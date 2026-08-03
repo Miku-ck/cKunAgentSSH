@@ -1,0 +1,220 @@
+"""
+LLM 适配器 — OpenAI 兼容异步流式客户端
+对接 vLLM 服务 (OpenAI-compatible API)
+
+支持：
+- 流式文本输出 (content + reasoning)
+- Function Calling / Tool Calls（流式分片累积）
+"""
+import json
+import logging
+from collections import OrderedDict
+from dataclasses import dataclass, field
+from typing import AsyncGenerator
+
+import openai
+
+logger = logging.getLogger(__name__)
+
+# H5 修复：客户端复用池，按 (base_url, api_key) 缓存 AsyncOpenAI 实例
+# 避免每次 chat_stream 都新建客户端导致连接池泄漏
+# LRU 淘汰：频繁切换模型配置时限制缓存项数量，防止连接池无限增长
+_CLIENT_CACHE_MAX = 8  # 最大缓存客户端数
+_client_cache: "OrderedDict[tuple[str, str], openai.AsyncOpenAI]" = OrderedDict()
+
+
+def _get_client(base_url: str, api_key: str) -> openai.AsyncOpenAI:
+    """获取共享的 AsyncOpenAI 客户端（LRU 缓存，最多保留 _CLIENT_CACHE_MAX 个）"""
+    key = (base_url, api_key or "EMPTY")
+    client = _client_cache.get(key)
+    if client is not None:
+        # 命中：移到末尾（最近使用）
+        _client_cache.move_to_end(key)
+        return client
+    # 未命中：创建新客户端
+    client = openai.AsyncOpenAI(
+        api_key=api_key or "EMPTY",
+        base_url=base_url,
+        timeout=120.0,
+    )
+    _client_cache[key] = client
+    # 超容量时淘汰最久未使用的（AsyncOpenAI 的 __del__ 会处理连接池清理）
+    if len(_client_cache) > _CLIENT_CACHE_MAX:
+        _client_cache.popitem(last=False)
+    return client
+
+
+@dataclass
+class ToolCall:
+    """工具调用（解析后的完整结构）"""
+    id: str = ""
+    name: str = ""
+    arguments: str = ""  # JSON 字符串
+
+    def to_dict(self) -> dict:
+        """转为 OpenAI 消息格式"""
+        return {
+            "id": self.id,
+            "type": "function",
+            "function": {"name": self.name, "arguments": self.arguments},
+        }
+
+    def parsed_args(self) -> dict:
+        """解析 arguments JSON，失败时返回空 dict"""
+        try:
+            return json.loads(self.arguments) if self.arguments else {}
+        except json.JSONDecodeError:
+            logger.warning("tool_call arguments JSON 解析失败: %s", self.arguments[:200])
+            return {}
+
+
+@dataclass
+class StreamChunk:
+    """流式输出块"""
+    content: str = ""
+    reasoning: str = ""
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    # token 用量（仅最后一个 chunk 通常携带，来自 stream_options include_usage）
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+
+async def chat_stream(
+    base_url: str,
+    api_key: str,
+    model: str,
+    messages: list[dict],
+    temperature: float = 0.7,
+    # 默认为 None：不传 max_tokens，由 vLLM 自行决定输出上限。
+    max_tokens: int | None = None,
+    top_p: float = 0.9,
+    enable_thinking: bool = False,
+    tools: list[dict] | None = None,
+    tool_choice: str = "auto",
+    # 思考阶段 token 上限（仅 thinking 模型生效，限制 reasoning_content 长度）
+    # None 表示不限制；vLLM/Qwen3 通过 chat_template_kwargs.thinking_budget 传递
+    reasoning_max_tokens: int | None = None,
+) -> AsyncGenerator[StreamChunk, None]:
+    """
+    流式聊天补全
+
+    Args:
+        base_url: vLLM 服务地址 (如 http://192.168.150.40:9030/v1)
+        api_key: API 密钥 (vLLM 通常为 "EMPTY")
+        model: 模型名称
+        messages: OpenAI 格式消息列表
+        temperature: 采样温度
+        max_tokens: 最大输出 token，None 表示不传该参数
+        top_p: 核采样参数
+        enable_thinking: 是否启用思考模式 (Thinking 模型)
+        tools: OpenAI function calling 格式的工具定义列表
+        tool_choice: 工具选择策略 ("auto" / "none" / "required")
+        reasoning_max_tokens: thinking 阶段 token 上限（仅 thinking 模型生效）
+            通过 vLLM chat_template_kwargs.thinking_budget 传递，限制 reasoning_content 长度
+            None 表示不限制；用于意图识别后的思考预算控制
+    """
+    # H5 修复：复用共享客户端
+    client = _get_client(base_url, api_key)
+
+    extra_body: dict = {}
+    if enable_thinking:
+        # chat_template_kwargs 会被 vLLM 注入到 chat template 渲染上下文
+        # Qwen3 系列支持 enable_thinking（布尔）+ thinking_budget（int，思考 token 上限）
+        tpl_kwargs: dict = {"enable_thinking": True}
+        if reasoning_max_tokens is not None and reasoning_max_tokens > 0:
+            tpl_kwargs["thinking_budget"] = reasoning_max_tokens
+        extra_body["chat_template_kwargs"] = tpl_kwargs
+
+    kwargs: dict = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "top_p": top_p,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+    if extra_body:
+        kwargs["extra_body"] = extra_body
+    if tools:
+        kwargs["tools"] = tools
+        # 仅当 tool_choice 非 "auto" 默认值时才显式传入；
+        # "auto" 是 OpenAI 默认行为，但 vLLM 若未启用 --enable-auto-tool-choice
+        # 会因收到 tool_choice="auto" 而返回 400 错误。
+        # 不传该字段时 vLLM 会按服务端默认行为处理（仍能识别 tools）。
+        if tool_choice and tool_choice != "auto":
+            kwargs["tool_choice"] = tool_choice
+
+    try:
+        stream = await client.chat.completions.create(**kwargs)
+    except openai.BadRequestError as e:
+        # vLLM 未启用 --enable-auto-tool-choice 时，传 tools 也可能被拒
+        # 降级：移除 tools/tool_choice 后重试（纯文本对话）
+        err_msg = str(e).lower()
+        if tools and ("tool" in err_msg or "tool_choice" in err_msg):
+            logger.warning(
+                "vLLM 拒绝 tool 调用（可能未启用 --enable-auto-tool-choice），"
+                "降级为无工具模式重试: %s", e
+            )
+            kwargs.pop("tools", None)
+            kwargs.pop("tool_choice", None)
+            stream = await client.chat.completions.create(**kwargs)
+        else:
+            raise
+
+    # 流式 tool_calls 分片累积：index → {id, name, arguments_buffer}
+    accumulated: dict[int, dict] = {}
+
+    async for chunk in stream:
+        # OpenAI 流式: 最后一个 chunk 没有 choices 但携带 usage
+        if not chunk.choices:
+            usage = getattr(chunk, "usage", None)
+            if usage:
+                yield StreamChunk(
+                    prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+                    completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
+                )
+            continue
+        delta = chunk.choices[0].delta
+
+        # 解析 tool_calls 分片（流式中 arguments 是逐字符到达的）
+        if delta.tool_calls:
+            for tc_delta in delta.tool_calls:
+                # H6 修复：tc_delta.index 可能为 None，使用 0 作为兜底
+                idx = tc_delta.index if tc_delta.index is not None else 0
+                if idx not in accumulated:
+                    accumulated[idx] = {
+                        "id": tc_delta.id or "",
+                        "name": tc_delta.function.name if tc_delta.function else "",
+                        "arguments": "",
+                    }
+                if tc_delta.id:
+                    accumulated[idx]["id"] = tc_delta.id
+                if tc_delta.function and tc_delta.function.name:
+                    accumulated[idx]["name"] = tc_delta.function.name
+                if tc_delta.function and tc_delta.function.arguments:
+                    accumulated[idx]["arguments"] += tc_delta.function.arguments
+
+        # vLLM --reasoning-parser qwen3 返回 'reasoning' 字段
+        reasoning = (
+            getattr(delta, "reasoning_content", None)
+            or getattr(delta, "reasoning", None)
+            or ""
+        )
+        content = delta.content or ""
+
+        if content or reasoning:
+            yield StreamChunk(content=content, reasoning=reasoning)
+
+    # 流结束后，如果有完整的 tool_calls，yield 一个合并后的 chunk
+    if accumulated:
+        tool_calls = [
+            ToolCall(
+                id=tc["id"] or f"call_{idx}",
+                name=tc["name"],
+                arguments=tc["arguments"],
+            )
+            for idx, tc in sorted(accumulated.items())
+        ]
+        yield StreamChunk(tool_calls=tool_calls)

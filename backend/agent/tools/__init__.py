@@ -1,0 +1,135 @@
+"""
+工具注册中心 — BaseTool / ToolResult / ToolRegistry
+
+所有工具继承 BaseTool，通过 ToolRegistry 注册。
+ToolRegistry 生成 OpenAI function calling 格式的 tools 参数，
+并负责工具执行（含权限检查由 Hook 层拦截）。
+"""
+from dataclasses import dataclass, field
+from typing import Any, Callable, Optional
+import logging
+import threading
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ToolResult:
+    """工具执行结果"""
+    success: bool
+    output: str
+    error: str = ""
+    priority: str = "normal"  # 优先级：high（错误/关键）/ normal（常规）/ low（噪声）
+
+
+@dataclass
+class ToolMeta:
+    """工具元数据 — 用于权限判断和成本控制"""
+    risk_level: str = "safe"        # safe / moderate / dangerous
+    timeout: float = 30.0           # 默认超时（秒）
+    cacheable: bool = False         # 结果是否可缓存
+    reversible: bool = True         # 操作是否可逆
+    mode_scope: list[str] = field(default_factory=lambda: ["ssh"])
+
+
+class BaseTool:
+    """所有工具的基类"""
+    name: str = ""
+    description: str = ""
+    parameters: dict | None = None
+    meta: ToolMeta | None = None
+
+    def __init__(self):
+        # 深拷贝类级 dict/meta，避免子类类级赋值的 dict 在实例间共享
+        # （子类 class ReadFileTool(BaseTool): parameters = {...} 所有实例拿到同一对象）
+        import copy
+        if self.parameters is not None and type(self) is not BaseTool:
+            # 只有子类实例才深拷贝——基类属性保持 None 不变
+            self.parameters = copy.deepcopy(self.parameters)
+        if self.parameters is None:
+            self.parameters = {}
+        if self.meta is not None and type(self) is not BaseTool:
+            self.meta = copy.deepcopy(self.meta)
+        if self.meta is None:
+            self.meta = ToolMeta()
+
+    async def execute(self, context: "ToolContext", **kwargs) -> ToolResult:
+        """执行工具，子类必须实现"""
+        raise NotImplementedError
+
+
+@dataclass
+class ToolContext:
+    """工具执行上下文 — 传入工具的运行时信息"""
+    workspace_path: str = ""        # 当前工作区路径
+    ssh_session_id: str = ""        # SSH 会话 ID（SSH 模式）
+    mode: str = "ssh"               # 当前模式
+    conversation_id: str = ""
+    agent_run_id: str = ""
+
+
+class ToolRegistry:
+    """工具注册中心"""
+
+    def __init__(self):
+        self._tools: dict[str, BaseTool] = {}
+        self._lock = threading.RLock()  # 线程安全
+
+    def register(self, tool: BaseTool) -> None:
+        """注册工具"""
+        if not tool.name:
+            raise ValueError("工具必须定义 name 属性")
+        with self._lock:
+            self._tools[tool.name] = tool
+        logger.info("注册工具: %s (risk=%s)", tool.name, tool.meta.risk_level)
+
+    def unregister(self, name: str) -> None:
+        """注销工具"""
+        with self._lock:
+            if name in self._tools:
+                del self._tools[name]
+
+    def get(self, name: str) -> BaseTool | None:
+        return self._tools.get(name)
+
+    def names(self) -> list[str]:
+        return list(self._tools.keys())
+
+    def schemas(self) -> list[dict]:
+        """获取工具 schema 列表"""
+        with self._lock:
+            snapshot = list(self._tools.values())
+
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters,
+                }
+            }
+            for tool in snapshot
+        ]
+
+    async def execute(self, name: str, args: dict, context: ToolContext) -> ToolResult:
+        """执行工具调用"""
+        tool = self._tools.get(name)
+        if not tool:
+            return ToolResult(success=False, output="", error=f"未知工具: {name}")
+
+        try:
+            result = await tool.execute(context=context, **args)
+            return result
+        except Exception as e:
+            logger.exception("工具 %s 执行异常", name)
+            return ToolResult(success=False, output="", error=str(e))
+
+
+def create_registry_for_mode(mode: str) -> ToolRegistry:
+    """根据模式创建工具注册中心，注册该模式可用的工具"""
+    from agent.tools.builtin import register_builtin_tools
+
+    registry = ToolRegistry()
+    register_builtin_tools(registry, mode)
+    return registry

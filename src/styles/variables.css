@@ -1,0 +1,110 @@
+:root {
+  /* ── 深色主题（默认）── */
+  --bg-base: #000000;
+  --bg-panel: #000000;
+  --bg-surface: #000000;
+  --bg-elevated: #000000;
+  --bg-hover: rgba(255,255,255,0.06);
+  --bg-active: rgba(255,255,255,0.12);
+  --divider-primary: #1a1a1a;
+  --divider-secondary: #2d2d2d;
+  --border-default: #3e3e42;
+  --border-subtle: #2d2d30;
+  --text-primary: #cccccc;
+  --text-secondary: #969696;
+  --text-tertiary: #6e6e6e;
+
+  /* 扩展背景/边框变量 */
+  --bg-sidebar: #000000;
+  --bg-input: #000000;
+  --bg-code: #000000;
+  --bg-slider: #303030;
+  --border-input: #303030;
+
+  /* 强调色（由 JS 动态覆盖） */
+  --accent-primary: #0078d4;
+  --accent-primary-rgb: 0, 120, 212;
+  --accent-blue: #0078d4;
+  --accent-purple: #c586c0;
+  --accent-green: #4ec9b0;
+  --accent-orange: #ce9178;
+  --accent-red: #f48771;
+  --accent-cyan: #9cdcfe;
+  --accent-yellow: #dcdcaa;
+  --accent-gradient: linear-gradient(135deg, #0078d4 0%, #c586c0 100%);
+
+  /* 圆角 & 阴影 */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.2);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.4);
+
+  /* 过渡 */
+  --transition-fast: 150ms ease;
+  --transition-normal: 200ms ease;
+
+  /* 字体 */
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, "Courier New", monospace;
+
+  /* 布局 */
+  --titlebar-h: 38px;
+  --tabbar-h: 44px;
+  --statusbar-h: 28px;
+
+  /* 间距（紧凑模式由 JS 覆盖） */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 12px;
+  --spacing-lg: 16px;
+}
+
+/* ── 浅色主题 ── */
+[data-theme="light"] {
+  --bg-base: #ffffff;
+  --bg-panel: #ffffff;
+  --bg-surface: #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-hover: rgba(0,0,0,0.04);
+  --bg-active: rgba(0,0,0,0.08);
+  --divider-primary: #e0e0e0;
+  --divider-secondary: #eaeaea;
+  --border-default: #d0d0d0;
+  --border-subtle: #e0e0e0;
+  --text-primary: #1e1e1e;
+  --text-secondary: #555555;
+  --text-tertiary: #888888;
+  --bg-sidebar: #ffffff;
+  --bg-input: #ffffff;
+  --bg-code: #ffffff;
+  --bg-slider: #d0d0d0;
+  --border-input: #c0c0c0;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.08);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.1);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.15);
+}
+
+/* ── 蓝屏主题 ── */
+[data-theme="blue-screen"] {
+  --bg-base: #0a1628;
+  --bg-panel: #0a1628;
+  --bg-surface: #0a1628;
+  --bg-elevated: #0a1628;
+  --bg-hover: rgba(255,255,255,0.06);
+  --bg-active: rgba(255,255,255,0.12);
+  --divider-primary: #0a1628;
+  --divider-secondary: #1a3050;
+  --border-default: #1e3a5f;
+  --border-subtle: #152d50;
+  --text-primary: #c8ddf0;
+  --text-secondary: #8aa8c8;
+  --text-tertiary: #5a7898;
+  --bg-sidebar: #0a1628;
+  --bg-input: #0a1628;
+  --bg-code: #0a1628;
+  --bg-slider: #1a3a6e;
+  --border-input: #1e3a5f;
+}

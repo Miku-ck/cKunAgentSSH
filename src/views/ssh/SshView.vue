@@ -1,0 +1,890 @@
+<template>
+  <div class="ssh-view">
+    <!-- 主终端区域 -->
+    <div class="ssh-main">
+      <!-- 标签栏 -->
+      <div class="term-tabs">
+        <div class="tabs-scroll">
+          <!-- 终端标签 -->
+          <div
+            v-for="s in store.sessions"
+            :key="s.id"
+            class="term-tab"
+            :class="{ active: s.id === store.activeSessionId && !showHome }"
+            @click="activateTerminal(s.id)"
+            @contextmenu.prevent="showTabContextMenu($event, s.id)"
+          >
+            <svg v-if="s.type === 'local'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+            <IconMonitor v-else :width="12" :height="12" :stroke-width="2" />
+            <span class="tab-label">{{ s.name }}</span>
+            <button class="tab-close" @click.stop="store.closeSession(s.id)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+
+          <!-- 新建按钮（加号，跟随终端标签右侧） -->
+          <button
+            class="new-tab-btn"
+            :class="{ active: showHome && activeNavPage === 'home' }"
+            title="新建终端"
+            @click="goHome"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+              <line x1="12" y1="5" x2="12" y2="19"/>
+              <line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+          </button>
+        </div>
+
+        <div class="tabs-actions">
+          <!-- AI 运维助手 -->
+          <button
+            class="tab-action-btn ai-tab-btn"
+            :class="{ active: sshAiStore.showAiPanel }"
+            title="AI 运维助手"
+            @click="toggleAiPanel"
+          >
+            <span class="ai-text">AI</span>
+          </button>
+          <!-- 远程终端管理 -->
+          <button
+            class="tab-action-btn"
+            :class="{ active: activeNavPage === 'remote-mgr' }"
+            title="远程终端"
+            @click="toggleRemoteManager"
+          >
+            <IconMonitor :width="14" :height="14" :stroke-width="2" />
+          </button>
+          <!-- SFTP 文件传输 -->
+          <button
+            class="tab-action-btn"
+            :class="{ active: activeNavPage === 'sftp' }"
+            title="SFTP"
+            @click="toggleSftp"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          </button>
+          <!-- 设置 -->
+          <button
+            class="tab-action-btn"
+            title="设置"
+            @click="openSettings()"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- 内容区包装器: flex:1 + position:relative 为内部绝对定位提供参照 -->
+      <div class="content-area">
+        <!-- 终端内容区 (始终渲染以保持终端实例, 被quick-start覆盖或隐藏) -->
+        <div class="term-content" v-if="store.sessions.length > 0" v-show="!showHome">
+          <template v-for="s in store.sessions" :key="s.id">
+            <LocalTerminal
+              v-if="s.type === 'local'"
+              :ref="(el) => { if (el) terminalRefs[s.id] = el }"
+              :pty-id="s.id"
+              :shell="(s as any).shell"
+              :visible="s.id === store.activeSessionId && !showHome"
+              v-show="s.id === store.activeSessionId"
+              @exit="handleLocalExit(s.id, $event)"
+            />
+            <RemoteTerminal
+              v-if="s.type === 'remote'"
+              :ref="(el) => { if (el) terminalRefs[s.id] = el }"
+              :ssh-id="s.id"
+              :visible="s.id === store.activeSessionId && !showHome"
+              v-show="s.id === store.activeSessionId"
+              @close="handleRemoteClose(s.id)"
+            />
+          </template>
+        </div>
+
+        <!-- RemoteManager 页面 -->
+        <div v-show="activeNavPage === 'remote-mgr'" class="rm-page">
+          <RemoteManager
+            @connect="handleRmConnect"
+            @edit="editConnection"
+            @new-connection="editConnection(null)"
+          />
+        </div>
+
+        <!-- SFTP 文件传输页面 -->
+        <div v-show="activeNavPage === 'sftp'" class="sftp-page">
+          <SftpView />
+        </div>
+
+        <!-- Quick Start 页面 -->
+        <div v-show="(showHome || store.sessions.length === 0) && activeNavPage === 'home'" class="quick-start">
+          <div class="qs-header">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            <span>Quick Start</span>
+          </div>
+
+          <div class="qs-search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input v-model="qsSearch" placeholder="搜索终端或连接..." class="qs-input" />
+          </div>
+
+          <!-- 本地终端 -->
+          <div class="qs-section">
+            <div class="qs-section-title">本地终端</div>
+            <div class="qs-grid">
+              <div
+                v-for="shell in filteredShells"
+                :key="shell"
+                class="qs-card"
+                @click="openLocalShell(shell)"
+              >
+                <div class="qs-card-icon local">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                </div>
+                <span class="qs-card-label">{{ shell }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 远程连接 -->
+          <div class="qs-section">
+            <div class="qs-section-title">远程连接</div>
+            <div class="qs-grid">
+              <div
+                v-for="conn in filteredConnections"
+                :key="conn.id"
+                class="qs-card"
+                @click="connectRemote(conn)"
+                @contextmenu.prevent="editConnection(conn)"
+              >
+                <div class="qs-card-icon remote">
+                  <IconMonitor :width="20" :height="20" :stroke-width="2" />
+                </div>
+                <span class="qs-card-label">{{ conn.name }}</span>
+                <span class="qs-card-meta">{{ conn.host }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="filteredShells.length === 0 && filteredConnections.length === 0" class="qs-empty">
+            没有匹配的结果
+          </div>
+        </div>
+      </div>
+
+      <!-- 快捷命令条 -->
+      <QuickCommandBar v-if="showCommandBar" />
+    </div>
+
+    <!-- AI 运维助手面板 -->
+    <SshAiPanel v-if="sshAiStore.showAiPanel" @close="sshAiStore.showAiPanel = false" />
+
+    <!-- 连接弹窗 -->
+    <ConnectionModal
+      v-if="showModal"
+      :edit-data="editingConnection"
+      @close="closeModal"
+      @saved="handleSaved"
+    />
+
+    <!-- 标签右键菜单 -->
+    <Teleport to="body">
+      <div
+        v-if="tabCtxMenu.visible"
+        class="tab-ctx-menu"
+        :style="{ left: tabCtxMenu.x + 'px', top: tabCtxMenu.y + 'px' }"
+        @click="tabCtxMenu.visible = false"
+        @contextmenu.prevent
+      >
+        <div class="tab-ctx-item" @click="handleTabCtxAction('duplicate')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          复制终端
+        </div>
+        <div class="tab-ctx-sep"></div>
+        <div class="tab-ctx-item" @click="handleTabCtxAction('closeCurrent')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          关闭当前
+        </div>
+        <div class="tab-ctx-item" @click="handleTabCtxAction('closeLeft')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="15 18 9 12 15 6"/></svg>
+          关闭左侧
+        </div>
+        <div class="tab-ctx-item" @click="handleTabCtxAction('closeRight')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="9 18 15 12 9 6"/></svg>
+          关闭右侧
+        </div>
+        <div class="tab-ctx-sep"></div>
+        <div class="tab-ctx-item danger" @click="handleTabCtxAction('closeAll')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg>
+          关闭全部
+        </div>
+      </div>
+    </Teleport>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import LocalTerminal from '@/components/ssh/LocalTerminal.vue'
+import RemoteTerminal from '@/components/ssh/RemoteTerminal.vue'
+import ConnectionModal from '@/components/ssh/ConnectionModal.vue'
+import SftpView from '@/components/ssh/SftpView.vue'
+import RemoteManager from '@/components/ssh/RemoteManager.vue'
+import QuickCommandBar from '@/components/ssh/QuickCommandBar.vue'
+import SshAiPanel from '@/components/ssh/SshAiPanel.vue'
+import IconMonitor from '@/components/icons/IconMonitor.vue'
+import { useSSHStore, type SSHConnection } from '@/stores/ssh'
+import { useSshAiStore } from '@/stores/ssh-ai'
+import { useToastStore } from '@/stores/toast'
+import { useSettings } from '@/composables/useSettings'
+import { toFriendlyMessage } from '@/api/client'
+
+const store = useSSHStore()
+const sshAiStore = useSshAiStore()
+const toast = useToastStore()
+const { openSettings } = useSettings()
+
+// 终端组件引用映射（key: sessionId, value: 组件实例）
+const terminalRefs: Record<string, any> = {}
+
+// 聚焦活动终端（供 QuickCommandBar 发送命令后调用，让用户能按 Enter 执行）
+function focusActiveTerminal() {
+  const activeId = store.activeSessionId
+  if (!activeId) return
+  terminalRefs[activeId]?.focus?.()
+}
+
+// 将命令写入活动终端（由 AI 助手通过 CustomEvent 触发）
+function deliverCommandToTerminal(e: Event) {
+  const detail = (e as CustomEvent).detail as { command?: string } | undefined
+  const command = detail?.command
+  const sessionId = store.activeSessionId
+  if (!command || !sessionId) {
+    toast.warning(sessionId ? '没有可投递的命令' : '请先打开一个终端')
+    return
+  }
+  const session = store.sessions.find(s => s.id === sessionId)
+  if (!session) return
+  const api = window.electronAPI
+  if (!api) {
+    toast.error('Electron API 未就绪，无法投递命令')
+    return
+  }
+  const writer = session.type === 'local' ? api.ptyWrite : api.sshWrite
+  writer(sessionId, command).catch((err: any) => {
+    console.error('[SshView] deliver command failed:', err)
+    toast.error(toFriendlyMessage(err, '命令投递失败'))
+  })
+  focusActiveTerminal()
+}
+
+// ─── 布局状态 ──────────────────────────────────
+const showHome = ref(true)
+const activeNavPage = ref<'home' | 'remote-mgr' | 'sftp'>('home')
+const showModal = ref(false)
+const editingConnection = ref<SSHConnection | undefined>(undefined)
+
+const localShells = ['PowerShell', 'Git Bash', 'CMD', 'WSL']
+
+const showCommandBar = computed(() =>
+  store.activeSessionId !== '' && !showHome.value && activeNavPage.value === 'home'
+)
+
+// ─── 页面切换 ──────────────────────────────────
+function goHome() {
+  showHome.value = true
+  activeNavPage.value = 'home'
+}
+
+function activateTerminal(sessionId: string) {
+  showHome.value = false
+  activeNavPage.value = 'home'
+  store.switchSession(sessionId)
+}
+
+function toggleRemoteManager() {
+  if (activeNavPage.value === 'remote-mgr') {
+    goHome()
+  } else {
+    showHome.value = true
+    activeNavPage.value = 'remote-mgr'
+  }
+}
+
+function toggleSftp() {
+  if (activeNavPage.value === 'sftp') {
+    goHome()
+  } else {
+    showHome.value = true
+    activeNavPage.value = 'sftp'
+  }
+}
+
+function toggleAiPanel() {
+  sshAiStore.toggleAiPanel()
+}
+
+// ─── Quick Start 搜索过滤 ──────────────────────
+const qsSearch = ref('')
+
+const filteredShells = computed(() => {
+  const q = qsSearch.value.toLowerCase().trim()
+  if (!q) return localShells
+  return localShells.filter(s => s.toLowerCase().includes(q))
+})
+
+const filteredConnections = computed(() => {
+  const q = qsSearch.value.toLowerCase().trim()
+  if (!q) return store.connections
+  return store.connections.filter(c =>
+    c.name.toLowerCase().includes(q) ||
+    c.host.toLowerCase().includes(q) ||
+    c.username.toLowerCase().includes(q)
+  )
+})
+
+// ─── 本地终端 ─────────────────────────────────
+async function openLocalShell(shellName: string) {
+  try {
+    await store.createLocalTerminal(shellName)
+    showHome.value = false
+  } catch (err: any) {
+    console.error('[openLocalShell] Failed:', shellName, err)
+    toast.error(toFriendlyMessage(err, `${shellName} 打开失败`))
+  }
+}
+
+function handleLocalExit(id: string, _exitCode: number) {
+  store.removeSession(id)
+}
+
+// ─── 远程连接 ─────────────────────────────────
+// 2 秒内重复点击只算一次(防双击/误触);只允许同时存在一个正在打开的远程连接
+const CONNECT_DEBOUNCE_MS = 2000
+let lastConnectAt = 0
+
+async function connectRemote(conn: SSHConnection) {
+  const now = Date.now()
+  if (now - lastConnectAt < CONNECT_DEBOUNCE_MS) {
+    return
+  }
+  lastConnectAt = now
+
+  try {
+    await store.connectRemote(conn.id, 80, 24)
+    showHome.value = false
+  } catch (err: any) {
+    console.error('SSH connection failed:', err)
+    toast.error(toFriendlyMessage(err, 'SSH 连接失败'))
+  }
+}
+
+// RemoteManager 触发的连接
+function handleRmConnect(connId: string) {
+  const conn = store.connections.find(c => c.id === connId)
+  if (conn) connectRemote(conn)
+}
+
+function handleRemoteClose(id: string) {
+  store.removeSession(id)
+}
+
+// ─── 连接管理 ─────────────────────────────────
+function editConnection(conn: SSHConnection | null) {
+  editingConnection.value = conn ? { ...conn } : undefined
+  showModal.value = true
+}
+
+function closeModal() {
+  showModal.value = false
+  editingConnection.value = undefined
+}
+
+async function handleSaved({ savedId, connectNow }: { savedId: string; connectNow: boolean }) {
+  closeModal()
+  if (connectNow) {
+    const conn = store.connections.find(c => c.id === savedId)
+    if (conn) await connectRemote(conn)
+  }
+}
+
+// ─── 标签右键菜单 ──────────────────────────────
+const tabCtxMenu = ref({ visible: false, x: 0, y: 0, targetId: '' })
+
+function showTabContextMenu(e: MouseEvent, id: string) {
+  // 菜单约 7 个菜单项，每个 ~28px，总计 ~210px
+  const estimatedHeight = 210
+  const viewportHeight = window.innerHeight
+  const y = e.clientY + estimatedHeight > viewportHeight
+    ? e.clientY - estimatedHeight
+    : e.clientY
+  tabCtxMenu.value = { visible: true, x: e.clientX, y, targetId: id }
+}
+
+function handleTabCtxAction(action: string) {
+  const targetId = tabCtxMenu.value.targetId
+  tabCtxMenu.value.visible = false
+  store.handleTabContextAction(action, targetId)
+}
+
+function dismissTabCtxMenu() {
+  tabCtxMenu.value.visible = false
+}
+
+// ─── 自动回到首页 ──────────────────────────────
+// 当所有会话关闭时, 自动回到 Home; 同时清理 terminalRefs 防止内存泄漏
+watch(() => store.sessions.length, (len) => {
+  // 清理已关闭 session 残留在 terminalRefs 中的组件引用
+  const activeIds = new Set(store.sessions.map(s => s.id))
+  for (const id of Object.keys(terminalRefs)) {
+    if (!activeIds.has(id)) {
+      delete terminalRefs[id]
+    }
+  }
+  if (len === 0) {
+    goHome()
+  }
+})
+
+onMounted(() => {
+  document.addEventListener('click', dismissTabCtxMenu)
+  window.addEventListener('ssh:focus-terminal', focusActiveTerminal)
+  window.addEventListener('ssh:deliver-command', deliverCommandToTerminal)
+  store.init()
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', dismissTabCtxMenu)
+  window.removeEventListener('ssh:focus-terminal', focusActiveTerminal)
+  window.removeEventListener('ssh:deliver-command', deliverCommandToTerminal)
+})
+</script>
+
+<style scoped>
+.ssh-view {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  min-height: 0;
+  background: var(--bg-base);
+}
+
+/* ─── Terminal Area ─── */
+.ssh-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ─── Content Area (终端和Quick Start的容器) ─── */
+.content-area {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ─── Tab Bar ─── */
+.term-tabs {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border-subtle, #2d2d30);
+  flex-shrink: 0;
+  overflow: hidden;
+  position: relative;
+  z-index: 20;
+}
+
+.tabs-scroll {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  padding: 0 4px;
+  overflow-x: auto;
+  height: 100%;
+}
+
+.tabs-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.tabs-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  flex-shrink: 0;
+}
+
+/* Home按钮(加号) - 跟随终端标签右侧,样式与 term-tab 一致但无内容 */
+.new-tab-btn {
+  height: 30px;
+  width: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--transition-fast);
+}
+
+.new-tab-btn:hover {
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+}
+
+.new-tab-btn:active {
+  background: var(--bg-active, #094771);
+}
+
+.new-tab-btn.active {
+  color: var(--accent-blue);
+  border-color: var(--border-default);
+  margin-bottom: -1px;
+  padding-bottom: 1px;
+}
+
+.tab-action-btn {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.tab-action-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+.tab-action-btn:active {
+  background: var(--bg-active, #094771);
+}
+
+.tab-action-btn.active {
+  color: var(--accent-blue);
+}
+
+.ai-tab-btn.active {
+  color: #818CF8;
+}
+
+.ai-text {
+  font-size: 11px;
+  font-weight: 600;
+  font-style: italic;
+  letter-spacing: -0.5px;
+}
+
+.term-tab {
+  height: 30px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all var(--transition-fast);
+}
+
+.term-tab:hover {
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+}
+
+.term-tab:active {
+  background: var(--bg-active, #094771);
+}
+
+.term-tab.active {
+  color: var(--text-primary);
+  border-color: var(--border-default);
+  margin-bottom: -1px;
+  padding-bottom: 1px;
+}
+
+.tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
+}
+
+.tab-close {
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  border-radius: 3px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.term-tab:hover .tab-close,
+.term-tab.active .tab-close {
+  opacity: 1;
+}
+
+.tab-close:hover {
+  background: var(--bg-active);
+  color: var(--accent-red);
+}
+
+.tab-close svg {
+  width: 10px;
+  height: 10px;
+}
+
+.term-content {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+}
+
+/* ─── Directory Panel ─── */
+
+/* ─── Quick Start ─── */
+.quick-start {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40px 24px;
+  overflow-y: auto;
+  z-index: 10;
+}
+
+/* ─── RemoteManager Page ─── */
+.rm-page {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  overflow: hidden;
+}
+
+/* ─── SFTP Page ─── */
+.sftp-page {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  overflow: hidden;
+}
+
+.qs-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent-blue);
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 24px;
+}
+
+.qs-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 520px;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  color: var(--text-tertiary);
+  margin-bottom: 32px;
+  transition: border-color var(--transition-fast);
+}
+
+.qs-search:focus-within {
+  border-color: var(--accent-blue);
+}
+
+.qs-input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: var(--font-sans);
+  outline: none;
+}
+
+.qs-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.qs-section {
+  width: 100%;
+  max-width: 520px;
+  margin-bottom: 28px;
+}
+
+.qs-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-tertiary);
+  margin-bottom: 12px;
+}
+
+.qs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+  gap: 12px;
+}
+
+.qs-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 8px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.qs-card:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-default);
+}
+
+.qs-card-icon {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-subtle);
+}
+
+.qs-card-icon.local {
+  background: rgba(88, 166, 255, 0.08);
+  color: var(--accent-blue);
+}
+
+.qs-card-icon.remote {
+  background: rgba(63, 185, 80, 0.08);
+  color: var(--accent-green);
+}
+
+.qs-card-label {
+  font-size: 12px;
+  color: var(--text-primary);
+  font-weight: 500;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 80px;
+}
+
+.qs-card-meta {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 80px;
+}
+
+.qs-empty {
+  color: var(--text-tertiary);
+  font-size: 13px;
+  padding: 20px;
+}
+
+/* ─── Tab Context Menu ─── */
+.tab-ctx-menu {
+  position: fixed;
+  z-index: 9999;
+  min-width: 140px;
+  padding: 4px 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.tab-ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text-secondary, #969696);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.tab-ctx-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.tab-ctx-item.danger:hover {
+  background: rgba(244, 135, 113, 0.15);
+  color: var(--accent-red, #f48771);
+}
+
+.tab-ctx-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border-subtle, #2d2d30);
+}
+
+/* 启用自定义背景图时，让主内容区透明 */
+:global(.app.has-background) .ssh-view,
+:global(.app.has-background) .term-tabs,
+:global(.app.has-background) .term-content {
+  background: transparent !important;
+}
+</style>

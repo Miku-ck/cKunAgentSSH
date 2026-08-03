@@ -1,0 +1,45 @@
+"""
+max_tokens 安全封顶工具 — 解耦 routes/chat 与 routes/agent 的跨路由依赖。
+
+vLLM 的 max_tokens 是「输出」预算，但模型上下文窗口是「输入+输出」总和。
+若用户配置 max_tokens = 上下文窗口（如 16384），加上 prompt 就会越界触发 vLLM 400。
+这里根据 prompt 字符数估算 token，自动下调 max_tokens。
+"""
+
+
+def safe_max_tokens(
+    configured: int | None,
+    prompt_chars: int,
+    max_output_tokens: int | None = None,
+) -> int | None:
+    """
+    根据输入大小智能封顶 max_tokens，避免触发 vLLM 400。
+
+    估算说明：1 token ≈ 1~2 个字符（中英混合时 1.2~1.8 实测），取保守值 1.5；
+    额外留 1024 token 给 vLLM 内部 / system 指令 / tool schema。
+    绝对上限 8192：用户配置 16384 时实际仍按 8192 输出，避免撞穿 16K 上下文。
+    max_output_tokens 优先：用户在模型配置里设了 max_output_tokens（如 4096），
+    以该值作为更精确的上限（覆盖硬编码 8192）。
+
+    额外保护：max_output_tokens 不能接近 configured（上下文窗口），
+    否则加上 prompt 后必然越界。当 max_output_tokens >= configured * 0.8 时，
+    视为用户误配，降级使用硬编码 8192 上限。
+    """
+    if not configured or configured <= 0:
+        return None  # 不传该参数
+
+    # 用户配置的 max_output_tokens 优先作为绝对上限
+    # 但若 max_output_tokens 接近 configured（上下文窗口），视为误配：
+    # 上下文 16384 + prompt 1428 → 输出设 16384 必然越界
+    user_max = max_output_tokens if (max_output_tokens and max_output_tokens > 0) else None
+    if user_max is not None and user_max >= configured * 0.8:
+        # 误配降级：max_output_tokens 过大（如 = 上下文窗口），改用硬编码上限
+        user_max = None
+
+    absolute_max = user_max if user_max else 8192
+    # 估算 prompt 占用的 token：保守 1.5 token/char（中文 1 token ≈ 1 汉字，
+    # 英文 1 token ≈ 4 char，混合文本 1 token ≈ 1.5 char 实测最稳）。
+    estimated_prompt_tokens = max(1, int(prompt_chars * 1.5))
+    # 留出 1024 token 给 vLLM 内部 / system 指令 / tool schema 余量
+    safe_max = max(256, configured - estimated_prompt_tokens - 1024)
+    return min(configured, absolute_max, safe_max)

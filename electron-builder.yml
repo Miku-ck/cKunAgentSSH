@@ -1,0 +1,46 @@
+appId: com.ckun.agent-ssh
+productName: cKunAgentSSH
+directories:
+  buildResources: resources
+  output: dist
+files:
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!electron/*'
+  - '!backend/*'
+  - '!{.eslintignore,.eslintrc.cjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+asarUnpack:
+  - '**/node-pty/**'
+  - '**/ssh2/**'
+  - '**/*.node'
+extraResources:
+  - from: backend
+    to: backend
+    filter:
+      - '**/*'
+      - '!__pycache__/**'
+      - '!**/__pycache__/**'
+      - '!*.pyc'
+win:
+  executableName: cKunAgentSSH
+  target:
+    - nsis
+    - portable
+portable:
+  artifactName: ${name}-${version}-portable.${ext}
+nsis:
+  artifactName: ${name}-${version}-setup.${ext}
+  shortcutName: ${productName}
+  uninstallDisplayName: ${productName}
+  createDesktopShortcut: always
+mac:
+  extendInfo:
+    - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
+  target:
+    - dmg
+linux:
+  target:
+    - AppImage
+  maintainer: ckun.com
+  category: Utility

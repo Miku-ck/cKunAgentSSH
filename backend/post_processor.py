@@ -1,0 +1,888 @@
+"""
+单轮对话后处理 — 异步提取记忆、自动生成技能、生成会话标题
+
+重构要点（P0+P1+P2）：
+1. 任务解耦：三任务拆为独立 LLM 调用，互不影响
+2. 配置化：PostProcessConfig 控制启停/超时/频率/上限
+3. 去重 + 质量门：技能 slug 去重 + system_prompt 长度门 + trigger_words 清洗；记忆相似度检查
+4. 生命周期统一：PostProcessManager 管理任务，应用关闭时优雅退出
+5. prompt 精简：assistant_content/reasoning 截断，降低本地模型负担
+6. 超时统一：单 chunk 超时 + 总超时双层保护，内外层语义一致
+7. 标题仅首轮调用 LLM：非首轮直接跳过，不浪费 token
+
+设计原则：
+- 失败隔离：任一子任务失败不影响其他
+- 单次 LLM 调用/子任务：每个子任务独立调用 LLM
+- 异步执行：通过 PostProcessManager.submit 启动，不阻塞 SSE 响应
+"""
+import asyncio
+import json
+import logging
+import re
+from dataclasses import dataclass
+from typing import Optional
+
+import database as db
+from llm_adapter import chat_stream
+from prompts import MODE_PROMPTS
+
+logger = logging.getLogger(__name__)
+
+AUTO_SKILL_CATEGORY = {
+    "ssh": "运维脚本",
+}
+
+MAX_TITLE_LEN = 20
+
+# 默认会话标题集合（产品改名时只需更新此处，避免硬编码导致逻辑静默失效）
+_DEFAULT_TITLES = {"New Chat", "新对话", "New Conversation", ""}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 配置
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class PostProcessConfig:
+    """后处理配置 — 控制启停/超时/频率/上限"""
+    enabled: bool = True
+    # 子任务独立开关
+    generate_title: bool = True
+    extract_memory: bool = True
+    generate_skill: bool = True
+    # 模型选择（空则用主对话模型）
+    title_model_id: str = ""        # 标题用轻量模型（推荐 Instruct）
+    memory_model_id: str = ""
+    skill_model_id: str = ""
+    # 单 chunk 超时（秒）—— 等待 LLM 首 token 或后续 token
+    chunk_timeout: int = 180
+    # 子任务总超时（秒）
+    title_total_timeout: int = 30
+    memory_total_timeout: int = 120
+    skill_total_timeout: int = 150
+    # 整体总超时（秒）—— PostProcessManager 外层保护
+    total_timeout: int = 300
+    # 频率（每 N 轮执行一次）
+    memory_interval: int = 1        # 记忆每轮提取
+    skill_interval: int = 3         # 技能每 3 轮生成一次
+    # 数量上限
+    max_skills_per_conversation: int = 5   # 全局 auto 技能上限（防数据库污染，非 per-conversation）
+    max_memories_per_turn: int = 3
+    # prompt 截断（降本地模型负担）
+    max_content_chars: int = 2000
+    max_reasoning_chars: int = 500
+    # 去重阈值
+    memory_similarity_threshold: float = 0.85   # cosine 相似度超过此值视为重复
+    skill_min_system_prompt_len: int = 50       # system_prompt 最少字数（质量门）
+
+
+# 全局配置实例（由 main.py 启动时从 DB 加载，或用默认值）
+_config: PostProcessConfig = PostProcessConfig()
+
+
+def get_post_process_config() -> PostProcessConfig:
+    return _config
+
+
+def set_post_process_config(cfg: PostProcessConfig) -> None:
+    global _config
+    _config = cfg
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 上下文
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class TurnContext:
+    """单轮对话上下文 — 传给各子任务"""
+    mode: str
+    conversation_id: str
+    user_message: str
+    assistant_content: str
+    assistant_reasoning: str
+    model_id: str
+    turn_index: int = 0     # 当前会话第几轮（0-based）
+    is_first_turn: bool = True
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 工具函数
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _truncate_for_post_process(
+    content: str,
+    reasoning: str,
+    config: PostProcessConfig,
+) -> tuple[str, str]:
+    """截断 prompt 内容，降低本地模型 prefill 负担"""
+    truncated_content = content[:config.max_content_chars]
+    if len(content) > config.max_content_chars:
+        truncated_content += f"\n...[已截断，原始 {len(content)} 字]"
+
+    # reasoning 只取开头（思考链的核心结论通常在开头）
+    truncated_reasoning = reasoning[:config.max_reasoning_chars] if reasoning else ""
+    if reasoning and len(reasoning) > config.max_reasoning_chars:
+        truncated_reasoning += f"\n...[已截断，原始 {len(reasoning)} 字]"
+
+    return truncated_content, truncated_reasoning
+
+
+def _resolve_model_id(config_field: str, fallback: str) -> str:
+    """解析子任务模型 ID：配置为空则用主对话模型"""
+    return config_field.strip() or fallback
+
+
+def _clean_trigger_words(words: list) -> list[str]:
+    """清洗 trigger_words：去重 + 长度检查 + 特殊字符过滤"""
+    seen: set = set()
+    result: list[str] = []
+    for w in words:
+        w = str(w).strip()
+        # 长度门：2-20 字符
+        if not w or len(w) < 2 or len(w) > 20:
+            continue
+        # 特殊字符过滤（只允许中英文/数字/连字符）
+        if not re.match(r"^[\w\u4e00-\u9fff-]+$", w):
+            continue
+        # 去重（小写比较）
+        key = w.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(w)
+    return result[:5]
+
+
+def _extract_json(text: str) -> str:
+    """从文本中提取 JSON 块（支持 markdown 代码块包裹 + 嵌套 JSON）"""
+    m = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
+    if m:
+        candidate = m.group(1).strip()
+        if _is_valid_json(candidate):
+            return candidate
+    result = _extract_outer_json(text)
+    if result:
+        return result
+    return text.strip()
+
+
+def _is_valid_json(s: str) -> bool:
+    try:
+        json.loads(s)
+        return True
+    except (json.JSONDecodeError, ValueError):
+        return False
+
+
+def _extract_outer_json(text: str) -> str | None:
+    """通过 brace-counting 提取最外层 JSON 对象"""
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i+1]
+    return None
+
+
+async def _call_llm_with_timeout(
+    messages: list[dict],
+    model_cfg: dict,
+    model_id: str,
+    temperature: float,
+    max_tokens: int,
+    chunk_timeout: float,
+    total_timeout: float,
+    task_name: str,
+) -> Optional[str]:
+    """带双层超时的 LLM 调用
+
+    chunk_timeout: 单 chunk 间隔超时
+    total_timeout: 总超时（整个 LLM 调用不能超过此值）
+
+    超时/异常后显式 aclose() generator，避免 httpx stream 连接泄漏。
+    """
+    full_text = ""
+    chunk_iter = chat_stream(
+        base_url=model_cfg["base_url"],
+        api_key=model_cfg["api_key"],
+        model=model_cfg.get("model_id") or model_id,
+        messages=messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        enable_thinking=False,
+    )
+
+    deadline = asyncio.get_event_loop().time() + total_timeout
+    try:
+        done = False
+        while not done:
+            now = asyncio.get_event_loop().time()
+            if now >= deadline:
+                logger.warning("[post_process:%s] 总超时 %ss", task_name, total_timeout)
+                return None
+            remaining = deadline - now
+            # 单 chunk 超时不能超过剩余时间
+            chunk_wait = min(chunk_timeout, remaining)
+            try:
+                chunk = await asyncio.wait_for(chunk_iter.__anext__(), timeout=chunk_wait)
+                full_text += chunk.content
+            except StopAsyncIteration:
+                done = True
+            except asyncio.TimeoutError:
+                logger.warning("[post_process:%s] 单 chunk 超时 %ss", task_name, chunk_timeout)
+                return None
+    except Exception:
+        logger.exception("[post_process:%s] LLM 调用异常", task_name)
+        return None
+    finally:
+        # 显式关闭 async generator，释放 httpx stream 连接
+        try:
+            await chunk_iter.aclose()
+        except Exception:
+            pass
+
+    if not full_text or not full_text.strip():
+        logger.warning("[post_process:%s] LLM 返回空内容", task_name)
+        return None
+    return full_text
+
+
+def _fallback_title(user_message: str, max_len: int = MAX_TITLE_LEN) -> str:
+    """LLM 不可用时，从用户首条消息中提取一个简短标题（核心摘要）。"""
+    if not user_message:
+        return ""
+    # 移除常见 markdown 标记和代码块，保留可读文本
+    text = re.sub(r"```[\s\S]*?```", "", user_message)
+    text = re.sub(r"[`#*\[\](){}<>|\\]", "", text)
+    text = text.replace("\n", " ").strip()
+    # 去掉开头的非语义字符
+    text = re.sub(r"^[^\w\u4e00-\u9fff]+", "", text)
+    if not text:
+        return ""
+    # 优先在标题长度附近断句，保持语义完整
+    upper = min(len(text), max_len + 10)
+    for i in range(max_len, upper + 1):
+        if text[i] in "。，！？,.;；":
+            return text[:i]
+    return text[:max_len]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 子任务 1：标题生成（仅首轮调用 LLM）
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+_TITLE_PROMPT_TEMPLATE = """\
+请基于以下用户问题，生成一个 {max_len} 字以内的中文会话标题。
+仅输出标题文本，不要包含引号、标点或其他说明。
+
+用户问题：{user_message}
+"""
+
+
+async def _generate_title(ctx: TurnContext, config: PostProcessConfig) -> None:
+    """生成会话标题 — 仅首轮 + 标题仍是默认值时调用 LLM"""
+    if not config.generate_title:
+        return
+    if not ctx.is_first_turn:
+        return
+
+    # 检查当前标题是否仍是默认值
+    try:
+        conv = db.get_conversation(ctx.conversation_id)
+        if not conv or conv.get("title", "") not in _DEFAULT_TITLES:
+            return
+    except Exception:
+        logger.exception("[post_process:title] 查询会话失败")
+        return
+
+    # 解析模型
+    title_model = _resolve_model_id(config.title_model_id, ctx.model_id)
+    model_cfg = db.get_model_config(title_model, mask_key=False)
+    if not model_cfg:
+        logger.warning("[post_process:title] unknown model_id: %s", title_model)
+        # 模型不可用也尽量给出规则摘要，避免标题始终为 New Chat
+        title = _fallback_title(ctx.user_message)
+        if title:
+            try:
+                db.update_conversation_title(ctx.conversation_id, title)
+                logger.info("[post_process:title] 已使用 fallback 更新标题: %s", title)
+            except Exception:
+                logger.exception("[post_process:title] fallback 更新标题失败")
+        return
+
+    # 标题只需用户问题，不需要 assistant 内容（降负担）
+    messages = [
+        {"role": "system", "content": "你是会话标题生成器，输出简洁的中文标题。"},
+        {"role": "user", "content": _TITLE_PROMPT_TEMPLATE.format(
+            max_len=MAX_TITLE_LEN, user_message=ctx.user_message[:500],
+        )},
+    ]
+
+    full_text = await _call_llm_with_timeout(
+        messages=messages,
+        model_cfg=model_cfg,
+        model_id=title_model,
+        temperature=0.3,
+        max_tokens=50,   # 标题只需 50 token
+        chunk_timeout=config.chunk_timeout,
+        total_timeout=config.title_total_timeout,
+        task_name="title",
+    )
+    if not full_text:
+        # LLM 失败时降级为本地规则摘要，避免会话名始终为 New Chat
+        title = _fallback_title(ctx.user_message)
+        if title:
+            try:
+                db.update_conversation_title(ctx.conversation_id, title)
+                logger.info("[post_process:title] 已使用 fallback 更新标题: %s", title)
+            except Exception:
+                logger.exception("[post_process:title] fallback 更新标题失败")
+        return
+
+    title = full_text.strip().strip('"\'').strip()[:MAX_TITLE_LEN]
+    if not title:
+        title = _fallback_title(ctx.user_message)
+        if not title:
+            return
+
+    try:
+        db.update_conversation_title(ctx.conversation_id, title)
+        logger.info("[post_process:title] 已更新标题: %s", title)
+    except Exception:
+        logger.exception("[post_process:title] 更新标题失败")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 子任务 2：记忆提取（带相似度去重）
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+_MEMORY_PROMPT_TEMPLATE = """\
+请分析以下 AI 助手与用户的单轮对话，提取关键记忆（最多 {max_count} 条）。
+仅提取值得长期记住的信息：用户偏好、重要事实、可复用上下文。每条用一句话表达。
+
+请严格按以下 JSON 格式输出，不要包含其他内容：
+{{
+  "memories": ["记忆1", "记忆2"]
+}}
+
+用户消息：
+{user_message}
+
+助手回复：
+{assistant_content}
+"""
+
+
+async def _extract_memories(ctx: TurnContext, config: PostProcessConfig) -> None:
+    """提取记忆 + 相似度去重"""
+    if not config.extract_memory:
+        return
+    # 频率控制
+    if ctx.turn_index % config.memory_interval != 0:
+        return
+
+    memory_model = _resolve_model_id(config.memory_model_id, ctx.model_id)
+    model_cfg = db.get_model_config(memory_model, mask_key=False)
+    if not model_cfg:
+        logger.warning("[post_process:memory] unknown model_id: %s", memory_model)
+        return
+
+    # 截断 prompt
+    truncated_content, _ = _truncate_for_post_process(
+        ctx.assistant_content, ctx.assistant_reasoning, config,
+    )
+
+    messages = [
+        {"role": "system", "content": MODE_PROMPTS.get(ctx.mode, MODE_PROMPTS["ssh"])},
+        {"role": "user", "content": _MEMORY_PROMPT_TEMPLATE.format(
+            max_count=config.max_memories_per_turn,
+            user_message=ctx.user_message[:1000],
+            assistant_content=truncated_content,
+        )},
+    ]
+
+    full_text = await _call_llm_with_timeout(
+        messages=messages,
+        model_cfg=model_cfg,
+        model_id=memory_model,
+        temperature=0.3,
+        max_tokens=512,
+        chunk_timeout=config.chunk_timeout,
+        total_timeout=config.memory_total_timeout,
+        task_name="memory",
+    )
+    if not full_text:
+        return
+
+    # 解析 JSON
+    try:
+        raw = _extract_json(full_text)
+        result = json.loads(raw)
+    except json.JSONDecodeError as e:
+        logger.warning("[post_process:memory] JSON 解析失败: %s, raw=%s", e, full_text[:200])
+        return
+
+    memories = result.get("memories", [])[:config.max_memories_per_turn]
+    if not memories:
+        return
+
+    # 初始化 MemoryManager（用于 embedding + 相似度检查）
+    try:
+        from agent.memory import get_memory_manager
+        mem_cfg = db.get_default_model(ctx.mode) or {}
+        mem_mgr = get_memory_manager(
+            base_url=mem_cfg.get("base_url", ""),
+            api_key=mem_cfg.get("api_key", ""),
+            embedding_model=mem_cfg.get("model_id") or mem_cfg.get("name", ""),
+        )
+    except Exception:
+        logger.exception("[post_process:memory] 初始化 MemoryManager 失败")
+        return
+
+    # 逐条保存 + 相似度去重
+    saved_count = 0
+    for mem in memories:
+        if not isinstance(mem, str) or not mem.strip():
+            continue
+        content = mem.strip()
+        try:
+            # 相似度检查：先查同 mode 的 semantic 记忆
+            if await _is_memory_duplicate(mem_mgr, content, ctx.mode, config.memory_similarity_threshold):
+                logger.info("[post_process:memory] 跳过相似记忆: %s", content[:50])
+                continue
+            await mem_mgr.save_semantic(
+                mode=ctx.mode, content=content,
+                source_conv_id=ctx.conversation_id, importance=0.6,
+            )
+            saved_count += 1
+        except Exception as e:
+            logger.warning("[post_process:memory] 保存记忆失败: %s", e)
+
+    if saved_count > 0:
+        logger.info("[post_process:memory] 保存 %d 条记忆", saved_count)
+
+    # 容量管理
+    try:
+        db.prune_agent_memories(mode=ctx.mode, mem_type="semantic", max_count=100)
+    except Exception:
+        logger.warning("[post_process:memory] prune 失败")
+
+
+async def _is_memory_duplicate(
+    mem_mgr,
+    content: str,
+    mode: str,
+    threshold: float,
+) -> bool:
+    """检查记忆是否与已有记忆相似"""
+    try:
+        # 用 MemoryManager.retrieve 检索（内部对 semantic 用 cosine 相似度）
+        results = await mem_mgr.retrieve(
+            query=content, mode=mode, top_k=3, threshold=threshold,
+        )
+        return len(results) > 0
+    except Exception:
+        # 检索失败时不阻断保存（fail-open）
+        return False
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 子任务 3：技能生成（带 slug 去重 + 质量门）
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+_SKILL_PROMPT_TEMPLATE = """\
+请分析以下 AI 助手与用户的单轮对话，判断是否可沉淀为技能。
+仅当对话中包含可复用的操作步骤、模板、规则、脚本或最佳实践时，才生成技能；否则返回空数组。
+
+每个技能必须包含：
+- name: 技能名称（简洁）
+- slug: 英文 slug（kebab-case）
+- description: 技能描述
+- system_prompt: 技能完整内容（至少 50 字，包含可复用的步骤/规则）
+- trigger_words: 3-5 个触发词，当用户消息包含这些词时自动激活
+
+请严格按以下 JSON 格式输出，不要包含其他内容：
+{{
+  "skills": [
+    {{
+      "name": "技能名称",
+      "slug": "skill-slug",
+      "description": "技能描述",
+      "system_prompt": "技能内容",
+      "trigger_words": ["触发词1", "触发词2"]
+    }}
+  ]
+}}
+
+用户消息：
+{user_message}
+
+助手回复：
+{assistant_content}
+"""
+
+
+async def _generate_skill(ctx: TurnContext, config: PostProcessConfig) -> None:
+    """生成技能 + slug 去重 + 质量门"""
+    if not config.generate_skill:
+        return
+    # 频率控制
+    if ctx.turn_index % config.skill_interval != 0:
+        return
+
+    # 数量上限检查（全局 auto 技能上限，防数据库污染）
+    try:
+        existing_count = _count_auto_skills()
+        if existing_count >= config.max_skills_per_conversation:
+            logger.info(
+                "[post_process:skill] 全局已有 %d 个 auto 技能，达上限 %d",
+                existing_count, config.max_skills_per_conversation,
+            )
+            return
+    except Exception:
+        logger.warning("[post_process:skill] 查询技能数量失败")
+
+    skill_model = _resolve_model_id(config.skill_model_id, ctx.model_id)
+    model_cfg = db.get_model_config(skill_model, mask_key=False)
+    if not model_cfg:
+        logger.warning("[post_process:skill] unknown model_id: %s", skill_model)
+        return
+
+    # 截断 prompt
+    truncated_content, truncated_reasoning = _truncate_for_post_process(
+        ctx.assistant_content, ctx.assistant_reasoning, config,
+    )
+
+    messages = [
+        {"role": "system", "content": MODE_PROMPTS.get(ctx.mode, MODE_PROMPTS["ssh"])},
+        {"role": "user", "content": _SKILL_PROMPT_TEMPLATE.format(
+            user_message=ctx.user_message[:1000],
+            assistant_content=truncated_content + (
+                f"\n\n[思考过程]\n{truncated_reasoning}" if truncated_reasoning else ""
+            ),
+        )},
+    ]
+
+    full_text = await _call_llm_with_timeout(
+        messages=messages,
+        model_cfg=model_cfg,
+        model_id=skill_model,
+        temperature=0.3,
+        max_tokens=1024,
+        chunk_timeout=config.chunk_timeout,
+        total_timeout=config.skill_total_timeout,
+        task_name="skill",
+    )
+    if not full_text:
+        return
+
+    # 解析 JSON
+    try:
+        raw = _extract_json(full_text)
+        result = json.loads(raw)
+    except json.JSONDecodeError as e:
+        logger.warning("[post_process:skill] JSON 解析失败: %s, raw=%s", e, full_text[:200])
+        return
+
+    skills = result.get("skills", [])
+    created_count = 0
+    for skill in skills:
+        if not isinstance(skill, dict):
+            continue
+        created = _create_auto_skill_with_quality_gate(skill, ctx.mode, config)
+        if created:
+            created_count += 1
+
+    if created_count > 0:
+        logger.info("[post_process:skill] 创建 %d 个技能", created_count)
+
+
+def _count_auto_skills() -> int:
+    """统计全局自动生成技能总数
+
+    注：skills 表无 source_conv_id 字段，无法按会话统计。
+    此处用全局上限保护，避免 auto 技能无限累积污染数据库。
+    max_skills_per_conversation 实际语义为"全局 auto 技能上限"。
+    如需真正的 per-conversation 限制，需在 skills 表新增 source_conv_id 字段。
+    """
+    try:
+        all_skills = db.list_skills(limit=9999, offset=0)
+        return sum(1 for s in all_skills if s.get("source") == "auto")
+    except Exception:
+        logger.warning("[post_process:skill] 查询技能数量失败")
+        return 0
+
+
+def _create_auto_skill_with_quality_gate(
+    skill_dict: dict,
+    mode: str,
+    config: PostProcessConfig,
+) -> Optional[dict]:
+    """创建技能 — 带 slug 去重 + 质量门"""
+    try:
+        name = skill_dict.get("name", "").strip()
+        slug = skill_dict.get("slug", "").strip()
+        if not name:
+            return None
+        if not slug:
+            slug = name.lower().replace(" ", "-").replace("_", "-")
+        # slug 规范化：只保留 kebab-case 字符
+        slug = re.sub(r"[^a-z0-9-]", "", slug.lower())
+        if not slug:
+            return None
+
+        # slug 去重
+        if db.get_skill_by_slug(slug):
+            logger.info("[post_process:skill] 跳过重复 slug: %s", slug)
+            return None
+
+        system_prompt = skill_dict.get("system_prompt", "").strip()
+        # 质量门：system_prompt 至少 N 字
+        if len(system_prompt) < config.skill_min_system_prompt_len:
+            logger.info(
+                "[post_process:skill] 跳过低质量技能（system_prompt 过短）: %s", slug,
+            )
+            return None
+
+        description = skill_dict.get("description", "").strip()
+        trigger_words = _clean_trigger_words(skill_dict.get("trigger_words", []))
+
+        return db.create_skill(
+            name=name,
+            slug=slug,
+            system_prompt=system_prompt,
+            description=description,
+            category=AUTO_SKILL_CATEGORY.get(mode, "其他"),
+            source="auto",
+            is_builtin=0,
+            enabled=0,
+            trigger_words=trigger_words,
+        )
+    except Exception:
+        logger.exception("[post_process:skill] create_auto_skill failed")
+        return None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 主入口
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+async def post_process_after_turn(
+    mode: str,
+    conversation_id: str,
+    user_message: str,
+    assistant_content: str,
+    assistant_reasoning: str = "",
+    model_id: Optional[str] = None,
+    turn_index: int = 0,
+) -> None:
+    """单轮对话完成后的统一后处理入口
+
+    Args:
+        turn_index: 当前会话第几轮（0-based），用于频率控制
+    """
+    config = get_post_process_config()
+    if not config.enabled:
+        return
+
+    # model_id 未指定时从数据库取默认模型
+    if model_id is None:
+        try:
+            default_cfg = db.get_default_model()
+            if default_cfg:
+                model_id = default_cfg.get("model_id") or default_cfg.get("id", "Qwen3-VL")
+            else:
+                model_id = "Qwen3-VL"
+        except Exception:
+            model_id = "Qwen3-VL"
+
+    # 构建 TurnContext
+    ctx = TurnContext(
+        mode=mode,
+        conversation_id=conversation_id,
+        user_message=user_message,
+        assistant_content=assistant_content,
+        assistant_reasoning=assistant_reasoning,
+        model_id=model_id,
+        turn_index=turn_index,
+        is_first_turn=(turn_index == 0),
+    )
+
+    # 三任务并发执行，互不影响
+    tasks = [
+        _generate_title(ctx, config),
+        _extract_memories(ctx, config),
+        _generate_skill(ctx, config),
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # 记录失败（但不影响主流程）
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            task_names = ["title", "memory", "skill"]
+            logger.exception(
+                "[post_process:%s] 子任务异常",
+                task_names[i] if i < len(task_names) else f"unknown_{i}",
+                exc_info=result,
+            )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 生命周期管理
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class PostProcessManager:
+    """统一管理 post_process 任务生命周期
+
+    用法：
+        manager = PostProcessManager()
+        await manager.submit(ctx)  # 提交任务
+        await manager.shutdown()   # 应用关闭时调用
+    """
+
+    def __init__(self, config: Optional[PostProcessConfig] = None) -> None:
+        self.config = config or get_post_process_config()
+        self._tasks: dict[str, asyncio.Task] = {}
+        self._lock = asyncio.Lock()
+
+    async def submit(
+        self,
+        mode: str,
+        conversation_id: str,
+        user_message: str,
+        assistant_content: str,
+        assistant_reasoning: str = "",
+        model_id: Optional[str] = None,
+        turn_index: int = 0,
+    ) -> str:
+        """提交后处理任务，返回 task_id"""
+        if not self.config.enabled:
+            return ""
+
+        import uuid
+        task_id = uuid.uuid4().hex
+        # 先注册 done callback 再 create_task，避免任务在 add_done_callback 之前
+        # 完成导致 callback 永不触发、_tasks 字典泄漏完成的 Task 引用
+        # （_discard 用 pop(..., None) 容忍 callback 早于 dict put 触发的情况）
+        async with self._lock:
+            # 占位 None 防止 callback 先触发时 _discard 找不到 key
+            self._tasks[task_id] = None  # type: ignore[assignment]
+        task = asyncio.create_task(self._run_with_timeout(
+            mode, conversation_id, user_message,
+            assistant_content, assistant_reasoning,
+            model_id, turn_index,
+        ))
+        task.add_done_callback(lambda _: self._discard(task_id))
+        async with self._lock:
+            # 任务已完成时不要覆盖（_discard 已移除占位）
+            if task_id in self._tasks and self._tasks[task_id] is None:
+                self._tasks[task_id] = task
+        return task_id
+
+    def _discard(self, task_id: str) -> None:
+        """从 _tasks 中移除已完成的任务"""
+        # 同步回调，不能 await
+        self._tasks.pop(task_id, None)
+
+    async def _run_with_timeout(
+        self,
+        mode: str,
+        conversation_id: str,
+        user_message: str,
+        assistant_content: str,
+        assistant_reasoning: str,
+        model_id: Optional[str],
+        turn_index: int,
+    ) -> None:
+        """带总超时的执行"""
+        try:
+            await asyncio.wait_for(
+                post_process_after_turn(
+                    mode=mode,
+                    conversation_id=conversation_id,
+                    user_message=user_message,
+                    assistant_content=assistant_content,
+                    assistant_reasoning=assistant_reasoning,
+                    model_id=model_id,
+                    turn_index=turn_index,
+                ),
+                timeout=self.config.total_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "[post_process] 整体超时 %ss: conversation=%s",
+                self.config.total_timeout, conversation_id,
+            )
+        except asyncio.CancelledError:
+            logger.info("[post_process] 任务被取消: conversation=%s", conversation_id)
+            raise
+        except Exception:
+            logger.exception("[post_process] 失败: conversation=%s", conversation_id)
+
+    async def shutdown(self, timeout: float = 10.0) -> None:
+        """应用关闭时调用 — 等待所有任务完成，超时后强制取消"""
+        async with self._lock:
+            pending = [t for t in self._tasks.values() if not t.done()]
+
+        if not pending:
+            return
+
+        logger.info("[post_process] 等待 %d 个任务完成（最多 %ss）", len(pending), timeout)
+        try:
+            await asyncio.wait(pending, timeout=timeout)
+        except Exception:
+            pass
+
+        # 超时后强制取消
+        for task in pending:
+            if not task.done():
+                task.cancel()
+                logger.warning("[post_process] 强制取消任务")
+
+
+# 全局 Manager 实例（由 main.py 启动时创建）
+_manager: Optional[PostProcessManager] = None
+
+
+def get_post_process_manager() -> PostProcessManager:
+    """获取全局 PostProcessManager 实例"""
+    global _manager
+    if _manager is None:
+        _manager = PostProcessManager()
+    return _manager
+
+
+def init_post_process_manager(config: Optional[PostProcessConfig] = None) -> PostProcessManager:
+    """初始化全局 PostProcessManager（由 main.py 调用）"""
+    global _manager
+    _manager = PostProcessManager(config)
+    return _manager

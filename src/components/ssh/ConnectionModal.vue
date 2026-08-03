@@ -1,0 +1,736 @@
+<template>
+  <div class="modal-overlay" @click.self="$emit('close')">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>{{ isEdit ? '编辑连接' : '添加远程连接' }}</h3>
+        <button class="modal-close" @click="$emit('close')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+
+      <div class="modal-body">
+        <!-- 基本信息 -->
+        <div class="form-row">
+          <div class="form-group flex-1">
+            <label>连接名称</label>
+            <input v-model="form.name" type="text" placeholder="留空则自动生成 用户名@主机" />
+          </div>
+        </div>
+
+        <div class="form-row two-col">
+          <div class="form-group flex-2">
+            <label>主机地址</label>
+            <input v-model="form.host" type="text" placeholder="192.168.1.100 或 example.com" />
+          </div>
+          <div class="form-group flex-1">
+            <label>端口</label>
+            <input v-model.number="form.port" type="number" min="1" max="65535" placeholder="22" @blur="clampPort" />
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group flex-1">
+            <label>用户名</label>
+            <input v-model="form.username" type="text" placeholder="root" />
+          </div>
+        </div>
+
+        <!-- 认证方式 -->
+        <div class="form-row">
+          <div class="form-group flex-1">
+            <label>认证方式</label>
+            <div class="auth-tabs">
+              <button
+                v-for="opt in authOptions"
+                :key="opt.value"
+                class="auth-tab"
+                :class="{ active: form.authType === opt.value }"
+                @click="form.authType = opt.value"
+              >
+                {{ opt.label }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 密码认证 -->
+        <div v-if="form.authType === 'password'" class="form-row">
+          <div class="form-group flex-1">
+            <label>密码</label>
+            <div class="input-with-btn">
+              <input v-model="form.password" :type="showPassword ? 'text' : 'password'" placeholder="输入密码" />
+              <button class="toggle-btn" @click="showPassword = !showPassword" :title="showPassword ? '隐藏' : '显示'">
+                <svg v-if="showPassword" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 私钥认证 -->
+        <template v-if="form.authType === 'privateKey'">
+          <div class="form-row">
+            <div class="form-group flex-1">
+              <label>私钥文件路径</label>
+              <div class="input-with-btn">
+                <input v-model="form.privateKeyPath" type="text" placeholder="~/.ssh/id_rsa" />
+                <button class="browse-btn" @click="selectKeyFile">浏览</button>
+              </div>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group flex-1">
+              <label>密码短语 (可选)</label>
+              <div class="input-with-btn">
+                <input v-model="form.passphrase" :type="showPassphrase ? 'text' : 'password'" placeholder="Passphrase" />
+                <button class="toggle-btn" @click="showPassphrase = !showPassphrase" :title="showPassphrase ? '隐藏' : '显示'">
+                  <svg v-if="showPassphrase" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                  <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- Agent 认证 -->
+        <div v-if="form.authType === 'agent'" class="form-row">
+          <div class="form-info">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="16" height="16"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+            <span>使用 SSH Agent 进行认证,请确保 ssh-agent 已运行并添加了密钥。</span>
+          </div>
+        </div>
+
+        <!-- 备注 -->
+        <div class="form-row">
+          <div class="form-group flex-1">
+            <label>备注</label>
+            <NoteInput v-model="form.note" placeholder="请输入备注..." :max-length="10" />
+          </div>
+        </div>
+
+        <!-- 高级选项 -->
+        <div class="advanced-section">
+          <button class="advanced-toggle" @click="showAdvanced = !showAdvanced">
+            <svg class="toggle-arrow" :class="{ expanded: showAdvanced }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="9 18 15 12 9 6"/></svg>
+            高级选项
+          </button>
+          <div v-if="showAdvanced" class="advanced-body">
+            <div class="form-row two-col">
+              <div class="form-group flex-1">
+                <label>连接超时 (秒)</label>
+                <input v-model.number="form.readyTimeout" type="number" min="1" max="120" placeholder="15" />
+              </div>
+              <div class="form-group flex-1">
+                <label>心跳间隔 (秒)</label>
+                <input v-model.number="form.keepaliveInterval" type="number" min="0" max="120" placeholder="10" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <label class="checkbox-row">
+            <input type="checkbox" v-model="form.connectNow" />
+            <span>保存后立即连接</span>
+          </label>
+        </div>
+
+        <!-- 测试结果 -->
+        <div v-if="testResult" class="test-result" :class="testResult.ok ? 'success' : 'fail'">
+          <svg v-if="testResult.ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="20 6 9 17 4 12"/></svg>
+          <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+          <span>{{ testResult.ok ? `连接成功 (${testResult.latencyMs}ms)` : `连接失败: ${testResult.message}` }}</span>
+        </div>
+
+        <!-- 错误信息 -->
+        <div v-if="errorMsg" class="form-error">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+          {{ errorMsg }}
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn-cancel" @click="$emit('close')">取消</button>
+        <button class="btn-secondary" :disabled="testing" @click="handleTest">
+          <svg v-if="testing" class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+          <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          {{ testing ? '测试中...' : '测试连接' }}
+        </button>
+        <button class="btn-primary" :disabled="saving || testing" @click="handleSave">
+          {{ saving ? '保存中...' : (isEdit ? '保存' : '添加') }}
+        </button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, reactive, watch, onMounted, onUnmounted } from 'vue'
+import NoteInput from './NoteInput.vue'
+import { useSSHStore } from '@/stores/ssh'
+import type { SSHConnection } from '@/stores/ssh'
+import { useConfirm } from '@/composables/useConfirm'
+import { toFriendlyMessage } from '@/api/client'
+
+const props = defineProps<{
+  editData?: SSHConnection
+}>()
+
+const emit = defineEmits<{
+  close: []
+  saved: [payload: { savedId: string; connectNow: boolean }]
+}>()
+
+const store = useSSHStore()
+const { confirm } = useConfirm()
+
+const isEdit = !!props.editData
+const saving = ref(false)
+const testing = ref(false)
+const errorMsg = ref('')
+const showPassword = ref(false)
+const showPassphrase = ref(false)
+const showAdvanced = ref(false)
+const testResult = ref<SSHTestResult | null>(null)
+
+const form = reactive({
+  name: props.editData?.name || '',
+  host: props.editData?.host || '',
+  port: props.editData?.port || 22,
+  username: props.editData?.username || '',
+  authType: (props.editData?.authType || 'password') as 'password' | 'privateKey' | 'agent',
+  password: props.editData?.password || '',
+  privateKeyPath: props.editData?.privateKeyPath || '',
+  passphrase: props.editData?.passphrase || '',
+  // 备注(单条字符串,最多 10 个字). 兼容旧数据:从 tags 数组中取第一个非空值
+  note: props.editData?.note ?? ((props.editData?.tags || [])[0] || ''),
+  readyTimeout: props.editData?.readyTimeout ? Math.round(props.editData.readyTimeout / 1000) : 15,
+  keepaliveInterval: props.editData?.keepaliveInterval ? Math.round(props.editData.keepaliveInterval / 1000) : 10,
+  connectNow: false,
+})
+
+const authOptions = [
+  { value: 'password' as const, label: '密码' },
+  { value: 'privateKey' as const, label: '私钥' },
+  { value: 'agent' as const, label: 'Agent' },
+]
+
+// 认证相关字段变动时清除旧的测试结果,避免误导
+watch(
+  () => [form.host, form.port, form.username, form.authType, form.password, form.privateKeyPath, form.passphrase],
+  () => { testResult.value = null },
+)
+
+// Escape 键关闭弹窗
+function handleKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') emit('close')
+}
+onMounted(() => window.addEventListener('keydown', handleKeydown))
+onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
+
+function clampPort() {
+  const n = Number(form.port)
+  if (!Number.isFinite(n) || n < 1) form.port = 22
+  else if (n > 65535) form.port = 65535
+}
+
+/** 将秒级输入安全转为毫秒;非法/非正数返回 undefined 让后端用默认值 */
+function sanitizeMs(val: unknown): number | undefined {
+  const n = Number(val)
+  if (!Number.isFinite(n) || n <= 0) return undefined
+  return Math.round(n) * 1000
+}
+
+/** 构建认证载荷,供测试与保存共用 */
+function buildPayload() {
+  return {
+    name: form.name.trim() || `${form.username.trim()}@${form.host.trim()}`,
+    host: form.host.trim(),
+    port: Math.min(65535, Math.max(1, Number(form.port) || 22)),
+    username: form.username.trim(),
+    authType: form.authType,
+    password: form.authType === 'password' ? form.password : undefined,
+    privateKeyPath: form.authType === 'privateKey' ? form.privateKeyPath : undefined,
+    passphrase: form.authType === 'privateKey' ? form.passphrase : undefined,
+    readyTimeout: sanitizeMs(form.readyTimeout),
+    keepaliveInterval: sanitizeMs(form.keepaliveInterval),
+  }
+}
+
+/** 把响应式对象转成 plain object,避免 IPC structuredClone 失败 */
+function toPlain<T>(obj: T): T {
+  return JSON.parse(JSON.stringify(obj))
+}
+
+function isDuplicate(): boolean {
+  const key = `${form.host.trim()}:${form.port}:${form.username.trim()}`
+  return store.connections.some(c =>
+    `${c.host}:${c.port}:${c.username}` === key && c.id !== props.editData?.id
+  )
+}
+
+async function selectKeyFile() {
+  const api = window.electronAPI
+  if (api?.fsSelectFile) {
+    const path = await api.fsSelectFile()
+    if (path) form.privateKeyPath = path
+  }
+}
+
+async function handleTest() {
+  errorMsg.value = ''
+  testResult.value = null
+
+  if (!form.host.trim() || !form.username.trim()) {
+    errorMsg.value = '请先填写主机和用户名'
+    return
+  }
+  if (form.authType === 'password' && !form.password) {
+    errorMsg.value = '请输入密码'
+    return
+  }
+  if (form.authType === 'privateKey' && !form.privateKeyPath) {
+    errorMsg.value = '请选择私钥文件'
+    return
+  }
+
+  const api = window.electronAPI
+  if (!api) { errorMsg.value = 'Electron API 不可用'; return }
+
+  testing.value = true
+  try {
+    testResult.value = await api.sshTestConnection(toPlain({
+      id: props.editData?.id || '',
+      ...buildPayload(),
+    }))
+  } catch (err: any) {
+    testResult.value = { ok: false, message: toFriendlyMessage(err, '测试失败'), latencyMs: 0 }
+  } finally {
+    testing.value = false
+  }
+}
+
+async function handleSave() {
+  errorMsg.value = ''
+
+  if (!form.host.trim()) { errorMsg.value = '请输入主机地址'; return }
+  if (!form.username.trim()) { errorMsg.value = '请输入用户名'; return }
+  // 新建时强制要求密码/私钥,编辑时允许保留原值
+  if (!isEdit) {
+    if (form.authType === 'password' && !form.password) { errorMsg.value = '请输入密码'; return }
+    if (form.authType === 'privateKey' && !form.privateKeyPath) { errorMsg.value = '请选择私钥文件'; return }
+  } else {
+    if (form.authType === 'privateKey' && !form.privateKeyPath) { errorMsg.value = '请选择私钥文件'; return }
+  }
+
+  if (isDuplicate()) {
+    const ok = await confirm({
+      title: '检测到重复连接',
+      message: `已存在相同连接 ${form.host}:${form.port} (${form.username}),是否继续保存?`,
+      confirmText: '继续保存',
+    })
+    if (!ok) return
+  }
+
+  saving.value = true
+  try {
+    // 备注:限长 10 字,去除首尾空格
+    const note = (form.note || '').trim().slice(0, 10)
+    const payload = toPlain({ ...buildPayload(), note, tags: note ? [note] : [] })
+    let savedId: string
+    if (isEdit) {
+      await store.updateConnection(props.editData!.id, payload)
+      savedId = props.editData!.id
+    } else {
+      savedId = await store.addConnection(payload)
+    }
+    emit('saved', { savedId, connectNow: form.connectNow })
+  } catch (err: any) {
+    console.error('[ConnectionModal] save failed:', err)
+    errorMsg.value = toFriendlyMessage(err, '保存失败')
+  } finally {
+    saving.value = false
+  }
+}
+</script>
+
+<style scoped>
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(2px);
+}
+
+.modal-dialog {
+  width: 560px;
+  max-height: 85vh;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modal-header {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.modal-header h3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.modal-close {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.modal-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+.modal-close svg {
+  width: 14px;
+  height: 14px;
+}
+
+.modal-body {
+  padding: 8px 16px 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.form-row {
+  display: flex;
+  gap: 12px;
+}
+
+.form-row.two-col {
+  gap: 12px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.form-group.flex-1 { flex: 1; }
+.form-group.flex-2 { flex: 2; }
+
+.form-group label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.form-group input[type="text"],
+.form-group input[type="password"],
+.form-group input[type="number"] {
+  height: 32px;
+  padding: 0 10px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: var(--font-sans);
+  outline: none;
+  transition: border-color var(--transition-fast);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.form-group input:focus {
+  border-color: var(--accent-blue);
+}
+
+.form-group input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.auth-tabs {
+  display: flex;
+  gap: 2px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+}
+
+.auth-tab {
+  flex: 1;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: var(--font-sans);
+  transition: all var(--transition-fast);
+}
+
+.auth-tab:hover {
+  color: var(--text-secondary);
+}
+
+.auth-tab.active {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  box-shadow: var(--shadow-sm);
+}
+
+.input-with-btn {
+  display: flex;
+  gap: 6px;
+}
+
+.input-with-btn input {
+  flex: 1;
+  height: 32px;
+  padding: 0 10px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: var(--font-mono);
+  outline: none;
+  transition: border-color var(--transition-fast);
+  min-width: 0;
+}
+
+.input-with-btn input:focus {
+  border-color: var(--accent-blue);
+}
+
+.browse-btn,
+.toggle-btn {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.browse-btn:hover,
+.toggle-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.form-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: rgba(0, 120, 212, 0.06);
+  border: 1px solid rgba(0, 120, 212, 0.15);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.form-info svg {
+  flex-shrink: 0;
+  color: var(--accent-blue);
+}
+
+/* 高级选项 */
+.advanced-section {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 8px;
+}
+
+.advanced-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  padding: 4px 0;
+}
+
+.advanced-toggle:hover {
+  color: var(--text-primary);
+}
+
+.toggle-arrow {
+  transition: transform var(--transition-fast);
+}
+
+.toggle-arrow.expanded {
+  transform: rotate(90deg);
+}
+
+.advanced-body {
+  margin-top: 8px;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.checkbox-row input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent-blue);
+  cursor: pointer;
+}
+
+.test-result {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+
+.test-result.success {
+  background: rgba(78, 201, 176, 0.08);
+  border: 1px solid rgba(78, 201, 176, 0.25);
+  color: var(--accent-green);
+}
+
+.test-result.fail {
+  background: rgba(244, 135, 113, 0.08);
+  border: 1px solid rgba(244, 135, 113, 0.2);
+  color: var(--accent-red);
+}
+
+.form-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: rgba(244, 135, 113, 0.08);
+  border: 1px solid rgba(244, 135, 113, 0.2);
+  border-radius: var(--radius-sm);
+  color: var(--accent-red);
+  font-size: 12px;
+}
+
+.modal-footer {
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 16px;
+  border-top: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.btn-cancel,
+.btn-secondary,
+.btn-primary {
+  height: 30px;
+  padding: 0 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  transition: all var(--transition-fast);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-cancel {
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.btn-cancel:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.btn-secondary {
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--text-secondary);
+  margin-right: auto;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.btn-primary {
+  border: none;
+  background: var(--accent-blue);
+  color: #fff;
+  font-weight: 600;
+}
+
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.btn-primary:disabled,
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.spin {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+</style>
