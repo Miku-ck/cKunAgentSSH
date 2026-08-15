@@ -62,7 +62,8 @@ export class ElectronBridge {
     res.setHeader('Content-Type', 'application/json')
 
     const authHeader = req.headers['x-bridge-token']
-    if (authHeader !== this.token) {
+    // C2 修复：使用 timingSafeEqual 防止时序攻击逐字节猜测 token
+    if (!this._secureCompare(String(authHeader ?? ''), this.token)) {
       res.writeHead(401)
       res.end(JSON.stringify({ success: false, error: 'Unauthorized' }))
       return
@@ -132,6 +133,19 @@ export class ElectronBridge {
         res.end(JSON.stringify({ success: false, error: '命令执行失败，请稍后重试' }))
       }
     })
+  }
+
+  /**
+   * 恒定时间字符串比较，防止时序攻击。
+   * 长度不等时直接返回 false，避免任何 crypto 运算引入时序差异。
+   */
+  private _secureCompare(a: string, b: string): boolean {
+    const bufA = Buffer.from(a, 'utf-8')
+    const bufB = Buffer.from(b, 'utf-8')
+    if (bufA.length !== bufB.length) {
+      return false
+    }
+    return require('crypto').timingSafeEqual(bufA, bufB)
   }
 
   private findFreePort(start: number, end: number): Promise<number> {

@@ -90,6 +90,8 @@ async function triggerCompletion(): Promise<void> {
   }
 
   const candidates = await queryCompletion('local', props.ptyId, '', parsed, props.shell)
+  // Optimization 修复：await 后校验终端仍存活且可见，避免向已关闭的终端写入数据
+  if (!terminal) return
   // 注意：queryCompletion 内部会再传一次 props.ptyId 给 ptyCompleteCommand 以获取 cwd
   if (candidates.length === 0) {
     hideCompletion()

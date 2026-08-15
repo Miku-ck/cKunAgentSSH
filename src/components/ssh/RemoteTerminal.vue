@@ -49,6 +49,7 @@ let unsubClose: (() => void) | null = null
 let unsubTermConfig: (() => void) | null = null
 let resizeObserver: ResizeObserver | null = null
 let contextMenuHandler: ((e: Event) => void) | null = null
+let flushTimer: ReturnType<typeof setTimeout> | null = null
 
 const sshStore = useSSHStore()
 
@@ -90,6 +91,8 @@ async function triggerCompletion(): Promise<void> {
     }
 
     const candidates = await queryCompletion('remote', props.sshId, '', parsed)
+    // Optimization 修复：await 后校验终端仍存活，避免向已断开的 SSH 会话写入数据
+    if (!terminal) return
     if (candidates.length === 0) {
       hideCompletion()
       return
@@ -268,21 +271,84 @@ onMounted(() => {
   // 1. 过滤 ANSI 背景色以去除字体后的长方形色块
   // 2. 过滤 OSC 7 序列（由 PROMPT_COMMAND 注入产生，用于跟踪 cwd，不应显示）
   // 3. 过滤启动时注入命令的回显（用唯一标识 __ckun_ 和精确格式避免误伤用户输入）
+  //
+  // 行缓冲 + 延时刷新：
+  // - 注入命令回显较长（~250 字符），可能被拆成多个 TCP 数据块到达。
+  //   若按块过滤，含 __ckun_ 的前半段被过滤，但尾部残留会漏出。
+  //   因此先按 \n 拆行，仅处理完整行，不完整尾部暂存等待拼接。
+  // - 但 PS1 提示符不以 \n 结尾，会一直留在缓冲区。
+  //   因此用 30ms 延时刷新：数据停顿后自动刷出剩余内容（提示符/光标移动等）。
+  //   30ms 足够短不影响交互感知，又足够长以拼接被拆块的 echo 行。
+  let dataBuffer = ''
+
+  function processBufferedData(raw: string): string {
+    let cleaned = stripAnsiBackground(raw)
+    // 过滤 OSC 7 序列，支持 BEL (\x07) 和 ST (ESC \) 两种结束符
+    cleaned = cleaned.replace(/\x1b\]7;[^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    // 过滤启动注入命令的回显（整行含 __ckun_ 标识则丢弃）
+    cleaned = cleaned.replace(/[^\r\n]*__ckun_(?:osc7|host)[^\r\n]*[\r\n]*/g, '')
+    cleaned = cleaned.replace(/[^\r\n]*stty (?:-)?echo 2>\/dev\/null[^\r\n]*[\r\n]*/g, '')
+    return cleaned
+  }
+
+  function scheduleFlush(): void {
+    if (flushTimer) clearTimeout(flushTimer)
+    flushTimer = setTimeout(() => {
+      flushTimer = null
+      if (dataBuffer.length > 0) {
+        const cleaned = processBufferedData(dataBuffer)
+        if (cleaned) terminal?.write(cleaned)
+        dataBuffer = ''
+      }
+    }, 30)
+  }
+
+  function flushBuffer(processComplete: boolean): void {
+    if (flushTimer) {
+      clearTimeout(flushTimer)
+      flushTimer = null
+    }
+
+    if (processComplete) {
+      // 连接关闭时刷新全部剩余缓冲（不再等待完整行）
+      if (dataBuffer.length > 0) {
+        const cleaned = processBufferedData(dataBuffer)
+        if (cleaned) terminal?.write(cleaned)
+        dataBuffer = ''
+      }
+      return
+    }
+
+    const nlIdx = dataBuffer.lastIndexOf('\n')
+    if (nlIdx === -1) {
+      // 尚无完整行，启动延时刷新（处理提示符等不以 \n 结尾的数据）
+      scheduleFlush()
+      return
+    }
+
+    const completePart = dataBuffer.slice(0, nlIdx + 1)
+    dataBuffer = dataBuffer.slice(nlIdx + 1)
+
+    const cleaned = processBufferedData(completePart)
+    if (cleaned) terminal?.write(cleaned)
+
+    // 若仍有不完整尾部（如提示符），启动延时刷新
+    if (dataBuffer.length > 0) {
+      scheduleFlush()
+    }
+  }
+
   unsubData = api.onSshData(({ id, data }) => {
     if (id === props.sshId) {
-      let cleaned = stripAnsiBackground(data)
-      // 过滤 OSC 7 序列，支持 BEL (\x07) 和 ST (ESC \) 两种结束符
-      cleaned = cleaned.replace(/\x1b\]7;[^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
-      // 过滤启动注入命令的回显（仅匹配精确格式，避免误伤用户输入）
-      cleaned = cleaned.replace(/[^\r\n]*__ckun_(?:osc7|host)[^\r\n]*[\r\n]*/g, '')
-      cleaned = cleaned.replace(/[^\r\n]*stty (?:-)?echo 2>\/dev\/null[^\r\n]*[\r\n]*/g, '')
-      terminal?.write(cleaned)
+      dataBuffer += data
+      flushBuffer(false)
     }
   })
 
   // 监听 SSH 关闭
   unsubClose = api.onSshClose(({ id }) => {
     if (id === props.sshId) {
+      flushBuffer(true) // 刷新行缓冲，避免尾部数据丢失
       terminal?.write('\r\n\x1b[33m[SSH connection closed]\x1b[0m\r\n')
       emit('close')
     }
@@ -330,6 +396,10 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  if (flushTimer) {
+    clearTimeout(flushTimer)
+    flushTimer = null
+  }
   if (contextMenuHandler && terminal?.element) {
     terminal.element.removeEventListener('contextmenu', contextMenuHandler)
   }

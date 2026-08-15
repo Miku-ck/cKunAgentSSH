@@ -35,6 +35,8 @@ export const useSftpStore = defineStore('sftp', () => {
   const connectionName = ref('')
   const connectionHost = ref('')
   const online = ref(false)
+  /** 标记当前 SFTP 是否复用终端 SSH 会话（复用时 disconnect 不关闭 SSH 连接） */
+  const reusingTerminal = ref(false)
 
   // ─── 双栏目录 ─────────────────────────────────
   const localCwd = ref('')
@@ -52,10 +54,14 @@ export const useSftpStore = defineStore('sftp', () => {
 
   // ─── 传输队列 ─────────────────────────────────
   const transfers = ref<TransferItem[]>([])
-  let transferSeq = 1
+  // m4 修复：transferSeq 移入 store state，避免模块级变量永不重置和多会话共享
+  const transferSeq = ref(1)
   // 批量传输并发上限：同一 SFTP 通道同时传输多个文件会互相争抢导致整体吞吐降低
   // 经验值 2-3 较优，超过 4 后单文件速度明显下降
   const MAX_CONCURRENT_TRANSFERS = 3
+
+  // ─── 剪贴板（跨侧复制粘贴） ─────────────────────
+  const clipboard = ref<{ side: 'local' | 'remote'; paths: string[] } | null>(null)
   // 当前正在运行的传输数
   const runningCount = computed(() => transfers.value.filter(t => t.status === 'running').length)
 
@@ -67,6 +73,7 @@ export const useSftpStore = defineStore('sftp', () => {
   /** 直接通过 SSH 连接 + SFTP 子系统打开远程会话(独立于终端会话) */
   async function connect(connection: SSHConnectionRecord): Promise<void> {
     if (online.value) await disconnect()
+    reusingTerminal.value = false
     const plain = JSON.parse(JSON.stringify(connection))
     const { id, name } = await getApi().sshConnectSftp(plain)
     sshSessionId.value = id
@@ -81,25 +88,76 @@ export const useSftpStore = defineStore('sftp', () => {
       online.value = false
       remoteError.value = err?.message || 'SFTP 打开失败'
       // 失败时关闭 SSH
-      try { await getApi().sshDisconnect(id) } catch { /* ignore */ }
+      try { await getApi().sshDisconnect(id) } catch (e) { console.debug('[sftp] 连接失败后关闭 SSH 失败:', e) }
       sshSessionId.value = ''
+      throw err
+    }
+  }
+
+  /**
+   * 复用已有终端 SSH 会话打开 SFTP 子系统，并跳转到终端当前工作目录
+   * 不新建 SSH 连接，disconnect 时只关闭 SFTP 通道，不断开 SSH
+   */
+  async function connectFromTerminal(
+    terminalSshId: string,
+    name: string,
+    host: string,
+  ): Promise<void> {
+    if (online.value) await disconnect()
+    reusingTerminal.value = true
+    sshSessionId.value = terminalSshId
+    connectionName.value = name
+    connectionHost.value = host
+    try {
+      await getApi().sftpOpen(terminalSshId)
+      online.value = true
+      // 获取终端当前工作目录：优先用 OSC 7 跟踪值，为空则 exec pwd
+      let cwd = await getApi().sshGetCwd(terminalSshId)
+      if (!cwd) {
+        const result = await getApi().sshExec(terminalSshId, 'pwd')
+        cwd = (result.stdout || '').trim()
+      }
+      const target = cwd || '/'
+      remoteCwd.value = target
+      await loadRemote(target)
+    } catch (err: any) {
+      online.value = false
+      remoteError.value = err?.message || 'SFTP 打开失败'
+      // 复用模式下不关闭 SSH 连接（终端仍需要）
+      try { await getApi().sftpClose(terminalSshId) } catch (e) { console.debug('[sftp] 连接失败后关闭 SFTP 失败:', e) }
+      sshSessionId.value = ''
+      reusingTerminal.value = false
       throw err
     }
   }
 
   async function disconnect(): Promise<void> {
     if (sshSessionId.value) {
-      try { await getApi().sftpClose(sshSessionId.value) } catch { /* ignore */ }
-      try { await getApi().sshDisconnect(sshSessionId.value) } catch { /* ignore */ }
+      try { await getApi().sftpClose(sshSessionId.value) } catch (e) { console.debug('[sftp] 关闭 SFTP 失败:', e) }
+      // 复用终端模式不关闭 SSH 连接（终端仍需要），仅关闭 SFTP 子系统
+      if (!reusingTerminal.value) {
+        try { await getApi().sshDisconnect(sshSessionId.value) } catch (e) { console.debug('[sftp] 断开 SSH 失败:', e) }
+      }
     }
     sshSessionId.value = ''
     connectionName.value = ''
     connectionHost.value = ''
     online.value = false
-    remoteCwd.value = ''
-    remoteEntries.value = []
-    selectedRemote.value = new Set()
-    remoteError.value = ''
+    reusingTerminal.value = false
+  remoteCwd.value = ''
+  remoteEntries.value = []
+  selectedRemote.value = new Set()
+  transferSeq.value = 1
+  remoteError.value = ''
+  }
+
+  // ─── 剪贴板操作 ───────────────────────────────
+  function copyToClipboard(side: 'local' | 'remote', paths: string[]): void {
+    clipboard.value = { side, paths: [...paths] }
+  }
+
+  function clearClipboard(): void {
+    clipboard.value = null
   }
 
   // ─── 本地侧操作 ───────────────────────────────
@@ -218,6 +276,103 @@ export const useSftpStore = defineStore('sftp', () => {
     await remoteRefresh()
   }
 
+  // ─── 同侧复制粘贴 ─────────────────────────────
+  /**
+   * 本地同侧复制：将 paths 复制到 targetDir
+   * 支持目录递归，进度通过 sftp:progress 事件上报
+   */
+  async function localCopy(paths: string[], targetDir: string): Promise<void> {
+    const tasks: Array<{ id: string; src: string; dest: string; name: string }> = []
+    for (const src of paths) {
+      const name = basenameLocal(src)
+      const dest = await getApi().fsPathJoin(targetDir, name)
+      const id = `t${transferSeq.value++}`
+      transfers.value.push({
+        id, direction: 'up', name,
+        from: src, to: dest,
+        transferred: 0, total: 0,
+        status: 'pending', startTime: Date.now(),
+      })
+      tasks.push({ id, src, dest, name })
+    }
+    runBatch(tasks.map(t => () => runLocalCopy(t.id, t.src, t.dest))).then(async (results) => {
+      if (results.some(r => r.ok)) await localRefresh()
+    }).catch((err) => {
+      // C2 修复：防止 post-batch refresh 抛错导致未捕获 Promise rejection
+      console.debug('[sftp] batch local-copy 后续刷新失败:', err)
+    })
+  }
+
+  async function runLocalCopy(id: string, src: string, dest: string, retried = false): Promise<void> {
+    const t = transfers.value.find(x => x.id === id)
+    if (!t) return
+    t.status = 'running'
+    try {
+      await getApi().fsCopy(src, dest, id)
+      t.status = 'done'
+      t.endTime = Date.now()
+      toast.success(`复制成功: ${t.name}`)
+      scheduleRemoveTransfer(id)
+    } catch (err: any) {
+      t.status = 'error'
+      t.error = err?.message || '复制失败'
+      t.endTime = Date.now()
+      toast.error(`复制失败: ${t.name} — ${t.error}`)
+      scheduleRemoveTransfer(id, 10000)
+    }
+  }
+
+  /**
+   * 远程同侧复制：用 cp -r 复制，不支持细粒度进度（total=0 不定进度）
+   */
+  async function remoteCopy(paths: string[], targetDir: string): Promise<void> {
+    if (!sshSessionId.value || !online.value) return
+    const tasks: Array<{ id: string; src: string; dest: string; name: string }> = []
+    for (const src of paths) {
+      const name = basenameRemote(src)
+      const dest = targetDir === '/' ? '/' + name : targetDir + '/' + name
+      const id = `t${transferSeq.value++}`
+      transfers.value.push({
+        id, direction: 'down', name,
+        from: src, to: dest,
+        transferred: 0, total: 0,
+        status: 'pending', startTime: Date.now(),
+      })
+      tasks.push({ id, src, dest, name })
+    }
+    runBatch(tasks.map(t => () => runRemoteCopy(t.id, t.src, t.dest))).then(async (results) => {
+      if (results.some(r => r.ok)) await remoteRefresh()
+    }).catch((err) => {
+      // C2 修复：防止 post-batch refresh 抛错导致未捕获 Promise rejection
+      console.debug('[sftp] batch remote-copy 后续刷新失败:', err)
+    })
+  }
+
+  async function runRemoteCopy(id: string, src: string, dest: string): Promise<void> {
+    const t = transfers.value.find(x => x.id === id)
+    if (!t) return
+    t.status = 'running'
+    try {
+      // 用 cp -r 递归复制，shellQuote 转义路径中的特殊字符
+      const escapedSrc = `'${src.replace(/'/g, "'\\''")}'`
+      const escapedDest = `'${dest.replace(/'/g, "'\\''")}'`
+      const result = await getApi().sshExec(sshSessionId.value, `cp -r ${escapedSrc} ${escapedDest}`)
+      if (result.exitCode !== 0 && result.exitCode !== null) {
+        throw new Error(result.stderr || '复制失败')
+      }
+      t.status = 'done'
+      t.endTime = Date.now()
+      toast.success(`复制成功: ${t.name}`)
+      scheduleRemoveTransfer(id)
+    } catch (err: any) {
+      t.status = 'error'
+      t.error = err?.message || '复制失败'
+      t.endTime = Date.now()
+      toast.error(`复制失败: ${t.name} — ${t.error}`)
+      scheduleRemoveTransfer(id, 10000)
+    }
+  }
+
   // ─── 选择 ─────────────────────────────────────
   function toggleSelectLocal(path: string): void {
     const s = new Set(selectedLocal.value)
@@ -304,13 +459,15 @@ export const useSftpStore = defineStore('sftp', () => {
    * 支持目录递归：目录会被展开为多个文件上传任务，远程目录结构自动创建
    * 所有任务完成后再统一刷新目录，避免 N 个文件触发 N 次刷新
    */
-  async function uploadFiles(localPaths: string[]): Promise<void> {
+  /** 上传多个本地文件到远程目录（支持目录递归） */
+  async function uploadFiles(localPaths: string[], targetDir?: string): Promise<void> {
     if (!sshSessionId.value || !online.value) return
+    const remoteBaseDir = targetDir ?? remoteCwd.value
     const tasks: Array<{ id: string; localPath: string; remotePath: string }> = []
 
     for (const lp of localPaths) {
       const name = basenameLocal(lp)
-      const remoteBase = remoteCwd.value === '/' ? '/' + name : remoteCwd.value + '/' + name
+      const remoteBase = remoteBaseDir === '/' ? '/' + name : remoteBaseDir + '/' + name
 
       // 判断是文件还是目录：优先查 localEntries（应用内拖拽），否则用 fsStat（OS 拖拽）
       let isDir = false
@@ -334,7 +491,7 @@ export const useSftpStore = defineStore('sftp', () => {
           const remoteDir = remotePath.substring(0, remotePath.lastIndexOf('/'))
           // 确保远程父目录存在
           try { await getApi().sftpMkdirRecursive(sshSessionId.value, remoteDir) } catch { /* ignore */ }
-          const id = `t${transferSeq++}`
+          const id = `t${transferSeq.value++}`
           transfers.value.push({
             id, direction: 'up', name: f.relPath,
             from: f.localPath, to: remotePath,
@@ -345,7 +502,7 @@ export const useSftpStore = defineStore('sftp', () => {
         }
       } else {
         // 文件：直接加入
-        const id = `t${transferSeq++}`
+        const id = `t${transferSeq.value++}`
         transfers.value.push({
           id, direction: 'up', name,
           from: lp, to: remoteBase,
@@ -359,17 +516,21 @@ export const useSftpStore = defineStore('sftp', () => {
     runBatch(tasks.map(t => () => runUpload(t.id, t.localPath, t.remotePath))).then(async (results) => {
       // 至少有一个成功才刷新目录，避免无谓请求
       if (results.some(r => r.ok)) await remoteRefresh()
+    }).catch((err) => {
+      // C2 修复：防止 post-batch refresh 抛错导致未捕获 Promise rejection
+      console.debug('[sftp] batch upload 后续刷新失败:', err)
     })
   }
 
-  /** 下载多个远程文件到当前本地目录（支持目录递归） */
-  async function downloadFiles(remotePaths: string[]): Promise<void> {
+  /** 下载多个远程文件到本地目录（支持目录递归） */
+  async function downloadFiles(remotePaths: string[], targetDir?: string): Promise<void> {
     if (!sshSessionId.value || !online.value) return
+    const localBaseDir = targetDir ?? localCwd.value
     const tasks: Array<{ id: string; remotePath: string; localPath: string }> = []
 
     for (const rp of remotePaths) {
       const name = basenameRemote(rp)
-      const localBase = await getApi().fsPathJoin(localCwd.value, name)
+      const localBase = await getApi().fsPathJoin(localBaseDir, name)
 
       // 判断是文件还是目录：优先查 remoteEntries，否则用 sftpStat
       let isDir = false
@@ -388,7 +549,7 @@ export const useSftpStore = defineStore('sftp', () => {
             ? localPath.split('\\').slice(0, -1).join('\\')
             : localPath.split('/').slice(0, -1).join('/')
           try { await getApi().fsMkdir(localDir) } catch { /* ignore */ }
-          const id = `t${transferSeq++}`
+          const id = `t${transferSeq.value++}`
           transfers.value.push({
             id, direction: 'down', name: f.relPath,
             from: f.remotePath, to: localPath,
@@ -399,7 +560,7 @@ export const useSftpStore = defineStore('sftp', () => {
         }
       } else {
         // 文件：直接加入
-        const id = `t${transferSeq++}`
+        const id = `t${transferSeq.value++}`
         transfers.value.push({
           id, direction: 'down', name,
           from: rp, to: localBase,
@@ -412,6 +573,9 @@ export const useSftpStore = defineStore('sftp', () => {
 
     runBatch(tasks.map(t => () => runDownload(t.id, t.remotePath, t.localPath))).then(async (results) => {
       if (results.some(r => r.ok)) await localRefresh()
+    }).catch((err) => {
+      // C2 修复：防止 post-batch refresh 抛错导致未捕获 Promise rejection
+      console.debug('[sftp] batch download 后续刷新失败:', err)
     })
   }
 
@@ -664,14 +828,16 @@ export const useSftpStore = defineStore('sftp', () => {
 
   return {
     // state
-    sshSessionId, connectionName, connectionHost, online,
+    sshSessionId, connectionName, connectionHost, online, reusingTerminal,
     localCwd, remoteCwd, localEntries, remoteEntries,
     loadingLocal, loadingRemote, localError, remoteError,
-    selectedLocal, selectedRemote, transfers,
+    selectedLocal, selectedRemote, transfers, clipboard,
     // computed
     activeTransfers,
     // session
-    connect, disconnect,
+    connect, connectFromTerminal, disconnect,
+    // clipboard
+    copyToClipboard, clearClipboard,
     // local
     loadLocal, initLocalHome, localUp, localRefresh, localMkdir, localRename, localDelete,
     // remote
@@ -680,6 +846,8 @@ export const useSftpStore = defineStore('sftp', () => {
     toggleSelectLocal, toggleSelectRemote, clearSelection,
     // transfer
     uploadFiles, downloadFiles, cancelTransfer, removeTransfer, applyProgress,
+    // copy
+    localCopy, remoteCopy,
     // zip
     zipLocal, unzipLocal, zipRemote, unzipRemote,
     // 路径辅助（用于 ZIP 覆盖确认等场景）

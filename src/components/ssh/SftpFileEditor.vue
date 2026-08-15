@@ -216,10 +216,14 @@ function initEditor(): void {
       save()
     },
   })
-  setTimeout(() => editor?.layout(), 50)
-  setTimeout(() => editor?.layout(), 200)
+  // Optimization 修复：保存 timerId，组件卸载时清理，避免 dispose 后仍回调
+  _layoutTimers.push(window.setTimeout(() => editor?.layout(), 50))
+  _layoutTimers.push(window.setTimeout(() => editor?.layout(), 200))
   editor.focus()
 }
+
+/** Monaco 布局延时的定时器引用（组件卸载时清理） */
+const _layoutTimers: number[] = []
 
 function disposeEditor(): void {
   if (editor) {
@@ -286,6 +290,8 @@ function formatSize(bytes: number): string {
 }
 
 onUnmounted(() => {
+  // Optimization 修复：清理未触发的布局定时器
+  _layoutTimers.forEach(t => clearTimeout(t))
   disposeEditor()
 })
 </script>

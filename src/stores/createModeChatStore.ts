@@ -152,6 +152,9 @@ export function createModeChatStore<
     persistence: config.persistence ?? ('dual' as const),
   } as ModeConfig<TContext, TMessage, TConversation>
 
+  // M5 修复：发送锁，防止快速连点绕过 streaming 守卫导致并发流写入同一会话
+  let _sendLock = false
+
   let persistence: ReturnType<typeof useChatPersistence<TContext, TMessage, TConversation>>
   async function getDefaultModelId(): Promise<string | undefined> {
     const chatStore: ChatStoreLike = _chatStoreGetter!()
@@ -259,140 +262,157 @@ export function createModeChatStore<
     systemPrompt?: string
     skillIds?: string[]
   }) {
-    if (stream.streaming.value || !content.trim()) return
-
-    const appStore = useAppStore()
-    const toast = useToastStore()
-    if (appStore.backendStatus !== 'ready') {
-      toast.error('后端未就绪，请稍后重试')
-      return
-    }
-
-    const chatStore: ChatStoreLike = _chatStoreGetter!()
-    if (!persistence.selectedModelId.value || !chatStore.models.some((m: ModelConfig) => m.id === persistence.selectedModelId.value)) {
-      await fetchDefaultModel()
-    }
-    if (chatStore.models.length === 0) {
-      toast.error('无可用模型')
-      return
-    }
-    if (!persistence.selectedModelId.value) {
-      toast.error('请先选择模型')
-      return
-    }
-
-    let conv = persistence.currentConversation.value
-    if (!conv) {
-      const title = content.slice(0, 30) + (content.length > 30 ? '...' : '')
-      conv = await persistence.createConversation(title)
-    }
-    if (!conv) return
-
+    // M5 修复：原子检查+加锁，消除 streaming 守卫与 startStream 之间的竞态窗口
+    if (_sendLock || stream.streaming.value || !content.trim()) return
+    _sendLock = true
     try {
-      await persistence.ensureBackendConversation(conv)
-    } catch {
-      toast.error('创建会话失败')
-      return
-    }
-
-    const ctx = options?.context ?? (await buildContext?.())
-    const baseSystemPrompt = options?.systemPrompt ?? (buildSystemPrompt ? buildSystemPrompt(ctx) : undefined)
-
-    // ── 技能注入：用户显式选择的 skillIds + autoSkillMatch 开启时按触发词智能匹配 ──
-    // 与 Work 模式 chat.ts 行为一致：合并去重 → getSkillContext 拼接 → 注入 systemPrompt
-    let systemPrompt = baseSystemPrompt
-    try {
-      const userSkillIds = options?.skillIds ?? []
-      const skillStore = useSkillStore()
-      const autoMatched = settingsStore.settings.chat.autoSkillMatch
-        ? skillStore.matchSkills(content, mode)
-        : []
-      const allSkillIds = [...new Set([...userSkillIds, ...autoMatched.map(s => s.id)])]
-      if (allSkillIds.length > 0) {
-        const skillContext = skillStore.getSkillContext(allSkillIds)
-        if (skillContext) {
-          systemPrompt = systemPrompt ? `${systemPrompt}\n\n${skillContext}` : skillContext
-        }
+      const appStore = useAppStore()
+      const toast = useToastStore()
+      if (appStore.backendStatus !== 'ready') {
+        toast.error('后端未就绪，请稍后重试')
+        return
       }
-    } catch (e) {
-      console.warn('[createModeChatStore] 技能上下文构建失败（降级为无技能）:', e)
-    }
 
-    const userMsg: TMessage = createMessage
-      ? createMessage('user', content, ctx)
-      : {
-          id: genId(),
-          role: 'user',
-          content,
-          context: ctx,
-          created_at: new Date().toISOString(),
-        } as TMessage
-    conv.messages.push(userMsg)
+      const chatStore: ChatStoreLike = _chatStoreGetter!()
+      if (!persistence.selectedModelId.value || !chatStore.models.some((m: ModelConfig) => m.id === persistence.selectedModelId.value)) {
+        await fetchDefaultModel()
+      }
+      if (chatStore.models.length === 0) {
+        toast.error('无可用模型')
+        return
+      }
+      if (!persistence.selectedModelId.value) {
+        toast.error('请先选择模型')
+        return
+      }
 
-    const assistantMsg: TMessage = createMessage
-      ? createMessage('assistant', '', ctx)
-      : {
-          id: genId(),
-          role: 'assistant',
-          content: '',
-          streamingContent: '',
-          streamingReasoning: '',
-          created_at: new Date().toISOString(),
-        } as TMessage
-    if (assistantMsg.streamingContent === undefined) assistantMsg.streamingContent = ''
-    if (assistantMsg.streamingReasoning === undefined) assistantMsg.streamingReasoning = ''
-    conv.messages.push(assistantMsg)
+      let conv = persistence.currentConversation.value
+      if (!conv) {
+        const title = content.slice(0, 30) + (content.length > 30 ? '...' : '')
+        conv = await persistence.createConversation(title)
+      }
+      if (!conv) return
 
-    // 仅 dual 模式在本地做临时标题占位；backend 模式由后端 post_process 统一生成核心摘要标题，
-    // 避免本地抢先写入导致后端跳过标题生成。
-    if (fullConfig.persistence !== 'backend' && conv.messages.length <= 2 && conv.title === 'New Chat') {
-      conv.title = content.slice(0, 30) + (content.length > 30 ? '...' : '')
-    }
+      try {
+        await persistence.ensureBackendConversation(conv)
+      } catch {
+        toast.error('创建会话失败')
+        return
+      }
 
-    conv.updated_at = new Date().toISOString()
-    triggerRef(persistence.conversations)
-    persistence.save()
+      const ctx = options?.context ?? (await buildContext?.())
+      const baseSystemPrompt = options?.systemPrompt ?? (buildSystemPrompt ? buildSystemPrompt(ctx) : undefined)
 
-    const ok = await stream.startStream<TMessage, TConversation>({
-      content,
-      conversation: conv,
-      systemPrompt,
-      onContent: (msg, token) => {
-        msg.streamingContent = (msg.streamingContent || '') + token
-        triggerRef(persistence.conversations)
-      },
-      onReasoning: (msg, token) => {
-        msg.streamingReasoning = (msg.streamingReasoning || '') + token
-        triggerRef(persistence.conversations)
-      },
-      onError: (msg, err, duration) => {
-        msg.duration = duration
-        msg.content = msg.streamingContent || ''
-        msg.reasoning = msg.streamingReasoning || undefined
-        msg.streamingContent = undefined
-        msg.streamingReasoning = undefined
-        if (!msg.content) {
-          msg.content = `错误: ${err}`
+      // ── 技能注入：用户显式选择的 skillIds + autoSkillMatch 开启时按触发词智能匹配 ──
+      // 与 Work 模式 chat.ts 行为一致：合并去重 → getSkillContext 拼接 → 注入 systemPrompt
+      let systemPrompt = baseSystemPrompt
+      try {
+        const userSkillIds = options?.skillIds ?? []
+        const skillStore = useSkillStore()
+        const autoMatched = settingsStore.settings.chat.autoSkillMatch
+          ? skillStore.matchSkills(content, mode)
+          : []
+        const allSkillIds = [...new Set([...userSkillIds, ...autoMatched.map(s => s.id)])]
+        if (allSkillIds.length > 0) {
+          const skillContext = skillStore.getSkillContext(allSkillIds)
+          if (skillContext) {
+            systemPrompt = systemPrompt ? `${systemPrompt}\n\n${skillContext}` : skillContext
+          }
         }
-        conv.updated_at = new Date().toISOString()
-        triggerRef(persistence.conversations)
-        persistence.save()
-      },
-      onDone: async (msg, duration) => {
-        msg.duration = duration
-        msg.content = msg.streamingContent || ''
-        msg.reasoning = msg.streamingReasoning || undefined
-        msg.streamingContent = undefined
-        msg.streamingReasoning = undefined
-        conv.updated_at = new Date().toISOString()
-        triggerRef(persistence.conversations)
-        persistence.save()
-        await afterStreamDone?.(conv)
-      },
-    })
+      } catch (e) {
+        console.warn('[createModeChatStore] 技能上下文构建失败（降级为无技能）:', e)
+      }
 
-    if (!ok) {
-      toast.error('启动流式失败')
+      const userMsg: TMessage = createMessage
+        ? createMessage('user', content, ctx)
+        : {
+            id: genId(),
+            role: 'user',
+            content,
+            context: ctx,
+            created_at: new Date().toISOString(),
+          } as TMessage
+      conv.messages.push(userMsg)
+
+      const assistantMsg: TMessage = createMessage
+        ? createMessage('assistant', '', ctx)
+        : {
+            id: genId(),
+            role: 'assistant',
+            content: '',
+            streamingContent: '',
+            streamingReasoning: '',
+            created_at: new Date().toISOString(),
+          } as TMessage
+      if (assistantMsg.streamingContent === undefined) assistantMsg.streamingContent = ''
+      if (assistantMsg.streamingReasoning === undefined) assistantMsg.streamingReasoning = ''
+      conv.messages.push(assistantMsg)
+
+      // 仅 dual 模式在本地做临时标题占位；backend 模式由后端 post_process 统一生成核心摘要标题，
+      // 避免本地抢先写入导致后端跳过标题生成。
+      if (fullConfig.persistence !== 'backend' && conv.messages.length <= 2 && conv.title === 'New Chat') {
+        conv.title = content.slice(0, 30) + (content.length > 30 ? '...' : '')
+      }
+
+      conv.updated_at = new Date().toISOString()
+      triggerRef(persistence.conversations)
+      persistence.save()
+
+      // M1 修复：requestAnimationFrame 节流，将多个 token 合并为单次渲染，避免高 token 速率下的卡顿
+      let rafScheduled = false
+      const scheduleRender = () => {
+        if (rafScheduled) return
+        rafScheduled = true
+        requestAnimationFrame(() => {
+          rafScheduled = false
+          triggerRef(persistence.conversations)
+        })
+      }
+
+      const ok = await stream.startStream<TMessage, TConversation>({
+        content,
+        conversation: conv,
+        systemPrompt,
+        onContent: (msg, token) => {
+          msg.streamingContent = (msg.streamingContent || '') + token
+          scheduleRender()
+        },
+        onReasoning: (msg, token) => {
+          msg.streamingReasoning = (msg.streamingReasoning || '') + token
+          scheduleRender()
+        },
+        onError: (msg, err, duration) => {
+          msg.duration = duration
+          msg.content = msg.streamingContent || ''
+          msg.reasoning = msg.streamingReasoning || undefined
+          msg.streamingContent = undefined
+          msg.streamingReasoning = undefined
+          if (!msg.content) {
+            msg.content = `错误: ${err}`
+          }
+          conv.updated_at = new Date().toISOString()
+          triggerRef(persistence.conversations)
+          persistence.save()
+        },
+        onDone: async (msg, duration) => {
+          msg.duration = duration
+          msg.content = msg.streamingContent || ''
+          msg.reasoning = msg.streamingReasoning || undefined
+          msg.streamingContent = undefined
+          msg.streamingReasoning = undefined
+          conv.updated_at = new Date().toISOString()
+          triggerRef(persistence.conversations)
+          persistence.save()
+          await afterStreamDone?.(conv)
+        },
+      })
+
+      if (!ok) {
+        toast.error('启动流式失败')
+      }
+    } finally {
+      // Optimization 修复：所有早返回路径（后端未就绪/无模型/创建失败等）均走此 finally，防止锁永久占用
+      _sendLock = false
     }
   }
 

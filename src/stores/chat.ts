@@ -187,8 +187,11 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function loadMessages(conversationId: string) {
+    const targetId = conversationId
     try {
-      const rawMessages = await api.getMessages(conversationId)
+      const rawMessages = await api.getMessages(targetId)
+      // Optimization 修复：await 后校验当前会话未改变，避免快速切换时消息串台
+      if (base.currentConvId.value !== targetId) return
       // 映射后端的 snake_case 字段到前端 ChatMessage 的 camelCase 字段
       const mapped = rawMessages.map((msg: any) => ({
         ...msg,
@@ -199,11 +202,13 @@ export const useChatStore = defineStore('chat', () => {
         duration: msg.agent_trace?.duration ?? undefined,
       })) as ModeMessage[]
       base.conversations.value = base.conversations.value.map((c) =>
-        c.id === conversationId ? { ...c, messages: mapped } : c
+        c.id === targetId ? { ...c, messages: mapped } : c
       )
     } catch {
+      // 同样仅在会话未改变时写入空数组
+      if (base.currentConvId.value !== targetId) return
       base.conversations.value = base.conversations.value.map((c) =>
-        c.id === conversationId ? { ...c, messages: [] as ModeMessage[] } : c
+        c.id === targetId ? { ...c, messages: [] as ModeMessage[] } : c
       )
     }
   }
@@ -251,8 +256,15 @@ export const useChatStore = defineStore('chat', () => {
     const skillContext = skillStore.getSkillContext(allSkillIds)
 
     if (!currentConversationId.value) {
-      // 新建会话时不传标题，让后端 post_process 在第一轮完成后自动生成核心摘要标题
-      await createConversation()
+      // Optimization 修复：自动创建会话失败时捕获错误，避免变为未捕获 rejection
+      try {
+        // 新建会话时不传标题，让后端 post_process 在第一轮完成后自动生成核心摘要标题
+        await createConversation()
+      } catch (e) {
+        console.error('[chatStore] auto-create conversation failed:', e)
+        toast.error('创建会话失败，请重试')
+        return
+      }
     }
 
     await base.sendMessage(content, {

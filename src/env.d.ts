@@ -91,6 +91,7 @@ interface ElectronAPI {
   fsGetHomePath: () => Promise<string>
   fsMkdir: (dirPath: string) => Promise<void>
   fsRename: (oldPath: string, newPath: string) => Promise<void>
+  fsCopy: (srcPath: string, destPath: string, transferId: string) => Promise<void>
   fsTrash: (filePath: string) => Promise<void>
   fsWriteBinaryFile: (filePath: string, base64Data: string) => Promise<void>
   fsPathJoin: (...segments: string[]) => Promise<string>
@@ -126,8 +127,13 @@ interface ElectronAPI {
   sshWrite: (id: string, data: string) => Promise<void>
   sshResize: (id: string, cols: number, rows: number) => Promise<void>
   sshDisconnect: (id: string) => Promise<void>
+  sshGetCwd: (id: string) => Promise<string>
+  sshExec: (id: string, command: string) => Promise<{ stdout: string; stderr: string; exitCode: number | null }>
   onSshData: (callback: (data: { id: string; data: string }) => void) => () => void
   onSshClose: (callback: (data: { id: string }) => void) => () => void
+  // s1 修复：主机密钥验证事件（首次连接通知 + 密钥变更警告）
+  onHostKeyNew: (callback: (data: { hostKey: string; fingerprint: string }) => void) => () => void
+  onHostKeyMismatch: (callback: (data: { hostKey: string; expected: string; got: string }) => void) => () => void
   sshListConnections: () => Promise<SSHConnectionRecord[]>
   sshSaveConnection: (conn: SSHConnectionRecord) => Promise<SSHConnectionRecord>
   sshDeleteConnection: (id: string) => Promise<void>

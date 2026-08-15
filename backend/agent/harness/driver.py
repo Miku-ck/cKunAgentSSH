@@ -318,143 +318,9 @@ class Driver:
                 except Exception as e:
                     logger.warning("渐进收集检测失败: %s", e)
 
-            # ── ACT: 执行工具 ──
-            await ctx.transition(State.ACTING, event="need_tool")
-
-            for tc in llm_out.tool_calls:
-                # 记录到 ctx.tool_calls_log（供 Reins 检查）
-                ctx.tool_calls_log.append({
-                    "tool": tc.name,
-                    "args": tc.args,
-                    "iteration": iteration,
-                    "success": None,  # 待执行
-                })
-
-                # ── pre_tool_call（Reins 检查）──
-                pre_tool_decision = await harness.reins.check(ReinPoint.PRE_TOOL_CALL, ctx)
-                if pre_tool_decision.intercepted:
-                    # 拦截
-                    for ev in pre_tool_decision.events:
-                        await telemetry.emit(ev)
-                        yield ev
-                    result_text = f"工具调用被拦截: {pre_tool_decision.intercept_reason}"
-                    ctx.tool_calls_log[-1]["success"] = False
-                    # 被拦截说明是危险命令，priority 标记为 high 供 compress_messages 优先保留
-                    ctx.messages.append(harness.bridle.build_tool_result_message(tc.id, result_text, priority="high"))
-                    yield TraceEvent(
-                        kind="tool_call_result",
-                        source="reins",
-                        run_id=ctx.run_id,
-                        iteration=iteration,
-                        payload={
-                            "tool": tc.name,
-                            "result": result_text,
-                            "success": False,
-                            "duration_ms": 0,
-                        },
-                    )
-                    continue
-
-                # ── 发 tool_call_start ──
-                # H13 修复 A3：push span_id 到栈，供嵌套工具调用的 parent_span_id 追踪
-                ctx.span_stack.append(tc.id)
-                parent_span = ctx.span_stack[-2] if len(ctx.span_stack) >= 2 else ""
-                yield TraceEvent(
-                    kind="tool_call_start",
-                    source="driver",
-                    run_id=ctx.run_id,
-                    iteration=iteration,
-                    payload={"tool": tc.name, "args": tc.args, "tool_call_id": tc.id},
-                    parent_span_id=parent_span,
-                )
-
-                # ── Saddle 执行工具 ──
-                result, undo = await harness.saddle.execute(
-                    tc, ctx,
-                    auto_rollback=ctx.config.auto_rollback_on_tool_failure,
-                )
-                ctx.tool_calls_log[-1]["success"] = result.success
-
-                # ── post_tool_call ──
-                post_tool_decision = await harness.reins.check(ReinPoint.POST_TOOL_CALL, ctx)
-                # H13 修复 B2：补全 intercepted + undo_actions 处理
-                # 原实现只处理 events + inject_messages，未处理 intercepted 和 undo_actions 字段
-                if post_tool_decision.intercepted:
-                    # 拦截器要求终止本次工具调用 → 用拦截结果替代 saddle 的 result
-                    for ev in post_tool_decision.events:
-                        yield ev
-                    # 执行拦截器声明的 undo_actions（如严重错误时回滚已写入文件）
-                    if post_tool_decision.undo_actions:
-                        for action in post_tool_decision.undo_actions:
-                            try:
-                                await action.apply_reverse()
-                            except Exception as e:
-                                logger.warning("POST_TOOL_CALL undo 失败: %s", e)
-                    # 构建拦截结果（high 优先级，确保压缩时保留）
-                    result = ToolResult(
-                        success=False,
-                        error=post_tool_decision.intercept_reason or "POST_TOOL_CALL 拦截",
-                        priority="high",
-                    )
-                    ctx.tool_calls_log[-1]["success"] = False
-                    if post_tool_decision.inject_messages:
-                        ctx.messages.extend(post_tool_decision.inject_messages)
-                elif post_tool_decision.events or post_tool_decision.inject_messages:
-                    # 原有逻辑：发出 events + 注入 messages（不拦截）
-                    for ev in post_tool_decision.events:
-                        yield ev
-                    if post_tool_decision.inject_messages:
-                        ctx.messages.extend(post_tool_decision.inject_messages)
-
-                # ── 发 tool_call_result ──
-                if result.success:
-                    result_text = result.output
-                else:
-                    # H13 修复 C6：使用 Stirrups.build_error_feedback 构建差异化反馈
-                    # 按错误类型给 LLM 不同的修复指引（参数错误/权限拦截/瞬时故障/致命错误）
-                    from .stirrups import ErrorClassifier, build_error_feedback
-                    error_type = ErrorClassifier.classify_tool_error(result.error or "", tc.name)
-                    result_text = build_error_feedback(result.error or "", tc.name, error_type)
-                yield TraceEvent(
-                    kind="tool_call_result",
-                    source="saddle",
-                    run_id=ctx.run_id,
-                    iteration=iteration,
-                    payload={
-                        "tool": tc.name,
-                        "result": result_text,
-                        "success": result.success,
-                        "duration_ms": result.duration_ms,
-                        "tool_call_id": tc.id,
-                    },
-                )
-
-                # 工具结果加入消息历史，透传 priority 供 compress_messages 读取
-                ctx.messages.append(harness.bridle.build_tool_result_message(tc.id, result_text, priority=result.priority))
-
-                # H13 修复 A4：每次工具调用后清空 once 范围授权
-                # once 语义是"仅本次"，必须消费后立即清空，防止跨工具调用污染
-                # 原实现 PermissionGate.clear_once() 已实现但无人调用，是死代码
-                try:
-                    from .reins import _get_global_permission_gate_sync
-                    _get_global_permission_gate_sync().clear_once()
-                except Exception as e:
-                    logger.warning("clear_once 失败: %s", e)
-
-                # H13 修复 A3：pop span_id（与 tool_call_start 的 push 配对）
-                if ctx.span_stack:
-                    ctx.span_stack.pop()
-
-            # ── OBSERVE → THINK ──
-            await ctx.transition(State.OBSERVING, event="continue")
-            await ctx.transition(State.THINKING, event="continue")
-            yield TraceEvent(
-                kind="state",
-                source="driver",
-                run_id=ctx.run_id,
-                iteration=iteration + 1,
-                payload={"state": "thinking"},
-            )
+            # ── ACT: 执行工具 + OBSERVE → THINK ──
+            async for ev in self._execute_tool_calls(llm_out, ctx, harness, telemetry, iteration):
+                yield ev
 
             # ── post_iteration ──
             post_decision = await harness.reins.check(ReinPoint.POST_ITERATION, ctx)
@@ -530,6 +396,157 @@ class Driver:
             full_content, full_reasoning, harness,
         ):
             yield ev
+
+    async def _execute_tool_calls(
+        self,
+        llm_out: LLMOutput,
+        ctx: RunContext,
+        harness: "Harness",
+        telemetry: TelemetryBus,
+        iteration: int,
+    ) -> AsyncIterator[TraceEvent]:
+        """ACT 阶段：执行本轮所有工具调用 + OBSERVE → THINK 状态转移。
+
+        包含 pre_tool_call 拦截、Saddle 执行、post_tool_call 拦截/回滚、
+        span 追踪、once 权限清理。
+        """
+        # ── ACT: 执行工具 ──
+        await ctx.transition(State.ACTING, event="need_tool")
+
+        for tc in llm_out.tool_calls:
+            # 记录到 ctx.tool_calls_log（供 Reins 检查）
+            ctx.tool_calls_log.append({
+                "tool": tc.name,
+                "args": tc.args,
+                "iteration": iteration,
+                "success": None,  # 待执行
+            })
+
+            # ── pre_tool_call（Reins 检查）──
+            pre_tool_decision = await harness.reins.check(ReinPoint.PRE_TOOL_CALL, ctx)
+            if pre_tool_decision.intercepted:
+                # 拦截
+                for ev in pre_tool_decision.events:
+                    await telemetry.emit(ev)
+                    yield ev
+                result_text = f"工具调用被拦截: {pre_tool_decision.intercept_reason}"
+                ctx.tool_calls_log[-1]["success"] = False
+                # 被拦截说明是危险命令，priority 标记为 high 供 compress_messages 优先保留
+                ctx.messages.append(harness.bridle.build_tool_result_message(tc.id, result_text, priority="high"))
+                yield TraceEvent(
+                    kind="tool_call_result",
+                    source="reins",
+                    run_id=ctx.run_id,
+                    iteration=iteration,
+                    payload={
+                        "tool": tc.name,
+                        "result": result_text,
+                        "success": False,
+                        "duration_ms": 0,
+                    },
+                )
+                continue
+
+            # ── 发 tool_call_start ──
+            # H13 修复 A3：push span_id 到栈，供嵌套工具调用的 parent_span_id 追踪
+            ctx.span_stack.append(tc.id)
+            parent_span = ctx.span_stack[-2] if len(ctx.span_stack) >= 2 else ""
+            yield TraceEvent(
+                kind="tool_call_start",
+                source="driver",
+                run_id=ctx.run_id,
+                iteration=iteration,
+                payload={"tool": tc.name, "args": tc.args, "tool_call_id": tc.id},
+                parent_span_id=parent_span,
+            )
+
+            # ── Saddle 执行工具 ──
+            result, undo = await harness.saddle.execute(
+                tc, ctx,
+                auto_rollback=ctx.config.auto_rollback_on_tool_failure,
+            )
+            ctx.tool_calls_log[-1]["success"] = result.success
+
+            # ── post_tool_call ──
+            post_tool_decision = await harness.reins.check(ReinPoint.POST_TOOL_CALL, ctx)
+            # H13 修复 B2：补全 intercepted + undo_actions 处理
+            # 原实现只处理 events + inject_messages，未处理 intercepted 和 undo_actions 字段
+            if post_tool_decision.intercepted:
+                # 拦截器要求终止本次工具调用 → 用拦截结果替代 saddle 的 result
+                for ev in post_tool_decision.events:
+                    yield ev
+                # 执行拦截器声明的 undo_actions（如严重错误时回滚已写入文件）
+                if post_tool_decision.undo_actions:
+                    for action in post_tool_decision.undo_actions:
+                        try:
+                            await action.apply_reverse()
+                        except Exception as e:
+                            logger.warning("POST_TOOL_CALL undo 失败: %s", e)
+                # 构建拦截结果（high 优先级，确保压缩时保留）
+                result = ToolResult(
+                    success=False,
+                    error=post_tool_decision.intercept_reason or "POST_TOOL_CALL 拦截",
+                    priority="high",
+                )
+                ctx.tool_calls_log[-1]["success"] = False
+                if post_tool_decision.inject_messages:
+                    ctx.messages.extend(post_tool_decision.inject_messages)
+            elif post_tool_decision.events or post_tool_decision.inject_messages:
+                # 原有逻辑：发出 events + 注入 messages（不拦截）
+                for ev in post_tool_decision.events:
+                    yield ev
+                if post_tool_decision.inject_messages:
+                    ctx.messages.extend(post_tool_decision.inject_messages)
+
+            # ── 发 tool_call_result ──
+            if result.success:
+                result_text = result.output
+            else:
+                # H13 修复 C6：使用 Stirrups.build_error_feedback 构建差异化反馈
+                # 按错误类型给 LLM 不同的修复指引（参数错误/权限拦截/瞬时故障/致命错误）
+                from .stirrups import ErrorClassifier, build_error_feedback
+                error_type = ErrorClassifier.classify_tool_error(result.error or "", tc.name)
+                result_text = build_error_feedback(result.error or "", tc.name, error_type)
+            yield TraceEvent(
+                kind="tool_call_result",
+                source="saddle",
+                run_id=ctx.run_id,
+                iteration=iteration,
+                payload={
+                    "tool": tc.name,
+                    "result": result_text,
+                    "success": result.success,
+                    "duration_ms": result.duration_ms,
+                    "tool_call_id": tc.id,
+                },
+            )
+
+            # 工具结果加入消息历史，透传 priority 供 compress_messages 读取
+            ctx.messages.append(harness.bridle.build_tool_result_message(tc.id, result_text, priority=result.priority))
+
+            # H13 修复 A4：每次工具调用后清空 once 范围授权
+            # once 语义是"仅本次"，必须消费后立即清空，防止跨工具调用污染
+            # 原实现 PermissionGate.clear_once() 已实现但无人调用，是死代码
+            try:
+                from .reins import _get_global_permission_gate_sync
+                _get_global_permission_gate_sync().clear_once()
+            except Exception as e:
+                logger.warning("clear_once 失败: %s", e)
+
+            # H13 修复 A3：pop span_id（与 tool_call_start 的 push 配对）
+            if ctx.span_stack:
+                ctx.span_stack.pop()
+
+        # ── OBSERVE → THINK ──
+        await ctx.transition(State.OBSERVING, event="continue")
+        await ctx.transition(State.THINKING, event="continue")
+        yield TraceEvent(
+            kind="state",
+            source="driver",
+            run_id=ctx.run_id,
+            iteration=iteration + 1,
+            payload={"state": "thinking"},
+        )
 
     def _filter_tools_by_intention(
         self,

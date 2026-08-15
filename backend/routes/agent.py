@@ -113,6 +113,111 @@ async def _run_reflection_and_evolution(
         logger.warning("反思/演化失败: %s", e, exc_info=True)
 
 
+# ── Helper Functions ──
+
+def _build_agent_system_prompt(
+    req: "AgentRunRequest",
+    reflection_injection: str,
+    is_conversation_task: bool,
+) -> str:
+    """构建 Agent 系统提示（时间注入 + 模式角色 + 用户 prompt + 反思 + 任务引导）"""
+    from prompts import MODE_PROMPTS
+
+    # 开头注入当前时间（解决 LLM 训练数据截止导致日期/星期回答过时的问题）
+    time_injection = (
+        f"[系统时间] 当前时间：{_current_time_str()}。"
+        f"如用户询问日期/星期/时间，请以本信息为准，不要使用训练数据中的旧时间。"
+    )
+
+    # 拼装：时间 + 模式基础 prompt + 用户 system_prompt + 反思
+    mode_prompt = MODE_PROMPTS.get(req.mode, "")
+    parts = [time_injection]
+    if mode_prompt:
+        parts.append(mode_prompt)
+    if req.system_prompt:
+        parts.append(req.system_prompt)
+    if reflection_injection:
+        parts.append(reflection_injection)
+
+    if is_conversation_task:
+        # 对话型任务：跳过工具效率/任务拆分/子Agent/输出格式等大段引导
+        parts.append(
+            "本任务为纯对话型问题，请直接简洁回答，不要调用任何工具，不要做长篇规划。"
+            "回答应基于你自身的身份和能力，避免引用无关上下文或记忆。"
+        )
+    else:
+        # 工具使用效率指引：减少无意义重复读取和循环调用
+        parts.append(
+            "工具使用效率：读取文件后请基于返回内容直接推理和修改，避免在短时间内多次读取同一文件。"
+            "如需查看大文件的不同位置，请优先使用 read_file 的 start_line/end_line 参数读取相关片段，"
+            "而不是重新读取整个文件。"
+        )
+        # 任务拆分指引：鼓励 Agent 把大任务拆成可独立验证的子任务
+        parts.append(
+            "任务拆分：面对复杂任务（涉及多文件修改、多步骤验证、跨模块重构等），请先在首轮输出一个简短的"
+            "子任务清单（用编号列表），然后逐个完成并验证。每完成一个子任务就明确标注"
+            "'✓ 子任务 N 完成'，便于追踪进度。若某个子任务卡住，先跳过并继续后续子任务，"
+            "最后统一汇报未完成项。这样即使迭代数耗尽，也能保证部分成果交付。"
+        )
+        # 子 Agent 指引：告知可用 spawn_subagent 工具委派独立子任务
+        parts.append(
+            "子 Agent：你可以使用 spawn_subagent 工具把独立子任务（如代码审查、方案设计、文档生成、"
+            "测试用例生成等）交给一个子 Agent 处理。子 Agent 是一次无工具的 LLM 推理调用，"
+            "适合做可独立完成的推理类任务。传入清晰的 task 和 system_prompt（角色设定），"
+            "可选 extra_context 提供代码片段等上下文。子 Agent 返回结果后，你负责整合并执行后续操作。"
+            "合理使用子 Agent 可以避免主上下文被细节淹没，提高复杂任务的执行效率。"
+        )
+        # 输出格式约束：避免中英文混排、过程性内容污染最终报告
+        parts.append(
+            "输出格式：在工具调用迭代过程中保持输出简洁，避免把每一步的内心独白、英文碎碎念或执行日志写入正文。"
+            "完成所有操作后，用结构化中文报告总结：先给总体结论，再用 ## 二级标题分节，每个修复点独立成段，"
+            "代码用代码块包裹。标题、列表、代码块前后必须换行，确保 Markdown 渲染正确。"
+        )
+
+    return "\n\n".join(parts)
+
+
+def _resolve_evolution_config(
+    req: "AgentRunRequest",
+    model_cfg: dict,
+    safe_max: int,
+    evolution_mgr: "EvolutionEngine",
+) -> dict:
+    """解析演化配置，返回 effective thinking/max_iter/temperature/max_tokens"""
+    try:
+        evolved_cfg = evolution_mgr.load_latest_evolved_config(req.mode)
+        if evolved_cfg:
+            # 用户未显式 enable_thinking 时，应用演化值
+            thinking = req.enable_thinking or evolved_cfg.get("enable_thinking", False)
+            # H11：应用演化后的 max_iterations（学到的最优值），用户值作为兜底
+            evolved_iter = evolved_cfg.get("max_iterations")
+            max_iter = evolved_iter if evolved_iter is not None else req.max_iterations
+            # 演化值覆盖模型配置默认值
+            evolved_temp = evolved_cfg.get("temperature")
+            temperature = evolved_temp if evolved_temp is not None else model_cfg.get("temperature", 0.7)
+            # H13：应用演化后的 max_tokens
+            evolved_max_tokens = evolved_cfg.get("max_tokens")
+            max_tokens = evolved_max_tokens if evolved_max_tokens else safe_max
+        else:
+            thinking = req.enable_thinking
+            max_iter = req.max_iterations
+            temperature = model_cfg.get("temperature", 0.7)
+            max_tokens = safe_max
+    except Exception as e:
+        logger.warning("加载演化配置失败: %s", e)
+        thinking = req.enable_thinking
+        max_iter = req.max_iterations
+        temperature = model_cfg.get("temperature", 0.7)
+        max_tokens = safe_max
+
+    return {
+        "thinking": thinking,
+        "max_iter": max_iter,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+
+
 # ── Request Models ──
 
 
@@ -210,10 +315,16 @@ async def agent_run(req: AgentRunRequest, request: Request):
     memory_contents: list[str] = []
     if memory_enabled and not is_conversation_task:
         try:
-            results = await memory_mgr.retrieve(
-                query=req.task, mode=req.mode, top_k=5, threshold=0.3
+            # M1 修复：加超时保护，防止 embedding API 阻塞导致 SSE 连接挂起无数据
+            results = await asyncio.wait_for(
+                memory_mgr.retrieve(
+                    query=req.task, mode=req.mode, top_k=5, threshold=0.3
+                ),
+                timeout=30.0,
             )
             memory_contents = [r.memory.content for r in results if r.memory.content]
+        except asyncio.TimeoutError:
+            logger.warning("记忆检索超时（30s），降级为空记忆继续运行")
         except Exception as e:
             logger.warning("记忆检索失败（降级为空记忆继续运行）: %s", e)
 
@@ -233,113 +344,29 @@ async def agent_run(req: AgentRunRequest, request: Request):
         logger.warning("加载反思策略失败（降级为无反思）: %s", e)
         reflection_injection = ""
 
-    # 合并 system_prompt + 反思注入
-    # 同时在开头注入当前时间（解决 LLM 训练数据截止导致日期/星期回答过时的问题）
-    time_injection = f"[系统时间] 当前时间：{_current_time_str()}。如用户询问日期/星期/时间，请以本信息为准，不要使用训练数据中的旧时间。"
-
-    # 拼装：时间 + 模式基础 prompt + 用户 system_prompt + 反思
-    # 注入 MODE_PROMPTS 确保 Agent 模式也有角色定位（修复 SSH Agent 缺角色问题）
-    from prompts import MODE_PROMPTS
-    mode_prompt = MODE_PROMPTS.get(req.mode, "")
-    parts = [time_injection]
-    if mode_prompt:
-        parts.append(mode_prompt)
-    if req.system_prompt:
-        parts.append(req.system_prompt)
-    if reflection_injection:
-        parts.append(reflection_injection)
-
-    if is_conversation_task:
-        # 对话型任务：跳过工具效率/任务拆分/子Agent/输出格式等大段引导
-        # 这些引导会让 LLM 误以为必须执行复杂任务、必须调用工具，从而回答一堆无关内容
-        # 对话型任务只需要简洁回答，不需要任何工具/规划/任务拆分引导
-        parts.append(
-            "本任务为纯对话型问题，请直接简洁回答，不要调用任何工具，不要做长篇规划。"
-            "回答应基于你自身的身份和能力，避免引用无关上下文或记忆。"
-        )
-    else:
-        # 工具使用效率指引：减少无意义重复读取和循环调用
-        parts.append(
-            "工具使用效率：读取文件后请基于返回内容直接推理和修改，避免在短时间内多次读取同一文件。"
-            "如需查看大文件的不同位置，请优先使用 read_file 的 start_line/end_line 参数读取相关片段，"
-            "而不是重新读取整个文件。"
-        )
-
-        # 任务拆分指引：鼓励 Agent 把大任务拆成可独立验证的子任务
-        parts.append(
-            "任务拆分：面对复杂任务（涉及多文件修改、多步骤验证、跨模块重构等），请先在首轮输出一个简短的"
-            "子任务清单（用编号列表），然后逐个完成并验证。每完成一个子任务就明确标注"
-            "'✓ 子任务 N 完成'，便于追踪进度。若某个子任务卡住，先跳过并继续后续子任务，"
-            "最后统一汇报未完成项。这样即使迭代数耗尽，也能保证部分成果交付。"
-        )
-
-        # 子 Agent 指引：告知可用 spawn_subagent 工具委派独立子任务
-        parts.append(
-            "子 Agent：你可以使用 spawn_subagent 工具把独立子任务（如代码审查、方案设计、文档生成、"
-            "测试用例生成等）交给一个子 Agent 处理。子 Agent 是一次无工具的 LLM 推理调用，"
-            "适合做可独立完成的推理类任务。传入清晰的 task 和 system_prompt（角色设定），"
-            "可选 extra_context 提供代码片段等上下文。子 Agent 返回结果后，你负责整合并执行后续操作。"
-            "合理使用子 Agent 可以避免主上下文被细节淹没，提高复杂任务的执行效率。"
-        )
-
-        # 输出格式约束：避免中英文混排、过程性内容污染最终报告
-        parts.append(
-            "输出格式：在工具调用迭代过程中保持输出简洁，避免把每一步的内心独白、英文碎碎念或执行日志写入正文。"
-            "完成所有操作后，用结构化中文报告总结：先给总体结论，再用 ## 二级标题分节，每个修复点独立成段，"
-            "代码用代码块包裹。标题、列表、代码块前后必须换行，确保 Markdown 渲染正确。"
-        )
-
-    final_system_prompt = "\n\n".join(parts)
+    # M3 修复：提取 system prompt 构建为独立函数
+    final_system_prompt = _build_agent_system_prompt(
+        req, reflection_injection, is_conversation_task
+    )
 
     # 应用演化配置（仅覆盖用户未显式传入的字段）
-    # 修复：原实现遗漏了 temperature 演化值，导致 EvolutionEngine 计算出的 temperature 调整
-    # 完全不生效。现增加 effective_temperature，与 max_iterations / enable_thinking 一并应用。
-    # H13 修复 C7：新增 effective_max_tokens，应用 EvolutionEngine 演化的 max_tokens 值。
-
-    # 估算 prompt 字符数（task + system + history + memories），用于安全封顶 max_tokens
-    # H13 修复 C7：必须在使用 _safe_max 之前完成计算，否则 UnboundLocalError
+    # M3 修复：提取演化配置解析为独立函数
     _prompt_chars = (
         len(req.task or "")
         + len(final_system_prompt or "")
         + sum(len(m.get("content", "")) for m in history)
         + sum(len(m) for m in memory_contents)
     )
-    # 配置的 max_tokens 不能等于/超过模型上下文窗口（否则 input 预算 = 0），
-    # 这里按 prompt 估算 token 后自动下调，避免 vLLM 返回 400。
     _safe_max = safe_max_tokens(
         model_cfg.get("max_tokens"),
         _prompt_chars,
         model_cfg.get("max_output_tokens"),
     )
-
-    try:
-        evolved_cfg = evolution_mgr.load_latest_evolved_config(req.mode)
-        if evolved_cfg:
-            # 用户未显式 enable_thinking 时，应用演化值
-            effective_thinking = req.enable_thinking or evolved_cfg.get("enable_thinking", False)
-            # H11 修复：应用演化后的 max_iterations（学到的最优值），用户值作为兜底
-            # 注意：evolved value 可能为 0 或 None，用 is not None 避免 or 吞掉 falsy 值
-            evolved_iter = evolved_cfg.get("max_iterations")
-            effective_max_iter = evolved_iter if evolved_iter is not None else req.max_iterations
-            # 修复 temperature 未应用 bug：演化值覆盖模型配置默认值
-            # 边界保护已在 EvolutionEngine 内完成（0.3 ≤ temp ≤ 1.0），此处直接采用
-            evolved_temp = evolved_cfg.get("temperature")
-            effective_temperature = evolved_temp if evolved_temp is not None else model_cfg.get("temperature", 0.7)
-            # H13 修复 C7：应用演化后的 max_tokens（原实现遗漏）
-            # 演化值为 0 或 None 时回退到 safe_max_tokens 计算值
-            evolved_max_tokens = evolved_cfg.get("max_tokens")
-            effective_max_tokens = evolved_max_tokens if evolved_max_tokens else _safe_max
-        else:
-            effective_thinking = req.enable_thinking
-            effective_max_iter = req.max_iterations
-            effective_temperature = model_cfg.get("temperature", 0.7)
-            effective_max_tokens = _safe_max
-    except Exception as e:
-        logger.warning("加载演化配置失败: %s", e)
-        effective_thinking = req.enable_thinking
-        effective_max_iter = req.max_iterations
-        effective_temperature = model_cfg.get("temperature", 0.7)
-        effective_max_tokens = _safe_max
+    _evo = _resolve_evolution_config(req, model_cfg, _safe_max, evolution_mgr)
+    effective_thinking = _evo["thinking"]
+    effective_max_iter = _evo["max_iter"]
+    effective_temperature = _evo["temperature"]
+    effective_max_tokens = _evo["max_tokens"]
 
     # 生成 run_id（与旧 AgentEngine.run_id 格式一致：8 位 hex）
     import uuid as _uuid
@@ -438,6 +465,10 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     run_id=run_id,
                     skill_ids=req.skill_ids,
                 ):
+                    # M2 修复：检测客户端断连后立即停止 producer，避免空转浪费算力
+                    if await request.is_disconnected():
+                        logger.info("SSE 客户端断连，engine_producer 主动停止")
+                        break
                     # TraceEvent → 前端 SSE dict（SSEAdapter 保持协议兼容）
                     sse_dict = SSEAdapter.to_sse_dict(trace_event)
                     # 强制注入 run_id（Harness 内部 ctx.run_id 与 run_id 一致）
@@ -501,9 +532,11 @@ async def agent_run(req: AgentRunRequest, request: Request):
                             result_str = event.get("result", "")
                             if not isinstance(result_str, str):
                                 result_str = json.dumps(result_str, ensure_ascii=False)
+                            # m1 修复：截断时标记，避免 Agent 拿到不完整数据做出错误决策
+                            truncated = len(result_str) > 5000
                             db.update_tool_call(
                                 tool_call_id=tc_id,
-                                result=result_str[:5000],  # 截断防止过大
+                                result=result_str[:5000] + ("\n...[truncated]" if truncated else ""),
                                 success=event.get("success", True),
                                 duration_ms=event.get("duration_ms", 0),
                             )

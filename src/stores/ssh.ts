@@ -4,6 +4,7 @@
  */
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { useToastStore } from './toast'
 
 export type SSHConnection = SSHConnectionRecord
 
@@ -35,6 +36,12 @@ export const useSSHStore = defineStore('ssh', () => {
   /** 按终端会话维度的命令历史（内存版） */
   const commandHistory = ref<CommandHistoryEntry[]>([])
 
+  /** 命令历史最大条目数（超出后淘汰最久未使用的条目） */
+  const MAX_COMMAND_HISTORY = 500
+
+  /** 终端会话最大数量（防止无限制创建导致内存溢出） */
+  const MAX_SESSIONS = 20
+
   // ─── Computed ─────────────────────────────────
   const localSessions = computed(() => sessions.value.filter(s => s.type === 'local'))
   const activeSession = computed(() => sessions.value.find(s => s.id === activeSessionId.value))
@@ -58,6 +65,27 @@ export const useSSHStore = defineStore('ssh', () => {
     await migrateLegacyIfNeeded()
     await loadConnections()
     loaded.value = true
+    // s1 修复：主机密钥验证事件监听（TOFU 通知 + 中间人攻击警告）
+    _setupHostKeyNotifications()
+  }
+
+  /** s1 修复：监听并提示主机密钥验证事件 */
+  function _setupHostKeyNotifications(): void {
+    const api = window.electronAPI
+    if (!api) return
+    const toast = useToastStore()
+    api.onHostKeyNew(({ hostKey, fingerprint }) => {
+      toast.warning(
+        `首次连接到 ${hostKey}，已记录服务器指纹：${fingerprint.slice(0, 24)}...`,
+        6000,
+      )
+    })
+    api.onHostKeyMismatch(({ hostKey }) => {
+      toast.error(
+        `⚠️ ${hostKey} 服务器密钥变更！可能存在中间人攻击，连接已被拒绝。`,
+        0, // 不自动关闭，强制用户确认
+      )
+    })
   }
 
   async function migrateLegacyIfNeeded(): Promise<void> {
@@ -73,8 +101,9 @@ export const useSSHStore = defineStore('ssh', () => {
       if (!api) return
       await api.sshMigrateLegacy(legacy)
       localStorage.removeItem(LEGACY_KEY)
-    } catch {
-      // ignore migration errors
+    } catch (e) {
+      // m6 修复：记录迁移失败日志，便于排查兼容性问题
+      console.debug('[ssh] 迁移旧版连接配置失败:', e)
     }
   }
 
@@ -157,6 +186,10 @@ export const useSSHStore = defineStore('ssh', () => {
   }
 
   async function createLocalTerminal(shell: string): Promise<string> {
+    // s4 修复：会话数量上限保护
+    if (sessions.value.length >= MAX_SESSIONS) {
+      throw new Error(`终端会话数量已达上限（${MAX_SESSIONS}），请先关闭部分会话`)
+    }
     const api = window.electronAPI
     if (!api) throw new Error('Electron API not available')
 
@@ -166,7 +199,7 @@ export const useSSHStore = defineStore('ssh', () => {
 
     sessions.value.push({
       id: result.id,
-      name: `${shell} #${localSessions.value.length + 1}`,
+      name: shell,
       type: 'local',
       shell,
     })
@@ -177,6 +210,10 @@ export const useSSHStore = defineStore('ssh', () => {
 
   // ─── 远程连接 ─────────────────────────────────
   async function connectRemote(connectionId: string, cols: number, rows: number): Promise<string> {
+    // s4 修复：会话数量上限保护
+    if (sessions.value.length >= MAX_SESSIONS) {
+      throw new Error(`终端会话数量已达上限（${MAX_SESSIONS}），请先关闭部分会话`)
+    }
     const conn = connections.value.find(c => c.id === connectionId)
     if (!conn) throw new Error(`Connection ${connectionId} not found`)
 
@@ -222,10 +259,15 @@ export const useSSHStore = defineStore('ssh', () => {
 
     const api = window.electronAPI
     if (api) {
-      if (session.type === 'local') {
-        await api.ptyDestroy(id)
-      } else {
-        await api.sshDisconnect(id)
+      try {
+        if (session.type === 'local') {
+          await api.ptyDestroy(id)
+        } else {
+          await api.sshDisconnect(id)
+        }
+      } catch (e) {
+        // C1 修复：IPC 调用失败时仍继续清理本地 session，防止僵尸会话
+        console.debug('[ssh] closeSession IPC 失败:', e)
       }
     }
 
@@ -326,6 +368,11 @@ export const useSSHStore = defineStore('ssh', () => {
         count: 1,
         lastUsedAt: now,
       })
+      // s5 修复：超出上限时淘汰最久未使用的条目，防止内存无界增长
+      if (commandHistory.value.length > MAX_COMMAND_HISTORY) {
+        commandHistory.value.sort((a, b) => a.lastUsedAt - b.lastUsedAt)
+        commandHistory.value.splice(0, commandHistory.value.length - MAX_COMMAND_HISTORY)
+      }
     }
   }
 

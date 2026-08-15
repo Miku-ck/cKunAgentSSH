@@ -46,7 +46,8 @@ export class BackendManager {
       console.log(`[BackendManager] Python cmd: ${pythonCmd}`)
       console.log(`[BackendManager] DB path: ${dbPath}`)
 
-      this.process = spawn(pythonCmd, ['main.py', '--port', String(this.port), '--host', '0.0.0.0'], {
+      // M2 修复：默认绑定 127.0.0.1，防止局域网内其他设备访问后端（含 API Key、SSH 凭据等敏感数据）
+      this.process = spawn(pythonCmd, ['main.py', '--port', String(this.port), '--host', '127.0.0.1'], {
         cwd: backendDir,
         env: {
           ...process.env,
@@ -149,6 +150,12 @@ export class BackendManager {
     this.intentionalStop = true
     if (!this.process) return
     console.log('[BackendManager] Stopping Python backend...')
+
+    // Optimization 修复：杀进程前移除所有监听器，防止闭包（含 this）长期持有旧 process 引用
+    this.process.stdout?.removeAllListeners()
+    this.process.stderr?.removeAllListeners()
+    this.process.removeAllListeners('exit')
+    this.process.removeAllListeners('error')
 
     const pid = this.process.pid ?? 0
     const isWin = process.platform === 'win32'

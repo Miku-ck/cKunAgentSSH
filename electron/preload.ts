@@ -42,6 +42,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   fsGetHomePath: () => ipcRenderer.invoke('fs:getHomePath'),
   fsMkdir: (dirPath: string) => ipcRenderer.invoke('fs:mkdir', dirPath),
   fsRename: (oldPath: string, newPath: string) => ipcRenderer.invoke('fs:rename', oldPath, newPath),
+  fsCopy: (srcPath: string, destPath: string, transferId: string) => ipcRenderer.invoke('fs:copy', srcPath, destPath, transferId),
   fsTrash: (filePath: string) => ipcRenderer.invoke('fs:trash', filePath),
   fsWriteBinaryFile: (filePath: string, base64Data: string) => ipcRenderer.invoke('fs:writeBinaryFile', filePath, base64Data),
   fsPathJoin: (...segments: string[]) => ipcRenderer.invoke('fs:pathJoin', ...segments),
@@ -90,6 +91,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sshWrite: (id: string, data: string) => ipcRenderer.invoke('ssh:write', id, data),
   sshResize: (id: string, cols: number, rows: number) => ipcRenderer.invoke('ssh:resize', id, cols, rows),
   sshDisconnect: (id: string) => ipcRenderer.invoke('ssh:disconnect', id),
+  sshGetCwd: (id: string) => ipcRenderer.invoke('ssh:getCwd', id),
+  sshExec: (id: string, command: string) => ipcRenderer.invoke('ssh:exec', id, command),
   /**
    * 监听 SSH 终端输出数据
    * @param callback 数据回调
@@ -109,6 +112,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_event: any, data: any) => callback(data)
     ipcRenderer.on('ssh:close', handler)
     return () => ipcRenderer.removeListener('ssh:close', handler)
+  },
+  /**
+   * 监听新主机密钥（首次连接 TOFU 信任通知）
+   * s1 修复：让用户知道新服务器指纹已被记录
+   */
+  onHostKeyNew: (callback: (data: { hostKey: string; fingerprint: string }) => void) => {
+    const handler = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('ssh:host-key-new', handler)
+    return () => ipcRenderer.removeListener('ssh:host-key-new', handler)
+  },
+  /**
+   * 监听主机密钥不匹配（可能的中间人攻击警告）
+   * s1 修复：前端可据此展示严重安全警告
+   */
+  onHostKeyMismatch: (callback: (data: { hostKey: string; expected: string; got: string }) => void) => {
+    const handler = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('ssh:host-key-mismatch', handler)
+    return () => ipcRenderer.removeListener('ssh:host-key-mismatch', handler)
   },
 
   // SSH 连接配置管理

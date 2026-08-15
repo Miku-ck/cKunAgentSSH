@@ -14,8 +14,7 @@
             @click="activateTerminal(s.id)"
             @contextmenu.prevent="showTabContextMenu($event, s.id)"
           >
-            <svg v-if="s.type === 'local'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-            <IconMonitor v-else :width="12" :height="12" :stroke-width="2" />
+            <IconMonitor v-if="s.type === 'remote'" :width="12" :height="12" :stroke-width="2" />
             <span class="tab-label">{{ s.name }}</span>
             <button class="tab-close" @click.stop="store.closeSession(s.id)">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -84,7 +83,7 @@
               v-if="s.type === 'local'"
               :ref="(el) => { if (el) terminalRefs[s.id] = el }"
               :pty-id="s.id"
-              :shell="(s as any).shell"
+              :shell="s.shell"
               :visible="s.id === store.activeSessionId && !showHome"
               v-show="s.id === store.activeSessionId"
               @exit="handleLocalExit(s.id, $event)"
@@ -222,7 +221,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { onMounted } from 'vue'
 import LocalTerminal from '@/components/ssh/LocalTerminal.vue'
 import RemoteTerminal from '@/components/ssh/RemoteTerminal.vue'
 import ConnectionModal from '@/components/ssh/ConnectionModal.vue'
@@ -231,230 +230,60 @@ import RemoteManager from '@/components/ssh/RemoteManager.vue'
 import QuickCommandBar from '@/components/ssh/QuickCommandBar.vue'
 import SshAiPanel from '@/components/ssh/SshAiPanel.vue'
 import IconMonitor from '@/components/icons/IconMonitor.vue'
-import { useSSHStore, type SSHConnection } from '@/stores/ssh'
+import { useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
-import { useToastStore } from '@/stores/toast'
 import { useSettings } from '@/composables/useSettings'
-import { toFriendlyMessage } from '@/api/client'
+import { useCommandDelivery } from '@/composables/useCommandDelivery'
+import { useSshNavigation } from '@/composables/useSshNavigation'
+import { useTabContextMenu } from '@/composables/useTabContextMenu'
 
 const store = useSSHStore()
 const sshAiStore = useSshAiStore()
-const toast = useToastStore()
 const { openSettings } = useSettings()
 
 // 终端组件引用映射（key: sessionId, value: 组件实例）
 const terminalRefs: Record<string, any> = {}
 
-// 聚焦活动终端（供 QuickCommandBar 发送命令后调用，让用户能按 Enter 执行）
-function focusActiveTerminal() {
-  const activeId = store.activeSessionId
-  if (!activeId) return
-  terminalRefs[activeId]?.focus?.()
-}
+// 命令投递 + 终端聚焦（内部注册 ssh:focus-terminal / ssh:deliver-command 监听）
+const { focusActiveTerminal } = useCommandDelivery(terminalRefs)
 
-// 将命令写入活动终端（由 AI 助手通过 CustomEvent 触发）
-function deliverCommandToTerminal(e: Event) {
-  const detail = (e as CustomEvent).detail as { command?: string } | undefined
-  const command = detail?.command
-  const sessionId = store.activeSessionId
-  if (!command || !sessionId) {
-    toast.warning(sessionId ? '没有可投递的命令' : '请先打开一个终端')
-    return
-  }
-  const session = store.sessions.find(s => s.id === sessionId)
-  if (!session) return
-  const api = window.electronAPI
-  if (!api) {
-    toast.error('Electron API 未就绪，无法投递命令')
-    return
-  }
-  const writer = session.type === 'local' ? api.ptyWrite : api.sshWrite
-  writer(sessionId, command).catch((err: any) => {
-    console.error('[SshView] deliver command failed:', err)
-    toast.error(toFriendlyMessage(err, '命令投递失败'))
-  })
-  focusActiveTerminal()
-}
+// 页面导航 + 终端生命周期 + 模态框 + 远程连接 + Quick Start + 自动回首页
+const {
+  showHome,
+  activeNavPage,
+  showModal,
+  editingConnection,
+  showCommandBar,
+  goHome,
+  activateTerminal,
+  toggleRemoteManager,
+  toggleSftp,
+  toggleAiPanel,
+  qsSearch,
+  filteredShells,
+  filteredConnections,
+  openLocalShell,
+  handleLocalExit,
+  connectRemote,
+  handleRmConnect,
+  handleRemoteClose,
+  editConnection,
+  closeModal,
+  handleSaved,
+} = useSshNavigation(focusActiveTerminal, terminalRefs)
 
-// ─── 布局状态 ──────────────────────────────────
-const showHome = ref(true)
-const activeNavPage = ref<'home' | 'remote-mgr' | 'sftp'>('home')
-const showModal = ref(false)
-const editingConnection = ref<SSHConnection | undefined>(undefined)
+// 标签右键菜单（内部注册全局 click 关闭监听）
+const { tabCtxMenu, showTabContextMenu } = useTabContextMenu()
 
-const localShells = ['PowerShell', 'Git Bash', 'CMD', 'WSL']
-
-const showCommandBar = computed(() =>
-  store.activeSessionId !== '' && !showHome.value && activeNavPage.value === 'home'
-)
-
-// ─── 页面切换 ──────────────────────────────────
-function goHome() {
-  showHome.value = true
-  activeNavPage.value = 'home'
-}
-
-function activateTerminal(sessionId: string) {
-  showHome.value = false
-  activeNavPage.value = 'home'
-  store.switchSession(sessionId)
-}
-
-function toggleRemoteManager() {
-  if (activeNavPage.value === 'remote-mgr') {
-    goHome()
-  } else {
-    showHome.value = true
-    activeNavPage.value = 'remote-mgr'
-  }
-}
-
-function toggleSftp() {
-  if (activeNavPage.value === 'sftp') {
-    goHome()
-  } else {
-    showHome.value = true
-    activeNavPage.value = 'sftp'
-  }
-}
-
-function toggleAiPanel() {
-  sshAiStore.toggleAiPanel()
-}
-
-// ─── Quick Start 搜索过滤 ──────────────────────
-const qsSearch = ref('')
-
-const filteredShells = computed(() => {
-  const q = qsSearch.value.toLowerCase().trim()
-  if (!q) return localShells
-  return localShells.filter(s => s.toLowerCase().includes(q))
-})
-
-const filteredConnections = computed(() => {
-  const q = qsSearch.value.toLowerCase().trim()
-  if (!q) return store.connections
-  return store.connections.filter(c =>
-    c.name.toLowerCase().includes(q) ||
-    c.host.toLowerCase().includes(q) ||
-    c.username.toLowerCase().includes(q)
-  )
-})
-
-// ─── 本地终端 ─────────────────────────────────
-async function openLocalShell(shellName: string) {
-  try {
-    await store.createLocalTerminal(shellName)
-    showHome.value = false
-  } catch (err: any) {
-    console.error('[openLocalShell] Failed:', shellName, err)
-    toast.error(toFriendlyMessage(err, `${shellName} 打开失败`))
-  }
-}
-
-function handleLocalExit(id: string, _exitCode: number) {
-  store.removeSession(id)
-}
-
-// ─── 远程连接 ─────────────────────────────────
-// 2 秒内重复点击只算一次(防双击/误触);只允许同时存在一个正在打开的远程连接
-const CONNECT_DEBOUNCE_MS = 2000
-let lastConnectAt = 0
-
-async function connectRemote(conn: SSHConnection) {
-  const now = Date.now()
-  if (now - lastConnectAt < CONNECT_DEBOUNCE_MS) {
-    return
-  }
-  lastConnectAt = now
-
-  try {
-    await store.connectRemote(conn.id, 80, 24)
-    showHome.value = false
-  } catch (err: any) {
-    console.error('SSH connection failed:', err)
-    toast.error(toFriendlyMessage(err, 'SSH 连接失败'))
-  }
-}
-
-// RemoteManager 触发的连接
-function handleRmConnect(connId: string) {
-  const conn = store.connections.find(c => c.id === connId)
-  if (conn) connectRemote(conn)
-}
-
-function handleRemoteClose(id: string) {
-  store.removeSession(id)
-}
-
-// ─── 连接管理 ─────────────────────────────────
-function editConnection(conn: SSHConnection | null) {
-  editingConnection.value = conn ? { ...conn } : undefined
-  showModal.value = true
-}
-
-function closeModal() {
-  showModal.value = false
-  editingConnection.value = undefined
-}
-
-async function handleSaved({ savedId, connectNow }: { savedId: string; connectNow: boolean }) {
-  closeModal()
-  if (connectNow) {
-    const conn = store.connections.find(c => c.id === savedId)
-    if (conn) await connectRemote(conn)
-  }
-}
-
-// ─── 标签右键菜单 ──────────────────────────────
-const tabCtxMenu = ref({ visible: false, x: 0, y: 0, targetId: '' })
-
-function showTabContextMenu(e: MouseEvent, id: string) {
-  // 菜单约 7 个菜单项，每个 ~28px，总计 ~210px
-  const estimatedHeight = 210
-  const viewportHeight = window.innerHeight
-  const y = e.clientY + estimatedHeight > viewportHeight
-    ? e.clientY - estimatedHeight
-    : e.clientY
-  tabCtxMenu.value = { visible: true, x: e.clientX, y, targetId: id }
-}
-
+// 标签菜单动作桥接：连接菜单状态 → store 方法
 function handleTabCtxAction(action: string) {
   const targetId = tabCtxMenu.value.targetId
   tabCtxMenu.value.visible = false
   store.handleTabContextAction(action, targetId)
 }
 
-function dismissTabCtxMenu() {
-  tabCtxMenu.value.visible = false
-}
-
-// ─── 自动回到首页 ──────────────────────────────
-// 当所有会话关闭时, 自动回到 Home; 同时清理 terminalRefs 防止内存泄漏
-watch(() => store.sessions.length, (len) => {
-  // 清理已关闭 session 残留在 terminalRefs 中的组件引用
-  const activeIds = new Set(store.sessions.map(s => s.id))
-  for (const id of Object.keys(terminalRefs)) {
-    if (!activeIds.has(id)) {
-      delete terminalRefs[id]
-    }
-  }
-  if (len === 0) {
-    goHome()
-  }
-})
-
 onMounted(() => {
-  document.addEventListener('click', dismissTabCtxMenu)
-  window.addEventListener('ssh:focus-terminal', focusActiveTerminal)
-  window.addEventListener('ssh:deliver-command', deliverCommandToTerminal)
   store.init()
-})
-
-onUnmounted(() => {
-  document.removeEventListener('click', dismissTabCtxMenu)
-  window.removeEventListener('ssh:focus-terminal', focusActiveTerminal)
-  window.removeEventListener('ssh:deliver-command', deliverCommandToTerminal)
 })
 </script>
 

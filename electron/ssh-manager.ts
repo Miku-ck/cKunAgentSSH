@@ -5,10 +5,11 @@
 import { Client, ClientChannel } from 'ssh2'
 import type { SFTPWrapper } from 'ssh2'
 import { LS_COLORS_NO_BACKGROUND } from './utils/terminal-colors'
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, app } from 'electron'
 import { readFileSync, statSync } from 'fs'
 import { promises as fsPromises } from 'fs'
-import { posix } from 'path'
+import { posix, join } from 'path'
+import { createHash } from 'crypto'
 
 // ════════════════════════════════════════════════
 //   传输错误分类（断点续传 / 友好提示 / 自动重试依据）
@@ -207,10 +208,79 @@ export class SSHManager {
   private transfers = new Map<string, () => void>()
   private nextId = 1
   private mainWindow: BrowserWindow | null = null
+  // s1 修复：known_hosts 存储（host:port → sha256 指纹），TOFU 模型
+  private knownHosts = new Map<string, string>()
+  private knownHostsLoaded = false
 
   setWindow(win: BrowserWindow): void {
     this.mainWindow = win
   }
+
+  /** known_hosts 文件路径（与 ssh-connections.json 同级） */
+  private get knownHostsPath(): string {
+    try {
+      return join(app.getPath('userData'), 'known-hosts.json')
+    } catch {
+      // app 未就绪时的回退（理论上不会发生）
+      return join(process.cwd(), 'known-hosts.json')
+    }
+  }
+
+  /** 加载 known_hosts 文件到内存（懒加载，仅一次） */
+  private async loadKnownHosts(): Promise<void> {
+    if (this.knownHostsLoaded) return
+    this.knownHostsLoaded = true
+    try {
+      const raw = await fsPromises.readFile(this.knownHostsPath, 'utf-8')
+      const data = JSON.parse(raw) as Record<string, string>
+      for (const [key, fp] of Object.entries(data)) {
+        this.knownHosts.set(key, fp)
+      }
+    } catch {
+      // 文件不存在或解析失败 → 空表，后续 TOFU 逐步填充
+    }
+  }
+
+  /** 持久化 known_hosts 到磁盘 */
+  private async saveKnownHosts(): Promise<void> {
+    try {
+      const data: Record<string, string> = {}
+      for (const [key, fp] of this.knownHosts) {
+        data[key] = fp
+      }
+      await fsPromises.writeFile(this.knownHostsPath, JSON.stringify(data, null, 2), 'utf-8')
+    } catch (e) {
+      console.warn('[ssh] 保存 known_hosts 失败:', e)
+    }
+  }
+
+  /**
+   * ssh2 hostVerifier 回调 — TOFU（Trust On First Use）模型
+   * - 首次连接：记录指纹并通知前端
+   * - 指纹匹配：允许连接
+   * - 指纹不匹配：拒绝连接（可能的中间人攻击）
+   */
+  private hostVerifier = (key: Buffer): boolean => {
+    const fp = createHash('sha256').update(key).digest('base64')
+    const hostKey = this._verifyingHostKey
+    if (!hostKey) return true // 无 host-key 上下文时不阻拦
+
+    const stored = this.knownHosts.get(hostKey)
+    if (stored === undefined) {
+      // 首次连接：信任并记录
+      this.knownHosts.set(hostKey, fp)
+      this.saveKnownHosts() // fire-and-forget
+      this.safeSend('ssh:host-key-new', { hostKey, fingerprint: fp })
+      return true
+    }
+    if (stored === fp) return true
+    // 指纹不匹配 → 拒绝（中间人攻击风险）
+    this.safeSend('ssh:host-key-mismatch', { hostKey, expected: stored, got: fp })
+    return false
+  }
+
+  /** 当前正在验证的 host:port 键（供 hostVerifier 闭包使用） */
+  private _verifyingHostKey: string | null = null
 
   /** 安全发送 IPC 消息（窗口已销毁时跳过） */
   private safeSend(channel: string, data: unknown): void {
@@ -231,6 +301,8 @@ export class SSHManager {
       // 启用 SSH 压缩：对文本/代码/日志类小文件有明显加速效果
       // （对已压缩的图片/视频/zip 等无收益但也不会显著变慢，ssh2 会自适应）
       compress: true,
+      // s1 修复：主机密钥验证（TOFU 模型），防止中间人攻击
+      hostVerifier: this.hostVerifier,
     }
 
     if (config.authType === 'password') {
@@ -276,15 +348,26 @@ export class SSHManager {
     cols?: number,
     rows?: number,
   ): Promise<{ id: string; name: string }> {
+    // s1 修复：加载 known_hosts 并设置当前验证上下文
+    await this.loadKnownHosts()
+    this._verifyingHostKey = `${config.host}:${config.port}`
     const client = new Client()
     const connectConfig = this.buildConnectConfig(config)
+    // s3 修复：连接配置已提取后立即清除内存中的明文密码/passphrase
+    config.password = undefined
+    config.passphrase = undefined
 
     return new Promise((resolve, reject) => {
+      // s1 修复：连接结果确定后清除验证上下文，避免跨连接串扰
+      const cleanup = () => { this._verifyingHostKey = null }
+      const wrappedResolve = (val: { id: string; name: string }) => { cleanup(); resolve(val) }
+      const wrappedReject = (err: Error) => { cleanup(); reject(err) }
+
       client.on('ready', () => {
         if (!withShell) {
           const name = config.name || `${config.username}@${config.host}`
           this.sessions.set(id, { id, connectionId: config.id, client, stream: null, name, cwd: '' })
-          resolve({ id, name })
+          wrappedResolve({ id, name })
           return
         }
 
@@ -295,7 +378,7 @@ export class SSHManager {
           (err, stream) => {
             if (err) {
               client.end()
-              reject(new Error('打开终端失败，请检查 SSH 连接状态'))
+              wrappedReject(new Error('打开终端失败，请检查 SSH 连接状态'))
               return
             }
 
@@ -314,26 +397,22 @@ export class SSHManager {
             // 格式: ESC ] 7 ; file://<host><path> BEL 或 ST (ESC \)
             //
             // 关键设计：
-            // 1. 使用 stty -echo 避免注入命令被回显到终端
-            // 2. PROMPT_COMMAND 追加而非覆盖，保留用户 .bashrc 原有设置
-            // 3. 同时兼容 bash (PROMPT_COMMAND) 和 zsh (precmd_functions)
-            // 4. host 作为 printf 参数传入，避免 % 冲突和注入
+            // 1. 整段脚本必须是【单行命令】：多行 if/function 结构会让 bash 逐行读取并
+            //    输出 PS2 续行提示符（"> "），且每行作为独立命令都会重新打印一次 PS1，
+            //    导致终端出现大量空提示符行和 "> " 垃圾输出
+            // 2. stty -echo 无法阻止本行自身被内核回显（回显发生在命令执行前），
+            //    但前端会过滤含 __ckun_ 标识的整行回显
+            // 3. PROMPT_COMMAND 追加而非覆盖，保留用户 .bashrc 原有设置
+            // 4. 同时兼容 bash (PROMPT_COMMAND) 和 zsh (precmd_functions)
+            // 5. host 作为 printf 参数传入，避免 % 冲突和注入
             const escapedHost = config.host.replace(/'/g, "'\\''")
             const initCmd = Buffer.from(
-              [
-                'stty -echo 2>/dev/null',
-                `__ckun_host='${escapedHost}'`,
-                `__ckun_osc7() { printf '\\033]7;file://%s%s\\007' "$__ckun_host" "$PWD"; }`,
-                // bash: 追加到 PROMPT_COMMAND（不覆盖原有设置）
-                'if [ -n "$BASH_VERSION" ]; then',
-                '  PROMPT_COMMAND="__ckun_osc7${PROMPT_COMMAND:+; $PROMPT_COMMAND}"',
-                // zsh: 使用 precmd_functions
-                'elif [ -n "$ZSH_VERSION" ]; then',
-                '  precmd_functions+=(__ckun_osc7)',
-                'fi',
-                'stty echo 2>/dev/null',
-                '', // 末尾换行
-              ].join('\n')
+              'stty -echo 2>/dev/null; ' +
+              `__ckun_host='${escapedHost}'; ` +
+              '__ckun_osc7() { printf \'\\033]7;file://%s%s\\007\' "$__ckun_host" "$PWD"; }; ' +
+              'if [ -n "$BASH_VERSION" ]; then PROMPT_COMMAND="__ckun_osc7${PROMPT_COMMAND:+; $PROMPT_COMMAND}"; ' +
+              'elif [ -n "$ZSH_VERSION" ]; then precmd_functions+=(__ckun_osc7); fi; ' +
+              'stty echo 2>/dev/null\n'
             )
             stream.write(initCmd)
 
@@ -362,7 +441,7 @@ export class SSHManager {
               this.safeSend('ssh:close', { id })
             })
 
-            resolve({ id, name })
+            wrappedResolve({ id, name })
           }
         )
       })
@@ -371,13 +450,16 @@ export class SSHManager {
         this.sessions.delete(id)
         const msg = err?.message || ''
         if (msg.includes('ECONNREFUSED') || msg.includes('Connection refused')) {
-          reject(new Error('连接被拒绝，请检查主机地址和端口是否正确'))
+          wrappedReject(new Error('连接被拒绝，请检查主机地址和端口是否正确'))
         } else if (msg.includes('ETIMEDOUT') || msg.includes('timed out')) {
-          reject(new Error('连接超时，请检查网络或增加超时时间'))
+          wrappedReject(new Error('连接超时，请检查网络或增加超时时间'))
         } else if (msg.includes('Authentication') || msg.includes('auth') || msg.includes('password')) {
-          reject(new Error('认证失败，请检查用户名、密码或私钥'))
+          wrappedReject(new Error('认证失败，请检查用户名、密码或私钥'))
+        } else if (msg.includes('host key') || msg.includes('verification failed') || msg.includes('Host verification')) {
+          // s1 修复：主机密钥验证失败的友好提示（可能的中间人攻击）
+          wrappedReject(new Error('主机密钥验证失败：服务器密钥与记录不符，可能存在中间人攻击'))
         } else {
-          reject(new Error('SSH 连接失败，请检查连接信息后重试'))
+          wrappedReject(new Error('SSH 连接失败，请检查连接信息后重试'))
         }
       })
 
@@ -532,14 +614,18 @@ export class SSHManager {
   /** 测试连接:建立成功后立即断开,不写入 sessions */
   async testConnection(config: SSHConnectionConfig): Promise<SSHTestResult> {
     const start = Date.now()
+    // s1 修复：测试连接也走同样的 host key 验证
+    await this.loadKnownHosts()
+    this._verifyingHostKey = `${config.host}:${config.port}`
     const client = new Client()
     const connectConfig = this.buildConnectConfig(config)
 
     return new Promise((resolve) => {
       let settled = false
-      const done = (ok: boolean, message: string) => {
+      let done = (ok: boolean, message: string) => {
         if (settled) return
         settled = true
+        this._verifyingHostKey = null
         try { client.end() } catch { /* ignore */ }
         resolve({ ok, message, latencyMs: Date.now() - start })
       }
@@ -553,6 +639,8 @@ export class SSHManager {
           done(false, '连接超时，请检查网络或增加超时时间')
         } else if (msg.includes('Authentication') || msg.includes('auth') || msg.includes('password')) {
           done(false, '认证失败，请检查用户名、密码或私钥')
+        } else if (msg.includes('host key') || msg.includes('verification failed') || msg.includes('Host verification')) {
+          done(false, '主机密钥验证失败：服务器密钥与记录不符，可能存在中间人攻击')
         } else {
           done(false, '连接失败，请检查连接信息后重试')
         }
@@ -566,7 +654,13 @@ export class SSHManager {
       }
 
       // 兜底超时(比 readyTimeout 多 2s)
-      setTimeout(() => done(false, '连接超时'), (config.readyTimeout ?? 15000) + 2000)
+      // s6 修复：保存 timerId 以便连接提前完成时清除，避免无谓等待
+      const fallbackTimer = setTimeout(() => done(false, '连接超时'), (config.readyTimeout ?? 15000) + 2000)
+      const _origDone = done
+      done = (ok, message) => {
+        clearTimeout(fallbackTimer)
+        _origDone(ok, message)
+      }
     })
   }
 
@@ -824,9 +918,6 @@ export class SSHManager {
         )
       }
 
-      await localFd.close()
-      await sftpClose(sftp, remoteHandle)
-
       // 6. 取消则抛错，不执行 rename（防止 .part 被误认为完成）
       if (cancelled) {
         throw new Error('CANCELLED')
@@ -846,6 +937,9 @@ export class SSHManager {
       }
       throw toTransferError(tErr)
     } finally {
+      // M7 修复：FD 关闭移入 finally，确保异常路径也不泄漏
+      try { await localFd.close() } catch { /* ignore */ }
+      try { await sftpClose(sftp, remoteHandle) } catch { /* ignore */ }
       heartbeat.stop()
       this.transfers.delete(transferId)
     }
@@ -887,9 +981,12 @@ export class SSHManager {
       this.safeSend('sftp:stalled', { id: transferId })
     })
 
+    // M7 修复：声明在 try 外部，确保 finally 块始终可访问
+    let remoteHandle: Buffer | null = null
+    let localFd: { close: () => Promise<void> } | null = null
     try {
       // 1. 打开远程文件（后续校验和下载都复用）
-      const remoteHandle = await sftpOpen(sftp, remotePath, 'r')
+      remoteHandle = await sftpOpen(sftp, remotePath, 'r')
 
       // 2. 确定续传起点（检查本地 .part + 内容校验）
       let startOffset = 0
@@ -925,7 +1022,7 @@ export class SSHManager {
       }
 
       // 3. 打开本地 .part（存在用 r+ 续写，不存在用 w 新建）
-      const localFd = await fsPromises.open(partPath, partExists ? 'r+' : 'w')
+      localFd = await fsPromises.open(partPath, partExists ? 'r+' : 'w')
 
       // 4. 构造分块列表
       const chunks: Array<{ offset: number; length: number }> = []
@@ -959,9 +1056,6 @@ export class SSHManager {
         )
       }
 
-      await localFd.close()
-      await sftpClose(sftp, remoteHandle)
-
       // 6. 取消则抛错，不执行 rename（防止 .part 被误认为完成）
       if (cancelled) {
         throw new Error('CANCELLED')
@@ -980,6 +1074,9 @@ export class SSHManager {
       }
       throw toTransferError(tErr)
     } finally {
+      // M7 修复：FD 关闭移入 finally，确保异常路径也不泄漏
+      try { await localFd?.close() } catch { /* ignore */ }
+      try { if (remoteHandle) await sftpClose(sftp, remoteHandle) } catch { /* ignore */ }
       heartbeat.stop()
       this.transfers.delete(transferId)
     }
@@ -1088,7 +1185,7 @@ export class SSHManager {
     if (!hasPy) {
       throw new Error('远程服务器缺少 zip 命令和 python3，无法打包')
     }
-    // 用 python 脚本打包
+    // M8 修复：用 python 脚本打包（写临时文件后执行，避免 shell 拼接注入风险）
     const pyScript = [
       'import os, sys, zipfile',
       `os.chdir(${JSON.stringify(cwd)})`,
@@ -1106,9 +1203,16 @@ export class SSHManager {
       '            zf.write(s, s)',
       'print("ok")',
     ].join('\n')
-    const escaped = pyScript.replace(/'/g, "'\\''")
-    const cmd = `python3 -c '${escaped}'`
-    const result = await this.execCommandWithExitCode(sshSessionId, cmd, 300)
+    // 写临时文件后通过 python3 <file> 执行，完全绕过 shell 对脚本内容的解释
+    const tmpScript = `/tmp/ckun_zip_${Date.now()}_${Math.random().toString(36).slice(2)}.py`
+    await this.sftpWriteFile(sshSessionId, tmpScript, pyScript)
+    let result: { stdout: string; stderr: string; exitCode: number | null }
+    try {
+      result = await this.execCommandWithExitCode(sshSessionId, `python3 ${shellQuoteRemote(tmpScript)}`, 300)
+    } finally {
+      // 清理临时脚本（无论成功与否）
+      try { await this.sftpDelete(sshSessionId, tmpScript) } catch { /* ignore */ }
+    }
     if (result.exitCode !== 0) {
       // Bug 3 修复：失败时清理半成品 zip 文件，避免残留在远程服务器
       try { await this.sftpDelete(sshSessionId, remoteZipPath) } catch { /* ignore */ }
@@ -1150,6 +1254,7 @@ export class SSHManager {
     if (!hasPy) {
       throw new Error('远程服务器缺少 unzip 命令和 python3，无法解压')
     }
+    // M8 修复：用 python 脚本解压（写临时文件后执行，避免 shell 拼接注入风险）
     const pyScript = [
       'import os, sys, zipfile',
       `zip_path = ${JSON.stringify(remoteZipPath)}`,
@@ -1159,9 +1264,16 @@ export class SSHManager {
       '    zf.extractall(dest)',
       'print("ok")',
     ].join('\n')
-    const escaped = pyScript.replace(/'/g, "'\\''")
-    const cmd = `python3 -c '${escaped}'`
-    const result = await this.execCommandWithExitCode(sshSessionId, cmd, 300)
+    // 写临时文件后通过 python3 <file> 执行，完全绕过 shell 对脚本内容的解释
+    const tmpScript = `/tmp/ckun_unzip_${Date.now()}_${Math.random().toString(36).slice(2)}.py`
+    await this.sftpWriteFile(sshSessionId, tmpScript, pyScript)
+    let result: { stdout: string; stderr: string; exitCode: number | null }
+    try {
+      result = await this.execCommandWithExitCode(sshSessionId, `python3 ${shellQuoteRemote(tmpScript)}`, 300)
+    } finally {
+      // 清理临时脚本（无论成功与否）
+      try { await this.sftpDelete(sshSessionId, tmpScript) } catch { /* ignore */ }
+    }
     if (result.exitCode !== 0) {
       throw new Error(`远程解压失败: ${(result.stderr || result.stdout || '').trim() || '未知错误'}`)
     }

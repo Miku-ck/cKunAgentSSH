@@ -19,7 +19,7 @@ export const useAppStore = defineStore('app', () => {
       if (data.status === 'ready') {
         setBackendStatus('ready', data.port)
       } else if (data.status === 'error') {
-        setBackendStatus('error', undefined, (data as any).error)
+        setBackendStatus('error', undefined, data.error)
       } else if (data.status === 'restarting') {
         setBackendStatus('restarting')
       }
