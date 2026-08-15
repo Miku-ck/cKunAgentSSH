@@ -1244,7 +1244,7 @@ def set_default_model(model_id: str, mode: Optional[str] = None) -> None:
 
 
 def get_default_model(mode: Optional[str] = None) -> Optional[dict]:
-    """获取当前默认模型配置。
+    """获取当前默认模型配置（api_key 已脱敏）。
     mode 为 None 时返回全局 is_default 模型；
     mode 为 'ssh' 时返回 SSH 模式的默认模型。
     """
@@ -1266,7 +1266,12 @@ def get_default_model(mode: Optional[str] = None) -> Optional[dict]:
                 "temperature, max_tokens, max_output_tokens, top_p "
                 "FROM models_config WHERE is_default_ssh = 1 LIMIT 1"
             ).fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        result = dict(row)
+        # C1 修复：脱敏 api_key，避免明文密钥泄露到前端
+        result["api_key"] = _mask_api_key(result.get("api_key"))
+        return result
     finally:
         conn.close()
 

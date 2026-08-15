@@ -32,7 +32,9 @@ export function useChatPersistence<
     try {
       const raw = localStorage.getItem(storageKey)
       return raw ? JSON.parse(raw) : []
-    } catch {
+    } catch (e) {
+      // m3 修复：JSON 解析失败时输出警告，便于排查数据损坏问题
+      console.warn(`[useChatPersistence] 解析 ${storageKey} 失败，重置为空列表:`, e)
       return []
     }
   }

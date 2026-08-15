@@ -91,6 +91,14 @@
         <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="7 16 12 21 17 16"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
         {{ ctxMenu.side === 'local' ? '上传' : '下载' }}
       </div>
+      <div v-if="ctxMenu.entry" class="ctx-item" @click="handleCtxAction('copy')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        复制
+      </div>
+      <div v-if="canPaste" class="ctx-item" @click="handleCtxAction('paste')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>
+        粘贴
+      </div>
       <div class="ctx-sep"></div>
       <div class="ctx-item" @click="handleCtxAction('newFolder')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
@@ -140,6 +148,24 @@
       </div>
     </div>
 
+    <!-- 压缩包文件名对话框 -->
+    <div v-if="zipDialog.visible" class="rename-overlay" @click.self="zipDialog.visible = false">
+      <div class="rename-dialog">
+        <div class="rename-title">压缩为 zip</div>
+        <input
+          ref="zipInput"
+          v-model="zipDialog.name"
+          class="rename-input"
+          @keydown.enter="confirmZip"
+          @keydown.escape="zipDialog.visible = false"
+        />
+        <div class="rename-actions">
+          <button class="rename-btn cancel" @click="zipDialog.visible = false">取消</button>
+          <button class="rename-btn confirm" @click="confirmZip">确定</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 弹窗文件编辑器 -->
     <SftpFileEditor
       :visible="fileEditor.visible"
@@ -154,7 +180,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import SftpPane from './SftpPane.vue'
 import SftpFileEditor from './SftpFileEditor.vue'
 import TransferQueue from './TransferQueue.vue'
@@ -280,6 +306,12 @@ function onContextMenu(e: MouseEvent, entry: AnyEntry | null, side: 'local' | 'r
   ctxMenu.side = side
 }
 
+/** 剪贴板中有来自同侧的数据时才可粘贴 */
+const canPaste = computed(() => {
+  if (!store.clipboard) return false
+  return store.clipboard.side === ctxMenu.side
+})
+
 async function handleCtxAction(action: string): Promise<void> {
   const entry = ctxMenu.entry
   const side = ctxMenu.side
@@ -303,6 +335,25 @@ async function handleCtxAction(action: string): Promise<void> {
     return
   }
 
+  if (action === 'copy' && entry) {
+    const paths = getCtxPaths(side, entry)
+    store.copyToClipboard(side, paths)
+    toast.success(`已复制 ${paths.length} 项`)
+    return
+  }
+
+  if (action === 'paste') {
+    const cb = store.clipboard
+    if (!cb) return
+    // 确定目标目录：右键在目录上则粘贴到该目录，否则粘贴到当前 cwd
+    const targetDir = entry?.isDirectory
+      ? entry.path
+      : (side === 'local' ? store.localCwd : store.remoteCwd)
+    if (side === 'local') await store.localCopy(cb.paths, targetDir)
+    else await store.remoteCopy(cb.paths, targetDir)
+    return
+  }
+
   if (action === 'newFolder') {
     openRenameDialog(true, '', side)
     return
@@ -313,29 +364,7 @@ async function handleCtxAction(action: string): Promise<void> {
     const defaultName = paths.length === 1
       ? entry.name + '.zip'
       : 'archive.zip'
-    const zipName = prompt('请输入压缩包文件名', defaultName)
-    if (!zipName?.trim()) return
-    const finalName = zipName.trim()
-    // Bug 1 修复：检查目标 zip 是否已存在，提示用户是否覆盖
-    const targetPath = side === 'local'
-      ? await store.joinLocalPath(finalName)
-      : store.joinRemotePath(finalName)
-    const exists = side === 'local'
-      ? await store.localPathExists(targetPath)
-      : await store.remotePathExists(targetPath)
-    if (exists) {
-      const ok = await confirm({
-        title: '文件已存在',
-        message: `「${finalName}」已存在，是否覆盖？`,
-        confirmText: '覆盖',
-        danger: true,
-      })
-      if (!ok) return
-    }
-    try {
-      if (side === 'local') await store.zipLocal(paths, finalName)
-      else await store.zipRemote(paths, finalName)
-    } catch { /* toast 已在 store 内弹出 */ }
+    openZipDialog(paths, defaultName, side)
     return
   }
 
@@ -429,6 +458,55 @@ const renameDialog = reactive({
   oldPath: '',
 })
 const renameInput = ref<HTMLInputElement | null>(null)
+
+// ─── 压缩 zip ──────────────────────────
+const zipDialog = reactive({
+  visible: false,
+  name: '',
+  side: '' as 'local' | 'remote',
+  paths: [] as string[],
+})
+const zipInput = ref<HTMLInputElement | null>(null)
+
+function openZipDialog(paths: string[], defaultName: string, side: 'local' | 'remote'): void {
+  zipDialog.paths = paths
+  zipDialog.name = defaultName
+  zipDialog.side = side
+  zipDialog.visible = true
+  nextTick(() => {
+    zipInput.value?.focus()
+    // 预选主文件名部分（不含 .zip 扩展名）
+    const dot = defaultName.lastIndexOf('.')
+    if (dot > 0) zipInput.value?.setSelectionRange(0, dot)
+  })
+}
+
+async function confirmZip(): Promise<void> {
+  const finalName = zipDialog.name.trim()
+  if (!finalName) return
+  const { side, paths } = zipDialog
+  zipDialog.visible = false
+  // 检查目标 zip 是否已存在，提示用户是否覆盖
+  const targetPath = side === 'local'
+    ? await store.joinLocalPath(finalName)
+    : store.joinRemotePath(finalName)
+  const exists = side === 'local'
+    ? await store.localPathExists(targetPath)
+    : await store.remotePathExists(targetPath)
+  if (exists) {
+    const ok = await confirm({
+      title: '文件已存在',
+      message: `「${finalName}」已存在，是否覆盖？`,
+      confirmText: '覆盖',
+      danger: true,
+    })
+    if (!ok) return
+  }
+  try {
+    if (side === 'local') await store.zipLocal(paths, finalName)
+    else await store.zipRemote(paths, finalName)
+  } catch { /* toast 已在 store 内弹出 */ }
+}
 
 function openRenameDialog(isNew: boolean, name: string, side: 'local' | 'remote', oldPath = ''): void {
   renameDialog.isNew = isNew

@@ -37,6 +37,7 @@ class TickConfig:
     min_importance: float = 0.3        # 低于此重要性 + 长期未用 → 清理
     stale_days: int = 7                # stale_days 天未用视为过期
     failure_lookback: int = 10         # 反思失败时回看的最近 run 数
+    task_timeout_seconds: int = 60     # m2 修复：单个任务超时时间，防止任务挂起阻塞后续 tick
 
 
 class ConsciousnessTick:
@@ -143,12 +144,24 @@ class ConsciousnessTick:
             results: dict[str, dict] = {}
             for name in selected:
                 try:
-                    result = await self._tasks[name]()
+                    # m2 修复：用 wait_for 防止任务挂起（如数据库锁、embedding 请求超时）
+                    # 导致后续 tick 全部阻塞
+                    result = await asyncio.wait_for(
+                        self._tasks[name](),
+                        timeout=self.config.task_timeout_seconds,
+                    )
                     results[name] = result
                     self._last_run[name] = now
                     logger.info(
                         "ConsciousnessTick 任务 '%s' 完成: %s",
                         name, result.get("summary", ""),
+                    )
+                except asyncio.TimeoutError:
+                    results[name] = {"error": f"超时 ({self.config.task_timeout_seconds}s)"}
+                    self._last_run[name] = now
+                    logger.warning(
+                        "ConsciousnessTick 任务 '%s' 超时 (%ds)",
+                        name, self.config.task_timeout_seconds,
                     )
                 except Exception as e:
                     results[name] = {"error": str(e)}

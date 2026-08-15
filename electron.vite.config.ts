@@ -27,6 +27,11 @@ export default defineConfig({
   },
   renderer: {
     root: '.',
+    // 绑定 IPv4 地址，避免 Electron 渲染进程连接超时（默认只绑 IPv6 ::1）
+    server: {
+      host: '127.0.0.1',
+      port: 5173,
+    },
     build: {
       outDir: 'out/renderer',
       rollupOptions: {

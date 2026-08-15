@@ -15,6 +15,18 @@ interface PtySession {
   cwd: string
 }
 
+// M3 修复：允许的 shell 白名单，防止渲染进程启动任意命令
+const ALLOWED_SHELLS: Record<string, string[]> = {
+  win32: ['cmd.exe', 'powershell.exe', 'pwsh.exe', 'bash.exe', 'git-bash.exe'],
+  darwin: ['/bin/zsh', '/bin/bash', '/bin/sh', '/usr/bin/zsh', '/usr/bin/bash'],
+  linux: ['/bin/bash', '/bin/sh', '/bin/zsh', '/usr/bin/bash', '/usr/bin/zsh'],
+}
+// 禁止的危险参数（正则匹配）
+const DANGEROUS_ARG_PATTERNS = [
+  /-enc/i, /-encodedcommand/i, /-command/i, /-c\b/,
+  /\/c\b/, /&&/, /\|\|/, /;\s/, /\$\(/, /`/, /Invoke-Expression/i,
+]
+
 export class PtyManager {
   private sessions = new Map<string, PtySession>()
   private nextId = 1
@@ -51,11 +63,29 @@ export class PtyManager {
   /** 创建新终端会话 */
   create(opts?: { shell?: string; args?: string[]; cwd?: string; cols?: number; rows?: number }): { id: string; shell: string } {
     const id = `pty-${this.nextId++}`
-    const shell = opts?.shell || this.getDefaultShell()
+    const defaultShell = this.getDefaultShell()
+    let shell = opts?.shell || defaultShell
     const args = opts?.args || []
     const cwd = opts?.cwd || this.getDefaultCwd()
     const cols = opts?.cols || 80
     const rows = opts?.rows || 24
+
+    // M3 修复：验证 shell 在白名单中，防止渲染进程启动任意命令
+    const platform = process.platform
+    const allowed = ALLOWED_SHELLS[platform] || []
+    const shellBase = shell.toLowerCase()
+    const isAllowed = allowed.some(s => shellBase === s.toLowerCase() || shellBase.endsWith('/' + s.toLowerCase()) || shellBase.endsWith('\\' + s.toLowerCase()))
+    if (!isAllowed) {
+      console.warn(`[PtyManager] shell "${shell}" 不在白名单中，回退到默认: ${defaultShell}`)
+      shell = defaultShell
+    }
+
+    // M3 修复：检测并拒绝危险参数
+    for (const arg of args) {
+      if (DANGEROUS_ARG_PATTERNS.some(p => p.test(arg))) {
+        throw new Error(`检测到危险的 shell 参数，已拒绝: ${arg}`)
+      }
+    }
 
     console.log(`[PtyManager] spawning shell: ${shell}, args: ${JSON.stringify(args)}, cwd: ${cwd}`)
     const proc = pty.spawn(shell, args, {

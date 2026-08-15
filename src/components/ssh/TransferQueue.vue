@@ -33,6 +33,11 @@
           <div class="transfer-progress">
             <div class="progress-bar">
               <div
+                v-if="isIndeterminate(t)"
+                class="progress-fill indeterminate"
+              ></div>
+              <div
+                v-else
                 class="progress-fill"
                 :class="t.status"
                 :style="{ width: progressPercent(t) + '%' }"
@@ -41,7 +46,8 @@
           </div>
 
           <div class="transfer-percent">
-            <span v-if="t.status === 'running' || t.status === 'done'">{{ progressPercent(t) }}%</span>
+            <span v-if="isIndeterminate(t)" class="indeterminate-text">复制中</span>
+            <span v-else-if="t.status === 'running' || t.status === 'done'">{{ progressPercent(t) }}%</span>
             <span v-else-if="t.status === 'error'" class="err-text">失败</span>
             <span v-else-if="t.status === 'cancelled'">已取消</span>
             <span v-else>—</span>
@@ -95,6 +101,11 @@ const statusText = computed(() => {
 function progressPercent(t: TransferItem): number {
   if (!t.total) return 0
   return Math.min(100, Math.round((t.transferred / t.total) * 100))
+}
+
+/** 远程 cp -r 等无法获取进度的操作：running 且 total=0 */
+function isIndeterminate(t: TransferItem): boolean {
+  return t.status === 'running' && !t.total
 }
 
 function formatSpeed(t: TransferItem): string {
@@ -235,6 +246,18 @@ function formatDuration(t: TransferItem): string {
 .progress-fill.done { background: var(--accent-green); }
 .progress-fill.error { background: var(--accent-red); }
 .progress-fill.cancelled { background: var(--text-tertiary); }
+
+/* 不定进度条（远程 cp -r 等无法获取进度的操作） */
+.progress-fill.indeterminate {
+  width: 40%;
+  background: var(--accent-blue);
+  animation: indeterminate-slide 1.2s ease-in-out infinite;
+}
+@keyframes indeterminate-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+.indeterminate-text { color: var(--text-secondary); }
 
 .transfer-percent {
   font-family: var(--font-mono);

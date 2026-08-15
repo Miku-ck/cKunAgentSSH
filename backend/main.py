@@ -91,10 +91,15 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     print(f"[cKunAgentic] Starting backend on {args.host}:{args.port}")
-    uvicorn.run(
+    # 使用 asyncio.run(Server.serve()) 代替 uvicorn.run()，
+    # 避免 PowerShell 后台运行时 WatchFiles reloader 启动缓慢导致健康检查超时
+    import asyncio
+    config = uvicorn.Config(
         "main:app",
         host=args.host,
         port=args.port,
-        reload=settings.dev_mode,
+        reload=False,
         log_level="info",
     )
+    server = uvicorn.Server(config)
+    asyncio.run(server.serve())

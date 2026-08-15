@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, shell, dialog, session, safeStorage, nativeImage } from 'electron'
 import { join, normalize, resolve as pathResolve, dirname, basename, extname } from 'path'
 import { is } from '@electron-toolkit/utils'
-import { readdir, readFile, writeFile, stat, mkdir, rename, rm, realpath } from 'fs/promises'
+import { readdir, readFile, writeFile, stat, mkdir, rename, rm, realpath, copyFile } from 'fs/promises'
 import { existsSync, readdirSync } from 'fs'
 import { homedir } from 'os'
 import { execSync, exec, execFile } from 'child_process'
@@ -231,8 +231,10 @@ function findProgramInPath(name: string): string | null {
 
 /** 在 PATH 中查找以 prefix 开头的可执行文件，返回去重后的命令名列表（不含扩展名，用于 CMD 弱补全） */
 function findProgramsInPathByPrefix(prefix: string): string[] {
-  const paths = (process.env.PATH || '').split(';')
-  const exts = (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';')
+  // m5 修复：根据平台选择正确的 PATH 分隔符（Windows 用 ;，其他用 :）
+  const isWindows = process.platform === 'win32'
+  const paths = (process.env.PATH || '').split(isWindows ? ';' : ':')
+  const exts = (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(isWindows ? ';' : ':')
   const found = new Set<string>()
   for (const dir of paths) {
     if (!dir) continue
@@ -520,6 +522,47 @@ function setupFSIPC(): void {
     await assertSafePath(oldPath)
     await assertSafePath(newPath)
     await rename(oldPath, newPath)
+  })
+
+  // 递归复制文件/目录（同侧复制粘贴），通过 sftp:progress 上报进度
+  ipcMain.handle('fs:copy', async (_event, srcPath: string, destPath: string, transferId: string) => {
+    await assertSafePath(srcPath)
+    await assertSafePath(destPath)
+
+    // 收集所有文件并统计总大小
+    const files: Array<{ src: string; dest: string; size: number }> = []
+    async function collect(src: string, dest: string): Promise<void> {
+      const st = await stat(src)
+      if (st.isFile()) {
+        files.push({ src, dest, size: st.size })
+      } else if (st.isDirectory()) {
+        await mkdir(dest, { recursive: true })
+        const entries = await readdir(src)
+        for (const entry of entries) {
+          await collect(join(src, entry), join(dest, entry))
+        }
+      }
+    }
+    await collect(srcPath, destPath)
+
+    const total = files.reduce((sum, f) => sum + f.size, 0)
+    let transferred = 0
+    let lastReport = 0
+    const report = () => {
+      const now = Date.now()
+      if (now - lastReport > 100) {
+        lastReport = now
+        mainWindow?.webContents.send('sftp:progress', { id: transferId, transferred, total })
+      }
+    }
+
+    for (const f of files) {
+      await mkdir(dirname(f.dest), { recursive: true })
+      await copyFile(f.src, f.dest)
+      transferred += f.size
+      report()
+    }
+    mainWindow?.webContents.send('sftp:progress', { id: transferId, transferred: total, total })
   })
 
   // 移到回收站
@@ -864,6 +907,14 @@ function setupSSHIPC(): void {
 
   ipcMain.handle('ssh:disconnect', (_event, id: string) => {
     sshManager!.disconnect(id)
+  })
+
+  ipcMain.handle('ssh:getCwd', (_event, id: string) => {
+    return sshManager!.getCwd(id)
+  })
+
+  ipcMain.handle('ssh:exec', async (_event, id: string, command: string) => {
+    return sshManager!.execCommandWithExitCode(id, command)
   })
 
   // 连接配置管理
