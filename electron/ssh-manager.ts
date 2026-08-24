@@ -341,7 +341,7 @@ export class SSHManager {
     return this.doConnect(id, config, false)
   }
 
-  private doConnect(
+  private async doConnect(
     id: string,
     config: SSHConnectionConfig,
     withShell: boolean,

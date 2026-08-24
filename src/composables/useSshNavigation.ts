@@ -123,29 +123,51 @@ export function useSshNavigation(
 
   // ─── 远程连接 ───
   let lastConnectAt = 0
+  // 新增连接 loading 状态：显示转圈圈提示
+  const connecting = ref(false)
+  const pendingConnId = ref('')
 
   async function connectRemote(conn: SSHConnection) {
     const now = Date.now()
     if (now - lastConnectAt < CONNECT_DEBOUNCE_MS) {
+      console.log('[useSshNavigation] connectRemote: debounced, skipping')
       return
     }
     lastConnectAt = now
+    console.log('[useSshNavigation] connectRemote: connecting to', conn.name, conn.id)
 
     try {
       await store.connectRemote(conn.id, 80, 24)
+      console.log('[useSshNavigation] connectRemote: connected!', conn.id)
       showHome.value = false
       // 等待 Vue 渲染 RemoteTerminal 组件后，让终端获取焦点
       setTimeout(() => focusActiveTerminal(), 100)
     } catch (err: any) {
-      console.error('SSH connection failed:', err)
+      console.error('[useSshNavigation] connectRemote failed:', err)
       toast.error(toFriendlyMessage(err, 'SSH 连接失败'))
+    } finally {
+      connecting.value = false
+      pendingConnId.value = ''
+      console.log('[useSshNavigation] connectRemote: cleanup', conn.id)
     }
   }
 
   // RemoteManager 触发的连接
   function handleRmConnect(connId: string) {
+    console.log('[useSshNavigation] handleRmConnect called:', connId)
+    // 立即显示 loading（点击后马上转圈圈，给用户即时反馈）
+    connecting.value = true
+    pendingConnId.value = connId
+
     const conn = store.connections.find(c => c.id === connId)
-    if (conn) connectRemote(conn)
+    if (conn) {
+      connectRemote(conn)
+    } else {
+      console.error('[useSshNavigation] connection not found:', connId)
+      toast.error('连接配置不存在')
+      connecting.value = false
+      pendingConnId.value = ''
+    }
   }
 
   function handleRemoteClose(id: string) {
@@ -206,6 +228,8 @@ export function useSshNavigation(
     openLocalShell,
     handleLocalExit,
     connectRemote,
+    connecting,
+    pendingConnId,
     handleRmConnect,
     handleRemoteClose,
     editConnection,

@@ -56,8 +56,14 @@ class ErrorClassifier:
         # 上下文超限 → 触发压缩（H13 修复 B7：扩充中文标记）
         if "context length" in error_lower or "maximum context" in error_lower or "上下文超限" in error or "上下文长度" in error:
             return ErrorType.INVALID_ARGS
-        # 服务不可用
-        if "503" in error_lower or "overloaded" in error_lower or "rate limit" in error_lower or "服务不可用" in error or "限流" in error:
+        # 服务不可用 / 网络瞬时错误（H13 修复 B7：扩充中文标记）
+        # 注意：connection/连接 必须放这里，否则会被归为 FATAL 导致不重试直接失败
+        transient_markers = [
+            "503", "overloaded", "rate limit", "服务不可用", "限流",
+            "connection", "connect", "timeout", "timed out", "reset", "refused",
+            "连接", "超时", "重置", "拒绝",
+        ]
+        if any(m in error_lower for m in transient_markers):
             return ErrorType.TRANSIENT
         return ErrorType.FATAL
 

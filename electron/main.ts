@@ -1141,6 +1141,10 @@ function setupSftpIPC(): void {
 }
 
 // ─── App Lifecycle ──────────────────────────────────
+// 修复 GPU cache 权限问题：禁用 GPU 磁盘缓存（Windows GPU 进程无写权限时的拒绝访问错误）
+// 注意：不使用 setPath('userData') 以避免破坏数据库/SSH 连接等现有数据路径
+app.commandLine.appendSwitch('disable-gpu-disk-cache')
+
 app.whenReady().then(async () => {
   setupWindowIPC()
   setupFSIPC()

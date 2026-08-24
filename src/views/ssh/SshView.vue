@@ -105,6 +105,8 @@
             @connect="handleRmConnect"
             @edit="editConnection"
             @new-connection="editConnection(null)"
+            :connecting="connecting"
+            :pending-conn-id="pendingConnId"
           />
         </div>
 
@@ -265,6 +267,8 @@ const {
   openLocalShell,
   handleLocalExit,
   connectRemote,
+  connecting,
+  pendingConnId,
   handleRmConnect,
   handleRemoteClose,
   editConnection,

@@ -37,9 +37,11 @@
     </div>
 
     <div class="cell-actions" @click.stop>
-      <button class="row-btn connect" title="连接" @click="$emit('connect', connection.id)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        连接
+      <button class="row-btn connect" :class="{ loading: isConnecting }" :title="isConnecting ? '连接中...' : '连接'" @click="$emit('connect', connection.id)">
+        <svg v-if="!isConnecting" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        <svg v-else class="spinner" viewBox="0 0 24 24" fill="none" width="14" height="14"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.25"/><path d="M22 12a10 10 0 0 0-10-10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+        <span v-if="!isConnecting">连接</span>
+        <span v-else class="loading-text">连接中...</span>
       </button>
       <button class="row-btn more" title="更多操作" @click.stop="$emit('menu', $event, connection)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
@@ -56,7 +58,14 @@ const props = defineProps<{
   connection: SSHConnection
   selected: boolean
   online: boolean
+  /** 是否正在连接中 */
+  connecting: boolean
+  /** 当前正在连接中的连接 ID */
+  pendingConnId: string
 }>()
+
+/** 当前行是否处于连接中状态 */
+const isConnecting = computed(() => props.connecting && props.pendingConnId === props.connection.id)
 
 defineEmits<{
   connect: [id: string]
@@ -321,5 +330,24 @@ function formatDate(ts: number): string {
 .row-btn.more:hover {
   background: var(--bg-active);
   color: var(--text-primary);
+}
+
+/* 连接中 spinner 动画 */
+.row-btn.connect.loading {
+  pointer-events: none;
+  opacity: 0.85;
+  border-color: var(--accent-blue);
+  background: rgba(0, 120, 212, 0.08);
+}
+.row-btn.connect .spinner {
+  animation: spin 0.8s linear infinite;
+  color: var(--accent-blue);
+}
+.row-btn.connect .loading-text {
+  color: var(--accent-blue);
+  font-weight: 500;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 </style>

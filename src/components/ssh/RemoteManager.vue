@@ -59,6 +59,8 @@
         :connection="conn"
         :selected="selectedIds.has(conn.id)"
         :online="store.isOnline(conn.id)"
+        :connecting="props.connecting"
+        :pending-conn-id="props.pendingConnId"
         @connect="handleConnect"
         @edit="handleEdit"
         @duplicate="handleDuplicate"
@@ -132,6 +134,12 @@ const emit = defineEmits<{
   connect: [id: string]
   edit: [conn: SSHConnection]
   'new-connection': []
+}>()
+
+// 新增：连接 loading 状态（从父组件传入）
+const props = defineProps<{
+  connecting: boolean
+  pendingConnId: string
 }>()
 
 const store = useSSHStore()
