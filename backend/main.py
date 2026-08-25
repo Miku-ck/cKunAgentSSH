@@ -16,6 +16,7 @@ from routes.models import router as models_router
 from routes.settings import router as settings_router
 from routes.skills import router as skills_router
 from routes.agent import router as agent_router
+from routes.terminal import router as terminal_router
 from agent.consciousness_tick import get_global_tick
 
 
@@ -82,6 +83,7 @@ app.include_router(models_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
 app.include_router(skills_router, prefix="/api")
 app.include_router(agent_router, prefix="/api")
+app.include_router(terminal_router, prefix="/api")
 
 
 if __name__ == "__main__":

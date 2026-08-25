@@ -38,7 +38,7 @@ const showThinkingDots = computed(() => {
   width: 100%;
   line-height: 1.7;
   font-size: 14px;
-  color: #e6edf3;
+  color: var(--text-primary);
   text-align: left;
 }
 
@@ -63,7 +63,7 @@ const showThinkingDots = computed(() => {
 }
 .thinking-dots span {
   width: 7px; height: 7px;
-  background: #6e7681;
+  background: var(--text-tertiary);
   border-radius: 50%;
   animation: bounce 1.2s infinite ease-in-out;
 }

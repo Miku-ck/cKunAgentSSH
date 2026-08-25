@@ -58,7 +58,7 @@ const open = ref(initialOpen.value)
   padding: 6px 10px;
   border: none;
   background: transparent;
-  color: #a5b4fc;
+  color: var(--accent-purple);
   font-size: 12px;
   cursor: pointer;
   text-align: left;
@@ -83,7 +83,7 @@ const open = ref(initialOpen.value)
 
 .reasoning-content {
   padding: 8px 12px 10px;
-  color: #c7c7c7;
+  color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.6;
   white-space: pre-wrap;

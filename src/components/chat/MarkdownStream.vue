@@ -30,7 +30,7 @@ function handleClick(e: MouseEvent) {
 .markdown-body {
   font-size: 13px;
   line-height: 1.7;
-  color: #d4d4d4;
+  color: var(--text-primary);
 }
 
 .markdown-body :deep(p) {
@@ -57,7 +57,7 @@ function handleClick(e: MouseEvent) {
 
 .markdown-body :deep(.code-lang) {
   font-size: 11px;
-  color: #8b949e;
+  color: var(--text-secondary);
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   text-transform: lowercase;
 }
@@ -65,7 +65,7 @@ function handleClick(e: MouseEvent) {
 .markdown-body :deep(.code-copy-btn) {
   border: none;
   background: transparent;
-  color: #8b949e;
+  color: var(--text-secondary);
   font-size: 11px;
   cursor: pointer;
   padding: 2px 6px;
@@ -75,8 +75,8 @@ function handleClick(e: MouseEvent) {
 }
 
 .markdown-body :deep(.code-copy-btn:hover) {
-  background: rgba(255, 255, 255, 0.08);
-  color: #e6edf3;
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .markdown-body :deep(.code-block-wrapper pre) {
@@ -103,14 +103,14 @@ function handleClick(e: MouseEvent) {
   background: transparent;
   padding: 0;
   border: none;
-  color: #d4d4d4;
+  color: var(--text-primary);
 }
 
 .markdown-body :deep(:not(pre) > code) {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-hover);
   padding: 2px 5px;
   border-radius: 4px;
-  color: #e6e6e6;
+  color: var(--text-primary);
 }
 
 .markdown-body :deep(ul),

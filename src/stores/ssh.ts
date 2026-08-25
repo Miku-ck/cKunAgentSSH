@@ -23,6 +23,15 @@ export interface CommandHistoryEntry {
   lastUsedAt: number
 }
 
+/** 命令链条目：记录连续命令对 (prevCmd -> nextCmd) */
+export interface CommandChainEntry {
+  sessionId: string
+  prevCmd: string
+  nextCmd: string
+  count: number
+  lastUsedAt: number
+}
+
 const LEGACY_KEY = 'ckun-ssh-connections'
 
 export const useSSHStore = defineStore('ssh', () => {
@@ -36,11 +45,20 @@ export const useSSHStore = defineStore('ssh', () => {
   /** 按终端会话维度的命令历史（内存版） */
   const commandHistory = ref<CommandHistoryEntry[]>([])
 
+  /** 命令链记录：连续命令对的共现统计 */
+  const commandChains = ref<CommandChainEntry[]>([])
+
   /** 命令历史最大条目数（超出后淘汰最久未使用的条目） */
   const MAX_COMMAND_HISTORY = 500
 
+  /** 命令链最大条目数 */
+  const MAX_COMMAND_CHAINS = 1000
+
   /** 终端会话最大数量（防止无限制创建导致内存溢出） */
   const MAX_SESSIONS = 20
+
+  /** 上一次执行的命令（按会话记录，用于构建命令链） */
+  const lastCommandBySession = ref<Record<string, string>>({})
 
   // ─── Computed ─────────────────────────────────
   const localSessions = computed(() => sessions.value.filter(s => s.type === 'local'))
@@ -374,6 +392,53 @@ export const useSSHStore = defineStore('ssh', () => {
         commandHistory.value.splice(0, commandHistory.value.length - MAX_COMMAND_HISTORY)
       }
     }
+
+    // 记录命令链：将上一个命令与当前命令关联
+    const prevCmd = lastCommandBySession.value[sessionId]
+    if (prevCmd && prevCmd !== trimmed) {
+      recordCommandChain(sessionId, prevCmd, trimmed, now)
+    }
+    lastCommandBySession.value[sessionId] = trimmed
+  }
+
+  /**
+   * 记录命令链（连续命令对）
+   */
+  function recordCommandChain(sessionId: string, prevCmd: string, nextCmd: string, now: number): void {
+    const existing = commandChains.value.find(
+      c => c.sessionId === sessionId && c.prevCmd === prevCmd && c.nextCmd === nextCmd,
+    )
+    if (existing) {
+      existing.count++
+      existing.lastUsedAt = now
+    } else {
+      commandChains.value.push({
+        sessionId,
+        prevCmd,
+        nextCmd,
+        count: 1,
+        lastUsedAt: now,
+      })
+      // 超出上限时淘汰最久未使用的条目
+      if (commandChains.value.length > MAX_COMMAND_CHAINS) {
+        commandChains.value.sort((a, b) => a.lastUsedAt - b.lastUsedAt)
+        commandChains.value.splice(0, commandChains.value.length - MAX_COMMAND_CHAINS)
+      }
+    }
+  }
+
+  /**
+   * 查询命令链推荐：给定前一个命令，返回最可能的下一个命令
+   */
+  function queryCommandChainCandidates(sessionId: string, prevCmd: string, limit = 5): CommandChainEntry[] {
+    if (!sessionId || !prevCmd) return []
+    return commandChains.value
+      .filter(c => c.sessionId === sessionId && c.prevCmd === prevCmd)
+      .sort((a, b) => {
+        if (b.count !== a.count) return b.count - a.count
+        return b.lastUsedAt - a.lastUsedAt
+      })
+      .slice(0, limit)
   }
 
   /**
@@ -398,6 +463,42 @@ export const useSSHStore = defineStore('ssh', () => {
         return b.lastUsedAt - a.lastUsedAt
       })
       .slice(0, limit)
+  }
+
+  /**
+   * 获取命令的时间衰减加权评分
+   * 评分 = count * 时间衰减因子
+   * 时间衰减因子：最近使用的命令得分更高，半衰期 7 天
+   */
+  function getCommandScore(command: string, sessionId: string): number {
+    const entry = commandHistory.value.find(
+      h => h.sessionId === sessionId && h.command === command,
+    )
+    if (!entry) return 0
+    const now = Date.now()
+    const ageDays = (now - entry.lastUsedAt) / (1000 * 60 * 60 * 24)
+    const halfLifeDays = 7
+    const decayFactor = Math.pow(0.5, ageDays / halfLifeDays)
+    return entry.count * decayFactor
+  }
+
+  /**
+   * 获取某会话上一次执行的命令
+   */
+  function getLastCommand(sessionId: string): string | undefined {
+    return lastCommandBySession.value[sessionId]
+  }
+
+  /**
+   * 获取某会话最近执行的命令列表（按时间正序）
+   */
+  function getRecentCommands(sessionId: string, limit = 10): string[] {
+    return commandHistory.value
+      .filter(h => h.sessionId === sessionId)
+      .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+      .slice(0, limit)
+      .map(h => h.command)
+      .reverse()
   }
 
   // ─── 连接管理(走 IPC 持久化) ──────────────────
@@ -471,5 +572,9 @@ export const useSSHStore = defineStore('ssh', () => {
     // history
     recordCommand,
     queryHistoryCandidates,
+    getCommandScore,
+    getLastCommand,
+    getRecentCommands,
+    queryCommandChainCandidates,
   }
 })

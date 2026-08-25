@@ -341,6 +341,20 @@ export const api = {
     request<{ deleted: boolean }>(`/skills/${id}`, {
       method: 'DELETE',
     }),
+
+  // 终端预测
+  predictTerminalCommand: (payload: {
+    session_id: string
+    current_input?: string
+    recent_commands?: string[]
+    cwd?: string
+    platform?: string
+    model_id?: string
+  }) =>
+    request<{ predictions: string[]; model_used: string }>('/terminal/predict', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 }
 
 // ── SSE 流式聊天 ──

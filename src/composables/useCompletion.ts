@@ -10,6 +10,8 @@
  */
 import type { Terminal } from '@xterm/xterm'
 import { useSSHStore } from '@/stores/ssh'
+import { api } from '@/api/client'
+import { useSettingsStore } from '@/stores/settings'
 
 export interface CompletionCandidate {
   text: string
@@ -224,6 +226,69 @@ function queryHistoryCandidates(
   return result
 }
 
+/** 补充命令链推荐候选（命令段且无前缀时，基于上一个命令推荐下一个） */
+function queryChainCandidates(
+  sessionId: string,
+  input: CompletionInput,
+  nativeCandidates: CompletionCandidate[],
+  lastCmd: string | undefined,
+): CompletionCandidate[] {
+  if (!input.isCommand || input.prefix || !lastCmd) return []
+
+  const store = useSSHStore()
+  const chains = store.queryCommandChainCandidates(sessionId, lastCmd, 5)
+  if (chains.length === 0) return []
+
+  const seen = new Set(nativeCandidates.map(c => c.text))
+  const result: CompletionCandidate[] = []
+  for (const chain of chains) {
+    if (seen.has(chain.nextCmd)) continue
+    seen.add(chain.nextCmd)
+    result.push({ text: chain.nextCmd, type: 'history' })
+  }
+  return result
+}
+
+/** 补充 AI 预测候选（命令段且无前缀时，基于上下文预测下一步命令） */
+async function queryAIPredictions(
+  sessionId: string,
+  input: CompletionInput,
+  nativeCandidates: CompletionCandidate[],
+): Promise<CompletionCandidate[]> {
+  if (!input.isCommand || input.prefix) return []
+
+  const settings = useSettingsStore()
+  if (!settings.settings.appearance?.terminal?.aiPredictionEnabled) return []
+
+  const store = useSSHStore()
+  const lastCmd = store.getLastCommand(sessionId)
+  if (!lastCmd) return []
+
+  try {
+    const result = await api.predictTerminalCommand({
+      session_id: sessionId,
+      current_input: input.line || '',
+      recent_commands: store.getRecentCommands(sessionId, 10),
+      cwd: '',
+      platform: typeof navigator !== 'undefined' && navigator.userAgent?.includes('Windows') ? 'windows' : 'linux',
+    })
+
+    if (!result?.predictions?.length) return []
+
+    const seen = new Set(nativeCandidates.map(c => c.text))
+    const aiCandidates: CompletionCandidate[] = []
+    for (const pred of result.predictions) {
+      const trimmed = pred.trim()
+      if (!trimmed || seen.has(trimmed)) continue
+      seen.add(trimmed)
+      aiCandidates.push({ text: trimmed, type: 'command' })
+    }
+    return aiCandidates
+  } catch {
+    return []
+  }
+}
+
 /**
  * 查询补全候选
  * @param side 'local' | 'remote'
@@ -311,11 +376,18 @@ export async function queryCompletion(
       candidates.push({ text, type })
     }
 
-    // 排序
+    // 排序：命令类型优先，同类型内按频率+时间衰减加权排序
     candidates.sort((a, b) => {
       const ra = rank[a.type] ?? 9
       const rb = rank[b.type] ?? 9
       if (ra !== rb) return ra - rb
+      // 同类型时，history 类型按频率+时间衰减排序
+      if (a.type === 'history' && b.type === 'history') {
+        const store = useSSHStore()
+        const scoreA = store.getCommandScore(a.text, sessionId)
+        const scoreB = store.getCommandScore(b.text, sessionId)
+        if (scoreB !== scoreA) return scoreB - scoreA
+      }
       return a.text.localeCompare(b.text)
     })
 
@@ -323,6 +395,18 @@ export async function queryCompletion(
     if (sessionId && input.isCommand && input.prefix) {
       const historyCandidates = queryHistoryCandidates(sessionId, input, candidates)
       candidates.push(...historyCandidates)
+    }
+
+    // 命令段且无前缀时，基于上一个命令推荐下一个命令（命令链推荐）
+    if (sessionId && input.isCommand && !input.prefix) {
+      const store = useSSHStore()
+      const lastCmd = store.getLastCommand(sessionId)
+      const chainCandidates = queryChainCandidates(sessionId, input, candidates, lastCmd)
+      candidates.push(...chainCandidates)
+
+      // AI 智能预测：基于上下文预测下一步命令
+      const aiCandidates = await queryAIPredictions(sessionId, input, candidates)
+      candidates.push(...aiCandidates)
     }
 
     return candidates

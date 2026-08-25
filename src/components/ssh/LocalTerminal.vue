@@ -137,7 +137,19 @@ function positionPopup(): void {
 function applyCompletion(candidate: CompletionCandidate): void {
   if (!terminal || !window.electronAPI) return
   const isUnique = completionState.value.candidates.length <= 1
-  const text = buildCompletionText(candidate.text, completionState.value.prefix, isUnique)
+
+  // 直接从终端读取当前前缀，避免状态不同步导致重复字符
+  const lineInfo = readCurrentLine(terminal)
+  let prefix = completionState.value.prefix
+  if (lineInfo) {
+    const { input: curInput, startCol: curStart } = stripPrompt(lineInfo.line)
+    const curCursorCol = Math.max(0, lineInfo.cursorPos - curStart)
+    const curCursorIdx = columnToIndex(curInput, curCursorCol)
+    const lastSpace = curInput.lastIndexOf(' ', curCursorIdx - 1)
+    prefix = curInput.slice(lastSpace + 1, curCursorIdx)
+  }
+
+  const text = buildCompletionText(candidate.text, prefix, isUnique)
   if (text) {
     window.electronAPI.ptyWrite(props.ptyId, text)
   }
@@ -362,7 +374,6 @@ defineExpose({
 .local-terminal {
   width: 100%;
   height: 100%;
-  padding: 4px;
 }
 
 .local-terminal :deep(.xterm) {

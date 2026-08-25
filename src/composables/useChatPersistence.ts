@@ -170,17 +170,22 @@ export function useChatPersistence<
     }
   }
 
-  async function deleteConversation(id: string) {
-    const conv = conversations.value.find((c) => c.id === id)
-    if (conv?.backendConvId) {
-      try { await api.deleteConversation(conv.backendConvId) } catch { /* ignore */ }
-    }
-    conversations.value = conversations.value.filter((c) => c.id !== id)
-    if (currentConvId.value === id) {
-      currentConvId.value = conversations.value[0]?.id ?? null
-    }
-    saveConversations(conversations.value)
+async function deleteConversation(id: string, loadMessages?: (conv: any) => Promise<void>) {
+  const conv = conversations.value.find((c) => c.id === id)
+  if (conv?.backendConvId) {
+    try { await api.deleteConversation(conv.backendConvId) } catch { /* ignore */ }
   }
+  conversations.value = conversations.value.filter((c) => c.id !== id)
+  if (currentConvId.value === id) {
+    const nextConv = conversations.value[0] ?? null
+    currentConvId.value = nextConv?.id ?? null
+    // 切换到下一个会话时，如果是后端模式则加载消息
+    if (nextConv && persistence === 'backend' && loadMessages) {
+      await loadMessages(nextConv)
+    }
+  }
+  saveConversations(conversations.value)
+}
 
   async function ensureBackendConversation(conv: TConversation): Promise<void> {
     if (conv.backendConvId) return

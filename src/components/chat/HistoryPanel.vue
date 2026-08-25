@@ -64,18 +64,21 @@ defineEmits<{
   align-items: flex-start;
   justify-content: center;
   padding-top: 40px;
+  backdrop-filter: blur(2px);
 }
 
 .history-panel {
   width: 100%;
   max-height: calc(100% - 48px);
-  border: 1px solid #3a3a3a;
+  border: 1px solid var(--border-default);
   border-radius: 8px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   margin: 0 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  background: color-mix(in srgb, var(--bg-elevated) 90%, transparent);
+  backdrop-filter: blur(12px);
 }
 
 .history-panel-header {
@@ -132,7 +135,7 @@ defineEmits<{
   padding: 6px 12px 4px;
   font-size: 11px;
   font-weight: 600;
-  color: #888888;
+  color: var(--text-tertiary);
   text-transform: uppercase;
   letter-spacing: 0.3px;
 }
@@ -158,7 +161,7 @@ defineEmits<{
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #555555;
+  background: var(--text-tertiary);
   flex-shrink: 0;
 }
 
@@ -187,7 +190,7 @@ defineEmits<{
   height: 20px;
   border: none;
   background: transparent;
-  color: #666666;
+  color: var(--text-tertiary);
   cursor: pointer;
   border-radius: 3px;
   flex-shrink: 0;
@@ -208,6 +211,6 @@ defineEmits<{
   padding: 24px 12px;
   text-align: center;
   font-size: 12px;
-  color: #666666;
+  color: var(--text-tertiary);
 }
 </style>

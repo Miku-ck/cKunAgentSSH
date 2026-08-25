@@ -62,6 +62,7 @@ export interface AppSettings {
     terminal: {
       fontSize: number
       fontFamily: string
+      aiPredictionEnabled: boolean
     }
   }
 }
@@ -125,6 +126,7 @@ export const useSettingsStore = defineStore('settings', () => {
       terminal: {
         fontSize: saved?.appearance?.terminal?.fontSize ?? 14,
         fontFamily: saved?.appearance?.terminal?.fontFamily ?? 'jetbrains',
+        aiPredictionEnabled: saved?.appearance?.terminal?.aiPredictionEnabled ?? false,
       },
     },
   })

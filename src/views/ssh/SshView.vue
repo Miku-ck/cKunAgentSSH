@@ -338,7 +338,6 @@ onMounted(() => {
   display: flex;
   align-items: flex-end;
   gap: 1px;
-  padding: 0 4px;
   overflow-x: auto;
   height: 100%;
 }
@@ -351,7 +350,6 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 0 6px;
   flex-shrink: 0;
 }
 

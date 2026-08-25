@@ -15,10 +15,14 @@ export interface TransferItem {
   to: string
   transferred: number
   total: number
-  status: 'pending' | 'running' | 'done' | 'error' | 'cancelled'
+  status: 'pending' | 'running' | 'paused' | 'done' | 'error' | 'cancelled'
   error?: string
   startTime: number
   endTime?: number
+  // 断点续传相关
+  resumeOffset?: number      // 已传输字节数（续传起点）
+  retryCount?: number        // 自动重试次数
+  abortController?: AbortController  // 用于暂停传输
 }
 
 export const useSftpStore = defineStore('sftp', () => {
@@ -144,11 +148,18 @@ export const useSftpStore = defineStore('sftp', () => {
     connectionHost.value = ''
     online.value = false
     reusingTerminal.value = false
-  remoteCwd.value = ''
-  remoteEntries.value = []
-  selectedRemote.value = new Set()
-  transferSeq.value = 1
-  remoteError.value = ''
+    remoteCwd.value = ''
+    remoteEntries.value = []
+    selectedRemote.value = new Set()
+    transferSeq.value = 1
+    remoteError.value = ''
+    // 断开连接时清空传输记录
+    transfers.value = []
+  }
+
+  /** 清空传输记录（端口关闭时自动调用） */
+  function clearTransfers(): void {
+    transfers.value = []
   }
 
   // ─── 剪贴板操作 ───────────────────────────────
@@ -746,12 +757,16 @@ export const useSftpStore = defineStore('sftp', () => {
     })
   }
 
-  async function runUpload(id: string, localPath: string, remotePath: string, retried = false): Promise<void> {
+async function runUpload(id: string, localPath: string, remotePath: string, retried = false, resumeOffset?: number): Promise<void> {
     const t = transfers.value.find(x => x.id === id)
     if (!t) return
+    // 创建 AbortController 用于暂停功能
+    if (!t.abortController) {
+      t.abortController = new AbortController()
+    }
     t.status = 'running'
     try {
-      await getApi().sftpUpload(id, sshSessionId.value, localPath, remotePath)
+      await getApi().sftpUpload(id, sshSessionId.value, localPath, remotePath, resumeOffset, t.abortController.signal)
       t.status = 'done'
       t.endTime = Date.now()
       toast.success(`上传成功: ${t.name}`)
@@ -762,7 +777,7 @@ export const useSftpStore = defineStore('sftp', () => {
       // NETWORK/STALLED 错误自动重试一次（断点续传）
       if (retryable && !retried) {
         toast.info(`正在自动续传: ${t.name}…`)
-        return runUpload(id, localPath, remotePath, true)
+        return runUpload(id, localPath, remotePath, true, t.transferred)
       }
       t.status = code === 'CANCELLED' ? 'cancelled' : 'error'
       t.error = err?.message || '上传失败'
@@ -776,12 +791,16 @@ export const useSftpStore = defineStore('sftp', () => {
     }
   }
 
-  async function runDownload(id: string, remotePath: string, localPath: string, retried = false): Promise<void> {
+  async function runDownload(id: string, remotePath: string, localPath: string, retried = false, resumeOffset?: number): Promise<void> {
     const t = transfers.value.find(x => x.id === id)
     if (!t) return
+    // 创建 AbortController 用于暂停功能
+    if (!t.abortController) {
+      t.abortController = new AbortController()
+    }
     t.status = 'running'
     try {
-      await getApi().sftpDownload(id, sshSessionId.value, remotePath, localPath)
+      await getApi().sftpDownload(id, sshSessionId.value, remotePath, localPath, resumeOffset, t.abortController.signal)
       t.status = 'done'
       t.endTime = Date.now()
       toast.success(`下载成功: ${t.name}`)
@@ -792,7 +811,7 @@ export const useSftpStore = defineStore('sftp', () => {
       // NETWORK/STALLED 错误自动重试一次（断点续传）
       if (retryable && !retried) {
         toast.info(`正在自动续传: ${t.name}…`)
-        return runDownload(id, remotePath, localPath, true)
+        return runDownload(id, remotePath, localPath, true, t.transferred)
       }
       t.status = code === 'CANCELLED' ? 'cancelled' : 'error'
       t.error = err?.message || '下载失败'
@@ -805,11 +824,40 @@ export const useSftpStore = defineStore('sftp', () => {
     }
   }
 
-  async function cancelTransfer(id: string): Promise<void> {
-    try { await getApi().sftpCancel(id) } catch { /* ignore */ }
-  }
+async function cancelTransfer(id: string): Promise<void> {
+  try { await getApi().sftpCancel(id) } catch { /* ignore */ }
+}
 
-  function removeTransfer(id: string): void {
+/** 暂停传输任务（断点续传） */
+function pauseTransfer(id: string): void {
+  const t = transfers.value.find(t => t.id === id)
+  if (!t || t.status !== 'running') return
+  // 中止当前传输
+  if (t.abortController) {
+    t.abortController.abort()
+  }
+  t.status = 'paused'
+  t.resumeOffset = t.transferred  // 记录断点位置
+  try { getApi().sftpCancel(id) } catch { /* ignore */ }
+}
+
+/** 恢复传输任务（断点续传） */
+function resumeTransfer(id: string): void {
+  const t = transfers.value.find(t => t.id === id)
+  if (!t || t.status !== 'paused') return
+  // 重新创建 AbortController
+  t.abortController = new AbortController()
+  t.status = 'running'
+  t.error = undefined
+  // 根据方向重新启动传输，从断点处继续
+  if (t.direction === 'up') {
+    runUpload(id, t.from, t.to, false, t.resumeOffset)
+  } else {
+    runDownload(id, t.to, t.from, false, t.resumeOffset)
+  }
+}
+
+function removeTransfer(id: string): void {
     const idx = transfers.value.findIndex(t => t.id === id)
     if (idx >= 0) transfers.value.splice(idx, 1)
   }
@@ -845,7 +893,7 @@ export const useSftpStore = defineStore('sftp', () => {
     // selection
     toggleSelectLocal, toggleSelectRemote, clearSelection,
     // transfer
-    uploadFiles, downloadFiles, cancelTransfer, removeTransfer, applyProgress,
+    uploadFiles, downloadFiles, cancelTransfer, pauseTransfer, resumeTransfer, removeTransfer, applyProgress, clearTransfers,
     // copy
     localCopy, remoteCopy,
     // zip

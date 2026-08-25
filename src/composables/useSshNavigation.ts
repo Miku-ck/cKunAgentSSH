@@ -7,7 +7,7 @@ import { useToastStore } from '@/stores/toast'
 import { toFriendlyMessage } from '@/api/client'
 
 /** 本地终端列表常量 */
-const LOCAL_SHELLS = ['PowerShell', 'Git Bash', 'CMD', 'WSL']
+const LOCAL_SHELLS = ['PowerShell', 'CMD', 'Git Bash', 'WSL']
 
 /** 远程连接防抖间隔 */
 const CONNECT_DEBOUNCE_MS = 2000

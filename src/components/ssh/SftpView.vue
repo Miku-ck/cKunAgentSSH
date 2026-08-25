@@ -9,6 +9,12 @@
         <span v-else class="session-host">仅本地模式</span>
       </div>
       <div class="session-right">
+        <!-- 传输任务按钮 -->
+        <button class="session-btn transfer" :class="{ active: showTransferList }" @click="showTransferList = !showTransferList">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/><polyline points="7 16 12 21 17 16"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+          <span v-if="store.transfers.length > 0" class="transfer-badge">{{ store.transfers.length }}</span>
+          传输任务
+        </button>
         <button v-if="!store.online" class="session-btn connect" @click="showConnPicker = true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
           连接远程
@@ -42,8 +48,204 @@
       />
     </div>
 
-    <!-- 底部传输队列 -->
-    <TransferQueue />
+    <!-- 传输任务列表弹窗 -->
+    <div v-if="showTransferList" class="transfer-overlay" @click.self="showTransferList = false">
+      <div class="transfer-panel">
+        <div class="transfer-panel-header">
+          <span class="transfer-panel-title">传输任务</span>
+          <div class="transfer-panel-actions">
+            <span v-if="store.transfers.length > 0" class="transfer-count">{{ store.activeTransfers.length }} 项进行中</span>
+            <button v-if="store.transfers.length > 0" class="transfer-clear-btn" @click="clearCompleted">清除已完成</button>
+            <button class="transfer-panel-close" @click="showTransferList = false">×</button>
+          </div>
+        </div>
+        <div class="transfer-panel-body">
+          <div v-if="store.transfers.length === 0" class="transfer-empty">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48"><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/><polyline points="7 16 12 21 17 16"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+            <p>暂无传输任务</p>
+            <p class="transfer-empty-hint">断开连接后记录将自动清空</p>
+          </div>
+          <div v-else class="transfer-list">
+            <!-- 进行中的任务 -->
+            <div v-if="activeTransfers.length > 0" class="transfer-section">
+              <div class="transfer-section-title">
+                <span class="transfer-section-label">进行中</span>
+                <span class="transfer-section-count">{{ activeTransfers.length }}</span>
+              </div>
+              <div
+                v-for="t in activeTransfers"
+                :key="t.id"
+                class="transfer-list-item"
+                :class="t.status"
+                @contextmenu.prevent="onTransferContext($event, t)"
+              >
+              <div class="tl-icon" :class="t.direction">
+                <svg v-if="t.direction === 'up'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="7 16 12 21 17 16"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+              </div>
+              <div class="tl-info">
+                <div class="tl-name" :title="t.name">{{ t.name }}</div>
+                <div class="tl-path">
+                  <span class="tl-path-from" :title="t.from">{{ truncatePath(t.from) }}</span>
+                  <svg class="tl-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="10" height="10"><polyline points="9 18 15 12 9 6"/></svg>
+                  <span class="tl-path-to" :title="t.to">{{ truncatePath(t.to) }}</span>
+                </div>
+                <div class="tl-meta">
+                  <span v-if="t.status === 'running'" class="tl-speed">{{ formatSpeed(t) }} · {{ formatSize(t.transferred) }} / {{ formatSize(t.total) }} · {{ formatElapsed(t) }}</span>
+                  <span v-else-if="t.status === 'paused'" class="tl-paused">已暂停 · {{ formatSize(t.transferred) }} / {{ formatSize(t.total) }} · {{ formatElapsed(t) }}</span>
+                  <span v-else-if="t.status === 'done'" class="tl-done">完成 · {{ formatSize(t.total) }} · {{ formatDuration(t) }}</span>
+                  <span v-else-if="t.status === 'error'" class="tl-error" :title="t.error">失败: {{ t.error }}</span>
+                  <span v-else-if="t.status === 'cancelled'" class="tl-cancelled">已取消 · {{ formatSize(t.transferred) }} / {{ formatSize(t.total) }}</span>
+                  <span v-else class="tl-pending">等待中 · {{ formatSize(t.total) }}</span>
+                </div>
+                <div class="tl-progress-bar">
+                  <div
+                    v-if="isIndeterminate(t)"
+                    class="tl-progress-fill indeterminate"
+                  ></div>
+                  <div
+                    v-else
+                    class="tl-progress-fill"
+                    :class="t.status"
+                    :style="{ width: progressPercent(t) + '%' }"
+                  ></div>
+                </div>
+              </div>
+              <div class="tl-right">
+                <span v-if="isIndeterminate(t)" class="tl-percent-indeterminate">复制中</span>
+                <span v-else-if="t.status === 'running'" class="tl-percent">{{ progressPercent(t) }}%</span>
+                <span v-else-if="t.status === 'paused'" class="tl-percent-paused">已暂停</span>
+                <span v-else-if="t.status === 'done'" class="tl-percent-success">{{ progressPercent(t) }}%</span>
+                <span v-else-if="t.status === 'error'" class="tl-percent-error">失败</span>
+                <span v-else-if="t.status === 'cancelled'" class="tl-percent-cancelled">已取消</span>
+                <span v-else class="tl-percent-pending">—</span>
+              </div>
+              <button
+                v-if="t.status === 'running' || t.status === 'pending'"
+                class="tl-action tl-cancel"
+                :title="t.status === 'running' ? '暂停' : '取消'"
+                @click.stop="t.status === 'running' ? store.pauseTransfer(t.id) : store.cancelTransfer(t.id)"
+              >
+                <svg v-if="t.status === 'running'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+              <button
+                v-else-if="t.status === 'paused'"
+                class="tl-action tl-resume"
+                title="继续"
+                @click.stop="store.resumeTransfer(t.id)"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              </button>
+              <button
+                v-else
+                class="tl-action tl-remove"
+                title="移除"
+                @click.stop="store.removeTransfer(t.id)"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/></svg>
+              </button>
+            </div>
+            </div>
+          </div>
+          <!-- 已完成的记录 -->
+          <div v-if="completedTransfers.length > 0" class="transfer-section">
+            <div class="transfer-section-title">
+              <span class="transfer-section-label">已完成</span>
+              <span class="transfer-section-count">{{ completedTransfers.length }}</span>
+            </div>
+            <div
+              v-for="t in completedTransfers"
+              :key="t.id"
+              class="transfer-list-item"
+              :class="t.status"
+              @contextmenu.prevent="onTransferContext($event, t)"
+            >
+              <div class="tl-icon" :class="t.direction">
+                <svg v-if="t.direction === 'up'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="7 16 12 21 17 16"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+              </div>
+              <div class="tl-info">
+                <div class="tl-name" :title="t.name">{{ t.name }}</div>
+                <div class="tl-path">
+                  <span class="tl-path-from" :title="t.from">{{ truncatePath(t.from) }}</span>
+                  <svg class="tl-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="10" height="10"><polyline points="9 18 15 12 9 6"/></svg>
+                  <span class="tl-path-to" :title="t.to">{{ truncatePath(t.to) }}</span>
+                </div>
+                <div class="tl-meta">
+                  <span v-if="t.status === 'done'" class="tl-done">完成 · {{ formatSize(t.total) }} · {{ formatDuration(t) }}</span>
+                  <span v-else-if="t.status === 'error'" class="tl-error" :title="t.error">失败: {{ t.error }}</span>
+                  <span v-else-if="t.status === 'cancelled'" class="tl-cancelled">已取消 · {{ formatSize(t.transferred) }} / {{ formatSize(t.total) }}</span>
+                </div>
+                <div class="tl-progress-bar">
+                  <div
+                    class="tl-progress-fill"
+                    :class="t.status"
+                    :style="{ width: '100%' }"
+                  ></div>
+                </div>
+              </div>
+              <div class="tl-right">
+                <span v-if="t.status === 'done'" class="tl-percent-success">完成</span>
+                <span v-else-if="t.status === 'error'" class="tl-percent-error">失败</span>
+                <span v-else class="tl-percent-cancelled">已取消</span>
+              </div>
+              <button
+                class="tl-action tl-remove"
+                title="移除"
+                @click.stop="store.removeTransfer(t.id)"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 传输任务右键菜单 -->
+    <div
+      v-if="transferCtxMenu.visible"
+      class="transfer-ctx-menu"
+      :style="{ left: transferCtxMenu.x + 'px', top: transferCtxMenu.y + 'px' }"
+      @click.stop
+      @contextmenu.prevent
+    >
+      <div v-if="transferCtxMenu.item && transferCtxMenu.item.status === 'running'" class="ctx-item" @click="store.pauseTransfer(transferCtxMenu.item.id); transferCtxMenu.visible = false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+        暂停传输
+      </div>
+      <div v-if="transferCtxMenu.item && transferCtxMenu.item.status === 'paused'" class="ctx-item" @click="store.resumeTransfer(transferCtxMenu.item.id); transferCtxMenu.visible = false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        继续传输
+      </div>
+      <div v-if="transferCtxMenu.item && transferCtxMenu.item.status === 'running'" class="ctx-item" @click="store.cancelTransfer(transferCtxMenu.item.id); transferCtxMenu.visible = false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        取消传输
+      </div>
+      <div v-if="transferCtxMenu.item && transferCtxMenu.item.status === 'pending'" class="ctx-item" @click="store.cancelTransfer(transferCtxMenu.item.id); transferCtxMenu.visible = false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        取消排队
+      </div>
+      <div v-if="transferCtxMenu.item && (transferCtxMenu.item.status === 'done' || transferCtxMenu.item.status === 'error' || transferCtxMenu.item.status === 'cancelled')" class="ctx-item" @click="store.removeTransfer(transferCtxMenu.item.id); transferCtxMenu.visible = false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"/></svg>
+        移除记录
+      </div>
+      <div v-if="transferCtxMenu.item" class="ctx-sep"></div>
+      <div v-if="transferCtxMenu.item" class="ctx-item" @click="copyTransferPath(transferCtxMenu.item); transferCtxMenu.visible = false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        复制源路径
+      </div>
+      <div v-if="transferCtxMenu.item" class="ctx-item" @click="copyTransferDestPath(transferCtxMenu.item); transferCtxMenu.visible = false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        复制目标路径
+      </div>
+      <div v-if="transferCtxMenu.item && transferCtxMenu.item.status === 'error'" class="ctx-sep"></div>
+      <div v-if="transferCtxMenu.item && transferCtxMenu.item.status === 'error'" class="ctx-item" @click="retryTransfer(transferCtxMenu.item); transferCtxMenu.visible = false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+        重试
+      </div>
+    </div>
 
     <!-- 连接选择模态 -->
     <div v-if="showConnPicker" class="conn-overlay" @click.self="showConnPicker = false">
@@ -183,8 +385,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import SftpPane from './SftpPane.vue'
 import SftpFileEditor from './SftpFileEditor.vue'
-import TransferQueue from './TransferQueue.vue'
-import { useSftpStore } from '@/stores/sftp'
+import { useSftpStore, type TransferItem } from '@/stores/sftp'
 import { useSSHStore } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
@@ -199,6 +400,125 @@ const { confirm } = useConfirm()
 const showConnPicker = ref(false)
 const connecting = ref(false)
 const pendingConnId = ref('')
+const showTransferList = ref(false)
+
+// 传输任务计算属性
+const activeTransfers = computed(() =>
+  store.transfers.filter(t => t.status === 'running' || t.status === 'paused' || t.status === 'pending')
+)
+const completedTransfers = computed(() =>
+  store.transfers.filter(t => t.status === 'done' || t.status === 'error' || t.status === 'cancelled')
+)
+
+// 传输任务右键菜单状态
+const transferCtxMenu = ref({
+  visible: false,
+  x: 0,
+  y: 0,
+  item: null as TransferItem | null
+})
+
+// ─── 传输任务辅助函数 ─────────────────
+function progressPercent(t: TransferItem): number {
+  if (!t.total) return 0
+  return Math.min(100, Math.round((t.transferred / t.total) * 100))
+}
+
+function isIndeterminate(t: TransferItem): boolean {
+  return t.status === 'running' && !t.total
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+function formatSpeed(t: TransferItem): string {
+  if (!t.startTime) return ''
+  const elapsed = (Date.now() - t.startTime) / 1000
+  if (elapsed <= 0) return ''
+  const speed = t.transferred / elapsed
+  const speedText = speed < 1024
+    ? `${Math.round(speed)} B/s`
+    : speed < 1024 * 1024
+      ? `${(speed / 1024).toFixed(1)} KB/s`
+      : `${(speed / 1024 / 1024).toFixed(1)} MB/s`
+  const remaining = t.total > t.transferred && speed > 0
+    ? Math.ceil((t.total - t.transferred) / speed)
+    : 0
+  if (remaining > 0) return `${speedText} · 剩余 ${remaining}s`
+  return speedText
+}
+
+function formatDuration(t: TransferItem): string {
+  if (!t.startTime || !t.endTime) return '—'
+  const ms = t.endTime - t.startTime
+  if (ms < 1000) return `${ms}ms`
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  const rs = s % 60
+  return `${m}m ${rs}s`
+}
+
+/** 格式化已运行时间（用于进行中和暂停状态） */
+function formatElapsed(t: TransferItem): string {
+  if (!t.startTime) return '—'
+  const ms = Date.now() - t.startTime
+  const s = Math.floor(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  const rs = s % 60
+  if (m < 60) return `${m}m ${rs}s`
+  const h = Math.floor(m / 60)
+  const rm = m % 60
+  return `${h}h ${rm}m`
+}
+
+function truncatePath(path: string): string {
+  if (path.length <= 30) return path
+  const parts = path.split('/')
+  if (parts.length > 3) {
+    return `.../${parts.slice(-2).join('/')}`
+  }
+  return '...' + path.slice(-27)
+}
+
+function clearCompleted() {
+  store.transfers = store.transfers.filter(t => t.status === 'running' || t.status === 'paused' || t.status === 'pending')
+}
+
+function onTransferContext(event: MouseEvent, item: TransferItem) {
+  transferCtxMenu.value = {
+    visible: true,
+    x: event.clientX,
+    y: event.clientY,
+    item
+  }
+}
+
+function copyTransferPath(item: TransferItem) {
+  navigator.clipboard.writeText(item.from).then(() => {
+    toast.success('已复制源路径')
+  }).catch(() => {
+    toast.error('复制失败')
+  })
+}
+
+function copyTransferDestPath(item: TransferItem) {
+  navigator.clipboard.writeText(item.to).then(() => {
+    toast.success('已复制目标路径')
+  }).catch(() => {
+    toast.error('复制失败')
+  })
+}
+
+function retryTransfer(item: TransferItem) {
+  store.removeTransfer(item.id)
+  onTransfer({ from: item.from, to: item.to, direction: item.direction } as any)
+}
 
 // ─── 进度订阅 ─────────────────────────
 let unsubProgress: (() => void) | null = null
@@ -274,7 +594,40 @@ async function handleDisconnect(): Promise<void> {
 }
 
 // ─── 跨栏传输(由 SftpPane drop 触发) ───
-function onTransfer(payload: { side: 'local' | 'remote'; paths: string[] }): void {
+async function onTransfer(payload: { side: 'local' | 'remote'; paths: string[] }): Promise<void> {
+  // 覆盖确认：检查目标路径是否已存在同名文件
+  const existingFiles: string[] = []
+  if (payload.side === 'local') {
+    // 上传：检查远程目标
+    for (const lp of payload.paths) {
+      const name = lp.split('/').pop()?.split('\\').pop() ?? lp
+      const remotePath = store.remoteCwd === '/' ? '/' + name : store.remoteCwd + '/' + name
+      const exists = await store.remotePathExists(remotePath)
+      if (exists) existingFiles.push(name)
+    }
+  } else {
+    // 下载：检查本地目标
+    for (const rp of payload.paths) {
+      const name = rp.split('/').pop() ?? rp
+      const localPath = store.localCwd + '/' + name
+      const exists = await store.localPathExists(localPath)
+      if (exists) existingFiles.push(name)
+    }
+  }
+
+  // 如果有文件已存在，弹出覆盖确认
+  if (existingFiles.length > 0) {
+    const fileList = existingFiles.slice(0, 3).join('、')
+    const more = existingFiles.length > 3 ? ` 等 ${existingFiles.length} 个文件` : ''
+    const ok = await confirm({
+      title: '文件已存在',
+      message: `目标位置已存在同名文件「${fileList}${more}」，是否覆盖？`,
+      confirmText: '覆盖',
+      danger: true,
+    })
+    if (!ok) return
+  }
+
   if (payload.side === 'local') {
     // 本地 → 远程: 上传
     store.uploadFiles(payload.paths)
@@ -544,6 +897,7 @@ async function confirmRename(): Promise<void> {
 // ─── 关闭右键菜单 ─────────────────────
 function dismissCtxMenu(): void {
   ctxMenu.visible = false
+  transferCtxMenu.value.visible = false
 }
 
 // ─── 弹窗编辑器 ───────────────────────
@@ -612,6 +966,25 @@ async function onFileSaved(): Promise<void> {
 .session-btn svg { width: 12px; height: 12px; }
 .session-btn.connect { color: var(--accent-green); border-color: rgba(78,201,176,0.4); }
 .session-btn.connect:hover { background: rgba(78,201,176,0.1); }
+.session-btn.transfer { position: relative; }
+.session-btn.transfer.active { background: var(--bg-hover); color: var(--text-primary); }
+.transfer-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  background: var(--accent-blue);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  pointer-events: none;
+}
 
 /* 双栏 */
 .sftp-panes {
@@ -735,4 +1108,290 @@ async function onFileSaved(): Promise<void> {
 .rename-btn.cancel:hover { background: var(--bg-hover); }
 .rename-btn.confirm { background: var(--accent-blue); color: #fff; border-color: var(--accent-blue); }
 .rename-btn.confirm:hover { opacity: 0.9; }
+
+/* 传输任务右键菜单 */
+.transfer-ctx-menu {
+  position: fixed;
+  z-index: 1100;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  padding: 4px;
+  min-width: 160px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  animation: ctx-fade-in 0.1s ease-out;
+}
+@keyframes ctx-fade-in {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* 传输任务列表弹窗 */
+.transfer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(2px);
+}
+.transfer-panel {
+  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  width: 560px;
+  max-height: 600px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(12px);
+  overflow: hidden;
+}
+.transfer-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+.transfer-panel-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.transfer-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.transfer-count {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.transfer-clear-btn {
+  background: transparent;
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.transfer-clear-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.transfer-panel-close {
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.transfer-panel-close:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+.transfer-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.transfer-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  gap: 12px;
+  color: var(--text-tertiary);
+}
+.transfer-empty svg { opacity: 0.4; }
+.transfer-empty p { font-size: 13px; margin: 0; }
+.transfer-empty-hint { font-size: 11px !important; opacity: 0.6; }
+
+/* 传输列表分区 */
+.transfer-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.transfer-section + .transfer-section {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+.transfer-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+}
+.transfer-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.transfer-section-count {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  background: var(--bg-hover);
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+
+/* 传输列表 */
+.transfer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.transfer-list-item {
+  display: grid;
+  grid-template-columns: 24px 1fr auto auto 20px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--bg-hover);
+  transition: background 0.15s;
+}
+.transfer-list-item:hover { background: var(--bg-active); }
+
+/* 图标 */
+.tl-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.tl-icon.up { background: rgba(78, 201, 176, 0.12); color: var(--accent-green); }
+.tl-icon.down { background: rgba(0, 200, 255, 0.12); color: var(--accent-cyan); }
+.tl-icon svg { width: 14px; height: 14px; }
+
+/* 信息 */
+.tl-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tl-name {
+  font-size: 12px;
+  color: var(--text-primary);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tl-path {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+}
+.tl-path-from,
+.tl-path-to {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
+}
+.tl-path-from { opacity: 0.8; }
+.tl-arrow { flex-shrink: 0; opacity: 0.5; }
+.tl-meta {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tl-speed { color: var(--accent-blue); }
+.tl-paused { color: var(--accent-orange); }
+.tl-done { color: var(--accent-green); }
+.tl-error { color: var(--accent-red); }
+.tl-cancelled { color: var(--text-tertiary); }
+.tl-pending { color: var(--text-tertiary); }
+
+/* 进度条 */
+.tl-progress-bar {
+  grid-column: 2;
+  width: 100%;
+  height: 3px;
+  background: var(--bg-base);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 2px;
+}
+.tl-progress-fill {
+  height: 100%;
+  background: var(--accent-blue);
+  border-radius: 2px;
+  transition: width 0.15s;
+}
+.tl-progress-fill.paused { background: var(--accent-orange); }
+.tl-progress-fill.done { background: var(--accent-green); }
+.tl-progress-fill.error { background: var(--accent-red); }
+.tl-progress-fill.cancelled { background: var(--text-tertiary); }
+.tl-progress-fill.indeterminate {
+  width: 40%;
+  background: var(--accent-blue);
+  animation: indeterminate-slide 1.2s ease-in-out infinite;
+}
+@keyframes indeterminate-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+
+/* 右侧百分比 */
+.tl-right {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-align: right;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+.tl-percent-indeterminate { color: var(--text-secondary); }
+.tl-percent-success { color: var(--accent-green); font-weight: 600; }
+.tl-percent-paused { color: var(--accent-orange); }
+.tl-percent-error { color: var(--accent-red); }
+.tl-percent-cancelled { color: var(--text-tertiary); }
+.tl-percent-pending { color: var(--text-tertiary); }
+
+/* 操作按钮 */
+.tl-action {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0;
+  flex-shrink: 0;
+}
+.tl-action:hover { background: var(--bg-hover); }
+.tl-action.tl-cancel:hover { color: var(--accent-red); }
+.tl-action.tl-resume:hover { color: var(--accent-green); }
+.tl-action.tl-remove:hover { color: var(--text-secondary); }
+.tl-action svg { width: 10px; height: 10px; }
 </style>

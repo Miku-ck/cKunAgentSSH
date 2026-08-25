@@ -132,6 +132,10 @@
             <option v-for="f in terminalFontOptions" :key="f.value" :value="f.value">{{ f.label }}</option>
           </select>
         </SettingRow>
+
+        <SettingRow label="AI 命令预测" desc="基于上下文智能预测下一步命令（需配置 AI 模型）">
+          <ToggleSwitch v-model="settings.appearance.terminal.aiPredictionEnabled" />
+        </SettingRow>
       </div>
     </div>
   </div>

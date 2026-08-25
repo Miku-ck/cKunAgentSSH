@@ -24,8 +24,8 @@ export function useModelSelector(options: UseModelSelectorOptions) {
     const id = getSelectedId()
     const list = models()
     const model = list.find(m => m.id === id)
-    // 优先展示 model_id（与后端 API 标识一致），避免仅显示友好名称导致混淆
-    return model?.model_id || model?.name || model?.id || '选择模型'
+    // 优先展示友好名称，其次才是 model_id / id
+    return model?.name || model?.model_id || model?.id || '选择模型'
   })
 
   function selectModel(id: string) {

@@ -100,8 +100,8 @@ function copyContent(text: string) {
   width: 100%;
   max-width: 100%;
   padding: 4px 14px;
-  background: rgba(110, 118, 129, 0.08);
-  color: #e6e6e6;
+  background: var(--bg-active);
+  color: var(--text-primary);
   border: 1px solid var(--border-default);
   border-radius: 12px;
 }
@@ -110,7 +110,7 @@ function copyContent(text: string) {
   width: 100%;
   max-width: 100%;
   background: transparent;
-  color: #d4d4d4;
+  color: var(--text-primary);
   padding-left: 0;
 }
 
@@ -158,7 +158,7 @@ function copyContent(text: string) {
   border: none;
   border-radius: 4px;
   background: transparent;
-  color: #858585;
+  color: var(--text-secondary);
   font-size: 11px;
   cursor: pointer;
   transition: all 0.1s;
@@ -166,11 +166,11 @@ function copyContent(text: string) {
 
 .action-btn:hover {
   background: var(--bg-hover);
-  color: #e6e6e6;
+  color: var(--text-primary);
 }
 
 .action-elapsed {
-  color: #6e6e6e;
+  color: var(--text-tertiary);
   font-size: 11px;
   margin-left: auto;
 }

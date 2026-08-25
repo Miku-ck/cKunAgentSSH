@@ -16,6 +16,7 @@
             maxlength="30"
             placeholder="如: 查看日志"
             class="qc-input"
+            spellcheck="false"
           />
         </div>
 
@@ -27,6 +28,7 @@
             maxlength="1000"
             placeholder="输入要发送到终端的命令..."
             class="qc-textarea"
+            spellcheck="false"
           />
         </div>
 

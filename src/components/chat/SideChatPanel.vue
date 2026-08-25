@@ -169,7 +169,7 @@
                 @click="handleSelectModel(model.id)"
               >
                 <div class="model-item-info">
-                  <span class="model-label">{{ model.model_id || model.name || model.id }}</span>
+                  <span class="model-label">{{ model.name || model.model_id || model.id }}</span>
                 </div>
               </div>
             </div>
@@ -553,10 +553,10 @@ defineExpose({ focusInput })
 
 /* Header */
 .panel-header {
-  height: 32px;
+  height: 34px;
   display: flex;
   align-items: center;
-  padding: 0 12px;
+  padding: 0 4px;
   border-bottom: 1px solid var(--border-subtle, #2d2d30);
   flex-shrink: 0;
   gap: 8px;
@@ -587,7 +587,7 @@ defineExpose({ focusInput })
 
 .icon-btn:hover {
   background: var(--bg-hover);
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .icon-btn svg {
@@ -630,13 +630,13 @@ defineExpose({ focusInput })
 .empty-title {
   font-size: 18px;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--text-primary);
   margin: 0;
 }
 
 .empty-desc {
   font-size: 13px;
-  color: #888888;
+  color: var(--text-secondary);
   margin: 0;
   text-align: center;
   line-height: 1.5;
@@ -644,7 +644,7 @@ defineExpose({ focusInput })
 
 /* Messages List */
 .messages-list {
-  padding: 12px 16px;
+  padding: 12px 4px;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -657,7 +657,7 @@ defineExpose({ focusInput })
 }
 
 .input-container {
-  padding: 0 12px;
+  padding: 0 4px;
   border-bottom: 1px solid var(--border-subtle, #2d2d30);
   position: relative;
 }
@@ -666,7 +666,7 @@ defineExpose({ focusInput })
   width: 100%;
   border: none;
   background: transparent;
-  color: #e0e0e0;
+  color: var(--text-primary);
   font-size: 13px;
   font-family: var(--font-sans);
   padding: 10px 0;
@@ -679,11 +679,13 @@ defineExpose({ focusInput })
 }
 
 .chat-input::placeholder {
-  color: #666666;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  opacity: 0.7;
 }
 
 .chat-input:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
 }
 
 /* ── 已选技能标签 ── */
@@ -798,7 +800,7 @@ defineExpose({ focusInput })
 
 .skill-item-name {
   font-size: 12px;
-  color: #e0e0e0;
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -965,12 +967,12 @@ defineExpose({ focusInput })
 }
 
 .send-btn:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: #ffffff;
+  background: var(--bg-active);
+  color: var(--text-primary);
 }
 
 .send-btn:disabled {
-  opacity: 0.35;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
