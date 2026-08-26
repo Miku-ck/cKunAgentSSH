@@ -1,5 +1,5 @@
 // src/composables/useChatStream.ts
-import { ref } from 'vue'
+import { ref, onUnmounted } from 'vue'
 import { streamChat } from '@/api/client'
 import type { ModelConfig } from '@/api/client'
 import type { BaseConversation, BaseMessage, ChatMode } from '@/types/chat'
@@ -35,9 +35,22 @@ export function useChatStream(options: UseChatStreamOptions) {
     const model = getModel()
     if (!model) return false
 
+    // 防止重复启动：已有流运行时先中止旧流
+    if (streaming.value && abortFn) {
+      abortFn()
+      abortFn = null
+      streaming.value = false
+    }
+
     const conv = conversation
     const streamStartTime = Date.now()
     streaming.value = true
+
+    // 后端会话 ID 校验，避免传入 undefined 导致难以定位的错误
+    if (!conv.backendConvId) {
+      streaming.value = false
+      throw new Error('会话尚未初始化，请先创建后端会话')
+    }
 
     // 流式输出开关：关闭时缓冲所有 token，done 时一次性回调（保留 SSE 通道，最小改动）
     const settingsStore = useSettingsStore()
@@ -112,6 +125,15 @@ export function useChatStream(options: UseChatStreamOptions) {
       streaming.value = false
     }
   }
+
+  // 组件卸载时中止活跃流，防止内存泄漏
+  onUnmounted(() => {
+    if (abortFn) {
+      abortFn()
+      abortFn = null
+      streaming.value = false
+    }
+  })
 
   return {
     streaming,

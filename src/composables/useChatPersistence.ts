@@ -119,7 +119,9 @@ export function useChatPersistence<
         selectedModelId.value = id
         saveSelectedModelId(id)
       }
-    } catch { /* ignore */ }
+    } catch (e) {
+      console.debug('[useChatPersistence] fetchDefaultModel skipped:', e)
+    }
   }
 
   function setSelectedModel(id: string) {
@@ -172,8 +174,16 @@ export function useChatPersistence<
 
 async function deleteConversation(id: string, loadMessages?: (conv: any) => Promise<void>) {
   const conv = conversations.value.find((c) => c.id === id)
+  // 后端删除失败时回滚本地状态，避免"删掉的会话又回来了"的数据不一致
   if (conv?.backendConvId) {
-    try { await api.deleteConversation(conv.backendConvId) } catch { /* ignore */ }
+    try {
+      await api.deleteConversation(conv.backendConvId)
+    } catch (e) {
+      console.error('[useChatPersistence] Backend delete failed:', e)
+      const toast = useToastStore()
+      toast.error('服务端删除失败，请稍后重试')
+      return // 后端删除失败，不回滚本地状态
+    }
   }
   conversations.value = conversations.value.filter((c) => c.id !== id)
   if (currentConvId.value === id) {

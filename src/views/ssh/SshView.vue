@@ -34,44 +34,6 @@
             </svg>
           </button>
         </div>
-
-        <div class="tabs-actions">
-          <!-- AI 运维助手 -->
-          <button
-            class="tab-action-btn ai-tab-btn"
-            :class="{ active: sshAiStore.showAiPanel }"
-            title="AI 运维助手"
-            @click="toggleAiPanel"
-          >
-            <span class="ai-text">AI</span>
-          </button>
-          <!-- 远程终端管理 -->
-          <button
-            class="tab-action-btn"
-            :class="{ active: activeNavPage === 'remote-mgr' }"
-            title="远程终端"
-            @click="toggleRemoteManager"
-          >
-            <IconMonitor :width="14" :height="14" :stroke-width="2" />
-          </button>
-          <!-- SFTP 文件传输 -->
-          <button
-            class="tab-action-btn"
-            :class="{ active: activeNavPage === 'sftp' }"
-            title="SFTP"
-            @click="toggleSftp"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-          </button>
-          <!-- 设置 -->
-          <button
-            class="tab-action-btn"
-            title="设置"
-            @click="openSettings()"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          </button>
-        </div>
       </div>
 
       <!-- 内容区包装器: flex:1 + position:relative 为内部绝对定位提供参照 -->
@@ -79,23 +41,23 @@
         <!-- 终端内容区 (始终渲染以保持终端实例, 被quick-start覆盖或隐藏) -->
         <div class="term-content" v-if="store.sessions.length > 0" v-show="!showHome">
           <template v-for="s in store.sessions" :key="s.id">
-            <LocalTerminal
-              v-if="s.type === 'local'"
-              :ref="(el) => { if (el) terminalRefs[s.id] = el }"
-              :pty-id="s.id"
-              :shell="s.shell"
-              :visible="s.id === store.activeSessionId && !showHome"
-              v-show="s.id === store.activeSessionId"
-              @exit="handleLocalExit(s.id, $event)"
-            />
-            <RemoteTerminal
-              v-if="s.type === 'remote'"
-              :ref="(el) => { if (el) terminalRefs[s.id] = el }"
-              :ssh-id="s.id"
-              :visible="s.id === store.activeSessionId && !showHome"
-              v-show="s.id === store.activeSessionId"
-              @close="handleRemoteClose(s.id)"
-            />
+<LocalTerminal
+v-if="s.type === 'local'"
+:ref="(el) => { if (el) terminalRefs[s.id] = el; else delete terminalRefs[s.id] }"
+:pty-id="s.id"
+:shell="s.shell"
+:visible="s.id === store.activeSessionId && !showHome"
+v-show="s.id === store.activeSessionId"
+@exit="handleLocalExit(s.id, $event)"
+/>
+<RemoteTerminal
+v-if="s.type === 'remote'"
+:ref="(el) => { if (el) terminalRefs[s.id] = el; else delete terminalRefs[s.id] }"
+:ssh-id="s.id"
+:visible="s.id === store.activeSessionId && !showHome"
+v-show="s.id === store.activeSessionId"
+@close="handleRemoteClose(s.id)"
+/>
           </template>
         </div>
 
@@ -200,6 +162,7 @@
           复制终端
         </div>
         <div class="tab-ctx-sep"></div>
+        <div class="tab-ctx-sep"></div>
         <div class="tab-ctx-item" @click="handleTabCtxAction('closeCurrent')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           关闭当前
@@ -289,6 +252,14 @@ function handleTabCtxAction(action: string) {
 onMounted(() => {
   store.init()
 })
+
+// 暴露方法给父组件（TitleBar 事件）
+defineExpose({
+  toggleAiPanel,
+  toggleRemoteManager,
+  toggleSftp,
+  openSettings,
+})
 </script>
 
 <style scoped>
@@ -346,13 +317,6 @@ onMounted(() => {
   display: none;
 }
 
-.tabs-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-}
-
 /* Home按钮(加号) - 跟随终端标签右侧,样式与 term-tab 一致但无内容 */
 .new-tab-btn {
   height: 30px;
@@ -384,44 +348,6 @@ onMounted(() => {
   border-color: var(--border-default);
   margin-bottom: -1px;
   padding-bottom: 1px;
-}
-
-.tab-action-btn {
-  width: 26px;
-  height: 26px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  background: transparent;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-  transition: all var(--transition-fast);
-}
-
-.tab-action-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text-secondary);
-}
-
-.tab-action-btn:active {
-  background: var(--bg-active, #094771);
-}
-
-.tab-action-btn.active {
-  color: var(--accent-blue);
-}
-
-.ai-tab-btn.active {
-  color: #818CF8;
-}
-
-.ai-text {
-  font-size: 11px;
-  font-weight: 600;
-  font-style: italic;
-  letter-spacing: -0.5px;
 }
 
 .term-tab {

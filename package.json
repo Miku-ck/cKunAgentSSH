@@ -10,7 +10,7 @@
     "typecheck": "vue-tsc -p tsconfig.web.json --noEmit",
     "preview": "electron-vite preview",
     "dev:backend": "cd backend && python main.py --host 0.0.0.0",
-    "package": "electron-builder",
+    "package": "node scripts/package.js",
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {

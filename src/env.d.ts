@@ -89,6 +89,7 @@ interface ElectronAPI {
   fsLoadBackgroundImage: (fileName: string) => Promise<string>
   fsDeleteBackgroundImage: (fileName: string) => Promise<boolean>
   fsGetHomePath: () => Promise<string>
+  fsGetDrives: () => Promise<string[]>
   fsMkdir: (dirPath: string) => Promise<void>
   fsRename: (oldPath: string, newPath: string) => Promise<void>
   fsCopy: (srcPath: string, destPath: string, transferId: string) => Promise<void>

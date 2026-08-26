@@ -5,10 +5,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { renderMarkdown } from '@/utils/markdown'
+import { useToastStore } from '@/stores/toast'
 
 const props = defineProps<{
   content: string
 }>()
+
+const toast = useToastStore()
 
 const renderedHtml = computed(() => renderMarkdown(props.content || ''))
 
@@ -20,9 +23,12 @@ function handleClick(e: MouseEvent) {
   const codeEl = wrapper?.querySelector('code')
   if (!codeEl) return
   const text = codeEl.textContent || ''
-  navigator.clipboard.writeText(text).catch(() => {})
-  target.textContent = '已复制'
-  setTimeout(() => { target.textContent = '复制' }, 1500)
+  navigator.clipboard.writeText(text).then(() => {
+    target.textContent = '已复制'
+    setTimeout(() => { target.textContent = '复制' }, 1500)
+  }).catch(() => {
+    toast.error('复制失败，请手动选择文本复制')
+  })
 }
 </script>
 

@@ -38,7 +38,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick, watch } from 'vue'
+import { ref, nextTick, watch, onUnmounted } from 'vue'
 
 interface ConfirmOptions {
   title?: string
@@ -108,6 +108,11 @@ watch(visible, (v) => {
   } else {
     window.removeEventListener('keydown', handleKeydown, true)
   }
+})
+
+// 组件卸载时确保 keydown 监听器被清理
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown, true)
 })
 
 defineExpose({ open, close })

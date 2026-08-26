@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, onScopeDispose } from 'vue'
 
 export const useAppStore = defineStore('app', () => {
   const backendStatus = ref<'starting' | 'ready' | 'error' | 'restarting'>('starting')
@@ -15,7 +15,7 @@ export const useAppStore = defineStore('app', () => {
 
   // 监听后端状态
   if (typeof window !== 'undefined' && window.electronAPI) {
-    window.electronAPI.onBackendStatus((data) => {
+    const off = window.electronAPI.onBackendStatus((data) => {
       if (data.status === 'ready') {
         setBackendStatus('ready', data.port)
       } else if (data.status === 'error') {
@@ -33,7 +33,14 @@ export const useAppStore = defineStore('app', () => {
           setBackendStatus('ready', port)
         }
       }
-    }).catch(() => {})
+    }).catch((err) => {
+      console.debug('[appStore] getBackendPort fallback failed:', err)
+    })
+
+    // Pinia scope 销毁时清理监听器（HMR 场景）
+    onScopeDispose(() => {
+      if (typeof off === 'function') off()
+    })
   }
 
   return { backendStatus, backendPort, backendError, setBackendStatus }

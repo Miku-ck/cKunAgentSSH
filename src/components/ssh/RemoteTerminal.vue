@@ -418,16 +418,24 @@ onUnmounted(() => {
     window.electronAPI.sshDisconnect(props.sshId)
   }
   terminal?.dispose()
+  // 清理可见性定时器
+  if (visTimer) clearTimeout(visTimer)
 })
 
 // 可见性变化时重新适配
+let visTimer: ReturnType<typeof setTimeout> | null = null
 watch(
   () => props.visible,
   (visible) => {
+    // 清理上一轮的定时器，避免组件卸载后仍执行回调
+    if (visTimer) clearTimeout(visTimer)
     // 终端被切换隐藏时,立即关闭补全浮层,避免浮层残留
     if (!visible) hideCompletion()
     if (visible && fitAddon) {
-      setTimeout(() => {
+      visTimer = setTimeout(() => {
+        visTimer = null
+        // 回调开头守卫：组件可能已卸载
+        if (!containerRef.value) return
         fitAddon!.fit()
         if (window.electronAPI && terminal) {
           window.electronAPI.sshResize(props.sshId, terminal.cols, terminal.rows)

@@ -301,7 +301,8 @@ export const useSkillStore = defineStore('skills', () => {
           if (Array.isArray(parsed)) {
             triggerWords = parsed.filter((w: unknown) => typeof w === 'string')
           }
-        } catch {
+        } catch (e) {
+          console.warn(`[skills] 解析 trigger_words 失败 (skill ${item.id}):`, e)
           triggerWords = []
         }
 
@@ -311,7 +312,8 @@ export const useSkillStore = defineStore('skills', () => {
           modeConfigs = typeof item.mode_configs === 'string'
             ? JSON.parse(item.mode_configs)
             : item.mode_configs || {}
-        } catch {
+        } catch (e) {
+          console.warn(`[skills] 解析 mode_configs 失败 (skill ${item.id}):`, e)
           modeConfigs = {}
         }
         for (const [mode, cfg] of Object.entries(modeConfigs)) {
@@ -641,7 +643,7 @@ export const useSkillStore = defineStore('skills', () => {
         `name: ${skill.name}`,
         `slug: ${skill.slug}`,
         `version: ${skill.version}`,
-        `description: "${skill.description.replace(/"/g, '\\"')}"`,
+        `description: "${skill.description.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`,
         `category: ${skill.category}`,
         metadataStr,
         '---',

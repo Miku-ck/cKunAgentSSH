@@ -7,11 +7,18 @@ export function useTabContextMenu() {
   function showTabContextMenu(e: MouseEvent, id: string) {
     // 菜单约 7 个菜单项，每个 ~28px，总计 ~210px
     const estimatedHeight = 210
+    const menuWidth = 140
     const viewportHeight = window.innerHeight
+    const viewportWidth = window.innerWidth
+    // 垂直方向溢出检测
     const y = e.clientY + estimatedHeight > viewportHeight
       ? e.clientY - estimatedHeight
       : e.clientY
-    tabCtxMenu.value = { visible: true, x: e.clientX, y, targetId: id }
+    // 水平方向溢出检测
+    const x = e.clientX + menuWidth > viewportWidth
+      ? e.clientX - menuWidth
+      : e.clientX
+    tabCtxMenu.value = { visible: true, x, y, targetId: id }
   }
 
   function dismissTabCtxMenu() {

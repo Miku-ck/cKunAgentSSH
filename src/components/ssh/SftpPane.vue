@@ -36,31 +36,57 @@
     </div>
 
     <!-- 面包屑 / 路径编辑栏 -->
-    <div
-      v-if="!editingPath"
-      class="breadcrumb"
-      @click="onBreadcrumbClick"
-    >
-      <span
-        v-for="(seg, i) in breadcrumbs"
-        :key="i"
-        class="crumb-group"
+    <div class="breadcrumb-bar">
+      <!-- 盘符切换按钮（仅本地侧 + Windows） -->
+      <button
+        v-if="side === 'local' && isWindows"
+        class="drive-switcher"
+        :class="{ active: showDriveDropdown }"
+        title="切换磁盘"
+        @click.stop="toggleDriveDropdown"
       >
-        <span v-if="i > 0" class="crumb-sep">›</span>
-        <span class="crumb" :class="{ current: i === breadcrumbs.length - 1 }" @click.stop="navigateTo(i)">{{ seg || '/' }}</span>
-      </span>
-    </div>
-    <div v-else class="breadcrumb breadcrumb-edit">
-      <input
-        ref="pathInputRef"
-        v-model="pathInput"
-        class="path-input"
-        type="text"
-        spellcheck="false"
-        @keydown.enter="commitPath"
-        @keydown.esc="cancelPath"
-        @blur="onPathInputBlur"
-      />
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+      </button>
+      <!-- 盘符下拉面板 -->
+      <div v-if="showDriveDropdown" class="drive-dropdown" @click.stop>
+        <div class="drive-dropdown-title">选择磁盘</div>
+        <div
+          v-for="drive in drives"
+          :key="drive"
+          class="drive-option"
+          :class="{ active: isCurrentDrive(drive) }"
+          @click="navigateToDrive(drive)"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          <span>{{drive}}</span>
+        </div>
+      </div>
+      <div
+        v-if="!editingPath"
+        class="breadcrumb"
+        @click="onBreadcrumbClick"
+      >
+        <span
+          v-for="(seg, i) in breadcrumbs"
+          :key="i"
+          class="crumb-group"
+        >
+          <span v-if="i > 0" class="crumb-sep">›</span>
+          <span class="crumb" :class="{ current: i === breadcrumbs.length - 1 }" @click.stop="navigateTo(i)">{{ seg || '/' }}</span>
+        </span>
+      </div>
+      <div v-else class="breadcrumb breadcrumb-edit">
+        <input
+          ref="pathInputRef"
+          v-model="pathInput"
+          class="path-input"
+          type="text"
+          spellcheck="false"
+          @keydown.enter="commitPath"
+          @keydown.esc="cancelPath"
+          @blur="onPathInputBlur"
+        />
+      </div>
     </div>
 
     <!-- 文件列表 -->
@@ -110,7 +136,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { useSftpStore } from '@/stores/sftp'
 import { useToastStore } from '@/stores/toast'
 import { toFriendlyMessage } from '@/api/client'
@@ -125,6 +151,45 @@ const listRef = ref<HTMLElement | null>(null)
 const editingPath = ref(false)
 const pathInput = ref('')
 const pathInputRef = ref<HTMLInputElement | null>(null)
+
+// ─── 盘符切换 ─────────────────────────
+const isWindows = computed(() => {
+  // 通过 userAgent 判断 Windows 平台（Electron 渲染进程）
+  return typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent)
+})
+const drives = ref<string[]>([])
+const showDriveDropdown = ref(false)
+
+async function toggleDriveDropdown(): Promise<void> {
+  if (showDriveDropdown.value) {
+    showDriveDropdown.value = false
+    return
+  }
+  // 加载盘符列表
+  drives.value = await store.getDrives()
+  showDriveDropdown.value = true
+}
+
+function isCurrentDrive(drive: string): boolean {
+  return store.localCwd.toUpperCase().startsWith(drive.toUpperCase())
+}
+
+async function navigateToDrive(drive: string): Promise<void> {
+  showDriveDropdown.value = false
+  await store.loadLocal(drive)
+}
+
+function closeDriveDropdown(): void {
+  showDriveDropdown.value = false
+}
+
+// 点击外部关闭盘符下拉
+onMounted(() => {
+  document.addEventListener('click', closeDriveDropdown)
+})
+onUnmounted(() => {
+  document.removeEventListener('click', closeDriveDropdown)
+})
 
 // 拖拽悬停提示文案
 const dragHintText = computed(() => {
@@ -445,14 +510,65 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
 .pane-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .pane-btn svg { width: 12px; height: 12px; }
 
+.breadcrumb-bar {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  position: relative;
+}
+.drive-switcher {
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg-base);
+  border: none;
+  border-right: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.drive-switcher:hover { background: var(--bg-hover); color: var(--text-secondary); }
+.drive-switcher.active { background: var(--bg-hover); color: var(--accent-cyan); }
+.drive-switcher svg { width: 14px; height: 14px; }
+
+.drive-dropdown {
+  position: absolute;
+  top: 29px;
+  left: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  box-shadow: var(--shadow-lg);
+  padding: 4px;
+  min-width: 120px;
+  z-index: 100;
+  animation: ctx-fade-in 0.1s ease-out;
+}
+.drive-dropdown-title {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  padding: 4px 8px;
+  font-weight: 600;
+}
+.drive-option {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 4px;
+}
+.drive-option:hover { background: var(--bg-hover); color: var(--text-primary); }
+.drive-option.active { color: var(--accent-cyan); background: rgba(0,120,212,0.1); }
+.drive-option svg { flex-shrink: 0; }
+
 .breadcrumb {
   height: 28px;
   display: flex;
   align-items: center;
   padding: 0 10px; gap: 2px;
   background: var(--bg-base);
-  border-bottom: 1px solid var(--border-subtle);
-  overflow-x: auto; flex-shrink: 0;
+  overflow-x: auto; flex: 1;
   font-family: var(--font-mono); font-size: 11px;
   cursor: text;
 }
@@ -550,5 +666,10 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   font-size: 12px; font-weight: 500;
   z-index: 6; pointer-events: none;
   box-shadow: var(--shadow-lg);
+}
+
+@keyframes ctx-fade-in {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
 }
 </style>

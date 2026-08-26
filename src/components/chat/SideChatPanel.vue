@@ -11,8 +11,9 @@
         <button class="icon-btn" title="历史记录" @click="showHistoryPanel = !showHistoryPanel">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
         </button>
-        <button class="icon-btn" title="新建对话" @click="$emit('new-chat')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <button class="icon-btn" :class="{ loading: props.creating }" :title="props.creating ? '创建中...' : '新建对话'" :disabled="props.creating" @click="$emit('new-chat')">
+          <svg v-if="!props.creating" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          <svg v-else class="spinner" viewBox="0 0 24 24" fill="none" width="14" height="14"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.25"/><path d="M22 12a10 10 0 0 0-10-10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
         </button>
         <button class="icon-btn" title="关闭面板" @click="$emit('close')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -244,6 +245,7 @@ const props = defineProps<{
   agentMode?: boolean
   showMessageActions?: boolean
   agentRunning?: boolean
+  creating?: boolean
   placeholder?: string
   emptyTitle?: string
   emptyDesc?: string
@@ -394,23 +396,24 @@ function handleSelectModel(id: string) {
 }
 
 // ── 消息显示 ──
-const displayMessages = computed(() =>
-  props.messages.map((m, idx) => {
-    const live = isLiveAgentRun(m, idx)
-    return {
-      ...m,
-      // Agent 运行中：实时同步 agentStore 的 content/reasoning
-      content: live
-        ? agentStore.content || m.content || m.streamingContent || ''
-        : m.content || '',
-      // 普通流式消息：必须保留 streamingContent/streamingReasoning，
-      // 否则 MessageItem 在流式过程中 content 为空，只能等 done 才一次性显示。
-      streamingContent: live ? undefined : m.streamingContent,
-      reasoning: live ? '' : m.reasoning || '',
-      streamingReasoning: live ? undefined : m.streamingReasoning,
+// 优化：仅对最后一条消息计算 live 状态，其余消息保持原始引用避免 O(n) 重渲染
+const displayMessages = computed(() => {
+  const lastIdx = props.messages.length - 1
+  return props.messages.map((m, idx) => {
+    if (idx === lastIdx && isLiveAgentRun(m, idx)) {
+      return {
+        ...m,
+        // Agent 运行中：实时同步 agentStore 的 content/reasoning
+        content: agentStore.content || m.content || m.streamingContent || '',
+        streamingContent: undefined,
+        reasoning: '',
+        streamingReasoning: undefined,
+      }
     }
+    // 非活跃消息保持原始引用，避免不必要的重渲染
+    return m
   })
-)
+})
 
 // ── 滚动 ──
 async function scrollToBottom() {
@@ -425,8 +428,9 @@ watch(() => props.messages.length, () => {
   scrollToBottom()
 })
 
+// 监听流式内容变化：仅检查最后一条消息的 streamingContent 长度，避免 O(n) reduce 开销
 watch(
-  () => props.messages.map(m => m.streamingContent).join(''),
+  () => props.messages[props.messages.length - 1]?.streamingContent?.length,
   () => {
     if (props.streaming) scrollToBottom()
   }
@@ -590,9 +594,26 @@ defineExpose({ focusInput })
   color: var(--text-primary);
 }
 
+.icon-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.icon-btn.loading {
+  pointer-events: none;
+}
+
+.icon-btn .spinner {
+  animation: spin 0.8s linear infinite;
+}
+
 .icon-btn svg {
   width: 14px;
   height: 14px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 /* Main Content */

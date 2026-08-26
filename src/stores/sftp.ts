@@ -162,6 +162,11 @@ export const useSftpStore = defineStore('sftp', () => {
     transfers.value = []
   }
 
+  /** 清空已完成的传输记录 */
+  function clearCompleted(): void {
+    transfers.value = transfers.value.filter(t => t.status === 'running' || t.status === 'paused' || t.status === 'pending')
+  }
+
   // ─── 剪贴板操作 ───────────────────────────────
   function copyToClipboard(side: 'local' | 'remote', paths: string[]): void {
     clipboard.value = { side, paths: [...paths] }
@@ -194,6 +199,15 @@ export const useSftpStore = defineStore('sftp', () => {
     await loadLocal(home)
   }
 
+  /** 获取 Windows 可用盘符列表，非 Windows 返回空数组 */
+  async function getDrives(): Promise<string[]> {
+    try {
+      return await getApi().fsGetDrives()
+    } catch {
+      return []
+    }
+  }
+
   function localParent(): string {
     const sep = localCwd.value.includes('\\') ? '\\' : '/'
     const parts = localCwd.value.split(sep).filter(Boolean)
@@ -209,9 +223,9 @@ export const useSftpStore = defineStore('sftp', () => {
     await loadLocal(localParent())
   }
 
-  async function localRefresh(): Promise<void> {
-    await loadLocal(localCwd.value)
-  }
+async function localRefresh(): Promise<void> {
+  await loadLocal(localCwd.value, true) // 静默刷新，避免闪烁
+}
 
   async function localMkdir(name: string): Promise<void> {
     const newPath = await getApi().fsPathJoin(localCwd.value, name)
@@ -241,11 +255,15 @@ export const useSftpStore = defineStore('sftp', () => {
     return '/' + parts.slice(0, -1).join('/')
   }
 
-  async function loadRemote(dirPath?: string): Promise<void> {
+  /**
+   * @param dirPath 目标目录
+   * @param silent 是否静默加载（不显示 loading 状态，用于刷新操作避免闪烁）
+   */
+  async function loadRemote(dirPath?: string, silent = false): Promise<void> {
     if (!sshSessionId.value) return
     const target = dirPath ?? remoteCwd.value
     if (!target) return
-    loadingRemote.value = true
+    if (!silent) loadingRemote.value = true
     remoteError.value = ''
     try {
       const entries = await getApi().sftpList(sshSessionId.value, target)
@@ -255,7 +273,7 @@ export const useSftpStore = defineStore('sftp', () => {
     } catch (err: any) {
       remoteError.value = err?.message || '读取远程目录失败'
     } finally {
-      loadingRemote.value = false
+      if (!silent) loadingRemote.value = false
     }
   }
 
@@ -263,9 +281,9 @@ export const useSftpStore = defineStore('sftp', () => {
     await loadRemote(remoteParent())
   }
 
-  async function remoteRefresh(): Promise<void> {
-    await loadRemote(remoteCwd.value)
-  }
+async function remoteRefresh(): Promise<void> {
+  await loadRemote(remoteCwd.value, true) // 静默刷新，避免闪烁
+}
 
   async function remoteMkdir(name: string): Promise<void> {
     const newPath = remoteCwd.value === '/'
@@ -887,13 +905,13 @@ function removeTransfer(id: string): void {
     // clipboard
     copyToClipboard, clearClipboard,
     // local
-    loadLocal, initLocalHome, localUp, localRefresh, localMkdir, localRename, localDelete,
+    loadLocal, initLocalHome, getDrives, localUp, localRefresh, localMkdir, localRename, localDelete,
     // remote
     loadRemote, remoteUp, remoteRefresh, remoteMkdir, remoteRename, remoteDelete,
     // selection
     toggleSelectLocal, toggleSelectRemote, clearSelection,
-    // transfer
-    uploadFiles, downloadFiles, cancelTransfer, pauseTransfer, resumeTransfer, removeTransfer, applyProgress, clearTransfers,
+// transfer
+uploadFiles, downloadFiles, cancelTransfer, pauseTransfer, resumeTransfer, removeTransfer, applyProgress, clearTransfers, clearCompleted,
     // copy
     localCopy, remoteCopy,
     // zip

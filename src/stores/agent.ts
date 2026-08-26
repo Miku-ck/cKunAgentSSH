@@ -301,7 +301,7 @@ export const useAgentStore = defineStore('agent', () => {
       case 'tool_call_start':
         if (event.tool) {
           const entry: ToolCallEntry = {
-            id: `${event.tool}_${Date.now()}`,
+            id: `${event.tool}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
             tool: event.tool,
             args: event.args || {},
             timestamp: Date.now(),
@@ -408,7 +408,12 @@ export const useAgentStore = defineStore('agent', () => {
         if (event.file_changes) fileChanges.value = event.file_changes
         // H14 修复：支持 human_help 终止态，保留 currentState 供 UI 显示"需要人工介入"
         status.value = event.state === 'failed' || event.state === 'human_help' ? 'failed' : 'completed'
-        currentState.value = event.state || (status.value === 'failed' ? 'failed' : 'completed')
+        // 保留有意义的 currentState（如 human_help），仅在 event.state 为空时回退
+        if (event.state) {
+          currentState.value = event.state
+        } else if (status.value !== 'failed') {
+          currentState.value = 'completed'
+        }
         break
     }
   }

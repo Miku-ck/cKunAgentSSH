@@ -1,5 +1,5 @@
 // useSshNavigation.ts — 页面导航 + 终端生命周期 + Quick Start + 模态框 + 远程连接
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import { useSSHStore, type SSHConnection } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useSftpStore } from '@/stores/sftp'
@@ -31,6 +31,9 @@ export function useSshNavigation(
     store.activeSessionId !== '' && !showHome.value && activeNavPage.value === 'home'
   )
 
+  // 延迟聚焦定时器 ID 列表，组件卸载时清理
+  const focusTimers: number[] = []
+
   // ─── 页面切换 ───
   function goHome() {
     showHome.value = true
@@ -42,7 +45,8 @@ export function useSshNavigation(
     activeNavPage.value = 'home'
     store.switchSession(sessionId)
     // 等待 Vue 切换渲染后，让终端获取焦点，用户可立即输入
-    setTimeout(() => focusActiveTerminal(), 50)
+    const tid = setTimeout(() => focusActiveTerminal(), 50)
+    focusTimers.push(tid)
   }
 
   function toggleRemoteManager() {
@@ -131,6 +135,9 @@ export function useSshNavigation(
     const now = Date.now()
     if (now - lastConnectAt < CONNECT_DEBOUNCE_MS) {
       console.log('[useSshNavigation] connectRemote: debounced, skipping')
+      // debounce 路径也要重置 connecting 状态，避免 loading 永远不消失
+      connecting.value = false
+      pendingConnId.value = ''
       return
     }
     lastConnectAt = now
@@ -141,7 +148,8 @@ export function useSshNavigation(
       console.log('[useSshNavigation] connectRemote: connected!', conn.id)
       showHome.value = false
       // 等待 Vue 渲染 RemoteTerminal 组件后，让终端获取焦点
-      setTimeout(() => focusActiveTerminal(), 100)
+      const tid = setTimeout(() => focusActiveTerminal(), 100)
+      focusTimers.push(tid)
     } catch (err: any) {
       console.error('[useSshNavigation] connectRemote failed:', err)
       toast.error(toFriendlyMessage(err, 'SSH 连接失败'))
@@ -209,6 +217,11 @@ export function useSshNavigation(
     if (len === 0) {
       goHome()
     }
+  })
+
+  // 组件卸载时清理延迟聚焦定时器
+  onUnmounted(() => {
+    focusTimers.forEach(t => clearTimeout(t))
   })
 
   return {

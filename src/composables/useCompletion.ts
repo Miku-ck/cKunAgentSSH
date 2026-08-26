@@ -310,6 +310,7 @@ export async function queryCompletion(
   try {
     let stdout: string
     if (side === 'local') {
+      if (!sessionId) return []
       stdout = await api.ptyCompleteCommand({
         ptyId: sessionId,
         cmd: input.cmd,

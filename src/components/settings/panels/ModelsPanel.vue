@@ -152,14 +152,14 @@
               <div v-if="!isLocalProvider" class="form-group">
                 <div class="label-row">
                   <label class="form-label">API Key <span class="required">*</span></label>
-                  <span v-if="isEditing && hasExistingKey" class="local-note" style="color: var(--text-secondary);">已配置 · 清空可重新输入</span>
+                  <span v-if="isEditing && hasExistingKey" class="local-note">已配置 · 留空则保留原值</span>
                 </div>
                 <div class="api-key-row">
                   <input
                     v-model="form.api_key"
                     class="form-input"
                     :type="showApiKey ? 'text' : 'password'"
-                    placeholder="输入 API Key"
+                    :placeholder="isEditing && hasExistingKey ? '留空保留原 Key，输入新值则替换' : '输入 API Key'"
                     autocomplete="off"
                     spellcheck="false"
                   />
@@ -480,6 +480,8 @@ async function handleDelete(id: string, name: string) {
   if (!ok) return
   const success = await store.deleteModelConfig(id)
   if (success) {
+    // 清理已删除模型的测试状态，避免内存泄漏
+    delete testStatus[id]
     toast.success(`已删除模型「${name}」`)
   } else {
     toast.error(store.modelsError || '删除失败', 6000)

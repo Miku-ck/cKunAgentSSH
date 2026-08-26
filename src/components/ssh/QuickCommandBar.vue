@@ -72,11 +72,13 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { useSSHStore } from '@/stores/ssh'
 import { useQuickCommandsStore, type QuickCommand } from '@/stores/quickCommands'
 import { useConfirm } from '@/composables/useConfirm'
+import { useToastStore } from '@/stores/toast'
 import QuickCommandEditor from './QuickCommandEditor.vue'
 
 const sshStore = useSSHStore()
 const store = useQuickCommandsStore()
 const { confirm } = useConfirm()
+const toast = useToastStore()
 
 const editorVisible = ref(false)
 const editingCommand = ref<QuickCommand | null>(null)
@@ -103,9 +105,10 @@ function sendCommand(e: MouseEvent, cmd: QuickCommand) {
   const api = window.electronAPI
   if (!api) return
   const writer = session.type === 'local' ? api.ptyWrite : api.sshWrite
-  writer(sessionId, cmd.command).catch((err: any) => {
-    console.error('[quickCommand] send failed:', err)
-  })
+writer(sessionId, cmd.command).catch((err: any) => {
+  console.error('[quickCommand] send failed:', err)
+  toast.error('命令发送失败')
+})
   // 发送命令后将焦点还给活动终端，用户可手动按 Enter 执行
   window.dispatchEvent(new CustomEvent('ssh:focus-terminal'))
 }

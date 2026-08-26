@@ -1,13 +1,22 @@
 import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import { api, agentApi, type ModelConfig, type ModelConfigPayload } from '@/api/client'
+import { useToastStore } from './toast'
 
 /**
  * 惰性获取 chatStore 并刷新模型列表
  * 设置面板增删改模型后，同步刷新对话中的模型选择器
+ * 使用模块缓存避免重复动态导入导致的竞态条件
  */
+let _chatStorePromise: Promise<typeof import('./chat')> | null = null
 function refreshChatModels() {
-  import('./chat').then(({ useChatStore }) => {
+  if (!_chatStorePromise) {
+    _chatStorePromise = import('./chat').catch((err) => {
+      _chatStorePromise = null // 失败时重置，允许重试
+      throw err
+    })
+  }
+  _chatStorePromise.then(({ useChatStore }) => {
     useChatStore().fetchModels()
   }).catch(() => { /* 模块未就绪时忽略 */ })
 }
@@ -131,18 +140,41 @@ export const useSettingsStore = defineStore('settings', () => {
     },
   })
 
-  // 防抖持久化
-  let saveTimer: number | undefined
-  watch(
-    settings,
-    () => {
-      clearTimeout(saveTimer)
-      saveTimer = window.setTimeout(() => {
-        localStorage.setItem(LS_KEY, JSON.stringify(settings.value))
-      }, 300)
-    },
-    { deep: true }
-  )
+  // 防抖持久化：按分区独立监听，避免高频变更（如滑块）触发全量序列化
+  let saveChatTimer: number | undefined
+  let saveAgentTimer: number | undefined
+  let saveAppearanceTimer: number | undefined
+  let saveMemoryTimer: number | undefined
+  let savePostProcessTimer: number | undefined
+
+  watch(() => settings.value.chat, () => {
+    clearTimeout(saveChatTimer)
+    saveChatTimer = window.setTimeout(() => persistSettings(), 300)
+  }, { deep: true })
+
+  watch(() => settings.value.agent, () => {
+    clearTimeout(saveAgentTimer)
+    saveAgentTimer = window.setTimeout(() => persistSettings(), 300)
+  }, { deep: true })
+
+  watch(() => settings.value.appearance, () => {
+    clearTimeout(saveAppearanceTimer)
+    saveAppearanceTimer = window.setTimeout(() => persistSettings(), 300)
+  }, { deep: true })
+
+  watch(() => settings.value.memory, () => {
+    clearTimeout(saveMemoryTimer)
+    saveMemoryTimer = window.setTimeout(() => persistSettings(), 300)
+  }, { deep: true })
+
+  watch(() => settings.value.postProcess, () => {
+    clearTimeout(savePostProcessTimer)
+    savePostProcessTimer = window.setTimeout(() => persistSettings(), 300)
+  }, { deep: true })
+
+  function persistSettings() {
+    localStorage.setItem(LS_KEY, JSON.stringify(settings.value))
+  }
 
   // 记忆设置变更时同步到后端
   let memorySyncTimer: number | undefined
@@ -155,7 +187,12 @@ export const useSettingsStore = defineStore('settings', () => {
           enabled: mem.enabled,
           strategy: mem.strategy,
           max_items: mem.maxItems,
-        }).catch(() => { /* 后端可能未就绪，静默失败 */ })
+        }).catch((e) => {
+          // 后端同步失败时提示用户，避免静默失败导致设置丢失
+          const toast = useToastStore()
+          const msg = e instanceof Error ? e.message : String(e)
+          toast.error(`记忆设置同步失败: ${msg}`, 5000)
+        })
       }, 500)
     },
     { deep: true }
@@ -183,7 +220,12 @@ export const useSettingsStore = defineStore('settings', () => {
           generate_title: pp.generateTitle,
           extract_memory: pp.extractMemory,
           generate_skill: pp.generateSkill,
-        }).catch(() => { /* 后端可能未就绪，静默失败 */ })
+        }).catch((e) => {
+          // 后端同步失败时提示用户，避免静默失败导致设置丢失
+          const toast = useToastStore()
+          const msg = e instanceof Error ? e.message : String(e)
+          toast.error(`后处理设置同步失败: ${msg}`, 5000)
+        })
       }, 500)
     },
     { deep: true }

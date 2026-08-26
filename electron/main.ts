@@ -511,6 +511,37 @@ function setupFSIPC(): void {
   // 获取用户主目录
   ipcMain.handle('fs:getHomePath', () => homedir())
 
+  // 获取可用盘符（Windows 返回 ['C:\\', 'D:\\', ...]，其他平台返回 []）
+  ipcMain.handle('fs:getDrives', async () => {
+    if (process.platform !== 'win32') return []
+    try {
+      const { execFile } = await import('node:child_process')
+      const { promisify } = await import('node:util')
+      const execFileAsync = promisify(execFile)
+      // 使用 wmic 获取本地磁盘盘符列表
+      const { stdout } = await execFileAsync('wmic', ['logicaldisk', 'get', 'caption'])
+      const drives = stdout
+        .split('\n')
+        .slice(1) // 跳过表头 Caption
+        .map(line => line.trim())
+        .filter(line => /^[A-Z]:$/.test(line))
+        .map(letter => letter + '\\')
+      return drives
+    } catch {
+      // wmic 不可用时回退：检测 C 到 Z 的可访问性
+      const { accessSync, constants } = await import('node:fs')
+      const drives: string[] = []
+      for (let i = 67; i <= 90; i++) { // C=67 ... Z=90
+        const drive = String.fromCharCode(i) + ':\\'
+        try {
+          accessSync(drive, constants.R_OK)
+          drives.push(drive)
+        } catch { /* 跳过不可访问盘符 */ }
+      }
+      return drives
+    }
+  })
+
   // 创建目录
   ipcMain.handle('fs:mkdir', async (_event, dirPath: string) => {
     await assertSafePath(dirPath)

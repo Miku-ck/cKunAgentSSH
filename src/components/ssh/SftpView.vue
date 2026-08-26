@@ -487,7 +487,7 @@ function truncatePath(path: string): string {
 }
 
 function clearCompleted() {
-  store.transfers = store.transfers.filter(t => t.status === 'running' || t.status === 'paused' || t.status === 'pending')
+  store.clearCompleted()
 }
 
 function onTransferContext(event: MouseEvent, item: TransferItem) {

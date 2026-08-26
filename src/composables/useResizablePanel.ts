@@ -24,9 +24,12 @@ export function useResizablePanel(options: ResizablePanelOptions = {}) {
 
   let activeMouseMove: ((ev: MouseEvent) => void) | null = null
   let activeMouseUp: (() => void) | null = null
+  let isResizing = false // 防重入标志
 
   function startResize(e: MouseEvent) {
+    if (isResizing) return // 防止快速双击拖柄导致监听器泄漏
     e.preventDefault()
+    isResizing = true
     const startX = e.clientX
     const startWidth = panelWidth.value
 
@@ -43,6 +46,7 @@ export function useResizablePanel(options: ResizablePanelOptions = {}) {
       document.body.style.userSelect = ''
       activeMouseMove = null
       activeMouseUp = null
+      isResizing = false
     }
 
     activeMouseMove = onMouseMove
@@ -53,10 +57,14 @@ export function useResizablePanel(options: ResizablePanelOptions = {}) {
     document.body.style.userSelect = 'none'
   }
 
-  // 组件卸载时清理可能残留的拖拽监听器
+  // 组件卸载时清理可能残留的拖拽监听器和 body 样式
   onUnmounted(() => {
     if (activeMouseMove) document.removeEventListener('mousemove', activeMouseMove)
     if (activeMouseUp) document.removeEventListener('mouseup', activeMouseUp)
+    // 拖拽中卸载时恢复 body 样式，避免光标和选中状态泄漏
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+    isResizing = false
   })
 
   return { panelWidth, startResize }

@@ -59,6 +59,9 @@ tmp/
 temp/
 *.tmp
 
+# electron-builder binary cache (local)
+.electron-cache/
+
 # OS
 Thumbs.db
 Desktop.ini

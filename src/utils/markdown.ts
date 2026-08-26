@@ -56,7 +56,8 @@ export function renderMarkdown(text: string): string {
     return DOMPurify.sanitize(highlighted, {
       ADD_ATTR: ['class', 'target'],
     })
-  } catch {
+  } catch (e) {
+    console.warn('[renderMarkdown] failed, falling back to sanitized plain text:', e)
     return DOMPurify.sanitize(text)
   }
 }

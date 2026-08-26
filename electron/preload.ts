@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   fsReadFileForEditor: (filePath: string) => ipcRenderer.invoke('fs:readFileForEditor', filePath),
   fsSelectFolder: () => ipcRenderer.invoke('fs:selectFolder'),
   fsGetHomePath: () => ipcRenderer.invoke('fs:getHomePath'),
+fsGetDrives: () => ipcRenderer.invoke('fs:getDrives'),
   fsMkdir: (dirPath: string) => ipcRenderer.invoke('fs:mkdir', dirPath),
   fsRename: (oldPath: string, newPath: string) => ipcRenderer.invoke('fs:rename', oldPath, newPath),
   fsCopy: (srcPath: string, destPath: string, transferId: string) => ipcRenderer.invoke('fs:copy', srcPath, destPath, transferId),

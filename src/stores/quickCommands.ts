@@ -89,7 +89,7 @@ export const useQuickCommandsStore = defineStore('quickCommands', () => {
       ...current,
       name: updates.name !== undefined ? updates.name.trim().slice(0, 30) : current.name,
       command: updates.command !== undefined ? updates.command.trimEnd().slice(0, 1000) : current.command,
-      color: updates.color || current.color,
+      color: updates.color !== undefined ? updates.color : current.color,
     }
     save()
   }

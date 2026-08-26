@@ -4,7 +4,7 @@ import { useSSHStore } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
 import { toFriendlyMessage } from '@/api/client'
 
-export function useCommandDelivery(terminalRefs: Record<string, any>) {
+export function useCommandDelivery(terminalRefs: Record<string, { focus?: () => void }>) {
   const store = useSSHStore()
   const toast = useToastStore()
 

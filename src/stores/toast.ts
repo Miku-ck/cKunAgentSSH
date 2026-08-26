@@ -19,17 +19,29 @@ let seq = 0
 
 export const useToastStore = defineStore('toast', () => {
   const items = ref<ToastItem[]>([])
+  // 跟踪所有活跃的定时器，用于清理
+  const timers = new Map<number, ReturnType<typeof setTimeout>>()
 
   function push(type: ToastType, message: string, duration = 3000): number {
     const id = ++seq
     items.value.push({ id, type, message, duration })
     if (duration > 0) {
-      setTimeout(() => dismiss(id), duration)
+      const timer = setTimeout(() => {
+        timers.delete(id)
+        dismiss(id)
+      }, duration)
+      timers.set(id, timer)
     }
     return id
   }
 
   function dismiss(id: number) {
+    // 清理对应的定时器
+    const timer = timers.get(id)
+    if (timer) {
+      clearTimeout(timer)
+      timers.delete(id)
+    }
     items.value = items.value.filter(t => t.id !== id)
   }
 

@@ -12,8 +12,10 @@
  */
 import { useAgentStore } from '@/stores/agent'
 import { agentApi } from '@/api/client'
+import { useToastStore } from '@/stores/toast'
 
 const agentStore = useAgentStore()
+const toast = useToastStore()
 
 function levelLabel(level: string): string {
   const map: Record<string, string> = {
@@ -52,10 +54,11 @@ async function grantAlways(reqId: string, tool: string) {
   try {
     await agentApi.grantPermission(tool, 'always')
     agentStore.resolvePermission(reqId, true)
-  } catch (e) {
-    req.granting = false
-    console.error('授权失败:', e)
-  }
+} catch (e) {
+  req.granting = false
+  console.error('授权失败:', e)
+  toast.error('授权失败，请重试')
+}
 }
 
 </script>

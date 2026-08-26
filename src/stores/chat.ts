@@ -18,6 +18,13 @@ import {
 import { useAppStore } from './app'
 import { useSettingsStore } from './settings'
 import { useSkillStore } from './skills'
+
+/** 后端返回的原始消息格式（snake_case） */
+interface RawMessage {
+  run_id?: string
+  agent_trace?: AgentTraceSnapshot
+  [key: string]: unknown
+}
 import { useToastStore } from './toast'
 import { createModeChatStore, registerChatStore } from './createModeChatStore'
 import type { ModeMessage, ModeConversation, ModeChatStore } from './createModeChatStore'
@@ -35,6 +42,22 @@ export interface ChatMessage extends Message {
   fileChanges?: AgentFileChangesSummary
   /** Agent 模式产生的 assistant 消息会带上执行过程快照，使历史会话也能显示过程摘要 */
   agentTrace?: AgentTraceSnapshot
+}
+
+// ── 延迟刷新定时器管理（用于后端标题回填）──
+const _refreshTimers: ReturnType<typeof setTimeout>[] = []
+function scheduleDelayedRefresh(delay: number, convId?: string) {
+  const timer = setTimeout(async () => {
+    await fetchConversations()
+    const targetId = convId ?? currentConversationId.value
+    if (targetId) {
+      await loadMessages(targetId)
+    }
+    // 从列表中移除已执行的定时器
+    const idx = _refreshTimers.indexOf(timer)
+    if (idx >= 0) _refreshTimers.splice(idx, 1)
+  }, delay)
+  _refreshTimers.push(timer)
 }
 
 export const useChatStore = defineStore('chat', () => {
@@ -62,22 +85,12 @@ export const useChatStore = defineStore('chat', () => {
         await loadMessages(conv.id)
       }
       // 后端标题生成是异步后处理，延迟再刷新一次以回填生成的标题
-      setTimeout(async () => {
-        await fetchConversations()
-        if (currentConversationId.value) {
-          await loadMessages(currentConversationId.value)
-        }
-      }, 1800)
+      scheduleDelayedRefresh(1800)
     },
     // Agent 完成后延迟刷新会话列表（后端 post_process_after_turn 异步生成标题），
     // 并重新加载消息体。固化逻辑已在工厂 store 层 watch 中完成，此处仅补标题回填。
     onAgentComplete: async (conv) => {
-      setTimeout(async () => {
-        await fetchConversations()
-        if (base.currentConvId.value === conv.id) {
-          await loadMessages(conv.id)
-        }
-      }, 5000)
+      scheduleDelayedRefresh(5000, conv.id)
     },
   })
 
@@ -150,14 +163,8 @@ export const useChatStore = defineStore('chat', () => {
     })()
     return initPromise
   }
+  // 后端就绪后拉取模型和会话（ensureLoaded 已覆盖 fetchModels，无需重复 watch）
   watch(() => appStore.backendStatus, ensureLoaded, { immediate: true })
-
-  // 兜底：后端就绪后主动拉取模型
-  watch(() => appStore.backendStatus, (status) => {
-    if (status === 'ready' && models.value.length === 0) {
-      fetchModels()
-    }
-  })
 
   async function fetchConversations() {
     // 拉取 SSH 模式的会话
@@ -193,14 +200,14 @@ export const useChatStore = defineStore('chat', () => {
       // Optimization 修复：await 后校验当前会话未改变，避免快速切换时消息串台
       if (base.currentConvId.value !== targetId) return
       // 映射后端的 snake_case 字段到前端 ChatMessage 的 camelCase 字段
-      const mapped = rawMessages.map((msg: any) => ({
+      const mapped = rawMessages.map((msg: RawMessage) => ({
         ...msg,
         runId: msg.run_id,
         agentTrace: msg.agent_trace,
         // 从持久化的 agent_trace 还原结构化字段，避免 5s 回填后文件变更/耗时丢失
         fileChanges: msg.agent_trace?.fileChanges ?? undefined,
         duration: msg.agent_trace?.duration ?? undefined,
-      })) as ModeMessage[]
+      }))
       base.conversations.value = base.conversations.value.map((c) =>
         c.id === targetId ? { ...c, messages: mapped } : c
       )

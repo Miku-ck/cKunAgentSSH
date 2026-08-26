@@ -785,23 +785,35 @@ export class SSHManager {
     })
   }
 
-  async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
-    const sftp = this.requireSftp(sshSessionId)
-    const stat: any = await new Promise((resolve, reject) => {
-      sftp.stat(remotePath, (err, res) => {
-        if (err) reject(new Error('获取文件信息失败，请检查路径是否存在'))
-        else resolve(res)
-      })
-    })
-    const isDir = (stat.mode & 0o170000) === 0o040000
-    await new Promise<void>((resolve, reject) => {
-      const cb = (err: Error | null | undefined) => err
-        ? reject(new Error('删除失败，请检查是否有权限或目标是否被占用'))
-        : resolve()
-      if (isDir) sftp.rmdir(remotePath, cb)
-      else sftp.unlink(remotePath, cb)
-    })
-  }
+async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
+	const sftp = this.requireSftp(sshSessionId)
+	const stat: any = await new Promise((resolve, reject) => {
+		sftp.stat(remotePath, (err, res) => {
+			if (err) reject(new Error('获取文件信息失败，请检查路径是否存在'))
+			else resolve(res)
+		})
+	})
+	const isDir = (stat.mode & 0o170000) === 0o040000
+	await new Promise<void>((resolve, reject) => {
+		const cb = (err: Error | null | undefined) => {
+			if (!err) { resolve(); return }
+			// 保留原始 SFTP 错误信息，便于用户定位原因
+			const msg = err.message || '未知错误'
+			// 常见错误给出更友好的提示
+			if (msg.includes('Permission denied')) {
+				reject(new Error('权限不足，无法删除'))
+			} else if (msg.includes('Directory not empty') || msg.includes('not empty')) {
+				reject(new Error('目录不为空，无法删除'))
+			} else if (msg.includes('No such file')) {
+				reject(new Error('文件或目录不存在'))
+			} else {
+				reject(new Error(`删除失败: ${msg}`))
+			}
+		}
+		if (isDir) sftp.rmdir(remotePath, cb)
+		else sftp.unlink(remotePath, cb)
+	})
+}
 
   /**
    * 上传本地文件到远程（并发分块 + 断点续传 + 心跳检测 + 错误分类）

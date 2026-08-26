@@ -1,6 +1,7 @@
 /** 格式化美元成本 */
 export function formatCost(usd: number | undefined | null): string {
-  if (!usd) return '$0'
+  if (usd == null) return '—'  // null/undefined 返回占位符，区分"零成本"和"成本未知"
+  if (usd === 0) return '$0'
   if (usd < 0.01) return `$${usd.toFixed(6)}`
   if (usd < 1) return `$${usd.toFixed(4)}`
   return `$${usd.toFixed(2)}`

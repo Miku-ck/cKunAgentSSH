@@ -438,9 +438,15 @@ export function createModeChatStore<
   // ── 返回通用 API ──
 
   /** 手动触发会话列表响应式更新（shallowRef 内部对象原地变更后调用，如 Agent 模式直接 push 消息） */
+  let notifySaveTimer: ReturnType<typeof setTimeout> | null = null
   function notifyConversationsChanged() {
     triggerRef(persistence.conversations)
-    persistence.save()
+    // 防抖写入 localStorage，避免 Agent 流式输出期间频繁序列化
+    if (notifySaveTimer) clearTimeout(notifySaveTimer)
+    notifySaveTimer = setTimeout(() => {
+      notifySaveTimer = null
+      persistence.save()
+    }, 300)
   }
 
   // ── Agent 完成固化（store 层 watch，不依赖组件生命周期）──

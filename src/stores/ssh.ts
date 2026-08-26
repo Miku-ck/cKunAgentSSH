@@ -3,7 +3,7 @@
  * 连接配置通过 IPC 持久化到主进程(safeStorage 加密),不再走 localStorage
  */
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, onScopeDispose } from 'vue'
 import { useToastStore } from './toast'
 
 export type SSHConnection = SSHConnectionRecord
@@ -92,17 +92,22 @@ export const useSSHStore = defineStore('ssh', () => {
     const api = window.electronAPI
     if (!api) return
     const toast = useToastStore()
-    api.onHostKeyNew(({ hostKey, fingerprint }) => {
+    const offNew = api.onHostKeyNew(({ hostKey, fingerprint }) => {
       toast.warning(
         `首次连接到 ${hostKey}，已记录服务器指纹：${fingerprint.slice(0, 24)}...`,
         6000,
       )
     })
-    api.onHostKeyMismatch(({ hostKey }) => {
+    const offMismatch = api.onHostKeyMismatch(({ hostKey }) => {
       toast.error(
         `⚠️ ${hostKey} 服务器密钥变更！可能存在中间人攻击，连接已被拒绝。`,
         0, // 不自动关闭，强制用户确认
       )
+    })
+    // Pinia scope 销毁时清理监听器（HMR 场景）
+    onScopeDispose(() => {
+      if (typeof offNew === 'function') offNew()
+      if (typeof offMismatch === 'function') offMismatch()
     })
   }
 
@@ -305,6 +310,8 @@ export const useSSHStore = defineStore('ssh', () => {
     }
     // 同步清理该会话的命令历史,防止长期使用后内存增长
     commandHistory.value = commandHistory.value.filter(h => h.sessionId !== id)
+    // 清理 lastCommandBySession 对应该会话的条目
+    delete lastCommandBySession.value[id]
   }
 
   function switchSession(id: string) {

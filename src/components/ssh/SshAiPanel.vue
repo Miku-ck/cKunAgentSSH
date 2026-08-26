@@ -9,6 +9,7 @@
     :models="chatStore.models"
     :grouped-conversations="store.groupedConversations"
     :agent-running="agentStore.isRunning"
+    :creating="creating"
     show-agent-toggle
     v-model:agent-mode="agentMode"
     show-message-actions
@@ -35,7 +36,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, toRef } from 'vue'
+import { ref, onMounted, onUnmounted, toRef } from 'vue'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useChatStore } from '@/stores/chat'
 import { useAgentIntegration } from '@/composables/useAgentIntegration'
@@ -60,9 +61,24 @@ async function handleSend(content: string, skillIds: string[] = []) {
   await store.sendMessage(content, { skillIds })
 }
 
-function handleNewChat() {
-  store.createConversation()
+// 新建对话防重复提交
+const creating = ref(false)
+async function handleNewChat() {
+  if (creating.value) return
+  creating.value = true
+  try {
+    await store.createConversation()
+    // 最小锁定时间 500ms，防止快速重复点击
+    await new Promise(resolve => setTimeout(resolve, 500))
+  } finally {
+    creating.value = false
+  }
 }
+
+// 组件卸载时重置创建状态，防止状态残留
+onUnmounted(() => {
+  creating.value = false
+})
 
 function handleSwitchConv(id: string) {
   store.switchConversation(id)

@@ -1,6 +1,6 @@
 <template>
-  <div v-if="visible" class="qc-editor-overlay" @click.self="handleClose">
-    <div class="qc-editor-dialog" @keydown.esc="handleClose">
+  <div v-if="visible" class="qc-editor-overlay">
+    <div class="qc-editor-dialog">
       <div class="qc-editor-header">
         <h3>{{ isEdit ? '编辑快捷命令' : '新建快捷命令' }}</h3>
         <button class="qc-editor-close" @click="handleClose">&times;</button>
@@ -14,7 +14,6 @@
             v-model="form.name"
             type="text"
             maxlength="30"
-            placeholder="如: 查看日志"
             class="qc-input"
             spellcheck="false"
           />

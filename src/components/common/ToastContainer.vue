@@ -31,8 +31,8 @@ const iconMap: Record<ToastType, string> = {
 <style scoped>
 .toast-container {
   position: fixed;
-  /* 中间显示且下移：避右上角，下移 80px 让提示不卡顶部遮挡标题栏 */
-  top: 80px;
+  /* 居中显示且下移：避开标题栏，下移 60px 让提示不遮挡标题栏 */
+  top: 60px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 2000;

@@ -39,6 +39,7 @@ import { computed } from 'vue'
 import ThinkingBlock from './ThinkingBlock.vue'
 import MessageContentRenderer from './MessageContentRenderer.vue'
 import AgentTraceInline from '@/components/agent/AgentTraceInline.vue'
+import { useToastStore } from '@/stores/toast'
 import type { AgentTraceSnapshot } from '@/api/client'
 
 interface ChatMessage {
@@ -51,6 +52,8 @@ interface ChatMessage {
   duration?: number
   agentTrace?: AgentTraceSnapshot
 }
+
+const toast = useToastStore()
 
 const props = defineProps<{
   message: ChatMessage
@@ -68,7 +71,9 @@ const thinkingDefaultOpen = computed(() => {
 })
 
 function copyContent(text: string) {
-  navigator.clipboard.writeText(text).catch(() => {})
+  navigator.clipboard.writeText(text).catch(() => {
+    toast.error('复制失败，请手动选择文本复制')
+  })
 }
 </script>
 

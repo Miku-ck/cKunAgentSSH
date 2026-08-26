@@ -455,7 +455,12 @@ export function streamChat(options: StreamChatOptions): () => void {
     } catch (e: unknown) {
       if (e instanceof Error && e.name !== 'AbortError') {
         // H13 修复：用 toFriendlyMessage 转换网络错误，避免直接显示 "Failed to fetch"
-        options.onError(toFriendlyMessage(e, 'Agent 运行失败，请稍后重试'))
+        // H15 包裹 onError 回调，防止回调自身抛异常导致 unhandled promise rejection
+        try {
+          options.onError(toFriendlyMessage(e, 'Agent 运行失败，请稍后重试'))
+        } catch (cbErr) {
+          console.error('[streamChat] onError callback threw:', cbErr)
+        }
       }
     }
   }
@@ -774,7 +779,12 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
     } catch (e: unknown) {
       if (e instanceof Error && e.name !== 'AbortError') {
         // H13 修复：用 toFriendlyMessage 转换网络错误，避免直接显示 "Failed to fetch"
-        options.onError(toFriendlyMessage(e, 'Agent 运行失败，请稍后重试'))
+        // H15 包裹 onError 回调，防止回调自身抛异常导致 unhandled promise rejection
+        try {
+          options.onError(toFriendlyMessage(e, 'Agent 运行失败，请稍后重试'))
+        } catch (cbErr) {
+          console.error('[streamAgentRun] onError callback threw:', cbErr)
+        }
       }
     }
   }

@@ -173,7 +173,10 @@ async function loadFile(): Promise<void> {
     readOnly.value = result.readOnly
     language.value = getLanguage(props.name)
     loading.value = false
+    // 竞态条件守卫：加载期间组件可能已关闭（visible 变为 false）
+    if (!props.visible) return
     await nextTick()
+    if (!props.visible) return
     initEditor()
   } catch (err: any) {
     error.value = toFriendlyMessage(err, '打开失败')

@@ -122,7 +122,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, triggerRef } from 'vue'
 import ConnectionRow from './ConnectionRow.vue'
 import { useSSHStore } from '@/stores/ssh'
 import type { SSHConnection } from '@/stores/ssh'
@@ -213,7 +213,7 @@ function toggleSelectAll() {
       selectedIds.value.add(c.id)
     }
   }
-  selectedIds.value = new Set(selectedIds.value)
+  triggerRef(selectedIds)
 }
 
 function handleToggleSelect(id: string) {
@@ -222,11 +222,12 @@ function handleToggleSelect(id: string) {
   } else {
     selectedIds.value.add(id)
   }
-  selectedIds.value = new Set(selectedIds.value)
+  triggerRef(selectedIds)
 }
 
 function clearSelection() {
-  selectedIds.value = new Set()
+  selectedIds.value.clear()
+  triggerRef(selectedIds)
 }
 
 // ─── 操作 ─────────────────────────────────
@@ -260,16 +261,18 @@ async function handleDelete(id: string) {
   try {
     await store.removeConnection(id)
     selectedIds.value.delete(id)
-    selectedIds.value = new Set(selectedIds.value)
+    triggerRef(selectedIds)
     toast.success('已删除')
   } catch (err: any) {
     toast.error(toFriendlyMessage(err, '删除失败'))
   }
 }
 
+const deleting = ref(false)
 async function handleDeleteBatch() {
   const count = selectedIds.value.size
   if (count === 0) return
+  if (deleting.value) return // 防重复点击
   const ok = await confirm({
     title: '批量删除',
     message: `确认删除选中的 ${count} 个连接?\n此操作不可撤销。`,
@@ -277,6 +280,7 @@ async function handleDeleteBatch() {
     danger: true,
   })
   if (!ok) return
+  deleting.value = true
   const ids = Array.from(selectedIds.value)
   try {
     for (const id of ids) {
@@ -286,6 +290,8 @@ async function handleDeleteBatch() {
     toast.success(`已删除 ${count} 个连接`)
   } catch (err: any) {
     toast.error(toFriendlyMessage(err, '删除失败'))
+  } finally {
+    deleting.value = false
   }
 }
 

@@ -11,9 +11,14 @@
       class="app-overlay-layer"
       aria-hidden="true"
     ></div>
-    <TitleBar />
+    <TitleBar
+      @action-ai="sshViewRef?.toggleAiPanel()"
+      @action-remote="sshViewRef?.toggleRemoteManager()"
+      @action-sftp="sshViewRef?.toggleSftp()"
+      @action-settings="sshViewRef?.openSettings()"
+    />
     <div class="main">
-      <SshView />
+      <SshView ref="sshViewRef" />
     </div>
     <ToastContainer />
     <ConfirmDialogHolder />
@@ -33,6 +38,8 @@ import SshView from './views/ssh/SshView.vue'
 
 const settingsStore = useSettingsStore()
 useAppearance()
+
+const sshViewRef = ref<InstanceType<typeof SshView> | null>(null)
 
 const backgroundImageUrl = ref('')
 let firstBgLoad = true
@@ -79,8 +86,14 @@ const hasBackground = computed(
 
 onMounted(async () => {
   // 初始化设置（从后端同步）
-  settingsStore.loadMemorySettings()
-  settingsStore.loadPostProcessSettings()
+  try {
+    await Promise.all([
+      settingsStore.loadMemorySettings(),
+      settingsStore.loadPostProcessSettings(),
+    ])
+  } catch (e) {
+    console.error('[App] 初始化设置加载失败:', e)
+  }
 })
 </script>
 

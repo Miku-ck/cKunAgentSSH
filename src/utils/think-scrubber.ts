@@ -17,7 +17,6 @@ const MAX_TAG_LEN = Math.max(...THINK_OPEN_TAGS.concat(THINK_CLOSE_TAGS).map(t =
 export class StreamingThinkScrubber {
   private _inBlock: boolean = false
   private _buf: string = ''
-  private _lastEmittedEndedNewline: boolean = true
 
   /**
    * 喂入一段 delta 文本，返回可见部分（think 块内容被擦洗）
@@ -58,7 +57,6 @@ export class StreamingThinkScrubber {
           output += pending.substring(i, openIdx.start)
           this._inBlock = true
           i = openIdx.end
-          this._lastEmittedEndedNewline = output.endsWith('\n')
         } else {
           // 未找到开标签，检查 pending 末尾是否可能是半截开标签
           const remaining = pending.substring(i)
@@ -67,11 +65,9 @@ export class StreamingThinkScrubber {
             // 保留半截到 buf
             output += remaining.substring(0, remaining.length - partialMatch)
             this._buf = remaining.substring(remaining.length - partialMatch)
-            this._lastEmittedEndedNewline = output.endsWith('\n')
           } else {
             // 没有半截，全部输出
             output += remaining
-            this._lastEmittedEndedNewline = output.endsWith('\n')
           }
           break
         }

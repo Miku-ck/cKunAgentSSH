@@ -62,7 +62,22 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     modelInitPromise = (async () => {
       if (base.selectedModelId.value) return
       await base.fetchDefaultModel()
+      // 完成后清除缓存，允许后续重试
+      modelInitPromise = null
     })()
+    // 超时清理：30秒后清除缓存，防止永久阻塞
+    let modelInitTimer: ReturnType<typeof setTimeout> | null = null
+    modelInitTimer = setTimeout(() => {
+      modelInitPromise = null
+      modelInitTimer = null
+    }, 30000)
+    // promise 完成时清理超时定时器
+    modelInitPromise.finally(() => {
+      if (modelInitTimer) {
+        clearTimeout(modelInitTimer)
+        modelInitTimer = null
+      }
+    }).catch(() => {})
     return modelInitPromise
   }
   watch(() => appStore.backendStatus, ensureModelLoaded, { immediate: true })
@@ -83,8 +98,8 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       return {
         sessionType: 'remote',
         connectionName: conn?.name || session.name,
-        host: conn?.host,
-        username: conn?.username,
+        host: conn?.host || 'unknown',
+        username: conn?.username || 'unknown',
         sessionId: session.id,
       }
     } else {
@@ -129,7 +144,19 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   }
 
   /** Agent 模式：多步工具调用，支持远程命令执行 */
+  // 发送锁，防止快速连点创建多个会话
+  let _agentSendLock = false
   async function sendAgentMessage(content: string, skillIds: string[] = []) {
+    if (_agentSendLock) return
+    _agentSendLock = true
+    try {
+      await _sendAgentMessageInner(content, skillIds)
+    } finally {
+      _agentSendLock = false
+    }
+  }
+
+  async function _sendAgentMessageInner(content: string, skillIds: string[] = []) {
     if (agentStore.isRunning) {
       toast.error('Agent 正在运行中，请等待完成或先中止')
       return
