@@ -196,6 +196,7 @@ export interface ModelConfig {
   temperature?: number
   max_tokens?: number
   max_output_tokens?: number
+  reasoning_tokens?: number
   top_p?: number
   sort_order?: number
   created_at?: string
@@ -214,6 +215,7 @@ export interface ModelConfigPayload {
   temperature?: number
   max_tokens?: number
   max_output_tokens?: number
+  reasoning_tokens?: number
   top_p?: number
 }
 

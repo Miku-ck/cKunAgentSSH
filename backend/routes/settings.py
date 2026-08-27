@@ -28,6 +28,8 @@ class CreateModelRequest(BaseModel):
     # 默认 4096：远低于常见 vLLM 16K/32K 上下文窗口，避免输出预算占满导致 400
     max_tokens: int = Field(4096, ge=1, le=1000000)
     max_output_tokens: int = Field(4096, ge=1, le=1000000)
+    # 推理/思考内容的独立 token 预算（Qwen3 等模型支持 enable_thinking 时使用）
+    reasoning_tokens: int = Field(8192, ge=0, le=1000000, description="推理内容最大 token 数，0 表示使用 max_output_tokens")
     top_p: float = Field(0.9, ge=0, le=1)
     is_default_work: bool = False
     is_default_ide: bool = False
@@ -46,6 +48,7 @@ class UpdateModelRequest(BaseModel):
     temperature: Optional[float] = Field(None, ge=0, le=2)
     max_tokens: Optional[int] = Field(None, ge=1, le=1000000)
     max_output_tokens: Optional[int] = Field(None, ge=1, le=1000000)
+    reasoning_tokens: Optional[int] = Field(None, ge=0, le=1000000, description="推理内容最大 token 数")
     top_p: Optional[float] = Field(None, ge=0, le=1)
     sort_order: Optional[int] = None
     is_default_work: Optional[bool] = None
@@ -109,6 +112,7 @@ async def create_model_config(req: CreateModelRequest):
             is_default_work=req.is_default_work,
             is_default_ide=req.is_default_ide,
             is_default_ssh=req.is_default_ssh,
+            reasoning_tokens=req.reasoning_tokens,
         )
         return result
     except Exception as e:

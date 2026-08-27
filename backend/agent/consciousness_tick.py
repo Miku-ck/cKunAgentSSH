@@ -135,9 +135,11 @@ class ConsciousnessTick:
 
             # 选择本轮要执行的任务：优先选最久未执行的
             now = _now_utc()
+            # 修复：datetime.min 是 naive datetime，与 aware datetime 比较会 TypeError
+            # 使用 datetime.min.replace(tzinfo=timezone.utc) 保持时区一致
             candidates = sorted(
                 self._tasks.keys(),
-                key=lambda name: self._last_run.get(name, datetime.min),
+                key=lambda name: self._last_run.get(name, datetime.min.replace(tzinfo=timezone.utc)),
             )
             selected = candidates[: self.config.max_tasks_per_tick]
 

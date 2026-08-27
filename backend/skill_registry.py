@@ -2,28 +2,43 @@
 import json
 import re
 import threading
+import time
+import logging
 from typing import Optional
 
 import database as db
+
+logger = logging.getLogger(__name__)
 
 
 class SkillRegistry:
     """技能注册表（线程安全，内存缓存）"""
 
+    # 修复：reload 失败后的重试间隔（秒），避免对故障数据库反复查询
+    _RETRY_INTERVAL = 5.0
+
     def __init__(self):
         self._lock = threading.RLock()
         self._skills: list[dict] = []  # 缓存所有技能
         self._loaded = False
+        self._last_fail_time: float = 0  # 上次失败时间
 
     def reload(self):
         """从数据库重新加载所有技能"""
         with self._lock:
+            # 修复：失败后间隔 _RETRY_INTERVAL 秒再重试，避免对故障数据库反复查询
+            if not self._loaded and self._last_fail_time > 0:
+                if time.monotonic() - self._last_fail_time < self._RETRY_INTERVAL:
+                    return  # 未到重试间隔，跳过
             try:
                 self._skills = db.list_all_skills()  # 返回所有技能（含 disabled）
                 self._loaded = True
-            except Exception:
+                self._last_fail_time = 0
+            except Exception as e:
                 self._skills = []
                 self._loaded = False
+                self._last_fail_time = time.monotonic()
+                logger.warning("[skill_registry] reload 失败，%.1fs 后重试: %s", self._RETRY_INTERVAL, e)
 
     def get_enabled_skills(self, mode: str) -> list[dict]:
         """获取指定模式下启用的技能，按 priority 降序"""

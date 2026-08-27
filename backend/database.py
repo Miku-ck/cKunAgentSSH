@@ -10,15 +10,21 @@ import uuid
 import json
 import atexit
 import threading
+import logging
 from datetime import datetime, timezone
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 _db_path: str = ""
 
 # ── 线程本地连接池 ──
 _thread_local = threading.local()
-# 跟踪所有线程的连接，用于进程退出时统一清理
-_all_connections: list[sqlite3.Connection] = []
+# 跟踪所有线程的连接，用于进程退出时统一清理。
+# 注意：不能用 WeakSet —— sqlite3.Connection 在部分 Python 构建（如 3.13）下
+# 不支持弱引用，WeakSet.add() 会抛 "cannot create weak reference"，导致后端起不来。
+# 由于 _thread_local 已保证每线程仅一条连接，这里改用普通 set，数量受线程数约束，不会无界增长。
+_all_connections: set = set()
 _conn_lock = threading.Lock()
 
 
@@ -42,6 +48,9 @@ class _PooledConnection:
     def close(self):
         """No-op close：回滚未提交事务，但不关闭底层连接。"""
         try:
+            # 修复：记录未提交事务的回滚，便于排查数据丢失问题
+            if self._conn.in_transaction:
+                logger.debug("回滚未提交的事务（连接保持复用）")
             self._conn.rollback()
         except Exception:
             pass  # 连接可能已损坏，下次 _get_conn() 会重建
@@ -85,7 +94,7 @@ def _get_conn() -> _PooledConnection:
     if conn is None:
         conn = _create_connection()
         with _conn_lock:
-            _all_connections.append(conn)
+            _all_connections.add(conn)  # WeakSet 使用 add() 而非 append()
         _thread_local.conn = conn
 
     return _PooledConnection(conn)
@@ -217,6 +226,7 @@ def init_db(db_path: str) -> None:
                 temperature      REAL DEFAULT 0.7,
                 max_tokens       INTEGER DEFAULT 16384,
                 max_output_tokens INTEGER DEFAULT 4096,
+                reasoning_tokens INTEGER DEFAULT 8192,  -- 推理/思考内容的独立 token 预算
                 top_p            REAL DEFAULT 0.9,
                 sort_order       INTEGER DEFAULT 0,
                 created_at       TEXT NOT NULL DEFAULT (datetime('now')),
@@ -423,16 +433,33 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
         # 修正 name 与 model_id 的值（它们可能正好反了）
         _fix_model_name_and_id(conn)
 
-        if 'is_default_ssh' not in cols:
-            conn.execute("ALTER TABLE models_config ADD COLUMN is_default_ssh INTEGER DEFAULT 0")
-
-        # 新增：supports_image, supports_tool_calling, max_output_tokens
-        if 'supports_image' not in cols:
-            conn.execute("ALTER TABLE models_config ADD COLUMN supports_image INTEGER DEFAULT 0")
-        if 'supports_tool_calling' not in cols:
-            conn.execute("ALTER TABLE models_config ADD COLUMN supports_tool_calling INTEGER DEFAULT 0")
-        if 'max_output_tokens' not in cols:
-            conn.execute("ALTER TABLE models_config ADD COLUMN max_output_tokens INTEGER DEFAULT 4096")
+        # 幂等补齐所有查询依赖的列（与 CREATE TABLE 保持一致）。
+        # 旧库可能缺少 reasoning_tokens/top_p/sort_order 等，若不补，
+        # list_models_config / get_model_config 的 SELECT 会因 "no such column"
+        # 抛 500，导致模型在前端下拉与设置面板均不显示。
+        for col, col_def in {
+            "name": "TEXT NOT NULL DEFAULT ''",
+            "model_id": "TEXT",
+            "provider": "TEXT NOT NULL DEFAULT 'custom'",
+            "base_url": "TEXT NOT NULL DEFAULT ''",
+            "api_key": "TEXT",
+            "supports_thinking": "INTEGER DEFAULT 0",
+            "supports_image": "INTEGER DEFAULT 0",
+            "supports_tool_calling": "INTEGER DEFAULT 0",
+            "is_default": "INTEGER DEFAULT 0",
+            "is_default_ssh": "INTEGER DEFAULT 0",
+            "temperature": "REAL DEFAULT 0.7",
+            "max_tokens": "INTEGER DEFAULT 16384",
+            "max_output_tokens": "INTEGER DEFAULT 4096",
+            "reasoning_tokens": "INTEGER DEFAULT 8192",
+            "top_p": "REAL DEFAULT 0.9",
+            "sort_order": "INTEGER DEFAULT 0",
+            "created_at": "TEXT NOT NULL DEFAULT (datetime('now'))",
+            "updated_at": "TEXT NOT NULL DEFAULT (datetime('now'))",
+        }.items():
+            if col not in cols:
+                conn.execute(f"ALTER TABLE models_config ADD COLUMN {col} {col_def}")
+                cols.add(col)
 
 
 def _fix_model_name_and_id(conn: sqlite3.Connection) -> None:
@@ -475,12 +502,12 @@ def _seed_models(conn: sqlite3.Connection) -> None:
         "INSERT INTO models_config "
         "(id, name, model_id, provider, base_url, api_key, supports_thinking, supports_image, supports_tool_calling, "
         "is_default, is_default_ssh, "
-        "temperature, max_tokens, max_output_tokens, top_p, sort_order, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?, ?, ?)",
+        "temperature, max_tokens, max_output_tokens, reasoning_tokens, top_p, sort_order, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             "Qwen3-VL", "Qwen3-VL-8B-Instruct", "Qwen3-VL", "qwen",
             base_url, api_key, 0, 0, 0,
-            0.7, 16384, 4096, 0.9, 0, now, now,
+            0.7, 16384, 4096, 8192, 0.9, 0, now, now,
         ),
     )
     # 默认模型 2: Qwen3-VL-Thinking（对应服务器 --served-model-name Qwen3-VL-Thinking）
@@ -488,12 +515,12 @@ def _seed_models(conn: sqlite3.Connection) -> None:
         "INSERT INTO models_config "
         "(id, name, model_id, provider, base_url, api_key, supports_thinking, supports_image, supports_tool_calling, "
         "is_default, is_default_ssh, "
-        "temperature, max_tokens, max_output_tokens, top_p, sort_order, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?)",
+        "temperature, max_tokens, max_output_tokens, reasoning_tokens, top_p, sort_order, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             "Qwen3-VL-Thinking", "Qwen3-VL-8B-Thinking", "Qwen3-VL-Thinking", "qwen",
             thinking_url, api_key, 1, 0, 0,
-            0.7, 16384, 4096, 0.9, 1, now, now,
+            0.7, 16384, 4096, 8192, 0.9, 1, now, now,
         ),
     )
 
@@ -1075,7 +1102,7 @@ def list_models_config() -> list[dict]:
             "SELECT id, name, model_id, provider, base_url, api_key, "
             "supports_thinking, supports_image, supports_tool_calling, "
             "is_default, is_default_ssh, "
-            "temperature, max_tokens, max_output_tokens, top_p, sort_order, created_at, updated_at "
+            "temperature, max_tokens, max_output_tokens, reasoning_tokens, top_p, sort_order, created_at, updated_at "
             "FROM models_config ORDER BY sort_order ASC, created_at ASC"
         ).fetchall()
         result = [dict(r) for r in rows]
@@ -1094,7 +1121,7 @@ def get_model_config(model_id: str, mask_key: bool = True) -> Optional[dict]:
             "SELECT id, name, model_id, provider, base_url, api_key, "
             "supports_thinking, supports_image, supports_tool_calling, "
             "is_default, is_default_ssh, "
-            "temperature, max_tokens, max_output_tokens, top_p, sort_order, created_at, updated_at "
+            "temperature, max_tokens, max_output_tokens, reasoning_tokens, top_p, sort_order, created_at, updated_at "
             "FROM models_config WHERE id = ?",
             (model_id,),
         ).fetchone()
@@ -1122,7 +1149,10 @@ def create_model_config(
     max_tokens: int = 4096,
     max_output_tokens: int = 4096,
     top_p: float = 0.9,
+    is_default_work: bool = False,   # 预留：Work 模式默认标记（当前 DB 无对应列，不参与 INSERT）
+    is_default_ide: bool = False,    # 预留：IDE 模式默认标记（当前 DB 无对应列，不参与 INSERT）
     is_default_ssh: bool = False,
+    reasoning_tokens: int = 8192,
 ) -> dict:
     """创建模型配置，返回完整记录"""
     # 去除首尾空格：粘贴时可能带入换行/空白，导致上游 API 校验失败（401）
@@ -1141,15 +1171,15 @@ def create_model_config(
             "INSERT INTO models_config "
             "(id, name, model_id, provider, base_url, api_key, supports_thinking, supports_image, supports_tool_calling, "
             "is_default, is_default_ssh, "
-            "temperature, max_tokens, max_output_tokens, top_p, sort_order, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "temperature, max_tokens, max_output_tokens, reasoning_tokens, top_p, sort_order, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 mid, name, model_id, provider, base_url, api_key,
                 1 if supports_thinking else 0,
                 1 if supports_image else 0,
                 1 if supports_tool_calling else 0,
                 1 if is_default_ssh else 0,
-                temperature, max_tokens, max_output_tokens, top_p, next_order, now, now,
+                temperature, max_tokens, max_output_tokens, reasoning_tokens, top_p, next_order, now, now,
             ),
         )
         # 如果新模型被设为默认，需清除其他模型的默认标记
@@ -1169,7 +1199,7 @@ def update_model_config(config_id: str, **kwargs) -> Optional[dict]:
     allowed = {
         "name", "model_id", "provider", "base_url", "api_key",
         "supports_thinking", "supports_image", "supports_tool_calling",
-        "temperature", "max_tokens", "max_output_tokens", "top_p", "sort_order",
+        "temperature", "max_tokens", "max_output_tokens", "reasoning_tokens", "top_p", "sort_order",
         "is_default_ssh",
     }
     sets = []
@@ -1384,7 +1414,7 @@ def get_agent_run_stats(mode: str = None, days: int = 7) -> dict:
 
     Args:
         mode: 模式过滤（None=所有模式）
-        days: 最近 N 天
+        days: 最近 N 天（1-365，默认 7）
     Returns:
         {
             "total_runs": int,
@@ -1400,6 +1430,8 @@ def get_agent_run_stats(mode: str = None, days: int = 7) -> dict:
             "avg_cost_usd": float,
         }
     """
+    # 修复：校验 days 参数范围，避免负数或极大值导致语义异常
+    days = max(1, min(int(days) if days else 7, 365))
     conn = _get_conn()
     try:
         sql = (

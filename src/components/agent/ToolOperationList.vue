@@ -141,20 +141,22 @@ const statsText = computed((): string => {
 <template>
   <div class="tool-log" :class="{ embedded: hideHeader }">
     <div v-if="!hideHeader" class="log-header" @click="toggle">
-      <svg
-        class="log-chevron"
-        :class="{ expanded }"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        width="10"
-        height="10"
-      >
-        <polyline points="9 18 15 12 9 6" />
-      </svg>
       <span class="log-title">{{ headerTitle }}</span>
-      <span v-if="statsText && !totalRunning" class="log-stats">{{ statsText }}</span>
+      <span class="log-right">
+        <span v-if="statsText && !totalRunning" class="log-stats">{{ statsText }}</span>
+        <svg
+          class="log-chevron"
+          :class="{ expanded }"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          width="14"
+          height="14"
+        >
+          <polyline points="9 18 15 12 9 6" />
+        </svg>
+      </span>
     </div>
 
     <div v-show="expanded" class="log-body">
@@ -176,27 +178,35 @@ const statsText = computed((): string => {
   font-family: var(--font-sans);
 }
 
-/* 折叠头：极简，无背景无边框 */
+/* 折叠头：极简无背景 */
 .log-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
   padding: 4px 0;
-  font-size: 13px;
-  color: #8b949e;
+  font-size: 12px;
+  color: var(--text-secondary);
   cursor: pointer;
   user-select: none;
   line-height: 1.6;
 }
 
 .log-header:hover {
-  color: #c9d1d9;
+  color: var(--text-primary);
+}
+
+.log-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .log-chevron {
-  color: #6e7681;
+  color: var(--text-secondary);
   transition: transform 0.2s ease;
   flex-shrink: 0;
+  opacity: 0.5;
 }
 
 .log-chevron.expanded {
@@ -209,7 +219,7 @@ const statsText = computed((): string => {
 
 /* 聚合统计：更暗的灰，不抢主标题 */
 .log-stats {
-  color: #6e7681;
+  color: #888;
   font-size: 12px;
 }
 

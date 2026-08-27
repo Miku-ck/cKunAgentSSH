@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections import deque
+from collections import deque, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -142,6 +142,8 @@ class FilesystemGuard:
             level, reason = classify_shell_args(args)
             if level == "hardline":
                 # 无条件阻断，不询问 PermissionGate
+                # 修复：使用 "user" 角色而非 "system"，因为 inject_messages 会被添加到消息列表末尾
+                # OpenAI API 要求 system 消息必须在开头，添加到末尾会触发 400 错误
                 return ReinDecision(
                     intercepted=True,
                     intercept_reason=f"敏感命令: {reason}",
@@ -153,8 +155,8 @@ class FilesystemGuard:
                         payload={"message": f"已拦截敏感命令: {reason}"},
                     )],
                     inject_messages=[{
-                        "role": "system",
-                        "content": f"已拦截敏感命令: {reason}。请使用更安全的替代方案。",
+                        "role": "user",
+                        "content": f"[系统拦截] 已拦截敏感命令: {reason}。请使用更安全的替代方案。",
                     }],
                 )
             elif level == "dangerous":
@@ -173,8 +175,8 @@ class FilesystemGuard:
                                 payload={"message": f"已拦截需审批命令: {reason}"},
                             )],
                             inject_messages=[{
-                                "role": "system",
-                                "content": f"已拦截需审批命令: {reason}。请先获得用户授权。",
+                                "role": "user",
+                                "content": f"[系统拦截] 已拦截需审批命令: {reason}。请先获得用户授权。",
                             }],
                         )
             # safe → 放行
@@ -199,6 +201,7 @@ class FilesystemGuard:
                 # 不同盘符等无法比较 → 拦截
                 common = ""
             if common != real_workspace:
+                # 修复：使用 "user" 角色而非 "system"，避免添加到消息末尾时触发 400 错误
                 return ReinDecision(
                     intercepted=True,
                     intercept_reason=f"路径越界: {path} 不在工作区 {workspace} 内",
@@ -210,12 +213,13 @@ class FilesystemGuard:
                         payload={"message": f"已拦截路径越界操作: {path}"},
                     )],
                     inject_messages=[{
-                        "role": "system",
-                        "content": f"已拦截路径越界操作: {path}。请仅操作工作区 {workspace} 内的文件。",
+                        "role": "user",
+                        "content": f"[系统拦截] 已拦截路径越界操作: {path}。请仅操作工作区 {workspace} 内的文件。",
                     }],
                 )
         except Exception as e:
             # 失败安全：解析异常时拦截
+            # 修复：使用 "user" 角色而非 "system"
             return ReinDecision(
                 intercepted=True,
                 intercept_reason=f"路径解析失败: {path} ({e})",
@@ -227,8 +231,8 @@ class FilesystemGuard:
                     payload={"message": f"已拦截路径解析失败: {path}"},
                 )],
                 inject_messages=[{
-                    "role": "system",
-                    "content": f"路径解析失败: {path}。请使用工作区内的有效路径。",
+                    "role": "user",
+                    "content": f"[系统拦截] 路径解析失败: {path}。请使用工作区内的有效路径。",
                 }],
             )
         return None
@@ -322,8 +326,8 @@ class LoopDetector:
                     payload={"message": f"循环检测第 {current_loop_count} 次触发，强制终止: {reason}"},
                 )],
                 inject_messages=[{
-                    "role": "system",
-                    "content": f"检测到工具调用循环（第 {current_loop_count} 次）：{reason}。已强制终止，请用户介入或换一种方法。",
+                    "role": "user",
+                    "content": f"[系统拦截] 检测到工具调用循环（第 {current_loop_count} 次）：{reason}。已强制终止，请用户介入或换一种方法。",
                 }],
             )
         elif current_loop_count == 2:
@@ -339,8 +343,8 @@ class LoopDetector:
                     payload={"message": f"循环检测第 {current_loop_count} 次触发，已拦截"},
                 )],
                 inject_messages=[{
-                    "role": "system",
-                    "content": f"检测到工具调用循环（第 {current_loop_count} 次）：{reason}。请立即换一种方法，否则下次将强制终止。",
+                    "role": "user",
+                    "content": f"[系统拦截] 检测到工具调用循环（第 {current_loop_count} 次）：{reason}。请立即换一种方法，否则下次将强制终止。",
                 }],
             )
         else:
@@ -348,8 +352,8 @@ class LoopDetector:
             return ReinDecision(
                 intercepted=False,
                 inject_messages=[{
-                    "role": "system",
-                    "content": f"检测到可能的工具调用循环：{reason}。请换一种方法，避免重复相同的操作。",
+                    "role": "user",
+                    "content": f"[系统提示] 检测到可能的工具调用循环：{reason}。请换一种方法，避免重复相同的操作。",
                 }],
             )
 
@@ -450,8 +454,8 @@ class ConfidenceMonitor:
             return ReinDecision(
                 intercepted=False,
                 inject_messages=[{
-                    "role": "system",
-                    "content": "请重新审视任务，你当前的方案可能存在问题，尝试换一种思路。",
+                    "role": "user",
+                    "content": "[系统提示] 请重新审视任务，你当前的方案可能存在问题，尝试换一种思路。",
                 }],
             )
 
@@ -500,7 +504,8 @@ class PermissionGate:
     # Saddle 引用（用于从 ToolRegistry 读取 ToolMeta，单一数据源）
     saddle: Optional[Any] = None
     # 三范围审批状态
-    _confirmed_once: set[str] = field(default_factory=set)  # 本次确认（仅一次）
+    # 修复：使用 Counter 替代 set，避免跨 run 竞态（Run A 的授权被 Run B 消费）
+    _confirmed_once: dict[str, int] = field(default_factory=lambda: defaultdict(int))  # 本次确认（计数器）
     _confirmed_session: set[str] = field(default_factory=set)  # 会话级确认（整个会话有效）
     _confirmed_permanent: set[str] = field(default_factory=set)  # 永久确认（持久化到 config）
     # 用户覆盖（从 DB 加载）
@@ -543,9 +548,11 @@ class PermissionGate:
         # 检查 session allowlist
         if tool_name in self._confirmed_session:
             return True
-        # 检查 once allowlist（一次性，消费后移除）
-        if tool_name in self._confirmed_once:
-            self._confirmed_once.discard(tool_name)
+        # 修复：检查 once allowlist（使用计数器，避免跨 run 竞态）
+        if self._confirmed_once.get(tool_name, 0) > 0:
+            self._confirmed_once[tool_name] -= 1
+            if self._confirmed_once[tool_name] <= 0:
+                del self._confirmed_once[tool_name]
             return True
         # 默认拦截 dangerous 命令（无交互式 UI，不能自动放行）
         return False
@@ -556,7 +563,8 @@ class PermissionGate:
         scope: 'once' | 'session' | 'always'
         """
         if scope == 'once':
-            self._confirmed_once.add(tool_name)
+            # 修复：使用计数器，支持多次授权累积
+            self._confirmed_once[tool_name] = self._confirmed_once.get(tool_name, 0) + 1
         elif scope == 'session':
             self._confirmed_session.add(tool_name)
         elif scope == 'always':
@@ -565,7 +573,7 @@ class PermissionGate:
 
     def revoke(self, tool_name: str) -> None:
         """撤销所有范围的权限"""
-        self._confirmed_once.discard(tool_name)
+        self._confirmed_once.pop(tool_name, None)  # Counter 使用 pop 替代 discard
         self._confirmed_session.discard(tool_name)
         self._confirmed_permanent.discard(tool_name)
         self._save_permanent_allowlist()
@@ -633,8 +641,8 @@ class PermissionGate:
                     payload={"tool": tool, "message": f"工具未注册: {tool}"},
                 )],
                 inject_messages=[{
-                    "role": "system",
-                    "content": f"工具 {tool} 未注册，无法执行。请使用已注册的工具。",
+                    "role": "user",
+                    "content": f"[系统拦截] 工具 {tool} 未注册，无法执行。请使用已注册的工具。",
                 }],
             )
 
@@ -676,8 +684,8 @@ class PermissionGate:
                 },
             )],
             inject_messages=[{
-                "role": "system",
-                "content": f"工具 {tool} 风险等级为 {risk}，需要用户授权才能执行。请换用更安全的工具，或在弹出的授权卡片中允许此工具。",
+                "role": "user",
+                "content": f"[系统拦截] 工具 {tool} 风险等级为 {risk}，需要用户授权才能执行。请换用更安全的工具，或在弹出的授权卡片中允许此工具。",
             }],
         )
 
@@ -903,12 +911,13 @@ class SyntaxVerifier:
         errors.append({"path": path, "error": error_msg, "iteration": ctx.iteration})
 
         # 注入错误信息，驱动 Agent 修复
+        # 修复：使用 "user" 角色而非 "system"，避免添加到消息末尾时触发 400 错误
         return ReinDecision(
             intercepted=False,
             inject_messages=[{
-                "role": "system",
+                "role": "user",
                 "content": (
-                    f"[Syntax Check FAILED] {path} 存在语法错误：\n```\n{error_msg}\n```\n"
+                    f"[语法检查失败] {path} 存在语法错误：\n```\n{error_msg}\n```\n"
                     f"请立即修复此语法错误，确保代码可运行后再继续任务。"
                 ),
             }],

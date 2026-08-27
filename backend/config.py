@@ -4,6 +4,9 @@
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def _default_db_path() -> str:
@@ -20,8 +23,8 @@ def _default_db_path() -> str:
 class Settings:
     """应用配置"""
 
-    # 运行模式
-    dev_mode: bool = field(default_factory=lambda: os.getenv("DEV_MODE", "true").lower() == "true")
+    # 运行模式（默认 false：生产安全，避免忘记设置 DEV_MODE 导致调试接口暴露）
+    dev_mode: bool = field(default_factory=lambda: os.getenv("DEV_MODE", "false").lower() == "true")
 
     # AI 模型配置（仅用于 _seed_models 初始种子，运行时模型配置存数据库）
     vllm_base_url: str = field(default_factory=lambda: os.getenv("VLLM_BASE_URL", "http://192.168.150.40:9030/v1"))

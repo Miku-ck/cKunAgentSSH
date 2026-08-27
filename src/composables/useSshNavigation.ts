@@ -126,21 +126,23 @@ export function useSshNavigation(
   }
 
   // ─── 远程连接 ───
-  let lastConnectAt = 0
+  // 修复：按连接 ID 分别记录最后连接时间，避免不同服务器之间的防抖互相影响
+  const lastConnectAtById: Record<string, number> = {}
   // 新增连接 loading 状态：显示转圈圈提示
   const connecting = ref(false)
   const pendingConnId = ref('')
 
   async function connectRemote(conn: SSHConnection) {
     const now = Date.now()
+    const lastConnectAt = lastConnectAtById[conn.id] || 0
     if (now - lastConnectAt < CONNECT_DEBOUNCE_MS) {
-      console.log('[useSshNavigation] connectRemote: debounced, skipping')
+      console.log('[useSshNavigation] connectRemote: debounced, skipping', conn.id)
       // debounce 路径也要重置 connecting 状态，避免 loading 永远不消失
       connecting.value = false
       pendingConnId.value = ''
       return
     }
-    lastConnectAt = now
+    lastConnectAtById[conn.id] = now
     console.log('[useSshNavigation] connectRemote: connecting to', conn.name, conn.id)
 
     try {

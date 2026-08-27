@@ -26,6 +26,11 @@ async def lifespan(_app: FastAPI):
     init_db(settings.db_path)
     print(f"[cKunAgentic] Database initialized: {settings.db_path}")
 
+    # 修复：从数据库加载后处理配置，避免使用默认值导致用户设置不生效
+    from post_processor import init_post_process_manager, load_post_process_config_from_db
+    post_config = load_post_process_config_from_db()
+    init_post_process_manager(post_config)
+
     # 意识 tick 延迟启动：仅首次 Agent 运行时触发（ensure_started），
     # 避免纯聊天用户产生空 DB 查询开销
     tick = get_global_tick()
@@ -66,6 +71,18 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "Accept"],
 )
+
+
+# 修复：CORS 安全中间件 — Origin 为 null 时不允许 credentials，防止 CSRF 风险
+@app.middleware("http")
+async def cors_null_origin_security(request, call_next):
+    """当 Origin 为 null 时，移除 Set-Cookie 头，防止跨站凭证泄露"""
+    response = await call_next(request)
+    origin = request.headers.get("origin")
+    if origin == "null":
+        # Origin 为 null 时不应设置 cookies，防止跨站请求伪造
+        response.headers.pop("set-cookie", None)
+    return response
 
 
 @app.get("/api/health")

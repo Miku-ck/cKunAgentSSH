@@ -258,6 +258,22 @@
                         </button>
                       </div>
                     </div>
+
+                    <!-- 推理 Token 限制（思考内容预算）-->
+                    <div class="form-group">
+                      <label class="form-label">推理（思考内容长度）</label>
+                      <div class="token-chips">
+                        <button
+                          v-for="opt in REASONING_TOKEN_OPTIONS"
+                          :key="opt"
+                          class="token-chip"
+                          :class="{ active: form.reasoning_tokens === opt }"
+                          @click="form.reasoning_tokens = opt"
+                        >
+                          {{ formatTokenCount(opt) }}
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </Transition>
               </div>
@@ -309,8 +325,10 @@ const PROVIDERS: ProviderDef[] = [
 
 ]
 
-const INPUT_TOKEN_OPTIONS = [4096, 8192, 16384, 32768, 65536, 131072, 262144]
-const OUTPUT_TOKEN_OPTIONS = [4096, 8192, 16384, 32768, 65536, 131072, 262144]
+const INPUT_TOKEN_OPTIONS = [4096, 8192, 16384, 262144, 1000000]
+const OUTPUT_TOKEN_OPTIONS = [4096, 8192, 16384, 262144, 1000000]
+// 推理/思考内容的独立 token 预算（Qwen3 等模型支持 enable_thinking 时使用）
+const REASONING_TOKEN_OPTIONS = [4096, 8192, 16384, 262144, 1000000]
 
 // ── 对话框状态 ──
 const showDialog = ref(false)
@@ -336,6 +354,7 @@ const form = reactive({
   temperature: 0.7,
   max_tokens: 4096,
   max_output_tokens: 4096,
+  reasoning_tokens: 8192,
 })
 
 const selectedProvider = computed(() => PROVIDERS.find(p => p.id === form.provider))
@@ -434,6 +453,7 @@ async function handleSave() {
     temperature: form.temperature,
     max_tokens: form.max_tokens,
     max_output_tokens: form.max_output_tokens,
+    reasoning_tokens: form.reasoning_tokens,
   }
   // top_p 仅新建时发送默认值；编辑时 UI 从未暴露该字段，不发以保留后端原值
   if (!isEditing.value) {
@@ -541,8 +561,9 @@ function isAnyDefault(m: ModelConfig): boolean {
 }
 
 function formatTokenCount(n: number): string {
-  if (n >= 1000) return (n / 1024).toFixed(0) + 'K'
-  return String(n)
+if (n >= 1000000) return (n / 1000000).toFixed(0) + 'M'
+if (n >= 1000) return (n / 1000).toFixed(0) + 'K'
+return String(n)
 }
 
 </script>

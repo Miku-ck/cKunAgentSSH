@@ -528,7 +528,7 @@ defineExpose({ focusInput })
 
 <style scoped>
 .side-chat-panel {
-  background: var(--bg-sidebar);
+  background: transparent;
   border-left: 1px solid var(--border-subtle, #2d2d30);
   display: flex;
   flex-direction: column;

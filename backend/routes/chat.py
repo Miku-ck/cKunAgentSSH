@@ -150,7 +150,9 @@ async def _generate_stream(
         db.touch_conversation(conversation_id)
         db.update_conversation_status(conversation_id, "in_progress")
 
-        # 流式调用 LLM
+# 流式调用 LLM；推理/思考内容的 token 预算（仅 enable_thinking=True 时生效）
+        _cfg = db_get_model_config(model_id)
+        reasoning_max_tokens = _cfg.get("reasoning_tokens") if enable_thinking else None
         chunk_iter = chat_stream(
             base_url=base_url,
             api_key=api_key,
@@ -160,6 +162,7 @@ async def _generate_stream(
             top_p=top_p,
             max_tokens=max_tokens,
             enable_thinking=enable_thinking,
+            reasoning_max_tokens=reasoning_max_tokens,
         )
 
         done = False

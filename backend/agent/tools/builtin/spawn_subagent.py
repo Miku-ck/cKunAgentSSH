@@ -148,14 +148,21 @@ class SpawnSubagentTool(BaseTool):
 
         # 调用 LLM（非流式收集完整结果）
         try:
-            result = await llm.call(
-                messages=messages,
-                tools=[],
-                model=model_id,
-                temperature=0.5,  # 子 Agent 用较低温度提高确定性
-                max_tokens=_MAX_SUBAGENT_TOKENS,
-                enable_thinking=False,
+            # 修复：添加超时防止 LLM 服务挂起导致子 Agent 永久阻塞
+            result = await asyncio.wait_for(
+                llm.call(
+                    messages=messages,
+                    tools=[],
+                    model=model_id,
+                    temperature=0.5,  # 子 Agent 用较低温度提高确定性
+                    max_tokens=_MAX_SUBAGENT_TOKENS,
+                    enable_thinking=False,
+                ),
+                timeout=120.0,
             )
+        except asyncio.TimeoutError:
+            logger.warning("子 Agent LLM 调用超时（120s）")
+            return "[子 Agent LLM 调用超时]"
         except Exception as e:
             logger.warning("子 Agent LLM 调用失败: %s", e)
             return f"[子 Agent LLM 调用失败: {e}]"

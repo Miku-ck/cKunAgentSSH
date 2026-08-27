@@ -43,6 +43,10 @@ class FileChange:
 # ── 内存缓存：run_id -> {abs_path -> FileChange} ──
 # 同一次运行内对同一文件的多次写入会合并（保留最终 diff）
 _PENDING: dict[str, dict[str, FileChange]] = {}
+# 修复：记录每个 run_id 的最后访问时间，用于 TTL 自动清理
+_PENDING_ACCESS_TIME: dict[str, float] = {}
+_PENDING_TTL = 3600  # 1 小时后自动清理（秒）
+import time as _time_module
 
 
 def _read_file_lines(path: str) -> list[str]:
@@ -139,6 +143,8 @@ def record_file_write(
 
         with _LOCK:
             run_map = _PENDING.setdefault(agent_run_id, {})
+            # 修复：更新最后访问时间，用于 TTL 自动清理
+            _PENDING_ACCESS_TIME[agent_run_id] = _time_module.time()
             # 同一次运行多次写同一文件：合并 diff（取最大累计值）
             if abs_path in run_map:
                 prev = run_map[abs_path]
@@ -219,6 +225,22 @@ def clear_file_changes(agent_run_id: str) -> None:
     """清理某次运行的内存缓存（运行结束后调用）"""
     with _LOCK:
         _PENDING.pop(agent_run_id, None)
+        _PENDING_ACCESS_TIME.pop(agent_run_id, None)
+
+
+def _cleanup_expired_pending() -> None:
+    """清理过期的 _PENDING 条目（TTL 自动清理）"""
+    now = _time_module.time()
+    with _LOCK:
+        expired = [
+            run_id for run_id, last_access in _PENDING_ACCESS_TIME.items()
+            if now - last_access > _PENDING_TTL
+        ]
+        for run_id in expired:
+            _PENDING.pop(run_id, None)
+            _PENDING_ACCESS_TIME.pop(run_id, None)
+        if expired:
+            logger.debug("[file_changes] 自动清理 %d 条过期记录", len(expired))
 
 
 def get_file_changes_summary(agent_run_id: str) -> dict:

@@ -361,6 +361,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
         model_cfg.get("max_tokens"),
         _prompt_chars,
         model_cfg.get("max_output_tokens"),
+        model_cfg.get("reasoning_tokens"),
     )
     _evo = _resolve_evolution_config(req, model_cfg, _safe_max, evolution_mgr)
     effective_thinking = _evo["thinking"]
@@ -447,6 +448,8 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     temperature=effective_temperature,
                     # H13 修复 C7：应用演化后的 max_tokens（原实现硬编码 _safe_max）
                     max_tokens=effective_max_tokens,
+                    # 推理/思考内容的 token 预算上限（来自模型配置，作为意图识别预算的上限）
+                    max_reasoning_tokens=model_cfg.get("reasoning_tokens"),
                     enable_thinking=effective_thinking,
                     enable_tools=effective_enable_tools,
                     enable_intention_guide=req.enable_intention_guide,

@@ -289,6 +289,9 @@ async function queryAIPredictions(
   }
 }
 
+// 修复：请求序号，用于取消过期请求（避免快速输入时旧请求覆盖新请求）
+let _completionRequestId = 0
+
 /**
  * 查询补全候选
  * @param side 'local' | 'remote'
@@ -306,6 +309,9 @@ export async function queryCompletion(
 ): Promise<CompletionCandidate[]> {
   const api = window.electronAPI
   if (!api) return []
+
+  // 修复：生成请求序号，用于取消过期请求
+  const requestId = ++_completionRequestId
 
   try {
     let stdout: string
@@ -410,8 +416,15 @@ export async function queryCompletion(
       candidates.push(...aiCandidates)
     }
 
+    // 修复：请求序号检查，如果已有更新的请求发出，丢弃本次结果
+    if (requestId !== _completionRequestId) {
+      return []
+    }
+
     return candidates
-  } catch {
+  } catch (e) {
+    // 修复：记录错误日志，便于排查 IPC 通信失败等问题
+    console.debug('[queryCompletion] failed:', e)
     return []
   }
 }

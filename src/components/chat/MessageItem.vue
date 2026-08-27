@@ -104,11 +104,11 @@ function copyContent(text: string) {
 .message-block.user .message-bubble {
   width: 100%;
   max-width: 100%;
-  padding: 4px 14px;
-  background: var(--bg-active);
+  padding: 10px 14px;
+  background: transparent;
   color: var(--text-primary);
-  border: 1px solid var(--border-default);
-  border-radius: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
 }
 
 .message-block.assistant .message-bubble {

@@ -164,22 +164,53 @@ _LEVEL_GUIDE: dict[IntentionLevel, str] = {
 }
 
 
-def classify(task: str) -> IntentionResult:
+def _compute_effective_budgets(max_budget: Optional[int]) -> dict[IntentionLevel, Optional[int]]:
+    """
+    根据模型配置的 reasoning_tokens 上限，动态计算各等级的有效预算。
+
+    策略：
+    - 当 max_budget 未设置或较小时（<= 4096），使用默认的固定预算
+    - 当 max_budget 较大时（如 262144），按比例放大各等级预算：
+      - trivial: min(256, max_budget * 0.1%)
+      - simple: min(512, max_budget * 0.2%)
+      - moderate: max_budget * 5%
+      - complex: max_budget * 50%（允许深度推理）
+      - debug: max_budget * 10%
+    """
+    if not max_budget or max_budget <= 4096:
+        return _LEVEL_BUDGET
+
+    # 大预算模型：按比例分配
+    return {
+        IntentionLevel.TRIVIAL: min(256, max(128, int(max_budget * 0.001))),
+        IntentionLevel.SIMPLE: min(512, max(256, int(max_budget * 0.002))),
+        IntentionLevel.MODERATE: max(2048, int(max_budget * 0.05)),
+        IntentionLevel.COMPLEX: max(4096, int(max_budget * 0.5)),  # 复杂任务可用 50% 预算
+        IntentionLevel.DEBUG: max(1024, int(max_budget * 0.1)),
+    }
+
+
+def classify(task: str, max_budget: Optional[int] = None) -> IntentionResult:
     """
     意图识别主入口
 
     Args:
         task: 用户原始任务文本
+        max_budget: 模型配置的 reasoning_tokens 上限，用于动态调整各等级预算
 
     Returns:
         IntentionResult: 包含 level/task_type/budget/allow_planning/guide_prompt
     """
+    # 动态预算：当模型配置了较大的 reasoning_tokens 时，按比例放大各等级预算
+    # 对于 1M 上下文模型（reasoning_tokens=262144），complex 任务可使用 131072 tokens
+    effective_budget = _compute_effective_budgets(max_budget)
+
     if not task or not task.strip():
         # 空任务兜底为 trivial
         return IntentionResult(
             level=IntentionLevel.TRIVIAL,
             task_type=TaskType.QUERY,
-            reasoning_budget=_LEVEL_BUDGET[IntentionLevel.TRIVIAL],
+            reasoning_budget=effective_budget[IntentionLevel.TRIVIAL],
             allow_planning_phase=False,
             guide_prompt=_LEVEL_GUIDE[IntentionLevel.TRIVIAL],
             confidence=0.3,
@@ -210,7 +241,7 @@ def classify(task: str) -> IntentionResult:
         return IntentionResult(
             level=IntentionLevel.TRIVIAL,
             task_type=TaskType.CONVERSATION,
-            reasoning_budget=_LEVEL_BUDGET[IntentionLevel.TRIVIAL],
+            reasoning_budget=effective_budget[IntentionLevel.TRIVIAL],
             allow_planning_phase=False,
             guide_prompt=(
                 "思考预算：本任务为纯对话型问题，思考应极简（< 256 tokens）。"
@@ -324,7 +355,7 @@ def classify(task: str) -> IntentionResult:
     allow_planning = (level == IntentionLevel.COMPLEX and task_type != TaskType.DEBUG)
 
     # ── 4. 取预算 ──
-    budget = _LEVEL_BUDGET.get(level)
+    budget = effective_budget.get(level)
 
     # ── 5. 拼装引导语 ──
     guide = _LEVEL_GUIDE[level]
@@ -469,6 +500,7 @@ def reclassify(
     tool_calls_log: list[dict],
     errors: list[str],
     max_iterations: int,
+    max_budget: Optional[int] = None,
 ) -> IntentionResult:
     """
     动态重分类 — 根据已积累的执行上下文重新评估意图等级
@@ -479,9 +511,13 @@ def reclassify(
     - 执行顺畅、工具调用少 → 任务比预期简单，降级
     - 接近末尾且无输出 → 提升紧急度
 
+    Args:
+        max_budget: 模型配置的 reasoning_tokens 上限，用于动态调整预算
+
     Returns:
         更新后的 IntentionResult（如果无需变化则返回原对象）
     """
+    effective_budget = _compute_effective_budgets(max_budget)
     total_tool_calls = len(tool_calls_log)
     failed_calls = sum(1 for e in tool_calls_log if e.get("success") is False)
     recent_failures = sum(
@@ -499,13 +535,13 @@ def reclassify(
     # 连续失败 ≥ 3 次：任务比预期复杂
     if recent_failures >= 3 and level in (IntentionLevel.TRIVIAL, IntentionLevel.SIMPLE):
         level = IntentionLevel.MODERATE
-        budget = _LEVEL_BUDGET[level]
+        budget = effective_budget[level]
         guide = _LEVEL_GUIDE[level]
         confidence = max(confidence - 0.1, 0.5)
         changed = True
     elif recent_failures >= 4 and level == IntentionLevel.MODERATE:
         level = IntentionLevel.DEBUG
-        budget = _LEVEL_BUDGET[level]
+        budget = effective_budget[level]
         guide = _LEVEL_GUIDE[level]
         confidence = max(confidence - 0.1, 0.5)
         changed = True
@@ -514,7 +550,7 @@ def reclassify(
     if iteration > 0 and total_tool_calls / max(iteration, 1) > 2.5:
         if level in (IntentionLevel.TRIVIAL, IntentionLevel.SIMPLE):
             level = IntentionLevel.MODERATE
-            budget = _LEVEL_BUDGET[level]
+            budget = effective_budget[level]
             guide = _LEVEL_GUIDE[level]
             changed = True
 
@@ -529,7 +565,7 @@ def reclassify(
         new_level = _decrease_level(level)
         if new_level != level:
             level = new_level
-            budget = _LEVEL_BUDGET.get(level, budget)
+            budget = effective_budget.get(level, budget)
             guide = _LEVEL_GUIDE.get(level, guide)
             changed = True
 

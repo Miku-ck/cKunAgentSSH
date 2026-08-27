@@ -94,7 +94,7 @@ export const useSettingsStore = defineStore('settings', () => {
     chat: {
       sendShortcut: saved?.chat?.sendShortcut ?? 'enter',
       streaming: saved?.chat?.streaming ?? true,
-      thinkingExpanded: saved?.chat?.thinkingExpanded ?? false,
+      thinkingExpanded: saved?.chat?.thinkingExpanded ?? true,
       autoScroll: saved?.chat?.autoScroll ?? true,
       messageFontSize: saved?.chat?.messageFontSize ?? 13,
       codeTheme: saved?.chat?.codeTheme ?? 'github-dark',

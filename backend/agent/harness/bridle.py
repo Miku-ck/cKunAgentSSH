@@ -146,9 +146,10 @@ class Bridle:
         # 3.5 上下文摘要注入（压缩后保留的早期 run 对话摘要）
         # 置于 history 之后、近期 run 之前：摘要浓缩的是本轮早期 run 消息，
         # 时间上位于 history 之后，顺序符合时间线。
+        # 修复：使用 "user" 角色而非 "system"，避免 system 消息不在开头触发 400 错误
         summary = ctx.metadata.get("context_summary")
         if summary:
-            messages.append({"role": "system", "content": summary})
+            messages.append({"role": "user", "content": f"[上下文摘要]\n{summary}"})
 
         # 4. 当前运行累积的消息（含 task / assistant / tool / 拦截器注入的 system 纠偏消息）
         for msg in ctx.messages:
@@ -306,8 +307,9 @@ class Bridle:
                     name = tc.get("function", {}).get("name", "?")
                     summary_parts.append(f"[assistant] 调用工具: {name}")
 
+        # 修复：使用 "user" 角色而非 "system"，避免 system 消息不在开头触发 400 错误
         summary_text = "以下是之前对话的摘要:\n" + "\n".join(summary_parts)
-        summary_msg = {"role": "system", "content": summary_text}
+        summary_msg = {"role": "user", "content": summary_text}
 
         return self._strip_tool_priority(system_msgs + [summary_msg] + recent_msgs)
 

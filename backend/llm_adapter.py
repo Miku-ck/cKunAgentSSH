@@ -8,6 +8,7 @@ LLM 适配器 — OpenAI 兼容异步流式客户端
 """
 import json
 import logging
+import httpx
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import AsyncGenerator
@@ -23,7 +24,7 @@ _CLIENT_CACHE_MAX = 8  # 最大缓存客户端数
 _client_cache: "OrderedDict[tuple[str, str], openai.AsyncOpenAI]" = OrderedDict()
 
 
-def _get_client(base_url: str, api_key: str) -> openai.AsyncOpenAI:
+async def _get_client(base_url: str, api_key: str) -> openai.AsyncOpenAI:
     """获取共享的 AsyncOpenAI 客户端（LRU 缓存，最多保留 _CLIENT_CACHE_MAX 个）"""
     key = (base_url, api_key or "EMPTY")
     client = _client_cache.get(key)
@@ -35,12 +36,19 @@ def _get_client(base_url: str, api_key: str) -> openai.AsyncOpenAI:
     client = openai.AsyncOpenAI(
         api_key=api_key or "EMPTY",
         base_url=base_url,
-        timeout=120.0,
+        # 修复：分别配置连接超时和读取超时，流式输出时读取超时可能过短
+        timeout=httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0),
     )
     _client_cache[key] = client
-    # 超容量时淘汰最久未使用的（AsyncOpenAI 的 __del__ 会处理连接池清理）
+    # 超容量时淘汰最久未使用的
     if len(_client_cache) > _CLIENT_CACHE_MAX:
-        _client_cache.popitem(last=False)
+        evicted = _client_cache.popitem(last=False)[1]
+        # 修复：显式关闭被淘汰客户端的 httpx 连接池，避免连接泄漏
+        try:
+            if hasattr(evicted, '_client') and hasattr(evicted._client, 'aclose'):
+                await evicted._client.aclose()
+        except Exception:
+            pass  # 关闭失败时依赖 GC 回收
     return client
 
 
@@ -114,7 +122,7 @@ async def chat_stream(
             None 表示不限制；用于意图识别后的思考预算控制
     """
     # H5 修复：复用共享客户端
-    client = _get_client(base_url, api_key)
+    client = await _get_client(base_url, api_key)
 
     extra_body: dict = {}
     if enable_thinking:

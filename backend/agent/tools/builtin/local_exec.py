@@ -69,7 +69,7 @@ class LocalExecTool(BaseTool):
         risk_level="moderate",
         reversible=False,
         timeout=30.0,
-        mode_scope=["ssh"],
+        mode_scope=["ide"],  # IDE 模式专属（与文档描述一致）
         cacheable=False,
     )
 

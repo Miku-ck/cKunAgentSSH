@@ -277,7 +277,13 @@ class ShellUndo:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            await proc.wait()
+            # 修复：添加超时防止反向命令挂起导致回滚流程永久阻塞
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=10.0)
+            except asyncio.TimeoutError:
+                logger.warning("ShellUndo 超时，强制终止: %s", self.reverse_command)
+                proc.kill()
+                await proc.wait()
         except Exception as e:
             logger.warning("ShellUndo 失败 %s: %s", self.reverse_command, e)
 

@@ -790,28 +790,32 @@ class PostProcessManager:
 
         import uuid
         task_id = uuid.uuid4().hex
-        # 先注册 done callback 再 create_task，避免任务在 add_done_callback 之前
-        # 完成导致 callback 永不触发、_tasks 字典泄漏完成的 Task 引用
-        # （_discard 用 pop(..., None) 容忍 callback 早于 dict put 触发的情况）
+
+        # 修复竞态条件：create_task + add_done_callback + 存储必须在同一个锁内完成
+        # 否则任务可能在锁外完成，_discard 移除占位后 task 引用丢失，shutdown() 无法等待
         async with self._lock:
             # 占位 None 防止 callback 先触发时 _discard 找不到 key
             self._tasks[task_id] = None  # type: ignore[assignment]
-        task = asyncio.create_task(self._run_with_timeout(
-            mode, conversation_id, user_message,
-            assistant_content, assistant_reasoning,
-            model_id, turn_index,
-        ))
-        task.add_done_callback(lambda _: self._discard(task_id))
-        async with self._lock:
-            # 任务已完成时不要覆盖（_discard 已移除占位）
-            if task_id in self._tasks and self._tasks[task_id] is None:
-                self._tasks[task_id] = task
+            task = asyncio.create_task(self._run_with_timeout(
+                mode, conversation_id, user_message,
+                assistant_content, assistant_reasoning,
+                model_id, turn_index,
+            ))
+            task.add_done_callback(lambda _: self._discard(task_id))
+            self._tasks[task_id] = task
         return task_id
 
     def _discard(self, task_id: str) -> None:
         """从 _tasks 中移除已完成的任务"""
         # 同步回调，不能 await
-        self._tasks.pop(task_id, None)
+        # 修复：使用 call_soon_threadsafe 确保线程安全（虽然 asyncio 是单线程的，
+        # 但 add_done_callback 可能在其他线程的任务完成时被调用）
+        try:
+            loop = asyncio.get_running_loop()
+            loop.call_soon_threadsafe(self._tasks.pop, task_id, None)
+        except RuntimeError:
+            # 无运行中的事件循环，直接操作
+            self._tasks.pop(task_id, None)
 
     async def _run_with_timeout(
         self,
@@ -886,3 +890,21 @@ def init_post_process_manager(config: Optional[PostProcessConfig] = None) -> Pos
     global _manager
     _manager = PostProcessManager(config)
     return _manager
+
+
+def load_post_process_config_from_db() -> PostProcessConfig:
+    """从数据库加载后处理配置，若无记录则返回默认配置"""
+    from database import get_app_setting
+
+    def _bool(key: str, default: bool) -> bool:
+        v = get_app_setting(key)
+        if v is None:
+            return default
+        return v.lower() == "true"
+
+    return PostProcessConfig(
+        enabled=_bool("post_process.enabled", True),
+        generate_title=_bool("post_process.generate_title", True),
+        extract_memory=_bool("post_process.extract_memory", True),
+        generate_skill=_bool("post_process.generate_skill", True),
+    )

@@ -15,6 +15,9 @@ const ACCENT_MAP: Record<Accent, { hex: string; rgb: string }> = {
   white:  { hex: '#ffffff', rgb: '255, 255, 255' },
 }
 
+// 修复：模块级标记，确保 darkMq 监听器只添加一次（多实例共享场景）
+let _systemThemeListenerAdded = false
+
 export function useAppearance() {
   const store = useSettingsStore()
   const root = document.documentElement
@@ -30,7 +33,11 @@ export function useAppearance() {
   }
 
   const systemHandler = () => applySystemTheme()
-  darkMq.addEventListener('change', systemHandler)
+  // 修复：仅在首次调用时添加监听器，避免多实例场景下重复添加
+  if (!_systemThemeListenerAdded) {
+    darkMq.addEventListener('change', systemHandler)
+    _systemThemeListenerAdded = true
+  }
 
   // ── 主题 ──
   function applyTheme(theme: Theme) {

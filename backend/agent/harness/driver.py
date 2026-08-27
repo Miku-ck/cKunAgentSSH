@@ -62,12 +62,20 @@ class Driver:
         # ── 意图识别（在 agent_start 后、主循环前）──
         # 根据 task 文本推断复杂度等级，设置 max_reasoning_tokens + allow_planning_phase
         # 后续每轮 LLM 调用前会基于 iteration 动态调整预算并注入引导语
+        # 模型配置的 reasoning_tokens 作为上限，意图识别的预算不能超过该值
         intention = None
+        model_max_reasoning = ctx.config.max_reasoning_tokens  # 保存模型配置的上限
         if ctx.config.enable_intention_guide:
             try:
                 from agent.intention import classify as classify_intention
-                intention = classify_intention(ctx.task)
-                ctx.config.max_reasoning_tokens = intention.reasoning_budget
+                intention = classify_intention(ctx.task, max_budget=model_max_reasoning)
+                # 意图识别的预算不能超过模型配置的上限
+                if intention.reasoning_budget is not None and model_max_reasoning is not None:
+                    ctx.config.max_reasoning_tokens = min(intention.reasoning_budget, model_max_reasoning)
+                elif model_max_reasoning is not None:
+                    ctx.config.max_reasoning_tokens = model_max_reasoning
+                else:
+                    ctx.config.max_reasoning_tokens = intention.reasoning_budget
                 ctx.config.allow_planning_phase = intention.allow_planning_phase
                 ctx.metadata["intention"] = intention.to_dict()
                 logger.info(
@@ -125,6 +133,7 @@ class Driver:
                         tool_calls_log=ctx.tool_calls_log,
                         errors=ctx.errors,
                         max_iterations=ctx.config.max_iterations,
+                        max_budget=model_max_reasoning,
                     )
                     if new_intention is not intention:
                         old_level = intention.level.value
@@ -155,10 +164,11 @@ class Driver:
             remaining = ctx.config.max_iterations - (iteration + 1)
             if remaining <= 2 and not ctx.metadata.get("final_summary_hint_sent"):
                 ctx.metadata["final_summary_hint_sent"] = True
+                # 修复：使用 "user" 角色而非 "system"，避免添加到消息末尾时触发 400 错误
                 ctx.messages.append({
-                    "role": "system",
+                    "role": "user",
                     "content": (
-                        f"[提示] 你还剩 {remaining + 1} 轮迭代机会。"
+                        f"[系统提示] 你还剩 {remaining + 1} 轮迭代机会。"
                         "如果任务尚未完成，请直接在下一轮生成当前进度总结和后续建议，"
                         "不要再调用新工具，避免最终没有输出。"
                     ),
@@ -198,9 +208,9 @@ class Driver:
                     ctx.config.max_reasoning_tokens = get_reasoning_budget_for_iteration(
                         intention, iteration,
                     )
-                    # 引导语作为 system 消息追加到 messages 末尾（不影响持久化的 ctx.messages）
+                    # 修复：引导语使用 "user" 角色而非 "system"，避免添加到消息末尾时触发 400 错误
                     if guide:
-                        messages.append({"role": "system", "content": guide})
+                        messages.append({"role": "user", "content": f"[意图引导] {guide}"})
                 except Exception as e:
                     logger.warning("意图引导注入失败（跳过）: %s", e)
 
@@ -266,10 +276,11 @@ class Driver:
                     error_list = "\n".join(
                         f"  - {e['path']}: {e['error']}" for e in seen_paths.values()
                     )
+                    # 修复：使用 "user" 角色而非 "system"，避免添加到消息末尾时触发 400 错误
                     ctx.messages.append({
-                        "role": "system",
+                        "role": "user",
                         "content": (
-                            f"[Verification Gate] 任务尚未通过验证，以下文件存在语法错误：\n{error_list}\n"
+                            f"[验证门] 任务尚未通过验证，以下文件存在语法错误：\n{error_list}\n"
                             f"请先修复上述语法错误，确保所有文件可运行后再结束任务。"
                         ),
                     })
@@ -292,8 +303,9 @@ class Driver:
                     max_per_turn, len(deferred),
                 )
                 # 注入提示：告诉 LLM 还有工具未执行，下轮继续
+                # 修复：使用 "user" 角色而非 "system"，避免添加到消息末尾时触发 400 错误
                 ctx.messages.append({
-                    "role": "system",
+                    "role": "user",
                     "content": (
                         f"[工具调用纪律] 你本轮请求了 {len(llm_out.tool_calls) + len(deferred)} 个工具调用，"
                         f"但系统限制每轮最多执行 {max_per_turn} 个。"
@@ -313,7 +325,8 @@ class Driver:
                     if detect_batch_reading(llm_out.tool_calls, threshold=3):
                         read_names = [tc.name for tc in llm_out.tool_calls]
                         guide = get_progressive_gathering_guide(read_names, iteration)
-                        ctx.messages.append({"role": "system", "content": guide})
+                        # 修复：使用 "user" 角色而非 "system"，避免添加到消息末尾时触发 400 错误
+                        ctx.messages.append({"role": "user", "content": f"[渐进收集] {guide}"})
                         logger.info("检测到批量读取，已注入渐进收集引导")
                 except Exception as e:
                     logger.warning("渐进收集检测失败: %s", e)
