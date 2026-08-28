@@ -2,9 +2,12 @@
 对话路由 — SSE 流式聊天 + 会话 CRUD
 """
 import asyncio
+import re
 from typing import Optional, Literal
+import uuid
+from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, File, UploadFile, Form
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -28,14 +31,86 @@ HEARTBEAT_INTERVAL = 15  # 秒
 # ── Request / Response Models ──
 
 
+class AttachmentItem(BaseModel):
+    """对话附件 — 由 /chat/upload 上传后返回，随消息一并发送"""
+    file_id: str = ""
+    filename: str = ""
+    content: str = Field("", max_length=MAX_ATTACHMENT_CHARS)
+
+
 class StreamChatRequest(BaseModel):
-    message: str = Field(..., min_length=1, max_length=50000)
+    message: str = Field("", max_length=50000)  # 可空：仅当带 attachments 时允许空消息
     conversation_id: str
     model_id: str = ""  # 空字符串：触发 mode 兜底逻辑选择默认模型
     enable_thinking: bool = False
     system_prompt: Optional[str] = None  # 前端上下文提示词（文件/SSH 信息等）
     mode: Literal["ssh"] = "ssh"
     context_window: Optional[int] = None  # 历史消息条数上限，None 时用默认 20
+    attachments: list[AttachmentItem] = []  # 附带文件（上传接口返回的内容）
+
+
+# ── 文件上传 ──
+# 仅允许文本类扩展名（作为 LLM 上下文）；二进制/图片请走其他渠道
+ALLOWED_UPLOAD_EXTS = {
+    ".txt", ".log", ".md", ".markdown", ".json", ".yaml", ".yml", ".toml",
+    ".ini", ".cfg", ".conf", ".env", ".properties", ".xml", ".csv", ".tsv",
+    ".sql", ".py", ".sh", ".bash", ".zsh", ".ps1", ".bat", ".cmd",
+    ".js", ".ts", ".jsx", ".tsx", ".vue", ".css", ".scss", ".less", ".html", ".htm",
+    ".java", ".go", ".rs", ".c", ".h", ".cpp", ".hpp", ".cs", ".php",
+    ".rb", ".pl", ".kt", ".swift", ".gradle", ".makefile", ".dockerfile",
+}
+MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_ATTACHMENT_CHARS = 50_000  # 注入上下文的文本上限
+
+
+def _uploads_root() -> Path:
+    """上传文件根目录：与数据库同目录下的 uploads/（跨重装稳定）"""
+    return Path(db._db_path).parent / "uploads"
+
+
+@router.post("/chat/upload")
+async def upload_chat_file(
+    file: UploadFile = File(...),
+    conversation_id: str = Form(""),
+):
+    """上传对话附件（文本类文件），返回内容供前端随消息注入 LLM 上下文"""
+    raw_name = file.filename or "unnamed"
+    # 消毒文件名：去掉路径分隔符，最长 120 字符
+    safe_name = raw_name.replace("\\", "/").split("/")[-1][:120].strip() or "unnamed"
+    suffix = Path(safe_name).suffix.lower()
+    if suffix not in ALLOWED_UPLOAD_EXTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的文件类型 '{suffix or safe_name}'，仅支持文本类文件（txt/log/md/代码/配置等）",
+        )
+
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=413, detail="文件超过 10MB 上限")
+    if len(data) == 0:
+        raise HTTPException(status_code=400, detail="文件内容为空")
+
+    file_id = uuid.uuid4().hex
+    # 消毒 conversation_id：仅保留字母数字/连字符/下划线，防止路径穿越；空则兜底 "general"
+    safe_conv = re.sub(r"[^A-Za-z0-9_\-]", "", conversation_id or "") or "general"
+    conv_dir = _uploads_root() / safe_conv
+    conv_dir.mkdir(parents=True, exist_ok=True)
+    dest = conv_dir / f"{file_id[:8]}_{safe_name}"
+    dest.write_bytes(data)
+
+    text = data.decode("utf-8", errors="replace")
+    truncated = len(text) > MAX_ATTACHMENT_CHARS
+    if truncated:
+        text = text[:MAX_ATTACHMENT_CHARS]
+
+    return {
+        "file_id": file_id,
+        "filename": safe_name,
+        "size": len(data),
+        "content": text,
+        "truncated": truncated,
+        "conversation_id": conversation_id,
+    }
 
 
 class CreateConversationRequest(BaseModel):
@@ -53,6 +128,9 @@ class UpdateTitleRequest(BaseModel):
 @router.post("/chat/stream")
 async def stream_chat(req: StreamChatRequest, request: Request):
     """SSE 流式对话 — 对接 vLLM"""
+    # 消息为空且无附件时拒绝（允许"仅上传附件"的空消息请求）
+    if not req.message.strip() and not req.attachments:
+        raise HTTPException(status_code=400, detail="消息内容为空")
     # ── 按 mode 选择默认模型（兜底）──
     effective_model_id = req.model_id
     if not effective_model_id:
@@ -89,7 +167,16 @@ async def stream_chat(req: StreamChatRequest, request: Request):
     messages = [{"role": "system", "content": system_prompt}]
     for m in history:
         messages.append({"role": m["role"], "content": m["content"]})
-    messages.append({"role": "user", "content": req.message})
+
+    # 组装用户消息：附带文件以 "[附件: 文件名]\n内容" 形式拼入上下文，
+    # 使 LLM 可读取文件内容，且历史存库后仍可回看附件文本
+    user_content = req.message
+    if req.attachments:
+        parts = [req.message] if req.message.strip() else []
+        for att in req.attachments:
+            parts.append(f"[附件: {att.filename}]\n{att.content}")
+        user_content = "\n\n".join(parts)
+    messages.append({"role": "user", "content": user_content})
 
     # 从模型配置读取推理参数；max_tokens 做安全封顶避免 400
     temperature = model_cfg.get("temperature") if model_cfg.get("temperature") is not None else 0.7
@@ -107,7 +194,6 @@ async def stream_chat(req: StreamChatRequest, request: Request):
             model=model_cfg.get("model_id") or model_cfg["id"],
             messages=messages,
             conversation_id=req.conversation_id,
-            user_message=req.message,
             model_id=req.model_id,
             mode=req.mode,
             enable_thinking=req.enable_thinking and model_cfg["supports_thinking"],
@@ -115,6 +201,7 @@ async def stream_chat(req: StreamChatRequest, request: Request):
             top_p=top_p,
             max_tokens=max_tokens,
             request=request,
+            user_message=user_content,
         ),
         media_type="text/event-stream",
         headers={

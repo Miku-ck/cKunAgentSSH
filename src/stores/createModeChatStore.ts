@@ -6,7 +6,7 @@
 import { computed, triggerRef, watch, ref } from 'vue'
 import type { Ref, ComputedRef, ShallowRef } from 'vue'
 import { defineStore } from 'pinia'
-import { api } from '@/api/client'
+import { api, type ChatAttachment } from '@/api/client'
 import type { ModelConfig } from '@/api/client'
 import type { ModeConfig, ChatMode, BaseMessage, BaseConversation } from '@/types/chat'
 import { useChatPersistence } from '@/composables/useChatPersistence'
@@ -107,7 +107,7 @@ export interface ModeChatStore<
   createConversation: (title?: string) => Promise<TConversation>
   switchConversation: (id: string, loadMessages?: (conv: TConversation) => Promise<void>) => Promise<void>
   deleteConversation: (id: string) => Promise<void>
-  sendMessage: (content: string, options?: { context?: TContext; systemPrompt?: string; skillIds?: string[] }) => Promise<void>
+  sendMessage: (content: string, options?: { context?: TContext; systemPrompt?: string; skillIds?: string[]; attachments?: ChatAttachment[] }) => Promise<void>
   abortStream: () => void
   /** 当前 Agent 模式开关（全局状态，影响新消息发送路径） */
   agentMode: Ref<boolean>
@@ -261,9 +261,12 @@ export function createModeChatStore<
     context?: TContext
     systemPrompt?: string
     skillIds?: string[]
+    attachments?: ChatAttachment[]
   }) {
     // M5 修复：原子检查+加锁，消除 streaming 守卫与 startStream 之间的竞态窗口
-    if (_sendLock || stream.streaming.value || !content.trim()) return
+    if (_sendLock || stream.streaming.value) return
+    // 允许"仅附件"的空消息（attachments 已注入上下文时）
+    if (!content.trim() && !(options?.attachments && options.attachments.length > 0)) return
     _sendLock = true
     try {
       const appStore = useAppStore()
@@ -373,6 +376,7 @@ export function createModeChatStore<
         content,
         conversation: conv,
         systemPrompt,
+        attachments: options?.attachments,
         onContent: (msg, token) => {
           msg.streamingContent = (msg.streamingContent || '') + token
           scheduleRender()

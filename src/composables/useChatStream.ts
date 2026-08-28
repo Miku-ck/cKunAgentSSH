@@ -1,6 +1,6 @@
 // src/composables/useChatStream.ts
 import { ref, onUnmounted } from 'vue'
-import { streamChat } from '@/api/client'
+import { streamChat, type ChatAttachment } from '@/api/client'
 import type { ModelConfig } from '@/api/client'
 import type { BaseConversation, BaseMessage, ChatMode } from '@/types/chat'
 import { useSettingsStore } from '@/stores/settings'
@@ -17,6 +17,7 @@ export interface StartStreamParams<
   content: string
   conversation: C
   systemPrompt?: string
+  attachments?: ChatAttachment[]
   onContent?: (msg: M, token: string) => void
   onReasoning?: (msg: M, token: string) => void
   onError?: (msg: M, err: string, duration: number) => void
@@ -31,7 +32,7 @@ export function useChatStream(options: UseChatStreamOptions) {
   async function startStream<M extends BaseMessage, C extends BaseConversation<M>>(
     params: StartStreamParams<M, C>,
   ): Promise<boolean> {
-    const { content, conversation, systemPrompt, onContent, onReasoning, onError, onDone } = params
+    const { content, conversation, systemPrompt, attachments, onContent, onReasoning, onError, onDone } = params
     const model = getModel()
     if (!model) return false
 
@@ -67,6 +68,8 @@ export function useChatStream(options: UseChatStreamOptions) {
       mode,
       // 上下文窗口：透传用户设置到后端，覆盖默认 limit=20
       contextWindow: settingsStore.settings.chat.contextWindow,
+      // 附带文件：随用户消息注入 LLM 上下文
+      attachments,
       onContent: (token) => {
         const last = conv.messages[conv.messages.length - 1]
         if (!last || last.role !== 'assistant') return

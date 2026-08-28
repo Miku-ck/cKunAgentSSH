@@ -23,6 +23,7 @@
     @delete-conversation="handleDeleteConv"
     @abort="handleAbort"
     @update:selected-model-id="store.setSelectedModel($event)"
+    :upload-handler="handleUploadFiles"
   >
 
     <template #agent-panel>
@@ -42,6 +43,7 @@ import { useChatStore } from '@/stores/chat'
 import { useAgentIntegration } from '@/composables/useAgentIntegration'
 import SideChatPanel from '@/components/chat/SideChatPanel.vue'
 import AgentRunPanel from '@/components/agent/AgentRunPanel.vue'
+import type { ChatAttachment } from '@/api/client'
 
 defineEmits<{ close: [] }>()
 
@@ -57,8 +59,13 @@ function handleAbort() {
   agentHandleAbort(() => store.abortStream())
 }
 
-async function handleSend(content: string, skillIds: string[] = []) {
-  await store.sendMessage(content, { skillIds })
+async function handleSend(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = []) {
+  await store.sendMessage(content, { skillIds, attachments })
+}
+
+/** 上传对话附件：委托给 store（内部会逐个调用 /chat/upload 并 toast 失败） */
+async function handleUploadFiles(files: File[]): Promise<ChatAttachment[]> {
+  return store.uploadFiles(files)
 }
 
 // 新建对话防重复提交

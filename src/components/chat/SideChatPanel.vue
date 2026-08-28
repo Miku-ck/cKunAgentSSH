@@ -95,6 +95,20 @@
           </span>
         </div>
 
+        <!-- 已选附件（上传文件，随消息注入 AI 上下文） -->
+        <div v-if="pendingFiles.length > 0" class="pending-files">
+          <span v-for="att in pendingFiles" :key="att.file_id" class="tag-file" :title="att.truncated ? '文件较大，已截断前 50K 字符注入' : ''">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="9" height="9"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            <span class="file-name">{{ att.filename }}</span>
+            <span v-if="att.size" class="file-size">{{ formatFileSize(att.size) }}</span>
+            <button class="tag-remove" @click="removePendingFile(att.file_id)" title="移除文件">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="8" height="8">
+                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
+          </span>
+        </div>
+
         <textarea
           ref="inputRef"
           v-model="inputText"
@@ -137,6 +151,25 @@
       <!-- 工具栏 -->
       <div class="input-toolbar">
         <div class="toolbar-left">
+          <!-- 上传文件附件 -->
+          <button
+            v-if="uploadHandler"
+            class="toolbar-btn upload-btn"
+            :disabled="uploading || streaming || agentRunning"
+            :title="uploading ? '上传中...' : (streaming || agentRunning) ? '当前响应中，请稍后再上传' : '上传文件（文本类，单文件 ≤ 10MB）'"
+            @click="handleUploadClick"
+          >
+            <svg v-if="!uploading" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            <svg v-else class="spinner" viewBox="0 0 24 24" fill="none" width="13" height="13"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.25"/><path d="M22 12a10 10 0 0 0-10-10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+          </button>
+          <input
+            ref="fileInputRef"
+            type="file"
+            multiple
+            class="hidden-file-input"
+            :disabled="streaming || agentRunning"
+            @change="handleFileChange"
+          />
           <button
             v-if="showAgentToggle"
             class="toolbar-btn agent-toggle"
@@ -144,12 +177,6 @@
             :title="agentMode ? 'Agent 模式已开启 — AI 可自主调用工具' : '开启 Agent 模式 — AI 可自主调用工具'"
             @click="emit('update:agentMode', !agentMode)"
           >
-            <svg class="agent-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14">
-              <rect x="6" y="8" width="12" height="10" rx="2"/>
-              <circle cx="10" cy="13" r="1.2"/>
-              <circle cx="14" cy="13" r="1.2"/>
-              <path d="M9 8V6a3 3 0 0 1 6 0v2"/>
-            </svg>
             <span class="agent-label">Agent</span>
           </button>
           <slot name="toolbar-left"></slot>
@@ -180,9 +207,9 @@
           <button
             v-if="!streaming && !agentRunning"
             class="send-btn"
-            :disabled="!inputText.trim()"
+            :disabled="!canSend"
             @click="handleSend"
-            title="发送"
+            :title="canSend ? '发送' : '请输入内容或添加附件后再发送'"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="12" y1="19" x2="12" y2="5"/>
@@ -209,9 +236,12 @@ import AgentTraceInline from '@/components/agent/AgentTraceInline.vue'
 import { useAgentStore } from '@/stores/agent'
 import { useSettingsStore } from '@/stores/settings'
 import { useSkillStore } from '@/stores/skills'
+import { useToastStore } from '@/stores/toast'
+import type { ChatAttachment } from '@/api/client'
 
 const settingsStore = useSettingsStore()
 const skillStore = useSkillStore()
+const toast = useToastStore()
 
 // ── 消息接口（兼容 ModeMessage 和 MessageItem 的 ChatMessage） ──
 interface DisplayMsg {
@@ -249,11 +279,13 @@ const props = defineProps<{
   placeholder?: string
   emptyTitle?: string
   emptyDesc?: string
+  /** 上传处理函数：由父组件注入（返回上传成功的附件列表）；未注入则不显示上传入口 */
+  uploadHandler?: (files: File[]) => Promise<ChatAttachment[]>
 }>()
 
 const emit = defineEmits<{
   close: []
-  send: [content: string, skillIds: string[]]
+  send: [content: string, skillIds: string[], attachments: ChatAttachment[]]
   'update:selectedModelId': [id: string]
   'update:agentMode': [val: boolean]
   'new-chat': []
@@ -267,6 +299,46 @@ const messagesEl = ref<HTMLElement | null>(null)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 const inputText = ref('')
 const showHistoryPanel = ref(false)
+
+// ── 文件上传附件 ──
+const fileInputRef = ref<HTMLInputElement | null>(null)
+const pendingFiles = ref<ChatAttachment[]>([])
+const uploading = ref(false)
+
+function handleUploadClick() {
+  fileInputRef.value?.click()
+}
+
+function formatFileSize(bytes?: number): string {
+  if (!bytes || bytes <= 0) return ''
+  if (bytes < 1024) return `${bytes}B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`
+}
+
+async function handleFileChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const files = input.files ? Array.from(input.files) : []
+  input.value = '' // 允许重复选择同一文件
+  if (files.length === 0 || !props.uploadHandler || uploading.value) return
+  uploading.value = true
+  try {
+    const results = await props.uploadHandler(files)
+    // 追加已上传成功的附件（失败的文件由 handler 内部 toast 提示）
+    pendingFiles.value.push(...results)
+  } catch (err: unknown) {
+    // 防御：handler 出现非预期异常时给出提示，避免静默无反馈
+    const msg = err instanceof Error ? err.message : String(err)
+    toast.error(`上传失败：${msg}`)
+    console.error('[SideChatPanel] upload failed:', err)
+  } finally {
+    uploading.value = false
+  }
+}
+
+function removePendingFile(fileId: string) {
+  pendingFiles.value = pendingFiles.value.filter(f => f.file_id !== fileId)
+}
 
 // ── / 斜杠技能菜单 ──
 const selectedSkillIds = ref<string[]>([])
@@ -495,17 +567,24 @@ function autoResize() {
   }
 }
 
+/** 是否可发送：有输入文字或有待发送附件（与按钮 disabled 保持一致） */
+const canSend = computed(() =>
+  inputText.value.trim().length > 0 || pendingFiles.value.length > 0,
+)
+
 function handleSend() {
   const text = inputText.value.trim()
-  if (!text || props.streaming || props.agentRunning) return
+  if ((!text && pendingFiles.value.length === 0) || props.streaming || props.agentRunning) return
   // 关闭可能打开的菜单
   closeSkillMenu()
-  // 复制 skillIds 后立即清空，避免下次发送残留
+  // 复制 skillIds / attachments 后立即清空，避免下次发送残留
   const skillIds = [...selectedSkillIds.value]
+  const attachments = [...pendingFiles.value]
   selectedSkillIds.value = []
+  pendingFiles.value = []
   inputText.value = ''
   if (inputRef.value) inputRef.value.style.height = 'auto'
-  emit('send', text, skillIds)
+  emit('send', text, skillIds, attachments)
 }
 
 // ── 历史事件 ──
@@ -749,6 +828,47 @@ defineExpose({ focusInput })
 
 .tag-skill .tag-remove:hover {
   opacity: 1;
+}
+
+/* ── 附件 chips（上传文件）── */
+.pending-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 4px 0;
+}
+
+.tag-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 220px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.tag-file svg {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+.tag-file .file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tag-file .file-size {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.hidden-file-input {
+  display: none;
 }
 
 /* ── / 触发技能菜单 ── */
@@ -1054,10 +1174,6 @@ defineExpose({ focusInput })
 
 .toolbar-btn.active:hover {
   background: rgba(99, 102, 241, 0.25);
-}
-
-.agent-icon {
-  flex-shrink: 0;
 }
 
 .agent-label {

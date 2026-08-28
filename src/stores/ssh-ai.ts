@@ -10,6 +10,7 @@ import { useAppStore } from './app'
 import { useSettingsStore } from './settings'
 import { useToastStore } from './toast'
 import { createModeChatStore, type ModeMessage, type ModeConversation } from './createModeChatStore'
+import { api, type ChatAttachment } from '@/api/client'
 
 // ── SSH 特有数据模型 ──
 
@@ -128,40 +129,64 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   // ── 5. SSH 特有 Actions ──
 
   /** 发送消息（SSH 模式封装：自动注入上下文 + system prompt） */
-  async function sendMessage(content: string, options?: { skillIds?: string[] }) {
+  async function sendMessage(content: string, options?: { skillIds?: string[]; attachments?: ChatAttachment[] }) {
     if (agentMode.value) {
-      await sendAgentMessage(content, options?.skillIds || [])
+      await sendAgentMessage(content, options?.skillIds || [], options?.attachments || [])
     } else {
-      await sendChatMessage(content, options?.skillIds || [])
+      await sendChatMessage(content, options?.skillIds || [], options?.attachments || [])
     }
   }
 
   /** 普通聊天模式 */
-  async function sendChatMessage(content: string, skillIds: string[] = []) {
+  async function sendChatMessage(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = []) {
     const ctx = buildContext()
     const systemPrompt = buildSystemPrompt(ctx)
-    await base.sendMessage(content, { context: ctx, systemPrompt, skillIds })
+    await base.sendMessage(content, { context: ctx, systemPrompt, skillIds, attachments })
+  }
+
+  /** 上传文件（对话附件）：逐个调用后端 /chat/upload，失败项 toast 提示并跳过 */
+  async function uploadFiles(files: File[]): Promise<ChatAttachment[]> {
+    const results: ChatAttachment[] = []
+    for (const file of files) {
+      try {
+        const att = await api.uploadChatFile(base.currentConvId.value || '', file)
+        results.push(att)
+      } catch (e: any) {
+        const detail = e?.detail || e?.message || String(e)
+        toast.error(`上传 ${file.name} 失败：${detail}`)
+      }
+    }
+    return results
   }
 
   /** Agent 模式：多步工具调用，支持远程命令执行 */
   // 发送锁，防止快速连点创建多个会话
   let _agentSendLock = false
-  async function sendAgentMessage(content: string, skillIds: string[] = []) {
+  async function sendAgentMessage(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = []) {
     if (_agentSendLock) return
     _agentSendLock = true
     try {
-      await _sendAgentMessageInner(content, skillIds)
+      await _sendAgentMessageInner(content, skillIds, attachments)
     } finally {
       _agentSendLock = false
     }
   }
 
-  async function _sendAgentMessageInner(content: string, skillIds: string[] = []) {
+  async function _sendAgentMessageInner(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = []) {
+    // 附带文件拼入任务文本：Agent 走 /agent/run，直接注入内容让 LLM 读取
+    let effectiveContent = content
+    if (attachments.length > 0) {
+      const parts = [content]
+      for (const att of attachments) {
+        parts.push(`[附件: ${att.filename}]\n${att.content}`)
+      }
+      effectiveContent = parts.join('\n\n')
+    }
     if (agentStore.isRunning) {
       toast.error('Agent 正在运行中，请等待完成或先中止')
       return
     }
-    if (!content.trim()) return
+    if (!effectiveContent.trim()) return
 
     if (appStore.backendStatus !== 'ready') {
       toast.error('后端未就绪，请稍后重试')
@@ -182,7 +207,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
 
     let conv = base.currentConversation.value as SshAiConversation | undefined
     if (!conv) {
-      const title = content.slice(0, 30) + (content.length > 30 ? '...' : '')
+      const title = effectiveContent.slice(0, 30) + (effectiveContent.length > 30 ? '...' : '')
       conv = await base.createConversation(title) as SshAiConversation
     }
     if (!conv) return
@@ -197,7 +222,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     const userMsg: SshAiMessage = {
       id: genId(),
       role: 'user',
-      content,
+      content: effectiveContent,
       context: ctx,
       created_at: new Date().toISOString(),
     }
@@ -215,14 +240,14 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     conv.messages.push(assistantMsg)
 
     if (conv.messages.length <= 2 && conv.title === 'New Chat') {
-      conv.title = content.slice(0, 30) + (content.length > 30 ? '...' : '')
+      conv.title = effectiveContent.slice(0, 30) + (effectiveContent.length > 30 ? '...' : '')
     }
 
     conv.updated_at = new Date().toISOString()
     base.notifyConversationsChanged()
 
     agentStore.runAgent({
-      task: content,
+      task: effectiveContent,
       conversationId: conv.backendConvId!,
       modelId: base.selectedModelId.value,
       mode: 'ssh',
@@ -266,5 +291,6 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     buildSystemPrompt,
     sendMessage,
     sendAgentMessage,
+    uploadFiles,
   }
 })

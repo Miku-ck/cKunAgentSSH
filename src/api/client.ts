@@ -262,6 +262,17 @@ export const api = {
   getMessages: (conversationId: string, limit = 50, offset = 0) =>
     request<Message[]>(`/chat/conversations/${conversationId}/messages?limit=${limit}&offset=${offset}`),
 
+  // 对话附件上传（文本类文件，返回内容供注入 LLM 上下文）
+  uploadChatFile: (conversationId: string, file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('conversation_id', conversationId || '')
+    return request<ChatAttachment>('/chat/upload', {
+      method: 'POST',
+      body: fd,
+    })
+  },
+
   // 模型
   getModels: () =>
     request<ModelConfig[]>('/models'),
@@ -359,6 +370,14 @@ export const api = {
     }),
 }
 
+export interface ChatAttachment {
+  file_id: string
+  filename: string
+  size?: number
+  content: string
+  truncated?: boolean
+}
+
 // ── SSE 流式聊天 ──
 
 export interface StreamChatOptions {
@@ -369,6 +388,7 @@ export interface StreamChatOptions {
   systemPrompt?: string
   mode?: 'ssh'
   contextWindow?: number  // 历史消息条数上限，覆盖后端默认 20
+  attachments?: ChatAttachment[]  // 附带文件（上传接口返回），拼入用户消息上下文
   onContent: (token: string) => void
   onReasoning: (token: string) => void
   onError: (error: string) => void
@@ -393,6 +413,7 @@ export function streamChat(options: StreamChatOptions): () => void {
           system_prompt: options.systemPrompt,
           mode: options.mode || 'ssh',
           context_window: options.contextWindow,
+          attachments: options.attachments || [],
         }),
         signal: abortController.signal,
       })

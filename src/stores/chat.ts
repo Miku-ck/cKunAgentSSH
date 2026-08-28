@@ -12,6 +12,7 @@ import {
   type Conversation,
   type Message,
   type ModelConfig,
+  type ChatAttachment,
   type AgentFileChangesSummary,
   type AgentTraceSnapshot,
 } from '@/api/client'
@@ -239,8 +240,10 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /** 发送消息 (完整的流式对话流程) */
-  async function sendMessage(content: string, skillIds: string[] = []): Promise<void> {
-    if (streaming.value || !content.trim()) return
+  async function sendMessage(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = []): Promise<void> {
+    if (streaming.value) return
+    // 允许"仅附件"的空消息
+    if (!content.trim() && attachments.length === 0) return
 
     // 后端就绪检查
     const toast = useToastStore()
@@ -276,6 +279,7 @@ export const useChatStore = defineStore('chat', () => {
 
     await base.sendMessage(content, {
       systemPrompt: skillContext || undefined,
+      attachments,
     })
   }
 
