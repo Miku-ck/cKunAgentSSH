@@ -16,6 +16,7 @@ Embedding 生成策略:
   - Semantic: query embedding 与所有 semantic 记忆的 embedding 做余弦相似度，
               取 score > threshold 的 top_k
 """
+import asyncio
 import hashlib
 import json
 import logging
@@ -201,7 +202,7 @@ class MemoryManager:
         query: str,
         mode: str,
         top_k: int = _DEFAULT_TOP_K,
-        threshold: float = _DEFAULT_THRESHOLD,
+        threshold: float = 0.15,
     ) -> list[MemoryQueryResult]:
         """
         检索相关记忆（合并 episodic + semantic）
@@ -210,7 +211,10 @@ class MemoryManager:
             query: 当前任务/查询文本
             mode: 当前模式（work/ide/ssh）
             top_k: 返回最大条数
-            threshold: semantic 检索的相似度阈值（也应用于 episodic 的关键词重叠分）
+            threshold: 相似度阈值（episodic 关键词重叠分 + semantic 余弦相似度通用）。
+                       E 修复：原默认 0.3 且仅 semantic 生效，episodic 硬编码 0.15；
+                       现统一为传入阈值，默认 0.15（episodic 原行为，向后兼容）。
+                       semantic 的既有调用方均显式传 threshold（如 0.3），不受影响。
         """
         # 延迟导入避免循环依赖
         import database as db
@@ -230,8 +234,8 @@ class MemoryManager:
                 # 关键词重叠相似度（Jaccard 变体）
                 content_terms = _extract_terms(entry.content)
                 score = _jaccard_score(query_terms, content_terms)
-                # episodic 阈值放宽到 0.15（比 semantic 0.3 低，因为关键词匹配较弱）
-                if score >= 0.15:
+                # E 修复：改用传入的 threshold（默认 0.15，关键词匹配较弱的放宽值）
+                if score >= threshold:
                     results.append(MemoryQueryResult(memory=entry, score=score))
         except Exception as e:
             logger.warning("Episodic 记忆检索失败: %s", e)
@@ -316,7 +320,9 @@ class MemoryManager:
         # 延迟导入避免循环依赖
         import database as db
         try:
-            return db.add_agent_memory(
+            # D 修复（事件循环阻塞）：同步 INSERT 放线程池
+            return await asyncio.to_thread(
+                db.add_agent_memory,
                 mode=mode,
                 mem_type="episodic",
                 content=content.strip(),
@@ -344,7 +350,9 @@ class MemoryManager:
         # 延迟导入避免循环依赖
         import database as db
         try:
-            return db.add_agent_memory(
+            # D 修复（事件循环阻塞）：同步 INSERT 放线程池
+            return await asyncio.to_thread(
+                db.add_agent_memory,
                 mode=mode,
                 mem_type="semantic",
                 content=content.strip(),

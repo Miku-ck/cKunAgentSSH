@@ -16,6 +16,10 @@ _GREP_OUTPUT_HEAD = 1500
 _GREP_OUTPUT_TAIL = 1000
 # 单文件最多扫描的行数（审查 MINOR：防超大文件整读入内存）
 _MAX_LINES_PER_FILE = 20000
+# E 修复：LLM 提供的 pattern 长度上限（超长正则可造成 catastrophic backtracking）
+_MAX_PATTERN_LEN = 200
+# E 修复：单行超过该字节数时跳过匹配（minified JS/单行 JSON 等，避免逐字符回溯）
+_MAX_LINE_BYTES = 100 * 1024
 
 # 递归搜索时跳过这些目录
 _SKIP_DIRS = {
@@ -85,6 +89,14 @@ class GrepTool(BaseTool):
             context_lines = 0
         context_lines = max(0, min(context_lines, 10))
 
+        # E 修复：pattern 长度上限 200（超长正则可直接 DoS 事件循环）
+        if len(pattern) > _MAX_PATTERN_LEN:
+            return ToolResult(
+                False, "",
+                f"正则表达式过长（{len(pattern)} 字符，上限 {_MAX_PATTERN_LEN}），请简化后重试",
+                priority="high",
+            )
+
         # 编译正则表达式
         flags = re.IGNORECASE if ignore_case else 0
         try:
@@ -110,7 +122,7 @@ class GrepTool(BaseTool):
 
         # 执行搜索
         try:
-            results, total_matches = await asyncio.to_thread(
+            results, total_matches, skipped_lines = await asyncio.to_thread(
                 self._search_files, files, regex, max_results, context_lines,
                 context.workspace_path,
             )
@@ -118,13 +130,18 @@ class GrepTool(BaseTool):
             return ToolResult(False, "", f"搜索失败: {e}", priority="high")
 
         if not results:
-            return ToolResult(True, "未找到匹配", priority="normal")
+            note = ""
+            if skipped_lines:
+                note = f"（已跳过 {skipped_lines} 行超过 100KB 的超长行）"
+            return ToolResult(True, f"未找到匹配{note}", priority="normal")
 
         output = "\n".join(results)
         output = _maybe_truncate_output(output)
         # 超过上限的匹配提示
         if total_matches > max_results:
             output += f"\n... [还有 {total_matches - max_results} 个匹配未显示]"
+        if skipped_lines:
+            output += f"\n... [已跳过 {skipped_lines} 行超过 100KB 的超长行]"
         return ToolResult(True, output, priority="normal")
 
     def _collect_files(self, root, include):
@@ -145,9 +162,15 @@ class GrepTool(BaseTool):
         return files
 
     def _search_files(self, files, regex, max_results, context_lines, workspace):
-        """在文件列表中搜索匹配行"""
+        """在文件列表中搜索匹配行
+
+        Returns:
+            (results, total_matches, skipped_oversize_lines)
+            skipped_oversize_lines：因超过 100KB 而被跳过匹配的行数（E 修复）
+        """
         results = []
         total = 0
+        skipped_oversize = 0
         for filepath in files:
             # 跳过二进制文件
             if _is_binary(filepath):
@@ -162,6 +185,10 @@ class GrepTool(BaseTool):
                 continue
             rel = self._rel_path(filepath, workspace)
             for i, line in enumerate(lines):
+                # E 修复：单行 >100KB（minified JS / 单行 JSON）跳过匹配
+                if len(line.encode("utf-8", errors="ignore")) > _MAX_LINE_BYTES:
+                    skipped_oversize += 1
+                    continue
                 if regex.search(line):
                     total += 1
                     if total <= max_results:
@@ -176,7 +203,7 @@ class GrepTool(BaseTool):
                                     results.append(f"{rel}:{j + 1}- {lines[j].rstrip()}")
                         else:
                             results.append(f"{rel}:{i + 1}: {line.rstrip()}")
-        return results, total
+        return results, total, skipped_oversize
 
     def _rel_path(self, filepath, workspace):
         """计算相对路径（用于输出展示）"""

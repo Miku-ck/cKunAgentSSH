@@ -724,9 +724,17 @@ def get_messages(
     """获取会话消息 (按时间正序)"""
     conn = _get_conn()
     try:
+        # F-4 修复：返回最新 N 条（按时间正序输出）。
+        # 原 ORDER BY created_at ASC LIMIT ? 返回的是最旧 N 条，>50 条的会话
+        # 重载后只显示最新消息之前的内容。内层子查询按 created_at DESC, id DESC
+        # 取窗口（offset 语义保持为"从新到旧"窗口内偏移），外层再按时间正序输出。
         rows = conn.execute(
             "SELECT id, conversation_id, role, content, reasoning, model_used, tokens_used, run_id, agent_trace, created_at "
-            "FROM messages WHERE conversation_id = ? ORDER BY created_at ASC LIMIT ? OFFSET ?",
+            "FROM ("
+            "  SELECT id, conversation_id, role, content, reasoning, model_used, tokens_used, run_id, agent_trace, created_at "
+            "  FROM messages WHERE conversation_id = ? "
+            "  ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
+            ") ORDER BY created_at ASC, id ASC",
             (conversation_id, limit, offset),
         ).fetchall()
         result = []
@@ -793,13 +801,24 @@ def upsert_tool_config(tool_name: str, mode: str, enabled: bool) -> dict:
             return {"id": existing["id"], "tool_name": tool_name, "mode": mode, "enabled": enabled, "updated_at": now}
         else:
             new_id = _uuid.uuid4().hex[:12]
+            # B-MINOR 修复：SELECT→INSERT 非原子（UNIQUE(tool_name,mode) 下
+            # 并发双 INSERT 会 500）。改为 INSERT ... ON CONFLICT DO UPDATE，
+            # 冲突时回退到 UPDATE 既有行，消除竞态窗口
             conn.execute(
                 "INSERT INTO tools_config (id, tool_name, mode, enabled, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(tool_name, mode) DO UPDATE SET "
+                "enabled = excluded.enabled, updated_at = excluded.updated_at",
                 (new_id, tool_name, mode, 1 if enabled else 0, now, now),
             )
             conn.commit()
-            return {"id": new_id, "tool_name": tool_name, "mode": mode, "enabled": enabled, "created_at": now, "updated_at": now}
+            # ON CONFLICT 命中时行 id 是既有值，重查保证返回真实 id
+            row = conn.execute(
+                "SELECT id FROM tools_config WHERE tool_name = ? AND mode = ?",
+                (tool_name, mode),
+            ).fetchone()
+            real_id = row["id"] if row else new_id
+            return {"id": real_id, "tool_name": tool_name, "mode": mode, "enabled": enabled, "updated_at": now}
     finally:
         conn.close()
 
@@ -1264,6 +1283,10 @@ def update_model_config(config_id: str, **kwargs) -> Optional[dict]:
             # api_key 空字符串表示「保留原值」，跳过更新
             if k == "api_key" and v == "":
                 continue
+            # B-10 修复：前端回传的掩码值（含 "****"）不是真密钥 —
+            # 原实现会把掩码写回 DB 覆盖真实 api_key，导致模型 401
+            if k == "api_key" and "****" in str(v):
+                continue
             sets.append(f"{k} = ?")
             params.append(1 if isinstance(v, bool) else v)
     # 记录是否存在（优先判断，避免 rowcount 0 的误判）
@@ -1397,7 +1420,9 @@ def update_agent_run(run_id: str, status: str, iteration: Optional[int] = None,
     审查 NIT：completed_at 仅在终态（completed/failed/human_help）时写入，
     原实现每次更新（含中间状态）都刷新 completed_at，时间字段失真。
     """
-    _TERMINAL_RUN_STATUSES = ("completed", "failed", "human_help")
+    # B-7 修复：max_reached 同为终态（contracts.State.MAX_REACHED / reflection /
+    # 统计查询 database.py get_agent_run_stats 均视其为终态），completed_at 需一并写入
+    _TERMINAL_RUN_STATUSES = ("completed", "failed", "human_help", "max_reached")
     conn = _get_conn()
     try:
         sets = ["status = ?"]

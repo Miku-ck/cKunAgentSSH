@@ -62,6 +62,22 @@ RISKY_PAYLOADS = [
     ('cat ~/.ssh/id_rsa', "dangerous"),
     ('dd if=/etc/shadow of=/tmp/c', "dangerous"),
     ('cp /root/.ssh/id_rsa /tmp/stolen', "dangerous"),
+    # ── 包管理器首 token 判 dangerous（B-1a：可间接执行任意脚本）──
+    ('npx evil', "dangerous"),
+    ('npm install foo', "dangerous"),
+    ('npm run dev', "dangerous"),
+    ('pip install x', "dangerous"),
+    ('pip install requests', "dangerous"),
+    # ── 换行命令注入（B-2 配套：\n 是命令分隔符）──
+    ('git status\nnpx evil', "dangerous"),
+    # ── 写动词落盘目标（B-3：cp/mv/install/ln/rsync 最后一个非 flag 参数）──
+    ('cp /tmp/x /etc/ld.so.preload', "hardline"),
+    ('mv a /root/.ssh/authorized_keys', "hardline"),
+    # ── dd 写裸设备（B-4：任意 /dev/ 目标，安全设备前缀除外）──
+    ('dd if=/dev/zero of=/dev/disk/by-id/xxx', "hardline"),
+    # ── 关机/重启（B-4：与 shutdown 同级，无条件阻断）──
+    ('systemctl poweroff', "hardline"),
+    ('telinit 0', "hardline"),
 ]
 
 
@@ -79,8 +95,8 @@ SAFE_CONTROLS = [
     'curl -s http://127.0.0.1:8010/api/health',
     'echo hello',
     'apt update',
-    'pip install requests',
-    'npm run dev',
+    # B-4 对照组：of= 目标是安全设备（zero）→ 保持原级（safe），不得误判 hardline
+    'dd of=/dev/zero',
     'docker ps',
     'kill 12345',
     'rm -i /tmp/file.txt',
@@ -129,3 +145,37 @@ def test_safe_controls_remain_safe(cmd: str):
 def test_hardline_controls_stay_hardline(cmd: str):
     level, _ = classify_command(cmd)
     assert level == "hardline", f"字面危险命令降级: {cmd!r} → {level}"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# saddle.UndoBuilder._shell_reverse 加固（B-5：反向命令不得携带可执行 payload）
+# ──────────────────────────────────────────────────────────────────────────────
+
+from agent.harness.saddle import UndoBuilder  # noqa: E402
+
+
+def test_shell_reverse_rejects_embedded_payload():
+    # 字符串切片时代 `mkdir 'a; rm -rf /tmp'` 会派生
+    # `rmdir a; rm -rf /tmp`（可执行内嵌 payload）；加固后必须拒绝
+    assert UndoBuilder._shell_reverse("mkdir 'a; rm -rf /tmp'") is None
+    # 换行注入同样拒绝
+    assert UndoBuilder._shell_reverse("mkdir /tmp/a\nrm -rf /tmp") is None
+
+
+def test_shell_reverse_normal_mkdir():
+    assert UndoBuilder._shell_reverse("mkdir /tmp/foo") == "rmdir /tmp/foo"
+
+
+def test_shell_reverse_normal_mv():
+    # mv a b 的反向 = mv b a（token 形态精确匹配才派生）
+    assert UndoBuilder._shell_reverse("mv /tmp/a.txt /tmp/b.txt") == "mv /tmp/b.txt /tmp/a.txt"
+
+
+def test_shell_reverse_rejects_unsafe_derived():
+    # 派生出的反向命令本身危险（非 safe）→ 返回 None
+    assert UndoBuilder._shell_reverse("touch /root/.ssh/key") is None
+
+
+def test_shell_reverse_unknown_verb():
+    assert UndoBuilder._shell_reverse("echo hello") is None
+    assert UndoBuilder._shell_reverse("mkdir a b") is None  # token 数不匹配

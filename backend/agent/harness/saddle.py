@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
+import shlex
 import time
 import shutil
 import logging
@@ -422,20 +424,54 @@ class UndoBuilder:
         # 只读工具 → NoOp
         return NoOpUndo(reason="readonly")
 
-    @staticmethod
-    def _shell_reverse(cmd: str) -> Optional[str]:
-        """尝试推导 shell 命令的反向命令"""
-        cmd = cmd.strip()
-        # mkdir → rmdir
-        if cmd.startswith("mkdir "):
-            path = cmd[6:].strip().strip('"\'')
-            return f"rmdir {path}" if path else None
-        # touch → rm
-        if cmd.startswith("touch "):
-            path = cmd[6:].strip().strip('"\'')
-            return f"rm {path}" if path else None
-        # 其他命令无通用反向
-        return None
+    # B-5 加固：反向命令参数禁止的 shell 元字符（与 local_exec._META_CHAR_RE 同款字符集，
+    # 含换行/回车 — 原字符串切片实现可让 `mkdir 'a; rm -rf /tmp'` 类 payload 混入反向命令）
+    _SHELL_META_RE = re.compile(r"[;&|<>`${}\n\r]")
+
+    @classmethod
+    def _shell_reverse(cls, cmd: str) -> Optional[str]:
+        """尝试推导 shell 命令的反向命令（B-5 加固）
+
+        - shlex 解析原命令，仅当 token 形态精确匹配时才派生：
+          mkdir/rmdir/touch → 恰好 [verb, path]；mv/cp → 恰好 [verb, a, b]
+        - 路径参数含任何 shell 元字符（含换行）→ 拒绝
+        - 派生出的反向命令再过一次 safety.classify_command，非 safe → 返回 None
+        """
+        try:
+            tokens = shlex.split(cmd.strip(), posix=True)
+        except ValueError:
+            return None
+        if not tokens:
+            return None
+        verb = tokens[0].rsplit("/", 1)[-1]
+        args = tokens[1:]
+
+        reverse: Optional[str] = None
+        if verb in ("mkdir", "rmdir", "touch") and len(args) == 1:
+            path = args[0]
+            if not cls._SHELL_META_RE.search(path):
+                reverse_verb = {"mkdir": "rmdir", "rmdir": "mkdir", "touch": "rm"}[verb]
+                reverse = f"{reverse_verb} {path}"
+        elif verb in ("mv", "cp") and len(args) == 2:
+            a, b = args
+            if not cls._SHELL_META_RE.search(a) and not cls._SHELL_META_RE.search(b):
+                if verb == "mv":
+                    reverse = f"mv {b} {a}"
+                else:
+                    # cp 的反向 = 删除目标副本（源文件不受影响）
+                    reverse = f"rm {b}"
+        else:
+            # 其他动词/形态无通用反向
+            return None
+
+        if reverse is None:
+            return None
+        # 派生命令二次分类：非 safe 一律放弃（防止派生出危险反向命令）
+        from .safety import classify_command
+        level, _ = classify_command(reverse)
+        if level != "safe":
+            return None
+        return reverse
 
 
 # ──────────────────────────────────────────────────────────────────────────────

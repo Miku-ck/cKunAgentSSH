@@ -15,7 +15,7 @@ import asyncio
 import json
 import logging
 import os
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -245,12 +245,15 @@ class AgentRunRequest(BaseModel):
     task: str = Field(..., min_length=1, max_length=50000)
     conversation_id: str
     model_id: str = ""
-    mode: str = "ssh"
+    # E 修复：mode 白名单校验（Pydantic Literal，非法值 → 422），
+    # 防止任意 mode 串绕过注册表/权限边界
+    mode: Literal["ssh", "ide"] = "ssh"
     system_prompt: Optional[str] = None
     ssh_session_id: Optional[str] = None
     enable_thinking: bool = False
     enable_tools: bool = True
-    max_iterations: int = 100
+    # E 修复：max_iterations 边界校验（1-500），防 LLM/恶意请求传 0 或天文数字
+    max_iterations: int = Field(100, ge=1, le=500)
     skill_ids: list[str] = Field(default_factory=list)
     # 意图识别 + 思考预算控制（默认开启）
     # 关闭时降级为旧行为：无 thinking 预算限制、无规划阶段、无引导语注入
@@ -524,6 +527,9 @@ async def agent_run(req: AgentRunRequest, request: Request):
 
         total_content = ""
         total_reasoning = ""
+        # B-8 修复：追踪 run 最终状态（done 事件前保持 None），
+        # finally 中仅对 completed 的 run 清理备份
+        final_state: Optional[str] = None
 
         # H14 修复：立即发送 state=thinking 事件，让前端马上显示"思考中..."提示
         # 原问题：从 fetch 发起到 driver 发出第一个 state 事件之间可能等 2-5 秒
@@ -617,9 +623,9 @@ async def agent_run(req: AgentRunRequest, request: Request):
                         file_changes_summary = event.get("file_changes") or {}
                         has_file_changes = (file_changes_summary.get("files_changed") or 0) > 0
                         agent_trace_snapshot = {
-                            # H14 修复：human_help 状态在前端显示为 failed（兼容现有 UI），
-                            # 但保留 currentState = human_help 供组件识别为"需要人工介入"
-                            "status": "failed" if final_state in ("failed", "human_help") else "completed",
+                            # E 修复：保留原始 final_state（max_reached 等终态不再被
+                            # 归一成 "completed"，前端按 currentState/status 自行展示）
+                            "status": final_state,
                             "currentState": final_state,
                             "iterations": event.get("iterations", 0),
                             "duration": round((cost_data.get("duration_ms", 0) or 0) / 1000, 1),
@@ -796,9 +802,14 @@ async def agent_run(req: AgentRunRequest, request: Request):
                 clear_file_changes(run_id)
             except Exception:
                 pass
+            # B-8 修复：仅当 run 最终 status == "completed" 时清理备份 —
+            # 原实现对所有 run（含 failed/max_reached/断连）无条件 rmtree，
+            # 导致这些 run 的 /undo（依赖 _scan_run_backups）备份丢失；
+            # 同时 rmtree 是同步 IO，移到线程池避免卡事件循环
             try:
                 from agent.harness.saddle import cleanup_run_backups
-                cleanup_run_backups(run_id)
+                if final_state == "completed":
+                    await asyncio.to_thread(cleanup_run_backups, run_id)
             except Exception:
                 pass
             # 清理 TelemetryBus 事件缓存（防止内存泄漏）

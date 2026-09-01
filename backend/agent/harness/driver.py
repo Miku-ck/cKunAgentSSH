@@ -545,18 +545,19 @@ class Driver:
             # 工具结果加入消息历史，透传 priority 供 compress_messages 读取
             ctx.messages.append(harness.bridle.build_tool_result_message(tc.id, result_text, priority=result.priority))
 
-            # H13 修复 A4：每次工具调用后清空 once 范围授权
-            # once 语义是"仅本次"，必须消费后立即清空，防止跨工具调用污染
-            # 原实现 PermissionGate.clear_once() 已实现但无人调用，是死代码
-            try:
-                from .reins import _get_global_permission_gate_sync
-                _get_global_permission_gate_sync().clear_once()
-            except Exception as e:
-                logger.warning("clear_once 失败: %s", e)
-
             # H13 修复 A3：pop span_id（与 tool_call_start 的 push 配对）
             if ctx.span_stack:
                 ctx.span_stack.pop()
+
+        # H13 修复 A4（E 修正）：一轮迭代结束（所有工具调用完成后）清空 once 范围授权
+        # once 语义是"仅本次"，必须消费后清空防跨轮污染；
+        # 但原实现在每个工具调用后都全清，会误伤同轮其他工具的 once 授权
+        # （用户为本轮第 N 个工具批了"仅本次"，执行到第 N-1 个工具时被提前清掉）
+        try:
+            from .reins import _get_global_permission_gate_sync
+            _get_global_permission_gate_sync().clear_once()
+        except Exception as e:
+            logger.warning("clear_once 失败: %s", e)
 
         # ── OBSERVE → THINK ──
         await ctx.transition(State.OBSERVING, event="continue")

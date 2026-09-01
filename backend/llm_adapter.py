@@ -174,46 +174,54 @@ async def chat_stream(
     # 流式 tool_calls 分片累积：index → {id, name, arguments_buffer}
     accumulated: dict[int, dict] = {}
 
-    async for chunk in stream:
-        # OpenAI 流式: 最后一个 chunk 没有 choices 但携带 usage
-        if not chunk.choices:
-            usage = getattr(chunk, "usage", None)
-            if usage:
-                yield StreamChunk(
-                    prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
-                    completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
-                )
-            continue
-        delta = chunk.choices[0].delta
+    # B-9 修复：内层 openai 流式迭代包 try/finally — 消费者提前 break/断连时
+    # 显式 aclose 释放底层 HTTP 连接（原实现依赖 GC，连接可能长期挂起）
+    try:
+        async for chunk in stream:
+            # OpenAI 流式: 最后一个 chunk 没有 choices 但携带 usage
+            if not chunk.choices:
+                usage = getattr(chunk, "usage", None)
+                if usage:
+                    yield StreamChunk(
+                        prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+                        completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
+                    )
+                continue
+            delta = chunk.choices[0].delta
 
-        # 解析 tool_calls 分片（流式中 arguments 是逐字符到达的）
-        if delta.tool_calls:
-            for tc_delta in delta.tool_calls:
-                # H6 修复：tc_delta.index 可能为 None，使用 0 作为兜底
-                idx = tc_delta.index if tc_delta.index is not None else 0
-                if idx not in accumulated:
-                    accumulated[idx] = {
-                        "id": tc_delta.id or "",
-                        "name": tc_delta.function.name if tc_delta.function else "",
-                        "arguments": "",
-                    }
-                if tc_delta.id:
-                    accumulated[idx]["id"] = tc_delta.id
-                if tc_delta.function and tc_delta.function.name:
-                    accumulated[idx]["name"] = tc_delta.function.name
-                if tc_delta.function and tc_delta.function.arguments:
-                    accumulated[idx]["arguments"] += tc_delta.function.arguments
+            # 解析 tool_calls 分片（流式中 arguments 是逐字符到达的）
+            if delta.tool_calls:
+                for tc_delta in delta.tool_calls:
+                    # H6 修复：tc_delta.index 可能为 None，使用 0 作为兜底
+                    idx = tc_delta.index if tc_delta.index is not None else 0
+                    if idx not in accumulated:
+                        accumulated[idx] = {
+                            "id": tc_delta.id or "",
+                            "name": tc_delta.function.name if tc_delta.function else "",
+                            "arguments": "",
+                        }
+                    if tc_delta.id:
+                        accumulated[idx]["id"] = tc_delta.id
+                    if tc_delta.function and tc_delta.function.name:
+                        accumulated[idx]["name"] = tc_delta.function.name
+                    if tc_delta.function and tc_delta.function.arguments:
+                        accumulated[idx]["arguments"] += tc_delta.function.arguments
 
-        # vLLM --reasoning-parser qwen3 返回 'reasoning' 字段
-        reasoning = (
-            getattr(delta, "reasoning_content", None)
-            or getattr(delta, "reasoning", None)
-            or ""
-        )
-        content = delta.content or ""
+            # vLLM --reasoning-parser qwen3 返回 'reasoning' 字段
+            reasoning = (
+                getattr(delta, "reasoning_content", None)
+                or getattr(delta, "reasoning", None)
+                or ""
+            )
+            content = delta.content or ""
 
-        if content or reasoning:
-            yield StreamChunk(content=content, reasoning=reasoning)
+            if content or reasoning:
+                yield StreamChunk(content=content, reasoning=reasoning)
+    finally:
+        try:
+            await stream.aclose()
+        except Exception:
+            pass
 
     # 流结束后，如果有完整的 tool_calls，yield 一个合并后的 chunk
     if accumulated:

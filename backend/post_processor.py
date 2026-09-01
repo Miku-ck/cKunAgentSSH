@@ -314,8 +314,9 @@ async def _generate_title(ctx: TurnContext, config: PostProcessConfig) -> None:
         return
 
     # 检查当前标题是否仍是默认值
+    # D 修复（事件循环阻塞）：db 同步调用放线程池
     try:
-        conv = db.get_conversation(ctx.conversation_id)
+        conv = await asyncio.to_thread(db.get_conversation, ctx.conversation_id)
         if not conv or conv.get("title", "") not in _DEFAULT_TITLES:
             return
     except Exception:
@@ -324,14 +325,14 @@ async def _generate_title(ctx: TurnContext, config: PostProcessConfig) -> None:
 
     # 解析模型
     title_model = _resolve_model_id(config.title_model_id, ctx.model_id)
-    model_cfg = db.get_model_config(title_model, mask_key=False)
+    model_cfg = await asyncio.to_thread(db.get_model_config, title_model, mask_key=False)
     if not model_cfg:
         logger.warning("[post_process:title] unknown model_id: %s", title_model)
         # 模型不可用也尽量给出规则摘要，避免标题始终为 New Chat
         title = _fallback_title(ctx.user_message)
         if title:
             try:
-                db.update_conversation_title(ctx.conversation_id, title)
+                await asyncio.to_thread(db.update_conversation_title, ctx.conversation_id, title)
                 logger.info("[post_process:title] 已使用 fallback 更新标题: %s", title)
             except Exception:
                 logger.exception("[post_process:title] fallback 更新标题失败")
@@ -360,7 +361,7 @@ async def _generate_title(ctx: TurnContext, config: PostProcessConfig) -> None:
         title = _fallback_title(ctx.user_message)
         if title:
             try:
-                db.update_conversation_title(ctx.conversation_id, title)
+                await asyncio.to_thread(db.update_conversation_title, ctx.conversation_id, title)
                 logger.info("[post_process:title] 已使用 fallback 更新标题: %s", title)
             except Exception:
                 logger.exception("[post_process:title] fallback 更新标题失败")
@@ -373,7 +374,7 @@ async def _generate_title(ctx: TurnContext, config: PostProcessConfig) -> None:
             return
 
     try:
-        db.update_conversation_title(ctx.conversation_id, title)
+        await asyncio.to_thread(db.update_conversation_title, ctx.conversation_id, title)
         logger.info("[post_process:title] 已更新标题: %s", title)
     except Exception:
         logger.exception("[post_process:title] 更新标题失败")
@@ -410,7 +411,7 @@ async def _extract_memories(ctx: TurnContext, config: PostProcessConfig) -> None
         return
 
     memory_model = _resolve_model_id(config.memory_model_id, ctx.model_id)
-    model_cfg = db.get_model_config(memory_model, mask_key=False)
+    model_cfg = await asyncio.to_thread(db.get_model_config, memory_model, mask_key=False)
     if not model_cfg:
         logger.warning("[post_process:memory] unknown model_id: %s", memory_model)
         return
@@ -459,7 +460,7 @@ async def _extract_memories(ctx: TurnContext, config: PostProcessConfig) -> None
         from agent.memory import get_memory_manager
         # 审查 M-15：embedding 调用需要真实 api_key（mask_key=False），
         # 否则脱敏值导致 401 → 静默降级 256 维伪向量，与主路径真实维度混存
-        mem_cfg = db.get_default_model(ctx.mode, mask_key=False) or {}
+        mem_cfg = await asyncio.to_thread(db.get_default_model, ctx.mode, mask_key=False) or {}
         mem_mgr = get_memory_manager(
             base_url=mem_cfg.get("base_url", ""),
             api_key=mem_cfg.get("api_key", ""),
@@ -493,7 +494,9 @@ async def _extract_memories(ctx: TurnContext, config: PostProcessConfig) -> None
 
     # 容量管理
     try:
-        db.prune_agent_memories(mode=ctx.mode, mem_type="semantic", max_count=100)
+        await asyncio.to_thread(
+            db.prune_agent_memories, mode=ctx.mode, mem_type="semantic", max_count=100
+        )
     except Exception:
         logger.warning("[post_process:memory] prune 失败")
 
@@ -563,7 +566,7 @@ async def _generate_skill(ctx: TurnContext, config: PostProcessConfig) -> None:
 
     # 数量上限检查（全局 auto 技能上限，防数据库污染）
     try:
-        existing_count = _count_auto_skills()
+        existing_count = await asyncio.to_thread(_count_auto_skills)
         if existing_count >= config.max_skills_per_conversation:
             logger.info(
                 "[post_process:skill] 全局已有 %d 个 auto 技能，达上限 %d",
@@ -574,7 +577,7 @@ async def _generate_skill(ctx: TurnContext, config: PostProcessConfig) -> None:
         logger.warning("[post_process:skill] 查询技能数量失败")
 
     skill_model = _resolve_model_id(config.skill_model_id, ctx.model_id)
-    model_cfg = db.get_model_config(skill_model, mask_key=False)
+    model_cfg = await asyncio.to_thread(db.get_model_config, skill_model, mask_key=False)
     if not model_cfg:
         logger.warning("[post_process:skill] unknown model_id: %s", skill_model)
         return
@@ -620,7 +623,9 @@ async def _generate_skill(ctx: TurnContext, config: PostProcessConfig) -> None:
     for skill in skills:
         if not isinstance(skill, dict):
             continue
-        created = _create_auto_skill_with_quality_gate(skill, ctx.mode, config)
+        created = await asyncio.to_thread(
+            _create_auto_skill_with_quality_gate, skill, ctx.mode, config
+        )
         if created:
             created_count += 1
 
@@ -721,7 +726,7 @@ async def post_process_after_turn(
     # model_id 未指定时从数据库取默认模型
     if model_id is None:
         try:
-            default_cfg = db.get_default_model()
+            default_cfg = await asyncio.to_thread(db.get_default_model)
             if default_cfg:
                 model_id = default_cfg.get("model_id") or default_cfg.get("id", "Qwen3-VL")
             else:

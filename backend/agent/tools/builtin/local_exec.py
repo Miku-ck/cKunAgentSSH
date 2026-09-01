@@ -16,11 +16,14 @@ from agent.tools import BaseTool, ToolResult, ToolMeta
 from agent.harness.safety import classify_command
 
 # shell 元字符：白名单场景不需要这些字符，出现即拒绝
-_META_CHAR_RE = re.compile(r"[;&|<>`${}]")
+# B-2 修复：加入 \n\r — create_subprocess_shell 按换行拆命令，
+# 原正则漏掉换行导致 `git status\nnpx evil` 可注入第二条命令
+_META_CHAR_RE = re.compile(r"[;&|<>`${}\n\r]")
 
 # 允许的二进制名（argv[0] 的 basename）
+# B-1b 修复：移除 npm/npx（包管理器可间接执行任意脚本，改由 safety 判 dangerous 走审批）
 _ALLOWED_BINARIES = frozenset({
-    "npm", "npx", "python", "python3", "pytest",
+    "python", "python3", "pytest",
     "git", "tsc", "eslint", "prettier", "ruff", "black", "mypy",
     "cargo", "go", "ls", "dir", "echo",
 })
@@ -58,12 +61,7 @@ def _validate_command(command: str) -> tuple[bool, str]:
 
     rest = argv[1:]
 
-    if binary == "npm":
-        if not rest or rest[0] not in {"test", "run", "ci", "install"}:
-            return (False, f"npm 仅允许 test/run/ci/install 子命令: {command}")
-    elif binary == "npx":
-        pass  # 保留原语义：npx 任意命令
-    elif binary in ("python", "python3"):
+    if binary in ("python", "python3"):
         if not rest:
             return (False, f"python 需要 -m 模块或 .py 脚本路径: {command}")
         if rest[0] == "-m":
@@ -71,8 +69,17 @@ def _validate_command(command: str) -> tuple[bool, str]:
                 return (False, f"python -m 仅允许 pytest/unittest: {command}")
         elif not rest[0].endswith(".py"):
             return (False, f"python 仅允许 -m pytest/unittest 或 .py 脚本: {command}")
+        else:
+            # B-1b 修复：.py 脚本必须是工作区相对路径
+            # （绝对路径/家目录/.. 可逃逸工作区执行任意脚本；-m 模块不受此限）
+            script = rest[0]
+            if script.startswith("/") or script.startswith("~") or ".." in script:
+                return (False, f"python 脚本必须是工作区相对路径（禁止绝对路径/家目录/..）: {command}")
     elif binary == "pytest":
-        pass  # 无限制（后续参数任意）
+        # B-1b 修复：非 flag 参数（路径）禁止绝对路径/家目录/..，flag 放行
+        for a in rest:
+            if not a.startswith("-") and (a.startswith("/") or a.startswith("~") or ".." in a):
+                return (False, f"pytest 路径参数必须是工作区相对路径（禁止绝对路径/家目录/..）: {command}")
     elif binary == "git":
         if not rest or rest[0] not in {"status", "diff", "log", "branch", "show"}:
             return (False, f"git 仅允许 status/diff/log/branch/show 子命令: {command}")
@@ -104,7 +111,7 @@ class LocalExecTool(BaseTool):
     name = "local_exec"
     description = (
         "在 IDE 模式下执行受限的本地命令。仅允许简单白名单命令，"
-        "禁止 shell 元字符/管道/命令替换（如 npm test、git status、python -m pytest、tsc --noEmit）"
+        "禁止 shell 元字符/管道/命令替换（如 git status、python -m pytest、pytest tests/、tsc --noEmit）"
     )
     parameters = {
         "type": "object",

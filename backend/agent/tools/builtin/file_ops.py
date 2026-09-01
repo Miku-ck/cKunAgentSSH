@@ -141,9 +141,9 @@ class WriteFileTool(BaseTool):
             return ToolResult(False, "", f"路径 {path} 超出工作区范围")
 
         try:
-            # 先写入（确保成功），再记录变更
-            await asyncio.to_thread(_atomic_write, full_path, content)
-            # 写入成功后才记录文件变更，避免写入失败留下虚假记录
+            # E 修复：先记录变更再写入（与 delete_file/move_file 一致）。
+            # record_file_write 读取磁盘当前内容作为 before — 原实现先写后记录，
+            # before 永远等于 new_content，diff 恒空，文件变更记录形同虚设
             if context.agent_run_id:
                 try:
                     record_file_write(
@@ -154,6 +154,7 @@ class WriteFileTool(BaseTool):
                     )
                 except Exception:
                     pass  # 文件变更追踪失败不影响主流程
+            await asyncio.to_thread(_atomic_write, full_path, content)
             # 写入结果反馈：常规优先级
             return ToolResult(True, f"文件已写入: {path} ({len(content)} 字符)", priority="normal")
         except Exception as e:

@@ -128,7 +128,8 @@ class SpawnSubagentTool(BaseTool):
         from agent.harness.llm_client import StreamLLMClient
 
         # 从 DB 获取当前模式的默认模型配置
-        model_cfg = self._get_model_config(tool_ctx)
+        # D 修复（事件循环阻塞）：内部含多次同步 db 查询，放线程池执行
+        model_cfg = await asyncio.to_thread(self._get_model_config, tool_ctx)
         if not model_cfg:
             return "[子 Agent] 未找到可用模型配置，无法运行"
 

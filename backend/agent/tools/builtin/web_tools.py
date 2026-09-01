@@ -4,6 +4,7 @@
   - WebSearchTool: 调用搜索引擎 API（Tavily / 360 / DuckDuckGo），返回结构化结果
   - WebFetchTool:  抓取指定 URL 内容，转为文本
 """
+import asyncio
 import ipaddress
 import json
 import logging
@@ -369,7 +370,8 @@ class WebFetchTool(BaseTool):
             return ToolResult(False, "", "无效的 URL")
 
         # 预先解析并校验目标 IP，防止 DNS rebinding / SSRF
-        safe, ip_or_reason = self._check_url_safe(url)
+        # E 修复：内部同步 DNS 查询已放线程池，需 await
+        safe, ip_or_reason = await self._check_url_safe(url)
         if not safe:
             return ToolResult(False, "", ip_or_reason)
 
@@ -398,7 +400,7 @@ class WebFetchTool(BaseTool):
                     if not next_url.startswith("http"):
                         next_url = httpx.URL(current_url).join(next_url).str()
 
-                    safe, next_ip_or_reason = self._check_url_safe(next_url)
+                    safe, next_ip_or_reason = await self._check_url_safe(next_url)
                     if not safe:
                         return ToolResult(False, "", f"重定向被拦截: {next_ip_or_reason}")
 
@@ -489,8 +491,11 @@ class WebFetchTool(BaseTool):
             netloc = f"[{ip}]" if port is None else f"[{ip}]:{port}"
         return parsed._replace(netloc=netloc).geturl()
 
-    def _check_url_safe(self, url: str) -> tuple[bool, str]:
-        """校验 URL 解析后的 IP 是否安全，并返回解析到的 IP（防 SSRF / DNS rebinding）"""
+    async def _check_url_safe(self, url: str) -> tuple[bool, str]:
+        """校验 URL 解析后的 IP 是否安全，并返回解析到的 IP（防 SSRF / DNS rebinding）
+
+        E 修复：socket.gethostbyname 是同步 DNS 查询，放线程池避免卡事件循环
+        """
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"):
             return False, f"不允许的协议: {parsed.scheme}"
@@ -498,7 +503,7 @@ class WebFetchTool(BaseTool):
         if not hostname:
             return False, "无效的 URL"
         try:
-            ip = socket.gethostbyname(hostname)
+            ip = await asyncio.to_thread(socket.gethostbyname, hostname)
         except socket.gaierror:
             return False, f"DNS 解析失败: {hostname}"
         safe, reason = _is_safe_ip(ip)

@@ -175,37 +175,57 @@ class FilesystemGuard:
                 )
             elif level == "dangerous":
                 # 交给 PermissionGate 决定是否需要审批
-                if self.permission_gate is not None:
-                    allowed = self.permission_gate.check_permission(tool, args)
-                    if not allowed:
-                        # 审查 M-3 修复：原实现只发 "warning" 事件，前端没有可操作的授权卡片，
-                        # 用户根本无法批准 dangerous 命令（授权闭环断裂）。
-                        # 改发 permission_needed（payload 含 tool/args/command），前端
-                        # AgentRunPanel 渲染授权卡片，用户选择 本次/会话/始终（绑定命令）。
-                        return ReinDecision(
-                            intercepted=True,
-                            intercept_reason=f"需审批命令: {reason}",
-                            events=[TraceEvent(
-                                kind="permission_needed",
-                                source="reins.filesystem_guard",
-                                run_id=ctx.run_id,
-                                iteration=ctx.iteration,
-                                payload={
-                                    "tool": tool,
-                                    "args": args,
-                                    "risk": "dangerous",
-                                    "reversible": False,
-                                    "message": f"需要用户授权: {tool} — {reason}",
-                                },
-                            )],
-                            inject_messages=[{
-                                "role": "user",
-                                "content": (
-                                    f"[系统拦截] 命令被判定为 dangerous（{reason}），已在界面上向用户请求授权。"
-                                    "请重新发起完全相同的命令（授权后会被放行），或改用更安全的替代方案。"
-                                ),
-                            }],
-                        )
+                # B-MINOR 修复：permission_gate 未配置时 fail-closed —
+                # 原实现直接落到 "safe → 放行"，dangerous 命令在缺权限门时反而无审批
+                if self.permission_gate is None:
+                    return ReinDecision(
+                        intercepted=True,
+                        intercept_reason="权限门未配置，拒绝执行危险命令",
+                        events=[TraceEvent(
+                            kind="warning",
+                            source="reins.filesystem_guard",
+                            run_id=ctx.run_id,
+                            iteration=ctx.iteration,
+                            payload={"message": f"权限门未配置，拒绝执行危险命令: {reason}"},
+                        )],
+                        inject_messages=[{
+                            "role": "user",
+                            "content": (
+                                f"[系统拦截] 权限门未配置，拒绝执行危险命令（{reason}）。"
+                                "请配置 PermissionGate 后重试，或改用更安全的替代方案。"
+                            ),
+                        }],
+                    )
+                allowed = self.permission_gate.check_permission(tool, args, risk="dangerous")
+                if not allowed:
+                    # 审查 M-3 修复：原实现只发 "warning" 事件，前端没有可操作的授权卡片，
+                    # 用户根本无法批准 dangerous 命令（授权闭环断裂）。
+                    # 改发 permission_needed（payload 含 tool/args/command），前端
+                    # AgentRunPanel 渲染授权卡片，用户选择 本次/会话/始终（绑定命令）。
+                    return ReinDecision(
+                        intercepted=True,
+                        intercept_reason=f"需审批命令: {reason}",
+                        events=[TraceEvent(
+                            kind="permission_needed",
+                            source="reins.filesystem_guard",
+                            run_id=ctx.run_id,
+                            iteration=ctx.iteration,
+                            payload={
+                                "tool": tool,
+                                "args": args,
+                                "risk": "dangerous",
+                                "reversible": False,
+                                "message": f"需要用户授权: {tool} — {reason}",
+                            },
+                        )],
+                        inject_messages=[{
+                            "role": "user",
+                            "content": (
+                                f"[系统拦截] 命令被判定为 dangerous（{reason}），已在界面上向用户请求授权。"
+                                "请重新发起完全相同的命令（授权后会被放行），或改用更安全的替代方案。"
+                            ),
+                        }],
+                    )
             # safe → 放行
 
         return ReinDecision()
@@ -590,10 +610,13 @@ class PermissionGate:
             return f"{tool_name}:{digest}"
         return tool_name
 
-    def check_permission(self, tool_name: str, args: dict, scope: str = 'once') -> bool:
+    def check_permission(self, tool_name: str, args: dict, scope: str = 'once',
+                         risk: Optional[str] = None) -> bool:
         """检查权限，返回是否放行
 
         scope: 'once' (仅本次) | 'session' (会话级) | 'always' (永久)
+        risk: 调用方已判定的风险等级；risk == "dangerous" 时忽略 session 级缓存
+              （B-6：落实 "dangerous 需每次授权" 契约，只认 once 与 always/permanent 键）
 
         无交互式 UI 场景：默认拦截 dangerous 命令，除非已在 allowlist 中。
         命令执行工具按"工具+命令哈希"键检查（审查 M-3）。
@@ -606,7 +629,10 @@ class PermissionGate:
         if key in self._confirmed_permanent:
             return True
         # 检查 session allowlist
-        if key in self._confirmed_session:
+        # B-6 修复：dangerous 需每次授权 — 忽略 session 级缓存
+        # （原实现固定按 permanent→session→once 检查，首次 session 授权后
+        #   同命令后续执行全部免审批，与 check() 中 L748 注释契约矛盾）
+        if risk != "dangerous" and key in self._confirmed_session:
             return True
         # 修复：检查 once allowlist（使用计数器，避免跨 run 竞态）
         if self._confirmed_once.get(key, 0) > 0:
@@ -747,7 +773,7 @@ class PermissionGate:
 
         # dangerous → 需每次授权（不可 session 级缓存，防止首次授权后 Agent 执行任意高危命令）
         if risk == "dangerous":
-            if self.check_permission(tool, args, scope='once'):
+            if self.check_permission(tool, args, scope='once', risk='dangerous'):
                 return ReinDecision()
         else:
             # moderate 不可逆 → session 级授权可接受（风险有限）
@@ -1247,7 +1273,10 @@ class SkillRein:
 
             # 显式选择的技能 + 自动匹配的技能（去重）
             explicit_ids = set(ctx.skill_ids or [])
-            auto_matched = registry.match_skills(ctx.task, ctx.mode, max_results=3)
+            # D 修复（事件循环阻塞）：registry 内部含同步 db 查询，放线程池执行
+            auto_matched = await asyncio.to_thread(
+                registry.match_skills, ctx.task, ctx.mode, max_results=3
+            )
             auto_ids = {s['id'] for s in auto_matched}
 
             all_ids = list(explicit_ids | auto_ids)
@@ -1255,12 +1284,14 @@ class SkillRein:
                 return ReinDecision()
 
             parts = []
-            catalog = registry.build_skill_catalog(all_ids, ctx.mode)
+            catalog = await asyncio.to_thread(registry.build_skill_catalog, all_ids, ctx.mode)
             if catalog:
                 parts.append(catalog)
 
             if explicit_ids:
-                preload = registry.build_skill_preload(list(explicit_ids), ctx.mode)
+                preload = await asyncio.to_thread(
+                    registry.build_skill_preload, list(explicit_ids), ctx.mode
+                )
                 if preload:
                     parts.append(preload)
 

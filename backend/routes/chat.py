@@ -239,6 +239,8 @@ async def _generate_stream(
     """SSE 流式生成器"""
     full_content = ""
     full_reasoning = ""
+    # B-9 修复：预初始化，finally 中无论流创建是否成功都能安全关闭 LLM 流
+    chunk_iter = None
 
     try:
         # 先保存用户消息（审查 M-13：db 同步调用放线程池，避免阻塞事件循环）
@@ -267,6 +269,11 @@ async def _generate_stream(
         while not done:
             # 检测客户端是否已断开，避免浪费 LLM 资源
             if request and await request.is_disconnected():
+                # B-9 修复：断连立即关闭 LLM 流迭代器，停止拉取后续 token
+                try:
+                    await chunk_iter.aclose()
+                except Exception:
+                    pass
                 break
             try:
                 chunk = await asyncio.wait_for(
@@ -344,6 +351,13 @@ async def _generate_stream(
         yield sse_event({"error": str(e)})
         yield "data: [DONE]\n\n"
     finally:
+        # B-9 修复：客户端断连后 break 出流式循环，LLM 流迭代器若不关闭，
+        # 底层 HTTP 连接会持续拉取/保持到响应结束，浪费 token 与连接
+        try:
+            if chunk_iter is not None:
+                await chunk_iter.aclose()
+        except Exception:
+            pass
         # 客户端主动 abort (SSE 断开) 抛 CancelledError/ConnectionError 不被 except Exception 捕获，
         # 会话会卡 in_progress；仅在仍为 in_progress 时复位为 completed，避免覆盖 failed 状态
         try:
@@ -381,13 +395,27 @@ def get_messages(cid: str, limit: int = 50, offset: int = 0):
 
 @router.delete("/chat/conversations/{cid}")
 def delete_conversation(cid: str):
-    """删除会话"""
+    """删除会话（级联删除该会话的上传附件目录）"""
     conv = db.get_conversation(cid)
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
     deleted = db.delete_conversation(cid)
     if not deleted:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    # B-MINOR 修复：级联清理 <db_dir>/uploads/<conv>/ 目录，
+    # 避免会话删除后上传文件无限堆积（与上传接口的消毒规则保持一致；
+    # 空会话 id 落入共享的 "general" 目录，不删除）
+    try:
+        import shutil as _shutil
+        safe_conv = re.sub(r"[^A-Za-z0-9_\-]", "", cid or "")
+        if safe_conv:
+            root = _uploads_root().resolve()
+            conv_dir = (root / safe_conv).resolve()
+            # 路径必须 join 在 uploads 根下并校验，防止意外 rmtree 根外目录
+            if conv_dir.is_dir() and root in conv_dir.parents:
+                _shutil.rmtree(conv_dir, ignore_errors=True)
+    except Exception:
+        pass
     return {"deleted": True}
 
 

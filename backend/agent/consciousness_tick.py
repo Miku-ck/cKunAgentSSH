@@ -124,7 +124,8 @@ class ConsciousnessTick:
             import database as db
 
             # 读取记忆设置 — 关闭时跳过所有记忆相关任务
-            mem_settings = db.get_memory_settings()
+            # D 修复（事件循环阻塞）：db 同步调用放线程池
+            mem_settings = await asyncio.to_thread(db.get_memory_settings)
             if not mem_settings["enabled"]:
                 self.last_tick_result = {
                     "tick_at": _now_utc().isoformat(),
@@ -181,17 +182,24 @@ class ConsciousnessTick:
 
     # ── 认知任务实现 ──
 
+    def _load_default_model_cfg(self) -> dict | None:
+        """同步读取默认模型配置（供 to_thread 在线程池执行）"""
+        import database as db
+        return (db.get_default_model(mode="ssh", mask_key=False)
+                or db.get_default_model(mask_key=False))
+
     def _get_memory_manager(self) -> "MemoryManager":
         """
         使用 get_memory_manager 工厂获取缓存实例，
         确保 tick 生成的 embedding 与 Agent 运行时使用同一来源（避免维度不一致）。
+
+        注意：内部含同步 db 调用，async 上下文请用
+        `await asyncio.to_thread(self._get_memory_manager)` 调用。
         """
         from agent.memory import get_memory_manager
         try:
-            import database as db
-            # 审查 M-15：embedding 需要真实 key（mask_key=False），与 Agent 主路径保持同维度
-            model_cfg = (db.get_default_model(mode="ssh", mask_key=False)
-                         or db.get_default_model(mask_key=False))
+            # D 修复（事件循环阻塞）：db 同步调用放线程池（由调用方 to_thread 包裹）
+            model_cfg = self._load_default_model_cfg()
             if model_cfg:
                 return get_memory_manager(
                     base_url=model_cfg.get("base_url", ""),
@@ -203,6 +211,12 @@ class ConsciousnessTick:
         return get_memory_manager()
 
     def _known_modes(self) -> list[str]:
+        """agent_memories 表中实际存在的 mode 列表（审查 MINOR：原 4 处硬编码
+        ("ssh",) 导致 work/ide 模式的记忆从不被固化/清理/提升）
+
+        注意：含同步 db 调用，async 上下文请用
+        `await asyncio.to_thread(self._known_modes)` 调用。
+        """
         """agent_memories 表中实际存在的 mode 列表（审查 MINOR：原 4 处硬编码
         ("ssh",) 导致 work/ide 模式的记忆从不被固化/清理/提升）"""
         import database as db
@@ -227,12 +241,15 @@ class ConsciousnessTick:
         import database as db
 
         # C8 修复：使用带模型配置的 MemoryManager，保证 embedding 来源一致
-        mgr = self._get_memory_manager()
+        # D 修复（事件循环阻塞）：内部含同步 db 调用，放线程池
+        mgr = await asyncio.to_thread(self._get_memory_manager)
 
         consolidated = 0
-        for mode in self._known_modes():
+        for mode in await asyncio.to_thread(self._known_modes):
             try:
-                rows = db.get_agent_memories(mode=mode, mem_type="episodic", limit=20)
+                rows = await asyncio.to_thread(
+                    db.get_agent_memories, mode=mode, mem_type="episodic", limit=20
+                )
             except Exception:
                 continue
             if not rows:
@@ -240,8 +257,8 @@ class ConsciousnessTick:
 
             # H12 修复：一次性查询 semantic 记忆，避免 N+1（原先每条 fact 都查一次 DB）
             try:
-                existing_semantic = db.get_agent_memories(
-                    mode=mode, mem_type="semantic", limit=200
+                existing_semantic = await asyncio.to_thread(
+                    db.get_agent_memories, mode=mode, mem_type="semantic", limit=200
                 )
                 existing_contents = [e.get("content", "") for e in existing_semantic]
             except Exception:
@@ -284,7 +301,9 @@ class ConsciousnessTick:
 
         lookback = self.config.failure_lookback
         try:
-            runs = db.get_agent_runs(conversation_id=None, limit=lookback)
+            runs = await asyncio.to_thread(
+                db.get_agent_runs, conversation_id=None, limit=lookback
+            )
         except Exception as e:
             return {"summary": f"查询 runs 失败: {e}", "reflected": 0}
 
@@ -309,10 +328,10 @@ class ConsciousnessTick:
 
         # 写入 semantic 记忆（每条 mode 一个）
         reflected = 0
-        # C8 修复：使用带模型配置的 MemoryManager
-        mgr = self._get_memory_manager()
+        # C8 修复：使用带模型配置的 MemoryManager（D 修复：同步 db 调用放线程池）
+        mgr = await asyncio.to_thread(self._get_memory_manager)
         for pattern in patterns:
-            for mode in self._known_modes() or ["ssh"]:
+            for mode in (await asyncio.to_thread(self._known_modes)) or ["ssh"]:
                 try:
                     await mgr.save_semantic(
                         mode=mode,
@@ -336,15 +355,17 @@ class ConsciousnessTick:
         import database as db
 
         # 读取用户配置的最大条目数，按 mode/type 各保留 max_items 条
-        mem_settings = db.get_memory_settings()
+        # D 修复（事件循环阻塞）：db 同步调用放线程池
+        mem_settings = await asyncio.to_thread(db.get_memory_settings)
         max_items = mem_settings.get("max_items", 100)
 
         total_deleted = 0
-        for mode in self._known_modes():
+        for mode in await asyncio.to_thread(self._known_modes):
             for mem_type in ("episodic", "semantic"):
                 try:
-                    deleted = db.prune_agent_memories(
-                        mode=mode, mem_type=mem_type, max_count=max_items
+                    deleted = await asyncio.to_thread(
+                        db.prune_agent_memories,
+                        mode=mode, mem_type=mem_type, max_count=max_items,
                     )
                     total_deleted += deleted
                 except Exception as e:
@@ -363,10 +384,12 @@ class ConsciousnessTick:
         import database as db
 
         promoted = 0
-        for mode in self._known_modes():
+        for mode in await asyncio.to_thread(self._known_modes):
             for mem_type in ("episodic", "semantic"):
                 try:
-                    promoted += db.promote_hot_memories(
+                    # D 修复（事件循环阻塞）：db 同步调用放线程池
+                    promoted += await asyncio.to_thread(
+                        db.promote_hot_memories,
                         mode=mode, mem_type=mem_type, min_use_count=3,
                         importance_delta=0.05, max_importance=1.0,
                     )

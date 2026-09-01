@@ -15,6 +15,7 @@ Safety — 命令安全检测层
 from __future__ import annotations
 
 import os
+import posixpath
 import re
 import shlex
 import unicodedata
@@ -90,13 +91,18 @@ HARDLINE_PATTERNS: list[tuple[re.Pattern, str]] = [
     # 尾部边界含闭括号：`os.system('rm -rf /')` 等解释器包裹的字面根删除同样 hardline
     (re.compile(r"\brm\s+(-[^\s]*\s+)*(/|/\*|/ \*)(?=[\s)\]}]|$)"), "recursive delete of root filesystem"),
     (re.compile(r"\bmkfs(\.[a-z0-9]+)?\b"), "format filesystem (mkfs)"),
-    (re.compile(r"\bdd\b[^\n]*\bof=/dev/(sd|nvme|hd|mmcblk|vd|xvd)[a-z0-9]*"), "dd to raw block device"),
+    # B-4 修复：of= 目标为任意 /dev/ 路径，仅排除安全设备前缀
+    # （zero/null/random/urandom/tty/pts/shm/console/fd），写裸设备一律 hardline
+    (re.compile(r"\bdd\b[^\n]*\bof=/dev/(?!zero\b|urandom\b|random\b|null\b|tty|pts|shm|console|fd)\S+"), "dd to raw block device"),
     (re.compile(r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:"), "fork bomb"),
     (re.compile(r"\bshutdown\b", re.IGNORECASE), "system shutdown"),
     (re.compile(r"\breboot\b", re.IGNORECASE), "system reboot"),
     (re.compile(r"\bhalt\b", re.IGNORECASE), "system halt"),
     (re.compile(r"\bpoweroff\b", re.IGNORECASE), "system poweroff"),
     (re.compile(r"\binit\s+0\b"), "init 0 (halt)"),
+    # B-4 修复：systemctl 电源动作 + telinit 0/6（与 shutdown 同级，无条件阻断）
+    (re.compile(r"\bsystemctl\s+(poweroff|reboot|halt|kexec|suspend)\b", re.IGNORECASE), "systemctl power action"),
+    (re.compile(r"\btelinit\s+(0|6)\b"), "telinit 0/6 (halt/reboot)"),
     (re.compile(r"\bkillall5\b"), "kill all processes"),
     (re.compile(r"\bkill\s+-9\s+-1\b"), "kill all processes by PID -1"),
     (re.compile(r"\bgit\s+push\s+(-f|--force)\s+origin\s+(main|master)\b", re.IGNORECASE), "force push to main/master"),
@@ -209,6 +215,8 @@ _INTERPRETERS = {
     "node", "nodejs", "deno", "bun", "lua", "busybox", "sh", "bash", "zsh",
     "dash", "ksh", "tcsh", "csh", "eval", "source", "powershell", "pwsh",
     "cmd", "rubyw", "perl5.30",
+    # B-1a 修复：包管理器/脚本执行器同样可间接执行任意代码，首 token 出现即需审批
+    "npx", "npm", "pip", "pip3", "yarn", "pnpm", "bunx", "uv",
 }
 # 带版本号的 python3.x 形式在首 token 判断时按前缀匹配
 _INTERPRETER_PREFIXES = ("python3.", "python2.", "perl5.")
@@ -236,8 +244,22 @@ def _split_command_chain(text: str) -> list[str]:
 
 
 def _normalize_target(path: str) -> str:
-    """规范化目标路径：strip + 折叠连续的 /"""
-    return re.sub(r"/+", "/", path.strip())
+    """规范化目标路径：strip + 折叠连续的 / + 解析 ./.. 点分段
+
+    B-7 配套修复：原实现只折叠连续 /，`rm -rf /../` 归一后仍是 "/../"，
+    绕过根目录/敏感目录前缀匹配。改用 posixpath.normpath 解析点分段
+    （normpath("/../") → "/"），保持原函数契约（strip + 折叠连续 /，
+    空串返回 ""，~/$HOME 等非常规前缀不受影响）。
+    """
+    p = path.strip()
+    if not p:
+        return ""
+    norm = posixpath.normpath(p)
+    # posixpath.normpath 对恰好两个前导 / 有 POSIX 特殊语义（保留 "//x"），
+    # 原契约是折叠为单个 /，此处对齐
+    if norm.startswith("//"):
+        norm = norm[1:]
+    return norm
 
 
 def _is_sensitive_path(target: str) -> bool:
@@ -471,8 +493,13 @@ def _classify_secret_read(segment: str) -> tuple[str, str | None]:
     return ("safe", None)
 
 
+# B-3 修复：以"落盘新文件/移动目标"为主要副作用的动词 —
+# 最后一个非 flag 参数即写入目标，与 > / >> / tee 同等判定
+_WRITE_VERBS = {"cp", "mv", "install", "ln", "rsync"}
+
+
 def _classify_write_targets(text: str) -> tuple[str, str | None]:
-    """扫描重定向 > / >> 与 tee 的写入目标（全串，跨段有效）：
+    """扫描重定向 > / >> 、tee 与 cp/mv/install/ln/rsync 的写入目标（全串，跨段有效）：
     - 持久化/植入目标（/etc/shadow、sudoers、任意 .ssh 等）→ hardline
     - 其他敏感目录（/etc、/boot、...）或主目录下 → dangerous
     排除 <<< here-string 与 2>&1 类噪声（见 _REDIRECT_RE）。
@@ -503,6 +530,25 @@ def _classify_write_targets(text: str) -> tuple[str, str | None]:
                 continue
             _check_target(a)
             break  # 只取第一个文件目标
+    # 3. 写动词目标：cp/mv/install/ln/rsync 的最后一个非 flag 参数（B-3）
+    #    与重定向/tee 用同一套 _check_target 判定，结果取更严重者（_check_target 内部合并）
+    for segment in _split_command_chain(text):
+        try:
+            tokens = shlex.split(segment, posix=True)
+        except ValueError:
+            continue
+        tokens = _strip_prefix_wrappers(tokens)
+        if not tokens:
+            continue
+        verb = tokens[0].rsplit("/", 1)[-1].lower()
+        if verb not in _WRITE_VERBS:
+            continue
+        target = None
+        for t in tokens[1:]:
+            if not t.startswith("-"):
+                target = t  # 逐个覆盖，最终为最后一个非 flag 参数
+        if target is not None:
+            _check_target(target)
     return best
 
 
