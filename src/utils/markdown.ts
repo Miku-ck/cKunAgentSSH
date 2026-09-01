@@ -11,6 +11,20 @@ marked.setOptions({
   gfm: true,
 })
 
+// C40 修复：DOMPurify 放行 target 属性但未强制 rel —
+// target="_blank" 的链接缺 rel 会造成 reverse tabnabbing。
+// 用 afterSanitizeAttributes hook（sanitize 过程中、输出 HTML 前执行，
+// 比 AFTER_SANITIZE 字符串后处理更稳妥）给所有 target="_blank" 的 a 补 rel
+DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+  if (node.tagName === 'A' && node.getAttribute('target') === '_blank') {
+    const rel = node.getAttribute('rel')
+    node.setAttribute(
+      'rel',
+      rel ? `${rel} noopener noreferrer`.trim() : 'noopener noreferrer',
+    )
+  }
+})
+
 /** 反转义 marked 输出的 HTML 实体，便于 hljs 重新高亮 */
 function decodeHtml(s: string): string {
   return s

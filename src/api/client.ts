@@ -158,13 +158,15 @@ async function waitForBackendReady(timeoutMs = 8000): Promise<void> {
 }
 
 async function request<T>(path: string, options?: RequestInit, _retrying = false): Promise<T> {
-  const url = `${getBaseUrl()}${path}`
   const { headers: customHeaders, ...restOptions } = options || {}
   // FormData 请求由浏览器自动设置 Content-Type（含 multipart boundary），不要手动覆盖
   const isFormData = restOptions.body instanceof FormData
   // 惰性获取 token（缓存结果），确保 X-API-Token 头带上；重试路径复用缓存的 token
   await ensureApiToken()
   try {
+    // B36 修复：getBaseUrl 可能抛原始 Error('Backend not ready') —
+    // 移入 try 内，统一走下方 FriendlyError 包装（友好文案"后端服务未就绪"）
+    const url = `${getBaseUrl()}${path}`
     const res = await fetch(url, {
       ...restOptions,
       headers: withApiToken({
@@ -181,7 +183,11 @@ async function request<T>(path: string, options?: RequestInit, _retrying = false
   } catch (e: unknown) {
     // 网络层错误（后端崩溃/重启）：等待后端恢复后重试一次
     const isNetworkError = e instanceof TypeError && /fetch/i.test(e.message)
-    if (isNetworkError && !_retrying) {
+    // B14 修复：自动重试仅限幂等的 GET/DELETE —
+    // POST/PUT/PATCH 重放会双发（重复建会话/授权），失败直接抛错
+    const method = ((restOptions.method as string) || 'GET').toUpperCase()
+    const isIdempotent = method === 'GET' || method === 'DELETE'
+    if (isNetworkError && !_retrying && isIdempotent) {
       console.warn(`[API] Request ${path} failed (network), waiting for backend to recover...`)
       try {
         await waitForBackendReady()
@@ -510,8 +516,13 @@ export function streamChat(options: StreamChatOptions): () => void {
           }
         }
 
-        // stream ended without [DONE]
-        options.onDone()
+        // B22 修复：正常结束但没有 [DONE] = 半截回复，不能当完整消息固化 —
+        // 原实现直接 onDone 会把半截内容当完整消息
+        try {
+          options.onError('响应中断')
+        } catch (cbErr) {
+          console.error('[streamChat] onError callback threw:', cbErr)
+        }
       } finally {
         // M5 修复：显式释放 reader，避免 abort 后底层流仍被占用导致资源泄漏
         try { reader.releaseLock() } catch { /* already released */ }
@@ -837,7 +848,13 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
           }
         }
 
-        options.onDone()
+        // B22 修复：正常结束但没有 [DONE] = 半截 Agent 流，不能走 onDone —
+        // 原实现会把未完成状态当完成，导致结果固化/状态错乱
+        try {
+          options.onError('响应中断')
+        } catch (cbErr) {
+          console.error('[streamAgentRun] onError callback threw:', cbErr)
+        }
       } finally {
         // M5 修复：显式释放 reader，避免 abort 后底层流仍被占用导致资源泄漏
         try { reader.releaseLock() } catch { /* already released */ }

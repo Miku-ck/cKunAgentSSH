@@ -60,6 +60,13 @@ let resolvePromise: ((value: boolean) => void) | null = null
 
 /** 打开确认框,返回 Promise<boolean> */
 function open(options: ConfirmOptions): Promise<boolean> {
+  // B18 修复：并发 open 时原实现直接覆盖 resolvePromise —
+  // 前一次 await 永远无人结算而永久挂起。新请求打开前先把旧 resolve 以 false 结算
+  if (resolvePromise) {
+    const prev = resolvePromise
+    resolvePromise = null
+    prev(false)
+  }
   title.value = options.title ?? '确认'
   message.value = options.message
   confirmText.value = options.confirmText ?? '确定'

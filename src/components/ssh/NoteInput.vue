@@ -7,6 +7,8 @@
       :placeholder="placeholder"
       :maxlength="maxLength"
       @input="handleInput"
+      @compositionstart="isComposing = true"
+      @compositionend="handleCompositionEnd"
       @focus="focused = true"
       @blur="focused = false"
     />
@@ -36,16 +38,29 @@ const emit = defineEmits<{
 
 const inputRef = ref<HTMLInputElement | null>(null)
 const focused = ref(false)
+// C38 修复：IME 组合态标志 — 组合期间强制截断会破坏中文转换
+const isComposing = ref(false)
 
 const count = computed(() => (props.modelValue || '').length)
 
 function handleInput(e: Event) {
   const target = e.target as HTMLInputElement
-  // 在最外层强制限制长度,避免中文输入法的 IME 组合态超出限制
+  // C38 修复：IME 组合态期间跳过截断（拼音中间态被切掉会导致无法上屏），
+  // 组合结束（compositionend）时再统一强制截断
+  if (isComposing.value) {
+    emit('update:modelValue', target.value)
+    return
+  }
+  // 在最外层强制限制长度
   const v = target.value.slice(0, props.maxLength)
   emit('update:modelValue', v)
-  // 如果 IME 过程中超长,同步到 input.value
   if (target.value !== v) target.value = v
+}
+
+/** IME 组合结束：退出组合态并对上屏结果统一截断 */
+function handleCompositionEnd(e: Event) {
+  isComposing.value = false
+  handleInput(e)
 }
 
 function focus() {

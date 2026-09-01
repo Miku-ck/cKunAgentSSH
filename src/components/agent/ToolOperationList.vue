@@ -219,7 +219,7 @@ const statsText = computed((): string => {
 
 /* 聚合统计：更暗的灰，不抢主标题 */
 .log-stats {
-  color: #888;
+  color: var(--text-tertiary);
   font-size: 12px;
 }
 
@@ -236,37 +236,37 @@ const statsText = computed((): string => {
   gap: 8px;
   font-size: 13px;
   line-height: 1.9;
-  color: #c9d1d9;
+  color: var(--log-text);
 }
 
 /* 动作词：暗灰，作为前缀标签 */
 .log-verb {
-  color: #8b949e;
+  color: var(--log-muted);
   flex-shrink: 0;
 }
 
 /* 目标：主文本色 */
 .log-target {
-  color: #c9d1d9;
+  color: var(--log-text);
   word-break: break-word;
   min-width: 0;
 }
 
 /* 失败态：仅用文字色区分，不用红圆点 */
 .log-item.failed .log-verb {
-  color: #f85149;
+  color: var(--log-fail);
 }
 
 .log-item.failed .log-target {
-  color: #ffa198;
+  color: var(--log-fail-text);
 }
 
 /* 运行中态：斜体淡蓝 */
 .log-item.running .log-verb {
-  color: #58a6ff;
+  color: var(--log-running);
 }
 
 .log-item.running .log-target {
-  color: #8b949e;
+  color: var(--log-muted);
 }
 </style>

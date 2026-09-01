@@ -64,6 +64,7 @@ export function useChatPersistence<
   async function loadConversationsFromBackend(limit = 50, offset = 0) {
     try {
       const convs = await api.listConversations(limit, offset, mode)
+      loadFailed.value = false
       conversations.value = convs.map((c: any) => ({
         id: c.id,
         title: c.title,
@@ -73,14 +74,19 @@ export function useChatPersistence<
         updated_at: c.updated_at,
       })) as TConversation[]
     } catch (e) {
+      // B24 修复：失败仍置空列表，但导出 loadFailed 标志供 UI 后续展示
+      // （原实现静默失败，用户看到空列表无法判断是"无会话"还是"加载失败"）
       console.error(`[${mode}] loadConversationsFromBackend failed:`, e)
       conversations.value = []
+      loadFailed.value = true
     }
   }
 
   const conversations = shallowRef<TConversation[]>(loadConversations())
   const currentConvId = ref<string | null>(null)
   const selectedModelId = ref<string>(loadSelectedModelId())
+  // B24 修复：后端会话列表加载失败标志（成功加载即复位），供 UI 后续展示
+  const loadFailed = ref(false)
 
   const currentConversation = computed(() =>
     conversations.value.find((c) => c.id === currentConvId.value) ?? null
@@ -224,6 +230,7 @@ async function deleteConversation(id: string, loadMessages?: (conv: any) => Prom
     messages,
     selectedModelId,
     groupedConversations,
+    loadFailed,
     fetchDefaultModel,
     setSelectedModel,
     createConversation,

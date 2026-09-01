@@ -114,6 +114,7 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
             v-if="!agentStore.isRunning"
             class="human-help-dismiss"
             title="忽略"
+            aria-label="忽略该请求"
             @click="agentStore.dismissHelp(req.id)"
           >×</button>
         </div>
@@ -153,6 +154,7 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
             v-if="!agentStore.isRunning && !req.resolved"
             class="permission-dismiss"
             title="忽略"
+            aria-label="忽略该请求"
             @click="agentStore.dismissPermission(req.id)"
           >×</button>
         </div>
@@ -229,11 +231,11 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
   align-items: center;
   gap: 6px;
   font-size: 13px;
-  color: #569cd6;
-  background: #1a2d3d;
+  color: var(--status-info-text);
+  background: var(--status-info-bg);
   padding: 8px 12px;
   border-radius: 6px;
-  border: 1px solid #2d4a5a;
+  border: 1px solid var(--status-info-border);
 }
 
 .intention-title {
@@ -249,28 +251,28 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
 }
 
 .intention-level.level-trivial {
-  background: #2d3d2d;
-  color: #6abf6a;
+  background: var(--status-success-bg);
+  color: var(--status-success-text);
 }
 
 .intention-level.level-simple {
-  background: #2d3d2d;
-  color: #6abf6a;
+  background: var(--status-success-bg);
+  color: var(--status-success-text);
 }
 
 .intention-level.level-moderate {
-  background: #3d3d2d;
-  color: #dcdcaa;
+  background: var(--status-warn-bg);
+  color: var(--status-warn-text);
 }
 
 .intention-level.level-complex {
-  background: #3d2d2d;
-  color: #ce9178;
+  background: var(--status-error-bg);
+  color: var(--accent-orange);
 }
 
 .intention-level.level-debug {
-  background: #2d2d3d;
-  color: #9cdcfe;
+  background: var(--status-debug-bg);
+  color: var(--status-debug-text);
 }
 
 .intention-details {
@@ -285,9 +287,9 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
   font-size: 11px;
   padding: 2px 8px;
   border-radius: 4px;
-  background: rgba(86, 156, 214, 0.1);
-  color: #8b949e;
-  border: 1px solid rgba(86, 156, 214, 0.2);
+  background: var(--status-tag-bg);
+  color: var(--status-tag-text);
+  border: 1px solid var(--status-tag-border);
 }
 
 .warnings-section,
@@ -307,8 +309,8 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
   align-items: center;
   gap: 6px;
   font-size: 13px;
-  color: #dcdcaa;
-  background: #2d2d1a;
+  color: var(--status-warn-text);
+  background: var(--status-warn-bg);
   padding: 6px 12px;
   border-radius: 6px;
   margin-bottom: 4px;
@@ -319,17 +321,17 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
   align-items: center;
   gap: 6px;
   font-size: 13px;
-  color: #bf6a6a;
-  background: #2d1a1a;
+  color: var(--status-error-text);
+  background: var(--status-error-bg);
   padding: 6px 12px;
   border-radius: 6px;
 }
 
 .human-help-item {
   font-size: 13px;
-  color: #dcdcaa;
-  background: #2d2a1a;
-  border: 1px solid #4a4533;
+  color: var(--status-warn-text);
+  background: var(--card-warn-bg);
+  border: 1px solid var(--card-warn-border);
   padding: 8px 12px;
   border-radius: 6px;
   margin-bottom: 6px;
@@ -353,14 +355,14 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
 
 .human-help-title {
   font-weight: 600;
-  color: #dcdcaa;
+  color: var(--status-warn-text);
   flex: 1;
 }
 
 .human-help-dismiss {
   background: transparent;
   border: none;
-  color: #888;
+  color: var(--text-tertiary);
   cursor: pointer;
   font-size: 16px;
   line-height: 1;
@@ -368,23 +370,23 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
 }
 
 .human-help-dismiss:hover {
-  color: #dcdcaa;
+  color: var(--status-warn-text);
 }
 
 .human-help-reason {
-  color: #ccc;
+  color: var(--text-primary);
   margin-bottom: 6px;
   line-height: 1.5;
 }
 
 .human-help-tool {
   font-size: 12px;
-  color: #999;
+  color: var(--text-secondary);
   margin-bottom: 4px;
 }
 
 .human-help-tool .tool-label {
-  color: #888;
+  color: var(--text-tertiary);
   margin-right: 4px;
 }
 
@@ -392,7 +394,7 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
   background: var(--bg-base);
   padding: 1px 6px;
   border-radius: 3px;
-  color: #ce9178;
+  color: var(--accent-orange);
   font-size: 12px;
 }
 
@@ -402,7 +404,7 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
 
 .tool-args summary {
   cursor: pointer;
-  color: #888;
+  color: var(--text-tertiary);
   font-size: 11px;
 }
 
@@ -412,14 +414,14 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
   padding: 6px 8px;
   border-radius: 4px;
   font-size: 11px;
-  color: #aaa;
+  color: var(--text-secondary);
   overflow-x: auto;
   white-space: pre-wrap;
 }
 
 .human-help-hint {
   font-size: 11px;
-  color: #777;
+  color: var(--text-tertiary);
   margin-top: 6px;
   font-style: italic;
 }
@@ -427,9 +429,9 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
 /* ── 权限请求卡片 ── */
 .permission-item {
   font-size: 13px;
-  color: #e6c07b;
-  background: #2d221a;
-  border: 1px solid #4a3a23;
+  color: var(--card-perm-text);
+  background: var(--card-perm-bg);
+  border: 1px solid var(--card-perm-border);
   padding: 8px 12px;
   border-radius: 6px;
   margin-bottom: 6px;
@@ -437,7 +439,7 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
 
 .permission-item.permission-resolved {
   opacity: 0.6;
-  border-color: #4a8a4a;
+  border-color: var(--card-perm-resolved);
 }
 
 .permission-header {
@@ -449,7 +451,7 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
 
 .permission-title {
   font-weight: 600;
-  color: #e6c07b;
+  color: var(--card-perm-text);
   flex: 1;
 }
 
@@ -462,19 +464,19 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
 }
 
 .permission-risk.risk-moderate {
-  background: #4a3a23;
-  color: #e6c07b;
+  background: var(--card-perm-border);
+  color: var(--card-perm-text);
 }
 
 .permission-risk.risk-dangerous {
-  background: #4a1a1a;
-  color: #ff6b6b;
+  background: var(--danger-bg);
+  color: var(--danger-text);
 }
 
 .permission-dismiss {
   background: transparent;
   border: none;
-  color: #888;
+  color: var(--text-tertiary);
   cursor: pointer;
   font-size: 16px;
   line-height: 1;
@@ -482,7 +484,7 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
 }
 
 .permission-dismiss:hover {
-  color: #e6c07b;
+  color: var(--card-perm-text);
 }
 
 .permission-body {
@@ -490,18 +492,18 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
 }
 
 .permission-message {
-  color: #ccc;
+  color: var(--text-primary);
   margin-bottom: 4px;
   line-height: 1.5;
 }
 
 .permission-tool {
   font-size: 12px;
-  color: #999;
+  color: var(--text-secondary);
 }
 
 .permission-tool .tool-label {
-  color: #888;
+  color: var(--text-tertiary);
   margin-right: 4px;
 }
 
@@ -509,7 +511,7 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
   background: var(--bg-base);
   padding: 1px 6px;
   border-radius: 3px;
-  color: #ce9178;
+  color: var(--accent-orange);
   font-size: 12px;
 }
 
@@ -530,13 +532,13 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
 }
 
 .permission-btn-grant {
-  background: #3a5a3a;
-  border-color: #4a8a4a;
-  color: #b0e0b0;
+  background: var(--card-perm-btn-bg);
+  border-color: var(--card-perm-btn-border);
+  color: var(--card-perm-btn-text);
 }
 
 .permission-btn-grant:hover:not(:disabled) {
-  background: #4a6a4a;
+  background: var(--card-perm-btn-hover);
 }
 
 .permission-btn-grant:disabled {
@@ -546,24 +548,24 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
 
 .permission-btn-dismiss {
   background: transparent;
-  border-color: #555;
-  color: #999;
+  border-color: var(--border-default);
+  color: var(--text-secondary);
 }
 
 .permission-btn-dismiss:hover {
-  border-color: #777;
-  color: #ccc;
+  border-color: var(--text-tertiary);
+  color: var(--text-primary);
 }
 
 .permission-resolved-text {
   font-size: 12px;
-  color: #6abf6a;
+  color: var(--status-success-text);
   font-style: italic;
 }
 
 .permission-hint {
   font-size: 11px;
-  color: #777;
+  color: var(--text-tertiary);
   margin-top: 4px;
   font-style: italic;
 }

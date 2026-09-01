@@ -310,6 +310,9 @@ export const useSSHStore = defineStore('ssh', () => {
     }
     // 同步清理该会话的命令历史,防止长期使用后内存增长
     commandHistory.value = commandHistory.value.filter(h => h.sessionId !== id)
+    // C37 修复：补充清理 commandChains 中该 sessionId 的条目（原实现只清了
+    // commandHistory，命令链记录随会话删除残留，占满 MAX_COMMAND_CHAINS 前一直泄漏）
+    commandChains.value = commandChains.value.filter(c => c.sessionId !== id)
     // 清理 lastCommandBySession 对应该会话的条目
     delete lastCommandBySession.value[id]
   }

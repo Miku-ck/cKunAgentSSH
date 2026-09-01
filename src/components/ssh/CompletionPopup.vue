@@ -1,6 +1,7 @@
 <template>
   <div
     v-if="visible"
+    ref="rootRef"
     class="completion-popup"
     :style="{ left: x + 'px', top: y + 'px', maxHeight: maxItemHeight * maxVisible + 8 + 'px' }"
     @click.stop
@@ -88,6 +89,8 @@ const emit = defineEmits<{
 const selectedIndex = ref(0)
 const maxVisible = 8
 const maxItemHeight = 22
+// C39 修复：popup 根元素 ref — scrollIntoView 查询限定在组件内部
+const rootRef = ref<HTMLElement | null>(null)
 
 // 候选变化时重置选中项
 watch(
@@ -112,7 +115,9 @@ function moveDown(): void {
 
 function scrollActiveIntoView(): void {
   nextTick(() => {
-    const activeEl = document.querySelector('.completion-popup .completion-item.active') as HTMLElement | null
+    // C39 修复：原 document 全局 querySelector 会命中其他终端的 popup 同名元素
+    // （多个 CompletionPopup 共存）— 限定在本组件根元素内查询
+    const activeEl = rootRef.value?.querySelector('.completion-item.active') as HTMLElement | null
     if (activeEl) {
       activeEl.scrollIntoView({ block: 'nearest' })
     }

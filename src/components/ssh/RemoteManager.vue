@@ -356,6 +356,11 @@ function handleMenuAction(action: string) {
 }
 
 onUnmounted(() => {
+  // C33 修复：卸载时清理搜索防抖定时器（原实现残留，卸载后回调仍会写入 ref）
+  if (searchTimer) {
+    clearTimeout(searchTimer)
+    searchTimer = null
+  }
   if (dismissBound) {
     document.removeEventListener('mousedown', handleDocMouseDown)
     dismissBound = false

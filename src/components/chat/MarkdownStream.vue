@@ -3,7 +3,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { ref, watch, onUnmounted } from 'vue'
 import { renderMarkdown } from '@/utils/markdown'
 import { useToastStore } from '@/stores/toast'
 
@@ -13,7 +13,34 @@ const props = defineProps<{
 
 const toast = useToastStore()
 
-const renderedHtml = computed(() => renderMarkdown(props.content || ''))
+// C34 修复：流式场景下原 computed 每个 token 都全量 renderMarkdown（整条消息
+// 逐 token 重渲染）— 改为 150ms 尾沿节流：中间变更只重置定时器，最后一次必须 flush
+const RENDER_THROTTLE_MS = 150
+const renderedHtml = ref(renderMarkdown(props.content || ''))
+let _renderTimer: ReturnType<typeof setTimeout> | null = null
+
+function scheduleRender(): void {
+  if (_renderTimer !== null) return // 已有待执行的 flush，尾沿节流复用同一 timer
+  _renderTimer = setTimeout(flushRender, RENDER_THROTTLE_MS)
+}
+
+function flushRender(): void {
+  _renderTimer = null
+  renderedHtml.value = renderMarkdown(props.content || '')
+}
+
+watch(() => props.content, (v) => {
+  if (v === '') return
+  scheduleRender()
+})
+
+// 组件卸载时清理未触发的定时器（卸载后内容不再变化，无需补 flush）
+onUnmounted(() => {
+  if (_renderTimer !== null) {
+    clearTimeout(_renderTimer)
+    _renderTimer = null
+  }
+})
 
 /** 事件委托：点击代码块复制按钮时复制代码到剪贴板 */
 function handleClick(e: MouseEvent) {
@@ -143,6 +170,6 @@ function handleClick(e: MouseEvent) {
 }
 
 .markdown-body :deep(th) {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--bg-hover);
 }
 </style>

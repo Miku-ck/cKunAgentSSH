@@ -3,7 +3,7 @@
     <div class="history-panel">
       <div class="history-panel-header">
         <span class="history-panel-title">历史任务</span>
-        <button class="icon-btn" @click="$emit('close')" title="关闭">
+        <button class="icon-btn" @click="$emit('close')" title="关闭" aria-label="关闭">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       </div>
@@ -14,12 +14,22 @@
             v-for="conv in group.items"
             :key="conv.id"
             class="history-panel-item"
-            :class="{ active: conv.id === currentConvId }"
-            @click="$emit('switch', conv.id)"
           >
-            <span class="history-panel-item-dot" :class="{ active: conv.id === currentConvId }"></span>
-            <span class="history-panel-item-title">{{ conv.title }}</span>
-            <button class="history-panel-item-delete" @click.stop="$emit('delete', conv.id)" title="删除">
+            <button
+              class="history-panel-item-main"
+              :class="{ active: conv.id === currentConvId }"
+              :aria-label="'切换到对话：' + conv.title"
+              @click="$emit('switch', conv.id)"
+            >
+              <span class="history-panel-item-dot" :class="{ active: conv.id === currentConvId }"></span>
+              <span class="history-panel-item-title">{{ conv.title }}</span>
+            </button>
+            <button
+              class="history-panel-item-delete"
+              @click="$emit('delete', conv.id)"
+              title="删除"
+              :aria-label="'删除对话：' + conv.title"
+            >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
             </button>
           </div>
@@ -143,17 +153,34 @@ defineEmits<{
 .history-panel-item {
   display: flex;
   align-items: center;
+  gap: 4px;
+  padding: 0 12px;
+}
+
+/* 对话主体：真实按钮，可键盘聚焦 */
+.history-panel-item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
   gap: 8px;
-  padding: 6px 12px;
+  padding: 6px 4px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
   cursor: pointer;
+  border-radius: 4px;
   transition: background 0.1s;
 }
 
-.history-panel-item:hover {
+.history-panel-item-main:hover {
   background: var(--bg-hover);
 }
 
-.history-panel-item.active {
+.history-panel-item-main.active {
   background: var(--bg-active);
 }
 
@@ -166,11 +193,12 @@ defineEmits<{
 }
 
 .history-panel-item-dot.active {
-  background: #818CF8;
+  background: var(--accent-indigo);
 }
 
 .history-panel-item-title {
   flex: 1;
+  min-width: 0;
   font-size: 12px;
   color: var(--text-primary);
   overflow: hidden;
@@ -178,7 +206,7 @@ defineEmits<{
   white-space: nowrap;
 }
 
-.history-panel-item.active .history-panel-item-title {
+.history-panel-item-main.active .history-panel-item-title {
   color: var(--text-primary);
 }
 
@@ -203,8 +231,8 @@ defineEmits<{
 }
 
 .history-panel-item-delete:hover {
-  background: rgba(244, 113, 113, 0.15);
-  color: #f47171;
+  background: color-mix(in srgb, var(--accent-red) 15%, transparent);
+  color: var(--accent-red);
 }
 
 .history-panel-empty {

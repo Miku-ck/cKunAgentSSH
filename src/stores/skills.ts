@@ -8,6 +8,7 @@ import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import JSZip from 'jszip'
 import { load as yamlLoad } from 'js-yaml'
+import { useToastStore } from './toast'
 
 export type SkillSource = 'builtin' | 'upload' | 'custom' | 'manual' | 'auto'
 
@@ -157,6 +158,39 @@ export function parseSkillMd(text: string): SkillManifest {
     metadata: parsed.metadata && typeof parsed.metadata === 'object' ? parsed.metadata : {},
     content: body.trim(),
   }
+}
+
+/**
+ * 新 IPC 契约（主进程侧同步实现，preload 方法名/签名固定）：
+ * - skillsMkdir：带 skillsRoot 边界断言的 mkdir
+ * - skillsWriteFile：带 skillsRoot 边界断言的二进制写入
+ * - fsReadFileBase64：10MB 上限的 base64 读取
+ * 本地类型断言 — env.d.ts 的 ElectronAPI 由主进程代理同步更新
+ */
+interface SkillsIpcApi extends ElectronAPI {
+  skillsMkdir: (dirPath: string) => Promise<void>
+  skillsWriteFile: (filePath: string, base64: string) => Promise<void>
+  fsReadFileBase64: (filePath: string) => Promise<{ base64: string; size: number }>
+}
+
+/** C-1 修复：slug 校验 — 拒绝 `..` 段、以 / 或盘符（如 C:）开头、含 \ 的 slug */
+function isValidSkillSlug(slug: string): boolean {
+  if (!slug) return false
+  if (slug.includes('\\')) return false
+  if (slug.startsWith('/')) return false
+  if (/^[a-z]:/i.test(slug)) return false
+  if (slug.split('/').some(seg => seg === '..')) return false
+  return true
+}
+
+/** C-1 修复：zip 条目 relPath（前缀剥离后）校验 — 拒绝 `..` 段、以 / 开头、含 \、含盘符 */
+function isValidSkillRelPath(relPath: string): boolean {
+  if (!relPath) return false
+  if (relPath.startsWith('/')) return false
+  if (relPath.includes('\\')) return false
+  if (/^[a-z]:/i.test(relPath)) return false
+  if (relPath.split('/').some(seg => seg === '..')) return false
+  return true
 }
 
 async function findSkillMdPath(api: ElectronAPI, dirPath: string): Promise<string | null> {
@@ -447,15 +481,21 @@ export const useSkillStore = defineStore('skills', () => {
     skillMdPath: string,
     slug: string,
   ): Promise<{ localPath: string; assets: string[] } | null> {
-    const api = (window as Window).electronAPI
-    if (!api?.fsGetSkillsDir || !api?.fsWriteBinaryFile || !api?.fsPathJoin || !api?.fsMkdir) {
+    const api = (window as Window).electronAPI as SkillsIpcApi | undefined
+    if (!api?.fsGetSkillsDir || !api?.skillsMkdir || !api?.skillsWriteFile || !api?.fsPathJoin) {
       return null
+    }
+    // C-1 修复：安装前拦截非法 slug（`..` 逃逸 / 绝对路径 / 盘符 / 反斜杠）
+    if (!isValidSkillSlug(slug)) {
+      useToastStore().error(`非法的技能目录名: ${slug}，已阻止安装`)
+      throw new Error(`非法的技能目录名: ${slug}`)
     }
     const skillsRoot = await api.fsGetSkillsDir()
     const skillDir = await api.fsPathJoin(skillsRoot, slug)
-    await api.fsMkdir(skillDir)
+    await api.skillsMkdir(skillDir)
 
     const assets: string[] = []
+    const skipped: string[] = []
     const skillMdDir = skillMdPath.includes('/') ? skillMdPath.slice(0, skillMdPath.lastIndexOf('/')) : ''
 
     for (const path of Object.keys(zip.files)) {
@@ -467,15 +507,28 @@ export const useSkillStore = defineStore('skills', () => {
       }
       if (!relPath || relPath === skillMdPath) continue
 
+      // C-1 修复：Zip-Slip — 逐条校验前缀剥离后的 relPath，
+      // 非法条目跳过并 warn（不整体拒绝），最后统一 toast 提示
+      if (!isValidSkillRelPath(relPath)) {
+        skipped.push(relPath)
+        console.warn('[skills] 跳过非法 zip 条目路径（Zip-Slip 防护）:', relPath)
+        continue
+      }
+
       const fullPath = await api.fsPathJoin(skillDir, relPath)
       if (relPath.includes('/')) {
         const subDir = await api.fsPathJoin(skillDir, relPath.slice(0, relPath.lastIndexOf('/')))
-        await api.fsMkdir(subDir)
+        await api.skillsMkdir(subDir)
       }
       const blob = await entry.async('blob')
       const base64 = await blobToBase64(blob)
-      await api.fsWriteBinaryFile(fullPath, base64)
+      // 新契约：带 skillsRoot 边界断言的二进制写入（主进程二次校验）
+      await api.skillsWriteFile(fullPath, base64)
       assets.push(relPath)
+    }
+
+    if (skipped.length > 0) {
+      useToastStore().warning(`${skipped.length} 个非法路径条目被跳过`)
     }
 
     return { localPath: skillDir, assets }
@@ -653,13 +706,17 @@ export const useSkillStore = defineStore('skills', () => {
       const zip = new JSZip()
       zip.file('SKILL.md', skillMd)
 
-      const api = (window as Window).electronAPI
-      if (skill.localPath && skill.assets && skill.assets.length > 0 && api?.fsPathJoin && api?.fsReadFile) {
+      // B17 修复：用 fsReadFileBase64 读二进制资源 —
+      // 原 fsReadFile 按 UTF-8 文本读二进制文件会破坏字节序列，导出包损坏。
+      // 文本/二进制统一走 base64，JSZip 支持 Uint8Array
+      const api = (window as Window).electronAPI as SkillsIpcApi | undefined
+      if (skill.localPath && skill.assets && skill.assets.length > 0 && api?.fsPathJoin && api?.fsReadFileBase64) {
         for (const relPath of skill.assets) {
           const fullPath = await api.fsPathJoin(skill.localPath, relPath)
           try {
-            const content = await api.fsReadFile(fullPath)
-            zip.file(relPath, content)
+            const { base64 } = await api.fsReadFileBase64(fullPath)
+            const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0))
+            zip.file(relPath, bytes)
           } catch {
             // 单个资源读取失败跳过
           }

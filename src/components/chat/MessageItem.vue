@@ -104,11 +104,11 @@ function copyContent(text: string) {
 .message-block.user .message-bubble {
   width: 100%;
   max-width: 100%;
-  padding: 10px 14px;
+  padding: 6px 14px;
   background: transparent;
   color: var(--text-primary);
   border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  border-radius: 0;
 }
 
 .message-block.assistant .message-bubble {
@@ -117,28 +117,6 @@ function copyContent(text: string) {
   background: transparent;
   color: var(--text-primary);
   padding-left: 0;
-}
-
-.thinking-dots {
-  display: flex;
-  gap: 4px;
-  padding: 8px 0;
-}
-
-.thinking-dots span {
-  width: 6px;
-  height: 6px;
-  background: #818cf8;
-  border-radius: 50%;
-  animation: blink 1.4s infinite both;
-}
-
-.thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
-.thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
-
-@keyframes blink {
-  0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
-  40% { opacity: 1; transform: scale(1); }
 }
 
 .message-actions {

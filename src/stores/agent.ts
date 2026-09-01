@@ -10,6 +10,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { streamAgentRun, type AgentSSEEvent, type AgentCostSnapshot, type AgentFileChangesSummary, type AgentTraceSnapshot, type AgentIntentionInfo } from '@/api/client'
 import { StreamingThinkScrubber } from '@/utils/think-scrubber'
+import { useToastStore } from './toast'
 
 export interface ToolCallEntry {
   id: string
@@ -193,6 +194,8 @@ export const useAgentStore = defineStore('agent', () => {
           : 'Agent 运行失败，后端未返回具体错误，请查看后端日志'
         status.value = 'failed'
         currentState.value = 'failed'
+        // B11 修复：run 结束清理权限请求状态，防止面板里残留过期授权按钮
+        permissionRequests.value = []
         // H14 修复：流结束后清除 abortFn，避免对已结束的流调用 abort 重置状态
         abortFn = null
       },
@@ -212,6 +215,8 @@ export const useAgentStore = defineStore('agent', () => {
       abortFn = null
     }
     status.value = 'idle'
+    // B11 修复：中止即 run 结束 — 清理权限请求状态，防止残留过期授权按钮
+    permissionRequests.value = []
   }
 
   /** 生成当前运行状态的快照（不重置状态），用于固化到 ChatMessage.agentTrace */
@@ -379,9 +384,13 @@ export const useAgentStore = defineStore('agent', () => {
         const evtCommand = typeof event.args?.command === 'string' ? (event.args.command as string) : ''
         const isCmdTool = COMMAND_EXEC_TOOLS.includes(evtTool)
         const dupKey = isCmdTool ? `${evtTool}::${evtCommand}` : evtTool
-        if (!permissionRequests.value.some(r =>
+        const alreadyPending = permissionRequests.value.some(r =>
           (r.isCommandTool ? `${r.tool}::${typeof r.args?.command === 'string' ? r.args.command : ''}` : r.tool) === dupKey
-        )) {
+        )
+        // B11 修复：权限卡片只存在于 AI 面板内，面板关闭期间用户无法响应 —
+        // 从非 pending → pending 转换时 toast 提醒（重复请求不重复弹）
+        const hadPending = permissionRequests.value.some(r => !r.resolved)
+        if (!alreadyPending) {
           permissionRequests.value.push({
             id: `perm_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
             tool: evtTool,
@@ -392,6 +401,9 @@ export const useAgentStore = defineStore('agent', () => {
             timestamp: Date.now(),
             isCommandTool: isCmdTool,
           })
+          if (!hadPending) {
+            useToastStore().warning('Agent 需要权限确认，请打开 AI 面板')
+          }
         }
         break
       }
@@ -401,6 +413,8 @@ export const useAgentStore = defineStore('agent', () => {
         status.value = 'failed'
         // H13 修复：同步更新 currentState，避免 UI 仍显示"思考中"
         currentState.value = 'failed'
+        // B11 修复：run 结束清理权限请求状态，防止残留过期授权按钮
+        permissionRequests.value = []
         // H1 修复：不在 error 事件清理 abortFn，此时流可能仍未关闭
         // abortFn 由 onDone/onError 回调（真正代表流结束）清理
         break
@@ -426,6 +440,8 @@ export const useAgentStore = defineStore('agent', () => {
         if (event.run_id) lastRunId.value = event.run_id
         // C3: 捕获文件变更摘要
         if (event.file_changes) fileChanges.value = event.file_changes
+        // B11 修复：run 结束清理权限请求状态，防止面板里残留过期授权按钮
+        permissionRequests.value = []
         // H14 修复：支持 human_help 终止态，保留 currentState 供 UI 显示"需要人工介入"
         status.value = event.state === 'failed' || event.state === 'human_help' ? 'failed' : 'completed'
         // 保留有意义的 currentState（如 human_help），仅在 event.state 为空时回退

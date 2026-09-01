@@ -12,7 +12,7 @@
   --border-subtle: #2d2d30;
   --text-primary: #cccccc;
   --text-secondary: #969696;
-  --text-tertiary: #6e6e6e;
+  --text-tertiary: #767676; /* ≥4.5:1 对比度（黑底） */
 
   /* 扩展背景/边框变量 */
   --bg-sidebar: #000000;
@@ -32,6 +32,49 @@
   --accent-cyan: #9cdcfe;
   --accent-yellow: #dcdcaa;
   --accent-gradient: linear-gradient(135deg, #0078d4 0%, #c586c0 100%);
+
+  /* 聊天强调色（indigo：技能标签/选中态/空状态图标） */
+  --accent-indigo: #818cf8;
+  --accent-indigo-soft: #a5b4fc;
+  --accent-indigo-bg: rgba(129, 140, 248, 0.12);
+  --accent-indigo-hover: rgba(129, 140, 248, 0.1);
+
+  /* 状态卡片色（Agent 运行面板：规划/警告/错误/调试/标签） */
+  --status-info-bg: #1a2d3d;
+  --status-info-border: #2d4a5a;
+  --status-info-text: #569cd6;
+  --status-success-bg: #2d3d2d;
+  --status-success-text: #6abf6a;
+  --status-warn-bg: #2d2d1a;
+  --status-warn-text: #dcdcaa;
+  --status-error-bg: #2d1a1a;
+  --status-error-text: #bf6a6a;
+  --status-debug-bg: #2d2d3d;
+  --status-debug-text: #9cdcfe;
+  --status-tag-bg: rgba(86, 156, 214, 0.1);
+  --status-tag-border: rgba(86, 156, 214, 0.2);
+  --status-tag-text: #8b949e;
+
+  /* 工具日志色（Agent 轨迹） */
+  --log-text: #c9d1d9;
+  --log-muted: #8b949e;
+  --log-fail: #f85149;
+  --log-fail-text: #ffa198;
+  --log-running: #58a6ff;
+
+  /* 人工介入/权限卡片 */
+  --card-warn-bg: #2d2a1a;
+  --card-warn-border: #4a4533;
+  --card-perm-bg: #2d221a;
+  --card-perm-border: #4a3a23;
+  --card-perm-text: #e6c07b;
+  --card-perm-btn-bg: #3a5a3a;
+  --card-perm-btn-border: #4a8a4a;
+  --card-perm-btn-text: #b0e0b0;
+  --card-perm-btn-hover: #4a6a4a;
+  --card-perm-resolved: #4a8a4a;
+  --danger-bg: #4a1a1a;
+  --danger-text: #ff6b6b;
 
   /* 圆角 & 阴影 */
   --radius-sm: 4px;
@@ -76,7 +119,7 @@
   --border-subtle: #e0e0e0;
   --text-primary: #000000;
   --text-secondary: #555555;
-  --text-tertiary: #888888;
+  --text-tertiary: #6e6e6e; /* ≥4.5:1 对比度（白底） */
   --bg-sidebar: #ffffff;
   --bg-input: #ffffff;
   --bg-code: #ffffff;
@@ -85,6 +128,49 @@
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.08);
   --shadow-md: 0 4px 12px rgba(0,0,0,0.1);
   --shadow-lg: 0 8px 24px rgba(0,0,0,0.15);
+
+  /* 浅色主题：indigo 加深保证对比度 */
+  --accent-indigo: #4f46e5;
+  --accent-indigo-soft: #4f46e5;
+  --accent-indigo-bg: rgba(79, 70, 229, 0.1);
+  --accent-indigo-hover: rgba(79, 70, 229, 0.08);
+
+  /* 浅色主题：状态卡片转浅底深字 */
+  --status-info-bg: #e8f1fa;
+  --status-info-border: #b9d4ec;
+  --status-info-text: #1f6fb2;
+  --status-success-bg: #e6f4ea;
+  --status-success-text: #1e7e34;
+  --status-warn-bg: #faf3dc;
+  --status-warn-text: #7a5c00;
+  --status-error-bg: #fdecea;
+  --status-error-text: #c62828;
+  --status-debug-bg: #e8f4fb;
+  --status-debug-text: #0e7490;
+  --status-tag-bg: rgba(31, 111, 178, 0.08);
+  --status-tag-border: rgba(31, 111, 178, 0.25);
+  --status-tag-text: #1f6fb2;
+
+  /* 浅色主题：工具日志（GitHub 亮色） */
+  --log-text: #1f2328;
+  --log-muted: #656d76;
+  --log-fail: #cf222e;
+  --log-fail-text: #a40e26;
+  --log-running: #0969da;
+
+  /* 浅色主题：人工介入/权限卡片 */
+  --card-warn-bg: #faf3dc;
+  --card-warn-border: #e5d5a8;
+  --card-perm-bg: #fdf6e3;
+  --card-perm-border: #e0c68a;
+  --card-perm-text: #7a5c00;
+  --card-perm-btn-bg: #e6f4ea;
+  --card-perm-btn-border: #34a853;
+  --card-perm-btn-text: #1e7e34;
+  --card-perm-btn-hover: #d4ecd9;
+  --card-perm-resolved: #34a853;
+  --danger-bg: #fdecea;
+  --danger-text: #c62828;
 }
 
 /* ── 蓝屏主题 ── */

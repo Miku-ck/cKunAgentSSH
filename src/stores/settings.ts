@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
-import { api, agentApi, type ModelConfig, type ModelConfigPayload } from '@/api/client'
+import { api, agentApi, toFriendlyMessage, type ModelConfig, type ModelConfigPayload } from '@/api/client'
 import { useToastStore } from './toast'
 
 /**
@@ -222,9 +222,9 @@ export const useSettingsStore = defineStore('settings', () => {
           generate_skill: pp.generateSkill,
         }).catch((e) => {
           // 后端同步失败时提示用户，避免静默失败导致设置丢失
+          // C35 修复：用 toFriendlyMessage 转换，不再暴露原始 e.message（技术细节）
           const toast = useToastStore()
-          const msg = e instanceof Error ? e.message : String(e)
-          toast.error(`后处理设置同步失败: ${msg}`, 5000)
+          toast.error(toFriendlyMessage(e, '后处理设置同步失败'), 5000)
         })
       }, 500)
     },

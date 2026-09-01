@@ -86,8 +86,11 @@ export class StreamingThinkScrubber {
       this._buf = ''
       return ''
     }
-    // 不在块内，输出残留 buf
-    const result = this._buf
+    // B13 修复：buf 尾部若恰好是某个开标签的前缀（如正文以 "<th" 结尾），
+    // 流已再无后续字符可拼出完整标签 — 原样输出会泄漏残缺标签，丢弃该前缀；
+    // 普通文本（不构成标签前缀）保留
+    const partial = this._matchPartialTag(this._buf, THINK_OPEN_TAGS)
+    const result = partial > 0 ? this._buf.slice(0, this._buf.length - partial) : this._buf
     this._buf = ''
     return result
   }
@@ -110,15 +113,22 @@ export class StreamingThinkScrubber {
   // ── 内部方法 ──
 
   private _findOpenTag(text: string, start: number): { found: boolean; start: number; end: number } {
+    // B13 修复：按标签最早出现位置（min indexOf）选择，而非列表顺序 —
+    // 原实现在列表靠前标签位置更晚时会误选更靠后的标签，
+    // 把中间内容（可能含真正标签）当成普通正文输出
+    const candidates: Array<{ tag: string; idx: number }> = []
     for (const tag of THINK_OPEN_TAGS) {
       const idx = text.indexOf(tag, start)
-      if (idx >= 0) {
-        // block-boundary 检查：标签前必须是换行或字符串开头
-        if (idx > 0 && !this._isBlockBoundary(text[idx - 1])) {
-          continue
-        }
-        return { found: true, start: idx, end: idx + tag.length }
+      if (idx >= 0) candidates.push({ tag, idx })
+    }
+    // 按出现位置升序：最早出现的标签优先（位置相同时保持列表顺序）
+    candidates.sort((a, b) => a.idx - b.idx)
+    for (const { tag, idx } of candidates) {
+      // block-boundary 检查：标签前必须是换行或字符串开头
+      if (idx > 0 && !this._isBlockBoundary(text[idx - 1])) {
+        continue
       }
+      return { found: true, start: idx, end: idx + tag.length }
     }
     return { found: false, start: -1, end: -1 }
   }

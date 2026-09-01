@@ -464,8 +464,14 @@ export function createModeChatStore<
       // 运行中切换会话后，固化会落到错误的会话上：源会话的 temp-agent 占位消息
       // 永远停在"运行中"骨架态，结果消息丢失。
       const sourceId = agentStore.currentConversationId
+      // F-1 修复：dual 模式新建会话的 c.id 是本地 genId，sourceId 是 backendConvId
+      // （ensureBackendConversation 只补 backendConvId 不改 id）—
+      // 仅按 c.id 匹配会落空，固化退到 currentConversation（可能已切走）。
+      // 从后端加载的会话 c.id === backendConvId，两种形态都能命中
       const conv = (sourceId
-        ? persistence.conversations.value.find((c) => c.id === sourceId)
+        ? persistence.conversations.value.find(
+            (c) => c.id === sourceId || c.backendConvId === sourceId,
+          )
         : undefined) || persistence.currentConversation.value || null
       if (!conv) return
       // 泛型边界：TConversation.messages 为 TMessage[]（自由类型参数），

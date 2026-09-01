@@ -6,16 +6,17 @@
     <!-- 顶部栏 -->
     <div class="panel-header">
       <slot name="header-prefix"></slot>
+      <span class="panel-title">{{ panelTitle }}</span>
       <div class="header-spacer"></div>
       <div class="header-actions">
-        <button class="icon-btn" title="历史记录" @click="showHistoryPanel = !showHistoryPanel">
+        <button class="icon-btn" title="历史记录" aria-label="历史记录" @click="showHistoryPanel = !showHistoryPanel">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
         </button>
-        <button class="icon-btn" :class="{ loading: props.creating }" :title="props.creating ? '创建中...' : '新建对话'" :disabled="props.creating" @click="$emit('new-chat')">
+        <button class="icon-btn" :class="{ loading: props.creating }" :title="props.creating ? '创建中...' : '新建对话'" :aria-label="props.creating ? '创建中...' : '新建对话'" :disabled="props.creating" @click="$emit('new-chat')">
           <svg v-if="!props.creating" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           <svg v-else class="spinner" viewBox="0 0 24 24" fill="none" width="14" height="14"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.25"/><path d="M22 12a10 10 0 0 0-10-10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
         </button>
-        <button class="icon-btn" title="关闭面板" @click="$emit('close')">
+        <button class="icon-btn" title="关闭面板" aria-label="关闭面板" @click="$emit('close')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       </div>
@@ -39,7 +40,7 @@
       </div>
 
       <!-- 消息列表 -->
-      <div v-else class="messages-list">
+      <div v-else class="messages-list" role="log" aria-live="polite">
         <template v-for="(msg, idx) in displayMessages" :key="msg.id">
           <!-- Agent 执行过程前置块：运行中且目标为最后一条 assistant 占位消息 -->
           <AgentTraceInline
@@ -87,7 +88,7 @@
               <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
             </svg>
             {{ tag.name }}
-            <button class="tag-remove" @click="removeSkill(tag.id)" title="移除技能">
+            <button class="tag-remove" @click="removeSkill(tag.id)" title="移除技能" aria-label="移除技能">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="8" height="8">
                 <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
               </svg>
@@ -101,7 +102,7 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="9" height="9"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
             <span class="file-name">{{ att.filename }}</span>
             <span v-if="att.size" class="file-size">{{ formatFileSize(att.size) }}</span>
-            <button class="tag-remove" @click="removePendingFile(att.file_id)" title="移除文件">
+            <button class="tag-remove" @click="removePendingFile(att.file_id)" title="移除文件" aria-label="移除文件">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="8" height="8">
                 <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
               </svg>
@@ -115,6 +116,7 @@
           class="chat-input"
           rows="1"
           :placeholder="inputPlaceholder"
+          aria-label="消息输入框"
           :disabled="streaming || agentRunning"
           @keydown="handleKeydown"
           @input="onInput"
@@ -157,6 +159,7 @@
             class="toolbar-btn upload-btn"
             :disabled="uploading || streaming || agentRunning"
             :title="uploading ? '上传中...' : (streaming || agentRunning) ? '当前响应中，请稍后再上传' : '上传文件（文本类，单文件 ≤ 10MB）'"
+            :aria-label="uploading ? '上传中' : '上传文件'"
             @click="handleUploadClick"
           >
             <svg v-if="!uploading" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
@@ -175,6 +178,7 @@
             class="toolbar-btn agent-toggle"
             :class="{ active: agentMode }"
             :title="agentMode ? 'Agent 模式已开启 — AI 可自主调用工具' : '开启 Agent 模式 — AI 可自主调用工具'"
+            :aria-label="agentMode ? '关闭 Agent 模式' : '开启 Agent 模式'"
             @click="emit('update:agentMode', !agentMode)"
           >
             <span class="agent-label">Agent</span>
@@ -210,13 +214,14 @@
             :disabled="!canSend"
             @click="handleSend"
             :title="canSend ? '发送' : '请输入内容或添加附件后再发送'"
+            aria-label="发送"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="12" y1="19" x2="12" y2="5"/>
               <polyline points="5 12 12 5 19 12"/>
             </svg>
           </button>
-          <button v-else class="abort-btn" @click="$emit('abort')" title="中止">
+          <button v-else class="abort-btn" @click="$emit('abort')" title="中止" aria-label="中止">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
           </button>
         </div>
@@ -279,6 +284,8 @@ const props = defineProps<{
   placeholder?: string
   emptyTitle?: string
   emptyDesc?: string
+  /** 面板头部标题（默认 "AI 助手"） */
+  panelTitle?: string
   /** 上传处理函数：由父组件注入（返回上传成功的附件列表）；未注入则不显示上传入口 */
   uploadHandler?: (files: File[]) => Promise<ChatAttachment[]>
 }>()
@@ -293,6 +300,9 @@ const emit = defineEmits<{
   'delete-conversation': [id: string]
   abort: []
 }>()
+
+// ── 面板头部标题（未传时使用通用默认） ──
+const panelTitle = computed(() => props.panelTitle || 'AI 助手')
 
 // ── Refs ──
 const messagesEl = ref<HTMLElement | null>(null)
@@ -649,6 +659,16 @@ defineExpose({ focusInput })
   flex: 1;
 }
 
+.panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
 .header-actions {
   display: flex;
   gap: 2px;
@@ -723,7 +743,7 @@ defineExpose({ focusInput })
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #818CF8;
+  color: var(--accent-indigo);
   margin-bottom: 8px;
 }
 
@@ -744,7 +764,7 @@ defineExpose({ focusInput })
 
 /* Messages List */
 .messages-list {
-  padding: 12px 4px;
+  padding: 12px 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -788,6 +808,12 @@ defineExpose({ focusInput })
   opacity: 0.5;
 }
 
+.chat-input:focus-visible {
+  outline: 2px solid var(--accent-indigo);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
 /* ── 已选技能标签 ── */
 .skill-tags {
   display: flex;
@@ -800,8 +826,8 @@ defineExpose({ focusInput })
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  background: rgba(129, 140, 248, 0.12);
-  color: #a5b4fc;
+  background: var(--accent-indigo-bg);
+  color: var(--accent-indigo-soft);
   font-size: 11px;
   padding: 2px 6px;
   border-radius: 4px;
@@ -810,7 +836,7 @@ defineExpose({ focusInput })
 
 .tag-skill svg {
   flex-shrink: 0;
-  color: #818cf8;
+  color: var(--accent-indigo);
 }
 
 .tag-skill .tag-remove {
@@ -819,7 +845,7 @@ defineExpose({ focusInput })
   justify-content: center;
   background: none;
   border: none;
-  color: #a5b4fc;
+  color: var(--accent-indigo-soft);
   cursor: pointer;
   padding: 0;
   margin-left: 2px;
@@ -879,7 +905,7 @@ defineExpose({ focusInput })
   right: 0;
   margin-bottom: 4px;
   background: var(--bg-sidebar, #1a1a1a);
-  border: 1px solid #3a3a3a;
+  border: 1px solid var(--border-default);
   border-radius: 6px;
   box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.5);
   z-index: 50;
@@ -894,20 +920,20 @@ defineExpose({ focusInput })
   justify-content: space-between;
   align-items: center;
   padding: 6px 10px;
-  border-bottom: 1px solid #2d2d30;
+  border-bottom: 1px solid var(--border-subtle);
   font-size: 11px;
-  color: #888;
+  color: var(--text-tertiary);
   flex-shrink: 0;
 }
 
 .skill-menu-header .menu-title {
-  color: #a5b4fc;
+  color: var(--accent-indigo-soft);
   font-weight: 500;
 }
 
 .skill-menu-header .menu-hint {
-  font-size: 10px;
-  color: #666;
+  font-size: 11px;
+  color: var(--text-tertiary);
 }
 
 .skill-menu-list {
@@ -928,7 +954,7 @@ defineExpose({ focusInput })
 
 .skill-menu-item:hover,
 .skill-menu-item.active {
-  background: rgba(129, 140, 248, 0.1);
+  background: var(--accent-indigo-hover);
 }
 
 .skill-item-info {
@@ -948,17 +974,17 @@ defineExpose({ focusInput })
 }
 
 .skill-item-desc {
-  font-size: 10px;
-  color: #888;
+  font-size: 11px;
+  color: var(--text-tertiary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .skill-item-cat {
-  font-size: 10px;
-  color: #666;
-  background: rgba(110, 118, 129, 0.15);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  background: var(--bg-hover);
   padding: 1px 5px;
   border-radius: 3px;
   flex-shrink: 0;
@@ -967,7 +993,7 @@ defineExpose({ focusInput })
 .skill-menu-empty {
   padding: 12px;
   text-align: center;
-  color: #666;
+  color: var(--text-tertiary);
   font-size: 11px;
 }
 
@@ -1031,7 +1057,7 @@ defineExpose({ focusInput })
   transform: translateX(-50%);
   margin-bottom: 4px;
   background: var(--bg-hover);
-  border: 1px solid #3a3a3a;
+  border: 1px solid var(--border-default);
   border-radius: 6px;
   padding: 4px;
   min-width: 180px;
@@ -1130,15 +1156,15 @@ defineExpose({ focusInput })
   justify-content: center;
   border: none;
   border-radius: 4px;
-  background: rgba(244, 135, 113, 0.15);
-  color: #f48771;
+  background: color-mix(in srgb, var(--accent-red) 15%, transparent);
+  color: var(--accent-red);
   cursor: pointer;
   transition: all 0.15s;
   flex-shrink: 0;
 }
 
 .abort-btn:hover {
-  background: rgba(244, 135, 113, 0.25);
+  background: color-mix(in srgb, var(--accent-red) 25%, transparent);
 }
 
 .abort-btn svg {
@@ -1168,12 +1194,12 @@ defineExpose({ focusInput })
 }
 
 .toolbar-btn.active {
-  background: rgba(99, 102, 241, 0.15);
-  color: #818cf8;
+  background: var(--accent-indigo-bg);
+  color: var(--accent-indigo);
 }
 
 .toolbar-btn.active:hover {
-  background: rgba(99, 102, 241, 0.25);
+  background: var(--accent-indigo-hover);
 }
 
 .agent-label {

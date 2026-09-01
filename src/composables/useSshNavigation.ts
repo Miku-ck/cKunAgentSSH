@@ -45,7 +45,12 @@ export function useSshNavigation(
     activeNavPage.value = 'home'
     store.switchSession(sessionId)
     // 等待 Vue 切换渲染后，让终端获取焦点，用户可立即输入
-    const tid = setTimeout(() => focusActiveTerminal(), 50)
+    // C28 修复：定时器触发后自摘除，focusTimers 数组不再无界增长
+    const tid = setTimeout(() => {
+      const i = focusTimers.indexOf(tid)
+      if (i !== -1) focusTimers.splice(i, 1)
+      focusActiveTerminal()
+    }, 50)
     focusTimers.push(tid)
   }
 
@@ -137,6 +142,8 @@ export function useSshNavigation(
     const lastConnectAt = lastConnectAtById[conn.id] || 0
     if (now - lastConnectAt < CONNECT_DEBOUNCE_MS) {
       console.log('[useSshNavigation] connectRemote: debounced, skipping', conn.id)
+      // B19 修复：防抖命中原来只 console.log 无任何用户反馈
+      toast.info('连接请求过于频繁，请稍候')
       // debounce 路径也要重置 connecting 状态，避免 loading 永远不消失
       connecting.value = false
       pendingConnId.value = ''
@@ -150,7 +157,12 @@ export function useSshNavigation(
       console.log('[useSshNavigation] connectRemote: connected!', conn.id)
       showHome.value = false
       // 等待 Vue 渲染 RemoteTerminal 组件后，让终端获取焦点
-      const tid = setTimeout(() => focusActiveTerminal(), 100)
+      // C28 修复：定时器触发后自摘除
+      const tid = setTimeout(() => {
+        const i = focusTimers.indexOf(tid)
+        if (i !== -1) focusTimers.splice(i, 1)
+        focusActiveTerminal()
+      }, 100)
       focusTimers.push(tid)
     } catch (err: any) {
       console.error('[useSshNavigation] connectRemote failed:', err)

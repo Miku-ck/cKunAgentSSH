@@ -159,7 +159,13 @@ async function loadFile(): Promise<void> {
   dirty.value = false
   disposeEditor()
   try {
-    const api = window.electronAPI!
+    // B9 修复：浏览器（非 Electron）下原 `window.electronAPI!` 非空断言
+    // 在打开编辑器时即 TypeError — 显式守卫并给出环境提示
+    const api = window.electronAPI
+    if (!api) {
+      error.value = '文件编辑仅 Electron 环境可用'
+      return
+    }
     let result: EditorFileContent
     if (props.side === 'local') {
       result = await api.fsReadFileForEditor(props.path)
@@ -229,6 +235,10 @@ function initEditor(): void {
 const _layoutTimers: number[] = []
 
 function disposeEditor(): void {
+  // C29 修复：清理所有未触发的 layout 定时器（原实现只靠组件卸载时清理，
+  // 关闭后重开/多次 dispose 会让旧定时器回调到已释放的编辑器）
+  for (const t of _layoutTimers) clearTimeout(t)
+  _layoutTimers.length = 0
   if (editor) {
     editor.dispose()
     editor = null
@@ -243,7 +253,13 @@ async function save(): Promise<void> {
   if (!dirty.value || readOnly.value || saving.value) return
   saving.value = true
   try {
-    const api = window.electronAPI!
+    // B9 修复：浏览器（非 Electron）下显式守卫，不再用非空断言
+    const api = window.electronAPI
+    if (!api) {
+      toast.error('文件编辑仅 Electron 环境可用')
+      saving.value = false
+      return
+    }
     if (props.side === 'local') {
       await api.fsWriteFile(props.path, content.value)
     } else {

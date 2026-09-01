@@ -29,7 +29,7 @@
         <button class="pane-btn" title="刷新" @click="refresh">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
         </button>
-        <button class="pane-btn" title="新建文件夹" @click="onMkdir">
+        <button class="pane-btn" title="新建文件夹" @click="openMkdirDialog">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
         </button>
       </div>
@@ -101,7 +101,7 @@
       <div v-else-if="error" class="pane-error">{{ error }}</div>
       <div v-else-if="entries.length === 0" class="pane-empty-list">目录为空</div>
       <div
-        v-for="entry in entries"
+        v-for="entry in displayEntries"
         :key="entry.path"
         class="file-row"
         :class="{ selected: isSelected(entry.path) }"
@@ -123,6 +123,31 @@
         <div class="file-size">{{ entry.isDirectory ? '—' : formatSize(entry.size) }}</div>
         <div class="file-time">{{ formatTime(entry.modified) }}</div>
         <div class="file-perm">{{ entry.isDirectory ? 'd' + (permText(entry) || 'rwx') : permText(entry) || '-' }}</div>
+      </div>
+      <!-- B16 修复：全量 v-for 无虚拟化 — 超大目录只渲染前 2000 行，超出给提示 -->
+      <div v-if="entries.length > RENDER_LIMIT" class="pane-list-limit">
+        仅显示前 {{ RENDER_LIMIT }} 个条目，共 {{ entries.length }} 个（请用筛选或进入子目录）
+      </div>
+    </div>
+
+    <!-- 新建文件夹对话框（F-2 修复：替代 Electron 下恒返回 null 的 window.prompt） -->
+    <div v-if="showMkdirDialog" class="mkdir-overlay" @click.self="cancelMkdir">
+      <div class="mkdir-dialog">
+        <div class="mkdir-title">新建文件夹</div>
+        <input
+          ref="mkdirInputRef"
+          v-model="mkdirName"
+          class="mkdir-input"
+          placeholder="请输入文件夹名称"
+          @keydown.enter="confirmMkdir"
+          @keydown.esc="cancelMkdir"
+        />
+        <div class="mkdir-actions">
+          <button class="mkdir-btn cancel" :disabled="mkdirBusy" @click="cancelMkdir">取消</button>
+          <button class="mkdir-btn confirm" :disabled="mkdirBusy || !mkdirName.trim()" @click="confirmMkdir">
+            {{ mkdirBusy ? '创建中…' : '确定' }}
+          </button>
+        </div>
       </div>
     </div>
 
@@ -161,13 +186,15 @@ const drives = ref<string[]>([])
 const showDriveDropdown = ref(false)
 
 async function toggleDriveDropdown(): Promise<void> {
+  // C31 修复：先同步翻转可见性 — 原实现 await getDrives 在途时
+  // showDriveDropdown 仍为 false，第二下"关闭"点击走不到同步关闭分支
   if (showDriveDropdown.value) {
     showDriveDropdown.value = false
     return
   }
+  showDriveDropdown.value = true
   // 加载盘符列表
   drives.value = await store.getDrives()
-  showDriveDropdown.value = true
 }
 
 function isCurrentDrive(drive: string): boolean {
@@ -204,6 +231,10 @@ const dragHintText = computed(() => {
 const entries = computed<any[]>(() =>
   props.side === 'local' ? store.localEntries : store.remoteEntries
 )
+
+// B16 修复：渲染上限（不引第三方虚拟滚动库），超大目录只显示前 N 行
+const RENDER_LIMIT = 2000
+const displayEntries = computed<any[]>(() => entries.value.slice(0, RENDER_LIMIT))
 const loading = computed(() =>
   props.side === 'local' ? store.loadingLocal : store.loadingRemote
 )
@@ -256,7 +287,8 @@ function permText(entry: any): string {
 function formatSize(bytes: number): string {
   if (!bytes) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.floor(Math.log(bytes) / Math.log(1024))
+  // C30 修复：≥1PB 时 i 越界显示 undefined — 钳制到最大单位
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
   return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + ' ' + units[i]
 }
 
@@ -346,16 +378,45 @@ function onPathInputBlur(): void {
   }
 }
 
-async function onMkdir(): Promise<void> {
-  const name = prompt('请输入文件夹名称')
-  if (!name?.trim()) return
+// ─── 新建文件夹对话框（F-2 修复） ──────────────────
+// Electron 的 window.prompt() 恒返回 null，"新建文件夹"按钮完全无反应；
+// 改为组件内小模态输入框（Enter 确认 / Esc 取消）
+const showMkdirDialog = ref(false)
+const mkdirName = ref('')
+const mkdirBusy = ref(false)
+const mkdirInputRef = ref<HTMLInputElement | null>(null)
+
+function openMkdirDialog(): void {
+  if (props.side === 'remote' && !store.online) {
+    toast.info('请先连接远程服务器')
+    return
+  }
+  mkdirName.value = ''
+  showMkdirDialog.value = true
+  nextTick(() => {
+    mkdirInputRef.value?.focus()
+  })
+}
+
+async function confirmMkdir(): Promise<void> {
+  const name = mkdirName.value.trim()
+  if (!name || mkdirBusy.value) return
+  mkdirBusy.value = true
   try {
-    if (props.side === 'local') await store.localMkdir(name.trim())
-    else await store.remoteMkdir(name.trim())
+    if (props.side === 'local') await store.localMkdir(name)
+    else await store.remoteMkdir(name)
     toast.success('已创建')
+    showMkdirDialog.value = false
   } catch (err: any) {
     toast.error(toFriendlyMessage(err, '创建失败'))
+  } finally {
+    mkdirBusy.value = false
   }
+}
+
+function cancelMkdir(): void {
+  if (mkdirBusy.value) return
+  showMkdirDialog.value = false
 }
 
 function onRowClick(entry: any, e: MouseEvent): void {
@@ -647,6 +708,61 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
 .pane-empty-overlay svg { width: 36px; height: 36px; opacity: 0.4; }
 .pane-empty-overlay .empty-title { font-size: 13px; color: var(--text-secondary); }
 .pane-empty-overlay .empty-desc { font-size: 11px; line-height: 1.6; max-width: 240px; }
+
+/* 文件列表渲染上限提示 */
+.pane-list-limit {
+  padding: 10px 12px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-align: center;
+  border-top: 1px dashed var(--border-subtle);
+}
+
+/* 新建文件夹对话框（风格与 SftpView 的 rename 对话框一致） */
+.mkdir-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1001;
+}
+.mkdir-dialog {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  padding: 20px;
+  width: 320px;
+  box-shadow: var(--shadow-lg);
+}
+.mkdir-title {
+  font-size: 14px; font-weight: 600;
+  color: var(--text-primary); margin-bottom: 12px;
+}
+.mkdir-input {
+  width: 100%; height: 32px; padding: 0 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-size: 13px; outline: none;
+  font-family: var(--font-sans);
+}
+.mkdir-input:focus { border-color: var(--accent-blue); }
+.mkdir-actions {
+  display: flex; justify-content: flex-end;
+  gap: 8px; margin-top: 16px;
+}
+.mkdir-btn {
+  height: 30px; padding: 0 14px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  font-size: 12px; cursor: pointer;
+  font-family: var(--font-sans);
+}
+.mkdir-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.mkdir-btn.cancel { background: transparent; color: var(--text-secondary); }
+.mkdir-btn.cancel:hover:not(:disabled) { background: var(--bg-hover); }
+.mkdir-btn.confirm { background: var(--accent-blue); color: #fff; border-color: var(--accent-blue); }
+.mkdir-btn.confirm:hover:not(:disabled) { opacity: 0.9; }
 
 /* 拖拽目标视觉反馈 */
 .sftp-pane.drag-target::after {

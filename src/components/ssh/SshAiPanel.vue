@@ -13,6 +13,7 @@
     show-agent-toggle
     v-model:agent-mode="agentMode"
     show-message-actions
+    panel-title="运维知识助手"
     placeholder="询问运维问题..."
     empty-title="运维知识助手"
     empty-desc="专注于 Linux/网络/数据库/容器运维问题"
@@ -85,8 +86,10 @@ async function handleNewChat() {
 // 组件卸载时重置创建状态，防止状态残留
 onUnmounted(() => {
   creating.value = false
-  // 兜底：面板因 v-if 关闭 / 视图切换而卸载时，中止仍在运行的聊天流（幂等，无流时 no-op）
-  store.abortStream()
+  // B12 修复：只 abortStream 不中止运行中 Agent — 复用 useAgentIntegration.handleAbort 逻辑：
+  // Agent 运行中则 agentStore.abort()（置 idle 并清理权限请求状态，见 stores/agent.ts），
+  // 否则中止普通聊天流（幂等，无流时 no-op）
+  agentHandleAbort(() => store.abortStream())
 })
 
 function handleSwitchConv(id: string) {

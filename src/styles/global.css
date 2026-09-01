@@ -28,6 +28,13 @@ button { font-family: var(--font-sans); }
 a { color: var(--accent-blue); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
+/* ── 键盘焦点可见性（不破坏默认 focus 移除，仅增强可见样式） ── */
+:focus-visible {
+  outline: 2px solid var(--accent-blue, #0078d4);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
 /* ── 通用用户徽章 ── */
 .user-info {
   display: flex;
@@ -97,4 +104,12 @@ a:hover { text-decoration: underline; }
 [data-animation="false"] *::after {
   transition-duration: 0s !important;
   animation-duration: 0s !important;
+}
+
+/* ── 系统级减少动效偏好 ── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0s !important;
+    animation-duration: 0s !important;
+  }
 }

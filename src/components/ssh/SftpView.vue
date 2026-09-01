@@ -123,10 +123,11 @@
               <button
                 v-if="t.status === 'running' || t.status === 'pending'"
                 class="tl-action tl-cancel"
-                :title="t.status === 'running' ? '暂停' : '取消'"
-                @click.stop="t.status === 'running' ? store.pauseTransfer(t.id) : store.cancelTransfer(t.id)"
+                :title="canPauseTransfer(t) ? '暂停' : '取消'"
+                @click.stop="canPauseTransfer(t) ? store.pauseTransfer(t.id) : store.cancelTransfer(t.id)"
               >
-                <svg v-if="t.status === 'running'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                <!-- F-6 修复：copy 类项不支持暂停，只给取消 -->
+                <svg v-if="canPauseTransfer(t)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
                 <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
               <button
@@ -211,7 +212,8 @@
       @click.stop
       @contextmenu.prevent
     >
-      <div v-if="transferCtxMenu.item && transferCtxMenu.item.status === 'running'" class="ctx-item" @click="store.pauseTransfer(transferCtxMenu.item.id); transferCtxMenu.visible = false">
+      <!-- F-6 修复：copy 类任务不支持暂停，右键菜单同样隐藏"暂停传输" -->
+      <div v-if="transferCtxMenu.item && canPauseTransfer(transferCtxMenu.item)" class="ctx-item" @click="store.pauseTransfer(transferCtxMenu.item.id); transferCtxMenu.visible = false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
         暂停传输
       </div>
@@ -490,7 +492,14 @@ function clearCompleted() {
   store.clearCompleted()
 }
 
+/** F-6 修复：仅 upload/download 支持暂停；copy 类（同侧复制）不支持暂停/恢复 */
+function canPauseTransfer(t: TransferItem): boolean {
+  return t.status === 'running' && (t.kind === 'upload' || t.kind === 'download')
+}
+
 function onTransferContext(event: MouseEvent, item: TransferItem) {
+  // C32 修复：打开传输右键菜单时先隐藏文件右键菜单（原来互不 dismiss）
+  ctxMenu.visible = false
   transferCtxMenu.value = {
     visible: true,
     x: event.clientX,
@@ -516,13 +525,9 @@ function copyTransferDestPath(item: TransferItem) {
 }
 
 function retryTransfer(item: TransferItem) {
-  store.removeTransfer(item.id)
-  // direction 语义（见 sftp.ts）：'up' = 上传，from 为本地源路径 → side 'local'；
-  // 'down' = 下载，from 为远程源路径 → side 'remote'。onTransfer 据此重新发起跨栏传输。
-  onTransfer({
-    side: item.direction === 'up' ? 'local' : 'remote',
-    paths: [item.from],
-  })
+  // F-6 修复：原实现只取 item.from 重发、目标推导为当前 cwd —
+  // 用户换过目录就传错位置。改为 store 按 kind 用原始 from → to 精确重发
+  store.retryTransfer(item.id)
 }
 
 // ─── 进度订阅 ─────────────────────────
@@ -532,7 +537,13 @@ let unsubClosed: (() => void) | null = null
 let unsubSshClose: (() => void) | null = null
 
 onMounted(() => {
-  const api = window.electronAPI!
+  // B9 修复：浏览器（非 Electron）环境无 electronAPI —
+  // 原 `window.electronAPI!` 非空断言在此处 onMounted 即 TypeError
+  const api = window.electronAPI
+  if (!api) {
+    console.warn('[SftpView] 非 Electron 环境，SFTP 功能不可用')
+    return
+  }
   unsubProgress = api.onSftpProgress((data) => {
     store.applyProgress(data)
   })
@@ -657,6 +668,8 @@ function onContextMenu(e: MouseEvent, entry: AnyEntry | null, side: 'local' | 'r
   const y = e.clientY + estimatedHeight > viewportHeight
     ? e.clientY - estimatedHeight
     : e.clientY
+  // C32 修复：打开文件右键菜单时先隐藏传输右键菜单（原来互不 dismiss）
+  transferCtxMenu.value.visible = false
   ctxMenu.visible = true
   ctxMenu.x = e.clientX
   ctxMenu.y = y

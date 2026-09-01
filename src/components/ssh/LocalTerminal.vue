@@ -26,6 +26,7 @@ import {
   columnToIndex,
   queryCompletion,
   buildCompletionText,
+  releaseCompletionSession,
   type CompletionCandidate,
 } from '@/composables/useCompletion'
 import { useSSHStore } from '@/stores/ssh'
@@ -282,6 +283,8 @@ onMounted(() => {
   // 监听 PTY 退出
   unsubExit = api.onPtyExit(({ id: ptyId, exitCode }) => {
     if (ptyId === id) {
+      // C27 修复：会话关闭时清理补全请求序号（防 _completionRequestIds 泄漏）
+      releaseCompletionSession(props.ptyId)
       terminal?.write(`\r\n\x1b[33m[Process exited with code ${exitCode}]\x1b[0m\r\n`)
       emit('exit', exitCode)
     }
@@ -295,10 +298,17 @@ onMounted(() => {
     }
   })
 
+  // B21 修复：右键粘贴与选中自动复制的剪贴板竞态 —
+  // 右键时 xterm 会先选中单词触发 onSelectionChange 自动 writeText，
+  // 与 contextmenu 里的 clipboard.readText 并发，可能把待粘贴内容覆盖掉。
+  // 右键先快照剪贴板并设时间戳标志，窗口内的自动复制直接跳过
+  let suppressAutoCopyUntil = 0
+
   // 选中文字自动复制到剪贴板
   terminal.onSelectionChange(() => {
     const sel = terminal?.getSelection()
     if (sel) {
+      if (Date.now() < suppressAutoCopyUntil) return
       navigator.clipboard.writeText(sel).catch(() => {})
     }
   })
@@ -306,6 +316,7 @@ onMounted(() => {
   // 右键粘贴：粘贴时去除末尾换行符，避免自动执行
   contextMenuHandler = (e: Event) => {
     e.preventDefault()
+    suppressAutoCopyUntil = Date.now() + 200
     navigator.clipboard.readText().then(text => {
       if (text) {
         // 去除末尾的换行符/回车符，防止粘贴时自动执行命令

@@ -9,6 +9,7 @@ import type { Ref } from 'vue'
 import { defineStore } from 'pinia'
 import {
   api,
+  toFriendlyMessage,
   type Conversation,
   type Message,
   type ModelConfig,
@@ -39,6 +40,7 @@ export interface ChatMessage extends Message {
 
 export const useChatStore = defineStore('chat', () => {
   const appStore = useAppStore()
+  const toast = useToastStore()
 
   // ── 核心对话能力（委托给工厂，SSH 模式后端持久化） ──
   const base: ModeChatStore<unknown, ModeMessage, ModeConversation> = createModeChatStore({
@@ -188,12 +190,12 @@ export const useChatStore = defineStore('chat', () => {
       base.conversations.value = base.conversations.value.map((c) =>
         c.id === targetId ? { ...c, messages: mapped as ModeMessage[] } : c
       )
-    } catch {
-      // 同样仅在会话未改变时写入空数组
+    } catch (e) {
+      // B15 修复：失败时保留旧 messages（不清空），并 toast 提示 —
+      // 原实现把 messages 置 [] 且无任何提示，用户看到空会话无法得知原因
       if (base.currentConvId.value !== targetId) return
-      base.conversations.value = base.conversations.value.map((c) =>
-        c.id === targetId ? { ...c, messages: [] as ModeMessage[] } : c
-      )
+      console.error('[chatStore] loadMessages failed:', e)
+      toast.error('消息加载失败，请重试')
     }
   }
 
@@ -225,11 +227,25 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function deleteConversation(id: string) {
-    await api.deleteConversation(id)
+    // B23 修复：失败时 toast 提示（原实现静默失败，调用方还误以为删掉了）
+    try {
+      await api.deleteConversation(id)
+    } catch (e) {
+      console.error('[chatStore] deleteConversation failed:', e)
+      toast.error(toFriendlyMessage(e, '删除会话失败，请重试'))
+      return
+    }
+    const prevCurrent = base.currentConvId.value
     base.conversations.value = base.conversations.value.filter((c) => c.id !== id)
     // 与 IDE/SSH 工厂逻辑保持一致：删除当前会话后跳到列表第一条，无会话则回空态
     if (base.currentConvId.value === id) {
       base.currentConvId.value = base.conversations.value[0]?.id ?? null
+    }
+    // B23 修复：current 变化后重新加载新 current 会话的消息
+    // （原实现切换后消息区仍是已删除会话的旧内容）
+    const nextCurrent = base.currentConvId.value
+    if (nextCurrent && nextCurrent !== prevCurrent) {
+      await loadMessages(nextCurrent)
     }
   }
 

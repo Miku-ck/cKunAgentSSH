@@ -434,6 +434,15 @@ export async function queryCompletion(
 }
 
 /**
+ * C27 修复：会话关闭时清理该会话的请求序号，_completionRequestIds 不再无界增长。
+ * 由终端组件在 onPtyExit / onSshClose 现有钩子中调用。
+ */
+export function releaseCompletionSession(sessionId: string): void {
+  if (!sessionId) return
+  _completionRequestIds.delete(sessionId)
+}
+
+/**
  * 计算补全后需要发送的剩余字符
  * @param candidate 用户选中的候选词
  * @param prefix 当前已输入的前缀
