@@ -17,15 +17,7 @@ import {
   type AgentTraceSnapshot,
 } from '@/api/client'
 import { useAppStore } from './app'
-import { useSettingsStore } from './settings'
-import { useSkillStore } from './skills'
 
-/** 后端返回的原始消息格式（snake_case） */
-interface RawMessage {
-  run_id?: string
-  agent_trace?: AgentTraceSnapshot
-  [key: string]: unknown
-}
 import { useToastStore } from './toast'
 import { createModeChatStore, registerChatStore } from './createModeChatStore'
 import type { ModeMessage, ModeConversation, ModeChatStore } from './createModeChatStore'
@@ -43,22 +35,6 @@ export interface ChatMessage extends Message {
   fileChanges?: AgentFileChangesSummary
   /** Agent 模式产生的 assistant 消息会带上执行过程快照，使历史会话也能显示过程摘要 */
   agentTrace?: AgentTraceSnapshot
-}
-
-// ── 延迟刷新定时器管理（用于后端标题回填）──
-const _refreshTimers: ReturnType<typeof setTimeout>[] = []
-function scheduleDelayedRefresh(delay: number, convId?: string) {
-  const timer = setTimeout(async () => {
-    await fetchConversations()
-    const targetId = convId ?? currentConversationId.value
-    if (targetId) {
-      await loadMessages(targetId)
-    }
-    // 从列表中移除已执行的定时器
-    const idx = _refreshTimers.indexOf(timer)
-    if (idx >= 0) _refreshTimers.splice(idx, 1)
-  }, delay)
-  _refreshTimers.push(timer)
 }
 
 export const useChatStore = defineStore('chat', () => {
@@ -201,7 +177,7 @@ export const useChatStore = defineStore('chat', () => {
       // Optimization 修复：await 后校验当前会话未改变，避免快速切换时消息串台
       if (base.currentConvId.value !== targetId) return
       // 映射后端的 snake_case 字段到前端 ChatMessage 的 camelCase 字段
-      const mapped = rawMessages.map((msg: RawMessage) => ({
+      const mapped: ChatMessage[] = rawMessages.map((msg) => ({
         ...msg,
         runId: msg.run_id,
         agentTrace: msg.agent_trace,
@@ -210,7 +186,7 @@ export const useChatStore = defineStore('chat', () => {
         duration: msg.agent_trace?.duration ?? undefined,
       }))
       base.conversations.value = base.conversations.value.map((c) =>
-        c.id === targetId ? { ...c, messages: mapped } : c
+        c.id === targetId ? { ...c, messages: mapped as ModeMessage[] } : c
       )
     } catch {
       // 同样仅在会话未改变时写入空数组
@@ -219,6 +195,33 @@ export const useChatStore = defineStore('chat', () => {
         c.id === targetId ? { ...c, messages: [] as ModeMessage[] } : c
       )
     }
+  }
+
+  // ── 延迟刷新定时器管理（用于后端标题回填）──
+  // 审查 M-17 修复：原实现是【模块级】函数，回调里引用的 fetchConversations /
+  // currentConversationId / loadMessages 都定义在 store 闭包内 — 模块作用域根本
+  // 看不到它们：typecheck 报 TS2304，且定时器真正触发时抛 ReferenceError，
+  // 回调末尾的 splice 永远执行不到，_refreshTimers 数组无界增长（每次对话都泄漏）。
+  // 移入闭包后引用正确，定时器登记也收敛在本 store 生命周期内。
+  const _refreshTimers: ReturnType<typeof setTimeout>[] = []
+  function scheduleDelayedRefresh(delay: number, convId?: string) {
+    const timer = setTimeout(async () => {
+      try {
+        await fetchConversations()
+        const targetId = convId ?? currentConversationId.value
+        if (targetId) {
+          await loadMessages(targetId)
+        }
+      } catch (e) {
+        // 刷新失败不影响主流程（下次对话会再触发），但必须捕获，
+        // 否则 unhandled rejection 且定时器登记无法清理
+        console.warn('[chatStore] 延迟刷新失败:', e)
+      } finally {
+        const idx = _refreshTimers.indexOf(timer)
+        if (idx >= 0) _refreshTimers.splice(idx, 1)
+      }
+    }, delay)
+    _refreshTimers.push(timer)
   }
 
   async function deleteConversation(id: string) {
@@ -257,14 +260,6 @@ export const useChatStore = defineStore('chat', () => {
       return
     }
 
-    const settingsStore = useSettingsStore()
-    const skillStore = useSkillStore()
-    const autoMatched = settingsStore.settings.chat.autoSkillMatch
-      ? skillStore.matchSkills(content, 'ssh')
-      : []
-    const allSkillIds = [...new Set([...skillIds, ...autoMatched.map(s => s.id)])]
-    const skillContext = skillStore.getSkillContext(allSkillIds)
-
     if (!currentConversationId.value) {
       // Optimization 修复：自动创建会话失败时捕获错误，避免变为未捕获 rejection
       try {
@@ -277,8 +272,11 @@ export const useChatStore = defineStore('chat', () => {
       }
     }
 
+    // 技能注入统一由 createModeChatStore 工厂完成（显式 skillIds + autoSkillMatch 自动匹配，
+    // 合并去重后单次注入 systemPrompt）。此处不再重复 matchSkills/getSkillContext，
+    // 避免最终 systemPrompt 中出现两份技能上下文。
     await base.sendMessage(content, {
-      systemPrompt: skillContext || undefined,
+      skillIds: [...new Set(skillIds)],
       attachments,
     })
   }

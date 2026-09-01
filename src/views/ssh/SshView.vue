@@ -138,7 +138,7 @@ v-show="s.id === store.activeSessionId"
     </div>
 
     <!-- AI 运维助手面板 -->
-    <SshAiPanel v-if="sshAiStore.showAiPanel" @close="sshAiStore.showAiPanel = false" />
+    <SshAiPanel v-if="sshAiStore.showAiPanel" @close="sshAiStore.closeAiPanel()" />
 
     <!-- 连接弹窗 -->
     <ConnectionModal

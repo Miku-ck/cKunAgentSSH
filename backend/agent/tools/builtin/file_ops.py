@@ -73,7 +73,7 @@ class ReadFileTool(BaseTool):
         },
         "required": ["path"],
     }
-    meta = ToolMeta(risk_level="safe", reversible=True)
+    meta = ToolMeta(risk_level="safe", reversible=True, idempotent=True)
 
     async def execute(self, context, path, start_line=None, end_line=None):
         # 解析路径
@@ -176,7 +176,7 @@ class ListDirTool(BaseTool):
         },
         "required": [],
     }
-    meta = ToolMeta(risk_level="safe", reversible=True)
+    meta = ToolMeta(risk_level="safe", reversible=True, idempotent=True)
 
     async def execute(self, context, path=None):
         target = path or context.workspace_path

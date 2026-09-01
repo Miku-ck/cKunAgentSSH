@@ -517,7 +517,12 @@ function copyTransferDestPath(item: TransferItem) {
 
 function retryTransfer(item: TransferItem) {
   store.removeTransfer(item.id)
-  onTransfer({ from: item.from, to: item.to, direction: item.direction } as any)
+  // direction 语义（见 sftp.ts）：'up' = 上传，from 为本地源路径 → side 'local'；
+  // 'down' = 下载，from 为远程源路径 → side 'remote'。onTransfer 据此重新发起跨栏传输。
+  onTransfer({
+    side: item.direction === 'up' ? 'local' : 'remote',
+    paths: [item.from],
+  })
 }
 
 // ─── 进度订阅 ─────────────────────────

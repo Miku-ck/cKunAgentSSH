@@ -2,10 +2,13 @@
 对话路由 — SSE 流式聊天 + 会话 CRUD
 """
 import asyncio
+import logging
 import re
 from typing import Optional, Literal
 import uuid
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, HTTPException, Request, File, UploadFile, Form
 from fastapi.responses import StreamingResponse
@@ -29,6 +32,9 @@ HEARTBEAT_INTERVAL = 15  # 秒
 
 
 # ── Request / Response Models ──
+# 注意：以下常量必须在 AttachmentItem 之前定义（Field 默认值在类创建时求值）
+MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_ATTACHMENT_CHARS = 50_000  # 注入上下文的文本上限
 
 
 class AttachmentItem(BaseModel):
@@ -59,8 +65,6 @@ ALLOWED_UPLOAD_EXTS = {
     ".java", ".go", ".rs", ".c", ".h", ".cpp", ".hpp", ".cs", ".php",
     ".rb", ".pl", ".kt", ".swift", ".gradle", ".makefile", ".dockerfile",
 }
-MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10MB
-MAX_ATTACHMENT_CHARS = 50_000  # 注入上下文的文本上限
 
 
 def _uploads_root() -> Path:
@@ -132,33 +136,34 @@ async def stream_chat(req: StreamChatRequest, request: Request):
     if not req.message.strip() and not req.attachments:
         raise HTTPException(status_code=400, detail="消息内容为空")
     # ── 按 mode 选择默认模型（兜底）──
+    # 审查 M-13：db 同步调用放线程池，避免阻塞事件循环（卡住所有并发请求/心跳）
     effective_model_id = req.model_id
     if not effective_model_id:
-        default_model = db.get_default_model(req.mode)
+        default_model = await asyncio.to_thread(db.get_default_model, req.mode)
         if default_model:
             effective_model_id = default_model.get("model_id") or default_model.get("id")
     if not effective_model_id:
-        default_model = db.get_default_model(None)
+        default_model = await asyncio.to_thread(db.get_default_model, None)
         if default_model:
             effective_model_id = default_model.get("model_id") or default_model.get("id")
     if not effective_model_id:
         raise HTTPException(status_code=400, detail=f"未找到 mode={req.mode} 的默认模型，请先配置模型")
 
     req.model_id = effective_model_id
-    model_cfg = db_get_model_config(req.model_id)  # 内部调用，含真实 api_key
+    model_cfg = await asyncio.to_thread(db_get_model_config, req.model_id)  # 内部调用，含真实 api_key
     if not model_cfg:
         raise HTTPException(status_code=400, detail=f"Unknown model_id: {req.model_id}")
 
     # 验证会话存在
-    conv = db.get_conversation(req.conversation_id)
+    conv = await asyncio.to_thread(db.get_conversation, req.conversation_id)
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     # 加载历史消息构建上下文 — 条数优先用请求参数，兜底 20
     # 前端 ChatPanel 的 contextWindow 设置会通过请求体透传过来
     history_limit = req.context_window if (req.context_window and req.context_window > 0) else 20
-    history = db.get_recent_messages(req.conversation_id, limit=history_limit)
-    memories = db.get_relevant_memories(req.mode, limit=5)
+    history = await asyncio.to_thread(db.get_recent_messages, req.conversation_id, limit=history_limit)
+    memories = await asyncio.to_thread(db.get_relevant_memories, req.mode, limit=5)
 
     # 构建上下文 prompt：前端传入的 system_prompt
     context_prompt = req.system_prompt or ""
@@ -181,9 +186,11 @@ async def stream_chat(req: StreamChatRequest, request: Request):
     # 从模型配置读取推理参数；max_tokens 做安全封顶避免 400
     temperature = model_cfg.get("temperature") if model_cfg.get("temperature") is not None else 0.7
     top_p = model_cfg.get("top_p") if model_cfg.get("top_p") is not None else 0.9
+    # 审查 M-16：传入 prompt 文本（safe_max_tokens 内部用 estimate_tokens 估算，
+    # 不再按 1.5 token/字符高估导致长对话输出被截到 256）
     max_tokens = safe_max_tokens(
         model_cfg.get("max_tokens"),
-        sum(len(m["content"]) for m in messages),
+        " ".join(m["content"] for m in messages if isinstance(m.get("content"), str)),
         model_cfg.get("max_output_tokens"),
     )
 
@@ -232,13 +239,15 @@ async def _generate_stream(
     full_reasoning = ""
 
     try:
-        # 先保存用户消息
-        db.add_message(conversation_id, "user", user_message, model_used=model_id)
-        db.touch_conversation(conversation_id)
-        db.update_conversation_status(conversation_id, "in_progress")
+        # 先保存用户消息（审查 M-13：db 同步调用放线程池，避免阻塞事件循环）
+        await asyncio.to_thread(
+            db.add_message, conversation_id, "user", user_message, model_used=model_id,
+        )
+        await asyncio.to_thread(db.touch_conversation, conversation_id)
+        await asyncio.to_thread(db.update_conversation_status, conversation_id, "in_progress")
 
 # 流式调用 LLM；推理/思考内容的 token 预算（仅 enable_thinking=True 时生效）
-        _cfg = db_get_model_config(model_id)
+        _cfg = await asyncio.to_thread(db_get_model_config, model_id)
         reasoning_max_tokens = _cfg.get("reasoning_tokens") if enable_thinking else None
         chunk_iter = chat_stream(
             base_url=base_url,
@@ -273,15 +282,19 @@ async def _generate_stream(
                 yield ": heartbeat\n\n"
 
         # 保存助手消息
-        db.add_message(
-            conversation_id,
-            "assistant",
-            full_content,
-            reasoning=full_reasoning if full_reasoning else None,
-            model_used=model_id,
-        )
-        db.touch_conversation(conversation_id)
-        db.update_conversation_status(conversation_id, "completed")
+        # 审查 MINOR 修复：LLM 未产生任何内容时不写空消息行（原实现空串入库，
+        # 前端渲染空气泡且污染历史上下文）
+        if full_content or full_reasoning:
+            await asyncio.to_thread(
+                db.add_message,
+                conversation_id,
+                "assistant",
+                full_content,
+                reasoning=full_reasoning if full_reasoning else None,
+                model_used=model_id,
+            )
+        await asyncio.to_thread(db.touch_conversation, conversation_id)
+        await asyncio.to_thread(db.update_conversation_status, conversation_id, "completed")
 
         yield "data: [DONE]\n\n"
 
@@ -289,9 +302,10 @@ async def _generate_stream(
         # 通过 PostProcessManager 统一管理生命周期 + 总超时
         # turn_index 用于频率控制（标题仅首轮、技能每 3 轮、记忆每轮）
         try:
-            # 查当前会话已有消息数作为 turn_index（assistant 消息已保存，所以是 turn+1）
-            existing_msgs = db.get_messages(conversation_id, limit=1000)
-            turn_index = max(0, len([m for m in existing_msgs if m.get("role") == "user"]) - 1)
+            # 查当前会话 user 消息数作为 turn_index（assistant 消息已保存，所以是 turn+1）
+            # 审查 MINOR 修复：COUNT 查询替代 get_messages(limit=1000) 全量拉取
+            _n_user = await asyncio.to_thread(db.count_messages_by_role, conversation_id, "user")
+            turn_index = max(0, _n_user - 1)
         except Exception:
             turn_index = 0
 
@@ -307,16 +321,33 @@ async def _generate_stream(
         )
 
     except Exception as e:
-        db.update_conversation_status(conversation_id, "failed")
+        # 审查 MINOR 修复：LLM 响应中断时已生成的部分内容不再丢弃（原实现只发 error
+        # 事件，用户看到空白但消息实际已生成一半）— 带中断标记入库
+        if full_content or full_reasoning:
+            try:
+                partial = full_content
+                if partial:
+                    partial += "\n\n…[响应中断，以上内容不完整]"
+                await asyncio.to_thread(
+                    db.add_message,
+                    conversation_id,
+                    "assistant",
+                    partial,
+                    reasoning=full_reasoning if full_reasoning else None,
+                    model_used=model_id,
+                )
+            except Exception:
+                logger.exception("[chat] 保存中断部分内容失败")
+        await asyncio.to_thread(db.update_conversation_status, conversation_id, "failed")
         yield sse_event({"error": str(e)})
         yield "data: [DONE]\n\n"
     finally:
         # 客户端主动 abort (SSE 断开) 抛 CancelledError/ConnectionError 不被 except Exception 捕获，
         # 会话会卡 in_progress；仅在仍为 in_progress 时复位为 completed，避免覆盖 failed 状态
         try:
-            cur = db.get_conversation(conversation_id)
+            cur = await asyncio.to_thread(db.get_conversation, conversation_id)
             if cur and cur.get("status") == "in_progress":
-                db.update_conversation_status(conversation_id, "completed")
+                await asyncio.to_thread(db.update_conversation_status, conversation_id, "completed")
         except Exception:
             pass
 
@@ -325,20 +356,20 @@ async def _generate_stream(
 
 
 @router.get("/chat/conversations")
-async def list_conversations(limit: int = 50, offset: int = 0, mode: Optional[str] = None):
+def list_conversations(limit: int = 50, offset: int = 0, mode: Optional[str] = None):
     """获取会话列表。mode 不为 None 时仅返回指定模式的会话"""
     return db.list_conversations(limit=limit, offset=offset, mode=mode)
 
 
 @router.post("/chat/conversations")
-async def create_conversation(req: CreateConversationRequest):
+def create_conversation(req: CreateConversationRequest):
     """创建新会话"""
     title = req.title or "New Chat"
     return db.create_conversation(title=title, mode=req.mode)
 
 
 @router.get("/chat/conversations/{cid}/messages")
-async def get_messages(cid: str, limit: int = 50, offset: int = 0):
+def get_messages(cid: str, limit: int = 50, offset: int = 0):
     """获取会话消息"""
     conv = db.get_conversation(cid)
     if not conv:
@@ -347,7 +378,7 @@ async def get_messages(cid: str, limit: int = 50, offset: int = 0):
 
 
 @router.delete("/chat/conversations/{cid}")
-async def delete_conversation(cid: str):
+def delete_conversation(cid: str):
     """删除会话"""
     conv = db.get_conversation(cid)
     if not conv:
@@ -359,7 +390,7 @@ async def delete_conversation(cid: str):
 
 
 @router.patch("/chat/conversations/{cid}")
-async def update_conversation(cid: str, req: UpdateTitleRequest):
+def update_conversation(cid: str, req: UpdateTitleRequest):
     """更新会话标题"""
     conv = db.get_conversation(cid)
     if not conv:

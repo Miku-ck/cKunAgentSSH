@@ -16,7 +16,7 @@ import { useToastStore } from './toast'
 import { useAgentStore } from './agent'
 import { useSettingsStore } from './settings'
 import { useSkillStore } from './skills'
-import { finalizeAgentMessage } from '@/composables/useAgentIntegration'
+import { finalizeAgentMessage, type AgentMessage } from '@/composables/useAgentIntegration'
 
 /**
  * 工厂内部依赖 chatStore 的模型列表能力。为避免与 chat.ts 形成循环导入
@@ -459,9 +459,19 @@ export function createModeChatStore<
   watch(() => agentStore.status, (newStatus, oldStatus) => {
     if (agentStore.currentMode !== mode) return
     if (oldStatus === 'running' && (newStatus === 'completed' || newStatus === 'failed')) {
-      const conv = persistence.currentConversation.value
+      // 审查 M-19 修复：优先固化为本次运行的【源会话】（agentStore 在 runAgent
+      // 时记录的 conversationId）。原实现取"完成时刻的当前会话" — 用户在 Agent
+      // 运行中切换会话后，固化会落到错误的会话上：源会话的 temp-agent 占位消息
+      // 永远停在"运行中"骨架态，结果消息丢失。
+      const sourceId = agentStore.currentConversationId
+      const conv = (sourceId
+        ? persistence.conversations.value.find((c) => c.id === sourceId)
+        : undefined) || persistence.currentConversation.value || null
       if (!conv) return
-      finalizeAgentMessage(conv, agentStore)
+      // 泛型边界：TConversation.messages 为 TMessage[]（自由类型参数），
+      // 与 AgentMessage[] 不可直接互证，显式断言（TMessage extends ModeMessage
+      // 结构上满足 AgentMessage 最小接口）
+      finalizeAgentMessage(conv as unknown as { messages: AgentMessage[] }, agentStore)
       notifyConversationsChanged()
       config.onAgentComplete?.(conv)
     }

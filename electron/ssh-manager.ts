@@ -5,11 +5,15 @@
 import { Client, ClientChannel } from 'ssh2'
 import type { SFTPWrapper } from 'ssh2'
 import { LS_COLORS_NO_BACKGROUND } from './utils/terminal-colors'
+import { assertKeyFileSafe } from './utils/path-guard'
 import { BrowserWindow, app } from 'electron'
 import { readFileSync, statSync } from 'fs'
 import { promises as fsPromises } from 'fs'
 import { posix, join } from 'path'
 import { createHash } from 'crypto'
+
+/** exec 命令输出累积上限（1MB），超过后截断并在返回结果附提示，防止无界内存增长 */
+const MAX_EXEC_OUTPUT_BYTES = 1024 * 1024
 
 // ════════════════════════════════════════════════
 //   传输错误分类（断点续传 / 友好提示 / 自动重试依据）
@@ -122,6 +126,11 @@ class TransferHeartbeat {
           this.stalled = true
           onStall()
         }
+      } else if (this.stalled) {
+        // 审查 MINOR：进度恢复后解除粘滞。原实现 stalled 一旦置 true 永不复位，
+        // 一次瞬时卡顿之后，本次传输的后续任何错误都会被 heartbeat.isStalled()
+        // 误判为 STALLED（错误分类失真，前端提示与重试策略都跟着错）
+        this.stalled = false
       }
     }, intervalMs)
   }
@@ -138,28 +147,72 @@ class TransferHeartbeat {
   }
 }
 
-/** 简易并发池：以 concurrency 个 worker 抢占式处理 items，任一失败立即 reject */
-async function runConcurrent<T>(
-  items: T[],
-  concurrency: number,
-  worker: (item: T, index: number) => Promise<void>,
-  shouldAbort: () => boolean,
-): Promise<void> {
-  let nextIndex = 0
-  const workers: Promise<void>[] = []
+/**
+ * 审查 M-5：并行读 + 顺序写的传输流水线。
+ *
+ * 背景：原上传/下载用 8 路并行绝对偏移写（读、写都乱序）。当写偏移超过目标
+ * 文件当前 EOF 时，SFTP 服务端（OpenSSH）与本地文件系统都会用【零字节填充】
+ * 中间间隙。单次传输内后续 chunk 会覆盖回正确数据，但若传输在间隙尚未被
+ * 覆盖前中断（取消/暂停/崩溃/断网），.part 文件大小已扩张到覆盖零填充区，
+ * 下次续传 startOffset = partStat.size 会【跳过】中间的全零块 — rename 后
+ * 文件静默损坏。
+ *
+ * 修复策略（读并行、写顺序）：
+ * - 读侧保持预读窗口（window 个 chunk 并行读入内存，上限 window*CHUNK_SIZE）
+ * - 写侧严格按 chunk 偏移顺序提交（高水位 = 已写连续前缀），永不越过 EOF，
+ *   零填充不可能发生；中断后续传只信任 .part 的连续前缀
+ */
+interface PipelineChunk {
+  offset: number
+  length: number
+}
 
-  const runOne = async (): Promise<void> => {
-    while (nextIndex < items.length && !shouldAbort()) {
-      const idx = nextIndex++
-      await worker(items[idx], idx)
+async function pipelineReadWrite(
+  chunks: PipelineChunk[],
+  window: number,
+  readChunk: (index: number, chunk: PipelineChunk) => Promise<Buffer>,
+  writeChunk: (index: number, chunk: PipelineChunk, buf: Buffer) => Promise<void>,
+  isCancelled: () => boolean,
+  onWritten: (chunk: PipelineChunk) => void,
+): Promise<void> {
+  const slots: Array<{ buf: Buffer | null; ready: Promise<void>; resolve: () => void }> = []
+  for (let i = 0; i < chunks.length; i++) {
+    let resolve!: () => void
+    const ready = new Promise<void>(r => { resolve = r })
+    slots.push({ buf: null, ready, resolve })
+  }
+
+  let readIdx = 0
+  let writeIdx = 0
+  let readError: Error | null = null
+
+  const issueReads = (): void => {
+    // 预读窗口：最多领先写指针 window 个 chunk
+    while (readIdx < chunks.length && readIdx < writeIdx + window) {
+      const i = readIdx++
+      readChunk(i, chunks[i]).then((buf) => {
+        slots[i].buf = buf
+        slots[i].resolve()
+      }).catch((e: Error) => {
+        readError = e
+        slots[i].resolve()
+      })
     }
   }
 
-  const parallel = Math.min(concurrency, items.length)
-  for (let i = 0; i < parallel; i++) {
-    workers.push(runOne())
+  issueReads()
+  while (writeIdx < chunks.length) {
+    if (isCancelled()) break
+    const slot = slots[writeIdx]
+    await slot.ready
+    if (readError) throw readError
+    const c = chunks[writeIdx]
+    await writeChunk(writeIdx, c, slot.buf!)
+    slot.buf = null // 释放引用，及时 GC
+    writeIdx++
+    onWritten(c)
+    issueReads()
   }
-  await Promise.all(workers)
 }
 
 export interface SSHConnectionConfig {
@@ -255,15 +308,20 @@ export class SSHManager {
   }
 
   /**
-   * ssh2 hostVerifier 回调 — TOFU（Trust On First Use）模型
+   * TOFU（Trust On First Use）主机密钥验证
    * - 首次连接：记录指纹并通知前端
    * - 指纹匹配：允许连接
    * - 指纹不匹配：拒绝连接（可能的中间人攻击）
+   *
+   * 审查 M-1 修复：hostKey 由每次连接构造的闭包显式传入（不再读共享的
+   * _verifyingHostKey 字段）。原实现在并发连接时存在两类问题：
+   * 1) 单槽位串扰 — 连接 A 设置 host:port 后，连接 B 在 A 的密钥到达前覆盖
+   *    槽位，A 的密钥被按 B 的主机校验（跨主机误判/误信任）；
+   * 2) fail-open — 槽位为 null 时（竞态窗口/清理过早）直接 return true，
+   *    主机密钥完全未经验证即放行。
    */
-  private hostVerifier = (key: Buffer): boolean => {
+  private verifyHostKey(hostKey: string, key: Buffer): boolean {
     const fp = createHash('sha256').update(key).digest('base64')
-    const hostKey = this._verifyingHostKey
-    if (!hostKey) return true // 无 host-key 上下文时不阻拦
 
     const stored = this.knownHosts.get(hostKey)
     if (stored === undefined) {
@@ -278,9 +336,6 @@ export class SSHManager {
     this.safeSend('ssh:host-key-mismatch', { hostKey, expected: stored, got: fp })
     return false
   }
-
-  /** 当前正在验证的 host:port 键（供 hostVerifier 闭包使用） */
-  private _verifyingHostKey: string | null = null
 
   /** 安全发送 IPC 消息（窗口已销毁时跳过） */
   private safeSend(channel: string, data: unknown): void {
@@ -301,14 +356,19 @@ export class SSHManager {
       // 启用 SSH 压缩：对文本/代码/日志类小文件有明显加速效果
       // （对已压缩的图片/视频/zip 等无收益但也不会显著变慢，ssh2 会自适应）
       compress: true,
-      // s1 修复：主机密钥验证（TOFU 模型），防止中间人攻击
-      hostVerifier: this.hostVerifier,
+      // s1 修复 + 审查 M-1：主机密钥验证（TOFU 模型），防止中间人攻击。
+      // 每次连接构造独立闭包捕获本连接的 host:port，避免并发连接共享单槽位
+      // 导致的跨主机串扰与 fail-open（见 verifyHostKey 注释）。
+      hostVerifier: (key: Buffer) => this.verifyHostKey(`${config.host}:${config.port}`, key),
     }
 
     if (config.authType === 'password') {
       connectConfig.password = config.password
     } else if (config.authType === 'privateKey') {
       if (config.privateKeyPath) {
+        // 修复 1：读取私钥前做路径白名单校验（~/.ssh、userData 或文件选择对话框选取），
+        // 防止渲染进程用任意路径读取敏感文件；校验失败直接抛出，由 ipcMain.handle 转 reject。
+        assertKeyFileSafe(config.privateKeyPath)
         connectConfig.privateKey = readFileSync(config.privateKeyPath, 'utf-8')
       }
       if (config.passphrase) {
@@ -348,9 +408,9 @@ export class SSHManager {
     cols?: number,
     rows?: number,
   ): Promise<{ id: string; name: string }> {
-    // s1 修复：加载 known_hosts 并设置当前验证上下文
+    // s1 修复：加载 known_hosts（审查 M-1：验证上下文已由 buildConnectConfig
+    // 的每连接闭包捕获，不再使用共享槽位）
     await this.loadKnownHosts()
-    this._verifyingHostKey = `${config.host}:${config.port}`
     const client = new Client()
     const connectConfig = this.buildConnectConfig(config)
     // s3 修复：连接配置已提取后立即清除内存中的明文密码/passphrase
@@ -358,10 +418,8 @@ export class SSHManager {
     config.passphrase = undefined
 
     return new Promise((resolve, reject) => {
-      // s1 修复：连接结果确定后清除验证上下文，避免跨连接串扰
-      const cleanup = () => { this._verifyingHostKey = null }
-      const wrappedResolve = (val: { id: string; name: string }) => { cleanup(); resolve(val) }
-      const wrappedReject = (err: Error) => { cleanup(); reject(err) }
+      const wrappedResolve = (val: { id: string; name: string }) => { resolve(val) }
+      const wrappedReject = (err: Error) => { reject(err) }
 
       client.on('ready', () => {
         if (!withShell) {
@@ -439,6 +497,11 @@ export class SSHManager {
             stream.on('close', () => {
               this.sessions.delete(id)
               this.safeSend('ssh:close', { id })
+              // 审查 M-6 修复：shell 通道关闭不等于 SSH 连接结束 — 原实现只删
+              // session 并通知前端，底层 client socket 一直挂着（client 的 'close'
+              // 事件只在连接级关闭时触发），远端断开后连接/文件句柄持续泄漏直到
+              // TCP 自行超时。此处主动 end() 整个连接（已关闭时 end() 为 no-op）。
+              try { client.end() } catch { /* ignore */ }
             })
 
             wrappedResolve({ id, name })
@@ -528,14 +591,25 @@ export class SSHManager {
         streamRef = stream
         let stdout = ''
         let stderr = ''
+        let stdoutTruncated = false
+        let stderrTruncated = false
         let exitCode: number | null = null
 
+        // 修复 3：输出累积上限——达到 1MB 后停止追加，保留已截断内容并标记
+        const appendCapped = (acc: string, text: string): string => {
+          if (acc.length >= MAX_EXEC_OUTPUT_BYTES) return acc
+          const remain = MAX_EXEC_OUTPUT_BYTES - acc.length
+          return text.length > remain ? acc + text.slice(0, remain) : acc + text
+        }
+
         stream.on('data', (data: Buffer) => {
-          stdout += data.toString('utf-8')
+          stdout = appendCapped(stdout, data.toString('utf-8'))
+          if (stdout.length >= MAX_EXEC_OUTPUT_BYTES) stdoutTruncated = true
         })
         if (stream.stderr) {
           stream.stderr.on('data', (data: Buffer) => {
-            stderr += data.toString('utf-8')
+            stderr = appendCapped(stderr, data.toString('utf-8'))
+            if (stderr.length >= MAX_EXEC_OUTPUT_BYTES) stderrTruncated = true
           })
         }
         stream.on('exit', (code: number | null) => {
@@ -545,7 +619,12 @@ export class SSHManager {
           clearTimeout(timer)
           if (!settled) {
             settled = true
-            resolve({ stdout, stderr, exitCode })
+            const TRUNCATED_NOTE = '\n[输出已截断，超过 1MB 上限]'
+            resolve({
+              stdout: stdoutTruncated ? stdout + TRUNCATED_NOTE : stdout,
+              stderr: stderrTruncated ? stderr + TRUNCATED_NOTE : stderr,
+              exitCode,
+            })
           }
         })
         stream.on('error', (err: Error) => {
@@ -614,9 +693,8 @@ export class SSHManager {
   /** 测试连接:建立成功后立即断开,不写入 sessions */
   async testConnection(config: SSHConnectionConfig): Promise<SSHTestResult> {
     const start = Date.now()
-    // s1 修复：测试连接也走同样的 host key 验证
+    // s1 修复：测试连接也走同样的 host key 验证（每连接闭包，审查 M-1）
     await this.loadKnownHosts()
-    this._verifyingHostKey = `${config.host}:${config.port}`
     const client = new Client()
     const connectConfig = this.buildConnectConfig(config)
 
@@ -625,7 +703,6 @@ export class SSHManager {
       let done = (ok: boolean, message: string) => {
         if (settled) return
         settled = true
-        this._verifyingHostKey = null
         try { client.end() } catch { /* ignore */ }
         resolve({ ok, message, latencyMs: Date.now() - start })
       }
@@ -852,6 +929,11 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       this.safeSend('sftp:stalled', { id: transferId })
     })
 
+    // M7 修复（上传侧补齐）：句柄声明在 try 外，确保 finally 块始终可访问。
+    // （原为 try 内 const，finally 引用会抛 ReferenceError 并被内层 catch 吞掉，
+    //   导致每次上传完成/异常时本地 fd 与远程句柄泄漏）
+    let remoteHandle: Buffer | null = null
+    let localFd: Awaited<ReturnType<typeof fsPromises.open>> | null = null
     try {
       // 1. 确定续传起点
       let startOffset = 0
@@ -889,10 +971,13 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       }
 
       // 2. 打开远程 .part 文件（存在用 r+ 续写，不存在用 w 新建）
-      const remoteHandle = await sftpOpen(sftp, partPath, partExists ? 'r+' : 'w')
+      remoteHandle = await sftpOpen(sftp, partPath, partExists ? 'r+' : 'w')
 
       // 3. 打开本地文件
-      const localFd = await fsPromises.open(localPath, 'r')
+      localFd = await fsPromises.open(localPath, 'r')
+      // 类型收窄（此时两者保证非空），供异步闭包内使用
+      const uploadRemoteHandle = remoteHandle
+      const uploadLocalFd = localFd
 
       // 4. 构造分块列表
       const chunks: Array<{ offset: number; length: number }> = []
@@ -911,22 +996,28 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       }
 
       if (chunks.length > 0) {
-        await runConcurrent(
+        // 审查 M-5：本地读并行（窗口 2*CONCURRENCY）+ 远程 .part 顺序追加写，
+        // 杜绝"越过 EOF 的零填充 + 中断后续传跳过零块"导致的静默损坏
+        await pipelineReadWrite(
           chunks,
-          CONCURRENCY,
-          async (chunk) => {
-            if (cancelled) return
+          2 * CONCURRENCY,
+          async (_i, chunk) => {
             const buf = Buffer.alloc(chunk.length)
-            const { bytesRead } = await localFd.read(buf, 0, chunk.length, chunk.offset)
+            const { bytesRead } = await uploadLocalFd.read(buf, 0, chunk.length, chunk.offset)
             if (bytesRead !== chunk.length) {
               throw new Error(`本地读取不完整: 期望 ${chunk.length}, 实际 ${bytesRead}`)
             }
-            await sftpWrite(sftp, remoteHandle, buf, chunk.offset)
+            return buf
+          },
+          async (_i, chunk, buf) => {
+            await sftpWrite(sftp, uploadRemoteHandle, buf, chunk.offset)
+          },
+          () => cancelled,
+          (chunk) => {
             transferred += chunk.length
             lastProgress = Date.now()
             reportProgress()
           },
-          () => cancelled,
         )
       }
 
@@ -949,9 +1040,9 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       }
       throw toTransferError(tErr)
     } finally {
-      // M7 修复：FD 关闭移入 finally，确保异常路径也不泄漏
-      try { await localFd.close() } catch { /* ignore */ }
-      try { await sftpClose(sftp, remoteHandle) } catch { /* ignore */ }
+      // M7 修复（上传侧补齐）：FD/句柄关闭在 finally 可达（null 安全）
+      try { if (localFd) await localFd.close() } catch { /* ignore */ }
+      try { if (remoteHandle) await sftpClose(sftp, remoteHandle) } catch { /* ignore */ }
       heartbeat.stop()
       this.transfers.delete(transferId)
     }
@@ -995,7 +1086,7 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
 
     // M7 修复：声明在 try 外部，确保 finally 块始终可访问
     let remoteHandle: Buffer | null = null
-    let localFd: { close: () => Promise<void> } | null = null
+    let localFd: Awaited<ReturnType<typeof fsPromises.open>> | null = null
     try {
       // 1. 打开远程文件（后续校验和下载都复用）
       remoteHandle = await sftpOpen(sftp, remotePath, 'r')
@@ -1035,6 +1126,9 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
 
       // 3. 打开本地 .part（存在用 r+ 续写，不存在用 w 新建）
       localFd = await fsPromises.open(partPath, partExists ? 'r+' : 'w')
+      // 类型收窄（此时两者保证非空），供异步闭包内使用
+      const downloadRemoteHandle = remoteHandle
+      const downloadLocalFd = localFd
 
       // 4. 构造分块列表
       const chunks: Array<{ offset: number; length: number }> = []
@@ -1053,18 +1147,35 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       }
 
       if (chunks.length > 0) {
-        await runConcurrent(
+        // 审查 M-5：远程读并行（窗口 2*CONCURRENCY）+ 本地 .part 顺序追加写，
+        // 杜绝"越过 EOF 的零填充 + 中断后续传跳过零块"导致的静默损坏
+        await pipelineReadWrite(
           chunks,
-          CONCURRENCY,
-          async (chunk) => {
-            if (cancelled) return
-            const buf = await sftpRead(sftp, remoteHandle, chunk.offset, chunk.length)
-            await localFd.write(buf, 0, buf.length, chunk.offset)
-            transferred += buf.length
+          2 * CONCURRENCY,
+          async (_i, chunk) => {
+            // 读满循环：SFTP 单次 read 可能返回短读（部分字节），按剩余长度续读；
+            // 返回 0 字节说明到达 EOF（文件在传输中缩小），属异常，抛错交由重试
+            const buf = Buffer.alloc(chunk.length)
+            let off = 0
+            while (off < chunk.length) {
+              const part = await sftpRead(sftp, downloadRemoteHandle, chunk.offset + off, chunk.length - off)
+              if (part.length === 0) {
+                throw new Error(`远程读取不完整: 期望 ${chunk.length}, 实际 ${off}`)
+              }
+              part.copy(buf, off)
+              off += part.length
+            }
+            return buf
+          },
+          async (_i, chunk, buf) => {
+            await downloadLocalFd.write(buf, 0, buf.length, chunk.offset)
+          },
+          () => cancelled,
+          (chunk) => {
+            transferred += chunk.length
             lastProgress = Date.now()
             reportProgress()
           },
-          () => cancelled,
         )
       }
 

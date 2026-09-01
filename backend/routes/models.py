@@ -9,7 +9,7 @@ router = APIRouter(tags=["models"])
 
 
 @router.get("/models")
-async def list_models():
+def list_models():
     """返回可用模型列表（供前端下拉选择）"""
     models = db.list_models_config()
     return [

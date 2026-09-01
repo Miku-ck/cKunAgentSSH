@@ -32,7 +32,7 @@ export function useSshNavigation(
   )
 
   // 延迟聚焦定时器 ID 列表，组件卸载时清理
-  const focusTimers: number[] = []
+  const focusTimers: ReturnType<typeof setTimeout>[] = []
 
   // ─── 页面切换 ───
   function goHome() {

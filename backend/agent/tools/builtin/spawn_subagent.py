@@ -16,6 +16,7 @@
 
 注意：子 Agent 使用与主 Agent 相同的 LLM 配置（base_url/api_key/model）。
 """
+import asyncio
 import logging
 from typing import Optional
 
@@ -180,18 +181,20 @@ class SpawnSubagentTool(BaseTool):
         try:
             import database as db
             mode = tool_ctx.mode or "ssh"
-            # 1. 模式默认
+            # 1. 模式默认 → 2. 全局默认 → 3. 任意可用（list_models_config 返回 list[dict]，取前 10 个）
             model = db.get_default_model(mode)
-            if model:
-                return model
-            # 2. 全局默认
-            model = db.get_default_model(None)
-            if model:
-                return model
-            # 3. 任意可用
-            models = db.list_models(limit=10)
-            if models:
-                return models[0]
+            if not model:
+                model = db.get_default_model(None)
+            if not model:
+                models = db.list_models_config()[:10]
+                model = models[0] if models else None
+            if not model:
+                return None
+            # 以上查询的 api_key 均已脱敏，子 Agent 的 LLM 调用需要真实 key，按 id 重取
+            cfg_id = model.get("id")
+            if cfg_id:
+                return db.get_model_config(cfg_id, mask_key=False) or model
+            return model
         except Exception as e:
             logger.warning("获取模型配置失败: %s", e)
         return None

@@ -9,24 +9,21 @@ Local 执行工具 — IDE 模式专属
 - local_exec: IDE 模式，白名单 + safety 双重检测
 """
 import asyncio
+import os
+import re
+import shlex
 from agent.tools import BaseTool, ToolResult, ToolMeta
 from agent.harness.safety import classify_command
 
-# 允许的命令前缀白名单
-_ALLOWED_COMMANDS = [
-    "npm test", "npm run", "npm ci", "npm install",
-    "npx ",
-    "python -m pytest", "python -m unittest", "python script",
-    "pytest",
-    "git status", "git diff", "git log", "git branch", "git show",
-    "tsc --noEmit",
-    "eslint ", "prettier ",
-    "ruff ", "black ", "mypy ",
-    "cargo build", "cargo test", "cargo check",
-    "go test", "go build",
-    "ls ", "dir ",  # 基础查看
-    "echo ",  # 调试
-]
+# shell 元字符：白名单场景不需要这些字符，出现即拒绝
+_META_CHAR_RE = re.compile(r"[;&|<>`${}]")
+
+# 允许的二进制名（argv[0] 的 basename）
+_ALLOWED_BINARIES = frozenset({
+    "npm", "npx", "python", "python3", "pytest",
+    "git", "tsc", "eslint", "prettier", "ruff", "black", "mypy",
+    "cargo", "go", "ls", "dir", "echo",
+})
 
 # 大输出保护阈值（与 shell_exec 对齐）
 _LOCAL_OUTPUT_THRESHOLD = 4000
@@ -34,34 +31,87 @@ _LOCAL_OUTPUT_HEAD = 1500
 _LOCAL_OUTPUT_TAIL = 1000
 
 
-def _is_allowed(command: str) -> bool:
-    """白名单检测 — 命令前缀匹配（大小写不敏感）"""
-    cmd = command.strip().lower()
-    for allowed in _ALLOWED_COMMANDS:
-        if cmd.startswith(allowed.lower()):
-            return True
-    return False
+def _validate_command(command: str) -> tuple[bool, str]:
+    """严格白名单校验
+
+    第一道：原始命令含 shell 元字符（; & | < > ` $ { }）→ 直接拒绝
+    第二道：shlex 解析 argv，校验 argv[0] basename 与子命令/参数
+
+    Returns:
+        (allowed, reason) — allowed=False 时 reason 为拒绝原因
+    """
+    # 第一道：shell 元字符检查
+    if _META_CHAR_RE.search(command):
+        return (False, "命令包含 shell 元字符，已被白名单拒绝")
+
+    # 第二道：argv 解析
+    try:
+        argv = shlex.split(command, posix=True)
+    except ValueError:
+        return (False, "命令无法解析（引号未闭合等），已被白名单拒绝")
+    if not argv:
+        return (False, "空命令")
+
+    binary = os.path.basename(argv[0])
+    if binary not in _ALLOWED_BINARIES:
+        return (False, f"命令不在白名单内: {command}")
+
+    rest = argv[1:]
+
+    if binary == "npm":
+        if not rest or rest[0] not in {"test", "run", "ci", "install"}:
+            return (False, f"npm 仅允许 test/run/ci/install 子命令: {command}")
+    elif binary == "npx":
+        pass  # 保留原语义：npx 任意命令
+    elif binary in ("python", "python3"):
+        if not rest:
+            return (False, f"python 需要 -m 模块或 .py 脚本路径: {command}")
+        if rest[0] == "-m":
+            if len(rest) < 2 or rest[1] not in {"pytest", "unittest"}:
+                return (False, f"python -m 仅允许 pytest/unittest: {command}")
+        elif not rest[0].endswith(".py"):
+            return (False, f"python 仅允许 -m pytest/unittest 或 .py 脚本: {command}")
+    elif binary == "pytest":
+        pass  # 无限制（后续参数任意）
+    elif binary == "git":
+        if not rest or rest[0] not in {"status", "diff", "log", "branch", "show"}:
+            return (False, f"git 仅允许 status/diff/log/branch/show 子命令: {command}")
+    elif binary in ("ls", "dir"):
+        if rest and any(not a.startswith("-") for a in rest):
+            return (False, f"{binary} 仅允许 flag 参数（- 开头）: {command}")
+    elif binary == "echo":
+        pass  # 已无元字符，任意参数
+    elif binary in ("cargo", "go"):
+        if not rest or rest[0] not in {"build", "test", "check"}:
+            return (False, f"{binary} 仅允许 build/test/check 子命令: {command}")
+    # tsc/eslint/prettier/ruff/black/mypy：仅校验 argv[0]（保守策略）
+
+    return (True, "")
 
 
 class LocalExecTool(BaseTool):
     """本地命令执行工具（IDE 模式）
 
-    通过白名单 + safety.classify_command 双重检测，限制只执行安全的开发命令。
+    通过严格白名单 + safety.classify_command 双重检测，限制只执行安全的开发命令。
     用于运行测试、构建、lint 等本地开发任务。
 
     安全策略：
-    1. 白名单前缀匹配 — 只允许常见开发命令（npm/git/cargo/go/python 等）
+    1. 严格白名单校验 — 拒绝 shell 元字符（; & | < > ` $ { }），
+       再用 shlex 解析 argv 校验二进制名与子命令/参数
     2. safety.classify_command 二次检测 — hardline/dangerous 均拦截
-       （防止白名单命令通过管道/重定向注入危险操作，如 `git diff; rm -rf /`）
+       （即使白名单命令也禁止管道/重定向/命令替换）
     """
     name = "local_exec"
-    description = "在 IDE 模式下执行受限的本地命令（白名单机制），用于运行测试、构建、lint 等"
+    description = (
+        "在 IDE 模式下执行受限的本地命令。仅允许简单白名单命令，"
+        "禁止 shell 元字符/管道/命令替换（如 npm test、git status、python -m pytest、tsc --noEmit）"
+    )
     parameters = {
         "type": "object",
         "properties": {
             "command": {"type": "string", "description": "要执行的命令"},
             "cwd": {"type": "string", "description": "工作目录（默认工作区根目录）"},
-            "timeout": {"type": "integer", "description": "超时秒数（默认 30）"},
+            "timeout": {"type": "integer", "description": "超时秒数（1-120，默认 30）"},
         },
         "required": ["command"],
     }
@@ -83,12 +133,16 @@ class LocalExecTool(BaseTool):
         return head + f"\n... [输出已截断，省略中间 {omitted} 字符]\n" + tail
 
     async def execute(self, context, command, cwd=None, timeout=30):
-        # 1. 白名单检测
-        if not _is_allowed(command):
+        # 0. 超时上限钳制（1-120 秒）
+        timeout = max(1, min(int(timeout), 120))
+
+        # 1. 严格白名单校验
+        allowed, reason = _validate_command(command)
+        if not allowed:
             return ToolResult(
                 False,
                 "",
-                f"命令不在白名单内: {command}",
+                reason,
             )
 
         # 2. safety 二次检测 — hardline/dangerous 均拦截
@@ -105,7 +159,7 @@ class LocalExecTool(BaseTool):
         work_dir = cwd or context.workspace_path or None
 
         try:
-            # 白名单命令可能含管道/重定向，仍用 shell 执行；
+            # 白名单命令经严格校验无 shell 元字符，直接用 shell 执行即可；
             # 安全性由白名单 + safety 双重检测保证
             proc = await asyncio.create_subprocess_shell(
                 command,

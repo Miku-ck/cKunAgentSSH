@@ -484,12 +484,28 @@ class Saddle:
         # H13 修复 C3：用 retry_with_backoff 包装 registry.execute，瞬时错误自动重试
         # 注意：仅对"抛异常"的瞬时错误生效，工具返回 ToolResult(success=False) 不触发重试
         from .stirrups import retry_with_backoff, ErrorClassifier
-        raw_result, retry_err = await retry_with_backoff(
-            func=lambda: self.registry.execute(call.name, call.args, tool_ctx),
-            classifier=ErrorClassifier(),
-            max_retries=2,
-            base_delay=0.5,
-        )
+
+        # 审查 MINOR 修复：仅对幂等工具重试。原实现对所有工具（含 write_file /
+        # shell_exec / delete_file / move_file / spawn_subagent）统一重试 —
+        # 非幂等工具在"副作用已发生但结果丢失"的瞬时错误下重跑，会造成
+        # 命令双执行、文件写两次、子 Agent 双启动。非幂等工具只执行一次。
+        tool_instance = self.registry.get(call.name) if hasattr(self.registry, "get") else None
+        idempotent = bool(tool_instance is not None
+                          and getattr(tool_instance.meta, "idempotent", False))
+        if idempotent:
+            raw_result, retry_err = await retry_with_backoff(
+                func=lambda: self.registry.execute(call.name, call.args, tool_ctx),
+                classifier=ErrorClassifier(),
+                max_retries=2,
+                base_delay=0.5,
+            )
+        else:
+            try:
+                raw_result = await self.registry.execute(call.name, call.args, tool_ctx)
+                retry_err = None
+            except Exception as e:
+                raw_result = None
+                retry_err = str(e)
         if raw_result is None:
             # 重试耗尽或非瞬时错误（FATAL/FORBIDDEN 立即返回）
             result = ToolResult(

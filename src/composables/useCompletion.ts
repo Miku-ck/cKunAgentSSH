@@ -289,8 +289,11 @@ async function queryAIPredictions(
   }
 }
 
-// 修复：请求序号，用于取消过期请求（避免快速输入时旧请求覆盖新请求）
-let _completionRequestId = 0
+// 修复 + 审查 M-20：请求序号按【会话】隔离，用于取消过期请求。
+// 原实现是模块级单一计数器 — 用户在终端 A 打字期间切到终端 B 触发一次补全，
+// A 的在途请求返回时因 B 的序号更大而被误丢弃（两个会话互相取消对方的补全）。
+// 现在每个 sessionId 独立计数，只取消本会话的更旧请求。
+const _completionRequestIds = new Map<string, number>()
 
 /**
  * 查询补全候选
@@ -310,8 +313,9 @@ export async function queryCompletion(
   const api = window.electronAPI
   if (!api) return []
 
-  // 修复：生成请求序号，用于取消过期请求
-  const requestId = ++_completionRequestId
+  // 审查 M-20：按会话生成请求序号，用于取消本会话的过期请求
+  const requestId = (_completionRequestIds.get(sessionId) ?? 0) + 1
+  _completionRequestIds.set(sessionId, requestId)
 
   try {
     let stdout: string
@@ -416,8 +420,8 @@ export async function queryCompletion(
       candidates.push(...aiCandidates)
     }
 
-    // 修复：请求序号检查，如果已有更新的请求发出，丢弃本次结果
-    if (requestId !== _completionRequestId) {
+    // 审查 M-20：请求序号检查（按会话），如果本会话已有更新的请求发出，丢弃本次结果
+    if (requestId !== _completionRequestIds.get(sessionId)) {
       return []
     }
 

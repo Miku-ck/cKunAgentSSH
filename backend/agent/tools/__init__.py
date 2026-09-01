@@ -29,6 +29,11 @@ class ToolMeta:
     timeout: float = 30.0           # 默认超时（秒）
     cacheable: bool = False         # 结果是否可缓存
     reversible: bool = True         # 操作是否可逆
+    # 审查 MINOR：同一调用重复执行是否产生相同结果（只读/覆盖写）。
+    # 仅 idempotent 工具允许 TRANSIENT 错误自动重试 — 非幂等工具
+    # （write/shell/delete/move/spawn_subagent）重试会放大副作用
+    # （命令双跑、写入两次、子 Agent 双启动）。默认 False（安全方向）。
+    idempotent: bool = False
     mode_scope: list[str] = field(default_factory=lambda: ["ssh"])
 
 

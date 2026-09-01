@@ -197,7 +197,10 @@ class Bridle:
         if sys_msgs:
             new_text = "\n".join(m["content"] for m in sys_msgs)
             # 已含旧摘要的浓缩（滚动再摘要），直接替换而非追加，确保摘要尺寸有界
-            cap = self.max_context_tokens * _CHARS_PER_TOKEN
+            # 审查 MINOR 修复：旧 cap = max_context_tokens * 3 字符 ≈ 整个上下文窗口的
+            # 字符当量（16384 窗口 → 49152 字符 ≈ 16k token），一条摘要即可再撑爆窗口，
+            # 反复触发 force 压缩直到重试耗尽。改为窗口的 25%（下限 2000 字符）。
+            cap = max(2000, int(self.max_context_tokens * 0.25 * _CHARS_PER_TOKEN))
             ctx.metadata["context_summary"] = (
                 new_text if len(new_text) <= cap
                 else "[早期上下文已折叠]\n" + new_text[-(cap - 11):]

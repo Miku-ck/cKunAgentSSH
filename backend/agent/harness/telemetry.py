@@ -60,13 +60,22 @@ class TelemetryBus:
             if len(self._events) > self._MAX_EVENTS:
                 self._events = self._events[-self._MAX_EVENTS:]
 
+        # 审查 NIT 修复：异步订阅者并发执行（gather）。原实现逐个 await —
+        # 任一慢订阅者会阻塞后续所有订阅者（含 SSE 队列投递），拖慢整个事件流。
+        # 同步订阅者保持 subscribe 顺序；各异步订阅者内部收到的事件顺序不变。
+        pending: list = []
         for cb in self._subscribers:
             try:
                 result = cb(event)
                 if asyncio.iscoroutine(result):
-                    await result
+                    pending.append(result)
             except Exception as e:
                 logger.warning("TelemetryBus 订阅者异常: %s", e, exc_info=True)
+        if pending:
+            outcomes = await asyncio.gather(*pending, return_exceptions=True)
+            for r in outcomes:
+                if isinstance(r, Exception):
+                    logger.warning("TelemetryBus 异步订阅者异常: %s", r, exc_info=r)
 
     def events(self) -> list[TraceEvent]:
         """获取事件序列副本（用于重放/调试）

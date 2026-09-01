@@ -244,7 +244,22 @@ class Driver:
             full_content += llm_out.content
             full_reasoning += llm_out.reasoning
 
-            # 记录 assistant 消息
+            # ── 工具调用上限裁剪（架构层硬约束）──
+            # 修复（审查 M-12）：裁剪必须先于 assistant 消息入队。
+            # 原实现先入队全部 tool_calls 再裁剪，被裁掉的调用永不执行、
+            # 也永不产生配对 tool 结果 → 下一轮 LLM 请求因缺配对而 400。
+            max_per_turn = ctx.config.max_tool_calls_per_turn
+            deferred = []
+            if max_per_turn > 0 and llm_out.tool_calls and len(llm_out.tool_calls) > max_per_turn:
+                deferred = llm_out.tool_calls[max_per_turn:]
+                llm_out.tool_calls = llm_out.tool_calls[:max_per_turn]
+                logger.info(
+                    "工具调用裁剪: %d → %d (deferred=%d)",
+                    max_per_turn + len(deferred),
+                    max_per_turn, len(deferred),
+                )
+
+            # 记录 assistant 消息（只携带实际将执行的 tool_calls，保证配对完整）
             if llm_out.content or llm_out.tool_calls:
                 assistant_msg: dict[str, Any] = {
                     "role": "assistant",
@@ -292,16 +307,13 @@ class Driver:
                     await ctx.transition(State.COMPLETED, event="done")
                     break
 
-            # ── 工具调用上限裁剪（架构层硬约束）──
-            max_per_turn = ctx.config.max_tool_calls_per_turn
-            if max_per_turn > 0 and len(llm_out.tool_calls) > max_per_turn:
-                deferred = llm_out.tool_calls[max_per_turn:]
-                llm_out.tool_calls = llm_out.tool_calls[:max_per_turn]
-                logger.info(
-                    "工具调用裁剪: %d → %d (deferred=%d)",
-                    len(llm_out.tool_calls) + len(deferred),
-                    max_per_turn, len(deferred),
-                )
+            # ── ACT: 执行工具 + OBSERVE → THINK ──
+            async for ev in self._execute_tool_calls(llm_out, ctx, harness, telemetry, iteration):
+                yield ev
+
+            # ── 裁剪提示注入（必须在 tool 结果消息之后，保证 assistant.tool_calls
+            #    与 role=tool 消息紧邻配对；user 提示插在中间会触发 OpenAI/vLLM 400）──
+            if deferred:
                 # 注入提示：告诉 LLM 还有工具未执行，下轮继续
                 # 修复：使用 "user" 角色而非 "system"，避免添加到消息末尾时触发 400 错误
                 ctx.messages.append({
@@ -309,13 +321,13 @@ class Driver:
                     "content": (
                         f"[工具调用纪律] 你本轮请求了 {len(llm_out.tool_calls) + len(deferred)} 个工具调用，"
                         f"但系统限制每轮最多执行 {max_per_turn} 个。"
-                        f"已执行前 {max_per_turn} 个，剩余 {len(deferred)} 个未执行。"
+                        f"本轮只执行前 {max_per_turn} 个，剩余 {len(deferred)} 个未执行。"
                         "请等待当前结果返回后再决定是否需要继续调用剩余工具。"
                         "不要假设未执行工具的结果。"
                     ),
                 })
 
-            # ── 渐进式信息收集检测 ──
+            # ── 渐进式信息收集检测（同样在 tool 结果之后注入）──
             if (
                 ctx.config.enable_progressive_gathering
                 and intention is not None
@@ -330,10 +342,6 @@ class Driver:
                         logger.info("检测到批量读取，已注入渐进收集引导")
                 except Exception as e:
                     logger.warning("渐进收集检测失败: %s", e)
-
-            # ── ACT: 执行工具 + OBSERVE → THINK ──
-            async for ev in self._execute_tool_calls(llm_out, ctx, harness, telemetry, iteration):
-                yield ev
 
             # ── post_iteration ──
             post_decision = await harness.reins.check(ReinPoint.POST_ITERATION, ctx)

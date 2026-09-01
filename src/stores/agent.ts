@@ -38,11 +38,15 @@ export interface PermissionRequest {
   reversible: boolean
   message: string
   timestamp: number
+  /** 命令执行工具（shell_exec/local_exec）— 授权绑定到具体命令（审查 M-3） */
+  isCommandTool?: boolean
   /** 是否正在授权中（防止重复点击） */
   granting?: boolean
   /** 是否已处理（已授权或已忽略） */
   resolved?: boolean
 }
+
+const COMMAND_EXEC_TOOLS = ['shell_exec', 'local_exec']
 
 export type AgentRunStatus = 'idle' | 'running' | 'completed' | 'failed'
 
@@ -70,6 +74,10 @@ export const useAgentStore = defineStore('agent', () => {
   const fileChanges = ref<AgentFileChangesSummary | null>(null)
   // C3 修复：记录当前运行模式，避免 keep-alive 下跨组件 watch 重复 push
   const currentMode = ref<'ssh' | ''>('')
+  // 审查 M-19：记录本次运行发起时的【源会话 ID】。
+  // Agent 运行期间用户可能切换会话 — 完成固化必须落回源会话（临时占位消息
+  // 推在哪个会话就固化哪个），不能按"完成时刻的当前会话"决定
+  const currentConversationId = ref('')
   // 当前正在进行的工具调用（用于状态栏显示真实动作）
   const currentToolCall = ref<ToolCallEntry | null>(null)
   // H14: 意图识别结果（用于规划列表展示）
@@ -172,6 +180,8 @@ export const useAgentStore = defineStore('agent', () => {
     currentState.value = 'thinking'
     // C3 修复：记录当前模式，watch 内据此判断是否为本组件的运行
     currentMode.value = options.mode || 'ssh'
+    // 审查 M-19：锁定源会话（_reset 已清空，这里重新写入）
+    currentConversationId.value = options.conversationId || ''
 
     abortFn = streamAgentRun({
       ...options,
@@ -251,6 +261,7 @@ export const useAgentStore = defineStore('agent', () => {
     lastRunId.value = ''
     fileChanges.value = null
     currentMode.value = ''
+    currentConversationId.value = ''
     currentToolCall.value = null
     intentionInfo.value = null
     _helpRequestedThisRun = false
@@ -361,20 +372,29 @@ export const useAgentStore = defineStore('agent', () => {
         }
         break
 
-      case 'permission_needed':
-        // H14 修复：按工具名去重，避免同一工具多次触发产生重复卡片
-        if (!permissionRequests.value.some(r => r.tool === event.tool)) {
+      case 'permission_needed': {
+        // 审查 M-3：命令执行工具按"工具+命令"去重（不同命令各自出卡片），
+        // 其他工具按工具名去重，避免同一工具多次触发产生重复卡片
+        const evtTool = event.tool || ''
+        const evtCommand = typeof event.args?.command === 'string' ? (event.args.command as string) : ''
+        const isCmdTool = COMMAND_EXEC_TOOLS.includes(evtTool)
+        const dupKey = isCmdTool ? `${evtTool}::${evtCommand}` : evtTool
+        if (!permissionRequests.value.some(r =>
+          (r.isCommandTool ? `${r.tool}::${typeof r.args?.command === 'string' ? r.args.command : ''}` : r.tool) === dupKey
+        )) {
           permissionRequests.value.push({
             id: `perm_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-            tool: event.tool || '',
+            tool: evtTool,
             args: event.args || {},
             risk: event.risk || 'moderate',
             reversible: event.reversible ?? false,
-            message: event.message || `需要授权: ${event.tool}`,
+            message: event.message || `需要授权: ${evtTool}`,
             timestamp: Date.now(),
+            isCommandTool: isCmdTool,
           })
         }
         break
+      }
 
       case 'error':
         errorMessage.value = event.message || 'Unknown error'
@@ -436,6 +456,7 @@ export const useAgentStore = defineStore('agent', () => {
     lastRunId,
     fileChanges,
     currentMode,
+    currentConversationId,
     currentToolCall,
     intentionInfo,
     // computed

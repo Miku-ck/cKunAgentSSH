@@ -159,6 +159,11 @@ class Stirrups:
         """
         max_retries = ctx.config.llm_max_retries
         last_error: Optional[Exception] = None
+        # 审查 NIT：call_llm 内强制压缩次数守卫。原实现对每次 INVALID_ARGS（上下文超限）
+        # 失败都触发一次 force 压缩 — 压缩无法进一步收缩时（摘要已最小）会反复执行
+        # 昂贵的压缩 LLM 调用，直到重试耗尽；同一 call 内最多压一次，之后直接失败。
+        compress_attempts = 0
+        _MAX_COMPRESS_PER_CALL = 1
 
         # 思考预算（仅 enable_thinking=True 时有意义）
         # None 表示不限制；int 透传给 vLLM chat_template_kwargs.thinking_budget
@@ -192,10 +197,15 @@ class Stirrups:
                     raise
 
                 if kind == ErrorType.INVALID_ARGS and self._compress_callback:
-                    # 上下文超限 → 强制压缩后重试
-                    logger.info("触发上下文压缩后重试")
-                    await self._compress_callback(ctx, force=True)
-                    continue
+                    if compress_attempts < _MAX_COMPRESS_PER_CALL:
+                        # 上下文超限 → 强制压缩后重试
+                        compress_attempts += 1
+                        logger.info("触发上下文压缩后重试 (第 %d 次)", compress_attempts)
+                        await self._compress_callback(ctx, force=True)
+                        continue
+                    # 压缩后仍超限 — 再压一次也是同样结果，直接失败
+                    logger.error("上下文压缩后仍超限，放弃重试: %s", err_str)
+                    raise
 
                 if kind == ErrorType.TRANSIENT and attempt < max_retries:
                     delay = 2.0 ** attempt  # 1s, 2s, 4s

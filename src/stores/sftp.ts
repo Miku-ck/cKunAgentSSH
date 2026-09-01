@@ -63,6 +63,9 @@ export const useSftpStore = defineStore('sftp', () => {
   // 批量传输并发上限：同一 SFTP 通道同时传输多个文件会互相争抢导致整体吞吐降低
   // 经验值 2-3 较优，超过 4 后单文件速度明显下降
   const MAX_CONCURRENT_TRANSFERS = 3
+  // 待删除传输记录定时器登记表：scheduleRemoveTransfer 登记、removeTransfer 注销、
+  // disconnect 统一清空。避免断线重连后残留定时器按旧 id 误删新传输记录。
+  const removeTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
   // ─── 剪贴板（跨侧复制粘贴） ─────────────────────
   const clipboard = ref<{ side: 'local' | 'remote'; paths: string[] } | null>(null)
@@ -151,8 +154,12 @@ export const useSftpStore = defineStore('sftp', () => {
     remoteCwd.value = ''
     remoteEntries.value = []
     selectedRemote.value = new Set()
-    transferSeq.value = 1
+    // m4 修复的补充：transferSeq 在 store 生命周期内单调递增，不再随 disconnect 重置，
+    // 保证断线重连后新传输记录 id 不会与旧记录重复
     remoteError.value = ''
+    // 清空所有待删除定时器：断线后旧定时器若不清除，重连后可能误删新传输记录
+    for (const timer of removeTimers.values()) clearTimeout(timer)
+    removeTimers.clear()
     // 断开连接时清空传输记录
     transfers.value = []
   }
@@ -177,10 +184,11 @@ export const useSftpStore = defineStore('sftp', () => {
   }
 
   // ─── 本地侧操作 ───────────────────────────────
-  async function loadLocal(dirPath?: string): Promise<void> {
+  /** @param dirPath 目标目录（默认当前目录） @param silent 静默刷新（不触发 loading 指示，防闪烁） */
+  async function loadLocal(dirPath?: string, silent = false): Promise<void> {
     const target = dirPath ?? localCwd.value
     if (!target) return
-    loadingLocal.value = true
+    if (!silent) loadingLocal.value = true
     localError.value = ''
     try {
       const entries = await getApi().fsReadDir(target)
@@ -190,7 +198,7 @@ export const useSftpStore = defineStore('sftp', () => {
     } catch (err: any) {
       localError.value = err?.message || '读取本地目录失败'
     } finally {
-      loadingLocal.value = false
+      if (!silent) loadingLocal.value = false
     }
   }
 
@@ -775,7 +783,7 @@ async function remoteRefresh(): Promise<void> {
     })
   }
 
-async function runUpload(id: string, localPath: string, remotePath: string, retried = false, resumeOffset?: number): Promise<void> {
+async function runUpload(id: string, localPath: string, remotePath: string, retried = false): Promise<void> {
     const t = transfers.value.find(x => x.id === id)
     if (!t) return
     // 创建 AbortController 用于暂停功能
@@ -784,7 +792,11 @@ async function runUpload(id: string, localPath: string, remotePath: string, retr
     }
     t.status = 'running'
     try {
-      await getApi().sftpUpload(id, sshSessionId.value, localPath, remotePath, resumeOffset, t.abortController.signal)
+      // 审查 M-18 修复：IPC 契约只有 4 个参数（preload/env.d.ts/main.ts 三处一致）—
+      // 原调用多传 resumeOffset + AbortSignal：preload 只透传前 4 参，两者被静默丢弃
+      // （AbortSignal 也无法结构化克隆过 IPC）。续传由主进程扫描远端 .part 文件
+      // 自动定位断点，暂停/取消走 sftp:cancel（pauseTransfer 已调用）。
+      await getApi().sftpUpload(id, sshSessionId.value, localPath, remotePath)
       t.status = 'done'
       t.endTime = Date.now()
       toast.success(`上传成功: ${t.name}`)
@@ -792,10 +804,16 @@ async function runUpload(id: string, localPath: string, remotePath: string, retr
     } catch (err: any) {
       const code = err?.code as string | undefined
       const retryable = err?.retryable as boolean | undefined
-      // NETWORK/STALLED 错误自动重试一次（断点续传）
+      // 审查 M-18：暂停路径 — pauseTransfer 已把状态置为 'paused' 并记录断点，
+      // 随后 sftp:cancel 触发的 CANCELLED 拒绝不能覆盖暂停状态、不能弹错误、
+      // 更不能把暂停中的任务 10s 后移除（原实现会，导致用户无法"恢复"）
+      // （宽化为 string：TS 控制流分析看不到 pauseTransfer 跨函数的赋值）
+      const statusNow: string = t.status
+      if (statusNow === 'paused') return
+      // NETWORK/STALLED 错误自动重试一次（断点续传，主进程按 .part 自动定位）
       if (retryable && !retried) {
         toast.info(`正在自动续传: ${t.name}…`)
-        return runUpload(id, localPath, remotePath, true, t.transferred)
+        return runUpload(id, localPath, remotePath, true)
       }
       t.status = code === 'CANCELLED' ? 'cancelled' : 'error'
       t.error = err?.message || '上传失败'
@@ -809,7 +827,7 @@ async function runUpload(id: string, localPath: string, remotePath: string, retr
     }
   }
 
-  async function runDownload(id: string, remotePath: string, localPath: string, retried = false, resumeOffset?: number): Promise<void> {
+  async function runDownload(id: string, remotePath: string, localPath: string, retried = false): Promise<void> {
     const t = transfers.value.find(x => x.id === id)
     if (!t) return
     // 创建 AbortController 用于暂停功能
@@ -818,7 +836,9 @@ async function runUpload(id: string, localPath: string, remotePath: string, retr
     }
     t.status = 'running'
     try {
-      await getApi().sftpDownload(id, sshSessionId.value, remotePath, localPath, resumeOffset, t.abortController.signal)
+      // 审查 M-18：同 runUpload — 严格按 4 参 IPC 契约调用（续传主进程按本地
+      // .part 自动定位，取消走 sftp:cancel）
+      await getApi().sftpDownload(id, sshSessionId.value, remotePath, localPath)
       t.status = 'done'
       t.endTime = Date.now()
       toast.success(`下载成功: ${t.name}`)
@@ -826,10 +846,14 @@ async function runUpload(id: string, localPath: string, remotePath: string, retr
     } catch (err: any) {
       const code = err?.code as string | undefined
       const retryable = err?.retryable as boolean | undefined
-      // NETWORK/STALLED 错误自动重试一次（断点续传）
+      // 审查 M-18：暂停路径保护（同 runUpload）— 已暂停的任务不被 CANCELLED
+      // 覆盖状态、不弹错误、不移除（宽化为 string：TS 看不到跨函数赋值）
+      const statusNow: string = t.status
+      if (statusNow === 'paused') return
+      // NETWORK/STALLED 错误自动重试一次（断点续传，主进程按 .part 自动定位）
       if (retryable && !retried) {
         toast.info(`正在自动续传: ${t.name}…`)
-        return runDownload(id, remotePath, localPath, true, t.transferred)
+        return runDownload(id, remotePath, localPath, true)
       }
       t.status = code === 'CANCELLED' ? 'cancelled' : 'error'
       t.error = err?.message || '下载失败'
@@ -868,20 +892,37 @@ function resumeTransfer(id: string): void {
   t.status = 'running'
   t.error = undefined
   // 根据方向重新启动传输，从断点处继续
+  // （断点位置由主进程扫描 .part 文件确定，前端无需传递）
   if (t.direction === 'up') {
-    runUpload(id, t.from, t.to, false, t.resumeOffset)
+    runUpload(id, t.from, t.to)
   } else {
-    runDownload(id, t.to, t.from, false, t.resumeOffset)
+    // 审查 M-18 修复：原实现参数写反 runDownload(id, t.to, t.from, ...) —
+    // runDownload 签名是 (id, remotePath, localPath)，而下载记录 from=远程/to=本地，
+    // 写反后断点恢复会把本地路径当远程路径发出去，恢复永远失败
+    runDownload(id, t.from, t.to)
   }
 }
 
 function removeTransfer(id: string): void {
+    // 注销该 id 的待删除定时器，防止定时器回调再次操作已移除的记录
+    const timer = removeTimers.get(id)
+    if (timer) {
+      clearTimeout(timer)
+      removeTimers.delete(id)
+    }
     const idx = transfers.value.findIndex(t => t.id === id)
     if (idx >= 0) transfers.value.splice(idx, 1)
   }
 
   function scheduleRemoveTransfer(id: string, delay = 3000): void {
-    setTimeout(() => removeTransfer(id), delay)
+    // 同一 id 重复调度时先清旧定时器，避免多个定时器重复回调
+    const existing = removeTimers.get(id)
+    if (existing) clearTimeout(existing)
+    const timer = setTimeout(() => {
+      removeTimers.delete(id)
+      removeTransfer(id)
+    }, delay)
+    removeTimers.set(id, timer)
   }
 
   /** 由 SftpView 在 onMounted 订阅 onSftpProgress 后调用 */

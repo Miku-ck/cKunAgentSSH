@@ -54,8 +54,13 @@ export class ElectronBridge {
   stop(): void {
     if (this.server) {
       this.server.close()
+      // 审查 MINOR：主动断开 keep-alive 连接，否则 close() 会挂起等待空闲连接超时
+      this.server.closeAllConnections?.()
       this.server = null
     }
+    // 审查 MINOR：复位端口/token，避免 stop 后残留陈旧值误导调用方
+    this.port = 0
+    this.token = ''
   }
 
   private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -75,14 +80,26 @@ export class ElectronBridge {
       return
     }
 
+    // 审查 MINOR：res 无 'error' 监听时，客户端中途断开会让 writeHead/end 抛 EPIPE
+    // 变成未捕获异常，直接崩掉 Electron 主进程
+    res.on('error', () => { /* 客户端已断开，忽略 */ })
+
     // 收集请求体，带大小限制
     let body = ''
     let bodyTooLarge = false
 
     req.on('data', (chunk: Buffer) => {
+      if (bodyTooLarge) return
       body += chunk.toString('utf-8')
       if (body.length > MAX_BODY_SIZE) {
+        // 审查 MINOR 修复：原实现超限即 req.destroy() — 流一断 'end' 永不触发，
+        // 下方 413 分支是死代码，客户端只看到连接被重置而无任何响应。
+        // 现在先回 413 再断开；后续 data/end 回调均检查 headersSent 幂等返回
         bodyTooLarge = true
+        if (!res.headersSent) {
+          res.writeHead(413)
+          res.end(JSON.stringify({ success: false, error: 'Request body too large' }))
+        }
         req.destroy()
       }
     })
@@ -92,9 +109,7 @@ export class ElectronBridge {
     })
 
     req.on('end', async () => {
-      if (bodyTooLarge) {
-        res.writeHead(413)
-        res.end(JSON.stringify({ success: false, error: 'Request body too large' }))
+      if (bodyTooLarge || res.headersSent) {
         return
       }
 
@@ -129,8 +144,13 @@ export class ElectronBridge {
           exit_code: exitCode,
         }))
       } catch (err: any) {
-        res.writeHead(500)
-        res.end(JSON.stringify({ success: false, error: '命令执行失败，请稍后重试' }))
+        // 审查 MINOR：原实现把 err 整个吞掉，500 根因（execCommandWithExitCode 抛错、
+        // 会话丢失等）永远查不到；记日志后再回 500
+        console.error('[ElectronBridge] /ssh/exec 处理失败:', err)
+        if (!res.headersSent) {
+          res.writeHead(500)
+          res.end(JSON.stringify({ success: false, error: '命令执行失败，请稍后重试' }))
+        }
       }
     })
   }

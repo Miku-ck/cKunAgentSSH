@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 后端信息
   getBackendPort: () => ipcRenderer.invoke('backend:getPort'),
   isBackendAlive: () => ipcRenderer.invoke('backend:isAlive'),
+  getBackendToken: () => ipcRenderer.invoke('backend:getToken'),
 
   // 账号凭证安全加解密（safeStorage）
   authIsEncryptionAvailable: () => ipcRenderer.invoke('auth:isEncryptionAvailable'),

@@ -3,6 +3,7 @@
 
 POST /api/terminal/predict — 根据终端上下文预测下一步可能输入的命令
 """
+import asyncio
 import json
 import logging
 from typing import Optional
@@ -74,14 +75,15 @@ async def predict_terminal_command(req: TerminalPredictRequest):
     # 获取模型配置
     model_id = req.model_id
     if not model_id:
-        default_model = db.get_default_model('ssh')
+        # 审查 M-13：db 同步调用放线程池，避免阻塞事件循环
+        default_model = await asyncio.to_thread(db.get_default_model, 'ssh')
         if not default_model:
-            default_model = db.get_default_model(None)
+            default_model = await asyncio.to_thread(db.get_default_model, None)
         if not default_model:
             raise HTTPException(status_code=400, detail="未配置默认模型，请先设置模型")
         model_id = default_model.get("id") or default_model.get("model_id")
 
-    model_cfg = _get_model_config(model_id)
+    model_cfg = await asyncio.to_thread(_get_model_config, model_id)
     if not model_cfg:
         raise HTTPException(status_code=400, detail=f"Unknown model_id: {model_id}")
 

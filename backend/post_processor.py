@@ -284,8 +284,10 @@ def _fallback_title(user_message: str, max_len: int = MAX_TITLE_LEN) -> str:
     if not text:
         return ""
     # 优先在标题长度附近断句，保持语义完整
+    # 审查修复：旧 `range(max_len, upper + 1)` 在 max_len < len(text) ≤ max_len+10 时
+    # i 可达 len(text) → text[i] IndexError，回退标题路径直接崩掉
     upper = min(len(text), max_len + 10)
-    for i in range(max_len, upper + 1):
+    for i in range(max_len, upper):
         if text[i] in "。，！？,.;；":
             return text[:i]
     return text[:max_len]
@@ -455,7 +457,9 @@ async def _extract_memories(ctx: TurnContext, config: PostProcessConfig) -> None
     # 初始化 MemoryManager（用于 embedding + 相似度检查）
     try:
         from agent.memory import get_memory_manager
-        mem_cfg = db.get_default_model(ctx.mode) or {}
+        # 审查 M-15：embedding 调用需要真实 api_key（mask_key=False），
+        # 否则脱敏值导致 401 → 静默降级 256 维伪向量，与主路径真实维度混存
+        mem_cfg = db.get_default_model(ctx.mode, mask_key=False) or {}
         mem_mgr = get_memory_manager(
             base_url=mem_cfg.get("base_url", ""),
             api_key=mem_cfg.get("api_key", ""),
@@ -633,8 +637,9 @@ def _count_auto_skills() -> int:
     如需真正的 per-conversation 限制，需在 skills 表新增 source_conv_id 字段。
     """
     try:
-        all_skills = db.list_skills(limit=9999, offset=0)
-        return sum(1 for s in all_skills if s.get("source") == "auto")
+        # 审查 MINOR 修复：COUNT 查询替代 list_skills(limit=9999) 全量加载
+        # （list_skills 会拉取所有技能的 system_prompt 全文，仅为数一下行数）
+        return db.count_skills_by_source("auto")
     except Exception:
         logger.warning("[post_process:skill] 查询技能数量失败")
         return 0
@@ -867,10 +872,16 @@ class PostProcessManager:
             pass
 
         # 超时后强制取消
+        cancelled: list = []
         for task in pending:
             if not task.done():
                 task.cancel()
+                cancelled.append(task)
                 logger.warning("[post_process] 强制取消任务")
+        # 审查 MINOR 修复：等待取消真正完成，避免事件循环带着未清理完的任务关闭
+        # （DB 写入可能处于半截状态）
+        if cancelled:
+            await asyncio.gather(*cancelled, return_exceptions=True)
 
 
 # 全局 Manager 实例（由 main.py 启动时创建）

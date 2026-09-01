@@ -11,6 +11,44 @@ import { useAppStore } from '@/stores/app'
 
 const FALLBACK_PORT = 8010  // 后端 dev 默认端口（与 backend/main.py --port default 一致）
 
+// ── 后端鉴权 token 头 ──
+// 跨层契约：Electron 层通过 IPC getBackendToken() 提供后端鉴权 token，
+// 渲染进程所有发往后端的请求（含 SSE）都带 X-API-Token 头。
+// 声明由 Electron 层在 src/env.d.ts 补充；此处用防御式访问，浏览器环境 / IPC 未实现时保持 null。
+let apiToken: string | null = null
+let apiTokenPromise: Promise<void> | null = null
+
+/** 惰性获取后端 token：成功后缓存；失败 / 无 IPC 时保持 null（请求不带该头） */
+async function ensureApiToken(): Promise<void> {
+  if (apiToken !== null) return
+  if (apiTokenPromise) return apiTokenPromise
+  apiTokenPromise = (async () => {
+    try {
+      const bridge = typeof window !== 'undefined'
+        ? (window.electronAPI as unknown as { getBackendToken?: () => Promise<unknown> } | undefined)
+        : undefined
+      if (bridge && typeof bridge.getBackendToken === 'function') {
+        const token = await bridge.getBackendToken()
+        if (typeof token === 'string' && token.length > 0) {
+          apiToken = token
+        }
+      }
+    } catch {
+      // 获取失败保持 null，请求不带该头
+      apiToken = null
+    } finally {
+      apiTokenPromise = null
+    }
+  })()
+  return apiTokenPromise
+}
+
+/** 往请求头中追加 X-API-Token（token 为空时不加该头） */
+function withApiToken(headers: Record<string, string>): Record<string, string> {
+  if (apiToken) headers['X-API-Token'] = apiToken
+  return headers
+}
+
 /**
  * 统一错误对象：携带用户友好的 message，同时保留原始错误用于调试。
  */
@@ -99,7 +137,12 @@ async function waitForBackendReady(timeoutMs = 8000): Promise<void> {
         // 解析后端 host:port（Electron 走 IPC，浏览器走 window.location）
         const baseUrl = getBaseUrl()
         try {
-          const res = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(2000) })
+          const headers: Record<string, string> = {}
+          await ensureApiToken()
+          const res = await fetch(`${baseUrl}/health`, {
+            signal: AbortSignal.timeout(2000),
+            headers: withApiToken(headers),
+          })
           if (res.ok) return
         } catch {
           // 后端未就绪，继续等待
@@ -119,13 +162,15 @@ async function request<T>(path: string, options?: RequestInit, _retrying = false
   const { headers: customHeaders, ...restOptions } = options || {}
   // FormData 请求由浏览器自动设置 Content-Type（含 multipart boundary），不要手动覆盖
   const isFormData = restOptions.body instanceof FormData
+  // 惰性获取 token（缓存结果），确保 X-API-Token 头带上；重试路径复用缓存的 token
+  await ensureApiToken()
   try {
     const res = await fetch(url, {
       ...restOptions,
-      headers: {
+      headers: withApiToken({
         ...(restOptions.method && restOptions.method !== 'GET' && !isFormData ? { 'Content-Type': 'application/json' } : {}),
         ...(customHeaders as Record<string, string>),
-      },
+      }),
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }))
@@ -400,11 +445,13 @@ export function streamChat(options: StreamChatOptions): () => void {
 
   const run = async () => {
     try {
+      // 惰性获取 token 后拼入 SSE 请求头；abort 仍可在 fetch 前生效（AbortController 已同步创建）
+      await ensureApiToken()
       const url = `${getBaseUrl()}/chat/stream`
       const headers: Record<string, string> = { 'Content-Type': 'application/json' }
       const res = await fetch(url, {
         method: 'POST',
-        headers,
+        headers: withApiToken(headers),
         body: JSON.stringify({
           message: options.message,
           conversation_id: options.conversationId,
@@ -727,11 +774,13 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
 
   const run = async () => {
     try {
+      // 惰性获取 token 后拼入 SSE 请求头；abort 仍可在 fetch 前生效（AbortController 已同步创建）
+      await ensureApiToken()
       const url = `${getBaseUrl()}/agent/run`
       const headers: Record<string, string> = { 'Content-Type': 'application/json' }
       const res = await fetch(url, {
         method: 'POST',
-        headers,
+        headers: withApiToken(headers),
         body: JSON.stringify({
           task: options.task,
           conversation_id: options.conversationId,
@@ -919,14 +968,16 @@ export const agentApi = {
     request<{ running: boolean; interval_seconds: number; last_tick: unknown }>(`/agent/tick/status`),
 
   // 权限管理
-  grantPermission: (tool: string, scope: 'always' | 'session' = 'always') =>
-    request<{ tool: string; scope: string; granted: boolean }>(`/agent/permission/grant`, {
+  // 审查 M-3：默认 scope 'once'（仅放行下一次调用），原默认 'always' 一次点击即永久免审批；
+  // command 用于 shell_exec/local_exec 的命令级绑定（只批准被展示的那条命令）
+  grantPermission: (tool: string, scope: 'once' | 'session' | 'always' = 'once', command?: string) =>
+    request<{ tool: string; scope: string; grant_key: string; granted: boolean }>(`/agent/permission/grant`, {
       method: 'POST',
-      body: JSON.stringify({ tool, scope }),
+      body: JSON.stringify({ tool, scope, ...(command ? { command } : {}) }),
     }),
 
-  revokePermission: (tool: string) =>
-    request<{ tool: string; granted: boolean }>(`/agent/permission/revoke?tool=${encodeURIComponent(tool)}`, {
+  revokePermission: (tool: string, command?: string) =>
+    request<{ tool: string; granted: boolean }>(`/agent/permission/revoke?tool=${encodeURIComponent(tool)}${command ? `&command=${encodeURIComponent(command)}` : ''}`, {
       method: 'POST',
     }),
 

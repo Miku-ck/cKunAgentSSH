@@ -4,6 +4,7 @@ import { app } from 'electron'
 import http from 'http'
 import { mkdirSync, existsSync, renameSync, copyFileSync } from 'fs'
 import { homedir } from 'os'
+import { randomBytes } from 'crypto'
 
 /**
  * Python FastAPI 后端进程管理器
@@ -18,8 +19,26 @@ export class BackendManager {
   private readonly MAX_RESTART_ATTEMPTS = 3
   private readonly RESTART_COOLDOWN_MS = 60_000  // 60 秒内最多重启 MAX_RESTART_ATTEMPTS 次
   private restartTimestamps: number[] = []
+  /**
+   * 审查 M-7：首次 start() 尚未返回（starting=true）期间后端崩溃时，
+   * exit 处理器无法立即重启（会与进行中的 start() 重叠）；原实现直接丢弃
+   * 该重启意图，应用停留在 error 状态直到用户手动重启。
+   * 现在记录待重启标志，start() 返回（finally）后立即执行。
+   */
+  private pendingRestart = false
   /** 后端状态变化回调：status / port / error */
   onStatusChange: ((data: { status: 'starting' | 'ready' | 'error' | 'restarting'; port?: number; error?: string }) => void) | null = null
+
+  /**
+   * 修复 4：后端 API token（构造时生成一次，自动重启复用同一 token，
+   * 通过环境变量 CKUN_API_TOKEN 注入子进程，渲染层经 backend:getToken 获取）
+   */
+  private readonly apiToken: string = randomBytes(32).toString('hex')
+
+  /** 返回当前后端 API token（即使未启动也已生成，供启动前查询） */
+  getApiToken(): string {
+    return this.apiToken
+  }
 
   /**
    * 启动 Python 后端，返回就绪的端口号
@@ -55,9 +74,28 @@ export class BackendManager {
           DEV_MODE: app.isPackaged ? 'false' : 'true',
           // 显式传数据库绝对路径，避免后端依赖 cwd 解析相对路径在不同启动方式下丢库
           DB_PATH: dbPath,
+          // 修复 4：注入后端 API token（进程级认证契约，后端据此校验 X-API-Token）
+          CKUN_API_TOKEN: this.apiToken,
           ...extraEnv,
         },
         stdio: ['ignore', 'pipe', 'pipe']
+      })
+
+      const child = this.process
+      // 修复 2a：spawn 失败（如 python 不存在 ENOENT）时若无 error 监听，
+      // 会触发未捕获异常直接崩掉整个 Electron 主进程；此处记录日志并拒绝 start()。
+      let spawnErrorOccurred = false
+      const spawnErrorPromise = new Promise<never>((_, reject) => {
+        child.on('error', (err) => {
+          spawnErrorOccurred = true
+          console.error('[BackendManager] Failed to spawn Python backend:', err)
+          if (this.process === child) this.process = null
+          const friendly = (err as NodeJS.ErrnoException)?.code === 'ENOENT'
+            ? '未检测到 Python 运行环境，请安装 Python 后重试'
+            : `后端进程启动失败: ${err.message || String(err)}`
+          this.onStatusChange?.({ status: 'error', error: friendly })
+          reject(new Error(friendly))
+        })
       })
 
       this.process.stdout?.on('data', (data: Buffer) => {
@@ -72,18 +110,38 @@ export class BackendManager {
         console.log(`[BackendManager] Python process exited with code ${code}`)
         this.process = null
 
-        // 非主动停止时尝试自动重启
-        if (!this.intentionalStop && code !== 0) {
-          this.tryAutoRestart()
+        // 非主动停止且非 spawn 失败时尝试自动重启
+        if (!this.intentionalStop && !spawnErrorOccurred && code !== 0) {
+          if (this.starting) {
+            // 审查 M-7：首次启动进行中 — 不能立即重启（会重叠 spawn），
+            // 记录意图，由 start() 的 finally 在返回后触发
+            this.pendingRestart = true
+          } else {
+            this.tryAutoRestart()
+          }
         }
       })
 
-      // 等待后端就绪
-      await this.waitForReady(this.port, 15000)
+      // 等待后端就绪（与 spawn 错误竞争：ENOENT 时立即失败，而不是等 15s 超时）
+      try {
+        await Promise.race([this.waitForReady(this.port, 15000), spawnErrorPromise])
+      } catch (err) {
+        // 修复 2b：启动失败（spawn 错误或超时）时清理已 spawn 的子进程，
+        // 避免留下孤儿进程占用端口；随后按原有失败语义向上抛出。
+        this.killCurrentProcess()
+        throw err
+      }
       this.restartAttempts = 0
       return this.port
     } finally {
       this.starting = false
+      // 审查 M-7：补发首次启动期间记录的重启意图（进程非零退出且非主动停止）
+      if (this.pendingRestart) {
+        this.pendingRestart = false
+        if (!this.intentionalStop) {
+          void this.tryAutoRestart()
+        }
+      }
     }
   }
 
@@ -137,7 +195,7 @@ export class BackendManager {
   }
 
   /**
-   * 停止 Python 后端
+   * 杀当前子进程（含 Windows 进程树），并清理引用。幂等：进程已为空时直接返回。
    *
    * Windows 不支持 POSIX 信号：Node 在 Win 上把 SIGTERM/SIGKILL 都映射成
    * TerminateProcess(主进程)，不杀子进程。而 uvicorn reload=true 时会 spawn
@@ -145,47 +203,59 @@ export class BackendManager {
    * 下次启动又 spawn 新的，越积越多（5 个僵尸进程占 8010-8014 的实测根因）。
    *
    * Windows 用 taskkill /T /F 杀整个进程树；POSIX 平台仍用 SIGTERM→SIGKILL。
+   * 修复 2b：启动失败（超时等）路径也复用本方法清理孤儿进程。
    */
-  stop(): void {
-    this.intentionalStop = true
-    if (!this.process) return
-    console.log('[BackendManager] Stopping Python backend...')
+  private killCurrentProcess(): void {
+    const proc = this.process
+    if (!proc) return
 
     // Optimization 修复：杀进程前移除所有监听器，防止闭包（含 this）长期持有旧 process 引用
-    this.process.stdout?.removeAllListeners()
-    this.process.stderr?.removeAllListeners()
-    this.process.removeAllListeners('exit')
-    this.process.removeAllListeners('error')
+    proc.stdout?.removeAllListeners()
+    proc.stderr?.removeAllListeners()
+    proc.removeAllListeners('exit')
+    proc.removeAllListeners('error')
 
-    const pid = this.process.pid ?? 0
+    const pid = proc.pid ?? 0
     const isWin = process.platform === 'win32'
 
     // Windows: taskkill /T /F 杀整个进程树（含 uvicorn reload 子进程）
     if (isWin && pid) {
       try {
-        execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore' })
+        // 审查 MINOR：taskkill 对挂死的进程树可能长时间不返回（同步阻塞主进程）；
+        // 5s 超时兜底 — 超时后进程多半已在终止过程中，不再等待
+        execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore', timeout: 5000 })
         console.log(`[BackendManager] taskkill /PID ${pid} /T /F issued`)
       } catch (e) {
-        console.warn(`[BackendManager] taskkill failed (process may have exited):`, e)
+        console.warn(`[BackendManager] taskkill failed (process may have exited or timed out):`, e)
       }
-    } else {
-      // POSIX: 优雅关闭 → 超时强杀
-      this.process.kill('SIGTERM')
-      const forceKillTimer = setTimeout(() => {
-        if (this.process) {
-          console.log('[BackendManager] Force killing Python process')
-          this.process.kill('SIGKILL')
-        }
-      }, 5000)
-      this.process.once('exit', () => {
-        clearTimeout(forceKillTimer)
-        this.process = null
-      })
+      // Windows: taskkill 后清理引用
+      this.process = null
       return
     }
 
-    // Windows: taskkill 后清理引用
-    this.process = null
+    // POSIX: 优雅关闭 → 超时强杀
+    proc.kill('SIGTERM')
+    const forceKillTimer = setTimeout(() => {
+      if (this.process === proc) {
+        console.log('[BackendManager] Force killing Python process')
+        proc.kill('SIGKILL')
+      }
+    }, 5000)
+    proc.once('exit', () => {
+      clearTimeout(forceKillTimer)
+      if (this.process === proc) this.process = null
+    })
+  }
+
+  /**
+   * 停止 Python 后端
+   * 修复 2c：与 spawn 错误路径共用 killCurrentProcess，均为幂等操作，不会互相竞争。
+   */
+  stop(): void {
+    this.intentionalStop = true
+    if (!this.process) return
+    console.log('[BackendManager] Stopping Python backend...')
+    this.killCurrentProcess()
   }
 
   getPort(): number {

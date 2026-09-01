@@ -34,6 +34,8 @@ _FALLBACK_DIM = 256
 _DEFAULT_THRESHOLD = 0.3
 # 默认 top_k
 _DEFAULT_TOP_K = 5
+# 语义检索候选池上限（审查 MINOR：原为 200，含 embedding 全文拉取负载过高）
+_SEMANTIC_CANDIDATE_CAP = 100
 
 # 模块级缓存：按 (base_url, api_key, embedding_model) 缓存 MemoryManager 实例，
 # 避免每次 Agent 运行都重建实例导致 _embedding_available 缓存丢失。
@@ -235,10 +237,22 @@ class MemoryManager:
             logger.warning("Episodic 记忆检索失败: %s", e)
 
         # 2. Semantic 记忆 — 按语义相似度检索
+        # 审查 MINOR 修复：候选池由 200 降为 _SEMANTIC_CANDIDATE_CAP（100）。
+        # 每次 retrieve 都会拉取候选池全部行（含 embedding 向量，单行可达数 KB），
+        # 200 行 ≈ 1~2MB 文本 + 200 次元余弦；按 last_used_at 倒序取最近使用的
+        # 100 条在召回质量上基本无损（长期冷记忆命中概率极低），负载减半。
+        # 池子饱和（行数 == 上限）时提示一次，便于后续评估是否需要 DB 级向量索引。
         try:
             semantic_rows = db.get_agent_memories(
-                mode=mode, mem_type="semantic", limit=200
+                mode=mode, mem_type="semantic", limit=_SEMANTIC_CANDIDATE_CAP
             )
+            if len(semantic_rows) >= _SEMANTIC_CANDIDATE_CAP and not getattr(self, "_semantic_pool_warned", False):
+                self._semantic_pool_warned = True
+                logger.warning(
+                    "semantic 记忆候选池饱和（%d 条），检索召回可能受限；"
+                    "记忆规模持续增长时建议引入 DB 级向量索引",
+                    _SEMANTIC_CANDIDATE_CAP,
+                )
             if semantic_rows:
                 query_vec = await self.embed(query)
                 query_dim = len(query_vec) if query_vec else 0

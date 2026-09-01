@@ -189,7 +189,9 @@ class ConsciousnessTick:
         from agent.memory import get_memory_manager
         try:
             import database as db
-            model_cfg = db.get_default_model(mode="ssh") or db.get_default_model()
+            # 审查 M-15：embedding 需要真实 key（mask_key=False），与 Agent 主路径保持同维度
+            model_cfg = (db.get_default_model(mode="ssh", mask_key=False)
+                         or db.get_default_model(mask_key=False))
             if model_cfg:
                 return get_memory_manager(
                     base_url=model_cfg.get("base_url", ""),
@@ -199,6 +201,23 @@ class ConsciousnessTick:
         except Exception as e:
             logger.debug("获取默认模型配置失败，tick 将使用 fallback embedding: %s", e)
         return get_memory_manager()
+
+    def _known_modes(self) -> list[str]:
+        """agent_memories 表中实际存在的 mode 列表（审查 MINOR：原 4 处硬编码
+        ("ssh",) 导致 work/ide 模式的记忆从不被固化/清理/提升）"""
+        import database as db
+        try:
+            conn = db._get_conn()
+            try:
+                rows = conn.execute(
+                    "SELECT DISTINCT mode FROM agent_memories WHERE mode IS NOT NULL AND mode != ''"
+                ).fetchall()
+                return [r["mode"] for r in rows]
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.debug("查询已知模式失败，回退 ssh: %s", e)
+            return ["ssh"]
 
     async def _consolidate_memories(self) -> dict:
         """
@@ -211,7 +230,7 @@ class ConsciousnessTick:
         mgr = self._get_memory_manager()
 
         consolidated = 0
-        for mode in ("ssh",):
+        for mode in self._known_modes():
             try:
                 rows = db.get_agent_memories(mode=mode, mem_type="episodic", limit=20)
             except Exception:
@@ -293,7 +312,7 @@ class ConsciousnessTick:
         # C8 修复：使用带模型配置的 MemoryManager
         mgr = self._get_memory_manager()
         for pattern in patterns:
-            for mode in ("ssh",):
+            for mode in self._known_modes() or ["ssh"]:
                 try:
                     await mgr.save_semantic(
                         mode=mode,
@@ -321,7 +340,7 @@ class ConsciousnessTick:
         max_items = mem_settings.get("max_items", 100)
 
         total_deleted = 0
-        for mode in ("ssh",):
+        for mode in self._known_modes():
             for mem_type in ("episodic", "semantic"):
                 try:
                     deleted = db.prune_agent_memories(
@@ -344,7 +363,7 @@ class ConsciousnessTick:
         import database as db
 
         promoted = 0
-        for mode in ("ssh",):
+        for mode in self._known_modes():
             for mem_type in ("episodic", "semantic"):
                 try:
                     promoted += db.promote_hot_memories(

@@ -9,17 +9,22 @@ vLLM 的 max_tokens 是「输出」预算，但模型上下文窗口是「输入
 因此需要确保 reasoning_tokens + max_output_tokens + prompt_tokens 不超过上下文窗口。
 """
 
+from agent.cost_tracker import estimate_tokens
+
 
 def safe_max_tokens(
     configured: int | None,
-    prompt_chars: int,
+    prompt_text: str,
     max_output_tokens: int | None = None,
     reasoning_tokens: int | None = None,
 ) -> int | None:
     """
     根据输入大小智能封顶 max_tokens，避免触发 vLLM 400。
 
-    估算说明：1 token ≈ 1~2 个字符（中英混合时 1.2~1.8 实测），取保守值 1.5；
+    估算说明（审查 M-16 修复）：prompt token 估算改用 cost_tracker.estimate_tokens
+    （中文 ~1.5 字符/token、英文 ~4 字符/token 的混合启发式）。
+    旧实现按 1.5 token/**字符**估算，比真实值高 2~6 倍，长中文对话下会把
+    输出预算压到 256 token 导致回答被强制截断。
     额外留 1024 token 给 vLLM 内部 / system 指令 / tool schema。
     max_output_tokens 优先：用户在模型配置里设了 max_output_tokens（如 4096），
     以该值作为更精确的上限。
@@ -47,14 +52,15 @@ def safe_max_tokens(
     # 当 enable_thinking=True 时，推理内容会消耗输出预算
     reasoning_budget = reasoning_tokens if (reasoning_tokens and reasoning_tokens > 0) else 0
 
-    # 绝对上限：用户配置值、上下文窗口的 1/2、或 131072（取最小）
+    # 绝对上限：用户配置值、上下文窗口的 1/2、1/4（下限 8192）、131072（取最小）
     # 1M 上下文时允许 131072 输出，16K 上下文时允许 8192 输出
-    context_cap = min(configured // 2, max(8192, configured // 4))
+    # （审查修复：旧公式 min(cfg//2, max(8192, cfg//4)) 对 1M 给出 262144，与注释及
+    #   上方 user_max 降级分支的 131072 上限不一致，此处对齐为 131072）
+    context_cap = min(configured // 2, max(8192, configured // 4), 131072)
     absolute_max = min(user_max if user_max else context_cap, context_cap)
 
-    # 估算 prompt 占用的 token：保守 1.5 token/char（中文 1 token ≈ 1 汉字，
-    # 英文 1 token ≈ 4 char，混合文本 1 token ≈ 1.5 char 实测最稳）。
-    estimated_prompt_tokens = max(1, int(prompt_chars * 1.5))
+    # 估算 prompt 占用的 token（中英混合启发式，见 estimate_tokens 文档）
+    estimated_prompt_tokens = max(1, estimate_tokens(prompt_text or ""))
     # 留出 1024 token 给 vLLM 内部 / system 指令 / tool schema 余量
     safe_max = max(256, configured - estimated_prompt_tokens - 1024 - reasoning_budget)
     return min(configured, absolute_max, safe_max)

@@ -4,12 +4,13 @@ import { is } from '@electron-toolkit/utils'
 import { readdir, readFile, writeFile, stat, mkdir, rename, rm, realpath, copyFile } from 'fs/promises'
 import { existsSync, readdirSync } from 'fs'
 import { homedir } from 'os'
-import { execSync, exec, execFile } from 'child_process'
+import { execSync, execFile, spawn } from 'child_process'
 import { BackendManager } from './backend-manager'
 import { PtyManager } from './pty-manager'
 import { SSHManager } from './ssh-manager'
 import { SSHStore, isEncryptionAvailable, type SSHConnectionRecord } from './ssh-store'
 import { ElectronBridge } from './electron-bridge'
+import { assertSafePath, allowDialogKeyPath } from './utils/path-guard'
 
 let mainWindow: BrowserWindow | null = null
 let backendManager: BackendManager | null = null
@@ -64,6 +65,35 @@ function createWindow(): void {
       shell.openExternal(details.url)
     }
     return { action: 'deny' }
+  })
+
+  // 审查 M-2：阻止主窗口被导航到任意外部地址（原实现完全没有 will-navigate 守卫，
+  // <a href> 点击、location 赋值、XSS 均可把整个应用窗口劫持到外部站点）。
+  // 只允许同源导航（dev 为 Vite URL，prod 为 file:// 本地文件），其余一律 preventDefault。
+  const allowedOrigins = new Set<string>()
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    try { allowedOrigins.add(new URL(process.env['ELECTRON_RENDERER_URL']).origin) } catch { /* ignore */ }
+  }
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    let parsed: URL
+    try {
+      parsed = new URL(url)
+    } catch {
+      event.preventDefault()
+      return
+    }
+    // file:// 的 origin 是 "file://"，prod 模式允许（loadFile 加载的本地资源）
+    const isAllowed =
+      (is.dev && allowedOrigins.has(parsed.origin)) ||
+      (!is.dev && parsed.protocol === 'file:') ||
+      url === mainWindow?.webContents.getURL()
+    if (!isAllowed) {
+      event.preventDefault()
+      // 外部 http(s) 链接交给系统浏览器，保持与 windowOpenHandler 一致的行为
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        shell.openExternal(url)
+      }
+    }
   })
 
   // 注入 CSP 响应头，限制资源加载范围
@@ -161,58 +191,8 @@ function setupWindowIPC(): void {
 }
 
 // ─── File System IPC ────────────────────────────────
-
-/** 主目录顶层敏感文件/目录（仅在用户主目录顶层时拦截） */
-const HOME_TOPLEVEL_SENSITIVE = new Set([
-  '.ssh', '.aws', '.gnupg', '.gpg', '.kube', '.docker',
-  '.env', '.npmrc', '.yarnrc',
-])
-
-/**
- * 任意路径段都拦截的敏感目录名。
- * 这些目录几乎不会作为合法项目子目录出现，且包含凭证，因此任何位置都拒绝。
- * 注意：`.env` / `.npmrc` / `.yarnrc` / `.docker` / `.gpg` 不在此列——
- * 它们常作为项目内合法文件/目录存在，仅在主目录顶层拦截即可。
- */
-const ANYWHERE_SENSITIVE = new Set([
-  '.ssh', '.aws', '.gnupg', '.kube',
-])
-
-/**
- * 检查路径是否访问敏感目录，是则抛异常。
- * M2 修复：先通过 realpath 解析符号链接，防止渲染进程利用 symlink 绕过检查。
- * M6 修复：`.env` / `.npmrc` 等仅在主目录顶层拦截，不再误伤项目内同名文件。
- */
-async function assertSafePath(targetPath: string): Promise<void> {
-  let resolved = pathResolve(targetPath)
-  // M2：解析符号链接——目标存在时直接 realpath；不存在时回退到父目录 realpath + basename
-  try {
-    resolved = await realpath(resolved)
-  } catch {
-    try {
-      const parentReal = await realpath(dirname(resolved))
-      resolved = join(parentReal, basename(resolved))
-    } catch {
-      // 父目录也不存在：使用原始 resolve 结果（后续检查仍基于字面路径）
-    }
-  }
-  const home = homedir()
-  const homeResolved = pathResolve(home)
-  // 检查是否直接访问主目录下的敏感子目录
-  if (resolved.startsWith(homeResolved)) {
-    const relative = resolved.slice(homeResolved.length).replace(/^[\\/]+/, '')
-    const topLevel = relative.split(/[\\/]/)[0]
-    if (topLevel && HOME_TOPLEVEL_SENSITIVE.has(topLevel)) {
-      throw new Error(`拒绝访问敏感路径: ${targetPath}`)
-    }
-  }
-  // 检查绝对路径中的任意位置敏感目录名（仅限凭证类目录）
-  for (const seg of resolved.split(/[\\/]/)) {
-    if (ANYWHERE_SENSITIVE.has(seg)) {
-      throw new Error(`拒绝访问敏感路径: ${targetPath}`)
-    }
-  }
-}
+// 敏感路径拦截逻辑（HOME_TOPLEVEL_SENSITIVE / ANYWHERE_SENSITIVE / assertSafePath）
+// 已迁至 ./utils/path-guard 并从此处导入，行为保持一致。
 
 /** 在 PATH 环境变量中查找可执行文件 */
 function findProgramInPath(name: string): string | null {
@@ -283,7 +263,9 @@ function findGitBashFromRegistry(): string | null {
   ]
   for (const query of queries) {
     try {
-      const output = execSync(query, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] })
+      // 审查 MINOR：原 execSync 无 timeout — 注册表被第三方 provider 锁定时 reg 进程
+      // 会挂起，主进程（同步阻塞）随之整体冻死；3s 超时兜底
+      const output = execSync(query, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'], timeout: 3000 })
       const match = output.match(/InstallPath\s+REG_SZ\s+(.+)/)
       if (match) {
         const installPath = match[1].trim()
@@ -341,10 +323,19 @@ function setupFSIPC(): void {
   ipcMain.handle('fs:readFile', async (_event, filePath: string) => {
     try {
       await assertSafePath(filePath)
+      // 审查 M-10：大小上限（与 fs:readFileForEditor 的 10MB 一致）。原实现无上限，
+      // 渲染进程可让主进程把任意大的文件整体读入内存（字符串）再 IPC 传回，
+      // 大文件直接打爆主/渲染两侧内存
+      const s = await stat(filePath)
+      if (s.size > 10 * 1024 * 1024) {
+        throw new Error('文件过大（超过 10MB），无法读取')
+      }
       const content = await readFile(filePath, 'utf-8')
       return content
     } catch (err: any) {
-      throw new Error('读取文件失败，请检查文件是否存在或是否有访问权限')
+      throw new Error(err?.message && err.message.includes('文件过大')
+        ? err.message
+        : '读取文件失败，请检查文件是否存在或是否有访问权限')
     }
   })
 
@@ -397,7 +388,15 @@ function setupFSIPC(): void {
       properties: ['openFile'],
     })
     if (result.canceled) return null
-    return result.filePaths[0]
+    const filePath = result.filePaths[0]
+    // 修复 1：把用户通过对话框选取的文件加入私钥白名单（realpath 后），
+    // 使 ssh-manager 的 assertKeyFileSafe 放行该路径（支持符号链接场景）。
+    try {
+      allowDialogKeyPath(await realpath(filePath))
+    } catch {
+      // realpath 失败（如文件在对话框关闭后消失）：不加入白名单，选择结果仍返回
+    }
+    return filePath
   })
 
   // 选择背景图片并保存到 userData/backgrounds，返回文件名
@@ -579,11 +578,17 @@ function setupFSIPC(): void {
     const total = files.reduce((sum, f) => sum + f.size, 0)
     let transferred = 0
     let lastReport = 0
+    // 修复 5：窗口销毁后 webContents.send 会抛异常，加守卫 + try/catch
+    const safeSendProgress = (data: unknown): void => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        try { mainWindow.webContents.send('sftp:progress', data) } catch { /* 窗口已销毁等场景忽略 */ }
+      }
+    }
     const report = () => {
       const now = Date.now()
       if (now - lastReport > 100) {
         lastReport = now
-        mainWindow?.webContents.send('sftp:progress', { id: transferId, transferred, total })
+        safeSendProgress({ id: transferId, transferred, total })
       }
     }
 
@@ -593,7 +598,7 @@ function setupFSIPC(): void {
       transferred += f.size
       report()
     }
-    mainWindow?.webContents.send('sftp:progress', { id: transferId, transferred: total, total })
+    safeSendProgress({ id: transferId, transferred: total, total })
   })
 
   // 移到回收站
@@ -809,7 +814,7 @@ function setupPtyIPC(): void {
   ptyManager = new PtyManager()
   if (mainWindow) ptyManager.setWindow(mainWindow)
 
-  ipcMain.handle('pty:create', (_event, opts?: { shell?: string; cwd?: string; cols?: number; rows?: number }) => {
+  ipcMain.handle('pty:create', (_event, opts?: { shell?: string; args?: string[]; cwd?: string; cols?: number; rows?: number }) => {
     return ptyManager!.create(opts)
   })
 
@@ -885,12 +890,36 @@ if ($result.CompletionMatches) {
 }
 `
         const ps = isPowerShell && /pwsh/i.test(shell || '') ? 'pwsh' : 'powershell'
-        exec(`"${ps}" -NoProfile -NonInteractive -Command "${psScript.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`,
-          { cwd: actualCwd, timeout: 5000, windowsHide: true, shell: 'cmd.exe' },
-          (err, stdout) => {
-            if (err) resolve('')
-            else resolve(stdout)
-          })
+        // 修复 7：改用 spawn 数组传参（不经 cmd.exe），避免 cmd 与 PowerShell 引号规则冲突
+        // 导致含双引号的输入被错误解析；psScript 内容与超时/错误处理语义保持不变。
+        // pwsh 路径解析沿用 fs:resolveProgram 的 findProgramInPath 逻辑。
+        const psPath = findProgramInPath(ps) || ps
+        const child = spawn(psPath, ['-NoProfile', '-NonInteractive', '-NoLogo', '-Command', psScript], {
+          cwd: actualCwd,
+          windowsHide: true,
+        })
+        let out = ''
+        let settled = false
+        let timer: NodeJS.Timeout | null = null
+        const finish = (value: string) => {
+          if (settled) return
+          settled = true
+          if (timer) clearTimeout(timer)
+          resolve(value)
+        }
+        timer = setTimeout(() => {
+          try { child.kill() } catch { /* ignore */ }
+          finish('')
+        }, 5000)
+        child.stdout?.on('data', (data: Buffer) => {
+          out += data.toString('utf-8')
+        })
+        child.stderr?.on('data', () => { /* 丢弃 stderr，保持原 exec 只取 stdout 的语义 */ })
+        child.on('error', () => finish(''))
+        child.on('close', (code) => {
+          // 保持原语义：退出码非 0（或 spawn 失败）视为失败，返回空串
+          finish(code === 0 ? out : '')
+        })
         return
       }
 
@@ -986,6 +1015,12 @@ function setupSSHIPC(): void {
     return backendManager?.getPort() ?? 0
   })
 
+  // 后端 API token 查询（渲染层据此向后端请求携带 X-API-Token；未启动时返回空字符串）
+  ipcMain.handle('backend:getToken', () => {
+    if (!backendManager || backendManager.getPort() === 0) return ''
+    return backendManager.getApiToken()
+  })
+
   // 后端存活状态查询（渲染进程在 API 失败时用于确认后端是否崩溃/重启中）
   ipcMain.handle('backend:isAlive', () => {
     return backendManager?.isAlive() ?? false
@@ -1009,9 +1044,18 @@ async function callBackendApi(path: string, options?: RequestInit): Promise<any>
   if (backendToken) {
     headers['Authorization'] = `Bearer ${backendToken}`
   }
+  // 修复 4：注入进程级 API token（后端通过 CKUN_API_TOKEN 环境变量持有同一值，
+  // 校验 X-API-Token 头）；token 为空（后端未启动）时不加头。
+  const apiToken = backendManager?.getApiToken() || ''
+  if (apiToken) {
+    headers['X-API-Token'] = apiToken
+  }
   const res = await fetch(`http://127.0.0.1:${port}/api${path}`, {
     ...options,
     headers,
+    // 审查 MINOR：原实现无超时 — 后端单次挂起（worker 阻塞、GIL 卡死等）会让
+    // fetch 永久等待，对应 IPC handler 永不 resolve，渲染层 UI 永久转圈
+    signal: (options?.signal as AbortSignal | undefined) ?? AbortSignal.timeout(30000),
   })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
@@ -1176,7 +1220,26 @@ function setupSftpIPC(): void {
 // 注意：不使用 setPath('userData') 以避免破坏数据库/SSH 连接等现有数据路径
 app.commandLine.appendSwitch('disable-gpu-disk-cache')
 
+// 审查 M-9：单实例锁（原实现完全没有，grep 验证零 requestSingleInstanceLock）。
+// 原行为：可同时启动多个应用实例 — 第二个实例再拉起一套 Python 后端（端口冲突/
+// 双写同一 SQLite）、再开一组 PTY/SSH 连接、重复注册 IPC 处理器。
+// 现在：第二个实例退出，并把第一个实例的窗口带到前台。
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.show()
+      mainWindow.focus()
+    }
+  })
+}
+
 app.whenReady().then(async () => {
+  // 双保险：非主实例不启动任何服务（quit 与 ready 的时序竞态下仍然安全）
+  if (!gotSingleInstanceLock) return
   setupWindowIPC()
   setupFSIPC()
   createWindow()

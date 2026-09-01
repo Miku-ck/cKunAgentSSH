@@ -26,19 +26,21 @@ class SkillRegistry:
     def reload(self):
         """从数据库重新加载所有技能"""
         with self._lock:
-            # 修复：失败后间隔 _RETRY_INTERVAL 秒再重试，避免对故障数据库反复查询
-            if not self._loaded and self._last_fail_time > 0:
+            # 失败后间隔 _RETRY_INTERVAL 秒再重试，避免对故障数据库反复查询
+            if self._last_fail_time > 0:
                 if time.monotonic() - self._last_fail_time < self._RETRY_INTERVAL:
-                    return  # 未到重试间隔，跳过
+                    return  # 未到重试间隔，跳过（继续服务旧缓存）
             try:
                 self._skills = db.list_all_skills()  # 返回所有技能（含 disabled）
                 self._loaded = True
                 self._last_fail_time = 0
             except Exception as e:
-                self._skills = []
-                self._loaded = False
+                # 审查 MINOR 修复：失败时保留旧缓存。原实现 `self._skills = []` 把
+                # 此前加载成功的技能全部清空，DB 故障期间所有技能注入/触发词匹配
+                # 静默丢失，直到下次成功 reload；现在降级为"旧数据"而非"无数据"
                 self._last_fail_time = time.monotonic()
-                logger.warning("[skill_registry] reload 失败，%.1fs 后重试: %s", self._RETRY_INTERVAL, e)
+                logger.warning("[skill_registry] reload 失败，保留旧缓存（%d 条），%.1fs 后重试: %s",
+                               len(self._skills), self._RETRY_INTERVAL, e)
 
     def get_enabled_skills(self, mode: str) -> list[dict]:
         """获取指定模式下启用的技能，按 priority 降序"""

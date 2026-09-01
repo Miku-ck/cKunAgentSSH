@@ -27,6 +27,13 @@ const DANGEROUS_ARG_PATTERNS = [
   /\/c\b/, /&&/, /\|\|/, /;\s/, /\$\(/, /`/, /Invoke-Expression/i,
 ]
 
+/** 钳制终端维度参数（审查 MINOR：防渲染进程传入非法值） */
+function clampPtyDimension(value: unknown, fallback: number, min: number, max: number): number {
+  const n = typeof value === 'number' ? Math.floor(value) : NaN
+  if (!Number.isFinite(n) || n < min) return fallback
+  return Math.min(n, max)
+}
+
 export class PtyManager {
   private sessions = new Map<string, PtySession>()
   private nextId = 1
@@ -66,9 +73,11 @@ export class PtyManager {
     const defaultShell = this.getDefaultShell()
     let shell = opts?.shell || defaultShell
     const args = opts?.args || []
-    const cwd = opts?.cwd || this.getDefaultCwd()
-    const cols = opts?.cols || 80
-    const rows = opts?.rows || 24
+    const cwd = typeof opts?.cwd === 'string' && opts.cwd ? opts.cwd : this.getDefaultCwd()
+    // 审查 MINOR：cols/rows 来自渲染进程，原实现直接透传给 pty.spawn —
+    // 负数/小数/超大值会让 spawn 抛异常或分配巨型终端缓冲。统一钳制。
+    const cols = clampPtyDimension(opts?.cols, 80, 1, 1000)
+    const rows = clampPtyDimension(opts?.rows, 24, 1, 500)
 
     // M3 修复：验证 shell 在白名单中，防止渲染进程启动任意命令
     const platform = process.platform

@@ -17,9 +17,36 @@ logger = logging.getLogger(__name__)
 # 默认搜索结果数量
 _DEFAULT_MAX_RESULTS = 5
 
+# web_fetch 响应体上限（审查 M-4）：超过即拒绝，防止恶意页面打爆后端内存
+_MAX_RESPONSE_BYTES = 10 * 1024 * 1024
+
+
+# 审查 M-4：显式封锁 CPython `is_global` 表未覆盖、但可路由到内网的地址段。
+# - 100.64.0.0/10 (CGNAT)：运营商级 NAT，可达内网设备，is_private 恒为 False
+# - 192.0.0.0/29 / 192.0.0.170/31：IETF 协议分配 / AS112-VS
+# - 198.18.0.0/15：网络基准测试（部分云内网使用）
+# - 2001::/32 (Teredo) / 2002::/16 (6to4) / 64:ff9b::/96 (NAT64)：
+#   已废弃的 IPv6 过渡机制，6to4/NAT64 可内嵌任意 IPv4（含内网地址）
+#   （64:ff9b:1::/48 已包含在 64:ff9b::/96 内，无需重复列出）
+_EXTRA_BLOCKED_NETWORKS = [
+    ipaddress.ip_network(n) for n in (
+        "100.64.0.0/10",
+        "192.0.0.0/29",
+        "192.0.0.170/31",
+        "198.18.0.0/15",
+        "2001::/32",
+        "2002::/16",
+        "64:ff9b::/96",
+    )
+]
+
 
 def _is_safe_ip(ip: str) -> tuple[bool, str]:
-    """检查 IP 是否安全（防 SSRF：拒绝私网/环回/链路本地/保留/多播地址）
+    """检查 IP 是否安全（防 SSRF：只允许公网可路由地址）
+
+    审查 M-4：基础检查改用 `is_global`（CPython 3.13 下同时覆盖
+    private/loopback/link-local/multicast/reserved/unspecified 全部语义），
+    并叠加显式封锁表（CGNAT/Teredo/6to4/NAT64 等 is_global 漏掉的段）。
 
     额外防护：检测 IPv6-mapped IPv4 地址（如 ::ffff:127.0.0.1），
     提取内嵌 IPv4 重新校验，防止通过 mapped 地址绕过。
@@ -34,10 +61,14 @@ def _is_safe_ip(ip: str) -> tuple[bool, str]:
                 # 是 mapped IPv4，递归检查内嵌的 IPv4
                 return _is_safe_ip(str(mapped))
 
-        # 拒绝私网/环回/链路本地/保留/多播/未指定地址
-        if (ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local
-                or ip_obj.is_reserved or ip_obj.is_multicast or ip_obj.is_unspecified):
+        # 只放行公网可路由地址（is_global 为 False 即 private/loopback/
+        # link-local/multicast/reserved/unspecified 等全部内网语义）
+        if not ip_obj.is_global:
             return False, f"拒绝访问内网/保留/多播地址: {ip}"
+        # 显式封锁 CPython 表未覆盖的内网可达段（CGNAT/Teredo/6to4/NAT64 等）
+        for net in _EXTRA_BLOCKED_NETWORKS:
+            if ip_obj.version == net.version and ip_obj in net:
+                return False, f"拒绝访问特殊用途地址: {ip}"
         return True, ""
     except ValueError:
         return False, f"无效的 IP 地址: {ip}"
@@ -54,7 +85,7 @@ class WebSearchTool(BaseTool):
         },
         "required": ["query"],
     }
-    meta = ToolMeta(risk_level="safe", reversible=True, cacheable=True)
+    meta = ToolMeta(risk_level="safe", reversible=True, cacheable=True, idempotent=True)
 
     async def execute(self, context, query, max_results=_DEFAULT_MAX_RESULTS):
         # 参数校验：max_results 必须是 1~20 的整数
@@ -316,7 +347,7 @@ class WebFetchTool(BaseTool):
         },
         "required": ["url"],
     }
-    meta = ToolMeta(risk_level="safe", reversible=True, cacheable=True)
+    meta = ToolMeta(risk_level="safe", reversible=True, cacheable=True, idempotent=True)
 
     async def execute(self, context, url, max_chars=8000):
         import httpx
@@ -347,21 +378,20 @@ class WebFetchTool(BaseTool):
         try:
             # 使用解析后的 IP 直连，同时通过 sni_hostname 保留原始域名做 TLS/SNI，
             # 既防止 DNS rebinding，又兼容 CDN / 虚拟主机。
+            # 审查 M-4：流式读取 + _MAX_RESPONSE_BYTES 上限，原 `resp.text` 无界
+            # （100MB+ 页面直接打爆内存 → 后端 OOM 影响所有请求）。
             async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
                 direct_url = self._build_direct_url(parsed, ip_or_reason)
-                resp = await client.get(
-                    direct_url,
-                    headers=headers,
-                    extensions={"sni_hostname": hostname},
+                status, location, html = await self._get_with_limit(
+                    client, direct_url, headers, hostname,
                 )
                 current_url = url
-                current_parsed = parsed
 
                 # 手动处理重定向（最多 5 次），每次重新解析并校验目标 IP
                 redirect_count = 0
-                while resp.is_redirect and redirect_count < 5:
+                while status in (301, 302, 303, 307, 308) and redirect_count < 5:
                     redirect_count += 1
-                    next_url = resp.headers.get("location", "")
+                    next_url = location or ""
                     if not next_url:
                         break
                     # 处理相对路径重定向
@@ -374,17 +404,18 @@ class WebFetchTool(BaseTool):
 
                     next_parsed = urlparse(next_url)
                     current_url = next_url
-                    current_parsed = next_parsed
                     headers["Host"] = next_parsed.hostname
                     direct_url = self._build_direct_url(next_parsed, next_ip_or_reason)
-                    resp = await client.get(
-                        direct_url,
-                        headers=headers,
-                        extensions={"sni_hostname": next_parsed.hostname},
+                    status, location, html = await self._get_with_limit(
+                        client, direct_url, headers, next_parsed.hostname,
                     )
 
-                resp.raise_for_status()
-                html = resp.text
+                if status == 413:
+                    return ToolResult(
+                        False, "", f"响应超过 {_MAX_RESPONSE_BYTES // (1024 * 1024)}MB 上限，拒绝抓取: {current_url}",
+                    )
+                if status >= 400:
+                    return ToolResult(False, "", f"HTTP 错误 {status}")
 
             # 尝试用 trafilatura 提取正文（可选依赖）
             try:
@@ -406,12 +437,44 @@ class WebFetchTool(BaseTool):
         except httpx.ConnectError as e:
             logger.warning("Web fetch 连接失败: %s", url)
             return ToolResult(False, "", f"连接失败: {e}")
-        except httpx.HTTPStatusError as e:
-            logger.warning("Web fetch HTTP 错误 %s: %s", e.response.status_code, url)
-            return ToolResult(False, "", f"HTTP 错误 {e.response.status_code}: {e}")
         except Exception as e:
             logger.exception("Web fetch 失败: %s", url)
             return ToolResult(False, "", f"抓取失败: {e}")
+
+    async def _get_with_limit(
+        self, client, direct_url: str, headers: dict, sni: str,
+        cap: int = _MAX_RESPONSE_BYTES,
+    ) -> tuple[int, str, str]:
+        """流式 GET 并在响应体超过 cap 时中止（审查 M-4）。
+
+        返回 (status_code, location, body_text)。
+        - 重定向状态：location 为 Location 头，body 为空
+        - 4xx/5xx：body 为空，调用方按 status 处理
+        - 超限：返回 (413, "", "") 作为内部标记
+        """
+        async with client.stream(
+            "GET", direct_url, headers=headers, extensions={"sni_hostname": sni},
+        ) as resp:
+            if 300 <= resp.status_code < 400:
+                return resp.status_code, resp.headers.get("location", ""), ""
+            if resp.status_code >= 400:
+                return resp.status_code, "", ""
+            # 先查 Content-Length（若服务器提供），避免白白下载超大响应
+            clen = resp.headers.get("content-length")
+            if clen:
+                try:
+                    if int(clen) > cap:
+                        return 413, "", ""
+                except ValueError:
+                    pass
+            chunks = []
+            total = 0
+            async for chunk in resp.aiter_bytes(65536):
+                total += len(chunk)
+                if total > cap:
+                    return 413, "", ""
+                chunks.append(chunk)
+            return resp.status_code, "", b"".join(chunks).decode("utf-8", "replace")
 
     def _build_direct_url(self, parsed, ip: str) -> str:
         """用解析后的 IP 替换 URL 中的 hostname，保留端口和路径"""

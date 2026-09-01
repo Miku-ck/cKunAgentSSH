@@ -15,6 +15,7 @@ Reins — 缰绳
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from collections import deque, defaultdict
 from dataclasses import dataclass, field
@@ -31,6 +32,9 @@ from .contracts import (
 from .safety import classify_command, classify_shell_args
 
 logger = logging.getLogger(__name__)
+
+# 命令执行工具：审批必须绑定命令内容（审查 M-3），工具级授权不得覆盖命令级审批
+_COMMAND_EXEC_TOOLS = {"shell_exec", "local_exec"}
 
 
 class Reins:
@@ -72,6 +76,9 @@ class Reins:
         3. 注入 decision.inject_messages 到下一轮 LLM
         """
         for interceptor in self._interceptors[point]:
+            # 审查 MINOR 修复：安全类拦截器（FilesystemGuard/PermissionGate）异常时
+            # fail-closed（拦截），旧实现一律 continue = 跳过权限检查直接放行工具
+            safety_critical = getattr(interceptor, "safety_critical", False)
             try:
                 decision = await interceptor.check(ctx)
                 if decision.intercepted:
@@ -85,7 +92,12 @@ class Reins:
                     "Reins 拦截器异常 [%s] %s: %s",
                     point.value, type(interceptor).__name__, e, exc_info=True,
                 )
-                # 拦截器异常不阻塞主流程，继续下一个
+                if safety_critical:
+                    return ReinDecision(
+                        intercepted=True,
+                        intercept_reason=f"安全拦截器异常（fail-closed）: {type(interceptor).__name__}: {e}",
+                    )
+                # 非安全拦截器异常不阻塞主流程，继续下一个
                 continue
         return ReinDecision(intercepted=False)
 
@@ -105,6 +117,8 @@ class FilesystemGuard:
     """
     point: ReinPoint = field(default=ReinPoint.PRE_TOOL_CALL, init=False)
     priority: int = field(default=10, init=False)
+    # 安全类拦截器：异常时 fail-closed（见 Reins.check）
+    safety_critical: bool = field(default=True, init=False)
     # 关联的权限门 — 用于 dangerous 命令的审批决策
     permission_gate: Optional["PermissionGate"] = None
 
@@ -164,19 +178,32 @@ class FilesystemGuard:
                 if self.permission_gate is not None:
                     allowed = self.permission_gate.check_permission(tool, args)
                     if not allowed:
+                        # 审查 M-3 修复：原实现只发 "warning" 事件，前端没有可操作的授权卡片，
+                        # 用户根本无法批准 dangerous 命令（授权闭环断裂）。
+                        # 改发 permission_needed（payload 含 tool/args/command），前端
+                        # AgentRunPanel 渲染授权卡片，用户选择 本次/会话/始终（绑定命令）。
                         return ReinDecision(
                             intercepted=True,
                             intercept_reason=f"需审批命令: {reason}",
                             events=[TraceEvent(
-                                kind="warning",
+                                kind="permission_needed",
                                 source="reins.filesystem_guard",
                                 run_id=ctx.run_id,
                                 iteration=ctx.iteration,
-                                payload={"message": f"已拦截需审批命令: {reason}"},
+                                payload={
+                                    "tool": tool,
+                                    "args": args,
+                                    "risk": "dangerous",
+                                    "reversible": False,
+                                    "message": f"需要用户授权: {tool} — {reason}",
+                                },
                             )],
                             inject_messages=[{
                                 "role": "user",
-                                "content": f"[系统拦截] 已拦截需审批命令: {reason}。请先获得用户授权。",
+                                "content": (
+                                    f"[系统拦截] 命令被判定为 dangerous（{reason}），已在界面上向用户请求授权。"
+                                    "请重新发起完全相同的命令（授权后会被放行），或改用更安全的替代方案。"
+                                ),
                             }],
                         )
             # safe → 放行
@@ -478,8 +505,11 @@ class ConfidenceMonitor:
                 base -= 0.15
                 break
 
-        # 工具失败
-        failed_tools = sum(1 for tc in ctx.tool_calls_log if tc.get("success") is False)
+        # 工具失败 — 审查 MINOR 修复：只看最近 5 次调用（窗口化），
+        # 原实现累计整个 run 的所有失败，长 run 里一次早期失败会永久压低置信度，
+        # 触发误判求助/纠偏注入
+        recent_calls = ctx.tool_calls_log[-5:] if ctx.tool_calls_log else []
+        failed_tools = sum(1 for tc in recent_calls if tc.get("success") is False)
         base -= 0.2 * failed_tools
 
         return max(0.1, base)
@@ -501,7 +531,12 @@ class PermissionGate:
     """
     point: ReinPoint = field(default=ReinPoint.PRE_TOOL_CALL, init=False)
     priority: int = field(default=8, init=False)
+    # 安全类拦截器：异常时 fail-closed（见 Reins.check）
+    safety_critical: bool = field(default=True, init=False)
     # Saddle 引用（用于从 ToolRegistry 读取 ToolMeta，单一数据源）
+    # 审查 MINOR 修复：本实例是进程级单例跨 run 共享，并发 run 下 `saddle` 字段会被
+    # 后启动的 run 覆盖（查错 ToolRegistry → 误判"工具未注册"）。因此 check 优先使用
+    # ctx.metadata["saddle"]（per-run），self.saddle 仅作无 ctx 调用（如 grant 端点）的兜底。
     saddle: Optional[Any] = None
     # 三范围审批状态
     # 修复：使用 Counter 替代 set，避免跨 run 竞态（Run A 的授权被 Run B 消费）
@@ -535,47 +570,92 @@ class PermissionGate:
             for name in sorted(self._confirmed_permanent):
                 f.write(name + '\n')
 
+    @staticmethod
+    def _grant_key(tool_name: str, command: Optional[str] = None) -> str:
+        """计算授权键（审查 M-3 核心修复）。
+
+        - 命令执行工具（shell_exec/local_exec）+ 具体命令 → `tool:<sha256(规范化命令)[:16]>`，
+          授权只绑定被批准的那条命令，防止一次"始终允许 shell_exec"后任意
+          dangerous 命令免审批（如 `rm -rf ~/backups`）。
+        - 其他工具 / 未提供命令 → 工具名本身（保持原工具级授权语义）。
+
+        兼容性：旧 allowlist.txt 中裸 `shell_exec` 条目对新逻辑不再放行命令级审批
+        （fail-safe 方向收紧），用户需重新针对具体命令授权。
+        """
+        if tool_name in _COMMAND_EXEC_TOOLS and command and str(command).strip():
+            from .safety import normalize_command_for_detection
+            digest = hashlib.sha256(
+                normalize_command_for_detection(str(command)).encode("utf-8")
+            ).hexdigest()[:16]
+            return f"{tool_name}:{digest}"
+        return tool_name
+
     def check_permission(self, tool_name: str, args: dict, scope: str = 'once') -> bool:
         """检查权限，返回是否放行
 
         scope: 'once' (仅本次) | 'session' (会话级) | 'always' (永久)
 
         无交互式 UI 场景：默认拦截 dangerous 命令，除非已在 allowlist 中。
+        命令执行工具按"工具+命令哈希"键检查（审查 M-3）。
         """
+        command = None
+        if tool_name in _COMMAND_EXEC_TOOLS and isinstance(args, dict):
+            command = args.get("command") or args.get("shell") or args.get("cmd")
+        key = self._grant_key(tool_name, command)
         # 检查 permanent allowlist
-        if tool_name in self._confirmed_permanent:
+        if key in self._confirmed_permanent:
             return True
         # 检查 session allowlist
-        if tool_name in self._confirmed_session:
+        if key in self._confirmed_session:
             return True
         # 修复：检查 once allowlist（使用计数器，避免跨 run 竞态）
-        if self._confirmed_once.get(tool_name, 0) > 0:
-            self._confirmed_once[tool_name] -= 1
-            if self._confirmed_once[tool_name] <= 0:
-                del self._confirmed_once[tool_name]
+        if self._confirmed_once.get(key, 0) > 0:
+            self._confirmed_once[key] -= 1
+            if self._confirmed_once[key] <= 0:
+                del self._confirmed_once[key]
             return True
         # 默认拦截 dangerous 命令（无交互式 UI，不能自动放行）
         return False
 
-    def grant(self, tool_name: str, scope: str = 'once') -> None:
-        """授予权限
+    def grant(self, tool_name: str, scope: str = 'once', command: Optional[str] = None) -> str:
+        """授予权限，返回实际写入的授权键
 
         scope: 'once' | 'session' | 'always'
+        command: 命令执行工具时传入被批准的具体命令（审查 M-3 命令级绑定）
         """
+        key = self._grant_key(tool_name, command)
         if scope == 'once':
             # 修复：使用计数器，支持多次授权累积
-            self._confirmed_once[tool_name] = self._confirmed_once.get(tool_name, 0) + 1
+            self._confirmed_once[key] = self._confirmed_once.get(key, 0) + 1
         elif scope == 'session':
-            self._confirmed_session.add(tool_name)
+            self._confirmed_session.add(key)
         elif scope == 'always':
-            self._confirmed_permanent.add(tool_name)
+            self._confirmed_permanent.add(key)
             self._save_permanent_allowlist()
+        return key
 
-    def revoke(self, tool_name: str) -> None:
-        """撤销所有范围的权限"""
-        self._confirmed_once.pop(tool_name, None)  # Counter 使用 pop 替代 discard
-        self._confirmed_session.discard(tool_name)
-        self._confirmed_permanent.discard(tool_name)
+    def _revoke_key(self, key: str) -> None:
+        self._confirmed_once.pop(key, None)  # Counter 使用 pop 替代 discard
+        self._confirmed_session.discard(key)
+        self._confirmed_permanent.discard(key)
+
+    def revoke(self, tool_name: str, command: Optional[str] = None) -> None:
+        """撤销权限
+
+        - 提供 command：只撤销该条命令的绑定授权
+        - 不提供 command：撤销该工具的全部授权（工具级 + 所有命令级绑定键）
+        """
+        if command and tool_name in _COMMAND_EXEC_TOOLS:
+            self._revoke_key(self._grant_key(tool_name, command))
+        else:
+            self._revoke_key(tool_name)
+            prefix = tool_name + ":"
+            for k in [k for k in self._confirmed_permanent if k.startswith(prefix)]:
+                self._revoke_key(k)
+            for k in [k for k in self._confirmed_session if k.startswith(prefix)]:
+                self._revoke_key(k)
+            for k in [k for k in self._confirmed_once if k.startswith(prefix)]:
+                self._revoke_key(k)
         self._save_permanent_allowlist()
 
     def clear_once(self) -> None:
@@ -586,15 +666,21 @@ class PermissionGate:
         """从 DB 加载用户自定义权限覆盖"""
         self._overrides.update(overrides)
 
-    def _lookup_meta(self, tool_name: str) -> Optional[Any]:
+    def _lookup_meta(self, tool_name: str, ctx: Optional[RunContext] = None) -> Optional[Any]:
         """从 Saddle 的 ToolRegistry 读取工具的 ToolMeta（单一数据源）
 
         返回 None 表示工具未注册。
+        审查 MINOR：优先使用 per-run saddle（ctx.metadata["saddle"]），
+        避免进程级单例的 saddle 字段被并发 run 覆盖后查错注册表。
         """
-        if not self.saddle:
+        saddle = None
+        if ctx is not None:
+            saddle = (ctx.metadata or {}).get("saddle")
+        saddle = saddle or self.saddle
+        if not saddle:
             return None
         try:
-            tool = self.saddle.registry.get(tool_name)
+            tool = saddle.registry.get(tool_name)
             if tool is None:
                 return None
             return tool.meta
@@ -621,13 +707,15 @@ class PermissionGate:
         # safety.classify_command 精细判定（hardline/dangerous/safe），
         # 不应被 PermissionGate 基于工具级 risk_level 一刀切拦截。
         # 若在此拦截，FilesystemGuard 的精细分类永远跑不到（priority 8 < 10）。
-        _COMMAND_EXEC_TOOLS = {"shell_exec", "local_exec"}
+        # 审查 M-3：命令级审批绑定在 FilesystemGuard → PermissionGate.check_permission
+        # 的 `tool:cmdhash` 授权键上，不在此处用工具级 risk 一刀切。
         if tool in _COMMAND_EXEC_TOOLS:
             # 跳过 tool-level 风险检查，由 FilesystemGuard 按命令内容判定
             return ReinDecision()
 
         # 从 ToolMeta 读取风险等级（单一数据源，避免硬编码脱同步）
-        meta = self._lookup_meta(tool)
+        # 审查 MINOR：传入 ctx 使用 per-run saddle（单例 saddle 字段会被并发 run 覆盖）
+        meta = self._lookup_meta(tool, ctx)
         if meta is None:
             # 工具未注册 — 拦截并明确报错（区分"未注册" vs "确实危险"）
             return ReinDecision(
@@ -897,7 +985,7 @@ class SyntaxVerifier:
             return ReinDecision()
 
         # 按扩展名做语法检查
-        error_msg = self._check_syntax(path, content)
+        error_msg = await self._check_syntax(path, content)
         if not error_msg:
             # 验证通过：移除该文件的语法错误记录
             errors: list = ctx.metadata.get("syntax_errors") or []
@@ -923,7 +1011,7 @@ class SyntaxVerifier:
             }],
         )
 
-    def _check_syntax(self, path: str, content: str) -> str:
+    async def _check_syntax(self, path: str, content: str) -> str:
         """按文件扩展名做语法检查，返回错误信息（空字符串表示通过）"""
         import os
         ext = os.path.splitext(path)[1].lower()
@@ -937,24 +1025,25 @@ class SyntaxVerifier:
             # .vue 文件含 SFC 结构，tsc 无法直接检查，跳过
             if ext == ".vue":
                 return ""
-            return self._check_tsc(path)
+            return await self._check_tsc(path)
         else:
             return ""
 
     @staticmethod
-    def _check_tsc(path: str) -> str:
+    async def _check_tsc(path: str) -> str:
         """用 tsc --noEmit 检查 TS/JS 文件语法（H13 修复 B6）
 
         策略：
         - 用 shutil.which 探测 tsc 是否可用（一次探测后缓存到类属性）
         - 不可用 → 跳过（返回空字符串）
-        - 可用 → subprocess 调用 tsc --noEmit <path>，捕获输出
+        - 可用 → 在线程池中调用 tsc --noEmit <path>（asyncio.to_thread，
+          避免同步 subprocess 阻塞 event loop），捕获输出
         - 失败 → 返回错误信息
         - 成功 → 返回空字符串
 
         注意：
         - tsc 检查的是磁盘文件（不是 content 参数），调用前需确保文件已落盘
-        - 用 subprocess.run 同步调用（与 _check_python/_check_json 一致的 sync 接口）
+        - 用 asyncio.to_thread 包装同步 subprocess.run，防止阻塞 event loop
         - tsc 不可用时静默跳过，不阻塞 Agent
         """
         import os
@@ -973,7 +1062,8 @@ class SyntaxVerifier:
             return ""
 
         try:
-            result = subprocess.run(
+            result = await asyncio.to_thread(
+                subprocess.run,
                 ["tsc", "--noEmit", "--pretty", "false", path],
                 capture_output=True, text=True, timeout=10,
             )

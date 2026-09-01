@@ -15,12 +15,12 @@ _SHELL_OUTPUT_TAIL = 1000
 
 class ShellExecTool(BaseTool):
     name = "shell_exec"
-    description = "执行 shell 命令并返回输出。超时 30 秒。"
+    description = "执行 shell 命令并返回输出。超时 1-120 秒（默认 30）。"
     parameters = {
         "type": "object",
         "properties": {
             "command": {"type": "string", "description": "要执行的命令"},
-            "timeout": {"type": "integer", "description": "超时秒数（默认 30）"},
+            "timeout": {"type": "integer", "description": "超时秒数（1-120，默认 30）"},
         },
         "required": ["command"],
     }
@@ -36,6 +36,8 @@ class ShellExecTool(BaseTool):
         return head + f"\n... [输出已截断，省略中间 {omitted} 字符]\n" + tail
 
     async def execute(self, context, command, timeout=30):
+        # 超时上限钳制（1-120 秒）
+        timeout = max(1, min(int(timeout), 120))
         # SSH 模式：若存在 ssh_session_id 且 Electron Bridge 已配置，则远程执行
         if context.ssh_session_id:
             return await self._execute_remote(context.ssh_session_id, command, timeout)

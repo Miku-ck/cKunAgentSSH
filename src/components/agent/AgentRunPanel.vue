@@ -46,19 +46,21 @@ const props = defineProps<{
   hideHumanHelp?: boolean
 }>()
 
-/** 永久授权工具 */
-async function grantAlways(reqId: string, tool: string) {
+/** 授权（审查 M-3：提供"允许本次"(once) 与"始终允许"(always) 两档；
+ *  命令工具始终允许时绑定该条具体命令，不会覆盖其他 dangerous 命令） */
+async function grantPermission(reqId: string, tool: string, scope: 'once' | 'always') {
   const req = agentStore.permissionRequests.find(r => r.id === reqId)
   if (!req || req.granting || req.resolved) return
+  const command = typeof req.args?.command === 'string' ? (req.args.command as string) : undefined
   req.granting = true
   try {
-    await agentApi.grantPermission(tool, 'always')
+    await agentApi.grantPermission(tool, scope, command)
     agentStore.resolvePermission(reqId, true)
-} catch (e) {
-  req.granting = false
-  console.error('授权失败:', e)
-  toast.error('授权失败，请重试')
-}
+  } catch (e) {
+    req.granting = false
+    console.error('授权失败:', e)
+    toast.error('授权失败，请重试')
+  }
 }
 
 </script>
@@ -175,9 +177,16 @@ async function grantAlways(reqId: string, tool: string) {
           <button
             class="permission-btn permission-btn-grant"
             :disabled="req.granting"
-            @click="grantAlways(req.id, req.tool)"
+            @click="grantPermission(req.id, req.tool, 'once')"
           >
-            {{ req.granting ? '授权中...' : '永久允许' }}
+            {{ req.granting ? '授权中...' : '允许本次' }}
+          </button>
+          <button
+            class="permission-btn permission-btn-grant"
+            :disabled="req.granting"
+            @click="grantPermission(req.id, req.tool, 'always')"
+          >
+            {{ req.isCommandTool ? '始终允许此命令' : '始终允许' }}
           </button>
           <button
             class="permission-btn permission-btn-dismiss"
@@ -185,7 +194,10 @@ async function grantAlways(reqId: string, tool: string) {
           >忽略</button>
         </div>
         <div class="permission-hint">
-          授权后下次运行生效；Agent 已被引导换用更安全的工具。
+          <template v-if="req.isCommandTool">
+            授权仅绑定此条命令，其他 dangerous 命令仍会单独请求审批；
+          </template>
+          授权后 Agent 重新发起该请求即生效。
         </div>
       </div>
     </div>

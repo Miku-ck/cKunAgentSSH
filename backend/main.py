@@ -3,11 +3,16 @@ cKunAgentic Python 后端入口
 启动: python main.py --port 8010
 """
 import argparse
+import hmac
+import logging
+import os
+import secrets
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from config import settings
 from database import init_db
@@ -18,6 +23,20 @@ from routes.skills import router as skills_router
 from routes.agent import router as agent_router
 from routes.terminal import router as terminal_router
 from agent.consciousness_tick import get_global_tick
+
+logger = logging.getLogger(__name__)
+
+# ── API Token 认证 ────────────────────────────────────────────────────────────
+# 契约：Electron spawn 时注入环境变量 CKUN_API_TOKEN；
+# 客户端请求需携带 HTTP 头 X-API-Token。
+# 开发模式（未注入）下生成临时 token 并打印前 8 位（不打印完整 token）。
+API_TOKEN = os.environ.get("CKUN_API_TOKEN", "")
+if not API_TOKEN:
+    API_TOKEN = secrets.token_hex(32)
+    logger.warning(
+        "未收到 CKUN_API_TOKEN，已生成临时 token（开发模式），token 前 8 位: %s...",
+        API_TOKEN[:8],
+    )
 
 
 @asynccontextmanager
@@ -83,6 +102,29 @@ async def cors_null_origin_security(request, call_next):
         # Origin 为 null 时不应设置 cookies，防止跨站请求伪造
         response.headers.pop("set-cookie", None)
     return response
+
+
+# ── API Token 认证中间件 ─────────────────────────────────────────────────────
+# 受保护范围：所有 /api/* 路由（含 SSE：POST /api/chat/stream、POST /api/agent/run）
+# 例外：GET /api/health（及 /health）不认证；OPTIONS（CORS 预检）放行
+# 校验：X-API-Token 头与 API_TOKEN 恒定时间比较（hmac.compare_digest）
+# 注意：本中间件经 @app.middleware 注册后被置于中间件栈最外层（先于 CORS 执行），
+#       未授权请求直接返回 401，不经 CORS 处理——对未授权请求这是期望行为。
+@app.middleware("http")
+async def api_token_auth(request: Request, call_next):
+    path = request.url.path
+    if not path.startswith("/api"):
+        return await call_next(request)
+    if request.method == "OPTIONS":
+        return await call_next(request)
+    if request.method == "GET" and path in ("/api/health", "/health"):
+        return await call_next(request)
+    token = request.headers.get("X-API-Token", "")
+    # 审查 MINOR 修复：compare_digest 的 str 版本要求纯 ASCII，畸形/非 ASCII 头
+    # 原实现抛 TypeError → 500；两侧编码为 bytes 后恒定时间比较恒安全
+    if not hmac.compare_digest(token.encode("utf-8"), API_TOKEN.encode("utf-8")):
+        return JSONResponse(status_code=401, content={"detail": "unauthorized"})
+    return await call_next(request)
 
 
 @app.get("/api/health")

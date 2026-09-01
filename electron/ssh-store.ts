@@ -132,13 +132,44 @@ function fromDisk(rec: SSHConnectionRecordOnDisk): SSHConnectionRecord {
 async function readAllFromDisk(): Promise<SSHConnectionRecordOnDisk[]> {
   const path = getStorePath()
   if (!existsSync(path)) return []
+  let raw: string
   try {
-    const raw = await readFile(path, 'utf-8')
-    const arr = JSON.parse(raw)
-    if (!Array.isArray(arr)) return []
-    return arr as SSHConnectionRecordOnDisk[]
-  } catch {
+    raw = await readFile(path, 'utf-8')
+  } catch (e) {
+    console.warn('[SSHStore] 读取 store 文件失败（按空处理）:', e)
     return []
+  }
+  try {
+    const arr = JSON.parse(raw)
+    if (!Array.isArray(arr)) {
+      console.warn('[SSHStore] store 文件内容不是数组，已隔离损坏文件')
+      await quarantineCorruptFile(path, raw)
+      return []
+    }
+    return arr as SSHConnectionRecordOnDisk[]
+  } catch (e) {
+    // 审查 M-8：损坏文件隔离到 .corrupt-<ts>.bak。原实现 JSON.parse 失败即静默
+    // 返回 []，随后的 save()/delete() 会以空数组为基线覆写磁盘文件 — 用户全部
+    // SSH 连接配置（含加密凭据）被静默永久抹掉，且无任何日志线索
+    console.error('[SSHStore] store 文件损坏（JSON 解析失败），已隔离原文件:', e)
+    await quarantineCorruptFile(path, raw)
+    return []
+  }
+}
+
+/** 把损坏的 store 文件移走（或复制）为带时间戳的 .bak，保留现场供恢复 */
+async function quarantineCorruptFile(path: string, raw: string): Promise<void> {
+  try {
+    const bak = `${path}.corrupt-${Date.now()}.bak`
+    try {
+      await rename(path, bak)
+    } catch {
+      // rename 失败（文件被占用等）：退回复制保留原文件
+      await writeFile(bak, raw, 'utf-8')
+    }
+    console.warn(`[SSHStore] 损坏文件已备份到: ${bak}`)
+  } catch (e) {
+    console.warn('[SSHStore] 备份损坏文件失败:', e)
   }
 }
 

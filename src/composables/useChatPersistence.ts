@@ -9,6 +9,9 @@ import type {
 } from '@/types/chat'
 
 import { genId } from '@/utils/id'
+// 审查修复：原文件在 deleteConversation 失败分支使用了 useToastStore 但从未导入
+// （typecheck TS2304；运行时该分支一触发就抛 ReferenceError，toast 永远弹不出来）
+import { useToastStore } from '@/stores/toast'
 
 export interface UseChatPersistenceOptions<
   TContext = unknown,

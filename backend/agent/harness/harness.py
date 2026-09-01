@@ -233,6 +233,11 @@ class Harness:
         ctx.llm_api_key = self.config.api_key
         ctx.llm_model = self.config.model
 
+        # 审查 MINOR：per-run saddle 引用。PermissionGate 是进程级单例，
+        # 其 saddle 字段会被后启动的并发 run 覆盖；拦截器改从 ctx.metadata 读取
+        # 当前 run 的 Saddle，避免查错 ToolRegistry 误判"工具未注册"。
+        ctx.metadata["saddle"] = self._saddle
+
         # 首条消息：用户任务
         ctx.messages.append({"role": "user", "content": task})
 

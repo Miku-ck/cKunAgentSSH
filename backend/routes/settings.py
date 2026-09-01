@@ -1,6 +1,7 @@
 """
 模型与设置路由 — 模型配置 CRUD + 连接测试
 """
+import asyncio
 from typing import Optional, Literal
 
 from fastapi import APIRouter, HTTPException, Query
@@ -61,7 +62,7 @@ class UpdateModelRequest(BaseModel):
 # 注意：/settings/models/default 必须注册在 /settings/models/{config_id} 之前，
 # 否则 FastAPI 按注册顺序匹配时 "default" 会被 {config_id} 路径先捕获导致功能失效。
 @router.patch("/settings/models/default")
-async def set_default_model(
+def set_default_model(
     model_id: str = Query(..., description="要设为默认的模型 id"),
     mode: Literal["ssh"] = Query("ssh", description="模式"),
 ):
@@ -74,7 +75,7 @@ async def set_default_model(
 
 
 @router.get("/settings/models/default")
-async def get_default_model(mode: Literal["ssh"] = Query("ssh")):
+def get_default_model(mode: Literal["ssh"] = Query("ssh")):
     """获取默认模型"""
     model = db.get_default_model(mode=mode)
     if not model:
@@ -87,13 +88,13 @@ async def get_default_model(mode: Literal["ssh"] = Query("ssh")):
 
 
 @router.get("/settings/models")
-async def list_models_config():
+def list_models_config():
     """获取所有模型配置"""
     return db.list_models_config()
 
 
 @router.post("/settings/models")
-async def create_model_config(req: CreateModelRequest):
+def create_model_config(req: CreateModelRequest):
     """创建模型配置"""
     try:
         result = db.create_model_config(
@@ -120,7 +121,7 @@ async def create_model_config(req: CreateModelRequest):
 
 
 @router.patch("/settings/models/{config_id}")
-async def update_model_config(config_id: str, req: UpdateModelRequest):
+def update_model_config(config_id: str, req: UpdateModelRequest):
     """更新模型配置"""
     # 路径参数用 config_id 避免与 UpdateModelRequest.model_id 字段同名冲突
     data = req.model_dump(exclude_unset=True)
@@ -134,7 +135,7 @@ async def update_model_config(config_id: str, req: UpdateModelRequest):
 
 
 @router.delete("/settings/models/{config_id}")
-async def delete_model_config(config_id: str):
+def delete_model_config(config_id: str):
     """删除模型配置"""
     try:
         deleted = db.delete_model_config(config_id)
@@ -162,7 +163,8 @@ async def test_model_connection(config_id: str):
 
     log = logging.getLogger("cKunAgentic.settings")
 
-    model = db.get_model_config(config_id, mask_key=False)
+    # 审查 M-13：db 同步调用放线程池（本路由因 httpx 异步探测保持 async）
+    model = await asyncio.to_thread(db.get_model_config, config_id, mask_key=False)
     if not model:
         log.warning("[TEST] config not found: %s", config_id)
         raise HTTPException(status_code=404, detail="Model not found")
@@ -245,13 +247,13 @@ class MemorySettingsRequest(BaseModel):
 
 
 @router.get("/settings/memory")
-async def get_memory_settings():
+def get_memory_settings():
     """获取记忆设置"""
     return db.get_memory_settings()
 
 
 @router.put("/settings/memory")
-async def update_memory_settings(req: MemorySettingsRequest):
+def update_memory_settings(req: MemorySettingsRequest):
     """更新记忆设置"""
     db.set_app_setting("memory.enabled", "true" if req.enabled else "false")
     db.set_app_setting("memory.strategy", req.strategy)
@@ -270,7 +272,7 @@ class PostProcessSettingsRequest(BaseModel):
 
 
 @router.get("/settings/post-process")
-async def get_post_process_settings():
+def get_post_process_settings():
     """获取后处理设置 — 只读，不修改全局配置"""
     def _bool(key: str, default: bool) -> bool:
         v = db.get_app_setting(key)
@@ -287,7 +289,7 @@ async def get_post_process_settings():
 
 
 @router.put("/settings/post-process")
-async def update_post_process_settings(req: PostProcessSettingsRequest):
+def update_post_process_settings(req: PostProcessSettingsRequest):
     """更新后处理设置并同步到全局 PostProcessConfig"""
     from post_processor import set_post_process_config, PostProcessConfig
 

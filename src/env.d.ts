@@ -75,6 +75,7 @@ interface ElectronAPI {
   sshIsEncryptionAvailable: () => Promise<boolean>
   getBackendPort: () => Promise<number>
   isBackendAlive: () => Promise<boolean>
+  getBackendToken: () => Promise<string>
   authIsEncryptionAvailable: () => Promise<boolean>
   authEncryptString: (plain: string) => Promise<string>
   authDecryptString: (encrypted: string) => Promise<string | null>

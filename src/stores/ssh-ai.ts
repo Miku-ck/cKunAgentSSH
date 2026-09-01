@@ -84,7 +84,21 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   watch(() => appStore.backendStatus, ensureModelLoaded, { immediate: true })
 
   function toggleAiPanel() {
-    showAiPanel.value = !showAiPanel.value
+    if (showAiPanel.value) {
+      closeAiPanel()
+    } else {
+      showAiPanel.value = true
+    }
+  }
+
+  /**
+   * 关闭 AI 面板：先中止仍在运行的普通聊天流（SSE 不再后台空跑），再隐藏面板。
+   * Agent 运行设计为可跨面板存活（store 层 watch 固化结果），关闭面板不中止 Agent。
+   */
+  function closeAiPanel() {
+    // 中止当前活动聊天流；无流时 abortStream 内部 no-op
+    base.abortStream()
+    showAiPanel.value = false
   }
 
   // ── 3. SSH 上下文构建：从当前活动 SSH 会话获取信息 ──
@@ -284,6 +298,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     // ── SSH 特有 API ──
     showAiPanel,
     toggleAiPanel,
+    closeAiPanel,
     agentMode,
     setAgentMode,
     agentRunning,

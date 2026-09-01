@@ -36,9 +36,24 @@ class GlobTool(BaseTool):
         },
         "required": ["pattern"],
     }
-    meta = ToolMeta(risk_level="safe", reversible=False)
+    meta = ToolMeta(risk_level="safe", reversible=False, idempotent=True)  # 只读查找，可安全重试
 
     async def execute(self, context, pattern, path=None, max_results=100):
+        # 审查 MINOR 修复：pattern 逃逸防护。原实现 `os.path.isabs(pattern)` 时直接用
+        # 绝对 pattern 搜索 — LLM 传入 C:\\ 或 /etc 下绝对路径即可全盘枚举；
+        # 含 .. 的相对 pattern（如 ../../*.txt）同样能跳出 root。
+        norm_pattern = (pattern or "").replace("\\", "/")
+        if os.path.isabs(pattern) or norm_pattern.startswith("/"):
+            return ToolResult(False, "", "pattern 不允许绝对路径，请使用相对模式", priority="high")
+        if any(part == ".." for part in norm_pattern.split("/")):
+            return ToolResult(False, "", "pattern 不允许包含 ..（无法跳出搜索根目录）", priority="high")
+        # 审查 MINOR 修复：max_results 钳制（原实现无上限，LLM 可传巨大值）
+        try:
+            max_results = int(max_results)
+        except (TypeError, ValueError):
+            max_results = 100
+        max_results = max(1, min(max_results, 500))
+
         # 解析搜索根目录
         root = path or context.workspace_path or "."
         try:
@@ -66,11 +81,8 @@ class GlobTool(BaseTool):
 
     def _glob_search(self, pattern, root, max_results, workspace):
         """执行 glob 查找并过滤排除目录"""
-        # 构建完整 glob 模式
-        if os.path.isabs(pattern):
-            full_pattern = pattern
-        else:
-            full_pattern = os.path.join(root, pattern)
+        # 构建完整 glob 模式（审查 MINOR：绝对 pattern 已在 execute 拒绝，此处恒为相对拼接）
+        full_pattern = os.path.join(root, pattern.replace("\\", os.sep))
 
         # 递归查找
         raw_matches = glob_module.glob(full_pattern, recursive=True)

@@ -42,7 +42,7 @@ class UpdateEnabledRequest(BaseModel):
 
 
 @router.get("/skills")
-async def list_skills(limit: int = 200, offset: int = 0, mode: Optional[str] = None):
+def list_skills(limit: int = 200, offset: int = 0, mode: Optional[str] = None):
     """获取所有技能列表
 
     Args:
@@ -62,7 +62,7 @@ async def list_skills(limit: int = 200, offset: int = 0, mode: Optional[str] = N
 
 
 @router.post("/skills")
-async def create_skill(req: CreateSkillRequest):
+def create_skill(req: CreateSkillRequest):
     """创建新技能（自动处理 slug 冲突）"""
     result = db.create_skill(
         name=req.name,
@@ -81,7 +81,7 @@ async def create_skill(req: CreateSkillRequest):
 
 
 @router.patch("/skills/{skill_id}/enabled")
-async def update_skill_enabled(
+def update_skill_enabled(
     skill_id: str,
     req: UpdateEnabledRequest,
     mode: Optional[str] = None,
@@ -111,7 +111,7 @@ async def update_skill_enabled(
 
 
 @router.delete("/skills/{skill_id}")
-async def delete_skill(skill_id: str):
+def delete_skill(skill_id: str):
     """删除非内置技能"""
     deleted = db.delete_skill(skill_id)
     if not deleted:
@@ -136,7 +136,7 @@ class SyncBuiltinSkillsRequest(BaseModel):
 
 
 @router.post("/skills/sync-builtin")
-async def sync_builtin_skills(req: SyncBuiltinSkillsRequest):
+def sync_builtin_skills(req: SyncBuiltinSkillsRequest):
     """同步内置技能到数据库
 
     - 按 slug upsert（保留用户已设置的 enabled 状态）

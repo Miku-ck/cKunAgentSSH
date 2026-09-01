@@ -16,8 +16,8 @@ import type { ChatMode } from '@/types/chat'
  * 固化 Agent 运行结果到会话的最后一条占位消息（id 以 'temp-agent-' 开头）。
  * 设计为在 store 层 watch 中调用，不依赖组件生命周期。
  */
-/** Agent 消息的最小接口定义 */
-interface AgentMessage {
+/** Agent 消息的最小接口定义（导出供 store 层泛型边界断言使用，审查 M-19） */
+export interface AgentMessage {
   role: string
   id: string
   content?: string

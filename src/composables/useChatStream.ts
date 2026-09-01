@@ -1,5 +1,5 @@
 // src/composables/useChatStream.ts
-import { ref, onUnmounted } from 'vue'
+import { ref, onScopeDispose } from 'vue'
 import { streamChat, type ChatAttachment } from '@/api/client'
 import type { ModelConfig } from '@/api/client'
 import type { BaseConversation, BaseMessage, ChatMode } from '@/types/chat'
@@ -129,8 +129,13 @@ export function useChatStream(options: UseChatStreamOptions) {
     }
   }
 
-  // 组件卸载时中止活跃流，防止内存泄漏
-  onUnmounted(() => {
+  // 作用域销毁时中止活跃流，防止 SSE 在后台空跑。
+  // 注意：本 composable 在 createModeChatStore 的 store setup 作用域内实例化，
+  // 组件卸载（onUnmounted）不会触发；改用 onScopeDispose：
+  // - store 被 $dispose（应用销毁）时触发，保留应用级兜底；
+  // - 若未来在组件 setup 内使用，组件作用域销毁时同样会触发。
+  // 面板关闭路径由 ssh-ai store 的 closeAiPanel() 显式调用 abortStream() 处理。
+  onScopeDispose(() => {
     if (abortFn) {
       abortFn()
       abortFn = null

@@ -9,11 +9,11 @@
 - 提供 unified diff 内容供前端展示具体改动
 """
 import os
-import time
 import difflib
 import threading
 import logging
 from dataclasses import dataclass, asdict, field
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +43,8 @@ class FileChange:
 # ── 内存缓存：run_id -> {abs_path -> FileChange} ──
 # 同一次运行内对同一文件的多次写入会合并（保留最终 diff）
 _PENDING: dict[str, dict[str, FileChange]] = {}
-# 修复：记录每个 run_id 的最后访问时间，用于 TTL 自动清理
-_PENDING_ACCESS_TIME: dict[str, float] = {}
-_PENDING_TTL = 3600  # 1 小时后自动清理（秒）
-import time as _time_module
+# 说明：曾计划按 TTL 自动清理，但清理函数始终无调用方（死代码，已移除）；
+# 当前由路由 finally 的 clear_file_changes 负责清理，进程重启后自然释放
 
 
 def _read_file_lines(path: str) -> list[str]:
@@ -136,15 +134,15 @@ def record_file_write(
             removed_lines=removed,
             before_size=before_size,
             after_size=after_size,
-            created_at=time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
+            # 审查 MINOR 修复：统一 UTC 时间戳（带 Z 标记），与 database._now 的 UTC 语义一致，
+            # 旧实现用 time.localtime() 生成无时区标记的本地时间，跨时区显示/排序错乱
+            created_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             before_content=_truncate_lines(before_lines),
             after_content=_truncate_lines(after_lines),
         )
 
         with _LOCK:
             run_map = _PENDING.setdefault(agent_run_id, {})
-            # 修复：更新最后访问时间，用于 TTL 自动清理
-            _PENDING_ACCESS_TIME[agent_run_id] = _time_module.time()
             # 同一次运行多次写同一文件：合并 diff（取最大累计值）
             if abs_path in run_map:
                 prev = run_map[abs_path]
@@ -225,22 +223,6 @@ def clear_file_changes(agent_run_id: str) -> None:
     """清理某次运行的内存缓存（运行结束后调用）"""
     with _LOCK:
         _PENDING.pop(agent_run_id, None)
-        _PENDING_ACCESS_TIME.pop(agent_run_id, None)
-
-
-def _cleanup_expired_pending() -> None:
-    """清理过期的 _PENDING 条目（TTL 自动清理）"""
-    now = _time_module.time()
-    with _LOCK:
-        expired = [
-            run_id for run_id, last_access in _PENDING_ACCESS_TIME.items()
-            if now - last_access > _PENDING_TTL
-        ]
-        for run_id in expired:
-            _PENDING.pop(run_id, None)
-            _PENDING_ACCESS_TIME.pop(run_id, None)
-        if expired:
-            logger.debug("[file_changes] 自动清理 %d 条过期记录", len(expired))
 
 
 def get_file_changes_summary(agent_run_id: str) -> dict:

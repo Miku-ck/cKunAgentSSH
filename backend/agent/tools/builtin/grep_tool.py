@@ -14,6 +14,8 @@ from agent.tools.builtin.file_ops import _resolve_path_safe
 _GREP_OUTPUT_THRESHOLD = 4000
 _GREP_OUTPUT_HEAD = 1500
 _GREP_OUTPUT_TAIL = 1000
+# 单文件最多扫描的行数（审查 MINOR：防超大文件整读入内存）
+_MAX_LINES_PER_FILE = 20000
 
 # 递归搜索时跳过这些目录
 _SKIP_DIRS = {
@@ -66,10 +68,23 @@ class GrepTool(BaseTool):
         },
         "required": ["pattern"],
     }
-    meta = ToolMeta(risk_level="safe", reversible=False)
+    meta = ToolMeta(risk_level="safe", reversible=False, idempotent=True)  # 只读搜索，可安全重试
 
     async def execute(self, context, pattern, path=None, include=None,
                       ignore_case=False, max_results=50, context_lines=0):
+        # 审查 MINOR 修复：参数钳制（原实现无上限，LLM 可传 max_results=100000
+        # 触发超大输出与全盘逐行扫描）
+        try:
+            max_results = int(max_results)
+        except (TypeError, ValueError):
+            max_results = 50
+        max_results = max(1, min(max_results, 200))
+        try:
+            context_lines = int(context_lines)
+        except (TypeError, ValueError):
+            context_lines = 0
+        context_lines = max(0, min(context_lines, 10))
+
         # 编译正则表达式
         flags = re.IGNORECASE if ignore_case else 0
         try:
@@ -139,7 +154,10 @@ class GrepTool(BaseTool):
                 continue
             try:
                 with open(filepath, "r", encoding="utf-8", errors="replace") as f:
-                    lines = f.readlines()
+                    # 审查 MINOR 修复：原 `f.readlines()` 整文件读入内存（超大文件
+                    # 直接打爆进程）；改为只读前 _MAX_LINES_PER_FILE 行
+                    from itertools import islice
+                    lines = [l.rstrip("\n") for l in islice(f, _MAX_LINES_PER_FILE)]
             except Exception:
                 continue
             rel = self._rel_path(filepath, workspace)

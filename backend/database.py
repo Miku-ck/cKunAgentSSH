@@ -67,6 +67,12 @@ def _create_connection() -> sqlite3.Connection:
     return conn
 
 
+# 连接空闲超过该秒数才做 SELECT 1 探活（审查 NIT：本地文件 SQLite 连接不会
+# 像网络连接那样断开，原实现每次 _get_conn() 都跑一遍探活，给每条 SQL 白加
+# 一次往返；30s 空闲阈值兼顾"长期空闲后校验"与热路径零开销）
+_CONN_IDLE_PROBE_SECONDS = 30.0
+
+
 def _get_conn() -> _PooledConnection:
     """获取当前线程的数据库连接（复用线程本地连接）。
 
@@ -74,28 +80,34 @@ def _get_conn() -> _PooledConnection:
     后续调用直接返回包装后的连接。
     close() 被包装为 no-op，所以 `finally: conn.close()` 不会真正关闭连接。
     """
+    import time as _time
+    now = _time.monotonic()
     conn = getattr(_thread_local, "conn", None)
     if conn is not None:
-        # 验证连接仍然有效（长时间空闲后可能已断开）
-        try:
-            conn.execute("SELECT 1")
-        except Exception:
-            # 连接已损坏，从跟踪列表移除并重建
-            with _conn_lock:
-                if conn in _all_connections:
-                    _all_connections.remove(conn)
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-            conn = None
-            _thread_local.conn = None
+        last_used = getattr(_thread_local, "conn_last_used", 0.0)
+        # 仅当连接空闲超过阈值时验证其有效性（热路径零探活开销）
+        if now - last_used > _CONN_IDLE_PROBE_SECONDS:
+            try:
+                conn.execute("SELECT 1")
+            except Exception:
+                # 连接已损坏，从跟踪列表移除并重建
+                with _conn_lock:
+                    if conn in _all_connections:
+                        _all_connections.remove(conn)
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                conn = None
+                _thread_local.conn = None
+        _thread_local.conn_last_used = now
 
     if conn is None:
         conn = _create_connection()
         with _conn_lock:
-            _all_connections.add(conn)  # WeakSet 使用 add() 而非 append()
+            _all_connections.add(conn)
         _thread_local.conn = conn
+        _thread_local.conn_last_used = now
 
     return _PooledConnection(conn)
 
@@ -113,6 +125,7 @@ def _close_all_connections() -> None:
     # 清除当前线程的引用
     if hasattr(_thread_local, "conn"):
         _thread_local.conn = None
+        _thread_local.conn_last_used = 0.0
 
 
 atexit.register(_close_all_connections)
@@ -744,6 +757,19 @@ def get_recent_messages(conversation_id: str, limit: int = 20) -> list[dict]:
         conn.close()
 
 
+def count_messages_by_role(conversation_id: str, role: str) -> int:
+    """统计会话中指定角色的消息数（审查：替代 get_messages(limit=1000) 全量拉取只计数）"""
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM messages WHERE conversation_id = ? AND role = ?",
+            (conversation_id, role),
+        ).fetchone()
+        return int(row["cnt"]) if row else 0
+    finally:
+        conn.close()
+
+
 # ── 工具配置 CRUD ──
 
 
@@ -837,6 +863,19 @@ def list_all_skills() -> list[dict]:
             "FROM skills ORDER BY priority DESC, updated_at DESC"
         ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def count_skills_by_source(source: str) -> int:
+    """统计指定来源的技能数（审查：替代 list_skills(limit=9999) 全量加载只计数）"""
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM skills WHERE source = ?",
+            (source,),
+        ).fetchone()
+        return int(row["cnt"]) if row else 0
     finally:
         conn.close()
 
@@ -1273,10 +1312,12 @@ def set_default_model(model_id: str, mode: Optional[str] = None) -> None:
         conn.close()
 
 
-def get_default_model(mode: Optional[str] = None) -> Optional[dict]:
-    """获取当前默认模型配置（api_key 已脱敏）。
+def get_default_model(mode: Optional[str] = None, mask_key: bool = True) -> Optional[dict]:
+    """获取当前默认模型配置。
     mode 为 None 时返回全局 is_default 模型；
     mode 为 'ssh' 时返回 SSH 模式的默认模型。
+    mask_key=True（默认）时 api_key 脱敏，面向前端/只取 id 的场景；
+    内部真正调用 LLM/embedding 的场景传 mask_key=False 获取真实 key。
     """
     conn = _get_conn()
     try:
@@ -1299,8 +1340,10 @@ def get_default_model(mode: Optional[str] = None) -> Optional[dict]:
         if not row:
             return None
         result = dict(row)
-        # C1 修复：脱敏 api_key，避免明文密钥泄露到前端
-        result["api_key"] = _mask_api_key(result.get("api_key"))
+        # C1 修复：默认脱敏 api_key，避免明文密钥泄露到前端
+        # 审查 M-15：内部需要真实 key 的调用方（embedding/LLM）传 mask_key=False，
+        # 否则拿到 "EMPT****" 式脱敏值 → 401 → 静默降级伪 embedding → 记忆维度混存
+        result["api_key"] = result.get("api_key") if not mask_key else _mask_api_key(result.get("api_key"))
         return result
     finally:
         conn.close()
@@ -1335,11 +1378,17 @@ def update_agent_run(run_id: str, status: str, iteration: Optional[int] = None,
 
     C6 修复：所有可选字段用 `is not None` 判断，避免合法的 0 值被跳过。
     iteration 改为 Optional：仅在显式传入时写入，避免仅更新 status 时被重置为 0。
+    审查 NIT：completed_at 仅在终态（completed/failed/human_help）时写入，
+    原实现每次更新（含中间状态）都刷新 completed_at，时间字段失真。
     """
+    _TERMINAL_RUN_STATUSES = ("completed", "failed", "human_help")
     conn = _get_conn()
     try:
-        sets = ["status = ?", "completed_at = ?"]
-        params: list = [status, _now()]
+        sets = ["status = ?"]
+        params: list = [status]
+        if status in _TERMINAL_RUN_STATUSES:
+            sets.append("completed_at = ?")
+            params.append(_now())
         if iteration is not None:
             sets.append("iteration = ?")
             params.append(iteration)

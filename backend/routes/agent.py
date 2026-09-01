@@ -14,6 +14,7 @@ POST /api/agent/tick    — 手动触发意识 tick
 import asyncio
 import json
 import logging
+import os
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -38,6 +39,19 @@ from agent.harness.llm_client import StreamLLMClient
 from agent.harness.telemetry import SSEAdapter
 
 logger = logging.getLogger(__name__)
+
+
+def _agent_workspace() -> str:
+    """Agent 文件工具默认工作区（审查 M-14）。
+
+    原实现硬编码 workspace_path=""：
+    - 文件工具直接 ValueError("未配置 workspace_path")，Agent 无法落盘任何文件；
+    - FilesystemGuard 路径越界检查仅在 workspace 非空时生效 → 守卫形同虚设。
+    现默认使用应用数据目录下的专用工作区，全部文件操作被限制在该目录内。
+    """
+    ws = os.path.expanduser("~/.ckunagentic/agent_workspace")
+    os.makedirs(ws, exist_ok=True)
+    return ws
 
 router = APIRouter(tags=["agent"])
 
@@ -73,7 +87,9 @@ async def _run_reflection_and_evolution(
     供 MetaReflection 多维反思（成本维度 + 状态转移异常检测）使用，
     并持久化到 agent_strategies 表供 EvolutionEngine 多维演化读取。
     """
-    try:
+    # 审查 M-13：反思/演化全程是同步 DB 读写，整块放线程池执行，
+    # 避免后台任务在事件循环线程里阻塞其他请求
+    def _work() -> None:
         reflection_mgr = MetaReflection()
         evolution_mgr = EvolutionEngine()
 
@@ -109,6 +125,9 @@ async def _run_reflection_and_evolution(
                     "策略演化完成 (mode=%s, adjustments=%d): %s",
                     mode, len(evolved.adjustments), "; ".join(evolved.adjustments),
                 )
+
+    try:
+        await asyncio.to_thread(_work)
     except Exception as e:
         logger.warning("反思/演化失败: %s", e, exc_info=True)
 
@@ -247,13 +266,14 @@ class AgentRunRequest(BaseModel):
 async def agent_run(req: AgentRunRequest, request: Request):
     """启动 Agent — SSE 流式返回运行过程"""
     # ── 按 mode 选择默认模型（兜底）──
+    # 审查 M-13：db 同步调用放线程池，避免阻塞事件循环（卡住所有并发请求/心跳）
     effective_model_id = req.model_id
     if not effective_model_id:
-        default_model = db.get_default_model(req.mode)
+        default_model = await asyncio.to_thread(db.get_default_model, req.mode)
         if default_model:
             effective_model_id = default_model.get("model_id") or default_model.get("id")
     if not effective_model_id:
-        default_model = db.get_default_model(None)
+        default_model = await asyncio.to_thread(db.get_default_model, None)
         if default_model:
             effective_model_id = default_model.get("model_id") or default_model.get("id")
     if not effective_model_id:
@@ -262,7 +282,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
     req.model_id = effective_model_id
 
     # 获取模型配置
-    model_cfg = _get_model_config(req.model_id)
+    model_cfg = await asyncio.to_thread(_get_model_config, req.model_id)
     if not model_cfg:
         raise HTTPException(status_code=404, detail=f"模型不存在: {req.model_id}")
 
@@ -272,7 +292,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
 
     # ── 按 mode 过滤显式 skill_ids ──
     if req.skill_ids:
-        disabled_skill_ids = set(db.list_disabled_skills_for_mode(req.mode))
+        disabled_skill_ids = set(await asyncio.to_thread(db.list_disabled_skills_for_mode, req.mode))
         original_skill_ids = req.skill_ids
         req.skill_ids = [sid for sid in req.skill_ids if sid not in disabled_skill_ids]
         if len(req.skill_ids) != len(original_skill_ids):
@@ -282,7 +302,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
             )
 
     # 获取历史消息
-    history = db.get_recent_messages(req.conversation_id, limit=20)
+    history = await asyncio.to_thread(db.get_recent_messages, req.conversation_id, limit=20)
 
     # ── 意图预识别：用于决定是否跳过记忆检索、是否禁用工具 schema ──
     # 对话型任务（问候/身份询问/能力询问）不需要记忆、不需要工具
@@ -307,7 +327,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
     )
 
     # 读取记忆设置 — 关闭时跳过检索与保存
-    mem_settings = db.get_memory_settings()
+    mem_settings = await asyncio.to_thread(db.get_memory_settings)
     memory_enabled = mem_settings["enabled"]
 
     # 三层记忆检索：episodic + semantic 合并
@@ -330,7 +350,8 @@ async def agent_run(req: AgentRunRequest, request: Request):
 
         # 兜底：若三层记忆为空，仍取旧的简单记忆表
         if not memory_contents:
-            memory_contents = [m["content"] for m in db.get_relevant_memories(req.mode, limit=5)]
+            _fallback_mems = await asyncio.to_thread(db.get_relevant_memories, req.mode, limit=5)
+            memory_contents = [m["content"] for m in _fallback_mems]
 
     # ── 加载历史反思 + 演化配置 ──
     reflection_mgr = MetaReflection()
@@ -338,7 +359,10 @@ async def agent_run(req: AgentRunRequest, request: Request):
 
     # 加载近 3 条反思策略，注入 system prompt
     try:
-        recent_reflections = reflection_mgr.load_recent_reflections(req.mode, limit=3)
+        # 审查 M-13：反思策略读取也是同步 DB 查询
+        recent_reflections = await asyncio.to_thread(
+            reflection_mgr.load_recent_reflections, req.mode, limit=3,
+        )
         reflection_injection = reflection_mgr.build_prompt_injection(recent_reflections)
     except Exception as e:
         logger.warning("加载反思策略失败（降级为无反思）: %s", e)
@@ -351,27 +375,29 @@ async def agent_run(req: AgentRunRequest, request: Request):
 
     # 应用演化配置（仅覆盖用户未显式传入的字段）
     # M3 修复：提取演化配置解析为独立函数
-    _prompt_chars = (
-        len(req.task or "")
-        + len(final_system_prompt or "")
-        + sum(len(m.get("content", "")) for m in history)
-        + sum(len(m) for m in memory_contents)
+    # 审查 M-16：传入 prompt 文本（safe_max_tokens 内部用 estimate_tokens 估算，
+    # 不再按 1.5 token/字符高估导致长对话输出被截到 256）
+    _prompt_text = "\n".join(
+        [req.task or "", final_system_prompt or ""]
+        + [m.get("content", "") for m in history if isinstance(m.get("content", ""), str)]
+        + [m for m in memory_contents if isinstance(m, str)]
     )
     _safe_max = safe_max_tokens(
         model_cfg.get("max_tokens"),
-        _prompt_chars,
+        _prompt_text,
         model_cfg.get("max_output_tokens"),
         model_cfg.get("reasoning_tokens"),
     )
-    _evo = _resolve_evolution_config(req, model_cfg, _safe_max, evolution_mgr)
+    _evo = await asyncio.to_thread(_resolve_evolution_config, req, model_cfg, _safe_max, evolution_mgr)
     effective_thinking = _evo["thinking"]
     effective_max_iter = _evo["max_iter"]
     effective_temperature = _evo["temperature"]
     effective_max_tokens = _evo["max_tokens"]
 
-    # 生成 run_id（与旧 AgentEngine.run_id 格式一致：8 位 hex）
+    # 生成 run_id（12 位 hex：审查 MINOR 修复，8 位在数万 run 量级下生日碰撞显著，
+    # 碰撞会触发 create_agent_run 主键冲突 500；12 位 hex 碰撞概率可忽略）
     import uuid as _uuid
-    run_id = _uuid.uuid4().hex[:8]
+    run_id = _uuid.uuid4().hex[:12]
 
     # ── P8: 创建 Harness 实例 ──
     harness = Harness(HarnessConfig(
@@ -399,8 +425,14 @@ async def agent_run(req: AgentRunRequest, request: Request):
         cost_tracker=cost_tracker,
     )
 
-    # 持久化 agent_run 记录
-    db.create_agent_run(
+    # 审查 MINOR 修复：校验会话存在（对比 chat.py 的 404 路径）。
+    # 否则坏 conversation_id 在 FK ON 下直接 sqlite3.IntegrityError → 500
+    if not await asyncio.to_thread(db.get_conversation, req.conversation_id):
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    # 持久化 agent_run 记录（审查 M-13：放线程池）
+    await asyncio.to_thread(
+        db.create_agent_run,
         run_id=run_id,
         conversation_id=req.conversation_id,
         task=req.task,
@@ -411,14 +443,15 @@ async def agent_run(req: AgentRunRequest, request: Request):
 
     # 保存用户消息到 db（修复：原 Agent 模式未保存用户消息，导致 post_process 的标题生成检查 len(recent)==2 失败，
     # 且历史会话切换时丢失用户问题）
-    db.add_message(
+    await asyncio.to_thread(
+        db.add_message,
         req.conversation_id,
         "user",
         req.task,
         model_used=model_cfg.get("model_id") or model_cfg["id"],
     )
-    db.touch_conversation(req.conversation_id)
-    db.update_conversation_status(req.conversation_id, "in_progress")
+    await asyncio.to_thread(db.touch_conversation, req.conversation_id)
+    await asyncio.to_thread(db.update_conversation_status, req.conversation_id, "in_progress")
 
     # 收集运行轨迹（用于结束后生成情景记忆）
     run_trace_tool_calls: list[dict] = []
@@ -459,7 +492,8 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     task=req.task,
                     mode=req.mode,
                     conversation_id=req.conversation_id,
-                    workspace_path="",
+                    # 审查 M-14：原 workspace_path="" 导致文件工具全部失败 + 路径守卫失效
+                    workspace_path=_agent_workspace(),
                     ssh_session_id=req.ssh_session_id,
                     system_prompt=final_system_prompt,
                     history=history,
@@ -513,8 +547,9 @@ async def agent_run(req: AgentRunRequest, request: Request):
                 elif event.get("type") == "reasoning":
                     total_reasoning += event["reasoning"]
                 elif event.get("type") == "tool_call_start":
-                    # 记录工具调用开始
-                    tc_id = db.add_tool_call(
+                    # 记录工具调用开始（审查 M-13：db 放线程池）
+                    tc_id = await asyncio.to_thread(
+                        db.add_tool_call,
                         agent_run_id=run_id,
                         iteration=event.get("iteration", 0),
                         tool_name=event["tool"],
@@ -537,7 +572,8 @@ async def agent_run(req: AgentRunRequest, request: Request):
                                 result_str = json.dumps(result_str, ensure_ascii=False)
                             # m1 修复：截断时标记，避免 Agent 拿到不完整数据做出错误决策
                             truncated = len(result_str) > 5000
-                            db.update_tool_call(
+                            await asyncio.to_thread(
+                                db.update_tool_call,
                                 tool_call_id=tc_id,
                                 result=result_str[:5000] + ("\n...[truncated]" if truncated else ""),
                                 success=event.get("success", True),
@@ -561,7 +597,8 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     # P7: 提取成本快照
                     cost_data = event.get("cost") or {}
                     try:
-                        db.update_agent_run(
+                        await asyncio.to_thread(
+                            db.update_agent_run,
                             run_id=run_id,
                             status=final_state,
                             iteration=event.get("iterations", 0),
@@ -613,7 +650,8 @@ async def agent_run(req: AgentRunRequest, request: Request):
                             content_to_save = "\n".join(lines)
 
                         if content_to_save or has_file_changes:
-                            db.add_message(
+                            await asyncio.to_thread(
+                                db.add_message,
                                 conversation_id=req.conversation_id,
                                 role="assistant",
                                 content=content_to_save,
@@ -626,8 +664,11 @@ async def agent_run(req: AgentRunRequest, request: Request):
                             # 异步后处理 — 通过 PostProcessManager 统一管理
                             # （超时保护 + 生命周期管理 + 配置化启停）
                             try:
-                                existing_msgs = db.get_messages(req.conversation_id, limit=1000)
-                                turn_index = max(0, len([m for m in existing_msgs if m.get("role") == "user"]) - 1)
+                                # 审查 MINOR 修复：COUNT 查询替代 get_messages(limit=1000) 全量拉取
+                                _n_user = await asyncio.to_thread(
+                                    db.count_messages_by_role, req.conversation_id, "user",
+                                )
+                                turn_index = max(0, _n_user - 1)
                             except Exception:
                                 turn_index = 0
 
@@ -696,7 +737,8 @@ async def agent_run(req: AgentRunRequest, request: Request):
                 elif event.get("type") == "error":
                     # engine 报错时更新 agent_run 状态为 failed
                     try:
-                        db.update_agent_run(
+                        await asyncio.to_thread(
+                            db.update_agent_run,
                             run_id=run_id,
                             status="failed",
                         )
@@ -731,7 +773,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
             logger.exception("Agent 运行异常 (event_stream)")
             # 异常时将 agent_run 状态标记为 failed
             try:
-                db.update_agent_run(run_id=run_id, status="failed")
+                await asyncio.to_thread(db.update_agent_run, run_id=run_id, status="failed")
             except Exception:
                 pass
             yield sse_event({"type": "error", "message": str(e)})
@@ -741,7 +783,8 @@ async def agent_run(req: AgentRunRequest, request: Request):
             engine_task.cancel()
             try:
                 from agent.file_changes import persist_file_changes
-                persist_file_changes(run_id)
+                # 审查 M-13：persist 内含同步 DB 写入
+                await asyncio.to_thread(persist_file_changes, run_id)
             except Exception:
                 pass
             try:
@@ -767,9 +810,9 @@ async def agent_run(req: AgentRunRequest, request: Request):
                 pass
             # 客户端断开时将 agent_run 标记为 failed（若仍为 running/init）
             try:
-                run = db.get_agent_run(run_id)
+                run = await asyncio.to_thread(db.get_agent_run, run_id)
                 if run and run.get("status") in ("running", "init"):
-                    db.update_agent_run(run_id=run_id, status="failed")
+                    await asyncio.to_thread(db.update_agent_run, run_id=run_id, status="failed")
             except Exception:
                 pass
 
@@ -795,14 +838,14 @@ async def agent_run(req: AgentRunRequest, request: Request):
 
 
 @router.get("/agent/runs")
-async def list_agent_runs(conversation_id: Optional[str] = None, limit: int = Query(20, ge=1, le=500)):
+def list_agent_runs(conversation_id: Optional[str] = None, limit: int = Query(20, ge=1, le=500)):
     """查询 Agent 运行历史"""
     runs = db.get_agent_runs(conversation_id=conversation_id, limit=limit)
     return {"runs": runs}
 
 
 @router.get("/agent/runs/{run_id}")
-async def get_agent_run_detail(run_id: str):
+def get_agent_run_detail(run_id: str):
     """查询单次 Agent 运行详情（含工具调用日志）"""
     run = db.get_agent_run(run_id)
     if not run:
@@ -812,7 +855,7 @@ async def get_agent_run_detail(run_id: str):
 
 
 @router.get("/agent/tools")
-async def list_tools(mode: str = "ssh"):
+def list_tools(mode: str = "ssh"):
     """查询当前模式可用的工具列表（含启用状态）"""
     import database as db
     # 获取所有工具类的元信息（包括未注册的，用于显示被禁用的工具）
@@ -844,7 +887,7 @@ class UpdateToolEnabledRequest(BaseModel):
 
 
 @router.patch("/agent/tools/{tool_name}/enabled")
-async def update_tool_enabled(tool_name: str, req: UpdateToolEnabledRequest, mode: str = "all"):
+def update_tool_enabled(tool_name: str, req: UpdateToolEnabledRequest, mode: str = "all"):
     """更新工具启用状态（默认 mode=all 全局开关）"""
     import database as db
     result = db.upsert_tool_config(tool_name, mode, req.enabled)
@@ -856,40 +899,50 @@ async def update_tool_enabled(tool_name: str, req: UpdateToolEnabledRequest, mod
 
 class PermissionGrantRequest(BaseModel):
     tool: str = Field(..., description="工具名")
-    scope: str = Field("always", description="授权范围：always（永久）/ session（会话）")
+    # 审查 M-3：默认 scope 从 "always" 收紧为 "once"（仅放行下一次调用）。
+    # 原默认 always 会在用户点一次后永久免审批。
+    scope: str = Field("once", description="授权范围：once（仅本次）/ session（会话）/ always（永久）")
+    # 命令执行工具（shell_exec/local_exec）时传入被批准的具体命令，
+    # 授权绑定到命令哈希（同命令免审批，其他 dangerous 命令仍需审批）
+    command: Optional[str] = Field(None, description="命令执行工具的具体命令（用于命令级绑定）")
 
 
 @router.post("/agent/permission/grant")
-async def grant_tool_permission(req: PermissionGrantRequest):
+def grant_tool_permission(req: PermissionGrantRequest):
     """授权工具
 
-    scope=always: 写入 ~/.ckunagentic/allowlist.txt，所有后续 run 放行
+    scope=once: 仅放行下一次相同工具（命令工具为相同命令）调用
     scope=session: 进程级单例 _confirmed_session，跨 run 共享，进程重启失效（H13 修复 A5）
+    scope=always: 写入 ~/.ckunagentic/allowlist.txt，所有后续 run 放行
+      （命令工具写入的是 `tool:cmdhash` 键，不覆盖其他命令 — 审查 M-3）
     """
-    from agent.harness.reins import get_global_permission_gate
-    if req.scope not in ("always", "session"):
-        raise HTTPException(status_code=400, detail="scope 必须是 always 或 session")
+    from agent.harness.reins import _get_global_permission_gate_sync
+    if req.scope not in ("once", "session", "always"):
+        raise HTTPException(status_code=400, detail="scope 必须是 once、session 或 always")
 
     # H13 修复 A5：session scope 改用进程级单例（原 501 限制移除）
-    pg = await get_global_permission_gate()
-    pg.grant(req.tool, scope=req.scope)
-    return {"tool": req.tool, "scope": req.scope, "granted": True}
+    pg = _get_global_permission_gate_sync()
+    grant_key = pg.grant(req.tool, scope=req.scope, command=req.command)
+    return {"tool": req.tool, "scope": req.scope, "grant_key": grant_key, "granted": True}
 
 
 @router.post("/agent/permission/revoke")
-async def revoke_tool_permission(tool: str):
-    """撤销工具授权（从永久 allowlist 和 session scope 移除）"""
-    from agent.harness.reins import get_global_permission_gate
-    pg = await get_global_permission_gate()
-    pg.revoke(tool)
+def revoke_tool_permission(tool: str, command: Optional[str] = None):
+    """撤销工具授权（从永久 allowlist 和 session scope 移除）
+
+    提供 command 时只撤销该命令的绑定授权；否则撤销该工具全部授权。
+    """
+    from agent.harness.reins import _get_global_permission_gate_sync
+    pg = _get_global_permission_gate_sync()
+    pg.revoke(tool, command=command)
     return {"tool": tool, "granted": False}
 
 
 @router.get("/agent/permission/list")
-async def list_tool_permissions():
+def list_tool_permissions():
     """查询已永久授权的工具列表"""
-    from agent.harness.reins import get_global_permission_gate
-    pg = await get_global_permission_gate()
+    from agent.harness.reins import _get_global_permission_gate_sync
+    pg = _get_global_permission_gate_sync()
     return {"tools": sorted(pg._confirmed_permanent)}
 
 
@@ -897,7 +950,7 @@ async def list_tool_permissions():
 
 
 @router.get("/agent/memories")
-async def list_agent_memories(
+def list_agent_memories(
     mode: Optional[str] = None,
     mem_type: Optional[str] = None,
     limit: int = Query(50, ge=1, le=500),
@@ -910,7 +963,7 @@ async def list_agent_memories(
 
 
 @router.delete("/agent/memories/{memory_id}")
-async def delete_agent_memory(memory_id: str):
+def delete_agent_memory(memory_id: str):
     """删除单条 Agent 记忆"""
     ok = db.delete_agent_memory(memory_id)
     if not ok:
@@ -919,7 +972,7 @@ async def delete_agent_memory(memory_id: str):
 
 
 @router.post("/agent/memories/prune")
-async def prune_agent_memories(
+def prune_agent_memories(
     mode: Optional[str] = None,
     mem_type: Optional[str] = None,
     max_count: int = Query(200, ge=1, le=10000),
@@ -949,7 +1002,7 @@ async def trigger_consciousness_tick():
 
 
 @router.get("/agent/tick/status")
-async def consciousness_tick_status():
+def consciousness_tick_status():
     """查询意识 tick 状态"""
     tick = get_global_tick()
     return {
@@ -963,7 +1016,7 @@ async def consciousness_tick_status():
 
 
 @router.get("/agent/strategies")
-async def list_agent_strategies(
+def list_agent_strategies(
     mode: Optional[str] = None,
     strategy_type: Optional[str] = None,
     limit: int = 50,
@@ -976,7 +1029,7 @@ async def list_agent_strategies(
 
 
 @router.get("/agent/strategies/{strategy_id}")
-async def get_agent_strategy_detail(strategy_id: str):
+def get_agent_strategy_detail(strategy_id: str):
     """查询单条策略详情"""
     s = db.get_agent_strategy(strategy_id)
     if not s:
@@ -985,7 +1038,7 @@ async def get_agent_strategy_detail(strategy_id: str):
 
 
 @router.patch("/agent/strategies/{strategy_id}/enabled")
-async def toggle_strategy_enabled(strategy_id: str, enabled: int = 1):
+def toggle_strategy_enabled(strategy_id: str, enabled: int = 1):
     """启用/禁用单条策略"""
     ok = db.update_agent_strategy_enabled(strategy_id, enabled=int(enabled))
     if not ok:
@@ -994,7 +1047,7 @@ async def toggle_strategy_enabled(strategy_id: str, enabled: int = 1):
 
 
 @router.delete("/agent/strategies/{strategy_id}")
-async def delete_agent_strategy_route(strategy_id: str):
+def delete_agent_strategy_route(strategy_id: str):
     """删除单条策略"""
     ok = db.delete_agent_strategy(strategy_id)
     if not ok:
@@ -1003,7 +1056,7 @@ async def delete_agent_strategy_route(strategy_id: str):
 
 
 @router.post("/agent/evolve")
-async def trigger_evolution(mode: str = "ssh"):
+def trigger_evolution(mode: str = "ssh"):
     """
     手动触发策略演化
     基于近期反思结果演化 Agent 配置，返回演化后的配置
@@ -1043,7 +1096,7 @@ async def trigger_evolution(mode: str = "ssh"):
 
 
 @router.get("/agent/runs/{run_id}/trace")
-async def get_agent_run_trace(run_id: str):
+def get_agent_run_trace(run_id: str):
     """
     获取 Agent 运行完整轨迹（供 Trace Viewer 可视化）
     包含: run 元信息 + 工具调用时间线 + 状态历史 + 成本统计
@@ -1117,7 +1170,7 @@ async def get_agent_run_trace(run_id: str):
 
 
 @router.get("/agent/runs/{run_id}/diff")
-async def get_run_file_diff(run_id: str, abs_path: str = Query(..., description="文件绝对路径")):
+def get_run_file_diff(run_id: str, abs_path: str = Query(..., description="文件绝对路径")):
     """
     获取某次 Agent 运行中某文件的具体 unified diff
 
@@ -1156,7 +1209,7 @@ def _scan_run_backups(run_id: str) -> dict[str, str]:
 
 
 @router.post("/agent/runs/{run_id}/undo")
-async def undo_agent_run_changes(run_id: str):
+def undo_agent_run_changes(run_id: str):
     """
     撤销某次 Agent 运行的所有文件变更
 
@@ -1241,7 +1294,7 @@ async def undo_agent_run_changes(run_id: str):
 
 
 @router.post("/agent/runs/{run_id}/keep")
-async def keep_agent_run_changes(run_id: str):
+def keep_agent_run_changes(run_id: str):
     """
     保留某次 Agent 运行的所有文件变更
 
@@ -1272,7 +1325,7 @@ async def keep_agent_run_changes(run_id: str):
 
 
 @router.get("/agent/stats")
-async def get_agent_cost_stats(mode: Optional[str] = None, days: int = Query(7, ge=1, le=365)):
+def get_agent_cost_stats(mode: Optional[str] = None, days: int = Query(7, ge=1, le=365)):
     """
     获取 Agent 成本/耗时统计聚合
 

@@ -85,6 +85,8 @@ async function handleNewChat() {
 // 组件卸载时重置创建状态，防止状态残留
 onUnmounted(() => {
   creating.value = false
+  // 兜底：面板因 v-if 关闭 / 视图切换而卸载时，中止仍在运行的聊天流（幂等，无流时 no-op）
+  store.abortStream()
 })
 
 function handleSwitchConv(id: string) {

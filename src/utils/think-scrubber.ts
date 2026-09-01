@@ -98,7 +98,6 @@ export class StreamingThinkScrubber {
   reset(): void {
     this._inBlock = false
     this._buf = ''
-    this._lastEmittedEndedNewline = true
   }
 
   /**
