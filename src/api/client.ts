@@ -383,12 +383,6 @@ export const api = {
   listSkills: (mode?: string) =>
     request<Skill[]>(`/skills${mode ? `?mode=${mode}` : ''}`),
 
-  createSkill: (skill: Partial<Skill>) =>
-    request<Skill>('/skills', {
-      method: 'POST',
-      body: JSON.stringify(skill),
-    }),
-
   updateSkillEnabled: (id: string, enabled: boolean, mode?: string) =>
     request<{ id: string; enabled: boolean }>(`/skills/${id}/enabled${mode ? `?mode=${mode}` : ''}`, {
       method: 'PATCH',

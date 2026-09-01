@@ -62,11 +62,6 @@ function encrypt(plain?: string): string | undefined {
   return 'enc:' + safeStorage.encryptString(plain).toString('base64')
 }
 
-/** safeStorage 加密服务是否可用（供主进程/渲染进程提前检测并提示用户） */
-export function isEncryptionAvailable(): boolean {
-  return safeStorage.isEncryptionAvailable()
-}
-
 function decrypt(stored?: string): string | undefined {
   if (!stored) return undefined
   if (stored.startsWith('enc:')) {
@@ -270,84 +265,6 @@ export class SSHStore {
       records[idx].lastConnectedAt = Date.now()
       await writeAllToDisk(records)
     }
-  }
-
-  /** 导出:返回不含密码的 JSON 字符串 */
-  async export(ids: string[]): Promise<string> {
-    const records = await readAllFromDisk()
-    const selected = records
-      .filter(r => ids.includes(r.id))
-      .map(fromDisk)
-      .map(r => ({
-        name: r.name,
-        host: r.host,
-        port: r.port,
-        username: r.username,
-        authType: r.authType,
-        privateKeyPath: r.privateKeyPath,
-        tags: r.tags,
-        readyTimeout: r.readyTimeout,
-        keepaliveInterval: r.keepaliveInterval,
-        // 密码/passphrase 不导出,强制用户重新填写
-        password: '',
-        passphrase: '',
-      }))
-    return JSON.stringify({ version: 1, exportedAt: Date.now(), connections: selected }, null, 2)
-  }
-
-  /** 导入:合并,已存在相同 host+port+username 的跳过 */
-  async import(json: string): Promise<{ imported: number; skipped: number }> {
-    let data: any
-    try {
-      data = JSON.parse(json)
-    } catch {
-      throw new Error('JSON 格式错误')
-    }
-    const incoming: any[] = Array.isArray(data) ? data : data.connections
-    if (!Array.isArray(incoming)) throw new Error('文件结构无效')
-
-    const records = await readAllFromDisk()
-    const existing = new Set(records.map(r => `${r.host}:${r.port}:${r.username}`))
-
-    let imported = 0
-    let skipped = 0
-    const now = Date.now()
-
-    for (const item of incoming) {
-      if (!item.host || !item.username) {
-        skipped++
-        continue
-      }
-      const key = `${item.host}:${item.port || 22}:${item.username}`
-      if (existing.has(key)) {
-        skipped++
-        continue
-      }
-      const rec: SSHConnectionRecord = {
-        id: genId(),
-        name: item.name || `${item.username}@${item.host}`,
-        host: item.host,
-        port: Math.min(65535, Math.max(1, Number(item.port) || 22)),
-        username: item.username,
-        authType: item.authType === 'privateKey' || item.authType === 'agent' ? item.authType : 'password',
-        password: item.password || undefined,
-        privateKeyPath: item.privateKeyPath || undefined,
-        passphrase: item.passphrase || undefined,
-        tags: Array.isArray(item.tags) ? item.tags : [],
-        readyTimeout: typeof item.readyTimeout === 'number' ? item.readyTimeout : undefined,
-        keepaliveInterval: typeof item.keepaliveInterval === 'number' ? item.keepaliveInterval : undefined,
-        createdAt: now,
-        updatedAt: now,
-      }
-      records.push(toDisk(rec))
-      existing.add(key)
-      imported++
-    }
-
-    if (imported > 0) {
-      await writeAllToDisk(records)
-    }
-    return { imported, skipped }
   }
 
   /** 从渲染进程 localStorage 迁移旧数据(一次性) */

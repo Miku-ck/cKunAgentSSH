@@ -15,7 +15,6 @@ export class BackendManager {
   private port: number = 0
   private intentionalStop = false
   private starting = false
-  private restartAttempts = 0
   private readonly MAX_RESTART_ATTEMPTS = 3
   private readonly RESTART_COOLDOWN_MS = 60_000  // 60 秒内最多重启 MAX_RESTART_ATTEMPTS 次
   private restartTimestamps: number[] = []
@@ -131,7 +130,6 @@ export class BackendManager {
         this.killCurrentProcess()
         throw err
       }
-      this.restartAttempts = 0
       return this.port
     } finally {
       this.starting = false
@@ -165,8 +163,7 @@ export class BackendManager {
     }
 
     this.restartTimestamps.push(now)
-    this.restartAttempts++
-    console.log(`[BackendManager] Auto-restarting backend (attempt ${this.restartAttempts})...`)
+    console.log(`[BackendManager] Auto-restarting backend (${this.restartTimestamps.length}/${this.MAX_RESTART_ATTEMPTS} in window)...`)
     this.onStatusChange?.({ status: 'restarting' })
 
     // 延迟 1 秒后重启，避免立即重试
@@ -260,13 +257,6 @@ export class BackendManager {
 
   getPort(): number {
     return this.port
-  }
-
-  /**
-   * 检查后端是否存活
-   */
-  isAlive(): boolean {
-    return this.process !== null && !this.process.killed && this.process.exitCode === null
   }
 
   /**

@@ -72,14 +72,8 @@ interface ElectronAPI {
   windowMaximize: () => Promise<void>
   windowClose: () => Promise<void>
   onBackendStatus: (callback: (data: { status: string; port?: number; error?: string }) => void) => () => void
-  sshIsEncryptionAvailable: () => Promise<boolean>
   getBackendPort: () => Promise<number>
-  isBackendAlive: () => Promise<boolean>
   getBackendToken: () => Promise<string>
-  authIsEncryptionAvailable: () => Promise<boolean>
-  authEncryptString: (plain: string) => Promise<string>
-  authDecryptString: (encrypted: string) => Promise<string | null>
-  authSetBackendToken: (token: string | null) => Promise<{ ok: boolean }>
   fsReadDir: (dirPath: string) => Promise<FileEntry[]>
   fsReadFile: (filePath: string) => Promise<string>
   fsWriteFile: (filePath: string, content: string) => Promise<void>
@@ -141,12 +135,9 @@ interface ElectronAPI {
   sshDeleteConnection: (id: string) => Promise<void>
   sshDuplicateConnection: (id: string) => Promise<SSHConnectionRecord>
   sshTestConnection: (config: Omit<SSHConnectionRecord, 'tags' | 'createdAt' | 'updatedAt'>) => Promise<SSHTestResult>
-  sshExportConnections: (ids: string[]) => Promise<string>
-  sshImportConnections: (json: string) => Promise<{ imported: number; skipped: number }>
   sshMigrateLegacy: (legacy: any[]) => Promise<number>
   // Skills
   listSkills: (mode?: string) => Promise<any[]>
-  createSkill: (skill: Record<string, any>) => Promise<any>
   updateSkillEnabled: (id: string, enabled: boolean, mode?: string) => Promise<{ id: string; enabled: boolean }>
   deleteSkill: (id: string) => Promise<{ deleted: boolean }>
   syncBuiltinSkills: (skills: any[]) => Promise<{ upserted: number; orphans_removed: number; total: number }>

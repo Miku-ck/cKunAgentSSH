@@ -24,15 +24,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 后端信息
   getBackendPort: () => ipcRenderer.invoke('backend:getPort'),
-  isBackendAlive: () => ipcRenderer.invoke('backend:isAlive'),
   getBackendToken: () => ipcRenderer.invoke('backend:getToken'),
-
-  // 账号凭证安全加解密（safeStorage）
-  authIsEncryptionAvailable: () => ipcRenderer.invoke('auth:isEncryptionAvailable'),
-  authEncryptString: (plain: string) => ipcRenderer.invoke('auth:encryptString', plain),
-  authDecryptString: (encrypted: string) => ipcRenderer.invoke('auth:decryptString', encrypted),
-  // 推送后端 token 到主进程缓存，供主进程转发到后端的 HTTP 请求注入 Authorization 头
-  authSetBackendToken: (token: string | null) => ipcRenderer.invoke('auth:setBackendToken', token),
 
   // 文件系统
   fsReadDir: (dirPath: string) => ipcRenderer.invoke('fs:readDir', dirPath),
@@ -136,13 +128,10 @@ fsGetDrives: () => ipcRenderer.invoke('fs:getDrives'),
 
   // SSH 连接配置管理
   sshListConnections: () => ipcRenderer.invoke('ssh:listConnections'),
-  sshIsEncryptionAvailable: () => ipcRenderer.invoke('ssh:isEncryptionAvailable'),
   sshSaveConnection: (conn: any) => ipcRenderer.invoke('ssh:saveConnection', conn),
   sshDeleteConnection: (id: string) => ipcRenderer.invoke('ssh:deleteConnection', id),
   sshDuplicateConnection: (id: string) => ipcRenderer.invoke('ssh:duplicateConnection', id),
   sshTestConnection: (config: any) => ipcRenderer.invoke('ssh:testConnection', config),
-  sshExportConnections: (ids: string[]) => ipcRenderer.invoke('ssh:exportConnections', ids),
-  sshImportConnections: (json: string) => ipcRenderer.invoke('ssh:importConnections', json),
   sshMigrateLegacy: (legacy: any[]) => ipcRenderer.invoke('ssh:migrateLegacy', legacy),
   fsSelectFile: () => ipcRenderer.invoke('fs:selectFile'),
   fsSelectImage: () => ipcRenderer.invoke('fs:selectImage'),
@@ -151,7 +140,6 @@ fsGetDrives: () => ipcRenderer.invoke('fs:getDrives'),
 
   // 技能（含自进化生成的 auto skills）
   listSkills: (mode?: string) => ipcRenderer.invoke('skills:list', mode),
-  createSkill: (skill: any) => ipcRenderer.invoke('skills:create', skill),
   updateSkillEnabled: (id: string, enabled: boolean, mode?: string) => ipcRenderer.invoke('skills:updateEnabled', id, enabled, mode),
   deleteSkill: (id: string) => ipcRenderer.invoke('skills:delete', id),
   syncBuiltinSkills: (skills: any[]) => ipcRenderer.invoke('skills:syncBuiltin', skills),

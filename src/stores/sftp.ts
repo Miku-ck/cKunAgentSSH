@@ -22,7 +22,6 @@ export interface TransferItem {
   // 断点续传相关
   resumeOffset?: number      // 已传输字节数（续传起点）
   retryCount?: number        // 自动重试次数
-  abortController?: AbortController  // 用于暂停传输
 }
 
 export const useSftpStore = defineStore('sftp', () => {
@@ -786,10 +785,6 @@ async function remoteRefresh(): Promise<void> {
 async function runUpload(id: string, localPath: string, remotePath: string, retried = false): Promise<void> {
     const t = transfers.value.find(x => x.id === id)
     if (!t) return
-    // 创建 AbortController 用于暂停功能
-    if (!t.abortController) {
-      t.abortController = new AbortController()
-    }
     t.status = 'running'
     try {
       // 审查 M-18 修复：IPC 契约只有 4 个参数（preload/env.d.ts/main.ts 三处一致）—
@@ -830,10 +825,6 @@ async function runUpload(id: string, localPath: string, remotePath: string, retr
   async function runDownload(id: string, remotePath: string, localPath: string, retried = false): Promise<void> {
     const t = transfers.value.find(x => x.id === id)
     if (!t) return
-    // 创建 AbortController 用于暂停功能
-    if (!t.abortController) {
-      t.abortController = new AbortController()
-    }
     t.status = 'running'
     try {
       // 审查 M-18：同 runUpload — 严格按 4 参 IPC 契约调用（续传主进程按本地
@@ -874,10 +865,7 @@ async function cancelTransfer(id: string): Promise<void> {
 function pauseTransfer(id: string): void {
   const t = transfers.value.find(t => t.id === id)
   if (!t || t.status !== 'running') return
-  // 中止当前传输
-  if (t.abortController) {
-    t.abortController.abort()
-  }
+  // 暂停走主进程 sftp:cancel（AbortSignal 无法跨 IPC，前端不再持控制器）
   t.status = 'paused'
   t.resumeOffset = t.transferred  // 记录断点位置
   try { getApi().sftpCancel(id) } catch { /* ignore */ }
@@ -887,8 +875,6 @@ function pauseTransfer(id: string): void {
 function resumeTransfer(id: string): void {
   const t = transfers.value.find(t => t.id === id)
   if (!t || t.status !== 'paused') return
-  // 重新创建 AbortController
-  t.abortController = new AbortController()
   t.status = 'running'
   t.error = undefined
   // 根据方向重新启动传输，从断点处继续

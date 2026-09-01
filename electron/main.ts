@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, dialog, session, safeStorage, nativeImage } from 'electron'
+import { app, BrowserWindow, ipcMain, shell, dialog, session, nativeImage } from 'electron'
 import { join, normalize, resolve as pathResolve, dirname, basename, extname } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { readdir, readFile, writeFile, stat, mkdir, rename, rm, realpath, copyFile } from 'fs/promises'
@@ -8,7 +8,7 @@ import { execSync, execFile, spawn } from 'child_process'
 import { BackendManager } from './backend-manager'
 import { PtyManager } from './pty-manager'
 import { SSHManager } from './ssh-manager'
-import { SSHStore, isEncryptionAvailable, type SSHConnectionRecord } from './ssh-store'
+import { SSHStore, type SSHConnectionRecord } from './ssh-store'
 import { ElectronBridge } from './electron-bridge'
 import { assertSafePath, allowDialogKeyPath } from './utils/path-guard'
 
@@ -980,8 +980,6 @@ function setupSSHIPC(): void {
   // 连接配置管理
   ipcMain.handle('ssh:listConnections', () => sshStore!.list())
 
-  ipcMain.handle('ssh:isEncryptionAvailable', () => isEncryptionAvailable())
-
   ipcMain.handle('ssh:saveConnection', (_event, conn: SSHConnectionRecord) => {
     return sshStore!.save(conn)
   })
@@ -996,14 +994,6 @@ function setupSSHIPC(): void {
 
   ipcMain.handle('ssh:testConnection', async (_event, config: any) => {
     return sshManager!.testConnection(config)
-  })
-
-  ipcMain.handle('ssh:exportConnections', (_event, ids: string[]) => {
-    return sshStore!.export(ids)
-  })
-
-  ipcMain.handle('ssh:importConnections', (_event, json: string) => {
-    return sshStore!.import(json)
   })
 
   ipcMain.handle('ssh:migrateLegacy', (_event, legacy: any[]) => {
@@ -1021,18 +1011,9 @@ function setupSSHIPC(): void {
     return backendManager.getApiToken()
   })
 
-  // 后端存活状态查询（渲染进程在 API 失败时用于确认后端是否崩溃/重启中）
-  ipcMain.handle('backend:isAlive', () => {
-    return backendManager?.isAlive() ?? false
-  })
 }
 
 // ─── Skills IPC（转发到后端 HTTP API）─────────────────
-// 主进程缓存的后端认证 token：渲染进程登录/登出时通过 'auth:setBackendToken' IPC 推送。
-// 主进程无法直接读取 renderer 的 localStorage，故用模块级变量缓存。
-// 仅用于 callBackendApi（主进程转发到后端的 HTTP 请求），不参与渲染进程自己的 fetch。
-let backendToken: string | null = null
-
 async function callBackendApi(path: string, options?: RequestInit): Promise<any> {
   const port = backendManager?.getPort() ?? 0
   if (!port) throw new Error('后端未就绪')
@@ -1040,11 +1021,7 @@ async function callBackendApi(path: string, options?: RequestInit): Promise<any>
     'Content-Type': 'application/json',
     ...(options?.headers as Record<string, string> | undefined || {}),
   }
-  // 注入 Authorization 头：后端 AuthMiddleware 对 /api/ 路径强制校验 Bearer token
-  if (backendToken) {
-    headers['Authorization'] = `Bearer ${backendToken}`
-  }
-  // 修复 4：注入进程级 API token（后端通过 CKUN_API_TOKEN 环境变量持有同一值，
+  // 注入进程级 API token（后端通过 CKUN_API_TOKEN 环境变量持有同一值，
   // 校验 X-API-Token 头）；token 为空（后端未启动）时不加头。
   const apiToken = backendManager?.getApiToken() || ''
   if (apiToken) {
@@ -1076,12 +1053,6 @@ function setupSkillsIPC(): void {
     const qs = mode ? `?mode=${encodeURIComponent(mode)}` : ''
     return callBackendApi(`/skills${qs}`)
   })
-  ipcMain.handle('skills:create', async (_event, skill: any) => {
-    return callBackendApi('/skills', {
-      method: 'POST',
-      body: JSON.stringify(skill),
-    })
-  })
   ipcMain.handle('skills:updateEnabled', async (_event, id: string, enabled: boolean, mode?: string) => {
     const qs = mode ? `?mode=${encodeURIComponent(mode)}` : ''
     return callBackendApi(`/skills/${id}/enabled${qs}`, {
@@ -1102,48 +1073,10 @@ function setupSkillsIPC(): void {
   })
 }
 
-// ─── Auth Credentials IPC ───────────────────────────
-// 渲染进程负责把密文存入 localStorage；主进程只提供 safeStorage 加解密服务，
-// 避免明文密码进入持久化存储。
-function setupAuthIPC(): void {
-  ipcMain.handle('auth:isEncryptionAvailable', () => safeStorage.isEncryptionAvailable())
-
-  // 渲染进程推送后端 token 到主进程缓存，供 callBackendApi 注入 Authorization 头
-  // （主进程无法直接读取 renderer 的 localStorage）。登出时传 null 清空。
-  ipcMain.handle('auth:setBackendToken', (_event, token: string | null) => {
-    backendToken = typeof token === 'string' && token ? token : null
-    return { ok: true }
-  })
-
-  ipcMain.handle('auth:encryptString', (_event, plain: string) => {
-    if (!safeStorage.isEncryptionAvailable()) {
-      throw new Error('safeStorage 加密不可用，无法记住密码')
-    }
-    if (typeof plain !== 'string') throw new Error('参数必须是字符串')
-    return 'enc:' + safeStorage.encryptString(plain).toString('base64')
-  })
-
-  ipcMain.handle('auth:decryptString', (_event, encrypted: string) => {
-    if (typeof encrypted !== 'string') return null
-    if (encrypted.startsWith('enc:')) {
-      if (!safeStorage.isEncryptionAvailable()) return null
-      try {
-        return safeStorage.decryptString(Buffer.from(encrypted.slice(4), 'base64'))
-      } catch {
-        return null
-      }
-    }
-    // 兼容旧版 plain: 前缀（仅迁移用）
-    if (encrypted.startsWith('plain:')) {
-      try {
-        return Buffer.from(encrypted.slice(6), 'base64').toString('utf-8')
-      } catch {
-        return null
-      }
-    }
-    return null
-  })
-}
+// 审查清理：旧 safeStorage 凭证 IPC（auth:isEncryptionAvailable/encryptString/
+// decryptString/setBackendToken）与 Bearer token 缓存链路已移除 — 渲染层零调用，
+// 且后端只校验 X-API-Token（callBackendApi 注入），Bearer 路径为旧鉴权契约残留。
+// 连接凭据加解密现由 ssh-store 在主进程内直接用 safeStorage 完成。
 
 // ─── SFTP IPC ───────────────────────────────────────
 function setupSftpIPC(): void {
@@ -1246,7 +1179,6 @@ app.whenReady().then(async () => {
   setupPtyIPC()
   setupSSHIPC()
   setupSkillsIPC()
-  setupAuthIPC()
   setupSftpIPC()
 
   // Start Electron bridge for backend → main process remote execution
