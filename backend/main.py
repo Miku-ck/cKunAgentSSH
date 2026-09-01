@@ -88,7 +88,11 @@ app.add_middleware(
     ),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "Accept"],
+    # 审查外热修：渲染进程直连请求都带 X-API-Token 头（client.ts withApiToken），
+    # 必须列入允许头 — Starlette ≥0.41 的 CORSMiddleware 对预检中出现未允许头的
+    # OPTIONS 直接回 400 "Disallowed CORS headers"（旧版会放行），导致浏览器
+    # 预检失败、所有跨源请求被拦，日志里 OPTIONS 400 刷屏即此因
+    allow_headers=["Content-Type", "Authorization", "Accept", "X-API-Token"],
 )
 
 

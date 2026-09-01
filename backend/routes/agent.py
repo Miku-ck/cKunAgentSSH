@@ -271,11 +271,12 @@ async def agent_run(req: AgentRunRequest, request: Request):
     if not effective_model_id:
         default_model = await asyncio.to_thread(db.get_default_model, req.mode)
         if default_model:
-            effective_model_id = default_model.get("model_id") or default_model.get("id")
+            # 审查外热修：同 chat.py — 优先行主键 id（原优先 LLM 模型名会 404 模型不存在）
+            effective_model_id = default_model.get("id") or default_model.get("model_id")
     if not effective_model_id:
         default_model = await asyncio.to_thread(db.get_default_model, None)
         if default_model:
-            effective_model_id = default_model.get("model_id") or default_model.get("id")
+            effective_model_id = default_model.get("id") or default_model.get("model_id")
     if not effective_model_id:
         raise HTTPException(status_code=400, detail=f"未找到 mode={req.mode} 的默认模型，请先配置模型")
 
@@ -679,7 +680,10 @@ async def agent_run(req: AgentRunRequest, request: Request):
                                 user_message=req.task,
                                 assistant_content=total_content,
                                 assistant_reasoning=total_reasoning,
-                                model_id=model_cfg.get("model_id") or model_cfg["id"],
+                                # 审查外热修：后处理契约是行主键 id — 原传 LLM 模型名
+                                # （model_id 列）导致 get_model_config 按 id 查落空，
+                                # 记忆/标题/技能提取被静默跳过（unknown model_id 告警）
+                                model_id=model_cfg.get("id"),
                                 turn_index=turn_index,
                             )
                     except Exception as e:

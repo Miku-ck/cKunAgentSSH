@@ -141,11 +141,13 @@ async def stream_chat(req: StreamChatRequest, request: Request):
     if not effective_model_id:
         default_model = await asyncio.to_thread(db.get_default_model, req.mode)
         if default_model:
-            effective_model_id = default_model.get("model_id") or default_model.get("id")
+            # 审查外热修：优先行主键 id（原优先 LLM 模型名，与 get_model_config
+            # 按 id 查询的契约不一致，会 400 Unknown model_id）
+            effective_model_id = default_model.get("id") or default_model.get("model_id")
     if not effective_model_id:
         default_model = await asyncio.to_thread(db.get_default_model, None)
         if default_model:
-            effective_model_id = default_model.get("model_id") or default_model.get("id")
+            effective_model_id = default_model.get("id") or default_model.get("model_id")
     if not effective_model_id:
         raise HTTPException(status_code=400, detail=f"未找到 mode={req.mode} 的默认模型，请先配置模型")
 

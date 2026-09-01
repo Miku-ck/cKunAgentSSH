@@ -1153,17 +1153,33 @@ def list_models_config() -> list[dict]:
 
 
 def get_model_config(model_id: str, mask_key: bool = True) -> Optional[dict]:
-    """根据 id 获取模型配置（mask_key=True 时 api_key 已脱敏）"""
+    """根据 id 获取模型配置（mask_key=True 时 api_key 已脱敏）
+
+    审查外热修：调用方可能传入行主键 id（model-<uuid>）或 LLM 模型名
+    （model_id 列，如 qwen3.8-27b）— Agent 后处理原样传模型名、chat/agent
+    的默认模型兜底也优先取模型名，导致按 id 查询落空、记忆/标题/技能提取
+    被静默跳过（日志 unknown model_id 告警）。现先按行 id 查，落空再按
+    model_id 列回退（重名取 rowid 最小的第一行）。
+    """
+    if not model_id:
+        return None
+    _MC_COLS = (
+        "id, name, model_id, provider, base_url, api_key, "
+        "supports_thinking, supports_image, supports_tool_calling, "
+        "is_default, is_default_ssh, "
+        "temperature, max_tokens, max_output_tokens, reasoning_tokens, top_p, sort_order, created_at, updated_at"
+    )
     conn = _get_conn()
     try:
         row = conn.execute(
-            "SELECT id, name, model_id, provider, base_url, api_key, "
-            "supports_thinking, supports_image, supports_tool_calling, "
-            "is_default, is_default_ssh, "
-            "temperature, max_tokens, max_output_tokens, reasoning_tokens, top_p, sort_order, created_at, updated_at "
-            "FROM models_config WHERE id = ?",
+            f"SELECT {_MC_COLS} FROM models_config WHERE id = ?",
             (model_id,),
         ).fetchone()
+        if row is None:
+            row = conn.execute(
+                f"SELECT {_MC_COLS} FROM models_config WHERE model_id = ? ORDER BY rowid LIMIT 1",
+                (model_id,),
+            ).fetchone()
         if not row:
             return None
         result = dict(row)
