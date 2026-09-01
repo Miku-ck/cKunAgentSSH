@@ -47,7 +47,10 @@ export async function assertSafePath(targetPath: string): Promise<void> {
   // 检查是否直接访问主目录下的敏感子目录
   if (resolved.startsWith(homeResolved)) {
     const relative = resolved.slice(homeResolved.length).replace(/^[\\/]+/, '')
-    const topLevel = relative.split(/[\\/]/)[0]
+    let topLevel = relative.split(/[\\/]/)[0]
+    // E19 修复：Windows 路径大小写不敏感 — 先 toLowerCase 再比对，
+    // 否则 `.SSH` / `.Ssh` 可绕过主目录顶层敏感目录拦截
+    if (process.platform === 'win32') topLevel = topLevel.toLowerCase()
     if (topLevel && HOME_TOPLEVEL_SENSITIVE.has(topLevel)) {
       throw new Error(`拒绝访问敏感路径: ${targetPath}`)
     }

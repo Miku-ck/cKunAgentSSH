@@ -1,12 +1,12 @@
 import { app, BrowserWindow, ipcMain, shell, dialog, session, nativeImage } from 'electron'
-import { join, normalize, resolve as pathResolve, dirname, basename, extname } from 'path'
+import { join, normalize, resolve as pathResolve, dirname, basename, extname, sep as pathSep } from 'path'
 import { is } from '@electron-toolkit/utils'
-import { readdir, readFile, writeFile, stat, mkdir, rename, rm, realpath, copyFile } from 'fs/promises'
-import { existsSync, readdirSync } from 'fs'
+import { readdir, readFile, writeFile, stat, lstat, mkdir, rename, rm, realpath, copyFile } from 'fs/promises'
+import { existsSync, readdirSync, mkdirSync, realpathSync } from 'fs'
 import { homedir } from 'os'
 import { execSync, execFile, spawn } from 'child_process'
 import { BackendManager } from './backend-manager'
-import { PtyManager } from './pty-manager'
+import { PtyManager, clampPtyDimension } from './pty-manager'
 import { SSHManager } from './ssh-manager'
 import { SSHStore, type SSHConnectionRecord } from './ssh-store'
 import { ElectronBridge } from './electron-bridge'
@@ -96,7 +96,20 @@ function createWindow(): void {
     }
   })
 
-  // 注入 CSP 响应头，限制资源加载范围
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+  } else {
+    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  }
+}
+
+// D16 修复：CSP 响应头注入原注册在 createWindow() 内 — 窗口重建（macOS
+// activate）会重复叠加 onHeadersReceived 回调。移到 whenReady 一次性执行，
+// 模块级标志防重
+let cspInstalled = false
+function installCsp(): void {
+  if (cspInstalled) return
+  cspInstalled = true
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({
       responseHeaders: {
@@ -107,12 +120,6 @@ function createWindow(): void {
       }
     })
   })
-
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
-  } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
-  }
 }
 
 // ─── Window Control IPC ────────────────────────────
@@ -339,13 +346,32 @@ function setupFSIPC(): void {
     }
   })
 
+  // C9：读取文件为 base64（渲染层二进制资源上传/预览用）
+  // assertSafePath + 10MB 上限，返回 { base64, size }
+  ipcMain.handle('fs:readFileBase64', async (_event, filePath: string): Promise<{ base64: string; size: number }> => {
+    await assertSafePath(filePath)
+    const s = await stat(filePath)
+    if (s.size > 10 * 1024 * 1024) {
+      throw new Error('文件过大（超过 10MB），无法读取')
+    }
+    const buf = await readFile(filePath)
+    return { base64: buf.toString('base64'), size: s.size }
+  })
+
   // 写入文件内容
   ipcMain.handle('fs:writeFile', async (_event, filePath: string, content: string) => {
     try {
       await assertSafePath(filePath)
+      // E21：写入内容大小上限（50MB）— 原实现无上限，渲染进程可传入超大
+      // 字符串耗尽内存/磁盘
+      if (Buffer.byteLength(content, 'utf-8') > 50 * 1024 * 1024) {
+        throw new Error('内容过大（超过 50MB），无法写入')
+      }
       await writeFile(filePath, content, 'utf-8')
     } catch (err: any) {
-      throw new Error('写入文件失败，请检查路径是否存在或是否有写入权限')
+      throw new Error(err?.message && err.message.includes('内容过大')
+        ? err.message
+        : '写入文件失败，请检查路径是否存在或是否有写入权限')
     }
   })
 
@@ -561,19 +587,33 @@ function setupFSIPC(): void {
 
     // 收集所有文件并统计总大小
     const files: Array<{ src: string; dest: string; size: number }> = []
-    async function collect(src: string, dest: string): Promise<void> {
-      const st = await stat(src)
+    async function collect(src: string, dest: string, isRoot: boolean): Promise<void> {
+      // E-5 修复：递归条目用 lstat（不跟随符号链接）— 原实现 stat 跟随符号
+      // 链接，源树中的符号链接（如指向 ~/.ssh）会被 copyFile 跟随复制出
+      // 链接目标内容造成泄露。符号链接条目跳过并 warn；根节点仍可跟随
+      // （根路径已经 assertSafePath 的 realpath 校验，不可能是指向敏感目录的链接）
+      const st = isRoot
+        ? await stat(src)
+        : await lstat(src).catch((e) => {
+            console.warn(`[fs:copy] 跳过无法访问的条目: ${src} (${e?.message || e})`)
+            return null
+          })
+      if (!st) return
+      if (!isRoot && st.isSymbolicLink()) {
+        console.warn(`[fs:copy] 跳过符号链接（防止泄露链接目标内容）: ${src}`)
+        return
+      }
       if (st.isFile()) {
         files.push({ src, dest, size: st.size })
       } else if (st.isDirectory()) {
         await mkdir(dest, { recursive: true })
         const entries = await readdir(src)
         for (const entry of entries) {
-          await collect(join(src, entry), join(dest, entry))
+          await collect(join(src, entry), join(dest, entry), false)
         }
       }
     }
-    await collect(srcPath, destPath)
+    await collect(srcPath, destPath, true)
 
     const total = files.reduce((sum, f) => sum + f.size, 0)
     let transferred = 0
@@ -636,7 +676,10 @@ function setupFSIPC(): void {
     try {
       // 安全：只允许删除技能目录下的路径，避免误删
       // 用 realpath 解析符号链接 + 严格边界检查，防止 `...\skills\..\..\Windows\System32` 路径遍历绕过
-      const skillsRoot = await realpath(join(app.getPath('userData'), 'skills'))
+      const skillsRootPath = join(app.getPath('userData'), 'skills')
+      // E18：skills 根不存在时无从谈起边界（realpath 会抛 ENOENT），直接 no-op 成功
+      if (!existsSync(skillsRootPath)) return
+      const skillsRoot = await realpath(skillsRootPath)
       let resolved: string
       try {
         resolved = await realpath(targetPath)
@@ -753,6 +796,29 @@ function setupFSIPC(): void {
     if (!sources || sources.length === 0) throw new Error('请至少选择一个要压缩的文件/目录')
     for (const s of sources) await assertSafePath(s)
     await assertSafePath(localZipPath)
+
+    // E-5 修复：打包前 lstat 递归扫描源树 — 发现任何符号链接直接拒绝
+    // （fail-closed）。Compress-Archive / zip 都会跟随符号链接，会把链接
+    // 目标内容（如 ~/.ssh）打包泄露。Windows 与非 Windows 分支共用此校验
+    async function assertNoSymlinks(root: string): Promise<void> {
+      const st = await lstat(root)
+      if (st.isSymbolicLink()) {
+        throw new Error(`源路径为符号链接，包含符号链接，已拒绝打包: ${root}`)
+      }
+      if (!st.isDirectory()) return
+      const entries = await readdir(root, { withFileTypes: true })
+      for (const e of entries) {
+        if (e.isSymbolicLink()) {
+          throw new Error(`源树包含符号链接，已拒绝打包: ${join(root, e.name)}`)
+        }
+        if (e.isDirectory()) {
+          await assertNoSymlinks(join(root, e.name))
+        }
+      }
+    }
+    for (const s of sources) {
+      await assertNoSymlinks(s)
+    }
 
     // 确保输出目录存在
     const outDir = dirname(localZipPath)
@@ -941,7 +1007,11 @@ function setupSSHIPC(): void {
 
   ipcMain.handle('ssh:connect', async (_event, config: any) => {
     const { cols, rows, ...connConfig } = config
-    const result = await sshManager!.connect(connConfig, cols || 80, rows || 24)
+    // E20：cols/rows 来自渲染进程，复用 pty:create 同款钳制
+    // （cols 1..1000 默认 80，rows 1..500 默认 24），防非法值
+    const safeCols = clampPtyDimension(cols, 80, 1, 1000)
+    const safeRows = clampPtyDimension(rows, 24, 1, 500)
+    const result = await sshManager!.connect(connConfig, safeCols, safeRows)
     // 连接成功后更新最后连接时间
     if (connConfig.id) {
       sshStore!.touchLastConnected(connConfig.id).catch(() => { /* ignore */ })
@@ -973,8 +1043,10 @@ function setupSSHIPC(): void {
     return sshManager!.getCwd(id)
   })
 
-  ipcMain.handle('ssh:exec', async (_event, id: string, command: string) => {
-    return sshManager!.execCommandWithExitCode(id, command)
+  // C8：超时参数可选第三参 timeoutSec，默认 30，钳制 1..600
+  ipcMain.handle('ssh:exec', async (_event, id: string, command: string, timeoutSec?: number) => {
+    const t = Math.max(1, Math.min(600, Math.floor(Number(timeoutSec) || 30)))
+    return sshManager!.execCommandWithExitCode(id, command, t)
   })
 
   // 连接配置管理
@@ -1049,6 +1121,52 @@ async function callBackendApi(path: string, options?: RequestInit): Promise<any>
 }
 
 function setupSkillsIPC(): void {
+  /**
+   * C-1：技能路径边界收容（渲染层技能 ZIP 解压写入用）。
+   * 返回 skills 根的真实路径；调用方对 resolve 后的路径做
+   * `=== skillsRoot || startsWith(skillsRoot + sep)` 断言，防 zip-slip 越界写。
+   */
+  function getSkillsRoot(): string {
+    const dir = join(app.getPath('userData'), 'skills')
+    // 根由 fs:getSkillsDir 保证存在；此处 mkdir 兜底（已存在时 no-op），
+    // 避免 realpathSync 对不存在目录抛 ENOENT
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+    return realpathSync(dir)
+  }
+
+  /** C-1：断言 p resolve 后位于 skills 根内（含根本身），否则抛"非法技能路径" */
+  function assertSkillsPath(p: string): void {
+    const skillsRoot = getSkillsRoot()
+    const resolved = pathResolve(p)
+    if (resolved !== skillsRoot && !resolved.startsWith(skillsRoot + pathSep)) {
+      throw new Error('非法技能路径')
+    }
+  }
+
+  // C-1：创建技能目录（渲染层技能 ZIP 解压用）— assertSafePath + 边界断言
+  ipcMain.handle('skills:mkdir', async (_event, dirPath: string) => {
+    await assertSafePath(dirPath)
+    assertSkillsPath(dirPath)
+    await mkdir(pathResolve(dirPath), { recursive: true })
+  })
+
+  // C-1：写入技能文件（base64 字节流，渲染层技能 ZIP 解压用）
+  // assertSafePath + 对 filePath 与其 dirname 都 resolve 后做 skills 根边界断言
+  ipcMain.handle('skills:writeFile', async (_event, filePath: string, base64: string) => {
+    await assertSafePath(filePath)
+    const skillsRoot = getSkillsRoot()
+    const fileResolved = pathResolve(filePath)
+    const dirResolved = pathResolve(dirname(filePath))
+    if (fileResolved !== skillsRoot && !fileResolved.startsWith(skillsRoot + pathSep)) {
+      throw new Error('非法技能路径')
+    }
+    if (dirResolved !== skillsRoot && !dirResolved.startsWith(skillsRoot + pathSep)) {
+      throw new Error('非法技能路径')
+    }
+    const buf = Buffer.from(base64, 'base64')
+    await writeFile(filePath, buf)
+  })
+
   ipcMain.handle('skills:list', async (_event, mode?: string) => {
     const qs = mode ? `?mode=${encodeURIComponent(mode)}` : ''
     return callBackendApi(`/skills${qs}`)
@@ -1173,6 +1291,7 @@ if (!gotSingleInstanceLock) {
 app.whenReady().then(async () => {
   // 双保险：非主实例不启动任何服务（quit 与 ready 的时序竞态下仍然安全）
   if (!gotSingleInstanceLock) return
+  installCsp()
   setupWindowIPC()
   setupFSIPC()
   createWindow()

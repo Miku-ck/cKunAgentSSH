@@ -36,13 +36,18 @@ function classifyTransferError(err: unknown, cancelled: boolean): TransferError 
   }
   const msg = (err instanceof Error ? err.message : String(err)).toLowerCase()
   if (msg.includes('econnreset') || msg.includes('etimedout') || msg.includes('epipe')
-      || msg.includes('socket hang up') || msg.includes('read epipe') || msg.includes('write epipe')) {
+      || msg.includes('socket hang up') || msg.includes('read epipe') || msg.includes('write epipe')
+      // D13 修复：SSH_FX_FAILURE（SFTP 状态码 4，ssh2 报 "SSH_FX_FAILURE: ..."）是
+      // 服务端通用错误，常由瞬时负载导致 — 原实现按 'failure' 子串一律判 PERMISSION
+      // 不可重试，一抖动就删 .part 丢全部进度。归 NETWORK（可重试，保留 .part）
+      || msg.includes('ssh_fx_failure')) {
     return { code: 'NETWORK', message: '网络中断，已保存进度可续传', retryable: true, originalError: err as Error }
   }
   if (msg.includes('enospc') || msg.includes('no space left') || msg.includes('disk full')) {
     return { code: 'DISK_FULL', message: '磁盘空间不足', retryable: false, originalError: err as Error }
   }
-  if (msg.includes('eacces') || msg.includes('permission denied') || msg.includes('failure')) {
+  // 仅明确的 permission denied 类状态判不可重试（不再匹配泛化的 'failure' 子串）
+  if (msg.includes('eacces') || msg.includes('permission denied') || msg.includes('ssh_fx_permission_denied')) {
     return { code: 'PERMISSION', message: '权限不足或目标被占用', retryable: false, originalError: err as Error }
   }
   if (msg.includes('enoent') || msg.includes('no such file')) {
@@ -175,11 +180,18 @@ async function pipelineReadWrite(
   isCancelled: () => boolean,
   onWritten: (chunk: PipelineChunk) => void,
 ): Promise<void> {
-  const slots: Array<{ buf: Buffer | null; ready: Promise<void>; resolve: () => void }> = []
-  for (let i = 0; i < chunks.length; i++) {
+  // D15 修复：slot 懒创建 + 写后释放 — 原实现为每个 chunk 预分配 slot+Promise
+  // （100GB = 40 万对象常驻到传输结束）。现在只在读侧按窗口创建，写循环用完即
+  // 置空 buffer 并从 Map 删除，内存占用恒约为 window 个 chunk。
+  // 不变量保持不变：读失败经 readError 在写循环中传播、isCancelled break、
+  // onWritten 严格按 chunk 顺序回调。
+  const slots = new Map<number, { buf: Buffer | null; ready: Promise<void>; resolve: () => void }>()
+  const createSlot = (i: number): { buf: Buffer | null; ready: Promise<void>; resolve: () => void } => {
     let resolve!: () => void
     const ready = new Promise<void>(r => { resolve = r })
-    slots.push({ buf: null, ready, resolve })
+    const slot = { buf: null, ready, resolve }
+    slots.set(i, slot)
+    return slot
   }
 
   let readIdx = 0
@@ -190,12 +202,13 @@ async function pipelineReadWrite(
     // 预读窗口：最多领先写指针 window 个 chunk
     while (readIdx < chunks.length && readIdx < writeIdx + window) {
       const i = readIdx++
+      const slot = createSlot(i)
       readChunk(i, chunks[i]).then((buf) => {
-        slots[i].buf = buf
-        slots[i].resolve()
+        slot.buf = buf
+        slot.resolve()
       }).catch((e: Error) => {
         readError = e
-        slots[i].resolve()
+        slot.resolve()
       })
     }
   }
@@ -203,12 +216,13 @@ async function pipelineReadWrite(
   issueReads()
   while (writeIdx < chunks.length) {
     if (isCancelled()) break
-    const slot = slots[writeIdx]
+    const slot = slots.get(writeIdx)!
     await slot.ready
     if (readError) throw readError
     const c = chunks[writeIdx]
     await writeChunk(writeIdx, c, slot.buf!)
     slot.buf = null // 释放引用，及时 GC
+    slots.delete(writeIdx) // slot 使命完成，立即回收
     writeIdx++
     onWritten(c)
     issueReads()
@@ -253,6 +267,8 @@ interface SSHSession {
   name: string
   /** 交互式 shell 当前工作目录，由 stream 数据中解析 OSC 7 得到 */
   cwd: string
+  /** D14 修复：close 通知已发送标志 — 去重，保证 ssh:close 恰好一次 */
+  closeNotified?: boolean
 }
 
 export class SSHManager {
@@ -264,6 +280,12 @@ export class SSHManager {
   // s1 修复：known_hosts 存储（host:port → sha256 指纹），TOFU 模型
   private knownHosts = new Map<string, string>()
   private knownHostsLoaded = false
+  // E-1 修复：single-flight 加载 Promise — 并发连接共享同一次磁盘加载，
+  // 消除"标志先置位、文件未读完"的竞态窗口（并发连接按空表 TOFU 并覆写磁盘表）
+  private loadPromise: Promise<void> | null = null
+  // E-1b 修复：串行化写入队列 — 每次保存排队到前一次完成之后，
+  // 快照在实际写入时刻（then 回调内）构建，并发首连不再把磁盘表写成子集
+  private savePromise: Promise<void> = Promise.resolve()
 
   setWindow(win: BrowserWindow): void {
     this.mainWindow = win
@@ -279,32 +301,47 @@ export class SSHManager {
     }
   }
 
-  /** 加载 known_hosts 文件到内存（懒加载，仅一次） */
-  private async loadKnownHosts(): Promise<void> {
-    if (this.knownHostsLoaded) return
-    this.knownHostsLoaded = true
-    try {
-      const raw = await fsPromises.readFile(this.knownHostsPath, 'utf-8')
-      const data = JSON.parse(raw) as Record<string, string>
-      for (const [key, fp] of Object.entries(data)) {
-        this.knownHosts.set(key, fp)
-      }
-    } catch {
-      // 文件不存在或解析失败 → 空表，后续 TOFU 逐步填充
+  /**
+   * 加载 known_hosts 文件到内存（懒加载，single-flight）
+   * E-1 修复：原实现 `knownHostsLoaded = true` 在 await readFile 完成前同步置位，
+   * 并发连接在竞态窗口内按空表 TOFU，且各自的后续 save 以子集覆写磁盘 known_hosts。
+   * 现在所有并发调用共享同一个 Promise，标志在加载完成（finally）后才置位。
+   */
+  private loadKnownHosts(): Promise<void> {
+    if (!this.loadPromise) {
+      this.loadPromise = (async () => {
+        try {
+          const raw = await fsPromises.readFile(this.knownHostsPath, 'utf-8')
+          const data = JSON.parse(raw) as Record<string, string>
+          for (const [key, fp] of Object.entries(data)) {
+            this.knownHosts.set(key, fp)
+          }
+        } catch {
+          // 文件不存在或解析失败 → 空表，后续 TOFU 逐步填充
+        } finally {
+          this.knownHostsLoaded = true
+        }
+      })()
     }
+    return this.loadPromise
   }
 
-  /** 持久化 known_hosts 到磁盘 */
-  private async saveKnownHosts(): Promise<void> {
-    try {
+  /**
+   * 持久化 known_hosts 到磁盘（E-1b 修复：串行化）
+   * 快照在 then 回调内构建 — 即实际写入时刻的全量内存表，排队保证
+   * 并发首连的多次保存按序执行、后写覆盖先写，不再互相丢条目。
+   */
+  saveKnownHosts(): Promise<void> {
+    this.savePromise = this.savePromise.then(async () => {
       const data: Record<string, string> = {}
       for (const [key, fp] of this.knownHosts) {
         data[key] = fp
       }
       await fsPromises.writeFile(this.knownHostsPath, JSON.stringify(data, null, 2), 'utf-8')
-    } catch (e) {
+    }).catch((e) => {
       console.warn('[ssh] 保存 known_hosts 失败:', e)
-    }
+    })
+    return this.savePromise
   }
 
   /**
@@ -341,6 +378,22 @@ export class SSHManager {
   private safeSend(channel: string, data: unknown): void {
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
       try { this.mainWindow.webContents.send(channel, data) } catch { /* EPIPE */ }
+    }
+  }
+
+  /**
+   * D14 修复：统一的会话清理 — 删除 session 并按 session 级标志去重通知。
+   * 原实现 client 'error' 先于 'close' 删除 session，导致无 shell 流的
+   * SFTP 专用连接（stream: null）中断后 'close' 分支不再发 ssh:close，
+   * UI 残留死会话。现在 error 处理器不删 session，close 处理器经此方法
+   * 统一清理 + 通知，closeNotified 标志保证 ssh:close 恰好一次。
+   */
+  private destroySession(id: string): void {
+    const session = this.sessions.get(id)
+    this.sessions.delete(id)
+    if (session && !session.closeNotified) {
+      session.closeNotified = true
+      this.safeSend('ssh:close', { id })
     }
   }
 
@@ -493,10 +546,9 @@ export class SSHManager {
               this.safeSend('ssh:data', { id, data: text })
             })
 
-            // Shell 关闭
+            // Shell 关闭（D14：统一走 destroySession，去重通知）
             stream.on('close', () => {
-              this.sessions.delete(id)
-              this.safeSend('ssh:close', { id })
+              this.destroySession(id)
               // 审查 M-6 修复：shell 通道关闭不等于 SSH 连接结束 — 原实现只删
               // session 并通知前端，底层 client socket 一直挂着（client 的 'close'
               // 事件只在连接级关闭时触发），远端断开后连接/文件句柄持续泄漏直到
@@ -510,7 +562,9 @@ export class SSHManager {
       })
 
       client.on('error', (err) => {
-        this.sessions.delete(id)
+        // D14 修复：error 不再删除 session、不单独通知 — 连接级 error 之后
+        // 必然跟随 'close'（ssh2 语义），由 close 处理器统一清理 + 通知，
+        // 保证 SFTP 专用连接（无 shell 流）中断后 UI 也能收到 ssh:close
         const msg = err?.message || ''
         if (msg.includes('ECONNREFUSED') || msg.includes('Connection refused')) {
           wrappedReject(new Error('连接被拒绝，请检查主机地址和端口是否正确'))
@@ -527,10 +581,8 @@ export class SSHManager {
       })
 
       client.on('close', () => {
-        if (this.sessions.has(id)) {
-          this.sessions.delete(id)
-          this.safeSend('ssh:close', { id })
-        }
+        // D14 修复：close 统一清理 + 通知（destroySession 内部去重，恰好一次）
+        this.destroySession(id)
       })
 
       client.connect(connectConfig)
@@ -918,38 +970,66 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
     let cancelled = false
     let lastProgress = Date.now()
     let transferred = 0
+    // C10 修复：心跳判定停滞后除发 sftp:stalled 事件外，还要 reject 该传输的
+    // IPC Promise（渲染层 retryable 自动续传依赖它）。标记失效后同一传输只
+    // reject 一次，后续进度回调对已失效传输忽略
+    let stalled = false
+    let stallReject: ((err: Error) => void) | null = null
     const heartbeat = new TransferHeartbeat()
 
-    this.transfers.set(transferId, () => {
+    const cancelFn = () => {
       cancelled = true
       heartbeat.stop()
-    })
+    }
+    this.transfers.set(transferId, cancelFn)
 
     heartbeat.start(5000, 30000, () => lastProgress, () => {
       this.safeSend('sftp:stalled', { id: transferId })
+      if (!stalled) {
+        stalled = true
+        // 错误对象形态与 NETWORK 一致（Error + code/retryable），渲染层按
+        // retryable 统一走自动续传路径
+        stallReject?.(toTransferError({ code: 'STALLED', message: '传输停滞，网络可能不稳定', retryable: true }))
+      }
     })
+
+    // 已失效传输（已按 STALLED reject）不再发进度，避免渲染层收到已放弃
+    // 传输的迟到事件
+    const sendProgress = (data: { transferred: number; total: number }): void => {
+      if (stalled) return
+      this.safeSend('sftp:progress', { id: transferId, ...data })
+    }
 
     // M7 修复（上传侧补齐）：句柄声明在 try 外，确保 finally 块始终可访问。
     // （原为 try 内 const，finally 引用会抛 ReferenceError 并被内层 catch 吞掉，
     //   导致每次上传完成/异常时本地 fd 与远程句柄泄漏）
     let remoteHandle: Buffer | null = null
     let localFd: Awaited<ReturnType<typeof fsPromises.open>> | null = null
+
+    const runBody = async (): Promise<void> => {
     try {
       // 1. 确定续传起点
       let startOffset = 0
       let partExists = false
       try {
         const partStat = await sftpStat(sftp, partPath)
-        partExists = partStat.size > 0
-        if (partStat.size >= total) {
-          // .part 已完成，直接 rename
+        if (partStat.size === total) {
+          // .part 与源文件大小一致，视为已完成，直接 rename
           await sftpRename(sftp, partPath, remotePath)
-          this.safeSend('sftp:progress', { id: transferId, transferred: total, total })
+          sendProgress({ transferred: total, total })
           return
         }
-        if (partStat.size > 0) {
+        // D12 修复：原实现 `partStat.size >= total` 直接 rename — 源文件缩小后
+        // 会把陈旧、过大的 .part 当完整结果。仅 `===` 才 rename；`>` 时前 4KB
+        // 校验无法区分"完成"与"源缩小"，fail-safe：删 .part 从头传
+        let resumeSize = partStat.size
+        if (resumeSize > total) {
+          try { await sftpUnlink(sftp, partPath) } catch { /* ignore */ }
+          resumeSize = 0
+        }
+        if (resumeSize > 0) {
           // 校验前 VERIFY_SIZE 字节
-          const verifyLen = Math.min(VERIFY_SIZE, partStat.size)
+          const verifyLen = Math.min(VERIFY_SIZE, resumeSize)
           const localHead = Buffer.alloc(verifyLen)
           const localFd = await fsPromises.open(localPath, 'r')
           await localFd.read(localHead, 0, verifyLen, 0)
@@ -958,8 +1038,9 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
           const remoteHead = await sftpRead(sftp, partHandle, 0, verifyLen)
           await sftpClose(sftp, partHandle)
           if (localHead.slice(0, verifyLen).equals(remoteHead.slice(0, verifyLen))) {
-            startOffset = partStat.size
+            startOffset = resumeSize
             transferred = startOffset
+            partExists = true
           } else {
             // 校验失败，从头开始
             await sftpUnlink(sftp, partPath)
@@ -991,7 +1072,7 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
         const now = Date.now()
         if (now - lastReport > 100) {
           lastReport = now
-          this.safeSend('sftp:progress', { id: transferId, transferred, total })
+          sendProgress({ transferred, total })
         }
       }
 
@@ -1028,7 +1109,7 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
 
       // 7. 完成：rename .part → remotePath
       await sftpRename(sftp, partPath, remotePath)
-      this.safeSend('sftp:progress', { id: transferId, transferred: total, total })
+      sendProgress({ transferred: total, total })
     } catch (err) {
       // 错误分类
       const tErr = heartbeat.isStalled()
@@ -1044,8 +1125,26 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       try { if (localFd) await localFd.close() } catch { /* ignore */ }
       try { if (remoteHandle) await sftpClose(sftp, remoteHandle) } catch { /* ignore */ }
       heartbeat.stop()
-      this.transfers.delete(transferId)
+      // C10 配套：渲染层按 STALLED 重试时可能已用同一 transferId 启动新传输，
+      // 只清理本传输自己注册的取消函数，避免误删新传输的条目
+      if (this.transfers.get(transferId) === cancelFn) {
+        this.transfers.delete(transferId)
+      }
     }
+    }
+
+    // C10 修复：传输体与停滞后 reject 竞速 — 原实现心跳判定停滞只发事件，
+    // 传输 Promise 永不 reject，渲染层"正在自动续传"的 retryable 自动重试
+    // 路径永远不触发。现在停滞时 IPC Promise 先 reject（Error + code:'STALLED'
+    // + retryable:true）；传输体无论之后成功或失败都照常收尾（.part 保留，
+    // 重试续传），互不干扰
+    return new Promise<void>((resolve, reject) => {
+      const stallPromise = new Promise<never>((_, rej) => { stallReject = rej })
+      void Promise.race([
+        runBody().then(() => resolve()),
+        stallPromise,
+      ]).then(null, (err) => reject(err as Error))
+    })
   }
 
   /**
@@ -1073,20 +1172,41 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
     let cancelled = false
     let lastProgress = Date.now()
     let transferred = 0
+    // C10 修复：心跳判定停滞后除发 sftp:stalled 事件外，还要 reject 该传输的
+    // IPC Promise（渲染层 retryable 自动续传依赖它）。标记失效后同一传输只
+    // reject 一次，后续进度回调对已失效传输忽略
+    let stalled = false
+    let stallReject: ((err: Error) => void) | null = null
     const heartbeat = new TransferHeartbeat()
 
-    this.transfers.set(transferId, () => {
+    const cancelFn = () => {
       cancelled = true
       heartbeat.stop()
-    })
+    }
+    this.transfers.set(transferId, cancelFn)
 
     heartbeat.start(5000, 30000, () => lastProgress, () => {
       this.safeSend('sftp:stalled', { id: transferId })
+      if (!stalled) {
+        stalled = true
+        // 错误对象形态与 NETWORK 一致（Error + code/retryable），渲染层按
+        // retryable 统一走自动续传路径
+        stallReject?.(toTransferError({ code: 'STALLED', message: '传输停滞，网络可能不稳定', retryable: true }))
+      }
     })
+
+    // 已失效传输（已按 STALLED reject）不再发进度，避免渲染层收到已放弃
+    // 传输的迟到事件
+    const sendProgress = (data: { transferred: number; total: number }): void => {
+      if (stalled) return
+      this.safeSend('sftp:progress', { id: transferId, ...data })
+    }
 
     // M7 修复：声明在 try 外部，确保 finally 块始终可访问
     let remoteHandle: Buffer | null = null
     let localFd: Awaited<ReturnType<typeof fsPromises.open>> | null = null
+
+    const runBody = async (): Promise<void> => {
     try {
       // 1. 打开远程文件（后续校验和下载都复用）
       remoteHandle = await sftpOpen(sftp, remotePath, 'r')
@@ -1096,24 +1216,32 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       let partExists = false
       try {
         const partStat = statSync(partPath)
-        partExists = partStat.size > 0
-        if (partStat.size >= total) {
-          // .part 已完成，直接 rename
+        if (partStat.size === total) {
+          // .part 与远程文件大小一致，视为已完成，直接 rename
           await fsPromises.rename(partPath, localPath)
-          this.safeSend('sftp:progress', { id: transferId, transferred: total, total })
+          sendProgress({ transferred: total, total })
           return
         }
-        if (partStat.size > 0) {
+        // D12 修复：原实现 `partStat.size >= total` 直接 rename — 远程文件缩小后
+        // 会把陈旧、过大的 .part 当完整结果。仅 `===` 才 rename；`>` 时前 4KB
+        // 校验无法区分"完成"与"源缩小"，fail-safe：删 .part 从头传
+        let resumeSize = partStat.size
+        if (resumeSize > total) {
+          try { await fsPromises.unlink(partPath) } catch { /* ignore */ }
+          resumeSize = 0
+        }
+        if (resumeSize > 0) {
           // 校验前 VERIFY_SIZE 字节与远程一致
-          const verifyLen = Math.min(VERIFY_SIZE, partStat.size)
+          const verifyLen = Math.min(VERIFY_SIZE, resumeSize)
           const localPartFd = await fsPromises.open(partPath, 'r')
           const localHead = Buffer.alloc(verifyLen)
           await localPartFd.read(localHead, 0, verifyLen, 0)
           await localPartFd.close()
           const remoteHead = await sftpRead(sftp, remoteHandle, 0, verifyLen)
           if (localHead.slice(0, verifyLen).equals(remoteHead.slice(0, verifyLen))) {
-            startOffset = partStat.size
+            startOffset = resumeSize
             transferred = startOffset
+            partExists = true
           } else {
             // 校验失败，从头开始
             await fsPromises.unlink(partPath)
@@ -1142,7 +1270,7 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
         const now = Date.now()
         if (now - lastReport > 100) {
           lastReport = now
-          this.safeSend('sftp:progress', { id: transferId, transferred, total })
+          sendProgress({ transferred, total })
         }
       }
 
@@ -1168,7 +1296,18 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
             return buf
           },
           async (_i, chunk, buf) => {
-            await downloadLocalFd.write(buf, 0, buf.length, chunk.offset)
+            // D11 修复：FileHandle.write 可能短写（bytesWritten < buf.length）—
+            // 忽略返回值会破坏".part 大小 = 连续前缀"的续传不变量（下次续传
+            // startOffset = partStat.size 会跳过缺失区间）。取回返回值，短写时
+            // 从 chunk.offset + bytesWritten 起循环补写剩余，直到写满
+            let off = 0
+            while (off < buf.length) {
+              const { bytesWritten } = await downloadLocalFd.write(buf, off, buf.length - off, chunk.offset + off)
+              if (bytesWritten <= 0) {
+                throw new Error(`本地写入停滞: 偏移 ${chunk.offset + off} 处期望写入 ${buf.length - off} 字节`)
+              }
+              off += bytesWritten
+            }
           },
           () => cancelled,
           (chunk) => {
@@ -1186,7 +1325,7 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
 
       // 7. 完成：rename .part → localPath
       await fsPromises.rename(partPath, localPath)
-      this.safeSend('sftp:progress', { id: transferId, transferred: total, total })
+      sendProgress({ transferred: total, total })
     } catch (err) {
       const tErr = heartbeat.isStalled()
         ? { code: 'STALLED' as const, message: '传输停滞，网络可能不稳定', retryable: true }
@@ -1201,8 +1340,26 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       try { await localFd?.close() } catch { /* ignore */ }
       try { if (remoteHandle) await sftpClose(sftp, remoteHandle) } catch { /* ignore */ }
       heartbeat.stop()
-      this.transfers.delete(transferId)
+      // C10 配套：渲染层按 STALLED 重试时可能已用同一 transferId 启动新传输，
+      // 只清理本传输自己注册的取消函数，避免误删新传输的条目
+      if (this.transfers.get(transferId) === cancelFn) {
+        this.transfers.delete(transferId)
+      }
     }
+    }
+
+    // C10 修复：传输体与停滞后 reject 竞速 — 原实现心跳判定停滞只发事件，
+    // 传输 Promise 永不 reject，渲染层"正在自动续传"的 retryable 自动重试
+    // 路径永远不触发。现在停滞时 IPC Promise 先 reject（Error + code:'STALLED'
+    // + retryable:true）；传输体无论之后成功或失败都照常收尾（.part 保留，
+    // 重试续传），互不干扰
+    return new Promise<void>((resolve, reject) => {
+      const stallPromise = new Promise<never>((_, rej) => { stallReject = rej })
+      void Promise.race([
+        runBody().then(() => resolve()),
+        stallPromise,
+      ]).then(null, (err) => reject(err as Error))
+    })
   }
 
   /** 读取远程文件内容到内存（带大小/二进制校验） */

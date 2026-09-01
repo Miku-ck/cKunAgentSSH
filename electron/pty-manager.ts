@@ -6,6 +6,7 @@ import * as pty from 'node-pty'
 import { BrowserWindow } from 'electron'
 import { homedir } from 'os'
 import { join } from 'path'
+import { statSync } from 'fs'
 import { LS_COLORS_NO_BACKGROUND } from './utils/terminal-colors'
 
 interface PtySession {
@@ -21,14 +22,18 @@ const ALLOWED_SHELLS: Record<string, string[]> = {
   darwin: ['/bin/zsh', '/bin/bash', '/bin/sh', '/usr/bin/zsh', '/usr/bin/bash'],
   linux: ['/bin/bash', '/bin/sh', '/bin/zsh', '/usr/bin/bash', '/usr/bin/zsh'],
 }
-// 禁止的危险参数（正则匹配）
-const DANGEROUS_ARG_PATTERNS = [
-  /-enc/i, /-encodedcommand/i, /-command/i, /-c\b/,
-  /\/c\b/, /&&/, /\|\|/, /;\s/, /\$\(/, /`/, /Invoke-Expression/i,
-]
+// E-4 修复：原"危险参数"黑名单可被绕过（cmd /S /K <任意命令>、
+// PowerShell -ExecutionPolicy Bypass -File evil.ps1 都不在黑名单里）。
+// 改为正向白名单：按 argv[0] 的 basename 判定 —
+//   cmd / powershell / pwsh → 拒绝一切 args；
+//   bash（含 git-bash 路径）→ 仅允许登录/交互式标志；
+//   其他程序 → 拒绝一切 args。
+const BASH_ALLOWED_ARGS = new Set(['-l', '-i', '--login', '--interactive'])
+// E-4：本地终端会话数上限，防止渲染进程无界 spawn
+const MAX_PTY_SESSIONS = 32
 
-/** 钳制终端维度参数（审查 MINOR：防渲染进程传入非法值） */
-function clampPtyDimension(value: unknown, fallback: number, min: number, max: number): number {
+/** 钳制终端维度参数（审查 MINOR：防渲染进程传入非法值）；main.ts ssh:connect 复用同款钳制 */
+export function clampPtyDimension(value: unknown, fallback: number, min: number, max: number): number {
   const n = typeof value === 'number' ? Math.floor(value) : NaN
   if (!Number.isFinite(n) || n < min) return fallback
   return Math.min(n, max)
@@ -79,6 +84,11 @@ export class PtyManager {
     const cols = clampPtyDimension(opts?.cols, 80, 1, 1000)
     const rows = clampPtyDimension(opts?.rows, 24, 1, 500)
 
+    // E-4：本地终端会话数上限，防止渲染进程无界 spawn
+    if (this.sessions.size >= MAX_PTY_SESSIONS) {
+      throw new Error('本地终端数量已达上限，请关闭闲置终端后重试')
+    }
+
     // M3 修复：验证 shell 在白名单中，防止渲染进程启动任意命令
     const platform = process.platform
     const allowed = ALLOWED_SHELLS[platform] || []
@@ -89,11 +99,40 @@ export class PtyManager {
       shell = defaultShell
     }
 
-    // M3 修复：检测并拒绝危险参数
-    for (const arg of args) {
-      if (DANGEROUS_ARG_PATTERNS.some(p => p.test(arg))) {
-        throw new Error(`检测到危险的 shell 参数，已拒绝: ${arg}`)
+    // E-4 修复：参数正向白名单 — 黑名单可被绕过（cmd /S /K <任意命令>、
+    // PowerShell -ExecutionPolicy Bypass -File evil.ps1）。按 basename 判定：
+    //   cmd / powershell / pwsh → 拒绝一切 args；
+    //   bash（含 git-bash 路径）→ 仅允许登录/交互式标志；
+    //   其他程序 → 拒绝一切 args
+    if (args.length > 0) {
+      const baseName = shellBase.split(/[\\/]/).pop() || shellBase
+      if (baseName === 'cmd' || baseName === 'cmd.exe') {
+        throw new Error('cmd 终端不允许自定义参数，已拒绝')
       }
+      if (baseName === 'powershell' || baseName === 'powershell.exe' || baseName === 'pwsh' || baseName === 'pwsh.exe') {
+        throw new Error('PowerShell 终端不允许自定义参数，已拒绝')
+      }
+      if (baseName === 'bash' || baseName === 'bash.exe' || baseName === 'git-bash' || baseName === 'git-bash.exe') {
+        for (const arg of args) {
+          if (!BASH_ALLOWED_ARGS.has(arg.toLowerCase())) {
+            throw new Error(`bash 不允许自定义参数，已拒绝: ${arg}`)
+          }
+        }
+      } else {
+        throw new Error(`${baseName} 不允许自定义参数，已拒绝`)
+      }
+    }
+
+    // E-4：spawn 前 stat 校验 cwd 存在且为目录，失败给出明确的中文错误
+    // （否则 pty.spawn 抛出底层平台错误，难以定位）
+    let cwdStat
+    try {
+      cwdStat = statSync(cwd)
+    } catch {
+      throw new Error(`工作目录不存在或不可访问: ${cwd}`)
+    }
+    if (!cwdStat.isDirectory()) {
+      throw new Error(`工作目录必须是目录: ${cwd}`)
     }
 
     console.log(`[PtyManager] spawning shell: ${shell}, args: ${JSON.stringify(args)}, cwd: ${cwd}`)

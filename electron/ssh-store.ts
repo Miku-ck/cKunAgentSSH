@@ -131,8 +131,12 @@ async function readAllFromDisk(): Promise<SSHConnectionRecordOnDisk[]> {
   try {
     raw = await readFile(path, 'utf-8')
   } catch (e) {
-    console.warn('[SSHStore] 读取 store 文件失败（按空处理）:', e)
-    return []
+    // E-2 修复：readFile 失败（含瞬态 EBUSY/EACCES）【向上抛】，不再按空表返回。
+    // 原实现失败后返回 []，随后的 save/delete/touchLastConnected 会以空数组为
+    // 基线覆写磁盘文件 — 用户全部 SSH 连接配置（含加密凭据）被静默永久抹掉。
+    // 写路径让错误自然上抛（IPC reject，用户重试即可）；读展示路径（list）在
+    // 调用方 catch 后降级为空列表，不崩 UI。
+    throw new Error(`读取 SSH 连接配置失败（文件可能被占用或权限不足，请重试）: ${e instanceof Error ? e.message : String(e)}`)
   }
   try {
     const arr = JSON.parse(raw)
@@ -203,9 +207,20 @@ function genId(): string {
 }
 
 export class SSHStore {
+  /**
+   * 列表（读展示路径）：E-2 修复 — readAllFromDisk 现在会把读取失败向上抛
+   * （防止空表覆写全库）。列表展示允许降级：catch 后返回 [] 并记日志，不崩 UI。
+   * 写路径（save/delete/duplicate/touchLastConnected/migrateLegacy）让错误
+   * 自然上抛，由 IPC reject 提示用户重试。
+   */
   async list(): Promise<SSHConnectionRecord[]> {
-    const records = await readAllFromDisk()
-    return records.map(fromDisk)
+    try {
+      const records = await readAllFromDisk()
+      return records.map(fromDisk)
+    } catch (e) {
+      console.error('[SSHStore] list 读取失败，降级为空列表:', e)
+      return []
+    }
   }
 
   async save(input: SSHConnectionRecord): Promise<SSHConnectionRecord> {

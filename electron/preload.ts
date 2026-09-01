@@ -33,7 +33,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   fsReadFileForEditor: (filePath: string) => ipcRenderer.invoke('fs:readFileForEditor', filePath),
   fsSelectFolder: () => ipcRenderer.invoke('fs:selectFolder'),
   fsGetHomePath: () => ipcRenderer.invoke('fs:getHomePath'),
-fsGetDrives: () => ipcRenderer.invoke('fs:getDrives'),
+  fsGetDrives: () => ipcRenderer.invoke('fs:getDrives'),
+  fsReadFileBase64: (filePath: string) => ipcRenderer.invoke('fs:readFileBase64', filePath),
   fsMkdir: (dirPath: string) => ipcRenderer.invoke('fs:mkdir', dirPath),
   fsRename: (oldPath: string, newPath: string) => ipcRenderer.invoke('fs:rename', oldPath, newPath),
   fsCopy: (srcPath: string, destPath: string, transferId: string) => ipcRenderer.invoke('fs:copy', srcPath, destPath, transferId),
@@ -86,7 +87,7 @@ fsGetDrives: () => ipcRenderer.invoke('fs:getDrives'),
   sshResize: (id: string, cols: number, rows: number) => ipcRenderer.invoke('ssh:resize', id, cols, rows),
   sshDisconnect: (id: string) => ipcRenderer.invoke('ssh:disconnect', id),
   sshGetCwd: (id: string) => ipcRenderer.invoke('ssh:getCwd', id),
-  sshExec: (id: string, command: string) => ipcRenderer.invoke('ssh:exec', id, command),
+  sshExec: (id: string, command: string, timeoutSec?: number) => ipcRenderer.invoke('ssh:exec', id, command, timeoutSec),
   /**
    * 监听 SSH 终端输出数据
    * @param callback 数据回调
@@ -143,6 +144,9 @@ fsGetDrives: () => ipcRenderer.invoke('fs:getDrives'),
   updateSkillEnabled: (id: string, enabled: boolean, mode?: string) => ipcRenderer.invoke('skills:updateEnabled', id, enabled, mode),
   deleteSkill: (id: string) => ipcRenderer.invoke('skills:delete', id),
   syncBuiltinSkills: (skills: any[]) => ipcRenderer.invoke('skills:syncBuiltin', skills),
+  // 技能 ZIP 解压写入（主进程边界收容，防 zip-slip 越界写）
+  skillsMkdir: (dirPath: string) => ipcRenderer.invoke('skills:mkdir', dirPath),
+  skillsWriteFile: (filePath: string, base64: string) => ipcRenderer.invoke('skills:writeFile', filePath, base64),
 
   // SFTP 文件传输
   sftpOpen: (sshSessionId: string) => ipcRenderer.invoke('sftp:open', sshSessionId),

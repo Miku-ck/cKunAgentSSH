@@ -76,6 +76,7 @@ interface ElectronAPI {
   getBackendToken: () => Promise<string>
   fsReadDir: (dirPath: string) => Promise<FileEntry[]>
   fsReadFile: (filePath: string) => Promise<string>
+  fsReadFileBase64: (filePath: string) => Promise<{ base64: string; size: number }>
   fsWriteFile: (filePath: string, content: string) => Promise<void>
   fsReadFileForEditor: (filePath: string) => Promise<EditorFileContent>
   fsSelectFolder: () => Promise<string | null>
@@ -124,7 +125,8 @@ interface ElectronAPI {
   sshResize: (id: string, cols: number, rows: number) => Promise<void>
   sshDisconnect: (id: string) => Promise<void>
   sshGetCwd: (id: string) => Promise<string>
-  sshExec: (id: string, command: string) => Promise<{ stdout: string; stderr: string; exitCode: number | null }>
+  // C8：timeoutSec 可选，默认 30 秒，主进程钳制 1..600
+  sshExec: (sshSessionId: string, command: string, timeoutSec?: number) => Promise<{ stdout: string; stderr: string; exitCode: number | null }>
   onSshData: (callback: (data: { id: string; data: string }) => void) => () => void
   onSshClose: (callback: (data: { id: string }) => void) => () => void
   // s1 修复：主机密钥验证事件（首次连接通知 + 密钥变更警告）
@@ -141,6 +143,9 @@ interface ElectronAPI {
   updateSkillEnabled: (id: string, enabled: boolean, mode?: string) => Promise<{ id: string; enabled: boolean }>
   deleteSkill: (id: string) => Promise<{ deleted: boolean }>
   syncBuiltinSkills: (skills: any[]) => Promise<{ upserted: number; orphans_removed: number; total: number }>
+  // C-1：技能 ZIP 解压写入（主进程边界收容，防 zip-slip 越界写）
+  skillsMkdir: (dirPath: string) => Promise<void>
+  skillsWriteFile: (filePath: string, base64: string) => Promise<void>
 
   // SFTP
   sftpOpen: (sshSessionId: string) => Promise<void>

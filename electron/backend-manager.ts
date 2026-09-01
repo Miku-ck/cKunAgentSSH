@@ -84,6 +84,10 @@ export class BackendManager {
       // 修复 2a：spawn 失败（如 python 不存在 ENOENT）时若无 error 监听，
       // 会触发未捕获异常直接崩掉整个 Electron 主进程；此处记录日志并拒绝 start()。
       let spawnErrorOccurred = false
+      // E23 说明：此 Promise<never> 在 spawn 成功时【永不 settle 是有意的】—
+      // 它只与 waitForReady 竞速：'error' 事件触发时 reject（ENOENT 等启动
+      // 失败立即返回，不用等 15s 超时）；启动成功则它一直悬置，无副作用
+      // （无人再引用它，GC 回收）。不要"顺手"补 resolve 逻辑。
       const spawnErrorPromise = new Promise<never>((_, reject) => {
         child.on('error', (err) => {
           spawnErrorOccurred = true
@@ -337,7 +341,12 @@ export class BackendManager {
           return
         }
         const server = http.createServer()
-        server.once('error', () => tryPort(port + 1))
+        server.once('error', () => {
+          // D17 修复：error 分支补 server.close()，与 electron-bridge.ts 同名
+          // 实现对齐 — 否则监听套接句柄泄漏，端口扫描循环可能挂住
+          server.close()
+          tryPort(port + 1)
+        })
         server.once('listening', () => {
           server.close(() => resolve(port))
         })

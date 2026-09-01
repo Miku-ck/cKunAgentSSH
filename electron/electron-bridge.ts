@@ -64,6 +64,9 @@ export class ElectronBridge {
   }
 
   private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    // E-3 修复：必须在 auth 检查之前挂 'error' 监听 — 客户端中途断开时，
+    // 401/404 路径的 res.end() 会抛 EPIPE，无监听即成未捕获异常，崩掉主进程
+    res.on('error', () => { /* 客户端已断开，忽略 */ })
     res.setHeader('Content-Type', 'application/json')
 
     const authHeader = req.headers['x-bridge-token']
@@ -79,10 +82,6 @@ export class ElectronBridge {
       res.end(JSON.stringify({ success: false, error: 'Not found' }))
       return
     }
-
-    // 审查 MINOR：res 无 'error' 监听时，客户端中途断开会让 writeHead/end 抛 EPIPE
-    // 变成未捕获异常，直接崩掉 Electron 主进程
-    res.on('error', () => { /* 客户端已断开，忽略 */ })
 
     // 收集请求体，带大小限制
     let body = ''
