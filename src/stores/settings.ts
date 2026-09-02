@@ -68,6 +68,18 @@ export interface AppSettings {
     backgroundVersion: number
     backgroundOpacity: number
     backgroundOverlay: number
+    /** 主题渐变色：背景加入强调色氛围渐变 */
+    themeGradientEnabled: boolean
+    /** 主题渐变强度（0-100） */
+    themeGradientStrength: number
+    /** 渐变形态：glow=顶部微光 / linear=线性渐变 / radial=放射渐变 */
+    themeGradientMode: 'glow' | 'linear' | 'radial'
+    /** 渐变方向（linear/radial 生效） */
+    themeGradientDirection: 'tb' | 'bt' | 'lr' | 'rl' | 'tlbr' | 'trbl'
+    /** 渐变起始色（空 = 跟随强调色） */
+    themeGradientStartColor: string
+    /** 渐变结束色（空 = 跟随主题底色） */
+    themeGradientEndColor: string
     terminal: {
       fontSize: number
       fontFamily: string
@@ -132,6 +144,12 @@ export const useSettingsStore = defineStore('settings', () => {
       backgroundVersion: saved?.appearance?.backgroundVersion ?? 0,
       backgroundOpacity: saved?.appearance?.backgroundOpacity ?? 80,
       backgroundOverlay: saved?.appearance?.backgroundOverlay ?? 60,
+      themeGradientEnabled: saved?.appearance?.themeGradientEnabled ?? false,
+      themeGradientStrength: saved?.appearance?.themeGradientStrength ?? 30,
+      themeGradientMode: saved?.appearance?.themeGradientMode ?? 'glow',
+      themeGradientDirection: saved?.appearance?.themeGradientDirection ?? 'tb',
+      themeGradientStartColor: saved?.appearance?.themeGradientStartColor ?? '',
+      themeGradientEndColor: saved?.appearance?.themeGradientEndColor ?? '',
       terminal: {
         fontSize: saved?.appearance?.terminal?.fontSize ?? 14,
         fontFamily: saved?.appearance?.terminal?.fontFamily ?? 'jetbrains',

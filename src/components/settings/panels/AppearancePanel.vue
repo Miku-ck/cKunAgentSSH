@@ -63,6 +63,75 @@
         <ToggleSwitch v-model="settings.appearance.animation" />
       </SettingRow>
 
+      <SettingRow label="主题渐变色" desc="背景加入强调色氛围渐变（顶部微光 → 主题底色）">
+        <ToggleSwitch v-model="settings.appearance.themeGradientEnabled" />
+      </SettingRow>
+
+      <template v-if="settings.appearance.themeGradientEnabled">
+        <SettingRow label="渐变强度" desc="渐变明显程度（0% = 纯色，100% = 最强）">
+          <div class="slider-row">
+            <input
+              type="range"
+              v-model.number="settings.appearance.themeGradientStrength"
+              min="0"
+              max="100"
+              step="1"
+              class="setting-range"
+            />
+            <span class="slider-value">{{ settings.appearance.themeGradientStrength }}%</span>
+          </div>
+        </SettingRow>
+
+        <SettingRow label="渐变形态" desc="渐变的整体样式">
+          <select v-model="settings.appearance.themeGradientMode" class="setting-select">
+            <option value="glow">顶部微光</option>
+            <option value="linear">线性渐变</option>
+            <option value="radial">放射渐变</option>
+          </select>
+        </SettingRow>
+
+        <SettingRow v-if="settings.appearance.themeGradientMode !== 'glow'" label="渐变方向" desc="渐变方向（放射形态为起点位置）">
+          <select v-model="settings.appearance.themeGradientDirection" class="setting-select">
+            <option value="tb">上 → 下</option>
+            <option value="bt">下 → 上</option>
+            <option value="lr">左 → 右</option>
+            <option value="rl">右 → 左</option>
+            <option value="tlbr">左上 → 右下</option>
+            <option value="trbl">右上 → 左下</option>
+          </select>
+        </SettingRow>
+
+        <SettingRow label="起始颜色" desc="渐变起点颜色（勾选则跟随强调色）">
+          <div class="gradient-color-row">
+            <input
+              type="color"
+              :value="settings.appearance.themeGradientStartColor || DEFAULT_GRADIENT_START"
+              :disabled="followStart"
+              @input="onStartColorInput"
+            />
+            <label class="gradient-follow">
+              <input type="checkbox" v-model="followStart" />
+              跟随强调色
+            </label>
+          </div>
+        </SettingRow>
+
+        <SettingRow label="结束颜色" desc="渐变终点颜色（勾选则跟随主题底色）">
+          <div class="gradient-color-row">
+            <input
+              type="color"
+              :value="settings.appearance.themeGradientEndColor || DEFAULT_GRADIENT_END"
+              :disabled="followEnd"
+              @input="onEndColorInput"
+            />
+            <label class="gradient-follow">
+              <input type="checkbox" v-model="followEnd" />
+              跟随主题底色
+            </label>
+          </div>
+        </SettingRow>
+      </template>
+
       <div class="bg-section">
         <SettingRow label="自定义背景图" desc="启用全窗口底层背景">
           <ToggleSwitch v-model="settings.appearance.backgroundEnabled" />
@@ -157,6 +226,26 @@ const settingsStore = useSettingsStore()
 const settings = settingsStore.settings
 const toast = useToastStore()
 const previewUrl = ref('')
+
+// ── 主题渐变自定义（颜色跟随默认的占位色仅用于色板显示） ──
+const DEFAULT_GRADIENT_START = '#818cf8'
+const DEFAULT_GRADIENT_END = '#0f0f0f'
+const followStart = ref(!settings.appearance.themeGradientStartColor)
+const followEnd = ref(!settings.appearance.themeGradientEndColor)
+
+function onStartColorInput(e: Event) {
+  settings.appearance.themeGradientStartColor = (e.target as HTMLInputElement).value
+  followStart.value = false
+}
+
+function onEndColorInput(e: Event) {
+  settings.appearance.themeGradientEndColor = (e.target as HTMLInputElement).value
+  followEnd.value = false
+}
+
+// 勾选“跟随默认”时清空自定义色（空串 = 跟随）
+watch(followStart, (v) => { if (v) settings.appearance.themeGradientStartColor = '' })
+watch(followEnd, (v) => { if (v) settings.appearance.themeGradientEndColor = '' })
 // 防竞态：快速连续换图时，旧请求可能后完成覆盖新请求的结果
 let previewLoadSeq = 0
 
@@ -343,6 +432,41 @@ const terminalFontOptions = TERMINAL_FONT_OPTIONS
   color: var(--text-secondary);
   min-width: 40px;
   text-align: right;
+}
+
+/* 渐变颜色行 */
+.gradient-color-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.gradient-color-row input[type="color"] {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  background: var(--bg-input);
+  cursor: pointer;
+}
+.gradient-color-row input[type="color"]:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.gradient-follow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.gradient-follow input[type="checkbox"] {
+  width: 13px;
+  height: 13px;
+  accent-color: var(--accent-primary);
+  margin: 0;
 }
 
 /* 背景图设置区域 */

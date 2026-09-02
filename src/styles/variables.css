@@ -2,8 +2,11 @@
   /* ── 深色主题（默认）── */
   --bg-base: #000000;
   --bg-panel: #000000;
+  --bg-panel-solid: #000000;
   --bg-surface: #000000;
+  --bg-surface-solid: #000000;
   --bg-elevated: #000000;
+  --bg-elevated-solid: #000000;
   --bg-hover: rgba(255,255,255,0.06);
   --bg-active: rgba(255,255,255,0.12);
   --divider-primary: #1a1a1a;
@@ -16,7 +19,9 @@
 
   /* 扩展背景/边框变量 */
   --bg-sidebar: #000000;
+  --bg-sidebar-solid: #000000;
   --bg-input: #000000;
+  --bg-input-solid: #000000;
   --bg-code: #000000;
   --bg-slider: #303030;
   --border-input: #303030;
@@ -109,8 +114,11 @@
 [data-theme="light"] {
   --bg-base: #ffffff;
   --bg-panel: #ffffff;
+  --bg-panel-solid: #ffffff;
   --bg-surface: #ffffff;
+  --bg-surface-solid: #ffffff;
   --bg-elevated: #ffffff;
+  --bg-elevated-solid: #ffffff;
   --bg-hover: rgba(0,0,0,0.04);
   --bg-active: rgba(0,0,0,0.08);
   --divider-primary: #e0e0e0;
@@ -121,7 +129,9 @@
   --text-secondary: #555555;
   --text-tertiary: #6e6e6e; /* ≥4.5:1 对比度（白底） */
   --bg-sidebar: #ffffff;
+  --bg-sidebar-solid: #ffffff;
   --bg-input: #ffffff;
+  --bg-input-solid: #ffffff;
   --bg-code: #ffffff;
   --bg-slider: #d0d0d0;
   --border-input: #c0c0c0;
@@ -177,8 +187,11 @@
 [data-theme="blue-screen"] {
   --bg-base: #0a1628;
   --bg-panel: #0a1628;
+  --bg-panel-solid: #0a1628;
   --bg-surface: #0a1628;
+  --bg-surface-solid: #0a1628;
   --bg-elevated: #0a1628;
+  --bg-elevated-solid: #0a1628;
   --bg-hover: rgba(255,255,255,0.06);
   --bg-active: rgba(255,255,255,0.12);
   --divider-primary: #0a1628;
@@ -189,7 +202,9 @@
   --text-secondary: #8aa8c8;
   --text-tertiary: #5a7898;
   --bg-sidebar: #0a1628;
+  --bg-sidebar-solid: #0a1628;
   --bg-input: #0a1628;
+  --bg-input-solid: #0a1628;
   --bg-code: #0a1628;
   --bg-slider: #1a3a6e;
   --border-input: #1e3a5f;
@@ -199,8 +214,11 @@
 [data-theme="forest"] {
   --bg-base: #0b1a12;
   --bg-panel: #0b1a12;
+  --bg-panel-solid: #0b1a12;
   --bg-surface: #0b1a12;
+  --bg-surface-solid: #0b1a12;
   --bg-elevated: #0b1a12;
+  --bg-elevated-solid: #0b1a12;
   --bg-hover: rgba(255,255,255,0.05);
   --bg-active: rgba(255,255,255,0.10);
   --divider-primary: #13261b;
@@ -211,7 +229,9 @@
   --text-secondary: #9db8a4;
   --text-tertiary: #6d8a76;
   --bg-sidebar: #0b1a12;
+  --bg-sidebar-solid: #0b1a12;
   --bg-input: #0b1a12;
+  --bg-input-solid: #0b1a12;
   --bg-code: #0b1a12;
   --bg-slider: #26402f;
   --border-input: #2a4a36;
@@ -221,8 +241,11 @@
 [data-theme="mint"] {
   --bg-base: #0a1b1a;
   --bg-panel: #0a1b1a;
+  --bg-panel-solid: #0a1b1a;
   --bg-surface: #0a1b1a;
+  --bg-surface-solid: #0a1b1a;
   --bg-elevated: #0a1b1a;
+  --bg-elevated-solid: #0a1b1a;
   --bg-hover: rgba(255,255,255,0.05);
   --bg-active: rgba(255,255,255,0.10);
   --divider-primary: #122928;
@@ -233,7 +256,9 @@
   --text-secondary: #9cc4bf;
   --text-tertiary: #6b938e;
   --bg-sidebar: #0a1b1a;
+  --bg-sidebar-solid: #0a1b1a;
   --bg-input: #0a1b1a;
+  --bg-input-solid: #0a1b1a;
   --bg-code: #0a1b1a;
   --bg-slider: #24504b;
   --border-input: #27514e;
@@ -243,8 +268,11 @@
 [data-theme="bee"] {
   --bg-base: #1a1206;
   --bg-panel: #1a1206;
+  --bg-panel-solid: #1a1206;
   --bg-surface: #1a1206;
+  --bg-surface-solid: #1a1206;
   --bg-elevated: #1a1206;
+  --bg-elevated-solid: #1a1206;
   --bg-hover: rgba(255,255,255,0.05);
   --bg-active: rgba(255,255,255,0.10);
   --divider-primary: #2b2010;
@@ -255,7 +283,9 @@
   --text-secondary: #c2b08a;
   --text-tertiary: #8f7d57;
   --bg-sidebar: #1a1206;
+  --bg-sidebar-solid: #1a1206;
   --bg-input: #1a1206;
+  --bg-input-solid: #1a1206;
   --bg-code: #1a1206;
   --bg-slider: #4a3a1e;
   --border-input: #57411f;
@@ -265,8 +295,11 @@
 [data-theme="coral"] {
   --bg-base: #180d0b;
   --bg-panel: #180d0b;
+  --bg-panel-solid: #180d0b;
   --bg-surface: #180d0b;
+  --bg-surface-solid: #180d0b;
   --bg-elevated: #180d0b;
+  --bg-elevated-solid: #180d0b;
   --bg-hover: rgba(255,255,255,0.05);
   --bg-active: rgba(255,255,255,0.10);
   --divider-primary: #2a1713;
@@ -277,7 +310,9 @@
   --text-secondary: #c5a6a0;
   --text-tertiary: #92746e;
   --bg-sidebar: #180d0b;
+  --bg-sidebar-solid: #180d0b;
   --bg-input: #180d0b;
+  --bg-input-solid: #180d0b;
   --bg-code: #180d0b;
   --bg-slider: #472a23;
   --border-input: #543028;

@@ -10,13 +10,24 @@ html, body {
   height: 100%;
   width: 100%;
   font-family: var(--font-sans);
-  background: var(--bg-panel);
+  background: var(--theme-gradient, var(--bg-panel));
   color: var(--text-primary);
   overflow: hidden;
   font-size: 13px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── 主题渐变色：开启时主要面板半透明，透出 body 渐变 ──
+   注意：color-mix 必须引用 -solid 纯色基础变量，避免同元素自引用循环
+   （自引用自定义属性会计算为 guaranteed-invalid，导致背景整体失效变透明） */
+[data-gradient="on"] {
+  --bg-panel: color-mix(in srgb, var(--bg-panel-solid) var(--gradient-alpha, 94%), transparent);
+  --bg-surface: color-mix(in srgb, var(--bg-surface-solid) var(--gradient-alpha, 94%), transparent);
+  --bg-elevated: color-mix(in srgb, var(--bg-elevated-solid) var(--gradient-alpha, 94%), transparent);
+  --bg-sidebar: color-mix(in srgb, var(--bg-sidebar-solid) var(--gradient-alpha, 94%), transparent);
+  --bg-input: color-mix(in srgb, var(--bg-input-solid) var(--gradient-alpha, 94%), transparent);
 }
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }

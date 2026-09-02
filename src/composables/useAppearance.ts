@@ -22,6 +22,26 @@ const ACCENT_MAP: Record<Accent, { hex: string; rgb: string }> = {
 // 修复：模块级标记，确保 darkMq 监听器只添加一次（多实例共享场景）
 let _systemThemeListenerAdded = false
 
+// 渐变方向 → linear-gradient 角度
+const GRADIENT_ANGLE: Record<string, string> = {
+  tb: '180deg',
+  bt: '0deg',
+  lr: '90deg',
+  rl: '270deg',
+  tlbr: '135deg',
+  trbl: '225deg',
+}
+
+// 渐变方向 → 放射起点位置
+const RADIAL_POS: Record<string, string> = {
+  tb: 'center',
+  bt: 'center',
+  lr: 'center',
+  rl: 'center',
+  tlbr: 'top left',
+  trbl: 'top right',
+}
+
 export function useAppearance() {
   const store = useSettingsStore()
   const root = document.documentElement
@@ -109,6 +129,38 @@ export function useAppearance() {
     root.style.setProperty('--app-bg-overlay', `${overlay / 100}`)
   }
 
+  // ── 主题渐变色 ──
+  function applyThemeGradient() {
+    const g = store.settings.appearance
+    const s = Math.max(0, Math.min(100, g.themeGradientStrength))
+    if (!g.themeGradientEnabled || s <= 0) {
+      root.removeAttribute('data-gradient')
+      root.style.removeProperty('--theme-gradient')
+      root.style.removeProperty('--gradient-alpha')
+      return
+    }
+    // 空色 = 跟随默认（强调色 / 主题底色），CSS 变量引用随主题自动联动
+    const start = g.themeGradientStartColor || 'var(--accent-primary)'
+    const end = g.themeGradientEndColor || 'var(--bg-base)'
+    const tint = s * 0.18
+    let gradient: string
+    if (g.themeGradientMode === 'linear') {
+      const angle = GRADIENT_ANGLE[g.themeGradientDirection] ?? '180deg'
+      gradient = `linear-gradient(${angle}, ${start} 0%, ${end} 100%)`
+    } else if (g.themeGradientMode === 'radial') {
+      const pos = RADIAL_POS[g.themeGradientDirection] ?? 'center'
+      gradient = `radial-gradient(circle at ${pos}, ${start} 0%, transparent 55%, ${end} 100%)`
+    } else {
+      // glow：顶部微光 → 透明过渡 → 主题底色（强度控制强调色混入比例）
+      gradient = `linear-gradient(180deg, ${start} ${tint}%, transparent 28%, ${end} 100%)`
+    }
+    root.style.setProperty('--theme-gradient', gradient)
+    // 面板半透明程度：强度越大越透（30→94%，100→80%），透出 body 渐变
+    const alpha = 100 - s * 0.2
+    root.style.setProperty('--gradient-alpha', `${alpha}%`)
+    root.setAttribute('data-gradient', 'on')
+  }
+
   // ── 消息字号 ──
   function applyMessageFontSize(size: number) {
     root.style.setProperty('--chat-font-size', `${size}px`)
@@ -123,6 +175,7 @@ export function useAppearance() {
   applyAnimation(a.animation)
   applySidebarWidth(a.sidebarWidth)
   applyBackground(a.backgroundEnabled, a.backgroundOpacity, a.backgroundOverlay)
+  applyThemeGradient()
   applyMessageFontSize(store.settings.chat.messageFontSize)
 
   // ── 响应式监听 ──
@@ -140,6 +193,19 @@ export function useAppearance() {
     }),
     ({ enabled, opacity, overlay }) => {
       applyBackground(enabled, opacity, overlay)
+    }
+  )
+  watch(
+    () => ({
+      enabled: store.settings.appearance.themeGradientEnabled,
+      strength: store.settings.appearance.themeGradientStrength,
+      mode: store.settings.appearance.themeGradientMode,
+      direction: store.settings.appearance.themeGradientDirection,
+      start: store.settings.appearance.themeGradientStartColor,
+      end: store.settings.appearance.themeGradientEndColor,
+    }),
+    () => {
+      applyThemeGradient()
     }
   )
   watch(() => store.settings.chat.messageFontSize, applyMessageFontSize)
