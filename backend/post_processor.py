@@ -336,8 +336,12 @@ async def _generate_title(ctx: TurnContext, config: PostProcessConfig) -> None:
         title = _fallback_title(ctx.user_message)
         if title:
             try:
-                await asyncio.to_thread(db.update_conversation_title, ctx.conversation_id, title)
-                logger.info("[post_process:title] 已使用 fallback 更新标题: %s", title)
+                # C-review MINOR-1：条件更新 — 窗口期内用户已改名则不覆盖
+                applied = await asyncio.to_thread(
+                    db.try_set_default_conversation_title,
+                    ctx.conversation_id, title, tuple(_DEFAULT_TITLES))
+                if applied:
+                    logger.info("[post_process:title] 已使用 fallback 更新标题: %s", title)
             except Exception:
                 logger.exception("[post_process:title] fallback 更新标题失败")
         return
@@ -365,8 +369,14 @@ async def _generate_title(ctx: TurnContext, config: PostProcessConfig) -> None:
         title = _fallback_title(ctx.user_message)
         if title:
             try:
-                await asyncio.to_thread(db.update_conversation_title, ctx.conversation_id, title)
-                logger.info("[post_process:title] 已使用 fallback 更新标题: %s", title)
+                # C-review MINOR-1：条件更新 — LLM 窗口期内用户已改名则不覆盖
+                applied = await asyncio.to_thread(
+                    db.try_set_default_conversation_title,
+                    ctx.conversation_id, title, tuple(_DEFAULT_TITLES))
+                if applied:
+                    logger.info("[post_process:title] 已使用 fallback 更新标题: %s", title)
+                else:
+                    logger.info("[post_process:title] 标题已在窗口期内被用户修改，放弃覆盖")
             except Exception:
                 logger.exception("[post_process:title] fallback 更新标题失败")
         return
@@ -378,8 +388,16 @@ async def _generate_title(ctx: TurnContext, config: PostProcessConfig) -> None:
             return
 
     try:
-        await asyncio.to_thread(db.update_conversation_title, ctx.conversation_id, title)
-        logger.info("[post_process:title] 已更新标题: %s", title)
+        # C-review MINOR-1：check-then-act 竞态 — 标题 LLM 调用长达 30s，
+        # 窗口期内用户改的自定义标题会被无条件覆盖。改为条件 UPDATE
+        # （仅当前标题仍是默认值时写入），检查与写入同语句原子完成
+        applied = await asyncio.to_thread(
+            db.try_set_default_conversation_title,
+            ctx.conversation_id, title, tuple(_DEFAULT_TITLES))
+        if applied:
+            logger.info("[post_process:title] 已更新标题: %s", title)
+        else:
+            logger.info("[post_process:title] 标题已在 LLM 窗口期内被用户修改，放弃覆盖")
     except Exception:
         logger.exception("[post_process:title] 更新标题失败")
 

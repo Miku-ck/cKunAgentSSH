@@ -314,6 +314,59 @@ def test_chat_stream_rejects_concurrent_stream(monkeypatch):
     assert captured["acquired"] == ["c1"], "抢锁必须针对请求会话执行"
 
 
+def test_try_set_default_conversation_title(monkeypatch):
+    """MINOR-1：标题仍为默认值 → 写入；窗口期内用户已改自定义标题 → 不覆盖"""
+    import database as db
+
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE conversations (id TEXT PRIMARY KEY, title TEXT, "
+        "status TEXT DEFAULT 'completed', mode TEXT, "
+        "created_at TEXT, updated_at TEXT)"
+    )
+    conn.execute("INSERT INTO conversations (id, title) VALUES ('c1', 'New Chat')")
+    conn.commit()
+    monkeypatch.setattr(db, "_get_conn", lambda: _NoClose(conn))
+
+    defaults = tuple({"New Chat", "新对话", "New Conversation", ""})
+    assert db.try_set_default_conversation_title("c1", "生成的标题", defaults) is True
+    assert conn.execute("SELECT title FROM conversations WHERE id='c1'").fetchone()[0] == "生成的标题"
+    # 用户自定义标题后，后处理再写不得覆盖
+    conn.execute("UPDATE conversations SET title='用户起的名字' WHERE id='c1'")
+    conn.commit()
+    assert db.try_set_default_conversation_title("c1", "又生成的标题", defaults) is False
+    assert conn.execute("SELECT title FROM conversations WHERE id='c1'").fetchone()[0] == "用户起的名字"
+
+
+def test_get_recent_messages_rowid_tiebreak(monkeypatch):
+    """MINOR-3：同秒消息按 rowid（插入序）排序，乱序喂 LLM 的问题消除"""
+    import database as db
+
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, "
+        "role TEXT NOT NULL, content TEXT NOT NULL, reasoning TEXT, "
+        "model_used TEXT, tokens_used INTEGER DEFAULT 0, run_id TEXT, "
+        "agent_trace TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')))"
+    )
+    # 同一秒（秒级时间戳）连续插入，按"第一条→第二条→第三条"顺序入库。
+    # uuid 主键 c/a/b 的字典序与插入序不一致：若误按 uuid 排序，结果会乱序。
+    # 期望 get_recent_messages 按 rowid（真实插入序）正序返回。
+    conn.executemany(
+        "INSERT INTO messages (id, conversation_id, role, content, created_at) "
+        "VALUES (?, 'c1', 'user', ?, '2025-01-01 00:00:00')",
+        [("uuid-c", "第一条"), ("uuid-a", "第二条"), ("uuid-b", "第三条")],
+    )
+    conn.commit()
+    monkeypatch.setattr(db, "_get_conn", lambda: _NoClose(conn))
+
+    rows = db.get_recent_messages("c1", limit=10)
+    assert [r["content"] for r in rows] == ["第一条", "第二条", "第三条"], \
+        "同秒消息必须按插入序（rowid）排序，而非 uuid 字典序"
+
+
 def test_try_begin_conversation_stream_atomic(monkeypatch):
     """非 in_progress → 抢锁成功并置 in_progress；持锁期间二次抢锁失败；
     释放（completed/failed）后可再抢"""

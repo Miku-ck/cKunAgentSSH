@@ -786,6 +786,29 @@ def update_conversation_title(cid: str, title: str) -> Optional[dict]:
         conn.close()
 
 
+def try_set_default_conversation_title(cid: str, title: str,
+                                       default_titles: tuple) -> bool:
+    """C-review MINOR-1：仅当当前标题仍是默认值时才更新（原子 check-and-act）。
+
+    标题 LLM 调用长达 30s：窗口期内用户改的自定义标题被无条件覆盖（原实现
+    只在调用前检查一次）。改为条件 UPDATE，检查与写入同一条语句原子完成；
+    返回 False 表示用户已改名，放弃覆盖。
+    """
+    now = _now()
+    placeholders = ", ".join("?" * len(default_titles)) if default_titles else "''"
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            f"UPDATE conversations SET title = ?, updated_at = ? "
+            f"WHERE id = ? AND (title IS NULL OR title IN ({placeholders}))",
+            (title, now, cid, *default_titles),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
 def delete_conversation(cid: str) -> bool:
     """删除会话 (级联删除消息)"""
     conn = _get_conn()
@@ -870,15 +893,17 @@ def get_messages(
     try:
         # F-4 修复：返回最新 N 条（按时间正序输出）。
         # 原 ORDER BY created_at ASC LIMIT ? 返回的是最旧 N 条，>50 条的会话
-        # 重载后只显示最新消息之前的内容。内层子查询按 created_at DESC, id DESC
+        # 重载后只显示最新消息之前的内容。内层子查询按 created_at DESC, rowid DESC
         # 取窗口（offset 语义保持为"从新到旧"窗口内偏移），外层再按时间正序输出。
+        # C-review MINOR-3：同秒消息用 rowid（插入序）兜底 — id 是随机 uuid，
+        # 按 id 排序不是时间序，同秒消息仍可能乱序。
         rows = conn.execute(
             "SELECT id, conversation_id, role, content, reasoning, model_used, tokens_used, run_id, agent_trace, created_at "
             "FROM ("
             "  SELECT id, conversation_id, role, content, reasoning, model_used, tokens_used, run_id, agent_trace, created_at "
             "  FROM messages WHERE conversation_id = ? "
-            "  ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
-            ") ORDER BY created_at ASC, id ASC",
+            "  ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?"
+            ") ORDER BY created_at ASC, rowid ASC",
             (conversation_id, limit, offset),
         ).fetchall()
         result = []
@@ -899,9 +924,11 @@ def get_recent_messages(conversation_id: str, limit: int = 20) -> list[dict]:
     """获取最近 N 条消息 (按时间正序返回，用于构建 LLM 上下文)"""
     conn = _get_conn()
     try:
+        # C-review MINOR-3：created_at 是秒级时间戳，同秒消息加 rowid（插入序）
+        # 兜底排序，避免乱序喂 LLM
         rows = conn.execute(
             "SELECT role, content FROM messages WHERE conversation_id = ? "
-            "ORDER BY created_at DESC LIMIT ?",
+            "ORDER BY created_at DESC, rowid DESC LIMIT ?",
             (conversation_id, limit),
         ).fetchall()
         return [dict(r) for r in reversed(rows)]

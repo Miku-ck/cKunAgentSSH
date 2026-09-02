@@ -37,8 +37,9 @@ def _patch(monkeypatch, current_title: str, updated: dict, llm_result: str = "ng
     monkeypatch.setattr(pp.db, "get_model_config",
                         lambda mid, mask_key=False: {"id": mid})
     monkeypatch.setattr(pp, "_call_llm_with_timeout", fake_llm)
-    monkeypatch.setattr(pp.db, "update_conversation_title",
-                        lambda cid, title: updated.setdefault("title", title) or True)
+    # MINOR-1：写入走条件更新（仅当前标题仍为默认值时生效），桩返回 True
+    monkeypatch.setattr(pp.db, "try_set_default_conversation_title",
+                        lambda cid, title, defaults: updated.setdefault("title", title))
 
 
 def test_title_generated_after_failed_first_turn(monkeypatch):
@@ -76,10 +77,22 @@ def test_custom_title_never_overwritten(monkeypatch):
     monkeypatch.setattr(pp.db, "get_model_config",
                         lambda mid, mask_key=False: {"id": mid})
     monkeypatch.setattr(pp, "_call_llm_with_timeout", fake_llm)
-    monkeypatch.setattr(pp.db, "update_conversation_title",
-                        lambda cid, title: updated.setdefault("title", title) or True)
+    monkeypatch.setattr(pp.db, "try_set_default_conversation_title",
+                        lambda cid, title, defaults: updated.setdefault("title", title))
 
     ctx = _ctx(turn_index=3)
     asyncio.run(_generate_title(ctx, PostProcessConfig()))
     assert not llm_called, "自定义标题存在时不应调用 LLM 生成标题"
     assert not updated, "自定义标题不得被覆盖"
+
+
+def test_custom_title_during_llm_window_not_overwritten(monkeypatch):
+    """MINOR-1：check-then-act 竞态 — 前置检查通过后、LLM 30s 窗口期内用户
+    改名，写入时条件更新失败（返回 False）→ 不得覆盖"""
+    updated: dict = {}
+    _patch(monkeypatch, "New Chat", updated)
+    monkeypatch.setattr(pp.db, "try_set_default_conversation_title",
+                        lambda cid, title, defaults: False)
+    ctx = _ctx(turn_index=1)
+    asyncio.run(_generate_title(ctx, PostProcessConfig()))
+    assert not updated, "窗口期内用户已改名的标题不得被覆盖"
