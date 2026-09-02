@@ -60,6 +60,8 @@ export function useSshNavigation(
     } else {
       showHome.value = true
       activeNavPage.value = 'remote-mgr'
+      // 切到独立页面时自动收起 AI 助手面板（点 AI 图标可重新展开）
+      sshAiStore.closeAiPanel()
     }
   }
 
@@ -70,6 +72,8 @@ export function useSshNavigation(
     }
     showHome.value = true
     activeNavPage.value = 'sftp'
+    // 切到独立页面时自动收起 AI 助手面板（点 AI 图标可重新展开）
+    sshAiStore.closeAiPanel()
 
     // 已有 SFTP 连接时无需重复连接
     if (sftpStore.online) return
@@ -102,6 +106,8 @@ export function useSshNavigation(
     } else {
       showHome.value = true
       activeNavPage.value = 'audit'
+      // 切到独立页面时自动收起 AI 助手面板（点 AI 图标可重新展开）
+      sshAiStore.closeAiPanel()
     }
   }
 

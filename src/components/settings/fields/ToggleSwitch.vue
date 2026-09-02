@@ -34,8 +34,8 @@ defineEmits<{
   outline: none;
 }
 .toggle-switch.on {
-  background: var(--accent-blue, #58a6ff);
-  border-color: var(--accent-blue, #58a6ff);
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
 }
 .toggle-thumb {
   position: absolute;
@@ -55,7 +55,7 @@ defineEmits<{
   border-color: #5d5d5d;
 }
 .toggle-switch.on:hover {
-  border-color: var(--accent-blue, #58a6ff);
+  border-color: var(--accent-primary);
   filter: brightness(1.1);
 }
 </style>

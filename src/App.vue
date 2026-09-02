@@ -109,7 +109,10 @@ onMounted(async () => {
 .app-background-layer {
   position: fixed;
   inset: 0;
-  z-index: -1;
+  /* 修复：不能用 z-index:-1 —— html/body 有不透明背景（var(--bg-panel)），
+     按层叠规则负 z-index 层会画在 body 背景之下，背景图永远被盖住。
+     改为 0 后位于 body 背景之上；overlay(0, DOM 顺序更后) 与 .main(1) 仍在更上层 */
+  z-index: 0;
   pointer-events: none;
   background-size: cover;
   background-position: center;
