@@ -12,7 +12,7 @@ SSH 智能运维终端 — 集成 SSH 连接管理、远程终端、SFTP 文件�
 - **命令补全**：Tab 补全，通过 SSH exec 远程查询候选
 - **快捷命令栏**：自定义命令快捷执行
 - **AI 运维助手**：流式对话 + 思考链、多模型切换、Agent 智能体（工具调用）
-- **Agent 框架（Harness）**：ReAct 决策循环、8 拦截器、13 工具、验证回路、动态步数预算、循环检测
+- **Agent 框架（Harness）**：ReAct 决策循环、8 拦截器、14 工具、验证回路、动态步数预算、循环检测
 
 ## 技术栈
 
@@ -65,7 +65,7 @@ SSH 智能运维终端 — 集成 SSH 连接管理、远程终端、SFTP 文件�
         │  • Agent Harness 框架          │
         │    - ReAct 决策循环            │
         │    - 8 拦截器 (Reins)          │
-        │    - 13 工具 (Saddle)          │
+        │    - 14 工具 (Saddle)          │
         │    - 验证回路 + 动态预算       │
         │  • 会话持久化 (SQLite)          │
         │  • 模型配置 / 路由             │
@@ -91,7 +91,10 @@ cKunAgentSSH/
 │   ├── electron-bridge.ts             # 本地 HTTP 服务供后端调用主进程 SSH 能力
 │   ├── pty-manager.ts                 # node-pty 终端实例池
 │   ├── ssh-manager.ts                 # ssh2 连接池 + SFTP
-│   └── ssh-store.ts                   # 连接配置持久化存储（safeStorage 加密）
+│   ├── ssh-store.ts                   # 连接配置持久化存储（safeStorage 加密）
+│   └── utils/
+│       ├── path-guard.ts              # 路径安全校验（越界/Key 文件）
+│       └── terminal-colors.ts         # LS_COLORS 配置
 │
 ├── src/                               # Vue 3 渲染进程
 │   ├── App.vue                        # 根组件：TitleBar + SshView
@@ -106,7 +109,9 @@ cKunAgentSSH/
 │   │   └── TitleBar.vue               # 自定义标题栏 + 窗口控制
 │   │
 │   ├── views/
-│   │   └── ssh/SshView.vue            # SSH 主视图：标签栏 + 终端 + AI 面板
+│   │   └── ssh/
+│   │       ├── SshView.vue            # SSH 主视图：标签栏 + 终端 + AI 面板
+│   │       └── AuditView.vue          # 审计记录视图
 │   │
 │   ├── components/
 │   │   ├── common/                    # 通用组件（Toast / Confirm / Settings）
@@ -126,7 +131,8 @@ cKunAgentSSH/
 │   │       ├── SshAiPanel.vue         # AI 运维助手面板
 │   │       ├── QuickCommandBar.vue    # 快捷命令栏
 │   │       ├── CompletionPopup.vue    # 命令补全弹窗
-│   │       └── TransferQueue.vue      # 传输队列
+│   │       ├── NoteInput.vue          # 备注输入
+│   │       └── QuickCommandEditor.vue # 快捷命令编辑
 │   │
 │   ├── composables/                   # 组合式函数
 │   │   ├── useAgentIntegration.ts     # Agent 集成逻辑
@@ -136,9 +142,11 @@ cKunAgentSSH/
 │   │   ├── useCompletion.ts           # 命令补全
 │   │   ├── useConfirm.ts              # 全局确认对话框
 │   │   ├── useModelSelector.ts        # 模型选择
-│   │   ├── useNotifications.ts        # 通知管理
 │   │   ├── useResizablePanel.ts       # 可拖拽面板
 │   │   ├── useSettings.ts             # 设置对话框
+│   │   ├── useCommandDelivery.ts      # 命令交付/焦点管理
+│   │   ├── useSshNavigation.ts        # SSH 导航与终端切换
+│   │   ├── useTabContextMenu.ts       # 标签右键菜单
 │   │   └── useTerminalConfig.ts       # 终端配置
 │   │
 │   ├── stores/                        # Pinia 状态
@@ -151,14 +159,14 @@ cKunAgentSSH/
 │   │   ├── skills.ts                  # 技能管理
 │   │   ├── quickCommands.ts           # 快捷命令
 │   │   ├── settings.ts                # 应用设置
+│   │   ├── createModeChatStore.ts     # 创建模式会话存储
 │   │   └── toast.ts                   # 消息提示
 │   │
 │   └── utils/
-│       ├── format.ts                  # 格式化工具
 │       ├── id.ts                      # ID 生成
 │       ├── language.ts                # 语言检测
 │       ├── markdown.ts                # Markdown 渲染
-│       ├── terminal-colors.ts         # LS_COLORS 配置
+│       ├── terminal-colors.ts         # ANSI 背景色过滤
 │       └── think-scrubber.ts          # 思考链清理
 │
 ├── backend/                           # Python FastAPI 后端
@@ -181,24 +189,40 @@ cKunAgentSSH/
 │   │   │   ├── saddle.py              # 工具执行 + 沙箱
 │   │   │   ├── stirrups.py            # LLM 调用 + 重试
 │   │   │   ├── reins.py               # 8 拦截器策略层
-│   │   │   ├── safety.py              # 安全防御
-│   │   │   └── telemetry.py           # 遥测总线
+│   │   │   ├── safety.py              # 命令/路径/SSRF 安全防御
+│   │   │   ├── telemetry.py           # 遥测总线
+│   │   │   ├── contracts.py           # 契约定义
+│   │   │   └── llm_client.py          # 流式 LLM 客户端
 │   │   │
-│   │   └── tools/builtin/             # 13 个内置工具
+│   │   ├── memory.py                  # Agent 记忆管理
+│   │   ├── reflection.py              # 元反思
+│   │   ├── evolution.py               # 策略演化
+│   │   ├── intention.py               # 意图分类
+│   │   ├── audit.py                   # 审计引擎（链式签名）
+│   │   ├── cost_tracker.py            # 成本追踪
+│   │   ├── file_changes.py            # 文件变更追踪
+│   │   ├── consciousness_tick.py      # 后台心智维护
+│   │   ├── electron_bridge.py         # 桥接主进程 SSH exec
+│   │   │
+│   │   └── tools/builtin/             # 14 个内置工具
 │   │       ├── shell_exec.py          # SSH 远程命令执行
 │   │       ├── file_ops.py            # 文件读写操作
 │   │       ├── patch_file.py          # 精确替换
 │   │       ├── grep_tool.py           # 内容搜索
 │   │       ├── glob_tool.py           # 文件查找
 │   │       ├── web_tools.py           # 联网搜索/抓取
-│   │       └── todo_write.py          # 任务列表
+│   │       ├── todo_write.py          # 任务列表
+│   │       ├── load_skill.py          # 按需加载技能
+│   │       └── spawn_subagent.py      # 启动子 Agent
 │   │
 │   └── routes/
 │       ├── chat.py                    # 对话接口（SSE 流式）
 │       ├── agent.py                   # Agent 运行接口（SSE + 工具调用）
 │       ├── models.py                  # 模型配置查询
 │       ├── settings.py                # 设置接口
-│       └── skills.py                  # 技能 CRUD
+│       ├── skills.py                  # 技能 CRUD
+│       ├── terminal.py                # 终端信息接口
+│       └── audit.py                   # 审计记录查询/导出/校验
 │
 ├── electron.vite.config.ts            # electron-vite 构建配置
 ├── electron-builder.yml               # 打包配置
@@ -261,7 +285,7 @@ Driver（驭手）—— ReAct 决策循环主驱动
   │   └── ConfidenceMonitor POST_ITERATION 置信度监控
   │
   ├── Bridle（马缰）—— 上下文组装 + 压缩
-  ├── Saddle（马鞍）—— 工具执行 + 沙箱（13 个内置工具）
+  ├── Saddle（马鞍）—— 工具执行 + 沙箱（14 个内置工具）
   ├── Stirrups（马镫）—— LLM 调用 + 重试
   └── TelemetryBus —— 事件广播
 ```
@@ -333,4 +357,4 @@ npm run build        # 构建生产版本
 
 ## License
 
-Private
+[MIT](LICENSE)
