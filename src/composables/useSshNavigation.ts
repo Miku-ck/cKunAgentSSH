@@ -23,7 +23,7 @@ export function useSshNavigation(
 
   // ─── 布局状态 ───
   const showHome = ref(true)
-  const activeNavPage = ref<'home' | 'remote-mgr' | 'sftp'>('home')
+  const activeNavPage = ref<'home' | 'remote-mgr' | 'sftp' | 'audit'>('home')
   const showModal = ref(false)
   const editingConnection = ref<SSHConnection | undefined>(undefined)
 
@@ -94,6 +94,15 @@ export function useSshNavigation(
 
   function toggleAiPanel() {
     sshAiStore.toggleAiPanel()
+  }
+
+  function toggleAudit() {
+    if (activeNavPage.value === 'audit') {
+      goHome()
+    } else {
+      showHome.value = true
+      activeNavPage.value = 'audit'
+    }
   }
 
   // ─── Quick Start 搜索过滤 ───
@@ -249,6 +258,7 @@ export function useSshNavigation(
     toggleRemoteManager,
     toggleSftp,
     toggleAiPanel,
+    toggleAudit,
     qsSearch,
     filteredShells,
     filteredConnections,

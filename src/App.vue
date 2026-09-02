@@ -14,6 +14,7 @@
     <TitleBar
       @action-ai="sshViewRef?.toggleAiPanel()"
       @action-remote="sshViewRef?.toggleRemoteManager()"
+      @action-audit="sshViewRef?.toggleAudit()"
       @action-sftp="sshViewRef?.toggleSftp()"
       @action-settings="sshViewRef?.openSettings()"
     />

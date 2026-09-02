@@ -250,6 +250,8 @@ class AgentRunRequest(BaseModel):
     mode: Literal["ssh"] = "ssh"
     system_prompt: Optional[str] = None
     ssh_session_id: Optional[str] = None
+    # 目标环境标记（test/prod）— 驱动生产环境高风险命令的审计与审批强化
+    environment: Literal["test", "prod"] = "test"
     enable_thinking: bool = False
     enable_tools: bool = True
     # E 修复：max_iterations 边界校验（1-500），防 LLM/恶意请求传 0 或天文数字
@@ -499,6 +501,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     # 审查 M-14：原 workspace_path="" 导致文件工具全部失败 + 路径守卫失效
                     workspace_path=_agent_workspace(),
                     ssh_session_id=req.ssh_session_id,
+                    environment=req.environment,
                     system_prompt=final_system_prompt,
                     history=history,
                     memories=memory_contents,

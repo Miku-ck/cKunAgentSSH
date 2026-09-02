@@ -366,6 +366,30 @@ def init_db(db_path: str) -> None:
             CREATE UNIQUE INDEX IF NOT EXISTS ix_tools_config_name_mode
                 ON tools_config(tool_name, mode);
 
+            -- 追加式、链式签名防篡改的运维审计表（对齐等保2.0 安全审计）
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts           TEXT NOT NULL,
+                operator     TEXT NOT NULL DEFAULT '',
+                target_type  TEXT NOT NULL DEFAULT '',
+                target_id    TEXT NOT NULL DEFAULT '',
+                environment  TEXT NOT NULL DEFAULT 'test',
+                action       TEXT NOT NULL DEFAULT '',
+                command_hash TEXT NOT NULL DEFAULT '',
+                command_raw  TEXT NOT NULL DEFAULT '',
+                result       TEXT NOT NULL DEFAULT '',
+                conclusion   TEXT NOT NULL DEFAULT '',
+                run_id       TEXT NOT NULL DEFAULT '',
+                iteration    INTEGER NOT NULL DEFAULT 0,
+                prev_hash    TEXT NOT NULL DEFAULT '',
+                hash         TEXT NOT NULL UNIQUE,
+                created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS ix_audit_ts     ON audit_log(ts);
+            CREATE INDEX IF NOT EXISTS ix_audit_run    ON audit_log(run_id);
+            CREATE INDEX IF NOT EXISTS ix_audit_target ON audit_log(target_id);
+            CREATE INDEX IF NOT EXISTS ix_audit_env    ON audit_log(environment);
+
 
         """)
 

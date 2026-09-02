@@ -25,6 +25,8 @@ export interface SSHConnectionRecord {
   lastConnectedAt?: number
   createdAt: number
   updatedAt: number
+  /** 目标环境标记('test' | 'prod'). 驱动生产环境高风险命令的审计与审批强化. 旧数据默认 'test' */
+  environment?: 'test' | 'prod'
 }
 
 /** 磁盘上的形态:敏感字段为加密后的 base64 字符串 */
@@ -46,6 +48,8 @@ interface SSHConnectionRecordOnDisk {
   lastConnectedAt?: number
   createdAt: number
   updatedAt: number
+  /** 目标环境标记('test' | 'prod'),旧记录缺失时默认 'test' */
+  environment?: 'test' | 'prod'
 }
 
 function getStorePath(): string {
@@ -94,6 +98,7 @@ function toDisk(rec: SSHConnectionRecord): SSHConnectionRecordOnDisk {
     privateKeyPath: rec.privateKeyPath,
     passphraseEnc: encrypt(rec.passphrase),
     note: rec.note,
+    environment: rec.environment || 'test',
     tags: rec.tags || [],
     readyTimeout: rec.readyTimeout,
     keepaliveInterval: rec.keepaliveInterval,
@@ -115,6 +120,7 @@ function fromDisk(rec: SSHConnectionRecordOnDisk): SSHConnectionRecord {
     privateKeyPath: rec.privateKeyPath,
     passphrase: decrypt(rec.passphraseEnc),
     note: rec.note,
+    environment: rec.environment || 'test',
     tags: rec.tags || [],
     readyTimeout: rec.readyTimeout,
     keepaliveInterval: rec.keepaliveInterval,
