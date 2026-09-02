@@ -88,7 +88,9 @@ async def upload_chat_file(
             detail=f"不支持的文件类型 '{suffix or safe_name}'，仅支持文本类文件（txt/log/md/代码/配置等）",
         )
 
-    data = await file.read()
+    # C-review MINOR-4：带上限读取（MAX+1）再校验大小 — 原实现全量读入内存后
+    # 才检查，超限文件会先占用超出上限的内存
+    data = await file.read(MAX_UPLOAD_SIZE + 1)
     if len(data) > MAX_UPLOAD_SIZE:
         raise HTTPException(status_code=413, detail="文件超过 10MB 上限")
     if len(data) == 0:
@@ -98,9 +100,13 @@ async def upload_chat_file(
     # 消毒 conversation_id：仅保留字母数字/连字符/下划线，防止路径穿越；空则兜底 "general"
     safe_conv = re.sub(r"[^A-Za-z0-9_\-]", "", conversation_id or "") or "general"
     conv_dir = _uploads_root() / safe_conv
-    conv_dir.mkdir(parents=True, exist_ok=True)
-    dest = conv_dir / f"{file_id[:8]}_{safe_name}"
-    dest.write_bytes(data)
+    # C-review MINOR-5：同步磁盘 IO 放线程池 — 原实现 async 路由内直接
+    # mkdir/write_bytes（最多 10MB），阻塞事件循环（其余 db 调用都已 to_thread）
+    await asyncio.to_thread(conv_dir.mkdir, parents=True, exist_ok=True)
+    # C-review NIT：落盘名用完整 file_id — 原 file_id[:8]（32 bit）在高频上传
+    # 下生日碰撞可覆盖他人上传文件
+    dest = conv_dir / f"{file_id}_{safe_name}"
+    await asyncio.to_thread(dest.write_bytes, data)
 
     text = data.decode("utf-8", errors="replace")
     truncated = len(text) > MAX_ATTACHMENT_CHARS
@@ -190,12 +196,17 @@ async def stream_chat(req: StreamChatRequest, request: Request):
     # 从模型配置读取推理参数；max_tokens 做安全封顶避免 400
     temperature = model_cfg.get("temperature") if model_cfg.get("temperature") is not None else 0.7
     top_p = model_cfg.get("top_p") if model_cfg.get("top_p") is not None else 0.9
+    # C-review MINOR-7：推理预算同样占用输出预算 — 原实现未把 reasoning_tokens
+    # 传给 safe_max_tokens，thinking 模型下 thinking_budget + 正文可超上下文
+    _thinking_on = bool(req.enable_thinking and model_cfg.get("supports_thinking"))
+    _reasoning_budget = model_cfg.get("reasoning_tokens") if _thinking_on else None
     # 审查 M-16：传入 prompt 文本（safe_max_tokens 内部用 estimate_tokens 估算，
     # 不再按 1.5 token/字符高估导致长对话输出被截到 256）
     max_tokens = safe_max_tokens(
         model_cfg.get("max_tokens"),
         " ".join(m["content"] for m in messages if isinstance(m.get("content"), str)),
         model_cfg.get("max_output_tokens"),
+        _reasoning_budget,
     )
 
     return StreamingResponse(
@@ -207,12 +218,15 @@ async def stream_chat(req: StreamChatRequest, request: Request):
             conversation_id=req.conversation_id,
             model_id=req.model_id,
             mode=req.mode,
-            enable_thinking=req.enable_thinking and model_cfg["supports_thinking"],
+            enable_thinking=_thinking_on,
             temperature=temperature,
             top_p=top_p,
             max_tokens=max_tokens,
             request=request,
             user_message=user_content,
+            # C-review MINOR-7：推理预算由调用方传入，不再二次查库（原实现在生成器
+            # 内部又 db_get_model_config 一次，同请求内重复同步查询）
+            reasoning_max_tokens=_reasoning_budget,
         ),
         media_type="text/event-stream",
         headers={
@@ -237,6 +251,7 @@ async def _generate_stream(
     top_p: float = 0.9,
     max_tokens: int | None = None,
     request: Request = None,
+    reasoning_max_tokens: int | None = None,
 ):
     """SSE 流式生成器"""
     full_content = ""
@@ -253,9 +268,9 @@ async def _generate_stream(
         await asyncio.to_thread(db.touch_conversation, conversation_id)
         await asyncio.to_thread(db.update_conversation_status, conversation_id, "in_progress")
 
-# 流式调用 LLM；推理/思考内容的 token 预算（仅 enable_thinking=True 时生效）
-        _cfg = await asyncio.to_thread(db_get_model_config, model_id)
-        reasoning_max_tokens = _cfg.get("reasoning_tokens") if enable_thinking else None
+        # 流式调用 LLM；推理/思考内容的 token 预算（仅 enable_thinking=True 时生效）
+        # C-review MINOR-7：预算由调用方（safe_max_tokens 同款数据源）传入，
+        # 原实现在此二次 db_get_model_config 重复查库
         chunk_iter = chat_stream(
             base_url=base_url,
             api_key=api_key,

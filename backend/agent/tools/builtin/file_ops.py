@@ -9,10 +9,11 @@ import tempfile
 from agent.tools import BaseTool, ToolResult, ToolMeta
 from agent.file_changes import record_file_write
 
-# 大文件保护阈值（与 bridle.tool_result_max_chars 对齐）
-_LARGE_FILE_THRESHOLD = 4000
-_LARGE_FILE_HEAD = 1500
-_LARGE_FILE_TAIL = 1000
+# 大文件保护阈值（C-review NIT：单一数据源 agent.truncation_limits）
+from agent.truncation_limits import TRUNC_THRESHOLD, TRUNC_HEAD, TRUNC_TAIL
+_LARGE_FILE_THRESHOLD = TRUNC_THRESHOLD
+_LARGE_FILE_HEAD = TRUNC_HEAD
+_LARGE_FILE_TAIL = TRUNC_TAIL
 
 
 def _resolve_path_safe(path: str, workspace: str) -> str:

@@ -21,6 +21,10 @@ _DEFAULT_MAX_RESULTS = 5
 # web_fetch 响应体上限（审查 M-4）：超过即拒绝，防止恶意页面打爆后端内存
 _MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 
+# C-review MINOR-10：max_chars 上限 — 原实现无上限，LLM 可传 10^9，
+# 10MB 响应全量进上下文（约 2.5M token，必然超窗口且烧钱）
+_MAX_FETCH_CHARS = 100_000
+
 
 # 审查 M-4：显式封锁 CPython `is_global` 表未覆盖、但可路由到内网的地址段。
 # - 100.64.0.0/10 (CGNAT)：运营商级 NAT，可达内网设备，is_private 恒为 False
@@ -344,7 +348,7 @@ class WebFetchTool(BaseTool):
         "type": "object",
         "properties": {
             "url": {"type": "string", "description": "要抓取的 URL"},
-            "max_chars": {"type": "integer", "description": "最大返回字符数（默认 8000）"},
+            "max_chars": {"type": "integer", "description": "最大返回字符数（默认 8000，上限 100000）"},
         },
         "required": ["url"],
     }
@@ -360,6 +364,9 @@ class WebFetchTool(BaseTool):
             return ToolResult(False, "", "max_chars 必须是整数")
         if max_chars < 1:
             max_chars = 1
+        # C-review MINOR-10：钳制上限（防止整页 10MB 灌入上下文）
+        if max_chars > _MAX_FETCH_CHARS:
+            max_chars = _MAX_FETCH_CHARS
 
         # 解析 URL
         parsed = urlparse(url)

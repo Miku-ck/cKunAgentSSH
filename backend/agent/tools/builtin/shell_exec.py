@@ -7,10 +7,11 @@ import asyncio
 from agent.tools import BaseTool, ToolResult, ToolMeta
 from agent.electron_bridge import ElectronBridge
 
-# 大输出保护阈值（与 bridle.tool_result_max_chars 对齐）
-_SHELL_OUTPUT_THRESHOLD = 4000
-_SHELL_OUTPUT_HEAD = 1500
-_SHELL_OUTPUT_TAIL = 1000
+# 大输出保护阈值（C-review NIT：单一数据源 agent.truncation_limits）
+from agent.truncation_limits import TRUNC_THRESHOLD, TRUNC_HEAD, TRUNC_TAIL
+_SHELL_OUTPUT_THRESHOLD = TRUNC_THRESHOLD
+_SHELL_OUTPUT_HEAD = TRUNC_HEAD
+_SHELL_OUTPUT_TAIL = TRUNC_TAIL
 
 
 class ShellExecTool(BaseTool):

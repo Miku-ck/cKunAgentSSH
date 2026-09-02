@@ -76,16 +76,9 @@ export const useChatStore = defineStore('chat', () => {
   // ── State ──
   const conversations = base.conversations as unknown as Ref<Conversation[]>
   const currentConversationId = base.currentConvId
-  const messages = computed<ChatMessage[]>({
-    get: () => base.messages.value as ChatMessage[],
-    set: (val) => {
-      const id = currentConversationId.value
-      if (!id) return
-      base.conversations.value = base.conversations.value.map((c) =>
-        c.id === id ? { ...c, messages: val as ModeMessage[] } : c
-      )
-    },
-  })
+  // C-review NIT：原 computed setter 无调用方（死代码）— 写路径都在工厂层
+  // 直接操作 base.conversations，改为只读 computed
+  const messages = computed<ChatMessage[]>(() => base.messages.value as ChatMessage[])
   const streaming = base.streaming
   const models = ref<ModelConfig[]>([])
   const selectedModelId = base.selectedModelId
@@ -175,7 +168,22 @@ export const useChatStore = defineStore('chat', () => {
   async function loadMessages(conversationId: string) {
     const targetId = conversationId
     try {
-      const rawMessages = await api.getMessages(targetId)
+      // C-review MINOR-11：分页拉全量历史 — 原实现只取最近 50 条，长会话的
+      // 更早消息被静默截断且无任何提示。循环 offset 翻页（新→旧窗口），
+      // 更早的页 prepend 到前面；上限 1000 条，触顶时明确提示。
+      const PAGE_SIZE = 50
+      const MAX_MESSAGES = 1000
+      let rawMessages: Message[] = []
+      let offset = 0
+      while (offset < MAX_MESSAGES) {
+        const page = await api.getMessages(targetId, PAGE_SIZE, offset)
+        rawMessages = [...page, ...rawMessages]
+        if (page.length < PAGE_SIZE) break
+        offset += PAGE_SIZE
+      }
+      if (offset >= MAX_MESSAGES && base.currentConvId.value === targetId) {
+        toast.warning(`该会话消息超过 ${MAX_MESSAGES} 条，仅加载最近 ${MAX_MESSAGES} 条`)
+      }
       // Optimization 修复：await 后校验当前会话未改变，避免快速切换时消息串台
       if (base.currentConvId.value !== targetId) return
       // 映射后端的 snake_case 字段到前端 ChatMessage 的 camelCase 字段

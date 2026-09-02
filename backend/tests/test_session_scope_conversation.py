@@ -28,11 +28,11 @@ def test_session_grant_scoped_to_conversation():
     g = _gate()
     g.grant("web_fetch", scope="session", conversation_id="convA")
     # 本会话免审
-    assert g.check_permission("web_fetch", {}, scope="session", conversation_id="convA") is True
+    assert g.check_permission("web_fetch", {}, conversation_id="convA") is True
     # 其他会话不得免审（M11 核心）
-    assert g.check_permission("web_fetch", {}, scope="session", conversation_id="convB") is False
+    assert g.check_permission("web_fetch", {}, conversation_id="convB") is False
     # 无会话上下文（旧调用方默认空串）也不得命中
-    assert g.check_permission("web_fetch", {}, scope="session") is False
+    assert g.check_permission("web_fetch", {}) is False
 
 
 def test_session_grant_command_binds_key():
@@ -52,7 +52,7 @@ def test_dangerous_still_ignores_session(monkeypatch):
     """B-6 契约保持：dangerous 风险即使本会话 session 授权也不放行"""
     g = _gate()
     g.grant("web_fetch", scope="session", conversation_id="convA")
-    assert g.check_permission("web_fetch", {}, scope="session",
+    assert g.check_permission("web_fetch", {},
                               risk="dangerous", conversation_id="convA") is False
 
 
@@ -62,8 +62,8 @@ def test_revoke_scoped_conversation():
     g.grant("web_fetch", scope="session", conversation_id="convB")
     g.revoke("web_fetch", conversation_id="convA")
     # convA 已撤，convB 保留
-    assert g.check_permission("web_fetch", {}, scope="session", conversation_id="convA") is False
-    assert g.check_permission("web_fetch", {}, scope="session", conversation_id="convB") is True
+    assert g.check_permission("web_fetch", {}, conversation_id="convA") is False
+    assert g.check_permission("web_fetch", {}, conversation_id="convB") is True
 
 
 def test_revoke_without_conversation_removes_all():
@@ -72,8 +72,8 @@ def test_revoke_without_conversation_removes_all():
     g.grant("web_fetch", scope="session", conversation_id="convA")
     g.grant("web_fetch", scope="session", conversation_id="convB")
     g.revoke("web_fetch")
-    assert g.check_permission("web_fetch", {}, scope="session", conversation_id="convA") is False
-    assert g.check_permission("web_fetch", {}, scope="session", conversation_id="convB") is False
+    assert g.check_permission("web_fetch", {}, conversation_id="convA") is False
+    assert g.check_permission("web_fetch", {}, conversation_id="convB") is False
 
 
 def test_once_and_always_unaffected_by_conversation():

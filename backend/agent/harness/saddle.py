@@ -167,7 +167,9 @@ class Sandbox:
     def _check_path_safe(path: str, workspace: str) -> SandboxCheck:
         """统一路径安全检查，与 file_ops._resolve_path_safe 使用同一套逻辑"""
         if not workspace:
-            return SandboxCheck(ok=True)
+            # C-review NIT：空 workspace fail-closed — 原实现返回 ok=True（fail-open），
+            # 安全底线组件在缺失边界时等同无边界
+            return SandboxCheck(ok=False, reason="未配置 workspace，无法校验路径边界")
         try:
             full_path = os.path.realpath(os.path.join(workspace, path) if not os.path.isabs(path) else path)
             real_workspace = os.path.realpath(workspace)

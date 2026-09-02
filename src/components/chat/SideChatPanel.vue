@@ -118,6 +118,11 @@
           rows="1"
           :placeholder="inputPlaceholder"
           aria-label="消息输入框"
+          role="combobox"
+          :aria-expanded="showSkillMenu"
+          aria-controls="skill-menu-list"
+          :aria-activedescendant="showSkillMenu ? activeSkillOptionId : undefined"
+          :maxlength="50000"
           :disabled="streaming || agentRunning"
           @keydown="handleKeydown"
           @input="onInput"
@@ -129,12 +134,15 @@
             <span class="menu-title">技能</span>
             <span class="menu-hint">↑↓ 选择 · Enter 确认 · Esc 关闭</span>
           </div>
-          <div class="skill-menu-list">
+          <div id="skill-menu-list" class="skill-menu-list" role="listbox" aria-label="技能">
             <div
               v-for="(item, i) in filteredSkills"
               :key="item.id"
               class="skill-menu-item"
               :class="{ active: i === skillActiveIdx }"
+              role="option"
+              :id="`skill-opt-${item.id}`"
+              :aria-selected="i === skillActiveIdx"
               @click="pickSkill(item)"
               @mouseenter="skillActiveIdx = i"
             >
@@ -370,7 +378,6 @@ const selectedSkillIds = ref<string[]>([])
 const showSkillMenu = ref(false)
 const skillQuery = ref('')
 const skillActiveIdx = ref(0)
-let skillMenuStartPos = -1
 
 /** 可用的技能列表 */
 const modeSkills = computed(() => {
@@ -389,6 +396,12 @@ const filteredSkills = computed(() => {
       (s.description || '').toLowerCase().includes(q),
     )
     .slice(0, 8)
+})
+
+/** aria-activedescendant 目标 id（C-review NIT：技能菜单无障碍） */
+const activeSkillOptionId = computed(() => {
+  const item = filteredSkills.value[skillActiveIdx.value]
+  return item ? `skill-opt-${item.id}` : undefined
 })
 
 /** 已选技能标签（用于 UI 展示） */
@@ -431,7 +444,6 @@ function detectSkillTrigger() {
   const segment = text.slice(lastSlash + 1, pos)
   if (/\s/.test(segment)) { closeSkillMenu(); return }
 
-  skillMenuStartPos = lastSlash
   skillQuery.value = segment
   skillActiveIdx.value = 0
   showSkillMenu.value = true
@@ -439,27 +451,21 @@ function detectSkillTrigger() {
 
 function closeSkillMenu() {
   showSkillMenu.value = false
-  skillMenuStartPos = -1
   skillQuery.value = ''
   skillActiveIdx.value = 0
 }
 
-/** 选中技能：在输入框插入 @技能名 标记，并 push 到 selectedSkillIds */
+/** 选中技能：加入 selectedSkillIds（输入框上方以标签展示）。
+ *  C-review NIT：原实现同时在输入框插入 "@技能名" 文本 — 文本与 skillIds
+ *  双重注入可漂移（手动删文本技能仍附加 / 删标签文本残留在消息里）。
+ *  现以 skillIds 为单一数据源，标签提供视觉反馈。 */
 function pickSkill(skill: { id: string; name: string }) {
-  const el = inputRef.value
-  const pos = el?.selectionStart ?? inputText.value.length
-  const before = inputText.value.slice(0, skillMenuStartPos)
-  const insert = `@${skill.name} `
-
-  inputText.value = before + insert + inputText.value.slice(pos)
   if (!selectedSkillIds.value.includes(skill.id)) {
     selectedSkillIds.value.push(skill.id)
   }
-
   closeSkillMenu()
   requestAnimationFrame(() => {
-    const newPos = (before + insert).length
-    if (el) { el.focus(); el.setSelectionRange(newPos, newPos) }
+    inputRef.value?.focus()
     autoResize()
   })
 }
@@ -502,9 +508,12 @@ const displayMessages = computed(() => {
       return {
         ...m,
         // Agent 运行中：实时同步 agentStore 的 content/reasoning
+        // C-review NIT：原实现 reasoning 强制空串、注释声称"外层 ThinkingBlock
+        // 展示"，实际不存在该展示（运行中 reasoning 完全丢失）。现透传
+        // agentStore.reasoning，由 MessageItem 的 ThinkingBlock 渲染。
         content: agentStore.content || m.content || m.streamingContent || '',
         streamingContent: undefined,
-        reasoning: '',
+        reasoning: agentStore.reasoning || '',
         streamingReasoning: undefined,
       }
     }

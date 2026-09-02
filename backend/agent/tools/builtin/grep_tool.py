@@ -10,10 +10,11 @@ import fnmatch
 from agent.tools import BaseTool, ToolResult, ToolMeta
 from agent.tools.builtin.file_ops import _resolve_path_safe
 
-# 输出截断阈值
-_GREP_OUTPUT_THRESHOLD = 4000
-_GREP_OUTPUT_HEAD = 1500
-_GREP_OUTPUT_TAIL = 1000
+# 输出截断阈值（C-review NIT：单一数据源 agent.truncation_limits）
+from agent.truncation_limits import TRUNC_THRESHOLD, TRUNC_HEAD, TRUNC_TAIL
+_GREP_OUTPUT_THRESHOLD = TRUNC_THRESHOLD
+_GREP_OUTPUT_HEAD = TRUNC_HEAD
+_GREP_OUTPUT_TAIL = TRUNC_TAIL
 # 单文件最多扫描的行数（审查 MINOR：防超大文件整读入内存）
 _MAX_LINES_PER_FILE = 20000
 # E 修复：LLM 提供的 pattern 长度上限（超长正则可造成 catastrophic backtracking）

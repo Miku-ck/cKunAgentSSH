@@ -225,8 +225,10 @@ class MemoryManager:
         # 修复：原实现无条件取最近 top_k 条，导致用户问"你是什么模型"时被注入
         # 之前 Agent 跑过的"任务: xxx | 使用工具: read_file | 结果: ..."等无关记忆
         try:
-            episodic_rows = db.get_agent_memories(
-                mode=mode, mem_type="episodic", limit=top_k * 3
+            # C-review MINOR-6：同步 sqlite 调用放线程池（WAL 锁竞争时不卡事件循环）
+            episodic_rows = await asyncio.to_thread(
+                db.get_agent_memories,
+                mode=mode, mem_type="episodic", limit=top_k * 3,
             )
             query_terms = _extract_terms(query)
             for row in episodic_rows:
@@ -247,8 +249,10 @@ class MemoryManager:
         # 100 条在召回质量上基本无损（长期冷记忆命中概率极低），负载减半。
         # 池子饱和（行数 == 上限）时提示一次，便于后续评估是否需要 DB 级向量索引。
         try:
-            semantic_rows = db.get_agent_memories(
-                mode=mode, mem_type="semantic", limit=_SEMANTIC_CANDIDATE_CAP
+            # C-review MINOR-6：同步 sqlite 调用放线程池
+            semantic_rows = await asyncio.to_thread(
+                db.get_agent_memories,
+                mode=mode, mem_type="semantic", limit=_SEMANTIC_CANDIDATE_CAP,
             )
             if len(semantic_rows) >= _SEMANTIC_CANDIDATE_CAP and not getattr(self, "_semantic_pool_warned", False):
                 self._semantic_pool_warned = True
@@ -296,9 +300,10 @@ class MemoryManager:
                 break
 
         # touch 检索到的记忆（更新 last_used_at）
+        # C-review MINOR-6：同步 sqlite 调用放线程池
         for r in unique:
             try:
-                db.touch_agent_memory(r.memory.id)
+                await asyncio.to_thread(db.touch_agent_memory, r.memory.id)
             except Exception:
                 pass
 

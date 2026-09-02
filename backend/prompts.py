@@ -49,26 +49,6 @@ def build_system_prompt(mode: str, context_prompt: str | None, memories: list[di
     return "\n\n".join(parts)
 
 
-POST_PROCESS_PROMPT = """\
-请分析以下 AI 助手与用户的单轮对话，完成三个任务：
-
-1. 提取关键记忆（最多 3 条）：用户偏好、重要事实、可复用上下文。每条用一句话表达。
-2. 判断是否可沉淀为技能：如果对话中包含可复用的操作步骤、模板、规则、脚本或最佳实践，则生成一个技能摘要；否则 skills 为空。每个技能必须包含 trigger_words 字段：3-5 个触发词，当用户消息包含这些词时自动激活该技能。触发词应为具体、区分性强的关键词。
-3. 生成会话标题（10 字以内中文）：基于用户本轮问题与助手回复，提炼关键词。
-
-请严格按以下 JSON 格式输出，不要包含其他内容：
-
-{
-  "memories": ["记忆1", "记忆2"],
-  "skills": [
-    {
-      "name": "技能名称",
-      "slug": "skill-slug",
-      "description": "技能描述",
-      "system_prompt": "技能内容",
-      "trigger_words": ["触发词1", "触发词2", "触发词3"]
-    }
-  ],
-  "title": "关键字摘要"
-}
-"""
+# C-review NIT：原 POST_PROCESS_PROMPT 死代码已删除 — post_processor.py 实际使用
+# 自己的 _TITLE_PROMPT_TEMPLATE / _MEMORY_PROMPT_TEMPLATE / _SKILL_PROMPT_TEMPLATE，
+# 该常量从未被引用，且"10 字以内"与 MAX_TITLE_LEN=20 的语义不一致。

@@ -3,7 +3,7 @@ Harness 契约层 — 所有组件共享的数据类型与协议
 
 设计原则：
 - 所有组件通过 dataclass / Protocol 交互，不直接依赖具体实现
-- TraceEvent 是唯一的跨组件事件格式，可序列化、可重放
+- TraceEvent 是唯一的跨组件事件格式，可序列化（to_dict 可直接 JSON 化）
 - UndoAction 是工具回滚的协议，每个工具可选实现
 """
 
@@ -22,13 +22,18 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Optional, Protocol, 
 # ──────────────────────────────────────────────────────────────────────────────
 
 class State(str, Enum):
-    """Agent 运行状态 — Driver 内部表达，替代原 state_machine.py"""
+    """Agent 运行状态 — Driver 内部表达，替代原 state_machine.py
+
+    C-review NIT：PLANNING / REFLECTING 是保留态 — 当前 Driver 从不进入
+    （保留枚举成员以兼容 state_history 消费方与潜在后续规划/反思阶段）。
+    state_history 消费者不应假定这两个状态会出现。
+    """
     INIT = "init"
-    PLANNING = "planning"
+    PLANNING = "planning"  # 保留态：Driver 从不进入（C-review NIT）
     THINKING = "thinking"
     ACTING = "acting"
     OBSERVING = "observing"
-    REFLECTING = "reflecting"
+    REFLECTING = "reflecting"  # 保留态：Driver 从不进入（C-review NIT）
     COMPLETED = "completed"
     FAILED = "failed"
     MAX_REACHED = "max_reached"
@@ -69,9 +74,13 @@ class TraceEvent:
 
     设计目标：
     - 可序列化：to_dict() 可直接 JSON 化
-    - 可重放：保存事件序列即可离线重放整个 run
-    - 可订阅：TelemetryBus 多订阅者（SSE/日志/指标/重放）
+    - 可订阅：TelemetryBus 多订阅者（SSE/日志/指标）
     - 可嵌套：span_id 支持工具执行内部子操作
+
+    注意（C-review MINOR-9）：TelemetryBus 只在 run 生命周期内保留最近
+    500 条事件（FIFO 截断），run 结束即 clear、从不落盘 —— 因此**不支持**
+    离线重放整个 run。原"保存事件序列即可离线重放"的承诺不成立，已修订。
+    如需审计/回放，需另行将事件持久化（见审计链 audit.append_record）。
     """
     kind: str                                  # "state" | "content" | "tool_call_start" | ...
     source: str                                # 产出组件："driver" / "saddle" / "reins" / ...

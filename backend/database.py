@@ -1594,6 +1594,26 @@ def update_agent_run(run_id: str, status: str, iteration: Optional[int] = None,
         conn.close()
 
 
+def mark_stale_agent_runs_failed() -> int:
+    """C-review MINOR-12：启动对账 — 把仍停留在 running/init 的 run 标记 failed。
+
+    进程崩溃/重启后，进行中的 run 在 DB 里永远滞留 'running'（内存中的
+    并发防护随进程丢失），前端会一直显示"运行中"。进程启动时调用一次。
+    返回被标记的条数。
+    """
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            "UPDATE agent_runs SET status = 'failed', completed_at = ? "
+            "WHERE status IN ('running', 'init')",
+            (_now(),),
+        )
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
 def get_agent_run(run_id: str) -> Optional[dict]:
     """获取单个 Agent 运行记录"""
     conn = _get_conn()

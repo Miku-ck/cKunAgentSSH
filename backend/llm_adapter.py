@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 # LRU 淘汰：频繁切换模型配置时限制缓存项数量，防止连接池无限增长
 _CLIENT_CACHE_MAX = 8  # 最大缓存客户端数
 _client_cache: "OrderedDict[tuple[str, str], openai.AsyncOpenAI]" = OrderedDict()
+# C-review MINOR-2：每个缓存客户端的进行中请求计数（key 同 _client_cache）。
+# LRU 淘汰时若计数 > 0（还有流在占用该 httpx 连接池），跳过 aclose，
+# 避免掐断进行中的流；该客户端将由 GC 回收，或下次同 key 重建时复用。
+_client_in_flight: dict[tuple[str, str], int] = {}
 
 
 def _normalize_system_first(messages: list[dict]) -> list[dict]:
@@ -58,13 +62,23 @@ async def _get_client(base_url: str, api_key: str) -> openai.AsyncOpenAI:
     _client_cache[key] = client
     # 超容量时淘汰最久未使用的
     if len(_client_cache) > _CLIENT_CACHE_MAX:
-        evicted = _client_cache.popitem(last=False)[1]
+        evicted_key, evicted = _client_cache.popitem(last=False)
         # 修复：显式关闭被淘汰客户端的 httpx 连接池，避免连接泄漏
-        try:
-            if hasattr(evicted, '_client') and hasattr(evicted._client, 'aclose'):
-                await evicted._client.aclose()
-        except Exception:
-            pass  # 关闭失败时依赖 GC 回收
+        # C-review MINOR-2：仍有进行中的流时不能 aclose（会掐断其他请求的
+        # HTTP 流）— 跳过关闭，依赖 GC 回收；计数归零前的淘汰一律不关
+        if _client_in_flight.get(evicted_key, 0) > 0:
+            logger.warning(
+                "LRU 淘汰客户端 %s 时仍有 %d 个进行中请求，跳过 aclose（依赖 GC）",
+                evicted_key[0], _client_in_flight.get(evicted_key, 0),
+            )
+            _client_in_flight.pop(evicted_key, None)
+        else:
+            try:
+                if hasattr(evicted, '_client') and hasattr(evicted._client, 'aclose'):
+                    await evicted._client.aclose()
+            except Exception:
+                pass  # 关闭失败时依赖 GC 回收
+            _client_in_flight.pop(evicted_key, None)
     return client
 
 
@@ -119,8 +133,46 @@ async def chat_stream(
     # None 表示不限制；vLLM/Qwen3 通过 chat_template_kwargs.thinking_budget 传递
     reasoning_max_tokens: int | None = None,
 ) -> AsyncGenerator[StreamChunk, None]:
+    """流式聊天补全（公开入口）
+
+    C-review MINOR-2：包装 _chat_stream_impl，维护客户端 in-flight 计数 —
+    LRU 淘汰期间有流在用则不 aclose 连接池。内层生成器在此处统一 aclose，
+    确保消费者断连时底层 HTTP 流确定性释放（不依赖 GC 收尾）。
     """
-    流式聊天补全
+    _key = (base_url, api_key or "EMPTY")
+    _client_in_flight[_key] = _client_in_flight.get(_key, 0) + 1
+    inner = _chat_stream_impl(
+        base_url, api_key, model, messages,
+        temperature=temperature, max_tokens=max_tokens, top_p=top_p,
+        enable_thinking=enable_thinking, tools=tools, tool_choice=tool_choice,
+        reasoning_max_tokens=reasoning_max_tokens,
+    )
+    try:
+        async for chunk in inner:
+            yield chunk
+    finally:
+        try:
+            await inner.aclose()
+        except Exception:
+            pass
+        _client_in_flight[_key] = max(0, _client_in_flight.get(_key, 0) - 1)
+
+
+async def _chat_stream_impl(
+    base_url: str,
+    api_key: str,
+    model: str,
+    messages: list[dict],
+    temperature: float = 0.7,
+    max_tokens: int | None = None,
+    top_p: float = 0.9,
+    enable_thinking: bool = False,
+    tools: list[dict] | None = None,
+    tool_choice: str = "auto",
+    reasoning_max_tokens: int | None = None,
+) -> AsyncGenerator[StreamChunk, None]:
+    """
+    流式聊天补全（实际实现，in-flight 计数由外层 chat_stream 包装维护）
 
     Args:
         base_url: vLLM 服务地址 (如 http://192.168.150.40:9030/v1)

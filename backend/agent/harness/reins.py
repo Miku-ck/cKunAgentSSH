@@ -777,14 +777,17 @@ class PermissionGate:
             return f"{tool_name}:{digest}"
         return tool_name
 
-    def check_permission(self, tool_name: str, args: dict, scope: str = 'once',
+    def check_permission(self, tool_name: str, args: dict,
                          risk: Optional[str] = None,
                          conversation_id: str = "") -> bool:
         """检查权限，返回是否放行
 
-        scope: 'once' (仅本次) | 'session' (会话级) | 'always' (永久)
         risk: 调用方已判定的风险等级；risk == "dangerous" 时忽略 session 级缓存
               （B-6：落实 "dangerous 需每次授权" 契约，只认 once 与 always/permanent 键）
+
+        检查顺序：permanent allowlist → session（非 dangerous，按会话键控）
+        → once 计数器。原 scope 参数已移除（C-review NIT：死参数，行为实际由
+        risk + 已存在的授权决定，与传入的 scope 无关）。
 
         无交互式 UI 场景：默认拦截 dangerous 命令，除非已在 allowlist 中。
         命令执行工具按"工具+命令哈希"键检查（审查 M-3）。
@@ -978,12 +981,14 @@ class PermissionGate:
 
         # dangerous → 需每次授权（不可 session 级缓存，防止首次授权后 Agent 执行任意高危命令）
         if risk == "dangerous":
-            if self.check_permission(tool, args, scope='once', risk='dangerous',
+            # C-review NIT：原 scope='once' 为死参数 — dangerous 每次授权的
+            # 语义由 risk 分支保证（忽略 session 缓存，只认 once/permanent 键）
+            if self.check_permission(tool, args, risk='dangerous',
                                       conversation_id=ctx.conversation_id):
                 return ReinDecision()
         else:
             # moderate 不可逆 → session 级授权可接受（风险有限）
-            if self.check_permission(tool, args, scope='session',
+            if self.check_permission(tool, args,
                                      conversation_id=ctx.conversation_id):
                 return ReinDecision()
 

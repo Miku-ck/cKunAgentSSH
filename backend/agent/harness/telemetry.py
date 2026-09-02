@@ -4,9 +4,11 @@ Telemetry Bus — 遥测总线
 统一事件总线，替代原 engine.run() 直接 yield SSE 的方式。
 
 特性：
-- 多订阅者：SSE 路由 / 日志 / 指标 / 重放
+- 多订阅者：SSE 路由 / 日志 / 指标
 - 故障隔离：单个订阅者异常不影响其他
-- 可重放：保存事件序列即可离线重放整个 run
+- 内存缓冲：run 生命周期内保留最近 500 条事件（FIFO 截断），
+  run 结束即 clear、从不落盘 —— 不支持离线重放整个 run
+  （C-review MINOR-9：原"可重放"承诺不成立，已修订；审计需求见 audit.append_record）
 """
 
 from __future__ import annotations
@@ -39,7 +41,7 @@ class TelemetryBus:
 
     def __init__(self) -> None:
         self._subscribers: list[Subscriber] = []
-        self._events: list[TraceEvent] = []  # 事件序列（可重放，有上限）
+        self._events: list[TraceEvent] = []  # 事件序列（内存缓冲，有上限，run 结束清空）
         self._lock = asyncio.Lock()
 
     def subscribe(self, callback: Subscriber) -> None:
@@ -78,7 +80,7 @@ class TelemetryBus:
                     logger.warning("TelemetryBus 异步订阅者异常: %s", r, exc_info=r)
 
     def events(self) -> list[TraceEvent]:
-        """获取事件序列副本（用于重放/调试）
+        """获取事件序列副本（用于调试；仅 run 生命周期内有效，不落盘）
 
         同步方法不能持 asyncio.Lock；list() 浅拷贝是原子的，与 emit 并发时最多多/少一个事件，
         不会结构损坏。可接受此竞态。

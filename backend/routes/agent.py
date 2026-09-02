@@ -283,10 +283,58 @@ class AgentRunRequest(BaseModel):
 
 # ── Routes ──
 
+# C-review MINOR-12：同会话并发 run 防护。
+# 原实现同一 conversation 可并发多个 run：消息交错写入、授权互相消费、
+# 备份/文件互覆。这里用进程级 {conversation_id: run_id} 标记进行中的 run，
+# 请求时原子地 check-and-set，事件流 finally 中释放。
+_in_flight_runs: dict[str, str] = {}
+_in_flight_lock = asyncio.Lock()
+
+
+async def _acquire_run_slot(conversation_id: str, run_id: str) -> Optional[str]:
+    """原子地为 conversation 占位。返回 None 表示成功占位；返回已有 run_id 表示冲突。"""
+    async with _in_flight_lock:
+        existing = _in_flight_runs.get(conversation_id)
+        if existing:
+            return existing
+        _in_flight_runs[conversation_id] = run_id
+        return None
+
+
+async def _release_run_slot(conversation_id: str, run_id: str) -> None:
+    """释放占位（仅当当前占位者仍是本 run 时，避免误删后续 run 的占位）"""
+    async with _in_flight_lock:
+        if _in_flight_runs.get(conversation_id) == run_id:
+            del _in_flight_runs[conversation_id]
+
+
+_startup_reconciled = False
+
+
+async def _reconcile_stale_runs_once() -> None:
+    """C-review MINOR-12：启动对账（懒执行，进程内仅一次）。
+
+    崩溃/重启后内存防护丢失，崩溃时进行中的 run 在 DB 里永久滞留 'running'。
+    首个 Agent 请求时把它们标记 failed。用懒执行而非 on_event 注册，
+    避免与 main.py 的 lifespan 钩子相互干扰（main.py 由并行开发维护）。
+    """
+    global _startup_reconciled
+    if _startup_reconciled:
+        return
+    _startup_reconciled = True
+    try:
+        n = await asyncio.to_thread(db.mark_stale_agent_runs_failed)
+        if n:
+            logger.warning("启动对账: %d 条滞留 running 的 agent_runs 已标记 failed", n)
+    except Exception as e:
+        logger.warning("启动对账失败（不影响本次运行）: %s", e)
+
 
 @router.post("/agent/run")
 async def agent_run(req: AgentRunRequest, request: Request):
     """启动 Agent — SSE 流式返回运行过程"""
+    # C-review MINOR-12：进程启动后首次请求做滞留 run 对账
+    await _reconcile_stale_runs_once()
     # ── 按 mode 选择默认模型（兜底）──
     # 审查 M-13：db 同步调用放线程池，避免阻塞事件循环（卡住所有并发请求/心跳）
     effective_model_id = req.model_id
@@ -453,28 +501,41 @@ async def agent_run(req: AgentRunRequest, request: Request):
     if not await asyncio.to_thread(db.get_conversation, req.conversation_id):
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    # 持久化 agent_run 记录（审查 M-13：放线程池）
-    await asyncio.to_thread(
-        db.create_agent_run,
-        run_id=run_id,
-        conversation_id=req.conversation_id,
-        task=req.task,
-        max_iterations=req.max_iterations,
-        mode=req.mode,
-        model_used=model_cfg.get("model_id") or model_cfg["id"],
-    )
+    # C-review MINOR-12：同会话并发防护 — 原子 check-and-set，冲突返回 409
+    # （前端 streamAgentRun 对非 200 走 onError(detail)，用户可见提示）
+    _conflict = await _acquire_run_slot(req.conversation_id, run_id)
+    if _conflict:
+        raise HTTPException(
+            status_code=409,
+            detail=f"该会话已有运行中的 Agent 任务（run_id={_conflict}），请等待其结束或终止后再试",
+        )
+    try:
+        # 持久化 agent_run 记录（审查 M-13：放线程池）
+        await asyncio.to_thread(
+            db.create_agent_run,
+            run_id=run_id,
+            conversation_id=req.conversation_id,
+            task=req.task,
+            max_iterations=req.max_iterations,
+            mode=req.mode,
+            model_used=model_cfg.get("model_id") or model_cfg["id"],
+        )
 
-    # 保存用户消息到 db（修复：原 Agent 模式未保存用户消息，导致 post_process 的标题生成检查 len(recent)==2 失败，
-    # 且历史会话切换时丢失用户问题）
-    await asyncio.to_thread(
-        db.add_message,
-        req.conversation_id,
-        "user",
-        req.task,
-        model_used=model_cfg.get("model_id") or model_cfg["id"],
-    )
-    await asyncio.to_thread(db.touch_conversation, req.conversation_id)
-    await asyncio.to_thread(db.update_conversation_status, req.conversation_id, "in_progress")
+        # 保存用户消息到 db（修复：原 Agent 模式未保存用户消息，导致 post_process 的标题生成检查 len(recent)==2 失败，
+        # 且历史会话切换时丢失用户问题）
+        await asyncio.to_thread(
+            db.add_message,
+            req.conversation_id,
+            "user",
+            req.task,
+            model_used=model_cfg.get("model_id") or model_cfg["id"],
+        )
+        await asyncio.to_thread(db.touch_conversation, req.conversation_id)
+        await asyncio.to_thread(db.update_conversation_status, req.conversation_id, "in_progress")
+    except Exception:
+        # 占位已得但落库失败 → 释放占位，避免该会话被永久锁死
+        await _release_run_slot(req.conversation_id, run_id)
+        raise
 
     # 收集运行轨迹（用于结束后生成情景记忆）
     run_trace_tool_calls: list[dict] = []
@@ -591,6 +652,9 @@ async def agent_run(req: AgentRunRequest, request: Request):
                         "tool": event["tool"],
                         "args": event.get("args", {}),
                         "iteration": event.get("iteration", 0),
+                        # C-review NIT：trace 回填按 tc_id 精确匹配（原 (tool, iteration)
+                        # 反向匹配在同轮同工具多次调用时张冠李戴）
+                        "tc_id": tc_id,
                     })
                 elif event.get("type") == "tool_call_result":
                     # H10 修复：将工具结果回写到 tool_calls 表
@@ -611,16 +675,14 @@ async def agent_run(req: AgentRunRequest, request: Request):
                             )
                         except Exception as e:
                             logger.warning("更新 tool_call 结果失败: %s", e)
-                    # 回写 run_trace_tool_calls（用于 agent_trace_snapshot 持久化）
-                    # 反向查找同 tool + 同 iteration + 无 result 的条目
-                    event_iter = event.get("iteration", 0)
-                    for tc_entry in reversed(run_trace_tool_calls):
-                        if (tc_entry.get("tool") == event.get("tool")
-                                and tc_entry.get("iteration", 0) == event_iter
-                                and "result" not in tc_entry):
-                            tc_entry["result"] = event.get("result", "")
-                            tc_entry["success"] = event.get("success", True)
-                            break
+                        # 回写 run_trace_tool_calls（用于 agent_trace_snapshot 持久化）
+                        # C-review NIT：按 tc_id 精确匹配 — 原 (tool, iteration) 反向
+                        # 匹配在同轮同工具多次调用时张冠李戴
+                        for tc_entry in reversed(run_trace_tool_calls):
+                            if tc_entry.get("tc_id") == tc_id and "result" not in tc_entry:
+                                tc_entry["result"] = event.get("result", "")
+                                tc_entry["success"] = event.get("success", True)
+                                break
                 elif event.get("type") == "done":
                     # 更新 agent_run 状态
                     final_state = event.get("state", "completed")
@@ -848,6 +910,8 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     await asyncio.to_thread(db.update_agent_run, run_id=run_id, status="failed")
             except Exception:
                 pass
+            # C-review MINOR-12：释放同会话运行占位（客户端断连也会走这里）
+            await _release_run_slot(req.conversation_id, run_id)
 
     # H8 修复：fire-and-forget 任务的异常日志回调
     def _task_exception_logger(name: str):

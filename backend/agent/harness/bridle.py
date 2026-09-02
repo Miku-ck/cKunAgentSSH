@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
+
+from agent.truncation_limits import TRUNC_THRESHOLD, TRUNC_HEAD, TRUNC_TAIL
 from typing import Optional
 
 from .contracts import RunContext
@@ -55,9 +57,10 @@ class CompressionConfig:
     compress_threshold: float = 0.7          # 触发压缩的阈值（占上下文窗口比例）
     keep_recent_turns: int = 3               # 压缩后保留的最近完整消息轮数
     tool_result_summary_chars: int = 500     # 工具结果摘要最大字符数
-    tool_result_max_chars: int = 4000        # 单条工具结果最大字符数
-    head_chars: int = 1500                   # 智能截断时保留的头部字符数
-    tail_chars: int = 1000                   # 智能截断时保留的尾部字符数
+    # C-review NIT：截断常量单一数据源 agent.truncation_limits（原四处手工复制）
+    tool_result_max_chars: int = TRUNC_THRESHOLD  # 单条工具结果最大字符数
+    head_chars: int = TRUNC_HEAD                 # 智能截断时保留的头部字符数
+    tail_chars: int = TRUNC_TAIL                 # 智能截断时保留的尾部字符数
 
 
 @dataclass
