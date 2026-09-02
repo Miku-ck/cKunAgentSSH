@@ -109,6 +109,8 @@ function copyContent(text: string) {
   color: var(--text-primary);
   border: 1px solid var(--border-subtle);
   border-radius: 0;
+  /* 左移 1px：左边框与面板左边框重叠成单线，避免相邻双线（叠加） */
+  transform: translateX(-1px);
 }
 
 .message-block.assistant .message-bubble {
