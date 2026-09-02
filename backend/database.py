@@ -14,6 +14,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
+import httpx
+
 logger = logging.getLogger(__name__)
 
 _db_path: str = ""
@@ -390,6 +392,42 @@ def init_db(db_path: str) -> None:
             CREATE INDEX IF NOT EXISTS ix_audit_target ON audit_log(target_id);
             CREATE INDEX IF NOT EXISTS ix_audit_env    ON audit_log(environment);
 
+            -- 定时任务（支持分钟间隔 / 每天 / 每周 / 每月）
+            CREATE TABLE IF NOT EXISTS schedules (
+                id              TEXT PRIMARY KEY,
+                name            TEXT NOT NULL,
+                schedule_type   TEXT NOT NULL DEFAULT 'interval',
+                interval_minutes INTEGER DEFAULT 60,
+                time_hour       INTEGER DEFAULT 9,
+                time_minute     INTEGER DEFAULT 0,
+                weekday         INTEGER DEFAULT 0,
+                day_of_month    INTEGER DEFAULT 1,
+                target_host     TEXT DEFAULT '',
+                task_prompt     TEXT DEFAULT '',
+                enabled         INTEGER DEFAULT 1,
+                next_run_at     TEXT,
+                last_run_at     TEXT,
+                last_status     TEXT DEFAULT 'idle',
+                last_run_id     TEXT,
+                created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS ix_schedules_enabled ON schedules(enabled, next_run_at);
+
+            -- 定时任务执行历史
+            CREATE TABLE IF NOT EXISTS schedule_runs (
+                id          TEXT PRIMARY KEY,
+                schedule_id TEXT NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+                run_id      TEXT DEFAULT '',
+                status      TEXT NOT NULL DEFAULT 'idle',
+                summary     TEXT DEFAULT '',
+                error       TEXT DEFAULT '',
+                started_at  TEXT,
+                finished_at TEXT,
+                created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS ix_schedule_runs_sid ON schedule_runs(schedule_id, created_at);
+
 
         """)
 
@@ -519,47 +557,96 @@ def _fix_model_name_and_id(conn: sqlite3.Connection) -> None:
             )
 
 
+def _probe_first_model(base_url: str, timeout: float = 3.0) -> Optional[str]:
+    """探测 OpenAI 兼容服务 /models 端点的第一个模型名。
+
+    供首启模型自动种子使用：任何失败（不可达/超时/4xx/空列表/坏响应）
+    都返回 None 并只写 warning 日志，静默降级为"不种子"，绝不阻塞启动。
+    表仍为空时，下次 init_db（应用重启）会自动重试探测。
+    """
+    try:
+        url = base_url.rstrip("/")
+        if not url.endswith("/models"):
+            url = f"{url}/models"
+        resp = httpx.get(url, timeout=timeout)
+        resp.raise_for_status()
+        items = (resp.json() or {}).get("data") or []
+        if items and items[0].get("id"):
+            return str(items[0]["id"])
+        logger.warning("模型自动探测: /models 返回空列表 %s", base_url)
+    except Exception as e:
+        logger.warning(
+            "模型自动探测失败 %s: %s（未种子模型，可在设置中手动配置；"
+            "服务启动后重启应用将自动重试）", base_url, e,
+        )
+    return None
+
+
+def _insert_seed_model(
+    conn: sqlite3.Connection,
+    *,
+    model_id: str,
+    base_url: str,
+    api_key: str,
+    supports_thinking: bool,
+    is_default: bool,
+    sort_order: int,
+    now: str,
+) -> None:
+    """插入一条首启种子模型配置（固定保守默认参数，用户可在 UI 调整）"""
+    conn.execute(
+        "INSERT INTO models_config "
+        "(id, name, model_id, provider, base_url, api_key, supports_thinking, supports_image, supports_tool_calling, "
+        "is_default, is_default_ssh, "
+        "temperature, max_tokens, max_output_tokens, reasoning_tokens, top_p, sort_order, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 0.7, 16384, 4096, 8192, 0.9, ?, ?, ?)",
+        (
+            model_id, model_id, model_id, "vllm",
+            base_url, api_key, int(supports_thinking), int(is_default), int(is_default),
+            sort_order, now, now,
+        ),
+    )
+
+
 def _seed_models(conn: sqlite3.Connection) -> None:
-    """首次运行时种子默认模型配置（来自 config.py 的默认值）"""
+    """首启模型种子 — 仅在 models_config 表为空且显式配置 VLLM_BASE_URL 时执行。
+
+    - 探测 {base_url}/models，取第一个模型名种子为默认模型（is_default + is_default_ssh）
+    - 另设 VLLM_THINKING_URL（须与主 URL 不同）时，同流程再种子一条思考模型
+    - 未显式配置 / 探测失败：不种子，模型列表留空，由设置 UI 引导用户配置
+    - 已有数据的库（表非空）：从不改动
+    """
     row = conn.execute("SELECT COUNT(*) AS cnt FROM models_config").fetchone()
     if row["cnt"] > 0:
         return
     try:
         from config import settings
-        base_url = settings.vllm_base_url
-        thinking_url = settings.vllm_thinking_url or base_url
-        api_key = settings.vllm_api_key
+        base_url = (settings.vllm_base_url or "").strip()
+        thinking_url = (settings.vllm_thinking_url or "").strip()
+        api_key = settings.vllm_api_key or "EMPTY"
     except Exception:
-        base_url = "http://192.168.150.40:9030/v1"
-        thinking_url = "http://192.168.150.40:9031/v1"
-        api_key = "EMPTY"
+        return
+    if not base_url:
+        # 未显式配置：不种子，等待用户在设置 UI 配置
+        return
+
     now = _now()
-    # 默认模型 1: Qwen3-VL（对应服务器 --served-model-name Qwen3-VL）
-    conn.execute(
-        "INSERT INTO models_config "
-        "(id, name, model_id, provider, base_url, api_key, supports_thinking, supports_image, supports_tool_calling, "
-        "is_default, is_default_ssh, "
-        "temperature, max_tokens, max_output_tokens, reasoning_tokens, top_p, sort_order, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            "Qwen3-VL", "Qwen3-VL-8B-Instruct", "Qwen3-VL", "qwen",
-            base_url, api_key, 0, 0, 0,
-            0.7, 16384, 4096, 8192, 0.9, 0, now, now,
-        ),
-    )
-    # 默认模型 2: Qwen3-VL-Thinking（对应服务器 --served-model-name Qwen3-VL-Thinking）
-    conn.execute(
-        "INSERT INTO models_config "
-        "(id, name, model_id, provider, base_url, api_key, supports_thinking, supports_image, supports_tool_calling, "
-        "is_default, is_default_ssh, "
-        "temperature, max_tokens, max_output_tokens, reasoning_tokens, top_p, sort_order, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            "Qwen3-VL-Thinking", "Qwen3-VL-8B-Thinking", "Qwen3-VL-Thinking", "qwen",
-            thinking_url, api_key, 1, 0, 0,
-            0.7, 16384, 4096, 8192, 0.9, 1, now, now,
-        ),
-    )
+    model_id = _probe_first_model(base_url)
+    if model_id:
+        _insert_seed_model(
+            conn, model_id=model_id, base_url=base_url, api_key=api_key,
+            supports_thinking=False, is_default=True, sort_order=0, now=now,
+        )
+        logger.info("自动探测种子默认模型: %s @ %s", model_id, base_url)
+
+    if thinking_url and thinking_url.rstrip("/") != base_url.rstrip("/"):
+        t_model = _probe_first_model(thinking_url)
+        if t_model:
+            _insert_seed_model(
+                conn, model_id=t_model, base_url=thinking_url, api_key=api_key,
+                supports_thinking=True, is_default=False, sort_order=1, now=now,
+            )
+            logger.info("自动探测种子思考模型: %s @ %s", t_model, thinking_url)
 
 
 def _now() -> str:
@@ -2017,6 +2104,232 @@ def delete_agent_strategy(strategy_id: str) -> bool:
         )
         conn.commit()
         return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+# ── 定时任务（schedules） ───────────────────────────────────────────────────────
+
+_SCHEDULE_COLS = (
+    "id, name, schedule_type, interval_minutes, time_hour, time_minute, "
+    "weekday, day_of_month, target_host, task_prompt, enabled, next_run_at, "
+    "last_run_at, last_status, last_run_id, created_at, updated_at"
+)
+
+
+def list_schedules() -> list[dict]:
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            f"SELECT {_SCHEDULE_COLS} FROM schedules ORDER BY created_at DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_schedule(schedule_id: str) -> Optional[dict]:
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            f"SELECT {_SCHEDULE_COLS} FROM schedules WHERE id = ?",
+            (schedule_id,),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_enabled_schedules() -> list[dict]:
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            f"SELECT {_SCHEDULE_COLS} FROM schedules WHERE enabled = 1"
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def create_schedule(data: dict) -> dict:
+    now = _now()
+    sid = data.get("id") or _new_id()
+    conn = _get_conn()
+    try:
+        conn.execute(
+            """INSERT INTO schedules (
+                id, name, schedule_type, interval_minutes, time_hour, time_minute,
+                weekday, day_of_month, target_host, task_prompt, enabled,
+                next_run_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                sid,
+                (data.get("name") or "").strip(),
+                data.get("schedule_type") or "interval",
+                int(data.get("interval_minutes") or 60),
+                int(data.get("time_hour") or 9),
+                int(data.get("time_minute") or 0),
+                int(data.get("weekday") or 0),
+                int(data.get("day_of_month") or 1),
+                data.get("target_host") or "",
+                data.get("task_prompt") or "",
+                1 if data.get("enabled", True) else 0,
+                data.get("next_run_at"),
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return get_schedule(sid)
+
+
+def update_schedule(schedule_id: str, fields: dict) -> Optional[dict]:
+    now = _now()
+    allowed = {
+        "name", "schedule_type", "interval_minutes", "time_hour", "time_minute",
+        "weekday", "day_of_month", "target_host", "task_prompt", "enabled",
+    }
+    cols, vals = [], []
+    for k, v in fields.items():
+        if k not in allowed:
+            continue
+        cols.append(f"{k} = ?")
+        vals.append(v)
+    if not cols:
+        return get_schedule(schedule_id)
+    cols.append("updated_at = ?")
+    vals.append(now)
+    vals.append(schedule_id)
+    conn = _get_conn()
+    try:
+        conn.execute(
+            f"UPDATE schedules SET {', '.join(cols)} WHERE id = ?", vals
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return get_schedule(schedule_id)
+
+
+def set_schedule_next_run(schedule_id: str, next_run_at: Optional[str]) -> None:
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "UPDATE schedules SET next_run_at = ?, updated_at = ? WHERE id = ?",
+            (next_run_at, _now(), schedule_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_schedule_run(
+    schedule_id: str,
+    status: str,
+    last_run_at: Optional[str] = None,
+    last_run_id: str = "",
+) -> None:
+    conn = _get_conn()
+    try:
+        conn.execute(
+            """UPDATE schedules SET last_status = ?, updated_at = ?
+               WHERE id = ?""",
+            (status, _now(), schedule_id),
+        )
+        if last_run_at:
+            conn.execute(
+                "UPDATE schedules SET last_run_at = ? WHERE id = ?",
+                (last_run_at, schedule_id),
+            )
+        if last_run_id:
+            conn.execute(
+                "UPDATE schedules SET last_run_id = ? WHERE id = ?",
+                (last_run_id, schedule_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_schedule(schedule_id: str) -> bool:
+    conn = _get_conn()
+    try:
+        cur = conn.execute("DELETE FROM schedules WHERE id = ?", (schedule_id,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+# ── 定时任务执行历史（schedule_runs） ───────────────────────────────────────────
+
+def create_schedule_run(schedule_id: str, run_id: str) -> dict:
+    rid = _new_id()
+    now = _now()
+    conn = _get_conn()
+    try:
+        conn.execute(
+            """INSERT INTO schedule_runs (id, schedule_id, run_id, status, started_at, created_at)
+               VALUES (?, ?, ?, 'running', ?, ?)""",
+            (rid, schedule_id, run_id, now, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {
+        "id": rid, "schedule_id": schedule_id, "run_id": run_id,
+        "status": "running", "summary": "", "error": "",
+        "started_at": now, "finished_at": None, "created_at": now,
+    }
+
+
+def update_schedule_run(
+    run_key: str,
+    status: Optional[str] = None,
+    summary: Optional[str] = None,
+    error: Optional[str] = None,
+) -> None:
+    """run_key 既可能是 schedule_runs.id 也可能是 harness run_id"""
+    cols, vals = [], []
+    if status is not None:
+        cols.append("status = ?")
+        vals.append(status)
+        if status in ("completed", "failed"):
+            cols.append("finished_at = ?")
+            vals.append(_now())
+    if summary is not None:
+        cols.append("summary = ?")
+        vals.append(summary)
+    if error is not None:
+        cols.append("error = ?")
+        vals.append(error)
+    if not cols:
+        return
+    vals.append(run_key)
+    conn = _get_conn()
+    try:
+        conn.execute(
+            f"UPDATE schedule_runs SET {', '.join(cols)} WHERE id = ? OR run_id = ?",
+            vals + [run_key],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_schedule_runs(schedule_id: str, limit: int = 50) -> list[dict]:
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            """SELECT id, schedule_id, run_id, status, summary, error,
+                      started_at, finished_at, created_at
+               FROM schedule_runs WHERE schedule_id = ?
+               ORDER BY created_at DESC LIMIT ?""",
+            (schedule_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
     finally:
         conn.close()
 

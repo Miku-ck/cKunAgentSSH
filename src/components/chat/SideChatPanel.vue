@@ -186,8 +186,21 @@
           <slot name="toolbar-left"></slot>
         </div>
         <div class="toolbar-right">
-          <!-- 模型选择器 -->
-          <div class="model-selector" ref="modelSelectorRef">
+          <!-- 模型选择器（未配置模型时显示引导空态） -->
+          <div
+            v-if="models.length === 0"
+            class="model-empty-hint"
+            role="button"
+            tabindex="0"
+            title="尚未配置模型，点击去设置"
+            @click="openSettings('models')"
+            @keydown.enter="openSettings('models')"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <span>尚未配置模型</span>
+            <span class="model-empty-hint-action">去设置</span>
+          </div>
+          <div v-else class="model-selector" ref="modelSelectorRef">
             <button class="model-selector-btn" @click="showModelDropdown = !showModelDropdown">
               <span class="model-name">{{ currentModelName }}</span>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="10" height="10"><polyline points="6 9 12 15 18 9"/></svg>
@@ -237,6 +250,7 @@ import MessageItem from '@/components/chat/MessageItem.vue'
 import HistoryPanel from '@/components/chat/HistoryPanel.vue'
 import { useResizablePanel } from '@/composables/useResizablePanel'
 import { useModelSelector } from '@/composables/useModelSelector'
+import { useSettings } from '@/composables/useSettings'
 import AgentTraceInline from '@/components/agent/AgentTraceInline.vue'
 import { useAgentStore } from '@/stores/agent'
 import { useSettingsStore } from '@/stores/settings'
@@ -472,6 +486,7 @@ const { showModelDropdown, modelSelectorRef, currentModelName, selectModel } = u
   setSelectedId: (id) => emit('update:selectedModelId', id),
   models: () => props.models,
 })
+const { openSettings } = useSettings()
 
 function handleSelectModel(id: string) {
   selectModel(id)
@@ -1014,6 +1029,31 @@ defineExpose({ focusInput })
 }
 
 /* Model Selector */
+.model-empty-hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px dashed #4d4d50;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
+}
+.model-empty-hint:hover,
+.model-empty-hint:focus-visible {
+  color: var(--accent-primary);
+  border-color: var(--accent-primary);
+  outline: none;
+}
+.model-empty-hint-action {
+  color: var(--accent-primary);
+  font-weight: 500;
+}
+
 .model-selector {
   position: relative;
 }

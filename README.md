@@ -334,6 +334,23 @@ INIT → THINKING → [LLM 调用] → 有工具调用?
 - Python 3.11+
 - 可访问的 OpenAI 兼容 LLM 服务（vLLM / Ollama / OpenAI）
 
+### 首次启动的模型配置
+
+首次启动**不会预填任何模型**（模型列表为空），请在 设置 → 模型 中添加你的 LLM 端点。
+
+开发者/演示环境若希望保留"首启自动探测"，可在 `backend/.env`（或进程环境变量）中显式开启：
+
+```bash
+# 必填：首启探测 {VLLM_BASE_URL}/models，取第一个模型自动种子为默认模型
+VLLM_BASE_URL=http://192.168.150.40:9030/v1
+# 可选：再探测并种子一条思考模型（supports_thinking）
+VLLM_THINKING_URL=http://192.168.150.40:9031/v1
+# 可选：API Key（本地 vLLM 默认 EMPTY）
+VLLM_API_KEY=EMPTY
+```
+
+探测失败（服务未启动/无模型）时不种子、不阻塞启动；服务就绪后重启应用会自动重试。
+
 ### 启动
 
 ```bash
