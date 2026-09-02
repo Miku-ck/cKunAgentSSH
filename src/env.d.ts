@@ -46,6 +46,8 @@ interface SSHConnectionRecord {
   passphrase?: string
   /** 备注(单行文字,最多 10 字). 旧数据可能没有此字段,但 tags 数组可作为兜底 */
   note?: string
+  /** 目标环境标记('test' | 'prod'). 驱动生产环境高风险命令的审计与审批强化. 旧数据默认 'test' */
+  environment?: 'test' | 'prod'
   tags: string[]
   readyTimeout?: number       // 毫秒
   keepaliveInterval?: number  // 毫秒

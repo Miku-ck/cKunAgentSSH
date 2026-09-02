@@ -458,7 +458,8 @@ async function handleSave() {
       toast.error(`模型未持久化：${store.modelsError}`, 8000)
       // 不关对话框，让用户看到 toast 并可重试
     } else {
-      // 不自动关闭：保存成功后保持弹窗打开，由用户手动点击「关闭/取消」关闭
+      // 保存成功后关闭窗口（× / 取消 / 保存均有关闭入口；点遮罩不关，防止误触丢表单）
+      closeDialog()
       toast.success(isEditing.value ? '模型已更新' : '模型已添加')
     }
   } else {

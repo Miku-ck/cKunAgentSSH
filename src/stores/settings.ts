@@ -57,8 +57,8 @@ export interface AppSettings {
     maxItems: number
   }
   appearance: {
-    theme: 'dark' | 'light' | 'system' | 'blue-screen'
-    accent: 'blue' | 'purple' | 'green' | 'orange' | 'white'
+    theme: 'dark' | 'light' | 'system' | 'blue-screen' | 'forest' | 'mint' | 'bee' | 'coral'
+    accent: 'blue' | 'purple' | 'green' | 'orange' | 'white' | 'forest' | 'mint' | 'bee' | 'coral'
     fontSize: number
     sidebarWidth: number
     compact: boolean

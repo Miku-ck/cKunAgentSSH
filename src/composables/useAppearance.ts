@@ -4,8 +4,8 @@ import { useSettingsStore } from '@/stores/settings'
 // 原实现 Monaco 主题在启动时硬编码，不随设置变化
 import { applyMonacoTheme } from '@/monaco-setup'
 
-type Theme = 'dark' | 'light' | 'system' | 'blue-screen'
-type Accent = 'blue' | 'purple' | 'green' | 'orange' | 'white'
+type Theme = 'dark' | 'light' | 'system' | 'blue-screen' | 'forest' | 'mint' | 'bee' | 'coral'
+type Accent = 'blue' | 'purple' | 'green' | 'orange' | 'white' | 'forest' | 'mint' | 'bee' | 'coral'
 
 const ACCENT_MAP: Record<Accent, { hex: string; rgb: string }> = {
   blue:   { hex: '#0078d4', rgb: '0, 120, 212' },
@@ -13,6 +13,10 @@ const ACCENT_MAP: Record<Accent, { hex: string; rgb: string }> = {
   green:  { hex: '#4ec9b0', rgb: '78, 201, 176' },
   orange: { hex: '#ce9178', rgb: '206, 145, 120' },
   white:  { hex: '#ffffff', rgb: '255, 255, 255' },
+  forest: { hex: '#2ea44f', rgb: '46, 164, 79' },
+  mint:   { hex: '#5eead4', rgb: '94, 234, 212' },
+  bee:    { hex: '#f5c542', rgb: '245, 197, 66' },
+  coral:  { hex: '#ff7b72', rgb: '255, 123, 114' },
 }
 
 // 修复：模块级标记，确保 darkMq 监听器只添加一次（多实例共享场景）

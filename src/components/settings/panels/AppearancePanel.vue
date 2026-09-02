@@ -10,6 +10,10 @@
           <option value="dark">深色</option>
           <option value="light">浅色</option>
           <option value="blue-screen">蓝屏</option>
+          <option value="forest">森林</option>
+          <option value="mint">薄荷</option>
+          <option value="bee">蜜蜂</option>
+          <option value="coral">珊瑚</option>
           <option value="system">跟随系统</option>
         </select>
       </SettingRow>
@@ -226,7 +230,7 @@ watch(
 )
 onMounted(() => loadPreview(settings.appearance.backgroundImage))
 
-type Accent = 'blue' | 'purple' | 'green' | 'orange' | 'white'
+type Accent = 'blue' | 'purple' | 'green' | 'orange' | 'white' | 'forest' | 'mint' | 'bee' | 'coral'
 
 const accentOptions: { value: Accent; label: string; color: string }[] = [
   { value: 'blue',   label: '蓝色', color: '#58a6ff' },
@@ -234,6 +238,10 @@ const accentOptions: { value: Accent; label: string; color: string }[] = [
   { value: 'green',  label: '绿色', color: '#4ec9b0' },
   { value: 'orange', label: '橙色', color: '#ce9178' },
   { value: 'white',  label: '白色', color: '#ffffff' },
+  { value: 'forest', label: '森林', color: '#2ea44f' },
+  { value: 'mint',   label: '薄荷', color: '#5eead4' },
+  { value: 'bee',    label: '蜜蜂', color: '#f5c542' },
+  { value: 'coral',  label: '珊瑚', color: '#ff7b72' },
 ]
 
 // 终端字体选项
@@ -285,6 +293,7 @@ const terminalFontOptions = TERMINAL_FONT_OPTIONS
 /* 颜色样本 */
 .color-swatches {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 .swatch-btn {

@@ -194,3 +194,91 @@
   --bg-slider: #1a3a6e;
   --border-input: #1e3a5f;
 }
+
+/* ── 森林主题（深墨绿） ── */
+[data-theme="forest"] {
+  --bg-base: #0b1a12;
+  --bg-panel: #0b1a12;
+  --bg-surface: #0b1a12;
+  --bg-elevated: #0b1a12;
+  --bg-hover: rgba(255,255,255,0.05);
+  --bg-active: rgba(255,255,255,0.10);
+  --divider-primary: #13261b;
+  --divider-secondary: #1d3a28;
+  --border-default: #2a4a36;
+  --border-subtle: #1d3526;
+  --text-primary: #d3e8d9;
+  --text-secondary: #9db8a4;
+  --text-tertiary: #6d8a76;
+  --bg-sidebar: #0b1a12;
+  --bg-input: #0b1a12;
+  --bg-code: #0b1a12;
+  --bg-slider: #26402f;
+  --border-input: #2a4a36;
+}
+
+/* ── 薄荷主题（深青） ── */
+[data-theme="mint"] {
+  --bg-base: #0a1b1a;
+  --bg-panel: #0a1b1a;
+  --bg-surface: #0a1b1a;
+  --bg-elevated: #0a1b1a;
+  --bg-hover: rgba(255,255,255,0.05);
+  --bg-active: rgba(255,255,255,0.10);
+  --divider-primary: #122928;
+  --divider-secondary: #1b3d3b;
+  --border-default: #27514e;
+  --border-subtle: #1c3a38;
+  --text-primary: #d0ece8;
+  --text-secondary: #9cc4bf;
+  --text-tertiary: #6b938e;
+  --bg-sidebar: #0a1b1a;
+  --bg-input: #0a1b1a;
+  --bg-code: #0a1b1a;
+  --bg-slider: #24504b;
+  --border-input: #27514e;
+}
+
+/* ── 蜜蜂主题（深琥珀） ── */
+[data-theme="bee"] {
+  --bg-base: #1a1206;
+  --bg-panel: #1a1206;
+  --bg-surface: #1a1206;
+  --bg-elevated: #1a1206;
+  --bg-hover: rgba(255,255,255,0.05);
+  --bg-active: rgba(255,255,255,0.10);
+  --divider-primary: #2b2010;
+  --divider-secondary: #3f2f18;
+  --border-default: #57411f;
+  --border-subtle: #3f2f18;
+  --text-primary: #ece0c4;
+  --text-secondary: #c2b08a;
+  --text-tertiary: #8f7d57;
+  --bg-sidebar: #1a1206;
+  --bg-input: #1a1206;
+  --bg-code: #1a1206;
+  --bg-slider: #4a3a1e;
+  --border-input: #57411f;
+}
+
+/* ── 珊瑚主题（深红珊瑚） ── */
+[data-theme="coral"] {
+  --bg-base: #180d0b;
+  --bg-panel: #180d0b;
+  --bg-surface: #180d0b;
+  --bg-elevated: #180d0b;
+  --bg-hover: rgba(255,255,255,0.05);
+  --bg-active: rgba(255,255,255,0.10);
+  --divider-primary: #2a1713;
+  --divider-secondary: #3d211c;
+  --border-default: #543028;
+  --border-subtle: #3d211c;
+  --text-primary: #f0dcd7;
+  --text-secondary: #c5a6a0;
+  --text-tertiary: #92746e;
+  --bg-sidebar: #180d0b;
+  --bg-input: #180d0b;
+  --bg-code: #180d0b;
+  --bg-slider: #472a23;
+  --border-input: #543028;
+}

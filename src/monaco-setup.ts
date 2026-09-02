@@ -124,6 +124,134 @@ monaco.editor.defineTheme('ckun-blue-screen', {
   },
 })
 
+// 森林主题：editor.background 与 --bg-base (#0b1a12) 一致
+monaco.editor.defineTheme('ckun-forest', {
+  base: 'vs-dark',
+  inherit: true,
+  rules: [
+    { token: 'comment', foreground: '6d8a76' },
+    { token: 'keyword', foreground: '7ee2a8' },
+    { token: 'string', foreground: 'a5d6ff' },
+    { token: 'number', foreground: '79c0ff' },
+    { token: 'type', foreground: 'ffa657' },
+  ],
+  colors: {
+    'editor.background': '#0b1a12',
+    'editor.foreground': '#d3e8d9',
+    'editorLineNumber.foreground': '#6d8a76',
+    'editorLineNumber.activeForeground': '#d3e8d9',
+    'editor.selectionBackground': '#2a4a36',
+    'editor.lineHighlightBackground': '#1d3526',
+    'editorCursor.foreground': '#d3e8d9',
+    'editorWhitespace.foreground': '#2a4a36',
+    'editorIndentGuide.background': '#1d3526',
+    'editorIndentGuide.activeBackground': '#3a5a44',
+    'editorGutter.background': '#0b1a12',
+    'editorWidget.background': '#0b1a12',
+    'editorWidget.border': '#2a4a36',
+    'editorSuggestWidget.background': '#0b1a12',
+    'editorSuggestWidget.border': '#2a4a36',
+    'editorSuggestWidget.selectedBackground': '#2a4a36',
+    'minimap.background': '#0b1a12',
+  },
+})
+
+// 薄荷主题：editor.background 与 --bg-base (#0a1b1a) 一致
+monaco.editor.defineTheme('ckun-mint', {
+  base: 'vs-dark',
+  inherit: true,
+  rules: [
+    { token: 'comment', foreground: '6b938e' },
+    { token: 'keyword', foreground: '7eead9' },
+    { token: 'string', foreground: 'a5d6ff' },
+    { token: 'number', foreground: '79c0ff' },
+    { token: 'type', foreground: 'ffa657' },
+  ],
+  colors: {
+    'editor.background': '#0a1b1a',
+    'editor.foreground': '#d0ece8',
+    'editorLineNumber.foreground': '#6b938e',
+    'editorLineNumber.activeForeground': '#d0ece8',
+    'editor.selectionBackground': '#27514e',
+    'editor.lineHighlightBackground': '#1c3a38',
+    'editorCursor.foreground': '#d0ece8',
+    'editorWhitespace.foreground': '#27514e',
+    'editorIndentGuide.background': '#1c3a38',
+    'editorIndentGuide.activeBackground': '#3f6b66',
+    'editorGutter.background': '#0a1b1a',
+    'editorWidget.background': '#0a1b1a',
+    'editorWidget.border': '#27514e',
+    'editorSuggestWidget.background': '#0a1b1a',
+    'editorSuggestWidget.border': '#27514e',
+    'editorSuggestWidget.selectedBackground': '#27514e',
+    'minimap.background': '#0a1b1a',
+  },
+})
+
+// 蜜蜂主题：editor.background 与 --bg-base (#1a1206) 一致
+monaco.editor.defineTheme('ckun-bee', {
+  base: 'vs-dark',
+  inherit: true,
+  rules: [
+    { token: 'comment', foreground: '8f7d57' },
+    { token: 'keyword', foreground: 'f5c542' },
+    { token: 'string', foreground: 'a5d6ff' },
+    { token: 'number', foreground: '79c0ff' },
+    { token: 'type', foreground: 'ffa657' },
+  ],
+  colors: {
+    'editor.background': '#1a1206',
+    'editor.foreground': '#ece0c4',
+    'editorLineNumber.foreground': '#8f7d57',
+    'editorLineNumber.activeForeground': '#ece0c4',
+    'editor.selectionBackground': '#57411f',
+    'editor.lineHighlightBackground': '#3f2f18',
+    'editorCursor.foreground': '#ece0c4',
+    'editorWhitespace.foreground': '#57411f',
+    'editorIndentGuide.background': '#3f2f18',
+    'editorIndentGuide.activeBackground': '#6b5227',
+    'editorGutter.background': '#1a1206',
+    'editorWidget.background': '#1a1206',
+    'editorWidget.border': '#57411f',
+    'editorSuggestWidget.background': '#1a1206',
+    'editorSuggestWidget.border': '#57411f',
+    'editorSuggestWidget.selectedBackground': '#57411f',
+    'minimap.background': '#1a1206',
+  },
+})
+
+// 珊瑚主题：editor.background 与 --bg-base (#180d0b) 一致
+monaco.editor.defineTheme('ckun-coral', {
+  base: 'vs-dark',
+  inherit: true,
+  rules: [
+    { token: 'comment', foreground: '92746e' },
+    { token: 'keyword', foreground: 'ff9a8f' },
+    { token: 'string', foreground: 'a5d6ff' },
+    { token: 'number', foreground: '79c0ff' },
+    { token: 'type', foreground: 'ffa657' },
+  ],
+  colors: {
+    'editor.background': '#180d0b',
+    'editor.foreground': '#f0dcd7',
+    'editorLineNumber.foreground': '#92746e',
+    'editorLineNumber.activeForeground': '#f0dcd7',
+    'editor.selectionBackground': '#543028',
+    'editor.lineHighlightBackground': '#3d211c',
+    'editorCursor.foreground': '#f0dcd7',
+    'editorWhitespace.foreground': '#543028',
+    'editorIndentGuide.background': '#3d211c',
+    'editorIndentGuide.activeBackground': '#6b3a30',
+    'editorGutter.background': '#180d0b',
+    'editorWidget.background': '#180d0b',
+    'editorWidget.border': '#543028',
+    'editorSuggestWidget.background': '#180d0b',
+    'editorSuggestWidget.border': '#543028',
+    'editorSuggestWidget.selectedBackground': '#543028',
+    'minimap.background': '#180d0b',
+  },
+})
+
 // 默认主题
 monaco.editor.setTheme('ckun-dark')
 
@@ -131,16 +259,22 @@ monaco.editor.setTheme('ckun-dark')
 // 主题切换函数 — 供 useAppearance.ts 调用
 // ──────────────────────────────────────────────────────────────────────────────
 
-type AppTheme = 'dark' | 'light' | 'system' | 'blue-screen'
+type AppTheme = 'dark' | 'light' | 'system' | 'blue-screen' | 'forest' | 'mint' | 'bee' | 'coral'
 
-const THEME_MAP: Record<string, 'ckun-dark' | 'ckun-light' | 'ckun-blue-screen'> = {
+type MonacoThemeName = 'ckun-dark' | 'ckun-light' | 'ckun-blue-screen' | 'ckun-forest' | 'ckun-mint' | 'ckun-bee' | 'ckun-coral'
+
+const THEME_MAP: Record<string, MonacoThemeName> = {
   dark: 'ckun-dark',
   light: 'ckun-light',
   'blue-screen': 'ckun-blue-screen',
+  forest: 'ckun-forest',
+  mint: 'ckun-mint',
+  bee: 'ckun-bee',
+  coral: 'ckun-coral',
 }
 
 export function applyMonacoTheme(theme: AppTheme): void {
-  let monacoTheme: 'ckun-dark' | 'ckun-light' | 'ckun-blue-screen'
+  let monacoTheme: MonacoThemeName
   if (theme === 'system') {
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
     monacoTheme = prefersDark ? 'ckun-dark' : 'ckun-light'
