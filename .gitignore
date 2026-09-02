@@ -75,5 +75,8 @@ Desktop.ini
 # Build artifacts
 *.tsbuildinfo
 
+# 本地 PowerShell shim（不入库）
+_bin/
+
 # pytest 临时缓存目录（WinError 5 残留，勿提交）
 pytest-cache-files-*/
