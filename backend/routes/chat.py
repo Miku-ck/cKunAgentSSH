@@ -209,6 +209,17 @@ async def stream_chat(req: StreamChatRequest, request: Request):
         _reasoning_budget,
     )
 
+    # C-review M4：同会话并发 stream 互斥 — 原子状态转移抢锁。
+    # 原实现并发请求各写 user 消息、in_progress→completed 互相覆盖：
+    # 历史交错、post_processor 双份执行、turn_index 漂移（双击发送即触发）。
+    # 抢锁放在全部只读准备之后，此后至生成器之间无 await（不会在持锁前
+    # 抛异常泄漏锁）；生成器自身各终态路径（completed/failed/断连复位）负责释放。
+    if not await asyncio.to_thread(db.try_begin_conversation_stream, req.conversation_id):
+        raise HTTPException(
+            status_code=409,
+            detail="该会话已有进行中的回复，请等上一条回复完成后再发送",
+        )
+
     return StreamingResponse(
         _generate_stream(
             base_url=model_cfg["base_url"],
@@ -266,7 +277,8 @@ async def _generate_stream(
             db.add_message, conversation_id, "user", user_message, model_used=model_id,
         )
         await asyncio.to_thread(db.touch_conversation, conversation_id)
-        await asyncio.to_thread(db.update_conversation_status, conversation_id, "in_progress")
+        # C-review M4：in_progress 已由 stream_chat 入口的 try_begin_conversation_stream
+        # 原子抢锁置好，此处不再重复写（保留 touch 更新时间戳）
 
         # 流式调用 LLM；推理/思考内容的 token 预算（仅 enable_thinking=True 时生效）
         # C-review MINOR-7：预算由调用方（safe_max_tokens 同款数据源）传入，

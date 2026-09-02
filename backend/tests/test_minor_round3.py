@@ -192,6 +192,10 @@ def _patch_chat_deps(monkeypatch, captured: dict):
                         lambda cid: {"id": cid, "title": "t"})
     monkeypatch.setattr(chat_mod.db, "get_recent_messages", lambda cid, limit=20: [])
     monkeypatch.setattr(chat_mod.db, "get_relevant_memories", lambda mode, limit=5: [])
+    # C-review M4：抢锁桩（默认成功），避免测试触碰真实 DB
+    captured.setdefault("acquired", [])
+    monkeypatch.setattr(chat_mod.db, "try_begin_conversation_stream",
+                        lambda cid: captured["acquired"].append(cid) or True)
 
 
 def test_chat_stream_passes_reasoning_budget_when_thinking(monkeypatch):
@@ -291,3 +295,46 @@ def test_mark_stale_agent_runs_failed(monkeypatch):
     assert rows["r3"] == "completed" and rows["r4"] == "failed"
     # 幂等：再跑一次无滞留
     assert db.mark_stale_agent_runs_failed() == 0
+
+
+# ── M4：同会话并发 stream 互斥 ──
+
+def test_chat_stream_rejects_concurrent_stream(monkeypatch):
+    """会话已有进行中的流 → 第二个请求 409（不写消息、不启动生成器）"""
+    import fastapi
+    import routes.chat as chat_mod
+
+    captured = {}
+    _patch_chat_deps(monkeypatch, captured)
+    monkeypatch.setattr(chat_mod.db, "try_begin_conversation_stream",
+                        lambda cid: captured["acquired"].append(cid) or False)
+    with pytest.raises(fastapi.HTTPException) as exc:
+        asyncio.run(chat_mod.stream_chat(_chat_req(enable_thinking=False), None))
+    assert exc.value.status_code == 409
+    assert captured["acquired"] == ["c1"], "抢锁必须针对请求会话执行"
+
+
+def test_try_begin_conversation_stream_atomic(monkeypatch):
+    """非 in_progress → 抢锁成功并置 in_progress；持锁期间二次抢锁失败；
+    释放（completed/failed）后可再抢"""
+    import database as db
+
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE conversations (id TEXT PRIMARY KEY, title TEXT, "
+        "status TEXT DEFAULT 'completed', mode TEXT, "
+        "created_at TEXT, updated_at TEXT)"
+    )
+    conn.execute("INSERT INTO conversations (id, status) VALUES ('c1', 'completed')")
+    conn.commit()
+    monkeypatch.setattr(db, "_get_conn", lambda: _NoClose(conn))
+
+    assert db.try_begin_conversation_stream("c1") is True
+    assert conn.execute("SELECT status FROM conversations WHERE id='c1'").fetchone()[0] == "in_progress"
+    assert db.try_begin_conversation_stream("c1") is False, "持锁期间必须冲突"
+    # 正常结束 / 异常结束释放后均可再抢
+    for release in ("completed", "failed"):
+        conn.execute("UPDATE conversations SET status=? WHERE id='c1'", (release,))
+        conn.commit()
+        assert db.try_begin_conversation_stream("c1") is True

@@ -747,6 +747,28 @@ def update_conversation_status(cid: str, status: str) -> None:
         conn.close()
 
 
+def try_begin_conversation_stream(cid: str) -> bool:
+    """C-review M4：原子抢占会话流式锁。
+
+    仅当会话当前不是 in_progress 时，把它原子地置为 in_progress 并返回 True；
+    已在 in_progress（另一路流进行中）则返回 False。用单条 UPDATE 的 rowcount
+    判定实现"检查 + 抢占"的原子性，避免并发请求各写 user 消息、
+    in_progress→completed 互相覆盖导致历史交错 / 后处理双份执行 / turn_index 漂移。
+    """
+    now = _now()
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            "UPDATE conversations SET status = 'in_progress', updated_at = ? "
+            "WHERE id = ? AND status <> 'in_progress'",
+            (now, cid),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
 def update_conversation_title(cid: str, title: str) -> Optional[dict]:
     """更新会话标题"""
     now = _now()
