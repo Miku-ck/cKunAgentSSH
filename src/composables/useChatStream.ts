@@ -28,6 +28,9 @@ export function useChatStream(options: UseChatStreamOptions) {
   const { mode, getModel } = options
   const streaming = ref(false)
   let abortFn: (() => void) | null = null
+  // M15：流代际计数器 — 每代流自增，回调比对代际后再写共享状态，
+  // 防止旧流的迟到 onError/onDone 清空新流的 abortFn/streaming 或把旧错误写入新消息
+  let currentStreamId = 0
 
   async function startStream<M extends BaseMessage, C extends BaseConversation<M>>(
     params: StartStreamParams<M, C>,
@@ -45,6 +48,9 @@ export function useChatStream(options: UseChatStreamOptions) {
 
     const conv = conversation
     const streamStartTime = Date.now()
+    // M15：本代流 id；isCurrent() 为真才允许回调触碰共享 streaming/abortFn
+    const streamId = ++currentStreamId
+    const isCurrent = () => streamId === currentStreamId
     streaming.value = true
 
     // 后端会话 ID 校验，避免传入 undefined 导致难以定位的错误
@@ -71,6 +77,7 @@ export function useChatStream(options: UseChatStreamOptions) {
       // 附带文件：随用户消息注入 LLM 上下文
       attachments,
       onContent: (token) => {
+        if (!isCurrent()) return  // M15：旧流迟到 token，丢弃
         const last = conv.messages[conv.messages.length - 1]
         if (!last || last.role !== 'assistant') return
         if (streamingEnabled) {
@@ -80,6 +87,7 @@ export function useChatStream(options: UseChatStreamOptions) {
         }
       },
       onReasoning: (token) => {
+        if (!isCurrent()) return  // M15：旧流迟到 token，丢弃
         const last = conv.messages[conv.messages.length - 1]
         if (!last || last.role !== 'assistant') return
         if (streamingEnabled) {
@@ -89,6 +97,7 @@ export function useChatStream(options: UseChatStreamOptions) {
         }
       },
       onError: (err) => {
+        if (!isCurrent()) return  // M15：旧流迟到错误，勿清空新流 abortFn/streaming
         streaming.value = false
         abortFn = null
         const last = conv.messages[conv.messages.length - 1]
@@ -103,6 +112,7 @@ export function useChatStream(options: UseChatStreamOptions) {
         }
       },
       onDone: () => {
+        if (!isCurrent()) return  // M15：旧流迟到完成，勿清空新流状态
         streaming.value = false
         abortFn = null
         const last = conv.messages[conv.messages.length - 1]

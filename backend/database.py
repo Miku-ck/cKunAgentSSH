@@ -536,6 +536,17 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
                 conn.execute(f"ALTER TABLE models_config ADD COLUMN {col} {col_def}")
                 cols.add(col)
 
+    # ── agent_file_changes 内容列迁移（C-review C3：before/after 落库供 undo 兜底）──
+    cursor = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='agent_file_changes'"
+    )
+    if cursor.fetchone():
+        cursor = conn.execute("PRAGMA table_info(agent_file_changes)")
+        afc_cols = {row[1] for row in cursor.fetchall()}
+        for col in ("before_content", "after_content"):
+            if col not in afc_cols:
+                conn.execute(f"ALTER TABLE agent_file_changes ADD COLUMN {col} TEXT")
+
 
 def _fix_model_name_and_id(conn: sqlite3.Connection) -> None:
     """修正 models_config 表中 name 与 model_id 的值（仅当确实反了时）
@@ -952,12 +963,19 @@ def list_disabled_tools(mode: str = "all") -> list[str]:
 
 
 def get_relevant_memories(mode: str, limit: int = 5) -> list[dict]:
-    """获取某模式下最相关的记忆（按最近使用 + 使用次数排序）"""
+    """获取某模式下最相关的记忆（按最近使用 + 使用次数排序）
+
+    C-review M2：原实现读旧表 `memories`，但该表无任何写入者（全库无
+    INSERT INTO memories），永远返回空 → 记忆注入形同虚设。真正的语义记忆
+    由 post_processor → mem_mgr.save_semantic → add_agent_memory 写入
+    `agent_memories`（type='semantic'）。改为读该表 semantic 层，字段形状
+    与旧返回保持一致（调用方仅用 content）。
+    """
     conn = _get_conn()
     try:
         rows = conn.execute(
             "SELECT id, mode, content, source_conv_id, last_used_at, use_count, created_at "
-            "FROM memories WHERE mode = ? "
+            "FROM agent_memories WHERE mode = ? AND type = 'semantic' "
             "ORDER BY last_used_at DESC, use_count DESC "
             "LIMIT ?",
             (mode, limit),
@@ -1729,11 +1747,18 @@ def save_agent_file_changes(agent_run_id: str, changes: list[dict]) -> None:
             (agent_run_id,),
         )
         for c in changes:
+            # C-review C3：before/after_content 一并落库（list[str] 行 → "\n" 拼接）。
+            # /undo 在磁盘备份缺失时（completed 保留期外、进程重启后）依赖此兜底恢复。
+            # 注意：内容在 record_file_write 阶段已截断到 2000 行（内存保护），
+            # 超大文件经此路径恢复的是截断内容。
+            before_lines = c.get("before_content") or []
+            after_lines = c.get("after_content") or []
             conn.execute(
                 "INSERT INTO agent_file_changes "
                 "(id, agent_run_id, file_path, abs_path, operation, "
-                " added_lines, removed_lines, before_size, after_size, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " added_lines, removed_lines, before_size, after_size, created_at, "
+                " before_content, after_content) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     _new_id(),
                     agent_run_id,
@@ -1745,6 +1770,8 @@ def save_agent_file_changes(agent_run_id: str, changes: list[dict]) -> None:
                     c.get("before_size", 0) or 0,
                     c.get("after_size", 0) or 0,
                     c.get("created_at") or _now(),
+                    "\n".join(before_lines) if before_lines else None,
+                    "\n".join(after_lines) if after_lines else None,
                 ),
             )
         conn.commit()

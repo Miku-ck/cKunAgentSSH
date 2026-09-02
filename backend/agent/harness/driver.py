@@ -56,6 +56,18 @@ class Driver:
         telemetry = harness.telemetry
         tools_schema = harness.saddle.schemas() if ctx.config.enable_tools else []
 
+        # C-review M8 修复：run 开始时清空遗留 once 授权（原实现在每轮迭代
+        # 结束时清空，与审批存在时序竞态：permission_needed 发出后、本轮
+        # 迭代结束前用户点"仅本次"，授权被静默清掉，下一轮重发仍被拦 →
+        # "点了允许却仍被拦"）。现在 once 授权在消费时移除
+        # （PermissionGate.check_permission 计数递减），此处仅负责防上个
+        # run 的过期授权泄漏进新 run。
+        try:
+            from .reins import _get_global_permission_gate_sync
+            _get_global_permission_gate_sync().clear_once()
+        except Exception as e:
+            logger.warning("clear_once 失败: %s", e)
+
         # ── agent_start ──
         await harness.reins.check(ReinPoint.AGENT_START, ctx)
 
@@ -311,6 +323,11 @@ class Driver:
             async for ev in self._execute_tool_calls(llm_out, ctx, harness, telemetry, iteration):
                 yield ev
 
+            # C-review M6：工具阶段拦截器要求终止（force_terminated）→ 退出主循环，
+            # 走下方 _emit_done（ctx.state 已是 FAILED）
+            if ctx.metadata.pop("force_terminated", False):
+                break
+
             # ── 裁剪提示注入（必须在 tool 结果消息之后，保证 assistant.tool_calls
             #    与 role=tool 消息紧邻配对；user 提示插在中间会触发 OpenAI/vLLM 400）──
             if deferred:
@@ -466,6 +483,14 @@ class Driver:
                         "duration_ms": 0,
                     },
                 )
+                if pre_tool_decision.terminate:
+                    # C-review M6：拦截器要求终止整个 run（如 LoopDetector 第 3
+                    # 次触发）。原实现 continue 继续下一工具调用/迭代，"强制终止"
+                    # 文案与行为不符。这里 transition(FAILED) + 通知主循环 break。
+                    await ctx.transition(State.FAILED, event="force_terminated")
+                    await harness.reins.check(ReinPoint.AGENT_FAILED, ctx)
+                    ctx.metadata["force_terminated"] = True
+                    break
                 continue
 
             # ── 发 tool_call_start ──
@@ -549,17 +574,15 @@ class Driver:
             if ctx.span_stack:
                 ctx.span_stack.pop()
 
-        # H13 修复 A4（E 修正）：一轮迭代结束（所有工具调用完成后）清空 once 范围授权
-        # once 语义是"仅本次"，必须消费后清空防跨轮污染；
-        # 但原实现在每个工具调用后都全清，会误伤同轮其他工具的 once 授权
-        # （用户为本轮第 N 个工具批了"仅本次"，执行到第 N-1 个工具时被提前清掉）
-        try:
-            from .reins import _get_global_permission_gate_sync
-            _get_global_permission_gate_sync().clear_once()
-        except Exception as e:
-            logger.warning("clear_once 失败: %s", e)
+        # 注：once 授权不再于每轮迭代末清空（C-review M8：改为 run 开始时
+        # 清空 + 消费时移除，消除与审批的时序竞态，见 drive() 开头）
 
-        # ── OBSERVE → THINK ──
+        # C-review M6：force_terminated 时状态已是 FAILED，跳过 OBSERVE→THINK
+        # 转移，避免从终态再转移污染 state_history
+        if ctx.metadata.get("force_terminated"):
+            return
+
+        # ── OBSERVING → THINK ──
         await ctx.transition(State.OBSERVING, event="continue")
         await ctx.transition(State.THINKING, event="continue")
         yield TraceEvent(

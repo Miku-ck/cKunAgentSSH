@@ -1,5 +1,6 @@
 <template>
   <SideChatPanel
+    ref="panelRef"
     mode="ssh"
     :conversations="store.conversations"
     :current-conv-id="store.currentConvId"
@@ -60,8 +61,11 @@ function handleAbort() {
   agentHandleAbort(() => store.abortStream())
 }
 
+// M18：发送被 store 早退拒绝（后端未就绪/无模型/建会话失败）时回滚组件草稿
+const panelRef = ref<InstanceType<typeof SideChatPanel> | null>(null)
 async function handleSend(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = []) {
-  await store.sendMessage(content, { skillIds, attachments })
+  const ok = await store.sendMessage(content, { skillIds, attachments })
+  if (!ok) panelRef.value?.restoreDraft()
 }
 
 /** 上传对话附件：委托给 store（内部会逐个调用 /chat/upload 并 toast 失败） */

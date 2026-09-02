@@ -445,9 +445,11 @@ class LoopDetector:
         current_loop_count = loop_count + 1
 
         if current_loop_count >= 3:
-            # 第 3 次：直接 FAILED
+            # 第 3 次：直接 FAILED（C-review M6：terminate=True 让 driver 真正终止
+            # run — 原实现只发 error 事件 + continue，run 继续烧满 max_iterations）
             return ReinDecision(
                 intercepted=True,
+                terminate=True,
                 intercept_reason=f"循环检测第 {current_loop_count} 次触发，终止运行: {reason}",
                 events=[TraceEvent(
                     kind="error",
@@ -920,6 +922,28 @@ class AuditLogger:
             "AUDIT [%s] iter=%d tool=%s success=%s",
             ctx.run_id, ctx.iteration, last.get("tool", ""), last.get("success"),
         )
+        # C-review C2 修复：原实现只有 FilesystemGuard 的 blocked/denied 分支落
+        # 审计链，"谁批准了什么、实际执行了什么"全部缺失，等保审计目标落空。
+        # 这里为每个真实执行过的工具调用补 executed/failed 记录（append_record
+        # 内部静默失败，不阻塞 run）。被 PRE 拦截的调用不会走到 POST_TOOL_CALL，
+        # 与 blocked/denied 记录不重复。
+        try:
+            args = last.get("args") or {}
+            command = ""
+            if isinstance(args, dict):
+                command = str(args.get("command") or args.get("shell") or args.get("cmd") or "")
+            append_record(
+                action=str(last.get("tool", "")),
+                conclusion="executed" if last.get("success") else "failed",
+                run_id=ctx.run_id,
+                iteration=ctx.iteration,
+                target_type=_audit_target_type(ctx),
+                target_id=_audit_target_id(ctx),
+                environment=getattr(ctx, "environment", "test") or "test",
+                command_raw=command,
+            )
+        except Exception as e:
+            logger.warning("审计 executed/failed 记录失败（不阻塞）: %s", e)
         return ReinDecision()
 
 

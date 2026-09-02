@@ -199,12 +199,16 @@ class ReinDecision:
        - Driver 在 intercepted=True 时按顺序执行 undo_actions
        - 与 ctx.undo_stack 不同：undo_actions 是拦截器临时声明的，不入栈
     3. 注入 inject_messages 到下一轮 LLM
+    4. terminate=True 时（C-review M6）：Driver 拦截后立即 transition(FAILED)
+       并终止整个 run（原实现拦截后 continue，拦截器声称"强制终止"但 run 继续
+       烧满 max_iterations）
     """
     intercepted: bool = False
     intercept_reason: str = ""
     events: list[TraceEvent] = field(default_factory=list)
     undo_actions: list[UndoAction] = field(default_factory=list)
     inject_messages: list[dict[str, str]] = field(default_factory=list)  # 注入到下一轮 LLM 的纠偏消息
+    terminate: bool = False  # 终止整个 run（FAILED）；仅 PRE_TOOL_CALL 的拦截器会设置
 
 
 @runtime_checkable

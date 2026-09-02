@@ -38,13 +38,16 @@ export function finalizeAgentMessage(
   for (let i = msgs.length - 1; i >= 0; i--) {
     if (msgs[i].role === 'assistant' && msgs[i].id.startsWith('temp-agent-')) {
       const trace = agentStore.snapshot()
-      // 失败时 content 为空则回写 errorMessage/warnings，确保用户看到失败原因
+      // 失败/中止时 content 为空则回写 errorMessage/warnings，确保用户看到原因
       let finalContent = agentStore.content || ''
       if (!finalContent.trim()) {
         if (agentStore.errorMessage) {
           finalContent = `错误: ${agentStore.errorMessage}`
         } else if (agentStore.warnings.length > 0) {
           finalContent = agentStore.warnings.join('\n')
+        } else if (agentStore.aborted) {
+          // M17：用户主动中止且无部分输出 — 标注"(已中止)"而非误报失败
+          finalContent = '(已中止)'
         } else {
           finalContent = '(Agent 运行失败，未产生输出)'
         }

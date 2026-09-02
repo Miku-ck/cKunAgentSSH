@@ -94,7 +94,7 @@ def _restore_from_backup(backup_path: str, abs_path: str) -> bool:
 
 
 def cleanup_run_backups(run_id: str) -> None:
-    """运行成功完成后清理该 run 的所有备份"""
+    """清理某 run 的所有磁盘备份（keep/undo 后调用）"""
     try:
         backup_root = _get_backup_root()
         run_dir = os.path.join(backup_root, run_id)
@@ -102,6 +102,30 @@ def cleanup_run_backups(run_id: str) -> None:
             shutil.rmtree(run_dir, ignore_errors=True)
     except Exception as e:
         logger.warning("清理备份失败 %s: %s", run_id, e)
+
+
+def cleanup_stale_backups(max_age_days: int = 7) -> int:
+    """C-review C3：按目录 mtime 清理过期备份，返回清理数量。
+
+    run 结束后不再自动清理备份（保留供 /undo 使用，见 routes/agent.py），
+    为防止备份目录无限膨胀，启动时按时间兜底清理。
+    """
+    import time
+    removed = 0
+    try:
+        backup_root = _get_backup_root()
+        cutoff = time.time() - max_age_days * 86400
+        for entry in os.listdir(backup_root):
+            path = os.path.join(backup_root, entry)
+            try:
+                if os.path.isdir(path) and os.path.getmtime(path) < cutoff:
+                    shutil.rmtree(path, ignore_errors=True)
+                    removed += 1
+            except OSError:
+                continue
+    except Exception as e:
+        logger.warning("清理过期备份失败: %s", e)
+    return removed
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -265,12 +289,38 @@ class FileMoveUndo:
 
 @dataclass
 class ShellUndo:
-    """Shell 命令撤销 — 记录命令，reverse 时尝试执行反向命令"""
+    """Shell 命令撤销 — 记录命令，reverse 时尝试执行反向命令
+
+    C-review C4：记录原命令的执行宿主（local/ssh + session_id）——
+    原实现 reverse 恒在本地 create_subprocess_shell 执行，SSH 模式下
+    原命令在远程服务器、回滚却在后端主机"打错机器"（误删本地同名路径）。
+    """
     command: str
     reverse_command: Optional[str]  # None 表示无反向命令
+    host: str = "local"  # "local" | "ssh"
+    ssh_session_id: str = ""
 
     async def apply_reverse(self) -> None:
         if not self.reverse_command:
+            return
+        if self.host == "ssh":
+            # 远程命令的反向必须走 ElectronBridge 下发到同一 SSH 会话
+            if not self.ssh_session_id:
+                logger.warning("ShellUndo 跳过：ssh 反向命令缺 session_id (command=%s)", self.command)
+                return
+            try:
+                from agent.electron_bridge import ElectronBridge
+                bridge = ElectronBridge()
+                if not bridge.is_available():
+                    logger.warning("ShellUndo 跳过：Electron Bridge 不可用 (command=%s)", self.command)
+                    return
+                await bridge.exec_ssh_command(
+                    ssh_session_id=self.ssh_session_id,
+                    command=self.reverse_command,
+                    timeout=10.0,
+                )
+            except Exception as e:
+                logger.warning("ShellUndo 远程反向失败 %s: %s", self.reverse_command, e)
             return
         try:
             proc = await asyncio.create_subprocess_shell(
@@ -418,7 +468,13 @@ class UndoBuilder:
         if tool == "shell_exec":
             cmd = args.get("command") or args.get("shell", "")
             reverse = UndoBuilder._shell_reverse(cmd)
-            return ShellUndo(command=cmd, reverse_command=reverse)
+            # C-review C4：记录执行宿主 — ssh_session_id 存在即远程执行
+            return ShellUndo(
+                command=cmd,
+                reverse_command=reverse,
+                host="ssh" if getattr(ctx, "ssh_session_id", "") else "local",
+                ssh_session_id=getattr(ctx, "ssh_session_id", "") or "",
+            )
 
         # 只读工具 → NoOp
         return NoOpUndo(reason="readonly")
@@ -466,9 +522,14 @@ class UndoBuilder:
         if reverse is None:
             return None
         # 派生命令二次分类：非 safe 一律放弃（防止派生出危险反向命令）
+        # C-review C1：默认审批策略下 mv 被判操作动词（dangerous），但 mv 反向
+        # （两个显式路径互换，token 形态已精确约束 + 无元字符）结构安全 — 豁免；
+        # 其余动词（rm/rmdir/mkdir 派生）仍要求分类 safe
         from .safety import classify_command
         level, _ = classify_command(reverse)
-        if level != "safe":
+        if level == "hardline":
+            return None
+        if level == "dangerous" and not reverse.startswith("mv "):
             return None
         return reverse
 

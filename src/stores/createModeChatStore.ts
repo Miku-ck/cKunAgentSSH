@@ -107,7 +107,8 @@ export interface ModeChatStore<
   createConversation: (title?: string) => Promise<TConversation>
   switchConversation: (id: string, loadMessages?: (conv: TConversation) => Promise<void>) => Promise<void>
   deleteConversation: (id: string) => Promise<void>
-  sendMessage: (content: string, options?: { context?: TContext; systemPrompt?: string; skillIds?: string[]; attachments?: ChatAttachment[] }) => Promise<void>
+  // M18：返回 Promise<boolean>（true=已接受入会话，false=早退拒绝），供组件回滚草稿
+  sendMessage: (content: string, options?: { context?: TContext; systemPrompt?: string; skillIds?: string[]; attachments?: ChatAttachment[] }) => Promise<boolean>
   abortStream: () => void
   /** 当前 Agent 模式开关（全局状态，影响新消息发送路径） */
   agentMode: Ref<boolean>
@@ -257,23 +258,25 @@ export function createModeChatStore<
 
   // ── 发送消息 ──
 
+  // M18：返回是否被接受 — true=消息已入会话（草稿可清空），false=早退拒绝
+  // （后端未就绪/无模型/未选模型/建会话失败），供组件回滚草稿，避免长文/附件丢失
   async function sendMessage(content: string, options?: {
     context?: TContext
     systemPrompt?: string
     skillIds?: string[]
     attachments?: ChatAttachment[]
-  }) {
+  }): Promise<boolean> {
     // M5 修复：原子检查+加锁，消除 streaming 守卫与 startStream 之间的竞态窗口
-    if (_sendLock || stream.streaming.value) return
+    if (_sendLock || stream.streaming.value) return false
     // 允许"仅附件"的空消息（attachments 已注入上下文时）
-    if (!content.trim() && !(options?.attachments && options.attachments.length > 0)) return
+    if (!content.trim() && !(options?.attachments && options.attachments.length > 0)) return false
     _sendLock = true
     try {
       const appStore = useAppStore()
       const toast = useToastStore()
       if (appStore.backendStatus !== 'ready') {
         toast.error('后端未就绪，请稍后重试')
-        return
+        return false
       }
 
       const chatStore: ChatStoreLike = _chatStoreGetter!()
@@ -282,11 +285,11 @@ export function createModeChatStore<
       }
       if (chatStore.models.length === 0) {
         toast.error('无可用模型')
-        return
+        return false
       }
       if (!persistence.selectedModelId.value) {
         toast.error('请先选择模型')
-        return
+        return false
       }
 
       let conv = persistence.currentConversation.value
@@ -294,13 +297,13 @@ export function createModeChatStore<
         const title = content.slice(0, 30) + (content.length > 30 ? '...' : '')
         conv = await persistence.createConversation(title)
       }
-      if (!conv) return
+      if (!conv) return false
 
       try {
         await persistence.ensureBackendConversation(conv)
       } catch {
         toast.error('创建会话失败')
-        return
+        return false
       }
 
       const ctx = options?.context ?? (await buildContext?.())
@@ -387,13 +390,15 @@ export function createModeChatStore<
         },
         onError: (msg, err, duration) => {
           msg.duration = duration
-          msg.content = msg.streamingContent || ''
+          // 审查修复：流中断时保留已生成的部分内容并追加错误说明；
+          // 原实现在有部分输出时丢弃错误原因，用户无法知道回答为何中断
+          const partial = msg.streamingContent || ''
+          msg.content = partial
+            ? `${partial}\n\n⚠️ 响应中断: ${err}`
+            : `错误: ${err}`
           msg.reasoning = msg.streamingReasoning || undefined
           msg.streamingContent = undefined
           msg.streamingReasoning = undefined
-          if (!msg.content) {
-            msg.content = `错误: ${err}`
-          }
           conv.updated_at = new Date().toISOString()
           triggerRef(persistence.conversations)
           persistence.save()
@@ -414,6 +419,9 @@ export function createModeChatStore<
       if (!ok) {
         toast.error('启动流式失败')
       }
+      // 消息已入会话（userMsg/assistantMsg 已 push 并持久化）— 即便流启动失败，
+      // 内容也保留在历史中，草稿无需回填（回填会重复），返回 true 清空草稿
+      return true
     } finally {
       // Optimization 修复：所有早返回路径（后端未就绪/无模型/创建失败等）均走此 finally，防止锁永久占用
       _sendLock = false
@@ -423,7 +431,13 @@ export function createModeChatStore<
   // ── 中止流 ──
 
   function abortStream() {
+    // 审查修复：仅当流确实在运行时才固化"已中止"占位。
+    // 原实现无条件重写最后一条助手消息 —— closeAiPanel()/中止按钮在
+    // 无流时也会调用本方法，导致已完成的回答被覆盖成 "(已中止)" 并持久化，
+    // 破坏历史消息。
+    const wasStreaming = stream.streaming.value
     stream.abortStream()
+    if (!wasStreaming) return
     const conv = persistence.currentConversation.value
     if (conv) {
       const last = conv.messages[conv.messages.length - 1]
@@ -458,7 +472,13 @@ export function createModeChatStore<
   const agentStore = useAgentStore()
   watch(() => agentStore.status, (newStatus, oldStatus) => {
     if (agentStore.currentMode !== mode) return
-    if (oldStatus === 'running' && (newStatus === 'completed' || newStatus === 'failed')) {
+    // M17：abort 使状态 running→idle（非 completed/failed），原 watch 漏捕 →
+    // temp-agent 占位消息（空内容）永久残留历史。补 running→idle 分支，
+    // 以 aborted 标志区分"用户中止"与 C10 并发保护的直接 abortFn()（后者不固化）。
+    const isTerminal = oldStatus === 'running' && (newStatus === 'completed' || newStatus === 'failed')
+    const isAbort = oldStatus === 'running' && newStatus === 'idle' && agentStore.aborted
+    if (!isTerminal && !isAbort) return
+    {
       // 审查 M-19 修复：优先固化为本次运行的【源会话】（agentStore 在 runAgent
       // 时记录的 conversationId）。原实现取"完成时刻的当前会话" — 用户在 Agent
       // 运行中切换会话后，固化会落到错误的会话上：源会话的 temp-agent 占位消息
@@ -474,12 +494,33 @@ export function createModeChatStore<
           )
         : undefined) || persistence.currentConversation.value || null
       if (!conv) return
+      // 审查修复：Agent 运行中用户切换/删除会话后，源会话可能已不在列表，
+      // 占位消息（temp-agent-）将永远停在运行中骨架态。此时移除悬空占位，
+      // 避免历史里出现卡死的空消息。
+      const hasPlaceholder = conv.messages.some(
+        (m) => m.role === 'assistant' && String(m.id).startsWith('temp-agent-'),
+      )
+      if (!hasPlaceholder) {
+        conv.messages = conv.messages.filter(
+          (m) => !(m.role === 'assistant' && String(m.id).startsWith('temp-agent-')),
+        )
+        if (conv.messages.length === 0) {
+          // 空会话（仅剩占位）直接移除，避免历史列表出现空条目
+          persistence.conversations.value = persistence.conversations.value.filter((c) => c.id !== conv.id)
+          if (persistence.currentConvId.value === conv.id) {
+            persistence.currentConvId.value = persistence.conversations.value[0]?.id ?? null
+          }
+        }
+        notifyConversationsChanged()
+        return
+      }
       // 泛型边界：TConversation.messages 为 TMessage[]（自由类型参数），
       // 与 AgentMessage[] 不可直接互证，显式断言（TMessage extends ModeMessage
       // 结构上满足 AgentMessage 最小接口）
       finalizeAgentMessage(conv as unknown as { messages: AgentMessage[] }, agentStore)
       notifyConversationsChanged()
-      config.onAgentComplete?.(conv)
+      // 中止不是"完成" — 仅正常终态（completed/failed）触发 onAgentComplete 钩子
+      if (isTerminal) config.onAgentComplete?.(conv)
     }
   })
 

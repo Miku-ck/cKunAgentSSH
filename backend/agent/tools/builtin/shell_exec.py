@@ -60,6 +60,11 @@ class ShellExecTool(BaseTool):
                 command=command,
                 timeout=float(timeout),
             )
+        except asyncio.CancelledError:
+            # C-review M9：客户端断连 → run 被取消。本地 HTTP 等待中止，但远程
+            # 命令无法经 bridge 终止（缺 kill 通道），只能让取消继续传播；
+            # 已知残留：远程命令可能继续执行，待 bridge 协议补命令中止后修复
+            raise
         except RuntimeError as e:
             return ToolResult(False, "", f"远程命令执行失败: {e}")
 
@@ -83,6 +88,7 @@ class ShellExecTool(BaseTool):
     async def _execute_local(
         self, context, command: str, timeout: int
     ) -> ToolResult:
+        proc = None  # C-review M9：预初始化，CancelledError 分支可安全引用
         try:
             proc = await asyncio.create_subprocess_shell(
                 command,
@@ -120,5 +126,16 @@ class ShellExecTool(BaseTool):
                 pass  # 竞态：进程在超时和 kill 之间已退出
             await proc.wait()
             return ToolResult(False, "", f"命令执行超时（{timeout}秒），已终止")
+        except asyncio.CancelledError:
+            # C-review M9：客户端断连时 engine task 被取消。CancelledError 是
+            # BaseException，不会被下方 except Exception 捕获——不显式 kill
+            # 子进程就会孤儿化继续执行（"用户已停止"的 run 仍在改文件）。
+            # 此处不等子进程退出，避免拖住断连清理路径。
+            if proc is not None:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass  # 竞态：进程已退出
+            raise
         except Exception as e:
             return ToolResult(False, "", str(e))

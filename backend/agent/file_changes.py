@@ -248,12 +248,20 @@ def get_file_changes_summary(agent_run_id: str) -> dict:
 
 
 def persist_file_changes(agent_run_id: str) -> None:
-    """将内存中的文件变更写入数据库（运行结束时调用）"""
+    """将内存中的文件变更写入数据库（运行结束时调用）
+
+    C-review C3：直接从 _PENDING 取含 before/after_content 的完整数据落库
+    （get_file_changes 会 pop 掉内容字段以控制 done 事件体积，不能用于持久化）。
+    """
     if not agent_run_id:
         return
     try:
         import database as db
-        changes = get_file_changes(agent_run_id)
+        with _LOCK:
+            run_map = _PENDING.get(agent_run_id)
+            if not run_map:
+                return
+            changes = [asdict(c) for c in run_map.values()]
         if changes:
             db.save_agent_file_changes(agent_run_id, changes)
     except Exception as e:
@@ -270,6 +278,10 @@ def load_file_changes(agent_run_id: str) -> list[dict]:
         with _LOCK:
             run_map = _PENDING.setdefault(agent_run_id, {})
             for c in changes:
+                # C-review C3：回填 before/after_content（DB 列，C3 迁移后存在），
+                # 使进程重启后的 undo/diff 也有内容源
+                before_content = (c.get("before_content") or "").splitlines() if c.get("before_content") else []
+                after_content = (c.get("after_content") or "").splitlines() if c.get("after_content") else []
                 change = FileChange(
                     agent_run_id=c.get("agent_run_id", agent_run_id),
                     file_path=c.get("file_path", ""),
@@ -280,6 +292,8 @@ def load_file_changes(agent_run_id: str) -> list[dict]:
                     before_size=c.get("before_size", 0) or 0,
                     after_size=c.get("after_size", 0) or 0,
                     created_at=c.get("created_at", ""),
+                    before_content=before_content,
+                    after_content=after_content,
                 )
                 run_map[change.abs_path] = change
         return changes

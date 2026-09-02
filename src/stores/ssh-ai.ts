@@ -146,19 +146,20 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   // ── 5. SSH 特有 Actions ──
 
   /** 发送消息（SSH 模式封装：自动注入上下文 + system prompt） */
-  async function sendMessage(content: string, options?: { skillIds?: string[]; attachments?: ChatAttachment[] }) {
+  // M18：返回是否被接受（true=已入会话，false=早退拒绝），供组件回滚草稿
+  async function sendMessage(content: string, options?: { skillIds?: string[]; attachments?: ChatAttachment[] }): Promise<boolean> {
     if (agentMode.value) {
-      await sendAgentMessage(content, options?.skillIds || [], options?.attachments || [])
+      return sendAgentMessage(content, options?.skillIds || [], options?.attachments || [])
     } else {
-      await sendChatMessage(content, options?.skillIds || [], options?.attachments || [])
+      return sendChatMessage(content, options?.skillIds || [], options?.attachments || [])
     }
   }
 
   /** 普通聊天模式 */
-  async function sendChatMessage(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = []) {
+  async function sendChatMessage(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = []): Promise<boolean> {
     const ctx = buildContext()
     const systemPrompt = buildSystemPrompt(ctx)
-    await base.sendMessage(content, { context: ctx, systemPrompt, skillIds, attachments })
+    return base.sendMessage(content, { context: ctx, systemPrompt, skillIds, attachments })
   }
 
   /** 上传文件（对话附件）：逐个调用后端 /chat/upload，失败项 toast 提示并跳过 */
@@ -179,17 +180,17 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   /** Agent 模式：多步工具调用，支持远程命令执行 */
   // 发送锁，防止快速连点创建多个会话
   let _agentSendLock = false
-  async function sendAgentMessage(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = []) {
-    if (_agentSendLock) return
+  async function sendAgentMessage(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = []): Promise<boolean> {
+    if (_agentSendLock) return false
     _agentSendLock = true
     try {
-      await _sendAgentMessageInner(content, skillIds, attachments)
+      return await _sendAgentMessageInner(content, skillIds, attachments)
     } finally {
       _agentSendLock = false
     }
   }
 
-  async function _sendAgentMessageInner(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = []) {
+  async function _sendAgentMessageInner(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = []): Promise<boolean> {
     // 附带文件拼入任务文本：Agent 走 /agent/run，直接注入内容让 LLM 读取
     let effectiveContent = content
     if (attachments.length > 0) {
@@ -201,13 +202,13 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     }
     if (agentStore.isRunning) {
       toast.error('Agent 正在运行中，请等待完成或先中止')
-      return
+      return false
     }
-    if (!effectiveContent.trim()) return
+    if (!effectiveContent.trim()) return false
 
     if (appStore.backendStatus !== 'ready') {
       toast.error('后端未就绪，请稍后重试')
-      return
+      return false
     }
 
     // 复用 base 内部模型检查逻辑：确保已选模型有效
@@ -216,7 +217,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     }
     if (!base.selectedModelId.value) {
       toast.error('请先选择模型')
-      return
+      return false
     }
 
     const ctx = buildContext()
@@ -227,13 +228,13 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       const title = effectiveContent.slice(0, 30) + (effectiveContent.length > 30 ? '...' : '')
       conv = await base.createConversation(title) as SshAiConversation
     }
-    if (!conv) return
+    if (!conv) return false
 
     try {
       await base.persistence.ensureBackendConversation(conv)
     } catch {
       toast.error('创建会话失败')
-      return
+      return false
     }
 
     const userMsg: SshAiMessage = {
@@ -278,6 +279,8 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       // 用户显式选择的技能 ID（后端 SkillRein 会与自动匹配的合并去重）
       skillIds,
     })
+    // 消息已入会话且 Agent 已启动 — 草稿可清空
+    return true
   }
 
   return {

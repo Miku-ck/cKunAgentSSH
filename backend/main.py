@@ -46,6 +46,17 @@ async def lifespan(_app: FastAPI):
     init_db(settings.db_path)
     print(f"[cKunAgentic] Database initialized: {settings.db_path}")
 
+    # C-review C3：run 结束不再自动清理磁盘备份（保留供 /undo 使用），
+    # 启动时按 TTL（7 天）兜底清理过期备份，防止目录无限膨胀
+    try:
+        import asyncio as _asyncio
+        from agent.harness.saddle import cleanup_stale_backups
+        _n = await _asyncio.to_thread(cleanup_stale_backups, 7)
+        if _n:
+            print(f"[cKunAgentic] Cleaned {_n} stale agent backup dir(s)")
+    except Exception:
+        pass
+
     # 修复：从数据库加载后处理配置，避免使用默认值导致用户设置不生效
     from post_processor import init_post_process_manager, load_post_process_config_from_db
     post_config = load_post_process_config_from_db()

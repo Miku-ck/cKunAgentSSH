@@ -85,6 +85,10 @@ export const useAgentStore = defineStore('agent', () => {
   const intentionInfo = ref<AgentIntentionInfo | null>(null)
   // H14 修复：人工介入去重标志（同一 run 只接受一次，独立于数组长度）
   let _helpRequestedThisRun = false
+  // M17：用户中止标记 — abort() 置位、_reset() 清除。固化 watch 据此把
+  // running→idle 区分"用户中止"（需固化为"(已中止)"）与 C10 并发保护的
+  // 直接 abortFn()（不固化，避免误判为失败/中止）
+  const aborted = ref(false)
 
   let abortFn: (() => void) | null = null
   // 记录运行开始时间，用于 snapshot() 计算 duration
@@ -216,6 +220,8 @@ export const useAgentStore = defineStore('agent', () => {
       abortFn = null
     }
     status.value = 'idle'
+    // M17：标记用户中止，供固化 watch 生成"(已中止)"文案
+    aborted.value = true
     // B11 修复：中止即 run 结束 — 清理权限请求状态，防止残留过期授权按钮
     permissionRequests.value = []
   }
@@ -271,6 +277,7 @@ export const useAgentStore = defineStore('agent', () => {
     currentToolCall.value = null
     intentionInfo.value = null
     _helpRequestedThisRun = false
+    aborted.value = false
   }
 
   /** 用户确认/忽略某次求助请求 */
@@ -476,6 +483,7 @@ export const useAgentStore = defineStore('agent', () => {
     currentConversationId,
     currentToolCall,
     intentionInfo,
+    aborted,
     // computed
     isRunning,
     hasToolCalls,

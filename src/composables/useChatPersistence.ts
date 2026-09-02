@@ -65,10 +65,19 @@ export function useChatPersistence<
     try {
       const convs = await api.listConversations(limit, offset, mode)
       loadFailed.value = false
+      // M19：合并刷新 — 保留内存中已加载的会话消息。原实现把**所有**会话替换为
+      // messages:[]，仅当前会话随后重载 → 窗口期内切到非当前会话会看到被抹空的消息
+      // （靠延迟刷新才自愈），当前会话也会闪烁一空。列表接口不返回消息体，
+      // 只有当前会话会因 post_process 在后台新增消息（随后 loadMessages 权威重载），
+      // 其余会话内存态即权威，保留即可。新出现的会话（内存无缓存）仍为空。
+      const cachedByConvId = new Map<string, TMessage[]>()
+      for (const c of conversations.value) {
+        if (c.messages && c.messages.length > 0) cachedByConvId.set(c.id, c.messages)
+      }
       conversations.value = convs.map((c: any) => ({
         id: c.id,
         title: c.title,
-        messages: [] as TMessage[],
+        messages: (cachedByConvId.get(c.id) ?? []) as TMessage[],
         backendConvId: c.id,
         created_at: c.created_at,
         updated_at: c.updated_at,
@@ -83,7 +92,10 @@ export function useChatPersistence<
   }
 
   const conversations = shallowRef<TConversation[]>(loadConversations())
-  const currentConvId = ref<string | null>(null)
+  // 审查修复：重启后恢复上次会话（dual 模式 localStorage 含完整消息；
+  // backend 模式列表消息为空，仅恢复选中态）。原实现恒为 null，
+  // 每次重启 AI 面板都显示空态，用户需手动从历史记录点回。
+  const currentConvId = ref<string | null>(conversations.value[0]?.id ?? null)
   const selectedModelId = ref<string>(loadSelectedModelId())
   // B24 修复：后端会话列表加载失败标志（成功加载即复位），供 UI 后续展示
   const loadFailed = ref(false)
@@ -116,6 +128,12 @@ export function useChatPersistence<
       const group = groups.find(g => g.label === label)
       if (group) group.items.push(conv)
       else groups.push({ label, items: [conv] })
+    }
+    // 审查修复：组内按更新时间倒序（新 → 旧），与列表顶部优先的展示顺序一致
+    for (const g of groups) {
+      g.items.sort((a, b) =>
+        new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+      )
     }
     return groups
   })

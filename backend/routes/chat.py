@@ -163,7 +163,9 @@ async def stream_chat(req: StreamChatRequest, request: Request):
 
     # 加载历史消息构建上下文 — 条数优先用请求参数，兜底 20
     # 前端 ChatPanel 的 contextWindow 设置会通过请求体透传过来
-    history_limit = req.context_window if (req.context_window and req.context_window > 0) else 20
+    # C-review M3：硬顶 100 条 — 无上限时用户设大后 prompt 超模型上下文，
+    # 且历史只增不减，该会话此后每条请求都会 400
+    history_limit = min(req.context_window, 100) if (req.context_window and req.context_window > 0) else 20
     history = await asyncio.to_thread(db.get_recent_messages, req.conversation_id, limit=history_limit)
     memories = await asyncio.to_thread(db.get_relevant_memories, req.mode, limit=5)
 
@@ -241,6 +243,7 @@ async def _generate_stream(
     full_reasoning = ""
     # B-9 修复：预初始化，finally 中无论流创建是否成功都能安全关闭 LLM 流
     chunk_iter = None
+    chunk_task = None  # M1 修复：进行中的 __anext__ 任务（shield 保活）
 
     try:
         # 先保存用户消息（审查 M-13：db 同步调用放线程池，避免阻塞事件循环）
@@ -270,15 +273,27 @@ async def _generate_stream(
             # 检测客户端是否已断开，避免浪费 LLM 资源
             if request and await request.is_disconnected():
                 # B-9 修复：断连立即关闭 LLM 流迭代器，停止拉取后续 token
+                if chunk_task is not None:
+                    chunk_task.cancel()
                 try:
                     await chunk_iter.aclose()
                 except Exception:
                     pass
                 break
+            # C-review M1 修复：chunk 任务用 ensure_future + shield 保活。
+            # 原实现 asyncio.wait_for(chunk_iter.__anext__(), ...) 超时会取消
+            # __anext__ 任务，CancelledError 抛进 async generator 帧将其永久
+            # 关闭（llm_adapter finally 随即 aclose 底层流），下一轮 __anext__
+            # 立即 StopAsyncIteration → 停顿 >HEARTBEAT_INTERVAL 的流被静默
+            # 截断且半截内容按正常完成入库（已复现）。现在超时只发心跳，
+            # chunk_task 继续存活，下一轮循环继续等它。
+            if chunk_task is None:
+                chunk_task = asyncio.ensure_future(chunk_iter.__anext__())
             try:
                 chunk = await asyncio.wait_for(
-                    chunk_iter.__anext__(), timeout=HEARTBEAT_INTERVAL
+                    asyncio.shield(chunk_task), timeout=HEARTBEAT_INTERVAL
                 )
+                chunk_task = None
                 if chunk.content:
                     full_content += chunk.content
                     yield sse_event({"content": chunk.content})
@@ -286,6 +301,7 @@ async def _generate_stream(
                     full_reasoning += chunk.reasoning
                     yield sse_event({"reasoning": chunk.reasoning})
             except StopAsyncIteration:
+                chunk_task = None
                 done = True
             except asyncio.TimeoutError:
                 yield ": heartbeat\n\n"
@@ -351,6 +367,10 @@ async def _generate_stream(
         yield sse_event({"error": str(e)})
         yield "data: [DONE]\n\n"
     finally:
+        # M1 修复：先取消进行中的 __anext__ 任务，避免"Task was destroyed
+        # but it is pending"告警；再关闭迭代器
+        if chunk_task is not None and not chunk_task.done():
+            chunk_task.cancel()
         # B-9 修复：客户端断连后 break 出流式循环，LLM 流迭代器若不关闭，
         # 底层 HTTP 连接会持续拉取/保持到响应结束，浪费 token 与连接
         try:

@@ -24,8 +24,9 @@
 
     <!-- 主内容区 -->
     <div class="main-content" ref="messagesEl">
-      <!-- 空状态 -->
-      <div v-if="displayMessages.length === 0" class="empty-state">
+      <!-- 空状态（历史面板打开时隐藏：遮罩半透明会透出当前对话，且 display:none
+           使 main-content 无可滚内容，滚轮不再穿透滚动背后消息列表） -->
+      <div v-if="displayMessages.length === 0" v-show="!showHistoryPanel" class="empty-state">
         <div class="empty-icon-wrapper">
           <slot name="empty-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="40" height="40">
@@ -39,8 +40,8 @@
         <p class="empty-desc">{{ emptyDesc }}</p>
       </div>
 
-      <!-- 消息列表 -->
-      <div v-else class="messages-list" role="log" aria-live="polite">
+      <!-- 消息列表（历史面板打开时隐藏，见上方空状态注释） -->
+      <div v-else class="messages-list" role="log" aria-live="polite" v-show="!showHistoryPanel">
         <template v-for="(msg, idx) in displayMessages" :key="msg.id">
           <!-- Agent 执行过程前置块：运行中且目标为最后一条 assistant 占位消息 -->
           <AgentTraceInline
@@ -545,6 +546,9 @@ watch(() => agentStore.reasoning, () => {
 
 // ── 输入处理 ──
 function handleKeydown(e: KeyboardEvent) {
+  // C-review M16 修复：IME 组合输入期间不拦截按键，
+  // 否则中文输入法按 Enter 确认候选词会同时触发发送/技能选择
+  if (e.isComposing || e.keyCode === 229) return
   // 技能菜单激活时优先处理菜单导航
   if (showSkillMenu.value) {
     if (e.key === 'ArrowDown') {
@@ -597,6 +601,10 @@ const canSend = computed(() =>
   inputText.value.trim().length > 0 || pendingFiles.value.length > 0,
 )
 
+// M18：草稿快照 — 发送后立即清空（保留"发送即清空"体验），父层 send 失败时
+// 由 restoreDraft() 回填，避免长文/附件在"后端未就绪/无模型/建会话失败"早退路径丢失
+const lastDraft = ref<{ text: string; skillIds: string[]; attachments: ChatAttachment[] } | null>(null)
+
 function handleSend() {
   const text = inputText.value.trim()
   if ((!text && pendingFiles.value.length === 0) || props.streaming || props.agentRunning) return
@@ -605,11 +613,26 @@ function handleSend() {
   // 复制 skillIds / attachments 后立即清空，避免下次发送残留
   const skillIds = [...selectedSkillIds.value]
   const attachments = [...pendingFiles.value]
+  lastDraft.value = { text, skillIds, attachments }
   selectedSkillIds.value = []
   pendingFiles.value = []
   inputText.value = ''
   if (inputRef.value) inputRef.value.style.height = 'auto'
   emit('send', text, skillIds, attachments)
+}
+
+/** M18：父层发送被拒绝（早退）时调用，把草稿回填输入框供用户重试 */
+function restoreDraft() {
+  if (!lastDraft.value) return
+  const { text, skillIds, attachments } = lastDraft.value
+  lastDraft.value = null
+  inputText.value = text
+  selectedSkillIds.value = skillIds
+  pendingFiles.value = attachments
+  nextTick(() => {
+    autoResize()
+    inputRef.value?.focus()
+  })
 }
 
 // ── 历史事件 ──
@@ -627,7 +650,7 @@ function focusInput() {
   nextTick(() => inputRef.value?.focus())
 }
 
-defineExpose({ focusInput })
+defineExpose({ focusInput, restoreDraft })
 </script>
 
 <style scoped>

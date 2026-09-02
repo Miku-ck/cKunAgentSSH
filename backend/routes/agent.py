@@ -805,16 +805,11 @@ async def agent_run(req: AgentRunRequest, request: Request):
                 clear_file_changes(run_id)
             except Exception:
                 pass
-            # B-8 修复：仅当 run 最终 status == "completed" 时清理备份 —
-            # 原实现对所有 run（含 failed/max_reached/断连）无条件 rmtree，
-            # 导致这些 run 的 /undo（依赖 _scan_run_backups）备份丢失；
-            # 同时 rmtree 是同步 IO，移到线程池避免卡事件循环
-            try:
-                from agent.harness.saddle import cleanup_run_backups
-                if final_state == "completed":
-                    await asyncio.to_thread(cleanup_run_backups, run_id)
-            except Exception:
-                pass
+            # C-review C3 修复：run 结束**不再**清理磁盘备份（无论最终状态）。
+            # 原 B-8 在 completed 时清理，但 /undo 的主场景恰是"run 正常完成后
+            # 点撤销"——清理后 modify/delete 无备份可恢复（DB 不落 before 内容
+            # 时数据永久丢失）。现在备份由 /keep、/undo 显式清理，
+            # 另有 main.py 启动时 7 天 TTL 兜底（cleanup_stale_backups）。
             # 清理 TelemetryBus 事件缓存（防止内存泄漏）
             try:
                 harness.telemetry.clear()
@@ -941,6 +936,20 @@ def grant_tool_permission(req: PermissionGrantRequest):
     # H13 修复 A5：session scope 改用进程级单例（原 501 限制移除）
     pg = _get_global_permission_gate_sync()
     grant_key = pg.grant(req.tool, scope=req.scope, command=req.command)
+    # C-review C2 修复：批准动作落审计链（原实现只写内存/allowlist，
+    # 事后无法证明"谁批准了什么"，等保审计目标落空）
+    try:
+        from agent.audit import append_record
+        append_record(
+            action=f"permission_grant:{req.tool}",
+            conclusion="approved",
+            target_type="tool",
+            target_id=grant_key,
+            command_raw=req.command or "",
+            result=f"scope={req.scope}",
+        )
+    except Exception:
+        logger.warning("grant 审计记录失败（不阻塞）")
     return {"tool": req.tool, "scope": req.scope, "grant_key": grant_key, "granted": True}
 
 
@@ -953,6 +962,18 @@ def revoke_tool_permission(tool: str, command: Optional[str] = None):
     from agent.harness.reins import _get_global_permission_gate_sync
     pg = _get_global_permission_gate_sync()
     pg.revoke(tool, command=command)
+    # C-review C2 修复：撤销动作同样落审计链
+    try:
+        from agent.audit import append_record
+        append_record(
+            action=f"permission_revoke:{tool}",
+            conclusion="revoked",
+            target_type="tool",
+            target_id=command or tool,
+            command_raw=command or "",
+        )
+    except Exception:
+        logger.warning("revoke 审计记录失败（不阻塞）")
     return {"tool": tool, "granted": False}
 
 
@@ -1226,6 +1247,15 @@ def _scan_run_backups(run_id: str) -> dict[str, str]:
     return mapping
 
 
+def _write_text_file(abs_path: str, content: str) -> None:
+    """C-review C3：把 DB 落库的变更前内容写回磁盘（undo 兜底路径）"""
+    import os
+    d = os.path.dirname(abs_path) or "."
+    os.makedirs(d, exist_ok=True)
+    with open(abs_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
 @router.post("/agent/runs/{run_id}/undo")
 def undo_agent_run_changes(run_id: str):
     """
@@ -1264,11 +1294,16 @@ def undo_agent_run_changes(run_id: str):
                     os.remove(abs_path)
                 deleted.append(abs_path)
             elif operation == "delete":
-                # 删除的文件 → 从备份恢复
+                # 删除的文件 → 从磁盘备份恢复；备份缺失时回退 DB before_content
                 backup = backups.get(abs_path)
                 if backup and os.path.exists(backup):
                     os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
                     shutil.copy2(backup, abs_path)
+                    restored.append(abs_path)
+                elif c.get("before_content") is not None:
+                    # C-review C3 兜底：磁盘备份不可用（进程重启/TTL 清理后）
+                    # 用落库的变更前内容恢复（>2000 行文件为截断内容）
+                    _write_text_file(abs_path, c["before_content"])
                     restored.append(abs_path)
                 elif os.path.exists(abs_path):
                     # 备份丢失但文件仍在，跳过
@@ -1276,16 +1311,18 @@ def undo_agent_run_changes(run_id: str):
                 else:
                     failed.append(abs_path)
             else:
-                # modify → 从备份恢复
+                # modify → 从磁盘备份恢复；备份缺失时回退 DB before_content
                 backup = backups.get(abs_path)
                 if backup and os.path.exists(backup):
                     os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
                     shutil.copy2(backup, abs_path)
                     restored.append(abs_path)
-                elif not os.path.exists(abs_path):
-                    failed.append(abs_path)
+                elif c.get("before_content") is not None and os.path.exists(abs_path):
+                    # C-review C3 兜底：用落库的变更前内容覆盖回原内容
+                    _write_text_file(abs_path, c["before_content"])
+                    restored.append(abs_path)
                 else:
-                    # 备份丢失但文件仍在，无法回滚到修改前，记录为失败
+                    # 备份与 DB 内容均不可用，无法回滚到修改前，记录为失败
                     failed.append(abs_path)
         except Exception as e:
             logger.warning("撤销文件变更失败 %s: %s", abs_path, e)
