@@ -39,7 +39,7 @@ export interface PermissionRequest {
   reversible: boolean
   message: string
   timestamp: number
-  /** 命令执行工具（shell_exec/local_exec）— 授权绑定到具体命令（审查 M-3） */
+  /** 命令执行工具（shell_exec）— 授权绑定到具体命令（审查 M-3） */
   isCommandTool?: boolean
   /** 是否正在授权中（防止重复点击） */
   granting?: boolean
@@ -47,7 +47,7 @@ export interface PermissionRequest {
   resolved?: boolean
 }
 
-const COMMAND_EXEC_TOOLS = ['shell_exec', 'local_exec']
+const COMMAND_EXEC_TOOLS = ['shell_exec']
 
 export type AgentRunStatus = 'idle' | 'running' | 'completed' | 'failed'
 

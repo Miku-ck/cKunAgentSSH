@@ -277,7 +277,7 @@ INIT → THINKING → [LLM 调用] → 有工具调用?
 达到 max_iterations → MAX_REACHED
 ```
 
-### 13 个内置工具
+### 14 个内置工具
 
 | 工具 | 风险 | 说明 |
 |---|---|---|
@@ -289,11 +289,12 @@ INIT → THINKING → [LLM 调用] → 有工具调用?
 | `list_dir` | safe | 列出目录内容 |
 | `grep` | safe | 正则内容搜索 |
 | `glob` | safe | 递归文件查找 |
-| `shell_exec` | dangerous | SSH 远程命令执行 |
-| `local_exec` | moderate | 本地白名单命令 |
+| `shell_exec` | moderate | SSH 远程命令执行（命令级审批） |
 | `web_search` | safe | 联网搜索（Tavily API） |
 | `web_fetch` | safe | 抓取网页（SSRF 防护） |
 | `todo_write` | safe | 任务列表管理 |
+| `load_skill` | safe | 按需加载技能完整指令 |
+| `spawn_subagent` | safe | 启动子 Agent 处理独立子任务（纯推理） |
 
 ### 安全防御
 

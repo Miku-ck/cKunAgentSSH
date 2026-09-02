@@ -594,47 +594,6 @@ export interface AgentIntentionInfo {
   confidence: number
 }
 
-export interface AgentRunTrace {
-  run: {
-    id: string
-    conversation_id: string
-    task: string
-    mode?: string
-    model_used?: string
-    status: string
-    iteration: number
-    max_iterations: number
-    started_at: string
-    completed_at?: string
-  }
-  cost: {
-    prompt_tokens: number
-    completion_tokens: number
-    total_tokens: number
-    cost_usd: number
-    duration_ms: number
-    tool_call_count: number
-    pricing: {
-      input_per_1m: number
-      output_per_1m: number
-      model: string
-    }
-  }
-  state_history: Array<{ from: string; event: string; to: string }>
-  tool_calls: Array<{
-    id: string
-    iteration: number
-    tool_name: string
-    arguments?: string
-    result?: string
-    success: boolean
-    duration_ms: number
-    created_at: string
-  }>
-  // C3: 文件变更摘要 — done 事件 + trace API 均会返回
-  file_changes?: AgentFileChangesSummary
-}
-
 // C3: 文件变更单条记录
 export interface AgentFileChange {
   agent_run_id: string
@@ -654,18 +613,6 @@ export interface AgentFileChangesSummary {
   added_lines: number
   removed_lines: number
   changes: AgentFileChange[]
-}
-
-// C3: 单文件具体 diff（由后端 get_file_diff 返回）
-export interface FileDiffResult {
-  file_path: string
-  abs_path: string
-  before: string
-  after: string
-  unified_diff: string
-  operation: 'create' | 'modify' | 'delete' | string
-  added_lines: number
-  removed_lines: number
 }
 
 /**
@@ -701,60 +648,6 @@ export interface AgentTraceSnapshot {
   costInfo?: AgentCostSnapshot
   /** 失败时的错误信息 */
   errorMessage?: string
-}
-
-export interface AgentCostStats {
-  filter: { mode?: string | null; days: number }
-  stats: {
-    total_runs: number
-    completed_runs: number
-    failed_runs: number
-    total_tokens: number
-    prompt_tokens: number
-    completion_tokens: number
-    total_cost_usd: number
-    total_duration_ms: number
-    total_tool_calls: number
-    avg_iterations: number
-    avg_cost_usd: number
-  }
-}
-
-export interface MemoryItem {
-  id: string
-  type: 'episodic' | 'semantic'
-  mode: 'ssh'
-  content: string
-  source_conv_id: string | null
-  agent_run_id: string | null
-  importance: number
-  created_at: string
-  last_used_at: string
-  use_count: number
-}
-
-/**
- * 工具元信息（含启用状态）
- */
-export interface Tool {
-  /** 工具名（如 read_file / shell_exec） */
-  name: string
-  /** 工具描述 */
-  description: string
-  /** 参数 JSON Schema */
-  parameters: Record<string, unknown>
-  /** 风险等级：safe / moderate / dangerous */
-  risk_level: 'safe' | 'moderate' | 'dangerous'
-  /** 适用模式列表 */
-  mode_scope: string[]
-  /** 是否启用（从 tools_config 表读取） */
-  enabled: boolean
-  /** 超时时间（秒） */
-  timeout: number
-  /** 结果可缓存 */
-  cacheable: boolean
-  /** 操作可逆 */
-  reversible: boolean
 }
 
 export interface StreamAgentOptions {
@@ -879,51 +772,6 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
 // ── Agent API ──
 
 export const agentApi = {
-  listRuns: (conversationId?: string) =>
-    request<{ runs: unknown[] }>(`/agent/runs${conversationId ? `?conversation_id=${conversationId}` : ''}`),
-
-  getRunDetail: (runId: string) =>
-    request<{ run: unknown; tool_calls: unknown[] }>(`/agent/runs/${runId}`),
-
-  listTools: (mode: string = 'ssh') =>
-    request<{ mode: string; tools: Tool[] }>(`/agent/tools?mode=${mode}`),
-
-  updateToolEnabled: (toolName: string, enabled: boolean, mode: string = 'all') =>
-    request<{ id: string; tool_name: string; mode: string; enabled: boolean }>(
-      `/agent/tools/${encodeURIComponent(toolName)}/enabled?mode=${mode}`,
-      {
-        method: 'PATCH',
-        body: JSON.stringify({ enabled }),
-      }
-    ),
-
-  // P7: Trace Viewer + 成本统计
-  getRunTrace: (runId: string) =>
-    request<AgentRunTrace>(`/agent/runs/${runId}/trace`),
-
-  /** 获取某次运行中某文件的具体 unified diff */
-  getRunFileDiff: (runId: string, absPath: string) =>
-    request<{ ok: boolean; diff?: FileDiffResult; message?: string }>(
-      `/agent/runs/${runId}/diff?abs_path=${encodeURIComponent(absPath)}`
-    ),
-
-  /** 撤销某次 Agent 运行的所有文件变更 */
-  undoRunChanges: (runId: string) =>
-    request<{ undone: boolean; restored: string[]; deleted: string[]; failed: string[]; reason?: string }>(
-      `/agent/runs/${runId}/undo`,
-      { method: 'POST' }
-    ),
-
-  /** 保留某次 Agent 运行的所有文件变更 */
-  keepRunChanges: (runId: string) =>
-    request<{ kept: boolean; run_id: string }>(
-      `/agent/runs/${runId}/keep`,
-      { method: 'POST' }
-    ),
-
-  getCostStats: (mode?: string, days: number = 7) =>
-    request<AgentCostStats>(`/agent/stats?${mode ? `mode=${mode}&` : ''}days=${days}`),
-
   // 记忆设置
   getMemorySettings: () =>
     request<{ enabled: boolean; strategy: string; max_items: number }>('/settings/memory'),
@@ -934,64 +782,12 @@ export const agentApi = {
       body: JSON.stringify(data),
     }),
 
-  // 记忆管理
-  listMemories: (mode?: string, memType?: string) =>
-    request<{ memories: MemoryItem[]; count: number }>(
-      `/agent/memories?${mode ? `mode=${mode}&` : ''}${memType ? `mem_type=${memType}` : ''}`
-    ),
-
-  deleteMemory: (memoryId: string) =>
-    request<{ deleted: boolean; id: string }>(`/agent/memories/${memoryId}`, {
-      method: 'DELETE',
-    }),
-
-  pruneMemories: (mode?: string, memType?: string, maxCount?: number, clearAll?: boolean) => {
-    const params = new URLSearchParams()
-    if (mode) params.set('mode', mode)
-    if (memType) params.set('mem_type', memType)
-    if (clearAll) {
-      params.set('clear_all', 'true')
-    } else {
-      params.set('max_count', String(maxCount ?? 200))
-    }
-    return request<{ deleted: number }>(`/agent/memories/prune?${params}`, {
-      method: 'POST',
-    })
-  },
-
-  // 策略管理
-  listStrategies: (mode?: string, strategyType?: string) =>
-    request<{ strategies: unknown[]; count: number }>(
-      `/agent/strategies?${mode ? `mode=${mode}&` : ''}${strategyType ? `strategy_type=${strategyType}` : ''}`
-    ),
-
-  triggerEvolution: (mode: string = 'ssh') =>
-    request<{ evolved: boolean; config?: unknown; adjustments: string[] }>(
-      `/agent/evolve?mode=${mode}`,
-      { method: 'POST' }
-    ),
-
-  // 意识 tick
-  triggerTick: () =>
-    request<{ tick: unknown }>(`/agent/tick`, { method: 'POST' }),
-
-  getTickStatus: () =>
-    request<{ running: boolean; interval_seconds: number; last_tick: unknown }>(`/agent/tick/status`),
-
   // 权限管理
   // 审查 M-3：默认 scope 'once'（仅放行下一次调用），原默认 'always' 一次点击即永久免审批；
-  // command 用于 shell_exec/local_exec 的命令级绑定（只批准被展示的那条命令）
+  // command 用于 shell_exec 的命令级绑定（只批准被展示的那条命令）
   grantPermission: (tool: string, scope: 'once' | 'session' | 'always' = 'once', command?: string) =>
     request<{ tool: string; scope: string; grant_key: string; granted: boolean }>(`/agent/permission/grant`, {
       method: 'POST',
       body: JSON.stringify({ tool, scope, ...(command ? { command } : {}) }),
     }),
-
-  revokePermission: (tool: string, command?: string) =>
-    request<{ tool: string; granted: boolean }>(`/agent/permission/revoke?tool=${encodeURIComponent(tool)}${command ? `&command=${encodeURIComponent(command)}` : ''}`, {
-      method: 'POST',
-    }),
-
-  listPermissions: () =>
-    request<{ tools: string[] }>(`/agent/permission/list`),
 }

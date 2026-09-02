@@ -163,8 +163,7 @@ class Sandbox:
             return check
 
         # shell 命令检查 — H13 修复 B4：复用 safety.classify_command（与 FilesystemGuard 同源）
-        # H14 修复：同时覆盖 local_exec（IDE 模式命令执行工具）
-        if tool in ("shell_exec", "local_exec"):
+        if tool in ("shell_exec",):
             cmd = args.get("command") or args.get("shell", "")
             if isinstance(cmd, str) and cmd:
                 from .safety import classify_command
@@ -424,8 +423,8 @@ class UndoBuilder:
         # 只读工具 → NoOp
         return NoOpUndo(reason="readonly")
 
-    # B-5 加固：反向命令参数禁止的 shell 元字符（与 local_exec._META_CHAR_RE 同款字符集，
-    # 含换行/回车 — 原字符串切片实现可让 `mkdir 'a; rm -rf /tmp'` 类 payload 混入反向命令）
+    # B-5 加固：反向命令参数禁止的 shell 元字符（含换行/回车 — 原字符串切片实现
+    # 可让 `mkdir 'a; rm -rf /tmp'` 类 payload 混入反向命令）
     _SHELL_META_RE = re.compile(r"[;&|<>`${}\n\r]")
 
     @classmethod

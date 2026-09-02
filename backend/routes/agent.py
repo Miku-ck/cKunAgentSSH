@@ -247,7 +247,7 @@ class AgentRunRequest(BaseModel):
     model_id: str = ""
     # E 修复：mode 白名单校验（Pydantic Literal，非法值 → 422），
     # 防止任意 mode 串绕过注册表/权限边界
-    mode: Literal["ssh", "ide"] = "ssh"
+    mode: Literal["ssh"] = "ssh"
     system_prompt: Optional[str] = None
     ssh_session_id: Optional[str] = None
     enable_thinking: bool = False
@@ -917,7 +917,7 @@ class PermissionGrantRequest(BaseModel):
     # 审查 M-3：默认 scope 从 "always" 收紧为 "once"（仅放行下一次调用）。
     # 原默认 always 会在用户点一次后永久免审批。
     scope: str = Field("once", description="授权范围：once（仅本次）/ session（会话）/ always（永久）")
-    # 命令执行工具（shell_exec/local_exec）时传入被批准的具体命令，
+    # 命令执行工具（shell_exec）时传入被批准的具体命令，
     # 授权绑定到命令哈希（同命令免审批，其他 dangerous 命令仍需审批）
     command: Optional[str] = Field(None, description="命令执行工具的具体命令（用于命令级绑定）")
 

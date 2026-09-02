@@ -24,6 +24,22 @@ _CLIENT_CACHE_MAX = 8  # 最大缓存客户端数
 _client_cache: "OrderedDict[tuple[str, str], openai.AsyncOpenAI]" = OrderedDict()
 
 
+def _normalize_system_first(messages: list[dict]) -> list[dict]:
+    """部分 OpenAI 兼容服务要求 system 消息必须位于消息列表最前。
+
+    Agent 组装路径（bridle._build）会把 ctx.messages 原样追加到末尾，而
+    上下文压缩保留的 system 纠偏消息恰好位于 ctx.messages 末尾；chat 路由的
+    history 也可能含有持久化的 system 消息。此处统一做稳定重排：所有 system
+    消息前置（保持相对顺序），其余消息保持原序，避免触发
+    400 "System message must be at the beginning"。
+    """
+    systems = [m for m in messages if m.get("role") == "system"]
+    if not systems:
+        return messages
+    others = [m for m in messages if m.get("role") != "system"]
+    return systems + others
+
+
 async def _get_client(base_url: str, api_key: str) -> openai.AsyncOpenAI:
     """获取共享的 AsyncOpenAI 客户端（LRU 缓存，最多保留 _CLIENT_CACHE_MAX 个）"""
     key = (base_url, api_key or "EMPTY")
@@ -135,7 +151,8 @@ async def chat_stream(
 
     kwargs: dict = {
         "model": model,
-        "messages": messages,
+        # system 消息统一前置，避免部分服务端 400 拒绝
+        "messages": _normalize_system_first(messages),
         "temperature": temperature,
         "top_p": top_p,
         "stream": True,

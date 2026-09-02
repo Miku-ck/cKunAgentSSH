@@ -102,15 +102,14 @@ function copyContent(text: string) {
 }
 
 .message-block.user .message-bubble {
-  width: 100%;
-  max-width: 100%;
+  /* 宽比父容器多 1px：flex-end 对齐下左边缘与面板左边框重叠成单线，右边缘贴面板右缘，左右对称 */
+  width: calc(100% + 1px);
+  max-width: none;
   padding: 6px 14px;
   background: transparent;
   color: var(--text-primary);
   border: 1px solid var(--border-subtle);
   border-radius: 0;
-  /* 左移 1px：左边框与面板左边框重叠成单线，避免相邻双线（叠加） */
-  transform: translateX(-1px);
 }
 
 .message-block.assistant .message-bubble {

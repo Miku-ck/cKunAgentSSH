@@ -34,7 +34,7 @@ from .safety import classify_command, classify_shell_args
 logger = logging.getLogger(__name__)
 
 # 命令执行工具：审批必须绑定命令内容（审查 M-3），工具级授权不得覆盖命令级审批
-_COMMAND_EXEC_TOOLS = {"shell_exec", "local_exec"}
+_COMMAND_EXEC_TOOLS = {"shell_exec"}
 
 
 class Reins:
@@ -151,8 +151,7 @@ class FilesystemGuard:
                     return violation
 
         # 敏感 shell 命令检查 — 委托给 safety 模块分类
-        # H14 修复：同时覆盖 local_exec（IDE 模式命令执行工具），与 shell_exec 同源安全策略
-        if tool in ("shell_exec", "local_exec"):
+        if tool in ("shell_exec",):
             level, reason = classify_shell_args(args)
             if level == "hardline":
                 # 无条件阻断，不询问 PermissionGate
@@ -594,7 +593,7 @@ class PermissionGate:
     def _grant_key(tool_name: str, command: Optional[str] = None) -> str:
         """计算授权键（审查 M-3 核心修复）。
 
-        - 命令执行工具（shell_exec/local_exec）+ 具体命令 → `tool:<sha256(规范化命令)[:16]>`，
+        - 命令执行工具（shell_exec）+ 具体命令 → `tool:<sha256(规范化命令)[:16]>`，
           授权只绑定被批准的那条命令，防止一次"始终允许 shell_exec"后任意
           dangerous 命令免审批（如 `rm -rf ~/backups`）。
         - 其他工具 / 未提供命令 → 工具名本身（保持原工具级授权语义）。
@@ -728,7 +727,7 @@ class PermissionGate:
                 return ReinDecision()
             # 其他级别走标准流程
 
-        # H14 修复：命令执行工具（shell_exec / local_exec）绕过 tool-level 风险检查
+        # H14 修复：命令执行工具（shell_exec）绕过 tool-level 风险检查
         # 原因：这些工具自身是命令入口，命令级安全由 FilesystemGuard + Sandbox 的
         # safety.classify_command 精细判定（hardline/dangerous/safe），
         # 不应被 PermissionGate 基于工具级 risk_level 一刀切拦截。

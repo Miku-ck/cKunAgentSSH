@@ -1656,19 +1656,6 @@ def get_agent_file_changes(agent_run_id: str) -> list[dict]:
         conn.close()
 
 
-def get_agent_file_changes_summary(agent_run_id: str) -> dict:
-    """获取某次 Agent 运行的文件变更汇总"""
-    changes = get_agent_file_changes(agent_run_id)
-    total_added = sum(c.get("added_lines", 0) or 0 for c in changes)
-    total_removed = sum(c.get("removed_lines", 0) or 0 for c in changes)
-    return {
-        "files_changed": len(changes),
-        "added_lines": total_added,
-        "removed_lines": total_removed,
-        "changes": changes,
-    }
-
-
 def accept_agent_file_changes(agent_run_id: str) -> None:
     """用户确认保留文件变更，标记 accepted_at"""
     conn = _get_conn()
