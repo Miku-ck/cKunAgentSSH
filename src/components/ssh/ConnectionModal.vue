@@ -108,6 +108,22 @@
           </div>
         </div>
 
+        <!-- 目标环境标记:驱动生产环境危险命令强制审批 -->
+        <div class="form-row">
+          <div class="form-group flex-1">
+            <label>环境</label>
+            <div class="env-select">
+              <select v-model="form.environment">
+                <option value="test">测试 (test)</option>
+                <option value="prod">生产 (prod)</option>
+              </select>
+            </div>
+            <div class="env-hint" v-if="form.environment === 'prod'">
+              [注意] 生产环境:危险命令仅接受预授权 allowlist 放行,不再临时弹窗审批。
+            </div>
+          </div>
+        </div>
+
         <!-- 高级选项 -->
         <div class="advanced-section">
           <button class="advanced-toggle" @click="showAdvanced = !showAdvanced">
@@ -204,6 +220,8 @@ const form = reactive({
   passphrase: props.editData?.passphrase || '',
   // 备注(单条字符串,最多 10 个字). 兼容旧数据:从 tags 数组中取第一个非空值
   note: props.editData?.note ?? ((props.editData?.tags || [])[0] || ''),
+  // 目标环境标记:生产环境危险命令将被强制要求预授权 allowlist
+  environment: (props.editData?.environment || 'test') as 'test' | 'prod',
   readyTimeout: props.editData?.readyTimeout ? Math.round(props.editData.readyTimeout / 1000) : 15,
   keepaliveInterval: props.editData?.keepaliveInterval ? Math.round(props.editData.keepaliveInterval / 1000) : 10,
   connectNow: false,
@@ -252,6 +270,7 @@ function buildPayload() {
     password: form.authType === 'password' ? form.password : undefined,
     privateKeyPath: form.authType === 'privateKey' ? form.privateKeyPath : undefined,
     passphrase: form.authType === 'privateKey' ? form.passphrase : undefined,
+    environment: form.environment,
     readyTimeout: sanitizeMs(form.readyTimeout),
     keepaliveInterval: sanitizeMs(form.keepaliveInterval),
   }
@@ -473,6 +492,30 @@ async function handleSave() {
 
 .form-group input::placeholder {
   color: var(--text-tertiary);
+}
+
+.env-select select {
+  height: 32px;
+  width: 100%;
+  padding: 0 10px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: var(--font-sans);
+  outline: none;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+.env-select select:focus {
+  border-color: var(--accent-blue);
+}
+.env-hint {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--accent-red, #f48771);
+  line-height: 1.4;
 }
 
 .auth-tabs {

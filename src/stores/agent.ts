@@ -160,6 +160,7 @@ export const useAgentStore = defineStore('agent', () => {
     mode?: 'ssh'
     systemPrompt?: string
     sshSessionId?: string
+    environment?: 'test' | 'prod'
     enableThinking?: boolean
     enableTools?: boolean
     maxIterations?: number

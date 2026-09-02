@@ -22,6 +22,7 @@ from routes.settings import router as settings_router
 from routes.skills import router as skills_router
 from routes.agent import router as agent_router
 from routes.terminal import router as terminal_router
+from routes.audit import router as audit_router
 from agent.consciousness_tick import get_global_tick
 
 logger = logging.getLogger(__name__)
@@ -147,6 +148,7 @@ app.include_router(settings_router, prefix="/api")
 app.include_router(skills_router, prefix="/api")
 app.include_router(agent_router, prefix="/api")
 app.include_router(terminal_router, prefix="/api")
+app.include_router(audit_router, prefix="/api")
 
 
 if __name__ == "__main__":

@@ -423,6 +423,80 @@ export interface ChatAttachment {
   truncated?: boolean
 }
 
+// ── 审计 API（等保2.0 安全审计）──
+export interface AuditRecord {
+  id: number
+  ts: string
+  operator: string
+  target_type: string
+  target_id: string
+  environment: string
+  action: string
+  command_hash: string
+  command_raw: string
+  result: string
+  conclusion: string // executed | auto_allowed | approved | blocked | denied
+  run_id: string
+  iteration: number
+  prev_hash: string
+  hash: string
+  created_at: string
+}
+
+export interface AuditVerifyResult {
+  intact: boolean
+  total: number
+  checked: number
+  broken: number[]
+  error?: string
+}
+
+export const auditApi = {
+  /** 按条件查询审计记录 */
+  query: (params: {
+    environment?: string
+    target_id?: string
+    action?: string
+    conclusion?: string
+    run_id?: string
+    limit?: number
+    offset?: number
+  } = {}) => {
+    const qs = new URLSearchParams()
+    if (params.environment) qs.set('environment', params.environment)
+    if (params.target_id) qs.set('target_id', params.target_id)
+    if (params.action) qs.set('action', params.action)
+    if (params.conclusion) qs.set('conclusion', params.conclusion)
+    if (params.run_id) qs.set('run_id', params.run_id)
+    if (params.limit !== undefined) qs.set('limit', String(params.limit))
+    if (params.offset !== undefined) qs.set('offset', String(params.offset))
+    return request<{ items: AuditRecord[]; total: number }>(`/audit/records?${qs.toString()}`)
+  },
+
+  /** 全链完整性校验 */
+  verify: () =>
+    request<AuditVerifyResult>('/audit/verify'),
+
+  /** 导出全部审计为 CSV */
+  exportCsv: async () => {
+    await ensureApiToken()
+    const url = `${getBaseUrl()}/audit/export`
+    const res = await fetch(url, {
+      headers: withApiToken({}),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }))
+      throw new Error(err.detail || res.statusText)
+    }
+    const blob = await res.blob()
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = 'audit_log.csv'
+    a.click()
+    URL.revokeObjectURL(a.href)
+  },
+}
+
 // ── SSE 流式聊天 ──
 
 export interface StreamChatOptions {
@@ -764,6 +838,7 @@ export interface StreamAgentOptions {
   mode?: 'ssh'
   systemPrompt?: string
   sshSessionId?: string
+  environment?: 'test' | 'prod'
   enableThinking?: boolean
   enableTools?: boolean
   maxIterations?: number
@@ -793,6 +868,7 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
           mode: options.mode || 'ssh',
           system_prompt: options.systemPrompt,
           ssh_session_id: options.sshSessionId,
+          environment: options.environment || 'test',
           enable_thinking: options.enableThinking ?? false,
           enable_tools: options.enableTools ?? true,
           max_iterations: options.maxIterations ?? 100,

@@ -31,10 +31,26 @@ from .contracts import (
 
 from .safety import classify_command, classify_shell_args
 
+from agent.audit import append_record
+
 logger = logging.getLogger(__name__)
 
 # 命令执行工具：审批必须绑定命令内容（审查 M-3），工具级授权不得覆盖命令级审批
 _COMMAND_EXEC_TOOLS = {"shell_exec", "local_exec"}
+
+
+def _audit_target_type(ctx: "RunContext") -> str:
+    """根据运行上下文推断目标类型（ssh / local / work）"""
+    if getattr(ctx, "ssh_session_id", ""):
+        return "ssh"
+    if getattr(ctx, "workspace_path", ""):
+        return "local"
+    return ""
+
+
+def _audit_target_id(ctx: "RunContext") -> str:
+    """目标标识：SSH 会话 id 优先，其次为工作区路径"""
+    return getattr(ctx, "ssh_session_id", "") or getattr(ctx, "workspace_path", "") or ""
 
 
 class Reins:
@@ -158,6 +174,18 @@ class FilesystemGuard:
                 # 无条件阻断，不询问 PermissionGate
                 # 修复：使用 "user" 角色而非 "system"，因为 inject_messages 会被添加到消息列表末尾
                 # OpenAI API 要求 system 消息必须在开头，添加到末尾会触发 400 错误
+                cmd = args.get("command") or args.get("shell") or args.get("cmd") or ""
+                append_record(
+                    action=tool,
+                    conclusion="blocked",
+                    run_id=ctx.run_id,
+                    iteration=ctx.iteration,
+                    target_type=_audit_target_type(ctx),
+                    target_id=_audit_target_id(ctx),
+                    environment=getattr(ctx, "environment", "test") or "test",
+                    command_raw=str(cmd),
+                    result=f"hardline: {reason}",
+                )
                 return ReinDecision(
                     intercepted=True,
                     intercept_reason=f"敏感命令: {reason}",
@@ -177,7 +205,17 @@ class FilesystemGuard:
                 # 交给 PermissionGate 决定是否需要审批
                 # B-MINOR 修复：permission_gate 未配置时 fail-closed —
                 # 原实现直接落到 "safe → 放行"，dangerous 命令在缺权限门时反而无审批
+                cmd = args.get("command") or args.get("shell") or args.get("cmd") or ""
                 if self.permission_gate is None:
+                    append_record(
+                        action=tool, conclusion="denied",
+                        run_id=ctx.run_id, iteration=ctx.iteration,
+                        target_type=_audit_target_type(ctx),
+                        target_id=_audit_target_id(ctx),
+                        environment=getattr(ctx, "environment", "test") or "test",
+                        command_raw=str(cmd),
+                        result=f"permission_gate_missing: {reason}",
+                    )
                     return ReinDecision(
                         intercepted=True,
                         intercept_reason="权限门未配置，拒绝执行危险命令",
@@ -196,36 +234,83 @@ class FilesystemGuard:
                             ),
                         }],
                     )
-                allowed = self.permission_gate.check_permission(tool, args, risk="dangerous")
-                if not allowed:
-                    # 审查 M-3 修复：原实现只发 "warning" 事件，前端没有可操作的授权卡片，
-                    # 用户根本无法批准 dangerous 命令（授权闭环断裂）。
-                    # 改发 permission_needed（payload 含 tool/args/command），前端
-                    # AgentRunPanel 渲染授权卡片，用户选择 本次/会话/始终（绑定命令）。
-                    return ReinDecision(
-                        intercepted=True,
-                        intercept_reason=f"需审批命令: {reason}",
-                        events=[TraceEvent(
-                            kind="permission_needed",
-                            source="reins.filesystem_guard",
-                            run_id=ctx.run_id,
-                            iteration=ctx.iteration,
-                            payload={
-                                "tool": tool,
-                                "args": args,
-                                "risk": "dangerous",
-                                "reversible": False,
-                                "message": f"需要用户授权: {tool} — {reason}",
-                            },
-                        )],
-                        inject_messages=[{
-                            "role": "user",
-                            "content": (
-                                f"[系统拦截] 命令被判定为 dangerous（{reason}），已在界面上向用户请求授权。"
-                                "请重新发起完全相同的命令（授权后会被放行），或改用更安全的替代方案。"
-                            ),
-                        }],
-                    )
+                # 生产环境强化（合规）：危险命令仅接受预授权 allowlist，禁止临时一次审批
+                env = (getattr(ctx, "environment", "test") or "test")
+                if env == "prod":
+                    if not self.permission_gate.is_permanently_allowed(tool, args):
+                        append_record(
+                            action=tool, conclusion="denied",
+                            run_id=ctx.run_id, iteration=ctx.iteration,
+                            target_type=_audit_target_type(ctx),
+                            target_id=_audit_target_id(ctx),
+                            environment=env,
+                            command_raw=str(cmd),
+                            result=f"prod_deny_no_allowlist: {reason}",
+                        )
+                        return ReinDecision(
+                            intercepted=True,
+                            intercept_reason=f"生产环境危险命令未预授权: {reason}",
+                            events=[TraceEvent(
+                                kind="warning",
+                                source="reins.filesystem_guard",
+                                run_id=ctx.run_id,
+                                iteration=ctx.iteration,
+                                payload={
+                                    "message": (
+                                        f"[生产强化] 危险命令在 prod 环境仅接受预授权 allowlist 放行。"
+                                        f"拒绝执行: {reason}"
+                                    ),
+                                },
+                            )],
+                            inject_messages=[{
+                                "role": "user",
+                                "content": (
+                                    f"[系统拦截] 当前目标为生产环境，危险命令（{reason}）需预先在"
+                                    "权限 allowlist 中登记后方可执行，此处拒绝临时授权。请改用更安全的操作。"
+                                ),
+                            }],
+                        )
+                    # 预授权命中 → 放行
+                else:
+                    allowed = self.permission_gate.check_permission(tool, args, risk="dangerous")
+                    if not allowed:
+                        # 审查 M-3 修复：原实现只发 "warning" 事件，前端没有可操作的授权卡片，
+                        # 用户根本无法批准 dangerous 命令（授权闭环断裂）。
+                        # 改发 permission_needed（payload 含 tool/args/command），前端
+                        # AgentRunPanel 渲染授权卡片，用户选择 本次/会话/始终（绑定命令）。
+                        append_record(
+                            action=tool, conclusion="denied",
+                            run_id=ctx.run_id, iteration=ctx.iteration,
+                            target_type=_audit_target_type(ctx),
+                            target_id=_audit_target_id(ctx),
+                            environment=env,
+                            command_raw=str(cmd),
+                            result=f"approval_needed: {reason}",
+                        )
+                        return ReinDecision(
+                            intercepted=True,
+                            intercept_reason=f"需审批命令: {reason}",
+                            events=[TraceEvent(
+                                kind="permission_needed",
+                                source="reins.filesystem_guard",
+                                run_id=ctx.run_id,
+                                iteration=ctx.iteration,
+                                payload={
+                                    "tool": tool,
+                                    "args": args,
+                                    "risk": "dangerous",
+                                    "reversible": False,
+                                    "message": f"需要用户授权: {tool} — {reason}",
+                                },
+                            )],
+                            inject_messages=[{
+                                "role": "user",
+                                "content": (
+                                    f"[系统拦截] 命令被判定为 dangerous（{reason}），已在界面上向用户请求授权。"
+                                    "请重新发起完全相同的命令（授权后会被放行），或改用更安全的替代方案。"
+                                ),
+                            }],
+                        )
             # safe → 放行
 
         return ReinDecision()
@@ -642,6 +727,19 @@ class PermissionGate:
             return True
         # 默认拦截 dangerous 命令（无交互式 UI，不能自动放行）
         return False
+
+    def is_permanently_allowed(self, tool_name: str, args: dict) -> bool:
+        """是否已被永久授权（生产环境危险命令的预授权 allowlist 判断）。
+
+        仅认 `_confirmed_permanent`（持久化 allowlist），忽略 once/session 一次性授权，
+        保证 prod 环境危险命令必须"预先登记"而非临时批准（合规要求）。
+        命令执行工具按"工具+命令哈希"键匹配（审查 M-3），其余工具按工具名匹配。
+        """
+        command = None
+        if tool_name in _COMMAND_EXEC_TOOLS and isinstance(args, dict):
+            command = args.get("command") or args.get("shell") or args.get("cmd")
+        key = self._grant_key(tool_name, command)
+        return key in self._confirmed_permanent
 
     def grant(self, tool_name: str, scope: str = 'once', command: Optional[str] = None) -> str:
         """授予权限，返回实际写入的授权键

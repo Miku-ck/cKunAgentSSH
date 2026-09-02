@@ -77,6 +77,11 @@ v-show="s.id === store.activeSessionId"
           <SftpView />
         </div>
 
+        <!-- 运维审计页面 -->
+        <div v-show="activeNavPage === 'audit'" class="audit-page">
+          <AuditView />
+        </div>
+
         <!-- Quick Start 页面 -->
         <div v-show="(showHome || store.sessions.length === 0) && activeNavPage === 'home'" class="quick-start">
           <div class="qs-header">
@@ -195,6 +200,7 @@ import RemoteManager from '@/components/ssh/RemoteManager.vue'
 import QuickCommandBar from '@/components/ssh/QuickCommandBar.vue'
 import SshAiPanel from '@/components/ssh/SshAiPanel.vue'
 import IconMonitor from '@/components/icons/IconMonitor.vue'
+import AuditView from '@/views/ssh/AuditView.vue'
 import { useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useSettings } from '@/composables/useSettings'
@@ -224,6 +230,7 @@ const {
   toggleRemoteManager,
   toggleSftp,
   toggleAiPanel,
+  toggleAudit,
   qsSearch,
   filteredShells,
   filteredConnections,
@@ -258,6 +265,7 @@ defineExpose({
   toggleAiPanel,
   toggleRemoteManager,
   toggleSftp,
+  toggleAudit,
   openSettings,
 })
 </script>
@@ -461,6 +469,17 @@ defineExpose({
 
 /* ─── SFTP Page ─── */
 .sftp-page {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  overflow: hidden;
+}
+
+/* ─── Audit Page ─── */
+.audit-page {
   position: absolute;
   top: 0;
   left: 0;

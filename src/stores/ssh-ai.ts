@@ -22,6 +22,8 @@ export interface SshAiContext {
   shell?: string
   /** 当前活动终端/SSH 会话 ID，Agent 模式下透传给后端供 shell_exec 远程执行 */
   sessionId?: string
+  /** 目标环境标记('test'|'prod')：来自 SSH 连接声明，驱动生产环境危险命令强制审批 */
+  environment?: 'test' | 'prod'
 }
 
 /** SSH 消息（兼容 ModeMessage，context 强类型为 SshAiContext） */
@@ -116,6 +118,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
         host: conn?.host || 'unknown',
         username: conn?.username || 'unknown',
         sessionId: session.id,
+        environment: conn?.environment || 'test',
       }
     } else {
       return {
@@ -267,6 +270,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       mode: 'ssh',
       systemPrompt,
       sshSessionId: ctx?.sessionId,
+      environment: ctx?.environment || 'test',
       enableThinking: false,
       enableTools: true,
       maxIterations: useSettingsStore().settings.agent.maxIterations,

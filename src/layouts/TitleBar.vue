@@ -17,6 +17,9 @@
       <button class="titlebar-action-btn" title="远程终端" @click="emit('action-remote')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg>
       </button>
+      <button class="titlebar-action-btn" title="运维审计" @click="emit('action-audit')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M9 12l2 2 4-4"/><path d="M20 12a8 8 0 1 1-2.34-5.66"/></svg>
+      </button>
       <button class="titlebar-action-btn" title="SFTP" @click="emit('action-sftp')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
       </button>
@@ -45,6 +48,7 @@ const api = window.electronAPI
 const emit = defineEmits<{
   'action-ai': []
   'action-remote': []
+  'action-audit': []
   'action-sftp': []
   'action-settings': []
 }>()

@@ -311,6 +311,8 @@ class RunContext:
     skill_ids: list[str] = field(default_factory=list)
     # SSH 会话 ID（SSH 模式下由前端传入，供 shell_exec 等工具远程执行）
     ssh_session_id: str = ""
+    # 目标环境标记（"test" | "prod"），驱动生产高风险命令的审计与审批强化
+    environment: str = "test"
 
     @classmethod
     def new(cls, task: str, mode: str, **opts) -> "RunContext":
@@ -322,6 +324,7 @@ class RunContext:
             conversation_id=opts.get("conversation_id", ""),
             workspace_path=opts.get("workspace_path", ""),
             ssh_session_id=opts.get("ssh_session_id", ""),
+            environment=opts.get("environment", "test"),
             system_prompt=opts.get("system_prompt", ""),
             history=opts.get("history", []),
             memories=opts.get("memories", []),
