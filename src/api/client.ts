@@ -621,7 +621,7 @@ export function streamChat(options: StreamChatOptions): () => void {
 // ── Agent SSE 流式运行 ──
 
 export interface AgentSSEEvent {
-  type: 'state' | 'content' | 'reasoning' | 'tool_call_start' | 'tool_call_result' | 'warning' | 'error' | 'human_help_needed' | 'permission_needed' | 'intention' | 'done'
+  type: 'state' | 'content' | 'reasoning' | 'tool_call_start' | 'tool_call_result' | 'warning' | 'error' | 'human_help_needed' | 'permission_needed' | 'permission_expired' | 'intention' | 'done'
   state?: string
   iteration?: number
   content?: string

@@ -73,7 +73,11 @@ class ReadFileTool(BaseTool):
         },
         "required": ["path"],
     }
-    meta = ToolMeta(risk_level="safe", reversible=True, idempotent=True)
+    # C-review M14：本地文件系统工具 — 仅本地模式（work/ide）可用。
+    # ssh 模式的目标在远程服务器，本地文件工具会"打错机器"（改到后端主机），
+    # 远程文件操作一律走 shell_exec（cat/ls/sed 等）。
+    meta = ToolMeta(risk_level="safe", reversible=True, idempotent=True,
+                    mode_scope=["work", "ide"])
 
     async def execute(self, context, path, start_line=None, end_line=None):
         # 解析路径
@@ -133,7 +137,8 @@ class WriteFileTool(BaseTool):
         },
         "required": ["path", "content"],
     }
-    meta = ToolMeta(risk_level="moderate", reversible=True)
+    # C-review M14：本地文件系统工具 — 仅本地模式（work/ide）可用（ssh 模式走 shell_exec）
+    meta = ToolMeta(risk_level="moderate", reversible=True, mode_scope=["work", "ide"])
 
     async def execute(self, context, path, content):
         full_path = self._resolve_path(path, context.workspace_path)
@@ -177,7 +182,9 @@ class ListDirTool(BaseTool):
         },
         "required": [],
     }
-    meta = ToolMeta(risk_level="safe", reversible=True, idempotent=True)
+    # C-review M14：本地文件系统工具 — 仅本地模式（work/ide）可用（ssh 模式走 shell_exec）
+    meta = ToolMeta(risk_level="safe", reversible=True, idempotent=True,
+                    mode_scope=["work", "ide"])
 
     async def execute(self, context, path=None):
         target = path or context.workspace_path
@@ -234,7 +241,8 @@ class DeleteFileTool(BaseTool):
         },
         "required": ["path"],
     }
-    meta = ToolMeta(risk_level="moderate", reversible=True)
+    # C-review M14：本地文件系统工具 — 仅本地模式（work/ide）可用（ssh 模式走 shell_exec）
+    meta = ToolMeta(risk_level="moderate", reversible=True, mode_scope=["work", "ide"])
 
     async def execute(self, context, path):
         full_path = self._resolve_path(path, context.workspace_path)
@@ -287,7 +295,8 @@ class MoveFileTool(BaseTool):
         },
         "required": ["source", "destination"],
     }
-    meta = ToolMeta(risk_level="moderate", reversible=True)
+    # C-review M14：本地文件系统工具 — 仅本地模式（work/ide）可用（ssh 模式走 shell_exec）
+    meta = ToolMeta(risk_level="moderate", reversible=True, mode_scope=["work", "ide"])
 
     async def execute(self, context, source, destination):
         src_full = self._resolve_path(source, context.workspace_path)

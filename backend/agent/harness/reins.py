@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import time
 from collections import deque, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -37,6 +38,21 @@ logger = logging.getLogger(__name__)
 
 # 命令执行工具：审批必须绑定命令内容（审查 M-3），工具级授权不得覆盖命令级审批
 _COMMAND_EXEC_TOOLS = {"shell_exec"}
+
+# C-review M7：审批等待超时（秒）。危险命令/权限请求发出后，用户在此时限内
+# 未响应 → 按拒绝处理：签名移出"等待审批"集合、不再重发 permission_needed
+# （发 permission_expired 让前端标记卡片过期）、注入强拒绝消息让 LLM 换路。
+_PERMISSION_APPROVAL_TIMEOUT_S = 120.0
+
+
+def _perm_pending(ctx: RunContext) -> dict:
+    """C-review M7：「等待审批」签名表（ctx.metadata，per-run 隔离）
+
+    key = LoopDetector._signature() 返回的 hashable 元组，
+    value = 首次发出 permission_needed 的 time.monotonic() 时间戳。
+    窗口内的重发豁免循环检测；超时的重发按拒绝处理。
+    """
+    return ctx.metadata.setdefault("permission_pending", {})
 
 
 def _audit_target_type(ctx: "RunContext") -> str:
@@ -271,37 +287,91 @@ class FilesystemGuard:
                         )
                     # 预授权命中 → 放行
                 else:
-                    allowed = self.permission_gate.check_permission(tool, args, risk="dangerous")
+                    # C-review M11：session 授权按会话键控
+                    allowed = self.permission_gate.check_permission(
+                        tool, args, risk="dangerous", conversation_id=ctx.conversation_id)
                     if not allowed:
+                        # C-review M7：审批等待三态处理（无审批超时、重发被循环检测
+                        # 抢截、授权卡片孤儿的问题由此修复）
+                        pending = _perm_pending(ctx)
+                        sig = LoopDetector._signature(last)
+                        first_ts = pending.get(sig)
+                        if first_ts is not None and \
+                                (time.monotonic() - first_ts) > _PERMISSION_APPROVAL_TIMEOUT_S:
+                            # 超时 → 按拒绝：移除标记（循环检测恢复计数）、不再重发卡片
+                            pending.pop(sig, None)
+                            append_record(
+                                action=tool, conclusion="denied",
+                                run_id=ctx.run_id, iteration=ctx.iteration,
+                                target_type=_audit_target_type(ctx),
+                                target_id=_audit_target_id(ctx),
+                                environment=env,
+                                command_raw=str(cmd),
+                                result=f"approval_timeout: {reason}",
+                            )
+                            return ReinDecision(
+                                intercepted=True,
+                                intercept_reason=f"审批超时（按拒绝处理）: {reason}",
+                                events=[TraceEvent(
+                                    kind="permission_expired",
+                                    source="reins.filesystem_guard",
+                                    run_id=ctx.run_id,
+                                    iteration=ctx.iteration,
+                                    payload={
+                                        "tool": tool,
+                                        "args": args,
+                                        "message": (
+                                            f"授权审批超时（{int(_PERMISSION_APPROVAL_TIMEOUT_S)}s 未响应），"
+                                            f"已按拒绝处理: {tool}"
+                                        ),
+                                    },
+                                )],
+                                inject_messages=[{
+                                    "role": "user",
+                                    "content": (
+                                        f"[系统拦截] 上述命令的授权审批已超时"
+                                        f"（{int(_PERMISSION_APPROVAL_TIMEOUT_S)}s 无用户响应），"
+                                        "系统已按拒绝处理。请勿重试该命令；改用更安全的替代方案，"
+                                        "或提示用户确认后再重新发起。"
+                                    ),
+                                }],
+                            )
+                        is_first = first_ts is None
+                        if is_first:
+                            pending[sig] = time.monotonic()
                         # 审查 M-3 修复：原实现只发 "warning" 事件，前端没有可操作的授权卡片，
                         # 用户根本无法批准 dangerous 命令（授权闭环断裂）。
                         # 改发 permission_needed（payload 含 tool/args/command），前端
                         # AgentRunPanel 渲染授权卡片，用户选择 本次/会话/始终（绑定命令）。
-                        append_record(
-                            action=tool, conclusion="denied",
-                            run_id=ctx.run_id, iteration=ctx.iteration,
-                            target_type=_audit_target_type(ctx),
-                            target_id=_audit_target_id(ctx),
-                            environment=env,
-                            command_raw=str(cmd),
-                            result=f"approval_needed: {reason}",
-                        )
+                        # C-review M7：仅首次请求发卡片（前端本就按 工具+命令 去重）；
+                        # 审批窗口内的重发只拦截 + 注入等待提示，不重复发事件。
+                        if is_first:
+                            append_record(
+                                action=tool, conclusion="denied",
+                                run_id=ctx.run_id, iteration=ctx.iteration,
+                                target_type=_audit_target_type(ctx),
+                                target_id=_audit_target_id(ctx),
+                                environment=env,
+                                command_raw=str(cmd),
+                                result=f"approval_needed: {reason}",
+                            )
+                        events = [TraceEvent(
+                            kind="permission_needed",
+                            source="reins.filesystem_guard",
+                            run_id=ctx.run_id,
+                            iteration=ctx.iteration,
+                            payload={
+                                "tool": tool,
+                                "args": args,
+                                "risk": "dangerous",
+                                "reversible": False,
+                                "message": f"需要用户授权: {tool} — {reason}",
+                            },
+                        )] if is_first else []
                         return ReinDecision(
                             intercepted=True,
                             intercept_reason=f"需审批命令: {reason}",
-                            events=[TraceEvent(
-                                kind="permission_needed",
-                                source="reins.filesystem_guard",
-                                run_id=ctx.run_id,
-                                iteration=ctx.iteration,
-                                payload={
-                                    "tool": tool,
-                                    "args": args,
-                                    "risk": "dangerous",
-                                    "reversible": False,
-                                    "message": f"需要用户授权: {tool} — {reason}",
-                                },
-                            )],
+                            events=events,
                             inject_messages=[{
                                 "role": "user",
                                 "content": (
@@ -407,6 +477,14 @@ class LoopDetector:
 
         last = ctx.tool_calls_log[-1]
         sig = self._signature(last)
+        # C-review M7：「等待审批」窗口内的签名豁免循环检测 — 审批期间的重发是
+        # 合理等待，不是循环。旧实现连续 3 次重发即触发循环检测（本拦截器
+        # priority=5 先于 FilesystemGuard=10 执行），第 4 次重发被抢截、
+        # permission_needed 不再发出 → 授权卡片孤儿、命令永远执行不了。
+        # 审批超时后由 FilesystemGuard/PermissionGate 移除标记，检测恢复正常
+        # （LLM 若在拒绝后仍重试，循环检测会接管终止 run）。
+        if sig in ctx.metadata.get("permission_pending", {}):
+            return ReinDecision()
         window.append(sig)
 
         # 实时统计当前窗口内该签名出现次数（避免持久计数失真）
@@ -647,7 +725,10 @@ class PermissionGate:
     # 三范围审批状态
     # 修复：使用 Counter 替代 set，避免跨 run 竞态（Run A 的授权被 Run B 消费）
     _confirmed_once: dict[str, int] = field(default_factory=lambda: defaultdict(int))  # 本次确认（计数器）
-    _confirmed_session: set[str] = field(default_factory=set)  # 会话级确认（整个会话有效）
+    # C-review M11：会话级确认按 conversation_id 键控（原全局 set — 会话 A 的
+    # session 授权会泄漏到会话 B 的 run 中免审）。进程级单例共享不变，
+    # 但"会话"边界 = conversation_id
+    _confirmed_session: dict[str, set[str]] = field(default_factory=dict)  # conversation_id → 确认键
     _confirmed_permanent: set[str] = field(default_factory=set)  # 永久确认（持久化到 config）
     # 用户覆盖（从 DB 加载）
     _overrides: dict[str, str] = field(default_factory=dict)
@@ -697,7 +778,8 @@ class PermissionGate:
         return tool_name
 
     def check_permission(self, tool_name: str, args: dict, scope: str = 'once',
-                         risk: Optional[str] = None) -> bool:
+                         risk: Optional[str] = None,
+                         conversation_id: str = "") -> bool:
         """检查权限，返回是否放行
 
         scope: 'once' (仅本次) | 'session' (会话级) | 'always' (永久)
@@ -718,7 +800,9 @@ class PermissionGate:
         # B-6 修复：dangerous 需每次授权 — 忽略 session 级缓存
         # （原实现固定按 permanent→session→once 检查，首次 session 授权后
         #   同命令后续执行全部免审批，与 check() 中 L748 注释契约矛盾）
-        if risk != "dangerous" and key in self._confirmed_session:
+        # C-review M11：只查本会话（conversation_id）的 session 授权，
+        # 跨会话不再免审（原全局 set 会把会话 A 的授权泄漏到会话 B）
+        if risk != "dangerous" and key in self._confirmed_session.get(conversation_id, frozenset()):
             return True
         # 修复：检查 once allowlist（使用计数器，避免跨 run 竞态）
         if self._confirmed_once.get(key, 0) > 0:
@@ -742,45 +826,67 @@ class PermissionGate:
         key = self._grant_key(tool_name, command)
         return key in self._confirmed_permanent
 
-    def grant(self, tool_name: str, scope: str = 'once', command: Optional[str] = None) -> str:
+    def grant(self, tool_name: str, scope: str = 'once', command: Optional[str] = None,
+              conversation_id: str = "") -> str:
         """授予权限，返回实际写入的授权键
 
         scope: 'once' | 'session' | 'always'
         command: 命令执行工具时传入被批准的具体命令（审查 M-3 命令级绑定）
+        conversation_id: C-review M11 — session 授权绑定到发起授权的会话
         """
         key = self._grant_key(tool_name, command)
         if scope == 'once':
             # 修复：使用计数器，支持多次授权累积
             self._confirmed_once[key] = self._confirmed_once.get(key, 0) + 1
         elif scope == 'session':
-            self._confirmed_session.add(key)
+            self._confirmed_session.setdefault(conversation_id, set()).add(key)
         elif scope == 'always':
             self._confirmed_permanent.add(key)
             self._save_permanent_allowlist()
         return key
 
-    def _revoke_key(self, key: str) -> None:
+    def _revoke_key(self, key: str, conversation_id: Optional[str] = None) -> None:
         self._confirmed_once.pop(key, None)  # Counter 使用 pop 替代 discard
-        self._confirmed_session.discard(key)
+        # C-review M11：conversation_id 指定 → 只撤该会话；None → 撤所有会话
+        if conversation_id is not None:
+            s = self._confirmed_session.get(conversation_id)
+            if s is not None:
+                s.discard(key)
+                if not s:
+                    self._confirmed_session.pop(conversation_id, None)
+        else:
+            for s in self._confirmed_session.values():
+                s.discard(key)
+            for cid in [c for c, s in self._confirmed_session.items() if not s]:
+                self._confirmed_session.pop(cid, None)
         self._confirmed_permanent.discard(key)
 
-    def revoke(self, tool_name: str, command: Optional[str] = None) -> None:
+    def revoke(self, tool_name: str, command: Optional[str] = None,
+               conversation_id: Optional[str] = None) -> None:
         """撤销权限
 
         - 提供 command：只撤销该条命令的绑定授权
         - 不提供 command：撤销该工具的全部授权（工具级 + 所有命令级绑定键）
+        - conversation_id：C-review M11 — 只撤指定会话的 session 授权；
+          None（默认）保持旧语义：撤所有会话
         """
         if command and tool_name in _COMMAND_EXEC_TOOLS:
-            self._revoke_key(self._grant_key(tool_name, command))
+            self._revoke_key(self._grant_key(tool_name, command), conversation_id)
         else:
-            self._revoke_key(tool_name)
+            self._revoke_key(tool_name, conversation_id)
             prefix = tool_name + ":"
             for k in [k for k in self._confirmed_permanent if k.startswith(prefix)]:
-                self._revoke_key(k)
-            for k in [k for k in self._confirmed_session if k.startswith(prefix)]:
-                self._revoke_key(k)
+                self._revoke_key(k, conversation_id)
+            cids = [conversation_id] if conversation_id is not None \
+                else list(self._confirmed_session.keys())
+            for cid in cids:
+                s = self._confirmed_session.get(cid)
+                if not s:
+                    continue
+                for k in [k for k in s if k.startswith(prefix)]:
+                    self._revoke_key(k, cid)
             for k in [k for k in self._confirmed_once if k.startswith(prefix)]:
-                self._revoke_key(k)
+                self._revoke_key(k, conversation_id)
         self._save_permanent_allowlist()
 
     def clear_once(self) -> None:
@@ -872,30 +978,70 @@ class PermissionGate:
 
         # dangerous → 需每次授权（不可 session 级缓存，防止首次授权后 Agent 执行任意高危命令）
         if risk == "dangerous":
-            if self.check_permission(tool, args, scope='once', risk='dangerous'):
+            if self.check_permission(tool, args, scope='once', risk='dangerous',
+                                      conversation_id=ctx.conversation_id):
                 return ReinDecision()
         else:
             # moderate 不可逆 → session 级授权可接受（风险有限）
-            if self.check_permission(tool, args, scope='session'):
+            if self.check_permission(tool, args, scope='session',
+                                     conversation_id=ctx.conversation_id):
                 return ReinDecision()
 
         # 未授权 → 发 permission_needed 事件 + 拦截
+        # C-review M7：与 FilesystemGuard 相同的审批三态处理（首次发卡片 /
+        # 窗口内重发豁免循环检测 / 超时按拒绝）
+        pending = _perm_pending(ctx)
+        sig = LoopDetector._signature(last)
+        first_ts = pending.get(sig)
+        if first_ts is not None and \
+                (time.monotonic() - first_ts) > _PERMISSION_APPROVAL_TIMEOUT_S:
+            pending.pop(sig, None)
+            return ReinDecision(
+                intercepted=True,
+                intercept_reason=f"审批超时（按拒绝处理）: {tool}",
+                events=[TraceEvent(
+                    kind="permission_expired",
+                    source="reins.permission_gate",
+                    run_id=ctx.run_id,
+                    iteration=ctx.iteration,
+                    payload={
+                        "tool": tool,
+                        "args": args,
+                        "message": (
+                            f"授权审批超时（{int(_PERMISSION_APPROVAL_TIMEOUT_S)}s 未响应），"
+                            f"已按拒绝处理: {tool}"
+                        ),
+                    },
+                )],
+                inject_messages=[{
+                    "role": "user",
+                    "content": (
+                        f"[系统拦截] 工具 {tool} 的授权审批已超时"
+                        f"（{int(_PERMISSION_APPROVAL_TIMEOUT_S)}s 无用户响应），系统已按拒绝处理。"
+                        "请勿重试该工具；换用更安全的工具，或提示用户确认后再重新发起。"
+                    ),
+                }],
+            )
+        is_first = first_ts is None
+        if is_first:
+            pending[sig] = time.monotonic()
+        events = [TraceEvent(
+            kind="permission_needed",
+            source="reins.permission_gate",
+            run_id=ctx.run_id,
+            iteration=ctx.iteration,
+            payload={
+                "tool": tool,
+                "args": args,
+                "risk": risk,
+                "reversible": reversible,
+                "message": f"需要用户授权: {tool} (风险: {risk})",
+            },
+        )] if is_first else []
         return ReinDecision(
             intercepted=True,
             intercept_reason=f"工具 {tool} 风险等级 {risk}，需要用户授权",
-            events=[TraceEvent(
-                kind="permission_needed",
-                source="reins.permission_gate",
-                run_id=ctx.run_id,
-                iteration=ctx.iteration,
-                payload={
-                    "tool": tool,
-                    "args": args,
-                    "risk": risk,
-                    "reversible": reversible,
-                    "message": f"需要用户授权: {tool} (风险: {risk})",
-                },
-            )],
+            events=events,
             inject_messages=[{
                 "role": "user",
                 "content": f"[系统拦截] 工具 {tool} 风险等级为 {risk}，需要用户授权才能执行。请换用更安全的工具，或在弹出的授权卡片中允许此工具。",
@@ -1366,6 +1512,95 @@ class DynamicBudgetRein:
 
 
 @dataclass
+class CostBudgetRein:
+    """
+    C-review M10：成本/token 硬熔断 — POST_ITERATION
+
+    背景：max_iterations 允许到 500，DynamicBudgetRein 还可再放宽 2x，
+    最坏一次 run 约 1000 次 LLM 调用；CostTracker 只累计、无人切断，
+    失控任务会持续烧资源直到步数耗尽。
+
+    机制：
+    - 每次 POST_ITERATION 从 ctx.metadata["cost_tracker"] 读实时累计
+      成本/token（harness.assemble 注入的 per-run 引用）
+    - 上限取 ctx.config.max_cost_usd / max_total_tokens
+      （None → 内置默认；0 → 显式禁用；>0 → 自定义上限）
+    - 超限 → intercepted + terminate：driver transition(FAILED) 并终止 run
+
+    熔断器异常时 fail-open（跳过本次检查）——熔断自身故障不应阻断主流程。
+    """
+    point: ReinPoint = field(default=ReinPoint.POST_ITERATION, init=False)
+    # priority=1：先于 DynamicBudgetRein(3)/ConfidenceMonitor 执行 —
+    # Reins 在首个 intercepted 即短路，保证熔断触发后不会再"追加预算"
+    priority: int = field(default=1, init=False)
+    # 内置默认上限（ctx.config 为 None 时生效）。取值考量：本地 vLLM 按
+    # fallback 计价时正常 100-200 步 run 远低于 $2；token 上限对大上下文
+    # 循环是第一道闸。均可通过 AgentConfig 覆盖或置 0 禁用。
+    default_max_cost_usd: float = 2.0
+    default_max_total_tokens: int = 3_000_000
+
+    async def check(self, ctx: RunContext) -> ReinDecision:
+        tracker = (ctx.metadata or {}).get("cost_tracker")
+        if tracker is None:
+            return ReinDecision()
+        max_cost = ctx.config.max_cost_usd
+        if max_cost is None:
+            max_cost = self.default_max_cost_usd
+        max_tokens = ctx.config.max_total_tokens
+        if max_tokens is None:
+            max_tokens = self.default_max_total_tokens
+        try:
+            total_tokens = int(tracker.get_total_tokens())
+            total_cost = float(tracker.get_total_cost())
+        except Exception:
+            logger.warning("CostBudgetRein 读取成本数据失败，跳过本次检查")
+            return ReinDecision()
+
+        cost_exceeded = max_cost > 0 and total_cost > max_cost
+        tokens_exceeded = max_tokens > 0 and total_tokens > max_tokens
+        if not (cost_exceeded or tokens_exceeded):
+            return ReinDecision()
+
+        reason = (
+            f"成本/token 预算超限: cost=${total_cost:.4f}(上限 ${max_cost:g}), "
+            f"tokens={total_tokens}(上限 {max_tokens})"
+        )
+        logger.warning("CostBudgetRein 熔断: %s (run_id=%s)", reason, ctx.run_id)
+        # 落审计链（熔断也是可审计动作）；conclusion 取值受 audit 校验，用 blocked
+        try:
+            append_record(
+                action="cost_budget_breaker",
+                conclusion="blocked",
+                run_id=ctx.run_id,
+                iteration=ctx.iteration,
+                target_type="run",
+                target_id=ctx.run_id,
+                environment=getattr(ctx, "environment", "test") or "test",
+                result=reason,
+            )
+        except Exception:
+            logger.warning("CostBudgetRein 审计写入失败（不阻塞）")
+        return ReinDecision(
+            intercepted=True,
+            terminate=True,
+            intercept_reason=reason,
+            events=[TraceEvent(
+                kind="warning",
+                source="reins.cost_budget",
+                run_id=ctx.run_id,
+                iteration=ctx.iteration,
+                payload={
+                    "message": f"硬熔断：累计成本/token 超预算，运行终止（{reason}）",
+                    "total_tokens": total_tokens,
+                    "total_cost_usd": round(total_cost, 6),
+                    "max_cost_usd": max_cost,
+                    "max_total_tokens": max_tokens,
+                },
+            )],
+        )
+
+
+@dataclass
 class SkillRein:
     """
     技能注入拦截器 — 在 AGENT_START 时注入技能上下文到 system_prompt
@@ -1476,6 +1711,10 @@ def create_default_reins(
             budget_rein.step_per_interval = config.dynamic_budget_step
             budget_rein.max_multiplier = config.dynamic_budget_cap
         interceptors.append(budget_rein)
+
+    # C-review M10：成本/token 硬熔断（POST_ITERATION，priority=1 先于动态预算，
+    # 触发后短路终止 — 最坏 1000 次 LLM 调用无人切断的问题由此兜底）
+    interceptors.append(CostBudgetRein())
 
     interceptors.append(ConfidenceMonitor())
 

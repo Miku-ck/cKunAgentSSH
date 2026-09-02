@@ -307,10 +307,14 @@ _TITLE_PROMPT_TEMPLATE = """\
 
 
 async def _generate_title(ctx: TurnContext, config: PostProcessConfig) -> None:
-    """生成会话标题 — 仅首轮 + 标题仍是默认值时调用 LLM"""
+    """生成会话标题 — 标题仍是默认值时调用 LLM（幂等）
+
+    M5 修复：原实现有「仅首轮」（is_first_turn）门槛，但首轮失败（user 消息已入库）
+    后次轮 turn_index=1 → 门槛永久关闭，会话名停在 "New Chat" 且永远补不回来。
+    下方「标题仍是默认值」检查已保证幂等（已生成标题则不覆盖、用户自定义标题不动），
+    故去掉首轮门槛，让失败/跳过的轮次能补生成标题。
+    """
     if not config.generate_title:
-        return
-    if not ctx.is_first_turn:
         return
 
     # 检查当前标题是否仍是默认值

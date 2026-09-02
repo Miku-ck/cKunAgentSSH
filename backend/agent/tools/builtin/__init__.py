@@ -1,16 +1,18 @@
 """
 内置工具包 — 按模式注册工具
 
-工具清单:
-  - read_file      (ssh)  读取文件内容
-  - write_file     (ssh)  写入文件内容
-  - patch_file     (ssh)  精确字符串替换编辑文件
-  - delete_file    (ssh)  删除文件
-  - move_file      (ssh)  移动/重命名文件
-  - list_dir       (ssh)  列出目录内容
-  - grep           (ssh)  内容搜索（正则）
-  - glob           (ssh)  递归文件查找
-  - shell_exec     (ssh)  执行 shell 命令
+工具清单（C-review M14 起，本地文件工具仅本地模式 work/ide 可用，
+ssh 模式的文件操作一律走 shell_exec 远程执行 — 本地文件工具在 ssh 模式
+会操作后端主机而非远程服务器）:
+  - read_file      (work/ide)  读取文件内容
+  - write_file     (work/ide)  写入文件内容
+  - patch_file     (work/ide)  精确字符串替换编辑文件
+  - delete_file    (work/ide)  删除文件
+  - move_file      (work/ide)  移动/重命名文件
+  - list_dir       (work/ide)  列出目录内容
+  - grep           (work/ide)  内容搜索（正则）
+  - glob           (work/ide)  递归文件查找
+  - shell_exec     (ssh)  执行 shell 命令（ssh 模式远程执行 / 本地模式本地执行）
   - web_search     (ssh)  联网搜索
   - web_fetch      (ssh)  抓取网页内容
   - todo_write     (ssh)  管理任务列表

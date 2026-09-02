@@ -51,7 +51,8 @@ class PatchFileTool(BaseTool):
         },
         "required": ["path", "old_string", "new_string"],
     }
-    meta = ToolMeta(risk_level="moderate", reversible=True)
+    # C-review M14：本地文件系统工具 — 仅本地模式（work/ide）可用（ssh 模式走 shell_exec）
+    meta = ToolMeta(risk_level="moderate", reversible=True, mode_scope=["work", "ide"])
 
     async def execute(self, context, path, old_string, new_string, replace_all=False):
         # 解析路径并做安全边界检查

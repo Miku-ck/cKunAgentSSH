@@ -58,7 +58,10 @@ def _backup_file(abs_path: str, run_id: str) -> Optional[str]:
     """
     将文件备份到磁盘，返回备份文件路径。
     - 文件不存在时返回 None（表示"原本不存在"）
-    - 备份文件命名: <backup_root>/<run_id>/<sha256(abs_path)>_<basename>
+    - 备份文件命名: <backup_root>/<run_id>/<sha256(abs_path)>_<basename>_g<N>
+      C-review M13：带代次序号 — 同 run 内同文件二次写入时，旧实现 copy2 同名
+      目标静默覆盖第一次备份，undo 恢复到"中间态"而非 run 前原始内容。
+      现在每次写前各存一代（g1 = 第一次写前内容 = run 前原始），undo 取第一代。
     - 进程崩溃后可通过扫描 <backup_root>/<run_id>/ 恢复
     """
     if not os.path.exists(abs_path):
@@ -69,7 +72,17 @@ def _backup_file(abs_path: str, run_id: str) -> Optional[str]:
         os.makedirs(run_dir, exist_ok=True)
         # 用 sha256(abs_path) 避免路径冲突
         path_hash = hashlib.sha256(abs_path.encode("utf-8")).hexdigest()[:16]
-        backup_name = f"{path_hash}_{os.path.basename(abs_path)}"
+        base_name = f"{path_hash}_{os.path.basename(abs_path)}"
+        # C-review M13：扫描该文件已有代次（旧版无代次备份视为 g1）
+        gen = 0
+        for name in os.listdir(run_dir):
+            if name == base_name:
+                gen = max(gen, 1)
+                continue
+            m = re.fullmatch(re.escape(base_name) + r"_g(\d+)", name)
+            if m:
+                gen = max(gen, int(m.group(1)))
+        backup_name = f"{base_name}_g{gen + 1}"
         backup_path = os.path.join(run_dir, backup_name)
         shutil.copy2(abs_path, backup_path)
         # 同时写入元数据（原路径）

@@ -150,8 +150,10 @@ def record_file_write(
                 prev.added_lines = max(prev.added_lines, added)
                 prev.removed_lines = max(prev.removed_lines, removed)
                 prev.after_size = after_size
-                prev.operation = "modify"  # 已存在则视为 modify
                 prev.after_content = change.after_content  # 更新为最新内容
+                # C-review M13：不覆盖 operation — 首次写入的 operation 反映 run 前
+                # 状态（create→modify 合并后仍是 "create"，undo 才会正确删文件；
+                # before_content/before_size 同样保留首次值 = run 前原始）
             else:
                 run_map[abs_path] = change
 

@@ -416,6 +416,26 @@ export const useAgentStore = defineStore('agent', () => {
         break
       }
 
+      case 'permission_expired': {
+        // C-review M7：审批超时（后端按拒绝处理）→ 标记对应授权卡片过期，
+        // 按钮失效，避免用户点了一个后端已不再等待的"孤儿卡片"
+        const tool = event.tool || ''
+        const cmd = typeof event.args?.command === 'string' ? (event.args.command as string) : ''
+        const key = cmd ? `${tool}::${cmd}` : tool
+        for (const r of permissionRequests.value) {
+          if (r.resolved) continue
+          const rKey = r.isCommandTool
+            ? `${r.tool}::${typeof r.args?.command === 'string' ? r.args.command : ''}`
+            : r.tool
+          if (rKey === key) {
+            r.resolved = true
+            r.granting = false
+            r.message = `${r.message}（审批超时，已按拒绝处理）`
+          }
+        }
+        break
+      }
+
       case 'error':
         errorMessage.value = event.message || 'Unknown error'
         status.value = 'failed'

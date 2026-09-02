@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
+from typing import Optional
 
 from .contracts import RunContext
 # 复用 cost_tracker 的更精确 token 估算（区分中英文），避免重复实现
@@ -161,9 +162,10 @@ class Bridle:
         """
         压缩本次 run 累积消息（ctx.messages），原地更新 ctx：
 
-        - 早期 run 消息（user/assistant/tool）压缩为摘要，存入
-          ctx.metadata["context_summary"]（与既有摘要合并，避免重复）
-        - ctx.messages 仅保留近期 run 消息
+        - 早期 run 消息（user/assistant/tool）压缩为摘要（_SUMMARY_PREFIX 显式标记），
+          存入 ctx.metadata["context_summary"]（滚动再摘要直接替换，尺寸有界）
+        - ctx.messages 仅保留近期 run 消息（摘要消息不入 ctx.messages，
+          由 assemble/_build 从 metadata 重新注入）
         - run 中的 system 消息（如拦截器 inject_messages 的纠偏提示）属于对话流，
           不并入摘要、不被丢弃，原样保留在 ctx.messages 末尾（紧邻下一轮 LLM 调用）
 
@@ -186,24 +188,37 @@ class Bridle:
                 prior_text = prior_text[len(_SUMMARY_PREFIX):]
             conv = [{"role": "user", "content": _PRIOR_SUMMARY_SENTINEL + prior_text}] + conv
         compressed = self.compress_messages(conv, force=force)
-        sys_msgs = [m for m in compressed if m.get("role") == "system"]
-        recent = [m for m in compressed if m.get("role") != "system"]
+        # C-review M12：从压缩结果中取出"显式标记的摘要消息"（_SUMMARY_PREFIX 前缀，
+        # compress_messages 生成的摘要消息 role=user），写入
+        # ctx.metadata["context_summary"] — assemble 时经 _build 重新注入。
+        # 原实现靠"压缩结果中存在 system 消息"才写元数据，但输入已剥离全部 system、
+        # 摘要消息又是 user 角色 → 分支恒死，摘要滞留 ctx.messages 并在下一轮
+        # 压缩被再截 200 字符嵌套（历史退化为嵌套切片）。
+        recent: list[dict] = []
+        summary_text: Optional[str] = None
+        for m in compressed:
+            c = m.get("content")
+            if (m.get("role") != "system"
+                    and isinstance(c, str)
+                    and c.startswith(_SUMMARY_PREFIX)):
+                summary_text = c[len(_SUMMARY_PREFIX):]
+                continue
+            recent.append(m)
         # 剔除合成前置摘要消息（仅用于本次压缩，不应进入 ctx.messages 或摘要）
         recent = [
             m for m in recent
             if not (isinstance(m.get("content"), str)
                     and m["content"].startswith(_PRIOR_SUMMARY_SENTINEL))
         ]
-        if sys_msgs:
-            new_text = "\n".join(m["content"] for m in sys_msgs)
+        if summary_text is not None:
             # 已含旧摘要的浓缩（滚动再摘要），直接替换而非追加，确保摘要尺寸有界
             # 审查 MINOR 修复：旧 cap = max_context_tokens * 3 字符 ≈ 整个上下文窗口的
             # 字符当量（16384 窗口 → 49152 字符 ≈ 16k token），一条摘要即可再撑爆窗口，
             # 反复触发 force 压缩直到重试耗尽。改为窗口的 25%（下限 2000 字符）。
             cap = max(2000, int(self.max_context_tokens * 0.25 * _CHARS_PER_TOKEN))
             ctx.metadata["context_summary"] = (
-                new_text if len(new_text) <= cap
-                else "[早期上下文已折叠]\n" + new_text[-(cap - 11):]
+                summary_text if len(summary_text) <= cap
+                else "[早期上下文已折叠]\n" + summary_text[-(cap - 11):]
             )
         # 保留纠偏 system 消息（置于末尾），其余为近期 run 消息
         ctx.messages = recent + run_system
@@ -281,14 +296,20 @@ class Bridle:
             return self._strip_tool_priority(system_msgs + conv_msgs)
         old_msgs = conv_msgs[:old_count]
 
-        # 早期消息压缩为一条 system 摘要
+        # 早期消息压缩为一条摘要
         summary_parts = []
+        prior_part: Optional[str] = None
         for msg in old_msgs:
             role = msg.get("role", "?")
             content = msg.get("content", "")
             if isinstance(content, str) and content:
                 if content.startswith(_PRIOR_SUMMARY_SENTINEL):
-                    content = content[len(_PRIOR_SUMMARY_SENTINEL):]
+                    # C-review M12：先前摘要按上限完整回喂（与 metadata 存储的 cap 一致），
+                    # 滚动再摘要得以浓缩完整旧摘要；旧实现只留 200 字符，
+                    # 每一代摘要都丢失上一代绝大部分信息（嵌套截断退化）
+                    prior_cap = max(2000, int(self.max_context_tokens * 0.25 * _CHARS_PER_TOKEN))
+                    prior_part = f"[user] {content[len(_PRIOR_SUMMARY_SENTINEL):][:prior_cap]}"
+                    continue
                 # tool 消息按 priority 差异化摘要长度
                 if role == "tool":
                     priority = msg.get("priority", "normal")
@@ -309,6 +330,10 @@ class Bridle:
                 for tc in msg["tool_calls"]:
                     name = tc.get("function", {}).get("name", "?")
                     summary_parts.append(f"[assistant] 调用工具: {name}")
+        # C-review M12：先前摘要置于 parts 末尾 — 超 cap 的尾部截断保住它
+        # （及最近的旧消息），被裁掉的是最旧的 200 字符切片（相关性最低）
+        if prior_part is not None:
+            summary_parts.append(prior_part)
 
         # 修复：使用 "user" 角色而非 "system"，避免 system 消息不在开头触发 400 错误
         summary_text = "以下是之前对话的摘要:\n" + "\n".join(summary_parts)

@@ -72,7 +72,10 @@ class GrepTool(BaseTool):
         },
         "required": ["pattern"],
     }
-    meta = ToolMeta(risk_level="safe", reversible=False, idempotent=True)  # 只读搜索，可安全重试
+    # C-review M14：本地文件搜索工具 — 仅本地模式（work/ide）可用。
+    # ssh 模式下会搜索后端主机而非远程服务器（误导性结果），远程搜索走 shell_exec 的 grep
+    meta = ToolMeta(risk_level="safe", reversible=False, idempotent=True,
+                    mode_scope=["work", "ide"])  # 只读搜索，可安全重试
 
     async def execute(self, context, pattern, path=None, include=None,
                       ignore_case=False, max_results=50, context_lines=0):

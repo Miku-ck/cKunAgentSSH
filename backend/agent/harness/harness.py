@@ -239,6 +239,10 @@ class Harness:
         # 其 saddle 字段会被后启动的并发 run 覆盖；拦截器改从 ctx.metadata 读取
         # 当前 run 的 Saddle，避免查错 ToolRegistry 误判"工具未注册"。
         ctx.metadata["saddle"] = self._saddle
+        # C-review M10：注入 per-run 成本追踪器，CostBudgetRein 熔断读取实时累计
+        # （ctx.metadata 是 per-run dict，不受并发 run 影响）
+        if self.cost_tracker is not None:
+            ctx.metadata["cost_tracker"] = self.cost_tracker
 
         # 首条消息：用户任务
         ctx.messages.append({"role": "user", "content": task})

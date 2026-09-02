@@ -249,6 +249,10 @@ class AgentConfig:
     dynamic_budget_interval: int = 3   # 每编辑 N 个不同文件追加预算
     dynamic_budget_step: int = 2       # 每次追加的步数
     dynamic_budget_cap: float = 2.0    # 封顶倍数（相对 initial_max）
+    # C-review M10：成本/token 硬熔断（POST_ITERATION 的 CostBudgetRein 每轮检查）
+    # None → CostBudgetRein 内置默认（$2.0 / 3M tokens）；0 → 显式禁用；>0 → 自定义上限
+    max_cost_usd: Optional[float] = None
+    max_total_tokens: Optional[int] = None
     # 语法验证配置
     enable_syntax_verify: bool = True  # 是否启用编辑后语法检查
     # ── 意图识别 + 思考预算（避免无脑长思考拖垮上下文/可观测性）──

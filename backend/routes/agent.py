@@ -166,11 +166,25 @@ def _build_agent_system_prompt(
         )
     else:
         # 工具使用效率指引：减少无意义重复读取和循环调用
-        parts.append(
-            "工具使用效率：读取文件后请基于返回内容直接推理和修改，避免在短时间内多次读取同一文件。"
-            "如需查看大文件的不同位置，请优先使用 read_file 的 start_line/end_line 参数读取相关片段，"
-            "而不是重新读取整个文件。"
-        )
+        # C-review M14：按模式选择话术 — ssh 模式无本地文件工具（M14 移出），
+        # 不能引导 LLM 使用不存在的 read_file
+        try:
+            from agent.tools.builtin import get_all_tool_classes
+            _mode_tool_names = {cls.name for cls in get_all_tool_classes(req.mode)}
+        except Exception:
+            _mode_tool_names = set()
+        if "read_file" in _mode_tool_names:
+            parts.append(
+                "工具使用效率：读取文件后请基于返回内容直接推理和修改，避免在短时间内多次读取同一文件。"
+                "如需查看大文件的不同位置，请优先使用 read_file 的 start_line/end_line 参数读取相关片段，"
+                "而不是重新读取整个文件。"
+            )
+        else:
+            parts.append(
+                "工具使用效率：通过 shell_exec 获取文件内容（cat/head/tail 等）后，请基于返回内容直接"
+                "推理和修改，避免在短时间内重复输出同一文件内容。查看大文件的不同位置时，优先用 "
+                "sed -n 'X,Yp'、head -n、tail -n 等指定范围读取相关片段，而不是反复 cat 整个文件。"
+            )
         # 任务拆分指引：鼓励 Agent 把大任务拆成可独立验证的子任务
         parts.append(
             "任务拆分：面对复杂任务（涉及多文件修改、多步骤验证、跨模块重构等），请先在首轮输出一个简短的"
@@ -262,6 +276,9 @@ class AgentRunRequest(BaseModel):
     enable_intention_guide: bool = True
     # 动态步数预算开关（可由前端设置面板控制）
     enable_dynamic_budget: bool = True
+    # C-review M10：成本/token 硬熔断（None=内置默认 $2/3M tokens；0=禁用；>0=自定义）
+    max_cost_usd: Optional[float] = Field(None, ge=0, description="累计成本上限（USD），超出即终止 run")
+    max_total_tokens: Optional[int] = Field(None, ge=0, description="累计 token 上限，超出即终止 run")
 
 
 # ── Routes ──
@@ -493,6 +510,9 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     enable_tools=effective_enable_tools,
                     enable_intention_guide=req.enable_intention_guide,
                     enable_dynamic_budget=req.enable_dynamic_budget,
+                    # C-review M10：成本/token 硬熔断
+                    max_cost_usd=req.max_cost_usd,
+                    max_total_tokens=req.max_total_tokens,
                 )
                 async for trace_event in harness.run(
                     task=req.task,
@@ -918,6 +938,8 @@ class PermissionGrantRequest(BaseModel):
     # 命令执行工具（shell_exec）时传入被批准的具体命令，
     # 授权绑定到命令哈希（同命令免审批，其他 dangerous 命令仍需审批）
     command: Optional[str] = Field(None, description="命令执行工具的具体命令（用于命令级绑定）")
+    # C-review M11：session 级授权绑定的会话 ID — 防跨会话授权泄漏
+    conversation_id: str = Field("", description="会话 ID（session 授权按会话键控）")
 
 
 @router.post("/agent/permission/grant")
@@ -925,7 +947,8 @@ def grant_tool_permission(req: PermissionGrantRequest):
     """授权工具
 
     scope=once: 仅放行下一次相同工具（命令工具为相同命令）调用
-    scope=session: 进程级单例 _confirmed_session，跨 run 共享，进程重启失效（H13 修复 A5）
+    scope=session: 进程级单例 _confirmed_session，跨 run 共享，进程重启失效（H13 修复 A5）；
+      C-review M11：按 conversation_id 键控，只对发起会话的 run 生效
     scope=always: 写入 ~/.ckunagentic/allowlist.txt，所有后续 run 放行
       （命令工具写入的是 `tool:cmdhash` 键，不覆盖其他命令 — 审查 M-3）
     """
@@ -935,7 +958,8 @@ def grant_tool_permission(req: PermissionGrantRequest):
 
     # H13 修复 A5：session scope 改用进程级单例（原 501 限制移除）
     pg = _get_global_permission_gate_sync()
-    grant_key = pg.grant(req.tool, scope=req.scope, command=req.command)
+    grant_key = pg.grant(req.tool, scope=req.scope, command=req.command,
+                         conversation_id=req.conversation_id)
     # C-review C2 修复：批准动作落审计链（原实现只写内存/allowlist，
     # 事后无法证明"谁批准了什么"，等保审计目标落空）
     try:
@@ -946,7 +970,7 @@ def grant_tool_permission(req: PermissionGrantRequest):
             target_type="tool",
             target_id=grant_key,
             command_raw=req.command or "",
-            result=f"scope={req.scope}",
+            result=f"scope={req.scope},conversation={req.conversation_id or '-'}",
         )
     except Exception:
         logger.warning("grant 审计记录失败（不阻塞）")
@@ -954,14 +978,17 @@ def grant_tool_permission(req: PermissionGrantRequest):
 
 
 @router.post("/agent/permission/revoke")
-def revoke_tool_permission(tool: str, command: Optional[str] = None):
+def revoke_tool_permission(tool: str, command: Optional[str] = None,
+                           conversation_id: Optional[str] = None):
     """撤销工具授权（从永久 allowlist 和 session scope 移除）
 
     提供 command 时只撤销该命令的绑定授权；否则撤销该工具全部授权。
+    C-review M11：提供 conversation_id 时只撤该会话的 session 授权，
+    否则（默认）撤所有会话。
     """
     from agent.harness.reins import _get_global_permission_gate_sync
     pg = _get_global_permission_gate_sync()
-    pg.revoke(tool, command=command)
+    pg.revoke(tool, command=command, conversation_id=conversation_id)
     # C-review C2 修复：撤销动作同样落审计链
     try:
         from agent.audit import append_record
@@ -1223,14 +1250,20 @@ def get_run_file_diff(run_id: str, abs_path: str = Query(..., description="文�
 
 
 def _scan_run_backups(run_id: str) -> dict[str, str]:
-    """扫描某次运行的磁盘备份，返回 abs_path -> backup_path 映射"""
+    """扫描某次运行的磁盘备份，返回 abs_path -> 第一代备份路径 映射
+
+    C-review M13：同文件可能存在多代备份（g1、g2、...，同 run 多次写入），
+    undo 必须恢复到 run 前原始内容 → 取最小代次（旧版无代次备份视为第一代）。
+    """
     from agent.harness.saddle import _get_backup_root
     import os
+    import re
     backup_root = _get_backup_root()
     run_dir = os.path.join(backup_root, run_id)
     if not os.path.isdir(run_dir):
         return {}
-    mapping: dict[str, str] = {}
+    # abs_path -> (代次, backup_path)；无代次（旧版）记 0 = 最早
+    best: dict[str, tuple[int, str]] = {}
     for name in os.listdir(run_dir):
         if name.endswith(".meta"):
             continue
@@ -1240,11 +1273,16 @@ def _scan_run_backups(run_id: str) -> dict[str, str]:
         try:
             with open(meta_path, "r", encoding="utf-8") as f:
                 abs_path = f.read().strip()
-            if abs_path:
-                mapping[abs_path] = os.path.join(run_dir, name)
+            if not abs_path:
+                continue
+            m = re.search(r"_g(\d+)$", name)
+            gen = int(m.group(1)) if m else 0
+            cur = best.get(abs_path)
+            if cur is None or gen < cur[0]:
+                best[abs_path] = (gen, os.path.join(run_dir, name))
         except Exception:
             continue
-    return mapping
+    return {p: bp for p, (_, bp) in best.items()}
 
 
 def _write_text_file(abs_path: str, content: str) -> None:

@@ -367,6 +367,13 @@ class Driver:
             async for ev in self._emit_decision_events(telemetry, post_decision, ctx, iteration):
                 yield ev
             if post_decision.intercepted:
+                # C-review M10：POST_ITERATION 拦截器（成本/token 熔断）要求终止 →
+                # transition(FAILED) + AGENT_FAILED + 退出主循环（与 M6 的
+                # PRE_TOOL_CALL terminate 同一条终止路径）
+                if post_decision.terminate:
+                    await ctx.transition(State.FAILED, event="force_terminated")
+                    await harness.reins.check(ReinPoint.AGENT_FAILED, ctx)
+                    break
                 # H14 修复：human_help_needed 是终止信号，应停止运行而不是继续循环
                 # 原实现"求助类拦截不终止"导致同一 run 无限次触发求助，产生大量重复卡片
                 if any(ev.kind == "human_help_needed" for ev in post_decision.events):
@@ -512,6 +519,17 @@ class Driver:
                 auto_rollback=ctx.config.auto_rollback_on_tool_failure,
             )
             ctx.tool_calls_log[-1]["success"] = result.success
+            # C-review M7：命令执行成功（审批已放行）→ 移出「等待审批」集合，
+            # 同命令后续重发恢复正常循环检测
+            if result.success:
+                pending = ctx.metadata.get("permission_pending")
+                if pending:
+                    try:
+                        from .reins import LoopDetector
+                        pending.pop(LoopDetector._signature(
+                            {"tool": tc.name, "args": tc.args}), None)
+                    except Exception:
+                        pass
 
             # ── post_tool_call ──
             post_tool_decision = await harness.reins.check(ReinPoint.POST_TOOL_CALL, ctx)

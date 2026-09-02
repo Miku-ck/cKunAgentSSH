@@ -123,6 +123,8 @@ class SSEAdapter:
         "error": "error",
         "human_help_needed": "human_help_needed",
         "permission_needed": "permission_needed",
+        # C-review M7：审批超时事件（超时按拒绝，前端标记对应授权卡片过期）
+        "permission_expired": "permission_expired",
         "done": "done",
         # H13 修复 B3：补全三种事件类型映射
         "intention": "intention",
@@ -180,6 +182,10 @@ class SSEAdapter:
             result["args"] = payload.get("args", {})
             result["risk"] = payload.get("risk", "")
             result["reversible"] = payload.get("reversible", True)
+            result["message"] = payload.get("message", "")
+        elif kind == "permission_expired":
+            result["tool"] = payload.get("tool", "")
+            result["args"] = payload.get("args", {})
             result["message"] = payload.get("message", "")
         elif kind == "done":
             result["state"] = payload.get("state", "")

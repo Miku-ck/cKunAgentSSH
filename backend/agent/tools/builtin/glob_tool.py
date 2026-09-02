@@ -36,7 +36,9 @@ class GlobTool(BaseTool):
         },
         "required": ["pattern"],
     }
-    meta = ToolMeta(risk_level="safe", reversible=False, idempotent=True)  # 只读查找，可安全重试
+    # C-review M14：本地文件查找工具 — 仅本地模式（work/ide）可用（ssh 模式走 shell_exec 的 find）
+    meta = ToolMeta(risk_level="safe", reversible=False, idempotent=True,
+                    mode_scope=["work", "ide"])  # 只读查找，可安全重试
 
     async def execute(self, context, pattern, path=None, max_results=100):
         # 审查 MINOR 修复：pattern 逃逸防护。原实现 `os.path.isabs(pattern)` 时直接用
