@@ -71,6 +71,10 @@ class ToolContext:
     mode: str = "ssh"               # 当前模式
     conversation_id: str = ""
     agent_run_id: str = ""
+    # 审查修复（P2 E6）：子 Agent / spawn_subagent 需要向主 Agent 的
+    # CostTracker 上报 LLM token 用量（原实现子 Agent 调用的 token 完全丢失）。
+    # None 表示无追踪器（如无头定时调度 run）
+    cost_tracker: object | None = None
 
 
 class ToolRegistry:

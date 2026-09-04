@@ -169,6 +169,21 @@ class SpawnSubagentTool(BaseTool):
             logger.warning("子 Agent LLM 调用失败: %s", e)
             return f"[子 Agent LLM 调用失败: {e}]"
 
+        # 审查修复（P2 E6）：子 Agent 的 LLM token 计入主 Agent CostTracker —
+        # 原实现子 Agent 调用的 token 用量完全丢失，主 Agent 面板显示的
+        # cost/usage 与实际不符（只计主 Agent 自身的 LLM 调用）。
+        # llm.call() 返回的 LLMOutput 含 prompt_tokens / completion_tokens
+        # （由 StreamLLMClient 从 usage chunk 提取或估算兜底）
+        if tool_ctx.cost_tracker is not None and hasattr(result, "prompt_tokens"):
+            try:
+                tracker = tool_ctx.cost_tracker
+                tracker.record_llm_call(
+                    getattr(result, "prompt_tokens", 0),
+                    getattr(result, "completion_tokens", 0),
+                )
+            except Exception as rec_err:
+                logger.debug("子 Agent token 记录失败: %s", rec_err)
+
         return result.content or "[子 Agent 未返回内容]"
 
     def _get_model_config(self, tool_ctx: ToolContext) -> Optional[dict]:

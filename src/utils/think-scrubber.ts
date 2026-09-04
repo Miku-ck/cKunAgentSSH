@@ -134,13 +134,19 @@ export class StreamingThinkScrubber {
   }
 
   private _findCloseTag(text: string, start: number): { found: boolean; end: number } {
+    // 审查修复（P2）：按最早出现位置（min indexOf）选择，与 _findOpenTag 对称 —
+    // 原实现按列表顺序返回第一个命中的标签，若列表中靠前的闭合标签
+    // （如 </thinking>）出现在较晚位置、靠后的（如 </thought>）出现较早，
+    // 会把两者之间的 think 块内容（真实 CoT）误当普通正文输出（泄漏窄窗口）
+    const candidates: Array<{ tag: string; idx: number }> = []
     for (const tag of THINK_CLOSE_TAGS) {
       const idx = text.indexOf(tag, start)
-      if (idx >= 0) {
-        return { found: true, end: idx + tag.length }
-      }
+      if (idx >= 0) candidates.push({ tag, idx })
     }
-    return { found: false, end: -1 }
+    if (candidates.length === 0) return { found: false, end: -1 }
+    candidates.sort((a, b) => a.idx - b.idx)
+    const { tag, idx } = candidates[0]
+    return { found: true, end: idx + tag.length }
   }
 
   private _isBlockBoundary(ch: string): boolean {

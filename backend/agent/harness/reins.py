@@ -32,7 +32,7 @@ from .contracts import (
 
 from .safety import classify_command, classify_shell_args
 
-from agent.audit import append_record
+from agent.audit import append_record_async
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +67,13 @@ def _audit_target_type(ctx: "RunContext") -> str:
 def _audit_target_id(ctx: "RunContext") -> str:
     """目标标识：SSH 会话 id 优先，其次为工作区路径"""
     return getattr(ctx, "ssh_session_id", "") or getattr(ctx, "workspace_path", "") or ""
+
+
+def _read_text_safe(path: str) -> str:
+    """同步安全读文本（供 asyncio.to_thread 调用，审查修复：原实现直接在
+    事件循环内 open().read() 大文件会阻塞事件循环）"""
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        return f.read()
 
 
 class Reins:
@@ -106,7 +113,15 @@ class Reins:
         1. 发出 decision.events
         2. 执行 decision.undo_actions 回滚
         3. 注入 decision.inject_messages 到下一轮 LLM
+
+        审查修复：原实现在拦截器未拦截时直接丢弃其 events/inject_messages
+        （循环后返回空决策）→ SyntaxVerifier 语法错误修复反馈、LoopDetector
+        第一级纠偏、ConfidenceMonitor 单次纠偏、DynamicBudgetRein 的
+        budget_extended 事件全部丢失，LLM 收不到实时纠偏。现聚合未拦截
+        决策的 events 与 inject_messages 一并返回（不拦截，仅透传反馈）。
         """
+        events: list = []
+        inject_messages: list = []
         for interceptor in self._interceptors[point]:
             # 审查 MINOR 修复：安全类拦截器（FilesystemGuard/PermissionGate）异常时
             # fail-closed（拦截），旧实现一律 continue = 跳过权限检查直接放行工具
@@ -119,6 +134,11 @@ class Reins:
                         point.value, type(interceptor).__name__, decision.intercept_reason,
                     )
                     return decision
+                # 未拦截：聚合纠偏事件与注入消息（见 docstring）
+                if decision.events:
+                    events.extend(decision.events)
+                if decision.inject_messages:
+                    inject_messages.extend(decision.inject_messages)
             except Exception as e:
                 logger.warning(
                     "Reins 拦截器异常 [%s] %s: %s",
@@ -131,7 +151,7 @@ class Reins:
                     )
                 # 非安全拦截器异常不阻塞主流程，继续下一个
                 continue
-        return ReinDecision(intercepted=False)
+        return ReinDecision(intercepted=False, events=events, inject_messages=inject_messages)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -190,7 +210,7 @@ class FilesystemGuard:
                 # 修复：使用 "user" 角色而非 "system"，因为 inject_messages 会被添加到消息列表末尾
                 # OpenAI API 要求 system 消息必须在开头，添加到末尾会触发 400 错误
                 cmd = args.get("command") or args.get("shell") or args.get("cmd") or ""
-                append_record(
+                await append_record_async(
                     action=tool,
                     conclusion="blocked",
                     run_id=ctx.run_id,
@@ -222,7 +242,7 @@ class FilesystemGuard:
                 # 原实现直接落到 "safe → 放行"，dangerous 命令在缺权限门时反而无审批
                 cmd = args.get("command") or args.get("shell") or args.get("cmd") or ""
                 if self.permission_gate is None:
-                    append_record(
+                    await append_record_async(
                         action=tool, conclusion="denied",
                         run_id=ctx.run_id, iteration=ctx.iteration,
                         target_type=_audit_target_type(ctx),
@@ -253,7 +273,7 @@ class FilesystemGuard:
                 env = (getattr(ctx, "environment", "test") or "test")
                 if env == "prod":
                     if not self.permission_gate.is_permanently_allowed(tool, args):
-                        append_record(
+                        await append_record_async(
                             action=tool, conclusion="denied",
                             run_id=ctx.run_id, iteration=ctx.iteration,
                             target_type=_audit_target_type(ctx),
@@ -300,7 +320,7 @@ class FilesystemGuard:
                                 (time.monotonic() - first_ts) > _PERMISSION_APPROVAL_TIMEOUT_S:
                             # 超时 → 按拒绝：移除标记（循环检测恢复计数）、不再重发卡片
                             pending.pop(sig, None)
-                            append_record(
+                            await append_record_async(
                                 action=tool, conclusion="denied",
                                 run_id=ctx.run_id, iteration=ctx.iteration,
                                 target_type=_audit_target_type(ctx),
@@ -346,7 +366,7 @@ class FilesystemGuard:
                         # C-review M7：仅首次请求发卡片（前端本就按 工具+命令 去重）；
                         # 审批窗口内的重发只拦截 + 注入等待提示，不重复发事件。
                         if is_first:
-                            append_record(
+                            await append_record_async(
                                 action=tool, conclusion="denied",
                                 run_id=ctx.run_id, iteration=ctx.iteration,
                                 target_type=_audit_target_type(ctx),
@@ -1083,7 +1103,7 @@ class AuditLogger:
             command = ""
             if isinstance(args, dict):
                 command = str(args.get("command") or args.get("shell") or args.get("cmd") or "")
-            append_record(
+            await append_record_async(
                 action=str(last.get("tool", "")),
                 conclusion="executed" if last.get("success") else "failed",
                 run_id=ctx.run_id,
@@ -1263,9 +1283,12 @@ class SyntaxVerifier:
                 return ReinDecision()
             import os
             full_path = os.path.join(ctx.workspace_path, path) if not os.path.isabs(path) else path
+            # 审查修复：同步文件读移入线程池 — 原实现在 async check 内直接
+            # open().read()，大文件/网络盘会阻塞事件循环
             try:
-                with open(full_path, "r", encoding="utf-8", errors="replace") as f:
-                    content = f.read()
+                content = await asyncio.to_thread(
+                    _read_text_safe, full_path
+                )
             except Exception:
                 return ReinDecision()
         else:
@@ -1273,9 +1296,11 @@ class SyntaxVerifier:
             if not content and ctx.workspace_path:
                 import os
                 full_path = os.path.join(ctx.workspace_path, path) if not os.path.isabs(path) else path
+                # 审查修复：同上，同步文件读移入线程池
                 try:
-                    with open(full_path, "r", encoding="utf-8", errors="replace") as f:
-                        content = f.read()
+                    content = await asyncio.to_thread(
+                        _read_text_safe, full_path
+                    )
                 except Exception:
                     return ReinDecision()
 
@@ -1573,7 +1598,7 @@ class CostBudgetRein:
         logger.warning("CostBudgetRein 熔断: %s (run_id=%s)", reason, ctx.run_id)
         # 落审计链（熔断也是可审计动作）；conclusion 取值受 audit 校验，用 blocked
         try:
-            append_record(
+            await append_record_async(
                 action="cost_budget_breaker",
                 conclusion="blocked",
                 run_id=ctx.run_id,

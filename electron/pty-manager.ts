@@ -92,11 +92,21 @@ export class PtyManager {
     // M3 修复：验证 shell 在白名单中，防止渲染进程启动任意命令
     const platform = process.platform
     const allowed = ALLOWED_SHELLS[platform] || []
-    const shellBase = shell.toLowerCase()
+    let shellBase = shell.toLowerCase()
     const isAllowed = allowed.some(s => shellBase === s.toLowerCase() || shellBase.endsWith('/' + s.toLowerCase()) || shellBase.endsWith('\\' + s.toLowerCase()))
+    let finalArgs = args
     if (!isAllowed) {
       console.warn(`[PtyManager] shell "${shell}" 不在白名单中，回退到默认: ${defaultShell}`)
       shell = defaultShell
+      shellBase = shell.toLowerCase()
+      // 审查修复（P2）：白名单回退后执行目标已变为默认 shell — 原实现仍按
+      // 渲染进程请求的旧 shell 名校验 args，"校验对象 ≠ 启动对象"
+      // （如 Windows 下 bash -l → 回退 cmd.exe，-l 按 bash 规则通过但实际
+      // 启动的是 cmd.exe）。回退后丢弃自定义参数，保证校验即启动。
+      if (args.length > 0) {
+        console.warn('[PtyManager] shell 白名单回退，丢弃自定义参数:', args)
+        finalArgs = []
+      }
     }
 
     // E-4 修复：参数正向白名单 — 黑名单可被绕过（cmd /S /K <任意命令>、
@@ -104,7 +114,7 @@ export class PtyManager {
     //   cmd / powershell / pwsh → 拒绝一切 args；
     //   bash（含 git-bash 路径）→ 仅允许登录/交互式标志；
     //   其他程序 → 拒绝一切 args
-    if (args.length > 0) {
+    if (finalArgs.length > 0) {
       const baseName = shellBase.split(/[\\/]/).pop() || shellBase
       if (baseName === 'cmd' || baseName === 'cmd.exe') {
         throw new Error('cmd 终端不允许自定义参数，已拒绝')
@@ -113,7 +123,7 @@ export class PtyManager {
         throw new Error('PowerShell 终端不允许自定义参数，已拒绝')
       }
       if (baseName === 'bash' || baseName === 'bash.exe' || baseName === 'git-bash' || baseName === 'git-bash.exe') {
-        for (const arg of args) {
+        for (const arg of finalArgs) {
           if (!BASH_ALLOWED_ARGS.has(arg.toLowerCase())) {
             throw new Error(`bash 不允许自定义参数，已拒绝: ${arg}`)
           }
@@ -135,8 +145,8 @@ export class PtyManager {
       throw new Error(`工作目录必须是目录: ${cwd}`)
     }
 
-    console.log(`[PtyManager] spawning shell: ${shell}, args: ${JSON.stringify(args)}, cwd: ${cwd}`)
-    const proc = pty.spawn(shell, args, {
+    console.log(`[PtyManager] spawning shell: ${shell}, args: ${JSON.stringify(finalArgs)}, cwd: ${cwd}`)
+    const proc = pty.spawn(shell, finalArgs, {
       name: 'xterm-256color',
       cols,
       rows,

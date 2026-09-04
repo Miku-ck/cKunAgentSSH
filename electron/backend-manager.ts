@@ -34,6 +34,13 @@ export class BackendManager {
    */
   private readonly apiToken: string = randomBytes(32).toString('hex')
 
+  /**
+   * 上次 start() 注入的额外环境变量（如 Electron bridge 端口/token）。
+   * 自动重启时若丢弃它，新后端进程将失去桥接地址 → 定时任务自动建会话
+   * 会因"连接失败"或"未可用"而失败。这里保存并在重启时复用。
+   */
+  private lastExtraEnv: Record<string, string> = {}
+
   /** 返回当前后端 API token（即使未启动也已生成，供启动前查询） */
   getApiToken(): string {
     return this.apiToken
@@ -46,6 +53,10 @@ export class BackendManager {
   async start(extraEnv?: Record<string, string>): Promise<number> {
     if (this.starting) {
       return this.port  // 已在启动中，避免重叠
+    }
+    // 记录本次注入的环境变量，供崩溃自动重启时复用（见 tryAutoRestart）
+    if (extraEnv) {
+      Object.assign(this.lastExtraEnv, extraEnv)
     }
     this.starting = true
     try {
@@ -122,6 +133,12 @@ export class BackendManager {
           } else {
             this.tryAutoRestart()
           }
+        } else if (!this.intentionalStop && !spawnErrorOccurred && code === 0) {
+          // 审查修复：非主动停止却以 code=0 退出（如 uvicorn 应用初始化失败后
+          // 正常退出）— 原实现既不重启也不推状态，前端停留在 'ready' 假象，
+          // 所有 API 调用才失败且无从排查。通知前端后端已停。
+          console.warn('[BackendManager] Backend exited with code 0 unexpectedly (not intentional stop)')
+          this.onStatusChange?.({ status: 'error', error: '后端进程异常退出，请重启应用' })
         }
       })
 
@@ -186,7 +203,7 @@ export class BackendManager {
     }
 
     try {
-      const port = await this.start()
+      const port = await this.start(this.lastExtraEnv)
       console.log(`[BackendManager] Backend auto-restarted on port ${port}`)
       this.onStatusChange?.({ status: 'ready', port })
     } catch (err) {

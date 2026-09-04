@@ -1,9 +1,9 @@
 <template>
-  <div class="modal-overlay" @click.self="$emit('close')">
+  <div class="modal-overlay" @click.self="handleOverlayClose">
     <div class="modal-dialog">
       <div class="modal-header">
         <h3>{{ isEdit ? '编辑连接' : '添加远程连接' }}</h3>
-        <button class="modal-close" @click="$emit('close')">
+        <button class="modal-close" @click="handleOverlayClose">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       </div>
@@ -166,7 +166,7 @@
       </div>
 
       <div class="modal-footer">
-        <button class="btn-cancel" @click="$emit('close')">取消</button>
+        <button class="btn-cancel" :disabled="saving || testing" @click="handleOverlayClose">取消</button>
         <button class="btn-secondary" :disabled="testing" @click="handleTest">
           <svg v-if="testing" class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
           <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
@@ -239,9 +239,18 @@ watch(
   () => { testResult.value = null },
 )
 
+// 审查修复（P2）：统一的关闭入口 — saving/testing 期间禁用
+function handleOverlayClose() {
+  if (saving.value || testing.value) return
+  emit('close')
+}
+
 // Escape 键关闭弹窗
 function handleKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') emit('close')
+  // 审查修复（P2）：saving/testing 期间禁止关闭（Esc/遮罩/取消/右上角 ×
+  // 统一走 handleOverlayClose）— 原实现关闭后保存/测试请求仍在后台继续并
+  // 落库，用户看不到结果且可能重复提交
+  if (e.key === 'Escape') handleOverlayClose()
 }
 onMounted(() => window.addEventListener('keydown', handleKeydown))
 onUnmounted(() => window.removeEventListener('keydown', handleKeydown))

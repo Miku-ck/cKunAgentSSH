@@ -658,6 +658,10 @@ class Saddle:
             conversation_id=ctx.conversation_id,
             agent_run_id=ctx.run_id,
             ssh_session_id=ctx.ssh_session_id,
+            # 审查修复（P2 E6）：透传 cost_tracker — 子 Agent 通过
+            # spawn_subagent 调用时需要上报 token 用量。
+            # cost_tracker 在 harness.run() 中被写入 ctx.metadata["cost_tracker"]
+            cost_tracker=ctx.metadata.get("cost_tracker"),
         )
 
     def schemas(self) -> list[dict[str, Any]]:

@@ -537,7 +537,11 @@ class Driver:
             # 原实现只处理 events + inject_messages，未处理 intercepted 和 undo_actions 字段
             if post_tool_decision.intercepted:
                 # 拦截器要求终止本次工具调用 → 用拦截结果替代 saddle 的 result
+                # 审查修复（P2 E7）：拦截分支漏 await telemetry.emit — 原实现
+                # 只 yield 事件给 Harness 合并流，未写入 TelemetryBus，
+                # 导致 TraceViewer / audit 记录中 POST_TOOL_CALL 拦截事件丢失
                 for ev in post_tool_decision.events:
+                    await telemetry.emit(ev)
                     yield ev
                 # 执行拦截器声明的 undo_actions（如严重错误时回滚已写入文件）
                 if post_tool_decision.undo_actions:
@@ -557,7 +561,9 @@ class Driver:
                     ctx.messages.extend(post_tool_decision.inject_messages)
             elif post_tool_decision.events or post_tool_decision.inject_messages:
                 # 原有逻辑：发出 events + 注入 messages（不拦截）
+                # 审查修复（P2 E7）：非拦截分支同样漏 await telemetry.emit
                 for ev in post_tool_decision.events:
+                    await telemetry.emit(ev)
                     yield ev
                 if post_tool_decision.inject_messages:
                     ctx.messages.extend(post_tool_decision.inject_messages)

@@ -186,6 +186,10 @@ export const useChatStore = defineStore('chat', () => {
       }
       // Optimization 修复：await 后校验当前会话未改变，避免快速切换时消息串台
       if (base.currentConvId.value !== targetId) return
+      // 审查修复（P1）：目标会话正在流式生成时跳过整表替换 — 原实现会把
+      // 流式 temp 消息与已写入的流式内容一并丢弃（UI 跳回旧消息、内容重复）。
+      // 流式结束后 afterStreamDone 钩子会重新加载，无需本次覆盖。
+      if (base.streaming.value && base.currentConvId.value === targetId) return
       // 映射后端的 snake_case 字段到前端 ChatMessage 的 camelCase 字段
       const mapped: ChatMessage[] = rawMessages.map((msg) => ({
         ...msg,

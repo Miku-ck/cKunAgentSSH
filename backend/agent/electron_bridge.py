@@ -39,37 +39,73 @@ class ElectronBridge:
         # httpx 超时 > SSH 超时，确保 SSH 侧先超时并返回错误响应
         http_timeout = timeout + _HTTP_TIMEOUT_MARGIN
 
+        return await self._post(
+            "/ssh/exec",
+            {
+                "sshSessionId": ssh_session_id,
+                "command": command,
+                "timeout": timeout,
+            },
+            http_timeout,
+        )
+
+    async def connect_ssh(self, connection_id: str, timeout: float = 60.0) -> dict:
+        """按连接 ID 自动建立一条轻量 SSH 会话（供定时任务无头执行）。
+
+        返回结构: {success: bool, sessionId: str, name: str}
+        """
+        if not self.is_available():
+            raise RuntimeError("Electron bridge not configured")
+
+        # 建连可能耗时（readyTimeout 默认 15s），放宽 HTTP 超时余量
+        http_timeout = timeout + _HTTP_TIMEOUT_MARGIN
+        return await self._post(
+            "/ssh/connect",
+            {"connectionId": connection_id},
+            http_timeout,
+        )
+
+    async def disconnect_ssh(self, session_id: str, timeout: float = 15.0) -> dict:
+        """关闭由 connect_ssh 建立的 SSH 会话，释放连接资源。"""
+        if not self.is_available():
+            raise RuntimeError("Electron bridge not configured")
+
+        return await self._post(
+            "/ssh/disconnect",
+            {"sessionId": session_id},
+            timeout + _HTTP_TIMEOUT_MARGIN,
+        )
+
+    async def _post(self, path: str, payload: dict, http_timeout: float) -> dict:
+        """向桥接服务发送 JSON POST 请求。"""
         try:
             async with httpx.AsyncClient(
                 base_url=self.base_url, timeout=http_timeout
             ) as client:
                 resp = await client.post(
-                    "/ssh/exec",
-                    json={
-                        "sshSessionId": ssh_session_id,
-                        "command": command,
-                        "timeout": timeout,
-                    },
+                    path,
+                    json=payload,
                     headers={"X-Bridge-Token": self.token},
                 )
                 resp.raise_for_status()
                 return resp.json()
         except httpx.TimeoutException:
-            logger.warning(
-                "Electron bridge 请求超时 (ssh_session=%s, timeout=%.1fs)",
-                ssh_session_id, http_timeout,
-            )
-            raise RuntimeError(
-                f"Electron bridge 请求超时（{http_timeout:.0f}秒）"
-            )
+            logger.warning("Electron bridge 请求超时 (path=%s)", path)
+            raise RuntimeError("Electron bridge 请求超时")
         except httpx.HTTPStatusError as e:
             logger.warning(
-                "Electron bridge 返回错误状态 %s: %s",
-                e.response.status_code, e.response.text[:200],
+                "Electron bridge 返回错误状态 %s (path=%s): %s",
+                e.response.status_code, path, e.response.text[:200],
             )
-            raise RuntimeError(
-                f"Electron bridge 错误 ({e.response.status_code})"
-            )
+            # 优先透传服务端给出的可读错误
+            try:
+                detail = (e.response.json() or {}).get("error", "")
+            except Exception:
+                detail = ""
+            raise RuntimeError(detail or f"Electron bridge 错误 ({e.response.status_code})")
         except httpx.ConnectError:
             logger.warning("Electron bridge 连接失败 (port=%s)", self.port)
-            raise RuntimeError("Electron bridge 连接失败，主进程可能未启动")
+            raise RuntimeError(
+                "Electron bridge 连接失败，主进程未启动，或桥接端口/token 已过期"
+                "（请完整重启应用，使主进程与后端一起重启）"
+            )

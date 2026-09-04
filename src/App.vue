@@ -12,7 +12,9 @@
       aria-hidden="true"
     ></div>
     <TitleBar
+      :active-page="activePage"
       @action-ai="sshViewRef?.toggleAiPanel()"
+      @action-schedules="sshViewRef?.toggleSchedules()"
       @action-remote="sshViewRef?.toggleRemoteManager()"
       @action-audit="sshViewRef?.toggleAudit()"
       @action-sftp="sshViewRef?.toggleSftp()"
@@ -41,6 +43,14 @@ const settingsStore = useSettingsStore()
 useAppearance()
 
 const sshViewRef = ref<InstanceType<typeof SshView> | null>(null)
+
+// 当前激活的功能页：用于 TitleBar 图标高亮（ref 未挂载时为 'home'）
+const activePage = computed<'home' | 'remote-mgr' | 'sftp' | 'audit' | 'ai' | 'schedules'>(() => {
+  const nav = sshViewRef.value?.activeNavPage
+  if (nav && nav !== 'home') return nav
+  if (sshViewRef.value?.showAiPanel) return 'ai'
+  return 'home'
+})
 
 const backgroundImageUrl = ref('')
 let firstBgLoad = true

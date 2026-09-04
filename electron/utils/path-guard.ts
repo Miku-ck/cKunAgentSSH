@@ -56,8 +56,11 @@ export async function assertSafePath(targetPath: string): Promise<void> {
     }
   }
   // 检查绝对路径中的任意位置敏感目录名（仅限凭证类目录）
+  // 审查修复：Windows 路径大小写不敏感 — 段比对须小写化，
+  // 否则 `C:\Users\x\.SSH` / `.AWS` 可绕过任意位置拦截（顶层检查已有 E19，此处补齐）
   for (const seg of resolved.split(/[\\/]/)) {
-    if (ANYWHERE_SENSITIVE.has(seg)) {
+    const segCheck = process.platform === 'win32' ? seg.toLowerCase() : seg
+    if (ANYWHERE_SENSITIVE.has(segCheck)) {
       throw new Error(`拒绝访问敏感路径: ${targetPath}`)
     }
   }

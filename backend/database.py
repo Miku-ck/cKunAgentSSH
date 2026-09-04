@@ -5,6 +5,7 @@ SQLite 数据库层 — 会话与消息持久化
 connect/close 的开销；close() 被包装为 rollback-and-keep-alive，
 现有代码的 `finally: conn.close()` 模式无需任何改动。
 """
+import asyncio
 import sqlite3
 import uuid
 import json
@@ -446,7 +447,8 @@ def init_db(db_path: str) -> None:
             if col not in existing_cols:
                 conn.execute(f"ALTER TABLE agent_runs ADD COLUMN {col} {col_def}")
         _migrate_db(conn)
-        _seed_models(conn)
+        # 审查修复（P2 E9）：_seed_models（含同步 httpx.get）已移至独立异步入口
+        # seed_models_async，从 lifespan 调用，避免阻塞事件循环
         conn.commit()
     finally:
         conn.close()
@@ -593,6 +595,53 @@ def _probe_first_model(base_url: str, timeout: float = 3.0) -> Optional[str]:
     return None
 
 
+async def seed_models_async(db_path: str) -> None:
+    """异步模型种子 — 仅在 models_config 表为空且显式配置 VLLM_BASE_URL 时执行。
+
+    审查修复（P2 E9）：_probe_first_model 内含同步 httpx.get（最长阻塞 3s×2=6s）。
+    原实现从 async lifespan 直接调 init_db → _seed_models → _probe_first_model，
+    6s 同步阻塞阻塞整个事件循环（所有 FastAPI 请求/后台任务/心跳全卡死）。
+    改为独立异步入口：httpx 调用放 asyncio.to_thread 线程池，事件循环保持畅通。
+    """
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("SELECT COUNT(*) AS cnt FROM models_config").fetchone()
+        if row["cnt"] > 0:
+            return
+        try:
+            from config import settings
+            base_url = (settings.vllm_base_url or "").strip()
+            thinking_url = (settings.vllm_thinking_url or "").strip()
+            api_key = settings.vllm_api_key or "EMPTY"
+        except Exception:
+            return
+        if not base_url:
+            return
+
+        now = _now()
+        # httpx.get 是同步阻塞调用，放线程池避免阻塞事件循环
+        model_id = await asyncio.to_thread(_probe_first_model, base_url)
+        if model_id:
+            _insert_seed_model(
+                conn, model_id=model_id, base_url=base_url, api_key=api_key,
+                supports_thinking=False, is_default=True, sort_order=0, now=now,
+            )
+            logger.info("自动探测种子默认模型: %s @ %s", model_id, base_url)
+
+        if thinking_url and thinking_url.rstrip("/") != base_url.rstrip("/"):
+            t_model = await asyncio.to_thread(_probe_first_model, thinking_url)
+            if t_model:
+                _insert_seed_model(
+                    conn, model_id=t_model, base_url=thinking_url, api_key=api_key,
+                    supports_thinking=True, is_default=False, sort_order=1, now=now,
+                )
+                logger.info("自动探测种子思考模型: %s @ %s", t_model, thinking_url)
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _insert_seed_model(
     conn: sqlite3.Connection,
     *,
@@ -617,47 +666,6 @@ def _insert_seed_model(
             sort_order, now, now,
         ),
     )
-
-
-def _seed_models(conn: sqlite3.Connection) -> None:
-    """首启模型种子 — 仅在 models_config 表为空且显式配置 VLLM_BASE_URL 时执行。
-
-    - 探测 {base_url}/models，取第一个模型名种子为默认模型（is_default + is_default_ssh）
-    - 另设 VLLM_THINKING_URL（须与主 URL 不同）时，同流程再种子一条思考模型
-    - 未显式配置 / 探测失败：不种子，模型列表留空，由设置 UI 引导用户配置
-    - 已有数据的库（表非空）：从不改动
-    """
-    row = conn.execute("SELECT COUNT(*) AS cnt FROM models_config").fetchone()
-    if row["cnt"] > 0:
-        return
-    try:
-        from config import settings
-        base_url = (settings.vllm_base_url or "").strip()
-        thinking_url = (settings.vllm_thinking_url or "").strip()
-        api_key = settings.vllm_api_key or "EMPTY"
-    except Exception:
-        return
-    if not base_url:
-        # 未显式配置：不种子，等待用户在设置 UI 配置
-        return
-
-    now = _now()
-    model_id = _probe_first_model(base_url)
-    if model_id:
-        _insert_seed_model(
-            conn, model_id=model_id, base_url=base_url, api_key=api_key,
-            supports_thinking=False, is_default=True, sort_order=0, now=now,
-        )
-        logger.info("自动探测种子默认模型: %s @ %s", model_id, base_url)
-
-    if thinking_url and thinking_url.rstrip("/") != base_url.rstrip("/"):
-        t_model = _probe_first_model(thinking_url)
-        if t_model:
-            _insert_seed_model(
-                conn, model_id=t_model, base_url=thinking_url, api_key=api_key,
-                supports_thinking=True, is_default=False, sort_order=1, now=now,
-            )
-            logger.info("自动探测种子思考模型: %s @ %s", t_model, thinking_url)
 
 
 def _now() -> str:
@@ -1515,16 +1523,24 @@ def set_default_model(model_id: str, mode: Optional[str] = None) -> None:
     """设置默认模型。
     mode 为 None 时设置全局 is_default；
     mode 为 'ssh' 时设置 SSH 模式的默认模型。
+
+    审查修复：原实现"全清 + 置一"为两条非原子 UPDATE，并发切换可产生
+    0 个或 2 个默认模型（两条语句间交错）。改为单条条件 UPDATE
+    （清 others 带 WHERE id != 目标后提交同一事务），消除中间状态。
     """
     conn = _get_conn()
     try:
         if mode is None:
-            conn.execute("UPDATE models_config SET is_default = 0")
-            conn.execute("UPDATE models_config SET is_default = 1 WHERE id = ?", (model_id,))
+            col = "is_default"
         else:
-            conn.execute("UPDATE models_config SET is_default_ssh = 0")
-            conn.execute("UPDATE models_config SET is_default_ssh = 1 WHERE id = ?", (model_id,))
-        conn.commit()
+            col = "is_default_ssh"
+        with conn:  # 单事务：BEGIN → 两条 UPDATE → commit/rollback
+            conn.execute(
+                f"UPDATE models_config SET {col} = 0 WHERE id != ?", (model_id,)
+            )
+            conn.execute(
+                f"UPDATE models_config SET {col} = 1 WHERE id = ?", (model_id,)
+            )
     finally:
         conn.close()
 

@@ -484,15 +484,19 @@ export function createModeChatStore<
       // 运行中切换会话后，固化会落到错误的会话上：源会话的 temp-agent 占位消息
       // 永远停在"运行中"骨架态，结果消息丢失。
       const sourceId = agentStore.currentConversationId
-      // F-1 修复：dual 模式新建会话的 c.id 是本地 genId，sourceId 是 backendConvId
-      // （ensureBackendConversation 只补 backendConvId 不改 id）—
-      // 仅按 c.id 匹配会落空，固化退到 currentConversation（可能已切走）。
-      // 从后端加载的会话 c.id === backendConvId，两种形态都能命中
-      const conv = (sourceId
+      // 审查修复（P1）：移除 `|| persistence.currentConversation` 兜底 —
+      // 同一 mode 存在多个 store 实例（chat.ts / ssh-ai.ts 各建一个），
+      // 共享同一个 agentStore，Agent 结束时所有实例的 watch 都会触发。
+      // 非发起方实例的 persistence 列表里没有占位消息（占位只存在于发起方
+      // 实时列表），兜底会退到该实例【自己的当前会话】执行固化/清理 →
+      // 误固化到错误会话、甚至误删用户当前会话。
+      // 发起方列表必含源会话（c.id === sourceId 或 backendConvId 双键命中），
+      // 找不到即说明本实例非发起方，直接返回让发起方实例处理。
+      const conv = sourceId
         ? persistence.conversations.value.find(
             (c) => c.id === sourceId || c.backendConvId === sourceId,
           )
-        : undefined) || persistence.currentConversation.value || null
+        : null
       if (!conv) return
       // 审查修复：Agent 运行中用户切换/删除会话后，源会话可能已不在列表，
       // 占位消息（temp-agent-）将永远停在运行中骨架态。此时移除悬空占位，

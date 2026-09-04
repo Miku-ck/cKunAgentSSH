@@ -133,6 +133,10 @@ class Stirrups:
     classifier: ErrorClassifier = field(default_factory=ErrorClassifier)
     # 上下文压缩回调（由 Bridle 注入）
     _compress_callback: Optional[Callable[[RunContext, bool], Awaitable[None]]] = None
+    # 消息重建回调（由 Harness 注入）：压缩后按 ctx 重新组装消息列表。
+    # 审查修复：压缩回调只更新 ctx（messages/摘要元数据），而 call_llm 的
+    # messages 入参是压缩前快照 — 不重建则重试请求体不缩水，必然再次 400
+    _messages_rebuilder: Optional[Callable[[RunContext], list[dict[str, str]]]] = None
 
     def set_compress_callback(
         self,
@@ -140,6 +144,13 @@ class Stirrups:
     ) -> None:
         """Bridle 注入上下文压缩回调"""
         self._compress_callback = cb
+
+    def set_messages_rebuilder(
+        self,
+        cb: Callable[[RunContext], list[dict[str, str]]],
+    ) -> None:
+        """Harness 注入消息重建回调（压缩后重取）"""
+        self._messages_rebuilder = cb
 
     async def call_llm(
         self,
@@ -202,6 +213,11 @@ class Stirrups:
                         compress_attempts += 1
                         logger.info("触发上下文压缩后重试 (第 %d 次)", compress_attempts)
                         await self._compress_callback(ctx, force=True)
+                        # 审查修复：压缩只改写 ctx，messages 入参仍是旧快照 →
+                        # 必须重建，否则重试请求体未变小必然再次 400，且
+                        # compress_attempts 耗尽后误报"压缩后仍超限"
+                        if self._messages_rebuilder is not None:
+                            messages = self._messages_rebuilder(ctx)
                         continue
                     # 压缩后仍超限 — 再压一次也是同样结果，直接失败
                     logger.error("上下文压缩后仍超限，放弃重试: %s", err_str)

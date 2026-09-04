@@ -253,7 +253,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import type { ModelConfig } from '@/api/client'
 import MessageItem from '@/components/chat/MessageItem.vue'
 import HistoryPanel from '@/components/chat/HistoryPanel.vue'
@@ -454,6 +454,23 @@ function closeSkillMenu() {
   skillQuery.value = ''
   skillActiveIdx.value = 0
 }
+
+// 审查修复（P2）：点击菜单外区域关闭技能菜单 — 原实现只有 Esc/选中/失焦
+// 能关，鼠标点输入区外（如消息列表）菜单残留，视觉像死菜单
+function onDocClickOutsideSkillMenu(e: MouseEvent) {
+  if (!showSkillMenu.value) return
+  const target = e.target as HTMLElement | null
+  // 菜单自身或输入框内的点击不关闭（菜单项点击走 pickSkill 自行关闭）
+  if (target && target.closest?.('.skill-menu')) return
+  if (inputRef.value?.contains(target)) return
+  closeSkillMenu()
+}
+onMounted(() => {
+  document.addEventListener('mousedown', onDocClickOutsideSkillMenu)
+})
+onUnmounted(() => {
+  document.removeEventListener('mousedown', onDocClickOutsideSkillMenu)
+})
 
 /** 选中技能：加入 selectedSkillIds（输入框上方以标签展示）。
  *  C-review NIT：原实现同时在输入框插入 "@技能名" 文本 — 文本与 skillIds

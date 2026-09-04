@@ -1,0 +1,406 @@
+"""
+定时任务调度引擎 — 负责按「分钟间隔 / 每天 / 每周 / 每月」周期触发一次 Agent 运行。
+
+设计：
+- 全局单例 ScheduleEngine（由 main.py lifespan 启停）。
+- 后台循环每 30s 扫描一次启用的任务，用 next_run_at 判定是否到期。
+- 到期后在后台 asyncio 任务里执行一次「无头」Agent 运行（复用 Harness），
+  把最终回答写入 schedule_runs.summary，并刷新 next_run_at 防止重入。
+- next_run_at 统一以 UTC naive 字符串存储（与 database._now() 一致）。
+
+时区说明：用户填写的 time_hour/time_minute/weekday/day_of_month 视为本地时间，
+计算 next_run 时先转成等价 UTC 瞬时再比较，避免与数据库 UTC 时间戳错位。
+"""
+import asyncio
+import calendar
+import logging
+import os
+import uuid
+from datetime import datetime, timedelta, timezone
+
+import database as db
+from agent.harness import Harness, HarnessConfig
+from agent.harness.contracts import AgentConfig as HarnessAgentConfig
+from agent.harness.llm_client import StreamLLMClient
+from agent.cost_tracker import CostTracker
+from agent.electron_bridge import ElectronBridge
+
+logger = logging.getLogger(__name__)
+
+_SCHEDULE_POLL_SECONDS = 30
+_SCHEDULE_MAX_ITERATIONS = 8
+_SCHEDULE_CONVERSATION_PREFIX = "sched-"
+
+
+class ScheduleEngine:
+    """后台定时任务调度器（单例）。"""
+
+    def __init__(self, poll_seconds: int = _SCHEDULE_POLL_SECONDS):
+        self._poll_seconds = poll_seconds
+        self._task: asyncio.Task | None = None
+        self._stop_event = asyncio.Event()
+        self._executing: set[str] = set()  # 正在执行的 schedule_id，防重入
+        # 审查修复（P2）：登记进行中的 _run_task — 原 stop() 只取消轮询循环，
+        # 已 create_task 的任务（无引用、detached）会继续跑 SSH 会话，
+        # schedule_runs 在进程退出后滞留 'running'
+        self._running_tasks: dict[str, asyncio.Task] = {}
+
+    # ── 生命周期 ──
+    def start(self) -> None:
+        if self._task is not None and not self._task.done():
+            return
+        self._stop_event.clear()
+        self._task = asyncio.create_task(self._run_loop())
+        logger.info("ScheduleEngine 已启动 (poll=%ds)", self._poll_seconds)
+
+    async def stop(self) -> None:
+        if self._task is not None and not self._task.done():
+            self._stop_event.set()
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+        # 审查修复（P2）：取消进行中的定时任务并等待其把 DB 状态落定
+        # （_run_task 的 except CancelledError 会标记 run 为 failed/中断）
+        if self._running_tasks:
+            for t in self._running_tasks.values():
+                if not t.done():
+                    t.cancel()
+            await asyncio.gather(*self._running_tasks.values(), return_exceptions=True)
+            self._running_tasks.clear()
+
+    def ensure_started(self) -> None:
+        self.start()
+
+    # ── 后台循环 ──
+    async def _run_loop(self) -> None:
+        try:
+            # 启动后先扫一遍（对遗留/新建任务立即生效），之后按周期轮询
+            await self._tick_once()
+            while not self._stop_event.is_set():
+                await asyncio.sleep(self._poll_seconds)
+                await self._tick_once()
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error("ScheduleEngine 循环异常退出: %s", e)
+
+    async def _tick_once(self) -> None:
+        schedules = await asyncio.to_thread(db.list_enabled_schedules)
+        now = utcnow()
+        for s in schedules:
+            if s["id"] in self._executing:
+                continue
+            due = False
+            if not s.get("next_run_at"):
+                due = True
+            else:
+                try:
+                    due = _parse_ts(s["next_run_at"]) <= now
+                except Exception:
+                    due = True
+            if due:
+                # 审查修复：必须 await — trigger 是 async def，原实现未 await
+                # 导致协程被静默丢弃，后台轮询从未真正触发任何到期定时任务
+                # （next_run_at 也不推进，自动调度整体失效，仅手动"立即执行"可用）
+                await self.trigger(s)
+
+    async def trigger(self, sched: dict) -> None:
+        """触发一次执行：先刷新 next_run_at，再后台跑 Agent。"""
+        sid = sched["id"]
+        if sid in self._executing:
+            logger.info("schedule=%s 正在执行，跳过重复触发", sid)
+            return
+        try:
+            next_at = compute_next_run(sched)
+            await asyncio.to_thread(db.set_schedule_next_run, sid, next_at)
+        except Exception as e:
+            logger.warning("schedule=%s 计算 next_run 失败: %s", sid, e)
+        # 审查修复：执行标记须保持到任务结束（_run_task 的 finally 中移除）。
+        # 原实现在 DB 写入后立即 discard，任务尚未开始就释放了去重锁，
+        # 运行时间超过 tick 间隔（30s）的任务会被每次 tick 重复触发，
+        # 并发启动多个 Agent 运行。
+        try:
+            self._executing.add(sid)
+            t = asyncio.get_running_loop().create_task(self._run_task(sched.copy()))
+            self._running_tasks[sid] = t
+        except Exception:
+            # 无运行循环或 create_task 失败：回滚标记，避免任务永久卡死
+            self._executing.discard(sid)
+            raise
+
+    # ── 无头执行 ──
+    async def _run_task(self, sched: dict) -> None:
+        sid = sched["id"]
+        run_id = uuid.uuid4().hex[:12]
+        started = db._now() if hasattr(db, "_now") else datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        run_in_db = False
+        try:
+            # 审查修复：DB 初始化移入 try — 原实现在 try 外执行，DB 异常时
+            # finally 不执行，_executing 标记永不释放，该任务被永久视为执行中，
+            # 后续所有 tick 全部跳过直至进程重启
+            await asyncio.to_thread(db.create_schedule_run, sid, run_id)
+            await asyncio.to_thread(
+                db.mark_schedule_run, sid, "running", last_run_at=started, last_run_id=run_id
+            )
+            run_in_db = True
+            content, err = await self._run_agent_once(sched, run_id)
+            snippet = (content or "").strip()
+            status = "failed" if (not snippet and err) else "completed"
+            await asyncio.to_thread(
+                db.update_schedule_run, run_id,
+                status=status, summary=snippet, error=err or "",
+            )
+            await asyncio.to_thread(db.mark_schedule_run, sid, status)
+            logger.info("schedule=%s run=%s %s", sid, run_id, status)
+        except asyncio.CancelledError:
+            # 审查修复（P2）：关停取消 — 把 run 标记为中断后重新抛出，
+            # 否则 schedule_runs 永久滞留 'running'
+            logger.warning("schedule=%s run=%s 被关停取消", sid, run_id)
+            if run_in_db:
+                try:
+                    await asyncio.to_thread(
+                        db.update_schedule_run, run_id,
+                        status="failed", error="服务停止，任务被中断",
+                    )
+                    await asyncio.to_thread(db.mark_schedule_run, sid, "failed")
+                except BaseException:
+                    pass
+            raise
+        except Exception as e:
+            logger.exception("schedule=%s run=%s 执行失败", sid, run_id)
+            await asyncio.to_thread(
+                db.update_schedule_run, run_id, status="failed", error=f"{type(e).__name__}: {e}"
+            )
+            await asyncio.to_thread(db.mark_schedule_run, sid, "failed")
+        finally:
+            self._executing.discard(sid)
+            self._running_tasks.pop(sid, None)
+            # 审查修复（P2）：清理本 run 的内存 todo 列表 — 定时 run 走独立
+            # 路径，不经过交互式 Agent 的清理钩子，模块级 dict 会缓慢泄漏
+            try:
+                from agent.tools.builtin.todo_write import clear_todos
+                clear_todos(run_id)
+            except Exception:
+                pass
+
+    async def _run_agent_once(self, sched: dict, run_id: str) -> tuple[str, str]:
+        """组装 Harness 无头运行一次，返回 (最终 report 文本, 内部错误信息)。"""
+        model_cfg = await asyncio.to_thread(self._resolve_model)
+        if not model_cfg:
+            raise RuntimeError("未配置默认模型，无法执行定时任务")
+
+        model_name = model_cfg.get("model_id") or model_cfg.get("id") or ""
+        ctx_limit = int(model_cfg.get("max_tokens") or 16384)
+
+        harness = Harness(HarnessConfig(
+            base_url=model_cfg["base_url"],
+            api_key=model_cfg.get("api_key") or "",
+            model=model_name,
+            max_context_tokens=ctx_limit,
+        ))
+        llm_client = StreamLLMClient(
+            base_url=model_cfg["base_url"],
+            api_key=model_cfg.get("api_key") or "",
+        )
+        from agent.tools import create_registry_for_mode
+        tool_registry = create_registry_for_mode("ssh")
+        cost_tracker = CostTracker(model_id=model_name)
+        harness.assemble(
+            llm_client=llm_client,
+            tool_registry=tool_registry,
+            cost_tracker=cost_tracker,
+        )
+
+        prompt = (sched.get("task_prompt") or "").strip()
+        if not prompt:
+            prompt = "对当前环境执行一次例行检查，输出结构化报告。"
+        host = (sched.get("target_host") or "").strip() or None
+
+        # ── 自动建立 SSH 会话 ──
+        # 定时任务为无头执行，主进程没有为该主机预建会话。这里临时按连接 ID
+        # 建立一条轻量 SSH 会话，把真实会话 ID 交给 Agent 使用；任务结束后
+        # 在 finally 中关闭，避免连接资源泄漏。
+        bridge = ElectronBridge()
+        ssh_session_id = ""
+        if host:
+            if not bridge.is_available():
+                raise RuntimeError("Electron bridge 未可用，无法为定时任务建立 SSH 会话")
+            try:
+                conn = await bridge.connect_ssh(host)
+                ssh_session_id = str(conn.get("sessionId") or "")
+                if not ssh_session_id:
+                    raise RuntimeError("Electron bridge 未返回会话 ID")
+                logger.info("schedule=%s 已为目标主机建立会话 %s", sched["id"], ssh_session_id)
+            except Exception as e:
+                logger.warning(
+                    "schedule=%s 为目标主机建会话失败（connection=%s）: %s",
+                    sched["id"], host, e,
+                )
+                raise RuntimeError(f"无法连接到目标主机：{e}")
+
+        # 输出 token 上限不能设得等于/接近上下文上限，否则一旦带入输入就必然
+        # 超过模型上下文窗口 → vLLM 返回 400，任务瞬时失败且无输出。
+        # 此处钳制为上下文上限的一半，保留足够输出空间又不会触发 400。
+        out_limit = int(model_cfg.get("max_tokens") or ctx_limit)
+        safe_out = max(1, min(out_limit, ctx_limit // 2))
+        rt = model_cfg.get("reasoning_tokens")
+        safe_reasoning = min(int(rt or 0), safe_out) if rt else None
+
+        cfg = HarnessAgentConfig(
+            max_iterations=_SCHEDULE_MAX_ITERATIONS,
+            temperature=(model_cfg.get("temperature") or 0.7),
+            max_tokens=safe_out,
+            max_reasoning_tokens=safe_reasoning,
+            enable_thinking=True,
+            enable_tools=True,
+            enable_intention_guide=False,
+            enable_dynamic_budget=False,
+        )
+        system_prompt = _build_schedule_system_prompt(sched)
+        conversation_id = _SCHEDULE_CONVERSATION_PREFIX + (sched["id"] or "")
+
+        done_content = ""
+        error_msg = ""
+        try:
+            async for ev in harness.run(
+                task=prompt,
+                mode="ssh",
+                conversation_id=conversation_id,
+                workspace_path=_agent_workspace(),
+                ssh_session_id=ssh_session_id,
+                environment="prod",
+                system_prompt=system_prompt,
+                history=[],
+                memories=[],
+                config=cfg,
+                run_id=run_id,
+            ):
+                if ev.kind == "error":
+                    # harness 内部错误（如 LLM 调用失败）不要让用户看到"无输出"，回传展示
+                    error_msg = ((ev.payload or {}).get("message") or "") or error_msg
+                elif ev.kind == "done":
+                    payload = ev.payload or {}
+                    done_content = payload.get("content", "") or done_content
+        finally:
+            # 任务结束（含异常路径）关闭自动建立的 SSH 会话，释放连接资源
+            if ssh_session_id:
+                try:
+                    await bridge.disconnect_ssh(ssh_session_id)
+                    logger.info(
+                        "schedule=%s 已关闭会话 %s", sched["id"], ssh_session_id
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "schedule=%s 关闭会话 %s 失败: %s",
+                        sched["id"], ssh_session_id, e,
+                    )
+        return done_content, error_msg
+
+    @staticmethod
+    def _resolve_model() -> dict | None:
+        """取默认模型（未掩码）供 Harness 调用。"""
+        default = db.get_default_model(None, mask_key=False)
+        if not default:
+            return None
+        mid = default.get("id") or default.get("model_id")
+        if not mid:
+            return default
+        cfg = db.get_model_config(mid, mask_key=False)
+        return cfg or default
+
+
+# 全局单例
+_engine: ScheduleEngine | None = None
+
+
+def get_schedule_engine() -> ScheduleEngine:
+    global _engine
+    if _engine is None:
+        _engine = ScheduleEngine()
+    return _engine
+
+
+# ── 时间工具 ───────────────────────────────────────────────────────────────────
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _parse_ts(s: str) -> datetime:
+    return datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+
+
+def _local_tz() -> datetime.tzinfo:
+    return datetime.now().astimezone().tzinfo
+
+
+def _local_to_utc(y: int, mo: int, d: int, h: int, mi: int) -> datetime:
+    local = datetime(y, mo, d, h, mi, tzinfo=_local_tz())
+    return local.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _fmt(dt: datetime) -> str:
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def compute_next_run(sched: dict, now: datetime | None = None) -> str:
+    """按规则计算下一次执行时间（UTC naive 字符串，保证 > now）。"""
+    now = now or utcnow()
+    st = sched.get("schedule_type") or "interval"
+    if st == "interval":
+        minutes = int(sched.get("interval_minutes") or 60)
+        return _fmt(now + timedelta(minutes=minutes))
+
+    h, mi = int(sched.get("time_hour") or 9), int(sched.get("time_minute") or 0)
+
+    if st == "daily":
+        d = now + timedelta(days=1)
+        return _fmt(_local_to_utc(d.year, d.month, d.day, h, mi))
+
+    if st == "weekly":
+        target = int(sched.get("weekday") or 0)  # 0=周一
+        d = now + timedelta(days=1)
+        while d.weekday() != target:
+            d += timedelta(days=1)
+        return _fmt(_local_to_utc(d.year, d.month, d.day, h, mi))
+
+    if st == "monthly":
+        dom = int(sched.get("day_of_month") or 1)
+        y, mo = now.year, now.month
+        last = calendar.monthrange(y, mo)[1]
+        cand = _local_to_utc(y, mo, min(dom, last), h, mi)
+        if cand <= now:
+            y, mo = (y + 1, 1) if mo == 12 else (y, mo + 1)
+            last = calendar.monthrange(y, mo)[1]
+            cand = _local_to_utc(y, mo, min(dom, last), h, mi)
+        return _fmt(cand)
+
+    return _fmt(now + timedelta(hours=1))
+
+
+def _agent_workspace() -> str:
+    ws = os.path.expanduser("~/.ckunagentic/agent_workspace")
+    os.makedirs(ws, exist_ok=True)
+    return ws
+
+
+def _build_schedule_system_prompt(sched: dict) -> str:
+    parts = []
+    try:
+        from prompts import _current_time_str, MODE_PROMPTS
+        parts.append(f"[系统时间] 当前时间：{_current_time_str()}。")
+        mode_prompt = MODE_PROMPTS.get("ssh", "")
+        if mode_prompt:
+            parts.append(mode_prompt)
+    except Exception:
+        pass
+    parts.append(
+        "你现在以「定时任务」方式自动执行。请独立完成给定任务，"
+        "并输出结构化中文报告：先给总体结论，再用 ## 二级标题分节说明发现的问题、"
+        "已执行的操作与后续建议。"
+    )
+    parts.append("请以只读、安全的操作为主，涉及破坏性操作时先说明计划再执行。")
+    return "\n\n".join(parts)

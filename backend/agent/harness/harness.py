@@ -113,6 +113,9 @@ class Harness:
         self._stirrups = Stirrups(llm_client=llm_client)
         # 注入压缩回调
         self._stirrups.set_compress_callback(self.bridle.compress)
+        # 审查修复：压缩后按 ctx 重建消息 — 压缩只更新 ctx，Stirrups.call_llm
+        # 持有的 messages 快照不随之缩小，不重建则上下文超限重试必然再次 400
+        self._stirrups.set_messages_rebuilder(self.bridle.assemble)
 
         # 如果是 StreamLLMClient，注入 token 回调与 chunk 流式回调
         from .llm_client import StreamLLMClient

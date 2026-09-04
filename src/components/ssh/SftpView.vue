@@ -610,7 +610,20 @@ async function handleDisconnect(): Promise<void> {
 }
 
 // ─── 跨栏传输(由 SftpPane drop 触发) ───
-async function onTransfer(payload: { side: 'local' | 'remote'; paths: string[] }): Promise<void> {
+// 审查修复（P2）：拖拽串行化 — 原实现 onTransfer 无并发守卫，快速连续拖拽
+// 两份目录时，第二份在确认对话框出现前到达会直接走 upload/download，
+// 第一份的确认被静默丢弃（用户以为取消了，实际第二份已在传；或反之），
+// 且两批传输交叉时覆盖检查基于陈旧 cwd。用 Promise 链把所有拖拽请求
+// 排队执行，保证"确认 → 传输"原子串行。
+let transferQueue: Promise<unknown> = Promise.resolve()
+function onTransfer(payload: { side: 'local' | 'remote'; paths: string[] }): Promise<void> {
+  const run = transferQueue.then(() => doTransfer(payload))
+  // 队列链吞掉单个失败，避免一次失败阻塞后续拖拽
+  transferQueue = run.then(() => undefined, () => undefined)
+  return run
+}
+
+async function doTransfer(payload: { side: 'local' | 'remote'; paths: string[] }): Promise<void> {
   // 覆盖确认：检查目标路径是否已存在同名文件
   const existingFiles: string[] = []
   if (payload.side === 'local') {

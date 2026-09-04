@@ -1,0 +1,610 @@
+<template>
+  <div class="schedules-view">
+    <!-- 头部 -->
+    <div class="schedules-header">
+      <div class="schedules-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 16 14"/></svg>
+        <span>定时任务</span>
+        <span class="schedules-sub" v-if="items.length">共 {{ items.length }} 个任务</span>
+      </div>
+      <div class="schedules-actions">
+        <button class="sc-btn" @click="load" :disabled="loading">刷新</button>
+        <button class="sc-btn primary" @click="openCreate">新建任务</button>
+      </div>
+    </div>
+
+    <!-- 任务卡片 -->
+    <div v-if="items.length === 0 && !loading" class="empty-state">暂无定时任务</div>
+    <div class="schedule-list">
+      <div v-for="s in items" :key="s.id" class="schedule-card">
+        <div class="schedule-card-head">
+          <div class="schedule-name">
+            {{ s.name }}
+            <span class="toggle" :class="{ on: !!s.enabled }" @click="toggle(s)">
+              {{ s.enabled ? '启用' : '停用' }}
+            </span>
+          </div>
+          <div class="schedule-card-actions">
+            <button class="row-btn" @click="toggle(s)" :title="s.enabled ? '停用' : '启用'">
+              {{ s.enabled ? '停用' : '启用' }}
+            </button>
+            <button class="row-btn" :disabled="isRunning(s)" @click="openEdit(s)">编辑</button>
+            <button class="row-btn" @click="runNow(s)" :disabled="isRunning(s)">立即执行</button>
+            <button class="row-btn" @click="openHistory(s)">历史</button>
+            <button class="row-btn danger" @click="remove(s)">删除</button>
+          </div>
+        </div>
+        <div class="schedule-card-meta">
+          <span class="meta-item">周期：{{ scheduleText(s) }}</span>
+          <span class="meta-item" v-if="s.target_host">目标：<b class="mono">{{ hostLabel(s.target_host) }}</b></span>
+          <span class="meta-item">上次执行：{{ s.last_run_at ? formatTs(s.last_run_at) : '—' }}</span>
+          <span class="meta-item">
+            状态：<span class="status" :class="s.last_status">{{ statusLabel(s.last_status) }}</span>
+          </span>
+          <span class="meta-item" v-if="s.enabled && s.next_run_at">下次：{{ formatTs(s.next_run_at) }}</span>
+        </div>
+        <div class="schedule-card-body" v-if="s.task_prompt">
+          <div class="k">任务提示</div>
+          <div class="prompt">{{ s.task_prompt }}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 空历史 Modal -->
+    <div v-if="historyFor" class="modal-mask" @click.self="historyFor = null">
+      <div class="modal wide">
+        <div class="modal-title">{{ historyTitle }} — 执行历史</div>
+        <div class="modal-body">
+          <div v-if="historyRuns.length === 0" class="empty-small">暂无执行记录</div>
+          <div v-else class="history-list">
+            <div v-for="r in historyRuns" :key="r.id" class="history-item">
+              <div class="history-head">
+                <span class="mono">{{ formatTs(r.started_at) }}</span>
+                <span class="status" :class="r.status">{{ statusLabel(r.status) }}</span>
+                <span class="mono" v-if="r.run_id">run {{ shortId(r.run_id) }}</span>
+              </div>
+              <div class="history-summary" v-if="r.summary">{{ r.summary }}</div>
+              <div class="history-error" v-if="r.error">{{ r.error }}</div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="sc-btn" @click="historyFor = null">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 新建/编辑 Modal -->
+    <div v-if="editing" class="modal-mask" @click.self="editing = null">
+      <div class="modal">
+        <div class="modal-title">{{ editing.id ? '编辑任务' : '新建定时任务' }}</div>
+        <div class="modal-body">
+          <!-- 模板选择（仅新建时显示） -->
+          <div v-if="!editing.id" class="field">
+            <span>选择模板</span>
+            <div class="template-list">
+              <button
+                v-for="t in templates"
+                :key="t.id"
+                class="template-chip"
+                :class="{ active: selectedTemplate === t.id }"
+                @click="applyTemplate(t)"
+              >
+                <div class="template-name">{{ t.name }}</div>
+                <div class="template-desc">{{ t.desc }}</div>
+              </button>
+            </div>
+          </div>
+          <label class="field">
+            <span>任务名称 *</span>
+            <input v-model="form.name" placeholder="例如：每日系统健康巡检" />
+          </label>
+          <div class="field">
+            <span>触发时间</span>
+            <div class="sched-options">
+              <button
+                class="sched-option"
+                :class="{ active: form.schedule_type === 'interval' }"
+                @click="form.schedule_type = 'interval'"
+              >每 N 分钟</button>
+              <button
+                class="sched-option"
+                :class="{ active: form.schedule_type === 'daily' }"
+                @click="form.schedule_type = 'daily'"
+              >每天</button>
+              <button
+                class="sched-option"
+                :class="{ active: form.schedule_type === 'weekly' }"
+                @click="form.schedule_type = 'weekly'"
+              >每周</button>
+              <button
+                class="sched-option"
+                :class="{ active: form.schedule_type === 'monthly' }"
+                @click="form.schedule_type = 'monthly'"
+              >每月</button>
+            </div>
+
+            <!-- 每 N 分钟 -->
+            <div v-if="form.schedule_type === 'interval'" class="sched-subrow">
+              <span>每</span>
+              <input v-model.number="form.interval_minutes" type="number" min="1" max="1440" class="num" />
+              <span>分钟执行一次</span>
+            </div>
+
+            <!-- 每天 -->
+            <div v-else-if="form.schedule_type === 'daily'" class="sched-subrow">
+              <span>每天</span>
+              <input v-model.number="form.time_hour" type="number" min="0" max="23" class="num" /> :
+              <input v-model.number="form.time_minute" type="number" min="0" max="59" class="num" />
+            </div>
+
+            <!-- 每周 -->
+            <div v-else-if="form.schedule_type === 'weekly'" class="sched-subrow">
+              <span>每周</span>
+              <select v-model.number="form.weekday" class="sel">
+                <option v-for="(w, i) in WEEKDAYS" :key="w" :value="i">{{ w }}</option>
+              </select>
+              <input v-model.number="form.time_hour" type="number" min="0" max="23" class="num" /> :
+              <input v-model.number="form.time_minute" type="number" min="0" max="59" class="num" />
+            </div>
+
+            <!-- 每月 -->
+            <div v-else class="sched-subrow">
+              <span>每月第</span>
+              <input v-model.number="form.day_of_month" type="number" min="1" max="28" class="num" />
+              <span>日</span>
+              <input v-model.number="form.time_hour" type="number" min="0" max="23" class="num" /> :
+              <input v-model.number="form.time_minute" type="number" min="0" max="59" class="num" />
+            </div>
+          </div>
+          <label class="field">
+            <span>目标主机（可选）</span>
+            <select v-model="form.target_host">
+              <option value="">未指定（不执行远程命令）</option>
+              <option v-for="c in connections" :key="c.id" :value="c.id">
+                {{ c.name }} — {{ c.username }}@{{ c.host }}
+              </option>
+            </select>
+          </label>
+          <label class="field">
+            <span>任务提示（留空用内置模板）</span>
+            <textarea
+              v-model="form.task_prompt"
+              rows="4"
+              placeholder="描述要执行的任务，例如：对目标系统执行只读健康巡检：CPU/内存/磁盘/服务状态，输出异常与建议。"
+            ></textarea>
+          </label>
+          <label class="field check">
+            <input v-model="form.enabled" type="checkbox" />
+            <span>启用定时执行</span>
+          </label>
+        </div>
+        <div class="modal-actions">
+          <button class="sc-btn" @click="editing = null">取消</button>
+          <button class="sc-btn primary" @click="save" :disabled="saving || !form.name.trim()">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="loading" class="sc-loading">加载中…</div>
+    <div v-if="error" class="sc-error">{{ error }}</div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { reactive, ref, computed, onMounted } from 'vue'
+import {
+  scheduleApi,
+  toFriendlyMessage,
+  type ScheduleRecord,
+  type ScheduleRun,
+} from '@/api/client'
+import { useToastStore } from '@/stores/toast'
+import { useSSHStore } from '@/stores/ssh'
+
+const toast = useToastStore()
+const sshStore = useSSHStore()
+
+/** 远程管理页保存的 SSH 连接列表（供目标主机下拉选择） */
+const connections = computed(() => sshStore.connections)
+
+function hostLabel(v: string): string {
+  const c = sshStore.connections.find(x => x.id === v)
+  return c ? `${c.name} (${c.username}@${c.host})` : v
+}
+
+const loading = ref(false)
+const error = ref('')
+const items = ref<ScheduleRecord[]>([])
+
+const editing = ref<ScheduleRecord | null>(null)
+const saving = ref(false)
+const selectedTemplate = ref<string | null>(null)
+type ScheduleType = 'interval' | 'daily' | 'weekly' | 'monthly'
+const form = reactive<{
+  name: string
+  schedule_type: ScheduleType
+  interval_minutes: number
+  time_hour: number
+  time_minute: number
+  weekday: number
+  day_of_month: number
+  target_host: string
+  task_prompt: string
+  enabled: boolean
+}>({
+  name: '',
+  schedule_type: 'interval',
+  interval_minutes: 60,
+  time_hour: 9,
+  time_minute: 0,
+  weekday: 0,
+  day_of_month: 1,
+  target_host: '',
+  task_prompt: '',
+  enabled: true,
+})
+
+const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
+
+const hh = (n: number) => String(n).padStart(2, '0')
+const MINUTE_LABEL = (h: number, m: number) => `${hh(h)}:${hh(m)}`
+/** 周期展示文案 */
+function scheduleText(s: ScheduleRecord): string {
+  switch (s.schedule_type) {
+    case 'interval':
+      return `每 ${s.interval_minutes} 分钟`
+    case 'daily':
+      return `每天 ${MINUTE_LABEL(s.time_hour, s.time_minute)}`
+    case 'weekly':
+      return `每周${WEEKDAYS[s.weekday] || s.weekday} ${MINUTE_LABEL(s.time_hour, s.time_minute)}`
+    case 'monthly':
+      return `每月${s.day_of_month}日 ${MINUTE_LABEL(s.time_hour, s.time_minute)}`
+    default:
+      return `每 ${s.interval_minutes} 分钟`
+  }
+}
+
+interface Template {
+  id: string
+  name: string
+  desc: string
+  prompt: string
+  schedule_type?: ScheduleType
+  defaultInterval?: number
+  time_hour?: number
+  weekday?: number
+  day_of_month?: number
+}
+const templates: Template[] = [
+  {
+    id: 'system-patrol',
+    name: '定时巡检',
+    desc: '系统健康巡检（CPU/内存/磁盘/服务）',
+    schedule_type: 'interval',
+    defaultInterval: 60,
+    prompt: '对目标主机系统做只读健康巡检：\n1. 检查 CPU、内存、磁盘使用率\n2. 检查关键系统服务状态\n3. 检查系统负载和连接数\n4. 输出异常指标和优化建议\n仅做信息采集，不执行修改操作。',
+  },
+  {
+    id: 'log-cleanup',
+    name: '日志清理',
+    desc: '定时清理过期日志文件',
+    schedule_type: 'weekly',
+    weekday: 0,
+    time_hour: 2,
+    prompt: '检查目标主机上的日志目录，清理 7 天前的过期日志文件，\n报告清理前后磁盘空间变化。\n仅删除过期文件，确认安全后再执行。',
+  },
+  {
+    id: 'backup-check',
+    name: '备份检查',
+    desc: '检查备份文件是否生成成功',
+    schedule_type: 'daily',
+    time_hour: 9,
+    prompt: '检查备份目录下今日是否成功生成了完整的备份文件，\n验证文件大小和完整性，\n如发现备份缺失或异常立即报告。',
+  },
+  {
+    id: 'bill-summary',
+    name: '月度对账',
+    desc: '每月初汇总资源用量并生成对账报告',
+    schedule_type: 'monthly',
+    day_of_month: 1,
+    time_hour: 9,
+    prompt: '汇总上月的资源使用与账单情况，比对配置与用量，\n生成结构化月度对账报告，标注异常扣费和优化建议。',
+  },
+]
+
+function applyTemplate(t: Template) {
+  selectedTemplate.value = t.id
+  // 切换模板时始终更新任务名称为模板名，便于一眼识别模板对应任务
+  form.name = t.name
+  if (t.schedule_type) form.schedule_type = t.schedule_type
+  if (t.defaultInterval !== undefined) form.interval_minutes = t.defaultInterval
+  if (t.time_hour !== undefined) form.time_hour = t.time_hour
+  if (t.weekday !== undefined) form.weekday = t.weekday
+  if (t.day_of_month !== undefined) form.day_of_month = t.day_of_month
+  form.time_minute = 0
+  form.task_prompt = t.prompt ?? ''
+}
+
+const historyFor = ref<ScheduleRecord | null>(null)
+const historyRuns = ref<ScheduleRun[]>([])
+const historyTitle = computed(() => historyFor.value?.name || '')
+
+async function load() {
+  loading.value = true
+  error.value = ''
+  try {
+    items.value = await scheduleApi.list()
+  } catch (e) {
+    error.value = toFriendlyMessage(e, '巡检任务加载失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+function isRunning(s: ScheduleRecord): boolean {
+  return s.last_status === 'running'
+}
+
+function openCreate() {
+  form.name = ''
+  form.schedule_type = 'interval'
+  form.interval_minutes = 60
+  form.time_hour = 9
+  form.time_minute = 0
+  form.weekday = 0
+  form.day_of_month = 1
+  form.target_host = ''
+  form.task_prompt = ''
+  form.enabled = true
+  selectedTemplate.value = null
+  editing.value = {} as ScheduleRecord
+}
+
+/** 编辑已有任务：把记录回填到表单并进入编辑态（模板选择在编辑态隐藏） */
+function openEdit(s: ScheduleRecord) {
+  form.name = s.name
+  form.schedule_type = s.schedule_type
+  form.interval_minutes = s.interval_minutes ?? 60
+  form.time_hour = s.time_hour ?? 9
+  form.time_minute = s.time_minute ?? 0
+  form.weekday = s.weekday ?? 0
+  form.day_of_month = s.day_of_month ?? 1
+  form.target_host = s.target_host ?? ''
+  form.task_prompt = s.task_prompt ?? ''
+  form.enabled = !!s.enabled
+  selectedTemplate.value = null
+  editing.value = s
+}
+
+function formPayload() {
+  return {
+    name: form.name.trim(),
+    schedule_type: form.schedule_type,
+    interval_minutes: form.interval_minutes || 60,
+    time_hour: form.time_hour ?? 9,
+    time_minute: form.time_minute ?? 0,
+    weekday: form.weekday ?? 0,
+    day_of_month: form.day_of_month ?? 1,
+    target_host: form.target_host.trim(),
+    task_prompt: form.task_prompt.trim(),
+    enabled: form.enabled,
+  }
+}
+
+async function save() {
+  if (!form.name.trim()) return
+  saving.value = true
+  try {
+    if (editing.value?.id) {
+      await scheduleApi.update(editing.value.id, formPayload())
+      toast.success('任务已更新')
+    } else {
+      await scheduleApi.create(formPayload())
+      toast.success('定时任务已创建')
+    }
+    editing.value = null
+    await load()
+  } catch (e) {
+    toast.error(toFriendlyMessage(e, '保存失败'))
+  } finally {
+    saving.value = false
+  }
+}
+
+async function toggle(s: ScheduleRecord) {
+  try {
+    await scheduleApi.update(s.id, { enabled: !s.enabled })
+    toast.success(s.enabled ? '已停用' : '已启用')
+    await load()
+  } catch (e) {
+    toast.error(toFriendlyMessage(e, '更新失败'))
+  }
+}
+
+async function runNow(s: ScheduleRecord) {
+  try {
+    await scheduleApi.runNow(s.id)
+    toast.success('已触发立即执行')
+    await load()
+    // 后台执行，轮询刷新状态：任务被删除（latest 为 undefined）或达到最大次数
+    // 时停止，防止 setInterval 泄漏（原实现在任务删除/异常不结束时永不 clearInterval）
+    let polls = 0
+    const t = setInterval(async () => {
+      if (++polls > 100) { clearInterval(t); return }
+      try {
+        await load()
+        const latest = items.value.find((x) => x.id === s.id)
+        if (!latest || (latest.last_status !== 'running' && latest.last_status !== 'idle')) {
+          clearInterval(t)
+        }
+      } catch { /* 忽略轮询错误 */ }
+    }, 3000)
+  } catch (e: any) {
+    toast.error(toFriendlyMessage(e, '触发失败'))
+  }
+}
+
+async function openHistory(s: ScheduleRecord) {
+  historyFor.value = s
+  historyRuns.value = []
+  try {
+    historyRuns.value = await scheduleApi.runs(s.id)
+  } catch (e) {
+    toast.error(toFriendlyMessage(e, '加载历史失败'))
+  }
+}
+
+async function remove(s: ScheduleRecord) {
+  if (!confirm(`确认删除定时任务「${s.name}」及其全部历史？`)) return
+  try {
+    await scheduleApi.remove(s.id)
+    toast.success('已删除')
+    await load()
+  } catch (e) {
+    toast.error(toFriendlyMessage(e, '删除失败'))
+  }
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  idle: '未执行',
+  running: '执行中',
+  completed: '已完成',
+  failed: '失败',
+  waiting_permission: '待审批',
+  pending: '待执行',
+}
+function statusLabel(s: string): string {
+  return STATUS_LABEL[s] || s
+}
+
+function shortId(id: string): string {
+  return id ? id.slice(0, 8) : ''
+}
+
+function formatTs(ts?: string): string {
+  if (!ts) return ''
+  const d = new Date(ts.replace(' ', 'T'))
+  if (isNaN(d.getTime())) return ts
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+onMounted(async () => {
+  await load()
+  // 加载远程管理的主机列表，供「目标主机」下拉使用（仅在未加载时拉取）
+  if (sshStore.connections.length === 0) {
+    sshStore.loadConnections()
+  }
+})
+</script>
+
+<style scoped>
+.schedules-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  padding: 16px;
+  gap: 12px;
+  overflow: hidden;
+  background: var(--bg-base);
+}
+.schedules-header { display: flex; align-items: center; justify-content: space-between; }
+.schedules-title { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; color: var(--text-primary); }
+.schedules-sub { font-size: 12px; color: var(--text-tertiary); font-weight: 400; }
+.schedules-actions { display: flex; gap: 8px; }
+
+.sc-btn {
+  padding: 4px 12px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle, #333);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.sc-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+.sc-btn:disabled { opacity: 0.5; cursor: default; }
+.sc-btn.primary { color: var(--accent-blue); border-color: var(--accent-blue); }
+
+.schedule-list { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+.schedule-card {
+  border: 1px solid var(--border-subtle, #333);
+  border-left: 3px solid var(--accent-blue);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.schedule-card-head { display: flex; align-items: center; justify-content: space-between; }
+.schedule-name { font-size: 14px; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 8px; }
+.toggle { font-size: 11px; padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border-subtle, #333); cursor: pointer; }
+.toggle.on { color: var(--accent-green); border-color: var(--accent-green); }
+.schedule-card-actions { display: flex; gap: 6px; }
+.row-btn {
+  font-size: 11px; padding: 2px 8px; border-radius: 4px;
+  border: 1px solid var(--border-subtle, #333); background: transparent;
+  color: var(--text-tertiary); cursor: pointer;
+}
+.row-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+.row-btn.danger:hover { color: var(--accent-red); border-color: var(--accent-red); }
+.schedule-card-meta { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--text-secondary); margin-top: 8px; }
+.meta-item b { color: var(--text-primary); font-weight: 600; }
+.mono { font-family: monospace; }
+.schedule-card-body { margin-top: 8px; font-size: 12px; }
+.schedule-card-body .k { color: var(--text-tertiary); margin-bottom: 4px; }
+.prompt { color: var(--text-secondary); white-space: pre-wrap; }
+
+.status { font-size: 11px; padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border-subtle, #333); }
+.status.running { color: var(--accent-blue); border-color: var(--accent-blue); }
+.status.completed { color: var(--accent-green); border-color: var(--accent-green); }
+.status.failed { color: var(--accent-red); border-color: var(--accent-red); }
+.status.waiting_permission { color: var(--accent-orange); border-color: var(--accent-orange); }
+
+.empty-state { color: var(--text-tertiary); font-size: 13px; text-align: center; padding: 50px 0; }
+.sc-loading { color: var(--text-tertiary); font-size: 12px; }
+.sc-error { color: var(--accent-red, #f48771); font-size: 12px; }
+
+.modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.modal { width: 520px; max-width: 90vw; background: var(--bg-base); border: 1px solid var(--border-subtle, #333); border-radius: 10px; padding: 16px; max-height: 80vh; overflow: auto; }
+.modal.wide { width: 680px; }
+.modal-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 12px; }
+.modal-body { display: flex; flex-direction: column; gap: 10px; }
+.field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-tertiary); }
+.field input, .field textarea, .field select {
+  font-size: 12px; padding: 6px 8px; border-radius: 6px;
+  border: 1px solid var(--border-subtle, #333); background: var(--bg-base); color: var(--text-primary);
+}
+.field-row { display: flex; gap: 10px; }
+.field.check { flex-direction: row; align-items: center; gap: 6px; }
+.template-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.template-chip {
+  text-align: left; padding: 8px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--border-subtle, #333); background: var(--bg-hover, rgba(255,255,255,0.03));
+}
+.template-chip:hover { border-color: var(--text-tertiary); }
+.template-chip.active { border-color: var(--accent-blue); color: var(--text-primary); background: rgba(59,130,246,0.08); }
+.template-name { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+.template-desc { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
+.sched-options { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.sched-option {
+  padding: 5px 0; font-size: 12px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border-subtle, #333); background: transparent; color: var(--text-secondary);
+}
+.sched-option:hover { color: var(--text-primary); background: var(--bg-hover); }
+.sched-option.active { color: var(--accent-blue); border-color: var(--accent-blue); background: rgba(59,130,246,0.08); }
+.sched-subrow { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+.sched-subrow .num { width: 56px; }
+.sched-subrow .sel { width: 92px; }
+.sched-subrow input.num, .sched-subrow select.sel {
+  font-size: 12px; padding: 4px 6px; border-radius: 6px;
+  border: 1px solid var(--border-subtle, #333); background: var(--bg-base); color: var(--text-primary);
+}
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+
+.history-list { display: flex; flex-direction: column; gap: 8px; }
+.history-item { border: 1px solid var(--border-subtle, #333); border-radius: 6px; padding: 8px 10px; }
+.history-head { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--text-secondary); }
+.history-summary { font-size: 12px; color: var(--text-secondary); margin-top: 6px; white-space: pre-wrap; max-height: 150px; overflow: auto; }
+.history-error { font-size: 12px; color: var(--accent-red, #f48771); margin-top: 4px; }
+.empty-small { color: var(--text-tertiary); font-size: 12px; padding: 20px 0; text-align: center; }
+</style>

@@ -91,6 +91,8 @@ function copyContent(text: string) {
 
 .message-block.assistant {
   align-items: flex-start;
+  /* 与面板左边框留出间隙（用户消息保持贴边，见下方 .user 注释） */
+  padding-left: 10px;
 }
 
 .message-bubble {

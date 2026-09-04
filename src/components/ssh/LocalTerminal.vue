@@ -152,7 +152,7 @@ function applyCompletion(candidate: CompletionCandidate): void {
 
   const text = buildCompletionText(candidate.text, prefix, isUnique)
   if (text) {
-    window.electronAPI.ptyWrite(props.ptyId, text)
+    window.electronAPI.ptyWrite(props.ptyId, text).catch(() => {})
   }
   hideCompletion()
   terminal.focus()
@@ -270,7 +270,7 @@ onMounted(() => {
   const rect = containerRef.value.getBoundingClientRect()
   if (rect.width > 0 && rect.height > 0) {
     fitAddon.fit()
-    api.ptyResize(id, terminal.cols, terminal.rows)
+    api.ptyResize(id, terminal.cols, terminal.rows).catch(() => {})
   }
 
   // 监听 PTY 数据，过滤 ANSI 背景色以去除字体后的长方形色块
@@ -292,7 +292,7 @@ onMounted(() => {
 
   // 终端输入 → PTY，并在提交命令时收集历史
   terminal.onData((data) => {
-    api.ptyWrite(id, data)
+    api.ptyWrite(id, data).catch(() => {})
     if (data.includes('\r') || data.includes('\n')) {
       collectCommand()
     }
@@ -322,7 +322,7 @@ onMounted(() => {
         // 去除末尾的换行符/回车符，防止粘贴时自动执行命令
         const sanitized = text.replace(/[\r\n]+$/, '')
         if (sanitized) {
-          api.ptyWrite(id, sanitized)
+          api.ptyWrite(id, sanitized).catch(() => {})
         }
         terminal?.focus()
       }
@@ -334,7 +334,7 @@ onMounted(() => {
   resizeObserver = new ResizeObserver(() => {
     if (!terminal || !fitAddon || !props.visible) return
     fitAddon.fit()
-    api.ptyResize(id, terminal.cols, terminal.rows)
+    api.ptyResize(id, terminal.cols, terminal.rows).catch(() => {})
   })
   resizeObserver.observe(containerRef.value)
 })
@@ -357,6 +357,9 @@ onUnmounted(() => {
     window.electronAPI.ptyDestroy(props.ptyId)
   }
   terminal?.dispose()
+  // 审查修复（P2）：卸载后 terminal 置 null — 原实现只 dispose 不清引用，
+  // 卸载窗口内补全/渲染回调的 terminal 守卫失效，会在已 dispose 实例上操作
+  terminal = null
   // 清理可见性定时器
   if (visTimer) clearTimeout(visTimer)
 })

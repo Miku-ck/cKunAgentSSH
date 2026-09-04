@@ -82,6 +82,11 @@ v-show="s.id === store.activeSessionId"
           <AuditView />
         </div>
 
+        <!-- 定时任务页面 -->
+        <div v-show="activeNavPage === 'schedules'" class="schedules-page">
+          <SchedulesView />
+        </div>
+
         <!-- Quick Start 页面 -->
         <div v-show="(showHome || store.sessions.length === 0) && activeNavPage === 'home'" class="quick-start">
           <div class="qs-header">
@@ -201,6 +206,7 @@ import QuickCommandBar from '@/components/ssh/QuickCommandBar.vue'
 import SshAiPanel from '@/components/ssh/SshAiPanel.vue'
 import IconMonitor from '@/components/icons/IconMonitor.vue'
 import AuditView from '@/views/ssh/AuditView.vue'
+import SchedulesView from '@/views/ssh/SchedulesView.vue'
 import { useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useSettings } from '@/composables/useSettings'
@@ -231,6 +237,8 @@ const {
   toggleSftp,
   toggleAiPanel,
   toggleAudit,
+  toggleSchedules,
+  showAiPanel,
   qsSearch,
   filteredShells,
   filteredConnections,
@@ -266,7 +274,10 @@ defineExpose({
   toggleRemoteManager,
   toggleSftp,
   toggleAudit,
+  toggleSchedules,
   openSettings,
+  activeNavPage,
+  showAiPanel,
 })
 </script>
 
@@ -487,6 +498,18 @@ defineExpose({
   bottom: 0;
   z-index: 10;
   overflow: hidden;
+}
+
+/* ─── Schedules Page ─── */
+.schedules-page {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  overflow: hidden;
+  display: flex;
 }
 
 .qs-header {

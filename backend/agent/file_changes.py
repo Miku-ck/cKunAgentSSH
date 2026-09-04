@@ -195,30 +195,37 @@ def get_file_diff(agent_run_id: str, abs_path: str) -> dict:
         }
     """
     with _LOCK:
-        run_map = _PENDING.get(agent_run_id, {})
-        change = run_map.get(abs_path)
-        if not change:
-            return {}
-        before = change.before_content
-        after = change.after_content
-        # 生成 unified diff
-        diff_lines = list(difflib.unified_diff(
-            before,
-            after,
-            fromfile=f"a/{change.file_path}",
-            tofile=f"b/{change.file_path}",
-            lineterm="",
-        ))
-        return {
-            "file_path": change.file_path,
-            "abs_path": change.abs_path,
-            "before": "\n".join(before),
-            "after": "\n".join(after),
-            "unified_diff": "\n".join(diff_lines),
-            "operation": change.operation,
-            "added_lines": change.added_lines,
-            "removed_lines": change.removed_lines,
-        }
+        change = _PENDING.get(agent_run_id, {}).get(abs_path)
+    if not change:
+        # 审查修复：run 结束后 clear_file_changes 清空内存缓存，而本接口的设计
+        # 使用场景恰是"run 结束后点击文件查看 diff"→ 原实现恒返回未找到。
+        # 先按 C3 迁移落库的 before/after_content 从 DB 恢复到内存再查。
+        # 注意：load_file_changes 内部也会取 _LOCK（非可重入），必须在锁外调用
+        load_file_changes(agent_run_id)
+        with _LOCK:
+            change = _PENDING.get(agent_run_id, {}).get(abs_path)
+    if not change:
+        return {}
+    before = change.before_content
+    after = change.after_content
+    # 生成 unified diff
+    diff_lines = list(difflib.unified_diff(
+        before,
+        after,
+        fromfile=f"a/{change.file_path}",
+        tofile=f"b/{change.file_path}",
+        lineterm="",
+    ))
+    return {
+        "file_path": change.file_path,
+        "abs_path": change.abs_path,
+        "before": "\n".join(before),
+        "after": "\n".join(after),
+        "unified_diff": "\n".join(diff_lines),
+        "operation": change.operation,
+        "added_lines": change.added_lines,
+        "removed_lines": change.removed_lines,
+    }
 
 
 def clear_file_changes(agent_run_id: str) -> None:

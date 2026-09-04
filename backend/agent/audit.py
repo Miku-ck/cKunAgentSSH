@@ -15,6 +15,7 @@ AuditEngine — 追加式、链式签名防篡改的运维审计
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -202,6 +203,14 @@ def append_record(
         return None
 
 
+async def append_record_async(*args, **kwargs) -> Optional[dict[str, Any]]:
+    """异步包装 — 审查修复：原实现在 asyncio 上下文（reins 拦截器）中同步调用
+    append_record，其 BEGIN IMMEDIATE 在其它连接持写锁时 busy_timeout 最长
+    阻塞事件循环 5s。改由 to_thread 执行，不阻塞事件循环。
+    """
+    return await asyncio.to_thread(append_record, *args, **kwargs)
+
+
 def _last_hash(conn) -> str:
     cur = conn.execute(f"SELECT hash FROM {AUDIT_TABLE} ORDER BY id DESC LIMIT 1")
     row = cur.fetchone()
@@ -259,8 +268,12 @@ def query(
 def count(
     environment: Optional[str] = None,
     target_id: Optional[str] = None,
+    action: Optional[str] = None,
     conclusion: Optional[str] = None,
+    run_id: Optional[str] = None,
 ) -> int:
+    """审查修复：过滤集与 query 对齐（原实现缺 action/run_id，
+    total 与 items 数量不一致 — 按 action/run_id 过滤时 total 仍是全量）"""
     conds: list[str] = []
     params: list[Any] = []
     if environment:
@@ -269,9 +282,15 @@ def count(
     if target_id:
         conds.append("target_id = ?")
         params.append(target_id)
+    if action:
+        conds.append("action = ?")
+        params.append(action)
     if conclusion:
         conds.append("conclusion = ?")
         params.append(conclusion)
+    if run_id:
+        conds.append("run_id = ?")
+        params.append(run_id)
     where = (" WHERE " + " AND ".join(conds)) if conds else ""
     try:
         conn = database._get_conn()

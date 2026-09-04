@@ -212,7 +212,44 @@ function genId(): string {
   return `conn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+/**
+ * 审查修复（P2）：就地重加密磁盘记录里的 plain: 旧格式字段。
+ * 旧存储形态 plain: 仅为 base64 混淆（等效明文），safeStorage 可用时
+ * 在任意一次写操作前将其升级为 enc:，消除明文落盘窗口。
+ */
+function reencryptPlainOnDisk(records: SSHConnectionRecordOnDisk[]): void {
+  if (!safeStorage.isEncryptionAvailable()) return
+  for (const rec of records) {
+    for (const field of ['passwordEnc', 'passphraseEnc'] as const) {
+      const v = rec[field]
+      if (v && v.startsWith('plain:')) {
+        try {
+          const plain = Buffer.from(v.slice(6), 'base64').toString('utf-8')
+          rec[field] = 'enc:' + safeStorage.encryptString(plain).toString('base64')
+        } catch {
+          // 解码失败：保留原值，不阻断写操作
+        }
+      }
+    }
+  }
+}
+
 export class SSHStore {
+  /**
+   * 审查修复（P2）：读-改-写串行化队列。原实现 save/delete/duplicate/
+   * touchLastConnected/migrateLegacy 各自独立"读全量 → 改 → 写全量"，
+   * 两个写操作并发时会以各自的旧基线互相覆写（丢更新）。
+   * 参照 known-hosts 的 savePromise 链模式：所有写操作串在同一 promise 链上。
+   */
+  private writeQueue: Promise<unknown> = Promise.resolve()
+
+  /** 把写操作串入队列；前一个操作失败不阻断后续（各自重试语义不变） */
+  private enqueue<T>(op: () => Promise<T>): Promise<T> {
+    const run = this.writeQueue.then(op, op)
+    // 吞掉队列链本身的错误，防止前一个操作的 reject 污染后续操作的链
+    this.writeQueue = run.then(() => undefined, () => undefined)
+    return run
+  }
   /**
    * 列表（读展示路径）：E-2 修复 — readAllFromDisk 现在会把读取失败向上抛
    * （防止空表覆写全库）。列表展示允许降级：catch 后返回 [] 并记日志，不崩 UI。
@@ -230,10 +267,15 @@ export class SSHStore {
   }
 
   async save(input: SSHConnectionRecord): Promise<SSHConnectionRecord> {
+    return this.enqueue(() => this.doSave(input))
+  }
+
+  private async doSave(input: SSHConnectionRecord): Promise<SSHConnectionRecord> {
     if (!safeStorage.isEncryptionAvailable() && (input.password || input.passphrase)) {
       console.warn('[SSHStore] safeStorage 加密不可用，密码/passphrase 将不持久化（每次连接需重新输入或改用私钥认证）')
     }
     const records = await readAllFromDisk()
+    reencryptPlainOnDisk(records)
     const now = Date.now()
 
     let record: SSHConnectionRecord
@@ -251,7 +293,12 @@ export class SSHStore {
   }
 
   async delete(id: string): Promise<void> {
+    return this.enqueue(() => this.doDelete(id))
+  }
+
+  private async doDelete(id: string): Promise<void> {
     const records = await readAllFromDisk()
+    reencryptPlainOnDisk(records)
     const filtered = records.filter(r => r.id !== id)
     if (filtered.length !== records.length) {
       await writeAllToDisk(filtered)
@@ -259,7 +306,12 @@ export class SSHStore {
   }
 
   async duplicate(id: string): Promise<SSHConnectionRecord> {
+    return this.enqueue(() => this.doDuplicate(id))
+  }
+
+  private async doDuplicate(id: string): Promise<SSHConnectionRecord> {
     const records = await readAllFromDisk()
+    reencryptPlainOnDisk(records)
     const src = records.find(r => r.id === id)
     if (!src) throw new Error(`Connection ${id} not found`)
 
@@ -280,7 +332,12 @@ export class SSHStore {
 
   /** 更新最后连接时间(连接成功后调用) */
   async touchLastConnected(id: string): Promise<void> {
+    return this.enqueue(() => this.doTouchLastConnected(id))
+  }
+
+  private async doTouchLastConnected(id: string): Promise<void> {
     const records = await readAllFromDisk()
+    reencryptPlainOnDisk(records)
     const idx = records.findIndex(r => r.id === id)
     if (idx !== -1) {
       records[idx].lastConnectedAt = Date.now()
@@ -291,7 +348,12 @@ export class SSHStore {
   /** 从渲染进程 localStorage 迁移旧数据(一次性) */
   async migrateLegacy(legacy: any[]): Promise<number> {
     if (!Array.isArray(legacy) || legacy.length === 0) return 0
+    return this.enqueue(() => this.doMigrateLegacy(legacy))
+  }
+
+  private async doMigrateLegacy(legacy: any[]): Promise<number> {
     const records = await readAllFromDisk()
+    reencryptPlainOnDisk(records)
     const existing = new Set(records.map(r => `${r.host}:${r.port}:${r.username}`))
     const now = Date.now()
     let migrated = 0

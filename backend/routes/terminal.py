@@ -34,7 +34,10 @@ class TerminalPredictRequest(BaseModel):
     # 当前已输入的命令前缀（可能为空）
     current_input: str = ""
     # 最近执行的命令历史（最近 N 条，按时间正序）
-    recent_commands: list[str] = Field(default_factory=list)
+    # 审查修复（P2 E8）：加上限 — 原实现无约束，渲染进程传数万条历史
+    # 全量反序列化到内存，再构建 LLM prompt（每条都进 context_parts），
+    # 极端情况下撑爆请求体 + prompt。10 条已足够预测上下文
+    recent_commands: list[str] = Field(default_factory=list, max_length=50)
     # 当前工作目录
     cwd: str = ""
     # 操作系统类型
@@ -132,10 +135,21 @@ async def predict_terminal_command(req: TerminalPredictRequest):
             max_tokens=max_tokens,
         )
 
-        async for chunk in chunk_iter:
-            if chunk.content:
-                full_content += chunk.content
+        # 审查修复（P2 E8）：LLM 调用加整体超时 — 原实现流式读取无上限时间
+        # 保护，LLM 服务挂起或慢响应时该端点永久阻塞，连接池耗尽后
+        # 影响所有 FastAPI 请求（包括健康检查）。15s 对预测类短回复已足够
+        async def _read_stream() -> str:
+            parts: list[str] = []
+            async for chunk in chunk_iter:
+                if chunk.content:
+                    parts.append(chunk.content)
+            return "".join(parts)
 
+        full_content = await asyncio.wait_for(_read_stream(), timeout=15.0)
+
+    except asyncio.TimeoutError:
+        logger.warning("Terminal predict LLM call timed out (15s)")
+        return TerminalPredictResponse(predictions=[], model_used=model_id)
     except Exception as e:
         logger.warning(f"Terminal predict LLM call failed: {e}")
         return TerminalPredictResponse(predictions=[], model_used=model_id)

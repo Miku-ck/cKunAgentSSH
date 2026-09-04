@@ -19,6 +19,35 @@ let sshManager: SSHManager | null = null
 let sshStore: SSHStore | null = null
 let electronBridge: ElectronBridge | null = null
 
+// 审查修复：IPC sender 校验 — 原实现所有 ipcMain.handle 均不校验请求来源，
+// 任何受控渲染进程（XSS/外部 file:// 导航/未来新增窗口）都能直调
+// ssh:connect、fs:*、backend:getToken 等危险 API。
+// 本应用只有唯一主窗口（单实例锁 + 固定 renderer 入口），校验策略：
+// 请求必须来自当前主窗口的 webContents。
+function assertTrustedSender(event: Electron.IpcMainInvokeEvent): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    throw new Error('主窗口不存在，拒绝 IPC 请求')
+  }
+  if (event.sender !== mainWindow.webContents) {
+    throw new Error(`拒绝来自非主窗口渲染进程的 IPC 请求: ${event.senderFrame?.url || 'unknown'}`)
+  }
+}
+
+/**
+ * 审查修复：带 sender 校验的 IPC handler 注册（见 assertTrustedSender）。
+ * 用法：所有 ipcMain.handle 一律改走本函数，事件原样透传给业务 handler
+ * （业务侧 `_event` 参数签名不受影响）。
+ */
+function handleTrusted(
+  channel: string,
+  fn: (event: Electron.IpcMainInvokeEvent, ...args: any[]) => any,
+): void {
+  ipcMain.handle(channel, (event, ...args) => {
+    assertTrustedSender(event)
+    return fn(event, ...args)
+  })
+}
+
 const IMAGE_MIME_MAP: Record<string, string> = {
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -186,15 +215,15 @@ function buildBashCompletionScript(opts: {
 }
 
 function setupWindowIPC(): void {
-  ipcMain.handle('win:minimize', () => mainWindow?.minimize())
-  ipcMain.handle('win:maximize', () => {
+  handleTrusted('win:minimize', () => mainWindow?.minimize())
+  handleTrusted('win:maximize', () => {
     if (mainWindow?.isMaximized()) {
       mainWindow.unmaximize()
     } else {
       mainWindow?.maximize()
     }
   })
-  ipcMain.handle('win:close', () => mainWindow?.close())
+  handleTrusted('win:close', () => mainWindow?.close())
 }
 
 // ─── File System IPC ────────────────────────────────
@@ -288,7 +317,7 @@ function findGitBashFromRegistry(): string | null {
 
 function setupFSIPC(): void {
   // 读取目录内容
-  ipcMain.handle('fs:readDir', async (_event, dirPath: string) => {
+  handleTrusted('fs:readDir', async (_event, dirPath: string) => {
     try {
       await assertSafePath(dirPath)
       const entries = await readdir(dirPath, { withFileTypes: true })
@@ -327,7 +356,7 @@ function setupFSIPC(): void {
   })
 
   // 读取文件内容
-  ipcMain.handle('fs:readFile', async (_event, filePath: string) => {
+  handleTrusted('fs:readFile', async (_event, filePath: string) => {
     try {
       await assertSafePath(filePath)
       // 审查 M-10：大小上限（与 fs:readFileForEditor 的 10MB 一致）。原实现无上限，
@@ -348,7 +377,7 @@ function setupFSIPC(): void {
 
   // C9：读取文件为 base64（渲染层二进制资源上传/预览用）
   // assertSafePath + 10MB 上限，返回 { base64, size }
-  ipcMain.handle('fs:readFileBase64', async (_event, filePath: string): Promise<{ base64: string; size: number }> => {
+  handleTrusted('fs:readFileBase64', async (_event, filePath: string): Promise<{ base64: string; size: number }> => {
     await assertSafePath(filePath)
     const s = await stat(filePath)
     if (s.size > 10 * 1024 * 1024) {
@@ -359,7 +388,7 @@ function setupFSIPC(): void {
   })
 
   // 写入文件内容
-  ipcMain.handle('fs:writeFile', async (_event, filePath: string, content: string) => {
+  handleTrusted('fs:writeFile', async (_event, filePath: string, content: string) => {
     try {
       await assertSafePath(filePath)
       // E21：写入内容大小上限（50MB）— 原实现无上限，渲染进程可传入超大
@@ -376,7 +405,7 @@ function setupFSIPC(): void {
   })
 
   // 为弹窗编辑器读取文件内容（带大小/二进制校验）
-  ipcMain.handle('fs:readFileForEditor', async (_event, filePath: string) => {
+  handleTrusted('fs:readFileForEditor', async (_event, filePath: string) => {
     try {
       await assertSafePath(filePath)
       const stats = await stat(filePath)
@@ -400,7 +429,7 @@ function setupFSIPC(): void {
   })
 
   // 选择文件夹
-  ipcMain.handle('fs:selectFolder', async () => {
+  handleTrusted('fs:selectFolder', async () => {
     const result = await dialog.showOpenDialog(mainWindow!, {
       properties: ['openDirectory'],
     })
@@ -409,7 +438,7 @@ function setupFSIPC(): void {
   })
 
   // 选择文件(用于私钥等)
-  ipcMain.handle('fs:selectFile', async () => {
+  handleTrusted('fs:selectFile', async () => {
     const result = await dialog.showOpenDialog(mainWindow!, {
       properties: ['openFile'],
     })
@@ -426,7 +455,7 @@ function setupFSIPC(): void {
   })
 
   // 选择背景图片并保存到 userData/backgrounds，返回文件名
-  ipcMain.handle('fs:selectImage', async () => {
+  handleTrusted('fs:selectImage', async () => {
     const result = await dialog.showOpenDialog(mainWindow!, {
       properties: ['openFile'],
       filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }],
@@ -506,7 +535,7 @@ function setupFSIPC(): void {
   }
 
   // 从 userData/backgrounds 读取背景图为 data URL
-  ipcMain.handle('fs:loadBackgroundImage', async (_, fileName: string) => {
+  handleTrusted('fs:loadBackgroundImage', async (_, fileName: string) => {
     try {
       const filePath = resolveBackgroundPath(fileName)
       await assertSafePath(filePath)
@@ -520,7 +549,7 @@ function setupFSIPC(): void {
   })
 
   // 删除 userData/backgrounds 中的背景图文件
-  ipcMain.handle('fs:deleteBackgroundImage', async (_, fileName: string) => {
+  handleTrusted('fs:deleteBackgroundImage', async (_, fileName: string) => {
     try {
       const filePath = resolveBackgroundPath(fileName)
       await assertSafePath(filePath)
@@ -534,10 +563,10 @@ function setupFSIPC(): void {
   })
 
   // 获取用户主目录
-  ipcMain.handle('fs:getHomePath', () => homedir())
+  handleTrusted('fs:getHomePath', () => homedir())
 
   // 获取可用盘符（Windows 返回 ['C:\\', 'D:\\', ...]，其他平台返回 []）
-  ipcMain.handle('fs:getDrives', async () => {
+  handleTrusted('fs:getDrives', async () => {
     if (process.platform !== 'win32') return []
     try {
       const { execFile } = await import('node:child_process')
@@ -568,20 +597,20 @@ function setupFSIPC(): void {
   })
 
   // 创建目录
-  ipcMain.handle('fs:mkdir', async (_event, dirPath: string) => {
+  handleTrusted('fs:mkdir', async (_event, dirPath: string) => {
     await assertSafePath(dirPath)
     await mkdir(dirPath, { recursive: true })
   })
 
   // 重命名
-  ipcMain.handle('fs:rename', async (_event, oldPath: string, newPath: string) => {
+  handleTrusted('fs:rename', async (_event, oldPath: string, newPath: string) => {
     await assertSafePath(oldPath)
     await assertSafePath(newPath)
     await rename(oldPath, newPath)
   })
 
   // 递归复制文件/目录（同侧复制粘贴），通过 sftp:progress 上报进度
-  ipcMain.handle('fs:copy', async (_event, srcPath: string, destPath: string, transferId: string) => {
+  handleTrusted('fs:copy', async (_event, srcPath: string, destPath: string, transferId: string) => {
     await assertSafePath(srcPath)
     await assertSafePath(destPath)
 
@@ -615,7 +644,18 @@ function setupFSIPC(): void {
     }
     await collect(srcPath, destPath, true)
 
+    // 审查修复（P2）：复制总量上限 — 原实现无上限，递归收集百万文件的整棵树
+    // 全部驻留内存（files 数组 + 逐文件 copyFile），可 OOM 崩主进程。
+    // 10 万文件或 10GB 已远超手工复制场景，超出提示用 sftp/远端命令处理。
+    const MAX_COPY_FILES = 100_000
+    const MAX_COPY_BYTES = 10 * 1024 * 1024 * 1024
+    if (files.length > MAX_COPY_FILES) {
+      throw new Error(`文件数过多（${files.length}，上限 ${MAX_COPY_FILES}），请分批复制或用远端命令处理`)
+    }
     const total = files.reduce((sum, f) => sum + f.size, 0)
+    if (total > MAX_COPY_BYTES) {
+      throw new Error(`总大小超过 10GB 上限，请分批复制或用远端命令处理`)
+    }
     let transferred = 0
     let lastReport = 0
     // 修复 5：窗口销毁后 webContents.send 会抛异常，加守卫 + try/catch
@@ -642,16 +682,22 @@ function setupFSIPC(): void {
   })
 
   // 移到回收站
-  ipcMain.handle('fs:trash', async (_event, filePath: string) => {
+  handleTrusted('fs:trash', async (_event, filePath: string) => {
     await assertSafePath(filePath)
     await shell.trashItem(filePath)
   })
 
   // 写入二进制文件（用于技能包资源文件解压）
   // data 为 base64 编码的字节数据，避免 IPC 序列化丢失字节
-  ipcMain.handle('fs:writeBinaryFile', async (_event, filePath: string, data: string) => {
+  // 审查修复：加 50MB 大小上限 — 原实现无上限，受控渲染进程可传超大 base64
+  // 字符串耗尽主进程内存（IPC 序列化 + Buffer 解码双重放大）
+  const MAX_BINARY_WRITE_BYTES = 50 * 1024 * 1024
+  handleTrusted('fs:writeBinaryFile', async (_event, filePath: string, data: string) => {
     try {
       await assertSafePath(filePath)
+      if (typeof data !== 'string' || data.length > MAX_BINARY_WRITE_BYTES * 1.4) {
+        throw new Error(`写入数据过大（上限 ${MAX_BINARY_WRITE_BYTES / 1024 / 1024}MB）`)
+      }
       const buf = Buffer.from(data, 'base64')
       await writeFile(filePath, buf)
     } catch (err: any) {
@@ -660,19 +706,19 @@ function setupFSIPC(): void {
   })
 
   // 路径拼接（主进程使用 Node path，避免渲染进程引入 polyfill）
-  ipcMain.handle('fs:pathJoin', async (_event, ...segments: string[]) => {
+  handleTrusted('fs:pathJoin', async (_event, ...segments: string[]) => {
     return join(...segments)
   })
 
   // 技能目录根路径：{userData}/skills
-  ipcMain.handle('fs:getSkillsDir', async () => {
+  handleTrusted('fs:getSkillsDir', async () => {
     const dir = join(app.getPath('userData'), 'skills')
     await mkdir(dir, { recursive: true })
     return dir
   })
 
   // 递归删除目录（用于卸载技能时清理资源）
-  ipcMain.handle('fs:rmRF', async (_event, targetPath: string) => {
+  handleTrusted('fs:rmRF', async (_event, targetPath: string) => {
     try {
       // 安全：只允许删除技能目录下的路径，避免误删
       // 用 realpath 解析符号链接 + 严格边界检查，防止 `...\skills\..\..\Windows\System32` 路径遍历绕过
@@ -701,7 +747,7 @@ function setupFSIPC(): void {
 
   // 列出目录下所有文件（递归），返回相对路径列表，用于技能导出收集资源文件。
   // 仅用于小型目录（技能文件夹），不做剪枝。
-  ipcMain.handle('fs:listFilesRecursive', async (_event, dirPath: string): Promise<string[]> => {
+  handleTrusted('fs:listFilesRecursive', async (_event, dirPath: string): Promise<string[]> => {
     try {
       await assertSafePath(dirPath)
       const result: string[] = []
@@ -727,7 +773,7 @@ function setupFSIPC(): void {
   // 列出工作区下的文本类源码文件（递归），用于 @ 菜单文件提及。
   // 在主进程侧剪枝：跳过 node_modules/.git/dist 等巨型目录、仅收集文本扩展名、
   // 总数上限 2000。避免大工作区返回数十万路径阻塞渲染进程导致 UI 卡死。
-  ipcMain.handle('fs:listTextFiles', async (_event, dirPath: string): Promise<string[]> => {
+  handleTrusted('fs:listTextFiles', async (_event, dirPath: string): Promise<string[]> => {
     try {
       await assertSafePath(dirPath)
       const SKIP_DIRS = new Set([
@@ -769,20 +815,20 @@ function setupFSIPC(): void {
   })
 
   // 检查文件是否存在
-  ipcMain.handle('fs:exists', async (_event, filePath: string) => {
+  handleTrusted('fs:exists', async (_event, filePath: string) => {
     await assertSafePath(filePath)
     return existsSync(filePath)
   })
 
   // 获取文件/目录信息（用于判断是文件还是目录）
-  ipcMain.handle('fs:stat', async (_event, filePath: string) => {
+  handleTrusted('fs:stat', async (_event, filePath: string) => {
     await assertSafePath(filePath)
     const s = await stat(filePath)
     return { isDirectory: s.isDirectory(), isFile: s.isFile(), size: s.size, modified: s.mtimeMs }
   })
 
   // 按环境变量 PATH 查找可执行文件；对 bash 额外读取 Git for Windows 注册表
-  ipcMain.handle('fs:resolveProgram', (_event, name: string) => {
+  handleTrusted('fs:resolveProgram', (_event, name: string) => {
     if (name === 'bash') {
       const gitBash = findGitBashFromRegistry()
       if (gitBash) return gitBash
@@ -792,7 +838,7 @@ function setupFSIPC(): void {
 
   // 本地 ZIP 打包：sources 为本地路径数组，输出到 localZipPath
   // Windows 使用 PowerShell Compress-Archive，Linux/macOS 使用 zip 命令
-  ipcMain.handle('fs:zipLocal', async (_event, sources: string[], localZipPath: string) => {
+  handleTrusted('fs:zipLocal', async (_event, sources: string[], localZipPath: string) => {
     if (!sources || sources.length === 0) throw new Error('请至少选择一个要压缩的文件/目录')
     for (const s of sources) await assertSafePath(s)
     await assertSafePath(localZipPath)
@@ -839,7 +885,7 @@ function setupFSIPC(): void {
   })
 
   // 本地 ZIP 解压：localZipPath 解压到 localDestDir
-  ipcMain.handle('fs:unzipLocal', async (_event, localZipPath: string, localDestDir: string) => {
+  handleTrusted('fs:unzipLocal', async (_event, localZipPath: string, localDestDir: string) => {
     await assertSafePath(localZipPath)
     await assertSafePath(localDestDir)
     await mkdir(localDestDir, { recursive: true })
@@ -880,26 +926,26 @@ function setupPtyIPC(): void {
   ptyManager = new PtyManager()
   if (mainWindow) ptyManager.setWindow(mainWindow)
 
-  ipcMain.handle('pty:create', (_event, opts?: { shell?: string; args?: string[]; cwd?: string; cols?: number; rows?: number }) => {
+  handleTrusted('pty:create', (_event, opts?: { shell?: string; args?: string[]; cwd?: string; cols?: number; rows?: number }) => {
     return ptyManager!.create(opts)
   })
 
-  ipcMain.handle('pty:write', (_event, id: string, data: string) => {
+  handleTrusted('pty:write', (_event, id: string, data: string) => {
     ptyManager!.write(id, data)
   })
 
-  ipcMain.handle('pty:resize', (_event, id: string, cols: number, rows: number) => {
+  handleTrusted('pty:resize', (_event, id: string, cols: number, rows: number) => {
     ptyManager!.resize(id, cols, rows)
   })
 
-  ipcMain.handle('pty:destroy', (_event, id: string) => {
+  handleTrusted('pty:destroy', (_event, id: string) => {
     ptyManager!.destroy(id)
   })
 
   // 本地终端命令补全：在指定 cwd 执行补全
   // Windows PowerShell：使用 [System.Management.Automation.CommandCompletion]::CompleteInput
   // macOS/Linux bash：使用 compgen（识别 function/alias/command/file）
-  ipcMain.handle('pty:completeCommand', (_event, opts: { ptyId: string; cmd: string; prefix: string; cwd: string; isCommand: boolean; prevSegments: string[]; shell?: string }) => {
+  handleTrusted('pty:completeCommand', (_event, opts: { ptyId: string; cmd: string; prefix: string; cwd: string; isCommand: boolean; prevSegments: string[]; shell?: string }) => {
     return new Promise<string>((resolve) => {
       const { ptyId, cmd, prefix, cwd, isCommand, prevSegments, shell } = opts
       const isPowerShell = process.platform === 'win32' && (!shell || /powershell|pwsh/i.test(shell))
@@ -978,6 +1024,12 @@ if ($result.CompletionMatches) {
           finish('')
         }, 5000)
         child.stdout?.on('data', (data: Buffer) => {
+          // 审查修复（P2）：stdout 累积上限 — 原实现无上限，补全命令在异常
+          // 环境（如损坏的 PSModulePath 脚本刷屏）下可无限累积撑爆主进程内存
+          if (out.length > 256 * 1024) {
+            finish('')
+            return
+          }
           out += data.toString('utf-8')
         })
         child.stderr?.on('data', () => { /* 丢弃 stderr，保持原 exec 只取 stdout 的语义 */ })
@@ -1005,7 +1057,7 @@ function setupSSHIPC(): void {
   sshStore = new SSHStore()
   if (mainWindow) sshManager.setWindow(mainWindow)
 
-  ipcMain.handle('ssh:connect', async (_event, config: any) => {
+  handleTrusted('ssh:connect', async (_event, config: any) => {
     const { cols, rows, ...connConfig } = config
     // E20：cols/rows 来自渲染进程，复用 pty:create 同款钳制
     // （cols 1..1000 默认 80，rows 1..500 默认 24），防非法值
@@ -1019,7 +1071,7 @@ function setupSSHIPC(): void {
     return result
   })
 
-  ipcMain.handle('ssh:connectSftp', async (_event, config: any) => {
+  handleTrusted('ssh:connectSftp', async (_event, config: any) => {
     const result = await sshManager!.connectSftp(config)
     if (config.id) {
       sshStore!.touchLastConnected(config.id).catch(() => { /* ignore */ })
@@ -1027,58 +1079,66 @@ function setupSSHIPC(): void {
     return result
   })
 
-  ipcMain.handle('ssh:write', (_event, id: string, data: string) => {
+  handleTrusted('ssh:write', (_event, id: string, data: string) => {
     sshManager!.write(id, data)
   })
 
-  ipcMain.handle('ssh:resize', (_event, id: string, cols: number, rows: number) => {
+  handleTrusted('ssh:resize', (_event, id: string, cols: number, rows: number) => {
     sshManager!.resize(id, cols, rows)
   })
 
-  ipcMain.handle('ssh:disconnect', (_event, id: string) => {
+  handleTrusted('ssh:disconnect', (_event, id: string) => {
     sshManager!.disconnect(id)
   })
 
-  ipcMain.handle('ssh:getCwd', (_event, id: string) => {
+  handleTrusted('ssh:getCwd', (_event, id: string) => {
     return sshManager!.getCwd(id)
   })
 
   // C8：超时参数可选第三参 timeoutSec，默认 30，钳制 1..600
-  ipcMain.handle('ssh:exec', async (_event, id: string, command: string, timeoutSec?: number) => {
+  handleTrusted('ssh:exec', async (_event, id: string, command: string, timeoutSec?: number) => {
     const t = Math.max(1, Math.min(600, Math.floor(Number(timeoutSec) || 30)))
     return sshManager!.execCommandWithExitCode(id, command, t)
   })
 
   // 连接配置管理
-  ipcMain.handle('ssh:listConnections', () => sshStore!.list())
+  // 审查修复（P2 E10）：连接列表返回前剥离明文密码/passphrase —
+  // 原实现直接返回 SSHStore 完整记录（含解密后的 password/passphrase），
+  // 渲染进程通过 IPC 可见全部连接的明文凭据（XSS 或调试面板均可读取）。
+  // 渲染层只用列表做展示（名称/host/port），连接时由 ssh:connect 从
+  // 主进程 Store 直接读取凭据，无需经 IPC 传输明文。
+  handleTrusted('ssh:listConnections', async () => {
+    const records = await sshStore!.list()
+    return records.map(({ password, passphrase, ...rest }) => rest)
+  })
 
-  ipcMain.handle('ssh:saveConnection', (_event, conn: SSHConnectionRecord) => {
+  handleTrusted('ssh:saveConnection', (_event, conn: SSHConnectionRecord) => {
     return sshStore!.save(conn)
   })
 
-  ipcMain.handle('ssh:deleteConnection', (_event, id: string) => {
+  handleTrusted('ssh:deleteConnection', (_event, id: string) => {
     return sshStore!.delete(id)
   })
 
-  ipcMain.handle('ssh:duplicateConnection', (_event, id: string) => {
+  handleTrusted('ssh:duplicateConnection', (_event, id: string) => {
     return sshStore!.duplicate(id)
   })
 
-  ipcMain.handle('ssh:testConnection', async (_event, config: any) => {
+  handleTrusted('ssh:testConnection', async (_event, config: any) => {
     return sshManager!.testConnection(config)
   })
 
-  ipcMain.handle('ssh:migrateLegacy', (_event, legacy: any[]) => {
+  handleTrusted('ssh:migrateLegacy', (_event, legacy: any[]) => {
     return sshStore!.migrateLegacy(legacy)
   })
 
   // 后端端口查询（渲染进程启动时兜底获取，防止 backend:status 事件丢失）
-  ipcMain.handle('backend:getPort', () => {
+  handleTrusted('backend:getPort', () => {
     return backendManager?.getPort() ?? 0
   })
 
   // 后端 API token 查询（渲染层据此向后端请求携带 X-API-Token；未启动时返回空字符串）
-  ipcMain.handle('backend:getToken', () => {
+  handleTrusted('backend:getToken', () => {
     if (!backendManager || backendManager.getPort() === 0) return ''
     return backendManager.getApiToken()
   })
@@ -1144,7 +1204,7 @@ function setupSkillsIPC(): void {
   }
 
   // C-1：创建技能目录（渲染层技能 ZIP 解压用）— assertSafePath + 边界断言
-  ipcMain.handle('skills:mkdir', async (_event, dirPath: string) => {
+  handleTrusted('skills:mkdir', async (_event, dirPath: string) => {
     await assertSafePath(dirPath)
     assertSkillsPath(dirPath)
     await mkdir(pathResolve(dirPath), { recursive: true })
@@ -1152,7 +1212,7 @@ function setupSkillsIPC(): void {
 
   // C-1：写入技能文件（base64 字节流，渲染层技能 ZIP 解压用）
   // assertSafePath + 对 filePath 与其 dirname 都 resolve 后做 skills 根边界断言
-  ipcMain.handle('skills:writeFile', async (_event, filePath: string, base64: string) => {
+  handleTrusted('skills:writeFile', async (_event, filePath: string, base64: string) => {
     await assertSafePath(filePath)
     const skillsRoot = getSkillsRoot()
     const fileResolved = pathResolve(filePath)
@@ -1167,23 +1227,23 @@ function setupSkillsIPC(): void {
     await writeFile(filePath, buf)
   })
 
-  ipcMain.handle('skills:list', async (_event, mode?: string) => {
+  handleTrusted('skills:list', async (_event, mode?: string) => {
     const qs = mode ? `?mode=${encodeURIComponent(mode)}` : ''
     return callBackendApi(`/skills${qs}`)
   })
-  ipcMain.handle('skills:updateEnabled', async (_event, id: string, enabled: boolean, mode?: string) => {
+  handleTrusted('skills:updateEnabled', async (_event, id: string, enabled: boolean, mode?: string) => {
     const qs = mode ? `?mode=${encodeURIComponent(mode)}` : ''
     return callBackendApi(`/skills/${id}/enabled${qs}`, {
       method: 'PATCH',
       body: JSON.stringify({ enabled }),
     })
   })
-  ipcMain.handle('skills:delete', async (_event, id: string) => {
+  handleTrusted('skills:delete', async (_event, id: string) => {
     return callBackendApi(`/skills/${id}`, {
       method: 'DELETE',
     })
   })
-  ipcMain.handle('skills:syncBuiltin', async (_event, skills: any[]) => {
+  handleTrusted('skills:syncBuiltin', async (_event, skills: any[]) => {
     return callBackendApi('/skills/sync-builtin', {
       method: 'POST',
       body: JSON.stringify({ skills }),
@@ -1198,52 +1258,57 @@ function setupSkillsIPC(): void {
 
 // ─── SFTP IPC ───────────────────────────────────────
 function setupSftpIPC(): void {
-  ipcMain.handle('sftp:open', (_event, sshSessionId: string) => {
+  handleTrusted('sftp:open', (_event, sshSessionId: string) => {
     return sshManager!.openSftp(sshSessionId)
   })
-  ipcMain.handle('sftp:close', (_event, sshSessionId: string) => {
+  handleTrusted('sftp:close', (_event, sshSessionId: string) => {
     sshManager!.closeSftp(sshSessionId)
   })
-  ipcMain.handle('sftp:list', (_event, sshSessionId: string, remotePath: string) => {
+  handleTrusted('sftp:list', (_event, sshSessionId: string, remotePath: string) => {
     return sshManager!.sftpList(sshSessionId, remotePath)
   })
-  ipcMain.handle('sftp:mkdir', (_event, sshSessionId: string, remotePath: string) => {
+  handleTrusted('sftp:mkdir', (_event, sshSessionId: string, remotePath: string) => {
     return sshManager!.sftpMkdir(sshSessionId, remotePath)
   })
-  ipcMain.handle('sftp:mkdirRecursive', (_event, sshSessionId: string, remotePath: string) => {
+  handleTrusted('sftp:mkdirRecursive', (_event, sshSessionId: string, remotePath: string) => {
     return sshManager!.sftpMkdirRecursive(sshSessionId, remotePath)
   })
   // 检查远程路径是否存在（用于 ZIP 覆盖确认等场景）
-  ipcMain.handle('sftp:exists', (_event, sshSessionId: string, remotePath: string) => {
+  handleTrusted('sftp:exists', (_event, sshSessionId: string, remotePath: string) => {
     return sshManager!.sftpExists(sshSessionId, remotePath)
   })
-  ipcMain.handle('sftp:rename', (_event, sshSessionId: string, oldPath: string, newPath: string) => {
+  handleTrusted('sftp:rename', (_event, sshSessionId: string, oldPath: string, newPath: string) => {
     return sshManager!.sftpRename(sshSessionId, oldPath, newPath)
   })
-  ipcMain.handle('sftp:delete', (_event, sshSessionId: string, remotePath: string) => {
+  handleTrusted('sftp:delete', (_event, sshSessionId: string, remotePath: string) => {
     return sshManager!.sftpDelete(sshSessionId, remotePath)
   })
-  ipcMain.handle('sftp:upload', (_event, transferId: string, sshSessionId: string, localPath: string, remotePath: string) => {
+  // 上传/下载：审查修复 — 本地路径须过 assertSafePath（原实现 remotePath 走
+  // 远程侧无本地风险，但 localPath 是渲染进程任意字符串，受控渲染进程可写
+  // 到系统任意位置如 C:\Windows\Temp 或读敏感文件内容上传到远程）
+  handleTrusted('sftp:upload', async (_event, transferId: string, sshSessionId: string, localPath: string, remotePath: string) => {
+    await assertSafePath(localPath)
     return sshManager!.sftpUpload(transferId, sshSessionId, localPath, remotePath)
   })
-  ipcMain.handle('sftp:download', (_event, transferId: string, sshSessionId: string, remotePath: string, localPath: string) => {
+  handleTrusted('sftp:download', async (_event, transferId: string, sshSessionId: string, remotePath: string, localPath: string) => {
+    await assertSafePath(localPath)
     return sshManager!.sftpDownload(transferId, sshSessionId, remotePath, localPath)
   })
-  ipcMain.handle('sftp:cancel', (_event, transferId: string) => {
+  handleTrusted('sftp:cancel', (_event, transferId: string) => {
     sshManager!.sftpCancel(transferId)
   })
-  ipcMain.handle('sftp:readFile', (_event, sshSessionId: string, remotePath: string) => {
+  handleTrusted('sftp:readFile', (_event, sshSessionId: string, remotePath: string) => {
     return sshManager!.sftpReadFile(sshSessionId, remotePath)
   })
-  ipcMain.handle('sftp:writeFile', (_event, sshSessionId: string, remotePath: string, content: string) => {
+  handleTrusted('sftp:writeFile', (_event, sshSessionId: string, remotePath: string, content: string) => {
     return sshManager!.sftpWriteFile(sshSessionId, remotePath, content)
   })
   // 远程 ZIP 打包：通过 SSH exec 执行 zip/python 命令
-  ipcMain.handle('sftp:zipRemote', (_event, sshSessionId: string, sources: string[], remoteZipPath: string, cwd: string) => {
+  handleTrusted('sftp:zipRemote', (_event, sshSessionId: string, sources: string[], remoteZipPath: string, cwd: string) => {
     return sshManager!.sftpZipRemote(sshSessionId, sources, remoteZipPath, cwd || '/')
   })
   // 远程 ZIP 解压
-  ipcMain.handle('sftp:unzipRemote', (_event, sshSessionId: string, remoteZipPath: string, remoteDestDir: string) => {
+  handleTrusted('sftp:unzipRemote', (_event, sshSessionId: string, remoteZipPath: string, remoteDestDir: string) => {
     return sshManager!.sftpUnzipRemote(sshSessionId, remoteZipPath, remoteDestDir)
   })
 
@@ -1253,7 +1318,7 @@ function setupSftpIPC(): void {
   // 输出格式：每行 "type:text"，type ∈ {func,alias,cmd,file,arg}，让前端能排序/去重
   // 重要：SSH exec 通道的默认工作目录是用户主目录，不是交互式 shell 的当前目录。
   //       通过 OSC 7 跟踪交互式 shell 的 cwd，在补全命令前 cd 到该目录。
-  ipcMain.handle('ssh:completeCommand', async (_event, sshSessionId: string, opts: { cmd: string; prefix: string; isCommand: boolean; prevSegments: string[] }) => {
+  handleTrusted('ssh:completeCommand', async (_event, sshSessionId: string, opts: { cmd: string; prefix: string; isCommand: boolean; prevSegments: string[] }) => {
     const { prefix, isCommand, cmd, prevSegments } = opts
     const scriptBody = buildBashCompletionScript({ isCommand, cmd, prefix, prevSegments })
     // 获取交互式 shell 的当前工作目录，将 cd 前缀合并到 scriptBody 中统一转义
@@ -1300,9 +1365,27 @@ app.whenReady().then(async () => {
   setupSkillsIPC()
   setupSftpIPC()
 
+  // 审查修复：顶层异常兜底 — 原实现无 uncaughtException/unhandledRejection
+  // 处理器，主进程任何未捕获异常（IPC handler 竞态、异步回调遗漏的 reject）
+  // 直接崩掉整个应用（丢 PTY/SSH 连接 + 后端进程变孤儿）。
+  // 策略：记日志 + 尽力保活；连续 3 次 uncaught 视为不可恢复，主动退出
+  let uncaughtCount = 0
+  process.on('uncaughtException', (err) => {
+    console.error('[main] uncaughtException:', err)
+    if (++uncaughtCount >= 3) {
+      console.error('[main] 连续 3 次未捕获异常，退出应用')
+      app.quit()
+    }
+  })
+  process.on('unhandledRejection', (reason) => {
+    // 只记日志不退出 — 未捕获的 promise rejection 多为业务侧遗漏 catch，
+    // 直接退出会把一次可恢复错误放大成应用崩溃
+    console.error('[main] unhandledRejection:', reason)
+  })
+
   // Start Electron bridge for backend → main process remote execution
   if (sshManager) {
-    electronBridge = new ElectronBridge({ sshManager })
+    electronBridge = new ElectronBridge({ sshManager, sshStore: sshStore ?? undefined })
   }
 
   // Start Python backend
@@ -1341,11 +1424,15 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => {
-  ptyManager?.destroyAll()
-  sshManager?.disconnectAll()
-  backendManager?.stop()
-  electronBridge?.stop()
+  // 审查修复：darwin 分支不再销毁 PTY/SSH/后端 — 原实现关最后一个窗口即
+  // disconnectAll + stop 后端，但 macOS 上应用仍驻留 Dock，点图标 activate
+  // 重建窗口后后端已死且不重启（whenReady 只跑一次），应用半残。
+  // 资源释放统一交给 before-quit（真正退出时才执行）。
   if (process.platform !== 'darwin') {
+    ptyManager?.destroyAll()
+    sshManager?.disconnectAll()
+    backendManager?.stop()
+    electronBridge?.stop()
     app.quit()
   }
 })

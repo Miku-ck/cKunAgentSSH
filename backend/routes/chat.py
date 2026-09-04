@@ -10,7 +10,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, HTTPException, Request, File, UploadFile, Form
+from fastapi import APIRouter, HTTPException, Query, Request, File, UploadFile, Form
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -296,6 +296,7 @@ async def _generate_stream(
         )
 
         done = False
+        client_disconnected = False
         while not done:
             # 检测客户端是否已断开，避免浪费 LLM 资源
             if request and await request.is_disconnected():
@@ -306,6 +307,10 @@ async def _generate_stream(
                     await chunk_iter.aclose()
                 except Exception:
                     pass
+                # 审查修复：原实现断连后 break 仍走正常完成路径 — 半截回复
+                # 不带"[响应中断]"标记入库、会话置 completed，污染下一轮 LLM
+                # 历史（中断标记只在 except LLM 异常分支加）
+                client_disconnected = True
                 break
             # C-review M1 修复：chunk 任务用 ensure_future + shield 保活。
             # 原实现 asyncio.wait_for(chunk_iter.__anext__(), ...) 超时会取消
@@ -337,16 +342,25 @@ async def _generate_stream(
         # 审查 MINOR 修复：LLM 未产生任何内容时不写空消息行（原实现空串入库，
         # 前端渲染空气泡且污染历史上下文）
         if full_content or full_reasoning:
+            # 审查修复：断连入库带中断标记，与 except 分支一致
+            content_to_save = full_content
+            if client_disconnected and content_to_save:
+                content_to_save += "\n\n…[响应中断，以上内容不完整]"
             await asyncio.to_thread(
                 db.add_message,
                 conversation_id,
                 "assistant",
-                full_content,
+                content_to_save,
                 reasoning=full_reasoning if full_reasoning else None,
                 model_used=model_id,
             )
         await asyncio.to_thread(db.touch_conversation, conversation_id)
-        await asyncio.to_thread(db.update_conversation_status, conversation_id, "completed")
+        # 审查修复：断连时会话置 failed 而非 completed（半截回复不代表完成）
+        await asyncio.to_thread(
+            db.update_conversation_status,
+            conversation_id,
+            "failed" if client_disconnected else "completed",
+        )
 
         yield "data: [DONE]\n\n"
 
@@ -419,8 +433,14 @@ async def _generate_stream(
 
 
 @router.get("/chat/conversations")
-def list_conversations(limit: int = 50, offset: int = 0, mode: Optional[str] = None):
-    """获取会话列表。mode 不为 None 时仅返回指定模式的会话"""
+def list_conversations(limit: int = Query(default=50, ge=1, le=500),
+                       offset: int = Query(default=0, ge=0),
+                       mode: Optional[str] = None):
+    """获取会话列表。mode 不为 None 时仅返回指定模式的会话
+
+    审查修复：limit/offset 加边界 — limit=-1 在 SQLite 语义为"无限制"全表返回，
+    其余负值直接 OperationalError → 500
+    """
     return db.list_conversations(limit=limit, offset=offset, mode=mode)
 
 
@@ -432,7 +452,8 @@ def create_conversation(req: CreateConversationRequest):
 
 
 @router.get("/chat/conversations/{cid}/messages")
-def get_messages(cid: str, limit: int = 50, offset: int = 0):
+def get_messages(cid: str, limit: int = Query(default=50, ge=1, le=500),
+                 offset: int = Query(default=0, ge=0)):
     """获取会话消息"""
     conv = db.get_conversation(cid)
     if not conv:

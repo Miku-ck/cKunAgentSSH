@@ -311,6 +311,24 @@ class ConsciousnessTick:
         if not failed:
             return {"summary": "无失败 run 可反思", "reflected": 0}
 
+        # 审查修复（P2）：按失败 run 集合的签名去重 — 原实现每个 tick 都对同一
+        # 批失败 run 重复 save_semantic 相同内容的反思记忆（lookback 窗口内
+        # 无新失败时），记忆表被重复条目淹没。同一失败批次只反思一次，
+        # 出现新失败 run 时签名变化，重新反思。
+        signature = "|".join(
+            f"{r.get('id')}:{r.get('status')}" for r in sorted(failed, key=lambda x: x.get("id") or "")
+        )
+        if not hasattr(self, "_reflected_signatures"):
+            from collections import deque
+            self._reflected_signatures: deque[str] = deque(maxlen=500)
+        if signature in self._reflected_signatures:
+            return {
+                "summary": f"失败批次已反思过（{len(failed)} 个 run 无变化）",
+                "reflected": 0,
+                "failed_count": len(failed),
+            }
+        self._reflected_signatures.append(signature)
+
         # 简单模式识别：统计失败状态分布
         from collections import Counter
         status_counts = Counter(r.get("status") for r in failed)

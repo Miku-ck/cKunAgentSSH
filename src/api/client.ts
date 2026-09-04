@@ -540,8 +540,14 @@ export function streamChat(options: StreamChatOptions): () => void {
       })
 
       if (!res.ok) {
+        // 审查修复：onError 回调包 try/catch — 原实现与下方 H15 包裹的
+        // 循环内 onError 不一致，回调自身抛异常时变成 unhandled rejection
         const err = await res.json().catch(() => ({ detail: res.statusText }))
-        options.onError(err.detail || res.statusText)
+        try {
+          options.onError(err.detail || res.statusText)
+        } catch (cbErr) {
+          console.error('[streamChat] onError 回调异常:', cbErr)
+        }
         return
       }
 
@@ -568,6 +574,8 @@ export function streamChat(options: StreamChatOptions): () => void {
               const data = line.slice(6)
               if (data === '[DONE]') {
                 options.onDone()
+                // 审查修复：显式取消底层读取，避免 [DONE] 后流仍占用连接直到服务端关闭
+                reader.cancel().catch(() => { /* already closed */ })
                 return
               }
               try {
@@ -772,8 +780,14 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
       })
 
       if (!res.ok) {
+        // 审查修复：onError 回调包 try/catch — 原实现回调自身抛异常时
+        // 变成 unhandled rejection
         const err = await res.json().catch(() => ({ detail: res.statusText }))
-        options.onError(err.detail || res.statusText)
+        try {
+          options.onError(err.detail || res.statusText)
+        } catch (cbErr) {
+          console.error('[streamAgentRun] onError 回调异常:', cbErr)
+        }
         return
       }
 
@@ -800,6 +814,8 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
               const data = line.slice(6)
               if (data === '[DONE]') {
                 options.onDone()
+                // 审查修复：显式取消底层读取，避免 [DONE] 后流仍占用连接直到服务端关闭
+                reader.cancel().catch(() => { /* already closed */ })
                 return
               }
               try {
@@ -866,4 +882,86 @@ export const agentApi = {
       method: 'POST',
       body: JSON.stringify({ tool, scope, ...(command ? { command } : {}) }),
     }),
+}
+
+// ── 定时任务调度 API ──
+export interface ScheduleRecord {
+  id: string
+  name: string
+  task_prompt: string
+  target_host: string
+  schedule_type: 'interval' | 'daily' | 'weekly' | 'monthly'
+  interval_minutes: number
+  time_hour: number
+  time_minute: number
+  weekday: number
+  day_of_month: number
+  enabled: number
+  next_run_at?: string
+  last_run_at?: string
+  last_status: string
+  last_run_id: string
+  created_at: string
+  updated_at?: string
+}
+
+export interface ScheduleRun {
+  id: string
+  schedule_id: string
+  run_id: string
+  status: string
+  summary: string
+  error: string
+  started_at: string
+  finished_at?: string
+  created_at: string
+}
+
+export interface ScheduleIn {
+  name: string
+  task_prompt?: string
+  target_host?: string
+  schedule_type?: 'interval' | 'daily' | 'weekly' | 'monthly'
+  interval_minutes?: number
+  time_hour?: number
+  time_minute?: number
+  weekday?: number
+  day_of_month?: number
+  enabled?: boolean
+}
+
+export const scheduleApi = {
+  /** 任务列表 */
+  list: () =>
+    request<ScheduleRecord[]>('/schedules'),
+
+  /** 创建定时巡检任务 */
+  create: (payload: ScheduleIn) =>
+    request<ScheduleRecord>('/schedules', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  /** 更新任务（名称/提示词/目标/周期/启停） */
+  update: (id: string, payload: Partial<Omit<ScheduleIn, 'name'>> & { name?: string }) =>
+    request<ScheduleRecord>(`/schedules/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+
+  /** 删除任务 */
+  remove: (id: string) =>
+    request<{ deleted: boolean }>(`/schedules/${id}`, {
+      method: 'DELETE',
+    }),
+
+  /** 立即巡检（不推进下次调度时间） */
+  runNow: (id: string) =>
+    request<{ schedule_id: string; dispatched: boolean }>(`/schedules/${id}/run`, {
+      method: 'POST',
+    }),
+
+  /** 执行历史 */
+  runs: (id: string, limit = 50) =>
+    request<ScheduleRun[]>(`/schedules/${id}/runs?limit=${limit}`),
 }

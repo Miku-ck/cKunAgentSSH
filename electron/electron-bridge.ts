@@ -4,10 +4,25 @@
  */
 import http from 'http'
 import { randomBytes } from 'crypto'
+import { appendFileSync } from 'fs'
+import { join } from 'path'
 import type { SSHManager } from './ssh-manager'
+import type { SSHStore } from './ssh-store'
+
+// 桥接启动/错误持久化日志，便于排查"主进程 socket 假监听/崩溃"类环境问题
+const BRIDGE_LOG = join(process.cwd(), 'electron-bridge.log')
+function bridgeLog(msg: string): void {
+  try {
+    appendFileSync(BRIDGE_LOG, `[${new Date().toISOString()}] ${msg}\n`)
+  } catch {
+    /* 日志失败不影响功能 */
+  }
+}
 
 export interface ElectronBridgeConfig {
   sshManager: SSHManager
+  /** 用于按连接 ID 反查 SSH 连接配置，实现定时任务的自动建会话 */
+  sshStore?: SSHStore
 }
 
 export interface ExecRequest {
@@ -32,9 +47,11 @@ export class ElectronBridge {
   private port = 0
   private token = ''
   private sshManager: SSHManager
+  private sshStore: SSHStore | undefined
 
   constructor(config: ElectronBridgeConfig) {
     this.sshManager = config.sshManager
+    this.sshStore = config.sshStore
   }
 
   async start(): Promise<BridgeEnv> {
@@ -43,8 +60,12 @@ export class ElectronBridge {
     this.server = http.createServer((req, res) => this.handleRequest(req, res))
 
     return new Promise<BridgeEnv>((resolve, reject) => {
-      this.server!.once('error', reject)
+      this.server!.once('error', (err: Error) => {
+        bridgeLog(`server 'error' event on port ${this.port}: ${err.message}`)
+        reject(err)
+      })
       this.server!.listen(this.port, '127.0.0.1', () => {
+        bridgeLog(`listen callback fired successfully on 127.0.0.1:${this.port}`)
         console.log(`[ElectronBridge] listening on 127.0.0.1:${this.port}`)
         resolve({ port: this.port, token: this.token })
       })
@@ -77,7 +98,14 @@ export class ElectronBridge {
       return
     }
 
-    if (req.method !== 'POST' || req.url !== '/ssh/exec') {
+    if (req.method !== 'POST') {
+      res.writeHead(404)
+      res.end(JSON.stringify({ success: false, error: 'Not found' }))
+      return
+    }
+    const path = req.url || ''
+    const KNOWN_PATHS = ['/ssh/exec', '/ssh/connect', '/ssh/disconnect']
+    if (!KNOWN_PATHS.includes(path)) {
       res.writeHead(404)
       res.end(JSON.stringify({ success: false, error: 'Not found' }))
       return
@@ -113,45 +141,97 @@ export class ElectronBridge {
       }
 
       try {
-        const data = JSON.parse(body) as ExecRequest
-
-        // 验证必填字段
-        if (!data.sshSessionId || typeof data.sshSessionId !== 'string') {
-          res.writeHead(400)
-          res.end(JSON.stringify({ success: false, error: 'Missing sshSessionId' }))
-          return
+        const data = JSON.parse(body) as Record<string, any>
+        // 根据路径分发到对应的处理器，异常在各自处理器内捕获回 500
+        if (path === '/ssh/exec') {
+          await this.handleExec(res, data as ExecRequest)
+        } else if (path === '/ssh/connect') {
+          await this.handleConnect(res, data)
+        } else if (path === '/ssh/disconnect') {
+          await this.handleDisconnect(res, data)
         }
-        if (!data.command || typeof data.command !== 'string') {
-          res.writeHead(400)
-          res.end(JSON.stringify({ success: false, error: 'Missing command' }))
-          return
-        }
-
-        // 钳制 timeout 到安全范围
-        const timeout = Math.max(MIN_TIMEOUT, Math.min(MAX_TIMEOUT, data.timeout ?? 30))
-
-        const { stdout, stderr, exitCode } = await this.sshManager.execCommandWithExitCode(
-          data.sshSessionId,
-          data.command,
-          timeout,
-        )
-        res.writeHead(200)
-        res.end(JSON.stringify({
-          success: exitCode === 0,
-          output: stdout,
-          error: stderr,
-          exit_code: exitCode,
-        }))
       } catch (err: any) {
         // 审查 MINOR：原实现把 err 整个吞掉，500 根因（execCommandWithExitCode 抛错、
         // 会话丢失等）永远查不到；记日志后再回 500
-        console.error('[ElectronBridge] /ssh/exec 处理失败:', err)
+        console.error(`[ElectronBridge] ${path} 处理失败:`, err)
         if (!res.headersSent) {
           res.writeHead(500)
-          res.end(JSON.stringify({ success: false, error: '命令执行失败，请稍后重试' }))
+          res.end(JSON.stringify({ success: false, error: '请求处理失败，请稍后重试' }))
         }
       }
     })
+  }
+
+  /** 在既有 SSH 会话上执行远程命令（原 /ssh/exec 逻辑）。 */
+  private async handleExec(res: http.ServerResponse, data: ExecRequest): Promise<void> {
+    // 验证必填字段
+    if (!data.sshSessionId || typeof data.sshSessionId !== 'string') {
+      res.writeHead(400)
+      res.end(JSON.stringify({ success: false, error: 'Missing sshSessionId' }))
+      return
+    }
+    if (!data.command || typeof data.command !== 'string') {
+      res.writeHead(400)
+      res.end(JSON.stringify({ success: false, error: 'Missing command' }))
+      return
+    }
+
+    // 钳制 timeout 到安全范围
+    const timeout = Math.max(MIN_TIMEOUT, Math.min(MAX_TIMEOUT, data.timeout ?? 30))
+
+    const { stdout, stderr, exitCode } = await this.sshManager.execCommandWithExitCode(
+      data.sshSessionId,
+      data.command,
+      timeout,
+    )
+    res.writeHead(200)
+    res.end(JSON.stringify({
+      success: exitCode === 0,
+      output: stdout,
+      error: stderr,
+      exit_code: exitCode,
+    }))
+  }
+
+  /**
+   * LAST-MILE/:src 之外的分发端点 — 按连接 ID 建立一条轻量 SSH 会话（无 Shell，
+   * 专供定时任务无头执行）。返回真实会话 ID，供后续 /ssh/exec 使用。
+   */
+  private async handleConnect(res: http.ServerResponse, data: Record<string, any>): Promise<void> {
+    const connectionId = data?.connectionId
+    if (typeof connectionId !== 'string' || !connectionId) {
+      res.writeHead(400)
+      res.end(JSON.stringify({ success: false, error: 'Missing connectionId' }))
+      return
+    }
+    if (!this.sshStore) {
+      res.writeHead(500)
+      res.end(JSON.stringify({ success: false, error: 'SSH store 未配置' }))
+      return
+    }
+    const connections = await this.sshStore.list()
+    const conn = connections.find((c) => c.id === connectionId)
+    if (!conn) {
+      res.writeHead(404)
+      res.end(JSON.stringify({ success: false, error: `连接配置不存在: ${connectionId}` }))
+      return
+    }
+    const { id, name } = await this.sshManager.connectSftp(conn)
+    res.writeHead(200)
+    res.end(JSON.stringify({ success: true, sessionId: id, name }))
+  }
+
+  /** 关闭由 /ssh/connect（或桥接）建立的 SSH 会话，释放连接资源。 */
+  private async handleDisconnect(res: http.ServerResponse, data: Record<string, any>): Promise<void> {
+    const sessionId = data?.sessionId
+    if (typeof sessionId !== 'string' || !sessionId) {
+      res.writeHead(400)
+      res.end(JSON.stringify({ success: false, error: 'Missing sessionId' }))
+      return
+    }
+    this.sshManager.disconnect(sessionId)
+    res.writeHead(200)
+    res.end(JSON.stringify({ success: true }))
   }
 
   /**

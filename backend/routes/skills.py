@@ -5,7 +5,7 @@ import json
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 import database as db
@@ -42,7 +42,9 @@ class UpdateEnabledRequest(BaseModel):
 
 
 @router.get("/skills")
-def list_skills(limit: int = 200, offset: int = 0, mode: Optional[str] = None):
+def list_skills(limit: int = Query(default=200, ge=1, le=500),
+                offset: int = Query(default=0, ge=0),
+                mode: Optional[str] = None):
     """获取所有技能列表
 
     Args:

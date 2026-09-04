@@ -1149,7 +1149,7 @@ def consciousness_tick_status():
 def list_agent_strategies(
     mode: Optional[str] = None,
     strategy_type: Optional[str] = None,
-    limit: int = 50,
+    limit: int = Query(default=50, ge=1, le=500),
 ):
     """查询 Agent 策略列表（reflection / evolved_config）"""
     rows = db.get_agent_strategies(

@@ -423,6 +423,13 @@ class WebFetchTool(BaseTool):
                     return ToolResult(
                         False, "", f"响应超过 {_MAX_RESPONSE_BYTES // (1024 * 1024)}MB 上限，拒绝抓取: {current_url}",
                     )
+                # 审查修复（P2）：重定向达到 5 次上限后 status 仍是 3xx，
+                # 原实现直接落入下方成功分支 — 302 响应体通常是空的，
+                # Agent 拿到"成功"的空正文继续推理
+                if status in (301, 302, 303, 307, 308):
+                    return ToolResult(
+                        False, "", f"重定向次数超过 5 次上限，放弃抓取: {current_url}",
+                    )
                 if status >= 400:
                     return ToolResult(False, "", f"HTTP 错误 {status}")
 

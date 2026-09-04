@@ -190,7 +190,10 @@ export const useSftpStore = defineStore('sftp', () => {
       if (t.status === 'running') {
         t.status = 'cancelled'
         t.endTime = Date.now()
-        try { getApi().sftpCancel(t.id) } catch { /* ignore */ }
+        // 审查修复（P2）：sftpCancel 返回 Promise — 原实现同步 try/catch
+        // 只能捕获调用时的同步抛错，IPC reject 变成 unhandled rejection。
+        // 改为对返回的 Promise 挂 .catch
+        void getApi().sftpCancel(t.id).catch(() => { /* 忽略取消失败 */ })
       }
     }
     // 断开连接时清空传输记录
@@ -990,7 +993,9 @@ function pauseTransfer(id: string): void {
   // 暂停走主进程 sftp:cancel（AbortSignal 无法跨 IPC，前端不再持控制器）
   t.status = 'paused'
   t.resumeOffset = t.transferred  // 记录断点位置
-  try { getApi().sftpCancel(id) } catch { /* ignore */ }
+  // 审查修复（P2）：同 disconnect 路径 — 同步 try/catch 捕获不到
+  // sftpCancel 返回 Promise 的 reject，改为挂 .catch
+  void getApi().sftpCancel(id).catch(() => { /* 忽略取消失败 */ })
 }
 
 /** 恢复传输任务（断点续传） */

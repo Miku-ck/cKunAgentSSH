@@ -11,16 +11,19 @@
     <div class="titlebar-drag" @dblclick="toggleMaximize"></div>
     <!-- 功能按钮 -->
     <div class="titlebar-actions" @dblclick.stop>
-      <button class="titlebar-action-btn" title="AI 运维助手" @click="emit('action-ai')">
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'ai' }" title="AI 运维助手" @click="emit('action-ai')">
         <span class="ai-text">AI</span>
       </button>
-      <button class="titlebar-action-btn" title="远程终端" @click="emit('action-remote')">
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'schedules' }" title="定时任务" @click="emit('action-schedules')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 16 14"/></svg>
+      </button>
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'remote-mgr' }" title="远程终端" @click="emit('action-remote')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg>
       </button>
-      <button class="titlebar-action-btn" title="运维审计" @click="emit('action-audit')">
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'audit' }" title="运维审计" @click="emit('action-audit')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M9 12l2 2 4-4"/><path d="M20 12a8 8 0 1 1-2.34-5.66"/></svg>
       </button>
-      <button class="titlebar-action-btn" title="SFTP" @click="emit('action-sftp')">
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'sftp' }" title="SFTP" @click="emit('action-sftp')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
       </button>
       <button class="titlebar-action-btn" title="设置" @click="emit('action-settings')">
@@ -45,8 +48,14 @@
 <script setup lang="ts">
 const api = window.electronAPI
 
+defineProps<{
+  /** 当前激活的功能页，对应图标高亮 */
+  activePage: 'home' | 'remote-mgr' | 'sftp' | 'audit' | 'ai' | 'schedules'
+}>()
+
 const emit = defineEmits<{
   'action-ai': []
+  'action-schedules': []
   'action-remote': []
   'action-audit': []
   'action-sftp': []
@@ -125,6 +134,16 @@ async function close() { await api?.windowClose() }
 .titlebar-action-btn:hover {
   background: var(--bg-hover, rgba(255,255,255,0.1));
   color: var(--text-primary, #fff);
+}
+
+/* 当前功能页图标高亮（亮绿色） */
+.titlebar-action-btn.active {
+  color: #4ade80;
+  text-shadow: 0 0 8px rgba(74, 222, 128, 0.45);
+}
+
+.titlebar-action-btn.active:hover {
+  color: #4ade80;
 }
 
 .titlebar-action-btn .ai-text {

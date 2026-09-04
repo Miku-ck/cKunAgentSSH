@@ -149,7 +149,7 @@ function applyCompletion(candidate: CompletionCandidate): void {
   const isUnique = completionState.value.candidates.length <= 1
   const text = buildCompletionText(candidate.text, completionState.value.prefix, isUnique)
   if (text) {
-    window.electronAPI.sshWrite(props.sshId, text)
+    window.electronAPI.sshWrite(props.sshId, text).catch(() => {})
   }
   hideCompletion()
   terminal.focus()
@@ -359,7 +359,7 @@ onMounted(() => {
 
   // 终端输入 → SSH，并在提交命令时收集历史
   terminal.onData((data) => {
-    api.sshWrite(props.sshId, data)
+    api.sshWrite(props.sshId, data).catch(() => {})
     if (data.includes('\r') || data.includes('\n')) {
       collectCommand()
     }
@@ -389,7 +389,7 @@ onMounted(() => {
         // 去除末尾的换行符/回车符，防止粘贴时自动执行命令
         const sanitized = text.replace(/[\r\n]+$/, '')
         if (sanitized) {
-          api.sshWrite(props.sshId, sanitized)
+          api.sshWrite(props.sshId, sanitized).catch(() => {})
         }
         terminal?.focus()
       }
@@ -401,7 +401,7 @@ onMounted(() => {
   resizeObserver = new ResizeObserver(() => {
     if (!terminal || !fitAddon || !props.visible) return
     fitAddon.fit()
-    api.sshResize(props.sshId, terminal.cols, terminal.rows)
+    api.sshResize(props.sshId, terminal.cols, terminal.rows).catch(() => {})
   })
   resizeObserver.observe(containerRef.value)
 })
@@ -429,6 +429,9 @@ onUnmounted(() => {
     window.electronAPI.sshDisconnect(props.sshId)
   }
   terminal?.dispose()
+  // 审查修复（P2）：卸载后 terminal 置 null — 原实现只 dispose 不清引用，
+  // 卸载窗口内 ssh:write/渲染回调的守卫失效，会在已 dispose 实例上操作
+  terminal = null
   // 清理可见性定时器
   if (visTimer) clearTimeout(visTimer)
 })
@@ -449,7 +452,7 @@ watch(
         if (!containerRef.value) return
         fitAddon!.fit()
         if (window.electronAPI && terminal) {
-          window.electronAPI.sshResize(props.sshId, terminal.cols, terminal.rows)
+          window.electronAPI.sshResize(props.sshId, terminal.cols, terminal.rows).catch(() => {})
         }
       }, 50)
     }

@@ -23,7 +23,7 @@ export function useSshNavigation(
 
   // ─── 布局状态 ───
   const showHome = ref(true)
-  const activeNavPage = ref<'home' | 'remote-mgr' | 'sftp' | 'audit'>('home')
+  const activeNavPage = ref<'home' | 'remote-mgr' | 'sftp' | 'audit' | 'schedules'>('home')
   const showModal = ref(false)
   const editingConnection = ref<SSHConnection | undefined>(undefined)
 
@@ -106,6 +106,17 @@ export function useSshNavigation(
     } else {
       showHome.value = true
       activeNavPage.value = 'audit'
+      // 切到独立页面时自动收起 AI 助手面板（点 AI 图标可重新展开）
+      sshAiStore.closeAiPanel()
+    }
+  }
+
+  function toggleSchedules() {
+    if (activeNavPage.value === 'schedules') {
+      goHome()
+    } else {
+      showHome.value = true
+      activeNavPage.value = 'schedules'
       // 切到独立页面时自动收起 AI 助手面板（点 AI 图标可重新展开）
       sshAiStore.closeAiPanel()
     }
@@ -256,6 +267,7 @@ export function useSshNavigation(
   return {
     showHome,
     activeNavPage,
+    showAiPanel: sshAiStore.showAiPanel,
     showModal,
     editingConnection,
     showCommandBar,
@@ -265,6 +277,7 @@ export function useSshNavigation(
     toggleSftp,
     toggleAiPanel,
     toggleAudit,
+    toggleSchedules,
     qsSearch,
     filteredShells,
     filteredConnections,

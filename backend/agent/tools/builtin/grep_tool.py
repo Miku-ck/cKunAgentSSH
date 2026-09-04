@@ -22,6 +22,13 @@ _MAX_PATTERN_LEN = 200
 # E 修复：单行超过该字节数时跳过匹配（minified JS/单行 JSON 等，避免逐字符回溯）
 _MAX_LINE_BYTES = 100 * 1024
 
+# 审查修复：灾难性回溯防护 — 检测两类高危嵌套结构（LLM 生成的模式命中时
+# 在长行上可指数级回溯，即使跑在线程池也会独占 CPU 拖垮进程）：
+# 1) 量词嵌套：(X)+ / (X)* 且 X 内含量词（如 (a+)+、(\d+)+、(foo*)+）
+# 2) 歧义交替+外层量词：(X|Y)+ / (X|Y)* 且交替支有重叠（如 (a|a)+、(x|xy)+）
+#    （固定长短交替如 (foo|bar)+ 属误报方向，可接受 — 提示改写即可）
+_RE_CATASTROPHE_RE = re.compile(r"\((?:[^()]*[+*][^()]*|[^()]*\|[^()]*)\)\??[+*]")
+
 # 递归搜索时跳过这些目录
 _SKIP_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv",
@@ -107,6 +114,14 @@ class GrepTool(BaseTool):
             regex = re.compile(pattern, flags)
         except re.error as e:
             return ToolResult(False, "", f"无效的正则表达式: {e}", priority="high")
+
+        # 审查修复：嵌套量词模式拒绝执行（灾难性回溯风险，见 _RE_CATASTROPHE_RE 注释）
+        if _RE_CATASTROPHE_RE.search(pattern):
+            return ToolResult(
+                False, "",
+                "正则表达式包含嵌套量词（如 (a+)+），存在灾难性回溯风险，请改写后重试",
+                priority="high",
+            )
 
         # 解析搜索路径
         search_path = path or context.workspace_path or "."

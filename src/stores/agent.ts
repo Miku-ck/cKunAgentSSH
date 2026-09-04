@@ -194,6 +194,13 @@ export const useAgentStore = defineStore('agent', () => {
       sshSessionId: options.sshSessionId,
       onEvent: (event: AgentSSEEvent) => _handleEvent(event),
       onError: (err: string) => {
+        // 审查修复（P2）：与 onDone 的 guard 对称 — 原实现无条件置 failed，
+        // 窄窗口竞态（服务端先发 done 再发 error / 中止后迟到的 error）
+        // 会把已完成/已中止的 run 状态翻回 failed
+        if (status.value === 'completed') {
+          console.warn('[Agent] 运行已完成，忽略迟到 onError:', err)
+          return
+        }
         errorMessage.value = err?.trim()
           ? err
           : 'Agent 运行失败，后端未返回具体错误，请查看后端日志'

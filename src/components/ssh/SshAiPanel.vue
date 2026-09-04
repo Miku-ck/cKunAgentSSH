@@ -90,10 +90,13 @@ async function handleNewChat() {
 // 组件卸载时重置创建状态，防止状态残留
 onUnmounted(() => {
   creating.value = false
-  // B12 修复：只 abortStream 不中止运行中 Agent — 复用 useAgentIntegration.handleAbort 逻辑：
-  // Agent 运行中则 agentStore.abort()（置 idle 并清理权限请求状态，见 stores/agent.ts），
-  // 否则中止普通聊天流（幂等，无流时 no-op）
-  agentHandleAbort(() => store.abortStream())
+  // 审查修复：卸载只中止普通聊天流，不再中止运行中的 Agent。
+  // 原实现走 handleAbort（Agent 运行中则 agentStore.abort()），与 P3-4 设计契约
+  // （"Agent 运行设计为可跨面板存活，关闭面板不中止 Agent"，见 useAgentIntegration
+  // 头注释与 closeAiPanel 注释）矛盾：切页/关面板会把正在执行的多步运维任务
+  // 中途杀掉并固化成"(已中止)"。Agent 结果固化在 store 层 watch（P3-4），
+  // 不依赖组件生命周期，面板重新打开即可继续查看。
+  store.abortStream()
 })
 
 function handleSwitchConv(id: string) {

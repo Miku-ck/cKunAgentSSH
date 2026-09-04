@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 
 from config import settings
 from database import init_db
+from database import seed_models_async
 from routes.chat import router as chat_router
 from routes.models import router as models_router
 from routes.settings import router as settings_router
@@ -23,6 +24,7 @@ from routes.skills import router as skills_router
 from routes.agent import router as agent_router
 from routes.terminal import router as terminal_router
 from routes.audit import router as audit_router
+from routes.schedules import router as schedules_router
 from agent.consciousness_tick import get_global_tick
 
 logger = logging.getLogger(__name__)
@@ -46,6 +48,13 @@ async def lifespan(_app: FastAPI):
     init_db(settings.db_path)
     print(f"[cKunAgentic] Database initialized: {settings.db_path}")
 
+    # 审查修复（P2 E9）：模型种子探测（httpx.get 同步阻塞）从 init_db 移至
+    # 独立异步入口，放 asyncio.to_thread 线程池执行，不阻塞事件循环
+    try:
+        await seed_models_async(settings.db_path)
+    except Exception as e:
+        print(f"[cKunAgentic] Model seed probe skipped: {e}")
+
     # C-review C3：run 结束不再自动清理磁盘备份（保留供 /undo 使用），
     # 启动时按 TTL（7 天）兜底清理过期备份，防止目录无限膨胀
     try:
@@ -66,10 +75,19 @@ async def lifespan(_app: FastAPI):
     # 避免纯聊天用户产生空 DB 查询开销
     tick = get_global_tick()
 
+    # 定时任务调度引擎：懒启动，仅在存在定时任务时 begin（ensure_started）
+    from agent.schedule_engine import get_schedule_engine
+    schedule_engine = get_schedule_engine()
+    schedule_engine.ensure_started()
+
     yield
 
     # 优雅停止后台 tick（若曾启动）
     await tick.stop()
+
+    # 停止定时任务调度引擎
+    from agent.schedule_engine import get_schedule_engine
+    await get_schedule_engine().stop()
 
     # 等待 PostProcessManager 任务完成（最多 10 秒），避免数据库写入被截断
     from post_processor import get_post_process_manager
@@ -160,6 +178,7 @@ app.include_router(skills_router, prefix="/api")
 app.include_router(agent_router, prefix="/api")
 app.include_router(terminal_router, prefix="/api")
 app.include_router(audit_router, prefix="/api")
+app.include_router(schedules_router, prefix="/api")
 
 
 if __name__ == "__main__":

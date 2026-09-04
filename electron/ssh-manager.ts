@@ -20,7 +20,7 @@ const MAX_EXEC_OUTPUT_BYTES = 1024 * 1024
 // ════════════════════════════════════════════════
 export type TransferErrorCode =
   | 'NETWORK' | 'DISK_FULL' | 'PERMISSION' | 'NOT_FOUND'
-  | 'CANCELLED' | 'STALLED' | 'REMOTE_CHANGED' | 'UNKNOWN'
+  | 'CANCELLED' | 'STALLED' | 'REMOTE_CHANGED' | 'RENAME_FAILED' | 'UNKNOWN'
 
 export interface TransferError {
   code: TransferErrorCode
@@ -83,6 +83,32 @@ function sftpRename(sftp: SFTPWrapper, oldPath: string, newPath: string): Promis
   return new Promise((resolve, reject) => {
     sftp.rename(oldPath, newPath, (err) => err ? reject(err) : resolve())
   })
+}
+
+/**
+ * 审查修复（P2）：覆盖语义 rename。
+ * POSIX 的 rename 原子覆盖已存在目标；Windows 上目标已存在时抛 EPERM，
+ * 跨设备（.part 与最终路径不同卷）抛 EXDEV — 原下载收尾直接用
+ * fsPromises.rename，这两种情况都会失败进入通用 catch，被归类为不可
+ * 重试并删除 .part，已下载完整的数据丢失。
+ * 此处模拟 POSIX 行为：EPERM/EACCES 先删除目标再重试；EXDEV 降级为
+ * copyFile + unlink（.part 数据完整，拷贝不丢数据）。
+ */
+async function renameOverwrite(src: string, dest: string): Promise<void> {
+  try {
+    await fsPromises.rename(src, dest)
+    return
+  } catch (err: any) {
+    const code = err?.code as string | undefined
+    if (code !== 'EPERM' && code !== 'EACCES' && code !== 'EXDEV') throw err
+    try { await fsPromises.unlink(dest) } catch { /* 目标不存在，忽略 */ }
+    if (code === 'EXDEV') {
+      await fsPromises.copyFile(src, dest)
+      await fsPromises.unlink(src)
+    } else {
+      await fsPromises.rename(src, dest)
+    }
+  }
 }
 
 function sftpOpen(sftp: SFTPWrapper, path: string, flags: string): Promise<Buffer> {
@@ -461,6 +487,11 @@ export class SSHManager {
     cols?: number,
     rows?: number,
   ): Promise<{ id: string; name: string }> {
+    // 审查修复：SSH/SFTP 会话数上限 — 原实现无上限，断连清理失败或 LLM Agent
+    // 批量触发 connect 时可无限累积会话（每个含 TCP 连接 + 事件监听器）
+    if (this.sessions.size >= 64) {
+      throw new Error('SSH 会话数已达上限（64），请关闭闲置连接后重试')
+    }
     // s1 修复：加载 known_hosts（审查 M-1：验证上下文已由 buildConnectConfig
     // 的每连接闭包捕获，不再使用共享槽位）
     await this.loadKnownHosts()
@@ -880,9 +911,15 @@ export class SSHManager {
         // 不存在则创建
         await new Promise<void>((resolve, reject) => {
           sftp.mkdir(current, (err) => {
-            // 已存在（并发创建场景）视为成功
-            if (err && !err.message.includes('exists')) reject(err)
-            else resolve()
+            if (!err) return resolve()
+            // 审查修复（P2）：原实现以 err.message.includes('exists') 判定"并发已创建"，
+            // 但 OpenSSH SFTP 服务器对已存在路径返回 SSH_FX_FAILURE（通用错误，
+            // 无 'exists' 字样）→ 判定落空，目录上传/远程解压在并发或
+            // 部分已存在的父目录场景下误报失败。改为失败后重新 stat：
+            // 路径现已存在即视为创建成功（幂等语义），否则抛出真实错误。
+            sftpStat(sftp, current)
+              .then(() => resolve())
+              .catch(() => reject(err))
           })
         })
       }
@@ -1205,6 +1242,9 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
     // M7 修复：声明在 try 外部，确保 finally 块始终可访问
     let remoteHandle: Buffer | null = null
     let localFd: Awaited<ReturnType<typeof fsPromises.open>> | null = null
+    // 审查修复（P2）：标记数据是否已全部写入（rename 之前）。
+    // 为 true 后任何异常都属 rename 阶段 — .part 是完整数据，须保留供重试
+    let downloadComplete = false
 
     const runBody = async (): Promise<void> => {
     try {
@@ -1218,7 +1258,9 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
         const partStat = statSync(partPath)
         if (partStat.size === total) {
           // .part 与远程文件大小一致，视为已完成，直接 rename
-          await fsPromises.rename(partPath, localPath)
+          // 审查修复（P2）：覆盖语义 rename，避免 Windows 目标已存在 EPERM
+          downloadComplete = true
+          await renameOverwrite(partPath, localPath)
           sendProgress({ transferred: total, total })
           return
         }
@@ -1323,13 +1365,28 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
         throw new Error('CANCELLED')
       }
 
-      // 7. 完成：rename .part → localPath
-      await fsPromises.rename(partPath, localPath)
+      // 7. 完成：rename .part → localPath（覆盖语义，见 renameOverwrite）
+      // 审查修复（P2）：先标记数据已全部写入 — rename 失败时据此保留 .part
+      downloadComplete = true
+      await renameOverwrite(partPath, localPath)
       sendProgress({ transferred: total, total })
     } catch (err) {
-      const tErr = heartbeat.isStalled()
-        ? { code: 'STALLED' as const, message: '传输停滞，网络可能不稳定', retryable: true }
-        : classifyTransferError(err, cancelled)
+      // 审查修复（P2）：rename 阶段（数据已完整写入）失败 — .part 是完整
+      // 数据，原实现落入通用 catch 被判不可重试并删 .part，已下载数据丢失。
+      // 现在保留 .part 并归类 RENAME_FAILED（retryable），重试可续传完成
+      let tErr: TransferError
+      if (downloadComplete && !heartbeat.isStalled()) {
+        tErr = {
+          code: 'RENAME_FAILED',
+          message: `下载已完成，但重命名为最终文件失败：${err instanceof Error ? err.message : String(err)}。请重试下载（数据已保留为 .part）`,
+          retryable: true,
+          originalError: err as Error,
+        }
+      } else {
+        tErr = heartbeat.isStalled()
+          ? { code: 'STALLED' as const, message: '传输停滞，网络可能不稳定', retryable: true }
+          : classifyTransferError(err, cancelled)
+      }
       // 不可重试的错误清理 .part
       if (!tErr.retryable && tErr.code !== 'CANCELLED') {
         try { await fsPromises.unlink(partPath) } catch { /* ignore */ }

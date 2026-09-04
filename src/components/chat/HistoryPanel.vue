@@ -68,13 +68,14 @@ defineEmits<{
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  /* 不透明背景：历史面板打开时遮住当前对话（配合 SideChatPanel 的 v-show
+     隐藏消息列表），消除半透明遮罩透出的视觉干扰 */
+  background: var(--bg-panel, #141414);
   z-index: 20;
   display: flex;
   align-items: flex-start;
   justify-content: center;
   padding-top: 40px;
-  backdrop-filter: blur(2px);
 }
 
 .history-panel {
@@ -87,8 +88,7 @@ defineEmits<{
   overflow: hidden;
   margin: 0 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  background: color-mix(in srgb, var(--bg-elevated) 90%, transparent);
-  backdrop-filter: blur(12px);
+  background: var(--bg-elevated, var(--bg-panel, #1e1e1e));
 }
 
 .history-panel-header {
