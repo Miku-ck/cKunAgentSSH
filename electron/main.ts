@@ -8,6 +8,7 @@ import { execSync, execFile, spawn } from 'child_process'
 import { BackendManager } from './backend-manager'
 import { PtyManager, clampPtyDimension } from './pty-manager'
 import { SSHManager } from './ssh-manager'
+import { SSHError, toIpcTransport } from './ssh-error'
 import { SSHStore, type SSHConnectionRecord } from './ssh-store'
 import { ElectronBridge } from './electron-bridge'
 import { assertSafePath, allowDialogKeyPath } from './utils/path-guard'
@@ -37,6 +38,11 @@ function assertTrustedSender(event: Electron.IpcMainInvokeEvent): void {
  * 审查修复：带 sender 校验的 IPC handler 注册（见 assertTrustedSender）。
  * 用法：所有 ipcMain.handle 一律改走本函数，事件原样透传给业务 handler
  * （业务侧 `_event` 参数签名不受影响）。
+ *
+ * v2 改进：自动识别 SSHError 并序列化为 transport 格式透传 Electron IPC。
+ * 原始 SSHError 经过 IPC 后会退化为普通 Error（丢失 name/code），
+ * handleTrusted 在边界拦截并以 __sshError 哨兵字段携带完整错误信息，
+ * 前端 fromIpcTransport() 可还原为完整 SSHError。
  */
 function handleTrusted(
   channel: string,
@@ -44,8 +50,49 @@ function handleTrusted(
 ): void {
   ipcMain.handle(channel, (event, ...args) => {
     assertTrustedSender(event)
-    return fn(event, ...args)
+    try {
+      const result = fn(event, ...args)
+      // async handler 返回 Promise：拦截 rejection 中的 SSHError
+      if (result && typeof (result as any).then === 'function') {
+        return (result as Promise<any>).catch((err: unknown) => {
+          throw normalizeIpcError(err)
+        })
+      }
+      return result
+    } catch (err) {
+      throw normalizeIpcError(err)
+    }
   })
+}
+
+/** 把业务错误标准化为 IPC 透传格式：SSHError → 结构化 object；普通 Error → 同类 object *
+ * 双重冗余设计确保跨 Electron 版本兼容：
+ *   1. e.name = 'SSHError:<code>' — name 在所有 Electron 版都能透传（已验证 32+保真）
+ *   2. e.__sshError = transport — 自定义属性（Electron 32+ 序列化保真性已改进，保留作为增强）
+ *   前端 detectSSHError() 优先读 __sshError；缺失时回退解析 e.name 前缀 */
+function normalizeIpcError(err: unknown): Error {
+  if ((err as any)?.__sshError) {
+    // 已是 transport（二次穿透防護）
+    return err as Error
+  }
+  if (isSSHError(err)) {
+    const transport = toIpcTransport(err as any)
+    const e = new Error(transport.message) as Error & { __sshError?: any; name: string }
+    e.name = `SSHError:${transport.code}`  // name 字段跨平台保真性最强
+    e.__sshError = transport
+    // 保留原始 SSHError 堆栈（指向 ssh-manager.ts 中的真实抛出点），
+    // 而非指向 normalizeIpcError 本身，方便开发期诊断
+    if ((err as Error).stack) {
+      e.stack = `${e.name}: ${e.message}\n${(err as Error).stack}`
+    }
+    return e
+  }
+  return err instanceof Error ? err : new Error(String(err))
+}
+
+/** 类型守卫：判断是否为 SSHError */
+function isSSHError(e: unknown): e is SSHError {
+  return e instanceof SSHError
 }
 
 const IMAGE_MIME_MAP: Record<string, string> = {

@@ -243,36 +243,33 @@ export const useSSHStore = defineStore('ssh', () => {
     const api = window.electronAPI
     if (!api) throw new Error('Electron API not available')
 
-    connecting.value = true
-    try {
-      // 剥离 Vue 响应式 Proxy,避免 IPC structuredClone 失败
-      const plain = JSON.parse(JSON.stringify(conn))
-      const { id, name } = await api.sshConnect({
-        ...plain,
-        cols,
-        rows,
-      })
+    // v2 改进：connecting UI 标志统一由 useSshNavigation 管理（避免 store 层和 UI 层
+    // 双重重置导致竞态）；store.connectRemote 只负责数据状态（sessions / activeSessionId）
+    // 剥离 Vue 响应式 Proxy,避免 IPC structuredClone 失败
+    const plain = JSON.parse(JSON.stringify(conn))
+    const { id, name } = await api.sshConnect({
+      ...plain,
+      cols,
+      rows,
+    })
 
-      sessions.value.push({
-        id,
-        name: name || `${conn.username}@${conn.host}`,
-        type: 'remote',
-        shell: `${conn.username}@${conn.host}`,
-        connectionId: conn.id,
-      })
+    sessions.value.push({
+      id,
+      name: name || `${conn.username}@${conn.host}`,
+      type: 'remote',
+      shell: `${conn.username}@${conn.host}`,
+      connectionId: conn.id,
+    })
 
-      activeSessionId.value = id
+    activeSessionId.value = id
 
-      // 主进程已 touchLastConnected,前端同步更新本地副本
-      const idx = connections.value.findIndex(c => c.id === connectionId)
-      if (idx !== -1) {
-        connections.value[idx] = { ...connections.value[idx], lastConnectedAt: Date.now() }
-      }
-
-      return id
-    } finally {
-      connecting.value = false
+    // 主进程已 touchLastConnected,前端同步更新本地副本
+    const idx = connections.value.findIndex(c => c.id === connectionId)
+    if (idx !== -1) {
+      connections.value[idx] = { ...connections.value[idx], lastConnectedAt: Date.now() }
     }
+
+    return id
   }
 
   // ─── 关闭会话 ─────────────────────────────────

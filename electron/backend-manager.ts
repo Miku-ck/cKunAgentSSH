@@ -47,6 +47,57 @@ export class BackendManager {
   }
 
   /**
+   * 杀掉前一次应用异常退出后遗留的孤儿 Python backend 进程。
+   * 这些进程持有过期的 Electron bridge 端口/token，会导致定时任务执行时
+   * bridge 连接全部失败（日志中即 "Electron bridge 连接失败 port=30000"）。
+   *
+   * Windows 用 wmic 按命令行匹配 python main.py，pgrep -f 用于 POSIX 平台。
+   * 匹配不到属于正常情况（无孤儿），静默返回。
+   */
+  private static killOrphanBackends(): void {
+    try {
+      if (process.platform === 'win32') {
+        // Windows: wmic 根据命令行找 python main.py 进程
+        // 双引号内用 %% 转义 LIKE 通配符（wmic 语法要求）
+        const output = execSync(
+          `wmic process where "name='python.exe' and commandline like '%%main.py%%'" get processid`,
+          { encoding: 'utf-8', timeout: 5000 }
+        )
+        const pids = output
+          .split(/\s+/)
+          .map(s => parseInt(s.trim(), 10))
+          .filter(n => !isNaN(n) && n > 0)
+        for (const pid of pids) {
+          try {
+            execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore', timeout: 5000 })
+            console.log(`[BackendManager] Killed orphan backend PID=${pid}`)
+          } catch (e) {
+            console.warn(`[BackendManager] Failed to kill orphan PID=${pid}:`, e)
+          }
+        }
+      } else {
+        // macOS / Linux: pgrep 找 main.py 进程
+        const output = execSync('pgrep -f "main.py"', { encoding: 'utf-8', timeout: 5000 })
+        const pids = output
+          .split(/\s+/)
+          .map(s => parseInt(s.trim(), 10))
+          .filter(n => !isNaN(n) && n > 0)
+        for (const pid of pids) {
+          try {
+            process.kill(pid, 'SIGTERM')
+            console.log(`[BackendManager] Sent SIGTERM to orphan backend PID=${pid}`)
+          } catch (e) {
+            console.warn(`[BackendManager] Failed to signal orphan PID=${pid}:`, e)
+          }
+        }
+      }
+    } catch (e) {
+      // wmic/pgrep 找不到匹配的进程 — 属于正常情况（无孤儿需要清理）
+      console.log('[BackendManager] No orphan backend processes found')
+    }
+  }
+
+  /**
    * 启动 Python 后端，返回就绪的端口号
    * @param extraEnv 额外环境变量（如 Electron bridge 端口/token）
    */
@@ -54,6 +105,9 @@ export class BackendManager {
     if (this.starting) {
       return this.port  // 已在启动中，避免重叠
     }
+    // 杀掉上次异常退出残留的孤儿 python 主进程（持有过期的 bridge 端口/token，
+    // 定时任务执行时 bridge 会连接失败）。必须在 spawn 新进程之前执行。
+    BackendManager.killOrphanBackends()
     // 记录本次注入的环境变量，供崩溃自动重启时复用（见 tryAutoRestart）
     if (extraEnv) {
       Object.assign(this.lastExtraEnv, extraEnv)

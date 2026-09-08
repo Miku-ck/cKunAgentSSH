@@ -5,6 +5,7 @@ import { useSshAiStore } from '@/stores/ssh-ai'
 import { useSftpStore } from '@/stores/sftp'
 import { useToastStore } from '@/stores/toast'
 import { toFriendlyMessage } from '@/api/client'
+import { extractSSHError, isRetryable } from '@/ssh-error-types'
 
 /** 本地终端列表常量 */
 const LOCAL_SHELLS = ['PowerShell', 'CMD', 'Git Bash', 'WSL']
@@ -192,7 +193,15 @@ export function useSshNavigation(
       focusTimers.push(tid)
     } catch (err: any) {
       console.error('[useSshNavigation] connectRemote failed:', err)
-      toast.error(toFriendlyMessage(err, 'SSH 连接失败'))
+      // v2 改进：结构化错误优先提取 SSHErrorTransport，带详情与重试按钮
+      const sshTransport = extractSSHError(err)
+      const friendlyMsg = toFriendlyMessage(err, 'SSH 连接失败')
+      const details = sshTransport?.detail
+        || (err instanceof Error && err.message !== friendlyMsg ? err.message : undefined)
+      const actions = (sshTransport && isRetryable(sshTransport.code))
+        ? [{ label: '重试', onClick: () => connectRemote(conn) }]
+        : undefined
+      toast.error(friendlyMsg, 8000, { details, actions })
     } finally {
       connecting.value = false
       pendingConnId.value = ''

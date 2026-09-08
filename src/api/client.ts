@@ -8,6 +8,7 @@
  *    否则请求会指向用户本机的 8010（不存在）
  */
 import { useAppStore } from '@/stores/app'
+import { extractSSHError, toFriendlySshMessage } from '@/ssh-error-types'
 
 const FALLBACK_PORT = 8010  // 后端 dev 默认端口（与 backend/main.py --port default 一致）
 
@@ -78,9 +79,15 @@ function isTechnicalErrorMessage(msg: string): boolean {
 
 /**
  * 把底层/代码级错误转换为用户可读的友好提示。
- * 保留业务性错误（如"用户名或密码错误"）不变。
+ * v2 改进：优先识别 SSHErrorTransport（结构化错误，精准文案），再回退原有模式匹配。
  */
 export function toFriendlyMessage(e: unknown, fallback = '操作失败，请稍后重试'): string {
+  // v2：优先提取 SSH 结构化错误（精确文案）
+  const sshTransport = extractSSHError(e)
+  if (sshTransport) {
+    return toFriendlySshMessage(sshTransport.code, sshTransport.detail)
+  }
+
   if (e instanceof FriendlyError) return e.message
   if (e instanceof Error) {
     const msg = e.message
@@ -610,7 +617,15 @@ export function streamChat(options: StreamChatOptions): () => void {
         try { reader.releaseLock() } catch { /* already released */ }
       }
     } catch (e: unknown) {
-      if (e instanceof Error && e.name !== 'AbortError') {
+      if (e instanceof Error && e.name === 'AbortError') {
+        // 用户主动中止：调用 onDone 确保 streaming 状态被重置为 false。
+        // 原实现静默忽略 AbortError — 若中止时序异常（如 startStream 内部
+        // abortFn() 抛出后未走到 streaming.value=false），streaming 卡死为 true，
+        // SideChatPanel.handleSend 的 props.streaming 检查拦截所有后续发送，
+        // 用户输入"你好"完全没有反应。onDone 在 useChatStream 中仅重置
+        // streaming/abortFn，不影响消息内容（工厂层 abortStream 随后固化中止文案）。
+        try { options.onDone() } catch { /* abort callback error, ignore */ }
+      } else if (e instanceof Error) {
         // H13 修复：用 toFriendlyMessage 转换网络错误，避免直接显示 "Failed to fetch"
         // H15 包裹 onError 回调，防止回调自身抛异常导致 unhandled promise rejection
         try {

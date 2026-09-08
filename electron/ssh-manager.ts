@@ -7,6 +7,7 @@ import type { SFTPWrapper } from 'ssh2'
 import { LS_COLORS_NO_BACKGROUND } from './utils/terminal-colors'
 import { assertKeyFileSafe } from './utils/path-guard'
 import { BrowserWindow, app } from 'electron'
+import { SSHError, classifyRawError, toFriendlyZh } from './ssh-error'
 import { readFileSync, statSync } from 'fs'
 import { promises as fsPromises } from 'fs'
 import { posix, join } from 'path'
@@ -490,7 +491,7 @@ export class SSHManager {
     // 审查修复：SSH/SFTP 会话数上限 — 原实现无上限，断连清理失败或 LLM Agent
     // 批量触发 connect 时可无限累积会话（每个含 TCP 连接 + 事件监听器）
     if (this.sessions.size >= 64) {
-      throw new Error('SSH 会话数已达上限（64），请关闭闲置连接后重试')
+      throw new SSHError('SESSION_LIMIT')
     }
     // s1 修复：加载 known_hosts（审查 M-1：验证上下文已由 buildConnectConfig
     // 的每连接闭包捕获，不再使用共享槽位）
@@ -520,7 +521,7 @@ export class SSHManager {
           (err, stream) => {
             if (err) {
               client.end()
-              wrappedReject(new Error('打开终端失败，请检查 SSH 连接状态'))
+              wrappedReject(new SSHError('EXEC_FAIL', { original: err }))
               return
             }
 
@@ -596,19 +597,8 @@ export class SSHManager {
         // D14 修复：error 不再删除 session、不单独通知 — 连接级 error 之后
         // 必然跟随 'close'（ssh2 语义），由 close 处理器统一清理 + 通知，
         // 保证 SFTP 专用连接（无 shell 流）中断后 UI 也能收到 ssh:close
-        const msg = err?.message || ''
-        if (msg.includes('ECONNREFUSED') || msg.includes('Connection refused')) {
-          wrappedReject(new Error('连接被拒绝，请检查主机地址和端口是否正确'))
-        } else if (msg.includes('ETIMEDOUT') || msg.includes('timed out')) {
-          wrappedReject(new Error('连接超时，请检查网络或增加超时时间'))
-        } else if (msg.includes('Authentication') || msg.includes('auth') || msg.includes('password')) {
-          wrappedReject(new Error('认证失败，请检查用户名、密码或私钥'))
-        } else if (msg.includes('host key') || msg.includes('verification failed') || msg.includes('Host verification')) {
-          // s1 修复：主机密钥验证失败的友好提示（可能的中间人攻击）
-          wrappedReject(new Error('主机密钥验证失败：服务器密钥与记录不符，可能存在中间人攻击'))
-        } else {
-          wrappedReject(new Error('SSH 连接失败，请检查连接信息后重试'))
-        }
+        // v2 改进：用 SSHError.from 统一分类原始错误，前端可按 code 做差异化呈现
+        wrappedReject(SSHError.from(err))
       })
 
       client.on('close', () => {
@@ -646,8 +636,8 @@ export class SSHManager {
     command: string,
     timeout = 30,
   ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
-    const session = this.sessions.get(sshSessionId)
-    if (!session) throw new Error('SSH session not found')
+const session = this.sessions.get(sshSessionId)
+if (!session) throw new SSHError('SESSION_NOT_FOUND')
 
     return new Promise((resolve, reject) => {
       let settled = false
@@ -792,30 +782,22 @@ export class SSHManager {
 
       client.on('ready', () => done(true, '连接成功'))
       client.on('error', (err: Error) => {
-        const msg = err?.message || ''
-        if (msg.includes('ECONNREFUSED') || msg.includes('Connection refused')) {
-          done(false, '连接被拒绝，请检查主机地址和端口')
-        } else if (msg.includes('ETIMEDOUT') || msg.includes('timed out')) {
-          done(false, '连接超时，请检查网络或增加超时时间')
-        } else if (msg.includes('Authentication') || msg.includes('auth') || msg.includes('password')) {
-          done(false, '认证失败，请检查用户名、密码或私钥')
-        } else if (msg.includes('host key') || msg.includes('verification failed') || msg.includes('Host verification')) {
-          done(false, '主机密钥验证失败：服务器密钥与记录不符，可能存在中间人攻击')
-        } else {
-          done(false, '连接失败，请检查连接信息后重试')
-        }
+        // v2 改进：统一使用 classifyRawError + toFriendlyZh 分类错误
+        const code = classifyRawError(err)
+        done(false, toFriendlyZh(code, err.message))
       })
       client.on('close', () => done(false, '连接已关闭'))
 
       try {
         client.connect(connectConfig)
       } catch (err: any) {
-        done(false, '连接失败，请检查连接信息后重试')
+        const code = classifyRawError(err)
+        done(false, toFriendlyZh(code, err?.message))
       }
 
       // 兜底超时(比 readyTimeout 多 2s)
       // s6 修复：保存 timerId 以便连接提前完成时清除，避免无谓等待
-      const fallbackTimer = setTimeout(() => done(false, '连接超时'), (config.readyTimeout ?? 15000) + 2000)
+      const fallbackTimer = setTimeout(() => done(false, toFriendlyZh('CONN_TIMEOUT')), (config.readyTimeout ?? 15000) + 2000)
       const _origDone = done
       done = (ok, message) => {
         clearTimeout(fallbackTimer)
@@ -828,20 +810,20 @@ export class SSHManager {
   //   SFTP
   // ════════════════════════════════════════════════
 
-  private requireSftp(sshSessionId: string): SFTPWrapper {
-    const sftp = this.sftpSessions.get(sshSessionId)
-    if (!sftp) throw new Error('SFTP 会话未打开,请先连接远程')
-    return sftp
-  }
+private requireSftp(sshSessionId: string): SFTPWrapper {
+const sftp = this.sftpSessions.get(sshSessionId)
+if (!sftp) throw new SSHError('SFTP_SESSION_REQUIRED')
+return sftp
+}
 
   /** 复用已建立的 SSH Client,打开 SFTP 子系统 */
-  async openSftp(sshSessionId: string): Promise<void> {
-    const session = this.sessions.get(sshSessionId)
-    if (!session) throw new Error('SSH 会话不存在或已断开')
-    if (this.sftpSessions.has(sshSessionId)) return
-    await new Promise<void>((resolve, reject) => {
-      session.client.sftp((err, sftp) => {
-        if (err) return reject(new Error('SFTP 子系统打开失败，请检查远程服务器是否支持 SFTP'))
+async openSftp(sshSessionId: string): Promise<void> {
+const session = this.sessions.get(sshSessionId)
+if (!session) throw new SSHError('SESSION_NOT_FOUND')
+if (this.sftpSessions.has(sshSessionId)) return
+await new Promise<void>((resolve, reject) => {
+session.client.sftp((err, sftp) => {
+if (err) return reject(new SSHError('SFTP_INIT_FAIL', { original: err }))
         sftp.on('close', () => {
           this.sftpSessions.delete(sshSessionId)
           this.safeSend('sftp:closed', { id: sshSessionId })

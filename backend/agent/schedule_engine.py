@@ -223,23 +223,48 @@ class ScheduleEngine:
         # 定时任务为无头执行，主进程没有为该主机预建会话。这里临时按连接 ID
         # 建立一条轻量 SSH 会话，把真实会话 ID 交给 Agent 使用；任务结束后
         # 在 finally 中关闭，避免连接资源泄漏。
+        from electron_bridge import BridgeError, BridgeErrorCode, classify_bridge_error
         bridge = ElectronBridge()
         ssh_session_id = ""
         if host:
+            # 1. 环境变量检查 — 快速拒绝未配置的场景
             if not bridge.is_available():
-                raise RuntimeError("Electron bridge 未可用，无法为定时任务建立 SSH 会话")
+                raise BridgeError(
+                    BridgeErrorCode.NOT_CONFIGURED,
+                    "定时任务需要 Electron bridge，但未注入端口/token",
+                )
+            # 2. 探活检查 — 组装 Harness/LLM 开销大（数百毫秒），提前确认桥服务
+            #    可达可避免资源浪费；失败意味着端口/token 过期（孤儿进程、主进程
+            #    未启动等），给出明确操作指引
+            try:
+                bridge_alive = await bridge.ping(timeout=5.0)
+            except Exception:
+                bridge_alive = False
+            if not bridge_alive:
+                raise BridgeError(
+                    BridgeErrorCode.PORT_CLOSED,
+                    f"port={bridge.port}",
+                )
+            # 3. 正式建连
             try:
                 conn = await bridge.connect_ssh(host)
                 ssh_session_id = str(conn.get("sessionId") or "")
                 if not ssh_session_id:
-                    raise RuntimeError("Electron bridge 未返回会话 ID")
+                    raise BridgeError(
+                        BridgeErrorCode.HTTP_ERROR,
+                        "connect_ssh 返回空 sessionId",
+                    )
                 logger.info("schedule=%s 已为目标主机建立会话 %s", sched["id"], ssh_session_id)
+            except BridgeError:
+                raise
             except Exception as e:
+                # 非结构化异常 — 反向推断桥接错误码
+                code = classify_bridge_error(e)
                 logger.warning(
-                    "schedule=%s 为目标主机建会话失败（connection=%s）: %s",
-                    sched["id"], host, e,
+                    "schedule=%s 为目标主机建会话失败（connection=%s）: [%s] %s",
+                    sched["id"], host, code, e,
                 )
-                raise RuntimeError(f"无法连接到目标主机：{e}")
+                raise BridgeError(code, str(e), original=e if isinstance(e, Exception) else None)
 
         # 输出 token 上限不能设得等于/接近上下文上限，否则一旦带入输入就必然
         # 超过模型上下文窗口 → vLLM 返回 400，任务瞬时失败且无输出。
