@@ -168,8 +168,6 @@ export function useSshNavigation(
     const now = Date.now()
     const lastConnectAt = lastConnectAtById[conn.id] || 0
     if (now - lastConnectAt < CONNECT_DEBOUNCE_MS) {
-      console.log('[useSshNavigation] connectRemote: debounced, skipping', conn.id)
-      // B19 修复：防抖命中原来只 console.log 无任何用户反馈
       toast.info('连接请求过于频繁，请稍候')
       // debounce 路径也要重置 connecting 状态，避免 loading 永远不消失
       connecting.value = false
@@ -177,11 +175,9 @@ export function useSshNavigation(
       return
     }
     lastConnectAtById[conn.id] = now
-    console.log('[useSshNavigation] connectRemote: connecting to', conn.name, conn.id)
 
     try {
       await store.connectRemote(conn.id, 80, 24)
-      console.log('[useSshNavigation] connectRemote: connected!', conn.id)
       showHome.value = false
       // 等待 Vue 渲染 RemoteTerminal 组件后，让终端获取焦点
       // C28 修复：定时器触发后自摘除
@@ -205,13 +201,11 @@ export function useSshNavigation(
     } finally {
       connecting.value = false
       pendingConnId.value = ''
-      console.log('[useSshNavigation] connectRemote: cleanup', conn.id)
     }
   }
 
   // RemoteManager 触发的连接
   function handleRmConnect(connId: string) {
-    console.log('[useSshNavigation] handleRmConnect called:', connId)
     // 立即显示 loading（点击后马上转圈圈，给用户即时反馈）
     connecting.value = true
     pendingConnId.value = connId

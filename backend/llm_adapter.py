@@ -33,15 +33,29 @@ def _normalize_system_first(messages: list[dict]) -> list[dict]:
 
     Agent 组装路径（bridle._build）会把 ctx.messages 原样追加到末尾，而
     上下文压缩保留的 system 纠偏消息恰好位于 ctx.messages 末尾；chat 路由的
-    history 也可能含有持久化的 system 消息。此处统一做稳定重排：所有 system
-    消息前置（保持相对顺序），其余消息保持原序，避免触发
+    history 也可能含有持久化的 system 消息。此处统一重排：所有 system 消息
+    合并为单条置顶（保持相对顺序），其余消息保持原序。
+
+    合并而非仅前置的原因：部分 vLLM 版本要求 system 消息"恰好一条"——
+    即便全部排在开头区域，出现第二条 system 仍报
     400 "System message must be at the beginning"。
     """
     systems = [m for m in messages if m.get("role") == "system"]
     if not systems:
         return messages
     others = [m for m in messages if m.get("role") != "system"]
-    return systems + others
+    if len(systems) == 1:
+        return [systems[0]] + others
+    # 多条 system 合并为一条（换行分隔，保持相对顺序）
+    merged_content = "\n\n".join(
+        m.get("content", "") for m in systems if m.get("content")
+    )
+    merged: dict = {"role": "system", "content": merged_content}
+    # 保留首条 system 的其他字段（如 name），避免信息丢失
+    for k, v in systems[0].items():
+        if k not in ("role", "content"):
+            merged.setdefault(k, v)
+    return [merged] + others
 
 
 async def _get_client(base_url: str, api_key: str) -> openai.AsyncOpenAI:
@@ -224,6 +238,13 @@ async def _chat_stream_impl(
             kwargs["tool_choice"] = tool_choice
 
     try:
+        # 诊断日志：打印角色序列，用于确认 system 合并修复已生效
+        # （v1.1 = _normalize_system_first 合并版；若仍见 400 且日志缺失，说明运行的是旧进程）
+        # 用 print 而非 logger.info：uvicorn 默认日志级别下应用层 INFO 不进控制台
+        print(
+            f"[llm_adapter v1.1] {model} roles={[m.get('role') for m in kwargs['messages']]}",
+            flush=True,
+        )
         stream = await client.chat.completions.create(**kwargs)
     except openai.BadRequestError as e:
         # vLLM 未启用 --enable-auto-tool-choice 时，传 tools 也可能被拒

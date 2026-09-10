@@ -148,6 +148,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   /** 发送消息（SSH 模式封装：自动注入上下文 + system prompt） */
   // M18：返回是否被接受（true=已入会话，false=早退拒绝），供组件回滚草稿
   async function sendMessage(content: string, options?: { skillIds?: string[]; attachments?: ChatAttachment[] }): Promise<boolean> {
+    console.log('[ssh-ai] sendMessage called, agentMode=', agentMode.value, 'content=', content.slice(0, 20))
     if (agentMode.value) {
       return sendAgentMessage(content, options?.skillIds || [], options?.attachments || [])
     } else {
@@ -157,6 +158,9 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
 
   /** 普通聊天模式 */
   async function sendChatMessage(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = []): Promise<boolean> {
+    console.log('[ssh-ai] sendChatMessage called, selectedModelId=', base.selectedModelId.value)
+    // 模型列表预载由 base.sendMessage 内部完成（models 为空时自动 fetchModels），
+    // 此处无需重复处理（原 chatStore 预载代码引用了未定义变量，已移除）
     const ctx = buildContext()
     const systemPrompt = buildSystemPrompt(ctx)
     return base.sendMessage(content, { context: ctx, systemPrompt, skillIds, attachments })

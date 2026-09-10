@@ -57,22 +57,56 @@ export class BackendManager {
   private static killOrphanBackends(): void {
     try {
       if (process.platform === 'win32') {
-        // Windows: wmic 根据命令行找 python main.py 进程
-        // 双引号内用 %% 转义 LIKE 通配符（wmic 语法要求）
-        const output = execSync(
-          `wmic process where "name='python.exe' and commandline like '%%main.py%%'" get processid`,
-          { encoding: 'utf-8', timeout: 5000 }
-        )
-        const pids = output
-          .split(/\s+/)
-          .map(s => parseInt(s.trim(), 10))
-          .filter(n => !isNaN(n) && n > 0)
-        for (const pid of pids) {
+        // 修复：wmic 在 Windows 11 已废弃（乱码输出 → 孤儿进程无法清理 →
+        // 端口被僵尸进程占用 → waitForReady 15s 超时 → 启动失败）。
+        // 改用 tasklist /FI 过滤 + taskkill /T /F 杀进程树。
+        let output = ''
+        try {
+          output = execSync(
+            `tasklist /FI "IMAGENAME eq python.exe" /FO CSV /NH`,
+            { encoding: 'utf-8', timeout: 5000 }
+          )
+        } catch {
+          // tasklist 也找不到 → 无 Python 进程，静默返回
+          console.log('[BackendManager] No Python processes found')
+          return
+        }
+        // CSV 格式: "python.exe","12345","Console","1","20,428 K"
+        const lines = output.split('\n').filter(l => l.includes('main.py') || l.includes('uvicorn'))
+        // 若 CSV 行不含命令行信息（tasklist 默认不显示），回退到 wmic 单次尝试
+        if (lines.length === 0) {
           try {
-            execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore', timeout: 5000 })
-            console.log(`[BackendManager] Killed orphan backend PID=${pid}`)
-          } catch (e) {
-            console.warn(`[BackendManager] Failed to kill orphan PID=${pid}:`, e)
+            output = execSync(
+              `wmic process where "name='python.exe'" get processid,commandline`,
+              { encoding: 'utf-8', timeout: 5000 }
+            )
+            const matches = output.match(/(\d+)\s+.*main\.py/g) || []
+            for (const m of matches) {
+              const pid = parseInt(m, 10)
+              if (!isNaN(pid) && pid > 0) {
+                try {
+                  execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore', timeout: 5000 })
+                  console.log(`[BackendManager] Killed orphan backend PID=${pid}`)
+                } catch { /* already exited */ }
+              }
+            }
+          } catch {
+            // wmic 不可用，无法清理孤儿 — 继续启动，端口占用时由 findFreePort 兜底
+            console.log('[BackendManager] Cannot detect orphan processes (wmic unavailable), relying on port scan')
+          }
+          return
+        }
+        // tasklist CSV 行解析 PID（第 2 列）
+        for (const line of lines) {
+          const parts = line.split(',')
+          if (parts.length >= 2) {
+            const pid = parseInt(parts[1].replace(/"/g, '').trim(), 10)
+            if (!isNaN(pid) && pid > 0) {
+              try {
+                execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore', timeout: 5000 })
+                console.log(`[BackendManager] Killed orphan backend PID=${pid}`)
+              } catch { /* already exited */ }
+            }
           }
         }
       } else {
@@ -92,7 +126,6 @@ export class BackendManager {
         }
       }
     } catch (e) {
-      // wmic/pgrep 找不到匹配的进程 — 属于正常情况（无孤儿需要清理）
       console.log('[BackendManager] No orphan backend processes found')
     }
   }

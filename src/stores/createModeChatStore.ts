@@ -181,10 +181,18 @@ export function createModeChatStore<
   })
 
   const settingsStore = useSettingsStore()
-  // 计算初始值：持久化记忆（开启时） > 全局默认
+  // 计算初始值：代码默认值 > 持久化记忆。
+  // 修复：原实现 lastMap[mode] 覆盖 defaultAgentMode — 用户 localStorage 中
+  // 保存了旧版 defaultAgentMode=true 的记忆，即使代码已改为 false，
+  // rememberAgentMode 仍从 lastMap 恢复 true，导致所有消息走 /agent/run，
+  // /chat/stream 从未被调用，普通对话完全无反应。现在 AND 双重校验：
+  // 只有代码默认值也为 true 时才信任持久化记忆，否则回退到代码默认值。
   const lastMap = loadLastAgentMode()
-  const startAgentMode = settingsStore.settings.agent.rememberAgentMode && mode in lastMap
+  const savedMode = settingsStore.settings.agent.rememberAgentMode && mode in lastMap
     ? lastMap[mode]
+    : undefined
+  const startAgentMode = savedMode !== undefined
+    ? savedMode && settingsStore.settings.agent.defaultAgentMode
     : settingsStore.settings.agent.defaultAgentMode
   const agentMode = ref<boolean>(startAgentMode)
 
@@ -244,11 +252,9 @@ export function createModeChatStore<
   async function switchConversation(id: string) {
     if (stream.streaming.value) abortStream()
     await persistence.switchConversation(id)
-    const conv = persistence.currentConversation.value
-    // 切换会话后恢复该会话上次使用的 Agent 模式
-    if (conv && typeof conv.agentMode === 'boolean') {
-      agentMode.value = conv.agentMode
-    }
+    // 不再从会话恢复 agentMode — 用户的显式切换优先。
+    // 原实现：切换到 Agent 模式创建的旧会话时 agentMode 被强制恢复为 true，
+    // 用户明明已切到普通模式，消息却仍走 /agent/run，/chat/stream 从未被调用。
   }
 
   async function deleteConversation(id: string) {
@@ -267,7 +273,10 @@ export function createModeChatStore<
     attachments?: ChatAttachment[]
   }): Promise<boolean> {
     // M5 修复：原子检查+加锁，消除 streaming 守卫与 startStream 之间的竞态窗口
-    if (_sendLock || stream.streaming.value) return false
+    if (_sendLock || stream.streaming.value) {
+      console.log('[factory] sendMessage BLOCKED: _sendLock=', _sendLock, 'streaming=', stream.streaming.value)
+      return false
+    }
     // 允许"仅附件"的空消息（attachments 已注入上下文时）
     if (!content.trim() && !(options?.attachments && options.attachments.length > 0)) return false
     _sendLock = true
@@ -280,11 +289,16 @@ export function createModeChatStore<
       }
 
       const chatStore: ChatStoreLike = _chatStoreGetter!()
+      // 竞态修复：chat.ts 的 fetchModels 可能尚未完成（两个 store 的
+      // backendStatus watcher 并发触发），主动确保模型列表已加载
+      if (chatStore.models.length === 0) {
+        await chatStore.fetchModels()
+      }
       if (!persistence.selectedModelId.value || !chatStore.models.some((m: ModelConfig) => m.id === persistence.selectedModelId.value)) {
         await fetchDefaultModel()
       }
       if (chatStore.models.length === 0) {
-        toast.error('无可用模型')
+        toast.error('无可用模型，请在设置中配置模型')
         return false
       }
       if (!persistence.selectedModelId.value) {
@@ -295,7 +309,17 @@ export function createModeChatStore<
       let conv = persistence.currentConversation.value
       if (!conv) {
         const title = content.slice(0, 30) + (content.length > 30 ? '...' : '')
-        conv = await persistence.createConversation(title)
+        try {
+          conv = await persistence.createConversation(title)
+        } catch (e) {
+          // createConversation（backend 策略走 api.createConversation）失败时
+          // 原实现异常直接穿透 → handleSend 的 await 未捕获 → 无气泡、无请求、
+          // 无提示，表现为"普通对话没有反应"。与下方 ensureBackendConversation
+          // 的兜底语义对齐：toast + 早退。
+          console.error('[factory] createConversation failed:', e)
+          toast.error('创建会话失败')
+          return false
+        }
       }
       if (!conv) return false
 
@@ -375,7 +399,9 @@ export function createModeChatStore<
         })
       }
 
-      const ok = await stream.startStream<TMessage, TConversation>({
+      let ok = false
+      try {
+        ok = await stream.startStream<TMessage, TConversation>({
         content,
         conversation: conv,
         systemPrompt,
@@ -415,8 +441,19 @@ export function createModeChatStore<
           await afterStreamDone?.(conv)
         },
       })
+      } catch (e) {
+        // startStream 抛异常（如 backendConvId 缺失、getModel 抛错）时兜底：
+        // 原实现异常直接变成 unhandled rejection — streaming 卡 true、无 toast、
+        // 后续发送全被 props.streaming 拦截，用户表现为"普通对话没有反应"。
+        console.error('[factory] startStream threw:', e)
+        ok = false
+        if (stream.streaming.value) stream.streaming.value = false
+      }
 
       if (!ok) {
+        // 安全兜底：startStream 返回 false 时若 streaming 仍为 true（边界竞态），
+        // 强制重置，避免后续所有发送被 SideChatPanel 的 props.streaming 拦截
+        if (stream.streaming.value) stream.streaming.value = false
         toast.error('启动流式失败')
       }
       // 消息已入会话（userMsg/assistantMsg 已 push 并持久化）— 即便流启动失败，

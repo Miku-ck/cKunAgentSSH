@@ -633,7 +633,16 @@ const lastDraft = ref<{ text: string; skillIds: string[]; attachments: ChatAttac
 
 function handleSend() {
   const text = inputText.value.trim()
-  if ((!text && pendingFiles.value.length === 0) || props.streaming || props.agentRunning) return
+  if ((!text && pendingFiles.value.length === 0)) return
+  // 流式进行中或 Agent 运行中时给出明确反馈，不再静默吞掉
+  if (props.streaming) {
+    toast.info('正在等待回复中，请稍候…')
+    return
+  }
+  if (props.agentRunning) {
+    toast.info('Agent 正在运行中，请等待完成')
+    return
+  }
   // 关闭可能打开的菜单
   closeSkillMenu()
   // 复制 skillIds / attachments 后立即清空，避免下次发送残留
@@ -872,11 +881,8 @@ defineExpose({ focusInput, restoreDraft })
   opacity: 0.5;
 }
 
-.chat-input:focus-visible {
-  outline: 2px solid var(--accent-indigo);
-  outline-offset: 2px;
-  border-radius: 4px;
-}
+/* focus 指示环已移除：输入框自带 outline:none，focus-visible 的彩色
+   outline 会在聚焦时画出明显的颜色框，与无边框输入区风格不符 */
 
 /* ── 已选技能标签 ── */
 .skill-tags {

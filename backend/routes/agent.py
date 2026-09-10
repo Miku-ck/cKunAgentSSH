@@ -308,6 +308,37 @@ async def _release_run_slot(conversation_id: str, run_id: str) -> None:
             del _in_flight_runs[conversation_id]
 
 
+def has_active_run(conversation_id: str) -> bool:
+    """查询该会话是否有真实进行中的 Agent run。
+
+    供 chat.py 的 409 自愈判定使用。进程内注册表是唯一权威：
+    DB 中 status='running' 的行若不在注册表里，说明是崩溃/断连残留的
+    滞留行（对账 _reconcile_stale_runs_once 只在 /agent/run 请求时懒执行，
+    纯普通对话用户永不触发）——此处顺手对账为 failed 并返回 False，
+    否则滞留行会让自愈判定永远认为"有活跃 run"，409 永不解除。
+    """
+    # 进程内注册表：有占位即真实活跃
+    if _in_flight_runs.get(conversation_id):
+        return True
+    # DB 中有 running 行但注册表无占位 → 滞留残留，对账清理
+    conn = db._get_conn()
+    try:
+        cur = conn.execute(
+            "UPDATE agent_runs SET status = 'failed', completed_at = ? "
+            "WHERE conversation_id = ? AND status IN ('running', 'init')",
+            (db._now(), conversation_id),
+        )
+        conn.commit()
+        if cur.rowcount:
+            logger.warning(
+                "[agent] 会话 %s 有 %d 条注册表外滞留 run，已对账为 failed",
+                conversation_id, cur.rowcount,
+            )
+        return False
+    finally:
+        conn.close()
+
+
 _startup_reconciled = False
 
 
@@ -912,6 +943,16 @@ async def agent_run(req: AgentRunRequest, request: Request):
                 pass
             # C-review MINOR-12：释放同会话运行占位（客户端断连也会走这里）
             await _release_run_slot(req.conversation_id, run_id)
+            # 修复：Agent 启动时（line 534）将会话状态设为 in_progress，
+            # 但结束时未重置回 completed — 普通聊天的 try_begin_conversation_stream
+            # 检查 WHERE status <> 'in_progress' 永远失败，返回 409。
+            # 此处与 _release_run_slot 对称，确保会话状态正确复位。
+            try:
+                cur_status = await asyncio.to_thread(db.get_conversation, req.conversation_id)
+                if cur_status and cur_status.get("status") == "in_progress":
+                    await asyncio.to_thread(db.update_conversation_status, req.conversation_id, "completed")
+            except Exception:
+                pass
 
     # H8 修复：fire-and-forget 任务的异常日志回调
     def _task_exception_logger(name: str):

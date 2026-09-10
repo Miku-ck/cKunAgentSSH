@@ -1679,6 +1679,27 @@ def mark_stale_agent_runs_failed() -> int:
         conn.close()
 
 
+def reset_stale_in_progress_conversations() -> int:
+    """启动对账 — 把仍停留在 in_progress 的会话复位为 completed。
+
+    崩溃/重启后 try_begin_conversation_stream 的 WHERE status <> 'in_progress'
+    永远失败，普通对话永久 409（Agent 结束时的复位逻辑随进程丢失）。
+    仅启动时调用一次：正常运行中 in_progress 表示真有流进行中，不能动。
+    返回被复位的条数。
+    """
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            "UPDATE conversations SET status = 'completed', updated_at = ? "
+            "WHERE status = 'in_progress'",
+            (_now(),),
+        )
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
 def get_agent_run(run_id: str) -> Optional[dict]:
     """获取单个 Agent 运行记录"""
     conn = _get_conn()

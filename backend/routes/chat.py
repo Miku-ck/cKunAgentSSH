@@ -28,6 +28,13 @@ def db_get_model_config(model_id: str):
 
 router = APIRouter(tags=["chat"])
 
+# 滞留锁自愈：进程内活跃 chat 流注册表 {conversation_id: True}。
+# 生成器真正开始时注册、finally 中注销。409 时若 DB 显示 in_progress
+# 但既无活跃 chat 流也无活跃 agent run，说明是崩溃/断连残留的滞留锁，
+# 复位后重试抢锁，而不是让该会话永久 409。
+_active_chat_streams: set[str] = set()
+_active_streams_lock = asyncio.Lock()
+
 HEARTBEAT_INTERVAL = 15  # 秒
 
 
@@ -138,6 +145,8 @@ class UpdateTitleRequest(BaseModel):
 @router.post("/chat/stream")
 async def stream_chat(req: StreamChatRequest, request: Request):
     """SSE 流式对话 — 对接 vLLM"""
+    # 打印用户输入（便于在 [Python] 日志中直接看到前端发来的问题）
+    print(f"[chat] 用户输入: {req.message!r} (conversation_id={req.conversation_id})")
     # 消息为空且无附件时拒绝（允许"仅上传附件"的空消息请求）
     if not req.message.strip() and not req.attachments:
         raise HTTPException(status_code=400, detail="消息内容为空")
@@ -215,10 +224,25 @@ async def stream_chat(req: StreamChatRequest, request: Request):
     # 抢锁放在全部只读准备之后，此后至生成器之间无 await（不会在持锁前
     # 抛异常泄漏锁）；生成器自身各终态路径（completed/failed/断连复位）负责释放。
     if not await asyncio.to_thread(db.try_begin_conversation_stream, req.conversation_id):
-        raise HTTPException(
-            status_code=409,
-            detail="该会话已有进行中的回复，请等上一条回复完成后再发送",
-        )
+        # 409 自愈：DB 显示 in_progress，但若既无活跃 chat 流也无活跃 Agent run，
+        # 说明是崩溃/断连/生成器未启动即被取消（StreamingResponse 头发出后
+        # 客户端立即 abort，finally 从未执行）残留的滞留锁 — 复位后重试一次，
+        # 而不是让该会话永久 409。
+        from routes.agent import has_active_run
+        stale = not await asyncio.to_thread(has_active_run, req.conversation_id)
+        if stale:
+            await asyncio.to_thread(db.update_conversation_status, req.conversation_id, "completed")
+            logger.warning("[chat] 会话 %s 滞留 in_progress 已自愈复位（无活跃流/run）", req.conversation_id)
+            if not await asyncio.to_thread(db.try_begin_conversation_stream, req.conversation_id):
+                raise HTTPException(
+                    status_code=409,
+                    detail="该会话已有进行中的回复，请等上一条回复完成后再发送",
+                )
+        else:
+            raise HTTPException(
+                status_code=409,
+                detail="该会话已有进行中的回复，请等上一条回复完成后再发送",
+            )
 
     return StreamingResponse(
         _generate_stream(
@@ -270,6 +294,9 @@ async def _generate_stream(
     # B-9 修复：预初始化，finally 中无论流创建是否成功都能安全关闭 LLM 流
     chunk_iter = None
     chunk_task = None  # M1 修复：进行中的 __anext__ 任务（shield 保活）
+    # 活跃流注册：生成器真正开始执行才算活跃（请求被取消且生成器从未启动时
+    # 不会留下假活跃标记），finally 中注销 — 供 409 自愈判定
+    _active_chat_streams.add(conversation_id)
 
     try:
         # 先保存用户消息（审查 M-13：db 同步调用放线程池，避免阻塞事件循环）
@@ -408,6 +435,8 @@ async def _generate_stream(
         yield sse_event({"error": str(e)})
         yield "data: [DONE]\n\n"
     finally:
+        # 注销活跃流注册（与生成器开头的 add 对称）
+        _active_chat_streams.discard(conversation_id)
         # M1 修复：先取消进行中的 __anext__ 任务，避免"Task was destroyed
         # but it is pending"告警；再关闭迭代器
         if chunk_task is not None and not chunk_task.done():

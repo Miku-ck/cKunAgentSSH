@@ -125,27 +125,32 @@ class Bridle:
 
     def _build(self, ctx: RunContext) -> list[dict[str, str]]:
         """按当前 ctx 状态组装 messages（含已持久化的摘要），不触发压缩"""
-        messages: list[dict[str, str]] = []
+        system_msgs: list[dict[str, str]] = []
+        other_msgs: list[dict[str, str]] = []
 
         # 1. system prompt
         if ctx.system_prompt:
-            messages.append({"role": "system", "content": ctx.system_prompt})
+            system_msgs.append({"role": "system", "content": ctx.system_prompt})
 
         # 2. 记忆注入（作为 system 消息追加）
         if ctx.memories:
             memory_text = "\n".join(f"- {m}" for m in ctx.memories if m)
             if memory_text:
-                messages.append({
+                system_msgs.append({
                     "role": "system",
                     "content": f"[相关记忆]\n{memory_text}",
                 })
 
         # 3. 历史（始终前置、不参与压缩）
+        # 修复：历史中可能含有之前 Agent 运行注入的 system 消息（纠偏提示等），
+        # 无差别放入 other_msgs 会导致 system 消息夹在非 system 消息中间，
+        # vLLM 返回 400 "System message must be at the beginning"。
         for msg in ctx.history:
-            messages.append({
-                "role": msg.get("role", "user"),
-                "content": msg.get("content", ""),
-            })
+            entry = {"role": msg.get("role", "user"), "content": msg.get("content", "")}
+            if entry["role"] == "system":
+                system_msgs.append(entry)
+            else:
+                other_msgs.append(entry)
 
         # 3.5 上下文摘要注入（压缩后保留的早期 run 对话摘要）
         # 置于 history 之后、近期 run 之前：摘要浓缩的是本轮早期 run 消息，
@@ -153,13 +158,17 @@ class Bridle:
         # 修复：使用 "user" 角色而非 "system"，避免 system 消息不在开头触发 400 错误
         summary = ctx.metadata.get("context_summary")
         if summary:
-            messages.append({"role": "user", "content": f"[上下文摘要]\n{summary}"})
+            other_msgs.append({"role": "user", "content": f"[上下文摘要]\n{summary}"})
 
         # 4. 当前运行累积的消息（含 task / assistant / tool / 拦截器注入的 system 纠偏消息）
+        # 分离 system 消息到顶部，避免 vLLM 400 "System message must be at the beginning"
         for msg in ctx.messages:
-            messages.append(msg)
+            if msg.get("role") == "system":
+                system_msgs.append(msg)
+            else:
+                other_msgs.append(msg)
 
-        return messages
+        return system_msgs + other_msgs
 
     def _compress_run_into(self, ctx: RunContext, force: bool) -> None:
         """

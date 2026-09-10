@@ -223,7 +223,7 @@ class ScheduleEngine:
         # 定时任务为无头执行，主进程没有为该主机预建会话。这里临时按连接 ID
         # 建立一条轻量 SSH 会话，把真实会话 ID 交给 Agent 使用；任务结束后
         # 在 finally 中关闭，避免连接资源泄漏。
-        from electron_bridge import BridgeError, BridgeErrorCode, classify_bridge_error
+        from agent.electron_bridge import BridgeError, BridgeErrorCode, classify_bridge_error
         bridge = ElectronBridge()
         ssh_session_id = ""
         if host:

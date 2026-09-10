@@ -117,7 +117,9 @@ export const useSettingsStore = defineStore('settings', () => {
     agent: {
       maxIterations: saved?.agent?.maxIterations ?? 100,
       dynamicBudget: saved?.agent?.dynamicBudget ?? true,
-      defaultAgentMode: saved?.agent?.defaultAgentMode ?? true,
+      // 硬编码 false：旧版 localStorage 保存了 true（?? 无法覆盖），
+      // 导致所有消息走 /agent/run，普通对话永远不到后端
+      defaultAgentMode: false,
       rememberAgentMode: saved?.agent?.rememberAgentMode ?? true,
     },
     postProcess: {

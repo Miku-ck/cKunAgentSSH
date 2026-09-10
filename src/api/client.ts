@@ -625,11 +625,16 @@ export function streamChat(options: StreamChatOptions): () => void {
         // 用户输入"你好"完全没有反应。onDone 在 useChatStream 中仅重置
         // streaming/abortFn，不影响消息内容（工厂层 abortStream 随后固化中止文案）。
         try { options.onDone() } catch { /* abort callback error, ignore */ }
-      } else if (e instanceof Error) {
-        // H13 修复：用 toFriendlyMessage 转换网络错误，避免直接显示 "Failed to fetch"
-        // H15 包裹 onError 回调，防止回调自身抛异常导致 unhandled promise rejection
+      } else {
+        // 兜底：所有非 AbortError 异常统一走 onError，确保 streaming 状态被重置。
+        // 含 e instanceof Error（网络错误等）和非 Error 异常（throw "string" / throw null
+        // 等边界情况）— 原实现仅处理 instanceof Error，非 Error 异常时 streaming 卡死为
+        // true，后续所有发送被 SideChatPanel 的 props.streaming 拦截，用户输入无任何反应。
+        const msg = e instanceof Error
+          ? toFriendlyMessage(e, '请求失败，请稍后重试')
+          : (e ? String(e) : '请求异常，请重试')
         try {
-          options.onError(toFriendlyMessage(e, 'Agent 运行失败，请稍后重试'))
+          options.onError(msg)
         } catch (cbErr) {
           console.error('[streamChat] onError callback threw:', cbErr)
         }

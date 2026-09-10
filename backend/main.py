@@ -66,6 +66,18 @@ async def lifespan(_app: FastAPI):
     except Exception:
         pass
 
+    # 启动对账：崩溃/重启后滞留 in_progress 的会话复位为 completed。
+    # 不复位则 try_begin_conversation_stream 永远 409，普通对话锁死。
+    # 仅启动时执行一次 — 正常运行中 in_progress 表示真有流进行中。
+    try:
+        import asyncio as _asyncio
+        import database as _db
+        _n = await _asyncio.to_thread(_db.reset_stale_in_progress_conversations)
+        if _n:
+            print(f"[cKunAgentic] Reset {_n} stale in_progress conversation(s)")
+    except Exception as e:
+        print(f"[cKunAgentic] Stale conversation reset skipped: {e}")
+
     # 修复：从数据库加载后处理配置，避免使用默认值导致用户设置不生效
     from post_processor import init_post_process_manager, load_post_process_config_from_db
     post_config = load_post_process_config_from_db()
