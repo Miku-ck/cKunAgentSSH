@@ -11,8 +11,6 @@
     :grouped-conversations="store.groupedConversations"
     :agent-running="agentStore.isRunning"
     :creating="creating"
-    show-agent-toggle
-    v-model:agent-mode="agentMode"
     show-message-actions
     panel-title="运维知识助手"
     placeholder="询问运维问题..."
@@ -52,7 +50,7 @@ defineEmits<{ close: [] }>()
 const store = useSshAiStore()
 const chatStore = useChatStore()
 
-const { agentStore, agentMode, handleAbort: agentHandleAbort } = useAgentIntegration({
+const { agentStore, handleAbort: agentHandleAbort } = useAgentIntegration({
   mode: 'ssh',
   agentModeRef: toRef(store, 'agentMode'),
 })

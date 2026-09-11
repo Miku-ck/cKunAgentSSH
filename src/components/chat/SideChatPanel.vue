@@ -182,16 +182,6 @@
             :disabled="streaming || agentRunning"
             @change="handleFileChange"
           />
-          <button
-            v-if="showAgentToggle"
-            class="toolbar-btn agent-toggle"
-            :class="{ active: agentMode }"
-            :title="agentMode ? 'Agent 模式已开启 — AI 可自主调用工具' : '开启 Agent 模式 — AI 可自主调用工具'"
-            :aria-label="agentMode ? '关闭 Agent 模式' : '开启 Agent 模式'"
-            @click="emit('update:agentMode', !agentMode)"
-          >
-            <span class="agent-label">Agent</span>
-          </button>
           <slot name="toolbar-left"></slot>
         </div>
         <div class="toolbar-right">
@@ -299,8 +289,6 @@ const props = defineProps<{
   selectedModelId: string
   models: ModelConfig[]
   groupedConversations: ConvGroup[]
-  showAgentToggle?: boolean
-  agentMode?: boolean
   showMessageActions?: boolean
   agentRunning?: boolean
   creating?: boolean
@@ -317,7 +305,6 @@ const emit = defineEmits<{
   close: []
   send: [content: string, skillIds: string[], attachments: ChatAttachment[]]
   'update:selectedModelId': [id: string]
-  'update:agentMode': [val: boolean]
   'new-chat': []
   'switch-conversation': [id: string]
   'delete-conversation': [id: string]
@@ -1295,10 +1282,6 @@ defineExpose({ focusInput, restoreDraft })
 
 .toolbar-btn.active:hover {
   background: var(--accent-indigo-hover);
-}
-
-.agent-label {
-  font-size: 12px;
 }
 
 /* 启用自定义背景图时，让右侧面板透明 */
