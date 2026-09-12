@@ -47,9 +47,6 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
 
   // ── 2. SSH 特有 State ──
   const showAiPanel = ref(false)
-  // Agent 模式开关由 createModeChatStore 工厂统一持有，实现默认开启与切换持久化
-  const agentMode = base.agentMode
-  const setAgentMode = base.setAgentMode
 
   const agentStore = useAgentStore()
   const appStore = useAppStore()
@@ -94,12 +91,10 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   }
 
   /**
-   * 关闭 AI 面板：先中止仍在运行的普通聊天流（SSE 不再后台空跑），再隐藏面板。
+   * 关闭 AI 面板：隐藏面板。
    * Agent 运行设计为可跨面板存活（store 层 watch 固化结果），关闭面板不中止 Agent。
    */
   function closeAiPanel() {
-    // 中止当前活动聊天流；无流时 abortStream 内部 no-op
-    base.abortStream()
     showAiPanel.value = false
   }
 
@@ -190,7 +185,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       effectiveContent = parts.join('\n\n')
     }
     if (agentStore.isRunning) {
-      toast.error('Agent 正在运行中，请等待完成或先中止')
+      toast.error('AI 正在运行中，请等待完成或先中止')
       return false
     }
     if (!effectiveContent.trim()) return false
@@ -278,7 +273,6 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     currentConvId: base.currentConvId,
     currentConversation: base.currentConversation,
     messages: base.messages,
-    streaming: base.streaming,
     selectedModelId: base.selectedModelId,
     selectedModel: base.selectedModel,
     groupedConversations: base.groupedConversations,
@@ -288,15 +282,12 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     createConversation: base.createConversation,
     switchConversation: base.switchConversation,
     deleteConversation: base.deleteConversation,
-    abortStream: base.abortStream,
     save: base.persistence.save,
     notifyConversationsChanged: base.notifyConversationsChanged,
     // ── SSH 特有 API ──
     showAiPanel,
     toggleAiPanel,
     closeAiPanel,
-    agentMode,
-    setAgentMode,
     agentRunning,
     buildContext,
     buildSystemPrompt,

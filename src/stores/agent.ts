@@ -203,7 +203,7 @@ export const useAgentStore = defineStore('agent', () => {
         }
         errorMessage.value = err?.trim()
           ? err
-          : 'Agent 运行失败，后端未返回具体错误，请查看后端日志'
+          : 'AI 运行失败，后端未返回具体错误，请查看后端日志'
         status.value = 'failed'
         currentState.value = 'failed'
         // B11 修复：run 结束清理权限请求状态，防止面板里残留过期授权按钮
@@ -384,7 +384,7 @@ export const useAgentStore = defineStore('agent', () => {
           _helpRequestedThisRun = true
           humanHelpRequests.value.push({
             id: `help_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-            reason: event.reason || 'Agent 请求人类介入',
+            reason: event.reason || 'AI 请求人类介入',
             tool: event.tool,
             args: event.args,
             timestamp: Date.now(),
@@ -417,7 +417,7 @@ export const useAgentStore = defineStore('agent', () => {
             isCommandTool: isCmdTool,
           })
           if (!hadPending) {
-            useToastStore().warning('Agent 需要权限确认，请打开 AI 面板')
+            useToastStore().warning('AI 需要权限确认，请打开 AI 面板')
           }
         }
         break

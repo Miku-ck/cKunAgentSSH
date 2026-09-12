@@ -51,7 +51,6 @@
           />
           <MessageItem
             :message="msg"
-            :is-streaming="streaming"
             :is-last="idx === displayMessages.length - 1"
           >
             <template v-if="showMessageActions" #actions="{ content }">
@@ -123,7 +122,7 @@
           aria-controls="skill-menu-list"
           :aria-activedescendant="showSkillMenu ? activeSkillOptionId : undefined"
           :maxlength="50000"
-          :disabled="streaming || agentRunning"
+          :disabled="agentRunning"
           @keydown="handleKeydown"
           @input="onInput"
         ></textarea>
@@ -166,8 +165,8 @@
           <button
             v-if="uploadHandler"
             class="toolbar-btn upload-btn"
-            :disabled="uploading || streaming || agentRunning"
-            :title="uploading ? '上传中...' : (streaming || agentRunning) ? '当前响应中，请稍后再上传' : '上传文件（文本类，单文件 ≤ 10MB）'"
+            :disabled="uploading || agentRunning"
+            :title="uploading ? '上传中...' : agentRunning ? '当前响应中，请稍后再上传' : '上传文件（文本类，单文件 ≤ 10MB）'"
             :aria-label="uploading ? '上传中' : '上传文件'"
             @click="handleUploadClick"
           >
@@ -179,7 +178,7 @@
             type="file"
             multiple
             class="hidden-file-input"
-            :disabled="streaming || agentRunning"
+            :disabled="agentRunning"
             @change="handleFileChange"
           />
           <slot name="toolbar-left"></slot>
@@ -221,7 +220,7 @@
 
           <!-- 发送/中止按钮 -->
           <button
-            v-if="!streaming && !agentRunning"
+            v-if="!agentRunning"
             class="send-btn"
             :disabled="!canSend"
             @click="handleSend"
@@ -285,7 +284,6 @@ const props = defineProps<{
   conversations: Array<{ id: string; title: string; updated_at: string }>
   currentConvId: string | null
   messages: DisplayMsg[]
-  streaming: boolean
   selectedModelId: string
   models: ModelConfig[]
   groupedConversations: ConvGroup[]
@@ -539,14 +537,6 @@ watch(() => props.messages.length, () => {
   scrollToBottom()
 })
 
-// 监听流式内容变化：仅检查最后一条消息的 streamingContent 长度，避免 O(n) reduce 开销
-watch(
-  () => props.messages[props.messages.length - 1]?.streamingContent?.length,
-  () => {
-    if (props.streaming) scrollToBottom()
-  }
-)
-
 // Agent 运行中 content/reasoning 通过 agentStore 实时更新，需单独监听以触发滚动
 watch(() => agentStore.content, () => {
   if (agentStore.isRunning) scrollToBottom()
@@ -621,13 +611,9 @@ const lastDraft = ref<{ text: string; skillIds: string[]; attachments: ChatAttac
 function handleSend() {
   const text = inputText.value.trim()
   if ((!text && pendingFiles.value.length === 0)) return
-  // 流式进行中或 Agent 运行中时给出明确反馈，不再静默吞掉
-  if (props.streaming) {
-    toast.info('正在等待回复中，请稍候…')
-    return
-  }
+  // AI 运行中时给出明确反馈，不再静默吞掉
   if (props.agentRunning) {
-    toast.info('Agent 正在运行中，请等待完成')
+    toast.info('AI 正在运行中，请等待完成')
     return
   }
   // 关闭可能打开的菜单

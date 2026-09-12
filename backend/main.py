@@ -67,8 +67,8 @@ async def lifespan(_app: FastAPI):
         pass
 
     # 启动对账：崩溃/重启后滞留 in_progress 的会话复位为 completed。
-    # 不复位则 try_begin_conversation_stream 永远 409，普通对话锁死。
-    # 仅启动时执行一次 — 正常运行中 in_progress 表示真有流进行中。
+    # Agent run 在运行中崩溃时复位逻辑丢失，会话会永久滞留 in_progress。
+    # 仅启动时执行一次 — 正常运行中 in_progress 表示真有 run 进行中。
     try:
         import asyncio as _asyncio
         import database as _db

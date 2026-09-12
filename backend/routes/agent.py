@@ -943,10 +943,9 @@ async def agent_run(req: AgentRunRequest, request: Request):
                 pass
             # C-review MINOR-12：释放同会话运行占位（客户端断连也会走这里）
             await _release_run_slot(req.conversation_id, run_id)
-            # 修复：Agent 启动时（line 534）将会话状态设为 in_progress，
-            # 但结束时未重置回 completed — 普通聊天的 try_begin_conversation_stream
-            # 检查 WHERE status <> 'in_progress' 永远失败，返回 409。
-            # 此处与 _release_run_slot 对称，确保会话状态正确复位。
+            # 修复：Agent 启动时将会话状态设为 in_progress，结束时须重置回
+            # completed — 若不复位，会话永久滞留 in_progress，下次运行会被
+            # 误判为有 run 进行中。此处与 _release_run_slot 对称。
             try:
                 cur_status = await asyncio.to_thread(db.get_conversation, req.conversation_id)
                 if cur_status and cur_status.get("status") == "in_progress":

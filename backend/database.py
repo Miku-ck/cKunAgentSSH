@@ -755,28 +755,6 @@ def update_conversation_status(cid: str, status: str) -> None:
         conn.close()
 
 
-def try_begin_conversation_stream(cid: str) -> bool:
-    """C-review M4：原子抢占会话流式锁。
-
-    仅当会话当前不是 in_progress 时，把它原子地置为 in_progress 并返回 True；
-    已在 in_progress（另一路流进行中）则返回 False。用单条 UPDATE 的 rowcount
-    判定实现"检查 + 抢占"的原子性，避免并发请求各写 user 消息、
-    in_progress→completed 互相覆盖导致历史交错 / 后处理双份执行 / turn_index 漂移。
-    """
-    now = _now()
-    conn = _get_conn()
-    try:
-        cur = conn.execute(
-            "UPDATE conversations SET status = 'in_progress', updated_at = ? "
-            "WHERE id = ? AND status <> 'in_progress'",
-            (now, cid),
-        )
-        conn.commit()
-        return cur.rowcount > 0
-    finally:
-        conn.close()
-
-
 def update_conversation_title(cid: str, title: str) -> Optional[dict]:
     """更新会话标题"""
     now = _now()
@@ -1682,9 +1660,9 @@ def mark_stale_agent_runs_failed() -> int:
 def reset_stale_in_progress_conversations() -> int:
     """启动对账 — 把仍停留在 in_progress 的会话复位为 completed。
 
-    崩溃/重启后 try_begin_conversation_stream 的 WHERE status <> 'in_progress'
-    永远失败，普通对话永久 409（Agent 结束时的复位逻辑随进程丢失）。
-    仅启动时调用一次：正常运行中 in_progress 表示真有流进行中，不能动。
+    Agent run 启动时将会话置 in_progress、结束时复位为 completed；若进程在
+    运行中崩溃/被杀，该复位逻辑随进程丢失，会话永久滞留 in_progress。
+    仅启动时调用一次：正常运行中 in_progress 表示真有 run 进行中，不能动。
     返回被复位的条数。
     """
     conn = _get_conn()

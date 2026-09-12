@@ -27,16 +27,17 @@ def main():
     check("create_conversation 返回 id", bool(cid))
     check("新会话 status=completed", conv.get("status") == "completed")
 
-    # 2. try_begin_conversation_stream 抢锁 / 互斥 / 释放
-    check("首次抢锁成功", db.try_begin_conversation_stream(cid) is True)
-    check("持锁期间二次抢锁失败(409 根因)", db.try_begin_conversation_stream(cid) is False)
-
-    # 3. 滞留 in_progress 的启动对账复位
+    # 2. 滞留 in_progress 的启动对账复位（直接 DB 置 in_progress 模拟崩溃残留）
+    conn = db._get_conn()
+    try:
+        conn.execute("UPDATE conversations SET status='in_progress' WHERE id=?", (cid,))
+        conn.commit()
+    finally:
+        conn.close()
     n = db.reset_stale_in_progress_conversations()
     check("reset_stale_in_progress_conversations 复位 1 条", n == 1)
     cur = db.get_conversation(cid)
     check("复位后 status=completed", cur.get("status") == "completed")
-    check("复位后可再次抢锁", db.try_begin_conversation_stream(cid) is True)
 
     # 4. mark_stale_agent_runs_failed 对 agent_runs 的对账
     now = db._now()

@@ -5,7 +5,6 @@
 - MINOR-2  llm_adapter LRU 淘汰不得 aclose 仍有进行中流的客户端
 - MINOR-4  上传带上限读取（MAX+1），超限 413
 - MINOR-6  memory.retrieve 的 sqlite 调用放线程池
-- MINOR-7  chat/stream 把 reasoning 预算传入 safe_max_tokens（thinking 开/关）
 - MINOR-10 web_fetch max_chars 上限钳制
 - MINOR-12 同会话并发占位（冲突/误删保护）+ 启动对账标记滞留 run
 
@@ -162,58 +161,6 @@ def test_memory_retrieve_offloaded_to_thread(monkeypatch):
     assert all(t != main_tid for t in seen_tids), "sqlite 调用必须在事件循环线程之外"
 
 
-# ── MINOR-7：reasoning 预算传入 safe_max_tokens ──
-
-def _chat_req(enable_thinking: bool):
-    import routes.chat as chat_mod
-    return chat_mod.StreamChatRequest(
-        message="hi", conversation_id="c1", model_id="",
-        enable_thinking=enable_thinking,
-    )
-
-
-def _patch_chat_deps(monkeypatch, captured: dict):
-    import routes.chat as chat_mod
-
-    def rec_safe(configured, prompt_text, max_output_tokens=None, reasoning_tokens=None):
-        captured["configured"] = configured
-        captured["reasoning"] = reasoning_tokens
-        return 2048
-
-    monkeypatch.setattr(chat_mod, "safe_max_tokens", rec_safe)
-    monkeypatch.setattr(chat_mod.db, "get_default_model",
-                        lambda mode: {"id": "m1", "model_id": "m1"})
-    monkeypatch.setattr(chat_mod, "db_get_model_config", lambda mid: {
-        "id": "m1", "model_id": "m1", "base_url": "http://x", "api_key": "k",
-        "max_tokens": 16384, "supports_thinking": True, "reasoning_tokens": 8000,
-        "max_output_tokens": None, "temperature": None, "top_p": None,
-    })
-    monkeypatch.setattr(chat_mod.db, "get_conversation",
-                        lambda cid: {"id": cid, "title": "t"})
-    monkeypatch.setattr(chat_mod.db, "get_recent_messages", lambda cid, limit=20: [])
-    monkeypatch.setattr(chat_mod.db, "get_relevant_memories", lambda mode, limit=5: [])
-    # C-review M4：抢锁桩（默认成功），避免测试触碰真实 DB
-    captured.setdefault("acquired", [])
-    monkeypatch.setattr(chat_mod.db, "try_begin_conversation_stream",
-                        lambda cid: captured["acquired"].append(cid) or True)
-
-
-def test_chat_stream_passes_reasoning_budget_when_thinking(monkeypatch):
-    import routes.chat as chat_mod
-    captured = {}
-    _patch_chat_deps(monkeypatch, captured)
-    asyncio.run(chat_mod.stream_chat(_chat_req(enable_thinking=True), None))
-    assert captured.get("reasoning") == 8000, "thinking 开启时 reasoning 预算必须传入封顶计算"
-
-
-def test_chat_stream_no_reasoning_budget_when_off(monkeypatch):
-    import routes.chat as chat_mod
-    captured = {}
-    _patch_chat_deps(monkeypatch, captured)
-    asyncio.run(chat_mod.stream_chat(_chat_req(enable_thinking=False), None))
-    assert captured.get("reasoning") is None, "thinking 关闭时不得预留推理预算"
-
-
 # ── MINOR-10：web_fetch max_chars 上限 ──
 
 def test_web_fetch_max_chars_capped(monkeypatch):
@@ -297,23 +244,6 @@ def test_mark_stale_agent_runs_failed(monkeypatch):
     assert db.mark_stale_agent_runs_failed() == 0
 
 
-# ── M4：同会话并发 stream 互斥 ──
-
-def test_chat_stream_rejects_concurrent_stream(monkeypatch):
-    """会话已有进行中的流 → 第二个请求 409（不写消息、不启动生成器）"""
-    import fastapi
-    import routes.chat as chat_mod
-
-    captured = {}
-    _patch_chat_deps(monkeypatch, captured)
-    monkeypatch.setattr(chat_mod.db, "try_begin_conversation_stream",
-                        lambda cid: captured["acquired"].append(cid) or False)
-    with pytest.raises(fastapi.HTTPException) as exc:
-        asyncio.run(chat_mod.stream_chat(_chat_req(enable_thinking=False), None))
-    assert exc.value.status_code == 409
-    assert captured["acquired"] == ["c1"], "抢锁必须针对请求会话执行"
-
-
 def test_try_set_default_conversation_title(monkeypatch):
     """MINOR-1：标题仍为默认值 → 写入；窗口期内用户已改自定义标题 → 不覆盖"""
     import database as db
@@ -365,29 +295,3 @@ def test_get_recent_messages_rowid_tiebreak(monkeypatch):
     rows = db.get_recent_messages("c1", limit=10)
     assert [r["content"] for r in rows] == ["第一条", "第二条", "第三条"], \
         "同秒消息必须按插入序（rowid）排序，而非 uuid 字典序"
-
-
-def test_try_begin_conversation_stream_atomic(monkeypatch):
-    """非 in_progress → 抢锁成功并置 in_progress；持锁期间二次抢锁失败；
-    释放（completed/failed）后可再抢"""
-    import database as db
-
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute(
-        "CREATE TABLE conversations (id TEXT PRIMARY KEY, title TEXT, "
-        "status TEXT DEFAULT 'completed', mode TEXT, "
-        "created_at TEXT, updated_at TEXT)"
-    )
-    conn.execute("INSERT INTO conversations (id, status) VALUES ('c1', 'completed')")
-    conn.commit()
-    monkeypatch.setattr(db, "_get_conn", lambda: _NoClose(conn))
-
-    assert db.try_begin_conversation_stream("c1") is True
-    assert conn.execute("SELECT status FROM conversations WHERE id='c1'").fetchone()[0] == "in_progress"
-    assert db.try_begin_conversation_stream("c1") is False, "持锁期间必须冲突"
-    # 正常结束 / 异常结束释放后均可再抢
-    for release in ("completed", "failed"):
-        conn.execute("UPDATE conversations SET status=? WHERE id='c1'", (release,))
-        conn.commit()
-        assert db.try_begin_conversation_stream("c1") is True

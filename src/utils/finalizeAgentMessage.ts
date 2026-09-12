@@ -1,21 +1,9 @@
 /**
- * Agent 集成 Composable
- * 从 WorkView / AiChatPanel / SshAiPanel 中提取的通用 Agent 逻辑：
- * - agentMode 状态（由外部 store 提供，实现默认配置 + 持久化记忆）
- * - handleAbort（agent/chat 双分支中止）
- *
- * 注意：Agent 运行完成后的消息固化逻辑已移入 store 层（createModeChatStore /
- * chat.ts 的 watch），通过 finalizeAgentMessage 实现，不再依赖组件生命周期，
- * 避免跨模式切换时面板卸载导致 Agent 结果丢失（P3-4）。
- */
-import { type Ref } from 'vue'
-import { useAgentStore } from '@/stores/agent'
-import type { ChatMode } from '@/types/chat'
-
-/**
  * 固化 Agent 运行结果到会话的最后一条占位消息（id 以 'temp-agent-' 开头）。
  * 设计为在 store 层 watch 中调用，不依赖组件生命周期。
  */
+import type { useAgentStore } from '@/stores/agent'
+
 /** Agent 消息的最小接口定义（导出供 store 层泛型边界断言使用，审查 M-19） */
 export interface AgentMessage {
   role: string
@@ -49,7 +37,7 @@ export function finalizeAgentMessage(
           // M17：用户主动中止且无部分输出 — 标注"(已中止)"而非误报失败
           finalContent = '(已中止)'
         } else {
-          finalContent = '(Agent 运行失败，未产生输出)'
+          finalContent = '(AI 运行失败，未产生输出)'
         }
       }
       msgs[i].content = finalContent
@@ -64,27 +52,4 @@ export function finalizeAgentMessage(
       break
     }
   }
-}
-
-export interface UseAgentIntegrationOptions {
-  /** 当前模式标识，用于过滤 agentStore 的跨模式 watch */
-  mode: ChatMode
-  /** 外部传入的 agentMode ref。持久化记忆由 createModeChatStore 统一实现。 */
-  agentModeRef: Ref<boolean>
-}
-
-export function useAgentIntegration(options: UseAgentIntegrationOptions) {
-  const agentStore = useAgentStore()
-  const agentMode = options.agentModeRef
-
-  /** 统一中止：Agent 运行中则中止 Agent，否则中止普通流式 */
-  function handleAbort(chatAbort: () => void) {
-    if (agentStore.isRunning) {
-      agentStore.abort()
-    } else {
-      chatAbort()
-    }
-  }
-
-  return { agentStore, agentMode, handleAbort }
 }

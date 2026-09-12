@@ -109,7 +109,7 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
       >
         <div class="human-help-header">
           <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
-          <span class="human-help-title">Agent 请求人工介入</span>
+          <span class="human-help-title">AI 请求人工介入</span>
           <button
             v-if="!agentStore.isRunning"
             class="human-help-dismiss"
@@ -129,7 +129,7 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
             </details>
           </div>
           <div class="human-help-hint">
-            Agent 已被引导换一种方法；如需介入请终止并修改任务描述后重试。
+            AI 已被引导换一种方法；如需介入请终止并修改任务描述后重试。
           </div>
         </div>
       </div>
@@ -199,7 +199,7 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
           <template v-if="req.isCommandTool">
             授权仅绑定此条命令，其他 dangerous 命令仍会单独请求审批；
           </template>
-          授权后 Agent 重新发起该请求即生效。
+          授权后 AI 重新发起该请求即生效。
         </div>
       </div>
     </div>

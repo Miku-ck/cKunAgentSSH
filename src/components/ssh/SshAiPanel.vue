@@ -5,9 +5,8 @@
     :conversations="store.conversations"
     :current-conv-id="store.currentConvId"
     :messages="store.messages"
-    :streaming="store.streaming"
     :selected-model-id="store.selectedModelId"
-    :models="chatStore.models"
+    :models="modelsStore.models"
     :grouped-conversations="store.groupedConversations"
     :agent-running="agentStore.isRunning"
     :creating="creating"
@@ -37,10 +36,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, toRef } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useSshAiStore } from '@/stores/ssh-ai'
-import { useChatStore } from '@/stores/chat'
-import { useAgentIntegration } from '@/composables/useAgentIntegration'
+import { useModelsStore } from '@/stores/models'
+import { useAgentStore } from '@/stores/agent'
 import SideChatPanel from '@/components/chat/SideChatPanel.vue'
 import AgentRunPanel from '@/components/agent/AgentRunPanel.vue'
 import type { ChatAttachment } from '@/api/client'
@@ -48,15 +47,11 @@ import type { ChatAttachment } from '@/api/client'
 defineEmits<{ close: [] }>()
 
 const store = useSshAiStore()
-const chatStore = useChatStore()
-
-const { agentStore, handleAbort: agentHandleAbort } = useAgentIntegration({
-  mode: 'ssh',
-  agentModeRef: toRef(store, 'agentMode'),
-})
+const modelsStore = useModelsStore()
+const agentStore = useAgentStore()
 
 function handleAbort() {
-  agentHandleAbort(() => store.abortStream())
+  agentStore.abort()
 }
 
 // M18：发送被 store 早退拒绝（后端未就绪/无模型/建会话失败）时回滚组件草稿
@@ -85,16 +80,11 @@ async function handleNewChat() {
   }
 }
 
-// 组件卸载时重置创建状态，防止状态残留
+// 组件卸载时重置创建状态，防止状态残留。
+// 不中止运行中的 Agent — Agent 运行设计为可跨面板存活（P3-4），结果固化在
+// store 层 watch，不依赖组件生命周期，面板重新打开即可继续查看。
 onUnmounted(() => {
   creating.value = false
-  // 审查修复：卸载只中止普通聊天流，不再中止运行中的 Agent。
-  // 原实现走 handleAbort（Agent 运行中则 agentStore.abort()），与 P3-4 设计契约
-  // （"Agent 运行设计为可跨面板存活，关闭面板不中止 Agent"，见 useAgentIntegration
-  // 头注释与 closeAiPanel 注释）矛盾：切页/关面板会把正在执行的多步运维任务
-  // 中途杀掉并固化成"(已中止)"。Agent 结果固化在 store 层 watch（P3-4），
-  // 不依赖组件生命周期，面板重新打开即可继续查看。
-  store.abortStream()
 })
 
 function handleSwitchConv(id: string) {

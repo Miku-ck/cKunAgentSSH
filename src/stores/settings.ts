@@ -8,16 +8,16 @@ import { useToastStore } from './toast'
  * 设置面板增删改模型后，同步刷新对话中的模型选择器
  * 使用模块缓存避免重复动态导入导致的竞态条件
  */
-let _chatStorePromise: Promise<typeof import('./chat')> | null = null
+let _modelsStorePromise: Promise<typeof import('./models')> | null = null
 function refreshChatModels() {
-  if (!_chatStorePromise) {
-    _chatStorePromise = import('./chat').catch((err) => {
-      _chatStorePromise = null // 失败时重置，允许重试
+  if (!_modelsStorePromise) {
+    _modelsStorePromise = import('./models').catch((err) => {
+      _modelsStorePromise = null // 失败时重置，允许重试
       throw err
     })
   }
-  _chatStorePromise.then(({ useChatStore }) => {
-    useChatStore().fetchModels()
+  _modelsStorePromise.then(({ useModelsStore }) => {
+    useModelsStore().fetchModels()
   }).catch(() => { /* 模块未就绪时忽略 */ })
 }
 
@@ -41,8 +41,6 @@ export interface AppSettings {
   agent: {
     maxIterations: number
     dynamicBudget: boolean
-    defaultAgentMode: boolean
-    rememberAgentMode: boolean
   }
   postProcess: {
     enabled: boolean
@@ -117,10 +115,6 @@ export const useSettingsStore = defineStore('settings', () => {
     agent: {
       maxIterations: saved?.agent?.maxIterations ?? 100,
       dynamicBudget: saved?.agent?.dynamicBudget ?? true,
-      // 硬编码 false：旧版 localStorage 保存了 true（?? 无法覆盖），
-      // 导致所有消息走 /agent/run，普通对话永远不到后端
-      defaultAgentMode: false,
-      rememberAgentMode: saved?.agent?.rememberAgentMode ?? true,
     },
     postProcess: {
       enabled: saved?.postProcess?.enabled ?? true,
