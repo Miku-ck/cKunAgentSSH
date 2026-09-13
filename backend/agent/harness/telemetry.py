@@ -132,6 +132,8 @@ class SSEAdapter:
         "intention": "intention",
         "budget_extended": "budget_extended",
         "reflection_request": "reflection_request",
+        # 可见终端模式：通知前端把命令写入真实 PTY/SSH 会话并等待回传
+        "tool_deliver": "tool_deliver",
     }
 
     @classmethod
@@ -141,7 +143,7 @@ class SSEAdapter:
 
         前端 AgentSSEEvent 接口字段：
         type / state / iteration / content / reasoning / tool / args / result /
-        success / message / iterations / state_history / reason / cost / run_id / file_changes
+        success / message / iterations / state_history / reason / cost / run_id
         """
         kind = event.kind
         payload = event.payload
@@ -195,7 +197,6 @@ class SSEAdapter:
             result["state_history"] = payload.get("state_history", [])
             result["cost"] = payload.get("cost")
             result["run_id"] = payload.get("run_id", "")
-            result["file_changes"] = payload.get("file_changes")
         # H13 修复 B3：补全三种事件类型的字段提取
         elif kind == "intention":
             # H14: 嵌套在 intention 字段下，与前端 AgentIntentionInfo 接口对齐
@@ -218,5 +219,10 @@ class SSEAdapter:
             result["unique_tools"] = payload.get("unique_tools", [])
             result["failed_tools"] = payload.get("failed_tools", [])
             result["has_cost"] = payload.get("has_cost", False)
+        elif kind == "tool_deliver":
+            result["tool_id"] = payload.get("tool_id", "")
+            result["command"] = payload.get("command", "")
+            result["session_id"] = payload.get("session_id", "")
+            result["requires_confirm"] = payload.get("requires_confirm", False)
 
         return result

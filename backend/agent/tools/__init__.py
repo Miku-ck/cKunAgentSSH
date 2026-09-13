@@ -20,6 +20,9 @@ class ToolResult:
     output: str
     error: str = ""
     priority: str = "normal"  # 优先级：high（错误/关键）/ normal（常规）/ low（噪声）
+    # 可见终端模式：非空时表示命令需交付到可见终端（前端写入 PTY/SSH）后由驱动挂起等待，
+    # 结构: {"tool_id": str, "command": str, "session_id": str, "requires_confirm": bool}
+    pending_delivery: Optional[dict] = None
 
 
 @dataclass
@@ -75,6 +78,10 @@ class ToolContext:
     # CostTracker 上报 LLM token 用量（原实现子 Agent 调用的 token 完全丢失）。
     # None 表示无追踪器（如无头定时调度 run）
     cost_tracker: object | None = None
+    # 可见终端模式：True 时 shell_exec 不 headless 执行，而是登记待交付到可见终端
+    visible_terminal: bool = False
+    # 目标环境标记（test/prod）— 生产高风险命令需确认
+    environment: str = "test"
 
 
 class ToolRegistry:

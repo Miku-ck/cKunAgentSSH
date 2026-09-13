@@ -235,16 +235,21 @@ class ScheduleEngine:
                 )
             # 2. 探活检查 — 组装 Harness/LLM 开销大（数百毫秒），提前确认桥服务
             #    可达可避免资源浪费；失败意味着端口/token 过期（孤儿进程、主进程
-            #    未启动等），给出明确操作指引
+            #    未启动等），给出明确操作指引。
+            #    用 probe() 而非 ping()：需要具体失败原因码写入 run summary。
+            #    原实现把 ping 的所有失败一律报成 PORT_CLOSED，导致"端口在监听但
+            #    无响应（假监听/超时）"被错误描述为"端口已关闭"，把排查方向带偏。
             try:
-                bridge_alive = await bridge.ping(timeout=5.0)
-            except Exception:
-                bridge_alive = False
-            if not bridge_alive:
-                raise BridgeError(
-                    BridgeErrorCode.PORT_CLOSED,
-                    f"port={bridge.port}",
+                probe_error = await bridge.probe(timeout=5.0)
+            except Exception as e:
+                # probe 内部已全量捕获异常，此处仅为防御未来改动
+                probe_error = classify_bridge_error(e)
+            if probe_error is not None:
+                logger.warning(
+                    "schedule=%s 桥接探活失败 [%s] port=%s",
+                    sched["id"], probe_error.value, bridge.port,
                 )
+                raise BridgeError(probe_error, f"port={bridge.port}")
             # 3. 正式建连
             try:
                 conn = await bridge.connect_ssh(host)

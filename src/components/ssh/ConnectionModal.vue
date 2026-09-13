@@ -1,5 +1,5 @@
 <template>
-  <div class="modal-overlay" @click.self="handleOverlayClose">
+  <div class="modal-overlay">
     <div class="modal-dialog">
       <div class="modal-header">
         <h3>{{ isEdit ? '编辑连接' : '添加远程连接' }}</h3>
@@ -247,9 +247,9 @@ function handleOverlayClose() {
 
 // Escape 键关闭弹窗
 function handleKeydown(e: KeyboardEvent) {
-  // 审查修复（P2）：saving/testing 期间禁止关闭（Esc/遮罩/取消/右上角 ×
-  // 统一走 handleOverlayClose）— 原实现关闭后保存/测试请求仍在后台继续并
-  // 落库，用户看不到结果且可能重复提交
+  // 审查修复（P2）：saving/testing 期间禁止关闭（Esc/取消/右上角 ×
+  // 统一走 handleOverlayClose，点击遮罩空白处不关闭）— 原实现关闭后保存/测试
+  // 请求仍在后台继续并落库，用户看不到结果且可能重复提交
   if (e.key === 'Escape') handleOverlayClose()
 }
 onMounted(() => window.addEventListener('keydown', handleKeydown))

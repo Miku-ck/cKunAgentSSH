@@ -591,9 +591,9 @@ def reclassify(
     )
 
 
-# ── 渐进式信息收集工具名（只读类）──
+# ── 渐进式信息收集工具名（只读类；ssh 模式文件操作经 shell_exec，无法按名识别）──
 _READ_TOOLS = frozenset({
-    "read_file", "grep", "glob", "list_dir", "web_search", "web_fetch",
+    "web_search", "web_fetch",
 })
 
 
@@ -626,10 +626,10 @@ def get_progressive_gathering_guide(
         return (
             "\n\n[信息收集策略] 检测到你在一次性读取多个文件/目录。"
             "请采用渐进式收集策略：\n"
-            "1. 先用 list_dir 或 glob 获取目录结构概览\n"
+            "1. 先用 shell_exec（ls -la / find）获取目录结构概览\n"
             "2. 基于概览判断哪些文件真正相关\n"
-            "3. 每次只读 1-2 个最相关的文件，读完评估是否足够\n"
-            "4. 如果信息不够再读下一个，而不是一次性读完所有可能相关的文件\n"
+            "3. 每次只看 1-2 个最相关的文件（head/tail 片段即可），看完评估是否足够\n"
+            "4. 如果信息不够再看下一个，而不是一次性读完所有可能相关的文件\n"
             "\n批量读取会消耗上下文窗口，且很多文件读完后发现并不需要。"
         )
     else:

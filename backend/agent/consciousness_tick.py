@@ -212,13 +212,11 @@ class ConsciousnessTick:
 
     def _known_modes(self) -> list[str]:
         """agent_memories 表中实际存在的 mode 列表（审查 MINOR：原 4 处硬编码
-        ("ssh",) 导致 work/ide 模式的记忆从不被固化/清理/提升）
+        ("ssh",)，现动态查询实际存在的 mode）
 
         注意：含同步 db 调用，async 上下文请用
         `await asyncio.to_thread(self._known_modes)` 调用。
         """
-        """agent_memories 表中实际存在的 mode 列表（审查 MINOR：原 4 处硬编码
-        ("ssh",) 导致 work/ide 模式的记忆从不被固化/清理/提升）"""
         import database as db
         try:
             conn = db._get_conn()
@@ -438,7 +436,7 @@ def _extract_facts(episodic_content: str) -> list[str]:
     facts: list[str] = []
     # 提取使用的工具
     if "使用工具:" in episodic_content:
-        # 形如 "使用工具: read_file, write_file"
+        # 形如 "使用工具: shell_exec, web_search"
         parts = episodic_content.split("使用工具:")
         if len(parts) > 1:
             tools_part = parts[1].split("|")[0].split(",")[0].strip()

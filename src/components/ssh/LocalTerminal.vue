@@ -32,6 +32,7 @@ import {
 import { useSSHStore } from '@/stores/ssh'
 import { buildTerminalOptions, watchTerminalConfig } from '@/composables/useTerminalConfig'
 import { stripAnsiBackground } from '@/utils/terminal-colors'
+import { ingestOutput } from '@/composables/useAgentDeliver'
 
 const props = defineProps<{
   ptyId: string
@@ -277,6 +278,8 @@ onMounted(() => {
   unsubData = api.onPtyData(({ id: ptyId, data }) => {
     if (ptyId === id) {
       terminal?.write(stripAnsiBackground(data))
+      // 可见终端执行模式：喂给交付编排器解析 BEGIN/END 哨兵捕获输出
+      ingestOutput(id, data)
     }
   })
 

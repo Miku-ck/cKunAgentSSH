@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""首启模型种子逻辑测试（_seed_models / _probe_first_model）
+"""首启模型种子逻辑测试（seed_models_async / _probe_first_model）
 
 设计契约见 docs/superpowers/specs/2026-09-02-model-seed-env-driven-design.md：
 - 未显式设置 VLLM_BASE_URL → 不种子
@@ -8,7 +8,17 @@
 - 探测失败 → 不种子、不抛异常
 - 表非空（已有数据）→ 不探测、不改动
 httpx 全部 mock，不发真实请求。
+
+重构适配：_seed_models(conn) 已重构为异步的 seed_models_async(db_path)
+（P2 E9：httpx 同步探测移入线程池，不阻塞事件循环），测试改为
+临时文件 DB + asyncio.run（函数自开连接，内存库不可用）。
+
+临时目录使用 conftest 的 tmp_workspace（普通 os.mkdir）— 不能用
+tmp_path/tempfile.mkdtemp：Windows 下 mkdtemp 打限制性 ACL，沙箱
+进程随后访问会被拒（见 conftest.py 注释）。
 """
+import asyncio
+import os
 import sqlite3
 
 import pytest
@@ -34,12 +44,7 @@ class FakeResponse:
         return self._payload
 
 
-def make_empty_conn(tmp_path=None):
-    """建一个只有 models_config 表的空库连接（内存库，不落盘）"""
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    conn.execute(
-        """
+_MODELS_DDL = """
         CREATE TABLE models_config (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -61,14 +66,37 @@ def make_empty_conn(tmp_path=None):
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
-        """
-    )
-    conn.commit()
-    return conn
+    """
 
 
-def count_models(conn):
-    return conn.execute("SELECT COUNT(*) AS c FROM models_config").fetchone()["c"]
+def make_db_file(tmp_dir: str):
+    """建一个只有 models_config 表的临时文件库（seed_models_async 自开连接）"""
+    db_file = os.path.join(tmp_dir, "models.db")
+    conn = sqlite3.connect(db_file)
+    try:
+        conn.execute(_MODELS_DDL)
+        conn.commit()
+    finally:
+        conn.close()
+    return db_file
+
+
+def count_models(db_file):
+    conn = sqlite3.connect(str(db_file))
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("SELECT COUNT(*) AS c FROM models_config").fetchone()["c"]
+    finally:
+        conn.close()
+
+
+def query_models(db_file):
+    conn = sqlite3.connect(str(db_file))
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("SELECT * FROM models_config").fetchall()
+    finally:
+        conn.close()
 
 
 def set_env(monkeypatch, base_url="", thinking_url=""):
@@ -77,17 +105,17 @@ def set_env(monkeypatch, base_url="", thinking_url=""):
     monkeypatch.setattr("config.settings.vllm_api_key", "EMPTY")
 
 
-def test_no_env_no_seed(monkeypatch):
+def test_no_env_no_seed(monkeypatch, tmp_workspace):
     """未显式配置 VLLM_BASE_URL → 不种子任何模型"""
-    conn = make_empty_conn()
+    db_file = make_db_file(tmp_workspace)
     set_env(monkeypatch)
-    db._seed_models(conn)
-    assert count_models(conn) == 0
+    asyncio.run(db.seed_models_async(str(db_file)))
+    assert count_models(db_file) == 0
 
 
-def test_probe_success_seeds_default(monkeypatch):
+def test_probe_success_seeds_default(monkeypatch, tmp_workspace):
     """探测成功 → 种子 data[0].id 为默认 + SSH 默认模型"""
-    conn = make_empty_conn()
+    db_file = make_db_file(tmp_workspace)
     set_env(monkeypatch, base_url="http://127.0.0.1:9030/v1")
     calls = []
 
@@ -96,9 +124,9 @@ def test_probe_success_seeds_default(monkeypatch):
         return FakeResponse(payload={"data": [{"id": "model-a"}, {"id": "model-b"}]})
 
     monkeypatch.setattr(db.httpx, "get", fake_get)
-    db._seed_models(conn)
+    asyncio.run(db.seed_models_async(str(db_file)))
 
-    rows = conn.execute("SELECT * FROM models_config").fetchall()
+    rows = query_models(db_file)
     assert len(rows) == 1
     assert rows[0]["model_id"] == "model-a"
     assert rows[0]["is_default"] == 1
@@ -107,9 +135,9 @@ def test_probe_success_seeds_default(monkeypatch):
     assert calls == ["http://127.0.0.1:9030/v1/models"]
 
 
-def test_thinking_url_seeds_second_model(monkeypatch):
+def test_thinking_url_seeds_second_model(monkeypatch, tmp_workspace):
     """主 + thinking URL → 两条种子，第二条为思考模型且非默认"""
-    conn = make_empty_conn()
+    db_file = make_db_file(tmp_workspace)
     set_env(monkeypatch,
             base_url="http://127.0.0.1:9030/v1",
             thinking_url="http://127.0.0.1:9031/v1")
@@ -120,9 +148,9 @@ def test_thinking_url_seeds_second_model(monkeypatch):
         return FakeResponse(payload={"data": [{"id": "main-m"}]})
 
     monkeypatch.setattr(db.httpx, "get", fake_get)
-    db._seed_models(conn)
+    asyncio.run(db.seed_models_async(str(db_file)))
 
-    rows = conn.execute("SELECT * FROM models_config ORDER BY sort_order").fetchall()
+    rows = query_models(db_file)
     assert len(rows) == 2
     assert rows[0]["model_id"] == "main-m"
     assert rows[0]["is_default"] == 1
@@ -131,43 +159,45 @@ def test_thinking_url_seeds_second_model(monkeypatch):
     assert rows[1]["is_default"] == 0
 
 
-def test_probe_failure_no_seed_no_raise(monkeypatch):
+def test_probe_failure_no_seed_no_raise(monkeypatch, tmp_workspace):
     """探测连接失败 → 不种子、不抛异常（静默降级）"""
-    conn = make_empty_conn()
+    db_file = make_db_file(tmp_workspace)
     set_env(monkeypatch, base_url="http://127.0.0.1:1/v1")  # 不可达地址（被 mock 拦截）
 
     def fake_get(url, timeout=None):
         raise Exception("connection refused")
 
     monkeypatch.setattr(db.httpx, "get", fake_get)
-    db._seed_models(conn)
-    assert count_models(conn) == 0
+    asyncio.run(db.seed_models_async(str(db_file)))
+    assert count_models(db_file) == 0
 
 
-def test_probe_empty_data_no_seed(monkeypatch):
+def test_probe_empty_data_no_seed(monkeypatch, tmp_workspace):
     """/models 返回空 data → 不种子"""
-    conn = make_empty_conn()
+    db_file = make_db_file(tmp_workspace)
     set_env(monkeypatch, base_url="http://127.0.0.1:9030/v1")
     monkeypatch.setattr(db.httpx, "get", lambda url, timeout=None: FakeResponse(payload={"data": []}))
-    db._seed_models(conn)
-    assert count_models(conn) == 0
+    asyncio.run(db.seed_models_async(str(db_file)))
+    assert count_models(db_file) == 0
 
 
-def test_existing_rows_untouched(monkeypatch):
+def test_existing_rows_untouched(monkeypatch, tmp_workspace):
     """表非空（旧数据）→ 不探测、不改动"""
-    conn = make_empty_conn()
+    db_file = make_db_file(tmp_workspace)
+    conn = sqlite3.connect(str(db_file))
     conn.execute(
         "INSERT INTO models_config (id, name, model_id, base_url, created_at, updated_at)"
         " VALUES ('existing', 'x', 'x', 'http://old', '2026-01-01 00:00:00', '2026-01-01 00:00:00')")
     conn.commit()
+    conn.close()
     set_env(monkeypatch, base_url="http://127.0.0.1:9030/v1")
 
     def fail_get(url, timeout=None):
         raise AssertionError("表非空时不应发起探测")
 
     monkeypatch.setattr(db.httpx, "get", fail_get)
-    db._seed_models(conn)
-    assert count_models(conn) == 1
+    asyncio.run(db.seed_models_async(str(db_file)))
+    assert count_models(db_file) == 1
 
 
 def test_probe_first_model_direct(monkeypatch):

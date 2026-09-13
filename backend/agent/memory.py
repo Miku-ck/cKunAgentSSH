@@ -209,7 +209,7 @@ class MemoryManager:
 
         Args:
             query: 当前任务/查询文本
-            mode: 当前模式（work/ide/ssh）
+            mode: 当前模式（ssh 运维模式）
             top_k: 返回最大条数
             threshold: 相似度阈值（episodic 关键词重叠分 + semantic 余弦相似度通用）。
                        E 修复：原默认 0.3 且仅 semantic 生效，episodic 硬编码 0.15；

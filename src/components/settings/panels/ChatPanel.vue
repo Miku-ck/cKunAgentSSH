@@ -12,10 +12,6 @@
         </select>
       </SettingRow>
 
-      <SettingRow label="流式输出" desc="逐字显示 AI 回复">
-        <ToggleSwitch v-model="settings.chat.streaming" />
-      </SettingRow>
-
       <SettingRow label="思考链默认" desc="推理模型的思考过程默认展开">
         <select v-model="settings.chat.thinkingExpanded" class="setting-select">
           <option :value="false">折叠</option>

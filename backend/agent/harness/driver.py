@@ -293,31 +293,8 @@ class Driver:
 
             # ── 判断是否结束 ──
             if not llm_out.tool_calls:
-                # 完成前强制校验：若存在未修复的语法错误，注入并强制再迭代
-                syntax_errors = ctx.metadata.get("syntax_errors") or []
-                if syntax_errors:
-                    # 按文件路径去重（保留最新错误）
-                    seen_paths: dict[str, dict] = {}
-                    for e in syntax_errors:
-                        seen_paths[e["path"]] = e
-                    error_list = "\n".join(
-                        f"  - {e['path']}: {e['error']}" for e in seen_paths.values()
-                    )
-                    # 修复：使用 "user" 角色而非 "system"，避免添加到消息末尾时触发 400 错误
-                    ctx.messages.append({
-                        "role": "user",
-                        "content": (
-                            f"[验证门] 任务尚未通过验证，以下文件存在语法错误：\n{error_list}\n"
-                            f"请先修复上述语法错误，确保所有文件可运行后再结束任务。"
-                        ),
-                    })
-                    # 不清空 syntax_errors：仅在对应文件被重新编辑并通过验证后由 SyntaxVerifier 移除
-                    # 跳过 ACTING/OBSERVING 状态转移，直接进入下一轮 THINKING
-                    await ctx.transition(State.THINKING, event="verification_gate")
-                    continue
-                else:
-                    await ctx.transition(State.COMPLETED, event="done")
-                    break
+                await ctx.transition(State.COMPLETED, event="done")
+                break
 
             # ── ACT: 执行工具 + OBSERVE → THINK ──
             async for ev in self._execute_tool_calls(llm_out, ctx, harness, telemetry, iteration):
@@ -518,6 +495,15 @@ class Driver:
                 tc, ctx,
                 auto_rollback=ctx.config.auto_rollback_on_tool_failure,
             )
+            # 可见终端模式：工具要求把命令交付到可见终端（前端 PTY/SSH）而非
+            # headless 执行。发出 tool_deliver 事件挂起等待前端回传结果，
+            # 跳过正常 post_tool_call / tool_call_result / 消息追加路径。
+            if getattr(result, "pending_delivery", None):
+                async for ev in self._emit_and_await_visible(
+                    ctx, harness, telemetry, result, tc, iteration,
+                ):
+                    yield ev
+                continue
             ctx.tool_calls_log[-1]["success"] = result.success
             # C-review M7：命令执行成功（审批已放行）→ 移出「等待审批」集合，
             # 同命令后续重发恢复正常循环检测
@@ -617,6 +603,134 @@ class Driver:
             payload={"state": "thinking"},
         )
 
+    async def _emit_and_await_visible(
+        self,
+        ctx: RunContext,
+        harness: "Harness",
+        telemetry: TelemetryBus,
+        result: ToolResult,
+        tc: ToolCall,
+        iteration: int,
+    ) -> AsyncIterator[TraceEvent]:
+        """可见终端模式：发出 tool_deliver 事件并挂起等待前端回传结果。
+
+        流程：
+        1. 发出 TraceEvent(kind="tool_deliver")，通知前端把 command 写入真实 PTY/SSH 会话。
+        2. 经 PendingDeliveries.wait() 挂起，等待前端 POST /api/agent/tool-result 恢复。
+        3. 挂起用 try/finally 包裹：外层 CancelledError（用户中止 SSE → run 被取消）
+           或超时都会清理注册表中的待交付项，避免泄漏。
+        4. 恢复后按 超时/被拒/成功 构建 result_text，发 tool_call_result 事件结束本调用。
+        """
+        import asyncio
+        from agent.pending_delivery import PendingDeliveries
+
+        pd = result.pending_delivery
+        tool_id = pd["tool_id"]
+        command = pd.get("command", "")
+
+        # 1. tool_deliver 事件
+        deliver_ev = TraceEvent(
+            kind="tool_deliver",
+            source="saddle",
+            run_id=ctx.run_id,
+            iteration=iteration,
+            payload={
+                "tool_id": tool_id,
+                "command": command,
+                "session_id": pd.get("session_id", ""),
+                "requires_confirm": pd.get("requires_confirm", False),
+            },
+        )
+        await telemetry.emit(deliver_ev)
+        yield deliver_ev
+
+        try:
+            timeout = PendingDeliveries.timeout_of(tool_id)
+            try:
+                await asyncio.wait_for(PendingDeliveries.wait(tool_id), timeout=timeout)
+            except asyncio.TimeoutError:
+                result_text = (
+                    f"等待可见终端执行超时（或会话已结束），命令 {command} 未能确认完成；"
+                    "请手动检查终端。"
+                )
+                ev = await self._finish_visible(
+                    ctx, harness, telemetry, result, tc, iteration,
+                    result_text=result_text, success=False,
+                )
+                yield ev
+                return
+
+            reg = PendingDeliveries.get(tool_id)
+            if reg is None:
+                # 等待被唤醒但注册项已被清理（异常/并发中止）→ 视为未确认
+                result_text = (
+                    f"可见终端交付已结束，命令 {command} 未能确认完成；请手动检查终端。"
+                )
+                ev = await self._finish_visible(
+                    ctx, harness, telemetry, result, tc, iteration,
+                    result_text=result_text, success=False,
+                )
+                yield ev
+                return
+
+            if reg.rejected:
+                result_text = f"[用户拒绝执行] {command}"
+                ev = await self._finish_visible(
+                    ctx, harness, telemetry, result, tc, iteration,
+                    result_text=result_text, success=False,
+                )
+                yield ev
+                return
+
+            # 成功
+            result_text = f"[已写入可见终端] {command}\n{reg.output}"
+            if reg.exit_code is not None:
+                result_text += f"\n[exit_code={reg.exit_code}]"
+            ev = await self._finish_visible(
+                ctx, harness, telemetry, result, tc, iteration,
+                result_text=result_text, success=reg.success,
+            )
+            yield ev
+        finally:
+            # 无论成功/超时/异常/外部取消（CancelledError），都清理注册项防泄漏
+            PendingDeliveries.remove(tool_id)
+
+    async def _finish_visible(
+        self,
+        ctx: RunContext,
+        harness: "Harness",
+        telemetry: TelemetryBus,
+        result: ToolResult,
+        tc: ToolCall,
+        iteration: int,
+        result_text: str,
+        success: bool,
+    ) -> TraceEvent:
+        """可见终端恢复后收尾：更新日志、追加消息历史、pop span、发 tool_call_result。"""
+        ctx.tool_calls_log[-1]["success"] = success
+        # 追加到消息历史，透传 priority 供 compress_messages 读取（与正常路径一致）
+        ctx.messages.append(
+            harness.bridle.build_tool_result_message(tc.id, result_text, priority=result.priority)
+        )
+        # H13 修复 A3：pop span_id（与 tool_call_start 的 push 配对）
+        if ctx.span_stack:
+            ctx.span_stack.pop()
+        ev = TraceEvent(
+            kind="tool_call_result",
+            source="saddle",
+            run_id=ctx.run_id,
+            iteration=iteration,
+            payload={
+                "tool": tc.name,
+                "result": result_text,
+                "success": success,
+                "duration_ms": result.duration_ms,
+                "tool_call_id": tc.id,
+            },
+        )
+        await telemetry.emit(ev)
+        return ev
+
     def _filter_tools_by_intention(
         self,
         tools_schema: list[dict[str, Any]],
@@ -689,39 +803,8 @@ class Driver:
             logger.info("Agent 失败，回滚 %d 个文件操作", len(ctx.undo_stack))
             await harness.stirrups.undo_all(ctx)
         
-        # 成功完成时清理磁盘备份
-        if final_state == State.COMPLETED:
-            try:
-                from agent.harness.saddle import cleanup_run_backups
-                cleanup_run_backups(ctx.run_id)
-            except Exception as e:
-                logger.warning("清理备份失败: %s", e)
-
         # 成本快照
         cost_snapshot = harness.cost_tracker.snapshot(iterations=iterations).to_dict() if harness.cost_tracker else {}
-
-        # 文件变更摘要
-        file_changes_summary: dict[str, Any] = {}
-        try:
-            from agent.file_changes import get_file_changes_summary
-            file_changes_summary = get_file_changes_summary(ctx.run_id)
-        except Exception:
-            pass
-
-        # 文件变更验证 footer：检测失败的文件变更工具调用，防止 over-claiming
-        verifier_footer = _build_file_mutation_footer(ctx)
-        if verifier_footer:
-            # 先发 content 事件，让 footer 流入内容流（前端自动追加显示）
-            footer_event = TraceEvent(
-                kind="content",
-                source="driver",
-                run_id=ctx.run_id,
-                iteration=iterations,
-                payload={"content": verifier_footer},
-            )
-            await telemetry.emit(footer_event)
-            yield footer_event
-            full_content += verifier_footer
 
         done_event = TraceEvent(
             kind="done",
@@ -736,43 +819,17 @@ class Driver:
                 "state": final_state.value,
                 "state_history": ctx.state_history,
                 "cost": cost_snapshot,
-                "file_changes": file_changes_summary,
-                "verifier_footer": verifier_footer or None,
             },
         )
         await telemetry.emit(done_event)
         yield done_event
 
 
-# 会修改文件系统的工具名（用于 file-mutation verifier footer 检测）
+# 会修改文件系统的工具名（用于 run 摘要 mutated 统计；ssh 模式无本地文件工具，当前不会命中）
 _FILE_MUTATION_TOOLS = frozenset({
     "write_file", "patch_file", "edit_file", "create_file",
     "delete_file", "move_file", "rename_file",
 })
-
-
-def _build_file_mutation_footer(ctx: RunContext) -> str:
-    """
-    构建文件变更验证 footer
-
-    扫描本次运行中失败的文件变更工具调用，生成 advisory 文本。
-    防止模型 over-claiming：声称已修改文件但实际工具返回失败。
-    """
-    failed: list[str] = []
-    for entry in ctx.tool_calls_log:
-        if entry.get("tool") in _FILE_MUTATION_TOOLS and entry.get("success") is False:
-            args = entry.get("args") or {}
-            path = args.get("path") or args.get("file_path") or args.get("target") or "<unknown>"
-            failed.append(f"  - {entry['tool']}({path})")
-
-    if not failed:
-        return ""
-
-    return (
-        "\n\n---\n[Verification] 以下文件变更可能未生效（工具返回失败）：\n"
-        + "\n".join(failed)
-        + "\n请手动检查上述文件。"
-    )
 
 
 def _build_run_summary(ctx: RunContext) -> str:

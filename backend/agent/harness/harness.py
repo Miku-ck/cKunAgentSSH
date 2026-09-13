@@ -167,12 +167,14 @@ class Harness:
         workspace_path: str = "",
         ssh_session_id: Optional[str] = None,
         environment: str = "test",
+        enable_visible_terminal: bool = False,
         system_prompt: str = "",
         history: Optional[list[dict[str, str]]] = None,
         memories: Optional[list[str]] = None,
         config: Optional[AgentConfig] = None,
         run_id: Optional[str] = None,
         skill_ids: Optional[list[str]] = None,
+        auto_skill_match: bool = True,
     ) -> AsyncIterator[TraceEvent]:
         """
         主入口 — yield TraceEvent
@@ -206,7 +208,7 @@ class Harness:
             self.telemetry.subscribe(_log_subscriber)
             self._log_subscriber_registered = True
 
-        # 用实际 run 配置重新初始化 reins（保证 DynamicBudgetRein/SyntaxVerifier 的参数正确）
+        # 用实际 run 配置重新初始化 reins（保证 DynamicBudgetRein 的参数正确）
         # create_default_reins 用 run 的 config 而非 Harness 构造时的默认 config
         # 传入 saddle：PermissionGate 从 ToolRegistry 读取 ToolMeta（单一数据源）
         actual_config = config or AgentConfig()
@@ -224,11 +226,13 @@ class Harness:
             workspace_path=workspace_path,
             ssh_session_id=ssh_session_id,
             environment=environment,
+            visible_terminal=enable_visible_terminal,
             system_prompt=system_prompt,
             history=history or [],
             memories=memories or [],
             config=config or AgentConfig(),
             skill_ids=skill_ids or [],
+            auto_skill_match=auto_skill_match,
         )
         # 如果调用方指定 run_id，覆盖自动生成的
         if run_id:

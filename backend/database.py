@@ -291,30 +291,11 @@ def init_db(db_path: str) -> None:
             CREATE INDEX IF NOT EXISTS ix_tool_calls_run
                 ON tool_calls(agent_run_id);
 
-            -- Agent 文件变更记录（供 IDE 模式审查面板跨进程恢复）
-            CREATE TABLE IF NOT EXISTS agent_file_changes (
-                id              TEXT PRIMARY KEY,
-                agent_run_id    TEXT NOT NULL,
-                file_path       TEXT NOT NULL,
-                abs_path        TEXT NOT NULL,
-                operation       TEXT NOT NULL,           -- create / modify / delete
-                added_lines     INTEGER DEFAULT 0,
-                removed_lines   INTEGER DEFAULT 0,
-                before_size     INTEGER DEFAULT 0,
-                after_size      INTEGER DEFAULT 0,
-                accepted_at     TEXT,                    -- 用户点击"保留"时写入
-                created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-                FOREIGN KEY (agent_run_id) REFERENCES agent_runs(id) ON DELETE CASCADE
-            );
-
-            CREATE INDEX IF NOT EXISTS ix_agent_file_changes_run
-                ON agent_file_changes(agent_run_id);
-
             -- Agent 三层记忆（episodic=情景总结, semantic=知识事实+embedding）
             CREATE TABLE IF NOT EXISTS agent_memories (
                 id              TEXT PRIMARY KEY,
                 type            TEXT NOT NULL,           -- episodic / semantic
-                mode            TEXT NOT NULL,           -- work / ide / ssh
+                mode            TEXT NOT NULL,           -- ssh（运维模式）
                 content         TEXT NOT NULL,
                 source_conv_id  TEXT,
                 agent_run_id    TEXT,
@@ -537,17 +518,6 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
             if col not in cols:
                 conn.execute(f"ALTER TABLE models_config ADD COLUMN {col} {col_def}")
                 cols.add(col)
-
-    # ── agent_file_changes 内容列迁移（C-review C3：before/after 落库供 undo 兜底）──
-    cursor = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='agent_file_changes'"
-    )
-    if cursor.fetchone():
-        cursor = conn.execute("PRAGMA table_info(agent_file_changes)")
-        afc_cols = {row[1] for row in cursor.fetchall()}
-        for col in ("before_content", "after_content"):
-            if col not in afc_cols:
-                conn.execute(f"ALTER TABLE agent_file_changes ADD COLUMN {col} TEXT")
 
 
 def _fix_model_name_and_id(conn: sqlite3.Connection) -> None:
@@ -1815,91 +1785,6 @@ def get_tool_calls(agent_run_id: str) -> list[dict]:
             (agent_run_id,),
         ).fetchall()
         return [dict(r) for r in rows]
-    finally:
-        conn.close()
-
-
-# ── Agent 文件变更 CRUD ──
-
-
-def save_agent_file_changes(agent_run_id: str, changes: list[dict]) -> None:
-    """持久化一次 Agent 运行的文件变更记录（覆盖式写入，保证幂等）"""
-    conn = _get_conn()
-    try:
-        conn.execute(
-            "DELETE FROM agent_file_changes WHERE agent_run_id = ?",
-            (agent_run_id,),
-        )
-        for c in changes:
-            # C-review C3：before/after_content 一并落库（list[str] 行 → "\n" 拼接）。
-            # /undo 在磁盘备份缺失时（completed 保留期外、进程重启后）依赖此兜底恢复。
-            # 注意：内容在 record_file_write 阶段已截断到 2000 行（内存保护），
-            # 超大文件经此路径恢复的是截断内容。
-            before_lines = c.get("before_content") or []
-            after_lines = c.get("after_content") or []
-            conn.execute(
-                "INSERT INTO agent_file_changes "
-                "(id, agent_run_id, file_path, abs_path, operation, "
-                " added_lines, removed_lines, before_size, after_size, created_at, "
-                " before_content, after_content) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    _new_id(),
-                    agent_run_id,
-                    c.get("file_path", ""),
-                    c.get("abs_path", ""),
-                    c.get("operation", "modify"),
-                    c.get("added_lines", 0) or 0,
-                    c.get("removed_lines", 0) or 0,
-                    c.get("before_size", 0) or 0,
-                    c.get("after_size", 0) or 0,
-                    c.get("created_at") or _now(),
-                    "\n".join(before_lines) if before_lines else None,
-                    "\n".join(after_lines) if after_lines else None,
-                ),
-            )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def get_agent_file_changes(agent_run_id: str) -> list[dict]:
-    """获取某次 Agent 运行的文件变更记录（按路径排序）"""
-    conn = _get_conn()
-    try:
-        rows = conn.execute(
-            "SELECT * FROM agent_file_changes "
-            "WHERE agent_run_id = ? AND accepted_at IS NULL "
-            "ORDER BY file_path",
-            (agent_run_id,),
-        ).fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        conn.close()
-
-
-def accept_agent_file_changes(agent_run_id: str) -> None:
-    """用户确认保留文件变更，标记 accepted_at"""
-    conn = _get_conn()
-    try:
-        conn.execute(
-            "UPDATE agent_file_changes SET accepted_at = ? WHERE agent_run_id = ? AND accepted_at IS NULL",
-            (_now(), agent_run_id),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def delete_agent_file_changes(agent_run_id: str) -> None:
-    """删除某次 Agent 运行的文件变更记录"""
-    conn = _get_conn()
-    try:
-        conn.execute(
-            "DELETE FROM agent_file_changes WHERE agent_run_id = ?",
-            (agent_run_id,),
-        )
-        conn.commit()
     finally:
         conn.close()
 

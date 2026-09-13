@@ -13,7 +13,7 @@ MetaReflection — Agent 事后复盘 + 策略评价
   5. 成本: 单次运行 USD 成本是否过高？（H12 新增，供 EvolutionEngine 多维演化）
 
 事后洞察（H12 新增）:
-  - 工具调用冲突检测：write_file 后又 delete_file 同一文件、patch 后又 write 同一文件
+  - 工具调用冲突检测：先做后撤销的浪费模式（如先创建后删除同一对象）
   - 状态转移异常检测：非法状态跳转（如 COMPLETED → ACTING、FAILED → COMPLETED）
 
 反思不调 LLM，纯规则评估，零成本。
@@ -268,7 +268,7 @@ class MetaReflection:
         if efficiency < 0.5:
             suggestions.append("考虑拆分任务为更小子任务，或增加 max_iterations")
         if robustness < 0.7:
-            suggestions.append("工具调用前应先验证参数，必要时先调用 read_file 确认状态")
+            suggestions.append("工具调用前应先验证参数，必要时先执行只读命令（ls/cat 等）确认状态")
         if safety < 1.0:
             suggestions.append("避免直接调用高风险工具，先使用低风险工具收集信息")
         if trace.final_state == "max_reached":
@@ -278,7 +278,7 @@ class MetaReflection:
         if cost < 0.5:
             suggestions.append(
                 f"成本偏高（${trace.cost_usd:.3f}），建议减少冗余工具调用、"
-                f"避免反复读取大文件、合并相邻的 patch_file 操作"
+                f"避免反复读取大文件、合并相邻的变更操作"
             )
 
         # 若全部评分都很高，给正向建议
@@ -289,15 +289,9 @@ class MetaReflection:
 
     # ── H12 新增：工具调用冲突检测 ──
 
-    # 写后删 / patch 后写 等冲突组合（前者工具, 后者工具）
-    _CONFLICT_PATTERNS: list[tuple[str, str]] = [
-        ("write_file", "delete_file"),
-        ("write_file", "move_file"),
-        ("patch_file", "write_file"),     # patch 后又整体覆盖，patch 工作浪费
-        ("patch_file", "delete_file"),
-        ("move_file", "delete_file"),     # 移动后又删除，移动浪费
-        ("create_file", "delete_file"),   # 创建后立即删除
-    ]
+    # 工具调用冲突组合（前者工具, 后者工具）— ssh 模式工具集（shell_exec 等）
+    # 无本地文件工具，暂无可检测的冲突模式
+    _CONFLICT_PATTERNS: list[tuple[str, str]] = []
 
     def _detect_tool_conflicts(self, tool_calls: list[dict]) -> list[str]:
         """检测事后工具调用冲突（浪费工作模式）

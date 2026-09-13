@@ -30,6 +30,7 @@ from agent.consciousness_tick import get_global_tick
 from agent.reflection import MetaReflection, RunTrace
 from agent.evolution import EvolutionEngine
 from agent.cost_tracker import CostTracker
+from agent.pending_delivery import PendingDeliveries
 from prompts import _current_time_str
 from safe_tokens import safe_max_tokens
 # Harness 框架（P8：切换到 Harness）
@@ -166,25 +167,12 @@ def _build_agent_system_prompt(
         )
     else:
         # 工具使用效率指引：减少无意义重复读取和循环调用
-        # C-review M14：按模式选择话术 — ssh 模式无本地文件工具（M14 移出），
-        # 不能引导 LLM 使用不存在的 read_file
-        try:
-            from agent.tools.builtin import get_all_tool_classes
-            _mode_tool_names = {cls.name for cls in get_all_tool_classes(req.mode)}
-        except Exception:
-            _mode_tool_names = set()
-        if "read_file" in _mode_tool_names:
-            parts.append(
-                "工具使用效率：读取文件后请基于返回内容直接推理和修改，避免在短时间内多次读取同一文件。"
-                "如需查看大文件的不同位置，请优先使用 read_file 的 start_line/end_line 参数读取相关片段，"
-                "而不是重新读取整个文件。"
-            )
-        else:
-            parts.append(
-                "工具使用效率：通过 shell_exec 获取文件内容（cat/head/tail 等）后，请基于返回内容直接"
-                "推理和修改，避免在短时间内重复输出同一文件内容。查看大文件的不同位置时，优先用 "
-                "sed -n 'X,Yp'、head -n、tail -n 等指定范围读取相关片段，而不是反复 cat 整个文件。"
-            )
+        # ssh 模式无本地文件工具 — 所有文件操作必须经 shell_exec 在远程执行
+        parts.append(
+            "工具使用效率：通过 shell_exec 获取文件内容（cat/head/tail 等）后，请基于返回内容直接"
+            "推理和修改，避免在短时间内重复输出同一文件内容。查看大文件的不同位置时，优先用 "
+            "sed -n 'X,Yp'、head -n、tail -n 等指定范围读取相关片段，而不是反复 cat 整个文件。"
+        )
         # 任务拆分指引：鼓励 Agent 把大任务拆成可独立验证的子任务
         parts.append(
             "任务拆分：面对复杂任务（涉及多文件修改、多步骤验证、跨模块重构等），请先在首轮输出一个简短的"
@@ -266,11 +254,17 @@ class AgentRunRequest(BaseModel):
     ssh_session_id: Optional[str] = None
     # 目标环境标记（test/prod）— 驱动生产环境高风险命令的审计与审批强化
     environment: Literal["test", "prod"] = "test"
+    # 可见终端模式：True 时 shell_exec 命令交付到可见终端（前端 PTY/SSH）而非 headless 执行
+    visible_terminal: bool = False
     enable_thinking: bool = False
     enable_tools: bool = True
     # E 修复：max_iterations 边界校验（1-500），防 LLM/恶意请求传 0 或天文数字
     max_iterations: int = Field(100, ge=1, le=500)
     skill_ids: list[str] = Field(default_factory=list)
+    # 是否启用触发词自动技能匹配（前端"自动技能匹配"开关，默认开启）
+    auto_skill_match: bool = True
+    # 历史上下文条数（前端"上下文窗口"设置，1-100）
+    context_window: int = Field(20, ge=1, le=100)
     # 意图识别 + 思考预算控制（默认开启）
     # 关闭时降级为旧行为：无 thinking 预算限制、无规划阶段、无引导语注入
     enable_intention_guide: bool = True
@@ -403,8 +397,8 @@ async def agent_run(req: AgentRunRequest, request: Request):
                 req.mode, len(original_skill_ids), len(req.skill_ids),
             )
 
-    # 获取历史消息
-    history = await asyncio.to_thread(db.get_recent_messages, req.conversation_id, limit=20)
+    # 获取历史消息（条数来自前端"上下文窗口"设置）
+    history = await asyncio.to_thread(db.get_recent_messages, req.conversation_id, limit=req.context_window)
 
     # ── 意图预识别：用于决定是否跳过记忆检索、是否禁用工具 schema ──
     # 对话型任务（问候/身份询问/能力询问）不需要记忆、不需要工具
@@ -514,7 +508,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
         api_key=model_cfg["api_key"],
     )
     # 工具注册表（按模式创建；enable_tools=False 时用空注册表）
-    # 对话型任务强制禁用工具 schema：用户问"你是什么模型"时不应看到 read_file/write_file 等工具
+    # 对话型任务强制禁用工具 schema：用户问"你是什么模型"时不应看到 shell_exec/web_search 等工具
     # 否则 LLM 会被工具 schema 引导去调用工具，产生无关内容
     effective_enable_tools = req.enable_tools and not is_conversation_task
     tool_registry = create_registry_for_mode(req.mode) if effective_enable_tools else ToolRegistry()
@@ -614,12 +608,14 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     workspace_path=_agent_workspace(),
                     ssh_session_id=req.ssh_session_id,
                     environment=req.environment,
+                    enable_visible_terminal=req.visible_terminal,
                     system_prompt=final_system_prompt,
                     history=history,
                     memories=memory_contents,
                     config=harness_config,
                     run_id=run_id,
                     skill_ids=req.skill_ids,
+                    auto_skill_match=req.auto_skill_match,
                 ):
                     # M2 修复：检测客户端断连后立即停止 producer，避免空转浪费算力
                     if await request.is_disconnected():
@@ -735,9 +731,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
                         )
                         # H14 修复：构造 AgentTraceSnapshot（无论是否有正文都构造）
                         # 原实现只在 total_content 非空时保存消息，导致运行失败且无正文输出时
-                        # 文件变更记录丢失，用户完全看不到 Agent 修改了什么
-                        file_changes_summary = event.get("file_changes") or {}
-                        has_file_changes = (file_changes_summary.get("files_changed") or 0) > 0
+                        # 执行过程记录丢失，用户完全看不到 Agent 做了什么
                         agent_trace_snapshot = {
                             # E 修复：保留原始 final_state（max_reached 等终态不再被
                             # 归一成 "completed"，前端按 currentState/status 自行展示）
@@ -748,7 +742,6 @@ async def agent_run(req: AgentRunRequest, request: Request):
                             "toolCalls": run_trace_tool_calls,
                             "reasoning": total_reasoning or "",
                             "lastRunId": run_id,
-                            "fileChanges": file_changes_summary,
                             "costInfo": {
                                 "total_tokens": cost_data.get("total_tokens", 0),
                                 "prompt_tokens": cost_data.get("prompt_tokens", 0),
@@ -760,19 +753,9 @@ async def agent_run(req: AgentRunRequest, request: Request):
                             "errorMessage": None,
                         }
 
-                        # 存储最终消息：有正文 或 有文件变更 时都需要保存
-                        # 无正文但有变更时，生成一段摘要作为 content，避免消息为空
                         content_to_save = total_content
-                        if not content_to_save and has_file_changes:
-                            changes = file_changes_summary.get("changes", [])
-                            lines = ["Agent 运行未产生正文输出，但已修改以下文件："]
-                            for c in changes:
-                                op = c.get("operation", "modify")
-                                op_cn = {"create": "新建", "modify": "修改", "delete": "删除"}.get(op, op)
-                                lines.append(f"- [{op_cn}] {c.get('file_path', c.get('abs_path', ''))}")
-                            content_to_save = "\n".join(lines)
 
-                        if content_to_save or has_file_changes:
+                        if content_to_save:
                             await asyncio.to_thread(
                                 db.add_message,
                                 conversation_id=req.conversation_id,
@@ -889,8 +872,6 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     except Exception:
                         pass
 
-                # file_changes 已由 Driver._emit_done 注入，无需重复
-
                 yield sse_event(event)
 
             yield "data: [DONE]\n\n"
@@ -907,22 +888,6 @@ async def agent_run(req: AgentRunRequest, request: Request):
         finally:
             heartbeat_task.cancel()
             engine_task.cancel()
-            try:
-                from agent.file_changes import persist_file_changes
-                # 审查 M-13：persist 内含同步 DB 写入
-                await asyncio.to_thread(persist_file_changes, run_id)
-            except Exception:
-                pass
-            try:
-                from agent.file_changes import clear_file_changes
-                clear_file_changes(run_id)
-            except Exception:
-                pass
-            # C-review C3 修复：run 结束**不再**清理磁盘备份（无论最终状态）。
-            # 原 B-8 在 completed 时清理，但 /undo 的主场景恰是"run 正常完成后
-            # 点撤销"——清理后 modify/delete 无备份可恢复（DB 不落 before 内容
-            # 时数据永久丢失）。现在备份由 /keep、/undo 显式清理，
-            # 另有 main.py 启动时 7 天 TTL 兜底（cleanup_stale_backups）。
             # 清理 TelemetryBus 事件缓存（防止内存泄漏）
             try:
                 harness.telemetry.clear()
@@ -972,6 +937,32 @@ async def agent_run(req: AgentRunRequest, request: Request):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+class ToolResultRequest(BaseModel):
+    """可见终端执行结果回传 — 前端在把命令写入可见终端并捕获输出后调用"""
+    tool_id: str
+    output: str = ""
+    success: bool = False
+    exit_code: Optional[int] = None
+
+
+@router.post("/agent/tool-result")
+async def agent_tool_result(req: ToolResultRequest):
+    """回传可见终端命令执行结果，恢复挂起的 Agent 循环。
+
+    - 200：成功恢复对应的待交付命令
+    - 404：tool_id 未知（可能已超时清除/会话结束）
+    """
+    ok = PendingDeliveries.resume(
+        req.tool_id,
+        output=req.output,
+        success=req.success,
+        exit_code=req.exit_code,
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"tool_id 未知: {req.tool_id}")
+    return {"status": "ok", "tool_id": req.tool_id}
 
 
 @router.get("/agent/runs")
@@ -1291,10 +1282,6 @@ def get_agent_run_trace(run_id: str):
     model_used = run.get("model_used") or ""
     in_price, out_price = get_model_pricing(model_used)
 
-    # 文件变更清单（C 部分新增）
-    from agent.file_changes import get_file_changes_summary
-    file_changes = get_file_changes_summary(run_id)
-
     return {
         "run": {
             "id": run.get("id"),
@@ -1335,190 +1322,8 @@ def get_agent_run_trace(run_id: str):
             }
             for tc in tool_calls
         ],
-        "file_changes": file_changes,
     }
 
-
-@router.get("/agent/runs/{run_id}/diff")
-def get_run_file_diff(run_id: str, abs_path: str = Query(..., description="文件绝对路径")):
-    """
-    获取某次 Agent 运行中某文件的具体 unified diff
-
-    前端 ChangeReviewCard 点击文件时调用此接口，展示具体改动内容。
-    """
-    from agent.file_changes import get_file_diff
-    diff = get_file_diff(run_id, abs_path)
-    if not diff:
-        return {"ok": False, "message": "未找到该文件的变更记录（可能已被清理）"}
-    return {"ok": True, "diff": diff}
-
-
-def _scan_run_backups(run_id: str) -> dict[str, str]:
-    """扫描某次运行的磁盘备份，返回 abs_path -> 第一代备份路径 映射
-
-    C-review M13：同文件可能存在多代备份（g1、g2、...，同 run 多次写入），
-    undo 必须恢复到 run 前原始内容 → 取最小代次（旧版无代次备份视为第一代）。
-    """
-    from agent.harness.saddle import _get_backup_root
-    import os
-    import re
-    backup_root = _get_backup_root()
-    run_dir = os.path.join(backup_root, run_id)
-    if not os.path.isdir(run_dir):
-        return {}
-    # abs_path -> (代次, backup_path)；无代次（旧版）记 0 = 最早
-    best: dict[str, tuple[int, str]] = {}
-    for name in os.listdir(run_dir):
-        if name.endswith(".meta"):
-            continue
-        meta_path = os.path.join(run_dir, name + ".meta")
-        if not os.path.exists(meta_path):
-            continue
-        try:
-            with open(meta_path, "r", encoding="utf-8") as f:
-                abs_path = f.read().strip()
-            if not abs_path:
-                continue
-            m = re.search(r"_g(\d+)$", name)
-            gen = int(m.group(1)) if m else 0
-            cur = best.get(abs_path)
-            if cur is None or gen < cur[0]:
-                best[abs_path] = (gen, os.path.join(run_dir, name))
-        except Exception:
-            continue
-    return {p: bp for p, (_, bp) in best.items()}
-
-
-def _write_text_file(abs_path: str, content: str) -> None:
-    """C-review C3：把 DB 落库的变更前内容写回磁盘（undo 兜底路径）"""
-    import os
-    d = os.path.dirname(abs_path) or "."
-    os.makedirs(d, exist_ok=True)
-    with open(abs_path, "w", encoding="utf-8") as f:
-        f.write(content)
-
-
-@router.post("/agent/runs/{run_id}/undo")
-def undo_agent_run_changes(run_id: str):
-    """
-    撤销某次 Agent 运行的所有文件变更
-
-    - 根据 agent_file_changes 表判断 create/modify/delete
-    - 优先使用磁盘备份恢复原始内容
-    - 清理该 run 的磁盘备份并删除 DB 记录
-    """
-    run = db.get_agent_run(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="Agent 运行不存在")
-
-    from agent.file_changes import load_file_changes, clear_file_changes
-    changes = load_file_changes(run_id) or db.get_agent_file_changes(run_id)
-    if not changes:
-        return {"undone": False, "reason": "无文件变更记录", "restored": [], "deleted": []}
-
-    backups = _scan_run_backups(run_id)
-    restored: list[str] = []
-    deleted: list[str] = []
-    failed: list[str] = []
-
-    import os
-    import shutil
-
-    for c in changes:
-        abs_path = c.get("abs_path") or c.get("file_path", "")
-        operation = c.get("operation", "modify")
-        if not abs_path:
-            continue
-        try:
-            if operation == "create":
-                # 新建的文件 → 删除
-                if os.path.exists(abs_path):
-                    os.remove(abs_path)
-                deleted.append(abs_path)
-            elif operation == "delete":
-                # 删除的文件 → 从磁盘备份恢复；备份缺失时回退 DB before_content
-                backup = backups.get(abs_path)
-                if backup and os.path.exists(backup):
-                    os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
-                    shutil.copy2(backup, abs_path)
-                    restored.append(abs_path)
-                elif c.get("before_content") is not None:
-                    # C-review C3 兜底：磁盘备份不可用（进程重启/TTL 清理后）
-                    # 用落库的变更前内容恢复（>2000 行文件为截断内容）
-                    _write_text_file(abs_path, c["before_content"])
-                    restored.append(abs_path)
-                elif os.path.exists(abs_path):
-                    # 备份丢失但文件仍在，跳过
-                    restored.append(abs_path)
-                else:
-                    failed.append(abs_path)
-            else:
-                # modify → 从磁盘备份恢复；备份缺失时回退 DB before_content
-                backup = backups.get(abs_path)
-                if backup and os.path.exists(backup):
-                    os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
-                    shutil.copy2(backup, abs_path)
-                    restored.append(abs_path)
-                elif c.get("before_content") is not None and os.path.exists(abs_path):
-                    # C-review C3 兜底：用落库的变更前内容覆盖回原内容
-                    _write_text_file(abs_path, c["before_content"])
-                    restored.append(abs_path)
-                else:
-                    # 备份与 DB 内容均不可用，无法回滚到修改前，记录为失败
-                    failed.append(abs_path)
-        except Exception as e:
-            logger.warning("撤销文件变更失败 %s: %s", abs_path, e)
-            failed.append(abs_path)
-
-    # 清理备份和 DB 记录
-    try:
-        from agent.harness.saddle import cleanup_run_backups
-        cleanup_run_backups(run_id)
-    except Exception:
-        pass
-    try:
-        db.delete_agent_file_changes(run_id)
-        clear_file_changes(run_id)
-    except Exception:
-        pass
-
-    return {
-        "undone": len(failed) == 0,
-        "restored": restored,
-        "deleted": deleted,
-        "failed": failed,
-    }
-
-
-@router.post("/agent/runs/{run_id}/keep")
-def keep_agent_run_changes(run_id: str):
-    """
-    保留某次 Agent 运行的所有文件变更
-
-    - 标记 DB 记录为已接受
-    - 清理该 run 的磁盘备份
-    """
-    run = db.get_agent_run(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="Agent 运行不存在")
-
-    try:
-        db.accept_agent_file_changes(run_id)
-    except Exception as e:
-        logger.warning("标记文件变更为已接受失败: %s", e)
-
-    try:
-        from agent.harness.saddle import cleanup_run_backups
-        cleanup_run_backups(run_id)
-    except Exception:
-        pass
-    try:
-        from agent.file_changes import clear_file_changes
-        clear_file_changes(run_id)
-    except Exception:
-        pass
-
-    return {"kept": True, "run_id": run_id}
 
 
 @router.get("/agent/stats")
@@ -1527,7 +1332,7 @@ def get_agent_cost_stats(mode: Optional[str] = None, days: int = Query(7, ge=1, 
     获取 Agent 成本/耗时统计聚合
 
     Args:
-        mode: 模式过滤（work/ide/ssh，None=所有）
+        mode: 模式过滤（ssh，None=所有）
         days: 最近 N 天（默认 7）
     """
     stats = db.get_agent_run_stats(mode=mode, days=days)

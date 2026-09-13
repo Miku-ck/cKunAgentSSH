@@ -51,7 +51,9 @@ class _FakeTracker:
 @pytest.fixture(autouse=True)
 def _no_audit_writes(monkeypatch):
     """熔断落审计走真实 DB — 测试中屏蔽（只验证决策行为）"""
-    monkeypatch.setattr(reins_mod, "append_record", lambda **kw: None)
+    async def _noop_audit(**kw):
+        return None
+    monkeypatch.setattr(reins_mod, "append_record_async", _noop_audit)
 
 
 def _ctx(config: AgentConfig, tracker: Optional[_FakeTracker]) -> RunContext:

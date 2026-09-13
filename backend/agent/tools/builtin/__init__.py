@@ -1,23 +1,14 @@
 """
-内置工具包 — 按模式注册工具
+内置工具包 — 运维 Agent 工具集
 
-工具清单（C-review M14 起，本地文件工具仅本地模式 work/ide 可用，
-ssh 模式的文件操作一律走 shell_exec 远程执行 — 本地文件工具在 ssh 模式
-会操作后端主机而非远程服务器）:
-  - read_file      (work/ide)  读取文件内容
-  - write_file     (work/ide)  写入文件内容
-  - patch_file     (work/ide)  精确字符串替换编辑文件
-  - delete_file    (work/ide)  删除文件
-  - move_file      (work/ide)  移动/重命名文件
-  - list_dir       (work/ide)  列出目录内容
-  - grep           (work/ide)  内容搜索（正则）
-  - glob           (work/ide)  递归文件查找
-  - shell_exec     (ssh)  执行 shell 命令（ssh 模式远程执行 / 本地模式本地执行）
-  - web_search     (ssh)  联网搜索
-  - web_fetch      (ssh)  抓取网页内容
-  - todo_write     (ssh)  管理任务列表
-  - load_skill     (ssh)  按需加载技能完整指令
-  - spawn_subagent (ssh)  启动子 Agent 处理独立子任务
+工具清单（ssh 运维模式；文件操作一律经 shell_exec 远程执行，
+本地文件工具已随 work/ide 模式移除）:
+  - shell_exec     执行 shell 命令（ssh 模式远程执行）
+  - web_search     联网搜索
+  - web_fetch      抓取网页内容
+  - todo_write     管理任务列表
+  - load_skill     按需加载技能完整指令
+  - spawn_subagent 启动子 Agent 处理独立子任务
 """
 import logging
 
@@ -26,34 +17,61 @@ from agent.tools import ToolRegistry, BaseTool
 logger = logging.getLogger(__name__)
 
 # 统一的工具类清单（消除 register_builtin_tools 与 get_all_tool_classes 的重复维护）
-from agent.tools.builtin.file_ops import (
-    ReadFileTool, WriteFileTool, ListDirTool,
-    DeleteFileTool, MoveFileTool,
-)
-from agent.tools.builtin.patch_file import PatchFileTool
-from agent.tools.builtin.grep_tool import GrepTool
-from agent.tools.builtin.glob_tool import GlobTool
 from agent.tools.builtin.shell_exec import ShellExecTool
 from agent.tools.builtin.web_tools import WebSearchTool, WebFetchTool
 from agent.tools.builtin.todo_write import TodoWriteTool
 from agent.tools.builtin.load_skill import LoadSkillTool
 from agent.tools.builtin.spawn_subagent import SpawnSubagentTool
+# 运维智能工具（只读观测 / 日志 / 服务生命周期 / 计划定时）
+from agent.tools.builtin.ops_obs import (
+    SysOverviewTool,
+    ProcessInspectTool,
+    NetworkProbeTool,
+    LogReadTool,
+)
+from agent.tools.builtin.ops_service import ServiceManageTool
+from agent.tools.builtin.ops_schedule import ScheduleOpTool
+# 运维文件操作（远程/本地双模式）、图片查看、后台任务
+from agent.tools.builtin.ops_file import (
+    FileReadTool,
+    FileWriteTool,
+    FileEditTool,
+    FileGlobTool,
+    FileGrepTool,
+)
+from agent.tools.builtin.ops_image import ReadImageTool
+from agent.tools.builtin.ops_job import (
+    JobRunTool,
+    JobListTool,
+    JobOutputTool,
+    JobKillTool,
+)
 
 _ALL_TOOL_CLASSES: list[type[BaseTool]] = [
-    ReadFileTool,
-    WriteFileTool,
-    PatchFileTool,
-    DeleteFileTool,
-    MoveFileTool,
-    ListDirTool,
-    GrepTool,
-    GlobTool,
     ShellExecTool,
     WebSearchTool,
     WebFetchTool,
     TodoWriteTool,
     LoadSkillTool,
     SpawnSubagentTool,
+    # 运维智能
+    SysOverviewTool,
+    ProcessInspectTool,
+    NetworkProbeTool,
+    LogReadTool,
+    ServiceManageTool,
+    ScheduleOpTool,
+    # 运维文件操作 / 图片查看 / 后台任务
+    FileReadTool,
+    FileWriteTool,
+    FileEditTool,
+    FileGlobTool,
+    FileGrepTool,
+    ReadImageTool,
+    JobRunTool,
+    JobListTool,
+    JobOutputTool,
+    JobKillTool,
 ]
 
 

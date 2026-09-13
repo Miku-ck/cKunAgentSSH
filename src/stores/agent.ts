@@ -8,9 +8,10 @@
  */
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { streamAgentRun, type AgentSSEEvent, type AgentCostSnapshot, type AgentFileChangesSummary, type AgentTraceSnapshot, type AgentIntentionInfo } from '@/api/client'
+import { streamAgentRun, type AgentSSEEvent, type AgentCostSnapshot, type AgentTraceSnapshot, type AgentIntentionInfo } from '@/api/client'
 import { StreamingThinkScrubber } from '@/utils/think-scrubber'
 import { useToastStore } from './toast'
+import { useAgentDeliver } from '@/composables/useAgentDeliver'
 
 export interface ToolCallEntry {
   id: string
@@ -21,6 +22,10 @@ export interface ToolCallEntry {
   timestamp: number
   /** 所属迭代号（用于按批次分组渲染） */
   iteration?: number
+  /** 可见终端执行模式：待交付命令的达成状态 */
+  deliveryStatus?: 'pending_deliver' | 'capturing' | 'done' | 'rejected' | 'aborted'
+  /** 可见终端执行模式：后端下发的 tool_id */
+  deliveryToolId?: string
 }
 
 export interface HumanHelpRequest {
@@ -71,8 +76,6 @@ export const useAgentStore = defineStore('agent', () => {
   const _contentScrubber = new StreamingThinkScrubber()
   const _reasoningScrubber = new StreamingThinkScrubber()
   const lastRunId = ref<string>('')
-  // C3: 文件变更摘要（done 事件携带，供 ChatMessages 徽标 + TraceViewer 展示）
-  const fileChanges = ref<AgentFileChangesSummary | null>(null)
   // C3 修复：记录当前运行模式，避免 keep-alive 下跨组件 watch 重复 push
   const currentMode = ref<'ssh' | ''>('')
   // 审查 M-19：记录本次运行发起时的【源会话 ID】。
@@ -93,6 +96,9 @@ export const useAgentStore = defineStore('agent', () => {
   let abortFn: (() => void) | null = null
   // 记录运行开始时间，用于 snapshot() 计算 duration
   let runStartTime: number = 0
+
+  // 可见终端执行模式：交付编排器（模块级单例，跨组件共享）
+  const agentDeliver = useAgentDeliver()
 
   // ── Computed ──
   const isRunning = computed(() => status.value === 'running')
@@ -170,6 +176,10 @@ export const useAgentStore = defineStore('agent', () => {
     maxIterations?: number
     enableDynamicBudget?: boolean
     skillIds?: string[]
+    autoSkillMatch?: boolean
+    contextWindow?: number
+    visibleTerminal?: boolean
+    sessionType?: 'local' | 'remote'
   }) {
     // C10 修复：并发保护 — 如果有正在运行的流，先中止它，避免多个流并行导致状态混乱
     if (abortFn) {
@@ -231,6 +241,8 @@ export const useAgentStore = defineStore('agent', () => {
     aborted.value = true
     // B11 修复：中止即 run 结束 — 清理权限请求状态，防止残留过期授权按钮
     permissionRequests.value = []
+    // 可见终端执行模式：中止所有在途交付捕获，避免 dangling POST
+    agentDeliver.abortRun()
   }
 
   /** 生成当前运行状态的快照（不重置状态），用于固化到 ChatMessage.agentTrace */
@@ -254,7 +266,6 @@ export const useAgentStore = defineStore('agent', () => {
       })),
       reasoning: reasoning.value,
       lastRunId: lastRunId.value,
-      fileChanges: fileChanges.value || undefined,
       costInfo: costInfo.value || undefined,
       errorMessage: errorMessage.value || undefined,
     }
@@ -278,7 +289,6 @@ export const useAgentStore = defineStore('agent', () => {
     permissionRequests.value = []
     costInfo.value = null
     lastRunId.value = ''
-    fileChanges.value = null
     currentMode.value = ''
     currentConversationId.value = ''
     currentToolCall.value = null
@@ -303,6 +313,30 @@ export const useAgentStore = defineStore('agent', () => {
     if (req) {
       req.resolved = true
       req.granting = false
+    }
+  }
+
+  // ── 可见终端执行模式：待交付命令 ──
+  /** 有待确认执行的交付（UI 渲染"命令待确认"条） */
+  const pendingDeliveries = computed(() =>
+    agentDeliver.deliveries.value.filter(d => d.status === 'pending_confirm'),
+  )
+
+  /** 用户确认：把命令写入可见终端 */
+  function confirmDeliver(toolId: string) {
+    agentDeliver.confirmDeliver(toolId)
+    const tc = toolCalls.value.find(t => t.deliveryToolId === toolId)
+    if (tc) tc.deliveryStatus = 'capturing'
+  }
+
+  /** 用户拒绝：不回写命令，直接回传失败结果 */
+  async function rejectDeliver(toolId: string) {
+    await agentDeliver.rejectDeliver(toolId)
+    const tc = toolCalls.value.find(t => t.deliveryToolId === toolId)
+    if (tc) {
+      tc.deliveryStatus = 'rejected'
+      tc.result = '[用户拒绝执行]'
+      tc.success = false
     }
   }
 
@@ -366,6 +400,24 @@ export const useAgentStore = defineStore('agent', () => {
           }
         }
         break
+
+      case 'tool_deliver': {
+        // 可见终端执行模式：后端等待前端把命令写入当前可见终端并回传结果
+        if (!event.tool_id) break
+        // 关联到 shell_exec 的 tool_call 条目，标记为待交付
+        const pendingTc = [...toolCalls.value].reverse().find(t => t.tool === 'shell_exec' && !t.result)
+        if (pendingTc) {
+          pendingTc.deliveryStatus = 'pending_deliver'
+          pendingTc.deliveryToolId = event.tool_id
+        }
+        agentDeliver.handleDeliver({
+          tool_id: event.tool_id,
+          command: event.command || '',
+          session_id: event.session_id || '',
+          requires_confirm: !!event.requires_confirm,
+        })
+        break
+      }
 
       case 'warning':
         if (event.message) {
@@ -474,7 +526,6 @@ export const useAgentStore = defineStore('agent', () => {
         if (event.cost) costInfo.value = event.cost
         if (event.run_id) lastRunId.value = event.run_id
         // C3: 捕获文件变更摘要
-        if (event.file_changes) fileChanges.value = event.file_changes
         // B11 修复：run 结束清理权限请求状态，防止面板里残留过期授权按钮
         permissionRequests.value = []
         // H14 修复：支持 human_help 终止态，保留 currentState 供 UI 显示"需要人工介入"
@@ -505,7 +556,6 @@ export const useAgentStore = defineStore('agent', () => {
     permissionRequests,
     costInfo,
     lastRunId,
-    fileChanges,
     currentMode,
     currentConversationId,
     currentToolCall,
@@ -518,6 +568,8 @@ export const useAgentStore = defineStore('agent', () => {
     hasPermissionRequest,
     stateColor,
     currentActionText,
+    pendingDeliveries,
+    deliveries: agentDeliver.deliveries,
     // actions
     runAgent,
     abort,
@@ -525,5 +577,7 @@ export const useAgentStore = defineStore('agent', () => {
     dismissHelp,
     dismissPermission,
     resolvePermission,
+    confirmDeliver,
+    rejectDeliver,
   }
 })

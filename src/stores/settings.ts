@@ -29,11 +29,9 @@ export type SettingCategory =
 export interface AppSettings {
   chat: {
     sendShortcut: 'enter' | 'shiftEnter'
-    streaming: boolean
     thinkingExpanded: boolean
     autoScroll: boolean
     messageFontSize: 12 | 13 | 14 | 15
-    codeTheme: string
     markdown: boolean
     contextWindow: number
     autoSkillMatch: boolean
@@ -50,7 +48,6 @@ export interface AppSettings {
   }
   memory: {
     enabled: boolean
-    userMdPath: string
     strategy: 'auto' | 'manual'
     maxItems: number
   }
@@ -103,11 +100,9 @@ export const useSettingsStore = defineStore('settings', () => {
   const settings = ref<AppSettings>({
     chat: {
       sendShortcut: saved?.chat?.sendShortcut ?? 'enter',
-      streaming: saved?.chat?.streaming ?? true,
       thinkingExpanded: saved?.chat?.thinkingExpanded ?? true,
       autoScroll: saved?.chat?.autoScroll ?? true,
       messageFontSize: saved?.chat?.messageFontSize ?? 13,
-      codeTheme: saved?.chat?.codeTheme ?? 'github-dark',
       markdown: saved?.chat?.markdown ?? true,
       contextWindow: saved?.chat?.contextWindow ?? 20,
       autoSkillMatch: saved?.chat?.autoSkillMatch ?? true,
@@ -124,7 +119,6 @@ export const useSettingsStore = defineStore('settings', () => {
     },
     memory: {
       enabled: saved?.memory?.enabled ?? true,
-      userMdPath: saved?.memory?.userMdPath ?? '',
       strategy: saved?.memory?.strategy ?? 'auto',
       maxItems: saved?.memory?.maxItems ?? 100,
     },

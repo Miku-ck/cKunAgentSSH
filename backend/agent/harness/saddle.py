@@ -12,133 +12,16 @@ Saddle — 马鞍
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 import shlex
 import time
-import shutil
 import logging
-import hashlib
-import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from .contracts import NoOpUndo, RunContext, ToolCall, ToolResult, UndoAction
 
 logger = logging.getLogger(__name__)
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 磁盘备份目录 — Undo 包同时写入磁盘，进程崩溃后可恢复
-# ──────────────────────────────────────────────────────────────────────────────
-
-_BACKUP_DIR_ENV = "CKUN_AGENT_BACKUP_DIR"
-_DEFAULT_BACKUP_DIRNAME = ".agent-backup"
-
-
-def _get_backup_root() -> str:
-    """获取备份根目录（环境变量优先，否则用系统临时目录）"""
-    env_dir = os.environ.get(_BACKUP_DIR_ENV)
-    if env_dir:
-        try:
-            os.makedirs(env_dir, exist_ok=True)
-            return env_dir
-        except OSError:
-            pass
-    # 回退到系统临时目录下的 ckun-agent-backup
-    fallback = os.path.join(tempfile.gettempdir(), "ckun-agent-backup")
-    try:
-        os.makedirs(fallback, exist_ok=True)
-    except OSError:
-        pass
-    return fallback
-
-
-def _backup_file(abs_path: str, run_id: str) -> Optional[str]:
-    """
-    将文件备份到磁盘，返回备份文件路径。
-    - 文件不存在时返回 None（表示"原本不存在"）
-    - 备份文件命名: <backup_root>/<run_id>/<sha256(abs_path)>_<basename>_g<N>
-      C-review M13：带代次序号 — 同 run 内同文件二次写入时，旧实现 copy2 同名
-      目标静默覆盖第一次备份，undo 恢复到"中间态"而非 run 前原始内容。
-      现在每次写前各存一代（g1 = 第一次写前内容 = run 前原始），undo 取第一代。
-    - 进程崩溃后可通过扫描 <backup_root>/<run_id>/ 恢复
-    """
-    if not os.path.exists(abs_path):
-        return None
-    try:
-        backup_root = _get_backup_root()
-        run_dir = os.path.join(backup_root, run_id)
-        os.makedirs(run_dir, exist_ok=True)
-        # 用 sha256(abs_path) 避免路径冲突
-        path_hash = hashlib.sha256(abs_path.encode("utf-8")).hexdigest()[:16]
-        base_name = f"{path_hash}_{os.path.basename(abs_path)}"
-        # C-review M13：扫描该文件已有代次（旧版无代次备份视为 g1）
-        gen = 0
-        for name in os.listdir(run_dir):
-            if name == base_name:
-                gen = max(gen, 1)
-                continue
-            m = re.fullmatch(re.escape(base_name) + r"_g(\d+)", name)
-            if m:
-                gen = max(gen, int(m.group(1)))
-        backup_name = f"{base_name}_g{gen + 1}"
-        backup_path = os.path.join(run_dir, backup_name)
-        shutil.copy2(abs_path, backup_path)
-        # 同时写入元数据（原路径）
-        meta_path = backup_path + ".meta"
-        with open(meta_path, "w", encoding="utf-8") as f:
-            f.write(abs_path)
-        return backup_path
-    except Exception as e:
-        logger.warning("磁盘备份失败 %s: %s", abs_path, e)
-        return None
-
-
-def _restore_from_backup(backup_path: str, abs_path: str) -> bool:
-    """从备份恢复文件到 abs_path"""
-    try:
-        os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
-        shutil.copy2(backup_path, abs_path)
-        return True
-    except Exception as e:
-        logger.warning("从备份恢复失败 %s -> %s: %s", backup_path, abs_path, e)
-        return False
-
-
-def cleanup_run_backups(run_id: str) -> None:
-    """清理某 run 的所有磁盘备份（keep/undo 后调用）"""
-    try:
-        backup_root = _get_backup_root()
-        run_dir = os.path.join(backup_root, run_id)
-        if os.path.isdir(run_dir):
-            shutil.rmtree(run_dir, ignore_errors=True)
-    except Exception as e:
-        logger.warning("清理备份失败 %s: %s", run_id, e)
-
-
-def cleanup_stale_backups(max_age_days: int = 7) -> int:
-    """C-review C3：按目录 mtime 清理过期备份，返回清理数量。
-
-    run 结束后不再自动清理备份（保留供 /undo 使用，见 routes/agent.py），
-    为防止备份目录无限膨胀，启动时按时间兜底清理。
-    """
-    import time
-    removed = 0
-    try:
-        backup_root = _get_backup_root()
-        cutoff = time.time() - max_age_days * 86400
-        for entry in os.listdir(backup_root):
-            path = os.path.join(backup_root, entry)
-            try:
-                if os.path.isdir(path) and os.path.getmtime(path) < cutoff:
-                    shutil.rmtree(path, ignore_errors=True)
-                    removed += 1
-            except OSError:
-                continue
-    except Exception as e:
-        logger.warning("清理过期备份失败: %s", e)
-    return removed
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -163,43 +46,9 @@ class Sandbox:
     原实现自带 _IRREVERSIBLE_PATTERNS 字符串匹配，与 safety.py 的正则+NFKC 规范化脱同步
     """
 
-    @staticmethod
-    def _check_path_safe(path: str, workspace: str) -> SandboxCheck:
-        """统一路径安全检查，与 file_ops._resolve_path_safe 使用同一套逻辑"""
-        if not workspace:
-            # C-review NIT：空 workspace fail-closed — 原实现返回 ok=True（fail-open），
-            # 安全底线组件在缺失边界时等同无边界
-            return SandboxCheck(ok=False, reason="未配置 workspace，无法校验路径边界")
-        try:
-            full_path = os.path.realpath(os.path.join(workspace, path) if not os.path.isabs(path) else path)
-            real_workspace = os.path.realpath(workspace)
-            common = os.path.commonpath([full_path, real_workspace])
-            if common != real_workspace:
-                return SandboxCheck(ok=False, reason=f"路径越界: {path}")
-            return SandboxCheck(ok=True)
-        except Exception as e:
-            return SandboxCheck(ok=False, reason=f"路径解析失败: {e}")
-
     def validate(self, call: ToolCall, ctx: RunContext) -> SandboxCheck:
         tool = call.name
         args = call.args
-
-        # 路径检查 — 使用与 file_ops._resolve_path_safe 一致的 realpath + commonpath
-        if tool in ("write_file", "read_file", "list_dir", "patch_file", "delete_file", "move_file"):
-            path = args.get("file_path") or args.get("path") or args.get("source", "")
-            if not path:
-                return SandboxCheck(ok=True)
-            check = self._check_path_safe(path, ctx.workspace_path)
-            if not check.ok:
-                return check
-            # move_file 还要检查 destination
-            if tool == "move_file":
-                dst = args.get("destination", "")
-                if dst:
-                    dst_check = self._check_path_safe(dst, ctx.workspace_path)
-                    if not dst_check.ok:
-                        return dst_check
-            return check
 
         # shell 命令检查 — H13 修复 B4：复用 safety.classify_command（与 FilesystemGuard 同源）
         if tool in ("shell_exec",):
@@ -221,86 +70,6 @@ class Sandbox:
 # ──────────────────────────────────────────────────────────────────────────────
 # Undo 实现
 # ──────────────────────────────────────────────────────────────────────────────
-
-@dataclass
-class FileWriteUndo:
-    """文件写入撤销 — 保存原内容，reverse 时恢复
-
-    同时维护内存备份和磁盘备份：
-    - 内存备份：进程正常时快速恢复
-    - 磁盘备份：进程崩溃/断电后可手动恢复
-    """
-    abs_path: str
-    original_content: Optional[str]  # None 表示文件原本不存在
-    existed: bool
-    backup_path: Optional[str] = None  # 磁盘备份路径
-    run_id: str = ""
-
-    async def apply_reverse(self) -> None:
-        try:
-            if not self.existed:
-                # 原本不存在 → 删除
-                if os.path.exists(self.abs_path):
-                    os.remove(self.abs_path)
-            else:
-                # 原本存在 → 恢复原内容（优先用磁盘备份，确保字节一致）
-                if self.backup_path and os.path.exists(self.backup_path):
-                    _restore_from_backup(self.backup_path, self.abs_path)
-                else:
-                    # 回退到内存备份
-                    with open(self.abs_path, "w", encoding="utf-8") as f:
-                        f.write(self.original_content or "")
-        except Exception as e:
-            logger.warning("FileWriteUndo 失败 %s: %s", self.abs_path, e)
-
-
-@dataclass
-class FileDeleteUndo:
-    """文件删除撤销 — 保存被删除文件的内容，reverse 时恢复"""
-    abs_path: str
-    original_content: str
-    backup_path: Optional[str] = None
-
-    async def apply_reverse(self) -> None:
-        try:
-            # 优先用磁盘备份恢复（保留原始字节和权限）
-            if self.backup_path and os.path.exists(self.backup_path):
-                _restore_from_backup(self.backup_path, self.abs_path)
-            else:
-                os.makedirs(os.path.dirname(self.abs_path) or ".", exist_ok=True)
-                with open(self.abs_path, "w", encoding="utf-8") as f:
-                    f.write(self.original_content)
-        except Exception as e:
-            logger.warning("FileDeleteUndo 失败 %s: %s", self.abs_path, e)
-
-
-@dataclass
-class FileMoveUndo:
-    """文件移动撤销 — 保存源路径和目标路径，reverse 时反向移动
-
-    注意：move_file 工具内部已经记录了 source 的原始内容，
-    这里只需把目标路径的文件移回源路径即可。
-    若 dest 原本就存在（被覆盖），还需从 dest_backup_path 恢复 dest 原内容。
-    """
-    source_path: str
-    dest_path: str
-    source_existed: bool
-    dest_existed_before: bool  # 目标路径原本是否存在（被覆盖）
-    source_backup_path: Optional[str] = None
-    dest_backup_path: Optional[str] = None  # 若 dest 原本存在，备份其原内容
-
-    async def apply_reverse(self) -> None:
-        try:
-            # 1. 如果目标路径现在存在（move 成功了），先把它移回源路径
-            if os.path.exists(self.dest_path):
-                os.makedirs(os.path.dirname(self.source_path) or ".", exist_ok=True)
-                shutil.move(self.dest_path, self.source_path)
-            # 2. 如果目标路径原本就存在（被覆盖了），从备份恢复目标原内容
-            if self.dest_existed_before and self.dest_backup_path and os.path.exists(self.dest_backup_path):
-                _restore_from_backup(self.dest_backup_path, self.dest_path)
-        except Exception as e:
-            logger.warning("FileMoveUndo 失败 %s -> %s: %s", self.dest_path, self.source_path, e)
-
 
 @dataclass
 class ShellUndo:
@@ -362,123 +131,10 @@ class UndoBuilder:
     """根据工具调用构建 Undo 包"""
 
     @staticmethod
-    def _resolve_abs(path: str, workspace: str) -> str:
-        return os.path.abspath(os.path.join(workspace, path) if not os.path.isabs(path) else path)
-
-    @staticmethod
-    def _read_file_safe(abs_path: str) -> Optional[str]:
-        """安全读取文件内容，不存在返回 None"""
-        if not os.path.exists(abs_path):
-            return None
-        try:
-            with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
-                return f.read()
-        except Exception as e:
-            logger.warning("读取文件失败 %s: %s", abs_path, e)
-            return None
-
-    @staticmethod
     async def build(call: ToolCall, ctx: RunContext) -> UndoAction:
         tool = call.name
         args = call.args
         run_id = ctx.run_id
-
-        if tool == "write_file":
-            path = args.get("file_path") or args.get("path", "")
-            if not path or not ctx.workspace_path:
-                return NoOpUndo(reason="no_path")
-            try:
-                abs_path = UndoBuilder._resolve_abs(path, ctx.workspace_path)
-                if os.path.exists(abs_path):
-                    content = UndoBuilder._read_file_safe(abs_path) or ""
-                    backup_path = _backup_file(abs_path, run_id)
-                    return FileWriteUndo(
-                        abs_path=abs_path,
-                        original_content=content,
-                        existed=True,
-                        backup_path=backup_path,
-                        run_id=run_id,
-                    )
-                else:
-                    return FileWriteUndo(
-                        abs_path=abs_path,
-                        original_content=None,
-                        existed=False,
-                        backup_path=None,
-                        run_id=run_id,
-                    )
-            except Exception as e:
-                logger.warning("构建 FileWriteUndo 失败: %s", e)
-                return NoOpUndo(reason=f"build_failed: {e}")
-
-        if tool == "patch_file":
-            path = args.get("path", "")
-            if not path or not ctx.workspace_path:
-                return NoOpUndo(reason="no_path")
-            try:
-                abs_path = UndoBuilder._resolve_abs(path, ctx.workspace_path)
-                if not os.path.exists(abs_path):
-                    # 文件不存在，工具会返回错误，NoOp 即可
-                    return NoOpUndo(reason="file_not_exist")
-                content = UndoBuilder._read_file_safe(abs_path) or ""
-                backup_path = _backup_file(abs_path, run_id)
-                # patch_file 的 Undo 等同于 write_file：恢复整个文件原内容
-                return FileWriteUndo(
-                    abs_path=abs_path,
-                    original_content=content,
-                    existed=True,
-                    backup_path=backup_path,
-                    run_id=run_id,
-                )
-            except Exception as e:
-                logger.warning("构建 PatchFileUndo 失败: %s", e)
-                return NoOpUndo(reason=f"build_failed: {e}")
-
-        if tool == "delete_file":
-            path = args.get("path", "")
-            if not path or not ctx.workspace_path:
-                return NoOpUndo(reason="no_path")
-            try:
-                abs_path = UndoBuilder._resolve_abs(path, ctx.workspace_path)
-                if not os.path.exists(abs_path):
-                    return NoOpUndo(reason="file_not_exist")
-                content = UndoBuilder._read_file_safe(abs_path) or ""
-                backup_path = _backup_file(abs_path, run_id)
-                return FileDeleteUndo(
-                    abs_path=abs_path,
-                    original_content=content,
-                    backup_path=backup_path,
-                )
-            except Exception as e:
-                logger.warning("构建 FileDeleteUndo 失败: %s", e)
-                return NoOpUndo(reason=f"build_failed: {e}")
-
-        if tool == "move_file":
-            source = args.get("source", "")
-            dest = args.get("destination", "")
-            if not source or not dest or not ctx.workspace_path:
-                return NoOpUndo(reason="no_path")
-            try:
-                src_abs = UndoBuilder._resolve_abs(source, ctx.workspace_path)
-                dst_abs = UndoBuilder._resolve_abs(dest, ctx.workspace_path)
-                if not os.path.exists(src_abs):
-                    return NoOpUndo(reason="source_not_exist")
-                # 备份源文件（reverse 时用于恢复到 source）
-                src_backup = _backup_file(src_abs, run_id)
-                dest_existed = os.path.exists(dst_abs)
-                # 如果目标已存在，也备份目标（reverse 时恢复 dest 原内容）
-                dst_backup = _backup_file(dst_abs, run_id) if dest_existed else None
-                return FileMoveUndo(
-                    source_path=src_abs,
-                    dest_path=dst_abs,
-                    source_existed=True,
-                    dest_existed_before=dest_existed,
-                    source_backup_path=src_backup,
-                    dest_backup_path=dst_backup,
-                )
-            except Exception as e:
-                logger.warning("构建 FileMoveUndo 失败: %s", e)
-                return NoOpUndo(reason=f"build_failed: {e}")
 
         if tool == "shell_exec":
             cmd = args.get("command") or args.get("shell", "")
@@ -560,7 +216,7 @@ class Saddle:
 
     职责：
     1. 沙箱检查（Sandbox.validate）
-    2. 构建 Undo 包（UndoBuilder.build）+ 磁盘备份
+    2. 构建 Undo 包（UndoBuilder.build，shell 命令反向推导）
     3. 调用 ToolRegistry.execute（自动从 RunContext 构造 ToolContext）
     4. 工具失败时可选自动回滚
     """
@@ -596,10 +252,10 @@ class Saddle:
         # 注意：仅对"抛异常"的瞬时错误生效，工具返回 ToolResult(success=False) 不触发重试
         from .stirrups import retry_with_backoff, ErrorClassifier
 
-        # 审查 MINOR 修复：仅对幂等工具重试。原实现对所有工具（含 write_file /
-        # shell_exec / delete_file / move_file / spawn_subagent）统一重试 —
+        # 审查 MINOR 修复：仅对幂等工具重试。原实现对所有工具
+        # （shell_exec / spawn_subagent 等）统一重试 —
         # 非幂等工具在"副作用已发生但结果丢失"的瞬时错误下重跑，会造成
-        # 命令双执行、文件写两次、子 Agent 双启动。非幂等工具只执行一次。
+        # 命令双执行、子 Agent 双启动。非幂等工具只执行一次。
         tool_instance = self.registry.get(call.name) if hasattr(self.registry, "get") else None
         idempotent = bool(tool_instance is not None
                           and getattr(tool_instance.meta, "idempotent", False))
@@ -636,11 +292,14 @@ class Saddle:
                 error=raw_result.error or "",
                 duration_ms=0,
                 priority=priority,
+                pending_delivery=raw_result.pending_delivery,
             )
         result.duration_ms = int((time.time() - start) * 1000)
 
         # 4. 失败时自动回滚
-        if not result.success and auto_rollback:
+        # 可见终端模式：pending_delivery 非空表示命令尚未执行（等待前端写入可见终端），
+        # 不应触发回滚（无副作用可撤销），交由 Driver 挂起等待。
+        if not result.success and not result.pending_delivery and auto_rollback:
             try:
                 await undo.apply_reverse()
                 ctx.undo_stack.pop()  # 已执行，从栈中移除
@@ -658,6 +317,9 @@ class Saddle:
             conversation_id=ctx.conversation_id,
             agent_run_id=ctx.run_id,
             ssh_session_id=ctx.ssh_session_id,
+            # 可见终端模式 + 目标环境 — 透传给 shell_exec 决定是否交付到可见终端
+            visible_terminal=getattr(ctx, "visible_terminal", False),
+            environment=getattr(ctx, "environment", "test"),
             # 审查修复（P2 E6）：透传 cost_tracker — 子 Agent 通过
             # spawn_subagent 调用时需要上报 token 用量。
             # cost_tracker 在 harness.run() 中被写入 ctx.metadata["cost_tracker"]

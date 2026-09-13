@@ -19,7 +19,7 @@ class BridgeErrorCode(str, enum.Enum):
     PORT_CLOSED = "BRIDGE_PORT_CLOSED"          # 端口无人监听（孤儿进程 / 主进程未启动）
     TOKEN_REJECTED = "BRIDGE_TOKEN_REJECTED"    # 401/403：主进程重启后 token 已更新
     HTTP_ERROR = "BRIDGE_HTTP_ERROR"            # 其他 HTTP 非 2xx
-    TIMEOUT = "BRIDGE_TIMEOUT"                  # HTTP 层超时
+    TIMEOUT = "BRIDGE_TIMEOUT"                  # 连接/读取超时（端口假监听、主进程繁忙）
     CONNECT_ERROR = "BRIDGE_CONNECT_ERROR"      # 底层 TCP 连接失败
     UNKNOWN = "BRIDGE_UNKNOWN"
 
@@ -73,7 +73,11 @@ _BRIDGE_ERROR_SUGGESTIONS: dict[BridgeErrorCode, str] = {
     BridgeErrorCode.PORT_CLOSED: "Electron 主进程桥接端口无响应。可能主进程未启动，或端口/token 已过期。请完整重启应用，使主进程与后端一起重启。",
     BridgeErrorCode.TOKEN_REJECTED: "Electron 桥接 token 校验失败（主进程已重启但后端仍用旧 token）。请完整重启应用。",
     BridgeErrorCode.HTTP_ERROR: "Electron 桥接服务返回错误。请查看主进程日志（终端输出）了解详情。",
-    BridgeErrorCode.TIMEOUT: "Electron 桥接请求超时。主进程可能繁忙或无响应，请检查主进程是否正常运行。",
+    BridgeErrorCode.TIMEOUT: (
+        "Electron 桥接端口连接超时（端口可能在监听但无响应，即\"假监听\"）。"
+        "请查看 electron-bridge.log 中是否出现该端口的 REQ 记录："
+        "无 REQ 说明请求根本未到达主进程，请重启应用以重建桥接端口。"
+    ),
     BridgeErrorCode.CONNECT_ERROR: "无法连接到 Electron 主进程桥接端口。请完整重启应用。",
     BridgeErrorCode.UNKNOWN: "桥接通信异常。请查看主进程日志并尝试重启应用。",
 }
@@ -104,33 +108,60 @@ class ElectronBridge:
             f"port={self.port} base_url={self.base_url}",
         )
 
-    async def ping(self, timeout: float = 3.0) -> bool:
-        """检测 Electron bridge 服务是否可达且 token 有效。
+    def _new_client(self, timeout: float) -> httpx.AsyncClient:
+        """构造桥接专用 HTTP 客户端。
 
-        用于定时任务执行前的快速健康检查，避免带着过期端口/token 去建 SSH 会话。
-        对已知路径发一次 POST：任何 HTTP 响应（含 400/500）都证明桥服务存活
-        + token 有效；只有 ConnectError / 超时 才返回 False。
+        trust_env=False 是硬性要求，不能省：
+        桥接是纯回环（127.0.0.1）进程间通信，绝不应受 HTTP_PROXY / HTTPS_PROXY /
+        ALL_PROXY / NO_PROXY 等环境变量影响。httpx 默认 trust_env=True，若宿主
+        环境注入了代理（实测本机存在 HTTP_PROXY=http://127.0.0.1:<port> 这类值），
+        发往 127.0.0.1:30000 的请求会被交给代理转发；代理不转发回环地址或未运行时
+        表现为 ConnectTimeout —— 症状与"桥接端口不可达"几乎无法区分，极易误导排查。
+        """
+        return httpx.AsyncClient(
+            base_url=self.base_url, timeout=timeout, trust_env=False
+        )
+
+    async def probe(self, timeout: float = 3.0) -> BridgeErrorCode | None:
+        """探测桥接可达性：返回 None 表示可达，否则返回具体失败原因码。
+
+        相比旧实现（用 /ssh/exec 发空参数反推）的两点修正：
+          1. 改用专用 /ping 端点 —— 探活不再依赖 SSH 业务参数校验。旧实现靠
+             "400 响应 ⇒ 桥存活"间接判断，语义错位且与业务逻辑耦合。
+          2. 不再把所有失败一律归类为 PORT_CLOSED，而是区分超时/连接拒绝/token
+             失效 —— 之前"端口假监听导致的超时"被报成"端口关闭"，把排查方向
+             指向了错误的结论。
         """
         if not self.is_available():
-            return False
+            return BridgeErrorCode.NOT_CONFIGURED
         try:
-            async with httpx.AsyncClient(
-                base_url=self.base_url, timeout=timeout
-            ) as client:
-                await client.post(
-                    "/ssh/exec",
-                    json={"sshSessionId": "", "command": ""},
-                    headers={"X-Bridge-Token": self.token},
+            async with self._new_client(timeout) as client:
+                resp = await client.post(
+                    "/ping", headers={"X-Bridge-Token": self.token}
                 )
-                return True
-        except httpx.ConnectError:
-            return False
-        except httpx.TimeoutException:
-            logger.warning("Electron bridge 探活超时 (port=%s)", self.port)
-            return False
-        except Exception:
-            # 其他 HTTP 错误（400/500 等）说明桥服务端正常处理了请求
-            return True
+                if resp.status_code in (401, 403):
+                    return BridgeErrorCode.TOKEN_REJECTED
+                return None
+        except httpx.ConnectError as e:
+            logger.warning("Electron bridge 连接被拒绝 (port=%s): %s", self.port, e)
+            return BridgeErrorCode.PORT_CLOSED
+        except httpx.TimeoutException as e:
+            # ConnectTimeout 与 ReadTimeout 都归此处。前者意味着 TCP 握手都未完成
+            # （端口在 LISTEN 但 SYN 无应答 —— 典型"假监听"），后者意味着已连上但
+            # 主进程未回包。两者都应提示"重启应用重建桥接"，而非"端口未监听"。
+            logger.warning(
+                "Electron bridge 探活超时 (port=%s, %s): 端口无响应",
+                self.port,
+                type(e).__name__,
+            )
+            return BridgeErrorCode.TIMEOUT
+        except Exception as e:
+            logger.warning("Electron bridge 探活异常 (port=%s): %s", self.port, e)
+            return BridgeErrorCode.UNKNOWN
+
+    async def ping(self, timeout: float = 3.0) -> bool:
+        """桥接是否可达（布尔薄封装）。需要具体失败原因时请直接调用 probe()。"""
+        return await self.probe(timeout) is None
 
     async def exec_ssh_command(
         self,
@@ -192,9 +223,7 @@ class ElectronBridge:
         上层 (schedule_engine) 可按 code 区分根因并写入 run summary 给用户明确指引。
         """
         try:
-            async with httpx.AsyncClient(
-                base_url=self.base_url, timeout=http_timeout
-            ) as client:
+            async with self._new_client(http_timeout) as client:
                 resp = await client.post(
                     path,
                     json=payload,

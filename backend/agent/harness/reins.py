@@ -115,9 +115,9 @@ class Reins:
         3. 注入 decision.inject_messages 到下一轮 LLM
 
         审查修复：原实现在拦截器未拦截时直接丢弃其 events/inject_messages
-        （循环后返回空决策）→ SyntaxVerifier 语法错误修复反馈、LoopDetector
-        第一级纠偏、ConfidenceMonitor 单次纠偏、DynamicBudgetRein 的
-        budget_extended 事件全部丢失，LLM 收不到实时纠偏。现聚合未拦截
+        （循环后返回空决策）→ LoopDetector 第一级纠偏、ConfidenceMonitor
+        单次纠偏、DynamicBudgetRein 的 budget_extended 事件全部丢失，
+        LLM 收不到实时纠偏。现聚合未拦截
         决策的 events 与 inject_messages 一并返回（不拦截，仅透传反馈）。
         """
         events: list = []
@@ -163,9 +163,7 @@ class FilesystemGuard:
     """
     文件系统守卫 — 迁移自 hooks.filesystem_guard
 
-    pre_tool_call 时检查：
-    - 路径越界（workspace_path 之外）
-    - 敏感 shell 命令（rm -rf / 等）
+    pre_tool_call 时检查敏感 shell 命令（rm -rf / 等）
     """
     point: ReinPoint = field(default=ReinPoint.PRE_TOOL_CALL, init=False)
     priority: int = field(default=10, init=False)
@@ -185,22 +183,6 @@ class FilesystemGuard:
 
         tool = last.get("tool", "")
         args = last.get("args", {})
-
-        # 路径越界检查（覆盖所有文件变更工具 + 含 path 参数的只读工具 + source/destination 字段）
-        # grep/glob 含 path 参数，虽为只读但应防越界读取（与 Sandbox._check_path_safe 一致）
-        _PATH_CHECK_TOOLS = {
-            "write_file", "read_file", "list_dir", "patch_file",
-            "edit_file", "create_file", "delete_file", "move_file", "rename_file",
-            "grep", "glob",
-        }
-        if tool in _PATH_CHECK_TOOLS and ctx.workspace_path:
-            # 收集所有可能的路径参数
-            path_keys = ["file_path", "path", "source", "destination", "target"]
-            paths_to_check = [args.get(k) for k in path_keys if args.get(k)]
-            for path in paths_to_check:
-                violation = self._check_path_boundary(path, ctx.workspace_path)
-                if violation:
-                    return violation
 
         # 敏感 shell 命令检查 — 委托给 safety 模块分类
         if tool in ("shell_exec",):
@@ -403,60 +385,6 @@ class FilesystemGuard:
             # safe → 放行
 
         return ReinDecision()
-
-    def _check_path_boundary(self, path: str, workspace: str) -> Optional[ReinDecision]:
-        """路径越界检查 — 使用 realpath + commonpath 严格检查
-
-        返回 ReinDecision 表示拦截，None 表示放行。
-        失败安全：解析异常时拦截。
-        """
-        import os
-        try:
-            full_path = os.path.realpath(
-                os.path.join(workspace, path) if not os.path.isabs(path) else path
-            )
-            real_workspace = os.path.realpath(workspace)
-            try:
-                common = os.path.commonpath([full_path, real_workspace])
-            except ValueError:
-                # 不同盘符等无法比较 → 拦截
-                common = ""
-            if common != real_workspace:
-                # 修复：使用 "user" 角色而非 "system"，避免添加到消息末尾时触发 400 错误
-                return ReinDecision(
-                    intercepted=True,
-                    intercept_reason=f"路径越界: {path} 不在工作区 {workspace} 内",
-                    events=[TraceEvent(
-                        kind="warning",
-                        source="reins.filesystem_guard",
-                        run_id="",  # 由调用方补充
-                        iteration=0,
-                        payload={"message": f"已拦截路径越界操作: {path}"},
-                    )],
-                    inject_messages=[{
-                        "role": "user",
-                        "content": f"[系统拦截] 已拦截路径越界操作: {path}。请仅操作工作区 {workspace} 内的文件。",
-                    }],
-                )
-        except Exception as e:
-            # 失败安全：解析异常时拦截
-            # 修复：使用 "user" 角色而非 "system"
-            return ReinDecision(
-                intercepted=True,
-                intercept_reason=f"路径解析失败: {path} ({e})",
-                events=[TraceEvent(
-                    kind="warning",
-                    source="reins.filesystem_guard",
-                    run_id="",
-                    iteration=0,
-                    payload={"message": f"已拦截路径解析失败: {path}"},
-                )],
-                inject_messages=[{
-                    "role": "user",
-                    "content": f"[系统拦截] 路径解析失败: {path}。请使用工作区内的有效路径。",
-                }],
-            )
-        return None
 
 
 @dataclass
@@ -1216,211 +1144,6 @@ class ReflectionRein:
 
 
 @dataclass
-class SyntaxVerifier:
-    """
-    语法验证拦截器 — POST_TOOL_CALL 时对文件变更工具做语法检查
-
-    触发条件：工具调用成功 + 工具属于 _FILE_MUTATION_TOOLS + 文件类型支持检查
-    检查策略：
-    - .py → ast.parse（内存检查，无需落盘也可检查 content）
-    - .ts/.tsx/.js/.jsx/.vue → 尝试 tsc --noEmit（若环境有 tsc）
-    - .json → json.loads
-    - 其他 → 跳过
-
-    检查失败时：
-    - 不拦截工具调用（文件已写入，无法回滚语法错误）
-    - 注入错误信息到下一轮 LLM，驱动 Agent 修复
-    - 记录到 ctx.metadata['syntax_errors'] 供完成前校验
-    """
-    point: ReinPoint = field(default=ReinPoint.POST_TOOL_CALL, init=False)
-    priority: int = field(default=5, init=False)
-
-    # 文件变更工具集（与 driver._FILE_MUTATION_TOOLS 对齐）
-    # 注：delete_file 删除后无内容可检，在 check() 内早期跳过；
-    # move_file/rename_file 后目标路径为新内容，必须读磁盘验证；
-    # create_file/write_file/patch_file 同理。
-    _FILE_MUTATION_TOOLS: frozenset = field(default_factory=lambda: frozenset({
-        "write_file", "patch_file", "edit_file", "create_file",
-        "delete_file", "move_file", "rename_file",
-    }))
-
-    async def check(self, ctx: RunContext) -> ReinDecision:
-        if not ctx.tool_calls_log:
-            return ReinDecision()
-
-        last = ctx.tool_calls_log[-1]
-        tool = last.get("tool", "")
-        success = last.get("success")
-
-        # 只检查成功的文件变更工具调用
-        if tool not in self._FILE_MUTATION_TOOLS or success is not True:
-            return ReinDecision()
-
-        # delete_file 删除后无内容可检，直接跳过
-        if tool == "delete_file":
-            return ReinDecision()
-
-        args = last.get("args") or {}
-        # path 优先用目标路径（move/rename 后的真实路径），否则用源路径
-        path = (
-            args.get("destination")
-            or args.get("path")
-            or args.get("file_path")
-            or ""
-        )
-        if not path:
-            return ReinDecision()
-
-        # 获取文件内容：
-        # - patch_file: new_string 是片段，必须读磁盘完整文件检查
-        # - write_file/create_file: 用 args.content（完整文件内容）
-        # - move_file/rename_file: 无 args.content，必须读磁盘目标文件
-        # - 其他: 尝试 args.content，再回退读磁盘
-        if tool == "patch_file":
-            # patch_file 的 new_string 是替换片段，不能直接做语法检查
-            # 必须读取磁盘上的完整文件
-            if not ctx.workspace_path:
-                return ReinDecision()
-            import os
-            full_path = os.path.join(ctx.workspace_path, path) if not os.path.isabs(path) else path
-            # 审查修复：同步文件读移入线程池 — 原实现在 async check 内直接
-            # open().read()，大文件/网络盘会阻塞事件循环
-            try:
-                content = await asyncio.to_thread(
-                    _read_text_safe, full_path
-                )
-            except Exception:
-                return ReinDecision()
-        else:
-            content = args.get("content") or ""
-            if not content and ctx.workspace_path:
-                import os
-                full_path = os.path.join(ctx.workspace_path, path) if not os.path.isabs(path) else path
-                # 审查修复：同上，同步文件读移入线程池
-                try:
-                    content = await asyncio.to_thread(
-                        _read_text_safe, full_path
-                    )
-                except Exception:
-                    return ReinDecision()
-
-        if not content:
-            return ReinDecision()
-
-        # 按扩展名做语法检查
-        error_msg = await self._check_syntax(path, content)
-        if not error_msg:
-            # 验证通过：移除该文件的语法错误记录
-            errors: list = ctx.metadata.get("syntax_errors") or []
-            ctx.metadata["syntax_errors"] = [e for e in errors if e.get("path") != path]
-            return ReinDecision()
-
-        # 记录语法错误（按文件去重，更新最新错误）
-        errors: list = ctx.metadata.setdefault("syntax_errors", [])
-        # 移除该文件的旧错误，追加新错误
-        errors[:] = [e for e in errors if e.get("path") != path]
-        errors.append({"path": path, "error": error_msg, "iteration": ctx.iteration})
-
-        # 注入错误信息，驱动 Agent 修复
-        # 修复：使用 "user" 角色而非 "system"，避免添加到消息末尾时触发 400 错误
-        return ReinDecision(
-            intercepted=False,
-            inject_messages=[{
-                "role": "user",
-                "content": (
-                    f"[语法检查失败] {path} 存在语法错误：\n```\n{error_msg}\n```\n"
-                    f"请立即修复此语法错误，确保代码可运行后再继续任务。"
-                ),
-            }],
-        )
-
-    async def _check_syntax(self, path: str, content: str) -> str:
-        """按文件扩展名做语法检查，返回错误信息（空字符串表示通过）"""
-        import os
-        ext = os.path.splitext(path)[1].lower()
-
-        if ext == ".py":
-            return self._check_python(content)
-        elif ext == ".json":
-            return self._check_json(content)
-        elif ext in (".ts", ".tsx", ".js", ".jsx", ".vue", ".mjs", ".cjs"):
-            # H13 修复 B6：TS/JS 文件用 tsc --noEmit 检查
-            # .vue 文件含 SFC 结构，tsc 无法直接检查，跳过
-            if ext == ".vue":
-                return ""
-            return await self._check_tsc(path)
-        else:
-            return ""
-
-    @staticmethod
-    async def _check_tsc(path: str) -> str:
-        """用 tsc --noEmit 检查 TS/JS 文件语法（H13 修复 B6）
-
-        策略：
-        - 用 shutil.which 探测 tsc 是否可用（一次探测后缓存到类属性）
-        - 不可用 → 跳过（返回空字符串）
-        - 可用 → 在线程池中调用 tsc --noEmit <path>（asyncio.to_thread，
-          避免同步 subprocess 阻塞 event loop），捕获输出
-        - 失败 → 返回错误信息
-        - 成功 → 返回空字符串
-
-        注意：
-        - tsc 检查的是磁盘文件（不是 content 参数），调用前需确保文件已落盘
-        - 用 asyncio.to_thread 包装同步 subprocess.run，防止阻塞 event loop
-        - tsc 不可用时静默跳过，不阻塞 Agent
-        """
-        import os
-        import shutil
-        import subprocess
-
-        # 缓存 tsc 可用性（类属性，进程级缓存）
-        if not hasattr(SyntaxVerifier, "_tsc_available"):
-            SyntaxVerifier._tsc_available = shutil.which("tsc") is not None
-            if SyntaxVerifier._tsc_available:
-                logger.info("SyntaxVerifier: 检测到 tsc，TS/JS 文件将做语法检查")
-            else:
-                logger.debug("SyntaxVerifier: 未检测到 tsc，TS/JS 文件跳过语法检查")
-
-        if not SyntaxVerifier._tsc_available:
-            return ""
-
-        try:
-            result = await asyncio.to_thread(
-                subprocess.run,
-                ["tsc", "--noEmit", "--pretty", "false", path],
-                capture_output=True, text=True, timeout=10,
-            )
-            if result.returncode != 0:
-                # tsc 输出格式：path(line,col): error TSxxxx: message
-                return result.stdout or result.stderr or "tsc 检查失败"
-            return ""
-        except subprocess.TimeoutExpired:
-            return "tsc 检查超时（10s）"
-        except Exception as e:
-            # tsc 调用失败 → 静默跳过，不阻塞 Agent
-            logger.debug("tsc 检查异常 %s: %s", path, e)
-            return ""
-
-    @staticmethod
-    def _check_python(content: str) -> str:
-        try:
-            import ast
-            ast.parse(content)
-            return ""
-        except SyntaxError as e:
-            return f"SyntaxError (line {e.lineno}): {e.msg}\n{e.text or ''}"
-
-    @staticmethod
-    def _check_json(content: str) -> str:
-        try:
-            import json
-            json.loads(content)
-            return ""
-        except json.JSONDecodeError as e:
-            return f"JSONDecodeError (line {e.lineno}, col {e.colno}): {e.msg}"
-
-
-@dataclass
 class DynamicBudgetRein:
     """
     动态步数预算拦截器 — POST_ITERATION 时根据工作密度动态放宽步数上限
@@ -1658,12 +1381,16 @@ class SkillRein:
             registry = get_skill_registry()
 
             # 显式选择的技能 + 自动匹配的技能（去重）
+            # auto_skill_match=False（前端"自动技能匹配"关闭）时跳过触发词匹配，
+            # 仅注入用户显式选择的技能
             explicit_ids = set(ctx.skill_ids or [])
-            # D 修复（事件循环阻塞）：registry 内部含同步 db 查询，放线程池执行
-            auto_matched = await asyncio.to_thread(
-                registry.match_skills, ctx.task, ctx.mode, max_results=3
-            )
-            auto_ids = {s['id'] for s in auto_matched}
+            auto_ids: set[str] = set()
+            if ctx.auto_skill_match:
+                # D 修复（事件循环阻塞）：registry 内部含同步 db 查询，放线程池执行
+                auto_matched = await asyncio.to_thread(
+                    registry.match_skills, ctx.task, ctx.mode, max_results=3
+                )
+                auto_ids = {s['id'] for s in auto_matched}
 
             all_ids = list(explicit_ids | auto_ids)
             if not all_ids:
@@ -1728,10 +1455,6 @@ def create_default_reins(
         permission_gate,
         AuditLogger(),
     ]
-
-    # 语法验证（POST_TOOL_CALL）
-    if config is None or config.enable_syntax_verify:
-        interceptors.append(SyntaxVerifier())
 
     # 动态步数预算（POST_ITERATION）
     if config is None or config.enable_dynamic_budget:

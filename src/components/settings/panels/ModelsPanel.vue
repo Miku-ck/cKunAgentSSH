@@ -298,7 +298,7 @@ interface ProviderDef {
 }
 
 const PROVIDERS: ProviderDef[] = [
-  { id: 'vllm', label: 'vLLM 本地部署', baseUrl: 'http://localhost:8000/v1', isLocal: true, icon: '' },
+  { id: 'vllm', label: '自定义', baseUrl: 'http://localhost:8000/v1', isLocal: true, icon: '' },
   { id: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', isLocal: false, icon: '' },
   { id: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', isLocal: false, icon: '' },
   { id: 'qwen', label: 'Qwen', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', isLocal: false, icon: '' },

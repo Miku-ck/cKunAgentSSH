@@ -6,12 +6,23 @@ Shell 执行工具 — SSH 模式专属
 import asyncio
 from agent.tools import BaseTool, ToolResult, ToolMeta
 from agent.electron_bridge import ElectronBridge
+from agent.pending_delivery import PendingDeliveries
 
 # 大输出保护阈值（C-review NIT：单一数据源 agent.truncation_limits）
 from agent.truncation_limits import TRUNC_THRESHOLD, TRUNC_HEAD, TRUNC_TAIL
 _SHELL_OUTPUT_THRESHOLD = TRUNC_THRESHOLD
 _SHELL_OUTPUT_HEAD = TRUNC_HEAD
 _SHELL_OUTPUT_TAIL = TRUNC_TAIL
+
+
+def _compute_requires_confirm(command: str, environment: str) -> bool:
+    """计算可见终端模式下该命令是否需要用户确认。
+
+    规则：非 safe 命令（dangerous/hardline）或生产环境（prod）都需要确认。
+    """
+    from agent.harness.safety import classify_command
+    level, _reason = classify_command(command)
+    return (level != "safe") or (environment == "prod")
 
 
 class ShellExecTool(BaseTool):
@@ -39,10 +50,42 @@ class ShellExecTool(BaseTool):
     async def execute(self, context, command, timeout=30):
         # 超时上限钳制（1-120 秒）
         timeout = max(1, min(int(timeout), 120))
-        # SSH 模式：若存在 ssh_session_id 且 Electron Bridge 已配置，则远程执行
+        # 分支顺序：
+        #   1. 可见终端模式 + 存在 SSH 会话 → 交付到可见终端（不 headless 执行）
+        #   2. SSH 会话 → 原有远程执行（ElectronBridge）
+        #   3. 否则 → 原有本地子进程执行
+        visible = getattr(context, "visible_terminal", False)
+        if visible and context.ssh_session_id:
+            return self._execute_visible(context, command)
         if context.ssh_session_id:
             return await self._execute_remote(context.ssh_session_id, command, timeout)
         return await self._execute_local(context, command, timeout)
+
+    def _execute_visible(self, context, command: str) -> ToolResult:
+        """可见终端模式：登记待交付命令，返回 pending_delivery 让 Driver 挂起等待。
+
+        不在此处执行命令（headless 关闭），命令由前端写入真实 PTY/SSH 会话后，
+        经 POST /api/agent/tool-result 回传结果恢复循环。
+        """
+        environment = getattr(context, "environment", "test")
+        requires_confirm = _compute_requires_confirm(command, environment)
+        pending = PendingDeliveries.create(
+            command=command,
+            session_id=context.ssh_session_id,
+            requires_confirm=requires_confirm,
+            run_id=getattr(context, "agent_run_id", ""),
+        )
+        return ToolResult(
+            success=False,
+            output="",
+            priority="high",
+            pending_delivery={
+                "tool_id": pending.tool_id,
+                "command": command,
+                "session_id": pending.session_id,
+                "requires_confirm": requires_confirm,
+            },
+        )
 
     async def _execute_remote(
         self, ssh_session_id: str, command: str, timeout: int

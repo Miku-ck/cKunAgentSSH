@@ -1,4 +1,4 @@
-import { spawn, ChildProcess, execSync } from 'child_process'
+import { spawn, ChildProcess, execSync, execFileSync } from 'child_process'
 import { join } from 'path'
 import { app } from 'electron'
 import http from 'http'
@@ -47,67 +47,106 @@ export class BackendManager {
   }
 
   /**
+   * 解析 PowerShell 可执行文件路径。
+   *
+   * 必须优先用绝对路径：本应用经常从 PATH 被裁剪的环境启动（实测 `npm run dev`
+   * 的父 shell 连 ls / dirname 都找不到），此时 spawn 裸名 'powershell' 会直接
+   * ENOENT，孤儿检测静默失效。返回值回退为裸名，以兼容 PATH 正常的场景。
+   */
+  private static resolvePowerShell(): string {
+    const root = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows'
+    const candidates = [
+      join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+      // 32 位宿主进程访问 64 位 System32 时的别名路径
+      join(root, 'Sysnative', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+    ]
+    for (const c of candidates) {
+      try {
+        if (existsSync(c)) return c
+      } catch {
+        /* 忽略，继续尝试下一个候选 */
+      }
+    }
+    return 'powershell'
+  }
+
+  /**
+   * 判定某进程命令行是否属于本应用的后端进程。
+   *
+   * 不能只匹配 "main.py" — 用户机器上其他 Python 项目同样可能以 main.py 为入口，
+   * 误杀会破坏无关服务。要求命中本应用的启动特征之一：
+   *   1. 命令行包含本应用 backend 目录路径（覆盖 dev 与打包两种布局）
+   *   2. 命令行同时含本应用固定的启动参数组合（backendDir 位置变化时的兜底）
+   */
+  private static isOurBackendProcess(cmdline: string, backendDir: string): boolean {
+    if (!cmdline) return false
+    const norm = cmdline.replace(/\//g, '\\').toLowerCase()
+    if (!norm.includes('main.py')) return false
+
+    const dir = backendDir.replace(/\//g, '\\').toLowerCase()
+    if (dir && norm.includes(dir)) return true
+
+    // 兜底：本应用固定以 `main.py --port <n> --host 127.0.0.1` 启动
+    return norm.includes('--host 127.0.0.1') && norm.includes('--port')
+  }
+
+  /**
    * 杀掉前一次应用异常退出后遗留的孤儿 Python backend 进程。
    * 这些进程持有过期的 Electron bridge 端口/token，会导致定时任务执行时
    * bridge 连接全部失败（日志中即 "Electron bridge 连接失败 port=30000"）。
    *
-   * Windows 用 wmic 按命令行匹配 python main.py，pgrep -f 用于 POSIX 平台。
+   * Windows 用 PowerShell CIM 按命令行匹配，pgrep -f 用于 POSIX 平台。
    * 匹配不到属于正常情况（无孤儿），静默返回。
+   *
+   * @param backendDir 本应用 backend 目录，用于精确识别"自己的"后端进程
    */
-  private static killOrphanBackends(): void {
+  private static killOrphanBackends(backendDir: string): void {
     try {
       if (process.platform === 'win32') {
-        // 修复：wmic 在 Windows 11 已废弃（乱码输出 → 孤儿进程无法清理 →
-        // 端口被僵尸进程占用 → waitForReady 15s 超时 → 启动失败）。
-        // 改用 tasklist /FI 过滤 + taskkill /T /F 杀进程树。
-        let output = ''
+        // 修复：原实现用 `tasklist /FO CSV /NH` — 该输出只有 镜像名/PID/会话/内存，
+        // 不含命令行，故 `filter(l => l.includes('main.py'))` 恒为空，必然落入 wmic
+        // 回退分支；而 wmic 自 Win11 起已从系统中移除（实测报
+        // "'wmic' 不是内部或外部命令"），于是孤儿检测【从未真正生效】——
+        // 旧后端进程可长期存活，继续占用端口并持有过期 bridge 配置
+        // （实测发现 4 小时前启动的残留 python 进程）。
+        // 改用 PowerShell CIM 查询 Win32_Process.CommandLine：这是不依赖 wmic
+        // 且能稳定拿到命令行的途径。execFileSync 绕过 shell，避免引号被二次解析。
+        let stdout: string
         try {
-          output = execSync(
-            `tasklist /FI "IMAGENAME eq python.exe" /FO CSV /NH`,
-            { encoding: 'utf-8', timeout: 5000 }
+          stdout = execFileSync(
+            BackendManager.resolvePowerShell(),
+            [
+              '-NoProfile',
+              '-NonInteractive',
+              '-Command',
+              "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -like '*main.py*' } | ForEach-Object { $_.ProcessId.ToString() + '|' + $_.CommandLine }",
+            ],
+            { encoding: 'utf-8', timeout: 10000, windowsHide: true },
           )
-        } catch {
-          // tasklist 也找不到 → 无 Python 进程，静默返回
-          console.log('[BackendManager] No Python processes found')
+        } catch (e) {
+          // 记录真实原因。原实现静默 catch 成一句"CIM query unavailable"，
+          // 无法区分"没有 PowerShell / 没有 WMI / 权限不足 / 命令语法错"——
+          // 实测就是因为 PATH 被裁剪、spawn 裸名 'powershell' 报 ENOENT，
+          // 而这一点在日志里完全看不出来。
+          console.log(
+            `[BackendManager] Cannot detect orphan processes (${(e as Error)?.message || e}), relying on port scan`,
+          )
           return
         }
-        // CSV 格式: "python.exe","12345","Console","1","20,428 K"
-        const lines = output.split('\n').filter(l => l.includes('main.py') || l.includes('uvicorn'))
-        // 若 CSV 行不含命令行信息（tasklist 默认不显示），回退到 wmic 单次尝试
-        if (lines.length === 0) {
+        for (const rawLine of stdout.split(/\r?\n/)) {
+          const line = rawLine.trim()
+          if (!line) continue
+          const sep = line.indexOf('|')
+          if (sep <= 0) continue
+          const pid = parseInt(line.slice(0, sep).trim(), 10)
+          const cmdline = line.slice(sep + 1)
+          if (isNaN(pid) || pid <= 0) continue
+          // 二次甄别：只杀本应用自己的后端，避免误伤同名 main.py 的其他服务
+          if (!BackendManager.isOurBackendProcess(cmdline, backendDir)) continue
           try {
-            output = execSync(
-              `wmic process where "name='python.exe'" get processid,commandline`,
-              { encoding: 'utf-8', timeout: 5000 }
-            )
-            const matches = output.match(/(\d+)\s+.*main\.py/g) || []
-            for (const m of matches) {
-              const pid = parseInt(m, 10)
-              if (!isNaN(pid) && pid > 0) {
-                try {
-                  execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore', timeout: 5000 })
-                  console.log(`[BackendManager] Killed orphan backend PID=${pid}`)
-                } catch { /* already exited */ }
-              }
-            }
-          } catch {
-            // wmic 不可用，无法清理孤儿 — 继续启动，端口占用时由 findFreePort 兜底
-            console.log('[BackendManager] Cannot detect orphan processes (wmic unavailable), relying on port scan')
-          }
-          return
-        }
-        // tasklist CSV 行解析 PID（第 2 列）
-        for (const line of lines) {
-          const parts = line.split(',')
-          if (parts.length >= 2) {
-            const pid = parseInt(parts[1].replace(/"/g, '').trim(), 10)
-            if (!isNaN(pid) && pid > 0) {
-              try {
-                execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore', timeout: 5000 })
-                console.log(`[BackendManager] Killed orphan backend PID=${pid}`)
-              } catch { /* already exited */ }
-            }
-          }
+            execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore', timeout: 5000 })
+            console.log(`[BackendManager] Killed orphan backend PID=${pid}`)
+          } catch { /* already exited */ }
         }
       } else {
         // macOS / Linux: pgrep 找 main.py 进程
@@ -140,7 +179,8 @@ export class BackendManager {
     }
     // 杀掉上次异常退出残留的孤儿 python 主进程（持有过期的 bridge 端口/token，
     // 定时任务执行时 bridge 会连接失败）。必须在 spawn 新进程之前执行。
-    BackendManager.killOrphanBackends()
+    // 传入 backendDir 供精确识别本应用后端，避免误杀同名 main.py 的其他服务。
+    BackendManager.killOrphanBackends(this.getBackendDir())
     // 记录本次注入的环境变量，供崩溃自动重启时复用（见 tryAutoRestart）
     if (extraEnv) {
       Object.assign(this.lastExtraEnv, extraEnv)

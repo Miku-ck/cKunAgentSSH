@@ -12,7 +12,7 @@ SSH 智能运维终端 — 集成 SSH 连接管理、远程终端、SFTP 文件�
 - **命令补全**：Tab 补全，通过 SSH exec 远程查询候选
 - **快捷命令栏**：自定义命令快捷执行
 - **AI 运维助手**：流式对话 + 思考链、多模型切换、Agent 智能体（工具调用）
-- **Agent 框架（Harness）**：ReAct 决策循环、8 拦截器、14 工具、验证回路、动态步数预算、循环检测
+- **Agent 框架（Harness）**：ReAct 决策循环、9 拦截器、22 工具、动态步数预算、循环检测、成本熔断
 
 ## 技术栈
 
@@ -64,9 +64,9 @@ SSH 智能运维终端 — 集成 SSH 连接管理、远程终端、SFTP 文件�
         │  • Chat 流式对话 (SSE)          │
         │  • Agent Harness 框架          │
         │    - ReAct 决策循环            │
-        │    - 8 拦截器 (Reins)          │
-        │    - 14 工具 (Saddle)          │
-        │    - 验证回路 + 动态预算       │
+        │    - 9 拦截器 (Reins)          │
+        │    - 22 工具 (Saddle)         │
+        │    - 动态预算 + 成本熔断       │
         │  • 会话持久化 (SQLite)          │
         │  • 模型配置 / 路由             │
         │  • 技能系统 (SkillRegistry)    │
@@ -188,7 +188,7 @@ cKunAgentSSH/
 │   │   │   ├── bridle.py              # 上下文组装 + 压缩
 │   │   │   ├── saddle.py              # 工具执行 + 沙箱
 │   │   │   ├── stirrups.py            # LLM 调用 + 重试
-│   │   │   ├── reins.py               # 8 拦截器策略层
+│   │   │   ├── reins.py               # 9 拦截器策略层
 │   │   │   ├── safety.py              # 命令/路径/SSRF 安全防御
 │   │   │   ├── telemetry.py           # 遥测总线
 │   │   │   ├── contracts.py           # 契约定义
@@ -200,20 +200,22 @@ cKunAgentSSH/
 │   │   ├── intention.py               # 意图分类
 │   │   ├── audit.py                   # 审计引擎（链式签名）
 │   │   ├── cost_tracker.py            # 成本追踪
-│   │   ├── file_changes.py            # 文件变更追踪
 │   │   ├── consciousness_tick.py      # 后台心智维护
 │   │   ├── electron_bridge.py         # 桥接主进程 SSH exec
 │   │   │
-│   │   └── tools/builtin/             # 14 个内置工具
+│   │   └── tools/builtin/             # 22 个内置工具（SSH 模式）
 │   │       ├── shell_exec.py          # SSH 远程命令执行
-│   │       ├── file_ops.py            # 文件读写操作
-│   │       ├── patch_file.py          # 精确替换
-│   │       ├── grep_tool.py           # 内容搜索
-│   │       ├── glob_tool.py           # 文件查找
 │   │       ├── web_tools.py           # 联网搜索/抓取
 │   │       ├── todo_write.py          # 任务列表
 │   │       ├── load_skill.py          # 按需加载技能
-│   │       └── spawn_subagent.py      # 启动子 Agent
+│   │       ├── spawn_subagent.py      # 启动子 Agent
+│   │       ├── ops_common.py          # 运维共享执行辅助（双模式）
+│   │       ├── ops_obs.py             # 只读观测（概览/进程/网络）+ 日志
+│   │       ├── ops_service.py         # 服务生命周期（systemctl）
+│   │       ├── ops_schedule.py        # 计划/定时任务
+│   │       ├── ops_file.py            # 文件操作（读/写/改/查找/搜索）
+│   │       ├── ops_image.py           # 图片查看
+│   │       └── ops_job.py             # 后台任务
 │   │
 │   └── routes/
 │       ├── chat.py                    # 对话接口（SSE 流式）
@@ -274,18 +276,19 @@ Agent 框架采用马术装备隐喻，契约驱动设计。
 
 ```
 Driver（驭手）—— ReAct 决策循环主驱动
-  ├── Reins（缰绳）—— 8 拦截器策略层
+  ├── Reins（缰绳）—— 9 拦截器策略层
   │   ├── SkillRein         AGENT_START    技能注入
   │   ├── LoopDetector      PRE_TOOL_CALL  循环检测
   │   ├── PermissionGate    PRE_TOOL_CALL  权限审批
-  │   ├── FilesystemGuard   PRE_TOOL_CALL  路径越界+敏感命令
-  │   ├── SyntaxVerifier    POST_TOOL_CALL 语法验证
+  │   ├── FilesystemGuard   PRE_TOOL_CALL  敏感命令检测
   │   ├── AuditLogger       POST_TOOL_CALL 审计日志
   │   ├── DynamicBudgetRein POST_ITERATION 动态步数预算
-  │   └── ConfidenceMonitor POST_ITERATION 置信度监控
+  │   ├── CostBudgetRein    POST_ITERATION 成本/token 硬熔断
+  │   ├── ConfidenceMonitor POST_ITERATION 置信度监控
+  │   └── ReflectionRein    AGENT_COMPLETE 反思演化
   │
   ├── Bridle（马缰）—— 上下文组装 + 压缩
-  ├── Saddle（马鞍）—— 工具执行 + 沙箱（14 个内置工具）
+  ├── Saddle（马鞍）—— 工具执行 + 沙箱（6 个内置工具）
   ├── Stirrups（马镫）—— LLM 调用 + 重试
   └── TelemetryBus —— 事件广播
 ```
@@ -295,35 +298,68 @@ Driver（驭手）—— ReAct 决策循环主驱动
 ```
 INIT → THINKING → [LLM 调用] → 有工具调用?
   ├─ 是 → ACTING → [工具执行] → OBSERVING → THINKING（循环）
-  └─ 否 → 验证回路检查
-         ├─ 有语法错误 → 注入错误 → THINKING（强制修复）
-         └─ 无错误 → COMPLETED
+  └─ 否 → COMPLETED
 达到 max_iterations → MAX_REACHED
+成本/token 超限 → CostBudgetRein 熔断 → FAILED
 ```
 
-### 14 个内置工具
+### 22 个内置工具
+
+#### 基础工具
 
 | 工具 | 风险 | 说明 |
 |---|---|---|
-| `read_file` | safe | 读取文件（支持行范围，大文件截断） |
-| `write_file` | moderate | 写入文件（覆盖） |
-| `patch_file` | moderate | 精确替换（old_string → new_string） |
-| `delete_file` | moderate | 删除文件 |
-| `move_file` | moderate | 移动/重命名文件 |
-| `list_dir` | safe | 列出目录内容 |
-| `grep` | safe | 正则内容搜索 |
-| `glob` | safe | 递归文件查找 |
-| `shell_exec` | moderate | SSH 远程命令执行（命令级审批） |
+| `shell_exec` | moderate | 命令执行（SSH 远程 / 本地子进程双模式，可见终端交付） |
 | `web_search` | safe | 联网搜索（Tavily API） |
 | `web_fetch` | safe | 抓取网页（SSRF 防护） |
 | `todo_write` | safe | 任务列表管理 |
 | `load_skill` | safe | 按需加载技能完整指令 |
 | `spawn_subagent` | safe | 启动子 Agent 处理独立子任务（纯推理） |
 
+#### 运维观测与日志（只读）
+
+| 工具 | 风险 | 说明 |
+|---|---|---|
+| `sys_overview` | safe | 系统概览：负载/内存/磁盘/内核/时间 |
+| `process_inspect` | safe | 进程 TOP N 与按名查看 |
+| `network_probe` | safe | 监听端口 / 网络连接 |
+| `log_read` | safe | 受限日志读取（路径校验 + 行数/模式过滤） |
+
+#### 服务与计划
+
+| 工具 | 风险 | 说明 |
+|---|---|---|
+| `service_manage` | moderate | systemctl 服务操作（status/start/stop/restart，破坏性标记） |
+| `schedule_op` | moderate | 定时任务管理（create/list/cancel：固定间隔 + 受限 cron） |
+
+#### 文件操作（远程/本地双模式）
+
+| 工具 | 风险 | 说明 |
+|---|---|---|
+| `file_read` | safe | 带行号、offset/limit 分页读取（拒绝 `..` 越界） |
+| `file_write` | moderate | 新建/整体覆写（远程 base64 落盘 / 本地 Python） |
+| `file_edit` | moderate | 精确替换（old_string 唯一校验；远程经 base64 读取避免内容误删） |
+| `file_glob` | safe | 按路径模式递归查找文件 |
+| `file_grep` | safe | 正则搜内容（远程 grep / 本地 Python re） |
+
+#### 图片查看与后台任务
+
+| 工具 | 风险 | 说明 |
+|---|---|---|
+| `read_image` | safe | 读 PNG/JPEG/WebP/GIF（白名单 + 10MB 上限），返回 base64 data URI |
+| `job_run` | moderate | 后台启动长驻/跟随任务（本地子进程，返回 job_id） |
+| `job_list` | safe | 列出全部后台任务 |
+| `job_output` | safe | 读 job 输出（可 wait 阻塞，最长 60s） |
+| `job_kill` | moderate | 终止后台任务（SIGTERM→SIGKILL） |
+
+> 文件/图片/后台任务均**双模式**：有 SSH 会话时操作远程服务器（POSIX），
+> 无会话时操作本地主机（Python 原生 API，规避 Windows CMD 不认 POSIX）。
+> 所有文件路径拒绝 `..` 越界，写/杀操作带风险标记与确认。
+> 后台 job 以本地子进程为主；远程大任务因桥接缺少 kill 通道仅"尽力而为"。
+
 ### 安全防御
 
 - **命令安全**：6 步归一化 + 12 HARDLINE 阻断 + 20 DANGEROUS 审批
-- **路径安全**：realpath + commonpath 严格边界检查（防 symlink 逃逸）
 - **SSRF 防护**：IP 拒绝私网 + DNS rebinding 防护 + 重定向校验
 
 ## 开发

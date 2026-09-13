@@ -35,7 +35,10 @@ def _no_file_io(monkeypatch):
     """隔离 allowlist 文件 IO + 审计落库（真实 DB）"""
     monkeypatch.setattr(PermissionGate, "_load_permanent_allowlist", lambda self: set())
     monkeypatch.setattr(PermissionGate, "_save_permanent_allowlist", lambda self: None)
-    monkeypatch.setattr(reins_mod, "append_record", lambda **kw: None)
+
+    async def _noop_audit(**kw):
+        return None
+    monkeypatch.setattr(reins_mod, "append_record_async", _noop_audit)
 
 
 def _ctx() -> RunContext:

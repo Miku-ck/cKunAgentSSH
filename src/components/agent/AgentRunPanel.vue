@@ -41,6 +41,18 @@ function taskTypeLabel(type: string): string {
   return map[type] || type
 }
 
+/** 可见终端交付状态的人读文案 */
+function deliveryStatusLabel(status: string): string {
+  const map: Record<string, string> = {
+    capturing: '执行中',
+    done: '已完成',
+    rejected: '已拒绝',
+    aborted: '已中止',
+    writing: '写入中',
+  }
+  return map[status] || status
+}
+
 const props = defineProps<{
   /** 当审查面板已展示人工介入状态时，隐藏此处的人工介入卡片 */
   hideHumanHelp?: boolean
@@ -201,6 +213,48 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
           </template>
           授权后 AI 重新发起该请求即生效。
         </div>
+      </div>
+    </div>
+
+    <!-- 可见终端执行：待确认命令 -->
+    <div class="delivery-section" v-if="agentStore.pendingDeliveries.length > 0">
+      <div
+        v-for="d in agentStore.pendingDeliveries"
+        :key="d.tool_id"
+        class="delivery-item"
+      >
+        <div class="delivery-header">
+          <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+          <span class="delivery-title">命令待确认</span>
+          <span class="delivery-risk">将在当前终端执行</span>
+        </div>
+        <pre class="delivery-command">{{ d.command }}</pre>
+        <div class="delivery-actions">
+          <button
+            class="delivery-btn delivery-btn-confirm"
+            @click="agentStore.confirmDeliver(d.tool_id)"
+          >确认执行</button>
+          <button
+            class="delivery-btn delivery-btn-reject"
+            @click="agentStore.rejectDeliver(d.tool_id)"
+          >拒绝执行</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 可见终端执行：在途交付状态 -->
+    <div class="delivery-section" v-if="agentStore.deliveries.some(d => d.status !== 'pending_confirm')">
+      <div
+        v-for="d in agentStore.deliveries.filter(d => d.status !== 'pending_confirm')"
+        :key="d.tool_id"
+        class="delivery-badge-row"
+      >
+        <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+        <code class="delivery-badge-cmd">{{ d.command }}</code>
+        <span
+          class="delivery-badge"
+          :class="`badge-${d.status}`"
+        >{{ deliveryStatusLabel(d.status) }}</span>
       </div>
     </div>
 
@@ -568,5 +622,135 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
   color: var(--text-tertiary);
   margin-top: 4px;
   font-style: italic;
+}
+
+/* ── 可见终端执行 · 待确认命令 ── */
+.delivery-section {
+  padding: 0 4px;
+}
+
+.delivery-item {
+  font-size: 13px;
+  color: var(--card-perm-text);
+  background: var(--card-warn-bg);
+  border: 1px solid var(--card-warn-border);
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin-bottom: 6px;
+}
+
+.delivery-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.delivery-title {
+  font-weight: 600;
+  color: var(--status-warn-text);
+  flex: 1;
+}
+
+.delivery-risk {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.delivery-command {
+  margin: 0 0 8px;
+  background: var(--bg-base);
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--accent-orange);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.delivery-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.delivery-btn {
+  font-size: 12px;
+  padding: 4px 14px;
+  border-radius: 4px;
+  border: 1px solid;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.delivery-btn-confirm {
+  background: var(--status-success-bg);
+  border-color: var(--status-success-border, var(--border-default));
+  color: var(--status-success-text);
+}
+
+.delivery-btn-confirm:hover {
+  filter: brightness(1.05);
+}
+
+.delivery-btn-reject {
+  background: transparent;
+  border-color: var(--border-default);
+  color: var(--text-secondary);
+}
+
+.delivery-btn-reject:hover {
+  border-color: var(--danger-text);
+  color: var(--danger-text);
+}
+
+.delivery-badge-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--card-warn-bg);
+  border: 1px solid var(--card-warn-border);
+  padding: 4px 10px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+}
+
+.delivery-badge-cmd {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--accent-orange);
+  font-size: 12px;
+}
+
+.delivery-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+
+.badge-capturing,
+.badge-writing {
+  background: var(--status-warn-bg);
+  color: var(--status-warn-text);
+}
+
+.badge-done {
+  background: var(--status-success-bg);
+  color: var(--status-success-text);
+}
+
+.badge-rejected,
+.badge-aborted {
+  background: var(--status-error-bg);
+  color: var(--status-error-text);
 }
 </style>

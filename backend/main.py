@@ -55,17 +55,6 @@ async def lifespan(_app: FastAPI):
     except Exception as e:
         print(f"[cKunAgentic] Model seed probe skipped: {e}")
 
-    # C-review C3：run 结束不再自动清理磁盘备份（保留供 /undo 使用），
-    # 启动时按 TTL（7 天）兜底清理过期备份，防止目录无限膨胀
-    try:
-        import asyncio as _asyncio
-        from agent.harness.saddle import cleanup_stale_backups
-        _n = await _asyncio.to_thread(cleanup_stale_backups, 7)
-        if _n:
-            print(f"[cKunAgentic] Cleaned {_n} stale agent backup dir(s)")
-    except Exception:
-        pass
-
     # 启动对账：崩溃/重启后滞留 in_progress 的会话复位为 completed。
     # Agent run 在运行中崩溃时复位逻辑丢失，会话会永久滞留 in_progress。
     # 仅启动时执行一次 — 正常运行中 in_progress 表示真有 run 进行中。

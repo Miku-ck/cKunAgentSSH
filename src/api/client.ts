@@ -507,7 +507,7 @@ export const auditApi = {
 // ── Agent SSE 流式运行 ──
 
 export interface AgentSSEEvent {
-  type: 'state' | 'content' | 'reasoning' | 'tool_call_start' | 'tool_call_result' | 'warning' | 'error' | 'human_help_needed' | 'permission_needed' | 'permission_expired' | 'intention' | 'done'
+  type: 'state' | 'content' | 'reasoning' | 'tool_call_start' | 'tool_call_result' | 'warning' | 'error' | 'human_help_needed' | 'permission_needed' | 'permission_expired' | 'intention' | 'tool_deliver' | 'done'
   state?: string
   iteration?: number
   content?: string
@@ -527,10 +527,13 @@ export interface AgentSSEEvent {
   // P7: done 事件携带的成本快照 + run_id
   cost?: AgentCostSnapshot
   run_id?: string
-  // C3: done 事件携带的文件变更摘要
-  file_changes?: AgentFileChangesSummary
   // H14: intention 事件携带的意图识别结果
   intention?: AgentIntentionInfo
+  // tool_deliver 事件专用字段：可见终端执行模式待交付命令
+  tool_id?: string
+  command?: string
+  session_id?: string
+  requires_confirm?: boolean
 }
 
 export interface AgentCostSnapshot {
@@ -552,27 +555,6 @@ export interface AgentIntentionInfo {
   reasoning_budget: number | null
   allow_planning_phase: boolean
   confidence: number
-}
-
-// C3: 文件变更单条记录
-export interface AgentFileChange {
-  agent_run_id: string
-  file_path: string
-  abs_path: string
-  operation: 'create' | 'modify' | 'delete' | string
-  added_lines: number
-  removed_lines: number
-  before_size: number
-  after_size: number
-  created_at?: string
-}
-
-// C3: 文件变更汇总（由后端 get_file_changes_summary 返回）
-export interface AgentFileChangesSummary {
-  files_changed: number
-  added_lines: number
-  removed_lines: number
-  changes: AgentFileChange[]
 }
 
 /**
@@ -602,8 +584,6 @@ export interface AgentTraceSnapshot {
   reasoning: string
   /** 关联的 agent_run id（用于打开 TraceViewer） */
   lastRunId: string
-  /** 文件变更摘要 */
-  fileChanges?: AgentFileChangesSummary
   /** 成本快照 */
   costInfo?: AgentCostSnapshot
   /** 失败时的错误信息 */
@@ -623,6 +603,12 @@ export interface StreamAgentOptions {
   maxIterations?: number
   enableDynamicBudget?: boolean
   skillIds?: string[]
+  /** 是否启用触发词自动技能匹配（设置"自动技能匹配"，默认开启） */
+  autoSkillMatch?: boolean
+  /** 历史上下文条数（设置"上下文窗口"，1-100） */
+  contextWindow?: number
+  visibleTerminal?: boolean
+  sessionType?: 'local' | 'remote'
   onEvent: (event: AgentSSEEvent) => void
   onError: (error: string) => void
   onDone: () => void
@@ -653,6 +639,10 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
           max_iterations: options.maxIterations ?? 100,
           enable_dynamic_budget: options.enableDynamicBudget ?? true,
           skill_ids: options.skillIds || [],
+          auto_skill_match: options.autoSkillMatch ?? true,
+          context_window: options.contextWindow ?? 20,
+          visible_terminal: options.visibleTerminal ?? false,
+          session_type: options.sessionType,
         }),
         signal: abortController.signal,
       })
@@ -737,6 +727,31 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
 
   run()
   return () => abortController.abort()
+}
+
+/**
+ * 可见终端执行模式：回传命令执行结果，恢复后端挂起的 Agent 循环。
+ * 成功回传走 /agent/tool-result（后端 resume）；用户拒绝同样走此接口，
+ * 以 success=false + 固定拒绝文案 形式标记为拒绝。
+ */
+export async function postToolResult(
+  toolId: string,
+  output: string,
+  success: boolean,
+  exitCode: number | null,
+): Promise<void> {
+  await ensureApiToken()
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const url = `${getBaseUrl()}/agent/tool-result`
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: withApiToken(headers),
+    body: JSON.stringify({ tool_id: toolId, output, success, exit_code: exitCode }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(err.detail || res.statusText)
+  }
 }
 
 // ── Agent API ──

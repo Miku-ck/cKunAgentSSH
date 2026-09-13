@@ -254,14 +254,21 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       modelId: base.selectedModelId.value,
       mode: 'ssh',
       systemPrompt,
-      sshSessionId: ctx?.sessionId,
+      // 可见终端执行模式：无论本地/远程都把活动会话 id 传给后端，
+      // 后端据此把 shell_exec 交付到当前可见终端执行（而非 headless）
+      sshSessionId: ctx?.sessionId || useSSHStore().activeSessionId || undefined,
       environment: ctx?.environment || 'test',
       enableThinking: false,
       enableTools: true,
       maxIterations: useSettingsStore().settings.agent.maxIterations,
       enableDynamicBudget: useSettingsStore().settings.agent.dynamicBudget,
+      visibleTerminal: true,
+      sessionType: ctx?.sessionType || 'local',
       // 用户显式选择的技能 ID（后端 SkillRein 会与自动匹配的合并去重）
       skillIds,
+      // 对话设置：自动技能匹配开关 + 上下文窗口条数
+      autoSkillMatch: useSettingsStore().settings.chat.autoSkillMatch,
+      contextWindow: useSettingsStore().settings.chat.contextWindow,
     })
     // 消息已入会话且 Agent 已启动 — 草稿可清空
     return true

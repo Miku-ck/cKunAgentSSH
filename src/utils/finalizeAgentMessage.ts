@@ -11,7 +11,6 @@ export interface AgentMessage {
   content?: string
   reasoning?: string
   runId?: string
-  fileChanges?: unknown
   tokens_used?: number
   duration?: number
   [key: string]: unknown
@@ -43,7 +42,6 @@ export function finalizeAgentMessage(
       msgs[i].content = finalContent
       msgs[i].reasoning = agentStore.reasoning || undefined
       msgs[i].runId = agentStore.lastRunId || undefined
-      msgs[i].fileChanges = agentStore.fileChanges || undefined
       msgs[i].tokens_used = agentStore.costInfo?.total_tokens || 0
       if (trace.duration && trace.duration > 0) msgs[i].duration = trace.duration
       msgs[i].agentTrace = trace

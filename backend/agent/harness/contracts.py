@@ -133,6 +133,8 @@ class ToolResult:
     error: str = ""
     duration_ms: int = 0
     priority: str = "normal"  # 优先级：high（错误/关键）/ normal（常规）/ low（噪声）
+    # 可见终端模式：非空时表示命令需交付到可见终端，Driver 挂起等待前端回传
+    pending_delivery: Optional[dict] = None
 
 
 @dataclass
@@ -262,8 +264,6 @@ class AgentConfig:
     # None → CostBudgetRein 内置默认（$2.0 / 3M tokens）；0 → 显式禁用；>0 → 自定义上限
     max_cost_usd: Optional[float] = None
     max_total_tokens: Optional[int] = None
-    # 语法验证配置
-    enable_syntax_verify: bool = True  # 是否启用编辑后语法检查
     # ── 意图识别 + 思考预算（避免无脑长思考拖垮上下文/可观测性）──
     # max_reasoning_tokens: thinking 阶段的 token 上限，None 表示不限制
     # 由 IntentionClassifier 在 run 启动时根据 task 文本推断；
@@ -280,7 +280,7 @@ class AgentConfig:
     # 架构层硬约束：超出部分延迟到下一轮执行，防止模型一次性批量操作
     max_tool_calls_per_turn: int = 3
     # enable_progressive_gathering: 启用渐进式信息收集引导
-    # 检测批量 read_file/grep 并注入"先概览再深入"的策略引导
+    # 检测批量只读工具调用并注入"先概览再深入"的策略引导
     enable_progressive_gathering: bool = True
     # reclassify_interval: 每隔 N 轮迭代重新评估意图等级
     reclassify_interval: int = 5
@@ -326,10 +326,14 @@ class RunContext:
     llm_model: str = ""
     # 技能 ID 列表（前端显式选择），SkillRein 在 AGENT_START 时注入到 system_prompt
     skill_ids: list[str] = field(default_factory=list)
+    # 是否启用按触发词自动匹配技能（False 时 SkillRein 仅注入显式 skill_ids）
+    auto_skill_match: bool = True
     # SSH 会话 ID（SSH 模式下由前端传入，供 shell_exec 等工具远程执行）
     ssh_session_id: str = ""
     # 目标环境标记（"test" | "prod"），驱动生产高风险命令的审计与审批强化
     environment: str = "test"
+    # 可见终端模式：True 时 shell_exec 命令交付到可见终端（前端 PTY/SSH）而非 headless 执行
+    visible_terminal: bool = False
 
     @classmethod
     def new(cls, task: str, mode: str, **opts) -> "RunContext":
@@ -342,11 +346,13 @@ class RunContext:
             workspace_path=opts.get("workspace_path", ""),
             ssh_session_id=opts.get("ssh_session_id", ""),
             environment=opts.get("environment", "test"),
+            visible_terminal=opts.get("visible_terminal", False),
             system_prompt=opts.get("system_prompt", ""),
             history=opts.get("history", []),
             memories=opts.get("memories", []),
             config=opts.get("config", AgentConfig()),
             skill_ids=opts.get("skill_ids", []),
+            auto_skill_match=opts.get("auto_skill_match", True),
         )
 
     async def transition(self, new_state: State, event: str = "") -> None:
