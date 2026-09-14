@@ -638,7 +638,9 @@ async function doTransfer(payload: { side: 'local' | 'remote'; paths: string[] }
     // 下载：检查本地目标
     for (const rp of payload.paths) {
       const name = rp.split('/').pop() ?? rp
-      const localPath = store.localCwd + '/' + name
+      // P3 修复：用 store.joinLocalPath（内部走 fsPathJoin）替代硬拼 '/' —
+      // 硬拼在本地 cwd 已含分隔符或跨盘符时会产生错误路径，与 :625 下载展开逻辑不一致
+      const localPath = await store.joinLocalPath(name)
       const exists = await store.localPathExists(localPath)
       if (exists) existingFiles.push(name)
     }

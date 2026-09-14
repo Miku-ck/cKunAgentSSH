@@ -65,7 +65,7 @@
           <span class="footer-item">行 {{ cursorPos.line }}, 列 {{ cursorPos.col }}</span>
         </template>
         <span v-if="readOnly && !loading && !error" class="footer-item readonly-hint">
-          文件较大，以只读模式打开
+          {{ readOnlyReason }}
         </span>
         <span v-if="side === 'remote' && !loading && !error" class="footer-item remote-tag">
           远程
@@ -100,7 +100,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onUnmounted, nextTick, markRaw } from 'vue'
+import { ref, computed, watch, onUnmounted, nextTick, markRaw } from 'vue'
 import * as monaco from 'monaco-editor'
 import { getLanguage } from '@/utils/language'
 import { useToastStore } from '@/stores/toast'
@@ -131,6 +131,15 @@ const language = ref('plaintext')
 const dirty = ref(false)
 const saving = ref(false)
 const cursorPos = ref({ line: 1, col: 1 })
+
+// P3 修复：只读脚注按实际原因显示（原固定"文件较大"）。
+// 读取接口（main.ts fs:readFileForEditor / ssh-manager.ts sftpReadFile）仅在
+// size > 5MB 时返回 readOnly=true；>10MB 与二进制/无权限都以 error 抛出、
+// 不会进入只读分支，故只读分支的原因恒为"文件过大（超过 5MB）"。
+const readOnlyReason = computed(() => {
+  if (!readOnly.value) return ''
+  return `文件较大（${formatSize(size.value)}，超过 5MB），以只读模式打开`
+})
 
 const container = ref<HTMLElement | null>(null)
 let editor: monaco.editor.IStandaloneCodeEditor | null = null

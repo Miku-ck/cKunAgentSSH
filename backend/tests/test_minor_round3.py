@@ -195,20 +195,55 @@ def test_web_fetch_max_chars_capped(monkeypatch):
 
 # ── MINOR-12：同会话并发占位 + 启动对账 ──
 
-def test_run_slot_conflict():
-    from routes.agent import _acquire_run_slot, _release_run_slot
+def test_run_slot_conflict(monkeypatch):
+    from routes import agent as ra
+
+    # 测试环境无对应 DB 行 — 占位者行缺失不算陈旧（防误接管新建 run），保持冲突
+    monkeypatch.setattr(ra.db, "get_agent_run", lambda run_id: None)
 
     async def main():
-        assert await _acquire_run_slot("c1", "run1") is None
-        assert await _acquire_run_slot("c1", "run2") == "run1", "同会话第二个 run 必须冲突"
-        await _release_run_slot("c1", "run1")
-        assert await _acquire_run_slot("c1", "run3") is None, "释放后可再占位"
+        assert await ra._acquire_run_slot("c1", "run1") is None
+        assert await ra._acquire_run_slot("c1", "run2") == "run1", "同会话第二个 run 必须冲突"
+        await ra._release_run_slot("c1", "run1")
+        assert await ra._acquire_run_slot("c1", "run3") is None, "释放后可再占位"
         # 误删保护：占位者是 run3 时，用 run9 释放不得删掉 run3
-        await _release_run_slot("c1", "run9")
-        assert await _acquire_run_slot("c1", "runX") == "run3"
-        await _release_run_slot("c1", "run3")
+        await ra._release_run_slot("c1", "run9")
+        assert await ra._acquire_run_slot("c1", "runX") == "run3"
+        await ra._release_run_slot("c1", "run3")
 
     asyncio.run(main())
+
+
+def test_run_slot_stale_takeover(monkeypatch):
+    """回归：占位 run 在 DB 中已 completed（finally 被取消打断的残留）→ 新请求接管，
+    会话不再被永久锁死（"已有运行中的 Agent 任务"故障）。"""
+    from routes import agent as ra
+
+    monkeypatch.setattr(ra.db, "get_agent_run",
+                        lambda run_id: {"id": run_id, "status": "completed"} if run_id == "stale1" else None)
+
+    async def main():
+        ra._in_flight_runs["c2"] = "stale1"   # 模拟泄漏的占位
+        assert await ra._acquire_run_slot("c2", "new1") is None, "终态残留必须被接管"
+        assert ra._in_flight_runs.get("c2") == "new1"
+        # DB 行仍是 running 的占位者不得被接管
+        ra._in_flight_runs["c3"] = "live1"
+        monkeypatch.setattr(ra.db, "get_agent_run",
+                            lambda run_id: {"id": run_id, "status": "running"} if run_id == "live1" else None)
+        assert await ra._acquire_run_slot("c3", "new2") == "live1", "活 run 必须保持冲突"
+        ra._in_flight_runs.pop("c3", None)
+
+    asyncio.run(main())
+
+
+def test_release_run_slot_sync_identity():
+    """同步释放：仅删自己的占位；无 await，取消安全。"""
+    from routes import agent as ra
+    ra._in_flight_runs["c4"] = "mine"
+    ra._release_run_slot_sync("c4", "other")     # 身份不符 → 不动
+    assert ra._in_flight_runs.get("c4") == "mine"
+    ra._release_run_slot_sync("c4", "mine")
+    assert ra._in_flight_runs.get("c4") is None
 
 
 def test_mark_stale_agent_runs_failed(monkeypatch):

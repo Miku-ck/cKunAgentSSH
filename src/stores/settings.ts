@@ -25,6 +25,7 @@ export type SettingCategory =
   | 'models'
   | 'chat'
   | 'appearance'
+  | 'agent'
 
 export interface AppSettings {
   chat: {

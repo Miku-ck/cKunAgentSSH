@@ -83,3 +83,6 @@ _bin/
 
 # pytest 临时缓存目录（WinError 5 残留，勿提交）
 pytest-cache-files-*/
+
+# 安全删除的回收备份目录（勿提交）
+.trash-cleanup-*/

@@ -1,4 +1,4 @@
-"""运维文件操作工具集 — SSH 模式专属（支持远端/本地双模式）。
+"""运维文件操作工具集 — SSH 模式专属。
 
 包含五个 BaseTool 子类：
   - file_read  ：带行号读取文件片段（offset/limit）
@@ -10,8 +10,13 @@
 安全约束：
   1. 所有路径均校验绝对路径归一化后不得包含 `..`，杜绝越界访问；
   2. 远程命令一律经 shlex.quote 转义（file_write/编辑用 base64，天然不必转义）；
-  3. 本地（Windows）执行一律用 Python 原生文件 API，不套 POSIX 命令；
-  4. 大输出经 truncate_output 截断，防刷屏。
+  3. **写/编辑（file_write/file_edit）仅限远程 SSH 会话**：与 shell_exec、
+     ops_common.run_headless 同一 fail-closed 口径 — 缺少 SSH 会话即拒绝，
+     绝不降级到后端主机本机落盘（本产品 AI 操作的对象是远程服务器，
+     在后端主机写文件没有合法场景）；
+  4. 读取类（file_read/file_glob/file_grep/read_image）保留本地分支，
+     服务本地终端场景的查看/诊断（Python 原生文件 API，只读无突变）；
+  5. 大输出经 truncate_output 截断，防刷屏。
 """
 import base64
 import os
@@ -20,34 +25,19 @@ import re
 import shlex
 
 from agent.tools import BaseTool, ToolResult, ToolMeta
-from agent.tools.builtin.ops_common import run_headless, truncate_output
+from agent.tools.builtin.ops_common import (
+    is_remote,
+    is_traversal,
+    run_headless,
+    strip_remote_tail,
+    truncate_output,
+)
 
 
-def _is_traversal(path) -> bool:
-    """路径是否含 `..` 越界访问。"""
-    if not isinstance(path, str) or not path:
-        return True
-    for sep in (os.sep, "/"):
-        if ".." in path.split(sep):
-            return True
-    return False
-
-
-def _is_remote(context) -> bool:
-    """是否远程执行（有 SSH 会话）。"""
-    return bool(getattr(context, "ssh_session_id", ""))
-
-
-def _strip_remote_tail(output: str) -> str:
-    """剥离 run_headless 追加的 [exit_code=..] / [stderr] 尾部行。"""
-    lines = output.splitlines()
-    while lines:
-        last = lines[-1]
-        if last.startswith("[exit_code=") or last == "[stderr]":
-            lines.pop()
-            continue
-        break
-    return "\n".join(lines)
+_WRITE_REQUIRES_SSH = (
+    "拒绝执行（fail-closed）：缺少 SSH 会话，文件写入/编辑仅限远程目标服务器，"
+    "不会在后端主机本机落盘。请先建立 SSH 连接，或确认操作目标。"
+)
 
 
 def _base64_write_cmd(path: str, data: bytes) -> str:
@@ -59,7 +49,7 @@ def _base64_write_cmd(path: str, data: bytes) -> str:
 async def _remote_b64_read(context, path: str) -> tuple[bool, bytes]:
     """远程以 base64 读取文件原始字节。
 
-    用 base64 传回内容以规避 _strip_remote_tail 误伤真实内容：base64 字符集
+    用 base64 传回内容以规避 strip_remote_tail 误伤真实内容：base64 字符集
     （A-Za-z0-9+/=）不含 '['，因此尾部 "[exit_code=..]" 哨兵行可被无损剥离，
     不会与真实文件内容产生歧义。返回 (是否成功, 字节)。
     """
@@ -67,7 +57,7 @@ async def _remote_b64_read(context, path: str) -> tuple[bool, bytes]:
     ok, output = await run_headless(context, f"base64 {qpath}", 30)
     if not ok:
         return False, output.encode("utf-8")
-    body = _strip_remote_tail(output)
+    body = strip_remote_tail(output)
     try:
         data = base64.b64decode(body)
     except Exception:
@@ -104,7 +94,7 @@ class FileReadTool(BaseTool):
     )
 
     def _validate(self, path, offset, limit):
-        if _is_traversal(path):
+        if is_traversal(path):
             return "非法路径：包含 `..`，禁止越界访问"
         if offset < 1:
             return "offset 必须为 >=1 的整数"
@@ -119,14 +109,14 @@ class FileReadTool(BaseTool):
         if err:
             return ToolResult(False, "", err)
 
-        if _is_remote(context):
+        if is_remote(context):
             qpath = shlex.quote(path)
             start, stop = offset, offset + limit - 1
             cmd = f"nl -ba {qpath} | sed -n '{start},{stop}p'"
             ok, output = await run_headless(context, cmd, self.meta.timeout)
             if not ok:
                 return ToolResult(False, output, "读取文件失败")
-            body = _strip_remote_tail(output)
+            body = strip_remote_tail(output)
             if not body.strip():
                 return ToolResult(True, f"无内容（offset {offset} 超出文件末尾或文件为空）")
             return ToolResult(True, body)
@@ -175,28 +165,18 @@ class FileWriteTool(BaseTool):
     )
 
     async def execute(self, context, path, content):
-        if _is_traversal(path):
+        if is_traversal(path):
             return ToolResult(False, "", "非法路径：包含 `..`，禁止越界访问")
+        if not is_remote(context):
+            return ToolResult(False, "", _WRITE_REQUIRES_SSH)
         content = content if isinstance(content, str) else str(content)
         data = content.encode("utf-8")
 
-        if _is_remote(context):
-            ok, output = await run_headless(
-                context, _base64_write_cmd(path, data), self.meta.timeout
-            )
-            if not ok:
-                return ToolResult(False, output, "远程写入文件失败")
-            return ToolResult(True, f"已写入 {len(data)} 字节 -> {path}")
-
-        # 本地：Python 原生文件 API
-        parent = os.path.dirname(os.path.abspath(path))
-        if not os.path.isdir(parent):
-            return ToolResult(False, "", f"父目录不存在: {parent}")
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(content)
-        except Exception as e:
-            return ToolResult(False, "", f"写入文件失败: {e}")
+        ok, output = await run_headless(
+            context, _base64_write_cmd(path, data), self.meta.timeout
+        )
+        if not ok:
+            return ToolResult(False, output, "远程写入文件失败")
         return ToolResult(True, f"已写入 {len(data)} 字节 -> {path}")
 
 
@@ -232,44 +212,26 @@ class FileEditTool(BaseTool):
         return content.replace(old, new)
 
     async def execute(self, context, path, old_string, new_string):
-        if _is_traversal(path):
+        if is_traversal(path):
             return ToolResult(False, "", "非法路径：包含 `..`，禁止越界访问")
         if not isinstance(old_string, str) or old_string == "":
             return ToolResult(False, "", "old_string 不能为空")
+        if not is_remote(context):
+            return ToolResult(False, "", _WRITE_REQUIRES_SSH)
 
-        if _is_remote(context):
-            ok, raw = await _remote_b64_read(context, path)
-            if not ok:
-                return ToolResult(False, raw.decode("utf-8", errors="replace"), "远程读取文件失败或文件不存在")
-            content = raw.decode("utf-8", errors="replace")
-            new_content = self._apply_replace(content, old_string, new_string)
-            if isinstance(new_content, ToolResult):
-                return new_content
-            data = new_content.encode("utf-8")
-            ok2, out2 = await run_headless(
-                context, _base64_write_cmd(path, data), self.meta.timeout
-            )
-            if not ok2:
-                return ToolResult(False, out2, "远程写入文件失败")
-            return ToolResult(True, "已替换 1 处")
-
-        # 本地：Python 原生文件 API（读→唯一校验→替换→写回）
-        try:
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
-                content = f.read()
-        except FileNotFoundError:
-            return ToolResult(False, "", f"文件不存在: {path}")
-        except Exception as e:
-            return ToolResult(False, "", f"读取文件失败: {e}")
-
+        ok, raw = await _remote_b64_read(context, path)
+        if not ok:
+            return ToolResult(False, raw.decode("utf-8", errors="replace"), "远程读取文件失败或文件不存在")
+        content = raw.decode("utf-8", errors="replace")
         new_content = self._apply_replace(content, old_string, new_string)
         if isinstance(new_content, ToolResult):
             return new_content
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(new_content)
-        except Exception as e:
-            return ToolResult(False, "", f"写入文件失败: {e}")
+        data = new_content.encode("utf-8")
+        ok2, out2 = await run_headless(
+            context, _base64_write_cmd(path, data), self.meta.timeout
+        )
+        if not ok2:
+            return ToolResult(False, out2, "远程写入文件失败")
         return ToolResult(True, "已替换 1 处")
 
 
@@ -293,10 +255,10 @@ class FileGlobTool(BaseTool):
     )
 
     async def execute(self, context, path, pattern):
-        if _is_traversal(path):
+        if is_traversal(path):
             return ToolResult(False, "", "非法路径：包含 `..`，禁止越界访问")
 
-        if _is_remote(context):
+        if is_remote(context):
             qpath, qpat = shlex.quote(path), shlex.quote(pattern)
             cmd = f"find {qpath} -name {qpat} -type f"
             ok, output = await run_headless(context, cmd, self.meta.timeout)
@@ -354,11 +316,11 @@ class FileGrepTool(BaseTool):
     )
 
     async def execute(self, context, path, pattern, max_lines=200):
-        if _is_traversal(path):
+        if is_traversal(path):
             return ToolResult(False, "", "非法路径：包含 `..`，禁止越界访问")
         max_lines = min(5000, max(1, int(max_lines)))
 
-        if _is_remote(context):
+        if is_remote(context):
             qpat, qpath = shlex.quote(pattern), shlex.quote(path)
             cmd = f"grep -rnE --color=never {qpat} {qpath} | head -n {max_lines}"
             ok, output = await run_headless(context, cmd, self.meta.timeout)

@@ -296,6 +296,54 @@ interface SSHSession {
   cwd: string
   /** D14 修复：close 通知已发送标志 — 去重，保证 ssh:close 恰好一次 */
   closeNotified?: boolean
+  /** 重连修复：最新终端尺寸（连接时初始化、resize 时更新），重连建 shell 时复用 */
+  cols?: number
+  rows?: number
+}
+
+/**
+ * 重连修复：自动重连状态（每个交互式 shell 会话一条，key 为会话 id）。
+ * - 意外断开（网络抖动/服务端断连）时由 destroySession 触发，最多 3 次、
+ *   退避 1s/3s/9s；凭据由主进程自 SSHStore 读取，渲染层无需传递
+ * - 用户主动断开（关 tab/断开按钮）与删除连接配置会取消本条目
+ */
+interface ReconnectEntry {
+  /** 连接配置 id — 重连时主进程据此从 SSHStore 自取凭据 */
+  connectionId: string
+  /** 重连建 shell 用的终端尺寸（连接时初始值，之后随 resize 更新） */
+  cols: number
+  rows: number
+  /** 代数 — 取消/手动重启时 +1，使 in-flight 旧连接的结果作废（防僵尸连接/双连接） */
+  generation: number
+  /** 待执行的退避定时器（null = 无排程） */
+  timer: NodeJS.Timeout | null
+  /** 是否有一次重连连接正在进行中 */
+  inFlight: boolean
+}
+
+/** 自动重连最大尝试次数 */
+const RECONNECT_MAX_ATTEMPTS = 3
+/** 重连退避：1s / 3s / 9s（×3 指数） */
+function reconnectDelayMs(attempt: number): number {
+  return 1000 * Math.pow(3, attempt - 1)
+}
+
+/**
+ * 重连状态变化事件（主进程 → 渲染层，channel: ssh:reconnect）。
+ * 渲染层类型副本见 src/env.d.ts（两个 tsconfig 程序互不包含，沿用
+ * SSHConnectionRecord 的跨上下文复制模式）
+ */
+export interface SshReconnectStatus {
+  id: string
+  /** reconnecting=首轮排程（断开后自动/手动点击后）| retry=上一次失败后的重试排程 | success=重连成功 | gave-up=放弃 */
+  phase: 'reconnecting' | 'retry' | 'success' | 'gave-up'
+  /** 当前（reconnecting/retry）或最后一次（success/gave-up）尝试序号，1 起；gave-up + cancelled 时为 0（哨兵值） */
+  attempt: number
+  maxAttempts: number
+  /** reconnecting/retry 阶段：下一次尝试前的退避等待（ms） */
+  delayMs?: number
+  /** gave-up 阶段：exhausted=3 次均失败 | config-missing=连接配置已删除 | cancelled=重连被取消（如断开后连接配置被删除，tab 仍在） */
+  reason?: 'exhausted' | 'config-missing' | 'cancelled'
 }
 
 export class SSHManager {
@@ -313,6 +361,21 @@ export class SSHManager {
   // E-1b 修复：串行化写入队列 — 每次保存排队到前一次完成之后，
   // 快照在实际写入时刻（then 回调内）构建，并发首连不再把磁盘表写成子集
   private savePromise: Promise<void> = Promise.resolve()
+  // 重连修复：重连状态表（key = shell 会话 id）+ 配置读取器（main.ts 注入，
+  // 重连时主进程自取已保存的连接配置与凭据，渲染层全程不参与）
+  private reconnects = new Map<string, ReconnectEntry>()
+  private configProvider: ((connectionId: string) => Promise<SSHConnectionConfig | null>) | null = null
+  private onReconnected: ((connectionId: string) => void) | null = null
+
+  /** 注入连接配置读取函数（main.ts 用 SSHStore.get 实现） */
+  setConfigProvider(fn: (connectionId: string) => Promise<SSHConnectionConfig | null>): void {
+    this.configProvider = fn
+  }
+
+  /** 重连成功回调（main.ts 据此更新 lastConnectedAt，与首连成功路径同语义） */
+  setOnReconnected(fn: (connectionId: string) => void): void {
+    this.onReconnected = fn
+  }
 
   setWindow(win: BrowserWindow): void {
     this.mainWindow = win
@@ -414,13 +477,27 @@ export class SSHManager {
    * SFTP 专用连接（stream: null）中断后 'close' 分支不再发 ssh:close，
    * UI 残留死会话。现在 error 处理器不删 session，close 处理器经此方法
    * 统一清理 + 通知，closeNotified 标志保证 ssh:close 恰好一次。
+   *
+   * 重连修复：
+   * 1) client 参数 — 重连会用同一 id 建立新 client，旧 client 的迟到 close
+   *    事件必须识别为陈旧事件跳过，否则会误毁已建立的新会话；
+   * 2) 断开来源判定 — 走到这里且 session 仍在池中，必然是"意外断开"
+   *    （用户主动断开走 disconnect()/disconnectAll()，会先把 session 从池
+   *    中删除，其迟到的 close 事件在此直接 no-op）。因此 session 存在 +
+   *    有重连条目 = 意外断开，自动触发重连。
    */
-  private destroySession(id: string): void {
+  private destroySession(id: string, client?: Client): void {
     const session = this.sessions.get(id)
+    if (!session) return
+    // 陈旧事件守卫：session 的 client 已是新连接（重连已重建），跳过
+    if (client && session.client !== client) return
     this.sessions.delete(id)
-    if (session && !session.closeNotified) {
-      session.closeNotified = true
-      this.safeSend('ssh:close', { id })
+    if (session.closeNotified) return
+    session.closeNotified = true
+    const willReconnect = this.reconnects.has(id)
+    this.safeSend('ssh:close', { id, willReconnect })
+    if (willReconnect) {
+      this.startAutoReconnect(id)
     }
   }
 
@@ -462,7 +539,9 @@ export class SSHManager {
       } else if (process.platform === 'win32') {
         connectConfig.agent = '\\\\.\\pipe\\openssh-ssh-agent'
       } else {
-        connectConfig.agent = undefined
+        // P2 修复：原实现静默置 undefined → 落入笼统的"所有认证方法均失败"，
+        // 用户无从得知真正原因。明确抛出，由 IPC 层透传给前端展示。
+        throw new Error('未检测到 SSH Agent：请先运行 ssh-agent 并加载密钥（ssh-add），或设置 SSH_AUTH_SOCK 环境变量')
       }
     }
 
@@ -533,6 +612,9 @@ export class SSHManager {
               stream,
               name,
               cwd: '',
+              // 重连修复：记录终端尺寸，重连建 shell 时复用（resize 会持续更新）
+              cols: cols || 80,
+              rows: rows || 24,
             })
 
             // 在 shell 启动时注入 OSC 7 报告机制，跟踪交互式 shell 的当前工作目录
@@ -580,13 +662,39 @@ export class SSHManager {
 
             // Shell 关闭（D14：统一走 destroySession，去重通知）
             stream.on('close', () => {
-              this.destroySession(id)
+              this.destroySession(id, client)
               // 审查 M-6 修复：shell 通道关闭不等于 SSH 连接结束 — 原实现只删
               // session 并通知前端，底层 client socket 一直挂着（client 的 'close'
               // 事件只在连接级关闭时触发），远端断开后连接/文件句柄持续泄漏直到
               // TCP 自行超时。此处主动 end() 整个连接（已关闭时 end() 为 no-op）。
               try { client.end() } catch { /* ignore */ }
             })
+
+            // 重连修复：为交互式 shell 会话登记重连上下文（SFTP 专用连接不登记）。
+            // 意外断开时 destroySession 据此自动触发重连；用户主动断开
+            // （disconnect/disconnectAll）会取消该条目，保证主动关闭绝不重连。
+            // 无连接配置 id 的会话（理论仅程序内直连）无法自取凭据，不登记。
+            // 注意：重连成功路径条目已存在 — 必须【原地更新】而非替换对象：
+            // runReconnectAttempt 的 in-flight 续体按"条目引用 + 代数"识别同一轮，
+            // 若此处替换为新对象，成功的重连会被误判为陈旧结果而被拆除。
+            if (config.id) {
+              const existingEntry = this.reconnects.get(id)
+              if (existingEntry) {
+                existingEntry.connectionId = config.id
+                existingEntry.cols = cols || 80
+                existingEntry.rows = rows || 24
+                existingEntry.inFlight = false
+              } else {
+                this.reconnects.set(id, {
+                  connectionId: config.id,
+                  cols: cols || 80,
+                  rows: rows || 24,
+                  generation: 0,
+                  timer: null,
+                  inFlight: false,
+                })
+              }
+            }
 
             wrappedResolve({ id, name })
           }
@@ -598,12 +706,17 @@ export class SSHManager {
         // 必然跟随 'close'（ssh2 语义），由 close 处理器统一清理 + 通知，
         // 保证 SFTP 专用连接（无 shell 流）中断后 UI 也能收到 ssh:close
         // v2 改进：用 SSHError.from 统一分类原始错误，前端可按 code 做差异化呈现
-        wrappedReject(SSHError.from(err))
+        // 修复：传入 authType —— ssh2 认证失败的错误消息不含方法名，按用户
+        // 配置的认证方式归类，密码错才报 AUTH_PASSWORD（"密码认证失败"）
+        // 而非泛化的 AUTH_UNKNOWN。password/passphrase 已在 buildConnectConfig
+        // 后清除，但 authType 未被清除，此处可用
+        wrappedReject(SSHError.from(err, undefined, config.authType))
       })
 
       client.on('close', () => {
         // D14 修复：close 统一清理 + 通知（destroySession 内部去重，恰好一次）
-        this.destroySession(id)
+        // 重连修复：传入 client — 重连场景下旧 client 的迟到 close 事件据此识别为陈旧事件
+        this.destroySession(id, client)
       })
 
       client.connect(connectConfig)
@@ -626,6 +739,17 @@ export class SSHManager {
         session.stream.setWindow(rows, cols, 0, 0)
       } catch {
         // ignore resize errors
+      }
+    }
+    // 重连修复：记住最新终端尺寸（session 与重连条目同步更新），
+    // 重连建 shell 时以断开前的实际大小重建，避免回到 80x24
+    if (session) {
+      session.cols = cols
+      session.rows = rows
+      const entry = this.reconnects.get(id)
+      if (entry) {
+        entry.cols = cols
+        entry.rows = rows
       }
     }
   }
@@ -723,29 +847,20 @@ if (!session) throw new SSHError('SESSION_NOT_FOUND')
     return session?.cwd || ''
   }
 
-  /** 断开连接 */
+  /** 断开连接（用户主动：先取消所有待执行重连，不触发重连、不发 ssh:close） */
   disconnect(id: string): void {
-    const session = this.sessions.get(id)
-    if (session) {
-      this.closeSftp(id)
-      try {
-        session.stream?.close()
-      } catch {
-        // ignore
-      }
-      try {
-        session.client.end()
-      } catch {
-        // ignore
-      }
-      this.sessions.delete(id)
-    }
+    // 重连修复：主动断开取消该会话的重连（清 timer + 代数 +1 使 in-flight 旧连接作废）
+    this.cancelReconnect(id)
+    this.teardownSession(id)
   }
 
-  /** 清理所有会话 */
+  /** 清理所有会话（应用退出/关全部：同样取消所有待执行重连，防退出后定时器空转） */
   disconnectAll(): void {
     for (const id of this.sftpSessions.keys()) {
       this.closeSftp(id)
+    }
+    for (const id of Array.from(this.reconnects.keys())) {
+      this.cancelReconnect(id)
     }
     for (const session of this.sessions.values()) {
       try {
@@ -761,6 +876,184 @@ if (!session) throw new SSHError('SESSION_NOT_FOUND')
     }
     this.sessions.clear()
     this.transfers.clear()
+  }
+
+  // ════════════════════════════════════════════════
+  //   断线重连（自动 + 手动）
+  //   修复动机：远程 shell 意外断开（网络抖动/服务端断连）时原实现仅通知
+  //   前端关 tab，无任何重连。现在：意外断开自动最多 3 次、退避 1s/3s/9s，
+  //   复用已保存连接配置（主进程自取凭据）与完整 doConnect 路径
+  //   （新 client + 新 shell + OSC 7 注入，会话 id 不变，前端 scrollback 保留）；
+  //   用户主动断开/关 tab/删除连接配置会取消所有待执行重连，不产生僵尸连接。
+  // ════════════════════════════════════════════════
+
+  /** 自动重连入口：意外断开时由 destroySession 触发 */
+  private startAutoReconnect(id: string): void {
+    this.beginReconnect(id)
+  }
+
+  /**
+   * 手动重连：用户在终端状态区点击「重连」— 重置计数，重新走完整
+   * 3 次退避循环（1s/3s/9s）。cols/rows 由渲染层传入当前终端实际尺寸。
+   */
+  reconnect(id: string, cols?: number, rows?: number): void {
+    const entry = this.reconnects.get(id)
+    if (!entry) throw new SSHError('SESSION_NOT_FOUND')
+    // 会话仍存活（防御：按钮只应在断开后出现）：无需重连
+    if (this.sessions.has(id)) return
+    if (typeof cols === 'number' && cols > 0) entry.cols = cols
+    if (typeof rows === 'number' && rows > 0) entry.rows = rows
+    this.beginReconnect(id)
+  }
+
+  /** 开始一轮重连循环（自动/手动共用）：作废旧 in-flight 连接 + 排程第 1 次尝试 */
+  private beginReconnect(id: string): void {
+    const entry = this.reconnects.get(id)
+    if (!entry) return
+    // 代数 +1：任何进行中的旧连接完成后结果作废（防止用户重启重连期间
+    // 旧连接恰好成功造成双连接/僵尸连接）
+    entry.generation++
+    if (entry.timer) {
+      clearTimeout(entry.timer)
+      entry.timer = null
+    }
+    entry.inFlight = false
+    this.scheduleReconnectAttempt(id, 1)
+  }
+
+  /**
+   * 排程第 N 次尝试：先通知前端（驱动终端系统行 + 状态区 spinner），
+   * 再按退避延迟建立连接。仅对 N ∈ [1, max] 调用，超限由调用方 give-up。
+   */
+  private scheduleReconnectAttempt(id: string, attempt: number): void {
+    const entry = this.reconnects.get(id)
+    if (!entry) return
+    // 防御：等待期间会话已被其他方式重建（不应发生），不再重连
+    if (this.sessions.has(id)) return
+    const delayMs = reconnectDelayMs(attempt)
+    this.safeSend('ssh:reconnect', {
+      id,
+      // attempt 1 = 首轮（断开后自动 / 手动点击后）；attempt > 1 = 上一次失败后的重试
+      phase: attempt === 1 ? 'reconnecting' : 'retry',
+      attempt,
+      maxAttempts: RECONNECT_MAX_ATTEMPTS,
+      delayMs,
+    })
+    entry.timer = setTimeout(() => {
+      entry.timer = null
+      void this.runReconnectAttempt(id, attempt)
+    }, delayMs)
+  }
+
+  /** 执行一次重连尝试：取配置 → 复用 doConnect（同 id）→ 通知结果 */
+  private async runReconnectAttempt(id: string, attempt: number): Promise<void> {
+    const entry = this.reconnects.get(id)
+    if (!entry || this.sessions.has(id)) return
+    const gen = entry.generation
+    entry.inFlight = true
+
+    // 主进程自取已保存的连接配置（safeStorage 解密凭据），渲染层全程不参与
+    let config: SSHConnectionConfig | null = null
+    if (this.configProvider) {
+      try {
+        config = await this.configProvider(entry.connectionId)
+      } catch (e) {
+        console.warn('[ssh] 重连读取连接配置失败:', e)
+      }
+    }
+    // await 期间条目可能已被取消（关 tab/删连接）或手动重启：本轮结果作废
+    if (!this.isReconnectCurrent(id, entry, gen)) return
+    if (!config) {
+      // 连接配置已被删除：重连失去意义（手动重试也无凭据），移除条目并通知前端
+      this.reconnects.delete(id)
+      this.safeSend('ssh:reconnect', {
+        id, phase: 'gave-up', attempt, maxAttempts: RECONNECT_MAX_ATTEMPTS, reason: 'config-missing',
+      })
+      return
+    }
+
+    try {
+      // 复用现有连接路径（不复制逻辑）：同一会话 id（前端 xterm 实例/scrollback
+      // 监听不变），doConnect 内部完成新 Client + 新 shell 通道 + OSC 7 cwd 注入
+      await this.doConnect(id, config, true, entry.cols, entry.rows)
+    } catch (err) {
+      if (!this.isReconnectCurrent(id, entry, gen)) return
+      entry.inFlight = false
+      console.warn(`[ssh] 重连第 ${attempt}/${RECONNECT_MAX_ATTEMPTS} 次失败:`, err instanceof Error ? err.message : err)
+      if (attempt >= RECONNECT_MAX_ATTEMPTS) {
+        // 3 次全部失败：通知前端显示手动「重连」按钮
+        this.safeSend('ssh:reconnect', {
+          id, phase: 'gave-up', attempt, maxAttempts: RECONNECT_MAX_ATTEMPTS, reason: 'exhausted',
+        })
+      } else {
+        this.scheduleReconnectAttempt(id, attempt + 1)
+      }
+      return
+    }
+
+    // 陈旧成功：连接期间条目已被取消/手动重启（用户操作覆盖了本轮）—
+    // 只拆除刚建立的连接。注意不能走 disconnect()（会连带取消新一轮的状态），
+    // 也不发 ssh:close（前端 tab 由新一轮重连接管）
+    if (!this.isReconnectCurrent(id, entry, gen)) {
+      this.teardownSession(id)
+      // 条目对象被替换（取消删除后由 doConnect 重新登记）= 悬挂条目，清理；
+      // 同一对象但代数变化 = 手动重启（新一轮仍有效，原地更新保证对象不变），保留
+      if (this.reconnects.get(id) !== entry) {
+        this.reconnects.delete(id)
+      }
+      return
+    }
+    entry.inFlight = false
+    this.safeSend('ssh:reconnect', { id, phase: 'success', attempt, maxAttempts: RECONNECT_MAX_ATTEMPTS })
+    // 重连成功后更新最后连接时间（与首连成功路径同语义）
+    try { this.onReconnected?.(entry.connectionId) } catch { /* ignore */ }
+  }
+
+  /** in-flight 连接完成时校验：重连条目仍是开始时那条且代数未变（未被取消/重启） */
+  private isReconnectCurrent(id: string, entry: ReconnectEntry, gen: number): boolean {
+    return this.reconnects.get(id) === entry && entry.generation === gen
+  }
+
+  /** 取消某会话的重连：清退避 timer + 代数 +1 作废旧 in-flight 连接 + 移除条目 */
+  private cancelReconnect(id: string): void {
+    const entry = this.reconnects.get(id)
+    if (!entry) return
+    // 取消时确有重连活动（退避等待中或连接在途）才通知前端 —
+    // 典型场景：会话断开后用户删除了连接配置（tab 仍在，状态条须停止转圈）；
+    // 常规关 tab 路径组件随即卸载，事件无接收者，天然无害
+    const hadPending = !!entry.timer || entry.inFlight
+    if (entry.timer) {
+      clearTimeout(entry.timer)
+      entry.timer = null
+    }
+    entry.generation++
+    entry.inFlight = false
+    this.reconnects.delete(id)
+    if (hadPending) {
+      this.safeSend('ssh:reconnect', {
+        id, phase: 'gave-up', attempt: 0, maxAttempts: RECONNECT_MAX_ATTEMPTS, reason: 'cancelled',
+      })
+    }
+  }
+
+  /** 取消指定连接配置名下所有会话的重连（删除连接配置时由 main.ts 调用） */
+  cancelReconnectsByConnection(connectionId: string): void {
+    for (const [id, entry] of this.reconnects) {
+      if (entry.connectionId === connectionId) this.cancelReconnect(id)
+    }
+  }
+
+  /**
+   * 底层会话拆除：关闭 shell 流与连接、移出会话池。
+   * 不发 ssh:close、不动重连状态 — 供用户主动断开与陈旧重连连接拆除复用。
+   */
+  private teardownSession(id: string): void {
+    const session = this.sessions.get(id)
+    if (!session) return
+    this.closeSftp(id)
+    try { session.stream?.close() } catch { /* ignore */ }
+    try { session.client.end() } catch { /* ignore */ }
+    this.sessions.delete(id)
   }
 
   /** 测试连接:建立成功后立即断开,不写入 sessions */
@@ -783,7 +1076,8 @@ if (!session) throw new SSHError('SESSION_NOT_FOUND')
       client.on('ready', () => done(true, '连接成功'))
       client.on('error', (err: Error) => {
         // v2 改进：统一使用 classifyRawError + toFriendlyZh 分类错误
-        const code = classifyRawError(err)
+        // 修复：传入 authType，认证失败时按配置的认证方式给出精确文案
+        const code = classifyRawError(err, config.authType)
         done(false, toFriendlyZh(code, err.message))
       })
       client.on('close', () => done(false, '连接已关闭'))

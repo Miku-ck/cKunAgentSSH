@@ -140,7 +140,7 @@ async def cors_null_origin_security(request, call_next):
 
 
 # ── API Token 认证中间件 ─────────────────────────────────────────────────────
-# 受保护范围：所有 /api/* 路由（含 SSE：POST /api/chat/stream、POST /api/agent/run）
+# 受保护范围：所有 /api/* 路由（含 SSE：POST /api/agent/run）
 # 例外：GET /api/health（及 /health）不认证；OPTIONS（CORS 预检）放行
 # 校验：X-API-Token 头与 API_TOKEN 恒定时间比较（hmac.compare_digest）
 # 注意：本中间件经 @app.middleware 注册后被置于中间件栈最外层（先于 CORS 执行），

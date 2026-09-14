@@ -1,11 +1,15 @@
 // src/composables/useChatPersistence.ts
+//
+// SSH 模式会话持久化（固定 dual 策略：localStorage 权威 + 后端懒同步）。
+// 原多模式抽象层（ChatMode 联合 / 'backend' 策略分支 / loadConversationsFromBackend
+// 整体替换）随"固定 Agent 模式"重构收敛删除，仅保留 ssh-ai 实际使用的路径。
 import { ref, shallowRef, computed } from 'vue'
 import { api } from '@/api/client'
 import type {
-  BaseConversation,
-  BaseMessage,
-  ModeConfig,
-  PersistenceStrategy,
+  ChatStorageKeys,
+  ConvGroup,
+  ModeConversation,
+  ModeMessage,
 } from '@/types/chat'
 
 import { genId } from '@/utils/id'
@@ -13,25 +17,17 @@ import { genId } from '@/utils/id'
 // （typecheck TS2304；运行时该分支一触发就抛 ReferenceError，toast 永远弹不出来）
 import { useToastStore } from '@/stores/toast'
 
-export interface UseChatPersistenceOptions<
-  TContext = unknown,
-  TMessage extends BaseMessage = BaseMessage,
-  TConversation extends BaseConversation<TMessage> = BaseConversation<TMessage>,
-> {
-  config: ModeConfig<TContext, TMessage, TConversation>
+/** 后端 API 的会话模式标识（固定 Agent 模式后仅 ssh 一种） */
+const API_MODE = 'ssh'
+
+export function useChatPersistence(options: {
+  config: ChatStorageKeys
   getDefaultModelId: () => Promise<string | undefined>
-}
-
-export function useChatPersistence<
-  TContext = unknown,
-  TMessage extends BaseMessage = BaseMessage,
-  TConversation extends BaseConversation<TMessage> = BaseConversation<TMessage>,
->(options: UseChatPersistenceOptions<TContext, TMessage, TConversation>) {
+}) {
   const { config, getDefaultModelId } = options
-  const { persistence, storageKey, modelStorageKey, mode } = config
+  const { storageKey, modelStorageKey } = config
 
-  function loadConversations(): TConversation[] {
-    if (persistence !== 'dual') return []
+  function loadConversations(): ModeConversation[] {
     try {
       const raw = localStorage.getItem(storageKey)
       return raw ? JSON.parse(raw) : []
@@ -42,13 +38,11 @@ export function useChatPersistence<
     }
   }
 
-  function saveConversations(convs: TConversation[]) {
-    if (persistence !== 'dual') return
+  function saveConversations(convs: ModeConversation[]) {
     localStorage.setItem(storageKey, JSON.stringify(convs))
   }
 
   function loadSelectedModelId(): string {
-    if (persistence !== 'dual') return ''
     try {
       return localStorage.getItem(modelStorageKey) || ''
     } catch {
@@ -57,47 +51,59 @@ export function useChatPersistence<
   }
 
   function saveSelectedModelId(id: string) {
-    if (persistence !== 'dual') return
     localStorage.setItem(modelStorageKey, id)
   }
 
-  async function loadConversationsFromBackend(limit = 50, offset = 0) {
+  /**
+   * P2 修复：启动时合并后端会话列表。
+   *
+   * 原缺口：历史仅靠 localStorage 恢复 — 换设备/清本地后，后端已同步的
+   * 会话在列表里凭空消失。
+   * 合并语义：
+   *   - 后端有、本地无（按 id 或 backendConvId 双键匹配）→ 追加（消息空，切换时按需拉取）
+   *   - 两边都有 → 仅更新 title/updated_at（本地消息是权威，不动）
+   *   - 本地有、后端无 → 保留（本地新建未同步的会话不能丢）
+   * 失败时不动本地列表（后端不可达 ≠ 历史丢失），仅记警告。
+   */
+  async function syncBackendConversations() {
     try {
-      const convs = await api.listConversations(limit, offset, mode)
+      const remote = await api.listConversations(50, 0, API_MODE)
       loadFailed.value = false
-      // M19：合并刷新 — 保留内存中已加载的会话消息。原实现把**所有**会话替换为
-      // messages:[]，仅当前会话随后重载 → 窗口期内切到非当前会话会看到被抹空的消息
-      // （靠延迟刷新才自愈），当前会话也会闪烁一空。列表接口不返回消息体，
-      // 只有当前会话会因 post_process 在后台新增消息（随后 loadMessages 权威重载），
-      // 其余会话内存态即权威，保留即可。新出现的会话（内存无缓存）仍为空。
-      const cachedByConvId = new Map<string, TMessage[]>()
-      for (const c of conversations.value) {
-        if (c.messages && c.messages.length > 0) cachedByConvId.set(c.id, c.messages)
+      const byLocalId = new Map(conversations.value.map((c) => [c.id, c]))
+      const byBackendId = new Map(
+        conversations.value.filter((c) => (c as any).backendConvId).map((c) => [(c as any).backendConvId as string, c]),
+      )
+      const merged = [...conversations.value]
+      for (const r of remote as Array<{ id: string; title: string; created_at: string; updated_at: string }>) {
+        const match = byBackendId.get(r.id) ?? byLocalId.get(r.id)
+        if (match) {
+          if (r.title) match.title = r.title
+          if (r.updated_at) match.updated_at = r.updated_at
+        } else {
+          merged.push({
+            id: r.id,
+            title: r.title,
+            messages: [] as ModeMessage[],
+            backendConvId: r.id,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+          } as ModeConversation)
+        }
       }
-      conversations.value = convs.map((c: any) => ({
-        id: c.id,
-        title: c.title,
-        messages: (cachedByConvId.get(c.id) ?? []) as TMessage[],
-        backendConvId: c.id,
-        created_at: c.created_at,
-        updated_at: c.updated_at,
-      })) as TConversation[]
+      // 浅引用新数组触发 groupedConversations 等下游重算（原地改 title 也一并生效）
+      conversations.value = merged
+      saveConversations(merged)
     } catch (e) {
-      // B24 修复：失败仍置空列表，但导出 loadFailed 标志供 UI 后续展示
-      // （原实现静默失败，用户看到空列表无法判断是"无会话"还是"加载失败"）
-      console.error(`[${mode}] loadConversationsFromBackend failed:`, e)
-      conversations.value = []
-      loadFailed.value = true
+      console.warn(`[${API_MODE}] syncBackendConversations failed（保留本地列表）:`, e)
     }
   }
 
-  const conversations = shallowRef<TConversation[]>(loadConversations())
-  // 审查修复：重启后恢复上次会话（dual 模式 localStorage 含完整消息；
-  // backend 模式列表消息为空，仅恢复选中态）。原实现恒为 null，
-  // 每次重启 AI 面板都显示空态，用户需手动从历史记录点回。
+  const conversations = shallowRef<ModeConversation[]>(loadConversations())
+  // 审查修复：重启后恢复上次会话（localStorage 含完整消息，仅恢复选中态）。
+  // 原实现恒为 null，每次重启 AI 面板都显示空态，用户需手动从历史记录点回。
   const currentConvId = ref<string | null>(conversations.value[0]?.id ?? null)
   const selectedModelId = ref<string>(loadSelectedModelId())
-  // B24 修复：后端会话列表加载失败标志（成功加载即复位），供 UI 后续展示
+  // B24 修复：后端会话列表加载失败标志（成功加载即复位），供 UI 展示
   const loadFailed = ref(false)
 
   const currentConversation = computed(() =>
@@ -112,8 +118,8 @@ export function useChatPersistence<
     return conv ? [...conv.messages] : []
   })
 
-  const groupedConversations = computed(() => {
-    const groups: Array<{ label: string; items: Array<{ id: string; title: string; updated_at: string }> }> = []
+  const groupedConversations = computed<ConvGroup[]>(() => {
+    const groups: ConvGroup[] = []
     const now = new Date()
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
     const yesterday = new Date(today.getTime() - 86400000)
@@ -156,82 +162,52 @@ export function useChatPersistence<
     saveSelectedModelId(id)
   }
 
-  async function createConversation(title?: string): Promise<TConversation> {
-    if (persistence === 'backend') {
-      try {
-        const backendConv = await api.createConversation(title || 'New Chat', mode)
-        const conv = {
-          id: backendConv.id,
-          title: backendConv.title,
-          messages: [] as TMessage[],
-          backendConvId: backendConv.id,
-          created_at: backendConv.created_at,
-          updated_at: backendConv.updated_at,
-        } as TConversation
-        conversations.value = [conv, ...conversations.value]
-        currentConvId.value = conv.id
-        return conv
-      } catch (e) {
-        console.error(`[${mode}] createConversation backend failed:`, e)
-        throw e
-      }
-    }
-
-    // dual 策略保持原有逻辑
+  async function createConversation(title?: string): Promise<ModeConversation> {
     const conv = {
       id: genId(),
       title: title || 'New Chat',
-      messages: [] as TMessage[],
+      messages: [] as ModeMessage[],
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
-    } as TConversation
+    } as ModeConversation
     conversations.value = [conv, ...conversations.value]
     currentConvId.value = conv.id
     saveConversations(conversations.value)
     return conv
   }
 
-  async function switchConversation(id: string, loadMessages?: (conv: TConversation) => Promise<void>) {
+  function switchConversation(id: string) {
     currentConvId.value = id
-    if (persistence === 'backend' && loadMessages) {
-      const conv = currentConversation.value
-      if (conv) await loadMessages(conv)
-    }
   }
 
-async function deleteConversation(id: string, loadMessages?: (conv: any) => Promise<void>) {
-  const conv = conversations.value.find((c) => c.id === id)
-  // 后端删除失败时回滚本地状态，避免"删掉的会话又回来了"的数据不一致
-  if (conv?.backendConvId) {
-    try {
-      await api.deleteConversation(conv.backendConvId)
-    } catch (e) {
-      console.error('[useChatPersistence] Backend delete failed:', e)
-      const toast = useToastStore()
-      toast.error('服务端删除失败，请稍后重试')
-      return // 后端删除失败，不回滚本地状态
+  async function deleteConversation(id: string) {
+    const conv = conversations.value.find((c) => c.id === id)
+    // 后端删除失败时回滚本地状态，避免"删掉的会话又回来了"的数据不一致
+    if (conv?.backendConvId) {
+      try {
+        await api.deleteConversation(conv.backendConvId)
+      } catch (e) {
+        console.error('[useChatPersistence] Backend delete failed:', e)
+        const toast = useToastStore()
+        toast.error('服务端删除失败，请稍后重试')
+        return // 后端删除失败，不回滚本地状态
+      }
     }
-  }
-  conversations.value = conversations.value.filter((c) => c.id !== id)
-  if (currentConvId.value === id) {
-    const nextConv = conversations.value[0] ?? null
-    currentConvId.value = nextConv?.id ?? null
-    // 切换到下一个会话时，如果是后端模式则加载消息
-    if (nextConv && persistence === 'backend' && loadMessages) {
-      await loadMessages(nextConv)
+    conversations.value = conversations.value.filter((c) => c.id !== id)
+    if (currentConvId.value === id) {
+      currentConvId.value = conversations.value[0]?.id ?? null
     }
+    saveConversations(conversations.value)
   }
-  saveConversations(conversations.value)
-}
 
-  async function ensureBackendConversation(conv: TConversation): Promise<void> {
+  async function ensureBackendConversation(conv: ModeConversation): Promise<void> {
     if (conv.backendConvId) return
     try {
-      const backendConv = await api.createConversation(conv.title, mode)
+      const backendConv = await api.createConversation(conv.title, API_MODE)
       conv.backendConvId = backendConv.id
       saveConversations(conversations.value)
     } catch (e) {
-      console.error(`[${mode}] Failed to create backend conversation:`, e)
+      console.error(`[${API_MODE}] Failed to create backend conversation:`, e)
       throw e
     }
   }
@@ -255,7 +231,7 @@ async function deleteConversation(id: string, loadMessages?: (conv: any) => Prom
     switchConversation,
     deleteConversation,
     ensureBackendConversation,
-    loadConversationsFromBackend,
+    syncBackendConversations,
     save,
   }
 }

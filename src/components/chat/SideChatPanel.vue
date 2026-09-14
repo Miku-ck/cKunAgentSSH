@@ -9,6 +9,7 @@
       <span class="panel-title">{{ panelTitle }}</span>
       <div class="header-spacer"></div>
       <div class="header-actions">
+        <slot name="header-actions-extra"></slot>
         <button class="icon-btn" title="历史记录" aria-label="历史记录" @click="showHistoryPanel = !showHistoryPanel">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
         </button>
@@ -244,6 +245,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import type { ModelConfig } from '@/api/client'
+import type { ConvGroup } from '@/types/chat'
 import MessageItem from '@/components/chat/MessageItem.vue'
 import HistoryPanel from '@/components/chat/HistoryPanel.vue'
 import { useResizablePanel } from '@/composables/useResizablePanel'
@@ -270,12 +272,6 @@ interface DisplayMsg {
   streamingReasoning?: string
   duration?: number
   [key: string]: any
-}
-
-// ── 历史分组接口 ──
-interface ConvGroup {
-  label: string
-  items: Array<{ id: string; title: string; updated_at: string }>
 }
 
 // ── Props ──

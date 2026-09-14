@@ -50,6 +50,7 @@ import type { SettingCategory } from '@/stores/settings'
 import ModelsPanel from '@/components/settings/panels/ModelsPanel.vue'
 import ChatPanel from '@/components/settings/panels/ChatPanel.vue'
 import AppearancePanel from '@/components/settings/panels/AppearancePanel.vue'
+import AgentPanel from '@/components/settings/panels/AgentPanel.vue'
 
 // 导航图标（自绘 SVG 组件）
 const IconModels = markRaw({
@@ -61,6 +62,9 @@ const IconChat = markRaw({
 const IconAppearance = markRaw({
   template: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`,
 })
+const IconAgent = markRaw({
+  template: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4"/><rect x="5" y="6" width="14" height="10" rx="3"/><circle cx="9.5" cy="11" r="1"/><circle cx="14.5" cy="11" r="1"/><path d="M9 20v-4M15 20v-4M3 10v2M21 10v2"/></svg>`,
+})
 
 const visible = ref(false)
 const activeCategory = ref<SettingCategory>('models')
@@ -69,12 +73,14 @@ const categories: { id: SettingCategory; label: string; icon: Component }[] = [
   { id: 'models',         label: '模型',   icon: IconModels },
   { id: 'chat',           label: '对话',   icon: IconChat },
   { id: 'appearance',     label: '外观',   icon: IconAppearance },
+  { id: 'agent',          label: 'Agent',  icon: IconAgent },
 ]
 
 const panelMap: Record<SettingCategory, Component> = {
   models:         markRaw(ModelsPanel),
   chat:           markRaw(ChatPanel),
   appearance:     markRaw(AppearancePanel),
+  agent:          markRaw(AgentPanel),
 }
 
 const currentPanel = computed(() => panelMap[activeCategory.value])

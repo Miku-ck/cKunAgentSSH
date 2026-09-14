@@ -78,7 +78,7 @@ class SpawnSubagentTool(BaseTool):
         """执行子 Agent 调用
 
         参数:
-            context: 工具执行上下文（含 workspace/mode 等信息）
+            context: 工具执行上下文（含 SSH 会话 / 环境 / mode 等信息）
             task: 子任务描述
             system_prompt: 子 Agent 角色设定
             extra_context: 额外上下文（可选）

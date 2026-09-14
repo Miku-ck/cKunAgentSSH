@@ -44,6 +44,10 @@ interface SSHConnectionRecord {
   password?: string
   privateKeyPath?: string
   passphrase?: string
+  /** 主进程列表接口附带的布尔标志（不含凭据内容）：是否已保存密码/passphrase，
+   *  供编辑弹窗提示"留空则保持原值"，避免误触"请输入密码"或误以为凭据丢失 */
+  hasPassword?: boolean
+  hasPassphrase?: boolean
   /** 备注(单行文字,最多 10 字). 旧数据可能没有此字段,但 tags 数组可作为兜底 */
   note?: string
   /** 目标环境标记('test' | 'prod'). 驱动生产环境高风险命令的审计与审批强化. 旧数据默认 'test' */
@@ -69,6 +73,24 @@ interface EditorFileContent {
   readOnly: boolean
 }
 
+/**
+ * SSH 重连状态变化事件（主进程 → 渲染层，channel: ssh:reconnect）。
+ * 主进程类型定义见 electron/ssh-manager.ts（两个 tsconfig 程序互不包含，
+ * 此处为渲染层副本）
+ */
+interface SshReconnectStatus {
+  id: string
+  /** reconnecting=首轮排程（断开后自动/手动点击后）| retry=上一次失败后的重试排程 | success=重连成功 | gave-up=放弃 */
+  phase: 'reconnecting' | 'retry' | 'success' | 'gave-up'
+  /** 当前（reconnecting/retry）或最后一次（success/gave-up）尝试序号，1 起；gave-up + cancelled 时为 0（哨兵值） */
+  attempt: number
+  maxAttempts: number
+  /** reconnecting/retry 阶段：下一次尝试前的退避等待（ms） */
+  delayMs?: number
+  /** gave-up 阶段：exhausted=3 次均失败 | config-missing=连接配置已删除 | cancelled=重连被取消（如断开后连接配置被删除，tab 仍在） */
+  reason?: 'exhausted' | 'config-missing' | 'cancelled'
+}
+
 interface ElectronAPI {
   windowMinimize: () => Promise<void>
   windowMaximize: () => Promise<void>
@@ -92,12 +114,10 @@ interface ElectronAPI {
   fsRename: (oldPath: string, newPath: string) => Promise<void>
   fsCopy: (srcPath: string, destPath: string, transferId: string) => Promise<void>
   fsTrash: (filePath: string) => Promise<void>
-  fsWriteBinaryFile: (filePath: string, base64Data: string) => Promise<void>
   fsPathJoin: (...segments: string[]) => Promise<string>
   fsGetSkillsDir: () => Promise<string>
   fsRmRF: (targetPath: string) => Promise<void>
   fsListFilesRecursive: (dirPath: string) => Promise<string[]>
-  fsListTextFiles: (dirPath: string) => Promise<string[]>
   fsExists: (filePath: string) => Promise<boolean>
   fsStat: (filePath: string) => Promise<{ isDirectory: boolean; isFile: boolean; size: number; modified: number }>
   fsResolveProgram: (name: string) => Promise<string | null>
@@ -126,11 +146,19 @@ interface ElectronAPI {
   sshWrite: (id: string, data: string) => Promise<void>
   sshResize: (id: string, cols: number, rows: number) => Promise<void>
   sshDisconnect: (id: string) => Promise<void>
+  // 重连修复：手动重连已断开的会话（重置计数，重新走 3 次退避）。
+  // cols/rows 传当前终端实际尺寸，主进程按 ssh:connect 同款规则钳制
+  sshReconnect: (id: string, cols?: number, rows?: number) => Promise<void>
   sshGetCwd: (id: string) => Promise<string>
   // C8：timeoutSec 可选，默认 30 秒，主进程钳制 1..600
   sshExec: (sshSessionId: string, command: string, timeoutSec?: number) => Promise<{ stdout: string; stderr: string; exitCode: number | null }>
   onSshData: (callback: (data: { id: string; data: string }) => void) => () => void
-  onSshClose: (callback: (data: { id: string }) => void) => () => void
+  // 重连修复：willReconnect=true 表示意外断开且主进程将自动重连 —
+  // 渲染层保留 tab 等待重连（不 removeSession）；false/缺省走原关闭清理流程。
+  // 用户主动断开（关 tab/断开按钮）不会发出本事件
+  onSshClose: (callback: (data: { id: string; willReconnect?: boolean }) => void) => () => void
+  // 重连修复：重连状态变化（自动/手动重连进度，驱动终端系统行与状态区显示）
+  onSshReconnect: (callback: (data: SshReconnectStatus) => void) => () => void
   // s1 修复：主机密钥验证事件（首次连接通知 + 密钥变更警告）
   onHostKeyNew: (callback: (data: { hostKey: string; fingerprint: string }) => void) => () => void
   onHostKeyMismatch: (callback: (data: { hostKey: string; expected: string; got: string }) => void) => () => void

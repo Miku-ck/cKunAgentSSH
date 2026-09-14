@@ -181,18 +181,3 @@ export class StreamingThinkScrubber {
     return 0
   }
 }
-
-/**
- * 一次性擦洗函数（用于非流式场景）
- */
-export function scrubThinkBlocks(text: string): string {
-  const scrubber = new StreamingThinkScrubber()
-  return scrubber.feed(text) + scrubber.flush()
-}
-
-/**
- * 检测文本是否包含 think 块
- */
-export function hasThinkBlock(text: string): boolean {
-  return THINK_OPEN_TAGS.some(tag => text.includes(tag))
-}

@@ -121,7 +121,7 @@ class TraceEvent:
 class ToolCall:
     """单次工具调用 — LLM 输出解析后的结构化表达"""
     id: str                                    # LLM 返回的 tool_call_id
-    name: str                                  # 工具名（如 "read_file"）
+    name: str                                  # 工具名（如 "file_read"）
     args: dict[str, Any]                       # 参数
 
 
@@ -170,7 +170,7 @@ class UndoAction(Protocol):
 
 @dataclass
 class NoOpUndo:
-    """空撤销 — 用于只读工具（web_search/web_fetch/read_file/list_dir）"""
+    """空撤销 — 用于只读工具（web_search/web_fetch/file_read/file_glob 等）"""
     reason: str = "readonly"
 
     async def apply_reverse(self) -> None:
@@ -300,7 +300,6 @@ class RunContext:
     task: str
     mode: str
     conversation_id: str
-    workspace_path: str
     system_prompt: str
     history: list[dict[str, str]]
     memories: list[str]
@@ -343,7 +342,6 @@ class RunContext:
             task=task,
             mode=mode,
             conversation_id=opts.get("conversation_id", ""),
-            workspace_path=opts.get("workspace_path", ""),
             ssh_session_id=opts.get("ssh_session_id", ""),
             environment=opts.get("environment", "test"),
             visible_terminal=opts.get("visible_terminal", False),

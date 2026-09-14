@@ -12,10 +12,6 @@ export function registerSettingsDialog(instance: SettingsDialogInstance) {
   dialogInstance.value = instance
 }
 
-export function unregisterSettingsDialog() {
-  dialogInstance.value = null
-}
-
 export function useSettings() {
   function openSettings(category: SettingCategory = 'models') {
     dialogInstance.value?.open(category)

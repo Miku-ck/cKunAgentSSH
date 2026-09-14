@@ -25,6 +25,19 @@
     :upload-handler="handleUploadFiles"
   >
 
+    <template #header-actions-extra>
+      <button
+        class="memory-btn"
+        :class="{ active: showMemory }"
+        title="Agent 记忆"
+        aria-label="Agent 记忆"
+        @click="showMemory = !showMemory"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4a4 4 0 0 0-4 4 3 3 0 0 0-1 5.8A3.5 3.5 0 0 0 9 20h6a3.5 3.5 0 0 0 2-6.2A3 3 0 0 0 16 8a4 4 0 0 0-4-4z"/><path d="M12 4v16M9 8H7M17 8h-2M9 14H7.5M17 14h-1.5"/></svg>
+      </button>
+      <AgentMemoryView v-if="showMemory" @close="showMemory = false" />
+    </template>
+
     <template #agent-panel>
       <!-- 仅在有警告/错误/人工介入/权限请求时显示 -->
       <AgentRunPanel
@@ -42,6 +55,7 @@ import { useModelsStore } from '@/stores/models'
 import { useAgentStore } from '@/stores/agent'
 import SideChatPanel from '@/components/chat/SideChatPanel.vue'
 import AgentRunPanel from '@/components/agent/AgentRunPanel.vue'
+import AgentMemoryView from '@/components/agent/AgentMemoryView.vue'
 import type { ChatAttachment } from '@/api/client'
 
 defineEmits<{ close: [] }>()
@@ -49,6 +63,9 @@ defineEmits<{ close: [] }>()
 const store = useSshAiStore()
 const modelsStore = useModelsStore()
 const agentStore = useAgentStore()
+
+/** AI 面板头部"Agent 记忆"浮层开关 */
+const showMemory = ref(false)
 
 function handleAbort() {
   agentStore.abort()
@@ -102,4 +119,25 @@ onMounted(() => {
 
 <style scoped>
 /* SSH 面板特化样式占位，通用 Agent 切换样式已在 SideChatPanel.vue 统一维护 */
+/* header-actions-extra 插槽内容编译于本组件作用域，需自带 icon-btn 等效样式 */
+.memory-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary, #9a9a9a);
+  cursor: pointer;
+}
+.memory-btn:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+  color: var(--text-primary, #d4d4d4);
+}
+.memory-btn.active {
+  color: var(--accent-primary, #7aa2d0);
+  background: var(--bg-active, rgba(255, 255, 255, 0.08));
+}
 </style>

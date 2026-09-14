@@ -1,14 +1,28 @@
 <template>
-  <div class="remote-terminal" ref="containerRef">
-    <CompletionPopup
-      ref="popupRef"
-      :visible="completionState.visible"
-      :candidates="completionState.candidates"
-      :x="completionState.x"
-      :y="completionState.y"
-      @select="applyCompletion"
-      @cancel="hideCompletion"
-    />
+  <div class="remote-terminal-root">
+    <!-- 重连修复：重连状态条 — 重连中：spinner + 尝试序号；自动重连放弃后：「重连」按钮。
+         仅在有状态时渲染，平时零高度开销；终端容器 flex:1 自动让位/还原 -->
+    <div class="reconnect-bar" v-if="reconnectState || reconnectGaveUp">
+      <template v-if="reconnectState">
+        <span class="reconnect-spinner"></span>
+        <span class="reconnect-text">重连中 ({{ reconnectState.attempt }}/{{ reconnectState.maxAttempts }})...</span>
+      </template>
+      <template v-else>
+        <span class="reconnect-text reconnect-text-failed">已断开</span>
+        <button class="reconnect-btn" :disabled="reconnectBusy" @click="manualReconnect">重连</button>
+      </template>
+    </div>
+    <div class="remote-terminal" ref="containerRef">
+      <CompletionPopup
+        ref="popupRef"
+        :visible="completionState.visible"
+        :candidates="completionState.candidates"
+        :x="completionState.x"
+        :y="completionState.y"
+        @select="applyCompletion"
+        @cancel="hideCompletion"
+      />
+    </div>
   </div>
 </template>
 
@@ -30,9 +44,11 @@ import {
   type CompletionCandidate,
 } from '@/composables/useCompletion'
 import { useSSHStore } from '@/stores/ssh'
+import { useToastStore } from '@/stores/toast'
 import { buildTerminalOptions, watchTerminalConfig } from '@/composables/useTerminalConfig'
 import { stripAnsiBackground } from '@/utils/terminal-colors'
 import { ingestOutput } from '@/composables/useAgentDeliver'
+import { toFriendlyMessage } from '@/api/client'
 
 const props = defineProps<{
   sshId: string
@@ -52,8 +68,66 @@ let unsubTermConfig: (() => void) | null = null
 let resizeObserver: ResizeObserver | null = null
 let contextMenuHandler: ((e: Event) => void) | null = null
 let flushTimer: ReturnType<typeof setTimeout> | null = null
+// 行缓冲提升到 setup 作用域：重连系统行追加（appendReconnectLine，setup 作用域）
+// 需要先刷出残留的不完整行再写入，与 onMounted 内的 flush 逻辑共享同一缓冲
+let dataBuffer = ''
 
 const sshStore = useSSHStore()
+const toast = useToastStore()
+
+// ─── 重连状态（重连修复）──────────────────
+/** 重连进行中：状态条显示 spinner + 「重连中 (n/3)」（主进程 ssh:reconnect 事件驱动） */
+const reconnectState = ref<{ attempt: number; maxAttempts: number } | null>(null)
+/** 自动重连已放弃（3 次失败）且未手动重连：状态条显示「重连」按钮 */
+const reconnectGaveUp = ref(false)
+/** 手动重连 IPC 在途（防重复点击） */
+const reconnectBusy = ref(false)
+let unsubReconnect: (() => void) | null = null
+
+/** 向终端追加一条重连系统提示行（先刷出不完整行缓冲，避免与 shell 输出交错） */
+function appendReconnectLine(text: string, color: string): void {
+  if (!terminal) return
+  if (flushTimer) {
+    clearTimeout(flushTimer)
+    flushTimer = null
+  }
+  if (dataBuffer.length > 0) {
+    const cleaned = processBufferedData(dataBuffer)
+    if (cleaned) terminal.write(cleaned)
+    dataBuffer = ''
+  }
+  terminal.write(`\r\n${color}${text}\x1b[0m`)
+}
+
+/** 手动重连：重置计数，重新走完整 3 次退避循环（连接由主进程完成，凭据主进程自取） */
+async function manualReconnect(): Promise<void> {
+  const api = window.electronAPI
+  if (!api || !terminal || reconnectBusy.value) return
+  reconnectBusy.value = true
+  // 乐观隐藏按钮；后续状态由主进程 ssh:reconnect 事件驱动
+  reconnectGaveUp.value = false
+  try {
+    await api.sshReconnect(props.sshId, terminal.cols, terminal.rows)
+  } catch (err) {
+    // 无重连上下文（如连接配置已删除）：恢复按钮并提示
+    reconnectGaveUp.value = true
+    appendReconnectLine('[重连失败：连接配置不存在或已删除]', '\x1b[31m')
+    toast.error(toFriendlyMessage(err, '重连失败'), 5000)
+  } finally {
+    reconnectBusy.value = false
+  }
+}
+
+/** 过滤/清洗 shell 输出（ANSI 背景色、OSC 7、启动注入命令回显） */
+function processBufferedData(raw: string): string {
+  let cleaned = stripAnsiBackground(raw)
+  // 过滤 OSC 7 序列，支持 BEL (\x07) 和 ST (ESC \) 两种结束符
+  cleaned = cleaned.replace(/\x1b\]7;[^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+  // 过滤启动注入命令的回显（整行含 __ckun_ 标识则丢弃）
+  cleaned = cleaned.replace(/[^\r\n]*__ckun_(?:osc7|host)[^\r\n]*[\r\n]*/g, '')
+  cleaned = cleaned.replace(/[^\r\n]*stty (?:-)?echo 2>\/dev\/null[^\r\n]*[\r\n]*/g, '')
+  return cleaned
+}
 
 // ─── 补全状态 ────────────────────────────
 const completionState = ref<{
@@ -281,17 +355,7 @@ onMounted(() => {
   // - 但 PS1 提示符不以 \n 结尾，会一直留在缓冲区。
   //   因此用 30ms 延时刷新：数据停顿后自动刷出剩余内容（提示符/光标移动等）。
   //   30ms 足够短不影响交互感知，又足够长以拼接被拆块的 echo 行。
-  let dataBuffer = ''
-
-  function processBufferedData(raw: string): string {
-    let cleaned = stripAnsiBackground(raw)
-    // 过滤 OSC 7 序列，支持 BEL (\x07) 和 ST (ESC \) 两种结束符
-    cleaned = cleaned.replace(/\x1b\]7;[^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
-    // 过滤启动注入命令的回显（整行含 __ckun_ 标识则丢弃）
-    cleaned = cleaned.replace(/[^\r\n]*__ckun_(?:osc7|host)[^\r\n]*[\r\n]*/g, '')
-    cleaned = cleaned.replace(/[^\r\n]*stty (?:-)?echo 2>\/dev\/null[^\r\n]*[\r\n]*/g, '')
-    return cleaned
-  }
+  // （dataBuffer 与 processBufferedData 已提升到 setup 作用域，供重连系统行追加复用）
 
   function scheduleFlush(): void {
     if (flushTimer) clearTimeout(flushTimer)
@@ -350,13 +414,58 @@ onMounted(() => {
   })
 
   // 监听 SSH 关闭
-  unsubClose = api.onSshClose(({ id }) => {
+  unsubClose = api.onSshClose(({ id, willReconnect }) => {
     if (id === props.sshId) {
       // C27 修复：会话关闭时清理补全请求序号（防 _completionRequestIds 泄漏）
       releaseCompletionSession(props.sshId)
       flushBuffer(true) // 刷新行缓冲，避免尾部数据丢失
+      if (willReconnect) {
+        // 重连修复：意外断开，主进程将自动重连 — 保留 tab（不 emit close/
+        // removeSession）与 xterm 实例（scrollback 保留），具体提示行由紧随的
+        // ssh:reconnect 状态事件写入。用户主动断开不发本事件，不受影响
+        return
+      }
       terminal?.write('\r\n\x1b[33m[SSH connection closed]\x1b[0m\r\n')
       emit('close')
+    }
+  })
+
+  // 重连修复：监听重连状态变化（主进程推送）— 驱动终端系统行 + 状态条
+  unsubReconnect = api.onSshReconnect((data) => {
+    if (data.id !== props.sshId) return
+    const { phase, attempt, maxAttempts } = data
+    if (phase === 'reconnecting') {
+      // 首轮排程（断开后自动 / 点击「重连」后）
+      reconnectGaveUp.value = false
+      reconnectState.value = { attempt, maxAttempts }
+      appendReconnectLine(`[连接已断开] 正在自动重连 (${attempt}/${maxAttempts})...`, '\x1b[33m')
+    } else if (phase === 'retry') {
+      // 上一次尝试失败、下一次退避已排程：追加倒计时提示，状态条更新序号
+      reconnectState.value = { attempt, maxAttempts }
+      const secs = Math.max(1, Math.round((data.delayMs ?? 1000) / 1000))
+      appendReconnectLine(`[重连第 ${attempt - 1}/${maxAttempts} 次失败，${secs} 秒后重试]`, '\x1b[33m')
+    } else if (phase === 'success') {
+      // 重连成功：新 shell 以同一 id 流式接管，scrollback 无缝衔接
+      reconnectState.value = null
+      reconnectGaveUp.value = false
+      appendReconnectLine('[已重新连接]', '\x1b[32m')
+    } else if (phase === 'gave-up') {
+      reconnectState.value = null
+      if (data.reason === 'cancelled') {
+        // 重连被取消（如断开后连接配置被删除）：静默清除状态，隐藏状态条
+        reconnectGaveUp.value = false
+        return
+      }
+      if (data.reason === 'config-missing') {
+        // 连接配置已被删除：重连失去意义，关闭 tab（等同用户主动断开）
+        reconnectGaveUp.value = false
+        appendReconnectLine('[连接配置已删除，无法重连]', '\x1b[31m')
+        emit('close')
+        return
+      }
+      // 3 次均失败：状态条显示「重连」按钮
+      reconnectGaveUp.value = true
+      appendReconnectLine('[自动重连失败，可点击「重连」手动重试]', '\x1b[31m')
     }
   })
 
@@ -425,6 +534,7 @@ onUnmounted(() => {
   resizeObserver?.disconnect()
   unsubData?.()
   unsubClose?.()
+  unsubReconnect?.()
   unsubTermConfig?.()
   // 仅当 session 仍在 store 中时才主动断开 SSH
   // 避免 closeSession 已调用 sshDisconnect 后,组件卸载又重复调用造成冗余 IPC
@@ -468,9 +578,76 @@ defineExpose({
 </script>
 
 <style scoped>
-.remote-terminal {
+/* 重连修复：根容器 flex 纵向布局 — 状态条出现时终端容器让位，
+   ResizeObserver 自动重新 fit，无需手动协调 */
+.remote-terminal-root {
   width: 100%;
   height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.remote-terminal {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  position: relative;
+}
+
+/* ─── 重连状态条 ─── */
+.reconnect-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 12px;
+  background: var(--bg-elevated, #1a1a1e);
+  border-bottom: 1px solid var(--border-subtle, #2d2d30);
+  color: var(--text-secondary, #969696);
+  font-size: 12px;
+  z-index: 5;
+}
+
+.reconnect-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border-default, #3a3a3e);
+  border-top-color: var(--accent-blue);
+  border-radius: 50%;
+  animation: reconnect-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes reconnect-spin {
+  to { transform: rotate(360deg); }
+}
+
+.reconnect-text-failed {
+  color: var(--accent-red, #f48771);
+}
+
+.reconnect-btn {
+  margin-left: auto;
+  padding: 2px 14px;
+  border: 1px solid var(--accent-blue);
+  border-radius: var(--radius-sm, 4px);
+  background: transparent;
+  color: var(--accent-blue);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.reconnect-btn:hover:not(:disabled) {
+  background: var(--accent-blue);
+  color: #fff;
+}
+
+.reconnect-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .remote-terminal :deep(.xterm) {

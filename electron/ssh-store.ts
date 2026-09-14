@@ -281,8 +281,19 @@ export class SSHStore {
     let record: SSHConnectionRecord
     const idx = records.findIndex(r => r.id === input.id)
     if (idx !== -1) {
-      record = { ...input, updatedAt: now, createdAt: records[idx].createdAt }
-      records[idx] = toDisk(record)
+      const existing = records[idx]
+      record = { ...input, updatedAt: now, createdAt: existing.createdAt }
+      const disk = toDisk(record)
+      // 修复（凭据静默擦除）：渲染进程拿不到已保存的密码（ssh:listConnections
+      // 已剥离明文凭据，E10），编辑弹窗的密码框恒为空，保存时携带 password:''。
+      // 原实现整条覆写 → encrypt('') = undefined → 已存的加密密码被静默抹掉，
+      // 下次连接认证失败，用户被迫反复重新输入密码。现在：认证方式未变且
+      // 新值为空 → 保留磁盘上已有的加密凭据（"留空 = 保持不变"）。
+      if (input.authType === existing.authType) {
+        if (!disk.passwordEnc && existing.passwordEnc) disk.passwordEnc = existing.passwordEnc
+        if (!disk.passphraseEnc && existing.passphraseEnc) disk.passphraseEnc = existing.passphraseEnc
+      }
+      records[idx] = disk
     } else {
       record = { ...input, id: input.id || genId(), createdAt: now, updatedAt: now }
       records.push(toDisk(record))
@@ -290,6 +301,13 @@ export class SSHStore {
 
     await writeAllToDisk(records)
     return record
+  }
+
+  /** 按 ID 读取单条记录（含解密后的凭据；仅主进程内部使用，不直接暴露给渲染进程） */
+  async get(id: string): Promise<SSHConnectionRecord | null> {
+    const records = await readAllFromDisk()
+    const rec = records.find(r => r.id === id)
+    return rec ? fromDisk(rec) : null
   }
 
   async delete(id: string): Promise<void> {

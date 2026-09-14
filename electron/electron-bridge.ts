@@ -7,11 +7,14 @@ import net from 'net'
 import { randomBytes, timingSafeEqual } from 'crypto'
 import { appendFile } from 'fs'
 import { join } from 'path'
+import { app } from 'electron'
 import type { SSHManager } from './ssh-manager'
 import type { SSHStore } from './ssh-store'
 
 // 桥接启动/错误持久化日志，便于排查"主进程 socket 假监听/崩溃"类环境问题
-const BRIDGE_LOG = join(process.cwd(), 'electron-bridge.log')
+// P3 修复：原写 process.cwd()，应用运行后工作区残留 electron-bridge.log 运行时文件；
+// 改写到 userData 目录（与其他持久化数据同处，不污染代码目录）。
+const BRIDGE_LOG = join(app.getPath('userData'), 'electron-bridge.log')
 /**
  * 写桥接日志。
  *
@@ -160,11 +163,23 @@ export class ElectronBridge {
     this.port = lastPort
     const hint =
       'Electron bridge 端口绑定成功但入站不可达。最常见原因：Windows 防火墙未放行 ' +
-      'electron.exe 的入站连接。请以管理员身份为该 exe 添加入站允许规则后重启应用。'
-    console.error(`[ElectronBridge] ${hint} (lastPort=${lastPort})`)
-    bridgeLog(
-      `UNREACHABLE after ${START_MAX_ATTEMPTS} attempts: ${hint} lastPort=${lastPort}`,
-    )
+      'electron.exe 的入站连接。请以管理员身份为该 exe 添加入站允许规则' +
+      '（或直接以管理员身份运行 scripts\\fix-electron-firewall.ps1）后重启应用。'
+    if (lastPort === 0) {
+      // 整个端口区间被占满：从未成功绑定过，失败根因是 listenFirstFree 报错而非防火墙，
+      // 单独提示，避免误导用户去修防火墙
+      console.error(
+        `[ElectronBridge] 桥接无法启动：${PORT_RANGE_START}-${PORT_RANGE_END} 区间无可用端口（${lastError?.message ?? 'unknown error'}）`,
+      )
+      bridgeLog(
+        `UNREACHABLE: no free port in ${PORT_RANGE_START}-${PORT_RANGE_END}: ${lastError?.message ?? 'unknown error'}`,
+      )
+    } else {
+      console.error(`[ElectronBridge] ${hint} (lastPort=${lastPort})`)
+      bridgeLog(
+        `UNREACHABLE after ${START_MAX_ATTEMPTS} attempts: ${hint} lastPort=${lastPort}`,
+      )
+    }
     if (lastError) {
       bridgeLog(`last listenFirstFree error: ${lastError.message}`)
     }

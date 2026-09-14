@@ -36,7 +36,7 @@ class ErrorClassifier:
             return ErrorType.TRANSIENT
         # 权限
         forbidden_markers = [
-            "forbidden", "permission", "intercepted", "超出工作区",
+            "forbidden", "permission", "intercepted",
             "拦截", "权限", "禁止", "未授权",  # 中文
         ]
         if any(m in error_lower for m in forbidden_markers):
@@ -124,9 +124,10 @@ class Stirrups:
 
     职责：
     1. call_llm: 带分类重试的 LLM 调用（上下文超限时触发压缩）
-    2. retry_tool: 工具执行的指数退避重试
-    3. undo: 按 LIFO 顺序回滚操作
-    4. undo_all: 回滚整个 run 的所有操作
+    2. undo: 按 LIFO 顺序回滚操作
+    3. undo_all: 回滚整个 run 的所有操作
+
+    工具级指数退避重试见模块级 retry_with_backoff（Saddle 直接调用，无需实例化）。
     """
 
     llm_client: Any  # LLMClient 协议实现
@@ -233,35 +234,6 @@ class Stirrups:
 
         # 不应到达
         raise last_error or RuntimeError("LLM 调用失败（未知原因）")
-
-    async def retry_tool(
-        self,
-        func: Callable[[], Awaitable[Any]],
-        max_retries: int = 3,
-        base_delay: float = 1.0,
-    ) -> tuple[Any, Optional[str]]:
-        """
-        工具执行的指数退避重试 — 迁移自 error_recovery.retry_with_backoff
-
-        Returns:
-            (result, error) — result 不为 None 表示成功
-        """
-        last_error: Optional[str] = None
-        for attempt in range(max_retries):
-            try:
-                result = await func()
-                return result, None
-            except Exception as e:
-                last_error = str(e)
-                kind = self.classifier.classify_tool_error(last_error, "")
-                if kind in (ErrorType.FATAL, ErrorType.FORBIDDEN):
-                    return None, last_error
-                if kind != ErrorType.TRANSIENT:
-                    return None, last_error
-                if attempt < max_retries - 1:
-                    delay = base_delay * (2 ** attempt)
-                    await asyncio.sleep(delay)
-        return None, last_error
 
     async def undo(self, actions: list[UndoAction]) -> None:
         """按 LIFO 顺序回滚指定操作"""

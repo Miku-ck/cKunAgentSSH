@@ -11,6 +11,7 @@
 import { computed } from 'vue'
 import type { AgentTraceSnapshot } from '@/api/client'
 import ToolOperationList from './ToolOperationList.vue'
+import AgentFullTrace from './AgentFullTrace.vue'
 
 const props = withDefaults(defineProps<{
   trace: AgentTraceSnapshot
@@ -43,6 +44,12 @@ const isPreparing = computed(() => props.isLive && !hasToolCalls.value && !props
         v-if="hasToolCalls"
         :tool-calls="trace.toolCalls"
         :default-expanded="isLive"
+      />
+
+      <!-- 会话内回放：固化后按 run_id 拉 DB 权威轨迹（每步耗时/成本/状态流转） -->
+      <AgentFullTrace
+        v-if="!isLive && trace.lastRunId"
+        :run-id="trace.lastRunId"
       />
     </div>
   </div>

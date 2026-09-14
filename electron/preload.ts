@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { SshReconnectStatus } from './ssh-manager'
 
 /**
  * 安全暴露给渲染进程的 API
@@ -39,12 +40,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   fsRename: (oldPath: string, newPath: string) => ipcRenderer.invoke('fs:rename', oldPath, newPath),
   fsCopy: (srcPath: string, destPath: string, transferId: string) => ipcRenderer.invoke('fs:copy', srcPath, destPath, transferId),
   fsTrash: (filePath: string) => ipcRenderer.invoke('fs:trash', filePath),
-  fsWriteBinaryFile: (filePath: string, base64Data: string) => ipcRenderer.invoke('fs:writeBinaryFile', filePath, base64Data),
   fsPathJoin: (...segments: string[]) => ipcRenderer.invoke('fs:pathJoin', ...segments),
   fsGetSkillsDir: () => ipcRenderer.invoke('fs:getSkillsDir'),
   fsRmRF: (targetPath: string) => ipcRenderer.invoke('fs:rmRF', targetPath),
   fsListFilesRecursive: (dirPath: string) => ipcRenderer.invoke('fs:listFilesRecursive', dirPath),
-  fsListTextFiles: (dirPath: string) => ipcRenderer.invoke('fs:listTextFiles', dirPath),
   fsExists: (filePath: string) => ipcRenderer.invoke('fs:exists', filePath),
   fsStat: (filePath: string) => ipcRenderer.invoke('fs:stat', filePath),
   fsResolveProgram: (name: string) => ipcRenderer.invoke('fs:resolveProgram', name),
@@ -86,6 +85,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sshWrite: (id: string, data: string) => ipcRenderer.invoke('ssh:write', id, data),
   sshResize: (id: string, cols: number, rows: number) => ipcRenderer.invoke('ssh:resize', id, cols, rows),
   sshDisconnect: (id: string) => ipcRenderer.invoke('ssh:disconnect', id),
+  // 重连修复：手动重连已断开的会话（重置计数，重新走 3 次退避）。
+  // cols/rows 传当前终端实际尺寸，主进程按 ssh:connect 同款规则钳制
+  sshReconnect: (id: string, cols?: number, rows?: number) => ipcRenderer.invoke('ssh:reconnect', id, cols, rows),
   sshGetCwd: (id: string) => ipcRenderer.invoke('ssh:getCwd', id),
   sshExec: (id: string, command: string, timeoutSec?: number) => ipcRenderer.invoke('ssh:exec', id, command, timeoutSec),
   /**
@@ -100,13 +102,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   /**
    * 监听 SSH 连接关闭事件
+   * willReconnect: 该断开是否为"意外断开且主进程将自动重连"（渲染层据此
+   * 决定保留 tab 等待重连，还是走原有关闭清理流程）。用户主动断开不发本事件。
    * @param callback 关闭回调
    * @returns 取消监听函数，务必在组件 onUnmounted 时调用以避免内存泄漏
    */
-  onSshClose: (callback: (data: { id: string }) => void) => {
+  onSshClose: (callback: (data: { id: string; willReconnect?: boolean }) => void) => {
     const handler = (_event: any, data: any) => callback(data)
     ipcRenderer.on('ssh:close', handler)
     return () => ipcRenderer.removeListener('ssh:close', handler)
+  },
+  /**
+   * 监听 SSH 重连状态变化（自动/手动重连进度，主进程推送）
+   * phase: 'reconnecting' 首轮排程 | 'retry' 上一次失败后的重试排程
+   *       | 'success' 重连成功 | 'gave-up' 放弃（3 次失败 / 连接配置已删除 / 重连被取消）
+   * @param callback 状态回调
+   * @returns 取消监听函数，务必在组件 onUnmounted 时调用以避免内存泄漏
+   */
+  onSshReconnect: (callback: (data: SshReconnectStatus) => void) => {
+    const handler = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('ssh:reconnect', handler)
+    return () => ipcRenderer.removeListener('ssh:reconnect', handler)
   },
   /**
    * 监听新主机密钥（首次连接 TOFU 信任通知）
@@ -171,7 +187,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('sftp:zipRemote', sshSessionId, sources, remoteZipPath, cwd),
   sftpUnzipRemote: (sshSessionId: string, remoteZipPath: string, remoteDestDir: string) =>
     ipcRenderer.invoke('sftp:unzipRemote', sshSessionId, remoteZipPath, remoteDestDir),
-  sshCompleteCommand: (sshSessionId: string, opts: { cmd: string; prefix: string; isCommand: boolean }) =>
+  // P3 修复：补上 prevSegments — main.ts 的 ssh:completeCommand 处理器实际消费该字段
+  // （buildBashCompletionScript 依赖它构建补全上下文），原类型漏声明
+  sshCompleteCommand: (sshSessionId: string, opts: { cmd: string; prefix: string; isCommand: boolean; prevSegments?: string[] }) =>
     ipcRenderer.invoke('ssh:completeCommand', sshSessionId, opts),
   /**
    * 监听 SFTP 文件传输进度

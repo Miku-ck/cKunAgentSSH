@@ -16,7 +16,12 @@ import re
 import shlex
 
 from agent.tools import BaseTool, ToolResult, ToolMeta
-from agent.tools.builtin.ops_common import run_headless
+from agent.tools.builtin.ops_common import (
+    is_remote,
+    is_traversal,
+    run_headless,
+    strip_remote_tail,
+)
 
 # 最大允许文件大小（字节，10MB）
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -29,33 +34,6 @@ _EXT_MIME = {
     "webp": "image/webp",
     "gif": "image/gif",
 }
-
-
-def _is_traversal(path) -> bool:
-    """路径是否含 `..` 越界访问。"""
-    if not isinstance(path, str) or not path:
-        return True
-    for sep in (os.sep, "/"):
-        if ".." in path.split(sep):
-            return True
-    return False
-
-
-def _is_remote(context) -> bool:
-    """是否远程执行（有 SSH 会话）。"""
-    return bool(getattr(context, "ssh_session_id", ""))
-
-
-def _strip_remote_tail(output: str) -> str:
-    """剥离 run_headless 追加的 [exit_code=..] / [stderr] 尾部行。"""
-    lines = output.splitlines()
-    while lines:
-        last = lines[-1]
-        if last.startswith("[exit_code=") or last == "[stderr]":
-            lines.pop()
-            continue
-        break
-    return "\n".join(lines)
 
 
 class ReadImageTool(BaseTool):
@@ -77,7 +55,7 @@ class ReadImageTool(BaseTool):
     )
 
     def _validate(self, path):
-        if _is_traversal(path):
+        if is_traversal(path):
             return "非法路径：包含 `..`，禁止越界访问"
         ext = os.path.splitext(path)[1].lstrip(".").lower() if isinstance(path, str) else ""
         if ext not in _EXT_MIME:
@@ -90,12 +68,12 @@ class ReadImageTool(BaseTool):
             return ToolResult(False, "", err)
         mime = _EXT_MIME[os.path.splitext(path)[1].lstrip(".").lower()]
 
-        if _is_remote(context):
+        if is_remote(context):
             qpath = shlex.quote(path)
             ok, output = await run_headless(context, f"base64 -i {qpath}", 20)
             if not ok:
                 return ToolResult(False, output, "远程读取图片失败")
-            b64 = re.sub(r"\s+", "", _strip_remote_tail(output))
+            b64 = re.sub(r"\s+", "", strip_remote_tail(output))
             if not b64:
                 return ToolResult(False, "", "远程读取图片为空或文件不存在")
             # 按 base64 长度估算原始字节数（约 len*3/4）

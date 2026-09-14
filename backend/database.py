@@ -410,6 +410,22 @@ def init_db(db_path: str) -> None:
             );
             CREATE INDEX IF NOT EXISTS ix_schedule_runs_sid ON schedule_runs(schedule_id, created_at);
 
+            -- 远程后台任务注册表（job_run target=remote）：进程/日志句柄持久化，
+            -- backend 重启后 job_list 可恢复、对账与 kill
+            CREATE TABLE IF NOT EXISTS agent_jobs (
+                job_id      TEXT PRIMARY KEY,
+                run_id      TEXT NOT NULL DEFAULT '',
+                session_id  TEXT NOT NULL DEFAULT '',
+                cmd         TEXT NOT NULL DEFAULT '',
+                pid         INTEGER,
+                log_dir     TEXT NOT NULL DEFAULT '',
+                status      TEXT NOT NULL DEFAULT 'running',
+                exit_code   INTEGER,
+                created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+                finished_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS ix_agent_jobs_status ON agent_jobs(status);
+            CREATE INDEX IF NOT EXISTS ix_agent_jobs_run ON agent_jobs(run_id);
 
         """)
 
@@ -2324,6 +2340,69 @@ def list_schedule_runs(schedule_id: str, limit: int = 50) -> list[dict]:
                FROM schedule_runs WHERE schedule_id = ?
                ORDER BY created_at DESC LIMIT ?""",
             (schedule_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# ── 远程后台任务注册表（agent_jobs）──────────────────────────────
+def save_agent_job(job_id: str, run_id: str, session_id: str, cmd: str,
+                   pid: int | None, log_dir: str, status: str = "running") -> None:
+    """写入/更新一条远程后台任务记录（启动时调用）。"""
+    conn = _get_conn()
+    try:
+        conn.execute(
+            """INSERT INTO agent_jobs
+                   (job_id, run_id, session_id, cmd, pid, log_dir, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(job_id) DO UPDATE SET
+                   run_id = excluded.run_id,
+                   session_id = excluded.session_id,
+                   cmd = excluded.cmd,
+                   pid = excluded.pid,
+                   log_dir = excluded.log_dir,
+                   status = excluded.status""",
+            (job_id, run_id, session_id, cmd, pid, log_dir, status),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_agent_job_status(job_id: str, status: str,
+                            exit_code: int | None = None) -> None:
+    """更新任务状态（结束/被杀时调用；终态时落 finished_at）。"""
+    conn = _get_conn()
+    try:
+        terminal = status in ("finished", "failed", "killed")
+        if terminal:
+            conn.execute(
+                """UPDATE agent_jobs SET status = ?, exit_code = ?,
+                       finished_at = datetime('now')
+                   WHERE job_id = ?""",
+                (status, exit_code, job_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE agent_jobs SET status = ?, exit_code = ? WHERE job_id = ?",
+                (status, exit_code, job_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_running_agent_jobs() -> list[dict]:
+    """列出全部未终结的远程任务（backend 重启后恢复注册表用）。"""
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            """SELECT job_id, run_id, session_id, cmd, pid, log_dir, status,
+                      created_at
+               FROM agent_jobs
+               WHERE status NOT IN ('finished', 'failed', 'killed')
+               ORDER BY created_at""",
         ).fetchall()
         return [dict(r) for r in rows]
     finally:

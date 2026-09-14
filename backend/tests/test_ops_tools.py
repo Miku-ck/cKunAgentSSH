@@ -31,7 +31,7 @@ NEW_TOOLS = {
 
 
 def _ctx(**kwargs) -> ToolContext:
-    base = dict(workspace_path=".", ssh_session_id="", mode="ssh",
+    base = dict(ssh_session_id="", mode="ssh",
                 environment="test", visible_terminal=False)
     base.update(kwargs)
     return ToolContext(**base)

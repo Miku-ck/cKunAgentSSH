@@ -43,10 +43,7 @@
 </template>
 
 <script setup lang="ts">
-interface ConvGroup {
-  label: string
-  items: Array<{ id: string; title: string; updated_at: string }>
-}
+import type { ConvGroup } from '@/types/chat'
 
 defineProps<{
   groups: ConvGroup[]

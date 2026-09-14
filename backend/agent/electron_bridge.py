@@ -20,7 +20,6 @@ class BridgeErrorCode(str, enum.Enum):
     TOKEN_REJECTED = "BRIDGE_TOKEN_REJECTED"    # 401/403：主进程重启后 token 已更新
     HTTP_ERROR = "BRIDGE_HTTP_ERROR"            # 其他 HTTP 非 2xx
     TIMEOUT = "BRIDGE_TIMEOUT"                  # 连接/读取超时（端口假监听、主进程繁忙）
-    CONNECT_ERROR = "BRIDGE_CONNECT_ERROR"      # 底层 TCP 连接失败
     UNKNOWN = "BRIDGE_UNKNOWN"
 
 
@@ -56,16 +55,6 @@ class BridgeError(RuntimeError):
         self.suggestion = self.suggestion_for(code)
         super().__init__(f"[{code.value}] {detail}" if detail else f"[{code.value}] {self.suggestion}")
 
-    @classmethod
-    def from_exception(cls, err: unknown) -> BridgeError:
-        """从底层异常自动构造结构化 BridgeError"""
-        code = classify_bridge_error(err)
-        if isinstance(err, BridgeError):
-            return err
-        detail = err.message if hasattr(err, "message") else str(err)
-        original = err if isinstance(err, Exception) else None
-        return cls(code, detail, original)
-
 
 # 桥接错误 → 用户建议映射（模块级常量，BridgeError 类外维护便于扩展）
 _BRIDGE_ERROR_SUGGESTIONS: dict[BridgeErrorCode, str] = {
@@ -78,7 +67,6 @@ _BRIDGE_ERROR_SUGGESTIONS: dict[BridgeErrorCode, str] = {
         "请查看 electron-bridge.log 中是否出现该端口的 REQ 记录："
         "无 REQ 说明请求根本未到达主进程，请重启应用以重建桥接端口。"
     ),
-    BridgeErrorCode.CONNECT_ERROR: "无法连接到 Electron 主进程桥接端口。请完整重启应用。",
     BridgeErrorCode.UNKNOWN: "桥接通信异常。请查看主进程日志并尝试重启应用。",
 }
 

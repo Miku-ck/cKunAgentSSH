@@ -70,26 +70,6 @@ const CATEGORY_MAP: Record<string, string> = {
   'using-superpowers': '效率提升',
 }
 
-const COLOR_PALETTE = [
-  '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
-  '#06b6d4', '#ec4899', '#6366f1', '#14b8a6', '#f97316',
-  '#84cc16', '#d946ef',
-]
-
-function hashString(str: string): number {
-  let h = 0
-  for (let i = 0; i < str.length; i++) {
-    h = (h << 5) - h + str.charCodeAt(i)
-    h |= 0
-  }
-  return Math.abs(h)
-}
-
-/** 根据 slug 生成一个稳定的主题色 */
-export function skillColor(slug: string): string {
-  return COLOR_PALETTE[hashString(slug) % COLOR_PALETTE.length]
-}
-
 /** 用技能名称生成两字母图标（不使用 emoji） */
 export function skillInitials(name: string): string {
   const cleaned = name.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, ' ')

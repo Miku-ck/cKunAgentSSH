@@ -1,16 +1,22 @@
 /**
  * SSH 模式 AI 运维助手 Store
- * 通用对话能力委托给 createModeChatStore，本文件仅保留 SSH 特有能力。
+ *
+ * 会话/模型持久化来自 useChatPersistence（单一 ssh 模式、固定 dual 策略）。
+ * 原 createModeChatStore 通用工厂仅剩本文件一个调用方，已收敛内联至此
+ * （固定 Agent 模式重构的收尾清理）。
  */
-import { ref, computed, watch } from 'vue'
+import { computed, ref, triggerRef, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { useSSHStore } from './ssh'
 import { useAgentStore } from './agent'
 import { useAppStore } from './app'
 import { useSettingsStore } from './settings'
 import { useToastStore } from './toast'
-import { createModeChatStore, type ModeMessage, type ModeConversation } from './createModeChatStore'
-import { api, type ChatAttachment } from '@/api/client'
+import { api, type ChatAttachment, type ModelConfig } from '@/api/client'
+import { useChatPersistence } from '@/composables/useChatPersistence'
+import { useModelsStore } from './models'
+import { finalizeAgentMessage, type AgentMessage } from '@/utils/finalizeAgentMessage'
+import type { ModeConversation, ModeMessage } from '@/types/chat'
 
 // ── SSH 特有数据模型 ──
 
@@ -38,30 +44,164 @@ export interface SshAiConversation extends ModeConversation {
 import { genId } from '@/utils/id'
 
 export const useSshAiStore = defineStore('ssh-ai', () => {
-  // ── 1. 通用对话能力（委托给 createModeChatStore） ──
-  const base = createModeChatStore({
-    mode: 'ssh',
-    storageKey: 'ckun-ssh-ai-conversations',
-    modelStorageKey: 'ckun-ssh-ai-selected-model',
+  // ── 1. 通用对话能力（单一 ssh 模式，直接组合 useChatPersistence） ──
+
+  const persistence = useChatPersistence({
+    config: {
+      storageKey: 'ckun-ssh-ai-conversations',
+      modelStorageKey: 'ckun-ssh-ai-selected-model',
+    },
+    getDefaultModelId,
+  })
+
+  async function getDefaultModelId(): Promise<string | undefined> {
+    const modelsStore = useModelsStore()
+    if (modelsStore.models.length === 0) await modelsStore.fetchModels()
+    const sid = persistence.selectedModelId.value
+    if (sid && modelsStore.models.some((m: ModelConfig) => m.id === sid)) {
+      return sid
+    }
+    try {
+      const def = await api.getDefaultModel('ssh')
+      if (def?.id) return def.id
+    } catch { /* ignore */ }
+    return modelsStore.models[0]?.id
+  }
+
+  // P2 修复：store 初始化时合并后端会话列表。
+  // 历史原仅靠 localStorage 恢复，换设备/清本地后丢失；后端保存了已同步的完整列表。
+  // fire-and-forget：store 工厂在 pinia setup 内执行，不阻塞面板渲染。
+  void persistence.syncBackendConversations()
+
+  /** 当前选中的模型配置（从 models store 中查找） */
+  const selectedModel = computed<ModelConfig | null>(() => {
+    const modelsStore = useModelsStore()
+    return modelsStore.models.find((m: ModelConfig) => m.id === persistence.selectedModelId.value) ?? modelsStore.models[0] ?? null
+  })
+
+  // ── 模型选择 ──
+
+  /** 加载默认模型 */
+  async function fetchDefaultModel() {
+    const modelsStore = useModelsStore()
+    if (modelsStore.models.length === 0) await modelsStore.fetchModels()
+    await persistence.fetchDefaultModel()
+  }
+
+  function setSelectedModel(id: string) {
+    persistence.setSelectedModel(id)
+  }
+
+  // ── 会话 CRUD ──
+
+  async function createConversation(title?: string): Promise<ModeConversation> {
+    const conv = await persistence.createConversation(title)
+    notifyConversationsChanged()
+    return conv
+  }
+
+  async function switchConversation(id: string) {
+    persistence.switchConversation(id)
+    // P2 修复：启动合并进来的后端会话本地无消息缓存（messages:[]），
+    // 切到时按需从后端拉取一次并固化到本地，避免"选中了却是空对话"
+    const conv = persistence.currentConversation.value
+    if (conv && conv.messages.length === 0 && (conv as any).backendConvId) {
+      try {
+        // Message[] → ModeMessage[]：后端消息结构与本地结构兼容，显式断言
+        const msgs = (await api.getMessages((conv as any).backendConvId)) as unknown as ModeMessage[]
+        conv.messages = msgs
+        persistence.save()
+        notifyConversationsChanged()
+      } catch (e) {
+        console.warn(`[ssh] 拉取会话消息失败（保留空列表）:`, e)
+      }
+    }
+  }
+
+  async function deleteConversation(id: string) {
+    await persistence.deleteConversation(id)
+  }
+
+  /** 手动触发会话列表响应式更新（shallowRef 内部对象原地变更后调用，如 Agent 模式直接 push 消息） */
+  let notifySaveTimer: ReturnType<typeof setTimeout> | null = null
+  function notifyConversationsChanged() {
+    triggerRef(persistence.conversations)
+    // 防抖写入 localStorage，避免 Agent 流式输出期间频繁序列化
+    if (notifySaveTimer) clearTimeout(notifySaveTimer)
+    notifySaveTimer = setTimeout(() => {
+      notifySaveTimer = null
+      persistence.save()
+    }, 300)
+  }
+
+  // ── Agent 完成固化（store 层 watch，不依赖组件生命周期）──
+  // 修复 P3-4：面板卸载不会丢失 Agent 结果。
+  const agentStore = useAgentStore()
+  watch(() => agentStore.status, (newStatus, oldStatus) => {
+    if (agentStore.currentMode !== 'ssh') return
+    // M17：abort 使状态 running→idle（非 completed/failed），原 watch 漏捕 →
+    // temp-agent 占位消息（空内容）永久残留历史。补 running→idle 分支，
+    // 以 aborted 标志区分"用户中止"与 C10 并发保护的直接 abortFn()（后者不固化）。
+    const isTerminal = oldStatus === 'running' && (newStatus === 'completed' || newStatus === 'failed')
+    const isAbort = oldStatus === 'running' && newStatus === 'idle' && agentStore.aborted
+    if (!isTerminal && !isAbort) return
+    {
+      // 审查 M-19 修复：优先固化为本次运行的【源会话】（agentStore 在 runAgent
+      // 时记录的 conversationId）。原实现取"完成时刻的当前会话" — 用户在 Agent
+      // 运行中切换会话后，固化会落到错误的会话上：源会话的 temp-agent 占位消息
+      // 永远停在"运行中"骨架态，结果消息丢失。
+      const sourceId = agentStore.currentConversationId
+      // 审查修复（P1）：移除 `|| persistence.currentConversation` 兜底 —
+      // 会话可能属于其他 store 实例/已删除，兜底会误固化到错误会话、甚至误删
+      // 用户当前会话。列表里没有源会话即说明本轮不归属本 store，直接返回。
+      const conv = sourceId
+        ? persistence.conversations.value.find(
+            (c) => c.id === sourceId || c.backendConvId === sourceId,
+          )
+        : null
+      if (!conv) return
+      // 审查修复：Agent 运行中用户切换/删除会话后，源会话可能已不在列表，
+      // 占位消息（temp-agent-）将永远停在运行中骨架态。此时移除悬空占位，
+      // 避免历史里出现卡死的空消息。
+      const hasPlaceholder = conv.messages.some(
+        (m) => m.role === 'assistant' && String(m.id).startsWith('temp-agent-'),
+      )
+      if (!hasPlaceholder) {
+        conv.messages = conv.messages.filter(
+          (m) => !(m.role === 'assistant' && String(m.id).startsWith('temp-agent-')),
+        )
+        if (conv.messages.length === 0) {
+          // 空会话（仅剩占位）直接移除，避免历史列表出现空条目
+          persistence.conversations.value = persistence.conversations.value.filter((c) => c.id !== conv.id)
+          if (persistence.currentConvId.value === conv.id) {
+            persistence.currentConvId.value = persistence.conversations.value[0]?.id ?? null
+          }
+        }
+        notifyConversationsChanged()
+        return
+      }
+      // 结构上满足 AgentMessage 最小接口，显式断言（与固化函数签名对齐）
+      finalizeAgentMessage(conv as unknown as { messages: AgentMessage[] }, agentStore)
+      notifyConversationsChanged()
+    }
   })
 
   // ── 2. SSH 特有 State ──
   const showAiPanel = ref(false)
 
-  const agentStore = useAgentStore()
   const appStore = useAppStore()
   const toast = useToastStore()
 
   const agentRunning = computed(() => agentStore.isRunning)
 
-  // 后端就绪后自动加载模型，复用 chatStore 共享的 models
+  // 后端就绪后自动加载模型，复用共享的 models
   let modelInitPromise: Promise<void> | null = null
   function ensureModelLoaded() {
     if (modelInitPromise) return modelInitPromise
     if (appStore.backendStatus !== 'ready') return
     modelInitPromise = (async () => {
-      if (base.selectedModelId.value) return
-      await base.fetchDefaultModel()
+      if (persistence.selectedModelId.value) return
+      await fetchDefaultModel()
       // 完成后清除缓存，允许后续重试
       modelInitPromise = null
     })()
@@ -151,7 +291,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     const results: ChatAttachment[] = []
     for (const file of files) {
       try {
-        const att = await api.uploadChatFile(base.currentConvId.value || '', file)
+        const att = await api.uploadChatFile(persistence.currentConvId.value || '', file)
         results.push(att)
       } catch (e: any) {
         const detail = e?.detail || e?.message || String(e)
@@ -195,11 +335,11 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       return false
     }
 
-    // 复用 base 内部模型检查逻辑：确保已选模型有效
-    if (!base.selectedModelId.value) {
-      await base.fetchDefaultModel()
+    // 复用共享模型检查逻辑：确保已选模型有效
+    if (!persistence.selectedModelId.value) {
+      await fetchDefaultModel()
     }
-    if (!base.selectedModelId.value) {
+    if (!persistence.selectedModelId.value) {
       toast.error('请先选择模型')
       return false
     }
@@ -207,15 +347,15 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     const ctx = buildContext()
     const systemPrompt = buildSystemPrompt(ctx)
 
-    let conv = base.currentConversation.value as SshAiConversation | undefined
+    let conv = persistence.currentConversation.value as SshAiConversation | undefined
     if (!conv) {
       const title = effectiveContent.slice(0, 30) + (effectiveContent.length > 30 ? '...' : '')
-      conv = await base.createConversation(title) as SshAiConversation
+      conv = await createConversation(title) as SshAiConversation
     }
     if (!conv) return false
 
     try {
-      await base.persistence.ensureBackendConversation(conv)
+      await persistence.ensureBackendConversation(conv)
     } catch {
       toast.error('创建会话失败')
       return false
@@ -246,12 +386,12 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     }
 
     conv.updated_at = new Date().toISOString()
-    base.notifyConversationsChanged()
+    notifyConversationsChanged()
 
     agentStore.runAgent({
       task: effectiveContent,
       conversationId: conv.backendConvId!,
-      modelId: base.selectedModelId.value,
+      modelId: persistence.selectedModelId.value,
       mode: 'ssh',
       systemPrompt,
       // 可见终端执行模式：无论本地/远程都把活动会话 id 传给后端，
@@ -275,22 +415,23 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   }
 
   return {
-    // ── 透传通用 API ──
-    conversations: base.conversations,
-    currentConvId: base.currentConvId,
-    currentConversation: base.currentConversation,
-    messages: base.messages,
-    selectedModelId: base.selectedModelId,
-    selectedModel: base.selectedModel,
-    groupedConversations: base.groupedConversations,
-    persistence: base.persistence,
-    fetchDefaultModel: base.fetchDefaultModel,
-    setSelectedModel: base.setSelectedModel,
-    createConversation: base.createConversation,
-    switchConversation: base.switchConversation,
-    deleteConversation: base.deleteConversation,
-    save: base.persistence.save,
-    notifyConversationsChanged: base.notifyConversationsChanged,
+    // ── 会话/模型持久化 API ──
+    conversations: persistence.conversations,
+    currentConvId: persistence.currentConvId,
+    currentConversation: persistence.currentConversation,
+    messages: persistence.messages,
+    selectedModelId: persistence.selectedModelId,
+    selectedModel,
+    groupedConversations: persistence.groupedConversations,
+    loadFailed: persistence.loadFailed,
+    fetchDefaultModel,
+    setSelectedModel,
+    createConversation,
+    switchConversation,
+    deleteConversation,
+    ensureBackendConversation: persistence.ensureBackendConversation,
+    save: persistence.save,
+    notifyConversationsChanged,
     // ── SSH 特有 API ──
     showAiPanel,
     toggleAiPanel,

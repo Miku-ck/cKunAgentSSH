@@ -825,10 +825,11 @@ class Driver:
         yield done_event
 
 
-# 会修改文件系统的工具名（用于 run 摘要 mutated 统计；ssh 模式无本地文件工具，当前不会命中）
+# 会修改文件系统的工具名（用于 run 摘要 mutated 统计）。
+# 必须是 builtin 实际注册名 —— work 模式旧名（write_file/patch_file 等）
+# 已随全库清理移除，残留旧名会让摘要统计静默失效（2026-09 修复）。
 _FILE_MUTATION_TOOLS = frozenset({
-    "write_file", "patch_file", "edit_file", "create_file",
-    "delete_file", "move_file", "rename_file",
+    "file_write", "file_edit",
 })
 
 

@@ -18,17 +18,28 @@ interface PtySession {
 
 // M3 修复：允许的 shell 白名单，防止渲染进程启动任意命令
 const ALLOWED_SHELLS: Record<string, string[]> = {
-  win32: ['cmd.exe', 'powershell.exe', 'pwsh.exe', 'bash.exe', 'git-bash.exe'],
+  // P1 修复：补 wsl.exe — 此前 UI 的"WSL"选项（ssh.ts 解析为 System32\wsl.exe）
+  // 不在白名单中，被下方回退逻辑静默降级为默认 shell（cmd.exe）且无任何提示。
+  // wsl.exe 无参数 = 启动默认发行版的默认 shell，参数面由 E-4 白名单兜底（拒绝一切 args）。
+  win32: ['cmd.exe', 'powershell.exe', 'pwsh.exe', 'bash.exe', 'git-bash.exe', 'wsl.exe'],
   darwin: ['/bin/zsh', '/bin/bash', '/bin/sh', '/usr/bin/zsh', '/usr/bin/bash'],
   linux: ['/bin/bash', '/bin/sh', '/bin/zsh', '/usr/bin/bash', '/usr/bin/zsh'],
 }
 // E-4 修复：原"危险参数"黑名单可被绕过（cmd /S /K <任意命令>、
 // PowerShell -ExecutionPolicy Bypass -File evil.ps1 都不在黑名单里）。
 // 改为正向白名单：按 argv[0] 的 basename 判定 —
-//   cmd / powershell / pwsh → 拒绝一切 args；
+//   cmd → 拒绝一切 args；
+//   powershell / pwsh → 仅允许 -NoLogo / -NoExit / -NoProfile；
 //   bash（含 git-bash 路径）→ 仅允许登录/交互式标志；
 //   其他程序 → 拒绝一切 args。
 const BASH_ALLOWED_ARGS = new Set(['-l', '-i', '--login', '--interactive'])
+// 修复：PowerShell 允许无害的启动标志。渲染层 ssh.ts getShellArgs('PowerShell')
+// 固定传 [-NoLogo, -NoExit]（-NoExit 是为了防止 node-pty 启动后立即退出），
+// 而原实现按 E-4 一律拒绝 PowerShell 的任何 args → 本地 PowerShell 终端
+// 100% 打不开，报"PowerShell 终端不允许自定义参数，已拒绝"。
+// 仅放行不影响执行语义的展示/生命周期标志；-Command / -File / -EncodedCommand /
+// -ExecutionPolicy 等仍被拒绝（E-4 的防注入意图不变）。
+const POWERSHELL_ALLOWED_ARGS = new Set(['-nologo', '-noexit', '-noprofile'])
 // E-4：本地终端会话数上限，防止渲染进程无界 spawn
 const MAX_PTY_SESSIONS = 32
 
@@ -120,7 +131,11 @@ export class PtyManager {
         throw new Error('cmd 终端不允许自定义参数，已拒绝')
       }
       if (baseName === 'powershell' || baseName === 'powershell.exe' || baseName === 'pwsh' || baseName === 'pwsh.exe') {
-        throw new Error('PowerShell 终端不允许自定义参数，已拒绝')
+        for (const arg of finalArgs) {
+          if (!POWERSHELL_ALLOWED_ARGS.has(arg.toLowerCase())) {
+            throw new Error(`PowerShell 不允许自定义参数，已拒绝: ${arg}`)
+          }
+        }
       }
       if (baseName === 'bash' || baseName === 'bash.exe' || baseName === 'git-bash' || baseName === 'git-bash.exe') {
         for (const arg of finalArgs) {

@@ -69,7 +69,6 @@ class BaseTool:
 @dataclass
 class ToolContext:
     """工具执行上下文 — 传入工具的运行时信息"""
-    workspace_path: str = ""        # 当前工作区路径
     ssh_session_id: str = ""        # SSH 会话 ID（SSH 模式）
     mode: str = "ssh"               # 当前模式
     conversation_id: str = ""

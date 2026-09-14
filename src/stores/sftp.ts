@@ -498,13 +498,17 @@ async function remoteRefresh(): Promise<void> {
   async function expandLocalDir(localDir: string): Promise<Array<{ localPath: string; relPath: string }>> {
     const result: Array<{ localPath: string; relPath: string }> = []
     const stack: Array<{ dir: string; rel: string }> = [{ dir: localDir, rel: '' }]
+    // P3 修复：收集遍历中因不可读（无权限）而跳过的子目录，结束后统一告警
+    // —— 原实现静默 continue，用户无从得知上传的目录结构不完整
+    const skipped: string[] = []
     while (stack.length > 0) {
       const { dir, rel } = stack.pop()!
       let entries: FileEntry[]
       try {
         entries = await getApi().fsReadDir(dir)
       } catch {
-        continue  // 无权限的子目录跳过
+        skipped.push(dir)  // 无权限的子目录跳过
+        continue
       }
       for (const e of entries) {
         const childRel = rel ? `${rel}/${e.name}` : e.name
@@ -514,6 +518,9 @@ async function remoteRefresh(): Promise<void> {
           result.push({ localPath: e.path, relPath: childRel })
         }
       }
+    }
+    if (skipped.length > 0) {
+      toast.warning(`部分子目录因无权限被跳过（${skipped.length} 个）：${skipped.slice(0, 3).join('、')}${skipped.length > 3 ? ' …' : ''}`)
     }
     return result
   }
@@ -525,12 +532,15 @@ async function remoteRefresh(): Promise<void> {
   async function expandRemoteDir(remoteDir: string): Promise<Array<{ remotePath: string; relPath: string }>> {
     const result: Array<{ remotePath: string; relPath: string }> = []
     const stack: Array<{ dir: string; rel: string }> = [{ dir: remoteDir, rel: '' }]
+    // P3 修复：同 expandLocalDir — 收集不可读而跳过的子目录并统一告警
+    const skipped: string[] = []
     while (stack.length > 0) {
       const { dir, rel } = stack.pop()!
       let entries: SftpEntry[]
       try {
         entries = await getApi().sftpList(sshSessionId.value, dir)
       } catch {
+        skipped.push(dir)
         continue
       }
       for (const e of entries) {
@@ -541,6 +551,9 @@ async function remoteRefresh(): Promise<void> {
           result.push({ remotePath: e.path, relPath: childRel })
         }
       }
+    }
+    if (skipped.length > 0) {
+      toast.warning(`部分远程子目录因不可读被跳过（${skipped.length} 个）：${skipped.slice(0, 3).join('、')}${skipped.length > 3 ? ' …' : ''}`)
     }
     return result
   }
@@ -1013,6 +1026,10 @@ function resumeTransfer(id: string): void {
   }
   t.status = 'running'
   t.error = undefined
+  // P3 修复：续传后重置 startTime — 原实现沿用首次传输的 startTime，
+  // 速度/剩余时间按总耗时（含暂停间隙）计算而失真。重置后速度/ETA
+  // 只反映本段传输（resumeOffset 仍记录断点，不受影响）。
+  t.startTime = Date.now()
   // 根据方向重新启动传输，从断点处继续
   // （断点位置由主进程扫描 .part 文件确定，前端无需传递）
   if (t.kind === 'upload') {

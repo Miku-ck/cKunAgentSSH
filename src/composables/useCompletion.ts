@@ -33,11 +33,6 @@ export interface CompletionInput {
   prevSegments: string[]
 }
 
-export interface CompletionResult {
-  candidates: CompletionCandidate[]
-  input: CompletionInput
-}
-
 // 自定义 OSC 6973 标记序列（注入到 prompt 末尾，用于精确定位命令起点）
 const OSC_MARK = '\x1b]6973;\x07'
 // 回退正则：匹配常见 prompt 末尾分隔符 $ # > %，后可跟空白或位于行尾
@@ -180,13 +175,14 @@ export function parseInput(line: string, cursorPos: number): CompletionInput | n
   // 光标位置在剥离后的 input 内
   const beforeCursor = line.slice(0, cursorPos)
 
-  // 找光标前最后一个空白
-  const lastSpaceIdx = beforeCursor.lastIndexOf(' ')
+  // P3 修复：按"空白运行"（/\s+/，含多空格/Tab）切分，而非单个空格字符。
+  // 原 lastIndexOf(' ') 只在单空格处定位边界 — 光标前有多空格/Tab 间隔时
+  // prefix 边界取错（如 "ls\t-a" 无空格会整个 token 被当成 prefix）。
+  // prefix = 光标前末尾的连续非空白（当前正在输入的 token）。
+  const prefix = (beforeCursor.match(/\S+$/) || [''])[0]
 
-  const prefix = beforeCursor.slice(lastSpaceIdx + 1)
-
-  // 命令前的部分（不含当前 token）
-  const beforeToken = beforeCursor.slice(0, lastSpaceIdx + 1).trim()
+  // 命令前的部分（不含当前 token），剥掉 token 前的一段空白
+  const beforeToken = beforeCursor.slice(0, beforeCursor.length - prefix.length).trim()
   // 段数：beforeToken 按空白分割
   const segments = beforeToken ? beforeToken.split(/\s+/).filter(Boolean) : []
 

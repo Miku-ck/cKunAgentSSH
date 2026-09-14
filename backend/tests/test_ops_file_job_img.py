@@ -5,11 +5,16 @@ file_grep / read_image / job_run / job_list / job_output / job_kill。
 
 测试刻意避免依赖真实远程桥接：通过置空 ssh_session_id 走本地 Python 分支，
 或用 monkeypatch 注入共享执行辅助，保证跨平台确定性（Windows 亦通过）。
+
+临时目录使用 conftest 的 tmp_workspace（普通 os.mkdir）— 不能用
+tmp_path/tempfile.mkdtemp：Windows 下 mkdtemp 打限制性 ACL，沙箱
+进程随后访问会被拒（见 conftest.py 注释）。
 """
 import asyncio
 import os
 import re
 import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -34,9 +39,49 @@ NEW_TOOLS = {
 }
 
 
+def _spawn_allowed() -> bool:
+    """探测本环境能否派生子进程（部分沙箱拒绝 asyncio 的 CreateProcess → WinError 5）。
+
+    必须探测 asyncio.create_subprocess_exec — 与 subprocess.run 走不同路径，
+    存在前者被拒而后者可用的沙箱。
+    """
+    import subprocess
+    import sys
+    try:
+        subprocess.run([sys.executable, "-c", "pass"],
+                       capture_output=True, timeout=15)
+    except Exception:
+        return False
+    try:
+        async def _a():
+            p = await asyncio.create_subprocess_exec(
+                sys.executable, "-c", "pass", stdout=asyncio.subprocess.PIPE)
+            await p.wait()
+            return p.returncode == 0
+        return asyncio.run(_a())
+    except Exception:
+        return False
+
+
+REQUIRES_SPAWN = _spawn_allowed()
+
+
+@pytest.fixture(autouse=True)
+def _jobs_run_unsandboxed(monkeypatch):
+    """job 测试验证的是工具链本身（run→list→output→kill），旁路沙箱隔离：
+
+    1) 本机装有 docker/podman/bwrap/systemd-run 等后端时，宿主命令会被包裹进
+       另一执行环境（宿主 python 路径/解释器不可见 → rc=127、输出丢失）。
+    2) 无后端时默认 fail-closed 会直接拒绝本地执行。
+    沙箱行为本身由 test_sandbox_exec.py 覆盖，此处只保证工具链确定性。
+    """
+    import agent.harness.sandbox_exec as se
+    monkeypatch.setenv("CKUN_AGENT_ALLOW_UNSANDBOXED_LOCAL", "1")
+    monkeypatch.setattr(se, "ALLOW_UNSANDBOXED_LOCAL", True)
+
+
 def _ctx(*, remote: bool = False, **kwargs) -> ToolContext:
     base = dict(
-        workspace_path=os.getcwd(),
         ssh_session_id="sess-1" if remote else "",
         mode="ssh",
         environment="test",
@@ -91,8 +136,8 @@ async def test_file_read_rejects_traversal_local(bad_path):
 
 
 @pytest.mark.asyncio
-async def test_file_read_local_basic(tmp_path):
-    f = tmp_path / "a.txt"
+async def test_file_read_local_basic(tmp_workspace):
+    f = Path(tmp_workspace) / "a.txt"
     f.write_text("line1\nline2\nline3\n", encoding="utf-8")
     res = await FileReadTool().execute(_ctx(), path=str(f), offset=2, limit=2)
     assert res.success is True
@@ -118,56 +163,113 @@ async def test_file_read_rejects_traversal_remote(monkeypatch):
     assert ".." in res.error
 
 
-# ── 文件写入 ─────────────────────────────────
+# ── 文件写入（仅限远程）─────────────────────────
 @pytest.mark.asyncio
-async def test_file_write_local(tmp_path):
-    f = tmp_path / "out.txt"
+async def test_file_write_local_refused(tmp_workspace):
+    """无 SSH 会话 → file_write 必须拒绝，绝不在后端主机本机落盘。"""
+    f = Path(tmp_workspace) / "out.txt"
     res = await FileWriteTool().execute(_ctx(), path=str(f), content="hello\n")
-    assert res.success is True
-    assert f.read_text(encoding="utf-8") == "hello\n"
-    assert "6 字节" in res.output
+    assert res.success is False
+    assert "SSH 会话" in res.error
+    assert not f.exists()
 
 
 @pytest.mark.asyncio
 async def test_file_write_traversal_rejected():
-    res = await FileWriteTool().execute(_ctx(), path="../x.txt", content="x")
+    res = await FileWriteTool().execute(_ctx(remote=True), path="../x.txt", content="x")
     assert res.success is False
 
 
-# ── 文件编辑：唯一性校验 ──────────────────────
 @pytest.mark.asyncio
-async def test_file_edit_unique_success(tmp_path):
-    f = tmp_path / "e.txt"
-    f.write_text("alpha beta alpha2", encoding="utf-8")
+async def test_file_write_remote_ok(monkeypatch):
+    """远程正常路径：base64 写命令 + 字节数回显。"""
+    import base64 as _b64
+    import re as _re
+    import agent.tools.builtin.ops_file as m
+
+    captured: list[str] = []
+
+    async def fake_write(ctx, command, timeout):
+        _ = ctx, timeout
+        captured.append(command)
+        return True, "ok"
+
+    monkeypatch.setattr(m, "run_headless", fake_write)
+    res = await FileWriteTool().execute(
+        _ctx(remote=True), path="/tmp/out.txt", content="hello\n"
+    )
+    assert res.success is True
+    assert "6 字节" in res.output
+    b64 = _re.search(r"'([A-Za-z0-9+/=]+)'", captured[0]).group(1)
+    assert _b64.b64decode(b64).decode("utf-8") == "hello\n"
+    assert "> /tmp/out.txt" in captured[0]
+
+
+# ── 文件编辑：唯一性校验（远程路径驱动）──────────
+async def _edit_with_content(monkeypatch, original, old, new):
+    """把 file_edit 远程读/写接到内存内容上，返回执行结果与写回内容。"""
+    import agent.tools.builtin.ops_file as m
+
+    written: list[str] = []
+
+    async def fake_read(ctx, path):
+        _ = ctx, path
+        return True, original.encode("utf-8")
+
+    async def fake_write(ctx, command, timeout):
+        import base64 as _b64
+        import re as _re
+        _ = ctx, timeout
+        b64 = _re.search(r"'([A-Za-z0-9+/=]+)'", command).group(1)
+        written.append(_b64.b64decode(b64).decode("utf-8"))
+        return True, "ok"
+
+    monkeypatch.setattr(m, "_remote_b64_read", fake_read)
+    monkeypatch.setattr(m, "run_headless", fake_write)
     res = await FileEditTool().execute(
-        _ctx(), path=str(f), old_string="beta", new_string="GAMMA"
+        _ctx(remote=True), path="/tmp/e.txt", old_string=old, new_string=new
+    )
+    return res, written
+
+
+@pytest.mark.asyncio
+async def test_file_edit_local_refused():
+    """无 SSH 会话 → file_edit 必须拒绝（编辑即写回，属突变操作）。"""
+    res = await FileEditTool().execute(
+        _ctx(), path="C:/windows/win.ini", old_string="a", new_string="b"
+    )
+    assert res.success is False
+    assert "SSH 会话" in res.error
+
+
+@pytest.mark.asyncio
+async def test_file_edit_unique_success(monkeypatch):
+    res, written = await _edit_with_content(
+        monkeypatch, "alpha beta alpha2", "beta", "GAMMA"
     )
     assert res.success is True
     assert "替换 1 处" in res.output
-    assert f.read_text(encoding="utf-8") == "alpha GAMMA alpha2"
+    assert written == ["alpha GAMMA alpha2"]
 
 
 @pytest.mark.asyncio
-async def test_file_edit_duplicate_rejected(tmp_path):
-    f = tmp_path / "dup.txt"
-    f.write_text("xx yy xx", encoding="utf-8")
-    res = await FileEditTool().execute(
-        _ctx(), path=str(f), old_string="xx", new_string="zz"
+async def test_file_edit_duplicate_rejected(monkeypatch):
+    res, written = await _edit_with_content(
+        monkeypatch, "xx yy xx", "xx", "zz"
     )
     assert res.success is False
     assert "2 次" in res.error
-    assert f.read_text(encoding="utf-8") == "xx yy xx"  # 文件保持不变
+    assert written == []  # 未通过校验绝不写回
 
 
 @pytest.mark.asyncio
-async def test_file_edit_zero_rejected(tmp_path):
-    f = tmp_path / "zero.txt"
-    f.write_text("hello", encoding="utf-8")
-    res = await FileEditTool().execute(
-        _ctx(), path=str(f), old_string="nope", new_string="z"
+async def test_file_edit_zero_rejected(monkeypatch):
+    res, written = await _edit_with_content(
+        monkeypatch, "hello", "nope", "z"
     )
     assert res.success is False
     assert "0 次" in res.error
+    assert written == []
 
 
 @pytest.mark.asyncio
@@ -206,18 +308,20 @@ async def test_file_edit_remote_does_not_strip_bracket_lines(monkeypatch):
 
 # ── 文件查找 / 内容搜索（本地） ────────────────
 @pytest.mark.asyncio
-async def test_file_glob_local(tmp_path):
-    (tmp_path / "a.log").write_text("x", encoding="utf-8")
-    (tmp_path / "b.txt").write_text("x", encoding="utf-8")
-    res = await FileGlobTool().execute(_ctx(), path=str(tmp_path), pattern="*.log")
+async def test_file_glob_local(tmp_workspace):
+    with open(os.path.join(tmp_workspace, "a.log"), "w", encoding="utf-8") as fh:
+        fh.write("x")
+    with open(os.path.join(tmp_workspace, "b.txt"), "w", encoding="utf-8") as fh:
+        fh.write("x")
+    res = await FileGlobTool().execute(_ctx(), path=tmp_workspace, pattern="*.log")
     assert res.success is True
     assert "a.log" in res.output
     assert "b.txt" not in res.output
 
 
 @pytest.mark.asyncio
-async def test_file_grep_local(tmp_path):
-    f = tmp_path / "g.txt"
+async def test_file_grep_local(tmp_workspace):
+    f = Path(tmp_workspace) / "g.txt"
     f.write_text("apple\nbanana\napple pie\n", encoding="utf-8")
     res = await FileGrepTool().execute(_ctx(), path=str(f), pattern="apple", max_lines=10)
     assert res.success is True
@@ -226,9 +330,9 @@ async def test_file_grep_local(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_file_grep_invalid_regex(tmp_path):
+async def test_file_grep_invalid_regex(tmp_workspace):
     res = await FileGrepTool().execute(
-        _ctx(), path=str(tmp_path), pattern="([", max_lines=10
+        _ctx(), path=tmp_workspace, pattern="([", max_lines=10
     )
     assert res.success is False
     assert "正则" in res.error
@@ -236,8 +340,8 @@ async def test_file_grep_invalid_regex(tmp_path):
 
 # ── 图片查看：扩展名 / 大小校验 ────────────────
 @pytest.mark.asyncio
-async def test_read_image_bad_extension(tmp_path):
-    f = tmp_path / "doc.pdf"
+async def test_read_image_bad_extension(tmp_workspace):
+    f = Path(tmp_workspace) / "doc.pdf"
     f.write_bytes(b"%PDF-1.4")
     res = await ReadImageTool().execute(_ctx(), path=str(f))
     assert res.success is False
@@ -251,8 +355,8 @@ async def test_read_image_traversal_rejected():
 
 
 @pytest.mark.asyncio
-async def test_read_image_local_ok(tmp_path):
-    f = tmp_path / "pix.png"
+async def test_read_image_local_ok(tmp_workspace):
+    f = Path(tmp_workspace) / "pix.png"
     f.write_bytes(b"\x89PNG\r\n\x1a\nfakedata")
     res = await ReadImageTool().execute(_ctx(), path=str(f))
     assert res.success is True
@@ -260,8 +364,8 @@ async def test_read_image_local_ok(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_read_image_too_large(tmp_path):
-    f = tmp_path / "big.png"
+async def test_read_image_too_large(tmp_workspace):
+    f = Path(tmp_workspace) / "big.png"
     f.write_bytes(b"x" * (10 * 1024 * 1024 + 1))
     res = await ReadImageTool().execute(_ctx(), path=str(f))
     assert res.success is False
@@ -269,16 +373,17 @@ async def test_read_image_too_large(tmp_path):
 
 
 # ── 后台任务：run → list → output → kill ──────
+@pytest.mark.skipif(not REQUIRES_SPAWN, reason="当前沙箱禁止派生子进程")
 @pytest.mark.asyncio
-async def test_job_lifecycle_local(tmp_path):
-    script = tmp_path / "job.py"
+async def test_job_lifecycle_local(tmp_workspace):
+    script = Path(tmp_workspace) / "job.py"
     script.write_text("import time\nprint('started', flush=True)\ntime.sleep(60)\n", encoding="utf-8")
 
     # shlex.split 会把 Windows 反斜杠当转义符，故用正斜杠路径
     script_posix = script.as_posix()
     run_tool = JobRunTool()
     res = await run_tool.execute(
-        _ctx(workspace_path=str(tmp_path)),
+        _ctx(),
         cmd=f"python {script_posix}",
     )
     assert res.success is True

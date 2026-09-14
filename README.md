@@ -288,7 +288,7 @@ Driver（驭手）—— ReAct 决策循环主驱动
   │   └── ReflectionRein    AGENT_COMPLETE 反思演化
   │
   ├── Bridle（马缰）—— 上下文组装 + 压缩
-  ├── Saddle（马鞍）—— 工具执行 + 沙箱（6 个内置工具）
+  ├── Saddle（马鞍）—— 工具执行 + 沙箱（22 个内置工具）
   ├── Stirrups（马镫）—— LLM 调用 + 重试
   └── TelemetryBus —— 事件广播
 ```
@@ -347,15 +347,18 @@ INIT → THINKING → [LLM 调用] → 有工具调用?
 | 工具 | 风险 | 说明 |
 |---|---|---|
 | `read_image` | safe | 读 PNG/JPEG/WebP/GIF（白名单 + 10MB 上限），返回 base64 data URI |
-| `job_run` | moderate | 后台启动长驻/跟随任务（本地子进程，返回 job_id） |
-| `job_list` | safe | 列出全部后台任务 |
-| `job_output` | safe | 读 job 输出（可 wait 阻塞，最长 60s） |
-| `job_kill` | moderate | 终止后台任务（SIGTERM→SIGKILL） |
+| `job_run` | moderate | 后台启动长驻/跟随任务（local 本地子进程 / remote 远程 setsid 脱离会话，返回 job_id + PID） |
+| `job_list` | safe | 列出全部后台任务（远程任务重启后从 agent_jobs 恢复，顺带 kill -0 存活对账） |
+| `job_output` | safe | 读 job 输出（本地=内存缓冲 / 远程=增量 tail 日志 + 退出码文件，可 wait 阻塞） |
+| `job_kill` | moderate | 终止后台任务（本地 SIGTERM→SIGKILL / 远程整进程组 TERM→KILL 升级） |
 
 > 文件/图片/后台任务均**双模式**：有 SSH 会话时操作远程服务器（POSIX），
 > 无会话时操作本地主机（Python 原生 API，规避 Windows CMD 不认 POSIX）。
 > 所有文件路径拒绝 `..` 越界，写/杀操作带风险标记与确认。
-> 后台 job 以本地子进程为主；远程大任务因桥接缺少 kill 通道仅"尽力而为"。
+> 远程 job：cmd 经 base64 落脚本（防注入），setsid 进程组脱离会话（关窗口继续跑），
+> 日志/退出码落 /tmp/ckun_agent_jobs/&lt;job_id&gt;/，注册表持久化 agent_jobs 表 —
+> backend 重启可恢复、对账、kill；agent run 取消/断连时自动清理该 run 名下远程任务。
+> job_run 的内部命令与 shell_exec 同走命令级安全分类与审批（wrapper 不参与分类）。
 
 ### 安全防御
 

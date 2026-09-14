@@ -36,8 +36,11 @@ from agent.audit import append_record_async
 
 logger = logging.getLogger(__name__)
 
-# 命令执行工具：审批必须绑定命令内容（审查 M-3），工具级授权不得覆盖命令级审批
-_COMMAND_EXEC_TOOLS = {"shell_exec"}
+# 命令执行工具：审批必须绑定命令内容（审查 M-3），工具级授权不得覆盖命令级审批。
+# job_run 同属命令入口（local=本地子进程 / remote=远程命令），其 `cmd` 参数
+# 必须经 classify_command 精细判定，wrapper 不参与分类，防止内部 dangerous
+# 命令借工具级 moderate 一刀切漏审。
+_COMMAND_EXEC_TOOLS = {"shell_exec", "job_run"}
 
 # C-review M7：审批等待超时（秒）。危险命令/权限请求发出后，用户在此时限内
 # 未响应 → 按拒绝处理：签名移出"等待审批"集合、不再重发 permission_needed
@@ -56,17 +59,15 @@ def _perm_pending(ctx: RunContext) -> dict:
 
 
 def _audit_target_type(ctx: "RunContext") -> str:
-    """根据运行上下文推断目标类型（ssh / local / work）"""
+    """根据运行上下文推断目标类型：仅远程（SSH 会话）；无会话时工具本身已 fail-closed 拒绝"""
     if getattr(ctx, "ssh_session_id", ""):
         return "ssh"
-    if getattr(ctx, "workspace_path", ""):
-        return "local"
     return ""
 
 
 def _audit_target_id(ctx: "RunContext") -> str:
-    """目标标识：SSH 会话 id 优先，其次为工作区路径"""
-    return getattr(ctx, "ssh_session_id", "") or getattr(ctx, "workspace_path", "") or ""
+    """目标标识：SSH 会话 id"""
+    return getattr(ctx, "ssh_session_id", "") or ""
 
 
 def _read_text_safe(path: str) -> str:
@@ -185,7 +186,8 @@ class FilesystemGuard:
         args = last.get("args", {})
 
         # 敏感 shell 命令检查 — 委托给 safety 模块分类
-        if tool in ("shell_exec",):
+        # （shell_exec / job_run 均按 command|shell|cmd 参数提取内部命令）
+        if tool in _COMMAND_EXEC_TOOLS:
             level, reason = classify_shell_args(args)
             if level == "hardline":
                 # 无条件阻断，不询问 PermissionGate
@@ -408,9 +410,13 @@ class LoopDetector:
     point: ReinPoint = field(default=ReinPoint.PRE_TOOL_CALL, init=False)
     priority: int = field(default=5, init=False)
 
-    # 只读/低风险工具：读取大文件或目录时多次调用是合理的，放宽长窗口阈值
+    # 只读/低风险工具：读取大文件、目录遍历、观测轮询是合理的高频重复调用，
+    # 放宽长窗口阈值。注意：必须与 builtin 注册名一致（曾残留 work 模式旧名
+    # read_file/list_dir 导致该放宽永不命中 — 2026-09 清理修复）
     _READONLY_TOOLS: frozenset = field(default_factory=lambda: frozenset({
-        "read_file", "list_dir", "grep", "glob",
+        "file_read", "file_glob", "file_grep", "read_image", "log_read",
+        "sys_overview", "process_inspect", "network_probe",
+        "job_list", "job_output",
     }), init=False, repr=False)
 
     async def check(self, ctx: RunContext) -> ReinDecision:
@@ -1072,22 +1078,6 @@ def _get_global_permission_gate_sync(saddle: Optional[Any] = None) -> "Permissio
     return _global_permission_gate
 
 
-async def get_global_permission_gate(saddle: Optional[Any] = None) -> "PermissionGate":
-    """
-    获取进程级 PermissionGate 单例（异步版本，供 routes 层 await 调用）
-
-    与 _get_global_permission_gate_sync 共享同一单例。
-    保留 async 签名是为了符合 FastAPI 异步路由的调用约定。
-    """
-    return _get_global_permission_gate_sync(saddle=saddle)
-
-
-def reset_global_permission_gate() -> None:
-    """重置单例（仅用于测试隔离）"""
-    global _global_permission_gate
-    _global_permission_gate = None
-
-
 @dataclass
 class ReflectionRein:
     """
@@ -1160,14 +1150,14 @@ class DynamicBudgetRein:
     point: ReinPoint = field(default=ReinPoint.POST_ITERATION, init=False)
     priority: int = field(default=3, init=False)
 
-    # 文件变更工具集（与 driver._FILE_MUTATION_TOOLS 对齐）
+    # 文件变更工具集（与 driver._FILE_MUTATION_TOOLS 对齐；必须用 builtin 实际
+    # 注册名 —— work 模式旧名 write_file/edit_file 等已随全库清理移除）
     _FILE_MUTATION_TOOLS: frozenset = field(default_factory=lambda: frozenset({
-        "write_file", "patch_file", "edit_file", "create_file",
-        "delete_file", "move_file", "rename_file",
+        "file_write", "file_edit",
     }), init=False, repr=False)
-    # 只读工具集：多次读取不同文件是合理的工作密度，应给予预算
+    # 只读工具集：多次读取不同文件是合理的工作密度，应给予预算（旧名残留修复）
     _READONLY_TOOLS: frozenset = field(default_factory=lambda: frozenset({
-        "read_file", "list_dir", "grep", "glob",
+        "file_read", "file_glob", "file_grep", "read_image", "log_read",
     }), init=False, repr=False)
     # 每编辑 N 个不同文件追加预算
     file_mutation_interval: int = 3

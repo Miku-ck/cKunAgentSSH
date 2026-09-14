@@ -310,12 +310,6 @@ export const api = {
       method: 'DELETE',
     }),
 
-  updateConversationTitle: (id: string, title: string) =>
-    request<Conversation>(`/chat/conversations/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ title }),
-    }),
-
   // 消息
   getMessages: (conversationId: string, limit = 50, offset = 0) =>
     request<Message[]>(`/chat/conversations/${conversationId}/messages?limit=${limit}&offset=${offset}`),
@@ -857,4 +851,166 @@ export const scheduleApi = {
   /** 执行历史 */
   runs: (id: string, limit = 50) =>
     request<ScheduleRun[]>(`/schedules/${id}/runs?limit=${limit}`),
+}
+
+// ── Agent 管理端（对接 backend/routes/agent.py 的管理端点）──
+// 说明：这些端点后端早已闭环、此前前端零引用；此处仅接线消费，不改后端行为。
+
+/** GET /agent/tools 单工具元信息（含启用状态） */
+export interface AgentToolInfo {
+  name: string
+  description: string
+  risk_level: 'safe' | 'moderate' | 'dangerous'
+  mode_scope: string[]
+  enabled: boolean
+  reversible: boolean
+  cacheable: boolean
+  timeout: number
+}
+export interface AgentToolsResponse { mode: string; tools: AgentToolInfo[] }
+
+/** GET /agent/permission/list 永久授权键集合（"tool" 或 "tool:cmdhash"） */
+export interface PermissionListResponse { tools: string[] }
+
+/** GET /agent/memories 单条记忆（embedding 已在后端剔除） */
+export interface AgentMemoryItem {
+  id: string
+  type: string
+  mode: string
+  content: string
+  importance: number
+  use_count: number
+  last_used_at: string
+  created_at: string
+  agent_run_id?: string
+  source_conv_id?: string
+}
+export interface MemoriesResponse { memories: AgentMemoryItem[]; count: number }
+
+/** GET /agent/strategies 单条策略（reflection / evolved_config） */
+export interface AgentStrategyItem {
+  id: string
+  mode: string
+  strategy_type: string
+  name: string
+  content: string
+  config?: string
+  score: number
+  enabled: number
+  created_at: string
+  updated_at: string
+}
+export interface StrategiesResponse { strategies: AgentStrategyItem[]; count: number }
+
+/** GET /agent/tick/status 意识循环状态 */
+export interface TickStatusResponse {
+  running: boolean
+  interval_seconds: number
+  last_tick: Record<string, unknown> | null
+}
+
+/** GET /agent/runs/{id}/trace 完整轨迹（会话内"查看完整轨迹"回放） */
+export interface AgentRunTrace {
+  run: {
+    id: string | null
+    conversation_id?: string
+    task?: string
+    mode?: string
+    model_used?: string
+    status?: string
+    iteration?: number
+    max_iterations?: number
+    started_at?: string
+    completed_at?: string
+  }
+  cost: {
+    prompt_tokens: number
+    completion_tokens: number
+    total_tokens: number
+    cost_usd: number
+    duration_ms: number
+    tool_call_count: number
+    pricing: { input_per_1m: number; output_per_1m: number; model: string }
+  }
+  state_history: Array<{ from?: string; to?: string; event?: string; at?: string }>
+  tool_calls: Array<{
+    id: string
+    iteration: number
+    tool_name: string
+    arguments: Record<string, unknown> | string
+    result: string | null
+    success: boolean
+    duration_ms: number | null
+    created_at: string
+  }>
+}
+
+export const agentAdminApi = {
+  /** 工具清单（含启用状态、风险档） */
+  getTools: (mode = 'ssh') =>
+    request<AgentToolsResponse>(`/agent/tools?mode=${encodeURIComponent(mode)}`),
+
+  /** 启用/禁用工具 */
+  setToolEnabled: (toolName: string, enabled: boolean) =>
+    request<unknown>(
+      `/agent/tools/${encodeURIComponent(toolName)}/enabled`,
+      { method: 'PATCH', body: JSON.stringify({ enabled }) },
+    ),
+
+  /** 永久授权清单 */
+  listPermissions: () => request<PermissionListResponse>('/agent/permission/list'),
+
+  /** 撤销某工具全部授权（工具级撤销会连带其所有命令级绑定键 — 与后端 revoke 语义一致） */
+  revokePermission: (tool: string) =>
+    request<unknown>(
+      `/agent/permission/revoke?tool=${encodeURIComponent(tool)}`,
+      { method: 'POST' },
+    ),
+
+  /** 记忆列表 */
+  listMemories: (opts: { mode?: string; memType?: string; limit?: number } = {}) => {
+    const q = new URLSearchParams()
+    if (opts.mode) q.set('mode', opts.mode)
+    if (opts.memType) q.set('mem_type', opts.memType)
+    q.set('limit', String(opts.limit ?? 100))
+    return request<MemoriesResponse>(`/agent/memories?${q.toString()}`)
+  },
+
+  deleteMemory: (id: string) =>
+    request<unknown>(`/agent/memories/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** 清理最旧/最少使用记忆；clearAll=true 清空 */
+  pruneMemories: (opts: { maxCount?: number; clearAll?: boolean; mode?: string } = {}) => {
+    const q = new URLSearchParams()
+    if (opts.mode) q.set('mode', opts.mode)
+    q.set('max_count', String(opts.maxCount ?? 200))
+    if (opts.clearAll) q.set('clear_all', 'true')
+    return request<{ deleted: number }>(`/agent/memories/prune?${q.toString()}`, {
+      method: 'POST',
+    })
+  },
+
+  /** 策略列表（反思 + 演化） */
+  listStrategies: (opts: { mode?: string; limit?: number } = {}) => {
+    const q = new URLSearchParams()
+    if (opts.mode) q.set('mode', opts.mode)
+    q.set('limit', String(opts.limit ?? 50))
+    return request<StrategiesResponse>(`/agent/strategies?${q.toString()}`)
+  },
+
+  setStrategyEnabled: (id: string, enabled: boolean) =>
+    request<unknown>(
+      `/agent/strategies/${encodeURIComponent(id)}/enabled?enabled=${enabled ? 1 : 0}`,
+      { method: 'PATCH' },
+    ),
+
+  deleteStrategy: (id: string) =>
+    request<unknown>(`/agent/strategies/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** 意识 tick 状态（running / 间隔 / 上次结果） */
+  getTickStatus: () => request<TickStatusResponse>('/agent/tick/status'),
+
+  /** 某次 run 的完整轨迹（DB 权威，含每调用耗时与成本） */
+  getRunTrace: (runId: string) =>
+    request<AgentRunTrace>(`/agent/runs/${encodeURIComponent(runId)}/trace`),
 }

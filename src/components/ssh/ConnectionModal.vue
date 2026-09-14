@@ -58,7 +58,7 @@
           <div class="form-group flex-1">
             <label>密码</label>
             <div class="input-with-btn">
-              <input v-model="form.password" :type="showPassword ? 'text' : 'password'" placeholder="输入密码" />
+              <input v-model="form.password" :type="showPassword ? 'text' : 'password'" :placeholder="passwordPlaceholder" />
               <button class="toggle-btn" @click="showPassword = !showPassword" :title="showPassword ? '隐藏' : '显示'">
                 <svg v-if="showPassword" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
                 <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -82,7 +82,7 @@
             <div class="form-group flex-1">
               <label>密码短语 (可选)</label>
               <div class="input-with-btn">
-                <input v-model="form.passphrase" :type="showPassphrase ? 'text' : 'password'" placeholder="Passphrase" />
+                <input v-model="form.passphrase" :type="showPassphrase ? 'text' : 'password'" :placeholder="passphrasePlaceholder" />
                 <button class="toggle-btn" @click="showPassphrase = !showPassphrase" :title="showPassphrase ? '隐藏' : '显示'">
                   <svg v-if="showPassphrase" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
                   <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -233,6 +233,15 @@ const authOptions = [
   { value: 'agent' as const, label: 'Agent' },
 ]
 
+// 编辑已保存连接时凭据框默认留空（主进程列表接口不返回明文，属安全设计）——
+// 用占位符明确告知"留空 = 保持不变"，避免用户以为凭据丢失而反复重输
+const passwordPlaceholder = isEdit && props.editData?.hasPassword
+  ? '已保存，留空则保持原密码'
+  : '输入密码'
+const passphrasePlaceholder = isEdit && props.editData?.hasPassphrase
+  ? '已保存，留空则保持原值'
+  : 'Passphrase'
+
 // 认证相关字段变动时清除旧的测试结果,避免误导
 watch(
   () => [form.host, form.port, form.username, form.authType, form.password, form.privateKeyPath, form.passphrase],
@@ -313,7 +322,8 @@ async function handleTest() {
     errorMsg.value = '请先填写主机和用户名'
     return
   }
-  if (form.authType === 'password' && !form.password) {
+  // 编辑已保存密码的连接时允许留空（主进程用存储的凭据补全后再测试）
+  if (form.authType === 'password' && !form.password && !(isEdit && props.editData?.hasPassword)) {
     errorMsg.value = '请输入密码'
     return
   }

@@ -12,6 +12,8 @@ Saddle — 马鞍
 from __future__ import annotations
 
 import asyncio
+import base64
+import os
 import re
 import shlex
 import time
@@ -73,54 +75,87 @@ class Sandbox:
 
 @dataclass
 class ShellUndo:
-    """Shell 命令撤销 — 记录命令，reverse 时尝试执行反向命令
+    """Shell 命令撤销 — reverse 时经 ElectronBridge 在【同一 SSH 会话】执行反向命令
 
-    C-review C4：记录原命令的执行宿主（local/ssh + session_id）——
-    原实现 reverse 恒在本地 create_subprocess_shell 执行，SSH 模式下
-    原命令在远程服务器、回滚却在后端主机"打错机器"（误删本地同名路径）。
+    C-review C4：记录原命令的执行会话 —— 原实现 reverse 恒在本地
+    create_subprocess_shell 执行，SSH 模式下原命令在远程服务器、回滚却在
+    后端主机"打错机器"（误删本地同名路径）。
+
+    仅远程（2026-09 收敛）：shell_exec 无 SSH 会话即 fail-closed 拒绝，本机
+    不存在被撤销的执行。而 undo 在 PRE_TOOL_CALL 构建、工具 execute 拒绝后
+    会触发 apply_reverse — 若保留本地回滚分支，拒绝路径的反向命令（如 rmdir）
+    反而会在后端主机真实执行，绕过 shell_exec 的本机执行禁令。因此无
+    ssh_session_id 时一律跳过（本机从未执行，也无需回滚）。
     """
     command: str
     reverse_command: Optional[str]  # None 表示无反向命令
-    host: str = "local"  # "local" | "ssh"
     ssh_session_id: str = ""
 
     async def apply_reverse(self) -> None:
         if not self.reverse_command:
             return
-        if self.host == "ssh":
-            # 远程命令的反向必须走 ElectronBridge 下发到同一 SSH 会话
-            if not self.ssh_session_id:
-                logger.warning("ShellUndo 跳过：ssh 反向命令缺 session_id (command=%s)", self.command)
-                return
-            try:
-                from agent.electron_bridge import ElectronBridge
-                bridge = ElectronBridge()
-                if not bridge.is_available():
-                    logger.warning("ShellUndo 跳过：Electron Bridge 不可用 (command=%s)", self.command)
-                    return
-                await bridge.exec_ssh_command(
-                    ssh_session_id=self.ssh_session_id,
-                    command=self.reverse_command,
-                    timeout=10.0,
-                )
-            except Exception as e:
-                logger.warning("ShellUndo 远程反向失败 %s: %s", self.reverse_command, e)
+        if not self.ssh_session_id:
+            # 原命令从未执行（无 SSH 会话 → shell_exec 已拒绝），无需回滚，
+            # 且绝不允许在后端主机执行反向命令。
+            logger.info("ShellUndo 跳过：无 SSH 会话，原命令未执行 (command=%s)", self.command)
             return
         try:
-            proc = await asyncio.create_subprocess_shell(
-                self.reverse_command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            from agent.electron_bridge import ElectronBridge
+            bridge = ElectronBridge()
+            if not bridge.is_available():
+                logger.warning("ShellUndo 跳过：Electron Bridge 不可用 (command=%s)", self.command)
+                return
+            await bridge.exec_ssh_command(
+                ssh_session_id=self.ssh_session_id,
+                command=self.reverse_command,
+                timeout=10.0,
             )
-            # 修复：添加超时防止反向命令挂起导致回滚流程永久阻塞
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=10.0)
-            except asyncio.TimeoutError:
-                logger.warning("ShellUndo 超时，强制终止: %s", self.reverse_command)
-                proc.kill()
-                await proc.wait()
         except Exception as e:
-            logger.warning("ShellUndo 失败 %s: %s", self.reverse_command, e)
+            logger.warning("ShellUndo 远程反向失败 %s: %s", self.reverse_command, e)
+
+
+@dataclass
+class FileContentUndo:
+    """文件写/编辑撤销 — 执行前快照原内容，reverse 时经 SSH 会话还原（或删除新建文件）。
+
+    P3 预变更快照：文件类突变工具（file_write / file_edit）的回滚从 "NoOp" 升级为
+    内容级还原，与 shell_exec 的反向命令回滚并列构成 Undo 链。
+
+    仅限远程（2026-09 收敛）：file_write/file_edit 无 SSH 会话即被拒绝，
+    不存在本地还原路径；还原经 ElectronBridge 下发到同一 SSH 会话。
+    snapshot_b64=None 且 existed=False 表示原文件不存在，reverse 时删除新建的文件。
+    """
+
+    path: str
+    ssh_session_id: str
+    snapshot_b64: Optional[str] = None  # 原内容 base64；None 表示原文件不存在
+    existed: bool = True
+
+    async def apply_reverse(self) -> None:
+        try:
+            if not self.ssh_session_id:
+                logger.info("FileContentUndo 跳过：无 SSH 会话，原写入未发生 %s", self.path)
+                return
+            from agent.electron_bridge import ElectronBridge
+            bridge = ElectronBridge()
+            if not bridge.is_available():
+                logger.warning("FileContentUndo 跳过：Electron Bridge 不可用 %s", self.path)
+                return
+            if self.existed and self.snapshot_b64 is not None:
+                # base64 仅含字母数字+/=+，无需额外转义；路径经 shlex.quote 防护
+                cmd = (
+                    f"printf '%s' '{self.snapshot_b64}' "
+                    f"| base64 -d > {shlex.quote(self.path)}"
+                )
+            else:
+                cmd = f"rm -f {shlex.quote(self.path)}"
+            await bridge.exec_ssh_command(
+                ssh_session_id=self.ssh_session_id,
+                command=cmd,
+                timeout=10.0,
+            )
+        except Exception as e:
+            logger.warning("FileContentUndo 还原失败 %s: %s", self.path, e)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -139,16 +174,53 @@ class UndoBuilder:
         if tool == "shell_exec":
             cmd = args.get("command") or args.get("shell", "")
             reverse = UndoBuilder._shell_reverse(cmd)
-            # C-review C4：记录执行宿主 — ssh_session_id 存在即远程执行
+            # 仅远程执行（shell_exec 无会话即拒绝）；撤销目标 = 同一 SSH 会话
             return ShellUndo(
                 command=cmd,
                 reverse_command=reverse,
-                host="ssh" if getattr(ctx, "ssh_session_id", "") else "local",
                 ssh_session_id=getattr(ctx, "ssh_session_id", "") or "",
             )
 
+        if tool in ("file_write", "file_edit"):
+            # P3 预变更快照：文件突变工具执行前快照原内容，供回滚时还原
+            return await UndoBuilder._build_file_undo(tool, args, ctx)
+
         # 只读工具 → NoOp
         return NoOpUndo(reason="readonly")
+
+    @staticmethod
+    async def _build_file_undo(tool: str, args: dict, ctx: RunContext) -> UndoAction:
+        """为 file_write / file_edit 构建内容级回滚包（执行前快照，仅限 SSH 会话）。"""
+        path = args.get("path") or ""
+        if not path:
+            return NoOpUndo(reason="file_no_path")
+        sess = getattr(ctx, "ssh_session_id", "") or ""
+        if not sess:
+            # 工具 execute 会 fail-closed 拒绝，本机无副作用可撤销
+            return NoOpUndo(reason="file_write_requires_ssh")
+
+        # 执行前快照远端原内容（base64 回传，规避尾部哨兵歧义）
+        from agent.tools.builtin.ops_common import run_headless, strip_remote_tail
+        ok, out = await run_headless(ctx, f"base64 {shlex.quote(path)}", 30)
+        if ok:
+            body = strip_remote_tail(out)
+            try:
+                data = base64.b64decode(body)
+            except Exception:
+                return NoOpUndo(reason="file_snapshot_decode_fail")
+            return FileContentUndo(
+                path=path, ssh_session_id=sess,
+                snapshot_b64=base64.b64encode(data).decode("ascii"),
+                existed=True,
+            )
+        # 快照失败：区分"桥/会话不可用"（真实写入也会失败 → NoOp）
+        # 与其余（如 base64 因文件不存在非 0 退出 → 原文件不存在，回滚=删除）
+        if "拒绝执行" in out or "fail-closed" in out or "未就绪" in out:
+            return NoOpUndo(reason="file_snapshot_unavailable")
+        return FileContentUndo(
+            path=path, ssh_session_id=sess,
+            snapshot_b64=None, existed=False,
+        )
 
     # B-5 加固：反向命令参数禁止的 shell 元字符（含换行/回车 — 原字符串切片实现
     # 可让 `mkdir 'a; rm -rf /tmp'` 类 payload 混入反向命令）
@@ -312,7 +384,6 @@ class Saddle:
         """从 RunContext 构造 ToolContext（原 agent.tools.ToolContext）"""
         from agent.tools import ToolContext
         return ToolContext(
-            workspace_path=ctx.workspace_path,
             mode=ctx.mode,
             conversation_id=ctx.conversation_id,
             agent_run_id=ctx.run_id,

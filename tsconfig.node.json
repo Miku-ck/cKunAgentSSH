@@ -10,5 +10,5 @@
     "outDir": "./out",
     "types": ["node"]
   },
-  "include": ["electron/**/*", "electron.vite.config.ts"]
+  "include": ["electron/**/*", "shared/**/*.ts", "electron.vite.config.ts"]
 }

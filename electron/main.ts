@@ -42,7 +42,7 @@ function assertTrustedSender(event: Electron.IpcMainInvokeEvent): void {
  * v2 改进：自动识别 SSHError 并序列化为 transport 格式透传 Electron IPC。
  * 原始 SSHError 经过 IPC 后会退化为普通 Error（丢失 name/code），
  * handleTrusted 在边界拦截并以 __sshError 哨兵字段携带完整错误信息，
- * 前端 fromIpcTransport() 可还原为完整 SSHError。
+ * 前端 extractSSHError()（src/ssh-error-types.ts）据此还原结构化错误。
  */
 function handleTrusted(
   channel: string,
@@ -618,9 +618,11 @@ function setupFSIPC(): void {
     try {
       const { execFile } = await import('node:child_process')
       const { promisify } = await import('node:util')
-      const execFileAsync = promisify(execFile)
+      // P3 修复：局部改名 drivesExecFileAsync — 原同名 const 遮蔽了模块级
+      // execFileAsync（压缩/解压用 Promise 封装），消除变量遮蔽，行为不变
+      const drivesExecFileAsync = promisify(execFile)
       // 使用 wmic 获取本地磁盘盘符列表
-      const { stdout } = await execFileAsync('wmic', ['logicaldisk', 'get', 'caption'])
+      const { stdout } = await drivesExecFileAsync('wmic', ['logicaldisk', 'get', 'caption'])
       const drives = stdout
         .split('\n')
         .slice(1) // 跳过表头 Caption
@@ -734,24 +736,6 @@ function setupFSIPC(): void {
     await shell.trashItem(filePath)
   })
 
-  // 写入二进制文件（用于技能包资源文件解压）
-  // data 为 base64 编码的字节数据，避免 IPC 序列化丢失字节
-  // 审查修复：加 50MB 大小上限 — 原实现无上限，受控渲染进程可传超大 base64
-  // 字符串耗尽主进程内存（IPC 序列化 + Buffer 解码双重放大）
-  const MAX_BINARY_WRITE_BYTES = 50 * 1024 * 1024
-  handleTrusted('fs:writeBinaryFile', async (_event, filePath: string, data: string) => {
-    try {
-      await assertSafePath(filePath)
-      if (typeof data !== 'string' || data.length > MAX_BINARY_WRITE_BYTES * 1.4) {
-        throw new Error(`写入数据过大（上限 ${MAX_BINARY_WRITE_BYTES / 1024 / 1024}MB）`)
-      }
-      const buf = Buffer.from(data, 'base64')
-      await writeFile(filePath, buf)
-    } catch (err: any) {
-      throw new Error(`Failed to write binary file: ${err.message}`)
-    }
-  })
-
   // 路径拼接（主进程使用 Node path，避免渲染进程引入 polyfill）
   handleTrusted('fs:pathJoin', async (_event, ...segments: string[]) => {
     return join(...segments)
@@ -807,50 +791,6 @@ function setupFSIPC(): void {
             await walk(fullPath, relPath)
           } else {
             result.push(relPath)
-          }
-        }
-      }
-      await walk(dirPath, '')
-      return result
-    } catch (err: any) {
-      throw new Error('读取文件列表失败，请检查目录是否存在或是否有访问权限')
-    }
-  })
-
-  // 列出工作区下的文本类源码文件（递归），用于 @ 菜单文件提及。
-  // 在主进程侧剪枝：跳过 node_modules/.git/dist 等巨型目录、仅收集文本扩展名、
-  // 总数上限 2000。避免大工作区返回数十万路径阻塞渲染进程导致 UI 卡死。
-  handleTrusted('fs:listTextFiles', async (_event, dirPath: string): Promise<string[]> => {
-    try {
-      await assertSafePath(dirPath)
-      const SKIP_DIRS = new Set([
-        'node_modules', '.git', '.svn', '.hg', 'dist', 'build', 'out',
-        '.next', '.nuxt', '.cache', '.parcel-cache', 'coverage',
-        '__pycache__', '.pytest_cache', '.mypy_cache', '.venv', 'venv',
-        'target', '.gradle', '.idea', '.vscode', 'vendor',
-      ])
-      const TEXT_EXT = new Set([
-        'txt','md','js','ts','vue','py','java','c','cpp','h','hpp',
-        'go','rs','rb','php','sh','bat','ps1','sql','html','css',
-        'json','yaml','yml','toml','xml','csv','tsv','log',
-        'jsx','tsx','svelte','astro','lua','pl','r','m','swift',
-        'kt','dart','scala','clj','hs','ml','fs','elm',
-      ])
-      const MAX_FILES = 2000
-      const result: string[] = []
-      let stopped = false
-      async function walk(dir: string, base: string): Promise<void> {
-        if (stopped || result.length >= MAX_FILES) { stopped = true; return }
-        const entries = await readdir(dir, { withFileTypes: true })
-        for (const entry of entries) {
-          if (stopped || result.length >= MAX_FILES) { stopped = true; return }
-          if (entry.isDirectory()) {
-            if (SKIP_DIRS.has(entry.name)) continue
-            await walk(join(dir, entry.name), join(base, entry.name))
-          } else {
-            const ext = entry.name.split('.').pop()?.toLowerCase() || ''
-            if (!TEXT_EXT.has(ext)) continue
-            result.push(join(base, entry.name))
           }
         }
       }
@@ -1099,10 +1039,61 @@ if ($result.CompletionMatches) {
 }
 
 // ─── SSH IPC ────────────────────────────────────────
+
+/**
+ * 凭据回填（修复：重启后"已保存的密码失效"）。
+ *
+ * 渲染进程 connections 副本不含明文凭据（ssh:listConnections 已剥离，见 E10），
+ * 主进程重启后渲染层内存里也不再有任何密码副本 → ssh:connect 收到的 password
+ * 恒为 undefined，ssh2 无任何可用认证方式即发起请求 → USERAUTH_FAILURE，前端按
+ * authType='password' 呈现为"密码认证失败"。实际上密码一直完好保存在 Store 中，
+ * 只是连接路径没有被读出来（对比：ssh:testConnection 有回填，所以测试连接能过）。
+ *
+ * 语义：渲染层传了非空值优先（弹窗里刚输入/未保存的场景），否则用 Store 中已保存
+ * 的凭据；认证方式与磁盘记录不一致时不用（用户正在切换认证方式）。
+ */
+async function resolveCredentials(config: any): Promise<any> {
+  if (!config || !config.id) return config
+  let stored: SSHConnectionRecord | null = null
+  try {
+    stored = await sshStore!.get(config.id)
+  } catch (e) {
+    console.warn('[ssh] 读取已保存凭据失败，本次连接仅用渲染层传入值:', e)
+    return config
+  }
+  if (!stored || stored.authType !== config.authType) return config
+  if (!config.password && stored.password) config.password = stored.password
+  if (!config.passphrase && stored.passphrase) config.passphrase = stored.passphrase
+  return config
+}
+
+/**
+ * 剥离记录中的明文凭据，仅保留布尔标志（与 ssh:listConnections 同语义）。
+ *
+ * 修复 E10 的残留缺口：ssh:saveConnection / ssh:duplicateConnection 原样返回 Store
+ * 记录（含解密后的 password/passphrase）给渲染进程，既违背"凭据不出主进程"的约定，
+ * 也让"同会话内连接能成功"依赖渲染层内存里的密码副本 —— 这正是上面这个 bug
+ * 只在重启后才暴露的原因。
+ */
+function stripCredentials(rec: SSHConnectionRecord): SSHConnectionRecord {
+  const { password, passphrase, ...rest } = rec
+  return { ...rest, hasPassword: !!password, hasPassphrase: !!passphrase } as SSHConnectionRecord
+}
+
 function setupSSHIPC(): void {
   sshManager = new SSHManager()
   sshStore = new SSHStore()
   if (mainWindow) sshManager.setWindow(mainWindow)
+
+  // 重连修复：重连时主进程自取已保存的连接配置（safeStorage 解密后的凭据），
+  // 渲染层无需（也不应）经 IPC 传递凭据
+  sshManager.setConfigProvider(async (connectionId) => {
+    return sshStore!.get(connectionId)
+  })
+  // 重连成功后更新最后连接时间（与 ssh:connect 成功路径同语义）
+  sshManager.setOnReconnected((connectionId) => {
+    sshStore!.touchLastConnected(connectionId).catch(() => { /* ignore */ })
+  })
 
   handleTrusted('ssh:connect', async (_event, config: any) => {
     const { cols, rows, ...connConfig } = config
@@ -1110,7 +1101,9 @@ function setupSSHIPC(): void {
     // （cols 1..1000 默认 80，rows 1..500 默认 24），防非法值
     const safeCols = clampPtyDimension(cols, 80, 1, 1000)
     const safeRows = clampPtyDimension(rows, 24, 1, 500)
-    const result = await sshManager!.connect(connConfig, safeCols, safeRows)
+    // 凭据回填：渲染层不持有明文凭据，缺省时以 Store 中已保存的为准
+    const resolved = await resolveCredentials(connConfig)
+    const result = await sshManager!.connect(resolved, safeCols, safeRows)
     // 连接成功后更新最后连接时间
     if (connConfig.id) {
       sshStore!.touchLastConnected(connConfig.id).catch(() => { /* ignore */ })
@@ -1119,7 +1112,9 @@ function setupSSHIPC(): void {
   })
 
   handleTrusted('ssh:connectSftp', async (_event, config: any) => {
-    const result = await sshManager!.connectSftp(config)
+    // 凭据回填：SFTP 连接与终端连接同一条凭据来源规则
+    const resolved = await resolveCredentials(config)
+    const result = await sshManager!.connectSftp(resolved)
     if (config.id) {
       sshStore!.touchLastConnected(config.id).catch(() => { /* ignore */ })
     }
@@ -1136,6 +1131,14 @@ function setupSSHIPC(): void {
 
   handleTrusted('ssh:disconnect', (_event, id: string) => {
     sshManager!.disconnect(id)
+  })
+
+  // 重连修复：手动重连已断开的会话（重置计数，重新走 3 次 1s/3s/9s 退避）。
+  // cols/rows 来自渲染层当前终端实际尺寸（与 ssh:connect 同款钳制防非法值）
+  handleTrusted('ssh:reconnect', (_event, id: string, cols?: number, rows?: number) => {
+    const safeCols = clampPtyDimension(cols, 80, 1, 1000)
+    const safeRows = clampPtyDimension(rows, 24, 1, 500)
+    sshManager!.reconnect(id, safeCols, safeRows)
   })
 
   handleTrusted('ssh:getCwd', (_event, id: string) => {
@@ -1156,23 +1159,34 @@ function setupSSHIPC(): void {
   // 主进程 Store 直接读取凭据，无需经 IPC 传输明文。
   handleTrusted('ssh:listConnections', async () => {
     const records = await sshStore!.list()
-    return records.map(({ password, passphrase, ...rest }) => rest)
+    // hasPassword/hasPassphrase 是布尔标志（不含任何凭据内容），供编辑弹窗
+    // 显示"已保存，留空则保持原密码"占位提示，避免用户误以为凭据丢失而反复重输
+    return records.map(stripCredentials)
   })
 
-  handleTrusted('ssh:saveConnection', (_event, conn: SSHConnectionRecord) => {
-    return sshStore!.save(conn)
+  handleTrusted('ssh:saveConnection', async (_event, conn: SSHConnectionRecord) => {
+    // 落库后同样剥离明文凭据再回传（渲染层此后一律经 ssh:connect 由主进程取凭据）
+    return stripCredentials(await sshStore!.save(conn))
   })
 
   handleTrusted('ssh:deleteConnection', (_event, id: string) => {
+    // 重连修复：删除连接配置时取消该配置名下所有会话的待执行重连
+    // （已断开的会话之后不再自动重连，手动重试也无凭据可用）
+    sshManager!.cancelReconnectsByConnection(id)
     return sshStore!.delete(id)
   })
 
-  handleTrusted('ssh:duplicateConnection', (_event, id: string) => {
-    return sshStore!.duplicate(id)
+  handleTrusted('ssh:duplicateConnection', async (_event, id: string) => {
+    // 副本同样剥离明文凭据再回传（与 list/save 一致）
+    return stripCredentials(await sshStore!.duplicate(id))
   })
 
   handleTrusted('ssh:testConnection', async (_event, config: any) => {
-    return sshManager!.testConnection(config)
+    // 修复：编辑已保存连接时渲染进程看不到密码（列表已剥离明文凭据），
+    // 测试连接若要求重输密码就失去意义 —— 与 ssh:connect 共用同一套回填规则
+    // （凭据不出主进程，不落日志）
+    const resolved = await resolveCredentials(config)
+    return sshManager!.testConnection(resolved)
   })
 
   handleTrusted('ssh:migrateLegacy', (_event, legacy: any[]) => {

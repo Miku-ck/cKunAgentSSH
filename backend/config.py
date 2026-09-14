@@ -52,9 +52,6 @@ def _default_db_path() -> str:
 class Settings:
     """应用配置"""
 
-    # 运行模式（默认 false：生产安全，避免忘记设置 DEV_MODE 导致调试接口暴露）
-    dev_mode: bool = field(default_factory=lambda: os.getenv("DEV_MODE", "false").lower() == "true")
-
     # AI 模型配置（仅用于首启 _seed_models 自动探测，运行时模型配置存数据库）
     # 默认空 = 不种子任何模型（引导用户在设置 UI 配置）。
     # 开发者/演示环境显式设置 VLLM_BASE_URL（或写 backend/.env）即可保留

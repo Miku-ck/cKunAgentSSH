@@ -41,19 +41,6 @@ from agent.harness.telemetry import SSEAdapter
 
 logger = logging.getLogger(__name__)
 
-
-def _agent_workspace() -> str:
-    """Agent 文件工具默认工作区（审查 M-14）。
-
-    原实现硬编码 workspace_path=""：
-    - 文件工具直接 ValueError("未配置 workspace_path")，Agent 无法落盘任何文件；
-    - FilesystemGuard 路径越界检查仅在 workspace 非空时生效 → 守卫形同虚设。
-    现默认使用应用数据目录下的专用工作区，全部文件操作被限制在该目录内。
-    """
-    ws = os.path.expanduser("~/.ckunagentic/agent_workspace")
-    os.makedirs(ws, exist_ok=True)
-    return ws
-
 router = APIRouter(tags=["agent"])
 
 HEARTBEAT_INTERVAL = 15
@@ -166,12 +153,19 @@ def _build_agent_system_prompt(
             "回答应基于你自身的身份和能力，避免引用无关上下文或记忆。"
         )
     else:
-        # 工具使用效率指引：减少无意义重复读取和循环调用
-        # ssh 模式无本地文件工具 — 所有文件操作必须经 shell_exec 在远程执行
+        # 工具使用效率指引：优先专用运维工具，减少 shell 拼命令与重复读取
         parts.append(
-            "工具使用效率：通过 shell_exec 获取文件内容（cat/head/tail 等）后，请基于返回内容直接"
-            "推理和修改，避免在短时间内重复输出同一文件内容。查看大文件的不同位置时，优先用 "
-            "sed -n 'X,Yp'、head -n、tail -n 等指定范围读取相关片段，而不是反复 cat 整个文件。"
+            "工具使用效率：优先使用专用工具而非 shell_exec 拼命令——读文件用 file_read、"
+            "改文件用 file_edit、搜内容用 file_grep、找文件用 file_glob、看日志用 log_read、"
+            "查进程用 process_inspect、看资源用 sys_overview、探端口用 network_probe、"
+            "管服务用 service_manage。基于返回内容直接推理，避免短时间内重复读取同一内容；"
+            "查看大文件的不同位置时优先指定 offset/limit 读取相关片段。"
+        )
+        # 长任务指引：>60s 的任务必须走后台，禁止 shell_exec 同步死等
+        parts.append(
+            "长任务规则：预计执行超过 60 秒的任务（大文件传输、构建、批量巡检、等待类操作）"
+            "必须用 job_run(target='remote') 后台启动，再用 job_output(job_id, wait=10~30) "
+            "轮询输出，需要停止时用 job_kill。不要用 shell_exec 同步等待（超时上限 120 秒）。"
         )
         # 任务拆分指引：鼓励 Agent 把大任务拆成可独立验证的子任务
         parts.append(
@@ -286,20 +280,51 @@ _in_flight_lock = asyncio.Lock()
 
 
 async def _acquire_run_slot(conversation_id: str, run_id: str) -> Optional[str]:
-    """原子地为 conversation 占位。返回 None 表示成功占位；返回已有 run_id 表示冲突。"""
+    """原子地为 conversation 占位。返回 None 表示成功占位；返回已有 run_id 表示冲突。
+
+    自愈：占位者的 DB 行已存在且处于终态（completed/failed — cleanup finally
+    被取消打断的陈旧残留）时，记日志并接管占位，避免会话被永久锁死。
+    注意：DB 行缺失不算陈旧（占位先于 create_agent_run，新 run 可能有毫秒级
+    窗口还没有行）— 误接管活 run 的代价高于多等一次。
+    """
     async with _in_flight_lock:
         existing = _in_flight_runs.get(conversation_id)
         if existing:
-            return existing
+            stale = False
+            status_text = ""
+            try:
+                row = await asyncio.to_thread(db.get_agent_run, existing)
+                if row is not None:
+                    status_text = row.get("status", "")
+                    stale = row.get("status") in ("completed", "failed")
+            except Exception:
+                stale = False
+            if not stale:
+                return existing
+            logger.warning(
+                "[agent] 释放陈旧 run 占位: conversation=%s stale_run=%s status=%s",
+                conversation_id, existing, status_text,
+            )
+            del _in_flight_runs[conversation_id]
         _in_flight_runs[conversation_id] = run_id
         return None
 
 
+def _release_run_slot_sync(conversation_id: str, run_id: str) -> None:
+    """同步释放占位（无 await，取消安全）。
+
+    仅当当前占位者仍是本 run 时删除，避免误删后续 run 的占位。
+    asyncio 单线程事件循环内无 await 点 = 无交错可能，dict 操作等价原子。
+    故障根因修复：客户端断连触发任务 cancel 时，finally 里带 await 的
+    释放会被 CancelledError（BaseException）打断 → 占位永久残留。
+    """
+    if _in_flight_runs.get(conversation_id) == run_id:
+        del _in_flight_runs[conversation_id]
+
+
 async def _release_run_slot(conversation_id: str, run_id: str) -> None:
-    """释放占位（仅当当前占位者仍是本 run 时，避免误删后续 run 的占位）"""
-    async with _in_flight_lock:
-        if _in_flight_runs.get(conversation_id) == run_id:
-            del _in_flight_runs[conversation_id]
+    """释放占位（兼容旧调用；实际为无 await 的同步操作）"""
+    _release_run_slot_sync(conversation_id, run_id)
 
 
 def has_active_run(conversation_id: str) -> bool:
@@ -604,8 +629,6 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     task=req.task,
                     mode=req.mode,
                     conversation_id=req.conversation_id,
-                    # 审查 M-14：原 workspace_path="" 导致文件工具全部失败 + 路径守卫失效
-                    workspace_path=_agent_workspace(),
                     ssh_session_id=req.ssh_session_id,
                     environment=req.environment,
                     enable_visible_terminal=req.visible_terminal,
@@ -886,36 +909,62 @@ async def agent_run(req: AgentRunRequest, request: Request):
             yield sse_event({"type": "error", "message": str(e)})
             yield "data: [DONE]\n\n"
         finally:
-            heartbeat_task.cancel()
-            engine_task.cancel()
+            # ── 抗取消清理 ─────────────────────────────────────────────
+            # 故障根因：客户端断连 → 响应任务被 cancel → finally 里第一个
+            # await 抛 CancelledError（BaseException，except Exception 接不住）
+            # → 其后的占位释放/会话复位全部跳过 → run 在 DB 里已 completed，
+            # 但内存占位残留，新请求永远报"已有运行中的 Agent 任务"。
+            # 对策：1) 占位用无 await 的同步操作最先释放（取消也丢不掉）；
+            #      2) 其余清理全部 except BaseException；
+            #      3) 关键异步清理用 shield（外层被取消时内层任务继续跑完）。
+            _release_run_slot_sync(req.conversation_id, run_id)
+            try:
+                heartbeat_task.cancel()
+                engine_task.cancel()
+            except BaseException:
+                pass
             # 清理 TelemetryBus 事件缓存（防止内存泄漏）
             try:
                 harness.telemetry.clear()
-            except Exception:
+            except BaseException:
                 pass
             # 清理 todo_store（防止内存泄漏）
             try:
                 from agent.tools.builtin.todo_write import clear_todos
                 clear_todos(run_id)
-            except Exception:
+            except BaseException:
                 pass
+            # P2 修复：run 取消/断连时清理该 run 名下的远程后台任务
+            # （job_run target=remote 的进程脱离会话运行，不杀会永久残留；
+            #  shield 保证断连 cancel 时清理任务仍会在后台跑完）
+            try:
+                from agent.tools.builtin.ops_job import kill_remote_jobs_for_run
+                await asyncio.shield(kill_remote_jobs_for_run(run_id))
+            except BaseException:
+                logger.warning("取消联动清理远程任务失败 (run_id=%s)", run_id, exc_info=True)
             # 客户端断开时将 agent_run 标记为 failed（若仍为 running/init）
             try:
-                run = await asyncio.to_thread(db.get_agent_run, run_id)
+                run = await asyncio.shield(asyncio.to_thread(db.get_agent_run, run_id))
                 if run and run.get("status") in ("running", "init"):
-                    await asyncio.to_thread(db.update_agent_run, run_id=run_id, status="failed")
-            except Exception:
+                    await asyncio.shield(
+                        asyncio.to_thread(db.update_agent_run, run_id=run_id, status="failed")
+                    )
+            except BaseException:
                 pass
-            # C-review MINOR-12：释放同会话运行占位（客户端断连也会走这里）
-            await _release_run_slot(req.conversation_id, run_id)
             # 修复：Agent 启动时将会话状态设为 in_progress，结束时须重置回
-            # completed — 若不复位，会话永久滞留 in_progress，下次运行会被
-            # 误判为有 run 进行中。此处与 _release_run_slot 对称。
+            # completed — 若不复位，会话永久滞留 in_progress。
+            # （占位释放已提到最前的同步操作；此步为对称的 DB 侧复位）
             try:
-                cur_status = await asyncio.to_thread(db.get_conversation, req.conversation_id)
+                cur_status = await asyncio.shield(
+                    asyncio.to_thread(db.get_conversation, req.conversation_id)
+                )
                 if cur_status and cur_status.get("status") == "in_progress":
-                    await asyncio.to_thread(db.update_conversation_status, req.conversation_id, "completed")
-            except Exception:
+                    await asyncio.shield(
+                        asyncio.to_thread(
+                            db.update_conversation_status, req.conversation_id, "completed"
+                        )
+                    )
+            except BaseException:
                 pass
 
     # H8 修复：fire-and-forget 任务的异常日志回调

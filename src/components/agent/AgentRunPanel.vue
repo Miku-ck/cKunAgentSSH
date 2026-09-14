@@ -1,14 +1,17 @@
 <script setup lang="ts">
 /**
- * AgentRunPanel — Agent 运行过程可视化面板
+ * AgentRunPanel — Agent 运行过程通知面板（异常/需要用户决策时显示）
  *
- * 仅显示 Agent 运行过程中的实时信息:
- * - 状态指示器（thinking / acting / observing）
- * - 迭代计数 + 终止按钮
- * - 工具调用卡片
- * - 警告 / 人工介入 / 权限请求 / 错误
+ * 实际包含的区块（均为条件渲染，无内容时整块隐藏）:
+ * - 任务规划（意图分类：级别/任务类型/思考预算）
+ * - 警告（warnings）
+ * - 人工介入求助卡片（AI 请求帮助，可忽略）
+ * - 工具授权请求（允许本次/始终允许/忽略，命令工具绑定命令哈希）
+ * - 可见终端执行：待确认命令（确认/拒绝）与在途交付状态徽章
+ * - 错误（errorMessage）
  *
- * 运行结束后的成本统计与完整轨迹通过消息气泡上的"轨迹"按钮访问 TraceViewer。
+ * 注：常规运行状态（thinking/acting、迭代计数、工具调用流）不在本面板展示 —
+ * 工具调用明细见消息气泡内联轨迹（AgentTraceInline / ToolOperationList）。
  */
 import { useAgentStore } from '@/stores/agent'
 import { agentApi } from '@/api/client'

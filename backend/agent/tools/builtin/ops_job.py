@@ -1,28 +1,46 @@
-"""后台任务管理工具集 — 本地子进程为主，远程尽可能而为。SSH 模式专属。
+"""后台任务管理工具集 — 本地子进程 + 远程 nohup/日志/PID。SSH 模式专属。
 
 包含四个 BaseTool 子类：
-  - job_run    在后台启动一个本地子进程长驻/跟随任务，返回 job_id
-  - job_list   列出所有（含已结束保留的）后台任务
-  - job_output 读取指定任务的累积输出缓冲（可短暂阻塞等待新输出）
-  - job_kill   终止指定任务（先 terminate，再 escalate kill）
+  - job_run    后台启动长驻/跟随任务，返回 job_id
+               target=local  → 本地子进程（参数列表执行，无 shell）
+               target=remote → 远程 SSH 会话：脚本落脚本 + setsid 脱离会话
+                               后台运行，stdout 落日志文件，回传进程组 PID
+  - job_list   列出所有后台任务（远程任务重启后从 agent_jobs 表恢复并对账）
+  - job_output 读取任务输出（本地=内存缓冲；远程=增量 tail 日志 + 退出码文件）
+  - job_kill   终止任务（本地=TERM→KILL 升级；远程=整进程组 TERM→KILL 升级）
+
+远程实现要点（方案 A：桥接零协议变更）：
+  1. cmd 经 base64 解码落脚本 run.sh，彻底规避引号/注入问题
+     （与 ops_file 远程 base64 通道同一模式）。
+  2. setsid 使 wrapper 成为新进程组 leader（$! 即组号），
+     job_kill 用 `kill -- -<pid>` 整组终结，防孤儿子孙进程。
+  3. 退出码由 run.sh 在命令结束后写入 rc 文件；日志/脚本/rc 全部在
+     /tmp/ckun_agent_jobs/<job_id>/ 下，关 app 任务继续跑、日志留痕。
+  4. 注册表持久化到 agent_jobs 表 — backend 重启后 job_list 恢复、
+     对账（kill -0）并可继续 kill。
 
 安全约束：
-  1. 一律以参数列表方式创建子进程（asyncio.create_subprocess_exec），
-     严禁 shell=True / join 命令字符串，规避 shell 注入与 Windows 解析歧义。
-  2. 用户输入命令经 shlex.split 拆为参数清单，本地子进程在受限权限下运行，
-     输出与副作用隔离在内存缓冲，不落库。
-  3. 后台任务以本地子进程为主；远程 SSH 会话因桥接缺少远程 kill 通道，
-     远程大任务仅"尽可能而为"，仍以本地进程形态执行。
+  1. 本地分支一律参数列表创建子进程（create_subprocess_exec），
+     严禁 shell=True。
+  2. 远程分支 fail-closed：缺 SSH 会话或 Bridge 未就绪直接拒绝
+     （复用 ops_common.run_headless，不含任何本地降级）。
+  3. 内部命令的审批/安全分类由 FilesystemGuard 按 `cmd` 参数精细判定
+     （job_run 已列入 _COMMAND_EXEC_TOOLS），wrapper 不参与分类。
 """
 import asyncio
+import base64
 import shlex
 import threading
 import time
+import types
 from dataclasses import dataclass, field
 from typing import List, Optional
 
 from agent.tools import BaseTool, ToolResult, ToolMeta
-from agent.tools.builtin.ops_common import truncate_output
+from agent.tools.builtin.ops_common import run_headless, truncate_output
+
+# 远程任务落盘根目录（目标机 /tmp 下，重启任务与日志的持久位置）
+_JOBS_ROOT = "/tmp/ckun_agent_jobs"
 
 # job_run / job_kill 会启动并终止外部进程，具备中等影响，标记 moderate 不可幂等。
 _RUN_META = ToolMeta(
@@ -44,28 +62,38 @@ _READ_META = ToolMeta(
 
 @dataclass
 class JobEntry:
-    """单个后台任务的运行时记录。"""
+    """单个后台任务的运行时记录（本地/远程双形态）。"""
     job_id: str
     args: List[str]
     start_ts: float
-    proc: asyncio.subprocess.Process
-    output: List[str] = field(default_factory=list)
-    status: str = "running"          # running / finished / failed / killed
+    proc: Optional[asyncio.subprocess.Process] = None   # 本地形态
+    output: List[str] = field(default_factory=list)     # 本地输出缓冲
+    status: str = "running"          # running / finished / failed / killed / exited
     exit_code: Optional[int] = None
     reader_task: Optional[asyncio.Task] = None
+    # ── 远程形态 ──
+    remote: bool = False
+    ssh_session_id: str = ""
+    pid: Optional[int] = None        # setsid 进程组 leader PID
+    log_dir: str = ""                # /tmp/ckun_agent_jobs/<job_id>
+    run_id: str = ""                 # 所属 agent run（取消联动清理用）
+    raw_cmd: str = ""                # 原始命令文本（展示用）
+    out_offset: int = 0              # 已读取的日志字节数（增量 tail）
 
 
 class JobManager:
-    """模块级单例：以本地子进程管理后台任务。
+    """模块级单例：管理本地/远程后台任务。
 
-    线程安全（threading.Lock 保护 job 字典），活动 job 仅存内存不落库。
-    已结束的 job 保留在字典中以便 job_list / job_output 追溯。
+    线程安全（threading.Lock 保护 job 字典）。本地 job 仅存内存；
+    远程 job 持久化到 agent_jobs 表，进程重启后由 _ensure_restored
+    从 DB 恢复到内存（状态以 kill -0 对账为准）。
     """
 
     _instance: Optional["JobManager"] = None
     _instance_lock = threading.Lock()
     _seq_lock = threading.Lock()
     _seq = 0
+    _restored = False
 
     def __init__(self):
         self._jobs: dict[str, JobEntry] = {}
@@ -100,13 +128,206 @@ class JobManager:
             entry = self._jobs.get(job_id)
             if entry is None:
                 return
-            # 竞态防护：已标记 killed 的 job 不再被 _drain 降级为 failed/finished，
-            # 保证用户显式终止的语义不被后台 reader 覆盖。
+            # 竞态防护：已标记 killed 的 job 不再被 reader/对账降级
             if entry.status == "killed":
                 entry.exit_code = exit_code
                 return
             entry.status = status
             entry.exit_code = exit_code
+        if entry.remote:
+            _persist_status(entry.job_id, status, exit_code)
+
+    def _ensure_restored(self) -> None:
+        """从 agent_jobs 表恢复未终结的远程任务（进程重启后一次）。
+
+        失败静默（DB 不可用/未初始化时远程任务列表为空即可）。
+        """
+        if JobManager._restored:
+            return
+        with JobManager._instance_lock:
+            if JobManager._restored:
+                return
+            JobManager._restored = True
+        try:
+            import database as db
+            rows = db.get_running_agent_jobs()
+        except Exception:
+            return
+        for row in rows:
+            job_id = row.get("job_id") or ""
+            if not job_id or self.get(job_id):
+                continue
+            try:
+                start_ts = time.mktime(time.strptime(
+                    row.get("created_at") or "", "%Y-%m-%d %H:%M:%S"))
+            except Exception:
+                start_ts = time.time()
+            cmd = row.get("cmd") or ""
+            self.add(JobEntry(
+                job_id=job_id,
+                args=[cmd] if cmd else [],
+                start_ts=start_ts,
+                status=row.get("status") or "running",
+                remote=True,
+                ssh_session_id=row.get("session_id") or "",
+                pid=row.get("pid"),
+                log_dir=row.get("log_dir") or f"{_JOBS_ROOT}/{job_id}",
+                run_id=row.get("run_id") or "",
+                raw_cmd=cmd,
+            ))
+
+
+# ── 远程持久化辅助（DB 不可用时静默降级，不影响任务本身）─────────
+def _persist_save(entry: JobEntry) -> None:
+    try:
+        import database as db
+        db.save_agent_job(
+            job_id=entry.job_id,
+            run_id=entry.run_id,
+            session_id=entry.ssh_session_id,
+            cmd=entry.raw_cmd,
+            pid=entry.pid,
+            log_dir=entry.log_dir,
+            status="running",
+        )
+    except Exception:
+        pass
+
+
+def _persist_status(job_id: str, status: str, exit_code: Optional[int]) -> None:
+    try:
+        import database as db
+        db.update_agent_job_status(job_id, status, exit_code)
+    except Exception:
+        pass
+
+
+def _session_ctx(ssh_session_id: str):
+    """为已恢复任务构造 run_headless 所需的最小上下文。"""
+    return types.SimpleNamespace(ssh_session_id=ssh_session_id)
+
+
+def _parse_remote_pid(output: str) -> Optional[int]:
+    """从启动命令输出解析 PID（忽略 run_headless 追加的 [exit_code=..] 行）。"""
+    for line in reversed([l.strip() for l in output.splitlines() if l.strip()]):
+        if line.startswith("[exit_code"):
+            continue
+        if line.isdigit():
+            return int(line)
+        break
+    return None
+
+
+async def _remote_launch(context, job_id: str, cmd: str) -> tuple[bool, Optional[int], str]:
+    """远程启动后台任务，返回 (ok, pid, error)。
+
+    命令结构（一次 exec，立即返回）：
+      mkdir 目录 → base64 落 run.sh → setsid 后台运行 → echo $!
+    run.sh 内容：原始命令 + 退出码落 rc 文件。
+    """
+    d = f"{_JOBS_ROOT}/{job_id}"
+    script = f"{d}/run.sh"
+    log = f"{d}/out.log"
+    rc = f"{d}/rc"
+    script_content = f"#!/bin/bash\n{cmd}\necho $? > {rc}\n"
+    sb64 = base64.b64encode(script_content.encode("utf-8")).decode("ascii")
+    launch_cmd = (
+        f"mkdir -p {d}\n"
+        f"echo {sb64} | base64 -d > {script}\n"
+        f"setsid bash {script} > {log} 2>&1 < /dev/null &\n"
+        f"echo $!"
+    )
+    ok, out = await run_headless(context, launch_cmd, timeout=20)
+    if not ok:
+        return False, None, f"远程启动失败: {out}"
+    pid = _parse_remote_pid(out)
+    if pid is None:
+        return False, None, f"无法解析远程进程 PID（输出: {out[:200]!r}）。" \
+            "目标机可能缺少 setsid，请改用 shell_exec 的 nohup 方式。"
+    return True, pid, ""
+
+
+async def _remote_read(context, entry: JobEntry) -> tuple[str, Optional[int]]:
+    """增量读取远程任务输出，返回 (new_output, rc|None)。"""
+    d = entry.log_dir
+    n = entry.out_offset + 1
+    cmd = (
+        f"RC=; [ -f {d}/rc ] && RC=$(cat {d}/rc); "
+        f"printf 'CKUNJOB_RC=%s\\n' \"$RC\"; "
+        f"[ -f {d}/out.log ] && tail -c +{n} {d}/out.log"
+    )
+    ok, out = await run_headless(context, cmd, timeout=15)
+    if not ok:
+        return f"读取远程输出失败: {out}", None
+    # 剥离 run_headless 追加的 [exit_code=..] 尾行（是 tail 命令自身的退出码，
+    # 不是任务的）
+    lines = out.splitlines()
+    if lines and lines[-1].startswith("[exit_code"):
+        lines = lines[:-1]
+    body = "\n".join(lines)
+    rc: Optional[int] = None
+    parts = body.split("\n", 1)
+    if parts and parts[0].startswith("CKUNJOB_RC="):
+        val = parts[0][len("CKUNJOB_RC="):].strip()
+        if val.lstrip("-").isdigit():
+            rc = int(val)
+        content = parts[1] if len(parts) > 1 else ""
+    else:
+        content = body
+    entry.out_offset += len(content.encode("utf-8"))
+    return content, rc
+
+
+async def _remote_kill(context, entry: JobEntry) -> str:
+    """远程终止：整进程组 TERM → 3s → KILL 升级，返回 DEAD/STILL/错误。"""
+    if not entry.pid:
+        return "NO_PID"
+    pid = entry.pid
+    cmd = (
+        f"kill -TERM -- -{pid} 2>/dev/null; sleep 3; "
+        f"if kill -0 {pid} 2>/dev/null; then "
+        f"kill -KILL -- -{pid} 2>/dev/null; sleep 1; "
+        f"kill -0 {pid} 2>/dev/null && echo CKUNJOB_STILL || echo CKUNJOB_DEAD; "
+        f"else echo CKUNJOB_DEAD; fi"
+    )
+    ok, out = await run_headless(context, cmd, timeout=15)
+    if not ok:
+        return f"远程 kill 失败: {out}"
+    if "CKUNJOB_STILL" in out:
+        return "STILL"
+    if "CKUNJOB_DEAD" in out:
+        return "DEAD"
+    return f"未知结果: {out[:100]!r}"
+
+
+async def kill_remote_jobs_for_run(run_id: str) -> int:
+    """run 取消/断连时清理该 run 名下全部在跑的远程任务（best-effort）。
+
+    返回成功终止的数量；单个失败不阻断其余。
+    """
+    if not run_id:
+        return 0
+    mgr = JobManager.instance()
+    mgr._ensure_restored()
+    targets = [
+        e for e in mgr.list()
+        if e.remote and e.status == "running" and e.run_id == run_id
+    ]
+    if not targets:
+        return 0
+    async def _kill_one(e: JobEntry) -> str:
+        return await _remote_kill(_session_ctx(e.ssh_session_id), e)
+
+    results = await asyncio.gather(
+        *[_kill_one(e) for e in targets],
+        return_exceptions=True,
+    )
+    killed = 0
+    for e, r in zip(targets, results):
+        if isinstance(r, str) and r == "DEAD":
+            mgr.update_status(e.job_id, "killed", None)
+            killed += 1
+    return killed
 
 
 def _split_cmd(cmd: str) -> List[str]:
@@ -169,15 +390,22 @@ def _running_seconds(entry: JobEntry, now: float) -> int:
 class JobRunTool(BaseTool):
     name = "job_run"
     description = (
-        "在后台启动一个本地子进程长驻/跟随任务并返回 job_id。"
-        "命令以参数列表执行（非 shell），支持本地长驻；远程会话仅尽力而为。"
-        "可用 job_output 查看输出、job_kill 终止。"
+        "在后台启动长驻/跟随任务并返回 job_id，用 job_output 查看输出、job_kill 终止。"
+        "target=local：本地子进程（参数列表执行，非 shell）。"
+        "target=remote：在远程 SSH 会话脱离会话后台运行（nohup 语义，关窗口继续跑），"
+        "返回进程组 PID，日志落远程 /tmp/ckun_agent_jobs/<job_id>/。"
+        "预计执行超过 60 秒的任务一律用 remote，不要用 shell_exec 同步等待。"
     )
     parameters = {
         "type": "object",
         "properties": {
-            "cmd": {"type": "string", "description": "要后台执行的单条命令，将按空白/引号拆为参数列表"},
-            "cwd": {"type": "string", "description": "可选工作目录，缺省用工作区根目录"},
+            "cmd": {"type": "string", "description": "要后台执行的单条命令"},
+            "target": {
+                "type": "string",
+                "enum": ["local", "remote"],
+                "description": "local=后端主机本地子进程（默认）；remote=远程 SSH 会话",
+            },
+            "cwd": {"type": "string", "description": "可选工作目录（仅 local），缺省用后端进程当前目录"},
         },
         "required": ["cmd"],
     }
@@ -187,24 +415,74 @@ class JobRunTool(BaseTool):
         cmd = (kwargs.get("cmd") or "").strip()
         if not cmd:
             return ToolResult(success=False, output="", error="cmd 不能为空")
-        args = _split_cmd(cmd)
-        if not args:
-            return ToolResult(success=False, output="", error="cmd 无法解析为参数列表")
-
-        cwd = kwargs.get("cwd")
-        if not cwd:
-            workspace = getattr(context, "workspace_path", "") or ""
-            cwd = workspace or None
+        target = (kwargs.get("target") or "local").strip().lower()
+        if target not in ("local", "remote"):
+            return ToolResult(success=False, output="", error="target 只能是 local 或 remote")
 
         mgr = JobManager.instance()
         job_id = mgr._next_id()
-        entry = None
+
+        # ── 远程分支 ──
+        if target == "remote":
+            # 入口显式 fail-closed（不依赖 run_headless 内部检查，测试可精确断言）
+            if not (getattr(context, "ssh_session_id", "") or ""):
+                return ToolResult(
+                    success=False, output="",
+                    error="拒绝执行：缺少 SSH 会话，远程后台任务仅在 SSH 会话内执行",
+                )
+            entry = JobEntry(
+                job_id=job_id,
+                args=[cmd],
+                start_ts=time.time(),
+                remote=True,
+                ssh_session_id=getattr(context, "ssh_session_id", "") or "",
+                log_dir=f"{_JOBS_ROOT}/{job_id}",
+                run_id=getattr(context, "agent_run_id", "") or "",
+                raw_cmd=cmd,
+            )
+            ok, pid, err = await _remote_launch(context, job_id, cmd)
+            if not ok:
+                return ToolResult(success=False, output="", error=err)
+            entry.pid = pid
+            mgr.add(entry)
+            _persist_save(entry)
+            return ToolResult(
+                success=True,
+                output=(
+                    f"已远程后台启动: {cmd}\n"
+                    f"job_id={job_id} pid={pid}\n"
+                    f"日志: {entry.log_dir}/out.log（退出码文件 rc）\n"
+                    f"用 job_output(job_id='{job_id}') 轮询输出，job_kill 终止"
+                ),
+            )
+
+        # ── 本地分支（沙箱隔离执行）──
+        # 本地执行是唯一的本机命令入口，必须经沙箱做能力限制（只读根 + 无网络 +
+        # 资源上限 + 降权 + 丢权能）。无沙箱后端且策略要求沙箱 → fail-closed 拒绝。
+        args = _split_cmd(cmd)
+        if not args:
+            return ToolResult(success=False, output="", error="cmd 无法解析为参数列表")
+        # cwd 未显式指定时保持 None → 沙箱在进程当前目录下执行
+        cwd = kwargs.get("cwd") or None
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=cwd,
+            from agent.harness.sandbox_exec import (
+                run_sandboxed,
+                SandboxUnavailable,
+                SandboxLimits,
+                ALLOW_UNSANDBOXED_LOCAL,
+            )
+            proc = await run_sandboxed(
+                args,
+                workdir=cwd,
+                limits=SandboxLimits(),
+                # 生产默认 fail-closed；开发环境设
+                # CKUN_AGENT_ALLOW_UNSANDBOXED_LOCAL=1 可放行裸跑
+                require_sandbox=not ALLOW_UNSANDBOXED_LOCAL,
+            )
+        except SandboxUnavailable as e:
+            return ToolResult(
+                success=False, output="",
+                error=f"本地任务启动被拒绝（沙箱不可用，fail-closed）：{e}",
             )
         except Exception as e:
             return ToolResult(success=False, output="", error=f"启动后台任务失败: {e}")
@@ -217,19 +495,15 @@ class JobRunTool(BaseTool):
         )
         entry.reader_task = asyncio.create_task(_drain(proc, entry))
         mgr.add(entry)
-
-        out = f"已后台启动: {cmd}\njob_id={job_id}"
-        if getattr(context, "ssh_session_id", ""):
-            out += (
-                "\n注：远程后台大任务仅尽力而为，本实现以本地子进程执行"
-                "（缺少远程 kill 通道）。"
-            )
-        return ToolResult(success=True, output=out)
+        return ToolResult(success=True, output=f"已本地后台启动: {cmd}\njob_id={job_id}")
 
 
 class JobListTool(BaseTool):
     name = "job_list"
-    description = "列出所有后台任务（含已结束仍在 manager 保留的）：id | 状态 | 运行秒数 | cmd。只读。"
+    description = (
+        "列出所有后台任务（本地 + 远程，含已结束仍在 manager 保留的）："
+        "id | 状态 | 运行秒数 | cmd。远程在跑任务会顺带做存活对账（kill -0）。只读。"
+    )
     parameters = {
         "type": "object",
         "properties": {},
@@ -239,23 +513,76 @@ class JobListTool(BaseTool):
 
     async def execute(self, context, **kwargs) -> ToolResult:
         mgr = JobManager.instance()
+        mgr._ensure_restored()
         jobs = mgr.list()
         if not jobs:
             return ToolResult(success=True, output="（暂无后台任务）")
+
+        # 远程在跑任务按会话分组做一次批量对账（best-effort，失败不阻断列表）
+        running_remote = [e for e in jobs if e.remote and e.status == "running" and e.pid]
+        if running_remote:
+            await _reconcile_remote(mgr, running_remote)
+
         now = time.time()
         lines = []
         for e in jobs:
+            tag = "远程" if e.remote else "本地"
+            cmd_txt = e.raw_cmd if e.remote else " ".join(e.args)
             lines.append(
-                f"{e.job_id} | {e.status} | {_running_seconds(e, now)}s | {' '.join(e.args)}"
+                f"{e.job_id} | {e.status} | {tag} | {_running_seconds(e, now)}s | {cmd_txt}"
             )
         return ToolResult(success=True, output="\n".join(lines))
+
+
+async def _reconcile_remote(mgr: JobManager, entries: List[JobEntry]) -> None:
+    """批量对账远程在跑任务：kill -0 判存活，死掉的任务读 rc 落终态。
+
+    按 ssh_session_id 分组，每会话最多两次 exec（判活 + 读 rc）。
+    """
+    by_session: dict[str, List[JobEntry]] = {}
+    for e in entries:
+        by_session.setdefault(e.ssh_session_id or "", []).append(e)
+    for sid, group in by_session.items():
+        if not sid:
+            for e in group:
+                mgr.update_status(e.job_id, "exited", None)
+            continue
+        ctx = _session_ctx(sid)
+        pids = " ".join(str(e.pid) for e in group)
+        ok, out = await run_headless(ctx,
+            f"for p in {pids}; do kill -0 $p 2>/dev/null && echo \"$p ALIVE\" "
+            f"|| echo \"$p DEAD\"; done", timeout=15)
+        if not ok:
+            return  # 桥接不可达 — 保持原状态，下次对账
+        alive = {
+            int(l.split()[0]) for l in out.splitlines()
+            if l.strip().endswith("ALIVE") and l.split()[0].isdigit()
+        }
+        dead = [e for e in group if e.pid not in alive]
+        if not dead:
+            return
+        # 死掉的任务读 rc 文件定终态
+        dirs = " ".join(e.log_dir for e in dead)
+        ok2, out2 = await run_headless(ctx,
+            f"for J in {dirs}; do R=''; [ -f $J/rc ] && R=$(cat $J/rc); "
+            f"printf '%s\\n' \"$R\"; done", timeout=15)
+        rcs = out2.splitlines() if ok2 else []
+        rcs = [l for l in rcs if not l.startswith("[exit_code")]
+        for i, e in enumerate(dead):
+            rc_raw = rcs[i].strip() if i < len(rcs) else ""
+            if rc_raw.lstrip("-").isdigit():
+                code = int(rc_raw)
+                mgr.update_status(e.job_id, "finished" if code == 0 else "failed", code)
+            else:
+                mgr.update_status(e.job_id, "exited", None)
 
 
 class JobOutputTool(BaseTool):
     name = "job_output"
     description = (
-        "读取指定后台任务的累积输出缓冲。wait>0 时最多阻塞等待 wait 秒的新输出"
-        "或进程结束；job 不存在返回错误。"
+        "读取指定后台任务的输出。本地：累积内存缓冲；远程：增量 tail 日志"
+        "（返回上次读取后的新内容）。wait>0 时最多阻塞等待 wait 秒的新输出或结束。"
+        "任务退出后返回其退出码。job 不存在返回错误。"
     )
     parameters = {
         "type": "object",
@@ -275,12 +602,44 @@ class JobOutputTool(BaseTool):
         wait = max(0, min(wait, 60))
 
         mgr = JobManager.instance()
+        mgr._ensure_restored()
         entry = mgr.get(job_id)
         if entry is None:
             return ToolResult(success=False, output="", error=f"job 不存在: {job_id}")
 
+        # ── 远程分支 ──
+        if entry.remote:
+            ctx = _session_ctx(entry.ssh_session_id)
+            chunks: List[str] = []
+            if wait > 0:
+                deadline = time.time() + wait
+                while time.time() < deadline and entry.status == "running":
+                    content, rc = await _remote_read(ctx, entry)
+                    if rc is not None:
+                        mgr.update_status(job_id,
+                                          "finished" if rc == 0 else "failed", rc)
+                    if content:
+                        chunks.append(content)
+                        break
+                    await asyncio.sleep(0.5)
+            content, rc = await _remote_read(ctx, entry)
+            if rc is not None and entry.status == "running":
+                mgr.update_status(job_id, "finished" if rc == 0 else "failed", rc)
+            if content:
+                chunks.append(content)
+            body = "".join(chunks)
+            if not body.strip():
+                body = "（暂无新输出" + ("，任务已退出）" if entry.status != "running"
+                              else "，任务仍在运行）")
+            header = f"[job {job_id} 状态={entry.status}"
+            if entry.exit_code is not None:
+                header += f" exit_code={entry.exit_code}"
+            header += f" pid={entry.pid}]"
+            return ToolResult(success=True, output=f"{header}\n" + truncate_output(body))
+
+        # ── 本地分支（原实现）──
         start_len = len(entry.output)
-        if wait > 0:
+        if wait > 0 and entry.reader_task is not None:
             deadline = time.time() + wait
             while time.time() < deadline and not entry.reader_task.done():
                 if len(entry.output) > start_len:
@@ -298,8 +657,8 @@ class JobOutputTool(BaseTool):
 class JobKillTool(BaseTool):
     name = "job_kill"
     description = (
-        "终止指定后台任务：先 terminate（SIGTERM），等待约 2 秒仍未退出则"
-        " kill（SIGKILL），标记状态 killed，返回已终止信息。"
+        "终止指定后台任务：先 SIGTERM，等待约 2~3 秒仍未退出则升级 SIGKILL，"
+        "标记状态 killed 并返回结果。远程任务按进程组整组终结（含子孙进程）。"
     )
     parameters = {
         "type": "object",
@@ -316,6 +675,7 @@ class JobKillTool(BaseTool):
             return ToolResult(success=False, output="", error="job_id 必填")
 
         mgr = JobManager.instance()
+        mgr._ensure_restored()
         entry = mgr.get(job_id)
         if entry is None:
             return ToolResult(success=False, output="", error=f"job 不存在: {job_id}")
@@ -325,6 +685,27 @@ class JobKillTool(BaseTool):
                 output=f"job {job_id} 已不在运行（状态={entry.status}）",
             )
 
+        # ── 远程分支 ──
+        if entry.remote:
+            ctx = _session_ctx(entry.ssh_session_id)
+            result = await _remote_kill(ctx, entry)
+            if result == "DEAD":
+                mgr.update_status(job_id, "killed", None)
+                return ToolResult(
+                    success=True,
+                    output=f"已终止远程 job {job_id}（进程组 {entry.pid} 已退出）",
+                )
+            if result == "STILL":
+                mgr.update_status(job_id, "killed", None)
+                return ToolResult(
+                    success=False,
+                    output="",
+                    error=f"远程 job {job_id}（pid={entry.pid}）SIGKILL 后仍未退出，"
+                          "可能存在守护/重拉机制，请登录核查",
+                )
+            return ToolResult(success=False, output="", error=result)
+
+        # ── 本地分支（原实现）──
         proc = entry.proc
         try:
             proc.terminate()

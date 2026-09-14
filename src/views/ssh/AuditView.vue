@@ -23,12 +23,12 @@
 
     <!-- 过滤器 -->
     <div class="audit-filters">
-      <select v-model="filters.environment" @change="load">
+      <select v-model="filters.environment" @change="loadFirst">
         <option value="">全部环境</option>
         <option value="test">测试 (test)</option>
         <option value="prod">生产 (prod)</option>
       </select>
-      <select v-model="filters.conclusion" @change="load">
+      <select v-model="filters.conclusion" @change="loadFirst">
         <option value="">全部结论</option>
         <option value="executed">执行 (executed)</option>
         <option value="approved">已批准 (approved)</option>
@@ -36,7 +36,7 @@
         <option value="blocked">已拦截 (blocked)</option>
         <option value="denied">已拒绝 (denied)</option>
       </select>
-      <input v-model="filters.target_id" placeholder="目标 ID 过滤" @keyup.enter="load" />
+      <input v-model="filters.target_id" placeholder="目标 ID 过滤" @keyup.enter="loadFirst" />
     </div>
 
     <!-- 记录表 -->
@@ -72,6 +72,15 @@
       </table>
     </div>
 
+    <!-- 分页：仅当有记录时显示（P3 修复，配合 offset 翻页） -->
+    <div v-if="total > 0" class="audit-pager">
+      <button class="audit-btn" :disabled="offset === 0 || loading" @click="prevPage">上一页</button>
+      <span class="audit-pager-info">
+        第 {{ offset + 1 }}–{{ Math.min(offset + records.length, total) }} 条 / 共 {{ total }} 条
+      </span>
+      <button class="audit-btn" :disabled="offset + records.length >= total || loading" @click="nextPage">下一页</button>
+    </div>
+
     <div v-if="loading" class="audit-loading">加载中…</div>
     <div v-if="error" class="audit-error">{{ error }}</div>
   </div>
@@ -86,6 +95,10 @@ const total = ref(0)
 const loading = ref(false)
 const error = ref('')
 const verifyState = ref<AuditVerifyResult | null>(null)
+// P3 修复：offset 分页（后端 /audit/records 已支持 offset，limit/offset 均带边界）。
+// 页大小保持 200，记录倒序（id DESC）——"下一页"取更旧的记录（offset 增大）。
+const pageSize = 200
+const offset = ref(0)
 
 const filters = reactive<{ environment: string; conclusion: string; target_id: string }>({
   environment: '',
@@ -101,7 +114,8 @@ async function load() {
       environment: filters.environment || undefined,
       conclusion: filters.conclusion || undefined,
       target_id: filters.target_id || undefined,
-      limit: 200,
+      limit: pageSize,
+      offset: offset.value,
     })
     records.value = res.items
     total.value = res.total
@@ -112,8 +126,29 @@ async function load() {
   }
 }
 
+// 回到第一页加载（筛选条件变化 / 手动刷新时调用，避免沿用旧 offset）
+function loadFirst(): Promise<void> {
+  offset.value = 0
+  return load()
+}
+
+// 上一页：offset 减小（取更新的记录）
+function prevPage(): void {
+  if (loading.value || offset.value <= 0) return
+  offset.value = Math.max(0, offset.value - pageSize)
+  load()
+}
+
+// 下一页：offset 增大（取更旧的记录）
+function nextPage(): void {
+  if (loading.value) return
+  if (offset.value + records.value.length >= total.value) return
+  offset.value += pageSize
+  load()
+}
+
 async function refresh() {
-  await Promise.all([load(), verify()])
+  await Promise.all([loadFirst(), verify()])
 }
 
 async function onVerify() {
@@ -285,6 +320,14 @@ onMounted(refresh)
 .cmd { max-width: 40ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .result { max-width: 30ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-tertiary); }
 .empty { text-align: center; color: var(--text-tertiary); padding: 24px; }
+.audit-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+.audit-pager-info { font-size: 12px; color: var(--text-tertiary); }
 .audit-loading { color: var(--text-tertiary); font-size: 12px; }
 .audit-error { color: var(--accent-red); font-size: 12px; }
 </style>

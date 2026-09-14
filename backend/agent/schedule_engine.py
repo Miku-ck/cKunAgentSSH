@@ -299,7 +299,6 @@ class ScheduleEngine:
                 task=prompt,
                 mode="ssh",
                 conversation_id=conversation_id,
-                workspace_path=_agent_workspace(),
                 ssh_session_id=ssh_session_id,
                 environment="prod",
                 system_prompt=system_prompt,
@@ -409,12 +408,6 @@ def compute_next_run(sched: dict, now: datetime | None = None) -> str:
         return _fmt(cand)
 
     return _fmt(now + timedelta(hours=1))
-
-
-def _agent_workspace() -> str:
-    ws = os.path.expanduser("~/.ckunagentic/agent_workspace")
-    os.makedirs(ws, exist_ok=True)
-    return ws
 
 
 def _build_schedule_system_prompt(sched: dict) -> str:
