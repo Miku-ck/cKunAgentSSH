@@ -352,3 +352,94 @@ def export_rows() -> list[dict[str, Any]]:
     except Exception as e:
         logger.warning("审计导出失败: %s", e)
         return []
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 归档轮转（受控 clear）
+# ──────────────────────────────────────────────────────────────────────────────
+
+def archive_and_clear(archive_dir: Optional[str] = None) -> dict[str, Any]:
+    """归档式清空（审计轮转）— append-only 契约下唯一安全的清理入口。
+
+    与裸 DELETE 的区别（为什么这不违背防篡改设计）：
+    1. 证据不消失：全量记录（含 hash/prev_hash 链字段）先落盘 CSV 归档，
+       归档文件可离线重放校验同一条链；
+    2. 清空动作本身入链：写入一条 action=audit_cleared 的封缄记录作为新链
+       genesis（prev_hash=""），result 记录归档条数、文件名与旧链尾 hash，
+       verify() 对 live 链依旧自洽；
+    3. 原子性：删除与封缄同事务，任一步失败整体回滚，链不会"半断"；
+       归档写盘发生在删除之前，不存在丢数据窗口（回滚后残留的归档文件
+       只是未被引用的冗余副本）。
+
+    Returns:
+        {"archived": n, "file": 归档绝对路径, "last_hash": 旧链尾 hash,
+         "seal_hash": 封缄记录 hash（新链尾）}；空表时 archived=0 且不动库。
+    """
+    import csv as _csv
+    import io as _io
+
+    conn = database._get_conn()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        cur = conn.execute(f"SELECT * FROM {AUDIT_TABLE} ORDER BY id ASC")
+        cols = [d[0] for d in cur.description]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        if not rows:
+            conn.execute("COMMIT")
+            return {"archived": 0, "file": "", "last_hash": "", "seal_hash": ""}
+
+        last_hash = str(rows[-1].get("hash") or "")
+
+        base = archive_dir or os.path.dirname(os.path.abspath(database._db_path or ".")) or os.getcwd()
+        os.makedirs(base, exist_ok=True)
+        fname = f"audit_archive_{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.csv"
+        archive_path = os.path.join(base, fname)
+        buf = _io.StringIO()
+        writer = _csv.DictWriter(buf, fieldnames=cols)
+        writer.writeheader()
+        for r in rows:
+            writer.writerow(r)
+        # utf-8-sig BOM：与 /audit/export 一致，Excel 直开不乱码
+        with open(archive_path, "w", encoding="utf-8-sig", newline="") as f:
+            f.write(buf.getvalue())
+
+        conn.execute(f"DELETE FROM {AUDIT_TABLE}")
+
+        seal = {
+            "ts": _now(),
+            "operator": _operator(),
+            "target_type": "system",
+            "target_id": "",
+            "environment": _DEFAULT_ENV,
+            "action": "audit_cleared",
+            "command_hash": "",
+            "command_raw": "",
+            "result": f"archived={len(rows)} file={fname} old_last_hash={last_hash}",
+            "conclusion": "executed",
+            "run_id": "",
+            "iteration": 0,
+        }
+        seal["prev_hash"] = ""  # 新链 genesis
+        seal["hash"] = _chain_hash(_canonical(seal), "")
+        conn.execute(
+            f"INSERT INTO {AUDIT_TABLE} "
+            f"(ts, operator, target_type, target_id, environment, action, "
+            f" command_hash, command_raw, result, conclusion, run_id, iteration, "
+            f" prev_hash, hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                seal["ts"], seal["operator"], seal["target_type"], seal["target_id"],
+                seal["environment"], seal["action"], seal["command_hash"],
+                seal["command_raw"], seal["result"], seal["conclusion"],
+                seal["run_id"], seal["iteration"], seal["prev_hash"], seal["hash"],
+            ),
+        )
+        conn.execute("COMMIT")
+        logger.info("审计归档轮转: %d 条 → %s", len(rows), archive_path)
+        return {"archived": len(rows), "file": archive_path,
+                "last_hash": last_hash, "seal_hash": seal["hash"]}
+    except Exception:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
+        raise

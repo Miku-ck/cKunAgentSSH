@@ -1,9 +1,11 @@
 """
-审计路由 — 运维审计查询 / 链完整性校验 / 导出
+审计路由 — 运维审计查询 / 链完整性校验 / 导出 / 归档轮转
 
 对齐等保2.0「安全审计」：Agent 对本地/远程主机执行的命令与审批结论已由
-AuditEngine 追加式写入 audit_log（链式签名防篡改）。本路由仅提供只读查询，
-不提供任何更新/删除接口，维持审计的追加式契约。
+AuditEngine 追加式写入 audit_log（链式签名防篡改）。本路由以只读查询为主；
+唯一的受控写入口是 POST /audit/clear —— 它不是删除接口，而是「归档轮转」：
+全量导出 CSV 归档后清空 live 表，并写入 audit_cleared 封缄记录作为新链起点
+（见 agent.audit.archive_and_clear），历史证据经归档文件仍可离线验链。
 """
 import asyncio
 import csv
@@ -11,10 +13,10 @@ import io
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 
-from agent.audit import count, export_rows, query, verify
+from agent.audit import archive_and_clear, count, export_rows, query, verify
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["audit"])
@@ -86,3 +88,18 @@ async def audit_export():
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": "attachment; filename=audit_log.csv"},
     )
+
+
+@router.post("/audit/clear")
+async def audit_clear():
+    """归档式清空（轮转）：CSV 归档落盘 → 清空 live 表 → 封缄记录开新链。
+
+    归档文件写在数据库同目录（audit_archive_*.csv），返回其路径供 UI 展示。
+    同步 sqlite 移入线程池；失败抛 500，事务已在函数内回滚（链原样保留）。
+    """
+    try:
+        result = await asyncio.to_thread(archive_and_clear)
+    except Exception as e:
+        logger.exception("审计归档轮转失败")
+        raise HTTPException(status_code=500, detail=f"归档清理失败，审计链未变动：{e}")
+    return result

@@ -18,6 +18,12 @@
         <button class="audit-btn" @click="refresh" :disabled="loading">刷新</button>
         <button class="audit-btn" @click="onVerify" :disabled="loading">校验</button>
         <button class="audit-btn" @click="onExport" :disabled="loading">导出 CSV</button>
+        <button
+          class="audit-btn danger"
+          @click="onClearArchived"
+          :disabled="loading || clearing || total === 0"
+          :title="`归档清理：全部 ${total} 条记录先导出 CSV 存档到数据库目录，再清空并写入封缄记录开启新审计链（证据不丢、链不断）`"
+        >{{ clearing ? '归档中…' : '归档清理' }}</button>
       </div>
     </div>
 
@@ -89,10 +95,16 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { auditApi, toFriendlyMessage, type AuditRecord, type AuditVerifyResult } from '@/api/client'
+import { useConfirm } from '@/composables/useConfirm'
+import { useToastStore } from '@/stores/toast'
+
+const { confirm } = useConfirm()
+const toast = useToastStore()
 
 const records = ref<AuditRecord[]>([])
 const total = ref(0)
 const loading = ref(false)
+const clearing = ref(false)
 const error = ref('')
 const verifyState = ref<AuditVerifyResult | null>(null)
 // P3 修复：offset 分页（后端 /audit/records 已支持 offset，limit/offset 均带边界）。
@@ -168,6 +180,33 @@ async function onExport() {
     await auditApi.exportCsv()
   } catch (e) {
     error.value = toFriendlyMessage(e, '导出失败')
+  }
+}
+
+/** 归档清理：CSV 归档 → 清表 → 封缄开新链（后端单事务，失败链原样） */
+async function onClearArchived() {
+  const ok = await confirm({
+    title: '归档清理审计记录',
+    message: `将先把全部 ${total.value} 条审计记录归档为 CSV 文件（保存在后端数据库目录），`
+      + '然后清空列表并写入一条"清理封缄"记录开启新审计链。\n'
+      + '历史证据保存在归档文件中，可离线校验，不会丢失。',
+    confirmText: '归档并清理',
+    danger: true,
+  })
+  if (!ok) return
+  clearing.value = true
+  try {
+    const r = await auditApi.clearArchived()
+    if (r.archived > 0) {
+      toast.success(`已归档 ${r.archived} 条记录并清理，新链已开启（归档文件：${r.file}）`)
+    } else {
+      toast.info('审计记录已为空，无需清理')
+    }
+    await refresh()
+  } catch (e) {
+    toast.error(toFriendlyMessage(e, '归档清理失败，审计链未变动'))
+  } finally {
+    clearing.value = false
   }
 }
 
@@ -252,6 +291,12 @@ onMounted(refresh)
 .audit-btn:hover:not(:disabled) {
   color: var(--text-primary);
   border-color: var(--accent-blue);
+}
+.audit-btn.danger { color: var(--accent-red, #e06c60); border-color: var(--accent-red, #e06c60); }
+.audit-btn.danger:hover:not(:disabled) {
+  color: var(--accent-red, #e06c60);
+  border-color: var(--accent-red, #e06c60);
+  background: rgba(224, 108, 96, 0.12);
 }
 .audit-btn:disabled { opacity: 0.5; cursor: default; }
 .audit-filters {

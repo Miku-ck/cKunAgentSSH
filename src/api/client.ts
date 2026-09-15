@@ -478,6 +478,12 @@ export const auditApi = {
   verify: () =>
     request<AuditVerifyResult>('/audit/verify'),
 
+  /** 归档式清理：全量 CSV 归档落盘后清空，写入封缄记录开新链（非裸删除） */
+  clearArchived: () =>
+    request<{ archived: number; file: string; last_hash: string; seal_hash: string }>(
+      '/audit/clear', { method: 'POST' },
+    ),
+
   /** 导出全部审计为 CSV */
   exportCsv: async () => {
     await ensureApiToken()
