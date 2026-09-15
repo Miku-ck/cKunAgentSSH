@@ -224,7 +224,7 @@ async def _edit_with_content(monkeypatch, original, old, new):
         written.append(_b64.b64decode(b64).decode("utf-8"))
         return True, "ok"
 
-    monkeypatch.setattr(m, "_remote_b64_read", fake_read)
+    monkeypatch.setattr(m, "remote_read_b64", fake_read)
     monkeypatch.setattr(m, "run_headless", fake_write)
     res = await FileEditTool().execute(
         _ctx(remote=True), path="/tmp/e.txt", old_string=old, new_string=new
@@ -296,7 +296,7 @@ async def test_file_edit_remote_does_not_strip_bracket_lines(monkeypatch):
         written.append(_b64.b64decode(b64).decode("utf-8"))
         return True, "ok"
 
-    monkeypatch.setattr(m, "_remote_b64_read", fake_b64_read)
+    monkeypatch.setattr(m, "remote_read_b64", fake_b64_read)
     monkeypatch.setattr(m, "run_headless", fake_write)
 
     res = await FileEditTool().execute(

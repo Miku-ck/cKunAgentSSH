@@ -38,6 +38,10 @@ def _load_dotenv() -> None:
 _load_dotenv()
 
 
+# 应用级共享路径常量（此前 reins.py 两处字面量复制，收敛单一源）
+ALLOWLIST_PATH = os.path.expanduser("~/.ckunagentic/allowlist.txt")
+
+
 def _default_db_path() -> str:
     """数据库默认路径：优先用 env，否则落在用户目录，避免相对 cwd 脆弱导致跨启动丢库"""
     env = os.getenv("DB_PATH")

@@ -18,7 +18,6 @@
      服务本地终端场景的查看/诊断（Python 原生文件 API，只读无突变）；
   5. 大输出经 truncate_output 截断，防刷屏。
 """
-import base64
 import os
 import pathlib
 import re
@@ -26,10 +25,12 @@ import shlex
 
 from agent.tools import BaseTool, ToolResult, ToolMeta
 from agent.tools.builtin.ops_common import (
+    base64_write_cmd,
+    drop_sentinel_lines,
     is_remote,
     is_traversal,
+    remote_read_b64,
     run_headless,
-    strip_remote_tail,
     truncate_output,
 )
 
@@ -38,31 +39,6 @@ _WRITE_REQUIRES_SSH = (
     "拒绝执行（fail-closed）：缺少 SSH 会话，文件写入/编辑仅限远程目标服务器，"
     "不会在后端主机本机落盘。请先建立 SSH 连接，或确认操作目标。"
 )
-
-
-def _base64_write_cmd(path: str, data: bytes) -> str:
-    """构造 base64 写文件命令（base64 仅含字母数字+/=+等，无需转义）。"""
-    b64 = base64.b64encode(data).decode("ascii")
-    return f"printf '%s' '{b64}' | base64 -d > {shlex.quote(path)}"
-
-
-async def _remote_b64_read(context, path: str) -> tuple[bool, bytes]:
-    """远程以 base64 读取文件原始字节。
-
-    用 base64 传回内容以规避 strip_remote_tail 误伤真实内容：base64 字符集
-    （A-Za-z0-9+/=）不含 '['，因此尾部 "[exit_code=..]" 哨兵行可被无损剥离，
-    不会与真实文件内容产生歧义。返回 (是否成功, 字节)。
-    """
-    qpath = shlex.quote(path)
-    ok, output = await run_headless(context, f"base64 {qpath}", 30)
-    if not ok:
-        return False, output.encode("utf-8")
-    body = strip_remote_tail(output)
-    try:
-        data = base64.b64decode(body)
-    except Exception:
-        return False, b""
-    return True, data
 
 
 class FileReadTool(BaseTool):
@@ -173,7 +149,7 @@ class FileWriteTool(BaseTool):
         data = content.encode("utf-8")
 
         ok, output = await run_headless(
-            context, _base64_write_cmd(path, data), self.meta.timeout
+            context, base64_write_cmd(path, data), self.meta.timeout
         )
         if not ok:
             return ToolResult(False, output, "远程写入文件失败")
@@ -219,7 +195,7 @@ class FileEditTool(BaseTool):
         if not is_remote(context):
             return ToolResult(False, "", _WRITE_REQUIRES_SSH)
 
-        ok, raw = await _remote_b64_read(context, path)
+        ok, raw = await remote_read_b64(context, path)
         if not ok:
             return ToolResult(False, raw.decode("utf-8", errors="replace"), "远程读取文件失败或文件不存在")
         content = raw.decode("utf-8", errors="replace")
@@ -228,7 +204,7 @@ class FileEditTool(BaseTool):
             return new_content
         data = new_content.encode("utf-8")
         ok2, out2 = await run_headless(
-            context, _base64_write_cmd(path, data), self.meta.timeout
+            context, base64_write_cmd(path, data), self.meta.timeout
         )
         if not ok2:
             return ToolResult(False, out2, "远程写入文件失败")
@@ -264,13 +240,7 @@ class FileGlobTool(BaseTool):
             ok, output = await run_headless(context, cmd, self.meta.timeout)
             if not ok:
                 return ToolResult(False, output, "glob 查找失败")
-            lines = [
-                line
-                for line in output.splitlines()
-                if line.strip()
-                and "[exit_code=" not in line
-                and line != "[stderr]"
-            ]
+            lines = drop_sentinel_lines(output)
             if not lines:
                 return ToolResult(True, f"未匹配到文件：{pattern}")
             return ToolResult(True, "\n".join(lines))
@@ -324,12 +294,7 @@ class FileGrepTool(BaseTool):
             qpat, qpath = shlex.quote(pattern), shlex.quote(path)
             cmd = f"grep -rnE --color=never {qpat} {qpath} | head -n {max_lines}"
             ok, output = await run_headless(context, cmd, self.meta.timeout)
-            lines = [
-                line
-                for line in output.splitlines()
-                if "[exit_code=" not in line
-                and line != "[stderr]"
-            ]
+            lines = drop_sentinel_lines(output)
             if not lines:
                 if not ok and output.strip():
                     return ToolResult(False, output, "grep 查找失败")

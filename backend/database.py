@@ -1579,7 +1579,7 @@ def update_agent_run(run_id: str, status: str, iteration: Optional[int] = None,
     原实现每次更新（含中间状态）都刷新 completed_at，时间字段失真。
     """
     # B-7 修复：max_reached 同为终态（contracts.State.MAX_REACHED / reflection /
-    # 统计查询 database.py get_agent_run_stats 均视其为终态），completed_at 需一并写入
+    # 统计查询均视其为终态），completed_at 需一并写入
     _TERMINAL_RUN_STATUSES = ("completed", "failed", "human_help", "max_reached")
     conn = _get_conn()
     try:
@@ -1695,69 +1695,6 @@ def get_agent_runs(conversation_id: str = None, limit: int = 20) -> list[dict]:
         return [dict(r) for r in rows]
     finally:
         conn.close()
-
-
-def get_agent_run_stats(mode: str = None, days: int = 7) -> dict:
-    """
-    获取 Agent 运行成本/耗时统计聚合
-
-    Args:
-        mode: 模式过滤（None=所有模式）
-        days: 最近 N 天（1-365，默认 7）
-    Returns:
-        {
-            "total_runs": int,
-            "completed_runs": int,
-            "failed_runs": int,
-            "total_tokens": int,
-            "prompt_tokens": int,
-            "completion_tokens": int,
-            "total_cost_usd": float,
-            "total_duration_ms": int,
-            "total_tool_calls": int,
-            "avg_iterations": float,
-            "avg_cost_usd": float,
-        }
-    """
-    # 修复：校验 days 参数范围，避免负数或极大值导致语义异常
-    days = max(1, min(int(days) if days else 7, 365))
-    conn = _get_conn()
-    try:
-        sql = (
-            "SELECT "
-            "  COUNT(*) as total_runs, "
-            "  SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) as completed_runs, "
-            "  SUM(CASE WHEN status IN ('failed','max_reached') THEN 1 ELSE 0 END) as failed_runs, "
-            "  COALESCE(SUM(total_tokens), 0) as total_tokens, "
-            "  COALESCE(SUM(prompt_tokens), 0) as prompt_tokens, "
-            "  COALESCE(SUM(completion_tokens), 0) as completion_tokens, "
-            "  COALESCE(SUM(cost_usd), 0) as total_cost_usd, "
-            "  COALESCE(SUM(duration_ms), 0) as total_duration_ms, "
-            "  COALESCE(SUM(tool_call_count), 0) as total_tool_calls, "
-            "  COALESCE(AVG(iteration), 0) as avg_iterations, "
-            "  COALESCE(AVG(cost_usd), 0) as avg_cost_usd "
-            "FROM agent_runs "
-            "WHERE started_at >= datetime('now', ?) "
-        )
-        params: list = [f"-{days} days"]
-        if mode:
-            sql += "AND mode = ? "
-            params.append(mode)
-
-        row = conn.execute(sql, params).fetchone()
-        if not row:
-            return {
-                "total_runs": 0, "completed_runs": 0, "failed_runs": 0,
-                "total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0,
-                "total_cost_usd": 0.0, "total_duration_ms": 0,
-                "total_tool_calls": 0, "avg_iterations": 0.0, "avg_cost_usd": 0.0,
-            }
-        return dict(row)
-    finally:
-        conn.close()
-
-
-# ── Tool Calls CRUD ──
 
 
 def add_tool_call(agent_run_id: str, iteration: int, tool_name: str,
@@ -2073,21 +2010,6 @@ def get_agent_strategies(
             params + [limit],
         ).fetchall()
         return [dict(r) for r in rows]
-    finally:
-        conn.close()
-
-
-def get_agent_strategy(strategy_id: str) -> Optional[dict]:
-    """获取单条 Agent 策略"""
-    conn = _get_conn()
-    try:
-        row = conn.execute(
-            "SELECT id, mode, strategy_type, name, content, config, score, enabled, "
-            "       created_at, updated_at "
-            "FROM agent_strategies WHERE id = ?",
-            (strategy_id,),
-        ).fetchone()
-        return dict(row) if row else None
     finally:
         conn.close()
 

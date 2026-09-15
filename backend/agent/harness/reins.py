@@ -20,6 +20,7 @@ import logging
 import time
 from collections import deque, defaultdict
 from dataclasses import dataclass, field
+from config import ALLOWLIST_PATH
 from typing import Any, Optional
 
 from .contracts import (
@@ -68,13 +69,6 @@ def _audit_target_type(ctx: "RunContext") -> str:
 def _audit_target_id(ctx: "RunContext") -> str:
     """目标标识：SSH 会话 id"""
     return getattr(ctx, "ssh_session_id", "") or ""
-
-
-def _read_text_safe(path: str) -> str:
-    """同步安全读文本（供 asyncio.to_thread 调用，审查修复：原实现直接在
-    事件循环内 open().read() 大文件会阻塞事件循环）"""
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        return f.read()
 
 
 class Reins:
@@ -693,7 +687,7 @@ class PermissionGate:
     def _load_permanent_allowlist(self) -> set[str]:
         """从 config 加载永久 allowlist（简化：从 ~/.ckunagentic/allowlist.txt 读取，每行一个工具名）"""
         import os
-        path = os.path.expanduser('~/.ckunagentic/allowlist.txt')
+        path = ALLOWLIST_PATH
         if not os.path.exists(path):
             return set()
         try:
@@ -705,7 +699,7 @@ class PermissionGate:
     def _save_permanent_allowlist(self) -> None:
         """保存永久 allowlist"""
         import os
-        path = os.path.expanduser('~/.ckunagentic/allowlist.txt')
+        path = ALLOWLIST_PATH
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, 'w', encoding='utf-8') as f:
             for name in sorted(self._confirmed_permanent):

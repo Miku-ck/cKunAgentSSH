@@ -10,6 +10,7 @@
 绝不降级到后端主机本机执行。
 """
 import asyncio
+import base64
 import os
 from agent.electron_bridge import ElectronBridge
 from agent.truncation_limits import TRUNC_THRESHOLD, TRUNC_HEAD, TRUNC_TAIL
@@ -132,3 +133,41 @@ async def run_headless(
     if err:
         return False, err
     return success, output
+
+def base64_write_cmd(path: str, data: bytes) -> str:
+    """构造 base64 写文件命令（base64 仅含字母数字+/=+，无需转义；路径 shlex.quote）。"""
+    b64 = base64.b64encode(data).decode("ascii")
+    return base64_restore_cmd(path, b64)
+
+
+def base64_restore_cmd(path: str, b64: str) -> str:
+    """以既有 base64 文本构造还原写盘命令（ops_file 写入与 saddle 撤销共用模板）。"""
+    import shlex
+    return f"printf '%s' '{b64}' | base64 -d > {shlex.quote(path)}"
+
+
+def drop_sentinel_lines(output: str) -> list[str]:
+    """剔除 run_headless 输出中的哨兵/空行，保留真实数据行（glob/grep 列表解析共用）。"""
+    return [
+        line
+        for line in output.splitlines()
+        if line.strip() and "[exit_code=" not in line and line != "[stderr]"
+    ]
+
+
+async def remote_read_b64(context, path: str) -> tuple[bool, bytes]:
+    """远程以 base64 读取文件原始字节（哨兵经 strip_remote_tail 无损剥离：
+    base64 字符集不含 '['，与尾部 "[exit_code=..]" 天然无歧义）。
+
+    失败时 payload 为错误信息字节（沿用 run_headless 的失败输出）。
+    """
+    import shlex
+    ok, output = await run_headless(context, f"base64 {shlex.quote(path)}", 30)
+    if not ok:
+        return False, output.encode("utf-8")
+    body = strip_remote_tail(output)
+    try:
+        data = base64.b64decode(body)
+    except Exception:
+        return False, b""
+    return True, data

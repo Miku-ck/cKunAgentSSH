@@ -327,37 +327,6 @@ async def _release_run_slot(conversation_id: str, run_id: str) -> None:
     _release_run_slot_sync(conversation_id, run_id)
 
 
-def has_active_run(conversation_id: str) -> bool:
-    """查询该会话是否有真实进行中的 Agent run。
-
-    供 chat.py 的 409 自愈判定使用。进程内注册表是唯一权威：
-    DB 中 status='running' 的行若不在注册表里，说明是崩溃/断连残留的
-    滞留行（对账 _reconcile_stale_runs_once 只在 /agent/run 请求时懒执行，
-    纯普通对话用户永不触发）——此处顺手对账为 failed 并返回 False，
-    否则滞留行会让自愈判定永远认为"有活跃 run"，409 永不解除。
-    """
-    # 进程内注册表：有占位即真实活跃
-    if _in_flight_runs.get(conversation_id):
-        return True
-    # DB 中有 running 行但注册表无占位 → 滞留残留，对账清理
-    conn = db._get_conn()
-    try:
-        cur = conn.execute(
-            "UPDATE agent_runs SET status = 'failed', completed_at = ? "
-            "WHERE conversation_id = ? AND status IN ('running', 'init')",
-            (db._now(), conversation_id),
-        )
-        conn.commit()
-        if cur.rowcount:
-            logger.warning(
-                "[agent] 会话 %s 有 %d 条注册表外滞留 run，已对账为 failed",
-                conversation_id, cur.rowcount,
-            )
-        return False
-    finally:
-        conn.close()
-
-
 _startup_reconciled = False
 
 
@@ -1014,23 +983,6 @@ async def agent_tool_result(req: ToolResultRequest):
     return {"status": "ok", "tool_id": req.tool_id}
 
 
-@router.get("/agent/runs")
-def list_agent_runs(conversation_id: Optional[str] = None, limit: int = Query(20, ge=1, le=500)):
-    """查询 Agent 运行历史"""
-    runs = db.get_agent_runs(conversation_id=conversation_id, limit=limit)
-    return {"runs": runs}
-
-
-@router.get("/agent/runs/{run_id}")
-def get_agent_run_detail(run_id: str):
-    """查询单次 Agent 运行详情（含工具调用日志）"""
-    run = db.get_agent_run(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="Agent 运行不存在")
-    tool_calls = db.get_tool_calls(run_id)
-    return {"run": run, "tool_calls": tool_calls}
-
-
 @router.get("/agent/tools")
 def list_tools(mode: str = "ssh"):
     """查询当前模式可用的工具列表（含启用状态）"""
@@ -1203,14 +1155,6 @@ def prune_agent_memories(
 # ── 意识 tick ──
 
 
-@router.post("/agent/tick")
-async def trigger_consciousness_tick():
-    """手动触发一次意识 tick（用于调试/UI 集成）"""
-    tick = get_global_tick()
-    result = await tick.trigger_now()
-    return {"tick": result}
-
-
 @router.get("/agent/tick/status")
 def consciousness_tick_status():
     """查询意识 tick 状态"""
@@ -1238,15 +1182,6 @@ def list_agent_strategies(
     return {"strategies": rows, "count": len(rows)}
 
 
-@router.get("/agent/strategies/{strategy_id}")
-def get_agent_strategy_detail(strategy_id: str):
-    """查询单条策略详情"""
-    s = db.get_agent_strategy(strategy_id)
-    if not s:
-        raise HTTPException(status_code=404, detail="策略不存在")
-    return {"strategy": s}
-
-
 @router.patch("/agent/strategies/{strategy_id}/enabled")
 def toggle_strategy_enabled(strategy_id: str, enabled: int = 1):
     """启用/禁用单条策略"""
@@ -1263,43 +1198,6 @@ def delete_agent_strategy_route(strategy_id: str):
     if not ok:
         raise HTTPException(status_code=404, detail="策略不存在")
     return {"deleted": True, "id": strategy_id}
-
-
-@router.post("/agent/evolve")
-def trigger_evolution(mode: str = "ssh"):
-    """
-    手动触发策略演化
-    基于近期反思结果演化 Agent 配置，返回演化后的配置
-    """
-    reflection_mgr = MetaReflection()
-    evolution_mgr = EvolutionEngine()
-
-    recent = reflection_mgr.load_recent_reflections(mode, limit=10)
-    if not recent:
-        return {
-            "evolved": False,
-            "reason": "无反思策略可演化，请先运行若干次 Agent 任务",
-            "reflections_count": 0,
-        }
-
-    evolved = evolution_mgr.evolve(mode=mode, recent_reflections=recent)
-    saved_id = None
-    if evolved.adjustments:
-        saved_id = evolution_mgr.save_evolved_config(evolved, mode=mode)
-
-    return {
-        "evolved": bool(evolved.adjustments),
-        "saved_id": saved_id,
-        "reflections_count": len(recent),
-        "config": {
-            "max_iterations": evolved.max_iterations,
-            "temperature": evolved.temperature,
-            "enable_thinking": evolved.enable_thinking,
-            "evolved_from_runs": evolved.evolved_from_runs,
-            "avg_score": evolved.avg_score,
-        },
-        "adjustments": evolved.adjustments,
-    }
 
 
 # ── Trace Viewer + 成本追踪 ──
@@ -1374,26 +1272,3 @@ def get_agent_run_trace(run_id: str):
     }
 
 
-
-@router.get("/agent/stats")
-def get_agent_cost_stats(mode: Optional[str] = None, days: int = Query(7, ge=1, le=365)):
-    """
-    获取 Agent 成本/耗时统计聚合
-
-    Args:
-        mode: 模式过滤（ssh，None=所有）
-        days: 最近 N 天（默认 7）
-    """
-    stats = db.get_agent_run_stats(mode=mode, days=days)
-    # 兜底字段（旧库可能返回 None）
-    for k in ("total_tokens", "prompt_tokens", "completion_tokens",
-              "total_duration_ms", "total_tool_calls"):
-        if stats.get(k) is None:
-            stats[k] = 0
-    for k in ("total_cost_usd", "avg_cost_usd", "avg_iterations"):
-        if stats.get(k) is None:
-            stats[k] = 0.0
-    return {
-        "filter": {"mode": mode, "days": days},
-        "stats": stats,
-    }

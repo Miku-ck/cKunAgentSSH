@@ -141,12 +141,10 @@ class FileContentUndo:
             if not bridge.is_available():
                 logger.warning("FileContentUndo 跳过：Electron Bridge 不可用 %s", self.path)
                 return
+            from agent.tools.builtin.ops_common import base64_restore_cmd
             if self.existed and self.snapshot_b64 is not None:
-                # base64 仅含字母数字+/=+，无需额外转义；路径经 shlex.quote 防护
-                cmd = (
-                    f"printf '%s' '{self.snapshot_b64}' "
-                    f"| base64 -d > {shlex.quote(self.path)}"
-                )
+                # 模板与 ops_file 写入共用（base64 无需转义；路径 shlex.quote 防护）
+                cmd = base64_restore_cmd(self.path, self.snapshot_b64)
             else:
                 cmd = f"rm -f {shlex.quote(self.path)}"
             await bridge.exec_ssh_command(
