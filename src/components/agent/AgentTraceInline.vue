@@ -11,7 +11,6 @@
 import { computed } from 'vue'
 import type { AgentTraceSnapshot } from '@/api/client'
 import ToolOperationList from './ToolOperationList.vue'
-import AgentFullTrace from './AgentFullTrace.vue'
 
 const props = withDefaults(defineProps<{
   trace: AgentTraceSnapshot
@@ -23,7 +22,6 @@ const props = withDefaults(defineProps<{
 const hasToolCalls = computed(() => props.trace.toolCalls && props.trace.toolCalls.length > 0)
 // H14 修复：运行中且没有任何内容时显示"思考中..."占位提示
 const isPreparing = computed(() => props.isLive && !hasToolCalls.value && !props.trace.reasoning?.trim())
-// H14 修复：文件变更摘要已迁移到 CodeChangeReviewPanel，避免与 IDE 右栏审查卡片重复
 // H15 修复：深度思考统一由外层 ThinkingBlock 展示，此处不再重复渲染
 </script>
 
@@ -44,12 +42,6 @@ const isPreparing = computed(() => props.isLive && !hasToolCalls.value && !props
         v-if="hasToolCalls"
         :tool-calls="trace.toolCalls"
         :default-expanded="isLive"
-      />
-
-      <!-- 会话内回放：固化后按 run_id 拉 DB 权威轨迹（每步耗时/成本/状态流转） -->
-      <AgentFullTrace
-        v-if="!isLive && trace.lastRunId"
-        :run-id="trace.lastRunId"
       />
     </div>
   </div>

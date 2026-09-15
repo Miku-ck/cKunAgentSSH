@@ -54,16 +54,19 @@
  * 快照是运行视图，这里是落库视图 —— 每步 duration_ms、完整 result、
  * 成本与状态历史以 DB 为准（回放审计口径）。
  */
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { agentAdminApi, toFriendlyMessage, type AgentRunTrace } from '@/api/client'
 import ToolOperationList from './ToolOperationList.vue'
 
 const props = defineProps<{ runId: string }>()
+const emit = defineEmits<{ 'expand-change': [boolean] }>()
 
 const expanded = ref(false)
 const loading = ref(false)
 const error = ref('')
 const trace = ref<AgentRunTrace | null>(null)
+
+watch(expanded, (v) => emit('expand-change', v))
 
 async function onToggle() {
   expanded.value = !expanded.value
@@ -115,7 +118,7 @@ const dbCalls = computed(() =>
 </script>
 
 <style scoped>
-.full-trace { margin-top: 4px; }
+.full-trace { display: inline-flex; }
 .ft-toggle {
   display: inline-flex; align-items: center; gap: 5px;
   background: none; border: none; padding: 2px 0; cursor: pointer;
@@ -124,7 +127,24 @@ const dbCalls = computed(() =>
 .ft-toggle:hover { color: var(--accent-primary, #7aa2d0); }
 .ft-caret { transition: transform .15s; font-size: 10px; }
 .ft-caret.open { transform: rotate(90deg); }
-.ft-body { padding: 6px 0 2px; display: flex; flex-direction: column; gap: 8px; }
+/* 下拉浮层：锚定宿主消息块（.message-block 提供 relative），
+   左右钉满对话区宽度 —— 与 AI 面板整体同幅，拖拽调宽时实时自适应 */
+.ft-body {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 2px;
+  right: 2px;
+  z-index: 40;
+  max-height: 60vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-elevated-solid, #1b1e24);
+  border: 1px solid var(--border-default, #333);
+  border-radius: 8px;
+}
 .ft-hint { margin: 0; font-size: 11.5px; color: var(--text-secondary); }
 .ft-hint.err { color: #d98f86; }
 .ft-hint.muted { color: var(--text-tertiary, #6a6a6a); }
