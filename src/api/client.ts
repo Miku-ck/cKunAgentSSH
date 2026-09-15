@@ -909,7 +909,7 @@ export interface TickStatusResponse {
   last_tick: Record<string, unknown> | null
 }
 
-/** GET /agent/runs/{id}/trace 完整轨迹（会话内"查看完整轨迹"回放） */
+/** GET /agent/runs/{id}/trace 完整轨迹（会话内「轨迹」按钮回放） */
 export interface AgentRunTrace {
   run: {
     id: string | null

@@ -1,8 +1,8 @@
 <template>
   <div class="full-trace">
-    <button class="ft-toggle" @click="onToggle">
+    <button class="ft-toggle" title="DB 权威记录：每步耗时 / 成本 / 状态流转" @click="onToggle">
       <span class="ft-caret" :class="{ open: expanded }">▸</span>
-      查看完整轨迹（DB 权威记录：每步耗时 / 成本 / 状态流转）
+      轨迹
     </button>
 
     <div v-if="expanded" class="ft-body">
