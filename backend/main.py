@@ -26,6 +26,7 @@ from routes.terminal import router as terminal_router
 from routes.audit import router as audit_router
 from routes.schedules import router as schedules_router
 from agent.consciousness_tick import get_global_tick
+from agent.bridge_relay import bridge_ws_endpoint
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,11 @@ async def lifespan(_app: FastAPI):
     schedule_engine = get_schedule_engine()
     schedule_engine.ensure_started()
 
+    # Bridge WS relay（阶段 1）：Electron 主进程反向连接 /ws/bridge 的命令通道。
+    # 创建即注册到模块全局（bridge_ws_endpoint 经 get_bridge_relay() 获取）。
+    from agent.bridge_relay import BridgeRelay, set_bridge_relay
+    set_bridge_relay(BridgeRelay())
+
     yield
 
     # 优雅停止后台 tick（若曾启动）
@@ -89,6 +95,10 @@ async def lifespan(_app: FastAPI):
     # 停止定时任务调度引擎
     from agent.schedule_engine import get_schedule_engine
     await get_schedule_engine().stop()
+
+    # 注销 Bridge WS relay（优雅关闭时新连接将收到 1013）
+    from agent.bridge_relay import set_bridge_relay
+    set_bridge_relay(None)
 
     # 等待 PostProcessManager 任务完成（最多 10 秒），避免数据库写入被截断
     from post_processor import get_post_process_manager
@@ -181,6 +191,10 @@ app.include_router(terminal_router, prefix="/api")
 app.include_router(audit_router, prefix="/api")
 app.include_router(schedules_router, prefix="/api")
 
+# Bridge WS 端点：刻意不挂 /api 前缀 — X-API-Token 中间件不覆盖，
+# 它有自己的 hello token 鉴权（与主进程注入后端的 ELECTRON_BRIDGE_TOKEN 比对）
+app.add_api_websocket_route("/ws/bridge", bridge_ws_endpoint)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="cKunAgentic Backend")
@@ -198,6 +212,8 @@ if __name__ == "__main__":
         port=args.port,
         reload=False,
         log_level="info",
+        # Bridge WS 单帧上限（显式化默认值）：远程命令输出可能较大
+        ws_max_size=16 * 1024 * 1024,
     )
     server = uvicorn.Server(config)
     asyncio.run(server.serve())

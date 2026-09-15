@@ -1,6 +1,15 @@
-"""Electron Bridge — Python 后端调用 Electron 主进程能力的客户端"""
+"""Electron Bridge — Python 后端调用 Electron 主进程能力的客户端
+
+传输层（阶段 1，见 docs/superpowers/specs/2026-09-14-bridge-ws-channel-design.md）：
+- WS 优先：主进程反向连接本进程 /ws/bridge（bridge_relay 持有），命令经 WS 下发
+- HTTP 兜底：原有 127.0.0.1:<port> 端口桥，WS 不可用时的回退通道
+- 公开 API（is_available/probe/ping/exec_ssh_command/connect_ssh/disconnect_ssh）不变，
+  4 个调用方（schedule_engine / ops_common / shell_exec / saddle）零改动
+- 断线时在途请求 fail-closed：绝不回 HTTP 重发同一请求（远程命令非幂等）
+"""
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
@@ -20,6 +29,7 @@ class BridgeErrorCode(str, enum.Enum):
     TOKEN_REJECTED = "BRIDGE_TOKEN_REJECTED"    # 401/403：主进程重启后 token 已更新
     HTTP_ERROR = "BRIDGE_HTTP_ERROR"            # 其他 HTTP 非 2xx
     TIMEOUT = "BRIDGE_TIMEOUT"                  # 连接/读取超时（端口假监听、主进程繁忙）
+    WS_LOST = "BRIDGE_WS_LOST"                  # WS 通道丢失（无连接 / 在途断线 / 等待响应超时）
     UNKNOWN = "BRIDGE_UNKNOWN"
 
 
@@ -67,6 +77,10 @@ _BRIDGE_ERROR_SUGGESTIONS: dict[BridgeErrorCode, str] = {
         "请查看 electron-bridge.log 中是否出现该端口的 REQ 记录："
         "无 REQ 说明请求根本未到达主进程，请重启应用以重建桥接端口。"
     ),
+    BridgeErrorCode.WS_LOST: (
+        "Electron 桥接反向连接（WS）不可用或已断开（主进程可能在重启）。"
+        "请重试该任务；若持续出现请完整重启应用。"
+    ),
     BridgeErrorCode.UNKNOWN: "桥接通信异常。请查看主进程日志并尝试重启应用。",
 }
 
@@ -75,6 +89,11 @@ logger = logging.getLogger(__name__)
 # httpx 超时比 SSH 超时多出的余量（秒），确保 SSH 侧超时先触发，
 # Electron 返回错误响应后 httpx 正常收到结果，避免两侧同时超时导致竞争。
 _HTTP_TIMEOUT_MARGIN = 5.0
+
+# WS 通道"短等待"预算（秒）：任务触发时 WS 未连接（典型场景：后端刚被
+# BackendManager 自动重启，主进程重连在途）最多等这么久；仍不通再走 HTTP 兜底。
+_WS_CONNECT_WAIT_S = 5.0
+_WS_POLL_S = 0.2
 
 
 class ElectronBridge:
@@ -96,6 +115,64 @@ class ElectronBridge:
             f"port={self.port} base_url={self.base_url}",
         )
 
+    # ── WS 传输层（阶段 1 主链路）────────────────────
+
+    def _ws_connected(self) -> bool:
+        from agent.bridge_relay import get_bridge_relay
+        relay = get_bridge_relay()
+        return relay is not None and relay.connected
+
+    async def _wait_ws(self, budget: float = _WS_CONNECT_WAIT_S) -> bool:
+        """最多等 budget 秒让 WS 通道就绪（每 0.2s 轮询一次）。"""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + budget
+        while True:
+            if self._ws_connected():
+                return True
+            if loop.time() >= deadline:
+                return False
+            await asyncio.sleep(_WS_POLL_S)
+
+    async def _ws_request(self, op: str, payload: dict, timeout: float) -> dict:
+        """经 WS 通道下发一条请求并等待结果。
+
+        超时语义与 HTTP 路径对齐：timeout + 余量，让主进程侧 SSH 超时先触发。
+        4xx/5xx 业务失败 → BridgeError(HTTP_ERROR)；通道丢失 → BridgeWsLostError
+        （由调用方 _post_ws_or_http 归一为 WS_LOST）。
+        """
+        from agent.bridge_relay import BridgeWsLostError, get_bridge_relay
+
+        relay = get_bridge_relay()
+        if relay is None or not relay.connected:
+            raise BridgeWsLostError("bridge ws not connected")
+        try:
+            status, result = await relay.send_request(op, payload, timeout + _HTTP_TIMEOUT_MARGIN)
+        except BridgeWsLostError:
+            raise
+        except Exception as e:
+            raise BridgeWsLostError(str(e)) from e
+        if status >= 400:
+            detail = (result.get("error", "") if isinstance(result, dict) else "") or f"WS status {status}"
+            raise BridgeError(BridgeErrorCode.HTTP_ERROR, detail)
+        return result if isinstance(result, dict) else {}
+
+    async def _post_ws_or_http(
+        self, op: str, path: str, payload: dict, timeout: float, http_timeout: float
+    ) -> dict:
+        """传输选择：调用瞬间 WS 已连接 → WS；否则 → 现有 HTTP 兜底路径。
+
+        fail-closed：WS 在途断线只抛 WS_LOST，**不回落 HTTP 重发同一请求**
+        （远程命令可能已部分执行，重发 = 双执行）。
+        """
+        from agent.bridge_relay import BridgeWsLostError
+
+        if self._ws_connected():
+            try:
+                return await self._ws_request(op, payload, timeout)
+            except BridgeWsLostError as e:
+                raise BridgeError(BridgeErrorCode.WS_LOST, str(e), original=e)
+        return await self._post(path, payload, http_timeout)
+
     def _new_client(self, timeout: float) -> httpx.AsyncClient:
         """构造桥接专用 HTTP 客户端。
 
@@ -113,15 +190,24 @@ class ElectronBridge:
     async def probe(self, timeout: float = 3.0) -> BridgeErrorCode | None:
         """探测桥接可达性：返回 None 表示可达，否则返回具体失败原因码。
 
-        相比旧实现（用 /ssh/exec 发空参数反推）的两点修正：
+        相比旧实现（用 /ssh/exec 发空参数反推）的修正：
           1. 改用专用 /ping 端点 —— 探活不再依赖 SSH 业务参数校验。旧实现靠
              "400 响应 ⇒ 桥存活"间接判断，语义错位且与业务逻辑耦合。
           2. 不再把所有失败一律归类为 PORT_CLOSED，而是区分超时/连接拒绝/token
              失效 —— 之前"端口假监听导致的超时"被报成"端口关闭"，把排查方向
              指向了错误的结论。
+          3. 阶段 1 起 WS 优先：反向连接已建立即视为可达（通道即健康）；
+             未建立时最多等 _WS_CONNECT_WAIT_S 秒（覆盖后端刚重启、主进程
+             重连在途的窗口），仍不通再对 HTTP 兜底通道探活。
         """
         if not self.is_available():
             return BridgeErrorCode.NOT_CONFIGURED
+        if await self._wait_ws(_WS_CONNECT_WAIT_S):
+            return None
+        return await self._probe_http(timeout)
+
+    async def _probe_http(self, timeout: float) -> BridgeErrorCode | None:
+        """HTTP 兜底通道的 /ping 探活（WS 不可用时调用）。"""
         try:
             async with self._new_client(timeout) as client:
                 resp = await client.post(
@@ -164,16 +250,18 @@ class ElectronBridge:
         if not self.is_available():
             self._raise_unavailable()
 
-        # httpx 超时 > SSH 超时，确保 SSH 侧先超时并返回错误响应
+        # 超时 > SSH 超时，确保 SSH 侧先超时并返回错误响应（WS/HTTP 两通道同语义）
         http_timeout = timeout + _HTTP_TIMEOUT_MARGIN
 
-        return await self._post(
+        return await self._post_ws_or_http(
+            "ssh_exec",
             "/ssh/exec",
             {
                 "sshSessionId": ssh_session_id,
                 "command": command,
                 "timeout": timeout,
             },
+            timeout,
             http_timeout,
         )
 
@@ -185,11 +273,13 @@ class ElectronBridge:
         if not self.is_available():
             self._raise_unavailable()
 
-        # 建连可能耗时（readyTimeout 默认 15s），放宽 HTTP 超时余量
+        # 建连可能耗时（readyTimeout 默认 15s），放宽超时余量
         http_timeout = timeout + _HTTP_TIMEOUT_MARGIN
-        return await self._post(
+        return await self._post_ws_or_http(
+            "ssh_connect",
             "/ssh/connect",
             {"connectionId": connection_id},
+            timeout,
             http_timeout,
         )
 
@@ -198,9 +288,11 @@ class ElectronBridge:
         if not self.is_available():
             self._raise_unavailable()
 
-        return await self._post(
+        return await self._post_ws_or_http(
+            "ssh_disconnect",
             "/ssh/disconnect",
             {"sessionId": session_id},
+            timeout,
             timeout + _HTTP_TIMEOUT_MARGIN,
         )
 

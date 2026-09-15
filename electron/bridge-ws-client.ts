@@ -1,0 +1,260 @@
+/**
+ * Bridge WS 客户端 — 主进程反向连接（出站拨号）后端 /ws/bridge。
+ *
+ * WS 反向通道阶段 1 的主链路：定时任务命令经此通道从后端下发到主进程，
+ * 不再依赖 electron.exe 的回环入站防火墙规则（出站长连接不受入站规则影响）。
+ * HTTP 端口桥保留为兜底通道。
+ * 协议与实现详见 docs/superpowers/specs/2026-09-14-bridge-ws-channel-design.md
+ * 及 backend/agent/bridge_relay.py（服务端中枢，协议双方须一致）。
+ *
+ * 使用 Node 22 原生 WebSocket（Electron 35 内置，零依赖）。主进程 tsconfig
+ * 不含 DOM lib，故在此声明最小类型。
+ */
+
+const WS_PATH = '/ws/bridge'
+/** 应用层心跳间隔：原生 WebSocket API 无 ping() 方法，用应用帧 */
+const PING_INTERVAL_MS = 30_000
+/** 连续 N 轮 ping 无 pong → 判定连接死亡，主动关闭触发重连 */
+const MAX_MISSED_PONGS = 2
+const RECONNECT_BASE_MS = 1_000
+const RECONNECT_MAX_MS = 15_000
+
+const WS_STATE_OPEN = 1
+
+// 最小 WebSocket 类型（Node 22 / undici 实现的公共子集）
+interface WsSocket {
+  readyState: number
+  send(data: string): void
+  close(code?: number, reason?: string): void
+  onopen: ((ev?: unknown) => void) | null
+  onmessage: ((ev: { data: unknown }) => void) | null
+  onclose: ((ev: { code?: number; reason?: string }) => void) | null
+  onerror: ((ev?: unknown) => void) | null
+}
+declare const WebSocket: new (url: string) => WsSocket
+
+/** 业务分发结果：与 HTTP 响应同构（status 为 HTTP 风格状态码） */
+export interface DispatchResult {
+  status: number
+  body: unknown
+}
+/** 后端 req 帧 → 主进程业务实现的注入点（ElectronBridge.dispatch） */
+export type BridgeDispatch = (op: string, payload: Record<string, any>) => Promise<DispatchResult>
+
+function log(msg: string): void {
+  console.log(`[BridgeWS] ${msg}`)
+}
+
+export class BridgeWsClient {
+  private ws: WsSocket | null = null
+  private port = 0
+  private token = ''
+  private stopped = true
+  private connecting = false
+  private reconnectTimer: NodeJS.Timeout | null = null
+  private pingTimer: NodeJS.Timeout | null = null
+  private missedPongs = 0
+  private reconnectDelay = RECONNECT_BASE_MS
+
+  constructor(private readonly dispatch: BridgeDispatch) {}
+
+  /**
+   * （重新）指向目标后端并启动/刷新连接。
+   * 后端自动重启后端口可能变化：调用方（main.ts）在每次 'ready' 事件携带
+   * 端口时重新调用本方法。同目标且连接健康时为空操作。
+   */
+  setTarget(port: number, token: string): void {
+    if (!port || !token) return
+    const changed = port !== this.port || token !== this.token
+    this.port = port
+    this.token = token
+    if (this.stopped) {
+      this.stopped = false
+      this.connect()
+      return
+    }
+    if (changed || !this.isOpen()) {
+      log(`目标变化（port=${port}）或连接不健康，重建连接`)
+      this.cancelReconnect()
+      this.closeCurrent()
+      this.reconnectDelay = RECONNECT_BASE_MS
+      this.connect()
+    }
+  }
+
+  /** 永久关闭（应用退出路径）。幂等。 */
+  stop(): void {
+    this.stopped = true
+    this.cancelReconnect()
+    this.closeCurrent()
+  }
+
+  /** 通道是否就绪（已连接；hello 握手成功与否不影响本判断，req 会自行暴露问题） */
+  isOpen(): boolean {
+    return !!this.ws && this.ws.readyState === WS_STATE_OPEN
+  }
+
+  // ── 连接生命周期 ────────────────────────────────
+
+  private connect(): void {
+    if (this.stopped || this.connecting || this.isOpen()) return
+    this.connecting = true
+
+    let ws: WsSocket
+    try {
+      ws = new WebSocket(`ws://127.0.0.1:${this.port}${WS_PATH}`)
+    } catch (err) {
+      this.connecting = false
+      log(`构造 WebSocket 失败: ${err instanceof Error ? err.message : String(err)}`)
+      this.scheduleReconnect()
+      return
+    }
+    this.ws = ws
+
+    ws.onopen = () => {
+      this.connecting = false
+      this.reconnectDelay = RECONNECT_BASE_MS
+      this.missedPongs = 0
+      log(`已连接 127.0.0.1:${this.port}${WS_PATH}，发送 hello`)
+      this.sendJson({ type: 'hello', token: this.token })
+      this.startPing()
+    }
+
+    ws.onmessage = (ev) => {
+      let msg: any
+      try {
+        msg = JSON.parse(String(ev.data))
+      } catch {
+        return // 非 JSON 帧：忽略（服务端对协议错误会自行断连）
+      }
+      switch (msg?.type) {
+        case 'hello-ack':
+          log('hello-ack 收到，通道就绪')
+          break
+        case 'pong':
+          this.missedPongs = 0
+          break
+        case 'req':
+          void this.handleReq(msg.id, msg.op, (msg.payload ?? {}) as Record<string, any>)
+          break
+        // 后端不主动发 res/ping（ping 方向为主→后端）；未知帧忽略（前向兼容）
+      }
+    }
+
+    ws.onclose = (ev) => {
+      this.connecting = false
+      this.stopPing()
+      this.ws = null
+      log(`连接关闭 (code=${ev?.code ?? '?'})，将自动重连`)
+      this.scheduleReconnect()
+    }
+
+    ws.onerror = () => {
+      /* close 事件紧随其后，重连由 onclose 统一处理 */
+    }
+  }
+
+  /** 主动关闭当前 socket（null 掉 onclose 以抑制重连调度）。 */
+  private closeCurrent(): void {
+    this.stopPing()
+    const ws = this.ws
+    this.ws = null
+    // 关键：socket 可能处于 CONNECTING（握手在途）— 其 onopen/onclose 已被 null，
+    // 无人再复位 connecting 标志；不复位则后续 connect() 被守卫永久挡住，通道死亡
+    this.connecting = false
+    if (ws) {
+      ws.onopen = null
+      ws.onmessage = null
+      ws.onclose = null
+      ws.onerror = null
+      try {
+        ws.close(1000)
+      } catch {
+        /* 已关闭，忽略 */
+      }
+    }
+  }
+
+  private scheduleReconnect(): void {
+    if (this.stopped) return
+    this.cancelReconnect()
+    const delay = this.reconnectDelay
+    this.reconnectDelay = Math.min(this.reconnectDelay * 2, RECONNECT_MAX_MS)
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
+      this.connect()
+    }, delay)
+    this.reconnectTimer.unref?.()
+  }
+
+  private cancelReconnect(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
+  }
+
+  // ── 应用层心跳 ─────────────────────────────────
+
+  private startPing(): void {
+    this.stopPing()
+    this.pingTimer = setInterval(() => {
+      const ws = this.ws
+      if (!ws || ws.readyState !== WS_STATE_OPEN) return
+      this.missedPongs += 1
+      if (this.missedPongs >= MAX_MISSED_PONGS) {
+        log(`连续 ${MAX_MISSED_PONGS} 轮 ping 无 pong，判定连接死亡，主动关闭触发重连`)
+        this.stopPing()
+        this.ws = null
+        try {
+          ws.close(1000)
+        } catch {
+          /* 忽略 */
+        }
+        this.scheduleReconnect()
+        return
+      }
+      this.sendJson({ type: 'ping' })
+    }, PING_INTERVAL_MS)
+    this.pingTimer.unref?.()
+  }
+
+  private stopPing(): void {
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer)
+      this.pingTimer = null
+    }
+  }
+
+  // ── 帧收发 ─────────────────────────────────────
+
+  private sendJson(obj: unknown): void {
+    const ws = this.ws
+    if (!ws || ws.readyState !== WS_STATE_OPEN) return
+    try {
+      ws.send(JSON.stringify(obj))
+    } catch (err) {
+      log(`send 失败: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  /**
+   * 处理后端下发的 req 帧：分发给业务实现（ElectronBridge.dispatch），
+   * 回 res 帧。id 原样带回；异常统一归为 500，绝不吞掉不回复（否则后端
+   * 侧请求会挂到超时）。
+   */
+  private async handleReq(id: unknown, op: string, payload: Record<string, any>): Promise<void> {
+    let status = 200
+    let body: unknown
+    try {
+      const r = await this.dispatch(op, payload)
+      status = r.status
+      body = r.body
+    } catch (err) {
+      status = 500
+      body = { success: false, error: '请求处理失败，请稍后重试' }
+      console.error(`[BridgeWS] ${op} 处理失败:`, err)
+    }
+    this.sendJson({ type: 'res', id, status, result: body })
+  }
+}

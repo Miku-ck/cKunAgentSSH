@@ -10,7 +10,8 @@ import { PtyManager, clampPtyDimension } from './pty-manager'
 import { SSHManager } from './ssh-manager'
 import { SSHError, toIpcTransport } from './ssh-error'
 import { SSHStore, type SSHConnectionRecord } from './ssh-store'
-import { ElectronBridge } from './electron-bridge'
+import { ElectronBridge, BridgeOp } from './electron-bridge'
+import { BridgeWsClient } from './bridge-ws-client'
 import { assertSafePath, allowDialogKeyPath } from './utils/path-guard'
 
 let mainWindow: BrowserWindow | null = null
@@ -19,6 +20,7 @@ let ptyManager: PtyManager | null = null
 let sshManager: SSHManager | null = null
 let sshStore: SSHStore | null = null
 let electronBridge: ElectronBridge | null = null
+let bridgeWsClient: BridgeWsClient | null = null
 
 // 审查修复：IPC sender 校验 — 原实现所有 ipcMain.handle 均不校验请求来源，
 // 任何受控渲染进程（XSS/外部 file:// 导航/未来新增窗口）都能直调
@@ -1451,14 +1453,19 @@ app.whenReady().then(async () => {
 
   // Start Python backend
   backendManager = new BackendManager()
+  // 桥接 env（port/token）提升到此处：WS 反向通道的重定向需要引用 token
+  let bridgeEnv: { port: number; token: string } = { port: 0, token: '' }
   // 后端状态变化（含崩溃自动重启）统一通过回调推送到前端
   backendManager.onStatusChange = (data) => {
+    // 自动重启 ready（端口可能变化）时重新指向 WS 反向通道
+    if (data.status === 'ready' && data.port && bridgeWsClient && bridgeEnv.token) {
+      bridgeWsClient.setTarget(data.port, bridgeEnv.token)
+    }
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('backend:status', data)
     }
   }
   try {
-    let bridgeEnv = { port: 0, token: '' }
     if (electronBridge) {
       bridgeEnv = await electronBridge.start()
     }
@@ -1469,6 +1476,14 @@ app.whenReady().then(async () => {
     }
     const port = await backendManager.start(extraEnv)
     console.log(`[BackendManager] Python backend ready on port ${port}`)
+    // WS 反向通道（阶段 1）：主进程出站拨号后端，定时任务命令的主链路；
+    // HTTP 端口桥（bridgeEnv.port）保留为兜底通道
+    if (electronBridge && bridgeEnv.token) {
+      bridgeWsClient = new BridgeWsClient(async (op, payload) =>
+        electronBridge!.dispatch(op as BridgeOp, payload),
+      )
+      bridgeWsClient.setTarget(port, bridgeEnv.token)
+    }
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('backend:status', { status: 'ready', port })
     }
@@ -1493,6 +1508,7 @@ app.on('window-all-closed', () => {
     ptyManager?.destroyAll()
     sshManager?.disconnectAll()
     backendManager?.stop()
+    bridgeWsClient?.stop()
     electronBridge?.stop()
     app.quit()
   }
@@ -1502,5 +1518,6 @@ app.on('before-quit', () => {
   ptyManager?.destroyAll()
   sshManager?.disconnectAll()
   backendManager?.stop()
+  bridgeWsClient?.stop()
   electronBridge?.stop()
 })
