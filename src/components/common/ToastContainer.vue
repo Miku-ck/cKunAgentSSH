@@ -63,12 +63,13 @@ const iconMap: Record<ToastType, string> = {
   max-width: 480px;
   padding: 10px 14px;
   border-radius: 8px;
+  background: var(--bg-elevated-solid, #1e1e1e);
   border: 1px solid var(--border-default);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   cursor: pointer;
   pointer-events: auto;
   font-size: 13px;
-  color: #e0e0e0;
+  color: var(--text-primary, #e0e0e0);
   font-family: var(--font-sans);
   overflow: hidden;
   transition: all 0.2s ease;

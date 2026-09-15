@@ -59,7 +59,7 @@
         <span class="footer-sep">|</span>
         <span class="footer-item">UTF-8</span>
         <span class="footer-sep">|</span>
-        <span class="footer-item">{{ formatSize(size) }}</span>
+        <span class="footer-item">{{ formatBytes(size) }}</span>
         <template v-if="!loading && !error">
           <span class="footer-sep">|</span>
           <span class="footer-item">行 {{ cursorPos.line }}, 列 {{ cursorPos.col }}</span>
@@ -100,6 +100,7 @@
 </template>
 
 <script setup lang="ts">
+import { formatBytes } from '@/utils/format'
 import { ref, computed, watch, onUnmounted, nextTick, markRaw } from 'vue'
 import * as monaco from 'monaco-editor'
 import { getLanguage } from '@/utils/language'
@@ -138,7 +139,7 @@ const cursorPos = ref({ line: 1, col: 1 })
 // 不会进入只读分支，故只读分支的原因恒为"文件过大（超过 5MB）"。
 const readOnlyReason = computed(() => {
   if (!readOnly.value) return ''
-  return `文件较大（${formatSize(size.value)}，超过 5MB），以只读模式打开`
+  return `文件较大（${formatBytes(size.value)}，超过 5MB），以只读模式打开`
 })
 
 const container = ref<HTMLElement | null>(null)
@@ -310,13 +311,6 @@ async function saveAndClose(): Promise<void> {
   }
 }
 
-function formatSize(bytes: number): string {
-  if (!bytes) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(1024))
-  return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + ' ' + units[i]
-}
-
 onUnmounted(() => {
   // Optimization 修复：清理未触发的布局定时器
   _layoutTimers.forEach(t => clearTimeout(t))
@@ -339,7 +333,7 @@ onUnmounted(() => {
   width: 80vw;
   height: 85vh;
   max-width: 1400px;
-  background: var(--bg-elevated);
+  background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
   border-radius: 8px;
   display: flex;

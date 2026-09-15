@@ -142,7 +142,7 @@ defineExpose({
   z-index: 2000;
   min-width: 180px;
   max-width: 420px;
-  background: var(--bg-input);
+  background: var(--bg-input-solid);
   border: 1px solid var(--border-default, #3e3e42);
   border-radius: 4px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);

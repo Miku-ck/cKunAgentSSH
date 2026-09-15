@@ -58,7 +58,6 @@ function deliveryStatusLabel(status: string): string {
 
 const props = defineProps<{
   /** 当审查面板已展示人工介入状态时，隐藏此处的人工介入卡片 */
-  hideHumanHelp?: boolean
 }>()
 
 /** 授权（审查 M-3：提供"允许本次"(once) 与"始终允许"(always) 两档；
@@ -112,10 +111,10 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
       </div>
     </div>
 
-    <!-- 人工介入求助（运行中/非 IDE 模式显示完整卡片；IDE 模式由 CodeChangeReviewPanel 统一展示，此处仅保留关闭入口） -->
+    <!-- 人工介入求助卡片 -->
     <div
       class="human-help-section"
-      v-if="agentStore.hasHumanHelpRequest && !props.hideHumanHelp"
+      v-if="agentStore.hasHumanHelpRequest"
     >
       <div
         v-for="req in agentStore.humanHelpRequests"

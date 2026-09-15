@@ -647,7 +647,7 @@ defineExpose({
   z-index: 9999;
   min-width: 140px;
   padding: 4px 0;
-  background: var(--bg-elevated);
+  background: var(--bg-elevated-solid, #1a1a1e);
   border: 1px solid var(--border-default);
   border-radius: 6px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);

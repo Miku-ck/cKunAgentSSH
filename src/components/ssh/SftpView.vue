@@ -91,12 +91,12 @@
                   <span class="tl-path-to" :title="t.to">{{ truncatePath(t.to) }}</span>
                 </div>
                 <div class="tl-meta">
-                  <span v-if="t.status === 'running'" class="tl-speed">{{ formatSpeed(t) }} · {{ formatSize(t.transferred) }} / {{ formatSize(t.total) }} · {{ formatElapsed(t) }}</span>
-                  <span v-else-if="t.status === 'paused'" class="tl-paused">已暂停 · {{ formatSize(t.transferred) }} / {{ formatSize(t.total) }} · {{ formatElapsed(t) }}</span>
-                  <span v-else-if="t.status === 'done'" class="tl-done">完成 · {{ formatSize(t.total) }} · {{ formatDuration(t) }}</span>
+                  <span v-if="t.status === 'running'" class="tl-speed">{{ formatSpeed(t) }} · {{ formatBytes(t.transferred) }} / {{ formatBytes(t.total) }} · {{ formatElapsed(t) }}</span>
+                  <span v-else-if="t.status === 'paused'" class="tl-paused">已暂停 · {{ formatBytes(t.transferred) }} / {{ formatBytes(t.total) }} · {{ formatElapsed(t) }}</span>
+                  <span v-else-if="t.status === 'done'" class="tl-done">完成 · {{ formatBytes(t.total) }} · {{ formatDuration(t) }}</span>
                   <span v-else-if="t.status === 'error'" class="tl-error" :title="t.error">失败: {{ t.error }}</span>
-                  <span v-else-if="t.status === 'cancelled'" class="tl-cancelled">已取消 · {{ formatSize(t.transferred) }} / {{ formatSize(t.total) }}</span>
-                  <span v-else class="tl-pending">等待中 · {{ formatSize(t.total) }}</span>
+                  <span v-else-if="t.status === 'cancelled'" class="tl-cancelled">已取消 · {{ formatBytes(t.transferred) }} / {{ formatBytes(t.total) }}</span>
+                  <span v-else class="tl-pending">等待中 · {{ formatBytes(t.total) }}</span>
                 </div>
                 <div class="tl-progress-bar">
                   <div
@@ -174,9 +174,9 @@
                   <span class="tl-path-to" :title="t.to">{{ truncatePath(t.to) }}</span>
                 </div>
                 <div class="tl-meta">
-                  <span v-if="t.status === 'done'" class="tl-done">完成 · {{ formatSize(t.total) }} · {{ formatDuration(t) }}</span>
+                  <span v-if="t.status === 'done'" class="tl-done">完成 · {{ formatBytes(t.total) }} · {{ formatDuration(t) }}</span>
                   <span v-else-if="t.status === 'error'" class="tl-error" :title="t.error">失败: {{ t.error }}</span>
-                  <span v-else-if="t.status === 'cancelled'" class="tl-cancelled">已取消 · {{ formatSize(t.transferred) }} / {{ formatSize(t.total) }}</span>
+                  <span v-else-if="t.status === 'cancelled'" class="tl-cancelled">已取消 · {{ formatBytes(t.transferred) }} / {{ formatBytes(t.total) }}</span>
                 </div>
                 <div class="tl-progress-bar">
                   <div
@@ -384,6 +384,7 @@
 </template>
 
 <script setup lang="ts">
+import { formatBytes } from '@/utils/format'
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import SftpPane from './SftpPane.vue'
 import SftpFileEditor from './SftpFileEditor.vue'
@@ -428,13 +429,6 @@ function progressPercent(t: TransferItem): number {
 
 function isIndeterminate(t: TransferItem): boolean {
   return t.status === 'running' && !t.total
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
 }
 
 function formatSpeed(t: TransferItem): string {
@@ -1035,7 +1029,7 @@ async function onFileSaved(): Promise<void> {
   z-index: 1000;
 }
 .conn-dialog {
-  background: var(--bg-elevated);
+  background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
   border-radius: 8px;
   width: 420px;
@@ -1085,7 +1079,7 @@ async function onFileSaved(): Promise<void> {
   padding: 4px;
   min-width: 160px;
   z-index: 9999;
-  background: var(--bg-elevated);
+  background: var(--bg-elevated-solid);
 }
 .ctx-item {
   display: flex; align-items: center; gap: 8px;
@@ -1105,7 +1099,7 @@ async function onFileSaved(): Promise<void> {
   z-index: 1001;
 }
 .rename-dialog {
-  background: var(--bg-elevated);
+  background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
   border-radius: 8px;
   padding: 20px;
@@ -1146,7 +1140,7 @@ async function onFileSaved(): Promise<void> {
 .transfer-ctx-menu {
   position: fixed;
   z-index: 1100;
-  background: var(--bg-elevated);
+  background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
   border-radius: 8px;
   padding: 4px;

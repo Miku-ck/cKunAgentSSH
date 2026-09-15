@@ -126,7 +126,7 @@ onMounted(load)
   max-height: calc(100% - 90px);
   display: flex;
   flex-direction: column;
-  background: var(--bg-panel, var(--bg-input, #1b1e24));
+  background: var(--bg-panel-solid, #1b1e24);
   border: 1px solid var(--border-default);
   border-radius: 8px;
   z-index: 30;

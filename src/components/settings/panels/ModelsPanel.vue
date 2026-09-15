@@ -749,7 +749,7 @@ return String(n)
   z-index: 10000;
 }
 .modal-container {
-  background: var(--bg-input);
+  background: var(--bg-input-solid);
   border: 1px solid #2d2d30;
   border-radius: 10px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
@@ -875,7 +875,7 @@ return String(n)
   top: calc(100% + 4px);
   left: 0;
   right: 0;
-  background: var(--bg-input);
+  background: var(--bg-input-solid);
   border: 1px solid #2d2d30;
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);

@@ -146,7 +146,7 @@ function handleSave() {
 .qc-editor-dialog {
   width: 420px;
   max-width: 90vw;
-  background: var(--bg-input);
+  background: var(--bg-input-solid);
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);

@@ -68,7 +68,6 @@ export function useChatPersistence(options: {
   async function syncBackendConversations() {
     try {
       const remote = await api.listConversations(50, 0, API_MODE)
-      loadFailed.value = false
       const byLocalId = new Map(conversations.value.map((c) => [c.id, c]))
       const byBackendId = new Map(
         conversations.value.filter((c) => (c as any).backendConvId).map((c) => [(c as any).backendConvId as string, c]),
@@ -103,9 +102,6 @@ export function useChatPersistence(options: {
   // 原实现恒为 null，每次重启 AI 面板都显示空态，用户需手动从历史记录点回。
   const currentConvId = ref<string | null>(conversations.value[0]?.id ?? null)
   const selectedModelId = ref<string>(loadSelectedModelId())
-  // B24 修复：后端会话列表加载失败标志（成功加载即复位），供 UI 展示
-  const loadFailed = ref(false)
-
   const currentConversation = computed(() =>
     conversations.value.find((c) => c.id === currentConvId.value) ?? null
   )
@@ -224,7 +220,6 @@ export function useChatPersistence(options: {
     messages,
     selectedModelId,
     groupedConversations,
-    loadFailed,
     fetchDefaultModel,
     setSelectedModel,
     createConversation,

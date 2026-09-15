@@ -120,7 +120,7 @@
           </svg>
           <span>{{ entry.name }}</span>
         </div>
-        <div class="file-size">{{ entry.isDirectory ? '—' : formatSize(entry.size) }}</div>
+        <div class="file-size">{{ entry.isDirectory ? '—' : formatBytes(entry.size) }}</div>
         <div class="file-time">{{ formatTime(entry.modified) }}</div>
         <div class="file-perm">{{ entry.isDirectory ? 'd' + (permText(entry) || 'rwx') : permText(entry) || '-' }}</div>
       </div>
@@ -161,6 +161,7 @@
 </template>
 
 <script setup lang="ts">
+import { formatBytes } from '@/utils/format'
 import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { useSftpStore } from '@/stores/sftp'
 import { useToastStore } from '@/stores/toast'
@@ -282,14 +283,6 @@ function iconClass(entry: any): string {
 function permText(entry: any): string {
   if (props.side === 'remote' && entry.mode) return entry.mode
   return entry.isDirectory ? 'drwx' : '-rw'
-}
-
-function formatSize(bytes: number): string {
-  if (!bytes) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  // C30 修复：≥1PB 时 i 越界显示 undefined — 钳制到最大单位
-  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
-  return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + ' ' + units[i]
 }
 
 function formatTime(ms: number): string {
@@ -596,7 +589,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   position: absolute;
   top: 29px;
   left: 0;
-  background: var(--bg-elevated);
+  background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
   border-radius: 6px;
   box-shadow: var(--shadow-lg);
@@ -726,7 +719,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   z-index: 1001;
 }
 .mkdir-dialog {
-  background: var(--bg-elevated);
+  background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
   border-radius: 8px;
   padding: 20px;

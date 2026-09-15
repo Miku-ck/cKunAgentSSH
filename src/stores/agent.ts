@@ -67,7 +67,6 @@ export const useAgentStore = defineStore('agent', () => {
   const warnings = ref<string[]>([])
   const errorMessage = ref('')
   const totalIterations = ref(0)
-  const stateHistory = ref<Array<{ from: string; event: string; to: string }>>([])
   const humanHelpRequests = ref<HumanHelpRequest[]>([])
   const permissionRequests = ref<PermissionRequest[]>([])
   // P7: 成本信息 + 最近 run_id（供 TraceViewer 使用）
@@ -83,7 +82,6 @@ export const useAgentStore = defineStore('agent', () => {
   // 推在哪个会话就固化哪个），不能按"完成时刻的当前会话"决定
   const currentConversationId = ref('')
   // 当前正在进行的工具调用（用于状态栏显示真实动作）
-  const currentToolCall = ref<ToolCallEntry | null>(null)
   // H14: 意图识别结果（用于规划列表展示）
   const intentionInfo = ref<AgentIntentionInfo | null>(null)
   // H14 修复：人工介入去重标志（同一 run 只接受一次，独立于数组长度）
@@ -102,64 +100,9 @@ export const useAgentStore = defineStore('agent', () => {
 
   // ── Computed ──
   const isRunning = computed(() => status.value === 'running')
-  const hasToolCalls = computed(() => toolCalls.value.length > 0)
   const hasHumanHelpRequest = computed(() => humanHelpRequests.value.length > 0)
   const hasPermissionRequest = computed(() => permissionRequests.value.some(r => !r.resolved))
 
-  /** 当前状态对应的主题色（thinking 蓝色 / acting 橙色 / failed 红色 等） */
-  const stateColor = computed((): string => {
-    const map: Record<string, string> = {
-      init: 'var(--text-secondary)',
-      thinking: 'var(--accent-blue)',
-      acting: 'var(--accent-orange)',
-      observing: 'var(--accent-yellow)',
-      reflecting: 'var(--accent-purple)',
-      completed: 'var(--accent-green)',
-      failed: 'var(--accent-red)',
-      human_help: 'var(--accent-red)',
-      max_reached: 'var(--accent-yellow)',
-    }
-    return map[currentState.value] || 'var(--text-secondary)'
-  })
-
-  /** 当前正在进行的动作文本，例如"思考中..."/"正在读取文件：main.py" */
-  const currentActionText = computed((): string => {
-    const state = currentState.value
-    const tc = currentToolCall.value
-
-    if (state === 'thinking') return '思考中...'
-    if (state === 'reflecting') return '反思总结中...'
-    if (state === 'observing') return '观察工具结果...'
-    // H14 修复：human_help 终止态显示为"需要人工介入"，而不是"思考中..."
-    if (state === 'human_help') return '需要人工介入'
-
-    if (tc && (state === 'acting' || state === 'executing' || !state)) {
-      const tool = tc.tool
-      const args = tc.args
-      const value =
-        args.file_path || args.path || args.url || args.query || args.command || args.shell || args.target || args.code || ''
-      let target = ''
-      if (typeof value === 'string') {
-        target = value.length > 30 ? value.slice(0, 27) + '...' : value
-      } else if (Array.isArray(value) && value.length > 0) {
-        const first = String(value[0])
-        target = first.length > 30 ? first.slice(0, 27) + '...' : first
-      }
-      const toolNameMap: Record<string, string> = {
-        read_file: '读取文件',
-        write_file: '写入文件',
-        list_dir: '列出目录',
-        shell_exec: '执行命令',
-        web_search: '搜索网络',
-        web_fetch: '获取网页',
-      }
-      const verb = toolNameMap[tool] || tool
-      return target ? `正在${verb}：${target}` : `正在调用 ${tool}...`
-    }
-
-    if (state === 'acting') return '执行工具中...'
-    return '思考中...'
-  })
 
   // ── Actions ──
 
@@ -284,14 +227,12 @@ export const useAgentStore = defineStore('agent', () => {
     warnings.value = []
     errorMessage.value = ''
     totalIterations.value = 0
-    stateHistory.value = []
     humanHelpRequests.value = []
     permissionRequests.value = []
     costInfo.value = null
     lastRunId.value = ''
     currentMode.value = ''
     currentConversationId.value = ''
-    currentToolCall.value = null
     intentionInfo.value = null
     _helpRequestedThisRun = false
     aborted.value = false
@@ -374,7 +315,6 @@ export const useAgentStore = defineStore('agent', () => {
           }
           toolCalls.value.push(entry)
           // 记录当前正在执行的工具，用于状态栏显示真实动作
-          currentToolCall.value = entry
         }
         break
 
@@ -395,9 +335,6 @@ export const useAgentStore = defineStore('agent', () => {
             tc.success = event.success
           }
           // 工具调用完成，清空当前动作显示
-          if (currentToolCall.value?.tool === event.tool && !currentToolCall.value.result) {
-            currentToolCall.value = null
-          }
         }
         break
 
@@ -521,7 +458,6 @@ export const useAgentStore = defineStore('agent', () => {
           if (reasoningTail) reasoning.value += reasoningTail
         }
         if (event.iterations !== undefined) totalIterations.value = event.iterations
-        if (event.state_history) stateHistory.value = event.state_history
         // P7: 捕获成本快照 + run_id
         if (event.cost) costInfo.value = event.cost
         if (event.run_id) lastRunId.value = event.run_id
@@ -550,24 +486,18 @@ export const useAgentStore = defineStore('agent', () => {
     toolCalls,
     warnings,
     errorMessage,
-    totalIterations,
-    stateHistory,
     humanHelpRequests,
     permissionRequests,
     costInfo,
     lastRunId,
     currentMode,
     currentConversationId,
-    currentToolCall,
     intentionInfo,
     aborted,
     // computed
     isRunning,
-    hasToolCalls,
     hasHumanHelpRequest,
     hasPermissionRequest,
-    stateColor,
-    currentActionText,
     pendingDeliveries,
     deliveries: agentDeliver.deliveries,
     // actions

@@ -407,6 +407,7 @@ async function handleSave() {
 .modal-dialog {
   width: 560px;
   max-height: 85vh;
+  background: var(--bg-base, #1a1a1a);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);

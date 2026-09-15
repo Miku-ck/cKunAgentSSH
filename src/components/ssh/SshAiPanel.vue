@@ -1,7 +1,6 @@
 <template>
   <SideChatPanel
     ref="panelRef"
-    mode="ssh"
     :conversations="store.conversations"
     :current-conv-id="store.currentConvId"
     :messages="store.messages"

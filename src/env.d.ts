@@ -25,13 +25,6 @@ interface SftpEntry {
 }
 
 /** SSH 快捷命令 */
-interface QuickCommand {
-  id: string
-  name: string
-  command: string
-  color: string
-  order: number
-}
 
 /** SSH 连接配置(渲染进程与主进程共用形态) */
 interface SSHConnectionRecord {

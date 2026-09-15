@@ -60,7 +60,7 @@
           </MessageItem>
         </template>
 
-        <!-- Agent 面板插槽（IDE 模式使用） -->
+        <!-- Agent 面板插槽（运行告警/审批卡等，由具体助手面板注入） -->
         <slot name="agent-panel"></slot>
       </div>
 
@@ -79,7 +79,7 @@
     <!-- 输入区域 -->
     <div class="input-section">
       <div class="input-container">
-        <!-- 上下文标签插槽（IDE 文件标签等） -->
+        <!-- 上下文标签插槽（会话附加信息，可选） -->
         <slot name="input-prefix"></slot>
 
         <!-- 已选技能标签（与 Work 模式 ChatInput 风格一致） -->
@@ -260,6 +260,10 @@ import type { ChatAttachment } from '@/api/client'
 
 const settingsStore = useSettingsStore()
 const skillStore = useSkillStore()
+// 审查修复：loadBuiltinSkills 此前全仓零调用方 —— 内置技能扫描、后端同步
+// （syncBuiltinToBackend → SkillRein 匹配）与远程 manual/auto 装载整条链路
+// 悬空，斜杠技能菜单永远为空。面板创建时装载一次（重复挂载重扫，语义同刷新）。
+void skillStore.loadBuiltinSkills()
 const toast = useToastStore()
 
 // ── 消息接口（兼容 ModeMessage 和 MessageItem 的 ChatMessage） ──
@@ -276,7 +280,6 @@ interface DisplayMsg {
 
 // ── Props ──
 const props = defineProps<{
-  mode: 'ssh'
   conversations: Array<{ id: string; title: string; updated_at: string }>
   currentConvId: string | null
   messages: DisplayMsg[]
@@ -943,7 +946,7 @@ defineExpose({ focusInput, restoreDraft })
   left: 0;
   right: 0;
   margin-bottom: 4px;
-  background: var(--bg-sidebar, #1a1a1a);
+  background: var(--bg-sidebar-solid, #1a1a1a);
   border: 1px solid var(--border-default);
   border-radius: 6px;
   box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.5);
@@ -1120,7 +1123,7 @@ defineExpose({ focusInput, restoreDraft })
   left: 50%;
   transform: translateX(-50%);
   margin-bottom: 4px;
-  background: var(--bg-hover);
+  background: var(--bg-elevated-solid, #232323);
   border: 1px solid var(--border-default);
   border-radius: 6px;
   padding: 4px;
