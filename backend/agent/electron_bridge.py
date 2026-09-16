@@ -93,7 +93,10 @@ _HTTP_TIMEOUT_MARGIN = 5.0
 # WS 通道"短等待"预算（秒）：任务触发时 WS 未连接（典型场景：后端刚被
 # BackendManager 自动重启，主进程重连在途）最多等这么久；仍不通再走 HTTP 兜底。
 _WS_CONNECT_WAIT_S = 5.0
-_WS_POLL_S = 0.2
+# 探活专用预算：健康检查高频且非关键路径，等通道的时间应远小于任务触发路径
+# （事件驱动后等待零轮询延迟，1s 足以覆盖重连在途窗口）；HTTP-only 部署下
+# 每次探活最多多花这 1s，而非阶段 1 的固定 5s。
+_WS_PROBE_WAIT_S = 1.0
 
 
 class ElectronBridge:
@@ -122,16 +125,20 @@ class ElectronBridge:
         relay = get_bridge_relay()
         return relay is not None and relay.connected
 
-    async def _wait_ws(self, budget: float = _WS_CONNECT_WAIT_S) -> bool:
-        """最多等 budget 秒让 WS 通道就绪（每 0.2s 轮询一次）。"""
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + budget
-        while True:
-            if self._ws_connected():
-                return True
-            if loop.time() >= deadline:
-                return False
-            await asyncio.sleep(_WS_POLL_S)
+    async def _wait_ws(self, budget: float | None = None) -> bool:
+        """最多等 budget 秒让 WS 通道就绪（事件驱动，无轮询）。
+
+        budget 默认取调用时的模块常量（保持可被测试 monkeypatch），
+        就绪事件由 bridge_relay 在 hello 鉴权通过时置位。
+        """
+        from agent.bridge_relay import get_bridge_relay
+
+        if budget is None:
+            budget = _WS_CONNECT_WAIT_S
+        relay = get_bridge_relay()
+        if relay is None:
+            return False
+        return await relay.wait_ready(budget)
 
     async def _ws_request(self, op: str, payload: dict, timeout: float) -> dict:
         """经 WS 通道下发一条请求并等待结果。
@@ -197,12 +204,12 @@ class ElectronBridge:
              失效 —— 之前"端口假监听导致的超时"被报成"端口关闭"，把排查方向
              指向了错误的结论。
           3. 阶段 1 起 WS 优先：反向连接已建立即视为可达（通道即健康）；
-             未建立时最多等 _WS_CONNECT_WAIT_S 秒（覆盖后端刚重启、主进程
-             重连在途的窗口），仍不通再对 HTTP 兜底通道探活。
+             未建立时最多等 _WS_PROBE_WAIT_S 秒（事件驱动，覆盖后端刚重启、
+             主进程重连在途的窗口），仍不通再对 HTTP 兜底通道探活。
         """
         if not self.is_available():
             return BridgeErrorCode.NOT_CONFIGURED
-        if await self._wait_ws(_WS_CONNECT_WAIT_S):
+        if await self._wait_ws(_WS_PROBE_WAIT_S):
             return None
         return await self._probe_http(timeout)
 

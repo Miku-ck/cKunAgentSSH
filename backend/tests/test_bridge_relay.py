@@ -256,6 +256,35 @@ async def test_stale_teardown_does_not_kill_new_connection_requests(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_wait_ready_event(monkeypatch):
+    """wait_ready：未就绪时 await 事件，hello 后立即返回；断开后事件清空。"""
+    monkeypatch.setenv("ELECTRON_BRIDGE_TOKEN", TOKEN)
+    relay = BridgeRelay()
+    set_bridge_relay(relay)
+    try:
+        # 未连接：预算内等不到 → False（且耗时受预算约束）
+        assert await relay.wait_ready(0.05) is False
+
+        ws = FakeWS()
+        handler = asyncio.create_task(relay.handle_bridge_ws(ws))
+        # 并发等待与 hello 竞速：hello 完成后等待方应立即返回 True
+        waiter = asyncio.create_task(relay.wait_ready(2.0))
+        await asyncio.sleep(0.02)
+        await ws.inbound.put(_hello())
+        await _wait_frame(ws, lambda f: f.get("type") == "hello-ack")
+        assert await asyncio.wait_for(waiter, 2.0) is True
+        # 已就绪：同步立即返回
+        assert await relay.wait_ready(0.0) is True
+
+        # 断开：事件清空，再次等待超时返回 False
+        ws.inbound.put_nowait(None)
+        await asyncio.wait_for(handler, 2.0)
+        assert await relay.wait_ready(0.05) is False
+    finally:
+        set_bridge_relay(None)
+
+
+@pytest.mark.asyncio
 async def test_ping_pong(monkeypatch):
     monkeypatch.setenv("ELECTRON_BRIDGE_TOKEN", TOKEN)
     relay = BridgeRelay()

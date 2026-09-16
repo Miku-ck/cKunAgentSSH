@@ -55,6 +55,9 @@ class BridgeRelay:
         self._lock = asyncio.Lock()  # 保护 _ws/_hello_ok 槽位切换
         self._pending: dict[str, asyncio.Future] = {}
         self._id_counter = itertools.count(1)
+        # 通道就绪事件：hello 成功置位，断开/替换清空。
+        # 等待方（electron_bridge._wait_ws）await 此事件而非轮询 connected。
+        self._ready_event = asyncio.Event()
 
     # ── 对外查询 ────────────────────────────────────
 
@@ -62,6 +65,22 @@ class BridgeRelay:
     def connected(self) -> bool:
         """WS 通道是否就绪（已连接且 hello 鉴权通过）。"""
         return self._ws is not None and self._hello_ok
+
+    async def wait_ready(self, timeout: float) -> bool:
+        """最多等 timeout 秒让通道就绪；就绪（或本已就绪）返回 True。
+
+        事件驱动的关键点：置位发生在持有 _lock 的槽位切换完成后，此处先做
+        一次同步检查再 await，覆盖"事件刚置位但调用方尚未观察到"的竞态。
+        """
+        if self.connected:
+            return True
+        try:
+            await asyncio.wait_for(self._ready_event.wait(), timeout)
+        except asyncio.TimeoutError:
+            pass
+        # 成功与超时分支统一复查：事件可能在唤醒前被 set 后又 clear
+        # （连接刚建立即断开/替换），不能凭事件唤醒就认定就绪
+        return self.connected
 
     async def send_request(self, op: str, payload: dict, timeout: float) -> tuple[int, dict | None]:
         """下发一条 req 帧并等待对应 res 帧。
@@ -135,6 +154,7 @@ class BridgeRelay:
             old = self._ws
             self._ws = ws
             self._hello_ok = True
+            self._ready_event.set()
             if old is not None and old is not ws:
                 stale_pending, self._pending = self._pending, {}
         if old is not None and old is not ws:
@@ -184,6 +204,7 @@ class BridgeRelay:
                 if self._ws is ws:
                     self._ws = None
                     self._hello_ok = False
+                    self._ready_event.clear()
                     self._fail_all_pending("bridge connection closed")
             logger.info("[BridgeRelay] bridge ws channel closed")
 

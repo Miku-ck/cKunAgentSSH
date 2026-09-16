@@ -39,6 +39,9 @@ class FakeRelay:
             raise BridgeWsLostError("simulated drop")
         return self._result
 
+    async def wait_ready(self, timeout):
+        return self.connected
+
 
 def _use_relay(monkeypatch, relay):
     monkeypatch.setattr(bridge_relay, "get_bridge_relay", lambda: relay)
@@ -101,8 +104,8 @@ async def test_probe_ws_connected_returns_none(env, monkeypatch):
 async def test_probe_falls_back_to_http_after_short_wait(env, monkeypatch):
     """WS 未连接 → 等短预算后回落 HTTP 探活（不等待真实 5s）。"""
     _use_relay(monkeypatch, FakeRelay(connected=False))
-    # 模块级常量：按模块路径 patch，缩短真实 5s 等待为 0.1s
-    monkeypatch.setattr("agent.electron_bridge._WS_CONNECT_WAIT_S", 0.1)
+    # 模块级常量：按模块路径 patch，缩短真实 1s 等待为 0.1s
+    monkeypatch.setattr("agent.electron_bridge._WS_PROBE_WAIT_S", 0.1)
     probed: list[float] = []
 
     async def _fake_probe(self, timeout):

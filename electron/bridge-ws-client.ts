@@ -16,8 +16,12 @@ const WS_PATH = '/ws/bridge'
 const PING_INTERVAL_MS = 30_000
 /** 连续 N 轮 ping 无 pong → 判定连接死亡，主动关闭触发重连 */
 const MAX_MISSED_PONGS = 2
+/** hello-ack 等待超时：连接建立但握手无响应（半开/服务端假活）→ 关闭重连 */
+const HELLO_ACK_TIMEOUT_MS = 5_000
 const RECONNECT_BASE_MS = 1_000
 const RECONNECT_MAX_MS = 15_000
+/** 重连退避抖动幅度：±30%，避免后端重启完成时主进程侧重连风暴同步共振 */
+const RECONNECT_JITTER = 0.3
 
 const WS_STATE_OPEN = 1
 
@@ -53,6 +57,7 @@ export class BridgeWsClient {
   private connecting = false
   private reconnectTimer: NodeJS.Timeout | null = null
   private pingTimer: NodeJS.Timeout | null = null
+  private helloAckTimer: NodeJS.Timeout | null = null
   private missedPongs = 0
   private reconnectDelay = RECONNECT_BASE_MS
 
@@ -117,6 +122,7 @@ export class BridgeWsClient {
       this.missedPongs = 0
       log(`已连接 127.0.0.1:${this.port}${WS_PATH}，发送 hello`)
       this.sendJson({ type: 'hello', token: this.token })
+      this.armHelloAckTimeout(ws)
       this.startPing()
     }
 
@@ -129,6 +135,7 @@ export class BridgeWsClient {
       }
       switch (msg?.type) {
         case 'hello-ack':
+          this.disarmHelloAckTimeout()
           log('hello-ack 收到，通道就绪')
           break
         case 'pong':
@@ -157,6 +164,7 @@ export class BridgeWsClient {
   /** 主动关闭当前 socket（null 掉 onclose 以抑制重连调度）。 */
   private closeCurrent(): void {
     this.stopPing()
+    this.disarmHelloAckTimeout()
     const ws = this.ws
     this.ws = null
     // 关键：socket 可能处于 CONNECTING（握手在途）— 其 onopen/onclose 已被 null，
@@ -178,7 +186,10 @@ export class BridgeWsClient {
   private scheduleReconnect(): void {
     if (this.stopped) return
     this.cancelReconnect()
-    const delay = this.reconnectDelay
+    // 指数退避 + ±30% 抖动：后端自动重启完成、多窗口/多场景同时恢复时，
+    // 固定退避会让重连尝试同步共振；抖动把风暴摊开
+    const jitter = 1 + (Math.random() * 2 - 1) * RECONNECT_JITTER
+    const delay = Math.min(this.reconnectDelay * jitter, RECONNECT_MAX_MS)
     this.reconnectDelay = Math.min(this.reconnectDelay * 2, RECONNECT_MAX_MS)
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
@@ -191,6 +202,44 @@ export class BridgeWsClient {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
+    }
+  }
+
+  // ── hello-ack 超时判定（半开连接检测）──────────────
+
+  /**
+   * 连接建立后若 HELLO_ACK_TIMEOUT_MS 内未收到 hello-ack，判定为半开/
+   * 服务端假活（TCP 已通但对端无响应），主动关闭让 onclose 走重连路径。
+   * 正常情况下 hello-ack 在服务端 hello 鉴权后立即到达（毫秒级），不会触发。
+   */
+  private armHelloAckTimeout(ws: WsSocket): void {
+    this.disarmHelloAckTimeout()
+    this.helloAckTimer = setTimeout(() => {
+      this.helloAckTimer = null
+      if (this.ws !== ws) return // 已被 closeCurrent/setTarget 换掉
+      log(`${HELLO_ACK_TIMEOUT_MS}ms 内未收到 hello-ack，判定半开连接，关闭重连`)
+      // 摘除事件句柄再关闭：抑制 socket 迟到的 close 事件二次调度重连
+      // （否则退避被双重翻倍 4×），与 closeCurrent 的契约一致
+      ws.onopen = null
+      ws.onmessage = null
+      ws.onclose = null
+      ws.onerror = null
+      this.stopPing()
+      this.ws = null
+      try {
+        ws.close(1000)
+      } catch {
+        /* 忽略 */
+      }
+      this.scheduleReconnect()
+    }, HELLO_ACK_TIMEOUT_MS)
+    this.helloAckTimer.unref?.()
+  }
+
+  private disarmHelloAckTimeout(): void {
+    if (this.helloAckTimer) {
+      clearTimeout(this.helloAckTimer)
+      this.helloAckTimer = null
     }
   }
 
