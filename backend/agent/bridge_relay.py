@@ -74,9 +74,14 @@ class BridgeRelay:
         if ws is None or not self._hello_ok:
             raise BridgeWsLostError("bridge ws not connected")
 
-        req_id = str(next(self._id_counter))
-        fut: asyncio.Future = asyncio.get_running_loop().create_future()
-        self._pending[req_id] = fut
+        # 锁内注册并复核槽位：若捕获的 socket 恰在注册前被新连接替换，
+        # 立即失败而非在将被关闭的旧 socket 上发送、悬挂到超时
+        async with self._lock:
+            if self._ws is not ws:
+                raise BridgeWsLostError("bridge connection replaced before send")
+            req_id = str(next(self._id_counter))
+            fut: asyncio.Future = asyncio.get_running_loop().create_future()
+            self._pending[req_id] = fut
         try:
             await ws.send_text(
                 json.dumps(
@@ -84,13 +89,13 @@ class BridgeRelay:
                     ensure_ascii=False,
                 )
             )
-            try:
-                return await asyncio.wait_for(fut, timeout)
-            except asyncio.TimeoutError:
-                raise BridgeWsLostError(f"request timeout op={op} after {timeout}s") from None
         except (RuntimeError, WebSocketDisconnect) as e:
             # 发送时 socket 已死（对端刚断开）— 归为通道丢失
             raise BridgeWsLostError(f"send failed: {e}") from e
+        try:
+            return await asyncio.wait_for(fut, timeout)
+        except asyncio.TimeoutError:
+            raise BridgeWsLostError(f"request timeout op={op} after {timeout}s") from None
         finally:
             self._pending.pop(req_id, None)
 
@@ -123,14 +128,20 @@ class BridgeRelay:
             await self._safe_close(ws, CLOSE_TOKEN_REJECTED)
             return
 
-        # 2) 新者胜：替换旧连接（若存在）。旧连接的在途请求不可能再被应答，全部失败
+        # 2) 新者胜：替换旧连接（若存在）。旧连接的在途请求不可能再被应答，全部失败。
+        #    原子换掉 pending 字典再失败旧字典：替换后新连接注册的请求落在新字典，
+        #    不会被误杀。
         async with self._lock:
             old = self._ws
             self._ws = ws
             self._hello_ok = True
+            if old is not None and old is not ws:
+                stale_pending, self._pending = self._pending, {}
         if old is not None and old is not ws:
             logger.info("[BridgeRelay] 新 bridge 连接替换旧连接")
-            self._fail_all_pending("bridge connection replaced")
+            for fut in stale_pending.values():
+                if not fut.done():
+                    fut.set_exception(BridgeWsLostError("bridge connection replaced"))
             await self._safe_close(old, CLOSE_REPLACED)
 
         await self._safe_send(ws, json.dumps({"type": "hello-ack", "ok": True}))
@@ -167,12 +178,13 @@ class BridgeRelay:
         except Exception:
             logger.exception("[BridgeRelay] bridge ws 读循环异常")
         finally:
+            # 仅当本连接仍是当前连接时才清空失败 pending；若已被新连接替换，
+            # 替换路径已原子换掉字典并失败旧请求，此处不得触碰新连接的 pending
             async with self._lock:
                 if self._ws is ws:
                     self._ws = None
                     self._hello_ok = False
-            # 幂等：若已被新连接替换并清空过，这里无操作
-            self._fail_all_pending("bridge connection closed")
+                    self._fail_all_pending("bridge connection closed")
             logger.info("[BridgeRelay] bridge ws channel closed")
 
     # ── 内部工具 ────────────────────────────────────

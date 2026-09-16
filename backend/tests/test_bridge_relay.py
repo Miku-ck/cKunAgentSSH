@@ -216,6 +216,46 @@ async def test_new_connection_replaces_old(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_stale_teardown_does_not_kill_new_connection_requests(monkeypatch):
+    """竞态回归：旧连接被替换后真实断开，其 teardown 不得失败化新连接的在途请求。"""
+    monkeypatch.setenv("ELECTRON_BRIDGE_TOKEN", TOKEN)
+    relay = BridgeRelay()
+    set_bridge_relay(relay)
+    try:
+        ws1, ws2 = FakeWS(), FakeWS()
+        h1 = asyncio.create_task(relay.handle_bridge_ws(ws1))
+        await ws1.inbound.put(_hello())
+        await _wait_frame(ws1, lambda f: f.get("type") == "hello-ack")
+
+        # 新连接接入并完成 hello（新者胜，ws1 被关闭标记）
+        h2 = asyncio.create_task(relay.handle_bridge_ws(ws2))
+        await ws2.inbound.put(_hello())
+        await _wait_frame(ws2, lambda f: f.get("type") == "hello-ack")
+        assert ws1.close_code == CLOSE_REPLACED
+
+        # 现实场景：被替换的旧 socket 随即真正断开，h1 进入 teardown
+        ws1.inbound.put_nowait(None)
+        await asyncio.wait_for(h1, 2.0)
+        assert relay.connected is True  # 新连接不受影响
+
+        # teardown 完成后在新连接上发请求，必须正常往返
+        pend2 = asyncio.create_task(relay.send_request("ssh_exec", {"command": "ls"}, 5.0))
+        req2 = await _wait_frame(ws2, lambda f: f.get("type") == "req")
+        await ws2.inbound.put(
+            json.dumps({"type": "res", "id": req2["id"], "status": 200, "result": {"ok": True}})
+        )
+        status, result = await asyncio.wait_for(pend2, 2.0)
+        assert status == 200
+        assert result == {"ok": True}
+
+        ws2.inbound.put_nowait(None)
+        await asyncio.wait_for(h2, 2.0)
+        assert relay.connected is False
+    finally:
+        set_bridge_relay(None)
+
+
+@pytest.mark.asyncio
 async def test_ping_pong(monkeypatch):
     monkeypatch.setenv("ELECTRON_BRIDGE_TOKEN", TOKEN)
     relay = BridgeRelay()

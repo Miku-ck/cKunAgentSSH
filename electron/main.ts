@@ -1455,11 +1455,23 @@ app.whenReady().then(async () => {
   backendManager = new BackendManager()
   // 桥接 env（port/token）提升到此处：WS 反向通道的重定向需要引用 token
   let bridgeEnv: { port: number; token: string } = { port: 0, token: '' }
+  // 创建（若尚未创建）并指向 WS 反向通道；后端首次启动与崩溃自动重启共用，
+  // 避免首次 start 失败后重启时 client 仍为 null、通道整个会话不建立的漏洞
+  const ensureBridgeWsClient = (port: number) => {
+    if (!electronBridge || !bridgeEnv.token) return
+    if (!bridgeWsClient) {
+      const bridge = electronBridge
+      bridgeWsClient = new BridgeWsClient(async (op, payload) =>
+        bridge.dispatch(op as BridgeOp, payload),
+      )
+    }
+    bridgeWsClient.setTarget(port, bridgeEnv.token)
+  }
   // 后端状态变化（含崩溃自动重启）统一通过回调推送到前端
   backendManager.onStatusChange = (data) => {
-    // 自动重启 ready（端口可能变化）时重新指向 WS 反向通道
-    if (data.status === 'ready' && data.port && bridgeWsClient && bridgeEnv.token) {
-      bridgeWsClient.setTarget(data.port, bridgeEnv.token)
+    // 自动重启 ready（端口可能变化）时（重新）指向 WS 反向通道
+    if (data.status === 'ready' && data.port) {
+      ensureBridgeWsClient(data.port)
     }
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('backend:status', data)
@@ -1478,12 +1490,7 @@ app.whenReady().then(async () => {
     console.log(`[BackendManager] Python backend ready on port ${port}`)
     // WS 反向通道（阶段 1）：主进程出站拨号后端，定时任务命令的主链路；
     // HTTP 端口桥（bridgeEnv.port）保留为兜底通道
-    if (electronBridge && bridgeEnv.token) {
-      bridgeWsClient = new BridgeWsClient(async (op, payload) =>
-        electronBridge!.dispatch(op as BridgeOp, payload),
-      )
-      bridgeWsClient.setTarget(port, bridgeEnv.token)
-    }
+    ensureBridgeWsClient(port)
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('backend:status', { status: 'ready', port })
     }
