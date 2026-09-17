@@ -60,7 +60,7 @@ git 历史印证：近期多轮系统性清理（"后端深扫——死函数/�
 
 | # | 建议 | 收益 | 成本 |
 |---|---|---|---|
-| 1 | Monaco 语言裁剪：`src/monaco-setup.ts` 全量引入 85 个语言 + 5 个 worker，只留运维常用语言（json/yaml/bash/python/shell）或降纯文本 | out/ 70 万行 → 10 万行内，安装包显著变小 | 低 |
+| 1 | ✅ Monaco 语言裁剪（已实施）：`src/monaco-setup.ts` 全量入口 `editor.main`（85 语言）改按需导入（核心 API + 5 worker + 4 富语言服务 + 27 运维常用语言）。实测：语言 chunk 85→27（保留合计约 173KB），构建 js chunk 92→39，out/ 产物约减 1MB（29M→28M）。大头 ts.worker 13MB / index 10.4MB 未变，进一步瘦身需 highlight.js 语言子集化（`markdown.ts` 全量引入）与 ts.worker 按需评估 | 低 |
 | 2 | 删 `@types/dompurify` | 去冗余依赖 | 一行 |
 | 3 | `trafilatura` 移到 `requirements-optional.txt` | 后端安装更轻，降级逻辑已就绪 | 低 |
 | 4 | 定期清本地残留（tests/_tmp 7 个 db、__pycache__、.pytest_cache、.benchmarks） | 磁盘整洁 | 低 |
@@ -69,4 +69,4 @@ git 历史印证：近期多轮系统性清理（"后端深扫——死函数/�
 
 ## 总体评价
 
-无注水、零死代码、依赖近乎零冗余的成熟项目。四万多行是三端 + 完整 Agent 框架的真实功能量，后端测试到位。唯一值得动手的实质瘦身是 monaco 全量语言打包（建议 #1）。
+无注水、零死代码、依赖近乎零冗余的成熟项目。四万多行是三端 + 完整 Agent 框架的真实功能量，后端测试到位。建议 #1（monaco 按需加载）已实施：语言 chunk 85→27、构建 chunk 92→39、产物约减 1MB；如需更大瘦身，下一步是 highlight.js 语言子集化（markdown.ts 中全量 import）与 ts.worker（13MB，未压缩）的按需评估。
