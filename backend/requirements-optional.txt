@@ -1,0 +1,4 @@
+# 可选依赖（web_fetch 工具增强）
+# trafilatura 用于网页正文提取；未安装时自动降级到内置 _strip_html
+# 安装: pip install -r requirements-optional.txt
+trafilatura>=1.12.0,<2.0

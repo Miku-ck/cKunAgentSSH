@@ -102,7 +102,7 @@
 <script setup lang="ts">
 import { formatBytes } from '@/utils/format'
 import { ref, computed, watch, onUnmounted, nextTick, markRaw } from 'vue'
-import * as monaco from 'monaco-editor'
+import * as monaco from 'monaco-editor/esm/vs/editor/editor.api.js'
 import { getLanguage } from '@/utils/language'
 import { useToastStore } from '@/stores/toast'
 import { toFriendlyMessage } from '@/api/client'

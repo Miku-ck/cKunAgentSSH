@@ -12,7 +12,7 @@ SSH 智能运维终端 — 集成 SSH 连接管理、远程终端、SFTP 文件�
 - **命令补全**：Tab 补全，通过 SSH exec 远程查询候选
 - **快捷命令栏**：自定义命令快捷执行
 - **AI 运维助手**：流式对话 + 思考链、多模型切换、Agent 智能体（工具调用）
-- **Agent 框架（Harness）**：ReAct 决策循环、9 拦截器、22 工具、动态步数预算、循环检测、成本熔断
+- **Agent 框架（Harness）**：ReAct 决策循环、10 拦截器、22 工具、动态步数预算、循环检测、成本熔断
 
 ## 技术栈
 
@@ -64,7 +64,7 @@ SSH 智能运维终端 — 集成 SSH 连接管理、远程终端、SFTP 文件�
         │  • Chat 流式对话 (SSE)          │
         │  • Agent Harness 框架          │
         │    - ReAct 决策循环            │
-        │    - 9 拦截器 (Reins)          │
+        │    - 10 拦截器 (Reins)         │
         │    - 22 工具 (Saddle)         │
         │    - 动态预算 + 成本熔断       │
         │  • 会话持久化 (SQLite)          │
@@ -181,6 +181,7 @@ cKunAgentSSH/
 │   ├── safe_tokens.py                 # Token 安全处理
 │   ├── sse_utils.py                   # SSE 工具函数
 │   ├── requirements.txt               # Python 依赖
+│   ├── requirements-optional.txt      # 可选依赖（trafilatura 网页正文提取）
 │   │
 │   ├── agent/                         # Agent 智能体框架
 │   │   ├── harness/                   # Harness 核心（马术装备隐喻）
@@ -189,7 +190,7 @@ cKunAgentSSH/
 │   │   │   ├── bridle.py              # 上下文组装 + 压缩
 │   │   │   ├── saddle.py              # 工具执行 + 沙箱
 │   │   │   ├── stirrups.py            # LLM 调用 + 重试
-│   │   │   ├── reins.py               # 9 拦截器策略层
+│   │   │   ├── reins.py               # 10 拦截器策略层
 │   │   │   ├── safety.py              # 命令/路径/SSRF 安全防御
 │   │   │   ├── telemetry.py           # 遥测总线
 │   │   │   ├── contracts.py           # 契约定义
@@ -278,7 +279,7 @@ Agent 框架采用马术装备隐喻，契约驱动设计。
 
 ```
 Driver（驭手）—— ReAct 决策循环主驱动
-  ├── Reins（缰绳）—— 9 拦截器策略层
+  ├── Reins（缰绳）—— 10 拦截器策略层
   │   ├── SkillRein         AGENT_START    技能注入
   │   ├── LoopDetector      PRE_TOOL_CALL  循环检测
   │   ├── PermissionGate    PRE_TOOL_CALL  权限审批
@@ -287,7 +288,8 @@ Driver（驭手）—— ReAct 决策循环主驱动
   │   ├── DynamicBudgetRein POST_ITERATION 动态步数预算
   │   ├── CostBudgetRein    POST_ITERATION 成本/token 硬熔断
   │   ├── ConfidenceMonitor POST_ITERATION 置信度监控
-  │   └── ReflectionRein    AGENT_COMPLETE 反思演化
+  │   ├── ReflectionRein    AGENT_COMPLETE 反思演化
+  │   └── ReflectionRein    AGENT_FAILED   失败反思（同组件双实例）
   │
   ├── Bridle（马缰）—— 上下文组装 + 压缩
   ├── Saddle（马鞍）—— 工具执行 + 沙箱（22 个内置工具）
@@ -401,6 +403,9 @@ npm install
 
 # 安装 Python 依赖
 cd backend && pip install -r requirements.txt && cd ..
+
+# 可选：web_fetch 工具增强（网页正文提取，未安装时自动降级）
+cd backend && pip install -r requirements-optional.txt && cd ..
 
 # 开发模式启动
 npm run dev

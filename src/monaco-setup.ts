@@ -6,12 +6,52 @@
  * 原实现仅启动时硬编码 setTheme('ckun-dark')，后续主题切换不生效
  * 现导出 applyMonacoTheme()，由 useAppearance.ts 在主题变化时调用
  */
-import * as monaco from 'monaco-editor'
+// ──────────────────────────────────────────────────────────────────────────────
+// 按需加载：核心 API + 运维常用语言（原全量入口 editor.main 打包 85 种语言，
+// 体积膨胀约 500KB+；现仅保留 language.ts 实际映射的语言）
+// ──────────────────────────────────────────────────────────────────────────────
+import * as monaco from 'monaco-editor/esm/vs/editor/editor.api.js'
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker'
 import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker'
 import cssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker'
 import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker'
 import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker'
+
+// 富语言（语言服务 + worker）
+import 'monaco-editor/esm/vs/language/json/monaco.contribution.js'
+import 'monaco-editor/esm/vs/language/typescript/monaco.contribution.js'
+import 'monaco-editor/esm/vs/language/css/monaco.contribution.js'
+import 'monaco-editor/esm/vs/language/html/monaco.contribution.js'
+
+// 语法高亮（Monarch）— 与 utils/language.ts 的扩展名映射一一对应
+// plaintext / makefile 为 core 内置语言，无需导入
+import 'monaco-editor/esm/vs/basic-languages/bat/bat.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution.js' // 注册 c + cpp
+import 'monaco-editor/esm/vs/basic-languages/csharp/csharp.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/css/css.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/dockerfile/dockerfile.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/go/go.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/graphql/graphql.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/html/html.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/ini/ini.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/java/java.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/kotlin/kotlin.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/less/less.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/php/php.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/powershell/powershell.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/python/python.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/ruby/ruby.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/rust/rust.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/scala/scala.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/scss/scss.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/shell/shell.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/sql/sql.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/swift/swift.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/xml/xml.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution.js'
 
 self.MonacoEnvironment = {
   getWorker(_: string, label: string) {
