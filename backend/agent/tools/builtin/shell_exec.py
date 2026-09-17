@@ -86,7 +86,7 @@ class ShellExecTool(BaseTool):
             return ToolResult(
                 False,
                 "",
-                "远程执行未就绪：Electron Bridge 未配置（ELECTRON_BRIDGE_PORT/TOKEN 缺失）",
+                "远程执行未就绪：Electron Bridge 未配置（ELECTRON_BRIDGE_TOKEN 缺失）",
             )
         success, output, exit_code, err = result
         if err:

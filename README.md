@@ -75,10 +75,11 @@ SSH 智能运维终端 — 集成 SSH 连接管理、远程终端、SFTP 文件�
                   vLLM (OpenAI 兼容)
 ```
 
-**两条数据流：**
+**三条数据流：**
 
 - **AI 对话**：Renderer → HTTP/SSE → Python FastAPI
 - **终端 / SSH / SFTP**：Renderer → Electron IPC → node-pty / ssh2（纯 Node.js，不经 Python）
+- **Agent 远程执行**：Python 后端 → WS 反向通道（`/ws/bridge`，主进程出站拨号、长期保持）→ Electron 主进程 dispatch → ssh2。断线 fail-closed，在途请求绝不重发（远程命令非幂等）
 
 ## 项目结构
 
@@ -88,7 +89,7 @@ cKunAgentSSH/
 │   ├── main.ts                        # 入口，窗口管理，IPC handler 注册
 │   ├── preload.ts                     # 安全桥接 API (contextBridge)
 │   ├── backend-manager.ts             # Python 进程生命周期管理
-│   ├── electron-bridge.ts             # 本地 HTTP 服务供后端调用主进程 SSH 能力
+│   ├── electron-bridge.ts             # 桥接业务实现（token 生成 + dispatch，经 WS 反向通道下发）
 │   ├── pty-manager.ts                 # node-pty 终端实例池
 │   ├── ssh-manager.ts                 # ssh2 连接池 + SFTP
 │   ├── ssh-store.ts                   # 连接配置持久化存储（safeStorage 加密）
@@ -201,7 +202,8 @@ cKunAgentSSH/
 │   │   ├── audit.py                   # 审计引擎（链式签名）
 │   │   ├── cost_tracker.py            # 成本追踪
 │   │   ├── consciousness_tick.py      # 后台心智维护
-│   │   ├── electron_bridge.py         # 桥接主进程 SSH exec
+│   │   ├── electron_bridge.py         # 桥接客户端（WS-only，经 bridge_relay 下发命令）
+│   │   ├── bridge_relay.py            # WS 反向通道服务端（/ws/bridge 单连接中枢）
 │   │   │
 │   │   └── tools/builtin/             # 22 个内置工具（SSH 模式）
 │   │       ├── shell_exec.py          # SSH 远程命令执行
@@ -242,7 +244,7 @@ cKunAgentSSH/
 - **pty-manager.ts** — node-pty 实例池，跨平台 shell 检测
 - **ssh-manager.ts** — ssh2 连接池，支持密码/密钥认证、shell channel、SFTP 断点续传
 - **ssh-store.ts** — 连接配置持久化，safeStorage OS 级加密，原子写入
-- **electron-bridge.ts** — 本地 HTTP 服务（127.0.0.1:30000），供 Python 后端调用主进程 SSH exec
+- **electron-bridge.ts** — 桥接业务实现：生成 token（注入后端 env + WS hello 共用），`dispatch()` 为 WS 通道 req 帧的唯一业务实现。阶段 2 起不再监听任何端口（HTTP 端口桥已移除）
 
 ### 渲染进程
 
@@ -364,6 +366,7 @@ INIT → THINKING → [LLM 调用] → 有工具调用?
 
 - **命令安全**：6 步归一化 + 12 HARDLINE 阻断 + 20 DANGEROUS 审批
 - **SSRF 防护**：IP 拒绝私网 + DNS rebinding 防护 + 重定向校验
+- **远端最小权限（部署侧）**：`scripts/deploy/` 提供受限账户一键部署（`setup-ckun-agent.sh`）+ 白名单执行器（`agent-exec.py`，20 模板逐条匹配、base64 洞递归封堵）+ 部署验证（`ckun-agent-verify.sh`）。Agent 在远端默认只能执行白名单内命令，与代码侧 HARDLINE/审批形成纵深；跨端一致性由契约测试 `test_remote_whitelist_contract.py` 钉死（改任一端命令格式必须跑该测试）
 
 ## 开发
 

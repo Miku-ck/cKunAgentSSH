@@ -1453,8 +1453,8 @@ app.whenReady().then(async () => {
 
   // Start Python backend
   backendManager = new BackendManager()
-  // 桥接 env（port/token）提升到此处：WS 反向通道的重定向需要引用 token
-  let bridgeEnv: { port: number; token: string } = { port: 0, token: '' }
+  // 桥接 env（token）提升到此处：WS 反向通道的重定向需要引用 token
+  let bridgeEnv: { token: string } = { token: '' }
   // 创建（若尚未创建）并指向 WS 反向通道；后端首次启动与崩溃自动重启共用，
   // 避免首次 start 失败后重启时 client 仍为 null、通道整个会话不建立的漏洞
   const ensureBridgeWsClient = (port: number) => {
@@ -1479,17 +1479,15 @@ app.whenReady().then(async () => {
   }
   try {
     if (electronBridge) {
-      bridgeEnv = await electronBridge.start()
+      bridgeEnv = electronBridge.start()
     }
     const extraEnv: Record<string, string> = {}
-    if (bridgeEnv.port) {
-      extraEnv.ELECTRON_BRIDGE_PORT = String(bridgeEnv.port)
+    if (bridgeEnv.token) {
       extraEnv.ELECTRON_BRIDGE_TOKEN = bridgeEnv.token
     }
     const port = await backendManager.start(extraEnv)
     console.log(`[BackendManager] Python backend ready on port ${port}`)
-    // WS 反向通道（阶段 1）：主进程出站拨号后端，定时任务命令的主链路；
-    // HTTP 端口桥（bridgeEnv.port）保留为兜底通道
+    // WS 反向通道：主进程出站拨号后端，定时任务命令的唯一链路（阶段 2 已移除 HTTP 端口桥）
     ensureBridgeWsClient(port)
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('backend:status', { status: 'ready', port })

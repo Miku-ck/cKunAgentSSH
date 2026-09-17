@@ -86,3 +86,4 @@ pytest-cache-files-*/
 
 # 安全删除的回收备份目录（勿提交）
 .trash-cleanup-*/
+backend/tests/_tmp/
