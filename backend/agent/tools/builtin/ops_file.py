@@ -34,6 +34,29 @@ from agent.tools.builtin.ops_common import (
     truncate_output,
 )
 
+# ── 远端命令构建（单一事实来源）──────────────────────────────
+# 这些函数是客户端→远端白名单执行器（scripts/deploy/agent-exec.py）的契约源：
+# 远端 wrapper 的正则白名单必须逐条接受这里生成的命令串，
+# 由 backend/tests/test_remote_whitelist_contract.py 跨端校验。
+
+def file_read_cmd(path: str, offset: int, limit: int) -> str:
+    """file_read 远端模板：带行号读取 [offset, offset+limit-1] 片段。"""
+    qpath = shlex.quote(path)
+    start, stop = offset, offset + limit - 1
+    return f"nl -ba {qpath} | sed -n '{start},{stop}p'"
+
+
+def file_glob_cmd(path: str, pattern: str) -> str:
+    """file_glob 远端模板：递归按 glob 名查找文件。"""
+    qpath, qpat = shlex.quote(path), shlex.quote(pattern)
+    return f"find {qpath} -name {qpat} -type f"
+
+
+def file_grep_cmd(path: str, pattern: str, max_lines: int) -> str:
+    """file_grep 远端模板：正则递归搜索 + 限行。"""
+    qpat, qpath = shlex.quote(pattern), shlex.quote(path)
+    return f"grep -rnE --color=never {qpat} {qpath} | head -n {max_lines}"
+
 
 _WRITE_REQUIRES_SSH = (
     "拒绝执行（fail-closed）：缺少 SSH 会话，文件写入/编辑仅限远程目标服务器，"
@@ -86,9 +109,7 @@ class FileReadTool(BaseTool):
             return ToolResult(False, "", err)
 
         if is_remote(context):
-            qpath = shlex.quote(path)
-            start, stop = offset, offset + limit - 1
-            cmd = f"nl -ba {qpath} | sed -n '{start},{stop}p'"
+            cmd = file_read_cmd(path, offset, limit)
             ok, output = await run_headless(context, cmd, self.meta.timeout)
             if not ok:
                 return ToolResult(False, output, "读取文件失败")
@@ -235,8 +256,7 @@ class FileGlobTool(BaseTool):
             return ToolResult(False, "", "非法路径：包含 `..`，禁止越界访问")
 
         if is_remote(context):
-            qpath, qpat = shlex.quote(path), shlex.quote(pattern)
-            cmd = f"find {qpath} -name {qpat} -type f"
+            cmd = file_glob_cmd(path, pattern)
             ok, output = await run_headless(context, cmd, self.meta.timeout)
             if not ok:
                 return ToolResult(False, output, "glob 查找失败")
@@ -291,8 +311,7 @@ class FileGrepTool(BaseTool):
         max_lines = min(5000, max(1, int(max_lines)))
 
         if is_remote(context):
-            qpat, qpath = shlex.quote(pattern), shlex.quote(path)
-            cmd = f"grep -rnE --color=never {qpat} {qpath} | head -n {max_lines}"
+            cmd = file_grep_cmd(path, pattern, max_lines)
             ok, output = await run_headless(context, cmd, self.meta.timeout)
             lines = drop_sentinel_lines(output)
             if not lines:

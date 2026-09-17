@@ -23,6 +23,15 @@ _NO_SYSTEMCTL_MSG = (
 )
 
 
+def service_cmd(action: str, name: str) -> str:
+    """service_manage 远端模板：固定 systemctl 动词 + 校验后的服务名。
+
+    契约源：与远端白名单执行器（scripts/deploy/agent-exec.py）对齐，
+    由 backend/tests/test_remote_whitelist_contract.py 跨端校验。
+    """
+    return f"systemctl {action} {shlex.quote(name)}"
+
+
 class ServiceManageTool(BaseTool):
     name = "service_manage"
     description = "通过 systemctl 管理系统服务（status/start/stop/restart）。仅用于 ssh 模式。"
@@ -58,8 +67,7 @@ class ServiceManageTool(BaseTool):
         if err:
             return ToolResult(False, "", err)
 
-        quoted = shlex.quote(name)
-        command = f"systemctl {action} {quoted}"
+        command = service_cmd(action, name)
 
         success, output = await run_headless(context, command, 30)
 

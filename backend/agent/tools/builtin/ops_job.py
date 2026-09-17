@@ -218,6 +218,66 @@ def _parse_remote_pid(output: str) -> Optional[int]:
     return None
 
 
+# ── 远端命令构建（单一事实来源）──────────────────────────────
+# 契约源：与远端白名单执行器（scripts/deploy/agent-exec.py）对齐，
+# 由 backend/tests/test_remote_whitelist_contract.py 跨端校验。
+
+def job_launch_cmd(job_id: str, cmd: str) -> str:
+    """job_run 远端启动模板：mkdir 目录 → base64 落 run.sh → setsid 后台运行 → echo $!。"""
+    d = f"{_JOBS_ROOT}/{job_id}"
+    script = f"{d}/run.sh"
+    log = f"{d}/out.log"
+    rc = f"{d}/rc"
+    script_content = f"#!/bin/bash\n{cmd}\necho $? > {rc}\n"
+    sb64 = base64.b64encode(script_content.encode("utf-8")).decode("ascii")
+    return (
+        f"mkdir -p {d}\n"
+        f"echo {sb64} | base64 -d > {script}\n"
+        f"setsid bash {script} > {log} 2>&1 < /dev/null &\n"
+        f"echo $!"
+    )
+
+
+def job_read_cmd(log_dir: str, offset: int) -> str:
+    """job_output 远端模板：读退出码文件 + 增量 tail 日志。"""
+    d = log_dir
+    n = offset + 1
+    return (
+        f"RC=; [ -f {d}/rc ] && RC=$(cat {d}/rc); "
+        f"printf 'CKUNJOB_RC=%s\\n' \"$RC\"; "
+        f"[ -f {d}/out.log ] && tail -c +{n} {d}/out.log"
+    )
+
+
+def job_kill_cmd(pid: int) -> str:
+    """job_kill 远端模板：整进程组 TERM → 3s → KILL 升级。"""
+    return (
+        f"kill -TERM -- -{pid} 2>/dev/null; sleep 3; "
+        f"if kill -0 {pid} 2>/dev/null; then "
+        f"kill -KILL -- -{pid} 2>/dev/null; sleep 1; "
+        f"kill -0 {pid} 2>/dev/null && echo CKUNJOB_STILL || echo CKUNJOB_DEAD; "
+        f"else echo CKUNJOB_DEAD; fi"
+    )
+
+
+def job_reconcile_alive_cmd(pids) -> str:
+    """job_list 对账模板①：kill -0 批量判活。"""
+    pid_list = " ".join(str(p) for p in pids)
+    return (
+        f"for p in {pid_list}; do kill -0 $p 2>/dev/null && echo \"$p ALIVE\" "
+        f"|| echo \"$p DEAD\"; done"
+    )
+
+
+def job_reconcile_rcs_cmd(log_dirs) -> str:
+    """job_list 对账模板②：批量读退出码文件。"""
+    dir_list = " ".join(log_dirs)
+    return (
+        f"for J in {dir_list}; do R=''; [ -f $J/rc ] && R=$(cat $J/rc); "
+        f"printf '%s\\n' \"$R\"; done"
+    )
+
+
 async def _remote_launch(context, job_id: str, cmd: str) -> tuple[bool, Optional[int], str]:
     """远程启动后台任务，返回 (ok, pid, error)。
 
@@ -229,14 +289,7 @@ async def _remote_launch(context, job_id: str, cmd: str) -> tuple[bool, Optional
     script = f"{d}/run.sh"
     log = f"{d}/out.log"
     rc = f"{d}/rc"
-    script_content = f"#!/bin/bash\n{cmd}\necho $? > {rc}\n"
-    sb64 = base64.b64encode(script_content.encode("utf-8")).decode("ascii")
-    launch_cmd = (
-        f"mkdir -p {d}\n"
-        f"echo {sb64} | base64 -d > {script}\n"
-        f"setsid bash {script} > {log} 2>&1 < /dev/null &\n"
-        f"echo $!"
-    )
+    launch_cmd = job_launch_cmd(job_id, cmd)
     ok, out = await run_headless(context, launch_cmd, timeout=20)
     if not ok:
         return False, None, f"远程启动失败: {out}"
@@ -249,13 +302,7 @@ async def _remote_launch(context, job_id: str, cmd: str) -> tuple[bool, Optional
 
 async def _remote_read(context, entry: JobEntry) -> tuple[str, Optional[int]]:
     """增量读取远程任务输出，返回 (new_output, rc|None)。"""
-    d = entry.log_dir
-    n = entry.out_offset + 1
-    cmd = (
-        f"RC=; [ -f {d}/rc ] && RC=$(cat {d}/rc); "
-        f"printf 'CKUNJOB_RC=%s\\n' \"$RC\"; "
-        f"[ -f {d}/out.log ] && tail -c +{n} {d}/out.log"
-    )
+    cmd = job_read_cmd(entry.log_dir, entry.out_offset)
     ok, out = await run_headless(context, cmd, timeout=15)
     if not ok:
         return f"读取远程输出失败: {out}", None
@@ -283,13 +330,7 @@ async def _remote_kill(context, entry: JobEntry) -> str:
     if not entry.pid:
         return "NO_PID"
     pid = entry.pid
-    cmd = (
-        f"kill -TERM -- -{pid} 2>/dev/null; sleep 3; "
-        f"if kill -0 {pid} 2>/dev/null; then "
-        f"kill -KILL -- -{pid} 2>/dev/null; sleep 1; "
-        f"kill -0 {pid} 2>/dev/null && echo CKUNJOB_STILL || echo CKUNJOB_DEAD; "
-        f"else echo CKUNJOB_DEAD; fi"
-    )
+    cmd = job_kill_cmd(pid)
     ok, out = await run_headless(context, cmd, timeout=15)
     if not ok:
         return f"远程 kill 失败: {out}"
@@ -548,10 +589,8 @@ async def _reconcile_remote(mgr: JobManager, entries: List[JobEntry]) -> None:
                 mgr.update_status(e.job_id, "exited", None)
             continue
         ctx = _session_ctx(sid)
-        pids = " ".join(str(e.pid) for e in group)
-        ok, out = await run_headless(ctx,
-            f"for p in {pids}; do kill -0 $p 2>/dev/null && echo \"$p ALIVE\" "
-            f"|| echo \"$p DEAD\"; done", timeout=15)
+        pid_list = [e.pid for e in group]
+        ok, out = await run_headless(ctx, job_reconcile_alive_cmd(pid_list), timeout=15)
         if not ok:
             return  # 桥接不可达 — 保持原状态，下次对账
         alive = {
@@ -562,10 +601,8 @@ async def _reconcile_remote(mgr: JobManager, entries: List[JobEntry]) -> None:
         if not dead:
             return
         # 死掉的任务读 rc 文件定终态
-        dirs = " ".join(e.log_dir for e in dead)
-        ok2, out2 = await run_headless(ctx,
-            f"for J in {dirs}; do R=''; [ -f $J/rc ] && R=$(cat $J/rc); "
-            f"printf '%s\\n' \"$R\"; done", timeout=15)
+        dead_dirs = [e.log_dir for e in dead]
+        ok2, out2 = await run_headless(ctx, job_reconcile_rcs_cmd(dead_dirs), timeout=15)
         rcs = out2.splitlines() if ok2 else []
         rcs = [l for l in rcs if not l.startswith("[exit_code")]
         for i, e in enumerate(dead):

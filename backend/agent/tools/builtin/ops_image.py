@@ -17,11 +17,19 @@ import shlex
 
 from agent.tools import BaseTool, ToolResult, ToolMeta
 from agent.tools.builtin.ops_common import (
+    base64_read_cmd,
     is_remote,
     is_traversal,
     run_headless,
     strip_remote_tail,
 )
+
+# 契约模板：远端白名单 read_image 动词（base64 -i，容忍换行分隔）。
+# 与远端执行器 scripts/deploy/agent-exec.py 的白名单对齐，
+# 由 backend/tests/test_remote_whitelist_contract.py 跨端校验。
+def image_read_cmd(path: str) -> str:
+    """read_image 远端模板：base64 -i 读图片（-i 忽略非字母字符，容忍换行）。"""
+    return f"base64 -i {shlex.quote(path)}"
 
 # 最大允许文件大小（字节，10MB）
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -69,8 +77,8 @@ class ReadImageTool(BaseTool):
         mime = _EXT_MIME[os.path.splitext(path)[1].lstrip(".").lower()]
 
         if is_remote(context):
-            qpath = shlex.quote(path)
-            ok, output = await run_headless(context, f"base64 -i {qpath}", 20)
+            # 契约模板：远端白名单 read_image 动词（base64 -i，容忍换行分隔）
+            ok, output = await run_headless(context, image_read_cmd(path), 20)
             if not ok:
                 return ToolResult(False, output, "远程读取图片失败")
             b64 = re.sub(r"\s+", "", strip_remote_tail(output))

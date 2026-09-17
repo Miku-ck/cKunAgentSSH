@@ -1,6 +1,8 @@
 # P3 实施计划：远端最小权限账户 + 命令白名单 + 预变更快照集成
 
-> 状态：代码层（P0/P1/路径#4/P2）已闭环；本计划补足**部署/运维侧**的远端权限收敛。
+> 状态：**已实现（2026-09-16）**。代码层（P0/P1/路径#4/P2）此前已闭环；本计划补足的**部署/运维侧**远端权限收敛已落地——
+> 交付物见 `scripts/deploy/`（`agent-exec.py` 白名单执行器 + `setup-ckun-agent.sh` 一键部署 + `ckun-agent-verify.sh` 部署后验证），
+> 并由跨端契约测试 `backend/tests/test_remote_whitelist_contract.py` 钉死客户端模板与远端白名单的一致性。
 > 前置依赖：Electron Bridge 已 fail-closed（`run_headless` 缺会话/桥不可用时拒绝本机执行）、
 > `FileContentUndo` 已在 `UndoBuilder.build` 中落地（执行前快照远端原内容，失败时内容级还原）。
 > 本计划不改动上述代码，而是让远端账户**默认就什么都不该做超出白名单的事**。
@@ -170,3 +172,66 @@ if __name__ == "__main__":
 - **白名单是否含 `systemctl`/`service`**：运维作业若需启停服务，需单独动词 + 精确 unit 白名单，
   不在本基础动词集内，建议作为 P3.1 单独设计。
 - **多目标机一致性**：上述配置需经配置管理（Ansible/脚本）统一下发，避免逐机漂移。
+
+## 8. 实现记录与决策落点（2026-09-16 落地）
+
+第 7 节三个决策的落点（self-use 场景，已拍板）：
+
+1. **作业执行模型 —— 保留任意命令，wrapper 递归封堵 base64 洞**
+   不改成纯 `job <name>` 预注册（那会让 `job_run` 远端能力退化、丢失灵活性）。
+   改为：`agent-exec` 对 `job_run` 启动命令**解码 run.sh 并对内部命令递归做安全分类**
+   （移植后端 `safety.py` 的 HARDLINE/DANGEROUS 正则表）——
+   `hardline` 恒拒；`dangerous` 默认拒绝（可用 `CKUN_AGENT_ALLOW_DANGEROUS_JOB=1` 放宽，self-use 信任场景）。
+   普通运维命令（sleep/df/grep/systemctl status 等）照常放行。
+   > 这是原始设计未覆盖的关键绕过：`echo <b64>|base64 -d>run.sh; setsid bash run.sh`
+   > 表面是合法模板，内部命令可藏任意 payload。契约测试
+   > `test_job_base64_hole_encoded_payload_rejected` 专门钉死。
+
+2. **systemctl —— 纳入白名单，动词收敛**
+   `systemctl (status|start|stop|restart) <name>` 放行（name 严格 `[A-Za-z0-9_.-]+`）；
+   `reboot/poweroff/halt/kexec/suspend` 等电源动作不在动词集内，且被 HARDLINE
+   `systemctl power action` 规则双重拦截。
+
+3. **多机一致性 —— 一键脚本 + 环境变量**
+   `setup-ckun-agent.sh` 单机幂等部署（账户/目录/wrapper/sshd/authorized_keys 五步，
+   重复执行安全）；wrapper 全部边界经 `/etc/ckun-agent.env`（WORKSPACE / JOBS_ROOT /
+   ALLOW_DANGEROUS_JOB）可覆盖，多机统一下发时可由 Ansible 按机渲染该 env 文件，
+   脚本本体零改动。
+
+### 实现要点（与原设计稿的差异）
+
+- **模板匹配方式**：原稿第 4 节用"逐动词正则 + shlex 执行"。落地改为**对整条命令串做
+  带锚点正则的逐模板匹配**（20 个模板），默认拒绝。原因：客户端命令是固定模板串，
+  整体精确匹配比逐动词拆解更稳（不受 shell 分词细节如 `;` 粘连影响），且天然
+  阻止"合法模板 + 追加注入"（锚点 `$`）。
+- **契约测试（防两端漂移的核心）**：客户端命令模板已全部收敛为单一事实来源函数
+  （`ops_common.base64_read_cmd/base64_write_cmd/base64_restore_cmd/file_delete_cmd`、
+  `ops_file.file_read_cmd/file_glob_cmd/file_grep_cmd`、`ops_image.image_read_cmd`、
+  `ops_obs.*_cmd`、`ops_service.service_cmd`、`ops_job.job_*_cmd`），
+  `test_remote_whitelist_contract.py` 加载 `agent-exec.py` 后用真实客户端输出断言
+  "全部放行 + 18 类对抗命令全部拒绝"（34 用例）。**改任一端命令格式必须跑该测试。**
+- **SFTP 兼容**：Agent 命令与 SFTP 面板共用受限连接（sshd `ForceCommand` 会接管
+  子系统请求，命令置为 `sftp`），白名单含 `sftp` 模板（仅裸命令/安全 flag）。
+- **pid 边界**：`job_kill`/`job_alive` 仅接受正整数 PID（`$!` 恒 ≥1），
+  `kill -- -0`（杀当前进程组）被拒。
+- **shell_exec 反向命令（ShellUndo）**：`_shell_reverse` 仅派生
+  `mkdir/rmdir/touch/mv/cp` 的精确反向（无元字符），落在白名单外时
+  apply_reverse 会失败但被捕获记 warning（best-effort 回滚，不阻断主流程）。
+  受限账户下 `rmdir`/`rm` 等反向命令若不在工作区内会被 wrapper 拒绝——
+  这是预期行为（受限账户本就不应越区操作）。
+- **验证**：`ckun-agent-verify.sh` 实现第 6 节全部 6 项检查（越权路径/越权动词/
+  快照闭环/无提权/密钥 only/无 TTY 与转发），部署后跑一遍即可。
+
+### 使用
+
+```bash
+# 目标机（root）：
+scp agent-exec.py target:/tmp/ && ssh target \
+  "bash /tmp/setup-ckun-agent.sh --from 10.0.0.0/8 --publickey ~/.ssh/ckun.pub && systemctl reload sshd"
+
+# 验证：
+bash ckun-agent-verify.sh --user ckunagent --host <ip> --key ~/.ssh/ckun_ed25519
+```
+
+客户端侧无需任何配置改动：Agent 仍连同一个 SSH 连接；若希望 Agent 专用受限账户，
+在连接管理里为该目标加一条 `ckunagent` 连接并在 AI 面板选它作为活动会话即可。

@@ -14,6 +14,64 @@ import shlex
 from agent.tools import BaseTool, ToolResult, ToolMeta
 from agent.tools.builtin.ops_common import run_headless
 
+# ── 远端命令构建（单一事实来源）──────────────────────────────
+# 契约源：与远端白名单执行器（scripts/deploy/agent-exec.py）对齐，
+# 由 backend/tests/test_remote_whitelist_contract.py 跨端校验。
+
+def sys_overview_cmd(top: int) -> str:
+    """sys_overview 远端模板：多行只读观测脚本（; 串联，缺失命令不影响其余）。"""
+    return "\n".join(
+        [
+            'echo "[CPU 负载]"; uptime 2>/dev/null',
+            'echo "[内存]"; free -m 2>/dev/null',
+            'echo "[磁盘 TOP %d]"; df -h 2>/dev/null | head -n %d' % (top, top + 1),
+            'echo "[开机时长]"; uptime -s 2>/dev/null',
+            'echo "[内核版本]"; uname -r 2>/dev/null',
+        ]
+    )
+
+
+def process_inspect_cmd(query: str) -> str:
+    """process_inspect 远端模板：按子串匹配进程（排除 grep 自身）。"""
+    return f"ps -eo pid,pcpu,pmem,stat,comm,args | grep {shlex.quote(query)} | grep -v grep"
+
+
+def netprobe_bash_cmd(host: str, port: str, timeout: str) -> str:
+    """network_probe 远端模板①：bash /dev/tcp 探测（host/port 经 $1/$2 传参）。"""
+    hq, pq, tq = shlex.quote(host), shlex.quote(port), shlex.quote(timeout)
+    return (
+        f"bash -c 'exec 3<>/dev/tcp/$1/$2 && echo OK || echo FAIL; "
+        f"exec 3<&-' probe {hq} {pq}"
+    )
+
+
+def netprobe_nc_cmd(host: str, port: str, timeout: str) -> str:
+    """network_probe 远端模板②：nc 回退探测（macOS/老系统）。"""
+    hq, pq, tq = shlex.quote(host), shlex.quote(port), shlex.quote(timeout)
+    return f"nc -zvw{tq} {hq} {pq}"
+
+
+def netprobe_listen_cmd(port: str) -> str:
+    """network_probe 远端模板③：本地监听状态（ss 优先，netstat 回退）。"""
+    pq = shlex.quote(port)
+    return f"ss -ltn 2>/dev/null | grep :{pq}"
+
+
+def netprobe_listen_fallback_cmd(port: str) -> str:
+    """network_probe 远端模板④：netstat 回退监听查询。"""
+    pq = shlex.quote(port)
+    return f"netstat -an 2>/dev/null | grep :{pq}"
+
+
+def log_tail_cmd(path: str, lines: int) -> str:
+    """log_read 远端模板：无过滤时直接读尾部。"""
+    return f"tail -n {lines} {shlex.quote(path)}"
+
+
+def log_grep_cmd(path: str, pattern: str, lines: int) -> str:
+    """log_read 远端模板：关键词过滤 + 限行。"""
+    return f"grep {shlex.quote(pattern)} {shlex.quote(path)} | tail -n {lines}"
+
 # 只读观测结果属于噪声，统一使用 low 优先级
 _OBS_META = ToolMeta(
     risk_level="safe",
@@ -43,16 +101,7 @@ class SysOverviewTool(BaseTool):
         top = max(1, min(int(top), 20))
         # 多命令脚本：用 ; 串联，任一命令缺失不影响其余（保持健壮）。
         # upsilence 缺失命令的 stderr，避免标签被刷屏干扰。
-        script = "\n".join(
-            [
-                'echo "[CPU 负载]"; uptime 2>/dev/null',
-                'echo "[内存]"; free -m 2>/dev/null',
-                'echo "[磁盘 TOP %d]"; df -h 2>/dev/null | head -n %d'
-                % (top, top + 1),
-                'echo "[开机时长]"; uptime -s 2>/dev/null',
-                'echo "[内核版本]"; uname -r 2>/dev/null',
-            ]
-        )
+        script = sys_overview_cmd(top)
         ok, output = await run_headless(context, script, timeout=15)
         if not ok:
             return ToolResult(False, output, "系统概览命令执行失败")
@@ -75,9 +124,8 @@ class ProcessInspectTool(BaseTool):
     meta = _OBS_META
 
     async def execute(self, context, query):
-        q = shlex.quote(query)
         # grep -v grep 排除 grep 自身进程条目
-        command = f"ps -eo pid,pcpu,pmem,stat,comm,args | grep {q} | grep -v grep"
+        command = process_inspect_cmd(query)
         ok, raw = await run_headless(context, command, timeout=15)
 
         rows = []
@@ -121,16 +169,9 @@ class NetworkProbeTool(BaseTool):
     def _run_probe_tests(self):
         """返回两个候选连通性探测命令模板（按 host/port 已引号转义）。"""
         host, port, timeout = self._host, self._port, self._timeout
-        hq, pq, tq = shlex.quote(host), shlex.quote(port), shlex.quote(timeout)
         # bash /dev/tcp 探测：host/port 作为独立参数传入 bash -c，$1/$2 引用，
         # 避免把用户输入内联进单引号脚本串导致引号转义错乱。
-        bash_cmd = (
-            f"bash -c 'exec 3<>/dev/tcp/$1/$2 && echo OK || echo FAIL; "
-            f"exec 3<&-' probe {hq} {pq}"
-        )
-        # nc 回退探测（macOS / 老系统常用）
-        nc_cmd = f"nc -zvw{tq} {hq} {pq}"
-        return bash_cmd, nc_cmd
+        return netprobe_bash_cmd(host, port, timeout), netprobe_nc_cmd(host, port, timeout)
 
     async def execute(self, context, host, port, timeout=5):
         port = max(1, min(int(port), 65535))
@@ -157,14 +198,13 @@ class NetworkProbeTool(BaseTool):
                 note = "（bash /dev/tcp 与 nc 均不可用，连通性探测跳过）"
 
         # 本地监听状态：优先 ss，无结果时回退 netstat（跨平台健壮性）
-        pq = shlex.quote(str(port))
         listen = ""
-        _, ss_out = await run_headless(context, f"ss -ltn 2>/dev/null | grep :{pq}", timeout=15)
+        _, ss_out = await run_headless(context, netprobe_listen_cmd(str(port)), timeout=15)
         if ss_out.strip() and "[exit_code=" not in ss_out:
             listen = ss_out.strip()
         else:
             _, net_out = await run_headless(
-                context, f"netstat -an 2>/dev/null | grep :{pq}", timeout=15
+                context, netprobe_listen_fallback_cmd(str(port)), timeout=15
             )
             if net_out.strip() and "[exit_code=" not in net_out:
                 listen = net_out.strip()
@@ -204,13 +244,11 @@ class LogReadTool(BaseTool):
             return ToolResult(False, "", "日志文件路径包含非法字符")
 
         lines = max(1, min(int(lines), 1000))
-        pq = shlex.quote(path)
 
         if pattern:
-            pat = shlex.quote(pattern)
-            command = f"grep {pat} {pq} | tail -n {lines}"
+            command = log_grep_cmd(path, pattern, lines)
         else:
-            command = f"tail -n {lines} {pq}"
+            command = log_tail_cmd(path, lines)
 
         ok, raw = await run_headless(context, command, timeout=15)
 

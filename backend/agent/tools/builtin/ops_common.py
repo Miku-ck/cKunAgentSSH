@@ -134,6 +134,18 @@ async def run_headless(
         return False, err
     return success, output
 
+def base64_read_cmd(path: str) -> str:
+    """构造 base64 读文件命令（remote_read_b64 与 saddle 预变更快照共用模板）。"""
+    import shlex
+    return f"base64 {shlex.quote(path)}"
+
+
+def file_delete_cmd(path: str) -> str:
+    """构造删除文件命令（FileContentUndo 还原新建文件用，saddle 与契约测试共用）。"""
+    import shlex
+    return f"rm -f {shlex.quote(path)}"
+
+
 def base64_write_cmd(path: str, data: bytes) -> str:
     """构造 base64 写文件命令（base64 仅含字母数字+/=+，无需转义；路径 shlex.quote）。"""
     b64 = base64.b64encode(data).decode("ascii")
@@ -161,8 +173,7 @@ async def remote_read_b64(context, path: str) -> tuple[bool, bytes]:
 
     失败时 payload 为错误信息字节（沿用 run_headless 的失败输出）。
     """
-    import shlex
-    ok, output = await run_headless(context, f"base64 {shlex.quote(path)}", 30)
+    ok, output = await run_headless(context, base64_read_cmd(path), 30)
     if not ok:
         return False, output.encode("utf-8")
     body = strip_remote_tail(output)
