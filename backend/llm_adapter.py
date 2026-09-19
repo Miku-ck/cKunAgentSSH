@@ -241,9 +241,10 @@ async def _chat_stream_impl(
         # 诊断日志：打印角色序列，用于确认 system 合并修复已生效
         # （v1.1 = _normalize_system_first 合并版；若仍见 400 且日志缺失，说明运行的是旧进程）
         # 用 print 而非 logger.info：uvicorn 默认日志级别下应用层 INFO 不进控制台
-        print(
-            f"[llm_adapter v1.1] {model} roles={[m.get('role') for m in kwargs['messages']]}",
-            flush=True,
+        logger.debug(
+            "[llm_adapter v1.1] %s roles=%s",
+            model,
+            [m.get("role") for m in kwargs["messages"]],
         )
         stream = await client.chat.completions.create(**kwargs)
     except openai.BadRequestError as e:

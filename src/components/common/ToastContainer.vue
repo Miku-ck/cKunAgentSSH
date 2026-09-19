@@ -105,7 +105,7 @@ const iconMap: Record<ToastType, string> = {
 
 .toast-expand-hint {
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   flex-shrink: 0;
   opacity: 0.7;
 }

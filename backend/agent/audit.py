@@ -143,8 +143,10 @@ def append_record(
     operator: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
     """追加一条审计记录（审计失败静默，返回 None 不阻塞 Agent）"""
+    # 合法结论白名单（单一事实来源，非法值静默落 "executed"）。
+    # "released"：once 授权按 run 释放（release-run 兜底端点写入此结论）
     if conclusion not in ("executed", "failed", "blocked", "denied",
-                          "auto_allowed", "approved", "revoked"):
+                          "auto_allowed", "approved", "released", "revoked"):
         conclusion = "executed"
     environment = environment or _DEFAULT_ENV
     record = {

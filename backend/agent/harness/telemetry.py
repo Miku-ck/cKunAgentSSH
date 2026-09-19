@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Awaitable, Callable
+from typing import Any, Callable
 
 from .contracts import TraceEvent
 
@@ -153,6 +153,10 @@ class SSEAdapter:
             "type": sse_type,
             "iteration": event.iteration,
         }
+        # 问题 1/4：全事件透传 run_id — 前端需实时捕获当前 run_id
+        # （once 授权键控 / visible_terminal 拒绝标记 / 中止清理都依赖它）
+        if event.run_id:
+            result["run_id"] = event.run_id
 
         # 按 kind 填充字段（与原 engine.py yield 的 dict 结构保持一致）
         if kind == "state":
@@ -187,6 +191,13 @@ class SSEAdapter:
             result["risk"] = payload.get("risk", "")
             result["reversible"] = payload.get("reversible", True)
             result["message"] = payload.get("message", "")
+            # 问题 2 接线补完：透传归一化展示命令（reins 已写入 payload，
+            # 原实现未映射 → 前端授权卡片「授权命令」行永远收不到）
+            result["normalized_command"] = payload.get("normalized_command", "")
+            # 透传 run_id（路由层会对所有 SSE dict 统一注入，此处保持
+            # to_sse_dict 自洽：脱离路由单测/其他消费方也能拿到）
+            if event.run_id:
+                result["run_id"] = event.run_id
         elif kind == "permission_expired":
             result["tool"] = payload.get("tool", "")
             result["args"] = payload.get("args", {})
@@ -224,5 +235,20 @@ class SSEAdapter:
             result["command"] = payload.get("command", "")
             result["session_id"] = payload.get("session_id", "")
             result["requires_confirm"] = payload.get("requires_confirm", False)
+        elif kind == "clarification_needed":
+            result["tool"] = payload.get("tool", "")
+            result["tool_call_id"] = payload.get("tool_call_id", "")
+            result["args"] = payload.get("args", {})
+            result["current_step"] = payload.get("current_step", 0)
+            result["total_steps"] = payload.get("total_steps", 0)
+            result["question"] = payload.get("question", "")
+            result["options"] = payload.get("options", [])
+            result["allow_custom"] = payload.get("allow_custom", True)
+            result["reason"] = payload.get("reason", "")
+        elif kind == "clarification_done":
+            result["tool"] = payload.get("tool", "")
+            result["tool_call_id"] = payload.get("tool_call_id", "")
+            result["summary"] = payload.get("summary", "")
+            result["answers"] = payload.get("answers", {})
 
         return result

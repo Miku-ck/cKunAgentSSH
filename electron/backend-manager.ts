@@ -128,9 +128,7 @@ export class BackendManager {
           // 无法区分"没有 PowerShell / 没有 WMI / 权限不足 / 命令语法错"——
           // 实测就是因为 PATH 被裁剪、spawn 裸名 'powershell' 报 ENOENT，
           // 而这一点在日志里完全看不出来。
-          console.log(
-            `[BackendManager] Cannot detect orphan processes (${(e as Error)?.message || e}), relying on port scan`,
-          )
+
           return
         }
         for (const rawLine of stdout.split(/\r?\n/)) {
@@ -145,7 +143,7 @@ export class BackendManager {
           if (!BackendManager.isOurBackendProcess(cmdline, backendDir)) continue
           try {
             execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore', timeout: 5000 })
-            console.log(`[BackendManager] Killed orphan backend PID=${pid}`)
+
           } catch { /* already exited */ }
         }
       } else {
@@ -168,14 +166,14 @@ export class BackendManager {
           if (!BackendManager.isOurBackendProcess(cmdline, backendDir)) continue
           try {
             process.kill(pid, 'SIGTERM')
-            console.log(`[BackendManager] Sent SIGTERM to orphan backend PID=${pid}`)
+
           } catch (e) {
             console.warn(`[BackendManager] Failed to signal orphan PID=${pid}:`, e)
           }
         }
       }
     } catch (e) {
-      console.log('[BackendManager] No orphan backend processes found')
+
     }
   }
 
@@ -207,10 +205,7 @@ export class BackendManager {
       const pythonCmd = this.getPythonCommand()
       const dbPath = this.ensureDbPath(backendDir)
 
-      console.log(`[BackendManager] Starting Python backend on port ${this.port}`)
-      console.log(`[BackendManager] Backend dir: ${backendDir}`)
-      console.log(`[BackendManager] Python cmd: ${pythonCmd}`)
-      console.log(`[BackendManager] DB path: ${dbPath}`)
+
 
       // M2 修复：默认绑定 127.0.0.1，防止局域网内其他设备访问后端（含 API Key、SSH 凭据等敏感数据）
       this.process = spawn(pythonCmd, ['main.py', '--port', String(this.port), '--host', '127.0.0.1'], {
@@ -253,7 +248,7 @@ export class BackendManager {
       })
 
       this.process.stdout?.on('data', (data: Buffer) => {
-        try { console.log(`[Python] ${data.toString().trim()}`) } catch { /* EPIPE on exit */ }
+        // backend stdout 已通过状态事件透传，省略控制台回显
       })
 
       this.process.stderr?.on('data', (data: Buffer) => {
@@ -261,7 +256,7 @@ export class BackendManager {
       })
 
       this.process.on('exit', (code) => {
-        console.log(`[BackendManager] Python process exited with code ${code}`)
+
         this.process = null
 
         // 非主动停止且非 spawn 失败时尝试自动重启
@@ -310,7 +305,7 @@ export class BackendManager {
   private async tryAutoRestart(): Promise<void> {
     // 已在启动中（例如首次 start() 尚未结束），跳过避免与进行中的 start() 重叠
     if (this.starting) {
-      console.log('[BackendManager] 启动中，跳过自动重启')
+
       return
     }
     const now = Date.now()
@@ -324,7 +319,7 @@ export class BackendManager {
     }
 
     this.restartTimestamps.push(now)
-    console.log(`[BackendManager] Auto-restarting backend (${this.restartTimestamps.length}/${this.MAX_RESTART_ATTEMPTS} in window)...`)
+
     this.onStatusChange?.({ status: 'restarting' })
 
     // 延迟 1 秒后重启，避免立即重试
@@ -334,17 +329,17 @@ export class BackendManager {
     //   - 用户可能调用了 stop()（intentionalStop=true），此时不应再自动重启
     //   - 外部可能已手动调用了 start()（starting=true），避免重复 spawn
     if (this.intentionalStop) {
-      console.log('[BackendManager] 延迟期间被主动停止，取消自动重启')
+
       return
     }
     if (this.starting) {
-      console.log('[BackendManager] 延迟期间已有启动在进行，跳过自动重启')
+
       return
     }
 
     try {
       const port = await this.start(this.lastExtraEnv)
-      console.log(`[BackendManager] Backend auto-restarted on port ${port}`)
+
       this.onStatusChange?.({ status: 'ready', port })
     } catch (err) {
       console.error('[BackendManager] Auto-restart failed:', err)
@@ -382,7 +377,7 @@ export class BackendManager {
         // 审查 MINOR：taskkill 对挂死的进程树可能长时间不返回（同步阻塞主进程）；
         // 5s 超时兜底 — 超时后进程多半已在终止过程中，不再等待
         execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore', timeout: 5000 })
-        console.log(`[BackendManager] taskkill /PID ${pid} /T /F issued`)
+
       } catch (e) {
         console.warn(`[BackendManager] taskkill failed (process may have exited or timed out):`, e)
       }
@@ -395,7 +390,7 @@ export class BackendManager {
     proc.kill('SIGTERM')
     const forceKillTimer = setTimeout(() => {
       if (this.process === proc) {
-        console.log('[BackendManager] Force killing Python process')
+
         proc.kill('SIGKILL')
       }
     }, 5000)
@@ -412,7 +407,7 @@ export class BackendManager {
   stop(): void {
     this.intentionalStop = true
     if (!this.process) return
-    console.log('[BackendManager] Stopping Python backend...')
+
     this.killCurrentProcess()
   }
 
@@ -470,7 +465,7 @@ export class BackendManager {
         } catch {
           copyFileSync(legacy, targetPath)
         }
-        console.log(`[BackendManager] Migrated DB: ${legacy} -> ${targetPath}`)
+
         return targetPath
       } catch (e) {
         console.warn(`[BackendManager] Failed to migrate DB from ${legacy}:`, e)

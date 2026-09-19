@@ -8,7 +8,7 @@
  */
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { streamAgentRun, type AgentSSEEvent, type AgentCostSnapshot, type AgentTraceSnapshot, type AgentIntentionInfo } from '@/api/client'
+import { agentApi, streamAgentRun, type AgentSSEEvent, type AgentCostSnapshot, type AgentTraceSnapshot, type AgentIntentionInfo } from '@/api/client'
 import { StreamingThinkScrubber } from '@/utils/think-scrubber'
 import { useToastStore } from './toast'
 import { useAgentDeliver } from '@/composables/useAgentDeliver'
@@ -50,6 +50,31 @@ export interface PermissionRequest {
   granting?: boolean
   /** 是否已处理（已授权或已忽略） */
   resolved?: boolean
+  /** 归一化展示命令（问题 2 改进：让用户看到实际授权的规范化形态） */
+  normalizedCommand?: string
+  /** 发起审批的 run_id（once 授权按 run 键控，防跨 run 消费） */
+  runId?: string
+  /** 发起审批的会话 ID（session 授权按会话键控，C-review M11） */
+  conversationId?: string
+}
+
+/** 澄清向导运行时状态（clarification_needed 事件触发后填充） */
+export interface ClarificationWizardState {
+  runId: string
+  tool: string
+  toolCallId: string
+  args: Record<string, unknown>
+  /** 后端触发原因（如 "命令使用通配符/递归操作但未指定具体目标文件"） */
+  reason: string
+  currentStep: number
+  totalSteps: number
+  question: string
+  options: Array<{ id: string; label: string }>
+  allowCustom: boolean
+  /** 用户已答步骤：step_index 0-based → { choice, custom_text? } */
+  answers: Record<string, { choice: string; custom_text?: string }>
+  /** 已提交到后端（clarification_done 后置 true） */
+  submitted: boolean
 }
 
 const COMMAND_EXEC_TOOLS = ['shell_exec']
@@ -84,6 +109,8 @@ export const useAgentStore = defineStore('agent', () => {
   // 当前正在进行的工具调用（用于状态栏显示真实动作）
   // H14: 意图识别结果（用于规划列表展示）
   const intentionInfo = ref<AgentIntentionInfo | null>(null)
+  // 澄清向导状态 — clarification_needed 事件触发时填充，ClarifyingWizard 组件据此渲染
+  const clarificationWizard = ref<ClarificationWizardState | null>(null)
   // H14 修复：人工介入去重标志（同一 run 只接受一次，独立于数组长度）
   let _helpRequestedThisRun = false
   // M17：用户中止标记 — abort() 置位、_reset() 清除。固化 watch 据此把
@@ -185,7 +212,8 @@ export const useAgentStore = defineStore('agent', () => {
     // B11 修复：中止即 run 结束 — 清理权限请求状态，防止残留过期授权按钮
     permissionRequests.value = []
     // 可见终端执行模式：中止所有在途交付捕获，避免 dangling POST
-    agentDeliver.abortRun()
+    // 问题 1 兜底：传 run_id 释放该 run 未消费的 once 授权（用户中止可能绕过终态清理）
+    agentDeliver.abortRun(lastRunId.value || undefined)
   }
 
   /** 生成当前运行状态的快照（不重置状态），用于固化到 ChatMessage.agentTrace */
@@ -234,6 +262,7 @@ export const useAgentStore = defineStore('agent', () => {
     currentMode.value = ''
     currentConversationId.value = ''
     intentionInfo.value = null
+    clarificationWizard.value = null
     _helpRequestedThisRun = false
     aborted.value = false
   }
@@ -286,6 +315,8 @@ export const useAgentStore = defineStore('agent', () => {
       case 'state':
         if (event.state) currentState.value = event.state
         if (event.iteration !== undefined) iteration.value = event.iteration
+        // 问题 1/4：实时捕获当前 run_id（SSE 全事件透传），供授权键控与中止清理使用
+        if (event.run_id) lastRunId.value = event.run_id
         break
 
       case 'content':
@@ -352,6 +383,8 @@ export const useAgentStore = defineStore('agent', () => {
           command: event.command || '',
           session_id: event.session_id || '',
           requires_confirm: !!event.requires_confirm,
+          // 问题 4：透传 run_id — 拒绝时用于标记 deny_command
+          runId: event.run_id || undefined,
         })
         break
       }
@@ -404,6 +437,12 @@ export const useAgentStore = defineStore('agent', () => {
             message: event.message || `需要授权: ${evtTool}`,
             timestamp: Date.now(),
             isCommandTool: isCmdTool,
+            // 问题 2 改进：传递归一化展示命令（仅命令执行工具）
+            normalizedCommand: typeof event.normalized_command === 'string' ? event.normalized_command : undefined,
+            // once 授权按 run 键控 / session 按会话键控：创建时捕获上下文，
+            // 授权时回传后端（后端 PermissionGate 据此键控）
+            runId: event.run_id || lastRunId.value || undefined,
+            conversationId: currentConversationId.value || undefined,
           })
           if (!hadPending) {
             useToastStore().warning('AI 需要权限确认，请打开 AI 面板')
@@ -449,6 +488,40 @@ export const useAgentStore = defineStore('agent', () => {
         }
         break
 
+      case 'clarification_needed': {
+        // 澄清向导触发：后端 PRE_TOOL_CALL 拦截器发现意图不明的工具调用（如 rm -rf *）
+        // 一次推送全部步骤 + 当前步；前端据此弹出卡片组
+        clarificationWizard.value = {
+          runId: event.run_id || lastRunId.value || '',
+          tool: event.tool || '',
+          toolCallId: event.tool_call_id || '',
+          args: event.args || {},
+          reason: event.reason || '',
+          currentStep: event.current_step ?? 0,
+          totalSteps: event.total_steps ?? 0,
+          question: event.question || '',
+          options: event.options || [],
+          allowCustom: event.allow_custom ?? true,
+          // 累积答案：每步选中后写入
+          answers: {},
+          submitted: false,
+        }
+        useToastStore().warning('AI 需要对不明确的操作进行确认')
+        break
+      }
+
+      case 'clarification_done': {
+        // 后端已注入澄清答案 + 放行工具执行 — 关闭向导
+        if (clarificationWizard.value) {
+          clarificationWizard.value.submitted = true
+        }
+        // 短暂延迟后清除（让组件播放一个完成动画/提示）
+        setTimeout(() => {
+          clarificationWizard.value = null
+        }, 800)
+        break
+      }
+
       case 'done':
         // 流结束：flush 擦洗器，输出残留 buf（仍在 think 块内则丢弃，防泄露 partial CoT）
         {
@@ -493,11 +566,13 @@ export const useAgentStore = defineStore('agent', () => {
     currentMode,
     currentConversationId,
     intentionInfo,
+    clarificationWizard,
     aborted,
     // computed
     isRunning,
     hasHumanHelpRequest,
     hasPermissionRequest,
+    hasClarification: computed(() => !!clarificationWizard.value && !clarificationWizard.value.submitted),
     pendingDeliveries,
     deliveries: agentDeliver.deliveries,
     // actions
@@ -509,5 +584,9 @@ export const useAgentStore = defineStore('agent', () => {
     resolvePermission,
     confirmDeliver,
     rejectDeliver,
+    submitClarification: (runId: string, answers: Record<string, { choice: string; custom_text?: string }>) =>
+      agentApi.submitClarification(runId, answers),
+    skipClarification: (runId: string) =>
+      agentApi.skipClarification(runId),
   }
 })

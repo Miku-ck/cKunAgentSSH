@@ -18,7 +18,6 @@
      服务本地终端场景的查看/诊断（Python 原生文件 API，只读无突变）；
   5. 大输出经 truncate_output 截断，防刷屏。
 """
-import os
 import pathlib
 import re
 import shlex
@@ -31,6 +30,7 @@ from agent.tools.builtin.ops_common import (
     is_traversal,
     remote_read_b64,
     run_headless,
+    strip_remote_tail,
     truncate_output,
 )
 

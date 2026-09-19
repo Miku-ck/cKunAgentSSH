@@ -1461,7 +1461,7 @@ def update_model_config(config_id: str, **kwargs) -> Optional[dict]:
     params.append(config_id)
     conn = _get_conn()
     try:
-        cur = conn.execute(
+        conn.execute(
             f"UPDATE models_config SET {', '.join(sets)} WHERE id = ?",
             params,
         )
@@ -2299,6 +2299,79 @@ def prune_schedule_runs(max_count: int = 2000) -> int:
                    ) WHERE rn > ?
                )""",
             (max_count,),
+        )
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
+def prune_agent_runs(max_count: int = 5000) -> int:
+    """删除最旧的 agent_runs（连带级联删除其 tool_calls），返回删除的 run 数。
+
+    每个 Agent 运行插一行 agent_runs、每次工具调用插一行 tool_calls；
+    两者只靠 conversation 级联回收，用户长期不删会话时无界增长
+    （tool_calls 是最大头）。保留最近 max_count 个 run，由 SSE 事件流
+    finally 低频节流触发（每 6h），不放在热路径上。
+    注意：tool_calls 经 agent_run_id 外键 ON DELETE CASCADE 级联删除，
+    故只删 agent_runs 即可，无需单独 prune tool_calls。
+    """
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            """DELETE FROM agent_runs WHERE id IN (
+                   SELECT id FROM (
+                       SELECT id,
+                              ROW_NUMBER() OVER (
+                                  ORDER BY started_at DESC
+                              ) AS rn
+                       FROM agent_runs
+                   ) WHERE rn > ?
+               )""",
+            (max_count,),
+        )
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
+def prune_conversations(keep_count: int = 1000) -> int:
+    """删除最旧的活动已结束的 conversations，保留最近 keep_count 个，返回删除数。
+
+    设计（第 8 轮审查 #2）：conversations 是用户聊天记录，默认**不**自动清理
+    （用户数据，删除=数据丢失）。本函数仅当用户在设置里【显式开启】会话保留
+    清理时才被调用，且只删 status='completed' 的会话——**永不碰 in_progress**
+    （可能有 run 进行中）。
+
+    "最近活跃" 判定用 MAX(messages.created_at)（真实最后一条消息时间），回退
+    updated_at / created_at。注意不能用 conversations.updated_at 单字段：它只在
+    agent 启动/状态/改标题时更新，普通聊天消息不更新，按它排序会误删近期活跃的会话。
+
+    删除经外键级联回收 messages + agent_runs（再级联 tool_calls），故只删
+    conversations 即可。keep_count<=0 视为不限制（不删）。
+    """
+    if keep_count is None or keep_count <= 0:
+        return 0
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            """DELETE FROM conversations WHERE id IN (
+                   SELECT id FROM (
+                       SELECT c.id,
+                              ROW_NUMBER() OVER (
+                                  ORDER BY COALESCE(
+                                      (SELECT MAX(m.created_at) FROM messages m
+                                       WHERE m.conversation_id = c.id),
+                                      c.updated_at,
+                                      c.created_at
+                                  ) DESC
+                              ) AS rn
+                       FROM conversations c
+                       WHERE c.status = 'completed'
+                   ) WHERE rn > ?
+               )""",
+            (keep_count,),
         )
         conn.commit()
         return cur.rowcount

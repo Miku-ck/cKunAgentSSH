@@ -23,6 +23,7 @@ import unicodedata
 
 __all__ = [
     "normalize_command_for_detection",
+    "get_normalized_for_display",
     "HARDLINE_PATTERNS",
     "DANGEROUS_PATTERNS",
     "check_sudo_stdin_guard",
@@ -82,6 +83,27 @@ def _decode_ansi_c(match: re.Match) -> str:
         out.append(ch)
         i += 1
     return "".join(out)
+
+
+def get_normalized_for_display(command: str) -> str:
+    """返回命令的归一化可读形态，用于 UI 授权卡片展示。
+
+    与 normalize_command_for_detection 的检测归一化不同，本函数额外执行
+    shlex.split + 重组，消除空白差异，让用户看到"实际会被授权键绑定的命令形态"。
+
+    示例：
+      `rm  -rf   /tmp/foo ` → `rm -rf /tmp/foo`
+      `rm$'/tmp/foo'` → `rm /tmp/foo`
+
+    仅用于 UI 展示，不影响安全检测流程（检测归一化由 normalize_command_for_detection 完成）。
+    """
+    normalized = normalize_command_for_detection(command)
+    try:
+        tokens = shlex.split(normalized, posix=True)
+        return " ".join(tokens)
+    except ValueError:
+        # 解析失败时退回 strip 后的归一化版本
+        return normalized.strip()
 
 
 def normalize_command_for_detection(command: str) -> str:

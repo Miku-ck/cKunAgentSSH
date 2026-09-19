@@ -182,3 +182,52 @@ def test_change_discipline_not_duplicated():
     r = classify("重启 nginx")
     guide = get_guide_for_iteration(r, 0)
     assert guide.count("[变更纪律]") == 1
+
+
+# ── 4. reclassify 思考预算钳制（与初始 classify 路径对称）─────────────────
+# 历史缺陷（本轮修复）：reclassify 的升级信号（连续失败/工具密度）会把预算
+# 推到默认表高档（MODERATE=2048/COMPLEX=4096），而 _compute_effective_budgets
+# 在 max_budget<=4096 时直接返回默认表 — 无视模型上限。driver 把该值直接赋给
+# ctx.config.max_reasoning_tokens，低上限模型（本地 vLLM/小模型）下一轮 LLM
+# 调用带超限 reasoning_max_tokens → 400 → 整个 run 失败。
+# 初始路径（driver classify 后 min(budget, model_max)）已防住，重分类路径必须对称。
+
+def _upgrade_log(n_fail: int = 3) -> list[dict]:
+    """构造触发 TRIVIAL→MODERATE 升级的工具日志（最近 N 次调用全部失败）"""
+    return [{"tool": "ops_exec", "args": {}, "success": False} for _ in range(n_fail)]
+
+
+@pytest.mark.parametrize("max_budget", [256, 512, 1024, 2048])
+def test_reclassify_upgrade_budget_capped_at_model_max(max_budget):
+    """升级后的预算不得超出模型配置上限（无论默认表档位多高）"""
+    original = classify("读取 /etc/hosts", max_budget=max_budget)
+    assert original.level is IntentionLevel.TRIVIAL
+    new = reclassify(
+        original, iteration=3, tool_calls_log=_upgrade_log(),
+        errors=["x"] * 3, max_iterations=10, max_budget=max_budget,
+    )
+    assert new is not original
+    assert new.level is IntentionLevel.MODERATE  # 升级确实发生了
+    assert new.reasoning_budget is None or new.reasoning_budget <= max_budget
+
+
+def test_reclassify_budget_unchanged_when_under_cap():
+    """上限足够大时，升级预算不受钳制影响（保留默认表档位）"""
+    original = classify("读取 /etc/hosts", max_budget=262144)
+    new = reclassify(
+        original, iteration=3, tool_calls_log=_upgrade_log(),
+        errors=["x"] * 3, max_iterations=10, max_budget=262144,
+    )
+    assert new.level is IntentionLevel.MODERATE
+    # 大上限走比例分配（5%*262144=13107 → 仍应 <= 上限），此处只验证钳制不误伤
+    assert new.reasoning_budget is None or new.reasoning_budget <= 262144
+
+
+def test_reclassify_no_change_returns_original_object():
+    """未触发任何信号时返回原对象（原预算不变，无钳制必要）"""
+    original = classify("检查 CPU 占用", max_budget=1024)
+    same = reclassify(
+        original, iteration=1, tool_calls_log=[], errors=[], max_iterations=20,
+        max_budget=1024,
+    )
+    assert same is original

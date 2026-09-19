@@ -14,7 +14,7 @@ POST /api/agent/tick    — 手动触发意识 tick
 import asyncio
 import json
 import logging
-import os
+import time
 from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -348,6 +348,46 @@ def _release_run_slot_sync(conversation_id: str, run_id: str) -> None:
 async def _release_run_slot(conversation_id: str, run_id: str) -> None:
     """释放占位（兼容旧调用；实际为无 await 的同步操作）"""
     _release_run_slot_sync(conversation_id, run_id)
+
+
+_AGENT_RUNS_PRUNE_INTERVAL_S = 6 * 3600  # agent_runs/tool_calls 保留清理节流（每 6h）
+_last_agent_runs_prune_at = 0.0
+
+
+async def _maybe_prune_agent_runs() -> None:
+    """低频清理 agent_runs（连带级联 tool_calls），每 6h 最多一次，best-effort。
+
+    放在 SSE 事件流 finally：run 结束是低频活动点，空转不碰 DB；to_thread
+    避免同步 sqlite 占用事件循环；shield 保证 finally 被取消（断连）时清理仍跑完。
+    参照 schedule_engine._maybe_prune_runs 的节流形态。
+    """
+    global _last_agent_runs_prune_at
+    now = time.monotonic()
+    if now - _last_agent_runs_prune_at < _AGENT_RUNS_PRUNE_INTERVAL_S:
+        return
+    _last_agent_runs_prune_at = now
+    try:
+        await asyncio.shield(asyncio.to_thread(db.prune_agent_runs))
+    except Exception:
+        logger.warning("agent_runs 保留清理失败（best-effort，不阻塞）", exc_info=True)
+    # 会话保留清理：用户数据，仅当【显式开启】才执行（默认关闭 → 不碰）
+    try:
+        retention = await asyncio.shield(asyncio.to_thread(_get_conv_retention_setting))
+        if retention.get("enabled"):
+            await asyncio.shield(asyncio.to_thread(db.prune_conversations, retention.get("keep_count", 1000)))
+    except Exception:
+        logger.warning("会话保留清理失败（best-effort，不阻塞）", exc_info=True)
+
+
+def _get_conv_retention_setting() -> dict:
+    """读取会话保留设置（默认关闭）。与 routes/settings.py 的 key 保持一致。"""
+    enabled = (db.get_app_setting("conv_retention.enabled", "false") or "false").lower() == "true"
+    raw = db.get_app_setting("conv_retention.keep_count")
+    try:
+        keep = int(raw) if raw is not None else 1000
+    except (ValueError, TypeError):
+        keep = 1000
+    return {"enabled": enabled, "keep_count": keep}
 
 
 _startup_reconciled = False
@@ -984,6 +1024,11 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     )
             except BaseException:
                 pass
+            # 低频清理 agent_runs/tool_calls（每 6h 节流，best-effort）
+            try:
+                await _maybe_prune_agent_runs()
+            except BaseException:
+                pass
 
     # H8 修复：fire-and-forget 任务的异常日志回调
     def _task_exception_logger(name: str):
@@ -1085,6 +1130,8 @@ class PermissionGrantRequest(BaseModel):
     command: Optional[str] = Field(None, description="命令执行工具的具体命令（用于命令级绑定）")
     # C-review M11：session 级授权绑定的会话 ID — 防跨会话授权泄漏
     conversation_id: str = Field("", description="会话 ID（session 授权按会话键控）")
+    # P1 竞态修复：once 授权绑定的运行 ID — 运行终止时按 run_id 清理
+    run_id: str = Field("", description="运行 ID（once 授权按 run_id 隔离，终态自动清理）")
 
 
 @router.post("/agent/permission/grant")
@@ -1104,7 +1151,7 @@ def grant_tool_permission(req: PermissionGrantRequest):
     # H13 修复 A5：session scope 改用进程级单例（原 501 限制移除）
     pg = _get_global_permission_gate_sync()
     grant_key = pg.grant(req.tool, scope=req.scope, command=req.command,
-                         conversation_id=req.conversation_id)
+                         conversation_id=req.conversation_id, run_id=req.run_id)
     # C-review C2 修复：批准动作落审计链（原实现只写内存/allowlist，
     # 事后无法证明"谁批准了什么"，等保审计目标落空）
     try:
@@ -1155,6 +1202,134 @@ def list_tool_permissions():
     from agent.harness.reins import _get_global_permission_gate_sync
     pg = _get_global_permission_gate_sync()
     return {"tools": sorted(pg._confirmed_permanent)}
+
+
+class DenyCommandRequest(BaseModel):
+    """visible_terminal 拒绝命令请求 — 标记某 run 下某命令被拒绝"""
+    tool: str = Field(..., description="工具名（通常为 shell_exec）")
+    command: str = Field(..., description="被拒绝的命令")
+    run_id: str = Field("", description="运行 ID（拒绝记录按 run_id 隔离）")
+
+
+@router.post("/agent/permission/deny-command")
+def deny_command(req: DenyCommandRequest):
+    """标记某 run 下某命令被用户拒绝
+
+    visible_terminal 拒绝时调用：后续该 run 再次请求此命令时 PermissionGate
+    check_permission 直接返回 False，不会再次触发 permission_needed 卡片。
+    """
+    from agent.harness.reins import _get_global_permission_gate_sync
+    pg = _get_global_permission_gate_sync()
+    denied_key = pg.deny_command(req.tool, req.command, req.run_id)
+    # 审计记录
+    try:
+        from agent.audit import append_record
+        append_record(
+            action=f"permission_deny_command:{req.tool}",
+            conclusion="denied",
+            target_type="tool",
+            target_id=denied_key,
+            command_raw=req.command,
+            result=f"run={req.run_id or '-'}",
+        )
+    except Exception:
+        logger.warning("deny_command 审计记录失败（不阻塞）")
+    return {"tool": req.tool, "command": req.command,
+            "run_id": req.run_id, "denied_key": denied_key}
+
+
+@router.post("/agent/permission/release-run/{run_id}")
+def release_run_permissions(run_id: str):
+    """手动清理某次 run 的全部 once 授权（前端显式终止或超时时调用）
+
+    ReflectionRein 在 AGENT_COMPLETE / AGENT_FAILED 时自动调用此逻辑，
+    本接口作为兜底：前端在用户点击"停止"或 run 被强制终止时主动释放。
+    """
+    from agent.harness.reins import _get_global_permission_gate_sync
+    pg = _get_global_permission_gate_sync()
+    released = pg.cleanup_run_once(run_id)
+    try:
+        from agent.audit import append_record
+        append_record(
+            action=f"permission_release_run:{run_id}",
+            conclusion="released",
+            target_type="run",
+            target_id=run_id,
+            result=f"released={released}",
+        )
+    except Exception:
+        logger.warning("release_run 审计记录失败（不阻塞）")
+    return {"run_id": run_id, "released": released}
+
+
+# ── 澄清向导（Clarification Wizard）──
+
+
+class ClarificationAnswerRequest(BaseModel):
+    """用户回答澄清问题的请求体"""
+    run_id: str = Field(..., description="运行 ID")
+    answers: dict = Field(
+        default_factory=dict,
+        description="答案字典 {step_index(key str): {choice: 'A'|'B'|'C'|'custom', custom_text?: str}}",
+    )
+
+
+@router.post("/agent/clarification/answer")
+def submit_clarification_answer(req: ClarificationAnswerRequest):
+    """用户回答完澄清问题后调用 — 写入答案到 pending 存储
+
+    前端 ClarifyingWizard 在用户答完所有步（或点击"完成"）后提交。
+    下一轮 PRE_TOOL_CALL 时 ClarificationInterceptor 读到 _CLARIFICATION_DONE
+    即注入用户答案上下文、发 clarification_done 事件、放行工具执行。
+    """
+    from agent.harness.reins import _get_global_clarification_store
+    store = _get_global_clarification_store()
+    store["done"][req.run_id] = req.answers
+    # 标记 context 已完成（避免再次 PRE_TOOL_CALL 重发题目）
+    ctx_info = store["context"].get(req.run_id)
+    if ctx_info:
+        ctx_info["_done"] = True
+    logger.info("clarification answer: run_id=%s answers=%s", req.run_id, req.answers)
+    # 审计
+    try:
+        from agent.audit import append_record
+        append_record(
+            action="clarification_answer",
+            conclusion="answered",
+            target_type="run",
+            target_id=req.run_id,
+            result=f"steps={len(req.answers)}",
+        )
+    except Exception:
+        logger.warning("clarification answer 审计记录失败（不阻塞）")
+    return {"run_id": req.run_id, "status": "recorded", "steps": len(req.answers)}
+
+
+@router.post("/agent/clarification/skip")
+def skip_clarification(req: ClarificationAnswerRequest):
+    """用户跳过所有剩余澄清步 — 写入空答案（空 dict 表示无约束放行）
+
+    ClarificationInterceptor 在格式化空答案时输出"用户选择跳过澄清"提示，
+    LLM 按原始命令执行，但仍在 PermissionGate 的权限控制之下。
+    """
+    from agent.harness.reins import _get_global_clarification_store
+    store = _get_global_clarification_store()
+    store["done"][req.run_id] = {}  # 空 answers → _format_answers 输出"跳过"
+    ctx_info = store["context"].get(req.run_id)
+    if ctx_info:
+        ctx_info["_done"] = True
+    logger.info("clarification skip: run_id=%s", req.run_id)
+    try:
+        from agent.audit import append_record
+        append_record(
+            action="clarification_skip",
+            conclusion="skipped",
+            target_type="run",
+            target_id=req.run_id,
+        )
+    except Exception:
+        logger.warning("clarification skip 审计记录失败（不阻塞）")
+    return {"run_id": req.run_id, "status": "skipped"}
 
 
 # ── Agent 记忆管理 ──

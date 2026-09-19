@@ -16,6 +16,7 @@
 import { useAgentStore } from '@/stores/agent'
 import { agentApi } from '@/api/client'
 import { useToastStore } from '@/stores/toast'
+import ClarifyingWizard from './ClarifyingWizard.vue'
 
 const agentStore = useAgentStore()
 const toast = useToastStore()
@@ -56,10 +57,6 @@ function deliveryStatusLabel(status: string): string {
   return map[status] || status
 }
 
-const props = defineProps<{
-  /** 当审查面板已展示人工介入状态时，隐藏此处的人工介入卡片 */
-}>()
-
 /** 授权（审查 M-3：提供"允许本次"(once) 与"始终允许"(always) 两档；
  *  命令工具始终允许时绑定该条具体命令，不会覆盖其他 dangerous 命令） */
 async function grantPermission(reqId: string, tool: string, scope: 'once' | 'always') {
@@ -68,7 +65,8 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
   const command = typeof req.args?.command === 'string' ? (req.args.command as string) : undefined
   req.granting = true
   try {
-    await agentApi.grantPermission(tool, scope, command)
+    // 回传发起审批的 run_id / 会话 id：once 按 run 键控、session 按会话键控
+    await agentApi.grantPermission(tool, scope, command, req.runId, req.conversationId)
     agentStore.resolvePermission(reqId, true)
   } catch (e) {
     req.granting = false
@@ -80,6 +78,7 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
 </script>
 
 <template>
+  <ClarifyingWizard />
   <div class="agent-run-panel">
     <!-- 规划/意图信息 -->
     <div class="intention-section" v-if="agentStore.intentionInfo">
@@ -179,6 +178,9 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
             <code>{{ req.tool }}</code>
             <span class="tool-label" style="margin-left: 12px;">可逆:</span>
             <span>{{ req.reversible ? '是' : '否' }}</span>
+            <!-- 问题 2 改进：显示归一化命令，让用户理解授权实际绑定的命令形态 -->
+            <span v-if="req.isCommandTool && req.normalizedCommand" class="tool-label" style="margin-left: 12px;">授权命令:</span>
+            <code v-if="req.isCommandTool && req.normalizedCommand" class="normalized-cmd">{{ req.normalizedCommand }}</code>
             <details v-if="req.args && Object.keys(req.args).length > 0" class="tool-args">
               <summary>参数</summary>
               <pre>{{ JSON.stringify(req.args, null, 2) }}</pre>
@@ -393,14 +395,7 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
   margin-bottom: 6px;
 }
 
-.human-help-item.compact {
-  padding: 6px 10px;
-  margin-bottom: 4px;
-}
 
-.human-help-item.compact .human-help-header {
-  margin-bottom: 0;
-}
 
 .human-help-header {
   display: flex;
@@ -569,6 +564,11 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
   border-radius: 3px;
   color: var(--accent-orange);
   font-size: 12px;
+}
+
+.permission-tool code.normalized-cmd {
+  color: var(--accent-cyan, #7aa2d0);
+  font-style: italic;
 }
 
 .permission-actions {

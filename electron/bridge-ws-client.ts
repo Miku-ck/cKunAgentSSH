@@ -37,17 +37,10 @@ interface WsSocket {
 }
 declare const WebSocket: new (url: string) => WsSocket
 
-/** 业务分发结果：与 HTTP 响应同构（status 为 HTTP 风格状态码） */
-export interface DispatchResult {
-  status: number
-  body: unknown
-}
+import type { DispatchResult } from './electron-bridge'
+
 /** 后端 req 帧 → 主进程业务实现的注入点（ElectronBridge.dispatch） */
 export type BridgeDispatch = (op: string, payload: Record<string, any>) => Promise<DispatchResult>
-
-function log(msg: string): void {
-  console.log(`[BridgeWS] ${msg}`)
-}
 
 export class BridgeWsClient {
   private ws: WsSocket | null = null
@@ -79,7 +72,7 @@ export class BridgeWsClient {
       return
     }
     if (changed || !this.isOpen()) {
-      log(`目标变化（port=${port}）或连接不健康，重建连接`)
+
       this.cancelReconnect()
       this.closeCurrent()
       this.reconnectDelay = RECONNECT_BASE_MS
@@ -110,7 +103,7 @@ export class BridgeWsClient {
       ws = new WebSocket(`ws://127.0.0.1:${this.port}${WS_PATH}`)
     } catch (err) {
       this.connecting = false
-      log(`构造 WebSocket 失败: ${err instanceof Error ? err.message : String(err)}`)
+
       this.scheduleReconnect()
       return
     }
@@ -120,7 +113,7 @@ export class BridgeWsClient {
       this.connecting = false
       this.reconnectDelay = RECONNECT_BASE_MS
       this.missedPongs = 0
-      log(`已连接 127.0.0.1:${this.port}${WS_PATH}，发送 hello`)
+
       this.sendJson({ type: 'hello', token: this.token })
       this.armHelloAckTimeout(ws)
       this.startPing()
@@ -136,7 +129,7 @@ export class BridgeWsClient {
       switch (msg?.type) {
         case 'hello-ack':
           this.disarmHelloAckTimeout()
-          log('hello-ack 收到，通道就绪')
+
           break
         case 'pong':
           this.missedPongs = 0
@@ -152,7 +145,7 @@ export class BridgeWsClient {
       this.connecting = false
       this.stopPing()
       this.ws = null
-      log(`连接关闭 (code=${ev?.code ?? '?'})，将自动重连`)
+
       this.scheduleReconnect()
     }
 
@@ -217,7 +210,7 @@ export class BridgeWsClient {
     this.helloAckTimer = setTimeout(() => {
       this.helloAckTimer = null
       if (this.ws !== ws) return // 已被 closeCurrent/setTarget 换掉
-      log(`${HELLO_ACK_TIMEOUT_MS}ms 内未收到 hello-ack，判定半开连接，关闭重连`)
+
       // 摘除事件句柄再关闭：抑制 socket 迟到的 close 事件二次调度重连
       // （否则退避被双重翻倍 4×），与 closeCurrent 的契约一致
       ws.onopen = null
@@ -252,7 +245,7 @@ export class BridgeWsClient {
       if (!ws || ws.readyState !== WS_STATE_OPEN) return
       this.missedPongs += 1
       if (this.missedPongs >= MAX_MISSED_PONGS) {
-        log(`连续 ${MAX_MISSED_PONGS} 轮 ping 无 pong，判定连接死亡，主动关闭触发重连`)
+
         this.stopPing()
         this.ws = null
         try {
@@ -283,7 +276,7 @@ export class BridgeWsClient {
     try {
       ws.send(JSON.stringify(obj))
     } catch (err) {
-      log(`send 失败: ${err instanceof Error ? err.message : String(err)}`)
+
     }
   }
 

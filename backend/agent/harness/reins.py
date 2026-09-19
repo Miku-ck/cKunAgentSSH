@@ -24,7 +24,10 @@ from config import ALLOWLIST_PATH
 from typing import Any, Optional
 
 from .contracts import (
+    ClarificationOption,
+    ClarificationStep,
     Interceptor,
+    PendingClarification,
     ReinDecision,
     ReinPoint,
     RunContext,
@@ -286,8 +289,10 @@ class FilesystemGuard:
                     # 预授权命中 → 放行
                 else:
                     # C-review M11：session 授权按会话键控
+                    # 问题 1 改进：同时传入 run_id 以支持 once 作用域隔离
                     allowed = self.permission_gate.check_permission(
-                        tool, args, risk="dangerous", conversation_id=ctx.conversation_id)
+                        tool, args, risk="dangerous", conversation_id=ctx.conversation_id,
+                        run_id=ctx.run_id)
                     if not allowed:
                         # C-review M7：审批等待三态处理（无审批超时、重发被循环检测
                         # 抢截、授权卡片孤儿的问题由此修复）
@@ -343,6 +348,41 @@ class FilesystemGuard:
                         # AgentRunPanel 渲染授权卡片，用户选择 本次/会话/始终（绑定命令）。
                         # C-review M7：仅首次请求发卡片（前端本就按 工具+命令 去重）；
                         # 审批窗口内的重发只拦截 + 注入等待提示，不重复发事件。
+                        # 问题 4：visible_terminal 拒绝过该命令 → 不再发卡片，直接拒绝
+                        # （用户已明确点过"拒绝"，重复卡片是无意义的骚扰）
+                        if self.permission_gate and self.permission_gate.is_denied(tool, str(cmd) if cmd else None, ctx.run_id):
+                            return ReinDecision(
+                                intercepted=True,
+                                intercept_reason=f"命令曾被用户拒绝: {cmd}",
+                                events=[TraceEvent(
+                                    kind="warning",
+                                    source="reins.filesystem_guard",
+                                    run_id=ctx.run_id,
+                                    iteration=ctx.iteration,
+                                    payload={
+                                        "tool": tool,
+                                        "message": (
+                                            f"命令 \"{cmd if cmd else tool}\" 在本次会话中曾被用户拒绝执行。"
+                                            "系统已自动拦截。请改用更安全的替代方案，"
+                                            "或提示用户确认后再重新发起。"
+                                        ),
+                                    },
+                                )],
+                                inject_messages=[{
+                                    "role": "user",
+                                    "content": (
+                                        f"[系统拦截] 命令 \"{cmd if cmd else tool}\" "
+                                        "在本次会话中曾被用户拒绝执行。系统已自动拦截该命令，"
+                                        "不会再次请求审批。请：\n"
+                                        "1. 不要再重试该命令；\n"
+                                        "2. 改用更安全的替代方案；\n"
+                                        "3. 如确需执行，提示用户手动在终端中运行。"
+                                    ),
+                                }],
+                            )
+                        # 问题 2 改进：计算归一化展示命令，让用户看到实际授权的命令形态
+                        from .safety import get_normalized_for_display
+                        display_cmd = get_normalized_for_display(str(cmd)) if cmd else ""
                         if is_first:
                             await append_record_async(
                                 action=tool, conclusion="denied",
@@ -364,6 +404,7 @@ class FilesystemGuard:
                                 "risk": "dangerous",
                                 "reversible": False,
                                 "message": f"需要用户授权: {tool} — {reason}",
+                                "normalized_command": display_cmd,
                             },
                         )] if is_first else []
                         return ReinDecision(
@@ -671,8 +712,10 @@ class PermissionGate:
     # ctx.metadata["saddle"]（per-run），self.saddle 仅作无 ctx 调用（如 grant 端点）的兜底。
     saddle: Optional[Any] = None
     # 三范围审批状态
-    # 修复：使用 Counter 替代 set，避免跨 run 竞态（Run A 的授权被 Run B 消费）
-    _confirmed_once: dict[str, int] = field(default_factory=lambda: defaultdict(int))  # 本次确认（计数器）
+    # 问题 1 改进：once 授权按 run_id 键控，消除跨 run 竞态。
+    # _confirmed_once[run_id][grant_key] = count（某 run 授权了 N 次同一 grant_key）
+    # 空 run_id ("") = 旧实现全局池（fallback，兼容前端不传 run_id 的场景）
+    _confirmed_once: dict[str, dict[str, int]] = field(default_factory=lambda: defaultdict(lambda: defaultdict(int)))
     # C-review M11：会话级确认按 conversation_id 键控（原全局 set — 会话 A 的
     # session 授权会泄漏到会话 B 的 run 中免审）。进程级单例共享不变，
     # 但"会话"边界 = conversation_id
@@ -680,21 +723,62 @@ class PermissionGate:
     _confirmed_permanent: set[str] = field(default_factory=set)  # 永久确认（持久化到 config）
     # 用户覆盖（从 DB 加载）
     _overrides: dict[str, str] = field(default_factory=dict)
+    # 问题 4：visible_terminal 拒绝命令 — 按 run_id 键控，防止 LLM 重发时再次弹卡片。
+    # _denied_commands[run_id] = set(grant_key)，拒绝后 LLM 重试不会再次触发审批，
+    # 而是直接拦截并注入"已被用户拒绝"提示（让 LLM 换路）。
+    # 运行终止时由 ReflectionRein 自动清理（与 cleanup_run_once 同源）。
+    _denied_commands: dict[str, set[str]] = field(default_factory=lambda: defaultdict(set))
 
     def __post_init__(self) -> None:
         self._confirmed_permanent = self._load_permanent_allowlist()
 
+    @staticmethod
+    def _validate_allowlist_entry(line: str, lineno: int) -> tuple[bool, str]:
+        """校验单条 allowlist 条目格式。
+
+        合法格式：
+          1. 纯工具名：^[A-Za-z0-9_.-]+$
+          2. 工具名 + 命令哈希：^[A-Za-z0-9_.-]+:[0-9a-f]{16}$
+
+        Returns: (valid, reason_if_invalid)
+        """
+        import re
+        _TOOL_NAME_RE = re.compile(r'^[A-Za-z0-9_.-]+$')
+        _GRANT_KEY_RE = re.compile(r'^[A-Za-z0-9_.-]+:[0-9a-f]{16}$')
+        if _GRANT_KEY_RE.match(line):
+            return True, ""
+        if _TOOL_NAME_RE.match(line):
+            return True, ""
+        return False, (
+            f"allowlist 第 {lineno} 行格式无效: {line!r}（"
+            f"期望工具名如 'my_tool' 或 工具:16位hex哈希 如 'shell_exec:a1b2c3d4e5f67890'）"
+        )
+
     def _load_permanent_allowlist(self) -> set[str]:
-        """从 config 加载永久 allowlist（简化：从 ~/.ckunagentic/allowlist.txt 读取，每行一个工具名）"""
+        """从 config 加载永久 allowlist（~/.ckunagentic/allowlist.txt）。
+
+        逐行校验格式，不合法行记录 warning 日志后跳过。
+        空行和 '#' 注释行被忽略。
+        """
         import os
         path = ALLOWLIST_PATH
         if not os.path.exists(path):
             return set()
+        result: set[str] = set()
         try:
             with open(path, 'r', encoding='utf-8') as f:
-                return {line.strip() for line in f if line.strip() and not line.startswith('#')}
-        except Exception:
-            return set()
+                for lineno, raw_line in enumerate(f, start=1):
+                    line = raw_line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    valid, reason = self._validate_allowlist_entry(line, lineno)
+                    if not valid:
+                        logger.warning(reason)
+                        continue
+                    result.add(line)
+        except Exception as e:
+            logger.warning("读取 allowlist 失败: %s: %s", path, e)
+        return result
 
     def _save_permanent_allowlist(self) -> None:
         """保存永久 allowlist"""
@@ -727,15 +811,20 @@ class PermissionGate:
 
     def check_permission(self, tool_name: str, args: dict,
                          risk: Optional[str] = None,
-                         conversation_id: str = "") -> bool:
+                         conversation_id: str = "",
+                         run_id: str = "") -> bool:
         """检查权限，返回是否放行
 
         risk: 调用方已判定的风险等级；risk == "dangerous" 时忽略 session 级缓存
               （B-6：落实 "dangerous 需每次授权" 契约，只认 once 与 always/permanent 键）
 
         检查顺序：permanent allowlist → session（非 dangerous，按会话键控）
-        → once 计数器。原 scope 参数已移除（C-review NIT：死参数，行为实际由
-        risk + 已存在的授权决定，与传入的 scope 无关）。
+        → once 计数器（优先 run_id 作用域，fallback 全局池）。原 scope 参数已移除
+        （C-review NIT：死参数，行为实际由 risk + 已存在的授权决定，与传入的 scope 无关）。
+
+        run_id: 问题 1 改进 — once 授权绑定到发起授权的 run_id，消除跨 run 竞态。
+               检查时优先匹配当前 run_id 的授权池；未命中则 fallback 全局空 run_id 池
+               （兼容前端未传 run_id 的旧调用模型）。
 
         无交互式 UI 场景：默认拦截 dangerous 命令，除非已在 allowlist 中。
         命令执行工具按"工具+命令哈希"键检查（审查 M-3）。
@@ -744,6 +833,10 @@ class PermissionGate:
         if tool_name in _COMMAND_EXEC_TOOLS and isinstance(args, dict):
             command = args.get("command") or args.get("shell") or args.get("cmd")
         key = self._grant_key(tool_name, command)
+        # 问题 4：visible_terminal 拒绝标记检查 — 用户明确拒绝的命令不再免审
+        # （即使永久 allowlist 中有该命令，当前 run 的拒绝状态也优先）
+        if self.is_denied(tool_name, command, run_id):
+            return False
         # 检查 permanent allowlist
         if key in self._confirmed_permanent:
             return True
@@ -755,11 +848,19 @@ class PermissionGate:
         # 跨会话不再免审（原全局 set 会把会话 A 的授权泄漏到会话 B）
         if risk != "dangerous" and key in self._confirmed_session.get(conversation_id, frozenset()):
             return True
-        # 修复：检查 once allowlist（使用计数器，避免跨 run 竞态）
-        if self._confirmed_once.get(key, 0) > 0:
-            self._confirmed_once[key] -= 1
-            if self._confirmed_once[key] <= 0:
-                del self._confirmed_once[key]
+        # 问题 1 改进：优先检查 run_id 作用域的 once 池，再 fallback 全局空 run_id 池
+        run_pool = self._confirmed_once.get(run_id)
+        if run_pool and run_pool.get(key, 0) > 0:
+            run_pool[key] -= 1
+            if run_pool[key] <= 0:
+                del run_pool[key]
+            return True
+        # fallback：全局空 run_id 池（兼容旧模型 + 向后兼容）
+        global_pool = self._confirmed_once.get("")
+        if global_pool and global_pool.get(key, 0) > 0:
+            global_pool[key] -= 1
+            if global_pool[key] <= 0:
+                del global_pool[key]
             return True
         # 默认拦截 dangerous 命令（无交互式 UI，不能自动放行）
         return False
@@ -778,17 +879,18 @@ class PermissionGate:
         return key in self._confirmed_permanent
 
     def grant(self, tool_name: str, scope: str = 'once', command: Optional[str] = None,
-              conversation_id: str = "") -> str:
+              conversation_id: str = "", run_id: str = "") -> str:
         """授予权限，返回实际写入的授权键
 
         scope: 'once' | 'session' | 'always'
         command: 命令执行工具时传入被批准的具体命令（审查 M-3 命令级绑定）
         conversation_id: C-review M11 — session 授权绑定到发起授权的会话
+        run_id: 问题 1 改进 — once 授权绑定到发起授权的 run_id（消除跨 run 竞态）
         """
         key = self._grant_key(tool_name, command)
         if scope == 'once':
-            # 修复：使用计数器，支持多次授权累积
-            self._confirmed_once[key] = self._confirmed_once.get(key, 0) + 1
+            # 问题 1 改进：嵌套字典 [run_id][key]，消除跨 run 竞态
+            self._confirmed_once[run_id][key] += 1
         elif scope == 'session':
             self._confirmed_session.setdefault(conversation_id, set()).add(key)
         elif scope == 'always':
@@ -797,7 +899,9 @@ class PermissionGate:
         return key
 
     def _revoke_key(self, key: str, conversation_id: Optional[str] = None) -> None:
-        self._confirmed_once.pop(key, None)  # Counter 使用 pop 替代 discard
+        # 问题 1 改进：遍历所有 run_id 的 once 池，移除该 key
+        for run_pool in list(self._confirmed_once.values()):
+            run_pool.pop(key, None)
         # C-review M11：conversation_id 指定 → 只撤该会话；None → 撤所有会话
         if conversation_id is not None:
             s = self._confirmed_session.get(conversation_id)
@@ -811,6 +915,56 @@ class PermissionGate:
             for cid in [c for c, s in self._confirmed_session.items() if not s]:
                 self._confirmed_session.pop(cid, None)
         self._confirmed_permanent.discard(key)
+
+    def deny_command(self, tool_name: str, command: Optional[str], run_id: str) -> str:
+        """记录某 run 下某命令被用户拒绝（visible_terminal 拒绝时调用）。
+
+        后续该 run 再次请求此命令时 check_permission 直接返回 False，
+        LLM 不会收到新的 permission_needed 卡片。
+
+        Returns:
+            实际标记的 grant_key
+        """
+        key = self._grant_key(tool_name, command)
+        self._denied_commands[run_id].add(key)
+        return key
+
+    def is_denied(self, tool_name: str, command: Optional[str], run_id: str) -> bool:
+        """检查某 run 下某命令是否已被用户拒绝。
+
+        优先检查 run_id 作用域，再检查全局空 run_id 池。
+        """
+        key = self._grant_key(tool_name, command)
+        return key in self._denied_commands.get(run_id, set()) or \
+               key in self._denied_commands.get("", set())
+
+    def cleanup_run_once(self, run_id: str) -> int:
+        """释放指定 run_id 的全部 once 授权。
+
+        在 run 终止（completed/failed/max_reached）时由 ReflectionRein 调用，
+        防止已授权的 yet-unused once 卡子被 run 退出后的新 run 消费。
+
+        Returns:
+            释放的授权条目数量
+        """
+        run_pool = self._confirmed_once.pop(run_id, None)
+        if not run_pool:
+            return 0
+        return sum(run_pool.values())
+
+    def cleanup_run_denied(self, run_id: str) -> int:
+        """释放指定 run_id 的全部拒绝命令记录。
+
+        在 run 终止（completed/failed/max_reached）时由 ReflectionRein 调用，
+        防止跨 run 的拒绝卡子残留。
+
+        Returns:
+            释放的拒绝条目数量
+        """
+        denied_set = self._denied_commands.pop(run_id, None)
+        if not denied_set:
+            return 0
+        return len(denied_set)
 
     def revoke(self, tool_name: str, command: Optional[str] = None,
                conversation_id: Optional[str] = None) -> None:
@@ -847,6 +1001,33 @@ class PermissionGate:
     def load_overrides(self, overrides: dict[str, str]) -> None:
         """从 DB 加载用户自定义权限覆盖"""
         self._overrides.update(overrides)
+
+    def _get_effective_risk(self, tool_name: str, meta: Any, args: dict,
+                            environment: str) -> str:
+        """计算工具在特定参数和环境下的有效风险等级（问题 5）。
+
+        规则：
+        - base risk = meta.risk_level
+        - 当 environment == "prod" 且 meta.destructive_actions 非空：
+          若 args["action"] 命中 destructive_actions 集合，
+          将风险升级为 "dangerous"（即使 meta.risk_level == "moderate"）。
+        - 其他情况返回 meta.risk_level。
+
+        设计目标：service_manage 等 moderate 工具的 stop/restart 操作在
+        生产环境不会因 session 级授权而免审，每次都需要显式批准。
+        """
+        base = meta.risk_level
+        if not args or not isinstance(args, dict):
+            return base
+        destructive = getattr(meta, "destructive_actions", None)
+        if not destructive:
+            return base
+        if environment != "prod":
+            return base
+        action = args.get("action")
+        if action and action in destructive:
+            return "dangerous"
+        return base
 
     def _lookup_meta(self, tool_name: str, ctx: Optional[RunContext] = None) -> Optional[Any]:
         """从 Saddle 的 ToolRegistry 读取工具的 ToolMeta（单一数据源）
@@ -916,7 +1097,11 @@ class PermissionGate:
                 }],
             )
 
-        risk = meta.risk_level
+        # 问题 5：prod 环境下，对声明了 destructive_actions 的工具，
+        # 若当前调用的 action 命中该集合，风险等级升级为 dangerous
+        # （确保 stop/restart 等操作不走 session 级缓存，每次都要审批）
+        environment = getattr(ctx, "environment", "") or ""
+        risk = self._get_effective_risk(tool, meta, args, environment)
         reversible = meta.reversible
 
         # safe → 自主放行
@@ -929,15 +1114,57 @@ class PermissionGate:
 
         # dangerous → 需每次授权（不可 session 级缓存，防止首次授权后 Agent 执行任意高危命令）
         if risk == "dangerous":
+            # prod 强化（合规）：与 FilesystemGuard 的 shell 命令对齐 — 生产环境
+            # 危险操作仅接受【预授权 allowlist】，禁止临时一次审批（once/session）。
+            # 原实现 prod 下 non-shell 危险工具（如 service_manage stop/restart）
+            # 走临时审批，用户点"始终允许"即写入永久 allowlist 后免审，
+            # 与 shell 命令"prod 必须预登记"的合规姿态不一致（第 8 轮审查修复）。
+            if environment == "prod" and not self.is_permanently_allowed(tool, args):
+                await append_record_async(
+                    action=tool, conclusion="denied",
+                    run_id=ctx.run_id, iteration=ctx.iteration,
+                    target_type=_audit_target_type(ctx),
+                    target_id=_audit_target_id(ctx),
+                    environment=environment,
+                    command_raw=str(args.get("action") if isinstance(args, dict) else ""),
+                    result=f"prod_deny_no_allowlist: {tool} 未在 allowlist 预授权",
+                )
+                return ReinDecision(
+                    intercepted=True,
+                    intercept_reason=f"生产环境危险工具未预授权: {tool}",
+                    events=[TraceEvent(
+                        kind="warning",
+                        source="reins.permission_gate",
+                        run_id=ctx.run_id,
+                        iteration=ctx.iteration,
+                        payload={
+                            "tool": tool,
+                            "message": (
+                                f"[生产强化] 生产环境危险工具 {tool} 仅接受预授权 allowlist 放行。"
+                                "拒绝临时审批。请预先在权限 allowlist 中登记后重试。"
+                            ),
+                        },
+                    )],
+                    inject_messages=[{
+                        "role": "user",
+                        "content": (
+                            f"[系统拦截] 当前目标为生产环境，危险工具 {tool} 需预先在"
+                            "权限 allowlist 中登记后方可执行，此处拒绝临时授权。"
+                            "请改用更安全的操作，或提示用户预先登记 allowlist。"
+                        ),
+                    }],
+                )
             # C-review NIT：原 scope='once' 为死参数 — dangerous 每次授权的
             # 语义由 risk 分支保证（忽略 session 缓存，只认 once/permanent 键）
             if self.check_permission(tool, args, risk='dangerous',
-                                      conversation_id=ctx.conversation_id):
+                                      conversation_id=ctx.conversation_id,
+                                      run_id=ctx.run_id):
                 return ReinDecision()
         else:
             # moderate 不可逆 → session 级授权可接受（风险有限）
             if self.check_permission(tool, args,
-                                     conversation_id=ctx.conversation_id):
+                                     conversation_id=ctx.conversation_id,
+                                     run_id=ctx.run_id):
                 return ReinDecision()
 
         # 未授权 → 发 permission_needed 事件 + 拦截
@@ -989,6 +1216,9 @@ class PermissionGate:
                 "risk": risk,
                 "reversible": reversible,
                 "message": f"需要用户授权: {tool} (风险: {risk})",
+                # 命令执行工具在上方 _COMMAND_EXEC_TOOLS 分支已 early-return，
+                # 本路径只命中非命令工具（无 command 参数），故不携带
+                # normalized_command（前端 isCommandTool 判断下该行自然隐藏）
             },
         )] if is_first else []
         return ReinDecision(
@@ -1072,6 +1302,28 @@ def _get_global_permission_gate_sync(saddle: Optional[Any] = None) -> "Permissio
     return _global_permission_gate
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# 澄清向导 — 全局 pending 存储（供 routes 层写入用户回答）
+# ──────────────────────────────────────────────────────────────────────────────
+
+# 进程级澄清 pending 存储单例包装（模块级 dict 直接可写，此处提供读写封装）
+_global_clarification_store: Optional[dict] = None
+
+
+def _get_global_clarification_store() -> dict:
+    """获取澄清向导全局存储句柄（模块级 dict 单例）。
+
+    返回 dict 结构：
+    - "done": _CLARIFICATION_DONE (run_id → answers dict)
+    - "context": _CLARIFICATION_CONTEXT (run_id → ctx_info)
+    routes 层通过引用写入，ClarificationInterceptor.check 在同一进程内读到。
+    """
+    return {
+        "done": _CLARIFICATION_DONE,
+        "context": _CLARIFICATION_CONTEXT,
+    }
+
+
 @dataclass
 class ReflectionRein:
     """
@@ -1090,11 +1342,32 @@ class ReflectionRein:
     - 实际反思逻辑仍由 routes/agent.py 的 _run_reflection_and_evolution 异步执行。
     - 事件 payload 含 run_id / mode / final_state / iterations / tool_calls_summary，
       供路由层直接使用，无需重新从 ctx 提取。
+    - 运行终止时自动清理该 run_id 绑定的 once 授权池（P1 竞态修复）。
     """
-    point: ReinPoint = field(default=ReinPoint.AGENT_COMPLETE, init=False)
+    point: ReinPoint = field(default=ReinPoint.AGENT_COMPLETE)
     priority: int = field(default=5, init=False)
+    permission_gate: Optional["PermissionGate"] = field(default=None, repr=False)
 
     async def check(self, ctx: RunContext) -> ReinDecision:
+        # P1 竞态修复：运行终止时清理该 run 绑定的 once 授权池
+        #（AGENT_COMPLETE / AGENT_FAILED 均为终态，once 授权不应跨 run 残留）
+        if self.permission_gate is not None:
+            try:
+                released = self.permission_gate.cleanup_run_once(ctx.run_id)
+                if released:
+                    logger.debug("ReflectionRein: 清理 run %s 的 %d 条 once 授权",
+                                 ctx.run_id, released)
+            except Exception:
+                logger.warning("ReflectionRein: once 清理异常（不阻塞反思）", exc_info=True)
+            # 问题 4：同步清理拒绝命令记录
+            try:
+                denied_count = self.permission_gate.cleanup_run_denied(ctx.run_id)
+                if denied_count:
+                    logger.debug("ReflectionRein: 清理 run %s 的 %d 条拒绝记录",
+                                 ctx.run_id, denied_count)
+            except Exception:
+                logger.warning("ReflectionRein: denied 清理异常（不阻塞反思）", exc_info=True)
+
         # 统计工具调用摘要（避免传完整 tool_calls_log 进 payload，太重）
         tool_calls_log = ctx.tool_calls_log or []
         tool_names = [tc.get("tool", "?") for tc in tool_calls_log]
@@ -1458,10 +1731,258 @@ def create_default_reins(
     # 反思触发（AGENT_COMPLETE + AGENT_FAILED）
     # 注册两个实例，分别绑定到不同 ReinPoint，确保成功/失败/超上限都会推送 reflection_request
     # 原实现 AGENT_FAILED 没有拦截器，导致失败运行错过反思，演化数据偏斜
-    interceptors.append(ReflectionRein())  # AGENT_COMPLETE
-    failed_reflection = ReflectionRein()
-    failed_reflection.point = ReinPoint.AGENT_FAILED
-    interceptors.append(failed_reflection)
+    # P1 竞态修复：传递 permission_gate，运行终止时自动清理 once 授权池
+    reflection_complete = ReflectionRein(permission_gate=permission_gate)
+    interceptors.append(reflection_complete)  # AGENT_COMPLETE
+    reflection_failed = ReflectionRein(point=ReinPoint.AGENT_FAILED, permission_gate=permission_gate)
+    interceptors.append(reflection_failed)
+
+    # ── 澄清向导（PRE_TOOL_CALL）──
+    interceptors.append(ClarificationInterceptor())
 
     reins.register_all(interceptors)
     return reins
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 澄清向导（ClarificationGate）
+#
+# 设计要点：
+# - 一个 run 最多一道进行中澄清题（简化：按 run_id 键控）
+# - 仅在工具调用"意图不明"且 detect_vague 返回非空时触发；精准调用零打扰
+# - 前端在本地推进多步（A/B/C 卡片 + D 自定义输入），最终一次性 POST 答案
+# - POST /agent/clarification/answer 写 _CLARIFICATION_DONE → 下一轮 PRE_TOOL_CALL
+#   注入答案上下文 + 放行工具（LLM 按澄清结果重规划）
+# - 跳过（skip）= 全部留空 → 放行原调用走既有权限门控
+# ──────────────────────────────────────────────────────────────────────────────
+
+import re as _re
+
+# run_id → 已回答答案 dict {step_idx: {choice, custom_text}}
+_CLARIFICATION_DONE: dict[str, dict] = {}
+# run_id → 整治中题元信息（含 steps）；_done=True 表示答案就绪待注入
+_CLARIFICATION_CONTEXT: dict[str, dict] = {}
+
+
+def _shell_detect_vague(args: dict) -> Optional[str]:
+    """shell_exec 意图模糊判定：命令含破坏性动词 + 通配符/递归且未指定明确目标。
+
+    Returns:
+        模糊原因（触发澄清）或 None（目标明确 → 不触发）。
+    """
+    import re as _re
+    if not args or not isinstance(args, dict):
+        return None
+    cmd = args.get("command") or args.get("shell") or args.get("cmd") or ""
+    if not cmd or not isinstance(cmd, str):
+        return None
+    lower = cmd.strip().lower()
+    # 1) 含破坏性动词
+    _DESTRUCTIVE = ("rm ", "rm\t", "rmdir ", "rmdir\t", "find ", "xargs ", "chmod", "chown")
+    if not any(v in lower for v in _DESTRUCTIVE):
+        return None
+    # 2) 含通配符或递归标记（-rR 可能以 -rf/-fr/-rR 组合形式出现，做宽松匹配）
+    has_wildcard = any(c in cmd for c in ("*", "?"))
+    # 匹配 -r / -R / -rf / -fr / -rR 等任何含 r/R 的短选项 token
+    has_recurs = bool(_re.search(r'(?:^|\s)-[a-zA-Z]*[rR][a-zA-Z]*\b', lower))
+    if not has_wildcard and not has_recurs:
+        return None
+    # 3) 不含通配符/递归的精准单文件 rm/mv 视为明确（由权限门控兜底）
+    return f"命令 {cmd!r} 使用通配符/递归操作但未指定具体目标文件，影响范围不确定"
+
+
+def _shell_build_steps(args: dict) -> list[ClarificationStep]:
+    """为模糊 shell 命令构建 3 步澄清题（范围 / 处置方式 / 完成后）"""
+    cmd = ""
+    if isinstance(args, dict):
+        cmd = args.get("command") or args.get("shell") or args.get("cmd") or ""
+    cmd_display = (cmd[:40] + "…") if len(str(cmd)) > 40 else str(cmd)
+    return [
+        ClarificationStep(
+            question=f"\"{cmd_display}\" 的作用范围是？",
+            options=[
+                ClarificationOption(id="A", label="仅 git 已修改的文件（影响最小、最可控）"),
+                ClarificationOption(id="B", label="整个工作区全仓库扫描清理"),
+                ClarificationOption(id="C", label="我指定的特定文件或路径（运行时再列出）"),
+            ],
+            allow_custom=True,
+        ),
+        ClarificationStep(
+            question="对匹配项的处理方式？",
+            options=[
+                ClarificationOption(id="A", label="仅报告，列出匹配项但不做任何修改"),
+                ClarificationOption(id="B", label="直接执行删除/清理"),
+                ClarificationOption(id="C", label="执行但生成 undo 脚本（可回滚）"),
+            ],
+            allow_custom=True,
+        ),
+        ClarificationStep(
+            question="执行完成后？",
+            options=[
+                ClarificationOption(id="A", label="保持现状，不提交任何变更"),
+                ClarificationOption(id="B", label="自动生成 diff 摘要供我审查后再决定"),
+                ClarificationOption(id="C", label="清理完成后自动提交为新 commit"),
+            ],
+            allow_custom=True,
+        ),
+    ]
+
+
+# 可澄清注册表：tool_name → (detect_vague(args)->Optional[str], build_steps(args)->list[ClarificationStep])
+# detect_vague 返回 None 表示意图明确 → 跳过澄清直达执行
+_CLARIFIABLE_TOOLS: dict[str, tuple] = {
+    "shell_exec": (_shell_detect_vague, _shell_build_steps),
+}
+
+
+def _step_to_dict(s: ClarificationStep) -> dict:
+    return {
+        "question": s.question,
+        "options": [{"id": o.id, "label": o.label} for o in s.options],
+        "allow_custom": s.allow_custom,
+    }
+
+
+def _build_clarification_needed(run_id: str, tool: str, args: dict,
+                                steps: list[ClarificationStep], step: int,
+                                total: int, tool_call_id: str,
+                                reason: str = "") -> TraceEvent:
+    return TraceEvent(
+        kind="clarification_needed",
+        source="reins.clarification",
+        run_id=run_id,
+        payload={
+            "run_id": run_id,
+            "tool": tool,
+            "tool_call_id": tool_call_id,
+            "args": args,
+            "step": step,
+            "total": total,
+            "reason": reason,
+            "steps": [_step_to_dict(s) for s in steps],   # 全量步，前端本地推进
+        },
+    )
+
+
+def _format_answers(answers: dict) -> str:
+    """把答案 dict 格式化为一段用户消息（注入 LLM 让模型按澄清结果重规划）"""
+    if not answers:
+        return "用户选择跳过澄清，未指定具体范围。"
+    lines = ["用户已回答澄清问题："]
+    for step_idx in sorted(answers.keys(), key=lambda x: int(x)):
+        a = answers[step_idx] if isinstance(answers[step_idx], dict) else {"choice": str(answers[step_idx])}
+        choice = a.get("choice", "")
+        custom_text = a.get("custom_text")
+        line = f"  Q{int(step_idx) + 1}: {choice}"
+        if choice == "custom" and custom_text:
+            line += f"（{custom_text}）"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+@dataclass
+class ClarificationInterceptor:
+    """澄清向导拦截器 — 对 PRE_TOOL_CALL 的不明意图工具前置问答收窄范围。
+
+    触发流程：
+    1. 首个 PRE_TOOL_CALL（本次工具刚被 append 进 tool_calls_log[-1]）
+       → detect_vague 通过 + detect_vague 返回非空
+       → 构建 Pending 题元，发 clarification_needed(step=0) + inject 等待提示
+       → intercepted=True（本轮该工具不执行）
+    2. 等待间再次 PRE_TOOL_CALL（LLM 重试同一工具时）
+       → 重发当前 step 的 clarification_needed + inject 等待提示
+       → intercepted=True（仍不执行）
+    3. POST /agent/clarification/answer → _CLARIFICATION_DONE[run_id]=answers
+       随后 PRE_TOOL_CALL → 注入 answers 上下文 + clarification_done 事件
+       → intercepted=False（LLM 按澄清结果重规划后放行本工具）
+    """
+    point: ReinPoint = field(default=ReinPoint.PRE_TOOL_CALL, init=False)
+    priority: int = 8  # 先于 PermissionGate(priority=10)：先问清意图再走权限
+
+    async def check(self, ctx: RunContext) -> ReinDecision:
+        if not ctx.tool_calls_log:
+            return ReinDecision()
+
+        tc = ctx.tool_calls_log[-1]
+        run_id = ctx.run_id
+        tool = tc.get("tool", "")
+
+        # ── 答案就绪 → 注入上下文 + 放行 ──
+        if run_id in _CLARIFICATION_DONE:
+            answers = _CLARIFICATION_DONE.pop(run_id)
+            ctx_info = _CLARIFICATION_CONTEXT.pop(run_id, None)
+            summary = _format_answers(answers)
+            done_ev = TraceEvent(
+                kind="clarification_done",
+                source="reins.clarification",
+                run_id=run_id,
+                iteration=ctx.iteration,
+                payload={"run_id": run_id, "answers": answers,
+                         "summary": summary,
+                         "tool": (ctx_info or {}).get("tool", tool)},
+            )
+            return ReinDecision(
+                intercepted=False,
+                events=[done_ev],
+                inject_messages=[{
+                    "role": "user",
+                    "content": f"[用户澄清结果]\n{summary}\n请按上述澄清范围重新执行操作。",
+                }],
+            )
+
+        # ── 整治中（未完成）── ─ 重发当前步事件 + 拦截 ──
+        ctx_info = _CLARIFICATION_CONTEXT.get(run_id)
+        if ctx_info and not ctx_info.get("_done"):
+            step = ctx_info.get("current_step", 0)
+            steps = ctx_info.get("steps", [])
+            ev = _build_clarification_needed(
+                run_id, ctx_info.get("tool", tool), ctx_info.get("args", {}),
+                steps, step, ctx_info.get("total", len(steps)),
+                ctx_info.get("tool_call_id", ""),
+                reason=ctx_info.get("reason", ""),
+            )
+            return ReinDecision(
+                intercepted=True,
+                intercept_reason="clarification_pending",
+                events=[ev],
+                inject_messages=[{
+                    "role": "user",
+                    "content": "一个澄清问题正在等待用户回答，请不要重试调用同一工具。",
+                }],
+            )
+
+        # ── 无整治中的题 ── 仅在工具 intent 不明时才创建新题 ──
+        entry = _CLARIFIABLE_TOOLS.get(tool)
+        if not entry:
+            return ReinDecision()   # 工具不在注册表：直达执行
+        detect_vague, build_steps_fn = entry
+        args = tc.get("args", {})
+        reason = detect_vague(args)
+        if not reason:
+            return ReinDecision()   # 意图明确：直达执行
+
+        steps = build_steps_fn(args)
+        if not steps:
+            return ReinDecision()   # 未配置题目：直达执行
+
+        # 创建 Pending 题元 + 发首步事件 + 拦截
+        tool_call_id = str(len(ctx.tool_calls_log))
+        ctx_info = {
+            "tool": tool, "args": args, "tool_call_id": tool_call_id,
+            "steps": steps, "current_step": 0, "total": len(steps),
+            "reason": reason, "_done": False,
+        }
+        _CLARIFICATION_CONTEXT[run_id] = ctx_info
+        ev = _build_clarification_needed(
+            run_id, tool, args, steps, 0, len(steps), tool_call_id,
+            reason=reason,
+        )
+        return ReinDecision(
+            intercepted=True,
+            intercept_reason="clarification_needed",
+            events=[ev],
+            inject_messages=[{
+                "role": "user",
+                "content": f"工具 {tool} 调用意图不明：{reason}\n已发送问题给用户，请等待回答后按澄清结果执行。",
+            }],
+        )

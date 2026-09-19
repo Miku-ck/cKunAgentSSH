@@ -35,12 +35,12 @@ export const useAppStore = defineStore('app', () => {
       if (_portPollsLeft-- <= 0) return
       api.getBackendPort().then((port: number) => {
         if (port && port !== backendPort.value) {
-          console.debug('[appStore] restarting 期间检测到新端口:', port)
+
           backendPort.value = port
         }
       }).catch((err) => {
         // 后端尚未起监听时查询失败属预期，继续轮询
-        console.debug('[appStore] restarting 期间 getBackendPort 查询失败（继续轮询）:', err)
+
       }).finally(() => {
         if (_portPollsLeft > 0) {
           _portPollTimer = setTimeout(poll, 500)
@@ -74,7 +74,7 @@ export const useAppStore = defineStore('app', () => {
         }
       }
     }).catch((err) => {
-      console.debug('[appStore] getBackendPort fallback failed:', err)
+
     })
 
     // Pinia scope 销毁时清理监听器（HMR 场景）

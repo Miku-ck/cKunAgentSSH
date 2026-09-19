@@ -132,7 +132,7 @@ export const useSSHStore = defineStore('ssh', () => {
       localStorage.removeItem(LEGACY_KEY)
     } catch (e) {
       // m6 修复：记录迁移失败日志，便于排查兼容性问题
-      console.debug('[ssh] 迁移旧版连接配置失败:', e)
+
     }
   }
 
@@ -293,7 +293,7 @@ export const useSSHStore = defineStore('ssh', () => {
         }
       } catch (e) {
         // C1 修复：IPC 调用失败时仍继续清理本地 session，防止僵尸会话
-        console.debug('[ssh] closeSession IPC 失败:', e)
+
       }
     }
 

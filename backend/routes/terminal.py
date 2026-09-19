@@ -6,7 +6,6 @@ POST /api/terminal/predict — 根据终端上下文预测下一步可能输入�
 import asyncio
 import json
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field

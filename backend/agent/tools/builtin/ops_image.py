@@ -17,7 +17,6 @@ import shlex
 
 from agent.tools import BaseTool, ToolResult, ToolMeta
 from agent.tools.builtin.ops_common import (
-    base64_read_cmd,
     is_remote,
     is_traversal,
     run_headless,

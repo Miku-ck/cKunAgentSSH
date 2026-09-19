@@ -1491,7 +1491,7 @@ app.whenReady().then(async () => {
       extraEnv.ELECTRON_BRIDGE_TOKEN = bridgeEnv.token
     }
     const port = await backendManager.start(extraEnv)
-    console.log(`[BackendManager] Python backend ready on port ${port}`)
+
     // WS 反向通道：主进程出站拨号后端，定时任务命令的唯一链路（阶段 2 已移除 HTTP 端口桥）
     ensureBridgeWsClient(port)
     if (mainWindow && !mainWindow.isDestroyed()) {

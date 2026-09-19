@@ -748,19 +748,8 @@ class Driver:
             logger.info("意图为 CONVERSATION，禁用所有工具 schema")
             return []
 
-        if intention.task_type in (TaskType.QUERY, TaskType.RESEARCH):
-            net_tool_names = {"web_search", "web_fetch"}
-            available = {
-                schema.get("function", {}).get("name")
-                for schema in tools_schema
-                if schema.get("type") == "function"
-            }
-            has_net = bool(net_tool_names & available)
-            logger.info(
-                "意图为 %s，联网工具可用: %s",
-                intention.task_type.value, has_net,
-            )
-
+        # QUERY / RESEARCH / 其他：均保持全部工具（由 guide prompt 引导，
+        # 不在架构层裁剪）
         return tools_schema
 
     async def _emit_decision_events(

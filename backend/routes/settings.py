@@ -261,6 +261,38 @@ def update_memory_settings(req: MemorySettingsRequest):
     return db.get_memory_settings()
 
 
+# ── 会话保留清理（用户数据，默认关闭）──
+
+
+class ConversationRetentionRequest(BaseModel):
+    enabled: bool = False
+    keep_count: int = Field(1000, ge=0, le=100000)
+
+
+def _conv_retention() -> dict:
+    enabled = (db.get_app_setting("conv_retention.enabled", "false") or "false").lower() == "true"
+    raw = db.get_app_setting("conv_retention.keep_count")
+    try:
+        keep = int(raw) if raw is not None else 1000
+    except (ValueError, TypeError):
+        keep = 1000
+    return {"enabled": enabled, "keep_count": keep}
+
+
+@router.get("/settings/conv-retention")
+def get_conv_retention():
+    """获取会话保留设置（默认关闭）。开启后按 keep_count 清理最旧的已结束会话。"""
+    return _conv_retention()
+
+
+@router.put("/settings/conv-retention")
+def update_conv_retention(req: ConversationRetentionRequest):
+    """更新会话保留设置。enabled=false（默认）时不做任何自动清理。"""
+    db.set_app_setting("conv_retention.enabled", "true" if req.enabled else "false")
+    db.set_app_setting("conv_retention.keep_count", str(req.keep_count))
+    return _conv_retention()
+
+
 # ── 后处理设置 ──
 
 

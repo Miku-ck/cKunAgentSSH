@@ -1,7 +1,6 @@
 """
 技能路由 — 技能 CRUD 与启用管理（支持按模式隔离）
 """
-import json
 import logging
 from typing import Optional
 

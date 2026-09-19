@@ -3,7 +3,6 @@
  *
  * 错误码契约 / isRetryable / 中文文案与 electron/ssh-error.ts 共享同一
  * 单一实现源（shared/ssh-error-core.ts），本文件只提供消费侧工具：
- *   - isSSHError(err)      — 判断错误是否携带 __sshError 结构化 transport
  *   - extractSSHError(err) — 从 Error 中提取 SSHErrorTransport（优先 __sshError，回退 name 解析）
  *   - toFriendlySshMessage(code) — 按 code 返回中文友好文案（共享实现的别名导出）
  *
@@ -57,17 +56,4 @@ export function extractSSHError(err: unknown): SSHErrorTransport | null {
   return null
 }
 
-/** 判断错误是否为 SSH 结构化错误 */
-export function isSSHError(err: unknown): boolean {
-  return extractSSHError(err) !== null
-}
 
-/** 从 Error 中获取最佳显示文案：结构化错误按 code 翻译；普通 Error 直接返回 message */
-export function bestDisplayMessage(err: unknown): string {
-  const transport = extractSSHError(err)
-  if (transport) {
-    return toFriendlySshMessage(transport.code, transport.detail)
-  }
-  if (err instanceof Error) return err.message
-  return String(err || '未知错误')
-}

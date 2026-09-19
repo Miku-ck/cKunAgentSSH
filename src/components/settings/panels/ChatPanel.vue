@@ -81,6 +81,30 @@
       <SettingRow label="自动生成技能" desc="从对话中沉淀可复用技能（每 3 轮触发）">
         <ToggleSwitch v-model="settings.postProcess.generateSkill" />
       </SettingRow>
+
+      <div class="section-divider" />
+
+      <h4 class="section-title">会话保留</h4>
+
+      <SettingRow label="自动清理旧会话" desc="开启后定期删除最旧的已结束会话（进行中的会话永不删除）。默认关闭，建议开启以避免数据库长期膨胀">
+        <ToggleSwitch :model-value="retention.enabled" @update:model-value="onRetentionToggle" />
+      </SettingRow>
+
+      <SettingRow
+        v-if="retention.enabled"
+        label="保留会话数"
+        desc="按最近活跃保留的会话条数，超出部分自动清理"
+      >
+        <input
+          v-model.number="retention.keepCount"
+          type="number"
+          min="10"
+          max="100000"
+          class="setting-number"
+          @change="onRetentionCountChange"
+        />
+      </SettingRow>
+      <p v-if="retentionSaving" class="hint saving">保存中…</p>
     </div>
   </div>
 </template>
@@ -98,7 +122,49 @@ const settings = settingsStore.settings
 const defaultModelName = ref('加载中…')
 const defaultModelId = ref('')
 
+// ── 会话保留（服务端设置，默认关闭；删除用户数据，故默认不启用）──
+const retention = ref<{ enabled: boolean; keepCount: number }>({ enabled: false, keepCount: 1000 })
+const retentionSaving = ref(false)
+
+async function loadRetention() {
+  try {
+    const data = await api.getConvRetention()
+    retention.value = { enabled: !!data.enabled, keepCount: data.keep_count || 1000 }
+  } catch {
+    // 加载失败保持默认关闭（安全方向）
+  }
+}
+
+async function saveRetention(patch: Partial<{ enabled: boolean; keepCount: number }>) {
+  const prev = { ...retention.value }
+  const next = {
+    enabled: patch.enabled ?? prev.enabled,
+    keepCount: patch.keepCount ?? prev.keepCount,
+  }
+  // 乐观更新
+  retention.value = { ...next }
+  retentionSaving.value = true
+  try {
+    await api.updateConvRetention({ enabled: next.enabled, keep_count: next.keepCount })
+  } catch {
+    retention.value = { ...prev }
+  } finally {
+    retentionSaving.value = false
+  }
+}
+
+function onRetentionToggle(v: boolean) {
+  void saveRetention({ enabled: v })
+}
+
+function onRetentionCountChange() {
+  const n = Math.max(10, Math.min(100000, Number(retention.value.keepCount) || 1000))
+  retention.value.keepCount = n
+  void saveRetention({ keepCount: n })
+}
+
 onMounted(async () => {
+  void loadRetention()
   try {
     const model = await api.getDefaultModel('ssh')
     defaultModelName.value = model.name || model.model_id || model.id || '未配置'
@@ -184,6 +250,21 @@ onMounted(async () => {
   min-width: 40px;
   text-align: right;
 }
+
+.setting-number {
+  width: 100px;
+  height: 28px;
+  padding: 0 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-input);
+  border-radius: var(--radius-sm, 4px);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+}
+.setting-number:focus { border-color: var(--accent-primary); }
+.hint.saving { margin: 8px 0 0; font-size: 11px; color: var(--text-tertiary); }
 
 .section-divider {
   height: 1px;

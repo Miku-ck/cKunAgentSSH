@@ -118,7 +118,7 @@ export const useSftpStore = defineStore('sftp', () => {
       online.value = false
       remoteError.value = err?.message || 'SFTP 打开失败'
       // 失败时关闭 SSH
-      try { await getApi().sshDisconnect(id) } catch (e) { console.debug('[sftp] 连接失败后关闭 SSH 失败:', e) }
+      try { await getApi().sshDisconnect(id) } catch { }
       sshSessionId.value = ''
       throw err
     }
@@ -154,7 +154,7 @@ export const useSftpStore = defineStore('sftp', () => {
       online.value = false
       remoteError.value = err?.message || 'SFTP 打开失败'
       // 复用模式下不关闭 SSH 连接（终端仍需要）
-      try { await getApi().sftpClose(terminalSshId) } catch (e) { console.debug('[sftp] 连接失败后关闭 SFTP 失败:', e) }
+      try { await getApi().sftpClose(terminalSshId) } catch { }
       sshSessionId.value = ''
       reusingTerminal.value = false
       throw err
@@ -163,10 +163,10 @@ export const useSftpStore = defineStore('sftp', () => {
 
   async function disconnect(): Promise<void> {
     if (sshSessionId.value) {
-      try { await getApi().sftpClose(sshSessionId.value) } catch (e) { console.debug('[sftp] 关闭 SFTP 失败:', e) }
+      try { await getApi().sftpClose(sshSessionId.value) } catch { }
       // 复用终端模式不关闭 SSH 连接（终端仍需要），仅关闭 SFTP 子系统
       if (!reusingTerminal.value) {
-        try { await getApi().sshDisconnect(sshSessionId.value) } catch (e) { console.debug('[sftp] 断开 SSH 失败:', e) }
+        try { await getApi().sshDisconnect(sshSessionId.value) } catch { }
       }
     }
     sshSessionId.value = ''
@@ -384,7 +384,7 @@ async function remoteRefresh(): Promise<void> {
       if (results.some(r => r.ok)) await localRefresh()
     }).catch((err) => {
       // C2 修复：防止 post-batch refresh 抛错导致未捕获 Promise rejection
-      console.debug('[sftp] batch local-copy 后续刷新失败:', err)
+
     })
   }
 
@@ -432,7 +432,7 @@ async function remoteRefresh(): Promise<void> {
       if (results.some(r => r.ok)) await remoteRefresh()
     }).catch((err) => {
       // C2 修复：防止 post-batch refresh 抛错导致未捕获 Promise rejection
-      console.debug('[sftp] batch remote-copy 后续刷新失败:', err)
+
     })
   }
 
@@ -623,7 +623,7 @@ async function remoteRefresh(): Promise<void> {
       if (results.some(r => r.ok)) await remoteRefresh()
     }).catch((err) => {
       // C2 修复：防止 post-batch refresh 抛错导致未捕获 Promise rejection
-      console.debug('[sftp] batch upload 后续刷新失败:', err)
+
     })
   }
 
@@ -691,7 +691,7 @@ async function remoteRefresh(): Promise<void> {
       if (results.some(r => r.ok)) await localRefresh()
     }).catch((err) => {
       // C2 修复：防止 post-batch refresh 抛错导致未捕获 Promise rejection
-      console.debug('[sftp] batch download 后续刷新失败:', err)
+
     })
   }
 
@@ -1066,7 +1066,7 @@ function retryTransfer(id: string): void {
     : kind === 'copy-local' ? () => runLocalCopy(newId, from, to)
     : () => runRemoteCopy(newId, from, to)
   runBatch([{ fn: task, id: newId, kind }]).catch((err) => {
-    console.debug('[sftp] retry batch 后续处理失败:', err)
+
   })
 }
 

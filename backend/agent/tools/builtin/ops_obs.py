@@ -63,7 +63,7 @@ def process_inspect_cmd(query: str) -> str:
 
 def netprobe_bash_cmd(host: str, port: str, timeout: str) -> str:
     """network_probe 远端模板①：bash /dev/tcp 探测（host/port 经 $1/$2 传参）。"""
-    hq, pq, tq = shlex.quote(host), shlex.quote(port), shlex.quote(timeout)
+    hq, pq = shlex.quote(host), shlex.quote(port)
     return (
         f"bash -c 'exec 3<>/dev/tcp/$1/$2 && echo OK || echo FAIL; "
         f"exec 3<&-' probe {hq} {pq}"

@@ -149,7 +149,7 @@ export function useChatPersistence(options: {
         saveSelectedModelId(id)
       }
     } catch (e) {
-      console.debug('[useChatPersistence] fetchDefaultModel skipped:', e)
+
     }
   }
 

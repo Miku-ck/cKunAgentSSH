@@ -76,11 +76,6 @@ export class ElectronBridge {
     this.token = ''
   }
 
-  /** 桥接 token（WS 客户端 hello 握手用；与注入后端 env 的是同一个） */
-  getBridgeToken(): string {
-    return this.token
-  }
-
   /**
    * 桥接业务逻辑的**唯一实现**，WS 客户端（bridge-ws-client）收到 req 帧后调用：
    *

@@ -15,7 +15,10 @@ SSH 智能运维终端 — 集成 SSH 连接管理、远程终端、SFTP 文件�
 - **实时监控仪表盘**：每 5s 轮询远程指标（CPU 跨轮次差分 / 内存 / 负载 / 磁盘 / 进程 TOP / 监听端口 / GPU nvidia-smi），Sparkline 趋势，单点指标可「分析」送 AI；连续失败转后台重试，断线自动恢复
 - **终端「问 AI」**：选中终端内容 → 选区旁悬浮按钮 → 预填 AI 面板问题草稿，随消息自动注入 cwd / 最近命令 / 选区上下文
 - **AI 运维助手**：流式对话 + 思考链、多模型切换、Agent 智能体（工具调用）
-- **Agent 框架（Harness）**：ReAct 决策循环、10 拦截器、22 工具、动态步数预算、循环检测、成本熔断
+- **Agent 框架（Harness）**：ReAct 决策循环、11 拦截器、22 工具、动态步数预算、循环检测、成本熔断
+- **澄清向导**：Agent 工具调用意图不明时拦截并弹出多步澄清卡片（A/B/C + 自定义），答完注入上下文放行、可跳过；精准调用零打扰
+- **生产环境授权强化**：prod 环境仅认预授权 allowlist（禁临时审批），service stop/restart 等破坏性动作自动升级 dangerous 需逐次审批
+- **会话保留（可选）**：设置页可开启自动清理已完结会话（默认关闭，永不触碰进行中的会话）
 - **目标机环境画像**：run 开始自动探测发行版 / init / 包管理器 / 身份，注入系统提示，避免模型凭印象生成与发行版不匹配的命令
 - **运维方法论注入**：意图识别输出 `is_change`（变更 / 只读正交维度），按任务性质二选一注入变更纪律 / 只读取证方法论
 - **定时任务**：倒计时、历史耗时、失败 run 一键「AI 诊断」
@@ -298,11 +301,12 @@ Agent 框架采用马术装备隐喻，契约驱动设计。
 
 ```
 Driver（驭手）—— ReAct 决策循环主驱动
-  ├── Reins（缰绳）—— 10 拦截器策略层
+  ├── Reins（缰绳）—— 11 拦截器策略层
   │   ├── SkillRein         AGENT_START    技能注入
   │   ├── LoopDetector      PRE_TOOL_CALL  循环检测
-  │   ├── PermissionGate    PRE_TOOL_CALL  权限审批
+  │   ├── PermissionGate    PRE_TOOL_CALL  权限审批（prod 仅预授权 allowlist）
   │   ├── FilesystemGuard   PRE_TOOL_CALL  敏感命令检测
+  │   ├── ClarificationInterceptor PRE_TOOL_CALL 澄清向导（意图不明时拦截提问）
   │   ├── AuditLogger       POST_TOOL_CALL 审计日志
   │   ├── DynamicBudgetRein POST_ITERATION 动态步数预算
   │   ├── CostBudgetRein    POST_ITERATION 成本/token 硬熔断

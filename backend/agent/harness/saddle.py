@@ -167,7 +167,6 @@ class UndoBuilder:
     async def build(call: ToolCall, ctx: RunContext) -> UndoAction:
         tool = call.name
         args = call.args
-        run_id = ctx.run_id
 
         if tool == "shell_exec":
             cmd = args.get("command") or args.get("shell", "")

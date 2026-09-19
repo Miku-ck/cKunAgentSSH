@@ -160,7 +160,7 @@ export class PtyManager {
       throw new Error(`工作目录必须是目录: ${cwd}`)
     }
 
-    console.log(`[PtyManager] spawning shell: ${shell}, args: ${JSON.stringify(finalArgs)}, cwd: ${cwd}`)
+
     const proc = pty.spawn(shell, finalArgs, {
       name: 'xterm-256color',
       cols,
@@ -181,7 +181,7 @@ export class PtyManager {
 
     // 退出事件
     proc.onExit(({ exitCode }) => {
-      console.log(`[PtyManager] shell exited: ${shell}, exitCode: ${exitCode}`)
+
       this.sessions.delete(id)
       this.safeSend('pty:exit', { id, exitCode })
     })

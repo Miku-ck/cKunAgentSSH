@@ -318,10 +318,6 @@ async def _remote_launch(context, job_id: str, cmd: str) -> tuple[bool, Optional
       mkdir 目录 → base64 落 run.sh → setsid 后台运行 → echo $!
     run.sh 内容：原始命令 + 退出码落 rc 文件。
     """
-    d = f"{_JOBS_ROOT}/{job_id}"
-    script = f"{d}/run.sh"
-    log = f"{d}/out.log"
-    rc = f"{d}/rc"
     launch_cmd = job_launch_cmd(job_id, cmd)
     ok, out = await run_headless(context, launch_cmd, timeout=20)
     if not ok:

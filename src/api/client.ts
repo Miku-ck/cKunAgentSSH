@@ -373,6 +373,19 @@ export const api = {
       },
     ),
 
+  // 会话保留清理（用户数据，默认关闭）— 开启后按 keep_count 清理最旧的已结束会话
+  getConvRetention: () =>
+    request<{ enabled: boolean; keep_count: number }>('/settings/conv-retention'),
+
+  updateConvRetention: (payload: { enabled: boolean; keep_count: number }) =>
+    request<{ enabled: boolean; keep_count: number }>(
+      '/settings/conv-retention',
+      {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      },
+    ),
+
   testModelConnection: async (id: string): Promise<{ status: 'ok'; latency_ms: number; model_name?: string } | { status: 'error'; detail: string; model_name?: string }> => {
     try {
       const body = await request<{ status: 'ok'; latency_ms: number; model_name?: string } | { status: 'error'; detail: string; model_name?: string }>(
@@ -507,7 +520,7 @@ export const auditApi = {
 // ── Agent SSE 流式运行 ──
 
 export interface AgentSSEEvent {
-  type: 'state' | 'content' | 'reasoning' | 'tool_call_start' | 'tool_call_result' | 'warning' | 'error' | 'human_help_needed' | 'permission_needed' | 'permission_expired' | 'intention' | 'tool_deliver' | 'done'
+  type: 'state' | 'content' | 'reasoning' | 'tool_call_start' | 'tool_call_result' | 'warning' | 'error' | 'human_help_needed' | 'permission_needed' | 'permission_expired' | 'intention' | 'tool_deliver' | 'clarification_needed' | 'clarification_done' | 'done'
   state?: string
   iteration?: number
   content?: string
@@ -524,6 +537,8 @@ export interface AgentSSEEvent {
   // permission_needed 事件专用字段
   risk?: string
   reversible?: boolean
+  /** 归一化展示命令（问题 2 改进：前端据此展示实际授权键绑定的命令形态） */
+  normalized_command?: string
   // P7: done 事件携带的成本快照 + run_id
   cost?: AgentCostSnapshot
   run_id?: string
@@ -534,6 +549,16 @@ export interface AgentSSEEvent {
   command?: string
   session_id?: string
   requires_confirm?: boolean
+  // clarification_needed 事件专用字段
+  tool_call_id?: string
+  current_step?: number
+  total_steps?: number
+  question?: string
+  options?: Array<{ id: string; label: string }>
+  allow_custom?: boolean
+  // clarification_done 事件专用字段
+  answers?: Record<string, { choice: string; custom_text?: string }>
+  summary?: string
 }
 
 export interface AgentCostSnapshot {
@@ -770,11 +795,47 @@ export const agentApi = {
   // 权限管理
   // 审查 M-3：默认 scope 'once'（仅放行下一次调用），原默认 'always' 一次点击即永久免审批；
   // command 用于 shell_exec 的命令级绑定（只批准被展示的那条命令）
-  grantPermission: (tool: string, scope: 'once' | 'session' | 'always' = 'once', command?: string) =>
+  // runId/conversationId：once 授权按 run 键控、session 按会话键控（后端 PermissionGate 隔离）
+  grantPermission: (tool: string, scope: 'once' | 'session' | 'always' = 'once', command?: string,
+                    runId?: string, conversationId?: string) =>
     request<{ tool: string; scope: string; grant_key: string; granted: boolean }>(`/agent/permission/grant`, {
       method: 'POST',
-      body: JSON.stringify({ tool, scope, ...(command ? { command } : {}) }),
+      body: JSON.stringify({
+        tool, scope,
+        ...(command ? { command } : {}),
+        ...(runId ? { run_id: runId } : {}),
+        ...(conversationId ? { conversation_id: conversationId } : {}),
+      }),
     }),
+
+  /** 清理某次 run 的全部 once 授权（前端显式终止或超时时主动释放） */
+  releaseRunPermissions: (runId: string) =>
+    request<ReleaseRunResponse>(
+      `/agent/permission/release-run/${encodeURIComponent(runId)}`,
+      { method: 'POST' },
+    ),
+
+  /** 标记某 run 下某命令被用户拒绝（visible_terminal 拒绝后调用，后续不再弹卡片） */
+  denyCommand: (tool: string, command: string, runId: string) =>
+    request<{ tool: string; command: string; run_id: string; denied_key: string }>(
+      '/agent/permission/deny-command',
+      { method: 'POST', body: JSON.stringify({ tool, command, run_id: runId }) },
+    ),
+
+  // ── 澄清向导 ──
+  /** 提交用户答案（前端澄清向导"完成"按钮调用） */
+  submitClarification: (runId: string, answers: Record<string, { choice: string; custom_text?: string }>) =>
+    request<{ run_id: string; status: string; steps: number }>(
+      '/agent/clarification/answer',
+      { method: 'POST', body: JSON.stringify({ run_id: runId, answers }) },
+    ),
+
+  /** 跳过所有剩余澄清步（前端"跳过"按钮调用） */
+  skipClarification: (runId: string) =>
+    request<{ run_id: string; status: string }>(
+      '/agent/clarification/skip',
+      { method: 'POST', body: JSON.stringify({ run_id: runId, answers: {} }) },
+    ),
 }
 
 // ── 定时任务调度 API ──
@@ -877,6 +938,9 @@ export interface AgentToolsResponse { mode: string; tools: AgentToolInfo[] }
 
 /** GET /agent/permission/list 永久授权键集合（"tool" 或 "tool:cmdhash"） */
 export interface PermissionListResponse { tools: string[] }
+
+/** POST /agent/permission/release-run/{run_id} — 清理某次 run 的全部 once 授权 */
+export interface ReleaseRunResponse { run_id: string; released: number }
 
 /** GET /agent/memories 单条记忆（embedding 已在后端剔除） */
 export interface AgentMemoryItem {

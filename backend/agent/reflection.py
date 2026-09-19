@@ -374,10 +374,8 @@ class MetaReflection:
             return []
 
         # 检测 1：终态后继续转移
-        seen_terminal = False
         for src, dst in transitions:
             if src in self._TERMINAL_STATES:
-                seen_terminal = True
                 if dst not in self._TERMINAL_STATES:
                     insights.append(
                         f"状态转移异常：终态 {src} 后继续转移到 {dst}（应为终态）"

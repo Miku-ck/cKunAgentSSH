@@ -47,14 +47,14 @@ if not API_TOKEN:
 async def lifespan(_app: FastAPI):
     """初始化数据库 + 启动后台意识 tick"""
     init_db(settings.db_path)
-    print(f"[cKunAgentic] Database initialized: {settings.db_path}")
+    logger.info("[cKunAgentic] Database initialized: %s", settings.db_path)
 
     # 审查修复（P2 E9）：模型种子探测（httpx.get 同步阻塞）从 init_db 移至
     # 独立异步入口，放 asyncio.to_thread 线程池执行，不阻塞事件循环
     try:
         await seed_models_async(settings.db_path)
     except Exception as e:
-        print(f"[cKunAgentic] Model seed probe skipped: {e}")
+        logger.warning("[cKunAgentic] Model seed probe skipped: %s", e)
 
     # 启动对账：崩溃/重启后滞留 in_progress 的会话复位为 completed。
     # Agent run 在运行中崩溃时复位逻辑丢失，会话会永久滞留 in_progress。
@@ -64,9 +64,9 @@ async def lifespan(_app: FastAPI):
         import database as _db
         _n = await _asyncio.to_thread(_db.reset_stale_in_progress_conversations)
         if _n:
-            print(f"[cKunAgentic] Reset {_n} stale in_progress conversation(s)")
+            logger.info("[cKunAgentic] Reset %s stale in_progress conversation(s)", _n)
     except Exception as e:
-        print(f"[cKunAgentic] Stale conversation reset skipped: {e}")
+        logger.warning("[cKunAgentic] Stale conversation reset skipped: %s", e)
 
     # 修复：从数据库加载后处理配置，避免使用默认值导致用户设置不生效
     from post_processor import init_post_process_manager, load_post_process_config_from_db
@@ -202,7 +202,7 @@ if __name__ == "__main__":
     parser.add_argument("--host", type=str, default="127.0.0.1", help="监听地址")
     args = parser.parse_args()
 
-    print(f"[cKunAgentic] Starting backend on {args.host}:{args.port}")
+    logger.info("[cKunAgentic] Starting backend on %s:%s", args.host, args.port)
     # 使用 asyncio.run(Server.serve()) 代替 uvicorn.run()，
     # 避免 PowerShell 后台运行时 WatchFiles reloader 启动缓慢导致健康检查超时
     import asyncio

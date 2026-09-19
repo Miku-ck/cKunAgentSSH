@@ -14,7 +14,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, AsyncIterator, Awaitable, Callable, Optional, Protocol, Union, runtime_checkable
+from typing import Any, Optional, Protocol, runtime_checkable
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -220,6 +220,52 @@ class ReinDecision:
     undo_actions: list[UndoAction] = field(default_factory=list)
     inject_messages: list[dict[str, str]] = field(default_factory=list)  # 注入到下一轮 LLM 的纠偏消息
     terminate: bool = False  # 终止整个 run（FAILED）；仅 PRE_TOOL_CALL 的拦截器会设置
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 澄清向导契约 — 仅当工具调用意图不明确时前置多步问答收窄范围
+# ──────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class ClarificationOption:
+    """单个澄清选项（A / B / C 卡片）"""
+    id: str                 # "A" | "B" | "C"
+    label: str              # 卡片展示文案；可含项目动态上下文引用（如 git diff 摘要）
+
+
+@dataclass
+class ClarificationStep:
+    """一步澄清问题（含当前题面 + 选项 + 是否允许 D 自定义输入）"""
+    question: str
+    options: list[ClarificationOption]
+    allow_custom: bool = True
+
+
+@dataclass
+class PendingClarification:
+    """某 run 下一道待答的澄清题单（进程内存；同 run 内的澄清题串行推进）"""
+    run_id: str
+    tool: str
+    tool_call_id: str           # 被拦截的 tool_call.id（resume 时回查注入的目标）
+    args: dict                  # 被拦截的工具调用原始参数
+    steps: list[ClarificationStep]   # 完整题序列
+    current_step: int           # 0-based
+    answers: dict[int, dict]    # {step_index: {choice: "A"|"custom", custom_text?: "..."}}
+
+    @property
+    def is_complete(self) -> bool:
+        """所有必答步骤均已回答（跳过的步骤不计入完成）"""
+        answered = {i for i, a in self.answers.items() if a.get("choice")}
+        required = {i for i, s in enumerate(self.steps) if not s.allow_custom or True}
+        return len(answered) == len(self.steps)
+
+    @property
+    def total(self) -> int:
+        return len(self.steps)
+
+    @property
+    def skipped_all(self) -> bool:
+        return len(self.answers) == 0
 
 
 @runtime_checkable

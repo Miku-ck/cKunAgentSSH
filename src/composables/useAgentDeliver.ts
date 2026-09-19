@@ -12,7 +12,7 @@
  * 4. 用户拒绝 / 写入失败 / 超时等均回传失败结果，避免后端挂死。
  */
 import { ref, reactive } from 'vue'
-import { postToolResult } from '@/api/client'
+import { postToolResult, agentApi } from '@/api/client'
 import { useSSHStore } from '@/stores/ssh'
 
 export type DeliveryStatus =
@@ -32,6 +32,8 @@ export interface ToolDelivery {
   output: string
   exit_code: number | null
   error?: string
+  /** 问题 4：发起交付的 run_id（拒绝时用于标记 deny_command） */
+  runId?: string
 }
 
 interface ToolDeliverPayload {
@@ -39,6 +41,7 @@ interface ToolDeliverPayload {
   command: string
   session_id: string
   requires_confirm: boolean
+  runId?: string
 }
 
 /** 单次捕获的解析状态（进程内非响应式即可，纯文本解析用） */
@@ -199,6 +202,7 @@ function handleDeliver(payload: ToolDeliverPayload): void {
     status: 'pending_confirm',
     output: '',
     exit_code: null,
+    runId: payload.runId,
   }
   deliveries.value.push(delivery)
   if (payload.requires_confirm) {
@@ -225,6 +229,12 @@ async function rejectDeliver(toolId: string): Promise<void> {
   delivery.output = REJECT_OUTPUT
   delivery.exit_code = null
   await finishAndPost(toolId, REJECT_OUTPUT, false, null)
+  // 问题 4：通知后端标记该命令被拒绝，避免 LLM 重试时再次弹卡片
+  if (delivery.command && delivery.runId) {
+    agentApi.denyCommand('shell_exec', delivery.command, delivery.runId).catch((err: unknown) => {
+      console.warn('[useAgentDeliver] denyCommand 失败（不阻塞）:', err)
+    })
+  }
 }
 
 /**
@@ -273,12 +283,19 @@ function ingestOutput(sessionId: string, data: string): void {
 }
 
 /** 中止整个 run：标记所有活动交付为 aborted 并清除捕获（不发回传，避免尾巴 POST） */
-function abortRun(): void {
+function abortRun(runId?: string): void {
   for (const d of deliveries.value) {
     if (d.status === 'pending_confirm' || d.status === 'writing' || d.status === 'capturing') {
       d.status = 'aborted'
       clearCapture(d.tool_id)
     }
+  }
+  // 问题 1 兜底：用户主动停止 run 时，释放该 run 未消费的 once 授权
+  //（ReflectionRein 只在正常终态触发，用户中止可能绕过 AGENT_FAILED 清理）
+  if (runId) {
+    agentApi.releaseRunPermissions(runId).catch((err: unknown) => {
+      console.warn('[useAgentDeliver] releaseRunPermissions 失败（不阻塞）:', err)
+    })
   }
 }
 

@@ -131,7 +131,11 @@ def test_driver_non_terminate_intercept_continues():
 # ── M8：once 授权不再于迭代末被清空 ──
 
 def test_once_grant_consumes_and_survives_iteration_end():
-    """once 授权：消费一次后失效；迭代结束不再全清（竞态修复核心）"""
+    """once 授权：消费一次后失效；迭代结束不再全清（竞态修复核心）
+
+    问题 1 改进后 _confirmed_once 为 [run_id][key] 双层结构：
+    不传 run_id 时落全局池（"" 键），与旧扁平结构的消费语义一致。
+    """
     gate = PermissionGate()
     gate._confirmed_permanent = set()  # 排除宿主 allowlist.txt 干扰
     key = gate.grant("shell_exec", "once", command="rm -f /tmp/x")
@@ -140,4 +144,34 @@ def test_once_grant_consumes_and_survives_iteration_end():
     assert gate.check_permission("shell_exec", args, risk="dangerous") is False
     # 重新授权后授权仍在（driver 已不在迭代末 clear_once，授权存活到被消费）
     gate.grant("shell_exec", "once", command="rm -f /tmp/x")
-    assert gate._confirmed_once.get(key, 0) == 1
+    assert gate._confirmed_once[""].get(key, 0) == 1
+
+
+def test_once_grant_isolated_by_run_id():
+    """once 授权按 run_id 键控：run A 的授权不能被 run B 消费"""
+    gate = PermissionGate()
+    gate._confirmed_permanent = set()
+    args = {"command": "rm -f /tmp/x"}
+    # run A 批准一次（once）
+    gate.grant("shell_exec", "once", command="rm -f /tmp/x", run_id="runA")
+    # run B 请求同命令 → 必须仍被拦截（不能消费 run A 的批准）
+    assert gate.check_permission("shell_exec", args, risk="dangerous", run_id="runB") is False
+    # run A 请求 → 放行（消费掉）
+    assert gate.check_permission("shell_exec", args, risk="dangerous", run_id="runA") is True
+    # 再请求 → 已消费，拦截
+    assert gate.check_permission("shell_exec", args, risk="dangerous", run_id="runA") is False
+
+
+def test_cleanup_run_once_releases_only_that_run():
+    """cleanup_run_once：释放指定 run 的未消费授权，不动其他 run"""
+    gate = PermissionGate()
+    gate._confirmed_permanent = set()
+    gate.grant("shell_exec", "once", command="rm -f /tmp/a", run_id="runA")
+    gate.grant("shell_exec", "once", command="rm -f /tmp/b", run_id="runB")
+    released = gate.cleanup_run_once("runA")
+    assert released == 1
+    # runB 的授权不受影响
+    args_b = {"command": "rm -f /tmp/b"}
+    assert gate.check_permission("shell_exec", args_b, risk="dangerous", run_id="runB") is True
+    # 重复清理同一 run → 0（幂等）
+    assert gate.cleanup_run_once("runA") == 0

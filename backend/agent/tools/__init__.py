@@ -38,6 +38,11 @@ class ToolMeta:
     # （命令双跑、写入两次、子 Agent 双启动）。默认 False（安全方向）。
     idempotent: bool = False
     mode_scope: list[str] = field(default_factory=lambda: ["ssh"])
+    # 问题 5：per-action 风险覆盖。当调用 args 中指定了特定 action 时，
+    # PermissionGate 在 prod 环境按此处声明的风险等级处理（默认按 risk_level）。
+    # 例如 service_manage 工具 risk_level=moderate，但 stop/restart 在 prod
+    # 环境应视为 dangerous（需每次授权），而非 session 级缓存。
+    destructive_actions: frozenset[str] = field(default_factory=frozenset)
 
 
 class BaseTool:

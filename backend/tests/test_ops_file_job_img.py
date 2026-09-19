@@ -163,6 +163,28 @@ async def test_file_read_rejects_traversal_remote(monkeypatch):
     assert ".." in res.error
 
 
+@pytest.mark.asyncio
+async def test_file_read_remote_success_strips_sentinel(monkeypatch):
+    """远程 file_read 成功路径回归。
+
+    回归锁：ops_file 曾在远端成功分支调用 strip_remote_tail 却未 import，
+    导致真实 SSH 会话下 file_read 成功时抛 NameError（此前无测试覆盖远端
+    成功分支，潜伏 8 轮）。此测试走完整远端成功路径，若 import 缺失会
+    NameError 而非返回内容。run_headless 返回 run.sh 哨兵形态，strip_remote_tail
+    须剥掉 [exit_code=..]，只留 nl 行号正文。
+    """
+    remote_body = "     1|root:x:0:0\n     2|bin:x:1:1\n[exit_code=0]\n"
+    async def fake_run(ctx, command, timeout):
+        assert command.startswith("nl -ba "), f"file_read 远端模板漂移: {command!r}"
+        return True, remote_body
+    monkeypatch.setattr("agent.tools.builtin.ops_file.run_headless", fake_run)
+    res = await FileReadTool().execute(_ctx(remote=True), path="/etc/passwd", offset=1, limit=10)
+    assert res.success is True
+    assert "root:x:0:0" in res.output
+    assert "[exit_code=" not in res.output  # 哨兵已剥离
+
+
+
 # ── 文件写入（仅限远程）─────────────────────────
 @pytest.mark.asyncio
 async def test_file_write_local_refused(tmp_workspace):

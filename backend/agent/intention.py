@@ -657,6 +657,17 @@ def reclassify(
     if not changed:
         return original
 
+    # 预算钳制（与初始 classify 路径对称）：重分类的升级信号（连续失败/工具密度）
+    # 可能把预算推到默认表的高档（MODERATE=2048/COMPLEX=4096），而模型配置的
+    # reasoning 上限可能更低（本地 vLLM / 小模型常见 ≤4096）。不钳制时 driver
+    # 会把超限值直接赋给 max_reasoning_tokens（driver.py 赋值点与
+    # get_reasoning_budget_for_iteration 的 base 都消费这个字段），下一轮 LLM
+    # 调用带超限 reasoning_max_tokens → 400 → 整个 run 失败。初始路径
+    # （driver.py classify 后 min(budget, model_max)）防了这一层，重分类路径
+    # 必须对称防住。
+    if max_budget is not None and budget is not None:
+        budget = min(budget, max_budget)
+
     return IntentionResult(
         level=level,
         task_type=original.task_type,
