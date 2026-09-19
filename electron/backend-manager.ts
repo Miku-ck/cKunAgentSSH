@@ -149,13 +149,23 @@ export class BackendManager {
           } catch { /* already exited */ }
         }
       } else {
-        // macOS / Linux: pgrep 找 main.py 进程
+        // macOS / Linux: pgrep 找 main.py 进程。
+        // 与 Windows 分支对称的二次甄别：本机可能有多个 FastAPI 项目都用
+        // main.py 入口（如其他工作区的后端服务），只杀本应用自己的。
+        // pgrep 拿 PID 后用 ps 取完整命令行，走同一套 isOurBackendProcess。
         const output = execSync('pgrep -f "main.py"', { encoding: 'utf-8', timeout: 5000 })
         const pids = output
           .split(/\s+/)
           .map(s => parseInt(s.trim(), 10))
           .filter(n => !isNaN(n) && n > 0)
         for (const pid of pids) {
+          let cmdline = ''
+          try {
+            cmdline = execSync(`ps -p ${pid} -o command=`, { encoding: 'utf-8', timeout: 3000 }).trim()
+          } catch {
+            continue // 进程刚退出
+          }
+          if (!BackendManager.isOurBackendProcess(cmdline, backendDir)) continue
           try {
             process.kill(pid, 'SIGTERM')
             console.log(`[BackendManager] Sent SIGTERM to orphan backend PID=${pid}`)
@@ -208,6 +218,9 @@ export class BackendManager {
         env: {
           ...process.env,
           PYTHONUNBUFFERED: '1',
+          // Windows 上 Python 管道 stdout 默认用 ANSI 代码页(cp936/GBK)，
+          // Electron 按 UTF-8 读管道 → 中文日志/traceback 变 ?????。强制 UTF-8。
+          PYTHONIOENCODING: 'utf-8',
           DEV_MODE: app.isPackaged ? 'false' : 'true',
           // 显式传数据库绝对路径，避免后端依赖 cwd 解析相对路径在不同启动方式下丢库
           DB_PATH: dbPath,

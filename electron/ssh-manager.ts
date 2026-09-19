@@ -36,6 +36,12 @@ function classifyTransferError(err: unknown, cancelled: boolean): TransferError 
     return { code: 'CANCELLED', message: '已取消', retryable: false }
   }
   const msg = (err instanceof Error ? err.message : String(err)).toLowerCase()
+  // SFTP 状态码 4 (SSH_FX_FAILURE)：ssh2 对该状态只报裸文本 "Failure"（无
+  // "SSH_FX_FAILURE:" 前缀），原始 err.code 即数值 4。与下方 ssh_fx_failure 同归
+  // NETWORK — 服务端通用错误多由瞬时负载引起，不可判 UNKNOWN 删 .part 丢进度
+  if ((err as { code?: unknown } | null)?.code === 4) {
+    return { code: 'NETWORK', message: '网络中断，已保存进度可续传', retryable: true, originalError: err as Error }
+  }
   if (msg.includes('econnreset') || msg.includes('etimedout') || msg.includes('epipe')
       || msg.includes('socket hang up') || msg.includes('read epipe') || msg.includes('write epipe')
       // D13 修复：SSH_FX_FAILURE（SFTP 状态码 4，ssh2 报 "SSH_FX_FAILURE: ..."）是
@@ -83,6 +89,12 @@ function sftpUnlink(sftp: SFTPWrapper, path: string): Promise<void> {
 function sftpRename(sftp: SFTPWrapper, oldPath: string, newPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
     sftp.rename(oldPath, newPath, (err) => err ? reject(err) : resolve())
+  })
+}
+
+function sftpSetstatSize(sftp: SFTPWrapper, path: string, size: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    sftp.setstat(path, { size }, (err) => err ? reject(err) : resolve())
   })
 }
 
@@ -771,7 +783,9 @@ if (!session) throw new SSHError('SESSION_NOT_FOUND')
         if (!settled) {
           settled = true
           try { streamRef?.close() } catch { /* ignore */ }
-          reject(new Error(`命令执行超时（${timeout}秒）`))
+          // 结构化错误：超时 → EXEC_TIMEOUT，经 normalizeIpcError 序列化为
+          // __sshError transport 透传，前端 extractSSHError 据此还原友好文案
+          reject(new SSHError('EXEC_TIMEOUT', { detail: `${timeout}秒` }))
         }
       }, timeout * 1000)
 
@@ -780,7 +794,8 @@ if (!session) throw new SSHError('SESSION_NOT_FOUND')
           clearTimeout(timer)
           if (!settled) {
             settled = true
-            reject(new Error('命令执行失败，请检查命令格式或连接状态'))
+            // 分类原始错误（连接断开/重置等），不再手抛通用英文提示
+            reject(SSHError.from(err))
           }
           return
         }
@@ -828,7 +843,8 @@ if (!session) throw new SSHError('SESSION_NOT_FOUND')
           clearTimeout(timer)
           if (!settled) {
             settled = true
-            reject(err)
+            // 通道级错误（连接断开/重置）→ 结构化分类，前端友好呈现
+            reject(SSHError.from(err))
           }
         })
       })
@@ -1300,6 +1316,13 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       this.safeSend('sftp:stalled', { id: transferId })
       if (!stalled) {
         stalled = true
+        // 停滞即停本传输写循环（上传并发 worker 的截断竞态防护，下载同形）：
+        // 渲染层按 STALLED 自动续传、新传输对同一 .part 重新校验续写；若旧
+        // worker 仍在跑，其失败/收尾时的 .part 截断会越过新传输已写范围
+        // （网络差 → stall 后旧写入更易出错 → 截断把新写入删成洞 → rename
+        // 出损坏文件）。停后本传输走 CANCELLED 收尾，stalled=true 使 catch
+        // 按 STALLED 分类（retryable、保留 .part），续传不受影响。
+        cancelFn()
         // 错误对象形态与 NETWORK 一致（Error + code/retryable），渲染层按
         // retryable 统一走自动续传路径
         stallReject?.(toTransferError({ code: 'STALLED', message: '传输停滞，网络可能不稳定', retryable: true }))
@@ -1390,29 +1413,69 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       }
 
       if (chunks.length > 0) {
-        // 审查 M-5：本地读并行（窗口 2*CONCURRENCY）+ 远程 .part 顺序追加写，
-        // 杜绝"越过 EOF 的零填充 + 中断后续传跳过零块"导致的静默损坏
-        await pipelineReadWrite(
-          chunks,
-          2 * CONCURRENCY,
-          async (_i, chunk) => {
-            const buf = Buffer.alloc(chunk.length)
-            const { bytesRead } = await uploadLocalFd.read(buf, 0, chunk.length, chunk.offset)
-            if (bytesRead !== chunk.length) {
-              throw new Error(`本地读取不完整: 期望 ${chunk.length}, 实际 ${bytesRead}`)
+        // 并发写：各 chunk 写偏移互不重叠，可安全并发（M-5 的"顺序追加写"约束
+        // 是为续传无洞，这里改为失败时截断回连续写入边界来保证）。原实现写循环
+        // 串行 await，同时只有一个 256KB 块在途，吞吐被 RTT 锁死。
+        // 原语义保留：M-5 杜绝"越过 EOF 的零填充 + 中断后续传跳过零块"导致的
+        // 静默损坏 — 失败/取消时 .part 截断回连续完成边界，续传不踩洞
+        let firstError: Error | null = null
+        let contiguousIdx = 0 // 从 startOffset 起连续完成的 chunk 数
+        const doneSet = new Set<number>()
+        let nextIdx = 0
+        const worker = async (): Promise<void> => {
+          while (!firstError && !cancelled) {
+            const i = nextIdx++
+            if (i >= chunks.length) return
+            const chunk = chunks[i]
+            try {
+              const buf = Buffer.alloc(chunk.length)
+              const { bytesRead } = await uploadLocalFd.read(buf, 0, chunk.length, chunk.offset)
+              if (bytesRead !== chunk.length) {
+                throw new Error(`本地读取不完整: 期望 ${chunk.length}, 实际 ${bytesRead}`)
+              }
+              await sftpWrite(sftp, uploadRemoteHandle, buf, chunk.offset)
+            } catch (err) {
+              firstError = firstError ?? (err instanceof Error ? err : new Error(String(err)))
+              return
             }
-            return buf
-          },
-          async (_i, chunk, buf) => {
-            await sftpWrite(sftp, uploadRemoteHandle, buf, chunk.offset)
-          },
-          () => cancelled,
-          (chunk) => {
-            transferred += chunk.length
-            lastProgress = Date.now()
-            reportProgress()
-          },
-        )
+            doneSet.add(i)
+            // 进度按连续边界推进汇报（乱序完成的超前 chunk 不计入），保证
+            // transferred 不超过失败/取消时实际保住的连续字节数，避免进度倒挂
+            while (doneSet.has(contiguousIdx)) {
+              doneSet.delete(contiguousIdx)
+              transferred += chunks[contiguousIdx].length
+              contiguousIdx++
+              lastProgress = Date.now()
+              reportProgress()
+            }
+          }
+        }
+        await Promise.all(Array.from({ length: Math.min(CONCURRENCY, chunks.length) }, () => worker()))
+
+        // 失败或用户取消：.part 可能留有越过未写区的洞，截断回连续写入边界
+        // （startOffset + 已连续完成字节数），保证后续续传顺序写不踩洞。
+        // 停滞（stalled）路径例外：stallReject 已 reject IPC，渲染层可能立即用
+        // 同一 .part 启动续传传输，此处迟到的 setstat 会把新传输已写范围截小，
+        // 反而制造洞 — 跳过截断，由续传侧的 4KB 校验 + 顺序写兜底
+        if (firstError || (cancelled && !stalled)) {
+          const boundary = contiguousIdx >= chunks.length
+            ? total
+            : (contiguousIdx === 0 ? startOffset : chunks[contiguousIdx].offset)
+          if (boundary < total) {
+            let truncated = false
+            try {
+              await sftpSetstatSize(sftp, partPath, boundary)
+              truncated = true
+            } catch { /* 截断失败走下方兜底 */ }
+            if (!truncated) {
+              // P1 兜底：截断失败则 .part 含洞且不可信，续传按 partStat.size
+              // 起点会跳过零填充区导致静默损坏 — 删除 .part 让重试从头传，
+              // 宁可丢进度不可丢数据（删除也失败时连接多半已不可用，重试自会报错）
+              try { await sftpUnlink(sftp, partPath) } catch { /* ignore */ }
+            }
+          }
+        }
+        if (firstError) throw firstError
       }
 
       // 6. 取消则抛错，不执行 rename（防止 .part 被误认为完成）
@@ -1502,6 +1565,13 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       this.safeSend('sftp:stalled', { id: transferId })
       if (!stalled) {
         stalled = true
+        // 停滞即停本传输写循环（上传并发 worker 的截断竞态防护，下载同形）：
+        // 渲染层按 STALLED 自动续传、新传输对同一 .part 重新校验续写；若旧
+        // worker 仍在跑，其失败/收尾时的 .part 截断会越过新传输已写范围
+        // （网络差 → stall 后旧写入更易出错 → 截断把新写入删成洞 → rename
+        // 出损坏文件）。停后本传输走 CANCELLED 收尾，stalled=true 使 catch
+        // 按 STALLED 分类（retryable、保留 .part），续传不受影响。
+        cancelFn()
         // 错误对象形态与 NETWORK 一致（Error + code/retryable），渲染层按
         // retryable 统一走自动续传路径
         stallReject?.(toTransferError({ code: 'STALLED', message: '传输停滞，网络可能不稳定', retryable: true }))
