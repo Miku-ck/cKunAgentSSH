@@ -42,6 +42,13 @@ from agent.tools.builtin.ops_common import run_headless, truncate_output
 # 远程任务落盘根目录（目标机 /tmp 下，重启任务与日志的持久位置）
 _JOBS_ROOT = "/tmp/ckun_agent_jobs"
 
+# 内存上限（长驻后端防无界增长）：终态 job 最多保留的条数，超出淘汰最旧的
+# （_evict_terminal_locked，只动终态、running 恒保留）；本地 job 输出缓冲上限
+# （字符数，近似字节）——超限丢弃头部保留最近内容（见 _read_stream）。
+# 后端是长驻服务，job 记录只增不删会随会话数线性膨胀。
+_MAX_TERMINAL_JOBS = 100
+_LOCAL_OUTPUT_CAP = 1 << 20
+
 # job_run / job_kill 会启动并终止外部进程，具备中等影响，标记 moderate 不可幂等。
 _RUN_META = ToolMeta(
     risk_level="moderate",
@@ -134,8 +141,23 @@ class JobManager:
                 return
             entry.status = status
             entry.exit_code = exit_code
+            if status in ("finished", "failed", "killed", "exited"):
+                self._evict_terminal_locked()
         if entry.remote:
             _persist_status(entry.job_id, status, exit_code)
+
+    def _evict_terminal_locked(self) -> None:
+        """终态 job 超出上限时淘汰最旧的（调用方须持有 ``_lock``）。
+
+        只动终态（非 running）记录：运行中任务必须保留供 kill/对账；
+        淘汰仅影响 job_list 的展示与 job_output 的可读性（job 已终结）。
+        """
+        terminal = [e for e in self._jobs.values() if e.status != "running"]
+        if len(terminal) <= _MAX_TERMINAL_JOBS:
+            return
+        terminal.sort(key=lambda e: e.start_ts)
+        for e in terminal[: len(terminal) - _MAX_TERMINAL_JOBS]:
+            self._jobs.pop(e.job_id, None)
 
     def _ensure_restored(self) -> None:
         """从 agent_jobs 表恢复未终结的远程任务（进程重启后一次）。
@@ -174,6 +196,7 @@ class JobManager:
                 log_dir=row.get("log_dir") or f"{_JOBS_ROOT}/{job_id}",
                 run_id=row.get("run_id") or "",
                 raw_cmd=cmd,
+                out_offset=int(row.get("out_offset") or 0),
             ))
 
 
@@ -189,6 +212,7 @@ def _persist_save(entry: JobEntry) -> None:
             pid=entry.pid,
             log_dir=entry.log_dir,
             status="running",
+            out_offset=entry.out_offset,
         )
     except Exception:
         pass
@@ -198,6 +222,15 @@ def _persist_status(job_id: str, status: str, exit_code: Optional[int]) -> None:
     try:
         import database as db
         db.update_agent_job_status(job_id, status, exit_code)
+    except Exception:
+        pass
+
+
+def _persist_offset(job_id: str, out_offset: int) -> None:
+    """推进已读日志偏移（重启后 job_output 不从头重读已见日志）。"""
+    try:
+        import database as db
+        db.update_agent_job_offset(job_id, out_offset)
     except Exception:
         pass
 
@@ -300,28 +333,55 @@ async def _remote_launch(context, job_id: str, cmd: str) -> tuple[bool, Optional
     return True, pid, ""
 
 
+def _strip_sentinel(tail: str) -> str:
+    """从日志段无损剥离 [exit_code=..] 哨兵，返回展示用 content。
+
+    真实形态：rfind 已剥掉末行独立哨兵，本函数直接返回；旧测试 mock 形态
+    （哨兵紧随 RC 值）：整体是哨兵，返回空串。不用 splitlines+rejoin 剥
+    末行——那会把日志里的 CRLF/孤立 CR 归一成 \\n，损坏读回内容。
+    """
+    if tail.startswith("[exit_code="):
+        return ""
+    return tail
+
+
 async def _remote_read(context, entry: JobEntry) -> tuple[str, Optional[int]]:
-    """增量读取远程任务输出，返回 (new_output, rc|None)。"""
+    """增量读取远程任务输出，返回 (new_output, rc|None)。
+
+    字节守恒不变量：offset 每次推进的量必须等于 **out.log** 自上次 offset
+    以来新增的字节数（= 响应体里 RC 行首个换行之后、末行 [exit_code=] 哨兵
+    之前的"日志段"全长，含尾部换行）。少推 → 下一轮 tail -c +n 重复读；
+    多推 → 永久跳丢日志。RC 行本身是 printf 格式字节、不在 out.log 里，
+    不计入；故 offset 用日志段全长（= tail -c +n 的原始输出），content 用
+    同段（该读命令几乎不产生 stderr——若产生则 exit_code≠0、ok=False 提前
+    返回，到不了 offset 更新）。剥哨兵不用 splitlines+rejoin：那会把日志里
+    的 CRLF/孤立 CR 归一成 \\n，损坏读回内容且错位 offset。
+    """
     cmd = job_read_cmd(entry.log_dir, entry.out_offset)
     ok, out = await run_headless(context, cmd, timeout=15)
     if not ok:
         return f"读取远程输出失败: {out}", None
-    # 剥离 run_headless 追加的 [exit_code=..] 尾行（是 tail 命令自身的退出码，
+    # 剥离 run_headless 追加在末行的 [exit_code=..] 哨兵（tail 命令自身退出码，
     # 不是任务的）
-    lines = out.splitlines()
-    if lines and lines[-1].startswith("[exit_code"):
-        lines = lines[:-1]
-    body = "\n".join(lines)
+    i = out.rfind("\n[exit_code=")
+    body = out[:i] if i != -1 else out
     rc: Optional[int] = None
-    parts = body.split("\n", 1)
-    if parts and parts[0].startswith("CKUNJOB_RC="):
-        val = parts[0][len("CKUNJOB_RC="):].strip()
+    if body.startswith("CKUNJOB_RC="):
+        head, _sep, tail = body.partition("\n")
+        val = head[len("CKUNJOB_RC="):].strip()
         if val.lstrip("-").isdigit():
             rc = int(val)
-        content = parts[1] if len(parts) > 1 else ""
+        # 日志段 = RC 行首个换行之后的全部字节（tail -c +n 的原始输出）
+        content = _strip_sentinel(tail)
     else:
+        # 意外形态（无 RC 行）：整体当内容，保守处理不跳丢
         content = body
-    entry.out_offset += len(content.encode("utf-8"))
+        tail = body
+    entry.out_offset += len(tail.encode("utf-8"))
+    if content:
+        # offset 推进立即落盘：中途崩溃/重启后不从头重读已见日志
+        # （best-effort，DB 不可用时静默跳过，行为与修复前一致）
+        _persist_offset(entry.job_id, entry.out_offset)
     return content, rc
 
 
@@ -410,7 +470,7 @@ async def _drain(proc: asyncio.subprocess.Process, entry: JobEntry) -> None:
 
 
 async def _read_stream(stream, entry: JobEntry) -> None:
-    """读取单个输出流并追加到缓冲（带简单缓冲累计，靠近行边界追加）。"""
+    """读取单个输出流并追加到缓冲（带缓冲上限，超限丢头部保留最近内容）。"""
     buf_list = entry.output  # 直接持有引用，追加受 manager 锁保护
     while True:
         try:
@@ -422,6 +482,12 @@ async def _read_stream(stream, entry: JobEntry) -> None:
         text = line.decode("utf-8", errors="replace")
         with JobManager.instance()._lock:
             buf_list.append(text)
+            # 上限：丢弃最旧的行保留最近内容（job_output 展示的是尾部，
+            # 头部旧日志对排障价值最低；丢行不保证行边界完整，仅防无界增长）
+            total = sum(len(t) for t in buf_list)
+            while total > _LOCAL_OUTPUT_CAP and len(buf_list) > 1:
+                total -= len(buf_list[0])
+                buf_list.pop(0)
 
 
 def _running_seconds(entry: JobEntry, now: float) -> int:

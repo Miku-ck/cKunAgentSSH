@@ -31,6 +31,31 @@ def sys_overview_cmd(top: int) -> str:
     )
 
 
+def host_profile_cmd() -> str:
+    """host_profile 远端模板：固定的只读环境探测（**无参数**）。
+
+    探测项：发行版 / init 系统 / 包管理器与容器运行时 / 当前身份与工作目录。
+    用途：把"目标机是什么环境"这一事实注入 Agent 系统提示，避免模型靠猜
+    生成与发行版不匹配的命令（如 Ubuntu 上给 yum install）。
+
+    两个硬约束（改动时必须同步 scripts/deploy/agent-exec.py 的 RE_HOST_PROFILE）：
+    1. **完全固定字面量、无参数**：远端白名单是整串锚点正则匹配，
+       有可变参数就得引入捕获组，无参数才能一条精确正则了事。
+    2. **末尾 `true` 保证整体 exit_code == 0**：exec_remote 的 success 判定是
+       `bridge.success and exit_code == 0`，任一子命令非 0（命令缺失/无权限）
+       都会让整条被判失败，进而误报"环境未知"。
+    """
+    return "\n".join(
+        [
+            'echo "[发行版]"; cat /etc/os-release 2>/dev/null | head -n 5',
+            'echo "[init]"; ps -p 1 -o comm= 2>/dev/null',
+            'echo "[包管理器]"; command -v apt-get dnf yum apk pacman zypper docker 2>/dev/null',
+            'echo "[身份]"; id -un 2>/dev/null; pwd 2>/dev/null',
+            "true",
+        ]
+    )
+
+
 def process_inspect_cmd(query: str) -> str:
     """process_inspect 远端模板：按子串匹配进程（排除 grep 自身）。"""
     return f"ps -eo pid,pcpu,pmem,stat,comm,args | grep {shlex.quote(query)} | grep -v grep"

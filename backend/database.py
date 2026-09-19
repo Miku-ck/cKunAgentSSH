@@ -421,6 +421,7 @@ def init_db(db_path: str) -> None:
                 log_dir     TEXT NOT NULL DEFAULT '',
                 status      TEXT NOT NULL DEFAULT 'running',
                 exit_code   INTEGER,
+                out_offset  INTEGER NOT NULL DEFAULT 0,
                 created_at  TEXT NOT NULL DEFAULT (datetime('now')),
                 finished_at TEXT
             );
@@ -443,6 +444,14 @@ def init_db(db_path: str) -> None:
         ]:
             if col not in existing_cols:
                 conn.execute(f"ALTER TABLE agent_runs ADD COLUMN {col} {col_def}")
+        # agent_jobs 表：旧库补 out_offset（job_output 增量读日志的字节偏移，
+        # 重启后恢复注册表时用它避免从头重读已见日志）
+        cur = conn.execute("PRAGMA table_info(agent_jobs)")
+        job_cols = {row[1] for row in cur.fetchall()}
+        if "out_offset" not in job_cols:
+            conn.execute(
+                "ALTER TABLE agent_jobs ADD COLUMN out_offset INTEGER NOT NULL DEFAULT 0"
+            )
         _migrate_db(conn)
         # 审查修复（P2 E9）：_seed_models（含同步 httpx.get）已移至独立异步入口
         # seed_models_async，从 lifespan 调用，避免阻塞事件循环
@@ -2268,16 +2277,50 @@ def list_schedule_runs(schedule_id: str, limit: int = 50) -> list[dict]:
         conn.close()
 
 
+def prune_schedule_runs(max_count: int = 2000) -> int:
+    """删除最旧的 schedule_runs，每个 schedule 各保留最近 max_count 条，
+    返回删除数量。
+
+    每次到期触发都会插一行（interval 任务 1 分钟一次 = 一天 1440 行），
+    不清理会随运行时间无界增长。由调度引擎低频调用（每 6h），不放在
+    热路径上。
+    """
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            """DELETE FROM schedule_runs WHERE id IN (
+                   SELECT id FROM (
+                       SELECT id,
+                              ROW_NUMBER() OVER (
+                                  PARTITION BY schedule_id
+                                  ORDER BY created_at DESC
+                              ) AS rn
+                       FROM schedule_runs
+                   ) WHERE rn > ?
+               )""",
+            (max_count,),
+        )
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
 # ── 远程后台任务注册表（agent_jobs）──────────────────────────────
 def save_agent_job(job_id: str, run_id: str, session_id: str, cmd: str,
-                   pid: int | None, log_dir: str, status: str = "running") -> None:
-    """写入/更新一条远程后台任务记录（启动时调用）。"""
+                   pid: int | None, log_dir: str, status: str = "running",
+                   out_offset: int = 0) -> None:
+    """写入/更新一条远程后台任务记录（启动时调用）。
+
+    upsert 的 UPDATE 子句不覆盖 out_offset：save 只在任务启动时调用
+    （offset 恒 0），运行期 offset 由 update_agent_job_offset 推进。
+    """
     conn = _get_conn()
     try:
         conn.execute(
             """INSERT INTO agent_jobs
-                   (job_id, run_id, session_id, cmd, pid, log_dir, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?)
+                   (job_id, run_id, session_id, cmd, pid, log_dir, status, out_offset)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(job_id) DO UPDATE SET
                    run_id = excluded.run_id,
                    session_id = excluded.session_id,
@@ -2285,7 +2328,7 @@ def save_agent_job(job_id: str, run_id: str, session_id: str, cmd: str,
                    pid = excluded.pid,
                    log_dir = excluded.log_dir,
                    status = excluded.status""",
-            (job_id, run_id, session_id, cmd, pid, log_dir, status),
+            (job_id, run_id, session_id, cmd, pid, log_dir, status, out_offset),
         )
         conn.commit()
     finally:
@@ -2294,7 +2337,10 @@ def save_agent_job(job_id: str, run_id: str, session_id: str, cmd: str,
 
 def update_agent_job_status(job_id: str, status: str,
                             exit_code: int | None = None) -> None:
-    """更新任务状态（结束/被杀时调用；终态时落 finished_at）。"""
+    """更新任务状态（结束/被杀时调用；终态时落 finished_at）。
+
+    只动状态/退出码，不碰 out_offset（运行期由 update_agent_job_offset 维护）。
+    """
     conn = _get_conn()
     try:
         terminal = status in ("finished", "failed", "killed")
@@ -2315,13 +2361,26 @@ def update_agent_job_status(job_id: str, status: str,
         conn.close()
 
 
+def update_agent_job_offset(job_id: str, out_offset: int) -> None:
+    """推进 job_output 已读日志的字节偏移（重启后恢复时避免从头重读）。"""
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "UPDATE agent_jobs SET out_offset = ? WHERE job_id = ?",
+            (out_offset, job_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def get_running_agent_jobs() -> list[dict]:
     """列出全部未终结的远程任务（backend 重启后恢复注册表用）。"""
     conn = _get_conn()
     try:
         rows = conn.execute(
             """SELECT job_id, run_id, session_id, cmd, pid, log_dir, status,
-                      created_at
+                      out_offset, created_at
                FROM agent_jobs
                WHERE status NOT IN ('finished', 'failed', 'killed')
                ORDER BY created_at""",

