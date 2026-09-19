@@ -126,9 +126,20 @@ def _build_agent_system_prompt(
     req: "AgentRunRequest",
     reflection_injection: str,
     is_conversation_task: bool,
+    host_profile_text: str = "",
+    is_change: Optional[bool] = None,
 ) -> str:
-    """构建 Agent 系统提示（时间注入 + 模式角色 + 用户 prompt + 反思 + 任务引导）"""
-    from prompts import MODE_PROMPTS
+    """构建 Agent 系统提示
+
+    拼装顺序：时间 → 模式角色 → 目标机环境画像 → 用户 prompt → 反思
+              → 运维方法论 → 工具/输出引导
+
+    Args:
+        host_profile_text: 目标机环境画像（agent.host_profile 产出）；空串不注入
+        is_change: 任务是否可能改变目标机状态。None 表示未做意图识别，
+            此时按"变更"处理 —— 方向性取舍见下方注释。
+    """
+    from prompts import MODE_PROMPTS, OPS_METHOD_CHANGE, OPS_METHOD_READONLY
 
     # 开头注入当前时间（解决 LLM 训练数据截止导致日期/星期回答过时的问题）
     time_injection = (
@@ -141,6 +152,11 @@ def _build_agent_system_prompt(
     parts = [time_injection]
     if mode_prompt:
         parts.append(mode_prompt)
+    # 目标机环境事实：紧跟角色设定，使"这是台什么机器"先于任何命令生成进入上下文。
+    # 无 SSH 会话时该文案会显式声明"运维工具不在本机执行"，避免模型误以为可本地动手。
+    # 对话型任务不注入（不调工具，环境事实无意义）——即便调用方传了也在此拦掉。
+    if host_profile_text and not is_conversation_task:
+        parts.append(host_profile_text)
     if req.system_prompt:
         parts.append(req.system_prompt)
     if reflection_injection:
@@ -153,6 +169,13 @@ def _build_agent_system_prompt(
             "回答应基于你自身的身份和能力，避免引用无关上下文或记忆。"
         )
     else:
+        # 运维方法论：变更类任务与只读任务的处置方式不同（见 prompts.py）。
+        # is_change=None（未做意图识别）时按"变更"处理 —— 两条误判路径代价不对称：
+        # 对只读任务多说一段影响说明，顶多啰嗦；对变更任务注入"本任务不改变目标机状态"
+        # 则是给出错误前提。OPS_METHOD_CHANGE 第 0 条本身要求模型在纯只读时自行降级。
+        parts.append(
+            OPS_METHOD_READONLY if is_change is False else OPS_METHOD_CHANGE
+        )
         # 工具使用效率指引：优先专用运维工具，减少 shell 拼命令与重复读取
         parts.append(
             "工具使用效率：优先使用专用工具而非 shell_exec 拼命令——读文件用 file_read、"
@@ -458,9 +481,35 @@ async def agent_run(req: AgentRunRequest, request: Request):
         logger.warning("加载反思策略失败（降级为无反思）: %s", e)
         reflection_injection = ""
 
+    # ── 目标机环境画像（只读探测，失败静默降级）──
+    # 一条只读、免审的探测命令（ops_obs.host_profile_cmd ↔ 远端 host_profile 模板），
+    # 把"这台机器是什么环境"沉淀为已知事实，避免模型凭训练数据印象对 Ubuntu 发 yum、
+    # 对非 systemd 机发 systemctl。探测失败 / 超时 / 目标机未部署该模板一律降级为
+    # "环境未知"文案，绝不影响 run（见 agent/host_profile.py 硬约束）。
+    # 对话型任务跳过：纯寒暄不需要一次远程往返，也不需要环境事实。
+    # 无 SSH 会话时不探测，直接返回"未连接主机"文案。
+    # 代价：setup 期多一次 await（超时上限 10s，实际为亚秒级只读命令）；setup 本身
+    # 已含记忆检索（上限 30s）等阻塞项，故不额外改变首字节时序。
+    host_profile_text = ""
+    if not is_conversation_task:
+        from agent.harness.contracts import RunContext as _RunContext
+        from agent.host_profile import ensure_host_profile
+
+        _host_ctx = _RunContext.new(
+            task=req.task or "",
+            mode=req.mode,
+            ssh_session_id=req.ssh_session_id or "",
+        )
+        host_profile_text = await ensure_host_profile(_host_ctx)
+
     # M3 修复：提取 system prompt 构建为独立函数
     final_system_prompt = _build_agent_system_prompt(
-        req, reflection_injection, is_conversation_task
+        req,
+        reflection_injection,
+        is_conversation_task,
+        host_profile_text=host_profile_text,
+        # pre_intention 为 None 表示本次未做意图识别（enable_intention_guide=False）
+        is_change=pre_intention.is_change if pre_intention else None,
     )
 
     # 应用演化配置（仅覆盖用户未显式传入的字段）

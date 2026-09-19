@@ -151,12 +151,14 @@ class ElectronBridge:
         except BridgeWsLostError as e:
             raise BridgeError(BridgeErrorCode.WS_LOST, str(e), original=e)
 
-    async def probe(self, timeout: float = 3.0) -> BridgeErrorCode | None:
+    async def probe(self) -> BridgeErrorCode | None:
         """探测桥接可达性：返回 None 表示可达，否则返回具体失败原因码。
 
         阶段 2 WS-only：反向连接已建立即视为可达（通道即健康）；
         未建立时最多等 _WS_PROBE_WAIT_S 秒（事件驱动，覆盖后端刚重启、
         主进程重连在途的窗口），仍不通返回 WS_LOST。
+        等待预算恒为 _WS_PROBE_WAIT_S：探活高频且非关键路径，调用方
+        （schedule_engine 等）不应也不能放大它。
         """
         if not self.is_available():
             return BridgeErrorCode.NOT_CONFIGURED
@@ -164,9 +166,9 @@ class ElectronBridge:
             return None
         return BridgeErrorCode.WS_LOST
 
-    async def ping(self, timeout: float = 3.0) -> bool:
+    async def ping(self) -> bool:
         """桥接是否可达（布尔薄封装）。需要具体失败原因时请直接调用 probe()。"""
-        return await self.probe(timeout) is None
+        return await self.probe() is None
 
     async def exec_ssh_command(
         self,

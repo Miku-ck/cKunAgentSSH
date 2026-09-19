@@ -15,6 +15,7 @@ import asyncio
 import calendar
 import logging
 import os
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -30,6 +31,9 @@ logger = logging.getLogger(__name__)
 _SCHEDULE_POLL_SECONDS = 30
 _SCHEDULE_MAX_ITERATIONS = 8
 _SCHEDULE_CONVERSATION_PREFIX = "sched-"
+# schedule_runs 清理节流间隔（秒）与每个 schedule 保留的最大行数
+_RUNS_PRUNE_INTERVAL_S = 6 * 3600
+_RUNS_KEEP_PER_SCHEDULE = 2000
 
 
 class ScheduleEngine:
@@ -44,6 +48,7 @@ class ScheduleEngine:
         # 已 create_task 的任务（无引用、detached）会继续跑 SSH 会话，
         # schedule_runs 在进程退出后滞留 'running'
         self._running_tasks: dict[str, asyncio.Task] = {}
+        self._last_prune_at = 0.0  # schedule_runs 清理节流（monotonic）
 
     # ── 生命周期 ──
     def start(self) -> None:
@@ -130,6 +135,24 @@ class ScheduleEngine:
             # 无运行循环或 create_task 失败：回滚标记，避免任务永久卡死
             self._executing.discard(sid)
             raise
+        self._maybe_prune_runs()
+
+    def _maybe_prune_runs(self) -> None:
+        """低频清理 schedule_runs（每 6h 最多一次，best-effort）。
+
+        放在 trigger 末尾而非 tick 循环：只在实际有触发活动时顺带清理，
+        空转的 tick 不碰 DB；to_thread 避免同步 sqlite 占用事件循环。
+        """
+        now = time.monotonic()
+        if now - self._last_prune_at < _RUNS_PRUNE_INTERVAL_S:
+            return
+        self._last_prune_at = now
+        try:
+            asyncio.get_running_loop().create_task(
+                asyncio.to_thread(db.prune_schedule_runs)
+            )
+        except RuntimeError:
+            pass  # 无运行循环（单测直调）— 跳过即可
 
     # ── 无头执行 ──
     async def _run_task(self, sched: dict) -> None:
@@ -240,7 +263,7 @@ class ScheduleEngine:
             #    原实现把 ping 的所有失败一律报成 PORT_CLOSED，导致"端口在监听但
             #    无响应（假监听/超时）"被错误描述为"端口已关闭"，把排查方向带偏。
             try:
-                probe_error = await bridge.probe(timeout=5.0)
+                probe_error = await bridge.probe()
             except Exception as e:
                 # probe 内部已全量捕获异常，此处仅为防御未来改动
                 probe_error = classify_bridge_error(e)
@@ -376,28 +399,49 @@ def _fmt(dt: datetime) -> str:
 
 
 def compute_next_run(sched: dict, now: datetime | None = None) -> str:
-    """按规则计算下一次执行时间（UTC naive 字符串，保证 > now）。"""
+    """按规则计算下一次执行时间（UTC naive 字符串，保证 > now）。
+
+    语义（三类周期共用同一形态）：先算"最近一个目标时刻"（可能就在今天/
+    本周/本月），未过则取之，已过则滚动到下一周期。旧实现 daily/weekly
+    无条件从"明天/下周"起步、不与 now 比较 — 今天时刻还没到时也会晚一天
+    （实测：daily 23:00 在 10:00 触发会算出明天 23:00）。
+    """
     now = now or utcnow()
     st = sched.get("schedule_type") or "interval"
     if st == "interval":
-        minutes = int(sched.get("interval_minutes") or 60)
+        # 注意：interval_minutes 保留 `or 60` — 0 是危险值（每 tick 触发），
+        # 落到 60 是安全方向（路由层另有 ge=1 校验）
+        minutes = int(sched["interval_minutes"]) if sched.get("interval_minutes") else 60
         return _fmt(now + timedelta(minutes=minutes))
 
-    h, mi = int(sched.get("time_hour") or 9), int(sched.get("time_minute") or 0)
+    # None 判定而非 `or`：0 是合法值（午夜 0 点）。旧实现 `time_hour or 9`
+    # 会把 0 点任务静默挪到 9 点（路由校验 0<=hour<=23 明确允许 0）。
+    h = int(sched["time_hour"]) if sched.get("time_hour") is not None else 9
+    mi = int(sched["time_minute"]) if sched.get("time_minute") is not None else 0
 
     if st == "daily":
-        d = now + timedelta(days=1)
-        return _fmt(_local_to_utc(d.year, d.month, d.day, h, mi))
+        d = now
+        cand = _local_to_utc(d.year, d.month, d.day, h, mi)
+        if cand <= now:
+            d += timedelta(days=1)
+            cand = _local_to_utc(d.year, d.month, d.day, h, mi)
+        return _fmt(cand)
 
     if st == "weekly":
-        target = int(sched.get("weekday") or 0)  # 0=周一
-        d = now + timedelta(days=1)
-        while d.weekday() != target:
-            d += timedelta(days=1)
-        return _fmt(_local_to_utc(d.year, d.month, d.day, h, mi))
+        target = int(sched["weekday"]) if sched.get("weekday") is not None else 0  # 0=周一
+        d = now
+        if d.weekday() != target:
+            # 最近的目标 weekday（不含今天；差值在 1..6）
+            d += timedelta(days=(target - d.weekday()) % 7)
+        cand = _local_to_utc(d.year, d.month, d.day, h, mi)
+        if cand <= now:
+            # 今天就是目标周但时刻已过 → 下一周
+            d += timedelta(days=7)
+            cand = _local_to_utc(d.year, d.month, d.day, h, mi)
+        return _fmt(cand)
 
     if st == "monthly":
-        dom = int(sched.get("day_of_month") or 1)
+        dom = int(sched["day_of_month"]) if sched.get("day_of_month") is not None else 1
         y, mo = now.year, now.month
         last = calendar.monthrange(y, mo)[1]
         cand = _local_to_utc(y, mo, min(dom, last), h, mi)

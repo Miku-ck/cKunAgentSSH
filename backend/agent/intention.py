@@ -4,6 +4,8 @@
 设计目标：
 - "真正的意图识别"：综合关键词、长度、结构信号、否定词等多维特征，而非单点关键词匹配
 - 输出 (level, task_type, reasoning_budget, allow_planning_phase, guide_prompt) 五元组
+- 额外输出 is_change：任务是否可能改变目标机 / 代码库状态，
+  供运维方法论二选一注入（OPS_METHOD_READONLY / OPS_METHOD_CHANGE）
 - Driver 根据结果动态调整每轮 LLM 调用的 reasoning 预算 + prompt 引导语
 
 5 个复杂度等级：
@@ -49,6 +51,10 @@ class IntentionResult:
     allow_planning_phase: bool        # 是否允许首轮纯规划（不调工具）
     guide_prompt: str                 # 注入到 system_prompt 的引导语
     confidence: float = 0.7           # 识别置信度（0-1），用于日志/审计
+    # 是否可能改变目标机 / 代码库状态（与 task_type 正交：task_type 描述任务性质，
+    # is_change 描述"是否产生副作用"）。由 routes/agent.py 选用
+    # OPS_METHOD_CHANGE / OPS_METHOD_READONLY 消费。
+    is_change: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -57,6 +63,7 @@ class IntentionResult:
             "reasoning_budget": self.reasoning_budget,
             "allow_planning_phase": self.allow_planning_phase,
             "confidence": self.confidence,
+            "is_change": self.is_change,
         }
 
 
@@ -86,6 +93,33 @@ _QUERY_MARKERS = [
 ]
 _MODIFY_MARKERS = [
     "修改", "改为", "改成", "替换", "更新", "调整", "改一下", "改下", "rename",
+]
+
+# 变更信号：任务可能改变目标机 / 代码库状态（文件、服务、包、权限、版本库）
+# 与 TaskType 正交 —— task_type 说"做什么性质的事"，is_change 说"有没有副作用"。
+# 判定偏保守（宁滥勿缺）：误判为变更的代价是多说一段影响说明；
+# 漏判的代价是变更命令只拿到只读方法论 → 代价不对称。
+# 注意：_any_match_wordbounded 对纯 ASCII 词做词边界匹配（"rm" 不命中 "confirm"，
+# "start" 不命中 "start.sh"），故英文标记一律不带尾随空格，否则退化为子串匹配。
+_CHANGE_MARKERS = [
+    # 服务 / 进程生命周期
+    "重启", "停止", "启动", "关掉", "关闭服务", "杀掉", "杀死", "重新加载",
+    "restart", "stop", "start", "reload", "kill",
+    # 文件 / 配置变更
+    # 注意：不收录"执行/运行/run/exec" —— "执行 df -h" 也是纯只读，
+    # 而"运行部署脚本"已被"部署"命中，无需借助通用动词。
+    "删除", "删掉", "移除", "清理", "清空", "覆盖", "写入", "新建",
+    "重命名", "移动", "改配置", "修复",
+    "rm", "mv", "cp", "chmod", "chown", "mkdir", "truncate", "fix",
+    # 部署 / 发布 / 容量与数据
+    "部署", "发布", "上线", "回滚", "回退", "扩容", "缩容", "迁移", "备份", "恢复",
+    "deploy", "rollback", "scale",
+    # 包管理 / 提权
+    "安装", "卸载", "升级", "降级", "apt-get", "yum", "dnf", "apk",
+    "install", "uninstall", "upgrade", "sudo",
+    # 版本控制
+    "提交", "推送", "合并", "拉取",
+    "commit", "push", "pull", "merge", "rebase", "checkout", "reset",
 ]
 
 # 纯对话信号：问候/身份询问/能力询问/闲聊 — 不需要工具、不需要记忆、不需要规划
@@ -163,6 +197,16 @@ _LEVEL_GUIDE: dict[IntentionLevel, str] = {
         "禁止在脑中连续推演多个未验证的假设。",
 }
 
+# 变更纪律（is_change=True 时追加到逐轮引导）
+# 为什么不只靠 system prompt 里的 OPS_METHOD_CHANGE：driver 把本函数的返回值
+# 作为**最后一条 user 消息**注入，是注意力最强的位置；而系统提示里的完整方法论
+# 在长上下文中会被稀释。只读任务短路了，变更任务需要在尾部再钉一次。
+_CHANGE_DISCIPLINE = (
+    "\n\n[变更纪律] 本任务会改变目标机状态：动手前先用只读工具确认现状，"
+    "执行前说明做什么 / 影响范围 / 是否可逆 / 如何回滚，"
+    "一次只做一个变更并立即验证，目标含糊时先列出候选等用户确认。"
+)
+
 
 def _compute_effective_budgets(max_budget: Optional[int]) -> dict[IntentionLevel, Optional[int]]:
     """
@@ -219,6 +263,9 @@ def classify(task: str, max_budget: Optional[int] = None) -> IntentionResult:
     text = task.lower()
     text_zh = task  # 中文匹配保留原文（lower 不影响中文）
 
+    # 变更信号：命中运维变更动词（重启/删除/部署/安装/回滚…）
+    has_change_signal = _any_match_wordbounded(_CHANGE_MARKERS, text, text_zh)
+
     # ── 0. 纯对话型任务识别（最高优先级，先判定）──
     # 短任务 + 命中对话 markers → 直接归为 CONVERSATION
     # 这样可以避免"你是什么模型"被误判为 trivial QUERY 并被引导去调工具
@@ -232,6 +279,7 @@ def classify(task: str, max_budget: Optional[int] = None) -> IntentionResult:
         or _any_match_wordbounded(_IMPLEMENT_MARKERS, text, text_zh)
         or _any_match_wordbounded(_MODIFY_MARKERS, text, text_zh)
         or _any_match_wordbounded(_RESEARCH_MARKERS, text, text_zh)
+        or has_change_signal
     )
     if (
         task_len < 60
@@ -249,6 +297,7 @@ def classify(task: str, max_budget: Optional[int] = None) -> IntentionResult:
                 "不要做长篇规划，不要引用无关记忆或上下文。"
             ),
             confidence=0.95,
+            is_change=False,  # 纯对话不产生副作用
         )
 
     # ── 1. 任务类型识别（按优先级，先匹配先返回）──
@@ -350,6 +399,16 @@ def classify(task: str, max_budget: Optional[int] = None) -> IntentionResult:
         # 复杂 debug 保持 debug 等级（限制每步思考），不切到 complex
         level = IntentionLevel.DEBUG
 
+    # ── 2.7 变更类判定（is_change）──
+    # 两条来源取或：
+    #   a) 命中变更动词（has_change_signal）
+    #   b) 任务性质本身即写操作（implement / modify / refactor）
+    # debug 不自动算变更 —— "排查为什么服务挂了"是只读取证，
+    # 只有同时命中变更动词（"修复 nginx 配置"）才算。
+    is_change = has_change_signal or task_type in (
+        TaskType.IMPLEMENT, TaskType.MODIFY, TaskType.REFACTOR,
+    )
+
     # ── 3. 允许规划阶段？ ──
     # 仅 complex 等级且非 debug 允许首轮纯规划
     allow_planning = (level == IntentionLevel.COMPLEX and task_type != TaskType.DEBUG)
@@ -392,6 +451,7 @@ def classify(task: str, max_budget: Optional[int] = None) -> IntentionResult:
         allow_planning_phase=allow_planning,
         guide_prompt=guide,
         confidence=level_confidence,
+        is_change=is_change,
     )
 
 
@@ -452,8 +512,24 @@ def get_guide_for_iteration(
     intention: IntentionResult,
     iteration: int,
 ) -> str:
+    """逐轮引导语（公开入口）。
+
+    在 `_guide_for_iteration_base` 的基础上，对变更类任务（is_change）追加
+    `_CHANGE_DISCIPLINE` —— 该返回值由 driver 作为最末一条 user 消息注入，
+    是压过 system prompt 里长方法论的最后一次提醒。
     """
-    根据当前迭代轮次返回动态引导语
+    guide = _guide_for_iteration_base(intention, iteration)
+    if intention.is_change and _CHANGE_DISCIPLINE not in guide:
+        guide += _CHANGE_DISCIPLINE
+    return guide
+
+
+def _guide_for_iteration_base(
+    intention: IntentionResult,
+    iteration: int,
+) -> str:
+    """
+    根据当前迭代轮次返回动态引导语（不含变更纪律，由外层追加）
 
     - iteration=0 + allow_planning_phase → 规划阶段引导
     - iteration=0 + 不允许规划 → 直接执行引导
@@ -588,6 +664,8 @@ def reclassify(
         allow_planning_phase=False,  # 重分类后不再允许规划阶段
         guide_prompt=guide,
         confidence=confidence,
+        # is_change 由初始任务文本判定，执行过程中的工具结果不改变任务性质 → 原样透传
+        is_change=original.is_change,
     )
 
 

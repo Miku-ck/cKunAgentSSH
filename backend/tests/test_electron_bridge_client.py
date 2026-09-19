@@ -85,7 +85,7 @@ async def test_probe_ws_not_connected_returns_ws_lost(env, monkeypatch):
     """WS 未连接 → 短等待后 fail-closed 返回 WS_LOST（HTTP 兜底已移除）。"""
     _use_relay(monkeypatch, FakeRelay(connected=False))
     monkeypatch.setattr("agent.electron_bridge._WS_PROBE_WAIT_S", 0.1)
-    assert await env.probe(timeout=3.0) is BridgeErrorCode.WS_LOST
+    assert await env.probe() is BridgeErrorCode.WS_LOST
     assert await env.ping() is False
 
 

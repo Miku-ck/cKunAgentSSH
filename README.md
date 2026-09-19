@@ -9,10 +9,17 @@ SSH 智能运维终端 — 集成 SSH 连接管理、远程终端、SFTP 文件�
 - **本地终端**：node-pty + xterm.js，支持 CMD / PowerShell / Git Bash / WSL
 - **SFTP 文件传输**：断点续传（.part 临时文件）、分块并发、心跳检测、错误分类
 - **远程文件编辑**：Monaco Editor 在线编辑远程文件
-- **命令补全**：Tab 补全，通过 SSH exec 远程查询候选
+- **命令补全**：Tab 补全，通过 SSH exec 远程查询候选；历史命令 fuzzy 联想（字符子序列 + 词首/连续加分）+ 执行次数徽标
 - **快捷命令栏**：自定义命令快捷执行
+- **多节点批量下发**：对多台活动远程会话并行下发一条命令，结果并排对比 + 逐行差异高亮，可一键送 AI 分析；生产环境标记 / 危险命令命中时执行前强制二次确认
+- **实时监控仪表盘**：每 5s 轮询远程指标（CPU 跨轮次差分 / 内存 / 负载 / 磁盘 / 进程 TOP / 监听端口 / GPU nvidia-smi），Sparkline 趋势，单点指标可「分析」送 AI；连续失败转后台重试，断线自动恢复
+- **终端「问 AI」**：选中终端内容 → 选区旁悬浮按钮 → 预填 AI 面板问题草稿，随消息自动注入 cwd / 最近命令 / 选区上下文
 - **AI 运维助手**：流式对话 + 思考链、多模型切换、Agent 智能体（工具调用）
 - **Agent 框架（Harness）**：ReAct 决策循环、10 拦截器、22 工具、动态步数预算、循环检测、成本熔断
+- **目标机环境画像**：run 开始自动探测发行版 / init / 包管理器 / 身份，注入系统提示，避免模型凭印象生成与发行版不匹配的命令
+- **运维方法论注入**：意图识别输出 `is_change`（变更 / 只读正交维度），按任务性质二选一注入变更纪律 / 只读取证方法论
+- **定时任务**：倒计时、历史耗时、失败 run 一键「AI 诊断」
+- **CI 门禁**：`scripts/ci-check.sh` + GitHub Actions 工作流（后端 pytest / 前端 typecheck / vitest / 构建）
 
 ## 技术栈
 
@@ -112,6 +119,8 @@ cKunAgentSSH/
 │   ├── views/
 │   │   └── ssh/
 │   │       ├── SshView.vue            # SSH 主视图：标签栏 + 终端 + AI 面板
+│   │       ├── DashboardView.vue      # 监控仪表盘（CPU/内存/负载/磁盘/GPU/进程/端口）
+│   │       ├── SchedulesView.vue      # 定时任务（倒计时 + 失败 AI 诊断）
 │   │       └── AuditView.vue          # 审计记录视图
 │   │
 │   ├── components/
@@ -130,8 +139,9 @@ cKunAgentSSH/
 │   │       ├── SftpView.vue           # SFTP 文件浏览
 │   │       ├── SftpFileEditor.vue     # 远程文件编辑（Monaco）
 │   │       ├── SshAiPanel.vue         # AI 运维助手面板
+│   │       ├── BulkCommandModal.vue   # 多节点批量下发 + 结果对比
 │   │       ├── QuickCommandBar.vue    # 快捷命令栏
-│   │       ├── CompletionPopup.vue    # 命令补全弹窗
+│   │       ├── CompletionPopup.vue    # 命令补全弹窗（含历史次数徽标）
 │   │       ├── NoteInput.vue          # 备注输入
 │   │       └── QuickCommandEditor.vue # 快捷命令编辑
 │   │
@@ -140,7 +150,7 @@ cKunAgentSSH/
 │   │   ├── useAppearance.ts           # 主题/外观管理
 │   │   ├── useChatPersistence.ts      # 聊天持久化
 │   │   ├── useChatStream.ts           # 流式聊天
-│   │   ├── useCompletion.ts           # 命令补全
+│   │   ├── useCompletion.ts           # 命令补全（含历史 fuzzy 联想纯函数）
 │   │   ├── useConfirm.ts              # 全局确认对话框
 │   │   ├── useModelSelector.ts        # 模型选择
 │   │   ├── useResizablePanel.ts       # 可拖拽面板
@@ -148,15 +158,20 @@ cKunAgentSSH/
 │   │   ├── useCommandDelivery.ts      # 命令交付/焦点管理
 │   │   ├── useSshNavigation.ts        # SSH 导航与终端切换
 │   │   ├── useTabContextMenu.ts       # 标签右键菜单
-│   │   └── useTerminalConfig.ts       # 终端配置
+│   │   ├── useTerminalConfig.ts       # 终端配置
+│   │   ├── useTerminalContext.ts      # 终端「问 AI」：选区登记 + 悬浮按钮 + cwd 同步
+│   │   ├── bulkCommandDiff.ts         # 批量下发结果对比 + 危险命令启发式（纯函数）
+│   │   └── ssh-error-types.ts         # SSH 错误还原（与 shared/ssh-error-core 对齐）
 │   │
 │   ├── stores/                        # Pinia 状态
 │   │   ├── app.ts                     # 后端状态管理
-│   │   ├── ssh.ts                     # SSH 会话池 + 连接配置
+│   │   ├── ssh.ts                     # SSH 会话池 + 连接配置（含终端选区/cwd 注册表）
 │   │   ├── sftp.ts                    # SFTP 传输状态
-│   │   ├── ssh-ai.ts                  # SSH AI 对话
+│   │   ├── ssh-ai.ts                  # SSH AI 对话（含「问 AI」pendingPrefill 通路）
 │   │   ├── chat.ts                    # 通用对话管理
 │   │   ├── agent.ts                   # Agent 运行状态
+│   │   ├── server-monitor.ts          # 实时监控轮询编排（5s 采样 + 失败重试）
+│   │   ├── server-monitor-core.ts     # 监控远端采集命令 + /proc 解析（纯函数）
 │   │   ├── skills.ts                  # 技能管理
 │   │   ├── quickCommands.ts           # 快捷命令
 │   │   ├── settings.ts                # 应用设置
@@ -199,7 +214,8 @@ cKunAgentSSH/
 │   │   ├── memory.py                  # Agent 记忆管理
 │   │   ├── reflection.py              # 元反思
 │   │   ├── evolution.py               # 策略演化
-│   │   ├── intention.py               # 意图分类
+│   │   ├── intention.py               # 意图分类（含 is_change 变更/只读维度 + 逐轮引导）
+│   │   ├── host_profile.py            # 目标机环境画像（只读探测 + 缓存 + 静默降级）
 │   │   ├── audit.py                   # 审计引擎（链式签名）
 │   │   ├── cost_tracker.py            # 成本追踪
 │   │   ├── consciousness_tick.py      # 后台心智维护
@@ -213,7 +229,7 @@ cKunAgentSSH/
 │   │       ├── load_skill.py          # 按需加载技能
 │   │       ├── spawn_subagent.py      # 启动子 Agent
 │   │       ├── ops_common.py          # 运维共享执行辅助（双模式）
-│   │       ├── ops_obs.py             # 只读观测（概览/进程/网络）+ 日志
+│   │       ├── ops_obs.py             # 只读观测（概览/进程/网络）+ 日志 + 环境画像模板
 │   │       ├── ops_service.py         # 服务生命周期（systemctl）
 │   │       ├── ops_schedule.py        # 计划/定时任务
 │   │       ├── ops_file.py            # 文件操作（读/写/改/查找/搜索）
@@ -231,6 +247,9 @@ cKunAgentSSH/
 │
 ├── electron.vite.config.ts            # electron-vite 构建配置
 ├── electron-builder.yml               # 打包配置
+├── scripts/ci-check.sh                # 本地一键 CI（与 GitHub Actions 检查项一致）
+├── scripts/deploy/                    # 远端最小权限部署（白名单执行器等）
+├── vitest.config.ts                   # 前端单测配置（node 环境）
 ├── package.json
 └── tsconfig.json / tsconfig.web.json / tsconfig.node.json
 ```
@@ -251,7 +270,7 @@ cKunAgentSSH/
 
 - **App.vue** — 根布局：TitleBar + SshView，直接渲染 SSH 界面
 - **TitleBar.vue** — 自定义标题栏：品牌标识 + 窗口控制按钮
-- **SshView.vue** — SSH 主视图：Quick Start 首页 / 远程管理 / 本地终端 / SFTP / AI 面板 / 快捷命令栏
+- **SshView.vue** — SSH 主视图：Quick Start 首页 / 远程管理 / 本地终端 / SFTP / AI 面板 / 监控仪表盘 / 定时任务 / 快捷命令栏
 
 ### 状态管理
 
@@ -368,7 +387,7 @@ INIT → THINKING → [LLM 调用] → 有工具调用?
 
 - **命令安全**：6 步归一化 + 12 HARDLINE 阻断 + 20 DANGEROUS 审批
 - **SSRF 防护**：IP 拒绝私网 + DNS rebinding 防护 + 重定向校验
-- **远端最小权限（部署侧）**：`scripts/deploy/` 提供受限账户一键部署（`setup-ckun-agent.sh`）+ 白名单执行器（`agent-exec.py`，20 模板逐条匹配、base64 洞递归封堵）+ 部署验证（`ckun-agent-verify.sh`）。Agent 在远端默认只能执行白名单内命令，与代码侧 HARDLINE/审批形成纵深；跨端一致性由契约测试 `test_remote_whitelist_contract.py` 钉死（改任一端命令格式必须跑该测试）
+- **远端最小权限（部署侧）**：`scripts/deploy/` 提供受限账户一键部署（`setup-ckun-agent.sh`）+ 白名单执行器（`agent-exec.py`，22 模板逐条锚点匹配、默认拒绝、base64 洞递归封堵）+ 部署验证（`ckun-agent-verify.sh`）。Agent 在远端默认只能执行白名单内命令，与代码侧 HARDLINE/审批形成纵深；跨端一致性由契约测试 `test_remote_whitelist_contract.py` 钉死（改任一端命令格式必须跑该测试）
 
 ## 开发
 
@@ -417,6 +436,8 @@ npm run dev
 npm run dev          # 开发模式（Vite HMR + Electron）
 npm run dev:backend  # 单独启动 Python 后端
 npm run build        # 构建生产版本
+npm run typecheck    # 前端类型检查（vue-tsc）
+bash scripts/ci-check.sh   # 一键 CI（后端 pytest / typecheck / vitest / 构建）
 ```
 
 ## License
