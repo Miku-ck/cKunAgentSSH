@@ -931,6 +931,11 @@ function setupPtyIPC(): void {
     ptyManager!.destroy(id)
   })
 
+  // 本地终端当前工作目录（「问 AI」终端上下文采集）
+  handleTrusted('pty:getCwd', (_event, id: string) => {
+    return ptyManager!.getCwd(id) ?? ''
+  })
+
   // 本地终端命令补全：在指定 cwd 执行补全
   // Windows PowerShell：使用 [System.Management.Automation.CommandCompletion]::CompleteInput
   // macOS/Linux bash：使用 compgen（识别 function/alias/command/file）
