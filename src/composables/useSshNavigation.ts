@@ -2,6 +2,7 @@
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { useSSHStore, type SSHConnection } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
+import { useServerMonitorStore } from '@/stores/server-monitor'
 import { useSftpStore } from '@/stores/sftp'
 import { useToastStore } from '@/stores/toast'
 import { toFriendlyMessage } from '@/api/client'
@@ -20,11 +21,12 @@ export function useSshNavigation(
   const store = useSSHStore()
   const sshAiStore = useSshAiStore()
   const sftpStore = useSftpStore()
+  const monitorStore = useServerMonitorStore()
   const toast = useToastStore()
 
   // ─── 布局状态 ───
   const showHome = ref(true)
-  const activeNavPage = ref<'home' | 'remote-mgr' | 'sftp' | 'audit' | 'schedules'>('home')
+  const activeNavPage = ref<'home' | 'remote-mgr' | 'sftp' | 'audit' | 'schedules' | 'dashboard'>('home')
   const showModal = ref(false)
   const editingConnection = ref<SSHConnection | undefined>(undefined)
 
@@ -118,6 +120,17 @@ export function useSshNavigation(
     } else {
       showHome.value = true
       activeNavPage.value = 'schedules'
+      // 切到独立页面时自动收起 AI 助手面板（点 AI 图标可重新展开）
+      sshAiStore.closeAiPanel()
+    }
+  }
+
+  function toggleDashboard() {
+    if (activeNavPage.value === 'dashboard') {
+      goHome()
+    } else {
+      showHome.value = true
+      activeNavPage.value = 'dashboard'
       // 切到独立页面时自动收起 AI 助手面板（点 AI 图标可重新展开）
       sshAiStore.closeAiPanel()
     }
@@ -262,6 +275,25 @@ export function useSshNavigation(
     }
   })
 
+  // ─── 实时监控轮询生命周期（B 阶段） ───
+  // 单一事实来源：monitoredTarget 同时依赖 sessions 与 activeSessionId，
+  // 覆盖「切到远程会话 → start」「切到本地/会话全关 → stop」「关闭会话后校正目标」
+  // 三种场景。监控数据在 store 层存活，视图切换不中断。
+  const monitoredTarget = computed(() => {
+    const remotes = store.sessions.filter(s => s.type === 'remote')
+    if (!remotes.length) return ''
+    const active = remotes.find(s => s.id === store.activeSessionId)
+    return (active || remotes[0]).id
+  })
+  watch(monitoredTarget, (target) => {
+    if (!target) {
+      monitorStore.stop()
+      return
+    }
+    if (monitorStore.polling && monitorStore.current?.sshId === target) return
+    monitorStore.start(target)
+  }, { immediate: true })
+
   // 组件卸载时清理延迟聚焦定时器
   onUnmounted(() => {
     focusTimers.forEach(t => clearTimeout(t))
@@ -281,6 +313,7 @@ export function useSshNavigation(
     toggleAiPanel,
     toggleAudit,
     toggleSchedules,
+    toggleDashboard,
     qsSearch,
     filteredShells,
     filteredConnections,

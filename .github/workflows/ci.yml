@@ -1,0 +1,58 @@
+# CI — cKunAgentSSH
+#
+# 说明：当前仓库托管在 Gitee。本文件是标准 GitHub Actions 配置，
+# 推送到 GitHub（或 fork）即自动生效；在 Gitee 上可用 Gitee Go 等价配置，
+# 或直接在本地跑 `bash scripts/ci-check.sh` 执行完全相同的检查项。
+#
+# 检查项（与 scripts/ci-check.sh 一致）：
+#   1. 后端 pytest（backend/tests/，含跨端白名单契约测试）
+#   2. 前端 vue-tsc 类型检查
+#   3. 前端 vitest 单测
+#   4. electron-vite 构建（验证 main/preload/renderer 三方编译）
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pytest pytest-asyncio
+
+      # node-pty 需在本机构建二进制；CI 上仅做类型检查/构建，
+      # 构建失败不阻断（与本地 postinstall 的 install-app-deps 一致的策略）
+      - name: Build native deps (best effort)
+        run: npm run postinstall || true
+
+      - name: Backend tests
+        run: cd backend && python -m pytest tests/ -q
+
+      - name: Frontend typecheck
+        run: npm run typecheck
+
+      - name: Frontend unit tests
+        run: npx vitest run
+
+      - name: Build
+        run: npm run build

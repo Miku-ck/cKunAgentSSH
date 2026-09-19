@@ -66,6 +66,7 @@
         <polyline points="13 2 13 9 20 9"/>
       </svg>
       <span class="item-text">{{ cand.text }}</span>
+      <span v-if="cand.count" class="item-count" :title="`已执行 ${cand.count} 次`">{{ cand.count }}次</span>
     </div>
   </div>
 </template>
@@ -193,5 +194,15 @@ defineExpose({
 .item-text {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.item-count {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-tertiary, #666);
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+  padding: 0 5px;
+  border-radius: 4px;
+  font-variant-numeric: tabular-nums;
 }
 </style>

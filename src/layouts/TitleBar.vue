@@ -17,6 +17,9 @@
       <button class="titlebar-action-btn" :class="{ active: activePage === 'schedules' }" title="定时任务" @click="emit('action-schedules')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 16 14"/></svg>
       </button>
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'dashboard' }" title="监控仪表盘" @click="emit('action-dashboard')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      </button>
       <button class="titlebar-action-btn" :class="{ active: activePage === 'remote-mgr' }" title="远程终端" @click="emit('action-remote')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg>
       </button>
@@ -50,7 +53,7 @@ const api = window.electronAPI
 
 defineProps<{
   /** 当前激活的功能页，对应图标高亮 */
-  activePage: 'home' | 'remote-mgr' | 'sftp' | 'audit' | 'ai' | 'schedules'
+  activePage: 'home' | 'remote-mgr' | 'sftp' | 'audit' | 'ai' | 'schedules' | 'dashboard'
 }>()
 
 const emit = defineEmits<{
@@ -59,6 +62,7 @@ const emit = defineEmits<{
   'action-remote': []
   'action-audit': []
   'action-sftp': []
+  'action-dashboard': []
   'action-settings': []
 }>()
 

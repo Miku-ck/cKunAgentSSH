@@ -16,6 +16,62 @@ import { useSettingsStore } from '@/stores/settings'
 export interface CompletionCandidate {
   text: string
   type: 'command' | 'file' | 'dir' | 'history'
+  /** 历史命令执行次数（仅 history 类型有值，弹窗显示统计） */
+  count?: number
+}
+
+// ── 历史命令 fuzzy 联想（E 阶段） ──
+// 纯函数：字符子序列匹配（"lslat" 命中 "ls -lat"），词首/连续字符加分，
+// 短命令与词首命中靠前。无外部依赖，可独立单测。
+
+/**
+ * 在历史命令中做 fuzzy 匹配（前缀命中是 fuzzy 的特例，得分更高）。
+ * @param commands 历史命令列表（去重后的完整命令）
+ * @param query 用户已输入的片段
+ * @param limit 最多返回条数
+ * @returns 按匹配得分降序排列的 [命令, 得分] 列表
+ */
+export function fuzzyMatchCommand(
+  commands: string[],
+  query: string,
+  limit = 10,
+): Array<{ command: string; score: number }> {
+  const q = query.toLowerCase()
+  if (!q) return []
+  // 单字符不触发 fuzzy 联想：一个字母会命中几乎全部命令，纯属噪音。
+  // 用户明确输入 ≥2 字符后再开始匹配（与 CompletionPopup 的展示阈值一致）。
+  if (q.length < 2) return []
+  const results: Array<{ command: string; score: number }> = []
+  for (const cmd of commands) {
+    const lower = cmd.toLowerCase()
+    const startsWith = lower.startsWith(q)
+    let qi = 0
+    let score = 0
+    let lastIdx = -1
+    for (let i = 0; i < lower.length && qi < q.length; i++) {
+      if (lower[i] === q[qi]) {
+        // 词首（命令/参数开头、行首、空白后）加分 — 让 "git l" 优先命中 "git log"
+        const wordStart = i === 0 || /[\s=\/:-]/.test(lower[i - 1])
+        // 连续字符（紧跟上一个命中字符）加分
+        const consecutive = i === lastIdx + 1
+        score += 2 + (wordStart ? 3 : 0) + (consecutive ? 2 : 0)
+        lastIdx = i
+        qi++
+      }
+    }
+    if (qi === q.length) {
+      // 前缀精确命中大幅加分；短命令更具体，轻微加分
+      if (startsWith) score += 10
+      score += Math.max(0, 8 - Math.floor(lower.length / 10))
+      results.push({ command: cmd, score })
+    }
+  }
+  results.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score
+    // 同分时短命令优先（"ls" 排在 "ls -lat" 前，更精确的命中排前）
+    return a.command.length - b.command.length
+  })
+  return results.slice(0, limit)
 }
 
 export interface CompletionInput {
@@ -200,7 +256,7 @@ export function parseInput(line: string, cursorPos: number): CompletionInput | n
   }
 }
 
-/** 补充历史命令候选（仅在命令段且有前缀时触发） */
+/** 补充历史命令候选（命令段且有前缀时触发；E 阶段改为 fuzzy 联想 + 次数统计） */
 function queryHistoryCandidates(
   sessionId: string,
   input: CompletionInput,
@@ -209,15 +265,24 @@ function queryHistoryCandidates(
   if (!input.isCommand || !input.prefix) return []
 
   const store = useSSHStore()
-  const entries = store.queryHistoryCandidates(sessionId, input.prefix, 10)
-  if (entries.length === 0) return []
+  // 本会话历史命令做 fuzzy 匹配（前缀命中是特例且得分更高）
+  const matched = fuzzyMatchCommand(
+    store.getSessionCommands(sessionId),
+    input.prefix,
+    10,
+  )
+  if (matched.length === 0) return []
 
   const seen = new Set(nativeCandidates.map(c => c.text))
   const result: CompletionCandidate[] = []
-  for (const entry of entries) {
-    if (seen.has(entry.command)) continue
-    seen.add(entry.command)
-    result.push({ text: entry.command, type: 'history' })
+  for (const m of matched) {
+    if (seen.has(m.command)) continue
+    seen.add(m.command)
+    result.push({
+      text: m.command,
+      type: 'history',
+      count: store.getCommandCount(m.command, sessionId),
+    })
   }
   return result
 }

@@ -44,15 +44,9 @@
       <!-- 消息列表（历史面板打开时隐藏，见上方空状态注释） -->
       <div v-else class="messages-list" role="log" aria-live="polite" v-show="!showHistoryPanel">
         <template v-for="(msg, idx) in displayMessages" :key="msg.id">
-          <!-- Agent 执行过程前置块：运行中且目标为最后一条 assistant 占位消息 -->
-          <AgentTraceInline
-            v-if="isLiveAgentRun(msg, idx)"
-            :trace="agentStore.snapshot()"
-            :is-live="true"
-          />
           <MessageItem
             :message="msg"
-            :is-last="idx === displayMessages.length - 1"
+            :is-last="idx === props.messages.length - 1"
           >
             <template v-if="showMessageActions" #actions="{ content }">
               <slot name="message-actions" :content="content" :msg="msg"></slot>
@@ -251,7 +245,6 @@ import HistoryPanel from '@/components/chat/HistoryPanel.vue'
 import { useResizablePanel } from '@/composables/useResizablePanel'
 import { useModelSelector } from '@/composables/useModelSelector'
 import { useSettings } from '@/composables/useSettings'
-import AgentTraceInline from '@/components/agent/AgentTraceInline.vue'
 import { useAgentStore } from '@/stores/agent'
 import { useSettingsStore } from '@/stores/settings'
 import { useSkillStore } from '@/stores/skills'
@@ -657,7 +650,17 @@ function focusInput() {
   nextTick(() => inputRef.value?.focus())
 }
 
-defineExpose({ focusInput, restoreDraft })
+/** 预填输入框草稿（「问 AI」等外部入口注入问题草稿，用户可修改后发送） */
+function prefill(text: string) {
+  if (!text) return
+  inputText.value = text
+  nextTick(() => {
+    autoResize()
+    inputRef.value?.focus()
+  })
+}
+
+defineExpose({ focusInput, restoreDraft, prefill })
 </script>
 
 <style scoped>

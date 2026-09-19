@@ -56,6 +56,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ptyWrite: (id: string, data: string) => ipcRenderer.invoke('pty:write', id, data),
   ptyResize: (id: string, cols: number, rows: number) => ipcRenderer.invoke('pty:resize', id, cols, rows),
   ptyDestroy: (id: string) => ipcRenderer.invoke('pty:destroy', id),
+  ptyGetCwd: (id: string) => ipcRenderer.invoke('pty:getCwd', id),
   ptyCompleteCommand: (opts: { ptyId: string; cmd: string; prefix: string; cwd: string; isCommand: boolean; prevSegments: string[]; shell?: string }) =>
     ipcRenderer.invoke('pty:completeCommand', opts),
   /**

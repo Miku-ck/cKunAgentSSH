@@ -9,6 +9,18 @@
       @select="applyCompletion"
       @cancel="hideCompletion"
     />
+    <!-- 「问 AI」悬浮按钮：选中终端内容后在选区上方出现 -->
+    <button
+      v-if="askAiBtn.visible && visible"
+      class="ask-ai-float-btn"
+      :style="{ left: askAiBtn.x + 'px', top: askAiBtn.y + 'px' }"
+      title="把选中的终端内容发给 AI 分析"
+      @mousedown.prevent
+      @click="askAi"
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="12" height="12" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+      问 AI
+    </button>
   </div>
 </template>
 
@@ -33,6 +45,7 @@ import { useSSHStore } from '@/stores/ssh'
 import { buildTerminalOptions, watchTerminalConfig } from '@/composables/useTerminalConfig'
 import { stripAnsiBackground } from '@/utils/terminal-colors'
 import { ingestOutput } from '@/composables/useAgentDeliver'
+import { useTerminalContext } from '@/composables/useTerminalContext'
 
 const props = defineProps<{
   ptyId: string
@@ -54,6 +67,21 @@ let resizeObserver: ResizeObserver | null = null
 let contextMenuHandler: ((e: Event) => void) | null = null
 
 const sshStore = useSSHStore()
+
+// 「问 AI」终端上下文（选中登记 + 悬浮按钮；本地 pty cwd 取一次）
+const {
+  askAiBtn,
+  onSelectionChange: ctxOnSelectionChange,
+  askAi,
+  start: startTerminalContext,
+} = useTerminalContext({
+  getTerminal: () => terminal,
+  getSessionId: () => props.ptyId,
+  fetchCwd: (id) => window.electronAPI?.ptyGetCwd(id) ?? Promise.resolve(''),
+  isVisible: () => props.visible,
+  // 本地 pty cwd 为初始目录，不随交互更新，挂载取一次即可
+  cwdPollMs: 0,
+})
 
 // ─── 补全状态 ────────────────────────────
 const completionState = ref<{
@@ -191,6 +219,9 @@ onMounted(() => {
 
   terminal.open(containerRef.value)
 
+  // 「问 AI」上下文采集启动（本地 cwd 取一次）
+  startTerminalContext()
+
   // 监听终端配置变化，动态应用主题/字号/字体（无需重建终端）
   unsubTermConfig = watchTerminalConfig(terminal, fitAddon, () => props.visible)
 
@@ -307,8 +338,11 @@ onMounted(() => {
   // 右键先快照剪贴板并设时间戳标志，窗口内的自动复制直接跳过
   let suppressAutoCopyUntil = 0
 
-  // 选中文字自动复制到剪贴板
+  // 选中文字自动复制到剪贴板 + 「问 AI」上下文登记
+  // ctxOnSelectionChange 必须在 suppressAutoCopy 早退之前调用：
+  // 右键粘贴窗口内的选中也要登记，否则「问 AI」拿不到选区内容
   terminal.onSelectionChange(() => {
+    ctxOnSelectionChange(terminal)
     const sel = terminal?.getSelection()
     if (sel) {
       if (Date.now() < suppressAutoCopyUntil) return
@@ -399,6 +433,30 @@ defineExpose({
 .local-terminal {
   width: 100%;
   height: 100%;
+  position: relative;
+}
+
+/* 「问 AI」悬浮按钮：选区上方，点击把选中内容送进 AI 面板 */
+.ask-ai-float-btn {
+  position: absolute;
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--accent-indigo, #7aa2d0);
+  border-radius: 4px;
+  background: var(--bg-elevated-solid, #232323);
+  color: var(--accent-indigo-soft, #9db8d9);
+  font-size: 11px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+  transition: all var(--transition-fast, 0.15s);
+}
+
+.ask-ai-float-btn:hover {
+  background: var(--accent-indigo, #7aa2d0);
+  color: #fff;
 }
 
 .local-terminal :deep(.xterm) {

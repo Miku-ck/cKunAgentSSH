@@ -118,6 +118,7 @@ interface ElectronAPI {
   fsUnzipLocal: (localZipPath: string, localDestDir: string) => Promise<void>
   ptyCreate: (opts?: { shell?: string; args?: string[]; cwd?: string; cols?: number; rows?: number }) => Promise<{ id: string; shell: string }>
   ptyWrite: (id: string, data: string) => Promise<void>
+  ptyGetCwd: (id: string) => Promise<string>
   ptyResize: (id: string, cols: number, rows: number) => Promise<void>
   ptyDestroy: (id: string) => Promise<void>
   ptyCompleteCommand: (opts: { ptyId: string; cmd: string; prefix: string; cwd: string; isCommand: boolean; prevSegments: string[]; shell?: string }) => Promise<string>

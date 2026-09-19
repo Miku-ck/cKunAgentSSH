@@ -30,6 +30,12 @@ export interface SshAiContext {
   sessionId?: string
   /** 目标环境标记('test'|'prod')：来自 SSH 连接声明，驱动生产环境危险命令强制审批 */
   environment?: 'test' | 'prod'
+  /** 终端当前工作目录（远程 OSC 7 跟踪 / 本地 pty cwd） */
+  cwd?: string
+  /** 用户选中并发送给 AI 的终端片段 */
+  selection?: string
+  /** 最近执行的命令（时间正序） */
+  recentCommands?: string[]
 }
 
 /** SSH 消息（兼容 ModeMessage，context 强类型为 SshAiContext） */
@@ -189,6 +195,10 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   // ── 2. SSH 特有 State ──
   const showAiPanel = ref(false)
 
+  /** 终端上下文「问 AI」预填请求：终端组件选中后调用，面板打开并预填问题草稿。
+   *  预填只发生一次（SshAiPanel watch 消费后置 null），用户可修改后再发送 */
+  const pendingPrefill = ref<{ text: string } | null>(null)
+
   const appStore = useAppStore()
   const toast = useToastStore()
 
@@ -239,40 +249,107 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   }
 
   // ── 3. SSH 上下文构建：从当前活动 SSH 会话获取信息 ──
-  function buildContext(): SshAiContext | undefined {
+  // 选中片段/最近命令等"现场上下文"按需采集（问 AI 入口），避免每次 buildContext 发 IPC
+  function buildContext(includeSelection: string, recentCommands?: string[]): SshAiContext | undefined {
     const sshStore = useSSHStore()
     const session = sshStore.activeSession
     if (!session) return undefined
+
+    const base = {
+      sessionType: session.type as 'local' | 'remote',
+      sessionId: session.type === 'remote' ? session.id : undefined,
+    }
 
     if (session.type === 'remote') {
       const conn = sshStore.connections.find(c => c.id === session.connectionId)
       // 连接已被删除时回退到会话自带的展示信息，避免向后端发送 undefined
       return {
-        sessionType: 'remote',
+        ...base,
         connectionName: conn?.name || session.name,
         host: conn?.host || 'unknown',
         username: conn?.username || 'unknown',
-        sessionId: session.id,
         environment: conn?.environment || 'test',
+        selection: includeSelection || undefined,
+        recentCommands,
       }
     } else {
       return {
-        sessionType: 'local',
+        ...base,
         shell: session.shell,
         // 本地终端不传递 sessionId，避免 shell_exec 误判为 SSH 远程会话
+        selection: includeSelection || undefined,
+        recentCommands,
       }
     }
   }
 
-  // ── 4. System Prompt 构建：运维专家 + SSH 环境信息 ──
+  /** 活动终端现场上下文（selection 为空时不传）— 供「问 AI」入口采集。
+   *  sessionId 标记快照来源终端：发送前切 tab/关会话时用于防串主机（见 sendMessage） */
+  function getTerminalSnapshot(): { sessionId: string | null; selection: string; cwd: string; recent: string[] } {
+    const sshStore = useSSHStore()
+    const session = sshStore.activeSession
+    const sel = session ? sshStore.getTerminalSelection(session.id) : ''
+    const recent = session ? sshStore.getRecentCommands(session.id, 10) : []
+    return {
+      sessionId: session ? session.id : null,
+      selection: sel || '',
+      cwd: session ? sshStore.getTerminalCwd(session.id) || '' : '',
+      recent,
+    }
+  }
+
+  // 暂存「问 AI」时采集的现场快照：点击按钮即清空终端选区登记，若发送时重新采集
+  // 会拿到空 selection；且预填草稿与快照必须绑定同一终端——sessionId 不一致时
+  // （发送前切 tab / 原会话已关闭）发送端会丢弃该快照，防"主机 B 的身份 + 主机 A 的现场"。
+  let pendingSnapshot: { sessionId: string | null; selection: string; cwd: string; recent: string[] } | null = null
+
+  /** 终端「问 AI」入口：选中内容 → 预填 AI 面板问题草稿（上下文随消息自动注入） */
+  function askAiAboutSelection(question?: string) {
+    const snap = getTerminalSnapshot()
+    const q = (question || '').trim()
+    if (!q && !snap.selection) return
+    const text = q || '请分析下面选中的终端输出：'
+    pendingPrefill.value = { text }
+    // 仅在确有选区/终端现场时暂存快照，供发送时优先消费
+    pendingSnapshot = snap.selection || snap.cwd || snap.recent.length ? snap : null
+    if (!showAiPanel.value) showAiPanel.value = true
+  }
+
+  /** 纯文本「问 AI」入口（不采集终端上下文）：供 Schedules 等非终端页面使用，
+   *  避免混入无关终端的选区/命令历史 */
+  function askAi(text: string) {
+    const q = (text || '').trim()
+    if (!q) return
+    pendingPrefill.value = { text: q }
+    pendingSnapshot = null
+    if (!showAiPanel.value) showAiPanel.value = true
+  }
+
+  // ── 4. System Prompt 构建：运维专家 + SSH 环境信息 + 终端现场上下文 ──
   function buildSystemPrompt(ctx?: SshAiContext): string {
     // 模式基础 prompt（"运维助手"）由后端根据 mode='ssh' 注入
     let prompt = ''
 
     if (ctx?.sessionType === 'remote') {
-      prompt += `用户当前已通过 SSH 连接到服务器：${ctx.connectionName || ''}（${ctx.username || ''}@${ctx.host || ''}）。请基于该环境给出建议。`
+      prompt += `用户当前已通过 SSH 连接到服务器：${ctx.connectionName || ''}（${ctx.username || ''}@${ctx.host || ''}）。`
     } else if (ctx?.sessionType === 'local') {
       prompt += `用户当前在本地终端（${ctx.shell || 'shell'}）环境。`
+    }
+
+    // 终端现场上下文（cwd / 最近命令 / 选中片段）— 由消息 context 透传，prompt 中结构化说明
+    const cwd = ctx?.cwd
+    const recent = ctx?.recentCommands?.length ? ctx.recentCommands : null
+    if (cwd || recent) {
+      prompt += '\n\n【终端现场上下文】'
+      if (cwd) prompt += `\n当前工作目录: ${cwd}`
+      if (recent) prompt += `\n最近执行的命令:\n${recent.map(c => `- ${c}`).join('\n')}`
+    }
+    if (ctx?.selection) {
+      prompt += `\n\n用户在终端中选中了以下内容，问题可能与它相关:\n\`\`\`\n${ctx.selection}\n\`\`\``
+    }
+
+    if (ctx?.sessionType === 'remote') {
+      prompt += '\n请基于该环境与终端现场上下文给出建议。'
     }
 
     return prompt
@@ -344,7 +421,20 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       return false
     }
 
-    const ctx = buildContext()
+    // 优先消费「问 AI」时暂存的现场快照（选区登记已被点击清除，重新采集会为空）。
+    // 防串主机：快照记录来源终端 sessionId，发送时活动会话已切走（或原会话已关闭）
+    // 则丢弃暂存、改现场采集——否则会拼出"主机 B 的身份 + 主机 A 的选区/命令"的矛盾上下文。
+    // 无暂存（普通输入）时直接现场采集。
+    let snapshot = pendingSnapshot
+    if (
+      !snapshot ||
+      (snapshot.sessionId && snapshot.sessionId !== useSSHStore().activeSessionId)
+    ) {
+      snapshot = getTerminalSnapshot()
+    }
+    pendingSnapshot = null
+    const ctx = buildContext(snapshot.selection, snapshot.recent)
+    if (ctx) ctx.cwd = snapshot.cwd || undefined
     const systemPrompt = buildSystemPrompt(ctx)
 
     let conv = persistence.currentConversation.value as SshAiConversation | undefined
@@ -430,6 +520,9 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     showAiPanel,
     toggleAiPanel,
     closeAiPanel,
+    pendingPrefill,
+    askAiAboutSelection,
+    askAi,
     sendMessage,
     uploadFiles,
   }

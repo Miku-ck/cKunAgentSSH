@@ -41,7 +41,7 @@
           <span class="meta-item">
             状态：<span class="status" :class="s.last_status">{{ statusLabel(s.last_status) }}</span>
           </span>
-          <span class="meta-item" v-if="s.enabled && s.next_run_at">下次：{{ formatTs(s.next_run_at) }}</span>
+          <span class="meta-item" v-if="s.enabled && s.next_run_at">下次：{{ formatTs(s.next_run_at) }}<span v-if="countdownText(s)" class="countdown">（{{ countdownText(s) }}后）</span></span>
         </div>
         <div class="schedule-card-body" v-if="s.task_prompt">
           <div class="k">任务提示</div>
@@ -61,10 +61,14 @@
               <div class="history-head">
                 <span class="mono">{{ formatTs(r.started_at) }}</span>
                 <span class="status" :class="r.status">{{ statusLabel(r.status) }}</span>
+                <span class="mono" v-if="durationText(r)">{{ durationText(r) }}</span>
                 <span class="mono" v-if="r.run_id">run {{ shortId(r.run_id) }}</span>
               </div>
               <div class="history-summary" v-if="r.summary">{{ r.summary }}</div>
               <div class="history-error" v-if="r.error">{{ r.error }}</div>
+              <div class="history-actions" v-if="r.status === 'failed' && historyFor">
+                <button class="row-btn" @click="askAiDiagnose(historyFor, r)">⚡ AI 诊断此失败</button>
+              </div>
             </div>
           </div>
         </div>
@@ -192,7 +196,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, computed, onMounted } from 'vue'
+import { reactive, ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import {
   scheduleApi,
   toFriendlyMessage,
@@ -201,9 +205,11 @@ import {
 } from '@/api/client'
 import { useToastStore } from '@/stores/toast'
 import { useSSHStore } from '@/stores/ssh'
+import { useSshAiStore } from '@/stores/ssh-ai'
 
 const toast = useToastStore()
 const sshStore = useSSHStore()
+const sshAiStore = useSshAiStore()
 
 /** 远程管理页保存的 SSH 连接列表（供目标主机下拉选择） */
 const connections = computed(() => sshStore.connections)
@@ -490,12 +496,86 @@ function formatTs(ts?: string): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+// ── 下次执行倒计时（D 阶段）：每秒 tick，仅在有启用任务时运行 ──
+const nowTick = ref(Date.now())
+let countdownTimer: ReturnType<typeof setInterval> | null = null
+
+function parseSchedTs(ts?: string): number {
+  if (!ts) return NaN
+  return new Date(ts.replace(' ', 'T')).getTime()
+}
+
+function countdownText(s: ScheduleRecord): string {
+  if (!s.enabled || !s.next_run_at) return ''
+  const t = parseSchedTs(s.next_run_at)
+  if (isNaN(t)) return ''
+  const ms = t - nowTick.value
+  if (ms <= 0) return '即将'
+  const m = Math.floor(ms / 60000)
+  if (m < 60) return `${m} 分钟`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h} 小时 ${m % 60} 分`
+  return `${Math.floor(h / 24)} 天 ${h % 24} 小时`
+}
+
+/** 单次执行耗时（秒，保留 1 位小数） */
+function durationText(r: ScheduleRun): string {
+  if (!r.started_at || !r.finished_at) return ''
+  const a = parseSchedTs(r.started_at)
+  const b = parseSchedTs(r.finished_at)
+  if (isNaN(a) || isNaN(b) || b <= a) return ''
+  return `${Math.round((b - a) / 100) / 10}s`
+}
+
+function startCountdownTick() {
+  if (countdownTimer) return
+  countdownTimer = setInterval(() => {
+    nowTick.value = Date.now()
+  }, 1000)
+}
+function stopCountdownTick() {
+  if (countdownTimer) {
+    clearInterval(countdownTimer)
+    countdownTimer = null
+  }
+}
+
+// 按需启停：仅当存在启用且有 next_run_at 的任务时运行 1s 定时器。
+// 视图是 v-show 常驻（SshView 不卸载），无条件 tick 会永久空转。
+// 倒计时文案本身每 tick 重算（nowTick 变化触发），无任务时自然为空。
+const hasCountdownTarget = computed(() =>
+  items.value.some(s => s.enabled && !!s.next_run_at),
+)
+watch(hasCountdownTarget, (on) => {
+  if (on) startCountdownTick()
+  else stopCountdownTick()
+}, { immediate: true })
+
+/** 失败 run → 预填 AI 面板诊断（复用 A 的 pendingPrefill 通路） */
+function askAiDiagnose(s: ScheduleRecord, r: ScheduleRun) {
+  const lines = [
+    `定时任务「${s.name}」在 ${formatTs(r.started_at)} 的执行失败了，帮我分析原因并给出修复建议。`,
+    `任务提示：${s.task_prompt || '（使用内置模板）'}`,
+    s.target_host ? `目标主机：${hostLabel(s.target_host)}` : '',
+    r.summary ? `执行摘要：${r.summary}` : '',
+    r.error ? `错误信息：${r.error}` : '',
+    '请给出：1) 最可能的根因 2) 排查步骤 3) 修复方案。',
+  ].filter(Boolean)
+  // 纯文本入口，不采集终端上下文（本页面无终端，避免混入无关终端的选区/历史）
+  sshAiStore.askAi(lines.join('\n'))
+}
+
 onMounted(async () => {
   await load()
+  // 倒计时定时器由 hasCountdownTarget watch 按需启停（load 后 items 变化自动触发）
   // 加载远程管理的主机列表，供「目标主机」下拉使用（仅在未加载时拉取）
   if (sshStore.connections.length === 0) {
     sshStore.loadConnections()
   }
+})
+
+onUnmounted(() => {
+  stopCountdownTick()
 })
 </script>
 
@@ -607,4 +687,6 @@ onMounted(async () => {
 .history-summary { font-size: 12px; color: var(--text-secondary); margin-top: 6px; white-space: pre-wrap; max-height: 150px; overflow: auto; }
 .history-error { font-size: 12px; color: var(--accent-red, #f48771); margin-top: 4px; }
 .empty-small { color: var(--text-tertiary); font-size: 12px; padding: 20px 0; text-align: center; }
+.countdown { color: var(--accent-blue); font-weight: 600; }
+.history-actions { margin-top: 6px; }
 </style>

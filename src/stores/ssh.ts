@@ -60,6 +60,12 @@ export const useSSHStore = defineStore('ssh', () => {
   /** 上一次执行的命令（按会话记录，用于构建命令链） */
   const lastCommandBySession = ref<Record<string, string>>({})
 
+  /** 终端选中片段注册表（「问 AI」上下文采集：终端组件选中变化时写入） */
+  const selectionBySession = ref<Record<string, string>>({})
+
+  /** 终端工作目录缓存（远程 OSC 7 经 sshGetCwd 定时同步；本地经 ptyGetCwd） */
+  const cwdBySession = ref<Record<string, string>>({})
+
   // ─── Computed ─────────────────────────────────
   const localSessions = computed(() => sessions.value.filter(s => s.type === 'local'))
   const activeSession = computed(() => sessions.value.find(s => s.id === activeSessionId.value))
@@ -312,6 +318,9 @@ export const useSSHStore = defineStore('ssh', () => {
     commandChains.value = commandChains.value.filter(c => c.sessionId !== id)
     // 清理 lastCommandBySession 对应该会话的条目
     delete lastCommandBySession.value[id]
+    // 清理终端现场上下文缓存（选中片段 / cwd）
+    delete selectionBySession.value[id]
+    delete cwdBySession.value[id]
   }
 
   function switchSession(id: string) {
@@ -449,27 +458,22 @@ export const useSSHStore = defineStore('ssh', () => {
   }
 
   /**
-   * 查询某会话的历史命令候选
-   * 排序：使用频率(count)越高越靠前，最近使用(lastUsedAt)越近越靠前
+   * 获取某会话全部历史命令（去重后的完整命令列表，E 阶段 fuzzy 联想用）
    */
-  function queryHistoryCandidates(
-    sessionId: string,
-    prefix: string,
-    limit = 10,
-  ): CommandHistoryEntry[] {
-    if (!sessionId || !prefix) return []
-    const lowerPrefix = prefix.toLowerCase()
+  function getSessionCommands(sessionId: string): string[] {
     return commandHistory.value
-      .filter(
-        h =>
-          h.sessionId === sessionId &&
-          h.command.toLowerCase().startsWith(lowerPrefix),
-      )
-      .sort((a, b) => {
-        if (b.count !== a.count) return b.count - a.count
-        return b.lastUsedAt - a.lastUsedAt
-      })
-      .slice(0, limit)
+      .filter(h => h.sessionId === sessionId)
+      .map(h => h.command)
+  }
+
+  /**
+   * 获取某会话中一条命令的执行次数（E 阶段补全弹窗显示统计）
+   */
+  function getCommandCount(command: string, sessionId: string): number {
+    const entry = commandHistory.value.find(
+      h => h.sessionId === sessionId && h.command === command,
+    )
+    return entry?.count ?? 0
   }
 
   /**
@@ -506,6 +510,30 @@ export const useSSHStore = defineStore('ssh', () => {
       .slice(0, limit)
       .map(h => h.command)
       .reverse()
+  }
+
+  // ─── 终端现场上下文（「问 AI」采集） ─────────────────────────
+
+  /** 终端组件在选中变化时登记当前选中片段（空选中时清除） */
+  function setTerminalSelection(sessionId: string, text: string): void {
+    if (!sessionId) return
+    if (text) selectionBySession.value[sessionId] = text
+    else delete selectionBySession.value[sessionId]
+  }
+
+  function getTerminalSelection(sessionId: string): string {
+    return selectionBySession.value[sessionId] || ''
+  }
+
+  /** 终端组件定时同步 cwd（远程 OSC 7 / 本地 pty），无变化时跳过写入 */
+  function setTerminalCwd(sessionId: string, cwd: string): void {
+    if (!sessionId || !cwd) return
+    if (cwdBySession.value[sessionId] === cwd) return
+    cwdBySession.value[sessionId] = cwd
+  }
+
+  function getTerminalCwd(sessionId: string): string {
+    return cwdBySession.value[sessionId] || ''
   }
 
   // ─── 连接管理(走 IPC 持久化) ──────────────────
@@ -578,10 +606,16 @@ export const useSSHStore = defineStore('ssh', () => {
     duplicateConnection,
     // history
     recordCommand,
-    queryHistoryCandidates,
     getCommandScore,
+    getCommandCount,
     getLastCommand,
     getRecentCommands,
+    getSessionCommands,
     queryCommandChainCandidates,
+    // 终端现场上下文（「问 AI」）
+    setTerminalSelection,
+    getTerminalSelection,
+    setTerminalCwd,
+    getTerminalCwd,
   }
 })

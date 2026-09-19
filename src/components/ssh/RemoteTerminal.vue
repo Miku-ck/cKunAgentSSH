@@ -22,6 +22,18 @@
         @select="applyCompletion"
         @cancel="hideCompletion"
       />
+      <!-- 「问 AI」悬浮按钮：选中终端内容后在选区上方出现 -->
+      <button
+        v-if="askAiBtn.visible && visible"
+        class="ask-ai-float-btn"
+        :style="{ left: askAiBtn.x + 'px', top: askAiBtn.y + 'px' }"
+        title="把选中的终端内容发给 AI 分析"
+        @mousedown.prevent
+        @click="askAi"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="12" height="12" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+        问 AI
+      </button>
     </div>
   </div>
 </template>
@@ -49,6 +61,7 @@ import { buildTerminalOptions, watchTerminalConfig } from '@/composables/useTerm
 import { stripAnsiBackground } from '@/utils/terminal-colors'
 import { ingestOutput } from '@/composables/useAgentDeliver'
 import { toFriendlyMessage } from '@/api/client'
+import { useTerminalContext } from '@/composables/useTerminalContext'
 
 const props = defineProps<{
   sshId: string
@@ -74,6 +87,21 @@ let dataBuffer = ''
 
 const sshStore = useSSHStore()
 const toast = useToastStore()
+
+// 「问 AI」终端上下文（选中登记 + 悬浮按钮 + cwd 轮询）
+const {
+  askAiBtn,
+  onSelectionChange: ctxOnSelectionChange,
+  askAi,
+  start: startTerminalContext,
+} = useTerminalContext({
+  getTerminal: () => terminal,
+  getSessionId: () => props.sshId,
+  fetchCwd: (id) => window.electronAPI?.sshGetCwd(id) ?? Promise.resolve(''),
+  isVisible: () => props.visible,
+  // 远程 cwd 随 cd 变化（OSC 7 实时跟踪），5s 轮询同步
+  cwdPollMs: 5000,
+})
 
 // ─── 重连状态（重连修复）──────────────────
 /** 重连进行中：状态条显示 spinner + 「重连中 (n/3)」（主进程 ssh:reconnect 事件驱动） */
@@ -260,6 +288,9 @@ onMounted(() => {
   terminal.loadAddon(new WebLinksAddon())
 
   terminal.open(containerRef.value)
+
+  // 「问 AI」上下文采集启动（cwd 轮询 + 首次同步）
+  startTerminalContext()
 
   // 监听终端配置变化，动态应用主题/字号/字体（无需重建终端）
   unsubTermConfig = watchTerminalConfig(terminal, fitAddon, () => props.visible)
@@ -483,8 +514,11 @@ onMounted(() => {
   // 右键先快照剪贴板并设时间戳标志，窗口内的自动复制直接跳过
   let suppressAutoCopyUntil = 0
 
-  // 选中文字自动复制到剪贴板
+  // 选中文字自动复制到剪贴板 + 「问 AI」上下文登记
+  // ctxOnSelectionChange 必须在 suppressAutoCopy 早退之前调用：
+  // 右键粘贴窗口内的选中也要登记，否则「问 AI」拿不到选区内容
   terminal.onSelectionChange(() => {
+    ctxOnSelectionChange(terminal)
     const sel = terminal?.getSelection()
     if (sel) {
       if (Date.now() < suppressAutoCopyUntil) return
@@ -652,6 +686,29 @@ defineExpose({
 
 .remote-terminal :deep(.xterm) {
   height: 100%;
+}
+
+/* 「问 AI」悬浮按钮：选区上方，点击把选中内容送进 AI 面板 */
+.ask-ai-float-btn {
+  position: absolute;
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--accent-indigo, #7aa2d0);
+  border-radius: 4px;
+  background: var(--bg-elevated-solid, #232323);
+  color: var(--accent-indigo-soft, #9db8d9);
+  font-size: 11px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+  transition: all var(--transition-fast, 0.15s);
+}
+
+.ask-ai-float-btn:hover {
+  background: var(--accent-indigo, #7aa2d0);
+  color: #fff;
 }
 
 .remote-terminal :deep(.xterm-viewport) {

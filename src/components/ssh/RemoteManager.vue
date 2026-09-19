@@ -7,6 +7,10 @@
         <span>远程管理</span>
       </div>
       <div class="rm-header-actions">
+        <button v-if="remoteSessionCount > 1" class="rm-btn" @click="showBulkModal = true" title="对当前活动远程会话批量下发命令并对比结果">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          批量下发（{{ remoteSessionCount }} 台）
+        </button>
         <button class="rm-btn primary" @click="$emit('new-connection')" title="新建连接">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           新建连接
@@ -118,12 +122,16 @@
         </div>
       </div>
     </Teleport>
+
+    <!-- 多节点批量下发（F 阶段） -->
+    <BulkCommandModal v-if="showBulkModal" @close="showBulkModal = false" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, triggerRef } from 'vue'
 import ConnectionRow from './ConnectionRow.vue'
+import BulkCommandModal from './BulkCommandModal.vue'
 import { useSSHStore } from '@/stores/ssh'
 import type { SSHConnection } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
@@ -145,6 +153,10 @@ const props = defineProps<{
 const store = useSSHStore()
 const toast = useToastStore()
 const { confirm } = useConfirm()
+
+// ── 多节点批量下发（F 阶段） ──
+const showBulkModal = ref(false)
+const remoteSessionCount = computed(() => store.sessions.filter(s => s.type === 'remote').length)
 
 const searchText = ref('')
 const debouncedSearch = ref('')

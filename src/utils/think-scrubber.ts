@@ -12,7 +12,6 @@
 
 const THINK_OPEN_TAGS = ['<think>', '<thinking>', '<reasoning>', '<thought>', '<REASONING_SCRATCHPAD>']
 const THINK_CLOSE_TAGS = ['</think>', '</thinking>', '</reasoning>', '</thought>', '</REASONING_SCRATCHPAD>']
-const MAX_TAG_LEN = Math.max(...THINK_OPEN_TAGS.concat(THINK_CLOSE_TAGS).map(t => t.length))
 
 export class StreamingThinkScrubber {
   private _inBlock: boolean = false
@@ -41,12 +40,19 @@ export class StreamingThinkScrubber {
             i++
           }
         } else {
-          // 未找到闭合标签，可能跨 delta，保留剩余到 buf
-          // 但要检查 pending 末尾是否可能是半截闭合标签
-          const tail = pending.substring(Math.max(i, pending.length - MAX_TAG_LEN))
-          if (this._couldBePartialTag(tail, THINK_CLOSE_TAGS)) {
-            this._buf = tail
+          // 未找到闭合标签，可能跨 delta：只保留"最后一个 < 之后、且确实是
+          // 某个闭合标签前缀"的片段到 buf。不能放宽到任意文本末尾 —
+          // 否则 "secret"（内容词）会被当成 "</secret" 的潜在前缀而滞留缓存。
+          const remaining = pending.substring(i)
+          const lastOpen = remaining.lastIndexOf('<')
+          let keep = ''
+          if (lastOpen >= 0) {
+            const tail = remaining.substring(lastOpen)
+            if (this._matchPartialTag(tail, THINK_CLOSE_TAGS) === tail.length) {
+              keep = tail
+            }
           }
+          this._buf = keep
           break
         }
       } else {
@@ -151,22 +157,6 @@ export class StreamingThinkScrubber {
 
   private _isBlockBoundary(ch: string): boolean {
     return ch === '\n' || ch === '\r'
-  }
-
-  private _couldBePartialTag(tail: string, tags: string[]): boolean {
-    for (const tag of tags) {
-      // 检查 tail 是否是某个 tag 的前缀
-      if (tag.startsWith(tail) && tail.length < tag.length) {
-        return true
-      }
-      // 检查 tag 是否以 tail 结尾的部分前缀开头
-      for (let len = Math.min(tail.length, tag.length - 1); len > 0; len--) {
-        if (tail.endsWith(tag.substring(0, len))) {
-          return true
-        }
-      }
-    }
-    return false
   }
 
   private _matchPartialTag(remaining: string, tags: string[]): number {

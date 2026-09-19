@@ -38,7 +38,7 @@
     </template>
 
     <template #agent-panel>
-      <!-- 仅在有警告/错误/人工介入/权限请求时显示 -->
+      <!-- 异常/决策面板：仅在出现警告/错误/人工介入/授权请求时显示 -->
       <AgentRunPanel
         v-if="agentStore.hasHumanHelpRequest || agentStore.hasPermissionRequest || agentStore.errorMessage || agentStore.warnings.length > 0"
         class="agent-run-panel-ssh"
@@ -48,7 +48,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useModelsStore } from '@/stores/models'
 import { useAgentStore } from '@/stores/agent'
@@ -96,11 +96,34 @@ async function handleNewChat() {
   }
 }
 
-// 组件卸载时重置创建状态，防止状态残留。
+// 组件卸载时重置创建中标志，避免状态残留。
 // 不中止运行中的 Agent — Agent 运行设计为可跨面板存活（P3-4），结果固化在
 // store 层 watch，不依赖组件生命周期，面板重新打开即可继续查看。
 onUnmounted(() => {
   creating.value = false
+})
+
+// ── 终端「问 AI」预填：store 请求预填 → 打开面板 + 注入问题草稿 ──
+// 每次请求都是新对象（watch 按引用触发）；消费后置 null 防重复。面板是 v-if 条件挂载，
+// 首次「问 AI」时 pendingPrefill 与 showAiPanel 同批写入，setup 阶段 immediate watch 先触发，
+// 此刻 SideChatPanel 的 template ref 尚未赋值——用 nextTick 等渲染/挂载完成后写入。
+// 仅在实际执行 prefill 后才清空请求；ref 仍不就绪时保留请求，由下方 watch(panelRef)
+// 在 ref 落地后补一次消费，兑现「保留请求待下次挂载消费」的承诺（不静默丢弃）。
+function consumePrefill(): void {
+  const req = store.pendingPrefill
+  const el = panelRef.value
+  if (!req || !el) return
+  el.prefill(req.text)
+  store.pendingPrefill = null
+}
+watch(() => store.pendingPrefill, (req) => {
+  if (!req) return
+  nextTick(consumePrefill)
+}, { immediate: true })
+// ref 就绪兜底：pendingPrefill 在 ref 挂载前写入时，上面的 nextTick 里 ref 可能尚未赋值
+// → ref 落地（null → 实例）后再消费一次，覆盖面板首次打开的竞态路径。
+watch(panelRef, () => {
+  nextTick(consumePrefill)
 })
 
 function handleSwitchConv(id: string) {
