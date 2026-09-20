@@ -40,7 +40,8 @@ class Sandbox:
     沙箱 — 工具执行前的静态检查
 
     与 FilesystemGuard 拦截器的区别：
-    - FilesystemGuard 是 Reins 策略层（可被用户覆盖/禁用）
+    - FilesystemGuard 是 Reins 策略层（在拦截器链里，链可由装配方裁剪；
+      `contracts.py` 未给它禁用开关，`safety_critical=True` 的拦截器抛异常即拦截）
     - Sandbox 是 Saddle 内置的安全底线（不可禁用）
 
     H13 修复 B4：shell 命令检查改用 safety.classify_command（与 FilesystemGuard 同源）

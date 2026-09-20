@@ -392,7 +392,7 @@ INIT → THINKING → [LLM 调用] → 有工具调用?
 ### 安全防御
 
 - **安全边界与威胁模型**：见 [`docs/security-boundary.md`](docs/security-boundary.md) —— 四层判定与处置、高危命令口径、通道分级（AI 自主 / 人授权 / 人自主）、授权键语义、已知取舍登记
-- **命令安全**：唯一判定源 `safety.classify_command`（6 步归一化抗混淆 + hardline 阻断 + dangerous 逐条审批 + 未入只读白名单即审批）；能自拼命令的工具（`file_write`/`file_edit`/`schedule_op` 等）经 `bound_command` 报出真实执行命令，与 `shell_exec` 同口径判定，授权键绑定命令/路径哈希
+- **命令安全**：唯一判定源 `safety.classify_command`（6 步归一化抗混淆 + hardline 阻断 + dangerous 逐条审批 + 未入只读白名单即审批）；能自拼命令的工具（`file_write`/`file_edit`/`schedule_op` 等）经 `bound_command` 报出真实执行命令，与 `shell_exec` 同口径判定，授权键绑定命令/路径哈希。判定精度：电源动词按**执行位置**命中（`grep -i reboot` 不再误拦）、凭据读取按**路径**命中（`sort /etc/shadow` 不再漏放）、只读白名单动词的写开关与 curl/wget 上传侧外传一律要审批 — 误拦/误放双向回归见 `backend/tests/test_safety_misjudgment.py`
 - **SSRF 防护**：IP 拒绝私网 + DNS rebinding 防护 + 重定向校验
 - **远端最小权限（部署侧）**：`scripts/deploy/` 提供受限账户一键部署（`setup-ckun-agent.sh`）+ 白名单执行器（`agent-exec.py`，22 模板逐条锚点匹配、默认拒绝、base64 洞递归封堵）+ 部署验证（`ckun-agent-verify.sh`）。Agent 在远端默认只能执行白名单内命令，与代码侧 HARDLINE/审批形成纵深；跨端一致性由契约测试 `test_remote_whitelist_contract.py` 钉死（改任一端命令格式必须跑该测试）
 

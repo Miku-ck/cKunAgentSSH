@@ -119,6 +119,12 @@ CONSEQUENCE_RULES: list[tuple[re.Pattern, str, bool]] = [
      "杀掉机器上几乎所有进程，业务会全面中断。", False),
     (re.compile(r"^kill PID 1"),
      "杀掉 PID 1（init/systemd），系统会立即崩溃或重启。", False),
+    (re.compile(r"^dmesg ring buffer clear"),
+     "清空内核日志缓冲区（dmesg -C），排查故障所需的内核证据会立即消失且无法找回。", False),
+    (re.compile(r"^ifconfig interface state change"),
+     "改动网卡状态或标志（{target}），把网卡置 down 会直接中断这台机器对外的连接，远程会话可能就此失联。", False),
+    (re.compile(r"^hostname change"),
+     "修改主机名（{target}），可能影响依赖主机名的服务注册、证书与日志归属。", False),
 
     # ── 权限与账户 ──
     (re.compile(r"^sudo command"),
@@ -165,6 +171,8 @@ CONSEQUENCE_RULES: list[tuple[re.Pattern, str, bool]] = [
      "给刚下载的文件加上可执行权限，通常是准备运行来源不明的程序。", False),
     (re.compile(r"^interpreter/indirect execution"),
      "通过解释器间接执行代码（{target}），真实行为写在脚本内容里，静态检查看不到。", False),
+    (re.compile(r"^awk/sed inline code execution"),
+     "awk/sed 的 system() 一类的内联代码会另起进程执行，真实动作藏在脚本片段里，静态检查看不到。", False),
     (re.compile(r"^destructive command with indirect expansion"),
      "破坏性命令被 $()、反引号或变量展开包裹，真正要删改的对象要到运行时才确定，无法判断影响范围。", False),
     (re.compile(r"^sed in-place edit"),
@@ -175,6 +183,10 @@ CONSEQUENCE_RULES: list[tuple[re.Pattern, str, bool]] = [
     # ── 凭据读写 ──
     (re.compile(r"^read of credential file"),
      "读取口令/密钥等凭据文件（{target}），内容一旦出现在输出里就可能外泄。", False),
+    (re.compile(r"^upload credential file"),
+     "把口令/密钥等凭据文件（{target}）作为上传或 POST 内容送出，属于凭据外泄，一旦执行无法收回。", False),
+    (re.compile(r"^upload sensitive system path"),
+     "把系统关键文件（{target}）作为上传或 POST 内容送出，配置与凭据可能就此落到外部机器。", False),
     (re.compile(r"^write to persistence/credential target"),
      "写入认证或启动植入类文件（{target}），等同于给机器安装永久后门，正常运维不需要。", False),
     (re.compile(r"^write to sensitive path"),

@@ -94,6 +94,13 @@ DYNAMIC_SAMPLES = [
     "destructive command with indirect expansion",
     "sudo password guessing via stdin (sudo -S)",
     "kill all processes by PID -1",
+    # F3/F4/F5 新增 reason（误判审查修复）
+    "upload credential file (/etc/shadow)",
+    "upload sensitive system path (/etc/hosts)",
+    "awk/sed inline code execution",
+    "dmesg ring buffer cleared (--clear)",
+    "ifconfig interface state change (eth0 down)",
+    "hostname change (web-99)",
 ]
 
 
