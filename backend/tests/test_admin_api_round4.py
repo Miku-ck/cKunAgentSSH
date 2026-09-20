@@ -37,7 +37,7 @@ def _make_client(*routers) -> TestClient:
 
 @pytest.fixture
 def perm_client(base_db, tmp_workspace, monkeypatch):
-    import agent.harness.reins as reins
+    import agent.harness.reins.gate as reins
     monkeypatch.setattr(reins, "ALLOWLIST_PATH", os.path.join(tmp_workspace, "allowlist.txt"))
     monkeypatch.setattr(reins, "_global_permission_gate", None)
     import routes.agent as agent_mod
@@ -53,7 +53,7 @@ def test_allow_tool_level_grant(perm_client):
     listed = perm_client.get("/api/agent/permission/list").json()["tools"]
     assert "view_file" in listed
     # 落盘
-    import agent.harness.reins as reins
+    import agent.harness.reins.gate as reins
     with open(reins.ALLOWLIST_PATH, encoding="utf-8") as f:
         assert "view_file" in f.read()
 

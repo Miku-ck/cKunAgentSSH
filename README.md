@@ -18,6 +18,7 @@ SSH 智能运维终端 — 集成 SSH 连接管理、远程终端、SFTP 文件�
 - **Agent 框架（Harness）**：ReAct 决策循环、11 拦截器、22 工具、动态步数预算、循环检测、成本熔断
 - **澄清向导**：Agent 工具调用意图不明时拦截并弹出多步澄清卡片（A/B/C + 自定义），答完注入上下文放行、可跳过；精准调用零打扰
 - **生产环境授权强化**：prod 环境仅认预授权 allowlist（禁临时审批），service stop/restart 等破坏性动作自动升级 dangerous 需逐次审批
+- **审批卡片中文说明**：需审批命令自动附中文后果说明（静态后果表全覆盖），未知命令由 LLM 后台补发一句解释回填卡片；纯展示层，不参与任何放行/拦截判定
 - **会话保留（可选）**：设置页可开启自动清理已完结会话（默认关闭，永不触碰进行中的会话）
 - **目标机环境画像**：run 开始自动探测发行版 / init / 包管理器 / 身份，注入系统提示，避免模型凭印象生成与发行版不匹配的命令
 - **运维方法论注入**：意图识别输出 `is_change`（变更 / 只读正交维度），按任务性质二选一注入变更纪律 / 只读取证方法论
@@ -75,7 +76,7 @@ SSH 智能运维终端 — 集成 SSH 连接管理、远程终端、SFTP 文件�
         │  • Chat 流式对话 (SSE)          │
         │  • Agent Harness 框架          │
         │    - ReAct 决策循环            │
-        │    - 10 拦截器 (Reins)         │
+        │    - 11 拦截器 (Reins)         │
         │    - 22 工具 (Saddle)         │
         │    - 动态预算 + 成本熔断       │
         │  • 会话持久化 (SQLite)          │
@@ -150,10 +151,9 @@ cKunAgentSSH/
 │   │       └── QuickCommandEditor.vue # 快捷命令编辑
 │   │
 │   ├── composables/                   # 组合式函数
-│   │   ├── useAgentIntegration.ts     # Agent 集成逻辑
+│   │   ├── useAgentDeliver.ts         # Agent 结果交付（命令投递/状态回传）
 │   │   ├── useAppearance.ts           # 主题/外观管理
 │   │   ├── useChatPersistence.ts      # 聊天持久化
-│   │   ├── useChatStream.ts           # 流式聊天
 │   │   ├── useCompletion.ts           # 命令补全（含历史 fuzzy 联想纯函数）
 │   │   ├── useConfirm.ts              # 全局确认对话框
 │   │   ├── useModelSelector.ts        # 模型选择
@@ -164,22 +164,20 @@ cKunAgentSSH/
 │   │   ├── useTabContextMenu.ts       # 标签右键菜单
 │   │   ├── useTerminalConfig.ts       # 终端配置
 │   │   ├── useTerminalContext.ts      # 终端「问 AI」：选区登记 + 悬浮按钮 + cwd 同步
-│   │   ├── bulkCommandDiff.ts         # 批量下发结果对比 + 危险命令启发式（纯函数）
-│   │   └── ssh-error-types.ts         # SSH 错误还原（与 shared/ssh-error-core 对齐）
+│   │   └── bulkCommandDiff.ts         # 批量下发结果对比 + 危险命令启发式（纯函数）
 │   │
 │   ├── stores/                        # Pinia 状态
 │   │   ├── app.ts                     # 后端状态管理
 │   │   ├── ssh.ts                     # SSH 会话池 + 连接配置（含终端选区/cwd 注册表）
 │   │   ├── sftp.ts                    # SFTP 传输状态
 │   │   ├── ssh-ai.ts                  # SSH AI 对话（含「问 AI」pendingPrefill 通路）
-│   │   ├── chat.ts                    # 通用对话管理
 │   │   ├── agent.ts                   # Agent 运行状态
 │   │   ├── server-monitor.ts          # 实时监控轮询编排（5s 采样 + 失败重试）
 │   │   ├── server-monitor-core.ts     # 监控远端采集命令 + /proc 解析（纯函数）
 │   │   ├── skills.ts                  # 技能管理
 │   │   ├── quickCommands.ts           # 快捷命令
 │   │   ├── settings.ts                # 应用设置
-│   │   ├── createModeChatStore.ts     # 创建模式会话存储
+│   │   ├── models.ts                  # 模型配置列表
 │   │   └── toast.ts                   # 消息提示
 │   │
 │   └── utils/
@@ -211,8 +209,9 @@ cKunAgentSSH/
 │   │   │   ├── bridle.py              # 上下文组装 + 压缩
 │   │   │   ├── saddle.py              # 工具执行 + 沙箱
 │   │   │   ├── stirrups.py            # LLM 调用 + 重试
-│   │   │   ├── reins.py               # 10 拦截器策略层
+│   │   │   ├── reins/                   # 拦截器策略层（core/guards/gate/flow/lifecycle/clarification/defaults）
 │   │   │   ├── safety.py              # 命令/路径/SSRF 安全防御
+│   │   │   ├── command_explain.py     # 审批卡片中文后果说明（静态表 + LLM 兜底）
 │   │   │   ├── telemetry.py           # 遥测总线
 │   │   │   ├── contracts.py           # 契约定义
 │   │   │   └── llm_client.py          # 流式 LLM 客户端
@@ -308,7 +307,7 @@ Driver（驭手）—— ReAct 决策循环主驱动
   │   ├── SkillRein         AGENT_START    技能注入
   │   ├── LoopDetector      PRE_TOOL_CALL  循环检测
   │   ├── PermissionGate    PRE_TOOL_CALL  权限审批（prod 仅预授权 allowlist）
-  │   ├── FilesystemGuard   PRE_TOOL_CALL  敏感命令检测
+  │   ├── FilesystemGuard   PRE_TOOL_CALL  敏感命令检测 + 审批卡片中文说明
   │   ├── ClarificationInterceptor PRE_TOOL_CALL 澄清向导（意图不明时拦截提问）
   │   ├── AuditLogger       POST_TOOL_CALL 审计日志
   │   ├── DynamicBudgetRein POST_ITERATION 动态步数预算

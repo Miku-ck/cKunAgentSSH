@@ -136,12 +136,6 @@ class CostTracker:
             self.completion_tokens += completion_tokens
         self.llm_call_count += 1
 
-    def record_tool_call(self, duration_ms: int = 0) -> None:
-        """记录一次工具调用"""
-        self.tool_call_count += 1
-        if duration_ms > 0:
-            self.tool_duration_ms += duration_ms
-
     def get_total_cost(self) -> float:
         """计算当前累计成本（USD）"""
         return calc_cost(self.prompt_tokens, self.completion_tokens, self.model_id)
@@ -185,20 +179,3 @@ def estimate_tokens(text: str) -> int:
     other_chars = len(text) - chinese_chars
     # 中文 1.5 字符/token，其他 4 字符/token
     return int(chinese_chars / 1.5 + other_chars / 4)
-
-
-def estimate_messages_tokens(messages: list[dict]) -> int:
-    """估算 messages 列表的总 prompt token 数（含角色开销）"""
-    total = 0
-    for msg in messages:
-        # 每条消息约 4 token 角色开销
-        total += 4
-        content = msg.get("content", "")
-        if isinstance(content, str):
-            total += estimate_tokens(content)
-        elif isinstance(content, list):
-            # 多模态消息（content 是 list）
-            for part in content:
-                if isinstance(part, dict) and part.get("type") == "text":
-                    total += estimate_tokens(part.get("text", ""))
-    return total

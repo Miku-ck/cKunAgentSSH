@@ -35,7 +35,7 @@ from .driver import Driver
 from .bridle import Bridle, CompressionConfig
 from .reins import Reins, create_default_reins
 from .saddle import Saddle, Sandbox, UndoBuilder
-from .stirrups import Stirrups, ErrorClassifier
+from .stirrups import Stirrups
 
 logger = logging.getLogger(__name__)
 
@@ -244,6 +244,14 @@ class Harness:
         # 其 saddle 字段会被后启动的并发 run 覆盖；拦截器改从 ctx.metadata 读取
         # 当前 run 的 Saddle，避免查错 ToolRegistry 误判"工具未注册"。
         ctx.metadata["saddle"] = self._saddle
+        # 审批卡片的"迟到增益"通道：拦截器在卡片发出后异步补发事件（如命令的
+        # LLM 后果解释），无法从 ReinsDecision.events 返回值搭车，需要主动向
+        # chunk 队列投递。run 终态把 _chunk_queue 置 None（见下方 finally），
+        # 届时投递自动成为 no-op —— 卡片已消失/已授权的迟到事件天然被丢弃。
+        async def emit_event(event: TraceEvent) -> None:
+            if self._chunk_queue is not None:
+                await self._chunk_queue.put(event)
+        ctx.metadata["emit_event"] = emit_event
         # C-review M10：注入 per-run 成本追踪器，CostBudgetRein 熔断读取实时累计
         # （ctx.metadata 是 per-run dict，不受并发 run 影响）
         if self.cost_tracker is not None:

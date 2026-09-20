@@ -16,8 +16,5 @@ export function useSettings() {
   function openSettings(category: SettingCategory = 'models') {
     dialogInstance.value?.open(category)
   }
-  function closeSettings() {
-    dialogInstance.value?.close()
-  }
-  return { openSettings, closeSettings }
+  return { openSettings }
 }

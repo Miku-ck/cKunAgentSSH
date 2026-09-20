@@ -26,7 +26,7 @@ from agent.harness.contracts import (
 )
 from agent.harness.driver import Driver
 from agent.harness.reins import CostBudgetRein
-import agent.harness.reins as reins_mod
+import agent.harness.reins.flow as _flow_mod
 
 
 class _FakeTracker:
@@ -53,7 +53,7 @@ def _no_audit_writes(monkeypatch):
     """熔断落审计走真实 DB — 测试中屏蔽（只验证决策行为）"""
     async def _noop_audit(**kw):
         return None
-    monkeypatch.setattr(reins_mod, "append_record_async", _noop_audit)
+    monkeypatch.setattr(_flow_mod, "append_record_async", _noop_audit)
 
 
 def _ctx(config: AgentConfig, tracker: Optional[_FakeTracker]) -> RunContext:

@@ -14,7 +14,8 @@ import asyncio
 
 import pytest
 
-import agent.harness.reins as reins_mod
+import agent.harness.reins.gate as _gate_mod
+import agent.harness.reins.guards as _guards_mod
 from agent.harness.contracts import AgentConfig, RunContext
 from agent.harness.reins import FilesystemGuard, PermissionGate
 from agent.tools import ToolMeta
@@ -32,7 +33,8 @@ def _no_file_io(monkeypatch):
 
     async def _noop_audit(**kw):
         return None
-    monkeypatch.setattr(reins_mod, "append_record_async", _noop_audit)
+    for _m in (_guards_mod, _gate_mod):
+        monkeypatch.setattr(_m, "append_record_async", _noop_audit)
 
 
 def _ctx(environment: str = "test") -> RunContext:
@@ -58,12 +60,19 @@ def test_once_grant_scoped_to_run():
     assert g.check_permission("web_fetch2", {}, run_id="runB") is False
 
 
-def test_once_grant_global_pool_fallback():
-    """未传 run_id 的授权落入全局池（"" 键），任意 run 均可消费（向后兼容旧调用模型）"""
+def test_once_grant_requires_run_id():
+    """once 授权必须携带 run_id：空 run_id 直接拒绝（原全局池 fallback 已删除，
+    防止 A run 未消费的授权被 B run 跨 run 竞态消费）"""
     g = _gate()
-    g.grant("web_fetch", scope="once")  # run_id 默认空 → 全局池
-    assert g.check_permission("web_fetch", {}, run_id="runX") is True
-    assert g.check_permission("web_fetch", {}, run_id="runY") is False
+    with pytest.raises(ValueError):
+        g.grant("web_fetch", scope="once")  # run_id 缺失 → 拒绝
+    # 未写入任何池
+    assert g.check_permission("web_fetch", {}, run_id="runX") is False
+
+
+def test_deny_command_requires_run_id():
+    with pytest.raises(ValueError):
+        _gate().deny_command("shell_exec", "rm -rf /tmp/x", "")
 
 
 def test_cleanup_run_once_only_clears_target_run():
@@ -128,12 +137,18 @@ def test_denied_overrides_permanent_and_once():
     assert g2_key in g._confirmed_permanent
 
 
-def test_global_deny_applies_to_all_runs():
-    """run_id="" 的拒绝为全局拒绝，所有 run 均拦截"""
+def test_deny_strictly_run_scoped():
+    """拒绝记录严格按 run 隔离（原 run_id="" 全局拒绝语义已随全局池一并删除：
+    空 run_id 拒绝无法随 run 终态清理，改为直接拒绝写入）"""
     g = _gate()
-    g.deny_command("shell_exec", CMD2, "")
-    assert g.is_denied("shell_exec", CMD2, "runAny") is True
-    assert g.check_permission("shell_exec", {"command": CMD2}, run_id="runAny") is False
+    with pytest.raises(ValueError):
+        g.deny_command("shell_exec", CMD2, "")
+    g.deny_command("shell_exec", CMD2, "runA")
+    assert g.is_denied("shell_exec", CMD2, "runA") is True
+    # 其他 run 不受该拒绝影响（跨 run 不再泄漏）
+    assert g.is_denied("shell_exec", CMD2, "runAny") is False
+    # 同 run 内 check_permission 直接拒绝
+    assert g.check_permission("shell_exec", {"command": CMD2}, run_id="runA") is False
 
 
 def test_cleanup_run_denied():

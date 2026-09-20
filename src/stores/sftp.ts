@@ -200,11 +200,6 @@ export const useSftpStore = defineStore('sftp', () => {
     transfers.value = []
   }
 
-  /** 清空传输记录（端口关闭时自动调用） */
-  function clearTransfers(): void {
-    transfers.value = []
-  }
-
   /** 清空已完成的传输记录 */
   function clearCompleted(): void {
     transfers.value = transfers.value.filter(t => t.status === 'running' || t.status === 'paused' || t.status === 'pending')
@@ -213,10 +208,6 @@ export const useSftpStore = defineStore('sftp', () => {
   // ─── 剪贴板操作 ───────────────────────────────
   function copyToClipboard(side: 'local' | 'remote', paths: string[]): void {
     clipboard.value = { side, paths: [...paths] }
-  }
-
-  function clearClipboard(): void {
-    clipboard.value = null
   }
 
   // ─── 本地侧操作 ───────────────────────────────
@@ -1102,7 +1093,7 @@ function removeTransfer(id: string): void {
 
   return {
     // state
-    sshSessionId, connectionName, connectionHost, online, reusingTerminal,
+    sshSessionId, connectionName, connectionHost, online,
     localCwd, remoteCwd, localEntries, remoteEntries,
     loadingLocal, loadingRemote, localError, remoteError,
     selectedLocal, selectedRemote, transfers, clipboard,
@@ -1111,7 +1102,7 @@ function removeTransfer(id: string): void {
     // session
     connect, connectFromTerminal, disconnect,
     // clipboard
-    copyToClipboard, clearClipboard,
+    copyToClipboard,
     // local
     loadLocal, initLocalHome, getDrives, localUp, localRefresh, localMkdir, localRename, localDelete,
     // remote
@@ -1119,7 +1110,7 @@ function removeTransfer(id: string): void {
     // selection
     toggleSelectLocal, toggleSelectRemote, clearSelection,
 // transfer
-uploadFiles, downloadFiles, cancelTransfer, pauseTransfer, resumeTransfer, retryTransfer, removeTransfer, applyProgress, clearTransfers, clearCompleted,
+uploadFiles, downloadFiles, cancelTransfer, pauseTransfer, resumeTransfer, retryTransfer, removeTransfer, applyProgress, clearCompleted,
     // copy
     localCopy, remoteCopy,
     // zip

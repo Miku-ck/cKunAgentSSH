@@ -87,7 +87,7 @@ def command_hash(command: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 表结构（在 database.init_db 中也创建，这里是兜底自检）
+# 表结构（database.init_db 建表时有同源副本；本常量供测试建表引用）
 # ──────────────────────────────────────────────────────────────────────────────
 
 _AUDIT_SCHEMA = f"""
@@ -114,15 +114,6 @@ CREATE INDEX IF NOT EXISTS idx_audit_run    ON {AUDIT_TABLE}(run_id);
 CREATE INDEX IF NOT EXISTS idx_audit_target ON {AUDIT_TABLE}(target_id);
 CREATE INDEX IF NOT EXISTS idx_audit_env    ON {AUDIT_TABLE}(environment);
 """
-
-
-def init() -> None:
-    """确保审计表存在（database.init_db 已调用；此处兜底幂等）"""
-    try:
-        conn = database._get_conn()
-        conn.executescript(_AUDIT_SCHEMA)
-    except Exception as e:
-        logger.warning("audit.init 失败: %s", e)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -133,18 +133,18 @@ def test_driver_non_terminate_intercept_continues():
 def test_once_grant_consumes_and_survives_iteration_end():
     """once 授权：消费一次后失效；迭代结束不再全清（竞态修复核心）
 
-    问题 1 改进后 _confirmed_once 为 [run_id][key] 双层结构：
-    不传 run_id 时落全局池（"" 键），与旧扁平结构的消费语义一致。
+    _confirmed_once 为 [run_id][key] 双层结构，once 授权严格绑定 run_id
+    （空 run_id 全局池已删除）。
     """
     gate = PermissionGate()
     gate._confirmed_permanent = set()  # 排除宿主 allowlist.txt 干扰
-    key = gate.grant("shell_exec", "once", command="rm -f /tmp/x")
+    key = gate.grant("shell_exec", "once", command="rm -f /tmp/x", run_id="runX")
     args = {"command": "rm -f /tmp/x"}
-    assert gate.check_permission("shell_exec", args, risk="dangerous") is True
-    assert gate.check_permission("shell_exec", args, risk="dangerous") is False
+    assert gate.check_permission("shell_exec", args, risk="dangerous", run_id="runX") is True
+    assert gate.check_permission("shell_exec", args, risk="dangerous", run_id="runX") is False
     # 重新授权后授权仍在（driver 已不在迭代末 clear_once，授权存活到被消费）
-    gate.grant("shell_exec", "once", command="rm -f /tmp/x")
-    assert gate._confirmed_once[""].get(key, 0) == 1
+    gate.grant("shell_exec", "once", command="rm -f /tmp/x", run_id="runX")
+    assert gate._confirmed_once["runX"].get(key, 0) == 1
 
 
 def test_once_grant_isolated_by_run_id():

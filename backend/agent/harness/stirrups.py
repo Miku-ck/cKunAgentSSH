@@ -16,7 +16,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
-from .contracts import ErrorType, LLMOutput, RunContext, TraceEvent, UndoAction
+from .contracts import ErrorType, LLMOutput, RunContext, UndoAction
 
 logger = logging.getLogger(__name__)
 

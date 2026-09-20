@@ -1,0 +1,189 @@
+"""Reins 容器与共享常量/助手 — 拆分自原 reins.py（纯搬家，无语义变更）。"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from ..contracts import Interceptor, ReinDecision, ReinPoint, RunContext
+
+logger = logging.getLogger(__name__)
+
+# 命令执行工具：审批必须绑定命令内容（审查 M-3），工具级授权不得覆盖命令级审批。
+# job_run 同属命令入口（local=本地子进程 / remote=远程命令），其 `cmd` 参数
+# 必须经 classify_command 精细判定，wrapper 不参与分类，防止内部 dangerous
+# 命令借工具级 moderate 一刀切漏审。
+_COMMAND_EXEC_TOOLS = {"shell_exec", "job_run"}
+
+# C-review M7：审批等待超时（秒）。危险命令/权限请求发出后，用户在此时限内
+# 未响应 → 按拒绝处理：签名移出"等待审批"集合、不再重发 permission_needed
+# （发 permission_expired 让前端标记卡片过期）、注入强拒绝消息让 LLM 换路。
+_PERMISSION_APPROVAL_TIMEOUT_S = 120.0
+
+
+def _perm_pending(ctx: RunContext) -> dict:
+    """C-review M7：「等待审批」签名表（ctx.metadata，per-run 隔离）
+
+    key = tool_call_signature() 返回的 hashable 元组，
+    value = 首次发出 permission_needed 的 time.monotonic() 时间戳。
+    窗口内的重发豁免循环检测；超时的重发按拒绝处理。
+    """
+    return ctx.metadata.setdefault("permission_pending", {})
+
+
+def _audit_target_type(ctx: "RunContext") -> str:
+    """根据运行上下文推断目标类型：仅远程（SSH 会话）；无会话时工具本身已 fail-closed 拒绝"""
+    if getattr(ctx, "ssh_session_id", ""):
+        return "ssh"
+    return ""
+
+
+def _audit_target_id(ctx: "RunContext") -> str:
+    """目标标识：SSH 会话 id"""
+    return getattr(ctx, "ssh_session_id", "") or ""
+
+
+def permission_display_fields(ctx: "RunContext", command: str = "") -> dict[str, Any]:
+    """审批卡片的「用户在看什么」上下文：环境 / 用户原任务 / 目标会话 / 命令原文。
+
+    纯展示字段，不参与任何授权判定（grant_key 仍按 工具+命令哈希 绑定）。
+    给 FilesystemGuard 与 PermissionGate 两条审批路径共用，保证两侧卡片信息一致。
+    task 截断 200 字符：卡片引用块显示得下即可，同时避免超长任务撑大事件 payload。
+    """
+    return {
+        "environment": getattr(ctx, "environment", "") or "test",
+        "task": str(getattr(ctx, "task", "") or "")[:200],
+        "ssh_session_id": getattr(ctx, "ssh_session_id", "") or "",
+        "command": command,
+    }
+
+
+def tool_call_signature(call: dict[str, Any]) -> tuple:
+    """生成规范化的工具调用签名（原 LoopDetector._signature 实现体，拆至 core 供 guards/gate/flow 共用）
+
+    规范化：
+    - 路径：os.path.normpath 统一格式
+    - 命令：shlex.split + 重组，消除空白差异
+    - 其他：取 str()
+    """
+    import os
+    import shlex
+
+    tool = call.get("tool", "")
+    args = call.get("args") or {}
+
+    # 优先用路径类参数
+    path = args.get("file_path") or args.get("path") or args.get("source") or args.get("destination")
+    if path:
+        try:
+            path = os.path.normpath(str(path))
+        except Exception:
+            path = str(path)
+        return (tool, ("path", path))
+
+    # 命令类参数
+    command = args.get("command")
+    if command:
+        try:
+            # 规范化命令：shlex 分词后重组，消除空白差异
+            parts = shlex.split(str(command))
+            command = " ".join(parts)
+        except Exception:
+            command = str(command)
+        return (tool, ("cmd", command))
+
+    # URL / query 类参数
+    url = args.get("url")
+    if url:
+        return (tool, ("url", str(url)))
+    query = args.get("query")
+    if query:
+        return (tool, ("query", str(query)))
+
+    # fallback：工具名 + 参数 frozenset（捕获所有参数）
+    return (tool, ("args", frozenset(
+        (k, str(v)) for k, v in args.items() if v is not None
+    )))
+
+
+class Reins:
+    """
+    缰绳 — 持有一组 Interceptor，按 point + priority 分组
+
+    用法：
+        reins = Reins()
+        reins.register(FilesystemGuard())
+        reins.register(PermissionGate(...))
+        decision = await reins.check(ReinPoint.PRE_TOOL_CALL, ctx)
+        if decision.intercepted:
+            ...
+    """
+
+    def __init__(self) -> None:
+        # 按 ReinPoint 分组的拦截器列表（每组内按 priority 升序）
+        self._interceptors: dict[ReinPoint, list[Interceptor]] = {
+            pt: [] for pt in ReinPoint
+        }
+
+    def register(self, interceptor: Interceptor) -> None:
+        """注册拦截器 — 按 priority 升序插入"""
+        bucket = self._interceptors[interceptor.point]
+        bucket.append(interceptor)
+        bucket.sort(key=lambda x: x.priority)
+
+    def register_all(self, interceptors: list[Interceptor]) -> None:
+        for it in interceptors:
+            self.register(it)
+
+    async def check(self, point: ReinPoint, ctx: RunContext) -> ReinDecision:
+        """
+        按优先级执行所有该点的拦截器
+
+        任一拦截器返回 intercepted=True 则停止后续，Driver 会：
+        1. 发出 decision.events
+        2. 执行 decision.undo_actions 回滚
+        3. 注入 decision.inject_messages 到下一轮 LLM
+
+        审查修复：原实现在拦截器未拦截时直接丢弃其 events/inject_messages
+        （循环后返回空决策）→ LoopDetector 第一级纠偏、ConfidenceMonitor
+        单次纠偏、DynamicBudgetRein 的 budget_extended 事件全部丢失，
+        LLM 收不到实时纠偏。现聚合未拦截
+        决策的 events 与 inject_messages 一并返回（不拦截，仅透传反馈）。
+        """
+        events: list = []
+        inject_messages: list = []
+        for interceptor in self._interceptors[point]:
+            # 审查 MINOR 修复：安全类拦截器（FilesystemGuard/PermissionGate）异常时
+            # fail-closed（拦截），旧实现一律 continue = 跳过权限检查直接放行工具
+            safety_critical = getattr(interceptor, "safety_critical", False)
+            try:
+                decision = await interceptor.check(ctx)
+                if decision.intercepted:
+                    logger.info(
+                        "Reins 拦截 [%s] by %s: %s",
+                        point.value, type(interceptor).__name__, decision.intercept_reason,
+                    )
+                    return decision
+                # 未拦截：聚合纠偏事件与注入消息（见 docstring）
+                if decision.events:
+                    events.extend(decision.events)
+                if decision.inject_messages:
+                    inject_messages.extend(decision.inject_messages)
+            except Exception as e:
+                logger.warning(
+                    "Reins 拦截器异常 [%s] %s: %s",
+                    point.value, type(interceptor).__name__, e, exc_info=True,
+                )
+                if safety_critical:
+                    return ReinDecision(
+                        intercepted=True,
+                        intercept_reason=f"安全拦截器异常（fail-closed）: {type(interceptor).__name__}: {e}",
+                    )
+                # 非安全拦截器异常不阻塞主流程，继续下一个
+                continue
+        return ReinDecision(intercepted=False, events=events, inject_messages=inject_messages)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 内置拦截器
+# ──────────────────────────────────────────────────────────────────────────────

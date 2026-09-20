@@ -67,7 +67,6 @@ export const useSSHStore = defineStore('ssh', () => {
   const cwdBySession = ref<Record<string, string>>({})
 
   // ─── Computed ─────────────────────────────────
-  const localSessions = computed(() => sessions.value.filter(s => s.type === 'local'))
   const activeSession = computed(() => sessions.value.find(s => s.id === activeSessionId.value))
 
   /** 当前有活动会话的连接 ID 集合(用于在线状态指示) */
@@ -585,11 +584,7 @@ export const useSSHStore = defineStore('ssh', () => {
     sessions,
     activeSessionId,
     activeSession,
-    localSessions,
     connecting,
-    loaded,
-    // computed helpers
-    onlineConnectionIds,
     // methods
     isOnline,
     init,

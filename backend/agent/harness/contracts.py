@@ -9,7 +9,6 @@ Harness 契约层 — 所有组件共享的数据类型与协议
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -38,14 +37,6 @@ class State(str, Enum):
     FAILED = "failed"
     MAX_REACHED = "max_reached"
     HUMAN_HELP = "human_help"  # H14 新增：人工介入状态（终止态）
-
-    @property
-    def is_terminal(self) -> bool:
-        return self in (State.COMPLETED, State.FAILED, State.MAX_REACHED, State.HUMAN_HELP)
-
-    @property
-    def is_active(self) -> bool:
-        return self in (State.PLANNING, State.THINKING, State.ACTING, State.OBSERVING, State.REFLECTING)
 
 
 class ErrorType(str, Enum):
@@ -241,33 +232,6 @@ class ClarificationStep:
     allow_custom: bool = True
 
 
-@dataclass
-class PendingClarification:
-    """某 run 下一道待答的澄清题单（进程内存；同 run 内的澄清题串行推进）"""
-    run_id: str
-    tool: str
-    tool_call_id: str           # 被拦截的 tool_call.id（resume 时回查注入的目标）
-    args: dict                  # 被拦截的工具调用原始参数
-    steps: list[ClarificationStep]   # 完整题序列
-    current_step: int           # 0-based
-    answers: dict[int, dict]    # {step_index: {choice: "A"|"custom", custom_text?: "..."}}
-
-    @property
-    def is_complete(self) -> bool:
-        """所有必答步骤均已回答（跳过的步骤不计入完成）"""
-        answered = {i for i, a in self.answers.items() if a.get("choice")}
-        required = {i for i, s in enumerate(self.steps) if not s.allow_custom or True}
-        return len(answered) == len(self.steps)
-
-    @property
-    def total(self) -> int:
-        return len(self.steps)
-
-    @property
-    def skipped_all(self) -> bool:
-        return len(self.answers) == 0
-
-
 @runtime_checkable
 class Interceptor(Protocol):
     """
@@ -408,11 +372,6 @@ class RunContext:
     def push_undo(self, action: UndoAction) -> None:
         self.undo_stack.append(action)
 
-    async def pop_undo(self) -> Optional[UndoAction]:
-        if not self.undo_stack:
-            return None
-        return self.undo_stack.pop()
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # LLM 客户端协议
@@ -432,21 +391,4 @@ class LLMClient(Protocol):
         enable_thinking: bool,
         reasoning_max_tokens: Optional[int] = None,
     ) -> LLMOutput:
-        ...
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 工具注册表协议
-# ──────────────────────────────────────────────────────────────────────────────
-
-@runtime_checkable
-class ToolRegistry(Protocol):
-    """工具注册表协议 — Saddle 通过它执行工具"""
-
-    def schemas(self) -> list[dict[str, Any]]:
-        """返回 OpenAI function calling 格式的工具 schema 列表"""
-        ...
-
-    async def execute(self, name: str, args: dict[str, Any], ctx: RunContext) -> ToolResult:
-        """执行工具"""
         ...

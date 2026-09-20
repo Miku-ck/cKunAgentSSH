@@ -9,7 +9,6 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 import database as db
-from llm_adapter import chat_stream as llm_chat_stream
 
 
 router = APIRouter(tags=["settings"])
@@ -33,8 +32,6 @@ class CreateModelRequest(BaseModel):
     # 推理/思考内容的独立 token 预算（Qwen3 等模型支持 enable_thinking 时使用）
     reasoning_tokens: int = Field(8192, ge=0, le=1000000, description="推理内容最大 token 数，0 表示使用 max_output_tokens")
     top_p: float = Field(0.9, ge=0, le=1)
-    is_default_work: bool = False
-    is_default_ide: bool = False
     is_default_ssh: bool = False
 
 
@@ -53,8 +50,6 @@ class UpdateModelRequest(BaseModel):
     reasoning_tokens: Optional[int] = Field(None, ge=0, le=1000000, description="推理内容最大 token 数")
     top_p: Optional[float] = Field(None, ge=0, le=1)
     sort_order: Optional[int] = None
-    is_default_work: Optional[bool] = None
-    is_default_ide: Optional[bool] = None
     is_default_ssh: Optional[bool] = None
 
 
@@ -111,8 +106,6 @@ def create_model_config(req: CreateModelRequest):
             max_tokens=req.max_tokens,
             max_output_tokens=req.max_output_tokens,
             top_p=req.top_p,
-            is_default_work=req.is_default_work,
-            is_default_ide=req.is_default_ide,
             is_default_ssh=req.is_default_ssh,
             reasoning_tokens=req.reasoning_tokens,
         )

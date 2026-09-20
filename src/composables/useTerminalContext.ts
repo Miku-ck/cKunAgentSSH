@@ -131,6 +131,5 @@ export function useTerminalContext(opts: UseTerminalContextOptions) {
     onSelectionChange,
     askAi,
     start,
-    stop,
   }
 }

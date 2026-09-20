@@ -31,8 +31,6 @@ logger = logging.getLogger(__name__)
 
 # 伪 embedding 维度（仅在 embedding API 不可用时使用）
 _FALLBACK_DIM = 256
-# 语义检索相似度阈值
-_DEFAULT_THRESHOLD = 0.3
 # 默认 top_k
 _DEFAULT_TOP_K = 5
 # 语义检索候选池上限（审查 MINOR：原为 200，含 embedding 全文拉取负载过高）

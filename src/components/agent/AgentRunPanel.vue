@@ -13,12 +13,14 @@
  * 注：常规运行状态（thinking/acting、迭代计数、工具调用流）不在本面板展示 —
  * 工具调用明细见消息气泡内联轨迹（AgentTraceInline / ToolOperationList）。
  */
-import { useAgentStore } from '@/stores/agent'
+import { useAgentStore, type PermissionRequest } from '@/stores/agent'
+import { useSSHStore } from '@/stores/ssh'
 import { agentApi } from '@/api/client'
 import { useToastStore } from '@/stores/toast'
 import ClarifyingWizard from './ClarifyingWizard.vue'
 
 const agentStore = useAgentStore()
+const sshStore = useSSHStore()
 const toast = useToastStore()
 
 function levelLabel(level: string): string {
@@ -55,6 +57,31 @@ function deliveryStatusLabel(status: string): string {
     writing: '写入中',
   }
   return map[status] || status
+}
+
+/** 风险等级人读文案：英文 dangerous/moderate 对非专业用户没有信息量 */
+function riskLabel(risk: string): string {
+  const map: Record<string, string> = { dangerous: '高危', moderate: '中风险', safe: '低风险' }
+  return map[risk] || risk
+}
+
+/** 审批目标主机展示名 — 后端只带 ssh_session_id，可读标签在前端按会话反查 */
+function targetLabel(req: PermissionRequest): string {
+  if (!req.sshSessionId) return ''
+  const session = sshStore.sessions.find(s => s.id === req.sshSessionId)
+  const conn = session?.connectionId
+    ? sshStore.connections.find(c => c.id === session.connectionId)
+    : undefined
+  if (conn) return `${conn.name || conn.host}（${conn.username}@${conn.host}）`
+  // 连接记录被删除或本地终端会话：退到会话名，再不行显示会话 id 片段（至少可辨识）
+  return session?.name || `会话 ${req.sshSessionId.slice(0, 8)}`
+}
+
+/** 明确拒绝：后端登记后本 run 内 AI 重发同一条命令不再弹卡片 */
+async function denyRequest(reqId: string) {
+  if (!await agentStore.denyPermission(reqId)) {
+    toast.error('拒绝登记失败，请重试')
+  }
 }
 
 /** 授权（审查 M-3：提供"允许本次"(once) 与"始终允许"(always) 两档；
@@ -161,8 +188,13 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
       >
         <div class="permission-header">
           <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-          <span class="permission-title">工具授权请求</span>
-          <span class="permission-risk" :class="`risk-${req.risk}`">{{ req.risk }}</span>
+          <span class="permission-title">AI 请求执行确认</span>
+          <span class="permission-risk" :class="`risk-${req.risk}`">{{ riskLabel(req.risk) }}</span>
+          <span
+            v-if="req.environment"
+            class="env-badge"
+            :class="`env-${req.environment}`"
+          >{{ req.environment === 'prod' ? '生产环境' : '测试环境' }}</span>
           <button
             v-if="!agentStore.isRunning && !req.resolved"
             class="permission-dismiss"
@@ -172,6 +204,23 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
           >×</button>
         </div>
         <div class="permission-body">
+          <!-- 小白阅读顺序：这是我要做的事吗 → 它会造成什么后果 → 在哪台机器上 -->
+          <div v-if="req.environment === 'prod'" class="prod-warn">
+            目标为生产环境主机，误操作影响线上业务，请格外确认后再授权。
+          </div>
+          <div v-if="req.task" class="task-quote" :title="req.task">
+            <span class="row-label">你的请求</span>
+            <span class="task-text">{{ req.task }}</span>
+          </div>
+          <div v-if="req.explain" class="explain-row">
+            <span class="row-label">这条命令会做什么</span>
+            <span class="explain-text">{{ req.explain }}</span>
+            <span v-if="req.explainSource === 'llm'" class="explain-tag">AI 生成，仅供参考</span>
+          </div>
+          <div v-if="targetLabel(req)" class="target-host">
+            <span class="row-label">目标主机</span>
+            <code>{{ targetLabel(req) }}</code>
+          </div>
           <div class="permission-message">{{ req.message }}</div>
           <div class="permission-tool">
             <span class="tool-label">工具:</span>
@@ -188,8 +237,11 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
           </div>
         </div>
         <div v-if="req.resolved" class="permission-actions">
-          <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-          <span class="permission-resolved-text">已授权，重新发起请求后生效</span>
+          <template v-if="req.granted">
+            <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+            <span class="permission-resolved-text">已授权，AI 重新发起该请求时生效</span>
+          </template>
+          <span v-else class="permission-expired-text">审批超时，这条命令已按拒绝处理，无需再操作</span>
         </div>
         <div v-else class="permission-actions">
           <button
@@ -207,15 +259,17 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
             {{ req.isCommandTool ? '始终允许此命令' : '始终允许' }}
           </button>
           <button
-            class="permission-btn permission-btn-dismiss"
-            @click="agentStore.dismissPermission(req.id)"
-          >忽略</button>
+            class="permission-btn permission-btn-deny"
+            @click="denyRequest(req.id)"
+          >拒绝</button>
         </div>
         <div class="permission-hint">
           <template v-if="req.isCommandTool">
-            授权仅绑定此条命令，其他 dangerous 命令仍会单独请求审批；
+            「允许本次」只对这行命令生效，其他高风险命令仍会逐条询问；
+            「始终允许」会把这行命令写入本机持久授权清单，今后包括生产环境在内的同一命令都不再询问 ——
+            拿不准就先选「允许本次」。
           </template>
-          授权后 AI 重新发起该请求即生效。
+          拒绝后本次运行内 AI 不会再请求同一条命令。
         </div>
       </div>
     </div>
@@ -511,7 +565,6 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
   padding: 1px 6px;
   border-radius: 3px;
   font-weight: 600;
-  text-transform: uppercase;
 }
 
 .permission-risk.risk-moderate {
@@ -546,6 +599,93 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
   color: var(--text-primary);
   margin-bottom: 4px;
   line-height: 1.5;
+}
+
+/* 环境徽章：prod 用警示色，用户一眼看出影响的是线上机器 */
+.env-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-weight: 600;
+}
+
+.env-badge.env-prod {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.env-badge.env-test {
+  background: var(--card-perm-border);
+  color: var(--text-secondary);
+}
+
+.prod-warn {
+  font-size: 12px;
+  color: var(--danger-text);
+  background: var(--danger-bg);
+  border-radius: 4px;
+  padding: 4px 8px;
+  margin-bottom: 6px;
+  line-height: 1.5;
+}
+
+.row-label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-bottom: 2px;
+}
+
+.task-quote {
+  border-left: 2px solid var(--card-perm-border);
+  padding-left: 8px;
+  margin-bottom: 6px;
+}
+
+/* 用户原话可能很长，两行截断 + title 悬浮看全文 */
+.task-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.explain-row {
+  margin-bottom: 6px;
+}
+
+.explain-text {
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+
+.explain-tag {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-left: 6px;
+}
+
+.target-host {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.target-host .row-label {
+  display: inline;
+  margin-bottom: 0;
+}
+
+.target-host code {
+  background: var(--bg-base);
+  padding: 1px 6px;
+  border-radius: 3px;
+  color: var(--accent-cyan, #7aa2d0);
 }
 
 .permission-tool {
@@ -602,20 +742,26 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
   cursor: not-allowed;
 }
 
-.permission-btn-dismiss {
+.permission-btn-deny {
   background: transparent;
-  border-color: var(--border-default);
-  color: var(--text-secondary);
+  border-color: var(--danger-border, var(--border-default));
+  color: var(--danger-text);
 }
 
-.permission-btn-dismiss:hover {
-  border-color: var(--text-tertiary);
-  color: var(--text-primary);
+.permission-btn-deny:hover {
+  background: var(--danger-bg);
+  border-color: var(--danger-text);
 }
 
 .permission-resolved-text {
   font-size: 12px;
   color: var(--status-success-text);
+  font-style: italic;
+}
+
+.permission-expired-text {
+  font-size: 12px;
+  color: var(--text-tertiary);
   font-style: italic;
 }
 

@@ -48,7 +48,6 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
   /** 历史序列（时间正序，长度 ≤ HISTORY_MAX）— 状态条 sparkline 数据源 */
   const cpuHistory = ref<number[]>([])
   const memHistory = ref<number[]>([])
-  const diskHistory = ref<number[]>([])
   const loadHistory = ref<number[]>([])
   /** 主 GPU 利用率序列（多卡取最高者，供 sparkline） */
   const gpuHistory = ref<number[]>([])
@@ -144,8 +143,6 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
       lastError.value = null
       pushHistory(cpuHistory, cpu.used)
       pushHistory(memHistory, rest.mem.percent)
-      const rd = rest.disks.find(x => x.mount === '/') || rest.disks[0]
-      pushHistory(diskHistory, rd ? rd.percent : 0)
       pushHistory(loadHistory, rest.load[0])
       const topGpu = rest.gpus.length
         ? rest.gpus.reduce((a, b) => (b.utilization > a.utilization ? b : a))
@@ -209,7 +206,6 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
     current.value = null
     cpuHistory.value = []
     memHistory.value = []
-    diskHistory.value = []
     loadHistory.value = []
     gpuHistory.value = []
     errorCount.value = 0
@@ -237,13 +233,10 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
     current,
     cpuHistory,
     memHistory,
-    diskHistory,
     loadHistory,
     gpuHistory,
-    errorCount,
     polling,
     lastError,
-    rootDisk,
     start,
     stop,
     askAiAboutMetrics,

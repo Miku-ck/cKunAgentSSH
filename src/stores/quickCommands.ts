@@ -117,19 +117,13 @@ export const useQuickCommandsStore = defineStore('quickCommands', () => {
     save()
   }
 
-  function getDefaultColor(index: number): string {
-    return PRESET_COLORS[index % PRESET_COLORS.length]
-  }
-
   return {
     commands,
     sortedCommands,
-    loaded,
     load,
     addCommand,
     updateCommand,
     removeCommand,
     reorder,
-    getDefaultColor,
   }
 })

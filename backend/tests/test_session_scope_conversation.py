@@ -79,10 +79,10 @@ def test_revoke_without_conversation_removes_all():
 def test_once_and_always_unaffected_by_conversation():
     """once 计数器与 permanent allowlist 不受会话键控影响（语义不变）"""
     g = _gate()
-    g.grant("web_fetch", scope="once", conversation_id="convA")
-    # once 跨会话仍可消费（计数语义，run 内一次性）
-    assert g.check_permission("web_fetch", {}, conversation_id="convB") is True
-    assert g.check_permission("web_fetch", {}, conversation_id="convB") is False
+    g.grant("web_fetch", scope="once", conversation_id="convA", run_id="runA")
+    # once 跨会话仍可消费（计数语义，同 run 内一次性）
+    assert g.check_permission("web_fetch", {}, conversation_id="convB", run_id="runA") is True
+    assert g.check_permission("web_fetch", {}, conversation_id="convB", run_id="runA") is False
 
     g.grant("web_fetch2", scope="always", conversation_id="convA")
     assert g.check_permission("web_fetch2", {}, conversation_id="convZ") is True

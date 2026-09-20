@@ -1,8 +1,8 @@
 import { app, BrowserWindow, ipcMain, shell, dialog, session, nativeImage } from 'electron'
-import { join, normalize, resolve as pathResolve, dirname, basename, extname, sep as pathSep } from 'path'
+import { join, resolve as pathResolve, dirname, basename, extname } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { readdir, readFile, writeFile, stat, lstat, mkdir, rename, rm, realpath, copyFile } from 'fs/promises'
-import { existsSync, readdirSync, mkdirSync, realpathSync } from 'fs'
+import { existsSync, readdirSync } from 'fs'
 import { homedir } from 'os'
 import { execSync, execFile, spawn } from 'child_process'
 import { BackendManager } from './backend-manager'
@@ -424,18 +424,6 @@ function setupFSIPC(): void {
     }
   })
 
-  // C9：读取文件为 base64（渲染层二进制资源上传/预览用）
-  // assertSafePath + 10MB 上限，返回 { base64, size }
-  handleTrusted('fs:readFileBase64', async (_event, filePath: string): Promise<{ base64: string; size: number }> => {
-    await assertSafePath(filePath)
-    const s = await stat(filePath)
-    if (s.size > 10 * 1024 * 1024) {
-      throw new Error('文件过大（超过 10MB），无法读取')
-    }
-    const buf = await readFile(filePath)
-    return { base64: buf.toString('base64'), size: s.size }
-  })
-
   // 写入文件内容
   handleTrusted('fs:writeFile', async (_event, filePath: string, content: string) => {
     try {
@@ -475,15 +463,6 @@ function setupFSIPC(): void {
     } catch (err: any) {
       throw new Error(err.message || '读取文件失败，请检查文件是否存在或是否有访问权限')
     }
-  })
-
-  // 选择文件夹
-  handleTrusted('fs:selectFolder', async () => {
-    const result = await dialog.showOpenDialog(mainWindow!, {
-      properties: ['openDirectory'],
-    })
-    if (result.canceled) return null
-    return result.filePaths[0]
   })
 
   // 选择文件(用于私钥等)
@@ -741,66 +720,6 @@ function setupFSIPC(): void {
   // 路径拼接（主进程使用 Node path，避免渲染进程引入 polyfill）
   handleTrusted('fs:pathJoin', async (_event, ...segments: string[]) => {
     return join(...segments)
-  })
-
-  // 技能目录根路径：{userData}/skills
-  handleTrusted('fs:getSkillsDir', async () => {
-    const dir = join(app.getPath('userData'), 'skills')
-    await mkdir(dir, { recursive: true })
-    return dir
-  })
-
-  // 递归删除目录（用于卸载技能时清理资源）
-  handleTrusted('fs:rmRF', async (_event, targetPath: string) => {
-    try {
-      // 安全：只允许删除技能目录下的路径，避免误删
-      // 用 realpath 解析符号链接 + 严格边界检查，防止 `...\skills\..\..\Windows\System32` 路径遍历绕过
-      const skillsRootPath = join(app.getPath('userData'), 'skills')
-      // E18：skills 根不存在时无从谈起边界（realpath 会抛 ENOENT），直接 no-op 成功
-      if (!existsSync(skillsRootPath)) return
-      const skillsRoot = await realpath(skillsRootPath)
-      let resolved: string
-      try {
-        resolved = await realpath(targetPath)
-      } catch {
-        // 目标不存在时回退到 normalize 的字面路径，但仍做边界检查
-        resolved = normalize(targetPath)
-      }
-      // 严格边界：resolved 必须 === skillsRoot 或在 skillsRoot + 路径分隔符 之下
-      const sep = process.platform === 'win32' ? '\\' : '/'
-      const isInside = resolved === skillsRoot || resolved.startsWith(skillsRoot + sep)
-      if (!isInside) {
-        throw new Error('只允许删除技能目录下的文件')
-      }
-      await rm(resolved, { recursive: true, force: true })
-    } catch (err: any) {
-      throw new Error('删除失败，请检查文件是否存在或是否有权限')
-    }
-  })
-
-  // 列出目录下所有文件（递归），返回相对路径列表，用于技能导出收集资源文件。
-  // 仅用于小型目录（技能文件夹），不做剪枝。
-  handleTrusted('fs:listFilesRecursive', async (_event, dirPath: string): Promise<string[]> => {
-    try {
-      await assertSafePath(dirPath)
-      const result: string[] = []
-      async function walk(dir: string, base: string): Promise<void> {
-        const entries = await readdir(dir, { withFileTypes: true })
-        for (const entry of entries) {
-          const fullPath = join(dir, entry.name)
-          const relPath = join(base, entry.name)
-          if (entry.isDirectory()) {
-            await walk(fullPath, relPath)
-          } else {
-            result.push(relPath)
-          }
-        }
-      }
-      await walk(dirPath, '')
-      return result
-    } catch (err: any) {
-      throw new Error('读取文件列表失败，请检查目录是否存在或是否有访问权限')
-    }
   })
 
   // 检查文件是否存在
@@ -1249,52 +1168,6 @@ async function callBackendApi(path: string, options?: RequestInit): Promise<any>
 }
 
 function setupSkillsIPC(): void {
-  /**
-   * C-1：技能路径边界收容（渲染层技能 ZIP 解压写入用）。
-   * 返回 skills 根的真实路径；调用方对 resolve 后的路径做
-   * `=== skillsRoot || startsWith(skillsRoot + sep)` 断言，防 zip-slip 越界写。
-   */
-  function getSkillsRoot(): string {
-    const dir = join(app.getPath('userData'), 'skills')
-    // 根由 fs:getSkillsDir 保证存在；此处 mkdir 兜底（已存在时 no-op），
-    // 避免 realpathSync 对不存在目录抛 ENOENT
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-    return realpathSync(dir)
-  }
-
-  /** C-1：断言 p resolve 后位于 skills 根内（含根本身），否则抛"非法技能路径" */
-  function assertSkillsPath(p: string): void {
-    const skillsRoot = getSkillsRoot()
-    const resolved = pathResolve(p)
-    if (resolved !== skillsRoot && !resolved.startsWith(skillsRoot + pathSep)) {
-      throw new Error('非法技能路径')
-    }
-  }
-
-  // C-1：创建技能目录（渲染层技能 ZIP 解压用）— assertSafePath + 边界断言
-  handleTrusted('skills:mkdir', async (_event, dirPath: string) => {
-    await assertSafePath(dirPath)
-    assertSkillsPath(dirPath)
-    await mkdir(pathResolve(dirPath), { recursive: true })
-  })
-
-  // C-1：写入技能文件（base64 字节流，渲染层技能 ZIP 解压用）
-  // assertSafePath + 对 filePath 与其 dirname 都 resolve 后做 skills 根边界断言
-  handleTrusted('skills:writeFile', async (_event, filePath: string, base64: string) => {
-    await assertSafePath(filePath)
-    const skillsRoot = getSkillsRoot()
-    const fileResolved = pathResolve(filePath)
-    const dirResolved = pathResolve(dirname(filePath))
-    if (fileResolved !== skillsRoot && !fileResolved.startsWith(skillsRoot + pathSep)) {
-      throw new Error('非法技能路径')
-    }
-    if (dirResolved !== skillsRoot && !dirResolved.startsWith(skillsRoot + pathSep)) {
-      throw new Error('非法技能路径')
-    }
-    const buf = Buffer.from(base64, 'base64')
-    await writeFile(filePath, buf)
-  })
-
   handleTrusted('skills:list', async (_event, mode?: string) => {
     const qs = mode ? `?mode=${encodeURIComponent(mode)}` : ''
     return callBackendApi(`/skills${qs}`)

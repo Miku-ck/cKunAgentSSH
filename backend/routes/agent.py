@@ -22,7 +22,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 import database as db
-from database import get_model_config as _db_get_model_config_raw
+from routes.terminal import _get_model_config
 from sse_utils import sse_event
 from agent.tools import create_registry_for_mode, ToolRegistry
 from agent.memory import get_memory_manager
@@ -44,11 +44,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["agent"])
 
 HEARTBEAT_INTERVAL = 15
-
-
-def _get_model_config(model_id: str):
-    """获取模型配置（含真实 api_key）"""
-    return _db_get_model_config_raw(model_id, mask_key=False)
 
 
 async def _run_reflection_and_evolution(
@@ -1147,11 +1142,18 @@ def grant_tool_permission(req: PermissionGrantRequest):
     from agent.harness.reins import _get_global_permission_gate_sync
     if req.scope not in ("once", "session", "always"):
         raise HTTPException(status_code=400, detail="scope 必须是 once、session 或 always")
+    # once 授权严格按 run 隔离（run 终态自动清理）；缺失 run_id 的授权
+    # 无法被任何 run 消费，直接拒绝（原实现落空 run_id 全局池，有跨 run 竞态）
+    if req.scope == "once" and not req.run_id:
+        raise HTTPException(status_code=400, detail="scope=once 授权必须携带 run_id")
 
     # H13 修复 A5：session scope 改用进程级单例（原 501 限制移除）
     pg = _get_global_permission_gate_sync()
-    grant_key = pg.grant(req.tool, scope=req.scope, command=req.command,
-                         conversation_id=req.conversation_id, run_id=req.run_id)
+    try:
+        grant_key = pg.grant(req.tool, scope=req.scope, command=req.command,
+                             conversation_id=req.conversation_id, run_id=req.run_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     # C-review C2 修复：批准动作落审计链（原实现只写内存/allowlist，
     # 事后无法证明"谁批准了什么"，等保审计目标落空）
     try:
@@ -1251,8 +1253,13 @@ def deny_command(req: DenyCommandRequest):
     check_permission 直接返回 False，不会再次触发 permission_needed 卡片。
     """
     from agent.harness.reins import _get_global_permission_gate_sync
+    if not req.run_id:
+        raise HTTPException(status_code=400, detail="deny_command 必须携带 run_id（拒绝记录按 run 隔离）")
     pg = _get_global_permission_gate_sync()
-    denied_key = pg.deny_command(req.tool, req.command, req.run_id)
+    try:
+        denied_key = pg.deny_command(req.tool, req.command, req.run_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     # 审计记录
     try:
         from agent.audit import append_record

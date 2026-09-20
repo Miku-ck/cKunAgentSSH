@@ -72,6 +72,7 @@ def test_grant_and_revoke_are_audited(monkeypatch):
 
     grant_tool_permission(PermissionGrantRequest(
         tool="shell_exec", scope="once", command="rm -f /tmp/x",
+        run_id="run-audit",
     ))
     revoke_tool_permission("shell_exec", command="rm -f /tmp/x")
 

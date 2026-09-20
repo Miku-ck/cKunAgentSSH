@@ -323,5 +323,3 @@ export function applyMonacoTheme(theme: AppTheme): void {
   }
   monaco.editor.setTheme(monacoTheme)
 }
-
-export default monaco

@@ -544,7 +544,7 @@ export const auditApi = {
 // ── Agent SSE 流式运行 ──
 
 export interface AgentSSEEvent {
-  type: 'state' | 'content' | 'reasoning' | 'tool_call_start' | 'tool_call_result' | 'warning' | 'error' | 'human_help_needed' | 'permission_needed' | 'permission_expired' | 'intention' | 'tool_deliver' | 'clarification_needed' | 'clarification_done' | 'done'
+  type: 'state' | 'content' | 'reasoning' | 'tool_call_start' | 'tool_call_result' | 'warning' | 'error' | 'human_help_needed' | 'permission_needed' | 'permission_expired' | 'permission_explain' | 'intention' | 'tool_deliver' | 'clarification_needed' | 'clarification_done' | 'done'
   state?: string
   iteration?: number
   content?: string
@@ -563,6 +563,18 @@ export interface AgentSSEEvent {
   reversible?: boolean
   /** 归一化展示命令（问题 2 改进：前端据此展示实际授权键绑定的命令形态） */
   normalized_command?: string
+  /** 命令后果的中文说明（审批卡片给非专业用户看，不参与任何授权判定） */
+  explain?: string
+  /** 后果说明来源：static=静态后果表 fallback=通用兜底 llm=模型生成（仅供参考） */
+  explain_source?: 'static' | 'fallback' | 'llm'
+  /** 目标环境（test/prod），prod 卡片需额外警示 */
+  environment?: string
+  /** 用户本次任务原话（后端截断 200 字符），供用户核对"这是否我要做的事" */
+  task?: string
+  /** 目标 SSH 会话 id（前端据此反查连接名/主机展示） */
+  ssh_session_id?: string
+  /** permission_explain 事件专用字段：后到的命令后果解释 */
+  explanation?: string
   // P7: done 事件携带的成本快照 + run_id
   cost?: AgentCostSnapshot
   run_id?: string

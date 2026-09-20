@@ -19,7 +19,7 @@
             <button class="link-btn" :disabled="syncing" @click="onSyncPackaged">{{ syncing ? '同步中…' : '同步包内技能' }}</button>
           </p>
           <p v-if="error" class="hint err">{{ error }}</p>
-          <p v-else-if="!rows.length" class="hint muted">暂无技能（包内运维技能启动时自动同步；也可在对话面板导入 ZIP 技能包）</p>
+          <p v-else-if="!rows.length" class="hint muted">暂无技能（包内运维技能启动时自动同步；若为空可点上方「同步包内技能」）</p>
           <div v-for="r in rows" :key="r.id" class="skill-row" :class="{ off: !r.on }">
             <div class="tool-info">
               <span class="skill-name">
@@ -64,7 +64,6 @@
  * 数据源是后端 /skills（含包内 builtin、手工 manual、自演化 auto 技能），
  * 启用状态走 per-mode（?mode=ssh 写 skill_mode_config）。包内技能内容随 app
  * 分发，启动时由 backend/builtin_skills 同步；「同步包内技能」按钮供升级后手动刷新。
- * ZIP 导入/导出仍在对话面板的技能市场完成（涉及本地文件 IPC，不重复实现）。
  */
 import { computed, onMounted, reactive, ref } from 'vue'
 import { api, toFriendlyMessage } from '@/api/client'

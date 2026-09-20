@@ -48,12 +48,6 @@ class TelemetryBus:
         """订阅事件 — 回调可以是同步或异步函数"""
         self._subscribers.append(callback)
 
-    def unsubscribe(self, callback: Subscriber) -> None:
-        try:
-            self._subscribers.remove(callback)
-        except ValueError:
-            pass
-
     async def emit(self, event: TraceEvent) -> None:
         """发事件 — 按订阅顺序通知，单个异常不影响其他"""
         async with self._lock:
@@ -87,14 +81,6 @@ class TelemetryBus:
         """
         return list(self._events)
 
-    def filter(self, source: str | None = None, kind: str | None = None) -> list[TraceEvent]:
-        """按来源/类型过滤事件 — 先快照再过滤，避免并发 append 截断错位"""
-        snapshot = list(self._events)
-        return [
-            e for e in snapshot
-            if (source is None or e.source == source) and (kind is None or e.kind == kind)
-        ]
-
     def clear(self) -> None:
         """清理事件缓存（同步，被 routes/agent.py 同步调用）
 
@@ -127,6 +113,8 @@ class SSEAdapter:
         "permission_needed": "permission_needed",
         # C-review M7：审批超时事件（超时按拒绝，前端标记对应授权卡片过期）
         "permission_expired": "permission_expired",
+        # 审批卡片可读性：命令后果解释的迟到回填（卡片已弹出，解释生成完再补）
+        "permission_explain": "permission_explain",
         "done": "done",
         # H13 修复 B3：补全三种事件类型映射
         "intention": "intention",
@@ -194,10 +182,24 @@ class SSEAdapter:
             # 问题 2 接线补完：透传归一化展示命令（reins 已写入 payload，
             # 原实现未映射 → 前端授权卡片「授权命令」行永远收不到）
             result["normalized_command"] = payload.get("normalized_command", "")
+            # 审批卡片可读性字段：中文后果说明 + 用户原任务 / 环境 / 目标会话 /
+            # 命令原文（reins 由 permission_display_fields 写入，见 core.py）
+            result["explain"] = payload.get("explain", "")
+            result["explain_source"] = payload.get("explain_source", "")
+            result["environment"] = payload.get("environment", "")
+            result["task"] = payload.get("task", "")
+            result["ssh_session_id"] = payload.get("ssh_session_id", "")
+            result["command"] = payload.get("command", "")
             # 透传 run_id（路由层会对所有 SSE dict 统一注入，此处保持
             # to_sse_dict 自洽：脱离路由单测/其他消费方也能拿到）
             if event.run_id:
                 result["run_id"] = event.run_id
+        elif kind == "permission_explain":
+            # 卡片已弹出后才生成的解释，按 tool+command 回填到对应卡片
+            result["tool"] = payload.get("tool", "")
+            result["command"] = payload.get("command", "")
+            result["normalized_command"] = payload.get("normalized_command", "")
+            result["explanation"] = payload.get("explanation", "")
         elif kind == "permission_expired":
             result["tool"] = payload.get("tool", "")
             result["args"] = payload.get("args", {})

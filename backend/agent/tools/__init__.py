@@ -6,7 +6,7 @@ ToolRegistry 生成 OpenAI function calling 格式的 tools 参数，
 并负责工具执行（含权限检查由 Hook 层拦截）。
 """
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Optional
 import logging
 import threading
 

@@ -165,7 +165,7 @@ def test_prune_agent_runs_no_op_under_cap(tmp_path):
 
 
 # ── #1：prod 强化覆盖 non-shell 危险工具（service_manage stop/restart）────────
-import agent.harness.reins as reins_mod
+import agent.harness.reins.gate as _gate_mod
 from agent.harness.contracts import AgentConfig, RunContext
 from agent.harness.reins import PermissionGate
 from agent.tools.builtin.ops_service import ServiceManageTool
@@ -178,7 +178,7 @@ def _prod_gate(monkeypatch) -> PermissionGate:
 
     async def _noop_audit(**kw):
         return None
-    monkeypatch.setattr(reins_mod, "append_record_async", _noop_audit)
+    monkeypatch.setattr(_gate_mod, "append_record_async", _noop_audit)
 
     g = PermissionGate()
     g._confirmed_permanent = set()

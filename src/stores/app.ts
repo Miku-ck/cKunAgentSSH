@@ -4,13 +4,10 @@ import { ref, onScopeDispose } from 'vue'
 export const useAppStore = defineStore('app', () => {
   const backendStatus = ref<'starting' | 'ready' | 'error' | 'restarting'>('starting')
   const backendPort = ref<number>(0)
-  const backendError = ref<string>('')
 
-  function setBackendStatus(status: 'starting' | 'ready' | 'error' | 'restarting', port?: number, error?: string) {
+  function setBackendStatus(status: 'starting' | 'ready' | 'error' | 'restarting', port?: number) {
     backendStatus.value = status
     if (port) backendPort.value = port
-    if (error) backendError.value = error
-    else if (status === 'ready') backendError.value = ''
   }
 
   // B25 修复：restarting 期间 backendPort 仍指向旧端口，request 的 8s 等待会
@@ -58,7 +55,7 @@ export const useAppStore = defineStore('app', () => {
         setBackendStatus('ready', data.port)
       } else if (data.status === 'error') {
         stopPortPolling()
-        setBackendStatus('error', undefined, data.error)
+        setBackendStatus('error')
       } else if (data.status === 'restarting') {
         setBackendStatus('restarting')
         startPortPolling()
@@ -84,5 +81,5 @@ export const useAppStore = defineStore('app', () => {
     })
   }
 
-  return { backendStatus, backendPort, backendError, setBackendStatus }
+  return { backendStatus, backendPort, setBackendStatus }
 })

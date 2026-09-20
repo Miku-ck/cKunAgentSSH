@@ -15,7 +15,7 @@ ReAct 决策循环的执行者 — THINK → ACT → OBSERVE → THINK → ... �
 from __future__ import annotations
 
 import logging
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator
 
 from .contracts import (
     LLMOutput,
@@ -510,8 +510,8 @@ class Driver:
                 pending = ctx.metadata.get("permission_pending")
                 if pending:
                     try:
-                        from .reins import LoopDetector
-                        pending.pop(LoopDetector._signature(
+                        from .reins import tool_call_signature
+                        pending.pop(tool_call_signature(
                             {"tool": tc.name, "args": tc.args}), None)
                     except Exception:
                         pass

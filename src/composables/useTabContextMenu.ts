@@ -44,5 +44,5 @@ export function useTabContextMenu() {
     document.removeEventListener('contextmenu', dismissTabCtxMenu)
   })
 
-  return { tabCtxMenu, showTabContextMenu, dismissTabCtxMenu }
+  return { tabCtxMenu, showTabContextMenu }
 }

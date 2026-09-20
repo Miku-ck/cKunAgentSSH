@@ -147,23 +147,6 @@ class SkillRegistry:
                     pass
             return skill
 
-    def build_skill_context(self, skill_ids: list[str], mode: str) -> str:
-        """构建技能 system prompt 片段"""
-        skills = self.get_skills_by_ids(skill_ids)
-        # 也加入自动匹配的技能
-        # 按 priority 降序
-        skills.sort(key=lambda s: s.get('priority', 0), reverse=True)
-        if not skills:
-            return ""
-        parts = []
-        for s in skills:
-            content = s.get('system_prompt', '')[:12000]
-            parts.append(
-                f"以下是一个名为「{s['name']}」的技能提供的参考信息：\n"
-                f"---技能内容开始---\n{content}\n---技能内容结束---"
-            )
-        return '\n\n'.join(parts)
-
     def build_skill_catalog(self, skill_ids: list[str], mode: str) -> str:
         """构建 LLM 可见的可用技能目录（不含正文）"""
         skills = self.get_skills_by_ids(skill_ids)

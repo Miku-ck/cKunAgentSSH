@@ -93,10 +93,8 @@ interface ElectronAPI {
   getBackendToken: () => Promise<string>
   fsReadDir: (dirPath: string) => Promise<FileEntry[]>
   fsReadFile: (filePath: string) => Promise<string>
-  fsReadFileBase64: (filePath: string) => Promise<{ base64: string; size: number }>
   fsWriteFile: (filePath: string, content: string) => Promise<void>
   fsReadFileForEditor: (filePath: string) => Promise<EditorFileContent>
-  fsSelectFolder: () => Promise<string | null>
   fsSelectFile: () => Promise<string | null>
   fsSelectImage: () => Promise<{ fileName: string; mime: string; name: string } | null>
   fsLoadBackgroundImage: (fileName: string) => Promise<string>
@@ -108,9 +106,6 @@ interface ElectronAPI {
   fsCopy: (srcPath: string, destPath: string, transferId: string) => Promise<void>
   fsTrash: (filePath: string) => Promise<void>
   fsPathJoin: (...segments: string[]) => Promise<string>
-  fsGetSkillsDir: () => Promise<string>
-  fsRmRF: (targetPath: string) => Promise<void>
-  fsListFilesRecursive: (dirPath: string) => Promise<string[]>
   fsExists: (filePath: string) => Promise<boolean>
   fsStat: (filePath: string) => Promise<{ isDirectory: boolean; isFile: boolean; size: number; modified: number }>
   fsResolveProgram: (name: string) => Promise<string | null>
@@ -167,9 +162,6 @@ interface ElectronAPI {
   updateSkillEnabled: (id: string, enabled: boolean, mode?: string) => Promise<{ id: string; enabled: boolean }>
   deleteSkill: (id: string) => Promise<{ deleted: boolean }>
   syncBuiltinSkills: (skills: any[]) => Promise<{ upserted: number; orphans_removed: number; total: number }>
-  // C-1：技能 ZIP 解压写入（主进程边界收容，防 zip-slip 越界写）
-  skillsMkdir: (dirPath: string) => Promise<void>
-  skillsWriteFile: (filePath: string, base64: string) => Promise<void>
 
   // SFTP
   sftpOpen: (sshSessionId: string) => Promise<void>

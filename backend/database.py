@@ -182,21 +182,6 @@ def init_db(db_path: str) -> None:
             CREATE INDEX IF NOT EXISTS ix_messages_conv
                 ON messages(conversation_id, created_at);
 
-            CREATE TABLE IF NOT EXISTS memories (
-                id              TEXT PRIMARY KEY,
-                mode            TEXT NOT NULL,
-                content         TEXT NOT NULL,
-                source_conv_id  TEXT,
-                last_used_at    TEXT NOT NULL DEFAULT (datetime('now')),
-                use_count       INTEGER DEFAULT 1,
-                created_at      TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-
-            CREATE INDEX IF NOT EXISTS ix_memories_mode
-                ON memories(mode);
-            CREATE INDEX IF NOT EXISTS ix_memories_used
-                ON memories(mode, last_used_at);
-
             CREATE TABLE IF NOT EXISTS skills (
                 id          TEXT PRIMARY KEY,
                 name        TEXT NOT NULL,
@@ -995,11 +980,10 @@ def list_disabled_tools(mode: str = "all") -> list[str]:
 def get_relevant_memories(mode: str, limit: int = 5) -> list[dict]:
     """获取某模式下最相关的记忆（按最近使用 + 使用次数排序）
 
-    C-review M2：原实现读旧表 `memories`，但该表无任何写入者（全库无
-    INSERT INTO memories），永远返回空 → 记忆注入形同虚设。真正的语义记忆
-    由 post_processor → mem_mgr.save_semantic → add_agent_memory 写入
-    `agent_memories`（type='semantic'）。改为读该表 semantic 层，字段形状
-    与旧返回保持一致（调用方仅用 content）。
+    C-review M2：原实现读一张全库无写入者的旧表，永远返回空 → 记忆注入
+    形同虚设。真正的语义记忆由 post_processor → mem_mgr.save_semantic →
+    add_agent_memory 写入 `agent_memories`（type='semantic'）。改为读该表
+    semantic 层，字段形状与旧返回保持一致（调用方仅用 content）。
     """
     conn = _get_conn()
     try:
@@ -1384,8 +1368,6 @@ def create_model_config(
     max_tokens: int = 4096,
     max_output_tokens: int = 4096,
     top_p: float = 0.9,
-    is_default_work: bool = False,   # 预留：Work 模式默认标记（当前 DB 无对应列，不参与 INSERT）
-    is_default_ide: bool = False,    # 预留：IDE 模式默认标记（当前 DB 无对应列，不参与 INSERT）
     is_default_ssh: bool = False,
     reasoning_tokens: int = 8192,
 ) -> dict:

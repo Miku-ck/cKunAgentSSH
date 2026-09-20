@@ -92,5 +92,5 @@ export const useToastStore = defineStore('toast', () => {
     return push('warning', message, duration)
   }
 
-  return { items, push, dismiss, toggleDetails, success, error, info, warning }
+  return { items, dismiss, toggleDetails, success, error, info, warning }
 })

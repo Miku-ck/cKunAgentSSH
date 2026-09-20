@@ -30,9 +30,8 @@ logger = logging.getLogger(__name__)
 _SCHEDULE_POLL_SECONDS = 30
 _SCHEDULE_MAX_ITERATIONS = 8
 _SCHEDULE_CONVERSATION_PREFIX = "sched-"
-# schedule_runs 清理节流间隔（秒）与每个 schedule 保留的最大行数
+# schedule_runs 清理节流间隔（秒）
 _RUNS_PRUNE_INTERVAL_S = 6 * 3600
-_RUNS_KEEP_PER_SCHEDULE = 2000
 
 
 class ScheduleEngine:

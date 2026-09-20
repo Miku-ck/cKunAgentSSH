@@ -48,10 +48,22 @@ export interface PermissionRequest {
   isCommandTool?: boolean
   /** 是否正在授权中（防止重复点击） */
   granting?: boolean
-  /** 是否已处理（已授权或已忽略） */
+  /** 是否已处理（已授权或已超时作废） */
   resolved?: boolean
+  /** 已处理的卡片是否为「已授权」（超时作废的卡片文案不同） */
+  granted?: boolean
   /** 归一化展示命令（问题 2 改进：让用户看到实际授权的规范化形态） */
   normalizedCommand?: string
+  /** 命令后果的中文说明（纯展示，授权键仍绑定命令原文） */
+  explain?: string
+  /** 后果说明来源：static/fallback/llm */
+  explainSource?: 'static' | 'fallback' | 'llm'
+  /** 目标环境（test/prod） */
+  environment?: string
+  /** 用户本次任务原话 — 让用户核对命令是否服务于他要做的事 */
+  task?: string
+  /** 目标 SSH 会话 id（反查连接名/主机展示） */
+  sshSessionId?: string
   /** 发起审批的 run_id（once 授权按 run 键控，防跨 run 消费） */
   runId?: string
   /** 发起审批的会话 ID（session 授权按会话键控，C-review M11） */
@@ -78,6 +90,16 @@ export interface ClarificationWizardState {
 }
 
 const COMMAND_EXEC_TOOLS = ['shell_exec']
+
+/**
+ * 授权卡片标识键：命令执行工具按「工具 + 命令原文」区分（同一工具的不同命令各自
+ * 一张卡），其他工具按工具名。permission_needed 去重、permission_expired 标记过期、
+ * permission_explain 回填三处共用同一表达式，避免键形态漂移导致事件找不到卡片。
+ */
+function permCardKey(tool: string, args?: Record<string, unknown>): string {
+  if (!COMMAND_EXEC_TOOLS.includes(tool)) return tool
+  return `${tool}::${typeof args?.command === 'string' ? args.command : ''}`
+}
 
 export type AgentRunStatus = 'idle' | 'running' | 'completed' | 'failed'
 
@@ -276,9 +298,33 @@ export const useAgentStore = defineStore('agent', () => {
     humanHelpRequests.value = humanHelpRequests.value.filter(r => r.id !== id)
   }
 
-  /** 用户忽略某次权限请求 */
+  /** 用户忽略某次权限请求（仅关闭卡片，后端仍在等待，超时后按拒绝处理） */
   function dismissPermission(id: string) {
     permissionRequests.value = permissionRequests.value.filter(r => r.id !== id)
+  }
+
+  /**
+   * 用户明确拒绝该命令/工具 — 回传后端登记拒绝标记，本 run 内 AI 重发同一条
+   * 不再弹卡片（区别于 dismissPermission 的"先关掉不理会"）。
+   * 非命令工具传空串，后端 _grant_key 会退化为按工具名建键。
+   */
+  async function denyPermission(id: string): Promise<boolean> {
+    const req = permissionRequests.value.find(r => r.id === id)
+    if (!req || req.resolved) return false
+    if (!req.runId) {
+      // 拒绝记录按 run_id 隔离，无 run_id 后端直接 400 — 只能本地关闭卡片
+      dismissPermission(id)
+      return true
+    }
+    const command = typeof req.args?.command === 'string' ? req.args.command : ''
+    try {
+      await agentApi.denyCommand(req.tool, command, req.runId)
+    } catch (e) {
+      console.error('拒绝登记失败:', e)
+      return false  // 卡片保留，用户可重试；否则后端仍会等待审批
+    }
+    dismissPermission(id)
+    return true
   }
 
   /** 标记权限请求已处理 */
@@ -286,6 +332,7 @@ export const useAgentStore = defineStore('agent', () => {
     const req = permissionRequests.value.find(r => r.id === id)
     if (req) {
       req.resolved = true
+      req.granted = granted
       req.granting = false
     }
   }
@@ -422,11 +469,10 @@ export const useAgentStore = defineStore('agent', () => {
         // 审查 M-3：命令执行工具按"工具+命令"去重（不同命令各自出卡片），
         // 其他工具按工具名去重，避免同一工具多次触发产生重复卡片
         const evtTool = event.tool || ''
-        const evtCommand = typeof event.args?.command === 'string' ? (event.args.command as string) : ''
         const isCmdTool = COMMAND_EXEC_TOOLS.includes(evtTool)
-        const dupKey = isCmdTool ? `${evtTool}::${evtCommand}` : evtTool
-        const alreadyPending = permissionRequests.value.some(r =>
-          (r.isCommandTool ? `${r.tool}::${typeof r.args?.command === 'string' ? r.args.command : ''}` : r.tool) === dupKey
+        const dupKey = permCardKey(evtTool, event.args)
+        const alreadyPending = permissionRequests.value.some(
+          r => permCardKey(r.tool, r.args) === dupKey,
         )
         // B11 修复：权限卡片只存在于 AI 面板内，面板关闭期间用户无法响应 —
         // 从非 pending → pending 转换时 toast 提醒（重复请求不重复弹）
@@ -443,6 +489,12 @@ export const useAgentStore = defineStore('agent', () => {
             isCommandTool: isCmdTool,
             // 问题 2 改进：传递归一化展示命令（仅命令执行工具）
             normalizedCommand: typeof event.normalized_command === 'string' ? event.normalized_command : undefined,
+            // 卡片可读性：中文后果说明 + 环境/用户原任务/目标会话
+            explain: event.explain || undefined,
+            explainSource: event.explain_source || undefined,
+            environment: event.environment || undefined,
+            task: event.task || undefined,
+            sshSessionId: event.ssh_session_id || undefined,
             // once 授权按 run 键控 / session 按会话键控：创建时捕获上下文，
             // 授权时回传后端（后端 PermissionGate 据此键控）
             runId: event.run_id || lastRunId.value || undefined,
@@ -455,19 +507,31 @@ export const useAgentStore = defineStore('agent', () => {
         break
       }
 
+      case 'permission_explain': {
+        // 后果解释由后端在卡片弹出后异步补发（未知命令走 LLM，≤6s）。
+        // 该事件只带顶层 command（不带 args），据此拼出与卡片一致的标识键。
+        // 找不到未处理卡片 = 用户已授权/已拒绝/审批超时/run 已结束 → 直接丢弃。
+        const text = typeof event.explanation === 'string' ? event.explanation.trim() : ''
+        if (!text) break
+        const key = permCardKey(event.tool || '', { command: event.command })
+        for (const r of permissionRequests.value) {
+          if (!r.resolved && permCardKey(r.tool, r.args) === key) {
+            r.explain = text
+            r.explainSource = 'llm'
+          }
+        }
+        break
+      }
+
       case 'permission_expired': {
         // C-review M7：审批超时（后端按拒绝处理）→ 标记对应授权卡片过期，
         // 按钮失效，避免用户点了一个后端已不再等待的"孤儿卡片"
-        const tool = event.tool || ''
-        const cmd = typeof event.args?.command === 'string' ? (event.args.command as string) : ''
-        const key = cmd ? `${tool}::${cmd}` : tool
+        const key = permCardKey(event.tool || '', event.args)
         for (const r of permissionRequests.value) {
           if (r.resolved) continue
-          const rKey = r.isCommandTool
-            ? `${r.tool}::${typeof r.args?.command === 'string' ? r.args.command : ''}`
-            : r.tool
-          if (rKey === key) {
+          if (permCardKey(r.tool, r.args) === key) {
             r.resolved = true
+            r.granted = false
             r.granting = false
             r.message = `${r.message}（审批超时，已按拒绝处理）`
           }
@@ -558,8 +622,6 @@ export const useAgentStore = defineStore('agent', () => {
     status,
     content,
     reasoning,
-    currentState,
-    iteration,
     toolCalls,
     warnings,
     errorMessage,
@@ -576,7 +638,6 @@ export const useAgentStore = defineStore('agent', () => {
     isRunning,
     hasHumanHelpRequest,
     hasPermissionRequest,
-    hasClarification: computed(() => !!clarificationWizard.value && !clarificationWizard.value.submitted),
     pendingDeliveries,
     deliveries: agentDeliver.deliveries,
     // actions
@@ -585,6 +646,7 @@ export const useAgentStore = defineStore('agent', () => {
     snapshot,
     dismissHelp,
     dismissPermission,
+    denyPermission,
     resolvePermission,
     confirmDeliver,
     rejectDeliver,

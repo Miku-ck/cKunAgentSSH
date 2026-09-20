@@ -6,7 +6,6 @@
   - P1-2: find 只读命令不触发，仅 find | xargs 触发
   - _step_to_dict / _build_clarification_needed：事件结构正确
   - _format_answers：格式化用户答案文本
-  - _get_global_clarification_store：返回模块级 dict 引用
   - ClarificationInterceptor.check 三链路：触发→拦截→放行
   - P0-3: 路由层 answers 校验 + custom_text 截断
   - P1-5: _enforce_clarification_cap FIFO 淘汰
@@ -14,7 +13,7 @@
 运行: python -m pytest backend/tests/test_clarification_wizard.py -v
 """
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -24,15 +23,20 @@ from agent.harness.reins import (
     ClarificationInterceptor,
     ClarificationOption,
     ClarificationStep,
+    _CLARIFIABLE_TOOLS,
     _CLARIFICATION_CONTEXT,
     _CLARIFICATION_DONE,
     _build_clarification_needed,
     _enforce_clarification_cap,
+    _file_write_build_steps,
+    _file_write_detect_vague,
     _format_answers,
-    _get_global_clarification_store,
+    _service_build_steps,
+    _service_detect_vague,
     _shell_build_steps,
     _shell_detect_vague,
     _step_to_dict,
+    record_clarification_answers,
 )
 
 
@@ -155,24 +159,6 @@ class TestFormatAnswers:
         assert "Q1" in result
         assert "Q2" in result
         assert "blah" in result
-
-
-# ── _get_global_clarification_store ──
-
-class TestGlobalStore:
-    def test_returns_dict_with_done_and_context(self):
-        store = _get_global_clarification_store()
-        assert "done" in store
-        assert "context" in store
-        assert isinstance(store["done"], dict)
-        assert isinstance(store["context"], dict)
-
-    def test_is_module_level_reference(self):
-        """多次调用应拿到同一对象引用 — 确保 routes 写入后拦截器读到"""
-        s1 = _get_global_clarification_store()
-        s2 = _get_global_clarification_store()
-        assert s1["done"] is s2["done"]
-        assert s1["context"] is s2["context"]
 
 
 # ── ClarificationInterceptor 三链路 ──
@@ -314,7 +300,8 @@ class TestClarificationCap:
         _CLARIFICATION_DONE.clear()
         _CLARIFICATION_CONTEXT.clear()
         # 填充超过上限（设定一个小值便于测试）
-        import agent.harness.reins as _rmod
+        # reins.py 已拆包：常量定义在 clarification 子模块，patch 包属性不传导
+        import agent.harness.reins.clarification as _rmod
         orig_cap = _rmod._CLARIFICATION_MAX_ENTRIES
         try:
             _rmod._CLARIFICATION_MAX_ENTRIES = 5
@@ -464,3 +451,113 @@ def test_shell_steps_use_ops_semantics_not_git():
         assert forbidden not in all_text
     assert "目标机" in steps[0].question
     assert "undo" in steps[1].options[2].label
+
+
+# ── 扩注册表（2026-09 演进）：job_run / file_write / service_manage ──
+
+class TestRegistryExtension:
+    def _steps_shape(self, steps):
+        assert len(steps) == 3
+        for s in steps:
+            assert isinstance(s, ClarificationStep)
+            assert [o.id for o in s.options] == ["A", "B", "C"]
+            assert s.allow_custom is True
+
+    def test_registry_contains_command_and_ops_tools(self):
+        assert set(_CLARIFIABLE_TOOLS) == {"shell_exec", "job_run", "file_write", "service_manage"}
+
+    def test_every_registry_entry_callable_pair(self):
+        for name, (detect, build) in _CLARIFIABLE_TOOLS.items():
+            assert callable(detect) and callable(build), name
+
+    # job_run 复用 shell 检测器（cmd 参数）
+    def test_job_run_wildcard_cmd_triggers(self):
+        assert _shell_detect_vague({"cmd": "rm -rf /var/log/*"}) is not None
+
+    def test_job_run_clean_cmd_not_triggered(self):
+        assert _shell_detect_vague({"cmd": "df -h"}) is None
+
+    # file_write：仅系统配置路径触发
+    def test_file_write_etc_path_triggers(self):
+        assert _file_write_detect_vague({"path": "/etc/nginx/nginx.conf", "content": "x"}) is not None
+
+    def test_file_write_bare_etc_triggers(self):
+        assert _file_write_detect_vague({"path": "/etc", "content": "x"}) is not None
+
+    def test_file_write_app_path_not_triggered(self):
+        assert _file_write_detect_vague({"path": "/srv/app/config.ini", "content": "x"}) is None
+
+    def test_file_write_steps_shape(self):
+        self._steps_shape(_file_write_build_steps({"path": "/etc/foo.conf"}))
+
+    def test_file_write_steps_ask_backup_and_reload(self):
+        steps = _file_write_build_steps({"path": "/etc/ssh/sshd_config"})
+        all_text = steps[0].question + "".join(o.label for o in steps[0].options) \
+            + steps[1].question
+        assert "备份" in all_text
+        assert "reload" in steps[1].options[1].label or "reload" in steps[1].options[2].label
+
+    # service_manage：仅 stop/restart × 会话/网络关键服务触发
+    def test_service_stop_sshd_triggers(self):
+        assert _service_detect_vague({"action": "stop", "name": "sshd"}) is not None
+
+    def test_service_restart_with_suffix_triggers(self):
+        assert _service_detect_vague({"action": "restart", "name": "sshd.service"}) is not None
+
+    def test_service_status_not_triggered(self):
+        assert _service_detect_vague({"action": "status", "name": "sshd"}) is None
+
+    def test_service_noncritical_stop_not_triggered(self):
+        assert _service_detect_vague({"action": "stop", "name": "nginx"}) is None
+
+    def test_service_steps_shape(self):
+        self._steps_shape(_service_build_steps({"action": "stop", "name": "sshd"}))
+
+
+class TestInterceptorPriority:
+    def test_clarification_runs_before_permission_and_guard(self):
+        from agent.harness.reins import FilesystemGuard, PermissionGate
+        clar = ClarificationInterceptor()
+        assert clar.priority < PermissionGate().priority < FilesystemGuard().priority
+
+
+class TestInterceptorExtendedTools:
+    @pytest.fixture(autouse=True)
+    def _clear_store(self):
+        _CLARIFICATION_DONE.clear()
+        _CLARIFICATION_CONTEXT.clear()
+        yield
+        _CLARIFICATION_DONE.clear()
+        _CLARIFICATION_CONTEXT.clear()
+
+    @pytest.mark.asyncio
+    async def test_file_write_system_path_emits_clarification(self):
+        it = ClarificationInterceptor()
+        ctx = _make_ctx(tool="file_write", args={"path": "/etc/foo.conf", "content": "x"})
+        d = await it.check(ctx)
+        assert d.intercepted
+        ev = d.events[0]
+        assert ev.kind == "clarification_needed"
+        assert ev.payload["tool"] == "file_write"
+        assert len(ev.payload["steps"]) == 3
+
+    @pytest.mark.asyncio
+    async def test_service_manage_sshd_stop_emits_clarification(self):
+        it = ClarificationInterceptor()
+        ctx = _make_ctx(tool="service_manage", args={"action": "stop", "name": "sshd"})
+        d = await it.check(ctx)
+        assert d.intercepted
+        assert d.events[0].kind == "clarification_needed"
+
+    @pytest.mark.asyncio
+    async def test_extended_tool_release_after_answer(self):
+        it = ClarificationInterceptor()
+        ctx = _make_ctx(tool="file_write", args={"path": "/etc/foo.conf", "content": "x"})
+        d1 = await it.check(ctx)
+        assert d1.intercepted
+        record_clarification_answers(ctx.run_id, {"0": {"choice": "A"}})
+        ctx2 = _make_ctx(tool="file_write", args={"path": "/etc/foo.conf", "content": "x"})
+        ctx2.run_id = ctx.run_id
+        d2 = await it.check(ctx2)
+        assert not d2.intercepted
+        assert any(e.kind == "clarification_done" for e in d2.events)

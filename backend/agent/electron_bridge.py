@@ -98,11 +98,6 @@ class ElectronBridge:
 
     # ── WS 传输层 ────────────────────────────────────
 
-    def _ws_connected(self) -> bool:
-        from agent.bridge_relay import get_bridge_relay
-        relay = get_bridge_relay()
-        return relay is not None and relay.connected
-
     async def _wait_ws(self, budget: float | None = None) -> bool:
         """最多等 budget 秒让 WS 通道就绪（事件驱动，无轮询）。
 

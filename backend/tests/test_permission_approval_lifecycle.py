@@ -16,6 +16,9 @@ import time
 import pytest
 
 import agent.harness.reins as reins_mod
+import agent.harness.reins.flow as _flow_mod
+import agent.harness.reins.gate as _gate_mod
+import agent.harness.reins.guards as _guards_mod
 from agent.harness.contracts import (
     AgentConfig,
     LLMOutput,
@@ -25,7 +28,7 @@ from agent.harness.contracts import (
     ToolResult,
 )
 from agent.harness.driver import Driver
-from agent.harness.reins import FilesystemGuard, LoopDetector, PermissionGate
+from agent.harness.reins import FilesystemGuard, LoopDetector, PermissionGate, tool_call_signature
 
 CMD = "systemctl restart nginx"  # 运维动词 → dangerous（非 hardline，走审批路径）
 
@@ -38,7 +41,9 @@ def _no_file_io(monkeypatch):
 
     async def _noop_audit(**kw):
         return None
-    monkeypatch.setattr(reins_mod, "append_record_async", _noop_audit)
+    # reins.py 已拆包：patch 必须落在定义 append_record_async 的子模块全局上
+    for _m in (_guards_mod, _gate_mod, _flow_mod):
+        monkeypatch.setattr(_m, "append_record_async", _noop_audit)
 
 
 def _ctx() -> RunContext:
@@ -66,7 +71,7 @@ def test_pending_sig_exempt_from_loop_detection():
     """审批窗口内的签名豁免循环检测 — 重发不得被抢截"""
     ctx = _ctx()
     _log(ctx)
-    sig = LoopDetector._signature(ctx.tool_calls_log[-1])
+    sig = tool_call_signature(ctx.tool_calls_log[-1])
     ctx.metadata["permission_pending"] = {sig: time.monotonic()}
     det = LoopDetector()
     for _ in range(6):
@@ -97,7 +102,7 @@ def test_first_request_emits_card_and_marks_pending():
     d = asyncio.run(_guard().check(ctx))
     assert d.intercepted
     assert any(e.kind == "permission_needed" for e in d.events), "首次请求必须发授权卡片事件"
-    sig = LoopDetector._signature(ctx.tool_calls_log[-1])
+    sig = tool_call_signature(ctx.tool_calls_log[-1])
     assert sig in ctx.metadata.get("permission_pending", {}), "首次审批请求必须标记「等待审批」"
 
 
@@ -117,7 +122,7 @@ def test_approval_timeout_denies():
     ctx = _ctx()
     _log(ctx)
     asyncio.run(_guard().check(ctx))
-    sig = LoopDetector._signature(ctx.tool_calls_log[-1])
+    sig = tool_call_signature(ctx.tool_calls_log[-1])
     # 模拟超过审批时限
     ctx.metadata["permission_pending"][sig] = time.monotonic() - \
         (reins_mod._PERMISSION_APPROVAL_TIMEOUT_S + 1)
@@ -164,7 +169,7 @@ def test_driver_releases_pending_on_success():
         cost_tracker = None
 
     ctx = _ctx()
-    sig = LoopDetector._signature({"tool": "shell_exec", "args": {"command": CMD}})
+    sig = tool_call_signature({"tool": "shell_exec", "args": {"command": CMD}})
     ctx.metadata["permission_pending"] = {sig: time.monotonic()}
 
     async def main():
