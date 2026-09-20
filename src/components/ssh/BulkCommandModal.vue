@@ -94,7 +94,9 @@
       <!-- 底部按钮（配置态） -->
       <div v-if="!results.length && !running" class="bulk-footer">
         <button class="sc-btn" @click="$emit('close')">取消</button>
-        <button class="sc-btn primary" :disabled="!canRun" @click="run">执行（{{ checkedCount }} 台并行）</button>
+        <button class="sc-btn primary" :disabled="!canRun" @click="run">
+          {{ checking ? '安全判定中…' : `执行（${checkedCount} 台并行）` }}
+        </button>
       </div>
     </div>
   </div>
@@ -107,13 +109,18 @@
  * 对当前所有活动远程终端会话并行下发一条命令（ssh:exec，独立 exec channel，
  * 不污染交互终端），结果并排展示；多节点时提供逐行差异对比（不一致行高亮）。
  * 结果可一键送 AI 分析。
+ *
+ * 这里是「一个人的动作 × N 台机器」的放大点，执行前必经后端风险判定：
+ * hardline 直接中止（无确认按钮），dangerous 二次确认，判定不可用则拒绝下发。
  */
 import { ref, computed, watch } from 'vue'
 import { useSSHStore, type TerminalSession } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useConfirm } from '@/composables/useConfirm'
-import { toFriendlyMessage } from '@/api/client'
-import { diffResults, resultsConsistent, detectDangerousCommand, type BulkResult } from '@/composables/bulkCommandDiff'
+import { agentApi, toFriendlyMessage, type SafetyClassifyResult } from '@/api/client'
+import {
+  diffResults, resultsConsistent, decideBulkDispatch, type BulkResult,
+} from '@/composables/bulkCommandDiff'
 
 const emit = defineEmits<{ close: [] }>()
 
@@ -128,6 +135,7 @@ const command = ref('')
 const timeoutSec = ref(30)
 const results = ref<BulkResult[]>([])
 const running = ref(false)
+const checking = ref(false)
 const showDiff = ref(false)
 
 const QUICK_CMDS = ['uptime', 'free -m', 'df -h /', 'uname -a', 'cat /etc/os-release | head -3']
@@ -138,7 +146,7 @@ function hostOf(s: TerminalSession): string {
 }
 
 const checkedCount = computed(() => checked.value.length)
-const canRun = computed(() => command.value.trim().length > 0 && checked.value.length > 0 && !running.value)
+const canRun = computed(() => command.value.trim().length > 0 && checked.value.length > 0 && !running.value && !checking.value)
 
 const runningCount = computed(() => checked.value.length)
 const doneCount = computed(() => results.value.length)
@@ -157,26 +165,52 @@ const allConsistent = computed(() => resultsConsistent(results.value))
 
 const diffLines = computed(() => diffResults(results.value))
 
-/** 执行前防护：prod 环境标记 + 危险命令启发式 → 二次确认（取消则中止） */
+/**
+ * 阻止执行并告知原因 —— 两个按钮都只是关闭，没有任何路径会下发命令。
+ */
+async function blockExecution(title: string, lines: string[]): Promise<false> {
+  const { confirm } = useConfirm()
+  await confirm({
+    title,
+    message: [...lines, '', '命令未下发到任何节点。'].join('\n'),
+    confirmText: '知道了',
+    cancelText: '关闭',
+    danger: true,
+  })
+  return false
+}
+
+/**
+ * 执行前防护：判定的唯一来源是后端 safety.classify_command（与 AI 的 shell_exec 同口径），
+ * 渲染层不再自带词表 —— 曾经这里是第四份规则表，各判各的，导致 mkfs / rm -rf / 在这条
+ * 路上只是"多问一句"。分支决策（hardline 中止 / dangerous 确认 / 判定不可达 fail-closed）
+ * 在 decideBulkDispatch 里，可单测。
+ */
 async function confirmBeforeRun(cmd: string, targets: TerminalSession[]): Promise<boolean> {
   const { confirm } = useConfirm()
-  const danger = detectDangerousCommand(cmd)
+  let verdict: SafetyClassifyResult | null = null
+  try {
+    const res = await agentApi.classifyCommands([cmd])
+    verdict = res.results.find(r => r.command === cmd) ?? null
+  } catch {
+    verdict = null
+  }
   const prodHosts: string[] = []
   for (const s of targets) {
     const conn = s.connectionId ? sshStore.connections.find(c => c.id === s.connectionId) : null
     if (conn?.environment === 'prod') prodHosts.push(conn.name || conn.host)
   }
-  const warnings: string[] = []
-  if (prodHosts.length) warnings.push(`目标包含 ${prodHosts.length} 台生产环境主机：${prodHosts.join('、')}`)
-  if (danger.length) warnings.push(`命令包含危险操作：${danger.join('、')}`)
-  if (!warnings.length) return true
+
+  const gate = decideBulkDispatch(cmd, verdict, prodHosts)
+  if (gate.action === 'block') return blockExecution(gate.title, gate.lines)
+  if (gate.action === 'run') return true
   const ok = await confirm({
     title: '批量下发确认',
     message: [
       `即将对 ${targets.length} 台节点并行执行：`,
       cmd,
       '',
-      ...warnings.map(w => `⚠ ${w}`),
+      ...gate.warnings.map(w => `⚠ ${w}`),
       '',
       '确认执行？',
     ].join('\n'),
@@ -194,7 +228,14 @@ async function run() {
   const targets = remoteSessions.value.filter(s => checked.value.includes(s.id))
   if (!targets.length) return
 
-  const ok = await confirmBeforeRun(cmd, targets)
+  // 判定要走一次网络往返，期间禁用入口避免重复点击堆叠确认框
+  checking.value = true
+  let ok = false
+  try {
+    ok = await confirmBeforeRun(cmd, targets)
+  } finally {
+    checking.value = false
+  }
   if (!ok) return
 
   running.value = true

@@ -1238,6 +1238,53 @@ def allow_tool_permission(req: AllowPermissionRequest):
     return {"tool": req.tool, "grant_key": grant_key, "granted": True}
 
 
+class SafetyClassifyRequest(BaseModel):
+    """批量下发等「人主导通道」的执行前判定请求"""
+    commands: list[str] = Field(..., min_length=1, max_length=50,
+                                description="待执行命令原文，1-50 条")
+
+    @field_validator("commands")
+    @classmethod
+    def _each_within_limit(cls, v: list[str]) -> list[str]:
+        for i, c in enumerate(v):
+            if len(c) > 4096:
+                raise ValueError(f"第 {i + 1} 条命令超过 4096 字符")
+        return v
+
+
+@router.post("/agent/safety/classify")
+def classify_safety_commands(req: SafetyClassifyRequest):
+    """命令风险判定的唯一来源（safety.classify_command）对外暴露，只读无状态。
+
+    为什么要这个端点：批量下发是「一个人的动作 × N 台机器」的放大点，此前它只在
+    渲染层自带一份词表来弹确认（bulkCommandDiff 的 DANGEROUS_PATTERNS）—— 那是
+    第四份规则表，与后端 HARDLINE/DANGEROUS 两套口径各写各的，且 mkfs、rm -rf /
+    在那条路上只是"多问一句"，点确认照样打到 N 台上。前端自此不再自带规则。
+
+    口径与 shell_exec 完全一致：模型自由文本 → classify_command（含「未入只读白
+    名单即审批」）。不区分 constructed 模板口径，因为这里的输入就是人敲的原文。
+
+    本端点只判定，不放行任何操作：不写审计、不建 run、不碰 allowlist。真正的阻断
+    发生在调用方（批量下发据 hardline 直接中止）。
+    """
+    from agent.harness.command_explain import explain_for_reason
+    from agent.harness.safety import classify_command, get_normalized_for_display
+    results = []
+    for raw in req.commands:
+        level, reason = classify_command(raw)
+        display = get_normalized_for_display(raw)
+        expl = explain_for_reason(reason or "")
+        results.append({
+            "command": raw,
+            "level": level,
+            "reason": reason or "",
+            "normalized": display,
+            # 中文后果说明：dangerous 的确认框给人看得懂的理由，而不是英文 reason
+            "explain": expl.text,
+        })
+    return {"results": results}
+
+
 class DenyCommandRequest(BaseModel):
     """visible_terminal 拒绝命令请求 — 标记某 run 下某命令被拒绝"""
     tool: str = Field(..., description="工具名（通常为 shell_exec）")

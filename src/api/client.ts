@@ -823,6 +823,15 @@ export async function postToolResult(
 
 // ── Agent API ──
 
+/** /agent/safety/classify 单条结果 —— level 与后端 classify_command 同枚举 */
+export interface SafetyClassifyResult {
+  command: string
+  level: 'hardline' | 'dangerous' | 'safe'
+  reason: string
+  normalized: string
+  explain: string
+}
+
 export const agentApi = {
   // 记忆设置
   getMemorySettings: () =>
@@ -863,6 +872,16 @@ export const agentApi = {
       '/agent/permission/deny-command',
       { method: 'POST', body: JSON.stringify({ tool, command, run_id: runId }) },
     ),
+
+  /**
+   * 命令风险分类（批量下发等人工通道的唯一判定源）。
+   * 后端 classify_command 与 shell_exec 完全同口径；调用方失败时必须拒绝执行（fail-closed）。
+   */
+  classifyCommands: (commands: string[]) =>
+    request<{ results: SafetyClassifyResult[] }>('/agent/safety/classify', {
+      method: 'POST',
+      body: JSON.stringify({ commands }),
+    }),
 
   // ── 澄清向导 ──
   /** 提交用户答案（前端澄清向导"完成"按钮调用） */

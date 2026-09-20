@@ -1,5 +1,5 @@
 /**
- * 多节点批量下发 — 结果对比纯核心（F 阶段，无 vue 依赖，可单测）
+ * 多节点批量下发 — 纯核心（无 vue 依赖，可单测）：结果逐行对比 + 执行前分支决策
  */
 
 export interface BulkResult {
@@ -52,53 +52,53 @@ export function resultsConsistent(results: BulkResult[]): boolean {
   return ok.every(r => r.lines.join('\n') === first && r.exitCode === ok[0].exitCode)
 }
 
-// ── 危险命令启发式（生产环境防护）────────────────────────────────────────
-// 批量下发会把同一命令并行打到 N 台机器，误发的放大效应远大于单会话。
-// 纯函数启发式：命中即视为"变更/破坏性命令"，执行前必须二次确认；
-// 未命中视为只读/低风险（df/uptime/ps/cat 等），prod 目标仅需普通确认。
-// 词边界用 \b 防误伤（"rm" 不命中 "confirm"）；宁可多报确认，不漏放破坏。
+// 危险命令判定的规则源唯一在后端 agent/harness/safety.py::classify_command。
+// 渲染层曾自带一份 DANGEROUS_PATTERNS 词表（第四份规则表，与后端长期漂移），已删除；
+// 这里只做「拿到后端判定结论后怎么走」的分支决策，不掺任何命令词表。
 
-const DANGEROUS_PATTERNS: Array<[RegExp, string]> = [
-  [/\brm\b/, 'rm'],
-  [/\brmdir\b/, 'rmdir'],
-  [/\breboot\b/, 'reboot'],
-  [/\bshutdown\b/, 'shutdown'],
-  [/\bpoweroff\b/, 'poweroff'],
-  [/\bhalt\b/, 'halt'],
-  [/\bkill\b/, 'kill'],
-  [/\bkillall\b/, 'killall'],
-  [/\bpkill\b/, 'pkill'],
-  [/\bdd\b/, 'dd'],
-  [/\bmkfs/, 'mkfs'],
-  [/\bfdisk\b|\bparted\b/, '磁盘分区操作'],
-  [/\bdrop\s+(table|database|schema|index)\b/i, 'drop'],
-  [/\btruncate\b/, 'truncate'],
-  [/\bchmod\b/, 'chmod'],
-  [/\bchown\b/, 'chown'],
-  [/\bmv\b/, 'mv'],
-  [/\bcp\b/, 'cp'],
-  [/\btee\b/, 'tee(写文件)'],
-  [/\b(apt-get|apt|yum|dnf)\s+install\b|\bapk\s+add\b/, '包安装'],
-  [/\b(apt-get|apt|yum|dnf)\s+(remove|purge)\b/, '包移除'],
-  [/\bapk\s+del\b/, '包移除'],
-  [/\bsystemctl\s+(stop|disable|restart|mask)\b/, 'systemctl 停/禁/重启'],
-  [/\bservice\s+\S+\s+(stop|restart)\b/, 'service 停/重启'],
-  [/\buserdel\b|\busermod\b|\buseradd\b/, '用户管理'],
-  [/\bcrontab\b/, 'crontab'],
-  [/\biptables\b|\bfirewall-cmd\b|\bufw\b/, '防火墙变更'],
-  [/(?<!>)>(?!>)(?!&)/, '重定向覆盖(>)'],
-]
+/** 后端 POST /agent/safety/classify 的单条结论（取用到的字段；SafetyClassifyResult 的结构子集） */
+export interface BulkSafetyVerdict {
+  level: 'hardline' | 'dangerous' | 'safe'
+  reason: string
+  explain: string
+}
 
 /**
- * 检测命令中的危险操作，返回命中的危险项描述列表（空数组 = 视为只读/低风险）。
- * 覆盖 `;` `&&` `|` 串联与括号子命令（词边界正则天然匹配串内任意位置）。
+ * 批量下发执行前的分支决策。
+ *
+ * - verdict 为 null（判定接口不可达）→ block：fail-closed。这里是「一个人的动作 × N 台」
+ *   的放大点，未判定的命令不允许下发。
+ * - hardline → block：不提供「确认执行」，与 AI 通道上 FilesystemGuard 的无条件阻断同口径。
+ * - dangerous，或目标是生产环境 → confirm：由调用方弹二次确认框。
+ * - 其余 → run。
+ *
+ * @param prodHosts 目标节点中 environment==='prod' 的主机名
  */
-export function detectDangerousCommand(cmd: string): string[] {
-  const c = (cmd || '').toLowerCase()
-  if (!c.trim()) return []
-  const hits: string[] = []
-  for (const [re, label] of DANGEROUS_PATTERNS) {
-    if (re.test(c) && !hits.includes(label)) hits.push(label)
+export function decideBulkDispatch(
+  cmd: string,
+  verdict: BulkSafetyVerdict | null,
+  prodHosts: string[],
+): { action: 'run' } | { action: 'confirm'; warnings: string[] } | { action: 'block'; title: string; lines: string[] } {
+  if (!verdict) {
+    return {
+      action: 'block',
+      title: '无法完成安全判定',
+      lines: [
+        '后端风险判定接口不可用，已拒绝下发。',
+        '未判定的命令不允许批量打到节点上，请确认后端服务在运行后重试。',
+      ],
+    }
   }
-  return hits
+  if (verdict.level === 'hardline') {
+    return {
+      action: 'block',
+      title: '命令被安全底线阻止',
+      lines: [cmd, '', `判定：hardline（${verdict.reason}）`, verdict.explain, '', '底线命令即使单台也不允许经批量通道下发。'],
+    }
+  }
+  const warnings: string[] = []
+  if (prodHosts.length) warnings.push(`目标包含 ${prodHosts.length} 台生产环境主机：${prodHosts.join('、')}`)
+  if (verdict.level === 'dangerous') warnings.push(`命令存在风险：${verdict.explain || verdict.reason}`)
+  if (warnings.length === 0) return { action: 'run' }
+  return { action: 'confirm', warnings }
 }
