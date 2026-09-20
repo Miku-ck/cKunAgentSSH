@@ -1228,7 +1228,9 @@ def allow_tool_permission(req: AllowPermissionRequest):
         from agent.audit import append_record
         append_record(
             action=f"permission_allow_manual:{req.tool}",
-            conclusion="granted",
+            # "granted" 不在 audit.append_record 的结论枚举里，会被静默改写为 "executed"
+            # —— 手动登记永久授权就伪装成了"执行过一条命令"。用同义且在枚举内的值。
+            conclusion="approved",
             target_type="tool",
             target_id=req.command or req.tool,
             command_raw=req.command or "",
