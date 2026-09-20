@@ -6,7 +6,7 @@ from skill_registry import get_skill_registry
 
 logger = logging.getLogger(__name__)
 
-_MAX_CONTENT_LEN = 3000
+_MAX_CONTENT_LEN = 12000
 
 
 class LoadSkillTool(BaseTool):

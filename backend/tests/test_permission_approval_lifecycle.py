@@ -180,3 +180,22 @@ def test_driver_releases_pending_on_success():
     assert sig not in ctx.metadata.get("permission_pending", {}), (
         "命令执行成功后必须移除「等待审批」标记"
     )
+
+
+def test_cleanup_run_once_isolated_across_concurrent_runs():
+    """回归：run 开始时的防御性清理不得误伤并发 run 在途的 once 授权。
+
+    修复前 driver 每次 run 开始调全局 clear_once()，并发 run B 启动会静默
+    清掉 run A 用户已批的"仅本次"授权（"点了允许却仍被拦"跨会话复现）。
+    修复后 once 池按 run_id 键控，run 开始只清理本 run_id 的残留池。
+    """
+    gate = PermissionGate()
+    gate.grant("shell_exec", scope="once", command=CMD, run_id="run-A")
+
+    # run-B 启动：只清 run-B 自己的（此时为空的）池
+    assert gate.cleanup_run_once("run-B") == 0
+    # run-A 的 once 授权必须存活，且消费一次后失效
+    assert gate.check_permission("shell_exec", {"command": CMD},
+                                 risk="dangerous", run_id="run-A") is True
+    assert gate.check_permission("shell_exec", {"command": CMD},
+                                 risk="dangerous", run_id="run-A") is False

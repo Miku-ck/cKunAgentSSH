@@ -2,6 +2,7 @@
 模型与设置路由 — 模型配置 CRUD + 连接测试
 """
 import asyncio
+import os
 from typing import Optional, Literal
 
 from fastapi import APIRouter, HTTPException, Query
@@ -343,3 +344,36 @@ def update_post_process_settings(req: PostProcessSettingsRequest):
         "extract_memory": cfg.extract_memory,
         "generate_skill": cfg.generate_skill,
     }
+
+
+# ── 网络工具密钥（Tavily 等）──
+
+
+@router.get("/settings/web-tools")
+def get_web_tools_settings():
+    """获取网络工具配置。密钥只回传掩码值与来源，不回传明文。"""
+    env_key = (os.environ.get("TAVILY_API_KEY") or "").strip()
+    db_key = (db.get_app_setting("web.tavily_api_key") or "").strip()
+    active = env_key or db_key
+    source = "env" if env_key else ("db" if db_key else "")
+    return {
+        "tavily_api_key_set": bool(active),
+        "tavily_api_key_masked": (active[:4] + "…" + active[-4:]) if len(active) > 12 else ("已设置" if active else ""),
+        "tavily_api_key_source": source,
+    }
+
+
+class WebToolsSettingsRequest(BaseModel):
+    tavily_api_key: str = Field(..., max_length=256,
+                                description="Tavily API Key；传空字符串 = 清除已存密钥")
+
+
+@router.put("/settings/web-tools")
+def update_web_tools_settings(req: WebToolsSettingsRequest):
+    """保存/清除 Tavily API Key（存 app_settings；环境变量优先级更高）"""
+    key = req.tavily_api_key.strip()
+    if key:
+        db.set_app_setting("web.tavily_api_key", key)
+    else:
+        db.set_app_setting("web.tavily_api_key", "")
+    return get_web_tools_settings()

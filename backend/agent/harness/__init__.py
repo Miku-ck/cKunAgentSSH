@@ -9,10 +9,11 @@ Harness — 驾驭工程框架
 - Reins    缰绳 — 策略点 + 拦截器（统一 hooks/permissions/self_monitor）
 - Saddle   马鞍 — 工具执行 + 沙箱 + Undo
 - Stirrups 马镫 — 错误恢复 + LLM 重试 + 回滚
-- Stables  马厩 — 长期记忆
-- Forge    锻造炉 — 反思 + 演化
-- Pasture  牧场 — 后台心智维护
 - TelemetryBus 遥测总线 — 统一事件流
+
+注：长期记忆（agent.memory）、反思/演化（agent.reflection / agent.evolution）
+与后台维护（agent.consciousness_tick）是 Harness 外围模块，不属于本包组件，
+勿在此虚构对应命名。
 """
 
 from .harness import Harness, HarnessConfig

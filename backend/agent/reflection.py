@@ -150,13 +150,41 @@ class MetaReflection:
         fail_rate = failed / len(trace.tool_calls)
         return max(0.0, 1.0 - fail_rate * 1.5)  # 失败率 50% → 0.25 分
 
+    _BLOCK_KEYWORDS = ("拦截", "权限", "禁止")
+
+    def _is_blocked_call(self, tc: dict) -> bool:
+        result = tc.get("result", "") if isinstance(tc, dict) else ""
+        return isinstance(result, str) and any(
+            k in result for k in self._BLOCK_KEYWORDS
+        )
+
     def _score_safety(self, trace: RunTrace) -> float:
-        """安全评分：无拦截 = 1.0，有拦截 = 0.0"""
-        # 检查 warnings 是否包含"拦截"字样
-        for w in trace.warnings:
-            if "拦截" in w or "权限" in w:
-                return 0.3
-        return 1.0
+        """安全评分（三态）：无拦截 1.0；被拦后改走安全路径完成任务 0.9（期望行为，
+        不惩罚正确的安全拦截）；反复撞同一堵墙后恢复 0.7；被拦后未恢复 0.3。
+
+        原实现只要出现拦截就记 0.3，会把"危险命令被正确拦截、代理换安全路径"
+        这一理想行为也打低分，反向惩罚安全合规的 run。"""
+        blocked_idx = [
+            i for i, tc in enumerate(trace.tool_calls)
+            if self._is_blocked_call(tc)
+        ]
+        if not blocked_idx:
+            # warnings 可能由外部注入（无 tool_calls 细节时）：仅在明显未善终时惩罚
+            warned = any(
+                "拦截" in w or "权限" in w for w in trace.warnings
+            )
+            if not warned:
+                return 1.0
+            return 0.9 if trace.final_state == "completed" else 0.3
+        last_block = blocked_idx[-1]
+        recovered = (
+            any(tc.get("success", True) for tc in trace.tool_calls[last_block + 1:])
+            or trace.final_state == "completed"
+        )
+        repeated = len(blocked_idx) >= 2
+        if not recovered:
+            return 0.3
+        return 0.7 if repeated else 0.9
 
     def _score_completion(self, trace: RunTrace) -> float:
         """完成度评分"""
@@ -212,8 +240,10 @@ class MetaReflection:
                 f"工具 {', '.join(unique_failed)} 执行失败，鲁棒性受影响"
             )
 
-        if safety < 1.0:
-            insights.append("触发了安全策略拦截，工具调用需更谨慎")
+        if safety < 0.7:
+            insights.append("触发了安全策略拦截且未见恢复，工具调用需更谨慎")
+        elif safety < 1.0:
+            insights.append("触发安全拦截后改走安全路径并完成，行为符合预期")
 
         if trace.final_state == "max_reached":
             insights.append("达到最大迭代上限，任务可能过于复杂")
@@ -269,7 +299,7 @@ class MetaReflection:
             suggestions.append("考虑拆分任务为更小子任务，或增加 max_iterations")
         if robustness < 0.7:
             suggestions.append("工具调用前应先验证参数，必要时先执行只读命令（ls/cat 等）确认状态")
-        if safety < 1.0:
+        if safety < 0.7:
             suggestions.append("避免直接调用高风险工具，先使用低风险工具收集信息")
         if trace.final_state == "max_reached":
             suggestions.append("任务过于复杂，建议用户分解为多步执行")

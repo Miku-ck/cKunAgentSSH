@@ -475,10 +475,22 @@ export class BackendManager {
   }
 
   /**
-   * 获取 Python 命令
-   * 优先使用系统 Python，后续可改为嵌入式 Python
+   * 获取 Python 命令，解析顺序：
+   * 1. CKUN_PYTHON 环境变量（开发/排障显式指定）
+   * 2. 打包后的内嵌运行时 resources/python-runtime/（构建时由 scripts/package.js
+   *    把仓库根 runtime/ 拷入 extraResources；Portable Python 解压到此目录）
+   * 3. 系统 python / python3（回退 — 与 README「未内嵌运行时的源码构建」一致）
    */
   private getPythonCommand(): string {
+    const envOverride = process.env.CKUN_PYTHON?.trim()
+    if (envOverride && existsSync(envOverride)) return envOverride
+    if (app.isPackaged) {
+      const bundled =
+        process.platform === 'win32'
+          ? join(process.resourcesPath, 'python-runtime', 'python.exe')
+          : join(process.resourcesPath, 'python-runtime', 'bin', 'python3')
+      if (existsSync(bundled)) return bundled
+    }
     return process.platform === 'win32' ? 'python' : 'python3'
   }
 

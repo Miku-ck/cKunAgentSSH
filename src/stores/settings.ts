@@ -25,6 +25,7 @@ export type SettingCategory =
   | 'models'
   | 'chat'
   | 'appearance'
+  | 'skills'
   | 'agent'
 
 export interface AppSettings {
@@ -40,6 +41,10 @@ export interface AppSettings {
   agent: {
     maxIterations: number
     dynamicBudget: boolean
+    /** 单次 run 成本熔断上限（USD），0 = 使用后端默认 */
+    maxCostUsd: number
+    /** 单次 run token 熔断上限，0 = 使用后端默认 */
+    maxTotalTokens: number
   }
   postProcess: {
     enabled: boolean
@@ -111,6 +116,8 @@ export const useSettingsStore = defineStore('settings', () => {
     agent: {
       maxIterations: saved?.agent?.maxIterations ?? 100,
       dynamicBudget: saved?.agent?.dynamicBudget ?? true,
+      maxCostUsd: saved?.agent?.maxCostUsd ?? 0,
+      maxTotalTokens: saved?.agent?.maxTotalTokens ?? 0,
     },
     postProcess: {
       enabled: saved?.postProcess?.enabled ?? true,

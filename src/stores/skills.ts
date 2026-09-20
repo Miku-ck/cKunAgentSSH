@@ -451,7 +451,7 @@ export const useSkillStore = defineStore('skills', () => {
     const selected = skills.value.filter(s => skillIds.includes(s.id) && s.enabled)
     if (selected.length === 0) return ''
     return selected.map(s =>
-      `以下是一个名为「${s.name}」的技能提供的参考信息：\n---技能内容开始---\n${s.content.slice(0, 3000)}\n---技能内容结束---`
+      `以下是一个名为「${s.name}」的技能提供的参考信息：\n---技能内容开始---\n${s.content.slice(0, 12000)}\n---技能内容结束---`
     ).join('\n\n')
   }
 

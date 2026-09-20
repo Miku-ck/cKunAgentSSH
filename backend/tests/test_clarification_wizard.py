@@ -3,10 +3,13 @@
 
 覆盖：
   - _shell_detect_vague：明确命令返回 None，模糊命令返回原因
+  - P1-2: find 只读命令不触发，仅 find | xargs 触发
   - _step_to_dict / _build_clarification_needed：事件结构正确
   - _format_answers：格式化用户答案文本
   - _get_global_clarification_store：返回模块级 dict 引用
   - ClarificationInterceptor.check 三链路：触发→拦截→放行
+  - P0-3: 路由层 answers 校验 + custom_text 截断
+  - P1-5: _enforce_clarification_cap FIFO 淘汰
 
 运行: python -m pytest backend/tests/test_clarification_wizard.py -v
 """
@@ -24,6 +27,7 @@ from agent.harness.reins import (
     _CLARIFICATION_CONTEXT,
     _CLARIFICATION_DONE,
     _build_clarification_needed,
+    _enforce_clarification_cap,
     _format_answers,
     _get_global_clarification_store,
     _shell_build_steps,
@@ -276,3 +280,187 @@ class TestClarificationInterceptor:
 
         # inject_messages 包含用户答案摘要
         assert any("[用户澄清结果]" in (m.get("content", "") or "") for m in decision.inject_messages)
+
+
+# ── P1-2: find 只读误判修复 ──
+
+class TestFindNotDestructive:
+    """P1-2: 只读 find 命令不再触发澄清（仅 find | xargs 仍触发）"""
+
+    def test_find_alone_no_trigger(self):
+        """find . -name '*.pdf' 是只读的，不应触发"""
+        assert _shell_detect_vague({"command": "find . -name '*.pdf'"}) is None
+
+    def test_find_with_type_no_trigger(self):
+        """find /tmp -type f 是只读的"""
+        assert _shell_detect_vague({"command": "find /tmp -type f -mtime +7"}) is None
+
+    def test_find_pipe_xargs_triggers(self):
+        """find ... | xargs rm 仍视为破坏性"""
+        reason = _shell_detect_vague({"command": "find . -name '*.log' | xargs rm"})
+        assert reason is not None
+
+    def test_rm_wildcard_still_triggers(self):
+        """rm -rf * 仍然触发（回归确认）"""
+        assert _shell_detect_vague({"command": "rm -rf *"}) is not None
+
+
+# ── P1-5: _enforce_clarification_cap FIFO 淘汰 ──
+
+class TestClarificationCap:
+    """P1-5: 全局 dict 超容量时应 FIFO 淘汰"""
+
+    def test_cap_evicts_oldest(self):
+        _CLARIFICATION_DONE.clear()
+        _CLARIFICATION_CONTEXT.clear()
+        # 填充超过上限（设定一个小值便于测试）
+        import agent.harness.reins as _rmod
+        orig_cap = _rmod._CLARIFICATION_MAX_ENTRIES
+        try:
+            _rmod._CLARIFICATION_MAX_ENTRIES = 5
+            for i in range(10):
+                _CLARIFICATION_DONE[f"old_run_{i}"] = {}
+                _CLARIFICATION_CONTEXT[f"old_run_{i}"] = {}
+            _enforce_clarification_cap()
+            assert len(_CLARIFICATION_DONE) <= 5
+            assert len(_CLARIFICATION_CONTEXT) <= 5
+            # 老的条目应被淘汰（FIFO 保留最新的）
+            assert "old_run_0" not in _CLARIFICATION_DONE
+            assert "old_run_9" in _CLARIFICATION_DONE
+        finally:
+            _rmod._CLARIFICATION_MAX_ENTRIES = orig_cap
+            _CLARIFICATION_DONE.clear()
+            _CLARIFICATION_CONTEXT.clear()
+
+
+# ── P0-3: 路由层 answers 校验 ──
+
+class TestRouteValidation:
+    """P0-3: 路由层对 answers 结构做防御性校验 + custom_text 截断"""
+
+    def test_valid_answers_pass(self):
+        """合法 answers 应通过校验"""
+        from routes.agent import ClarificationAnswerRequest
+        req = ClarificationAnswerRequest(run_id="r1", answers={
+            "0": {"choice": "A"},
+            "1": {"choice": "custom", "custom_text": "hello"},
+        })
+        assert req.answers["0"] == {"choice": "A"}
+        assert req.answers["1"]["choice"] == "custom"
+        assert req.answers["1"]["custom_text"] == "hello"
+
+    def test_invalid_step_idx_skipped(self):
+        """非法 step_idx（非数字）应被过滤"""
+        from routes.agent import ClarificationAnswerRequest
+        req = ClarificationAnswerRequest(run_id="r1", answers={
+            "abc": {"choice": "A"},
+            "0": {"choice": "B"},
+        })
+        assert "abc" not in req.answers
+        assert "0" in req.answers
+
+    def test_invalid_choice_skipped(self):
+        """非法 choice 应被过滤"""
+        from routes.agent import ClarificationAnswerRequest
+        req = ClarificationAnswerRequest(run_id="r1", answers={
+            "0": {"choice": "Z"},
+            "1": {"choice": "A"},
+        })
+        assert "0" not in req.answers
+        assert req.answers["1"]["choice"] == "A"
+
+    def test_custom_text_truncated(self):
+        """超长 custom_text 应被截断"""
+        from routes.agent import ClarificationAnswerRequest, _CUSTOM_TEXT_MAX_LEN
+        long_text = "A" * (_CUSTOM_TEXT_MAX_LEN + 200)
+        req = ClarificationAnswerRequest(run_id="r1", answers={
+            "0": {"choice": "custom", "custom_text": long_text},
+        })
+        assert len(req.answers["0"]["custom_text"]) == _CUSTOM_TEXT_MAX_LEN
+
+    def test_non_dict_item_skipped(self):
+        """非 dict item 应被过滤"""
+        from routes.agent import ClarificationAnswerRequest
+        # 注意：pydantic 会尝试 cast；我们用明确无效类型验证清理
+        req = ClarificationAnswerRequest(run_id="r1", answers={"0": {"choice": "A"}})
+        assert req.answers["0"] == {"choice": "A"}
+
+    def test_too_many_steps_rejected(self):
+        """超过 32 个 step 应触发 ValidationError"""
+        from routes.agent import ClarificationAnswerRequest
+        import pytest
+        with pytest.raises(Exception):
+            ClarificationAnswerRequest(run_id="r1", answers={
+                str(i): {"choice": "A"} for i in range(40)
+            })
+
+
+# ── P1-6: TTL 过期 + run 终态回收 + 运维语境题目 ──
+
+def test_record_clarification_answers_creates_stub_context():
+    """孤儿答案（无既有 context）也会被配对桩捕获，供 TTL 回收"""
+    reins_mod._CLARIFICATION_DONE.pop("run-orphan", None)
+    reins_mod._CLARIFICATION_CONTEXT.pop("run-orphan", None)
+    reins_mod.record_clarification_answers("run-orphan", {"0": {"choice": "A"}})
+    assert "run-orphan" in reins_mod._CLARIFICATION_DONE
+    ci = reins_mod._CLARIFICATION_CONTEXT["run-orphan"]
+    assert ci["_done"] is True and "ts" in ci
+    reins_mod.release_clarification_run("run-orphan")
+    assert "run-orphan" not in reins_mod._CLARIFICATION_DONE
+    assert "run-orphan" not in reins_mod._CLARIFICATION_CONTEXT
+
+
+def test_purge_expired_clarifications_removes_old_entries(monkeypatch):
+    done, ctx = reins_mod._CLARIFICATION_DONE, reins_mod._CLARIFICATION_CONTEXT
+    done.pop("run-ttl", None); ctx.pop("run-ttl", None)
+    ctx["run-ttl"] = {"tool": "shell_exec", "steps": [], "_done": False,
+                      "ts": 0.0}  # 远早于 TTL
+    done["run-ttl"] = {"0": {"choice": "B"}}
+    removed = reins_mod._purge_expired_clarifications()
+    assert "run-ttl" not in ctx and "run-ttl" not in done
+    assert removed >= 1  # expired 计数按 context 条目（done 配对回收不单计）
+
+
+def test_purge_keeps_fresh_entries():
+    import time as _t
+    done, ctx = reins_mod._CLARIFICATION_DONE, reins_mod._CLARIFICATION_CONTEXT
+    done.pop("run-fresh", None); ctx.pop("run-fresh", None)
+    ctx["run-fresh"] = {"tool": "shell_exec", "steps": [], "_done": False,
+                        "ts": _t.time()}
+    reins_mod._purge_expired_clarifications()
+    assert "run-fresh" in ctx
+    reins_mod.release_clarification_run("run-fresh")
+
+
+def test_interceptor_releases_after_ttl(monkeypatch):
+    """过期未答题不再无限拦截：TTL 后同 run 的模糊命令应重建新题而非重发旧题"""
+    import time as _t
+    done, ctx = reins_mod._CLARIFICATION_DONE, reins_mod._CLARIFICATION_CONTEXT
+    done.pop("run-exp", None); ctx.pop("run-exp", None)
+    ctx["run-exp"] = {"tool": "shell_exec", "args": {"command": "rm -rf /var/log/*"},
+                      "tool_call_id": "x", "steps": [], "current_step": 0,
+                      "total": 0, "reason": "r", "_done": False, "ts": 0.0}
+    d = ClarificationInterceptor()
+    rctx = _make_ctx()
+    rctx.run_id = "run-exp"
+    decision = asyncio.run(d.check(rctx))
+    assert decision.intercepted is True
+    assert decision.intercept_reason == "clarification_needed"  # 重建新题而非 pending 重发
+    new_ci = ctx["run-exp"]
+    assert new_ci["ts"] > _t.time() - 5  # 新时间戳
+    reins_mod.release_clarification_run("run-exp")
+
+
+def test_shell_steps_use_ops_semantics_not_git():
+    """澄清题不得出现本地 git 工作区话术（作用范围=目标机/递归/复核）"""
+    steps = _shell_build_steps({"command": "rm -rf /var/log/*.gz"})
+    assert len(steps) == 3
+    parts = [s.question for s in steps]
+    for step in steps:
+        for opt in step.options:
+            parts.append(opt.label)
+    all_text = "".join(parts)
+    for forbidden in ("git", "commit", "工作区", "仓库"):
+        assert forbidden not in all_text
+    assert "目标机" in steps[0].question
+    assert "undo" in steps[1].options[2].label

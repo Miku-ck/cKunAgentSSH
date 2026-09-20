@@ -994,10 +994,6 @@ class PermissionGate:
                 self._revoke_key(k, conversation_id)
         self._save_permanent_allowlist()
 
-    def clear_once(self) -> None:
-        """清空 once 范围（每次工具调用后调用）"""
-        self._confirmed_once.clear()
-
     def load_overrides(self, overrides: dict[str, str]) -> None:
         """从 DB 加载用户自定义权限覆盖"""
         self._overrides.update(overrides)
@@ -1367,6 +1363,13 @@ class ReflectionRein:
                                  ctx.run_id, denied_count)
             except Exception:
                 logger.warning("ReflectionRein: denied 清理异常（不阻塞反思）", exc_info=True)
+
+        # P1-6: run 终态回收澄清状态 — 未答完的题随 run 作废，不留到下个 run
+        try:
+            if release_clarification_run(ctx.run_id):
+                logger.debug("ReflectionRein: 回收 run %s 的澄清状态", ctx.run_id)
+        except Exception:
+            logger.warning("ReflectionRein: 澄清回收异常（不阻塞反思）", exc_info=True)
 
         # 统计工具调用摘要（避免传完整 tool_calls_log 进 payload，太重）
         tool_calls_log = ctx.tool_calls_log or []
@@ -1757,11 +1760,78 @@ def create_default_reins(
 # ──────────────────────────────────────────────────────────────────────────────
 
 import re as _re
+import uuid as _uuid
 
 # run_id → 已回答答案 dict {step_idx: {choice, custom_text}}
 _CLARIFICATION_DONE: dict[str, dict] = {}
 # run_id → 整治中题元信息（含 steps）；_done=True 表示答案就绪待注入
 _CLARIFICATION_CONTEXT: dict[str, dict] = {}
+
+# P1-5: 全局 pending 容量上限，超限时 FIFO 淘汰最老条目（防内存泄漏）
+_CLARIFICATION_MAX_ENTRIES = 128
+# P1-6: 未完成的澄清 10 分钟过期 — 用户中途关窗/跑题后，
+# 残留 pending 题不再让后续 PRE_TOOL_CALL 无限重发拦截
+_CLARIFICATION_TTL_SEC = 600
+
+
+def _purge_expired_clarifications() -> int:
+    """清理超过 TTL 的澄清条目（context 与配对的 done），返回清理条数"""
+    now = time.time()
+    expired = [
+        rid for rid, ci in _CLARIFICATION_CONTEXT.items()
+        if now - float(ci.get("ts", now)) > _CLARIFICATION_TTL_SEC
+    ]
+    for rid in expired:
+        _CLARIFICATION_CONTEXT.pop(rid, None)
+        _CLARIFICATION_DONE.pop(rid, None)
+    # done 必与 context 配对（record_clarification_answers 保证桩），孤儿一并回收
+    orphans = [rid for rid in _CLARIFICATION_DONE
+               if rid not in _CLARIFICATION_CONTEXT]
+    for rid in orphans:
+        _CLARIFICATION_DONE.pop(rid, None)
+    return len(expired) + len(orphans)
+
+
+def record_clarification_answers(run_id: str, answers: dict) -> None:
+    """路由层写入答案/跳过结果。
+
+    统一维护 done + context 配对与时间戳：无既有 context（run 已换新/题已清）
+    时补最小桩，保证 TTL 清扫能找到并回收孤儿答案。
+    """
+    _CLARIFICATION_DONE[run_id] = answers
+    ctx_info = _CLARIFICATION_CONTEXT.get(run_id)
+    if ctx_info is None:
+        _CLARIFICATION_CONTEXT[run_id] = {
+            "tool": "", "args": {}, "steps": [], "current_step": 0,
+            "total": 0, "reason": "", "_done": True, "ts": time.time(),
+        }
+    else:
+        ctx_info["_done"] = True
+        ctx_info.setdefault("ts", time.time())
+    _enforce_clarification_cap()
+
+
+def release_clarification_run(run_id: str) -> bool:
+    """run 终态回收该 run 的澄清状态（未答完的题随 run 作废）"""
+    had = _CLARIFICATION_CONTEXT.pop(run_id, None) is not None
+    had = _CLARIFICATION_DONE.pop(run_id, None) is not None or had
+    return had
+
+
+def _enforce_clarification_cap():
+    """FIFO 淘汰最老的 done/context 条目，保持总规模可控"""
+    while len(_CLARIFICATION_DONE) > _CLARIFICATION_MAX_ENTRIES:
+        try:
+            oldest = next(iter(_CLARIFICATION_DONE))
+            _CLARIFICATION_DONE.pop(oldest, None)
+        except StopIteration:
+            break
+    while len(_CLARIFICATION_CONTEXT) > _CLARIFICATION_MAX_ENTRIES:
+        try:
+            oldest = next(iter(_CLARIFICATION_CONTEXT))
+            _CLARIFICATION_CONTEXT.pop(oldest, None)
+        except StopIteration:
+            break
 
 
 def _shell_detect_vague(args: dict) -> Optional[str]:
@@ -1777,10 +1847,14 @@ def _shell_detect_vague(args: dict) -> Optional[str]:
     if not cmd or not isinstance(cmd, str):
         return None
     lower = cmd.strip().lower()
-    # 1) 含破坏性动词
-    _DESTRUCTIVE = ("rm ", "rm\t", "rmdir ", "rmdir\t", "find ", "xargs ", "chmod", "chown")
+    # 1) 含破坏性动词（P1-2: find 已从 _DESTRUCTIVE 移除——只读命令不触发；
+    #    仅当 find 管道接 xargs 时视为潜在破坏性，在下方单独判定）
+    _DESTRUCTIVE = ("rm ", "rm\t", "rmdir ", "rmdir\t", "xargs ", "chmod", "chown")
     if not any(v in lower for v in _DESTRUCTIVE):
-        return None
+        if "find " in lower and "| xargs" in lower:
+            pass  # find ... | xargs → 继续走后续递归/通配符判断
+        else:
+            return None
     # 2) 含通配符或递归标记（-rR 可能以 -rf/-fr/-rR 组合形式出现，做宽松匹配）
     has_wildcard = any(c in cmd for c in ("*", "?"))
     # 匹配 -r / -R / -rf / -fr / -rR 等任何含 r/R 的短选项 token
@@ -1792,18 +1866,22 @@ def _shell_detect_vague(args: dict) -> Optional[str]:
 
 
 def _shell_build_steps(args: dict) -> list[ClarificationStep]:
-    """为模糊 shell 命令构建 3 步澄清题（范围 / 处置方式 / 完成后）"""
+    """为模糊 shell 命令构建 3 步澄清题（范围 / 处置方式 / 完成后）。
+
+    面向 SSH 远程运维语境：目标是远端主机上的文件，措辞不得假设本地
+    git 工作区（原实现选项为"仅 git 已修改文件/自动 commit"，与场景错位）。
+    """
     cmd = ""
     if isinstance(args, dict):
         cmd = args.get("command") or args.get("shell") or args.get("cmd") or ""
     cmd_display = (cmd[:40] + "…") if len(str(cmd)) > 40 else str(cmd)
     return [
         ClarificationStep(
-            question=f"\"{cmd_display}\" 的作用范围是？",
+            question=f"\"{cmd_display}\" 在目标机上的作用范围是？",
             options=[
-                ClarificationOption(id="A", label="仅 git 已修改的文件（影响最小、最可控）"),
-                ClarificationOption(id="B", label="整个工作区全仓库扫描清理"),
-                ClarificationOption(id="C", label="我指定的特定文件或路径（运行时再列出）"),
+                ClarificationOption(id="A", label="仅通配符所在目录一层，不递归子目录（影响最小）"),
+                ClarificationOption(id="B", label="含全部子目录（按命令中的递归语义执行）"),
+                ClarificationOption(id="C", label="我指定确切路径（在自定义输入中列出）"),
             ],
             allow_custom=True,
         ),
@@ -1819,9 +1897,9 @@ def _shell_build_steps(args: dict) -> list[ClarificationStep]:
         ClarificationStep(
             question="执行完成后？",
             options=[
-                ClarificationOption(id="A", label="保持现状，不提交任何变更"),
-                ClarificationOption(id="B", label="自动生成 diff 摘要供我审查后再决定"),
-                ClarificationOption(id="C", label="清理完成后自动提交为新 commit"),
+                ClarificationOption(id="A", label="直接结束，无需汇报"),
+                ClarificationOption(id="B", label="用只读命令（ls/du 等）复核结果并给出前后对比"),
+                ClarificationOption(id="C", label="汇总受影响文件清单与释放空间报告供我审查"),
             ],
             allow_custom=True,
         ),
@@ -1903,6 +1981,9 @@ class ClarificationInterceptor:
         if not ctx.tool_calls_log:
             return ReinDecision()
 
+        # P1-6: 每轮先回收过期澄清（O(n) 小字典，n≤128）
+        _purge_expired_clarifications()
+
         tc = ctx.tool_calls_log[-1]
         run_id = ctx.run_id
         tool = tc.get("tool", "")
@@ -1966,13 +2047,15 @@ class ClarificationInterceptor:
             return ReinDecision()   # 未配置题目：直达执行
 
         # 创建 Pending 题元 + 发首步事件 + 拦截
-        tool_call_id = str(len(ctx.tool_calls_log))
+        # P1-3: 使用 uuid 防止 tool_call_id 在多个工具调用时碰撞
+        tool_call_id = f"clarify_{_uuid.uuid4().hex[:12]}"
         ctx_info = {
             "tool": tool, "args": args, "tool_call_id": tool_call_id,
             "steps": steps, "current_step": 0, "total": len(steps),
-            "reason": reason, "_done": False,
+            "reason": reason, "_done": False, "ts": time.time(),
         }
         _CLARIFICATION_CONTEXT[run_id] = ctx_info
+        _enforce_clarification_cap()
         ev = _build_clarification_needed(
             run_id, tool, args, steps, 0, len(steps), tool_call_id,
             reason=reason,

@@ -56,17 +56,16 @@ class Driver:
         telemetry = harness.telemetry
         tools_schema = harness.saddle.schemas() if ctx.config.enable_tools else []
 
-        # C-review M8 修复：run 开始时清空遗留 once 授权（原实现在每轮迭代
-        # 结束时清空，与审批存在时序竞态：permission_needed 发出后、本轮
-        # 迭代结束前用户点"仅本次"，授权被静默清掉，下一轮重发仍被拦 →
-        # "点了允许却仍被拦"）。现在 once 授权在消费时移除
-        # （PermissionGate.check_permission 计数递减），此处仅负责防上个
-        # run 的过期授权泄漏进新 run。
+        # C-review M8 修复：once 授权在消费时移除（check_permission 计数递减），
+        # run 终态由 ReflectionRein.cleanup_run_once 回收。此处只防御性清理
+        # 本 run_id 的残留池（上次进程崩溃时 AGENT_COMPLETE 未触发的情形）。
+        # 原先调用全局 clear_once() 会误清并发会话在途 run 的 once 授权 —
+        # once 池已按 run_id 键控，跨 run 泄漏已由键控本身消除。
         try:
             from .reins import _get_global_permission_gate_sync
-            _get_global_permission_gate_sync().clear_once()
+            _get_global_permission_gate_sync().cleanup_run_once(ctx.run_id)
         except Exception as e:
-            logger.warning("clear_once 失败: %s", e)
+            logger.warning("cleanup_run_once 失败: %s", e)
 
         # ── agent_start ──
         await harness.reins.check(ReinPoint.AGENT_START, ctx)

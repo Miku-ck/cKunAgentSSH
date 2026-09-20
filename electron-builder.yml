@@ -22,8 +22,14 @@ extraResources:
       - '!__pycache__/**'
       - '!**/__pycache__/**'
       - '!*.pyc'
+  # 内嵌 Python 运行时：把 Portable Python 解压到仓库根 runtime/ 即可随包分发到
+  # resources/python-runtime/（解析逻辑见 electron/backend-manager.ts getPythonCommand）。
+  # 该条目由 scripts/package.js 在 runtime/ 有实际内容时动态追加（-c.extraResources），
+  # 未准备运行时时打警告并跳过 — 打包机回退系统 Python，不阻断构建。
 win:
   executableName: cKunAgentSSH
+  # resources/icon.png（buildResources）— electron-builder 自动生成多尺寸 .ico
+  icon: resources/icon.png
   target:
     - nsis
     - portable

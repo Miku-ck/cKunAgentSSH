@@ -6,6 +6,46 @@
     </header>
 
     <div class="panel-body">
+      <!-- ── 运行预算 ── -->
+      <section class="grp">
+        <button class="grp-head" @click="open.budget = !open.budget">
+          <span class="grp-caret" :class="{ open: open.budget }">▸</span>
+          <span class="grp-title">运行预算熔断</span>
+          <span class="grp-badge">{{ budgetSummary }}</span>
+        </button>
+        <div v-show="open.budget" class="grp-body">
+          <p class="hint">
+            每次 Agent 运行的成本上限（美元）与 token 上限。超出后 run 以
+            <code>budget_exceeded</code> 终止，已完成的工具效果保留。0 = 使用后端默认预算。
+          </p>
+          <div class="budget-row">
+            <label class="budget-field">
+              <span class="budget-label">成本上限（USD）</span>
+              <input
+                v-model.number="budget.maxCostUsd"
+                class="num-input"
+                type="number"
+                min="0"
+                step="0.1"
+                placeholder="0"
+              />
+            </label>
+            <label class="budget-field">
+              <span class="budget-label">Token 上限</span>
+              <input
+                v-model.number="budget.maxTotalTokens"
+                class="num-input"
+                type="number"
+                min="0"
+                step="10000"
+                placeholder="0"
+              />
+            </label>
+          </div>
+          <p class="hint muted">修改即时保存到本地设置，下一次运行生效（0 表示不覆盖后端默认）。</p>
+        </div>
+      </section>
+
       <!-- ── 工具开关 ── -->
       <section class="grp">
         <button class="grp-head" @click="open.tools = !open.tools">
@@ -52,6 +92,17 @@
             审批弹窗点"始终允许"后写入此白名单（持久化，进程重启仍生效）。撤销立即生效。
             <button class="link-btn" @click="loadPermissions">刷新</button>
           </p>
+          <div class="allow-row">
+            <input v-model.trim="allowTool" class="text-input" placeholder="工具名（如 shell_exec）" list="perm-tool-names" />
+            <datalist id="perm-tool-names">
+              <option v-for="t in tools" :key="t.name" :value="t.name" />
+            </datalist>
+            <input v-model.trim="allowCommand" class="text-input wide" placeholder="绑定命令（可选；省略 = 工具级授权）" />
+            <button class="btn" :disabled="!allowTool || allowing" @click="onAllow">
+              {{ allowing ? '登记中…' : '手动授权' }}
+            </button>
+          </div>
+          <p class="hint muted">命令工具建议填绑定命令：授权键是命令哈希绑定（改命令即失效）；hardline 底线命令不受白名单放行。</p>
           <p v-if="!permTools.length" class="hint muted">暂无永久授权</p>
           <div v-for="p in permTools" :key="p.tool" class="perm-row">
             <div class="tool-info">
@@ -61,6 +112,34 @@
             <button class="btn danger" :disabled="revoking === p.tool" @click="onRevoke(p.tool)">
               {{ revoking === p.tool ? '撤销中…' : '全部撤销' }}
             </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Web 搜索密钥 ── -->
+      <section class="grp">
+        <button class="grp-head" @click="open.webtools = !open.webtools">
+          <span class="grp-caret" :class="{ open: open.webtools }">▸</span>
+          <span class="grp-title">Web 搜索密钥</span>
+          <span class="grp-badge" :class="{ live: webTools.tavily_api_key_set }">
+            {{ webTools.tavily_api_key_set ? `已配置（${webTools.tavily_api_key_source === 'env' ? '环境变量' : '本地存储'}）` : '未配置' }}
+          </span>
+        </button>
+        <div v-show="open.webtools" class="grp-body">
+          <p class="hint">
+            web_search 工具优先走 Tavily（结构化摘要 + 答案），未配置密钥时自动降级
+            360/DuckDuckGo 免费搜索。环境变量 <code>TAVILY_API_KEY</code> 优先于此处的本地存储。
+          </p>
+          <div class="allow-row">
+            <input
+              v-model.trim="tavilyInput"
+              class="text-input wide"
+              type="password"
+              :placeholder="webTools.tavily_api_key_set ? `已设置：${webTools.tavily_api_key_masked}（留空不改）` : 'tvly-…'"
+              autocomplete="off"
+            />
+            <button class="btn" :disabled="tavilySaving || !tavilyInput" @click="onSaveTavily">保存</button>
+            <button v-if="webTools.tavily_api_key_set && webTools.tavily_api_key_source === 'db'" class="btn danger" :disabled="tavilySaving" @click="onClearTavily">清除</button>
           </div>
         </div>
       </section>
@@ -131,17 +210,30 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import {
   agentAdminApi,
+  api,
   toFriendlyMessage,
   type AgentToolInfo,
   type AgentStrategyItem,
   type TickStatusResponse,
 } from '@/api/client'
 import { useToastStore } from '@/stores/toast'
+import { useSettingsStore } from '@/stores/settings'
 import ToggleSwitch from '@/components/settings/fields/ToggleSwitch.vue'
 
 const toast = useToastStore()
+const settingsStore = useSettingsStore()
 
-const open = reactive({ tools: true, perm: false, strat: false })
+const open = reactive({ budget: false, tools: true, perm: false, strat: false, webtools: false })
+
+// ── 运行预算（写本地设置，ssh-ai store 在下次运行时读取并随请求传给后端） ──
+const budget = computed(() => settingsStore.settings.agent)
+const budgetSummary = computed(() => {
+  const { maxCostUsd, maxTotalTokens } = budget.value
+  const parts: string[] = []
+  if (maxCostUsd > 0) parts.push(`$${maxCostUsd}`)
+  if (maxTotalTokens > 0) parts.push(`${(maxTotalTokens / 1000).toFixed(0)}K tok`)
+  return parts.length ? parts.join(' / ') : '后端默认'
+})
 
 // ── 工具开关 ──
 const tools = ref<AgentToolInfo[]>([])
@@ -216,6 +308,71 @@ async function onRevoke(tool: string) {
   }
 }
 
+const allowTool = ref('')
+const allowCommand = ref('')
+const allowing = ref(false)
+
+async function onAllow() {
+  allowing.value = true
+  try {
+    await agentAdminApi.allowPermission(allowTool.value, allowCommand.value || undefined)
+    toast.success(`已登记「${allowTool.value}」永久授权`)
+    allowTool.value = ''
+    allowCommand.value = ''
+    await loadPermissions()
+  } catch (e) {
+    toast.error(`授权登记失败：${toFriendlyMessage(e)}`)
+  } finally {
+    allowing.value = false
+  }
+}
+
+// ── Tavily 密钥 ──
+const webTools = reactive({
+  tavily_api_key_set: false,
+  tavily_api_key_masked: '',
+  tavily_api_key_source: '' as 'env' | 'db' | '',
+})
+const tavilyInput = ref('')
+const tavilySaving = ref(false)
+
+async function loadWebTools() {
+  try {
+    const data = await api.getWebToolsSettings()
+    Object.assign(webTools, data)
+  } catch (e) {
+    toast.error(`Web 工具设置加载失败：${toFriendlyMessage(e)}`)
+  }
+}
+
+async function onSaveTavily() {
+  if (!tavilyInput.value) return
+  tavilySaving.value = true
+  try {
+    const data = await api.updateWebToolsSettings({ tavily_api_key: tavilyInput.value })
+    Object.assign(webTools, data)
+    tavilyInput.value = ''
+    toast.success('Tavily 密钥已保存')
+  } catch (e) {
+    toast.error(`保存失败：${toFriendlyMessage(e)}`)
+  } finally {
+    tavilySaving.value = false
+  }
+}
+
+async function onClearTavily() {
+  tavilySaving.value = true
+  try {
+    const data = await api.updateWebToolsSettings({ tavily_api_key: '' })
+    Object.assign(webTools, data)
+    toast.success('已清除本地存储的 Tavily 密钥')
+  } catch (e) {
+    toast.error(`清除失败：${toFriendlyMessage(e)}`)
+  } finally {
+    tavilySaving.value = false
+  }
+}
+
 // ── 策略与演化 ──
 const strategies = ref<AgentStrategyItem[]>([])
 const stratError = ref('')
@@ -269,6 +426,7 @@ onMounted(() => {
   void loadTools()
   void loadPermissions()
   void loadStrategies()
+  void loadWebTools()
 })
 </script>
 
@@ -346,4 +504,18 @@ onMounted(() => {
 .btn.danger { color: #cf8a80; border-color: rgba(207,138,128,.4); }
 .btn.danger:hover { background: rgba(207,138,128,.08); }
 .btn:disabled { opacity: .5; cursor: default; }
+
+.budget-row { display: flex; gap: 16px; margin: 8px 0 4px; }
+.budget-field { display: flex; flex-direction: column; gap: 4px; }
+.budget-label { font-size: 11.5px; color: var(--text-secondary); }
+.num-input, .text-input {
+  height: 26px; padding: 0 8px; border-radius: 4px;
+  background: var(--bg-input, rgba(255,255,255,.04)); border: 1px solid var(--border-default);
+  color: var(--text-primary); font-size: 12px; font-family: inherit;
+}
+.num-input { width: 120px; }
+.allow-row { display: flex; gap: 8px; align-items: center; margin: 8px 0 4px; }
+.text-input { flex: 1; min-width: 0; }
+.text-input.wide { flex: 2; }
+.hint code { font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
 </style>

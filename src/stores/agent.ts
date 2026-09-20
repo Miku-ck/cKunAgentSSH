@@ -145,6 +145,10 @@ export const useAgentStore = defineStore('agent', () => {
     enableTools?: boolean
     maxIterations?: number
     enableDynamicBudget?: boolean
+    /** 成本熔断上限（USD）；undefined/0 = 后端默认 */
+    maxCostUsd?: number
+    /** token 熔断上限；undefined/0 = 后端默认 */
+    maxTotalTokens?: number
     skillIds?: string[]
     autoSkillMatch?: boolean
     contextWindow?: number
@@ -584,9 +588,14 @@ export const useAgentStore = defineStore('agent', () => {
     resolvePermission,
     confirmDeliver,
     rejectDeliver,
-    submitClarification: (runId: string, answers: Record<string, { choice: string; custom_text?: string }>) =>
+    // P1-4 fix: 显式返回 Promise 让前端 await 有效（防止重复提交）
+    submitClarification: (runId: string, answers: Record<string, { choice: string; custom_text?: string }>): Promise<{ run_id: string; status: string; steps: number }> =>
       agentApi.submitClarification(runId, answers),
-    skipClarification: (runId: string) =>
+    skipClarification: (runId: string): Promise<{ run_id: string; status: string }> =>
       agentApi.skipClarification(runId),
+    // P0-2 fix: 前端提交成功后立即关闭的清理动作（不依赖 SSE 兜底）
+    clearClarification: () => {
+      clarificationWizard.value = null
+    },
   }
 })

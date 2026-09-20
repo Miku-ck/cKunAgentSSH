@@ -69,7 +69,8 @@ SSH 智能运维终端 — 集成 SSH 连接管理、远程终端、SFTP 文件�
                         │
         ┌───────────────┴────────────────┐
         │     Python FastAPI Backend     │
-        │     (uvicorn / bundled exe)    │
+        │  (uvicorn / 系统 Python 或包内  │
+        │   runtime/ 内嵌嵌入式 Python)   │
         │                                │
         │  • Chat 流式对话 (SSE)          │
         │  • Agent Harness 框架          │
@@ -196,6 +197,8 @@ cKunAgentSSH/
 │   ├── prompts.py                     # 系统提示词构建
 │   ├── post_processor.py              # 后处理（记忆/技能/标题生成）
 │   ├── skill_registry.py              # 技能注册表
+│   ├── builtin_skills.py              # 包内内置技能同步（skills_builtin/ → DB）
+│   ├── skills_builtin/                # 随包分发的内置运维技能（SKILL.md）
 │   ├── safe_tokens.py                 # Token 安全处理
 │   ├── sse_utils.py                   # SSE 工具函数
 │   ├── requirements.txt               # Python 依赖
@@ -437,12 +440,31 @@ npm run dev
 ### 命令
 
 ```bash
-npm run dev          # 开发模式（Vite HMR + Electron）
-npm run dev:backend  # 单独启动 Python 后端
-npm run build        # 构建生产版本
-npm run typecheck    # 前端类型检查（vue-tsc）
-bash scripts/ci-check.sh   # 一键 CI（后端 pytest / typecheck / vitest / 构建）
+npm run dev            # 开发模式（Vite HMR + Electron）
+npm run dev:web        # 开发模式 + dev server 监听 0.0.0.0（局域网真机/多屏调试）
+npm run dev:backend    # 单独启动 Python 后端
+npm run build          # 构建生产版本（out/main|preload|renderer）
+npm run typecheck      # 前端类型检查（vue-tsc）
+npm test               # 前端单测（vitest）
+npm run test:backend   # 后端单测（pytest）
+npm run ci             # 本地门禁：typecheck + vitest + pytest
+bash scripts/ci-check.sh   # 一键 CI（上述 + 构建，与 .github/workflows/ci.yml 检查项一致）
+npm run package        # electron-builder 打包（Windows nsis + portable）
 ```
+
+### 打包与分发（最后一公里）
+
+- **解释器解析顺序**（`electron/backend-manager.ts`）：`CKUN_PYTHON` 环境变量 →
+  打包内 `resources/python-runtime/python.exe` → 系统 `python`/`python3`。
+- **内嵌 Python 运行时**：将 portable/embeddable Python 准备到仓库根 `runtime/`
+  （步骤见 `runtime/README.md`），`npm run package` 自动随包分发；未准备时构建
+  打警告并回退系统 Python（目标机需自装）。
+- **图标**：`resources/icon.png`（buildResources），electron-builder 打包时自动
+  生成各尺寸 .ico /.icns 资源。
+- **代码签名**：未配置证书（win 无 `certificateFile`），electron-builder 跳过
+  签名并打警告 — 内网分发场景预期行为， SmartScreen 需自行处理。
+- **CI**：仓库托管在 Gitee，`.github/workflows/ci.yml` 仅在推 GitHub 时生效；
+  Gitee 侧以 `npm run ci` / `bash scripts/ci-check.sh` 作为等效门禁。
 
 ## License
 

@@ -110,6 +110,7 @@
  */
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import { useAgentStore } from '@/stores/agent'
+import { useToastStore } from '@/stores/toast'
 
 const agentStore = useAgentStore()
 
@@ -125,6 +126,7 @@ const localStep = ref(0)
 /** 当前向导状态 — 直接引用 store 实现双向绑定 */
 const wizard = computed(() => agentStore.clarificationWizard)
 
+/* P1-7: 后端始终 push 全量 steps 且 current_step=0，前端独立维护 localStep 索引 */
 /** 显示用的步数（1-based） */
 const displayStep = computed(() => {
   const base = wizard.value?.currentStep ?? 0
@@ -215,11 +217,19 @@ async function handleAdvance() {
 async function submitAnswers() {
   const w = wizard.value
   if (!w || submitting.value) return
+  // P0-6 校验：仅允许当前活跃 run 提交
+  if (w.runId && agentStore.lastRunId && w.runId !== agentStore.lastRunId) {
+    console.warn('[ClarifyingWizard] run_id 不匹配当前活跃 run，忽略:', w.runId)
+    return
+  }
   submitting.value = true
   try {
     await agentStore.submitClarification(w.runId, { ...w.answers })
+    // P0-2 修复：提交成功后立即自行关闭，不依赖 clarification_done SSE 回执
+    agentStore.clearClarification()
   } catch (err) {
     console.error('[ClarifyingWizard] submit failed:', err)
+    useToastStore().error('提交失败，请重试')
   } finally {
     submitting.value = false
   }
@@ -229,11 +239,19 @@ async function handleSkip() {
   if (submitting.value) return
   const w = wizard.value
   if (!w) return
+  // P0-6 校验：仅允许当前活跃 run 跳过
+  if (w.runId && agentStore.lastRunId && w.runId !== agentStore.lastRunId) {
+    console.warn('[ClarifyingWizard] run_id 不匹配当前活跃 run，忽略:', w.runId)
+    return
+  }
   submitting.value = true
   try {
     await agentStore.skipClarification(w.runId)
+    // P0-2 修复：跳过成功后立即自行关闭
+    agentStore.clearClarification()
   } catch (err) {
     console.error('[ClarifyingWizard] skip failed:', err)
+    useToastStore().error('跳过失败，请重试')
   } finally {
     submitting.value = false
   }

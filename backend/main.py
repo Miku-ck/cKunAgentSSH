@@ -49,6 +49,14 @@ async def lifespan(_app: FastAPI):
     init_db(settings.db_path)
     logger.info("[cKunAgentic] Database initialized: %s", settings.db_path)
 
+    # 包内内置运维技能同步（backend/skills_builtin/*，线程池执行不阻塞事件循环）
+    try:
+        import asyncio as _asyncio
+        import builtin_skills as _bs
+        await _asyncio.to_thread(_bs.sync_packaged_skills)
+    except Exception as e:
+        logger.warning("[cKunAgentic] Packaged builtin skills sync skipped: %s", e)
+
     # 审查修复（P2 E9）：模型种子探测（httpx.get 同步阻塞）从 init_db 移至
     # 独立异步入口，放 asyncio.to_thread 线程池执行，不阻塞事件循环
     try:

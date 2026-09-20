@@ -1164,11 +1164,13 @@ def upsert_builtin_skill(
     description: str = "",
     category: str = "",
     trigger_words: Optional[list] = None,
+    enabled_on_insert: int = 0,
 ) -> dict:
     """同步内置技能到数据库（按 slug + is_builtin=1 upsert）
 
     与 create_skill 的区别：slug 冲突时更新而非追加后缀，
-    避免每次同步都新增重复记录。保留用户已设置的 enabled 状态。
+    避免每次同步都新增重复记录。保留用户已设置的 enabled 状态；
+    enabled_on_insert 仅控制首次插入的默认启用值（包内运维技能 = 1 开箱可用）。
     """
     conn = _get_conn()
     try:
@@ -1194,8 +1196,8 @@ def upsert_builtin_skill(
             conn.execute(
                 "INSERT INTO skills (id, name, slug, description, category, system_prompt, "
                 "source, is_builtin, enabled, priority, trigger_words, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'builtin', 1, 0, 0, ?, ?, ?)",
-                (sid, name, slug, description, category, system_prompt, trigger_words_json, now, now),
+                "VALUES (?, ?, ?, ?, ?, ?, 'builtin', 1, ?, 0, ?, ?, ?)",
+                (sid, name, slug, description, category, system_prompt, enabled_on_insert, trigger_words_json, now, now),
             )
             conn.commit()
             return {"id": sid, "slug": slug, "updated": False}

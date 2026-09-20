@@ -129,6 +129,7 @@ class BuiltinSkillItem(BaseModel):
     description: str = ""
     category: str = ""
     trigger_words: list[str] = Field(default_factory=list)
+    enabled: int = Field(default=0, description="首次插入时的默认启用状态（已存在则保留用户选择）")
 
 
 class SyncBuiltinSkillsRequest(BaseModel):
@@ -158,13 +159,21 @@ def sync_builtin_skills(req: SyncBuiltinSkillsRequest):
                 description=item.description,
                 category=item.category,
                 trigger_words=item.trigger_words,
+                enabled_on_insert=item.enabled,
             )
             upserted += 1
         except Exception as e:
             logger.warning("同步内置技能 %s 失败: %s", item.slug, e)
 
-    # 孤儿清理：数据库中存在但文件系统已删除的内置技能
-    orphan_slugs = set(db.list_builtin_skill_slugs()) - incoming_slugs
+    # 孤儿清理：数据库中存在但文件系统已删除的内置技能。
+    # 包内技能（backend/skills_builtin，由 builtin_skills 模块管理）豁免 —
+    # 前端只上报 ~/.agents/skills 目录内容，不排除会误删随包分发的技能。
+    try:
+        from builtin_skills import get_managed_slugs
+        packaged_slugs = get_managed_slugs()
+    except Exception:
+        packaged_slugs = set()
+    orphan_slugs = set(db.list_builtin_skill_slugs()) - incoming_slugs - packaged_slugs
     for slug in orphan_slugs:
         try:
             db.delete_builtin_skill_by_slug(slug)
@@ -177,3 +186,14 @@ def sync_builtin_skills(req: SyncBuiltinSkillsRequest):
         "orphans_removed": len(orphan_slugs),
         "total": len(incoming_slugs),
     }
+
+
+@router.post("/skills/sync-packaged")
+def sync_packaged_skills_endpoint():
+    """手动触发包内技能同步（升级后 app 更新包内容但启动同步未跑时）"""
+    try:
+        from builtin_skills import sync_packaged_skills
+        return sync_packaged_skills()
+    except Exception as e:
+        logger.warning("包内技能同步失败: %s", e)
+        raise HTTPException(status_code=500, detail=f"包内技能同步失败: {e}")

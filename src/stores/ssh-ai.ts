@@ -492,6 +492,9 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       enableTools: true,
       maxIterations: useSettingsStore().settings.agent.maxIterations,
       enableDynamicBudget: useSettingsStore().settings.agent.dynamicBudget,
+      // 成本/token 熔断预算（设置 → Agent 治理 → 运行预算；0 = 不传，走后端默认）
+      maxCostUsd: useSettingsStore().settings.agent.maxCostUsd || undefined,
+      maxTotalTokens: useSettingsStore().settings.agent.maxTotalTokens || undefined,
       visibleTerminal: true,
       sessionType: ctx?.sessionType || 'local',
       // 用户显式选择的技能 ID（后端 SkillRein 会与自动匹配的合并去重）

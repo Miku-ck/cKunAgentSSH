@@ -386,6 +386,24 @@ export const api = {
       },
     ),
 
+  // Web 搜索工具密钥（Tavily）— 后端掩码回显，明文只在写入时单向传输
+  getWebToolsSettings: () =>
+    request<{
+      tavily_api_key_set: boolean
+      tavily_api_key_masked: string
+      tavily_api_key_source: 'env' | 'db' | ''
+    }>('/settings/web-tools'),
+
+  updateWebToolsSettings: (payload: { tavily_api_key: string }) =>
+    request<{
+      tavily_api_key_set: boolean
+      tavily_api_key_masked: string
+      tavily_api_key_source: 'env' | 'db' | ''
+    }>('/settings/web-tools', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+
   testModelConnection: async (id: string): Promise<{ status: 'ok'; latency_ms: number; model_name?: string } | { status: 'error'; detail: string; model_name?: string }> => {
     try {
       const body = await request<{ status: 'ok'; latency_ms: number; model_name?: string } | { status: 'error'; detail: string; model_name?: string }>(
@@ -412,6 +430,12 @@ export const api = {
   deleteSkill: (id: string) =>
     request<{ deleted: boolean }>(`/skills/${id}`, {
       method: 'DELETE',
+    }),
+
+  /** 触发包内内置技能同步（backend/skills_builtin，升级后刷新技能内容） */
+  syncPackagedSkills: () =>
+    request<{ upserted: number; slugs: string[] }>('/skills/sync-packaged', {
+      method: 'POST',
     }),
 
   // 终端预测
@@ -627,6 +651,10 @@ export interface StreamAgentOptions {
   enableTools?: boolean
   maxIterations?: number
   enableDynamicBudget?: boolean
+  /** 成本熔断上限（USD），不传 = 后端默认 */
+  maxCostUsd?: number
+  /** token 熔断上限，不传 = 后端默认 */
+  maxTotalTokens?: number
   skillIds?: string[]
   /** 是否启用触发词自动技能匹配（设置"自动技能匹配"，默认开启） */
   autoSkillMatch?: boolean
@@ -663,6 +691,8 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
           enable_tools: options.enableTools ?? true,
           max_iterations: options.maxIterations ?? 100,
           enable_dynamic_budget: options.enableDynamicBudget ?? true,
+          ...(options.maxCostUsd ? { max_cost_usd: options.maxCostUsd } : {}),
+          ...(options.maxTotalTokens ? { max_total_tokens: options.maxTotalTokens } : {}),
           skill_ids: options.skillIds || [],
           auto_skill_match: options.autoSkillMatch ?? true,
           context_window: options.contextWindow ?? 20,
@@ -1030,10 +1060,18 @@ export const agentAdminApi = {
   /** 永久授权清单 */
   listPermissions: () => request<PermissionListResponse>('/agent/permission/list'),
 
-  /** 撤销某工具全部授权（工具级撤销会连带其所有命令级绑定键 — 与后端 revoke 语义一致） */
-  revokePermission: (tool: string) =>
+  /** 手动登记永久授权（与审批弹窗「始终允许」同源：落 allowlist 文件 + 审计） */
+  allowPermission: (tool: string, command?: string) =>
+    request<{ tool: string; grant_key: string; granted: boolean }>(
+      '/agent/permission/allow',
+      { method: 'POST', body: JSON.stringify({ tool, ...(command ? { command } : {}) }) },
+    ),
+
+  /** 撤销授权：省略 command = 撤该工具全部授权；带 command = 只撤单条命令绑定 */
+  revokePermission: (tool: string, command?: string) =>
     request<unknown>(
-      `/agent/permission/revoke?tool=${encodeURIComponent(tool)}`,
+      `/agent/permission/revoke?tool=${encodeURIComponent(tool)}` +
+      (command ? `&command=${encodeURIComponent(command)}` : ''),
       { method: 'POST' },
     ),
 

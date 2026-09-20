@@ -157,7 +157,7 @@ class SkillRegistry:
             return ""
         parts = []
         for s in skills:
-            content = s.get('system_prompt', '')[:3000]
+            content = s.get('system_prompt', '')[:12000]
             parts.append(
                 f"以下是一个名为「{s['name']}」的技能提供的参考信息：\n"
                 f"---技能内容开始---\n{content}\n---技能内容结束---"

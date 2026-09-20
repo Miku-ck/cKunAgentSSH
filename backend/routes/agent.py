@@ -19,7 +19,7 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 import database as db
 from database import get_model_config as _db_get_model_config_raw
@@ -1204,6 +1204,38 @@ def list_tool_permissions():
     return {"tools": sorted(pg._confirmed_permanent)}
 
 
+class AllowPermissionRequest(BaseModel):
+    """手动登记永久授权（免去先触发审批弹窗再点"始终允许"的路径）"""
+    tool: str = Field(..., min_length=1, max_length=64, description="工具名")
+    command: Optional[str] = Field(None, max_length=4096,
+                                   description="命令执行工具的绑定命令；省略 = 工具级授权")
+
+
+@router.post("/agent/permission/allow")
+def allow_tool_permission(req: AllowPermissionRequest):
+    """手动写入永久 allowlist（与审批"始终允许"同源，落 allowlist 文件 + 审计）
+
+    安全边界：仅登记，不放宽任何判定 — 命令工具写入的是 `tool:cmdhash`
+    命令级绑定键（审查 M-3 语义），hardline 底线命令在 FilesystemGuard
+    层无条件阻断，allowlist 无法放行。
+    """
+    from agent.harness.reins import _get_global_permission_gate_sync
+    pg = _get_global_permission_gate_sync()
+    grant_key = pg.grant(req.tool, scope="always", command=req.command)
+    try:
+        from agent.audit import append_record
+        append_record(
+            action=f"permission_allow_manual:{req.tool}",
+            conclusion="granted",
+            target_type="tool",
+            target_id=req.command or req.tool,
+            command_raw=req.command or "",
+        )
+    except Exception:
+        logger.warning("allow 审计记录失败（不阻塞）")
+    return {"tool": req.tool, "grant_key": grant_key, "granted": True}
+
+
 class DenyCommandRequest(BaseModel):
     """visible_terminal 拒绝命令请求 — 标记某 run 下某命令被拒绝"""
     tool: str = Field(..., description="工具名（通常为 shell_exec）")
@@ -1264,14 +1296,50 @@ def release_run_permissions(run_id: str):
 
 # ── 澄清向导（Clarification Wizard）──
 
+# P0-3: custom_text 最大长度限制，防止 prompt injection
+_CUSTOM_TEXT_MAX_LEN = 500
+
 
 class ClarificationAnswerRequest(BaseModel):
-    """用户回答澄清问题的请求体"""
-    run_id: str = Field(..., description="运行 ID")
+    """用户回答澄清问题的请求体（带防御性校验）"""
+    run_id: str = Field(..., description="运行 ID", max_length=128)
     answers: dict = Field(
         default_factory=dict,
         description="答案字典 {step_index(key str): {choice: 'A'|'B'|'C'|'custom', custom_text?: str}}",
     )
+
+    @field_validator("answers")
+    @classmethod
+    def validate_answers(cls, v: dict) -> dict:
+        """P0-3: 校验 answers 结构，拒绝畸形 step_idx 与超长 custom_text"""
+        if not isinstance(v, dict):
+            raise ValueError("answers 必须是 dict")
+        if len(v) > 32:
+            raise ValueError(f"answers 步数过多（>{32}）")
+        sanitized: dict[str, dict] = {}
+        for key, item in v.items():
+            # step_idx 必须是可解析的 0-based 整数
+            try:
+                idx = int(key)
+                if idx < 0:
+                    raise ValueError
+            except (ValueError, TypeError):
+                logger.warning("非法 clarification step_idx: %r（已跳过）", key)
+                continue
+            if not isinstance(item, dict):
+                continue
+            choice = item.get("choice", "")
+            if choice not in ("A", "B", "C", "custom"):
+                logger.warning("非法 clarification choice: %r（已跳过）", choice)
+                continue
+            cleaned: dict[str, str] = {"choice": choice}
+            if choice == "custom":
+                txt = str(item.get("custom_text", ""))
+                if len(txt) > _CUSTOM_TEXT_MAX_LEN:
+                    txt = txt[:_CUSTOM_TEXT_MAX_LEN]
+                cleaned["custom_text"] = txt
+            sanitized[str(idx)] = cleaned
+        return sanitized
 
 
 @router.post("/agent/clarification/answer")
@@ -1282,14 +1350,11 @@ def submit_clarification_answer(req: ClarificationAnswerRequest):
     下一轮 PRE_TOOL_CALL 时 ClarificationInterceptor 读到 _CLARIFICATION_DONE
     即注入用户答案上下文、发 clarification_done 事件、放行工具执行。
     """
-    from agent.harness.reins import _get_global_clarification_store
-    store = _get_global_clarification_store()
-    store["done"][req.run_id] = req.answers
-    # 标记 context 已完成（避免再次 PRE_TOOL_CALL 重发题目）
-    ctx_info = store["context"].get(req.run_id)
-    if ctx_info:
-        ctx_info["_done"] = True
-    logger.info("clarification answer: run_id=%s answers=%s", req.run_id, req.answers)
+    from agent.harness.reins import record_clarification_answers
+    # answers 已由 field_validator 清洗：step_idx 合法、choice 受控、custom_text 截断
+    # P1-6: 统一入口维护 done+context 配对与时间戳（TTL 可回收孤儿答案）
+    record_clarification_answers(req.run_id, req.answers)
+    logger.info("clarification answer: run_id=%s steps=%d", req.run_id, len(req.answers))
     # 审计
     try:
         from agent.audit import append_record
@@ -1312,12 +1377,8 @@ def skip_clarification(req: ClarificationAnswerRequest):
     ClarificationInterceptor 在格式化空答案时输出"用户选择跳过澄清"提示，
     LLM 按原始命令执行，但仍在 PermissionGate 的权限控制之下。
     """
-    from agent.harness.reins import _get_global_clarification_store
-    store = _get_global_clarification_store()
-    store["done"][req.run_id] = {}  # 空 answers → _format_answers 输出"跳过"
-    ctx_info = store["context"].get(req.run_id)
-    if ctx_info:
-        ctx_info["_done"] = True
+    from agent.harness.reins import record_clarification_answers
+    record_clarification_answers(req.run_id, {})  # 空 answers → _format_answers 输出"跳过"
     logger.info("clarification skip: run_id=%s", req.run_id)
     try:
         from agent.audit import append_record

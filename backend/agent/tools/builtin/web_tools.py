@@ -119,9 +119,16 @@ class WebSearchTool(BaseTool):
         return await self._search_duckduckgo(query, max_results)
 
     def _get_tavily_key(self) -> str:
-        """从环境变量或数据库获取 Tavily API Key"""
+        """获取 Tavily API Key：环境变量优先，其次数据库（设置面板写入）"""
         import os
-        return os.environ.get("TAVILY_API_KEY", "")
+        key = (os.environ.get("TAVILY_API_KEY") or "").strip()
+        if key:
+            return key
+        try:
+            import database as db
+            return (db.get_app_setting("web.tavily_api_key") or "").strip()
+        except Exception:
+            return ""
 
     async def _search_tavily(self, query: str, max_results: int, api_key: str) -> ToolResult:
         """调用 Tavily Search API"""
