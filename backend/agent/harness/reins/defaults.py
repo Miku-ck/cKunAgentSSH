@@ -42,7 +42,7 @@ def create_default_reins(
 
     interceptors: list[Interceptor] = [
         SkillRein(),  # AGENT_START: 技能注入
-        FilesystemGuard(permission_gate=permission_gate),
+        FilesystemGuard(permission_gate=permission_gate, saddle=saddle),
         LoopDetector(),
         permission_gate,
         AuditLogger(),

@@ -12,7 +12,7 @@
 import shlex
 
 from agent.tools import BaseTool, ToolResult, ToolMeta
-from agent.tools.builtin.ops_common import run_headless
+from agent.tools.builtin.ops_common import is_traversal, run_headless
 
 # ── 远端命令构建（单一事实来源）──────────────────────────────
 # 契约源：与远端白名单执行器（scripts/deploy/agent-exec.py）对齐，
@@ -261,10 +261,28 @@ class LogReadTool(BaseTool):
     }
     meta = _OBS_META
 
+    @classmethod
+    def bound_command(cls, args: dict) -> str | None:
+        """日志尾部按真实模板判定：tail -n 100 /etc/shadow 与手敲同罪。
+
+        meta.risk_level=safe 表达的是"读日志这个动作可逆"，不是"读任何文件都安全"。
+        """
+        path = args.get("path")
+        if not isinstance(path, str) or not path.strip() or is_traversal(path):
+            return None
+        try:
+            lines = max(1, min(int(args.get("lines") or 100), 1000))
+        except (TypeError, ValueError):
+            lines = 100
+        pattern = args.get("pattern") or ""
+        return log_grep_cmd(path, str(pattern), lines) if pattern else log_tail_cmd(path, lines)
+
     async def execute(self, context, path, lines=100, pattern=""):
         path = path or ""
         if not path.strip():
             return ToolResult(False, "", "日志文件路径不能为空")
+        if is_traversal(path):
+            return ToolResult(False, "", "非法路径：包含 `..`，禁止越界访问")
         if any(ord(c) < 32 for c in path):  # 拒绝控制字符/换行，防止破坏模板
             return ToolResult(False, "", "日志文件路径包含非法字符")
 

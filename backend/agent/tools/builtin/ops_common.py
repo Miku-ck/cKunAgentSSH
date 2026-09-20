@@ -158,6 +158,24 @@ def base64_restore_cmd(path: str, b64: str) -> str:
     return f"printf '%s' '{b64}' | base64 -d > {shlex.quote(path)}"
 
 
+# 写盘命令的「判定视图」占位 payload。PRE_TOOL_CALL 拦截器只看到 args={path,content}，
+# 看不到本模板 — 于是 file_write 写 authorized_keys 曾按工具级 moderate 放行，而等价
+# shell 重定向判 hardline。BaseTool.bound_command 把真实命令串交给 FilesystemGuard，
+# 两条路径自此共用同一个 classify_* 判定。
+_CLASSIFY_PAYLOAD = "BASE64_CONTENT_PAYLOAD"
+
+
+def base64_write_cmd_for_classification(path: str) -> str:
+    """与 base64_restore_cmd 同模板，仅 payload 换成固定占位符。
+
+    用占位符而非真实内容：授权键 = sha256(规范化命令)，含 payload 则改一个字节就要
+    重新授权、"始终允许"彻底失效，卡片 payload 也会爆大。风险由**目标路径**决定，
+    占位符使授权键的含义收敛为"允许写这个路径"，与产品语义一致。
+    """
+    import shlex
+    return f"printf '%s' '{_CLASSIFY_PAYLOAD}' | base64 -d > {shlex.quote(path)}"
+
+
 def drop_sentinel_lines(output: str) -> list[str]:
     """剔除 run_headless 输出中的哨兵/空行，保留真实数据行（glob/grep 列表解析共用）。"""
     return [

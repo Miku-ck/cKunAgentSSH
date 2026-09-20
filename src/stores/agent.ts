@@ -44,8 +44,13 @@ export interface PermissionRequest {
   reversible: boolean
   message: string
   timestamp: number
-  /** 命令执行工具（shell_exec）— 授权绑定到具体命令（审查 M-3） */
-  isCommandTool?: boolean
+  /**
+   * 本卡授权实际绑定的命令原文（后端 payload.command）。
+   * 两类来源：命令入口工具的自由文本参数，与实现 bound_command 的工具
+   * （file_write 的写盘模板 / schedule_op 的定时命令）报出的真实执行命令。
+   * 授权键 = 工具名 + 这条命令的哈希，所以它必须原样回传给 grant 端点。
+   */
+  command?: string
   /** 是否正在授权中（防止重复点击） */
   granting?: boolean
   /** 是否已处理（已授权或已超时作废） */
@@ -89,16 +94,19 @@ export interface ClarificationWizardState {
   submitted: boolean
 }
 
-const COMMAND_EXEC_TOOLS = ['shell_exec']
-
 /**
- * 授权卡片标识键：命令执行工具按「工具 + 命令原文」区分（同一工具的不同命令各自
- * 一张卡），其他工具按工具名。permission_needed 去重、permission_expired 标记过期、
- * permission_explain 回填三处共用同一表达式，避免键形态漂移导致事件找不到卡片。
+ * 授权卡片标识键：带命令原文时按「工具 + 命令」区分（同一工具针对不同目标 —— 写
+ * /etc/nginx vs 写 /tmp —— 各自一张卡，批了 A 不会放行 B），无命令的纯工具级授权
+ * 按工具名。permission_needed 去重、permission_expired 标记过期、permission_explain
+ * 回填三处共用同一表达式，避免键形态漂移导致事件找不到卡片。
+ *
+ * 命令取自后端 payload.command 而非 args：只有后端知道本次实际执行了什么
+ * （file_write 的 args 里只有 path/content，落盘命令是它自己拼的）。前端自此不再
+ * 自带一份"哪些工具算命令工具"的名单 —— 旧名单只有 shell_exec，漏了后端的
+ * job_run，两条不同命令的卡片曾被合成一张（批准第一条等于放行第二条）。
  */
-function permCardKey(tool: string, args?: Record<string, unknown>): string {
-  if (!COMMAND_EXEC_TOOLS.includes(tool)) return tool
-  return `${tool}::${typeof args?.command === 'string' ? args.command : ''}`
+function permCardKey(tool: string, command?: string): string {
+  return command ? `${tool}::${command}` : tool
 }
 
 export type AgentRunStatus = 'idle' | 'running' | 'completed' | 'failed'
@@ -316,7 +324,9 @@ export const useAgentStore = defineStore('agent', () => {
       dismissPermission(id)
       return true
     }
-    const command = typeof req.args?.command === 'string' ? req.args.command : ''
+    // 与 grant 同源：拒绝登记的键必须是后端实际执行的那条串（args.command 对
+    // job_run/file_write 都不成立，退化成裸工具名会让"拒绝过一次"形同虚设）
+    const command = req.command ?? ''
     try {
       await agentApi.denyCommand(req.tool, command, req.runId)
     } catch (e) {
@@ -466,13 +476,13 @@ export const useAgentStore = defineStore('agent', () => {
         break
 
       case 'permission_needed': {
-        // 审查 M-3：命令执行工具按"工具+命令"去重（不同命令各自出卡片），
-        // 其他工具按工具名去重，避免同一工具多次触发产生重复卡片
+        // 审查 M-3 + 本轮 A6：按"工具 + 实际执行命令"去重，同一工具的不同目标
+        // 各自出卡片（写 /etc/nginx 的授权不会顺带放行写 /tmp）
         const evtTool = event.tool || ''
-        const isCmdTool = COMMAND_EXEC_TOOLS.includes(evtTool)
-        const dupKey = permCardKey(evtTool, event.args)
+        const evtCommand = typeof event.command === 'string' && event.command ? event.command : undefined
+        const dupKey = permCardKey(evtTool, evtCommand)
         const alreadyPending = permissionRequests.value.some(
-          r => permCardKey(r.tool, r.args) === dupKey,
+          r => permCardKey(r.tool, r.command) === dupKey,
         )
         // B11 修复：权限卡片只存在于 AI 面板内，面板关闭期间用户无法响应 —
         // 从非 pending → pending 转换时 toast 提醒（重复请求不重复弹）
@@ -486,7 +496,7 @@ export const useAgentStore = defineStore('agent', () => {
             reversible: event.reversible ?? false,
             message: event.message || `需要授权: ${evtTool}`,
             timestamp: Date.now(),
-            isCommandTool: isCmdTool,
+            command: evtCommand,
             // 问题 2 改进：传递归一化展示命令（仅命令执行工具）
             normalizedCommand: typeof event.normalized_command === 'string' ? event.normalized_command : undefined,
             // 卡片可读性：中文后果说明 + 环境/用户原任务/目标会话
@@ -513,9 +523,9 @@ export const useAgentStore = defineStore('agent', () => {
         // 找不到未处理卡片 = 用户已授权/已拒绝/审批超时/run 已结束 → 直接丢弃。
         const text = typeof event.explanation === 'string' ? event.explanation.trim() : ''
         if (!text) break
-        const key = permCardKey(event.tool || '', { command: event.command })
+        const key = permCardKey(event.tool || '', event.command)
         for (const r of permissionRequests.value) {
-          if (!r.resolved && permCardKey(r.tool, r.args) === key) {
+          if (!r.resolved && permCardKey(r.tool, r.command) === key) {
             r.explain = text
             r.explainSource = 'llm'
           }
@@ -526,10 +536,10 @@ export const useAgentStore = defineStore('agent', () => {
       case 'permission_expired': {
         // C-review M7：审批超时（后端按拒绝处理）→ 标记对应授权卡片过期，
         // 按钮失效，避免用户点了一个后端已不再等待的"孤儿卡片"
-        const key = permCardKey(event.tool || '', event.args)
+        const key = permCardKey(event.tool || '', event.command)
         for (const r of permissionRequests.value) {
           if (r.resolved) continue
-          if (permCardKey(r.tool, r.args) === key) {
+          if (permCardKey(r.tool, r.command) === key) {
             r.resolved = true
             r.granted = false
             r.granting = false

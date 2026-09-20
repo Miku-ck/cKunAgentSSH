@@ -51,6 +51,11 @@ class BaseTool:
     description: str = ""
     parameters: dict | None = None
     meta: ToolMeta | None = None
+    # bound_command 返回的命令是否含模型自由文本（schedule_op 的 command 槽位）。
+    # True  → safety.classify_command（含「未知动词默认审批」，与 shell_exec 同口径）
+    # False → safety.classify_constructed_command（纯代码模板，动词不由模型选，
+    #         套用默认审批会把写 /tmp/x.txt 这类普通操作也判 dangerous）
+    bound_command_is_free_form: bool = False
 
     def __init__(self):
         # 深拷贝类级 dict/meta，避免子类类级赋值的 dict 在实例间共享
@@ -69,6 +74,20 @@ class BaseTool:
     async def execute(self, context: "ToolContext", **kwargs) -> ToolResult:
         """执行工具，子类必须实现"""
         raise NotImplementedError
+
+    @classmethod
+    def bound_command(cls, args: dict) -> str | None:
+        """本工具将要真实执行的 shell 命令（供内容级安全判定与命令级授权键）。
+
+        默认 None = 不参与（判定退回工具级 ToolMeta.risk_level）。适用于自身不接收
+        自由命令、但内部拼出 shell 串落地的工具 — 否则 `file_write(path=
+        /root/.ssh/authorized_keys)` 只按 moderate 放行，而等价的重定向写法会被
+        safety.classify_command 判 hardline，同一副作用两种结论。
+
+        约定：由 execute() 实际使用的同一个 `*_cmd` 模板函数派生（模板与提取器同处
+        一文件，防漂移），自由文本槽位原样返回、自身模板的 payload 用占位符。
+        """
+        return None
 
 
 @dataclass

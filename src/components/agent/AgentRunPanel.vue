@@ -89,7 +89,10 @@ async function denyRequest(reqId: string) {
 async function grantPermission(reqId: string, tool: string, scope: 'once' | 'always') {
   const req = agentStore.permissionRequests.find(r => r.id === reqId)
   if (!req || req.granting || req.resolved) return
-  const command = typeof req.args?.command === 'string' ? (req.args.command as string) : undefined
+  // 命令取 payload 原文（后端 permission_display_fields.command）：它才是授权键实际
+  // 绑定的那条串。原先从 args.command 猜，job_run 用的是 args.cmd 因而永远传空 →
+  // 键退化成裸工具名；file_write 更是根本没有 command 参数。
+  const command = req.command
   req.granting = true
   try {
     // 回传发起审批的 run_id / 会话 id：once 按 run 键控、session 按会话键控
@@ -100,6 +103,12 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
     console.error('授权失败:', e)
     toast.error('授权失败，请重试')
   }
+}
+
+/** 卡片上「授权命令」一行要显示的串：优先归一化形态（剥混淆、可比较），
+ *  退回 payload 原文（写入/定时任务类工具显示的是实际落盘的模板）。 */
+function cardCommand(req: PermissionRequest): string {
+  return req.normalizedCommand || req.command || ''
 }
 
 </script>
@@ -228,8 +237,8 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
             <span class="tool-label" style="margin-left: 12px;">可逆:</span>
             <span>{{ req.reversible ? '是' : '否' }}</span>
             <!-- 问题 2 改进：显示归一化命令，让用户理解授权实际绑定的命令形态 -->
-            <span v-if="req.isCommandTool && req.normalizedCommand" class="tool-label" style="margin-left: 12px;">授权命令:</span>
-            <code v-if="req.isCommandTool && req.normalizedCommand" class="normalized-cmd">{{ req.normalizedCommand }}</code>
+            <span v-if="cardCommand(req)" class="tool-label" style="margin-left: 12px;">授权命令:</span>
+            <code v-if="cardCommand(req)" class="normalized-cmd">{{ cardCommand(req) }}</code>
             <details v-if="req.args && Object.keys(req.args).length > 0" class="tool-args">
               <summary>参数</summary>
               <pre>{{ JSON.stringify(req.args, null, 2) }}</pre>
@@ -256,7 +265,7 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
             :disabled="req.granting"
             @click="grantPermission(req.id, req.tool, 'always')"
           >
-            {{ req.isCommandTool ? '始终允许此命令' : '始终允许' }}
+            {{ cardCommand(req) ? '始终允许此命令' : '始终允许' }}
           </button>
           <button
             class="permission-btn permission-btn-deny"
@@ -264,9 +273,10 @@ async function grantPermission(reqId: string, tool: string, scope: 'once' | 'alw
           >拒绝</button>
         </div>
         <div class="permission-hint">
-          <template v-if="req.isCommandTool">
+          <template v-if="cardCommand(req)">
             「允许本次」只对这行命令生效，其他高风险命令仍会逐条询问；
-            「始终允许」会把这行命令写入本机持久授权清单，今后包括生产环境在内的同一命令都不再询问 ——
+            「始终允许」只把这行命令（含其中的目标路径）写入本机持久授权清单，
+            今后包括生产环境在内的同一命令不再询问、换一条仍会询问 ——
             拿不准就先选「允许本次」。
           </template>
           拒绝后本次运行内 AI 不会再请求同一条命令。

@@ -182,6 +182,19 @@ class ScheduleOpTool(BaseTool):
     }
     meta = meta
 
+    # create 的 command 是模型自由文本（拼进 task_prompt 交未来的无头 run 执行），
+    # 按 shell_exec 同口径判定 — 含「未入只读白名单即审批」的默认策略。
+    bound_command_is_free_form = True
+
+    @classmethod
+    def bound_command(cls, args: dict) -> str | None:
+        """入库前先判一次：定时任务是"现在埋雷、未来自动引爆"，推迟到那次无头 run
+        才拒等于让 hardline 命令在库里躺着、等某个凌晨自己跑起来。"""
+        if args.get("action") != "create":
+            return None
+        cmd = args.get("command")
+        return cmd if isinstance(cmd, str) and cmd.strip() else None
+
     async def execute(self, context, action, mode="interval", interval_minutes=None,
                       cron=None, task=None, command=None, schedule_id=None, name=None):
         action = (action or "").strip()

@@ -5,20 +5,21 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 from agent.audit import append_record_async
 
 from ..command_explain import explain_for_reason, maybe_explain_via_llm
 from ..contracts import ReinDecision, ReinPoint, RunContext, TraceEvent
-from ..safety import classify_shell_args
+from ..safety import classify_command, classify_constructed_command
 from .core import (
-    _COMMAND_EXEC_TOOLS,
     _PERMISSION_APPROVAL_TIMEOUT_S,
     _audit_target_id,
     _audit_target_type,
     _perm_pending,
+    extract_bound_command,
     permission_display_fields,
+    resolve_registry,
     tool_call_signature,
 )
 
@@ -37,6 +38,8 @@ class FilesystemGuard:
     safety_critical: bool = field(default=True, init=False)
     # 关联的权限门 — 用于 dangerous 命令的审批决策
     permission_gate: Optional["PermissionGate"] = None
+    # 取 ToolRegistry 用：让实现 bound_command 的工具（file_write 等）也进内容级判定
+    saddle: Optional[Any] = None
 
     async def check(self, ctx: RunContext) -> ReinDecision:
         if not ctx.tool_calls_log:
@@ -50,15 +53,22 @@ class FilesystemGuard:
         tool = last.get("tool", "")
         args = last.get("args", {})
 
-        # 敏感 shell 命令检查 — 委托给 safety 模块分类
-        # （shell_exec / job_run 均按 command|shell|cmd 参数提取内部命令）
-        if tool in _COMMAND_EXEC_TOOLS:
-            level, reason = classify_shell_args(args)
+        # 内容级判定 — 委托给 safety 模块分类：
+        # 命令入口工具（shell_exec 的 command / job_run 的 cmd）取自由文本参数，
+        # 自身拼命令的工具（file_write/file_edit/schedule_op）取 bound_command 报出的
+        # 真实命令。原实现只认 _COMMAND_EXEC_TOOLS，于是写 authorized_keys 走
+        # file_write 判 moderate、走 shell_exec 判 hardline —— 同一副作用两种结论。
+        bound, is_free_form = extract_bound_command(
+            resolve_registry(ctx, self.saddle), tool, args
+        )
+        if bound:
+            level, reason = (classify_command if is_free_form
+                             else classify_constructed_command)(bound)
             if level == "hardline":
                 # 无条件阻断，不询问 PermissionGate
                 # 修复：使用 "user" 角色而非 "system"，因为 inject_messages 会被添加到消息列表末尾
                 # OpenAI API 要求 system 消息必须在开头，添加到末尾会触发 400 错误
-                cmd = args.get("command") or args.get("shell") or args.get("cmd") or ""
+                cmd = bound
                 await append_record_async(
                     action=tool,
                     conclusion="blocked",
@@ -89,7 +99,7 @@ class FilesystemGuard:
                 # 交给 PermissionGate 决定是否需要审批
                 # B-MINOR 修复：permission_gate 未配置时 fail-closed —
                 # 原实现直接落到 "safe → 放行"，dangerous 命令在缺权限门时反而无审批
-                cmd = args.get("command") or args.get("shell") or args.get("cmd") or ""
+                cmd = bound
                 if self.permission_gate is None:
                     await append_record_async(
                         action=tool, conclusion="denied",
@@ -121,7 +131,8 @@ class FilesystemGuard:
                 # 生产环境强化（合规）：危险命令仅接受预授权 allowlist，禁止临时一次审批
                 env = (getattr(ctx, "environment", "test") or "test")
                 if env == "prod":
-                    if not self.permission_gate.is_permanently_allowed(tool, args):
+                    if not self.permission_gate.is_permanently_allowed(
+                            tool, args, bound_command=bound):
                         await append_record_async(
                             action=tool, conclusion="denied",
                             run_id=ctx.run_id, iteration=ctx.iteration,
@@ -160,7 +171,7 @@ class FilesystemGuard:
                     # 问题 1 改进：同时传入 run_id 以支持 once 作用域隔离
                     allowed = self.permission_gate.check_permission(
                         tool, args, risk="dangerous", conversation_id=ctx.conversation_id,
-                        run_id=ctx.run_id)
+                        run_id=ctx.run_id, bound_command=bound)
                     if not allowed:
                         # C-review M7：审批等待三态处理（无审批超时、重发被循环检测
                         # 抢截、授权卡片孤儿的问题由此修复）
@@ -191,6 +202,9 @@ class FilesystemGuard:
                                     payload={
                                         "tool": tool,
                                         "args": args,
+                                        # 前端按「工具 + 命令」定位卡片（同一工具针对不同
+                                        # 目标各一张卡），缺了它会把无关卡片一起标成过期
+                                        "command": str(cmd),
                                         "message": (
                                             f"授权审批超时（{int(_PERMISSION_APPROVAL_TIMEOUT_S)}s 未响应），"
                                             f"已按拒绝处理: {tool}"

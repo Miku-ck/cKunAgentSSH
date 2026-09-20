@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 # job_run 同属命令入口（local=本地子进程 / remote=远程命令），其 `cmd` 参数
 # 必须经 classify_command 精细判定，wrapper 不参与分类，防止内部 dangerous
 # 命令借工具级 moderate 一刀切漏审。
+# 本集合是「模型自由输入命令」的入口清单，不要往里加工具名来扩展内容级判定 —
+# 自身拼命令的工具（file_write/file_edit/schedule_op）实现 BaseTool.bound_command
+# 即可，由 extract_bound_command 统一取出，口径区分见该函数 docstring。
 _COMMAND_EXEC_TOOLS = {"shell_exec", "job_run"}
 
 # C-review M7：审批等待超时（秒）。危险命令/权限请求发出后，用户在此时限内
@@ -56,6 +59,56 @@ def permission_display_fields(ctx: "RunContext", command: str = "") -> dict[str,
         "ssh_session_id": getattr(ctx, "ssh_session_id", "") or "",
         "command": command,
     }
+
+
+def command_from_args(args: Any) -> str:
+    """从工具参数里取 shell 命令串（shell_exec 用 command、job_run 用 cmd）。"""
+    if not isinstance(args, dict):
+        return ""
+    return args.get("command") or args.get("shell") or args.get("cmd") or ""
+
+
+def extract_bound_command(registry: Any, tool: str, args: Any) -> tuple[str | None, bool]:
+    """取「本次调用将要真实执行的命令」+ 该命令是否为模型自由输入。
+
+    为什么需要它：safety.classify_command 原先只挂在 shell_exec/job_run 一条路上
+    （_COMMAND_EXEC_TOOLS）。但 file_write 会自己拼出
+    `printf '%s' '<b64>' | base64 -d > /root/.ssh/authorized_keys` 落地 —— 同一条
+    命令手敲是 hardline 无条件阻断，走工具却只是 moderate（会话授权即可，"始终允许"
+    后含 prod 永久免审）。让工具自己报出真实命令，两条路径自此共用同一判定。
+
+    Returns:
+        (命令, 是否自由输入)；(None, False) 表示无命令可判 — 调用方退回工具级
+        ToolMeta.risk_level 口径。自由输入走 classify_command（含「未入只读白名单
+        即审批」的默认策略），客户端自造模板走 classify_constructed_command。
+
+    registry 为 None（如未注入 saddle 的单测环境）时，仅 _COMMAND_EXEC_TOOLS 生效，
+    与修复前行为一致。bound_command 抛异常不做兜底：FilesystemGuard 是
+    safety_critical 拦截器，异常按 fail-closed 拦截，此处吞掉反而变成放行。
+    """
+    if tool in _COMMAND_EXEC_TOOLS:
+        cmd = command_from_args(args)
+        return (cmd or None), True
+    get = getattr(registry, "get", None)
+    impl = get(tool) if callable(get) else None
+    bound_command = getattr(impl, "bound_command", None)
+    if not callable(bound_command):
+        return None, False
+    bound = bound_command(args if isinstance(args, dict) else {})
+    if not isinstance(bound, str) or not bound.strip():
+        return None, False
+    return bound, bool(getattr(impl, "bound_command_is_free_form", False))
+
+
+def resolve_registry(ctx: RunContext, saddle: Any) -> Any:
+    """取 per-run ToolRegistry（extract_bound_command 的第一个参数来源）。
+
+    优先 ctx.metadata["saddle"]：PermissionGate 是进程级单例，其 saddle 字段会被
+    并发 run 互相覆盖（见 gate._lookup_meta 的同款处理），拿错注册表会把 A run 的
+    工具元数据用在 B run 上。取不到返回 None（内容级判定自动退场，不报错）。
+    """
+    resolved = (getattr(ctx, "metadata", None) or {}).get("saddle") or saddle
+    return getattr(resolved, "registry", None)
 
 
 def tool_call_signature(call: dict[str, Any]) -> tuple:

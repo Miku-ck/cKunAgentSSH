@@ -13,13 +13,17 @@ from agent.audit import append_record_async
 from config import ALLOWLIST_PATH
 
 from ..contracts import ReinDecision, ReinPoint, RunContext, TraceEvent
+from ..safety import classify_command, classify_constructed_command
 from .core import (
     _COMMAND_EXEC_TOOLS,
     _PERMISSION_APPROVAL_TIMEOUT_S,
     _audit_target_id,
     _audit_target_type,
     _perm_pending,
+    command_from_args,
+    extract_bound_command,
     permission_display_fields,
+    resolve_registry,
     tool_call_signature,
 )
 
@@ -129,15 +133,21 @@ class PermissionGate:
     def _grant_key(tool_name: str, command: Optional[str] = None) -> str:
         """计算授权键（审查 M-3 核心修复）。
 
-        - 命令执行工具（shell_exec）+ 具体命令 → `tool:<sha256(规范化命令)[:16]>`，
-          授权只绑定被批准的那条命令，防止一次"始终允许 shell_exec"后任意
-          dangerous 命令免审批（如 `rm -rf ~/backups`）。
-        - 其他工具 / 未提供命令 → 工具名本身（保持原工具级授权语义）。
+        - 提供了命令 → `tool:<sha256(规范化命令)[:16]>`，授权只绑定被批准的那条
+          命令，防止一次"始终允许 shell_exec"后任意 dangerous 命令免审批
+          （如 `rm -rf ~/backups`）。
+        - 未提供命令 → 工具名本身（保持原工具级授权语义）。
+
+        命令有两个来源，二者共用同一键空间：
+          1. 命令入口工具（_COMMAND_EXEC_TOOLS）的自由文本参数，由调用方取出传入；
+          2. 实现 BaseTool.bound_command 的工具（file_write/file_edit/schedule_op）
+             报出的"本次真实执行命令"。没有这一路，"始终允许 file_write"写进的是
+             裸工具名，等于允许写任意路径（含 /root/.ssh/authorized_keys）。
 
         兼容性：旧 allowlist.txt 中裸 `shell_exec` 条目对新逻辑不再放行命令级审批
         （fail-safe 方向收紧），用户需重新针对具体命令授权。
         """
-        if tool_name in _COMMAND_EXEC_TOOLS and command and str(command).strip():
+        if command and str(command).strip():
             from ..safety import normalize_command_for_detection
             digest = hashlib.sha256(
                 normalize_command_for_detection(str(command)).encode("utf-8")
@@ -148,11 +158,16 @@ class PermissionGate:
     def check_permission(self, tool_name: str, args: dict,
                          risk: Optional[str] = None,
                          conversation_id: str = "",
-                         run_id: str = "") -> bool:
+                         run_id: str = "",
+                         bound_command: Optional[str] = None) -> bool:
         """检查权限，返回是否放行
 
         risk: 调用方已判定的风险等级；risk == "dangerous" 时忽略 session 级缓存
               （B-6：落实 "dangerous 需每次授权" 契约，只认 once 与 always/permanent 键）
+
+        bound_command: 调用方（FilesystemGuard）已算出的"本次真实执行命令"。非命令
+              入口工具（file_write 等）靠它把授权键从裸工具名收紧到目标粒度 —
+              否则一次"始终允许 file_write"等于允许写任意路径。
 
         检查顺序：permanent allowlist → session（非 dangerous，按会话键控）
         → once 计数器（优先 run_id 作用域，fallback 全局池）。原 scope 参数已移除
@@ -167,9 +182,9 @@ class PermissionGate:
         无交互式 UI 场景：默认拦截 dangerous 命令，除非已在 allowlist 中。
         命令执行工具按"工具+命令哈希"键检查（审查 M-3）。
         """
-        command = None
-        if tool_name in _COMMAND_EXEC_TOOLS and isinstance(args, dict):
-            command = args.get("command") or args.get("shell") or args.get("cmd")
+        command = bound_command
+        if command is None and tool_name in _COMMAND_EXEC_TOOLS:
+            command = command_from_args(args)
         key = self._grant_key(tool_name, command)
         # 问题 4：visible_terminal 拒绝标记检查 — 用户明确拒绝的命令不再免审
         # （即使永久 allowlist 中有该命令，当前 run 的拒绝状态也优先）
@@ -196,16 +211,21 @@ class PermissionGate:
         # 默认拦截 dangerous 命令（无交互式 UI，不能自动放行）
         return False
 
-    def is_permanently_allowed(self, tool_name: str, args: dict) -> bool:
+    def is_permanently_allowed(self, tool_name: str, args: dict,
+                               bound_command: Optional[str] = None) -> bool:
         """是否已被永久授权（生产环境危险命令的预授权 allowlist 判断）。
 
         仅认 `_confirmed_permanent`（持久化 allowlist），忽略 once/session 一次性授权，
         保证 prod 环境危险命令必须"预先登记"而非临时批准（合规要求）。
-        命令执行工具按"工具+命令哈希"键匹配（审查 M-3），其余工具按工具名匹配。
+        有命令可绑定时按"工具+命令哈希"键匹配（审查 M-3），否则按工具名匹配。
+
+        bound_command 由 FilesystemGuard 传入（它已算过一遍，不在此重算）：
+        prod 下 file_write 写敏感路径预登记的键是 `file_write:<该路径模板哈希>`，
+        漏传会退化成查裸工具名 → 批准过 /etc/nginx 就等于批准写任意路径。
         """
-        command = None
-        if tool_name in _COMMAND_EXEC_TOOLS and isinstance(args, dict):
-            command = args.get("command") or args.get("shell") or args.get("cmd")
+        command = bound_command
+        if command is None and tool_name in _COMMAND_EXEC_TOOLS:
+            command = command_from_args(args)
         key = self._grant_key(tool_name, command)
         return key in self._confirmed_permanent
 
@@ -306,8 +326,12 @@ class PermissionGate:
         - 不提供 command：撤销该工具的全部授权（工具级 + 所有命令级绑定键）
         - conversation_id：C-review M11 — 只撤指定会话的 session 授权；
           None（默认）保持旧语义：撤所有会话
+
+        command 不限 _COMMAND_EXEC_TOOLS：bound_command 类工具（file_write 等）的
+        授权键同样按命令哈希绑定，撤销口径必须与 grant 对称，否则撤销会要么过宽
+        （抹掉该工具所有路径）要么失效（撤不掉那一条键）。
         """
-        if command and tool_name in _COMMAND_EXEC_TOOLS:
+        if command:
             self._revoke_key(self._grant_key(tool_name, command), conversation_id)
         else:
             self._revoke_key(tool_name, conversation_id)
@@ -343,6 +367,10 @@ class PermissionGate:
 
         设计目标：service_manage 等 moderate 工具的 stop/restart 操作在
         生产环境不会因 session 级授权而免审，每次都需要显式批准。
+
+        本函数只看 args["action"] 这一类"工具参数即语义"的升级，不做命令内容判定 —
+        内容级升级（写敏感路径 / 定时任务里塞 rm）由 bound_command + FilesystemGuard
+        承担（见 check 的 A5 分支），两条路各自单一职责，避免第二份风险口径表。
         """
         base = meta.risk_level
         if not args or not isinstance(args, dict):
@@ -404,6 +432,20 @@ class PermissionGate:
             # 跳过 tool-level 风险检查，由 FilesystemGuard 按命令内容判定
             return ReinDecision()
 
+        # A5：自身拼命令的工具（file_write/file_edit/schedule_op）与 shell_exec 对齐 —
+        # 内容比 ToolMeta 更危险时让位给 FilesystemGuard（priority 8 在本拦截器、
+        # 10 在守卫，守卫后跑）。守卫已实现 dangerous 审批三态/超时/拒绝记忆/prod
+        # 预授权闸门，此处不复制那五套分支，否则同一判定有两处实现必然漂移。
+        # 内容 safe（如写 /tmp）仍走下面的 ToolMeta 流程，但授权键绑定该命令。
+        bound, is_free_form = extract_bound_command(
+            resolve_registry(ctx, self.saddle), tool, args
+        )
+        if bound:
+            content_level, _reason = (classify_command if is_free_form
+                                      else classify_constructed_command)(bound)
+            if content_level != "safe":
+                return ReinDecision()
+
         # 从 ToolMeta 读取风险等级（单一数据源，避免硬编码脱同步）
         # 审查 MINOR：传入 ctx 使用 per-run saddle（单例 saddle 字段会被并发 run 覆盖）
         meta = self._lookup_meta(tool, ctx)
@@ -447,7 +489,8 @@ class PermissionGate:
             # 原实现 prod 下 non-shell 危险工具（如 service_manage stop/restart）
             # 走临时审批，用户点"始终允许"即写入永久 allowlist 后免审，
             # 与 shell 命令"prod 必须预登记"的合规姿态不一致（第 8 轮审查修复）。
-            if environment == "prod" and not self.is_permanently_allowed(tool, args):
+            if environment == "prod" and not self.is_permanently_allowed(
+                    tool, args, bound_command=bound):
                 await append_record_async(
                     action=tool, conclusion="denied",
                     run_id=ctx.run_id, iteration=ctx.iteration,
@@ -486,13 +529,15 @@ class PermissionGate:
             # 语义由 risk 分支保证（忽略 session 缓存，只认 once/permanent 键）
             if self.check_permission(tool, args, risk='dangerous',
                                       conversation_id=ctx.conversation_id,
-                                      run_id=ctx.run_id):
+                                      run_id=ctx.run_id,
+                                      bound_command=bound):
                 return ReinDecision()
         else:
             # moderate 不可逆 → session 级授权可接受（风险有限）
             if self.check_permission(tool, args,
                                      conversation_id=ctx.conversation_id,
-                                     run_id=ctx.run_id):
+                                     run_id=ctx.run_id,
+                                     bound_command=bound):
                 return ReinDecision()
 
         # 未授权 → 发 permission_needed 事件 + 拦截
@@ -515,6 +560,8 @@ class PermissionGate:
                     payload={
                         "tool": tool,
                         "args": args,
+                        # 与 permission_needed 同源：前端按「工具 + 命令」定位卡片
+                        "command": str(bound or ""),
                         "message": (
                             f"授权审批超时（{int(_PERMISSION_APPROVAL_TIMEOUT_S)}s 未响应），"
                             f"已按拒绝处理: {tool}"
@@ -545,11 +592,13 @@ class PermissionGate:
                 "reversible": reversible,
                 "message": f"需要用户授权: {tool} (风险: {risk})",
                 # 卡片可读性字段（与 FilesystemGuard 的卡片信息保持一致）：
-                # 本路径只命中非命令工具（无 command 参数），故 command 留空，
-                # 前端 isCommandTool 判断下「授权命令」行自然隐藏。
+                # command 传 bound（内容 safe 的写入/定时任务工具，如写 /tmp）或空串
+                # （纯工具级授权，如 service_manage 无命令参数 → 前端 isCommandTool
+                # 判断下「授权命令」行自然隐藏）。展示的是授权键实际绑定的那条命令，
+                # 用户批准什么就看到什么。
                 # 工具名 → 中文说明的后果表尚未收录（工具级风险等级已由
                 # ToolMeta 声明），本期只补上下文不补 explain。
-                **permission_display_fields(ctx),
+                **permission_display_fields(ctx, str(bound or "")),
             },
         )] if is_first else []
         return ReinDecision(

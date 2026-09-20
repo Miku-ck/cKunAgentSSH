@@ -636,7 +636,12 @@ def _classify_interpreter(segment: str) -> tuple[str, str | None]:
 
 
 # 读取类动词：目标命中 _SECRET_FILE_RE 时升级
-_READ_VERBS = {"cat", "less", "more", "head", "tail", "cp", "scp", "rsync", "dd", "strings", "od", "xxd"}
+# nl/sed/base64 是 ops_file 读模板（base64 <path> / nl -ba <path> | sed -n）实际使用的
+# 动词 — 构造命令走 classify_constructed_command（不套默认审批），凭据读取必须由本表自己命中。
+# grep 族同因（file_grep / log_read 的过滤模板）；对 shell 口径无影响：grep 本就不在
+# 只读白名单，此前由「未知动词默认审批」拦，现在换了明确的 reason。
+_READ_VERBS = {"cat", "less", "more", "head", "tail", "cp", "scp", "rsync", "dd", "strings", "od", "xxd",
+               "nl", "sed", "base64", "grep", "egrep", "fgrep"}
 
 
 def _classify_secret_read(segment: str) -> tuple[str, str | None]:
@@ -943,7 +948,7 @@ def _classify_unknown_default(segment: str) -> tuple[str, str | None]:
     return ("dangerous", f"unknown command, default approval ({base})")
 
 
-def _classify_segment(segment: str) -> tuple[str, str | None]:
+def _classify_segment(segment: str, apply_default_approval: bool = True) -> tuple[str, str | None]:
     """对单个命令段做完整检测，取最高严重度（hardline > dangerous > safe）
 
     规则（按序累积，reason 说明命中的规则）：
@@ -953,6 +958,7 @@ def _classify_segment(segment: str) -> tuple[str, str | None]:
     4. $()/反引号 内层递归
     5. 解释器/间接执行：首 token 为解释器 → 至少 dangerous
     6. 敏感文件读取：cat/less/dd 等命中凭据文件 → dangerous
+    7. 默认审批（可由 apply_default_approval 关闭，见 classify_constructed_command）
     """
     best: tuple[str, str | None] = ("safe", None)
 
@@ -995,7 +1001,9 @@ def _classify_segment(segment: str) -> tuple[str, str | None]:
 
     # 7. C-review C1：默认审批 — 所有规则未命中且首 token 不在只读白名单
     #    → dangerous（需审批）。旧实现此处直接返回 safe（默认放行）。
-    if best[0] == "safe":
+    #    客户端自造模板（classify_constructed_command）关闭本条：模板动词不在
+    #    只读白名单里，套用会把写 /tmp/x.txt 这类普通操作也判 dangerous。
+    if apply_default_approval and best[0] == "safe":
         level, reason = _classify_unknown_default(segment)
         if _SEVERITY[level] > _SEVERITY[best[0]]:
             best = (level, reason)
@@ -1007,8 +1015,14 @@ def _classify_segment(segment: str) -> tuple[str, str | None]:
 # 主检测函数
 # ──────────────────────────────────────────────────────────────────────────────
 
-def classify_command(command: str) -> tuple[str, str | None]:
+def classify_command(command: str, apply_default_approval: bool = True) -> tuple[str, str | None]:
     """分类命令风险等级
+
+    Args:
+        command: 待判定命令
+        apply_default_approval: 是否套用「未入只读白名单即 dangerous」的默认审批。
+            默认 True（模型自由输入命令的原有口径）；客户端自造模板传 False，
+            见 classify_constructed_command。
 
     Returns:
         (level, reason)
@@ -1056,7 +1070,7 @@ def classify_command(command: str) -> tuple[str, str | None]:
     # 5. 命令链分段检测
     segments = _split_command_chain(detection)
     for segment in segments:
-        level, reason = _classify_segment(segment)
+        level, reason = _classify_segment(segment, apply_default_approval)
         if _SEVERITY[level] > _SEVERITY[best[0]]:
             best = (level, reason)
         if best[0] == "hardline":
@@ -1067,6 +1081,21 @@ def classify_command(command: str) -> tuple[str, str | None]:
     if _SEVERITY[level] > _SEVERITY[best[0]]:
         best = (level, reason)
     return best
+
+
+def classify_constructed_command(command: str) -> tuple[str, str | None]:
+    """客户端自造模板专用口径：跑全部结构性规则，但不套用「未知动词默认审批」。
+
+    与 classify_command 的差别只有一条：apply_default_approval=False。默认审批
+    （C-review C1）的动机是"模型自由输入的未入表命令不得免审"，而本函数接收的是
+    代码里写死的命令模板（ops_file 的 base64 写盘/读盘模板等），动词由不得模型选，
+    套用会把写 /tmp/x.txt 这类普通操作也判 dangerous —— 那是可用性回退。
+
+    结构层（正则表 / token 分析 / 写目标 / 子 shell / 解释器 / 凭据读取）全部保留，
+    因此模板的**目标路径**仍按真实风险定级：写 authorized_keys → hardline，
+    写 /etc/nginx/nginx.conf → dangerous。
+    """
+    return classify_command(command, apply_default_approval=False)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

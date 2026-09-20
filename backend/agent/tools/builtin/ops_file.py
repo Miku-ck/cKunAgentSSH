@@ -24,7 +24,9 @@ import shlex
 
 from agent.tools import BaseTool, ToolResult, ToolMeta
 from agent.tools.builtin.ops_common import (
+    base64_read_cmd,
     base64_write_cmd,
+    base64_write_cmd_for_classification,
     drop_sentinel_lines,
     is_remote,
     is_traversal,
@@ -64,6 +66,19 @@ _WRITE_REQUIRES_SSH = (
 )
 
 
+def _write_bound_command(args: dict) -> str | None:
+    """file_write / file_edit 共用：把真实落盘的 base64 写模板暴露给内容级判定。
+
+    没有这一步，写 /root/.ssh/authorized_keys 只按 meta.risk_level=moderate 处理
+    （会话级授权即可，点"始终允许"后含 prod 永久免审），而等价的手敲重定向会被
+    safety.classify_command 判 hardline —— 同一副作用必须同一结论。
+    """
+    path = args.get("path")
+    if not isinstance(path, str) or not path or is_traversal(path):
+        return None
+    return base64_write_cmd_for_classification(path)
+
+
 class FileReadTool(BaseTool):
     name = "file_read"
     description = "带行号读取文件指定片段（offset/limit，offset 从 1 开始）。"
@@ -91,6 +106,18 @@ class FileReadTool(BaseTool):
         timeout=30.0,
         mode_scope=["ssh"],
     )
+
+    @classmethod
+    def bound_command(cls, args: dict) -> str | None:
+        """读操作按 base64 读模板判定（remote_read_b64/saddle 快照共用该模板）。
+
+        meta.risk_level=safe 只表达"读本身可逆"；读到凭据文件必须与 `cat /etc/shadow`
+        同等对待，否则 AI 可用 file_read 免审取走 shadow/私钥，而手敲等价命令要审批。
+        """
+        path = args.get("path")
+        if not isinstance(path, str) or not path or is_traversal(path):
+            return None
+        return base64_read_cmd(path)
 
     def _validate(self, path, offset, limit):
         if is_traversal(path):
@@ -161,6 +188,10 @@ class FileWriteTool(BaseTool):
         mode_scope=["ssh"],
     )
 
+    @classmethod
+    def bound_command(cls, args: dict) -> str | None:
+        return _write_bound_command(args)
+
     async def execute(self, context, path, content):
         if is_traversal(path):
             return ToolResult(False, "", "非法路径：包含 `..`，禁止越界访问")
@@ -196,6 +227,10 @@ class FileEditTool(BaseTool):
         timeout=30.0,
         mode_scope=["ssh"],
     )
+
+    @classmethod
+    def bound_command(cls, args: dict) -> str | None:
+        return _write_bound_command(args)
 
     @staticmethod
     def _apply_replace(content, old, new):
@@ -304,6 +339,21 @@ class FileGrepTool(BaseTool):
         timeout=30.0,
         mode_scope=["ssh"],
     )
+
+    @classmethod
+    def bound_command(cls, args: dict) -> str | None:
+        """grep 会把匹配行原样返回 —— 与 file_read 同一条凭据外泄通道，同口径判定。
+
+        file_glob 不纳入：`find -name` 只返回路径名，不外泄文件内容。
+        """
+        path = args.get("path")
+        if not isinstance(path, str) or not path or is_traversal(path):
+            return None
+        try:
+            max_lines = min(5000, max(1, int(args.get("max_lines") or 200)))
+        except (TypeError, ValueError):
+            max_lines = 200
+        return file_grep_cmd(path, str(args.get("pattern") or ""), max_lines)
 
     async def execute(self, context, path, pattern, max_lines=200):
         if is_traversal(path):
