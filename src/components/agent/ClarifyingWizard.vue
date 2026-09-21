@@ -38,12 +38,12 @@
           <div class="clarify-body">
             <p class="clarify-question">
               <span class="qnum">{{ displayStep }}.</span>
-              {{ wizard?.question || '' }}
+              {{ currentQuestion.question }}
             </p>
 
             <div class="clarify-options">
               <button
-                v-for="opt in wizard?.options || []"
+                v-for="opt in currentQuestion.options"
                 :key="opt.id"
                 class="clarify-option"
                 :class="{ selected: selectedChoice === opt.id }"
@@ -55,7 +55,7 @@
 
               <!-- D 自定义输入 -->
               <div
-                v-if="wizard?.allowCustom"
+                v-if="currentQuestion.allowCustom"
                 class="clarify-option custom-wrap"
                 :class="{ selected: selectedChoice === 'custom' }"
               >
@@ -126,24 +126,39 @@ const localStep = ref(0)
 /** 当前向导状态 — 直接引用 store 实现双向绑定 */
 const wizard = computed(() => agentStore.clarificationWizard)
 
-/* P1-7: 后端始终 push 全量 steps 且 current_step=0，前端独立维护 localStep 索引 */
+/* P1-7: 后端一次推送全量 steps（step=0），前端独立维护 localStep 索引 */
 /** 显示用的步数（1-based） */
 const displayStep = computed(() => {
   const base = wizard.value?.currentStep ?? 0
   return Math.max(1, base + localStep.value + 1)
 })
 
-/** 当前步骤的题目（question / options / allowCustom） */
+/** 当前步索引（0-based）：后端起始步 + 前端本地推进 */
+const stepIndex = computed(() => (wizard.value?.currentStep ?? 0) + localStep.value)
+
+/** 当前步骤的题目（question / options / allowCustom）
+ *
+ * 全量 steps 是后端契约（clarification_needed.steps）；缺 steps 时回落到事件
+ * 自带的当前步字段，保证单步/旧事件仍能渲染。 */
 const currentQuestion = computed(() => {
-  if (!wizard.value) return { question: '', options: [], allowCustom: true }
+  const w = wizard.value
+  if (!w) return { question: '', options: [] as Array<{ id: string; label: string }>, allowCustom: true }
+  const s = w.steps?.[stepIndex.value]
   return {
-    question: wizard.value.question || '',
-    options: wizard.value.options || [],
-    allowCustom: wizard.value.allowCustom ?? true,
+    question: s?.question ?? w.question ?? '',
+    options: s?.options ?? w.options ?? [],
+    allowCustom: s?.allow_custom ?? w.allowCustom ?? true,
   }
 })
 
-const canAdvance = computed(() => selectedChoice.value !== null)
+const canAdvance = computed(() => {
+  const choice = selectedChoice.value
+  if (choice === null) return false
+  // 只选了「自定义」却不填内容 → 提交上去是一条无意义的 "choice: custom"，
+  // 后端把它原样注入 LLM 上下文，等于用户答了个空
+  if (choice === 'custom') return customText.value.trim().length > 0
+  return true
+})
 
 /** 从 args 提取可展示的命令文本（command/shell/cmd → JSON 兜底） */
 const commandText = computed(() => {
@@ -182,9 +197,9 @@ function selectOption(id: string) {
 /** 记录当前答案到 wizard.answers */
 function recordCurrentAnswer() {
   const w = wizard.value
-  if (!w) return
-  const stepKey = String(w.currentStep + localStep.value)
-  const choice = selectedChoice.value!
+  if (!w || selectedChoice.value === null) return
+  const stepKey = String(stepIndex.value)
+  const choice = selectedChoice.value
   if (choice === 'custom') {
     w.answers[stepKey] = { choice, custom_text: customText.value || undefined }
   } else {
@@ -302,12 +317,12 @@ onUnmounted(() => {
   width: 440px;
   max-width: calc(100vw - 32px);
   max-height: calc(100vh - 80px);
-  background: var(--card-perm-bg, #2d221a);
-  border: 1px solid var(--card-perm-border, #4a3a23);
-  border-radius: var(--radius-md, 6px);
+  background: var(--card-perm-bg);
+  border: 1px solid var(--card-perm-border);
+  border-radius: var(--radius-md);
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(0, 0, 0, 0.4);
   font-family: var(--font-sans);
-  color: var(--text-primary, #ccc);
+  color: var(--text-primary);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -329,22 +344,22 @@ onUnmounted(() => {
 }
 
 .clarify-icon {
-  color: var(--card-perm-text, #e6c07b);
+  color: var(--card-perm-text);
   flex-shrink: 0;
 }
 
 .clarify-title {
   font-size: 12px;
   font-weight: 600;
-  color: var(--card-perm-text, #e6c07b);
+  color: var(--card-perm-text);
   letter-spacing: 0.3px;
 }
 
 .clarify-progress {
   font-size: 11px;
-  color: var(--text-tertiary, #767676);
+  color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
 }
 
 /* ── 命令上下文条 ── */
@@ -366,21 +381,21 @@ onUnmounted(() => {
 .ctx-cmd-label {
   flex-shrink: 0;
   font-size: 10px;
-  font-family: var(--font-mono, monospace);
-  color: var(--text-tertiary, #767676);
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   padding: 1px 5px;
-  border: 1px solid var(--border-subtle, #2d2d30);
+  border: 1px solid var(--border-subtle);
   border-radius: 2px;
   background: rgba(255, 255, 255, 0.03);
 }
 
 .ctx-cmd-text {
   flex: 1;
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   font-size: 12px;
-  color: var(--status-info-text, #569cd6);
+  color: var(--status-info-text);
   background: rgba(0, 0, 0, 0.25);
   border-radius: 2px;
   padding: 3px 7px;
@@ -397,7 +412,7 @@ onUnmounted(() => {
   gap: 5px;
   font-size: 11px;
   line-height: 1.4;
-  color: var(--status-warn-text, #dcdcaa);
+  color: var(--status-warn-text);
 }
 
 .ctx-reason svg {
@@ -418,14 +433,14 @@ onUnmounted(() => {
   font-size: 13px;
   font-weight: 500;
   line-height: 1.5;
-  color: var(--text-primary, #ccc);
+  color: var(--text-primary);
 }
 
 .qnum {
-  color: var(--card-perm-text, #e6c07b);
+  color: var(--card-perm-text);
   font-weight: 600;
   margin-right: 6px;
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
 }
 
 /* ── 选项列表 ── */
@@ -444,26 +459,26 @@ onUnmounted(() => {
   padding: 6px 10px;
   background: rgba(0, 0, 0, 0.2);
   border: 1px solid transparent;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   transition: all 0.1s ease;
   text-align: left;
   font-family: inherit;
   font-size: 12px;
-  color: var(--text-secondary, #969696);
+  color: var(--text-secondary);
   line-height: 1.45;
 }
 
 .clarify-option:hover {
   background: rgba(255, 255, 255, 0.04);
-  border-color: var(--border-default, #3e3e42);
-  color: var(--text-primary, #ccc);
+  border-color: var(--border-default);
+  color: var(--text-primary);
 }
 
 .clarify-option.selected {
-  background: var(--status-warn-bg, #2d2d1a);
-  border-color: var(--card-warn-border, #4a4533);
-  color: var(--text-primary, #ccc);
+  background: var(--status-warn-bg);
+  border-color: var(--card-warn-border);
+  color: var(--text-primary);
 }
 
 .badge {
@@ -476,18 +491,18 @@ onUnmounted(() => {
   justify-content: center;
   font-size: 10px;
   font-weight: 700;
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   background: rgba(255, 255, 255, 0.06);
-  color: var(--text-tertiary, #767676);
-  border: 1px solid var(--border-subtle, #2d2d30);
+  color: var(--text-tertiary);
+  border: 1px solid var(--border-subtle);
   transition: all 0.1s ease;
   margin-top: 2px;
 }
 
 .badge.selected {
-  background: var(--card-perm-text, #e6c07b);
+  background: var(--card-perm-text);
   color: #1a1a0a;
-  border-color: var(--card-perm-text, #e6c07b);
+  border-color: var(--card-perm-text);
 }
 
 .opt-label {
@@ -508,13 +523,13 @@ onUnmounted(() => {
   outline: none;
   font-family: inherit;
   font-size: 12px;
-  color: var(--text-primary, #ccc);
+  color: var(--text-primary);
   padding: 2px 0;
   min-width: 0;
 }
 
 .custom-input::placeholder {
-  color: var(--text-tertiary, #555);
+  color: var(--text-tertiary);
 }
 
 /* ── 底栏 ── */
@@ -533,7 +548,7 @@ onUnmounted(() => {
   padding: 0 12px;
   font-size: 11px;
   font-family: inherit;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   transition: all 0.12s ease;
   outline: none;
@@ -545,25 +560,25 @@ onUnmounted(() => {
 
 .cbtn.skip {
   background: transparent;
-  color: var(--text-tertiary, #767676);
-  border: 1px solid var(--border-default, #3e3e42);
+  color: var(--text-tertiary);
+  border: 1px solid var(--border-default);
 }
 
 .cbtn.skip:hover:not(:disabled) {
-  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
-  color: var(--text-secondary, #969696);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
 }
 
 .cbtn.done {
-  background: var(--card-perm-btn-bg, #3a5a3a);
-  color: var(--card-perm-btn-text, #b0e0b0);
-  border: 1px solid var(--card-perm-btn-border, #4a8a4a);
+  background: var(--card-perm-btn-bg);
+  color: var(--card-perm-btn-text);
+  border: 1px solid var(--card-perm-btn-border);
   font-weight: 500;
 }
 
 .cbtn.done:hover:not(:disabled) {
-  background: var(--card-perm-btn-hover, #4a6a4a);
-  border-color: var(--card-perm-resolved, #4a8a4a);
+  background: var(--card-perm-btn-hover);
+  border-color: var(--card-perm-resolved);
 }
 
 .cbtn:disabled {

@@ -17,7 +17,7 @@ EvolutionEngine — 策略演化 + 超参数调优
   - 效率 > 0.8 → 减少 max_iterations（节约资源）
   - 鲁棒性 < 0.6 → 降低 temperature（减少随机性）
   - 效率低 + 鲁棒性好 → 提高 temperature（鼓励探索）
-  - 成本高（>0.5 USD 或 >10k tokens/次）→ 降低 max_iterations + 收紧 temperature
+  - 成本高于 _HIGH_COST_USD → 降低 max_iterations + 收紧 temperature
   - 上限到达率 > 50% → 增加 max_iterations（任务普遍偏复杂）
   - 综合分 < 0.5 → 启用 thinking 增强推理
 """
@@ -42,7 +42,7 @@ _DEFAULT_CONFIG = {
 
 # ── 演化边界保护 ──
 # 防止演化算法把参数调到极端值，导致 Agent 行为失常
-_MAX_ITER_BOUNDS = (5, 300)        # max_iterations 边界（与设置面板 10-300 一致）
+_MAX_ITER_BOUNDS = (5, 300)        # 演化算法自己的搜索区间（请求侧 Field 是 1-500）
 _TEMPERATURE_BOUNDS = (0.1, 1.5)   # temperature 边界（放宽，允许低温高确定性）
 # 单次演化调整幅度（避免震荡）
 _MAX_ITER_STEP = 5
@@ -56,8 +56,10 @@ _HIGH_MAX_REACHED_RATE = 0.5
 @dataclass
 class EvolvedConfig:
     """演化后的配置"""
-    max_iterations: int = 50
-    temperature: float = 0.7
+    # 默认值取自 _DEFAULT_CONFIG（= contracts.AgentConfig 的默认）；原先这里是另一份
+    # 50/0.7 硬编码，与 _DEFAULT_CONFIG 的 100/0.7 已经对不上。
+    max_iterations: int = _DEFAULT_CONFIG["max_iterations"]
+    temperature: float = _DEFAULT_CONFIG["temperature"]
     max_tokens: Optional[int] = None
     enable_thinking: bool = False
     enable_tools: bool = True
@@ -95,11 +97,13 @@ class EvolutionEngine:
             base.update(current_config)
 
         cfg = EvolvedConfig(
-            max_iterations=base.get("max_iterations", 50),
-            temperature=base.get("temperature", 0.7),
-            max_tokens=base.get("max_tokens"),
-            enable_thinking=base.get("enable_thinking", False),
-            enable_tools=base.get("enable_tools", True),
+            # base 由 _DEFAULT_CONFIG 起底，五个键必然存在 —— 这里再写一份 .get 兜底
+            # 默认值等于给同一个参数留下第二个定义
+            max_iterations=base["max_iterations"],
+            temperature=base["temperature"],
+            max_tokens=base["max_tokens"],
+            enable_thinking=base["enable_thinking"],
+            enable_tools=base["enable_tools"],
         )
 
         if not recent_reflections:
@@ -125,8 +129,18 @@ class EvolutionEngine:
                 robustnesses.append(float(cfg_data.get("robustness", 0.5)))
                 completions.append(float(cfg_data.get("completion", 0.5)))
                 # 新增维度：成本/迭代数/上限到达
-                cost = cfg_data.get("cost_usd") or cfg_data.get("cost", 0.0)
-                cost_usds.append(float(cost) if cost is not None else 0.0)
+                # 成本维度只看 cost_usd（真实 USD）。原写法 `cost_usd or cost` 把
+                # 反思记录里的另一个字段 cost —— 0~1 的**成本评分** —— 当成美元兜底：
+                # 零成本运行（本地/免费模型）cost_usd 恰为 0.0，于是回落到评分 1.0
+                # （_score_cost 对 cost_usd<=0 返回 1.0），被读成"单次花了 $1.00"。
+                # 结果越是免费的运行越触发规则 1（收紧迭代 + 降温），演化把资源削到
+                # 下限还给用户显示"成本高 $1.000"。缺 cost_usd 的旧行按 0.0 = 无成本
+                # 数据处理，与 _score_cost 的"无成本数据不惩罚"同一口径。
+                cost_usd_raw = cfg_data.get("cost_usd")
+                try:
+                    cost_usds.append(float(cost_usd_raw) if cost_usd_raw is not None else 0.0)
+                except (TypeError, ValueError):
+                    cost_usds.append(0.0)
                 iters = cfg_data.get("iterations")
                 if iters is not None:
                     iterations_list.append(int(iters))

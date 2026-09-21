@@ -164,6 +164,19 @@ async function waitForBackendReady(timeoutMs = 8000): Promise<void> {
   return _healthCheckPromise
 }
 
+/**
+ * 后端错误体 → 可读文案。
+ * 422（请求体校验失败）的 detail 是 [{loc, msg, type}] 数组，
+ * 直接交给 Error/toast 会得到 "[object Object]"。
+ */
+function backendErrorDetail(err: unknown): string {
+  const detail = (err as { detail?: unknown } | null)?.detail
+  if (Array.isArray(detail)) {
+    return detail.map(d => (d as { msg?: string })?.msg || String(d)).join('; ')
+  }
+  return typeof detail === 'string' ? detail : ''
+}
+
 async function request<T>(path: string, options?: RequestInit, _retrying = false): Promise<T> {
   const { headers: customHeaders, ...restOptions } = options || {}
   // FormData 请求由浏览器自动设置 Content-Type（含 multipart boundary），不要手动覆盖
@@ -183,7 +196,7 @@ async function request<T>(path: string, options?: RequestInit, _retrying = false
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }))
-      throw new Error(err.detail || res.statusText)
+      throw new Error(backendErrorDetail(err) || res.statusText)
     }
     if (res.status === 204) return {} as T
     return res.json()
@@ -530,7 +543,7 @@ export const auditApi = {
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }))
-      throw new Error(err.detail || res.statusText)
+      throw new Error(backendErrorDetail(err) || res.statusText)
     }
     const blob = await res.blob()
     const a = document.createElement('a')
@@ -542,6 +555,13 @@ export const auditApi = {
 }
 
 // ── Agent SSE 流式运行 ──
+
+/** 澄清向导单步（后端 reins.clarification._step_to_dict 的形状） */
+export interface AgentClarificationStep {
+  question: string
+  options: Array<{ id: string; label: string }>
+  allow_custom: boolean
+}
 
 export interface AgentSSEEvent {
   type: 'state' | 'content' | 'reasoning' | 'tool_call_start' | 'tool_call_result' | 'warning' | 'error' | 'human_help_needed' | 'permission_needed' | 'permission_expired' | 'permission_explain' | 'intention' | 'tool_deliver' | 'clarification_needed' | 'clarification_done' | 'done'
@@ -592,6 +612,8 @@ export interface AgentSSEEvent {
   question?: string
   options?: Array<{ id: string; label: string }>
   allow_custom?: boolean
+  /** 全量步骤（后端一次推送）：前端本地逐步推进时按索引取题 */
+  steps?: AgentClarificationStep[]
   // clarification_done 事件专用字段
   answers?: Record<string, { choice: string; custom_text?: string }>
   summary?: string
@@ -699,7 +721,11 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
           system_prompt: options.systemPrompt,
           ssh_session_id: options.sshSessionId,
           environment: options.environment || 'test',
-          enable_thinking: options.enableThinking ?? false,
+          // 未表态时省略该字段（后端 None = 允许演化配置接管）；
+          // 原实现 ?? false 会把「没设置」压成「显式关闭」，用户无法再关也无法让演化生效
+          ...(options.enableThinking === undefined
+            ? {}
+            : { enable_thinking: options.enableThinking }),
           enable_tools: options.enableTools ?? true,
           max_iterations: options.maxIterations ?? 100,
           enable_dynamic_budget: options.enableDynamicBudget ?? true,
@@ -719,7 +745,7 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
         // 变成 unhandled rejection
         const err = await res.json().catch(() => ({ detail: res.statusText }))
         try {
-          options.onError(err.detail || res.statusText)
+          options.onError(backendErrorDetail(err) || res.statusText)
         } catch (cbErr) {
           console.error('[streamAgentRun] onError 回调异常:', cbErr)
         }
@@ -798,14 +824,16 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
 
 /**
  * 可见终端执行模式：回传命令执行结果，恢复后端挂起的 Agent 循环。
- * 成功回传走 /agent/tool-result（后端 resume）；用户拒绝同样走此接口，
- * 以 success=false + 固定拒绝文案 形式标记为拒绝。
+ * 成功回传走 /agent/tool-result（后端 resume）；用户拒绝走同一接口但必须带
+ * rejected=true（后端 reject）—— 只有该标志能让后端把结果写成
+ * "[用户拒绝执行] <cmd>" 而非 "[已写入可见终端] <cmd>"，否则模型会以为命令已执行。
  */
 export async function postToolResult(
   toolId: string,
   output: string,
   success: boolean,
   exitCode: number | null,
+  rejected = false,
 ): Promise<void> {
   await ensureApiToken()
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
@@ -813,11 +841,11 @@ export async function postToolResult(
   const res = await fetch(url, {
     method: 'POST',
     headers: withApiToken(headers),
-    body: JSON.stringify({ tool_id: toolId, output, success, exit_code: exitCode }),
+    body: JSON.stringify({ tool_id: toolId, output, success, exit_code: exitCode, rejected }),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(err.detail || res.statusText)
+    throw new Error(backendErrorDetail(err) || res.statusText)
   }
 }
 
@@ -966,13 +994,17 @@ export const scheduleApi = {
 
   /** 删除任务 */
   remove: (id: string) =>
-    request<{ deleted: boolean }>(`/schedules/${id}`, {
+    request<{ ok: boolean }>(`/schedules/${id}`, {
       method: 'DELETE',
     }),
 
-  /** 立即巡检（不推进下次调度时间） */
+  /**
+   * 立即巡检。后端走 ScheduleEngine.trigger(manual=True)：不推进 next_run_at，
+   * 手动执行不消耗本次定时；若执行期间恰好到期，会在结束后的下一个 tick（≤30s）
+   * 补跑该次定时。
+   */
   runNow: (id: string) =>
-    request<{ schedule_id: string; dispatched: boolean }>(`/schedules/${id}/run`, {
+    request<{ ok: boolean; schedule_id: string }>(`/schedules/${id}/run`, {
       method: 'POST',
     }),
 
@@ -1009,7 +1041,8 @@ export interface AgentMemoryItem {
   type: string
   mode: string
   content: string
-  importance: number
+  /** 库里 importance 可为 NULL（列表接口原样透传 DB 行，后端 _row_to_entry 也为此兜底） */
+  importance: number | null
   use_count: number
   last_used_at: string
   created_at: string
@@ -1070,7 +1103,8 @@ export interface AgentRunTrace {
     tool_name: string
     arguments: Record<string, unknown> | string
     result: string | null
-    success: boolean
+    /** null = 调用发起后结果从未回写（崩溃/中止），前端按「未回写」渲染 */
+    success: boolean | null
     duration_ms: number | null
     created_at: string
   }>

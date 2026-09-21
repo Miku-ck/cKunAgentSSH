@@ -112,12 +112,14 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
-import { api } from '@/api/client'
+import { useToastStore } from '@/stores/toast'
+import { api, toFriendlyMessage } from '@/api/client'
 import SettingRow from '@/components/settings/fields/SettingRow.vue'
 import ToggleSwitch from '@/components/settings/fields/ToggleSwitch.vue'
 
 const settingsStore = useSettingsStore()
 const settings = settingsStore.settings
+const toast = useToastStore()
 
 const defaultModelName = ref('加载中…')
 const defaultModelId = ref('')
@@ -129,7 +131,9 @@ const retentionSaving = ref(false)
 async function loadRetention() {
   try {
     const data = await api.getConvRetention()
-    retention.value = { enabled: !!data.enabled, keepCount: data.keep_count || 1000 }
+    // ?? 而不是 ||：keep_count=0 是后端允许写入的合法值（清空全部已结束会话），
+    // 用 || 会把它显示成 1000 —— 界面说留 1000 条、实际在删用户的会话。
+    retention.value = { enabled: !!data.enabled, keepCount: data.keep_count ?? 1000 }
   } catch {
     // 加载失败保持默认关闭（安全方向）
   }
@@ -146,8 +150,10 @@ async function saveRetention(patch: Partial<{ enabled: boolean; keepCount: numbe
   retentionSaving.value = true
   try {
     await api.updateConvRetention({ enabled: next.enabled, keep_count: next.keepCount })
-  } catch {
+  } catch (e: unknown) {
     retention.value = { ...prev }
+    // 失败只回滚开关、不提示 → 用户看到"点了没反应"，会反复重试
+    toast.error(toFriendlyMessage(e, '会话保留设置保存失败'))
   } finally {
     retentionSaving.value = false
   }
@@ -202,7 +208,7 @@ onMounted(async () => {
   padding: 0 24px 0 8px;
   background: var(--bg-input);
   border: 1px solid var(--border-input);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--radius-sm);
   color: var(--text-primary);
   font-size: 12px;
   font-family: inherit;
@@ -257,7 +263,7 @@ onMounted(async () => {
   padding: 0 8px;
   background: var(--bg-input);
   border: 1px solid var(--border-input);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--radius-sm);
   color: var(--text-primary);
   font-size: 12px;
   font-family: inherit;

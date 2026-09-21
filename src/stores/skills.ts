@@ -43,7 +43,6 @@ interface SkillManifest {
 }
 
 const SKILL_MD_NAMES = ['SKILL.md', 'skill.md', 'Skill.md']
-const STORAGE_KEY = 'ckun-skills-v2'
 
 /** 为没有 category 的技能按 slug 归类 */
 const CATEGORY_MAP: Record<string, string> = {
@@ -67,20 +66,6 @@ function skillInitials(name: string): string {
     return (words[0][0] + words[1][0]).toUpperCase()
   }
   return cleaned.slice(0, 2).toUpperCase()
-}
-
-function loadPersistedState(): { enabledMap: Record<string, boolean>; userSkills: Skill[] } {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return { enabledMap: {}, userSkills: [] }
-    const parsed = JSON.parse(raw)
-    return {
-      enabledMap: parsed.enabledMap && typeof parsed.enabledMap === 'object' ? parsed.enabledMap : {},
-      userSkills: Array.isArray(parsed.userSkills) ? parsed.userSkills : [],
-    }
-  } catch {
-    return { enabledMap: {}, userSkills: [] }
-  }
 }
 
 /**
@@ -135,15 +120,18 @@ async function findSkillMdPath(api: ElectronAPI, dirPath: string): Promise<strin
   }
 }
 
+/** 对话侧只有 SSH 助手一个模式：与设置页 SkillsPanel 的开关、/agent/run 的 mode 保持一致 */
+const CHAT_MODE = 'ssh'
+
 export const useSkillStore = defineStore('skills', () => {
-  const persisted = loadPersistedState()
   const builtinSkills = ref<Skill[]>([])
-  const userSkills = ref<Skill[]>(persisted.userSkills)
   const remoteSkills = ref<Skill[]>([])
-  const enabledMap = ref<Record<string, boolean>>(persisted.enabledMap)
   const isLoading = ref(false)
 
-  const skills = computed(() => [...builtinSkills.value, ...userSkills.value, ...remoteSkills.value])
+  // 本地扫描到的内置技能只用于同步入库（syncBuiltinToBackend）：菜单读的是
+  // 后端那份（remoteSkills，带用户在设置页的开关状态）。这里若置 enabled，
+  // 同一个技能会在 "/" 菜单里出现两条（id 还分别是 builtin-<slug> 与 DB id）。
+  const skills = computed(() => [...builtinSkills.value, ...remoteSkills.value])
   const enabledSkills = computed(() => skills.value.filter(s => s.enabled))
 
   /** 从 ~/.agents/skills 读取内置技能 */
@@ -190,7 +178,7 @@ export const useSkillStore = defineStore('skills', () => {
             content: manifest.content,
             triggerWords,
             icon: typeof manifest.metadata?.icon === 'string' ? manifest.metadata.icon : skillInitials(manifest.name),
-            enabled: enabledMap.value[slug] ?? false,
+            enabled: false, // 见 skills 计算属性：菜单以后端副本为准，避免同名重复
             source: 'builtin',
             metadata: manifest.metadata,
             localPath: entry.path,
@@ -245,7 +233,10 @@ export const useSkillStore = defineStore('skills', () => {
         | undefined
       if (!api) return
 
-      const items = await api.listSkills()
+      // 带 mode 才能拿到 per-mode 开关：设置页的开关写的就是 skill_mode_config，
+      // 不带 mode 时后端只回全局 enabled —— 于是「本模式已停用」的技能仍出现在
+      // 对话侧 "/" 菜单里，选中后被 agent.py 按 mode 过滤掉，表现为静默无效。
+      const items = await api.listSkills(CHAT_MODE)
       remoteSkills.value = items.map(item => {
         // trigger_words 是 JSON 字符串，需解析
         let triggerWords: string[] = []
@@ -271,7 +262,9 @@ export const useSkillStore = defineStore('skills', () => {
           content: item.system_prompt,
           triggerWords,
           icon: skillInitials(item.name),
-          enabled: item.enabled === 1,
+          // 指定了 mode 时以后端 mode_enabled 为准（与 SkillsPanel 同一口径）；
+          // 字段缺失（旧后端/未带 mode）才退回全局 enabled
+          enabled: item.mode_enabled === undefined ? item.enabled === 1 : !!item.mode_enabled,
           source: item.source as SkillSource,
           metadata: { priority: item.priority || 0 },
           created_at: item.created_at,
@@ -288,5 +281,7 @@ export const useSkillStore = defineStore('skills', () => {
     enabledSkills,
     isLoading,
     loadBuiltinSkills,
+    // 设置页改动技能后需回灌对话侧菜单：remoteSkills 只在 loadBuiltinSkills 时拉一次
+    loadRemoteSkills,
   }
 })

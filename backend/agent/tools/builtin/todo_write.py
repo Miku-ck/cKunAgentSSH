@@ -17,6 +17,14 @@ _todo_store: dict[str, list[dict]] = {}
 # 单个 run 的任务数上限，防止内存膨胀
 _MAX_TODOS_PER_RUN = 100
 
+# 状态与长度上限的唯一来源：schema 的 enum、_update 的校验都从这里派生，
+# 免得出现「schema 收 3 个值、代码放行任意字符串」的口径漂移
+_STATUSES = ("pending", "in_progress", "completed")
+
+# 每条任务的内容上限：create/update 都会把整张表回显进上下文，
+# 单条不限长度 × 100 条会让一次工具调用塞进几十 K token
+_MAX_CONTENT_CHARS = 200
+
 
 def clear_todos(run_id: str) -> None:
     """清理指定 run_id 的任务列表（Agent 运行结束后调用，防止内存泄漏）"""
@@ -28,6 +36,13 @@ def _get_todos(run_id: str) -> list[dict]:
     if run_id not in _todo_store:
         _todo_store[run_id] = []
     return _todo_store[run_id]
+
+
+def _content_too_long_error(content: str) -> str | None:
+    if len(content) > _MAX_CONTENT_CHARS:
+        return (f"任务内容需 ≤{_MAX_CONTENT_CHARS} 字符，收到 {len(content)}；"
+                "请改写成一句话待办（细节留在自己的推理里，不要塞进任务项）")
+    return None
 
 
 def _format_todos(todos: list[dict]) -> str:
@@ -79,7 +94,7 @@ class TodoWriteTool(BaseTool):
             },
             "status": {
                 "type": "string",
-                "enum": ["pending", "in_progress", "completed"],
+                "enum": list(_STATUSES),
                 "description": "任务状态（update 时可选）",
             },
         },
@@ -141,6 +156,9 @@ class TodoWriteTool(BaseTool):
             return ToolResult(
                 False, "", "create 操作需要 content 参数", priority="high"
             )
+        too_long = _content_too_long_error(content)
+        if too_long:
+            return ToolResult(False, "", too_long, priority="high")
         # 任务数上限保护，防止内存膨胀
         if len(todos) >= _MAX_TODOS_PER_RUN:
             return ToolResult(
@@ -175,16 +193,23 @@ class TodoWriteTool(BaseTool):
                 "update 操作至少需要 content 或 status 之一",
                 priority="high",
             )
-        # 按 ID 查找目标任务
-        target = None
-        for t in todos:
-            if t["id"] == todo_id:
-                target = t
-                break
-        if target is None:
+        # 声明了 enum 不等于收到的就在 enum 里：脏状态会被原样渲染回模型
+        if status and status not in _STATUSES:
+            return ToolResult(
+                False, "",
+                f"status 必须是 {'/'.join(_STATUSES)} 之一，收到 {status!r}",
+                priority="high",
+            )
+        if content:
+            too_long = _content_too_long_error(content)
+            if too_long:
+                return ToolResult(False, "", too_long, priority="high")
+        idx = self._find(todos, todo_id)
+        if idx < 0:
             return ToolResult(
                 False, "", f"未找到任务: {todo_id}", priority="high"
             )
+        target = todos[idx]
         if content:
             target["content"] = content
         if status:
@@ -195,20 +220,28 @@ class TodoWriteTool(BaseTool):
             priority="normal",
         )
 
+    @staticmethod
+    def _find(todos: list[dict], todo_id: str) -> int:
+        """按 ID 定位任务下标，未找到返回 -1（update / delete 共用）"""
+        for i, t in enumerate(todos):
+            if t["id"] == todo_id:
+                return i
+        return -1
+
     def _delete(self, todos: list[dict], todo_id: str) -> ToolResult:
         """按 ID 删除任务"""
         if not todo_id:
             return ToolResult(
                 False, "", "delete 操作需要 id 参数", priority="high"
             )
-        for i, t in enumerate(todos):
-            if t["id"] == todo_id:
-                del todos[i]
-                return ToolResult(
-                    True,
-                    f"已删除任务: {todo_id}\n" + _format_todos(todos),
-                    priority="normal",
-                )
+        idx = self._find(todos, todo_id)
+        if idx < 0:
+            return ToolResult(
+                False, "", f"未找到任务: {todo_id}", priority="high"
+            )
+        del todos[idx]
         return ToolResult(
-            False, "", f"未找到任务: {todo_id}", priority="high"
+            True,
+            f"已删除任务: {todo_id}\n" + _format_todos(todos),
+            priority="normal",
         )

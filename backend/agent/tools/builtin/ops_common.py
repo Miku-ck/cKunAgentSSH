@@ -26,6 +26,35 @@ def truncate_output(output: str, threshold: int = TRUNC_THRESHOLD) -> str:
     return head + f"\n... [输出已截断，省略中间 {omitted} 字符]\n" + tail
 
 
+def parse_int_arg(raw, name: str, default: int | None = None) -> tuple[int | None, str]:
+    """把模型填的数字参数转成 int，返回 (值, 错误信息)；错误非空时值为 None。
+
+    各工具的 limit/lines/port/timeout 槽位由模型填写，原先一律裸 `int(raw)`：
+    填成 "30s"、"" 或 null 时抛 ValueError/TypeError 冒到驱动，回给模型的是一句
+    裸栈而不是一句「这个参数该怎么填」。区间策略仍由各调用方自己决定（有的钳制、
+    有的拒绝），这里只负责解析。
+    """
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        if default is None:
+            return None, f"{name} 需为整数，收到 {raw!r}"
+        return default, ""
+    try:
+        return int(raw), ""
+    except (TypeError, ValueError):
+        return None, f"{name} 需为整数，收到 {raw!r}"
+
+
+def clamp_int(raw, default: int, low: int, high: int) -> int:
+    """转 int 并钳到 [low, high]，缺失/非法一律回 default。
+
+    供 bound_command（判定视图）使用：那里绝不许抛，且必须与 execute 生成同一条
+    命令串 —— 授权键是 sha256(命令)，两边各写一份钳制规则就会漂移（max_lines=0
+    曾一边折成 200、一边钳成 1，预授权因此永不命中）。
+    """
+    parsed, _err = parse_int_arg(raw, "", default)
+    return max(low, min(parsed if parsed is not None else default, high))
+
+
 def is_traversal(path) -> bool:
     """路径是否含 `..` 越界访问。"""
     if not isinstance(path, str) or not path:
@@ -58,13 +87,19 @@ def strip_remote_tail(output: str) -> str:
 
 
 async def exec_remote(
-    ssh_session_id: str, command: str, timeout: int
+    ssh_session_id: str, command: str, timeout: int, keep_full: bool = False
 ) -> tuple[bool, str, int | None, str] | None:
     """在指定 SSH 会话上执行命令，返回 (success, 组装后输出, exit_code, 执行异常信息)。
 
     输出组装规则（单一实现源，run_headless 与 shell_exec 共用）：
     stdout + 可选 "\\n[stderr]\\n..." + 可选 "\\n[exit_code=..]"，再统一截断。
     success 判定：bridge 报 success 且 exit_code == 0。
+
+    keep_full=True 供**字节协议**通道使用（base64 回传文件内容、增量日志 tail）：
+    头尾保留截断是为「给人看的命令输出」设计的，插进协议载荷即损坏数据 ——
+    base64 串里混入中文标记行会直接解码失败（file_edit 因此对 >2.9KB 的文件报
+    「文件不存在」），日志 tail 的 offset 记账会与实际字节错位（下一轮重复读同一段）。
+    走这条路等于放弃长度兜底，上限由调用方自己显式设定（见 remote_read_b64）。
 
     返回 None 表示 Bridge 不可用（未配置端口/令牌）——由调用方决定
     面向用户的文案；err 仅在 bridge 调用抛出异常时非空（此时 output 为空），
@@ -97,13 +132,16 @@ async def exec_remote(
     if exit_code is not None:
         full += f"\n[exit_code={exit_code}]"
     success = bool(result.get("success", False)) and exit_code == 0
-    return success, truncate_output(full), exit_code, ""
+    return success, (full if keep_full else truncate_output(full)), exit_code, ""
 
 
 async def run_headless(
-    context, command: str, timeout: int = 30
+    context, command: str, timeout: int = 30, keep_full: bool = False
 ) -> tuple[bool, str]:
     """在远程 SSH 会话上无头执行一条命令，返回 (success, output)。
+
+    keep_full=True 的语义见 exec_remote：字节协议通道（base64 回传内容、
+    增量日志 tail）必须用它，否则回传载荷会被头尾保留截断损坏。
 
     安全（P0 fail-closed）：运维工具（ops_*）语义上只面向远程目标机。
     下列任一条件缺失即拒绝执行、返回失败，**绝不降级到后端主机本机执行**：
@@ -123,7 +161,7 @@ async def run_headless(
     if not ssh_session_id:
         return False, "拒绝执行：缺少 SSH 会话，运维工具仅限远程 SSH 会话（未在后端主机本机执行）"
 
-    result = await exec_remote(ssh_session_id, command, timeout)
+    result = await exec_remote(ssh_session_id, command, timeout, keep_full=keep_full)
     if result is None:
         return False, (
             "拒绝执行（fail-closed）：Electron Bridge 未就绪，"
@@ -185,18 +223,31 @@ def drop_sentinel_lines(output: str) -> list[str]:
     ]
 
 
-async def remote_read_b64(context, path: str) -> tuple[bool, bytes]:
-    """远程以 base64 读取文件原始字节（哨兵经 strip_remote_tail 无损剥离：
-    base64 字符集不含 '['，与尾部 "[exit_code=..]" 天然无歧义）。
+# base64 回传的显式载荷上限（原始字节）。原先这道保护是「靠 exec_remote 的 4000
+# 字符截断兜底」，但对协议载荷而言截断不是限制而是损坏（中文标记行混进 base64 →
+# 解码抛异常 → file_edit 报「文件不存在」、saddle 快照静默丢失）。约 200KB 的文本
+# 配置已远超真实编辑场景，超出即明确拒绝，让调用方拿到可转述的理由。
+B64_READ_MAX_BYTES = 200 * 1024
 
-    失败时 payload 为错误信息字节（沿用 run_headless 的失败输出）。
+
+async def remote_read_b64(context, path: str) -> tuple[bool, bytes]:
+    """远程以 base64 读取文件原始字节（keep_full：哨兵经 strip_remote_tail 无损
+    剥离，base64 字符集不含 '['，与尾部 "[exit_code=..]" 天然无歧义）。
+
+    失败时 payload 是一段「为什么失败」的文本（run_headless 的失败输出，或
+    本函数自己的超限/解码结论），调用方原样转述即可。
     """
-    ok, output = await run_headless(context, base64_read_cmd(path), 30)
+    ok, output = await run_headless(context, base64_read_cmd(path), 30, keep_full=True)
     if not ok:
         return False, output.encode("utf-8")
     body = strip_remote_tail(output)
     try:
         data = base64.b64decode(body)
     except Exception:
-        return False, b""
+        return False, "回传内容不是合法 base64（桥接通道返回形态异常），已放弃读取".encode("utf-8")
+    if len(data) > B64_READ_MAX_BYTES:
+        return False, (
+            f"文件 {len(data)} 字节，超过 base64 回读上限 {B64_READ_MAX_BYTES} 字节，"
+            "未取回内容（整体改写请用 file_write 或分段处理）"
+        ).encode("utf-8")
     return True, data

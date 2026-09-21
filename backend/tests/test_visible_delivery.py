@@ -70,6 +70,39 @@ def test_reject():
     asyncio.run(_scenario())
 
 
+def test_tool_result_route_passes_rejection():
+    """路由契约：前端「拒绝」必须带 rejected=true 让路由走 reject()。
+
+    回归点：reject() 曾无任何生产调用方，路由一律 resume() 且把 rejected 强置
+    False，Driver 于是把用户拒绝的命令写成 "[已写入可见终端] rm -rf …" ——
+    模型以为破坏性命令已在真实终端执行过。
+    """
+    from routes.agent import ToolResultRequest, agent_tool_result
+
+    d = PendingDeliveries.create(
+        command="rm -rf /srv", session_id="s3",
+        requires_confirm=True, run_id="r3",
+    )
+    asyncio.run(agent_tool_result(ToolResultRequest(
+        tool_id=d.tool_id, output="[用户拒绝执行]", success=False,
+        exit_code=None, rejected=True,
+    )))
+    reg = PendingDeliveries.get(d.tool_id)
+    assert reg is not None and reg.rejected is True
+    PendingDeliveries.remove(d.tool_id)
+
+    # 未带 rejected 时仍是执行结果回传路径（success/exit_code 生效，不标拒绝）
+    d2 = PendingDeliveries.create(
+        command="ls", session_id="s3", requires_confirm=False, run_id="r3",
+    )
+    asyncio.run(agent_tool_result(ToolResultRequest(
+        tool_id=d2.tool_id, output="a.txt", success=True, exit_code=0,
+    )))
+    reg2 = PendingDeliveries.get(d2.tool_id)
+    assert reg2.rejected is False and reg2.success is True
+    PendingDeliveries.remove(d2.tool_id)
+
+
 def test_clear_run_removes_pending():
     """run 中止/结束时 clear_run 清除该 run 的所有待交付项，无悬挂"""
     a = PendingDeliveries.create(

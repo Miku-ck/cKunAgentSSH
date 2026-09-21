@@ -23,7 +23,6 @@ def _ctx(turn_index: int) -> TurnContext:
         assistant_reasoning="",
         model_id="model-1",
         turn_index=turn_index,
-        is_first_turn=(turn_index == 0),
     )
 
 

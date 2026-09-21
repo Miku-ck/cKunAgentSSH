@@ -16,8 +16,8 @@ interface ToolCallEntry {
   args: Record<string, unknown>
   result?: string
   success?: boolean
-  timestamp: number
-  iteration?: number
+  /** DB 回放才有单步耗时（SSE 内联快照不提供），缺失即不显示 */
+  duration_ms?: number | null
 }
 
 const props = withDefaults(defineProps<{
@@ -37,46 +37,77 @@ function toggle() {
 }
 
 // ── 动作词映射：Qoder 风格的中文状态前缀 ──
-function actionVerb(tool: string, success?: boolean): string {
-  if (success === false) return '失败'
+// 工具名必须与后端注册名一致（file_read/file_write/file_edit/file_glob/file_grep…）。
+// 旧实现按 read_file/write_file/list_dir/glob/grep/search_code 匹配，一个都对不上：
+// 每一次文件操作的徽章都退化成「已调用」，折叠头的动作聚合也全归到同一类。
+function verbFor(tool: string): string {
   switch (tool) {
-    case 'read_file': return '已查看'
-    case 'write_file': return '已修改'
-    case 'list_dir': return '已浏览'
-    case 'glob': return '已查找'
-    case 'grep':
-    case 'search_code':
-    case 'search_content': return '已检索'
-    case 'shell_exec': return '已执行'
+    case 'file_read':
+    case 'read_image':
+    case 'log_read': return '已查看'
+    case 'file_write':
+    case 'file_edit': return '已修改'
+    case 'file_glob': return '已查找'
+    case 'file_grep': return '已检索'
+    case 'shell_exec':
+    case 'job_run': return '已执行'
+    case 'job_list':
+    case 'job_output':
+    case 'job_kill': return '已管理任务'
+    case 'service_manage':
+    case 'schedule_op': return '已操作'
+    case 'sys_overview':
+    case 'process_inspect':
+    case 'network_probe': return '已探测'
     case 'web_search': return '已搜索'
     case 'web_fetch': return '已访问'
-    case 'delete_file':
-    case 'delete': return '已删除'
+    case 'todo_write': return '已记录'
+    case 'load_skill': return '已加载'
+    case 'spawn_subagent': return '已委派'
     default: return '已调用'
   }
+}
+
+// 失败条目整行改说"失败"（红字），聚合统计仍按动作计（见 actionStats）
+function actionVerb(tool: string, success?: boolean): string {
+  return success === false ? '失败' : verbFor(tool)
 }
 
 // ── 目标简短描述 ──
 function targetLabel(tc: ToolCallEntry): string {
   const getStr = (v: unknown): string => typeof v === 'string' ? v : String(v ?? '')
   switch (tc.tool) {
-    case 'read_file':
-    case 'write_file':
-      return shortPath(getStr(tc.args.file_path || tc.args.path))
-    case 'list_dir':
+    case 'file_read':
+    case 'file_write':
+    case 'file_edit':
+    case 'read_image':
+    case 'log_read':
       return shortPath(getStr(tc.args.path))
-    case 'glob':
-      return getStr(tc.args.pattern)
-    case 'grep':
-    case 'search_code':
-    case 'search_content':
-      return getStr(tc.args.pattern || tc.args.query)
+    case 'file_glob':
+    case 'file_grep':
+      // pattern 才是用户关心的检索目标，path 只是范围
+      return getStr(tc.args.pattern) || shortPath(getStr(tc.args.path))
     case 'shell_exec':
       return truncate(getStr(tc.args.command || tc.args.shell), 60)
+    case 'job_run':
+      return truncate(getStr(tc.args.cmd), 60)
+    case 'service_manage':
+    case 'schedule_op':
+      return `${getStr(tc.args.action)} ${getStr(tc.args.name)}`.trim()
+    case 'network_probe':
+      return getStr(tc.args.host) ? `${getStr(tc.args.host)}:${getStr(tc.args.port)}` : ''
+    case 'process_inspect':
     case 'web_search':
       return truncate(getStr(tc.args.query), 60)
     case 'web_fetch':
       return truncate(getStr(tc.args.url), 60)
+    case 'job_output':
+    case 'job_kill':
+      return getStr(tc.args.job_id)
+    case 'load_skill':
+      return getStr(tc.args.skill_slug)
+    case 'spawn_subagent':
+      return truncate(getStr(tc.args.task), 60)
     default: {
       const entries = Object.entries(tc.args).slice(0, 1)
       return entries.map(([k, v]) => `${k}: ${truncate(getStr(v), 30)}`).join(', ')
@@ -95,11 +126,16 @@ function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max) + '…' : s
 }
 
+// 单步耗时（毫秒）→ 秒文本；null/undefined/非数字返回 ''，交由模板 v-if 隐藏
+function fmtDuration(ms?: number | null): string {
+  return typeof ms === 'number' && Number.isFinite(ms) ? `${(ms / 1000).toFixed(1)}s` : ''
+}
+
 // ── 按动作类型聚合统计（用于折叠头） ──
 const actionStats = computed(() => {
   const stats = new Map<string, number>()
   for (const tc of props.toolCalls) {
-    const verb = actionVerb(tc.tool, tc.success)
+    const verb = verbFor(tc.tool)
     stats.set(verb, (stats.get(verb) || 0) + 1)
   }
   return Array.from(stats.entries())
@@ -117,25 +153,13 @@ const headerTitle = computed((): string => {
 })
 
 // 聚合统计文本，如 "16次阅读 · 1次检索"
-const statsText = computed((): string => {
-  const verbShort: Record<string, string> = {
-    '已查看': '阅读',
-    '已修改': '修改',
-    '已浏览': '浏览',
-    '已查找': '查找',
-    '已检索': '检索',
-    '已执行': '执行',
-    '已搜索': '搜索',
-    '已访问': '访问',
-    '已删除': '删除',
-    '已调用': '调用',
-    '失败': '失败',
-  }
-  return actionStats.value
-    .filter(([verb]) => verb !== '失败')
-    .map(([verb, count]) => `${count}次${verbShort[verb] || verb.replace('已', '')}`)
-    .join(' · ')
-})
+// 名词直接由动作词去掉「已」派生（只「查看→阅读」一处特例），
+// 不再维护一份需要与 verbFor 手工同步的映射表。
+const statsText = computed((): string =>
+  actionStats.value
+    .map(([verb, count]) => `${count}次${verb === '已查看' ? '阅读' : verb.replace('已', '')}`)
+    .join(' · '),
+)
 </script>
 
 <template>
@@ -168,6 +192,7 @@ const statsText = computed((): string => {
       >
         <span class="log-verb">{{ actionVerb(tc.tool, tc.success) }}</span>
         <span class="log-target">{{ targetLabel(tc) }}</span>
+        <span v-if="fmtDuration(tc.duration_ms)" class="log-duration">{{ fmtDuration(tc.duration_ms) }}</span>
       </div>
     </div>
   </div>
@@ -250,6 +275,15 @@ const statsText = computed((): string => {
   color: var(--log-text);
   word-break: break-word;
   min-width: 0;
+}
+
+/* 单步耗时：右对齐弱色，仅 DB 回放有值 */
+.log-duration {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--log-muted);
+  font-family: ui-monospace, Consolas, monospace;
 }
 
 /* 失败态：仅用文字色区分，不用红圆点 */

@@ -61,18 +61,25 @@ export const useToastStore = defineStore('toast', () => {
     items.value = items.value.filter(t => t.id !== id)
   }
 
-  /** 切换详情折叠状态；展开时延长自动关闭时间给用户阅读 */
+  /** 切换详情折叠状态；展开时暂停自动关闭给用户阅读，折叠后重新计时 */
   function toggleDetails(id: number) {
     const item = items.value.find(t => t.id === id)
     if (!item) return
     item.expanded = !item.expanded
-    // 展开详情时暂停自动关闭（用户需要时间阅读）
     if (item.expanded) {
+      // 展开详情时暂停自动关闭（用户需要时间阅读）
       const timer = timers.get(id)
       if (timer) {
         clearTimeout(timer)
         timers.delete(id)
       }
+    } else if (item.duration > 0 && !timers.has(id)) {
+      // 折叠后重新挂上自动关闭定时器，否则该 toast 永久驻留
+      const timer = setTimeout(() => {
+        timers.delete(id)
+        dismiss(id)
+      }, item.duration)
+      timers.set(id, timer)
     }
   }
 

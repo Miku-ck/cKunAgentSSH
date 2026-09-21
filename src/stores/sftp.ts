@@ -95,8 +95,11 @@ export const useSftpStore = defineStore('sftp', () => {
   // B26 修复：并发门计数已移入 runBatch 的 gateCount（仅统计 upload/download），
   // 原全局 runningCount（含 copy 类）不再需要
 
+  // paused 也算未结束：它们既不属于「已完成」，又需要在列表里保留「继续传输」入口，
+  // 否则暂停后任务会从传输面板上消失。此前视图侧另抄了一份含 paused 的定义，
+  // 导致面板头部「N 项进行中」与分组计数（含 paused）对不上。
   const activeTransfers = computed(() =>
-    transfers.value.filter(t => t.status === 'running' || t.status === 'pending')
+    transfers.value.filter(t => t.status === 'running' || t.status === 'pending' || t.status === 'paused')
   )
 
   // ─── 绑定 / 解绑 SSH 会话 ────────────────────
@@ -177,6 +180,9 @@ export const useSftpStore = defineStore('sftp', () => {
     remoteCwd.value = ''
     remoteEntries.value = []
     selectedRemote.value = new Set()
+    // 跨主机的远程剪贴板必须一起清：不清则换主机后「粘贴」会把 A 机的绝对路径
+    // cp -r 到 B 机上（canPaste 只比 side，比不出主机）
+    clipboard.value = null
     // m4 修复的补充：transferSeq 在 store 生命周期内单调递增，不再随 disconnect 重置，
     // 保证断线重连后新传输记录 id 不会与旧记录重复
     remoteError.value = ''
@@ -230,8 +236,9 @@ export const useSftpStore = defineStore('sftp', () => {
       if (mySeq !== localLoadSeq) return
       localError.value = err?.message || '读取本地目录失败'
     } finally {
-      // 仅最新请求负责复位 loading，旧请求提前返回不能熄灭新请求的指示
-      if (mySeq === localLoadSeq && !silent) loadingLocal.value = false
+      // 仅最新请求负责复位 loading（&& !silent 会让「非静默导航 + 期间发起的静默刷新」
+      // 两条请求都跳过复位 —— 列表已加载完却永久停在「加载中...」）
+      if (mySeq === localLoadSeq) loadingLocal.value = false
     }
   }
 
@@ -257,7 +264,10 @@ export const useSftpStore = defineStore('sftp', () => {
     if (/^[a-z]:$/i.test(parts[0]) && parts.length === 2) {
       return parts[0] + sep
     }
-    return parts.slice(0, -1).join(sep) || (sep)
+    // POSIX 下 split 把开头的 '/' 当作空段丢掉，直接 join 会得到 'home' 这种
+    // 相对路径（readDir 报错或落到错误目录）—— 根分隔符必须补回
+    const root = localCwd.value.startsWith(sep) ? sep : ''
+    return root + parts.slice(0, -1).join(sep) || sep
   }
 
   async function localUp(): Promise<void> {
@@ -318,7 +328,8 @@ async function localRefresh(): Promise<void> {
       if (mySeq !== remoteLoadSeq) return
       remoteError.value = err?.message || '读取远程目录失败'
     } finally {
-      if (mySeq === remoteLoadSeq && !silent) loadingRemote.value = false
+      // 与 loadLocal 同步：最新请求一律复位，静默与否只影响是否显示 loading
+      if (mySeq === remoteLoadSeq) loadingRemote.value = false
     }
   }
 
@@ -439,7 +450,10 @@ async function remoteRefresh(): Promise<void> {
       const escapedDest = `'${dest.replace(/'/g, "'\\''")}'`
       // B7 修复：cp -r 大目录必超 sshExec 默认 30s 超时 — 显式传 300s
       const result = await sshExecWithTimeout(getApi(), sshSessionId.value, `cp -r ${escapedSrc} ${escapedDest}`, 300)
-      if (result.exitCode !== 0 && result.exitCode !== null) {
+      // 未知退出码（通道未收到 exit-status，main 侧 exitCode 保持 null）不能算成功：
+      // 那正是进程被杀/通道异常中断的形态，此时 cp -r 可能只拷了一半。
+      // 与 main 进程其余 exec 判定（exitCode !== 0）保持一致。
+      if (result.exitCode !== 0) {
         throw new Error(result.stderr || '复制失败')
       }
       t.status = 'done'
@@ -557,6 +571,10 @@ async function remoteRefresh(): Promise<void> {
   /** 上传多个本地文件到远程目录（支持目录递归） */
   async function uploadFiles(localPaths: string[], targetDir?: string): Promise<void> {
     if (!sshSessionId.value || !online.value) return
+    // 整批任务绑定「入队时」的会话：目录展开/建父目录要 await 多次 IPC，
+    // 期间用户切换活动终端会改写 sshSessionId.value —— 继续按 ref 取值会把
+    // 剩余文件上传到另一台主机的同一路径下
+    const sid = sshSessionId.value
     const remoteBaseDir = targetDir ?? remoteCwd.value
     const tasks: Array<{ id: string; localPath: string; remotePath: string }> = []
 
@@ -585,7 +603,7 @@ async function remoteRefresh(): Promise<void> {
           const remotePath = remoteBase + '/' + f.relPath
           const remoteDir = remotePath.substring(0, remotePath.lastIndexOf('/'))
           // 确保远程父目录存在
-          try { await getApi().sftpMkdirRecursive(sshSessionId.value, remoteDir) } catch { /* ignore */ }
+          try { await getApi().sftpMkdirRecursive(sid, remoteDir) } catch { /* ignore */ }
           const id = `t${transferSeq.value++}`
           transfers.value.push({
             id, direction: 'up', kind: 'upload', name: f.relPath,
@@ -609,18 +627,21 @@ async function remoteRefresh(): Promise<void> {
     }
 
     // F-6 修复：带上 id/kind（runBatch 派发前检查 + 并发门计数）
-    runBatch(tasks.map(t => ({ fn: () => runUpload(t.id, t.localPath, t.remotePath), id: t.id, kind: 'upload' as const }))).then(async (results) => {
+    runBatch(tasks.map(t => ({ fn: () => runUpload(t.id, sid, t.localPath, t.remotePath), id: t.id, kind: 'upload' as const }))).then(async (results) => {
       // 至少有一个成功才刷新目录，避免无谓请求
       if (results.some(r => r.ok)) await remoteRefresh()
     }).catch((err) => {
       // C2 修复：防止 post-batch refresh 抛错导致未捕获 Promise rejection
-
+      console.warn('[sftp] 上传批次收尾刷新失败:', err)
     })
   }
 
   /** 下载多个远程文件到本地目录（支持目录递归） */
   async function downloadFiles(remotePaths: string[], targetDir?: string): Promise<void> {
     if (!sshSessionId.value || !online.value) return
+    // 同 uploadFiles：入队时的会话固化到本批任务，避免等待期间切换终端后
+    // 从另一台主机读取同名路径
+    const sid = sshSessionId.value
     const localBaseDir = targetDir ?? localCwd.value
     const tasks: Array<{ id: string; remotePath: string; localPath: string }> = []
 
@@ -638,7 +659,7 @@ async function remoteRefresh(): Promise<void> {
         isDir = remoteEntry.isDirectory
       } else {
         try {
-          await getApi().sftpList(sshSessionId.value, rp)
+          await getApi().sftpList(sid, rp)
           isDir = true
         } catch {
           isDir = false
@@ -678,11 +699,11 @@ async function remoteRefresh(): Promise<void> {
     }
 
     // F-6 修复：带上 id/kind（runBatch 派发前检查 + 并发门计数）
-    runBatch(tasks.map(t => ({ fn: () => runDownload(t.id, t.remotePath, t.localPath), id: t.id, kind: 'download' as const }))).then(async (results) => {
+    runBatch(tasks.map(t => ({ fn: () => runDownload(t.id, sid, t.remotePath, t.localPath), id: t.id, kind: 'download' as const }))).then(async (results) => {
       if (results.some(r => r.ok)) await localRefresh()
     }).catch((err) => {
       // C2 修复：防止 post-batch refresh 抛错导致未捕获 Promise rejection
-
+      console.warn('[sftp] 下载批次收尾刷新失败:', err)
     })
   }
 
@@ -881,7 +902,7 @@ async function remoteRefresh(): Promise<void> {
     })
   }
 
-async function runUpload(id: string, localPath: string, remotePath: string, retried = false): Promise<void> {
+  async function runUpload(id: string, sid: string, localPath: string, remotePath: string, retried = false): Promise<void> {
     const t = transfers.value.find(x => x.id === id)
     if (!t) return
     // F-5 竞态双保险：任务在排队期间被取消则不再启动
@@ -892,7 +913,7 @@ async function runUpload(id: string, localPath: string, remotePath: string, retr
       // 原调用多传 resumeOffset + AbortSignal：preload 只透传前 4 参，两者被静默丢弃
       // （AbortSignal 也无法结构化克隆过 IPC）。续传由主进程扫描远端 .part 文件
       // 自动定位断点，暂停/取消走 sftp:cancel（pauseTransfer 已调用）。
-      await getApi().sftpUpload(id, sshSessionId.value, localPath, remotePath)
+      await getApi().sftpUpload(id, sid, localPath, remotePath)
       t.status = 'done'
       t.endTime = Date.now()
       toast.success(`上传成功: ${t.name}`)
@@ -913,7 +934,7 @@ async function runUpload(id: string, localPath: string, remotePath: string, retr
       // err.code 不参与判定
       if (retryable && !retried) {
         toast.info(`正在自动续传: ${t.name}…`)
-        return runUpload(id, localPath, remotePath, true)
+        return runUpload(id, sid, localPath, remotePath, true)
       }
       t.status = code === 'CANCELLED' ? 'cancelled' : 'error'
       t.error = err?.message || '上传失败'
@@ -929,7 +950,7 @@ async function runUpload(id: string, localPath: string, remotePath: string, retr
     }
   }
 
-  async function runDownload(id: string, remotePath: string, localPath: string, retried = false): Promise<void> {
+  async function runDownload(id: string, sid: string, remotePath: string, localPath: string, retried = false): Promise<void> {
     const t = transfers.value.find(x => x.id === id)
     if (!t) return
     // F-5 竞态双保险：任务在排队期间被取消则不再启动
@@ -938,7 +959,7 @@ async function runUpload(id: string, localPath: string, remotePath: string, retr
     try {
       // 审查 M-18：同 runUpload — 严格按 4 参 IPC 契约调用（续传主进程按本地
       // .part 自动定位，取消走 sftp:cancel）
-      await getApi().sftpDownload(id, sshSessionId.value, remotePath, localPath)
+      await getApi().sftpDownload(id, sid, remotePath, localPath)
       t.status = 'done'
       t.endTime = Date.now()
       toast.success(`下载成功: ${t.name}`)
@@ -956,7 +977,7 @@ async function runUpload(id: string, localPath: string, remotePath: string, retr
       // 判定只看 err.retryable（STALLED 与 NETWORK 同形态），err.code 不参与判定
       if (retryable && !retried) {
         toast.info(`正在自动续传: ${t.name}…`)
-        return runDownload(id, remotePath, localPath, true)
+        return runDownload(id, sid, remotePath, localPath, true)
       }
       t.status = code === 'CANCELLED' ? 'cancelled' : 'error'
       t.error = err?.message || '下载失败'
@@ -1023,13 +1044,14 @@ function resumeTransfer(id: string): void {
   t.startTime = Date.now()
   // 根据方向重新启动传输，从断点处继续
   // （断点位置由主进程扫描 .part 文件确定，前端无需传递）
+  // 恢复/重试是用户在当前会话上的显式动作 → 用当前活动会话 id
   if (t.kind === 'upload') {
-    runUpload(id, t.from, t.to)
+    runUpload(id, sshSessionId.value, t.from, t.to)
   } else {
     // 审查 M-18 修复：原实现参数写反 runDownload(id, t.to, t.from, ...) —
-    // runDownload 签名是 (id, remotePath, localPath)，而下载记录 from=远程/to=本地，
+    // runDownload 签名是 (id, sid, remotePath, localPath)，而下载记录 from=远程/to=本地，
     // 写反后断点恢复会把本地路径当远程路径发出去，恢复永远失败
-    runDownload(id, t.from, t.to)
+    runDownload(id, sshSessionId.value, t.from, t.to)
   }
 }
 
@@ -1052,8 +1074,9 @@ function retryTransfer(id: string): void {
     status: 'pending', startTime: Date.now(),
   })
   const task: () => Promise<void> =
-    kind === 'upload' ? () => runUpload(newId, from, to)
-    : kind === 'download' ? () => runDownload(newId, from, to)
+    // 手动重试是当前上下文里的显式动作：投递到此刻的活动会话
+    kind === 'upload' ? () => runUpload(newId, sshSessionId.value, from, to)
+    : kind === 'download' ? () => runDownload(newId, sshSessionId.value, from, to)
     : kind === 'copy-local' ? () => runLocalCopy(newId, from, to)
     : () => runRemoteCopy(newId, from, to)
   runBatch([{ fn: task, id: newId, kind }]).catch((err) => {

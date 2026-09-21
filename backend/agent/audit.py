@@ -136,8 +136,12 @@ def append_record(
     """追加一条审计记录（审计失败静默，返回 None 不阻塞 Agent）"""
     # 合法结论白名单（单一事实来源，非法值静默落 "executed"）。
     # "released"：once 授权按 run 释放（release-run 兜底端点写入此结论）
+    # "answered"/"skipped"：澄清向导的两个终态（routes/agent.py clarification 端点）。
+    # 漏配过一次：它们被静默改写成 "executed"，用户在审计链里的决策语义就此丢失 ——
+    # 增删结论值时同步 src/views/ssh/AuditView.vue 的筛选下拉。
     if conclusion not in ("executed", "failed", "blocked", "denied",
-                          "auto_allowed", "approved", "released", "revoked"):
+                          "auto_allowed", "approved", "released", "revoked",
+                          "answered", "skipped"):
         conclusion = "executed"
     environment = environment or _DEFAULT_ENV
     record = {

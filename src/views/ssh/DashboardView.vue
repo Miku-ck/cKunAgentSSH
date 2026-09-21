@@ -93,32 +93,26 @@
 
       <!-- GPU（nvidia-smi 采集；无驱动/无卡时显示提示） -->
       <div class="dash-section">
-        <div class="section-title">GPU<span class="section-sub">· nvidia-smi</span></div>
-        <div v-if="monitor.current.gpus.length === 0" class="section-empty">未检测到 NVIDIA GPU（未安装 nvidia-smi 驱动或无 GPU）</div>
-        <template v-else>
-          <div class="gpu-trend">
-            <span class="gpu-trend-label">主卡利用率趋势</span>
-            <Sparkline :values="monitor.gpuHistory" :width="240" :height="40" />
-          </div>
-          <table class="proc-table gpu-table">
-            <thead>
-              <tr><th>#</th><th>名称</th><th>利用率</th><th>显存</th><th>温度</th><th></th></tr>
-            </thead>
-            <tbody>
-              <tr v-for="g in monitor.current.gpus" :key="g.index">
-                <td class="mono">{{ g.index }}</td>
-                <td class="proc-name" :title="g.name">{{ g.name }}</td>
-                <td class="gpu-util">
-                  <div class="disk-bar"><div class="disk-bar-fill" :class="toneCls(g.utilization)" :style="{ width: Math.min(100, g.utilization) + '%' }"></div></div>
-                  <span class="disk-pct" :class="toneCls(g.utilization)">{{ g.utilization.toFixed(0) }}%</span>
-                </td>
-                <td class="mono">{{ (g.memUsed / 1024).toFixed(1) }}G / {{ (g.memTotal / 1024).toFixed(1) }}G <span class="dim">({{ g.memPercent.toFixed(0) }}%)</span></td>
-                <td :class="{ hot: g.temperature > 80 }">{{ g.temperature }}℃</td>
-                <td><button class="card-ask" @click="monitor.askAiAboutMetrics(`GPU ${g.name} 利用率 ${g.utilization.toFixed(0)}%、显存 ${g.memPercent.toFixed(0)}%、温度 ${g.temperature}℃，请分析。`)">分析</button></td>
-              </tr>
-            </tbody>
-          </table>
-        </template>
+        <div class="section-title">
+          <span>GPU<span class="section-sub">· nvidia-smi</span></span>
+          <button
+            v-if="monitor.current.gpus.length"
+            class="card-ask gpu-ask"
+            @click="monitor.askAiAboutMetrics('请结合上方 GPU 状态（利用率/显存/功耗/占用进程）分析这台服务器的算力使用情况。')"
+          >分析</button>
+        </div>
+        <div v-if="monitor.current.gpus.length === 0" class="section-empty">
+          <template v-if="monitor.current.gpuError">GPU 采集异常：{{ monitor.current.gpuError }}</template>
+          <template v-else>未检测到 NVIDIA GPU（无 GPU，或远端无驱动）</template>
+        </div>
+        <GpuNvtopPanel
+          v-else
+          :metrics="monitor.current"
+          :gpu-hist="monitor.gpuHist"
+          :cpu-hist="monitor.cpuHistory"
+          :mem-hist="monitor.memHistory"
+          :load-hist="monitor.loadHistory"
+        />
       </div>
 
       <!-- 进程 TOP -->
@@ -159,23 +153,24 @@
 <script setup lang="ts">
 import { computed, defineComponent, h } from 'vue'
 import { useServerMonitorStore } from '@/stores/server-monitor'
+import GpuNvtopPanel from '@/components/ssh/GpuNvtopPanel.vue'
 
 const monitor = useServerMonitorStore()
 
 function toneCls(v?: number): string {
   if (v == null) return ''
-  if (v >= 90) return 'tone-danger'
-  if (v >= 75) return 'tone-warn'
-  return ''
+  if (v > 80) return 'tone-danger'
+  if (v >= 60) return 'tone-warn'
+  return 'tone-cool'
 }
 
-/** 负载卡片配色：按 1min 负载值（4 告警 / 8 危险，单机经验阈值），不复用百分比语义的 toneCls */
+/** 负载卡片配色：按 1min 负载值（4 告警 / 8 危险，单机经验阈值）。正常档也归入 tone-cool（绿），与百分比口径一致 */
 function loadToneCls(): string {
   const l = monitor.current?.load[0]
   if (l == null) return ''
   if (l >= 8) return 'tone-danger'
   if (l >= 4) return 'tone-warn'
-  return ''
+  return 'tone-cool'
 }
 
 /** 负载 sparkline 上限：取峰值 1.5 倍，避免曲线贴底 */
@@ -241,7 +236,7 @@ const Sparkline = defineComponent({
   align-items: center;
   justify-content: space-between;
   padding: 10px 16px;
-  border-bottom: 1px solid var(--border-subtle, #2d2d30);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .dash-title {
@@ -256,7 +251,7 @@ const Sparkline = defineComponent({
   font-size: 12px;
   font-weight: 400;
   color: var(--text-secondary);
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
 }
 
 .dash-header-right {
@@ -267,7 +262,7 @@ const Sparkline = defineComponent({
 
 .dash-stopped {
   font-size: 11px;
-  color: var(--accent-red, #f48771);
+  color: var(--accent-red);
   /* 长文案在头部单行截断，完整内容经 :title 悬浮查看 */
   max-width: 480px;
   overflow: hidden;
@@ -276,7 +271,7 @@ const Sparkline = defineComponent({
 }
 
 .dash-stopped-hint {
-  color: var(--text-tertiary, #6e6e73);
+  color: var(--text-tertiary);
 }
 
 
@@ -293,24 +288,24 @@ const Sparkline = defineComponent({
 }
 
 .dash-empty-icon {
-  color: var(--text-tertiary, #6e6e73);
+  color: var(--text-tertiary);
   margin-bottom: 8px;
 }
 
 .dash-empty-icon-err {
-  color: var(--accent-red, #f48771);
+  color: var(--accent-red);
 }
 
 .dash-empty-sub {
   font-size: 12px;
-  color: var(--text-tertiary, #6e6e73);
+  color: var(--text-tertiary);
   max-width: 420px;
   text-align: center;
   line-height: 1.5;
 }
 
 .dash-empty-sub-hint {
-  color: var(--text-secondary, #9a9a9a);
+  color: var(--text-secondary);
 }
 
 .dash-body {
@@ -320,6 +315,8 @@ const Sparkline = defineComponent({
   display: flex;
   flex-direction: column;
   gap: 18px;
+  /* 区块层：与 header(--bg-base) 和卡片(--bg-elevated) 拉开三级层次 */
+  background: var(--bg-base);
 }
 
 .dash-cards {
@@ -331,9 +328,9 @@ const Sparkline = defineComponent({
 .card {
   position: relative;
   padding: 12px 14px;
-  border: 1px solid var(--border-subtle, #2d2d30);
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: var(--bg-elevated, #1a1a1e);
+  background: var(--bg-elevated);
 }
 
 .card-head {
@@ -345,7 +342,7 @@ const Sparkline = defineComponent({
 
 .card-label {
   font-size: 11px;
-  color: var(--text-tertiary, #6e6e73);
+  color: var(--text-tertiary);
   letter-spacing: 0.4px;
 }
 
@@ -355,13 +352,14 @@ const Sparkline = defineComponent({
   font-variant-numeric: tabular-nums;
 }
 
-.card.tone-warn .card-val { color: var(--accent-orange, #e5c07b); }
-.card.tone-danger .card-val { color: var(--accent-red, #f48771); }
+.card.tone-cool .card-val { color: var(--metric-cool); }
+.card.tone-warn .card-val { color: var(--metric-warm); }
+.card.tone-danger .card-val { color: var(--metric-hot); }
 
 .card-sub {
   margin-top: 4px;
   font-size: 11px;
-  color: var(--text-tertiary, #6e6e73);
+  color: var(--text-tertiary);
 }
 
 .card-ask {
@@ -369,14 +367,14 @@ const Sparkline = defineComponent({
   top: 10px;
   right: 10px;
   padding: 1px 8px;
-  border: 1px solid var(--border-default, #3a3a3e);
+  border: 1px solid var(--border-default);
   border-radius: 4px;
   background: transparent;
-  color: var(--text-tertiary, #6e6e73);
+  color: var(--text-tertiary);
   font-size: 10px;
   cursor: pointer;
   opacity: 0;
-  transition: all var(--transition-fast, 0.15s);
+  transition: all var(--transition-fast);
 }
 
 .card:hover .card-ask,
@@ -386,25 +384,28 @@ const Sparkline = defineComponent({
 }
 
 .card-ask:hover {
-  border-color: var(--accent-indigo, #7aa2d0);
-  color: var(--accent-indigo, #7aa2d0);
+  border-color: var(--accent-indigo);
+  color: var(--accent-indigo);
 }
 
 .sparkline-lg {
   display: block;
 }
 
-:deep(.sparkline-lg-path) { stroke: var(--accent-blue, #7aa2d0); }
-:deep(.spark-baseline) { stroke: var(--border-subtle, #2d2d30); stroke-width: 1; }
+:deep(.sparkline-lg-path) { stroke: var(--accent-primary); }
+:deep(.spark-baseline) { stroke: var(--border-subtle); stroke-width: 1; }
 
 .dash-section {
-  border: 1px solid var(--border-subtle, #2d2d30);
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: var(--bg-elevated, #1a1a1e);
+  background: var(--bg-elevated);
   padding: 12px 14px;
 }
 
 .section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   font-size: 12px;
   font-weight: 600;
   color: var(--text-secondary);
@@ -413,7 +414,7 @@ const Sparkline = defineComponent({
 
 .section-empty {
   font-size: 12px;
-  color: var(--text-tertiary, #6e6e73);
+  color: var(--text-tertiary);
 }
 
 /* ── 磁盘 ── */
@@ -432,7 +433,7 @@ const Sparkline = defineComponent({
 
 .disk-mount {
   width: 120px;
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -443,19 +444,20 @@ const Sparkline = defineComponent({
   flex: 1;
   height: 6px;
   border-radius: 3px;
-  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+  background: var(--bg-hover);
   overflow: hidden;
 }
 
 .disk-bar-fill {
   height: 100%;
   border-radius: 3px;
-  background: var(--accent-blue, #7aa2d0);
+  background: var(--metric-cool);
   transition: width 0.4s ease;
 }
 
-.disk-bar-fill.tone-warn { background: var(--accent-orange, #e5c07b); }
-.disk-bar-fill.tone-danger { background: var(--accent-red, #f48771); }
+.disk-bar-fill.tone-cool { background: var(--metric-cool); }
+.disk-bar-fill.tone-warn { background: var(--metric-warm); }
+.disk-bar-fill.tone-danger { background: var(--metric-hot); }
 
 .disk-pct {
   width: 48px;
@@ -468,46 +470,25 @@ const Sparkline = defineComponent({
 .section-sub {
   font-size: 10px;
   font-weight: 400;
-  color: var(--text-tertiary, #6e6e73);
+  color: var(--text-tertiary);
   margin-left: 6px;
 }
 
-.gpu-trend {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
+/* section-title 内的分析按钮：card-ask 默认定位是 absolute（服务顶部指标卡），此处转静态 */
+.gpu-ask {
+  position: static;
+  opacity: 1;
 }
 
-.gpu-trend-label {
-  font-size: 11px;
-  color: var(--text-tertiary, #6e6e73);
-  white-space: nowrap;
-}
-
-.gpu-util {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 140px;
-}
-
-.gpu-util .disk-bar {
-  flex: 1;
-}
-
-.dim {
-  color: var(--text-tertiary, #6e6e73);
-}
-
-.disk-pct.tone-warn { color: var(--accent-orange, #e5c07b); }
-.disk-pct.tone-danger { color: var(--accent-red, #f48771); }
+.disk-pct.tone-cool { color: var(--metric-cool); }
+.disk-pct.tone-warn { color: var(--metric-warm); }
+.disk-pct.tone-danger { color: var(--metric-hot); }
 
 .disk-size {
   width: 120px;
   text-align: right;
   font-size: 11px;
-  color: var(--text-tertiary, #6e6e73);
+  color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
 }
 
@@ -521,15 +502,15 @@ const Sparkline = defineComponent({
 .proc-table th {
   text-align: left;
   padding: 4px 8px;
-  color: var(--text-tertiary, #6e6e73);
+  color: var(--text-tertiary);
   font-weight: 500;
   font-size: 11px;
-  border-bottom: 1px solid var(--border-subtle, #2d2d30);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .proc-table td {
   padding: 5px 8px;
-  border-bottom: 1px solid var(--border-subtle, #2d2d30);
+  border-bottom: 1px solid var(--border-subtle);
   font-variant-numeric: tabular-nums;
 }
 
@@ -538,7 +519,7 @@ const Sparkline = defineComponent({
 }
 
 .mono {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
 }
 
 .proc-name {
@@ -549,7 +530,7 @@ const Sparkline = defineComponent({
 }
 
 .hot {
-  color: var(--accent-red, #f48771);
+  color: var(--accent-red);
   font-weight: 600;
 }
 
@@ -570,10 +551,10 @@ const Sparkline = defineComponent({
   align-items: center;
   gap: 6px;
   padding: 3px 10px;
-  border: 1px solid var(--border-default, #3a3a3e);
+  border: 1px solid var(--border-default);
   border-radius: 4px;
   font-size: 11px;
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   color: var(--text-primary);
 }
 
@@ -583,7 +564,19 @@ const Sparkline = defineComponent({
 
 .port-proto {
   font-size: 9px;
-  color: var(--text-tertiary, #6e6e73);
+  color: var(--text-tertiary);
   letter-spacing: 0.5px;
+}
+
+/* ── 窄窗口：磁盘行/进程表含多个固定宽度列，收窄时优先压缩非主信息列 ── */
+@media (max-width: 760px) {
+  .dash-header { padding: 8px 12px; }
+  .dash-body { padding: 12px; gap: 14px; }
+  .dash-stopped { max-width: 220px; }
+  .dash-section { padding: 10px 12px; }
+  .disk-row { gap: 6px; }
+  .disk-mount { width: 76px; font-size: 11px; }
+  .disk-size { width: 84px; font-size: 10px; }
+  .proc-name { max-width: 110px; }
 }
 </style>

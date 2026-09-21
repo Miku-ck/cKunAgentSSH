@@ -83,7 +83,7 @@ def _fake_headless(monkeypatch, responses):
     """responses: list[(success, output)] 按调用顺序弹出；用尽后重复最后一个。"""
     calls = []
 
-    async def fake(context, command, timeout=30):
+    async def fake(context, command, timeout=30, keep_full=False):
         calls.append(command)
         i = min(len(calls) - 1, len(responses) - 1)
         return responses[i]
@@ -243,7 +243,7 @@ async def test_remote_output_crlf_bytes_preserved(monkeypatch):
     e = _entry(offset=0)
     calls = {"n": 0}
 
-    async def fake(context, command, timeout=30):
+    async def fake(context, command, timeout=30, keep_full=False):
         n = int(re.search(r"tail -c \+(\d+)", command).group(1))
         rc_val = "0" if calls["n"] >= 2 else None
         return True, f"CKUNJOB_RC={rc_val or ''}\n{log[n - 1:]}\n[exit_code=0]"
@@ -266,7 +266,7 @@ async def test_remote_offset_advances_exact_bytes(monkeypatch):
     log = "x" * 100 + "\n"  # 101 字节
     e = _entry(offset=0)
 
-    async def fake(context, command, timeout=30):
+    async def fake(context, command, timeout=30, keep_full=False):
         n = int(re.search(r"tail -c \+(\d+)", command).group(1))
         return True, f"CKUNJOB_RC=\n{log[n - 1:]}\n[exit_code=0]"
 
@@ -281,7 +281,7 @@ async def test_remote_offset_persisted_on_read(monkeypatch):
     e = _entry(offset=0)
     persisted = []
     monkeypatch.setattr(oj, "_persist_offset", lambda jid, off: persisted.append((jid, off)))
-    async def fake(context, command, timeout=30):
+    async def fake(context, command, timeout=30, keep_full=False):
         return True, "CKUNJOB_RC=\nhello\n[exit_code=0]"
     monkeypatch.setattr(oj, "run_headless", fake)
     await oj.JobOutputTool().execute(_ctx(), job_id="j1")

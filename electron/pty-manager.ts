@@ -129,21 +129,20 @@ export class PtyManager {
       const baseName = shellBase.split(/[\\/]/).pop() || shellBase
       if (baseName === 'cmd' || baseName === 'cmd.exe') {
         throw new Error('cmd 终端不允许自定义参数，已拒绝')
-      }
-      if (baseName === 'powershell' || baseName === 'powershell.exe' || baseName === 'pwsh' || baseName === 'pwsh.exe') {
+      } else if (baseName === 'powershell' || baseName === 'powershell.exe' || baseName === 'pwsh' || baseName === 'pwsh.exe') {
         for (const arg of finalArgs) {
           if (!POWERSHELL_ALLOWED_ARGS.has(arg.toLowerCase())) {
             throw new Error(`PowerShell 不允许自定义参数，已拒绝: ${arg}`)
           }
         }
-      }
-      if (baseName === 'bash' || baseName === 'bash.exe' || baseName === 'git-bash' || baseName === 'git-bash.exe') {
+      } else if (baseName === 'bash' || baseName === 'bash.exe' || baseName === 'git-bash' || baseName === 'git-bash.exe') {
         for (const arg of finalArgs) {
           if (!BASH_ALLOWED_ARGS.has(arg.toLowerCase())) {
             throw new Error(`bash 不允许自定义参数，已拒绝: ${arg}`)
           }
         }
       } else {
+        // 未匹配任何已知 shell（cmd/powershell/pwsh/bash）→ 拒绝一切参数
         throw new Error(`${baseName} 不允许自定义参数，已拒绝`)
       }
     }
@@ -160,28 +159,46 @@ export class PtyManager {
       throw new Error(`工作目录必须是目录: ${cwd}`)
     }
 
-
-    const proc = pty.spawn(shell, finalArgs, {
-      name: 'xterm-256color',
-      cols,
-      rows,
-      cwd,
-      env: {
-        ...process.env,
-        LS_COLORS: LS_COLORS_NO_BACKGROUND,
-      } as Record<string, string>,
-    })
+    // 将底层平台错误（node-pty spawn 抛出的 ENOENT / conpty 不可用等）转为
+    // 可直接展示给用户的中文错误；否则渲染层只能拿到晦涩的英文原文。
+    const shellLabel = shellBase.split(/[\\/]/).pop() || shell
+    let proc: pty.IPty
+    try {
+      proc = pty.spawn(shell, finalArgs, {
+        name: 'xterm-256color',
+        cols,
+        rows,
+        cwd,
+        env: {
+          ...process.env,
+          LS_COLORS: LS_COLORS_NO_BACKGROUND,
+        } as Record<string, string>,
+      })
+    } catch (err: any) {
+      const raw = String(err?.message || err)
+      if (/enoent|file not found|找不到/i.test(raw)) {
+        throw new Error(`无法启动 ${shellLabel}：未找到可执行文件，请确认已安装并检查路径`)
+      }
+      if (/conpty/i.test(raw)) {
+        throw new Error(`无法启动 ${shellLabel}：无法创建终端控制台（ConPTY 不可用）`)
+      }
+      throw new Error(`无法启动 ${shellLabel}：${raw}`)
+    }
 
     this.sessions.set(id, { id, process: proc, shell, cwd })
 
     // 数据输出 → 发送到渲染进程
+    // 审查修复：destroy()/destroyAll() 先 kill 再从 sessions 删除，随后 kill 触发的
+    // 延迟 onExit / 缓冲 onData 会向渲染进程发送已被关闭会话的陈旧事件。以 sessions
+    // 是否仍持有该 id 作为存活判据，销毁后到达的回调直接丢弃。
     proc.onData((data) => {
+      if (!this.sessions.has(id)) return
       this.safeSend('pty:data', { id, data })
     })
 
     // 退出事件
     proc.onExit(({ exitCode }) => {
-
+      if (!this.sessions.has(id)) return
       this.sessions.delete(id)
       this.safeSend('pty:exit', { id, exitCode })
     })

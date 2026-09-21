@@ -65,10 +65,8 @@
         :online="store.isOnline(conn.id)"
         :connecting="props.connecting"
         :pending-conn-id="props.pendingConnId"
+        :now="nowTick"
         @connect="handleConnect"
-        @edit="handleEdit"
-        @duplicate="handleDuplicate"
-        @delete="handleDelete"
         @toggle-select="handleToggleSelect"
         @menu="showMenu"
       />
@@ -129,7 +127,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted, triggerRef } from 'vue'
+import { ref, computed, watch, onUnmounted, triggerRef } from 'vue'
 import ConnectionRow from './ConnectionRow.vue'
 import BulkCommandModal from './BulkCommandModal.vue'
 import { useSSHStore } from '@/stores/ssh'
@@ -161,6 +159,11 @@ const remoteSessionCount = computed(() => store.sessions.filter(s => s.type === 
 const searchText = ref('')
 const debouncedSearch = ref('')
 let searchTimer: ReturnType<typeof setTimeout> | null = null
+
+// 行内「最近连接」是相对时间，需要一个会动的基准；整张表共用一个定时器
+// （与 SchedulesView 的下次执行倒计时同套路），随卸载清理。
+const nowTick = ref(Date.now())
+const relativeTick = setInterval(() => { nowTick.value = Date.now() }, 60_000)
 const sortKey = ref<'recent' | 'name' | 'created'>('recent')
 const selectedIds = ref<Set<string>>(new Set())
 
@@ -205,6 +208,22 @@ const filteredConnections = computed(() => {
   }
 
   return list
+})
+
+// 列表收窄后剪掉看不见的选中项：搜索/排序变化会让 selectedIds 残留已不在列表里的
+// 连接，而「已选 N 项」与批量删除都按 selectedIds 走 —— 用户删的是当前界面根本
+// 看不到的连接。
+watch(filteredConnections, conns => {
+  if (selectedIds.value.size === 0) return
+  const visible = new Set(conns.map(c => c.id))
+  let changed = false
+  for (const id of Array.from(selectedIds.value)) {
+    if (!visible.has(id)) {
+      selectedIds.value.delete(id)
+      changed = true
+    }
+  }
+  if (changed) triggerRef(selectedIds)
 })
 
 const allSelected = computed(() =>
@@ -332,12 +351,9 @@ let dismissBound = false
 function showMenu(e: MouseEvent, conn: SSHConnection) {
   e.stopPropagation()
   e.preventDefault()
-  const estimatedHeight = 150
-  const viewportHeight = window.innerHeight
-  const y = e.clientY + estimatedHeight > viewportHeight
-    ? e.clientY - estimatedHeight
-    : e.clientY
-  menu.value = { visible: true, x: e.clientX, y, conn }
+  // 坐标只存原始光标位置：越界校正是 menuStyle 的职责（两个方向都按 MENU_MAX_HEIGHT
+  // 与 margin 收过，这里再翻一次等于对同一维度做两次钳制）
+  menu.value = { visible: true, x: e.clientX, y: e.clientY, conn }
   // 在菜单显示后才注册 document mousedown 监听(bubble 阶段,普通事件流)
   if (!dismissBound) {
     document.addEventListener('mousedown', handleDocMouseDown)
@@ -373,6 +389,7 @@ onUnmounted(() => {
     clearTimeout(searchTimer)
     searchTimer = null
   }
+  clearInterval(relativeTick)
   if (dismissBound) {
     document.removeEventListener('mousedown', handleDocMouseDown)
     dismissBound = false
@@ -440,7 +457,7 @@ onUnmounted(() => {
 }
 
 .rm-search:focus-within {
-  border-color: var(--accent-blue);
+  border-color: var(--accent-primary);
 }
 
 .rm-search input {
@@ -509,7 +526,7 @@ onUnmounted(() => {
 .rm-row-header .cell-check input {
   width: 13px;
   height: 13px;
-  accent-color: var(--accent-blue);
+  accent-color: var(--accent-primary);
   cursor: pointer;
 }
 .rm-row-header .cell-status { width: 100%; }
@@ -531,7 +548,7 @@ onUnmounted(() => {
 }
 
 .sortable.active {
-  color: var(--accent-blue);
+  color: var(--accent-primary);
 }
 
 .sort-arrow {
@@ -592,8 +609,8 @@ onUnmounted(() => {
 }
 
 .rm-btn.primary {
-  background: var(--accent-blue);
-  border-color: var(--accent-blue);
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
   color: #fff;
   font-weight: 500;
 }
@@ -621,7 +638,7 @@ onUnmounted(() => {
   height: 40px;
   padding: 0 16px;
   border-top: 1px solid var(--border-default);
-  background: var(--bg-elevated);
+  background: var(--bg-base);
   flex-shrink: 0;
 }
 

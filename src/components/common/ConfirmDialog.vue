@@ -140,12 +140,12 @@ defineExpose({ open, close })
 .confirm-dialog {
   width: 380px;
   max-width: calc(100vw - 32px);
-  background: var(--bg-base, #1a1a1a);
-  border: 1px solid var(--border-default, #2a2a2a);
-  border-radius: var(--radius-md, 8px);
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
-  font-family: var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
-  color: var(--text-primary, #e5e5e5);
+  font-family: var(--font-sans);
+  color: var(--text-primary);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -164,7 +164,7 @@ defineExpose({ open, close })
   height: 32px;
   border-radius: 50%;
   background: rgba(88, 166, 255, 0.12);
-  color: var(--accent-blue, #58a6ff);
+  color: var(--accent-primary);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -179,7 +179,7 @@ defineExpose({ open, close })
   margin: 0;
   font-size: 14px;
   font-weight: 600;
-  color: var(--text-primary, #e5e5e5);
+  color: var(--text-primary);
   line-height: 1.4;
 }
 
@@ -191,7 +191,7 @@ defineExpose({ open, close })
   margin: 0;
   font-size: 13px;
   line-height: 1.6;
-  color: var(--text-secondary, #b0b0b0);
+  color: var(--text-secondary);
   word-wrap: break-word;
   white-space: pre-wrap;
 }
@@ -201,7 +201,7 @@ defineExpose({ open, close })
   justify-content: flex-end;
   gap: 8px;
   padding: 12px 20px 16px;
-  border-top: 1px solid var(--border-subtle, #222);
+  border-top: 1px solid var(--border-subtle);
   background: rgba(0, 0, 0, 0.2);
 }
 
@@ -209,8 +209,8 @@ defineExpose({ open, close })
   height: 30px;
   min-width: 72px;
   padding: 0 14px;
-  border: 1px solid var(--border-default, #2a2a2a);
-  border-radius: var(--radius-sm, 4px);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
   font-size: 12px;
   font-family: inherit;
   cursor: pointer;
@@ -220,19 +220,19 @@ defineExpose({ open, close })
 
 .confirm-btn.cancel {
   background: transparent;
-  color: var(--text-secondary, #b0b0b0);
+  color: var(--text-secondary);
 }
 
 .confirm-btn.cancel:hover {
-  background: var(--bg-hover, #1f1f1f);
-  color: var(--text-primary, #e5e5e5);
-  border-color: var(--border-default, #2a2a2a);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-default);
 }
 
 .confirm-btn.ok {
-  background: var(--accent-blue, #58a6ff);
+  background: var(--accent-primary);
   color: #ffffff;
-  border-color: var(--accent-blue, #58a6ff);
+  border-color: var(--accent-primary);
 }
 
 .confirm-btn.ok:hover {

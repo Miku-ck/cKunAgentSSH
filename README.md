@@ -339,7 +339,7 @@ INIT → THINKING → [LLM 调用] → 有工具调用?
 | 工具 | 风险 | 说明 |
 |---|---|---|
 | `shell_exec` | moderate | 命令执行（SSH 远程 / 本地子进程双模式，可见终端交付） |
-| `web_search` | safe | 联网搜索（Tavily API） |
+| `web_search` | safe | 联网搜索（Tavily API，未配密钥/刮不到结果时降级 360→DuckDuckGo） |
 | `web_fetch` | safe | 抓取网页（SSRF 防护） |
 | `todo_write` | safe | 任务列表管理 |
 | `load_skill` | safe | 按需加载技能完整指令 |

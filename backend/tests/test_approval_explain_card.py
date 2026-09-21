@@ -111,6 +111,27 @@ def test_unknown_command_explain_marks_llm_path():
 
 
 # ── SSE 透传 ─────────────────────────────────────────────────────────────────
+def test_sse_permission_expired_passes_command():
+    """审批超时事件必须带 command：前端 permCardKey(tool, command) 靠它定位卡片。
+
+    回归点：to_sse_dict 曾丢弃 command（两个生产方都按注释带着它），超时事件
+    永远匹配不到卡片 → 后端已按拒绝处理，卡片却仍可点击。
+    """
+    sse = SSEAdapter.to_sse_dict(TraceEvent(
+        kind="permission_expired",
+        source="reins.permission_gate",
+        run_id="r1",
+        payload={
+            "tool": "shell_exec",
+            "args": {"command": CMD},
+            "command": CMD,
+            "message": "授权审批超时，已按拒绝处理: shell_exec",
+        },
+    ))
+    assert sse.get("command") == CMD, "缺 command → 前端无法定位超时卡片"
+    assert sse.get("tool") == "shell_exec"
+
+
 def test_sse_permission_needed_passes_display_fields():
     sse = SSEAdapter.to_sse_dict(TraceEvent(
         kind="permission_needed",

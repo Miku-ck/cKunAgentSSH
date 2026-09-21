@@ -58,6 +58,8 @@ class StreamLLMClient:
             reasoning_max_tokens: thinking 阶段 token 上限（仅 enable_thinking=True 时生效）
                 None 表示不限制；由意图识别器根据 task 复杂度推断
         """
+        from contextlib import aclosing
+
         from llm_adapter import chat_stream
         from .bridle import estimate_messages_tokens
 
@@ -67,7 +69,10 @@ class StreamLLMClient:
         prompt_tokens = 0
         completion_tokens = 0
 
-        async for chunk in chat_stream(
+        # aclosing 必加：Agent 运行可被用户中止，本协程会在 async for 处被取消，
+        # 生成器就只能等 GC 收尾 —— 期间 chat_stream 的 _client_in_flight 不递减，
+        # llm_adapter 的 LRU 淘汰据此拒绝 aclose 该客户端，连接池泄漏到进程结束。
+        async with aclosing(chat_stream(
             base_url=self.base_url,
             api_key=self.api_key,
             model=model,
@@ -77,35 +82,41 @@ class StreamLLMClient:
             enable_thinking=enable_thinking,
             tools=tools if tools else None,
             reasoning_max_tokens=reasoning_max_tokens,
-        ):
-            if chunk.content:
-                content_parts.append(chunk.content)
-            if chunk.reasoning:
-                reasoning_parts.append(chunk.reasoning)
-            # 实时推送：让 Agent 运行过程可见
-            if self._on_chunk and (chunk.content or chunk.reasoning):
-                try:
-                    await self._on_chunk(chunk.content or "", chunk.reasoning or "")
-                except Exception as e:
-                    logger.warning("chunk 回调异常: %s", e)
-            if chunk.tool_calls:
-                for tc in chunk.tool_calls:
-                    tool_calls.append(HarnessToolCall(
-                        id=tc.id,
-                        name=tc.name,
-                        args=tc.parsed_args(),
-                    ))
-            if chunk.prompt_tokens:
-                prompt_tokens = chunk.prompt_tokens
-            if chunk.completion_tokens:
-                completion_tokens = chunk.completion_tokens
+        )) as chunk_iter:
+            async for chunk in chunk_iter:
+                if chunk.content:
+                    content_parts.append(chunk.content)
+                if chunk.reasoning:
+                    reasoning_parts.append(chunk.reasoning)
+                # 实时推送：让 Agent 运行过程可见
+                if self._on_chunk and (chunk.content or chunk.reasoning):
+                    try:
+                        await self._on_chunk(chunk.content or "", chunk.reasoning or "")
+                    except Exception as e:
+                        logger.warning("chunk 回调异常: %s", e)
+                if chunk.tool_calls:
+                    for tc in chunk.tool_calls:
+                        tool_calls.append(HarnessToolCall(
+                            id=tc.id,
+                            name=tc.name,
+                            args=tc.parsed_args(),
+                        ))
+                if chunk.prompt_tokens:
+                    prompt_tokens = chunk.prompt_tokens
+                if chunk.completion_tokens:
+                    completion_tokens = chunk.completion_tokens
 
         # 估算兜底（LLM 未返回 usage 时）
         if prompt_tokens == 0:
             prompt_tokens = estimate_messages_tokens(messages)
         if completion_tokens == 0:
+            # reasoning 与 content 同为补全输出，只估 content 会把 thinking 模型的
+            # 输出 token 漏掉一大截（成本/用量统计随之偏低）
             completion_tokens = estimate_messages_tokens(
-                [{"role": "assistant", "content": "".join(content_parts)}]
+                [{"role": "assistant", "content": "\n".join([
+                    "".join(reasoning_parts),
+                    "".join(content_parts),
+                ])}]
             )
 
         # 通知 Harness 记录成本

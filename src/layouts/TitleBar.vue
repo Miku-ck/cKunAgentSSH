@@ -75,8 +75,8 @@ async function close() { await api?.windowClose() }
 .titlebar {
   position: relative;
   z-index: 1;
-  height: 32px;
-  border-bottom: 1px solid var(--border-subtle, #2d2d30);
+  height: var(--titlebar-h);
+  border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-base);
   display: flex;
   align-items: center;
@@ -91,7 +91,7 @@ async function close() { await api?.windowClose() }
   align-items: center;
   gap: 6px;
   padding: 0 12px;
-  color: var(--text-secondary, #ccc);
+  color: var(--text-secondary);
   font-size: 12px;
   font-weight: 500;
   -webkit-app-region: no-drag;
@@ -130,14 +130,14 @@ async function close() { await api?.windowClose() }
   height: 100%;
   border: none;
   background: transparent;
-  color: var(--text-secondary, #ccc);
+  color: var(--text-secondary);
   cursor: pointer;
   transition: background var(--transition-fast), color var(--transition-fast);
 }
 
 .titlebar-action-btn:hover {
-  background: var(--bg-hover, rgba(255,255,255,0.1));
-  color: var(--text-primary, #fff);
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 /* 当前功能页图标高亮（亮绿色） */
@@ -181,5 +181,15 @@ async function close() { await api?.windowClose() }
 
 :global(.app.has-background) .titlebar {
   background: transparent !important;
+}
+
+/* ── 窄窗口：图标优先。
+   7 个功能按钮 + 3 个窗口按钮约占 390px，窗口收窄时品牌区会被压没，
+   故隐藏品牌文字、收紧按钮宽度，保证全部功能入口仍可点。 */
+@media (max-width: 760px) {
+  .titlebar-brand { padding: 0 8px; }
+  .brand-text { display: none; }
+  .titlebar-action-btn { width: 30px; }
+  .win-btn { width: 38px; }
 }
 </style>

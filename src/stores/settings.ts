@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
-import { ref, watch } from 'vue'
+import { nextTick, ref, watch } from 'vue'
 import { api, agentApi, toFriendlyMessage, type ModelConfig, type ModelConfigPayload } from '@/api/client'
+// 外观枚举只在 useAppearance 里定义一次（store 与设置面板都从这里取，抄两份会漂）
+import type { Accent, GradientDirection, GradientMode, Theme } from '@/composables/useAppearance'
 import { useToastStore } from './toast'
 
 /**
@@ -58,11 +60,9 @@ export interface AppSettings {
     maxItems: number
   }
   appearance: {
-    theme: 'dark' | 'light' | 'system' | 'blue-screen' | 'forest' | 'mint' | 'bee' | 'coral'
-    accent: 'blue' | 'purple' | 'green' | 'orange' | 'white' | 'forest' | 'mint' | 'bee' | 'coral'
+    theme: Theme
+    accent: Accent
     fontSize: number
-    sidebarWidth: number
-    compact: boolean
     animation: boolean
     backgroundEnabled: boolean
     backgroundImage: string
@@ -74,9 +74,9 @@ export interface AppSettings {
     /** 主题渐变强度（0-100） */
     themeGradientStrength: number
     /** 渐变形态：glow=顶部微光 / linear=线性渐变 / radial=放射渐变 */
-    themeGradientMode: 'glow' | 'linear' | 'radial'
+    themeGradientMode: GradientMode
     /** 渐变方向（linear/radial 生效） */
-    themeGradientDirection: 'tb' | 'bt' | 'lr' | 'rl' | 'tlbr' | 'trbl'
+    themeGradientDirection: GradientDirection
     /** 渐变起始色（空 = 跟随强调色） */
     themeGradientStartColor: string
     /** 渐变结束色（空 = 跟随主题底色） */
@@ -134,8 +134,6 @@ export const useSettingsStore = defineStore('settings', () => {
       theme: saved?.appearance?.theme ?? 'dark',
       accent: saved?.appearance?.accent ?? 'blue',
       fontSize: saved?.appearance?.fontSize ?? 13,
-      sidebarWidth: saved?.appearance?.sidebarWidth ?? 240,
-      compact: saved?.appearance?.compact ?? false,
       animation: saved?.appearance?.animation ?? true,
       backgroundEnabled: saved?.appearance?.backgroundEnabled ?? false,
       backgroundImage: saved?.appearance?.backgroundImage ?? '',
@@ -156,47 +154,36 @@ export const useSettingsStore = defineStore('settings', () => {
     },
   })
 
-  // 防抖持久化：按分区独立监听，避免高频变更（如滑块）触发全量序列化
-  let saveChatTimer: number | undefined
-  let saveAgentTimer: number | undefined
-  let saveAppearanceTimer: number | undefined
-  let saveMemoryTimer: number | undefined
-  let savePostProcessTimer: number | undefined
-
-  watch(() => settings.value.chat, () => {
-    clearTimeout(saveChatTimer)
-    saveChatTimer = window.setTimeout(() => persistSettings(), 300)
-  }, { deep: true })
-
-  watch(() => settings.value.agent, () => {
-    clearTimeout(saveAgentTimer)
-    saveAgentTimer = window.setTimeout(() => persistSettings(), 300)
-  }, { deep: true })
-
-  watch(() => settings.value.appearance, () => {
-    clearTimeout(saveAppearanceTimer)
-    saveAppearanceTimer = window.setTimeout(() => persistSettings(), 300)
-  }, { deep: true })
-
-  watch(() => settings.value.memory, () => {
-    clearTimeout(saveMemoryTimer)
-    saveMemoryTimer = window.setTimeout(() => persistSettings(), 300)
-  }, { deep: true })
-
-  watch(() => settings.value.postProcess, () => {
-    clearTimeout(savePostProcessTimer)
-    savePostProcessTimer = window.setTimeout(() => persistSettings(), 300)
+  // 防抖持久化：persistSettings 本来就是全量序列化，按分区各开一个定时器并无意义
+  let saveTimer: number | undefined
+  watch(settings, () => {
+    clearTimeout(saveTimer)
+    saveTimer = window.setTimeout(() => persistSettings(), 300)
   }, { deep: true })
 
   function persistSettings() {
     localStorage.setItem(LS_KEY, JSON.stringify(settings.value))
   }
 
+  // debounce 的代价：改完设置立刻关窗（<300ms）这次改动就永久丢了 ——
+  // 外观/对话/运行预算这些都是纯本地设置，丢了用户完全无感，只会以为没保存过。
+  // pagehide 是 Chromium 渲染进程里最可靠的收尾点（beforeunload 需返回值才触发）。
+  // 可选链：单测的 window 垫片只有 setTimeout/clearTimeout。
+  window.addEventListener?.('pagehide', () => {
+    clearTimeout(saveTimer)
+    persistSettings()
+  })
+
   // 记忆设置变更时同步到后端
   let memorySyncTimer: number | undefined
+  // 后端回填不算用户改动：loadMemorySettings 写这几个字段会惊动 deep watch，
+  // 于是启动时把刚读到的值原样 POST 回去（白写一次）；响应缺字段时更会把
+  // undefined 落进本地、再推给后端 —— 一次异常响应就污染设置。
+  let applyingRemoteMemory = false
   watch(
     () => settings.value.memory,
     (mem) => {
+      if (applyingRemoteMemory) return
       clearTimeout(memorySyncTimer)
       memorySyncTimer = window.setTimeout(() => {
         agentApi.updateMemorySettings({
@@ -214,21 +201,27 @@ export const useSettingsStore = defineStore('settings', () => {
     { deep: true }
   )
 
-  // 初始化时从后端加载记忆设置
+  // 初始化时从后端加载记忆设置（只接受形状正确的字段，缺失即保留本地值）
   async function loadMemorySettings() {
+    applyingRemoteMemory = true
     try {
       const data = await agentApi.getMemorySettings()
-      settings.value.memory.enabled = data.enabled
-      settings.value.memory.strategy = data.strategy as 'auto' | 'manual'
-      settings.value.memory.maxItems = data.max_items
+      if (typeof data.enabled === 'boolean') settings.value.memory.enabled = data.enabled
+      if (data.strategy === 'auto' || data.strategy === 'manual') settings.value.memory.strategy = data.strategy
+      if (Number.isFinite(data.max_items)) settings.value.memory.maxItems = data.max_items
+      await nextTick()  // 等本轮 watcher 冲刷完再放开闸门
     } catch { /* 后端未就绪时使用 localStorage 默认值 */ }
+    finally { applyingRemoteMemory = false }
   }
 
   // 后处理设置变更时同步到后端
   let postProcessSyncTimer: number | undefined
+  // 同 applyingRemoteMemory：后端回填不回写、且只接受布尔字段
+  let applyingRemotePostProcess = false
   watch(
     () => settings.value.postProcess,
     (pp) => {
+      if (applyingRemotePostProcess) return
       clearTimeout(postProcessSyncTimer)
       postProcessSyncTimer = window.setTimeout(() => {
         api.updatePostProcessSettings({
@@ -247,15 +240,19 @@ export const useSettingsStore = defineStore('settings', () => {
     { deep: true }
   )
 
-  // 初始化时从后端加载后处理设置
+  // 初始化时从后端加载后处理设置（字段缺失/类型不对就保留本地值，不写回后端）
   async function loadPostProcessSettings() {
+    applyingRemotePostProcess = true
     try {
       const data = await api.getPostProcessSettings()
-      settings.value.postProcess.enabled = data.enabled
-      settings.value.postProcess.generateTitle = data.generate_title
-      settings.value.postProcess.extractMemory = data.extract_memory
-      settings.value.postProcess.generateSkill = data.generate_skill
+      const pp = settings.value.postProcess
+      if (typeof data.enabled === 'boolean') pp.enabled = data.enabled
+      if (typeof data.generate_title === 'boolean') pp.generateTitle = data.generate_title
+      if (typeof data.extract_memory === 'boolean') pp.extractMemory = data.extract_memory
+      if (typeof data.generate_skill === 'boolean') pp.generateSkill = data.generate_skill
+      await nextTick()
     } catch { /* 后端未就绪时使用 localStorage 默认值 */ }
+    finally { applyingRemotePostProcess = false }
   }
 
   // ── 模型配置（来自后端 DB）──

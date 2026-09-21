@@ -242,6 +242,38 @@ class TestClarificationInterceptor:
         assert any("等待用户回答" in (m.get("content", "") or "") for m in d2.inject_messages)
 
     @pytest.mark.asyncio
+    async def test_pending_only_freezes_mutating_tools(self):
+        """澄清挂起期间只冻结注册表内的改写类工具，只读探查放行。
+
+        回归点：曾拦下一切工具调用 —— 用户离席几十秒、模型只想 file_read /
+        sys_overview 也逐次吃 clarification_pending，直到 600s TTL 才结束，
+        整个 run 被一张没人答的向导拖死。
+        """
+        interceptor = ClarificationInterceptor()
+        ctx = _make_ctx(args={"command": "rm -rf *"})
+        assert (await interceptor.check(ctx)).intercepted
+
+        # 只读工具（不在 _CLARIFIABLE_TOOLS）→ 放行，且不得新建第二张向导
+        ctx.tool_calls_log[-1] = {
+            "tool": "file_read", "args": {"path": "/etc/hosts"},
+            "iteration": 1, "success": None,
+        }
+        d_read = await interceptor.check(ctx)
+        assert d_read.intercepted is False
+        assert not d_read.events
+        assert _CLARIFICATION_CONTEXT[ctx.run_id]["tool"] == "shell_exec"
+
+        # 注册表内的另一个改写工具 → 仍拦截，且重发的是原向导（上下文不被覆盖）
+        ctx.tool_calls_log[-1] = {
+            "tool": "file_write", "args": {"path": "/etc/passwd", "content": "x"},
+            "iteration": 2, "success": None,
+        }
+        d_write = await interceptor.check(ctx)
+        assert d_write.intercepted is True
+        assert d_write.events[0].payload["tool"] == "shell_exec"
+        _CLARIFICATION_CONTEXT.pop(ctx.run_id, None)
+
+    @pytest.mark.asyncio
     async def test_done_answers_inject_context_and_release(self):
         """链路 3：答案就绪后 → 注入上下文 + clarification_done + 放行"""
         interceptor = ClarificationInterceptor()

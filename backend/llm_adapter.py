@@ -85,7 +85,10 @@ async def _get_client(base_url: str, api_key: str) -> openai.AsyncOpenAI:
                 "LRU 淘汰客户端 %s 时仍有 %d 个进行中请求，跳过 aclose（依赖 GC）",
                 evicted_key[0], _client_in_flight.get(evicted_key, 0),
             )
-            _client_in_flight.pop(evicted_key, None)
+            # 计数原样留着，由这些请求各自的 finally 递减。原实现在这里 pop：
+            # 计数按 (base_url, api_key) 而非按客户端键控，pop 等于把在途请求清零 —
+            # 同 key 新建的客户端 B 只计到自己的 1，A 的流随后把计数扣成 0，
+            # B 被淘汰时就走了「无在途请求」分支被 aclose，掐断 B 仍在跑的流。
         else:
             try:
                 if hasattr(evicted, '_client') and hasattr(evicted._client, 'aclose'):

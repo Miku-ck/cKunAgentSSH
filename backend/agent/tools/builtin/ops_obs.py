@@ -12,7 +12,7 @@
 import shlex
 
 from agent.tools import BaseTool, ToolResult, ToolMeta
-from agent.tools.builtin.ops_common import is_traversal, run_headless
+from agent.tools.builtin.ops_common import clamp_int, is_traversal, parse_int_arg, run_headless
 
 # ── 远端命令构建（单一事实来源）──────────────────────────────
 # 契约源：与远端白名单执行器（scripts/deploy/agent-exec.py）对齐，
@@ -123,7 +123,10 @@ class SysOverviewTool(BaseTool):
     meta = _OBS_META
 
     async def execute(self, context, top=3):
-        top = max(1, min(int(top), 20))
+        top, err = parse_int_arg(top, "top", 3)
+        if err:
+            return ToolResult(False, "", err)
+        top = max(1, min(top, 20))
         # 多命令脚本：用 ; 串联，任一命令缺失不影响其余（保持健壮）。
         # upsilence 缺失命令的 stderr，避免标签被刷屏干扰。
         script = sys_overview_cmd(top)
@@ -199,8 +202,13 @@ class NetworkProbeTool(BaseTool):
         return netprobe_bash_cmd(host, port, timeout), netprobe_nc_cmd(host, port, timeout)
 
     async def execute(self, context, host, port, timeout=5):
-        port = max(1, min(int(port), 65535))
-        timeout = max(1, min(int(timeout), 30))
+        # port 不默认：猜一个端口去探测会回一句「无法连接」，比直接报错更容易误导模型
+        port, perr = parse_int_arg(port, "port")
+        timeout, terr = parse_int_arg(timeout, "timeout", 5)
+        if perr or terr:
+            return ToolResult(False, "", perr or terr)
+        port = max(1, min(port, 65535))
+        timeout = max(1, min(timeout, 30))
         self._host, self._port, self._timeout = host, str(port), str(timeout)
 
         bash_cmd, nc_cmd = self._run_probe_tests()
@@ -270,10 +278,7 @@ class LogReadTool(BaseTool):
         path = args.get("path")
         if not isinstance(path, str) or not path.strip() or is_traversal(path):
             return None
-        try:
-            lines = max(1, min(int(args.get("lines") or 100), 1000))
-        except (TypeError, ValueError):
-            lines = 100
+        lines = clamp_int(args.get("lines"), 100, 1, 1000)
         pattern = args.get("pattern") or ""
         return log_grep_cmd(path, str(pattern), lines) if pattern else log_tail_cmd(path, lines)
 
@@ -286,7 +291,10 @@ class LogReadTool(BaseTool):
         if any(ord(c) < 32 for c in path):  # 拒绝控制字符/换行，防止破坏模板
             return ToolResult(False, "", "日志文件路径包含非法字符")
 
-        lines = max(1, min(int(lines), 1000))
+        lines, err = parse_int_arg(lines, "lines", 100)
+        if err:
+            return ToolResult(False, "", err)
+        lines = max(1, min(lines, 1000))
 
         if pattern:
             command = log_grep_cmd(path, pattern, lines)

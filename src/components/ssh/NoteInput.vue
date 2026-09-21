@@ -84,7 +84,7 @@ defineExpose({ focus })
 }
 
 .note-input.focused {
-  border-color: var(--accent-blue);
+  border-color: var(--accent-primary);
 }
 
 .note-field {
@@ -114,6 +114,6 @@ defineExpose({ focus })
 }
 
 .note-counter.warn {
-  color: var(--accent-orange, #f59e0b);
+  color: var(--accent-orange);
 }
 </style>

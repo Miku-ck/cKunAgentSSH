@@ -46,7 +46,9 @@ class LoadSkillTool(BaseTool):
         reason: str = "",
     ) -> ToolResult:
         registry = get_skill_registry()
-        skill = registry.get_by_slug(skill_slug, mode=context.mode)
+        # slug 精确比对：模型常在 JSON 字符串尾部带空格/换行，raw 比对会报
+        # 「未找到技能」，模型看不出是自己填错了，只能盲目重试同一 slug
+        skill = registry.get_by_slug((skill_slug or "").strip(), mode=context.mode)
 
         if not skill:
             return ToolResult(

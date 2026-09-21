@@ -216,8 +216,11 @@ class Driver:
                     )
                     guide = get_guide_for_iteration(intention, iteration)
                     # 动态调整本轮思考预算（首轮保持完整，后续收紧到 1024）
+                    # 必须带 model_max_reasoning 钳制：intention.reasoning_budget 是
+                    # 未钳制的等级预算，赋给 max_reasoning_tokens 后超限会让下一轮
+                    # LLM 调用报 400（classify 路径由上面的 min() 防住，这里曾漏防）
                     ctx.config.max_reasoning_tokens = get_reasoning_budget_for_iteration(
-                        intention, iteration,
+                        intention, iteration, max_budget=model_max_reasoning,
                     )
                     # 修复：引导语使用 "user" 角色而非 "system"，避免添加到消息末尾时触发 400 错误
                     if guide:
@@ -328,8 +331,7 @@ class Driver:
                 try:
                     from agent.intention import detect_batch_reading, get_progressive_gathering_guide
                     if detect_batch_reading(llm_out.tool_calls, threshold=3):
-                        read_names = [tc.name for tc in llm_out.tool_calls]
-                        guide = get_progressive_gathering_guide(read_names, iteration)
+                        guide = get_progressive_gathering_guide(iteration)
                         # 修复：使用 "user" 角色而非 "system"，避免添加到消息末尾时触发 400 错误
                         ctx.messages.append({"role": "user", "content": f"[渐进收集] {guide}"})
                         logger.info("检测到批量读取，已注入渐进收集引导")
@@ -405,7 +407,11 @@ class Driver:
                 ).to_dict()
             except Exception as e:
                 logger.warning("写入 cost_snapshot 失败: %s", e)
-        await harness.reins.check(ReinPoint.AGENT_COMPLETE, ctx)
+        # FAILED/HUMAN_HELP 终态已在主循环 break 前触发 AGENT_FAILED（含反思 + once 池清理），
+        # 此处再触发 AGENT_COMPLETE 会让 ReflectionRein 对同一 run 重复推送 reflection_request，
+        # 导致失败运行的反思/演化被执行两次。COMPLETED / MAX_REACHED 未经 AGENT_FAILED，仍需在此反思。
+        if ctx.state not in (State.FAILED, State.HUMAN_HELP):
+            await harness.reins.check(ReinPoint.AGENT_COMPLETE, ctx)
 
         # ── done ──
         # iteration=-1 表示循环未执行（max_iterations=0），此时 iterations=0
@@ -562,6 +568,10 @@ class Driver:
                 from .stirrups import ErrorClassifier, build_error_feedback
                 error_type = ErrorClassifier.classify_tool_error(result.error or "", tc.name)
                 result_text = build_error_feedback(result.error or "", tc.name, error_type)
+                # 工具失败时带回的 output（远程 stderr / 已产生的部分输出）一并回传，
+                # 否则 Agent 只看得到一行 error，只能原样重试
+                if result.output:
+                    result_text += f"\n--- 失败时的部分输出（末尾 2000 字）---\n{result.output[-2000:]}"
             yield TraceEvent(
                 kind="tool_call_result",
                 source="saddle",

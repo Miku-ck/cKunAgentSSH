@@ -7,13 +7,13 @@
 认知活动（每次 tick 选择 1-2 个执行，全部基于规则，不调 LLM）:
   1. consolidate_memories  — 从近期 episodic 记忆提取 semantic 知识
   2. reflect_on_failures   — 分析失败的 agent_runs，识别模式并写入 semantic 记忆
-  3. prune_stale_memories  — 清理低重要性 + 长期未用的记忆
+  3. prune_stale_memories  — 按 mode/type 各保留最新最常用 max_items 条，修剪其余
   4. touch_hot_memories    — 提升高频使用记忆的 importance
 
 设计原则:
   - 零 LLM 调用：纯规则，避免后台成本
   - 失败静默：任何子任务异常都 try/except，不影响 tick 主循环
-  - 可配置：间隔、单次任务上限、最低重要性阈值
+  - 可配置：间隔、单次任务上限、单任务超时；修剪上限来自记忆设置 max_items
   - 优雅关闭：通过 cancel event 停止
 """
 import asyncio
@@ -34,8 +34,6 @@ class TickConfig:
     """意识 tick 配置"""
     interval_seconds: int = 300        # tick 间隔（默认 5 分钟）
     max_tasks_per_tick: int = 2        # 单次 tick 最多执行任务数
-    min_importance: float = 0.3        # 低于此重要性 + 长期未用 → 清理
-    stale_days: int = 7                # stale_days 天未用视为过期
     failure_lookback: int = 10         # 反思失败时回看的最近 run 数
     task_timeout_seconds: int = 60     # m2 修复：单个任务超时时间，防止任务挂起阻塞后续 tick
 
@@ -103,7 +101,17 @@ class ConsciousnessTick:
             # 启动后等一个间隔再开始（避免与启动初始化抢资源）
             await asyncio.sleep(self.config.interval_seconds)
             while not self._stop_event.is_set():
-                await self._tick_once()
+                # 单次 tick 的异常不能带走主循环：模块文档承诺「任何子任务异常都
+                # try/except，不影响 tick 主循环」，而 _tick_once 开头的
+                # db.get_memory_settings 在 SQLite 锁库时会抛 OperationalError ——
+                # 原写法让它冒到 _run_loop 外，后台任务静默结束（异常无人 retrieve），
+                # 记忆整理/反思从此不再运行，只有聊天路径的 ensure_started 才能拉起它。
+                try:
+                    await self._tick_once()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("ConsciousnessTick 单次 tick 失败，进入下一轮")
                 # 等待下一个间隔，但可以被 stop_event 提前唤醒
                 try:
                     await asyncio.wait_for(
@@ -325,7 +333,10 @@ class ConsciousnessTick:
                 "reflected": 0,
                 "failed_count": len(failed),
             }
-        self._reflected_signatures.append(signature)
+        # 签名延后到写入成功后才登记（见函数末尾）：原先在这里先 append，
+        # 而下面 mgr.save_semantic 的异常是 `except Exception: pass` 吞掉的 ——
+        # 一次记忆库写失败（锁库/模型不可用）就把这批失败 run 永久拉黑，
+        # 同一签名再也不会重新反思。
 
         # 简单模式识别：统计失败状态分布
         from collections import Counter
@@ -358,16 +369,19 @@ class ConsciousnessTick:
                 except Exception:
                     pass
 
+        if reflected > 0:
+            self._reflected_signatures.append(signature)
+        summary = f"反思 {len(failed)} 次失败，提取 {len(patterns)} 个模式"
+        if patterns and reflected == 0:
+            summary += "（模式写入全部失败，下个 tick 重试）"
         return {
-            "summary": f"反思 {len(failed)} 次失败，提取 {len(patterns)} 个模式",
+            "summary": summary,
             "reflected": reflected,
             "failed_count": len(failed),
         }
 
     async def _prune_stale_memories(self) -> dict:
-        """
-        清理过期记忆：importance < min_importance 且 last_used_at 超过 stale_days
-        """
+        """按 mode/type 各保留最新最常用 max_items 条，修剪其余（上限来自记忆设置）"""
         import database as db
 
         # 读取用户配置的最大条目数，按 mode/type 各保留 max_items 条
@@ -439,10 +453,12 @@ def _extract_facts(episodic_content: str) -> list[str]:
         # 形如 "使用工具: shell_exec, web_search"
         parts = episodic_content.split("使用工具:")
         if len(parts) > 1:
-            tools_part = parts[1].split("|")[0].split(",")[0].strip()
-            tools_part = tools_part.strip()
-            if tools_part:
-                facts.append(f"常用工具: {tools_part}")
+            # 只按 "|" 截掉后半个字段，逗号列表要整串保留：
+            # 原先再 .split(",")[0] 只留第一个工具，"shell_exec, web_search" 的
+            # 后半截被丢掉 —— 提取出的"常用工具"永远等于列表首位
+            tools = [t.strip() for t in parts[1].split("|")[0].split(",") if t.strip()]
+            if tools:
+                facts.append(f"常用工具: {', '.join(tools)}")
     # 提取任务类型
     if "任务:" in episodic_content:
         parts = episodic_content.split("任务:")

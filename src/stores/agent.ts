@@ -8,7 +8,7 @@
  */
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { agentApi, streamAgentRun, type AgentSSEEvent, type AgentCostSnapshot, type AgentTraceSnapshot, type AgentIntentionInfo } from '@/api/client'
+import { agentApi, streamAgentRun, type AgentSSEEvent, type AgentCostSnapshot, type AgentTraceSnapshot, type AgentIntentionInfo, type AgentClarificationStep } from '@/api/client'
 import { StreamingThinkScrubber } from '@/utils/think-scrubber'
 import { useToastStore } from './toast'
 import { useAgentDeliver } from '@/composables/useAgentDeliver'
@@ -22,9 +22,12 @@ export interface ToolCallEntry {
   timestamp: number
   /** 所属迭代号（用于按批次分组渲染） */
   iteration?: number
-  /** 可见终端执行模式：待交付命令的达成状态 */
-  deliveryStatus?: 'pending_deliver' | 'capturing' | 'done' | 'rejected' | 'aborted'
-  /** 可见终端执行模式：后端下发的 tool_id */
+  /** 后端 tc.id（SSE tool_call_id）— 结果回填的唯一可靠配对键 */
+  callId?: string
+  /** 可见终端执行模式：后端下发的 tool_id — 用户拒绝时按它找回这条 tool_call，
+   *  把「[用户拒绝执行]」写回轨迹。交付状态本身不在这里存：权威源是
+   *  agentDeliver.deliveries（面板读的就是它），原先这里另抄一份 deliveryStatus
+   *  没有任何读者，还会与 deliveries 的 writing/done 漂移（中止后停在 capturing）。 */
   deliveryToolId?: string
 }
 
@@ -51,8 +54,12 @@ export interface PermissionRequest {
    * 授权键 = 工具名 + 这条命令的哈希，所以它必须原样回传给 grant 端点。
    */
   command?: string
-  /** 是否正在授权中（防止重复点击） */
-  granting?: boolean
+  /**
+   * 卡片上有一次决策在途（授权或拒绝的 HTTP 请求未返回）。覆盖两枚按钮：
+   * 曾在一次往返内先 grant 后 deny，本 run 内 deny 优先，但 always 档的
+   * 持久授权已经落下 —— 换个 run 这条命令不再询问。
+   */
+  settling?: boolean
   /** 是否已处理（已授权或已超时作废） */
   resolved?: boolean
   /** 已处理的卡片是否为「已授权」（超时作废的卡片文案不同） */
@@ -88,6 +95,8 @@ export interface ClarificationWizardState {
   question: string
   options: Array<{ id: string; label: string }>
   allowCustom: boolean
+  /** 后端一次推送的全量步骤 — 逐步推进时按索引取题（question/options 只是当前步） */
+  steps: AgentClarificationStep[]
   /** 用户已答步骤：step_index 0-based → { choice, custom_text? } */
   answers: Record<string, { choice: string; custom_text?: string }>
   /** 已提交到后端（clarification_done 后置 true） */
@@ -136,7 +145,6 @@ export const useAgentStore = defineStore('agent', () => {
   // Agent 运行期间用户可能切换会话 — 完成固化必须落回源会话（临时占位消息
   // 推在哪个会话就固化哪个），不能按"完成时刻的当前会话"决定
   const currentConversationId = ref('')
-  // 当前正在进行的工具调用（用于状态栏显示真实动作）
   // H14: 意图识别结果（用于规划列表展示）
   const intentionInfo = ref<AgentIntentionInfo | null>(null)
   // 澄清向导状态 — clarification_needed 事件触发时填充，ClarifyingWizard 组件据此渲染
@@ -147,6 +155,10 @@ export const useAgentStore = defineStore('agent', () => {
   // running→idle 区分"用户中止"（需固化为"(已中止)"）与 C10 并发保护的
   // 直接 abortFn()（不固化，避免误判为失败/中止）
   const aborted = ref(false)
+  // 定时任务变更信号：聊天里 schedule_op 的 create/cancel 直接写后端库、
+  // 绕过 REST 路由，SchedulesView 靠 watch 本计数做失效刷新。
+  // 不进 _reset()——它跨 run 单调递增，重置会丢掉运行间隙的变更通知
+  const scheduleRev = ref(0)
 
   let abortFn: (() => void) | null = null
   // 记录运行开始时间，用于 snapshot() 计算 duration
@@ -158,7 +170,21 @@ export const useAgentStore = defineStore('agent', () => {
   // ── Computed ──
   const isRunning = computed(() => status.value === 'running')
   const hasHumanHelpRequest = computed(() => humanHelpRequests.value.length > 0)
-  const hasPermissionRequest = computed(() => permissionRequests.value.some(r => !r.resolved))
+
+  // 「运行面板有东西要显示」的唯一判定：逐项对齐 AgentRunPanel 实际渲染的区块
+  // （任务规划 / 警告 / 人工介入 / 工具授权 / 可见终端交付 / 错误）。
+  // 原先这份条件是抄在宿主 SshAiPanel.vue 的 v-if 里的，而那份漏了任务规划、待确认
+  // 交付与澄清向导：后端发 clarification_needed 时面板压根没挂载，向导渲染不出来，
+  // 用户只看到一条 toast，运行干等到后端 TTL 超时。面板加区块而宿主忘记同步必然复发，
+  // 所以条件搬回数据侧，宿主只负责无条件挂载。
+  const hasRunNotice = computed(() =>
+    !!intentionInfo.value
+    || warnings.value.length > 0
+    || hasHumanHelpRequest.value
+    || permissionRequests.value.length > 0
+    || agentDeliver.deliveries.value.length > 0
+    || !!errorMessage.value
+  )
 
 
   // ── Actions ──
@@ -255,7 +281,9 @@ export const useAgentStore = defineStore('agent', () => {
     const durationMs = runStartTime > 0 ? Date.now() - runStartTime : 0
     return {
       // H14 修复：human_help 状态在快照中显示为 failed 以兼容类型，currentState 保留 human_help
-      status: status.value === 'failed' || currentState.value === 'human_help' ? 'failed' : 'completed',
+      // 中止同样是"没跑完"：原实现只认 failed，用户中止后固化的 trace 卡片写着
+      // 「已完成」，而消息正文是「(已中止)」——同一条消息自相矛盾。
+      status: status.value === 'failed' || aborted.value || currentState.value === 'human_help' ? 'failed' : 'completed',
       currentState: currentState.value || 'completed',
       iterations: totalIterations.value || iteration.value + 1,
       duration: Math.round(durationMs / 100) / 10, // 秒，保留1位小数
@@ -291,6 +319,7 @@ export const useAgentStore = defineStore('agent', () => {
     totalIterations.value = 0
     humanHelpRequests.value = []
     permissionRequests.value = []
+    agentDeliver.resetDeliveries()
     costInfo.value = null
     lastRunId.value = ''
     currentMode.value = ''
@@ -318,7 +347,7 @@ export const useAgentStore = defineStore('agent', () => {
    */
   async function denyPermission(id: string): Promise<boolean> {
     const req = permissionRequests.value.find(r => r.id === id)
-    if (!req || req.resolved) return false
+    if (!req || req.resolved || req.settling) return false
     if (!req.runId) {
       // 拒绝记录按 run_id 隔离，无 run_id 后端直接 400 — 只能本地关闭卡片
       dismissPermission(id)
@@ -327,10 +356,12 @@ export const useAgentStore = defineStore('agent', () => {
     // 与 grant 同源：拒绝登记的键必须是后端实际执行的那条串（args.command 对
     // job_run/file_write 都不成立，退化成裸工具名会让"拒绝过一次"形同虚设）
     const command = req.command ?? ''
+    req.settling = true
     try {
       await agentApi.denyCommand(req.tool, command, req.runId)
     } catch (e) {
       console.error('拒绝登记失败:', e)
+      req.settling = false
       return false  // 卡片保留，用户可重试；否则后端仍会等待审批
     }
     dismissPermission(id)
@@ -343,7 +374,7 @@ export const useAgentStore = defineStore('agent', () => {
     if (req) {
       req.resolved = true
       req.granted = granted
-      req.granting = false
+      req.settling = false
     }
   }
 
@@ -353,11 +384,9 @@ export const useAgentStore = defineStore('agent', () => {
     agentDeliver.deliveries.value.filter(d => d.status === 'pending_confirm'),
   )
 
-  /** 用户确认：把命令写入可见终端 */
+  /** 用户确认：把命令写入可见终端（状态由 agentDeliver 的 deliveries 播报） */
   function confirmDeliver(toolId: string) {
     agentDeliver.confirmDeliver(toolId)
-    const tc = toolCalls.value.find(t => t.deliveryToolId === toolId)
-    if (tc) tc.deliveryStatus = 'capturing'
   }
 
   /** 用户拒绝：不回写命令，直接回传失败结果 */
@@ -365,7 +394,6 @@ export const useAgentStore = defineStore('agent', () => {
     await agentDeliver.rejectDeliver(toolId)
     const tc = toolCalls.value.find(t => t.deliveryToolId === toolId)
     if (tc) {
-      tc.deliveryStatus = 'rejected'
       tc.result = '[用户拒绝执行]'
       tc.success = false
     }
@@ -404,29 +432,39 @@ export const useAgentStore = defineStore('agent', () => {
             args: event.args || {},
             timestamp: Date.now(),
             iteration: event.iteration ?? iteration.value,
+            callId: event.tool_call_id,
           }
           toolCalls.value.push(entry)
-          // 记录当前正在执行的工具，用于状态栏显示真实动作
         }
         break
 
       case 'tool_call_result':
         if (event.tool) {
-          // 优先按 iteration + tool 精确匹配
+          // 匹配"未回填"的条目必须用 result === undefined：原实现写 !t.result，
+          // 而 shell_exec 执行无输出命令时 result 就是空串 —— 空串条目会被当成
+          // 未回填，同迭代的第二个结果盖到第一个头上（结果张冠李戴）。
+          // 首选 tool_call_id（后端 tc.id，start/result 成对透传）：同名多调用时
+          // 只有它能确定归属，iteration/名称匹配只是事件缺 id 时的兜底。
           const eventIter = event.iteration
           let tc: ToolCallEntry | undefined
-          if (eventIter !== undefined) {
-            tc = [...toolCalls.value].reverse().find(t => t.tool === event.tool && t.iteration === eventIter && !t.result)
+          if (event.tool_call_id) {
+            tc = toolCalls.value.find(t => t.callId === event.tool_call_id && t.result === undefined)
           }
-          // 降级：反向找同名无 result
+          if (!tc && eventIter !== undefined) {
+            tc = [...toolCalls.value].reverse().find(t => t.tool === event.tool && t.iteration === eventIter && t.result === undefined)
+          }
+          // 降级：反向找同名未回填
           if (!tc) {
-            tc = [...toolCalls.value].reverse().find(t => t.tool === event.tool && !t.result)
+            tc = [...toolCalls.value].reverse().find(t => t.tool === event.tool && t.result === undefined)
           }
           if (tc) {
-            tc.result = event.result
+            // 落库归一为字符串，保证「undefined = 未回填」这个判据成立
+            tc.result = event.result ?? ''
             tc.success = event.success
+            if (event.tool === 'schedule_op' && event.success && (tc.args?.action ?? 'create') !== 'list') {
+              scheduleRev.value++
+            }
           }
-          // 工具调用完成，清空当前动作显示
         }
         break
 
@@ -434,9 +472,9 @@ export const useAgentStore = defineStore('agent', () => {
         // 可见终端执行模式：后端等待前端把命令写入当前可见终端并回传结果
         if (!event.tool_id) break
         // 关联到 shell_exec 的 tool_call 条目，标记为待交付
-        const pendingTc = [...toolCalls.value].reverse().find(t => t.tool === 'shell_exec' && !t.result)
+        // （判据同 tool_call_result：空串结果算已回填，否则会挂到无输出的旧条目上）
+        const pendingTc = [...toolCalls.value].reverse().find(t => t.tool === 'shell_exec' && t.result === undefined)
         if (pendingTc) {
-          pendingTc.deliveryStatus = 'pending_deliver'
           pendingTc.deliveryToolId = event.tool_id
         }
         agentDeliver.handleDeliver({
@@ -481,8 +519,13 @@ export const useAgentStore = defineStore('agent', () => {
         const evtTool = event.tool || ''
         const evtCommand = typeof event.command === 'string' && event.command ? event.command : undefined
         const dupKey = permCardKey(evtTool, evtCommand)
+        // 去重判据只看【未处理】的卡片：已处理的老卡片仍留在数组里（resolvePermission
+        // 只打标记、不摘卡，面板要显示「已授权」），而它在后端已经不代表有人在等 ——
+        // driver 在命令执行成功后就把该签名移出「等待审批」集合，同一命令在后续迭代
+        // 再次请求时后端会重发 permission_needed。把它算进 dup 判据就等于吞掉这张新卡：
+        // 用户无从批准（老卡显示「已授权」），后端干等 120s 后按拒绝处理并注入强拒绝。
         const alreadyPending = permissionRequests.value.some(
-          r => permCardKey(r.tool, r.command) === dupKey,
+          r => !r.resolved && permCardKey(r.tool, r.command) === dupKey,
         )
         // B11 修复：权限卡片只存在于 AI 面板内，面板关闭期间用户无法响应 —
         // 从非 pending → pending 转换时 toast 提醒（重复请求不重复弹）
@@ -542,7 +585,7 @@ export const useAgentStore = defineStore('agent', () => {
           if (permCardKey(r.tool, r.command) === key) {
             r.resolved = true
             r.granted = false
-            r.granting = false
+            r.settling = false
             r.message = `${r.message}（审批超时，已按拒绝处理）`
           }
         }
@@ -550,12 +593,15 @@ export const useAgentStore = defineStore('agent', () => {
       }
 
       case 'error':
-        errorMessage.value = event.message || 'Unknown error'
+        errorMessage.value = event.message?.trim() || 'AI 运行失败，后端未返回具体错误'
         status.value = 'failed'
         // H13 修复：同步更新 currentState，避免 UI 仍显示"思考中"
         currentState.value = 'failed'
         // B11 修复：run 结束清理权限请求状态，防止残留过期授权按钮
         permissionRequests.value = []
+        // run 已终止：澄清向导继续挂着的话，用户答题只会 POST 到一个
+        // 后端不再等待的 run_id（clarification_done 永不回来，卡片永不消失）
+        clarificationWizard.value = null
         // H1 修复：不在 error 事件清理 abortFn，此时流可能仍未关闭
         // abortFn 由 onDone/onError 回调（真正代表流结束）清理
         break
@@ -569,10 +615,28 @@ export const useAgentStore = defineStore('agent', () => {
       case 'clarification_needed': {
         // 澄清向导触发：后端 PRE_TOOL_CALL 拦截器发现意图不明的工具调用（如 rm -rf *）
         // 一次推送全部步骤 + 当前步；前端据此弹出卡片组
+        const wizRunId = event.run_id || lastRunId.value || ''
+        const wizToolCallId = event.tool_call_id || ''
+        const prevWiz = clarificationWizard.value
+        // 同一张题的重发（用户还没答完、模型重试了改写类工具）：就地刷新题面。
+        // 整体替换对象会命中 ClarifyingWizard 的 watch(wizard) → localStep 归零，
+        // 加上 answers 重建，用户答到一半的选择被抹掉，只能从头再答一遍。
+        if (prevWiz && !prevWiz.submitted
+          && prevWiz.runId === wizRunId && prevWiz.toolCallId === wizToolCallId) {
+          Object.assign(prevWiz, {
+            currentStep: event.current_step ?? prevWiz.currentStep,
+            totalSteps: event.total_steps ?? prevWiz.totalSteps,
+            question: event.question || prevWiz.question,
+            options: event.options || prevWiz.options,
+            allowCustom: event.allow_custom ?? prevWiz.allowCustom,
+            steps: event.steps || prevWiz.steps,
+          })
+          break
+        }
         clarificationWizard.value = {
-          runId: event.run_id || lastRunId.value || '',
+          runId: wizRunId,
           tool: event.tool || '',
-          toolCallId: event.tool_call_id || '',
+          toolCallId: wizToolCallId,
           args: event.args || {},
           reason: event.reason || '',
           currentStep: event.current_step ?? 0,
@@ -580,6 +644,7 @@ export const useAgentStore = defineStore('agent', () => {
           question: event.question || '',
           options: event.options || [],
           allowCustom: event.allow_custom ?? true,
+          steps: event.steps || [],
           // 累积答案：每步选中后写入
           answers: {},
           submitted: false,
@@ -590,12 +655,17 @@ export const useAgentStore = defineStore('agent', () => {
 
       case 'clarification_done': {
         // 后端已注入澄清答案 + 放行工具执行 — 关闭向导
-        if (clarificationWizard.value) {
-          clarificationWizard.value.submitted = true
+        // 定时器捕获本次向导对象：800ms 内若已开新 run 并弹出新向导，
+        // 无条件置 null 会把新向导一起抹掉（用户再也答不了题）
+        const wiz = clarificationWizard.value
+        if (wiz) {
+          wiz.submitted = true
         }
         // 短暂延迟后清除（让组件播放一个完成动画/提示）
         setTimeout(() => {
-          clarificationWizard.value = null
+          if (clarificationWizard.value === wiz) {
+            clarificationWizard.value = null
+          }
         }, 800)
         break
       }
@@ -612,7 +682,11 @@ export const useAgentStore = defineStore('agent', () => {
         // P7: 捕获成本快照 + run_id
         if (event.cost) costInfo.value = event.cost
         if (event.run_id) lastRunId.value = event.run_id
-        // C3: 捕获文件变更摘要
+        // 判据同 error 分支：run 已经收尾，向导继续挂着就是让用户答一张没人收的题
+        // （用户离席期间模型放弃重试、迭代数耗尽 → done，向导却还开着）。答完
+        // POST 到已结束的 run_id 永远等不到 clarification_done，卡片只能靠下一次
+        // runAgent 的 _reset 才被抹掉。
+        clarificationWizard.value = null
         // B11 修复：run 结束清理权限请求状态，防止面板里残留过期授权按钮
         permissionRequests.value = []
         // H14 修复：支持 human_help 终止态，保留 currentState 供 UI 显示"需要人工介入"
@@ -644,10 +718,11 @@ export const useAgentStore = defineStore('agent', () => {
     intentionInfo,
     clarificationWizard,
     aborted,
+    scheduleRev,
     // computed
     isRunning,
     hasHumanHelpRequest,
-    hasPermissionRequest,
+    hasRunNotice,
     pendingDeliveries,
     deliveries: agentDeliver.deliveries,
     // actions

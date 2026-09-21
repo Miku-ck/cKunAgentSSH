@@ -45,25 +45,30 @@ export function renderMarkdown(text: string): string {
   if (!text) return ''
   try {
     const html = marked.parse(text, { async: false }) as string
+    // 语言标签不能只匹配 \w：marked 原样透传 info string，shell-session / c++ /
+    // vb.net 这类带 - + . 的 hljs 合法 id 会整条不匹配 —— 代码块既不高亮也没了复制按钮
     const highlighted = html.replace(
-      /<pre><code class="language-(\w*)">([\s\S]*?)<\/code><\/pre>/g,
+      /<pre><code class="language-([^"]*)">([\s\S]*?)<\/code><\/pre>/g,
       (_match, lang, code) => {
+        // lang 来自围栏 info string，放宽匹配后可能带任意字符：写进下面两处
+        // HTML 之前先削成语言 id 的合法字符集，别让 <...> 落到标签文本里
+        const safeLang = String(lang).replace(/[^-\w.+#]/g, '')
         const decoded = decodeHtml(code)
         let highlightedCode: string
         try {
-          highlightedCode = lang && hljs.getLanguage(lang)
-            ? hljs.highlight(decoded, { language: lang }).value
+          highlightedCode = safeLang && hljs.getLanguage(safeLang)
+            ? hljs.highlight(decoded, { language: safeLang }).value
             : hljs.highlightAuto(decoded).value
         } catch {
           highlightedCode = code
         }
-        const langLabel = lang || 'text'
+        const langLabel = safeLang || 'text'
         return `<div class="code-block-wrapper">` +
           `<div class="code-block-header">` +
           `<span class="code-lang">${langLabel}</span>` +
           `<button class="code-copy-btn" type="button">复制</button>` +
           `</div>` +
-          `<pre><code class="hljs language-${lang}">${highlightedCode}</code></pre>` +
+          `<pre><code class="hljs language-${safeLang}">${highlightedCode}</code></pre>` +
           `</div>`
       },
     )

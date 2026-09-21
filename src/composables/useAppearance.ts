@@ -1,13 +1,19 @@
-import { watch, onUnmounted } from 'vue'
+import { watch } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
 // H13 修复：Monaco 主题跟随设置切换
 // 原实现 Monaco 主题在启动时硬编码，不随设置变化
 import { applyMonacoTheme } from '@/monaco-setup'
 
-type Theme = 'dark' | 'light' | 'system' | 'blue-screen' | 'forest' | 'mint' | 'bee' | 'coral'
-type Accent = 'blue' | 'purple' | 'green' | 'orange' | 'white' | 'forest' | 'mint' | 'bee' | 'coral'
+// 外观枚举的唯一来源：settings store 的字段类型与设置面板的选项都从这里派生。
+// 此前 Theme/Accent 在 store 与面板里各抄一份，面板色板还另抄了一份 hex ——
+// 已经抄错：蓝色 swatch 显示 #58a6ff，实际写进 --accent-primary 的是 #0078d4。
+export type Theme = 'dark' | 'light' | 'system' | 'blue-screen' | 'forest' | 'mint' | 'bee' | 'coral'
+export type Accent = 'blue' | 'purple' | 'green' | 'orange' | 'white' | 'forest' | 'mint' | 'bee' | 'coral'
+export type GradientMode = 'glow' | 'linear' | 'radial'
+export type GradientDirection = 'tb' | 'bt' | 'lr' | 'rl' | 'tlbr' | 'trbl'
 
-const ACCENT_MAP: Record<Accent, { hex: string; rgb: string }> = {
+/** 强调色 → CSS 变量值（面板色板与 applyAccent 共用同一张表） */
+export const ACCENT_MAP: Record<Accent, { hex: string; rgb: string }> = {
   blue:   { hex: '#0078d4', rgb: '0, 120, 212' },
   purple: { hex: '#c586c0', rgb: '197, 134, 192' },
   green:  { hex: '#4ec9b0', rgb: '78, 201, 176' },
@@ -23,7 +29,7 @@ const ACCENT_MAP: Record<Accent, { hex: string; rgb: string }> = {
 let _systemThemeListenerAdded = false
 
 // 渐变方向 → linear-gradient 角度
-const GRADIENT_ANGLE: Record<string, string> = {
+const GRADIENT_ANGLE: Record<GradientDirection, string> = {
   tb: '180deg',
   bt: '0deg',
   lr: '90deg',
@@ -33,7 +39,7 @@ const GRADIENT_ANGLE: Record<string, string> = {
 }
 
 // 渐变方向 → 放射起点位置
-const RADIAL_POS: Record<string, string> = {
+const RADIAL_POS: Record<GradientDirection, string> = {
   tb: 'center',
   bt: 'center',
   lr: 'center',
@@ -57,7 +63,8 @@ export function useAppearance() {
   }
 
   const systemHandler = () => applySystemTheme()
-  // 修复：仅在首次调用时添加监听器，避免多实例场景下重复添加
+  // 监听器是模块级单例（多实例共享场景）：只注册一次且随应用存活，不随实例卸载移除
+  // —— matchMedia 每次返回新对象，移除后再次调用本函数不会重新挂上，系统主题切换会永久失效
   if (!_systemThemeListenerAdded) {
     darkMq.addEventListener('change', systemHandler)
     _systemThemeListenerAdded = true
@@ -79,6 +86,8 @@ export function useAppearance() {
   }
 
   // ── 强调色 ──
+  // 单一事实源：--accent-primary。历史上另有同语义的 --accent-blue（被 60+ 处样式引用、
+  // 值硬编码为蓝），切换强调色时不会跟随 —— 已全部合并到本令牌。
   function applyAccent(accent: Accent) {
     const v = ACCENT_MAP[accent]
     if (!v) return
@@ -91,31 +100,9 @@ export function useAppearance() {
     root.style.fontSize = `${size}px`
   }
 
-  // ── 紧凑模式 ──
-  function applyCompact(compact: boolean) {
-    if (compact) {
-      root.setAttribute('data-compact', 'true')
-      root.style.setProperty('--spacing-xs', '2px')
-      root.style.setProperty('--spacing-sm', '4px')
-      root.style.setProperty('--spacing-md', '8px')
-      root.style.setProperty('--spacing-lg', '12px')
-    } else {
-      root.removeAttribute('data-compact')
-      root.style.setProperty('--spacing-xs', '4px')
-      root.style.setProperty('--spacing-sm', '8px')
-      root.style.setProperty('--spacing-md', '12px')
-      root.style.setProperty('--spacing-lg', '16px')
-    }
-  }
-
   // ── 动效 ──
   function applyAnimation(enabled: boolean) {
     root.setAttribute('data-animation', enabled ? 'true' : 'false')
-  }
-
-  // ── 侧边栏宽度 ──
-  function applySidebarWidth(width: number) {
-    root.style.setProperty('--sidebar-width', `${width}px`)
   }
 
   // ── 自定义背景图 ──
@@ -171,9 +158,7 @@ export function useAppearance() {
   applyTheme(a.theme)
   applyAccent(a.accent)
   applyFontSize(a.fontSize)
-  applyCompact(a.compact)
   applyAnimation(a.animation)
-  applySidebarWidth(a.sidebarWidth)
   applyBackground(a.backgroundEnabled, a.backgroundOpacity, a.backgroundOverlay)
   applyThemeGradient()
   applyMessageFontSize(store.settings.chat.messageFontSize)
@@ -182,9 +167,7 @@ export function useAppearance() {
   watch(() => store.settings.appearance.theme, applyTheme)
   watch(() => store.settings.appearance.accent, applyAccent)
   watch(() => store.settings.appearance.fontSize, applyFontSize)
-  watch(() => store.settings.appearance.compact, applyCompact)
   watch(() => store.settings.appearance.animation, applyAnimation)
-  watch(() => store.settings.appearance.sidebarWidth, applySidebarWidth)
   watch(
     () => ({
       enabled: store.settings.appearance.backgroundEnabled,
@@ -209,8 +192,4 @@ export function useAppearance() {
     }
   )
   watch(() => store.settings.chat.messageFontSize, applyMessageFontSize)
-
-  onUnmounted(() => {
-    darkMq.removeEventListener('change', systemHandler)
-  })
 }

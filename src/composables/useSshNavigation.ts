@@ -166,7 +166,38 @@ export function useSshNavigation(
     }
   }
 
-  function handleLocalExit(id: string, _exitCode: number) {
+  // 本地终端“启动即退出”判定阈值（毫秒）：进程刚 spawn 成功不久就退出，
+  // 基本可断定是启动阶段失败（如 WSL 无发行版、pwsh/powershell 路径不可执行），
+  // 此时不该静默移除会话，而应提示用户。
+  const LOCAL_STARTUP_CRASH_MS = 2500
+
+  // 各本地 shell 启动失败时的友好排查提示
+  const LOCAL_SHELL_HINTS: Record<string, string> = {
+    PowerShell: '请确认已安装 Windows PowerShell / PowerShell 7 (pwsh)，且路径可执行。',
+    WSL: '请确认已通过 wsl --install 安装 WSL，并已安装至少一个发行版（wsl -l -v 可查看）。',
+    'Git Bash': '请确认已安装 Git，且 Git Bash 可正常启动。',
+    CMD: '',
+  }
+
+  function handleLocalExit(id: string, exitCode: number) {
+    // 启动即退出（非零退出码 + 存活时间极短）：多半是终端打开即失败，给出友好提示。
+    // 某些失败会带 0 退出码（如 WSL 未装发行版时 wsl.exe 可能以 0 退出），此时用更严的
+    // 1s 阈值兜底（正常 `exit` 关闭不会在 1 秒内完成打开→输入→退出全流程）。
+    if (exitCode !== 0) {
+      const session = store.sessions.find(s => s.id === id)
+      const age = (session && session.createdAt) ? Date.now() - session.createdAt : Number.POSITIVE_INFINITY
+      if (age < LOCAL_STARTUP_CRASH_MS) {
+        const hint = LOCAL_SHELL_HINTS[session?.shell || ''] || ''
+        toast.error(`「${session?.shell || '终端'}」打开失败（进程已退出，退出码 ${exitCode}）。${hint}`)
+      }
+    } else {
+      const session = store.sessions.find(s => s.id === id)
+      const age = (session && session.createdAt) ? Date.now() - session.createdAt : Number.POSITIVE_INFINITY
+      if (age < 1000) {
+        const hint = LOCAL_SHELL_HINTS[session?.shell || ''] || ''
+        toast.error(`「${session?.shell || '终端'}」打开异常（进程启动后立即退出）。${hint}`)
+      }
+    }
     store.removeSession(id)
   }
 
@@ -177,21 +208,40 @@ export function useSshNavigation(
   const connecting = ref(false)
   const pendingConnId = ref('')
 
+  /**
+   * 复位连接 loading：仅当状态仍归属本次连接时才清。
+   * 另一次连接（pendingConnId 已指向它）在途时，本次的 finally 不得越权清除，
+   * 否则「A 结束」会让仍在连接的 B 失去转圈，B 所在行重新可点导致重复会话。
+   */
+  function releaseConnectLock(connId: string): void {
+    if (pendingConnId.value && pendingConnId.value !== connId) return
+    connecting.value = false
+    pendingConnId.value = ''
+  }
+
   async function connectRemote(conn: SSHConnection) {
     const now = Date.now()
     const lastConnectAt = lastConnectAtById[conn.id] || 0
     if (now - lastConnectAt < CONNECT_DEBOUNCE_MS) {
       toast.info('连接请求过于频繁，请稍候')
       // debounce 路径也要重置 connecting 状态，避免 loading 永远不消失
-      connecting.value = false
-      pendingConnId.value = ''
+      releaseConnectLock(conn.id)
       return
     }
     lastConnectAtById[conn.id] = now
+    // loading 由本函数统一持有：Quick Start 卡片与失败「重试」按钮过去直接调用本
+    // 函数而不经过 handleRmConnect，既没有转圈反馈，finally 又会清掉同期
+    // 另一次连接的状态
+    connecting.value = true
+    pendingConnId.value = conn.id
 
     try {
       await store.connectRemote(conn.id, 80, 24)
+      // 与 activateTerminal 同口径：只收 showHome 不够，导航页是盖在 term-content
+      // 之上的绝对定位浮层（SshView.vue .rm-page z-index:10）。从 Remote Manager
+      // 列表点连接时浮层不消失，新终端已经在跑却被自己来的那一页挡住。
       showHome.value = false
+      activeNavPage.value = 'home'
       // 等待 Vue 渲染 RemoteTerminal 组件后，让终端获取焦点
       // C28 修复：定时器触发后自摘除
       const tid = setTimeout(() => {
@@ -202,6 +252,10 @@ export function useSshNavigation(
       focusTimers.push(tid)
     } catch (err: any) {
       console.error('[useSshNavigation] connectRemote failed:', err)
+      // 失败即解除防抖：时间戳在发起前就写入了，而下方 toast 的「重试」按钮直接
+      // 回调本函数 —— 秒级失败（拒绝连接/认证错误）时重试会撞进防抖窗口，
+      // 只弹「连接请求过于频繁」，重试按钮形同虚设
+      delete lastConnectAtById[conn.id]
       // v2 改进：结构化错误优先提取 SSHErrorTransport，带详情与重试按钮
       const sshTransport = extractSSHError(err)
       const friendlyMsg = toFriendlyMessage(err, 'SSH 连接失败')
@@ -212,26 +266,21 @@ export function useSshNavigation(
         : undefined
       toast.error(friendlyMsg, 8000, { details, actions })
     } finally {
-      connecting.value = false
-      pendingConnId.value = ''
+      releaseConnectLock(conn.id)
     }
   }
 
   // RemoteManager 触发的连接
   function handleRmConnect(connId: string) {
-    // 立即显示 loading（点击后马上转圈圈，给用户即时反馈）
-    connecting.value = true
-    pendingConnId.value = connId
-
     const conn = store.connections.find(c => c.id === connId)
-    if (conn) {
-      connectRemote(conn)
-    } else {
+    if (!conn) {
       console.error('[useSshNavigation] connection not found:', connId)
       toast.error('连接配置不存在')
-      connecting.value = false
-      pendingConnId.value = ''
+      return
     }
+    // connecting/pendingConnId 由 connectRemote 在首个 await 前同步置位，
+    // 同一 tick 内即可渲染转圈
+    void connectRemote(conn)
   }
 
   function handleRemoteClose(id: string) {

@@ -27,9 +27,11 @@ from agent.tools.builtin.ops_common import (
     base64_read_cmd,
     base64_write_cmd,
     base64_write_cmd_for_classification,
+    clamp_int,
     drop_sentinel_lines,
     is_remote,
     is_traversal,
+    parse_int_arg,
     remote_read_b64,
     run_headless,
     strip_remote_tail,
@@ -129,7 +131,12 @@ class FileReadTool(BaseTool):
         return None
 
     async def execute(self, context, path, offset=1, limit=200):
-        offset, limit = int(offset), int(limit)
+        # 模型可以把 offset/limit 填成 "200"/null/""：裸 int() 会把 ValueError
+        # 抛给驱动，模型只看到一句栈；这里换成「这个参数该怎么填」的可读提示
+        offset, oerr = parse_int_arg(offset, "offset", 1)
+        limit, lerr = parse_int_arg(limit, "limit", 200)
+        if oerr or lerr:
+            return ToolResult(False, "", oerr or lerr)
         limit = min(10000, limit)
         err = self._validate(path, offset, limit)
         if err:
@@ -253,7 +260,11 @@ class FileEditTool(BaseTool):
 
         ok, raw = await remote_read_b64(context, path)
         if not ok:
-            return ToolResult(False, raw.decode("utf-8", errors="replace"), "远程读取文件失败或文件不存在")
+            # 把远端/协议给出的真实理由转述给模型：固定成「或文件不存在」会把
+            # 超限、权限、通道异常一律误导成文件不存在，模型随即放弃编辑或改用
+            # file_write 整体覆写（它手里只有 file_read 截断过的片段 → 覆盖即丢内容）
+            reason = raw.decode("utf-8", errors="replace").strip()
+            return ToolResult(False, "", f"远程读取原文件失败：{reason or '文件不存在或不可读'}")
         content = raw.decode("utf-8", errors="replace")
         new_content = self._apply_replace(content, old_string, new_string)
         if isinstance(new_content, ToolResult):
@@ -349,16 +360,17 @@ class FileGrepTool(BaseTool):
         path = args.get("path")
         if not isinstance(path, str) or not path or is_traversal(path):
             return None
-        try:
-            max_lines = min(5000, max(1, int(args.get("max_lines") or 200)))
-        except (TypeError, ValueError):
-            max_lines = 200
-        return file_grep_cmd(path, str(args.get("pattern") or ""), max_lines)
+        return file_grep_cmd(
+            path, str(args.get("pattern") or ""), clamp_int(args.get("max_lines"), 200, 1, 5000)
+        )
 
     async def execute(self, context, path, pattern, max_lines=200):
         if is_traversal(path):
             return ToolResult(False, "", "非法路径：包含 `..`，禁止越界访问")
-        max_lines = min(5000, max(1, int(max_lines)))
+        max_lines, err = parse_int_arg(max_lines, "max_lines", 200)
+        if err:
+            return ToolResult(False, "", err)
+        max_lines = min(5000, max(1, max_lines))
 
         if is_remote(context):
             cmd = file_grep_cmd(path, pattern, max_lines)

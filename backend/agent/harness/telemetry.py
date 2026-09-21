@@ -203,6 +203,9 @@ class SSEAdapter:
         elif kind == "permission_expired":
             result["tool"] = payload.get("tool", "")
             result["args"] = payload.get("args", {})
+            # command 必须透传：前端 permCardKey(tool, command) 用它定位那张超时卡片，
+            # 缺失时 key 永远对不上 → 后端已按拒绝处理，卡片却仍可点击（孤儿卡片）
+            result["command"] = payload.get("command", "")
             result["message"] = payload.get("message", "")
         elif kind == "done":
             result["state"] = payload.get("state", "")
@@ -241,11 +244,20 @@ class SSEAdapter:
             result["tool"] = payload.get("tool", "")
             result["tool_call_id"] = payload.get("tool_call_id", "")
             result["args"] = payload.get("args", {})
-            result["current_step"] = payload.get("current_step", 0)
-            result["total_steps"] = payload.get("total_steps", 0)
-            result["question"] = payload.get("question", "")
-            result["options"] = payload.get("options", [])
-            result["allow_custom"] = payload.get("allow_custom", True)
+            # 生产端（reins.clarification._build_clarification_needed）的键是
+            # step / total / steps[全量]，这里曾按 current_step / total_steps /
+            # question / options 取值 —— 全部取不到 → 前端收到空题目空选项，
+            # 澄清向导退化成只剩自定义输入框。现按真实契约取值并透传全量 steps
+            # （前端本地逐步推进）。
+            steps = payload.get("steps", []) or []
+            idx = int(payload.get("step", 0) or 0)
+            result["steps"] = steps
+            result["current_step"] = idx
+            result["total_steps"] = int(payload.get("total", 0) or len(steps))
+            cur = steps[idx] if 0 <= idx < len(steps) else {}
+            result["question"] = cur.get("question", "")
+            result["options"] = cur.get("options", []) or []
+            result["allow_custom"] = cur.get("allow_custom", True)
             result["reason"] = payload.get("reason", "")
         elif kind == "clarification_done":
             result["tool"] = payload.get("tool", "")

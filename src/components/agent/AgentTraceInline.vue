@@ -68,7 +68,7 @@ const isPreparing = computed(() => props.isLive && !hasToolCalls.value && !props
   gap: 6px;
   padding: 6px 0;
   font-size: 13px;
-  color: var(--accent-blue, #58a6ff);
+  color: var(--accent-primary);
 }
 
 .preparing-text {
@@ -84,7 +84,7 @@ const isPreparing = computed(() => props.isLive && !hasToolCalls.value && !props
   width: 4px;
   height: 4px;
   border-radius: 50%;
-  background: var(--accent-blue, #58a6ff);
+  background: var(--accent-primary);
   animation: preparing-bounce 1.4s infinite ease-in-out both;
 }
 

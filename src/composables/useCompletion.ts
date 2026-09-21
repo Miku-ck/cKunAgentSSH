@@ -311,6 +311,11 @@ function queryChainCandidates(
 }
 
 /** 补充 AI 预测候选（命令段且无前缀时，基于上下文预测下一步命令） */
+/** AI 预测的本地等待预算（毫秒），超过就先出本地候选 */
+const AI_PREDICT_BUDGET_MS = 4000
+/** 正在等 AI 预测的会话（防止连按 Tab 叠加 LLM 请求） */
+const _aiPredictInFlight = new Set<string>()
+
 async function queryAIPredictions(
   sessionId: string,
   input: CompletionInput,
@@ -325,15 +330,24 @@ async function queryAIPredictions(
   const lastCmd = store.getLastCommand(sessionId)
   if (!lastCmd) return []
 
+  if (_aiPredictInFlight.has(sessionId)) return []
+  // 后端对这个 LLM 往返的保护是 15s，而补全弹窗是同步等它结果的 —— 慢模型会把
+  // Tab 补全整个卡住。本地只给 4s 预算，超时先返回本地候选。
+  const predict = api.predictTerminalCommand({
+    session_id: sessionId,
+    current_input: input.line || '',
+    recent_commands: store.getRecentCommands(sessionId, 10),
+    cwd: '',
+    platform: typeof navigator !== 'undefined' && navigator.userAgent?.includes('Windows') ? 'windows' : 'linux',
+  })
+  // 闸门在请求真正结束时才放开（不是 4s 放弃结果时）—— 否则连按 Tab 会叠加 LLM 请求
+  _aiPredictInFlight.add(sessionId)
+  void predict.catch(() => null).finally(() => { _aiPredictInFlight.delete(sessionId) })
   try {
-    const result = await api.predictTerminalCommand({
-      session_id: sessionId,
-      current_input: input.line || '',
-      recent_commands: store.getRecentCommands(sessionId, 10),
-      cwd: '',
-      platform: typeof navigator !== 'undefined' && navigator.userAgent?.includes('Windows') ? 'windows' : 'linux',
-    })
-
+    const result = await Promise.race([
+      predict,
+      new Promise<null>(resolve => setTimeout(() => resolve(null), AI_PREDICT_BUDGET_MS)),
+    ])
     if (!result?.predictions?.length) return []
 
     const seen = new Set(nativeCandidates.map(c => c.text))
@@ -501,6 +515,7 @@ export async function queryCompletion(
 export function releaseCompletionSession(sessionId: string): void {
   if (!sessionId) return
   _completionRequestIds.delete(sessionId)
+  _aiPredictInFlight.delete(sessionId)
 }
 
 /**

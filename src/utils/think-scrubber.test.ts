@@ -71,4 +71,17 @@ describe('StreamingThinkScrubber', () => {
     expect(run(['A\n<reasoning>\nB\n</reasoning>\nC'])).toBe('A\nC')
     expect(run(['A\n<thought>\nB\n</thought>\nC'])).toBe('A\nC')
   })
+
+  it('跨 delta 切断的行中标签不算块首，正文一字不丢', () => {
+    // "…答案 3<th" + "inking>不是 CoT"：标签重组后落在 pending[0]，
+    // 原实现的 `idx > 0` 前置条件让它直接放行 → 误入 think 块，
+    // 后面的真正文被擦洗并由 flush() 丢弃（答案悄悄变短、状态仍是"已完成"）
+    expect(run(['答案是 3<th', 'inking>不是 CoT'])).toBe('答案是 3<thinking>不是 CoT')
+    expect(run(['x<', 'reasoning>y'])).toBe('x<reasoning>y')
+  })
+
+  it('跨 delta 切断的行首标签仍进入块内', () => {
+    // 与上一例成对：邻居是换行时必须照旧擦洗，否则就是 CoT 泄漏
+    expect(run(['前文\n<th', 'ink>秘密\n', '</think>后文'])).toBe('前文\n后文')
+  })
 })

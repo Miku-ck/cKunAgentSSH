@@ -6,27 +6,35 @@
   box-sizing: border-box;
 }
 
-html, body {
+html {
+  height: 100%;
+  width: 100%;
+  /* rem 基准：外观设置（useAppearance.applyFontSize）以 inline style 覆盖此值 */
+  font-size: 13px;
+}
+
+body {
   height: 100%;
   width: 100%;
   font-family: var(--font-sans);
-  background: var(--theme-gradient, var(--bg-panel));
+  background: var(--theme-gradient, var(--bg-base));
   color: var(--text-primary);
   overflow: hidden;
-  font-size: 13px;
-  line-height: 1.5;
+  /* 1rem 跟随 html 基准；原为硬编码 13px，阻断了"字体大小"设置的传导 */
+  font-size: 1rem;
+  line-height: var(--line-height-normal);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* ── 主题渐变色：开启时主要面板半透明，透出 body 渐变 ──
+/* ── 主题渐变色：开启时浮起层与控件半透明，透出 body 渐变 ──
+   body 画布始终是 --bg-base（见上），只有卡片/浮层与控件参与半透明派生，
+   结构背景不再分层，故此处不再派生 panel/surface/sidebar。
+
    注意：color-mix 必须引用 -solid 纯色基础变量，避免同元素自引用循环
    （自引用自定义属性会计算为 guaranteed-invalid，导致背景整体失效变透明） */
 [data-gradient="on"] {
-  --bg-panel: color-mix(in srgb, var(--bg-panel-solid) var(--gradient-alpha, 94%), transparent);
-  --bg-surface: color-mix(in srgb, var(--bg-surface-solid) var(--gradient-alpha, 94%), transparent);
   --bg-elevated: color-mix(in srgb, var(--bg-elevated-solid) var(--gradient-alpha, 94%), transparent);
-  --bg-sidebar: color-mix(in srgb, var(--bg-sidebar-solid) var(--gradient-alpha, 94%), transparent);
   --bg-input: color-mix(in srgb, var(--bg-input-solid) var(--gradient-alpha, 94%), transparent);
 }
 
@@ -36,12 +44,18 @@ html, body {
 ::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
 
 button { font-family: var(--font-sans); }
-a { color: var(--accent-blue); text-decoration: none; }
+a { color: var(--accent-primary); text-decoration: none; }
 a:hover { text-decoration: underline; }
+
+/* ── 文本选中：跟随强调色，替换浏览器默认蓝 ── */
+::selection {
+  background: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+  color: var(--text-primary);
+}
 
 /* ── 键盘焦点可见性（不破坏默认 focus 移除，仅增强可见样式） ── */
 :focus-visible {
-  outline: 2px solid var(--accent-blue, #0078d4);
+  outline: 2px solid var(--accent-primary);
   outline-offset: 1px;
   border-radius: 2px;
 }
@@ -55,7 +69,7 @@ a:hover { text-decoration: underline; }
   padding: 6px 8px;
   background: transparent;
   border: none;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--radius-sm);
   color: inherit;
   font-family: inherit;
   font-size: 12px;
@@ -70,7 +84,7 @@ a:hover { text-decoration: underline; }
   height: 24px;
   border-radius: 50%;
   overflow: hidden;
-  background: var(--accent-gradient, var(--accent-blue));
+  background: var(--accent-gradient);
   display: flex;
   align-items: center;
   justify-content: center;

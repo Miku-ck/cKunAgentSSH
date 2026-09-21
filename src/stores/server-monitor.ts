@@ -49,8 +49,8 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
   const cpuHistory = ref<number[]>([])
   const memHistory = ref<number[]>([])
   const loadHistory = ref<number[]>([])
-  /** 主 GPU 利用率序列（多卡取最高者，供 sparkline） */
-  const gpuHistory = ref<number[]>([])
+  /** 每卡利用率/显存历史（nvitop 模式逐格色块条；键 = GPU index 字符串） */
+  const gpuHist = ref<Record<string, { util: number[]; mem: number[] }>>({})
   /** 连续失败计数（达 FAIL_STOP_THRESHOLD 转后台重试） */
   const errorCount = ref(0)
   const polling = ref(false)
@@ -74,9 +74,9 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
     return d.find(x => x.mount === '/') || d[0]
   })
 
-  function pushHistory(arr: { value: number[] }, v: number) {
-    arr.value.push(v)
-    if (arr.value.length > HISTORY_MAX) arr.value.shift()
+  function pushHistory(arr: number[], v: number) {
+    arr.push(v)
+    if (arr.length > HISTORY_MAX) arr.shift()
   }
 
   /** 监控指标异常/选中片段 → 预填 AI 面板（复用 A 的 pendingPrefill 通路） */
@@ -141,13 +141,16 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
       current.value = { ...rest, sshId: session.id, cpu, ts: Date.now() }
       errorCount.value = 0
       lastError.value = null
-      pushHistory(cpuHistory, cpu.used)
-      pushHistory(memHistory, rest.mem.percent)
-      pushHistory(loadHistory, rest.load[0])
-      const topGpu = rest.gpus.length
-        ? rest.gpus.reduce((a, b) => (b.utilization > a.utilization ? b : a))
-        : null
-      pushHistory(gpuHistory, topGpu ? topGpu.utilization : 0)
+      pushHistory(cpuHistory.value, cpu.used)
+      pushHistory(memHistory.value, rest.mem.percent)
+      pushHistory(loadHistory.value, rest.load[0])
+      for (const g of rest.gpus) {
+        const key = String(g.index)
+        const h = gpuHist.value[key] ?? { util: [], mem: [] }
+        pushHistory(h.util, g.utilization)
+        pushHistory(h.mem, g.memPercent)
+        gpuHist.value[key] = h
+      }
       return true
     } catch (e: unknown) {
       if (activeSshId !== session.id) return false
@@ -207,7 +210,7 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
     cpuHistory.value = []
     memHistory.value = []
     loadHistory.value = []
-    gpuHistory.value = []
+    gpuHist.value = {}
     errorCount.value = 0
     lastError.value = null
     prevStat = null
@@ -234,7 +237,7 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
     cpuHistory,
     memHistory,
     loadHistory,
-    gpuHistory,
+    gpuHist,
     polling,
     lastError,
     start,

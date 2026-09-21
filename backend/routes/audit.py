@@ -62,8 +62,12 @@ async def audit_records(
 
 @router.get("/audit/verify")
 async def audit_verify():
-    """全链完整性校验：重算每条记录的 hash 与 prev_hash 是否一致"""
-    return verify()
+    """全链完整性校验：重算每条记录的 hash 与 prev_hash 是否一致
+
+    审查修复：与 records/export 同批 — verify 全表扫 + 逐行 sha256 是同步重活，
+    直接跑在事件循环上会冻结所有并发请求（含聊天 SSE），移入线程池
+    """
+    return await asyncio.to_thread(verify)
 
 
 @router.get("/audit/export")

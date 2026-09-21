@@ -124,7 +124,7 @@ function handleClick(e: MouseEvent) {
 .markdown-body :deep(.code-block-wrapper) {
   position: relative;
   margin: 0.8em 0;
-  border: 1px solid var(--border-subtle, #2d2d30);
+  border: 1px solid var(--border-subtle);
   border-radius: 6px;
   overflow: hidden;
 }
@@ -135,7 +135,7 @@ function handleClick(e: MouseEvent) {
   justify-content: space-between;
   padding: 4px 12px;
   background: var(--bg-base);
-  border-bottom: 1px solid var(--border-subtle, #2d2d30);
+  border-bottom: 1px solid var(--border-subtle);
   height: 28px;
 }
 
@@ -171,7 +171,7 @@ function handleClick(e: MouseEvent) {
 
 .markdown-body :deep(pre) {
   background: var(--bg-base);
-  border: 1px solid var(--border-subtle, #2d2d30);
+  border: 1px solid var(--border-subtle);
   border-radius: 6px;
   padding: 12px;
   overflow-x: auto;
@@ -215,7 +215,7 @@ function handleClick(e: MouseEvent) {
 
 .markdown-body :deep(th),
 .markdown-body :deep(td) {
-  border: 1px solid var(--border-subtle, #2d2d30);
+  border: 1px solid var(--border-subtle);
   padding: 6px 10px;
   text-align: left;
 }

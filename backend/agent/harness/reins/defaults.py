@@ -13,7 +13,6 @@ from .guards import AuditLogger, FilesystemGuard
 from .lifecycle import ReflectionRein, SkillRein
 
 def create_default_reins(
-    permission_overrides: Optional[dict[str, str]] = None,
     config: Optional[Any] = None,
     saddle: Optional[Any] = None,
 ) -> Reins:
@@ -35,8 +34,6 @@ def create_default_reins(
     # 导致第二次 run 时单例仍持有旧 Saddle，查询工具会失败（"工具未注册"）
     if saddle is not None:
         permission_gate.saddle = saddle
-    if permission_overrides:
-        permission_gate.load_overrides(permission_overrides)
 
     reins = Reins()
 

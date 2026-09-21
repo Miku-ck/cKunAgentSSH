@@ -36,7 +36,7 @@
           </span>
         </div>
 
-        <!-- 权威工具调用清单（含 DB 完整 result 与单步耗时） -->
+        <!-- 权威工具调用清单（含单步耗时） -->
         <ToolOperationList :tool-calls="dbCalls" :default-expanded="true" hide-header />
 
         <p v-if="!dbCalls.length" class="ft-hint muted">该 run 无工具调用记录</p>
@@ -51,8 +51,8 @@
  * AgentFullTrace — 会话内回放：从 /agent/runs/{id}/trace 拉 DB 权威轨迹
  *
  * 与消息内联快照（AgentTraceSnapshot，SSE 期间累积）互补：
- * 快照是运行视图，这里是落库视图 —— 每步 duration_ms、完整 result、
- * 成本与状态历史以 DB 为准（回放审计口径）。
+ * 快照是运行视图，这里是落库视图 —— 每步 duration_ms、成本与状态历史
+ * 以 DB 为准（回放审计口径）。清单行只展示动作与目标，不展开结果正文。
  */
 import { computed, ref, watch } from 'vue'
 import { agentAdminApi, toFriendlyMessage, type AgentRunTrace } from '@/api/client'
@@ -109,9 +109,11 @@ const dbCalls = computed(() =>
       tool: tc.tool_name,
       args,
       result: tc.result ?? undefined,
-      success: tc.success,
-      timestamp: Date.parse((tc.created_at || '').replace(' ', 'T') + 'Z') || Date.now(),
-      iteration: tc.iteration,
+      // null（后端 NULL）= 结果从未回写。必须归一到 undefined，否则
+      // ToolOperationList 的「进行中」判据（result/success 都 === undefined）不成立，
+      // 半截调用会带着 success=null 显示成普通条目。
+      success: tc.success ?? undefined,
+      duration_ms: tc.duration_ms,
     }
   }),
 )
@@ -122,9 +124,9 @@ const dbCalls = computed(() =>
 .ft-toggle {
   display: inline-flex; align-items: center; gap: 5px;
   background: none; border: none; padding: 2px 0; cursor: pointer;
-  color: var(--text-secondary, #9a9a9a); font-size: 11.5px; font-family: inherit;
+  color: var(--text-secondary); font-size: 11.5px; font-family: inherit;
 }
-.ft-toggle:hover { color: var(--accent-primary, #7aa2d0); }
+.ft-toggle:hover { color: var(--accent-primary); }
 .ft-caret { transition: transform .15s; font-size: 10px; }
 .ft-caret.open { transform: rotate(90deg); }
 /* 下拉浮层：锚定宿主消息块（.message-block 提供 relative），
@@ -141,34 +143,34 @@ const dbCalls = computed(() =>
   flex-direction: column;
   gap: 8px;
   padding: 10px 12px;
-  background: var(--bg-elevated-solid, #1b1e24);
-  border: 1px solid var(--border-default, #333);
+  background: var(--bg-elevated-solid);
+  border: 1px solid var(--border-default);
   border-radius: 8px;
 }
 .ft-hint { margin: 0; font-size: 11.5px; color: var(--text-secondary); }
 .ft-hint.err { color: #d98f86; }
-.ft-hint.muted { color: var(--text-tertiary, #6a6a6a); }
+.ft-hint.muted { color: var(--text-tertiary); }
 .ft-retry {
-  background: none; border: none; color: var(--accent-primary, #7aa2d0);
+  background: none; border: none; color: var(--accent-primary);
   cursor: pointer; font-size: 11.5px; font-family: inherit; padding: 0 0 0 4px; text-decoration: underline;
 }
 .ft-meta { display: flex; flex-wrap: wrap; gap: 5px; }
 .ft-chip {
   font-size: 10.5px; padding: 1px 7px; border-radius: 8px;
-  border: 1px solid var(--border-default, #333); color: var(--text-secondary);
+  border: 1px solid var(--border-default); color: var(--text-secondary);
   font-family: ui-monospace, Consolas, monospace;
 }
 .ft-chip.ok { color: #7fbc92; border-color: rgba(127,188,146,.35); }
 .ft-chip.err { color: #cf8a80; border-color: rgba(207,138,128,.35); }
-.ft-chip.muted { color: var(--text-tertiary, #6a6a6a); }
+.ft-chip.muted { color: var(--text-tertiary); }
 .ft-states { display: flex; align-items: center; gap: 6px; font-size: 11px; flex-wrap: wrap; }
 .ft-states-label { color: var(--text-tertiary); }
 .ft-state-chain { display: inline-flex; align-items: center; gap: 3px; flex-wrap: wrap; }
 .ft-state {
   color: var(--text-secondary); font-family: ui-monospace, Consolas, monospace;
-  background: var(--bg-input, rgba(255,255,255,.04)); border-radius: 4px; padding: 0 5px;
+  background: var(--bg-input); border-radius: 4px; padding: 0 5px;
 }
 .ft-arrow { color: var(--text-tertiary); }
 .ft-time { margin: 0; font-size: 10.5px; }
-.muted { color: var(--text-tertiary, #6a6a6a); }
+.muted { color: var(--text-tertiary); }
 </style>

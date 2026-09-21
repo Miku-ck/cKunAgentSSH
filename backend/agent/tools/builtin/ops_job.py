@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 from agent.tools import BaseTool, ToolResult, ToolMeta
-from agent.tools.builtin.ops_common import run_headless, truncate_output
+from agent.tools.builtin.ops_common import parse_int_arg, run_headless, truncate_output
 
 # 远程任务落盘根目录（目标机 /tmp 下，重启任务与日志的持久位置）
 _JOBS_ROOT = "/tmp/ckun_agent_jobs"
@@ -114,9 +114,16 @@ class JobManager:
             return cls._instance
 
     def _next_id(self) -> str:
+        # 进程重启后 _seq 归零，而 _ensure_restored 会把 agent_jobs 里未终结的
+        # job-1…job-N 拉回内存：不跳过已占用的号就会撞号 —— add() 覆盖仍在跑的
+        # 条目、save_agent_job 的 upsert 覆盖 DB 行、远程 log_dir 指向同一目录，
+        # 原任务的输出与 kill 通道一起丢掉。
         with self._seq_lock:
-            self._seq += 1
-            return str(self._seq)
+            while True:
+                self._seq += 1
+                candidate = str(self._seq)
+                if self.get(candidate) is None:
+                    return candidate
 
     def add(self, entry: JobEntry) -> None:
         with self._lock:
@@ -354,7 +361,11 @@ async def _remote_read(context, entry: JobEntry) -> tuple[str, Optional[int]]:
     的 CRLF/孤立 CR 归一成 \\n，损坏读回内容且错位 offset。
     """
     cmd = job_read_cmd(entry.log_dir, entry.out_offset)
-    ok, out = await run_headless(context, cmd, timeout=15)
+    # keep_full：这里读的是「日志字节」，offset 记账按回传字节数推进。若走默认的
+    # 头尾保留截断（>4000 字符触发，紧跟一轮大输出的常见场景），回传段中间会被
+    # 插入中文标记行 —— 推进量与真实字节错位，下一轮 tail -c +n 重复读同一段，
+    # 且标记文本被当日志内容喂给模型。展示侧另有 truncate_output 兜着（见调用方）。
+    ok, out = await run_headless(context, cmd, timeout=15, keep_full=True)
     if not ok:
         return f"读取远程输出失败: {out}", None
     # 剥离 run_headless 追加在末行的 [exit_code=..] 哨兵（tail 命令自身退出码，
@@ -523,6 +534,9 @@ class JobRunTool(BaseTool):
             return ToolResult(success=False, output="", error="target 只能是 local 或 remote")
 
         mgr = JobManager.instance()
+        # 与 job_list/job_output/job_kill 同一前置：先恢复 DB 里未终结的远程 job，
+        # 否则 _next_id 看不到已占用的号，重启后首发会撞回复用中的 job_id
+        mgr._ensure_restored()
         job_id = mgr._next_id()
 
         # ── 远程分支 ──
@@ -654,14 +668,17 @@ async def _reconcile_remote(mgr: JobManager, entries: List[JobEntry]) -> None:
         pid_list = [e.pid for e in group]
         ok, out = await run_headless(ctx, job_reconcile_alive_cmd(pid_list), timeout=15)
         if not ok:
-            return  # 桥接不可达 — 保持原状态，下次对账
+            # 本会话桥接不可达 — 保持原状态下次再对账。必须是 continue：
+            # return 会让排在后面的会话整轮不被检查，而那些会话完全正常。
+            continue
         alive = {
             int(l.split()[0]) for l in out.splitlines()
             if l.strip().endswith("ALIVE") and l.split()[0].isdigit()
         }
         dead = [e for e in group if e.pid not in alive]
         if not dead:
-            return
+            # 同上：本会话的任务都还活着是正常态，不代表别的会话也没有已退出的任务
+            continue
         # 死掉的任务读 rc 文件定终态
         dead_dirs = [e.log_dir for e in dead]
         ok2, out2 = await run_headless(ctx, job_reconcile_rcs_cmd(dead_dirs), timeout=15)
@@ -697,7 +714,9 @@ class JobOutputTool(BaseTool):
         job_id = str(kwargs.get("job_id") or "").strip()
         if not job_id:
             return ToolResult(success=False, output="", error="job_id 必填")
-        wait = int(kwargs.get("wait") or 0)
+        wait, err = parse_int_arg(kwargs.get("wait"), "wait", 0)
+        if err:
+            return ToolResult(success=False, output="", error=err)
         wait = max(0, min(wait, 60))
 
         mgr = JobManager.instance()

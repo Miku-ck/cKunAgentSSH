@@ -62,6 +62,8 @@ const props = defineProps<{
   connecting: boolean
   /** 当前正在连接中的连接 ID */
   pendingConnId: string
+  /** 「最近连接」相对时间的基准时刻（父级定时 tick，见 relativeTime 的说明） */
+  now: number
 }>()
 
 /** 当前行是否处于连接中状态 */
@@ -92,7 +94,10 @@ const noteText = computed(() => {
   return firstTag || ''
 })
 
-const relativeTime = computed(() => formatRelative(props.connection.lastConnectedAt))
+// 相对时间的基准由父级 tick 传入：Date.now() 不是响应式来源，写在 computed 里
+// 等于「挂载那一刻定稿」——刚连上时显示"刚刚"，之后几小时（甚至重开面板前）都不会
+// 变成"3 分钟前"，除非该行的 lastConnectedAt 恰好又变一次。
+const relativeTime = computed(() => formatRelative(props.connection.lastConnectedAt, props.now))
 const fullTime = computed(() => {
   const t = props.connection.lastConnectedAt
   if (!t) return '从未连接'
@@ -103,9 +108,9 @@ const fullTime = computed(() => {
 const createdDateText = computed(() => formatDate(props.connection.createdAt))
 const fullCreatedTime = computed(() => new Date(props.connection.createdAt).toLocaleString())
 
-function formatRelative(ts?: number): string {
+function formatRelative(ts: number | undefined, now: number): string {
   if (!ts) return '从未连接'
-  const diff = Date.now() - ts
+  const diff = now - ts
   if (diff < 60_000) return '刚刚'
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`
@@ -173,7 +178,7 @@ function formatDate(ts: number): string {
 .cell-check input {
   width: 13px;
   height: 13px;
-  accent-color: var(--accent-blue);
+  accent-color: var(--accent-primary);
   cursor: pointer;
 }
 
@@ -247,12 +252,12 @@ function formatDate(ts: number): string {
 
 .auth-badge.password {
   background: rgba(0, 120, 212, 0.12);
-  color: var(--accent-blue);
+  color: var(--accent-primary);
 }
 
 .auth-badge.privateKey {
   background: rgba(197, 134, 192, 0.12);
-  color: var(--accent-purple, #c586c0);
+  color: var(--accent-purple);
 }
 
 .auth-badge.agent {
@@ -313,7 +318,7 @@ function formatDate(ts: number): string {
 }
 
 .row-btn.connect {
-  color: var(--accent-blue);
+  color: var(--accent-primary);
   border-color: rgba(0, 120, 212, 0.3);
 }
 
@@ -336,15 +341,15 @@ function formatDate(ts: number): string {
 .row-btn.connect.loading {
   pointer-events: none;
   opacity: 0.85;
-  border-color: var(--accent-blue);
+  border-color: var(--accent-primary);
   background: rgba(0, 120, 212, 0.08);
 }
 .row-btn.connect .spinner {
   animation: spin 0.8s linear infinite;
-  color: var(--accent-blue);
+  color: var(--accent-primary);
 }
 .row-btn.connect .loading-text {
-  color: var(--accent-blue);
+  color: var(--accent-primary);
   font-weight: 500;
 }
 @keyframes spin {

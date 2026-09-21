@@ -145,15 +145,15 @@ defineExpose({ open, close })
   height: clamp(640px, 88vh, 860px);
   max-width: 96vw;
   max-height: 94vh;
-  background: var(--bg-base, #1a1a1a);
-  border: 1px solid var(--border-default, #2a2a2a);
-  border-radius: var(--radius-md, 8px);
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  color: var(--text-primary, #e5e5e5);
-  font-family: var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
   -webkit-app-region: drag;
 }
 
@@ -163,7 +163,7 @@ defineExpose({ open, close })
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid var(--border-subtle, #222);
+  border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
   -webkit-app-region: drag;
 }
@@ -172,7 +172,7 @@ defineExpose({ open, close })
   margin: 0;
   font-size: 14px;
   font-weight: 600;
-  color: var(--text-primary, #e5e5e5);
+  color: var(--text-primary);
   -webkit-app-region: no-drag;
 }
 
@@ -182,17 +182,17 @@ defineExpose({ open, close })
   height: 28px;
   border: none;
   background: transparent;
-  color: var(--text-secondary, #b0b0b0);
+  color: var(--text-secondary);
   cursor: pointer;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
   transition: all 0.15s ease;
 }
 .close-btn:hover {
-  background: var(--bg-hover, #1f1f1f);
-  color: var(--text-primary, #e5e5e5);
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .settings-body {
@@ -205,8 +205,8 @@ defineExpose({ open, close })
 .settings-nav {
   width: 200px;
   flex-shrink: 0;
-  background: var(--bg-sidebar);
-  border-right: 1px solid var(--border-subtle, #2d2d30);
+  background: var(--bg-base);
+  border-right: 1px solid var(--border-subtle);
   padding: 12px 8px;
   overflow-y: auto;
 }
@@ -223,7 +223,7 @@ defineExpose({ open, close })
   cursor: pointer;
   color: var(--text-secondary);
   font-size: 13px;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--radius-sm);
   margin-bottom: 2px;
   text-align: left;
   position: relative;
@@ -231,7 +231,7 @@ defineExpose({ open, close })
   font-family: inherit;
 }
 .nav-item:hover {
-  background: var(--bg-hover, #1f1f1f);
+  background: var(--bg-hover);
   color: var(--text-primary);
 }
 .nav-item.active {

@@ -33,7 +33,7 @@ export function registerConfirmDialog(instance: { open: (opts: ConfirmOptions) =
 /**
  * 显示确认框,返回 Promise<boolean>:true=确认,false=取消
  *
- * 即使对话框未挂载,也会 resolve(false) 而非抛错,方便调用方
+ * Holder 未挂载时退到原生 window.confirm（保险分支，不让确认流程静默变成"永远取消"）
  */
 export function useConfirm() {
   async function confirm(options: ConfirmOptions | string): Promise<boolean> {

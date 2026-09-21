@@ -131,7 +131,10 @@ class SpawnSubagentTool(BaseTool):
         # D 修复（事件循环阻塞）：内部含多次同步 db 查询，放线程池执行
         model_cfg = await asyncio.to_thread(self._get_model_config, tool_ctx)
         if not model_cfg:
-            return "[子 Agent] 未找到可用模型配置，无法运行"
+            # 失败必须以异常上抛：原实现 return "[子 Agent] 未找到可用模型配置…" 会被
+            # execute 包成 ToolResult(True)，主 Agent 把这句错误文本当成子 Agent 的分析
+            # 结果读进正文（并计入成功徽章），用户看到的报告里就多了一段莫名其妙的失败说明。
+            raise RuntimeError("[子 Agent] 未找到可用模型配置，无法运行")
 
         model_id = model_cfg.get("model_id") or model_cfg.get("id", "")
         llm = StreamLLMClient(
@@ -164,10 +167,10 @@ class SpawnSubagentTool(BaseTool):
             )
         except asyncio.TimeoutError:
             logger.warning("子 Agent LLM 调用超时（120s）")
-            return "[子 Agent LLM 调用超时]"
+            raise RuntimeError("[子 Agent LLM 调用超时]")
         except Exception as e:
             logger.warning("子 Agent LLM 调用失败: %s", e)
-            return f"[子 Agent LLM 调用失败: {e}]"
+            raise RuntimeError(f"[子 Agent LLM 调用失败: {e}]") from e
 
         # 审查修复（P2 E6）：子 Agent 的 LLM token 计入主 Agent CostTracker —
         # 原实现子 Agent 调用的 token 用量完全丢失，主 Agent 面板显示的

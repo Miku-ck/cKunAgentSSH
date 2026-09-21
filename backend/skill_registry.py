@@ -22,6 +22,8 @@ class SkillRegistry:
         self._skills: list[dict] = []  # 缓存所有技能
         self._loaded = False
         self._last_fail_time: float = 0  # 上次失败时间
+        # mode → 最近一次成功读到的「该 mode 下被禁用的技能 id」
+        self._disabled_cache: dict[str, set] = {}
 
     def reload(self):
         """从数据库重新加载所有技能"""
@@ -42,16 +44,28 @@ class SkillRegistry:
                 logger.warning("[skill_registry] reload 失败，保留旧缓存（%d 条），%.1fs 后重试: %s",
                                len(self._skills), self._RETRY_INTERVAL, e)
 
+    def _disabled_ids_for_mode(self, mode: str) -> set:
+        """某 mode 下被用户禁用的技能 id（每次真读，失败时沿用最近成功结果）
+
+        读不出来不能当成「没人被禁用」：空集会把用户关掉的技能照常注入、
+        load_skill 照常放行，而这道过滤存在的唯一目的就是排除它们。
+        与 reload 的「降级为旧数据而非无数据」同一取向。调用方须持锁。
+        """
+        try:
+            ids = set(db.list_disabled_skills_for_mode(mode))
+        except Exception as e:
+            logger.warning("[skill_registry] 读取 mode=%s 禁用清单失败，沿用上次结果: %s",
+                           mode, e)
+            return self._disabled_cache.get(mode, set())
+        self._disabled_cache[mode] = ids
+        return ids
+
     def get_enabled_skills(self, mode: str) -> list[dict]:
         """获取指定模式下启用的技能，按 priority 降序"""
         if not self._loaded:
             self.reload()
         with self._lock:
-            disabled_ids = set()
-            try:
-                disabled_ids = set(db.list_disabled_skills_for_mode(mode))
-            except Exception:
-                pass
+            disabled_ids = self._disabled_ids_for_mode(mode)
             return [
                 s for s in self._skills
                 if s.get('enabled') and s['id'] not in disabled_ids
@@ -60,9 +74,14 @@ class SkillRegistry:
     @staticmethod
     def _compile_trigger_pattern(word: str) -> re.Pattern:
         """构造触发词匹配正则：
-        - 纯字母数字/中文：使用词边界 \\b（避免 git 命中 digit），中文不适用 \\b 改为直接 substring
-        - 含空格/标点的短语：转义后直接 substring 匹配（短语本身足够特异）
+        - 纯 ASCII 字母数字：用 ASCII 断言而不是 `\b`（避免 git 命中 digit）
+        - 其余（含空格/标点/中文的短语）：转义后直接 substring 匹配
         返回的 Pattern 仅用于 .search()，大小写无关。
+
+        为什么不能用 `\b`：Python 的 `\w` 含中文，所以 `\b502\b` 在
+        "网站返回502错误" 里两边都找不到词边界 → 命中不了。本项目消息几乎都是
+        中文夹 ASCII（nginx/502/CPU），用 \b 等于内置技能触发词大面积失效。
+        改成只把 ASCII 字母数字下划线视为"相邻字符"，中文边界即可命中。
         """
         w = word.strip()
         if not w:
@@ -70,10 +89,12 @@ class SkillRegistry:
         # 含非单词字符（空格、标点、中文等）：转义后直接匹配
         if not re.fullmatch(r'\w+', w, flags=re.UNICODE):
             return re.compile(re.escape(w), re.IGNORECASE)
-        # 纯 ASCII 字母数字：用 \\b 词边界，避免短词误命中（如 git 命中 digit）
+        # 纯 ASCII 字母数字：ASCII 邻接断言，避免短词误命中（如 git 命中 digit），
+        # 同时不被中文文本卡住边界
         if re.fullmatch(r'[A-Za-z0-9_]+', w):
-            return re.compile(rf'\b{re.escape(w)}\b', re.IGNORECASE)
-        # 含中文等非 ASCII 单词字符：直接 substring 匹配（\\b 对中文行为不一致）
+            return re.compile(
+                rf'(?<![A-Za-z0-9_]){re.escape(w)}(?![A-Za-z0-9_])', re.IGNORECASE)
+        # 含中文等非 ASCII 单词字符：直接 substring 匹配
         return re.compile(re.escape(w), re.IGNORECASE)
 
     def match_skills(self, message: str, mode: str, max_results: int = 3) -> list[dict]:
@@ -139,12 +160,8 @@ class SkillRegistry:
             if not skill or not skill.get('enabled'):
                 return None
             if mode:
-                try:
-                    disabled_ids = set(db.list_disabled_skills_for_mode(mode))
-                    if skill['id'] in disabled_ids:
-                        return None
-                except Exception:
-                    pass
+                if skill['id'] in self._disabled_ids_for_mode(mode):
+                    return None
             return skill
 
     def build_skill_catalog(self, skill_ids: list[str], mode: str) -> str:

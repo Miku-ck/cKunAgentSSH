@@ -4,7 +4,7 @@ Shell 执行工具 — SSH 模式专属
 安全约束: 30 秒超时，非破坏性命令自主执行
 """
 from agent.tools import BaseTool, ToolResult, ToolMeta
-from agent.tools.builtin.ops_common import exec_remote
+from agent.tools.builtin.ops_common import exec_remote, parse_int_arg
 from agent.pending_delivery import PendingDeliveries
 
 
@@ -20,7 +20,11 @@ def _compute_requires_confirm(command: str, environment: str) -> bool:
 
 class ShellExecTool(BaseTool):
     name = "shell_exec"
-    description = "执行 shell 命令并返回输出。超时 1-120 秒（默认 30）。"
+    description = (
+        "执行 shell 命令并返回输出。超时 1-120 秒（默认 30）。"
+        "多段探测/排查命令用 ; 串联而非 &&——du/find 遇无权限路径 exit 非零属预期，"
+        "&& 会中断后续段；exit 非零不等于连接异常，先看已捕获的输出再下结论。"
+    )
     parameters = {
         "type": "object",
         "properties": {
@@ -32,8 +36,11 @@ class ShellExecTool(BaseTool):
     meta = ToolMeta(risk_level="moderate", reversible=False, timeout=30.0, mode_scope=["ssh"])
 
     async def execute(self, context, command, timeout=30):
-        # 超时上限钳制（1-120 秒）
-        timeout = max(1, min(int(timeout), 120))
+        # 超时钳制（1-120 秒）；非数字回可读提示而不是裸 ValueError
+        parsed, err = parse_int_arg(timeout, "timeout", 30)
+        if err:
+            return ToolResult(False, "", err)
+        timeout = max(1, min(parsed, 120))
         # 分支顺序：
         #   1. 可见终端模式 + 存在 SSH 会话 → 交付到可见终端（不 headless 执行）
         #   2. SSH 会话 → 原有远程执行（ElectronBridge）

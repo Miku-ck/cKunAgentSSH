@@ -5,7 +5,7 @@
       <div class="audit-title">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M9 12l2 2 4-4"/><path d="M20 12a8 8 0 1 1-2.34-5.66"/></svg>
         <span>运维审计</span>
-        <span class="audit-sub" v-if="verifyState">共 {{ verifyState.total }} 条记录</span>
+        <span class="audit-sub" v-if="verifyState">全库 {{ verifyState.total }} 条记录</span>
       </div>
       <div class="audit-actions">
         <span
@@ -17,12 +17,12 @@
         </span>
         <button class="audit-btn" @click="refresh" :disabled="loading">刷新</button>
         <button class="audit-btn" @click="onVerify" :disabled="loading">校验</button>
-        <button class="audit-btn" @click="onExport" :disabled="loading">导出 CSV</button>
+        <button class="audit-btn" @click="onExport" :disabled="loading" title="导出审计表全部记录为 CSV（追加式全量导出，不受当前筛选影响）">导出 CSV</button>
         <button
           class="audit-btn danger"
           @click="onClearArchived"
-          :disabled="loading || clearing || total === 0"
-          :title="`归档清理：全部 ${total} 条记录先导出 CSV 存档到数据库目录，再清空并写入封缄记录开启新审计链（证据不丢、链不断）`"
+          :disabled="loading || clearing || tableIsEmpty"
+          :title="`归档清理：后端审计表的全部记录先导出 CSV 存档到数据库目录（与当前筛选无关），再清空并写入封缄记录开启新审计链（证据不丢、链不断）`"
         >{{ clearing ? '归档中…' : '归档清理' }}</button>
       </div>
     </div>
@@ -41,6 +41,14 @@
         <option value="auto_allowed">自动放行 (auto_allowed)</option>
         <option value="blocked">已拦截 (blocked)</option>
         <option value="denied">已拒绝 (denied)</option>
+        <!-- 后端 append_record 的合法结论共 10 种：failed 是「工具执行失败」，
+             每次失败的命令都会写一条，之前既筛不出来的也没有样式；
+             answered/skipped 是澄清向导的终态（用户的决策，不是执行结果） -->
+        <option value="failed">执行失败 (failed)</option>
+        <option value="released">授权已释放 (released)</option>
+        <option value="revoked">授权已撤销 (revoked)</option>
+        <option value="answered">已作答 (answered)</option>
+        <option value="skipped">已跳过 (skipped)</option>
       </select>
       <input v-model="filters.target_id" placeholder="目标 ID 过滤" @keyup.enter="loadFirst" />
     </div>
@@ -93,7 +101,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { auditApi, toFriendlyMessage, type AuditRecord, type AuditVerifyResult } from '@/api/client'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToastStore } from '@/stores/toast'
@@ -106,6 +114,8 @@ const total = ref(0)
 const loading = ref(false)
 const clearing = ref(false)
 const error = ref('')
+// load() 的请求序号（过期响应丢弃）
+let loadSeq = 0
 const verifyState = ref<AuditVerifyResult | null>(null)
 // P3 修复：offset 分页（后端 /audit/records 已支持 offset，limit/offset 均带边界）。
 // 页大小保持 200，记录倒序（id DESC）——"下一页"取更旧的记录（offset 增大）。
@@ -118,7 +128,18 @@ const filters = reactive<{ environment: string; conclusion: string; target_id: s
   target_id: '',
 })
 
+// 「归档清理」作用于整表，可点与否就必须看整表条数：total 是**当前筛选命中数**，
+// 用它做禁用条件会出现「筛到 0 条 → 按钮灰掉，而后端一堆记录等着归档」。
+// verify() 与 load() 同在 onMounted/refresh 里跑，全库计数在按钮可用前就已就绪；
+// 校验失败时（verifyState 为 null）退回筛选数，至少不会把空库判成有库。
+const tableIsEmpty = computed(() =>
+  verifyState.value ? verifyState.value.total === 0 : total.value === 0
+)
+
 async function load() {
+  // 序号守卫：连续切筛选/翻页会并发多个请求，慢的那个后到 —— 没有守卫时
+  // 它会把已匹配当前筛选的结果覆盖成旧筛选的记录（审计页误读风险）
+  const seq = ++loadSeq
   loading.value = true
   error.value = ''
   try {
@@ -129,12 +150,14 @@ async function load() {
       limit: pageSize,
       offset: offset.value,
     })
+    if (seq !== loadSeq) return
     records.value = res.items
     total.value = res.total
   } catch (e) {
+    if (seq !== loadSeq) return
     error.value = toFriendlyMessage(e, '加载审计记录失败')
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 
@@ -187,8 +210,10 @@ async function onExport() {
 async function onClearArchived() {
   const ok = await confirm({
     title: '归档清理审计记录',
-    message: `将先把全部 ${total.value} 条审计记录归档为 CSV 文件（保存在后端数据库目录），`
-      + '然后清空列表并写入一条"清理封缄"记录开启新审计链。\n'
+    // total 是「当前筛选命中数」，而归档清理作用于整表 —— 只报筛选数会低估
+    // 被归档的证据量（审计功能的文案不该在这一点上含糊）
+    message: `将把后端审计表【全部】记录归档为 CSV 文件（保存在后端数据库目录，与当前筛选无关，`
+      + `现在筛选命中 ${total.value} 条），然后清空列表并写入一条"清理封缄"记录开启新审计链。\n`
       + '历史证据保存在归档文件中，可离线校验，不会丢失。',
     confirmText: '归档并清理',
     danger: true,
@@ -257,7 +282,7 @@ onMounted(refresh)
   gap: 8px;
   font-size: 16px;
   font-weight: 600;
-  color: var(--accent-blue);
+  color: var(--accent-primary);
 }
 .audit-sub {
   font-size: 12px;
@@ -290,12 +315,12 @@ onMounted(refresh)
 }
 .audit-btn:hover:not(:disabled) {
   color: var(--text-primary);
-  border-color: var(--accent-blue);
+  border-color: var(--accent-primary);
 }
-.audit-btn.danger { color: var(--accent-red, #e06c60); border-color: var(--accent-red, #e06c60); }
+.audit-btn.danger { color: var(--accent-red); border-color: var(--accent-red); }
 .audit-btn.danger:hover:not(:disabled) {
-  color: var(--accent-red, #e06c60);
-  border-color: var(--accent-red, #e06c60);
+  color: var(--accent-red);
+  border-color: var(--accent-red);
   background: rgba(224, 108, 96, 0.12);
 }
 .audit-btn:disabled { opacity: 0.5; cursor: default; }
@@ -306,7 +331,7 @@ onMounted(refresh)
 }
 .audit-filters select,
 .audit-filters input {
-  background: var(--bg-elevated);
+  background: var(--bg-input);
   border: 1px solid var(--border-default);
   color: var(--text-primary);
   border-radius: var(--radius-sm);
@@ -317,7 +342,7 @@ onMounted(refresh)
 .audit-table-wrap {
   flex: 1;
   overflow: auto;
-  border: 1px solid var(--border-subtle, #2d2d30);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
 }
 .audit-table {
@@ -328,7 +353,7 @@ onMounted(refresh)
 .audit-table th {
   position: sticky;
   top: 0;
-  background: var(--bg-elevated);
+  background: var(--bg-base);
   text-align: left;
   padding: 8px 10px;
   font-size: 11px;
@@ -340,7 +365,7 @@ onMounted(refresh)
 }
 .audit-table td {
   padding: 6px 10px;
-  border-bottom: 1px solid var(--border-subtle, #26262a);
+  border-bottom: 1px solid var(--border-subtle);
   vertical-align: top;
 }
 .audit-table tr:hover td { background: var(--bg-hover); }
@@ -360,8 +385,10 @@ onMounted(refresh)
   border-radius: 8px;
 }
 .concl.executed, .concl.auto_allowed, .concl.approved { color: var(--accent-green); background: rgba(63, 185, 80, 0.12); }
-.concl.blocked { color: var(--accent-orange, #e5a54b); background: rgba(229, 165, 75, 0.12); }
+.concl.blocked { color: var(--accent-orange); background: rgba(229, 165, 75, 0.12); }
 .concl.denied { color: var(--accent-red); background: rgba(244, 135, 113, 0.12); }
+.concl.failed { color: #ff7b72; background: rgba(255, 123, 114, 0.12); }
+.concl.released, .concl.revoked, .concl.answered, .concl.skipped { color: #8b949e; background: rgba(139, 148, 158, 0.12); }
 .cmd { max-width: 40ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .result { max-width: 30ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-tertiary); }
 .empty { text-align: center; color: var(--text-tertiary); padding: 24px; }

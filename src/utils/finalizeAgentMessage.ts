@@ -23,8 +23,20 @@ export function finalizeAgentMessage(
   if (!conv) return
   const msgs = conv.messages
   for (let i = msgs.length - 1; i >= 0; i--) {
-    if (msgs[i].role === 'assistant' && msgs[i].id.startsWith('temp-agent-')) {
+    // id 可能缺失（后端历史消息合并进来的条目）：直接 .startsWith 会抛，
+    // 整条固化连带 agentTrace 一起丢
+    if (msgs[i].role === 'assistant' && String(msgs[i].id ?? '').startsWith('temp-agent-')) {
       const trace = agentStore.snapshot()
+      // 固化时把「从未回填结果」的调用落成明确状态：ToolOperationList 用
+      // result/success 双 undefined 判「进行中」，运行已经结束却还挂着进行中，
+      // 卡片会永远写着「进行中 · N 个操作」——而同一轮回放（DB 里 success 为 NULL）
+      // 现在也走同一套判据，两处必须同时收敛成「未回写」而不是互相矛盾。
+      for (const tc of trace.toolCalls) {
+        if (tc.result === undefined && tc.success === undefined) {
+          tc.result = '(运行结束前未回写结果)'
+          tc.success = false
+        }
+      }
       // 失败/中止时 content 为空则回写 errorMessage/warnings，确保用户看到原因
       let finalContent = agentStore.content || ''
       if (!finalContent.trim()) {

@@ -8,7 +8,7 @@
         <span class="schedules-sub" v-if="items.length">共 {{ items.length }} 个任务</span>
       </div>
       <div class="schedules-actions">
-        <button class="sc-btn" @click="load" :disabled="loading">刷新</button>
+        <button class="sc-btn" @click="load()" :disabled="loading">刷新</button>
         <button class="sc-btn primary" @click="openCreate">新建任务</button>
       </div>
     </div>
@@ -20,8 +20,8 @@
         <div class="schedule-card-head">
           <div class="schedule-name">
             {{ s.name }}
-            <span class="toggle" :class="{ on: !!s.enabled }" @click="toggle(s)">
-              {{ s.enabled ? '启用' : '停用' }}
+            <span class="toggle" :class="{ on: !!s.enabled }">
+              {{ s.enabled ? '已启用' : '已停用' }}
             </span>
           </div>
           <div class="schedule-card-actions">
@@ -204,12 +204,18 @@ import {
   type ScheduleRun,
 } from '@/api/client'
 import { useToastStore } from '@/stores/toast'
+import { parseBackendTs } from '@/utils/format'
 import { useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
+import { useAgentStore } from '@/stores/agent'
+
+// SshView 里本页常驻（v-show），active 标记当前是否停留在定时任务页
+const props = defineProps<{ active?: boolean }>()
 
 const toast = useToastStore()
 const sshStore = useSSHStore()
 const sshAiStore = useSshAiStore()
+const agentStore = useAgentStore()
 
 /** 远程管理页保存的 SSH 连接列表（供目标主机下拉选择） */
 const connections = computed(() => sshStore.connections)
@@ -336,21 +342,61 @@ const historyFor = ref<ScheduleRecord | null>(null)
 const historyRuns = ref<ScheduleRun[]>([])
 const historyTitle = computed(() => historyFor.value?.name || '')
 
-async function load() {
-  loading.value = true
-  error.value = ''
+/** 列表请求序号：runNow 后 3s 轮询、页面激活期 30s 轮询与手动/操作后刷新可并发 */
+let _loadSeq = 0
+
+async function load(silent = false) {
+  // silent：轮询刷新时不置 loading —— 否则每 3s 闪一次"加载中…"并禁用刷新按钮
+  if (!silent) {
+    loading.value = true
+    error.value = ''
+  }
+  const seq = ++_loadSeq
   try {
-    items.value = await scheduleApi.list()
+    const rows = await scheduleApi.list()
+    // 只有最新一次响应能覆盖列表：慢的旧响应会把刚删除/刚改过的行还原成旧快照
+    if (seq !== _loadSeq) return
+    items.value = rows
+    error.value = ''
   } catch (e) {
+    if (seq !== _loadSeq) return
     error.value = toFriendlyMessage(e, '巡检任务加载失败')
   } finally {
-    loading.value = false
+    if (!silent && seq === _loadSeq) loading.value = false
   }
 }
 
 function isRunning(s: ScheduleRecord): boolean {
   return s.last_status === 'running'
 }
+
+/** 页面激活期静默轮询：与后端调度 tick 同周期（30s），覆盖引擎后台触发导致的
+ *  last_status / next_run_at 变化；切走即停 */
+const LIST_POLL_MS = 30000
+let listPollTimer: ReturnType<typeof setInterval> | null = null
+
+function startListPoll() {
+  if (listPollTimer !== null) return
+  listPollTimer = setInterval(() => { load(true) }, LIST_POLL_MS)
+}
+
+function stopListPoll() {
+  if (listPollTimer === null) return
+  clearInterval(listPollTimer)
+  listPollTimer = null
+}
+
+watch(() => props.active, (on) => {
+  if (on) {
+    load()
+    startListPoll()
+  } else {
+    stopListPoll()
+  }
+})
+
+// AI 聊天里 schedule_op 直接写库（绕过 REST），结果事件驱动列表失效刷新
+watch(() => agentStore.scheduleRev, () => { load(true) })
 
 function openCreate() {
   form.name = ''
@@ -384,14 +430,18 @@ function openEdit(s: ScheduleRecord) {
 }
 
 function formPayload() {
+  // number 输入被清空时 v-model.number 留下的是原始 ''（Vue 的 looseToNumber
+  // 只在能转成数字时才转），`'' ?? 9` 不会兜底 → 后端 int 字段 422
+  const numOr = (v: unknown, fallback: number): number =>
+    typeof v === 'number' && Number.isFinite(v) ? v : fallback
   return {
     name: form.name.trim(),
     schedule_type: form.schedule_type,
     interval_minutes: form.interval_minutes || 60,
-    time_hour: form.time_hour ?? 9,
-    time_minute: form.time_minute ?? 0,
-    weekday: form.weekday ?? 0,
-    day_of_month: form.day_of_month ?? 1,
+    time_hour: numOr(form.time_hour, 9),
+    time_minute: numOr(form.time_minute, 0),
+    weekday: numOr(form.weekday, 0),
+    day_of_month: numOr(form.day_of_month, 1),
     target_host: form.target_host.trim(),
     task_prompt: form.task_prompt.trim(),
     enabled: form.enabled,
@@ -428,6 +478,14 @@ async function toggle(s: ScheduleRecord) {
   }
 }
 
+/** 「立即执行」后的状态轮询定时器集合：组件卸载时统一清理 */
+const runPollTimers = new Set<ReturnType<typeof setInterval>>()
+
+function stopPoll(t: ReturnType<typeof setInterval>) {
+  clearInterval(t)
+  runPollTimers.delete(t)
+}
+
 async function runNow(s: ScheduleRecord) {
   try {
     await scheduleApi.runNow(s.id)
@@ -437,15 +495,16 @@ async function runNow(s: ScheduleRecord) {
     // 时停止，防止 setInterval 泄漏（原实现在任务删除/异常不结束时永不 clearInterval）
     let polls = 0
     const t = setInterval(async () => {
-      if (++polls > 100) { clearInterval(t); return }
+      if (++polls > 100) { stopPoll(t); return }
       try {
-        await load()
+        await load(true)
         const latest = items.value.find((x) => x.id === s.id)
         if (!latest || (latest.last_status !== 'running' && latest.last_status !== 'idle')) {
-          clearInterval(t)
+          stopPoll(t)
         }
       } catch { /* 忽略轮询错误 */ }
     }, 3000)
+    runPollTimers.add(t)
   } catch (e: any) {
     toast.error(toFriendlyMessage(e, '触发失败'))
   }
@@ -490,7 +549,7 @@ function shortId(id: string): string {
 
 function formatTs(ts?: string): string {
   if (!ts) return ''
-  const d = new Date(ts.replace(' ', 'T'))
+  const d = parseBackendTs(ts)
   if (isNaN(d.getTime())) return ts
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
@@ -502,7 +561,7 @@ let countdownTimer: ReturnType<typeof setInterval> | null = null
 
 function parseSchedTs(ts?: string): number {
   if (!ts) return NaN
-  return new Date(ts.replace(' ', 'T')).getTime()
+  return parseBackendTs(ts).getTime()
 }
 
 function countdownText(s: ScheduleRecord): string {
@@ -576,6 +635,11 @@ onMounted(async () => {
 
 onUnmounted(() => {
   stopCountdownTick()
+  stopListPoll()
+  // 卸载前收起「立即执行」轮询：本页常驻(v-show)时通常不触发，但 SshView 整体
+  // 卸载/热更新后后台仍会 load() 数百次
+  for (const t of runPollTimers) clearInterval(t)
+  runPollTimers.clear()
 })
 </script>
 
@@ -598,7 +662,7 @@ onUnmounted(() => {
   padding: 4px 12px;
   font-size: 12px;
   border-radius: 6px;
-  border: 1px solid var(--border-subtle, #333);
+  border: 1px solid var(--border-subtle);
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
@@ -606,23 +670,23 @@ onUnmounted(() => {
 }
 .sc-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
 .sc-btn:disabled { opacity: 0.5; cursor: default; }
-.sc-btn.primary { color: var(--accent-blue); border-color: var(--accent-blue); }
+.sc-btn.primary { color: var(--accent-primary); border-color: var(--accent-primary); }
 
 .schedule-list { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
 .schedule-card {
-  border: 1px solid var(--border-subtle, #333);
-  border-left: 3px solid var(--accent-blue);
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--accent-primary);
   border-radius: 8px;
   padding: 12px 14px;
 }
 .schedule-card-head { display: flex; align-items: center; justify-content: space-between; }
 .schedule-name { font-size: 14px; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 8px; }
-.toggle { font-size: 11px; padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border-subtle, #333); cursor: pointer; }
+.toggle { font-size: 11px; padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border-subtle); }
 .toggle.on { color: var(--accent-green); border-color: var(--accent-green); }
 .schedule-card-actions { display: flex; gap: 6px; }
 .row-btn {
   font-size: 11px; padding: 2px 8px; border-radius: 4px;
-  border: 1px solid var(--border-subtle, #333); background: transparent;
+  border: 1px solid var(--border-subtle); background: transparent;
   color: var(--text-tertiary); cursor: pointer;
 }
 .row-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
@@ -634,59 +698,59 @@ onUnmounted(() => {
 .schedule-card-body .k { color: var(--text-tertiary); margin-bottom: 4px; }
 .prompt { color: var(--text-secondary); white-space: pre-wrap; }
 
-.status { font-size: 11px; padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border-subtle, #333); }
-.status.running { color: var(--accent-blue); border-color: var(--accent-blue); }
+.status { font-size: 11px; padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border-subtle); }
+.status.running { color: var(--accent-primary); border-color: var(--accent-primary); }
 .status.completed { color: var(--accent-green); border-color: var(--accent-green); }
 .status.failed { color: var(--accent-red); border-color: var(--accent-red); }
 .status.waiting_permission { color: var(--accent-orange); border-color: var(--accent-orange); }
 
 .empty-state { color: var(--text-tertiary); font-size: 13px; text-align: center; padding: 50px 0; }
 .sc-loading { color: var(--text-tertiary); font-size: 12px; }
-.sc-error { color: var(--accent-red, #f48771); font-size: 12px; }
+.sc-error { color: var(--accent-red); font-size: 12px; }
 
 .modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-.modal { width: 520px; max-width: 90vw; background: var(--bg-base); border: 1px solid var(--border-subtle, #333); border-radius: 10px; padding: 16px; max-height: 80vh; overflow: auto; }
+.modal { width: 520px; max-width: 90vw; background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 16px; max-height: 80vh; overflow: auto; }
 .modal.wide { width: 680px; }
 .modal-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 12px; }
 .modal-body { display: flex; flex-direction: column; gap: 10px; }
 .field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-tertiary); }
 .field input, .field textarea, .field select {
   font-size: 12px; padding: 6px 8px; border-radius: 6px;
-  border: 1px solid var(--border-subtle, #333); background: var(--bg-base); color: var(--text-primary);
+  border: 1px solid var(--border-subtle); background: var(--bg-base); color: var(--text-primary);
 }
 .field-row { display: flex; gap: 10px; }
 .field.check { flex-direction: row; align-items: center; gap: 6px; }
 .template-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
 .template-chip {
   text-align: left; padding: 8px; border-radius: 8px; cursor: pointer;
-  border: 1px solid var(--border-subtle, #333); background: var(--bg-hover, rgba(255,255,255,0.03));
+  border: 1px solid var(--border-subtle); background: var(--bg-hover);
 }
 .template-chip:hover { border-color: var(--text-tertiary); }
-.template-chip.active { border-color: var(--accent-blue); color: var(--text-primary); background: rgba(59,130,246,0.08); }
+.template-chip.active { border-color: var(--accent-primary); color: var(--text-primary); background: rgba(59,130,246,0.08); }
 .template-name { font-size: 12px; font-weight: 600; color: var(--text-primary); }
 .template-desc { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
 .sched-options { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .sched-option {
   padding: 5px 0; font-size: 12px; border-radius: 6px; cursor: pointer;
-  border: 1px solid var(--border-subtle, #333); background: transparent; color: var(--text-secondary);
+  border: 1px solid var(--border-subtle); background: transparent; color: var(--text-secondary);
 }
 .sched-option:hover { color: var(--text-primary); background: var(--bg-hover); }
-.sched-option.active { color: var(--accent-blue); border-color: var(--accent-blue); background: rgba(59,130,246,0.08); }
+.sched-option.active { color: var(--accent-primary); border-color: var(--accent-primary); background: rgba(59,130,246,0.08); }
 .sched-subrow { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
 .sched-subrow .num { width: 56px; }
 .sched-subrow .sel { width: 92px; }
 .sched-subrow input.num, .sched-subrow select.sel {
   font-size: 12px; padding: 4px 6px; border-radius: 6px;
-  border: 1px solid var(--border-subtle, #333); background: var(--bg-base); color: var(--text-primary);
+  border: 1px solid var(--border-subtle); background: var(--bg-base); color: var(--text-primary);
 }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 
 .history-list { display: flex; flex-direction: column; gap: 8px; }
-.history-item { border: 1px solid var(--border-subtle, #333); border-radius: 6px; padding: 8px 10px; }
+.history-item { border: 1px solid var(--border-subtle); border-radius: 6px; padding: 8px 10px; }
 .history-head { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--text-secondary); }
 .history-summary { font-size: 12px; color: var(--text-secondary); margin-top: 6px; white-space: pre-wrap; max-height: 150px; overflow: auto; }
-.history-error { font-size: 12px; color: var(--accent-red, #f48771); margin-top: 4px; }
+.history-error { font-size: 12px; color: var(--accent-red); margin-top: 4px; }
 .empty-small { color: var(--text-tertiary); font-size: 12px; padding: 20px 0; text-align: center; }
-.countdown { color: var(--accent-blue); font-weight: 600; }
+.countdown { color: var(--accent-primary); font-weight: 600; }
 .history-actions { margin-top: 6px; }
 </style>

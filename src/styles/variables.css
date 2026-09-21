@@ -1,35 +1,50 @@
+/* ============================================================
+ * 设计令牌（Design Tokens）
+ *
+ * 背景约定（**只有两个层级**）：
+ *   --bg-base      所有"非卡片"背景：窗口底、全局画布、侧栏、页面主体、
+ *                  面板头、工具条、状态栏、表头、覆盖层。结构背景不再分层。
+ *   --bg-elevated  唯一浮起层：卡片、弹窗、菜单、下拉、toast、浮层控件。
+ *
+ *   → 新增结构容器一律用 --bg-base，不要引入 panel / surface 之类的中间层级。
+ *
+ * 同族专用底（不属于"层级"，是有独立语义的控件/功能区底色）：
+ *   --bg-input     输入框、下拉、标签胶囊、折叠条等控件皮肤（"凹陷"）
+ *   --bg-slider    滑块轨道
+ *   --bg-terminal  终端内容区专用底。终端 ANSI 主题固定为暗色，
+ *                  故浅色主题下必须给深底，否则前景色不可读。
+ *
+ * 约定：--bg-xxx 与 --bg-xxx-solid 必须同值。
+ *       global.css 的 [data-gradient="on"] 会用 -solid 派生半透明版本。
+ *
+ * 维护约定：**新增令牌必须同时有消费方**（CSS var() 读取或 JS 读取）。
+ *           仅被 JS setProperty 写入而无任何读取的令牌 = 失效设置项，不应存在。
+ * ============================================================ */
+
 :root {
   /* ── 深色主题（默认）── */
-  --bg-base: #000000;
-  --bg-panel: #000000;
-  --bg-panel-solid: #000000;
-  --bg-surface: #000000;
-  --bg-surface-solid: #000000;
-  --bg-elevated: #000000;
-  --bg-elevated-solid: #000000;
+  --bg-base: #000000;            /* 所有非卡片背景：画布/侧栏/面板头/工具条/覆盖层 */
+  --bg-elevated: #1a1a1e;        /* 浮起层：卡片/弹窗 */
+  --bg-elevated-solid: #1a1a1e;
   --bg-hover: rgba(255,255,255,0.06);
   --bg-active: rgba(255,255,255,0.12);
   --divider-primary: #1a1a1a;
-  --divider-secondary: #2d2d2d;
   --border-default: #3e3e42;
   --border-subtle: #2d2d30;
   --text-primary: #cccccc;
   --text-secondary: #969696;
-  --text-tertiary: #767676; /* ≥4.5:1 对比度（黑底） */
+  --text-tertiary: #878787;      /* ≥4.5:1（对比最亮的 --bg-elevated #1a1a1e） */
+  --bg-terminal: #000000;        /* 终端内容区底（与 bg-base 一致） */
 
   /* 扩展背景/边框变量 */
-  --bg-sidebar: #000000;
-  --bg-sidebar-solid: #000000;
-  --bg-input: #000000;
-  --bg-input-solid: #000000;
-  --bg-code: #000000;
+  --bg-input: #101013;
+  --bg-input-solid: #101013;
   --bg-slider: #303030;
   --border-input: #303030;
 
   /* 强调色（由 JS 动态覆盖） */
   --accent-primary: #0078d4;
   --accent-primary-rgb: 0, 120, 212;
-  --accent-blue: #0078d4;
   --accent-purple: #c586c0;
   --accent-green: #4ec9b0;
   --accent-orange: #ce9178;
@@ -37,6 +52,12 @@
   --accent-cyan: #9cdcfe;
   --accent-yellow: #dcdcaa;
   --accent-gradient: linear-gradient(135deg, #0078d4 0%, #c586c0 100%);
+
+  /* 监控指标色板（正常/警戒/危险）：仪表盘顶部卡片、磁盘条 与 GpuNvtopPanel 细条共用。
+     统一阈值：正常 <60 绿 / 警戒 ≥60 ≤80 黄 / 危险 >80 红。 */
+  --metric-cool: #35c93f;
+  --metric-warm: #d7d72f;
+  --metric-hot: #e7574c;
 
   /* 聊天强调色（indigo：技能标签/选中态/空状态图标） */
   --accent-indigo: #818cf8;
@@ -49,6 +70,7 @@
   --status-info-border: #2d4a5a;
   --status-info-text: #569cd6;
   --status-success-bg: #2d3d2d;
+  --status-success-border: #4a6a4a;
   --status-success-text: #6abf6a;
   --status-warn-bg: #2d2d1a;
   --status-warn-text: #dcdcaa;
@@ -58,7 +80,7 @@
   --status-debug-text: #9cdcfe;
   --status-tag-bg: rgba(86, 156, 214, 0.1);
   --status-tag-border: rgba(86, 156, 214, 0.2);
-  --status-tag-text: #8b949e;
+  --status-tag-text: #a8b3bd;
 
   /* 工具日志色（Agent 轨迹） */
   --log-text: #c9d1d9;
@@ -79,64 +101,49 @@
   --card-perm-btn-hover: #4a6a4a;
   --card-perm-resolved: #4a8a4a;
   --danger-bg: #4a1a1a;
+  --danger-border: #6a2d2d;
   --danger-text: #ff6b6b;
 
   /* 圆角 & 阴影 */
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
-  --radius-xl: 12px;
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.2);
-  --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
   --shadow-lg: 0 8px 24px rgba(0,0,0,0.4);
 
   /* 过渡 */
   --transition-fast: 150ms ease;
-  --transition-normal: 200ms ease;
 
   /* 字体 */
-  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, "Courier New", monospace;
+  --font-sans: system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, "Courier New", monospace;
+  --line-height-normal: 1.5;
 
   /* 布局 */
-  --titlebar-h: 38px;
-  --tabbar-h: 44px;
-  --statusbar-h: 28px;
-
-  /* 间距（紧凑模式由 JS 覆盖） */
-  --spacing-xs: 4px;
-  --spacing-sm: 8px;
-  --spacing-md: 12px;
-  --spacing-lg: 16px;
+  --titlebar-h: 32px;            /* 与 layouts/TitleBar.vue 实现一致 */
+  --tabbar-h: 34px;              /* 与 views/ssh/SshView.vue 标签栏一致 */
 }
 
 /* ── 浅色主题 ── */
 [data-theme="light"] {
   --bg-base: #ffffff;
-  --bg-panel: #ffffff;
-  --bg-panel-solid: #ffffff;
-  --bg-surface: #ffffff;
-  --bg-surface-solid: #ffffff;
-  --bg-elevated: #ffffff;
+  --bg-elevated: #ffffff;        /* 浮起层：纯白卡片，靠 border + shadow 分层 */
   --bg-elevated-solid: #ffffff;
   --bg-hover: rgba(0,0,0,0.04);
   --bg-active: rgba(0,0,0,0.08);
   --divider-primary: #e0e0e0;
-  --divider-secondary: #eaeaea;
   --border-default: #d0d0d0;
   --border-subtle: #e0e0e0;
   --text-primary: #000000;
   --text-secondary: #555555;
   --text-tertiary: #6e6e6e; /* ≥4.5:1 对比度（白底） */
-  --bg-sidebar: #ffffff;
-  --bg-sidebar-solid: #ffffff;
+  /* 终端 ANSI 主题固定暗色：浅色界面下必须给深底，否则前景 #e6edf3 不可读 */
+  --bg-terminal: #17181c;
   --bg-input: #ffffff;
   --bg-input-solid: #ffffff;
-  --bg-code: #ffffff;
   --bg-slider: #d0d0d0;
   --border-input: #c0c0c0;
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.08);
-  --shadow-md: 0 4px 12px rgba(0,0,0,0.1);
   --shadow-lg: 0 8px 24px rgba(0,0,0,0.15);
 
   /* 浅色主题：indigo 加深保证对比度 */
@@ -150,6 +157,7 @@
   --status-info-border: #b9d4ec;
   --status-info-text: #1f6fb2;
   --status-success-bg: #e6f4ea;
+  --status-success-border: #b7e0c2;
   --status-success-text: #1e7e34;
   --status-warn-bg: #faf3dc;
   --status-warn-text: #7a5c00;
@@ -180,32 +188,26 @@
   --card-perm-btn-hover: #d4ecd9;
   --card-perm-resolved: #34a853;
   --danger-bg: #fdecea;
+  --danger-border: #f3c2bd;
   --danger-text: #c62828;
 }
 
 /* ── 蓝屏主题 ── */
 [data-theme="blue-screen"] {
   --bg-base: #0a1628;
-  --bg-panel: #0a1628;
-  --bg-panel-solid: #0a1628;
-  --bg-surface: #0a1628;
-  --bg-surface-solid: #0a1628;
-  --bg-elevated: #0a1628;
-  --bg-elevated-solid: #0a1628;
+  --bg-elevated: #142d52;
+  --bg-elevated-solid: #142d52;
   --bg-hover: rgba(255,255,255,0.06);
   --bg-active: rgba(255,255,255,0.12);
-  --divider-primary: #0a1628;
-  --divider-secondary: #1a3050;
+  --divider-primary: #0f2138;
   --border-default: #1e3a5f;
   --border-subtle: #152d50;
   --text-primary: #c8ddf0;
   --text-secondary: #8aa8c8;
-  --text-tertiary: #5a7898;
-  --bg-sidebar: #0a1628;
-  --bg-sidebar-solid: #0a1628;
-  --bg-input: #0a1628;
-  --bg-input-solid: #0a1628;
-  --bg-code: #0a1628;
+  --text-tertiary: #7d9cc0;      /* ≥4.5:1（对比 --bg-elevated #142d52） */
+  --bg-terminal: #0a1628;
+  --bg-input: #0f2039;
+  --bg-input-solid: #0f2039;
   --bg-slider: #1a3a6e;
   --border-input: #1e3a5f;
 }
@@ -213,26 +215,19 @@
 /* ── 森林主题（深墨绿） ── */
 [data-theme="forest"] {
   --bg-base: #0b1a12;
-  --bg-panel: #0b1a12;
-  --bg-panel-solid: #0b1a12;
-  --bg-surface: #0b1a12;
-  --bg-surface-solid: #0b1a12;
-  --bg-elevated: #0b1a12;
-  --bg-elevated-solid: #0b1a12;
+  --bg-elevated: #1b3a26;
+  --bg-elevated-solid: #1b3a26;
   --bg-hover: rgba(255,255,255,0.05);
   --bg-active: rgba(255,255,255,0.10);
   --divider-primary: #13261b;
-  --divider-secondary: #1d3a28;
   --border-default: #2a4a36;
   --border-subtle: #1d3526;
   --text-primary: #d3e8d9;
   --text-secondary: #9db8a4;
-  --text-tertiary: #6d8a76;
-  --bg-sidebar: #0b1a12;
-  --bg-sidebar-solid: #0b1a12;
-  --bg-input: #0b1a12;
-  --bg-input-solid: #0b1a12;
-  --bg-code: #0b1a12;
+  --text-tertiary: #93ac9c;      /* ≥4.5:1（对比 --bg-elevated #1b3a26） */
+  --bg-terminal: #0b1a12;
+  --bg-input: #132719;
+  --bg-input-solid: #132719;
   --bg-slider: #26402f;
   --border-input: #2a4a36;
 }
@@ -240,26 +235,19 @@
 /* ── 薄荷主题（深青） ── */
 [data-theme="mint"] {
   --bg-base: #0a1b1a;
-  --bg-panel: #0a1b1a;
-  --bg-panel-solid: #0a1b1a;
-  --bg-surface: #0a1b1a;
-  --bg-surface-solid: #0a1b1a;
-  --bg-elevated: #0a1b1a;
-  --bg-elevated-solid: #0a1b1a;
+  --bg-elevated: #1a413c;
+  --bg-elevated-solid: #1a413c;
   --bg-hover: rgba(255,255,255,0.05);
   --bg-active: rgba(255,255,255,0.10);
   --divider-primary: #122928;
-  --divider-secondary: #1b3d3b;
   --border-default: #27514e;
   --border-subtle: #1c3a38;
   --text-primary: #d0ece8;
   --text-secondary: #9cc4bf;
-  --text-tertiary: #6b938e;
-  --bg-sidebar: #0a1b1a;
-  --bg-sidebar-solid: #0a1b1a;
-  --bg-input: #0a1b1a;
-  --bg-input-solid: #0a1b1a;
-  --bg-code: #0a1b1a;
+  --text-tertiary: #96bab5;      /* ≥4.5:1（对比 --bg-elevated #1a413c） */
+  --bg-terminal: #0a1b1a;
+  --bg-input: #122b28;
+  --bg-input-solid: #122b28;
   --bg-slider: #24504b;
   --border-input: #27514e;
 }
@@ -267,26 +255,19 @@
 /* ── 蜜蜂主题（深琥珀） ── */
 [data-theme="bee"] {
   --bg-base: #1a1206;
-  --bg-panel: #1a1206;
-  --bg-panel-solid: #1a1206;
-  --bg-surface: #1a1206;
-  --bg-surface-solid: #1a1206;
-  --bg-elevated: #1a1206;
-  --bg-elevated-solid: #1a1206;
+  --bg-elevated: #3d2d12;
+  --bg-elevated-solid: #3d2d12;
   --bg-hover: rgba(255,255,255,0.05);
   --bg-active: rgba(255,255,255,0.10);
   --divider-primary: #2b2010;
-  --divider-secondary: #3f2f18;
   --border-default: #57411f;
   --border-subtle: #3f2f18;
   --text-primary: #ece0c4;
   --text-secondary: #c2b08a;
-  --text-tertiary: #8f7d57;
-  --bg-sidebar: #1a1206;
-  --bg-sidebar-solid: #1a1206;
-  --bg-input: #1a1206;
-  --bg-input-solid: #1a1206;
-  --bg-code: #1a1206;
+  --text-tertiary: #b8a47a;      /* ≥4.5:1（对比 --bg-elevated #3d2d12） */
+  --bg-terminal: #1a1206;
+  --bg-input: #281d0a;
+  --bg-input-solid: #281d0a;
   --bg-slider: #4a3a1e;
   --border-input: #57411f;
 }
@@ -294,26 +275,19 @@
 /* ── 珊瑚主题（深红珊瑚） ── */
 [data-theme="coral"] {
   --bg-base: #180d0b;
-  --bg-panel: #180d0b;
-  --bg-panel-solid: #180d0b;
-  --bg-surface: #180d0b;
-  --bg-surface-solid: #180d0b;
-  --bg-elevated: #180d0b;
-  --bg-elevated-solid: #180d0b;
+  --bg-elevated: #3a221c;
+  --bg-elevated-solid: #3a221c;
   --bg-hover: rgba(255,255,255,0.05);
   --bg-active: rgba(255,255,255,0.10);
   --divider-primary: #2a1713;
-  --divider-secondary: #3d211c;
   --border-default: #543028;
   --border-subtle: #3d211c;
   --text-primary: #f0dcd7;
   --text-secondary: #c5a6a0;
-  --text-tertiary: #92746e;
-  --bg-sidebar: #180d0b;
-  --bg-sidebar-solid: #180d0b;
-  --bg-input: #180d0b;
-  --bg-input-solid: #180d0b;
-  --bg-code: #180d0b;
+  --text-tertiary: #bfa09a;      /* ≥4.5:1（对比 --bg-elevated #3a221c） */
+  --bg-terminal: #180d0b;
+  --bg-input: #261511;
+  --bg-input-solid: #261511;
   --bg-slider: #472a23;
   --border-input: #543028;
 }

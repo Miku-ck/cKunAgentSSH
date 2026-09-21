@@ -5,6 +5,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed, onScopeDispose } from 'vue'
 import { useToastStore } from './toast'
+import { toFriendlyMessage } from '@/api/client'
 
 export type SSHConnection = SSHConnectionRecord
 
@@ -14,6 +15,7 @@ export interface TerminalSession {
   type: 'local' | 'remote'
   shell: string           // 本地: shell名, 远程: username@host
   connectionId?: string   // 远程连接的 ID
+  createdAt?: number      // 会话创建时间戳（用于判断本地终端是否“启动即退出”）
 }
 
 export interface CommandHistoryEntry {
@@ -39,7 +41,6 @@ export const useSSHStore = defineStore('ssh', () => {
   const connections = ref<SSHConnection[]>([])
   const sessions = ref<TerminalSession[]>([])
   const activeSessionId = ref('')
-  const connecting = ref(false)
   const loaded = ref(false)
 
   /** 按终端会话维度的命令历史（内存版） */
@@ -230,6 +231,7 @@ export const useSSHStore = defineStore('ssh', () => {
       name: shell,
       type: 'local',
       shell,
+      createdAt: Date.now(),
     })
 
     activeSessionId.value = result.id
@@ -264,6 +266,7 @@ export const useSSHStore = defineStore('ssh', () => {
       type: 'remote',
       shell: `${conn.username}@${conn.host}`,
       connectionId: conn.id,
+      createdAt: Date.now(),
     })
 
     activeSessionId.value = id
@@ -376,6 +379,7 @@ export const useSSHStore = defineStore('ssh', () => {
       }
     } catch (e) {
       console.error('[sshStore] duplicateSession failed:', e)
+      useToastStore().error(toFriendlyMessage(e, '复制终端失败'))
     }
   }
 
@@ -584,7 +588,6 @@ export const useSSHStore = defineStore('ssh', () => {
     sessions,
     activeSessionId,
     activeSession,
-    connecting,
     // methods
     isOnline,
     init,

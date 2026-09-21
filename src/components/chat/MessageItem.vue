@@ -4,7 +4,7 @@
     <AgentTraceInline
       v-if="message.role === 'assistant' && message.agentTrace"
       :trace="message.agentTrace"
-      :is-live="false"
+      :is-live="isStreaming && isLast"
     />
 
     <ThinkingBlock

@@ -4,7 +4,7 @@
 Agent 在"可见终端"模式下，不直接 headless 执行命令，而是把命令"交付"
 给前端（由前端写入真实 PTY/SSH 会话），挂起 ReAct 循环等待前端回传结果。
 
-本模块是 asyncio 事件循环安全的内存注册表（dict + asyncio.Lock）：
+本模块是 asyncio 事件循环安全的内存注册表（dict + threading.Lock）：
 - 每个待交付项持有 tool_id / command / session_id / requires_confirm / run_id，
   一个 asyncio.Event，以及结果字段（output/success/exit_code/rejected）。
 - create() 时生成 uuid tool_id 并注册；resume()/reject() 填好结果后 set 事件，
@@ -12,6 +12,7 @@ Agent 在"可见终端"模式下，不直接 headless 执行命令，而是把�
 - 无需持久化；run 结束/中止时用 clear_run() 清理该 run 的所有待交付项。
 
 线程安全级别：单 asyncio 事件循环内使用即可满足（FastAPI 单循环）。
+锁只保护 dict 的读写；Event 一律在循环线程内 set。
 """
 from __future__ import annotations
 
@@ -24,6 +25,10 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# 等待前端回传的默认秒数 —— create() 的默认值与 timeout_of() 的兜底共用，
+# 原先写成两处字面量，改一处会让两处口径分叉
+DEFAULT_DELIVERY_TIMEOUT = 300
+
 
 @dataclass
 class PendingDelivery:
@@ -33,7 +38,7 @@ class PendingDelivery:
     session_id: str
     requires_confirm: bool
     run_id: str
-    timeout: int = 300              # 等待秒数
+    timeout: int = DEFAULT_DELIVERY_TIMEOUT
     # 前端回传结果
     output: str = ""
     success: bool = False
@@ -55,7 +60,7 @@ class PendingDeliveryManager:
         session_id: str,
         requires_confirm: bool,
         run_id: str,
-        timeout: int = 300,
+        timeout: int = DEFAULT_DELIVERY_TIMEOUT,
     ) -> PendingDelivery:
         """创建并注册一条待交付命令，返回 PendingDelivery"""
         tool_id = uuid.uuid4().hex
@@ -85,10 +90,13 @@ class PendingDeliveryManager:
 
     def timeout_of(self, tool_id: str) -> int:
         delivery = self.get(tool_id)
-        return delivery.timeout if delivery else 300
+        return delivery.timeout if delivery else DEFAULT_DELIVERY_TIMEOUT
 
     async def wait(self, tool_id: str) -> None:
-        """挂起直到该 tool_id 的待交付被 resume/reject（或超时）"""
+        """挂起直到该 tool_id 的待交付被 resume/reject，或被 clear_run 唤醒。
+
+        本方法不带超时 —— 超时由调用方 asyncio.wait_for 负责（见 driver）。
+        """
         delivery = self.get(tool_id)
         if delivery is None:
             return
@@ -130,8 +138,16 @@ class PendingDeliveryManager:
         """移除某 run 的所有待交付项（run 结束/中止时调用）"""
         with self._lock:
             doomed = [tid for tid, d in self._registry.items() if d.run_id == run_id]
+            cleared = []
             for tid in doomed:
-                self._registry.pop(tid, None)
+                d = self._registry.pop(tid, None)
+                if d is not None:
+                    cleared.append(d)
+            # 必须唤醒等待方：原实现只 pop 不 set，Driver 已经 await 在 event.wait()
+            # 上时没人再碰它 —— 只能等自己的 wait_for 超时（默认 300s）才退出，
+            # run 早已结束却挂满五分钟。set 后等待方按 get()==None 走「未确认」分支。
+            for d in cleared:
+                d.event.set()
         if doomed:
             logger.info("清理可见终端待交付 (run=%s, count=%d)", run_id, len(doomed))
 

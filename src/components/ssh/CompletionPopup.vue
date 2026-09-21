@@ -144,7 +144,7 @@ defineExpose({
   min-width: 180px;
   max-width: 420px;
   background: var(--bg-input-solid);
-  border: 1px solid var(--border-default, #3e3e42);
+  border: 1px solid var(--border-default);
   border-radius: 4px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   overflow-y: auto;
@@ -167,7 +167,7 @@ defineExpose({
   gap: 7px;
   padding: 3px 10px;
   font-size: 12px;
-  font-family: var(--font-mono, 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace);
+  font-family: var(--font-mono);
   color: var(--text-primary);
   cursor: pointer;
   white-space: nowrap;
@@ -199,8 +199,8 @@ defineExpose({
   margin-left: auto;
   flex-shrink: 0;
   font-size: 10px;
-  color: var(--text-tertiary, #666);
-  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+  color: var(--text-tertiary);
+  background: var(--bg-hover);
   padding: 0 5px;
   border-radius: 4px;
   font-variant-numeric: tabular-nums;

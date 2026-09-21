@@ -17,17 +17,17 @@ from agent.harness.saddle import FileContentUndo, NoOpUndo, UndoBuilder
 import agent.tools.builtin.ops_common as ops_common
 
 
-async def _fake_run_headless_ok(context, command, timeout=30):
+async def _fake_run_headless_ok(context, command, timeout=30, keep_full=False):
     """返回一段 base64 内容（b"hello world"）"""
     b64 = base64.b64encode(b"hello world").decode("ascii")
     return True, f"{b64}\n[exit_code=0]"
 
 
-async def _fake_run_headless_missing(context, command, timeout=30):
+async def _fake_run_headless_missing(context, command, timeout=30, keep_full=False):
     return False, "base64: /tmp/nope: No such file or directory\n[exit_code=1]"
 
 
-async def _fake_run_headless_unavailable(context, command, timeout=30):
+async def _fake_run_headless_unavailable(context, command, timeout=30, keep_full=False):
     return False, (
         "拒绝执行（fail-closed）：Electron Bridge 未就绪，"
         "本命令不会降级到后端主机本机执行。"

@@ -195,3 +195,79 @@ def test_schedule_op_bad_action():
         r = await ScheduleOpTool().execute(_ctx(), action="explode")
         assert r.success is False
     asyncio.run(go())
+
+
+# ── schedule_op 与 /schedules 路由的校验口径对齐 ──────
+def _patch_schedule_db(monkeypatch, captured: dict):
+    class FakeEngine:
+        def ensure_started(self):
+            return None
+
+    def fake_create(data):
+        captured.update(data)
+        return {"id": "sched-1"}
+
+    monkeypatch.setattr(ops_schedule.db, "create_schedule", fake_create)
+    monkeypatch.setattr(ops_schedule.db, "set_schedule_next_run", lambda sid, nxt: None)
+    monkeypatch.setattr("agent.schedule_engine.get_schedule_engine", lambda: FakeEngine())
+
+
+@pytest.mark.parametrize("minutes,expect_ok", [
+    ("abc", False),   # 原先 int() 直接 ValueError 冒出 _create，模型拿到裸栈
+    (0, False),       # 0 会让 compute_next_run 每 tick 触发
+    (-5, False),
+    (10 ** 9, False),  # 约 1900 年，POST 的 le=525600 拒收
+    (None, True),     # 默认 60，与路由 default 一致
+    (30, True),
+])
+def test_schedule_op_interval_minutes_matches_route_field_bounds(monkeypatch, minutes, expect_ok):
+    captured = {}
+    _patch_schedule_db(monkeypatch, captured)
+
+    async def go():
+        r = await ScheduleOpTool().execute(
+            _ctx(), action="create", mode="interval", interval_minutes=minutes, task="t")
+        assert r.success is expect_ok, r.error or r.output
+    asyncio.run(go())
+    if minutes is None:
+        assert captured["interval_minutes"] == 60
+    elif expect_ok:
+        assert captured["interval_minutes"] == minutes
+
+
+def test_schedule_op_monthly_cron_day_caps_at_28():
+    """dom 29-31 会让 PATCH（含界面勾选启停）恒 400：_validate_fields 校验 merged 全量"""
+    parsed, err = ops_schedule._parse_cron("0 9 29 * *")
+    assert parsed is None and "1-28" in err
+    parsed, err = ops_schedule._parse_cron("0 9 28 * *")
+    assert err is None
+    assert parsed["schedule_type"] == "monthly" and parsed["day_of_month"] == 28
+
+
+def test_schedule_op_cron_row_keeps_editable_defaults(monkeypatch):
+    """cron 派生的行不能带 interval_minutes=0 / weekday=-1：前者撞 ge=1，后者永不触发"""
+    captured = {}
+    _patch_schedule_db(monkeypatch, captured)
+
+    async def go():
+        r = await ScheduleOpTool().execute(
+            _ctx(), action="create", mode="cron", cron="30 8 * * 0", task="轮转日志")
+        assert r.success is True, r.error
+    asyncio.run(go())
+
+    assert captured["schedule_type"] == "weekly"
+    assert captured["weekday"] == 6        # cron 周日 → engine weekday 6
+    assert captured["interval_minutes"] == 60
+    assert captured["time_hour"] == 8 and captured["time_minute"] == 30
+    assert captured["day_of_month"] == 1
+
+
+def test_schedule_op_list_empty_is_success_with_output(monkeypatch):
+    """空列表是成功态：驱动只把 output 喂回模型，提示不能只写在 error 里"""
+    monkeypatch.setattr(ops_schedule.db, "list_enabled_schedules", lambda: [])
+
+    async def go():
+        r = await ScheduleOpTool().execute(_ctx(), action="list")
+        assert r.success is True
+        assert r.output.strip()
+    asyncio.run(go())

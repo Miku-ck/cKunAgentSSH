@@ -67,13 +67,13 @@
           </div>
           <div v-else class="transfer-list">
             <!-- 进行中的任务 -->
-            <div v-if="activeTransfers.length > 0" class="transfer-section">
+            <div v-if="store.activeTransfers.length > 0" class="transfer-section">
               <div class="transfer-section-title">
                 <span class="transfer-section-label">进行中</span>
-                <span class="transfer-section-count">{{ activeTransfers.length }}</span>
+                <span class="transfer-section-count">{{ store.activeTransfers.length }}</span>
               </div>
               <div
-                v-for="t in activeTransfers"
+                v-for="t in store.activeTransfers"
                 :key="t.id"
                 class="transfer-list-item"
                 :class="t.status"
@@ -286,7 +286,7 @@
       @click="ctxMenu.visible = false"
       @contextmenu.prevent
     >
-      <div class="ctx-item" @click="handleCtxAction('open')">
+      <div v-if="ctxMenu.entry" class="ctx-item" @click="handleCtxAction('open')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
         打开
       </div>
@@ -385,7 +385,8 @@
 
 <script setup lang="ts">
 import { formatBytes } from '@/utils/format'
-import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { menuTop } from '@/utils/menu'
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import SftpPane from './SftpPane.vue'
 import SftpFileEditor from './SftpFileEditor.vue'
 import { useSftpStore, type TransferItem } from '@/stores/sftp'
@@ -405,10 +406,7 @@ const connecting = ref(false)
 const pendingConnId = ref('')
 const showTransferList = ref(false)
 
-// 传输任务计算属性
-const activeTransfers = computed(() =>
-  store.transfers.filter(t => t.status === 'running' || t.status === 'paused' || t.status === 'pending')
-)
+// 传输任务计算属性（「进行中」口径统一走 store.activeTransfers）
 const completedTransfers = computed(() =>
   store.transfers.filter(t => t.status === 'done' || t.status === 'error' || t.status === 'cancelled')
 )
@@ -497,7 +495,7 @@ function onTransferContext(event: MouseEvent, item: TransferItem) {
   transferCtxMenu.value = {
     visible: true,
     x: event.clientX,
-    y: event.clientY,
+    y: menuTop(event.clientY, 150),
     item
   }
 }
@@ -546,18 +544,20 @@ onMounted(() => {
     const name = item?.name || '文件'
     toast.warning(`"${name}" 传输停滞，正在尝试自动续传…`)
   })
-  unsubClosed = api.onSftpClosed((data) => {
-    if (data.id === store.sshSessionId) {
-      store.disconnect()
-      toast.warning('远程 SFTP 连接已断开')
-    }
-  })
-  unsubSshClose = api.onSshClose((data) => {
-    if (data.id === store.sshSessionId) {
-      store.disconnect()
-      toast.warning('远程 SFTP 连接已断开')
-    }
-  })
+  // 同一次掉线主进程会同时发 sftp:closed 与 ssh:close 两条事件，两个回调都会
+  // 命中这里的 sshSessionId 比对（disconnect 要 await 两次 IPC 才清空会话），
+  // 于是断线提示弹两遍、disconnect() 重入。用一个「本次已提示过」的会话标记去重。
+  let lostNotifiedFor = ''
+  function onConnectionLost(data: { id: string }) {
+    if (data.id !== store.sshSessionId || lostNotifiedFor === data.id) return
+    lostNotifiedFor = data.id
+    store.disconnect()
+    toast.warning('远程 SFTP 连接已断开')
+  }
+  // 重新连接（含连回同一个 id）后解除标记，否则下一次真实掉线不再提示
+  watch(() => store.sshSessionId, id => { if (id && id !== lostNotifiedFor) lostNotifiedFor = '' })
+  unsubClosed = api.onSftpClosed(onConnectionLost)
+  unsubSshClose = api.onSshClose(onConnectionLost)
   document.addEventListener('click', dismissCtxMenu)
   if (!store.localCwd) store.initLocalHome()
 })
@@ -672,16 +672,11 @@ const ctxMenu = reactive({
 })
 
 function onContextMenu(e: MouseEvent, entry: AnyEntry | null, side: 'local' | 'remote'): void {
-  const estimatedHeight = 200
-  const viewportHeight = window.innerHeight
-  const y = e.clientY + estimatedHeight > viewportHeight
-    ? e.clientY - estimatedHeight
-    : e.clientY
   // C32 修复：打开文件右键菜单时先隐藏传输右键菜单（原来互不 dismiss）
   transferCtxMenu.value.visible = false
   ctxMenu.visible = true
   ctxMenu.x = e.clientX
-  ctxMenu.y = y
+  ctxMenu.y = menuTop(e.clientY, 200)
   ctxMenu.entry = entry
   ctxMenu.side = side
 }
@@ -906,6 +901,10 @@ function openRenameDialog(isNew: boolean, name: string, side: 'local' | 'remote'
 async function confirmRename(): Promise<void> {
   const name = renameDialog.name.trim()
   if (!name) return
+  // 先关窗再执行：确定按钮随弹窗销毁，连点不会再触发第二次 mkdir/rename
+  // （原实现在 await 之后才置 visible=false，慢盘/远端抖动时双击会建两个目录，
+  //  第二个报「已存在」—— 用户看到的是自己没点过的错误）
+  renameDialog.visible = false
   try {
     if (renameDialog.isNew) {
       if (renameDialog.side === 'local') await store.localMkdir(name)
@@ -918,7 +917,6 @@ async function confirmRename(): Promise<void> {
   } catch (err: any) {
     toast.error(toFriendlyMessage(err, '操作失败'))
   }
-  renameDialog.visible = false
 }
 
 // ─── 关闭右键菜单 ─────────────────────
@@ -969,7 +967,7 @@ async function onFileSaved(): Promise<void> {
   align-items: center;
   justify-content: space-between;
   padding: 0 12px;
-  background: var(--bg-elevated);
+  background: var(--bg-base);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
@@ -1002,7 +1000,7 @@ async function onFileSaved(): Promise<void> {
   min-width: 16px;
   height: 16px;
   border-radius: 8px;
-  background: var(--accent-blue);
+  background: var(--accent-primary);
   color: #fff;
   font-size: 10px;
   font-weight: 600;
@@ -1119,7 +1117,7 @@ async function onFileSaved(): Promise<void> {
   font-size: 13px; outline: none;
   font-family: var(--font-sans);
 }
-.rename-input:focus { border-color: var(--accent-blue); }
+.rename-input:focus { border-color: var(--accent-primary); }
 .rename-actions {
   display: flex; justify-content: flex-end;
   gap: 8px; margin-top: 16px;
@@ -1133,7 +1131,7 @@ async function onFileSaved(): Promise<void> {
 }
 .rename-btn.cancel { background: transparent; color: var(--text-secondary); }
 .rename-btn.cancel:hover { background: var(--bg-hover); }
-.rename-btn.confirm { background: var(--accent-blue); color: #fff; border-color: var(--accent-blue); }
+.rename-btn.confirm { background: var(--accent-primary); color: #fff; border-color: var(--accent-primary); }
 .rename-btn.confirm:hover { opacity: 0.9; }
 
 /* 传输任务右键菜单 */
@@ -1349,7 +1347,7 @@ async function onFileSaved(): Promise<void> {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tl-speed { color: var(--accent-blue); }
+.tl-speed { color: var(--accent-primary); }
 .tl-paused { color: var(--accent-orange); }
 .tl-done { color: var(--accent-green); }
 .tl-error { color: var(--accent-red); }
@@ -1368,7 +1366,7 @@ async function onFileSaved(): Promise<void> {
 }
 .tl-progress-fill {
   height: 100%;
-  background: var(--accent-blue);
+  background: var(--accent-primary);
   border-radius: 2px;
   transition: width 0.15s;
 }
@@ -1378,7 +1376,7 @@ async function onFileSaved(): Promise<void> {
 .tl-progress-fill.cancelled { background: var(--text-tertiary); }
 .tl-progress-fill.indeterminate {
   width: 40%;
-  background: var(--accent-blue);
+  background: var(--accent-primary);
   animation: indeterminate-slide 1.2s ease-in-out infinite;
 }
 @keyframes indeterminate-slide {

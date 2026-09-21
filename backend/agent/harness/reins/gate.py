@@ -61,8 +61,6 @@ class PermissionGate:
     # 但"会话"边界 = conversation_id
     _confirmed_session: dict[str, set[str]] = field(default_factory=dict)  # conversation_id → 确认键
     _confirmed_permanent: set[str] = field(default_factory=set)  # 永久确认（持久化到 config）
-    # 用户覆盖（从 DB 加载）
-    _overrides: dict[str, str] = field(default_factory=dict)
     # 问题 4：visible_terminal 拒绝命令 — 按 run_id 键控，防止 LLM 重发时再次弹卡片。
     # _denied_commands[run_id] = set(grant_key)，拒绝后 LLM 重试不会再次触发审批，
     # 而是直接拦截并注入"已被用户拒绝"提示（让 LLM 换路）。
@@ -244,6 +242,12 @@ class PermissionGate:
             # 也无法被 run 终态清理，直接拒绝而非落入无人认领的池
             if not run_id:
                 raise ValueError("scope='once' 授权必须提供 run_id")
+            # 用户在「拒绝」后又点了「允许本次」→ 显式授权覆盖该 key 的拒绝标记。
+            # 否则对无命令可绑定的工具（多数 ops_* 走裸工具名键），一次拒绝即整 run
+            # 禁用：check_permission 先查 is_denied 直接返回 False，之后的每次授权
+            # 只写进无人消费的池子，卡片反复弹出直到审批超时，而审计却记为 approved。
+            # 仅 once 生效：session/always 授权仍让位于本 run 的拒绝（原契约不变）。
+            self._denied_commands.get(run_id, set()).discard(key)
             self._confirmed_once[run_id][key] += 1
         elif scope == 'session':
             self._confirmed_session.setdefault(conversation_id, set()).add(key)
@@ -346,13 +350,16 @@ class PermissionGate:
                     continue
                 for k in [k for k in s if k.startswith(prefix)]:
                     self._revoke_key(k, cid)
-            for k in [k for k in self._confirmed_once if k.startswith(prefix)]:
+            # once 池按 run_id 分桶（_confirmed_once[run_id][grant_key]），顶层键是
+            # run_id 而非授权键，直接 for k in self._confirmed_once 永远匹配不到 prefix。
+            # 需下钻各 run 池收集匹配该工具的授权键，再逐个撤销（与 _revoke_key 同构）。
+            once_keys = {
+                k for pool in self._confirmed_once.values() for k in pool
+                if k.startswith(prefix)
+            }
+            for k in once_keys:
                 self._revoke_key(k, conversation_id)
         self._save_permanent_allowlist()
-
-    def load_overrides(self, overrides: dict[str, str]) -> None:
-        """从 DB 加载用户自定义权限覆盖"""
-        self._overrides.update(overrides)
 
     def _get_effective_risk(self, tool_name: str, meta: Any, args: dict,
                             environment: str) -> str:
@@ -413,13 +420,6 @@ class PermissionGate:
         last = ctx.tool_calls_log[-1]
         tool = last.get("tool", "")
         args = last.get("args", {})
-
-        # 用户覆盖优先
-        if tool in self._overrides:
-            level = self._overrides[tool]
-            if level == "autonomous":
-                return ReinDecision()
-            # 其他级别走标准流程
 
         # H14 修复：命令执行工具（shell_exec）绕过 tool-level 风险检查
         # 原因：这些工具自身是命令入口，命令级安全由 FilesystemGuard + Sandbox 的

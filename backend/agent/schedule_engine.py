@@ -32,6 +32,18 @@ _SCHEDULE_MAX_ITERATIONS = 8
 _SCHEDULE_CONVERSATION_PREFIX = "sched-"
 # schedule_runs 清理节流间隔（秒）
 _RUNS_PRUNE_INTERVAL_S = 6 * 3600
+# 模型未配置 temperature 时的兜底值（与 models_config 列默认值一致）
+_DEFAULT_TEMPERATURE = 0.7
+
+
+def _num_param(value, default: float) -> float:
+    """数值型模型参数取值：只有缺失/NULL 才用默认值。
+
+    `model_cfg.get("temperature") or 0.7` 会把 0.0 静默抬成 0.7 —— 设置页允许
+    temperature=0（ge=0，确定性输出），交互式运行按 0 走、定时任务按 0.7 走，
+    同一模型配置两条通道行为不一致。
+    """
+    return default if value is None else float(value)
 
 
 class ScheduleEngine:
@@ -46,6 +58,9 @@ class ScheduleEngine:
         # 已 create_task 的任务（无引用、detached）会继续跑 SSH 会话，
         # schedule_runs 在进程退出后滞留 'running'
         self._running_tasks: dict[str, asyncio.Task] = {}
+        # 删除任务时被打断的 schedule_id：区分 CancelledError 文案
+        # （"任务已删除" vs "服务停止"），避免 cancel 与 finally 的竞态误写
+        self._deleted_sids: set[str] = set()
         self._last_prune_at = 0.0  # schedule_runs 清理节流（monotonic）
 
     # ── 生命周期 ──
@@ -79,16 +94,21 @@ class ScheduleEngine:
 
     # ── 后台循环 ──
     async def _run_loop(self) -> None:
-        try:
-            # 启动后先扫一遍（对遗留/新建任务立即生效），之后按周期轮询
-            await self._tick_once()
-            while not self._stop_event.is_set():
-                await asyncio.sleep(self._poll_seconds)
+        # 启动后先扫一遍（对遗留/新建任务立即生效），之后按周期轮询。
+        # try 必须在 while 之内：原实现整圈包在单个 try 里，一次 _tick_once 抛异常
+        # （DB 瞬时 locked、next_run_at 脏值）就让自动调度永久停摆，
+        # 而且日志之后毫无征兆 —— 只有下一次 create_schedule/run_now 的
+        # ensure_started 才会把它救回来。
+        while not self._stop_event.is_set():
+            try:
                 await self._tick_once()
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.error("ScheduleEngine 循环异常退出: %s", e)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(
+                    "ScheduleEngine tick 失败，%ds 后重试: %s", self._poll_seconds, e
+                )
+            await asyncio.sleep(self._poll_seconds)
 
     async def _tick_once(self) -> None:
         schedules = await asyncio.to_thread(db.list_enabled_schedules)
@@ -110,15 +130,30 @@ class ScheduleEngine:
                 # （next_run_at 也不推进，自动调度整体失效，仅手动"立即执行"可用）
                 await self.trigger(s)
 
-    async def trigger(self, sched: dict) -> None:
-        """触发一次执行：先刷新 next_run_at，再后台跑 Agent。"""
+    async def trigger(self, sched: dict, *, manual: bool = False) -> bool:
+        """触发一次执行：先刷新 next_run_at，再后台跑 Agent。
+
+        返回 False 表示该任务正在执行、本次触发被丢弃（路由据此回 409，
+        而不是对着用户谎报「已触发立即执行」）。
+
+        manual=True（用户点"立即执行"）不推进 next_run_at：手动跑不消耗本次
+        定时。若手动执行期间恰好到期，tick 被 _executing 防重入跳过，执行完
+        后的下一个 tick（≤poll_seconds）发现 next_run_at 已是过去值自动补跑，
+        即"延后执行"而非"吞掉"。
+        """
         sid = sched["id"]
         if sid in self._executing:
             logger.info("schedule=%s 正在执行，跳过重复触发", sid)
-            return
+            return False
+        # 去重标记必须落在第一个 await 之前：原实现先 await 线程池写 next_run_at
+        # 再 add，轮询 tick 与手动「立即执行」同时到达时两边都通过上面的检查，
+        # 同一个定时任务并发跑两个 Agent run（双开 SSH、双份模型开销），
+        # 且先结束那个的 finally 会把后起任务的标记和 _running_tasks 条目一起清掉。
+        self._executing.add(sid)
         try:
-            next_at = compute_next_run(sched)
-            await asyncio.to_thread(db.set_schedule_next_run, sid, next_at)
+            if not manual:
+                next_at = compute_next_run(sched)
+                await asyncio.to_thread(db.set_schedule_next_run, sid, next_at)
         except Exception as e:
             logger.warning("schedule=%s 计算 next_run 失败: %s", sid, e)
         # 审查修复：执行标记须保持到任务结束（_run_task 的 finally 中移除）。
@@ -126,7 +161,6 @@ class ScheduleEngine:
         # 运行时间超过 tick 间隔（30s）的任务会被每次 tick 重复触发，
         # 并发启动多个 Agent 运行。
         try:
-            self._executing.add(sid)
             t = asyncio.get_running_loop().create_task(self._run_task(sched.copy()))
             self._running_tasks[sid] = t
         except Exception:
@@ -134,6 +168,32 @@ class ScheduleEngine:
             self._executing.discard(sid)
             raise
         self._maybe_prune_runs()
+        return True
+
+    async def remove_schedule(self, sid: str) -> bool:
+        """删除定时任务的唯一实现（REST DELETE 与 AI 工具 cancel 共用）。
+
+        先取消在途执行体（无头 Agent 会继续操作 SSH，不能让它跑在已删除的
+        任务上），把滞留 running 的 run 行标为终态，再删 schedules 行
+        （schedule_runs 由 FK CASCADE 一并删除）。
+        不 await 被取消的 task：DELETE 需及时返回，收尾交给 _run_task 自己跑。
+        """
+        t = self._running_tasks.get(sid)
+        if t is not None and not t.done():
+            self._deleted_sids.add(sid)
+            t.cancel()
+            # 未开始执行的 task 被 cancel 时协程体（含 _run_task 的 finally）根本
+            # 不会运行，_executing/_running_tasks 条目会永久泄漏 —— done callback
+            # 兜底回收；对已跑完 finally 的 task 这些 discard 是幂等空操作
+            t.add_done_callback(lambda _t, s=sid: (
+                self._executing.discard(s),
+                self._running_tasks.pop(s, None),
+                self._deleted_sids.discard(s),
+            ))
+        await asyncio.to_thread(
+            db.fail_running_schedule_runs, sid, "任务已删除，执行被取消"
+        )
+        return await asyncio.to_thread(db.delete_schedule, sid)
 
     def _maybe_prune_runs(self) -> None:
         """低频清理 schedule_runs（每 6h 最多一次，best-effort）。
@@ -179,12 +239,16 @@ class ScheduleEngine:
         except asyncio.CancelledError:
             # 审查修复（P2）：关停取消 — 把 run 标记为中断后重新抛出，
             # 否则 schedule_runs 永久滞留 'running'
-            logger.warning("schedule=%s run=%s 被关停取消", sid, run_id)
+            cancelled_by_delete = sid in self._deleted_sids
+            logger.warning(
+                "schedule=%s run=%s 被%s取消", sid, run_id, "删除" if cancelled_by_delete else "关停"
+            )
             if run_in_db:
                 try:
                     await asyncio.to_thread(
                         db.update_schedule_run, run_id,
-                        status="failed", error="服务停止，任务被中断",
+                        status="failed",
+                        error="任务已删除，执行被取消" if cancelled_by_delete else "服务停止，任务被中断",
                     )
                     await asyncio.to_thread(db.mark_schedule_run, sid, "failed")
                 except BaseException:
@@ -199,6 +263,7 @@ class ScheduleEngine:
         finally:
             self._executing.discard(sid)
             self._running_tasks.pop(sid, None)
+            self._deleted_sids.discard(sid)
             # 审查修复（P2）：清理本 run 的内存 todo 列表 — 定时 run 走独立
             # 路径，不经过交互式 Agent 的清理钩子，模块级 dict 会缓慢泄漏
             try:
@@ -302,7 +367,7 @@ class ScheduleEngine:
 
         cfg = HarnessAgentConfig(
             max_iterations=_SCHEDULE_MAX_ITERATIONS,
-            temperature=(model_cfg.get("temperature") or 0.7),
+            temperature=_num_param(model_cfg.get("temperature"), _DEFAULT_TEMPERATURE),
             max_tokens=safe_out,
             max_reasoning_tokens=safe_reasoning,
             enable_thinking=True,

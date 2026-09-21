@@ -421,6 +421,14 @@ class ClarificationInterceptor:
         # ── 整治中（未完成）── ─ 重发当前步事件 + 拦截 ──
         ctx_info = _CLARIFICATION_CONTEXT.get(run_id)
         if ctx_info and not ctx_info.get("_done"):
+            # 只冻结「会改写系统」的调用（注册表内 4 个工具，含触发澄清的那个）。
+            # 原实现拦下一切工具：用户离席几十秒、模型只想 file_read / sys_overview
+            # 也要逐次吃 "clarification_pending"，直到 600s TTL 才结束，整个 run
+            # 被一张没人答的向导拖死。只读工具直接放行。
+            # 注意不能落到下面的「新建题」分支：同一 run 只允许一张向导，
+            # 否则 _CLARIFICATION_CONTEXT 被第二张题覆盖，用户的答案无处可回。
+            if tool != ctx_info.get("tool") and tool not in _CLARIFIABLE_TOOLS:
+                return ReinDecision()
             step = ctx_info.get("current_step", 0)
             steps = ctx_info.get("steps", [])
             ev = _build_clarification_needed(

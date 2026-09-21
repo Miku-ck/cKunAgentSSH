@@ -71,15 +71,20 @@ export function buildTerminalOptions(extra?: ITerminalOptions): ITerminalOptions
 
 /**
  * 监听终端字号/字体变化，动态应用到已创建的 terminal 实例（无需重建）。
- * 字号/字体变化时调用 fitAddon.fit() 重新计算行列数。
+ * 字号/字体变化时调用 fitAddon.fit() 重新计算行列数，并通过 onResized 通知宿主
+ * 把新的 cols/rows 下发给 PTY —— 容器尺寸没变，ResizeObserver 不会触发，
+ * 少了这一步则 vim/htop 等按尺寸渲染的程序会在换字号后串列。
  *
- * @param isActive 终端是否当前可见（不可见时跳过 fit，避免 0x0 计算错误）
+ * @param isActive 终端是否当前可见（不可见时跳过 fit，避免 0x0 计算错误；
+ *                 重新可见时宿主的 visible 监听会补一次 fit + resize）
+ * @param onResized fit 之后回调，宿主在此下发 sshResize / ptyResize
  * @returns 取消监听函数
  */
 export function watchTerminalConfig(
   terminal: Terminal,
   fitAddon: FitAddon,
-  isActive: () => boolean
+  isActive: () => boolean,
+  onResized?: () => void
 ): () => void {
   const store = useSettingsStore()
   return watch(
@@ -91,9 +96,11 @@ export function watchTerminalConfig(
       terminal.options.fontSize = clampFontSize(size)
       terminal.options.fontFamily = getTerminalFontFamily(family)
       // 字号/字体影响单元格尺寸，需重新 fit；仅在终端可见时执行避免 0x0
-      if (isActive()) {
-        fitAddon.fit()
-      }
+      if (!isActive()) return
+      const { cols, rows } = terminal
+      fitAddon.fit()
+      // 网格未变时不打扰 PTY（同尺寸 SIGWINCH 会让部分 TUI 无谓重绘）
+      if (terminal.cols !== cols || terminal.rows !== rows) onResized?.()
     }
   )
 }

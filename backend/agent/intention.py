@@ -145,14 +145,19 @@ _SIMPLIFY_MARKERS = [
 ]
 
 # 结构信号：暗示多步骤/需要规划
+# 注意：中文条目走的是子串匹配（_any_match_wordbounded 只对纯 ASCII 做词边界），
+# 所以单字「先」会命中「优先/领先/率先」，"调整任务优先级" 曾被判成多步骤
 _MULTI_STEP_MARKERS = [
-    "先", "然后", "接着", "第一步", "第二步", "第三步", "首先", "其次", "最后",
+    "然后", "接着", "第一步", "第二步", "第三步", "首先", "其次", "最后",
     "步骤", "phase", "step 1", "step 2",
 ]
 
 # 复杂度提升信号：暗示需要全局思考
+# 同上，中文按子串匹配 —— 「系统/所有/全部」在运维提问里是日常词
+# （"查看系统负载""列出所有进程"），命中它们会把只读查询抬成 complex，
+# 白付一轮「只规划不调工具」的开销，故此处只留真正指向全局改造的短语
 _COMPLEXITY_MARKERS = [
-    "整个", "全部", "所有", "模块", "系统", "架构", "性能优化", "全量",
+    "整个", "模块", "架构", "性能优化", "全量",
     "整个项目", "整个目录",
 ]
 
@@ -214,20 +219,22 @@ def _compute_effective_budgets(max_budget: Optional[int]) -> dict[IntentionLevel
 
     策略：
     - 当 max_budget 未设置或较小时（<= 4096），使用默认的固定预算
-    - 当 max_budget 较大时（如 262144），按比例放大各等级预算：
-      - trivial: min(256, max_budget * 0.1%)
-      - simple: min(512, max_budget * 0.2%)
-      - moderate: max_budget * 5%
-      - complex: max_budget * 50%（允许深度推理）
-      - debug: max_budget * 10%
+    - 当 max_budget 较大时（如 262144），按比例放大各等级预算（只放大、不缩小，
+      下限就是上面的固定值）：
+      - trivial: max(256, max_budget * 0.1%)
+      - simple: max(512, max_budget * 0.2%)
+      - moderate: max(2048, max_budget * 5%)
+      - complex: max(4096, max_budget * 50%)（允许深度推理）
+      - debug: max(1024, max_budget * 10%)
     """
     if not max_budget or max_budget <= 4096:
         return _LEVEL_BUDGET
 
-    # 大预算模型：按比例分配
+    # 大预算模型：按比例分配。取 max 而不是 min —— 配了更大的思考上限却把
+    # trivial/simple 预算降到固定值以下（8192 时曾是 256→128、512→256）是反的。
     return {
-        IntentionLevel.TRIVIAL: min(256, max(128, int(max_budget * 0.001))),
-        IntentionLevel.SIMPLE: min(512, max(256, int(max_budget * 0.002))),
+        IntentionLevel.TRIVIAL: max(256, int(max_budget * 0.001)),
+        IntentionLevel.SIMPLE: max(512, int(max_budget * 0.002)),
         IntentionLevel.MODERATE: max(2048, int(max_budget * 0.05)),
         IntentionLevel.COMPLEX: max(4096, int(max_budget * 0.5)),  # 复杂任务可用 50% 预算
         IntentionLevel.DEBUG: max(1024, int(max_budget * 0.1)),
@@ -345,10 +352,13 @@ def classify(task: str, max_budget: Optional[int] = None) -> IntentionResult:
         level = IntentionLevel.MODERATE
         level_confidence = max(level_confidence, 0.75)
 
-    # 2.2 复杂度信号 → 提升到 complex
+    # 2.2 复杂度信号 → 提升到 complex（只读查询只到 moderate）
     has_complexity = _any_match_wordbounded(_COMPLEXITY_MARKERS, text, text_zh)
     if has_complexity and level in (IntentionLevel.TRIVIAL, IntentionLevel.SIMPLE, IntentionLevel.MODERATE):
-        level = IntentionLevel.COMPLEX
+        # complex 的引导要求「首轮只做规划、不许调用工具」（见 _LEVEL_GUIDE）。
+        # 只读查询没有数据无从规划 —— 抬到 complex 等于白烧一轮再拿 16 倍的思考预算，
+        # 「查看整个目录的日志」这类提问需要的只是多走几步，不是先写计划。
+        level = IntentionLevel.MODERATE if task_type == TaskType.QUERY else IntentionLevel.COMPLEX
         level_confidence = max(level_confidence, 0.8)
 
     # 2.3 长度信号（弱信号，仅作为提升依据，不单独降级）
@@ -388,10 +398,7 @@ def classify(task: str, max_budget: Optional[int] = None) -> IntentionResult:
         level = IntentionLevel.SIMPLE
         level_confidence = max(level_confidence, 0.75)
 
-    # 2.5 文件路径信号：纯查询但有路径仍是 trivial（如 "读取 /etc/hosts"）
-    if has_path and level == IntentionLevel.TRIVIAL and task_type == TaskType.QUERY:
-        # 纯查询但有路径，仍是 trivial（如 "读取 /etc/hosts"）
-        pass
+    # 2.5 文件路径信号不改变等级：纯查询带路径仍是 trivial（如 "读取 /etc/hosts"）
 
     # 2.6 debug 任务的特殊处理：debug 即使有复杂信号也保持 debug（不提到 complex）
     # 因为调试需要的是"假设-验证"循环，而非"长规划"
@@ -585,7 +592,7 @@ def reclassify(
     - 连续多轮工具失败 → 可能任务比预期复杂，升级
     - 工具调用数远超预期 → 任务拆解不足，升级
     - 执行顺畅、工具调用少 → 任务比预期简单，降级
-    - 接近末尾且无输出 → 提升紧急度
+    - 接近末尾 → 追加收敛提示（可达性见下方分支注释）
 
     Args:
         max_budget: 模型配置的 reasoning_tokens 上限，用于动态调整预算
@@ -646,7 +653,10 @@ def reclassify(
             changed = True
 
     # ── 紧急度提升 ──
-    # 接近末尾（剩 ≤ 3 轮）且无 content 输出 → 强调收敛
+    # 接近末尾（剩 ≤ 3 轮）→ 强调收敛。
+    # 可达性提醒：driver 只在 iteration % reclassify_interval(=5) == 0 调用本函数，
+    # 故该分支只在 max_iterations ≡ 1..3 (mod 5) 时命中（默认 100 永不命中）；
+    # driver 另有一个每轮都检查、且每 run 只发一次的同类提示。
     if remaining <= 3 and iteration > 0:
         guide += (
             "\n\n[紧急] 剩余迭代机会不多，请立即收敛到当前进度，"
@@ -680,9 +690,14 @@ def reclassify(
     )
 
 
-# ── 渐进式信息收集工具名（只读类；ssh 模式文件操作经 shell_exec，无法按名识别）──
+# ── 渐进式信息收集工具名（只读类）──
+# 原集合只有 web_*，注释还写着「ssh 模式文件操作经 shell_exec，无法按名识别」—
+# 那是拆包前的旧世界：ssh 模式现在有一批按名注册的只读工具，其中最常用的
+# file_read/file_glob/file_grep 不在集合里，等于「一口气读 5 个文件」这个
+# 最典型的批量读取形态永远触发不了渐进收集引导。
 _READ_TOOLS = frozenset({
     "web_search", "web_fetch",
+    "file_read", "file_glob", "file_grep", "log_read",
 })
 
 
@@ -701,10 +716,7 @@ def detect_batch_reading(tool_calls: list, threshold: int = 3) -> bool:
     return read_count >= threshold
 
 
-def get_progressive_gathering_guide(
-    read_tool_names: list[str],
-    iteration: int,
-) -> str:
+def get_progressive_gathering_guide(iteration: int) -> str:
     """
     渐进式信息收集引导语
 
@@ -732,6 +744,7 @@ def get_progressive_gathering_guide(
 def get_reasoning_budget_for_iteration(
     intention: IntentionResult,
     iteration: int,
+    max_budget: Optional[int] = None,
 ) -> Optional[int]:
     """
     根据当前迭代轮次返回 reasoning token 预算
@@ -741,24 +754,35 @@ def get_reasoning_budget_for_iteration(
     - 首轮 + 不允许规划 → 70% 预算（避免一次性深度思考耗尽）
     - 第 2-3 轮（信息收集阶段）→ 50% 预算（聚焦当前一步）
     - 第 4+ 轮（执行阶段）→ 40% 预算（快速决策）
-    - 接近末尾（剩 ≤ 2 轮）→ 60% 预算（总结需要适当展开）
+
+    max_budget = 模型配置的 reasoning_tokens 上限。driver 每轮把本函数的返回值
+    直接赋给 ctx.config.max_reasoning_tokens，因此这里必须自己再钳一次：
+    intention.reasoning_budget 是未钳制的等级预算，超过模型上限的值会让下一轮
+    LLM 调用带 reasoning_max_tokens 超限 → 400 → 整个 run 失败
+    （classify 路径由 driver 的 min() 防住，reclassify 路径由 max_budget 参数防住，
+    逐轮调整这条路径原先两边都没防）。
     """
     if intention.reasoning_budget is None:
         return None
 
     base = intention.reasoning_budget
 
+    def _cap(value: int) -> int:
+        if max_budget is None:
+            return value
+        return min(value, max_budget)
+
     # 首轮 + 规划阶段：完整预算
     if iteration == 0 and intention.allow_planning_phase:
-        return base
+        return _cap(base)
 
     # 首轮但不规划：70%（避免首次思考就过长）
     if iteration == 0:
-        return max(int(base * 0.7), 256)
+        return _cap(max(int(base * 0.7), 256))
 
     # 第 2-3 轮：信息收集阶段，50%（聚焦单步决策）
     if iteration <= 3:
-        return max(int(base * 0.5), 256)
+        return _cap(max(int(base * 0.5), 256))
 
     # 第 4+ 轮：执行阶段，40%（快速决策+执行）
-    return max(int(base * 0.4), 256)
+    return _cap(max(int(base * 0.4), 256))

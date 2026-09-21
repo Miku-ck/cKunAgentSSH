@@ -69,6 +69,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
 import type { QuickCommand } from '@/stores/quickCommands'
+import { PRESET_COLORS } from '@/stores/quickCommands'
 
 const props = defineProps<{
   visible: boolean
@@ -80,16 +81,7 @@ const emit = defineEmits<{
   save: [data: { name: string; command: string; color: string }]
 }>()
 
-const presetColors = [
-  '#58a6ff',
-  '#3fb950',
-  '#d29922',
-  '#f85149',
-  '#a371f7',
-  '#f778ba',
-  '#39c5cf',
-  '#8b949e',
-]
+const presetColors = PRESET_COLORS
 
 const nameInput = ref<HTMLInputElement | null>(null)
 
@@ -218,13 +210,13 @@ function handleSave() {
 
 .qc-input,
 .qc-textarea {
-  background: var(--bg-sidebar);
+  background: var(--bg-input);
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
   padding: 8px 10px;
   color: var(--text-primary);
   font-size: 13px;
-  font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+  font-family: var(--font-mono);
   outline: none;
   resize: vertical;
   transition: border-color 0.15s;

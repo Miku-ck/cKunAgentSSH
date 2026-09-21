@@ -6,7 +6,6 @@
     >
       <span></span><span></span><span></span>
     </div>
-    <slot v-else-if="$slots.custom" name="custom" />
     <MarkdownStream v-else-if="effectiveContent && markdownEnabled" :content="effectiveContent" />
     <pre v-else-if="effectiveContent" class="raw-text">{{ effectiveContent }}</pre>
   </div>

@@ -78,7 +78,9 @@
 
         <!-- 逐节点并排视图 -->
         <div v-else class="bulk-cols">
-          <div v-for="r in results" :key="r.label" class="bulk-col" :class="{ failed: r.error || (r.exitCode !== null && r.exitCode !== 0) }">
+          <!-- key 用索引：同一连接开两个会话时 hostOf() 生成的 label 相同，
+               重复 key 会让 Vue 复用错列（results 按完成顺序 push，每次执行都重建） -->
+          <div v-for="(r, ri) in results" :key="ri" class="bulk-col" :class="{ failed: r.error || (r.exitCode !== null && r.exitCode !== 0) }">
             <div class="bulk-col-head">
               <span class="mono col-name">{{ r.label }}</span>
               <span class="col-badge" :class="r.error ? 'err' : (r.exitCode === 0 ? 'ok' : 'fail')">
@@ -326,7 +328,7 @@ watch(remoteSessions, (sessions) => {
   display: flex;
   flex-direction: column;
   background: var(--bg-base);
-  border: 1px solid var(--border-subtle, #333);
+  border: 1px solid var(--border-subtle);
   border-radius: 12px;
   padding: 16px 18px;
 }
@@ -360,10 +362,10 @@ watch(remoteSessions, (sessions) => {
 .bulk-field.row { flex-direction: row; align-items: center; gap: 8px; }
 .bulk-field textarea, .bulk-field select {
   font-size: 12px;
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   padding: 6px 8px;
   border-radius: 6px;
-  border: 1px solid var(--border-subtle, #333);
+  border: 1px solid var(--border-subtle);
   background: var(--bg-base);
   color: var(--text-primary);
   resize: vertical;
@@ -371,15 +373,15 @@ watch(remoteSessions, (sessions) => {
 .bulk-quick { display: flex; gap: 6px; flex-wrap: wrap; }
 .bulk-quick-btn {
   font-size: 11px;
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   padding: 3px 8px;
   border-radius: 5px;
-  border: 1px dashed var(--border-subtle, #444);
+  border: 1px dashed var(--border-subtle);
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
 }
-.bulk-quick-btn:hover { color: var(--text-primary); border-color: var(--accent-blue); }
+.bulk-quick-btn:hover { color: var(--text-primary); border-color: var(--accent-primary); }
 
 .bulk-targets { font-size: 12px; color: var(--text-tertiary); }
 .bulk-target-list {
@@ -389,7 +391,7 @@ watch(remoteSessions, (sessions) => {
   margin-top: 6px;
   max-height: 160px;
   overflow: auto;
-  border: 1px solid var(--border-subtle, #333);
+  border: 1px solid var(--border-subtle);
   border-radius: 6px;
   padding: 8px;
 }
@@ -402,27 +404,27 @@ watch(remoteSessions, (sessions) => {
   padding: 4px 12px;
   font-size: 12px;
   border-radius: 6px;
-  border: 1px solid var(--border-subtle, #333);
+  border: 1px solid var(--border-subtle);
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
 }
 .sc-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
 .sc-btn:disabled { opacity: 0.5; cursor: default; }
-.sc-btn.primary { color: var(--accent-blue); border-color: var(--accent-blue); }
-.sc-btn.active { color: var(--accent-blue); border-color: var(--accent-blue); }
+.sc-btn.primary { color: var(--accent-primary); border-color: var(--accent-primary); }
+.sc-btn.active { color: var(--accent-primary); border-color: var(--accent-primary); }
 
 .bulk-running { padding: 30px 0; display: flex; flex-direction: column; gap: 10px; align-items: center; }
 .bulk-progress-bar {
   width: 60%;
   height: 4px;
   border-radius: 2px;
-  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+  background: var(--bg-hover);
   overflow: hidden;
 }
 .bulk-progress-bar .fill {
   height: 100%;
-  background: var(--accent-blue);
+  background: var(--accent-primary);
   transition: width 0.3s ease;
 }
 .bulk-progress-text { font-size: 12px; color: var(--text-tertiary); }
@@ -437,20 +439,20 @@ watch(remoteSessions, (sessions) => {
   max-height: 52vh;
 }
 .bulk-col {
-  border: 1px solid var(--border-subtle, #333);
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
 }
-.bulk-col.failed { border-color: var(--accent-red, #e5534b); }
+.bulk-col.failed { border-color: var(--accent-red); }
 .bulk-col-head {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 6px 10px;
-  background: var(--bg-hover, rgba(255, 255, 255, 0.04));
-  border-bottom: 1px solid var(--border-subtle, #333);
+  background: var(--bg-hover);
+  border-bottom: 1px solid var(--border-subtle);
 }
 .col-name { font-size: 12px; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .col-badge {
@@ -460,8 +462,8 @@ watch(remoteSessions, (sessions) => {
   flex-shrink: 0;
 }
 .col-badge.ok { color: var(--accent-green); background: rgba(63, 185, 80, 0.12); }
-.col-badge.fail { color: var(--accent-red, #e5534b); background: rgba(229, 83, 75, 0.12); }
-.col-badge.err { color: var(--accent-red, #e5534b); background: rgba(229, 83, 75, 0.12); }
+.col-badge.fail { color: var(--accent-red); background: rgba(229, 83, 75, 0.12); }
+.col-badge.err { color: var(--accent-red); background: rgba(229, 83, 75, 0.12); }
 .col-dur { margin-left: auto; font-size: 10px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 .bulk-col-body {
   margin: 0;
@@ -475,10 +477,10 @@ watch(remoteSessions, (sessions) => {
   flex: 1;
   max-height: 300px;
 }
-.mono { font-family: var(--font-mono, monospace); }
+.mono { font-family: var(--font-mono); }
 
 .bulk-diff {
-  border: 1px solid var(--border-subtle, #333);
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
   max-height: 52vh;
   overflow: auto;
@@ -492,18 +494,18 @@ watch(remoteSessions, (sessions) => {
   font-size: 12px;
   line-height: 1.6;
 }
-.diff-marker { width: 12px; flex-shrink: 0; color: var(--accent-orange, #e5c07b); }
+.diff-marker { width: 12px; flex-shrink: 0; color: var(--accent-orange); }
 .diff-text { color: var(--text-secondary); word-break: break-all; }
 .diff-count {
   margin-left: auto;
   flex-shrink: 0;
   font-size: 10px;
-  color: var(--accent-orange, #e5c07b);
+  color: var(--accent-orange);
   background: rgba(210, 153, 34, 0.1);
   padding: 0 5px;
   border-radius: 4px;
 }
 .bulk-diff-line.inconsistent { background: rgba(210, 153, 34, 0.07); }
-.bulk-diff-line.inconsistent .diff-text { color: var(--accent-orange, #e5c07b); }
+.bulk-diff-line.inconsistent .diff-text { color: var(--accent-orange); }
 .bulk-empty { padding: 30px 0; text-align: center; color: var(--text-tertiary); font-size: 12px; }
 </style>

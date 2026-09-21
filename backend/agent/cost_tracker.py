@@ -44,9 +44,10 @@ _MODEL_PRICING: list[tuple[str, float, float]] = [
     ("qwen-turbo",        0.05,  0.20),
     # DeepSeek
     ("deepseek",          0.14,  0.28),
-    # 默认 fallback（未知模型）
-    ("__default__",       0.50,  1.50),
 ]
+
+# 未知模型 fallback
+_DEFAULT_PRICING: tuple[float, float] = (0.50, 1.50)
 
 
 def get_model_pricing(model_id: str) -> tuple[float, float]:
@@ -59,16 +60,22 @@ def get_model_pricing(model_id: str) -> tuple[float, float]:
         (input_price, output_price) USD per 1M tokens
     """
     if not model_id:
-        return _MODEL_PRICING[-1][1], _MODEL_PRICING[-1][2]
+        return _DEFAULT_PRICING
 
     model_lower = model_id.lower()
     for keyword, in_price, out_price in _MODEL_PRICING:
-        if keyword == "__default__":
-            continue
-        if keyword in model_lower:
-            return in_price, out_price
+        start = model_lower.find(keyword)
+        while start != -1:
+            end = start + len(keyword)
+            # 命中位置后面不能紧跟字母/数字/点，否则那是另一个型号：
+            # 裸 "gpt-4"（$30/$60）曾子串命中 "gpt-4.1"、"gpt-45"、"gpt-4o"，
+            # 成本被放大十几倍 —— 默认 $2 的熔断会在真实花费几毛钱时掐断 run。
+            # "-" 仍算边界（"gpt-4-1106-preview"、"deepseek-chat" 归属本行）。
+            if end == len(model_lower) or not (model_lower[end].isalnum() or model_lower[end] == "."):
+                return in_price, out_price
+            start = model_lower.find(keyword, start + 1)
     # 默认 fallback
-    return _MODEL_PRICING[-1][1], _MODEL_PRICING[-1][2]
+    return _DEFAULT_PRICING
 
 
 def calc_cost(prompt_tokens: int, completion_tokens: int, model_id: str) -> float:

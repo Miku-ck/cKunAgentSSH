@@ -73,6 +73,7 @@ import { useSSHStore } from '@/stores/ssh'
 import { useQuickCommandsStore, type QuickCommand } from '@/stores/quickCommands'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToastStore } from '@/stores/toast'
+import { menuLeft, menuTop } from '@/utils/menu'
 import QuickCommandEditor from './QuickCommandEditor.vue'
 
 const sshStore = useSSHStore()
@@ -105,21 +106,23 @@ function sendCommand(e: MouseEvent, cmd: QuickCommand) {
   const api = window.electronAPI
   if (!api) return
   const writer = session.type === 'local' ? api.ptyWrite : api.sshWrite
-writer(sessionId, cmd.command).catch((err: any) => {
-  console.error('[quickCommand] send failed:', err)
-  toast.error('命令发送失败')
-})
+  writer(sessionId, cmd.command).catch((err: any) => {
+    console.error('[quickCommand] send failed:', err)
+    toast.error('命令发送失败')
+  })
   // 发送命令后将焦点还给活动终端，用户可手动按 Enter 执行
   window.dispatchEvent(new CustomEvent('ssh:focus-terminal'))
 }
 
 function showContextMenu(e: MouseEvent, cmd: QuickCommand) {
-  const estimatedHeight = 100
-  const viewportHeight = window.innerHeight
-  const y = e.clientY + estimatedHeight > viewportHeight
-    ? e.clientY - estimatedHeight
-    : e.clientY
-  contextMenu.value = { visible: true, x: e.clientX, y, target: cmd }
+  // 菜单 .qc-ctx-menu 是 position:fixed 且 min-width 120：此前只校了垂直方向，
+  // 靠右边缘时光标处开出的菜单会溢出视口（与标签页菜单同一修法）
+  contextMenu.value = {
+    visible: true,
+    x: menuLeft(e.clientX, 120),
+    y: menuTop(e.clientY, 100),
+    target: cmd,
+  }
 }
 
 function dismissContextMenu() {
@@ -209,7 +212,7 @@ function handleDragEnd() {
   gap: 8px;
   padding: 0 10px;
   background: var(--bg-base);
-  border-top: 1px solid var(--border-subtle, #2d2d30);
+  border-top: 1px solid var(--border-subtle);
   position: relative;
   z-index: 15;
 }
@@ -263,7 +266,7 @@ function handleDragEnd() {
 
 .qc-item.drag-over {
   background: var(--bg-hover);
-  border-color: var(--accent-blue, #0078d4);
+  border-color: var(--accent-primary);
 }
 
 
@@ -306,7 +309,7 @@ function handleDragEnd() {
   min-width: 120px;
   padding: 4px 0;
   background: var(--bg-base);
-  border: 1px solid var(--border-default, #3e3e42);
+  border: 1px solid var(--border-default);
   border-radius: 6px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
@@ -323,18 +326,18 @@ function handleDragEnd() {
 }
 
 .qc-ctx-item:hover {
-  background: var(--bg-hover, #252525);
+  background: var(--bg-hover);
   color: #ffffff;
 }
 
 .qc-ctx-item.danger:hover {
   background: rgba(248, 81, 73, 0.15);
-  color: var(--accent-red, #f48771);
+  color: var(--accent-red);
 }
 
 .qc-ctx-sep {
   height: 1px;
   margin: 4px 0;
-  background: var(--border-subtle, #2d2d30);
+  background: var(--border-subtle);
 }
 </style>

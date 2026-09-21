@@ -22,20 +22,6 @@ def _reload_skill_registry() -> None:
         logger.warning("刷新技能注册表缓存失败: %s", e)
 
 
-class CreateSkillRequest(BaseModel):
-    name: str = Field(..., min_length=1, max_length=100)
-    slug: str = Field(..., min_length=1, max_length=100)
-    system_prompt: str = Field(..., min_length=1)
-    description: Optional[str] = Field(default="")
-    category: Optional[str] = Field(default="")
-    source: Optional[str] = Field(default="manual")
-    is_builtin: Optional[int] = Field(default=0)
-    enabled: Optional[int] = Field(default=0)
-    priority: Optional[int] = Field(default=0)
-    # 触发词列表，由 database.create_skill 序列化为 JSON 存储此处直接传 list
-    trigger_words: Optional[list[str]] = Field(default_factory=list)
-
-
 class UpdateEnabledRequest(BaseModel):
     enabled: bool
 
@@ -51,34 +37,12 @@ def list_skills(limit: int = Query(default=200, ge=1, le=500),
               未指定 mode 时仅返回全局 enabled 状态。
     """
     skills = db.list_skills(limit=limit, offset=offset)
-    mode_configs = db.list_all_skill_mode_configs()
-    for s in skills:
-        s['mode_configs'] = mode_configs.get(s['id'], {})
     if mode:
         disabled_ids = set(db.list_disabled_skills_for_mode(mode))
         for s in skills:
             # mode_enabled: 该技能在该模式下是否启用（全局 enabled=1 且未在该模式 disabled 列表中）
             s['mode_enabled'] = s['enabled'] == 1 and s['id'] not in disabled_ids
     return skills
-
-
-@router.post("/skills")
-def create_skill(req: CreateSkillRequest):
-    """创建新技能（自动处理 slug 冲突）"""
-    result = db.create_skill(
-        name=req.name,
-        slug=req.slug,
-        system_prompt=req.system_prompt,
-        description=req.description or "",
-        category=req.category or "",
-        source=req.source or "manual",
-        is_builtin=req.is_builtin or 0,
-        enabled=req.enabled or 0,
-        priority=req.priority or 0,
-        trigger_words=req.trigger_words or [],
-    )
-    _reload_skill_registry()
-    return result
 
 
 @router.patch("/skills/{skill_id}/enabled")
@@ -93,13 +57,17 @@ def update_skill_enabled(
         mode: 若指定模式，则更新该模式下的启用状态（skill_mode_config 表）。
               未指定 mode 时更新全局 enabled 状态。
     """
+    # per-mode 分支原先不校验技能是否存在（无外键），任意 skill_id 都会写进
+    # skill_mode_config 并返回 200 —— 要么留下脏配置，要么让前端以为开关生效了
+    if not db.get_skill(skill_id):
+        raise HTTPException(status_code=404, detail="Skill not found")
     if mode:
         # 按模式隔离：写入 skill_mode_config 表
         result = db.upsert_skill_mode_config(skill_id, mode, 1 if req.enabled else 0)
         # 同时确保全局 enabled=1（否则 per-mode 启用无意义）
         if req.enabled:
             existing = db.get_skill(skill_id)
-            if existing and existing.get('enabled') != 1:
+            if existing.get('enabled') != 1:
                 db.update_skill_enabled(skill_id, 1)
         _reload_skill_registry()
         return result
@@ -147,6 +115,13 @@ def sync_builtin_skills(req: SyncBuiltinSkillsRequest):
 
     前端在加载内置技能后调用此接口，让后端 Agent 也能匹配到内置技能。
     """
+    if not req.skills:
+        # 空上报 ≠ 用户删光了技能：扫描 ~/.agents/skills 的逐项读取失败会被循环吞掉，
+        # IPC 抖动或目录暂时不可读都会交出空列表。按孤儿清理语义走下去等于把已同步的
+        # 全部用户目录内置技能（含 skill_mode_config 里的用户开关）一次性清空。
+        logger.warning("内置技能同步收到空列表，跳过孤儿清理")
+        return {"upserted": 0, "orphans_removed": 0, "total": 0}
+
     incoming_slugs = set()
     upserted = 0
     for item in req.skills:

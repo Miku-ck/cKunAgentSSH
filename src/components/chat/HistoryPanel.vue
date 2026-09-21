@@ -67,7 +67,7 @@ defineEmits<{
   bottom: 0;
   /* 不透明背景：历史面板打开时遮住当前对话（配合 SideChatPanel 的 v-show
      隐藏消息列表），消除半透明遮罩透出的视觉干扰 */
-  background: var(--bg-panel-solid, #141414);
+  background: var(--bg-base);
   z-index: 20;
   display: flex;
   align-items: flex-start;
@@ -85,7 +85,7 @@ defineEmits<{
   overflow: hidden;
   margin: 0 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  background: var(--bg-elevated-solid, var(--bg-panel-solid, #1e1e1e));
+  background: var(--bg-elevated-solid);
 }
 
 .history-panel-header {
@@ -94,7 +94,7 @@ defineEmits<{
   align-items: center;
   justify-content: space-between;
   padding: 0 12px;
-  border-bottom: 1px solid var(--border-subtle, #2d2d30);
+  border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
 
@@ -224,6 +224,12 @@ defineEmits<{
 }
 
 .history-panel-item:hover .history-panel-item-delete {
+  opacity: 1;
+}
+
+/* 删除键是常驻可聚焦按钮，只在 :hover 时才可见 → 键盘 Tab 聚焦到它时完全看不见。
+   :focus-within 让「键盘走到某一行」与「鼠标悬停」露出同一个删除键 */
+.history-panel-item:focus-within .history-panel-item-delete {
   opacity: 1;
 }
 

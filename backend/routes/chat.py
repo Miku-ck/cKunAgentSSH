@@ -3,13 +3,10 @@
 （普通流式对话已删除：AI 助手固定走 /agent/run，由后端自主意图识别）
 """
 import asyncio
-import logging
 import re
 from typing import Optional, Literal
 import uuid
 from pathlib import Path
-
-logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, HTTPException, Query, File, UploadFile, Form
 from pydantic import BaseModel, Field
@@ -19,29 +16,22 @@ import database as db
 router = APIRouter(tags=["chat"])
 
 
-# ── Request / Response Models ──
-# 注意：以下常量必须在 AttachmentItem 之前定义（Field 默认值在类创建时求值）
+# ── 文件上传 ──
+# 仅允许文本类扩展名（作为 LLM 上下文）；二进制/图片请走其他渠道
 MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10MB
 MAX_ATTACHMENT_CHARS = 50_000  # 注入上下文的文本上限
 
-
-class AttachmentItem(BaseModel):
-    """对话附件 — 由 /chat/upload 上传后返回，随消息一并发送"""
-    file_id: str = ""
-    filename: str = ""
-    content: str = Field("", max_length=MAX_ATTACHMENT_CHARS)
-
-
-# ── 文件上传 ──
-# 仅允许文本类扩展名（作为 LLM 上下文）；二进制/图片请走其他渠道
 ALLOWED_UPLOAD_EXTS = {
     ".txt", ".log", ".md", ".markdown", ".json", ".yaml", ".yml", ".toml",
     ".ini", ".cfg", ".conf", ".env", ".properties", ".xml", ".csv", ".tsv",
     ".sql", ".py", ".sh", ".bash", ".zsh", ".ps1", ".bat", ".cmd",
     ".js", ".ts", ".jsx", ".tsx", ".vue", ".css", ".scss", ".less", ".html", ".htm",
     ".java", ".go", ".rs", ".c", ".h", ".cpp", ".hpp", ".cs", ".php",
-    ".rb", ".pl", ".kt", ".swift", ".gradle", ".makefile", ".dockerfile",
+    ".rb", ".pl", ".kt", ".swift", ".gradle",
 }
+
+# 无扩展名的常见构建文件：Path("Makefile").suffix 是空串，只按后缀匹配永远放行不了
+ALLOWED_UPLOAD_NAMES = {"makefile", "dockerfile"}
 
 
 def _uploads_root() -> Path:
@@ -59,7 +49,7 @@ async def upload_chat_file(
     # 消毒文件名：去掉路径分隔符，最长 120 字符
     safe_name = raw_name.replace("\\", "/").split("/")[-1][:120].strip() or "unnamed"
     suffix = Path(safe_name).suffix.lower()
-    if suffix not in ALLOWED_UPLOAD_EXTS:
+    if suffix not in ALLOWED_UPLOAD_EXTS and Path(safe_name).name.lower() not in ALLOWED_UPLOAD_NAMES:
         raise HTTPException(
             status_code=400,
             detail=f"不支持的文件类型 '{suffix or safe_name}'，仅支持文本类文件（txt/log/md/代码/配置等）",
@@ -101,7 +91,9 @@ async def upload_chat_file(
 
 
 class CreateConversationRequest(BaseModel):
-    title: Optional[str] = None
+    # 与 PATCH（UpdateTitleRequest）同一上限：标题会整份写进 localStorage 的会话缓存，
+    # 建会话时不设限等于留下一条绕过校验的路径
+    title: Optional[str] = Field(None, max_length=200)
     mode: Literal["ssh"] = "ssh"  # 标记会话所属模式，用于历史隔离
 
 

@@ -38,11 +38,10 @@
     </template>
 
     <template #agent-panel>
-      <!-- 异常/决策面板：仅在出现警告/错误/人工介入/授权请求时显示 -->
-      <AgentRunPanel
-        v-if="agentStore.hasHumanHelpRequest || agentStore.hasPermissionRequest || agentStore.errorMessage || agentStore.warnings.length > 0"
-        class="agent-run-panel-ssh"
-      />
+      <!-- 异常/决策面板：自身按 agentStore.hasRunNotice 决定挂不挂载内容。
+           这里不要再写条件：曾经写过一份，而那份漏了澄清向导/任务规划/待确认交付，
+           结果是需要用户决策时面板根本没挂载，用户只看到 toast，运行等到后端超时。 -->
+      <AgentRunPanel class="agent-run-panel-ssh" />
     </template>
   </SideChatPanel>
 </template>
@@ -151,15 +150,15 @@ onMounted(() => {
   border: none;
   border-radius: 4px;
   background: transparent;
-  color: var(--text-secondary, #9a9a9a);
+  color: var(--text-secondary);
   cursor: pointer;
 }
 .memory-btn:hover {
-  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
-  color: var(--text-primary, #d4d4d4);
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 .memory-btn.active {
-  color: var(--accent-primary, #7aa2d0);
-  background: var(--bg-active, rgba(255, 255, 255, 0.08));
+  color: var(--accent-primary);
+  background: var(--bg-active);
 }
 </style>

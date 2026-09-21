@@ -26,8 +26,9 @@ class CreateModelRequest(BaseModel):
     supports_image: bool = False
     supports_tool_calling: bool = False
     temperature: float = Field(0.7, ge=0, le=2)
-    # 默认 4096：远低于常见 vLLM 16K/32K 上下文窗口，避免输出预算占满导致 400
-    max_tokens: int = Field(4096, ge=1, le=1000000)
+    # max_tokens = 上下文窗口（与 models_config 列默认及 create_model_config 一致）；
+    # 输出预算由 max_output_tokens 单独控制，不要在这里压低窗口。
+    max_tokens: int = Field(16384, ge=1, le=1000000)
     max_output_tokens: int = Field(4096, ge=1, le=1000000)
     # 推理/思考内容的独立 token 预算（Qwen3 等模型支持 enable_thinking 时使用）
     reasoning_tokens: int = Field(8192, ge=0, le=1000000, description="推理内容最大 token 数，0 表示使用 max_output_tokens")
@@ -236,7 +237,9 @@ async def test_model_connection(config_id: str):
 
 class MemorySettingsRequest(BaseModel):
     enabled: bool = True
-    strategy: str = "auto"
+    # 白名单与前端 settings 仓库的 union 同口径（stores/settings.ts 只认 auto/manual，
+    # 回填时其余值静默丢弃）：这里不校验的话，脏值能写进库并一直留在配置接口里
+    strategy: Literal["auto", "manual"] = "auto"
     max_items: int = Field(100, ge=10, le=500)
 
 
@@ -263,20 +266,10 @@ class ConversationRetentionRequest(BaseModel):
     keep_count: int = Field(1000, ge=0, le=100000)
 
 
-def _conv_retention() -> dict:
-    enabled = (db.get_app_setting("conv_retention.enabled", "false") or "false").lower() == "true"
-    raw = db.get_app_setting("conv_retention.keep_count")
-    try:
-        keep = int(raw) if raw is not None else 1000
-    except (ValueError, TypeError):
-        keep = 1000
-    return {"enabled": enabled, "keep_count": keep}
-
-
 @router.get("/settings/conv-retention")
 def get_conv_retention():
     """获取会话保留设置（默认关闭）。开启后按 keep_count 清理最旧的已结束会话。"""
-    return _conv_retention()
+    return db.get_conv_retention()
 
 
 @router.put("/settings/conv-retention")
@@ -284,7 +277,7 @@ def update_conv_retention(req: ConversationRetentionRequest):
     """更新会话保留设置。enabled=false（默认）时不做任何自动清理。"""
     db.set_app_setting("conv_retention.enabled", "true" if req.enabled else "false")
     db.set_app_setting("conv_retention.keep_count", str(req.keep_count))
-    return _conv_retention()
+    return db.get_conv_retention()
 
 
 # ── 后处理设置 ──
@@ -364,9 +357,6 @@ class WebToolsSettingsRequest(BaseModel):
 @router.put("/settings/web-tools")
 def update_web_tools_settings(req: WebToolsSettingsRequest):
     """保存/清除 Tavily API Key（存 app_settings；环境变量优先级更高）"""
-    key = req.tavily_api_key.strip()
-    if key:
-        db.set_app_setting("web.tavily_api_key", key)
-    else:
-        db.set_app_setting("web.tavily_api_key", "")
+    # 空串即清除，不必分分支写：set_app_setting(key, "") 就是清除态
+    db.set_app_setting("web.tavily_api_key", req.tavily_api_key.strip())
     return get_web_tools_settings()

@@ -1,6 +1,6 @@
 /**
  * 模型选择器 Composable
- * 从 AiChatPanel / SshAiPanel 中提取的通用模型选择逻辑。
+ * 从 SideChatPanel 中提取的通用模型选择逻辑（聊天与 SSH AI 面板共用同一宿主）。
  */
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import type { ModelConfig } from '@/api/client'

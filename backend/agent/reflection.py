@@ -498,6 +498,9 @@ class MetaReflection:
     def load_recent_reflections(self, mode: str, limit: int = 3) -> list[dict]:
         """
         加载最近的高分反思，作为系统提示的一部分
+
+        仅用于 prompt 注入：低分反思是失败结论，教给模型反而有害。
+        演化引擎不要用它（见 load_reflections_for_evolution）。
         """
         import database as db
         try:
@@ -511,6 +514,25 @@ class MetaReflection:
             return valid[:limit]
         except Exception as e:
             logger.warning("加载反思策略失败: %s", e)
+            return []
+
+    def load_reflections_for_evolution(self, mode: str, limit: int = 10) -> list[dict]:
+        """取最近 limit 条反思给演化引擎 —— 不做高分过滤、不按分数排序
+
+        演化要的是「最近跑成什么样」，尤其是跑砸的样本。原先演化复用了
+        load_recent_reflections（高分 + 按分数降序的注入视图）：
+        - avg_score 恒 >= 0.5 → 规则 6「综合分低 → 打开 enable_thinking」永不触发
+        - 取的是分数最高的前 N 条，失败运行被排除在样本外，
+          于是「修失败」的演化机制对失败运行结构性失明
+        """
+        import database as db
+        try:
+            rows = db.get_agent_strategies(
+                mode=mode, strategy_type="reflection", limit=limit
+            )
+            return [r for r in rows if r.get("enabled", 1)]
+        except Exception as e:
+            logger.warning("加载演化用反思失败: %s", e)
             return []
 
     def build_prompt_injection(self, reflections: list[dict]) -> str:

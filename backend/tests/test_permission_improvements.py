@@ -151,6 +151,38 @@ def test_deny_strictly_run_scoped():
     assert g.check_permission("shell_exec", {"command": CMD2}, run_id="runA") is False
 
 
+def test_once_grant_after_deny_lifts_deny():
+    """拒绝后再点「允许本次」→ 显式授权必须生效。
+
+    回归点：无命令可绑定的工具（授权键是裸工具名，如 ops_* 的只读类工具）一次
+    拒绝即整 run 禁用 —— check_permission 先查 is_denied 直接 False，之后每次
+    授权只写进无人消费的池子，卡片反复弹到审批超时，而审计却记为 approved。
+    """
+    g = _gate()
+    g.deny_command("web_fetch", None, "runA")
+    assert g.check_permission("web_fetch", {"url": "https://a"}, run_id="runA") is False
+
+    g.grant("web_fetch", scope="once", run_id="runA")
+    assert g.check_permission("web_fetch", {"url": "https://a"}, run_id="runA") is True
+
+
+def test_deny_after_once_grant_still_blocks():
+    """顺序相反时优先权在拒绝：先授权后拒绝 → 残留的 once 额度也不得消费"""
+    g = _gate()
+    g.grant("web_fetch", scope="once", run_id="runA")
+    g.deny_command("web_fetch", None, "runA")
+    assert g.check_permission("web_fetch", {"url": "https://a"}, run_id="runA") is False
+
+
+def test_session_grant_does_not_lift_deny():
+    """session/always 授权不解除拒绝标记：本 run 的拒绝仍优先于一揽子授权（原契约不变）"""
+    g = _gate()
+    g.deny_command("web_fetch", None, "runA")
+    g.grant("web_fetch", scope="session", conversation_id="c1", run_id="runA")
+    assert g.check_permission(
+        "web_fetch", {"url": "https://a"}, conversation_id="c1", run_id="runA") is False
+
+
 def test_cleanup_run_denied():
     g = _gate()
     g.deny_command("shell_exec", CMD, "runA")

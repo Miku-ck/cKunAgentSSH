@@ -7,14 +7,9 @@
     <div class="panel-body">
       <SettingRow label="主题" desc="切换整体界面主题">
         <select v-model="settings.appearance.theme" class="setting-select">
-          <option value="dark">深色</option>
-          <option value="light">浅色</option>
-          <option value="blue-screen">蓝屏</option>
-          <option value="forest">森林</option>
-          <option value="mint">薄荷</option>
-          <option value="bee">蜜蜂</option>
-          <option value="coral">珊瑚</option>
-          <option value="system">跟随系统</option>
+          <!-- 选项由 themeLabels（Record<Theme, string>）枚举：新增主题忘了配文案直接编译报错，
+               而不是像原来那样靠手抄 <option> 与 useAppearance 的 Theme 对齐全靠人眼 -->
+          <option v-for="(label, value) in themeLabels" :key="value" :value="value">{{ label }}</option>
         </select>
       </SettingRow>
 
@@ -39,24 +34,6 @@
           <option :value="14">14px</option>
           <option :value="15">15px</option>
         </select>
-      </SettingRow>
-
-      <SettingRow label="侧边栏宽度" desc="Work 模式左侧栏宽度">
-        <div class="slider-row">
-          <input
-            type="range"
-            v-model.number="settings.appearance.sidebarWidth"
-            min="200"
-            max="320"
-            step="4"
-            class="setting-range"
-          />
-          <span class="slider-value">{{ settings.appearance.sidebarWidth }}px</span>
-        </div>
-      </SettingRow>
-
-      <SettingRow label="紧凑模式" desc="减少内边距，显示更多内容">
-        <ToggleSwitch v-model="settings.appearance.compact" />
       </SettingRow>
 
       <SettingRow label="动效" desc="界面过渡与动画效果">
@@ -84,20 +61,13 @@
 
         <SettingRow label="渐变形态" desc="渐变的整体样式">
           <select v-model="settings.appearance.themeGradientMode" class="setting-select">
-            <option value="glow">顶部微光</option>
-            <option value="linear">线性渐变</option>
-            <option value="radial">放射渐变</option>
+            <option v-for="(label, value) in gradientModeLabels" :key="value" :value="value">{{ label }}</option>
           </select>
         </SettingRow>
 
         <SettingRow v-if="settings.appearance.themeGradientMode !== 'glow'" label="渐变方向" desc="渐变方向（放射形态为起点位置）">
           <select v-model="settings.appearance.themeGradientDirection" class="setting-select">
-            <option value="tb">上 → 下</option>
-            <option value="bt">下 → 上</option>
-            <option value="lr">左 → 右</option>
-            <option value="rl">右 → 左</option>
-            <option value="tlbr">左上 → 右下</option>
-            <option value="trbl">右上 → 左下</option>
+            <option v-for="(label, value) in gradientDirectionLabels" :key="value" :value="value">{{ label }}</option>
           </select>
         </SettingRow>
 
@@ -221,6 +191,7 @@ import { useToastStore } from '@/stores/toast'
 import SettingRow from '@/components/settings/fields/SettingRow.vue'
 import ToggleSwitch from '@/components/settings/fields/ToggleSwitch.vue'
 import { TERMINAL_FONT_OPTIONS } from '@/composables/useTerminalConfig'
+import { ACCENT_MAP, type Accent, type GradientDirection, type GradientMode, type Theme } from '@/composables/useAppearance'
 
 const settingsStore = useSettingsStore()
 const settings = settingsStore.settings
@@ -319,19 +290,52 @@ watch(
 )
 onMounted(() => loadPreview(settings.appearance.backgroundImage))
 
-type Accent = 'blue' | 'purple' | 'green' | 'orange' | 'white' | 'forest' | 'mint' | 'bee' | 'coral'
+// 文案表按 Record<联合, string> 写：漏一条 = 编译错误，多一条 = 类型错误。
+// 强调色的 hex 直接取 ACCENT_MAP（原先面板另抄一份 hex，蓝色已经和实际下发的
+// #0078d4 不一致：色板显示 #58a6ff，点下去界面却是另一个蓝）。
+const themeLabels: Record<Theme, string> = {
+  dark: '深色',
+  light: '浅色',
+  'blue-screen': '蓝屏',
+  forest: '森林',
+  mint: '薄荷',
+  bee: '蜜蜂',
+  coral: '珊瑚',
+  system: '跟随系统',
+}
 
-const accentOptions: { value: Accent; label: string; color: string }[] = [
-  { value: 'blue',   label: '蓝色', color: '#58a6ff' },
-  { value: 'purple', label: '紫色', color: '#c586c0' },
-  { value: 'green',  label: '绿色', color: '#4ec9b0' },
-  { value: 'orange', label: '橙色', color: '#ce9178' },
-  { value: 'white',  label: '白色', color: '#ffffff' },
-  { value: 'forest', label: '森林', color: '#2ea44f' },
-  { value: 'mint',   label: '薄荷', color: '#5eead4' },
-  { value: 'bee',    label: '蜜蜂', color: '#f5c542' },
-  { value: 'coral',  label: '珊瑚', color: '#ff7b72' },
-]
+const accentLabels: Record<Accent, string> = {
+  blue: '蓝色',
+  purple: '紫色',
+  green: '绿色',
+  orange: '橙色',
+  white: '白色',
+  forest: '森林',
+  mint: '薄荷',
+  bee: '蜜蜂',
+  coral: '珊瑚',
+}
+
+const accentOptions = (Object.keys(accentLabels) as Accent[]).map(value => ({
+  value,
+  label: accentLabels[value],
+  color: ACCENT_MAP[value].hex,
+}))
+
+const gradientModeLabels: Record<GradientMode, string> = {
+  glow: '顶部微光',
+  linear: '线性渐变',
+  radial: '放射渐变',
+}
+
+const gradientDirectionLabels: Record<GradientDirection, string> = {
+  tb: '上 → 下',
+  bt: '下 → 上',
+  lr: '左 → 右',
+  rl: '右 → 左',
+  tlbr: '左上 → 右下',
+  trbl: '右上 → 左下',
+}
 
 // 终端字体选项
 const terminalFontOptions = TERMINAL_FONT_OPTIONS
@@ -363,7 +367,7 @@ const terminalFontOptions = TERMINAL_FONT_OPTIONS
   padding: 0 24px 0 8px;
   background: var(--bg-input);
   border: 1px solid var(--border-input);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--radius-sm);
   color: var(--text-primary);
   font-size: 12px;
   font-family: inherit;
@@ -494,7 +498,7 @@ const terminalFontOptions = TERMINAL_FONT_OPTIONS
   padding: 0 12px;
   background: var(--bg-input);
   border: 1px solid var(--border-input);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--radius-sm);
   color: var(--text-primary);
   font-size: 12px;
   font-family: inherit;
@@ -509,12 +513,12 @@ const terminalFontOptions = TERMINAL_FONT_OPTIONS
 }
 
 .bg-btn.danger {
-  color: var(--text-danger, #f85149);
+  color: var(--danger-text);
   border-color: var(--border-input);
 }
 
 .bg-btn.danger:hover {
-  border-color: var(--text-danger, #f85149);
+  border-color: var(--danger-text);
   background: rgba(248, 81, 73, 0.1);
 }
 
@@ -528,7 +532,7 @@ const terminalFontOptions = TERMINAL_FONT_OPTIONS
   width: 120px;
   height: 72px;
   object-fit: cover;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border-input);
   background: var(--bg-input);
 }

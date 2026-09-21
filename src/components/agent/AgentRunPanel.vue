@@ -3,12 +3,16 @@
  * AgentRunPanel — Agent 运行过程通知面板（异常/需要用户决策时显示）
  *
  * 实际包含的区块（均为条件渲染，无内容时整块隐藏）:
+ * - 澄清向导（ClarifyingWizard：自带 visible 门控 + Teleport，不受下方整块开关影响）
  * - 任务规划（意图分类：级别/任务类型/思考预算）
  * - 警告（warnings）
  * - 人工介入求助卡片（AI 请求帮助，可忽略）
  * - 工具授权请求（允许本次/始终允许/忽略，命令工具绑定命令哈希）
  * - 可见终端执行：待确认命令（确认/拒绝）与在途交付状态徽章
  * - 错误（errorMessage）
+ *
+ * 整块的显隐由 agentStore.hasRunNotice 决定（数据侧单一判定，逐区块对齐）——
+ * 宿主组件不要再抄一份条件：漏掉一项就等于那块内容永远不挂载。
  *
  * 注：常规运行状态（thinking/acting、迭代计数、工具调用流）不在本面板展示 —
  * 工具调用明细见消息气泡内联轨迹（AgentTraceInline / ToolOperationList）。
@@ -47,16 +51,19 @@ function taskTypeLabel(type: string): string {
   return map[type] || type
 }
 
-/** 可见终端交付状态的人读文案 */
-function deliveryStatusLabel(status: string): string {
+/** 可见终端交付状态的人读文案（失败态附退出码，与汇总栏失败口径对齐） */
+function deliveryStatusLabel(status: string, exitCode: number | null = null): string {
   const map: Record<string, string> = {
     capturing: '执行中',
     done: '已完成',
     rejected: '已拒绝',
     aborted: '已中止',
+    timeout: '超时',
+    failed: '失败',
     writing: '写入中',
   }
-  return map[status] || status
+  const label = map[status] || status
+  return status === 'failed' && exitCode !== null ? `${label}(exit ${exitCode})` : label
 }
 
 /** 风险等级人读文案：英文 dangerous/moderate 对非专业用户没有信息量 */
@@ -88,18 +95,18 @@ async function denyRequest(reqId: string) {
  *  命令工具始终允许时绑定该条具体命令，不会覆盖其他 dangerous 命令） */
 async function grantPermission(reqId: string, tool: string, scope: 'once' | 'always') {
   const req = agentStore.permissionRequests.find(r => r.id === reqId)
-  if (!req || req.granting || req.resolved) return
+  if (!req || req.settling || req.resolved) return
   // 命令取 payload 原文（后端 permission_display_fields.command）：它才是授权键实际
   // 绑定的那条串。原先从 args.command 猜，job_run 用的是 args.cmd 因而永远传空 →
   // 键退化成裸工具名；file_write 更是根本没有 command 参数。
   const command = req.command
-  req.granting = true
+  req.settling = true
   try {
     // 回传发起审批的 run_id / 会话 id：once 按 run 键控、session 按会话键控
     await agentApi.grantPermission(tool, scope, command, req.runId, req.conversationId)
     agentStore.resolvePermission(reqId, true)
   } catch (e) {
-    req.granting = false
+    req.settling = false
     console.error('授权失败:', e)
     toast.error('授权失败，请重试')
   }
@@ -115,7 +122,7 @@ function cardCommand(req: PermissionRequest): string {
 
 <template>
   <ClarifyingWizard />
-  <div class="agent-run-panel">
+  <div v-if="agentStore.hasRunNotice" class="agent-run-panel">
     <!-- 规划/意图信息 -->
     <div class="intention-section" v-if="agentStore.intentionInfo">
       <div class="intention-header">
@@ -255,20 +262,21 @@ function cardCommand(req: PermissionRequest): string {
         <div v-else class="permission-actions">
           <button
             class="permission-btn permission-btn-grant"
-            :disabled="req.granting"
+            :disabled="req.settling"
             @click="grantPermission(req.id, req.tool, 'once')"
           >
-            {{ req.granting ? '授权中...' : '允许本次' }}
+            {{ req.settling ? '处理中...' : '允许本次' }}
           </button>
           <button
             class="permission-btn permission-btn-grant"
-            :disabled="req.granting"
+            :disabled="req.settling"
             @click="grantPermission(req.id, req.tool, 'always')"
           >
             {{ cardCommand(req) ? '始终允许此命令' : '始终允许' }}
           </button>
           <button
             class="permission-btn permission-btn-deny"
+            :disabled="req.settling"
             @click="denyRequest(req.id)"
           >拒绝</button>
         </div>
@@ -322,7 +330,7 @@ function cardCommand(req: PermissionRequest): string {
         <span
           class="delivery-badge"
           :class="`badge-${d.status}`"
-        >{{ deliveryStatusLabel(d.status) }}</span>
+        >{{ deliveryStatusLabel(d.status, d.exit_code) }}</span>
       </div>
     </div>
 
@@ -695,7 +703,7 @@ function cardCommand(req: PermissionRequest): string {
   background: var(--bg-base);
   padding: 1px 6px;
   border-radius: 3px;
-  color: var(--accent-cyan, #7aa2d0);
+  color: var(--accent-cyan);
 }
 
 .permission-tool {
@@ -717,7 +725,7 @@ function cardCommand(req: PermissionRequest): string {
 }
 
 .permission-tool code.normalized-cmd {
-  color: var(--accent-cyan, #7aa2d0);
+  color: var(--accent-cyan);
   font-style: italic;
 }
 
@@ -754,7 +762,7 @@ function cardCommand(req: PermissionRequest): string {
 
 .permission-btn-deny {
   background: transparent;
-  border-color: var(--danger-border, var(--border-default));
+  border-color: var(--danger-border);
   color: var(--danger-text);
 }
 
@@ -846,7 +854,7 @@ function cardCommand(req: PermissionRequest): string {
 
 .delivery-btn-confirm {
   background: var(--status-success-bg);
-  border-color: var(--status-success-border, var(--border-default));
+  border-color: var(--status-success-border);
   color: var(--status-success-text);
 }
 
@@ -896,7 +904,8 @@ function cardCommand(req: PermissionRequest): string {
 }
 
 .badge-capturing,
-.badge-writing {
+.badge-writing,
+.badge-timeout {
   background: var(--status-warn-bg);
   color: var(--status-warn-text);
 }
@@ -907,7 +916,8 @@ function cardCommand(req: PermissionRequest): string {
 }
 
 .badge-rejected,
-.badge-aborted {
+.badge-aborted,
+.badge-failed {
   background: var(--status-error-bg);
   color: var(--status-error-text);
 }

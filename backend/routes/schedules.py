@@ -9,7 +9,6 @@ POST   /api/schedules/{id}/run — 立即执行
 GET    /api/schedules/{id}/runs— 执行历史
 """
 import asyncio
-import logging
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -18,14 +17,15 @@ from pydantic import BaseModel, Field
 import database as db
 from agent.schedule_engine import get_schedule_engine, compute_next_run
 
-logger = logging.getLogger(__name__)
 router = APIRouter(tags=["schedules"])
 
 _SCHEDULE_TYPES = {"interval", "daily", "weekly", "monthly"}
 
 
 class ScheduleIn(BaseModel):
-    name: str = Field(..., min_length=1)
+    # 上限与前端列表卡片一致：名称会整份进每 3s 一轮的列表响应，
+    # 无上限等于允许贴一整篇文档进来
+    name: str = Field(..., min_length=1, max_length=100)
     schedule_type: str = "interval"
     # 审查修复：加范围校验 — 0/负值入库后 compute_next_run 算出 ≤now 的时间，
     # 每 30s tick 都触发无头 SSH Agent 运行，持续消耗模型调用与 SSH 连接
@@ -58,6 +58,16 @@ _SCHEDULE_KEYS = {
     "schedule_type", "interval_minutes", "time_hour", "time_minute",
     "weekday", "day_of_month",
 }
+
+
+def _drop_nulls(patch: dict) -> dict:
+    """PATCH 中显式 null 与"未提供"等价，一律丢弃。
+
+    这些字段在库里 NOT NULL 且参与 compute_next_run/_validate_fields 的 int()，
+    原样透传会让 {"interval_minutes": null} 变成 int(None) 的 500，
+    或把 NULL 写进调度列导致任务永不触发。
+    """
+    return {k: v for k, v in patch.items() if v is not None}
 
 
 @router.get("/schedules")
@@ -95,22 +105,32 @@ async def update_schedule(schedule_id: str, req: SchedulePatch):
     existing = await asyncio.to_thread(db.get_schedule, schedule_id)
     if not existing:
         raise HTTPException(status_code=404, detail="任务不存在")
-    patch = req.model_dump(exclude_unset=True)
+    patch = _drop_nulls(req.model_dump(exclude_unset=True))
     merged = {**existing, **patch}
     if merged.get("schedule_type") not in _SCHEDULE_TYPES:
         raise HTTPException(status_code=400, detail=f"不支持的周期类型: {merged.get('schedule_type')}")
     _validate_fields(merged)
     updated = await asyncio.to_thread(db.update_schedule, schedule_id, patch)
-    # 仅当调度参数发生变化时重算下次执行时间；toggle 启停不重算
-    if _SCHEDULE_KEYS & set(patch.keys()):
+    if not updated:
+        # 校验与写入之间任务被另一个窗口删掉
+        raise HTTPException(status_code=404, detail="任务不存在")
+    # 调度参数变化，或从停用恢复为启用时重算下次执行时间。
+    # 恢复启用必须重算：停用期间 next_run_at 早已过期，带着旧值启用会在
+    # 下一个 tick 立即补跑一次；停用方向（true→false）不重算，保持原语义。
+    reenabled = patch.get("enabled") is True and not existing.get("enabled")
+    if (_SCHEDULE_KEYS & set(patch.keys())) or reenabled:
         next_at = compute_next_run(updated)
         await asyncio.to_thread(db.set_schedule_next_run, schedule_id, next_at)
+        # 重读后返回：updated 取于写 next_run_at 之前，直接回给调用方会带上
+        # 旧的下次执行时间（改周期后接口显示与新周期不符）
+        return await asyncio.to_thread(db.get_schedule, schedule_id)
     return updated
 
 
 @router.delete("/schedules/{schedule_id}")
 async def delete_schedule(schedule_id: str):
-    ok = await asyncio.to_thread(db.delete_schedule, schedule_id)
+    # 走 engine：先取消在途的无头 Agent run 并落定执行历史，再删行
+    ok = await get_schedule_engine().remove_schedule(schedule_id)
     if not ok:
         raise HTTPException(status_code=404, detail="任务不存在")
     return {"ok": True}
@@ -123,7 +143,11 @@ async def run_schedule_now(schedule_id: str):
         raise HTTPException(status_code=404, detail="任务不存在")
     engine = get_schedule_engine()
     engine.ensure_started()
-    await engine.trigger(sched)
+    started = await engine.trigger(sched, manual=True)
+    if not started:
+        # 上一次还没跑完：trigger 会静默丢弃本次触发，此时回 ok:true 等于
+        # 让前端弹「已触发立即执行」而实际什么都没发生
+        raise HTTPException(status_code=409, detail="该任务正在执行中，请等本次结束后再触发")
     return {"ok": True, "schedule_id": schedule_id}
 
 

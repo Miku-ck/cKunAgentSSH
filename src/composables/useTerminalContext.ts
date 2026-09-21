@@ -52,11 +52,11 @@ export function useTerminalContext(opts: UseTerminalContextOptions) {
       askAiBtn.value.visible = false
       return
     }
-    positionAskAiBtn(terminal, sel)
+    positionAskAiBtn(terminal)
   }
 
   /** 悬浮按钮定位：取选区左上角（视口内坐标 → 容器坐标） */
-  function positionAskAiBtn(terminal: Terminal, _sel: string): void {
+  function positionAskAiBtn(terminal: Terminal): void {
     // xterm getSelectionPosition() 返回 IBufferRange = { start:{x,y}, end:{x,y} }，
     // 没有顶层 x/y —— 误用 pos.x/pos.y 会恒为 undefined → 算出 NaN → 按钮不可用。
     const range = terminal.getSelectionPosition?.()

@@ -76,8 +76,10 @@
                 <span class="param-value">{{ m.temperature ?? 0.7 }}</span>
               </div>
               <div class="param-chip">
-                <span class="param-label">Max</span>
-                <span class="param-value">{{ formatTokenCount(m.max_tokens ?? 4096) }}</span>
+                <!-- 这个值是「上下文窗口」不是「最大回复长度」——标签写成 Max 会被
+                     读成输出上限，与表单里「输入（上下文长度）」的叫法也对不上 -->
+                <span class="param-label" title="上下文窗口（输入长度）">Ctx</span>
+                <span class="param-value">{{ formatTokenCount(m.max_tokens ?? DEFAULT_CONTEXT_TOKENS) }}</span>
               </div>
               <div class="param-chip">
                 <span class="param-label">Top-P</span>
@@ -278,7 +280,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { reactive, ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
@@ -294,20 +296,25 @@ interface ProviderDef {
   label: string
   baseUrl: string
   isLocal: boolean
-  icon: string
 }
 
 const PROVIDERS: ProviderDef[] = [
-  { id: 'vllm', label: '自定义', baseUrl: 'http://localhost:8000/v1', isLocal: true, icon: '' },
-  { id: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', isLocal: false, icon: '' },
-  { id: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', isLocal: false, icon: '' },
-  { id: 'qwen', label: 'Qwen', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', isLocal: false, icon: '' },
-  { id: 'kimi', label: 'Kimi', baseUrl: 'https://api.moonshot.cn/v1', isLocal: false, icon: '' },
-  { id: 'glm', label: 'GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', isLocal: false, icon: '' },
-  { id: 'xiaomi', label: 'Xiaomi', baseUrl: 'https://api.xiaomimimo.com/v1', isLocal: false, icon: '' },
-  { id: 'anthropic', label: 'Anthropic', baseUrl: 'https://api.anthropic.com/v1', isLocal: false, icon: '' },
-
+  { id: 'vllm', label: '自定义', baseUrl: 'http://localhost:8000/v1', isLocal: true },
+  { id: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', isLocal: false },
+  { id: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', isLocal: false },
+  { id: 'qwen', label: 'Qwen', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', isLocal: false },
+  { id: 'kimi', label: 'Kimi', baseUrl: 'https://api.moonshot.cn/v1', isLocal: false },
+  { id: 'glm', label: 'GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', isLocal: false },
+  { id: 'xiaomi', label: 'Xiaomi', baseUrl: 'https://api.xiaomimimo.com/v1', isLocal: false },
+  { id: 'anthropic', label: 'Anthropic', baseUrl: 'https://api.anthropic.com/v1', isLocal: false },
 ]
+
+// 上下文窗口默认值必须与后端一致：models_config.max_tokens 列默认 16384，
+// 消费方（routes/agent.py 的 max_context_tokens、schedule_engine）也都是 16384。
+// 面板这里若用 4096，新建模型会把窗口悄悄缩到 1/4（safe_max_tokens 随之压低输出
+// 预算、历史被更早截断），编辑一条 max_tokens 为 NULL 的旧行更会把 4096 落库。
+const DEFAULT_CONTEXT_TOKENS = 16384
+const DEFAULT_OUTPUT_TOKENS = 4096
 
 const INPUT_TOKEN_OPTIONS = [4096, 8192, 16384, 262144, 1000000]
 const OUTPUT_TOKEN_OPTIONS = [4096, 8192, 16384, 262144, 1000000]
@@ -334,8 +341,8 @@ const form = reactive({
   supports_image: false,
   supports_tool_calling: false,
   temperature: 0.7,
-  max_tokens: 4096,
-  max_output_tokens: 4096,
+  max_tokens: DEFAULT_CONTEXT_TOKENS,
+  max_output_tokens: DEFAULT_OUTPUT_TOKENS,
 })
 
 const selectedProvider = computed(() => PROVIDERS.find(p => p.id === form.provider))
@@ -370,8 +377,8 @@ function resetForm() {
   form.supports_image = false
   form.supports_tool_calling = false
   form.temperature = 0.7
-  form.max_tokens = 4096
-  form.max_output_tokens = 4096
+  form.max_tokens = DEFAULT_CONTEXT_TOKENS
+  form.max_output_tokens = DEFAULT_OUTPUT_TOKENS
 }
 
 function openCreateDialog() {
@@ -407,8 +414,8 @@ function openEditDialog(m: ModelConfig) {
   form.supports_image = !!m.supports_image
   form.supports_tool_calling = !!m.supports_tool_calling
   form.temperature = m.temperature ?? 0.7
-  form.max_tokens = m.max_tokens ?? 4096
-  form.max_output_tokens = m.max_output_tokens ?? 4096
+  form.max_tokens = m.max_tokens ?? DEFAULT_CONTEXT_TOKENS
+  form.max_output_tokens = m.max_output_tokens ?? DEFAULT_OUTPUT_TOKENS
   // 默认隐藏 API Key
   showApiKey.value = false
   showAdvanced.value = false
@@ -423,6 +430,17 @@ function closeDialog() {
 async function handleSave() {
   if (!canSave.value) return
   const trim = (s: string) => (s || '').trim()
+  // 数字输入框可以被清空或手打成越界值（min/max 只约束步进器，不拦手打）。
+  // 原样提交会撞上后端 Field 的同款区间（0-2 / 1-1000000）→ pydantic 原文进 toast。
+  // 提交前按后端口径钳制，并把钳好的值写回表单，避免界面显示 5、实际存 2。
+  const clampNum = (value: unknown, fallback: number, lo: number, hi: number) => {
+    const n = typeof value === 'number' ? value : Number(value)
+    if (!Number.isFinite(n)) return fallback
+    return Math.min(hi, Math.max(lo, n))
+  }
+  form.temperature = clampNum(form.temperature, 0.7, 0, 2)
+  form.max_tokens = clampNum(form.max_tokens, DEFAULT_CONTEXT_TOKENS, 1, 1000000)
+  form.max_output_tokens = clampNum(form.max_output_tokens, DEFAULT_OUTPUT_TOKENS, 1, 1000000)
   const payload: any = {
     name: trim(form.name),
     base_url: trim(form.base_url),
@@ -641,7 +659,7 @@ return String(n)
   margin-top: 6px;
 }
 .param-chip {
-  background: var(--bg-sidebar);
+  background: var(--bg-input);
   border: 1px solid #2d2d30;
   border-radius: 4px;
   padding: 3px 8px;
@@ -796,7 +814,7 @@ return String(n)
 .form-input {
   width: 100%;
   padding: 8px 10px;
-  background: var(--bg-sidebar);
+  background: var(--bg-input);
   border: 1px solid #2d2d30;
   border-radius: 6px;
   color: var(--text-primary);
@@ -855,7 +873,7 @@ return String(n)
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  background: var(--bg-sidebar);
+  background: var(--bg-input);
   border: 1px solid #2d2d30;
   border-radius: 6px;
   color: var(--text-primary);
@@ -921,7 +939,7 @@ return String(n)
   font-size: 13px;
   color: var(--text-secondary);
   cursor: pointer;
-  background: var(--bg-sidebar);
+  background: var(--bg-input);
   transition: all 0.15s;
   user-select: none;
 }
@@ -1020,7 +1038,7 @@ return String(n)
 }
 .token-chip {
   padding: 5px 12px;
-  background: var(--bg-sidebar);
+  background: var(--bg-input);
   border: 1px solid #2d2d30;
   border-radius: 6px;
   font-size: 12px;

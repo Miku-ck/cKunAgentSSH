@@ -45,7 +45,10 @@ export async function assertSafePath(targetPath: string): Promise<void> {
   const home = homedir()
   const homeResolved = pathResolve(home)
   // 检查是否直接访问主目录下的敏感子目录
-  if (resolved.startsWith(homeResolved)) {
+  // 审查修复：用 isInside（Windows 大小写归一 + 分隔符边界）替代裸 startsWith，
+  // 否则 homedir() 大小写与 realpath 规范形式不一致时（C:\Users\CKUN vs ...\ckun）
+  // 整个顶层敏感块被跳过，.env/.npmrc/.yarnrc/.docker/.gpg（仅在此列）绕过拦截
+  if (isInside(resolved, homeResolved)) {
     const relative = resolved.slice(homeResolved.length).replace(/^[\\/]+/, '')
     let topLevel = relative.split(/[\\/]/)[0]
     // E19 修复：Windows 路径大小写不敏感 — 先 toLowerCase 再比对，

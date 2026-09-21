@@ -134,6 +134,26 @@ def test_web_tools_key_length_capped(settings_client, monkeypatch):
     assert resp.status_code == 422
 
 
+def test_memory_settings_strategy_whitelist(settings_client, monkeypatch):
+    """strategy 只认前端 union 的 auto|manual：脏值此前能直接写进配置库"""
+    import routes.settings as settings_mod
+    store: dict[str, str] = {}
+    monkeypatch.setattr(settings_mod.db, "get_app_setting",
+                        lambda k, d=None: store.get(k, d))
+    monkeypatch.setattr(settings_mod.db, "set_app_setting",
+                        lambda k, v: store.__setitem__(k, v))
+
+    resp = settings_client.put("/api/settings/memory", json={"strategy": "telepathy"})
+    assert resp.status_code == 422
+    assert "memory.strategy" not in store
+
+    resp = settings_client.put("/api/settings/memory",
+                               json={"enabled": True, "strategy": "manual", "max_items": 50})
+    assert resp.status_code == 200
+    assert store["memory.strategy"] == "manual"
+    assert store["memory.max_items"] == "50"
+
+
 def test_web_tools_search_fallback(web_tools_key_resolution_env):
     """web_search._get_tavily_key：env 优先，env 缺失回退 DB"""
     tool_cls, patcher = web_tools_key_resolution_env

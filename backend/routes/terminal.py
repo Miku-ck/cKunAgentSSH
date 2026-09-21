@@ -6,6 +6,7 @@ POST /api/terminal/predict — 根据终端上下文预测下一步可能输入�
 import asyncio
 import json
 import logging
+from contextlib import aclosing
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -17,6 +18,12 @@ from database import get_model_config as _db_get_model_config_raw
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["terminal"])
+
+# 审查修复（P2 E8）：LLM 调用加整体超时 — 原实现流式读取无上限时间保护，
+# LLM 服务挂起或慢响应时该端点永久阻塞，连接池耗尽后影响所有 FastAPI 请求
+# （包括健康检查）。15s 对预测类短回复已足够。
+# 提成常量是为了让测试能把流挂起路径的等待压到毫秒级
+_LLM_TIMEOUT_S = 15.0
 
 
 def _get_model_config(model_id: str):
@@ -124,30 +131,28 @@ async def predict_terminal_command(req: TerminalPredictRequest):
 
     full_content = ""
     try:
-        chunk_iter = chat_stream(
-            base_url=model_cfg["base_url"],
-            api_key=model_cfg["api_key"],
-            model=model_cfg.get("model_id") or model_cfg["id"],
-            messages=messages,
-            temperature=temperature,
-            top_p=top_p,
-            max_tokens=max_tokens,
-        )
-
-        # 审查修复（P2 E8）：LLM 调用加整体超时 — 原实现流式读取无上限时间
-        # 保护，LLM 服务挂起或慢响应时该端点永久阻塞，连接池耗尽后
-        # 影响所有 FastAPI 请求（包括健康检查）。15s 对预测类短回复已足够
+        # aclosing：超时取消时生成器停在半途，不显式关闭就要等 GC ——
+        # llm_adapter 的 _client_in_flight 计数不归零，会挡住客户端 LRU 回收
         async def _read_stream() -> str:
             parts: list[str] = []
-            async for chunk in chunk_iter:
-                if chunk.content:
-                    parts.append(chunk.content)
+            async with aclosing(chat_stream(
+                base_url=model_cfg["base_url"],
+                api_key=model_cfg["api_key"],
+                model=model_cfg.get("model_id") or model_cfg["id"],
+                messages=messages,
+                temperature=temperature,
+                top_p=top_p,
+                max_tokens=max_tokens,
+            )) as chunk_iter:
+                async for chunk in chunk_iter:
+                    if chunk.content:
+                        parts.append(chunk.content)
             return "".join(parts)
 
-        full_content = await asyncio.wait_for(_read_stream(), timeout=15.0)
+        full_content = await asyncio.wait_for(_read_stream(), timeout=_LLM_TIMEOUT_S)
 
     except asyncio.TimeoutError:
-        logger.warning("Terminal predict LLM call timed out (15s)")
+        logger.warning("Terminal predict LLM call timed out (%ss)", _LLM_TIMEOUT_S)
         return TerminalPredictResponse(predictions=[], model_used=model_id)
     except Exception as e:
         logger.warning(f"Terminal predict LLM call failed: {e}")

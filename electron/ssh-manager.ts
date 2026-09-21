@@ -16,6 +16,11 @@ import { createHash } from 'crypto'
 /** exec 命令输出累积上限（1MB），超过后截断并在返回结果附提示，防止无界内存增长 */
 const MAX_EXEC_OUTPUT_BYTES = 1024 * 1024
 
+/** 断连修复：会话处于自动/手动重连期间，exec 等待会话重新入池的上限。
+ *  等待仅在存在重连条目时触发；覆盖大多数前几秒内恢复的路径级抖动，
+ *  超时/条目消失仍抛 SESSION_NOT_FOUND（重连随后会继续，无需阻塞 exec）。 */
+const EXEC_RECONNECT_WAIT_MS = 10000
+
 // ════════════════════════════════════════════════
 //   传输错误分类（断点续传 / 友好提示 / 自动重试依据）
 // ════════════════════════════════════════════════
@@ -315,8 +320,9 @@ interface SSHSession {
 
 /**
  * 重连修复：自动重连状态（每个交互式 shell 会话一条，key 为会话 id）。
- * - 意外断开（网络抖动/服务端断连）时由 destroySession 触发，最多 3 次、
- *   退避 1s/3s/9s；凭据由主进程自 SSHStore 读取，渲染层无需传递
+ * - 意外断开（网络抖动/服务端断连）时由 destroySession 触发，最多 12 次、
+ *   退避 1/3/9/27s…封顶 30s（累计约 4~5 分钟窗口）；凭据由主进程自 SSHStore
+ *   读取，渲染层无需传递
  * - 用户主动断开（关 tab/断开按钮）与删除连接配置会取消本条目
  */
 interface ReconnectEntry {
@@ -334,10 +340,16 @@ interface ReconnectEntry {
 }
 
 /** 自动重连最大尝试次数 */
-const RECONNECT_MAX_ATTEMPTS = 3
-/** 重连退避：1s / 3s / 9s（×3 指数） */
+const RECONNECT_MAX_ATTEMPTS = 12
+/** 单次退避延迟的上限（秒基数）—— 防止指数退避在长窗口内拖到数百秒 */
+const RECONNECT_MAX_DELAY_MS = 30000
+/**
+ * 断连修复：重连退避 1s/3s/9s/27s…，单次封顶 30s，共 12 次=累计约 4~5 分钟窗前
+ * 才 give-up。对齐开源方案（Tabby 等）：大多数路径级抖动在前几秒内恢复，
+ * 拉长窗口让终端在网络恢复后自己续上，而不是短暂断网即判死。
+ */
 function reconnectDelayMs(attempt: number): number {
-  return 1000 * Math.pow(3, attempt - 1)
+  return Math.min(1000 * Math.pow(3, attempt - 1), RECONNECT_MAX_DELAY_MS)
 }
 
 /**
@@ -521,7 +533,10 @@ export class SSHManager {
       username: config.username,
       readyTimeout: config.readyTimeout ?? 15000,
       keepaliveInterval: config.keepaliveInterval ?? 10000,
-      keepaliveCountMax: 3,
+      // 断连修复：keepaliveCountMax 由 3 提升到 10 — 原值连续 3 次心跳无应答
+      // （约 30~50s 网络抖动）即判死主动掐断，是"频繁自动断开"的直接诱因。
+      // 10 次≈容忍 100s 无应答，短暂休眠/WiFi 漫游/NAT 空闲冻结不再触发断开。
+      keepaliveCountMax: 10,
       // 启用 SSH 压缩：对文本/代码/日志类小文件有明显加速效果
       // （对已压缩的图片/视频/zip 等无收益但也不会显著变慢，ssh2 会自适应）
       compress: true,
@@ -529,6 +544,16 @@ export class SSHManager {
       // 每次连接构造独立闭包捕获本连接的 host:port，避免并发连接共享单槽位
       // 导致的跨主机串扰与 fail-open（见 verifyHostKey 注释）。
       hostVerifier: (key: Buffer) => this.verifyHostKey(`${config.host}:${config.port}`, key),
+    }
+
+    // 断连诊断：设置环境变量 SSH_DEBUG=1 时，把 ssh2 传输层日志打到主进程控制台，
+    // 用于拿到"频繁自动断开"的确切断开原因（超时/对端 DISCONNECT/握手失败/RST 等）。
+    // 平时关闭避免刷屏。
+    if (process.env.SSH_DEBUG) {
+      connectConfig.debug = (msg: string) => {
+        const tag = config.id || `${config.username}@${config.host}:${config.port}`
+        console.log(`[ssh2] ${tag} ${msg}`)
+      }
     }
 
     if (config.authType === 'password') {
@@ -674,6 +699,7 @@ export class SSHManager {
 
             // Shell 关闭（D14：统一走 destroySession，去重通知）
             stream.on('close', () => {
+              console.warn(`[ssh] 会话 ${id} 交互 shell 通道已关闭`)
               this.destroySession(id, client)
               // 审查 M-6 修复：shell 通道关闭不等于 SSH 连接结束 — 原实现只删
               // session 并通知前端，底层 client socket 一直挂着（client 的 'close'
@@ -723,9 +749,14 @@ export class SSHManager {
         // 而非泛化的 AUTH_UNKNOWN。password/passphrase 已在 buildConnectConfig
         // 后清除，但 authType 未被清除，此处可用
         wrappedReject(SSHError.from(err, undefined, config.authType))
+        // 断连诊断：连接就绪后（exec/监控期间）的传输层错误，原实现因 wrappedReject
+        // 早已 resolve 而无从观测。记入主进程控制台，用于定位"频繁自动断开"的根因。
+        console.error(`[ssh] 会话 ${id} 连接级错误:`, err?.message || err, { name: config.name })
       })
 
       client.on('close', () => {
+        // 断连诊断：记录连接级 close（在此并不会带原因，原因在上方 error 已打点）
+        console.warn(`[ssh] 会话 ${id} 连接已关闭（${this.sessions.has(id) ? '意外' : '已移除'}）`)
         // D14 修复：close 统一清理 + 通知（destroySession 内部去重，恰好一次）
         // 重连修复：传入 client — 重连场景下旧 client 的迟到 close 事件据此识别为陈旧事件
         this.destroySession(id, client)
@@ -766,14 +797,35 @@ export class SSHManager {
     }
   }
 
+  /**
+   * 断连修复：取 exec 的目标会话。若会话瞬时缺失但存在重连条目（该会话正在
+   * 自动/手动重连，会话 id 不变），则等待会话重新入池，避免重连窗口内的
+   * ssh:exec（监控轮询 / Agent 工具调用）立即抛 SESSION_NOT_FOUND。
+   * 等待上限 EXEC_RECONNECT_WAIT_MS；期间重连条目消失（取消/gave-up/主动断开）
+   * 或超时仍无会话 → 返回 null（由调用方抛 SESSION_NOT_FOUND）。
+   */
+  private async resolveSessionForExec(sshSessionId: string): Promise<SSHSession | null> {
+    if (this.sessions.has(sshSessionId)) return this.sessions.get(sshSessionId)!
+    // 无重连条目（如 SFTP 专用连接、用户主动断开）：不等待，立即失败
+    if (!this.reconnects.has(sshSessionId)) return null
+    const deadline = Date.now() + EXEC_RECONNECT_WAIT_MS
+    while (this.reconnects.has(sshSessionId)) {
+      const session = this.sessions.get(sshSessionId)
+      if (session) return session
+      if (Date.now() >= deadline) return null
+      await new Promise<void>((r) => setTimeout(r, 250))
+    }
+    return null
+  }
+
   /** 在已建立的 SSH 连接上执行一次性命令，返回 stdout / stderr / exitCode */
   async execCommandWithExitCode(
     sshSessionId: string,
     command: string,
     timeout = 30,
   ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
-const session = this.sessions.get(sshSessionId)
-if (!session) throw new SSHError('SESSION_NOT_FOUND')
+    const session = await this.resolveSessionForExec(sshSessionId)
+    if (!session) throw new SSHError('SESSION_NOT_FOUND')
 
     return new Promise((resolve, reject) => {
       let settled = false
@@ -997,7 +1049,7 @@ if (!session) throw new SSHError('SESSION_NOT_FOUND')
       entry.inFlight = false
       console.warn(`[ssh] 重连第 ${attempt}/${RECONNECT_MAX_ATTEMPTS} 次失败:`, err instanceof Error ? err.message : err)
       if (attempt >= RECONNECT_MAX_ATTEMPTS) {
-        // 3 次全部失败：通知前端显示手动「重连」按钮
+        // 全部尝试失败：通知前端显示手动「重连」按钮
         this.safeSend('ssh:reconnect', {
           id, phase: 'gave-up', attempt, maxAttempts: RECONNECT_MAX_ATTEMPTS, reason: 'exhausted',
         })

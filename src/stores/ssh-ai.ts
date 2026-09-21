@@ -5,7 +5,7 @@
  * 原 createModeChatStore 通用工厂仅剩本文件一个调用方，已收敛内联至此
  * （固定 Agent 模式重构的收尾清理）。
  */
-import { computed, ref, triggerRef, watch } from 'vue'
+import { ref, triggerRef, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { useSSHStore } from './ssh'
 import { useAgentStore } from './agent'
@@ -17,6 +17,10 @@ import { useChatPersistence } from '@/composables/useChatPersistence'
 import { useModelsStore } from './models'
 import { finalizeAgentMessage, type AgentMessage } from '@/utils/finalizeAgentMessage'
 import type { ModeConversation, ModeMessage } from '@/types/chat'
+
+// 后端 AgentRunRequest.task 的 max_length（routes/agent.py），与聊天输入框的
+// maxlength 同值：改这里必须同时改那两处，否则要么附件永远塞不进、要么 422。
+const TASK_CHAR_LIMIT = 50000
 
 // ── SSH 特有数据模型 ──
 
@@ -63,27 +67,23 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   async function getDefaultModelId(): Promise<string | undefined> {
     const modelsStore = useModelsStore()
     if (modelsStore.models.length === 0) await modelsStore.fetchModels()
+    const list = modelsStore.models
+    // 只有列表非空才谈「失效」：fetchModels 失败会把列表留空，据空列表判定失效
+    // 就把用户手选的模型静默换成了后端默认值 —— 取不到列表 ≠ 模型已删除。
+    const usable = (id?: string) => !list.length || list.some((m: ModelConfig) => m.id === id)
     const sid = persistence.selectedModelId.value
-    if (sid && modelsStore.models.some((m: ModelConfig) => m.id === sid)) {
-      return sid
-    }
+    if (sid && usable(sid)) return sid
     try {
       const def = await api.getDefaultModel('ssh')
-      if (def?.id) return def.id
+      if (def?.id && usable(def.id)) return def.id
     } catch { /* ignore */ }
-    return modelsStore.models[0]?.id
+    return list[0]?.id
   }
 
   // P2 修复：store 初始化时合并后端会话列表。
   // 历史原仅靠 localStorage 恢复，换设备/清本地后丢失；后端保存了已同步的完整列表。
   // fire-and-forget：store 工厂在 pinia setup 内执行，不阻塞面板渲染。
   void persistence.syncBackendConversations()
-
-  /** 当前选中的模型配置（从 models store 中查找） */
-  const selectedModel = computed<ModelConfig | null>(() => {
-    const modelsStore = useModelsStore()
-    return modelsStore.models.find((m: ModelConfig) => m.id === persistence.selectedModelId.value) ?? modelsStore.models[0] ?? null
-  })
 
   // ── 模型选择 ──
 
@@ -111,11 +111,17 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     // P2 修复：启动合并进来的后端会话本地无消息缓存（messages:[]），
     // 切到时按需从后端拉取一次并固化到本地，避免"选中了却是空对话"
     const conv = persistence.currentConversation.value
-    if (conv && conv.messages.length === 0 && (conv as any).backendConvId) {
+    if (conv && conv.messages.length === 0 && conv.backendConvId) {
       try {
-        // Message[] → ModeMessage[]：后端消息结构与本地结构兼容，显式断言
-        const msgs = (await api.getMessages((conv as any).backendConvId)) as unknown as ModeMessage[]
-        conv.messages = msgs
+        // Message[] → ModeMessage[]：后端行是 snake_case 的 agent_trace，UI 读的是
+        // camelCase 的 agentTrace —— 原实现直接断言，重载后的历史消息既没有执行过程
+        // 卡片也没有轨迹回放入口（数据在库里，只是没接到渲染层）
+        const rows = (await api.getMessages(conv.backendConvId)) as unknown as Array<
+          ModeMessage & { agent_trace?: ModeMessage['agentTrace'] }
+        >
+        conv.messages = rows.map(({ agent_trace, ...rest }) =>
+          agent_trace ? { ...rest, agentTrace: agent_trace } : rest,
+        )
         persistence.save()
         notifyConversationsChanged()
       } catch (e) {
@@ -173,17 +179,15 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
         (m) => m.role === 'assistant' && String(m.id).startsWith('temp-agent-'),
       )
       if (!hasPlaceholder) {
-        conv.messages = conv.messages.filter(
-          (m) => !(m.role === 'assistant' && String(m.id).startsWith('temp-agent-')),
-        )
+        // 本轮占位不在（已固化过或从未写入）：不固化，只回收彻底空的会话，
+        // 避免历史列表留下一条空条目
         if (conv.messages.length === 0) {
-          // 空会话（仅剩占位）直接移除，避免历史列表出现空条目
           persistence.conversations.value = persistence.conversations.value.filter((c) => c.id !== conv.id)
           if (persistence.currentConvId.value === conv.id) {
             persistence.currentConvId.value = persistence.conversations.value[0]?.id ?? null
           }
+          notifyConversationsChanged()
         }
-        notifyConversationsChanged()
         return
       }
       // 结构上满足 AgentMessage 最小接口，显式断言（与固化函数签名对齐）
@@ -202,33 +206,21 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   const appStore = useAppStore()
   const toast = useToastStore()
 
-  const agentRunning = computed(() => agentStore.isRunning)
-
   // 后端就绪后自动加载模型，复用共享的 models
+  // 只缓存"进行中的那次加载"，落地即释放：一次抖动/一次删模型都能立刻重试，
+  // 不必等某个固定超时
   let modelInitPromise: Promise<void> | null = null
-  function ensureModelLoaded() {
+  function ensureModelLoaded(): Promise<void> | undefined {
     if (modelInitPromise) return modelInitPromise
     if (appStore.backendStatus !== 'ready') return
-    modelInitPromise = (async () => {
-      if (persistence.selectedModelId.value) return
-      await fetchDefaultModel()
-      // 完成后清除缓存，允许后续重试
-      modelInitPromise = null
+    const pending = (async () => {
+      if (!persistence.selectedModelId.value) await fetchDefaultModel()
     })()
-    // 超时清理：30秒后清除缓存，防止永久阻塞
-    let modelInitTimer: ReturnType<typeof setTimeout> | null = null
-    modelInitTimer = setTimeout(() => {
-      modelInitPromise = null
-      modelInitTimer = null
-    }, 30000)
-    // promise 完成时清理超时定时器
-    modelInitPromise.finally(() => {
-      if (modelInitTimer) {
-        clearTimeout(modelInitTimer)
-        modelInitTimer = null
-      }
+    modelInitPromise = pending
+    pending.finally(() => {
+      if (modelInitPromise === pending) modelInitPromise = null
     }).catch(() => {})
-    return modelInitPromise
+    return pending
   }
   watch(() => appStore.backendStatus, ensureModelLoaded, { immediate: true })
 
@@ -285,7 +277,9 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
 
   /** 活动终端现场上下文（selection 为空时不传）— 供「问 AI」入口采集。
    *  sessionId 标记快照来源终端：发送前切 tab/关会话时用于防串主机（见 sendMessage） */
-  function getTerminalSnapshot(): { sessionId: string | null; selection: string; cwd: string; recent: string[] } {
+  type TerminalSnapshot = { sessionId: string | null; selection: string; cwd: string; recent: string[] }
+
+  function getTerminalSnapshot(): TerminalSnapshot {
     const sshStore = useSSHStore()
     const session = sshStore.activeSession
     const sel = session ? sshStore.getTerminalSelection(session.id) : ''
@@ -298,10 +292,13 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     }
   }
 
-  // 暂存「问 AI」时采集的现场快照：点击按钮即清空终端选区登记，若发送时重新采集
-  // 会拿到空 selection；且预填草稿与快照必须绑定同一终端——sessionId 不一致时
-  // （发送前切 tab / 原会话已关闭）发送端会丢弃该快照，防"主机 B 的身份 + 主机 A 的现场"。
-  let pendingSnapshot: { sessionId: string | null; selection: string; cwd: string; recent: string[] } | null = null
+  // 暂存「问 AI」时采集的现场快照，三态语义：
+  //   undefined — 未表态（面板里直接输入）→ 发送时现场采集
+  //   null      — 纯文本入口刻意不要终端现场（批量下发结果 / 监控指标 / 失败诊断，
+  //               问题文本已自带上下文；活动终端与问题所指主机未必同一台）
+  //   对象      — 点击「问 AI」时暂存的现场（选区登记随即被清空，只能此刻采集）；
+  //               发送时来源终端已切走/关闭则丢弃改现场采集，防"主机 B 身份 + 主机 A 现场"
+  let pendingSnapshot: TerminalSnapshot | null | undefined
 
   /** 终端「问 AI」入口：选中内容 → 预填 AI 面板问题草稿（上下文随消息自动注入） */
   function askAiAboutSelection(question?: string) {
@@ -310,8 +307,9 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     if (!q && !snap.selection) return
     const text = q || '请分析下面选中的终端输出：'
     pendingPrefill.value = { text }
-    // 仅在确有选区/终端现场时暂存快照，供发送时优先消费
-    pendingSnapshot = snap.selection || snap.cwd || snap.recent.length ? snap : null
+    // 调用方自带问题文本（监控指标「问 AI」）时不暂存现场：问题所指主机与活动
+    // 终端未必同一台，拼进无关终端的选区/历史只会误导模型。
+    pendingSnapshot = q ? null : snap
     if (!showAiPanel.value) showAiPanel.value = true
   }
 
@@ -366,9 +364,22 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   /** 上传文件（对话附件）：逐个调用后端 /chat/upload，失败项 toast 提示并跳过 */
   async function uploadFiles(files: File[]): Promise<ChatAttachment[]> {
     const results: ChatAttachment[] = []
+    // 附件目录必须按「后端会话 id」归档：删除会话的级联清理只认这个键
+    // （DELETE /chat/conversations/<backendConvId> → rmtree uploads/<backendConvId>）。
+    // 之前传的是本地 id，两边永远对不上，附件文件全部成为孤儿且无法回收。
+    const conv = persistence.currentConversation.value
+    let backendConvId = conv?.backendConvId || ''
+    if (conv && !backendConvId) {
+      try {
+        await persistence.ensureBackendConversation(conv)
+        backendConvId = conv.backendConvId || ''
+      } catch {
+        // 后端会话建不出来：退回共享的 general 目录，不因此阻断上传
+      }
+    }
     for (const file of files) {
       try {
-        const att = await api.uploadChatFile(persistence.currentConvId.value || '', file)
+        const att = await api.uploadChatFile(backendConvId, file)
         results.push(att)
       } catch (e: any) {
         const detail = e?.detail || e?.message || String(e)
@@ -392,14 +403,32 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   }
 
   async function _sendAgentMessageInner(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = []): Promise<boolean> {
-    // 附带文件拼入任务文本：Agent 走 /agent/run，直接注入内容让 LLM 读取
+    // 附带文件拼入任务文本：Agent 走 /agent/run，直接注入内容让 LLM 读取。
+    // 预算必须卡在这里：后端 AgentRunRequest.task 有 max_length=50000（与输入框
+    // maxlength 同值），而每个附件各自可达 5 万字符——原样拼接会让整条消息在第一个
+    // token 之前撞 422，用户只看到一句校验错误。放不下的附件整体丢弃并点名：
+    // 塞半截文件比不要更容易骗人（模型会把它当全文下结论）。
     let effectiveContent = content
     if (attachments.length > 0) {
       const parts = [content]
+      let budget = TASK_CHAR_LIMIT - content.length
+      const dropped: string[] = []
       for (const att of attachments) {
-        parts.push(`[附件: ${att.filename}]\n${att.content}`)
+        // 后端只注入前 50K 字符（truncated 标记）：不告诉模型「这是节选」，它会
+        // 把开头当成整份文件下结论（"日志里没有 ERROR"其实是被截断了）
+        const head = att.truncated ? `${att.filename}（文件过大，以下仅为开头节选）` : att.filename
+        const block = `[附件: ${head}]\n${att.content}`
+        if (block.length + 2 > budget) {
+          dropped.push(att.filename)
+          continue
+        }
+        parts.push(block)
+        budget -= block.length + 2  // +2 = join 用的空行
       }
       effectiveContent = parts.join('\n\n')
+      if (dropped.length) {
+        toast.error(`问题长度已达上限，以下附件未注入：${dropped.join('、')}`, 6000)
+      }
     }
     if (agentStore.isRunning) {
       toast.error('AI 正在运行中，请等待完成或先中止')
@@ -412,27 +441,25 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       return false
     }
 
-    // 复用共享模型检查逻辑：确保已选模型有效
-    if (!persistence.selectedModelId.value) {
-      await fetchDefaultModel()
-    }
+    // 复用共享模型检查逻辑：确保已选模型有效（含"有效性"——残留的死 id 也要在这里
+    // 换成能用的，只在「没选」时兜底的话，删掉当前模型后每次发送都吃 404）
+    await fetchDefaultModel()
     if (!persistence.selectedModelId.value) {
       toast.error('请先选择模型')
       return false
     }
 
-    // 优先消费「问 AI」时暂存的现场快照（选区登记已被点击清除，重新采集会为空）。
-    // 防串主机：快照记录来源终端 sessionId，发送时活动会话已切走（或原会话已关闭）
-    // 则丢弃暂存、改现场采集——否则会拼出"主机 B 的身份 + 主机 A 的选区/命令"的矛盾上下文。
-    // 无暂存（普通输入）时直接现场采集。
-    let snapshot = pendingSnapshot
-    if (
-      !snapshot ||
-      (snapshot.sessionId && snapshot.sessionId !== useSSHStore().activeSessionId)
-    ) {
+    // 消费暂存快照（三态语义见 pendingSnapshot 定义）。纯文本入口标 null 时必须
+    // 跳过现场采集——原先这里无条件重新采集，把「不采集终端上下文」的入口约定
+    // 又破掉了：批量下发/AI 诊断发问时会混入此刻活跃的无关终端选区与命令历史。
+    const staged = pendingSnapshot
+    pendingSnapshot = undefined
+    let snapshot: TerminalSnapshot =
+      staged === null ? { sessionId: null, selection: '', cwd: '', recent: [] } : staged ?? getTerminalSnapshot()
+    // 防串主机：暂存快照来源终端已切走（或原会话已关闭）→ 改现场采集
+    if (snapshot.sessionId && snapshot.sessionId !== useSSHStore().activeSessionId) {
       snapshot = getTerminalSnapshot()
     }
-    pendingSnapshot = null
     const ctx = buildContext(snapshot.selection, snapshot.recent)
     if (ctx) ctx.cwd = snapshot.cwd || undefined
     const systemPrompt = buildSystemPrompt(ctx)
@@ -488,7 +515,10 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       // 后端据此把 shell_exec 交付到当前可见终端执行（而非 headless）
       sshSessionId: ctx?.sessionId || useSSHStore().activeSessionId || undefined,
       environment: ctx?.environment || 'test',
-      enableThinking: false,
+      // 面板没有「深度思考」开关 —— 显式传 false 等于把该字段永久钉死：
+      // 后端演化配置（Evolution 学到的 enable_thinking）因客户端总是表态而被忽略。
+      // 省略 = 未表态，交给演化配置决定（用户若加了开关再显式传值即可覆盖）。
+      enableThinking: undefined,
       enableTools: true,
       maxIterations: useSettingsStore().settings.agent.maxIterations,
       enableDynamicBudget: useSettingsStore().settings.agent.dynamicBudget,

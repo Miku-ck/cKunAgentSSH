@@ -59,7 +59,6 @@ import { useSSHStore } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
 import { buildTerminalOptions, watchTerminalConfig } from '@/composables/useTerminalConfig'
 import { stripAnsiBackground } from '@/utils/terminal-colors'
-import { ingestOutput } from '@/composables/useAgentDeliver'
 import { toFriendlyMessage } from '@/api/client'
 import { useTerminalContext } from '@/composables/useTerminalContext'
 
@@ -293,7 +292,11 @@ onMounted(() => {
   startTerminalContext()
 
   // 监听终端配置变化，动态应用主题/字号/字体（无需重建终端）
-  unsubTermConfig = watchTerminalConfig(terminal, fitAddon, () => props.visible)
+  // 换字号后容器尺寸不变、ResizeObserver 不会触发，新行列数要在回调里主动下发给 PTY
+  unsubTermConfig = watchTerminalConfig(terminal, fitAddon, () => props.visible, () => {
+    if (!terminal) return
+    api.sshResize(props.sshId, terminal.cols, terminal.rows).catch(() => {})
+  })
 
   // 拦截按键：Tab 触发补全；补全可见时 ↑↓/Enter/Esc/Tab 控制浮层
   // 在 document 级别 capture 阶段拦截 keydown，确保比 xterm 自己的 capture 监听更早触发
@@ -439,8 +442,7 @@ onMounted(() => {
     if (id === props.sshId) {
       dataBuffer += data
       flushBuffer(false)
-      // 可见终端执行模式：喂给交付编排器解析 BEGIN/END 哨兵捕获输出
-      ingestOutput(id, data)
+      // 可见终端执行的哨兵捕获已集中到 useAgentDeliver 的全局订阅，组件只管显示
     }
   })
 
@@ -570,11 +572,12 @@ onUnmounted(() => {
   unsubClose?.()
   unsubReconnect?.()
   unsubTermConfig?.()
-  // 仅当 session 仍在 store 中时才主动断开 SSH
-  // 避免 closeSession 已调用 sshDisconnect 后,组件卸载又重复调用造成冗余 IPC
-  if (props.sshId && window.electronAPI && sshStore.sessions.some(s => s.id === props.sshId)) {
-    window.electronAPI.sshDisconnect(props.sshId)
-  }
+  // 组件卸载【不】断开 SSH 连接：Vue 在 vite HMR 会卸载/重挂本组件
+  // （RemoteTerminal / SshView / DashboardView 任一模块被热更新时），
+  // 若在此调用 sshDisconnect 会把一条仍健康的实时连接整体 tear down
+  // （client.end() → DISCONNECT），导致主进程处频繁报 SESSION_NOT_FOUND。
+  // 真实关闭终端走的是显式 closeSession → sshDisconnect（会先从 store 移除
+  // 会话），此处只负责组件级清理，不负责连接生命周期。
   terminal?.dispose()
   // 审查修复（P2）：卸载后 terminal 置 null — 原实现只 dispose 不清引用，
   // 卸载窗口内 ssh:write/渲染回调的守卫失效，会在已 dispose 实例上操作
@@ -637,9 +640,9 @@ defineExpose({
   gap: 8px;
   height: 30px;
   padding: 0 12px;
-  background: var(--bg-elevated, #1a1a1e);
-  border-bottom: 1px solid var(--border-subtle, #2d2d30);
-  color: var(--text-secondary, #969696);
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
   font-size: 12px;
   z-index: 5;
 }
@@ -647,8 +650,8 @@ defineExpose({
 .reconnect-spinner {
   width: 12px;
   height: 12px;
-  border: 2px solid var(--border-default, #3a3a3e);
-  border-top-color: var(--accent-blue);
+  border: 2px solid var(--border-default);
+  border-top-color: var(--accent-primary);
   border-radius: 50%;
   animation: reconnect-spin 0.8s linear infinite;
   flex-shrink: 0;
@@ -659,23 +662,23 @@ defineExpose({
 }
 
 .reconnect-text-failed {
-  color: var(--accent-red, #f48771);
+  color: var(--accent-red);
 }
 
 .reconnect-btn {
   margin-left: auto;
   padding: 2px 14px;
-  border: 1px solid var(--accent-blue);
-  border-radius: var(--radius-sm, 4px);
+  border: 1px solid var(--accent-primary);
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--accent-blue);
+  color: var(--accent-primary);
   font-size: 12px;
   cursor: pointer;
   transition: all var(--transition-fast);
 }
 
 .reconnect-btn:hover:not(:disabled) {
-  background: var(--accent-blue);
+  background: var(--accent-primary);
   color: #fff;
 }
 
@@ -696,18 +699,18 @@ defineExpose({
   align-items: center;
   gap: 4px;
   padding: 3px 8px;
-  border: 1px solid var(--accent-indigo, #7aa2d0);
+  border: 1px solid var(--accent-indigo);
   border-radius: 4px;
-  background: var(--bg-elevated-solid, #232323);
-  color: var(--accent-indigo-soft, #9db8d9);
+  background: var(--bg-elevated-solid);
+  color: var(--accent-indigo-soft);
   font-size: 11px;
   cursor: pointer;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
-  transition: all var(--transition-fast, 0.15s);
+  transition: all var(--transition-fast);
 }
 
 .ask-ai-float-btn:hover {
-  background: var(--accent-indigo, #7aa2d0);
+  background: var(--accent-indigo);
   color: #fff;
 }
 

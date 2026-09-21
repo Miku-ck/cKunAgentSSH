@@ -19,8 +19,15 @@ const FIXTURE = [
   'PORT=tcp|[::]|22',
   'PORT=udp|127.0.0.1|323',
   'PORT=udp|[::1]|323',
-  'GPU=0|NVIDIA A100-PCIE-40GB|87|15360|40960|62',
-  'GPU=1|NVIDIA A100-PCIE-40GB|12|4096|40960|45',
+  'SWAP_TOTAL=4096',
+  'SWAP_USED=204',
+  'GPU=0|NVIDIA A100-PCIE-40GB|87|15360|40960|62|222.75|300|N/A|1965|9802|GPU-abc0|580.173.02|00000000:41:00.0|P0|Enabled|Default|N/A',
+  'GPU=1|NVIDIA A100-PCIE-40GB|12|4096|40960|45|111.5|300|60|1500|9802|GPU-abc1|580.173.02|00000000:81:00.0|P8|Enabled|Default|3',
+  'GPUCUDA=13.0',
+  'GPROC=GPU-abc0|443545|1008|python run_ipose_service.py',
+  'GPROC=GPU-abc1|3134324|42961|VLLM::EngineCore',
+  'GPS=443545|root|0.0|0.5|16-05:32:11',
+  'GPS=3134324|root|1.5|1.0|73:08:55',
   '===END===',
 ].join('\n')
 
@@ -64,7 +71,7 @@ describe('parseMetricsRaw', () => {
     expect(m!.ports[3]).toEqual({ proto: 'udp', addr: '[::1]', port: 323 })
   })
 
-  it('解析 GPU（多卡，显存百分比自算）', () => {
+  it('解析 GPU（多卡，显存百分比自算 + 功耗/风扇/频率）', () => {
     const m = parseMetricsRaw(FIXTURE)
     expect(m!.gpus).toHaveLength(2)
     expect(m!.gpus[0]).toEqual({
@@ -75,13 +82,147 @@ describe('parseMetricsRaw', () => {
       memTotal: 40960,
       memPercent: 37.5,
       temperature: 62,
+      powerDraw: 222.75,
+      powerLimit: 300,
+      fanSpeed: null, // 被动散热卡 fan.speed = N/A
+      smClock: 1965,
+      memClock: 9802,
+      uuid: 'GPU-abc0',
+      busId: '00000000:41:00.0',
+      perfState: 'P0',
+      persistence: 'Enabled',
+      computeMode: 'Default',
+      eccUncorr: null, // 消费级/不支持 ECC → N/A
     })
     expect(m!.gpus[1].utilization).toBe(12)
+    expect(m!.gpus[1].fanSpeed).toBe(60)
+    expect(m!.gpus[1].eccUncorr).toBe(3)
+    expect(m!.gpuDriver).toBe('580.173.02')
+    expect(m!.gpuCuda).toBe('13.0')
+  })
+
+  it('解析 swap（nvtop SWP 行）', () => {
+    const m = parseMetricsRaw(FIXTURE)
+    expect(m!.swap).toEqual({ total: 4096, used: 204 })
+    const noSwap = parseMetricsRaw('===CKUN_MON===\nSTAT=1|2|3\nMEM_TOTAL=100\n===END===')
+    expect(noSwap!.swap).toEqual({ total: 0, used: 0 })
+  })
+
+  it('GPROC × GPS join → gpuProcs（uuid→index、ps 字段关联）', () => {
+    const m = parseMetricsRaw(FIXTURE)
+    expect(m!.gpuProcs).toHaveLength(2)
+    expect(m!.gpuProcs[0]).toEqual({
+      gpuIndex: 0,
+      pid: 443545,
+      memMB: 1008,
+      name: 'python run_ipose_service.py',
+      user: 'root',
+      cpu: 0,
+      mem: 0.5,
+      etime: '16-05:32:11',
+    })
+    expect(m!.gpuProcs[1].gpuIndex).toBe(1)
+    expect(m!.gpuProcs[1].etime).toBe('73:08:55')
+  })
+
+  it('GPROC 进程名含逗号不被截断；未知 uuid 丢弃；ps 行缺失字段兜底', () => {
+    const raw = [
+      '===CKUN_MON===', 'STAT=1|2|3', 'MEM_TOTAL=100',
+      'GPU=0|A100|50|1|2|60|N/A|N/A|N/A|N/A|N/A|GPU-x|',
+      'GPROC=GPU-x|77|10|python -c "print(1, 2)"',
+      'GPROC=GPU-unknown|88|10|ghost',
+      'GPROC=GPU-x|99|20|orphan-no-ps',
+      'GPS=77|alice|3.5|1.2|01:02:03',
+      '===END===',
+    ].join('\n')
+    const m = parseMetricsRaw(raw)
+    expect(m!.gpuProcs).toHaveLength(2)
+    expect(m!.gpuProcs[0]).toMatchObject({ gpuIndex: 0, pid: 77, user: 'alice', cpu: 3.5, etime: '01:02:03', name: 'python -c "print(1, 2)"' })
+    expect(m!.gpuProcs[1]).toMatchObject({ pid: 99, user: '?', cpu: null, mem: null, etime: '' })
+  })
+
+  it('GPU 扩展字段全 N/A（WSL 等场景）→ null 降级，基础字段不受影响', () => {
+    const raw = '===CKUN_MON===\nSTAT=1|2|3\nMEM_TOTAL=100\nGPU=0|Tesla T4|30|512|15360|55|N/A|N/A|N/A|N/A|N/A\n===END==='
+    const g = parseMetricsRaw(raw)!.gpus[0]
+    expect(g).toMatchObject({ index: 0, utilization: 30, temperature: 55 })
+    expect(g.memPercent).toBeCloseTo(100 / 30, 3)
+    expect([g.powerDraw, g.powerLimit, g.fanSpeed, g.smClock, g.memClock]).toEqual([null, null, null, null, null])
+  })
+
+  it('老驱动降级：18 列查询失败 → 6 列回退行（awk 补空段）→ 扩展字段 null，基础字段完整', () => {
+    // 回退时 awk 仍按 18 段 printf，$7..$18 为空串 → 行尾一串空段
+    const raw = '===CKUN_MON===\nSTAT=1|2|3\nMEM_TOTAL=100\nGPU=0|Tesla T4|30|512|15360|55||||||||||||\n===END==='
+    const g = parseMetricsRaw(raw)!.gpus[0]
+    expect(g).toMatchObject({ index: 0, name: 'Tesla T4', utilization: 30, memUsed: 512, memTotal: 15360, temperature: 55 })
+    expect([g.powerDraw, g.powerLimit, g.fanSpeed, g.smClock, g.memClock, g.eccUncorr]).toEqual([null, null, null, null, null, null])
+    expect([g.uuid, g.busId, g.perfState, g.persistence, g.computeMode]).toEqual(['', '', '', '', ''])
+  })
+
+  it('降级模式：GPUINFO/GPUDRV 补查行回填 uuid/驱动 → GPROC join 恢复（进程表不再消失）', () => {
+    const raw = [
+      '===CKUN_MON===', 'STAT=1|2|3', 'MEM_TOTAL=100',
+      'GPU=0|Tesla T4|30|512|15360|55||||||||||||',
+      'GPU=1|Tesla T4|10|256|15360|50||||||||||||',
+      'GPUINFO=0|GPU-tt0001', 'GPUINFO=1|GPU-tt0002', 'GPUDRV=470.199.02',
+      'GPROC=GPU-tt0002|7788|256|python3',
+      'GPROC=GPU-tt0001|7787|512|',
+      'GPS=7787|root|88.5|2.1|3:20:11',
+      '===END===',
+    ].join('\n')
+    const m = parseMetricsRaw(raw)!
+    expect(m.gpuDriver).toBe('470.199.02')
+    expect(m.gpus.map(g => g.uuid)).toEqual(['GPU-tt0001', 'GPU-tt0002'])
+    // 无名字 GPROC（三列降级查询）→ name 空串；GPUINFO join 生效
+    expect(m.gpuProcs).toEqual([
+      { gpuIndex: 1, pid: 7788, memMB: 256, name: 'python3', user: '?', cpu: null, mem: null, etime: '' },
+      { gpuIndex: 0, pid: 7787, memMB: 512, name: '', user: 'root', cpu: 88.5, mem: 2.1, etime: '3:20:11' },
+    ])
+  })
+
+  it('降级模式：GPUX 补查行回填功耗/风扇/频率/Bus-Id，不覆盖已有值', () => {
+    const raw = [
+      '===CKUN_MON===', 'STAT=1|2|3', 'MEM_TOTAL=100',
+      'GPU=0|Tesla T4|30|512|15360|55||||||||||||',
+      'GPU=1|Tesla T4|10|256|15360|50|99.9|120||||||||||',
+      'GPUX=0|80.5|120|55|1590|5001|00000000:3D:00.0',
+      'GPUX=1|70|120|50|1600|5001|00000000:3E:00.0',
+      '===END===',
+    ].join('\n')
+    const [g0, g1] = parseMetricsRaw(raw)!.gpus
+    expect([g0.powerDraw, g0.powerLimit, g0.fanSpeed, g0.smClock, g0.memClock, g0.busId])
+      .toEqual([80.5, 120, 55, 1590, 5001, '00000000:3D:00.0'])
+    // GPU= 行已有的 powerDraw 不被 GPUX 覆盖；空 busId 仍回填
+    expect(g1.powerDraw).toBe(99.9)
+    expect(g1.busId).toBe('00000000:3E:00.0')
   })
 
   it('无 GPU 行时 gpus 为空数组（不影响其它指标）', () => {
     const m = parseMetricsRaw('===CKUN_MON===\nSTAT=1|2|3\nMEM_TOTAL=100\n===END===')
     expect(m!.gpus).toEqual([])
+    expect(m!.gpuError).toBe('')
+  })
+
+  it('GPUERR= 行 → gpuError 透传（nvidia-smi 存在但执行失败）', () => {
+    const m = parseMetricsRaw('===CKUN_MON===\nSTAT=1|2|3\nMEM_TOTAL=100\nGPUERR=Failed to initialize NVML: Driver/library version mismatch\n===END===')
+    expect(m!.gpus).toEqual([])
+    expect(m!.gpuError).toContain('Driver/library version mismatch')
+  })
+
+  it('端口达上限(30)后 GPU 行仍被解析（回归：曾因 break 整循环丢 GPU）', () => {
+    const ports = Array.from({ length: 31 }, (_, i) => `PORT=tcp|0.0.0.0|${1000 + i}`)
+    const raw = ['===CKUN_MON===', 'STAT=1|2|3', 'MEM_TOTAL=100', ...ports, 'GPU=0|NVIDIA A100|50|1|2|60', '===END==='].join('\n')
+    const m = parseMetricsRaw(raw)
+    expect(m!.ports).toHaveLength(30)
+    expect(m!.gpus).toHaveLength(1)
+    expect(m!.gpus[0].powerDraw).toBeNull() // 短行（缺扩展段）不丢行，扩展字段 null
+  })
+
+  it('磁盘达上限(8)后 GPU 行仍被解析（回归）', () => {
+    const disks = Array.from({ length: 9 }, (_, i) => `DISK=/mnt/d${i}|100|50|50%`)
+    const raw = ['===CKUN_MON===', 'STAT=1|2|3', 'MEM_TOTAL=100', ...disks, 'GPU=0|NVIDIA A100|50|1|2|60', '===END==='].join('\n')
+    const m = parseMetricsRaw(raw)
+    expect(m!.disks).toHaveLength(8)
+    expect(m!.gpus).toHaveLength(1)
   })
 
   it('缺少 SENTINEL 时返回 null', () => {

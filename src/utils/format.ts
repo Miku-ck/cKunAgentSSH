@@ -13,3 +13,15 @@ export function formatBytes(bytes: number): string {
   )
   return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + ' ' + SIZE_UNITS[i]
 }
+
+/**
+ * 后端时间戳 → Date。
+ * 后端统一存 UTC naive 字符串（database._now / compute_next_run 都是 "YYYY-MM-DD HH:MM:SS"），
+ * 而 new Date("2026-09-21T07:00:00") 没有时区标记时按【本地时区】解释 —— UTC+8 下
+ * 所有时间早 8 小时：定时任务的「下次执行」显示成过去、倒计时恒为「即将」。
+ * 已带 Z / ±hh:mm 的（ISO 串）保持原样解析。
+ */
+export function parseBackendTs(ts?: string | null): Date {
+  const s = ts || ''
+  return new Date(s.replace(' ', 'T') + (/[Z+]/.test(s) ? '' : 'Z'))
+}

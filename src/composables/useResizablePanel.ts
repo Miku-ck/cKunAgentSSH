@@ -1,6 +1,6 @@
 /**
  * 可拖拽调整宽度的侧边面板 Composable
- * 从 AiChatPanel / SshAiPanel 中提取的通用拖拽逻辑。
+ * 从 SideChatPanel 中提取的通用拖拽逻辑。
  */
 import { ref, onUnmounted } from 'vue'
 

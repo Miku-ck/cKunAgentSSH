@@ -122,7 +122,9 @@
         </div>
         <div class="file-size">{{ entry.isDirectory ? '—' : formatBytes(entry.size) }}</div>
         <div class="file-time">{{ formatTime(entry.modified) }}</div>
-        <div class="file-perm">{{ entry.isDirectory ? 'd' + (permText(entry) || 'rwx') : permText(entry) || '-' }}</div>
+        <!-- permText 的两个分支都已自带类型位（远端 modeToString 的 "drwxr-xr-x"、
+             本地兜底的 'drwx'/'-rw'），这里再拼一个 'd' 会显示成 ddrwxr-xr-x -->
+        <div class="file-perm">{{ permText(entry) || '-' }}</div>
       </div>
       <!-- B16 修复：全量 v-for 无虚拟化 — 超大目录只渲染前 2000 行，超出给提示 -->
       <div v-if="entries.length > RENDER_LIMIT" class="pane-list-limit">
@@ -417,7 +419,9 @@ function onRowClick(entry: any, e: MouseEvent): void {
     if (props.side === 'local') store.toggleSelectLocal(entry.path)
     else store.toggleSelectRemote(entry.path)
   } else {
-    store.clearSelection()
+    // 只清理当前栏：不带参数会连带清掉另一栏的选中（与下方 onDragStart 的 Bug 5 修复不一致），
+    // 之后右键的删除/上传/压缩就只作用在单行上而非整批
+    store.clearSelection(props.side)
     if (props.side === 'local') store.toggleSelectLocal(entry.path)
     else store.toggleSelectRemote(entry.path)
   }
@@ -537,7 +541,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   align-items: center;
   justify-content: space-between;
   padding: 0 10px;
-  background: var(--bg-elevated);
+  background: var(--bg-base);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
@@ -637,8 +641,8 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   width: 100%;
   height: 22px;
   padding: 0 6px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--accent-blue);
+  background: var(--bg-input);
+  border: 1px solid var(--accent-primary);
   border-radius: 3px;
   color: var(--text-primary);
   font-family: var(--font-mono);
@@ -654,7 +658,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   grid-template-columns: 1fr 80px 130px 90px;
   height: 26px; align-items: center;
   padding: 0 10px;
-  background: var(--bg-elevated);
+  background: var(--bg-base);
   border-bottom: 1px solid var(--border-subtle);
   color: var(--text-tertiary);
   font-size: 11px; font-weight: 500;
@@ -739,7 +743,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   font-size: 13px; outline: none;
   font-family: var(--font-sans);
 }
-.mkdir-input:focus { border-color: var(--accent-blue); }
+.mkdir-input:focus { border-color: var(--accent-primary); }
 .mkdir-actions {
   display: flex; justify-content: flex-end;
   gap: 8px; margin-top: 16px;
@@ -754,7 +758,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
 .mkdir-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .mkdir-btn.cancel { background: transparent; color: var(--text-secondary); }
 .mkdir-btn.cancel:hover:not(:disabled) { background: var(--bg-hover); }
-.mkdir-btn.confirm { background: var(--accent-blue); color: #fff; border-color: var(--accent-blue); }
+.mkdir-btn.confirm { background: var(--accent-primary); color: #fff; border-color: var(--accent-primary); }
 .mkdir-btn.confirm:hover:not(:disabled) { opacity: 0.9; }
 
 /* 拖拽目标视觉反馈 */

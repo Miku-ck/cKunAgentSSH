@@ -74,7 +74,10 @@ def test_lru_eviction_skips_aclose_when_in_flight():
         asyncio.run(llm_adapter._get_client("http://host-new", "k"))
 
         assert not sinks[in_flight_key], "in-flight 客户端不得被 aclose"
-        assert in_flight_key not in llm_adapter._client_in_flight, "计数应被清理"
+        # 计数必须原样留着，由那条流自己的 finally 递减。原先在这里 pop 是错的：
+        # 计数按 (base_url, api_key) 键控，pop 等于把在途请求清零 —— 同 key 重建的
+        # 新客户端会被误判「无人在用」而在流还在跑时被 aclose（见 round13c 回归）。
+        assert llm_adapter._client_in_flight.get(in_flight_key) == 1, "在途计数不得被淘汰逻辑清零"
     finally:
         _reset_llm_cache()
 

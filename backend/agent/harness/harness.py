@@ -50,8 +50,6 @@ class HarnessConfig:
     # 上下文窗口
     max_context_tokens: int = 16384
     compression: CompressionConfig = field(default_factory=CompressionConfig)
-    # 权限覆盖（从 DB 加载）
-    permission_overrides: dict[str, str] = field(default_factory=dict)
 
 
 class Harness:
@@ -72,7 +70,7 @@ class Harness:
             max_context_tokens=config.max_context_tokens,
             config=config.compression,
         )
-        self.reins = create_default_reins(config.permission_overrides)
+        self.reins = create_default_reins()
         self.driver = Driver()
         self.cost_tracker: Any = None  # 由 assemble 注入
         self._llm_client: Optional[LLMClient] = None
@@ -212,7 +210,6 @@ class Harness:
         # 传入 saddle：PermissionGate 从 ToolRegistry 读取 ToolMeta（单一数据源）
         actual_config = config or AgentConfig()
         self.reins = create_default_reins(
-            permission_overrides=self.config.permission_overrides,
             config=actual_config,
             saddle=self._saddle,
         )

@@ -97,6 +97,13 @@ def sync_packaged_skills() -> dict:
     import database as db
 
     skills = scan_builtin_skills()
+    if not skills:
+        # 空扫描 ≠ 包内技能被删光了：BUILTIN_SKILLS_DIR 不存在/不可读（打包漏带目录、
+        # 升级中途文件占用）同样交出空列表。按孤儿清理语义走下去 = 把上一版同步过的
+        # 全部内置技能连用户在 skill_mode_config 里的开关一起删干净，且 _persist 之后
+        # 这次误删还会被固化。与 routes/skills.py 的 sync-builtin 空上报保护同源。
+        logger.warning("[builtin_skills] 包内技能扫描为空，跳过同步与孤儿清理")
+        return {"upserted": 0, "slugs": sorted(_managed_slugs)}
     _managed_slugs.clear()
     upserted = 0
     for s in skills:

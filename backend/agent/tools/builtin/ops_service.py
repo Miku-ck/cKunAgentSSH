@@ -21,6 +21,38 @@ _NO_SYSTEMCTL_MSG = (
     "[!] 目标未提供可用的 systemctl（非 systemd 环境或 systemctl 不存在），"
     "无法执行 systemctl 操作。请确认目标系统是否使用 systemd，或换用其他运维方式。"
 )
+# unit 不存在的提示：systemctl 本身工作正常，只是这个名字没有对应的 unit。
+# 与「本机没有 systemd」是两回事 —— 混为一谈会让模型放弃正确的排查方向。
+_NO_UNIT_MSG = (
+    "[!] systemctl 报告该服务名没有对应的 unit（未安装或名字不对），"
+    "systemd 本身可用。先用 shell_exec 跑 `systemctl list-units --all --full | grep -i <关键字>` "
+    "或 `systemctl list-unit-files` 确认真实服务名，再重试。"
+)
+
+# 「systemctl 这个可执行文件跑不起来」：shell 报错形态固定为 "<cmd>: <原因>"，
+# 必须带上 systemctl 前缀 —— 裸的 not found / no such file 更常来自 unit 缺失。
+_EXECUTABLE_MISSING_RE = re.compile(
+    r"systemctl[:\s].{0,16}?(?:not found|no such file or directory)", re.I)
+# systemd/init 本身不在的真信号（容器、chroot、无 dbus）：这些不含 not found 字样，
+# 原实现反而漏判，把真正的非 systemd 主机当成「服务名写错了」。
+_NO_SYSTEMD_RE = re.compile(
+    r"system has not been booted with systemd"
+    r"|couldn't communicate with systemd"
+    r"|failed to connect to (?:dbus|bus)"
+    r"|failed to get a connection to the bus"
+    r"|daemon not running"
+    r"|running in chroot", re.I)
+_UNIT_MISSING_RE = re.compile(
+    r"unit \S+ not found|failed to get unit file state.*no such file", re.I | re.S)
+
+
+def _failure_notice(output: str) -> str | None:
+    """从 systemctl 的失败输出里判断该补哪条说明；都不像则返回 None。"""
+    if _EXECUTABLE_MISSING_RE.search(output) or _NO_SYSTEMD_RE.search(output):
+        return _NO_SYSTEMCTL_MSG
+    if _UNIT_MISSING_RE.search(output):
+        return _NO_UNIT_MSG
+    return None
 
 
 def service_cmd(action: str, name: str) -> str:
@@ -82,18 +114,16 @@ class ServiceManageTool(BaseTool):
         is_destructive = action in _DESTRUCTIVE_ACTIONS
         # 破坏性标记：在输出开头明确表明该操作为破坏性操作（权限门控另由 harness 处理）
         marker = "[destructive=true, 破坏性操作]"
-        if is_destructive and output and not output.startswith(marker):
-            output = f"{marker}\n{output}"
-
-        # 非 systemd / systemctl 不可用兜底：给出友好说明，而不凭空执行破坏命令
+        # 失败原因分类：只在确实「systemctl/systemd 不可用」或「unit 不存在」时补说明，
+        # 补错方向的说明比不补更糟（模型会照它放弃正确的排查路径）。
+        notice = None if success else _failure_notice(output or "")
+        prefix = "\n".join(s for s in (
+            marker if is_destructive and output and not output.startswith(marker) else None,
+            notice,
+        ) if s)
+        if prefix:
+            output = f"{prefix}\n{output}"
         if not success:
-            low = output.lower()
-            if "not found" in low or "no such file" in low:
-                notice = _NO_SYSTEMCTL_MSG if not is_destructive else (
-                    f"[!] {_NO_SYSTEMCTL_MSG}"
-                )
-                output = (f"{marker}\n{notice}\n{output}" if is_destructive
-                          else f"[!] {notice}\n{output}")
             return ToolResult(False, output, "systemctl 执行失败")
 
         return ToolResult(True, output, priority="low")

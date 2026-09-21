@@ -13,6 +13,7 @@ import type {
 } from '@/types/chat'
 
 import { genId } from '@/utils/id'
+import { parseBackendTs } from '@/utils/format'
 // 审查修复：原文件在 deleteConversation 失败分支使用了 useToastStore 但从未导入
 // （typecheck TS2304；运行时该分支一触发就抛 ReferenceError，toast 永远弹不出来）
 import { useToastStore } from '@/stores/toast'
@@ -70,7 +71,7 @@ export function useChatPersistence(options: {
       const remote = await api.listConversations(50, 0, API_MODE)
       const byLocalId = new Map(conversations.value.map((c) => [c.id, c]))
       const byBackendId = new Map(
-        conversations.value.filter((c) => (c as any).backendConvId).map((c) => [(c as any).backendConvId as string, c]),
+        conversations.value.filter((c) => c.backendConvId).map((c) => [c.backendConvId as string, c]),
       )
       const merged = [...conversations.value]
       for (const r of remote as Array<{ id: string; title: string; created_at: string; updated_at: string }>) {
@@ -78,6 +79,9 @@ export function useChatPersistence(options: {
         if (match) {
           if (r.title) match.title = r.title
           if (r.updated_at) match.updated_at = r.updated_at
+          // 只按本地 id 命中时 backendConvId 还是空的（早期版本沿用后端 id 建过条目）：
+          // 补上，否则切到它会因缺 backendConvId 拉不到消息、删除时也不会同步删后端
+          if (!match.backendConvId) match.backendConvId = r.id
         } else {
           merged.push({
             id: r.id,
@@ -121,7 +125,9 @@ export function useChatPersistence(options: {
     const yesterday = new Date(today.getTime() - 86400000)
 
     for (const conv of conversations.value) {
-      const d = new Date(conv.updated_at)
+      // 后端条目原样存 "YYYY-MM-DD HH:MM:SS"（UTC-naive），本地条目是 toISOString()：
+      // 裸 new Date() 把前者按本地时区解析，UTC+8 下几分钟前的会话会被归到「昨天」。
+      const d = parseBackendTs(conv.updated_at)
       let label: string
       if (d >= today) label = '今天'
       else if (d >= yesterday) label = '昨天'
@@ -134,14 +140,17 @@ export function useChatPersistence(options: {
     // 审查修复：组内按更新时间倒序（新 → 旧），与列表顶部优先的展示顺序一致
     for (const g of groups) {
       g.items.sort((a, b) =>
-        new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+        parseBackendTs(b.updated_at).getTime() - parseBackendTs(a.updated_at).getTime()
       )
     }
     return groups
   })
 
   async function fetchDefaultModel() {
-    if (selectedModelId.value) return
+    // 原实现的 `if (selectedModelId.value) return` 让「已删模型留下的残留选中值」
+    // 永远没有修正机会：选择器因为列表里找不到它而显示「选择模型」，发送却照旧带
+    // 死 id → 后端 404 模型不存在（routes/agent.py:457），面板从此发不出东西。
+    // 「这个选中值还能不能用」只有 getDefaultModelId 看得懂（它拿得到模型列表）。
     try {
       const id = await getDefaultModelId()
       if (id) {
@@ -149,7 +158,8 @@ export function useChatPersistence(options: {
         saveSelectedModelId(id)
       }
     } catch (e) {
-
+      // 后端未就绪/模型列表为空都会走到这里：全静默会让"选不到模型"无从排查
+      console.warn('[useChatPersistence] 取默认模型失败:', e)
     }
   }
 
@@ -178,7 +188,8 @@ export function useChatPersistence(options: {
 
   async function deleteConversation(id: string) {
     const conv = conversations.value.find((c) => c.id === id)
-    // 后端删除失败时回滚本地状态，避免"删掉的会话又回来了"的数据不一致
+    // 后端删不掉就保留本地条目并原样返回：本地先删会把服务端会话变成再也删不到的
+    // 孤儿，下次启动又被 syncBackendConversations 合并回来（"删掉的会话又回来了"）
     if (conv?.backendConvId) {
       try {
         await api.deleteConversation(conv.backendConvId)
@@ -186,7 +197,7 @@ export function useChatPersistence(options: {
         console.error('[useChatPersistence] Backend delete failed:', e)
         const toast = useToastStore()
         toast.error('服务端删除失败，请稍后重试')
-        return // 后端删除失败，不回滚本地状态
+        return
       }
     }
     conversations.value = conversations.value.filter((c) => c.id !== id)

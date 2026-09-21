@@ -20,24 +20,26 @@
           </p>
           <p v-if="error" class="hint err">{{ error }}</p>
           <p v-else-if="!rows.length" class="hint muted">暂无技能（包内运维技能启动时自动同步；若为空可点上方「同步包内技能」）</p>
-          <div v-for="r in rows" :key="r.id" class="skill-row" :class="{ off: !r.on }">
-            <div class="tool-info">
-              <span class="skill-name">
-                {{ r.name }}
-                <span class="flag" :class="sourceClass(r.source)">{{ sourceText[r.source] || r.source }}</span>
-              </span>
-              <span class="skill-desc" :title="r.description">{{ r.description || '（无描述）' }}</span>
-              <span v-if="r.triggerWords.length" class="skill-triggers">
-                触发词：{{ r.triggerWords.slice(0, 6).join('、') }}{{ r.triggerWords.length > 6 ? ' …' : '' }}
-              </span>
+          <template v-for="r in rows" :key="r.id">
+            <div class="skill-row" :class="{ off: !r.on }">
+              <div class="tool-info">
+                <span class="skill-name">
+                  {{ r.name }}
+                  <span class="flag" :class="sourceClass(r.source)">{{ sourceText[r.source] || r.source }}</span>
+                </span>
+                <span class="skill-desc" :title="r.description">{{ r.description || '（无描述）' }}</span>
+                <span v-if="r.triggerWords.length" class="skill-triggers">
+                  触发词：{{ r.triggerWords.slice(0, 6).join('、') }}{{ r.triggerWords.length > 6 ? ' …' : '' }}
+                </span>
+              </div>
+              <button class="btn sm" @click="r.expanded = !r.expanded">{{ r.expanded ? '收起' : '正文' }}</button>
+              <ToggleSwitch :model-value="r.on" @update:model-value="(v: boolean) => onToggle(r, v)" />
+              <button v-if="r.source !== 'builtin'" class="btn danger sm" @click="onDelete(r)">删除</button>
             </div>
-            <button class="btn sm" @click="r.expanded = !r.expanded">{{ r.expanded ? '收起' : '正文' }}</button>
-            <ToggleSwitch :model-value="r.on" @update:model-value="(v: boolean) => onToggle(r, v)" />
-            <button v-if="r.source !== 'builtin'" class="btn danger sm" @click="onDelete(r)">删除</button>
-          </div>
-          <div v-for="r in rows.filter(x => x.expanded)" :key="'c-' + r.id" class="skill-content">
-            <pre>{{ r.system_prompt.slice(0, 4000) }}{{ r.system_prompt.length > 4000 ? `\n… [共 ${r.system_prompt.length} 字符]` : '' }}</pre>
-          </div>
+            <div v-if="r.expanded" class="skill-content">
+              <pre>{{ r.system_prompt.slice(0, 4000) }}{{ r.system_prompt.length > 4000 ? `\n… [共 ${r.system_prompt.length} 字符]` : '' }}</pre>
+            </div>
+          </template>
         </div>
       </section>
 
@@ -68,14 +70,13 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { api, toFriendlyMessage } from '@/api/client'
 import { useToastStore } from '@/stores/toast'
+import { useSkillStore } from '@/stores/skills'
 import ToggleSwitch from '@/components/settings/fields/ToggleSwitch.vue'
 
 interface SkillRow {
   id: string
   name: string
-  slug: string
   description: string
-  category: string
   source: string
   system_prompt: string
   triggerWords: string[]
@@ -85,6 +86,7 @@ interface SkillRow {
 
 const MODE = 'ssh'
 const toast = useToastStore()
+const skillStore = useSkillStore()
 const open = reactive({ list: true })
 const rows = ref<SkillRow[]>([])
 const loading = ref(false)
@@ -117,9 +119,7 @@ async function load() {
     rows.value = data.map((s) => ({
       id: s.id,
       name: s.name,
-      slug: s.slug,
       description: s.description ?? '',
-      category: s.category ?? '',
       source: s.source,
       system_prompt: s.system_prompt ?? '',
       triggerWords: parseTriggerWords(s.trigger_words),
@@ -138,6 +138,8 @@ async function onToggle(r: SkillRow, next: boolean) {
   r.on = next
   try {
     await api.updateSkillEnabled(r.id, next, MODE)
+    // 对话侧 "/" 菜单读的是 skillStore 缓存，不回灌就一直是改动前的列表
+    void skillStore.loadRemoteSkills()
   } catch (e) {
     r.on = prev
     toast.error(`技能「${r.name}」${next ? '启用' : '停用'}失败：${toFriendlyMessage(e)}`)
@@ -148,6 +150,7 @@ async function onDelete(r: SkillRow) {
   try {
     await api.deleteSkill(r.id)
     rows.value = rows.value.filter((x) => x.id !== r.id)
+    void skillStore.loadRemoteSkills()
     toast.success(`已删除技能「${r.name}」`)
   } catch (e) {
     toast.error(`删除失败：${toFriendlyMessage(e)}`)
@@ -159,6 +162,7 @@ async function onSyncPackaged() {
   try {
     const result = await api.syncPackagedSkills()
     await load()
+    void skillStore.loadRemoteSkills()
     toast.success(`包内技能同步完成（${result.upserted} 条）`)
   } catch (e) {
     toast.error(`同步失败：${toFriendlyMessage(e)}`)
@@ -178,8 +182,8 @@ onMounted(load)
 .panel-body { flex: 1; overflow-y: auto; padding-right: 4px; }
 
 .grp {
-  border: 1px solid var(--border-subtle, var(--border-default));
-  border-radius: 6px; margin-bottom: 10px; background: var(--bg-input, transparent);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px; margin-bottom: 10px; background: var(--bg-input);
 }
 .grp-head {
   display: flex; align-items: center; gap: 8px; width: 100%;
@@ -199,13 +203,13 @@ onMounted(load)
 .hint.muted { color: var(--text-tertiary); }
 .hint code { font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
 .link-btn {
-  background: none; border: none; color: var(--accent-primary, #7aa2d0);
+  background: none; border: none; color: var(--accent-primary);
   cursor: pointer; font-size: 11.5px; font-family: inherit; padding: 0; text-decoration: underline;
 }
 
 .skill-row {
   display: flex; align-items: center; gap: 10px; padding: 7px 4px;
-  border-top: 1px solid var(--border-subtle, rgba(255,255,255,.05));
+  border-top: 1px solid var(--border-subtle);
 }
 .skill-row.off { opacity: .55; }
 .tool-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }

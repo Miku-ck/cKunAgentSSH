@@ -24,6 +24,20 @@ _MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 # 10MB 响应全量进上下文（约 2.5M token，必然超窗口且烧钱）
 _MAX_FETCH_CHARS = 100_000
 
+# HTML 型搜索源（360 / DuckDuckGo）共用的浏览器 UA：两者都靠正则刮页面，
+# 缺一致的 Accept-Language/UA 容易被判定为爬虫返回验证页
+_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.0"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
+
+# 刮不到结果 ≠ 搜不到结果：返回失败才会走下一级降级源，
+# 否则页面改版/反爬的那一级会把「无搜索结果」当成功直接回给模型。
+_EMPTY_PARSE_HINT = "页面未解析出结果（可能已改版或被反爬拦截）"
+
 
 # 审查 M-4：显式封锁 CPython `is_global` 表未覆盖、但可路由到内网的地址段。
 # - 100.64.0.0/10 (CGNAT)：运营商级 NAT，可达内网设备，is_private 恒为 False
@@ -92,15 +106,12 @@ class WebSearchTool(BaseTool):
     meta = ToolMeta(risk_level="safe", reversible=True, cacheable=True, idempotent=True)
 
     async def execute(self, context, query, max_results=_DEFAULT_MAX_RESULTS):
-        # 参数校验：max_results 必须是 1~20 的整数
+        # 参数校验：max_results 必须是整数，区间越界按边界钳制
         try:
             max_results = int(max_results)
         except (TypeError, ValueError):
             return ToolResult(False, "", "max_results 必须是整数")
-        if max_results < 1:
-            max_results = 1
-        elif max_results > 20:
-            max_results = 20
+        max_results = max(1, min(max_results, 20))
 
         # 尝试 Tavily API（用户配置 key 时优先）
         tavily_key = self._get_tavily_key()
@@ -114,9 +125,14 @@ class WebSearchTool(BaseTool):
         result = await self._search_360(query, max_results)
         if result.success:
             return result
+        logger.warning("360 搜索失败，降级到 DuckDuckGo: %s", result.error)
 
-        # 降级 2：DuckDuckGo 免费 HTML 搜索
-        return await self._search_duckduckgo(query, max_results)
+        # 降级 2：DuckDuckGo 免费 HTML 搜索。两级都空手时回聚合原因 ——
+        # 单看最后一条错误会让人以为只是 DDG 挂了。
+        result = await self._search_duckduckgo(query, max_results)
+        if result.success:
+            return result
+        return ToolResult(False, "", f"联网搜索未取到结果（360 与 DuckDuckGo 均失败）: {result.error}")
 
     def _get_tavily_key(self) -> str:
         """获取 Tavily API Key：环境变量优先，其次数据库（设置面板写入）"""
@@ -174,14 +190,7 @@ class WebSearchTool(BaseTool):
 
         try:
             search_url = f"https://www.so.com/s?q={quote_plus(query)}"
-            headers = {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.0"
-                ),
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            }
+            headers = {**_BROWSER_HEADERS, "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"}
 
             async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
                 resp = await client.get(search_url, headers=headers)
@@ -190,16 +199,9 @@ class WebSearchTool(BaseTool):
 
             results = self._parse_360_html(html, max_results)
             if not results:
-                return ToolResult(True, "无搜索结果", priority="normal")
+                return ToolResult(False, "", f"360 {_EMPTY_PARSE_HINT}")
 
-            parts = []
-            for i, result in enumerate(results, 1):
-                parts.append(
-                    f"{i}. {result.get('title', '无标题')}\n"
-                    f"   URL: {result.get('url', '')}\n"
-                    f"   {result.get('snippet', '')[:300]}"
-                )
-            return ToolResult(True, "\n\n".join(parts), priority="normal")
+            return ToolResult(True, _format_results(results), priority="normal")
 
         except Exception as e:
             logger.exception("360 搜索失败")
@@ -257,14 +259,7 @@ class WebSearchTool(BaseTool):
 
         try:
             search_url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
-            headers = {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.0"
-                ),
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9",
-            }
+            headers = {**_BROWSER_HEADERS, "Accept-Language": "en-US,en;q=0.9"}
 
             async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
                 resp = await client.get(search_url, headers=headers)
@@ -273,16 +268,9 @@ class WebSearchTool(BaseTool):
 
             results = self._parse_duckduckgo_html(html, max_results)
             if not results:
-                return ToolResult(True, "无搜索结果", priority="normal")
+                return ToolResult(False, "", f"DuckDuckGo {_EMPTY_PARSE_HINT}")
 
-            parts = []
-            for i, result in enumerate(results, 1):
-                parts.append(
-                    f"{i}. {result.get('title', '无标题')}\n"
-                    f"   URL: {result.get('url', '')}\n"
-                    f"   {result.get('snippet', '')[:300]}"
-                )
-            return ToolResult(True, "\n\n".join(parts), priority="normal")
+            return ToolResult(True, _format_results(results), priority="normal")
 
         except Exception as e:
             logger.exception("DuckDuckGo 搜索失败")
@@ -331,6 +319,16 @@ class WebSearchTool(BaseTool):
         return results
 
 
+def _format_results(results: list[dict]) -> str:
+    """把 {title,url,snippet} 列表排成喂给模型的编号文本（360 / DDG 共用）"""
+    return "\n\n".join(
+        f"{i}. {r.get('title') or '无标题'}\n"
+        f"   URL: {r.get('url', '')}\n"
+        f"   {(r.get('snippet') or '')[:300]}"
+        for i, r in enumerate(results, 1)
+    )
+
+
 def _strip_html(html: str) -> str:
     """简易 HTML 标签去除（无 trafilatura 时的降级方案）"""
     import html as html_module
@@ -363,16 +361,13 @@ class WebFetchTool(BaseTool):
     async def execute(self, context, url, max_chars=8000):
         import httpx
 
-        # 参数校验：max_chars 必须是正整数
+        # 参数校验：max_chars 必须是整数；下限 1，上限 _MAX_FETCH_CHARS
+        # （C-review MINOR-10：钳制上限，防止整页 10MB 灌入上下文）
         try:
             max_chars = int(max_chars)
         except (TypeError, ValueError):
             return ToolResult(False, "", "max_chars 必须是整数")
-        if max_chars < 1:
-            max_chars = 1
-        # C-review MINOR-10：钳制上限（防止整页 10MB 灌入上下文）
-        if max_chars > _MAX_FETCH_CHARS:
-            max_chars = _MAX_FETCH_CHARS
+        max_chars = max(1, min(max_chars, _MAX_FETCH_CHARS))
 
         # 解析 URL
         parsed = urlparse(url)

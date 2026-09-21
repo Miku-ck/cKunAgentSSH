@@ -23,7 +23,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
 import MarkdownStream from './MarkdownStream.vue'
 
@@ -39,6 +39,10 @@ const markdownEnabled = computed(() => settingsStore.settings.chat.markdown)
 // 流式中调用方一般会传 defaultOpen=true，非流式时回退到用户设置
 const initialOpen = computed(() => props.defaultOpen ?? settingsStore.settings.chat.thinkingExpanded)
 const open = ref(initialOpen.value)
+// initialOpen 只取一次的话，流式期间调用方传的 defaultOpen=true 会永久留在展开态：
+// thinkingExpanded=false 的用户在流式结束后仍看到全展开的思考过程。
+// 流式结束 → defaultOpen 撤掉 → 这里回落到用户设置；用户手动折叠不会触发（两个来源都没变）。
+watch(initialOpen, (v) => { open.value = v })
 </script>
 
 <style scoped>

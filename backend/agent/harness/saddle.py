@@ -196,28 +196,27 @@ class UndoBuilder:
             # 工具 execute 会 fail-closed 拒绝，本机无副作用可撤销
             return NoOpUndo(reason="file_write_requires_ssh")
 
-        # 执行前快照远端原内容（base64 回传，规避尾部哨兵歧义）
-        from agent.tools.builtin.ops_common import run_headless, strip_remote_tail
-        ok, out = await run_headless(ctx, f"base64 {shlex.quote(path)}", 30)
+        # 执行前快照远端原内容：复用 remote_read_b64 这一条实现（base64 模板 +
+        # keep_full 无损回传 + 载荷上限），不再就地拼 `base64 <path>` —— 两处各写
+        # 一份模板，改一处即与 file_edit 的读取行为漂移，且哨兵剥离也会跟着分家。
+        from agent.tools.builtin.ops_common import remote_read_b64
+        ok, payload = await remote_read_b64(ctx, path)
         if ok:
-            body = strip_remote_tail(out)
-            try:
-                data = base64.b64decode(body)
-            except Exception:
-                return NoOpUndo(reason="file_snapshot_decode_fail")
             return FileContentUndo(
                 path=path, ssh_session_id=sess,
-                snapshot_b64=base64.b64encode(data).decode("ascii"),
+                snapshot_b64=base64.b64encode(payload).decode("ascii"),
                 existed=True,
             )
-        # 快照失败：区分"桥/会话不可用"（真实写入也会失败 → NoOp）
-        # 与其余（如 base64 因文件不存在非 0 退出 → 原文件不存在，回滚=删除）
-        if "拒绝执行" in out or "fail-closed" in out or "未就绪" in out:
-            return NoOpUndo(reason="file_snapshot_unavailable")
-        return FileContentUndo(
-            path=path, ssh_session_id=sess,
-            snapshot_b64=None, existed=False,
-        )
+        # existed=False 的后果是回滚执行 `rm -f` —— 只有远端**明确说文件不存在**
+        # 才构成证据。桥不可达 / 超时 / 权限 / 载荷超限一律 NoOp：把它们当成
+        # 「原本不存在」会在撤销时删掉一个一直存在的文件。
+        reason = payload.decode("utf-8", errors="replace")
+        if "No such file" in reason or "cannot open" in reason or "can't open" in reason:
+            return FileContentUndo(
+                path=path, ssh_session_id=sess,
+                snapshot_b64=None, existed=False,
+            )
+        return NoOpUndo(reason="file_snapshot_unavailable")
 
     # B-5 加固：反向命令参数禁止的 shell 元字符（含换行/回车 — 原字符串切片实现
     # 可让 `mkdir 'a; rm -rf /tmp'` 类 payload 混入反向命令）
@@ -318,7 +317,8 @@ class Saddle:
         tool_ctx = self._build_tool_context(ctx)
         start = time.time()
         # H13 修复 C3：用 retry_with_backoff 包装 registry.execute，瞬时错误自动重试
-        # 注意：仅对"抛异常"的瞬时错误生效，工具返回 ToolResult(success=False) 不触发重试
+        # （重试判定同时覆盖「抛出异常」与「返回 ToolResult(success=False)」两种失败形态，
+        #  见 stirrups.retry_with_backoff —— registry.execute 会把工具异常吞成失败结果）
         from .stirrups import retry_with_backoff, ErrorClassifier
 
         # 审查 MINOR 修复：仅对幂等工具重试。原实现对所有工具
@@ -355,9 +355,11 @@ class Saddle:
             if not raw_result.success and priority == "normal":
                 priority = "high"
             # 原 ToolResult 输出字段名是 output/error，统一映射
+            # 失败时同样保留 output：ops_* 等工具会把它已经拿到的远程 stderr /
+            # 部分结果放在 output 里返回，清空后 Agent 只剩一行 error 无从判断原因
             result = ToolResult(
                 success=raw_result.success,
-                output=raw_result.output if raw_result.success else "",
+                output=raw_result.output or "",
                 error=raw_result.error or "",
                 duration_ms=0,
                 priority=priority,

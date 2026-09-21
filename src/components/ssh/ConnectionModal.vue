@@ -222,8 +222,10 @@ const form = reactive({
   note: props.editData?.note ?? ((props.editData?.tags || [])[0] || ''),
   // 目标环境标记:生产环境危险命令将被强制要求预授权 allowlist
   environment: (props.editData?.environment || 'test') as 'test' | 'prod',
-  readyTimeout: props.editData?.readyTimeout ? Math.round(props.editData.readyTimeout / 1000) : 15,
-  keepaliveInterval: props.editData?.keepaliveInterval ? Math.round(props.editData.keepaliveInterval / 1000) : 10,
+  // 回显用 != null 而非真值判断：已存的 0（关闭心跳）不能被显示成默认 10，
+  // 否则用户看到「10」再保存，把显式配置覆盖回去
+  readyTimeout: props.editData?.readyTimeout != null ? Math.round(props.editData.readyTimeout / 1000) : 15,
+  keepaliveInterval: props.editData?.keepaliveInterval != null ? Math.round(props.editData.keepaliveInterval / 1000) : 10,
   connectNow: false,
 })
 
@@ -270,10 +272,12 @@ function clampPort() {
   else if (n > 65535) form.port = 65535
 }
 
-/** 将秒级输入安全转为毫秒;非法/非正数返回 undefined 让后端用默认值 */
-function sanitizeMs(val: unknown): number | undefined {
+/** 将秒级输入安全转为毫秒;空/非法返回 undefined 让主进程用默认值。
+ *  allowZero 时 0 是合法的显式值（心跳间隔 0 = 关闭心跳），不能被当成「未填」 */
+function sanitizeMs(val: unknown, allowZero = false): number | undefined {
+  if (val === '' || val === null || val === undefined) return undefined
   const n = Number(val)
-  if (!Number.isFinite(n) || n <= 0) return undefined
+  if (!Number.isFinite(n) || n < 0 || (n === 0 && !allowZero)) return undefined
   return Math.round(n) * 1000
 }
 
@@ -290,7 +294,11 @@ function buildPayload() {
     passphrase: form.authType === 'privateKey' ? form.passphrase : undefined,
     environment: form.environment,
     readyTimeout: sanitizeMs(form.readyTimeout),
-    keepaliveInterval: sanitizeMs(form.keepaliveInterval),
+    // 心跳必须 allowZero：输入框 min=0 且 0 = 关闭心跳（见上方回显注释）。
+    // 不传的话 sanitizeMs 把 0 当「未填」返回 undefined → JSON 序列化时键消失 →
+    // 新建连接拿主进程默认 10s，编辑时「10 → 0」也退回旧值：用户按下关闭心跳
+    // 却毫无效果，且界面上看不出差别。readyTimeout 的 min=1，不存在这个问题。
+    keepaliveInterval: sanitizeMs(form.keepaliveInterval, true),
   }
 }
 
@@ -407,7 +415,7 @@ async function handleSave() {
 .modal-dialog {
   width: 560px;
   max-height: 85vh;
-  background: var(--bg-base, #1a1a1a);
+  background: var(--bg-base);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
@@ -507,7 +515,7 @@ async function handleSave() {
 }
 
 .form-group input:focus {
-  border-color: var(--accent-blue);
+  border-color: var(--accent-primary);
 }
 
 .form-group input::placeholder {
@@ -529,12 +537,12 @@ async function handleSave() {
   box-sizing: border-box;
 }
 .env-select select:focus {
-  border-color: var(--accent-blue);
+  border-color: var(--accent-primary);
 }
 .env-hint {
   margin-top: 6px;
   font-size: 11px;
-  color: var(--accent-red, #f48771);
+  color: var(--accent-red);
   line-height: 1.4;
 }
 
@@ -595,7 +603,7 @@ async function handleSave() {
 }
 
 .input-with-btn input:focus {
-  border-color: var(--accent-blue);
+  border-color: var(--accent-primary);
 }
 
 .browse-btn,
@@ -636,7 +644,7 @@ async function handleSave() {
 
 .form-info svg {
   flex-shrink: 0;
-  color: var(--accent-blue);
+  color: var(--accent-primary);
 }
 
 /* 高级选项 */
@@ -686,7 +694,7 @@ async function handleSave() {
 .checkbox-row input {
   width: 14px;
   height: 14px;
-  accent-color: var(--accent-blue);
+  accent-color: var(--accent-primary);
   cursor: pointer;
 }
 
@@ -774,7 +782,7 @@ async function handleSave() {
 
 .btn-primary {
   border: none;
-  background: var(--accent-blue);
+  background: var(--accent-primary);
   color: #fff;
   font-weight: 600;
 }

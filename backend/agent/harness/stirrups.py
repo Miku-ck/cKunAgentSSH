@@ -100,21 +100,29 @@ async def retry_with_backoff(
     """
     clf = classifier or ErrorClassifier()
     last_error: Optional[str] = None
+    last_result: Any = None
     for attempt in range(max_retries):
         try:
             result = await func()
-            return result, None
         except Exception as e:
+            result = None
             last_error = str(e)
-            kind = clf.classify_tool_error(last_error, "")
-            if kind in (ErrorType.FATAL, ErrorType.FORBIDDEN):
-                return None, last_error
-            if kind != ErrorType.TRANSIENT:
-                return None, last_error
-            if attempt < max_retries - 1:
-                delay = base_delay * (2 ** attempt)
-                await asyncio.sleep(delay)
-    return None, last_error
+        else:
+            # ToolRegistry.execute 把工具内异常统一转成 ToolResult(success=False)，
+            # 只盯着抛出的异常等于「瞬时错误重试」这条 H13 C3 路径永不触发。
+            # 失败结果同样送进分类器，仅 TRANSIENT 才退避重试。
+            if getattr(result, "success", True) is not False:
+                return result, None
+            last_error = str(getattr(result, "error", "") or "") or "工具执行失败"
+            last_result = result
+        kind = clf.classify_tool_error(last_error or "", "")
+        if kind != ErrorType.TRANSIENT:
+            # 非瞬时（参数错/权限拦截/致命）立即返回首次失败结果，不重复执行
+            return last_result, last_error
+        if attempt < max_retries - 1:
+            delay = base_delay * (2 ** attempt)
+            await asyncio.sleep(delay)
+    return last_result, last_error
 
 
 @dataclass

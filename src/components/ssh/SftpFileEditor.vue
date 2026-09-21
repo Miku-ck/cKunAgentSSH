@@ -163,7 +163,19 @@ watch(
   },
 )
 
+// 竞态守卫：加载期间用户可能关闭编辑器、或换到另一个文件/另一侧（visible 快速
+// false→true）。原实现只守 props.visible，慢请求后到时把上一个文件的内容灌进
+// 当前 path 的编辑器 —— 用户点保存即覆盖目标文件（数据丢失）。
+let loadSeq = 0
+
+function isFreshLoad(seq: number, path: string, side: typeof props.side): boolean {
+  return seq === loadSeq && props.visible && props.path === path && props.side === side
+}
+
 async function loadFile(): Promise<void> {
+  const seq = ++loadSeq
+  const path = props.path
+  const side = props.side
   loading.value = true
   error.value = ''
   dirty.value = false
@@ -177,27 +189,28 @@ async function loadFile(): Promise<void> {
       return
     }
     let result: EditorFileContent
-    if (props.side === 'local') {
-      result = await api.fsReadFileForEditor(props.path)
+    if (side === 'local') {
+      result = await api.fsReadFileForEditor(path)
     } else {
       if (!props.sshSessionId) throw new Error('SSH 会话未连接')
-      result = await api.sftpReadFile(props.sshSessionId, props.path)
+      result = await api.sftpReadFile(props.sshSessionId, path)
     }
+    if (!isFreshLoad(seq, path, side)) return
     content.value = result.content
     originalContent.value = result.content
     size.value = result.size
     readOnly.value = result.readOnly
     language.value = getLanguage(props.name)
     loading.value = false
-    // 竞态条件守卫：加载期间组件可能已关闭（visible 变为 false）
-    if (!props.visible) return
     await nextTick()
-    if (!props.visible) return
+    if (!isFreshLoad(seq, path, side)) return
     initEditor()
   } catch (err: any) {
+    if (!isFreshLoad(seq, path, side)) return
     error.value = toFriendlyMessage(err, '打开失败')
   } finally {
-    loading.value = false
+    // 仅最新一次请求负责收口，过期请求不得复位当前加载态
+    if (seq === loadSeq) loading.value = false
   }
 }
 
@@ -383,7 +396,7 @@ onUnmounted(() => {
   min-width: 0;
 }
 .dirty-dot {
-  color: var(--accent-yellow, #e2c08d);
+  color: var(--accent-yellow);
   font-size: 10px;
   flex-shrink: 0;
 }
@@ -392,7 +405,7 @@ onUnmounted(() => {
   font-size: 10px;
   border-radius: 8px;
   background: rgba(226, 192, 141, 0.12);
-  color: var(--accent-yellow, #e2c08d);
+  color: var(--accent-yellow);
   flex-shrink: 0;
 }
 .header-right {
@@ -407,8 +420,8 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 5px;
-  background: var(--accent-blue);
-  border: 1px solid var(--accent-blue);
+  background: var(--accent-primary);
+  border: 1px solid var(--accent-primary);
   color: #fff;
   border-radius: 4px;
   cursor: pointer;
@@ -529,7 +542,7 @@ onUnmounted(() => {
   opacity: 0.4;
 }
 .readonly-hint {
-  color: var(--accent-yellow, #e2c08d);
+  color: var(--accent-yellow);
   margin-left: auto;
 }
 .remote-tag {
@@ -567,7 +580,7 @@ onUnmounted(() => {
   border-bottom: 1px solid var(--border-subtle);
 }
 .unsaved-header svg {
-  color: var(--accent-yellow, #e2c08d);
+  color: var(--accent-yellow);
   flex-shrink: 0;
 }
 .unsaved-body {
@@ -602,16 +615,16 @@ onUnmounted(() => {
 }
 .unsaved-btn.discard {
   background: transparent;
-  color: var(--accent-red, #f48771);
+  color: var(--accent-red);
   border-color: rgba(244, 135, 113, 0.4);
 }
 .unsaved-btn.discard:hover {
   background: rgba(244, 135, 113, 0.12);
 }
 .unsaved-btn.save {
-  background: var(--accent-blue);
+  background: var(--accent-primary);
   color: #fff;
-  border-color: var(--accent-blue);
+  border-color: var(--accent-primary);
 }
 .unsaved-btn.save:hover:not(:disabled) {
   opacity: 0.9;

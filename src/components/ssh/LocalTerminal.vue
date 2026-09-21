@@ -44,7 +44,6 @@ import {
 import { useSSHStore } from '@/stores/ssh'
 import { buildTerminalOptions, watchTerminalConfig } from '@/composables/useTerminalConfig'
 import { stripAnsiBackground } from '@/utils/terminal-colors'
-import { ingestOutput } from '@/composables/useAgentDeliver'
 import { useTerminalContext } from '@/composables/useTerminalContext'
 
 const props = defineProps<{
@@ -223,7 +222,11 @@ onMounted(() => {
   startTerminalContext()
 
   // 监听终端配置变化，动态应用主题/字号/字体（无需重建终端）
-  unsubTermConfig = watchTerminalConfig(terminal, fitAddon, () => props.visible)
+  // 换字号后容器尺寸不变、ResizeObserver 不会触发，新行列数要在回调里主动下发给 PTY
+  unsubTermConfig = watchTerminalConfig(terminal, fitAddon, () => props.visible, () => {
+    if (!terminal) return
+    api.ptyResize(id, terminal.cols, terminal.rows).catch(() => {})
+  })
 
   // 拦截按键：Tab 触发补全；补全可见时 ↑↓/Enter/Esc/Tab 控制浮层
   // 在 document 级别 capture 阶段拦截 keydown，确保比 xterm 自己的 capture 监听更早触发
@@ -309,8 +312,7 @@ onMounted(() => {
   unsubData = api.onPtyData(({ id: ptyId, data }) => {
     if (ptyId === id) {
       terminal?.write(stripAnsiBackground(data))
-      // 可见终端执行模式：喂给交付编排器解析 BEGIN/END 哨兵捕获输出
-      ingestOutput(id, data)
+      // 可见终端执行的哨兵捕获已集中到 useAgentDeliver 的全局订阅，组件只管显示
     }
   })
 
@@ -444,18 +446,18 @@ defineExpose({
   align-items: center;
   gap: 4px;
   padding: 3px 8px;
-  border: 1px solid var(--accent-indigo, #7aa2d0);
+  border: 1px solid var(--accent-indigo);
   border-radius: 4px;
-  background: var(--bg-elevated-solid, #232323);
-  color: var(--accent-indigo-soft, #9db8d9);
+  background: var(--bg-elevated-solid);
+  color: var(--accent-indigo-soft);
   font-size: 11px;
   cursor: pointer;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
-  transition: all var(--transition-fast, 0.15s);
+  transition: all var(--transition-fast);
 }
 
 .ask-ai-float-btn:hover {
-  background: var(--accent-indigo, #7aa2d0);
+  background: var(--accent-indigo);
   color: #fff;
 }
 

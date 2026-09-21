@@ -74,7 +74,7 @@ def _parse_cron(cron: str) -> tuple[dict, str | None]:
     # 通配 daily 00:00
     if all(s == "*" for s in fields):
         return {"schedule_type": "daily", "time_hour": 0, "time_minute": 0,
-                "interval_minutes": 0, "weekday": -1, "day_of_month": 1}, None
+                "weekday": 0, "day_of_month": 1}, None
 
     # min hour * * *（daily）
     if dom_s == "*" and dow_s == "*":
@@ -83,24 +83,22 @@ def _parse_cron(cron: str) -> tuple[dict, str | None]:
         if errs:
             return None, "cron 表达式无效: " + "\n".join(errs)
         return {"schedule_type": "daily", "time_hour": h, "time_minute": m,
-                "interval_minutes": 0, "weekday": -1, "day_of_month": 1}, None
+                "weekday": 0, "day_of_month": 1}, None
 
-    # min hour dom * *（monthly，dom 为单个数字）
+    # min hour dom * *（monthly，dom 为单个数字；dom='*' 的已全部被上面 daily 分支接走）
     if dow_s == "*" and month_s == "*":
-        if dom_s == "*":
-            return None, f"cron 表达式 {cron!r} 格式无法识别（min/hour 已定但 dom 和 dow 均为 '*'）。"
         m = _parse_int_field(min_s, 0, 59, "min", errs)
         h = _parse_int_field(hour_s, 0, 23, "hour", errs)
-        d = _parse_int_field(dom_s, 1, 31, "dom(day_of_month)", errs)
+        # 上限取 28 而不是 cron 的 31：/schedules 的 _validate_fields 按 merged 校验，
+        # 存 29-31 的行会让 PATCH（含界面上的勾选启停）恒返回 400，任务埋进去就改不动。
+        d = _parse_int_field(dom_s, 1, 28, "dom(day_of_month)", errs)
         if errs:
             return None, "cron 表达式无效: " + "\n".join(errs)
         return {"schedule_type": "monthly", "day_of_month": d, "time_hour": h, "time_minute": m,
-                "interval_minutes": 0, "weekday": -1}, None
+                "weekday": 0}, None
 
     # min hour * * dow（weekly，dow 为单个数字 0-7）
     if dom_s == "*" and month_s == "*":
-        if dow_s == "*":
-            return None, f"cron 表达式 {cron!r} 格式无法识别（min/hour 已定但 dom 和 dow 均为 '*'）。"
         m = _parse_int_field(min_s, 0, 59, "min", errs)
         h = _parse_int_field(hour_s, 0, 23, "hour", errs)
         if not _is_digits(dow_s) or not (0 <= int(dow_s) <= 7):
@@ -109,12 +107,12 @@ def _parse_cron(cron: str) -> tuple[dict, str | None]:
             return None, "cron 表达式无效: " + "\n".join(errs)
         weekday = _CRON_DOW_TO_WEEKDAY[int(dow_s)]
         return {"schedule_type": "weekly", "weekday": weekday, "time_hour": h, "time_minute": m,
-                "interval_minutes": 0, "day_of_month": 1}, None
+                "day_of_month": 1}, None
 
     return None, f"cron 表达式 {cron!r} 无法识别，请使用以下受支持的格式之一：\n" \
         "  * * * * *（每天 00:00）、min hour * * *（每天）、\n" \
         "  min hour * * dow（每周，dow=0-7，0/7 为周日，1=周一…6=周六）、\n" \
-        "  min hour dom * *（每月，dom=1-31）；不支持 */N、1-5、1,2 及按月指定月份。"
+        "  min hour dom * *（每月，dom=1-28）；不支持 */N、1-5、1,2 及按月指定月份。"
 
 
 def _default_name(mode: str, parsed: dict) -> str:
@@ -159,7 +157,7 @@ class ScheduleOpTool(BaseTool):
                 "type": "string",
                 "description": "5 字段 cron 表达式。仅支持：* * * * *（每天00:00）；"
                                "min hour * * *（每天）；min hour * * dow（每周，dow=0-7，0/7=周日，1=周一）；"
-                               "min hour dom * *（每月，dom=1-31）。",
+                               "min hour dom * *（每月，dom=1-28）。",
             },
             "task": {
                 "type": "string",
@@ -214,8 +212,17 @@ class ScheduleOpTool(BaseTool):
             return ToolResult(False, "", f"mode 必须是 interval|cron，收到 {mode!r}")
 
         if mode == "interval":
-            parsed = {"schedule_type": "interval",
-                      "interval_minutes": max(1, int(interval_minutes or 60))}
+            # 与 POST /schedules 的 Field(ge=1, le=525600) 同一口径：这里原先只做
+            # max(1, int(x or 60))，非数字字符串直接 ValueError 冒出 _create（不在下面的
+            # try 内），而 10**9 这种荒谬间隔能一路写进库。
+            raw = 60 if interval_minutes is None else interval_minutes
+            try:
+                minutes = int(str(raw).strip())
+            except (TypeError, ValueError):
+                return ToolResult(False, "", f"interval_minutes 需为整数分钟，收到 {interval_minutes!r}")
+            if not 1 <= minutes <= 525600:
+                return ToolResult(False, "", f"interval_minutes 需在 1-525600（约 365 天）之间，收到 {minutes}")
+            parsed = {"schedule_type": "interval", "interval_minutes": minutes}
         else:
             if not cron or not cron.strip():
                 return ToolResult(False, "", "mode=cron 时必须提供非空的 cron 表达式")
@@ -232,9 +239,13 @@ class ScheduleOpTool(BaseTool):
         data = {
             "name": task_name,
             "schedule_type": parsed["schedule_type"],
-            "interval_minutes": parsed.get("interval_minutes", 0),
+            # cron 派生的行不落 interval_minutes：留 0 的话，用户日后在界面上把类型
+            # 改成 interval 会撞上 POST/PATCH 的 ge=1 校验（422），而 UI 建行的默认是 60
+            "interval_minutes": parsed.get("interval_minutes", 60),
             "time_hour": parsed.get("time_hour", 9),
             "time_minute": parsed.get("time_minute", 0),
+            # weekday 没有「不适用」哨兵：compute_next_run 直接 int() 后与
+            # date.weekday()（0-6）比较，存 -1 等于埋一条永远不触发的周任务
             "weekday": parsed.get("weekday", 0),
             "day_of_month": parsed.get("day_of_month", 1),
             "target_host": "",
@@ -268,7 +279,9 @@ class ScheduleOpTool(BaseTool):
             return ToolResult(False, "", f"列出定时任务失败: {type(e).__name__}: {e}")
 
         if not rows:
-            return ToolResult(True, "", "暂无启用的定时任务")
+            # 成功态下驱动只把 output 喂回模型（driver.py: result.success → result.output），
+            # 原先提示写在 error 里、output 为空，模型看到的是空结果。
+            return ToolResult(True, "暂无启用的定时任务")
         lines = ["启用中的定时任务："]
         for r in rows:
             t = (r.get("task_prompt") or "").strip().splitlines()
@@ -284,7 +297,9 @@ class ScheduleOpTool(BaseTool):
             return ToolResult(False, "", "cancel 需要提供 schedule_id 参数")
         sid = str(schedule_id).strip()
         try:
-            ok = await asyncio.to_thread(db.delete_schedule, sid)
+            # 与 REST DELETE 同一实现：取消在途执行体 + 落定 running 行再删
+            from agent.schedule_engine import get_schedule_engine
+            ok = await get_schedule_engine().remove_schedule(sid)
         except Exception as e:
             return ToolResult(False, "", f"取消定时任务失败: {type(e).__name__}: {e}")
         if ok:

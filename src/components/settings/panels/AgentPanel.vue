@@ -28,6 +28,7 @@
                 min="0"
                 step="0.1"
                 placeholder="0"
+                @change="normalizeBudget"
               />
             </label>
             <label class="budget-field">
@@ -39,6 +40,7 @@
                 min="0"
                 step="10000"
                 placeholder="0"
+                @change="normalizeBudget"
               />
             </label>
           </div>
@@ -109,7 +111,7 @@
               <span class="tool-name">{{ p.tool }}</span>
               <span class="tool-desc">{{ p.keys.length }} 条授权键（{{ p.keys.map(k => k.split(':')[1] || '工具级').slice(0, 3).join('、') }}{{ p.keys.length > 3 ? ' …' : '' }}）</span>
             </div>
-            <button class="btn danger" :disabled="revoking === p.tool" @click="onRevoke(p.tool)">
+            <button class="btn danger" :disabled="revoking === p.tool" @click="onRevoke(p.tool, p.keys.length)">
               {{ revoking === p.tool ? '撤销中…' : '全部撤销' }}
             </button>
           </div>
@@ -217,16 +219,30 @@ import {
   type TickStatusResponse,
 } from '@/api/client'
 import { useToastStore } from '@/stores/toast'
+import { parseBackendTs } from '@/utils/format'
 import { useSettingsStore } from '@/stores/settings'
+import { useConfirm } from '@/composables/useConfirm'
 import ToggleSwitch from '@/components/settings/fields/ToggleSwitch.vue'
 
 const toast = useToastStore()
 const settingsStore = useSettingsStore()
+const { confirm } = useConfirm()
 
 const open = reactive({ budget: false, tools: true, perm: false, strat: false, webtools: false })
 
 // ── 运行预算（写本地设置，ssh-ai store 在下次运行时读取并随请求传给后端） ──
 const budget = computed(() => settingsStore.settings.agent)
+
+// 后端 /agent/run 对预算字段校验为 ge=0、token 为 int：清空（v-model.number 得到 ''）
+// 或输入负数/小数原样发出，会让整次运行以 422 失败 —— 用户只看到"跑不起来"。
+// 落库前归一化：清空/非法 = 0（= 用后端默认预算）。
+function normalizeBudget() {
+  const a = settingsStore.settings.agent
+  a.maxCostUsd = Number.isFinite(a.maxCostUsd) ? Math.max(0, a.maxCostUsd) : 0
+  a.maxTotalTokens = Number.isFinite(a.maxTotalTokens)
+    ? Math.max(0, Math.floor(a.maxTotalTokens))
+    : 0
+}
 const budgetSummary = computed(() => {
   const { maxCostUsd, maxTotalTokens } = budget.value
   const parts: string[] = []
@@ -295,7 +311,14 @@ async function loadPermissions() {
   }
 }
 
-async function onRevoke(tool: string) {
+async function onRevoke(tool: string, keyCount: number) {
+  const ok = await confirm({
+    title: '撤销永久授权',
+    message: `撤销「${tool}」的全部 ${keyCount} 条永久授权键？此后该工具每条命令都需重新审批。`,
+    confirmText: '全部撤销',
+    danger: true,
+  })
+  if (!ok) return
   revoking.value = tool
   try {
     await agentAdminApi.revokePermission(tool)
@@ -313,6 +336,22 @@ const allowCommand = ref('')
 const allowing = ref(false)
 
 async function onAllow() {
+  // 与后端 AllowPermissionRequest 的 Field 区间同口径（tool 1..64 / command ≤4096）。
+  // 提交前自己拦：不这么做的话，要么 pydantic 原文进 toast，要么给输入框加
+  // maxlength 静默截断 —— 授权键 = sha256(命令)，截断后的命令与实际执行的对不上，
+  // 授权永不命中，用户只会反复被审批弹窗骚扰且无从排查。
+  if (!allowTool.value) {
+    toast.error('请填写工具名')
+    return
+  }
+  if (allowTool.value.length > 64) {
+    toast.error('工具名不能超过 64 字符')
+    return
+  }
+  if (allowCommand.value.length > 4096) {
+    toast.error('绑定命令不能超过 4096 字符')
+    return
+  }
   allowing.value = true
   try {
     await agentAdminApi.allowPermission(allowTool.value, allowCommand.value || undefined)
@@ -404,6 +443,13 @@ async function onToggleStrategy(s: AgentStrategyItem, next: boolean) {
 }
 
 async function onDeleteStrategy(s: AgentStrategyItem) {
+  const ok = await confirm({
+    title: '淘汰演化策略',
+    message: `删除策略「${s.name}」？该条为库里唯一副本，删除不可恢复。`,
+    confirmText: '淘汰',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await agentAdminApi.deleteStrategy(s.id)
     strategies.value = strategies.value.filter((x) => x.id !== s.id)
@@ -416,7 +462,7 @@ async function onDeleteStrategy(s: AgentStrategyItem) {
 // ── 工具函数 ──
 function fmtDate(iso: string): string {
   try {
-    return new Date(iso.replace(' ', 'T') + (/[Z+]/.test(iso) ? '' : 'Z')).toLocaleDateString('zh-CN')
+    return parseBackendTs(iso).toLocaleDateString('zh-CN')
   } catch {
     return iso
   }
@@ -438,10 +484,10 @@ onMounted(() => {
 .panel-body { flex: 1; overflow-y: auto; padding-right: 4px; }
 
 .grp {
-  border: 1px solid var(--border-subtle, var(--border-default));
+  border: 1px solid var(--border-subtle);
   border-radius: 6px;
   margin-bottom: 10px;
-  background: var(--bg-input, transparent);
+  background: var(--bg-input);
 }
 .grp-head {
   display: flex; align-items: center; gap: 8px; width: 100%;
@@ -453,7 +499,7 @@ onMounted(() => {
 .grp-caret.open { transform: rotate(90deg); }
 .grp-title { font-weight: 600; }
 .grp-badge { margin-left: auto; font-size: 11px; color: var(--text-secondary); }
-.grp-badge.live { color: var(--accent-primary, #6aa97f); }
+.grp-badge.live { color: var(--accent-primary); }
 .grp.static .grp-badge { display: none; }
 .grp-body { padding: 2px 12px 12px; }
 
@@ -461,7 +507,7 @@ onMounted(() => {
 .hint.err { color: #d98f86; }
 .hint.muted { color: var(--text-tertiary); }
 .link-btn {
-  background: none; border: none; color: var(--accent-primary, #7aa2d0);
+  background: none; border: none; color: var(--accent-primary);
   cursor: pointer; font-size: 11.5px; font-family: inherit; padding: 0; text-decoration: underline;
 }
 
@@ -475,7 +521,7 @@ onMounted(() => {
 
 .tool-row, .perm-row, .strat-row {
   display: flex; align-items: center; gap: 10px;
-  padding: 7px 4px; border-top: 1px solid var(--border-subtle, rgba(255,255,255,.05));
+  padding: 7px 4px; border-top: 1px solid var(--border-subtle);
 }
 .strat-row.off { opacity: .55; }
 .tool-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
@@ -510,7 +556,7 @@ onMounted(() => {
 .budget-label { font-size: 11.5px; color: var(--text-secondary); }
 .num-input, .text-input {
   height: 26px; padding: 0 8px; border-radius: 4px;
-  background: var(--bg-input, rgba(255,255,255,.04)); border: 1px solid var(--border-default);
+  background: var(--bg-input); border: 1px solid var(--border-default);
   color: var(--text-primary); font-size: 12px; font-family: inherit;
 }
 .num-input { width: 120px; }

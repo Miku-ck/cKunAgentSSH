@@ -47,6 +47,7 @@
           <MessageItem
             :message="msg"
             :is-last="idx === props.messages.length - 1"
+            :is-streaming="isLiveAgentRun(msg, idx)"
           >
             <template v-if="showMessageActions" #actions="{ content }">
               <slot name="message-actions" :content="content" :msg="msg"></slot>
@@ -402,6 +403,9 @@ function onInput() {
   detectSkillTrigger()
 }
 
+/** 触发菜单的 '/' 在输入框中的下标（选中技能后要抹掉整段 "/query"） */
+let skillTriggerPos = -1
+
 /** 检测 / 触发技能菜单 */
 function detectSkillTrigger() {
   const el = inputRef.value
@@ -423,6 +427,7 @@ function detectSkillTrigger() {
 
   skillQuery.value = segment
   skillActiveIdx.value = 0
+  skillTriggerPos = lastSlash
   showSkillMenu.value = true
 }
 
@@ -430,6 +435,7 @@ function closeSkillMenu() {
   showSkillMenu.value = false
   skillQuery.value = ''
   skillActiveIdx.value = 0
+  skillTriggerPos = -1
 }
 
 // 审查修复（P2）：点击菜单外区域关闭技能菜单 — 原实现只有 Esc/选中/失焦
@@ -454,12 +460,26 @@ onUnmounted(() => {
  *  双重注入可漂移（手动删文本技能仍附加 / 删标签文本残留在消息里）。
  *  现以 skillIds 为单一数据源，标签提供视觉反馈。 */
 function pickSkill(skill: { id: string; name: string }) {
+  const el = inputRef.value
+  // 抹掉唤起菜单的 "/query" 片段：斜杠只是触发符，留在输入框里会被当成正文发出去。
+  // （早先的实现用 "@技能名" 文本替换它，改为 skillIds 单一数据源时把替换一起删了）
+  let caretPos = -1
+  if (skillTriggerPos >= 0) {
+    const end = el?.selectionStart ?? inputText.value.length
+    inputText.value = inputText.value.slice(0, skillTriggerPos) + inputText.value.slice(end)
+    caretPos = skillTriggerPos
+  }
   if (!selectedSkillIds.value.includes(skill.id)) {
     selectedSkillIds.value.push(skill.id)
   }
   closeSkillMenu()
   requestAnimationFrame(() => {
-    inputRef.value?.focus()
+    if (el && caretPos >= 0) {
+      el.focus()
+      el.setSelectionRange(caretPos, caretPos)
+    } else {
+      inputRef.value?.focus()
+    }
     autoResize()
   })
 }
@@ -509,6 +529,11 @@ const displayMessages = computed(() => {
         streamingContent: undefined,
         reasoning: agentStore.reasoning || '',
         streamingReasoning: undefined,
+        // 运行中的实时轨迹：不注入这一份，气泡里的内联轨迹要等到整轮跑完才出现 ——
+        // 期间用户看不到任何工具调用进度（AgentTraceInline 的 isLive 分支也因此永远
+        // 走不到）。lastRunId 必须清空：它是「查看轨迹」按钮的显示条件，而按钮拉的是
+        // 后端已固化的 run，运行中点开只会拿到半截结果并被组件缓存住不再刷新。
+        agentTrace: { ...agentStore.snapshot(), lastRunId: '' },
       }
     }
     // 非活跃消息保持原始引用，避免不必要的重渲染
@@ -666,7 +691,7 @@ defineExpose({ focusInput, restoreDraft, prefill })
 <style scoped>
 .side-chat-panel {
   background: transparent;
-  border-left: 1px solid var(--border-subtle, #2d2d30);
+  border-left: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
@@ -689,7 +714,7 @@ defineExpose({ focusInput, restoreDraft, prefill })
 
 .resize-handle:hover,
 .resize-handle:active {
-  background: var(--accent-blue, #0078d4);
+  background: var(--accent-primary);
 }
 
 /* Header */
@@ -698,7 +723,7 @@ defineExpose({ focusInput, restoreDraft, prefill })
   display: flex;
   align-items: center;
   padding: 0 4px;
-  border-bottom: 1px solid var(--border-subtle, #2d2d30);
+  border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
   gap: 8px;
 }
@@ -820,13 +845,13 @@ defineExpose({ focusInput, restoreDraft, prefill })
 
 /* Input Section */
 .input-section {
-  border-top: 1px solid var(--border-subtle, #2d2d30);
+  border-top: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
 
 .input-container {
   padding: 0 4px;
-  border-bottom: 1px solid var(--border-subtle, #2d2d30);
+  border-bottom: 1px solid var(--border-subtle);
   position: relative;
 }
 
@@ -949,7 +974,7 @@ defineExpose({ focusInput, restoreDraft, prefill })
   left: 0;
   right: 0;
   margin-bottom: 4px;
-  background: var(--bg-sidebar-solid, #1a1a1a);
+  background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
   border-radius: 6px;
   box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.5);
@@ -1126,7 +1151,7 @@ defineExpose({ focusInput, restoreDraft, prefill })
   left: 50%;
   transform: translateX(-50%);
   margin-bottom: 4px;
-  background: var(--bg-elevated-solid, #232323);
+  background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
   border-radius: 6px;
   padding: 4px;

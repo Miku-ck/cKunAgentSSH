@@ -16,6 +16,10 @@ const THINK_CLOSE_TAGS = ['</think>', '</thinking>', '</reasoning>', '</thought>
 export class StreamingThinkScrubber {
   private _inBlock: boolean = false
   private _buf: string = ''
+  /** _buf/pending 首字符在前一次 feed 里的邻居（'' = 整条流开头）。
+   *  跨 delta 切断的标签（"…答案<th" + "inking>…"）重组后落在 pending[0]，
+   *  只看 idx>0 会把「上一块末尾的普通文字」当成流开头，误判成行首标签。 */
+  private _prevChar: string = ''
 
   /**
    * 喂入一段 delta 文本，返回可见部分（think 块内容被擦洗）
@@ -79,7 +83,12 @@ export class StreamingThinkScrubber {
         }
       }
     }
-    
+
+    // 记下"下一次 feed 首字符的邻居"：pending 中未被缓冲部分的最后一个字符。
+    // 整段都进了 buf（consumedEnd<=0）时沿用上一次的值——缓冲仍在往回流。
+    const consumedEnd = pending.length - this._buf.length
+    if (consumedEnd > 0) this._prevChar = pending[consumedEnd - 1]
+
     return output
   }
 
@@ -107,6 +116,7 @@ export class StreamingThinkScrubber {
   reset(): void {
     this._inBlock = false
     this._buf = ''
+    this._prevChar = ''
   }
 
   /**
@@ -130,8 +140,10 @@ export class StreamingThinkScrubber {
     // 按出现位置升序：最早出现的标签优先（位置相同时保持列表顺序）
     candidates.sort((a, b) => a.idx - b.idx)
     for (const { tag, idx } of candidates) {
-      // block-boundary 检查：标签前必须是换行或字符串开头
-      if (idx > 0 && !this._isBlockBoundary(text[idx - 1])) {
+      // block-boundary 检查：标签前必须是换行或流开头。
+      // idx===0 时标签前没有字符可看：用上一块带过来的 _prevChar 判定（'' 才是流开头）
+      const before = idx > 0 ? text[idx - 1] : this._prevChar
+      if (!this._isBlockBoundary(before)) {
         continue
       }
       return { found: true, start: idx, end: idx + tag.length }
@@ -156,7 +168,8 @@ export class StreamingThinkScrubber {
   }
 
   private _isBlockBoundary(ch: string): boolean {
-    return ch === '\n' || ch === '\r'
+    // '' 只可能是「整条流还没有任何字符」= 流开头，按边界处理
+    return ch === '' || ch === '\n' || ch === '\r'
   }
 
   private _matchPartialTag(remaining: string, tags: string[]): number {

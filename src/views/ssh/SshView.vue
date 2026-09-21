@@ -84,7 +84,7 @@ v-show="s.id === store.activeSessionId"
 
         <!-- 定时任务页面 -->
         <div v-show="activeNavPage === 'schedules'" class="schedules-page">
-          <SchedulesView />
+          <SchedulesView :active="activeNavPage === 'schedules'" />
         </div>
 
         <!-- 监控仪表盘页面 -->
@@ -176,7 +176,6 @@ v-show="s.id === store.activeSessionId"
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           复制终端
         </div>
-        <div class="tab-ctx-sep"></div>
         <div class="tab-ctx-sep"></div>
         <div class="tab-ctx-item" @click="handleTabCtxAction('closeCurrent')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -320,11 +319,11 @@ defineExpose({
 
 /* ─── Tab Bar ─── */
 .term-tabs {
-  height: 34px;
+  height: var(--tabbar-h);
   display: flex;
   align-items: center;
   background: var(--bg-base);
-  border-bottom: 1px solid var(--border-subtle, #2d2d30);
+  border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
   overflow: hidden;
   position: relative;
@@ -346,8 +345,8 @@ defineExpose({
 
 /* Home按钮(加号) - 跟随终端标签右侧,样式与 term-tab 一致但无内容 */
 .new-tab-btn {
-  height: 30px;
-  width: 30px;
+  height: calc(var(--tabbar-h) - 4px);
+  width: calc(var(--tabbar-h) - 4px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -367,18 +366,18 @@ defineExpose({
 }
 
 .new-tab-btn:active {
-  background: var(--bg-active, #094771);
+  background: var(--bg-active);
 }
 
 .new-tab-btn.active {
-  color: var(--accent-blue);
+  color: var(--accent-primary);
   border-color: var(--border-default);
   margin-bottom: -1px;
   padding-bottom: 1px;
 }
 
 .term-tab {
-  height: 30px;
+  height: calc(var(--tabbar-h) - 4px);
   padding: 0 10px;
   display: flex;
   align-items: center;
@@ -402,7 +401,7 @@ defineExpose({
 }
 
 .term-tab:active {
-  background: var(--bg-active, #094771);
+  background: var(--bg-active);
 }
 
 .term-tab.active {
@@ -456,6 +455,9 @@ defineExpose({
   right: 0;
   bottom: 0;
   overflow: hidden;
+  /* 终端 ANSI 主题固定暗色，必须给独立深底：浅色主题下若透出浅色底层会不可读。
+     背景图模式下由文件末尾的 has-background 规则置为透明（用户主动选择）。 */
+  background: var(--bg-terminal);
 }
 
 /* ─── Directory Panel ─── */
@@ -535,7 +537,7 @@ defineExpose({
   display: flex;
   align-items: center;
   gap: 8px;
-  color: var(--accent-blue);
+  color: var(--accent-primary);
   font-size: 18px;
   font-weight: 600;
   margin-bottom: 24px;
@@ -557,7 +559,7 @@ defineExpose({
 }
 
 .qs-search:focus-within {
-  border-color: var(--accent-blue);
+  border-color: var(--accent-primary);
 }
 
 .qs-input {
@@ -624,7 +626,7 @@ defineExpose({
 
 .qs-card-icon.local {
   background: rgba(88, 166, 255, 0.08);
-  color: var(--accent-blue);
+  color: var(--accent-primary);
 }
 
 .qs-card-icon.remote {
@@ -666,7 +668,7 @@ defineExpose({
   z-index: 9999;
   min-width: 140px;
   padding: 4px 0;
-  background: var(--bg-elevated-solid, #1a1a1e);
+  background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
   border-radius: 6px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
@@ -678,7 +680,7 @@ defineExpose({
   gap: 8px;
   padding: 6px 12px;
   font-size: 12px;
-  color: var(--text-secondary, #969696);
+  color: var(--text-secondary);
   cursor: pointer;
   transition: background 0.1s;
 }
@@ -690,13 +692,13 @@ defineExpose({
 
 .tab-ctx-item.danger:hover {
   background: rgba(244, 135, 113, 0.15);
-  color: var(--accent-red, #f48771);
+  color: var(--accent-red);
 }
 
 .tab-ctx-sep {
   height: 1px;
   margin: 4px 0;
-  background: var(--border-subtle, #2d2d30);
+  background: var(--border-subtle);
 }
 
 /* 启用自定义背景图时，让主内容区透明 */
