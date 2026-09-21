@@ -18,13 +18,13 @@
         <li v-for="m in memories" :key="m.id" class="mem-item">
           <div class="mem-line">
             <span class="mem-type" :class="m.type">{{ typeText[m.type] || m.type }}</span>
-            <span class="mem-importance" :title="`重要度 ${m.importance.toFixed(2)} · 命中 ${m.use_count} 次`">
-              {{ m.importance.toFixed(2) }}
+            <span class="mem-importance" :title="`重要度 ${fmtScore(m.importance)} · 命中 ${m.use_count} 次`">
+              {{ fmtScore(m.importance) }}
             </span>
           </div>
           <p class="mem-content">{{ m.content }}</p>
           <div class="mem-meta">
-            <span>{{ fmtDate(m.last_used_at) }} 最近使用</span>
+            <span>{{ fmtDate(m.last_used_at) }} 写入</span>
             <span class="spacer" />
             <button class="mem-del" :disabled="deleting === m.id" @click="onDelete(m)">
               {{ deleting === m.id ? '删除中…' : '删除' }}
@@ -58,6 +58,7 @@
 import { onMounted, ref } from 'vue'
 import { agentAdminApi, toFriendlyMessage, type AgentMemoryItem } from '@/api/client'
 import { useToastStore } from '@/stores/toast'
+import { parseBackendTs } from '@/utils/format'
 
 defineEmits<{ close: [] }>()
 
@@ -105,9 +106,15 @@ async function onPrune() {
   }
 }
 
+// 旧行/异常写入可能给出 null importance：直接 .toFixed 会在渲染中抛错，
+// 一条脏数据就让整个记忆列表空白。
+function fmtScore(v: number | null): string {
+  return typeof v === 'number' ? v.toFixed(2) : '-'
+}
+
 function fmtDate(iso: string): string {
   try {
-    const d = new Date(iso.replace(' ', 'T') + (/[Z+]/.test(iso) ? '' : 'Z'))
+    const d = parseBackendTs(iso)
     return `${d.getMonth() + 1}/${d.getDate()}`
   } catch {
     return iso
@@ -126,7 +133,7 @@ onMounted(load)
   max-height: calc(100% - 90px);
   display: flex;
   flex-direction: column;
-  background: var(--bg-panel-solid, #1b1e24);
+  background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
   border-radius: 8px;
   z-index: 30;
@@ -134,7 +141,7 @@ onMounted(load)
 }
 .mem-head {
   display: flex; align-items: center; gap: 8px;
-  padding: 10px 12px; border-bottom: 1px solid var(--border-subtle, var(--border-default));
+  padding: 10px 12px; border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
 .mem-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
@@ -148,7 +155,7 @@ onMounted(load)
 .mem-hint { font-size: 12px; color: var(--text-secondary); line-height: 1.6; }
 .mem-hint.err { color: #d98f86; }
 .mem-list { list-style: none; margin: 0; padding: 0; }
-.mem-item { padding: 8px 0; border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,.05)); }
+.mem-item { padding: 8px 0; border-bottom: 1px solid var(--border-subtle); }
 .mem-item:last-child { border-bottom: none; }
 .mem-line { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
 .mem-type {
@@ -173,7 +180,7 @@ onMounted(load)
 .mem-del:disabled { opacity: .5; cursor: default; }
 .mem-foot {
   display: flex; align-items: center; gap: 8px; padding: 8px 12px;
-  border-top: 1px solid var(--border-subtle, var(--border-default));
+  border-top: 1px solid var(--border-subtle);
   font-size: 11.5px; color: var(--text-secondary); flex-shrink: 0;
 }
 .prune-q { flex: 1; }
@@ -181,7 +188,7 @@ onMounted(load)
   height: 24px; padding: 0 10px; border-radius: 4px; font-size: 11.5px; font-family: inherit;
   background: none; border: 1px solid var(--border-default); color: var(--text-primary); cursor: pointer;
 }
-.mem-btn:hover:not(:disabled) { border-color: var(--accent-primary, #7aa2d0); }
+.mem-btn:hover:not(:disabled) { border-color: var(--accent-primary); }
 .mem-btn:disabled { opacity: .45; cursor: default; }
 .mem-btn.danger { color: #cf8a80; border-color: rgba(207,138,128,.4); }
 </style>

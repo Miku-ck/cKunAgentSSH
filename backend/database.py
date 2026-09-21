@@ -285,8 +285,9 @@ def init_db(db_path: str) -> None:
                 source_conv_id  TEXT,
                 agent_run_id    TEXT,
                 embedding       TEXT,                    -- JSON list[float]，仅 semantic
+                embedding_src   TEXT,                    -- 向量来源指纹（P4），仅 semantic
                 importance      REAL DEFAULT 0.5,
-                last_used_at    TEXT NOT NULL DEFAULT (datetime('now')),
+                last_used_at    TEXT NOT NULL DEFAULT (datetime('now')),  -- P3 起为写入时间，touch 不再更新（见 touch_agent_memory）
                 use_count       INTEGER DEFAULT 0,
                 created_at      TEXT NOT NULL DEFAULT (datetime('now'))
             );
@@ -462,6 +463,13 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE conversations ADD COLUMN status TEXT DEFAULT 'completed'")
     if 'mode' not in columns:
         conn.execute("ALTER TABLE conversations ADD COLUMN mode TEXT NOT NULL DEFAULT 'ssh'")
+
+    # P4：embedding 向量来源标记（"api:<model_id>" 或 "local-<dim>"），
+    # 跨来源的向量不在同一空间，检索/去重前据此互斥比较
+    cursor = conn.execute("PRAGMA table_info(agent_memories)")
+    columns = {row[1] for row in cursor.fetchall()}
+    if 'embedding_src' not in columns:
+        conn.execute("ALTER TABLE agent_memories ADD COLUMN embedding_src TEXT")
 
     cursor = conn.execute("PRAGMA table_info(skills)")
     columns = {row[1] for row in cursor.fetchall()}
@@ -978,12 +986,16 @@ def list_disabled_tools(mode: str = "all") -> list[str]:
 
 
 def get_relevant_memories(mode: str, limit: int = 5) -> list[dict]:
-    """获取某模式下最相关的记忆（按最近使用 + 使用次数排序）
+    """获取某模式下最近的 semantic 记忆（按最近使用 + 使用次数排序）
 
     C-review M2：原实现读一张全库无写入者的旧表，永远返回空 → 记忆注入
     形同虚设。真正的语义记忆由 post_processor → mem_mgr.save_semantic →
     add_agent_memory 写入 `agent_memories`（type='semantic'）。改为读该表
     semantic 层，字段形状与旧返回保持一致（调用方仅用 content）。
+
+    P1 修复后唯一调用点是 routes/agent._retrieve_memory_contents 的**故障
+    降级路径**（检索超时/异常时按 recency 兜底）——不做相关性判定，禁止
+    在检索正常但空结果时调用，否则等于绕开 threshold 注入无关记忆。
     """
     conn = _get_conn()
     try:
@@ -1205,6 +1217,13 @@ def delete_builtin_skill_by_slug(slug: str) -> bool:
     """按 slug 删除内置技能（用于孤儿清理：文件系统已删除的技能）"""
     conn = _get_conn()
     try:
+        # skill_mode_config 没有指向 skills 的外键，不显式清就会每次删除残留一行
+        # （GET /skills 与每次按 mode 过滤都全表扫它）
+        conn.execute(
+            "DELETE FROM skill_mode_config WHERE skill_id IN "
+            "(SELECT id FROM skills WHERE slug = ? AND is_builtin = 1)",
+            (slug,),
+        )
         cur = conn.execute(
             "DELETE FROM skills WHERE slug = ? AND is_builtin = 1", (slug,)
         )
@@ -1219,6 +1238,8 @@ def delete_skill(skill_id: str) -> bool:
     conn = _get_conn()
     try:
         cur = conn.execute("DELETE FROM skills WHERE id = ? AND is_builtin = 0", (skill_id,))
+        if cur.rowcount > 0:
+            conn.execute("DELETE FROM skill_mode_config WHERE skill_id = ?", (skill_id,))
         conn.commit()
         return cur.rowcount > 0
     finally:
@@ -1241,27 +1262,6 @@ def list_disabled_skills_for_mode(mode: str) -> list[str]:
         conn.close()
 
 
-def list_all_skill_mode_configs() -> dict[str, dict[str, dict[str, bool]]]:
-    """返回所有技能的按模式启用配置
-
-    返回格式：{skill_id: {mode: {"enabled": bool}, ...}, ...}
-    """
-    conn = _get_conn()
-    try:
-        rows = conn.execute(
-            "SELECT skill_id, mode, enabled FROM skill_mode_config"
-        ).fetchall()
-        result: dict[str, dict[str, dict[str, bool]]] = {}
-        for r in rows:
-            skill_id = r["skill_id"]
-            mode = r["mode"]
-            enabled = r["enabled"] == 1
-            result.setdefault(skill_id, {})[mode] = {"enabled": enabled}
-        return result
-    finally:
-        conn.close()
-
-
 def upsert_skill_mode_config(skill_id: str, mode: str, enabled: int) -> dict:
     """插入或更新某技能在某模式下的启用状态"""
     now = _now()
@@ -1275,8 +1275,14 @@ def upsert_skill_mode_config(skill_id: str, mode: str, enabled: int) -> dict:
             (cfg_id, skill_id, mode, 1 if enabled else 0, now, now),
         )
         conn.commit()
+        # ON CONFLICT 命中时保留的是既有行 id，新生成的 cfg_id 并不存在于表中 —
+        # 与 upsert_tool_config 同样重查，避免把幽灵 id 返回给调用方
+        row = conn.execute(
+            "SELECT id FROM skill_mode_config WHERE skill_id = ? AND mode = ?",
+            (skill_id, mode),
+        ).fetchone()
         return {
-            "id": cfg_id,
+            "id": row["id"] if row else cfg_id,
             "skill_id": skill_id,
             "mode": mode,
             "enabled": 1 if enabled else 0,
@@ -1297,15 +1303,23 @@ def _mask_api_key(key: str | None) -> str:
     return key[:4] + "****"
 
 
+# models_config 全列（三处查询共用）。此前各处各写一份字面量，
+# get_default_model 那份漏了 reasoning_tokens —— 读默认模型的调用方拿到 None，
+# 思考预算退化为「不限制」。
+_MC_COLS = (
+    "id, name, model_id, provider, base_url, api_key, "
+    "supports_thinking, supports_image, supports_tool_calling, "
+    "is_default, is_default_ssh, "
+    "temperature, max_tokens, max_output_tokens, reasoning_tokens, top_p, sort_order, created_at, updated_at"
+)
+
+
 def list_models_config() -> list[dict]:
     """获取所有模型配置（按 sort_order 正序，api_key 已脱敏）"""
     conn = _get_conn()
     try:
         rows = conn.execute(
-            "SELECT id, name, model_id, provider, base_url, api_key, "
-            "supports_thinking, supports_image, supports_tool_calling, "
-            "is_default, is_default_ssh, "
-            "temperature, max_tokens, max_output_tokens, reasoning_tokens, top_p, sort_order, created_at, updated_at "
+            f"SELECT {_MC_COLS} "
             "FROM models_config ORDER BY sort_order ASC, created_at ASC"
         ).fetchall()
         result = [dict(r) for r in rows]
@@ -1327,12 +1341,6 @@ def get_model_config(model_id: str, mask_key: bool = True) -> Optional[dict]:
     """
     if not model_id:
         return None
-    _MC_COLS = (
-        "id, name, model_id, provider, base_url, api_key, "
-        "supports_thinking, supports_image, supports_tool_calling, "
-        "is_default, is_default_ssh, "
-        "temperature, max_tokens, max_output_tokens, reasoning_tokens, top_p, sort_order, created_at, updated_at"
-    )
     conn = _get_conn()
     try:
         row = conn.execute(
@@ -1364,8 +1372,10 @@ def create_model_config(
     supports_image: bool = False,
     supports_tool_calling: bool = False,
     temperature: float = 0.7,
-    # 默认 4096：远低于常见 vLLM 16K/32K 上下文，避免 max_tokens 占用全部窗口导致 400
-    max_tokens: int = 4096,
+    # max_tokens 是「上下文窗口」列（与 models_config 建表 DEFAULT 16384 一致），
+    # 不是输出预算 —— 输出预算由 max_output_tokens 管。窗口若默认 4096，
+    # safe_max_tokens 会把输出压到 2048、思考模式下压到 256 下限。
+    max_tokens: int = 16384,
     max_output_tokens: int = 4096,
     top_p: float = 0.9,
     is_default_ssh: bool = False,
@@ -1491,13 +1501,14 @@ def set_default_model(model_id: str, mode: Optional[str] = None) -> None:
             col = "is_default"
         else:
             col = "is_default_ssh"
-        with conn:  # 单事务：BEGIN → 两条 UPDATE → commit/rollback
-            conn.execute(
-                f"UPDATE models_config SET {col} = 0 WHERE id != ?", (model_id,)
-            )
-            conn.execute(
-                f"UPDATE models_config SET {col} = 1 WHERE id = ?", (model_id,)
-            )
+        # 两条 UPDATE 置于同一隐式事务，最后一次性 commit（保持原子性）
+        conn.execute(
+            f"UPDATE models_config SET {col} = 0 WHERE id != ?", (model_id,)
+        )
+        conn.execute(
+            f"UPDATE models_config SET {col} = 1 WHERE id = ?", (model_id,)
+        )
+        conn.commit()
     finally:
         conn.close()
 
@@ -1511,22 +1522,10 @@ def get_default_model(mode: Optional[str] = None, mask_key: bool = True) -> Opti
     """
     conn = _get_conn()
     try:
-        if mode is None:
-            row = conn.execute(
-                "SELECT id, name, model_id, provider, base_url, api_key, "
-                "supports_thinking, supports_image, supports_tool_calling, "
-                "is_default, is_default_ssh, "
-                "temperature, max_tokens, max_output_tokens, top_p "
-                "FROM models_config WHERE is_default = 1 LIMIT 1"
-            ).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT id, name, model_id, provider, base_url, api_key, "
-                "supports_thinking, supports_image, supports_tool_calling, "
-                "is_default, is_default_ssh, "
-                "temperature, max_tokens, max_output_tokens, top_p "
-                "FROM models_config WHERE is_default_ssh = 1 LIMIT 1"
-            ).fetchone()
+        col = "is_default" if mode is None else "is_default_ssh"
+        row = conn.execute(
+            f"SELECT {_MC_COLS} FROM models_config WHERE {col} = 1 LIMIT 1"
+        ).fetchone()
         if not row:
             return None
         result = dict(row)
@@ -1691,9 +1690,17 @@ def get_agent_runs(conversation_id: str = None, limit: int = 20) -> list[dict]:
 
 
 def add_tool_call(agent_run_id: str, iteration: int, tool_name: str,
-                  arguments: str, result: str = "", success: bool = True,
+                  arguments: str, result: Optional[str] = None,
+                  success: Optional[bool] = None,
                   duration_ms: int = 0) -> str:
-    """记录工具调用，返回生成的 tool_call_id（H10 修复）"""
+    """记录工具调用，返回生成的 tool_call_id（H10 修复）
+
+    本函数只在**调用开始前**被调用（routes/agent.py 的 tool_call_start），结果由
+    update_tool_call 回写。因此 result/success 默认落 NULL = 「还没有结果」：
+    原默认 (\"\", True) 让一条跑到一半崩溃、永远等不到回写的调用在轨迹回放里显示成
+    「已调用（成功）」——同一件事在内联快照里显示「进行中」，两处读数互相矛盾。
+    NULL 不是 False：False 是「工具明确失败」。
+    """
     tool_call_id = _new_id()
     conn = _get_conn()
     try:
@@ -1701,7 +1708,7 @@ def add_tool_call(agent_run_id: str, iteration: int, tool_name: str,
             "INSERT INTO tool_calls (id, agent_run_id, iteration, tool_name, arguments, result, success, duration_ms, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (tool_call_id, agent_run_id, iteration, tool_name, arguments, result,
-             1 if success else 0, duration_ms, _now()),
+             None if success is None else (1 if success else 0), duration_ms, _now()),
         )
         conn.commit()
     finally:
@@ -1746,6 +1753,7 @@ def add_agent_memory(
     agent_run_id: Optional[str] = None,
     embedding: Optional[list] = None,
     importance: float = 0.5,
+    embedding_src: Optional[str] = None,
 ) -> str:
     """添加一条 Agent 记忆，返回新记忆 id"""
     mid = _new_id()
@@ -1756,12 +1764,12 @@ def add_agent_memory(
         conn.execute(
             "INSERT INTO agent_memories "
             "(id, type, mode, content, source_conv_id, agent_run_id, embedding, "
-            " importance, last_used_at, use_count, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
+            " embedding_src, importance, last_used_at, use_count, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
             (
                 mid, mem_type, mode, content,
                 source_conv_id, agent_run_id, emb_json,
-                importance, now, now,
+                embedding_src, importance, now, now,
             ),
         )
         conn.commit()
@@ -1789,7 +1797,7 @@ def get_agent_memories(
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
         rows = conn.execute(
             "SELECT id, type, mode, content, source_conv_id, agent_run_id, "
-            "       embedding, importance, last_used_at, use_count, created_at "
+            "       embedding, embedding_src, importance, last_used_at, use_count, created_at "
             f"FROM agent_memories {where} "
             "ORDER BY last_used_at DESC LIMIT ?",
             (*params, limit),
@@ -1800,14 +1808,18 @@ def get_agent_memories(
 
 
 def touch_agent_memory(memory_id: str) -> None:
-    """更新记忆使用时间和计数"""
-    now = _now()
+    """命中计数 +1。
+
+    P3 修复：不再刷新 last_used_at。检索命中 → 刷使用时间 → 候选排序/prune
+    都按 last_used_at DESC → 被注入过的记忆更容易再次进候选、更晚被剪，
+    是条自增强回路；冷记忆掉出候选池后既不可检索也永不清理。该列现语义为
+    "写入时间"（插入后不变），排序 = 新近 + use_count，检索行为不再污染它。
+    """
     conn = _get_conn()
     try:
         conn.execute(
-            "UPDATE agent_memories SET last_used_at = ?, use_count = use_count + 1 "
-            "WHERE id = ?",
-            (now, memory_id),
+            "UPDATE agent_memories SET use_count = use_count + 1 WHERE id = ?",
+            (memory_id,),
         )
         conn.commit()
     finally:
@@ -1938,12 +1950,50 @@ def set_app_setting(key: str, value: str) -> None:
         conn.close()
 
 
+def _int_app_setting(key: str, default: int, low: Optional[int] = None, high: Optional[int] = None) -> int:
+    """读取整型 app_setting：脏值/越界值回默认值而不是抛 ValueError。
+
+    写入侧（routes/settings.py 的 Field 区间）只管得住走接口的写：升级前的旧行、
+    直接改库、或校验收紧前落下的越界值仍会留在表里。读取侧不兜住的话，一个脏行
+    就让 GET /settings/* 整条 500、面板永远打不开，用户连改回来的入口都没有。
+
+    low/high 传入时按写入区间一并校验：越界同样回默认值（不钳到边界——库里那行是
+    什么用户意图不可知，默认值是唯一说得过去的读数）。
+    """
+    raw = get_app_setting(key)
+    try:
+        value = int(raw) if raw is not None and str(raw).strip() else default
+    except (TypeError, ValueError):
+        return default
+    if low is not None and value < low:
+        return default
+    if high is not None and value > high:
+        return default
+    return value
+
+
+def get_conv_retention() -> dict:
+    """会话保留清理设置（默认关闭）。
+
+    唯一读取点：routes/settings.py 的 GET/PUT 与 routes/agent.py 的 run 前置清理
+    原先各抄一份，key 或默认值一改就会两边漂移。
+    """
+    enabled = (get_app_setting("conv_retention.enabled", "false") or "false").lower() == "true"
+    return {"enabled": enabled, "keep_count": _int_app_setting("conv_retention.keep_count", 1000)}
+
+
 def get_memory_settings() -> dict:
-    """读取记忆相关设置，返回带默认值的 dict"""
+    """读取记忆相关设置，返回带默认值的 dict
+
+    max_items 的区间就是写入侧的 Field 区间（10..500），越界读数不能原样放出去：
+    这个值一路喂到 consciousness_tick 的 prune_agent_memories(max_count=...)，其
+    SQL 是 `LIMIT -1 OFFSET ?` —— max_count=0 等于 OFFSET 0 无 LIMIT，把该 mode
+    下全部记忆一次删空。没有面板能改回这行，用户只能眼看着经验被清光。
+    """
     return {
         "enabled": get_app_setting("memory.enabled", "true") == "true",
         "strategy": get_app_setting("memory.strategy", "auto"),
-        "max_items": int(get_app_setting("memory.max_items", "100") or "100"),
+        "max_items": _int_app_setting("memory.max_items", 100, low=10, high=500),
     }
 
 
@@ -2242,6 +2292,21 @@ def update_schedule_run(
             vals + [run_key],
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def fail_running_schedule_runs(schedule_id: str, error: str) -> int:
+    """把某任务所有还在 running 的执行历史标为 failed，返回受影响行数。"""
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            """UPDATE schedule_runs SET status = 'failed', error = ?, finished_at = ?
+               WHERE schedule_id = ? AND status = 'running'""",
+            (error, _now(), schedule_id),
+        )
+        conn.commit()
+        return cur.rowcount
     finally:
         conn.close()
 

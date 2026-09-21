@@ -12,9 +12,10 @@ Embedding 生成策略:
   - 失败时回退到本地哈希伪 embedding（dim=256），保证无 embedding 服务时也能工作
 
 检索逻辑:
-  - Episodic: 按 mode 过滤 + 最近使用时间排序，取 top_k
-  - Semantic: query embedding 与所有 semantic 记忆的 embedding 做余弦相似度，
-              取 score > threshold 的 top_k
+  - Episodic: 按 mode 过滤 + 写入时间倒序取候选，用关键词 Jaccard（episodic_threshold）过滤
+  - Semantic: query embedding 与候选池（max_items 条）的 embedding 做余弦相似度，
+              取 score >= threshold 的 top_k
+  （P3 起 last_used_at 不再被检索 touch 刷新，排序键 = 写入新近 + use_count）
 """
 import asyncio
 import hashlib
@@ -22,6 +23,7 @@ import json
 import logging
 import math
 import re
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Optional
 
@@ -31,14 +33,18 @@ logger = logging.getLogger(__name__)
 
 # 伪 embedding 维度（仅在 embedding API 不可用时使用）
 _FALLBACK_DIM = 256
+# 向量来源指纹（P4）：不同来源的向量不在同一空间，禁止跨来源做余弦
+_FALLBACK_SRC = f"local-{_FALLBACK_DIM}"
 # 默认 top_k
 _DEFAULT_TOP_K = 5
-# 语义检索候选池上限（审查 MINOR：原为 200，含 embedding 全文拉取负载过高）
+# 语义检索候选池回退值（正常路径用记忆设置 max_items，见 retrieve；
+# P3 前该值恒为池上限，与 max_items 的保留上限错位 —— 池外记忆不可检索也剪不掉）
 _SEMANTIC_CANDIDATE_CAP = 100
 
 # 模块级缓存：按 (base_url, api_key, embedding_model) 缓存 MemoryManager 实例，
 # 避免每次 Agent 运行都重建实例导致 _embedding_available 缓存丢失。
-_memory_mgr_cache: dict[tuple, "MemoryManager"] = {}
+# OrderedDict：P5 起命中要 move_to_end，真 LRU（原普通 dict 只按插入序淘汰）
+_memory_mgr_cache: "OrderedDict[tuple, MemoryManager]" = OrderedDict()
 _MEMORY_MGR_CACHE_MAX = 4
 
 
@@ -53,10 +59,13 @@ def get_memory_manager(
     if mgr is None:
         mgr = MemoryManager(base_url, api_key, embedding_model)
         _memory_mgr_cache[key] = mgr
-        # LRU 式淘汰：超过上限时移除最早的条目
+        # 超过上限时移除最久未用的条目（P5：原实现 get 不移动键序，
+        # 是 FIFO 冒充 LRU；命中后 move_to_end 才是真 LRU）
         if len(_memory_mgr_cache) > _MEMORY_MGR_CACHE_MAX:
             oldest_key = next(iter(_memory_mgr_cache))
             _memory_mgr_cache.pop(oldest_key, None)
+    else:
+        _memory_mgr_cache.move_to_end(key)
     return mgr
 
 
@@ -75,6 +84,7 @@ class MemoryEntry:
     source_conv_id: str = ""
     agent_run_id: str = ""
     embedding: list[float] | None = None  # 仅 semantic 类型有
+    embedding_src: str = ""              # 向量来源指纹（P4），仅 semantic 类型有
     importance: float = 0.5              # 重要性 0-1
     created_at: str = ""
     last_used_at: str = ""
@@ -108,32 +118,40 @@ class MemoryManager:
     # ── Embedding 生成 ──
 
     async def embed(self, text: str) -> list[float]:
+        """生成文本的 embedding 向量（不带来源信息，兼容旧调用方）"""
+        vec, _src = await self.embed_with_src(text)
+        return vec
+
+    async def embed_with_src(self, text: str) -> tuple[list[float], str]:
         """
-        生成文本的 embedding 向量
+        生成 embedding 向量 + 来源指纹（P4）
 
         优先调用远程 embedding API；失败时回退到本地伪 embedding。
+        来源指纹随实际产出方向量的一方给出（API 降级时返回的是伪向量，
+        就必须标 local 而不是标配置的模型 —— 存标与实产不一致会让跨模型
+        余弦重新混进来，去重/检索的相关性判定全部失真）。
         """
         if not text.strip():
-            return [0.0] * _FALLBACK_DIM
+            return [0.0] * _FALLBACK_DIM, _FALLBACK_SRC
 
         # 若已确认 embedding API 不可用，直接走回退
         if self._embedding_available is False:
             self._embedding_fail_count += 1
             # 每 5 次调用重试一次 API
             if self._embedding_fail_count % 5 != 0:
-                return self._fallback_embed(text)
+                return self._fallback_embed(text), _FALLBACK_SRC
             # 重试
             self._embedding_available = None  # 重置为未确认，允许重试
 
         # 若未配置 base_url 或 embedding_model，直接走回退
         if not self.base_url or not self.embedding_model:
             self._embedding_available = False
-            return self._fallback_embed(text)
+            return self._fallback_embed(text), _FALLBACK_SRC
 
         try:
             vec = await self._call_embedding_api(text)
             self._embedding_available = True
-            return vec
+            return vec, f"api:{self.embedding_model}"
         except Exception as e:
             # embedding 服务不可用是常见场景（如 vLLM 未部署 embedding 模型），
             # 降级到伪 embedding 是设计内行为，用 debug 级别避免日志噪音
@@ -141,7 +159,7 @@ class MemoryManager:
                 "Embedding API 不可用，回退到本地伪 embedding: %s", e
             )
             self._embedding_available = False
-            return self._fallback_embed(text)
+            return self._fallback_embed(text), _FALLBACK_SRC
 
     async def _call_embedding_api(self, text: str) -> list[float]:
         """调用 OpenAI 兼容的 /v1/embeddings 端点"""
@@ -200,7 +218,8 @@ class MemoryManager:
         query: str,
         mode: str,
         top_k: int = _DEFAULT_TOP_K,
-        threshold: float = 0.15,
+        threshold: float = 0.3,
+        episodic_threshold: float = 0.15,
     ) -> list[MemoryQueryResult]:
         """
         检索相关记忆（合并 episodic + semantic）
@@ -209,10 +228,14 @@ class MemoryManager:
             query: 当前任务/查询文本
             mode: 当前模式（ssh 运维模式）
             top_k: 返回最大条数
-            threshold: 相似度阈值（episodic 关键词重叠分 + semantic 余弦相似度通用）。
-                       E 修复：原默认 0.3 且仅 semantic 生效，episodic 硬编码 0.15；
-                       现统一为传入阈值，默认 0.15（episodic 原行为，向后兼容）。
-                       semantic 的既有调用方均显式传 threshold（如 0.3），不受影响。
+            threshold: semantic 余弦相似度阈值
+            episodic_threshold: episodic 关键词 Jaccard 阈值。
+                       P2 修复：E 修复把两层统一为单一 threshold，但 Jaccard 与
+                       cosine 分布异质——episodic 摘要是 200-300 字长模板句，词集
+                       大，与短 query 的 Jaccard 极易低于 0.3，主调用点传 0.3 后
+                       episodic 层实际不可达（三层退化为 semantic 单轨）。
+                       现拆为两个参数，episodic 回到原行为 0.15。
+                       是否进一步换 query 覆盖率计分，待双阈值上线后按命中观察定。
         """
         # 延迟导入避免循环依赖
         import database as db
@@ -234,39 +257,51 @@ class MemoryManager:
                 # 关键词重叠相似度（Jaccard 变体）
                 content_terms = _extract_terms(entry.content)
                 score = _jaccard_score(query_terms, content_terms)
-                # E 修复：改用传入的 threshold（默认 0.15，关键词匹配较弱的放宽值）
-                if score >= threshold:
+                # P2 修复：用独立的 episodic_threshold（见 retrieve docstring）
+                if score >= episodic_threshold:
                     results.append(MemoryQueryResult(memory=entry, score=score))
         except Exception as e:
             logger.warning("Episodic 记忆检索失败: %s", e)
 
         # 2. Semantic 记忆 — 按语义相似度检索
-        # 审查 MINOR 修复：候选池由 200 降为 _SEMANTIC_CANDIDATE_CAP（100）。
-        # 每次 retrieve 都会拉取候选池全部行（含 embedding 向量，单行可达数 KB），
-        # 200 行 ≈ 1~2MB 文本 + 200 次元余弦；按 last_used_at 倒序取最近使用的
-        # 100 条在召回质量上基本无损（长期冷记忆命中概率极低），负载减半。
-        # 池子饱和（行数 == 上限）时提示一次，便于后续评估是否需要 DB 级向量索引。
+        # P3 修复：候选池与保留上限同源 —— 读取记忆设置的 max_items（prune 侧
+        # 已保证每 mode/type ≤ max_items，池 = 整表，不存在"保留 500 条但只有
+        # 最近 100 条可检索、其余既召回不到也剪不掉"的死库存）。
+        # 已知取舍（登记）：max_items=500 且全为真实高维 embedding 时单次 retrieve
+        # 拉全表 JSON 偏重（估计数百 ms，线程池内不卡事件循环）；规模再涨应引入
+        # DB 级向量索引（sqlite-vec 类），见饱和告警。
         try:
-            # C-review MINOR-6：同步 sqlite 调用放线程池
+            try:
+                # C-review MINOR-6：同步 sqlite 调用放线程池
+                mem_settings = await asyncio.to_thread(db.get_memory_settings)
+                pool = int(mem_settings.get("max_items", _SEMANTIC_CANDIDATE_CAP))
+            except Exception:
+                pool = _SEMANTIC_CANDIDATE_CAP  # 设置读取失败回退常量
             semantic_rows = await asyncio.to_thread(
                 db.get_agent_memories,
-                mode=mode, mem_type="semantic", limit=_SEMANTIC_CANDIDATE_CAP,
+                mode=mode, mem_type="semantic", limit=pool,
             )
-            if len(semantic_rows) >= _SEMANTIC_CANDIDATE_CAP and not getattr(self, "_semantic_pool_warned", False):
+            if len(semantic_rows) >= pool and not getattr(self, "_semantic_pool_warned", False):
                 self._semantic_pool_warned = True
                 logger.warning(
-                    "semantic 记忆候选池饱和（%d 条），检索召回可能受限；"
-                    "记忆规模持续增长时建议引入 DB 级向量索引",
-                    _SEMANTIC_CANDIDATE_CAP,
+                    "semantic 记忆候选池饱和（%d 条，max_items 生效中），"
+                    "记忆规模继续增长时建议引入 DB 级向量索引",
+                    pool,
                 )
             if semantic_rows:
-                query_vec = await self.embed(query)
+                query_vec, query_src = await self.embed_with_src(query)
                 query_dim = len(query_vec) if query_vec else 0
                 scored = []
                 mismatch_count = 0
+                src_skip_count = 0
                 for row in semantic_rows:
                     entry = _row_to_entry(row)
                     if not entry.embedding:
+                        continue
+                    # P4：来源不同的向量不在同一空间，跳过（历史行 src 为空
+                    # 的存量数据维持旧行为，只查维度）
+                    if entry.embedding_src and entry.embedding_src != query_src:
+                        src_skip_count += 1
                         continue
                     # 维度校验：不匹配则跳过并记录
                     if len(entry.embedding) != query_dim:
@@ -275,10 +310,11 @@ class MemoryManager:
                     score = _cosine(query_vec, entry.embedding)
                     if score >= threshold:
                         scored.append((MemoryQueryResult(memory=entry, score=score), score))
-                if mismatch_count > 0:
+                if mismatch_count > 0 or src_skip_count > 0:
                     logger.warning(
-                        "semantic 记忆 embedding 维度不匹配: %d 条被跳过（query_dim=%d）",
-                        mismatch_count, query_dim,
+                        "semantic 记忆向量不可比: %d 条 embedding 来源不同被跳过、"
+                        "%d 条维度不匹配（query_src=%s, query_dim=%d）",
+                        src_skip_count, mismatch_count, query_src, query_dim,
                     )
                 # 按分数排序取 top_k
                 scored.sort(key=lambda x: x[1], reverse=True)
@@ -297,8 +333,8 @@ class MemoryManager:
             if len(unique) >= top_k:
                 break
 
-        # touch 检索到的记忆（更新 last_used_at）
-        # C-review MINOR-6：同步 sqlite 调用放线程池
+        # touch 检索到的记忆（只加命中计数；P3 起不再刷 last_used_at，
+        # 切断「被检索→更新→更易被检索/免剪」的自增强回路）
         for r in unique:
             try:
                 await asyncio.to_thread(db.touch_agent_memory, r.memory.id)
@@ -346,10 +382,10 @@ class MemoryManager:
         agent_run_id: str = "",
         importance: float = 0.6,
     ) -> Optional[str]:
-        """保存语义记忆（知识/事实），自动生成 embedding"""
+        """保存语义记忆（知识/事实），自动生成 embedding + 来源指纹"""
         if not content.strip():
             return None
-        embedding = await self.embed(content)
+        embedding, embedding_src = await self.embed_with_src(content)
         # 延迟导入避免循环依赖
         import database as db
         try:
@@ -363,6 +399,7 @@ class MemoryManager:
                 agent_run_id=agent_run_id,
                 embedding=embedding,
                 importance=importance,
+                embedding_src=embedding_src,
             )
         except Exception as e:
             logger.warning("保存 semantic 记忆失败: %s", e)
@@ -426,7 +463,9 @@ def _row_to_entry(row: dict) -> MemoryEntry:
         source_conv_id=row.get("source_conv_id", "") or "",
         agent_run_id=row.get("agent_run_id", "") or "",
         embedding=embedding,
-        importance=float(row.get("importance", 0.5) or 0.5),
+        embedding_src=row.get("embedding_src", "") or "",
+        # 0.0 是合法的"低重要性"取值：`or 0.5` 会把它抬回 0.5，重要性读数失真
+        importance=0.5 if row.get("importance") is None else float(row["importance"]),
         created_at=row.get("created_at", "") or "",
         last_used_at=row.get("last_used_at", "") or "",
         use_count=int(row.get("use_count", 0) or 0),

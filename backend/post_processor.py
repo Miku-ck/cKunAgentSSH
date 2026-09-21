@@ -105,7 +105,6 @@ class TurnContext:
     assistant_reasoning: str
     model_id: str
     turn_index: int = 0     # 当前会话第几轮（0-based）
-    is_first_turn: bool = True
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -136,8 +135,17 @@ def _resolve_model_id(config_field: str, fallback: str) -> str:
     return config_field.strip() or fallback
 
 
-def _clean_trigger_words(words: list) -> list[str]:
-    """清洗 trigger_words：去重 + 长度检查 + 特殊字符过滤"""
+def _clean_trigger_words(words) -> list[str]:
+    """清洗 trigger_words：去重 + 长度检查 + 特殊字符过滤
+
+    入参是 LLM 产出的 JSON，形状不受控：常把数组写成单个逗号分隔字符串
+    （"部署,发布,k8s"）。原实现直接 for w in words 逐字符迭代，全部被
+    长度门滤掉 → 技能零触发词 → match_skills 永不命中，自演化技能静默失效。
+    """
+    if isinstance(words, str):
+        words = re.split(r"[,，;；、/|]+", words)
+    elif not isinstance(words, (list, tuple)):
+        words = []
     seen: set = set()
     result: list[str] = []
     for w in words:
@@ -309,7 +317,7 @@ _TITLE_PROMPT_TEMPLATE = """\
 async def _generate_title(ctx: TurnContext, config: PostProcessConfig) -> None:
     """生成会话标题 — 标题仍是默认值时调用 LLM（幂等）
 
-    M5 修复：原实现有「仅首轮」（is_first_turn）门槛，但首轮失败（user 消息已入库）
+    M5 修复：原实现有「仅首轮」（turn_index == 0）门槛，但首轮失败（user 消息已入库）
     后次轮 turn_index=1 → 门槛永久关闭，会话名停在 "New Chat" 且永远补不回来。
     下方「标题仍是默认值」检查已保证幂等（已生成标题则不覆盖、用户自定义标题不动），
     故去掉首轮门槛，让失败/跳过的轮次能补生成标题。
@@ -321,7 +329,11 @@ async def _generate_title(ctx: TurnContext, config: PostProcessConfig) -> None:
     # D 修复（事件循环阻塞）：db 同步调用放线程池
     try:
         conv = await asyncio.to_thread(db.get_conversation, ctx.conversation_id)
-        if not conv or conv.get("title", "") not in _DEFAULT_TITLES:
+        # title 可能是 NULL：.get("title", "") 只对「键缺失」兜底，NULL 列返回 None，
+        # 而 None 不在 _DEFAULT_TITLES 里 → 判成「已有自定义标题」永久早退，
+        # 这条会话再也补不上标题（db.try_set_default_conversation_title 是显式处理
+        # title IS NULL 的，两边口径要对齐）。"" 在集合内，所以归一到 "" 即正确。
+        if not conv or (conv.get("title") or "") not in _DEFAULT_TITLES:
             return
     except Exception:
         logger.exception("[post_process:title] 查询会话失败")
@@ -473,7 +485,7 @@ async def _extract_memories(ctx: TurnContext, config: PostProcessConfig) -> None
         logger.warning("[post_process:memory] JSON 解析失败: %s, raw=%s", e, full_text[:200])
         return
 
-    memories = result.get("memories", [])[:config.max_memories_per_turn]
+    memories = _llm_list(result, "memories")[:config.max_memories_per_turn]
     if not memories:
         return
 
@@ -514,10 +526,16 @@ async def _extract_memories(ctx: TurnContext, config: PostProcessConfig) -> None
     if saved_count > 0:
         logger.info("[post_process:memory] 保存 %d 条记忆", saved_count)
 
-    # 容量管理
+    # 容量管理：上限取记忆设置（与 consciousness_tick 的 _prune_stale_memories 同源）。
+    # 原先硬编码 100 —— 用户把 max_items 调到 500，每轮结束时仍被削回 100，
+    # 设置面板的保留条数在这里是死的（同一个保留上限写两处）。
     try:
+        mem_settings = await asyncio.to_thread(db.get_memory_settings)
         await asyncio.to_thread(
-            db.prune_agent_memories, mode=ctx.mode, mem_type="semantic", max_count=100
+            db.prune_agent_memories,
+            mode=ctx.mode,
+            mem_type="semantic",
+            max_count=mem_settings.get("max_items", 100),
         )
     except Exception:
         logger.warning("[post_process:memory] prune 失败")
@@ -531,11 +549,15 @@ async def _is_memory_duplicate(
 ) -> bool:
     """检查记忆是否与已有记忆相似"""
     try:
-        # 用 MemoryManager.retrieve 检索（内部对 semantic 用 cosine 相似度）
+        # 用 MemoryManager.retrieve 检索（内部对 semantic 用 cosine 相似度）。
+        # P2 拆双阈值后必须显式关掉 episodic 层：episodic 走 Jaccard、默认阈值
+        # 0.15，一条不相干的运行总结会被判成"重复"而吞掉新记忆；去重本就只该
+        # 与 semantic 层比对。
         results = await mem_mgr.retrieve(
             query=content, mode=mode, top_k=3, threshold=threshold,
+            episodic_threshold=1.1,  # Jaccard ∈ [0,1]，1.1 = episodic 层不可达
         )
-        return len(results) > 0
+        return any(r.memory.type == "semantic" for r in results)
     except Exception:
         # 检索失败时不阻断保存（fail-open）
         return False
@@ -596,7 +618,11 @@ async def _generate_skill(ctx: TurnContext, config: PostProcessConfig) -> None:
             )
             return
     except Exception:
-        logger.warning("[post_process:skill] 查询技能数量失败")
+        # 数不出来就按「已达上限」处理：这道保护的唯一目的就是防 auto 技能无限堆积，
+        # 查询失败（锁库等）后继续生成等于保护在最容易出问题时形同虚设。
+        # 原先 _count_auto_skills 内部把异常吞成 0，既要不到保护也让这个分支不可达。
+        logger.warning("[post_process:skill] 查询技能数量失败，跳过本轮生成")
+        return
 
     skill_model = _resolve_model_id(config.skill_model_id, ctx.model_id)
     model_cfg = await asyncio.to_thread(db.get_model_config, skill_model, mask_key=False)
@@ -640,7 +666,7 @@ async def _generate_skill(ctx: TurnContext, config: PostProcessConfig) -> None:
         logger.warning("[post_process:skill] JSON 解析失败: %s, raw=%s", e, full_text[:200])
         return
 
-    skills = result.get("skills", [])
+    skills = _llm_list(result, "skills")
     created_count = 0
     for skill in skills:
         if not isinstance(skill, dict):
@@ -662,14 +688,40 @@ def _count_auto_skills() -> int:
     此处用全局上限保护，避免 auto 技能无限累积污染数据库。
     max_skills_per_conversation 实际语义为"全局 auto 技能上限"。
     如需真正的 per-conversation 限制，需在 skills 表新增 source_conv_id 字段。
+
+    查询失败向上抛：调用方要按「数不出来 = 不放行」处理（见 _generate_skill）。
     """
-    try:
-        # 审查 MINOR 修复：COUNT 查询替代 list_skills(limit=9999) 全量加载
-        # （list_skills 会拉取所有技能的 system_prompt 全文，仅为数一下行数）
-        return db.count_skills_by_source("auto")
-    except Exception:
-        logger.warning("[post_process:skill] 查询技能数量失败")
-        return 0
+    # 审查 MINOR 修复：COUNT 查询替代 list_skills(limit=9999) 全量加载
+    # （list_skills 会拉取所有技能的 system_prompt 全文，仅为数一下行数）
+    return db.count_skills_by_source("auto")
+
+
+def _llm_list(result, key: str) -> list:
+    """取 LLM JSON 结果中的数组字段，形状异常时归一为空列表。
+
+    两处坑：① 模型常直接回一个顶层数组而非包一层对象，此时 result 是 list，
+    调 .get 直接 AttributeError；② 键存在但值为 null 时 get 返回 None（默认值
+    只对缺失键生效），后续切片/迭代 TypeError。原实现两种都靠外层 except 兜掉，
+    代价是整轮记忆/技能提取静默丢失。
+    """
+    if isinstance(result, list):
+        items = result
+    elif isinstance(result, dict):
+        items = result.get(key)
+    else:
+        items = None
+    return items if isinstance(items, list) else []
+
+
+def _llm_text(value) -> str:
+    """LLM 产出的字符串字段归一：非字符串（null/数组/数字）一律按缺失处理。
+
+    原实现 skill_dict.get("name","").strip() —— 键存在但值为 null 时 get 返回
+    None（默认值只对缺失键生效），AttributeError 被外层 except 吞掉，整条技能
+    连同其它合法字段一起丢失。这里不做 str() 强转：把 ["a","b"] 变成
+    "['a', 'b']" 会伪造出一段可通过长度门的 system_prompt，不如判定为缺失。
+    """
+    return value.strip() if isinstance(value, str) else ""
 
 
 def _create_auto_skill_with_quality_gate(
@@ -679,8 +731,8 @@ def _create_auto_skill_with_quality_gate(
 ) -> Optional[dict]:
     """创建技能 — 带 slug 去重 + 质量门"""
     try:
-        name = skill_dict.get("name", "").strip()
-        slug = skill_dict.get("slug", "").strip()
+        name = _llm_text(skill_dict.get("name"))
+        slug = _llm_text(skill_dict.get("slug"))
         if not name:
             return None
         if not slug:
@@ -695,7 +747,7 @@ def _create_auto_skill_with_quality_gate(
             logger.info("[post_process:skill] 跳过重复 slug: %s", slug)
             return None
 
-        system_prompt = skill_dict.get("system_prompt", "").strip()
+        system_prompt = _llm_text(skill_dict.get("system_prompt"))
         # 质量门：system_prompt 至少 N 字
         if len(system_prompt) < config.skill_min_system_prompt_len:
             logger.info(
@@ -703,7 +755,7 @@ def _create_auto_skill_with_quality_gate(
             )
             return None
 
-        description = skill_dict.get("description", "").strip()
+        description = _llm_text(skill_dict.get("description"))
         trigger_words = _clean_trigger_words(skill_dict.get("trigger_words", []))
 
         return db.create_skill(
@@ -765,7 +817,6 @@ async def post_process_after_turn(
         assistant_reasoning=assistant_reasoning,
         model_id=model_id,
         turn_index=turn_index,
-        is_first_turn=(turn_index == 0),
     )
 
     # 三任务并发执行，互不影响
@@ -817,6 +868,10 @@ class PostProcessManager:
         turn_index: int = 0,
     ) -> str:
         """提交后处理任务，返回 task_id"""
+        # 每次提交取当前配置：self.config 是单例构造时的快照，而设置面板的 PUT 只
+        # 换模块级 _config（set_post_process_config），不会重建这个常驻单例 ——
+        # 用户关掉"后处理"后，enabled 判定仍按旧值放行任务。
+        self.config = get_post_process_config()
         if not self.config.enabled:
             return ""
 

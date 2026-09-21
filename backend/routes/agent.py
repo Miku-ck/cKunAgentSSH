@@ -1,15 +1,24 @@
 """
-Agent 路由 — SSE 流式 Agent 运行 + Agent 运行历史查询
+Agent 路由 — SSE 流式运行 + 治理管理端点
 
-POST /api/agent/run    — 启动 Agent，SSE 流式返回运行过程
-GET  /api/agent/runs   — 查询 Agent 运行历史
-GET  /api/agent/tools  — 查询当前可用工具列表
-GET  /api/agent/memories — 查询 Agent 三层记忆
-DELETE /api/agent/memories/{id} — 删除单条记忆
-GET  /api/agent/strategies — 查询反思/演化策略
-POST /api/agent/evolve  — 手动触发策略演化
-GET  /api/agent/tick    — 查询意识 tick 状态
-POST /api/agent/tick    — 手动触发意识 tick
+运行与交付：
+  POST  /agent/run                          — 启动 Agent，SSE 流式返回运行过程
+  POST  /agent/tool-result                  — 可见终端执行模式回传命令结果
+  GET   /agent/runs/{run_id}/trace          — 回放单次运行的完整轨迹
+工具：
+  GET   /agent/tools                        — 当前可用工具列表
+  PATCH /agent/tools/{tool_name}/enabled    — 启停某工具
+审批授权：
+  POST  /agent/permission/grant|revoke|allow|deny-command|release-run/{run_id}
+  GET   /agent/permission/list              — 永久授权键列表
+  POST  /agent/safety/classify              — 命令内容级高危判定
+澄清向导：
+  POST  /agent/clarification/answer|skip
+记忆：
+  GET   /agent/memories · DELETE /agent/memories/{id} · POST /agent/memories/prune
+意识 tick 与演化策略：
+  GET   /agent/tick/status                  — 意识循环运行状态
+  GET   /agent/strategies · PATCH .../{id}/enabled · DELETE .../{id}
 """
 import asyncio
 import json
@@ -98,8 +107,8 @@ async def _run_reflection_and_evolution(
             run_id, result.score, cost_usd, result.summary,
         )
 
-        # 加载近 10 条反思，触发演化
-        recent = reflection_mgr.load_recent_reflections(mode, limit=10)
+        # 加载近 10 条反思，触发演化 — 用未过滤的"最近"视图，不是高分注入视图
+        recent = reflection_mgr.load_reflections_for_evolution(mode, limit=10)
         if len(recent) >= 3:  # 至少 3 条反思才演化
             evolved = evolution_mgr.evolve(mode=mode, recent_reflections=recent)
             if evolved.adjustments:
@@ -179,6 +188,13 @@ def _build_agent_system_prompt(
             "管服务用 service_manage。基于返回内容直接推理，避免短时间内重复读取同一内容；"
             "查看大文件的不同位置时优先指定 offset/limit 读取相关片段。"
         )
+        # 探测命令构建规范：多段探测用 ; 串联而非 &&；exit 非零属预期，不是连接异常
+        parts.append(
+            "探测命令规则：一次执行多段探测/排查命令时用 ; 串联各段，不要用 &&——"
+            "du/find/ls 遇到无权限路径会以非零码退出（属预期），&& 链会因此中断后续段落。"
+            "命令 exit code 非零不等于连接或执行异常：先看已捕获的输出内容再下结论"
+            "（du 仍会输出可读部分的大小）。"
+        )
         # 长任务指引：>60s 的任务必须走后台，禁止 shell_exec 同步死等
         parts.append(
             "长任务规则：预计执行超过 60 秒的任务（大文件传输、构建、批量巡检、等待类操作）"
@@ -210,38 +226,67 @@ def _build_agent_system_prompt(
     return "\n\n".join(parts)
 
 
+def _load_evolved_config(evolution_mgr: "EvolutionEngine", mode: str) -> Optional[dict]:
+    """读取最新演化配置，失败按「无演化配置」降级（调用方在 to_thread 中执行）"""
+    try:
+        return evolution_mgr.load_latest_evolved_config(mode)
+    except Exception as e:
+        logger.warning("加载演化配置失败: %s", e)
+        return None
+
+
+def _resolve_thinking(req: "AgentRunRequest", evolved_cfg: Optional[dict]) -> bool:
+    """enable_thinking 三态解析：None = 客户端未表态（交给演化配置），
+    显式 True/False 一律以用户选择为准。
+
+    必须在 safe_max_tokens 之前定稿 —— 推理预算只在 thinking 生效时占用输出空间
+    （stirrups.call_llm 未开启时显式传 None），thinking 关闭还预留 8192 会把
+    小上下文模型的输出削到 256 token，回答与工具调用 JSON 静默截断。
+    """
+    if req.enable_thinking is not None:
+        return req.enable_thinking
+    return bool((evolved_cfg or {}).get("enable_thinking", False))
+
+
 def _resolve_evolution_config(
     req: "AgentRunRequest",
     model_cfg: dict,
     safe_max: int,
-    evolution_mgr: "EvolutionEngine",
+    evolved_cfg: Optional[dict],
+    thinking: bool,
 ) -> dict:
-    """解析演化配置，返回 effective thinking/max_iter/temperature/max_tokens"""
-    try:
-        evolved_cfg = evolution_mgr.load_latest_evolved_config(req.mode)
-        if evolved_cfg:
-            # 用户未显式 enable_thinking 时，应用演化值
-            thinking = req.enable_thinking or evolved_cfg.get("enable_thinking", False)
-            # H11：应用演化后的 max_iterations（学到的最优值），用户值作为兜底
-            evolved_iter = evolved_cfg.get("max_iterations")
-            max_iter = evolved_iter if evolved_iter is not None else req.max_iterations
-            # 演化值覆盖模型配置默认值
-            evolved_temp = evolved_cfg.get("temperature")
-            temperature = evolved_temp if evolved_temp is not None else model_cfg.get("temperature", 0.7)
-            # H13：应用演化后的 max_tokens
-            evolved_max_tokens = evolved_cfg.get("max_tokens")
-            max_tokens = evolved_max_tokens if evolved_max_tokens else safe_max
-        else:
-            thinking = req.enable_thinking
-            max_iter = req.max_iterations
-            temperature = model_cfg.get("temperature", 0.7)
-            max_tokens = safe_max
-    except Exception as e:
-        logger.warning("加载演化配置失败: %s", e)
-        thinking = req.enable_thinking
-        max_iter = req.max_iterations
-        temperature = model_cfg.get("temperature", 0.7)
-        max_tokens = safe_max
+    """解析演化配置，返回 effective thinking/max_iter/temperature/max_tokens
+
+    evolved_cfg / thinking 由调用方加载并解析 —— safe_max_tokens 必须先知道
+    thinking 是否生效才能决定预留多少推理预算，见下方调用点。
+
+    演化值是**落库的历史数据**，读取侧必须重新校界：写侧的 Field(ge=1, le=500)
+    只约束请求，管不住 agent_strategies 里的旧行/手改行；越界值会直接进了
+    HarnessAgentConfig（迭代 0 = 一轮就收工，max_tokens 超窗 = LLM 400）。
+    """
+    max_iter = req.max_iterations
+    temperature = model_cfg.get("temperature", 0.7)
+    max_tokens = safe_max
+    if evolved_cfg:
+        # 只有用户开着「动态步数预算」时，演化学到的迭代上限才接管。
+        # 原实现无条件覆盖 —— 设置面板里的 max_iterations 与动态预算开关双双失效
+        # （下面那句老注释「用户值作为兜底」写的正是相反的语义）。
+        evolved_iter = evolved_cfg.get("max_iterations")
+        if req.enable_dynamic_budget and isinstance(evolved_iter, (int, float)) and not isinstance(evolved_iter, bool):
+            v = int(evolved_iter)
+            # 越界即弃用（不是夹到边界）：演化写入时自己限在 5-300，读到区间外的值
+            # 说明这行数据来自旧版本/手改，夹成 1 会让 run 一轮收工，比不接管更糟
+            if 1 <= v <= 500:
+                max_iter = v
+        evolved_temp = evolved_cfg.get("temperature")
+        if isinstance(evolved_temp, (int, float)) and not isinstance(evolved_temp, bool):
+            t = float(evolved_temp)
+            # 演化温度按 mode 存、跨模型共用 —— 只保证落在可用区间
+            if 0.0 <= t <= 2.0:
+                temperature = t
+        evolved_max_tokens = evolved_cfg.get("max_tokens")
+        if isinstance(evolved_max_tokens, int) and 0 < evolved_max_tokens < safe_max:
+            max_tokens = evolved_max_tokens
 
     return {
         "thinking": thinking,
@@ -268,7 +313,10 @@ class AgentRunRequest(BaseModel):
     environment: Literal["test", "prod"] = "test"
     # 可见终端模式：True 时 shell_exec 命令交付到可见终端（前端 PTY/SSH）而非 headless 执行
     visible_terminal: bool = False
-    enable_thinking: bool = False
+    # 深度思考开关：None = 客户端未表态（交给演化配置），True/False = 用户显式选择。
+    # 原实现是 bool = False，无法区分「没选」与「选了关」，导致演化一旦学会
+    # 开启 thinking，用户就再也关不掉（前端始终显式发送该字段时才走 None 分支）。
+    enable_thinking: Optional[bool] = None
     enable_tools: bool = True
     # E 修复：max_iterations 边界校验（1-500），防 LLM/恶意请求传 0 或天文数字
     max_iterations: int = Field(100, ge=1, le=500)
@@ -300,8 +348,8 @@ _in_flight_lock = asyncio.Lock()
 async def _acquire_run_slot(conversation_id: str, run_id: str) -> Optional[str]:
     """原子地为 conversation 占位。返回 None 表示成功占位；返回已有 run_id 表示冲突。
 
-    自愈：占位者的 DB 行已存在且处于终态（completed/failed — cleanup finally
-    被取消打断的陈旧残留）时，记日志并接管占位，避免会话被永久锁死。
+    自愈：占位者的 DB 行已存在且处于终态（completed/failed/human_help/max_reached —
+    cleanup finally 被取消打断的陈旧残留）时，记日志并接管占位，避免会话被永久锁死。
     注意：DB 行缺失不算陈旧（占位先于 create_agent_run，新 run 可能有毫秒级
     窗口还没有行）— 误接管活 run 的代价高于多等一次。
     """
@@ -314,7 +362,12 @@ async def _acquire_run_slot(conversation_id: str, run_id: str) -> Optional[str]:
                 row = await asyncio.to_thread(db.get_agent_run, existing)
                 if row is not None:
                     status_text = row.get("status", "")
-                    stale = row.get("status") in ("completed", "failed")
+                    # 终态集合与 database.update_agent_run 的 _TERMINAL_RUN_STATUSES
+                    # 对齐：漏掉 human_help / max_reached 时，这两种结束的 run 的内存
+                    # 占位永不自愈 → 该会话永久报「已有运行中的 Agent 任务」
+                    stale = row.get("status") in (
+                        "completed", "failed", "human_help", "max_reached",
+                    )
             except Exception:
                 stale = False
             if not stale:
@@ -367,22 +420,11 @@ async def _maybe_prune_agent_runs() -> None:
         logger.warning("agent_runs 保留清理失败（best-effort，不阻塞）", exc_info=True)
     # 会话保留清理：用户数据，仅当【显式开启】才执行（默认关闭 → 不碰）
     try:
-        retention = await asyncio.shield(asyncio.to_thread(_get_conv_retention_setting))
+        retention = await asyncio.shield(asyncio.to_thread(db.get_conv_retention))
         if retention.get("enabled"):
             await asyncio.shield(asyncio.to_thread(db.prune_conversations, retention.get("keep_count", 1000)))
     except Exception:
         logger.warning("会话保留清理失败（best-effort，不阻塞）", exc_info=True)
-
-
-def _get_conv_retention_setting() -> dict:
-    """读取会话保留设置（默认关闭）。与 routes/settings.py 的 key 保持一致。"""
-    enabled = (db.get_app_setting("conv_retention.enabled", "false") or "false").lower() == "true"
-    raw = db.get_app_setting("conv_retention.keep_count")
-    try:
-        keep = int(raw) if raw is not None else 1000
-    except (ValueError, TypeError):
-        keep = 1000
-    return {"enabled": enabled, "keep_count": keep}
 
 
 _startup_reconciled = False
@@ -405,6 +447,42 @@ async def _reconcile_stale_runs_once() -> None:
             logger.warning("启动对账: %d 条滞留 running 的 agent_runs 已标记 failed", n)
     except Exception as e:
         logger.warning("启动对账失败（不影响本次运行）: %s", e)
+
+
+# P5：30s 对交互首 token 太宽容（embedding API 慢时用户干等 SSE 无输出）。
+# 8s 覆盖正常 API 往返 + 本地伪 embedding 全池比对；超时仍有故障兜底路径。
+_RETRIEVE_TIMEOUT_SECONDS = 8.0
+
+
+async def _retrieve_memory_contents(mgr, *, query: str, mode: str) -> list[str]:
+    """三层记忆检索，返回注入 system prompt 的记忆内容列表。
+
+    P1 修复：兜底只在检索故障（超时/异常）时触发。检索返回空是相关性判定的
+    合法结论（库里没有相关记忆），此前空结果照样兜底注入最近 5 条 semantic，
+    等于绕开 threshold 把最不相关的近期记忆塞进 prompt —— 与意图跳过想避免的
+    "你是什么模型被无关记忆污染"（见 agent/memory.py retrieve 注释）同源复活。
+    """
+    retrieve_failed = False
+    contents: list[str] = []
+    try:
+        # M1 修复：加超时保护，防止 embedding API 阻塞导致 SSE 连接挂起无数据
+        results = await asyncio.wait_for(
+            mgr.retrieve(query=query, mode=mode, top_k=5, threshold=0.3),
+            timeout=_RETRIEVE_TIMEOUT_SECONDS,
+        )
+        contents = [r.memory.content for r in results if r.memory.content]
+    except asyncio.TimeoutError:
+        retrieve_failed = True
+        logger.warning("记忆检索超时（%ss），降级兜底", _RETRIEVE_TIMEOUT_SECONDS)
+    except Exception as e:
+        retrieve_failed = True
+        logger.warning("记忆检索失败，降级兜底: %s", e)
+
+    if retrieve_failed and not contents:
+        # 故障降级：按 recency 取 semantic，不做相关性判定（仅限故障路径）
+        _fallback_mems = await asyncio.to_thread(db.get_relevant_memories, mode, limit=5)
+        contents = [m["content"] for m in _fallback_mems]
+    return contents
 
 
 @router.post("/agent/run")
@@ -482,24 +560,9 @@ async def agent_run(req: AgentRunRequest, request: Request):
     # 对话型任务跳过记忆检索（避免无关记忆污染简单对话）
     memory_contents: list[str] = []
     if memory_enabled and not is_conversation_task:
-        try:
-            # M1 修复：加超时保护，防止 embedding API 阻塞导致 SSE 连接挂起无数据
-            results = await asyncio.wait_for(
-                memory_mgr.retrieve(
-                    query=req.task, mode=req.mode, top_k=5, threshold=0.3
-                ),
-                timeout=30.0,
-            )
-            memory_contents = [r.memory.content for r in results if r.memory.content]
-        except asyncio.TimeoutError:
-            logger.warning("记忆检索超时（30s），降级为空记忆继续运行")
-        except Exception as e:
-            logger.warning("记忆检索失败（降级为空记忆继续运行）: %s", e)
-
-        # 兜底：若三层记忆为空，仍取旧的简单记忆表
-        if not memory_contents:
-            _fallback_mems = await asyncio.to_thread(db.get_relevant_memories, req.mode, limit=5)
-            memory_contents = [m["content"] for m in _fallback_mems]
+        memory_contents = await _retrieve_memory_contents(
+            memory_mgr, query=req.task, mode=req.mode
+        )
 
     # ── 加载历史反思 + 演化配置 ──
     reflection_mgr = MetaReflection()
@@ -556,13 +619,16 @@ async def agent_run(req: AgentRunRequest, request: Request):
         + [m.get("content", "") for m in history if isinstance(m.get("content", ""), str)]
         + [m for m in memory_contents if isinstance(m, str)]
     )
+    # 演化配置可能把 thinking 打开，所以 thinking 必须先于 safe_max_tokens 定稿
+    _evolved_cfg = await asyncio.to_thread(_load_evolved_config, evolution_mgr, req.mode)
+    thinking_on = _resolve_thinking(req, _evolved_cfg)
     _safe_max = safe_max_tokens(
         model_cfg.get("max_tokens"),
         _prompt_text,
         model_cfg.get("max_output_tokens"),
-        model_cfg.get("reasoning_tokens"),
+        model_cfg.get("reasoning_tokens") if thinking_on else None,
     )
-    _evo = await asyncio.to_thread(_resolve_evolution_config, req, model_cfg, _safe_max, evolution_mgr)
+    _evo = _resolve_evolution_config(req, model_cfg, _safe_max, _evolved_cfg, thinking_on)
     effective_thinking = _evo["thinking"]
     effective_max_iter = _evo["max_iter"]
     effective_temperature = _evo["temperature"]
@@ -717,6 +783,8 @@ async def agent_run(req: AgentRunRequest, request: Request):
         # B-8 修复：追踪 run 最终状态（done 事件前保持 None），
         # finally 中仅对 completed 的 run 清理备份
         final_state: Optional[str] = None
+        # error 事件是否到达过（反思调度的闸门，见循环末尾）
+        error_seen = False
 
         # H14 修复：立即发送 state=thinking 事件，让前端马上显示"思考中..."提示
         # 原问题：从 fetch 发起到 driver 发出第一个 state 事件之间可能等 2-5 秒
@@ -752,6 +820,9 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     # H10 修复：保存 id 以便 tool_call_result 时回写结果
                     pending_tool_call_ids.append(tc_id)
                     run_trace_tool_calls.append({
+                        # 前端 AgentTraceSnapshot.toolCalls[].id 是列表 :key 与结果
+                        # 配对用的身份键，缺失时重载会话后每条记录的 key 都是 undefined
+                        "id": str(tc_id),
                         "tool": event["tool"],
                         "args": event.get("args", {}),
                         "iteration": event.get("iteration", 0),
@@ -781,9 +852,14 @@ async def agent_run(req: AgentRunRequest, request: Request):
                         # 回写 run_trace_tool_calls（用于 agent_trace_snapshot 持久化）
                         # C-review NIT：按 tc_id 精确匹配 — 原 (tool, iteration) 反向
                         # 匹配在同轮同工具多次调用时张冠李戴
+                        # 快照里的 result 必须是字符串：ops_* / job_* 等工具返回 dict，
+                        # 原样落库后前端按 string 渲染成 "[object Object]"
+                        trace_result = event.get("result", "")
+                        if not isinstance(trace_result, str):
+                            trace_result = str(trace_result)
                         for tc_entry in reversed(run_trace_tool_calls):
                             if tc_entry.get("tc_id") == tc_id and "result" not in tc_entry:
-                                tc_entry["result"] = event.get("result", "")
+                                tc_entry["result"] = trace_result
                                 tc_entry["success"] = event.get("success", True)
                                 break
                 elif event.get("type") == "done":
@@ -867,6 +943,24 @@ async def agent_run(req: AgentRunRequest, request: Request):
                                 model_id=model_cfg.get("id"),
                                 turn_index=turn_index,
                             )
+                        else:
+                            # 无正文的运行（纯工具型任务、或失败早退）也要落一条 assistant
+                            # 消息承载轨迹快照：否则上方精心构造的 snapshot 随分支一起丢掉，
+                            # 重载历史后用户完全看不到 Agent 做过什么。文案沿用前端
+                            # finalizeAgentMessage 对空输出的约定。
+                            await asyncio.to_thread(
+                                db.add_message,
+                                conversation_id=req.conversation_id,
+                                role="assistant",
+                                content="(本轮无文本输出)"
+                                if final_state == "completed"
+                                else "(AI 运行失败，未产生输出)",
+                                reasoning=total_reasoning if total_reasoning else None,
+                                model_used=model_cfg.get("model_id") or model_cfg["id"],
+                                tokens_used=cost_data.get("total_tokens", 0),
+                                run_id=run_id,
+                                agent_trace=agent_trace_snapshot,
+                            )
                     except Exception as e:
                         logger.warning("done 事件处理失败: %s", e)
 
@@ -920,35 +1014,47 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     reflect_task.add_done_callback(_task_exception_logger("reflection_evolution"))
 
                 elif event.get("type") == "error":
-                    # engine 报错时更新 agent_run 状态为 failed
-                    try:
-                        await asyncio.to_thread(
-                            db.update_agent_run,
-                            run_id=run_id,
-                            status="failed",
-                        )
-                        # H13 修复 C1：error 分支也触发反思（失败运行不应错过反思）
-                        # 原实现只在 done 事件分支触发反思，error 事件分支跳过，
-                        # 导致 LLM 调用失败 / engine_producer 异常的 run 没有反思数据
-                        reflect_task = asyncio.create_task(
-                            asyncio.wait_for(
-                                _run_reflection_and_evolution(
-                                    run_id=run_id,
-                                    task=req.task,
-                                    mode=req.mode,
-                                    final_state="failed",
-                                    iterations=0,  # error 时迭代数未知
-                                    tool_calls=run_trace_tool_calls,
-                                    final_content=total_content,
-                                ),
-                                timeout=120.0,
+                    # driver 出错时先 yield error、紧接着 _emit_done（driver.py:236-250），
+                    # done 分支带完整的 iteration/cost 统计并已落终态。final_state 非 None
+                    # 时不再重复写状态：否则 done 之后才到达的异常会把 completed 翻成 failed
+                    error_seen = True
+                    if final_state is None:
+                        try:
+                            await asyncio.to_thread(
+                                db.update_agent_run,
+                                run_id=run_id,
+                                status="failed",
                             )
-                        )
-                        reflect_task.add_done_callback(_task_exception_logger("reflection_error"))
-                    except Exception:
-                        pass
+                        except Exception as e:
+                            # 状态更新失败不应连带吞掉后续清理，但必须留痕
+                            logger.warning("error 分支更新 run 状态失败 run_id=%s: %s", run_id, e)
 
                 yield sse_event(event)
+
+            # H13 修复 C1：失败运行不应错过反思。engine_producer 异常等「只有 error、
+            # 没有 done」的 run 在这里补一次调度；done 分支已按完整统计调度过，
+            # final_state 作为闸门保证每个 run 只写一条 agent_strategies。
+            # （原实现在 error 分支内直接调度，driver 出错时 error+done 各来一次，
+            # 同一 run 落两条策略、其中一条 iterations=0，污染 Evolution 的 recent-10 窗口）
+            if error_seen and final_state is None:
+                try:
+                    reflect_task = asyncio.create_task(
+                        asyncio.wait_for(
+                            _run_reflection_and_evolution(
+                                run_id=run_id,
+                                task=req.task,
+                                mode=req.mode,
+                                final_state="failed",
+                                iterations=0,  # error 时迭代数未知
+                                tool_calls=run_trace_tool_calls,
+                                final_content=total_content,
+                            ),
+                            timeout=120.0,
+                        )
+                    )
+                    reflect_task.add_done_callback(_task_exception_logger("reflection_error"))
+                except Exception as e:
+                    logger.warning("error 分支反思调度失败 run_id=%s: %s", run_id, e)
 
             yield "data: [DONE]\n\n"
 
@@ -987,6 +1093,19 @@ async def agent_run(req: AgentRunRequest, request: Request):
                 clear_todos(run_id)
             except BaseException:
                 pass
+            # 清理该 run 名下待前端回传的工具结果（visible_terminal 命令交付）。
+            # driver 的 remove 在 yield 处被 GeneratorExit 打断时会漏掉，
+            # 残留条目随进程存活 —— 由 clear_run 兜底（模块文档约定的收尾点）
+            try:
+                PendingDeliveries.clear_run(run_id)
+            except BaseException:
+                pass
+            # run 级授权/拒绝/澄清池同样在这里兜底回收：driver 被 cancel 时
+            # ReflectionRein 不触发，而客户端断连也不会走 release-run 接口
+            try:
+                _release_run_interaction_state(run_id)
+            except BaseException:
+                logger.warning("run 交互状态回收失败 (run_id=%s)", run_id, exc_info=True)
             # P2 修复：run 取消/断连时清理该 run 名下的远程后台任务
             # （job_run target=remote 的进程脱离会话运行，不杀会永久残留；
             #  shield 保证断连 cancel 时清理任务仍会在后台跑完）
@@ -1052,6 +1171,9 @@ class ToolResultRequest(BaseModel):
     output: str = ""
     success: bool = False
     exit_code: Optional[int] = None
+    # 用户点「拒绝」而非执行：必须区分于「执行失败」，否则模型看到
+    # "[已写入可见终端] <cmd>"，以为破坏性命令已经在真实终端里跑过
+    rejected: bool = False
 
 
 @router.post("/agent/tool-result")
@@ -1061,12 +1183,15 @@ async def agent_tool_result(req: ToolResultRequest):
     - 200：成功恢复对应的待交付命令
     - 404：tool_id 未知（可能已超时清除/会话结束）
     """
-    ok = PendingDeliveries.resume(
-        req.tool_id,
-        output=req.output,
-        success=req.success,
-        exit_code=req.exit_code,
-    )
+    if req.rejected:
+        ok = PendingDeliveries.reject(req.tool_id)
+    else:
+        ok = PendingDeliveries.resume(
+            req.tool_id,
+            output=req.output,
+            success=req.success,
+            exit_code=req.exit_code,
+        )
     if not ok:
         raise HTTPException(status_code=404, detail=f"tool_id 未知: {req.tool_id}")
     return {"status": "ok", "tool_id": req.tool_id}
@@ -1075,7 +1200,6 @@ async def agent_tool_result(req: ToolResultRequest):
 @router.get("/agent/tools")
 def list_tools(mode: str = "ssh"):
     """查询当前模式可用的工具列表（含启用状态）"""
-    import database as db
     # 获取所有工具类的元信息（包括未注册的，用于显示被禁用的工具）
     from agent.tools.builtin import get_all_tool_classes
     all_tools_info = get_all_tool_classes(mode)
@@ -1107,7 +1231,6 @@ class UpdateToolEnabledRequest(BaseModel):
 @router.patch("/agent/tools/{tool_name}/enabled")
 def update_tool_enabled(tool_name: str, req: UpdateToolEnabledRequest, mode: str = "all"):
     """更新工具启用状态（默认 mode=all 全局开关）"""
-    import database as db
     result = db.upsert_tool_config(tool_name, mode, req.enabled)
     return result
 
@@ -1326,16 +1449,42 @@ def deny_command(req: DenyCommandRequest):
             "run_id": req.run_id, "denied_key": denied_key}
 
 
-@router.post("/agent/permission/release-run/{run_id}")
-def release_run_permissions(run_id: str):
-    """手动清理某次 run 的全部 once 授权（前端显式终止或超时时调用）
+def _release_run_interaction_state(run_id: str) -> tuple[int, int]:
+    """回收 run 级交互状态：once 授权池 + 拒绝记录 + 澄清向导上下文。
 
-    ReflectionRein 在 AGENT_COMPLETE / AGENT_FAILED 时自动调用此逻辑，
-    本接口作为兜底：前端在用户点击"停止"或 run 被强制终止时主动释放。
+    ReflectionRein 只在 AGENT_COMPLETE / AGENT_FAILED 正常终态触发。用户点"停止"
+    或客户端断连时 driver 直接被 cancel，它不会跑 —— 三个池子便随每次中止的 run
+    无界增长（授权池残留尤其危险：无人消费的 once 额度只能等进程重启）。
+    全部是同步字典操作（内部无 await），因此无需 shield 也不会被取消打断。
+
+    Returns:
+        (释放的 once 授权条数, 释放的拒绝记录条数)
     """
-    from agent.harness.reins import _get_global_permission_gate_sync
+    from agent.harness.reins import (
+        _get_global_permission_gate_sync, release_clarification_run)
     pg = _get_global_permission_gate_sync()
     released = pg.cleanup_run_once(run_id)
+    try:
+        denied = pg.cleanup_run_denied(run_id)
+    except Exception:
+        logger.warning("release_run: denied 清理异常 run=%s", run_id, exc_info=True)
+        denied = 0
+    try:
+        release_clarification_run(run_id)
+    except Exception:
+        logger.warning("release_run: 澄清回收异常 run=%s", run_id, exc_info=True)
+    return released, denied
+
+
+@router.post("/agent/permission/release-run/{run_id}")
+def release_run_permissions(run_id: str):
+    """手动清理某次 run 的全部 once 授权/拒绝记录/澄清状态（前端显式终止或超时时调用）
+
+    ReflectionRein 在 AGENT_COMPLETE / AGENT_FAILED 时自动回收这三样，
+    本接口作为兜底：前端在用户点击"停止"或 run 被强制终止时主动释放。
+    SSE 侧的 finally 也调用同一 helper —— 客户端直接断连时不会经过本接口。
+    """
+    released, denied_count = _release_run_interaction_state(run_id)
     try:
         from agent.audit import append_record
         append_record(
@@ -1343,11 +1492,11 @@ def release_run_permissions(run_id: str):
             conclusion="released",
             target_type="run",
             target_id=run_id,
-            result=f"released={released}",
+            result=f"released={released} denied={denied_count}",
         )
     except Exception:
         logger.warning("release_run 审计记录失败（不阻塞）")
-    return {"run_id": run_id, "released": released}
+    return {"run_id": run_id, "released": released, "denied": denied_count}
 
 
 # ── 澄清向导（Clarification Wizard）──
@@ -1604,7 +1753,9 @@ def get_agent_run_trace(run_id: str):
                 "tool_name": tc.get("tool_name"),
                 "arguments": tc.get("arguments"),
                 "result": tc.get("result"),
-                "success": bool(tc.get("success", 1)),
+                # 三态透传：NULL = 调用发起了但结果从未回写（崩溃/中止）。原写法
+                # bool(tc.get("success", 1)) 把 NULL 折成 True，半截调用被回放成成功。
+                "success": None if tc.get("success") is None else bool(tc["success"]),
                 "duration_ms": tc.get("duration_ms"),
                 "created_at": tc.get("created_at"),
             }
