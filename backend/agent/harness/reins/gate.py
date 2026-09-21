@@ -16,7 +16,7 @@ from ..contracts import ReinDecision, ReinPoint, RunContext, TraceEvent
 from ..safety import classify_command, classify_constructed_command
 from .core import (
     _COMMAND_EXEC_TOOLS,
-    _PERMISSION_APPROVAL_TIMEOUT_S,
+    _PERMISSION_APPROVAL_FALLBACK_S,
     _audit_target_id,
     _audit_target_type,
     _perm_pending,
@@ -542,16 +542,18 @@ class PermissionGate:
 
         # 未授权 → 发 permission_needed 事件 + 拦截
         # C-review M7：与 FilesystemGuard 相同的审批三态处理（首次发卡片 /
-        # 窗口内重发豁免循环检测 / 超时按拒绝）
+        # 窗口内重发豁免循环检测 / 兜底到期发 permission_expired 但保留等待集）
         pending = _perm_pending(ctx)
         sig = tool_call_signature(last)
         first_ts = pending.get(sig)
         if first_ts is not None and \
-                (time.monotonic() - first_ts) > _PERMISSION_APPROVAL_TIMEOUT_S:
-            pending.pop(sig, None)
+                (time.monotonic() - first_ts) > _PERMISSION_APPROVAL_FALLBACK_S:
+            # 兜底到期 → 保留等待集（不 pop），发 permission_expired 把卡标记
+            # timeout 保留；注入提示引导用户确认后重新发起。等待集未移除，兜底
+            # 窗口内同命令重发仍被拦截、复用待办而不重复建卡。
             return ReinDecision(
                 intercepted=True,
-                intercept_reason=f"审批超时（按拒绝处理）: {tool}",
+                intercept_reason=f"审批已过期（保留待办，等待确认）: {tool}",
                 events=[TraceEvent(
                     kind="permission_expired",
                     source="reins.permission_gate",
@@ -563,17 +565,18 @@ class PermissionGate:
                         # 与 permission_needed 同源：前端按「工具 + 命令」定位卡片
                         "command": str(bound or ""),
                         "message": (
-                            f"授权审批超时（{int(_PERMISSION_APPROVAL_TIMEOUT_S)}s 未响应），"
-                            f"已按拒绝处理: {tool}"
+                            f"授权审批已过期（{int(_PERMISSION_APPROVAL_FALLBACK_S)}s 兜底未响应），"
+                            f"待办已保留，可重新确认后执行: {tool}"
                         ),
                     },
                 )],
                 inject_messages=[{
                     "role": "user",
                     "content": (
-                        f"[系统拦截] 工具 {tool} 的授权审批已超时"
-                        f"（{int(_PERMISSION_APPROVAL_TIMEOUT_S)}s 无用户响应），系统已按拒绝处理。"
-                        "请勿重试该工具；换用更安全的工具，或提示用户确认后再重新发起。"
+                        f"[系统拦截] 工具 {tool} 的授权审批已过期"
+                        f"（{int(_PERMISSION_APPROVAL_FALLBACK_S)}s 兜底无用户响应），"
+                        "系统已保留待办、未按拒绝处理。请提示用户确认后重新发起，"
+                        "或换用更安全的工具。"
                     ),
                 }],
             )

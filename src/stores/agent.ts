@@ -60,10 +60,16 @@ export interface PermissionRequest {
    * 持久授权已经落下 —— 换个 run 这条命令不再询问。
    */
   settling?: boolean
-  /** 是否已处理（已授权或已超时作废） */
+  /** 是否已处理（已授权或已拒绝） */
   resolved?: boolean
-  /** 已处理的卡片是否为「已授权」（超时作废的卡片文案不同） */
+  /** 已处理的卡片是否为「已授权」（已拒绝/过期的卡片文案不同） */
   granted?: boolean
+  /**
+   * 审批超时标记（permission_expired）：按新语义「到期保留等待集」，
+   * 前端不再删卡也不置 resolved，仅打此标 + 留在队列供追溯；
+   * 焦点只由用户操作/运行结束推进。重发同命令时仍按未处理复用此卡。
+   */
+  expired?: boolean
   /** 归一化展示命令（问题 2 改进：让用户看到实际授权的规范化形态） */
   normalizedCommand?: string
   /** 命令后果的中文说明（纯展示，授权键仍绑定命令原文） */
@@ -184,6 +190,17 @@ export const useAgentStore = defineStore('agent', () => {
     || permissionRequests.value.length > 0
     || agentDeliver.deliveries.value.length > 0
     || !!errorMessage.value
+  )
+
+  // ── 单一焦点审批队列（spec refactor-approval-center） ──
+  // 待审批 = 未 resolved 且未 expired（仍在等待用户操作）；数组 append 序即年龄序，
+  // 队首恒为最旧一条 → 焦点。expired 单独归入追溯区，不再占用可操作焦点。
+  const pendingPermissions = computed(() =>
+    permissionRequests.value.filter(r => !r.resolved && !r.expired),
+  )
+  /** 超时保留项（可追溯展示，不参与焦点/批量操作） */
+  const expiredPermissions = computed(() =>
+    permissionRequests.value.filter(r => r.expired && !r.resolved),
   )
 
 
@@ -577,16 +594,17 @@ export const useAgentStore = defineStore('agent', () => {
       }
 
       case 'permission_expired': {
-        // C-review M7：审批超时（后端按拒绝处理）→ 标记对应授权卡片过期，
-        // 按钮失效，避免用户点了一个后端已不再等待的"孤儿卡片"
+        // 审批窗口语义重构（spec refactor-approval-center）：permission_expired 不再
+        // "移除并拒绝"——后端改在到期后仍把签名留在等待集、等待至 grant/deny/会话结束。
+        // 前端相应不再置 resolved/摘卡，而是打 expired 标记保留在队列（供追溯），
+        // 焦点递进只由用户操作或运行结束触发；同一命令重发会复用本卡而非重复建卡。
         const key = permCardKey(event.tool || '', event.command)
         for (const r of permissionRequests.value) {
           if (r.resolved) continue
           if (permCardKey(r.tool, r.command) === key) {
-            r.resolved = true
-            r.granted = false
+            r.expired = true
             r.settling = false
-            r.message = `${r.message}（审批超时，已按拒绝处理）`
+            r.message = `${r.message}（审批超时）`
           }
         }
         break
@@ -723,6 +741,8 @@ export const useAgentStore = defineStore('agent', () => {
     isRunning,
     hasHumanHelpRequest,
     hasRunNotice,
+    pendingPermissions,
+    expiredPermissions,
     pendingDeliveries,
     deliveries: agentDeliver.deliveries,
     // actions

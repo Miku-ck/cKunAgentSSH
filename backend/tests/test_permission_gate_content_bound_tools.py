@@ -208,7 +208,7 @@ def test_prod_preauthorized_path_passes(audits):
 
 # ── 5. 审批三态与拒绝记忆对内容工具同样生效 ──
 
-def test_approval_timeout_marks_card_expired(audits):
+def test_approval_fallback_marks_card_expired_but_keeps_pending(audits):
     gate, ctx = _gate(), _ctx()
     guard = _guard(gate)
     args = _write("file_write", NGINX)
@@ -220,8 +220,12 @@ def test_approval_timeout_marks_card_expired(audits):
     _log(ctx, "file_write", args)
     d = asyncio.run(_chain(ctx, gate, guard))
     assert d.intercepted
-    assert any(e.kind == "permission_expired" for e in d.events)
-    assert not any(e.kind == "permission_needed" for e in d.events)
+    assert any(e.kind == "permission_expired" for e in d.events), \
+        "兜底到期必须发 permission_expired"
+    assert not any(e.kind == "permission_needed" for e in d.events), \
+        "到期后不得重复建卡"
+    assert sig in _perm_pending(ctx), \
+        "兜底到期必须保留「等待审批」标记（待办不消失、复用已有待办）"
 
 
 def test_denied_path_is_not_recarded(audits):

@@ -216,6 +216,157 @@ def _extract_outer_json(text: str) -> str | None:
     return None
 
 
+def _is_skill_like(obj: dict) -> bool:
+    """粗略判定一个对象是否技能对象（只做字段存在性判断，不校验值）。"""
+    return any(k in obj for k in ("name", "slug", "system_prompt"))
+
+
+def _closed_object_at(text: str, start: int):
+    """text[start] 必为 '{'。若能自闭合则返回 (start, end)，否则返回 None。
+
+    逐字符跳过字符串进出与转义，避免把字符串里的花括号误当结构符。
+    """
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return (start, i)
+    return None
+
+
+def _collect_closed_json_objects(text: str) -> list[str]:
+    """扫描文本，摘出每个能自闭合的对象字面量片段。
+
+    外层对象因截断（深度永不归零）无法闭合时，这里仍能逐个抢救到内层
+    已完整闭合的技能对象（如 $$skills[0]$$ 完整、$$skills[1]$$ 中途被截断时，
+    前者会被捞回）。
+    """
+    collected: list[str] = []
+    i = 0
+    n = len(text)
+    in_string = False
+    escape = False
+    while i < n:
+        ch = text[i]
+        if escape:
+            escape = False
+            i += 1
+            continue
+        if ch == "\\":
+            escape = True
+            i += 1
+            continue
+        if ch == '"':
+            in_string = not in_string
+            i += 1
+            continue
+        if in_string:
+            i += 1
+            continue
+        if ch == "{":
+            closed = _closed_object_at(text, i)
+            if closed is not None:
+                start, end = closed
+                collected.append(text[start:end + 1])
+                i = end + 1
+                continue
+        i += 1
+    return collected
+
+
+def _try_repair_truncated(candidate: str) -> list[dict]:
+    """截断容错修复：在候选尾部补闭合符后尝试解析，成功即返回 skills。
+
+    截断点常在字符串中途，故先补一个闭合引号（若需要），再按常见嵌套
+    「技能对象 -> skills 数组 -> 外层对象」及 trigger_words 数组被截断的
+    组合逐层补 ] / }。保守：任一组合能通过 json.loads 才算数，否则返回空，
+    宁可不救也不把垃圾字段当技能。
+    """
+    # 去重、有序的后缀候选（含「先引号后结构」与纯结构两类，嵌套混合覆盖））
+    closings = list(dict.fromkeys((
+        '"',           # 仅闭合被截断的字符串
+        '"}',          # + 技能对象
+        '"}]',         # + 技能对象 + skills 数组
+        '"}]}',        # + 技能对象 + skills 数组 + 外层对象（最常见形态）
+        '"]}',         # 技能对象内 trigger_words 数组被截断
+        '"]}]}',
+        '"]}]',        # 纯结构：trigger_words 数组 + skills 数组（外两层另补）
+        '"]',
+        '"}',
+        '}',
+        ']}',
+        '}]',
+        '}]}',
+        ']',
+        ']}',
+        '}]',
+        '}]}',
+        ']}]',
+        ']}]}',
+    )))
+    for tail in closings:
+        try:
+            parsed = json.loads(candidate + tail)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        skills = _llm_list(parsed, "skills")
+        if skills:
+            return skills
+        if isinstance(parsed, dict) and _is_skill_like(parsed):
+            return [parsed]
+    return []
+
+
+def _parse_skills_lenient(full_text: str) -> list[dict]:
+    """钝化解析技能 JSON：LLM 输出被截断在字符串中途时仍尽量抢救技能。
+
+    本地小模型写长 system_prompt 常因 max_tokens 不足被切在
+    `"system_prompt": "# ...` 中间，正常 json.loads 会抛 Unterminated string，
+    于是整条技能（含已完整的 name/slug/description）被整条丢弃。此函数三步兜底。
+    """
+    # 第一步：候选上正常解析
+    candidate = _extract_json(full_text)
+    try:
+        result = json.loads(candidate)
+    except (json.JSONDecodeError, ValueError):
+        result = None
+    if isinstance(result, dict) and isinstance(result.get("skills"), list):
+        return result["skills"]
+
+    # 第二步：brace 计数逐一摘出可自闭合的 {...} 技能对象（截断也能救回已完整的）
+    skills: list[dict] = []
+    for frag in _collect_closed_json_objects(candidate):
+        try:
+            obj = json.loads(frag)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(obj, dict) and _is_skill_like(obj):
+            skills.append(obj)
+
+    # 第三步：截断字符串的保守修复（name/slug/description 完整 + 仅 system_prompt 被截断）
+    if not skills:
+        skills = _try_repair_truncated(candidate)
+
+    return skills
+
+
 async def _call_llm_with_timeout(
     messages: list[dict],
     model_cfg: dict,
@@ -650,7 +801,9 @@ async def _generate_skill(ctx: TurnContext, config: PostProcessConfig) -> None:
         model_cfg=model_cfg,
         model_id=skill_model,
         temperature=0.3,
-        max_tokens=1024,
+        # 技能 system_prompt 可能写得很长，1024 会在中段就把输出切在字符串里，
+        # 导致整个 JSON 解析失败、整条技能连同已生成的 name/slug 一起丢弃。
+        max_tokens=2048,
         chunk_timeout=config.chunk_timeout,
         total_timeout=config.skill_total_timeout,
         task_name="skill",
@@ -658,15 +811,24 @@ async def _generate_skill(ctx: TurnContext, config: PostProcessConfig) -> None:
     if not full_text:
         return
 
-    # 解析 JSON
+    # 解析 JSON：正常路径之外，LLM 输出常因 max_tokens 不足被切在字符串中途，
+    # 此时走 _parse_skills_lenient 钝化抢救，尽量不整条丢弃已完整的技能对象。
+    result = None
     try:
         raw = _extract_json(full_text)
         result = json.loads(raw)
     except json.JSONDecodeError as e:
         logger.warning("[post_process:skill] JSON 解析失败: %s, raw=%s", e, full_text[:200])
-        return
 
     skills = _llm_list(result, "skills")
+    if not skills:
+        rescued = _parse_skills_lenient(full_text)
+        if rescued:
+            skills = rescued
+            logger.info(
+                "[post_process:skill] 钝化解析救回 %d 条技能（LLM 输出可能被截断）",
+                len(rescued),
+            )
     created_count = 0
     for skill in skills:
         if not isinstance(skill, dict):

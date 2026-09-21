@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
-"""C-review M7 回归：审批等待三态处理 + 循环检测豁免 + 审批超时。
+"""C-review M7 回归：审批等待三态处理 + 循环检测豁免 + 审批兜底。
 
 修复前：审批期间 run 继续重发（烧 LLM 调用）；重发签名进 LoopDetector 窗口，
 第 4 次重发被循环检测抢截（permission_needed 不再发出）→ 授权卡片孤儿、命令
 永远执行不了；无审批超时。
 修复后：首次请求发卡片并标记「等待审批」；窗口内重发豁免循环检测、不重发卡片；
-超时（120s）按拒绝（permission_expired + 强拒绝注入 + 移除标记，循环检测恢复）；
-命令执行成功后移除标记。
+兜底（默认 600s）到期发 permission_expired（前端标记 timeout 保留卡片），但**
+保留等待集**、不按拒绝处理、不永久封禁，兜底窗口内同命令重发复用待办不重复
+建卡（也不被循环检测抢截）；命令执行成功后移除标记。
 
 运行: python -m pytest backend/tests/test_permission_approval_lifecycle.py -v
 """
@@ -117,29 +118,31 @@ def test_resend_within_window_no_duplicate_card():
     assert not any(e.kind == "permission_needed" for e in d2.events), "窗口内重发不得重发卡片"
 
 
-def test_approval_timeout_denies():
-    """超时：移除标记、发 permission_expired、不再发卡片；循环检测恢复计数"""
+def test_approval_fallback_keeps_pending_and_reuses_todo():
+    """兜底到期：保留等待集、发 permission_expired、不重复建卡；循环检测豁免仍生效"""
     ctx = _ctx()
     _log(ctx)
     asyncio.run(_guard().check(ctx))
     sig = tool_call_signature(ctx.tool_calls_log[-1])
-    # 模拟超过审批时限
+    # 模拟超过审批兜底时限
     ctx.metadata["permission_pending"][sig] = time.monotonic() - \
-        (reins_mod._PERMISSION_APPROVAL_TIMEOUT_S + 1)
-    _log(ctx)  # 超时后重发
+        (reins_mod._PERMISSION_APPROVAL_FALLBACK_S + 1)
+    _log(ctx)  # 兜底到期后重发
     d3 = asyncio.run(_guard().check(ctx))
     assert d3.intercepted
-    assert any(e.kind == "permission_expired" for e in d3.events), "超时必须发 permission_expired"
-    assert not any(e.kind == "permission_needed" for e in d3.events), "超时后不得再发卡片"
-    assert sig not in ctx.metadata.get("permission_pending", {}), "超时后必须移除「等待审批」标记"
+    assert any(e.kind == "permission_expired" for e in d3.events), "兜底到期必须发 permission_expired"
+    assert not any(e.kind == "permission_needed" for e in d3.events), "到期后不得重复建卡"
+    assert sig in ctx.metadata.get("permission_pending", {}), \
+        "兜底到期必须保留「等待审批」标记（待办不消失、不按拒绝处理）"
 
-    # 标记移除后 LLM 仍重试 → 循环检测接管（第 2 次检测即拦截）
+    # 等待标记保留 → 循环检测豁免仍生效：重发复用待办、不被抢截、也不会升级终断
     det = LoopDetector()
     d4 = None
     for _ in range(4):
         _log(ctx)
         d4 = asyncio.run(det.check(ctx))
-    assert d4 and d4.intercepted, "审批超时拒绝后 LLM 仍重试，循环检测应接管拦截"
+    assert d4 and not d4.intercepted, \
+        "等待标记保留期内同签名重发应仍被循环检测豁免（不重复建卡，也不升级终断）"
 
 
 # ── driver：执行成功后释放标记 ──

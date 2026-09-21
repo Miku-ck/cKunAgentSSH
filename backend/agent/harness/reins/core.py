@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from ..contracts import Interceptor, ReinDecision, ReinPoint, RunContext
@@ -18,10 +19,15 @@ logger = logging.getLogger(__name__)
 # 即可，由 extract_bound_command 统一取出，口径区分见该函数 docstring。
 _COMMAND_EXEC_TOOLS = {"shell_exec", "job_run"}
 
-# C-review M7：审批等待超时（秒）。危险命令/权限请求发出后，用户在此时限内
-# 未响应 → 按拒绝处理：签名移出"等待审批"集合、不再重发 permission_needed
-# （发 permission_expired 让前端标记卡片过期）、注入强拒绝消息让 LLM 换路。
-_PERMISSION_APPROVAL_TIMEOUT_S = 120.0
+# 审批窗口兜底时长（秒）。重构后审批不再设 120s 短超时 —— 未授权签名保持等待至
+# grant/deny/会话结束。这里仅保留一个生产可配置的**兜底**（默认 600s），到期时
+# 走 permission_expired（前端把卡片标记 timeout 并保留），但**不移出等待集**、
+# 不按永久拒绝处理，兜底窗口内同命令重发复用待办、不重复建卡。
+# 通过环境变量 CKUNAGENTIC_PERMISSION_APPROVAL_FALLBACK_S 覆盖（config 已把
+# .env 注入 os.environ，故 .env 设置同样生效）。设为 0 表示禁用兜底（永久等待）。
+_PERMISSION_APPROVAL_FALLBACK_S = float(
+    os.getenv("CKUNAGENTIC_PERMISSION_APPROVAL_FALLBACK_S", "600.0")
+)
 
 
 def _perm_pending(ctx: RunContext) -> dict:
@@ -29,7 +35,8 @@ def _perm_pending(ctx: RunContext) -> dict:
 
     key = tool_call_signature() 返回的 hashable 元组，
     value = 首次发出 permission_needed 的 time.monotonic() 时间戳。
-    窗口内的重发豁免循环检测；超时的重发按拒绝处理。
+    窗口内的重发豁免循环检测；抵达兜底（_PERMISSION_APPROVAL_FALLBACK_S）后的
+    重发发 permission_expired（保留等待集，不 pop），但仍复用待办、不重复建卡。
     """
     return ctx.metadata.setdefault("permission_pending", {})
 

@@ -40,7 +40,7 @@ from .clarification import (
 from ..contracts import ClarificationOption, ClarificationStep
 from .core import (
     _COMMAND_EXEC_TOOLS,
-    _PERMISSION_APPROVAL_TIMEOUT_S,
+    _PERMISSION_APPROVAL_FALLBACK_S,
     Reins,
     tool_call_signature,
 )

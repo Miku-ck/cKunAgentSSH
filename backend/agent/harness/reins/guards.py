@@ -13,7 +13,7 @@ from ..command_explain import explain_for_reason, maybe_explain_via_llm
 from ..contracts import ReinDecision, ReinPoint, RunContext, TraceEvent
 from ..safety import classify_command, classify_constructed_command
 from .core import (
-    _PERMISSION_APPROVAL_TIMEOUT_S,
+    _PERMISSION_APPROVAL_FALLBACK_S,
     _audit_target_id,
     _audit_target_type,
     _perm_pending,
@@ -175,13 +175,18 @@ class FilesystemGuard:
                     if not allowed:
                         # C-review M7：审批等待三态处理（无审批超时、重发被循环检测
                         # 抢截、授权卡片孤儿的问题由此修复）
+                        # 重构：审批不再设 120s 短超时 — 未授权签名保持等待至
+                        # grant/deny/会话结束；仅兜底时长生 permission_expired 把卡
+                        # 标记 timeout 并保留待办，不 pop、不按永久拒绝处理。
                         pending = _perm_pending(ctx)
                         sig = tool_call_signature(last)
                         first_ts = pending.get(sig)
                         if first_ts is not None and \
-                                (time.monotonic() - first_ts) > _PERMISSION_APPROVAL_TIMEOUT_S:
-                            # 超时 → 按拒绝：移除标记（循环检测恢复计数）、不再重发卡片
-                            pending.pop(sig, None)
+                                (time.monotonic() - first_ts) > _PERMISSION_APPROVAL_FALLBACK_S:
+                            # 兜底到期 → 保留等待集（不 pop），发 permission_expired
+                            # 让前端标记卡片 timeout 保留；注入提示引导用户确认后
+                            # 重新发起。等待集未移除，兜底窗口内同命令重发仍被拦截、
+                            # 复用待办而不重复建卡（也不会被循环检测抢截）。
                             await append_record_async(
                                 action=tool, conclusion="denied",
                                 run_id=ctx.run_id, iteration=ctx.iteration,
@@ -189,11 +194,11 @@ class FilesystemGuard:
                                 target_id=_audit_target_id(ctx),
                                 environment=env,
                                 command_raw=str(cmd),
-                                result=f"approval_timeout: {reason}",
+                                result=f"approval_expired: {reason}",
                             )
                             return ReinDecision(
                                 intercepted=True,
-                                intercept_reason=f"审批超时（按拒绝处理）: {reason}",
+                                intercept_reason=f"审批已过期（保留待办，等待确认）: {reason}",
                                 events=[TraceEvent(
                                     kind="permission_expired",
                                     source="reins.filesystem_guard",
@@ -206,18 +211,18 @@ class FilesystemGuard:
                                         # 目标各一张卡），缺了它会把无关卡片一起标成过期
                                         "command": str(cmd),
                                         "message": (
-                                            f"授权审批超时（{int(_PERMISSION_APPROVAL_TIMEOUT_S)}s 未响应），"
-                                            f"已按拒绝处理: {tool}"
+                                            f"授权审批已过期（{int(_PERMISSION_APPROVAL_FALLBACK_S)}s 兜底未响应），"
+                                            f"待办已保留，可重新确认后执行: {tool}"
                                         ),
                                     },
                                 )],
                                 inject_messages=[{
                                     "role": "user",
                                     "content": (
-                                        f"[系统拦截] 上述命令的授权审批已超时"
-                                        f"（{int(_PERMISSION_APPROVAL_TIMEOUT_S)}s 无用户响应），"
-                                        "系统已按拒绝处理。请勿重试该命令；改用更安全的替代方案，"
-                                        "或提示用户确认后再重新发起。"
+                                        f"[系统拦截] 上述命令的授权审批已过期"
+                                        f"（{int(_PERMISSION_APPROVAL_FALLBACK_S)}s 兜底无用户响应），"
+                                        "系统已保留待办、未按拒绝处理。请提示用户确认后重新发起"
+                                        "完全相同的命令（授权后会被放行），或改用更安全的替代方案。"
                                     ),
                                 }],
                             )
