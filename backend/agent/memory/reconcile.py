@@ -32,6 +32,9 @@ JOB_BACKFILL = "backfill_reconcile"
 _CHUNK_TIMEOUT = 30.0
 _TOTAL_TIMEOUT = 90.0
 _SIMILAR_TOP_K = 8
+# 无 LLM 时的纯阈值去重：余弦 ≥ 此值或归一化文本全等 → 判等价重复丢弃。
+# 0.95 是"近似同一句"的经验值；阈值以下宁可能误留（ADD）也不误杀新事实。
+_DEDUP_COSINE = 0.95
 
 _RECONCILE_PROMPT = """\
 你是记忆管理器。左侧是若干"新记忆候选"（编号 0 起），每个候选附带检索到的\
@@ -132,8 +135,21 @@ def _cand_block_for_prompt(cands: list, similars: list) -> str:
     return "\n\n".join(parts)
 
 
-async def process_jobs(*, max_jobs: int = 20, embed_client=None, model_cfg=None) -> dict:
-    """消费一批 job。由意识 tick 与 trigger_now 调用。"""
+def _llm_enabled() -> bool:
+    """对账是否允许调模型（设置关掉后退化为纯阈值去重）"""
+    import database as db
+    try:
+        return bool(db.get_memory_settings().get("reconcile_llm_enabled", True))
+    except Exception:
+        return True
+
+
+async def process_jobs(*, max_jobs: int = 20, embed_client=None, model_cfg=None,
+                       llm_enabled: "bool | None" = None) -> dict:
+    """消费一批 job。由意识 tick 与 trigger_now 调用。
+
+    llm_enabled=None 时读设置；显式传入（测试/手动触发）优先。
+    """
     jobs = await asyncio.to_thread(mstore.next_jobs, max_jobs)
     if not jobs:
         return {"processed": 0, "applied": {}, "failed": 0}
@@ -145,12 +161,17 @@ async def process_jobs(*, max_jobs: int = 20, embed_client=None, model_cfg=None)
             model_cfg.get("api_key", ""),
             model_cfg.get("model_id") or model_cfg.get("name", ""),
         )
+    if llm_enabled is None:
+        llm_enabled = await asyncio.to_thread(_llm_enabled)
+    # 关掉对账 LLM = 既不调去重裁决，也不做 episodic 改写：一条设置管两处，
+    # 否则"省 token"的开关只关掉一半，后台照样每轮打模型。
+    effective_cfg = model_cfg if llm_enabled else {}
 
     counters = {"ADD": 0, "UPDATE": 0, "DELETE": 0, "NOOP": 0, "episodic": 0}
     failed = 0
     for job in jobs:
         try:
-            c = await _process_one(job, embed_client, model_cfg)
+            c = await _process_one(job, embed_client, effective_cfg, llm_enabled=llm_enabled)
             for k, v in c.items():
                 counters[k] = counters.get(k, 0) + v
             await asyncio.to_thread(mstore.finish_job, job["id"])
@@ -165,15 +186,15 @@ async def process_jobs(*, max_jobs: int = 20, embed_client=None, model_cfg=None)
     }
 
 
-async def _process_one(job: dict, embed_client, model_cfg: dict) -> dict:
+async def _process_one(job: dict, embed_client, model_cfg: dict, *, llm_enabled: bool = True) -> dict:
     payload = json.loads(job.get("payload") or "{}")
     kind = job["kind"]
     if kind == JOB_EPISODIC:
-        return await _write_episodic(payload, job["id"], embed_client)
+        return await _write_episodic(payload, job["id"], embed_client, model_cfg)
     if kind == JOB_AGENT_ADD:
         payload.setdefault("source", "agent_tool")
         return await _reconcile_candidates([payload], job["id"], embed_client, model_cfg,
-                                           priority_add=True)
+                                           priority_add=True, llm_enabled=llm_enabled)
     if kind == JOB_CANDIDATE:
         items = [
             {**it, "conv_id": payload.get("conv_id"), "run_id": payload.get("run_id"),
@@ -182,7 +203,8 @@ async def _process_one(job: dict, embed_client, model_cfg: dict) -> dict:
         ]
         if not items:
             return {}
-        return await _reconcile_candidates(items, job["id"], embed_client, model_cfg)
+        return await _reconcile_candidates(items, job["id"], embed_client, model_cfg,
+                                           llm_enabled=llm_enabled)
     if kind == JOB_BACKFILL:
         rows = await asyncio.to_thread(mstore.get_many, payload.get("ids", []))
         cands = [
@@ -193,15 +215,23 @@ async def _process_one(job: dict, embed_client, model_cfg: dict) -> dict:
         ]
         if not cands:
             return {}
-        return await _reconcile_candidates(cands, job["id"], embed_client, model_cfg)
+        return await _reconcile_candidates(cands, job["id"], embed_client, model_cfg,
+                                           llm_enabled=llm_enabled)
     raise ValueError(f"未知 job kind: {kind}")
 
 
-async def _write_episodic(payload: dict, job_id: str, embed_client) -> dict:
-    """episodic 是事实记录不参与对账（spec §5 表），直接入 active。"""
+async def _write_episodic(payload: dict, job_id: str, embed_client, model_cfg: dict) -> dict:
+    """episodic 是事实记录不参与对账（spec §5 表），直接入 active。
+
+    快路径已在 run 收尾用规则拼出结构化轨迹（format_episodic）；这里在有 LLM 时
+    再把它改写成一句可读的语义摘要，让"何时/做了什么/结果"更像自然语言经验。
+    改写失败（超时/空返回）保留规则版，绝不因质量优化把 job 打成失败——轨迹已在。
+    """
     content = (payload.get("content") or "").strip()
     if not content:
         return {}
+    if model_cfg:
+        content = await _rewrite_episodic(content, model_cfg) or content
     emb, emb_src = await _embed(embed_client, content)
     await asyncio.to_thread(
         mstore.add_memory,
@@ -215,6 +245,36 @@ async def _write_episodic(payload: dict, job_id: str, embed_client) -> dict:
     return {"episodic": 1}
 
 
+_EPISODIC_REWRITE_PROMPT = """\
+把下面这段 Agent 运行轨迹压成 1-2 句中文经验记录，保留关键动作与结果，\
+去掉迭代次数/工具清单等噪声字段。只输出摘要文本本身，不要前缀、不要引号。
+"""
+
+
+async def _rewrite_episodic(content: str, model_cfg: dict) -> str:
+    try:
+        from post_processor import _call_llm_with_timeout  # 延迟导入避免环
+        model_id = model_cfg.get("id") or model_cfg.get("model_id") or ""
+        text = await _call_llm_with_timeout(
+            messages=[
+                {"role": "system", "content": "你是运行日志摘要器。"},
+                {"role": "user", "content": _EPISODIC_REWRITE_PROMPT + "\n\n" + content},
+            ],
+            model_cfg=model_cfg, model_id=model_id,
+            temperature=0.2, max_tokens=256,
+            chunk_timeout=_CHUNK_TIMEOUT, total_timeout=_TOTAL_TIMEOUT,
+            task_name="episodic_rewrite",
+        )
+    except Exception as e:
+        logger.warning("[reconcile] episodic 改写失败，保留规则版: %s", e)
+        return ""
+    text = (text or "").strip()
+    # 改写结果异常膨胀（模型跑偏/复读）时丢弃，用规则版
+    if len(text) < 8 or len(text) > len(content) * 2:
+        return ""
+    return text
+
+
 async def _embed(embed_client, content: str):
     if embed_client is None:
         return None, ""
@@ -223,8 +283,39 @@ async def _embed(embed_client, content: str):
     return (vec, f"api:{model}") if vec else (None, "")
 
 
+def _norm_content(text: str) -> str:
+    return "".join((text or "").split()).lower()
+
+
+def _threshold_decisions(cands: list, similars: list) -> "list[dict]":
+    """LLM 关掉时的降级裁决：全等/近全等 → NOOP（等价重复），否则 ADD。
+
+    只做"防重复入库"这一件保守的事：不做 UPDATE/DELETE 合并（那需要语义理解，
+    宁可留给下次开 LLM 的对账，也不在无模型时误作废记忆）。
+    """
+    decisions = []
+    for i, (cand, hits) in enumerate(zip(cands, similars)):
+        dup = None
+        cand_norm = _norm_content(cand.get("content"))
+        for h in hits:
+            if cand_norm and cand_norm == _norm_content(h.content):
+                dup = h
+                break
+            if h.relevance is not None and h.relevance >= _DEDUP_COSINE:
+                dup = h
+                break
+        if dup is not None and not cand.get("id"):
+            decisions.append({"index": i, "op": "NOOP", "target_id": dup.memory_id,
+                              "reason": f"阈值去重（无对账 LLM）"})
+        else:
+            # 迁移行无 LLM 可裁决时按 ADD 语义"转正"（沿用原 id，不重复入库）。
+            decisions.append({"index": i, "op": "ADD", "reason": "无对账 LLM，直接保留"})
+    return decisions
+
+
 async def _reconcile_candidates(
     cands: list, job_id: str, embed_client, model_cfg: dict, *, priority_add: bool = False,
+    llm_enabled: bool = True,
 ) -> dict:
     similars = await asyncio.gather(
         *(_similar_existing(c, embed_client) for c in cands),
@@ -237,8 +328,10 @@ async def _reconcile_candidates(
         decisions = await _call_llm(_RECONCILE_PROMPT, _cand_block_for_prompt(cands, similars),
                                     model_cfg)
     if decisions is None:
+        if not llm_enabled:
+            decisions = _threshold_decisions(cands, similars)
         # 无模型/LLM 失败：agent 工具是用户显式意图，直写；其余留给下个 tick 重试
-        if priority_add:
+        elif priority_add:
             decisions = [{"index": i, "op": "ADD"} for i in range(len(cands))]
         else:
             raise RuntimeError("LLM 对账不可用，job 待重试")

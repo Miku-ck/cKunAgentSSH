@@ -134,8 +134,8 @@ def test_web_tools_key_length_capped(settings_client, monkeypatch):
     assert resp.status_code == 422
 
 
-def test_memory_settings_strategy_whitelist(settings_client, monkeypatch):
-    """strategy 只认前端 union 的 auto|manual：脏值此前能直接写进配置库"""
+def test_memory_settings_budget_bounds_and_dead_strategy(settings_client, monkeypatch):
+    """v2：strategy 是死配置（沉淀策略由写入管线决定），预算/超时按 Field 区间挡脏值"""
     import routes.settings as settings_mod
     store: dict[str, str] = {}
     monkeypatch.setattr(settings_mod.db, "get_app_setting",
@@ -143,15 +143,24 @@ def test_memory_settings_strategy_whitelist(settings_client, monkeypatch):
     monkeypatch.setattr(settings_mod.db, "set_app_setting",
                         lambda k, v: store.__setitem__(k, v))
 
-    resp = settings_client.put("/api/settings/memory", json={"strategy": "telepathy"})
+    resp = settings_client.put("/api/settings/memory", json={"inject_budget_tokens": 99999})
     assert resp.status_code == 422
-    assert "memory.strategy" not in store
+    resp = settings_client.put("/api/settings/memory", json={"search_timeout_s": 0})
+    assert resp.status_code == 422
 
-    resp = settings_client.put("/api/settings/memory",
-                               json={"enabled": True, "strategy": "manual", "max_items": 50})
+    resp = settings_client.put("/api/settings/memory", json={
+        "enabled": True, "max_items": 50, "inject_budget_tokens": 900,
+        "blocks_budget_tokens": 800, "search_timeout_s": 3.5,
+        "reconcile_llm_enabled": False,
+    })
     assert resp.status_code == 200
-    assert store["memory.strategy"] == "manual"
     assert store["memory.max_items"] == "50"
+    assert store["memory.inject_budget_tokens"] == "900"
+    assert store["memory.blocks_budget_tokens"] == "800"
+    assert store["memory.search_timeout_s"] == "3.5"
+    assert store["memory.reconcile_llm_enabled"] == "false"
+    assert "memory.strategy" not in store
+    assert "strategy" not in resp.json()
 
 
 def test_web_tools_search_fallback(web_tools_key_resolution_env):

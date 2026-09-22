@@ -13,10 +13,6 @@ USER_PREFERENCES = "user-preferences"
 AGENT_RULES = "agent-rules"
 HOST_PREFIX = "host-profile:"
 
-# 画像块的常驻 token 预算默认值（与注入记忆的 memory.inject_budget_tokens 分账，
-# 互不挤占：块超预算不会把检索到的记忆挤没，反之亦然）
-BLOCKS_BUDGET_TOKENS = 1200
-
 # 注入顺序 = 价值顺序：用户偏好与操作规则是用户/策略意图，主机画像是可重新探测的
 # 机器事实 —— 预算不够时先牺牲后者。
 _RENDER_ORDER = (USER_PREFERENCES, AGENT_RULES)
@@ -48,8 +44,11 @@ async def replace(key: str, old: str, new: str, updated_by: str) -> int:
     return await asyncio.to_thread(mstore.replace_in_block, key, old, new, updated_by)
 
 
-async def render_for_context(host_id: str = "", budget_tokens: int = BLOCKS_BUDGET_TOKENS) -> str:
+async def render_for_context(host_id: str, budget_tokens: int) -> str:
     """组装 [画像] 段文本；无块返回空串。仅注入当前主机的 host 块。
+
+    budget_tokens 由调用方从 db.get_memory_settings()["blocks_budget_tokens"] 传入
+    （写死两处会变成"改画像上限悄悄挤掉检索注入"）。
 
     超预算时按整块丢弃而不是截字符：块内容是自编辑成的完整句子，
     切一半会改变语义（甚至反转「不要用 X」这类否定式规则）。

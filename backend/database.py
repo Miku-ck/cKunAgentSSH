@@ -611,10 +611,17 @@ def _init_memory_v2(conn: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL
         )
     """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_kind_status ON memories(kind, status)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_scope_status ON memories(scope, status)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_updated ON memories(updated_at)")
+    # 历史遗留 v1 memories 表可能缺 kind/scope/status/updated_at 等新列，
+    # CREATE TABLE IF NOT EXISTS 不会重建已存在的表，裸建索引会因缺列抛
+    # "no such column" 而中断整个 init_db → 后端无法启动。这里降级处理：
+    # 缺列时跳过索引（仅此，不迁移数据），与下方 FTS5 段的降级先例一致。
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_kind_status ON memories(kind, status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_scope_status ON memories(scope, status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_updated ON memories(updated_at)")
+    except sqlite3.OperationalError as e:
+        logger.warning("memories 旧表缺列，跳过 v2 索引（降级）: %s", e)
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS memory_jobs (
@@ -2223,6 +2230,31 @@ def get_conv_retention() -> dict:
     return {"enabled": enabled, "keep_count": _int_app_setting("conv_retention.keep_count", 1000)}
 
 
+def _bool_app_setting(key: str, default: bool) -> bool:
+    """布尔 app_setting：只有明确的真值才为 True，脏值回默认。"""
+    raw = get_app_setting(key)
+    if raw is None or not str(raw).strip():
+        return default
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _float_app_setting(key: str, default: float,
+                       low: Optional[float] = None, high: Optional[float] = None) -> float:
+    """浮点 app_setting，语义同 _int_app_setting（脏值/越界回默认，不钳边界）"""
+    raw = get_app_setting(key)
+    try:
+        value = float(raw) if raw is not None and str(raw).strip() else default
+    except (TypeError, ValueError):
+        return default
+    if value != value:  # NaN 字面量：任何区间比较都为 False，会溜过 low/high 检查
+        return default
+    if low is not None and value < low:
+        return default
+    if high is not None and value > high:
+        return default
+    return value
+
+
 def get_memory_settings() -> dict:
     """读取记忆相关设置，返回带默认值的 dict
 
@@ -2230,11 +2262,19 @@ def get_memory_settings() -> dict:
     这个值一路喂到 consciousness_tick 的 prune_agent_memories(max_count=...)，其
     SQL 是 `LIMIT -1 OFFSET ?` —— max_count=0 等于 OFFSET 0 无 LIMIT，把该 mode
     下全部记忆一次删空。没有面板能改回这行，用户只能眼看着经验被清光。
+
+    两个 token 预算分账：注入记忆（检索到的历史经验）与画像块（常驻已知事实）各有
+    上限，一方变长不会把另一方挤没 —— 写在一处会让"改大画像"悄悄削减"检索召回"。
     """
     return {
         "enabled": get_app_setting("memory.enabled", "true") == "true",
-        "strategy": get_app_setting("memory.strategy", "auto"),
         "max_items": _int_app_setting("memory.max_items", 100, low=10, high=500),
+        "inject_budget_tokens": _int_app_setting(
+            "memory.inject_budget_tokens", 1500, low=200, high=8000),
+        "blocks_budget_tokens": _int_app_setting(
+            "memory.blocks_budget_tokens", 1200, low=200, high=8000),
+        "search_timeout_s": _float_app_setting("memory.search_timeout_s", 8.0, low=0.5, high=30.0),
+        "reconcile_llm_enabled": _bool_app_setting("memory.reconcile_llm_enabled", True),
     }
 
 

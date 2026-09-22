@@ -464,30 +464,28 @@ async def _reconcile_stale_runs_once() -> None:
         logger.warning("启动对账失败（不影响本次运行）: %s", e)
 
 
-# P5：30s 对交互首 token 太宽容（embedding API 慢时用户干等 SSE 无输出）。
-# 8s 覆盖正常 API 往返 + 关键词/向量两路并行；超时仍有故障兜底路径。
-_RETRIEVE_TIMEOUT_SECONDS = 8.0
-
-
-async def _retrieve_memory_contents(embed_client, *, query: str, scopes: list[str]) -> list[str]:
+async def _retrieve_memory_contents(
+    embed_client, *, query: str, scopes: list[str], settings: dict,
+) -> list[str]:
     """v2 混合检索注入：Retriever 渲染行 + token 预算，仅注入者计热度。
 
     兜底只在检索故障（超时/异常）时触发；空结果是相关性判定的合法结论
     （v1 P1 教训保留：故障降级按 recency 取 active，不做相关性判定）。
     """
     contents: list[str] = []
+    timeout_s = settings["search_timeout_s"]
     retrieve_failed = False
     try:
-        budget = await asyncio.to_thread(db._int_app_setting, "memory.inject_budget_tokens", 1500)
         contents = await asyncio.wait_for(
             memory_retriever.retrieve_for_injection(
-                query, scopes=scopes, embed_client=embed_client, budget_tokens=budget,
+                query, scopes=scopes, embed_client=embed_client,
+                budget_tokens=settings["inject_budget_tokens"],
             ),
-            timeout=_RETRIEVE_TIMEOUT_SECONDS,
+            timeout=timeout_s,
         )
     except asyncio.TimeoutError:
         retrieve_failed = True
-        logger.warning("记忆检索超时（%ss），降级兜底", _RETRIEVE_TIMEOUT_SECONDS)
+        logger.warning("记忆检索超时（%ss），降级兜底", timeout_s)
     except Exception as e:
         retrieve_failed = True
         logger.warning("记忆检索失败，降级兜底: %s", e)
@@ -578,6 +576,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
         memory_contents = await _retrieve_memory_contents(
             embed_client, query=req.task,
             scopes=memory_retriever.context_scopes(req.ssh_session_id or ""),
+            settings=mem_settings,
         )
 
     # ── 演化配置 ──
@@ -615,12 +614,8 @@ async def agent_run(req: AgentRunRequest, request: Request):
                 except Exception as e:
                     logger.warning("主机画像块写入失败（不影响 run）: %s", e)
             try:
-                _blocks_budget = db._int_app_setting(
-                    "memory.blocks_budget_tokens",
-                    memory_blocks.BLOCKS_BUDGET_TOKENS, 200, 8000,
-                )
                 profile_text = await memory_blocks.render_for_context(
-                    req.ssh_session_id or "", _blocks_budget,
+                    req.ssh_session_id or "", mem_settings["blocks_budget_tokens"],
                 )
             except Exception as e:
                 logger.warning("画像块渲染失败，降级为本轮探测文案: %s", e)

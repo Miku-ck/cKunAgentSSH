@@ -313,6 +313,51 @@ def test_agent_add_bypasses_when_llm_down(memdb, monkeypatch):
     assert len(rows) == 1 and rows[0]["source"] == "agent_tool"
 
 
+def _no_llm_used(monkeypatch):
+    async def boom(prompt, block, cfg):
+        raise AssertionError("关闭对账 LLM 后不应调用模型")
+    monkeypatch.setattr(reconcile, "_call_llm", boom)
+
+
+def test_reconcile_llm_off_threshold_noop(memdb, monkeypatch):
+    """设置关掉对账 LLM：重复候选走纯阈值去重 NOOP，不打模型也不涨行"""
+    _no_llm_used(monkeypatch)
+    mstore.add_memory(kind="semantic", content="用户负责 cKun 后端", source="test")
+    mstore.enqueue_job(reconcile.JOB_CANDIDATE, {"items": [
+        {"content": "用户负责 cKun 后端", "kind": "semantic", "scope": "global"}]})
+
+    result = _run(reconcile.process_jobs(
+        embed_client=FakeEmbed(), model_cfg={"model_id": "m"}, llm_enabled=False))
+    assert result["applied"]["NOOP"] == 1
+    assert len(mstore.list_memories()) == 1
+
+
+def test_reconcile_llm_off_threshold_adds_fresh(memdb, monkeypatch):
+    """无对照记忆时阈值路径直接 ADD，保证关掉 LLM 仍能沉淀"""
+    _no_llm_used(monkeypatch)
+    mstore.enqueue_job(reconcile.JOB_CANDIDATE, {"items": [
+        {"content": "全新的一条事实", "kind": "semantic", "scope": "global"}]})
+
+    result = _run(reconcile.process_jobs(
+        embed_client=FakeEmbed(), model_cfg={"model_id": "m"}, llm_enabled=False))
+    assert result["applied"]["ADD"] == 1
+    rows = mstore.list_memories()
+    assert len(rows) == 1 and rows[0]["status"] == "active"
+
+
+def test_reconcile_llm_off_keeps_pending_migration(memdb, monkeypatch):
+    """迁移行无 LLM 时按 ADD 语义转正（沿用原 id），不重复入库"""
+    _no_llm_used(monkeypatch)
+    mid = mstore.add_memory(kind="semantic", content="待确认的旧事实",
+                            source="migration", status="pending_reconcile")
+    mstore.enqueue_job(reconcile.JOB_BACKFILL, {"ids": [mid]})
+
+    _run(reconcile.process_jobs(
+        embed_client=FakeEmbed(), model_cfg={"model_id": "m"}, llm_enabled=False))
+    assert mstore.get_memory(mid)["status"] == "active"
+    assert len(mstore.list_memories()) == 1
+
+
 # ── P2: tick 维护任务 ──
 
 
@@ -381,14 +426,14 @@ def _seed_three_blocks():
 
 def test_render_blocks_order_and_label(memdb):
     _seed_three_blocks()
-    text = _run(memory_blocks.render_for_context("s1"))
+    text = _run(memory_blocks.render_for_context("s1", 1200))
     assert text.startswith("[画像]")
     assert (text.index(memory_blocks.USER_PREFERENCES)
             < text.index(memory_blocks.AGENT_RULES)
             < text.index(memory_blocks.host_key("s1")))
     # 只注入当前主机的块
     mstore.put_block(memory_blocks.host_key("s2"), "另一台机器", "probe")
-    assert "另一台机器" not in _run(memory_blocks.render_for_context("s1"))
+    assert "另一台机器" not in _run(memory_blocks.render_for_context("s1", 1200))
 
 
 def test_render_blocks_budget_drops_whole_block(memdb):
@@ -396,7 +441,7 @@ def test_render_blocks_budget_drops_whole_block(memdb):
     from agent.cost_tracker import estimate_tokens
 
     _seed_three_blocks()
-    full = _run(memory_blocks.render_for_context("s1"))
+    full = _run(memory_blocks.render_for_context("s1", 1200))
     # 预算 = 前两块的成本之和 → 第三块（主机画像）刚好挤不进
     budget = sum(
         estimate_tokens(f"### {key}\n{mstore.get_block(key)['value']}")

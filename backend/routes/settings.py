@@ -237,10 +237,14 @@ async def test_model_connection(config_id: str):
 
 class MemorySettingsRequest(BaseModel):
     enabled: bool = True
-    # 白名单与前端 settings 仓库的 union 同口径（stores/settings.ts 只认 auto/manual，
-    # 回填时其余值静默丢弃）：这里不校验的话，脏值能写进库并一直留在配置接口里
-    strategy: Literal["auto", "manual"] = "auto"
     max_items: int = Field(100, ge=10, le=500)
+    # 两条注入通道分账的 token 预算：画像块（常驻）与检索注入（每轮按相关性）
+    inject_budget_tokens: int = Field(1500, ge=200, le=8000)
+    blocks_budget_tokens: int = Field(1200, ge=200, le=8000)
+    # 预检索等待上限：embedding API 慢时用户在等 SSE 首字节，上限越短越早放弃
+    search_timeout_s: float = Field(8.0, ge=0.5, le=30.0)
+    # 关掉 = 后台整理只做阈值去重，不调模型；记忆仍会写入，只是不再消解矛盾
+    reconcile_llm_enabled: bool = True
 
 
 @router.get("/settings/memory")
@@ -253,8 +257,13 @@ def get_memory_settings():
 def update_memory_settings(req: MemorySettingsRequest):
     """更新记忆设置"""
     db.set_app_setting("memory.enabled", "true" if req.enabled else "false")
-    db.set_app_setting("memory.strategy", req.strategy)
     db.set_app_setting("memory.max_items", str(req.max_items))
+    db.set_app_setting("memory.inject_budget_tokens", str(req.inject_budget_tokens))
+    db.set_app_setting("memory.blocks_budget_tokens", str(req.blocks_budget_tokens))
+    db.set_app_setting("memory.search_timeout_s", str(req.search_timeout_s))
+    db.set_app_setting(
+        "memory.reconcile_llm_enabled", "true" if req.reconcile_llm_enabled else "false",
+    )
     return db.get_memory_settings()
 
 
