@@ -81,5 +81,5 @@ export const useAppStore = defineStore('app', () => {
     })
   }
 
-  return { backendStatus, backendPort, setBackendStatus }
+  return { backendStatus, backendPort }
 })

@@ -94,3 +94,6 @@ runtime/*
 
 # scripts/package.js 生成的临时构建配置
 .electron-builder.runtime.yml
+
+# 一次性诊断脚本输出（生成器在 .workbuddy/ 下，勿入库）
+.scope-selectors-report.txt

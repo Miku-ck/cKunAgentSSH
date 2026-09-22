@@ -26,7 +26,6 @@ from .contracts import (
     ToolCall,
     ToolResult,
     TraceEvent,
-    TracePhase,
 )
 from .telemetry import TelemetryBus
 

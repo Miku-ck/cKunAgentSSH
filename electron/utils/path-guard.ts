@@ -73,7 +73,7 @@ export async function assertSafePath(targetPath: string): Promise<void> {
  * 通过文件选择对话框选取后允许作为私钥读取的路径集合（存 realpath 后的绝对路径）。
  * 修复 1：私钥读取绕过路径校验的加固——只有本集合、~/.ssh 或 userData 之下的路径可读。
  */
-export const dialogAllowedKeyPaths = new Set<string>()
+const dialogAllowedKeyPaths = new Set<string>()
 
 /** 把通过文件选择对话框选取的文件路径加入私钥白名单（入参应为 realpath 后的路径） */
 export function allowDialogKeyPath(p: string): void {

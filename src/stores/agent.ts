@@ -739,7 +739,6 @@ export const useAgentStore = defineStore('agent', () => {
     scheduleRev,
     // computed
     isRunning,
-    hasHumanHelpRequest,
     hasRunNotice,
     pendingPermissions,
     expiredPermissions,

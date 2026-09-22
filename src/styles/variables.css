@@ -90,7 +90,6 @@
   --log-running: #58a6ff;
 
   /* 人工介入/权限卡片 */
-  --card-warn-bg: #2d2a1a;
   --card-warn-border: #4a4533;
   --card-perm-bg: #2d221a;
   --card-perm-border: #4a3a23;
@@ -177,7 +176,6 @@
   --log-running: #0969da;
 
   /* 浅色主题：人工介入/权限卡片 */
-  --card-warn-bg: #faf3dc;
   --card-warn-border: #e5d5a8;
   --card-perm-bg: #fdf6e3;
   --card-perm-border: #e0c68a;

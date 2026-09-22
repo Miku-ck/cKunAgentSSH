@@ -18,7 +18,7 @@ from unittest.mock import patch
 import pytest
 
 import agent.harness.reins as reins_mod
-from agent.harness.contracts import AgentConfig, RunContext, ReinPoint, TraceEvent
+from agent.harness.contracts import AgentConfig, RunContext, TraceEvent
 from agent.harness.reins import (
     ClarificationInterceptor,
     ClarificationOption,

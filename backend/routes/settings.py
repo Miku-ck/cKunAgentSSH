@@ -293,18 +293,11 @@ class PostProcessSettingsRequest(BaseModel):
 @router.get("/settings/post-process")
 def get_post_process_settings():
     """获取后处理设置 — 只读，不修改全局配置"""
-    def _bool(key: str, default: bool) -> bool:
-        v = db.get_app_setting(key)
-        if v is None:
-            return default
-        return v.lower() == "true"
+    from post_processor import load_post_process_config_from_db
 
-    return {
-        "enabled": _bool("post_process.enabled", True),
-        "generate_title": _bool("post_process.generate_title", True),
-        "extract_memory": _bool("post_process.extract_memory", True),
-        "generate_skill": _bool("post_process.generate_skill", True),
-    }
+    cfg = load_post_process_config_from_db()
+    keys = ("enabled", "generate_title", "extract_memory", "generate_skill")
+    return {k: getattr(cfg, k) for k in keys}
 
 
 @router.put("/settings/post-process")
