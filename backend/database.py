@@ -414,6 +414,41 @@ def init_db(db_path: str) -> None:
             CREATE INDEX IF NOT EXISTS ix_agent_jobs_status ON agent_jobs(status);
             CREATE INDEX IF NOT EXISTS ix_agent_jobs_run ON agent_jobs(run_id);
 
+            -- Goal 驱动的运维实现目标（跨会话持久，承接 spec 拆解为原子步骤）
+            CREATE TABLE IF NOT EXISTS goals (
+                goal_id          TEXT PRIMARY KEY,
+                objective        TEXT NOT NULL,            -- 目标全文
+                spec_ref         TEXT DEFAULT '',          -- 来源 spec 关联（spec 文件或任务的引用）
+                conversation_id  TEXT DEFAULT '',          -- 关联会话/agent_run（用于过滤）
+                status           TEXT NOT NULL DEFAULT 'planned',  -- planned/in_progress/done/blocked
+                metadata         TEXT,                     -- JSON dict:{feature,priority,phase}
+                plan_json        TEXT,                     -- JSON 完整实现计划
+                -- 结构化目标五要素：用户声明的 Goal（区别于工具从 spec 解析出的 objective）。
+                -- 这五列是「目标不漂移」的依据 —— 它们会被渲染进 system prompt（见 agent/goal_prompt.py）
+                intent           TEXT DEFAULT '',          -- 意图：用户到底想完成什么
+                scope            TEXT DEFAULT '',          -- 实体与范围：对象/时间/数据源/环境
+                constraints_json TEXT DEFAULT '[]',        -- 约束 JSON 数组：权限/预算/时间/合规
+                success_criteria_json TEXT DEFAULT '[]',   -- 成功标准 JSON 数组：什么结果算完成
+                boundaries       TEXT DEFAULT '',          -- 优先级与边界：哪些不能做、哪些可妥协
+                created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS ix_goals_status   ON goals(status);
+            CREATE INDEX IF NOT EXISTS ix_goals_spec_ref ON goals(spec_ref);
+
+            -- Goal 的原子步骤，各带验收标准；随 goal 级联删除
+            CREATE TABLE IF NOT EXISTS goal_steps (
+                step_id              TEXT PRIMARY KEY,
+                goal_id              TEXT NOT NULL REFERENCES goals(goal_id) ON DELETE CASCADE,
+                title                TEXT NOT NULL,
+                acceptance_criterion TEXT DEFAULT '',      -- 该步可验证的验收标准
+                status               TEXT NOT NULL DEFAULT 'pending',  -- pending/in_progress/completed/blocked
+                attempts             INTEGER DEFAULT 0,    -- 执行/重试次数
+                created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at           TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS ix_goal_steps_goal ON goal_steps(goal_id);
+
         """)
 
         # P7: 兼容旧库 — 增量补齐 agent_runs 新字段（executescript 不支持 PRAGMA 循环）
@@ -470,6 +505,9 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
     columns = {row[1] for row in cursor.fetchall()}
     if 'embedding_src' not in columns:
         conn.execute("ALTER TABLE agent_memories ADD COLUMN embedding_src TEXT")
+
+    # v2 记忆子系统（spec §4/§7）：建表 + 一次性存量迁移，幂等由 app_settings 标记控制
+    _init_memory_v2(conn)
 
     cursor = conn.execute("PRAGMA table_info(skills)")
     columns = {row[1] for row in cursor.fetchall()}
@@ -536,6 +574,209 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
             if col not in cols:
                 conn.execute(f"ALTER TABLE models_config ADD COLUMN {col} {col_def}")
                 cols.add(col)
+
+
+def _init_memory_v2(conn: sqlite3.Connection) -> None:
+    """v2 记忆 schema 建表 + FTS5 侧表 + 一次性存量迁移（spec §4 / §7）。
+
+    全部幂等：建表用 IF NOT EXISTS；迁移以 app_settings('memory_v2.migrated') 为
+    闸门，中途失败不留半个标记（迁移与标记同一事务提交）。任何异常只降级
+    （记日志、置标记跳过），不拖垮应用启动——v2 表缺失时 mstore 调用方
+    （retriever/tick/routes）各自有 except 兜底。
+    """
+    import struct
+    logger = logging.getLogger(__name__)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS memories (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            scope TEXT NOT NULL DEFAULT 'global',
+            title TEXT NOT NULL DEFAULT '',
+            content TEXT NOT NULL,
+            source TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            importance REAL NOT NULL DEFAULT 0.5,
+            pinned INTEGER NOT NULL DEFAULT 0,
+            use_count INTEGER NOT NULL DEFAULT 0,
+            valid_at TEXT,
+            invalid_at TEXT,
+            superseded_by TEXT,
+            last_used_at TEXT,
+            embedding BLOB,
+            embedding_src TEXT,
+            source_conv_id TEXT,
+            agent_run_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_kind_status ON memories(kind, status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_scope_status ON memories(scope, status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_updated ON memories(updated_at)")
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS memory_jobs (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            priority INTEGER NOT NULL DEFAULT 5,
+            status TEXT NOT NULL DEFAULT 'pending',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            finished_at TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS memory_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            memory_id TEXT NOT NULL,
+            job_id TEXT,
+            action TEXT NOT NULL,
+            old_content TEXT,
+            new_content TEXT,
+            reason TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS memory_blocks (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL DEFAULT '',
+            limit_chars INTEGER NOT NULL DEFAULT 2000,
+            version INTEGER NOT NULL DEFAULT 0,
+            updated_by TEXT,
+            updated_at TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS memory_block_history (
+            key TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            value TEXT NOT NULL,
+            updated_by TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mbh_key ON memory_block_history(key, version DESC)"
+    )
+
+    # FTS5 侧表：内容由写入侧重分词（tokenize 空格/2-gram），故表只需 mid+tok。
+    # 不支持 FTS5 的旧 SQLite 走 except，memory_v2.fts='0' 让 mstore 退回词重叠。
+    try:
+        conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(mid UNINDEXED, tok)")
+        conn.execute("INSERT OR REPLACE INTO app_settings(key,value) VALUES('memory_v2.fts','1')")
+    except sqlite3.OperationalError as e:
+        logger.warning("FTS5 不可用，关键词检索退回词重叠: %s", e)
+        conn.execute("INSERT OR REPLACE INTO app_settings(key,value) VALUES('memory_v2.fts','0')")
+
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT value FROM app_settings WHERE key='memory_v2.migrated'"
+    ).fetchone()
+    if row and row[0] == "1":
+        return
+    try:
+        _migrate_memory_v1_to_v2(conn, struct)
+        conn.execute(
+            "INSERT OR REPLACE INTO app_settings(key,value) VALUES('memory_v2.migrated','1')"
+        )
+        conn.commit()
+        logger.info("memory v2: 存量迁移完成")
+    except Exception as e:
+        conn.rollback()
+        # 失败也置标记：重跑半截迁移比重跑整批更危险（部分搬运的 embedding 无法分辨），
+        # 存量数据仍在 agent_memories 里，v2 从零开始积累是安全状态。
+        conn.execute(
+            "INSERT OR REPLACE INTO app_settings(key,value) VALUES('memory_v2.migrated','1')"
+        )
+        conn.commit()
+        logger.warning("memory v2 存量迁移失败（v2 从零积累，旧表保留）: %s", e)
+
+
+def _migrate_memory_v1_to_v2(conn: sqlite3.Connection, struct_mod) -> None:
+    """agent_memories / agent_strategies(reflection) → memories（spec §7）。
+
+    - episodic 是事实记录不需对账 → active；semantic 全部 pending_reconcile，
+      由 backfill_reconcile job 逐批裁决（矛盾/重复在首次整理时被消解）。
+    - 旧 embedding 仅 'api:' 来源搬运为 float32 BLOB；local 伪向量一律丢弃
+      （它们与真实向量不同空间，正是 v1 误注入源头）。
+    - 旧 mode 列丢弃：v2 用 scope 表达归属，历史行统一 global。
+    """
+    now = _now()
+    batch_ids: list[str] = []
+
+    rows = conn.execute(
+        "SELECT id, type, content, embedding, embedding_src, importance, "
+        "source_conv_id, agent_run_id, use_count, last_used_at, created_at "
+        "FROM agent_memories"
+    ).fetchall()
+    for r in rows:
+        mem_type = r["type"] if r["type"] in ("semantic", "episodic", "procedural") else "semantic"
+        status = "active" if mem_type == "episodic" else "pending_reconcile"
+        blob_src = None
+        if (r["embedding_src"] or "").startswith("api:") and r["embedding"]:
+            try:
+                vec = json.loads(r["embedding"])
+                if isinstance(vec, list) and vec and all(isinstance(x, (int, float)) for x in vec):
+                    blob_src = (struct_mod.pack(f"{len(vec)}f", *vec), r["embedding_src"])
+            except (ValueError, TypeError):
+                blob_src = None
+        blob, emb_src = blob_src if blob_src else (None, None)
+        created = r["created_at"] or now
+        conn.execute(
+            "INSERT OR IGNORE INTO memories "
+            "(id,kind,scope,title,content,source,status,importance,pinned,use_count,"
+            "valid_at,last_used_at,embedding,embedding_src,source_conv_id,agent_run_id,"
+            "created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                r["id"], mem_type, "global", "", r["content"], "migration", status,
+                r["importance"] if r["importance"] is not None else 0.5,
+                0, r["use_count"] or 0, created, r["last_used_at"],
+                blob, emb_src, r["source_conv_id"], r["agent_run_id"],
+                created, now,
+            ),
+        )
+        if status == "pending_reconcile":
+            batch_ids.append(r["id"])
+
+    # reflection 策略 → kind=procedural（spec §2/§7）：直接 active，无需对账
+    try:
+        srows = conn.execute(
+            "SELECT id, name, content, score, created_at FROM agent_strategies "
+            "WHERE strategy_type='reflection'"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        srows = []
+    for s in srows:
+        body = f"{s['name']}: {s['content']}" if s["name"] else s["content"]
+        created = s["created_at"] or now
+        conn.execute(
+            "INSERT OR IGNORE INTO memories "
+            "(id,kind,scope,title,content,source,status,importance,pinned,use_count,"
+            "valid_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                f"mig-{s['id']}", "procedural", "global", (s["name"] or "")[:60], body,
+                "migration", "active",
+                s["score"] if s["score"] is not None else 0.7,
+                0, 0, created, created, now,
+            ),
+        )
+
+    # 每 10 条 pending 投一个 backfill_reconcile job（priority=7 高于普通整理）
+    for i in range(0, len(batch_ids), 10):
+        conn.execute(
+            "INSERT INTO memory_jobs(id,kind,payload,priority) VALUES (?,?,?,?)",
+            (
+                f"mj-mig-{i}", "backfill_reconcile",
+                json.dumps({"ids": batch_ids[i:i + 10]}), 7,
+            ),
+        )
 
 
 def _fix_model_name_and_id(conn: sqlite3.Connection) -> None:

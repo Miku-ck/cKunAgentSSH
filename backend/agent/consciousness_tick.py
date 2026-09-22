@@ -1,23 +1,25 @@
 """
 意识 tick — Agent 的后台心跳认知活动
 
-类似人类"潜意识的整理思绪"：在无用户交互时，Agent 后台周期性执行
-轻量级元认知任务，让记忆系统保持"新鲜"和"健康"。
+v2（spec §5/§9）：后台职责收敛为三类——
+  1. reconcile_jobs    — 消费 memory_jobs（Reconciler 对账，唯一写入口；
+                         唯一可能调 LLM 的环节，失败按 job 重试 3 次）
+  2. trim/decay        — 规则维护：按 max_items 修剪 + 长期零命中衰减（零 LLM）
+  3. reflect_failures  — 失败模式规则识别，产物投 candidate_fact job
+                         （kind=procedural，统一记忆而非独立策略表）
 
-认知活动（每次 tick 选择 1-2 个执行，全部基于规则，不调 LLM）:
-  1. consolidate_memories  — 从近期 episodic 记忆提取 semantic 知识
-  2. reflect_on_failures   — 分析失败的 agent_runs，识别模式并写入 semantic 记忆
-  3. prune_stale_memories  — 按 mode/type 各保留最新最常用 max_items 条，修剪其余
-  4. touch_hot_memories    — 提升高频使用记忆的 importance
+v1 的 consolidate/touch 任务已随统一记忆重构移除：固化被 Reconciler 的
+candidate_fact 通路取代；touch 自增强回路整体删除（热度只在真正注入时由
+retriever 计）。
 
 设计原则:
-  - 零 LLM 调用：纯规则，避免后台成本
   - 失败静默：任何子任务异常都 try/except，不影响 tick 主循环
-  - 可配置：间隔、单次任务上限、单任务超时；修剪上限来自记忆设置 max_items
+  - 可配置：间隔、单次 job 上限、单任务超时；修剪上限来自记忆设置 max_items
   - 优雅关闭：通过 cancel event 停止
 """
 import asyncio
 import logging
+from collections import Counter, deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, Awaitable
@@ -33,13 +35,14 @@ def _now_utc() -> datetime:
 class TickConfig:
     """意识 tick 配置"""
     interval_seconds: int = 300        # tick 间隔（默认 5 分钟）
-    max_tasks_per_tick: int = 2        # 单次 tick 最多执行任务数
+    max_jobs_per_tick: int = 20        # 单 tick 消费 job 上限（spec §3）
     failure_lookback: int = 10         # 反思失败时回看的最近 run 数
-    task_timeout_seconds: int = 60     # m2 修复：单个任务超时时间，防止任务挂起阻塞后续 tick
+    task_timeout_seconds: int = 180    # 对账含 LLM 往返，超时放宽
+    max_items: int = 0                 # >0 时覆盖记忆设置的修剪上限（测试注入点）
 
 
 class ConsciousnessTick:
-    """后台意识 tick — 周期性执行元认知任务"""
+    """后台意识 tick — 周期性对账 + 规则维护"""
 
     def __init__(self, config: TickConfig | None = None):
         self.config = config or TickConfig()
@@ -47,17 +50,19 @@ class ConsciousnessTick:
         self._stop_event = asyncio.Event()
         # 互斥锁：trigger_now 与后台 _run_loop 调用 _tick_once 时互斥
         self._tick_lock = asyncio.Lock()
-        # 已注册的认知任务（name → coroutine function）
         self._tasks: dict[str, Callable[[], Awaitable[dict]]] = {
-            "consolidate_memories": self._consolidate_memories,
-            "reflect_on_failures": self._reflect_on_failures,
-            "prune_stale_memories": self._prune_stale_memories,
-            "touch_hot_memories": self._touch_hot_memories,
+            "reconcile_jobs": self._reconcile_jobs,
+            "reflect_failures": self._reflect_failures,
+            "trim_pools": self._trim_pools,
+            "decay_importance": self._decay_importance,
         }
-        # 上次执行时间（用于轮询调度）
+        # 上次执行时间（供调试查看）
         self._last_run: dict[str, datetime] = {}
         # 最近一次 tick 结果（供调试/查询）
         self.last_tick_result: dict | None = None
+        # 同一失败批次只反思一次（P2 审查教训保留：无签名去重会淹没记忆表）
+        self._reflected_signatures: deque[str] = deque(maxlen=500)
+        self._mem_max_items = 0
 
     # ── 生命周期 ──
 
@@ -101,11 +106,10 @@ class ConsciousnessTick:
             # 启动后等一个间隔再开始（避免与启动初始化抢资源）
             await asyncio.sleep(self.config.interval_seconds)
             while not self._stop_event.is_set():
-                # 单次 tick 的异常不能带走主循环：模块文档承诺「任何子任务异常都
-                # try/except，不影响 tick 主循环」，而 _tick_once 开头的
-                # db.get_memory_settings 在 SQLite 锁库时会抛 OperationalError ——
-                # 原写法让它冒到 _run_loop 外，后台任务静默结束（异常无人 retrieve），
-                # 记忆整理/反思从此不再运行，只有聊天路径的 ensure_started 才能拉起它。
+                # 单次 tick 的异常不能带走主循环：_tick_once 开头的
+                # db.get_memory_settings 在 SQLite 锁库时会抛 OperationalError，
+                # 让它冒出去会静默杀死后台任务（异常无人 retrieve），
+                # 记忆整理从此不再运行，只有聊天路径的 ensure_started 能拉起它。
                 try:
                     await self._tick_once()
                 except asyncio.CancelledError:
@@ -125,14 +129,12 @@ class ConsciousnessTick:
             raise
 
     async def _tick_once(self) -> None:
-        """执行一次 tick：选择若干任务并运行"""
+        """执行一次 tick：四个任务按序全跑（对账优先，规则维护兜底容量）"""
         # 与 trigger_now 互斥，避免后台循环与手动触发并发执行
         async with self._tick_lock:
-            # 延迟导入避免循环依赖
             import database as db
 
             # 读取记忆设置 — 关闭时跳过所有记忆相关任务
-            # D 修复（事件循环阻塞）：db 同步调用放线程池
             mem_settings = await asyncio.to_thread(db.get_memory_settings)
             if not mem_settings["enabled"]:
                 self.last_tick_result = {
@@ -141,46 +143,33 @@ class ConsciousnessTick:
                     "results": {"skipped": "memory disabled"},
                 }
                 return
+            self._mem_max_items = mem_settings.get("max_items", 100)
 
-            # 选择本轮要执行的任务：优先选最久未执行的
             now = _now_utc()
-            # 修复：datetime.min 是 naive datetime，与 aware datetime 比较会 TypeError
-            # 使用 datetime.min.replace(tzinfo=timezone.utc) 保持时区一致
-            candidates = sorted(
-                self._tasks.keys(),
-                key=lambda name: self._last_run.get(name, datetime.min.replace(tzinfo=timezone.utc)),
-            )
-            selected = candidates[: self.config.max_tasks_per_tick]
-
             results: dict[str, dict] = {}
-            for name in selected:
+            for name, fn in self._tasks.items():
                 try:
-                    # m2 修复：用 wait_for 防止任务挂起（如数据库锁、embedding 请求超时）
-                    # 导致后续 tick 全部阻塞
+                    # wait_for 防止任务挂起（DB 锁、LLM/embedding 超时）阻塞后续任务
                     result = await asyncio.wait_for(
-                        self._tasks[name](),
-                        timeout=self.config.task_timeout_seconds,
+                        fn(), timeout=self.config.task_timeout_seconds,
                     )
                     results[name] = result
-                    self._last_run[name] = now
                     logger.info(
                         "ConsciousnessTick 任务 '%s' 完成: %s",
                         name, result.get("summary", ""),
                     )
                 except asyncio.TimeoutError:
                     results[name] = {"error": f"超时 ({self.config.task_timeout_seconds}s)"}
-                    self._last_run[name] = now
                     logger.warning(
                         "ConsciousnessTick 任务 '%s' 超时 (%ds)",
                         name, self.config.task_timeout_seconds,
                     )
                 except Exception as e:
                     results[name] = {"error": str(e)}
-                    # C9 修复：失败也更新 _last_run，避免失败任务持续被优先选中导致饿死其他任务
-                    self._last_run[name] = now
                     logger.warning(
                         "ConsciousnessTick 任务 '%s' 失败: %s", name, e, exc_info=True
                     )
+                self._last_run[name] = now
 
             self.last_tick_result = {
                 "tick_at": now.isoformat(),
@@ -190,120 +179,22 @@ class ConsciousnessTick:
 
     # ── 认知任务实现 ──
 
-    def _load_default_model_cfg(self) -> dict | None:
-        """同步读取默认模型配置（供 to_thread 在线程池执行）"""
+    async def _reconcile_jobs(self) -> dict:
+        """消费 memory_jobs：相似检索 + 一次 LLM 批量裁决（唯一写入口）"""
+        from agent.memory import reconcile
+
+        result = await reconcile.process_jobs(max_jobs=self.config.max_jobs_per_tick)
+        processed = result.get("processed", 0)
+        applied = result.get("applied", {})
+        summary = f"消费 {processed} job" + (f": {applied}" if processed else "")
+        if result.get("failed"):
+            summary += f", 失败 {result['failed']}"
+        return {"summary": summary, **result}
+
+    async def _reflect_failures(self) -> dict:
+        """失败模式规则识别 → procedural candidate job（对账由 Reconciler 完成）"""
         import database as db
-        return (db.get_default_model(mode="ssh", mask_key=False)
-                or db.get_default_model(mask_key=False))
-
-    def _get_memory_manager(self) -> "MemoryManager":
-        """
-        使用 get_memory_manager 工厂获取缓存实例，
-        确保 tick 生成的 embedding 与 Agent 运行时使用同一来源（避免维度不一致）。
-
-        注意：内部含同步 db 调用，async 上下文请用
-        `await asyncio.to_thread(self._get_memory_manager)` 调用。
-        """
-        from agent.memory import get_memory_manager
-        try:
-            # D 修复（事件循环阻塞）：db 同步调用放线程池（由调用方 to_thread 包裹）
-            model_cfg = self._load_default_model_cfg()
-            if model_cfg:
-                return get_memory_manager(
-                    base_url=model_cfg.get("base_url", ""),
-                    api_key=model_cfg.get("api_key", ""),
-                    embedding_model=model_cfg.get("model_id") or model_cfg.get("name", ""),
-                )
-        except Exception as e:
-            logger.debug("获取默认模型配置失败，tick 将使用 fallback embedding: %s", e)
-        return get_memory_manager()
-
-    def _known_modes(self) -> list[str]:
-        """agent_memories 表中实际存在的 mode 列表（审查 MINOR：原 4 处硬编码
-        ("ssh",)，现动态查询实际存在的 mode）
-
-        注意：含同步 db 调用，async 上下文请用
-        `await asyncio.to_thread(self._known_modes)` 调用。
-        """
-        import database as db
-        try:
-            conn = db._get_conn()
-            try:
-                rows = conn.execute(
-                    "SELECT DISTINCT mode FROM agent_memories WHERE mode IS NOT NULL AND mode != ''"
-                ).fetchall()
-                return [r["mode"] for r in rows]
-            finally:
-                conn.close()
-        except Exception as e:
-            logger.debug("查询已知模式失败，回退 ssh: %s", e)
-            return ["ssh"]
-
-    async def _consolidate_memories(self) -> dict:
-        """
-        记忆固化：从近期 episodic 记忆中提取关键事实写入 semantic 记忆
-        纯规则提取：识别 episodic 内容中的"任务 → 工具 → 结果"模式
-        """
-        import database as db
-
-        # C8 修复：使用带模型配置的 MemoryManager，保证 embedding 来源一致
-        # D 修复（事件循环阻塞）：内部含同步 db 调用，放线程池
-        mgr = await asyncio.to_thread(self._get_memory_manager)
-
-        consolidated = 0
-        for mode in await asyncio.to_thread(self._known_modes):
-            try:
-                rows = await asyncio.to_thread(
-                    db.get_agent_memories, mode=mode, mem_type="episodic", limit=20
-                )
-            except Exception:
-                continue
-            if not rows:
-                continue
-
-            # H12 修复：一次性查询 semantic 记忆，避免 N+1（原先每条 fact 都查一次 DB）
-            try:
-                existing_semantic = await asyncio.to_thread(
-                    db.get_agent_memories, mode=mode, mem_type="semantic", limit=200
-                )
-                existing_contents = [e.get("content", "") for e in existing_semantic]
-            except Exception:
-                existing_contents = []
-
-            for row in rows:
-                content = row.get("content", "")
-                if not content:
-                    continue
-                # 提取"使用工具: X, Y"作为知识
-                facts = _extract_facts(content)
-                for fact in facts:
-                    # H12 修复：在内存中匹配，不再每条 fact 查 DB
-                    if any(fact in c for c in existing_contents):
-                        continue
-                    try:
-                        await mgr.save_semantic(
-                            mode=mode,
-                            content=fact,
-                            source_conv_id=row.get("source_conv_id", ""),
-                            agent_run_id=row.get("agent_run_id", ""),
-                            importance=0.5,
-                        )
-                        existing_contents.append(fact)  # 避免本批次重复
-                        consolidated += 1
-                    except Exception as e:
-                        logger.debug("保存固化记忆失败: %s", e)
-
-        return {
-            "summary": f"固化 {consolidated} 条 semantic 记忆",
-            "consolidated": consolidated,
-        }
-
-    async def _reflect_on_failures(self) -> dict:
-        """
-        失败反思：分析最近失败的 agent_runs，识别常见失败模式
-        将"失败模式 → 建议"写入 semantic 记忆，供后续运行参考
-        """
-        import database as db
+        from agent.memory import mstore, reconcile
 
         lookback = self.config.failure_lookback
         try:
@@ -317,29 +208,17 @@ class ConsciousnessTick:
         if not failed:
             return {"summary": "无失败 run 可反思", "reflected": 0}
 
-        # 审查修复（P2）：按失败 run 集合的签名去重 — 原实现每个 tick 都对同一
-        # 批失败 run 重复 save_semantic 相同内容的反思记忆（lookback 窗口内
-        # 无新失败时），记忆表被重复条目淹没。同一失败批次只反思一次，
-        # 出现新失败 run 时签名变化，重新反思。
         signature = "|".join(
-            f"{r.get('id')}:{r.get('status')}" for r in sorted(failed, key=lambda x: x.get("id") or "")
+            f"{r.get('id')}:{r.get('status')}"
+            for r in sorted(failed, key=lambda x: x.get("id") or "")
         )
-        if not hasattr(self, "_reflected_signatures"):
-            from collections import deque
-            self._reflected_signatures: deque[str] = deque(maxlen=500)
         if signature in self._reflected_signatures:
             return {
                 "summary": f"失败批次已反思过（{len(failed)} 个 run 无变化）",
                 "reflected": 0,
                 "failed_count": len(failed),
             }
-        # 签名延后到写入成功后才登记（见函数末尾）：原先在这里先 append，
-        # 而下面 mgr.save_semantic 的异常是 `except Exception: pass` 吞掉的 ——
-        # 一次记忆库写失败（锁库/模型不可用）就把这批失败 run 永久拉黑，
-        # 同一签名再也不会重新反思。
 
-        # 简单模式识别：统计失败状态分布
-        from collections import Counter
         status_counts = Counter(r.get("status") for r in failed)
         patterns: list[str] = []
         if status_counts.get("max_reached", 0) >= 2:
@@ -353,82 +232,49 @@ class ConsciousnessTick:
                 f"建议：检查模型 API 可用性、工具权限配置"
             )
 
-        # 写入 semantic 记忆（每条 mode 一个）
-        reflected = 0
-        # C8 修复：使用带模型配置的 MemoryManager（D 修复：同步 db 调用放线程池）
-        mgr = await asyncio.to_thread(self._get_memory_manager)
         for pattern in patterns:
-            for mode in (await asyncio.to_thread(self._known_modes)) or ["ssh"]:
-                try:
-                    await mgr.save_semantic(
-                        mode=mode,
-                        content=f"[反思] {pattern}",
-                        importance=0.7,
-                    )
-                    reflected += 1
-                except Exception:
-                    pass
-
-        if reflected > 0:
+            await asyncio.to_thread(
+                mstore.enqueue_job,
+                reconcile.JOB_CANDIDATE,
+                {
+                    "items": [{
+                        "title": "失败模式反思",
+                        "content": f"[反思] {pattern}",
+                        "kind": "procedural",
+                        "scope": "global",
+                        "importance": 0.7,
+                    }],
+                    "conv_id": None,
+                    "run_id": None,
+                },
+                6,
+            )
+        # 签名在 job 入队后登记：入队本身只是写 memory_jobs，失败会抛异常走到
+        # _tick_once 的 except，不会误登记。
+        if patterns:
             self._reflected_signatures.append(signature)
-        summary = f"反思 {len(failed)} 次失败，提取 {len(patterns)} 个模式"
-        if patterns and reflected == 0:
-            summary += "（模式写入全部失败，下个 tick 重试）"
         return {
-            "summary": summary,
-            "reflected": reflected,
+            "summary": f"反思 {len(failed)} 次失败，投 {len(patterns)} 个模式候选",
+            "reflected": len(patterns),
             "failed_count": len(failed),
         }
 
-    async def _prune_stale_memories(self) -> dict:
-        """按 mode/type 各保留最新最常用 max_items 条，修剪其余（上限来自记忆设置）"""
-        import database as db
+    async def _trim_pools(self) -> dict:
+        """每 kind 保留 max_items 条，超出者 invalidate（pinned/pending 不参与）"""
+        from agent.memory import mstore
 
-        # 读取用户配置的最大条目数，按 mode/type 各保留 max_items 条
-        # D 修复（事件循环阻塞）：db 同步调用放线程池
-        mem_settings = await asyncio.to_thread(db.get_memory_settings)
-        max_items = mem_settings.get("max_items", 100)
+        max_items = self.config.max_items or self._mem_max_items or 100
+        retired = await asyncio.to_thread(mstore.trim_pools, max_items)
+        return {"summary": f"修剪 {retired} 条超额记忆", "retired": retired}
 
-        total_deleted = 0
-        for mode in await asyncio.to_thread(self._known_modes):
-            for mem_type in ("episodic", "semantic"):
-                try:
-                    deleted = await asyncio.to_thread(
-                        db.prune_agent_memories,
-                        mode=mode, mem_type=mem_type, max_count=max_items,
-                    )
-                    total_deleted += deleted
-                except Exception as e:
-                    logger.debug("清理 %s/%s 记忆失败: %s", mode, mem_type, e)
+    async def _decay_importance(self) -> dict:
+        """90 天零命中降权，跌破地板失效"""
+        from agent.memory import mstore
 
+        result = await asyncio.to_thread(mstore.decay_memories)
         return {
-            "summary": f"清理 {total_deleted} 条过期记忆",
-            "deleted": total_deleted,
-        }
-
-    async def _touch_hot_memories(self) -> dict:
-        """
-        热点记忆提升：use_count >= 3 的记忆 importance +0.05（上限 1.0）
-        让频繁使用的记忆在检索时获得更高优先级
-        """
-        import database as db
-
-        promoted = 0
-        for mode in await asyncio.to_thread(self._known_modes):
-            for mem_type in ("episodic", "semantic"):
-                try:
-                    # D 修复（事件循环阻塞）：db 同步调用放线程池
-                    promoted += await asyncio.to_thread(
-                        db.promote_hot_memories,
-                        mode=mode, mem_type=mem_type, min_use_count=3,
-                        importance_delta=0.05, max_importance=1.0,
-                    )
-                except Exception as e:
-                    logger.debug("提升 %s/%s 热点记忆失败: %s", mode, mem_type, e)
-
-        return {
-            "summary": f"提升 {promoted} 条热点记忆重要性",
-            "promoted": promoted,
+            "summary": f"衰减 {result.get('decayed', 0)} 条 / 失效 {result.get('invalidated', 0)} 条",
+            **result,
         }
 
     # ── 手动触发（供 API 调用） ──
@@ -437,36 +283,6 @@ class ConsciousnessTick:
         """立即执行一次 tick（不影响后台调度），返回执行结果"""
         await self._tick_once()
         return self.last_tick_result or {"summary": "tick 已执行但无结果"}
-
-
-# ── 辅助函数 ──
-
-
-def _extract_facts(episodic_content: str) -> list[str]:
-    """
-    从 episodic 记忆内容中提取事实
-    简单规则：识别"使用工具: X, Y"和"任务: Z"模式
-    """
-    facts: list[str] = []
-    # 提取使用的工具
-    if "使用工具:" in episodic_content:
-        # 形如 "使用工具: shell_exec, web_search"
-        parts = episodic_content.split("使用工具:")
-        if len(parts) > 1:
-            # 只按 "|" 截掉后半个字段，逗号列表要整串保留：
-            # 原先再 .split(",")[0] 只留第一个工具，"shell_exec, web_search" 的
-            # 后半截被丢掉 —— 提取出的"常用工具"永远等于列表首位
-            tools = [t.strip() for t in parts[1].split("|")[0].split(",") if t.strip()]
-            if tools:
-                facts.append(f"常用工具: {', '.join(tools)}")
-    # 提取任务类型
-    if "任务:" in episodic_content:
-        parts = episodic_content.split("任务:")
-        if len(parts) > 1:
-            task_part = parts[1].split("|")[0].strip()[:80]
-            if task_part:
-                facts.append(f"曾处理任务: {task_part}")
-    return facts
 
 
 # ── 全局单例（供 main.py 启动） ──

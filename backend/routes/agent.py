@@ -34,7 +34,10 @@ import database as db
 from routes.terminal import _get_model_config
 from sse_utils import sse_event
 from agent.tools import create_registry_for_mode, ToolRegistry
-from agent.memory import get_memory_manager
+from agent.memory import mstore
+from agent.memory import reconcile as memory_reconcile
+from agent.memory import retriever as memory_retriever
+from agent.memory.embedding import get_embedding_client
 from agent.consciousness_tick import get_global_tick
 from agent.reflection import MetaReflection, RunTrace
 from agent.evolution import EvolutionEngine
@@ -454,27 +457,26 @@ async def _reconcile_stale_runs_once() -> None:
 
 
 # P5：30s 对交互首 token 太宽容（embedding API 慢时用户干等 SSE 无输出）。
-# 8s 覆盖正常 API 往返 + 本地伪 embedding 全池比对；超时仍有故障兜底路径。
+# 8s 覆盖正常 API 往返 + 关键词/向量两路并行；超时仍有故障兜底路径。
 _RETRIEVE_TIMEOUT_SECONDS = 8.0
 
 
-async def _retrieve_memory_contents(mgr, *, query: str, mode: str) -> list[str]:
-    """三层记忆检索，返回注入 system prompt 的记忆内容列表。
+async def _retrieve_memory_contents(embed_client, *, query: str, scopes: list[str]) -> list[str]:
+    """v2 混合检索注入：Retriever 渲染行 + token 预算，仅注入者计热度。
 
-    P1 修复：兜底只在检索故障（超时/异常）时触发。检索返回空是相关性判定的
-    合法结论（库里没有相关记忆），此前空结果照样兜底注入最近 5 条 semantic，
-    等于绕开 threshold 把最不相关的近期记忆塞进 prompt —— 与意图跳过想避免的
-    "你是什么模型被无关记忆污染"（见 agent/memory.py retrieve 注释）同源复活。
+    兜底只在检索故障（超时/异常）时触发；空结果是相关性判定的合法结论
+    （v1 P1 教训保留：故障降级按 recency 取 active，不做相关性判定）。
     """
-    retrieve_failed = False
     contents: list[str] = []
+    retrieve_failed = False
     try:
-        # M1 修复：加超时保护，防止 embedding API 阻塞导致 SSE 连接挂起无数据
-        results = await asyncio.wait_for(
-            mgr.retrieve(query=query, mode=mode, top_k=5, threshold=0.3),
+        budget = await asyncio.to_thread(db._int_app_setting, "memory.inject_budget_tokens", 1500)
+        contents = await asyncio.wait_for(
+            memory_retriever.retrieve_for_injection(
+                query, scopes=scopes, embed_client=embed_client, budget_tokens=budget,
+            ),
             timeout=_RETRIEVE_TIMEOUT_SECONDS,
         )
-        contents = [r.memory.content for r in results if r.memory.content]
     except asyncio.TimeoutError:
         retrieve_failed = True
         logger.warning("记忆检索超时（%ss），降级兜底", _RETRIEVE_TIMEOUT_SECONDS)
@@ -483,12 +485,8 @@ async def _retrieve_memory_contents(mgr, *, query: str, mode: str) -> list[str]:
         logger.warning("记忆检索失败，降级兜底: %s", e)
 
     if retrieve_failed and not contents:
-        # 故障降级：按 recency 取 semantic，不做相关性判定（仅限故障路径）
-        # 审查R-4：兜底只在检索故障时触发，恰是 DB 最可能不可用时——兜底再抛
-        # 会让降级路径自身成为 500 单点，故捕获后降级为空列表。
         try:
-            _fallback_mems = await asyncio.to_thread(db.get_relevant_memories, mode, limit=5)
-            contents = [m["content"] for m in _fallback_mems]
+            contents = await asyncio.to_thread(mstore.recent_fallback_lines, 5)
         except Exception as e:
             logger.warning("记忆检索降级兜底同样失败，放弃注入: %s", e)
     return contents
@@ -554,23 +552,23 @@ async def agent_run(req: AgentRunRequest, request: Request):
         except Exception as e:
             logger.warning("意图预识别失败（降级为常规流程）: %s", e)
 
-    # 初始化记忆管理器（缓存单例，与当前模型共享 base_url/api_key 用于 embedding）
-    memory_mgr = get_memory_manager(
-        base_url=model_cfg["base_url"],
-        api_key=model_cfg["api_key"],
-        embedding_model=model_cfg.get("model_id") or model_cfg.get("name", ""),
+    # embedding 客户端（与 run 模型同源，LRU 缓存单例；失败仅无向量，不造伪向量）
+    embed_client = get_embedding_client(
+        model_cfg["base_url"],
+        model_cfg["api_key"],
+        model_cfg.get("model_id") or model_cfg.get("name", ""),
     )
 
     # 读取记忆设置 — 关闭时跳过检索与保存
     mem_settings = await asyncio.to_thread(db.get_memory_settings)
     memory_enabled = mem_settings["enabled"]
 
-    # 三层记忆检索：episodic + semantic 合并
+    # v2 混合检索：episodic/semantic/procedural 统一记忆，scope 硬过滤
     # 对话型任务跳过记忆检索（避免无关记忆污染简单对话）
     memory_contents: list[str] = []
     if memory_enabled and not is_conversation_task:
         memory_contents = await _retrieve_memory_contents(
-            memory_mgr, query=req.task, mode=req.mode
+            embed_client, query=req.task, scopes=["global"],
         )
 
     # ── 加载历史反思 + 演化配置 ──
@@ -982,22 +980,26 @@ async def agent_run(req: AgentRunRequest, request: Request):
                         and not is_conversation_task
                     ):
                         try:
-                            summary = memory_mgr.build_episodic_summary(
+                            summary = memory_reconcile.format_episodic(
                                 task=req.task,
                                 tool_calls=run_trace_tool_calls,
                                 final_content=total_content,
                                 iterations=event.get("iterations", 0),
                             )
-                            await memory_mgr.save_episodic(
-                                mode=req.mode,
-                                content=summary,
-                                source_conv_id=req.conversation_id,
-                                agent_run_id=run_id,
-                                importance=0.6,
+                            await asyncio.to_thread(
+                                mstore.enqueue_job,
+                                memory_reconcile.JOB_EPISODIC,
+                                {
+                                    "content": summary,
+                                    "conv_id": req.conversation_id,
+                                    "run_id": run_id,
+                                    "importance": 0.6,
+                                    "scope": "global",
+                                },
                             )
-                            logger.info("已保存情景记忆 (run_id=%s)", run_id)
+                            logger.info("已投递情景记忆 job (run_id=%s)", run_id)
                         except Exception as e:
-                            logger.warning("保存情景记忆失败: %s", e)
+                            logger.warning("投递情景记忆 job 失败: %s", e)
 
                     # ── 事后反思 + 策略演化（异步执行，不阻塞 SSE；超时保护防卡死） ──
                     # H12: 传递 cost_usd / total_tokens / state_history，
@@ -1607,48 +1609,111 @@ def skip_clarification(req: ClarificationAnswerRequest):
     return {"run_id": req.run_id, "status": "skipped"}
 
 
-# ── Agent 记忆管理 ──
+# ── Agent 记忆管理（v2：统一 memories 表 + jobs/audit/blocks）──
+
+
+class MemoryEditRequest(BaseModel):
+    content: Optional[str] = None
+    title: Optional[str] = None
+    pinned: Optional[bool] = None
+
+
+class BlockPutRequest(BaseModel):
+    value: str
 
 
 @router.get("/agent/memories")
 def list_agent_memories(
-    mode: Optional[str] = None,
-    mem_type: Optional[str] = None,
+    kind: Optional[str] = None,
+    mem_type: Optional[str] = None,   # 旧参数名兼容（P4 前端切 kind 后移除）
+    scope: Optional[str] = None,
+    status: Optional[str] = None,
+    q: Optional[str] = None,
     limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ):
-    """查询 Agent 三层记忆列表（mode 可选，不传则返回全部模式）"""
-    rows = db.get_agent_memories(mode=mode, mem_type=mem_type, limit=limit)
-    for r in rows:
-        r.pop("embedding", None)
+    """v2 记忆列表（embedding 不出后端，仅 has_embedding 标记）"""
+    rows = mstore.list_memories(
+        kind=kind or mem_type, scope=scope, status=status, q=q, limit=limit, offset=offset,
+    )
     return {"memories": rows, "count": len(rows)}
+
+
+@router.get("/agent/memories/stats")
+def memory_stats():
+    """按 kind/status 的计数 + job 队列水位（管理面板头部）"""
+    return mstore.stats()
+
+
+@router.patch("/agent/memories/{memory_id}")
+def edit_agent_memory(memory_id: str, req: MemoryEditRequest):
+    """用户编辑：改内容（旧向量作废）与/或 pin 状态"""
+    row = mstore.get_memory(memory_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="记忆不存在")
+    if req.content is not None:
+        if not req.content.strip():
+            raise HTTPException(status_code=400, detail="内容不能为空")
+        mstore.user_edit(memory_id, content=req.content.strip(),
+                         title=(req.title if req.title is not None else row.get("title") or ""))
+    if req.pinned is not None:
+        mstore.set_pinned(memory_id, req.pinned)
+    return {"updated": True, "memory": mstore.get_memory(memory_id)}
 
 
 @router.delete("/agent/memories/{memory_id}")
 def delete_agent_memory(memory_id: str):
-    """删除单条 Agent 记忆"""
-    ok = db.delete_agent_memory(memory_id)
+    """用户删除 = invalidate（失效不物理删，审计链保留）"""
+    ok = mstore.retire(memory_id, reason="user_delete")
     if not ok:
-        raise HTTPException(status_code=404, detail="记忆不存在")
+        raise HTTPException(status_code=404, detail="记忆不存在或已失效")
     return {"deleted": True, "id": memory_id}
 
 
-@router.post("/agent/memories/prune")
-def prune_agent_memories(
-    mode: Optional[str] = None,
-    mem_type: Optional[str] = None,
-    max_count: int = Query(200, ge=1, le=10000),
-    clear_all: bool = Query(False),
-):
-    """清理最旧最少使用的 Agent 记忆
+@router.post("/agent/memories/clear")
+def clear_agent_memories():
+    """清空：全部非 pinned 记忆 invalidate（pinned 是用户显式保留，永不被批量操作波及）"""
+    return {"invalidated": mstore.retire_all_unpinned()}
 
-    - clear_all=True: 删除所有匹配的记忆（忽略 max_count）
-    - clear_all=False: 保留最近 max_count 条，删除其余
-    """
-    if clear_all:
-        deleted = db.clear_all_memories(mode=mode, mem_type=mem_type)
-    else:
-        deleted = db.prune_agent_memories(mode=mode, mem_type=mem_type, max_count=max_count)
-    return {"deleted": deleted}
+
+@router.get("/agent/memories/audit")
+def list_memory_audit(memory_id: Optional[str] = None, limit: int = Query(50, ge=1, le=500)):
+    return {"audit": mstore.list_audit(memory_id=memory_id, limit=limit)}
+
+
+@router.get("/agent/memories/jobs")
+def list_memory_jobs(status: Optional[str] = None, limit: int = Query(50, ge=1, le=500)):
+    return {"jobs": mstore.list_jobs(status=status, limit=limit)}
+
+
+@router.post("/agent/memories/jobs/{job_id}/retry")
+def retry_memory_job(job_id: str):
+    if not mstore.retry_job(job_id):
+        raise HTTPException(status_code=404, detail="job 不存在或非 failed 状态")
+    return {"retried": True, "id": job_id}
+
+
+@router.get("/agent/blocks")
+def list_memory_blocks():
+    return {"blocks": mstore.list_blocks()}
+
+
+@router.put("/agent/blocks/{key}")
+def put_memory_block(key: str, req: BlockPutRequest):
+    """UI 整块写入（agent 只能走 replace 工具，见 tools/memory.py）"""
+    from agent.memory import blocks as memory_blocks
+    if not memory_blocks.allowed_key(key):
+        raise HTTPException(status_code=400, detail=f"非法块键: {key}")
+    try:
+        version = mstore.put_block(key, req.value, updated_by="user_ui")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"key": key, "version": version}
+
+
+@router.get("/agent/blocks/{key}/history")
+def memory_block_history(key: str, limit: int = Query(20, ge=1, le=100)):
+    return {"history": mstore.list_block_history(key, limit=limit)}
 
 
 # ── 意识 tick ──
@@ -1663,6 +1728,12 @@ def consciousness_tick_status():
         "interval_seconds": tick.config.interval_seconds,
         "last_tick": tick.last_tick_result,
     }
+
+
+@router.post("/agent/tick/run")
+async def consciousness_tick_run():
+    """手动执行一次 tick（对账 + 维护），返回执行结果"""
+    return await get_global_tick().trigger_now()
 
 
 # ── 策略（反思 + 演化） ──

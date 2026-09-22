@@ -572,11 +572,19 @@ async def _generate_title(ctx: TurnContext, config: PostProcessConfig) -> None:
 
 _MEMORY_PROMPT_TEMPLATE = """\
 请分析以下 AI 助手与用户的单轮对话，提取关键记忆（最多 {max_count} 条）。
-仅提取值得长期记住的信息：用户偏好、重要事实、可复用上下文。每条用一句话表达。
+仅提取值得长期记住的信息：用户偏好、重要事实、可复用上下文经验。
+
+每条记忆输出一个 JSON 对象：
+- title: 不超过 20 字的短标题
+- content: 一句话表达的记忆内容
+- kind: "semantic"（稳定事实/偏好）或 "procedural"（可复用的操作经验/教训）
+- scope: "global"（与具体主机无关时）
 
 请严格按以下 JSON 格式输出，不要包含其他内容：
 {{
-  "memories": ["记忆1", "记忆2"]
+  "memories": [
+    {{"title": "...", "content": "...", "kind": "semantic", "scope": "global"}}
+  ]
 }}
 
 用户消息：
@@ -640,56 +648,35 @@ async def _extract_memories(ctx: TurnContext, config: PostProcessConfig) -> None
     if not memories:
         return
 
-    # 初始化 MemoryManager（用于 embedding + 相似度检查）
-    try:
-        from agent.memory import get_memory_manager
-        # 审查 M-15：embedding 调用需要真实 api_key（mask_key=False），
-        # 否则脱敏值导致 401 → 静默降级 256 维伪向量，与主路径真实维度混存
-        mem_cfg = await asyncio.to_thread(db.get_default_model, ctx.mode, mask_key=False) or {}
-        mem_mgr = get_memory_manager(
-            base_url=mem_cfg.get("base_url", ""),
-            api_key=mem_cfg.get("api_key", ""),
-            embedding_model=mem_cfg.get("model_id") or mem_cfg.get("name", ""),
-        )
-    except Exception:
-        logger.exception("[post_process:memory] 初始化 MemoryManager 失败")
-        return
-
-    # 逐条保存 + 相似度去重
-    saved_count = 0
+    # v2：本地不再做相似度去重，提取产物整批投 candidate_fact job，
+    # 是否入库/合并/作废由 Reconciler 在后台统一裁决（spec §5：唯一写入口）。
+    items = []
     for mem in memories:
-        if not isinstance(mem, str) or not mem.strip():
+        if isinstance(mem, str):
+            mem = {"content": mem}
+        content = (mem.get("content") or "").strip()
+        if not content:
             continue
-        content = mem.strip()
-        try:
-            # 相似度检查：先查同 mode 的 semantic 记忆
-            if await _is_memory_duplicate(mem_mgr, content, ctx.mode, config.memory_similarity_threshold):
-                logger.info("[post_process:memory] 跳过相似记忆: %s", content[:50])
-                continue
-            await mem_mgr.save_semantic(
-                mode=ctx.mode, content=content,
-                source_conv_id=ctx.conversation_id, importance=0.6,
-            )
-            saved_count += 1
-        except Exception as e:
-            logger.warning("[post_process:memory] 保存记忆失败: %s", e)
-
-    if saved_count > 0:
-        logger.info("[post_process:memory] 保存 %d 条记忆", saved_count)
-
-    # 容量管理：上限取记忆设置（与 consciousness_tick 的 _prune_stale_memories 同源）。
-    # 原先硬编码 100 —— 用户把 max_items 调到 500，每轮结束时仍被削回 100，
-    # 设置面板的保留条数在这里是死的（同一个保留上限写两处）。
+        items.append({
+            "title": (mem.get("title") or "").strip()[:60],
+            "content": content,
+            "kind": mem.get("kind") if mem.get("kind") in ("semantic", "procedural") else "semantic",
+            "scope": "global",
+            "importance": 0.6,
+        })
+    if not items:
+        return
     try:
-        mem_settings = await asyncio.to_thread(db.get_memory_settings)
+        from agent.memory import mstore
+        from agent.memory.reconcile import JOB_CANDIDATE
         await asyncio.to_thread(
-            db.prune_agent_memories,
-            mode=ctx.mode,
-            mem_type="semantic",
-            max_count=mem_settings.get("max_items", 100),
+            mstore.enqueue_job, JOB_CANDIDATE,
+            {"items": items, "conv_id": ctx.conversation_id, "run_id": None},
+            5,
         )
-    except Exception:
-        logger.warning("[post_process:memory] prune 失败")
+        logger.info("[post_process:memory] 投递 %d 条候选记忆 job", len(items))
+    except Exception as e:
+        logger.warning("[post_process:memory] 投递候选 job 失败: %s", e)
 
 
 async def _is_memory_duplicate(
