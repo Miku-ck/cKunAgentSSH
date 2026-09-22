@@ -624,3 +624,68 @@ def test_block_update_tool_append_and_target_host_only(memdb):
         "key": "host-profile:s2", "old_string": "", "new_string": "x"}, _ctx())).success
     assert not _run(reg.execute("block_update", {
         "key": "system-prompt", "old_string": "", "new_string": "x"}, _ctx())).success
+
+
+# ── 管理端点：手动新增与块历史（spec §9）──
+
+
+def test_manual_add_endpoint_writes_pinned_active_memory(memdb):
+    """用户在 UI 手敲的记忆：直写 active、source=user_ui、自动 pinned"""
+    import routes.agent as agent_routes
+
+    out = agent_routes.create_agent_memory(agent_routes.MemoryCreateRequest(
+        kind="semantic", content="生产 nginx 配置在 /etc/nginx/nginx.conf",
+        title="nginx 配置路径", scope="global",
+    ))
+    assert out["created"] and out["id"]
+    row = out["memory"]
+    assert row["status"] == "active" and row["source"] == "user_ui"
+    assert row["pinned"] == 1 and row["has_embedding"] is False
+    audit = mstore.list_audit(out["id"])
+    assert [a["action"] for a in audit] == ["ADD"] and "user_ui" in audit[0]["reason"]
+
+    # 无向量也要能被关键词通道召回（否则用户写完发现"搜不到"）
+    hits = _run(retriever.search("nginx 配置", scopes=["global"], embed_client=None))
+    assert out["id"] in [h.memory_id for h in hits]
+
+
+def test_pinned_manual_memory_survives_pool_trim(memdb):
+    """池容量修剪只动 pinned=0：用户手写的条目被静默淘汰是最难排查的丢失"""
+    import routes.agent as agent_routes
+
+    out = agent_routes.create_agent_memory(agent_routes.MemoryCreateRequest(content="一条事实"))
+    mstore.add_memory(kind="semantic", content="机器沉淀的同类事实", source="test")
+    assert mstore.trim_pools(0) == 1
+    assert mstore.get_memory(out["id"])["status"] == "active"
+
+
+def test_manual_add_endpoint_rejects_blank_and_bad_scope(memdb):
+    import pytest
+
+    import routes.agent as agent_routes
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as e:
+        agent_routes.create_agent_memory(agent_routes.MemoryCreateRequest(content="   "))
+    assert e.value.status_code == 400
+
+    with pytest.raises(HTTPException) as e2:
+        agent_routes.create_agent_memory(agent_routes.MemoryCreateRequest(
+            content="一条事实", scope="weird"))
+    assert e2.value.status_code == 400
+    # 合法前缀放过（host:/run: 与 retriever.context_scopes 的命名一致）
+    assert agent_routes.create_agent_memory(agent_routes.MemoryCreateRequest(
+        content="主机级事实", scope="host:s1"))["created"]
+
+
+def test_block_history_rows_carry_value_for_rollback(memdb):
+    """UI 的回滚按钮靠历史行里的 value 原样重写，缺它就回滚不了"""
+    mstore.put_block(memory_blocks.USER_PREFERENCES, "- 回答用中文", updated_by="user_ui")
+    mstore.put_block(memory_blocks.USER_PREFERENCES, "- 回答用英文", updated_by="agent")
+    hist = mstore.list_block_history(memory_blocks.USER_PREFERENCES)
+    assert [h["version"] for h in hist] == [2, 1]
+    assert hist[1]["value"] == "- 回答用中文" and hist[1]["updated_by"] == "user_ui"
+    # 回滚 = 用旧值再写一版（历史不删，与"失效不物理删"一致）
+    assert mstore.put_block(memory_blocks.USER_PREFERENCES, hist[1]["value"],
+                            updated_by="user_ui") == 3
+    assert mstore.get_block(memory_blocks.USER_PREFERENCES)["value"] == "- 回答用中文"

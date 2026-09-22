@@ -33,6 +33,32 @@
       <input v-model="filters.q" class="mem-search" placeholder="搜索内容/标题"
              @keydown.enter="loadMemories" />
       <button class="mem-btn" @click="loadMemories">搜索</button>
+      <button class="mem-btn" @click="addingNew = !addingNew">{{ addingNew ? '收起' : '新增' }}</button>
+    </div>
+
+    <!-- ── 手动新增：直写 active 并置顶，不经对账管线 ── -->
+    <div v-if="addingNew && tab === 'memories'" class="mem-new">
+      <div class="mem-new-row">
+        <select v-model="newMem.kind">
+          <option value="semantic">事实</option>
+          <option value="episodic">经历</option>
+          <option value="procedural">规程</option>
+        </select>
+        <input v-model="newMem.scope" class="mem-new-scope" placeholder="global" />
+        <input v-model="newMem.title" placeholder="标题（可空）" />
+      </div>
+      <textarea v-model="newMem.content" class="mem-edit" rows="3"
+                placeholder="要记住的内容 —— 手写条目自动置顶，不会被池容量修剪掉" />
+      <div class="mem-new-row end">
+        <label class="mem-new-imp">
+          重要度
+          <input v-model.number="newMem.importance" type="range" min="0" max="1" step="0.05" />
+          <span class="mem-importance">{{ newMem.importance.toFixed(2) }}</span>
+        </label>
+        <span class="mem-new-hint">直写生效并置顶，不经对账；不带向量，关键词检索照常命中</span>
+        <button class="mem-btn sm" :disabled="!newMem.content.trim() || addingBusy"
+                @click="onAdd">{{ addingBusy ? '写入中…' : '写入' }}</button>
+      </div>
     </div>
 
     <div class="mem-body">
@@ -108,14 +134,41 @@
               <span class="mem-importance">v{{ b.version }} · {{ b.value.length }}/{{ b.limit_chars }} 字 · {{ blockByText[b.updated_by] || b.updated_by }}</span>
             </div>
             <textarea v-if="blockEditKey === b.key" v-model="blockDraft" class="mem-edit" rows="6" />
+            <div v-if="blockEditKey === b.key" class="mem-diff">
+              <div v-for="(d, i) in blockDiff" :key="i" class="diff-line" :class="d.op">
+                <span class="diff-mark">{{ d.op === 'add' ? '+' : d.op === 'del' ? '-' : ' ' }}</span>{{ d.text || ' ' }}
+              </div>
+            </div>
             <pre v-else class="mem-block-view">{{ b.value }}</pre>
             <div class="mem-meta">
               <span class="spacer" />
               <template v-if="blockEditKey === b.key">
                 <button class="mem-btn sm" :disabled="saving === b.key" @click="saveBlock(b)">保存</button>
-                <button class="mem-btn sm" @click="blockEditKey = ''">取消</button>
+                <button class="mem-btn sm" @click="cancelBlockEdit">取消</button>
               </template>
-              <button v-else class="mem-lnk" @click="startBlockEdit(b)">编辑</button>
+              <template v-else>
+                <button class="mem-lnk" @click="startBlockEdit(b)">编辑</button>
+                <button class="mem-lnk" @click="toggleHistory(b.key)">
+                  {{ historyFor === b.key ? '收起历史' : '历史' }}
+                </button>
+              </template>
+            </div>
+
+            <div v-if="historyFor === b.key" class="mem-history">
+              <p v-if="historyLoading" class="mem-hint">历史加载中…</p>
+              <p v-else-if="!historyRows.length" class="mem-hint">无历史版本。</p>
+              <ul v-else>
+                <li v-for="h in historyRows" :key="h.version">
+                  <span class="mem-badge">v{{ h.version }}</span>
+                  <span class="hist-meta">
+                    {{ blockByText[h.updated_by] || h.updated_by }} · {{ fmtDate(h.created_at) }} · {{ h.value.length }} 字
+                  </span>
+                  <button class="mem-lnk" :disabled="saving === b.key || h.version === b.version"
+                          @click="rollbackBlock(b, h)">
+                    {{ h.version === b.version ? '当前版' : '回滚到此版' }}
+                  </button>
+                </li>
+              </ul>
             </div>
           </li>
         </ul>
@@ -156,13 +209,16 @@
 /**
  * AgentMemoryView — v2 记忆管理面板（spec §9）
  *
- * 三视图：记忆（过滤/编辑/置顶/作废/审计）、对账队列（状态/重试）、画像块（查看/编辑）。
- * 所有写入经后端唯一入口：PATCH=invalidate/编辑、clear=批量失效、job 重试重投队列。
+ * 三视图：记忆（过滤/新增/编辑/置顶/作废/审计）、对账队列（状态/重试）、
+ * 画像块（查看/编辑带逐行 diff 预览/历史回滚）。
+ * 所有写入经后端唯一入口：POST=手写字段直写并置顶、PATCH=编辑、
+ * clear=批量失效、job 重试重投队列、PUT block=整块新版本（回滚即回写历史值，历史不删）。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import {
   agentAdminApi, toFriendlyMessage,
-  type MemoryRow, type MemoryJobRow, type MemoryBlockRow, type MemoryAuditRow, type MemoryStats,
+  type MemoryRow, type MemoryJobRow, type MemoryBlockRow, type MemoryBlockHistoryRow,
+  type MemoryAuditRow, type MemoryStats,
 } from '@/api/client'
 import { useToastStore } from '@/stores/toast'
 import { parseBackendTs } from '@/utils/format'
@@ -188,6 +244,20 @@ const clearArmed = ref(false)
 
 const blockEditKey = ref('')
 const blockDraft = ref('')
+const blockEditBase = ref('')
+const historyFor = ref('')
+const historyRows = ref<MemoryBlockHistoryRow[]>([])
+const historyLoading = ref(false)
+
+const addingNew = ref(false)
+const addingBusy = ref(false)
+const newMem = reactive({
+  kind: 'semantic' as 'semantic' | 'episodic' | 'procedural',
+  scope: 'global',
+  title: '',
+  content: '',
+  importance: 0.7,
+})
 
 const auditFor = ref<MemoryRow | null>(null)
 const auditRows = ref<MemoryAuditRow[]>([])
@@ -270,6 +340,10 @@ function switchTab(next: typeof tab.value) {
   tab.value = next
   clearArmed.value = false
   auditFor.value = null
+  addingNew.value = false
+  blockEditKey.value = ''
+  historyFor.value = ''
+  historyRows.value = []
   if (next === 'memories') loadMemories()
   else if (next === 'jobs') loadJobs()
   else loadBlocks()
@@ -280,6 +354,28 @@ function reload() {
   if (tab.value === 'memories') loadMemories()
   else if (tab.value === 'jobs') loadJobs()
   else loadBlocks()
+}
+
+async function onAdd() {
+  const content = newMem.content.trim()
+  if (!content) { toast.error('内容不能为空'); return }
+  addingBusy.value = true
+  try {
+    const r = await agentAdminApi.addMemory({
+      kind: newMem.kind, content, title: newMem.title.trim(),
+      scope: newMem.scope.trim() || 'global', importance: newMem.importance,
+    })
+    // 当前筛选条件可能容不下这条（如按类型过滤），失败也不影响写入本身
+    if (!filters.value.kind && !filters.value.q.trim()) memories.value.unshift(r.memory)
+    else await loadMemories()
+    newMem.content = ''
+    newMem.title = ''
+    addingNew.value = false
+    toast.success('已直写并置顶')
+    loadStats()
+  } catch (e) {
+    toast.error(`新增失败：${toFriendlyMessage(e)}`)
+  } finally { addingBusy.value = false }
 }
 
 function startEdit(m: MemoryRow) { editingId.value = m.id; editDraft.value = m.content }
@@ -343,7 +439,66 @@ async function retryJob(j: MemoryJobRow) {
   } catch (e) { toast.error(`重试失败：${toFriendlyMessage(e)}`) }
 }
 
-function startBlockEdit(b: MemoryBlockRow) { blockEditKey.value = b.key; blockDraft.value = b.value }
+function startBlockEdit(b: MemoryBlockRow) {
+  blockEditKey.value = b.key
+  blockDraft.value = b.value
+  blockEditBase.value = b.value
+  historyFor.value = ''
+}
+function cancelBlockEdit() {
+  blockEditKey.value = ''
+  blockDraft.value = ''
+  blockEditBase.value = ''
+}
+
+/** 逐行 diff 预览：掐掉公共前缀/后缀，中间整体算「旧行删 + 新行增」。
+ *  块内容上限 2000 字符，成块显示足够看清改了什么，不值得为行级对齐上 LCS。 */
+const blockDiff = computed<{ op: 'same' | 'del' | 'add', text: string }[]>(() => {
+  if (!blockEditKey.value) return []
+  return diffLineRanges(blockEditBase.value, blockDraft.value)
+})
+
+function diffLineRanges(oldText: string, newText: string) {
+  const a = oldText.split('\n')
+  const b = newText.split('\n')
+  let head = 0
+  while (head < a.length && head < b.length && a[head] === b[head]) head++
+  let ae = a.length
+  let be = b.length
+  while (ae > head && be > head && a[ae - 1] === b[be - 1]) { ae--; be-- }
+  const out: { op: 'same' | 'del' | 'add', text: string }[] = []
+  for (let i = 0; i < head; i++) out.push({ op: 'same', text: a[i] })
+  for (let i = head; i < ae; i++) out.push({ op: 'del', text: a[i] })
+  for (let i = head; i < be; i++) out.push({ op: 'add', text: b[i] })
+  for (let i = ae; i < a.length; i++) out.push({ op: 'same', text: a[i] })
+  return out
+}
+
+async function toggleHistory(key: string) {
+  if (historyFor.value === key) { historyFor.value = ''; return }
+  historyFor.value = key
+  historyRows.value = []
+  historyLoading.value = true
+  try { historyRows.value = (await agentAdminApi.listMemoryBlockHistory(key)).history }
+  catch (e) { toast.error(`历史加载失败：${toFriendlyMessage(e)}`) }
+  finally { historyLoading.value = false }
+}
+
+/** 回滚 = 把历史里的 value 再写一版：产生新版本号，历史本身不删（spec §6 失效不物理删） */
+async function rollbackBlock(b: MemoryBlockRow, h: MemoryBlockHistoryRow) {
+  if (h.version === b.version) return
+  saving.value = b.key
+  try {
+    await agentAdminApi.putMemoryBlock(b.key, h.value)
+    toast.success(`已回滚到 v${h.version}`)
+    historyFor.value = ''
+    blockEditKey.value = ''
+    await loadBlocks()
+  } catch (e) {
+    toast.error(`回滚失败：${toFriendlyMessage(e)}`)
+  } finally { saving.value = '' }
+}
+
 async function saveBlock(b: MemoryBlockRow) {
   saving.value = b.key
   try {
@@ -480,4 +635,38 @@ onMounted(() => { loadStats(); loadMemories() })
 .mem-btn:disabled { opacity: .45; cursor: default; }
 .mem-btn.danger { color: #cf8a80; border-color: rgba(207,138,128,.4); }
 .mem-btn.sm { height: 20px; padding: 0 8px; font-size: 11px; }
+.mem-new {
+  display: flex; flex-direction: column; gap: 5px; padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.mem-new-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.mem-new-row.end { justify-content: flex-end; }
+.mem-new-row select, .mem-new-row input {
+  font-size: 11.5px; font-family: inherit; color: var(--text-primary);
+  background: var(--bg-input, transparent); border: 1px solid var(--border-default);
+  border-radius: 4px; padding: 3px 6px;
+}
+.mem-new-scope { width: 110px; }
+.mem-new-row input:not(.mem-new-scope) { flex: 1; min-width: 120px; }
+.mem-new-imp { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-secondary); }
+.mem-new-imp input[type='range'] { width: 96px; accent-color: var(--accent-primary); }
+.mem-new-hint { flex: 1; font-size: 10.5px; color: var(--text-tertiary); }
+.mem-new .mem-edit { margin-bottom: 0; }
+.mem-diff {
+  max-height: 140px; overflow-y: auto; margin-bottom: 4px; padding: 4px 6px;
+  border: 1px solid var(--border-subtle); border-radius: 4px;
+  background: var(--bg-sunken, rgba(0,0,0,.12));
+  font-family: ui-monospace, Consolas, monospace; font-size: 11px; line-height: 1.5;
+}
+.diff-line { display: flex; gap: 4px; white-space: pre-wrap; word-break: break-word; color: var(--text-secondary); }
+.diff-line.add { color: #7fbc92; background: rgba(127,188,146,.08); }
+.diff-line.del { color: #cf8a80; background: rgba(207,138,128,.08); }
+.diff-mark { width: 8px; flex-shrink: 0; opacity: .8; }
+.mem-history {
+  margin-top: 5px; padding: 5px 8px; border-radius: 4px;
+  border: 1px solid var(--border-subtle); background: var(--bg-sunken, rgba(0,0,0,.12));
+}
+.mem-history ul { list-style: none; margin: 0; padding: 0; }
+.mem-history li { display: flex; align-items: center; gap: 8px; font-size: 11px; padding: 2px 0; }
+.hist-meta { flex: 1; color: var(--text-tertiary); }
 </style>

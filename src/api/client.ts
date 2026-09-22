@@ -1110,6 +1110,24 @@ export interface MemoryBlockRow {
   updated_at: string
 }
 
+/** 画像块历史版本（回滚即把其中的 value 再写一版，历史不删） */
+export interface MemoryBlockHistoryRow {
+  key: string
+  version: number
+  value: string
+  updated_by: string
+  created_at: string
+}
+
+/** POST /agent/memories —— 用户手动新增，后端直写 active 并置 pinned */
+export interface MemoryCreatePayload {
+  kind?: 'semantic' | 'episodic' | 'procedural'
+  content: string
+  title?: string
+  scope?: string
+  importance?: number
+}
+
 /** GET /agent/strategies 单条策略（reflection / evolved_config） */
 export interface AgentStrategyItem {
   id: string
@@ -1215,6 +1233,15 @@ export const agentAdminApi = {
 
   memoryStats: () => request<MemoryStats>('/agent/memories/stats'),
 
+  /**
+   * 手动新增：直写 active + pinned（不参与池容量修剪），source 固定 user_ui。
+   * 不带 embedding —— 关键词检索照常命中，列表里 has_embedding 显示 false。
+   */
+  addMemory: (payload: MemoryCreatePayload) =>
+    request<{ created: boolean; id: string; memory: MemoryRow }>('/agent/memories', {
+      method: 'POST', body: JSON.stringify(payload),
+    }),
+
   /** 用户编辑：改内容（旧向量作废）与/或 pin */
   editMemory: (id: string, patch: { content?: string; title?: string; pinned?: boolean }) =>
     request<{ updated: boolean; memory: MemoryRow }>(
@@ -1247,6 +1274,12 @@ export const agentAdminApi = {
     request<unknown>(`/agent/memories/jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST' }),
 
   listMemoryBlocks: () => request<{ blocks: MemoryBlockRow[] }>('/agent/blocks'),
+
+  /** 块历史（倒序，最新在前）——「回滚到此版」用其 value 调 putMemoryBlock */
+  listMemoryBlockHistory: (key: string, limit = 20) =>
+    request<{ history: MemoryBlockHistoryRow[] }>(
+      `/agent/blocks/${encodeURIComponent(key)}/history?limit=${limit}`,
+    ),
 
   /** UI 整块写入画像块（超限后端 400） */
   putMemoryBlock: (key: string, value: string) =>

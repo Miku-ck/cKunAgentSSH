@@ -1654,6 +1654,14 @@ class BlockPutRequest(BaseModel):
     value: str
 
 
+class MemoryCreateRequest(BaseModel):
+    kind: Literal["semantic", "episodic", "procedural"] = "semantic"
+    content: str
+    title: str = ""
+    scope: str = "global"
+    importance: float = Field(0.7, ge=0.0, le=1.0)
+
+
 @router.get("/agent/memories")
 def list_agent_memories(
     kind: Optional[str] = None,
@@ -1691,6 +1699,31 @@ def edit_agent_memory(memory_id: str, req: MemoryEditRequest):
     if req.pinned is not None:
         mstore.set_pinned(memory_id, req.pinned)
     return {"updated": True, "memory": mstore.get_memory(memory_id)}
+
+
+@router.post("/agent/memories")
+def create_agent_memory(req: MemoryCreateRequest):
+    """用户手动新增：直写 active 记忆并置顶（pinned），不过对账管线。
+
+    对账是为自动沉淀准备的（判重、消解矛盾）；用户在 UI 里敲定的事实本身就是仲裁
+    结果，再让模型判一遍只会把它改写成另一句话。pinned 让它不参与池容量修剪与衰减
+    ——见 mstore.trim_pools/decay_memories 的 pinned=0 条件。
+    不嵌向量：本路径没有模型凭证上下文，宁缺毋滥（与 user_edit 置 NULL 同策略），
+    FTS 关键词通道照常召回，列表里的 has_embedding 如实显示 false。
+    """
+    content = req.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="内容不能为空")
+    scope = req.scope.strip() or "global"
+    if scope != "global" and not (scope.startswith("host:") or scope.startswith("run:")):
+        raise HTTPException(status_code=400, detail=f"非法 scope: {scope}")
+    mid = mstore.add_memory(
+        kind=req.kind, content=content, scope=scope,
+        title=req.title.strip(), source="user_ui",
+        importance=req.importance, pinned=1,
+    )
+    mstore.add_audit(mid, "ADD", new=content, reason="user_ui")
+    return {"created": True, "id": mid, "memory": mstore.get_memory(mid)}
 
 
 @router.delete("/agent/memories/{memory_id}")
