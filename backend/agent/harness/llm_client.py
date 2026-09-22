@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Awaitable, Callable
 
-from .contracts import LLMClient, LLMOutput, ToolCall as HarnessToolCall
+from .contracts import LLMOutput, ToolCall as HarnessToolCall
 
 logger = logging.getLogger(__name__)
 

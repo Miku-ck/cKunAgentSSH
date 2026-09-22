@@ -459,7 +459,6 @@ class MetaReflection:
         H12: 新增 cost_usd / iterations / total_tokens 字段持久化，
         供 EvolutionEngine 读取做多维演化（成本/迭代数/上限到达率）。
         """
-        import json
         import database as db
         try:
             content = result.summary

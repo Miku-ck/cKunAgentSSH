@@ -1114,17 +1114,11 @@ def init_post_process_manager(config: Optional[PostProcessConfig] = None) -> Pos
 
 def load_post_process_config_from_db() -> PostProcessConfig:
     """从数据库加载后处理配置，若无记录则返回默认配置"""
-    from database import get_app_setting
-
-    def _bool(key: str, default: bool) -> bool:
-        v = get_app_setting(key)
-        if v is None:
-            return default
-        return v.lower() == "true"
+    from database import bool_app_setting
 
     return PostProcessConfig(
-        enabled=_bool("post_process.enabled", True),
-        generate_title=_bool("post_process.generate_title", True),
-        extract_memory=_bool("post_process.extract_memory", True),
-        generate_skill=_bool("post_process.generate_skill", True),
+        enabled=bool_app_setting("post_process.enabled", True),
+        generate_title=bool_app_setting("post_process.generate_title", True),
+        extract_memory=bool_app_setting("post_process.extract_memory", True),
+        generate_skill=bool_app_setting("post_process.generate_skill", True),
     )

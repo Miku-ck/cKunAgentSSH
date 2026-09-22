@@ -16,7 +16,6 @@ import importlib.util
 import os
 from pathlib import Path
 
-import pytest
 
 # ── 远端执行器的根目录（必须在 import agent-exec 之前设定，模块级读取）──
 _WS = "/srv/ckun-agent"

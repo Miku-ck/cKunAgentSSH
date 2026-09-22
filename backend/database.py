@@ -275,7 +275,8 @@ def init_db(db_path: str) -> None:
             CREATE INDEX IF NOT EXISTS ix_tool_calls_run
                 ON tool_calls(agent_run_id);
 
-            -- Agent 三层记忆（episodic=情景总结, semantic=知识事实+embedding）
+            -- v1 三层记忆表（spec §10：迁移源，v2 运行时只读不写，去留待定）
+            -- 迁移路径见 _migrate_memory_v1_to_v2；写入侧已全部改走 v2 `memories`
             CREATE TABLE IF NOT EXISTS agent_memories (
                 id              TEXT PRIMARY KEY,
                 type            TEXT NOT NULL,           -- episodic / semantic
@@ -286,7 +287,7 @@ def init_db(db_path: str) -> None:
                 embedding       TEXT,                    -- JSON list[float]，仅 semantic
                 embedding_src   TEXT,                    -- 向量来源指纹（P4），仅 semantic
                 importance      REAL DEFAULT 0.5,
-                last_used_at    TEXT NOT NULL DEFAULT (datetime('now')),  -- P3 起为写入时间，touch 不再更新（见 touch_agent_memory）
+                last_used_at    TEXT NOT NULL DEFAULT (datetime('now')),  -- 语义是"写入时间"，命中不再刷新（自增强回路教训）
                 use_count       INTEGER DEFAULT 0,
                 created_at      TEXT NOT NULL DEFAULT (datetime('now'))
             );
@@ -1203,35 +1204,6 @@ def list_disabled_tools(mode: str = "all") -> list[str]:
         conn.close()
 
 
-# ── 记忆 CRUD ──
-
-
-def get_relevant_memories(mode: str, limit: int = 5) -> list[dict]:
-    """获取某模式下最近的 semantic 记忆（按最近使用 + 使用次数排序）
-
-    C-review M2：原实现读一张全库无写入者的旧表，永远返回空 → 记忆注入
-    形同虚设。真正的语义记忆由 post_processor → mem_mgr.save_semantic →
-    add_agent_memory 写入 `agent_memories`（type='semantic'）。改为读该表
-    semantic 层，字段形状与旧返回保持一致（调用方仅用 content）。
-
-    P1 修复后唯一调用点是 routes/agent._retrieve_memory_contents 的**故障
-    降级路径**（检索超时/异常时按 recency 兜底）——不做相关性判定，禁止
-    在检索正常但空结果时调用，否则等于绕开 threshold 注入无关记忆。
-    """
-    conn = _get_conn()
-    try:
-        rows = conn.execute(
-            "SELECT id, mode, content, source_conv_id, last_used_at, use_count, created_at "
-            "FROM agent_memories WHERE mode = ? AND type = 'semantic' "
-            "ORDER BY last_used_at DESC, use_count DESC "
-            "LIMIT ?",
-            (mode, limit),
-        ).fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        conn.close()
-
-
 # ── 技能 CRUD ──
 
 
@@ -1967,184 +1939,6 @@ def get_tool_calls(agent_run_id: str) -> list[dict]:
         conn.close()
 
 
-# ── Agent 三层记忆 CRUD ──
-
-
-def add_agent_memory(
-    mode: str,
-    mem_type: str,
-    content: str,
-    source_conv_id: Optional[str] = None,
-    agent_run_id: Optional[str] = None,
-    embedding: Optional[list] = None,
-    importance: float = 0.5,
-    embedding_src: Optional[str] = None,
-) -> str:
-    """添加一条 Agent 记忆，返回新记忆 id"""
-    mid = _new_id()
-    now = _now()
-    emb_json = json.dumps(embedding) if embedding else None
-    conn = _get_conn()
-    try:
-        conn.execute(
-            "INSERT INTO agent_memories "
-            "(id, type, mode, content, source_conv_id, agent_run_id, embedding, "
-            " embedding_src, importance, last_used_at, use_count, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
-            (
-                mid, mem_type, mode, content,
-                source_conv_id, agent_run_id, emb_json,
-                embedding_src, importance, now, now,
-            ),
-        )
-        conn.commit()
-        return mid
-    finally:
-        conn.close()
-
-
-def get_agent_memories(
-    mode: Optional[str] = None,
-    mem_type: Optional[str] = None,
-    limit: int = 100,
-) -> list[dict]:
-    """获取 Agent 记忆列表（按 mode/type 过滤，按 last_used_at 倒序）"""
-    conn = _get_conn()
-    try:
-        conditions = []
-        params: list = []
-        if mode:
-            conditions.append("mode = ?")
-            params.append(mode)
-        if mem_type:
-            conditions.append("type = ?")
-            params.append(mem_type)
-        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-        rows = conn.execute(
-            "SELECT id, type, mode, content, source_conv_id, agent_run_id, "
-            "       embedding, embedding_src, importance, last_used_at, use_count, created_at "
-            f"FROM agent_memories {where} "
-            "ORDER BY last_used_at DESC LIMIT ?",
-            (*params, limit),
-        ).fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        conn.close()
-
-
-def touch_agent_memory(memory_id: str) -> None:
-    """命中计数 +1。
-
-    P3 修复：不再刷新 last_used_at。检索命中 → 刷使用时间 → 候选排序/prune
-    都按 last_used_at DESC → 被注入过的记忆更容易再次进候选、更晚被剪，
-    是条自增强回路；冷记忆掉出候选池后既不可检索也永不清理。该列现语义为
-    "写入时间"（插入后不变），排序 = 新近 + use_count，检索行为不再污染它。
-    """
-    conn = _get_conn()
-    try:
-        conn.execute(
-            "UPDATE agent_memories SET use_count = use_count + 1 WHERE id = ?",
-            (memory_id,),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def promote_hot_memories(
-    mode: str,
-    mem_type: str,
-    min_use_count: int = 3,
-    importance_delta: float = 0.05,
-    max_importance: float = 1.0,
-) -> int:
-    """批量提升高频使用记忆的重要性，返回更新行数"""
-    conn = _get_conn()
-    try:
-        cur = conn.execute(
-            "UPDATE agent_memories SET importance = MIN(?, importance + ?) "
-            "WHERE mode = ? AND type = ? AND use_count >= ? "
-            "AND importance < ?",
-            (max_importance, importance_delta, mode, mem_type, min_use_count, max_importance),
-        )
-        conn.commit()
-        return cur.rowcount
-    finally:
-        conn.close()
-
-
-def delete_agent_memory(memory_id: str) -> bool:
-    """删除单条 Agent 记忆"""
-    conn = _get_conn()
-    try:
-        cur = conn.execute(
-            "DELETE FROM agent_memories WHERE id = ?", (memory_id,)
-        )
-        conn.commit()
-        return cur.rowcount > 0
-    finally:
-        conn.close()
-
-
-def prune_agent_memories(
-    mode: Optional[str] = None,
-    mem_type: Optional[str] = None,
-    max_count: int = 200,
-) -> int:
-    """删除最旧最少使用的 Agent 记忆，返回删除数量
-
-    C4 修复：原 ORDER BY ASC + OFFSET 方向反了（保留最旧、删除最新）。
-    改为 DESC 排序后 OFFSET 跳过最新 max_count 条，删除剩余旧行。
-    """
-    conn = _get_conn()
-    try:
-        sql = (
-            "DELETE FROM agent_memories WHERE id IN ("
-            "SELECT id FROM agent_memories "
-        )
-        conditions = []
-        params: list = []
-        if mode:
-            conditions.append("mode = ?")
-            params.append(mode)
-        if mem_type:
-            conditions.append("type = ?")
-            params.append(mem_type)
-        if conditions:
-            sql += "WHERE " + " AND ".join(conditions) + " "
-        # C4 修复：DESC 排序，OFFSET 跳过最新 max_count 条
-        sql += "ORDER BY last_used_at DESC, use_count DESC LIMIT -1 OFFSET ?)"
-        params.append(max_count)
-        cur = conn.execute(sql, params)
-        conn.commit()
-        return cur.rowcount
-    finally:
-        conn.close()
-
-
-def clear_all_memories(
-    mode: Optional[str] = None,
-    mem_type: Optional[str] = None,
-) -> int:
-    """删除所有匹配的 Agent 记忆，返回删除数量"""
-    conn = _get_conn()
-    try:
-        conditions = []
-        params: list = []
-        if mode:
-            conditions.append("mode = ?")
-            params.append(mode)
-        if mem_type:
-            conditions.append("type = ?")
-            params.append(mem_type)
-        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-        cur = conn.execute(f"DELETE FROM agent_memories {where}", params)
-        conn.commit()
-        return cur.rowcount
-    finally:
-        conn.close()
-
-
 # ── 应用设置 key-value CRUD ──
 
 
@@ -2255,8 +2049,10 @@ def get_conv_retention() -> dict:
     唯一读取点：routes/settings.py 的 GET/PUT 与 routes/agent.py 的 run 前置清理
     原先各抄一份，key 或默认值一改就会两边漂移。
     """
-    enabled = (get_app_setting("conv_retention.enabled", "false") or "false").lower() == "true"
-    return {"enabled": enabled, "keep_count": _int_app_setting("conv_retention.keep_count", 1000)}
+    return {
+        "enabled": bool_app_setting("conv_retention.enabled", False),
+        "keep_count": _int_app_setting("conv_retention.keep_count", 1000),
+    }
 
 
 def get_permission_policy() -> dict:
@@ -2272,12 +2068,18 @@ def get_permission_policy() -> dict:
     }
 
 
-def _bool_app_setting(key: str, default: bool) -> bool:
-    """布尔 app_setting：只有明确的真值才为 True，脏值回默认。"""
+def bool_app_setting(key: str, default: bool) -> bool:
+    """布尔 app_setting：只有字面 "true" 才为 True，脏值回默认。
+
+    全库唯一的布尔设置解析口径 —— 此前 `== "true"`、`.lower() == "true"` 与
+    各自的局部函数写了好几份，同一个 "1" 在不同设置上含义不同。写入侧
+    （routes/settings.py）一律 `"true" if v else "false"`，所以这里认得比它多
+    没有意义，只会把历史脏值洗成意外打开的开关。
+    """
     raw = get_app_setting(key)
     if raw is None or not str(raw).strip():
         return default
-    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+    return str(raw).strip() == "true"
 
 
 def _float_app_setting(key: str, default: float,
@@ -2301,22 +2103,23 @@ def get_memory_settings() -> dict:
     """读取记忆相关设置，返回带默认值的 dict
 
     max_items 的区间就是写入侧的 Field 区间（10..500），越界读数不能原样放出去：
-    这个值一路喂到 consciousness_tick 的 prune_agent_memories(max_count=...)，其
-    SQL 是 `LIMIT -1 OFFSET ?` —— max_count=0 等于 OFFSET 0 无 LIMIT，把该 mode
-    下全部记忆一次删空。没有面板能改回这行，用户只能眼看着经验被清光。
+    这个值喂到 consciousness_tick → mstore.trim_pools(max_items)，其 SQL 是
+    `LIMIT -1 OFFSET ?` —— max_items=0 等于 OFFSET 0 无 LIMIT，把每个 kind 下
+    全部 active 且未 pin 的记忆一次 retire 掉。没有面板能改回这行，用户只能
+    眼看着经验被清光。
 
     两个 token 预算分账：注入记忆（检索到的历史经验）与画像块（常驻已知事实）各有
     上限，一方变长不会把另一方挤没 —— 写在一处会让"改大画像"悄悄削减"检索召回"。
     """
     return {
-        "enabled": get_app_setting("memory.enabled", "true") == "true",
+        "enabled": bool_app_setting("memory.enabled", True),
         "max_items": _int_app_setting("memory.max_items", 100, low=10, high=500),
         "inject_budget_tokens": _int_app_setting(
             "memory.inject_budget_tokens", 1500, low=200, high=8000),
         "blocks_budget_tokens": _int_app_setting(
             "memory.blocks_budget_tokens", 1200, low=200, high=8000),
         "search_timeout_s": _float_app_setting("memory.search_timeout_s", 8.0, low=0.5, high=30.0),
-        "reconcile_llm_enabled": _bool_app_setting("memory.reconcile_llm_enabled", True),
+        "reconcile_llm_enabled": bool_app_setting("memory.reconcile_llm_enabled", True),
     }
 
 

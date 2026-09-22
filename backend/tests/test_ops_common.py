@@ -8,7 +8,6 @@
 回归守护：一旦有人把"本地子进程执行"分支加回 run_headless，
 本测试会失败（旧分支会在本机执行 `cat /etc/passwd` 等命令）。
 """
-import asyncio
 import types
 
 import pytest

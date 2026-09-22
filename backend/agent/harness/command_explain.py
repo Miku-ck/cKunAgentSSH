@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:  # 仅类型标注，避免运行时把 contracts 拉进 safety 依赖链
-    from .contracts import RunContext, TraceEvent
+    from .contracts import RunContext
 
 logger = logging.getLogger(__name__)
 

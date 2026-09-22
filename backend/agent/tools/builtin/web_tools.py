@@ -148,8 +148,6 @@ class WebSearchTool(BaseTool):
 
     async def _search_tavily(self, query: str, max_results: int, api_key: str) -> ToolResult:
         """调用 Tavily Search API"""
-        import httpx
-
         try:
             import netconfig
             async with netconfig.new_client(default_timeout=15.0) as client:
@@ -186,7 +184,6 @@ class WebSearchTool(BaseTool):
 
     async def _search_360(self, query: str, max_results: int) -> ToolResult:
         """360 搜索 HTML（无需 API key，国内可直接访问）"""
-        import httpx
         from urllib.parse import quote_plus
 
         try:
@@ -256,7 +253,6 @@ class WebSearchTool(BaseTool):
 
     async def _search_duckduckgo(self, query: str, max_results: int) -> ToolResult:
         """DuckDuckGo HTML 搜索（无需 API key）"""
-        import httpx
         from urllib.parse import quote_plus
 
         try:

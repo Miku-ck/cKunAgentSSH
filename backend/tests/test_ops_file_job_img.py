@@ -13,7 +13,6 @@ tmp_path/tempfile.mkdtemp：Windows 下 mkdtemp 打限制性 ACL，沙箱
 import asyncio
 import os
 import re
-import tempfile
 from pathlib import Path
 
 import pytest

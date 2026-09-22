@@ -13,7 +13,6 @@
 运行: python -m pytest backend/tests/test_clarification_wizard.py -v
 """
 import asyncio
-from unittest.mock import patch
 
 import pytest
 

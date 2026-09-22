@@ -118,7 +118,6 @@ def _shell_detect_vague(args: dict) -> Optional[str]:
     Returns:
         模糊原因（触发澄清）或 None（目标明确 → 不触发）。
     """
-    import re as _re
     if not args or not isinstance(args, dict):
         return None
     cmd = args.get("command") or args.get("shell") or args.get("cmd") or ""

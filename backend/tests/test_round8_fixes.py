@@ -11,7 +11,6 @@
 import asyncio
 import sqlite3
 
-import pytest
 
 import database as db
 from agent import audit

@@ -14,7 +14,6 @@ import asyncio
 import sqlite3
 import sys
 
-import pytest
 import fastapi
 from fastapi.testclient import TestClient
 
@@ -47,8 +46,6 @@ def test_lru_eviction_skips_aclose_when_in_flight():
     import llm_adapter
     _reset_llm_cache()
     try:
-        closed = []
-
         class _FakePool:
             def __init__(self, sink):
                 self._sink = sink

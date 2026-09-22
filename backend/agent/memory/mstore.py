@@ -10,7 +10,7 @@ import sqlite3
 import database as db
 
 from . import vec as _vec
-from .text import match_query, tokenize
+from .text import tokenize
 
 _ACTIVE_STATUSES = ("active", "pending_reconcile")
 

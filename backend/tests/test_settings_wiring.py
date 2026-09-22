@@ -10,7 +10,6 @@
 历史消息条数由 routes/agent.py 的 get_recent_messages(limit=req.context_window)
 消费，此处校验请求模型契约；DB 读取行为不重复覆盖。
 """
-import asyncio
 
 import pytest
 

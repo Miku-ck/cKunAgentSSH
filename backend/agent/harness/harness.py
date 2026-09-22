@@ -30,7 +30,7 @@ from .contracts import (
 from .telemetry import TelemetryBus
 from .driver import Driver
 from .bridle import Bridle, CompressionConfig
-from .reins import Reins, create_default_reins
+from .reins import create_default_reins
 from .reins.plan_mode import MODE_KEY as PERMISSION_MODE_KEY
 from .saddle import Saddle, Sandbox, UndoBuilder
 from .stirrups import Stirrups

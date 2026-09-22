@@ -240,7 +240,7 @@ async def test_reconcile_dead_without_rc(monkeypatch):
 async def test_remote_output_crlf_bytes_preserved(monkeypatch):
     """CRLF/孤立 CR 日志必须逐字节还原（splitlines+rejoin 会损坏）。"""
     log = "line1\r\nline2\r\na\rb\nc\n"
-    e = _entry(offset=0)
+    _entry(offset=0)   # 注册 j1 —— 下面按 job_id="j1" 取的就是它
     calls = {"n": 0}
 
     async def fake(context, command, timeout=30, keep_full=False):
@@ -278,7 +278,7 @@ async def test_remote_offset_advances_exact_bytes(monkeypatch):
 @pytest.mark.asyncio
 async def test_remote_offset_persisted_on_read(monkeypatch):
     """offset 推进必须落盘（重启后恢复不从头重读）。"""
-    e = _entry(offset=0)
+    _entry(offset=0)   # 只为注册 j1；断言看的是 _persist_offset 的调用
     persisted = []
     monkeypatch.setattr(oj, "_persist_offset", lambda jid, off: persisted.append((jid, off)))
     async def fake(context, command, timeout=30, keep_full=False):

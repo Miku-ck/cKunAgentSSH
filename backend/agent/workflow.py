@@ -89,7 +89,6 @@ def get_phase(conversation_id: str, base_dir: str | Path | None = None) -> str:
     if not conversation_id:
         return ""
     base = base_dir if base_dir is not None else _DEFAULT_BASE_DIR
-    sd = _session_dir(base, conversation_id)
     if _artifact_path(base, conversation_id, _GOAL_FILE).is_file():
         return "goal"
     if _artifact_path(base, conversation_id, _PLAN_FILE).is_file():
