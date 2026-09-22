@@ -51,7 +51,6 @@
   --accent-red: #f48771;
   --accent-cyan: #9cdcfe;
   --accent-yellow: #dcdcaa;
-  --accent-gradient: linear-gradient(135deg, #0078d4 0%, #c586c0 100%);
 
   /* 监控指标色板（正常/警戒/危险）：仪表盘顶部卡片、磁盘条 与 GpuNvtopPanel 细条共用。
      统一阈值：正常 <60 绿 / 警戒 ≥60 ≤80 黄 / 危险 >80 红。 */

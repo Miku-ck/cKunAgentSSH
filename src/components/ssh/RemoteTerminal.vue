@@ -45,16 +45,8 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import CompletionPopup from './CompletionPopup.vue'
-import {
-  readCurrentLine,
-  stripPrompt,
-  parseInput,
-  columnToIndex,
-  queryCompletion,
-  buildCompletionText,
-  releaseCompletionSession,
-  type CompletionCandidate,
-} from '@/composables/useCompletion'
+import { releaseCompletionSession } from '@/composables/useCompletion'
+import { useCompletionPopup } from '@/composables/useCompletionPopup'
 import { useSSHStore } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
 import { buildTerminalOptions, watchTerminalConfig } from '@/composables/useTerminalConfig'
@@ -156,117 +148,14 @@ function processBufferedData(raw: string): string {
   return cleaned
 }
 
-// ─── 补全状态 ────────────────────────────
-const completionState = ref<{
-  visible: boolean
-  candidates: CompletionCandidate[]
-  x: number
-  y: number
-  prefix: string
-}>({
-  visible: false,
-  candidates: [],
-  x: 0,
-  y: 0,
-  prefix: '',
-})
-
-const popupRef = ref<{ moveUp: () => void; moveDown: () => void; selectCurrent: () => CompletionCandidate | null } | null>(null)
-
-function hideCompletion(): void {
-  completionState.value.visible = false
-  completionState.value.candidates = []
-  completionState.value.prefix = ''
-}
-
-async function triggerCompletion(): Promise<void> {
-  if (!terminal) return
-  try {
-    const lineInfo = readCurrentLine(terminal)
-    if (!lineInfo) return
-    const { input, startCol } = stripPrompt(lineInfo.line)
-    const cursorInInputCol = Math.max(0, lineInfo.cursorPos - startCol)
-    const cursorInInput = columnToIndex(input, cursorInInputCol)
-    const parsed = parseInput(input, cursorInInput)
-    if (!parsed) {
-      hideCompletion()
-      return
-    }
-
-    const candidates = await queryCompletion('remote', props.sshId, '', parsed)
-    // Optimization 修复：await 后校验终端仍存活，避免向已断开的 SSH 会话写入数据
-    if (!terminal) return
-    if (candidates.length === 0) {
-      hideCompletion()
-      return
-    }
-
-    // 单候选：直接补全
-    if (candidates.length === 1) {
-      completionState.value.prefix = parsed.prefix
-      applyCompletion(candidates[0])
-      return
-    }
-
-    // 多候选：显示浮层
-    completionState.value.prefix = parsed.prefix
-    completionState.value.candidates = candidates
-    positionPopup()
-    completionState.value.visible = true
-  } catch (err) {
-    console.error('[completion] triggerCompletion error:', err)
-    hideCompletion()
-  }
-}
-
-function positionPopup(): void {
-  if (!terminal || !terminal.element || !containerRef.value) return
-  const buffer = terminal.buffer.active
-  const cursorX = buffer.cursorX
-  const cursorY = buffer.cursorY
-  const termElement = terminal.element
-  const rect = termElement.getBoundingClientRect()
-  const containerRect = containerRef.value.getBoundingClientRect()
-  // 估算单元格尺寸
-  const cellWidth = terminal.cols > 0 ? rect.width / terminal.cols : 8
-  const cellHeight = terminal.rows > 0 ? rect.height / terminal.rows : 16
-  let x = containerRect.left + cursorX * cellWidth
-  let y = containerRect.top + (cursorY + 1) * cellHeight
-  // 边界处理：右溢出
-  const popupMaxWidth = 420
-  if (x + popupMaxWidth > window.innerWidth) {
-    x = window.innerWidth - popupMaxWidth - 8
-  }
-  // 边界处理：下溢出（向上显示）
-  const popupMaxHeight = 8 * 22 + 8
-  if (y + popupMaxHeight > window.innerHeight) {
-    y = containerRect.top + cursorY * cellHeight - popupMaxHeight
-  }
-  completionState.value.x = x
-  completionState.value.y = y
-}
-
-function applyCompletion(candidate: CompletionCandidate): void {
-  if (!terminal || !window.electronAPI) return
-  const isUnique = completionState.value.candidates.length <= 1
-  const text = buildCompletionText(candidate.text, completionState.value.prefix, isUnique)
-  if (text) {
-    window.electronAPI.sshWrite(props.sshId, text).catch(() => {})
-  }
-  hideCompletion()
-  terminal.focus()
-}
-
-/** 从当前行捕获用户提交的完整命令行 */
-function collectCommand(): void {
-  if (!terminal) return
-  const lineInfo = readCurrentLine(terminal)
-  if (!lineInfo) return
-  const { input } = stripPrompt(lineInfo.line)
-  const command = input.trim()
-  if (!command) return
-  sshStore.recordCommand(props.sshId, command)
-}
+// ─── 补全弹窗（与另一侧终端共用 useCompletionPopup，行为差异只由注入参数决定）───
+const { completionState, popupRef, hideCompletion, triggerCompletion, applyCompletion, collectCommand } =
+  useCompletionPopup({
+    getTerminal: () => terminal,
+    containerRef,
+    target: () => ({ kind: 'remote', id: props.sshId }),
+    write: (text) => { window.electronAPI?.sshWrite(props.sshId, text)?.catch(() => {}) },
+  })
 
 onMounted(() => {
   if (!containerRef.value || !window.electronAPI) return

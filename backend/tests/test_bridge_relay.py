@@ -9,7 +9,6 @@ import json
 import pytest
 from starlette.websockets import WebSocketDisconnect
 
-from agent import bridge_relay as br
 from agent.bridge_relay import (
     CLOSE_REPLACED,
     CLOSE_TOKEN_REJECTED,

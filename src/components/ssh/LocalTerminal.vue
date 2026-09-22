@@ -31,16 +31,8 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import CompletionPopup from './CompletionPopup.vue'
-import {
-  readCurrentLine,
-  stripPrompt,
-  parseInput,
-  columnToIndex,
-  queryCompletion,
-  buildCompletionText,
-  releaseCompletionSession,
-  type CompletionCandidate,
-} from '@/composables/useCompletion'
+import { releaseCompletionSession } from '@/composables/useCompletion'
+import { useCompletionPopup } from '@/composables/useCompletionPopup'
 import { useSSHStore } from '@/stores/ssh'
 import { buildTerminalOptions, watchTerminalConfig } from '@/composables/useTerminalConfig'
 import { stripAnsiBackground } from '@/utils/terminal-colors'
@@ -82,120 +74,14 @@ const {
   cwdPollMs: 0,
 })
 
-// ─── 补全状态 ────────────────────────────
-const completionState = ref<{
-  visible: boolean
-  candidates: CompletionCandidate[]
-  x: number
-  y: number
-  prefix: string
-}>({
-  visible: false,
-  candidates: [],
-  x: 0,
-  y: 0,
-  prefix: '',
-})
-
-const popupRef = ref<{ moveUp: () => void; moveDown: () => void; selectCurrent: () => CompletionCandidate | null } | null>(null)
-
-function hideCompletion(): void {
-  completionState.value.visible = false
-  completionState.value.candidates = []
-  completionState.value.prefix = ''
-}
-
-async function triggerCompletion(): Promise<void> {
-  if (!terminal) return
-  const lineInfo = readCurrentLine(terminal)
-  if (!lineInfo) return
-  const { input, startCol } = stripPrompt(lineInfo.line)
-  const cursorInInputCol = Math.max(0, lineInfo.cursorPos - startCol)
-  const cursorInInput = columnToIndex(input, cursorInInputCol)
-  const parsed = parseInput(input, cursorInInput)
-  if (!parsed) {
-    hideCompletion()
-    return
-  }
-
-  const candidates = await queryCompletion('local', props.ptyId, '', parsed, props.shell)
-  // Optimization 修复：await 后校验终端仍存活且可见，避免向已关闭的终端写入数据
-  if (!terminal) return
-  // 注意：queryCompletion 内部会再传一次 props.ptyId 给 ptyCompleteCommand 以获取 cwd
-  if (candidates.length === 0) {
-    hideCompletion()
-    return
-  }
-
-  if (candidates.length === 1) {
-    completionState.value.prefix = parsed.prefix
-    applyCompletion(candidates[0])
-    return
-  }
-
-  completionState.value.prefix = parsed.prefix
-  completionState.value.candidates = candidates
-  positionPopup()
-  completionState.value.visible = true
-}
-
-function positionPopup(): void {
-  if (!terminal || !terminal.element || !containerRef.value) return
-  const buffer = terminal.buffer.active
-  const cursorX = buffer.cursorX
-  const cursorY = buffer.cursorY
-  const termElement = terminal.element
-  const rect = termElement.getBoundingClientRect()
-  const containerRect = containerRef.value.getBoundingClientRect()
-  const cellWidth = terminal.cols > 0 ? rect.width / terminal.cols : 8
-  const cellHeight = terminal.rows > 0 ? rect.height / terminal.rows : 16
-  let x = containerRect.left + cursorX * cellWidth
-  let y = containerRect.top + (cursorY + 1) * cellHeight
-  const popupMaxWidth = 420
-  if (x + popupMaxWidth > window.innerWidth) {
-    x = window.innerWidth - popupMaxWidth - 8
-  }
-  const popupMaxHeight = 8 * 22 + 8
-  if (y + popupMaxHeight > window.innerHeight) {
-    y = containerRect.top + cursorY * cellHeight - popupMaxHeight
-  }
-  completionState.value.x = x
-  completionState.value.y = y
-}
-
-function applyCompletion(candidate: CompletionCandidate): void {
-  if (!terminal || !window.electronAPI) return
-  const isUnique = completionState.value.candidates.length <= 1
-
-  // 直接从终端读取当前前缀，避免状态不同步导致重复字符
-  const lineInfo = readCurrentLine(terminal)
-  let prefix = completionState.value.prefix
-  if (lineInfo) {
-    const { input: curInput, startCol: curStart } = stripPrompt(lineInfo.line)
-    const curCursorCol = Math.max(0, lineInfo.cursorPos - curStart)
-    const curCursorIdx = columnToIndex(curInput, curCursorCol)
-    const lastSpace = curInput.lastIndexOf(' ', curCursorIdx - 1)
-    prefix = curInput.slice(lastSpace + 1, curCursorIdx)
-  }
-
-  const text = buildCompletionText(candidate.text, prefix, isUnique)
-  if (text) {
-    window.electronAPI.ptyWrite(props.ptyId, text).catch(() => {})
-  }
-  hideCompletion()
-  terminal.focus()
-}
-
-/** 从当前行捕获用户提交的完整命令行 */
-function collectCommand(): void {
-  if (!terminal) return
-  const lineInfo = readCurrentLine(terminal)
-  if (!lineInfo) return
-  const { input } = stripPrompt(lineInfo.line)
-  const command = input.trim()
-  if (!command) return
-  sshStore.recordCommand(props.ptyId, command)
-}
+// ─── 补全弹窗（与另一侧终端共用 useCompletionPopup，行为差异只由注入参数决定）───
+const { completionState, popupRef, hideCompletion, triggerCompletion, applyCompletion, collectCommand } =
+  useCompletionPopup({
+    getTerminal: () => terminal,
+    containerRef,
+    target: () => ({ kind: 'local', id: props.ptyId, shell: props.shell }),
+    write: (text) => { window.electronAPI?.ptyWrite(props.ptyId, text)?.catch(() => {}) },
+  })
 
 onMounted(() => {
   if (!containerRef.value || !window.electronAPI) return
