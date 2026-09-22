@@ -1035,21 +1035,64 @@ export interface PermissionListResponse { tools: string[] }
 /** POST /agent/permission/release-run/{run_id} — 清理某次 run 的全部 once 授权 */
 export interface ReleaseRunResponse { run_id: string; released: number }
 
-/** GET /agent/memories 单条记忆（embedding 已在后端剔除） */
-export interface AgentMemoryItem {
+/** v2 记忆行（embedding 后端不出，仅 has_embedding 标记；SELECT * 投影） */
+export interface MemoryRow {
   id: string
-  type: string
-  mode: string
+  kind: 'semantic' | 'episodic' | 'procedural' | string
+  scope: string
+  title: string
   content: string
-  /** 库里 importance 可为 NULL（列表接口原样透传 DB 行，后端 _row_to_entry 也为此兜底） */
+  source: string
+  status: 'active' | 'pending_reconcile' | 'invalidated' | 'superseded' | 'rejected' | string
   importance: number | null
+  pinned: number
   use_count: number
-  last_used_at: string
+  valid_at?: string | null
+  invalid_at?: string | null
+  superseded_by?: string | null
+  last_used_at?: string | null
+  embedding_src?: string | null
+  has_embedding: boolean
+  source_conv_id?: string | null
+  agent_run_id?: string | null
   created_at: string
-  agent_run_id?: string
-  source_conv_id?: string
+  updated_at: string
 }
-export interface MemoriesResponse { memories: AgentMemoryItem[]; count: number }
+export interface MemoriesResponse { memories: MemoryRow[]; count: number }
+
+/** GET /agent/memories/stats：按 kind→status 计数 + job 队列水位 */
+export interface MemoryStats {
+  memories: Record<string, Record<string, number>>
+  jobs: Record<string, number>
+}
+
+export interface MemoryJobRow {
+  id: string
+  kind: string
+  status: string
+  attempts: number
+  last_error?: string | null
+  priority: number
+  created_at: string
+}
+export interface MemoryAuditRow {
+  id: number
+  memory_id: string
+  action: string
+  old_content?: string | null
+  new_content?: string | null
+  reason?: string | null
+  job_id?: string | null
+  created_at: string
+}
+export interface MemoryBlockRow {
+  key: string
+  value: string
+  limit_chars: number
+  version: number
+  updated_by: string
+  updated_at: string
+}
 
 /** GET /agent/strategies 单条策略（reflection / evolved_config） */
 export interface AgentStrategyItem {
@@ -1140,28 +1183,60 @@ export const agentAdminApi = {
       { method: 'POST' },
     ),
 
-  /** 记忆列表 */
-  listMemories: (opts: { mode?: string; memType?: string; limit?: number } = {}) => {
+  /** v2 记忆列表：kind/scope/status 精确过滤 + 内容/标题模糊搜 */
+  listMemories: (opts: {
+    kind?: string; scope?: string; status?: string; q?: string; limit?: number; offset?: number
+  } = {}) => {
     const q = new URLSearchParams()
-    if (opts.mode) q.set('mode', opts.mode)
-    if (opts.memType) q.set('mem_type', opts.memType)
+    if (opts.kind) q.set('kind', opts.kind)
+    if (opts.scope) q.set('scope', opts.scope)
+    if (opts.status) q.set('status', opts.status)
+    if (opts.q) q.set('q', opts.q)
     q.set('limit', String(opts.limit ?? 100))
+    if (opts.offset) q.set('offset', String(opts.offset))
     return request<MemoriesResponse>(`/agent/memories?${q.toString()}`)
   },
 
+  memoryStats: () => request<MemoryStats>('/agent/memories/stats'),
+
+  /** 用户编辑：改内容（旧向量作废）与/或 pin */
+  editMemory: (id: string, patch: { content?: string; title?: string; pinned?: boolean }) =>
+    request<{ updated: boolean; memory: MemoryRow }>(
+      `/agent/memories/${encodeURIComponent(id)}`,
+      { method: 'PATCH', body: JSON.stringify(patch) },
+    ),
+
+  /** 删除 = invalidate（失效不物理删，审计链保留） */
   deleteMemory: (id: string) =>
     request<unknown>(`/agent/memories/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
-  /** 清理最旧/最少使用记忆；clearAll=true 清空 */
-  pruneMemories: (opts: { maxCount?: number; clearAll?: boolean; mode?: string } = {}) => {
-    const q = new URLSearchParams()
-    if (opts.mode) q.set('mode', opts.mode)
-    q.set('max_count', String(opts.maxCount ?? 200))
-    if (opts.clearAll) q.set('clear_all', 'true')
-    return request<{ deleted: number }>(`/agent/memories/prune?${q.toString()}`, {
-      method: 'POST',
-    })
+  /** 清空：全部非 pinned 记忆 invalidate（pinned 永不被批量操作波及） */
+  clearMemories: () =>
+    request<{ invalidated: number }>('/agent/memories/clear', { method: 'POST' }),
+
+  /** 单条记忆的审计链（可空 = 全局最近） */
+  listMemoryAudit: (memoryId?: string, limit = 50) => {
+    const q = new URLSearchParams({ limit: String(limit) })
+    if (memoryId) q.set('memory_id', memoryId)
+    return request<{ audit: MemoryAuditRow[] }>(`/agent/memories/audit?${q.toString()}`)
   },
+
+  listMemoryJobs: (status?: string, limit = 50) => {
+    const q = new URLSearchParams({ limit: String(limit) })
+    if (status) q.set('status', status)
+    return request<{ jobs: MemoryJobRow[] }>(`/agent/memories/jobs?${q.toString()}`)
+  },
+
+  retryMemoryJob: (jobId: string) =>
+    request<unknown>(`/agent/memories/jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST' }),
+
+  listMemoryBlocks: () => request<{ blocks: MemoryBlockRow[] }>('/agent/blocks'),
+
+  /** UI 整块写入画像块（超限后端 400） */
+  putMemoryBlock: (key: string, value: string) =>
+    request<unknown>(`/agent/blocks/${encodeURIComponent(key)}`, {
+      method: 'PUT', body: JSON.stringify({ value }),
+    }),
 
   /** 策略列表（反思 + 演化） */
   listStrategies: (opts: { mode?: string; limit?: number } = {}) => {
