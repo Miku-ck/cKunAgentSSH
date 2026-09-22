@@ -106,6 +106,12 @@
 
       <!-- ── 对账队列 ── -->
       <template v-else-if="tab === 'jobs'">
+        <div class="mem-jobs-bar">
+          <span class="mem-new-hint">对账 / 池修剪 / 衰减按定时跑；这里可立刻催一轮</span>
+          <button class="mem-btn sm" :disabled="tickBusy" @click="onTickNow">
+            {{ tickBusy ? '整理中…' : '立即整理' }}
+          </button>
+        </div>
         <p v-if="!jobs.length" class="mem-hint">队列为空 —— 后台对账已消化所有待写入记忆。</p>
         <ul v-else class="mem-list">
           <li v-for="j in jobs" :key="j.id" class="mem-item job">
@@ -251,6 +257,7 @@ const historyLoading = ref(false)
 
 const addingNew = ref(false)
 const addingBusy = ref(false)
+const tickBusy = ref(false)
 const newMem = reactive({
   kind: 'semantic' as 'semantic' | 'episodic' | 'procedural',
   scope: 'global',
@@ -437,6 +444,17 @@ async function retryJob(j: MemoryJobRow) {
     j.status = 'pending'; j.attempts = 0
     toast.success('已重投队列')
   } catch (e) { toast.error(`重试失败：${toFriendlyMessage(e)}`) }
+}
+
+/** 手动催一轮 tick：后端 POST /agent/tick/run 跑同一套对账+维护，不改定时周期 */
+async function onTickNow() {
+  tickBusy.value = true
+  try {
+    const r = await agentAdminApi.runMemoryTickNow()
+    toast.success(`本轮整理：${typeof r.summary === 'string' ? r.summary : '已执行'}`)
+    await Promise.all([loadJobs(), loadStats()])
+  } catch (e) { toast.error(`整理失败：${toFriendlyMessage(e)}`) }
+  finally { tickBusy.value = false }
 }
 
 function startBlockEdit(b: MemoryBlockRow) {
@@ -638,6 +656,10 @@ onMounted(() => { loadStats(); loadMemories() })
 .mem-new {
   display: flex; flex-direction: column; gap: 5px; padding: 8px 12px;
   border-bottom: 1px solid var(--border-subtle);
+}
+.mem-jobs-bar {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 6px; padding: 5px 8px;
+  border: 1px solid var(--border-subtle); border-radius: 4px;
 }
 .mem-new-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .mem-new-row.end { justify-content: flex-end; }

@@ -1307,6 +1307,14 @@ export const agentAdminApi = {
   /** 意识 tick 状态（running / 间隔 / 上次结果） */
   getTickStatus: () => request<TickStatusResponse>('/agent/tick/status'),
 
+  /**
+   * 立即整理：手动跑一轮 tick（对账 + 池修剪 + 衰减），不等定时周期。
+   * 后台调度不受影响；返回本轮 summary 与各步计数。
+   */
+  runMemoryTickNow: () => request<Record<string, unknown>>('/agent/tick/run', {
+    method: 'POST',
+  }),
+
   /** 某次 run 的完整轨迹（DB 权威，含每调用耗时与成本） */
   getRunTrace: (runId: string) =>
     request<AgentRunTrace>(`/agent/runs/${encodeURIComponent(runId)}/trace`),
