@@ -544,13 +544,15 @@ onMounted(() => { loadStats(); loadMemories() })
 
 <style scoped>
 .mem-view {
-  position: absolute;
-  top: 42px; right: 10px; left: 10px;
-  max-height: calc(100% - 90px);
+  /* 内嵌宿主是设置面板（旧的 AI 面板浮层入口已撤下），所以走文档流。
+     高度必须确定：.mem-body 的 flex:1 + overflow 在内容撑高的盒子里不会生效。 */
+  position: relative;
+  height: min(60vh, 560px);
+  min-height: 320px;
   display: flex; flex-direction: column;
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
-  border-radius: 8px; z-index: 30; overflow: hidden;
+  border-radius: 8px; overflow: hidden;
 }
 .mem-head {
   display: flex; align-items: center; gap: 8px;

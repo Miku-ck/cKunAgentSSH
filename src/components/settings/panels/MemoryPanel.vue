@@ -77,8 +77,17 @@
         <span class="stats-value">{{ statsText }}</span>
       </div>
       <p class="foot-hint">
-        修改即时同步到后端；同步失败时自动回滚到上一次成功值。已有记忆的浏览与删除请通过 AI 面板顶部的"记忆"入口。
+        修改即时同步到后端；同步失败时自动回滚到上一次成功值。
       </p>
+
+      <SettingRow label="记忆管理" desc="浏览/检索/置顶/编辑/失效已有记忆，查看对账队列与画像块（含历史回滚）">
+        <button type="button" class="manage-btn" @click="showManager = !showManager">
+          {{ showManager ? '收起记忆管理' : '打开记忆管理' }}
+        </button>
+      </SettingRow>
+
+      <!-- 懒挂载：不开就不发 stats/列表请求 -->
+      <AgentMemoryView v-if="showManager" @close="showManager = false" />
     </div>
   </div>
 </template>
@@ -91,15 +100,18 @@
  * 不做"可选展示"，六个字段全部可见可改。
  * 全部通过 settings store 的 deep watch 自动同步（含 R6 回滚基线），面板自身
  * 不再直接调 updateMemorySettings，避免与 watcher 双写。
- * 记忆体本身（列表/编辑/删除）在 AgentMemoryView（AI 面板记忆入口），不重复。
+ * 记忆体本身（列表/编辑/新增/失效/审计/对账队列/画像块）内嵌 AgentMemoryView，
+ * 点「打开记忆管理」才挂载。
  */
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
 import SettingRow from '@/components/settings/fields/SettingRow.vue'
 import ToggleSwitch from '@/components/settings/fields/ToggleSwitch.vue'
+import AgentMemoryView from '@/components/agent/AgentMemoryView.vue'
 
 const settingsStore = useSettingsStore()
 const memory = computed(() => settingsStore.settings.memory)
+const showManager = ref(false)
 
 const statsText = computed(() => {
   const m = memory.value
@@ -173,4 +185,14 @@ onMounted(() => {
   color: var(--text-tertiary);
   line-height: 1.5;
 }
+.manage-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.manage-btn:hover { background: var(--bg-hover, rgba(255, 255, 255, .06)); }
 </style>
