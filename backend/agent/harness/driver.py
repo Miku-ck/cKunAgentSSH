@@ -509,6 +509,10 @@ class Driver:
                     yield ev
                 continue
             ctx.tool_calls_log[-1]["success"] = result.success
+            # ConfidenceMonitor 用输出尾部的 [exit_code=N] 哨兵区分"探针非零
+            # 退出"与"调用真实失败"，只需尾部片段（哨兵在末行，stderr 在前）
+            if not result.success and result.output:
+                ctx.tool_calls_log[-1]["output_tail"] = result.output[-512:]
             # C-review M7：命令执行成功（审批已放行）→ 移出「等待审批」集合，
             # 同命令后续重发恢复正常循环检测
             if result.success:

@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>输入区「+」号菜单 · 设计预览</title>
+<style>
+  /* ============================================================
+   * 取值全部来自 src/styles/variables.css 的深色主题（:root 默认）
+   * 预览页无法读取项目 CSS 变量，故此处按实际值内联
+   * ============================================================ */
+  :root {
+    --bg-base: #000000;
+    --bg-elevated: #1a1a1e;
+    --bg-elevated-solid: #1a1a1e;
+    --bg-hover: rgba(255,255,255,0.06);
+    --bg-active: rgba(255,255,255,0.12);
+    --bg-input: #101013;
+    --border-subtle: #2d2d30;
+    --border-default: #3e3e42;
+    --text-primary: #cccccc;
+    --text-secondary: #969696;
+    --text-tertiary: #878787;
+    --accent-primary: #0078d4;
+    --accent-indigo: #818cf8;
+    --accent-indigo-soft: #a5b4fc;
+    --accent-indigo-bg: rgba(129,140,248,0.12);
+    --accent-indigo-hover: rgba(129,140,248,0.10);
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg-base);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    min-height: 100vh;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 40px;
+    padding: 36px 24px 60px;
+    flex-wrap: wrap;
+  }
+
+  /* ── 左：模拟面板 ── */
+  .stage {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .stage-hint {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    letter-spacing: .2px;
+    padding-left: 2px;
+  }
+  .stage-hint b { color: var(--accent-indigo); font-weight: 500; }
+
+  .panel {
+    width: 380px;
+    height: 560px;
+    display: flex;
+    flex-direction: column;
+    background: transparent;
+    border-left: 1px solid var(--border-subtle);
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* 面板头 */
+  .panel-header {
+    height: 34px;
+    display: flex;
+    align-items: center;
+    padding: 0 4px;
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+    gap: 8px;
+  }
+  .panel-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .header-spacer { flex: 1; }
+  .icon-btn {
+    width: 24px; height: 24px;
+    display: flex; align-items: center; justify-content: center;
+    border: none; background: transparent;
+    color: var(--text-secondary);
+    border-radius: 4px; cursor: pointer;
+  }
+  .icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+  /* 消息区（示意，非本预览重点） */
+  .main-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 6px;
+    min-height: 0;
+  }
+  .empty-title { font-size: 15px; font-weight: 600; color: var(--text-secondary); margin: 0; }
+  .empty-desc  { font-size: 12px; color: var(--text-tertiary); margin: 0; }
+
+  /* ── 输入区 ── */
+  .input-section {
+    border-top: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+  }
+
+  .input-container {
+    padding: 0 4px;
+    border-bottom: 1px solid var(--border-subtle);
+    position: relative;
+  }
+
+  /* 已附加能力 chips（选中菜单项后的反馈，复用现有 tag 视觉） */
+  .cap-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 6px 0 2px;
+  }
+  .cap-tags:empty { display: none; }
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    background: var(--accent-indigo-bg);
+    color: var(--accent-indigo-soft);
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  .tag svg { flex-shrink: 0; color: var(--accent-indigo); }
+  .tag .tag-x {
+    display: flex; align-items: center; justify-content: center;
+    background: none; border: none; padding: 0; margin-left: 2px;
+    color: var(--accent-indigo-soft); opacity: .6; cursor: pointer;
+  }
+  .tag .tag-x:hover { opacity: 1; }
+
+  .chat-input {
+    width: 100%;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: var(--font-sans);
+    padding: 10px 0;
+    resize: none;
+    outline: none;
+    height: 40px;
+    line-height: 1.5;
+  }
+  .chat-input::placeholder { color: var(--text-tertiary); font-size: 12px; opacity: .7; }
+
+  /* ── 工具栏 ── */
+  .input-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px;
+    gap: 8px;
+  }
+  .toolbar-left, .toolbar-right { display: flex; align-items: center; gap: 6px; }
+
+  .toolbar-btn {
+    display: inline-flex; align-items: center; gap: 4px;
+    height: 24px; padding: 0 8px;
+    border: none; border-radius: 4px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 12px; cursor: pointer;
+    transition: all .15s;
+  }
+  .toolbar-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+  /* ★ 新增：+ 号触发按钮 */
+  .plus-wrap { position: relative; display: flex; }
+
+  .plus-btn {
+    width: 24px; height: 24px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: none; border-radius: 4px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background .15s, color .15s;
+    padding: 0;
+  }
+  .plus-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .plus-btn:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
+  .plus-btn[aria-expanded="true"] {
+    background: var(--accent-indigo-bg);
+    color: var(--accent-indigo);
+  }
+  .plus-btn svg { transition: transform .18s ease; }
+  .plus-btn[aria-expanded="true"] svg { transform: rotate(45deg); }
+
+  /* ★ 新增：向上弹出的菜单 */
+  .plus-menu {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 0;
+    width: 208px;
+    padding: 4px;
+    background: var(--bg-elevated-solid);
+    border: 1px solid var(--border-default);
+    border-radius: 6px;
+    box-shadow: 0 -4px 16px rgba(0,0,0,0.5);
+    z-index: 50;
+    transform-origin: bottom left;
+    animation: menu-in .14s ease-out;
+  }
+  @keyframes menu-in {
+    from { opacity: 0; transform: translateY(4px) scale(.98); }
+    to   { opacity: 1; transform: translateY(0)   scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .plus-menu { animation: none; }
+    .plus-btn svg { transition: none; }
+  }
+  .plus-menu[hidden] { display: none; }
+
+  .menu-item {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 30px;
+    padding: 0 8px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    cursor: pointer;
+    text-align: left;
+    transition: background .1s;
+  }
+  .menu-item:hover,
+  .menu-item.is-active { background: var(--bg-hover); }
+  .menu-item.is-active { background: var(--accent-indigo-hover); }
+  .menu-item:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: -2px; }
+
+  .mi-ico {
+    flex-shrink: 0;
+    width: 13px; height: 13px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-secondary);
+  }
+  .menu-item:hover .mi-ico,
+  .menu-item.is-active .mi-ico { color: var(--accent-indigo); }
+
+  .mi-name {
+    flex-shrink: 0;
+    font-size: 12px;
+    color: var(--text-primary);
+    white-space: nowrap;
+  }
+
+  .mi-desc {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--text-tertiary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* 已启用态（点击后） */
+  .menu-item.is-on .mi-ico { color: var(--accent-indigo); }
+  .menu-item.is-on .mi-desc { color: var(--accent-indigo); }
+
+  /* 分隔线与底部说明 */
+  .menu-sep { height: 1px; background: var(--border-subtle); margin: 4px 4px; }
+  .menu-foot {
+    padding: 2px 8px 4px;
+    font-size: 10px;
+    color: var(--text-tertiary);
+    line-height: 1.5;
+  }
+  .kbd {
+    display: inline-block;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 10px;
+    color: var(--text-secondary);
+  }
+
+  /* 模型选择器 / 发送按钮（示意） */
+  .model-selector-btn {
+    display: flex; align-items: center; gap: 2px;
+    height: 22px; background: transparent; border: none;
+    color: var(--text-primary); font-size: 11px; padding: 0 4px;
+    font-family: var(--font-sans); cursor: pointer;
+  }
+  .send-btn {
+    width: 26px; height: 26px;
+    display: flex; align-items: center; justify-content: center;
+    border: none; border-radius: 4px;
+    background: var(--bg-hover); color: var(--text-primary);
+    cursor: pointer; flex-shrink: 0;
+  }
+  .send-btn:hover { background: var(--bg-active); }
+
+  /* ── 右：规格说明 ── */
+  .spec {
+    width: 420px;
+    max-width: 100%;
+    font-size: 12px;
+    line-height: 1.7;
+    color: var(--text-secondary);
+  }
+  .spec h1 {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0 0 4px;
+    letter-spacing: .2px;
+  }
+  .spec .sub { font-size: 11px; color: var(--text-tertiary); margin: 0 0 18px; }
+  .spec h2 {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent-indigo);
+    text-transform: uppercase;
+    letter-spacing: .8px;
+    margin: 18px 0 6px;
+  }
+  .spec h2:first-of-type { margin-top: 0; }
+  .spec ul { margin: 0; padding-left: 16px; }
+  .spec li { margin: 2px 0; }
+  .spec code {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 11px;
+    color: var(--text-primary);
+    background: var(--bg-hover);
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+  .spec .ok { color: #6abf6a; }
+  .spec .warn { color: #dcdcaa; }
+  table.spec-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+    margin-top: 2px;
+  }
+  table.spec-table th,
+  table.spec-table td {
+    text-align: left;
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--border-subtle);
+    vertical-align: top;
+  }
+  table.spec-table th { color: var(--text-tertiary); font-weight: 500; }
+  table.spec-table td:first-child { color: var(--text-primary); white-space: nowrap; }
+  .swatch {
+    display: inline-block;
+    width: 9px; height: 9px;
+    border-radius: 2px;
+    border: 1px solid var(--border-default);
+    vertical-align: -1px;
+    margin-right: 5px;
+  }
+  .note {
+    margin-top: 16px;
+    padding: 8px 10px;
+    border-left: 2px solid var(--accent-indigo);
+    background: var(--bg-hover);
+    border-radius: 0 4px 4px 0;
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+</style>
+</head>
+<body>
+
+  <!-- ══════════ 左：模拟界面 ══════════ -->
+  <div class="stage">
+    <div class="stage-hint">点击 <b>+</b> 号开合菜单 · 支持 <b>↑ ↓</b> 移动、<b>Enter</b> 选中、<b>Esc</b> / 点击空白处关闭</div>
+
+    <div class="panel">
+      <!-- 面板头 -->
+      <div class="panel-header">
+        <span class="panel-title">AI 助手</span>
+        <span class="header-spacer"></span>
+        <button class="icon-btn" title="历史记录">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </button>
+        <button class="icon-btn" title="新建对话">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+        <button class="icon-btn" title="关闭面板">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+
+      <!-- 消息区（示意） -->
+      <div class="main-content">
+        <p class="empty-title">开始新的对话</p>
+        <p class="empty-desc">输入消息，或用 + 号添加能力</p>
+      </div>
+
+      <!-- 输入区 -->
+      <div class="input-section">
+        <div class="input-container">
+          <div class="cap-tags" id="capTags"></div>
+          <textarea class="chat-input" placeholder="输入消息，/ 调用技能..." readonly></textarea>
+        </div>
+
+        <div class="input-toolbar">
+          <div class="toolbar-left">
+            <!-- ★ 新增：+ 号与菜单（位于上传按钮左侧） -->
+            <div class="plus-wrap">
+              <button class="plus-btn" id="plusBtn" aria-haspopup="menu" aria-expanded="false" aria-controls="plusMenu" title="添加" aria-label="添加">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13">
+                  <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                </svg>
+              </button>
+
+              <div class="plus-menu" id="plusMenu" role="menu" aria-label="添加" hidden>
+                <button class="menu-item" role="menuitem" data-cap="goal">
+                  <span class="mi-ico">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13">
+                      <circle cx="12" cy="12" r="8"/>
+                      <path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>
+                    </svg>
+                  </span>
+                  <span class="mi-name">目标</span>
+                  <span class="mi-desc">明确要达成什么</span>
+                </button>
+
+                <button class="menu-item" role="menuitem" data-cap="plan">
+                  <span class="mi-ico">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13">
+                      <path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/>
+                      <path d="M3 16h4"/><path d="M3 20h4"/>
+                    </svg>
+                  </span>
+                  <span class="mi-name">计划</span>
+                  <span class="mi-desc">先出方案再执行</span>
+                </button>
+
+                <button class="menu-item" role="menuitem" data-cap="skill">
+                  <span class="mi-ico">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13">
+                      <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>
+                    </svg>
+                  </span>
+                  <span class="mi-name">技能</span>
+                  <span class="mi-desc">调用已启用技能</span>
+                </button>
+
+                <button class="menu-item" role="menuitem" data-cap="plugin">
+                  <span class="mi-ico">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13">
+                      <rect x="3" y="3" width="7" height="7" rx="1.5"/>
+                      <rect x="14" y="3" width="7" height="7" rx="1.5"/>
+                      <rect x="3" y="14" width="7" height="7" rx="1.5"/>
+                      <path d="M14 17.5h7M17.5 14v7"/>
+                    </svg>
+                  </span>
+                  <span class="mi-name">插件</span>
+                  <span class="mi-desc">连接 MCP 与扩展</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- 既有：上传文件（在 + 号右侧，保持不变） -->
+            <button class="toolbar-btn upload-btn" title="上传文件（文本类，单文件 ≤ 10MB）">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            </button>
+          </div>
+
+          <div class="toolbar-right">
+            <button class="model-selector-btn">
+              <span>Qwen3-VL-8B</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="10" height="10"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <button class="send-btn" title="发送">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════ 右：规格说明 ══════════ -->
+  <aside class="spec">
+    <h1>输入区「+」号入口 · 设计规格</h1>
+    <p class="sub">落点：<code>SideChatPanel.vue</code> → <code>.toolbar-left</code>，位于上传按钮左侧</p>
+
+    <h2>位置与尺寸</h2>
+    <table class="spec-table">
+      <tr><td>触发按钮</td><td>24 × 24 px，圆角 4px，图标 13px / stroke 1.8（与上传按钮图标同规格）</td></tr>
+      <tr><td>按钮间距</td><td>与上传按钮 gap 6px（沿用 <code>.toolbar-left</code> 既有 gap）</td></tr>
+      <tr><td>菜单尺寸</td><td>宽 208px，内边距 4px，圆角 6px，条目高 30px</td></tr>
+      <tr><td>展开方向</td><td>向上 <code>bottom: calc(100% + 6px)</code>、左对齐 <code>left: 0</code>（工具栏贴底，向下会出面板）</td></tr>
+      <tr><td>层级</td><td><code>z-index: 50</code>，与现有 <code>.skill-menu</code> 同层</td></tr>
+    </table>
+
+    <h2>设计令牌（深色主题实测值）</h2>
+    <table class="spec-table">
+      <tr><td><span class="swatch" style="background:#1a1a1e"></span>菜单底</td><td><code>--bg-elevated-solid</code> #1a1a1e（唯一浮起层，不新造面板层级）</td></tr>
+      <tr><td><span class="swatch" style="background:#3e3e42"></span>菜单描边</td><td><code>--border-default</code> #3e3e42</td></tr>
+      <tr><td><span class="swatch" style="background:rgba(255,255,255,.06)"></span>条目 hover</td><td><code>--bg-hover</code> rgba(255,255,255,.06)</td></tr>
+      <tr><td><span class="swatch" style="background:#cccccc"></span>条目文字</td><td><code>--text-primary</code> #cccccc → 10.8:1 <span class="ok">✓ AA</span></td></tr>
+      <tr><td><span class="swatch" style="background:#878787"></span>二级说明</td><td><code>--text-tertiary</code> #878787 → 4.8:1 <span class="ok">✓ AA</span></td></tr>
+      <tr><td><span class="swatch" style="background:#818cf8"></span>强调/开启态</td><td><code>--accent-indigo</code> #818cf8 → 5.8:1 <span class="ok">✓ AA</span></td></tr>
+    </table>
+
+    <h2>状态</h2>
+    <ul>
+      <li><b>默认</b>：图标 <code>--text-secondary</code>，无底色</li>
+      <li><b>hover</b>：<code>--bg-hover</code> 底 + <code>--text-primary</code> 图标</li>
+      <li><b>展开</b>：<code>--accent-indigo-bg</code> 底 + indigo 图标，<b>+ 号旋转 45° 变 ×</b>（同一按钮闭合）</li>
+      <li><b>焦点</b>：<code>focus-visible</code> 2px 主色描边，键盘可见</li>
+      <li><b>禁用</b>：Agent 运行中沿用 <code>:disabled</code> 半透明，与上传按钮一致</li>
+    </ul>
+
+    <h2>交互</h2>
+    <ul>
+      <li>点击开合；<b>Esc</b> 关闭并把焦点交还 + 号；点击菜单外区域关闭</li>
+      <li><b>↑ ↓</b> 移动高亮，<b>Enter</b> 选中，<b>Tab</b> 同 Enter（对齐既有 <code>/</code> 技能菜单手感）</li>
+      <li>选中后菜单关闭，能力以 chip 形式出现在输入框上方（复用现有 skill tag 视觉）</li>
+    </ul>
+
+    <h2>无障碍</h2>
+    <ul>
+      <li>触发按钮：<code>aria-haspopup="menu"</code> + <code>aria-expanded</code> + <code>aria-controls</code></li>
+      <li>菜单：<code>role="menu"</code>，条目 <code>role="menuitem"</code>，方向键与 Tab 可达</li>
+      <li>点击热区 24×24（图标按钮允许下限 24px；如需触屏可放宽到 28px）</li>
+    </ul>
+
+    <div class="note">
+      <b>当前状态：</b>四项已确认 —— <b>目标 · 计划 · 技能 · 插件</b>（目标在最上），<b>+ 号置于上传按钮左侧</b>；本预览与
+      <code>SideChatPanel.vue</code> 的实现一致。<br>
+      <b>本轮仅前端：</b>选中态只体现为按钮开启态 + 输入框上方 chip，<b>不进入发送载荷</b>，后端逻辑未接入；
+      后续接后端的改动点集中在 <code>pickCap()</code> 一处。
+    </div>
+  </aside>
+
+<script>
+(function () {
+  const btn  = document.getElementById('plusBtn');
+  const menu = document.getElementById('plusMenu');
+  const items = Array.from(menu.querySelectorAll('.menu-item'));
+  const tags = document.getElementById('capTags');
+  let activeIdx = -1;
+
+  const CAPS = {
+    goal:   { name: '目标', icon: '<circle cx="12" cy="12" r="8"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>' },
+    plan:   { name: '计划', icon: '<path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/><path d="M3 16h4"/><path d="M3 20h4"/>' },
+    skill:  { name: '技能', icon: '<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>' },
+    plugin: { name: '插件', icon: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 17.5h7M17.5 14v7"/>' }
+  };
+
+  function setActive(i) {
+    activeIdx = i;
+    items.forEach((el, idx) => el.classList.toggle('is-active', idx === i));
+    if (i >= 0) items[i].focus();
+  }
+
+  function open() {
+    menu.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+    setActive(0);
+  }
+
+  function close(refocus) {
+    if (menu.hidden) return;
+    menu.hidden = true;
+    btn.setAttribute('aria-expanded', 'false');
+    items.forEach(el => el.classList.remove('is-active'));
+    activeIdx = -1;
+    if (refocus) btn.focus();
+  }
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    menu.hidden ? open() : close(false);
+  });
+
+  items.forEach((el, idx) => {
+    el.addEventListener('mouseenter', () => {
+      activeIdx = idx;
+      items.forEach((o, i) => o.classList.toggle('is-active', i === idx));
+    });
+    el.addEventListener('click', () => {
+      const cap = el.dataset.cap;
+      const on = el.classList.toggle('is-on');
+      renderTag(cap, on);
+      close(true);
+    });
+  });
+
+  function renderTag(cap, on) {
+    const id = 'tag-' + cap;
+    const exist = document.getElementById(id);
+    if (on && !exist) {
+      const c = CAPS[cap];
+      const span = document.createElement('span');
+      span.className = 'tag';
+      span.id = id;
+      span.innerHTML =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="9" height="9">' + c.icon + '</svg>' +
+        c.name +
+        '<button class="tag-x" aria-label="移除' + c.name + '">' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="8" height="8"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
+        '</button>';
+      span.querySelector('.tag-x').addEventListener('click', () => {
+        span.remove();
+        const item = items.find(i => i.dataset.cap === cap);
+        if (item) item.classList.remove('is-on');
+      });
+      tags.appendChild(span);
+    } else if (!on && exist) {
+      exist.remove();
+    }
+  }
+
+  // 键盘
+  document.addEventListener('keydown', (e) => {
+    if (menu.hidden) {
+      if (e.key === 'Escape') return;
+      return;
+    }
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActive((activeIdx + 1) % items.length); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setActive((activeIdx - 1 + items.length) % items.length); }
+    else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); if (activeIdx >= 0) items[activeIdx].click(); }
+    else if (e.key === 'Escape') { e.preventDefault(); close(true); }
+  });
+
+  // 点击外部关闭
+  document.addEventListener('click', (e) => {
+    if (menu.hidden) return;
+    if (e.target.closest('.plus-wrap')) return;
+    close(false);
+  });
+
+  // 演示：进入页面时自动展开一次，方便直接看到菜单
+  window.addEventListener('load', () => setTimeout(open, 260));
+})();
+</script>
+</body>
+</html>

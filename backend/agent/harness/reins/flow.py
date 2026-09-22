@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections import deque
 from dataclasses import dataclass, field
 
@@ -12,6 +13,11 @@ from ..contracts import ReinDecision, ReinPoint, RunContext, TraceEvent
 from .core import tool_call_signature
 
 logger = logging.getLogger(__name__)
+
+# shell_exec / run_headless 失败结果的契约：命令确已执行时 output 末行带
+# [exit_code=N] 哨兵（见 ops_common.exec_remote / shell_exec._execute_remote），
+# 用它区分"探针非零退出"（有效诊断答案）与"调用真实失败"
+_EXIT_SENTINEL_RE = re.compile(r"\[exit_code=-?\d+\]")
 
 @dataclass
 class LoopDetector:
@@ -157,74 +163,128 @@ class ConfidenceMonitor:
     状态隔离：confidence_history 和 inject_count 存于 ctx.metadata，
     按 RunContext 隔离，避免拦截器实例被多 run 复用时跨 run 串扰
     （与 LoopDetector 同样的 per-run 隔离策略）。
+
+    误报修复（2026-09-22）：
+    - 探针类非零退出（输出含 [exit_code=N] 哨兵 = 命令确已执行）按 -0.05
+      轻计，不按 -0.25 失败计 —— grep 无匹配/test 为假是运维日常而非困惑；
+    - 同一最后 assistant 消息且无新工具调用时不重复计分 —— 原实现同一句
+      带"不确定"的话会在连续多次 post_iteration 里重复扣分；
+    - 求助阈值从"连续 3 次"提到"连续 5 次"，并始终累积 history
+      （原实现纠偏注入会提前 return，help 分支永远看不到注入后迭代的分数）。
     """
     point: ReinPoint = field(default=ReinPoint.POST_ITERATION, init=False)
     priority: int = field(default=10, init=False)
 
-    async def check(self, ctx: RunContext) -> ReinDecision:
-        confidence = self._estimate_confidence(ctx)
+    # 低置信度阈值 / 连续低分求助次数
+    LOW_THRESHOLD: float = field(default=0.4, init=False)
+    HELP_CONSECUTIVE: int = field(default=5, init=False)
 
+    async def check(self, ctx: RunContext) -> ReinDecision:
         # per-run 隔离状态：从 ctx.metadata 取/初始化
         history: list[float] = ctx.metadata.setdefault("confidence_history", [])
-        history.append(confidence)
+
+        # 重复计分守卫：上下文（最后 assistant 消息 + 工具日志长度）未变则
+        # 不追加 —— 本拦截器在 driver 主循环里每迭代只调一次，守卫只在
+        # "无新消息无新调用"的空转迭代生效，不影响正常节奏。
+        sig = self._context_signature(ctx)
+        if sig is not None and sig == ctx.metadata.get("confidence_last_signature"):
+            confidence = history[-1] if history else 0.8
+        else:
+            confidence = self._estimate_confidence(ctx)
+            history.append(confidence)
+            ctx.metadata["confidence_last_signature"] = sig
 
         # H14 修复：同一 run 只触发一次 human_help_needed，避免连续发多个相同求助卡片
         help_requested: bool = ctx.metadata.get("confidence_help_requested", False)
 
-        # 连续 3 次低置信度 → 求助（仅一次）
-        if not help_requested and len(history) >= 3:
-            recent = history[-3:]
-            if all(c < 0.4 for c in recent):
+        decision = ReinDecision()
+
+        # 连续 N 次低置信度 → 求助（仅一次）
+        if not help_requested and len(history) >= self.HELP_CONSECUTIVE:
+            recent = history[-self.HELP_CONSECUTIVE:]
+            if all(c < self.LOW_THRESHOLD for c in recent):
                 ctx.metadata["confidence_help_requested"] = True
-                return ReinDecision(
+                decision = ReinDecision(
                     intercepted=True,
-                    intercept_reason=f"连续 3 次低置信度（{recent}），请求人工介入",
+                    intercept_reason=(
+                        f"连续 {self.HELP_CONSECUTIVE} 次低置信度（{recent}），请求人工介入"
+                    ),
                     events=[TraceEvent(
                         kind="human_help_needed",
                         source="reins.confidence_monitor",
                         run_id=ctx.run_id,
                         iteration=ctx.iteration,
-                        payload={"reason": "Agent 连续多次低置信度，建议人工介入"},
+                        payload={
+                            "reason": "Agent 连续多次低置信度，建议人工介入",
+                            "confidence": round(recent[-1], 3),
+                        },
                     )],
                 )
 
         # 单次低置信度 → 注入纠偏消息（最多 2 次）
         inject_count: int = ctx.metadata.get("confidence_inject_count", 0)
-        if confidence < 0.4 and inject_count < 2:
+        if confidence < self.LOW_THRESHOLD and inject_count < 2:
             ctx.metadata["confidence_inject_count"] = inject_count + 1
-            return ReinDecision(
-                intercepted=False,
-                inject_messages=[{
-                    "role": "user",
-                    "content": "[系统提示] 请重新审视任务，你当前的方案可能存在问题，尝试换一种思路。",
-                }],
+            inject = [{
+                "role": "user",
+                "content": "[系统提示] 请重新审视任务，你当前的方案可能存在问题，尝试换一种思路。",
+            }]
+            decision.inject_messages = list(
+                (decision.inject_messages or []) + inject
             )
 
-        return ReinDecision()
+        return decision
+
+    @staticmethod
+    def _context_signature(ctx: RunContext) -> str | None:
+        """(最后一条 assistant 内容, 工具日志长度) 签名；无 assistant 消息返回 None"""
+        recent = [m for m in ctx.messages if m.get("role") == "assistant"]
+        if not recent:
+            return None
+        return f"{len(ctx.tool_calls_log)}::{recent[-1].get('content', '')}"
 
     @staticmethod
     def _estimate_confidence(ctx: RunContext) -> float:
-        """估算置信度 — 迁移自 consciousness.SelfMonitor.record_llm_output"""
+        """估算置信度 — 迁移自 consciousness.SelfMonitor.record_llm_output
+
+        2026-09-22 误报修复后的计分：
+        - 真实失败（无 exit 哨兵）每个 -0.25，窗口内封顶 4 个；单个失败不触底；
+        - 不确定标记词（"可能/不确定"等，含高频中文词）只在窗口内已有真实
+          失败时才 -0.15 —— 自信陈述里出现"可能是配置问题"不再单独降权；
+        - 已执行非零退出（探针答案，如 grep 无匹配）每个仅 -0.05。
+        """
         base = 0.8
         # 取最近一条 assistant 消息
         recent_msgs = [m for m in ctx.messages if m.get("role") == "assistant"]
-        if not recent_msgs:
-            return base
-        last = recent_msgs[-1].get("content", "")
+        last = recent_msgs[-1].get("content", "") if recent_msgs else ""
 
-        # 不确定标记
-        uncertain_markers = ["不确定", "不清楚", "可能", "也许", "大概", "I'm not sure", "maybe"]
-        for marker in uncertain_markers:
-            if marker in last:
-                base -= 0.15
-                break
-
-        # 工具失败 — 审查 MINOR 修复：只看最近 5 次调用（窗口化），
-        # 原实现累计整个 run 的所有失败，长 run 里一次早期失败会永久压低置信度，
-        # 触发误判求助/纠偏注入
+        # 工具失败 — 只看最近 5 次调用（窗口化），并区分两类：
+        # - 真实失败：调用/命令未产出可判读结果
+        # - 已执行非零退出（output 含 [exit_code=N] 哨兵）：grep 无匹配、
+        #   test 为假等探针结果是有效诊断答案，不是失败信号
         recent_calls = ctx.tool_calls_log[-5:] if ctx.tool_calls_log else []
-        failed_tools = sum(1 for tc in recent_calls if tc.get("success") is False)
-        base -= 0.2 * failed_tools
+
+        def _exited(tc: dict) -> bool:
+            return bool(_EXIT_SENTINEL_RE.search(
+                (tc.get("output_tail") or tc.get("output") or "")
+            ))
+
+        failed_tools = sum(
+            1 for tc in recent_calls
+            if tc.get("success") is False and not _exited(tc)
+        )
+        exited_tools = sum(
+            1 for tc in recent_calls
+            if tc.get("success") is False and _exited(tc)
+        )
+        base -= 0.25 * min(failed_tools, 4)
+        base -= 0.05 * exited_tools
+
+        # 不确定标记 — 仅在有真实失败时叠加（有失败证据才值得再扣分）
+        if failed_tools >= 1:
+            uncertain_markers = ["不确定", "不清楚", "可能", "也许", "大概", "I'm not sure", "maybe"]
+            if any(marker in last for marker in uncertain_markers):
+                base -= 0.15
 
         return max(0.1, base)
 
