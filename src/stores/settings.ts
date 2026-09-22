@@ -56,8 +56,11 @@ export interface AppSettings {
   }
   memory: {
     enabled: boolean
-    strategy: 'auto' | 'manual'
     maxItems: number
+    injectBudgetTokens: number
+    blocksBudgetTokens: number
+    searchTimeoutS: number
+    reconcileLlmEnabled: boolean
   }
   appearance: {
     theme: Theme
@@ -100,6 +103,16 @@ function loadFromLocalStorage(): Partial<AppSettings> | null {
   }
 }
 
+/**
+ * 本地持久化的数值不可信：旧版本存过 strategy，手工改过 localStorage 更常见。
+ * 越界或 NaN 一律退到默认值 —— 后端 Field(ge/le) 对越界值直接 422，
+ * 一次脏读数会让记忆设置整条同步通道静默失败。
+ */
+function clampNum(v: unknown, min: number, max: number, dflt: number): number {
+  const n = typeof v === 'number' ? v : Number(v)
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : dflt
+}
+
 const saved = loadFromLocalStorage()
 
 export const useSettingsStore = defineStore('settings', () => {
@@ -127,8 +140,11 @@ export const useSettingsStore = defineStore('settings', () => {
     },
     memory: {
       enabled: saved?.memory?.enabled ?? true,
-      strategy: saved?.memory?.strategy ?? 'auto',
-      maxItems: saved?.memory?.maxItems ?? 100,
+      maxItems: clampNum(saved?.memory?.maxItems, 10, 500, 100),
+      injectBudgetTokens: clampNum(saved?.memory?.injectBudgetTokens, 200, 8000, 1500),
+      blocksBudgetTokens: clampNum(saved?.memory?.blocksBudgetTokens, 200, 8000, 1200),
+      searchTimeoutS: clampNum(saved?.memory?.searchTimeoutS, 0.5, 30, 8),
+      reconcileLlmEnabled: saved?.memory?.reconcileLlmEnabled ?? true,
     },
     appearance: {
       theme: saved?.appearance?.theme ?? 'dark',
@@ -188,8 +204,11 @@ export const useSettingsStore = defineStore('settings', () => {
       memorySyncTimer = window.setTimeout(() => {
         agentApi.updateMemorySettings({
           enabled: mem.enabled,
-          strategy: mem.strategy,
           max_items: mem.maxItems,
+          inject_budget_tokens: mem.injectBudgetTokens,
+          blocks_budget_tokens: mem.blocksBudgetTokens,
+          search_timeout_s: mem.searchTimeoutS,
+          reconcile_llm_enabled: mem.reconcileLlmEnabled,
         }).catch((e) => {
           // 后端同步失败时提示用户，避免静默失败导致设置丢失
           const toast = useToastStore()
@@ -207,8 +226,11 @@ export const useSettingsStore = defineStore('settings', () => {
     try {
       const data = await agentApi.getMemorySettings()
       if (typeof data.enabled === 'boolean') settings.value.memory.enabled = data.enabled
-      if (data.strategy === 'auto' || data.strategy === 'manual') settings.value.memory.strategy = data.strategy
       if (Number.isFinite(data.max_items)) settings.value.memory.maxItems = data.max_items
+      if (Number.isFinite(data.inject_budget_tokens)) settings.value.memory.injectBudgetTokens = data.inject_budget_tokens
+      if (Number.isFinite(data.blocks_budget_tokens)) settings.value.memory.blocksBudgetTokens = data.blocks_budget_tokens
+      if (Number.isFinite(data.search_timeout_s)) settings.value.memory.searchTimeoutS = data.search_timeout_s
+      if (typeof data.reconcile_llm_enabled === 'boolean') settings.value.memory.reconcileLlmEnabled = data.reconcile_llm_enabled
       await nextTick()  // 等本轮 watcher 冲刷完再放开闸门
     } catch { /* 后端未就绪时使用 localStorage 默认值 */ }
     finally { applyingRemoteMemory = false }

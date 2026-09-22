@@ -860,13 +860,29 @@ export interface SafetyClassifyResult {
   explain: string
 }
 
+/**
+ * 记忆设置（v2）：字段与后端 MemorySettingsRequest 一一对应。
+ *
+ * 旧 memory.strategy 是死配置（全库无读取方，沉淀时机由后台对账 job 决定），
+ * 已随 v2 重构删除；预算账户由后端按模型窗口夹取（agent/memory/budget.py），
+ * 这里的值只是期望上限。
+ */
+export interface MemorySettings {
+  enabled: boolean
+  max_items: number
+  inject_budget_tokens: number
+  blocks_budget_tokens: number
+  search_timeout_s: number
+  reconcile_llm_enabled: boolean
+}
+
 export const agentApi = {
   // 记忆设置
   getMemorySettings: () =>
-    request<{ enabled: boolean; strategy: string; max_items: number }>('/settings/memory'),
+    request<MemorySettings>('/settings/memory'),
 
-  updateMemorySettings: (data: { enabled: boolean; strategy: string; max_items: number }) =>
-    request<{ enabled: boolean; strategy: string; max_items: number }>('/settings/memory', {
+  updateMemorySettings: (data: MemorySettings) =>
+    request<MemorySettings>('/settings/memory', {
       method: 'PUT',
       body: JSON.stringify(data),
     }),

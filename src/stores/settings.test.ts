@@ -48,6 +48,12 @@ vi.mock('@/stores/toast', () => ({
   useToastStore: () => ({ error: vi.fn(), warning: vi.fn(), success: vi.fn() }),
 }))
 
+// 后端 GET /settings/memory 的 v2 响应形状（db.get_memory_settings 已夹紧范围）
+const MEM_V2 = {
+  enabled: true, max_items: 100, inject_budget_tokens: 1500,
+  blocks_budget_tokens: 1200, search_timeout_s: 8, reconcile_llm_enabled: true,
+}
+
 const { useSettingsStore } = await import('@/stores/settings')
 
 describe('settings 后端回填', () => {
@@ -60,20 +66,22 @@ describe('settings 后端回填', () => {
     apiMock.getPostProcessSettings.mockResolvedValue({
       enabled: true, generate_title: true, extract_memory: true, generate_skill: true,
     })
-    agentApiMock.getMemorySettings.mockResolvedValue({
-      enabled: true, strategy: 'auto', max_items: 100,
-    })
+    agentApiMock.getMemorySettings.mockResolvedValue(MEM_V2)
   })
   afterEach(() => vi.useRealTimers())
 
   it('回填不会把值再 POST 回后端', async () => {
     const s = useSettingsStore()
     agentApiMock.getMemorySettings.mockResolvedValue({
-      enabled: false, strategy: 'manual', max_items: 55,
+      ...MEM_V2, enabled: false, max_items: 55, reconcile_llm_enabled: false,
     })
     await s.loadMemorySettings()
     await nextTick()
-    expect(s.settings.memory).toEqual({ enabled: false, strategy: 'manual', maxItems: 55 })
+    expect(s.settings.memory).toEqual({
+      enabled: false, maxItems: 55, injectBudgetTokens: 1500,
+      blocksBudgetTokens: 1200, searchTimeoutS: 8, reconcileLlmEnabled: false,
+    })
+    expect('strategy' in s.settings.memory).toBe(false)
 
     await vi.advanceTimersByTimeAsync(2000)
     expect(agentApiMock.updateMemorySettings).not.toHaveBeenCalled()
@@ -83,7 +91,8 @@ describe('settings 后端回填', () => {
     const s = useSettingsStore()
     const before = { ...s.settings.memory }
     agentApiMock.getMemorySettings.mockResolvedValue({
-      enabled: 'yes', strategy: 'telepathy', max_items: null,
+      enabled: 'yes', max_items: null, inject_budget_tokens: 'lots',
+      blocks_budget_tokens: NaN, search_timeout_s: 'soon', reconcile_llm_enabled: 'nope',
     })
     await s.loadMemorySettings()
     await nextTick()
@@ -102,9 +111,27 @@ describe('settings 后端回填', () => {
     s.settings.memory.maxItems = 42
     await vi.advanceTimersByTimeAsync(2000)
     expect(agentApiMock.updateMemorySettings).toHaveBeenCalledWith({
-      enabled: true, strategy: 'auto', max_items: 42,
+      enabled: true, max_items: 42, inject_budget_tokens: 1500,
+      blocks_budget_tokens: 1200, search_timeout_s: 8, reconcile_llm_enabled: true,
     })
     expect(lsMap.get('ckunagentic:settings')).toContain('"maxItems":42')
+  })
+
+  it('旧版本残留与越界数值不进设置，也不会被推回后端', async () => {
+    // max_items 上限 500 / 预算下限 200 是后端 Field 的边界：越界值 POST 过去是 422，
+    // 而 strategy 在 v2 已无对应字段，必须整条消失而不是被带进 payload。
+    lsMap.set('ckunagentic:settings', JSON.stringify({
+      memory: { enabled: true, strategy: 'auto', maxItems: 99999, injectBudgetTokens: -5 },
+    }))
+    vi.resetModules()
+    const { useSettingsStore: fresh } = await import('@/stores/settings')
+    setActivePinia(createPinia())
+    const m = fresh().settings.memory
+    expect(m.maxItems).toBe(500)
+    expect(m.injectBudgetTokens).toBe(200)
+    expect(m.blocksBudgetTokens).toBe(1200)
+    expect(m.searchTimeoutS).toBe(8)
+    expect('strategy' in m).toBe(false)
   })
 
   it('后处理回填同样不回写，且接受合法值', async () => {
