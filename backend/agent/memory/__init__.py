@@ -7,17 +7,4 @@
   blocks      画像块（常驻上下文）
   embedding   仅真实 API 的向量化客户端（伪向量路线已废除）
   text / vec  切词与向量索引辅助
-
-过渡兼容：legacy（v1 MemoryManager）经此暂时再导出，调用点迁完后 P5 移除。
 """
-from .legacy import (  # noqa: F401  过渡兼容（P5 移除）
-    MemoryEntry,
-    MemoryManager,
-    MemoryQueryResult,
-    get_memory_manager,
-    invalidate_memory_manager_cache,
-    _cosine,
-    _extract_terms,
-    _jaccard_score,
-    _row_to_entry,
-)

@@ -13,7 +13,6 @@
 import asyncio
 import sqlite3
 import sys
-import threading
 
 import pytest
 import fastapi
@@ -142,27 +141,6 @@ def test_upload_within_limit_ok(monkeypatch, tmp_workspace):
 
 
 # ── MINOR-6：memory.retrieve 线程池 ──
-
-def test_memory_retrieve_offloaded_to_thread(monkeypatch):
-    import agent.memory as mem
-    import database as db
-
-    main_tid = threading.get_ident()
-    seen_tids = []
-
-    def fake_get_agent_memories(**kw):
-        seen_tids.append(threading.get_ident())
-        return []
-
-    monkeypatch.setattr(db, "get_agent_memories", fake_get_agent_memories)
-
-    class _Dummy:
-        pass
-
-    asyncio.run(mem.MemoryManager.retrieve(_Dummy(), query="x", mode="ssh", top_k=3))
-    assert seen_tids, "get_agent_memories 应被调用"
-    assert all(t != main_tid for t in seen_tids), "sqlite 调用必须在事件循环线程之外"
-
 
 # ── MINOR-10：web_fetch max_chars 上限 ──
 

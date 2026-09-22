@@ -123,9 +123,9 @@ def update_model_config(config_id: str, req: UpdateModelRequest):
     result = db.update_model_config(config_id, **data)
     if not result:
         raise HTTPException(status_code=404, detail="Model not found")
-    # 模型配置变更后清除 MemoryManager 缓存（base_url/api_key 可能已变）
-    from agent.memory import invalidate_memory_manager_cache
-    invalidate_memory_manager_cache()
+    # 模型配置变更后清除 embedding 客户端缓存（base_url/api_key 可能已变）
+    from agent.memory.embedding import clear_cache as clear_embedding_cache
+    clear_embedding_cache()
     return result
 
 
@@ -136,8 +136,8 @@ def delete_model_config(config_id: str):
         deleted = db.delete_model_config(config_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="Model not found")
-        from agent.memory import invalidate_memory_manager_cache
-        invalidate_memory_manager_cache()
+        from agent.memory.embedding import clear_cache as clear_embedding_cache
+        clear_embedding_cache()
         return {"deleted": True}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

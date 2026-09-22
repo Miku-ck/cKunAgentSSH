@@ -100,14 +100,6 @@ class FakeSkillRegistry:
         return "[E2E-PRELOAD:" + ",".join(skill_ids) + "]"
 
 
-class FakeMemoryManager:
-    async def retrieve(self, **kwargs):
-        return []
-
-    async def save_episodic(self, **kwargs):
-        return None
-
-
 class FakePostProcessManager:
     def __init__(self, *args, **kwargs):
         self.submitted = []
@@ -171,7 +163,10 @@ def app_env(tmp_workspace, monkeypatch):
     import skill_registry as reg_mod
 
     monkeypatch.setattr(agent_mod, "StreamLLMClient", make_fake_llm_client())
-    monkeypatch.setattr(agent_mod, "get_memory_manager", lambda **kw: FakeMemoryManager())
+
+    async def _no_memory_inject(*args, **kwargs):
+        return []
+    monkeypatch.setattr(agent_mod, "_retrieve_memory_contents", _no_memory_inject)
     monkeypatch.setattr(agent_mod, "get_global_tick", lambda: FakeTick())
     monkeypatch.setattr(agent_mod, "_run_reflection_and_evolution", _noop_reflection)
     monkeypatch.setattr(
