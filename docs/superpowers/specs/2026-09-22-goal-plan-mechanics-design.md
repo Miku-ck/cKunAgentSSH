@@ -17,13 +17,11 @@ Qoder 对话框的「目标」与「计划」两个能力，本仓库已各自�
 | **I3 批准门** | `plan_write` 的 description 写"应等待用户批准计划后再动手执行"，无任何机制承载；且未批准的 `plan.md` 已被注入成"已确定的执行步骤" | 新增 `PlanApprovalGuard` @ `PRE_TOOL_CALL`，批准状态收敛为 `PermissionGate` 单一权威源 |
 | **goal 不跨 run** | `done` 事件已带出 `workflow_goal.{goal_text,self_checked,acknowledged}`，**信号已存在但无人消费** | `event_stream` 同流接续下一轮 run，带 `max_goal_turns` 与链级成本熔断 |
 | **无 blocked 判定** | agent 自述"未达成"仅落为关键词粗判，无客观校验、无停手条件 | 双源一致判定（自报 ∧ 失败签名集合重复），命中转既有 `HUMAN_HELP` 路径 |
-| **状态不可见** | 「目标」chip 在代码里**根本不存在**（工具条只有审批下拉）；目标/批准状态只存在于 SSE 事件流里 | 新增 chip，绑 `workflowPhase`（工件轴）而非 `workflow_mode`（姿态轴），配 DELETE 端点 |
+| **状态不可见** | 「目标」chip 在代码里**根本不存在**（工具条只有审批下拉）；目标/批准状态只存在于 SSE 事件流里 | 新增 chip，显示取「姿态 ∨ 工件」并集、圆点表工件已沉淀，配 DELETE 端点（§5） |
 
 四块可独立交付，**建议实施顺序 D → A → C → B**：D 让其余三块的状态可见、自身风险最低；A 是纯拦截器新文件；C 的 blocked 判定是 B 的续跑循环的止损阀，先于 B 存在才安全。
 
-此外，本 spec 在评审中途并入第四块 **设计 D：「目标」chip 显隐**（§5）。它不是新子系统，而是把 A/B/C 三块的目标与计划状态**变得可见可操作**——没有它，批准门与续跑都只存在于 SSE 事件流里，用户看不到"现在挂着什么目标、这份计划批过没有"。
-
-> **一句话概括 D 的取舍**：chip 绑**工件**（goal.md 存不存在）而不是绑**对话姿态**（`workflow_mode` 选了哪个）。后者今天只换提示词措辞、不约束任何行为，绑上去就是一个"亮着但什么都不做"的开关——那正是本仓库 `SideChatPanel.vue:685` 自己警告过的反模式。
+> **D 的两轮修正（§5.2）**：初版只绑工件（"姿态轴不约束行为"），被用户实测"我选了目标，怎么没显示？"推翻——那个点击确实什么都不发生。而"姿态是空的"这个论据只对一半：`workflow_mode` 不约束**权限**，但它驱动一段真实的行为提示词（`routes/agent.py:137-140`）。最终形态是两轴并集，并连带要求 `workflow_mode` 可空——否则 × 关的是一个摆设。
 
 ---
 
@@ -224,26 +222,39 @@ blocked = (自报受阻 ∧ 签名集合与上轮相同)
 
 实测：工具条上只有审批下拉（`SideChatPanel.vue:322-373`）与模型选择器，`toolbar-left` 插槽（第375行）**全仓没有任何父层填充**。`SideChatPanel.vue:206` 的注释还明确写着"工具条不再常驻 chip"。所以这不是"改掉一个现有 chip"，是**新加**，并且要一并推翻那句注释所代表的旧决定。
 
-### 5.2 绑定点：工件，不是姿态（本节的实质决定）
+### 5.2 绑定点：姿态为主、工件为凭（**本节经两轮修正，最终形态为 D′**）
 
 「目标」在这份代码里同时指两件不同的事，必须先拆开：
 
 | 含义 | 载体 | 有没有"关闭"态 |
 |---|---|---|
-| 对话姿态（与「计划」二选一的单选） | `activeMode`（默认 `'goal'`，第597行）→ `workflow_mode` | **没有** —— 不是 goal 就是 plan |
+| 对话姿态（与「计划」二选一的单选） | `activeMode`（默认 `'goal'`，第597行）→ `workflow_mode` | **目前没有** —— 不是 goal 就是 plan |
 | 工作流阶段（agent 沉淀了 goal.md） | `props.workflowPhase` ← `GET /workflow` 的 `phase` | **有** —— `''` 即无目标 |
 
-**`workflow_mode` 全仓只有两个消费点**：`AgentRunRequest` 的 `Literal` 声明（`routes/agent.py:406`）与一段措辞提示词（`_WORKFLOW_MODE_PROMPTS.get()`，第187行，字典定义在 136-145）。它**不约束任何行为**。对比「计划」chip 同时下发 `permission_mode='plan'`（真的 `PlanModeGuard` 只读强制），一个只换措辞的「目标」开关就是 `SideChatPanel.vue:685` 所判的"亮的空开关：用户以为进了计划模式，写操作照样执行"。
+**初版决定（只绑工件）已被推翻。** 推翻它的理由是用户实测反馈："我选了目标，怎么没显示？"——初版设计下这个点击确实什么都不会发生，要等 agent 主动调 `goal_write` 才亮。而我上一轮用来论证"绑姿态是空的"那句话**只对了一半**：
 
-且姿态绑法与"主体看详情"不兼容：详情内容是 goal.md 里的成功标准，属另一根轴——会出现 chip 隐藏着、goal.md 却存在且每轮照常注入 system prompt 的矛盾态。
+- 说它对，是因为 `workflow_mode` **不约束权限**——全仓只有 `Literal` 声明（`routes/agent.py:406`）与一段提示词两个消费点，不像「计划」那样同时下发 `permission_mode='plan'` 触发 `PlanModeGuard` 只读强制。
+- 说它错，是因为那段提示词**是真实的行为约束**（`routes/agent.py:137-140`："始终把用户这一次要达成的目标放在第一位，主动澄清并锁定『达成什么、怎么算成功』，执行围绕该目标收敛"）。用户点了就该看到自己选中的东西，这不是错觉。
 
-**决定：chip 显示 = `workflowPhase === 'goal'`**（即 goal.md 存在）。它反映事实而非偏好，且 `workflowPhase` prop 已经接进组件（第494行声明、第184行已在驱动菜单项的 `is-on`），**不需要新后端字段、不需要新事件**。
+**最终决定（D′）—— 显示条件取两轴的并集，各表达一件事：**
+
+```
+显示  = (activeMode === 'goal') ∨ (workflowPhase === 'goal')
+圆点  = (workflowPhase === 'goal')          # goal.md 已沉淀
+```
+
+- 并集而非交集：**已有目标就不该因为姿态没选而隐身**——那等于把真实存在的成功标准藏起来，比多显示一个 chip 危险得多。
+- 圆点区分"选了这个姿态"与"目标已经落成文档"，用户不必猜 agent 到底沉淀没有。
 
 ### 5.3 交互
 
-- **主体点击** → 展开气泡显示 goal.md 全文（数据已在 `store.workflowSnapshot.goal` 里，无需再请求）。空态不会出现：chip 显示即工件存在。
-- **× 点击** → 删除 goal.md 工件，chip 当场消失。
-- 与 `+` 菜单的姿态单选**完全解耦**：菜单项的 `is-selected`（姿态）与 `is-on`（阶段）已经是两个独立 class，本设计沿用，不改语义。
+- **主体点击**：有 goal.md → 展开气泡显示成功标准全文（数据已在 `store.workflowSnapshot.goal`，无需再请求）；无 goal.md → 展开一句说明"已选目标姿态，AI 会围绕目标收敛；说清要达成什么后会自动沉淀成功标准"。**不能点了没反应**，那是真正的空开关。
+- **× 点击**：`activeMode = null`（退出目标姿态）；若 `workflowPhase === 'goal'`，同时删除 goal.md 工件（走 §5.4 的 DELETE）。删工件不可逆，所以只在它确实存在时才发请求。
+- 姿态与阶段**不合并成一个状态**：`+` 菜单项的 `is-selected`（姿态）与 `is-on`（阶段）本就是两个独立 class，沿用。
+
+**× 必须真的有"未选中"这个态**：`activeMode` 现在是 `ref<CapKey>('goal')`（第597行），单选、默认 goal、无空值，× 点了会被下一次渲染顶回 'goal'。因此要扩成 `'goal' | 'plan' | null`。
+
+这个扩展在**审批层零风险**——`resolveRunModes`（`run-modes.ts:24-30`）里 goal 与 null 的 `permissionMode` 本就是同一值（只有 plan 才给 `'plan'`，其余一律按 approval 档走）。但为了让 × 不是装饰，`workflow_mode` 要一并改成可空：`AgentRunRequest.workflow_mode: Literal["goal","plan"] | None = None`，`_build_agent_system_prompt` 对 `None` 不注入姿态段。**不改后端的话，前端 × 只是把同一个 'goal' 又发了一遍**，用户看到 chip 消失而行为毫无变化——那才是本仓库 `SideChatPanel.vue:685` 警告的"亮的空开关"的反向版本：**能关，但关的是个摆设**。
 
 ### 5.4 需要新增的唯一后端能力，及它踩到的契约
 
@@ -320,9 +331,11 @@ DELETE /api/workflow/artifact?conversation_id=&kind=goal
 
 | 组 | 断言 | 变红条件 |
 |---|---|---|
-| 显隐 | `workflowPhase='goal'` → chip 渲染；`''` / `'spec'` / `'plan'` → 不渲染 | 绑到了 `activeMode`（姿态轴）而非阶段轴 |
-| 解耦 | 姿态选 `goal` 但无工件 → chip **不**显示；姿态选 `plan` 但有 goal.md → chip **仍**显示 | 两根轴被合并成一个状态 |
-| 移除 | 点 × 调 DELETE 后本地 `workflowSnapshot` 刷新，chip 当场消失 | 只改本地不回落，或漏了刷新 |
+| 显示并集 | 姿态 `goal` / 阶段 `goal` / 两者皆有 → chip 都渲染；两者皆无 → 不渲染 | 只绑一根轴（另一根的真实状态被藏起来） |
+| 圆点 | `workflowPhase='goal'` 才有圆点；仅姿态选中无工件 → 无圆点 | 圆点与显示条件同真，用户分不清"选了"与"已沉淀" |
+| × 真能关 | 点 × 后 `activeMode === null` 且**发出的 `workflow_mode` 为 `None`**（不是又发一遍 `'goal'`） | 只改前端态、后端仍收默认 'goal' → × 是摆设 |
+| 审批不受影响 | `activeMode` 为 `null` 时 `permissionMode` 仍按 approval 档派生（与 'goal' 完全一致） | × 意外把审批档带进 plan 语义 |
+| 移除 | 有 goal.md 时点 × 才发 DELETE，之后本地 `workflowSnapshot` 刷新、chip 消失 | 无工件也发 DELETE，或漏了刷新 |
 | 回落提示 | 删 goal.md 后 `phase` 回落到未批准的 plan → 响应体带出新阶段并提示 | 忽略回落，用户撞上拦截却不知为何 |
 | 值域 | `kind=../../etc/passwd`、`kind=notes` → 400/422 | 拼接路径未校验 |
 | **不可逃逸** | 全仓不存在任何让模型删除工件的工具（AST/grep 断言） | 给了模型删除能力 = A 的门可被 `plan_write` 空内容关掉 |
@@ -362,7 +375,7 @@ npx vitest run
 | 轮内即时终止（续跑的停止粒度） | 已有 `CostBudgetRein` 与 `force_terminated` 两条路，不造第三条 |
 | `_goal_acknowledged` 关键词表删除 | 保留为兜底判据；只降级其地位，不一次性移除正在被前端消费的字段 |
 | 给模型删除工件的工具 | 一旦有，设计 A 的批准门就有逃逸口（`plan_write` 空内容即关阀）。删除只许用户经 × 触发（§5.4） |
-| 「目标」chip 绑对话姿态 | 姿态轴只换提示词措辞、不约束行为（§5.2），绑上去就是"亮的空开关" |
+| 「目标」chip 只绑单一根轴 | 只绑姿态→已有 goal.md 时成功标准隐身；只绑工件→用户点了没反应（初版就是这么错的，见 §5.2） |
 
 ### 7.2 主要风险
 
