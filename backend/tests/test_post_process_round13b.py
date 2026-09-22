@@ -89,39 +89,6 @@ def test_generate_skill_still_caps_at_limit(monkeypatch):
 # ── 记忆 prune 与设置同源 ──
 
 
-def test_memory_prune_uses_configured_max_items(monkeypatch):
-    """保留上限只有一个来源：记忆设置的 max_items，而不是硬编码 100"""
-    async def fake_llm(**kwargs):
-        return '{"memories": ["nginx 日志路径是 /var/log/nginx/error.log"]}'
-
-    class FakeMemMgr:
-        async def save_semantic(self, **kwargs):
-            return 1
-
-    pruned: dict = {}
-
-    monkeypatch.setattr(pp.db, "get_model_config",
-                        lambda mid, mask_key=False: {"id": mid, "base_url": "u", "api_key": "k"})
-    monkeypatch.setattr(pp.db, "get_default_model",
-                        lambda mode, mask_key=False: {"base_url": "u", "api_key": "k", "model_id": "m"})
-    monkeypatch.setattr(pp, "_call_llm_with_timeout", fake_llm)
-
-    async def not_dup(*args, **kwargs):
-        return False
-
-    monkeypatch.setattr(pp, "_is_memory_duplicate", not_dup)
-    import agent.memory as am
-    monkeypatch.setattr(am, "get_memory_manager", lambda **kwargs: FakeMemMgr())
-    monkeypatch.setattr(pp.db, "get_memory_settings", lambda: {"max_items": 500})
-    monkeypatch.setattr(pp.db, "prune_agent_memories",
-                        lambda mode, mem_type, max_count: pruned.update({"max_count": max_count}))
-
-    asyncio.run(pp._extract_memories(_ctx(), PostProcessConfig()))
-    assert pruned.get("max_count") == 500, (
-        f"prune 未采用记忆设置的保留条数: {pruned}"
-    )
-
-
 # ── 3. NULL 标题 ──
 
 

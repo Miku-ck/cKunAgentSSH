@@ -679,28 +679,6 @@ async def _extract_memories(ctx: TurnContext, config: PostProcessConfig) -> None
         logger.warning("[post_process:memory] 投递候选 job 失败: %s", e)
 
 
-async def _is_memory_duplicate(
-    mem_mgr,
-    content: str,
-    mode: str,
-    threshold: float,
-) -> bool:
-    """检查记忆是否与已有记忆相似"""
-    try:
-        # 用 MemoryManager.retrieve 检索（内部对 semantic 用 cosine 相似度）。
-        # P2 拆双阈值后必须显式关掉 episodic 层：episodic 走 Jaccard、默认阈值
-        # 0.15，一条不相干的运行总结会被判成"重复"而吞掉新记忆；去重本就只该
-        # 与 semantic 层比对。
-        results = await mem_mgr.retrieve(
-            query=content, mode=mode, top_k=3, threshold=threshold,
-            episodic_threshold=1.1,  # Jaccard ∈ [0,1]，1.1 = episodic 层不可达
-        )
-        return any(r.memory.type == "semantic" for r in results)
-    except Exception:
-        # 检索失败时不阻断保存（fail-open）
-        return False
-
-
 # ──────────────────────────────────────────────────────────────────────────────
 # 子任务 3：技能生成（带 slug 去重 + 质量门）
 # ──────────────────────────────────────────────────────────────────────────────

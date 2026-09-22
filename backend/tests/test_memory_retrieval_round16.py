@@ -290,31 +290,6 @@ async def test_retrieve_skips_vectors_from_other_source(monkeypatch):
     assert "other-src" not in ids
 
 
-# ── P2 连带：semantic 去重不得被 episodic 层误伤 ──
-
-
-@pytest.mark.asyncio
-async def test_dedup_only_compares_semantic_layer():
-    import post_processor as pp
-
-    seen_kwargs = {}
-
-    class _Mgr:
-        def __init__(self, hit_type):
-            self._hit_type = hit_type
-
-        async def retrieve(self, query, mode, top_k, threshold, **kw):
-            seen_kwargs.update(kw)
-            entry = mem.MemoryEntry(id="h", type=self._hit_type, mode="ssh", content="c")
-            return [mem.MemoryQueryResult(memory=entry, score=threshold)]
-
-    # episodic 高分命中不算"重复"（旧实现会把新记忆吞掉）
-    assert await pp._is_memory_duplicate(_Mgr("episodic"), "x", "ssh", 0.85) is False
-    assert seen_kwargs.get("episodic_threshold") == 1.1, "去重必须关掉 episodic 层"
-    # semantic 命中才算重复
-    assert await pp._is_memory_duplicate(_Mgr("semantic"), "x", "ssh", 0.85) is True
-
-
 # ── P5：MemoryManager 缓存为真 LRU（命中移动键序）──
 
 
