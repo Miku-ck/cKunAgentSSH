@@ -6,13 +6,12 @@
 """
 import asyncio
 import json
-import struct
 from pathlib import Path
 
 import pytest
 
 import database as db
-from agent.memory import mstore, reconcile, retriever, vec
+from agent.memory import mstore, reconcile, retriever
 from agent.memory import blocks as memory_blocks
 
 
@@ -135,7 +134,7 @@ def test_migration_idempotent_across_init(memdb):
     conn.commit()
     db._migrate_db(conn)  # 第二次：标记已置，直接跳过
     conn.commit()
-    n = conn2_count = conn.execute("SELECT COUNT(*) c FROM memories").fetchone()["c"]
+    n = conn.execute("SELECT COUNT(*) c FROM memories").fetchone()["c"]
     assert n == 1
 
 
@@ -163,6 +162,15 @@ def test_search_rrf_order_and_gap_cut(memdb):
     hits = _run(retriever.search("nginx 反向代理", scopes=["global"], embed_client=None))
     ids = [h.memory_id for h in hits]
     assert ids and ids[0] == a and b not in ids
+
+
+def test_importance_zero_survives_retrieval(memdb):
+    mid = mstore.add_memory(kind="semantic", content="低重要性但确实相关的磁盘惯例",
+                            title="低重要性", source="test", importance=0.0)
+    hits = _run(retriever.search("磁盘惯例", scopes=["global"], embed_client=None))
+    assert [h.memory_id for h in hits] == [mid]
+    # v1 的 `row["importance"] or 0.5` 会把 0.0 抬回 0.5；v2 原样透传
+    assert hits[0].importance == 0.0
 
 
 def test_scope_filter(memdb):

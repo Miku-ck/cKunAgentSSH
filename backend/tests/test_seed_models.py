@@ -7,7 +7,7 @@
 - 另设 VLLM_THINKING_URL → 再种子一条思考模型
 - 探测失败 → 不种子、不抛异常
 - 表非空（已有数据）→ 不探测、不改动
-httpx 全部 mock，不发真实请求。
+探测链路（netconfig.new_sync_client）全部 mock，不发真实请求。
 
 重构适配：_seed_models(conn) 已重构为异步的 seed_models_async(db_path)
 （P2 E9：httpx 同步探测移入线程池，不阻塞事件循环），测试改为
@@ -22,6 +22,7 @@ import os
 import sqlite3
 
 import database as db
+import netconfig
 
 
 class FakeResponse:
@@ -40,6 +41,26 @@ class FakeResponse:
         if self._payload is None:
             raise ValueError("no json")
         return self._payload
+
+
+class FakeSyncClient:
+    """netconfig.new_sync_client 的替身（探测已从 httpx.get 改走统一出口）"""
+
+    def __init__(self, fn):
+        self._fn = fn
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def get(self, url, **_kwargs):
+        return self._fn(url)
+
+
+def patch_probe(monkeypatch, fn):
+    monkeypatch.setattr(netconfig, "new_sync_client", lambda **_kw: FakeSyncClient(fn))
 
 
 _MODELS_DDL = """
@@ -121,7 +142,7 @@ def test_probe_success_seeds_default(monkeypatch, tmp_workspace):
         calls.append(url)
         return FakeResponse(payload={"data": [{"id": "model-a"}, {"id": "model-b"}]})
 
-    monkeypatch.setattr(db.httpx, "get", fake_get)
+    patch_probe(monkeypatch, fake_get)
     asyncio.run(db.seed_models_async(str(db_file)))
 
     rows = query_models(db_file)
@@ -145,7 +166,7 @@ def test_thinking_url_seeds_second_model(monkeypatch, tmp_workspace):
             return FakeResponse(payload={"data": [{"id": "thinking-m"}]})
         return FakeResponse(payload={"data": [{"id": "main-m"}]})
 
-    monkeypatch.setattr(db.httpx, "get", fake_get)
+    patch_probe(monkeypatch, fake_get)
     asyncio.run(db.seed_models_async(str(db_file)))
 
     rows = query_models(db_file)
@@ -165,7 +186,7 @@ def test_probe_failure_no_seed_no_raise(monkeypatch, tmp_workspace):
     def fake_get(url, timeout=None):
         raise Exception("connection refused")
 
-    monkeypatch.setattr(db.httpx, "get", fake_get)
+    patch_probe(monkeypatch, fake_get)
     asyncio.run(db.seed_models_async(str(db_file)))
     assert count_models(db_file) == 0
 
@@ -174,7 +195,7 @@ def test_probe_empty_data_no_seed(monkeypatch, tmp_workspace):
     """/models 返回空 data → 不种子"""
     db_file = make_db_file(tmp_workspace)
     set_env(monkeypatch, base_url="http://127.0.0.1:9030/v1")
-    monkeypatch.setattr(db.httpx, "get", lambda url, timeout=None: FakeResponse(payload={"data": []}))
+    patch_probe(monkeypatch, lambda url: FakeResponse(payload={"data": []}))
     asyncio.run(db.seed_models_async(str(db_file)))
     assert count_models(db_file) == 0
 
@@ -193,7 +214,7 @@ def test_existing_rows_untouched(monkeypatch, tmp_workspace):
     def fail_get(url, timeout=None):
         raise AssertionError("表非空时不应发起探测")
 
-    monkeypatch.setattr(db.httpx, "get", fail_get)
+    patch_probe(monkeypatch, fail_get)
     asyncio.run(db.seed_models_async(str(db_file)))
     assert count_models(db_file) == 1
 
@@ -206,7 +227,7 @@ def test_probe_first_model_direct(monkeypatch):
         calls.append(url)
         return FakeResponse(payload={"data": [{"id": "m1"}]})
 
-    monkeypatch.setattr(db.httpx, "get", fake_get)
+    patch_probe(monkeypatch, fake_get)
     assert db._probe_first_model("http://h/v1") == "m1"
     assert calls[-1] == "http://h/v1/models"
     assert db._probe_first_model("http://h/v1/models") == "m1"
@@ -215,5 +236,5 @@ def test_probe_first_model_direct(monkeypatch):
     def boom(url, timeout=None):
         raise Exception("boom")
 
-    monkeypatch.setattr(db.httpx, "get", boom)
+    patch_probe(monkeypatch, boom)
     assert db._probe_first_model("http://h/v1") is None

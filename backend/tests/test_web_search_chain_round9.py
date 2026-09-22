@@ -5,12 +5,11 @@
 据此直接返回，下一级降级源永远不会再试：360 改版等于 web_search 整体失效。
 """
 import asyncio
-import sys
-import types
 
 import pytest
 
 import agent.tools.builtin.web_tools as wt
+import netconfig
 from agent.tools import ToolResult, ToolContext
 
 
@@ -27,11 +26,8 @@ class _FakeResp:
 
 
 def _install_fake_httpx(monkeypatch, html: str) -> None:
-    """web_search 的两个 HTML 源在函数内 `import httpx`，替换 sys.modules 即可离网"""
+    """HTML 源走 netconfig.new_client（统一代理+超时出口），替换它即可离网"""
     class _FakeClient:
-        def __init__(self, **_kwargs):
-            return None
-
         async def __aenter__(self):
             return self
 
@@ -41,7 +37,7 @@ def _install_fake_httpx(monkeypatch, html: str) -> None:
         async def get(self, _url, headers=None):
             return _FakeResp(html)
 
-    monkeypatch.setitem(sys.modules, "httpx", types.SimpleNamespace(AsyncClient=_FakeClient))
+    monkeypatch.setattr(netconfig, "new_client", lambda **_kw: _FakeClient())
 
 
 @pytest.mark.parametrize("method", ["_search_360", "_search_duckduckgo"])

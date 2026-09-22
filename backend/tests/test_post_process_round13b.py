@@ -1,14 +1,11 @@
 # -*- coding: utf-8 -*-
-"""第 13b 轮回归：后处理/意识心跳的失败语义与配置同源。
+"""第 13b 轮回归：后处理的失败语义与配置同源。
 
 覆盖三类缺陷（均为「成功形状的失败」或「一个值两处定义」家族）：
 1. auto 技能数量保护：COUNT 查询异常不得被吞成 0 后继续生成（最该挡的时候形同虚设）
-2. 记忆保留上限：post_process 的 prune 必须读记忆设置，不能再硬编码 100
-   （同一保留值写两处 → 面板调到 500 仍被每轮削回 100）
-3. 标题为 NULL 的会话：等价于默认标题，不能判成「用户已自定义」而永久早退
-4. PostProcessManager.submit：常驻单例持有的 config 是构造时快照，
+2. 标题为 NULL 的会话：等价于默认标题，不能判成「用户已自定义」而永久早退
+3. PostProcessManager.submit：常驻单例持有的 config 是构造时快照，
    设置面板 PUT 只换模块级 _config → 关掉后处理仍会放行任务
-5. _extract_facts：逗号工具列表只留首位 → 提取出的「常用工具」永远是第一个
 
 运行: python -m pytest backend/tests/test_post_process_round13b.py -v
 """
@@ -39,7 +36,7 @@ def _ctx(turn_index: int = 1) -> TurnContext:
     )
 
 
-# ── 1/2. auto 技能数量保护：查询失败 = 不放行 ──
+# ── 1. auto 技能数量保护：查询失败 = 不放行 ──
 
 
 def test_count_auto_skills_propagates_db_error(monkeypatch):
@@ -86,10 +83,7 @@ def test_generate_skill_still_caps_at_limit(monkeypatch):
     assert not called, "已达上限（5/5）仍生成了技能"
 
 
-# ── 记忆 prune 与设置同源 ──
-
-
-# ── 3. NULL 标题 ──
+# ── 2. NULL 标题 ──
 
 
 def test_null_title_treated_as_default(monkeypatch):
@@ -113,7 +107,7 @@ def test_null_title_treated_as_default(monkeypatch):
     )
 
 
-# ── 4. submit 读活配置 ──
+# ── 3. submit 读活配置 ──
 
 
 def test_submit_follows_live_config_not_construction_snapshot(monkeypatch):
@@ -132,17 +126,3 @@ def test_submit_follows_live_config_not_construction_snapshot(monkeypatch):
         assert task_id == "", "后处理已关闭，submit 仍按构造时的旧快照放行任务"
     finally:
         pp.set_post_process_config(original)
-
-
-# ── 5. _extract_facts 逗号列表 ──
-
-
-def test_extract_facts_keeps_whole_tool_list():
-    from agent.consciousness_tick import _extract_facts
-
-    facts = _extract_facts("任务: 排查 nginx 502 | 使用工具: shell_exec, file_grep, log_read")
-    tool_facts = [f for f in facts if f.startswith("常用工具:")]
-    assert tool_facts, f"未提取出常用工具: {facts}"
-    assert tool_facts[0] == "常用工具: shell_exec, file_grep, log_read", (
-        f"逗号列表被截断，只留下首个工具: {tool_facts[0]}"
-    )
