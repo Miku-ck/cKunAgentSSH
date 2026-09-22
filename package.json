@@ -8,7 +8,7 @@
     "dev:web": "cmd /c \"set VITE_HOST=0.0.0.0&& electron-vite dev\"",
     "dev:web:unix": "VITE_HOST=0.0.0.0 electron-vite dev",
     "build": "electron-vite build",
-    "typecheck": "vue-tsc -p tsconfig.web.json --noEmit",
+    "typecheck": "vue-tsc -p tsconfig.web.json --noEmit && vue-tsc -p tsconfig.node.json --noEmit",
     "test": "vitest run",
     "test:backend": "cd backend && python -m pytest -q",
     "ci": "npm run typecheck && npm run test && npm run test:backend",

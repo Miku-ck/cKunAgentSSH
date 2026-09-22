@@ -105,6 +105,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { auditApi, toFriendlyMessage, type AuditRecord, type AuditVerifyResult } from '@/api/client'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToastStore } from '@/stores/toast'
+import { formatBackendTs } from '@/utils/format'
 
 const { confirm } = useConfirm()
 const toast = useToastStore()
@@ -236,15 +237,7 @@ async function onClearArchived() {
 }
 
 function formatTs(ts: string): string {
-  if (!ts) return ''
-  try {
-    const d = new Date(ts)
-    if (isNaN(d.getTime())) return ts
-    const p = (n: number) => String(n).padStart(2, '0')
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
-  } catch {
-    return ts
-  }
+  return formatBackendTs(ts, true)
 }
 
 function shortId(id: string): string {

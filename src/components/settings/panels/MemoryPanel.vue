@@ -2,7 +2,7 @@
   <div class="panel">
     <header class="panel-header">
       <h3>记忆</h3>
-      <p class="panel-desc">Agent 长期记忆的写入策略与容量上限 —— 影响每次运行注入到 system prompt 的语义条目</p>
+      <p class="panel-desc">Agent 长期记忆的注入预算与容量上限 —— 影响每次运行写进 system prompt 的记忆条目与常驻画像块</p>
     </header>
 
     <div class="panel-body">
@@ -10,14 +10,7 @@
         <ToggleSwitch v-model="memory.enabled" />
       </SettingRow>
 
-      <SettingRow label="沉淀策略" desc="auto：任务完成后由模型自主提炼；manual：仅显式指令时写入">
-        <select v-model="memory.strategy" class="setting-select">
-          <option value="auto">自动（auto）</option>
-          <option value="manual">手动（manual）</option>
-        </select>
-      </SettingRow>
-
-      <SettingRow label="容量上限" desc="保留最近多少条 semantic 记忆，超出后按最旧最少使用清理">
+      <SettingRow label="容量上限" desc="每个记忆类别保留多少条活跃条目，超出由后台整理退休（手动新增的条目不受此限）">
         <div class="slider-row">
           <input
             type="range"
@@ -29,6 +22,52 @@
           />
           <span class="slider-value">{{ memory.maxItems }} 条</span>
         </div>
+      </SettingRow>
+
+      <SettingRow label="检索注入预算" desc="每轮运行按相关性注入 system prompt 的历史经验上限（token）">
+        <div class="slider-row">
+          <input
+            type="range"
+            v-model.number="memory.injectBudgetTokens"
+            min="200"
+            max="8000"
+            step="100"
+            class="setting-range"
+          />
+          <span class="slider-value">{{ memory.injectBudgetTokens }} t</span>
+        </div>
+      </SettingRow>
+
+      <SettingRow label="画像块预算" desc="常驻画像块（用户偏好/主机画像/规则）的独立上限 —— 与注入预算分账，改大这一项不会削减那一侧">
+        <div class="slider-row">
+          <input
+            type="range"
+            v-model.number="memory.blocksBudgetTokens"
+            min="200"
+            max="8000"
+            step="100"
+            class="setting-range"
+          />
+          <span class="slider-value">{{ memory.blocksBudgetTokens }} t</span>
+        </div>
+      </SettingRow>
+
+      <SettingRow label="检索等待上限" desc="预检索超过这个秒数就放弃（降级为按新近兜底），避免首字节被慢向量服务拖住">
+        <div class="slider-row">
+          <input
+            type="range"
+            v-model.number="memory.searchTimeoutS"
+            min="0.5"
+            max="30"
+            step="0.5"
+            class="setting-range"
+          />
+          <span class="slider-value">{{ memory.searchTimeoutS }} s</span>
+        </div>
+      </SettingRow>
+
+      <SettingRow label="后台整理调用模型" desc="开启后由模型消解矛盾与重复；关闭则只做阈值去重，记忆仍会写入">
+        <ToggleSwitch v-model="memory.reconcileLlmEnabled" />
       </SettingRow>
 
       <div class="section-divider" />
@@ -46,11 +85,13 @@
 
 <script setup lang="ts">
 /**
- * A2：记忆面板 —— 把 settings.memory 从"存在但无 UI 入口"补齐为可达可改。
+ * 记忆设置面板 —— 字段与后端 MemorySettingsRequest（v2 六项）严格同集合。
  *
- * 三个字段全部通过 settings store 的 deep watch 自动同步（含 R6 回滚基线），
- * 面板自身不再直接调 updateMemorySettings，避免与 watcher 双写。
- * 记忆体本身（列表/删除/prune）已在 AgentMemoryView（AI 面板浮层）里，不重复。
+ * PUT 是全字段覆盖，面板漏渲染一项就等于把它静默重置回默认值，所以这里
+ * 不做"可选展示"，六个字段全部可见可改。
+ * 全部通过 settings store 的 deep watch 自动同步（含 R6 回滚基线），面板自身
+ * 不再直接调 updateMemorySettings，避免与 watcher 双写。
+ * 记忆体本身（列表/编辑/删除）在 AgentMemoryView（AI 面板记忆入口），不重复。
  */
 import { computed, onMounted } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
@@ -60,19 +101,17 @@ import ToggleSwitch from '@/components/settings/fields/ToggleSwitch.vue'
 const settingsStore = useSettingsStore()
 const memory = computed(() => settingsStore.settings.memory)
 
-// stats 后端已有 /agent/memory/stats；这里只做零依赖的口径显示，
-// 拉取失败或未上线时降级为"未知"，不让面板整体空态。
-const statsLine = computed(() => {
+const statsText = computed(() => {
   const m = memory.value
   return m.enabled
-    ? `启用 · ${m.strategy === 'auto' ? '自动沉淀' : '仅手动写入'} · 上限 ${m.maxItems} 条`
+    ? `启用 · 上限 ${m.maxItems} 条/类 · 注入 ${m.injectBudgetTokens}t + 画像 ${m.blocksBudgetTokens}t · `
+      + `检索等待 ${m.searchTimeoutS}s · 整理${m.reconcileLlmEnabled ? '调用模型' : '仅阈值去重'}`
     : '已关闭 · Agent 运行时不注入也不写入'
 })
-const statsText = statsLine
 
 onMounted(() => {
-  // loadMemorySettings 已在应用启动路径调用；面板打开时若字段仍为默认（enabled=true/strategy=auto/maxItems=100），
-  // 再补拉一次以覆盖"启动时后端尚未就绪 → 静默降级到 localStorage"的场景。
+  // loadMemorySettings 已在应用启动路径调用；面板打开时再补拉一次，
+  // 覆盖"启动时后端尚未就绪 → 静默降级到 localStorage 默认值"的场景。
   void settingsStore.loadMemorySettings()
 })
 </script>
@@ -96,26 +135,6 @@ onMounted(() => {
   overflow-y: auto;
   padding-right: 4px;
 }
-.setting-select {
-  height: 28px;
-  padding: 0 24px 0 8px;
-  background: var(--bg-input);
-  border: 1px solid var(--border-input);
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
-  font-size: 12px;
-  font-family: inherit;
-  outline: none;
-  cursor: pointer;
-  -webkit-appearance: none;
-  appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%238b949e' stroke-width='1.5' stroke-linecap='round'%3E%3Cpolyline points='3 5 6 8 9 5'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 6px center;
-  transition: border-color 0.15s ease;
-}
-.setting-select:hover { border-color: var(--border-default); }
-.setting-select:focus { border-color: var(--accent-primary); }
 .slider-row { display: flex; align-items: center; gap: 12px; }
 .setting-range {
   width: 160px; height: 4px;

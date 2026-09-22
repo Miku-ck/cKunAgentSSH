@@ -76,8 +76,15 @@ export interface AppSettings {
   }
   memory: {
     enabled: boolean
-    strategy: 'auto' | 'manual'
     maxItems: number
+    /** 检索注入预算（每轮按相关性取的历史经验） */
+    injectBudgetTokens: number
+    /** 画像块预算（常驻已知事实），与注入预算分账 */
+    blocksBudgetTokens: number
+    /** 预检索等待上限，超时降级为按新近兜底 */
+    searchTimeoutS: number
+    /** 关闭后后台整理只做阈值去重，不调模型 */
+    reconcileLlmEnabled: boolean
   }
   appearance: {
     theme: Theme
@@ -165,8 +172,11 @@ export const useSettingsStore = defineStore('settings', () => {
     },
     memory: {
       enabled: saved?.memory?.enabled ?? true,
-      strategy: saved?.memory?.strategy ?? 'auto',
       maxItems: saved?.memory?.maxItems ?? 100,
+      injectBudgetTokens: saved?.memory?.injectBudgetTokens ?? 1500,
+      blocksBudgetTokens: saved?.memory?.blocksBudgetTokens ?? 1200,
+      searchTimeoutS: saved?.memory?.searchTimeoutS ?? 8,
+      reconcileLlmEnabled: saved?.memory?.reconcileLlmEnabled ?? true,
     },
     appearance: {
       theme: saved?.appearance?.theme ?? 'dark',
@@ -229,8 +239,11 @@ export const useSettingsStore = defineStore('settings', () => {
       memorySyncTimer = window.setTimeout(() => {
         agentApi.updateMemorySettings({
           enabled: mem.enabled,
-          strategy: mem.strategy,
           max_items: mem.maxItems,
+          inject_budget_tokens: mem.injectBudgetTokens,
+          blocks_budget_tokens: mem.blocksBudgetTokens,
+          search_timeout_s: mem.searchTimeoutS,
+          reconcile_llm_enabled: mem.reconcileLlmEnabled,
         }).then(() => {
           lastSyncedMemory = { ...settings.value.memory }
         }).catch((e) => {
@@ -252,9 +265,13 @@ export const useSettingsStore = defineStore('settings', () => {
     applyingRemoteMemory = true
     try {
       const data = await agentApi.getMemorySettings()
-      if (typeof data.enabled === 'boolean') settings.value.memory.enabled = data.enabled
-      if (data.strategy === 'auto' || data.strategy === 'manual') settings.value.memory.strategy = data.strategy
-      if (Number.isFinite(data.max_items)) settings.value.memory.maxItems = data.max_items
+      const mem = settings.value.memory
+      if (typeof data.enabled === 'boolean') mem.enabled = data.enabled
+      if (Number.isFinite(data.max_items)) mem.maxItems = data.max_items
+      if (Number.isFinite(data.inject_budget_tokens)) mem.injectBudgetTokens = data.inject_budget_tokens
+      if (Number.isFinite(data.blocks_budget_tokens)) mem.blocksBudgetTokens = data.blocks_budget_tokens
+      if (Number.isFinite(data.search_timeout_s)) mem.searchTimeoutS = data.search_timeout_s
+      if (typeof data.reconcile_llm_enabled === 'boolean') mem.reconcileLlmEnabled = data.reconcile_llm_enabled
       await nextTick()  // 等本轮 watcher 冲刷完再放开闸门
       // 后端值即"最后一次已知一致状态"，作为 sync 失败时的回滚基线
       lastSyncedMemory = { ...settings.value.memory }

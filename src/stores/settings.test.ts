@@ -8,6 +8,9 @@
  * - 用户真改动仍然 debounce 同步 + 落 localStorage
  *
  * 测试跑在 node 环境，故先补 localStorage / window 两个最小垫片。
+ *
+ * 记忆设置字段与后端 MemorySettingsRequest（v2 六项）严格同集合：PUT 是全字段
+ * 覆盖，测试里漏断言一项就等于放任面板把它静默重置回默认值。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
@@ -39,6 +42,11 @@ const agentApiMock = {
   getMemorySettings: vi.fn(),
   updateMemorySettings: vi.fn(async () => ({})),
 }
+/** 后端 GET /settings/memory 的 v2 响应（六字段，与 MemorySettingsRequest 同集合） */
+const MEMORY_V2 = {
+  enabled: true, max_items: 100, inject_budget_tokens: 1500,
+  blocks_budget_tokens: 1200, search_timeout_s: 8, reconcile_llm_enabled: true,
+}
 
 vi.mock('@/api/client', () => ({
   api: apiMock,
@@ -61,20 +69,22 @@ describe('settings 后端回填', () => {
     apiMock.getPostProcessSettings.mockResolvedValue({
       enabled: true, generate_title: true, extract_memory: true, generate_skill: true,
     })
-    agentApiMock.getMemorySettings.mockResolvedValue({
-      enabled: true, strategy: 'auto', max_items: 100,
-    })
+    agentApiMock.getMemorySettings.mockResolvedValue(MEMORY_V2)
   })
   afterEach(() => vi.useRealTimers())
 
   it('回填不会把值再 POST 回后端', async () => {
     const s = useSettingsStore()
     agentApiMock.getMemorySettings.mockResolvedValue({
-      enabled: false, strategy: 'manual', max_items: 55,
+      ...MEMORY_V2, enabled: false, max_items: 55, inject_budget_tokens: 900,
+      blocks_budget_tokens: 700, search_timeout_s: 3.5, reconcile_llm_enabled: false,
     })
     await s.loadMemorySettings()
     await nextTick()
-    expect(s.settings.memory).toEqual({ enabled: false, strategy: 'manual', maxItems: 55 })
+    expect(s.settings.memory).toEqual({
+      enabled: false, maxItems: 55, injectBudgetTokens: 900,
+      blocksBudgetTokens: 700, searchTimeoutS: 3.5, reconcileLlmEnabled: false,
+    })
 
     await vi.advanceTimersByTimeAsync(2000)
     expect(agentApiMock.updateMemorySettings).not.toHaveBeenCalled()
@@ -84,7 +94,8 @@ describe('settings 后端回填', () => {
     const s = useSettingsStore()
     const before = { ...s.settings.memory }
     agentApiMock.getMemorySettings.mockResolvedValue({
-      enabled: 'yes', strategy: 'telepathy', max_items: null,
+      enabled: 'yes', max_items: null, inject_budget_tokens: '1500',
+      blocks_budget_tokens: NaN, reconcile_llm_enabled: 1,   // search_timeout_s 缺失
     })
     await s.loadMemorySettings()
     await nextTick()
@@ -103,7 +114,8 @@ describe('settings 后端回填', () => {
     s.settings.memory.maxItems = 42
     await vi.advanceTimersByTimeAsync(2000)
     expect(agentApiMock.updateMemorySettings).toHaveBeenCalledWith({
-      enabled: true, strategy: 'auto', max_items: 42,
+      enabled: true, max_items: 42, inject_budget_tokens: 1500,
+      blocks_budget_tokens: 1200, search_timeout_s: 8, reconcile_llm_enabled: true,
     })
     expect(lsMap.get('ckunagentic:settings')).toContain('"maxItems":42')
   })
@@ -147,9 +159,7 @@ describe('settings sync 失败回滚', () => {
     apiMock.getPostProcessSettings.mockResolvedValue({
       enabled: true, generate_title: true, extract_memory: true, generate_skill: true,
     })
-    agentApiMock.getMemorySettings.mockResolvedValue({
-      enabled: true, strategy: 'auto', max_items: 100,
-    })
+    agentApiMock.getMemorySettings.mockResolvedValue(MEMORY_V2)
     // mockClear 不会重置 base impl，但也不会清掉 once 队列 —— 显式把默认实现装回来
     apiMock.updatePostProcessSettings.mockImplementation(async () => ({}))
     agentApiMock.updateMemorySettings.mockImplementation(async () => ({}))

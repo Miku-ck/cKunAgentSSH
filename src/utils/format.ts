@@ -25,3 +25,19 @@ export function parseBackendTs(ts?: string | null): Date {
   const s = ts || ''
   return new Date(s.replace(' ', 'T') + (/[Z+]/.test(s) ? '' : 'Z'))
 }
+
+/**
+ * 后端时间戳 → 本地「YYYY-MM-DD HH:MM[:SS]」。
+ * 解析口径交给 parseBackendTs（naive 串按 UTC 读），这里只负责渲染；
+ * 非法/空串原样返回，让调用方看到脏数据而不是凭空变成 1970。
+ */
+export function formatBackendTs(ts?: string | null, withSeconds = false): string {
+  if (!ts) return ''
+  const d = parseBackendTs(ts)
+  const ms = d.getTime()
+  if (Number.isNaN(ms)) return ts
+  const p = (n: number) => String(n).padStart(2, '0')
+  const date = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+  const hms = `${p(d.getHours())}:${p(d.getMinutes())}${withSeconds ? `:${p(d.getSeconds())}` : ''}`
+  return `${date} ${hms}`
+}

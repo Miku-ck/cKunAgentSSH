@@ -989,13 +989,23 @@ export interface SafetyClassifyResult {
   explain: string
 }
 
-export const agentApi = {
-  // 记忆设置
-  getMemorySettings: () =>
-    request<{ enabled: boolean; strategy: string; max_items: number }>('/settings/memory'),
+export interface MemorySettings {
+  enabled: boolean
+  max_items: number
+  inject_budget_tokens: number
+  blocks_budget_tokens: number
+  search_timeout_s: number
+  reconcile_llm_enabled: boolean
+}
 
-  updateMemorySettings: (data: { enabled: boolean; strategy: string; max_items: number }) =>
-    request<{ enabled: boolean; strategy: string; max_items: number }>('/settings/memory', {
+export const agentApi = {
+  // 记忆设置 —— 字段与后端 MemorySettingsRequest 一一对应：PUT 是全字段覆盖，
+  // 少传一个就等于把后端那一项静默重置回默认值。
+  getMemorySettings: () =>
+    request<MemorySettings>('/settings/memory'),
+
+  updateMemorySettings: (data: MemorySettings) =>
+    request<MemorySettings>('/settings/memory', {
       method: 'PUT',
       body: JSON.stringify(data),
     }),

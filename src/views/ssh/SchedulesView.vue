@@ -204,7 +204,7 @@ import {
   type ScheduleRun,
 } from '@/api/client'
 import { useToastStore } from '@/stores/toast'
-import { parseBackendTs } from '@/utils/format'
+import { formatBackendTs, parseBackendTs } from '@/utils/format'
 import { useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useAgentStore } from '@/stores/agent'
@@ -576,11 +576,7 @@ function shortId(id: string): string {
 }
 
 function formatTs(ts?: string): string {
-  if (!ts) return ''
-  const d = parseBackendTs(ts)
-  if (isNaN(d.getTime())) return ts
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  return formatBackendTs(ts)
 }
 
 // ── 下次执行倒计时（D 阶段）：每秒 tick，仅在有启用任务时运行 ──
