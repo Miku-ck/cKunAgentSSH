@@ -13,7 +13,6 @@ from routes.agent import AgentRunRequest, _build_agent_system_prompt
 
 PROFILE = "[目标机环境] 发行版: Ubuntu 22.04.3 LTS; init: systemd; 包管理器: apt-get"
 
-
 def _req(**kw) -> AgentRunRequest:
     base = dict(task="重启 nginx", conversation_id="c1", mode="ssh")
     base.update(kw)
@@ -53,26 +52,24 @@ def test_change_method_is_self_conditioning():
 # ── 目标机环境画像注入 ─────────────────────────────────────────────────────
 
 def test_host_profile_injected():
-    prompt = _build_agent_system_prompt(_req(), "", False, host_profile_text=PROFILE)
+    prompt = _build_agent_system_prompt(_req(), PROFILE, False)
     assert PROFILE in prompt
 
 
 def test_host_profile_placed_before_methodology_and_tool_guidance():
-    prompt = _build_agent_system_prompt(_req(), "", False, host_profile_text=PROFILE)
+    prompt = _build_agent_system_prompt(_req(), PROFILE, False)
     assert prompt.index(PROFILE) < prompt.index(OPS_METHOD_CHANGE)
     assert prompt.index(PROFILE) < prompt.index("工具使用效率")
 
 
 def test_host_profile_omitted_when_empty():
-    prompt = _build_agent_system_prompt(_req(), "", False, host_profile_text="")
+    prompt = _build_agent_system_prompt(_req(), "", False)
     assert "[目标机环境]" not in prompt
 
 
 def test_host_profile_not_injected_for_conversation_task():
     """对话型任务即便传了画像也不注入（不调工具，环境事实无意义）"""
-    prompt = _build_agent_system_prompt(
-        _req(task="你好"), "", True, host_profile_text=PROFILE,
-    )
+    prompt = _build_agent_system_prompt(_req(task="你好"), PROFILE, True)
     assert PROFILE not in prompt
     assert "[目标机环境]" not in prompt
 
@@ -98,9 +95,7 @@ def test_conversation_task_skips_methodology_and_tool_guidance():
     "输出格式",
 ])
 def test_existing_guidance_preserved(fragment):
-    prompt = _build_agent_system_prompt(
-        _req(), "", False, host_profile_text=PROFILE, is_change=True,
-    )
+    prompt = _build_agent_system_prompt(_req(), PROFILE, False, is_change=True)
     assert fragment in prompt
 
 
@@ -110,12 +105,30 @@ def test_time_and_mode_role_present():
     assert "cKunAgentSSH 的智能运维助手" in prompt
 
 
-def test_user_system_prompt_and_reflection_still_appended():
+def test_user_system_prompt_appended_and_reflection_backdoor_gone():
+    """v2 反思记忆走统一检索（[相关记忆]），不再有 system prompt 的独立注入参数。
+
+    原 reflection_injection 后门会把 agent_strategies 的近 3 条反思无条件拼进
+    系统提示 —— 与记忆库同源却绕过去重/相关性/预算三道闸，两通道迟早互相矛盾。
+    """
+    import inspect
+
     prompt = _build_agent_system_prompt(
         _req(system_prompt="[自定义] 严格模式"),
-        "[反思] 上次用了错误的包管理器",
+        PROFILE,
         False,
-        host_profile_text=PROFILE,
     )
     assert "[自定义] 严格模式" in prompt
-    assert "[反思] 上次用了错误的包管理器" in prompt
+    params = inspect.signature(_build_agent_system_prompt).parameters
+    assert "reflection_injection" not in params
+    assert "host_profile_text" not in params
+
+
+def test_memory_tool_guidance_present():
+    """记忆双通道的用法引导必须随运维任务注入，否则模型不知道有工具可主动查/记"""
+    prompt = _build_agent_system_prompt(_req(), "", False, is_change=True)
+    assert "记忆使用" in prompt
+    for name in ("memory_search", "memory_add", "block_update", "memory_invalidate"):
+        assert name in prompt
+    conv = _build_agent_system_prompt(_req(task="你好"), "", True)
+    assert "记忆使用" not in conv

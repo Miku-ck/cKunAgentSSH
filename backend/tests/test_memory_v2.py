@@ -1,7 +1,8 @@
-"""v2 记忆子系统单测（spec §13，P1+P2 部分）。
+"""v2 记忆子系统单测（spec §13，P1+P2+P3 部分）。
 
 覆盖：schema/迁移幂等、scope/kind 过滤、RRF 次序与断层截断、Reconciler 四操作
-与审计、job 重试到 failed、修剪/衰减、块精确替换与超限、伪向量不入库。
+与审计、job 重试到 failed、修剪/衰减、块精确替换与超限、伪向量不入库、
+画像块渲染预算、四个记忆工具端到端。
 """
 import asyncio
 import json
@@ -367,3 +368,151 @@ def test_episodic_job_written_without_llm(memdb):
     eps = mstore.list_memories(kind="episodic")
     assert len(eps) == 1 and "任务: ls" in eps[0]["content"]
     assert eps[0]["source"] == "run_summary"
+
+
+# ── P3: 画像块渲染与预算 ──
+
+
+def _seed_three_blocks():
+    mstore.put_block(memory_blocks.USER_PREFERENCES, "用户偏好: 中文回答，禁止 rm -rf", "test")
+    mstore.put_block(memory_blocks.AGENT_RULES, "规则: 变更前先备份", "test")
+    mstore.put_block(memory_blocks.host_key("s1"), "[目标机环境] 发行版: Ubuntu 22.04", "probe")
+
+
+def test_render_blocks_order_and_label(memdb):
+    _seed_three_blocks()
+    text = _run(memory_blocks.render_for_context("s1"))
+    assert text.startswith("[画像]")
+    assert (text.index(memory_blocks.USER_PREFERENCES)
+            < text.index(memory_blocks.AGENT_RULES)
+            < text.index(memory_blocks.host_key("s1")))
+    # 只注入当前主机的块
+    mstore.put_block(memory_blocks.host_key("s2"), "另一台机器", "probe")
+    assert "另一台机器" not in _run(memory_blocks.render_for_context("s1"))
+
+
+def test_render_blocks_budget_drops_whole_block(memdb):
+    """超预算按整块丢弃：切半句会反转「禁止 rm -rf」这类否定式规则的语义"""
+    from agent.cost_tracker import estimate_tokens
+
+    _seed_three_blocks()
+    full = _run(memory_blocks.render_for_context("s1"))
+    # 预算 = 前两块的成本之和 → 第三块（主机画像）刚好挤不进
+    budget = sum(
+        estimate_tokens(f"### {key}\n{mstore.get_block(key)['value']}")
+        for key in (memory_blocks.USER_PREFERENCES, memory_blocks.AGENT_RULES)
+    )
+    tight = _run(memory_blocks.render_for_context("s1", budget_tokens=budget))
+    assert memory_blocks.host_key("s1") in full
+    assert memory_blocks.host_key("s1") not in tight
+    assert "禁止 rm -rf" in tight          # 用户偏好优先保留，且保留整句
+    assert "发行版" not in tight
+    assert _run(memory_blocks.render_for_context("s1", budget_tokens=1)) == ""
+
+
+def test_degraded_probe_text_is_not_a_host_fact(memdb):
+    from agent import host_profile as hp
+    assert not hp.is_known_profile(hp.UNKNOWN_TEXT)
+    assert not hp.is_known_profile(hp.NO_SESSION_TEXT)
+    assert not hp.is_known_profile("")
+    assert hp.is_known_profile("[目标机环境] 发行版: Ubuntu 22.04")
+
+
+# ── P3: 记忆工具端到端 ──
+
+
+def _ctx(session_id: str = "s1"):
+    from agent.tools import ToolContext
+    return ToolContext(ssh_session_id=session_id, mode="ssh",
+                       conversation_id="c1", agent_run_id="r1")
+
+
+def _tool_registry():
+    from agent.tools import create_registry_for_mode
+    return create_registry_for_mode("ssh")
+
+
+def test_memory_tools_registered(memdb):
+    names = _tool_registry().names()
+    assert {"memory_search", "memory_add", "memory_invalidate", "block_update"} <= set(names)
+
+
+def test_memory_search_tool_hits_seeded_memory(memdb):
+    mid = mstore.add_memory(kind="procedural", content="该主机 nginx 日志在 /var/log/nginx/error.log",
+                           title="nginx 日志路径", source="test", scope="host:s1")
+    reg = _tool_registry()
+    res = _run(reg.execute("memory_search", {"query": "nginx 日志"}, _ctx()))
+    assert res.success and mid in res.output
+    assert "(procedural/host:s1)" in res.output
+    # 主机作用域外查不到（A 机经验不当作 B 机事实）
+    other = _run(reg.execute("memory_search", {"query": "nginx 日志"}, _ctx("s2")))
+    assert mid not in other.output
+
+
+def test_memory_search_tool_empty_and_bad_args(memdb):
+    reg = _tool_registry()
+    assert "无相关记忆" in _run(reg.execute("memory_search", {"query": "全新主题"}, _ctx())).output
+    assert not _run(reg.execute("memory_search", {"query": "  "}, _ctx())).success
+
+
+def test_memory_add_tool_goes_through_reconcile(memdb, monkeypatch):
+    reg = _tool_registry()
+    res = _run(reg.execute("memory_add", {
+        "content": "生产库只在维护窗口重启", "kind": "procedural", "title": "维护窗口",
+    }, _ctx()))
+    assert res.success and res.output.startswith("已提交")
+    jobs = mstore.list_jobs()
+    assert len(jobs) == 1 and jobs[0]["kind"] == reconcile.JOB_AGENT_ADD
+    assert jobs[0]["priority"] == 1          # 用户显式意图排在自动提取之前
+    assert not mstore.list_memories()        # 未对账不生效
+
+    async def fake_llm(prompt, block, cfg):
+        return [{"index": 0, "op": "ADD", "reason": "用户显式登记"}]
+    monkeypatch.setattr(reconcile, "_call_llm", fake_llm)
+
+    _process(FakeEmbed())
+    rows = mstore.list_memories()
+    assert len(rows) == 1 and rows[0]["source"] == "agent_tool"
+    assert rows[0]["kind"] == "procedural"
+
+
+def test_memory_add_tool_rejects_bad_scope(memdb):
+    reg = _tool_registry()
+    res = _run(reg.execute("memory_add", {
+        "content": "x", "kind": "semantic", "scope": "host:other-session"}, _ctx()))
+    assert not res.success and "当前主机" in res.error
+    assert not _run(reg.execute("memory_add", {"content": "x", "kind": "episodic"}, _ctx())).success
+
+
+def test_memory_invalidate_tool_marks_invalidated_with_audit(memdb):
+    mid = mstore.add_memory(kind="semantic", content="包管理器是 yum", source="test")
+    reg = _tool_registry()
+    res = _run(reg.execute("memory_invalidate", {"memory_id": mid, "reason": "实测为 apt"}, _ctx()))
+    assert res.success
+    assert mstore.get_memory(mid)["status"] == "invalidated"
+    audit = mstore.list_audit(mid)
+    assert audit and audit[0]["action"] == "DELETE" and "实测为 apt" in audit[0]["reason"]
+    # 二次作废与未知 id 都不该成功
+    assert not _run(reg.execute("memory_invalidate",
+                                {"memory_id": "nope", "reason": "x"}, _ctx())).success
+
+
+def test_block_update_tool_append_and_target_host_only(memdb):
+    reg = _tool_registry()
+    res = _run(reg.execute("block_update", {
+        "key": memory_blocks.USER_PREFERENCES, "old_string": "", "new_string": "- 回答用中文"}, _ctx()))
+    assert res.success
+    assert mstore.get_block(memory_blocks.USER_PREFERENCES)["value"] == "- 回答用中文"
+    res2 = _run(reg.execute("block_update", {
+        "key": "user-preferences", "old_string": "中文", "new_string": "英文"}, _ctx()))
+    assert res2.success and "英文" in mstore.get_block(memory_blocks.USER_PREFERENCES)["value"]
+
+    # host: 前缀简写归一化为 host-profile:，且只能改当前主机
+    res3 = _run(reg.execute("block_update", {
+        "key": "host:s1", "old_string": "", "new_string": "时区 CST"}, _ctx()))
+    assert res3.success
+    assert mstore.get_block(memory_blocks.host_key("s1"))["value"] == "时区 CST"
+    assert not _run(reg.execute("block_update", {
+        "key": "host-profile:s2", "old_string": "", "new_string": "x"}, _ctx())).success
+    assert not _run(reg.execute("block_update", {
+        "key": "system-prompt", "old_string": "", "new_string": "x"}, _ctx())).success

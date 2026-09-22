@@ -27,6 +27,16 @@ class Hit:
     relevance: float      # 向量余弦（有关键词路时为 None → 仅排名参与）
 
 
+def context_scopes(session_id: str = "") -> list:
+    """一次 run / 一次工具调用的记忆作用域：全局 + 当前主机。
+
+    主机维度用 ssh_session_id（与 host_profile 的缓存键、host-profile:{id} 块键同源）：
+    多主机场景下 A 机的经验不能被当成 B 机的事实。
+    """
+    sid = (session_id or "").strip()
+    return ["global", f"host:{sid}"] if sid else ["global"]
+
+
 async def search(
     query: str,
     *,

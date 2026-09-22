@@ -131,18 +131,19 @@ async def _run_reflection_and_evolution(
 
 def _build_agent_system_prompt(
     req: "AgentRunRequest",
-    reflection_injection: str,
+    profile_text: str,
     is_conversation_task: bool,
-    host_profile_text: str = "",
     is_change: Optional[bool] = None,
 ) -> str:
     """构建 Agent 系统提示
 
-    拼装顺序：时间 → 模式角色 → 目标机环境画像 → 用户 prompt → 反思
+    拼装顺序：时间 → 模式角色 → **当前目标** → 画像块 → 用户 prompt
               → 运维方法论 → 工具/输出引导
 
     Args:
-        host_profile_text: 目标机环境画像（agent.host_profile 产出）；空串不注入
+        profile_text: 画像块渲染结果（agent.memory.blocks.render_for_context），
+            含用户偏好、操作规则与目标机环境事实，已按 memory.blocks_budget_tokens
+            裁剪；空串不注入
         is_change: 任务是否可能改变目标机状态。None 表示未做意图识别，
             此时按"变更"处理 —— 方向性取舍见下方注释。
     """
@@ -154,20 +155,19 @@ def _build_agent_system_prompt(
         f"如用户询问日期/星期/时间，请以本信息为准，不要使用训练数据中的旧时间。"
     )
 
-    # 拼装：时间 + 模式基础 prompt + 用户 system_prompt + 反思
+    # 拼装：时间 + 模式基础 prompt + 用户 system_prompt + 画像块
     mode_prompt = MODE_PROMPTS.get(req.mode, "")
     parts = [time_injection]
     if mode_prompt:
         parts.append(mode_prompt)
-    # 目标机环境事实：紧跟角色设定，使"这是台什么机器"先于任何命令生成进入上下文。
-    # 无 SSH 会话时该文案会显式声明"运维工具不在本机执行"，避免模型误以为可本地动手。
-    # 对话型任务不注入（不调工具，环境事实无意义）——即便调用方传了也在此拦掉。
-    if host_profile_text and not is_conversation_task:
-        parts.append(host_profile_text)
+    # 画像块：常驻的已知事实（用户偏好 / 操作规则 / 目标机环境），让"这是台什么机器、
+    # 用户要什么"先于任何命令生成进入上下文，避免模型凭训练数据印象对 Ubuntu 发 yum。
+    # 无 SSH 会话时主机块文案会显式声明"运维工具不在本机执行"。
+    # 对话型任务不注入（不调工具，环境与操作规则无意义）——即便调用方传了也在此拦掉。
+    if profile_text and not is_conversation_task:
+        parts.append(profile_text)
     if req.system_prompt:
         parts.append(req.system_prompt)
-    if reflection_injection:
-        parts.append(reflection_injection)
 
     if is_conversation_task:
         # 对话型任务：跳过工具效率/任务拆分/子Agent/输出格式等大段引导
@@ -190,6 +190,14 @@ def _build_agent_system_prompt(
             "查进程用 process_inspect、看资源用 sys_overview、探端口用 network_probe、"
             "管服务用 service_manage。基于返回内容直接推理，避免短时间内重复读取同一内容；"
             "查看大文件的不同位置时优先指定 offset/limit 读取相关片段。"
+        )
+        # 记忆通道引导：预检索注入是"被动想起来"，工具是"主动查/记/纠错"
+        parts.append(
+            "记忆使用：上下文里 [画像] 是常驻已知事实、[相关记忆] 是本轮检索到的历史经验，"
+            "可直接引用无需再调工具。需要更多历史经验、或判断某做法在其他主机上的先例时用 "
+            "memory_search；确认了值得长期保留的主机特性/操作教训时用 memory_add（进后台对账队列，"
+            "本轮不生效）；用户给出持久偏好、或要修正 [画像] 里的既有内容时用 block_update；"
+            "发现 [相关记忆] 里的事实已被证伪时用 memory_invalidate 作废它，不要留着互相矛盾的记忆。"
         )
         # 探测命令构建规范：多段探测用 ; 串联而非 &&；exit 非零属预期，不是连接异常
         parts.append(
@@ -568,37 +576,27 @@ async def agent_run(req: AgentRunRequest, request: Request):
     memory_contents: list[str] = []
     if memory_enabled and not is_conversation_task:
         memory_contents = await _retrieve_memory_contents(
-            embed_client, query=req.task, scopes=["global"],
+            embed_client, query=req.task,
+            scopes=memory_retriever.context_scopes(req.ssh_session_id or ""),
         )
 
-    # ── 加载历史反思 + 演化配置 ──
-    reflection_mgr = MetaReflection()
+    # ── 演化配置 ──
     evolution_mgr = EvolutionEngine()
 
-    # 加载近 3 条反思策略，注入 system prompt
-    try:
-        # 审查 M-13：反思策略读取也是同步 DB 查询
-        recent_reflections = await asyncio.to_thread(
-            reflection_mgr.load_recent_reflections, req.mode, limit=3,
-        )
-        reflection_injection = reflection_mgr.build_prompt_injection(recent_reflections)
-    except Exception as e:
-        logger.warning("加载反思策略失败（降级为无反思）: %s", e)
-        reflection_injection = ""
-
-    # ── 目标机环境画像（只读探测，失败静默降级）──
-    # 一条只读、免审的探测命令（ops_obs.host_profile_cmd ↔ 远端 host_profile 模板），
-    # 把"这台机器是什么环境"沉淀为已知事实，避免模型凭训练数据印象对 Ubuntu 发 yum、
-    # 对非 systemd 机发 systemctl。探测失败 / 超时 / 目标机未部署该模板一律降级为
-    # "环境未知"文案，绝不影响 run（见 agent/host_profile.py 硬约束）。
+    # ── 画像（常驻上下文）：目标机探测 → host-profile 块 → [画像] 段 ──
+    # 探测是一条只读、免审命令（ops_obs.host_profile_cmd ↔ 远端 host_profile 模板），
+    # 失败/超时/目标机未部署该模板一律降级为"环境未知"文案，绝不影响 run
+    # （见 agent/host_profile.py 硬约束）。
+    # 只有真实环境事实才写进画像块；降级文案是"本轮没探到"的说明而非机器事实，
+    # 写进块会让一次失败常驻到下次成功，读起来像确凿结论 —— 故只在当轮直接注入。
     # 对话型任务跳过：纯寒暄不需要一次远程往返，也不需要环境事实。
-    # 无 SSH 会话时不探测，直接返回"未连接主机"文案。
     # 代价：setup 期多一次 await（超时上限 10s，实际为亚秒级只读命令）；setup 本身
-    # 已含记忆检索（上限 30s）等阻塞项，故不额外改变首字节时序。
-    host_profile_text = ""
+    # 已含记忆检索（上限 8s）等阻塞项，故不额外改变首字节时序。
+    profile_text = ""
     if not is_conversation_task:
         from agent.harness.contracts import RunContext as _RunContext
-        from agent.host_profile import ensure_host_profile
+        from agent.host_profile import ensure_host_profile, is_known_profile
+        from agent.memory import blocks as memory_blocks
 
         _host_ctx = _RunContext.new(
             task=req.task or "",
@@ -607,12 +605,34 @@ async def agent_run(req: AgentRunRequest, request: Request):
         )
         host_profile_text = await ensure_host_profile(_host_ctx)
 
+        if memory_enabled:
+            if req.ssh_session_id and is_known_profile(host_profile_text):
+                try:
+                    await memory_blocks.put(
+                        memory_blocks.host_key(req.ssh_session_id),
+                        host_profile_text, updated_by="probe",
+                    )
+                except Exception as e:
+                    logger.warning("主机画像块写入失败（不影响 run）: %s", e)
+            try:
+                _blocks_budget = db._int_app_setting(
+                    "memory.blocks_budget_tokens",
+                    memory_blocks.BLOCKS_BUDGET_TOKENS, 200, 8000,
+                )
+                profile_text = await memory_blocks.render_for_context(
+                    req.ssh_session_id or "", _blocks_budget,
+                )
+            except Exception as e:
+                logger.warning("画像块渲染失败，降级为本轮探测文案: %s", e)
+        # 记忆关闭时退回本轮探测文案；本轮未探到环境事实而块也为空时同样兜底，
+        # 否则"工具不在本机执行""先探测再假设"这两条安全提示会整体消失。
+        profile_text = profile_text or host_profile_text
+
     # M3 修复：提取 system prompt 构建为独立函数
     final_system_prompt = _build_agent_system_prompt(
         req,
-        reflection_injection,
+        profile_text,
         is_conversation_task,
-        host_profile_text=host_profile_text,
         # pre_intention 为 None 表示本次未做意图识别（enable_intention_guide=False）
         is_change=pre_intention.is_change if pre_intention else None,
     )
@@ -1334,10 +1354,19 @@ def revoke_tool_permission(tool: str, command: Optional[str] = None,
 
 @router.get("/agent/permission/list")
 def list_tool_permissions():
-    """查询已永久授权的工具列表"""
+    """查询已永久授权的工具列表
+
+    `tools` 保持原来的字符串数组语义（前端与 test_admin_api_round4 都按此消费）。
+    `entries`/`ttl_hours`（E3）是附加信息：授权何时写入、何时到期，面板要能诚实
+    回答"这条预登记还会有效多久"，而不是只报"已授权"。
+    """
     from agent.harness.reins import _get_global_permission_gate_sync
     pg = _get_global_permission_gate_sync()
-    return {"tools": sorted(pg._confirmed_permanent)}
+    return {
+        "tools": sorted(pg._confirmed_permanent),
+        "entries": pg.permanent_entries(),
+        "ttl_hours": max(0, int(pg.allowlist_ttl_hours)),
+    }
 
 
 class AllowPermissionRequest(BaseModel):

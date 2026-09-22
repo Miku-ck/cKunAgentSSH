@@ -46,6 +46,13 @@ from agent.tools.builtin.ops_job import (
     JobOutputTool,
     JobKillTool,
 )
+# 记忆自编辑（检索 / 登记 / 作废 / 画像块更新）
+from agent.tools.builtin.memory_tools import (
+    MemorySearchTool,
+    MemoryAddTool,
+    MemoryInvalidateTool,
+    BlockUpdateTool,
+)
 
 _ALL_TOOL_CLASSES: list[type[BaseTool]] = [
     ShellExecTool,
@@ -72,6 +79,11 @@ _ALL_TOOL_CLASSES: list[type[BaseTool]] = [
     JobListTool,
     JobOutputTool,
     JobKillTool,
+    # 记忆自编辑
+    MemorySearchTool,
+    MemoryAddTool,
+    MemoryInvalidateTool,
+    BlockUpdateTool,
 ]
 
 

@@ -72,6 +72,15 @@ def clear_cache(session_id: Optional[str] = None) -> None:
     _CACHE.pop(session_id, None)
 
 
+def is_known_profile(text: str) -> bool:
+    """探测文案是否为真实环境事实（而非降级占位文案）。
+
+    降级文案是给模型看的提示，不是关于这台机器的事实 —— 把它写进 host-profile
+    画像块会让"探测失败一次"常驻到下次成功为止，读起来像确凿结论。
+    """
+    return bool(text) and text not in (NO_SESSION_TEXT, UNKNOWN_TEXT)
+
+
 # ── 解析（纯函数，便于单测）────────────────────────────────────────────────
 
 def _split_sections(raw: str) -> dict[str, list[str]]:

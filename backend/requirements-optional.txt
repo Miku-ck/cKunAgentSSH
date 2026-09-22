@@ -1,4 +1,7 @@
-# 可选依赖（web_fetch 工具增强）
-# trafilatura 用于网页正文提取；未安装时自动降级到内置 _strip_html
+# 可选依赖（缺失即降级，不装也能跑）
+# trafilatura: web_fetch 工具的网页正文提取；未安装时自动降级到内置 _strip_html
+# sqlite-vec: v2 记忆的向量检索加速（KNN 走 SQL 扩展）。未安装时自动降级到
+#             Python 侧 float32 BLOB 全表余弦扫描（agent/memory/vec.py 探测决定）
 # 安装: pip install -r requirements-optional.txt
 trafilatura>=1.12.0,<2.0
+sqlite-vec>=0.1.6
