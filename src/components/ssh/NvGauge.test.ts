@@ -108,11 +108,12 @@ describe('NvGauge · 回归锁定：填充必须有取色 class', () => {
 })
 
 describe('NvGauge · 进度条取色档位', () => {
-  it('默认（pct）按 66 / 90 分档', async () => {
-    expect(fill(await render({ value: 65.9 })).cls).toBe('nv-cool')
-    expect(fill(await render({ value: 66 })).cls).toBe('nv-warm')
-    expect(fill(await render({ value: 89.9 })).cls).toBe('nv-warm')
-    expect(fill(await render({ value: 90 })).cls).toBe('nv-hot')
+  it('默认（pct）按统一档位 60 / 80 分档', async () => {
+    expect(fill(await render({ value: 59.9 })).cls).toBe('nv-cool')
+    expect(fill(await render({ value: 60 })).cls).toBe('nv-warm')
+    // 80 是"危险 >80"的边界，等号归警戒档
+    expect(fill(await render({ value: 80 })).cls).toBe('nv-warm')
+    expect(fill(await render({ value: 80.1 })).cls).toBe('nv-hot')
   })
 
   it('kind="load" 按 4 / 8 分档（负载不是百分比）', async () => {

@@ -484,8 +484,13 @@ async def _retrieve_memory_contents(mgr, *, query: str, mode: str) -> list[str]:
 
     if retrieve_failed and not contents:
         # 故障降级：按 recency 取 semantic，不做相关性判定（仅限故障路径）
-        _fallback_mems = await asyncio.to_thread(db.get_relevant_memories, mode, limit=5)
-        contents = [m["content"] for m in _fallback_mems]
+        # 审查R-4：兜底只在检索故障时触发，恰是 DB 最可能不可用时——兜底再抛
+        # 会让降级路径自身成为 500 单点，故捕获后降级为空列表。
+        try:
+            _fallback_mems = await asyncio.to_thread(db.get_relevant_memories, mode, limit=5)
+            contents = [m["content"] for m in _fallback_mems]
+        except Exception as e:
+            logger.warning("记忆检索降级兜底同样失败，放弃注入: %s", e)
     return contents
 
 

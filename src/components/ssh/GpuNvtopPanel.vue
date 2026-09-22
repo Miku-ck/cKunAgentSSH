@@ -415,7 +415,7 @@ const sysRows = computed<SysRow[]>(() => {
 .nv-hist-val { width: 48px; text-align: right; font-variant-numeric: tabular-nums; }
 
 /* ── 双层量值图（NvGauge，见 ./NvGauge.ts）──
-   上层 12px 横向进度条：长度编码**当前值**，填充按 66/90 变色；
+   上层 12px 横向进度条：长度编码**当前值**，填充按 60/80 变色；
    下层 4px 趋势薄条：60 格历史，高度编码，统一暗色（不参与阈值变色）。
 
    必须是**块级 flex**：系统区父级 .nv-plot 是普通块容器，若用 inline-flex 会触发

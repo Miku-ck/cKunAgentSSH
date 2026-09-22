@@ -546,7 +546,9 @@ class PermissionGate:
         pending = _perm_pending(ctx)
         sig = tool_call_signature(last)
         first_ts = pending.get(sig)
-        if first_ts is not None and \
+        # 审查R：兜底窗口 >0 才启用到期判定（core.py 注释声明"设为 0 表示禁用兜底/永久等待"，
+        # 但旧判据 elapsed > 0.0 对任何已记录时间戳恒真 → 设 0 反而首次重发即过期，语义反转）。
+        if first_ts is not None and _PERMISSION_APPROVAL_FALLBACK_S > 0 and \
                 (time.monotonic() - first_ts) > _PERMISSION_APPROVAL_FALLBACK_S:
             # 兜底到期 → 保留等待集（不 pop），发 permission_expired 把卡标记
             # timeout 保留；注入提示引导用户确认后重新发起。等待集未移除，兜底
