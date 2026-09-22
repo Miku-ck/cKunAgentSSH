@@ -19,6 +19,16 @@
         </select>
       </SettingRow>
 
+      <!-- E2：三态而非开关。'inherit' 保留"不发该字段"，让后端演化配置接管；
+           强制开/关覆盖演化。选 inherit 就是回到演化默认（多数模型 off） -->
+      <SettingRow label="深度思考模式" desc="Agent 运行是否强制启用思考链，或交由演化配置决定">
+        <select v-model="settings.chat.enableThinking" class="setting-select">
+          <option value="inherit">跟随演化（默认）</option>
+          <option value="on">强制开启</option>
+          <option value="off">强制关闭</option>
+        </select>
+      </SettingRow>
+
       <SettingRow label="自动滚动" desc="新消息自动滚动到底部">
         <ToggleSwitch v-model="settings.chat.autoScroll" />
       </SettingRow>
@@ -41,17 +51,7 @@
       </SettingRow>
 
       <SettingRow label="上下文窗口" desc="保留最近多少条消息作为上下文">
-        <div class="slider-row">
-          <input
-            type="range"
-            v-model.number="settings.chat.contextWindow"
-            min="5"
-            max="50"
-            step="1"
-            class="setting-range"
-          />
-          <span class="slider-value">{{ settings.chat.contextWindow }} 条</span>
-        </div>
+        <SettingSlider v-model="settings.chat.contextWindow" :min="5" :max="100" unit=" 条" />
       </SettingRow>
 
       <div class="section-divider" />
@@ -110,19 +110,33 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useToastStore } from '@/stores/toast'
 import { api, toFriendlyMessage } from '@/api/client'
 import SettingRow from '@/components/settings/fields/SettingRow.vue'
+import SettingSlider from '@/components/settings/fields/SettingSlider.vue'
 import ToggleSwitch from '@/components/settings/fields/ToggleSwitch.vue'
 
 const settingsStore = useSettingsStore()
 const settings = settingsStore.settings
 const toast = useToastStore()
 
-const defaultModelName = ref('加载中…')
-const defaultModelId = ref('')
+// A1：默认模型显示改为响应式派生自 store.modelConfigs。
+// 原来是 onMounted 里 api.getDefaultModel 一次性拉 → 用户切了默认后
+// 本面板仍显示旧值。改派生后，只要 fetchModelConfigs 刷新过一次
+// （SettingsDialog 打开时 ModelsPanel 会拉），卡片 star 与这里就同步。
+const defaultSshModel = computed(() => {
+  const list = settingsStore.modelConfigs
+  if (!list.length) return null
+  return list.find((m) => m.is_default_ssh) ?? list.find((m) => m.is_default) ?? list[0]
+})
+const defaultModelName = computed(() => {
+  const m = defaultSshModel.value
+  if (!m) return '未配置'
+  return m.name || m.model_id || m.id || '未配置'
+})
+const defaultModelId = computed(() => defaultSshModel.value?.model_id || '')
 
 // ── 会话保留（服务端设置，默认关闭；删除用户数据，故默认不启用）──
 const retention = ref<{ enabled: boolean; keepCount: number }>({ enabled: false, keepCount: 1000 })
@@ -171,14 +185,8 @@ function onRetentionCountChange() {
 
 onMounted(async () => {
   void loadRetention()
-  try {
-    const model = await api.getDefaultModel('ssh')
-    defaultModelName.value = model.name || model.model_id || model.id || '未配置'
-    defaultModelId.value = model.model_id || ''
-  } catch {
-    defaultModelName.value = '未配置'
-    defaultModelId.value = ''
-  }
+  // 首次进对话面板时若还没拉过模型列表，这里补一次；有数据后 computed 会自动填
+  if (!settingsStore.modelConfigs.length) void settingsStore.fetchModelConfigs()
 })
 </script>
 
@@ -223,39 +231,6 @@ onMounted(async () => {
 }
 .setting-select:hover { border-color: var(--border-default); }
 .setting-select:focus { border-color: var(--accent-primary); }
-
-/* 滑块行 */
-.slider-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.setting-range {
-  width: 120px;
-  height: 4px;
-  -webkit-appearance: none;
-  appearance: none;
-  background: var(--bg-slider);
-  border-radius: 2px;
-  outline: none;
-  cursor: pointer;
-}
-.setting-range::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--accent-primary);
-  border: 2px solid var(--bg-input);
-  cursor: pointer;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.4);
-}
-.slider-value {
-  font-size: 12px;
-  color: var(--text-secondary);
-  min-width: 40px;
-  text-align: right;
-}
 
 .setting-number {
   width: 100px;

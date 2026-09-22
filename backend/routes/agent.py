@@ -130,11 +130,26 @@ async def _run_reflection_and_evolution(
 
 # ── Helper Functions ──
 
+# 对话姿态提示：由前端模式选择器选中项决定，注入到 system prompt 前部。
+# goal = 主流「目标姿态」，聚焦"这次要达成什么、怎么算成功"；
+# plan = 「计划/方案姿态」，强调先给方案与影响面、批准后再动手。
+_WORKFLOW_MODE_PROMPTS = {
+    "goal": (
+        "本会话处于「目标」姿态：请始终把用户这一次要达成的目标放在第一位，"
+        "主动澄清并锁定『达成什么、怎么算成功』，执行围绕该目标收敛，避免被枝叶问题带偏。"
+    ),
+    "plan": (
+        "本会话处于「计划」姿态：请先给出解决方案与影响面评估，"
+        "在用户明确批准前不要直接动手更改环境；如需读取/调研以支撑方案，可正常进行。"
+    ),
+}
+
 def _build_agent_system_prompt(
     req: "AgentRunRequest",
     profile_text: str,
     is_conversation_task: bool,
     is_change: Optional[bool] = None,
+    goal_text: str = "",
 ) -> str:
     """构建 Agent 系统提示
 
@@ -147,6 +162,11 @@ def _build_agent_system_prompt(
             裁剪；空串不注入
         is_change: 任务是否可能改变目标机状态。None 表示未做意图识别，
             此时按"变更"处理 —— 方向性取舍见下方注释。
+        goal_text: 会话当前工作流阶段注入段（含当前阶段与相应工件），空串不注入。
+            紧跟角色设定插入：目标是「任务目的」，与角色同属身份层，放最靠前
+            以获得最高注意力；环境事实、用户 prompt 等方法层信息排其后。
+            对话型任务同样注入 —— 用户一旦声明目标即为全程约束，纪律第 4 条
+            处理的正是「新要求与目标冲突」，纯问答场景同样适用。
     """
     from prompts import MODE_PROMPTS, OPS_METHOD_CHANGE, OPS_METHOD_READONLY
 
@@ -161,6 +181,13 @@ def _build_agent_system_prompt(
     parts = [time_injection]
     if mode_prompt:
         parts.append(mode_prompt)
+    # 对话姿态：由前端模式选择器决定（goal=聚焦目标 / plan=先方案后动手）。
+    # 仅对非纯对话型任务注入（纯问答不需要方法论姿态），缺省 goal 不改变既有行为。
+    if not is_conversation_task:
+        parts.append(_WORKFLOW_MODE_PROMPTS.get(req.workflow_mode, ""))
+    # 会话目标：每轮 run 都复现，是「目标不漂移」的主手段
+    if goal_text:
+        parts.append(goal_text)
     # 画像块：常驻的已知事实（用户偏好 / 操作规则 / 目标机环境），让"这是台什么机器、
     # 用户要什么"先于任何命令生成进入上下文，避免模型凭训练数据印象对 Ubuntu 发 yum。
     # 无 SSH 会话时主机块文案会显式声明"运维工具不在本机执行"。
@@ -240,6 +267,22 @@ def _build_agent_system_prompt(
         )
 
     return "\n\n".join(parts)
+
+
+def _load_active_goal_text(conversation_id: str) -> str:
+    """读取会话当前工作流阶段（Spec/Plan/Goal）并渲染为注入文本，无内容一律返回空串。
+
+    调用方在 async 上下文里经 asyncio.to_thread 执行。注入是增强项，
+    任何失败都必须降级为空串，绝不让它把整轮对话拖垮（500 / run 起不来）。
+    """
+    if not conversation_id:
+        return ""
+    try:
+        from agent.workflow import hydrate_for_session
+        return hydrate_for_session(conversation_id)
+    except Exception as e:
+        logger.warning("读取会话工作流阶段失败（跳过注入）: %s", e)
+        return ""
 
 
 def _load_evolved_config(evolution_mgr: "EvolutionEngine", mode: str) -> Optional[dict]:
@@ -349,6 +392,18 @@ class AgentRunRequest(BaseModel):
     # C-review M10：成本/token 硬熔断（None=内置默认 $2/3M tokens；0=禁用；>0=自定义）
     max_cost_usd: Optional[float] = Field(None, ge=0, description="累计成本上限（USD），超出即终止 run")
     max_total_tokens: Optional[int] = Field(None, ge=0, description="累计 token 上限，超出即终止 run")
+    # 权限模式。值域用 Literal 校验，与 mode / environment 同惯例：
+    # 非法值 → 422，不会静默退化成普通模式（那会让"以为开了"与"实际可写"
+    # 之间出现落差）。默认 "normal" —— 既有前端不传该字段时行为完全不变。
+    # "plan" 时 reins.plan_mode 强制只读：写工具与写命令一律拒绝，只允许调研
+    # 与产出计划本身（对齐 Claude Code 的 permission modes）。
+    # "auto" 时 reins.auto_approve 在弹审批卡前先让模型裁决一次：ALLOW 放行
+    # （审计记 auto_allowed），超时/异常/存疑一律照旧弹卡问用户（fail-closed）。
+    # prod 预授权强化与 hardline 阻断不受该档影响。
+    permission_mode: Literal["normal", "auto", "plan"] = "normal"
+    # 对话姿态（goal/plan 单选，来自前端模式选择器）。驱动 _build_agent_system_prompt
+    # 注入对应的姿态前缀；缺省 "goal" —— 既有前端不传该字段时与之前一致。
+    workflow_mode: Literal["goal", "plan"] = "goal"
 
 
 # ── Routes ──
@@ -629,6 +684,10 @@ async def agent_run(req: AgentRunRequest, request: Request):
         # 否则"工具不在本机执行""先探测再假设"这两条安全提示会整体消失。
         profile_text = profile_text or host_profile_text
 
+    # 会话目标：用户声明的结构化目标随每轮 run 复现（防漂移的主手段）。查询走
+    # to_thread（与其它 db 访问一致），失败/无目标降级为空串，不影响 run。
+    goal_text = await asyncio.to_thread(_load_active_goal_text, req.conversation_id or "")
+
     # M3 修复：提取 system prompt 构建为独立函数
     final_system_prompt = _build_agent_system_prompt(
         req,
@@ -636,6 +695,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
         is_conversation_task,
         # pre_intention 为 None 表示本次未做意图识别（enable_intention_guide=False）
         is_change=pre_intention.is_change if pre_intention else None,
+        goal_text=goal_text,
     )
 
     # 应用演化配置（仅覆盖用户未显式传入的字段）
@@ -786,6 +846,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     run_id=run_id,
                     skill_ids=req.skill_ids,
                     auto_skill_match=req.auto_skill_match,
+                    permission_mode=req.permission_mode,
                 ):
                     # M2 修复：检测客户端断连后立即停止 producer，避免空转浪费算力
                     if await request.is_disconnected():

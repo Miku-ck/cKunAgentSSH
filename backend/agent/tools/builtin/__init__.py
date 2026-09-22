@@ -53,6 +53,12 @@ from agent.tools.builtin.memory_tools import (
     MemoryInvalidateTool,
     BlockUpdateTool,
 )
+# Spec/Plan/Goal 三阶段工作流（文档落盘，非 runbook）
+from agent.tools.builtin.workflow_tools import (
+    SpecWriteTool,
+    PlanWriteTool,
+    GoalWriteTool,
+)
 
 _ALL_TOOL_CLASSES: list[type[BaseTool]] = [
     ShellExecTool,
@@ -84,6 +90,10 @@ _ALL_TOOL_CLASSES: list[type[BaseTool]] = [
     MemoryAddTool,
     MemoryInvalidateTool,
     BlockUpdateTool,
+    # Spec/Plan/Goal 三阶段工作流
+    SpecWriteTool,
+    PlanWriteTool,
+    GoalWriteTool,
 ]
 
 

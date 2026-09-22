@@ -52,6 +52,8 @@ import ChatPanel from '@/components/settings/panels/ChatPanel.vue'
 import AppearancePanel from '@/components/settings/panels/AppearancePanel.vue'
 import SkillsPanel from '@/components/settings/panels/SkillsPanel.vue'
 import AgentPanel from '@/components/settings/panels/AgentPanel.vue'
+import MemoryPanel from '@/components/settings/panels/MemoryPanel.vue'
+import OpsPanel from '@/components/settings/panels/OpsPanel.vue'
 
 // 导航图标（自绘 SVG 组件）
 const IconModels = markRaw({
@@ -69,6 +71,12 @@ const IconAgent = markRaw({
 const IconSkills = markRaw({
   template: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 4.1 4.6.6-3.4 3.2.9 4.6L12 13.9 7.9 15.5l.9-4.6L5.5 7.7l4.6-.6z"/><path d="M6 19h12"/></svg>`,
 })
+const IconMemory = markRaw({
+  template: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3a3 3 0 0 0-3 3v1a3 3 0 0 0-3 3v2a3 3 0 0 0 3 3v1a3 3 0 0 0 3 3h1a3 3 0 0 0 3-3V6a3 3 0 0 0-3-3H9z"/><path d="M15 3a3 3 0 0 1 3 3v1a3 3 0 0 1 3 3v2a3 3 0 0 1-3 3v1a3 3 0 0 1-3 3h-1a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3h1z"/></svg>`,
+})
+const IconOps = markRaw({
+  template: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg>`,
+})
 
 const visible = ref(false)
 const activeCategory = ref<SettingCategory>('models')
@@ -79,6 +87,8 @@ const categories: { id: SettingCategory; label: string; icon: Component }[] = [
   { id: 'appearance',     label: '外观',   icon: IconAppearance },
   { id: 'skills',         label: '技能',   icon: IconSkills },
   { id: 'agent',          label: 'Agent',  icon: IconAgent },
+  { id: 'memory',         label: '记忆',   icon: IconMemory },
+  { id: 'ops',            label: '运维',   icon: IconOps },
 ]
 
 const panelMap: Record<SettingCategory, Component> = {
@@ -87,6 +97,8 @@ const panelMap: Record<SettingCategory, Component> = {
   appearance:     markRaw(AppearancePanel),
   skills:         markRaw(SkillsPanel),
   agent:          markRaw(AgentPanel),
+  memory:         markRaw(MemoryPanel),
+  ops:            markRaw(OpsPanel),
 }
 
 const currentPanel = computed(() => panelMap[activeCategory.value])
@@ -100,7 +112,7 @@ function close() {
   visible.value = false
 }
 
-// Esc 关闭（bubble 阶段，让内层弹窗 MemoryPanel/AccountPanel 等优先处理 Esc；
+// Esc 关闭（bubble 阶段，让内层弹窗优先处理 Esc；
 // 内层若调 e.stopPropagation() 可阻止外层 SettingsDialog 关闭）
 let keyHandler: ((e: KeyboardEvent) => void) | null = null
 watch(visible, (v) => {

@@ -20,6 +20,7 @@
 import { computed, ref, watch } from 'vue'
 import { useAgentStore, type PermissionRequest } from '@/stores/agent'
 import { useSSHStore } from '@/stores/ssh'
+import { useSettingsStore } from '@/stores/settings'
 import { agentApi } from '@/api/client'
 import { useToastStore } from '@/stores/toast'
 import ClarifyingWizard from './ClarifyingWizard.vue'
@@ -135,6 +136,8 @@ const deliveredProbe = computed(
 
 // ── 单一焦点审批队列（spec refactor-approval-center） ──
 const pendingPerms = computed(() => agentStore.pendingPermissions)
+/** E5：prod 专属警示的总开关（设置 → Agent 治理 → 运维策略） */
+const prodConfirmOn = computed(() => useSettingsStore().settings.agent.prodConfirm)
 /** 超时保留项（追溯区） */
 const expiredPerms = computed(() => agentStore.expiredPermissions)
 /** 已解决（已授权/已拒绝）项（追溯区） */
@@ -301,7 +304,9 @@ const latestHelp = computed(() =>
         </div>
         <div class="ap-body">
           <!-- 阅读顺序：我要做的事 → 后果 → 目标机器 -->
-          <div v-if="focusPerm.environment === 'prod'" class="ap-prod-warn">
+          <!-- E5：prod 提示受「生产环境额外确认」开关控制。关掉只是不再多问一句，
+               风险判定本身（dangerous 审批 / prod 预授权 allowlist / hardline 阻断）不受影响 -->
+          <div v-if="focusPerm.environment === 'prod' && prodConfirmOn" class="ap-prod-warn">
             目标为生产环境主机，误操作影响线上业务，请格外确认后再授权。
           </div>
           <div v-if="focusPerm.task" class="ap-keyval" :title="focusPerm.task">

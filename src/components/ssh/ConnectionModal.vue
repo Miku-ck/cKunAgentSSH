@@ -121,6 +121,9 @@
             <div class="env-hint" v-if="form.environment === 'prod'">
               [注意] 生产环境:危险命令仅接受预授权 allowlist 放行,不再临时弹窗审批。
             </div>
+            <div class="env-hint" v-else-if="!isEdit">
+              新建连接的默认环境取自「设置 → Agent 治理 → 运维策略」,此处仍可按单机实际情况改。
+            </div>
           </div>
         </div>
 
@@ -185,6 +188,7 @@ import { ref, reactive, watch, onMounted, onUnmounted } from 'vue'
 import NoteInput from './NoteInput.vue'
 import { useSSHStore } from '@/stores/ssh'
 import type { SSHConnection } from '@/stores/ssh'
+import { useSettingsStore } from '@/stores/settings'
 import { useConfirm } from '@/composables/useConfirm'
 import { toFriendlyMessage } from '@/api/client'
 
@@ -198,6 +202,7 @@ const emit = defineEmits<{
 }>()
 
 const store = useSSHStore()
+const settingsStore = useSettingsStore()
 const { confirm } = useConfirm()
 
 const isEdit = !!props.editData
@@ -221,7 +226,9 @@ const form = reactive({
   // 备注(单条字符串,最多 10 个字). 兼容旧数据:从 tags 数组中取第一个非空值
   note: props.editData?.note ?? ((props.editData?.tags || [])[0] || ''),
   // 目标环境标记:生产环境危险命令将被强制要求预授权 allowlist
-  environment: (props.editData?.environment || 'test') as 'test' | 'prod',
+  // 新建时取「设置 → Agent 治理 → 运维策略」的默认环境（E4）；编辑已有连接
+  // 仍以该条已存的标记为准，否则改默认值会静默重写历史归类。
+  environment: (props.editData?.environment || settingsStore.settings.agent.defaultEnvironment) as 'test' | 'prod',
   // 回显用 != null 而非真值判断：已存的 0（关闭心跳）不能被显示成默认 10，
   // 否则用户看到「10」再保存，把显式配置覆盖回去
   readyTimeout: props.editData?.readyTimeout != null ? Math.round(props.editData.readyTimeout / 1000) : 15,

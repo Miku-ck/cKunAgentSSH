@@ -288,6 +288,51 @@ export interface ModelConfigPayload {
   max_output_tokens?: number
   reasoning_tokens?: number
   top_p?: number
+  is_default_ssh?: boolean
+}
+
+/** GET /settings/http 的回读形状：proxy 只有脱敏形态，且反映的是"生效"策略（含 env 兜底） */
+export interface HttpSettings {
+  proxy_url_masked: string
+  proxy_url_set: boolean
+  proxy_source: 'db' | 'env' | ''
+  timeout_seconds: number
+  retry_count: number
+}
+
+export interface HttpSettingsPayload {
+  /**
+   * 三字段都是"传了才改"：代理明文只单向写入、读回永远脱敏，所以只改超时/重试时
+   * 不能把代理字段一起带上 —— 带空串等于清除，带脱敏值会把口令抹掉。
+   */
+  proxy_url?: string
+  /** 0 = 不覆盖，各调用点沿用自己的原默认超时 */
+  timeout_seconds?: number
+  retry_count?: number
+}
+
+export type LogLevel = 'debug' | 'info' | 'warning' | 'error' | 'critical'
+
+export interface LogLevelSettings {
+  level: LogLevel
+  levels: LogLevel[]
+}
+
+/** GET /settings/diagnostics —— 只读快照，密钥/代理已在后端脱敏 */
+export interface DiagnosticsSnapshot {
+  backend: { version: string; python: string; platform: string; pid: number }
+  database: { path: string; size_bytes: number | null; counts: Record<string, number> }
+  logging: LogLevelSettings
+  http: {
+    proxy: string
+    proxy_set: boolean
+    timeout_seconds: number
+    retry_count: number
+  }
+  tick: { running: boolean; last_result: Record<string, unknown> | null }
+  bridge: { connected: boolean; present: boolean }
+  permissions: { ttl_hours: number; permanent_entries: number | null }
+  app_settings: Record<string, string>
 }
 
 export interface Skill {
@@ -305,6 +350,31 @@ export interface Skill {
   mode_enabled?: boolean
   created_at: string
   updated_at: string
+}
+
+// ── 会话工作流（Spec/Plan/Goal）──
+// 三阶段工作流：spec（规格）→ plan（计划）→ goal（成功标准/执行锚），产物为
+// 会话目录下 spec.md / plan.md / goal.md，由 agent 用 spec_write/plan_write/
+// goal_write 工具维护，前端只做只读展示（三段指示条）。无写接口。
+export interface WorkflowSnapshot {
+  /** 当前阶段：''(无) / spec / plan / goal */
+  phase: string
+  spec: string
+  plan: string
+  goal: string
+}
+
+/** Spec/Plan/Goal 工作流只读 API —— 对接 backend/routes/workflow.py */
+export const workflowApi = {
+  /** 读取某会话工作流阶段与三份工件；无会话/无工件返回空字符串字段（不是 404） */
+  read: (conversationId: string) => {
+    const q = new URLSearchParams()
+    if (conversationId) q.set('conversation_id', conversationId)
+    return request<WorkflowSnapshot>(`/workflow?${q.toString()}`)
+  },
+
+  /** 列出所有有工件的会话 ID（导航条按会话展示用） */
+  phases: () => request<{ conversation_ids: string[] }>(`/workflow/phases`),
 }
 
 export const api = {
@@ -348,6 +418,15 @@ export const api = {
 
   getDefaultModel: (mode?: string) =>
     request<{ id: string; name?: string; model_id?: string }>(`/settings/models/default${mode ? `?mode=${mode}` : ''}`),
+
+  // 后端路由：PATCH /settings/models/default?model_id=...&mode=...（两个参数都是 query）
+  // 顺序敏感：FastAPI 中 /models/default 注册在 /models/{config_id} 之前，别改成 path 参数
+  setDefaultModel: (modelId: string, mode: 'ssh' = 'ssh') => {
+    const q = new URLSearchParams({ model_id: modelId, mode })
+    return request<{ default: string; mode: string }>(`/settings/models/default?${q.toString()}`, {
+      method: 'PATCH',
+    })
+  },
 
   createModelConfig: (payload: ModelConfigPayload) =>
     request<ModelConfig>('/settings/models', {
@@ -416,6 +495,41 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(payload),
     }),
+
+  // E3：审批授权保留时长（写入后端即时对 PermissionGate 生效，无需重启）
+  getPermissionPolicy: () =>
+    request<{ allowlist_ttl_hours: number }>('/settings/permission-policy'),
+
+  updatePermissionPolicy: (payload: { allowlist_ttl_hours: number }) =>
+    request<{ allowlist_ttl_hours: number }>('/settings/permission-policy', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+
+  // 运维策略：出站代理 / 超时 / 重试 / 日志级别 / 诊断快照
+
+  getHttpSettings: () => request<HttpSettings>('/settings/http'),
+
+  /**
+   * PUT /settings/http — 代理只在写入时单向传明文，读回永远脱敏。
+   * 后端返回的 clients_rebuilt 是这次被丢弃重建的 LLM 客户端数（代理改完仍直连
+   * 是因为连接池在建 client 时固化，不重建要等重启）。
+   */
+  updateHttpSettings: (payload: HttpSettingsPayload) =>
+    request<HttpSettings & { clients_rebuilt: number }>('/settings/http', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+
+  getLogLevel: () => request<LogLevelSettings>('/settings/log-level'),
+
+  updateLogLevel: (level: LogLevel) =>
+    request<LogLevelSettings>('/settings/log-level', {
+      method: 'PUT',
+      body: JSON.stringify({ level }),
+    }),
+
+  getDiagnostics: () => request<DiagnosticsSnapshot>('/settings/diagnostics'),
 
   testModelConnection: async (id: string): Promise<{ status: 'ok'; latency_ms: number; model_name?: string } | { status: 'error'; detail: string; model_name?: string }> => {
     try {
@@ -685,6 +799,8 @@ export interface StreamAgentOptions {
   enableTools?: boolean
   maxIterations?: number
   enableDynamicBudget?: boolean
+  /** E1：意图识别 + 思考预算控制，关闭 = 降级为无规划阶段 / 无引导语注入 */
+  enableIntentionGuide?: boolean
   /** 成本熔断上限（USD），不传 = 后端默认 */
   maxCostUsd?: number
   /** token 熔断上限，不传 = 后端默认 */
@@ -696,6 +812,16 @@ export interface StreamAgentOptions {
   contextWindow?: number
   visibleTerminal?: boolean
   sessionType?: 'local' | 'remote'
+  /** 对话姿态（goal/plan）—— 后端据此注入对应的姿态 system prompt */
+  workflowMode?: 'goal' | 'plan'
+  /**
+   * 权限模式（normal=手动审批 / auto=模型代判 / plan=只读强制）。
+   * 'plan' 必须与 workflowMode **成对**下发：只发姿态提示词时，用户以为进了
+   * 计划模式，写操作却照样执行（「亮的空开关」）。
+   * 'auto' 仅放宽审批卡的「谁来点头」那一维（fail-closed 在后端裁决器），
+   * 不越过 hardline / prod 预授权 / 用户拒绝记忆任何一条边界。缺省 normal。
+   */
+  permissionMode?: 'normal' | 'auto' | 'plan'
   onEvent: (event: AgentSSEEvent) => void
   onError: (error: string) => void
   onDone: () => void
@@ -729,6 +855,7 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
           enable_tools: options.enableTools ?? true,
           max_iterations: options.maxIterations ?? 100,
           enable_dynamic_budget: options.enableDynamicBudget ?? true,
+          enable_intention_guide: options.enableIntentionGuide ?? true,
           ...(options.maxCostUsd ? { max_cost_usd: options.maxCostUsd } : {}),
           ...(options.maxTotalTokens ? { max_total_tokens: options.maxTotalTokens } : {}),
           skill_ids: options.skillIds || [],
@@ -736,6 +863,8 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
           context_window: options.contextWindow ?? 20,
           visible_terminal: options.visibleTerminal ?? false,
           session_type: options.sessionType,
+          workflow_mode: options.workflowMode ?? 'goal',
+          permission_mode: options.permissionMode ?? 'normal',
         }),
         signal: abortController.signal,
       })
@@ -860,29 +989,13 @@ export interface SafetyClassifyResult {
   explain: string
 }
 
-/**
- * 记忆设置（v2）：字段与后端 MemorySettingsRequest 一一对应。
- *
- * 旧 memory.strategy 是死配置（全库无读取方，沉淀时机由后台对账 job 决定），
- * 已随 v2 重构删除；预算账户由后端按模型窗口夹取（agent/memory/budget.py），
- * 这里的值只是期望上限。
- */
-export interface MemorySettings {
-  enabled: boolean
-  max_items: number
-  inject_budget_tokens: number
-  blocks_budget_tokens: number
-  search_timeout_s: number
-  reconcile_llm_enabled: boolean
-}
-
 export const agentApi = {
   // 记忆设置
   getMemorySettings: () =>
-    request<MemorySettings>('/settings/memory'),
+    request<{ enabled: boolean; strategy: string; max_items: number }>('/settings/memory'),
 
-  updateMemorySettings: (data: MemorySettings) =>
-    request<MemorySettings>('/settings/memory', {
+  updateMemorySettings: (data: { enabled: boolean; strategy: string; max_items: number }) =>
+    request<{ enabled: boolean; strategy: string; max_items: number }>('/settings/memory', {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
@@ -1046,7 +1159,19 @@ export interface AgentToolInfo {
 export interface AgentToolsResponse { mode: string; tools: AgentToolInfo[] }
 
 /** GET /agent/permission/list 永久授权键集合（"tool" 或 "tool:cmdhash"） */
-export interface PermissionListResponse { tools: string[] }
+export interface PermissionListResponse {
+  tools: string[]
+  /** E3：逐条授予/到期时间（epoch 秒）。expires_at=null = 该条永不过期 */
+  entries?: { key: string; granted_at: number | null; expires_at: number | null }[]
+  /** 当前生效的保留时长（小时）；0 = 永久 */
+  ttl_hours?: number
+}
+
+/** GET/PUT /settings/permission-policy — 审批授权策略（E3） */
+export interface PermissionPolicy {
+  /** 永久授权保留时长（小时）；0 = 永不过期（默认，即引入 TTL 前的行为） */
+  allowlist_ttl_hours: number
+}
 
 /** POST /agent/permission/release-run/{run_id} — 清理某次 run 的全部 once 授权 */
 export interface ReleaseRunResponse { run_id: string; released: number }
@@ -1319,3 +1444,7 @@ export const agentAdminApi = {
   getRunTrace: (runId: string) =>
     request<AgentRunTrace>(`/agent/runs/${encodeURIComponent(runId)}/trace`),
 }
+
+// ── Goal（实现目标）API 已移除 ──
+// 旧 goalApi/goalsApi（目标 CRUD + goal_progress SSE）随 runbook 重构移除，
+// 由上方 workflowApi（Spec/Plan/Goal 只读）取代。

@@ -15,7 +15,7 @@ ReAct 决策循环的执行者 — THINK → ACT → OBSERVE → THINK → ... �
 from __future__ import annotations
 
 import logging
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Optional
 
 from .contracts import (
     LLMOutput,
@@ -294,6 +294,29 @@ class Driver:
 
             # ── 判断是否结束 ──
             if not llm_out.tool_calls:
+                # goal 验收锚：agent 声称完成（不再调工具）时，先对照成功标准自检一轮。
+                # 已有 goal 且本次 run 尚未自检 → 注入自检提示并 continue（下一轮 agent
+                # 必须给出「已达成/未达成」结论；未达成则继续）。自检过或本无 goal → 正常收尾。
+                goal_text = ctx.metadata.get("_goal_text", "")
+                if ctx.conversation_id and not goal_text:
+                    # driver 不依赖预注入：收尾时才读一次 goal 原文（文件 I/O 只在
+                    # 需要自检的这一刻发生，不进每轮热路径）。读取失败保持空串 → 走原收尾。
+                    try:
+                        from agent.workflow import read_artifacts
+                        goal_text = read_artifacts(ctx.conversation_id)["goal"]
+                        ctx.metadata["_goal_text"] = goal_text
+                    except Exception:
+                        goal_text = ""
+                if goal_text and not ctx.metadata.get("_goal_self_checked"):
+                    ctx.metadata["_goal_self_checked"] = True
+                    try:
+                        from agent.workflow import goal_self_check_prompt
+                        self_check = goal_self_check_prompt(goal_text)
+                    except Exception:
+                        self_check = ""
+                    if self_check:
+                        ctx.messages.append({"role": "user", "content": self_check})
+                        continue
                 await ctx.transition(State.COMPLETED, event="done")
                 break
 
@@ -823,6 +846,15 @@ class Driver:
                 # spec §8：run 内滚动摘要随 done 出栈，由 routes 落到 agent_runs 行，
                 # 否则摘要随 ctx 一起消亡，轨迹回放与 episodic job 都拿不到
                 "context_summary": ctx.metadata.get("context_summary") or "",
+                # goal 验收闭环：随 done 透出本 run 的目标状态，闭环信息才可见。
+                # goal_text=目标原文（无目标为空）；self_checked=收尾时是否做过「对照
+                # 成功标准自检」；acknowledged=agent 最终文本是否显式承认"全部达成"
+                # （仅关键词粗判，供前端提示；未检出置 None，不强断成败）。
+                "workflow_goal": {
+                    "goal_text": ctx.metadata.get("_goal_text", ""),
+                    "self_checked": bool(ctx.metadata.get("_goal_self_checked")),
+                    "acknowledged": _goal_acknowledged(full_content),
+                },
             },
         )
         await telemetry.emit(done_event)
@@ -835,6 +867,34 @@ class Driver:
 _FILE_MUTATION_TOOLS = frozenset({
     "file_write", "file_edit",
 })
+
+
+def _goal_acknowledged(content: str) -> Optional[bool]:
+    """粗判 agent 最终文本是否显式承认目标「全部达成」。
+
+    仅做关键词规约，供 done 事件的 workflow_goal.acknowledged 提示用，**不**作为
+    收尾成败的强判据：
+      - 命中明确达成措辞（已全部达成/目标已实现/成功标准均已满足 等）→ True
+      - 命中明确未达成措辞（尚未达成/仍有未满足/部分达成/还差 等）→ False
+      - 均未命中（含糊或无关内容，如未设目标的普通对话）→ None
+    """
+    if not content:
+        return None
+    text = content.strip()
+    achieved = (
+        "全部达成" in text or "全部满足" in text or "均已满足" in text
+        or "目标已实现" in text
+        or "已全部完成" in text or "已实现目标" in text or "达成目标" in text
+    )
+    not_achieved = (
+        "未达成" in text or "尚未达成" in text or "部分达成" in text
+        or "仍有未满足" in text or "未完全达成" in text or "未能达成" in text
+    )
+    if achieved and not not_achieved:
+        return True
+    if not_achieved and not achieved:
+        return False
+    return None
 
 
 def _build_run_summary(ctx: RunContext) -> str:

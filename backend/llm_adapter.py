@@ -8,12 +8,13 @@ LLM 适配器 — OpenAI 兼容异步流式客户端
 """
 import json
 import logging
-import httpx
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import AsyncGenerator
 
 import openai
+
+import netconfig
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,12 @@ def _normalize_system_first(messages: list[dict]) -> list[dict]:
 
 
 async def _get_client(base_url: str, api_key: str) -> openai.AsyncOpenAI:
-    """获取共享的 AsyncOpenAI 客户端（LRU 缓存，最多保留 _CLIENT_CACHE_MAX 个）"""
+    """获取共享的 AsyncOpenAI 客户端（LRU 缓存，最多保留 _CLIENT_CACHE_MAX 个）
+
+    代理/超时/重试来自 netconfig（G4/G5）。缓存键**刻意**保持 (base_url, api_key)：
+    它同时是 _client_in_flight 的键，改成带策略指纹的元组会让在途计数与客户端
+    错位（见 MINOR-2 那段教训）。策略变更走 invalidate_client_cache() 显式重建。
+    """
     key = (base_url, api_key or "EMPTY")
     client = _client_cache.get(key)
     if client is not None:
@@ -71,7 +77,11 @@ async def _get_client(base_url: str, api_key: str) -> openai.AsyncOpenAI:
         api_key=api_key or "EMPTY",
         base_url=base_url,
         # 修复：分别配置连接超时和读取超时，流式输出时读取超时可能过短
-        timeout=httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0),
+        # openai SDK 会按每请求覆盖 httpx 客户端的默认超时，所以超时必须显式传
+        timeout=netconfig.http_timeout(netconfig.LLM_TIMEOUT_DEFAULT),
+        # 用户未设超时时 = SDK 默认 1 次重试，与原行为一致
+        max_retries=netconfig.retry_count(),
+        http_client=netconfig.proxy_http_client(),
     )
     _client_cache[key] = client
     # 超容量时淘汰最久未使用的
@@ -97,6 +107,30 @@ async def _get_client(base_url: str, api_key: str) -> openai.AsyncOpenAI:
                 pass  # 关闭失败时依赖 GC 回收
             _client_in_flight.pop(evicted_key, None)
     return client
+
+
+async def invalidate_client_cache() -> dict:
+    """HTTP 策略（代理/超时/重试）变更后调用：丢弃已缓存客户端，下次请求按新策略重建。
+
+    仍有在途流的客户端只从缓存摘除、不 aclose —— aclose 会掐断正在跑的流
+    （与 LRU 淘汰同一条规则）；其连接池由该请求的 finally 递减后交给 GC。
+    """
+    stale = list(_client_cache.items())
+    _client_cache.clear()
+    closed = 0
+    deferred = 0
+    for key, client in stale:
+        if _client_in_flight.get(key, 0) > 0:
+            deferred += 1
+            continue
+        try:
+            if hasattr(client, "_client") and hasattr(client._client, "aclose"):
+                await client._client.aclose()
+                closed += 1
+        except Exception:
+            pass  # 关闭失败依赖 GC 回收，不能让设置写入失败
+        _client_in_flight.pop(key, None)
+    return {"dropped": len(stale), "closed": closed, "in_flight_deferred": deferred}
 
 
 @dataclass

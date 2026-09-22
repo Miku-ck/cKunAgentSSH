@@ -356,6 +356,8 @@ async function load(silent = false) {
     const rows = await scheduleApi.list()
     // 只有最新一次响应能覆盖列表：慢的旧响应会把刚删除/刚改过的行还原成旧快照
     if (seq !== _loadSeq) return
+    // 先比对再覆盖：否则基线永远是新值，转态通知一次也发不出
+    notifyTransitions(items.value, rows)
     items.value = rows
     error.value = ''
   } catch (e) {
@@ -363,6 +365,32 @@ async function load(silent = false) {
     error.value = toFriendlyMessage(e, '巡检任务加载失败')
   } finally {
     if (!silent && seq === _loadSeq) loading.value = false
+  }
+}
+
+/**
+ * 轮询到 last_status 转态时补一条桌面通知（G8）。后台调度器触发的执行没有前端
+ * 动作可挂靠，列表轮询是唯一能看到它进展的地方。
+ *   · 基线 = 上一次列表；首次加载（旧列表为空）只建基线不通知，
+ *     否则每次打开页面都会把存量 completed 历史重播一遍。
+ *   · 只对"有结果"的状态发：pending/running 是过程态，停用中的任务不算转态。
+ *   · 是否真弹由主进程判定（总开关 + 窗口是否聚焦 + 系统支持），这里只管发。
+ */
+const NOTICE_BODIES: Record<string, string> = {
+  completed: '执行完毕',
+  failed: '执行失败，可在历史里查看',
+  waiting_permission: '有需要审批的命令',
+}
+
+function notifyTransitions(prev: ScheduleRecord[], next: ScheduleRecord[]) {
+  const api = window.electronAPI
+  if (!api?.notifyDesktop || prev.length === 0) return
+  for (const s of next) {
+    const before = prev.find((p) => p.id === s.id)
+    if (!before || !s.enabled) continue
+    const body = NOTICE_BODIES[s.last_status]
+    if (!body || s.last_status === before.last_status) continue
+    void api.notifyDesktop(`定时任务 · ${s.name}`, body)
   }
 }
 

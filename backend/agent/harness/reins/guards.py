@@ -12,6 +12,7 @@ from agent.audit import append_record_async
 from ..command_explain import explain_for_reason, maybe_explain_via_llm
 from ..contracts import ReinDecision, ReinPoint, RunContext, TraceEvent
 from ..safety import classify_command, classify_constructed_command
+from .auto_approve import try_auto_approve
 from .core import (
     _PERMISSION_APPROVAL_FALLBACK_S,
     _audit_target_id,
@@ -173,6 +174,18 @@ class FilesystemGuard:
                         tool, args, risk="dangerous", conversation_id=ctx.conversation_id,
                         run_id=ctx.run_id, bound_command=bound)
                     if not allowed:
+                        # 自动审批（permission_mode="auto"）：弹卡前先让模型裁决一次，
+                        # ALLOW 放行 / 其余照旧弹卡（fail-closed，见 auto_approve 模块）。
+                        # 位置约束：① 在 pending 记账之前 —— 放行不该留半张等待签名；
+                        # ② 在 is_denied 兜底之前先做同一检查 —— 用户明确拒绝过的命令
+                        # 不能被模型翻案，用户否决永远高于裁决。
+                        if not self.permission_gate.is_denied(
+                                tool, str(cmd) if cmd else None, ctx.run_id):
+                            decision = await try_auto_approve(
+                                ctx, tool, args, reason or "",
+                                bound_command=str(cmd or ""))
+                            if decision is not None:
+                                return decision
                         # C-review M7：审批等待三态处理（无审批超时、重发被循环检测
                         # 抢截、授权卡片孤儿的问题由此修复）
                         # 重构：审批不再设 120s 短超时 — 未授权签名保持等待至

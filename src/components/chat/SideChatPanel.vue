@@ -9,13 +9,12 @@
       <span class="panel-title">{{ panelTitle }}</span>
       <div class="header-spacer"></div>
       <div class="header-actions">
-        <slot name="header-actions-extra"></slot>
-        <button class="icon-btn" title="历史记录" aria-label="历史记录" @click="showHistoryPanel = !showHistoryPanel">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-        </button>
         <button class="icon-btn" :class="{ loading: props.creating }" :title="props.creating ? '创建中...' : '新建对话'" :aria-label="props.creating ? '创建中...' : '新建对话'" :disabled="props.creating" @click="$emit('new-chat')">
           <svg v-if="!props.creating" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           <svg v-else class="spinner" viewBox="0 0 24 24" fill="none" width="14" height="14"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.25"/><path d="M22 12a10 10 0 0 0-10-10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+        </button>
+        <button class="icon-btn" title="历史记录" aria-label="历史记录" @click="showHistoryPanel = !showHistoryPanel">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
         </button>
         <button class="icon-btn" title="关闭面板" aria-label="关闭面板" @click="$emit('close')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -77,30 +76,8 @@
         <!-- 上下文标签插槽（会话附加信息，可选） -->
         <slot name="input-prefix"></slot>
 
-        <!-- 已附加能力（+ 号菜单选中项）—— 目前仅前端态，后端接入前不参与发送 -->
-        <div v-if="activeCaps.length > 0" class="cap-tags">
-          <span v-for="cap in activeCaps" :key="cap" class="tag-cap">
-            <svg v-if="cap === 'goal'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="9" height="9">
-              <circle cx="12" cy="12" r="8"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>
-            </svg>
-            <svg v-else-if="cap === 'plan'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="9" height="9">
-              <path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/><path d="M3 16h4"/><path d="M3 20h4"/>
-            </svg>
-            <svg v-else-if="cap === 'skill'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="9" height="9">
-              <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>
-            </svg>
-            <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="9" height="9">
-              <rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/>
-              <rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 17.5h7M17.5 14v7"/>
-            </svg>
-            {{ CAP_LABELS[cap] }}
-            <button class="tag-remove" :title="`移除${CAP_LABELS[cap]}`" :aria-label="`移除${CAP_LABELS[cap]}`" @click="pickCap(cap)">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="8" height="8">
-                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-              </svg>
-            </button>
-          </span>
-        </div>
+        <!-- 已附加能力（+ 号菜单选中项）—— 仅前端态，后端接入前不参与发送。
+             「目标」「计划」都是阶段姿态：切换后随下一次消息注入，不在此单独成块展示 -->
 
         <!-- 已选技能标签（与 Work 模式 ChatInput 风格一致） -->
         <div v-if="selectedSkillTags.length > 0" class="skill-tags">
@@ -195,19 +172,20 @@
               :aria-expanded="showPlusMenu"
               @click="togglePlusMenu"
             >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14">
                 <line x1="12" y1="5" x2="12" y2="19"/>
                 <line x1="5" y1="12" x2="19" y2="12"/>
               </svg>
             </button>
 
-            <div v-if="showPlusMenu" id="plus-menu" class="plus-menu" role="menu" aria-label="添加">
+            <div v-if="showPlusMenu" id="plus-menu" class="plus-menu" role="menu" aria-label="切换对话姿态">
               <button
                 class="menu-item"
-                :class="{ 'is-active': plusActiveIdx === 0, 'is-on': activeCaps.includes('goal') }"
-                role="menuitemcheckbox"
+                :class="{ 'is-active': plusActiveIdx === 0, 'is-selected': activeMode === 'goal', 'is-on': workflowPhase === 'goal' }"
+                role="menuitemradio"
+                :aria-checked="activeMode === 'goal'"
                 id="plus-opt-goal"
-                :aria-checked="activeCaps.includes('goal')"
+                title="目标姿态：让 AI 聚焦本次要达成什么、怎么算成功"
                 @click="pickCap('goal')"
                 @mouseenter="plusActiveIdx = 0"
               >
@@ -218,54 +196,63 @@
                   </svg>
                 </span>
                 <span class="mi-name">目标</span>
-                <span class="mi-desc">明确要达成什么</span>
+                <span class="mi-desc">达成什么、怎么算完成</span>
+                <span class="mi-check" :class="{ show: activeMode === 'goal' }">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="11" height="11"><polyline points="20 6 9 17 4 12"/></svg>
+                </span>
               </button>
 
+              <!-- 「计划」= 只读强制姿态的开关（qcode 形态：模式切换收进 + 菜单，
+                   工具条不再常驻 chip）。点亮态取当前姿态；审批下拉（手动/自动）
+                   是另一条轴，点亮计划时下拉休眠禁用，两处状态在 resolveRunModes 交汇。
+                   索引 1 与 CAP_KEYS 对齐 —— 此前 DOM 缺这一行但键盘导航仍会停在
+                   plus-opt-plan 上（aria-activedescendant 指向不存在的元素），恢复该行同时修好它。 -->
               <button
                 class="menu-item"
-                :class="{ 'is-active': plusActiveIdx === 1, 'is-on': activeCaps.includes('plan') }"
+                :class="{ 'is-active': plusActiveIdx === 1, 'is-on': isPlanMode }"
                 role="menuitemcheckbox"
+                :aria-checked="isPlanMode"
                 id="plus-opt-plan"
-                :aria-checked="activeCaps.includes('plan')"
+                :title="isPlanMode
+                  ? '计划模式已开启：只读调研，写操作会被直接拒绝。点击退出'
+                  : '计划模式：先只读调研并产出计划，批准后再动手'"
                 @click="pickCap('plan')"
                 @mouseenter="plusActiveIdx = 1"
               >
                 <span class="mi-ico">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13">
-                    <path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/>
-                    <path d="M3 16h4"/><path d="M3 20h4"/>
+                    <path d="m3 7 2 2 4-4"/>
+                    <path d="M13 6h8M13 12h8M13 18h8"/>
+                    <path d="M3 16h4M3 20h4"/>
                   </svg>
                 </span>
                 <span class="mi-name">计划</span>
-                <span class="mi-desc">先出方案再执行</span>
-              </button>
-
-              <button
-                class="menu-item"
-                :class="{ 'is-active': plusActiveIdx === 2, 'is-on': activeCaps.includes('skill') }"
-                role="menuitemcheckbox"
-                id="plus-opt-skill"
-                :aria-checked="activeCaps.includes('skill')"
-                @click="pickCap('skill')"
-                @mouseenter="plusActiveIdx = 2"
-              >
-                <span class="mi-ico">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13">
-                    <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>
-                  </svg>
+                <span class="mi-desc">先出方案再动手</span>
+                <span class="mi-check" :class="{ show: isPlanMode }">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="11" height="11"><polyline points="20 6 9 17 4 12"/></svg>
                 </span>
-                <span class="mi-name">技能</span>
-                <span class="mi-desc">调用已启用技能</span>
               </button>
 
+              <!-- 分组约定：带 › 的进「二级清单」（插件 / 技能），不带的直接改状态
+                   （目标 / 计划）。上一版这里是一条 .menu-divider 横线 —— 那是我按
+                   「任务层 / 能力层」自己推的分层；参考形态各行是**等距**的
+                   （行距一律 ~29px，无横线造成的突增），说明它靠尾标而非横线
+                   表达分组，故去掉横线、改由 › 承担，键盘顺序同步为视觉顺序。 -->
+
+              <!-- 插件：全仓没有任何插件清单与加载端（grep plugin 只命中本文件），
+                   故整行置灰且**不开**二级菜单 —— 不给 aria-haspopup，避免对读屏
+                   承诺一个打不开的菜单；也不挂 @mouseenter（disabled 元素本就不派发
+                   鼠标事件，且即便派发，键盘高亮也不该落到一个点不动的行上）。
+                   尾标保留 › 是把它归入「带清单的项」这一族，纯视觉归属；
+                   左边文案写明「尚未接入」，不做假启用。 -->
               <button
-                class="menu-item"
-                :class="{ 'is-active': plusActiveIdx === 3, 'is-on': activeCaps.includes('plugin') }"
-                role="menuitemcheckbox"
+                class="menu-item is-disabled"
+                :class="{ 'is-active': plusActiveIdx === 2 }"
+                role="menuitem"
                 id="plus-opt-plugin"
-                :aria-checked="activeCaps.includes('plugin')"
-                @click="pickCap('plugin')"
-                @mouseenter="plusActiveIdx = 3"
+                aria-disabled="true"
+                disabled
+                title="插件尚未接入：全仓没有插件清单与加载端，此处只保留入口位"
               >
                 <span class="mi-ico">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13">
@@ -276,7 +263,34 @@
                   </svg>
                 </span>
                 <span class="mi-name">插件</span>
-                <span class="mi-desc">连接 MCP 与扩展</span>
+                <span class="mi-desc">尚未接入</span>
+                <span class="mi-arrow">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="10" height="10"><path d="m9 6 6 6-6 6"/></svg>
+                </span>
+              </button>
+
+              <!-- 技能：打开的是既有技能清单（与 / 触发同一份 filteredSkills），
+                   所以它不是开关、也不带勾选态；挑中的技能以 skill-tags 呈现 -->
+              <button
+                class="menu-item"
+                :class="{ 'is-active': plusActiveIdx === 3 }"
+                role="menuitem"
+                id="plus-opt-skill"
+                aria-haspopup="menu"
+                title="从已启用技能中挑一个附加到本次输入"
+                @click="pickCap('skill')"
+                @mouseenter="plusActiveIdx = 3"
+              >
+                <span class="mi-ico">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13">
+                    <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>
+                  </svg>
+                </span>
+                <span class="mi-name">技能</span>
+                <span class="mi-desc">从清单里挑</span>
+                <span class="mi-arrow">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="10" height="10"><path d="m9 6 6 6-6 6"/></svg>
+                </span>
               </button>
             </div>
           </div>
@@ -290,7 +304,7 @@
             :aria-label="uploading ? '上传中' : '上传文件'"
             @click="handleUploadClick"
           >
-            <svg v-if="!uploading" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            <svg v-if="!uploading" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
             <svg v-else class="spinner" viewBox="0 0 24 24" fill="none" width="13" height="13"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.25"/><path d="M22 12a10 10 0 0 0-10-10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
           </button>
           <input
@@ -301,6 +315,63 @@
             :disabled="agentRunning"
             @change="handleFileChange"
           />
+          <!-- 审批档位选择器（手动审批 / 自动审批）—— 与「+（添加）」是两个独立控件：
+               + 管「往里加什么 / 以什么姿态跑」，这里管「危险操作谁来点头」。
+               计划模式点亮时本控件休眠（写操作在弹卡前就被拒，没有可审批的卡），
+               故禁用并在 title 里说明。 -->
+          <div class="perm-wrap">
+            <button
+              ref="permTriggerRef"
+              class="perm-btn"
+              :disabled="agentRunning || isPlanMode"
+              :title="agentRunning ? '当前响应中，请稍后再试'
+                : isPlanMode ? '计划模式下写操作直接拒绝，审批档暂不生效'
+                : '审批模式：危险操作由你逐条批准，还是让模型先代判一次'"
+              aria-haspopup="listbox"
+              aria-controls="perm-menu"
+              :aria-expanded="showPermMenu"
+              aria-label="审批模式"
+              @click="togglePermMenu"
+              @keydown.down.prevent="openPermMenu()"
+            >
+              <svg class="perm-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14" aria-hidden="true">
+                <circle cx="12" cy="12" r="9"/>
+                <path d="M12 12V3a9 9 0 0 1 9 9z" fill="currentColor" stroke="none"/>
+              </svg>
+              <span class="perm-name">{{ PERM_LABELS[approvalMode] }}</span>
+              <svg class="perm-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="9" height="9" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+
+            <div
+              v-if="showPermMenu"
+              id="perm-menu"
+              ref="permMenuRef"
+              class="perm-menu"
+              role="listbox"
+              aria-label="审批模式"
+              @keydown="handlePermMenuKeydown"
+            >
+              <button
+                v-for="opt in PERM_OPTIONS"
+                :key="opt.key"
+                class="perm-opt"
+                role="option"
+                :id="`perm-opt-${opt.key}`"
+                :aria-selected="approvalMode === opt.key"
+                :title="opt.desc"
+                @click="pickPerm(opt.key)"
+              >
+                <span class="po-text">
+                  <span class="po-name">{{ opt.label }}</span>
+                  <span class="po-desc">{{ opt.desc }}</span>
+                </span>
+                <span class="po-check" :class="{ show: approvalMode === opt.key }">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="11" height="11" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+                </span>
+              </button>
+            </div>
+          </div>
+
           <slot name="toolbar-left"></slot>
         </div>
         <div class="toolbar-right">
@@ -414,16 +485,27 @@ const props = defineProps<{
   panelTitle?: string
   /** 上传处理函数：由父组件注入（返回上传成功的附件列表）；未注入则不显示上传入口 */
   uploadHandler?: (files: File[]) => Promise<ChatAttachment[]>
+  /**
+   * 当前会话工作流阶段（''/spec/plan/goal，后端权威）。驱动菜单「目标」项的
+   * 点亮态：goal → 目标项点亮。「计划」项点亮与否取当前姿态（开关状态），
+   * 不由阶段推导 —— 阶段来自落盘工件（backend /agent/workflow.py），组件只读
+   * 展示，不在此伪造切换结果。
+   */
+  workflowPhase?: string
 }>()
 
 const emit = defineEmits<{
   close: []
-  send: [content: string, skillIds: string[], attachments: ChatAttachment[]]
+  /** mode = 对话姿态（goal/plan…），approval = 审批档（手动/自动）—— 两条独立轴，
+   *  合成 permission_mode 的唯一口径在 utils/run-modes.ts */
+  send: [content: string, skillIds: string[], attachments: ChatAttachment[], mode: string, approval: 'normal' | 'auto']
   'update:selectedModelId': [id: string]
   'new-chat': []
   'switch-conversation': [id: string]
   'delete-conversation': [id: string]
   abort: []
+  /** 进入目标阶段：通知父层让 AI 沉淀成功标准文档（不再打开本地编辑弹窗） */
+  'open-goal': []
 }>()
 
 // ── 面板头部标题（未传时使用通用默认） ──
@@ -475,22 +557,74 @@ function removePendingFile(fileId: string) {
   pendingFiles.value = pendingFiles.value.filter(f => f.file_id !== fileId)
 }
 
-// ── 能力入口 + 号菜单（目标 / 计划 / 技能 / 插件）──
-// 说明：当前为纯前端实现 —— 选中项只在 UI 上体现（按钮开启态 + 输入框上方 chip），
-// 不进入 emit('send') 载荷，后端逻辑未接入。后续接后端时改动点集中在 pickCap()。
+// ── 能力入口 + 号菜单（视觉顺序：目标 / 计划 / 插件 / 技能）──
+// 四个条目的形态各不相同，不能压成同一种控件：
+// - 「目标」是工作流阶段（backend 以 goal_write 落盘成功标准、每轮注入 system prompt）：
+//   点它让父层触发 agent 沉淀，启用态由 props.workflowPhase 反映，非本地开关；
+// - 「计划」是权限模式开关（qcode 形态：模式切换收进 + 菜单）：menuitemcheckbox，
+//   点亮 = 只读强制 + 计划姿态成对下发，再点退出；工具条权限下拉显示同一个状态；
+// - 「技能」从已启用清单里挑一个（与 / 触发同源），选中的以 skill-tags 呈现 ——
+//   它不是开关，所以菜单里不给勾选态；
+// - 「插件」无清单可列，整行置灰。
+// 后端逻辑未接入者，改动点一律集中在 pickCap()。
 type CapKey = 'goal' | 'plan' | 'skill' | 'plugin'
+/**
+ * 菜单里真正带开关语义的条目 —— 目前只有「计划」（menuitemcheckbox）。
+ *
+ * 另外三项各自的形态不同，都不能用「开关」表达：
+ *   goal   → 工作流阶段：触发 agent 沉淀，启用态由 workflowPhase 驱动（每轮注入）
+ *   skill  → 从已启用技能清单里**挑一个**（挑中的以 skill-tags 呈现）
+ *   plugin → 尚未接入，无可选项
+ * 早期版本把它们一律做成菜单里的 checkbox，导致「计划」和「装插件」看起来
+ * 是同一类开关，而它们连抽象层都不同（模式 vs 能力扩展）。
+ */
 const CAP_LABELS: Record<CapKey, string> = { goal: '目标', plan: '计划', skill: '技能', plugin: '插件' }
-const CAP_KEYS: CapKey[] = ['goal', 'plan', 'skill', 'plugin']
+/**
+ * 键盘导航顺序 —— 必须与 DOM 里的视觉顺序一致，否则 ↑↓ 会「跳着走」。
+ * 视觉顺序见模板：目标 → 计划 → 插件 → 技能（插件在技能之前）。
+ */
+const CAP_KEYS: CapKey[] = ['goal', 'plan', 'plugin', 'skill']
 
 const showPlusMenu = ref(false)
 const plusActiveIdx = ref(0)
-const activeCaps = ref<CapKey[]>([])
+
+/**
+ * 当前对话姿态（单选，默认「目标」）—— 对应主流 Agent 的模式选择器。
+ * 只有「目标/计划」这类纵向姿态落进 activeMode（决定下一次消息注入的姿态）；
+ * 「技能」从清单里挑、走 skill-tags，「插件」未接入、
+ * 都没有"单一姿态"的含义，勾选态只对 activeMode 的两项成立。
+ */
+const activeMode = ref<CapKey>('goal')
+/** 姿态类模式标签（按钮/菜单共用，取自 CAP_LABELS） */
+const MODE_LABELS = CAP_LABELS
 
 /** aria-activedescendant 目标 id（与 / 技能菜单同一无障碍模式） */
 const plusActiveOptionId = computed(() => {
   const key = CAP_KEYS[plusActiveIdx.value]
   return key ? `plus-opt-${key}` : undefined
 })
+
+/**
+ * 键盘导航跳过的条目：disabled 项既点不了、也不该成为落点
+ * —— 否则 ↑↓ 会停在「插件」上，回车毫无反应，读起来像坏了。
+ * 索引仍按 CAP_KEYS 计数（aria-activedescendant 靠索引取 id），只跳过、不压缩。
+ */
+const PLUS_SKIP: ReadonlySet<CapKey> = new Set<CapKey>(['plugin'])
+
+function stepPlusMenu(dir: 1 | -1) {
+  const n = CAP_KEYS.length
+  let i = plusActiveIdx.value
+  for (let step = 0; step < n; step++) {
+    i = (i + dir + n) % n
+    const key = CAP_KEYS[i]
+    if (key && !PLUS_SKIP.has(key)) {
+      plusActiveIdx.value = i
+      return
+    }
+  }
+  // 全部被跳过时保持原位。当前只有「插件」一项 disabled，走不到这里；
+  // 写成 for 循环是为了将来加第二项 disabled 时不用改逻辑。
+}
 
 function togglePlusMenu() {
   if (showPlusMenu.value) {
@@ -511,13 +645,156 @@ function closePlusMenu(refocus = false) {
   if (refocus) nextTick(() => inputRef.value?.focus())
 }
 
-/** 切换一项能力的选中态（再次点击 = 取消） */
+/** 菜单项选择：目标 → 单选为当前对话姿态（影响下一次消息注入）；
+ *  计划 → 权限模式开关（再点一次退出，回到目标姿态）；
+ *  技能 → 打开既有技能清单；插件未接入，兜住键盘 Enter。 */
 function pickCap(key: CapKey) {
-  activeCaps.value = activeCaps.value.includes(key)
-    ? activeCaps.value.filter(c => c !== key)
-    : [...activeCaps.value, key]
-  closePlusMenu(true)
+  // 目标：纵向姿态，单选覆盖 activeMode，随下一次发送传给后端作为姿态提示
+  if (key === 'goal') {
+    activeMode.value = key
+    closePlusMenu(true)
+    return
+  }
+  // 计划：不是「选一个姿态」而是开关 —— 点亮即只读强制 + 计划提示词成对下发，
+  // 再点回到目标姿态。它是独立于审批下拉的另一条轴（plan 姿态下下拉休眠）。
+  if (key === 'plan') {
+    togglePlanMode()
+    closePlusMenu(true)
+    return
+  }
+  // 技能：打开既有技能清单（与「/」触发同一条路径），选中的以 skill-tags 呈现
+  if (key === 'skill') {
+    closePlusMenu(true)
+    openSkillMenuFromPlus()
+    return
+  }
+  // 插件：无清单可列。按钮已 disabled 拦住鼠标，这里兜住键盘 Enter
+  if (key === 'plugin') return
 }
+
+// ── 权限模式（发往后端的 AgentRunRequest.permission_mode）──
+/**
+ * 两条独立轴：
+ *   审批轴（下拉，常驻工具条）= normal 手动 / auto 自动 —— 危险操作是用户逐条
+ *     批准，还是先让模型代判一次（拿不准仍弹卡，fail-closed 在后端）。
+ *   计划轴（+ 菜单「计划」开关）= 只读强制 —— 写操作在弹卡之前就直接拒绝。
+ *
+ * 「计划」同时意味着**两个**后端字段，不能只发一个：
+ *   permission_mode: 'plan' → 后端 PlanModeGuard 只读强制（真正的约束）
+ *   workflow_mode:   'plan' → 后端注入计划姿态提示词（只影响措辞）
+ * 只发后者就是「亮的空开关」：用户以为进了计划模式，写操作照样执行。
+ *
+ * 审批轴休眠规则：plan 姿态下 permission_mode 恒为 'plan'（后端 PlanModeGuard
+ * 在任何审批卡之前拦截，此时谈"谁来批准"没有意义）。真正的发送值在
+ * stores/ssh-ai.ts 经 resolveRunModes(activeMode, approval) 派生 —— 这里是
+ * **展示**同源（下拉文案 + 「计划」菜单项点亮），不存在自相矛盾的状态。
+ */
+const approvalMode = ref<'normal' | 'auto'>('normal')
+const isPlanMode = computed(() => activeMode.value === 'plan')
+
+const PERM_OPTIONS: ReadonlyArray<{ key: 'normal' | 'auto'; label: string; desc: string }> = [
+  { key: 'normal', label: '手动审批', desc: '危险操作逐条确认' },
+  { key: 'auto', label: '自动审批', desc: '模型代判，拿不准仍弹卡' },
+]
+const PERM_LABELS: Record<'normal' | 'auto', string> = { normal: '手动审批', auto: '自动审批' }
+
+const showPermMenu = ref(false)
+const permMenuRef = ref<HTMLElement | null>(null)
+const permTriggerRef = ref<HTMLButtonElement | null>(null)
+
+/** 菜单项（role=option）—— 键盘导航直接作用于真实 DOM，不另存一份索引状态，
+ *  避免索引与 DOM 顺序（未来增删选项时）静默错位。 */
+function permOptionEls(): HTMLElement[] {
+  const root = permMenuRef.value
+  if (!root) return []
+  return Array.from(root.querySelectorAll<HTMLElement>('[role="option"]'))
+}
+
+function openPermMenu() {
+  if (props.agentRunning || isPlanMode.value) return
+  closePlusMenu()
+  closeSkillMenu()
+  showPermMenu.value = true
+  // 焦点移进菜单（button + role=listbox 的标准做法）：不这么做 ↑↓ 没有落点，
+  // 而输入框的 handleKeydown 不接管这个菜单。
+  nextTick(() => {
+    const els = permOptionEls()
+    const idx = PERM_OPTIONS.findIndex(o => o.key === approvalMode.value)
+    els[idx >= 0 ? idx : 0]?.focus()
+  })
+}
+
+function closePermMenu(refocus = false) {
+  if (!showPermMenu.value) return
+  showPermMenu.value = false
+  if (refocus) nextTick(() => permTriggerRef.value?.focus())
+}
+
+function togglePermMenu() {
+  if (showPermMenu.value) closePermMenu(true)
+  else openPermMenu()
+}
+
+/** 审批档选择（纯审批轴）：不再触碰姿态 —— plan 的开关只在 + 菜单，
+ *  两轴交汇发生在 resolveRunModes（plan 姿态下审批档休眠）。 */
+function pickPerm(key: 'normal' | 'auto') {
+  approvalMode.value = key
+  closePermMenu(true)
+}
+
+/** + 菜单「计划」项 = 取反当前计划态（点亮即只读强制；审批档原样保留，
+ *  退出计划后恢复生效） */
+function togglePlanMode() {
+  activeMode.value = isPlanMode.value ? 'goal' : 'plan'
+}
+
+/** Enter/Space 由按钮自身的 click 处理，这里只管方向键与退出 */
+function handlePermMenuKeydown(e: KeyboardEvent) {
+  const els = permOptionEls()
+  if (els.length === 0) return
+  const cur = els.indexOf(document.activeElement as HTMLElement)
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    els[(cur + 1 + els.length) % els.length]?.focus()
+    return
+  }
+  if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    els[(cur - 1 + els.length) % els.length]?.focus()
+    return
+  }
+  if (e.key === 'Home') {
+    e.preventDefault()
+    els[0]?.focus()
+    return
+  }
+  if (e.key === 'End') {
+    e.preventDefault()
+    els[els.length - 1]?.focus()
+    return
+  }
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    closePermMenu(true)
+    return
+  }
+  // Tab 移出即关（焦点交给下一个控件），不抢它的默认行为
+  if (e.key === 'Tab') closePermMenu()
+}
+
+// 点 .perm-wrap 以外区域关闭（同 .skill-menu / .plus-menu 的外点策略）
+function onDocClickOutsidePermMenu(e: MouseEvent) {
+  if (!showPermMenu.value) return
+  const target = e.target as HTMLElement | null
+  if (target && target.closest?.('.perm-wrap')) return
+  closePermMenu()
+}
+onMounted(() => document.addEventListener('mousedown', onDocClickOutsidePermMenu))
+onUnmounted(() => document.removeEventListener('mousedown', onDocClickOutsidePermMenu))
+
+// 三个浮层（+ 号菜单 / 技能菜单 / 权限菜单）互斥：同时只允许开一个
+watch(showPlusMenu, (v) => { if (v) closePermMenu() })
+watch(showPermMenu, (v) => { if (v) { closePlusMenu(); closeSkillMenu() } })
 
 // ── / 斜杠技能菜单 ──
 const selectedSkillIds = ref<string[]>([])
@@ -604,6 +881,18 @@ function closeSkillMenu() {
   skillQuery.value = ''
   skillActiveIdx.value = 0
   skillTriggerPos = -1
+}
+
+/**
+ * 从 + 菜单打开技能清单：与「/」触发复用同一份 filteredSkills/键盘导航，
+ * 区别只是不经输入框文本 —— 故触发位置置 -1，pickSkill 会跳过「抹除 /query」
+ * 那一步（它已按 skillTriggerPos >= 0 守卫），点选后焦点回到输入框。
+ */
+function openSkillMenuFromPlus() {
+  skillQuery.value = ''
+  skillActiveIdx.value = 0
+  skillTriggerPos = -1
+  showSkillMenu.value = true
 }
 
 // + 号菜单与 / 技能菜单互斥：两者浮在同一输入区，需要保证同时只开一个
@@ -755,12 +1044,12 @@ function handleKeydown(e: KeyboardEvent) {
   if (showPlusMenu.value) {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      plusActiveIdx.value = (plusActiveIdx.value + 1) % CAP_KEYS.length
+      stepPlusMenu(1)
       return
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault()
-      plusActiveIdx.value = (plusActiveIdx.value - 1 + CAP_KEYS.length) % CAP_KEYS.length
+      stepPlusMenu(-1)
       return
     }
     if (e.key === 'Enter' || e.key === 'Tab') {
@@ -829,7 +1118,7 @@ const canSend = computed(() =>
 
 // M18：草稿快照 — 发送后立即清空（保留"发送即清空"体验），父层 send 失败时
 // 由 restoreDraft() 回填，避免长文/附件在"后端未就绪/无模型/建会话失败"早退路径丢失
-const lastDraft = ref<{ text: string; skillIds: string[]; attachments: ChatAttachment[]; caps: CapKey[] } | null>(null)
+const lastDraft = ref<{ text: string; skillIds: string[]; attachments: ChatAttachment[] } | null>(null)
 
 function handleSend() {
   const text = inputText.value.trim()
@@ -842,28 +1131,26 @@ function handleSend() {
   // 关闭可能打开的菜单
   closeSkillMenu()
   closePlusMenu()
-  // 复制 skillIds / attachments / caps 后立即清空，避免下次发送残留
+  closePermMenu()
+  // 复制 skillIds / attachments 后立即清空，避免下次发送残留
   const skillIds = [...selectedSkillIds.value]
   const attachments = [...pendingFiles.value]
-  const caps = [...activeCaps.value]
-  lastDraft.value = { text, skillIds, attachments, caps }
+  lastDraft.value = { text, skillIds, attachments }
   selectedSkillIds.value = []
   pendingFiles.value = []
-  activeCaps.value = []
   inputText.value = ''
   if (inputRef.value) inputRef.value.style.height = 'auto'
-  emit('send', text, skillIds, attachments)
+  emit('send', text, skillIds, attachments, activeMode.value, approvalMode.value)
 }
 
 /** M18：父层发送被拒绝（早退）时调用，把草稿回填输入框供用户重试 */
 function restoreDraft() {
   if (!lastDraft.value) return
-  const { text, skillIds, attachments, caps } = lastDraft.value
+  const { text, skillIds, attachments } = lastDraft.value
   lastDraft.value = null
   inputText.value = text
   selectedSkillIds.value = skillIds
   pendingFiles.value = attachments
-  activeCaps.value = caps
   nextTick(() => {
     autoResize()
     inputRef.value?.focus()
@@ -1219,7 +1506,151 @@ defineExpose({ focusInput, restoreDraft, prefill })
   color: var(--accent-indigo);
 }
 
+/* ── 权限模式选择器（工具条左侧，上传按钮之后）──
+   下拉文字即当前模式的常驻显示；开关入口另在 + 菜单「计划」项，二者同源。
+   与 .plus-btn 同底座（24px 高 / radius 5px），常驻文字故宽度自适应。 */
+.perm-wrap {
+  position: relative;
+  display: flex;
+}
+
+.perm-btn {
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.perm-btn:hover:not(:disabled),
+.perm-btn[aria-expanded="true"] {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.perm-btn:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
+.perm-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.perm-btn .perm-ico {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+}
+
+.perm-btn .perm-name {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.perm-btn .perm-caret {
+  flex-shrink: 0;
+  opacity: 0.65;
+  transition: transform 0.18s ease;
+}
+
+/* 展开时箭头翻转 —— 与「+」号展开时旋转 45° 同属开合反馈 */
+.perm-btn[aria-expanded="true"] .perm-caret {
+  transform: rotate(180deg);
+}
+
+/* 向上展开：工具栏贴面板底部，向下会溢出（同 .plus-menu 的定位策略与层级） */
+.perm-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  width: 208px;
+  padding: 4px;
+  background: var(--bg-elevated-solid);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.5);
+  z-index: 50;
+  transform-origin: bottom left;
+  animation: plus-menu-in 0.14s ease-out;
+}
+
+.perm-opt {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+/* 键盘导航会把焦点移进选项，所以 :focus 也必须给可见反馈（只写 :hover 会「看不见光标」） */
+.perm-opt:hover,
+.perm-opt:focus {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.perm-opt:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
+.perm-opt .po-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.perm-opt .po-name {
+  font-size: 12px;
+  color: inherit;
+  white-space: nowrap;
+}
+
+.perm-opt .po-desc {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.perm-opt .po-check {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  color: var(--accent-primary);
+  opacity: 0;
+}
+
+.perm-opt .po-check.show {
+  opacity: 1;
+}
+
 .plus-btn svg {
+  width: 14px;
+  height: 14px;
+  display: block;
   transition: transform 0.18s ease;
 }
 
@@ -1233,7 +1664,7 @@ defineExpose({ focusInput, restoreDraft, prefill })
   position: absolute;
   bottom: calc(100% + 6px);
   left: 0;
-  width: 208px;
+  width: 224px;
   padding: 4px;
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
@@ -1308,56 +1739,78 @@ defineExpose({ focusInput, restoreDraft, prefill })
   text-overflow: ellipsis;
 }
 
-/* 已选中项：图标与说明转为启用色（底部另有 chip 作二次反馈） */
+/* 子菜单指示 ›：标记「会展开一份清单」这一族（插件 / 技能）。
+   注意它只表达**归属**，不表达「能开」—— 插件那行是 disabled，箭头也随整行置灰。
+   （.mi-desc 的 margin-left:auto 已把 desc 及其后的箭头一起推到右端） */
+.plus-menu .mi-arrow {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  color: var(--text-tertiary);
+}
+
+.plus-menu .menu-item:hover .mi-arrow,
+.plus-menu .menu-item.is-active .mi-arrow {
+  color: var(--accent-indigo);
+}
+
+/* 未接入的条目：置灰 + 不参与 hover 反馈，避免看起来可点 */
+.plus-menu .menu-item.is-disabled,
+.plus-menu .menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.plus-menu .menu-item:disabled:hover {
+  background: transparent;
+}
+
+.plus-menu .menu-item:disabled:hover .mi-ico {
+  color: var(--text-secondary);
+}
+
+/* disabled 的按钮仍会命中 :hover（CSS 层面不排除 :disabled），
+   所以箭头必须显式回落，否则悬停时变强调色 —— 这行就成假启用了 */
+.plus-menu .menu-item:disabled:hover .mi-arrow {
+  color: var(--text-tertiary);
+}
+
+/* 已选中项（单选姿态）：图标与说明转为启用色 */
 .plus-menu .menu-item.is-on .mi-ico,
 .plus-menu .menu-item.is-on .mi-desc {
   color: var(--accent-indigo);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .plus-menu { animation: none; }
-  .plus-btn svg { transition: none; }
-}
-
-/* ── 已附加能力 chip（+ 号菜单选中项）── */
-.cap-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 6px 0 2px;
-}
-
-.tag-cap {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
+/* 单选选中态：行整体浅紫底 + 对勾显示，对应主流模式选择器的激活视觉 */
+.plus-menu .menu-item.is-selected {
   background: var(--accent-indigo-bg);
-  color: var(--accent-indigo-soft);
-  font-size: 11px;
-  padding: 2px 6px;
-  border-radius: 4px;
 }
 
-.tag-cap svg {
-  flex-shrink: 0;
+.plus-menu .menu-item.is-selected .mi-name,
+.plus-menu .menu-item.is-selected .mi-ico {
   color: var(--accent-indigo);
 }
 
-.tag-cap .tag-remove {
+.plus-menu .mi-check {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: none;
-  border: none;
-  color: var(--accent-indigo-soft);
-  cursor: pointer;
-  padding: 0;
-  margin-left: 2px;
-  opacity: 0.6;
+  color: var(--accent-indigo);
+  opacity: 0;
+  transition: opacity 0.12s;
 }
 
-.tag-cap .tag-remove:hover {
+.plus-menu .mi-check.show {
   opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plus-menu { animation: none; }
+  .plus-btn svg { transition: none; }
+  /* 权限菜单与它的箭头同样受此约束（沿用既有口径：只关动画/位移，颜色过渡保留） */
+  .perm-menu { animation: none; }
+  .perm-btn .perm-caret { transition: none; }
 }
 
 /* ── / 触发技能菜单 ── */
@@ -1474,6 +1927,15 @@ defineExpose({ focusInput, restoreDraft, prefill })
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* 左侧承载 3 个控件（+ / 上传 / 权限模式，常驻文字约 110px）。
+   面板可被拖到 minWidth=280px，那里一行放不下 —— 允许左侧自己换行，
+   否则 nowrap 的文字会挤出按钮框、盖住旁边的控件（.input-toolbar 不换行）。 */
+.toolbar-left {
+  flex-wrap: wrap;
+  row-gap: 6px;
+  min-width: 0;
 }
 
 /* Model Selector */
@@ -1660,20 +2122,22 @@ defineExpose({ focusInput, restoreDraft, prefill })
   height: 12px;
 }
 
-/* ── Toolbar buttons (scoped inside SideChatPanel, not relying on parent) ── */
+/* ── Toolbar buttons (scoped inside SideChatPanel, not relying on parent) ──
+   统一底座：24×24 / radius 4 / 透明底 / 无框 —— +、上传、权限阀三个控件等高同线。
+   icon-only 按钮不留横向 padding（语言型如「自动审批」在 .perm-btn 里另外管）。 */
 .toolbar-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  justify-content: center;
+  width: 24px;
   height: 24px;
-  padding: 0 8px;
+  padding: 0;
   border: none;
   border-radius: 4px;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background 0.15s, color 0.15s;
 }
 
 .toolbar-btn:hover {
@@ -1688,6 +2152,12 @@ defineExpose({ focusInput, restoreDraft, prefill })
 
 .toolbar-btn.active:hover {
   background: var(--accent-indigo-hover);
+}
+
+.toolbar-btn svg {
+  width: 14px;
+  height: 14px;
+  display: block;
 }
 
 /* 启用自定义背景图时，让右侧面板透明 */

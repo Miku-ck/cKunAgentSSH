@@ -116,6 +116,14 @@ prod 下 `file_write` 的三档落点（本轮决策：**moderate 工具在 prod
 且仅预授权、键按路径绑定；非敏感路径（`/tmp/x`）→ 会话授权，等同临时目录写。
 再收紧会让生产每次改配置都要预登记，收益/成本不成立。
 
+**预授权条目可选带保留时长**（设置 → Agent 治理 → 运维策略 → 授权保留时长）：
+默认「永久」即本节全部文字的原始口径；改成 24h/7d/30d 后，`_permanent_active`
+在查表时把到期键当"从未预授权"处理（prod 危险命令因此回到 `prod_deny_no_allowlist`
+拒绝路径，而不是放行），并就地清理 + 落盘。授予时间落在 `allowlist.meta.json`
+（与 `allowlist.txt` 同目录的 sidecar），键文件格式不变；缺记录的旧行按
+`allowlist.txt` 的 mtime 兜底，所以调小时长不会让既有预授权当场集体蒸发，
+但**确实可能**让某条很久没再被保存过的登记到期失效 —— 面板提示里写明了这点。
+
 ## 5. 通道分级：谁能自主做什么
 
 | 通道 | 起点 | 判定者 | 缺省姿态 |
@@ -134,6 +142,11 @@ prod 下 `file_write` 的三档落点（本轮决策：**moderate 工具在 prod
 **为什么不给 Electron 主进程再加一层判定**：`ssh:exec` 保持哑管道。渲染层已强制过后端分类，
 主进程再实现一份就是第四套规则表，与本轮"唯一判定源"的目标相反。
 
+**唯一可由用户关掉的环节是"prod 额外确认"**（设置 → Agent 治理 → 运维策略，默认开）：
+关掉后去掉的只有两张 prod 专属提示 —— 审批卡片顶部的红字警示条、批量下发中**仅因目标包含
+prod 主机**而弹的确认框。三条主判定不受该开关影响：dangerous 仍逐条审批、prod 危险命令仍
+必须预登记 allowlist、hardline 仍无条件阻断（判定接口不可达也仍 fail-closed 拒绝下发）。
+
 ## 6. 审计
 
 `backend/agent/audit.py`：链式签名 append-only。`conclusion ∈ {executed, failed, blocked,
@@ -148,7 +161,7 @@ denied, auto_allowed, approved, released, revoked}`（`audit.py:139` 是唯一�
 |---|---|---|---|
 | **B** | `environment` 由客户端声明（`routes/agent.py:268 Literal["test","prod"]="test"`，来源是渲染层抄连接标签），后端无主机清单、不校验 `ssh_session_id ↔ environment` | 后端不持有可信主机清单，派生不出真值；加校验需要先做主机资产 | prod 强化是"客户端诚实则诚实"的闸门；上限是远端 `ckunagent` 最小权限 |
 | **D** | 间接 prompt 注入：远端输出以 `role=tool` 原样回灌，无不可信标记（`ops_common.py` → `driver.py`），且记忆/反思/host_profile 三条持久化回路会以 system 消息注回 | 内容级标记与被注入检测是独立一轮工作，误报面大 | dangerous 命令仍必经人批；prod 仅预授权 |
-| **E** | ① `Sandbox.validate` 第二层仅覆盖 `shell_exec`（`job_run` 与绑定命令工具无第二道）；② allowlist 无 TTL，"始终允许"无二次确认；③ `agent-exec.py` 的规则副本既没有归一化层，也仍是**整串**电源动词匹配 —— 后端改成执行位置判定后远端更严（`grep -i reboot` 在远端会被挡），方向安全但不等价 | 均为收敛度问题，不改变"默认不信任"的骨架 | 契约测试 `test_remote_whitelist_contract.py` 钉跨端一致性 |
+| **E** | ① `Sandbox.validate` 第二层仅覆盖 `shell_exec`（`job_run` 与绑定命令工具无第二道）；② "始终允许"无二次确认（allowlist TTL 本轮已补，但**默认仍是永久**，且 TTL 只作用于 `always` 条目 —— once/session 各自按 run/会话终态清理）；③ `agent-exec.py` 的规则副本既没有归一化层，也仍是**整串**电源动词匹配 —— 后端改成执行位置判定后远端更严（`grep -i reboot` 在远端会被挡），方向安全但不等价 | 均为收敛度问题，不改变"默认不信任"的骨架 | 契约测试 `test_remote_whitelist_contract.py` 钉跨端一致性 |
 | **F** | 判定精度上仍接受的四处（本轮误判审查后剩下的）：① 相对路径递归删除 `rm -rf ./build`、`find ./logs -delete` 判 safe；② 在日志里 grep 字面量 `grep -n 'rm -rf /' audit.log` 仍 hardline；③ `env \| grep -i pass`、`cat /proc/1/environ` 判 safe；④ 无子命令的裸 `docker`/`kubectl`（含 `command -v docker 2>/dev/null` 这种探测写法）判 dangerous | ①绝对路径与敏感目标已全覆盖，相对路径的破坏面等于该账户本就能写的范围，收紧会让每次 `make clean` 都弹卡；②根删除保持整串口径，位置化会把 `find / -exec rm -rf {} +` 从 hardline 降成 dangerous，得不偿失；③读取进程环境既不是写操作也不命中凭据路径表，加黑名单会让所有 `env`/`printenv` 排查都要审批 —— 真正的风险是输出内容进模型上下文，与取舍 D 同源；④保守方向，成本是一张卡 | ①远端最小权限账户；②③④审计链 + dangerous 必经人批 |
 | **不对称** | `file_read/file_glob/file_grep` 在无 SSH 会话时降级读**本机**文件（仅 `..` 校验），与 `shell_exec` 的严格 fail-closed 不一致 | 有意的产品功能（本地文件浏览） | 路径遍历校验 + 审计 |
 | **口径差异** | 批量下发换用后端唯一判定源后，`kill -9 <pid>`、`cp` 非敏感路径判 safe → 不再弹确认；此前渲染层自带词表对任意 `kill/cp/mv` 都会问一句 | 保留第四套词表换取的收敛；与 AI 通道同口径 | 同一判定源、同一后果说明 |
@@ -162,6 +175,7 @@ cd backend && python -m pytest -q \
   tests/test_command_explain.py tests/test_ops_content_classification.py \
   tests/test_permission_gate_content_bound_tools.py \
   tests/test_permission_approval_lifecycle.py tests/test_audit_coverage.py \
+  tests/test_permission_policy_round18.py \
   tests/test_remote_whitelist_contract.py tests/test_safety_classify_endpoint.py
 npx vitest run && npm run typecheck
 ```

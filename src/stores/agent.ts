@@ -218,6 +218,8 @@ export const useAgentStore = defineStore('agent', () => {
     enableTools?: boolean
     maxIterations?: number
     enableDynamicBudget?: boolean
+    /** E1：意图识别 + 思考预算控制总开关 */
+    enableIntentionGuide?: boolean
     /** 成本熔断上限（USD）；undefined/0 = 后端默认 */
     maxCostUsd?: number
     /** token 熔断上限；undefined/0 = 后端默认 */
@@ -227,6 +229,10 @@ export const useAgentStore = defineStore('agent', () => {
     contextWindow?: number
     visibleTerminal?: boolean
     sessionType?: 'local' | 'remote'
+    /** 对话姿态（goal/plan）—— 透传后端注入姿态 system prompt */
+    workflowMode?: 'goal' | 'plan'
+    /** 权限模式（normal=手动审批 / auto=模型代判 / plan=只读强制）—— 缺省 normal */
+    permissionMode?: 'normal' | 'auto' | 'plan'
   }) {
     // C10 修复：并发保护 — 如果有正在运行的流，先中止它，避免多个流并行导致状态混乱
     if (abortFn) {

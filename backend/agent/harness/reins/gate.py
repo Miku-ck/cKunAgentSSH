@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
+import os
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -14,6 +16,7 @@ from config import ALLOWLIST_PATH
 
 from ..contracts import ReinDecision, ReinPoint, RunContext, TraceEvent
 from ..safety import classify_command, classify_constructed_command
+from .auto_approve import try_auto_approve
 from .core import (
     _COMMAND_EXEC_TOOLS,
     _PERMISSION_APPROVAL_FALLBACK_S,
@@ -28,6 +31,36 @@ from .core import (
 )
 
 logger = logging.getLogger(__name__)
+
+# E3：永久授权保留时长（小时）。0 = 永不过期，即 allowlist 引入 TTL 之前的行为。
+# 上限与 routes/settings.py 的 Field(le=) 同口径，读取侧脏值不至于是无限大。
+ALLOWLIST_TTL_MAX_HOURS = 8760
+
+# 模块级 TTL：PermissionGate 是进程级单例，且多半在设置接口被调用之前就已建好，
+# 所以 TTL 既要在单例字段上生效，也要留在模块级供之后创建的实例读到（__post_init__）。
+_ALLOWLIST_TTL_HOURS = 0
+
+
+def set_allowlist_ttl_hours(hours: int) -> int:
+    """设置 allowlist TTL，并对已存在的单例即时生效（含清理已过期键）。
+
+    Returns: 夹紧后的实际值。
+    """
+    global _ALLOWLIST_TTL_HOURS
+    try:
+        value = int(hours)
+    except (TypeError, ValueError):
+        value = 0
+    _ALLOWLIST_TTL_HOURS = max(0, min(value, ALLOWLIST_TTL_MAX_HOURS))
+    if _global_permission_gate is not None:
+        _global_permission_gate.allowlist_ttl_hours = _ALLOWLIST_TTL_HOURS
+        _global_permission_gate.prune_expired_allowlist()
+    return _ALLOWLIST_TTL_HOURS
+
+
+def get_allowlist_ttl_hours() -> int:
+    return _ALLOWLIST_TTL_HOURS
+
 
 @dataclass
 class PermissionGate:
@@ -61,6 +94,12 @@ class PermissionGate:
     # 但"会话"边界 = conversation_id
     _confirmed_session: dict[str, set[str]] = field(default_factory=dict)  # conversation_id → 确认键
     _confirmed_permanent: set[str] = field(default_factory=set)  # 永久确认（持久化到 config）
+    # E3：永久授权键的写入时间（epoch 秒）。allowlist.txt 里只有键、没有时间概念，
+    # 时间戳落在同目录的 allowlist.meta.json —— 键文件保持一行一键的原格式，
+    # 手工编辑的条目和旧版本写下的文件都不会因为多一列而解析失败。
+    _permanent_granted_at: dict[str, int] = field(default_factory=dict)
+    # 0 = 永不过期（默认，与引入 TTL 之前完全一致）
+    allowlist_ttl_hours: int = 0
     # 问题 4：visible_terminal 拒绝命令 — 按 run_id 键控，防止 LLM 重发时再次弹卡片。
     # _denied_commands[run_id] = set(grant_key)，拒绝后 LLM 重试不会再次触发审批，
     # 而是直接拦截并注入"已被用户拒绝"提示（让 LLM 换路）。
@@ -68,7 +107,13 @@ class PermissionGate:
     _denied_commands: dict[str, set[str]] = field(default_factory=lambda: defaultdict(set))
 
     def __post_init__(self) -> None:
+        # 显式构造参数优先（测试可直接 PermissionGate(allowlist_ttl_hours=24)），
+        # 未表态时才继承模块级值 —— 进程启动时从 DB 载入的那份。
+        if not self.allowlist_ttl_hours:
+            self.allowlist_ttl_hours = _ALLOWLIST_TTL_HOURS
         self._confirmed_permanent = self._load_permanent_allowlist()
+        self._permanent_granted_at = self._load_permanent_granted_at()
+        self.prune_expired_allowlist()
 
     @staticmethod
     def _validate_allowlist_entry(line: str, lineno: int) -> tuple[bool, str]:
@@ -98,7 +143,6 @@ class PermissionGate:
         逐行校验格式，不合法行记录 warning 日志后跳过。
         空行和 '#' 注释行被忽略。
         """
-        import os
         path = ALLOWLIST_PATH
         if not os.path.exists(path):
             return set()
@@ -118,14 +162,127 @@ class PermissionGate:
             logger.warning("读取 allowlist 失败: %s: %s", path, e)
         return result
 
+    @staticmethod
+    def _allowlist_meta_path() -> str:
+        """时间戳 sidecar 路径：与 allowlist.txt 同目录。
+
+        从 ALLOWLIST_PATH 推导而不是另设 config 常量，是为了让测试只 patch 一个
+        名字（ALLOWLIST_PATH）就能把两份文件一起挪进 tmp 目录。
+        """
+        return os.path.join(os.path.dirname(ALLOWLIST_PATH) or ".", "allowlist.meta.json")
+
+    def _load_permanent_granted_at(self) -> dict[str, int]:
+        """读取「授权键 → 写入时间」映射（allowlist.meta.json）。
+
+        没有记录的键（升级前写入的旧行、手工登记、sidecar 写失败）用 allowlist.txt
+        的 mtime 兜底：宁可按"文件最后修改时间"算一个保守的授予时间，也不要因为
+        缺时间戳就把已有预授权判成"无限旧"直接撤销 —— 那会让 prod 预登记条目
+        在升级后当场失效，运维在故障现场发现命令突然要审批。
+        """
+        mapping: dict[str, int] = {}
+        path = self._allowlist_meta_path()
+        try:
+            with open(path, encoding='utf-8') as f:
+                raw = json.load(f)
+            if isinstance(raw, dict):
+                for key, value in raw.items():
+                    try:
+                        mapping[str(key)] = int(value)
+                    except (TypeError, ValueError):
+                        continue
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            logger.warning("读取 allowlist 时间戳失败: %s: %s", path, e)
+        try:
+            fallback = int(os.path.getmtime(ALLOWLIST_PATH))
+        except OSError:
+            fallback = int(time.time())
+        for key in self._confirmed_permanent:
+            mapping.setdefault(key, fallback)
+        return mapping
+
+    def _ttl_seconds(self) -> int:
+        return max(0, int(self.allowlist_ttl_hours)) * 3600
+
+    def _is_expired_permanent(self, key: str) -> bool:
+        ttl = self._ttl_seconds()
+        if not ttl:
+            return False
+        granted = self._permanent_granted_at.get(key)
+        return granted is not None and granted < int(time.time()) - ttl
+
+    def _permanent_active(self, key: str) -> bool:
+        """永久授权命中判定，顺带就地失效到期条目。
+
+        清理不止发生在加载和 TTL 变更时：进程可以长期不重启，期间把 TTL 调小
+        也不该让旧键继续免审 —— 查表时兜一次，代价是一次 dict 读。
+        """
+        if key not in self._confirmed_permanent:
+            return False
+        if self._is_expired_permanent(key):
+            logger.info("永久授权已过期（TTL %dh），撤销: %s",
+                        max(0, int(self.allowlist_ttl_hours)), key)
+            self._confirmed_permanent.discard(key)
+            self._permanent_granted_at.pop(key, None)
+            return False
+        return True
+
+    def prune_expired_allowlist(self) -> int:
+        """撤销全部已过期的永久授权并落盘，返回清理条数。
+
+        没有清理掉任何东西时不写文件：构造期/测试环境下不该凭空创建 allowlist。
+        """
+        expired = [k for k in list(self._confirmed_permanent) if self._is_expired_permanent(k)]
+        for key in expired:
+            self._confirmed_permanent.discard(key)
+            self._permanent_granted_at.pop(key, None)
+        if expired:
+            logger.info("allowlist 过期清理：%s 条（TTL %dh）",
+                        len(expired), max(0, int(self.allowlist_ttl_hours)))
+            try:
+                self._save_permanent_allowlist()
+            except Exception as e:
+                logger.warning("allowlist 过期清理落盘失败（内存已生效）: %s", e)
+        return len(expired)
+
+    def permanent_entries(self) -> list[dict]:
+        """已生效的永久授权条目（含授予/到期时间），供管理接口展示。
+
+        expires_at 为 None = 永不过期（TTL=0，或该键没有可信的授予时间）。
+        """
+        ttl = self._ttl_seconds()
+        out: list[dict] = []
+        for key in sorted(self._confirmed_permanent):
+            granted = self._permanent_granted_at.get(key)
+            out.append({
+                "key": key,
+                "granted_at": granted,
+                "expires_at": granted + ttl if (ttl and granted is not None) else None,
+            })
+        return out
+
     def _save_permanent_allowlist(self) -> None:
-        """保存永久 allowlist"""
-        import os
+        """保存永久 allowlist（键文件 + 同目录时间戳 sidecar）"""
         path = ALLOWLIST_PATH
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        now = int(time.time())
+        for key in self._confirmed_permanent:
+            self._permanent_granted_at.setdefault(key, now)
+        # sidecar 只留仍生效的键，撤销/过期的条目不该继续累积
+        self._permanent_granted_at = {
+            k: v for k, v in self._permanent_granted_at.items() if k in self._confirmed_permanent
+        }
         with open(path, 'w', encoding='utf-8') as f:
             for name in sorted(self._confirmed_permanent):
                 f.write(name + '\n')
+        try:
+            with open(self._allowlist_meta_path(), 'w', encoding='utf-8') as f:
+                json.dump(self._permanent_granted_at, f, sort_keys=True)
+        except Exception as e:
+            # 时间戳写失败不能阻塞授权本身：缺记录的键之后按 allowlist.txt 的 mtime
+            # 兜底，方向是"少过期一点"，不是把已登记的预授权判死。
+            logger.warning("写入 allowlist 时间戳失败: %s", e)
 
     @staticmethod
     def _grant_key(tool_name: str, command: Optional[str] = None) -> str:
@@ -188,8 +345,8 @@ class PermissionGate:
         # （即使永久 allowlist 中有该命令，当前 run 的拒绝状态也优先）
         if self.is_denied(tool_name, command, run_id):
             return False
-        # 检查 permanent allowlist
-        if key in self._confirmed_permanent:
+        # 检查 permanent allowlist（E3：到期即失效，不再永久免审）
+        if self._permanent_active(key):
             return True
         # 检查 session allowlist
         # B-6 修复：dangerous 需每次授权 — 忽略 session 级缓存
@@ -216,6 +373,8 @@ class PermissionGate:
         仅认 `_confirmed_permanent`（持久化 allowlist），忽略 once/session 一次性授权，
         保证 prod 环境危险命令必须"预先登记"而非临时批准（合规要求）。
         有命令可绑定时按"工具+命令哈希"键匹配（审查 M-3），否则按工具名匹配。
+        E3：过了 TTL 的预登记条目同样不算预授权 —— 到期后 prod 危险命令会重新
+        走"未预授权"拒绝路径，而不是悄悄按放行处理。
 
         bound_command 由 FilesystemGuard 传入（它已算过一遍，不在此重算）：
         prod 下 file_write 写敏感路径预登记的键是 `file_write:<该路径模板哈希>`，
@@ -225,7 +384,7 @@ class PermissionGate:
         if command is None and tool_name in _COMMAND_EXEC_TOOLS:
             command = command_from_args(args)
         key = self._grant_key(tool_name, command)
-        return key in self._confirmed_permanent
+        return self._permanent_active(key)
 
     def grant(self, tool_name: str, scope: str = 'once', command: Optional[str] = None,
               conversation_id: str = "", run_id: str = "") -> str:
@@ -539,6 +698,14 @@ class PermissionGate:
                                      run_id=ctx.run_id,
                                      bound_command=bound):
                 return ReinDecision()
+
+        # 自动审批（permission_mode="auto"）：工具级 dangerous / moderate 不可逆
+        # 未授权时，弹卡前先让模型裁决一次（fail-closed，见 auto_approve 模块）。
+        # prod 强化分支已在上方 return —— 合规授权必须出自用户预登记，不问模型。
+        decision = await try_auto_approve(
+            ctx, tool, args, f"工具级风险 {risk} 需授权")
+        if decision is not None:
+            return decision
 
         # 未授权 → 发 permission_needed 事件 + 拦截
         # C-review M7：与 FilesystemGuard 相同的审批三态处理（首次发卡片 /

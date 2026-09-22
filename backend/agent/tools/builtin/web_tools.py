@@ -151,7 +151,8 @@ class WebSearchTool(BaseTool):
         import httpx
 
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            import netconfig
+            async with netconfig.new_client(default_timeout=15.0) as client:
                 resp = await client.post(
                     "https://api.tavily.com/search",
                     json={
@@ -192,7 +193,8 @@ class WebSearchTool(BaseTool):
             search_url = f"https://www.so.com/s?q={quote_plus(query)}"
             headers = {**_BROWSER_HEADERS, "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"}
 
-            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            import netconfig
+            async with netconfig.new_client(default_timeout=15.0, follow_redirects=True) as client:
                 resp = await client.get(search_url, headers=headers)
                 resp.raise_for_status()
                 html = resp.text
@@ -261,7 +263,8 @@ class WebSearchTool(BaseTool):
             search_url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
             headers = {**_BROWSER_HEADERS, "Accept-Language": "en-US,en;q=0.9"}
 
-            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            import netconfig
+            async with netconfig.new_client(default_timeout=15.0, follow_redirects=True) as client:
                 resp = await client.get(search_url, headers=headers)
                 resp.raise_for_status()
                 html = resp.text
@@ -390,6 +393,9 @@ class WebFetchTool(BaseTool):
             # 既防止 DNS rebinding，又兼容 CDN / 虚拟主机。
             # 审查 M-4：流式读取 + _MAX_RESPONSE_BYTES 上限，原 `resp.text` 无界
             # （100MB+ 页面直接打爆内存 → 后端 OOM 影响所有请求）。
+            # G4 有意**不**接 netconfig 代理：这里是「用解析出的 IP 直连 + sni_hostname
+            # 保留原域名」的 DNS rebinding 守卫。一旦交给代理，代理服务器自己重新解析
+            # 域名，这层守卫整体失效；宁可让纯代理出网环境下的 web_fetch 不可用。
             async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
                 direct_url = self._build_direct_url(parsed, ip_or_reason)
                 status, location, html = await self._get_with_limit(

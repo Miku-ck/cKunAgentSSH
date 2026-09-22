@@ -9,6 +9,7 @@
     :grouped-conversations="store.groupedConversations"
     :agent-running="agentStore.isRunning"
     :creating="creating"
+    :workflow-phase="store.workflowPhase"
     show-message-actions
     panel-title="运维知识助手"
     placeholder="询问运维问题..."
@@ -20,28 +21,16 @@
     @switch-conversation="handleSwitchConv"
     @delete-conversation="handleDeleteConv"
     @abort="handleAbort"
+    @open-goal="handleOpenGoal"
     @update:selected-model-id="store.setSelectedModel($event)"
     :upload-handler="handleUploadFiles"
   >
 
-    <template #header-actions-extra>
-      <button
-        class="memory-btn"
-        :class="{ active: showMemory }"
-        title="Agent 记忆"
-        aria-label="Agent 记忆"
-        @click="showMemory = !showMemory"
-      >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4a4 4 0 0 0-4 4 3 3 0 0 0-1 5.8A3.5 3.5 0 0 0 9 20h6a3.5 3.5 0 0 0 2-6.2A3 3 0 0 0 16 8a4 4 0 0 0-4-4z"/><path d="M12 4v16M9 8H7M17 8h-2M9 14H7.5M17 14h-1.5"/></svg>
-      </button>
-      <AgentMemoryView v-if="showMemory" @close="showMemory = false" />
-    </template>
-
     <template #agent-panel>
       <!-- 异常/决策面板：自身按 agentStore.hasRunNotice 决定挂不挂载内容。
-           这里不要再写条件：曾经写过一份，而那份漏了澄清向导/任务规划/待确认交付，
-           结果是需要用户决策时面板根本没挂载，用户只看到 toast，运行等到后端超时。 -->
-      <AgentRunPanel class="agent-run-panel-ssh" />
+         这里不要再写条件：曾经写过一份，而那份漏了澄清向导/任务规划/待确认交付，
+         结果是需要用户决策时面板根本没挂载，用户只看到 toast，运行等到后端超时。 -->
+    <AgentRunPanel class="agent-run-panel-ssh" />
     </template>
   </SideChatPanel>
 </template>
@@ -51,9 +40,9 @@ import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useModelsStore } from '@/stores/models'
 import { useAgentStore } from '@/stores/agent'
+import { useToastStore } from '@/stores/toast'
 import SideChatPanel from '@/components/chat/SideChatPanel.vue'
 import AgentRunPanel from '@/components/agent/AgentRunPanel.vue'
-import AgentMemoryView from '@/components/agent/AgentMemoryView.vue'
 import type { ChatAttachment } from '@/api/client'
 
 defineEmits<{ close: [] }>()
@@ -61,9 +50,23 @@ defineEmits<{ close: [] }>()
 const store = useSshAiStore()
 const modelsStore = useModelsStore()
 const agentStore = useAgentStore()
+const toast = useToastStore()
 
-/** AI 面板头部"Agent 记忆"浮层开关 */
-const showMemory = ref(false)
+// ── 会话工作流（Spec/Plan/Goal）──
+
+/** 就地菜单点「目标」：向 agent 发起一条"进入目标阶段"的意图，触发其在
+ *  Run 内经 goal_write 沉淀成功标准文档（阶段由后端按落盘工件推导，前端不伪造）。 */
+async function handleOpenGoal() {
+  if (agentStore.isRunning) {
+    toast.error('AI 正在运行中，请等待完成或先中止')
+    return
+  }
+  const ok = await store.sendMessage(
+    '进入「目标（Goal）」阶段：请先向我确认本次要达成什么、怎么算成功，' +
+    '再用 goal_write 把可验收的成功标准沉淀为文档，作为本任务贯穿执行的锚点。',
+  )
+  // 发送失败时草稿由 store 层已有逻辑同步，这里不需要额外回滚
+}
 
 function handleAbort() {
   agentStore.abort()
@@ -71,8 +74,8 @@ function handleAbort() {
 
 // M18：发送被 store 早退拒绝（后端未就绪/无模型/建会话失败）时回滚组件草稿
 const panelRef = ref<InstanceType<typeof SideChatPanel> | null>(null)
-async function handleSend(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = []) {
-  const ok = await store.sendMessage(content, { skillIds, attachments })
+async function handleSend(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = [], mode?: string, approval?: 'normal' | 'auto') {
+  const ok = await store.sendMessage(content, { skillIds, attachments, mode, approval })
   if (!ok) panelRef.value?.restoreDraft()
 }
 
@@ -135,30 +138,12 @@ async function handleDeleteConv(id: string) {
 
 onMounted(() => {
   store.fetchDefaultModel()
+  // 工作流工件落盘在后端、每轮 run 都会被注入（即使前端从不知道它存在）。
+  // 面板挂载时补一次读取：否则重启后阶段指示消失，但模型仍在按工件执行 ——
+  // 界面与注入不一致，比没这个功能更危险。
+  void store.loadWorkflow()
 })
 </script>
 
 <style scoped>
-/* SSH 面板特化样式占位，通用 Agent 切换样式已在 SideChatPanel.vue 统一维护 */
-/* header-actions-extra 插槽内容编译于本组件作用域，需自带 icon-btn 等效样式 */
-.memory-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-.memory-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-.memory-btn.active {
-  color: var(--accent-primary);
-  background: var(--bg-active);
-}
 </style>

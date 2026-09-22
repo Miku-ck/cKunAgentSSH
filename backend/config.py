@@ -69,5 +69,8 @@ class Settings:
     # 数据库 — 绝对路径，跨 cwd / 跨重装稳定
     db_path: str = field(default_factory=_default_db_path)
 
+    # 后端版本 — /api/health 与诊断面板（G10）共用同一个源，别再各处抄 "0.1.0" 字面量
+    version: str = field(default_factory=lambda: os.getenv("CKUN_APP_VERSION", "0.1.0"))
+
 
 settings = Settings()

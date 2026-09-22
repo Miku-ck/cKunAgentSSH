@@ -3,12 +3,14 @@
 """
 import asyncio
 import os
+import sys
 from typing import Optional, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 import database as db
+import netconfig
 
 
 router = APIRouter(tags=["settings"])
@@ -155,6 +157,7 @@ async def test_model_connection(config_id: str):
     import httpx
     import time as _time
     import logging
+    import netconfig
 
     log = logging.getLogger("cKunAgentic.settings")
 
@@ -187,7 +190,7 @@ async def test_model_connection(config_id: str):
 
     start = _time.monotonic()
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with netconfig.new_client(default_timeout=10.0) as client:
             resp = await client.get(models_url, headers=headers)
             log.info(
                 "[TEST] upstream HTTP %s, latency=%.0fms",
@@ -215,8 +218,16 @@ async def test_model_connection(config_id: str):
         log.info("[TEST] ok latency=%dms", latency_ms)
         return {"status": "ok", "latency_ms": latency_ms, "model_name": model_name}
     except httpx.TimeoutException:
-        log.warning("[TEST] timeout (10s) url=%s", models_url)
-        return {"status": "error", "detail": "连接超时 (10s)", "model_name": model_name}
+        # 超时上限来自 G5 设置（用户没设 = 原来的 10s）；报实际值，否则用户按
+        # 「10s 都连不上」去查网络，而真实上限其实是他自己调成的 5s。
+        limit = netconfig.timeout_seconds(10.0)
+        log.warning("[TEST] timeout (%ss) url=%s", limit, models_url)
+        return {
+            "status": "error",
+            "detail": f"连接超时 ({int(limit)}s)",
+            "model_name": model_name,
+            "timeout_seconds": int(limit),
+        }
     except httpx.HTTPStatusError as e:
         log.warning(
             "[TEST] upstream HTTP %d: %s",
@@ -267,8 +278,36 @@ def update_memory_settings(req: MemorySettingsRequest):
     return db.get_memory_settings()
 
 
-# ── 会话保留清理（用户数据，默认关闭）──
+# ── 审批授权策略（E3：allowlist 保留时长）──
 
+
+class PermissionPolicyRequest(BaseModel):
+    # 上限一年：再大的值与"永久"在使用上没区别，却会让脏值把到期时间推到不可读的年份
+    allowlist_ttl_hours: int = Field(0, ge=0, le=8760,
+                                     description="永久授权保留时长（小时）；0 = 永不过期")
+
+
+@router.get("/settings/permission-policy")
+def get_permission_policy():
+    """获取审批授权策略。默认 allowlist_ttl_hours=0（永久，即引入 TTL 前的行为）。"""
+    return db.get_permission_policy()
+
+
+@router.put("/settings/permission-policy")
+def update_permission_policy(req: PermissionPolicyRequest):
+    """更新审批授权策略，并即时推给进程内 PermissionGate。
+
+    只写库不够：gate 是进程级单例，TTL 在授权判定时读自身字段。不推这一步，
+    改完设置要重启后端才生效 —— 而用户刚把时长调小到 24h，恰恰是希望
+    立刻把不再想要的预授权收回来。
+    """
+    db.set_app_setting("permission.allowlist_ttl_hours", str(req.allowlist_ttl_hours))
+    from agent.harness.reins.gate import set_allowlist_ttl_hours
+    set_allowlist_ttl_hours(req.allowlist_ttl_hours)
+    return db.get_permission_policy()
+
+
+# ── 会话保留清理（用户数据，默认关闭）──
 
 class ConversationRetentionRequest(BaseModel):
     enabled: bool = False
@@ -362,3 +401,189 @@ def update_web_tools_settings(req: WebToolsSettingsRequest):
     # 空串即清除，不必分分支写：set_app_setting(key, "") 就是清除态
     db.set_app_setting("web.tavily_api_key", req.tavily_api_key.strip())
     return get_web_tools_settings()
+
+
+# ── 出站 HTTP 策略（G4 代理 / G5 超时与重试）──
+
+
+class HttpSettingsRequest(BaseModel):
+    """出站 HTTP 策略写入体。三个字段都可选，缺省 = 不改那一项。
+
+    为什么要"不改"这个第三态：GET 只回脱敏代理（可能带密码，不能回明文）。若代理
+    字段缺省即视为"清除"，用户只想改超时就会顺带把代理抹了 —— 而抹掉的还是明文
+    口令那部分，重连才发现。"" 才是显式清除（直连）。
+    """
+    # 非空可带 userinfo（http://user:pass@host:port）；scheme 与主机名由 netconfig 校验
+    proxy_url: Optional[str] = Field(None, max_length=512,
+                                     description="出站代理；http/https/socks5/socks5h/socks4/socks4a；"
+                                                 "不传 = 保持原值，空串 = 清除并直连")
+    # 0 = 不覆盖，各调用点沿用自己的旧硬编码（LLM read 300s、embedding 10s、测试 10s…）
+    timeout_seconds: Optional[int] = Field(None, ge=0, le=600,
+                                           description="上游请求超时秒数；0 = 用各端点原默认")
+    retry_count: Optional[int] = Field(None, ge=0, le=3,
+                                        description="传输层/5xx/429 重试次数；LLM 走 SDK max_retries")
+
+
+def _http_view() -> dict:
+    # 展示**生效**策略（netconfig 已合并 env 兜底），不是库里的原始行：只看库的话，
+    # 代理由 CKUN_HTTP_PROXY 注入的部署里面板会显示"无代理"，而请求其实都在走。
+    policy = netconfig.get_policy()
+    return {
+        # 与 api_key 同一套做法：只回脱敏形态，前端改代理时要显式重填
+        "proxy_url_masked": netconfig.redact_proxy(policy["proxy_url"]),
+        "proxy_url_set": bool(policy["proxy_url"]),
+        "proxy_source": _proxy_source(),
+        "timeout_seconds": policy["timeout_seconds"],
+        "retry_count": policy["retry_count"],
+    }
+
+
+def _proxy_source() -> str:
+    """代理来自哪里：库里那行，还是环境变量兜底（运维统一注入的形态）。"""
+    if (db.get_app_setting("http.proxy_url") or "").strip():
+        return "db"
+    if (os.environ.get("CKUN_HTTP_PROXY") or "").strip():
+        return "env"
+    return ""
+
+
+@router.get("/settings/http")
+async def get_http_settings():
+    """获取出站 HTTP 策略（代理只回脱敏值）。"""
+    return _http_view()
+
+
+@router.put("/settings/http")
+async def update_http_settings(req: HttpSettingsRequest):
+    """更新出站 HTTP 策略并让所有在途客户端按新策略重建。
+
+    只写库不够：llm_adapter 按 (base_url, api_key) 缓存 AsyncOpenAI，代理与超时
+    在建 client 时就固化了；不清缓存，用户配好代理后仍会直连到后端重启为止。
+    """
+    data = req.model_dump(exclude_none=True)  # 未出现的键 = 不改
+    cur = netconfig.get_policy()
+    proxy = cur["proxy_url"]
+    timeout = cur["timeout_seconds"]
+    retries = cur["retry_count"]
+    if "proxy_url" in data:
+        try:
+            proxy = netconfig.normalize_proxy_url(data["proxy_url"])
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    if "timeout_seconds" in data:
+        timeout = int(data["timeout_seconds"])
+    if "retry_count" in data:
+        retries = int(data["retry_count"])
+    if "proxy_url" in data:
+        db.set_app_setting("http.proxy_url", proxy)
+    if "timeout_seconds" in data:
+        db.set_app_setting("http.timeout_seconds", str(timeout))
+    if "retry_count" in data:
+        db.set_app_setting("http.retry_count", str(retries))
+    netconfig.set_policy(proxy, timeout, retries)
+    from llm_adapter import invalidate_client_cache
+    dropped = await invalidate_client_cache()
+    return {**_http_view(), "clients_rebuilt": dropped["dropped"]}
+
+
+# ── 日志级别（G9）──
+
+
+class LogLevelRequest(BaseModel):
+    level: Literal["debug", "info", "warning", "error", "critical"]
+
+
+@router.get("/settings/log-level")
+def get_log_level():
+    import logconfig
+    return {"level": logconfig.get_level(), "levels": list(logconfig.LEVELS)}
+
+
+@router.put("/settings/log-level")
+def update_log_level(req: LogLevelRequest):
+    """改后端日志级别：即时生效（不用重启），并落库供下次启动回填。"""
+    import logconfig
+    db.set_app_setting("log.level", req.level)
+    applied = logconfig.apply_level(req.level, persist_note=False)
+    return {"level": applied, "levels": list(logconfig.LEVELS)}
+
+
+# ── 诊断快照（G10）──
+
+# 键名含这些子串的 app_settings 值一律脱敏：代理 URL 可带密码、tavily/模型 key 是密钥
+_DIAG_SECRET_HINTS = ("api_key", "token", "secret", "password", "proxy")
+
+
+def _mask_value(key: str, value: str) -> str:
+    lowered = key.lower()
+    if "proxy" in lowered:
+        return netconfig.redact_proxy(value)
+    if any(h in lowered for h in _DIAG_SECRET_HINTS):
+        # 与 web-tools 的密钥展示同一口径（前 4 后 4），两处两种掩码法只会让人猜不准
+        return (value[:4] + "…" + value[-4:]) if len(value) > 12 else ("已设置" if value else "")
+    return value
+
+
+@router.get("/settings/diagnostics")
+async def get_diagnostics():
+    """运维诊断快照：DB / 后端版本 / 日志 / HTTP 策略 / 意识 tick / Bridge / 设置键。
+
+    只读，且刻意不含任何明文密钥。路径信息照实回 —— 这个面板的用途就是"我的后端
+    到底连的是哪个库、桥有没有接上"，把路径打码就等于把面板废掉。
+    """
+    import logconfig
+    from config import settings as app_config
+    from agent.consciousness_tick import get_global_tick
+    from agent.bridge_relay import get_bridge_relay
+
+    db_path = db.get_db_path() or app_config.db_path
+    size_bytes = None
+    try:
+        size_bytes = os.path.getsize(db_path) if db_path and os.path.exists(db_path) else None
+    except OSError:
+        size_bytes = None
+
+    tick = get_global_tick()
+    relay = get_bridge_relay()
+    snapshot = db.list_app_settings()
+    policy = netconfig.get_policy()
+    # 读模块全局而不是 _get_global_permission_gate_sync()：后者会在诊断请求里顺手
+    # 建一个 gate（加载 allowlist、跑一次过期剪枝），诊断面板不该有写副作用。
+    import agent.harness.reins.gate as gate_mod
+    gate = gate_mod._global_permission_gate
+    allowlist = {
+        "ttl_hours": int(getattr(gate, "allowlist_ttl_hours",
+                                  gate_mod.get_allowlist_ttl_hours()) or 0),
+        "permanent_entries": len(gate.permanent_entries()) if gate is not None else None,
+    }
+
+    return {
+        "backend": {
+            "version": app_config.version,
+            "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+            "platform": sys.platform,
+            "pid": os.getpid(),
+        },
+        "database": {
+            "path": db_path,
+            "size_bytes": size_bytes,
+            "counts": db.diag_counts(),
+        },
+        "logging": {"level": logconfig.get_level(), "levels": list(logconfig.LEVELS)},
+        "http": {
+            "proxy": netconfig.redact_proxy(policy["proxy_url"]),
+            "proxy_set": bool(policy["proxy_url"]),
+            "timeout_seconds": policy["timeout_seconds"],
+            "retry_count": policy["retry_count"],
+        },
+        "tick": {
+            "running": bool(getattr(tick, "_task", None) and not tick._task.done()),
+            "last_result": tick.last_tick_result,
+        },
+        "bridge": {
+            "connected": bool(relay.connected) if relay is not None else False,
+            "present": relay is not None,
+        },
+        "permissions": allowlist,
+        "app_settings": {k: _mask_value(k, v or "") for k, v in snapshot.items()},
+    }

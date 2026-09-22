@@ -25,6 +25,7 @@ from routes.agent import router as agent_router
 from routes.terminal import router as terminal_router
 from routes.audit import router as audit_router
 from routes.schedules import router as schedules_router
+from routes.workflow import router as workflow_router
 from agent.consciousness_tick import get_global_tick
 from agent.bridge_relay import bridge_ws_endpoint
 
@@ -48,6 +49,17 @@ async def lifespan(_app: FastAPI):
     """初始化数据库 + 启动后台意识 tick"""
     init_db(settings.db_path)
     logger.info("[cKunAgentic] Database initialized: %s", settings.db_path)
+
+    # G4/G5/G9：出站 HTTP 策略与日志级别回填。必须早于任何上游请求 —— 下面的
+    # seed_models_async 就会打 /models，任何 AsyncOpenAI 客户端也在此后首次建立。
+    # 顺序上先日志级别：策略加载失败本身要能被记下来。
+    try:
+        import logconfig
+        import netconfig
+        logconfig.load_from_db()
+        netconfig.load_policy_from_db()
+    except Exception as e:
+        logger.warning("[cKunAgentic] HTTP/log policy load skipped: %s", e)
 
     # 包内内置运维技能同步（backend/skills_builtin/*，线程池执行不阻塞事件循环）
     try:
@@ -80,6 +92,15 @@ async def lifespan(_app: FastAPI):
     from post_processor import init_post_process_manager, load_post_process_config_from_db
     post_config = load_post_process_config_from_db()
     init_post_process_manager(post_config)
+
+    # E3：allowlist 保留时长回填。必须在任何 PermissionGate 单例创建前写入模块值，
+    # 否则首次加载 allowlist 时按 TTL=0 判定，过期条目要等到下次重启才不会被撤销。
+    try:
+        import database as _db
+        from agent.harness.reins.gate import set_allowlist_ttl_hours
+        set_allowlist_ttl_hours(_db.get_permission_policy()["allowlist_ttl_hours"])
+    except Exception as e:
+        logger.warning("[cKunAgentic] Allowlist TTL load skipped: %s", e)
 
     # 意识 tick 延迟启动：仅首次 Agent 运行时触发（ensure_started），
     # 避免纯聊天用户产生空 DB 查询开销
@@ -115,7 +136,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="cKunAgentic Backend",
-    version="0.1.0",
+    version=settings.version,
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",
     lifespan=lifespan,
@@ -198,6 +219,7 @@ app.include_router(agent_router, prefix="/api")
 app.include_router(terminal_router, prefix="/api")
 app.include_router(audit_router, prefix="/api")
 app.include_router(schedules_router, prefix="/api")
+app.include_router(workflow_router, prefix="/api")
 
 # Bridge WS 端点：刻意不挂 /api 前缀 — X-API-Token 中间件不覆盖，
 # 它有自己的 hello token 鉴权（与主进程注入后端的 ELECTRON_BRIDGE_TOKEN 比对）

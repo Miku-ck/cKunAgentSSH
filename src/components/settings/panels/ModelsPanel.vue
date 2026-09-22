@@ -52,6 +52,17 @@
                 <svg v-if="testingId !== m.id" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
                 <div v-else class="spinner spinner-sm" />
               </button>
+              <!-- A1：切换 SSH 默认模型；已是默认时按钮置灰，靠 title 解释为什么点不动 -->
+              <button
+                class="btn-icon"
+                :class="{ 'btn-icon-default-active': m.is_default_ssh }"
+                :title="m.is_default_ssh ? '已是 SSH 默认模型' : '设为 SSH 默认模型'"
+                :disabled="m.is_default_ssh || defaultingId === m.id"
+                @click="handleSetDefault(m)"
+              >
+                <svg v-if="defaultingId === m.id" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/></svg>
+                <svg v-else viewBox="0 0 24 24" width="14" height="14" :fill="m.is_default_ssh ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+              </button>
               <button class="btn-icon" title="编辑" @click="openEditDialog(m)">
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
               </button>
@@ -211,6 +222,11 @@
                         <input type="checkbox" v-model="form.supports_thinking" class="form-checkbox" />
                         <span>思考模式</span>
                       </label>
+                      <!-- 仅新建时可勾选。编辑时的"切换默认"由卡片上的独立入口负责 -->
+                      <label v-if="!isEditing" class="capability-item">
+                        <input type="checkbox" v-model="form.is_default_ssh" class="form-checkbox" />
+                        <span>设为 SSH 默认模型</span>
+                      </label>
                     </div>
 
                     <!-- 温度 -->
@@ -343,6 +359,7 @@ const form = reactive({
   temperature: 0.7,
   max_tokens: DEFAULT_CONTEXT_TOKENS,
   max_output_tokens: DEFAULT_OUTPUT_TOKENS,
+  is_default_ssh: false,
 })
 
 const selectedProvider = computed(() => PROVIDERS.find(p => p.id === form.provider))
@@ -379,6 +396,7 @@ function resetForm() {
   form.temperature = 0.7
   form.max_tokens = DEFAULT_CONTEXT_TOKENS
   form.max_output_tokens = DEFAULT_OUTPUT_TOKENS
+  form.is_default_ssh = false
 }
 
 function openCreateDialog() {
@@ -456,6 +474,8 @@ async function handleSave() {
   // top_p 仅新建时发送默认值；编辑时 UI 从未暴露该字段，不发以保留后端原值
   if (!isEditing.value) {
     payload.top_p = 0.9
+    // 「设为 SSH 默认」只在创建时生效；已存在模型的默认切换走独立入口，避免与编辑语义混淆
+    if (form.is_default_ssh) payload.is_default_ssh = true
   }
   const trimmedKey = trim(form.api_key)
   // 本地部署不发送 api_key；编辑时若值与原脱敏值相同表示未修改，不发送
@@ -504,6 +524,25 @@ async function handleDelete(id: string, name: string) {
     toast.success(`已删除模型「${name}」`)
   } else {
     toast.error(store.modelsError || '删除失败', 6000)
+  }
+}
+
+// ── A1：设为 SSH 默认 ──
+const defaultingId = ref('')
+async function handleSetDefault(m: ModelConfig) {
+  const ok = await confirm({
+    title: '设为 SSH 默认模型',
+    message: `将「${m.name}」设为 SSH 模式默认模型？当前默认会被取消，下一次 Agent 运行即生效。`,
+    confirmText: '设为默认',
+  })
+  if (!ok) return
+  defaultingId.value = m.id
+  const success = await store.setDefaultModel(m.id)
+  defaultingId.value = ''
+  if (success) {
+    toast.success(`「${m.name}」已设为 SSH 默认`)
+  } else {
+    toast.error(store.modelsError || '设置默认模型失败', 6000)
   }
 }
 
@@ -755,6 +794,8 @@ return String(n)
 .btn-icon:hover { background: #ffffff10; color: var(--text-primary); }
 .btn-icon:disabled { opacity: 0.3; cursor: not-allowed; }
 .btn-icon-danger:hover { background: #f8514915; color: #f85149; }
+.btn-icon-default-active { color: #e3b341; opacity: 1 !important; }
+.btn-icon-default-active:disabled { opacity: 0.75 !important; cursor: default; }
 
 /* ── Modal ── */
 .modal-overlay {

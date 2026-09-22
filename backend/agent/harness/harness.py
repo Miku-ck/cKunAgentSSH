@@ -31,6 +31,7 @@ from .telemetry import TelemetryBus
 from .driver import Driver
 from .bridle import Bridle, CompressionConfig
 from .reins import Reins, create_default_reins
+from .reins.plan_mode import MODE_KEY as PERMISSION_MODE_KEY
 from .saddle import Saddle, Sandbox, UndoBuilder
 from .stirrups import Stirrups
 
@@ -169,6 +170,7 @@ class Harness:
         run_id: Optional[str] = None,
         skill_ids: Optional[list[str]] = None,
         auto_skill_match: bool = True,
+        permission_mode: str = "normal",
     ) -> AsyncIterator[TraceEvent]:
         """
         主入口 — yield TraceEvent
@@ -178,6 +180,10 @@ class Harness:
         Args:
             run_id: 可选 run_id（与 DB 记录保持一致）；不传则自动生成
             skill_ids: 前端显式选择的技能 ID 列表，由 SkillRein 在 AGENT_START 注入
+            permission_mode: 权限模式，"normal" | "auto" | "plan"。"plan" 会激活
+                reins.plan_mode 的只读强制（写工具与写命令一律拒绝）；"auto" 会激活
+                reins.auto_approve —— 弹审批卡前先让模型裁决一次，裁不过照旧弹卡。
+                默认 "normal"，既有调用方不传时行为与本参数引入前完全一致。
         """
         if not self._assembled:
             raise RuntimeError("Harness 未 assemble，请先调用 assemble()")
@@ -238,6 +244,22 @@ class Harness:
         # 其 saddle 字段会被后启动的并发 run 覆盖；拦截器改从 ctx.metadata 读取
         # 当前 run 的 Saddle，避免查错 ToolRegistry 误判"工具未注册"。
         ctx.metadata["saddle"] = self._saddle
+        # 权限模式（per-run，与 saddle / emit_event 同属 ctx.metadata）。
+        # reins.plan_mode 的两个拦截器读它决定是否启用只读强制；reins.auto_approve
+        # 读它决定是否让 LLM 代审；这里是**唯一**的写入点 —— 默认 "normal" 保证
+        # 既有调用方不传时零行为变化。
+        # 值域应由 routes 层的 Pydantic Literal 限定为 normal|auto|plan；此处只做归一化
+        # 并对越界值留痕。刻意**不把未知值当 plan/auto**：unknown → normal 会让"以为开了
+        # 计划模式/自动审批"与"实际按手动执行"之间出现静默落差。故告警必须显式，
+        # 方便定位拼写错误。
+        _pm = str(permission_mode or "normal").strip().lower()
+        if _pm not in ("normal", "auto", "plan"):
+            logger.warning(
+                "未知 permission_mode=%r，按 normal 处理（值域应为 normal|auto|plan）",
+                permission_mode,
+            )
+            _pm = "normal"
+        ctx.metadata[PERMISSION_MODE_KEY] = _pm
         # 审批卡片的"迟到增益"通道：拦截器在卡片发出后异步补发事件（如命令的
         # LLM 后果解释），无法从 ReinsDecision.events 返回值搭车，需要主动向
         # chunk 队列投递。run 终态把 _chunk_queue 置 None（见下方 finally），

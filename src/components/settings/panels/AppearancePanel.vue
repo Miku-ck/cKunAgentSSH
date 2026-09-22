@@ -27,8 +27,8 @@
         </div>
       </SettingRow>
 
-      <SettingRow label="字体大小" desc="界面整体字号">
-        <select v-model.number="settings.appearance.fontSize" class="setting-select">
+      <SettingRow label="界面字号" desc="整个界面的基础字号（终端字号、消息字号在各自页签单独设）">
+        <select v-model.number="settings.appearance.uiFontSize" class="setting-select">
           <option :value="12">12px</option>
           <option :value="13">13px</option>
           <option :value="14">14px</option>
@@ -46,18 +46,16 @@
 
       <template v-if="settings.appearance.themeGradientEnabled">
         <SettingRow label="渐变强度" desc="渐变明显程度（0% = 纯色，100% = 最强）">
-          <div class="slider-row">
-            <input
-              type="range"
-              v-model.number="settings.appearance.themeGradientStrength"
-              min="0"
-              max="100"
-              step="1"
-              class="setting-range"
-            />
-            <span class="slider-value">{{ settings.appearance.themeGradientStrength }}%</span>
-          </div>
+          <SettingSlider v-model="settings.appearance.themeGradientStrength" />
         </SettingRow>
+        <!-- 开关 on 但强度 0（或 localStorage 脏值被兜成 0）时，实际渐变已消失；
+             不"顺手"帮用户关开关（那是隐式 surprise），只把状态说破 -->
+        <p
+          v-if="!Number.isFinite(settings.appearance.themeGradientStrength) || settings.appearance.themeGradientStrength <= 0"
+          class="gradient-zero-hint"
+        >
+          强度为 0：渐变实际未生效，可拖动滑块上调；若不需要渐变请关闭总开关。
+        </p>
 
         <SettingRow label="渐变形态" desc="渐变的整体样式">
           <select v-model="settings.appearance.themeGradientMode" class="setting-select">
@@ -127,47 +125,17 @@
         </div>
 
         <SettingRow label="背景透明度" desc="图片不透明度（0% = 完全隐藏）">
-          <div class="slider-row">
-            <input
-              type="range"
-              v-model.number="settings.appearance.backgroundOpacity"
-              min="0"
-              max="100"
-              step="1"
-              class="setting-range"
-            />
-            <span class="slider-value">{{ settings.appearance.backgroundOpacity }}%</span>
-          </div>
+          <SettingSlider v-model="settings.appearance.backgroundOpacity" />
         </SettingRow>
 
         <SettingRow label="暗色遮罩" desc="保证文字和代码可读性">
-          <div class="slider-row">
-            <input
-              type="range"
-              v-model.number="settings.appearance.backgroundOverlay"
-              min="0"
-              max="100"
-              step="1"
-              class="setting-range"
-            />
-            <span class="slider-value">{{ settings.appearance.backgroundOverlay }}%</span>
-          </div>
+          <SettingSlider v-model="settings.appearance.backgroundOverlay" />
         </SettingRow>
       </div>
 
       <div class="terminal-section">
         <SettingRow label="终端字号" desc="SSH 本地/远程终端文字大小">
-          <div class="slider-row">
-            <input
-              type="range"
-              v-model.number="settings.appearance.terminal.fontSize"
-              min="12"
-              max="18"
-              step="1"
-              class="setting-range"
-            />
-            <span class="slider-value">{{ settings.appearance.terminal.fontSize }}px</span>
-          </div>
+          <SettingSlider v-model="settings.appearance.terminal.fontSize" :min="12" :max="18" unit="px" />
         </SettingRow>
 
         <SettingRow label="终端字体" desc="SSH 本地/远程终端等宽字体（未安装将回退）">
@@ -189,6 +157,7 @@ import { ref, watch, onMounted } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useToastStore } from '@/stores/toast'
 import SettingRow from '@/components/settings/fields/SettingRow.vue'
+import SettingSlider from '@/components/settings/fields/SettingSlider.vue'
 import ToggleSwitch from '@/components/settings/fields/ToggleSwitch.vue'
 import { TERMINAL_FONT_OPTIONS } from '@/composables/useTerminalConfig'
 import { ACCENT_MAP, type Accent, type GradientDirection, type GradientMode, type Theme } from '@/composables/useAppearance'
@@ -405,37 +374,15 @@ const terminalFontOptions = TERMINAL_FONT_OPTIONS
   box-shadow: 0 0 0 2px rgba(var(--accent-primary-rgb), 0.4);
 }
 
-/* 滑块行 */
-.slider-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.setting-range {
-  width: 120px;
-  height: 4px;
-  -webkit-appearance: none;
-  appearance: none;
-  background: var(--bg-slider);
-  border-radius: 2px;
-  outline: none;
-  cursor: pointer;
-}
-.setting-range::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--accent-primary);
-  border: 2px solid var(--bg-input);
-  cursor: pointer;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.4);
-}
-.slider-value {
+.gradient-zero-hint {
+  margin: -4px 0 8px;
+  padding: 6px 10px;
   font-size: 12px;
+  line-height: 1.5;
   color: var(--text-secondary);
-  min-width: 40px;
-  text-align: right;
+  background: var(--bg-input);
+  border-left: 2px solid var(--accent-primary);
+  border-radius: 3px;
 }
 
 /* 渐变颜色行 */

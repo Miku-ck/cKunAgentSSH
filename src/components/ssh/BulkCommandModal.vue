@@ -118,6 +118,7 @@
 import { ref, computed, watch } from 'vue'
 import { useSSHStore, type TerminalSession } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
+import { useSettingsStore } from '@/stores/settings'
 import { useConfirm } from '@/composables/useConfirm'
 import { agentApi, toFriendlyMessage, type SafetyClassifyResult } from '@/api/client'
 import {
@@ -198,9 +199,14 @@ async function confirmBeforeRun(cmd: string, targets: TerminalSession[]): Promis
     verdict = null
   }
   const prodHosts: string[] = []
-  for (const s of targets) {
-    const conn = s.connectionId ? sshStore.connections.find(c => c.id === s.connectionId) : null
-    if (conn?.environment === 'prod') prodHosts.push(conn.name || conn.host)
+  // E5：「生产环境额外确认」关掉时不再因为目标是 prod 就多问一句。
+  // dangerous/hardline 判定与判定不可达的 fail-closed 仍在（decideBulkDispatch 那侧），
+  // 这里撤掉的只是 prod 主机名带来的那一条警示。
+  if (useSettingsStore().settings.agent.prodConfirm) {
+    for (const s of targets) {
+      const conn = s.connectionId ? sshStore.connections.find(c => c.id === s.connectionId) : null
+      if (conn?.environment === 'prod') prodHosts.push(conn.name || conn.host)
+    }
   }
 
   const gate = decideBulkDispatch(cmd, verdict, prodHosts)

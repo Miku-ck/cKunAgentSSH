@@ -86,6 +86,15 @@ interface SshReconnectStatus {
 
 interface ElectronAPI {
   windowMinimize: () => Promise<void>
+  /**
+   * 桌面偏好类型走 inline import：env.d.ts 不能有顶层 import，
+   * 否则整个文件从全局脚本变成模块，下面所有 ambient 声明全部失效。
+   */
+  getDesktopPrefs: () => Promise<import('../shared/desktop-prefs').DesktopPrefs>
+  setDesktopPrefs: (
+    patch: Partial<import('../shared/desktop-prefs').DesktopPrefs>,
+  ) => Promise<import('../shared/desktop-prefs').DesktopPrefs>
+  notifyDesktop: (title: string, body: string) => Promise<boolean>
   windowMaximize: () => Promise<void>
   windowClose: () => Promise<void>
   onBackendStatus: (callback: (data: { status: string; port?: number; error?: string }) => void) => () => void

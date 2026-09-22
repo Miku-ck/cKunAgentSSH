@@ -29,6 +29,8 @@ export type SettingCategory =
   | 'appearance'
   | 'skills'
   | 'agent'
+  | 'memory'
+  | 'ops'
 
 export interface AppSettings {
   chat: {
@@ -39,14 +41,32 @@ export interface AppSettings {
     markdown: boolean
     contextWindow: number
     autoSkillMatch: boolean
+    /**
+     * E2：深度思考三态。'inherit' 表示前端不发 enable_thinking，
+     * 交给后端演化配置决定；'on'/'off' 为用户显式表态，覆盖演化。
+     */
+    enableThinking: 'inherit' | 'on' | 'off'
   }
   agent: {
     maxIterations: number
     dynamicBudget: boolean
+    /** E1：意图识别 + 思考预算控制总开关（关闭则无规划阶段、无引导语注入） */
+    enableIntentionGuide: boolean
     /** 单次 run 成本熔断上限（USD），0 = 使用后端默认 */
     maxCostUsd: number
     /** 单次 run token 熔断上限，0 = 使用后端默认 */
     maxTotalTokens: number
+    /**
+     * E4：新建 SSH 连接的默认环境标记。逐条仍可在连接表单里改，这里只定初值。
+     * 默认 'test'：误标成 prod 会让每条危险命令都走"必须预登记 allowlist"，
+     * 测试机上日常运维直接跑不动。
+     */
+    defaultEnvironment: 'test' | 'prod'
+    /**
+     * E5：生产环境额外确认总开关。关掉只撤掉「prod 专属」的那层提示与批量下发
+     * 确认框；dangerous/hardline 判定与 prod 预授权 allowlist 闸门不受此开关控制。
+     */
+    prodConfirm: boolean
   }
   postProcess: {
     enabled: boolean
@@ -56,16 +76,15 @@ export interface AppSettings {
   }
   memory: {
     enabled: boolean
+    strategy: 'auto' | 'manual'
     maxItems: number
-    injectBudgetTokens: number
-    blocksBudgetTokens: number
-    searchTimeoutS: number
-    reconcileLlmEnabled: boolean
   }
   appearance: {
     theme: Theme
     accent: Accent
-    fontSize: number
+    /** 界面基础字号（html 根字号）。旧名 fontSize 与 chat.messageFontSize /
+     *  terminal.fontSize 三套字号分不清，读取侧仍兼容旧 key */
+    uiFontSize: number
     animation: boolean
     backgroundEnabled: boolean
     backgroundImage: string
@@ -103,17 +122,14 @@ function loadFromLocalStorage(): Partial<AppSettings> | null {
   }
 }
 
-/**
- * 本地持久化的数值不可信：旧版本存过 strategy，手工改过 localStorage 更常见。
- * 越界或 NaN 一律退到默认值 —— 后端 Field(ge/le) 对越界值直接 422，
- * 一次脏读数会让记忆设置整条同步通道静默失败。
- */
-function clampNum(v: unknown, min: number, max: number, dflt: number): number {
-  const n = typeof v === 'number' ? v : Number(v)
-  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : dflt
-}
-
 const saved = loadFromLocalStorage()
+
+/**
+ * 重命名前的 appearance 行：`fontSize` 曾指"界面基础字号"，与 chat 消息字号、
+ * 终端字号三者同名不同物。旧 key 只读兼容一次，下次全量序列化自然消失。
+ */
+type LegacyAppearance = Partial<AppSettings['appearance']> & { fontSize?: number }
+const savedAppearance = (saved?.appearance ?? {}) as LegacyAppearance
 
 export const useSettingsStore = defineStore('settings', () => {
   const settings = ref<AppSettings>({
@@ -125,12 +141,21 @@ export const useSettingsStore = defineStore('settings', () => {
       markdown: saved?.chat?.markdown ?? true,
       contextWindow: saved?.chat?.contextWindow ?? 20,
       autoSkillMatch: saved?.chat?.autoSkillMatch ?? true,
+      enableThinking:
+        saved?.chat?.enableThinking === 'on' || saved?.chat?.enableThinking === 'off'
+          ? saved?.chat?.enableThinking
+          : 'inherit',
     },
     agent: {
       maxIterations: saved?.agent?.maxIterations ?? 100,
       dynamicBudget: saved?.agent?.dynamicBudget ?? true,
+      enableIntentionGuide: saved?.agent?.enableIntentionGuide ?? true,
       maxCostUsd: saved?.agent?.maxCostUsd ?? 0,
       maxTotalTokens: saved?.agent?.maxTotalTokens ?? 0,
+      defaultEnvironment: saved?.agent?.defaultEnvironment === 'prod' ? 'prod' : 'test',
+      // 只认真布尔：手改过的 localStorage 里塞字符串/数字时，`?? true` 会原样放行，
+      // 于是 prodConfirm 变成 truthy 的 'no' —— 用户以为关了，实际还开着。
+      prodConfirm: typeof saved?.agent?.prodConfirm === 'boolean' ? saved.agent.prodConfirm : true,
     },
     postProcess: {
       enabled: saved?.postProcess?.enabled ?? true,
@@ -140,16 +165,13 @@ export const useSettingsStore = defineStore('settings', () => {
     },
     memory: {
       enabled: saved?.memory?.enabled ?? true,
-      maxItems: clampNum(saved?.memory?.maxItems, 10, 500, 100),
-      injectBudgetTokens: clampNum(saved?.memory?.injectBudgetTokens, 200, 8000, 1500),
-      blocksBudgetTokens: clampNum(saved?.memory?.blocksBudgetTokens, 200, 8000, 1200),
-      searchTimeoutS: clampNum(saved?.memory?.searchTimeoutS, 0.5, 30, 8),
-      reconcileLlmEnabled: saved?.memory?.reconcileLlmEnabled ?? true,
+      strategy: saved?.memory?.strategy ?? 'auto',
+      maxItems: saved?.memory?.maxItems ?? 100,
     },
     appearance: {
       theme: saved?.appearance?.theme ?? 'dark',
       accent: saved?.appearance?.accent ?? 'blue',
-      fontSize: saved?.appearance?.fontSize ?? 13,
+      uiFontSize: savedAppearance.uiFontSize ?? savedAppearance.fontSize ?? 13,
       animation: saved?.appearance?.animation ?? true,
       backgroundEnabled: saved?.appearance?.backgroundEnabled ?? false,
       backgroundImage: saved?.appearance?.backgroundImage ?? '',
@@ -196,6 +218,9 @@ export const useSettingsStore = defineStore('settings', () => {
   // 于是启动时把刚读到的值原样 POST 回去（白写一次）；响应缺字段时更会把
   // undefined 落进本地、再推给后端 —— 一次异常响应就污染设置。
   let applyingRemoteMemory = false
+  // 上一成功同步到后端的快照：sync 失败时把本地回滚到这里，
+  // 否则"UI 显示新值 / DB 仍是旧值"的静默背离会长期存在。
+  let lastSyncedMemory: AppSettings['memory'] = { ...settings.value.memory }
   watch(
     () => settings.value.memory,
     (mem) => {
@@ -204,16 +229,18 @@ export const useSettingsStore = defineStore('settings', () => {
       memorySyncTimer = window.setTimeout(() => {
         agentApi.updateMemorySettings({
           enabled: mem.enabled,
+          strategy: mem.strategy,
           max_items: mem.maxItems,
-          inject_budget_tokens: mem.injectBudgetTokens,
-          blocks_budget_tokens: mem.blocksBudgetTokens,
-          search_timeout_s: mem.searchTimeoutS,
-          reconcile_llm_enabled: mem.reconcileLlmEnabled,
+        }).then(() => {
+          lastSyncedMemory = { ...settings.value.memory }
         }).catch((e) => {
-          // 后端同步失败时提示用户，避免静默失败导致设置丢失
           const toast = useToastStore()
           const msg = e instanceof Error ? e.message : String(e)
-          toast.error(`记忆设置同步失败: ${msg}`, 5000)
+          // 回滚本身要走 settings 响应式；先置闸门吞掉 watch，等本轮 watcher 冲刷完再放开
+          applyingRemoteMemory = true
+          settings.value.memory = { ...lastSyncedMemory }
+          window.setTimeout(() => { applyingRemoteMemory = false }, 0)
+          toast.error(`记忆设置同步失败，已回滚: ${msg}`, 5000)
         })
       }, 500)
     },
@@ -226,12 +253,11 @@ export const useSettingsStore = defineStore('settings', () => {
     try {
       const data = await agentApi.getMemorySettings()
       if (typeof data.enabled === 'boolean') settings.value.memory.enabled = data.enabled
+      if (data.strategy === 'auto' || data.strategy === 'manual') settings.value.memory.strategy = data.strategy
       if (Number.isFinite(data.max_items)) settings.value.memory.maxItems = data.max_items
-      if (Number.isFinite(data.inject_budget_tokens)) settings.value.memory.injectBudgetTokens = data.inject_budget_tokens
-      if (Number.isFinite(data.blocks_budget_tokens)) settings.value.memory.blocksBudgetTokens = data.blocks_budget_tokens
-      if (Number.isFinite(data.search_timeout_s)) settings.value.memory.searchTimeoutS = data.search_timeout_s
-      if (typeof data.reconcile_llm_enabled === 'boolean') settings.value.memory.reconcileLlmEnabled = data.reconcile_llm_enabled
       await nextTick()  // 等本轮 watcher 冲刷完再放开闸门
+      // 后端值即"最后一次已知一致状态"，作为 sync 失败时的回滚基线
+      lastSyncedMemory = { ...settings.value.memory }
     } catch { /* 后端未就绪时使用 localStorage 默认值 */ }
     finally { applyingRemoteMemory = false }
   }
@@ -240,6 +266,8 @@ export const useSettingsStore = defineStore('settings', () => {
   let postProcessSyncTimer: number | undefined
   // 同 applyingRemoteMemory：后端回填不回写、且只接受布尔字段
   let applyingRemotePostProcess = false
+  // 同 lastSyncedMemory：sync 失败回滚基线
+  let lastSyncedPostProcess: AppSettings['postProcess'] = { ...settings.value.postProcess }
   watch(
     () => settings.value.postProcess,
     (pp) => {
@@ -251,11 +279,15 @@ export const useSettingsStore = defineStore('settings', () => {
           generate_title: pp.generateTitle,
           extract_memory: pp.extractMemory,
           generate_skill: pp.generateSkill,
+        }).then(() => {
+          lastSyncedPostProcess = { ...settings.value.postProcess }
         }).catch((e) => {
-          // 后端同步失败时提示用户，避免静默失败导致设置丢失
           // C35 修复：用 toFriendlyMessage 转换，不再暴露原始 e.message（技术细节）
           const toast = useToastStore()
-          toast.error(toFriendlyMessage(e, '后处理设置同步失败'), 5000)
+          applyingRemotePostProcess = true
+          settings.value.postProcess = { ...lastSyncedPostProcess }
+          window.setTimeout(() => { applyingRemotePostProcess = false }, 0)
+          toast.error(`${toFriendlyMessage(e, '后处理设置同步失败')}，已回滚`, 5000)
         })
       }, 500)
     },
@@ -273,6 +305,7 @@ export const useSettingsStore = defineStore('settings', () => {
       if (typeof data.extract_memory === 'boolean') pp.extractMemory = data.extract_memory
       if (typeof data.generate_skill === 'boolean') pp.generateSkill = data.generate_skill
       await nextTick()
+      lastSyncedPostProcess = { ...settings.value.postProcess }
     } catch { /* 后端未就绪时使用 localStorage 默认值 */ }
     finally { applyingRemotePostProcess = false }
   }
@@ -342,6 +375,24 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
+  /**
+   * A1：把某条模型设为 SSH 模式默认。后端会原子清掉其他条的 is_default_ssh
+   * （db.set_default_model），所以本地只需重新拉列表即可让卡片徽标同步。
+   */
+  async function setDefaultModel(id: string): Promise<boolean> {
+    try {
+      await api.setDefaultModel(id, 'ssh')
+      await fetchModelConfigs()
+      // 模型选择器与 ssh-ai store 各自缓存了默认模型的 id，切换后必须刷新，
+      // 否则 ChatPanel 顶部仍显示旧模型、下一次运行仍走旧 endpoint
+      refreshChatModels()
+      return true
+    } catch (e: unknown) {
+      modelsError.value = e instanceof Error ? e.message : String(e)
+      return false
+    }
+  }
+
   async function testModelConnection(
     id: string,
     onStatus: (status: 'testing' | 'ok' | 'error', detail?: string, latencyMs?: number) => void,
@@ -374,6 +425,7 @@ export const useSettingsStore = defineStore('settings', () => {
     createModelConfig,
     updateModelConfig,
     deleteModelConfig,
+    setDefaultModel,
     testModelConnection,
   }
 })

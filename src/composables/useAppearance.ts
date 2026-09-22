@@ -95,8 +95,8 @@ export function useAppearance() {
     root.style.setProperty('--accent-primary-rgb', v.rgb)
   }
 
-  // ── 字号 ──
-  function applyFontSize(size: number) {
+  // ── 字号：界面基础字号（根元素）与消息正文字号是两套，分别应用 ──
+  function applyUiFontSize(size: number) {
     root.style.fontSize = `${size}px`
   }
 
@@ -119,7 +119,11 @@ export function useAppearance() {
   // ── 主题渐变色 ──
   function applyThemeGradient() {
     const g = store.settings.appearance
-    const s = Math.max(0, Math.min(100, g.themeGradientStrength))
+    // localStorage 脏值（"abc" → v-model.number → NaN）会让 Math.max/min 都返回 NaN，
+    // s <= 0 判 false 后走进渐变分支，把 NaN 拼进 CSS 变量 —— 渐变悄悄消失但属性上
+    // 挂着非法值。显式折 0 走"移除"分支，与强度归零等价。
+    const raw = g.themeGradientStrength
+    const s = Number.isFinite(raw) ? Math.max(0, Math.min(100, raw)) : 0
     if (!g.themeGradientEnabled || s <= 0) {
       root.removeAttribute('data-gradient')
       root.style.removeProperty('--theme-gradient')
@@ -157,7 +161,7 @@ export function useAppearance() {
   const a = store.settings.appearance
   applyTheme(a.theme)
   applyAccent(a.accent)
-  applyFontSize(a.fontSize)
+  applyUiFontSize(a.uiFontSize)
   applyAnimation(a.animation)
   applyBackground(a.backgroundEnabled, a.backgroundOpacity, a.backgroundOverlay)
   applyThemeGradient()
@@ -166,7 +170,7 @@ export function useAppearance() {
   // ── 响应式监听 ──
   watch(() => store.settings.appearance.theme, applyTheme)
   watch(() => store.settings.appearance.accent, applyAccent)
-  watch(() => store.settings.appearance.fontSize, applyFontSize)
+  watch(() => store.settings.appearance.uiFontSize, applyUiFontSize)
   watch(() => store.settings.appearance.animation, applyAnimation)
   watch(
     () => ({

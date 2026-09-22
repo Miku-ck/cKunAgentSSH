@@ -11,6 +11,7 @@ from .flow import ConfidenceMonitor, CostBudgetRein, DynamicBudgetRein, LoopDete
 from .gate import _get_global_permission_gate_sync
 from .guards import AuditLogger, FilesystemGuard
 from .lifecycle import ReflectionRein, SkillRein
+from .plan_mode import PlanDisciplineRein, PlanModeGuard
 
 def create_default_reins(
     config: Optional[Any] = None,
@@ -71,6 +72,25 @@ def create_default_reins(
 
     # ── 澄清向导（PRE_TOOL_CALL）──
     interceptors.append(ClarificationInterceptor())
+
+    # ── 计划模式（Plan Mode）──
+    # 制品落盘（spec/plan/goal.md）与 system prompt 注入由 agent/workflow.py 承担；
+    # 这里补的是它明确不做的另一半 —— **只读强制**。workflow.py 自述「不做验收机…
+    # 阶段推进与成功判定交由模型 + 用户决定，本模块不越权」，于是 plan_write 的
+    # description 里那句「应等待用户批准计划后再动手执行」只是自觉、不是机制。
+    # 本模块把「当前处于 plan 阶段」从提示词约定升级成会被强制执行的权限状态。
+    #
+    # 两者都先看 ctx.metadata["permission_mode"]，非 "plan" 时返回**全默认的
+    # ReinDecision()**（逐字段零差异），所以注册后对既有运行零影响 ——
+    # test_plan_mode.py 有 4 mode × 4 tool 的参数化回归钉住这一点。
+    #
+    # PlanModeGuard 的 priority=6 早于三个会弹审批卡的拦截器（ClarificationInterceptor 7、
+    # PermissionGate 8、FilesystemGuard 10）：Reins.check() 首个
+    # intercepted=True 即返回，plan 阶段的写操作应当**直接拒绝**，而不是先弹一张
+    # 审批卡让用户点 —— 用户点了「始终允许」也不该在计划阶段生效（对齐 Claude Code
+    # 「File edits are never auto-approved in plan mode, even when an allow rule matches」）。
+    interceptors.append(PlanModeGuard(saddle=saddle))   # PRE_TOOL_CALL, priority 6
+    interceptors.append(PlanDisciplineRein())           # PRE_ITERATION,  priority 12
 
     reins.register_all(interceptors)
     return reins

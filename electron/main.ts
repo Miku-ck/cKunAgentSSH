@@ -12,6 +12,14 @@ import { SSHError, toIpcTransport } from './ssh-error'
 import { SSHStore, type SSHConnectionRecord } from './ssh-store'
 import { ElectronBridge, BridgeOp } from './electron-bridge'
 import { BridgeWsClient } from './bridge-ws-client'
+import {
+  getDesktopPrefs,
+  initDesktopPrefs,
+  markQuitting,
+  notifyDesktop,
+  setDesktopPrefs,
+  shouldHideOnClose,
+} from './desktop-prefs'
 import { assertSafePath, allowDialogKeyPath } from './utils/path-guard'
 
 let mainWindow: BrowserWindow | null = null
@@ -126,6 +134,14 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
+  })
+
+  // G8：关窗隐藏到托盘。preventDefault 后窗口不销毁，'closed' 不触发，
+  // window-all-closed 也就不会误判成"用户退出了"而拆掉后端/PTY。
+  mainWindow.on('close', (event) => {
+    if (!shouldHideOnClose()) return
+    event.preventDefault()
+    mainWindow?.hide()
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -273,6 +289,12 @@ function setupWindowIPC(): void {
     }
   })
   handleTrusted('win:close', () => mainWindow?.close())
+
+  // ── 桌面偏好（G8）：自启 / 关窗隐藏到托盘 / 桌面通知 ──
+  handleTrusted('prefs:get', () => getDesktopPrefs())
+  handleTrusted('prefs:set', (_event, patch: unknown) => setDesktopPrefs(patch))
+  handleTrusted('app:notify', (_event, title: unknown, body: unknown) =>
+    notifyDesktop(String(title ?? ''), String(body ?? '')))
 }
 
 // ─── File System IPC ────────────────────────────────
@@ -1300,6 +1322,8 @@ app.whenReady().then(async () => {
   installCsp()
   setupWindowIPC()
   setupFSIPC()
+  // 桌面偏好必须在 createWindow 之前回填：关窗隐藏分支要在第一个窗口存在前就位
+  await initDesktopPrefs(() => mainWindow)
   createWindow()
   setupPtyIPC()
   setupSSHIPC()
@@ -1378,7 +1402,12 @@ app.whenReady().then(async () => {
   }
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow()
+      return
+    }
+    // 隐藏到托盘后点 Dock 图标：窗口还在，只是不可见 —— 不 show 就是"点了没反应"
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) mainWindow.show()
   })
 })
 
@@ -1398,6 +1427,8 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  // 先落"正在退出"标记：紧随其后的 close 事件不能再走隐藏分支，否则应用退不掉
+  markQuitting()
   ptyManager?.destroyAll()
   sshManager?.disconnectAll()
   backendManager?.stop()

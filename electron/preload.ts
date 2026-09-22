@@ -11,6 +11,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   windowMaximize: () => ipcRenderer.invoke('win:maximize'),
   windowClose: () => ipcRenderer.invoke('win:close'),
 
+  // 桌面偏好（自启 / 关窗隐藏到托盘 / 通知）与桌面通知
+  getDesktopPrefs: () => ipcRenderer.invoke('prefs:get'),
+  setDesktopPrefs: (patch: Record<string, boolean>) => ipcRenderer.invoke('prefs:set', patch),
+  notifyDesktop: (title: string, body: string) => ipcRenderer.invoke('app:notify', title, body),
+
   // 后端状态监听
   /**
    * 监听后端状态变化

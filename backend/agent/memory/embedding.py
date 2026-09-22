@@ -7,8 +7,6 @@ import logging
 import time
 from collections import OrderedDict
 
-import httpx
-
 logger = logging.getLogger(__name__)
 
 # API 失败后的静默期：期内直接返回 None，到期放行一次重试
@@ -38,7 +36,8 @@ class EmbeddingClient:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            import netconfig
+            async with netconfig.new_client(default_timeout=10.0) as client:
                 resp = await client.post(
                     self._endpoint(),
                     headers=headers,

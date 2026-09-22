@@ -87,6 +87,7 @@ pytest-cache-files-*/
 # 安全删除的回收备份目录（勿提交）
 .trash-cleanup-*/
 backend/tests/_tmp/
+backend/_tmp/
 
 # 内嵌 Python 运行时内容（体积大，本地准备，勿提交；README 占位保留）
 runtime/*

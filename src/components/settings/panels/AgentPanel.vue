@@ -24,6 +24,7 @@
               <input
                 v-model.number="budget.maxCostUsd"
                 class="num-input"
+                :class="{ 'input-error': !Number.isFinite(budget.maxCostUsd) || budget.maxCostUsd < 0 }"
                 type="number"
                 min="0"
                 step="0.1"
@@ -36,6 +37,7 @@
               <input
                 v-model.number="budget.maxTotalTokens"
                 class="num-input"
+                :class="{ 'input-error': !Number.isFinite(budget.maxTotalTokens) || budget.maxTotalTokens < 0 }"
                 type="number"
                 min="0"
                 step="10000"
@@ -45,6 +47,115 @@
             </label>
           </div>
           <p class="hint muted">修改即时保存到本地设置，下一次运行生效（0 表示不覆盖后端默认）。</p>
+        </div>
+      </section>
+
+      <!-- ── 运行控制（A3/A4/E1）── -->
+      <section class="grp">
+        <button class="grp-head" @click="open.runtime = !open.runtime">
+          <span class="grp-caret" :class="{ open: open.runtime }">▸</span>
+          <span class="grp-title">运行控制</span>
+          <span class="grp-badge">{{ runtimeSummary }}</span>
+        </button>
+        <div v-show="open.runtime" class="grp-body">
+          <p class="hint">
+            迭代上限、动态步数预算与意图引导共同决定单次 Agent run 的"步数弹性"。
+            三者互不冲突：动态预算接管后 <code>max_iterations</code> 作为演化异常时的兜底；
+            意图引导关闭则跳过规划阶段与思考预算限制（旧行为）。
+          </p>
+          <div class="runtime-row">
+            <label class="runtime-field">
+              <span class="runtime-label">最大迭代步数</span>
+              <div class="slider-inline">
+                <input
+                  v-model.number="runtimeCfg.maxIterations"
+                  type="range"
+                  min="1"
+                  max="500"
+                  step="1"
+                  class="setting-range"
+                />
+                <span class="slider-value">{{ runtimeCfg.maxIterations }}</span>
+              </div>
+            </label>
+            <p class="hint muted runtime-desc">
+              后端 <code>max_iterations</code> 允许 1-500。动态预算开启时优先使用演化习得值，越界才退回此上限。
+            </p>
+          </div>
+          <div class="runtime-toggle-row">
+            <div class="runtime-toggle-info">
+              <span class="runtime-label">动态步数预算</span>
+              <span class="runtime-desc">允许演化模块按 <code>max_iterations</code>/温度/输出长度自学习覆盖</span>
+            </div>
+            <ToggleSwitch v-model="runtimeCfg.dynamicBudget" />
+          </div>
+          <div class="runtime-toggle-row">
+            <div class="runtime-toggle-info">
+              <span class="runtime-label">意图识别 + 思考引导</span>
+              <span class="runtime-desc">关闭后 run 跳过规划阶段、无思考预算限制、无引导语注入（旧行为）</span>
+            </div>
+            <ToggleSwitch v-model="runtimeCfg.enableIntentionGuide" />
+          </div>
+        </div>
+      </section>
+
+      <!-- ── 运维策略（E3/E4/E5）── -->
+      <section class="grp">
+        <button class="grp-head" @click="open.ops = !open.ops">
+          <span class="grp-caret" :class="{ open: open.ops }">▸</span>
+          <span class="grp-title">运维策略</span>
+          <span class="grp-badge">{{ opsSummary }}</span>
+        </button>
+        <div v-show="open.ops" class="grp-body">
+          <p class="hint">
+            授权保留时长落在后端 <code>~/.ckunagentic/allowlist.txt</code> 的判定上，改完即刻生效（无需重启）；
+            另两项是本机渲染端策略，作用于新建连接与审批交互。
+          </p>
+
+          <div class="ops-toggle-row">
+            <div class="ops-info">
+              <span class="runtime-label">授权保留时长</span>
+              <span class="runtime-desc">
+                「始终允许」与手动登记的永久授权多久后自动失效。默认「永久」即引入该设置前的行为；
+                缩短时长会立刻撤销已到期条目，prod 预登记命令因此可能当场回到「未预授权」状态。
+              </span>
+            </div>
+            <select
+              v-model.number="ttlDraft"
+              class="setting-select"
+              :disabled="ttlSaving"
+              @change="onTtlChange"
+            >
+              <option v-for="o in ttlOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+              <option v-if="!ttlOptions.some((o) => o.value === allowlistTtl)" :value="allowlistTtl">
+                自定义（{{ allowlistTtl }} 小时）
+              </option>
+            </select>
+          </div>
+
+          <div class="ops-toggle-row">
+            <div class="ops-info">
+              <span class="runtime-label">新建连接默认环境</span>
+              <span class="runtime-desc">
+                只决定「添加连接」表单的初值，仍可逐条改；编辑已有连接时保留它原本的标记，不会被这里重写
+              </span>
+            </div>
+            <select v-model="opsCfg.defaultEnvironment" class="setting-select">
+              <option value="test">测试 (test)</option>
+              <option value="prod">生产 (prod)</option>
+            </select>
+          </div>
+
+          <div class="ops-toggle-row">
+            <div class="ops-info">
+              <span class="runtime-label">生产环境额外确认</span>
+              <span class="runtime-desc">
+                关闭后不再为 prod 目标多问一句：审批卡片的生产警示条、批量下发中「仅因目标是 prod」的确认框都会去掉。
+                dangerous 逐条审批、prod 危险命令必须预登记 allowlist、hardline 无条件阻断 —— 三条都不受此开关影响
+              </span>
+            </div>
+            <ToggleSwitch v-model="opsCfg.prodConfirm" />
+          </div>
         </div>
       </section>
 
@@ -87,11 +198,11 @@
         <button class="grp-head" @click="open.perm = !open.perm">
           <span class="grp-caret" :class="{ open: open.perm }">▸</span>
           <span class="grp-title">审批授权</span>
-          <span class="grp-badge">{{ permTools.length }} 个工具已永久授权</span>
+          <span class="grp-badge">{{ permTools.length }} 个工具已永久授权 · {{ ttlText(allowlistTtl) }}</span>
         </button>
         <div v-show="open.perm" class="grp-body">
           <p class="hint">
-            审批弹窗点"始终允许"后写入此白名单（持久化，进程重启仍生效）。撤销立即生效。
+            审批弹窗点"始终允许"后写入此白名单（持久化，进程重启仍生效{{ allowlistTtl ? `，但按「运维策略 → 授权保留时长」${ttlText(allowlistTtl)}后自动失效` : '' }}）。撤销立即生效。
             <button class="link-btn" @click="loadPermissions">刷新</button>
           </p>
           <div class="allow-row">
@@ -228,20 +339,100 @@ const toast = useToastStore()
 const settingsStore = useSettingsStore()
 const { confirm } = useConfirm()
 
-const open = reactive({ budget: false, tools: true, perm: false, strat: false, webtools: false })
+const open = reactive({ budget: false, runtime: true, ops: true, tools: true, perm: false, strat: false, webtools: false })
 
 // ── 运行预算（写本地设置，ssh-ai store 在下次运行时读取并随请求传给后端） ──
 const budget = computed(() => settingsStore.settings.agent)
 
+// A3/A4/E1：迭代步数 + 动态预算 + 意图引导。同 budget，写本地设置即生效
+const runtimeCfg = computed(() => settingsStore.settings.agent)
+const runtimeSummary = computed(() => {
+  const a = runtimeCfg.value
+  const parts = [`≤${a.maxIterations} 步`]
+  if (a.dynamicBudget) parts.push('动态')
+  if (a.enableIntentionGuide) parts.push('意图引导')
+  return parts.join(' · ')
+})
+
+// E3/E4/E5：运维策略。defaultEnvironment/prodConfirm 是本地设置（写 localStorage 即刻生效），
+// allowlist TTL 落在后端 gate，单独走 API + 失败回滚。
+const opsCfg = computed(() => settingsStore.settings.agent)
+const ttlOptions: { value: number; label: string }[] = [
+  { value: 0, label: '永久（不过期）' },
+  { value: 24, label: '24 小时' },
+  { value: 168, label: '7 天' },
+  { value: 720, label: '30 天' },
+]
+// allowlistTtl = 与后端一致的基线；ttlDraft = 选择框当前值（保存失败时回滚到基线）
+const allowlistTtl = ref(0)
+const ttlDraft = ref(0)
+const ttlSaving = ref(false)
+
+function ttlText(hours: number): string {
+  const hit = ttlOptions.find((o) => o.value === hours)
+  if (hit) return hit.label.replace('（不过期）', '')
+  return `${hours} 小时`
+}
+
+async function loadPermissionPolicy() {
+  try {
+    const data = await api.getPermissionPolicy()
+    const hours = Number.isFinite(data.allowlist_ttl_hours) ? data.allowlist_ttl_hours : 0
+    allowlistTtl.value = hours
+    ttlDraft.value = hours
+  } catch (e) {
+    toast.error(`授权策略加载失败：${toFriendlyMessage(e)}`)
+  }
+}
+
+async function onTtlChange() {
+  const next = ttlDraft.value
+  if (!Number.isFinite(next) || next === allowlistTtl.value) return
+  ttlSaving.value = true
+  try {
+    const data = await api.updatePermissionPolicy({ allowlist_ttl_hours: next })
+    allowlistTtl.value = Number.isFinite(data.allowlist_ttl_hours) ? data.allowlist_ttl_hours : next
+    ttlDraft.value = allowlistTtl.value
+    toast.success(allowlistTtl.value
+      ? `永久授权将在 ${ttlText(allowlistTtl.value)}后失效，已到期条目即刻撤销`
+      : '永久授权已恢复为不过期')
+    // 缩短时长可能当场清掉若干预登记条目，列表必须跟着刷新而不是留着旧行
+    await loadPermissions()
+  } catch (e) {
+    ttlDraft.value = allowlistTtl.value
+    toast.error(`授权时长保存失败：${toFriendlyMessage(e)}`)
+  } finally {
+    ttlSaving.value = false
+  }
+}
+
+const opsSummary = computed(() => {
+  const a = opsCfg.value
+  const parts = [`授权 ${ttlText(allowlistTtl.value)}`]
+  parts.push(`新连接 ${a.defaultEnvironment === 'prod' ? 'prod' : 'test'}`)
+  parts.push(a.prodConfirm ? 'prod 确认开' : 'prod 确认关')
+  return parts.join(' · ')
+})
+
 // 后端 /agent/run 对预算字段校验为 ge=0、token 为 int：清空（v-model.number 得到 ''）
 // 或输入负数/小数原样发出，会让整次运行以 422 失败 —— 用户只看到"跑不起来"。
 // 落库前归一化：清空/非法 = 0（= 用后端默认预算）。
+// R4：归零本身是"改了没生效"，必须让用户看到 —— 只静默折 0，budgetSummary
+// 又显示"后端默认"，用户以为保存了 -5 或 1e9 实际被吞。toast + 边框双通道。
 function normalizeBudget() {
   const a = settingsStore.settings.agent
-  a.maxCostUsd = Number.isFinite(a.maxCostUsd) ? Math.max(0, a.maxCostUsd) : 0
-  a.maxTotalTokens = Number.isFinite(a.maxTotalTokens)
-    ? Math.max(0, Math.floor(a.maxTotalTokens))
+  const rawCost = a.maxCostUsd
+  const rawTok = a.maxTotalTokens
+  const badCost = !Number.isFinite(rawCost) || rawCost < 0
+  const badTok =
+    !Number.isFinite(rawTok) || rawTok < 0 || !Number.isInteger(Number(rawTok))
+  a.maxCostUsd = Number.isFinite(rawCost) ? Math.max(0, rawCost) : 0
+  a.maxTotalTokens = Number.isFinite(rawTok)
+    ? Math.max(0, Math.floor(rawTok))
     : 0
+  if (badCost || badTok) {
+    toast.warning('预算输入非法，已回退为"后端默认"（0）', 4000)
+  }
 }
 const budgetSummary = computed(() => {
   const { maxCostUsd, maxTotalTokens } = budget.value
@@ -471,6 +662,7 @@ function fmtDate(iso: string): string {
 onMounted(() => {
   void loadTools()
   void loadPermissions()
+  void loadPermissionPolicy()
   void loadStrategies()
   void loadWebTools()
 })
@@ -560,6 +752,47 @@ onMounted(() => {
   color: var(--text-primary); font-size: 12px; font-family: inherit;
 }
 .num-input { width: 120px; }
+.num-input.input-error { border-color: #cf8a80; }
+.runtime-row { margin: 8px 0; }
+.runtime-field { display: block; }
+.runtime-label { font-size: 12px; color: var(--text-primary); font-weight: 500; }
+.runtime-desc { display: block; font-size: 11.5px; color: var(--text-secondary); margin-top: 2px; }
+.runtime-toggle-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 8px 0; border-top: 1px solid var(--border-subtle); margin-top: 8px;
+}
+.runtime-toggle-info { display: flex; flex-direction: column; gap: 2px; }
+.ops-toggle-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 8px 0; border-top: 1px solid var(--border-subtle);
+}
+.ops-toggle-row:first-of-type { border-top: none; }
+.ops-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.setting-select {
+  flex-shrink: 0; height: 26px; padding: 0 22px 0 8px;
+  background: var(--bg-input); border: 1px solid var(--border-default);
+  border-radius: 4px; color: var(--text-primary);
+  font-size: 12px; font-family: inherit; outline: none; cursor: pointer;
+  -webkit-appearance: none; appearance: none;
+}
+.setting-select:disabled { opacity: .5; cursor: default; }
+.setting-select:focus { border-color: var(--accent-primary); }
+.slider-inline { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
+.slider-inline .setting-range { flex: 1; max-width: 320px; }
+.slider-value { font-size: 12px; color: var(--text-secondary); min-width: 40px; text-align: right; }
+.setting-range {
+  height: 4px;
+  -webkit-appearance: none; appearance: none;
+  background: var(--bg-slider);
+  border-radius: 2px; outline: none; cursor: pointer;
+}
+.setting-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--accent-primary);
+  border: 2px solid var(--bg-input);
+  cursor: pointer;
+}
 .allow-row { display: flex; gap: 8px; align-items: center; margin: 8px 0 4px; }
 .text-input { flex: 1; min-width: 0; }
 .text-input.wide { flex: 2; }

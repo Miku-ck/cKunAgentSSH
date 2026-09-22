@@ -32,6 +32,7 @@ const apiMock = {
   createModelConfig: vi.fn(),
   updateModelConfig: vi.fn(),
   deleteModelConfig: vi.fn(),
+  setDefaultModel: vi.fn(async () => ({ default: '', mode: 'ssh' })),
   testModelConnection: vi.fn(),
 }
 const agentApiMock = {
@@ -48,12 +49,6 @@ vi.mock('@/stores/toast', () => ({
   useToastStore: () => ({ error: vi.fn(), warning: vi.fn(), success: vi.fn() }),
 }))
 
-// 后端 GET /settings/memory 的 v2 响应形状（db.get_memory_settings 已夹紧范围）
-const MEM_V2 = {
-  enabled: true, max_items: 100, inject_budget_tokens: 1500,
-  blocks_budget_tokens: 1200, search_timeout_s: 8, reconcile_llm_enabled: true,
-}
-
 const { useSettingsStore } = await import('@/stores/settings')
 
 describe('settings 后端回填', () => {
@@ -66,22 +61,20 @@ describe('settings 后端回填', () => {
     apiMock.getPostProcessSettings.mockResolvedValue({
       enabled: true, generate_title: true, extract_memory: true, generate_skill: true,
     })
-    agentApiMock.getMemorySettings.mockResolvedValue(MEM_V2)
+    agentApiMock.getMemorySettings.mockResolvedValue({
+      enabled: true, strategy: 'auto', max_items: 100,
+    })
   })
   afterEach(() => vi.useRealTimers())
 
   it('回填不会把值再 POST 回后端', async () => {
     const s = useSettingsStore()
     agentApiMock.getMemorySettings.mockResolvedValue({
-      ...MEM_V2, enabled: false, max_items: 55, reconcile_llm_enabled: false,
+      enabled: false, strategy: 'manual', max_items: 55,
     })
     await s.loadMemorySettings()
     await nextTick()
-    expect(s.settings.memory).toEqual({
-      enabled: false, maxItems: 55, injectBudgetTokens: 1500,
-      blocksBudgetTokens: 1200, searchTimeoutS: 8, reconcileLlmEnabled: false,
-    })
-    expect('strategy' in s.settings.memory).toBe(false)
+    expect(s.settings.memory).toEqual({ enabled: false, strategy: 'manual', maxItems: 55 })
 
     await vi.advanceTimersByTimeAsync(2000)
     expect(agentApiMock.updateMemorySettings).not.toHaveBeenCalled()
@@ -91,8 +84,7 @@ describe('settings 后端回填', () => {
     const s = useSettingsStore()
     const before = { ...s.settings.memory }
     agentApiMock.getMemorySettings.mockResolvedValue({
-      enabled: 'yes', max_items: null, inject_budget_tokens: 'lots',
-      blocks_budget_tokens: NaN, search_timeout_s: 'soon', reconcile_llm_enabled: 'nope',
+      enabled: 'yes', strategy: 'telepathy', max_items: null,
     })
     await s.loadMemorySettings()
     await nextTick()
@@ -111,27 +103,9 @@ describe('settings 后端回填', () => {
     s.settings.memory.maxItems = 42
     await vi.advanceTimersByTimeAsync(2000)
     expect(agentApiMock.updateMemorySettings).toHaveBeenCalledWith({
-      enabled: true, max_items: 42, inject_budget_tokens: 1500,
-      blocks_budget_tokens: 1200, search_timeout_s: 8, reconcile_llm_enabled: true,
+      enabled: true, strategy: 'auto', max_items: 42,
     })
     expect(lsMap.get('ckunagentic:settings')).toContain('"maxItems":42')
-  })
-
-  it('旧版本残留与越界数值不进设置，也不会被推回后端', async () => {
-    // max_items 上限 500 / 预算下限 200 是后端 Field 的边界：越界值 POST 过去是 422，
-    // 而 strategy 在 v2 已无对应字段，必须整条消失而不是被带进 payload。
-    lsMap.set('ckunagentic:settings', JSON.stringify({
-      memory: { enabled: true, strategy: 'auto', maxItems: 99999, injectBudgetTokens: -5 },
-    }))
-    vi.resetModules()
-    const { useSettingsStore: fresh } = await import('@/stores/settings')
-    setActivePinia(createPinia())
-    const m = fresh().settings.memory
-    expect(m.maxItems).toBe(500)
-    expect(m.injectBudgetTokens).toBe(200)
-    expect(m.blocksBudgetTokens).toBe(1200)
-    expect(m.searchTimeoutS).toBe(8)
-    expect('strategy' in m).toBe(false)
   })
 
   it('后处理回填同样不回写，且接受合法值', async () => {
@@ -156,5 +130,217 @@ describe('settings 后端回填', () => {
     await s.loadPostProcessSettings()
     await nextTick()
     expect(s.settings.postProcess).toEqual(before)
+  })
+})
+
+/**
+ * R6：sync 失败必须回滚到"上一成功同步"的快照，
+ * 否则本地新值与后端旧值长期背离，用户看不到任何异常。
+ */
+describe('settings sync 失败回滚', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.useFakeTimers()
+    lsMap.clear()
+    for (const fn of Object.values(apiMock)) fn.mockClear()
+    for (const fn of Object.values(agentApiMock)) fn.mockClear()
+    apiMock.getPostProcessSettings.mockResolvedValue({
+      enabled: true, generate_title: true, extract_memory: true, generate_skill: true,
+    })
+    agentApiMock.getMemorySettings.mockResolvedValue({
+      enabled: true, strategy: 'auto', max_items: 100,
+    })
+    // mockClear 不会重置 base impl，但也不会清掉 once 队列 —— 显式把默认实现装回来
+    apiMock.updatePostProcessSettings.mockImplementation(async () => ({}))
+    agentApiMock.updateMemorySettings.mockImplementation(async () => ({}))
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it('memory sync 失败回滚到 loadMemory 建立的基线', async () => {
+    const s = useSettingsStore()
+    await s.loadMemorySettings()
+    await nextTick()
+    agentApiMock.updateMemorySettings.mockClear()
+
+    agentApiMock.updateMemorySettings.mockRejectedValueOnce(new Error('500'))
+    s.settings.memory.maxItems = 77
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(s.settings.memory.maxItems).toBe(100)
+    // applyingRemoteMemory 闸门吞掉回滚写入 → 只看到 1 次原始 POST
+    expect(agentApiMock.updateMemorySettings).toHaveBeenCalledTimes(1)
+  })
+
+  it('memory sync 成功后基线推进；再失败回滚到最近一次成功值', async () => {
+    const s = useSettingsStore()
+    await s.loadMemorySettings()
+    await nextTick()
+    agentApiMock.updateMemorySettings.mockClear()
+
+    // 第一次 sync 成功：基线 100 → 42
+    s.settings.memory.maxItems = 42
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(s.settings.memory.maxItems).toBe(42)
+
+    // 第二次 sync 失败：回滚到 42 而不是初始 100
+    agentApiMock.updateMemorySettings.mockRejectedValueOnce(new Error('boom'))
+    s.settings.memory.maxItems = 99
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(s.settings.memory.maxItems).toBe(42)
+    // 两次 POST（一次成功 + 一次失败）；回滚不再叠加第三次
+    expect(agentApiMock.updateMemorySettings).toHaveBeenCalledTimes(2)
+  })
+
+  it('postProcess sync 失败回滚且不重发 POST', async () => {
+    const s = useSettingsStore()
+    await s.loadPostProcessSettings()
+    await nextTick()
+    apiMock.updatePostProcessSettings.mockClear()
+
+    apiMock.updatePostProcessSettings.mockRejectedValueOnce(new Error('500'))
+    s.settings.postProcess.enabled = false
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(s.settings.postProcess.enabled).toBe(true)
+    expect(apiMock.updatePostProcessSettings).toHaveBeenCalledTimes(1)
+  })
+})
+
+/**
+ * E4/E5：运维策略字段的默认值与脏值兜底。
+ * 这两项是纯本地设置（无后端路由），坏了不会有请求报错，只会静默改变行为：
+ * defaultEnvironment 变成任意字符串 → 新连接的 prod 标记不可信；
+ * prodConfirm 变成 truthy 的 'no' → 用户以为关了额外确认，实际还开着。
+ */
+describe('settings 运维策略字段（E4/E5）', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('默认值：新连接 test、prod 额外确认开', () => {
+    setActivePinia(createPinia())
+    lsMap.clear()
+    const s = useSettingsStore()
+    expect(s.settings.agent.defaultEnvironment).toBe('test')
+    expect(s.settings.agent.prodConfirm).toBe(true)
+  })
+
+  it('脏 localStorage 造不出非法环境值与非布尔 prodConfirm', async () => {
+    lsMap.set('ckunagentic:settings', JSON.stringify({
+      agent: { defaultEnvironment: 'staging', prodConfirm: 'no' },
+    }))
+    vi.useRealTimers()
+    vi.resetModules()
+    setActivePinia(createPinia())
+    const { useSettingsStore: fresh } = await import('@/stores/settings')
+    const s = fresh()
+    expect(s.settings.agent.defaultEnvironment).toBe('test')
+    expect(s.settings.agent.prodConfirm).toBe(true)
+  })
+
+  it('合法保存值原样读回', async () => {
+    lsMap.set('ckunagentic:settings', JSON.stringify({
+      agent: { defaultEnvironment: 'prod', prodConfirm: false },
+    }))
+    vi.resetModules()
+    setActivePinia(createPinia())
+    const { useSettingsStore: fresh } = await import('@/stores/settings')
+    const s = fresh()
+    expect(s.settings.agent.defaultEnvironment).toBe('prod')
+    expect(s.settings.agent.prodConfirm).toBe(false)
+  })
+})
+/**
+ * A1：卡片级"设为 SSH 默认"入口。store 负责 PATCH + 重拉列表，
+ * UI 侧靠 modelConfigs 响应式派生显示，无须自己再拉一次 default。
+ */
+describe('settings setDefaultModel', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.useFakeTimers()
+    lsMap.clear()
+    for (const fn of Object.values(apiMock)) fn.mockClear()
+    for (const fn of Object.values(agentApiMock)) fn.mockClear()
+    // refreshChatModels 会拉 ./models 并触发 api.getModels —— 提供空实现，
+    // 避免动态 import 报错打断主流程断言（外层 .catch 也会吞掉）
+    ;(apiMock as Record<string, unknown>).getModels = vi.fn(async () => [])
+    apiMock.setDefaultModel.mockImplementation(async () => ({ default: 'm2', mode: 'ssh' }))
+    // vi.fn 从初始 `async () => []` 推出 never[]；显式断言绕开 mockResolvedValue 的窄化
+    apiMock.getModelConfigs.mockResolvedValue([
+      { id: 'm1', name: 'A', is_default_ssh: false },
+      { id: 'm2', name: 'B', is_default_ssh: true },
+    ] as never)
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it('成功后刷新列表，is_default_ssh 落到新条目', async () => {
+    const s = useSettingsStore()
+    const ok = await s.setDefaultModel('m2')
+    expect(ok).toBe(true)
+    expect(apiMock.setDefaultModel).toHaveBeenCalledWith('m2', 'ssh')
+    expect(apiMock.getModelConfigs).toHaveBeenCalled()
+    expect(s.modelConfigs.find((m) => m.id === 'm2')?.is_default_ssh).toBe(true)
+    expect(s.modelsError).toBe('')
+  })
+
+  it('失败时置 modelsError，返回 false 且列表保持原样', async () => {
+    const s = useSettingsStore()
+    // 先建立初始列表
+    await s.fetchModelConfigs()
+    expect(s.modelConfigs.length).toBe(2)
+    apiMock.getModelConfigs.mockClear()
+
+    apiMock.setDefaultModel.mockRejectedValueOnce(new Error('404 Model not found'))
+    const ok = await s.setDefaultModel('missing')
+    expect(ok).toBe(false)
+    expect(s.modelsError).toContain('404')
+    // 失败路径不再拉列表：后端没落库，重拉只会拿到旧状态误导用户
+    expect(apiMock.getModelConfigs).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * C3：appearance.fontSize 重命名为 uiFontSize（它与 chat.messageFontSize、
+ * appearance.terminal.fontSize 三套字号同名不同物）。老用户的 localStorage 里
+ * 只有旧 key，读不到就等于把人家调过的字号打回 13。
+ */
+describe('settings 界面字号旧 key 兼容', () => {
+  const readUiFontSize = async (raw: unknown): Promise<number> => {
+    lsMap.set('ckunagentic:settings', JSON.stringify(raw))
+    vi.useRealTimers()
+    vi.resetModules()
+    setActivePinia(createPinia())
+    const { useSettingsStore: fresh } = await import('@/stores/settings')
+    return fresh().settings.appearance.uiFontSize
+  }
+
+  afterEach(() => vi.useRealTimers())
+
+  it('只有旧 fontSize 时按旧值读回', async () => {
+    expect(await readUiFontSize({ appearance: { fontSize: 15 } })).toBe(15)
+  })
+
+  it('新旧并存时以新 key 为准', async () => {
+    expect(await readUiFontSize({
+      appearance: { fontSize: 12, uiFontSize: 14 },
+    })).toBe(14)
+  })
+
+  it('两者都没有时落回默认 13', async () => {
+    expect(await readUiFontSize({ appearance: { theme: 'dark' } })).toBe(13)
+  })
+
+  it('保存后落盘的是新 key，旧 key 不再回写', async () => {
+    lsMap.set('ckunagentic:settings', JSON.stringify({ appearance: { fontSize: 15 } }))
+    vi.useFakeTimers()
+    vi.resetModules()
+    setActivePinia(createPinia())
+    const { useSettingsStore: fresh } = await import('@/stores/settings')
+    const s = fresh()
+    s.settings.appearance.uiFontSize = 14
+    await vi.advanceTimersByTimeAsync(1000)   // debounce 300ms 后全量序列化
+    const raw = lsMap.get('ckunagentic:settings') ?? ''
+    expect(raw).toContain('"uiFontSize":14')
+    // 全量重写：appearance 下的旧 fontSize 不会被带回来（terminal.fontSize 是另一套，照常保留）
+    const appearance = (JSON.parse(raw) as { appearance: Record<string, unknown> }).appearance
+    expect('fontSize' in appearance).toBe(false)
   })
 })
