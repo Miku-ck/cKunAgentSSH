@@ -222,7 +222,11 @@ CREATE TABLE memory_audit (
 
 ## 9. 前端 UI 与设置
 
-**`AgentMemoryView.vue` 升级为记忆管理面板**（AI 面板入口不变）：
+**`AgentMemoryView.vue` 升级为记忆管理面板**（入口：**设置 → 记忆 → 「打开记忆管理」**，懒挂载）：
+
+> 入口沿革：本节原写「AI 面板入口不变」。外来提交 `e309598`（标题只说删死配置 `memory.strategy`）
+> 顺手撤下了 AI 面板上的「记忆」按钮与挂载点，使整块面板 0 引用；第五轮清理把入口改挂到设置面板，
+> 不再回到 `SshAiPanel.vue`（该组件同时承载目标/工件线）。
 - 列表：按 kind/scope/status/source 筛选，显示 title + importance + use_count + 状态徽标（superseded/invalidated 灰显可展开"被谁取代"链）；
 - 操作：编辑（置 `pinned` 提示）、pin/unpin、手动新增（直写+`user_ui`）、删除（置 invalidated，非物理删）；
 - **审计抽屉**：单条记忆的 `memory_audit` 历史（为什么被改/谁改的）；job 队列状态（pending/failed + 错误 + "立即整理"手动触发 tick）；
@@ -233,6 +237,8 @@ CREATE TABLE memory_audit (
 - `memory.enabled`（总开关）、`memory.max_items` 保留并进设置 UI（现缺 UI）；
 - 新增 `memory.inject_budget_tokens`(1500)、`memory.search_timeout_s`(8)、`memory.reconcile_llm_enabled`(true，关掉则退化为纯阈值去重)。
 - embedding 沿用现有模型行配置，不新增设置项；模型行 embedding 探活结果在设置面板显示（"语义检索：可用/仅关键词"）。
+  - **未实现**：后端没有探活端点，`mstore.stats()` 只返回 memories/jobs 计数，设置面板因此不显示这一行。
+    第五轮清理只做「文档与代码对齐」，不在清理轮里造新能力；本条留作后续需求。
 
 ## 10. 存量迁移（启动时执行，幂等）
 
@@ -275,6 +281,11 @@ CREATE TABLE memory_audit (
 ## 14. 主要触点文件
 
 新增：`backend/agent/memory/`（包：`store.py` `index.py` `retriever.py` `reconcile.py` `blocks.py` `jobs.py` `budget.py`）、`backend/tests/test_memory_v2_*.py`、`src/components/agent/MemoryPanel/*`。
+
+> 落地时的实际文件名与设计稿不同（P1/P2 期间合并了模块）：`backend/agent/memory/` 下是
+> `mstore.py`（store+jobs 合一）/ `retriever.py` / `reconcile.py` / `blocks.py` / `budget.py` /
+> `text.py` / `vec.py` / `embedding.py`；前端没有 `MemoryPanel/*` 目录，管理面板仍在
+> `src/components/agent/AgentMemoryView.vue`（入口在设置面板的 `MemoryPanel.vue`，两者不是同一个组件）。
 改造：`backend/database.py`（新表+迁移）、`backend/routes/agent.py`（预检索/注入/反思后门）、`backend/post_processor.py`（提取投 job）、`backend/agent/consciousness_tick.py`（job 消费）、`backend/agent/harness/bridle.py`（blocks 段+预算）、`backend/agent/harness/reins/*`（工具注册）、`backend/agent/host_profile.py`（升级为块）、`backend/agent/reflection.py`/`evolution.py`（并轨）、`src/components/agent/AgentMemoryView.vue`、设置面板。
 删除：`backend/agent/memory.py`（P5）、伪向量与 `_fallback_embed`（P5）、`memory.strategy` 配置（P4）。
 

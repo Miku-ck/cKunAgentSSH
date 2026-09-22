@@ -16,7 +16,9 @@ SSH 智能运维终端 — 集成 SSH 连接管理、远程终端、SFTP 文件�
 - **GPU nvtop 面板**：nvitop 风格逐卡视图（算力/显存/温度/功耗/进程），双层量值图（进度条=当前值、趋势薄条=60 格历史），矛盾态检测（占卡不干活 / IO 等待 / SWAP 已满）以条端标记+悬浮提示呈现；档位阈值全局统一为 60/80（负载 4/8）
 - **终端「问 AI」**：选中终端内容 → 选区旁悬浮按钮 → 预填 AI 面板问题草稿，随消息自动注入 cwd / 最近命令 / 选区上下文
 - **AI 运维助手**：流式对话 + 思考链、多模型切换、Agent 智能体（工具调用）
-- **Agent 框架（Harness）**：ReAct 决策循环、11 拦截器、22 工具、动态步数预算、循环检测、成本熔断
+- **Agent 框架（Harness）**：ReAct 决策循环、13 拦截器、29 工具、动态步数预算、循环检测、成本熔断
+- **Agent 记忆 v2**：单一写入方对账（去重/消解矛盾/失效）、混合检索（FTS5 + 向量）、常驻画像块、注入 token 预算；设置 → 记忆 可浏览/检索/置顶/编辑/失效记忆并查看对账队列与块历史
+- **计划模式**：前端 mode chip 成对下发 `workflow_mode=plan` + `permission_mode=plan`，后者由 `PlanModeGuard` 在审批卡之前就把写操作硬拦成只读（不是提示词约定）；「计划批准后才放行执行」的门尚未接线，见 `docs/plan-mode.md` §6.2
 - **澄清向导**：Agent 工具调用意图不明时拦截并弹出多步澄清卡片（A/B/C + 自定义），答完注入上下文放行、可跳过；精准调用零打扰
 - **生产环境授权强化**：prod 环境仅认预授权 allowlist（禁临时审批），service stop/restart 等破坏性动作自动升级 dangerous 需逐次审批
 - **审批卡片中文说明**：需审批命令自动附中文后果说明（静态后果表全覆盖），未知命令由 LLM 后台补发一句解释回填卡片；纯展示层，不参与任何放行/拦截判定
@@ -187,7 +189,12 @@ cKunAgentSSH/
 │       ├── language.ts                # 语言检测
 │       ├── markdown.ts                # Markdown 渲染
 │       ├── terminal-colors.ts         # ANSI 背景色过滤
-│       └── think-scrubber.ts          # 思考链清理
+│       ├── think-scrubber.ts          # 思考链清理
+│       ├── format.ts                  # 展示格式化（字节数 / 后端 UTC naive 时间戳）
+│       ├── menu.ts                    # 浮层菜单贴边时翻向另一侧
+│       ├── run-modes.ts               # 姿态+审批档 → workflow_mode/permission_mode 成对下发
+│       ├── finalizeAgentMessage.ts    # 固化运行结果到会话占位消息（store watch 调用）
+│       └── nvtop-scale.ts             # GPU 面板取色与量值映射（阈值分档）
 │
 ├── backend/                           # Python FastAPI 后端
 │   ├── main.py                        # FastAPI 入口 + 路由注册
@@ -200,6 +207,8 @@ cKunAgentSSH/
 │   ├── builtin_skills.py              # 包内内置技能同步（skills_builtin/ → DB）
 │   ├── skills_builtin/                # 随包分发的内置运维技能（SKILL.md）
 │   ├── safe_tokens.py                 # Token 安全处理
+│   ├── netconfig.py                   # 出站 HTTP 策略（代理/超时/重试）唯一读取点
+│   ├── logconfig.py                   # 后端日志级别与 root handler
 │   ├── sse_utils.py                   # SSE 工具函数
 │   ├── requirements.txt               # Python 依赖
 │   ├── requirements-optional.txt      # 可选依赖（trafilatura 网页正文提取）
@@ -211,14 +220,24 @@ cKunAgentSSH/
 │   │   │   ├── bridle.py              # 上下文组装 + 压缩
 │   │   │   ├── saddle.py              # 工具执行 + 沙箱
 │   │   │   ├── stirrups.py            # LLM 调用 + 重试
-│   │   │   ├── reins/                   # 拦截器策略层（core/guards/gate/flow/lifecycle/clarification/defaults）
+│   │   │   ├── reins/                   # 拦截器策略层（core/guards/gate/flow/lifecycle/clarification/plan_mode/auto_approve/defaults）
 │   │   │   ├── safety.py              # 命令/路径/SSRF 安全防御
 │   │   │   ├── command_explain.py     # 审批卡片中文后果说明（静态表 + LLM 兜底）
 │   │   │   ├── telemetry.py           # 遥测总线
 │   │   │   ├── contracts.py           # 契约定义
 │   │   │   └── llm_client.py          # 流式 LLM 客户端
 │   │   │
-│   │   ├── memory.py                  # Agent 记忆管理
+│   │   ├── memory/                    # Agent 记忆 v2（单一写入方对账 + 画像块）
+│   │   │   ├── mstore.py              # 存储层：写入/检索池/置顶/失效/统计
+│   │   │   ├── retriever.py           # 混合检索（FTS5 + sqlite-vec 融合）
+│   │   │   ├── reconcile.py           # 对账器：候选 → 合并/取代/失效
+│   │   │   ├── blocks.py              # Letta 式常驻画像块（含历史回滚）
+│   │   │   ├── budget.py              # 注入预算分配（inject/blocks tokens）
+│   │   │   ├── text.py                # 正文规范化与去重键
+│   │   │   ├── vec.py                 # sqlite-vec 扩展装载与向量表
+│   │   │   ├── embedding.py           # 向量化（失败静默降级为纯词法）
+│   │   │   └── __init__.py            # 对外统一导入面
+│   │   ├── workflow.py                # Spec/Plan/Goal 三阶段工件按会话落盘读写
 │   │   ├── reflection.py              # 元反思
 │   │   ├── evolution.py               # 策略演化
 │   │   ├── intention.py               # 意图分类（含 is_change 变更/只读维度 + 逐轮引导）
@@ -229,12 +248,14 @@ cKunAgentSSH/
 │   │   ├── electron_bridge.py         # 桥接客户端（WS-only，经 bridge_relay 下发命令）
 │   │   ├── bridge_relay.py            # WS 反向通道服务端（/ws/bridge 单连接中枢）
 │   │   │
-│   │   └── tools/builtin/             # 22 个内置工具（SSH 模式）
+│   │   └── tools/builtin/             # 29 个内置工具（SSH 模式）
 │   │       ├── shell_exec.py          # SSH 远程命令执行
 │   │       ├── web_tools.py           # 联网搜索/抓取
 │   │       ├── todo_write.py          # 任务列表
 │   │       ├── load_skill.py          # 按需加载技能
 │   │       ├── spawn_subagent.py      # 启动子 Agent
+│   │       ├── memory_tools.py        # 记忆自编辑（主动查/记/作废，spec §7）
+│   │       ├── workflow_tools.py      # spec/plan/goal 工件写入
 │   │       ├── ops_common.py          # 运维共享执行辅助（双模式）
 │   │       ├── ops_obs.py             # 只读观测（概览/进程/网络）+ 日志 + 环境画像模板
 │   │       ├── ops_service.py         # 服务生命周期（systemctl）
@@ -250,6 +271,8 @@ cKunAgentSSH/
 │       ├── settings.py                # 设置接口
 │       ├── skills.py                  # 技能 CRUD
 │       ├── terminal.py                # 终端信息接口
+│       ├── schedules.py               # 定时任务接口
+│       ├── workflow.py                # Spec/Plan/Goal 工件读写接口
 │       └── audit.py                   # 审计记录查询/导出/校验
 │
 ├── electron.vite.config.ts            # electron-vite 构建配置
@@ -305,13 +328,15 @@ Agent 框架采用马术装备隐喻，契约驱动设计。
 
 ```
 Driver（驭手）—— ReAct 决策循环主驱动
-  ├── Reins（缰绳）—— 11 拦截器策略层
+  ├── Reins（缰绳）—— 13 拦截器策略层
   │   ├── SkillRein         AGENT_START    技能注入
   │   ├── LoopDetector      PRE_TOOL_CALL  循环检测
   │   ├── PermissionGate    PRE_TOOL_CALL  权限审批（prod 仅预授权 allowlist）
   │   ├── FilesystemGuard   PRE_TOOL_CALL  敏感命令检测 + 审批卡片中文说明
   │   ├── ClarificationInterceptor PRE_TOOL_CALL 澄清向导（意图不明时拦截提问）
+  │   ├── PlanModeGuard     PRE_TOOL_CALL  计划阶段只读强制（priority 6，先于三张审批卡）
   │   ├── AuditLogger       POST_TOOL_CALL 审计日志
+  │   ├── PlanDisciplineRein PRE_ITERATION 计划阶段行为纪律（priority 12）
   │   ├── DynamicBudgetRein POST_ITERATION 动态步数预算
   │   ├── CostBudgetRein    POST_ITERATION 成本/token 硬熔断
   │   ├── ConfidenceMonitor POST_ITERATION 置信度监控
@@ -319,7 +344,7 @@ Driver（驭手）—— ReAct 决策循环主驱动
   │   └── ReflectionRein    AGENT_FAILED   失败反思（同组件双实例）
   │
   ├── Bridle（马缰）—— 上下文组装 + 压缩
-  ├── Saddle（马鞍）—— 工具执行 + 沙箱（22 个内置工具）
+  ├── Saddle（马鞍）—— 工具执行 + 沙箱（29 个内置工具）
   ├── Stirrups（马镫）—— LLM 调用 + 重试
   └── TelemetryBus —— 事件广播
 ```
@@ -334,7 +359,7 @@ INIT → THINKING → [LLM 调用] → 有工具调用?
 成本/token 超限 → CostBudgetRein 熔断 → FAILED
 ```
 
-### 22 个内置工具
+### 29 个内置工具
 
 #### 基础工具
 
@@ -382,6 +407,18 @@ INIT → THINKING → [LLM 调用] → 有工具调用?
 | `job_list` | safe | 列出全部后台任务（远程任务重启后从 agent_jobs 恢复，顺带 kill -0 存活对账） |
 | `job_output` | safe | 读 job 输出（本地=内存缓冲 / 远程=增量 tail 日志 + 退出码文件，可 wait 阻塞） |
 | `job_kill` | moderate | 终止后台任务（本地 SIGTERM→SIGKILL / 远程整进程组 TERM→KILL 升级） |
+
+#### 记忆自编辑与三阶段工件
+
+| 工具 | 风险 | 说明 |
+|---|---|---|
+| `memory_search` | safe | 主动检索自己的记忆库（与被动注入是双通道） |
+| `memory_add` | safe | 显式记一条事实/经历/规程，进对账队列而非直接落池 |
+| `memory_invalidate` | safe | 按 id 失效一条记忆（失效不是删除，保留可回滚历史） |
+| `block_update` | safe | 改写常驻画像块（Letta 式，旧内容入历史） |
+| `spec_write` | safe | 写规格工件 spec.md（按会话目录落盘，无 DB） |
+| `plan_write` | safe | 写计划工件 plan.md |
+| `goal_write` | safe | 写目标工件 goal.md（成功标准锚） |
 
 > 文件/图片/后台任务均**双模式**：有 SSH 会话时操作远程服务器（POSIX），
 > 无会话时操作本地主机（Python 原生 API，规避 Windows CMD 不认 POSIX）。
@@ -446,13 +483,23 @@ npm run dev            # 开发模式（Vite HMR + Electron）
 npm run dev:web        # 开发模式 + dev server 监听 0.0.0.0（局域网真机/多屏调试）
 npm run dev:backend    # 单独启动 Python 后端
 npm run build          # 构建生产版本（out/main|preload|renderer）
-npm run typecheck      # 前端类型检查（vue-tsc）
+npm run typecheck      # 前端类型检查（vue-tsc，web + node/electron 两份 tsconfig 都要过）
 npm test               # 前端单测（vitest）
 npm run test:backend   # 后端单测（pytest）
 npm run ci             # 本地门禁：typecheck + vitest + pytest
 bash scripts/ci-check.sh   # 一键 CI（上述 + 构建，与 .github/workflows/ci.yml 检查项一致）
 npm run package        # electron-builder 打包（Windows nsis + portable）
 ```
+
+### 已知命名债：`backend/tests/test_*_roundN.py`
+
+71 个后端测试模块里有 20 个沿用历史审查轮次编号（`round3` … `round20`，如
+`test_minor_round3.py`、`test_post_process_round13b.py`、`test_settings_fields_round20.py`）。
+编号对读代码的人没有信息量 —— 文件名说的其实是"这轮顺手补的回归"，主题才是被测面。
+
+本轮**决定不改名**：改名会让 `git log -M` 追不到这些模块的演进史，而它们是历次
+审查的回归锚点（多条断言只有结合当轮缺陷才讲得通）。新测试请按主题命名
+（如 `test_safety_misjudgment.py`），别续上 `round21`。
 
 ### 打包与分发（最后一公里）
 

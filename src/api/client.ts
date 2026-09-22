@@ -373,7 +373,8 @@ export const workflowApi = {
     return request<WorkflowSnapshot>(`/workflow?${q.toString()}`)
   },
 
-  /** 列出所有有工件的会话 ID（导航条按会话展示用） */
+  /** 列出所有有工件的会话 ID —— 前端导航条尚未接线，目前无调用方；
+   *  后端 GET /workflow/phases 与 agent/workflow.py:get_phases 已就绪。 */
   phases: () => request<{ conversation_ids: string[] }>(`/workflow/phases`),
 }
 

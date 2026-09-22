@@ -193,7 +193,7 @@ cd backend && <venv>/Scripts/python.exe -m pytest tests/test_plan_mode.py -q -p 
 |---|---|---|
 | 1 | `reins/defaults.py` | `interceptors.append(PlanModeGuard(saddle=saddle))` + `append(PlanDisciplineRein())`（+19 行） |
 | 2 | `harness.py` `run()` | 新增可选参数 `permission_mode: str = "normal"`，写入 `ctx.metadata[MODE_KEY]`（+19 行，**唯一写入点**） |
-| 3 | `routes/agent.py` `AgentRunRequest` | `permission_mode: Literal["normal","plan"] = "normal"`（值域校验沿 `mode` / `environment` 惯例） |
+| 3 | `routes/agent.py` `AgentRunRequest` | `permission_mode: Literal["normal","auto","plan"] = "normal"`（值域校验沿 `mode` / `environment` 惯例；`auto` = 审批轴「模型代判」，与本节的 `plan` 互斥） |
 | 4 | `routes/agent.py` 的 `harness.run(...)` 调用 | `permission_mode=req.permission_mode` |
 
 1~4 全是**新增**，没有一行删除；1+2 合计 +38 行。
@@ -210,21 +210,30 @@ cd backend && <venv>/Scripts/python.exe -m pytest tests/test_plan_mode.py -q -p 
 
 **后端 4 个接线点已全部落地**（见 §5.3）—— `permission_mode` 现在能从 HTTP 请求一路走到 `ctx.metadata`：`POST /api/agent/run` 带 `"permission_mode": "plan"` 即可验证只读强制生效。
 
-**仍差两件事：**
+**仍差一件事：§6.2 的批准门。**
 
-### 6.1 前端「计划」chip 仍是**假启用**
+### 6.1 前端「计划」chip —— 已接线（本节原为「假启用」，已失效并更正）
 
-`+` 菜单的「计划」chip（`SideChatPanel.vue` 的 `activeCaps`，已经是 `CapToggleKey = 'plan'`）会亮，但**它从不进入 `emit('send')` 的载荷**（已核实；`src/stores/ssh-ai.ts` 里也搜不到任何 `plan` / `caps`）。后端已就绪，**只差把 chip 的值放进 run 请求**。
+chip 的值现在确实进入 run 请求，链路三跳都在代码里：
 
-⚠️ **留一个亮的、什么都不做的开关比没有更糟。** 要么接完，要么先把 chip 撤掉。
+| # | 位置 | 作用 |
+|---|---|---|
+| 1 | `src/components/chat/SideChatPanel.vue` → `emit('send', content, skillIds, attachments, mode, approval)` | chip 选中的姿态随发送载荷出组件 |
+| 2 | `src/components/ssh/SshAiPanel.vue`（`handleSend` → `store.sendMessage(content, { …, mode, approval })`） | 透传给 store，不在此处解释语义 |
+| 3 | `src/utils/run-modes.ts` `resolveRunModes(agentMode, approval)` | 单一口径：一次返回 `{ workflowMode, permissionMode }` 成对字段，调用方无法只取其一（`ssh-ai.ts` 里展开进 options） |
+| 4 | `src/api/client.ts`（请求体 `workflow_mode` / `permission_mode` 两行） | 落成后端两个字段 |
 
-`AgentRunPanel.vue` 还需要「计划已生成 / 批准 / 驳回」卡片 —— 依赖 6.2 的状态。
+**为什么收敛成一个函数**：`workflow_mode` 只管措辞（注入计划姿态的 system prompt 段），`permission_mode` 才是真拦住写操作的那个。只发前者 = 界面亮着、约束不存在的「亮的空开关」，而拆成两处各写一遍条件正是这种漂移最常发生的地方。
+
+姿态为 `plan` 时 `permissionMode` 恒为 `'plan'`、审批档休眠 —— 与 §5.1 的「PlanModeGuard 在任何审批卡之前拦住写操作」对齐：计划模式下不该再弹「让模型代判」的卡。
+
+`AgentRunPanel.vue` 的「计划已生成 / 批准 / 驳回」卡片仍**未做** —— 它依赖 §6.2 的状态，而那个状态还不存在。
 
 ### 6.2 批准门（I3）的存储未设计 —— 也是 §2.3 那个真 bug 的收口处
 
 `plan_write` 写出 `plan.md` 之后，**没有任何动作能把模式切回可写**。更糟的是：当前 `workflow.hydrate_for_session` 只要看到 `plan.md` 存在，就把它当成「已确定的执行步骤（按此推进）」注入 —— 也就是**未批准的计划已经被当成契约在执行**。
 
-§3.2 给的 `plan.meta.json` sidecar 方案（`status: draft|approved|rejected` + `plan_hash` 绑版本，hash 变则批准作废）需要读写 `workflow.py` 的会话工件目录。**先对齐归属再写**，否则会出现两套「批准状态」—— 这正是本仓库反复出现的失败模式（`GoalView.vue` 的重复实现即一例）。
+§3.2 给的 `plan.meta.json` sidecar 方案（`status: draft|approved|rejected` + `plan_hash` 绑版本，hash 变则批准作废）需要读写 `workflow.py` 的会话工件目录。**先对齐归属再写**，否则会出现两套「批准状态」—— 这正是本仓库反复出现的失败模式（同一份「布尔 app_setting 解析」曾在 `database.py` 与 `post_processor.py` 各写一遍且语义不同，第五轮清理才收敛成 `database.bool_app_setting`）。
 
 ### 6.3 当时的现场记录（已不适用，留档）
 
@@ -242,7 +251,7 @@ backend/routes/settings.py                     17:0x
 
 （`main.py` 的 mtime 在两次观察之间从「含 `routes.goals` 导入」变成「已移除导入」——**观察期间文件正在被写**。）
 
-往这些文件写会丢写，而且**在已有实现之上再起一套并行实现**正是本项目已经出现过的坏味道（`GoalView.vue` 就有一份重复实现）。因此只落地了不冲突的那一层。
+往这些文件写会丢写，而且**在已有实现之上再起一套并行实现**正是本项目已经出现过的坏味道（同一份布尔 app_setting 解析曾在 `database.py` 与 `post_processor.py` 各写一遍，语义还不完全一致）。因此只落地了不冲突的那一层。
 
 **当时的 3 个接线点（后端部分现已全部完成）**：
 
@@ -256,9 +265,9 @@ backend/routes/settings.py                     17:0x
 
 ## 7. 本轮顺带发现的两个在途缺陷（不是我改出来的）
 
-### 7.1 `database.py`：goal 回滚留下孤儿迁移，新建库直接崩
+### 7.1 `database.py`：goal 回滚留下孤儿迁移，新建库直接崩 —— 已消除
 
-`_migrate_db()` 里还留着补齐 goal 五要素的迁移块（`backend/database.py:477-491`），但全仓已经**没有任何地方创建 `goals` 表**了：
+`_migrate_db()` 里曾留着补齐 goal 五要素的迁移块，但全仓已经**没有任何地方创建 `goals` 表**了：
 
 ```
 $ grep -rn "CREATE TABLE.*goals" backend --include=*.py
@@ -267,18 +276,13 @@ $ grep -rn "CREATE TABLE.*goals" backend --include=*.py
 
 新建库时 `PRAGMA table_info(goals)` 返回 0 行 → 逐列 `ALTER TABLE goals ADD COLUMN …` → `sqlite3.OperationalError: no such table: goals`。
 
-单条复现：
-
-```
-cd backend && <venv>/Scripts/python.exe -m pytest \
-  tests/test_round8_fixes.py::test_prune_agent_runs_cascades_tool_calls -q -p no:cacheprovider
-# → 1 failed: database.py:490: OperationalError: no such table: goals
-```
-
-影响面：`test_round8_fixes.py` 5 个用例红，**所有用新建库的用例**都可能受牵连（本轮的 `test_plan_mode.py` 不碰 DB，所以没受影响）。修法是二选一：删掉该迁移块，或把 `CREATE TABLE IF NOT EXISTS goals` 一起恢复。**判断归属需要那条线的上下文，所以没动手。**
+**当前状态：该迁移块已不在代码里**（`grep -n "goals" backend/database.py` 无命中），
+`tests/test_round8_fixes.py` 13 passed。本节保留为缺陷记录，不再是需要裁决的开放项。
 
 ### 7.2 `workflow.get_phases()`：名字/文档与返回值不符
 
-见 §2.3 —— docstring 说返回"阶段元数据"，实现返回的是会话 id 列表。同样没动（该文件在并发写者手里）。
+见 §2.3 —— docstring 曾写"阶段元数据"而实现返回会话 id 列表。HEAD 仍是那句错文档；
+函数本身没有调用方（`workflowApi.phases` 亦未接线），所以错文档目前不误导任何代码，
+只会误导读代码的人。归属线正在写这个文件，本轮不动它。
 
 
