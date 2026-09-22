@@ -11,6 +11,7 @@ Bridle — 笼头
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 from dataclasses import dataclass, field
@@ -18,15 +19,12 @@ from dataclasses import dataclass, field
 from agent.truncation_limits import TRUNC_THRESHOLD, TRUNC_HEAD, TRUNC_TAIL
 from typing import Optional
 
+from ..memory import budget as memory_budget
 from .contracts import RunContext
 # 复用 cost_tracker 的更精确 token 估算（区分中英文），避免重复实现
 from ..cost_tracker import estimate_tokens
 
 logger = logging.getLogger(__name__)
-
-# Token → 字符数反向换算常量（用于摘要尺寸封顶，按 token 数 × chars/token 估算字符上限）
-# 与 cost_tracker.estimate_tokens 的中英文区分逻辑不同，此处只需粗略上限
-_CHARS_PER_TOKEN = 3
 
 # 滚动再摘要：将既有摘要作为合成 user 消息前置参与压缩；以下哨兵用于压缩后剔除该合成消息
 _PRIOR_SUMMARY_SENTINEL = "\x00__PRIOR_SUMMARY__\x00"
@@ -80,6 +78,14 @@ class Bridle:
     @property
     def compress_threshold_tokens(self) -> int:
         return int(self.max_context_tokens * self.config.compress_threshold)
+
+    @functools.cached_property
+    def budget(self) -> memory_budget.MemoryBudget:
+        """本次 run 的统一预算（画像块/注入/摘要/history），按窗口一次性分配。
+
+        Bridle 是 per-run 构造的，所以缓存在这里是安全的 —— 改设置下一条消息才生效。
+        """
+        return memory_budget.current(self.max_context_tokens)
 
     def should_compress(self, messages: list[dict]) -> bool:
         return estimate_messages_tokens(messages) > self.compress_threshold_tokens
@@ -223,15 +229,10 @@ class Bridle:
                     and m["content"].startswith(_PRIOR_SUMMARY_SENTINEL))
         ]
         if summary_text is not None:
-            # 已含旧摘要的浓缩（滚动再摘要），直接替换而非追加，确保摘要尺寸有界
-            # 审查 MINOR 修复：旧 cap = max_context_tokens * 3 字符 ≈ 整个上下文窗口的
-            # 字符当量（16384 窗口 → 49152 字符 ≈ 16k token），一条摘要即可再撑爆窗口，
-            # 反复触发 force 压缩直到重试耗尽。改为窗口的 25%（下限 2000 字符）。
-            cap = max(2000, int(self.max_context_tokens * 0.25 * _CHARS_PER_TOKEN))
-            ctx.metadata["context_summary"] = (
-                summary_text if len(summary_text) <= cap
-                else "[早期上下文已折叠]\n" + summary_text[-(cap - 11):]
-            )
+            # 滚动再摘要结果直接替换旧摘要（尺寸有界）。spec §8：按 token 上限截，
+            # 不再用 chars/token 反推字符数（旧 cap ≈ 整个窗口，一条摘要就能再撑爆）。
+            ctx.metadata["context_summary"] = memory_budget.cap_text_tokens(
+                summary_text, self.budget.summary)
         # 保留纠偏 system 消息（置于末尾），其余为近期 run 消息
         ctx.messages = recent + run_system
 
@@ -319,8 +320,9 @@ class Bridle:
                     # C-review M12：先前摘要按上限完整回喂（与 metadata 存储的 cap 一致），
                     # 滚动再摘要得以浓缩完整旧摘要；旧实现只留 200 字符，
                     # 每一代摘要都丢失上一代绝大部分信息（嵌套截断退化）
-                    prior_cap = max(2000, int(self.max_context_tokens * 0.25 * _CHARS_PER_TOKEN))
-                    prior_part = f"[user] {content[len(_PRIOR_SUMMARY_SENTINEL):][:prior_cap]}"
+                    prior_capped = memory_budget.cap_text_tokens(
+                        content[len(_PRIOR_SUMMARY_SENTINEL):], self.budget.summary)
+                    prior_part = f"[user] {prior_capped}"
                     continue
                 # tool 消息按 priority 差异化摘要长度
                 if role == "tool":

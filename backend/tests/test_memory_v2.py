@@ -455,6 +455,69 @@ def test_render_blocks_budget_drops_whole_block(memdb):
     assert _run(memory_blocks.render_for_context("s1", budget_tokens=1)) == ""
 
 
+def test_budget_clamps_accounts_to_window():
+    """spec §8：设置值是"想要多少"，窗口是"能给多少"，取小者。"""
+    from agent.memory.budget import MemoryBudget
+
+    tight = MemoryBudget.for_context(8192, blocks_wanted=8000, injection_wanted=8000)
+    assert tight.blocks < tight.window and tight.injection < tight.window
+    assert (tight.blocks + tight.injection + tight.summary
+            + tight.history + tight.reserve) <= tight.window
+    assert tight.reserve >= 1024
+
+    # 窗口足够大时设置值原样通过（小模型才会被夹）
+    wide = MemoryBudget.for_context(200000, blocks_wanted=1200, injection_wanted=1500)
+    assert (wide.blocks, wide.injection) == (1200, 1500)
+    assert MemoryBudget.for_context(None).window == 16384
+    assert MemoryBudget.for_context(8192).blocks < wide.blocks
+
+
+def test_budget_cap_text_tokens_keeps_tail():
+    from agent.cost_tracker import estimate_tokens
+    from agent.memory.budget import cap_text_tokens
+
+    assert cap_text_tokens("短文本", 300) == "短文本"
+    capped = cap_text_tokens("记录" * 4000, 300)
+    assert estimate_tokens(capped) <= 360          # marker 的余量在内
+    assert capped.endswith("记录记录")              # 保尾：近期内容更有价值
+    assert "[早期上下文已折叠]" in capped
+
+
+def test_bridle_uses_window_derived_summary_account(memdb):
+    """bridle 的摘要上限来自统一预算，不再是 max_context_tokens × 3 字符。"""
+    from agent.harness.bridle import Bridle
+
+    small = Bridle(max_context_tokens=4096)
+    big = Bridle(max_context_tokens=200000)
+    assert 0 < small.budget.summary < big.budget.summary
+    assert small.budget.summary == max(200, int((4096 - 1024) * 0.25))
+
+
+def test_context_summary_persisted_on_run(memdb):
+    """spec §8：run 内滚动摘要落库，轨迹回放与 episodic job 都还能拿到它。"""
+    rid = "r-sum-" + db._new_id()
+    conv = db.create_conversation(title="摘要落库", mode="ssh")
+    db.create_agent_run(rid, conv["id"], "排查 nginx 502", mode="ssh")
+    db.update_agent_run(rid, "completed", context_summary="先确认端口占用，再改回 listen")
+    assert db.get_agent_run(rid)["context_summary"] == "先确认端口占用，再改回 listen"
+
+    # 不传该参数 = 不覆写（中间态更新频繁，摘要只在终态写一次）
+    db.update_agent_run(rid, "running", iteration=3)
+    assert db.get_agent_run(rid)["context_summary"] == "先确认端口占用，再改回 listen"
+
+
+def test_episodic_prompt_includes_folded_summary():
+    from agent.memory.reconcile import format_episodic
+
+    plain = format_episodic(task="部署", tool_calls=[], final_content="ok", iterations=2)
+    with_fold = format_episodic(
+        task="部署", tool_calls=[], final_content="ok", iterations=2,
+        folded_summary="前 12 轮在改 nginx 配置",
+    )
+    assert "早期过程" not in plain
+    assert "早期过程: 前 12 轮在改 nginx 配置" in with_fold
+
+
 def test_degraded_probe_text_is_not_a_host_fact(memdb):
     from agent import host_profile as hp
     assert not hp.is_known_profile(hp.UNKNOWN_TEXT)

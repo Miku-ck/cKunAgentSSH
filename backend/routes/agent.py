@@ -35,6 +35,7 @@ from routes.terminal import _get_model_config
 from sse_utils import sse_event
 from agent.tools import create_registry_for_mode, ToolRegistry
 from agent.memory import mstore
+from agent.memory import budget as memory_budget
 from agent.memory import reconcile as memory_reconcile
 from agent.memory import retriever as memory_retriever
 from agent.memory.embedding import get_embedding_client
@@ -568,6 +569,11 @@ async def agent_run(req: AgentRunRequest, request: Request):
     # 读取记忆设置 — 关闭时跳过检索与保存
     mem_settings = await asyncio.to_thread(db.get_memory_settings)
     memory_enabled = mem_settings["enabled"]
+    # spec §8 统一预算：设置值只代表"想要多少"，窗口才代表"能给多少"，取小者。
+    # 不夹住的话 8k 窗口的模型也会按 8000 token 注入记忆，压掉 history 与输出空间。
+    _mem_budget = memory_budget.current(model_cfg.get("max_tokens"))
+    mem_settings["inject_budget_tokens"] = _mem_budget.injection
+    mem_settings["blocks_budget_tokens"] = _mem_budget.blocks
 
     # v2 混合检索：episodic/semantic/procedural 统一记忆，scope 硬过滤
     # 对话型任务跳过记忆检索（避免无关记忆污染简单对话）
@@ -902,6 +908,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
                             cost_usd=cost_data.get("cost_usd", 0.0),
                             duration_ms=cost_data.get("duration_ms", 0),
                             tool_call_count=cost_data.get("tool_call_count", 0) or len(run_trace_tool_calls),
+                            context_summary=event.get("context_summary") or None,
                         )
                         # H14 修复：构造 AgentTraceSnapshot（无论是否有正文都构造）
                         # 原实现只在 total_content 非空时保存消息，导致运行失败且无正文输出时
@@ -1000,6 +1007,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
                                 tool_calls=run_trace_tool_calls,
                                 final_content=total_content,
                                 iterations=event.get("iterations", 0),
+                                folded_summary=event.get("context_summary") or "",
                             )
                             await asyncio.to_thread(
                                 mstore.enqueue_job,

@@ -820,6 +820,9 @@ class Driver:
                 "state": final_state.value,
                 "state_history": ctx.state_history,
                 "cost": cost_snapshot,
+                # spec §8：run 内滚动摘要随 done 出栈，由 routes 落到 agent_runs 行，
+                # 否则摘要随 ctx 一起消亡，轨迹回放与 episodic job 都拿不到
+                "context_summary": ctx.metadata.get("context_summary") or "",
             },
         )
         await telemetry.emit(done_event)

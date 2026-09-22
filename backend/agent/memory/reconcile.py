@@ -58,14 +58,21 @@ decisions 数量必须等于候选数量且 index 连续。
 """
 
 
-def format_episodic(task: str, tool_calls: list, final_content: str, iterations: int) -> str:
-    """从 Agent 运行轨迹构建 episodic 摘要（纯规则，迁移自 v1 MemoryManager）。"""
+def format_episodic(task: str, tool_calls: list, final_content: str, iterations: int,
+                    folded_summary: str = "") -> str:
+    """从 Agent 运行轨迹构建 episodic 摘要（纯规则，迁移自 v1 MemoryManager）。
+
+    folded_summary = run 内被压缩掉的早期上下文摘要（spec §8）：不带它，长 run 的
+    经验只剩最后几轮，后台 LLM 改写再怎么发挥也无米下锅。
+    """
     parts = [f"任务: {task.strip()[:200]}"]
     if iterations:
         parts.append(f"迭代次数: {iterations}")
     if tool_calls:
         tool_names = [tc.get("tool", "?") for tc in tool_calls]
         parts.append(f"使用工具: {', '.join(tool_names[:8])}")
+    if folded_summary:
+        parts.append(f"早期过程: {folded_summary.strip().replace(chr(10), ' ')[:400]}")
     if final_content:
         parts.append(f"结果: {final_content.strip().replace(chr(10), ' ')[:300]}")
     return " | ".join(parts)

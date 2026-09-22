@@ -249,6 +249,7 @@ def init_db(db_path: str) -> None:
                 cost_usd        REAL DEFAULT 0.0,
                 duration_ms     INTEGER DEFAULT 0,
                 tool_call_count INTEGER DEFAULT 0,
+                context_summary TEXT,
                 mode            TEXT,
                 model_used      TEXT,
                 started_at      TEXT NOT NULL DEFAULT (datetime('now')),
@@ -505,6 +506,13 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
     columns = {row[1] for row in cursor.fetchall()}
     if 'embedding_src' not in columns:
         conn.execute("ALTER TABLE agent_memories ADD COLUMN embedding_src TEXT")
+
+    # spec §8：run 内滚动摘要落库 —— 旧库补列，否则 update_agent_run 写它时
+    # "no such column"，整条 done 分支的统计落库一起挂掉
+    cursor = conn.execute("PRAGMA table_info(agent_runs)")
+    _run_cols = {row[1] for row in cursor.fetchall()}
+    if 'context_summary' not in _run_cols:
+        conn.execute("ALTER TABLE agent_runs ADD COLUMN context_summary TEXT")
 
     # v2 记忆子系统（spec §4/§7）：建表 + 一次性存量迁移，幂等由 app_settings 标记控制
     _init_memory_v2(conn)
@@ -1810,7 +1818,8 @@ def update_agent_run(run_id: str, status: str, iteration: Optional[int] = None,
                      state_history: str = None, total_tokens: int = 0,
                      prompt_tokens: int = 0, completion_tokens: int = 0,
                      cost_usd: float = 0.0, duration_ms: int = 0,
-                     tool_call_count: int = 0) -> None:
+                     tool_call_count: int = 0,
+                     context_summary: str = None) -> None:
     """更新 Agent 运行状态（含 token/成本/耗时统计）
 
     C6 修复：所有可选字段用 `is not None` 判断，避免合法的 0 值被跳过。
@@ -1853,6 +1862,9 @@ def update_agent_run(run_id: str, status: str, iteration: Optional[int] = None,
         if tool_call_count is not None:
             sets.append("tool_call_count = ?")
             params.append(tool_call_count)
+        if context_summary is not None:
+            sets.append("context_summary = ?")
+            params.append(context_summary)
         params.append(run_id)
         conn.execute(
             f"UPDATE agent_runs SET {', '.join(sets)} WHERE id = ?",

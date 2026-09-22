@@ -3,7 +3,7 @@ max_tokens 安全封顶工具 — 解耦 routes/chat 与 routes/agent 的跨路�
 
 vLLM 的 max_tokens 是「输出」预算，但模型上下文窗口是「输入+输出」总和。
 若用户配置 max_tokens = 上下文窗口（如 16384），加上 prompt 就会越界触发 vLLM 400。
-这里根据 prompt 字符数估算 token，自动下调 max_tokens。
+这里按 cost_tracker.estimate_tokens 估算 prompt token，自动下调 max_tokens。
 
 对于支持 enable_thinking 的模型（如 Qwen3），推理内容和最终输出共享输出预算，
 因此需要确保 reasoning_tokens + max_output_tokens + prompt_tokens 不超过上下文窗口。
