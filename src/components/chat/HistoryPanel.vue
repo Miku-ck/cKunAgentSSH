@@ -203,10 +203,6 @@ defineEmits<{
   white-space: nowrap;
 }
 
-.history-panel-item-main.active .history-panel-item-title {
-  color: var(--text-primary);
-}
-
 .history-panel-item-delete {
   display: flex;
   align-items: center;
