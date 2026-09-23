@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { genId } from '@/utils/id'
 
 export type QuickCommand = {
   id: string
@@ -23,10 +24,6 @@ export const PRESET_COLORS = [
   '#8b949e', // gray
 ]
 
-function generateId(): string {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
-}
-
 export const useQuickCommandsStore = defineStore('quickCommands', () => {
   const commands = ref<QuickCommand[]>([])
   const loaded = ref(false)
@@ -48,7 +45,7 @@ export const useQuickCommandsStore = defineStore('quickCommands', () => {
           commands.value = parsed
             .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
             .map((item, index) => ({
-              id: typeof item.id === 'string' && item.id ? item.id : generateId(),
+              id: typeof item.id === 'string' && item.id ? item.id : genId(),
               name: String(item.name ?? '').slice(0, 30),
               command: String(item.command ?? '').slice(0, 1000),
               color: typeof item.color === 'string' && item.color
@@ -79,7 +76,7 @@ export const useQuickCommandsStore = defineStore('quickCommands', () => {
       ? Math.max(...commands.value.map(c => c.order)) + 1
       : 0
     const item: QuickCommand = {
-      id: generateId(),
+      id: genId(),
       name: name.trim().slice(0, 30),
       command: command.trimEnd().slice(0, 1000),
       color: color || PRESET_COLORS[commands.value.length % PRESET_COLORS.length],
