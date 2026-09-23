@@ -218,6 +218,30 @@ def _last_hash(conn) -> str:
 # 查询 / 校验 / 导出
 # ──────────────────────────────────────────────────────────────────────────────
 
+# query 与 count 的过滤条件必须逐字一致。两者原先各自手抄同一份 5 字段，count
+# 漏抄 action/run_id 曾导致 total 与 items 数量不一致（见 count docstring 里的
+# 审查修复记录）。收敛到唯一构造点，杜绝再次分叉。
+_FILTER_COLUMNS = ("environment", "target_id", "action", "conclusion", "run_id")
+
+
+def _build_filters(
+    environment: Optional[str],
+    target_id: Optional[str],
+    action: Optional[str],
+    conclusion: Optional[str],
+    run_id: Optional[str],
+) -> tuple[str, list[Any]]:
+    """按固定列序拼 WHERE 子句与对应参数；返回 (where, params)，params 为新列表。"""
+    conds: list[str] = []
+    params: list[Any] = []
+    for col, val in zip(_FILTER_COLUMNS, (environment, target_id, action, conclusion, run_id)):
+        if val:
+            conds.append(f"{col} = ?")
+            params.append(val)
+    where = (" WHERE " + " AND ".join(conds)) if conds else ""
+    return where, params
+
+
 def query(
     environment: Optional[str] = None,
     target_id: Optional[str] = None,
@@ -228,24 +252,7 @@ def query(
     offset: int = 0,
 ) -> list[dict[str, Any]]:
     """按条件查询审计记录（倒序）"""
-    conds: list[str] = []
-    params: list[Any] = []
-    if environment:
-        conds.append("environment = ?")
-        params.append(environment)
-    if target_id:
-        conds.append("target_id = ?")
-        params.append(target_id)
-    if action:
-        conds.append("action = ?")
-        params.append(action)
-    if conclusion:
-        conds.append("conclusion = ?")
-        params.append(conclusion)
-    if run_id:
-        conds.append("run_id = ?")
-        params.append(run_id)
-    where = (" WHERE " + " AND ".join(conds)) if conds else ""
+    where, params = _build_filters(environment, target_id, action, conclusion, run_id)
     params.append(limit)
     params.append(offset)
     try:
@@ -269,26 +276,9 @@ def count(
     conclusion: Optional[str] = None,
     run_id: Optional[str] = None,
 ) -> int:
-    """审查修复：过滤集与 query 对齐（原实现缺 action/run_id，
-    total 与 items 数量不一致 — 按 action/run_id 过滤时 total 仍是全量）"""
-    conds: list[str] = []
-    params: list[Any] = []
-    if environment:
-        conds.append("environment = ?")
-        params.append(environment)
-    if target_id:
-        conds.append("target_id = ?")
-        params.append(target_id)
-    if action:
-        conds.append("action = ?")
-        params.append(action)
-    if conclusion:
-        conds.append("conclusion = ?")
-        params.append(conclusion)
-    if run_id:
-        conds.append("run_id = ?")
-        params.append(run_id)
-    where = (" WHERE " + " AND ".join(conds)) if conds else ""
+    """审计记录计数。过滤集与 query 共用 _build_filters，天然一致
+    （曾手抄漏 action/run_id 导致 total 与 items 分叉，现收敛到唯一构造点）。"""
+    where, params = _build_filters(environment, target_id, action, conclusion, run_id)
     try:
         conn = database._get_conn()
         cur = conn.execute(f"SELECT COUNT(*) FROM {AUDIT_TABLE} {where}", params)
