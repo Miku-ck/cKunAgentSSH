@@ -256,9 +256,12 @@ class ScheduleOpTool(BaseTool):
         from agent.schedule_engine import compute_next_run
         try:
             next_at = await asyncio.to_thread(compute_next_run, data)
-            created = await asyncio.to_thread(db.create_schedule, dict(data))
+            # 审查修复：next_run_at 必须与插入同事务落定（并入 create_schedule 的 data，
+            # 与 REST 路由 routes/schedules.py:88 一致）。原实现先插 NULL 再在下一跳
+            # set_schedule_next_run，两跳之间 _tick_once 把 NULL 视为到期 → 刚建的
+            # "每天 09:00" 任务被立即触发一次。
+            created = await asyncio.to_thread(db.create_schedule, {**data, "next_run_at": next_at})
             sid = created["id"]
-            await asyncio.to_thread(db.set_schedule_next_run, sid, next_at)
             # 惰性导入避免 import 期循环依赖；确保后台引擎已启动以触发该任务
             from agent.schedule_engine import get_schedule_engine
             get_schedule_engine().ensure_started()
