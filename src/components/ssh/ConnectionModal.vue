@@ -368,13 +368,9 @@ async function handleSave() {
 
   if (!form.host.trim()) { errorMsg.value = '请输入主机地址'; return }
   if (!form.username.trim()) { errorMsg.value = '请输入用户名'; return }
-  // 新建时强制要求密码/私钥,编辑时允许保留原值
-  if (!isEdit) {
-    if (form.authType === 'password' && !form.password) { errorMsg.value = '请输入密码'; return }
-    if (form.authType === 'privateKey' && !form.privateKeyPath) { errorMsg.value = '请选择私钥文件'; return }
-  } else {
-    if (form.authType === 'privateKey' && !form.privateKeyPath) { errorMsg.value = '请选择私钥文件'; return }
-  }
+  // 私钥方式必填（新建/编辑皆然）；密码仅新建时强制，编辑允许留空沿用原值
+  if (!isEdit && form.authType === 'password' && !form.password) { errorMsg.value = '请输入密码'; return }
+  if (form.authType === 'privateKey' && !form.privateKeyPath) { errorMsg.value = '请选择私钥文件'; return }
 
   if (isDuplicate()) {
     const ok = await confirm({

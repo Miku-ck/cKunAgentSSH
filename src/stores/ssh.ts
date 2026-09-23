@@ -132,7 +132,7 @@ export const useSSHStore = defineStore('ssh', () => {
       localStorage.removeItem(LEGACY_KEY)
     } catch (e) {
       // m6 修复：记录迁移失败日志，便于排查兼容性问题
-
+      console.error('[ssh] 旧版连接迁移失败:', e)
     }
   }
 

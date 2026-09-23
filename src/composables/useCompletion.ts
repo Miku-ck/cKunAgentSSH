@@ -503,7 +503,7 @@ export async function queryCompletion(
     return candidates
   } catch (e) {
     // 修复：记录错误日志，便于排查 IPC 通信失败等问题
-
+    console.error('[completion] 查询补全失败:', e)
     return []
   }
 }

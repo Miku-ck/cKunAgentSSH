@@ -18,10 +18,9 @@ const props = withDefaults(defineProps<{
   isLive: false,
 })
 
-// 工具调用情况不在前端显示
-const hasToolCalls = computed(() => false)
 // H14 修复：运行中且没有任何内容时显示"思考中..."占位提示
-const isPreparing = computed(() => props.isLive && !hasToolCalls.value && !props.trace.reasoning?.trim())
+// 工具调用情况不在前端显示（无 hasToolCalls 判定项，条件即 isLive 且无 reasoning）
+const isPreparing = computed(() => props.isLive && !props.trace.reasoning?.trim())
 // H15 修复：深度思考统一由外层 ThinkingBlock 展示，此处不再重复渲染
 </script>
 
