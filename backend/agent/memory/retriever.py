@@ -45,7 +45,7 @@ async def search(
     top_k: int = 8,
     min_cosine: float = 0.3,
     embed_client=None,
-    exclude_ids="()",
+    exclude_ids=(),
     statuses=mstore._ACTIVE_STATUSES,
 ) -> "list[Hit]":
     """两路并行召回 → RRF(k=60) 融合 → 余弦下限过滤 → 相对断层截尾。"""
