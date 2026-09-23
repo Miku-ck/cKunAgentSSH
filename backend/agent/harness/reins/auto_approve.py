@@ -28,7 +28,7 @@ from typing import Optional
 from agent.audit import append_record_async
 
 from ..contracts import ReinDecision, RunContext, TraceEvent
-from .core import MODE_KEY, _audit_target_id, _audit_target_type
+from .core import MODE_KEY, _audit_environment, _audit_target_id, _audit_target_type
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +176,7 @@ async def try_auto_approve(
         run_id=ctx.run_id, iteration=ctx.iteration,
         target_type=_audit_target_type(ctx),
         target_id=_audit_target_id(ctx),
-        environment=getattr(ctx, "environment", "test") or "test",
+        environment=_audit_environment(ctx),
         command_raw=str(bound_command or subject),
         result=f"llm_judge_allow: {reason}",
     )

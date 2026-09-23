@@ -10,7 +10,7 @@ from agent.audit import append_record_async
 from agent.remote_protocol import has_exit_sentinel
 
 from ..contracts import ReinDecision, ReinPoint, RunContext, TraceEvent
-from .core import tool_call_signature
+from .core import _audit_environment, tool_call_signature
 
 logger = logging.getLogger(__name__)
 
@@ -473,7 +473,7 @@ class CostBudgetRein:
                 iteration=ctx.iteration,
                 target_type="run",
                 target_id=ctx.run_id,
-                environment=getattr(ctx, "environment", "test") or "test",
+                environment=_audit_environment(ctx),
                 result=reason,
             )
         except Exception:

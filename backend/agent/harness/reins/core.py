@@ -80,6 +80,14 @@ def _audit_target_id(ctx: "RunContext") -> str:
     return getattr(ctx, "ssh_session_id", "") or ""
 
 
+def _audit_environment(ctx: "RunContext") -> str:
+    """审计/展示用环境标签：缺失或空串统一回落 "test"（"" 不是合法环境）。
+
+    审计落库与审批卡片展示共用同一回落口径，避免多处内联漂移。
+    """
+    return getattr(ctx, "environment", "") or "test"
+
+
 def permission_display_fields(ctx: "RunContext", command: str = "") -> dict[str, Any]:
     """审批卡片的「用户在看什么」上下文：环境 / 用户原任务 / 目标会话 / 命令原文。
 
@@ -88,7 +96,7 @@ def permission_display_fields(ctx: "RunContext", command: str = "") -> dict[str,
     task 截断 200 字符：卡片引用块显示得下即可，同时避免超长任务撑大事件 payload。
     """
     return {
-        "environment": getattr(ctx, "environment", "") or "test",
+        "environment": _audit_environment(ctx),
         "task": str(getattr(ctx, "task", "") or "")[:200],
         "ssh_session_id": getattr(ctx, "ssh_session_id", "") or "",
         "command": command,

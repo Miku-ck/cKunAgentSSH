@@ -14,6 +14,7 @@ from ..contracts import ReinDecision, ReinPoint, RunContext, TraceEvent
 from ..safety import classify_command, classify_constructed_command
 from .auto_approve import try_auto_approve
 from .core import (
+    _audit_environment,
     _audit_target_id,
     _audit_target_type,
     _perm_pending,
@@ -78,7 +79,7 @@ class FilesystemGuard:
                     iteration=ctx.iteration,
                     target_type=_audit_target_type(ctx),
                     target_id=_audit_target_id(ctx),
-                    environment=getattr(ctx, "environment", "test") or "test",
+                    environment=_audit_environment(ctx),
                     command_raw=str(cmd),
                     result=f"hardline: {reason}",
                 )
@@ -108,7 +109,7 @@ class FilesystemGuard:
                         run_id=ctx.run_id, iteration=ctx.iteration,
                         target_type=_audit_target_type(ctx),
                         target_id=_audit_target_id(ctx),
-                        environment=getattr(ctx, "environment", "test") or "test",
+                        environment=_audit_environment(ctx),
                         command_raw=str(cmd),
                         result=f"permission_gate_missing: {reason}",
                     )
@@ -379,7 +380,7 @@ class AuditLogger:
                 iteration=ctx.iteration,
                 target_type=_audit_target_type(ctx),
                 target_id=_audit_target_id(ctx),
-                environment=getattr(ctx, "environment", "test") or "test",
+                environment=_audit_environment(ctx),
                 command_raw=command,
             )
         except Exception as e:
