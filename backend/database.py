@@ -881,23 +881,38 @@ async def seed_models_async(db_path: str) -> None:
 
         now = _now()
         # httpx.get 是同步阻塞调用，放线程池避免阻塞事件循环
+        # 审查R2修复：两条种子各自独立 try + 即时 commit —— 原实现整批一条
+        # commit，两条种子撞上同名模型（models_config.id 即模型名）抛
+        # IntegrityError 时，连接关闭回滚把先一条已成功的种子连坐抹掉。
+        # 现在单条冲突只 warning 跳过，不牵连另一条。
         model_id = await asyncio.to_thread(_probe_first_model, base_url)
         if model_id:
-            _insert_seed_model(
-                conn, model_id=model_id, base_url=base_url, api_key=api_key,
-                supports_thinking=False, is_default=True, sort_order=0, now=now,
-            )
-            logger.info("自动探测种子默认模型: %s @ %s", model_id, base_url)
+            try:
+                _insert_seed_model(
+                    conn, model_id=model_id, base_url=base_url, api_key=api_key,
+                    supports_thinking=False, is_default=True, sort_order=0, now=now,
+                )
+                conn.commit()
+                logger.info("自动探测种子默认模型: %s @ %s", model_id, base_url)
+            except sqlite3.Error as e:
+                conn.rollback()
+                logger.warning("种子默认模型写入失败（跳过，不影响另一条种子）: %s @ %s: %s",
+                               model_id, base_url, e)
 
         if thinking_url and thinking_url.rstrip("/") != base_url.rstrip("/"):
             t_model = await asyncio.to_thread(_probe_first_model, thinking_url)
             if t_model:
-                _insert_seed_model(
-                    conn, model_id=t_model, base_url=thinking_url, api_key=api_key,
-                    supports_thinking=True, is_default=False, sort_order=1, now=now,
-                )
-                logger.info("自动探测种子思考模型: %s @ %s", t_model, thinking_url)
-        conn.commit()
+                try:
+                    _insert_seed_model(
+                        conn, model_id=t_model, base_url=thinking_url, api_key=api_key,
+                        supports_thinking=True, is_default=False, sort_order=1, now=now,
+                    )
+                    conn.commit()
+                    logger.info("自动探测种子思考模型: %s @ %s", t_model, thinking_url)
+                except sqlite3.Error as e:
+                    conn.rollback()
+                    logger.warning("种子思考模型写入失败（跳过，不影响另一条种子）: %s @ %s: %s",
+                                   t_model, thinking_url, e)
     finally:
         conn.close()
 
@@ -1802,17 +1817,20 @@ def create_agent_run(run_id: str, conversation_id: str, task: str,
 
 
 def update_agent_run(run_id: str, status: str, iteration: Optional[int] = None,
-                     state_history: str = None, total_tokens: int = 0,
-                     prompt_tokens: int = 0, completion_tokens: int = 0,
-                     cost_usd: float = 0.0, duration_ms: int = 0,
-                     tool_call_count: int = 0,
-                     context_summary: str = None) -> None:
+                     state_history: Optional[str] = None, total_tokens: Optional[int] = None,
+                     prompt_tokens: Optional[int] = None, completion_tokens: Optional[int] = None,
+                     cost_usd: Optional[float] = None, duration_ms: Optional[int] = None,
+                     tool_call_count: Optional[int] = None,
+                     context_summary: Optional[str] = None) -> None:
     """更新 Agent 运行状态（含 token/成本/耗时统计）
 
     C6 修复：所有可选字段用 `is not None` 判断，避免合法的 0 值被跳过。
     iteration 改为 Optional：仅在显式传入时写入，避免仅更新 status 时被重置为 0。
     审查 NIT：completed_at 仅在终态（completed/failed/human_help）时写入，
     原实现每次更新（含中间状态）都刷新 completed_at，时间字段失真。
+    审查R2修复：其余统计参数的默认值同步改为 None —— 默认 0/0.0 配上
+    `is not None` 判断，让 status-only 调用（error/finally 分支标 failed）
+    把已写入的真实 token/成本/耗时统计覆盖成 0。显式传 0 仍照常写 0。
     """
     # B-7 修复：max_reached 同为终态（contracts.State.MAX_REACHED / reflection /
     # 统计查询均视其为终态），completed_at 需一并写入
@@ -2015,6 +2033,33 @@ def set_app_setting(key: str, value: str) -> None:
             (key, value, now, value, now),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def update_app_settings_bulk(settings: dict[str, str]) -> None:
+    """单事务批量写入多个应用设置。
+
+    审查R2修复：多键设置（审批策略 / 出站 HTTP 策略）此前逐条 set_app_setting
+    各自 commit，中途一条失败 = 库里一半新一半旧，而路由随后仍把内存策略按"全部
+    新值"应用 —— 两边各说各话。本 helper 把整批写进同一事务，任何一条失败整体
+    回滚并抛出，由调用方以 500 结束、内存策略保持旧值。
+    """
+    now = _now()
+    conn = _get_conn()
+    try:
+        for key, value in settings.items():
+            conn.execute(
+                "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = ?",
+                (key, value, now, value, now),
+            )
+        conn.commit()
+    except Exception:
+        # 线程本地池化连接的 close 是 no-op，不显式 rollback 会把半截事务
+        # 留在该线程上，污染后续读写
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

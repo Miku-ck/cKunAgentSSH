@@ -50,9 +50,24 @@ def _session_dir(base_dir: str | Path, conversation_id: str) -> Path:
     return Path(base_dir) / conversation_id
 
 
-def _artifact_path(base_dir: str | Path, conversation_id: str, name: str) -> Path:
-    """某个工件的文件路径。"""
-    return _session_dir(base_dir, conversation_id) / name
+def _checked_path(base: str | Path, conversation_id: str, name: str) -> Optional[Path]:
+    """审查R2修复：读写侧与删除入口（_checked_artifact_path）同一 containment 判据。
+
+    原来只有删除做 resolve+is_relative_to，读/写侧直接拼接：conversation_id 里
+    带 ".." 时读能越目录看到他人会话工件、写能把文件落到 base 之外。
+    非法入参返回 None，调用方按"工件不存在"处理（保持本模块"绝不抛"契约）。
+    """
+    if not conversation_id:
+        return None
+    try:
+        base_root = Path(base).resolve()
+        path = (base_root / conversation_id / name).resolve()
+    except (OSError, ValueError):
+        # 非法路径字符（如 Windows 保留名、嵌入 \0）：视作非法入参，不抛
+        return None
+    if not path.is_relative_to(base_root):
+        return None
+    return path
 
 
 def _read_artifact(path: Path) -> str:
@@ -89,11 +104,15 @@ def get_phase(conversation_id: str, base_dir: str | Path | None = None) -> str:
     if not conversation_id:
         return ""
     base = base_dir if base_dir is not None else _DEFAULT_BASE_DIR
-    if _artifact_path(base, conversation_id, _GOAL_FILE).is_file():
+    # 审查R2修复：阶段推导也走 containment 校验，与删除/读写入口同判据
+    goal = _checked_path(base, conversation_id, _GOAL_FILE)
+    if goal is not None and goal.is_file():
         return "goal"
-    if _artifact_path(base, conversation_id, _PLAN_FILE).is_file():
+    plan = _checked_path(base, conversation_id, _PLAN_FILE)
+    if plan is not None and plan.is_file():
         return "plan"
-    if _artifact_path(base, conversation_id, _SPEC_FILE).is_file():
+    spec = _checked_path(base, conversation_id, _SPEC_FILE)
+    if spec is not None and spec.is_file():
         return "spec"
     # 目录存在但没有任何已知工件不判别阶段，返回空
     return ""
@@ -102,34 +121,40 @@ def get_phase(conversation_id: str, base_dir: str | Path | None = None) -> str:
 # ── 写工件 ──────────────────────────────────────────────────────────────────
 
 
+def _write_checked(base: str | Path, conversation_id: str, name: str, content: str) -> str:
+    """审查R2修复：写侧统一入口，先做 containment 校验再落盘（非法入参返回空，不抛）。"""
+    path = _checked_path(base, conversation_id, name)
+    if path is None:
+        logger.warning("[workflow] 拒绝非法写入 cid=%r name=%r", conversation_id, name)
+        return ""
+    return _write_artifact(path, content)
+
+
 def write_spec(conversation_id: str, content: str,
                base_dir: str | Path | None = None) -> str:
-    """写规格文档。返回写入内容；会话为空/内容空返回空串。"""
+    """写规格文档。返回写入内容；会话为空/内容空/入参非法返回空串。"""
     if not conversation_id:
         return ""
     base = base_dir if base_dir is not None else _DEFAULT_BASE_DIR
-    path = _artifact_path(base, conversation_id, _SPEC_FILE)
-    return _write_artifact(path, content)
+    return _write_checked(base, conversation_id, _SPEC_FILE, content)
 
 
 def write_plan(conversation_id: str, content: str,
                base_dir: str | Path | None = None) -> str:
-    """写计划文档。返回写入内容；会话为空/内容空返回空串。"""
+    """写计划文档。返回写入内容；会话为空/内容空/入参非法返回空串。"""
     if not conversation_id:
         return ""
     base = base_dir if base_dir is not None else _DEFAULT_BASE_DIR
-    path = _artifact_path(base, conversation_id, _PLAN_FILE)
-    return _write_artifact(path, content)
+    return _write_checked(base, conversation_id, _PLAN_FILE, content)
 
 
 def write_goal(conversation_id: str, content: str,
                base_dir: str | Path | None = None) -> str:
-    """写目标（成功标准）文档。返回写入内容；会话为空/内容空返回空串。"""
+    """写目标（成功标准）文档。返回写入内容；会话为空/内容空/入参非法返回空串。"""
     if not conversation_id:
         return ""
     base = base_dir if base_dir is not None else _DEFAULT_BASE_DIR
-    path = _artifact_path(base, conversation_id, _GOAL_FILE)
-    return _write_artifact(path, content)
+    return _write_checked(base, conversation_id, _GOAL_FILE, content)
 
 
 # ── 删工件（仅用户显式动作） ────────────────────────────────────────────────
@@ -148,14 +173,11 @@ def _checked_artifact_path(base: str | Path, conversation_id: str, kind: str) ->
     任意文件）远大于误拦，所以不信任拼接：解析符号链接后要求路径仍落在 base 内。
     用「是否落在 base 内」而非「id 是否像 32 位 hex」做判据 —— 后者会在 id 生成
     规则变化时静默把删除变成空操作（跨层约定漂移）。
+    审查R2修复：判据抽到 _checked_path，读/写侧与本删除侧共用同一实现。
     """
-    if kind not in _KIND_FILES or not conversation_id:
+    if kind not in _KIND_FILES:
         return None
-    base_root = Path(base).resolve()
-    path = (base_root / conversation_id / _KIND_FILES[kind]).resolve()
-    if not path.is_relative_to(base_root):
-        return None
-    return path
+    return _checked_path(base, conversation_id, _KIND_FILES[kind])
 
 
 def delete_artifact(conversation_id: str, kind: str,
@@ -185,13 +207,15 @@ def delete_artifact(conversation_id: str, kind: str,
 
 def read_artifacts(conversation_id: str,
                    base_dir: str | Path | None = None) -> dict[str, str]:
-    """读取会话三个工件原文。缺失字段返回空串。"""
+    """读取会话三个工件原文。缺失字段返回空串；入参非法（越界会话 id）也返回空串。"""
     base = base_dir if base_dir is not None else _DEFAULT_BASE_DIR
-    return {
-        "spec": _read_artifact(_artifact_path(base, conversation_id, _SPEC_FILE)) if conversation_id else "",
-        "plan": _read_artifact(_artifact_path(base, conversation_id, _PLAN_FILE)) if conversation_id else "",
-        "goal": _read_artifact(_artifact_path(base, conversation_id, _GOAL_FILE)) if conversation_id else "",
-    }
+
+    def _one(name: str) -> str:
+        # 审查R2修复：读侧走 containment 校验，带 ".." 的会话 id 不再能越目录读他人工件
+        path = _checked_path(base, conversation_id, name)
+        return _read_artifact(path) if path is not None else ""
+
+    return {"spec": _one(_SPEC_FILE), "plan": _one(_PLAN_FILE), "goal": _one(_GOAL_FILE)}
 
 
 def hydrate_for_session(conversation_id: str,

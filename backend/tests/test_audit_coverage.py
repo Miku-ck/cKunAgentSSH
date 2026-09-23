@@ -70,11 +70,14 @@ def test_grant_and_revoke_are_audited(monkeypatch):
     monkeypatch.setattr(PermissionGate, "_save_permanent_allowlist", lambda self: None)
     monkeypatch.setattr(PermissionGate, "_load_permanent_allowlist", lambda self: set())
 
-    grant_tool_permission(PermissionGrantRequest(
+    # 审查R2修复：grant/revoke 路由改为 async def（消除 PermissionGate 跨线程竞态），
+    # 直接调用返回协程，需经事件循环执行；审计 to_thread 用的连接是
+    # check_same_thread=False 的内存库，跨线程写入安全。
+    asyncio.run(grant_tool_permission(PermissionGrantRequest(
         tool="shell_exec", scope="once", command="rm -f /tmp/x",
         run_id="run-audit",
-    ))
-    revoke_tool_permission("shell_exec", command="rm -f /tmp/x")
+    )))
+    asyncio.run(revoke_tool_permission("shell_exec", command="rm -f /tmp/x"))
 
     rows = _rows(conn)
     assert len(rows) == 2

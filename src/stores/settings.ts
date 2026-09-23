@@ -210,7 +210,14 @@ export const useSettingsStore = defineStore('settings', () => {
   }, { deep: true })
 
   function persistSettings() {
-    localStorage.setItem(LS_KEY, JSON.stringify(settings.value))
+    // 审查R2修复：与 useChatPersistence 同款裸 setItem —— 配额满时 QuotaExceeded
+    // 会在防抖定时器/pagehide 回调里抛出未捕获异常。设置体量小，无需淘汰逻辑，
+    // 捕获并记日志即可（不能让持久化失败掀翻调用栈）。
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify(settings.value))
+    } catch (e) {
+      console.warn('[settings] 设置持久化失败（localStorage 可能已满或被禁用）:', e)
+    }
   }
 
   // debounce 的代价：改完设置立刻关窗（<300ms）这次改动就永久丢了 ——

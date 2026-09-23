@@ -504,6 +504,18 @@ class Driver:
                     break
                 continue
 
+            # 审查R2修复：非拦截分支原先整体丢弃 Reins.check 聚合的 events/
+            # inject_messages（core.check 的未拦截透传没人消费）— 澄清答案的
+            # [用户澄清结果] 注入与 clarification_done 事件、LoopDetector 第 1 级
+            # 纠偏全部静默蒸发，用户答完向导后模型仍看不到答案。与
+            # POST_TOOL_CALL 非拦截分支同口径消费。
+            if pre_tool_decision.events or pre_tool_decision.inject_messages:
+                for ev in pre_tool_decision.events:
+                    await telemetry.emit(ev)
+                    yield ev
+                if pre_tool_decision.inject_messages:
+                    ctx.messages.extend(pre_tool_decision.inject_messages)
+
             # ── 发 tool_call_start ──
             # H13 修复 A3：push span_id 到栈，供嵌套工具调用的 parent_span_id 追踪
             ctx.span_stack.append(tc.id)
@@ -536,17 +548,20 @@ class Driver:
             # 退出"与"调用真实失败"，只需尾部片段（哨兵在末行，stderr 在前）
             if not result.success and result.output:
                 ctx.tool_calls_log[-1]["output_tail"] = result.output[-512:]
-            # C-review M7：命令执行成功（审批已放行）→ 移出「等待审批」集合，
-            # 同命令后续重发恢复正常循环检测
-            if result.success:
-                pending = ctx.metadata.get("permission_pending")
-                if pending:
-                    try:
-                        from .reins import tool_call_signature
-                        pending.pop(tool_call_signature(
-                            {"tool": tc.name, "args": tc.args}), None)
-                    except Exception:
-                        pass
+            # C-review M7：命令执行完成（审批已放行）→ 移出「等待审批」集合。
+            # 审查R2修复：原实现只在 success=True 时 pop — once 授权在
+            # check_permission 放行时已被消费清零，若随后工具执行失败，旧 sig
+            # 滞留 pending：同命令重试走 is_first=False 分支不再建卡（用户无卡
+            # 可点），注入文案却称"已在界面上请求授权"，空转至 600s 兜底；
+            # 且 pending 内签名永久豁免循环检测。授权既已消费，成败都应出集。
+            pending = ctx.metadata.get("permission_pending")
+            if pending:
+                try:
+                    from .reins import tool_call_signature
+                    pending.pop(tool_call_signature(
+                        {"tool": tc.name, "args": tc.args}), None)
+                except Exception:
+                    pass
 
             # ── post_tool_call ──
             post_tool_decision = await harness.reins.check(ReinPoint.POST_TOOL_CALL, ctx)
@@ -743,6 +758,10 @@ class Driver:
     ) -> TraceEvent:
         """可见终端恢复后收尾：更新日志、追加消息历史、pop span、发 tool_call_result。"""
         ctx.tool_calls_log[-1]["success"] = success
+        # 审查R2修复：pending_delivery 分支 continue 跳过了 POST_TOOL_CALL 链，
+        # 真实交付到可见终端执行过的命令在执行层没有任何 executed/failed 审计
+        # （该链当前唯一成员 AuditLogger 不拦截，直接触发其落审计即可）。
+        await harness.reins.check(ReinPoint.POST_TOOL_CALL, ctx)
         # 追加到消息历史，透传 priority 供 compress_messages 读取（与正常路径一致）
         ctx.messages.append(
             harness.bridle.build_tool_result_message(tc.id, result_text, priority=result.priority)

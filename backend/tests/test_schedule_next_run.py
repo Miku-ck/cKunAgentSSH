@@ -152,3 +152,42 @@ def test_prune_schedule_runs_no_op_under_cap(tmp_path):
     for i in range(3):
         db.create_schedule_run("A", f"r{i}")
     assert db.prune_schedule_runs(max_count=5) == 0
+
+
+# ── 审查R2修复：UTC 日期 ≠ 本地日期（跨午夜窗口）────────────────────────────
+# now 存的是 UTC naive；旧实现直接拿它的 .date() 当"今天"去拼本地时分，
+# 于是 UTC+8 下每天 16:00–24:00 UTC（本地次日 00:00–08:00）这段窗口里
+# "今天"被算错一天：daily 会跳过今天已到点的时刻、monthly 会把已过去的
+# 本月某天当成还没到。修复后一律以**本地日期**为基准，再加 while 滚动兜底。
+NOW_LATE_UTC = datetime(2026, 9, 17, 20, 0, 0)  # 本地 2026-09-18 04:00（周五）
+
+
+def test_daily_after_utc_midnight_uses_local_today():
+    # 本地 9-18 09:00 还没到 → 今天（UTC 9-18 01:00），不是"明天"
+    s = {"schedule_type": "daily", "time_hour": 9, "time_minute": 0}
+    assert compute_next_run(s, NOW_LATE_UTC) == _d("09-18 01:00:00")
+
+
+def test_daily_after_utc_midnight_passed_time_rolls_forward():
+    # 本地 9-18 03:00 已过（现在是 04:00）→ 下一个本地日 9-19 03:00 = UTC 9-18 19:00
+    s = {"schedule_type": "daily", "time_hour": 3, "time_minute": 0}
+    assert compute_next_run(s, NOW_LATE_UTC) == _d("09-18 19:00:00")
+
+
+def test_monthly_after_utc_midnight_does_not_repeat_past_day():
+    # 本地今天就是 18 号且 00:30 已过 → 下月 18 号 00:30 本地 = UTC 10-17 16:30。
+    # 旧实现按 UTC 日期(17) 判断"18 号还没到"，会算出已过去的 9-18 00:30。
+    s = {"schedule_type": "monthly", "day_of_month": 18, "time_hour": 0, "time_minute": 30}
+    assert compute_next_run(s, NOW_LATE_UTC) == "2026-10-17 16:30:00"
+
+
+def test_weekly_after_utc_midnight_same_local_day_not_passed():
+    # 本地 9-18 是周五，09:00 未到 → 今天（UTC 9-18 01:00）
+    s = {"schedule_type": "weekly", "weekday": 4, "time_hour": 9, "time_minute": 0}
+    assert compute_next_run(s, NOW_LATE_UTC) == _d("09-18 01:00:00")
+
+
+def test_weekly_after_utc_midnight_same_local_day_passed():
+    # 本地周五 03:00 已过 → 下周五 03:00 本地 = UTC 9-24 19:00
+    s = {"schedule_type": "weekly", "weekday": 4, "time_hour": 3, "time_minute": 0}
+    assert compute_next_run(s, NOW_LATE_UTC) == _d("09-24 19:00:00")

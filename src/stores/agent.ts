@@ -554,7 +554,9 @@ export const useAgentStore = defineStore('agent', () => {
         )
         // B11 修复：权限卡片只存在于 AI 面板内，面板关闭期间用户无法响应 —
         // 从非 pending → pending 转换时 toast 提醒（重复请求不重复弹）
-        const hadPending = permissionRequests.value.some(r => !r.resolved)
+        // 审查R2修复：expired 卡不算「有 pending」——它已不可操作（归入追溯区），
+        // 原实现只要数组里留着过期卡，本 run 后续新审批卡就永远弹不出 toast
+        const hadPending = permissionRequests.value.some(r => !r.resolved && !r.expired)
         if (!alreadyPending) {
           permissionRequests.value.push({
             id: `perm_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -610,6 +612,9 @@ export const useAgentStore = defineStore('agent', () => {
         for (const r of permissionRequests.value) {
           if (r.resolved) continue
           if (permCardKey(r.tool, r.command) === key) {
+            // 审查R2修复：后端可能对同一命令重发 permission_expired，
+            // 已 expired 的卡片再追加会把「（审批超时）」刷成一串
+            if (r.expired) continue
             r.expired = true
             r.settling = false
             r.message = `${r.message}（审批超时）`

@@ -406,7 +406,6 @@ async def maybe_explain_via_llm(
         return  # 已失败过 / 正在生成，不重复刷 LLM
 
     async def _worker() -> None:
-        _explain_inflight.add(key)
         try:
             raw = await _one_shot_llm(build_llm_messages(tool, display_cmd, env), ctx)
             text = sanitize_llm_explanation(raw or "")
@@ -419,6 +418,10 @@ async def maybe_explain_via_llm(
         finally:
             _explain_inflight.discard(key)
 
+    # 审查R2修复：inflight 登记必须与上方检查同在无 await 的同步段。原来 add 在
+    # _worker 内部，而 create_task 后协程要到下一轮事件循环才执行 —— 并发同命令
+    # 的调用都在 add 之前通过 `key in _explain_inflight` 检查，重复入队重复烧 LLM。
+    _explain_inflight.add(key)
     task = asyncio.create_task(_worker())
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)

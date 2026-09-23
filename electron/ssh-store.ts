@@ -294,6 +294,12 @@ export class SSHStore {
         if (!disk.passphraseEnc && existing.passphraseEnc) disk.passphraseEnc = existing.passphraseEnc
       }
       records[idx] = disk
+      // 审查R2修复：返回值以合并后的磁盘记录为准 — 原样返回 input spread 的 record
+      // 不含被保留的磁盘凭据，main.ts stripCredentials 算出的 hasPassword/
+      // hasPassphrase 恒为 false，前端（src/stores/ssh.ts）据此覆盖本地条目，
+      // 编辑弹窗误显示"未存密码"。fromDisk 解密还原真实凭据（仅主进程内使用，
+      // IPC 回传前由 stripCredentials 剥离，与 list() 同语义）。
+      record = fromDisk(disk)
     } else {
       record = { ...input, id: input.id || genId(), createdAt: now, updatedAt: now }
       records.push(toDisk(record))

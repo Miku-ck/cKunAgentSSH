@@ -316,7 +316,11 @@ async function navigateTo(idx: number): Promise<void> {
   } else {
     const sep = store.localCwd.includes('\\') ? '\\' : '/'
     const parts = store.localCwd.split(/[\\/]/).filter(Boolean)
-    const target = parts.slice(0, idx + 1).join(sep)
+    // 审查R2修复：split+filter(Boolean) 丢掉 POSIX 绝对路径的前导 /，
+    // 面包屑点「home」会导航到相对路径 'home'（与 sftp.ts localParent 同款问题）。
+    // 绝对路径（以根分隔符开头）导航时必须补回根分隔符；Windows 盘符路径不带。
+    const root = store.localCwd.startsWith(sep) ? sep : ''
+    const target = root + parts.slice(0, idx + 1).join(sep)
     // Windows 盘符根目录补反斜杠
     const finalPath = /^[a-z]:$/i.test(target) ? target + '\\' : target
     await store.loadLocal(finalPath || '/')

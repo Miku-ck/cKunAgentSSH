@@ -166,13 +166,26 @@ def normalize_command_for_detection(command: str) -> str:
 # 保住 reason 字面量全集（中文后果表覆盖测试、远端 agent-exec.py 副本同源文案）。
 # ──────────────────────────────────────────────────────────────────────────────
 
+# 审查R2修复：mkfs / dd 写裸设备同电源动词，退出整串匹配改按执行位置判定。
+# 整串匹配把只读排查与"往 runbook 里写说明"判成 hardline，而 hardline 没有
+# 审批出路（用户点确认也放行不了）：`grep -c mkfs /var/log/syslog`、
+# `echo "mkfs.ext4 流程说明" >> runbook.md` 实测均为无条件阻断。
+# rm 的根删除**不**并入本机制：保持整串口径是已登记的取舍
+# （见 test_safety_misjudgment::test_known_over_block_is_registered_tradeoff）。
+_MKFS_RE = re.compile(r"\bmkfs(\.[a-z0-9]+)?\b")
+# 执行位置上的动词名比对（_verb_of 已剥标点并小写，用 fullmatch 防止
+# `mkfsprobe` 这类同名前缀的普通程序被吃掉）
+_MKFS_VERB_RE = re.compile(r"mkfs(\.[a-z0-9]+)?")
+_DD_OF_RAW_RE = re.compile(
+    r"\bof=/dev/(?!zero\b|urandom\b|random\b|null\b|tty|pts|shm|console|fd)\S+")
+
 HARDLINE_PATTERNS: list[tuple[re.Pattern, str]] = [
     # 尾部边界含闭括号：`os.system('rm -rf /')` 等解释器包裹的字面根删除同样 hardline
     (re.compile(r"\brm\s+(-[^\s]*\s+)*(/|/\*|/ \*)(?=[\s)\]}]|$)"), "recursive delete of root filesystem"),
-    (re.compile(r"\bmkfs(\.[a-z0-9]+)?\b"), "format filesystem (mkfs)"),
+    (_MKFS_RE, "format filesystem (mkfs)"),
     # B-4 修复：of= 目标为任意 /dev/ 路径，仅排除安全设备前缀
     # （zero/null/random/urandom/tty/pts/shm/console/fd），写裸设备一律 hardline
-    (re.compile(r"\bdd\b[^\n]*\bof=/dev/(?!zero\b|urandom\b|random\b|null\b|tty|pts|shm|console|fd)\S+"), "dd to raw block device"),
+    (re.compile(r"\bdd\b[^\n]*" + _DD_OF_RAW_RE.pattern), "dd to raw block device"),
     (re.compile(r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:"), "fork bomb"),
     (re.compile(r"\bshutdown\b", re.IGNORECASE), "system shutdown"),
     (re.compile(r"\breboot\b", re.IGNORECASE), "system reboot"),
@@ -259,7 +272,10 @@ DANGEROUS_PATTERNS: list[tuple[re.Pattern, str]] = [
 # ──────────────────────────────────────────────────────────────────────────────
 
 # 匹配命令分隔符后紧跟的 `sudo -S`（stdin 密码读取）
-_SUDO_STDIN_RE = re.compile(r"(?:^|[;&|`\n]|&&|\|\|)\s*sudo\s+-S\b", re.IGNORECASE)
+# 审查R2修复：分隔符类补 `(` `{` `[` 与对应闭合符 —— 子 shell / 花括号组是
+# 包装提权命令的常见写法，`(sudo -S rm -rf /tmp/x)` 实测逃过本守卫（只降级成
+# dangerous 审批卡），密码爆破路径完全没被拦。
+_SUDO_STDIN_RE = re.compile(r"(?:^|[;&|`\n({[]|&&|\|\|)\s*sudo\s+-S\b", re.IGNORECASE)
 
 
 def check_sudo_stdin_guard(command: str) -> tuple[bool, str | None]:
@@ -318,11 +334,16 @@ _PERSISTENCE_PREFIXES = (
 
 # 敏感读取目标（cat/less/head/tail/cp/dd 等命中即 dangerous）：
 # 认证凭据与权限文件，正常运维不应由 Agent 读取
+# 审查R2修复：补 `.ssh` **目录本体**形态（无尾斜杠）。原判据要求 `.ssh/` 后面
+# 还有内容，`grep -r . ~/.ssh`、`ls ~/.ssh`、`tar czf x.tgz ~/.ssh` 这类一次性
+# 倒出整个私钥目录的命令实测判 safe —— 覆盖面比 `~/.ssh/id_rsa` 单文件更广。
+# 前导边界 (^|[/~]) + 行尾锚点避免 `app.ssh`、`.sshconfig` 这类兄弟名字误命中。
 _SECRET_FILE_RE = re.compile(
     r"(/etc/(?:passwd|shadow|sudoers|gshadow|master\.passwd)|"
     r"(?:/root|~|\$HOME)/?\.ssh/"
     r"|/\.ssh/(?:id_|authorized_keys)"
-    r"|/id_(?:rsa|dsa|ecdsa|ed25519)\b)"
+    r"|/id_(?:rsa|dsa|ecdsa|ed25519)\b"
+    r"|(?:^|[/~])\.ssh/?$)"
 )
 
 # 解释器/脚本执行器（作为命令首 token 出现 → 至少 dangerous，需审批）
@@ -716,6 +737,8 @@ _POWER_VERB_REASONS = {
 # scripts/deploy/agent-exec.py 的远端副本也仍以整串口径使用同一批文案。
 _EXEC_POSITION_REASONS: frozenset[str] = frozenset(_POWER_VERB_REASONS.values()) | frozenset({
     "sudo command", "switch user",
+    # 审查R2修复：mkfs/dd 写裸设备改位置判定（整串匹配会无条件阻断只读排查）
+    "format filesystem (mkfs)", "dd to raw block device",
 })
 
 # shell 结构词：出现在它们后面的 token 才是真正执行的命令
@@ -752,7 +775,7 @@ def _first_exec_verb(tokens: list[str]) -> tuple[str, list[str]]:
 
 
 def _classify_exec_position(segment: str) -> tuple[str, str | None]:
-    """电源动词与 sudo/su 的位置级判定，返回本机制命中的最高严重度"""
+    """电源动词、提权前缀与格式化/裸设备写入按执行位置判定，返回本机制命中的最高严重度"""
     try:
         tokens = shlex.split(segment, posix=True)
     except ValueError:
@@ -772,6 +795,13 @@ def _classify_exec_position(segment: str) -> tuple[str, str | None]:
         best = ("dangerous", "sudo command")
     elif head == "su":
         best = ("dangerous", "switch user")
+    # 审查R2修复：格式化文件系统与 dd 写裸设备只有在执行位置上才是破坏动作。
+    # `grep -c mkfs /var/log/syslog`、`echo "dd if=/dev/zero of=/dev/sda 演示" >> notes.md`
+    # 曾被整串匹配判 hardline —— 而 hardline 无审批出路，用户连"确认执行"都点不到。
+    if _MKFS_VERB_RE.fullmatch(real):
+        return ("hardline", "format filesystem (mkfs)")
+    if real == "dd" and _DD_OF_RAW_RE.search(" ".join(real_args)):
+        return ("hardline", "dd to raw block device")
     if real in ("init", "telinit"):
         # 只有切到 0/6 才是电源动作；`init 5` 这类换运行级原本也只是 dangerous
         # （默认审批），不能因为动词化就升级成无条件阻断
@@ -787,6 +817,12 @@ def _classify_exec_position(segment: str) -> tuple[str, str | None]:
         m2 = _POWER_PHRASE_RE.search(segment)
         if m2:
             return ("hardline", _POWER_VERB_REASONS[m2.group(1).lower()])
+        # 参数即代码时，格式化/裸设备写入同样退回整段匹配：
+        # `sh -c "mkfs.ext4 /dev/sdb1"`、`dd of=/dev/sda` 不得因位置化降级
+        if _MKFS_RE.search(segment):
+            return ("hardline", "format filesystem (mkfs)")
+        if re.search(r"\bdd\b", segment) and _DD_OF_RAW_RE.search(segment):
+            return ("hardline", "dd to raw block device")
     return best
 
 

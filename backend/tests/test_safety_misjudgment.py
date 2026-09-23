@@ -78,6 +78,81 @@ def test_known_over_block_is_registered_tradeoff():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# 一·B、审查R2修复：mkfs / dd 写裸设备退出整串匹配，改按执行位置判定
+#
+# 上面的"已登记取舍"只针对 rm 根删除。mkfs/dd 两条此前一并留在整串口径里，
+# 后果比 rm 严重得多：hardline **没有审批出路**（用户点确认也放行不了），
+# 于是「grep 日志里的 mkfs 记录」「往 runbook 里写 mkfs 流程说明」这类
+# 纯只读/纯文本动作变成无条件阻断。
+# ──────────────────────────────────────────────────────────────────────────────
+R2_FALSE_BLOCKS = [
+    "grep -c mkfs /var/log/syslog",
+    "echo \"mkfs.ext4 流程说明\" >> runbook.md",
+    "grep \"dd if=/dev/zero of=/dev/sda\" /var/log/x.log",
+    "dmesg | grep -i 'mkfs.fat not found'",
+]
+
+
+@pytest.mark.parametrize("cmd", R2_FALSE_BLOCKS)
+def test_destructive_literals_in_text_are_not_hard_blocks(cmd):
+    level, reason = classify_command(cmd)
+    assert level == "safe", f"字面量出现在参数/文本里被无条件阻断 {level}（{reason}）: {cmd!r}"
+
+
+R2_REAL_DESTRUCTIVE_FORMS = [
+    "mkfs.ext4 /dev/sdb1",
+    "mkfs /dev/sdb1",
+    "sudo mkfs.ext4 /dev/sda1",
+    "/sbin/mkfs.xfs /dev/nvme0n1p2",
+    "bash -c \"mkfs.ext4 /dev/sdb1\"",
+    "dd if=/dev/zero of=/dev/sda bs=1M",
+    "dd if=/dev/zero of=/dev/disk/by-id/xxx",
+    "sh -c \"dd if=/dev/zero of=/dev/sda\"",
+]
+
+
+@pytest.mark.parametrize("cmd", R2_REAL_DESTRUCTIVE_FORMS)
+def test_real_format_and_raw_device_writes_stay_hardline(cmd):
+    level, reason = classify_command(cmd)
+    assert level == "hardline", f"真实格式化/裸设备写入被降级为 {level}（{reason}）: {cmd!r}"
+
+
+# 审查R2修复：凭据读取的 `.ssh` **目录本体**形态（无尾斜杠）此前完全漏放 ——
+# 判据要求 `.ssh/` 后还有内容，而 `grep -r . ~/.ssh` 一次倒出整个私钥目录，
+# 覆盖面比读单个 id_rsa 更大。
+R2_SECRET_DIR_READS = [
+    "grep -r . ~/.ssh",
+    "cat ~/.ssh",
+    "ls -la /root/.ssh",
+    "tar czf /tmp/b.tgz ~/.ssh",
+    "wc -c ~/.ssh/",
+]
+
+
+@pytest.mark.parametrize("cmd", R2_SECRET_DIR_READS)
+def test_ssh_directory_read_needs_approval(cmd):
+    level, reason = classify_command(cmd)
+    assert level == "dangerous", f"整个 .ssh 目录被当只读放行: {cmd!r} → {level}"
+
+
+@pytest.mark.parametrize("cmd", ["ls /home/app/.sshignore", "grep foo app.ssh",
+                                 "cat /etc/ssh/ssh_config.d/extra.conf"])
+def test_ssh_sibling_names_are_not_credential_reads(cmd):
+    level, reason = classify_command(cmd)
+    assert level == "safe", f"兄弟名字被误判凭据读取 {level}（{reason}）: {cmd!r}"
+
+
+def test_sudo_stdin_guard_covers_subshell_wrappers():
+    """审查R2修复：`(sudo -S …)`/`{ sudo -S …; }` 曾是密码爆破守卫的盲区 ——
+    分隔符类只认 ; & | ` 换行，括号形态一路降到 dangerous 审批卡。"""
+    for cmd in ("(sudo -S rm -rf /tmp/x)", "echo hi; { sudo -S id; }", "sudo -S id"):
+        level, reason = classify_command(cmd)
+        assert level == "hardline", f"{cmd!r} → {level}（{reason}）"
+        assert "sudo password guessing" in reason
+
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # 二、真实电源动作必须保持 hardline（F2 的反向锁）
 # ──────────────────────────────────────────────────────────────────────────────
 REAL_POWER_ACTIONS = [

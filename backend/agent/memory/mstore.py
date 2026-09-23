@@ -97,6 +97,11 @@ def user_edit(memory_id: str, *, content: str, title: str) -> bool:
     """用户在 UI 编辑：改内容后旧向量作废（不重嵌入，宁缺毋滥），FTS 重建。"""
     conn = _conn()
     try:
+        # 审查R2修复：审计要能还原"用户把什么改成了什么"，UPDATE 前先取旧内容；
+        # 原实现 add_audit 恒传 old=None，审计链丢失修改前原值。
+        old_row = conn.execute(
+            "SELECT content FROM memories WHERE id=?", (memory_id,)
+        ).fetchone()
         cur = conn.execute(
             "UPDATE memories SET content=?, title=?, embedding=NULL, "
             "embedding_src=NULL, updated_at=? WHERE id=?",
@@ -108,7 +113,8 @@ def user_edit(memory_id: str, *, content: str, title: str) -> bool:
             ).fetchone()
             _fts_sync(conn, memory_id, row["title"] or "", row["content"])
             _vec.vec_delete(conn, memory_id)
-            add_audit(memory_id, "UPDATE", old=None, new=content, reason="user_edit")
+            add_audit(memory_id, "UPDATE", old=old_row["content"] if old_row else None,
+                      new=content, reason="user_edit")
         conn.commit()
         return cur.rowcount > 0
     finally:
@@ -172,6 +178,13 @@ def supersede(old_id: str, new_id: str) -> None:
     """旧行让位给新行并继承热度（spec §5 UPDATE）。"""
     conn = _conn()
     try:
+        # 审查R2修复：old_id 不存在时 fetchone() 返回 None，原下标访问抛 TypeError；
+        # 提前取热度并显式 raise ValueError，与本模块其他数据访问错误契约一致。
+        old_row = conn.execute(
+            "SELECT use_count FROM memories WHERE id=?", (old_id,)
+        ).fetchone()
+        if old_row is None:
+            raise ValueError(f"被让位的记忆行不存在: {old_id}")
         conn.execute(
             "UPDATE memories SET status='superseded', invalid_at=?, superseded_by=?, "
             "updated_at=? WHERE id=?",
@@ -179,8 +192,7 @@ def supersede(old_id: str, new_id: str) -> None:
         )
         conn.execute(
             "UPDATE memories SET use_count = use_count + ? WHERE id=?",
-            (conn.execute("SELECT use_count FROM memories WHERE id=?", (old_id,)).fetchone()["use_count"],
-             new_id),
+            (old_row["use_count"], new_id),
         )
         conn.commit()
     finally:
@@ -602,7 +614,9 @@ def replace_in_block(key: str, old: str, new: str, updated_by: str) -> int:
     if not old and not base:
         return put_block(key, new, updated_by)
     if not old:
-        raise ValueError("old_string 不能为空（整块覆盖请走 UI）")
+        # 审查R2修复：block_update 工具描述承诺「old_string 传空=末尾追加」，
+        # 原实现在非空块上直接抛"不能为空"，承诺与实现背离；补齐追加语义。
+        return put_block(key, base + "\n" + new, updated_by)
     n = base.count(old)
     if n != 1:
         raise ValueError(f"old_string 出现 {n} 次，需恰好 1 次")

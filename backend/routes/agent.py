@@ -1162,11 +1162,14 @@ async def agent_run(req: AgentRunRequest, request: Request):
 
         except Exception as e:
             logger.exception("Agent 运行异常 (event_stream)")
-            # 异常时将 agent_run 状态标记为 failed
-            try:
-                await asyncio.to_thread(db.update_agent_run, run_id=run_id, status="failed")
-            except Exception:
-                pass
+            # 审查R2修复：与 error 分支同款 final_state 守卫。done 分支已落 completed
+            # 终态后，[DONE] 送出时客户端断连抛出的普通异常曾无条件把 run 翻成 failed
+            # 并清零统计；终态已定稿时不再改写。
+            if final_state is None:
+                try:
+                    await asyncio.to_thread(db.update_agent_run, run_id=run_id, status="failed")
+                except Exception:
+                    pass
             yield sse_event({"type": "error", "message": str(e)})
             yield "data: [DONE]\n\n"
         finally:
@@ -1355,8 +1358,17 @@ class PermissionGrantRequest(BaseModel):
 
 
 @router.post("/agent/permission/grant")
-def grant_tool_permission(req: PermissionGrantRequest):
+async def grant_tool_permission(req: PermissionGrantRequest):
     """授权工具
+
+    审查R2修复（线程竞态）：本组审批端点此前是同步 def 路由，被 FastAPI 丢进
+    anyio 线程池执行，与事件循环上的 PermissionGate 消费/清理代码（reins.check、
+    event_stream finally 的回收）无锁并发读写同一批可变 dict/set —— sorted()
+    迭代中另一线程 add/discard 会抛 RuntimeError，defaultdict 复合 += 丢账。
+    改为 async def 后 gate 状态操作全部回到事件循环单线程，天然串行；
+    审计落盘（append_record，阻塞文件写）经 asyncio.to_thread 移出事件循环。
+    gate 内部的小额本地文件写（allowlist 覆盖写，几行文本）随 grant 留在循环内：
+    把它单独挪进线程会把状态突变也带出循环，竞态复活 —— 两害相权取小文件同步写。
 
     scope=once: 仅放行下一次相同工具（命令工具为相同命令）调用
     scope=session: 进程级单例 _confirmed_session，跨 run 共享，进程重启失效（H13 修复 A5）；
@@ -1381,9 +1393,11 @@ def grant_tool_permission(req: PermissionGrantRequest):
         raise HTTPException(status_code=400, detail=str(e))
     # C-review C2 修复：批准动作落审计链（原实现只写内存/allowlist，
     # 事后无法证明"谁批准了什么"，等保审计目标落空）
+    # 审查R2修复：审计文件写为阻塞副作用，async 路由下放线程池执行
     try:
         from agent.audit import append_record
-        append_record(
+        await asyncio.to_thread(
+            append_record,
             action=f"permission_grant:{req.tool}",
             conclusion="approved",
             target_type="tool",
@@ -1397,9 +1411,12 @@ def grant_tool_permission(req: PermissionGrantRequest):
 
 
 @router.post("/agent/permission/revoke")
-def revoke_tool_permission(tool: str, command: Optional[str] = None,
-                           conversation_id: Optional[str] = None):
+async def revoke_tool_permission(tool: str, command: Optional[str] = None,
+                                 conversation_id: Optional[str] = None):
     """撤销工具授权（从永久 allowlist 和 session scope 移除）
+
+    审查R2修复：改 async def 回到事件循环单线程操作 PermissionGate 状态，
+    与 grant 端点同一姿态（详见 grant 路由 docstring）。
 
     提供 command 时只撤销该命令的绑定授权；否则撤销该工具全部授权。
     C-review M11：提供 conversation_id 时只撤该会话的 session 授权，
@@ -1409,9 +1426,11 @@ def revoke_tool_permission(tool: str, command: Optional[str] = None,
     pg = _get_global_permission_gate_sync()
     pg.revoke(tool, command=command, conversation_id=conversation_id)
     # C-review C2 修复：撤销动作同样落审计链
+    # 审查R2修复：审计文件写放线程池，不阻塞事件循环
     try:
         from agent.audit import append_record
-        append_record(
+        await asyncio.to_thread(
+            append_record,
             action=f"permission_revoke:{tool}",
             conclusion="revoked",
             target_type="tool",
@@ -1424,8 +1443,12 @@ def revoke_tool_permission(tool: str, command: Optional[str] = None,
 
 
 @router.get("/agent/permission/list")
-def list_tool_permissions():
+async def list_tool_permissions():
     """查询已永久授权的工具列表
+
+    审查R2修复：改 async def —— `sorted(pg._confirmed_permanent)` 是跨多行的
+    迭代快照，此前在 anyio 线程池执行时与循环内 grant/revoke/check 的并发
+    add/discard 相撞可直接抛 RuntimeError（迭代中集合被改）。
 
     `tools` 保持原来的字符串数组语义（前端与 test_admin_api_round4 都按此消费）。
     `entries`/`ttl_hours`（E3）是附加信息：授权何时写入、何时到期，面板要能诚实
@@ -1448,8 +1471,11 @@ class AllowPermissionRequest(BaseModel):
 
 
 @router.post("/agent/permission/allow")
-def allow_tool_permission(req: AllowPermissionRequest):
+async def allow_tool_permission(req: AllowPermissionRequest):
     """手动写入永久 allowlist（与审批"始终允许"同源，落 allowlist 文件 + 审计）
+
+    审查R2修复：改 async def 回到事件循环单线程操作 PermissionGate 状态，
+    与 grant 端点同一姿态（详见 grant 路由 docstring）。
 
     安全边界：仅登记，不放宽任何判定 — 命令工具写入的是 `tool:cmdhash`
     命令级绑定键（审查 M-3 语义），hardline 底线命令在 FilesystemGuard
@@ -1458,9 +1484,11 @@ def allow_tool_permission(req: AllowPermissionRequest):
     from agent.harness.reins import _get_global_permission_gate_sync
     pg = _get_global_permission_gate_sync()
     grant_key = pg.grant(req.tool, scope="always", command=req.command)
+    # 审查R2修复：审计文件写放线程池，不阻塞事件循环
     try:
         from agent.audit import append_record
-        append_record(
+        await asyncio.to_thread(
+            append_record,
             action=f"permission_allow_manual:{req.tool}",
             # "granted" 不在 audit.append_record 的结论枚举里，会被静默改写为 "executed"
             # —— 手动登记永久授权就伪装成了"执行过一条命令"。用同义且在枚举内的值。
@@ -1529,8 +1557,11 @@ class DenyCommandRequest(BaseModel):
 
 
 @router.post("/agent/permission/deny-command")
-def deny_command(req: DenyCommandRequest):
+async def deny_command(req: DenyCommandRequest):
     """标记某 run 下某命令被用户拒绝
+
+    审查R2修复：改 async def 回到事件循环单线程操作 PermissionGate 状态，
+    与 grant 端点同一姿态（详见 grant 路由 docstring）。
 
     visible_terminal 拒绝时调用：后续该 run 再次请求此命令时 PermissionGate
     check_permission 直接返回 False，不会再次触发 permission_needed 卡片。
@@ -1544,9 +1575,11 @@ def deny_command(req: DenyCommandRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     # 审计记录
+    # 审查R2修复：审计文件写放线程池，不阻塞事件循环
     try:
         from agent.audit import append_record
-        append_record(
+        await asyncio.to_thread(
+            append_record,
             action=f"permission_deny_command:{req.tool}",
             conclusion="denied",
             target_type="tool",
@@ -1588,8 +1621,12 @@ def _release_run_interaction_state(run_id: str) -> tuple[int, int]:
 
 
 @router.post("/agent/permission/release-run/{run_id}")
-def release_run_permissions(run_id: str):
+async def release_run_permissions(run_id: str):
     """手动清理某次 run 的全部 once 授权/拒绝记录/澄清状态（前端显式终止或超时时调用）
+
+    审查R2修复：改 async def —— _release_run_interaction_state 同时被 SSE 侧
+    finally（事件循环线程）调用，此前本路由在 anyio 线程池里 pop 同一批 dict，
+    两处并发互为竞态源；回到循环后互斥天然成立。审计文件写放线程池。
 
     ReflectionRein 在 AGENT_COMPLETE / AGENT_FAILED 时自动回收这三样，
     本接口作为兜底：前端在用户点击"停止"或 run 被强制终止时主动释放。
@@ -1598,7 +1635,8 @@ def release_run_permissions(run_id: str):
     released, denied_count = _release_run_interaction_state(run_id)
     try:
         from agent.audit import append_record
-        append_record(
+        await asyncio.to_thread(
+            append_record,
             action=f"permission_release_run:{run_id}",
             conclusion="released",
             target_type="run",
@@ -1659,8 +1697,13 @@ class ClarificationAnswerRequest(BaseModel):
 
 
 @router.post("/agent/clarification/answer")
-def submit_clarification_answer(req: ClarificationAnswerRequest):
+async def submit_clarification_answer(req: ClarificationAnswerRequest):
     """用户回答完澄清问题后调用 — 写入答案到 pending 存储
+
+    审查R2修复：改 async def —— _CLARIFICATION_DONE/_CLARIFICATION_CONTEXT 与
+    PermissionGate 同为「循环内消费 + 线程池写入」的进程级可变状态（澄清拦截器、
+    release-run 回收都跑在事件循环上），此前本路由在 anyio 线程池里写它们存在
+    跨线程竞态；回到循环后天然串行。审计文件写放线程池。
 
     前端 ClarifyingWizard 在用户答完所有步（或点击"完成"）后提交。
     下一轮 PRE_TOOL_CALL 时 ClarificationInterceptor 读到 _CLARIFICATION_DONE
@@ -1674,7 +1717,8 @@ def submit_clarification_answer(req: ClarificationAnswerRequest):
     # 审计
     try:
         from agent.audit import append_record
-        append_record(
+        await asyncio.to_thread(
+            append_record,
             action="clarification_answer",
             conclusion="answered",
             target_type="run",
@@ -1687,8 +1731,11 @@ def submit_clarification_answer(req: ClarificationAnswerRequest):
 
 
 @router.post("/agent/clarification/skip")
-def skip_clarification(req: ClarificationAnswerRequest):
+async def skip_clarification(req: ClarificationAnswerRequest):
     """用户跳过所有剩余澄清步 — 写入空答案（空 dict 表示无约束放行）
+
+    审查R2修复：改 async def，与 clarification/answer 端点同一姿态（循环内
+    写澄清状态、线程池写审计）。
 
     ClarificationInterceptor 在格式化空答案时输出"用户选择跳过澄清"提示，
     LLM 按原始命令执行，但仍在 PermissionGate 的权限控制之下。
@@ -1698,7 +1745,8 @@ def skip_clarification(req: ClarificationAnswerRequest):
     logger.info("clarification skip: run_id=%s", req.run_id)
     try:
         from agent.audit import append_record
-        append_record(
+        await asyncio.to_thread(
+            append_record,
             action="clarification_skip",
             conclusion="skipped",
             target_type="run",

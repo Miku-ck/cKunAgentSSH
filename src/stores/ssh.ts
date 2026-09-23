@@ -561,7 +561,21 @@ export const useSSHStore = defineStore('ssh', () => {
     if (!api) throw new Error('Electron API not available')
     const idx = connections.value.findIndex(c => c.id === id)
     if (idx === -1) return
-    const merged = { ...connections.value[idx], ...updates, id, updatedAt: Date.now() }
+    const existing = connections.value[idx]
+    const merged = { ...existing, ...updates, id, updatedAt: Date.now() }
+    // 审查R2修复：编辑连接切换认证方式后，buildPayload 里非活跃凭据字段是
+    // undefined，经 JSON 序列化丢键 + 本处展开合并，旧记录中的凭据字段
+    // （password/privateKeyPath/passphrase 及 has* 标志）会永久残留在保存记录里。
+    // authType 变化时显式清除不属于新方式的凭据字段，让主进程 toDisk 不再落旧值。
+    if (updates.authType && updates.authType !== existing.authType) {
+      if (updates.authType !== 'password') delete merged.password
+      if (updates.authType !== 'privateKey') {
+        delete merged.privateKeyPath
+        delete merged.passphrase
+      }
+      delete merged.hasPassword
+      delete merged.hasPassphrase
+    }
     const saved = await api.sshSaveConnection(merged)
     connections.value[idx] = saved
   }

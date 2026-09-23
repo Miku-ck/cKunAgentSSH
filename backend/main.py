@@ -183,7 +183,11 @@ async def cors_null_origin_security(request, call_next):
     origin = request.headers.get("origin")
     if origin == "null":
         # Origin 为 null 时不应设置 cookies，防止跨站请求伪造
-        response.headers.pop("set-cookie", None)
+        # 审查R2修复：Starlette 的 MutableHeaders 没有 pop()（只有 __delitem__），
+        # 原写法在打包态（file:// renderer 的 Origin 恒为 "null"）对每个响应都抛
+        # AttributeError → 全量 API 500；dev 态 Origin 非 null 不触发，故开发期从未暴露
+        if "set-cookie" in response.headers:
+            del response.headers["set-cookie"]
     return response
 
 

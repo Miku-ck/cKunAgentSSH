@@ -10,7 +10,7 @@ import struct
 
 logger = logging.getLogger(__name__)
 
-_VEC_OK: bool | None = None      # 三态：None 未探测
+_VEC_OK_CONNS: dict = {}         # 底层连接对象 -> 该连接上 sqlite-vec 是否可用
 _VEC_DIM: int | None = None      # 当前 vec 表维度
 
 
@@ -23,25 +23,42 @@ def unpack_vec(blob) -> list[float]:
     return list(struct.unpack(f"{n}f", blob))
 
 
+def _raw_conn(conn):
+    """剥掉 _PooledConnection 薄壳，取长寿命的底层 sqlite3.Connection。
+
+    包装对象每次 _get_conn() 都新建，按它缓存等于永远不命中；底层连接按
+    对象身份可哈希（但不支持弱引用，见 database.py 注释），这里以对象本身
+    为 dict 键 —— dict 强引用让键不被回收，杜绝"连接关闭后 id 复用"造成
+    的假命中（代价是已废弃连接的探测标记留到进程退出，量级为线程数，可接受）。
+    """
+    return getattr(conn, "_conn", conn)
+
+
 def vec_available(conn) -> bool:
-    global _VEC_OK
-    if _VEC_OK is None:
-        try:
-            import sqlite_vec
-            conn.enable_load_extension(True)
-            sqlite_vec.load(conn)
-            conn.enable_load_extension(False)
-            _VEC_OK = True
-        except Exception as e:
-            logger.debug("sqlite-vec 不可用，向量检索走 Python 扫描兜底: %s", e)
-            _VEC_OK = False
-    return _VEC_OK
+    # 审查R2修复：sqlite-vec 扩展按连接生效，而 database 层是线程本地连接池。
+    # 原实现在首条连接加载扩展后进程级缓存 True：其他线程的连接根本没加载，
+    # KNN/虚表查询照样去试然后报错降级。改为按底层连接对象缓存，逐连接加载。
+    key = _raw_conn(conn)
+    cached = _VEC_OK_CONNS.get(key)
+    if cached is not None:
+        return cached
+    ok = False
+    try:
+        import sqlite_vec
+        key.enable_load_extension(True)
+        sqlite_vec.load(key)
+        key.enable_load_extension(False)
+        ok = True
+    except Exception as e:
+        logger.debug("sqlite-vec 不可用，向量检索走 Python 扫描兜底: %s", e)
+    _VEC_OK_CONNS[key] = ok
+    return ok
 
 
 def reset_probe() -> None:
-    """测试用：重置探测缓存。"""
-    global _VEC_OK, _VEC_DIM
-    _VEC_OK = None
+    """测试用：重置探测缓存（含按连接缓存的可用性标记）。"""
+    global _VEC_DIM
+    _VEC_OK_CONNS.clear()
     _VEC_DIM = None
 
 
@@ -74,7 +91,8 @@ def ensure_vec_table(conn, dim: int) -> bool:
         return True
     except Exception as e:
         logger.debug("sqlite-vec 表初始化失败，退回 Python 扫描: %s", e)
-        globals()["_VEC_OK"] = False
+        # 审查R2修复：降级只标记当前连接（原为进程级全局，会误伤其他线程）
+        _VEC_OK_CONNS[_raw_conn(conn)] = False
         return False
 
 

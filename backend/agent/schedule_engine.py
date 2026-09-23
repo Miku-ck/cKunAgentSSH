@@ -457,6 +457,11 @@ def _local_to_utc(y: int, mo: int, d: int, h: int, mi: int) -> datetime:
     return local.astimezone(timezone.utc).replace(tzinfo=None)
 
 
+def _local_now(now_utc_naive: datetime) -> datetime:
+    """UTC naive → 本地时区 aware datetime（daily/weekly/monthly 取「今天/本周/本月」的基准）。"""
+    return now_utc_naive.replace(tzinfo=timezone.utc).astimezone(_local_tz())
+
+
 def _fmt(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -483,36 +488,37 @@ def compute_next_run(sched: dict, now: datetime | None = None) -> str:
     mi = int(sched["time_minute"]) if sched.get("time_minute") is not None else 0
 
     if st == "daily":
-        d = now
-        cand = _local_to_utc(d.year, d.month, d.day, h, mi)
-        if cand <= now:
-            d += timedelta(days=1)
-            cand = _local_to_utc(d.year, d.month, d.day, h, mi)
-        return _fmt(cand)
+        # 审查R2修复：原实现以 UTC 日期当「今天」且只滚动一次 — UTC+8 下本地
+        # 午夜窗口（00:00–07:59）内算出的 next_run 是过去时刻，落库即到期，
+        # _tick_once 每 30s 重复触发同一个定时任务（headless run + SSH 执行
+        # 反复开跑）。基准改为本地日期，并用 while 滚动兜底保证 > now。
+        ld = _local_now(now).date()
+        while True:
+            cand = _local_to_utc(ld.year, ld.month, ld.day, h, mi)
+            if cand > now:
+                return _fmt(cand)
+            ld += timedelta(days=1)
 
     if st == "weekly":
         target = int(sched["weekday"]) if sched.get("weekday") is not None else 0  # 0=周一
-        d = now
-        if d.weekday() != target:
-            # 最近的目标 weekday（不含今天；差值在 1..6）
-            d += timedelta(days=(target - d.weekday()) % 7)
-        cand = _local_to_utc(d.year, d.month, d.day, h, mi)
-        if cand <= now:
-            # 今天就是目标周但时刻已过 → 下一周
-            d += timedelta(days=7)
-            cand = _local_to_utc(d.year, d.month, d.day, h, mi)
-        return _fmt(cand)
+        ld = _local_now(now).date()
+        ld += timedelta(days=(target - ld.weekday()) % 7)
+        while True:
+            cand = _local_to_utc(ld.year, ld.month, ld.day, h, mi)
+            if cand > now:
+                return _fmt(cand)
+            ld += timedelta(days=7)
 
     if st == "monthly":
         dom = int(sched["day_of_month"]) if sched.get("day_of_month") is not None else 1
-        y, mo = now.year, now.month
-        last = calendar.monthrange(y, mo)[1]
-        cand = _local_to_utc(y, mo, min(dom, last), h, mi)
-        if cand <= now:
-            y, mo = (y + 1, 1) if mo == 12 else (y, mo + 1)
+        local = _local_now(now)
+        y, mo = local.year, local.month
+        while True:
             last = calendar.monthrange(y, mo)[1]
             cand = _local_to_utc(y, mo, min(dom, last), h, mi)
-        return _fmt(cand)
+            if cand > now:
+                return _fmt(cand)
+            y, mo = (y + 1, 1) if mo == 12 else (y, mo + 1)
 
     return _fmt(now + timedelta(hours=1))
 

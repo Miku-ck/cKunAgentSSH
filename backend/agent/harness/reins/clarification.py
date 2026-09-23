@@ -21,8 +21,16 @@ from ..contracts import (
     RunContext,
     TraceEvent,
 )
+from .core import tool_call_signature
 
 logger = logging.getLogger(__name__)
+
+
+def _mark_pending_sig(ctx: RunContext) -> None:
+    """审查R2修复：把等待中的工具调用签名登记给 LoopDetector 豁免。"""
+    if ctx.tool_calls_log:
+        ctx.metadata.setdefault("clarification_pending", set()).add(
+            tool_call_signature(ctx.tool_calls_log[-1]))
 
 # 澄清向导 — 全局 pending 存储（供 routes 层写入用户回答）
 # ──────────────────────────────────────────────────────────────────────────────
@@ -394,9 +402,19 @@ class ClarificationInterceptor:
         run_id = ctx.run_id
         tool = tc.get("tool", "")
 
+        # 审查R2修复：LoopDetector 的等待豁免原先只覆盖审批路径
+        # （permission_pending），澄清等待期模型重发同一命令 3 次即被判循环，
+        # 第 3 次检测直接把 run 打成 FAILED、用户的答案变孤儿。本拦截器把
+        # 等待中的签名登记进 clarification_pending，供 LoopDetector 豁免。
+        # TTL 到期/答案已消费后清空，恢复常态检测。
+        if (run_id not in _CLARIFICATION_CONTEXT
+                and run_id not in _CLARIFICATION_DONE):
+            ctx.metadata.pop("clarification_pending", None)
+
         # ── 答案就绪 → 注入上下文 + 放行 ──
         if run_id in _CLARIFICATION_DONE:
             answers = _CLARIFICATION_DONE.pop(run_id)
+            ctx.metadata.pop("clarification_pending", None)
             ctx_info = _CLARIFICATION_CONTEXT.pop(run_id, None)
             summary = _format_answers(answers)
             done_ev = TraceEvent(
@@ -436,6 +454,7 @@ class ClarificationInterceptor:
                 ctx_info.get("tool_call_id", ""),
                 reason=ctx_info.get("reason", ""),
             )
+            _mark_pending_sig(ctx)
             return ReinDecision(
                 intercepted=True,
                 intercept_reason="clarification_pending",
@@ -474,6 +493,7 @@ class ClarificationInterceptor:
             run_id, tool, args, steps, 0, len(steps), tool_call_id,
             reason=reason,
         )
+        _mark_pending_sig(ctx)
         return ReinDecision(
             intercepted=True,
             intercept_reason="clarification_needed",

@@ -207,3 +207,78 @@ def test_cleanup_run_once_isolated_across_concurrent_runs():
                                  risk="dangerous", run_id="run-A") is True
     assert gate.check_permission("shell_exec", {"command": CMD},
                                  risk="dangerous", run_id="run-A") is False
+
+
+def test_driver_releases_pending_on_failure():
+    """审查R2修复回归：once 授权在 check_permission 放行时已被消费，执行失败
+    也必须把签名移出 permission_pending。旧实现只在 success=True 时 pop ——
+    失败重试走 is_first=False 分支不再建卡（用户无卡可点），且滞留签名永久
+    豁免循环检测。"""
+    class _NoopTelemetry:
+        async def emit(self, ev):
+            return None
+
+    class _StubBridle:
+        def build_tool_result_message(self, tc_id, text, priority="normal"):
+            return {"role": "tool", "tool_call_id": tc_id, "content": text}
+
+    class _StubSaddle:
+        async def execute(self, tc, ctx, auto_rollback=True):
+            return ToolResult(success=False, output="", error="boom", duration_ms=1), None
+
+    class _StubReins:
+        async def check(self, point, ctx):
+            from agent.harness.contracts import ReinDecision
+            return ReinDecision()
+
+    class _StubHarness:
+        bridle = _StubBridle()
+        saddle = _StubSaddle()
+        reins = _StubReins()
+        cost_tracker = None
+
+    ctx = _ctx()
+    sig = tool_call_signature({"tool": "shell_exec", "args": {"command": CMD}})
+    ctx.metadata["permission_pending"] = {sig: time.monotonic()}
+
+    async def main():
+        await ctx.transition(State.ACTING, event="need_tool")
+        driver = Driver()
+        llm_out = LLMOutput(tool_calls=[ToolCall(id="tc1", name="shell_exec",
+                                                 args={"command": CMD})])
+        async for ev in driver._execute_tool_calls(
+                llm_out, ctx, _StubHarness(), _NoopTelemetry(), 0):
+            pass
+
+    asyncio.run(main())
+    assert sig not in ctx.metadata.get("permission_pending", {}), (
+        "命令执行失败同样要移除「等待审批」标记，否则重试无卡可点且永久豁免循环检测"
+    )
+
+
+def test_denied_command_leaves_no_pending_sig():
+    """审查R2修复：拒绝判定必须落在 pending[sig] 记账**之前**。
+
+    旧顺序下被拒命令的签名已先写进 permission_pending，此后该签名永久豁免
+    循环检测 —— 模型可以无限刷「已被拒绝」的拦截直到 max_iterations，白烧
+    整轮 LLM 调用。"""
+    ctx = _ctx()
+    _log(ctx)
+    guard = _guard()
+    guard.permission_gate.deny_command("shell_exec", CMD, ctx.run_id)
+
+    d = asyncio.run(guard.check(ctx))
+    assert d.intercepted, "被拒命令仍要拦住"
+    assert not any(e.kind == "permission_needed" for e in d.events), \
+        "用户已明确点过拒绝，不得再发授权卡片"
+    sig = tool_call_signature(ctx.tool_calls_log[-1])
+    assert sig not in ctx.metadata.get("permission_pending", {}), \
+        "被拒签名不得滞留「等待审批」集（否则从此豁免循环检测）"
+
+    # 豁免面消失后，循环检测必须能接管同一签名的重发
+    det = LoopDetector()
+    last = None
+    for _ in range(5):
+        _log(ctx)
+        last = asyncio.run(det.check(ctx))
+    assert last.intercepted and last.terminate, "被拒命令的重发应由循环检测兜底终止"

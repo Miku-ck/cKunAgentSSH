@@ -24,11 +24,11 @@ const EXEC_RECONNECT_WAIT_MS = 10000
 // ════════════════════════════════════════════════
 //   传输错误分类（断点续传 / 友好提示 / 自动重试依据）
 // ════════════════════════════════════════════════
-export type TransferErrorCode =
+type TransferErrorCode =
   | 'NETWORK' | 'DISK_FULL' | 'PERMISSION' | 'NOT_FOUND'
   | 'CANCELLED' | 'STALLED' | 'REMOTE_CHANGED' | 'RENAME_FAILED' | 'UNKNOWN'
 
-export interface TransferError {
+interface TransferError {
   code: TransferErrorCode
   message: string
   retryable: boolean
@@ -273,7 +273,7 @@ async function pipelineReadWrite(
   }
 }
 
-export interface SSHConnectionConfig {
+interface SSHConnectionConfig {
   id: string
   name: string
   host: string
@@ -588,13 +588,17 @@ export class SSHManager {
   /** 建立 SSH 连接并创建 Shell 通道 */
   async connect(config: SSHConnectionConfig, cols: number, rows: number): Promise<{ id: string; name: string }> {
     const id = `ssh-${this.nextId++}`
-    return this.doConnect(id, config, true, cols, rows)
+    // 审查R2修复：doConnect 内部多返回 client 字段（供重连拆除用），此处剥离 —
+    // Client 对象不可结构化克隆，泄漏给渲染进程 IPC 会报错
+    const { client: _client, ...pub } = await this.doConnect(id, config, true, cols, rows)
+    return pub
   }
 
   /** 建立 SSH 连接,不创建 Shell 通道(用于 SFTP) */
   async connectSftp(config: SSHConnectionConfig): Promise<{ id: string; name: string }> {
     const id = `sftp-${this.nextId++}`
-    return this.doConnect(id, config, false)
+    const { client: _client, ...pub } = await this.doConnect(id, config, false)
+    return pub
   }
 
   private async doConnect(
@@ -603,7 +607,7 @@ export class SSHManager {
     withShell: boolean,
     cols?: number,
     rows?: number,
-  ): Promise<{ id: string; name: string }> {
+  ): Promise<{ id: string; name: string; client: Client }> {
     // 审查修复：SSH/SFTP 会话数上限 — 原实现无上限，断连清理失败或 LLM Agent
     // 批量触发 connect 时可无限累积会话（每个含 TCP 连接 + 事件监听器）
     if (this.sessions.size >= 64) {
@@ -619,14 +623,15 @@ export class SSHManager {
     config.passphrase = undefined
 
     return new Promise((resolve, reject) => {
-      const wrappedResolve = (val: { id: string; name: string }) => { resolve(val) }
+      const wrappedResolve = (val: { id: string; name: string; client: Client }) => { resolve(val) }
       const wrappedReject = (err: Error) => { reject(err) }
 
       client.on('ready', () => {
         if (!withShell) {
           const name = config.name || `${config.username}@${config.host}`
           this.sessions.set(id, { id, connectionId: config.id, client, stream: null, name, cwd: '' })
-          wrappedResolve({ id, name })
+          // 审查R2修复：携带 client，供陈旧重连续体精确拆除自身连接（见 runReconnectAttempt）
+          wrappedResolve({ id, name, client })
           return
         }
 
@@ -734,7 +739,7 @@ export class SSHManager {
               }
             }
 
-            wrappedResolve({ id, name })
+            wrappedResolve({ id, name, client })
           }
         )
       })
@@ -812,6 +817,12 @@ export class SSHManager {
     while (this.reconnects.has(sshSessionId)) {
       const session = this.sessions.get(sshSessionId)
       if (session) return session
+      // 审查R2修复：重连次数耗尽（exhausted）后条目为手动重连而永久保留，
+      // 但此刻既无退避排程（timer=null）也无进行中连接（inFlight=false）——
+      // 原实现只看 has(id) 会让每次 exec 白等满 10s 才报 SESSION_NOT_FOUND。
+      // 无进行中重连即立即失败（用户点击手动重连后 timer/inFlight 恢复，仍会等待）。
+      const entry = this.reconnects.get(sshSessionId)
+      if (entry && !entry.timer && !entry.inFlight) return null
       if (Date.now() >= deadline) return null
       await new Promise<void>((r) => setTimeout(r, 250))
     }
@@ -1040,10 +1051,13 @@ export class SSHManager {
       return
     }
 
+    // 审查R2修复：持有本轮 doConnect 建立的 client — 陈旧分支拆除时按 owner 身份
+    // 校验，避免关掉新代重连刚建好的同 id 会话
+    let conn: { client: Client } | null = null
     try {
       // 复用现有连接路径（不复制逻辑）：同一会话 id（前端 xterm 实例/scrollback
       // 监听不变），doConnect 内部完成新 Client + 新 shell 通道 + OSC 7 cwd 注入
-      await this.doConnect(id, config, true, entry.cols, entry.rows)
+      conn = await this.doConnect(id, config, true, entry.cols, entry.rows)
     } catch (err) {
       if (!this.isReconnectCurrent(id, entry, gen)) return
       entry.inFlight = false
@@ -1063,7 +1077,9 @@ export class SSHManager {
     // 只拆除刚建立的连接。注意不能走 disconnect()（会连带取消新一轮的状态），
     // 也不发 ssh:close（前端 tab 由新一轮重连接管）
     if (!this.isReconnectCurrent(id, entry, gen)) {
-      this.teardownSession(id)
+      // 审查R2修复：传入本轮 client（doConnect 成功即 conn 非空）——若池中同 id
+      // 会话已被新代重连替换，按身份守卫跳过拆除，不再误关新会话
+      this.teardownSession(id, conn?.client)
       // 条目对象被替换（取消删除后由 doConnect 重新登记）= 悬挂条目，清理；
       // 同一对象但代数变化 = 手动重启（新一轮仍有效，原地更新保证对象不变），保留
       if (this.reconnects.get(id) !== entry) {
@@ -1114,10 +1130,16 @@ export class SSHManager {
   /**
    * 底层会话拆除：关闭 shell 流与连接、移出会话池。
    * 不发 ssh:close、不动重连状态 — 供用户主动断开与陈旧重连连接拆除复用。
+   *
+   * 审查R2修复：新增可选 ownerClient 身份参数（参照 destroySession 的既有同款
+   * 守卫）— 陈旧重连续体拆除时传入本轮连接的 client，池中会话已被新代替换
+   * 时跳过，避免误关新代刚建好的同 id 会话；不传（用户主动断开）保持原行为。
    */
-  private teardownSession(id: string): void {
+  private teardownSession(id: string, ownerClient?: Client): void {
     const session = this.sessions.get(id)
     if (!session) return
+    // 陈旧事件守卫：session 的 client 已属其他连接（新代重连已重建），跳过
+    if (ownerClient && session.client !== ownerClient) return
     this.closeSftp(id)
     try { session.stream?.close() } catch { /* ignore */ }
     try { session.client.end() } catch { /* ignore */ }
@@ -1903,6 +1925,15 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       // 注：sources 中的 "." 会让 zip 内文件路径以 "./" 开头，
       // 但主流解压工具（unzip、Windows Explorer、macOS Archive Utility）都能正确处理，
       // 不会创建额外嵌套层级，因此无需特殊处理。
+      // 审查R2修复：zip -r 对已存在的归档是增量 update —— "覆盖打包"会残留旧条目，
+      // 且失败清理（sftpDelete）会把被 update 修改过的旧归档整体删掉。打包前先删除
+      // 已存在的目标，与下方 Python 回退分支 zipfile "w" 截断语义对齐；
+      // sftp 未开/删除失败时静默跳过，保持原行为交由 zip 处理。
+      try {
+        if (await this.sftpExists(sshSessionId, remoteZipPath)) {
+          await sftpUnlink(this.requireSftp(sshSessionId), remoteZipPath)
+        }
+      } catch { /* ignore */ }
       const quotedSources = sources.map(s => shellQuoteRemote(s)).join(' ')
       const cmd = `cd ${shellQuoteRemote(cwd)} && zip -r -y ${shellQuoteRemote(remoteZipPath)} ${quotedSources}`
       const result = await this.execCommandWithExitCode(sshSessionId, cmd, 300)

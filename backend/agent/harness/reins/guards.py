@@ -243,17 +243,14 @@ class FilesystemGuard:
                                 }],
                             )
                         is_first = first_ts is None
-                        if is_first:
-                            pending[sig] = time.monotonic()
-                        # 审查 M-3 修复：原实现只发 "warning" 事件，前端没有可操作的授权卡片，
-                        # 用户根本无法批准 dangerous 命令（授权闭环断裂）。
-                        # 改发 permission_needed（payload 含 tool/args/command），前端
-                        # AgentRunPanel 渲染授权卡片，用户选择 本次/会话/始终（绑定命令）。
-                        # C-review M7：仅首次请求发卡片（前端本就按 工具+命令 去重）；
-                        # 审批窗口内的重发只拦截 + 注入等待提示，不重复发事件。
+                        # 审查R2修复：is_denied 兜底原先落在 pending[sig] 记账之后 —
+                        # 被拒命令一旦走到这里，签名已永久驻留 permission_pending：
+                        # 该命令从此豁免循环检测，模型可无限刷「已被拒绝」拦截直到
+                        # max_iterations。拒绝判定前移，被拒即返回、不再记账。
                         # 问题 4：visible_terminal 拒绝过该命令 → 不再发卡片，直接拒绝
                         # （用户已明确点过"拒绝"，重复卡片是无意义的骚扰）
                         if self.permission_gate and self.permission_gate.is_denied(tool, str(cmd) if cmd else None, ctx.run_id):
+                            pending.pop(sig, None)
                             return ReinDecision(
                                 intercepted=True,
                                 intercept_reason=f"命令曾被用户拒绝: {cmd}",
@@ -283,6 +280,14 @@ class FilesystemGuard:
                                     ),
                                 }],
                             )
+                        # 审查 M-3 修复：原实现只发 "warning" 事件，前端没有可操作的授权卡片，
+                        # 用户根本无法批准 dangerous 命令（授权闭环断裂）。
+                        # 改发 permission_needed（payload 含 tool/args/command），前端
+                        # AgentRunPanel 渲染授权卡片，用户选择 本次/会话/始终（绑定命令）。
+                        # C-review M7：仅首次请求发卡片（前端本就按 工具+命令 去重）；
+                        # 审批窗口内的重发只拦截 + 注入等待提示，不重复发事件。
+                        if is_first:
+                            pending[sig] = time.monotonic()
                         # 问题 2 改进：计算归一化展示命令，让用户看到实际授权的命令形态
                         from ..safety import get_normalized_for_display
                         display_cmd = get_normalized_for_display(str(cmd)) if cmd else ""

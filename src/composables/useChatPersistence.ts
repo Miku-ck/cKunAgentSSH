@@ -21,6 +21,9 @@ import { useToastStore } from '@/stores/toast'
 /** 后端 API 的会话模式标识（固定 Agent 模式后仅 ssh 一种） */
 const API_MODE = 'ssh'
 
+// 审查R2修复：localStorage 写入失败（QuotaExceeded）的告警去重标志（模块级，全会话只 toast 一次防刷屏）
+let quotaWarned = false
+
 export function useChatPersistence(options: {
   config: ChatStorageKeys
   getDefaultModelId: () => Promise<string | undefined>
@@ -31,7 +34,15 @@ export function useChatPersistence(options: {
   function loadConversations(): ModeConversation[] {
     try {
       const raw = localStorage.getItem(storageKey)
-      return raw ? JSON.parse(raw) : []
+      const parsed = raw ? JSON.parse(raw) : []
+      // 审查R2修复：JSON.parse 成功不等于形态合法——非数组值（如被写进 `{}`/字符串）
+      // 或条目缺 messages 会让 messages computed / .find / 分组渲染整个 AI 面板抛错白屏。
+      // 按条目形状过滤，坏数据降级为空列表。
+      if (!Array.isArray(parsed)) {
+        console.warn(`[useChatPersistence] ${storageKey} 内容不是数组，重置为空列表`)
+        return []
+      }
+      return parsed.filter((c: any) => c && typeof c === 'object' && Array.isArray(c.messages))
     } catch (e) {
       // m3 修复：JSON 解析失败时输出警告，便于排查数据损坏问题
       console.warn(`[useChatPersistence] 解析 ${storageKey} 失败，重置为空列表:`, e)
@@ -40,7 +51,35 @@ export function useChatPersistence(options: {
   }
 
   function saveConversations(convs: ModeConversation[]) {
-    localStorage.setItem(storageKey, JSON.stringify(convs))
+    // 审查R2修复（a）：裸 setItem 在配额满（约 5MB）时抛 QuotaExceededError，
+    // 会把异常溅进所有调用方（发送消息/删除会话/启动合并）。捕获后：
+    // ① toast 告警一次（模块级标志防刷屏）；② 按 updated_at 淘汰最旧一条会话后重试一次。
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(convs))
+    } catch (e) {
+      console.warn(`[useChatPersistence] 写入 ${storageKey} 失败（可能配额已满）:`, e)
+      if (!quotaWarned) {
+        quotaWarned = true
+        try {
+          useToastStore().error('本地存储已满，会话保存失败，已自动清理最旧的历史会话')
+        } catch { /* 单测等无 pinia 环境忽略 */ }
+      }
+      if (convs.length <= 1) return
+      const oldestIdx = convs.reduce(
+        (acc, c, i) =>
+          parseBackendTs(c.updated_at).getTime() < parseBackendTs(convs[acc].updated_at).getTime() ? i : acc,
+        0,
+      )
+      const trimmed = convs.filter((_, i) => i !== oldestIdx)
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(trimmed))
+        // 内存侧同步淘汰（调用方传入的就是 conversations.value 时），
+        // 否则下一次保存又会把被淘汰的会话写回来，反复失败
+        if (conversations.value === convs) conversations.value = trimmed
+      } catch (e2) {
+        console.warn(`[useChatPersistence] 淘汰最旧会话后仍写入失败，放弃本次持久化:`, e2)
+      }
+    }
   }
 
   function loadSelectedModelId(): string {

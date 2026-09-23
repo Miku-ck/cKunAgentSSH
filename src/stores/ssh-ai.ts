@@ -381,9 +381,15 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       return
     }
     try {
-      workflowSnapshot.value = await workflowApi.read(cid)
+      const snap = await workflowApi.read(cid)
+      // 审查R2修复：await 后校验会话未切换——快速切会话时旧响应晚到，
+      // 无条件赋值会把上一个会话的工作流快照挂到新会话头上
+      if (persistence.currentConversation.value?.backendConvId !== cid) return
+      workflowSnapshot.value = snap
     } catch (e) {
       console.warn('[ssh] 加载会话工作流失败（按空处理）:', e)
+      // 审查R2修复：同上，会话已切换时旧请求的失败不应清空新会话的快照
+      if (persistence.currentConversation.value?.backendConvId !== cid) return
       workflowSnapshot.value = { phase: '', spec: '', plan: '', goal: '' }
     }
   }

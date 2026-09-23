@@ -132,6 +132,15 @@ function createWindow(): void {
     }
   })
 
+  // 审查R2修复：ptyManager/sshManager 的 setWindow 原本只在 whenReady 里
+  // setupPtyIPC/setupSSHIPC 各调用一次；macOS activate 销毁窗口后重建时，
+  // 两个 manager 仍持已销毁窗口，safeSend 的 isDestroyed 判断让所有推送
+  // （pty:data/ssh:data/sftp:progress/host-key）静默丢失。每次创建窗口后
+  // 重新绑定（首次启动时 manager 尚未创建，判空跳过，随后 setup 函数
+  // 仍会各自完成初次绑定，语义不变）。
+  if (ptyManager) ptyManager.setWindow(mainWindow)
+  if (sshManager) sshManager.setWindow(mainWindow)
+
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
   })
@@ -386,6 +395,18 @@ function findGitBashFromRegistry(): string | null {
   return null
 }
 
+/**
+ * 审查R2修复：fs handler 的 catch-all 会把 assertSafePath 抛出的「拒绝访问敏感路径」
+ * 改写成通用"读取/写入失败"文案，吞掉安全事件。此辅助在 catch 中识别该前缀时
+ * 原样透传并 console.warn 留痕（对照各 handler 既有的「文件过大」白名单做法）。
+ */
+function rethrowIfSensitivePath(err: any): void {
+  if (typeof err?.message === 'string' && err.message.startsWith('拒绝访问敏感路径')) {
+    console.warn(`[fs] 敏感路径访问被拒绝: ${err.message}`)
+    throw err
+  }
+}
+
 function setupFSIPC(): void {
   // 读取目录内容
   handleTrusted('fs:readDir', async (_event, dirPath: string) => {
@@ -422,6 +443,7 @@ function setupFSIPC(): void {
       })
       return items
     } catch (err: any) {
+      rethrowIfSensitivePath(err) // 审查R2修复：敏感路径拒绝事件不被通用文案吞掉
       throw new Error('读取目录失败，请检查路径是否存在或是否有访问权限')
     }
   })
@@ -440,6 +462,7 @@ function setupFSIPC(): void {
       const content = await readFile(filePath, 'utf-8')
       return content
     } catch (err: any) {
+      rethrowIfSensitivePath(err) // 审查R2修复：敏感路径拒绝事件不被通用文案吞掉
       throw new Error(err?.message && err.message.includes('文件过大')
         ? err.message
         : '读取文件失败，请检查文件是否存在或是否有访问权限')
@@ -457,6 +480,7 @@ function setupFSIPC(): void {
       }
       await writeFile(filePath, content, 'utf-8')
     } catch (err: any) {
+      rethrowIfSensitivePath(err) // 审查R2修复：敏感路径拒绝事件不被通用文案吞掉
       throw new Error(err?.message && err.message.includes('内容过大')
         ? err.message
         : '写入文件失败，请检查路径是否存在或是否有写入权限')
@@ -1334,11 +1358,22 @@ app.whenReady().then(async () => {
   // 处理器，主进程任何未捕获异常（IPC handler 竞态、异步回调遗漏的 reject）
   // 直接崩掉整个应用（丢 PTY/SSH 连接 + 后端进程变孤儿）。
   // 策略：记日志 + 尽力保活；连续 3 次 uncaught 视为不可恢复，主动退出
-  let uncaughtCount = 0
+  // 审查R2修复：计数改为 60s 时间窗 — 原 uncaughtCount 只增不清零，"连续3次"
+  // 实为进程生命周期内任意 3 次分散异常即 app.quit()。现仅统计窗口内的异常，
+  // 超出窗口的历史记录自动重置。
+  const UNCAUGHT_WINDOW_MS = 60_000
+  const uncaughtTimes: number[] = []
   process.on('uncaughtException', (err) => {
     console.error('[main] uncaughtException:', err)
-    if (++uncaughtCount >= 3) {
-      console.error('[main] 连续 3 次未捕获异常，退出应用')
+    const now = Date.now()
+    // 只保留 60s 窗口内的记录（含本次）
+    while (uncaughtTimes.length > 0 && now - uncaughtTimes[0] > UNCAUGHT_WINDOW_MS) {
+      uncaughtTimes.shift()
+    }
+    uncaughtTimes.push(now)
+    if (uncaughtTimes.length >= 3) {
+      console.error(`[main] ${UNCAUGHT_WINDOW_MS / 1000} 秒内 3 次未捕获异常，退出应用`)
+      uncaughtTimes.length = 0
       app.quit()
     }
   })

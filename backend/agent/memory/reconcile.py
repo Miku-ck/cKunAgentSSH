@@ -361,7 +361,14 @@ async def _apply(cand: dict, op: str, decision: dict, hits: list, job_id: str,
     """把一条裁决落到 memories + memory_audit。"""
     reason = str(decision.get("reason") or "")[:300]
     target = decision.get("target_id") or (hits[0].memory_id if hits else None)
-    emb, emb_src = await _embed(embed_client, cand["content"])
+    # 审查R2修复：嵌入必须按最终入库的 content 计算 —— UPDATE 分支存的是
+    # merged_content，原实现却恒按 cand["content"] 算向量，向量与正文永久错位，
+    # 语义检索按旧文本命中新正文。判据与下方 elif 条件一致；去重 NOOP 分支
+    # （无 id 不入库）本就不消费该向量，行为不变。
+    content = cand["content"]
+    if op == "UPDATE" and target and target != cand.get("id"):
+        content = str(decision.get("merged_content") or cand["content"])
+    emb, emb_src = await _embed(embed_client, content)
 
     if op == "ADD":
         if cand.get("id"):  # 迁移行转正（沿用原 id 与热度）
@@ -382,7 +389,7 @@ async def _apply(cand: dict, op: str, decision: dict, hits: list, job_id: str,
         await asyncio.to_thread(mstore.add_audit, mid, "ADD", new=cand["content"],
                                 reason=reason, job_id=job_id)
     elif op == "UPDATE" and target and target != cand.get("id"):
-        content = str(decision.get("merged_content") or cand["content"])
+        # content 已在函数入口按最终入库文本确定（含 merged_content），向量同源
         if cand.get("id"):
             mid = cand["id"]
             await asyncio.to_thread(mstore.adopt, mid, content=content,

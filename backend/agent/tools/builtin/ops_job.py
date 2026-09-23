@@ -86,6 +86,9 @@ class JobEntry:
     run_id: str = ""                 # 所属 agent run（取消联动清理用）
     raw_cmd: str = ""                # 原始命令文本（展示用）
     out_offset: int = 0              # 已读取的日志字节数（增量 tail）
+    # 审查R2修复：per-job 输出读锁，串行化「读 offset→await 拉取→推进 offset」
+    # （见 _remote_read 的并发说明）。惰性创建，不进构造参数以免调用点跟改。
+    read_lock: Optional["asyncio.Lock"] = None
 
 
 class JobManager:
@@ -176,12 +179,15 @@ class JobManager:
         with JobManager._instance_lock:
             if JobManager._restored:
                 return
+            try:
+                import database as db
+                rows = db.get_running_agent_jobs()
+            except Exception:
+                # 审查R2修复：原实现先置 _restored=True 再读 DB，一次 DB 抖动
+                # （锁/损坏）就让本进程终身不再恢复远程任务。仅在成功读行后置位，
+                # 失败留给下一个工具入口重试。
+                return
             JobManager._restored = True
-        try:
-            import database as db
-            rows = db.get_running_agent_jobs()
-        except Exception:
-            return
         for row in rows:
             job_id = row.get("job_id") or ""
             if not job_id or self.get(job_id):
@@ -350,6 +356,24 @@ def _strip_sentinel(tail: str) -> str:
 
 async def _remote_read(context, entry: JobEntry) -> tuple[str, Optional[int]]:
     """增量读取远程任务输出，返回 (new_output, rc|None)。
+
+    审查R2修复：本函数是「读 entry.out_offset → await run_headless → += 推进」，
+    await 前后跨两次事件循环调度，并发对同一 job 的调用会各自从同一 offset 读、
+    各自推进一次 —— offset 双倍前进，中间一段日志被永久跳丢。选 per-job
+    asyncio.Lock 而不是"await 前按请求偏移条件推进"：无锁方案下两个并发读仍会
+    各自把同一段内容返回给不同调用方（重复投递），且后完成者覆盖先完成者的
+    offset 时推进量可能偏短导致整段重读；锁让第二个调用直接等待、读到的是
+    真正的"新字节"，语义与单调用路径完全一致。Lock 惰性创建：创建过程无
+    await，单事件循环内不会有两个调用同时看到 None。
+    """
+    if entry.read_lock is None:
+        entry.read_lock = asyncio.Lock()
+    async with entry.read_lock:
+        return await _remote_read_locked(context, entry)
+
+
+async def _remote_read_locked(context, entry: JobEntry) -> tuple[str, Optional[int]]:
+    """真正的增量读取（由 _remote_read 在持 per-job 读锁时调用）。
 
     字节守恒不变量：offset 每次推进的量必须等于 **out.log** 自上次 offset
     以来新增的字节数（= 响应体里 RC 行首个换行之后、末行 [exit_code=] 哨兵
@@ -814,7 +838,11 @@ class JobKillTool(BaseTool):
                     output=f"已终止远程 job {job_id}（进程组 {entry.pid} 已退出）",
                 )
             if result == "STILL":
-                mgr.update_status(job_id, "killed", None)
+                # 审查R2修复：SIGKILL 后进程组仍在，原实现却标 killed —— 谎报终态：
+                # update_status 的竞态防护会让 killed 永不回退，job_list 对账也只查
+                # running，进程实际还活着却永远不会被再次核实/清理。
+                # 选择保持 running（而非新增 kill_failed 态）：进程确实还在跑是事实，
+                # 状态机不扩新态，用户可按错误提示重试 kill，最终退出由对账落终态。
                 return ToolResult(
                     success=False,
                     output="",

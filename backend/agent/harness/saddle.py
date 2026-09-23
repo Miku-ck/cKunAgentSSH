@@ -376,6 +376,14 @@ class Saddle:
             except Exception as e:
                 logger.warning("自动回滚失败: %s", e)
 
+        # 审查R2修复：pending_delivery 的命令此刻尚未执行，但第 2 步已把它
+        # push 进 undo_stack；用户拒绝/超时后 run 以 FAILED 收尾时 _emit_done
+        # 会 undo_all — 等于在从未执行过的命令上于同一 SSH 会话真实执行反向
+        # 命令（mv b a / touch→rm），绕过审批门制造副作用。交付挂起即出栈；
+        # 可见终端命令本就不做事后回滚，方向 fail-safe。
+        if result.pending_delivery and ctx.undo_stack and ctx.undo_stack[-1] is undo:
+            ctx.undo_stack.pop()
+
         return result, undo
 
     def _build_tool_context(self, ctx: RunContext) -> Any:

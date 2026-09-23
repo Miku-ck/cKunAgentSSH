@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 # 单次 memory_search 返回上限：记忆行是常驻上下文里最贵的一段文本
 _MAX_TOP_K = 10
 _KNOWN_KINDS = ("semantic", "episodic", "procedural")
+# 写入侧真实限制常量。审查R2修复：schema 描述曾写死"≤200 字/标题≤40 字"，
+# 与实现（≤500 拒绝、标题截 80）脱节——描述与常量必须同源，改上限只改这里。
+_MAX_CONTENT_CHARS = 500
+_MAX_TITLE_CHARS = 80
 
 
 def _host_scopes(context) -> list[str]:
@@ -112,8 +116,10 @@ class MemoryAddTool(BaseTool):
     parameters = {
         "type": "object",
         "properties": {
-            "content": {"type": "string", "description": "记忆正文（一句话、可独立理解，≤200 字）"},
-            "title": {"type": "string", "description": "短标题（可选，≤40 字）"},
+            "content": {"type": "string", "description":
+                        f"记忆正文（一句话、可独立理解，≤{_MAX_CONTENT_CHARS} 字）"},
+            "title": {"type": "string", "description":
+                      f"短标题（可选，超 {_MAX_TITLE_CHARS} 字自动截断）"},
             "kind": {"type": "string", "enum": ["semantic", "procedural"],
                      "description": "semantic=事实/偏好；procedural=操作规则/经验教训。"
                                      "episodic 由系统自动记录，不接受工具写入"},
@@ -130,9 +136,9 @@ class MemoryAddTool(BaseTool):
         content = (kwargs.get("content") or "").strip()
         if not content:
             return ToolResult(success=False, output="", error="content 不能为空")
-        if len(content) > 500:
+        if len(content) > _MAX_CONTENT_CHARS:
             return ToolResult(success=False, output="",
-                              error="content 需 ≤500 字，请压缩成一条可独立理解的事实")
+                              error=f"content 需 ≤{_MAX_CONTENT_CHARS} 字，请压缩成一条可独立理解的事实")
         kind = kwargs.get("kind") or "semantic"
         if kind not in ("semantic", "procedural"):
             return ToolResult(success=False, output="",
@@ -153,7 +159,7 @@ class MemoryAddTool(BaseTool):
 
         item = {
             "content": content,
-            "title": (kwargs.get("title") or "")[:80],
+            "title": (kwargs.get("title") or "")[:_MAX_TITLE_CHARS],
             "kind": kind,
             "scope": scope,
             "importance": importance,

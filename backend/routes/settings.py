@@ -308,18 +308,30 @@ def update_permission_policy(req: PermissionPolicyRequest):
     只写库不够：三者都是进程内状态，不推这一步，改完设置要重启后端才生效 ——
     而用户刚把时长调小到 24h，恰恰是希望立刻把不再想要的预授权收回来。
     """
+    # 审查R2修复：多键逐条 set_app_setting 各自提交，中途一条失败会让库里
+    # 「一半新一半旧」，而内存策略仍按全量新值应用，两边各说各话。改为
+    # update_app_settings_bulk 单事务落库：整体成功后才推内存运行时，
+    # 失败整体回滚并 500（内存策略保持旧值，与库一致）。
+    updates: dict[str, str] = {}
     if req.allowlist_ttl_hours is not None:
-        db.set_app_setting("permission.allowlist_ttl_hours", str(req.allowlist_ttl_hours))
+        updates["permission.allowlist_ttl_hours"] = str(req.allowlist_ttl_hours)
+    if req.auto_approve_enabled is not None:
+        updates["permission.auto_approve_enabled"] = (
+            "true" if req.auto_approve_enabled else "false")
+    if req.approval_fallback_s is not None:
+        updates["permission.approval_fallback_s"] = str(req.approval_fallback_s)
+    try:
+        db.update_app_settings_bulk(updates)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"审批策略写入失败，已整体回滚，运行时未变更: {e}")
+    if req.allowlist_ttl_hours is not None:
         from agent.harness.reins.gate import set_allowlist_ttl_hours
         set_allowlist_ttl_hours(req.allowlist_ttl_hours)
     if req.auto_approve_enabled is not None:
-        db.set_app_setting(
-            "permission.auto_approve_enabled",
-            "true" if req.auto_approve_enabled else "false")
         from agent.harness.reins.auto_approve import set_db_enabled
         set_db_enabled(req.auto_approve_enabled)
     if req.approval_fallback_s is not None:
-        db.set_app_setting("permission.approval_fallback_s", str(req.approval_fallback_s))
         from agent.harness.reins.core import set_approval_fallback_seconds
         set_approval_fallback_seconds(req.approval_fallback_s)
     return db.get_permission_policy()
@@ -492,12 +504,22 @@ async def update_http_settings(req: HttpSettingsRequest):
         timeout = int(data["timeout_seconds"])
     if "retry_count" in data:
         retries = int(data["retry_count"])
+    # 审查R2修复：三条 set_app_setting 逐条提交与 netconfig 内存策略非原子 ——
+    # 中途一条失败会留下「库里一半新一半旧、内存全量新」的分裂态。改为
+    # update_app_settings_bulk 单事务落库：整体成功后才应用内存策略并重建
+    # 客户端缓存；失败整体回滚并 500（netconfig 保持旧策略，与库一致）。
+    updates: dict[str, str] = {}
     if "proxy_url" in data:
-        db.set_app_setting("http.proxy_url", proxy)
+        updates["http.proxy_url"] = proxy
     if "timeout_seconds" in data:
-        db.set_app_setting("http.timeout_seconds", str(timeout))
+        updates["http.timeout_seconds"] = str(timeout)
     if "retry_count" in data:
-        db.set_app_setting("http.retry_count", str(retries))
+        updates["http.retry_count"] = str(retries)
+    try:
+        db.update_app_settings_bulk(updates)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"HTTP 策略写入失败，已整体回滚，运行时未变更: {e}")
     netconfig.set_policy(proxy, timeout, retries)
     from llm_adapter import invalidate_client_cache
     dropped = await invalidate_client_cache()

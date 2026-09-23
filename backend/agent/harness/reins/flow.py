@@ -67,7 +67,12 @@ class LoopDetector:
         # permission_needed 不再发出 → 授权卡片孤儿、命令永远执行不了。
         # 审批超时后由 FilesystemGuard/PermissionGate 移除标记，检测恢复正常
         # （LLM 若在拒绝后仍重试，循环检测会接管终止 run）。
+        # 审查R2修复：同款豁免扩到澄清等待路径 — 原实现只覆盖审批，用户在
+        # 向导期间不答、模型每轮重发同一命令，3 次检测即 terminate 把 run 打成
+        # FAILED，之后的答案 POST 成孤儿（C-review M7 修审批时漏了澄清一侧）。
         if sig in ctx.metadata.get("permission_pending", {}):
+            return ReinDecision()
+        if sig in ctx.metadata.get("clarification_pending", ()):
             return ReinDecision()
         window.append(sig)
 

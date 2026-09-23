@@ -48,8 +48,9 @@
               <span class="badge badge-provider">{{ providerLabel(m.provider) }}</span>
             </div>
             <div class="model-card-actions">
-              <button class="btn-icon" title="测试连接" @click="handleTest(m.id)" :disabled="testingId === m.id">
-                <svg v-if="testingId !== m.id" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+              <!-- 审查R2修复：忙态判断由单值 === 改为 Set.has（并发操作互不顶掉） -->
+              <button class="btn-icon" title="测试连接" @click="handleTest(m.id)" :disabled="testingIds.has(m.id)">
+                <svg v-if="!testingIds.has(m.id)" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
                 <div v-else class="spinner spinner-sm" />
               </button>
               <!-- A1：切换 SSH 默认模型；已是默认时按钮置灰，靠 title 解释为什么点不动 -->
@@ -57,10 +58,10 @@
                 class="btn-icon"
                 :class="{ 'btn-icon-default-active': m.is_default_ssh }"
                 :title="m.is_default_ssh ? '已是 SSH 默认模型' : '设为 SSH 默认模型'"
-                :disabled="m.is_default_ssh || defaultingId === m.id"
+                :disabled="m.is_default_ssh || defaultingIds.has(m.id)"
                 @click="handleSetDefault(m)"
               >
-                <svg v-if="defaultingId === m.id" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/></svg>
+                <svg v-if="defaultingIds.has(m.id)" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/></svg>
                 <svg v-else viewBox="0 0 24 24" width="14" height="14" :fill="m.is_default_ssh ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
               </button>
               <button class="btn-icon" title="编辑" @click="openEditDialog(m)">
@@ -528,7 +529,9 @@ async function handleDelete(id: string, name: string) {
 }
 
 // ── A1：设为 SSH 默认 ──
-const defaultingId = ref('')
+// 审查R2修复：单值 defaultingId 在并发设置时会互相清忙态（后发起的把前一个的
+// 忙标记顶掉，前一个完成后又置空 → 还在跑的条目丢转圈/按钮重新可点），改 Set 增删
+const defaultingIds = ref(new Set<string>())
 async function handleSetDefault(m: ModelConfig) {
   const ok = await confirm({
     title: '设为 SSH 默认模型',
@@ -536,9 +539,9 @@ async function handleSetDefault(m: ModelConfig) {
     confirmText: '设为默认',
   })
   if (!ok) return
-  defaultingId.value = m.id
+  defaultingIds.value.add(m.id)
   const success = await store.setDefaultModel(m.id)
-  defaultingId.value = ''
+  defaultingIds.value.delete(m.id)
   if (success) {
     toast.success(`「${m.name}」已设为 SSH 默认`)
   } else {
@@ -547,11 +550,12 @@ async function handleSetDefault(m: ModelConfig) {
 }
 
 // ── 测试 ──
-const testingId = ref('')
+// 审查R2修复：同上，多模型并发测试互清 testingId，改 Set 增删
+const testingIds = ref(new Set<string>())
 const testStatus = reactive<Record<string, { status: 'ok' | 'error' | 'testing'; message: string; latencyMs?: number }>>({})
 
 async function handleTest(id: string) {
-  testingId.value = id
+  testingIds.value.add(id)
   testStatus[id] = { status: 'testing', message: '正在测试连接...' }
   await store.testModelConnection(id, (status, detail, latencyMs) => {
     // onStatus('testing') 是 store 同步调的首个回调，此时 testStatus[id] 必为 'testing'，放行；
@@ -565,7 +569,7 @@ async function handleTest(id: string) {
     } else {
       testStatus[id] = { status: 'error', message: detail ? `连接失败: ${detail}` : '连接失败' }
     }
-    testingId.value = ''
+    testingIds.value.delete(id)
   })
 }
 

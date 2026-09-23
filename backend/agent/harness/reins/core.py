@@ -244,6 +244,13 @@ class Reins:
                         "Reins 拦截 [%s] by %s: %s",
                         point.value, type(interceptor).__name__, decision.intercept_reason,
                     )
+                    # 审查R2修复：此前所有未拦截拦截器已聚合的 events/
+                    # inject_messages 在早退分支被整体丢弃 — 澄清答案注入
+                    # （priority 7 放行轮）随后被 FilesystemGuard 拦截时蒸发，
+                    # LoopDetector 纠偏同灭。合并进返回决策再退出。
+                    if events or inject_messages:
+                        decision.events = events + list(decision.events)
+                        decision.inject_messages = inject_messages + list(decision.inject_messages)
                     return decision
                 # 未拦截：聚合纠偏事件与注入消息（见 docstring）
                 if decision.events:

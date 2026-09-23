@@ -434,8 +434,14 @@ async function onClear() {
 async function openAudit(m: MemoryRow) {
   auditFor.value = m
   auditRows.value = []
-  try { auditRows.value = (await agentAdminApi.listMemoryAudit(m.id)).audit }
-  catch (e) { toast.error(`审计加载失败：${toFriendlyMessage(e)}`) }
+  try {
+    const rows = (await agentAdminApi.listMemoryAudit(m.id)).audit
+    // 审查R2修复：快速切换条目时旧响应晚到——仅当弹窗仍指向发起时的条目才写入，
+    // 否则过期审计会挂到新条目头上
+    if (auditFor.value !== m) return
+    auditRows.value = rows
+  }
+  catch (e) { if (auditFor.value === m) toast.error(`审计加载失败：${toFriendlyMessage(e)}`) }
 }
 
 async function retryJob(j: MemoryJobRow) {
@@ -497,9 +503,18 @@ async function toggleHistory(key: string) {
   historyFor.value = key
   historyRows.value = []
   historyLoading.value = true
-  try { historyRows.value = (await agentAdminApi.listMemoryBlockHistory(key)).history }
-  catch (e) { toast.error(`历史加载失败：${toFriendlyMessage(e)}`) }
-  finally { historyLoading.value = false }
+  try {
+    const rows = (await agentAdminApi.listMemoryBlockHistory(key)).history
+    // 审查R2修复：快速切换块时旧响应晚到——仅发起时的 key 仍是当前展开项才写入
+    if (historyFor.value !== key) return
+    historyRows.value = rows
+  }
+  catch (e) { if (historyFor.value === key) toast.error(`历史加载失败：${toFriendlyMessage(e)}`) }
+  finally {
+    // 审查R2修复：加载态同样只由发起者的当前性决定——过期响应替新请求熄灭
+    // 加载态会造成转圈错乱（新请求还在飞、图标已停）
+    if (historyFor.value === key) historyLoading.value = false
+  }
 }
 
 /** 回滚 = 把历史里的 value 再写一版：产生新版本号，历史本身不删（spec §6 失效不物理删） */

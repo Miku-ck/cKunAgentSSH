@@ -14,6 +14,14 @@ export class BackendManager {
   private process: ChildProcess | null = null
   private port: number = 0
   private intentionalStop = false
+  /**
+   * 审查R2修复：应用退出终态标志 — before-quit→stop() 若落在 start() 的
+   * await 间隙（killOrphanBackends/findFreePort），this.process 尚为空，
+   * stop() 直接 return，随后 spawn 照常执行 → 应用退出后留下孤儿 python。
+   * stop() 置位后不再复位（崩溃自动重启也走 start()，同样必须放弃），
+   * start() 在 spawn 前检查，置位即终止启动。
+   */
+  private appQuitting = false
   private starting = false
   private readonly MAX_RESTART_ATTEMPTS = 3
   private readonly RESTART_COOLDOWN_MS = 60_000  // 60 秒内最多重启 MAX_RESTART_ATTEMPTS 次
@@ -200,6 +208,15 @@ export class BackendManager {
       this.onStatusChange?.({ status: 'starting' })
 
       this.port = await this.findFreePort(8010, 8100)
+
+      // 审查R2修复：上面的 findFreePort 是 await 间隙 — 若期间 before-quit→stop()
+      // 已执行（当时 process 未 spawn、杀不到任何东西），此处必须放弃启动，
+      // 否则 spawn 照常 → 应用退出后遗留孤儿 python。检查放在 spawn 之前的
+      // 最后一个 await 恢复点；start() 入口不重置该标志（自动重启同须放弃）。
+      if (this.appQuitting) {
+        this.killCurrentProcess() // 防御性清理（此刻通常无进程，幂等）
+        throw new Error('应用正在退出，已取消后端启动')
+      }
 
       const backendDir = this.getBackendDir()
       const pythonCmd = this.getPythonCommand()
@@ -406,6 +423,10 @@ export class BackendManager {
    */
   stop(): void {
     this.intentionalStop = true
+    // 审查R2修复：置应用退出终态标志 — 即使 stop() 落在 start() 的 await 间隙
+    // （this.process 为空、下面直接 return），start() 也会在 spawn 前检查此标志
+    // 并放弃启动，不再遗留退出后的孤儿 python（见 start() 内 appQuitting 守卫）
+    this.appQuitting = true
     if (!this.process) return
 
     this.killCurrentProcess()

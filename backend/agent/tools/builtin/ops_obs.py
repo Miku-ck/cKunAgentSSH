@@ -194,9 +194,13 @@ class NetworkProbeTool(BaseTool):
     }
     meta = _OBS_META
 
-    def _run_probe_tests(self):
-        """返回两个候选连通性探测命令模板（按 host/port 已引号转义）。"""
-        host, port, timeout = self._host, self._port, self._timeout
+    def _run_probe_tests(self, host: str, port: str, timeout: str):
+        """返回两个候选连通性探测命令模板（按 host/port 已引号转义）。
+
+        审查R2修复：host/port/timeout 改为参数直传 —— 工具是注册表单例，
+        原实现经 self._host 等实例属性跨方法传参，两个并发 network_probe
+        会互踩（后者覆盖属性、前者用后者的值建探测命令）。
+        """
         # bash /dev/tcp 探测：host/port 作为独立参数传入 bash -c，$1/$2 引用，
         # 避免把用户输入内联进单引号脚本串导致引号转义错乱。
         return netprobe_bash_cmd(host, port, timeout), netprobe_nc_cmd(host, port, timeout)
@@ -209,9 +213,8 @@ class NetworkProbeTool(BaseTool):
             return ToolResult(False, "", perr or terr)
         port = max(1, min(port, 65535))
         timeout = max(1, min(timeout, 30))
-        self._host, self._port, self._timeout = host, str(port), str(timeout)
-
-        bash_cmd, nc_cmd = self._run_probe_tests()
+        # 审查R2修复：不再经 self._host/_port/_timeout 实例属性中转（见 _run_probe_tests）
+        bash_cmd, nc_cmd = self._run_probe_tests(host, str(port), str(timeout))
 
         connected = None  # None=探测手段不可用，True/False=明确结果
         note = ""

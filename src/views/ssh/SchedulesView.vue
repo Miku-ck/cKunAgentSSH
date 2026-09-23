@@ -538,12 +538,20 @@ async function runNow(s: ScheduleRecord) {
   }
 }
 
+// 审查R2修复：历史请求序号（与 load 的 _loadSeq 同模式）——快速切换任务时
+// 旧响应晚到会挂到新任务的历史面板上，只有最新一次请求可写入
+let _historySeq = 0
+
 async function openHistory(s: ScheduleRecord) {
   historyFor.value = s
   historyRuns.value = []
+  const seq = ++_historySeq
   try {
-    historyRuns.value = await scheduleApi.runs(s.id)
+    const runs = await scheduleApi.runs(s.id)
+    if (seq !== _historySeq) return
+    historyRuns.value = runs
   } catch (e) {
+    if (seq !== _historySeq) return
     toast.error(toFriendlyMessage(e, '加载历史失败'))
   }
 }
