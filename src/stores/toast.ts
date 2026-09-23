@@ -38,16 +38,20 @@ export const useToastStore = defineStore('toast', () => {
   // 跟踪所有活跃的定时器，用于清理
   const timers = new Map<number, ReturnType<typeof setTimeout>>()
 
+  /** 挂/换某个 toast 的自动关闭定时器（先清旧表：展开→折叠重挂时旧句柄可能仍驻留） */
+  function armDismiss(id: number, ms: number) {
+    const old = timers.get(id)
+    if (old) clearTimeout(old)
+    timers.set(id, setTimeout(() => {
+      timers.delete(id)
+      dismiss(id)
+    }, ms))
+  }
+
   function push(type: ToastType, message: string, duration = 3000, opts: { details?: string; actions?: ToastAction[] } = {}): number {
     const id = ++seq
     items.value.push({ id, type, message, duration, details: opts.details, actions: opts.actions })
-    if (duration > 0) {
-      const timer = setTimeout(() => {
-        timers.delete(id)
-        dismiss(id)
-      }, duration)
-      timers.set(id, timer)
-    }
+    if (duration > 0) armDismiss(id, duration)
     return id
   }
 
@@ -75,11 +79,7 @@ export const useToastStore = defineStore('toast', () => {
       }
     } else if (item.duration > 0 && !timers.has(id)) {
       // 折叠后重新挂上自动关闭定时器，否则该 toast 永久驻留
-      const timer = setTimeout(() => {
-        timers.delete(id)
-        dismiss(id)
-      }, item.duration)
-      timers.set(id, timer)
+      armDismiss(id, item.duration)
     }
   }
 
