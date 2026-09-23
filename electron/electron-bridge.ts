@@ -20,13 +20,13 @@ function bridgeLog(msg: string): void {
   })
 }
 
-export interface ElectronBridgeConfig {
+interface ElectronBridgeConfig {
   sshManager: SSHManager
   /** 用于按连接 ID 反查 SSH 连接配置，实现定时任务的自动建会话 */
   sshStore?: SSHStore
 }
 
-export interface BridgeEnv {
+interface BridgeEnv {
   token: string
 }
 

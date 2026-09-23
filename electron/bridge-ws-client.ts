@@ -40,7 +40,7 @@ declare const WebSocket: new (url: string) => WsSocket
 import type { DispatchResult } from './electron-bridge'
 
 /** 后端 req 帧 → 主进程业务实现的注入点（ElectronBridge.dispatch） */
-export type BridgeDispatch = (op: string, payload: Record<string, any>) => Promise<DispatchResult>
+type BridgeDispatch = (op: string, payload: Record<string, any>) => Promise<DispatchResult>
 
 export class BridgeWsClient {
   private ws: WsSocket | null = null
