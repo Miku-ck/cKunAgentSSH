@@ -60,6 +60,21 @@ def test_real_cost_still_triggers_the_cost_rule():
     assert [a for a in cfg.adjustments if "成本高" in a]
 
 
+def test_reflection_with_unparseable_metric_is_fully_skipped():
+    """审查修复锁定：一条 reflection 的 config.completion 为 null 时 float(None) 抛错，
+    原实现已先 scores.append 再 except:continue，导致 scores 比 efficiencies/... 长，
+    n=len(scores) 把该"半截"行计入 evolved_from_runs 并用它去除较短的指标和 → 平均值
+    被压低。修复后四个指标先解析后统一入列，坏行整条跳过，n 不把它算进去。"""
+    good = _reflection(0.0, 0.5, completion=1.0, efficiency=1.0, robustness=1.0)
+    bad = _reflection(0.0, 0.5, completion=1.0, efficiency=1.0, robustness=1.0)
+    bad["config"]["completion"] = None  # float(None) → TypeError
+    cfg = EvolutionEngine().evolve(
+        mode="ssh",
+        recent_reflections=[good, good, good, bad],
+    )
+    assert cfg.evolved_from_runs == 3  # 坏行不得被计入
+
+
 def _req(**kw):
     base = dict(task="t", conversation_id="c")
     base.update(kw)

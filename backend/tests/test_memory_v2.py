@@ -697,3 +697,19 @@ def test_block_history_rows_carry_value_for_rollback(memdb):
     assert mstore.put_block(memory_blocks.USER_PREFERENCES, hist[1]["value"],
                             updated_by="user_ui") == 3
     assert mstore.get_block(memory_blocks.USER_PREFERENCES)["value"] == "- 回答用中文"
+
+
+def test_retire_returns_false_when_row_already_inactive(memdb):
+    """审查修复锁定：retire 的 UPDATE 带 status IN(active,pending_reconcile) 守卫，
+    对已失效行命中 0 行时必须返回 False 且不再落 DELETE 审计——否则会污染审计、
+    并让 reconcile DELETE 分支误判作废成功而把候选错误转正。"""
+    mid = mstore.add_memory(kind="semantic", content="将要作废的事实",
+                            scope="global", source="chat_extract", importance=0.6)
+    assert mstore.retire(mid, reason="第一次作废") is True
+    conn = db._get_conn()
+    audit_cnt = lambda: conn.execute(
+        "SELECT COUNT(*) FROM memory_audit WHERE memory_id=?", (mid,)).fetchone()[0]
+    first_cnt = audit_cnt()
+    # 第二次：行已是 invalidated，守卫 UPDATE 命中 0 行
+    assert mstore.retire(mid, reason="重复作废") is False
+    assert audit_cnt() == first_cnt  # 不得追加审计

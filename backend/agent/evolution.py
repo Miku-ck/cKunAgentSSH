@@ -124,10 +124,19 @@ class EvolutionEngine:
                 cfg_data = r.get("config", "{}")
                 if isinstance(cfg_data, str):
                     cfg_data = json.loads(cfg_data)
-                scores.append(float(r.get("score", 0.5)))
-                efficiencies.append(float(cfg_data.get("efficiency", 0.5)))
-                robustnesses.append(float(cfg_data.get("robustness", 0.5)))
-                completions.append(float(cfg_data.get("completion", 0.5)))
+                # 审查修复：先把四个指标全部解析成功再统一入列。原实现先 scores.append
+                # 再 append 其余三项，若 efficiency/robustness/completion 任一为 null
+                # （float(None) 抛错）则 except:continue，导致 scores 比其他列表长 1，
+                # 而下方 n=len(scores) 会用它去除以较短的 efficiencies/... → 平均值被压低，
+                # 误导按成本/完成度/效率触发的演化规则。
+                score_v = float(r.get("score", 0.5))
+                eff_v = float(cfg_data.get("efficiency", 0.5))
+                rob_v = float(cfg_data.get("robustness", 0.5))
+                comp_v = float(cfg_data.get("completion", 0.5))
+                scores.append(score_v)
+                efficiencies.append(eff_v)
+                robustnesses.append(rob_v)
+                completions.append(comp_v)
                 # 新增维度：成本/迭代数/上限到达
                 # 成本维度只看 cost_usd（真实 USD）。原写法 `cost_usd or cost` 把
                 # 反思记录里的另一个字段 cost —— 0~1 的**成本评分** —— 当成美元兜底：

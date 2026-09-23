@@ -161,11 +161,16 @@ def retire(memory_id: str, *, reason: str, job_id: str = "", status: str = "inva
         if not old:
             return False
         now = db._now()
-        conn.execute(
+        cur = conn.execute(
             "UPDATE memories SET status=?, invalid_at=?, superseded_by=?, updated_at=? "
             "WHERE id=? AND status IN ('active','pending_reconcile')",
             (status, now, superseded_by, now, memory_id),
         )
+        # 行存在但已非 active/pending_reconcile（已被 retire/supersede）时 UPDATE 命中 0 行，
+        # 原实现仍写审计并返回 True，与"返回是否命中行"契约相悖：会重复落 DELETE 审计、
+        # 并让 reconcile DELETE 分支误以为作废成功而把候选转正。按 rowcount 收敛。
+        if cur.rowcount == 0:
+            return False
         add_audit(memory_id, "DELETE" if status == "invalidated" else "UPDATE",
                   old=old["content"], new=None, reason=reason, job_id=job_id)
         conn.commit()
