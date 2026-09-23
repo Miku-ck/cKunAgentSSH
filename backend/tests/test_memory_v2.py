@@ -275,6 +275,43 @@ def test_delete_invalidates_not_physical(memdb, monkeypatch):
     assert mstore.list_memories(status="invalidated")  # 行仍在，供审计
 
 
+def test_update_missing_target_id_degrades_to_add_not_hits_fallback(memdb, monkeypatch):
+    """审查修复锁定（CRITICAL）：prompt 明确要求 UPDATE/DELETE 给 target_id；LLM 若违约
+    漏给，旧实现回落到相似度首位 hits[0]，会 supersede 一条并非目标的相似记忆。现降级为
+    ADD：保留候选增量、绝不动既有行。"""
+    # bash 记忆与候选共享关键词，会被 _similar_existing 检索为 hits[0]（旧代码的误伤对象）
+    unrelated = mstore.add_memory(kind="semantic", content="用户默认 shell 是 bash", source="test")
+    mstore.enqueue_job(reconcile.JOB_CANDIDATE, {"items": [
+        {"title": "", "content": "用户默认 shell 已改为 zsh", "kind": "semantic", "scope": "global"}]})
+
+    async def fake_llm(prompt, block, cfg):
+        return [{"index": 0, "op": "UPDATE", "target_id": None,
+                 "merged_content": "用户默认 shell 是 zsh", "reason": "更新但漏给 target"}]
+    monkeypatch.setattr(reconcile, "_call_llm", fake_llm)
+
+    result = _process(FakeEmbed())
+    assert mstore.get_memory(unrelated)["status"] == "active"  # 未被误 supersede
+    active = {r["content"] for r in mstore.list_memories(status="active")}
+    assert "用户默认 shell 已改为 zsh" in active  # 候选降级为独立新增
+    assert result["applied"]["ADD"] == 1 and result["applied"].get("UPDATE", 0) == 0
+
+
+def test_delete_missing_target_id_degrades_to_noop_not_retire(memdb, monkeypatch):
+    """DELETE 漏给 target_id 时不作废任何行（降级 NOOP），也不误新增候选。"""
+    victim = mstore.add_memory(kind="semantic", content="用户默认 shell 是 bash", source="test")
+    mstore.enqueue_job(reconcile.JOB_CANDIDATE, {"items": [
+        {"title": "", "content": "用户默认 shell 已改为 zsh", "kind": "semantic", "scope": "global"}]})
+
+    async def fake_llm(prompt, block, cfg):
+        return [{"index": 0, "op": "DELETE", "target_id": None, "reason": "否定但漏给 target"}]
+    monkeypatch.setattr(reconcile, "_call_llm", fake_llm)
+
+    result = _process(FakeEmbed())
+    assert mstore.get_memory(victim)["status"] == "active"  # 未被误 retire
+    assert len(mstore.list_memories()) == 1  # 候选未入库
+    assert result["applied"]["NOOP"] == 1
+
+
 def test_llm_failure_retries_then_failed(memdb, monkeypatch):
     mstore.enqueue_job(reconcile.JOB_CANDIDATE, {"items": [
         {"title": "", "content": "候选X", "kind": "semantic", "scope": "global"}]})

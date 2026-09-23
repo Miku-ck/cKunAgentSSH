@@ -351,6 +351,13 @@ async def _reconcile_candidates(
     for i, cand in enumerate(cands):
         d = by_index.get(i) or {"op": "NOOP" if not priority_add else "ADD"}
         op = str(d.get("op", "NOOP")).upper()
+        # LLM 若违反 prompt 约束（§44-47：UPDATE/DELETE 必须给 target_id）漏给目标，
+        # 绝不能用相似度首位 hits[0] 兜底——那会 supersede/retire 一条"恰好检索得最靠前、
+        # 却并非该候选所指"的无关记忆，静默毁数据。按本模块"宁可误留不误杀"降级：
+        # UPDATE 无 target → ADD（保留候选增量，不动既有行）；DELETE 无 target → NOOP
+        # （丢弃候选，不作废任何行）。降级后的 op 才计入 counters，令统计与实际效果一致。
+        if op in ("UPDATE", "DELETE") and not d.get("target_id"):
+            op = "ADD" if op == "UPDATE" else "NOOP"
         counters[op] = counters.get(op, 0) + 1
         await _apply(cand, op, d, similars[i], job_id, embed_client)
     return counters
