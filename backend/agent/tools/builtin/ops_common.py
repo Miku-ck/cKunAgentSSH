@@ -71,6 +71,11 @@ def is_traversal(path) -> bool:
     return False
 
 
+# 越界路径拒绝时的统一用户提示（ops_file/ops_image/ops_obs 各 is_traversal 分支共用，
+# 防文案漂移）。裸 return 与 ToolResult(False, "", ...) 两种返回形态都取此值。
+TRAVERSAL_ERROR = "非法路径：包含 `..`，禁止越界访问"
+
+
 def is_remote(context) -> bool:
     """是否远程执行（有 SSH 会话）。"""
     return bool(getattr(context, "ssh_session_id", ""))

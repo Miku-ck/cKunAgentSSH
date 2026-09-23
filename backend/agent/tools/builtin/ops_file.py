@@ -24,6 +24,7 @@ import shlex
 
 from agent.tools import BaseTool, ToolResult, ToolMeta
 from agent.tools.builtin.ops_common import (
+    TRAVERSAL_ERROR,
     base64_read_cmd,
     base64_write_cmd,
     base64_write_cmd_for_classification,
@@ -123,7 +124,7 @@ class FileReadTool(BaseTool):
 
     def _validate(self, path, offset, limit):
         if is_traversal(path):
-            return "非法路径：包含 `..`，禁止越界访问"
+            return TRAVERSAL_ERROR
         if offset < 1:
             return "offset 必须为 >=1 的整数"
         if limit < 1:
@@ -201,7 +202,7 @@ class FileWriteTool(BaseTool):
 
     async def execute(self, context, path, content):
         if is_traversal(path):
-            return ToolResult(False, "", "非法路径：包含 `..`，禁止越界访问")
+            return ToolResult(False, "", TRAVERSAL_ERROR)
         if not is_remote(context):
             return ToolResult(False, "", _WRITE_REQUIRES_SSH)
         content = content if isinstance(content, str) else str(content)
@@ -252,7 +253,7 @@ class FileEditTool(BaseTool):
 
     async def execute(self, context, path, old_string, new_string):
         if is_traversal(path):
-            return ToolResult(False, "", "非法路径：包含 `..`，禁止越界访问")
+            return ToolResult(False, "", TRAVERSAL_ERROR)
         if not isinstance(old_string, str) or old_string == "":
             return ToolResult(False, "", "old_string 不能为空")
         if not is_remote(context):
@@ -303,7 +304,7 @@ class FileGlobTool(BaseTool):
 
     async def execute(self, context, path, pattern):
         if is_traversal(path):
-            return ToolResult(False, "", "非法路径：包含 `..`，禁止越界访问")
+            return ToolResult(False, "", TRAVERSAL_ERROR)
 
         if is_remote(context):
             cmd = file_glob_cmd(path, pattern)
@@ -370,7 +371,7 @@ class FileGrepTool(BaseTool):
 
     async def execute(self, context, path, pattern, max_lines=200):
         if is_traversal(path):
-            return ToolResult(False, "", "非法路径：包含 `..`，禁止越界访问")
+            return ToolResult(False, "", TRAVERSAL_ERROR)
         max_lines, err = parse_int_arg(max_lines, "max_lines", 200)
         if err:
             return ToolResult(False, "", err)

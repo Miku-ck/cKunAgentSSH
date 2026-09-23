@@ -12,7 +12,7 @@
 import shlex
 
 from agent.tools import BaseTool, ToolResult, ToolMeta
-from agent.tools.builtin.ops_common import clamp_int, is_traversal, parse_int_arg, run_headless
+from agent.tools.builtin.ops_common import TRAVERSAL_ERROR, clamp_int, is_traversal, parse_int_arg, run_headless
 from agent.remote_protocol import EXIT_CODE_PREFIX
 
 # ── 远端命令构建（单一事实来源）──────────────────────────────
@@ -291,7 +291,7 @@ class LogReadTool(BaseTool):
         if not path.strip():
             return ToolResult(False, "", "日志文件路径不能为空")
         if is_traversal(path):
-            return ToolResult(False, "", "非法路径：包含 `..`，禁止越界访问")
+            return ToolResult(False, "", TRAVERSAL_ERROR)
         if any(ord(c) < 32 for c in path):  # 拒绝控制字符/换行，防止破坏模板
             return ToolResult(False, "", "日志文件路径包含非法字符")
 

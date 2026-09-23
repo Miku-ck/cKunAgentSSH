@@ -17,6 +17,7 @@ import shlex
 
 from agent.tools import BaseTool, ToolResult, ToolMeta
 from agent.tools.builtin.ops_common import (
+    TRAVERSAL_ERROR,
     is_remote,
     is_traversal,
     run_headless,
@@ -63,7 +64,7 @@ class ReadImageTool(BaseTool):
 
     def _validate(self, path):
         if is_traversal(path):
-            return "非法路径：包含 `..`，禁止越界访问"
+            return TRAVERSAL_ERROR
         ext = os.path.splitext(path)[1].lstrip(".").lower() if isinstance(path, str) else ""
         if ext not in _EXT_MIME:
             return f"不支持的图片格式：.{ext}（仅允许 png/jpg/jpeg/webp/gif）"
