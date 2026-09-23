@@ -492,29 +492,6 @@ class MetaReflection:
             logger.warning("保存反思结果失败: %s", e)
             return None
 
-    # ── 加载历史反思（供 AgentEngine 注入系统提示） ──
-
-    def load_recent_reflections(self, mode: str, limit: int = 3) -> list[dict]:
-        """
-        加载最近的高分反思，作为系统提示的一部分
-
-        仅用于 prompt 注入：低分反思是失败结论，教给模型反而有害。
-        演化引擎不要用它（见 load_reflections_for_evolution）。
-        """
-        import database as db
-        try:
-            rows = db.get_agent_strategies(
-                mode=mode, strategy_type="reflection", limit=limit * 3
-            )
-            # 过滤 score >= 0.5 且 enabled=1
-            valid = [r for r in rows if r.get("score", 0) >= 0.5 and r.get("enabled", 1)]
-            # 按 score 降序取 top_k
-            valid.sort(key=lambda r: r.get("score", 0), reverse=True)
-            return valid[:limit]
-        except Exception as e:
-            logger.warning("加载反思策略失败: %s", e)
-            return []
-
     def load_reflections_for_evolution(self, mode: str, limit: int = 10) -> list[dict]:
         """取最近 limit 条反思给演化引擎 —— 不做高分过滤、不按分数排序
 

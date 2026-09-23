@@ -330,9 +330,6 @@ def test_evolution_input_keeps_low_score_reflections(monkeypatch):
     # avg_score 现在可以 < 0.5（规则 6「综合分低 → 打开 enable_thinking」不再结构性不可达）
     assert min(r["score"] for r in ev) < 0.5
 
-    inj = mr.load_recent_reflections("ssh", limit=3)
-    assert [r["id"] for r in inj] == ["r1"]  # 注入视图仍只给高分
-
 
 def test_evolution_input_survives_db_error(monkeypatch):
     from agent.reflection import MetaReflection
@@ -342,7 +339,6 @@ def test_evolution_input_survives_db_error(monkeypatch):
 
     monkeypatch.setattr(db, "get_agent_strategies", boom)
     assert MetaReflection().load_reflections_for_evolution("ssh") == []
-    assert MetaReflection().load_recent_reflections("ssh") == []
 
 
 # ── LRU 淘汰不能把在途计数清零（否则同 key 重建的客户端会被中途 aclose）───
