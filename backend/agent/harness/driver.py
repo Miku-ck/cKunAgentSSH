@@ -17,6 +17,8 @@ from __future__ import annotations
 import logging
 from typing import Any, AsyncIterator, Optional
 
+from agent.remote_protocol import EXIT_CODE_PREFIX
+
 from .contracts import (
     LLMOutput,
     ReinDecision,
@@ -735,7 +737,7 @@ class Driver:
             # 成功
             result_text = f"[已写入可见终端] {command}\n{reg.output}"
             if reg.exit_code is not None:
-                result_text += f"\n[exit_code={reg.exit_code}]"
+                result_text += f"\n{EXIT_CODE_PREFIX}{reg.exit_code}]"
             ev = await self._finish_visible(
                 ctx, harness, telemetry, result, tc, iteration,
                 result_text=result_text, success=reg.success,

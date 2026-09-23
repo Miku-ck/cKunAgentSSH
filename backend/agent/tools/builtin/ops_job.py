@@ -38,6 +38,7 @@ from typing import List, Optional
 
 from agent.tools import BaseTool, ToolResult, ToolMeta
 from agent.tools.builtin.ops_common import parse_int_arg, run_headless, truncate_output
+from agent.remote_protocol import EXIT_CODE_PREFIX, is_exit_code_line
 
 # 远程任务落盘根目录（目标机 /tmp 下，重启任务与日志的持久位置）
 _JOBS_ROOT = "/tmp/ckun_agent_jobs"
@@ -256,7 +257,7 @@ def _session_ctx(ssh_session_id: str):
 def _parse_remote_pid(output: str) -> Optional[int]:
     """从启动命令输出解析 PID（忽略 run_headless 追加的 [exit_code=..] 行）。"""
     for line in reversed([l.strip() for l in output.splitlines() if l.strip()]):
-        if line.startswith("[exit_code"):
+        if is_exit_code_line(line):
             continue
         if line.isdigit():
             return int(line)
@@ -349,7 +350,7 @@ def _strip_sentinel(tail: str) -> str:
     （哨兵紧随 RC 值）：整体是哨兵，返回空串。不用 splitlines+rejoin 剥
     末行——那会把日志里的 CRLF/孤立 CR 归一成 \\n，损坏读回内容。
     """
-    if tail.startswith("[exit_code="):
+    if is_exit_code_line(tail):
         return ""
     return tail
 
@@ -394,7 +395,7 @@ async def _remote_read_locked(context, entry: JobEntry) -> tuple[str, Optional[i
         return f"读取远程输出失败: {out}", None
     # 剥离 run_headless 追加在末行的 [exit_code=..] 哨兵（tail 命令自身退出码，
     # 不是任务的）
-    i = out.rfind("\n[exit_code=")
+    i = out.rfind(f"\n{EXIT_CODE_PREFIX}")
     body = out[:i] if i != -1 else out
     rc: Optional[int] = None
     if body.startswith("CKUNJOB_RC="):
@@ -707,7 +708,10 @@ async def _reconcile_remote(mgr: JobManager, entries: List[JobEntry]) -> None:
         dead_dirs = [e.log_dir for e in dead]
         ok2, out2 = await run_headless(ctx, job_reconcile_rcs_cmd(dead_dirs), timeout=15)
         rcs = out2.splitlines() if ok2 else []
-        rcs = [l for l in rcs if not l.startswith("[exit_code")]
+        # 只跳真正的哨兵行（含 `=`）：少一个 `=` 的宽松写法会把恰好以
+        # "[exit_code" 开头的 rc 数据行一起删掉，后续 rcs[i] 与 dead_dirs 的
+        # 下标对齐就错了 —— 把 A 任务的退出码记到 B 任务头上。
+        rcs = [l for l in rcs if not is_exit_code_line(l)]
         for i, e in enumerate(dead):
             rc_raw = rcs[i].strip() if i < len(rcs) else ""
             if rc_raw.lstrip("-").isdigit():

@@ -27,6 +27,8 @@ import logging
 import time
 from typing import Optional
 
+from agent.remote_protocol import is_sentinel_line
+
 logger = logging.getLogger(__name__)
 
 # 画像缓存 TTL（秒）
@@ -95,7 +97,7 @@ def _split_sections(raw: str) -> dict[str, list[str]]:
         s = line.strip()
         if not s:
             continue
-        if s.startswith("[exit_code=") or s == "[stderr]":
+        if is_sentinel_line(s):
             continue
         if s.startswith("[") and s.endswith("]") and len(s) < 30:
             current = s[1:-1]

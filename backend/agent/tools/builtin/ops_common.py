@@ -14,6 +14,12 @@ import base64
 import os
 from agent.electron_bridge import ElectronBridge
 from agent.truncation_limits import TRUNC_THRESHOLD, TRUNC_HEAD, TRUNC_TAIL
+from agent.remote_protocol import (
+    EXIT_CODE_PREFIX,
+    STDERR_SENTINEL,
+    has_sentinel_fragment,
+    is_sentinel_line,
+)
 
 
 def truncate_output(output: str, threshold: int = TRUNC_THRESHOLD) -> str:
@@ -79,7 +85,7 @@ def strip_remote_tail(output: str) -> str:
     lines = output.splitlines()
     while lines:
         last = lines[-1]
-        if last.startswith("[exit_code=") or last == "[stderr]":
+        if is_sentinel_line(last):
             lines.pop()
             continue
         break
@@ -128,9 +134,9 @@ async def exec_remote(
     exit_code = result.get("exit_code")
     full = output
     if error:
-        full += f"\n[stderr]\n{error}"
+        full += f"\n{STDERR_SENTINEL}\n{error}"
     if exit_code is not None:
-        full += f"\n[exit_code={exit_code}]"
+        full += f"\n{EXIT_CODE_PREFIX}{exit_code}]"
     success = bool(result.get("success", False)) and exit_code == 0
     return success, (full if keep_full else truncate_output(full)), exit_code, ""
 
@@ -219,7 +225,7 @@ def drop_sentinel_lines(output: str) -> list[str]:
     return [
         line
         for line in output.splitlines()
-        if line.strip() and "[exit_code=" not in line and line != "[stderr]"
+        if line.strip() and not has_sentinel_fragment(line)
     ]
 
 

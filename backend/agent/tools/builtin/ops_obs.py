@@ -13,6 +13,7 @@ import shlex
 
 from agent.tools import BaseTool, ToolResult, ToolMeta
 from agent.tools.builtin.ops_common import clamp_int, is_traversal, parse_int_arg, run_headless
+from agent.remote_protocol import EXIT_CODE_PREFIX
 
 # ── 远端命令构建（单一事实来源）──────────────────────────────
 # 契约源：与远端白名单执行器（scripts/deploy/agent-exec.py）对齐，
@@ -158,7 +159,7 @@ class ProcessInspectTool(BaseTool):
 
         rows = []
         for line in raw.splitlines():
-            if "[exit_code=" in line or line.startswith("PID "):
+            if EXIT_CODE_PREFIX in line or line.startswith("PID "):
                 continue
             parts = line.split(None, 5)
             if len(parts) < 5:
@@ -236,13 +237,13 @@ class NetworkProbeTool(BaseTool):
         # 本地监听状态：优先 ss，无结果时回退 netstat（跨平台健壮性）
         listen = ""
         _, ss_out = await run_headless(context, netprobe_listen_cmd(str(port)), timeout=15)
-        if ss_out.strip() and "[exit_code=" not in ss_out:
+        if ss_out.strip() and EXIT_CODE_PREFIX not in ss_out:
             listen = ss_out.strip()
         else:
             _, net_out = await run_headless(
                 context, netprobe_listen_fallback_cmd(str(port)), timeout=15
             )
-            if net_out.strip() and "[exit_code=" not in net_out:
+            if net_out.strip() and EXIT_CODE_PREFIX not in net_out:
                 listen = net_out.strip()
 
         sections = []

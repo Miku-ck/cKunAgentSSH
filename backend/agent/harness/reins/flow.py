@@ -3,21 +3,16 @@
 from __future__ import annotations
 
 import logging
-import re
 from collections import deque
 from dataclasses import dataclass, field
 
 from agent.audit import append_record_async
+from agent.remote_protocol import has_exit_sentinel
 
 from ..contracts import ReinDecision, ReinPoint, RunContext, TraceEvent
 from .core import tool_call_signature
 
 logger = logging.getLogger(__name__)
-
-# shell_exec / run_headless 失败结果的契约：命令确已执行时 output 末行带
-# [exit_code=N] 哨兵（见 ops_common.exec_remote / shell_exec._execute_remote），
-# 用它区分"探针非零退出"（有效诊断答案）与"调用真实失败"
-_EXIT_SENTINEL_RE = re.compile(r"\[exit_code=-?\d+\]")
 
 @dataclass
 class LoopDetector:
@@ -270,9 +265,8 @@ class ConfidenceMonitor:
         recent_calls = ctx.tool_calls_log[-5:] if ctx.tool_calls_log else []
 
         def _exited(tc: dict) -> bool:
-            return bool(_EXIT_SENTINEL_RE.search(
-                (tc.get("output_tail") or tc.get("output") or "")
-            ))
+            # 命令确已执行（输出含 [exit_code=N]）时按有效诊断答案看待，不算失败
+            return has_exit_sentinel(tc.get("output_tail") or tc.get("output") or "")
 
         failed_tools = sum(
             1 for tc in recent_calls
