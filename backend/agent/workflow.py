@@ -45,11 +45,6 @@ _INJECT_HEADS = {
 }
 
 
-def _session_dir(base_dir: str | Path, conversation_id: str) -> Path:
-    """会话工件目录：<base_dir>/<conversation_id>/。"""
-    return Path(base_dir) / conversation_id
-
-
 def _checked_path(base: str | Path, conversation_id: str, name: str) -> Optional[Path]:
     """审查R2修复：读写侧与删除入口（_checked_artifact_path）同一 containment 判据。
 
