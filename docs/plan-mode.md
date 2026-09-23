@@ -285,4 +285,27 @@ $ grep -rn "CREATE TABLE.*goals" backend --include=*.py
 函数本身没有调用方（`workflowApi.phases` 亦未接线），所以错文档目前不误导任何代码，
 只会误导读代码的人。归属线正在写这个文件，本轮不动它。
 
+## 8. 两处 git 记账错位（本轮真实发生，均未修）
+
+### 8.1 `789715b`：标题写的是 docs(memory)，里面还有并发会话的 13 个文件
+
+提交 spec §10 时，门禁检查（`git diff --cached --name-only` 恰为一个路径）与 `git commit`
+之间有几秒间隙，并发会话把在途改动写进了同一个共享 index，于是这批文件被扫进我的提交：
+`reins/{__init__,auto_approve,core,gate,guards}.py`、`database.py`（审批策略两新字段）、
+`main.py`、`routes/settings.py`、`tests/{test_auto_approve,test_permission_approval_lifecycle,test_permission_policy_round18}.py`、
+`settings/fields/ToggleSwitch.vue`、`settings/panels/AgentPanel.vue`。
+
+内容没坏也没丢（全量 1417 passed / 0 failed），错的是归属 —— 查 reins/审批策略那条线的人
+`git log` 会撞到一条标题只讲记忆文档的提交。**没拆的原因**：并发会话每隔几分钟就往这条链上
+叠提交（写本节时 tip 已是 `b54b6c6`），拆 `789715b` 就是重写它正在写的链。两条线都空闲时的
+正解是 `git commit-tree` 逐条重建（前四条树原样不动，只把最后一条的树换成「父树 + 我的 spec blob」），
+不是 `git reset`（会把它的后续提交一起退回工作区）。
+
+### 8.2 `339b59f`：message 末行乱码 token，且已在远端
+
+正文末行是 `…面板会塌成一intas`（应为"塌成一坨"，句子在那里断了）。`gitee/master` 已包含这条
+（`git merge-base --is-ancestor 339b59f gitee/master` → YES），修它等于重写已发布历史 +
+`git push --force-with-lease gitee master`，需要两条线都停手。只影响一条 message 的可读性，
+不影响代码与测试。
+
 
