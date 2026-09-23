@@ -26,13 +26,19 @@ router = APIRouter()
 _DELETE_KINDS = ("spec", "plan", "goal")
 
 
+def _empty_workflow() -> dict:
+    """无会话 / 读取降级时的空响应。返回新对象而非共享模块常量，
+    避免调用方（或后续误加的原地修改）污染同一份 dict。"""
+    return {"phase": "", "spec": "", "plan": "", "goal": ""}
+
+
 @router.get("/workflow")
 async def get_workflow(
     conversation_id: str = Query(default="", description="会话后端 ID"),
 ):
     """返回会话当前工作流阶段与三份工件原文。无会话/无工件返回空对象。"""
     if not conversation_id:
-        return {"phase": "", "spec": "", "plan": "", "goal": ""}
+        return _empty_workflow()
 
     def _load():
         return (
@@ -44,7 +50,7 @@ async def get_workflow(
         phase, arts = await asyncio.to_thread(_load)
     except Exception as e:
         logger.warning("[workflow] 读取工作流失败（降级为空）: %s", e)
-        return {"phase": "", "spec": "", "plan": "", "goal": ""}
+        return _empty_workflow()
 
     return {
         "phase": phase,
