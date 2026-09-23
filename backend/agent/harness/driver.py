@@ -309,7 +309,11 @@ class Driver:
                         ctx.metadata["_goal_text"] = goal_text
                     except Exception:
                         goal_text = ""
-                if goal_text and not ctx.metadata.get("_goal_self_checked"):
+                if goal_text and not ctx.metadata.get("_goal_self_checked") \
+                        and iteration + 1 < ctx.config.max_iterations:
+                    # 仅当还有下一轮预算时才注入自检：continue 回 while 需 iteration+1<max
+                    # 成立，否则在最后一轮 continue 会直接落到 loop-else → 误判 MAX_REACHED
+                    # 且自检永不被回答（agent 已声明完成，这里应正常收尾为 COMPLETED）。
                     ctx.metadata["_goal_self_checked"] = True
                     try:
                         from agent.workflow import goal_self_check_prompt
