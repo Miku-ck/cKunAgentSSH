@@ -84,6 +84,9 @@ _bin/
 # pytest 临时缓存目录（WinError 5 残留，勿提交）
 pytest-cache-files-*/
 
+# 构建再生的 TS 增量状态（out/ 未入库时散落在仓库根）
+*.tsbuildinfo
+
 # 安全删除的回收备份目录（勿提交）
 .trash-cleanup-*/
 backend/tests/_tmp/
