@@ -516,6 +516,7 @@ export class SSHManager {
     if (!session) return
     // 陈旧事件守卫：session 的 client 已是新连接（重连已重建），跳过
     if (client && session.client !== client) return
+    this.closeSftp(id)
     this.sessions.delete(id)
     if (session.closeNotified) return
     session.closeNotified = true
@@ -1210,6 +1211,10 @@ await new Promise<void>((resolve, reject) => {
 session.client.sftp((err, sftp) => {
 if (err) return reject(new SSHError('SFTP_INIT_FAIL', { original: err }))
         sftp.on('close', () => {
+          // 陈旧 close 守卫：意外断开→重连复用同 id 后，旧通道迟到的 close 若无条件
+          // delete 会误删新 wrapper（面板随即 requireSftp 抛 SESSION_NOT_FOUND）。
+          // 仅当映射仍指向本次 sftp 才清理并通知，与 D14 的 client 身份守卫同源。
+          if (this.sftpSessions.get(sshSessionId) !== sftp) return
           this.sftpSessions.delete(sshSessionId)
           this.safeSend('sftp:closed', { id: sshSessionId })
         })
