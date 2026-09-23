@@ -9,7 +9,7 @@
  * - 人工介入求助卡片（AI 请求帮助，可忽略）
  * - 工具授权请求（允许本次/本会话允许/始终允许/忽略，命令工具绑定命令哈希；
  *   session 档只对非 dangerous 卡开放，口径见 utils/approval-scopes.ts）
- * - 可见终端执行：待确认命令（确认/拒绝）与在途交付状态徽章
+ * - 可见终端执行：待确认命令（确认/拒绝）
  * - 错误（errorMessage）
  *
  * 整块的显隐由 agentStore.hasRunNotice 决定（数据侧单一判定，逐区块对齐）——
@@ -53,21 +53,6 @@ function taskTypeLabel(type: string): string {
     conversation: '对话',
   }
   return map[type] || type
-}
-
-/** 可见终端交付状态的人读文案（失败态附退出码，与汇总栏失败口径对齐） */
-function deliveryStatusLabel(status: string, exitCode: number | null = null): string {
-  const map: Record<string, string> = {
-    capturing: '执行中',
-    done: '已完成',
-    rejected: '已拒绝',
-    aborted: '已中止',
-    timeout: '超时',
-    failed: '失败',
-    writing: '写入中',
-  }
-  const label = map[status] || status
-  return status === 'failed' && exitCode !== null ? `${label}(exit ${exitCode})` : label
 }
 
 /** 风险等级人读文案：英文 dangerous/moderate 对非专业用户没有信息量 */
@@ -120,86 +105,6 @@ async function grantPermission(reqId: string, tool: string, scope: GrantScope) {
  *  退回 payload 原文（写入/定时任务类工具显示的是实际落盘的模板）。 */
 function cardCommand(req: PermissionRequest): string {
   return req.normalizedCommand || req.command || ''
-}
-
-/** 在途交付面板的数据筛选分组 ── 统计栏 + 筛选 chips + 时间线 + 展开详情 */
-const execDeliveries = computed(() => agentStore.deliveries.filter(d => d.status !== 'pending_confirm'))
-const execTotal = computed(() => execDeliveries.value.length)
-const execDone = computed(() => execDeliveries.value.filter(d => d.status === 'done').length)
-const execFailed = computed(() => execDeliveries.value.filter(d => ['timeout', 'failed', 'aborted'].includes(d.status)).length)
-const execBlocked = computed(() => execDeliveries.value.filter(d => d.status === 'rejected').length)
-const execRunning = computed(() => execDeliveries.value.filter(d => ['writing', 'capturing'].includes(d.status)).length)
-
-// 聚合失败原因统计
-const failReasonAgg = computed(() => {
-  const m = new Map<string, number>()
-  for (const d of execDeliveries.value) {
-    if (!['timeout', 'failed', 'aborted', 'rejected'].includes(d.status)) continue
-    const key = deliveryStatusLabel(d.status)
-    m.set(key, (m.get(key) || 0) + 1)
-  }
-  return Array.from(m.entries())
-})
-
-// 顶部标题摘要
-const execSummaryText = computed((): string => {
-  const fails = execFailed.value + execBlocked.value
-  if (fails === 0 && execRunning.value === 0) return '全部成功'
-  if (execRunning.value > 0) return `运行中 ${execRunning.value}`
-  const agg = failReasonAgg.value
-  if (agg.length === 0) return ''
-  if (agg.length === 1) return `全部${agg[0][0]}`
-  return agg.map(([l, n]) => `${n} 个${l}`).join('·')
-})
-
-// 状态横幅：全失败时给出结论
-const execBanner = computed((): { tone: 'danger' | 'warn'; text: string } | null => {
-  const fails = execFailed.value + execBlocked.value
-  if (fails === 0) return null
-  const total = execTotal.value
-  if (fails === execTotal.value) {
-    return { tone: 'danger', text: `全部失败（${total} 项${execBlocked.value ? ` · ${execBlocked.value} 项被拦截` : ''}）` }
-  }
-  return { tone: 'warn', text: `${fails} 项失败已标出` }
-})
-
-// 筛选模式状态
-const FILTER_MODES = ['all', 'fail', 'blocked', 'running'] as const
-type FilterMode = typeof FILTER_MODES[number]
-const activeFilter = ref<FilterMode>('all')
-function setFilter(m: FilterMode) { activeFilter.value = m }
-
-// 按筛选过滤后的交付
-const filteredDeliveries = computed(() => {
-  switch (activeFilter.value) {
-    case 'fail':     return execDeliveries.value.filter(d => ['timeout', 'failed', 'aborted'].includes(d.status))
-    case 'blocked':  return execDeliveries.value.filter(d => d.status === 'rejected')
-    case 'running':  return execDeliveries.value.filter(d => ['writing', 'capturing'].includes(d.status))
-    default:         return execDeliveries.value
-  }
-})
-
-// 筛选 chip 的计数
-const filterCounts = computed(() => ({
-  all: execTotal.value,
-  fail: execFailed.value,
-  blocked: execBlocked.value,
-  running: execRunning.value,
-}))
-
-// 展开详情的 tool_id 追踪
-const expandedToolId = ref<string | null>(null)
-function toggleExpand(toolId: string) {
-  expandedToolId.value = expandedToolId.value === toolId ? null : toolId
-}
-function isExpanded(toolId: string): boolean {
-  return expandedToolId.value === toolId
-}
-
-// 每个 tool_id 对应的输出区（显示该条命令的完整详情）
-function outputOf(toolId: string): string {
-  const d = agentStore.deliveries.find(t => t.tool_id === toolId)
-  return d?.output || d?.error || ''
 }
 
 // ── 单一焦点审批队列（spec refactor-approval-center） ──
@@ -502,77 +407,6 @@ const latestHelp = computed(() =>
             <button class="ap-btn ap-btn-grant" @click="agentStore.confirmDeliver(d.tool_id)">确认执行</button>
             <button class="ap-btn ap-btn-deny" @click="agentStore.rejectDeliver(d.tool_id)">拒绝执行</button>
           </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 运维操作面板：交付统计 + 筛选 + 横幅 + 时间线 + 详情 -->
-    <div class="ap-card ap-ops-panel" v-if="execTotal > 0">
-      <!-- 头部：标题 + 摘要徽章 -->
-      <div class="ap-ops-header">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15" class="ap-ops-icon">
-          <polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>
-        </svg>
-        <span class="ap-ops-title">运维操作</span>
-        <span class="ap-sp"></span>
-        <span class="ap-ops-badge" :class="execRunning > 0 ? 'is-running' : (execFailed + execBlocked) > 0 ? 'is-danger' : 'is-success'">
-          {{ execSummaryText }}
-        </span>
-      </div>
-
-      <!-- 聚合统计条 -->
-      <div class="ap-ops-stats">
-        <div class="stat"><div class="stat-num">{{ execTotal }}</div><div class="stat-label">已操作</div></div>
-        <div class="stat"><div class="stat-num danger">{{ execFailed }}</div><div class="stat-label">失败</div></div>
-        <div class="stat"><div class="stat-num blocked">{{ execBlocked }}</div><div class="stat-label">已拦截</div></div>
-        <div class="stat"><div class="stat-num success">{{ execDone }}</div><div class="stat-label">成功</div></div>
-      </div>
-
-      <!-- 筛选 chips -->
-      <div class="ap-ops-filters">
-        <button v-for="m in FILTER_MODES" :key="m" class="chip" :class="{ active: activeFilter === m }" @click="setFilter(m)">
-          {{ { all: '全部', fail: '失败', blocked: '拦截', running: '运行中' }[m] }}
-          <span class="chip-count">{{ filterCounts[m] }}</span>
-        </button>
-      </div>
-
-      <!-- 状态横幅 -->
-      <div v-if="execBanner" class="ap-ops-banner" :class="`banner-${execBanner.tone}`">
-        <span class="banner-icon">{{ execBanner.tone === 'danger' ? '⚠' : '○' }}</span>
-        {{ execBanner.text }}
-      </div>
-
-      <!-- 时间线 -->
-      <div class="ap-ops-timeline">
-        <div
-          v-for="d in filteredDeliveries"
-          :key="d.tool_id"
-          class="ops-row"
-          :class="{ expanded: isExpanded(d.tool_id) }"
-          @click="toggleExpand(d.tool_id)"
-        >
-          <div class="ops-indicator" :class="`ind-${d.status}`"></div>
-          <div class="ops-content">
-            <div class="ops-cmd">{{ d.command }}</div>
-            <div class="ops-meta">
-              <span class="ops-badge" :class="`badge-${d.status}`">{{ deliveryStatusLabel(d.status, d.exit_code) }}</span>
-            </div>
-            <!-- 展开详情 -->
-            <div v-if="isExpanded(d.tool_id)" class="ops-detail" @click.stop>
-              <div class="detail-block">
-                <div class="detail-label">输出</div>
-                <pre class="detail-output" :class="{ empty: !outputOf(d.tool_id) }">{{ outputOf(d.tool_id) || '— 无输出 —' }}</pre>
-              </div>
-              <div class="detail-exit" v-if="d.exit_code !== null">
-                exit: <span>{{ d.exit_code }}</span>
-                <span v-if="d.error"> · {{ d.error }}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-        <!-- 空筛选 -->
-        <div v-if="filteredDeliveries.length === 0" class="ops-empty">
-          {{ { all: '暂无操作', fail: '没有失败项', blocked: '没有被拦截项', running: '没有运行中任务' }[activeFilter] }}
         </div>
       </div>
     </div>
@@ -891,7 +725,6 @@ const latestHelp = computed(() =>
 
 /* ── 权限卡片 ── */
 .ap-perm { background: var(--bg-elevated, var(--bg-base)); border-color: var(--card-perm-border); }
-.ap-perm-resolved { opacity: 0.62; border-color: var(--card-perm-resolved); }
 .ap-perm-accent { color: var(--danger-text, #ef4444); }
 .ap-perm-ttl { color: var(--card-perm-text); }
 .ap-risk { font-size: 10.5px; font-weight: 700; padding: 2px 9px; border-radius: 999px; }
@@ -913,7 +746,6 @@ const latestHelp = computed(() =>
 
 /* ── 通用动作区/按钮 ── */
 .ap-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding: 0 13px 11px; }
-.ap-actions-static { padding-top: 4px; }
 .ap-btn {
   font-family: inherit;
   font-size: 11.5px;
@@ -934,14 +766,6 @@ const latestHelp = computed(() =>
 .ap-btn-session:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-cyan, #38bdf8) 12%, transparent); }
 .ap-btn-deny { background: transparent; border-color: var(--border-default); color: var(--text-secondary); }
 .ap-btn-deny:hover:not(:disabled) { border-color: var(--danger-text); color: var(--danger-text); background: var(--danger-bg); }
-.ap-resolved {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--status-success-text);
-}
-.ap-expired { font-size: 12px; color: var(--text-tertiary); }
 .ap-hint {
   font-size: 10.5px;
   color: var(--text-tertiary);
@@ -974,244 +798,6 @@ const latestHelp = computed(() =>
   font-family: inherit;
 }
 
-/* ── 运维操作面板 ── */
-.ap-ops-panel { margin-top: 4px; }
-
-.ap-ops-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 13px 8px;
-}
-.ap-ops-icon { color: var(--text-tertiary); flex-shrink: 0; }
-.ap-ops-title { font-size: 12px; font-weight: 500; color: var(--text-secondary); }
-.ap-ops-badge {
-  font-size: 10.5px;
-  font-weight: 500;
-  padding: 1px 8px;
-  border-radius: 4px;
-  flex-shrink: 0;
-}
-.ap-ops-badge.is-danger { background: rgba(239,68,68,0.10); color: var(--danger-text); border: 1px solid rgba(239,68,68,0.22); }
-.ap-ops-badge.is-success { background: rgba(34,197,94,0.10); color: var(--status-success-text); border: 1px solid rgba(34,197,94,0.22); }
-.ap-ops-badge.is-running { background: rgba(59,130,246,0.10); color: var(--accent-primary); border: 1px solid rgba(59,130,246,0.22); }
-
-.ap-ops-stats {
-  display: flex;
-  padding: 0 13px 10px;
-}
-.ap-ops-stats .stat {
-  flex: 1;
-  text-align: center;
-  padding: 6px 4px;
-  border-right: 1px solid var(--border-default);
-}
-.ap-ops-stats .stat:last-child { border-right: none; }
-.stat-num {
-  font-family: var(--font-mono, monospace);
-  font-weight: 600;
-  font-size: 16px;
-  color: var(--text-primary);
-  line-height: 1.2;
-}
-.stat-num.danger { color: var(--danger-text); }
-.stat-num.blocked { color: var(--accent-orange); }
-.stat-num.success { color: var(--status-success-text); }
-.stat-label {
-  font-size: 10px;
-  color: var(--text-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-top: 1px;
-}
-
-.ap-ops-filters {
-  display: flex;
-  padding: 0 9px 8px;
-  gap: 4px;
-}
-.chip {
-  padding: 3px 9px;
-  border-radius: 5px;
-  font-size: 10.5px;
-  font-weight: 500;
-  color: var(--text-tertiary);
-  background: transparent;
-  border: 1px solid transparent;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.chip:hover { background: var(--hover-bg, rgba(255,255,255,0.06)); }
-.chip.active {
-  background: var(--bg-elevated);
-  border-color: var(--border-default);
-  color: var(--text-primary);
-}
-.chip-count {
-  font-family: var(--font-mono, monospace);
-  font-size: 10px;
-  opacity: 0.6;
-}
-
-.ap-ops-banner {
-  margin: 0 13px 6px;
-  padding: 6px 10px;
-  border-radius: 5px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  font-weight: 500;
-}
-.ap-ops-banner.banner-danger {
-  background: rgba(239,68,68,0.10);
-  border: 1px solid rgba(239,68,68,0.22);
-  color: var(--danger-text);
-}
-.ap-ops-banner.banner-warn {
-  background: rgba(234,179,8,0.10);
-  border: 1px solid rgba(234,179,8,0.22);
-  color: var(--accent-orange);
-}
-.ap-ops-banner .banner-icon { font-size: 12px; }
-
-.ap-ops-timeline {
-  display: flex;
-  flex-direction: column;
-  max-height: 320px;
-  overflow-y: auto;
-}
-.ops-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 9px;
-  padding: 7px 13px;
-  border-bottom: 1px solid var(--border-default);
-  cursor: pointer;
-  transition: background 0.12s ease;
-}
-.ops-row:hover { background: var(--hover-bg, rgba(255,255,255,0.04)); }
-.ops-row:last-child { border-bottom: none; }
-.ops-row.expanded { background: var(--bg-elevated); }
-
-.ops-indicator {
-  width: 3px;
-  align-self: stretch;
-  border-radius: 2px;
-  flex-shrink: 0;
-  margin: 2px 0;
-}
-.ops-indicator.ind-done,
-.ops-indicator.ind-completed { background: var(--status-success-text); }
-.ops-indicator.ind-timeout,
-.ops-indicator.ind-failed,
-.ops-indicator.ind-aborted { background: var(--danger-text); }
-.ops-indicator.ind-rejected { background: var(--accent-orange); }
-.ops-indicator.ind-capturing,
-.ops-indicator.ind-writing { background: var(--accent-primary); animation: ops-pulse 1.5s ease-in-out infinite; }
-.ops-indicator.ind-pending_confirm { background: var(--text-tertiary); opacity: 0.4; }
-
-@keyframes ops-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
-}
-
-.ops-content { flex: 1; min-width: 0; }
-.ops-cmd {
-  font-family: var(--font-mono, monospace);
-  font-size: 11.5px;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  line-height: 1.4;
-}
-.ops-row.expanded .ops-cmd {
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
-.ops-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 2px;
-  font-size: 10.5px;
-  color: var(--text-tertiary);
-  min-width: 0;
-}
-
-.ops-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 10px;
-  font-weight: 500;
-  padding: 0px 6px;
-  border-radius: 4px;
-  flex-shrink: 0;
-}
-.ops-badge.badge-done,
-.ops-badge.badge-completed { background: rgba(34,197,94,0.10); color: var(--status-success-text); border: 1px solid rgba(34,197,94,0.2); }
-.ops-badge.badge-timeout,
-.ops-badge.badge-failed,
-.ops-badge.badge-aborted { background: rgba(239,68,68,0.10); color: var(--danger-text); border: 1px solid rgba(239,68,68,0.2); }
-.ops-badge.badge-rejected { background: rgba(234,179,8,0.10); color: var(--accent-orange); border: 1px solid rgba(234,179,8,0.22); }
-.ops-badge.badge-capturing,
-.ops-badge.badge-writing { background: rgba(59,130,246,0.10); color: var(--accent-primary); border: 1px solid rgba(59,130,246,0.22); }
-
-.ops-detail {
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px solid var(--border-default);
-}
-.detail-block { margin-bottom: 6px; }
-.detail-label {
-  font-size: 9.5px;
-  color: var(--text-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  margin-bottom: 3px;
-  font-weight: 600;
-}
-.detail-output {
-  font-family: var(--font-mono, monospace);
-  font-size: 11px;
-  color: var(--text-secondary);
-  background: var(--bg-base);
-  border: 1px solid var(--border-subtle);
-  border-radius: 4px;
-  padding: 7px 9px;
-  white-space: pre-wrap;
-  word-break: break-all;
-  line-height: 1.55;
-  max-height: 120px;
-  overflow-y: auto;
-}
-.detail-output.empty {
-  color: var(--text-tertiary);
-  font-style: italic;
-  text-align: center;
-  padding: 10px;
-}
-.detail-exit {
-  display: flex;
-  gap: 14px;
-  font-size: 10.5px;
-  color: var(--text-tertiary);
-}
-.detail-exit > span { font-family: var(--font-mono, monospace); color: var(--text-secondary); }
-
-.ops-empty {
-  padding: 16px 13px;
-  text-align: center;
-  font-size: 11px;
-  color: var(--text-tertiary);
-}
-
 /* ── 徽章：圆点前缀 + 文字 + 配色三重传达（不依赖单一颜色） ── */
 .ap-badge {
   display: inline-flex;
@@ -1232,17 +818,7 @@ const latestHelp = computed(() =>
   border-radius: 50%;
   background: currentColor;
 }
-.ap-badge-info { color: var(--status-info-text); background: var(--status-info-bg); }
-.ap-badge-danger { color: var(--danger-text); background: var(--danger-bg); }
-.ap-badge-success { color: var(--status-success-text); background: var(--status-success-bg); }
-.ap-badge-warn,
-.ap-badge-capturing,
-.ap-badge-writing,
-.ap-badge-timeout { color: var(--status-warn-text); background: var(--status-warn-bg); }
-.ap-badge-done { color: var(--status-success-text); background: var(--status-success-bg); }
-.ap-badge-rejected,
-.ap-badge-aborted,
-.ap-badge-failed { color: var(--danger-text); background: var(--danger-bg); }
+.ap-badge-warn { color: var(--status-warn-text); background: var(--status-warn-bg); }
 
 /* ── 错误 ── */
 .ap-error {
@@ -1277,3 +853,4 @@ const latestHelp = computed(() =>
   .ap-btn, .ap-icon-btn { transition: none; }
 }
 </style>
+

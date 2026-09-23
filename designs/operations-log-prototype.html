@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>运维智能体 · 操作日志 UI 设计稿</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg-base: #0a0a0b;
+    --bg-elevated: #141416;
+    --bg-elevated-solid: #141416;
+    --bg-input: #1a1a1e;
+    --bg-hover: rgba(255,255,255,0.04);
+    --bg-active: rgba(255,255,255,0.08);
+    --border-default: #2a2a2e;
+    --border-subtle: #1e1e22;
+    --text-primary: #e4e4e7;
+    --text-secondary: #8b8b90;
+    --text-tertiary: #5c5c63;
+    --accent: #3b82f6;
+    --accent-soft: rgba(59,130,246,0.12);
+    --danger: #ef4444;
+    --danger-soft: rgba(239,68,68,0.10);
+    --danger-border: rgba(239,68,68,0.25);
+    --success: #22c55e;
+    --success-soft: rgba(34,197,94,0.10);
+    --success-border: rgba(34,197,94,0.25);
+    --warn: #eab308;
+    --warn-soft: rgba(234,179,8,0.10);
+    --mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+    --sans: 'Geist', system-ui, -apple-system, sans-serif;
+  }
+
+  body {
+    font-family: var(--sans);
+    background: var(--bg-base);
+    color: var(--text-primary);
+    font-size: 14px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  .app-shell {
+    display: flex;
+    height: calc(100vh - 41px);
+    max-width: 1440px;
+    margin: 0 auto;
+    background: var(--bg-base);
+    border-left: 1px solid var(--border-subtle);
+    border-right: 1px solid var(--border-subtle);
+  }
+
+  /* ── 左侧 AI 消息区 ── */
+  .chat-pane {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    border-right: 1px solid var(--border-subtle);
+  }
+
+  .pane-header {
+    height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-base);
+    flex-shrink: 0;
+  }
+  .pane-header .dot { display: flex; gap: 6px; }
+  .pane-header .dot span { width: 10px; height: 10px; border-radius: 50%; }
+  .dot .red { background: #ff5f57; }
+  .dot .yellow { background: #febc2e; }
+  .dot .green { background: #28c840; }
+  .pane-header .title { font-weight: 600; font-size: 13px; color: var(--text-primary); flex: 1; }
+  .pane-header .meta { font-family: var(--mono); font-size: 11px; color: var(--text-tertiary); font-weight: 400; }
+
+  .chat-body {
+    flex: 1;
+    padding: 20px;
+    overflow-y: auto;
+    background: var(--bg-base);
+  }
+
+  /* ── AI 消息气泡 ── */
+  .ai-msg {
+    padding: 14px 16px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    margin-bottom: 12px;
+    max-width: 680px;
+  }
+  .ai-msg .msg-label {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    font-weight: 600;
+    margin-bottom: 10px;
+  }
+  .ai-msg .msg-text { font-size: 13px; color: var(--text-secondary); line-height: 1.75; }
+  .ai-msg .msg-text strong { color: var(--text-primary); font-weight: 500; }
+  .ai-msg .msg-text ul { margin: 6px 0 0 18px; }
+  .ai-msg .msg-text li { color: var(--text-tertiary); }
+
+  .ai-msg code.inline {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+
+  /* 消息内操作摘要 badge */
+  .inline-op-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 12px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  .inline-op-badge.danger {
+    background: var(--danger-soft);
+    color: var(--danger);
+    border: 1px solid var(--danger-border);
+  }
+  .inline-op-badge.danger:hover { background: rgba(239,68,68,0.16); }
+  .inline-op-badge .sep { opacity: 0.4; margin: 0 2px; }
+  .inline-op-badge .arrow { font-size: 8px; transition: transform 0.2s ease; margin-left: 2px; }
+
+  /* ── 右侧运维操作侧栏 ── */
+  .ops-panel {
+    width: 380px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-base);
+  }
+
+  .ops-header {
+    padding: 14px 16px 12px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .ops-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .ops-title {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .ops-title .live-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--danger);
+    box-shadow: 0 0 0 3px var(--danger-soft);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+  .ops-header-actions { display: flex; gap: 4px; }
+
+  .icon-btn {
+    width: 26px; height: 26px;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--border-default);
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .icon-btn.active { background: var(--accent-soft); color: var(--accent); border-color: rgba(59,130,246,0.3); }
+
+  /* 聚合统计 */
+  .ops-summary {
+    display: flex;
+    padding: 0 16px 12px;
+  }
+  .ops-stat {
+    flex: 1;
+    text-align: center;
+    padding: 8px 4px;
+    border-right: 1px solid var(--border-subtle);
+  }
+  .ops-stat:last-child { border-right: none; }
+  .ops-stat .num {
+    font-family: var(--mono);
+    font-weight: 600;
+    font-size: 17px;
+    color: var(--text-primary);
+    line-height: 1.2;
+  }
+  .ops-stat .num.danger { color: var(--danger); }
+  .ops-stat .num.success { color: var(--success); }
+  .ops-stat .num.accent { color: var(--accent); }
+  .ops-stat .label {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    margin-top: 2px;
+  }
+
+  /* 筛选 */
+  .ops-filters {
+    display: flex;
+    padding: 0 12px 10px;
+    gap: 4px;
+  }
+  .filter-chip {
+    padding: 4px 10px;
+    border-radius: 5px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: transparent;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .filter-chip:hover { background: var(--bg-hover); }
+  .filter-chip.active {
+    background: var(--bg-elevated);
+    border-color: var(--border-default);
+    color: var(--text-primary);
+  }
+  .filter-chip .count {
+    font-family: var(--mono);
+    font-weight: 500;
+    margin-left: 4px;
+    opacity: 0.6;
+  }
+
+  /* 状态横幅 */
+  .status-banner {
+    margin: 0 16px 6px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .status-banner.danger { background: var(--danger-soft); border: 1px solid var(--danger-border); color: var(--danger); }
+  .status-banner .banner-text { flex: 1; }
+  .status-banner .banner-hint { font-weight: 400; color: var(--text-tertiary); font-size: 11px; }
+
+  /* 时间线 */
+  .ops-timeline {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0 0 16px;
+  }
+  .timeline-group { padding: 4px 16px; }
+  .group-label {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    padding: 8px 0 6px;
+    font-weight: 600;
+  }
+
+  /* 单行操作卡 */
+  .op-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 7px;
+    cursor: pointer;
+    transition: background 0.12s ease;
+    border: 1px solid transparent;
+    margin-bottom: 2px;
+  }
+  .op-row:hover { background: var(--bg-hover); }
+  .op-row.expanded { background: var(--bg-elevated); border-color: var(--border-default); }
+
+  /* 状态指示线 */
+  .op-indicator {
+    width: 3px;
+    align-self: stretch;
+    border-radius: 2px;
+    flex-shrink: 0;
+    margin: 2px 0;
+  }
+  .op-indicator.timeout  { background: var(--danger); }
+  .op-indicator.failed   { background: var(--danger); opacity: 0.6; }
+  .op-indicator.blocked  { background: var(--warn); }
+  .op-indicator.success  { background: var(--success); }
+  .op-indicator.running  { background: var(--accent); animation: ind-pulse 1.5s ease-in-out infinite; }
+  .op-indicator.pending  { background: var(--text-tertiary); opacity: 0.4; }
+  @keyframes ind-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  .op-content { flex: 1; min-width: 0; }
+  .op-cmd {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.4;
+  }
+  .op-row.expanded .op-cmd {
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  .op-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 3px;
+    font-size: 11px;
+    color: var(--text-tertiary);
+  }
+
+  .op-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 10px;
+    font-weight: 500;
+    padding: 1px 7px;
+    border-radius: 4px;
+    letter-spacing: 0.2px;
+  }
+  .op-badge.timeout  { background: var(--danger-soft); color: var(--danger);  border: 1px solid var(--danger-border); }
+  .op-badge.failed   { background: var(--danger-soft); color: var(--danger);  border: 1px solid rgba(239,68,68,0.2); }
+  .op-badge.blocked  { background: var(--warn-soft);    color: var(--warn);     border: 1px solid rgba(234,179,8,0.25); }
+  .op-badge.success  { background: var(--success-soft); color: var(--success);  border: 1px solid var(--success-border); }
+  .op-badge.running  { background: var(--accent-soft);  color: var(--accent);   border: 1px solid rgba(59,130,246,0.25); }
+
+  .op-time {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--text-tertiary);
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+
+  /* 展开详情 */
+  .op-detail {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-subtle);
+  }
+  .detail-block { margin-bottom: 8px; }
+  .detail-label {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+    font-weight: 600;
+  }
+  .detail-output {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--text-secondary);
+    background: var(--bg-base);
+    border: 1px solid var(--border-subtle);
+    border-radius: 5px;
+    padding: 8px 10px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.6;
+    max-height: 120px;
+    overflow-y: auto;
+  }
+  .detail-output.empty {
+    color: var(--text-tertiary);
+    font-style: italic;
+    text-align: center;
+    padding: 12px;
+  }
+  .detail-output .stderr { color: var(--danger); }
+  .detail-exit {
+    display: flex;
+    gap: 16px;
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+  .detail-exit > div span { font-family: var(--mono); }
+
+  /* 滚动条 */
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
+
+  /* 设计说明顶栏 */
+  .spec-bar {
+    background: var(--bg-elevated);
+    border-bottom: 1px solid var(--border-subtle);
+    padding: 10px 20px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .spec-bar .proj { font-weight: 600; color: var(--text-primary); }
+  .spec-bar .sep { color: var(--text-tertiary); }
+  .spec-bar .tag {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+  }
+  .spec-bar .tag.active { color: var(--success); }
+  .spec-bar .div { width: 1px; height: 16px; background: var(--border-subtle); }
+  .spec-bar .arrow { color: var(--text-tertiary); }
+</style>
+</head>
+<body>
+
+<!-- 设计说明顶栏 -->
+<div class="spec-bar">
+  <span class="proj">cKunAgent</span>
+  <span class="sep">/</span>
+  <span>运维操作日志 · UI 设计稿</span>
+  <div class="div"></div>
+  <span class="tag active">● 交互原型</span>
+  <span class="tag">独立 HTML</span>
+  <div class="div"></div>
+  <span style="font-weight:500;color:var(--text-primary);">AI 消息</span>
+  <span class="arrow">→</span>
+  <span style="font-weight:500;color:var(--text-primary);">操作面板</span>
+  <span class="sep" style="margin-left:auto;">v1.0 · 2026-09-23</span>
+</div>
+
+<div class="app-shell">
+
+  <!-- ========== 左侧：AI 对话区 ========== -->
+  <div class="chat-pane">
+    <div class="pane-header">
+      <div class="dot"><span class="red"></span><span class="yellow"></span><span class="green"></span></div>
+      <span class="title">对话 · 运维知识助手</span>
+      <span class="meta">qwen3.8-27b</span>
+    </div>
+    <div class="chat-body">
+
+      <!-- AI 消息 1 -->
+      <div class="ai-msg">
+        <div class="msg-label">AI · 刚刚</div>
+        <div class="msg-text">
+          <strong>1. 目标机是否可达 — 在你本地终端执行：</strong><br>
+          <code class="inline">ssh &lt;目标机IP&gt; "echo ok"</code><br><br>
+          如果这条也超时，说明机器本身有问题（负载过高 / 磁盘满 / 网络不通）。<br><br>
+          <strong>2.</strong> 如果是磁盘满了导致 I/O 卡死，可以尝试通过带外管理（IPMI/iLO/iDRAC）重启，或者用 <code class="inline" style="font-size:11px;">kill</code> 掉占用磁盘的进程。<br><br>
+          <strong>3.</strong> 如果机器恢复响应后，告诉我一声，我帮你：
+          <ul>
+            <li>探测 /tmp、/var/tmp、/var/log 的占用</li>
+            <li>确认哪些日志可以安全清理</li>
+            <li>执行清理并验证</li>
+          </ul>
+          <br>
+          你先看看目标机现在是什么状态？
+        </div>
+        <!-- 操作摘要 badge -->
+        <div class="inline-op-badge danger">
+          &#9632; 已操作 5 项 · 全部超时
+          <span class="sep">|</span>
+          1次探测 · 4次执行
+          <span class="arrow">&#9654;</span>
+        </div>
+      </div>
+
+      <!-- AI 消息 2 -->
+      <div class="ai-msg" style="opacity:0.55;">
+        <div class="msg-label">AI · 15s 前</div>
+        <div class="msg-text">
+          让我先看下目标机的整体负载情况...<br>
+          <span style="color:var(--text-tertiary);font-size:12px;">↑ 这次探测成功了：1 分钟负载 0.12</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ========== 右侧：运维操作侧栏 ========== -->
+  <div class="ops-panel">
+    <div class="ops-header">
+      <div class="ops-header-row">
+        <div class="ops-title">
+          <span class="live-dot"></span>
+          运维操作日志
+        </div>
+        <div class="ops-header-actions">
+          <button class="icon-btn" title="筛选">▤</button>
+          <button class="icon-btn active" title="实时">●</button>
+          <button class="icon-btn" title="导出">↓</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 聚合统计 -->
+    <div class="ops-summary">
+      <div class="ops-stat">
+        <div class="num">6</div>
+        <div class="label">已操作</div>
+      </div>
+      <div class="ops-stat">
+        <div class="num danger">5</div>
+        <div class="label">失败</div>
+      </div>
+      <div class="ops-stat">
+        <div class="num accent">1</div>
+        <div class="label">探测</div>
+      </div>
+      <div class="ops-stat">
+        <div class="num success">1</div>
+        <div class="label">成功</div>
+      </div>
+    </div>
+
+    <!-- 筛选 chips -->
+    <div class="ops-filters">
+      <button class="filter-chip active">全部 <span class="count">6</span></button>
+      <button class="filter-chip">失败 <span class="count">4</span></button>
+      <button class="filter-chip">已阻止 <span class="count">1</span></button>
+      <button class="filter-chip">运行中 <span class="count">1</span></button>
+    </div>
+
+    <!-- 状态横幅 -->
+    <div class="status-banner danger">
+      <span style="font-size:13px;">⚠</span>
+      <span class="banner-text">目标机不可达 · 所有探测命令超时</span>
+      <span class="banner-hint">exit: timeout</span>
+    </div>
+
+    <!-- ── 时间线 ── -->
+    <div class="ops-timeline">
+
+      <!-- 当前轮次 -->
+      <div class="timeline-group">
+        <div class="group-label">运行中</div>
+
+        <div class="op-row">
+          <div class="op-indicator running"></div>
+          <div class="op-content">
+            <div class="op-cmd">top -bn1 | head -10</div>
+            <div class="op-meta">
+              <span class="op-badge running">运行中</span>
+              <span>探测系统负载</span>
+              <span class="op-time">12:35:01</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="group-label" style="margin-top:6px;">12:31</div>
+
+        <!-- blocked -->
+        <div class="op-row">
+          <div class="op-indicator blocked"></div>
+          <div class="op-content">
+            <div class="op-cmd">top: 10</div>
+            <div class="op-meta">
+              <span class="op-badge blocked">已阻止</span>
+              <span>交互式命令 · 安全策略</span>
+              <span class="op-time">12:31:00</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 展开的 timeout 详情 -->
+        <div class="op-row expanded" id="expanded-row">
+          <div class="op-indicator timeout"></div>
+          <div class="op-content">
+            <div class="op-cmd">du -sh /tmp /var/tmp /var/log 2>/dev/null; true</div>
+            <div class="op-meta">
+              <span class="op-badge timeout">超时</span>
+              <span>探测磁盘占用</span>
+              <span class="op-time">12:31:02</span>
+            </div>
+            <div class="op-detail">
+              <div class="detail-block">
+                <div class="detail-label">stdout</div>
+                <div class="detail-output empty">— 无输出 —</div>
+              </div>
+              <div class="detail-block">
+                <div class="detail-label">stderr</div>
+                <div class="detail-output"><span class="stderr">ssh: connect to host 192.168.1.100 port 22: Connection timed out</span></div>
+              </div>
+              <div class="detail-exit">
+                <div>exit code: <span>timeout</span></div>
+                <div>耗时: <span>120.0s</span></div>
+                <div>风险: <span>探测</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="op-row">
+          <div class="op-indicator timeout"></div>
+          <div class="op-content">
+            <div class="op-cmd">du -sh /var/log/* 2>/dev/null | sort -rh | head -15; true</div>
+            <div class="op-meta">
+              <span class="op-badge timeout">超时</span>
+              <span>探测日志文件</span>
+              <span class="op-time">12:31:02</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="op-row">
+          <div class="op-indicator timeout"></div>
+          <div class="op-content">
+            <div class="op-cmd">du -sh /tmp/* 2>/dev/null | sort -rh | head -10; true</div>
+            <div class="op-meta">
+              <span class="op-badge timeout">超时</span>
+              <span>探测临时文件</span>
+              <span class="op-time">12:31:03</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="op-row">
+          <div class="op-indicator timeout"></div>
+          <div class="op-content">
+            <div class="op-cmd">df -h / /tmp /var 2>/dev/null | head -10</div>
+            <div class="op-meta">
+              <span class="op-badge timeout">超时</span>
+              <span>查看磁盘容量</span>
+              <span class="op-time">12:31:04</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 历史轮次 -->
+      <div class="timeline-group" style="opacity:0.7;">
+        <div class="group-label">12:30 · 已结束</div>
+
+        <div class="op-row">
+          <div class="op-indicator success"></div>
+          <div class="op-content">
+            <div class="op-cmd">uptime</div>
+            <div class="op-meta">
+              <span class="op-badge success">完成</span>
+              <span>探测负载</span>
+              <span class="op-time">12:30:45</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="op-row">
+          <div class="op-indicator success"></div>
+          <div class="op-content">
+            <div class="op-cmd">cat /proc/loadavg</div>
+            <div class="op-meta">
+              <span class="op-badge success">完成</span>
+              <span>读取负载均值</span>
+              <span class="op-time">12:30:46</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+<script>
+  // 点击 op-row 切换展开
+  document.querySelectorAll('.op-row').forEach(row => {
+    row.addEventListener('click', () => {
+      if (row.classList.contains('expanded')) {
+        row.classList.remove('expanded');
+      } else {
+        document.querySelectorAll('.op-row.expanded').forEach(r => r.classList.remove('expanded'));
+        row.classList.add('expanded');
+      }
+    });
+  });
+
+  // 筛选 chip
+  document.querySelectorAll('.filter-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+    });
+  });
+
+  // 模拟超时完成
+  setTimeout(() => {
+    const r = document.querySelector('.op-indicator.running');
+    if (r) {
+      r.className = 'op-indicator timeout';
+      const badge = r.closest('.op-row').querySelector('.op-badge');
+      badge.className = 'op-badge timeout';
+      badge.textContent = '超时';
+    }
+  }, 5000);
+</script>
+
+</body>
+</html>

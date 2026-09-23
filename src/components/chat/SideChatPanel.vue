@@ -630,19 +630,6 @@ function removePendingFile(fileId: string) {
 // - 「插件」无清单可列，整行置灰。
 // 后端逻辑未接入者，改动点一律集中在 pickCap()。
 type CapKey = 'goal' | 'plan' | 'skill' | 'plugin'
-/** 菜单四项里真正是「姿态」的两个 —— 单选的当前姿态与 chip 的 kind 都取这个值域。
- *  类型住在 utils/run-modes（姿态 → 后端字段的唯一映射点），侧栏与父面板共用，
- *  不在两处各写一遍字面量。 */
-/**
- * 菜单里真正带开关语义的条目 —— 「计划」与「目标」（都是 menuitemcheckbox）。
- *
- * 另外两项各自的形态不同，都不能用「开关」表达：
- *   skill  → 从已启用技能清单里**挑一个**（挑中的以 skill-tags 呈现）
- *   plugin → 尚未接入，无可选项
- * 早期版本把它们一律做成菜单里的 checkbox，导致「计划」和「装插件」看起来
- * 是同一类开关，而它们连抽象层都不同（模式 vs 能力扩展）。
- */
-const CAP_LABELS: Record<CapKey, string> = { goal: '目标', plan: '计划', skill: '技能', plugin: '插件' }
 /**
  * 键盘导航顺序 —— 必须与 DOM 里的视觉顺序一致，否则 ↑↓ 会「跳着走」。
  * 视觉顺序见模板：目标 → 计划 → 插件 → 技能（插件在技能之前）。
