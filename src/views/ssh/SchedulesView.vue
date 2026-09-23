@@ -37,11 +37,11 @@
         <div class="schedule-card-meta">
           <span class="meta-item">周期：{{ scheduleText(s) }}</span>
           <span class="meta-item" v-if="s.target_host">目标：<b class="mono">{{ hostLabel(s.target_host) }}</b></span>
-          <span class="meta-item">上次执行：{{ s.last_run_at ? formatTs(s.last_run_at) : '—' }}</span>
+          <span class="meta-item">上次执行：{{ s.last_run_at ? formatBackendTs(s.last_run_at) : '—' }}</span>
           <span class="meta-item">
             状态：<span class="status" :class="s.last_status">{{ statusLabel(s.last_status) }}</span>
           </span>
-          <span class="meta-item" v-if="s.enabled && s.next_run_at">下次：{{ formatTs(s.next_run_at) }}<span v-if="countdownText(s)" class="countdown">（{{ countdownText(s) }}后）</span></span>
+          <span class="meta-item" v-if="s.enabled && s.next_run_at">下次：{{ formatBackendTs(s.next_run_at) }}<span v-if="countdownText(s)" class="countdown">（{{ countdownText(s) }}后）</span></span>
         </div>
         <div class="schedule-card-body" v-if="s.task_prompt">
           <div class="k">任务提示</div>
@@ -59,7 +59,7 @@
           <div v-else class="history-list">
             <div v-for="r in historyRuns" :key="r.id" class="history-item">
               <div class="history-head">
-                <span class="mono">{{ formatTs(r.started_at) }}</span>
+                <span class="mono">{{ formatBackendTs(r.started_at) }}</span>
                 <span class="status" :class="r.status">{{ statusLabel(r.status) }}</span>
                 <span class="mono" v-if="durationText(r)">{{ durationText(r) }}</span>
                 <span class="mono" v-if="r.run_id">run {{ shortId(r.run_id) }}</span>
@@ -233,7 +233,7 @@ const editing = ref<ScheduleRecord | null>(null)
 const saving = ref(false)
 const selectedTemplate = ref<string | null>(null)
 type ScheduleType = 'interval' | 'daily' | 'weekly' | 'monthly'
-const form = reactive<{
+interface ScheduleForm {
   name: string
   schedule_type: ScheduleType
   interval_minutes: number
@@ -244,7 +244,10 @@ const form = reactive<{
   target_host: string
   task_prompt: string
   enabled: boolean
-}>({
+}
+// 初始值只有一份：原先 reactive 的初值与 openCreate 的清空各抄一遍 10 个字段，
+// 新增字段必然漏掉其中一处（新建表单带着上一个任务的字段值提交）。
+const FORM_DEFAULTS: ScheduleForm = {
   name: '',
   schedule_type: 'interval',
   interval_minutes: 60,
@@ -255,7 +258,12 @@ const form = reactive<{
   target_host: '',
   task_prompt: '',
   enabled: true,
-})
+}
+const form = reactive<ScheduleForm>({ ...FORM_DEFAULTS })
+
+function resetForm(): void {
+  Object.assign(form, FORM_DEFAULTS)
+}
 
 const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 
@@ -334,7 +342,7 @@ function applyTemplate(t: Template) {
   if (t.time_hour !== undefined) form.time_hour = t.time_hour
   if (t.weekday !== undefined) form.weekday = t.weekday
   if (t.day_of_month !== undefined) form.day_of_month = t.day_of_month
-  form.time_minute = 0
+  form.time_minute = FORM_DEFAULTS.time_minute
   form.task_prompt = t.prompt ?? ''
 }
 
@@ -427,29 +435,21 @@ watch(() => props.active, (on) => {
 watch(() => agentStore.scheduleRev, () => { load(true) })
 
 function openCreate() {
-  form.name = ''
-  form.schedule_type = 'interval'
-  form.interval_minutes = 60
-  form.time_hour = 9
-  form.time_minute = 0
-  form.weekday = 0
-  form.day_of_month = 1
-  form.target_host = ''
-  form.task_prompt = ''
-  form.enabled = true
+  resetForm()
   selectedTemplate.value = null
   editing.value = {} as ScheduleRecord
 }
 
 /** 编辑已有任务：把记录回填到表单并进入编辑态（模板选择在编辑态隐藏） */
 function openEdit(s: ScheduleRecord) {
+  // 缺省值取 FORM_DEFAULTS：原样字面量是第三份默认值副本，改一处就与新建表单分叉
   form.name = s.name
   form.schedule_type = s.schedule_type
-  form.interval_minutes = s.interval_minutes ?? 60
-  form.time_hour = s.time_hour ?? 9
-  form.time_minute = s.time_minute ?? 0
-  form.weekday = s.weekday ?? 0
-  form.day_of_month = s.day_of_month ?? 1
+  form.interval_minutes = s.interval_minutes ?? FORM_DEFAULTS.interval_minutes
+  form.time_hour = s.time_hour ?? FORM_DEFAULTS.time_hour
+  form.time_minute = s.time_minute ?? FORM_DEFAULTS.time_minute
+  form.weekday = s.weekday ?? FORM_DEFAULTS.weekday
+  form.day_of_month = s.day_of_month ?? FORM_DEFAULTS.day_of_month
   form.target_host = s.target_host ?? ''
   form.task_prompt = s.task_prompt ?? ''
   form.enabled = !!s.enabled
@@ -465,11 +465,11 @@ function formPayload() {
   return {
     name: form.name.trim(),
     schedule_type: form.schedule_type,
-    interval_minutes: form.interval_minutes || 60,
-    time_hour: numOr(form.time_hour, 9),
-    time_minute: numOr(form.time_minute, 0),
-    weekday: numOr(form.weekday, 0),
-    day_of_month: numOr(form.day_of_month, 1),
+    interval_minutes: form.interval_minutes || FORM_DEFAULTS.interval_minutes,
+    time_hour: numOr(form.time_hour, FORM_DEFAULTS.time_hour),
+    time_minute: numOr(form.time_minute, FORM_DEFAULTS.time_minute),
+    weekday: numOr(form.weekday, FORM_DEFAULTS.weekday),
+    day_of_month: numOr(form.day_of_month, FORM_DEFAULTS.day_of_month),
     target_host: form.target_host.trim(),
     task_prompt: form.task_prompt.trim(),
     enabled: form.enabled,
@@ -583,10 +583,6 @@ function shortId(id: string): string {
   return id ? id.slice(0, 8) : ''
 }
 
-function formatTs(ts?: string): string {
-  return formatBackendTs(ts)
-}
-
 // ── 下次执行倒计时（D 阶段）：每秒 tick，仅在有启用任务时运行 ──
 const nowTick = ref(Date.now())
 let countdownTimer: ReturnType<typeof setInterval> | null = null
@@ -645,7 +641,7 @@ watch(hasCountdownTarget, (on) => {
 /** 失败 run → 预填 AI 面板诊断（复用 A 的 pendingPrefill 通路） */
 function askAiDiagnose(s: ScheduleRecord, r: ScheduleRun) {
   const lines = [
-    `定时任务「${s.name}」在 ${formatTs(r.started_at)} 的执行失败了，帮我分析原因并给出修复建议。`,
+    `定时任务「${s.name}」在 ${formatBackendTs(r.started_at)} 的执行失败了，帮我分析原因并给出修复建议。`,
     `任务提示：${s.task_prompt || '（使用内置模板）'}`,
     s.target_host ? `目标主机：${hostLabel(s.target_host)}` : '',
     r.summary ? `执行摘要：${r.summary}` : '',
@@ -713,7 +709,8 @@ onUnmounted(() => {
 }
 .schedule-card-head { display: flex; align-items: center; justify-content: space-between; }
 .schedule-name { font-size: 14px; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 8px; }
-.toggle { font-size: 11px; padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border-subtle); }
+/* 启用标记与执行状态是同一种"小徽章"，形状只写一份；配色各自表述语义 */
+.toggle, .status { font-size: 11px; padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border-subtle); }
 .toggle.on { color: var(--accent-green); border-color: var(--accent-green); }
 .schedule-card-actions { display: flex; gap: 6px; }
 .row-btn {
@@ -730,7 +727,6 @@ onUnmounted(() => {
 .schedule-card-body .k { color: var(--text-tertiary); margin-bottom: 4px; }
 .prompt { color: var(--text-secondary); white-space: pre-wrap; }
 
-.status { font-size: 11px; padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border-subtle); }
 .status.running { color: var(--accent-primary); border-color: var(--accent-primary); }
 .status.completed { color: var(--accent-green); border-color: var(--accent-green); }
 .status.failed { color: var(--accent-red); border-color: var(--accent-red); }
@@ -750,7 +746,6 @@ onUnmounted(() => {
   font-size: 12px; padding: 6px 8px; border-radius: 6px;
   border: 1px solid var(--border-subtle); background: var(--bg-base); color: var(--text-primary);
 }
-.field-row { display: flex; gap: 10px; }
 .field.check { flex-direction: row; align-items: center; gap: 6px; }
 .template-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
 .template-chip {
