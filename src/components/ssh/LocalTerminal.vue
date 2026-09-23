@@ -279,7 +279,8 @@ onUnmounted(() => {
   // 仅当 session 仍在 store 中时才主动销毁 PTY
   // 避免 closeSession 已调用 ptyDestroy 后,组件卸载又重复调用造成冗余 IPC
   if (props.ptyId && window.electronAPI && sshStore.sessions.some(s => s.id === props.ptyId)) {
-    window.electronAPI.ptyDestroy(props.ptyId)
+    // 卸载期 PTY 可能已被后端回收，ptyDestroy 会 reject；不 catch 会抛未处理拒绝
+    window.electronAPI.ptyDestroy(props.ptyId).catch(() => {})
   }
   terminal?.dispose()
   // 审查修复（P2）：卸载后 terminal 置 null — 原实现只 dispose 不清引用，

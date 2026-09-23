@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { nextTick, ref, watch } from 'vue'
+import { nextTick, onScopeDispose, ref, watch } from 'vue'
 import { api, agentApi, toFriendlyMessage, type ModelConfig, type ModelConfigPayload } from '@/api/client'
 // 外观枚举只在 useAppearance 里定义一次（store 与设置面板都从这里取，抄两份会漂）
 import type { Accent, GradientDirection, GradientMode, Theme } from '@/composables/useAppearance'
@@ -224,10 +224,12 @@ export const useSettingsStore = defineStore('settings', () => {
   // 外观/对话/运行预算这些都是纯本地设置，丢了用户完全无感，只会以为没保存过。
   // pagehide 是 Chromium 渲染进程里最可靠的收尾点（beforeunload 需返回值才触发）。
   // 可选链：单测的 window 垫片只有 setTimeout/clearTimeout。
-  window.addEventListener?.('pagehide', () => {
+  const flushOnPageHide = () => {
     clearTimeout(saveTimer)
     persistSettings()
-  })
+  }
+  window.addEventListener?.('pagehide', flushOnPageHide)
+  onScopeDispose(() => window.removeEventListener?.('pagehide', flushOnPageHide))
 
   // 记忆设置变更时同步到后端
   let memorySyncTimer: number | undefined
