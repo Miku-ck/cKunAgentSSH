@@ -397,25 +397,23 @@ class Bridle:
         omitted = len(content) - head - tail
         return content[:head] + f"\n... [已截断，省略中间 {omitted} 字符]\n" + content[-tail:]
 
-    def truncate_tool_result(self, result: str) -> tuple[str, str]:
+    def truncate_tool_result(self, result: str) -> str:
         """
-        截断工具结果，返回 (截断后文本, 完整结果占位)
+        截断工具结果。
 
         - 未超阈值时原样返回
         - 超阈值时采用头尾保留：头部 head_chars + 中间省略提示 + 尾部 tail_chars
-        - 第二个返回值保留为空字符串（向后兼容，已不再用于存档）
         """
         if len(result) <= self.config.tool_result_max_chars:
-            return result, ""
+            return result
         head = self.config.head_chars
         tail = self.config.tail_chars
         omitted = f"\n... [已截断，原始 {len(result)} 字符，保留头部 {head} + 尾部 {tail}]\n"
-        truncated = result[:head] + omitted + result[-tail:]
-        return truncated, ""
+        return result[:head] + omitted + result[-tail:]
 
     def build_tool_result_message(self, tool_call_id: str, result: str, priority: str = "normal") -> dict:
         """构建 OpenAI tool 角色消息"""
-        summary, _ = self.truncate_tool_result(result)
+        summary = self.truncate_tool_result(result)
         return {
             "role": "tool",
             "tool_call_id": tool_call_id,

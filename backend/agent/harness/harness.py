@@ -228,7 +228,7 @@ class Harness:
             system_prompt=system_prompt,
             history=history or [],
             memories=memories or [],
-            config=config or AgentConfig(),
+            config=actual_config,
             skill_ids=skill_ids or [],
             auto_skill_match=auto_skill_match,
         )

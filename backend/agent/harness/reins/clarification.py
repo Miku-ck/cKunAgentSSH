@@ -21,7 +21,7 @@ from ..contracts import (
     RunContext,
     TraceEvent,
 )
-from .core import tool_call_signature
+from .core import command_from_args, tool_call_signature
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +128,7 @@ def _shell_detect_vague(args: dict) -> Optional[str]:
     """
     if not args or not isinstance(args, dict):
         return None
-    cmd = args.get("command") or args.get("shell") or args.get("cmd") or ""
+    cmd = command_from_args(args)
     if not cmd or not isinstance(cmd, str):
         return None
     lower = cmd.strip().lower()
@@ -156,9 +156,7 @@ def _shell_build_steps(args: dict) -> list[ClarificationStep]:
     面向 SSH 远程运维语境：目标是远端主机上的文件，措辞不得假设本地
     git 工作区（原实现选项为"仅 git 已修改文件/自动 commit"，与场景错位）。
     """
-    cmd = ""
-    if isinstance(args, dict):
-        cmd = args.get("command") or args.get("shell") or args.get("cmd") or ""
+    cmd = command_from_args(args)
     cmd_display = (cmd[:40] + "…") if len(str(cmd)) > 40 else str(cmd)
     return [
         ClarificationStep(

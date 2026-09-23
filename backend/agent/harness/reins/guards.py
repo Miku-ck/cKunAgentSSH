@@ -18,6 +18,7 @@ from .core import (
     _audit_target_type,
     _perm_pending,
     approval_fallback_seconds,
+    command_from_args,
     extract_bound_command,
     permission_display_fields,
     resolve_registry,
@@ -370,9 +371,7 @@ class AuditLogger:
         # 与 blocked/denied 记录不重复。
         try:
             args = last.get("args") or {}
-            command = ""
-            if isinstance(args, dict):
-                command = str(args.get("command") or args.get("shell") or args.get("cmd") or "")
+            command = command_from_args(args)
             await append_record_async(
                 action=str(last.get("tool", "")),
                 conclusion="executed" if last.get("success") else "failed",
