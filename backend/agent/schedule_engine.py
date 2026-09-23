@@ -58,6 +58,10 @@ class ScheduleEngine:
         # 已 create_task 的任务（无引用、detached）会继续跑 SSH 会话，
         # schedule_runs 在进程退出后滞留 'running'
         self._running_tasks: dict[str, asyncio.Task] = {}
+        # 后台 best-effort 任务（如 prune）强引用集合：事件循环只持弱引用，
+        # 裸 create_task 的结果可能在执行前被 GC 回收（CPython 文档明确警告），
+        # 与上方 _running_tasks 同一纪律，靠 done-callback 自动摘除。
+        self._bg_tasks: set[asyncio.Task] = set()
         # 删除任务时被打断的 schedule_id：区分 CancelledError 文案
         # （"任务已删除" vs "服务停止"），避免 cancel 与 finally 的竞态误写
         self._deleted_sids: set[str] = set()
@@ -206,11 +210,21 @@ class ScheduleEngine:
             return
         self._last_prune_at = now
         try:
-            asyncio.get_running_loop().create_task(
-                asyncio.to_thread(db.prune_schedule_runs)
-            )
+            loop = asyncio.get_running_loop()
         except RuntimeError:
-            pass  # 无运行循环（单测直调）— 跳过即可
+            return  # 无运行循环（单测直调）— 跳过即可
+        # 审查修复：原裸 create_task 不持强引用，loop 只留弱引用 → prune 任务可能在
+        # 跑完前被 GC 回收（CPython asyncio 文档明确警告），best-effort 清理会静默不执行；
+        # 且其异常"never retrieved"只留噪声。改为登记 _bg_tasks，done 时摘除并回收异常。
+        task = loop.create_task(asyncio.to_thread(db.prune_schedule_runs))
+        self._bg_tasks.add(task)
+
+        def _on_done(t: asyncio.Task) -> None:
+            self._bg_tasks.discard(t)
+            if not t.cancelled() and t.exception() is not None:
+                logger.warning("schedule_runs 清理失败（best-effort）: %s", t.exception())
+
+        task.add_done_callback(_on_done)
 
     # ── 无头执行 ──
     async def _run_task(self, sched: dict) -> None:

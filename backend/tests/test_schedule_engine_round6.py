@@ -141,3 +141,28 @@ def test_remove_schedule_without_running_task_still_purges_rows(monkeypatch):
 
     assert asyncio.run(engine.remove_schedule("nope")) is False
     assert calls == [("nope", "任务已删除，执行被取消")]
+
+
+def test_maybe_prune_registers_strong_task_ref_and_throttles(monkeypatch):
+    """回归锁：_maybe_prune_runs 的 create_task 结果必须登记进 _bg_tasks——事件循环
+    只持弱引用，裸 task 可能在跑完前被 GC 回收（CPython 文档警告），best-effort 清理
+    会静默不执行。同时锁住 6h 节流与 done-callback 自动摘除。"""
+    engine = ScheduleEngine()
+    engine._last_prune_at = time.monotonic() - 6 * 3600 - 10  # 远在节流窗口外 → 本次应真正调度
+    ran: list[int] = []
+    monkeypatch.setattr(db, "prune_schedule_runs", lambda *a, **k: ran.append(1) or 0)
+
+    async def scenario():
+        engine._maybe_prune_runs()
+        assert len(engine._bg_tasks) == 1, "prune task 未登记强引用（旧实现此处为空）"
+        engine._maybe_prune_runs()  # 刚刷新 _last_prune_at → 节流跳过
+        assert len(engine._bg_tasks) == 1, "节流失效：重复排了第二个 prune task"
+        for _ in range(100):  # 等 to_thread 完成 + done-callback 摘除
+            await asyncio.sleep(0.01)
+            if not engine._bg_tasks:
+                break
+        return set(engine._bg_tasks)
+
+    leftover = asyncio.run(scenario())
+    assert not leftover, "任务完成后未从 _bg_tasks 摘除"
+    assert ran, "prune 未实际执行"
