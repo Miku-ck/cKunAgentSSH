@@ -962,7 +962,7 @@ export class SSHManager {
   // ════════════════════════════════════════════════
   //   断线重连（自动 + 手动）
   //   修复动机：远程 shell 意外断开（网络抖动/服务端断连）时原实现仅通知
-  //   前端关 tab，无任何重连。现在：意外断开自动最多 3 次、退避 1s/3s/9s，
+  //   前端关 tab，无任何重连。现在：意外断开自动最多 12 次、退避 1s/3s/9s/27s…封顶 30s，
   //   复用已保存连接配置（主进程自取凭据）与完整 doConnect 路径
   //   （新 client + 新 shell + OSC 7 注入，会话 id 不变，前端 scrollback 保留）；
   //   用户主动断开/关 tab/删除连接配置会取消所有待执行重连，不产生僵尸连接。
@@ -974,8 +974,8 @@ export class SSHManager {
   }
 
   /**
-   * 手动重连：用户在终端状态区点击「重连」— 重置计数，重新走完整
-   * 3 次退避循环（1s/3s/9s）。cols/rows 由渲染层传入当前终端实际尺寸。
+   * 手动重连：用户在终端状态区点击「重连」— 重置计数，重新走完整退避循环
+   * （最多 12 次、1s/3s/9s/27s…封顶 30s）。cols/rows 由渲染层传入当前终端实际尺寸。
    */
   reconnect(id: string, cols?: number, rows?: number): void {
     const entry = this.reconnects.get(id)
@@ -2061,7 +2061,6 @@ function shellQuoteRemote(s: string): string {
 /** 将数值 mode(含文件类型位)转为 'drwxr-xr-x' 形式 */
 function modeToString(mode: number): string {
   const typeMap: Record<number, string> = {
-    0o170000: '', // mask
     0o140000: 's', 0o120000: 'l', 0o100000: '-',
     0o060000: 'b', 0o020000: 'c', 0o040000: 'd', 0o010000: 'p',
   }
