@@ -553,23 +553,31 @@ export class BackendManager {
           return
         }
 
+        // 每次尝试只允许重新排期一次轮询：超时分支的 req.destroy() 会再触发
+        // 'error'，若两路各自 setTimeout(check) 则每轮翻倍 → 一次 15s 启动内
+        // 并发 GET 指数级暴涨。settled 去重，无论 error/timeout/非200 只重排一次。
+        let settled = false
+        const reschedule = () => {
+          if (settled) return
+          settled = true
+          setTimeout(check, 500)
+        }
+
         const req = http.get(`http://127.0.0.1:${port}/api/health`, (res) => {
           if (res.statusCode === 200) {
             res.resume()
             resolve()
           } else {
             res.resume()
-            setTimeout(check, 500)
+            reschedule()
           }
         })
 
-        req.on('error', () => {
-          setTimeout(check, 500)
-        })
+        req.on('error', reschedule)
 
         req.setTimeout(2000, () => {
           req.destroy()
-          setTimeout(check, 500)
+          reschedule()
         })
       }
 

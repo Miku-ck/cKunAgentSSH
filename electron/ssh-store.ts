@@ -138,7 +138,17 @@ async function readAllFromDisk(): Promise<SSHConnectionRecordOnDisk[]> {
       await quarantineCorruptFile(path, raw)
       return []
     }
-    return arr as SSHConnectionRecordOnDisk[]
+    // 结构损坏防御：合法 JSON 数组内混入 null/原始值（外部编辑或非原子写残留）时，
+    // 下游 findIndex/find/filter/map 及 fromDisk 一律 r.id → TypeError，会同时击穿
+    // list/save/delete/查重。此处按"缺字符串 id 即损坏"过滤，正常记录必带 id 不受影响。
+    const valid = arr.filter(
+      (r): r is SSHConnectionRecordOnDisk =>
+        !!r && typeof r === 'object' && typeof (r as { id?: unknown }).id === 'string',
+    )
+    if (valid.length !== arr.length) {
+      console.warn(`[SSHStore] store 含 ${arr.length - valid.length} 条无 id 损坏条目，已跳过`)
+    }
+    return valid
   } catch (e) {
     // 审查 M-8：损坏文件隔离到 .corrupt-<ts>.bak。原实现 JSON.parse 失败即静默
     // 返回 []，随后的 save()/delete() 会以空数组为基线覆写磁盘文件 — 用户全部
