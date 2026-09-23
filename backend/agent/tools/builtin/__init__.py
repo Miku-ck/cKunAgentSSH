@@ -1,14 +1,11 @@
 """
 内置工具包 — 运维 Agent 工具集
 
-工具清单（ssh 运维模式；文件操作一律经 shell_exec 远程执行，
-本地文件工具已随 work/ide 模式移除）:
-  - shell_exec     执行 shell 命令（ssh 模式远程执行）
-  - web_search     联网搜索
-  - web_fetch      抓取网页内容
-  - todo_write     管理任务列表
-  - load_skill     按需加载技能完整指令
-  - spawn_subagent 启动子 Agent 处理独立子任务
+完整工具类清单以下方 _ALL_TOOL_CLASSES 为单一事实源（按 mode_scope 过滤后注册），
+此处不再另抄一份易漂移的枚举。概览分组：shell 执行 / 联网 / 待办 / 技能按需加载 /
+子 Agent，运维观测与服务·定时·后台任务，远程文件读写·编辑·检索，图片查看，
+记忆自编辑，以及 Spec/Plan/Goal 工作流落盘。work/ide 模式已移除，现存工具一律
+ssh 作用域。
 """
 import logging
 
