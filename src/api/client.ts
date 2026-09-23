@@ -671,11 +671,16 @@ export const auditApi = {
       throw new Error(backendErrorDetail(err) || res.statusText)
     }
     const blob = await res.blob()
+    const objectUrl = URL.createObjectURL(blob)
     const a = document.createElement('a')
-    a.href = URL.createObjectURL(blob)
+    a.href = objectUrl
     a.download = 'audit_log.csv'
+    document.body.appendChild(a)
     a.click()
-    URL.revokeObjectURL(a.href)
+    document.body.removeChild(a)
+    // 延后到宏任务再释放：click() 只是发起下载，同步 revoke 会让浏览器来不及
+    // 认领该 blob URL → 导出 0 字节或无文件（Chromium 明确告警的用法）。
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
   },
 }
 

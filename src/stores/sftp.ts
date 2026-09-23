@@ -190,6 +190,11 @@ export const useSftpStore = defineStore('sftp', () => {
     reusingTerminal.value = false
     remoteCwd.value = ''
     remoteEntries.value = []
+    // 使在途远程列目录失效：loadRemote 用 `mySeq !== remoteLoadSeq` 丢弃过期结果，
+    // 但 disconnect 不推进计数器 → 断线前发出的 sftpList 断线后才返回时会通过守卫，
+    // 把死主机的目录列表和 remoteCwd 重新填回（online 已 false，列不可操作，且脏
+    // cwd 带入下次连接）。bump 一下让那次 mySeq 失配即可。
+    remoteLoadSeq++
     selectedRemote.value = new Set()
     // 跨主机的远程剪贴板必须一起清：不清则换主机后「粘贴」会把 A 机的绝对路径
     // cp -r 到 B 机上（canPaste 只比 side，比不出主机）
@@ -270,7 +275,13 @@ export const useSftpStore = defineStore('sftp', () => {
   function localParent(): string {
     const sep = localCwd.value.includes('\\') ? '\\' : '/'
     const parts = localCwd.value.split(sep).filter(Boolean)
-    if (parts.length <= 1) return localCwd.value
+    if (parts.length <= 1) {
+      // POSIX 一级绝对目录（/home、/tmp、/root）仍可再上到根 '/'；原实现一刀切
+      // 返回原值，使「上一级」在深度 1 处空转（远端 remoteParent 已正确处理）。
+      // 仅收紧这一种情形：Windows 盘符根 C:\ 已在根、保持原样返回。
+      if (sep === '/' && parts.length === 1 && localCwd.value.startsWith('/')) return '/'
+      return localCwd.value
+    }
     // Windows 盘符根: C:\ → 保留
     if (/^[a-z]:$/i.test(parts[0]) && parts.length === 2) {
       return parts[0] + sep
@@ -401,7 +412,7 @@ async function remoteRefresh(): Promise<void> {
     })
   }
 
-  async function runLocalCopy(id: string, src: string, dest: string, retried = false): Promise<void> {
+  async function runLocalCopy(id: string, src: string, dest: string): Promise<void> {
     const t = transfers.value.find(x => x.id === id)
     if (!t) return
     // F-5 竞态双保险：任务在排队期间被取消则不再启动
@@ -1085,7 +1096,9 @@ function retryTransfer(id: string): void {
   const t = transfers.value.find(x => x.id === id)
   if (!t) return
   const { kind, name, from, to } = t
-  const direction: 'up' | 'down' = kind === 'upload' ? 'up' : 'down'
+  // direction 由 kind 唯一决定：upload/copy-local→up、download/copy-remote→down
+  // （见各 push 点）。原式只判 'upload'，重试同侧本地复制会把方向图标翻成 'down'。
+  const direction: 'up' | 'down' = kind === 'upload' || kind === 'copy-local' ? 'up' : 'down'
   removeTransfer(id)
   const newId = `t${transferSeq.value++}`
   transfers.value.push({

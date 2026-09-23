@@ -176,7 +176,12 @@ const commandText = computed(() => {
   }
 })
 
-/** 向导状态出现 → 显示；被清除 → 隐藏 */
+/** 向导状态出现 → 显示；被清除 → 隐藏
+ *
+ * 必须 immediate：本组件可能挂在 `clarification_needed` 之后才创建（如运行中关掉
+ * AI 面板、事件到达后再打开 → 全新实例、store 里 wizard 已非空但 watch 从未触发），
+ * 少了 immediate 则 visible 永停 false、遮罩永不显示，用户无法作答，后端在
+ * PRE_TOOL_CALL 挂到 TTL 过期、运行死掉。这与 host 早前修过的「v-if 漏挂向导」同源。*/
 watch(wizard, (w) => {
   if (w) {
     visible.value = true
@@ -187,7 +192,7 @@ watch(wizard, (w) => {
   } else {
     visible.value = false
   }
-})
+}, { immediate: true })
 
 function selectOption(id: string) {
   selectedChoice.value = id

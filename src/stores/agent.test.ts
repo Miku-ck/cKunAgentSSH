@@ -161,6 +161,16 @@ describe('clarification_done 延时清理', () => {
     push({ type: 'done', state: 'max_reached', iterations: 3, run_id: 'r1' })
     expect(store.clarificationWizard).toBeNull()
   })
+
+  it('用户中止（abort）时未作答的向导一起关掉', () => {
+    const { store, push } = startRun()
+    push(wizard('r1'))
+    expect(store.clarificationWizard?.submitted).toBe(false)
+    // 同 done 分支的坑：中止后 run 已终止，向导继续挂着就是让用户答一张没人收
+    // 的题——答完 POST 到已中止的 run_id 永远等不到 clarification_done。
+    store.abort()
+    expect(store.clarificationWizard).toBeNull()
+  })
 })
 
 describe('权限卡片决策在途互斥', () => {

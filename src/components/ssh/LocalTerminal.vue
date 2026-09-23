@@ -306,7 +306,9 @@ watch(
         if (!containerRef.value) return
         fitAddon!.fit()
         if (window.electronAPI && terminal) {
-          window.electronAPI.ptyResize(props.ptyId, terminal.cols, terminal.rows)
+          // PTY 可能已退出并被回收 → ptyResize 的 IPC reject 若不吞会成未处理拒绝
+          // （同文件 :114/:194/:262 及 RemoteTerminal 对应点均已 .catch）
+          window.electronAPI.ptyResize(props.ptyId, terminal.cols, terminal.rows).catch(() => {})
         }
       }, 50)
     }

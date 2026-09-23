@@ -293,6 +293,10 @@ export const useAgentStore = defineStore('agent', () => {
     aborted.value = true
     // B11 修复：中止即 run 结束 — 清理权限请求状态，防止残留过期授权按钮
     permissionRequests.value = []
+    // 同 done/error 分支：run 已终止，继续挂着向导会让用户答一张没人收的题——
+    // 答完 POST 到已中止的 run_id 永远等不到 clarification_done，只能靠下次
+    // runAgent 的 _reset 才抹掉。中止时一并关闭。
+    clarificationWizard.value = null
     // 可见终端执行模式：中止所有在途交付捕获，避免 dangling POST
     // 问题 1 兜底：传 run_id 释放该 run 未消费的 once 授权（用户中止可能绕过终态清理）
     agentDeliver.abortRun(lastRunId.value || undefined)
