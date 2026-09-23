@@ -47,7 +47,6 @@ import '@xterm/xterm/css/xterm.css'
 import CompletionPopup from './CompletionPopup.vue'
 import { releaseCompletionSession } from '@/composables/useCompletion'
 import { useCompletionPopup } from '@/composables/useCompletionPopup'
-import { useSSHStore } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
 import { buildTerminalOptions, watchTerminalConfig } from '@/composables/useTerminalConfig'
 import { stripAnsiBackground } from '@/utils/terminal-colors'
@@ -76,7 +75,6 @@ let flushTimer: ReturnType<typeof setTimeout> | null = null
 // 需要先刷出残留的不完整行再写入，与 onMounted 内的 flush 逻辑共享同一缓冲
 let dataBuffer = ''
 
-const sshStore = useSSHStore()
 const toast = useToastStore()
 
 // 「问 AI」终端上下文（选中登记 + 悬浮按钮 + cwd 轮询）
