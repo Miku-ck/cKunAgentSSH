@@ -99,7 +99,7 @@
           <span v-for="att in pendingFiles" :key="att.file_id" class="tag-file" :title="att.truncated ? '文件较大，已截断前 50K 字符注入' : ''">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="9" height="9"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
             <span class="file-name">{{ att.filename }}</span>
-            <span v-if="att.size" class="file-size">{{ formatFileSize(att.size) }}</span>
+            <span v-if="att.size" class="file-size">{{ formatBytes(att.size) }}</span>
             <button class="tag-remove" @click="removePendingFile(att.file_id)" title="移除文件" aria-label="移除文件">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="8" height="8">
                 <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
@@ -500,6 +500,7 @@ import { useSkillStore } from '@/stores/skills'
 import { useToastStore } from '@/stores/toast'
 import type { ChatAttachment } from '@/api/client'
 import type { PostureKey } from '@/utils/run-modes'
+import { formatBytes } from '@/utils/format'
 
 const settingsStore = useSettingsStore()
 const skillStore = useSkillStore()
@@ -585,13 +586,6 @@ const uploading = ref(false)
 
 function handleUploadClick() {
   fileInputRef.value?.click()
-}
-
-function formatFileSize(bytes?: number): string {
-  if (!bytes || bytes <= 0) return ''
-  if (bytes < 1024) return `${bytes}B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)}MB`
 }
 
 async function handleFileChange(e: Event) {
