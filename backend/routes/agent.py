@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field, field_validator
 import database as db
 from routes.terminal import _get_model_config
 from sse_utils import sse_event
+from agent.audit import append_record_async
 from agent.tools import create_registry_for_mode, ToolRegistry
 from agent.memory import mstore
 from agent.memory import budget as memory_budget
@@ -1392,21 +1393,17 @@ async def grant_tool_permission(req: PermissionGrantRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     # C-review C2 修复：批准动作落审计链（原实现只写内存/allowlist，
-    # 事后无法证明"谁批准了什么"，等保审计目标落空）
-    # 审查R2修复：审计文件写为阻塞副作用，async 路由下放线程池执行
-    try:
-        from agent.audit import append_record
-        await asyncio.to_thread(
-            append_record,
-            action=f"permission_grant:{req.tool}",
-            conclusion="approved",
-            target_type="tool",
-            target_id=grant_key,
-            command_raw=req.command or "",
-            result=f"scope={req.scope},conversation={req.conversation_id or '-'}",
-        )
-    except Exception:
-        logger.warning("grant 审计记录失败（不阻塞）")
+    # 事后无法证明"谁批准了什么"，等保审计目标落空）。
+    # append_record_async 自带"线程池执行 + 失败静默"（阻塞副作用不冻结事件循环、
+    # 审计写失败不阻塞授权），调用方不必再包 try
+    await append_record_async(
+        action=f"permission_grant:{req.tool}",
+        conclusion="approved",
+        target_type="tool",
+        target_id=grant_key,
+        command_raw=req.command or "",
+        result=f"scope={req.scope},conversation={req.conversation_id or '-'}",
+    )
     return {"tool": req.tool, "scope": req.scope, "grant_key": grant_key, "granted": True}
 
 
@@ -1426,19 +1423,13 @@ async def revoke_tool_permission(tool: str, command: Optional[str] = None,
     pg = _get_global_permission_gate_sync()
     pg.revoke(tool, command=command, conversation_id=conversation_id)
     # C-review C2 修复：撤销动作同样落审计链
-    # 审查R2修复：审计文件写放线程池，不阻塞事件循环
-    try:
-        from agent.audit import append_record
-        await asyncio.to_thread(
-            append_record,
-            action=f"permission_revoke:{tool}",
-            conclusion="revoked",
-            target_type="tool",
-            target_id=command or tool,
-            command_raw=command or "",
-        )
-    except Exception:
-        logger.warning("revoke 审计记录失败（不阻塞）")
+    await append_record_async(
+        action=f"permission_revoke:{tool}",
+        conclusion="revoked",
+        target_type="tool",
+        target_id=command or tool,
+        command_raw=command or "",
+    )
     return {"tool": tool, "granted": False}
 
 
@@ -1484,21 +1475,15 @@ async def allow_tool_permission(req: AllowPermissionRequest):
     from agent.harness.reins import _get_global_permission_gate_sync
     pg = _get_global_permission_gate_sync()
     grant_key = pg.grant(req.tool, scope="always", command=req.command)
-    # 审查R2修复：审计文件写放线程池，不阻塞事件循环
-    try:
-        from agent.audit import append_record
-        await asyncio.to_thread(
-            append_record,
-            action=f"permission_allow_manual:{req.tool}",
-            # "granted" 不在 audit.append_record 的结论枚举里，会被静默改写为 "executed"
-            # —— 手动登记永久授权就伪装成了"执行过一条命令"。用同义且在枚举内的值。
-            conclusion="approved",
-            target_type="tool",
-            target_id=req.command or req.tool,
-            command_raw=req.command or "",
-        )
-    except Exception:
-        logger.warning("allow 审计记录失败（不阻塞）")
+    await append_record_async(
+        action=f"permission_allow_manual:{req.tool}",
+        # "granted" 不在 audit.append_record 的结论枚举里，会被静默改写为 "executed"
+        # —— 手动登记永久授权就伪装成了"执行过一条命令"。用同义且在枚举内的值。
+        conclusion="approved",
+        target_type="tool",
+        target_id=req.command or req.tool,
+        command_raw=req.command or "",
+    )
     return {"tool": req.tool, "grant_key": grant_key, "granted": True}
 
 
@@ -1575,20 +1560,14 @@ async def deny_command(req: DenyCommandRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     # 审计记录
-    # 审查R2修复：审计文件写放线程池，不阻塞事件循环
-    try:
-        from agent.audit import append_record
-        await asyncio.to_thread(
-            append_record,
-            action=f"permission_deny_command:{req.tool}",
-            conclusion="denied",
-            target_type="tool",
-            target_id=denied_key,
-            command_raw=req.command,
-            result=f"run={req.run_id or '-'}",
-        )
-    except Exception:
-        logger.warning("deny_command 审计记录失败（不阻塞）")
+    await append_record_async(
+        action=f"permission_deny_command:{req.tool}",
+        conclusion="denied",
+        target_type="tool",
+        target_id=denied_key,
+        command_raw=req.command,
+        result=f"run={req.run_id or '-'}",
+    )
     return {"tool": req.tool, "command": req.command,
             "run_id": req.run_id, "denied_key": denied_key}
 
@@ -1633,18 +1612,13 @@ async def release_run_permissions(run_id: str):
     SSE 侧的 finally 也调用同一 helper —— 客户端直接断连时不会经过本接口。
     """
     released, denied_count = _release_run_interaction_state(run_id)
-    try:
-        from agent.audit import append_record
-        await asyncio.to_thread(
-            append_record,
-            action=f"permission_release_run:{run_id}",
-            conclusion="released",
-            target_type="run",
-            target_id=run_id,
-            result=f"released={released} denied={denied_count}",
-        )
-    except Exception:
-        logger.warning("release_run 审计记录失败（不阻塞）")
+    await append_record_async(
+        action=f"permission_release_run:{run_id}",
+        conclusion="released",
+        target_type="run",
+        target_id=run_id,
+        result=f"released={released} denied={denied_count}",
+    )
     return {"run_id": run_id, "released": released, "denied": denied_count}
 
 
@@ -1714,19 +1688,14 @@ async def submit_clarification_answer(req: ClarificationAnswerRequest):
     # P1-6: 统一入口维护 done+context 配对与时间戳（TTL 可回收孤儿答案）
     record_clarification_answers(req.run_id, req.answers)
     logger.info("clarification answer: run_id=%s steps=%d", req.run_id, len(req.answers))
-    # 审计
-    try:
-        from agent.audit import append_record
-        await asyncio.to_thread(
-            append_record,
-            action="clarification_answer",
-            conclusion="answered",
-            target_type="run",
-            target_id=req.run_id,
-            result=f"steps={len(req.answers)}",
-        )
-    except Exception:
-        logger.warning("clarification answer 审计记录失败（不阻塞）")
+    # 审计：向导的两个终态必须可事后复原（answered / skipped）
+    await append_record_async(
+        action="clarification_answer",
+        conclusion="answered",
+        target_type="run",
+        target_id=req.run_id,
+        result=f"steps={len(req.answers)}",
+    )
     return {"run_id": req.run_id, "status": "recorded", "steps": len(req.answers)}
 
 
@@ -1743,17 +1712,12 @@ async def skip_clarification(req: ClarificationAnswerRequest):
     from agent.harness.reins import record_clarification_answers
     record_clarification_answers(req.run_id, {})  # 空 answers → _format_answers 输出"跳过"
     logger.info("clarification skip: run_id=%s", req.run_id)
-    try:
-        from agent.audit import append_record
-        await asyncio.to_thread(
-            append_record,
-            action="clarification_skip",
-            conclusion="skipped",
-            target_type="run",
-            target_id=req.run_id,
-        )
-    except Exception:
-        logger.warning("clarification skip 审计记录失败（不阻塞）")
+    await append_record_async(
+        action="clarification_skip",
+        conclusion="skipped",
+        target_type="run",
+        target_id=req.run_id,
+    )
     return {"run_id": req.run_id, "status": "skipped"}
 
 

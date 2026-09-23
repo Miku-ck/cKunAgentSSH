@@ -196,7 +196,9 @@ def append_record(
             conn.execute("COMMIT")
         return record
     except Exception as e:
-        logger.warning("审计写入失败: %s", e)
+        # 带上 action：调用方不再各自包 try/except（本函数已承诺"失败静默返回 None"），
+        # 这条日志是唯一的失败线索，缺了 action 就不知道该记录丢的是哪个决策
+        logger.warning("审计写入失败: action=%s err=%s", action, e)
         return None
 
 
