@@ -95,7 +95,6 @@ async def upload_chat_file(
         "size": len(data),
         "content": text,
         "truncated": truncated,
-        "conversation_id": conversation_id,
     }
 
 
