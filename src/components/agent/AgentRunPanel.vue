@@ -136,6 +136,34 @@ const deliveredProbe = computed(
   () => deliveredDeliveries.value.filter(d => d.exit_code === 0).length,
 )
 
+// 失败原因聚合：{ 原因名: 出现次数 }，用于折叠头一行说清"全部超时"而非列 N 个红徽章
+const failReasonStats = computed(() => {
+  const reasons = new Map<string, number>()
+  for (const d of deliveredDeliveries.value) {
+    if (!['timeout', 'failed', 'aborted'].includes(d.status)) continue
+    const key = deliveryStatusLabel(d.status, d.exit_code)
+    reasons.set(key, (reasons.get(key) || 0) + 1)
+  }
+  return Array.from(reasons.entries())
+})
+
+// 标题栏里的失败摘要："全部超时" / "3 个超时·1 个失败" / "2 个失败"
+const failSummaryText = computed((): string => {
+  const fails = deliveredFailCount.value
+  if (fails === 0) return '全部成功'
+  const total = deliveredExec.value
+  const stats = failReasonStats.value
+  // 全部失败且原因相同时，一句说清
+  if (fails === total && stats.length === 1) return `全部${stats[0][0]}`
+  // 多种失败原因，聚合说
+  return stats.map(([label, n]) => `${n} 个${label}`).join('·')
+})
+
+// 命令列表是否可折叠：3 条以上默认折叠
+const canCollapse = computed(() => deliveredExec.value >= 3)
+const execListExpanded = ref(false)
+function toggleExecList() { execListExpanded.value = !execListExpanded.value }
+
 // ── 单一焦点审批队列（spec refactor-approval-center） ──
 const pendingPerms = computed(() => agentStore.pendingPermissions)
 /** E5：prod 专属警示的总开关（设置 → Agent 治理 → 运维策略） */
@@ -440,36 +468,44 @@ const latestHelp = computed(() =>
       </div>
     </div>
 
-    <!-- 可见终端执行：在途交付状态 -->
+    <!-- 可见终端执行：在途交付状态（同因失败聚合 + 长列表折叠） -->
     <div class="ap-card ap-exec" v-if="agentStore.deliveries.some(d => d.status !== 'pending_confirm')">
-      <div class="ap-head">
+      <div class="ap-head" :class="{ 'ap-head-clickable': canCollapse }" @click="canCollapse && toggleExecList()">
         <svg class="ap-ic ap-muted-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-        <span class="ap-ttl ap-exec-ttl">已操作 {{ agentStore.deliveries.filter(d => d.status !== 'pending_confirm').length }} 项</span>
+        <span class="ap-ttl ap-exec-ttl">已操作 {{ deliveredExec }} 项</span>
         <span class="ap-sp"></span>
         <span
           class="ap-badge"
           :class="deliveredFailCount > 0 ? 'ap-badge-danger' : 'ap-badge-success'"
-        >{{ deliveredFailCount > 0 ? `${deliveredFailCount} 个失败` : '全部成功' }}</span>
+        >{{ failSummaryText }}</span>
+        <!-- 可折叠时才显示展开箭头 -->
+        <svg
+          v-if="canCollapse"
+          class="ap-exec-chevron"
+          :class="{ expanded: execListExpanded }"
+          viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          width="14" height="14"
+        ><polyline points="9 18 15 12 9 6"/></svg>
       </div>
-      <div class="ap-summary">
+      <div v-show="!canCollapse || execListExpanded" class="ap-summary">
         <span>已记录 <b>{{ deliveredTotal }}</b></span>
         <span>执行 <b>{{ deliveredExec }}</b></span>
         <span :class="deliveredFailCount > 0 ? 'ap-fail' : ''">失败 <b>{{ deliveredFailCount }}</b></span>
         <span>探测 <b>{{ deliveredProbe }}</b></span>
       </div>
-      <div class="ap-exec-list">
+      <div v-show="!canCollapse || execListExpanded" class="ap-exec-list">
         <div
           v-for="d in agentStore.deliveries.filter(d => d.status !== 'pending_confirm')"
           :key="d.tool_id"
           class="ap-exec-row"
         >
-          <svg
-            class="ap-exec-arrow"
-            :class="{ 'ap-arrow-ok': ['done', 'capturing'].includes(d.status) || d.exit_code === 0 }"
-            viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
           <code class="ap-exec-cmd" :title="d.command">{{ d.command }}</code>
           <span class="ap-badge" :class="`ap-badge-${d.status}`">{{ deliveryStatusLabel(d.status, d.exit_code) }}</span>
         </div>
+      </div>
+      <!-- 折叠态的占位提示（点击展开） -->
+      <div v-if="canCollapse && !execListExpanded" class="ap-exec-folded-hint" @click="toggleExecList()">
+        点击展开 {{ deliveredExec }} 条命令
       </div>
     </div>
 
@@ -875,6 +911,22 @@ const latestHelp = computed(() =>
 .ap-exec .ap-head { background: transparent; }
 .ap-muted-ic { color: var(--text-tertiary); }
 .ap-exec-ttl { color: var(--text-secondary); font-weight: 500; }
+.ap-head-clickable { cursor: pointer; user-select: none; }
+.ap-head-clickable:hover { color: var(--text-primary); }
+.ap-exec-chevron {
+  color: var(--text-tertiary);
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+}
+.ap-exec-chevron.expanded { transform: rotate(90deg); }
+.ap-exec-folded-hint {
+  padding: 6px 13px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  text-align: center;
+}
+.ap-exec-folded-hint:hover { color: var(--text-secondary); }
 .ap-summary {
   display: flex;
   gap: 16px;
@@ -894,13 +946,6 @@ const latestHelp = computed(() =>
   border-bottom: 1px solid var(--border-default);
 }
 .ap-exec-row:last-child { border-bottom: none; }
-.ap-exec-arrow {
-  width: 13px;
-  height: 13px;
-  flex: none;
-  color: var(--text-tertiary);
-}
-.ap-arrow-ok { color: var(--status-success-text); }
 .ap-exec-cmd {
   flex: 1;
   min-width: 0;
