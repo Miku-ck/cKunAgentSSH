@@ -62,7 +62,6 @@ describe('StreamingThinkScrubber', () => {
     const s = new StreamingThinkScrubber()
     s.feed('A\nx')
     s.reset()
-    expect(s.isInThinkBlock()).toBe(false)
     expect(s.feed('B') + s.flush()).toBe('B')
   })
 

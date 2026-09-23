@@ -119,13 +119,6 @@ export class StreamingThinkScrubber {
     this._prevChar = ''
   }
 
-  /**
-   * 判断是否在 think 块内（用于 UI 状态判断）
-   */
-  isInThinkBlock(): boolean {
-    return this._inBlock
-  }
-
   // ── 内部方法 ──
 
   private _findOpenTag(text: string, start: number): { found: boolean; start: number; end: number } {
