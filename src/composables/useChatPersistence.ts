@@ -182,6 +182,13 @@ export function useChatPersistence(options: {
         parseBackendTs(b.updated_at).getTime() - parseBackendTs(a.updated_at).getTime()
       )
     }
+    // 组间也要按各自最新条目倒序：conversations.value 本身不保证按 updated_at 有序
+    // （syncBackendConversations 往后追加远端条目、createConversation 往前插），
+    // 分组按首次遇到顺序生成会让「昨天」组排在「今天」组上面。items 已降序，
+    // 故取每组 items[0] 的时间即该组最新时间。
+    groups.sort((a, b) =>
+      parseBackendTs(b.items[0].updated_at).getTime() - parseBackendTs(a.items[0].updated_at).getTime()
+    )
     return groups
   })
 

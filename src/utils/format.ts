@@ -23,7 +23,11 @@ export function formatBytes(bytes: number): string {
  */
 export function parseBackendTs(ts?: string | null): Date {
   const s = ts || ''
-  return new Date(s.replace(' ', 'T') + (/[Z+]/.test(s) ? '' : 'Z'))
+  // 只有 naive 串才补 Z 当 UTC 读；已带时区标记（尾部 Z 或 ±hh:mm 偏移）的按原样解析。
+  // 用结尾锚定的模式而非 /[Z+]/：既不漏负偏移 -hh:mm（旧式会把整串当 naive 追加 Z，
+  // 得到 "...-05:00Z" → Invalid Date），也不会被 naive 串日期部分里的 '-' 误判。
+  const hasTz = /[Zz]$/.test(s) || /[+-]\d{2}:?\d{2}$/.test(s)
+  return new Date(s.replace(' ', 'T') + (hasTz ? '' : 'Z'))
 }
 
 /**

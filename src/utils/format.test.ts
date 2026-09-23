@@ -17,6 +17,8 @@ describe('parseBackendTs', () => {
   it('已带时区标记的原样解析，不重复补 Z', () => {
     expect(parseBackendTs('2026-09-21T07:00:00Z').getTime()).toBe(Date.UTC(2026, 8, 21, 7))
     expect(parseBackendTs('2026-09-21T07:00:00+08:00').getTime()).toBe(Date.UTC(2026, 8, 20, 23))
+    // 负偏移：旧 /[Z+]/ 判定漏掉 '-'，会误补 Z 得到 "...-05:00Z" → Invalid Date
+    expect(parseBackendTs('2026-09-21T07:00:00-05:00').getTime()).toBe(Date.UTC(2026, 8, 21, 12))
   })
 
   it('空值只给出 Invalid Date，不抛异常', () => {

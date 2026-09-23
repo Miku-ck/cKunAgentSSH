@@ -183,20 +183,17 @@ export function useSshNavigation(
     // 启动即退出（非零退出码 + 存活时间极短）：多半是终端打开即失败，给出友好提示。
     // 某些失败会带 0 退出码（如 WSL 未装发行版时 wsl.exe 可能以 0 退出），此时用更严的
     // 1s 阈值兜底（正常 `exit` 关闭不会在 1 秒内完成打开→输入→退出全流程）。
-    if (exitCode !== 0) {
-      const session = store.sessions.find(s => s.id === id)
-      const age = (session && session.createdAt) ? Date.now() - session.createdAt : Number.POSITIVE_INFINITY
-      if (age < LOCAL_STARTUP_CRASH_MS) {
-        const hint = LOCAL_SHELL_HINTS[session?.shell || ''] || ''
-        toast.error(`「${session?.shell || '终端'}」打开失败（进程已退出，退出码 ${exitCode}）。${hint}`)
-      }
-    } else {
-      const session = store.sessions.find(s => s.id === id)
-      const age = (session && session.createdAt) ? Date.now() - session.createdAt : Number.POSITIVE_INFINITY
-      if (age < 1000) {
-        const hint = LOCAL_SHELL_HINTS[session?.shell || ''] || ''
-        toast.error(`「${session?.shell || '终端'}」打开异常（进程启动后立即退出）。${hint}`)
-      }
+    const session = store.sessions.find(s => s.id === id)
+    const age = (session && session.createdAt) ? Date.now() - session.createdAt : Number.POSITIVE_INFINITY
+    const crashThresholdMs = exitCode !== 0 ? LOCAL_STARTUP_CRASH_MS : 1000
+    if (age < crashThresholdMs) {
+      const hint = LOCAL_SHELL_HINTS[session?.shell || ''] || ''
+      const shellName = session?.shell || '终端'
+      toast.error(
+        exitCode !== 0
+          ? `「${shellName}」打开失败（进程已退出，退出码 ${exitCode}）。${hint}`
+          : `「${shellName}」打开异常（进程启动后立即退出）。${hint}`
+      )
     }
     store.removeSession(id)
   }
