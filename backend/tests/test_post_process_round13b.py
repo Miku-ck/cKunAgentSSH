@@ -107,6 +107,63 @@ def test_null_title_treated_as_default(monkeypatch):
     )
 
 
+# ── 2b. 标题 fallback 降级路径（两处重复块收敛为 _apply_fallback_title 后补测）──
+
+
+def test_title_fallback_when_model_unknown(monkeypatch):
+    """unknown model_id 分支：应落到本地规则摘要写标题，而非静默停在 New Chat。"""
+    written: list = []
+    monkeypatch.setattr(pp.db, "get_conversation",
+                        lambda cid: {"id": cid, "title": "New Chat"})
+    monkeypatch.setattr(pp.db, "get_model_config", lambda mid, mask_key=False: None)
+    monkeypatch.setattr(
+        pp.db, "try_set_default_conversation_title",
+        lambda cid, title, defaults: (written.append(title), True)[1])
+
+    asyncio.run(_generate_title(_ctx(turn_index=2), PostProcessConfig()))
+    assert len(written) == 1 and written[0], (
+        f"模型不可用时未走 fallback 写标题: {written}")
+
+
+def test_title_fallback_when_llm_returns_empty(monkeypatch):
+    """LLM 返回空文本分支：同样必须落到 fallback，与上面收敛到同一 helper。"""
+    written: list = []
+
+    async def fake_llm(**kwargs):
+        return ""
+
+    monkeypatch.setattr(pp.db, "get_conversation", lambda cid: {"id": cid, "title": ""})
+    monkeypatch.setattr(pp.db, "get_model_config",
+                        lambda mid, mask_key=False: {"id": mid, "base_url": "u", "api_key": "k"})
+    monkeypatch.setattr(pp, "_call_llm_with_timeout", fake_llm)
+    monkeypatch.setattr(
+        pp.db, "try_set_default_conversation_title",
+        lambda cid, title, defaults: (written.append(title), True)[1])
+
+    asyncio.run(_generate_title(_ctx(turn_index=2), PostProcessConfig()))
+    assert len(written) == 1 and written[0], (
+        f"LLM 空返回时未走 fallback 写标题: {written}")
+
+
+def test_apply_fallback_title_respects_windowed_rename(monkeypatch):
+    """条件写返回 False（窗口期用户已改名）：helper 不得抛，只放弃覆盖。"""
+    seen: list = []
+    monkeypatch.setattr(
+        pp.db, "try_set_default_conversation_title",
+        lambda cid, title, defaults: (seen.append(title), False)[1])
+    asyncio.run(pp._apply_fallback_title(_ctx()))
+    assert len(seen) == 1 and seen[0], "helper 应先算标题再尝试条件写"
+
+
+def test_apply_fallback_title_swallows_db_error(monkeypatch):
+    """fallback 写库异常必须被吞（后处理不得冒泡打断主流程）。"""
+    def boom(*args, **kwargs):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(pp.db, "try_set_default_conversation_title", boom)
+    asyncio.run(pp._apply_fallback_title(_ctx()))  # 不抛即通过
+
+
 # ── 3. submit 读活配置 ──
 
 
