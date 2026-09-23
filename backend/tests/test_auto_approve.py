@@ -152,6 +152,39 @@ def test_总闸关闭_不问模型(monkeypatch, audits):
     assert asyncio.run(_aa._judge_once(_ctx(), "shell_exec: x", "r")) is False
 
 
+def test_环境变量kill_switch压过设置面板开关(monkeypatch):
+    """env 总闸优先于 DB/UI 开关（G4/G5 代理同款姿态：运维一键回退不需要发版，
+    也不允许设置页把它翻回来）。"""
+    monkeypatch.setattr(_aa, "AUTO_APPROVE_ENABLED", True)
+    monkeypatch.setenv("CKUN_AGENT_DISABLE_AUTO_APPROVE", "1")
+    assert _aa.auto_approve_effective() is False
+    monkeypatch.delenv("CKUN_AGENT_DISABLE_AUTO_APPROVE")
+    assert _aa.auto_approve_effective() is True
+    monkeypatch.setattr(_aa, "AUTO_APPROVE_ENABLED", False)
+    assert _aa.auto_approve_effective() is False
+
+
+def test_env_kill_switch_在裁决调用处生效(monkeypatch):
+    """_judge_once 必须在发起 LLM 调用前查运行时口径，只看导入期常量 = 摆设。
+
+    桩用"记录 + 返回 ALLOW"而不是抛异常：_judge_once 把一切异常都 fail-closed
+    吞成 False，抛异常的桩会"因错误的理由通过"（见 try/except 分支）。
+    """
+    import post_processor
+
+    hits: list = []
+
+    async def _spy(**kw):
+        hits.append(kw)
+        return "ALLOW"
+
+    monkeypatch.setattr(post_processor, "_call_llm_with_timeout", _spy)
+    monkeypatch.setattr(_aa, "AUTO_APPROVE_ENABLED", True)
+    monkeypatch.setenv("CKUN_AGENT_DISABLE_AUTO_APPROVE", "1")
+    assert asyncio.run(_aa._judge_once(_ctx(), "shell_exec: x", "r")) is False
+    assert hits == [], "kill switch 生效时不得发起 LLM 调用"
+
+
 @pytest.mark.parametrize("outcome", [
     None,                              # 超时/异常时 _call_llm 返回 None
     "",                                # 空返回
@@ -387,6 +420,36 @@ def test_gate_工具级裁决subject绑定bound命令(monkeypatch, audits):
     assert len(calls) == 1
     assert calls[0] == f"file_write: {bound}", "裁决 subject 偏离授权键绑定的那条命令"
     assert "TOP-SECRET-BODY" not in calls[0], "文件正文不得充当裁决标的"
+
+
+def test_gate_兜底时长过期判定走getter_0为永久等待(monkeypatch, audits):
+    """设置面板改的兜底时长必须即时被 gate/guards 读到。
+
+    原实现是 `from .core import _PERMISSION_APPROVAL_FALLBACK_S` 的导入期快照
+    —— PUT 后重绑 core 模块名，两个消费模块毫无感知（跨层 key 漂移家族）。
+    0 = 永久等待的语义也只有在调用点现查才立得住。
+    """
+    import time as _t
+
+    from agent.harness.reins.core import _perm_pending, tool_call_signature
+
+    _stub_judge(monkeypatch, False)
+    gate, _guard_obj = _guard()
+    ctx = _logged(_ctx(mode="normal"), "service_manage",
+                  {"action": "restart", "name": "nginx"})
+    pending = _perm_pending(ctx)
+    pending[tool_call_signature(ctx.tool_calls_log[-1])] = _t.monotonic() - 10_000
+
+    monkeypatch.setattr(_gate_mod, "approval_fallback_seconds", lambda: 0.0)
+    d = asyncio.run(gate.check(ctx))
+    assert d.intercepted is True
+    assert not any(e.kind == "permission_expired" for e in d.events), \
+        "0 = 永久等待，不得判过期"
+
+    monkeypatch.setattr(_gate_mod, "approval_fallback_seconds", lambda: 1.0)
+    d2 = asyncio.run(gate.check(ctx))
+    assert any(e.kind == "permission_expired" for e in d2.events), \
+        "改了时长必须当场生效，而不是等重启"
 
 
 # ── 6. 契约：HTTP 值域与 harness 归一化 ──────────────────────────────────────

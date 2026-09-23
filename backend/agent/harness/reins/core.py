@@ -23,11 +23,32 @@ _COMMAND_EXEC_TOOLS = {"shell_exec", "job_run"}
 # grant/deny/会话结束。这里仅保留一个生产可配置的**兜底**（默认 600s），到期时
 # 走 permission_expired（前端把卡片标记 timeout 并保留），但**不移出等待集**、
 # 不按永久拒绝处理，兜底窗口内同命令重发复用待办、不重复建卡。
-# 通过环境变量 CKUNAGENTIC_PERMISSION_APPROVAL_FALLBACK_S 覆盖（config 已把
-# .env 注入 os.environ，故 .env 设置同样生效）。设为 0 表示禁用兜底（永久等待）。
-_PERMISSION_APPROVAL_FALLBACK_S = float(
-    os.getenv("CKUNAGENTIC_PERMISSION_APPROVAL_FALLBACK_S", "600.0")
-)
+# 初值来自环境变量 CKUNAGENTIC_PERMISSION_APPROVAL_FALLBACK_S（config 已把
+# .env 注入 os.environ）；设置面板 PUT /settings/permission-policy 经
+# set_approval_fallback_seconds 即时改写。**消费方必须走 getter 调用** ——
+# `from .core import 常量` 拿到的是导入期快照，PUT 后 guards/gate 看不见
+# （跨层 key 漂移家族，钉在 test_gate_兜底时长过期判定走getter）。
+# 0 = 禁用兜底（永久等待）。上限 86400s：再大的值与"永久"在使用上没区别。
+APPROVAL_FALLBACK_MAX_S = 86400.0
+_APPROVAL_FALLBACK_DEFAULT_S = 600.0
+_approval_fallback_s = float(os.getenv(
+    "CKUNAGENTIC_PERMISSION_APPROVAL_FALLBACK_S", "600.0"))
+
+
+def approval_fallback_seconds() -> float:
+    """审批兜底等待时长的当前生效值（秒）。0 = 永久等待。"""
+    return _approval_fallback_s
+
+
+def set_approval_fallback_seconds(value) -> float:
+    """设置兜底时长：脏值回默认，越界夹紧。Returns: 实际生效值。"""
+    global _approval_fallback_s
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        v = _APPROVAL_FALLBACK_DEFAULT_S
+    _approval_fallback_s = max(0.0, min(v, APPROVAL_FALLBACK_MAX_S))
+    return _approval_fallback_s
 
 
 def _perm_pending(ctx: RunContext) -> dict:
@@ -35,7 +56,7 @@ def _perm_pending(ctx: RunContext) -> dict:
 
     key = tool_call_signature() 返回的 hashable 元组，
     value = 首次发出 permission_needed 的 time.monotonic() 时间戳。
-    窗口内的重发豁免循环检测；抵达兜底（_PERMISSION_APPROVAL_FALLBACK_S）后的
+    窗口内的重发豁免循环检测；抵达兜底（approval_fallback_seconds()）后的
     重发发 permission_expired（保留等待集，不 pop），但仍复用待办、不重复建卡。
     """
     return ctx.metadata.setdefault("permission_pending", {})

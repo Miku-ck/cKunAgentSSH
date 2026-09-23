@@ -109,7 +109,7 @@
         <div v-show="open.ops" class="grp-body">
           <p class="hint">
             授权保留时长落在后端 <code>~/.ckunagentic/allowlist.txt</code> 的判定上，改完即刻生效（无需重启）；
-            另两项是本机渲染端策略，作用于新建连接与审批交互。
+            自动审批开关与审批兜底等待同样即时落到后端裁决链路。下面的默认环境等其余项是本机渲染端策略。
           </p>
 
           <div class="ops-toggle-row">
@@ -129,6 +129,44 @@
               <option v-for="o in ttlOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
               <option v-if="!ttlOptions.some((o) => o.value === allowlistTtl)" :value="allowlistTtl">
                 自定义（{{ allowlistTtl }} 小时）
+              </option>
+            </select>
+          </div>
+
+          <div class="ops-toggle-row">
+            <div class="ops-info">
+              <span class="runtime-label">自动审批</span>
+              <span class="runtime-desc">
+                「自动审批」档下弹卡前先让模型代审一道；关闭后模型不再代审，
+                所有需授权命令逐条弹卡问人（手动审批语义）。环境变量总闸
+                <code>CKUN_AGENT_DISABLE_AUTO_APPROVE=1</code> 压过本开关。
+                hardline 阻断、prod 预授权、用户显式拒绝不受本开关影响。
+              </span>
+            </div>
+            <ToggleSwitch
+              :model-value="autoApprove"
+              :disabled="policySaving"
+              @update:model-value="onAutoApproveToggle"
+            />
+          </div>
+
+          <div class="ops-toggle-row">
+            <div class="ops-info">
+              <span class="runtime-label">审批兜底等待</span>
+              <span class="runtime-desc">
+                审批卡无人响应多久后标记「已超时」（待办保留、不按拒绝处理，
+                重新确认仍可放行）。选「永久等待」则卡片永不标记超时。
+              </span>
+            </div>
+            <select
+              v-model.number="fallbackDraft"
+              class="setting-select"
+              :disabled="policySaving"
+              @change="onFallbackChange"
+            >
+              <option v-for="o in fallbackOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+              <option v-if="!fallbackOptions.some((o) => o.value === approvalFallback)" :value="approvalFallback">
+                自定义（{{ approvalFallback }} 秒）
               </option>
             </select>
           </div>
@@ -367,11 +405,32 @@ const ttlOptions: { value: number; label: string }[] = [
 const allowlistTtl = ref(0)
 const ttlDraft = ref(0)
 const ttlSaving = ref(false)
+// 审批策略新两字段：同款「基线 + 草稿 + 失败回滚」。autoApprove=false 时
+// auto 档不再问模型、逐条弹卡（env kill switch 在后端仍压过这里的开关）。
+const approvalFallback = ref(600)
+const fallbackDraft = ref(600)
+const autoApprove = ref(true)
+const autoApproveBaseline = ref(true)
+const policySaving = ref(false)
+const fallbackOptions: { value: number; label: string }[] = [
+  { value: 0, label: '永久等待（不标记超时）' },
+  { value: 600, label: '10 分钟（默认）' },
+  { value: 1800, label: '30 分钟' },
+  { value: 3600, label: '1 小时' },
+  { value: 86400, label: '1 天' },
+]
 
 function ttlText(hours: number): string {
   const hit = ttlOptions.find((o) => o.value === hours)
   if (hit) return hit.label.replace('（不过期）', '')
   return `${hours} 小时`
+}
+
+function syncPolicyFields(data: { auto_approve_enabled: boolean; approval_fallback_s: number }) {
+  autoApprove.value = data.auto_approve_enabled
+  autoApproveBaseline.value = data.auto_approve_enabled
+  approvalFallback.value = Number.isFinite(data.approval_fallback_s) ? data.approval_fallback_s : 600
+  fallbackDraft.value = approvalFallback.value
 }
 
 async function loadPermissionPolicy() {
@@ -380,6 +439,7 @@ async function loadPermissionPolicy() {
     const hours = Number.isFinite(data.allowlist_ttl_hours) ? data.allowlist_ttl_hours : 0
     allowlistTtl.value = hours
     ttlDraft.value = hours
+    syncPolicyFields(data)
   } catch (e) {
     toast.error(`授权策略加载失败：${toFriendlyMessage(e)}`)
   }
@@ -406,9 +466,46 @@ async function onTtlChange() {
   }
 }
 
+async function onFallbackChange() {
+  const next = fallbackDraft.value
+  if (!Number.isFinite(next) || next === approvalFallback.value) return
+  policySaving.value = true
+  try {
+    const data = await api.updatePermissionPolicy({ approval_fallback_s: next })
+    syncPolicyFields(data)
+    toast.success(data.approval_fallback_s
+      ? `审批卡片 ${data.approval_fallback_s}s 无响应后标记过期，待办保留`
+      : '审批卡片不再标记超时（永久等待）')
+  } catch (e) {
+    fallbackDraft.value = approvalFallback.value
+    toast.error(`审批兜底时长保存失败：${toFriendlyMessage(e)}`)
+  } finally {
+    policySaving.value = false
+  }
+}
+
+async function onAutoApproveToggle(v: boolean) {
+  // 先乐观翻转再落库，失败回滚到基线 —— ToggleSwitch 没有异步 slot，
+  // 等 PUT 返回再改 model-value 会让按钮看起来点了没反应。
+  autoApprove.value = v
+  policySaving.value = true
+  try {
+    const data = await api.updatePermissionPolicy({ auto_approve_enabled: v })
+    syncPolicyFields(data)
+    toast.success(data.auto_approve_enabled
+      ? '自动审批已开启：auto 档弹卡前先问模型'
+      : '自动审批已关闭：auto 档逐条弹卡，不再问模型')
+  } catch (e) {
+    autoApprove.value = autoApproveBaseline.value
+    toast.error(`自动审批开关保存失败：${toFriendlyMessage(e)}`)
+  } finally {
+    policySaving.value = false
+  }
+}
+
 const opsSummary = computed(() => {
   const a = opsCfg.value
-  const parts = [`授权 ${ttlText(allowlistTtl.value)}`]
+  const parts = [`授权 ${ttlText(allowlistTtl.value)}`, autoApprove.value ? '自动审批开' : '自动审批关']
   parts.push(`新连接 ${a.defaultEnvironment === 'prod' ? 'prod' : 'test'}`)
   parts.push(a.prodConfirm ? 'prod 确认开' : 'prod 确认关')
   return parts.join(' · ')

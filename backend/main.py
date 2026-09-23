@@ -95,12 +95,21 @@ async def lifespan(_app: FastAPI):
 
     # E3：allowlist 保留时长回填。必须在任何 PermissionGate 单例创建前写入模块值，
     # 否则首次加载 allowlist 时按 TTL=0 判定，过期条目要等到下次重启才不会被撤销。
+    # 审批策略另两字段同段回填：auto_approve 的 DB 开关（env kill switch 在调用处
+    # 仍优先）；兜底时长只在 DB 有显式行时才推 —— 从未在设置面板改过的用户，
+    # CKUNAGENTIC_PERMISSION_APPROVAL_FALLBACK_S 的 env 覆盖保持有效。
     try:
         import database as _db
+        from agent.harness.reins.auto_approve import set_db_enabled
+        from agent.harness.reins.core import set_approval_fallback_seconds
         from agent.harness.reins.gate import set_allowlist_ttl_hours
-        set_allowlist_ttl_hours(_db.get_permission_policy()["allowlist_ttl_hours"])
+        _pol = _db.get_permission_policy()
+        set_allowlist_ttl_hours(_pol["allowlist_ttl_hours"])
+        set_db_enabled(_pol["auto_approve_enabled"])
+        if _db.get_app_setting("permission.approval_fallback_s") is not None:
+            set_approval_fallback_seconds(_pol["approval_fallback_s"])
     except Exception as e:
-        logger.warning("[cKunAgentic] Allowlist TTL load skipped: %s", e)
+        logger.warning("[cKunAgentic] Permission policy load skipped: %s", e)
 
     # 意识 tick 延迟启动：仅首次 Agent 运行时触发（ensure_started），
     # 避免纯聊天用户产生空 DB 查询开销

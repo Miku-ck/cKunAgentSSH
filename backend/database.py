@@ -2106,15 +2106,23 @@ def get_conv_retention() -> dict:
 
 
 def get_permission_policy() -> dict:
-    """审批授权策略（E3）。唯一读取点：routes/settings.py 的 GET/PUT 与 main.py 启动回填。
+    """审批授权策略（E3 + 审批策略两新字段）。唯一读取点：routes/settings.py 的
+    GET/PUT 与 main.py 启动回填。
 
     allowlist_ttl_hours=0（默认）= 永不过期，即引入 TTL 之前 allowlist 的原始语义 ——
     默认值不能选"7 天"，那会让升级当天既有 prod 预登记条目凭空开始倒计时。
-    区间与写入侧 Field 同口径（0..8760 小时 = 最长一年）。
+    auto_approve_enabled=True（默认）= 设置面板侧不额外拦截；env kill switch
+    仍在调用处优先压过它（auto_approve.auto_approve_effective）。
+    approval_fallback_s=600（默认）= 审批兜底等待秒数，0 = 永久等待。
+    区间与写入侧 Field 同口径（0..8760 小时 / 0..86400 秒）。
     """
     return {
         "allowlist_ttl_hours": _int_app_setting(
             "permission.allowlist_ttl_hours", 0, low=0, high=8760),
+        "auto_approve_enabled": bool_app_setting(
+            "permission.auto_approve_enabled", True),
+        "approval_fallback_s": _int_app_setting(
+            "permission.approval_fallback_s", 600, low=0, high=86400),
     }
 
 

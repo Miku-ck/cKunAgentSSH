@@ -242,11 +242,24 @@ CREATE TABLE memory_audit (
 
 ## 10. 存量迁移（启动时执行，幂等）
 
+原设计（落笔时假定 v1 表叫 `agent_memories`）：
+
 1. 旧表 `RENAME TO agent_memories_archive / agent_strategies_archive`（保留 90 天，UI 不展示）。
 2. 映射灌入新表：`type→kind` 直映；旧 `mode` 丢弃；全部 `source=migration, status=pending_reconcile`；旧 embedding 若为 `api:` 来源**且维度与新模型一致**则搬运为 BLOB，否则置 NULL 等重嵌入——伪向量（`local-256`）**一律丢弃**（它们正是"误注入"源头）。
 3. `agent_strategies(strategy_type='reflection')→kind=procedural`；`evolved_config→app_settings`。
 4. 迁移完投 `backfill_reconcile` job 批（每 tick 消化 ≤20 条），矛盾旧记忆在首次整理时被裁决；`pinned=0, importance` 沿用旧值。
 5. 迁移失败 → 启动回滚 rename，系统以旧表只读模式起（记 error 日志 + UI 提示），不阻塞使用。
+
+**落地口径**（`database._init_memory_v2` / `_migrate_memory_v1_to_v2`，与上面不一致处以本节为准）：
+
+1. **不改名归档 v1 业务表**。v2 总表占用的正是 `memories` 这个表名，而它被 v1 三层记忆用过一次（列 `id/mode/content/…`，无 `kind`）—— `CREATE TABLE IF NOT EXISTS` 撞同名旧表会静默跳过，缺的是整张表的列。所以升级时先验 `PRAGMA table_info` 形状，把 v1 的 `memories` **改名为 `memories_v1_layers` 原样保留**（不删一行），再建真表。`agent_memories` / `agent_strategies` 保持原名，作为迁移源留在库里，UI 不展示。
+2. 映射是**复制不是搬运**：`type→kind` 直映（非法 `type` 归 semantic），旧行不删；`memories.id` 沿用旧 id（reflection 行为 `mig-{id}`）配 `INSERT OR IGNORE`，因此整批可重跑。`source=migration`；`episodic→active`（事实记录不对账），其余（`semantic`/`procedural`）`→pending_reconcile`；旧 embedding 仅 `api:` 来源搬成 float32 BLOB，伪向量丢弃。**`mode` 丢弃、统一 `scope='global'`**，"维度与新模型一致"未单独校验（维度只在装 sqlite-vec 时由 `ensure_vec_table` 把关）。
+3. `agent_strategies(strategy_type='reflection')→kind=procedural`（直接 active）。**`evolved_config→app_settings` 未做**：演化配置仍在 `agent_strategies`，运行期由 `routes/agent.py:_load_evolved_config` 读取，属另一条在跑的通路，不属记忆 v2 的读面。
+4. 每 **10** 条 `pending_reconcile` 投一个 `backfill_reconcile` job（`priority=7`，id `mj-mig-{下标}`），每 tick 取 ≤**20** 个 job（`mstore.next_jobs`）。FTS/向量侧表在迁移里同步写（`_index_side`，分词与 `mstore._fts_sync` 同源）——否则面板列得出、检索搜不到。
+5. 迁移失败**不回滚 rename**（除 1 里的改名，没有别的 rename）：`conn.rollback()` + 照样置 `memory_v2.migrated='1'`，v2 从零积累、旧表整表保留。理由是重跑半截迁移比重跑整批更危险（部分搬运的 embedding 无法分辨）。唯一例外：第 1 条那次真表重建会**清掉标记**重跑整批——缺列的旧表上这次迁移不可能成功过，不清就等于把存量永久锁在 `agent_memories` 里（正是 09-23 修掉的升级失效）。
+6. **旧表并非只读**：`agent_strategies` 至今仍被 `reflection.py`（写反思）和 `evolution.py:save_evolved_config` 写入，`agent_memories` 则已无写入方。原第 5 条"以旧表只读模式起"的说法按此理解。
+
+回归：`backend/tests/test_memory_v2_legacy_table.py`（预置 v1 形状表 + 被 poison 的迁移标记）。
 
 ## 11. 降级与错误处理矩阵
 

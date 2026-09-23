@@ -35,9 +35,25 @@ logger = logging.getLogger(__name__)
 MODE_KEY = "permission_mode"
 MODE_AUTO = "auto"
 
-# 总闸：与 CKUN_AGENT_DISABLE_LLM_EXPLAIN 同惯例，模型慢/不可用时运维侧一键
-# 退回纯手动审批（auto 档全部回退弹卡），不需要发版。
-AUTO_APPROVE_ENABLED = os.environ.get("CKUN_AGENT_DISABLE_AUTO_APPROVE") != "1"
+# DB/UI 侧开关：设置面板 PUT /settings/permission-policy 经 set_db_enabled 推送。
+# env 总闸 DISABLE_ENV_KEY=1 优先级更高（见 auto_approve_effective）—— 与代理
+# 设置同姿态：运维侧一键退回纯手动审批不需要发版，也不允许设置页把它翻回来。
+DISABLE_ENV_KEY = "CKUN_AGENT_DISABLE_AUTO_APPROVE"
+AUTO_APPROVE_ENABLED = True
+
+
+def set_db_enabled(enabled: bool) -> bool:
+    """设置 DB/UI 侧开关。Returns: 实际写入值。"""
+    global AUTO_APPROVE_ENABLED
+    AUTO_APPROVE_ENABLED = bool(enabled)
+    return AUTO_APPROVE_ENABLED
+
+
+def auto_approve_effective() -> bool:
+    """自动审批是否真正生效：env kill switch 优先压过设置面板开关。"""
+    if os.environ.get(DISABLE_ENV_KEY) == "1":
+        return False
+    return bool(AUTO_APPROVE_ENABLED)
 
 # 裁决要的是「一行 ALLOW/DENY」，给小 max_tokens 防模型开始长篇解释
 _JUDGE_CHUNK_TIMEOUT_S = 2.0
@@ -86,7 +102,7 @@ def _subject_of(tool: str, args: dict) -> str:
 
 async def _judge_once(ctx: RunContext, subject: str, reason: str) -> bool:
     """一次性 LLM 裁决调用。任何失败路径返回 False（回退弹卡）。"""
-    if not AUTO_APPROVE_ENABLED:
+    if not auto_approve_effective():
         return False
     if not ctx.llm_base_url or not ctx.llm_api_key:
         return False

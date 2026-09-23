@@ -1,9 +1,10 @@
 <template>
   <button
     class="toggle-switch"
-    :class="{ on: modelValue }"
+    :class="{ on: modelValue, disabled }"
     role="switch"
     :aria-checked="modelValue ? 'true' : 'false'"
+    :disabled="disabled"
     @click="$emit('update:modelValue', !modelValue)"
   >
     <span class="toggle-thumb" />
@@ -13,6 +14,7 @@
 <script setup lang="ts">
 defineProps<{
   modelValue: boolean
+  disabled?: boolean
 }>()
 
 defineEmits<{
@@ -57,5 +59,9 @@ defineEmits<{
 .toggle-switch.on:hover {
   border-color: var(--accent-primary);
   filter: brightness(1.1);
+}
+.toggle-switch.disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 </style>

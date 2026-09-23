@@ -14,10 +14,10 @@ from ..contracts import ReinDecision, ReinPoint, RunContext, TraceEvent
 from ..safety import classify_command, classify_constructed_command
 from .auto_approve import try_auto_approve
 from .core import (
-    _PERMISSION_APPROVAL_FALLBACK_S,
     _audit_target_id,
     _audit_target_type,
     _perm_pending,
+    approval_fallback_seconds,
     extract_bound_command,
     permission_display_fields,
     resolve_registry,
@@ -194,8 +194,11 @@ class FilesystemGuard:
                         pending = _perm_pending(ctx)
                         sig = tool_call_signature(last)
                         first_ts = pending.get(sig)
-                        if first_ts is not None and \
-                                (time.monotonic() - first_ts) > _PERMISSION_APPROVAL_FALLBACK_S:
+                        # 时长现查 getter（设置面板可即时改），不吃导入期快照；
+                        # >0 才判过期与 gate 审查R 同口径（0 = 永久等待，否则首次重发即过期）
+                        fallback_s = approval_fallback_seconds()
+                        if first_ts is not None and fallback_s > 0 and \
+                                (time.monotonic() - first_ts) > fallback_s:
                             # 兜底到期 → 保留等待集（不 pop），发 permission_expired
                             # 让前端标记卡片 timeout 保留；注入提示引导用户确认后
                             # 重新发起。等待集未移除，兜底窗口内同命令重发仍被拦截、
@@ -224,7 +227,7 @@ class FilesystemGuard:
                                         # 目标各一张卡），缺了它会把无关卡片一起标成过期
                                         "command": str(cmd),
                                         "message": (
-                                            f"授权审批已过期（{int(_PERMISSION_APPROVAL_FALLBACK_S)}s 兜底未响应），"
+                                            f"授权审批已过期（{int(fallback_s)}s 兜底未响应），"
                                             f"待办已保留，可重新确认后执行: {tool}"
                                         ),
                                     },
@@ -233,7 +236,7 @@ class FilesystemGuard:
                                     "role": "user",
                                     "content": (
                                         f"[系统拦截] 上述命令的授权审批已过期"
-                                        f"（{int(_PERMISSION_APPROVAL_FALLBACK_S)}s 兜底无用户响应），"
+                                        f"（{int(fallback_s)}s 兜底无用户响应），"
                                         "系统已保留待办、未按拒绝处理。请提示用户确认后重新发起"
                                         "完全相同的命令（授权后会被放行），或改用更安全的替代方案。"
                                     ),

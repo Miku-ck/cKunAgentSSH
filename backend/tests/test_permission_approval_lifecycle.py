@@ -126,7 +126,7 @@ def test_approval_fallback_keeps_pending_and_reuses_todo():
     sig = tool_call_signature(ctx.tool_calls_log[-1])
     # 模拟超过审批兜底时限
     ctx.metadata["permission_pending"][sig] = time.monotonic() - \
-        (reins_mod._PERMISSION_APPROVAL_FALLBACK_S + 1)
+        (reins_mod.approval_fallback_seconds() + 1)
     _log(ctx)  # 兜底到期后重发
     d3 = asyncio.run(_guard().check(ctx))
     assert d3.intercepted

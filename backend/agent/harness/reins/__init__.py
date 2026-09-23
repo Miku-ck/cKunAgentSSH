@@ -40,8 +40,8 @@ from .clarification import (
 from ..contracts import ClarificationOption, ClarificationStep
 from .core import (
     _COMMAND_EXEC_TOOLS,
-    _PERMISSION_APPROVAL_FALLBACK_S,
     Reins,
+    approval_fallback_seconds,
     tool_call_signature,
 )
 from .defaults import create_default_reins

@@ -19,10 +19,10 @@ from ..safety import classify_command, classify_constructed_command
 from .auto_approve import try_auto_approve
 from .core import (
     _COMMAND_EXEC_TOOLS,
-    _PERMISSION_APPROVAL_FALLBACK_S,
     _audit_target_id,
     _audit_target_type,
     _perm_pending,
+    approval_fallback_seconds,
     command_from_args,
     extract_bound_command,
     permission_display_fields,
@@ -718,8 +718,10 @@ class PermissionGate:
         first_ts = pending.get(sig)
         # 审查R：兜底窗口 >0 才启用到期判定（core.py 注释声明"设为 0 表示禁用兜底/永久等待"，
         # 但旧判据 elapsed > 0.0 对任何已记录时间戳恒真 → 设 0 反而首次重发即过期，语义反转）。
-        if first_ts is not None and _PERMISSION_APPROVAL_FALLBACK_S > 0 and \
-                (time.monotonic() - first_ts) > _PERMISSION_APPROVAL_FALLBACK_S:
+        # 时长现查 getter（可被设置面板 PUT 即时改写），不吃导入期快照。
+        fallback_s = approval_fallback_seconds()
+        if first_ts is not None and fallback_s > 0 and \
+                (time.monotonic() - first_ts) > fallback_s:
             # 兜底到期 → 保留等待集（不 pop），发 permission_expired 把卡标记
             # timeout 保留；注入提示引导用户确认后重新发起。等待集未移除，兜底
             # 窗口内同命令重发仍被拦截、复用待办而不重复建卡。
@@ -737,7 +739,7 @@ class PermissionGate:
                         # 与 permission_needed 同源：前端按「工具 + 命令」定位卡片
                         "command": str(bound or ""),
                         "message": (
-                            f"授权审批已过期（{int(_PERMISSION_APPROVAL_FALLBACK_S)}s 兜底未响应），"
+                            f"授权审批已过期（{int(fallback_s)}s 兜底未响应），"
                             f"待办已保留，可重新确认后执行: {tool}"
                         ),
                     },
@@ -746,7 +748,7 @@ class PermissionGate:
                     "role": "user",
                     "content": (
                         f"[系统拦截] 工具 {tool} 的授权审批已过期"
-                        f"（{int(_PERMISSION_APPROVAL_FALLBACK_S)}s 兜底无用户响应），"
+                        f"（{int(fallback_s)}s 兜底无用户响应），"
                         "系统已保留待办、未按拒绝处理。请提示用户确认后重新发起，"
                         "或换用更安全的工具。"
                     ),

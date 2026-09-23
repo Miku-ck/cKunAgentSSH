@@ -130,13 +130,34 @@ def base_db(tmp_workspace):
 
 
 def test_db_permission_policy_dirty_value_falls_back(base_db):
-    assert db.get_permission_policy() == {"allowlist_ttl_hours": 0}
+    assert db.get_permission_policy() == {
+        "allowlist_ttl_hours": 0,
+        "auto_approve_enabled": True,
+        "approval_fallback_s": 600,
+    }
     db.set_app_setting("permission.allowlist_ttl_hours", "abc")
-    assert db.get_permission_policy() == {"allowlist_ttl_hours": 0}
+    assert db.get_permission_policy() == {
+        "allowlist_ttl_hours": 0,
+        "auto_approve_enabled": True,
+        "approval_fallback_s": 600,
+    }
     db.set_app_setting("permission.allowlist_ttl_hours", "999999")
-    assert db.get_permission_policy() == {"allowlist_ttl_hours": 0}
+    assert db.get_permission_policy()["allowlist_ttl_hours"] == 0
     db.set_app_setting("permission.allowlist_ttl_hours", "168")
-    assert db.get_permission_policy() == {"allowlist_ttl_hours": 168}
+    assert db.get_permission_policy()["allowlist_ttl_hours"] == 168
+
+
+def test_db_审批策略新字段_默认脏值与合法写回读(base_db):
+    """兜底时长与自动审批开关的 DB 读回口径：脏值/越界回默认（同 TTL）。"""
+    db.set_app_setting("permission.approval_fallback_s", "99999")
+    assert db.get_permission_policy()["approval_fallback_s"] == 600
+    db.set_app_setting("permission.approval_fallback_s", "-3")
+    assert db.get_permission_policy()["approval_fallback_s"] == 600
+    db.set_app_setting("permission.approval_fallback_s", "0")
+    db.set_app_setting("permission.auto_approve_enabled", "false")
+    pol = db.get_permission_policy()
+    assert pol["approval_fallback_s"] == 0
+    assert pol["auto_approve_enabled"] is False
 
 
 # ── 路由 ──
@@ -156,14 +177,55 @@ def test_put_permission_policy_persists_and_pushes_gate(policy_client, isolated_
                              json={"allowlist_ttl_hours": 24}).status_code == 200
     assert gate_mod._ALLOWLIST_TTL_HOURS == 24
     assert gate_mod._get_global_permission_gate_sync().allowlist_ttl_hours == 24
-    assert db.get_permission_policy() == {"allowlist_ttl_hours": 24}
+    assert db.get_permission_policy()["allowlist_ttl_hours"] == 24
 
     got = policy_client.get("/api/settings/permission-policy").json()
-    assert got == {"allowlist_ttl_hours": 24}
+    assert got["allowlist_ttl_hours"] == 24
     # 之后新建的 gate（模拟重启）从模块值继承 TTL，不会退回"永久"
     g2 = PermissionGate()
     assert g2.allowlist_ttl_hours == 24
     assert key in g2._confirmed_permanent  # 刚写入，未到期
+
+
+def test_put_permission_policy_pushes_runtime_toggles(policy_client, base_db):
+    """PUT 必须把开关推进运行时模块（同 E3 推 gate 的理由：只写库要重启才生效）。
+
+    新字段是 Optional「不传 = 不改」（G4/G5 的 /settings/http 同款契约）：
+    带默认值的请求模型会让只发 TTL 的旧调用把 auto_approve 静默翻开。
+    """
+    import agent.harness.reins.auto_approve as aa_mod
+    from agent.harness.reins import core as core_mod
+    ttl_before = gate_mod._ALLOWLIST_TTL_HOURS
+    fallback_before = core_mod.approval_fallback_seconds()
+    try:
+        r = policy_client.put("/api/settings/permission-policy", json={
+            "auto_approve_enabled": False, "approval_fallback_s": 900})
+        assert r.status_code == 200
+        assert aa_mod.AUTO_APPROVE_ENABLED is False
+        assert core_mod.approval_fallback_seconds() == 900
+        assert db.get_permission_policy()["approval_fallback_s"] == 900
+
+        # 只发 TTL：另两个字段必须原地不动
+        r2 = policy_client.put("/api/settings/permission-policy",
+                               json={"allowlist_ttl_hours": 48})
+        got = r2.json()
+        assert got["auto_approve_enabled"] is False
+        assert got["approval_fallback_s"] == 900
+        assert aa_mod.AUTO_APPROVE_ENABLED is False
+
+        # 越界仍 422（0 合法 = 永久等待，不进这里）
+        assert policy_client.put("/api/settings/permission-policy",
+                                 json={"approval_fallback_s": 86401}).status_code == 422
+        assert policy_client.put("/api/settings/permission-policy",
+                                 json={"approval_fallback_s": -1}).status_code == 422
+    finally:
+        # 模块态是本进程共享的，用例结束复原，别把后门的开关留在别人脚下
+        aa_mod.AUTO_APPROVE_ENABLED = True
+        core_mod.set_approval_fallback_seconds(fallback_before)
+        gate_mod.set_allowlist_ttl_hours(ttl_before)
+        db.set_app_setting("permission.allowlist_ttl_hours", str(ttl_before))
+        db.set_app_setting("permission.auto_approve_enabled", "true")
+        db.set_app_setting("permission.approval_fallback_s", str(int(fallback_before)))
 
 
 def test_put_permission_policy_rejects_out_of_range(policy_client):

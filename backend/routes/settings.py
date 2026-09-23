@@ -282,28 +282,46 @@ def update_memory_settings(req: MemorySettingsRequest):
 
 
 class PermissionPolicyRequest(BaseModel):
+    # 全字段 Optional =「不传 = 不改」（与 /settings/http 同款契约）：带默认值的
+    # 请求模型会让只发 TTL 的旧调用把自动审批开关静默翻开。
     # 上限一年：再大的值与"永久"在使用上没区别，却会让脏值把到期时间推到不可读的年份
-    allowlist_ttl_hours: int = Field(0, ge=0, le=8760,
-                                     description="永久授权保留时长（小时）；0 = 永不过期")
+    allowlist_ttl_hours: Optional[int] = Field(
+        None, ge=0, le=8760, description="永久授权保留时长（小时）；0 = 永不过期")
+    auto_approve_enabled: Optional[bool] = Field(
+        None, description="自动审批设置侧开关；env kill switch 优先级更高")
+    # 0 = 永久等待（审批卡不过期）；上限一天，再长与永久没使用差别
+    approval_fallback_s: Optional[int] = Field(
+        None, ge=0, le=86400, description="审批兜底等待秒数；0 = 永久等待")
 
 
 @router.get("/settings/permission-policy")
 def get_permission_policy():
-    """获取审批授权策略。默认 allowlist_ttl_hours=0（永久，即引入 TTL 前的行为）。"""
+    """获取审批授权策略。默认 TTL=0（永久）、自动审批开、兜底 600s。"""
     return db.get_permission_policy()
 
 
 @router.put("/settings/permission-policy")
 def update_permission_policy(req: PermissionPolicyRequest):
-    """更新审批授权策略，并即时推给进程内 PermissionGate。
+    """更新审批授权策略，并即时推给进程内运行时（gate TTL / auto_approve 开关 /
+    core 兜底时长）。
 
-    只写库不够：gate 是进程级单例，TTL 在授权判定时读自身字段。不推这一步，
-    改完设置要重启后端才生效 —— 而用户刚把时长调小到 24h，恰恰是希望
-    立刻把不再想要的预授权收回来。
+    只写库不够：三者都是进程内状态，不推这一步，改完设置要重启后端才生效 ——
+    而用户刚把时长调小到 24h，恰恰是希望立刻把不再想要的预授权收回来。
     """
-    db.set_app_setting("permission.allowlist_ttl_hours", str(req.allowlist_ttl_hours))
-    from agent.harness.reins.gate import set_allowlist_ttl_hours
-    set_allowlist_ttl_hours(req.allowlist_ttl_hours)
+    if req.allowlist_ttl_hours is not None:
+        db.set_app_setting("permission.allowlist_ttl_hours", str(req.allowlist_ttl_hours))
+        from agent.harness.reins.gate import set_allowlist_ttl_hours
+        set_allowlist_ttl_hours(req.allowlist_ttl_hours)
+    if req.auto_approve_enabled is not None:
+        db.set_app_setting(
+            "permission.auto_approve_enabled",
+            "true" if req.auto_approve_enabled else "false")
+        from agent.harness.reins.auto_approve import set_db_enabled
+        set_db_enabled(req.auto_approve_enabled)
+    if req.approval_fallback_s is not None:
+        db.set_app_setting("permission.approval_fallback_s", str(req.approval_fallback_s))
+        from agent.harness.reins.core import set_approval_fallback_seconds
+        set_approval_fallback_seconds(req.approval_fallback_s)
     return db.get_permission_policy()
 
 
