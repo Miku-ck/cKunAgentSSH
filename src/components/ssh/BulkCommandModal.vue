@@ -43,7 +43,7 @@
       <!-- 执行中 -->
       <div v-if="running" class="bulk-running">
         <div class="bulk-progress-bar"><div class="fill" :style="{ width: progressPct + '%' }"></div></div>
-        <div class="bulk-progress-text">正在 {{ runningCount }} 台节点上执行…（{{ doneCount }}/{{ results.length }} 完成）</div>
+        <div class="bulk-progress-text">正在 {{ checkedCount }} 台节点上执行…（{{ doneCount }}/{{ checkedCount }} 完成）</div>
       </div>
 
       <!-- 结果对比 -->
@@ -151,15 +151,13 @@ function hostOf(s: TerminalSession): string {
 const checkedCount = computed(() => checked.value.length)
 const canRun = computed(() => command.value.trim().length > 0 && checked.value.length > 0 && !running.value && !checking.value)
 
-const runningCount = computed(() => checked.value.length)
 const doneCount = computed(() => results.value.length)
 
 // 进度 = 已完成节点数 / 总节点数
 const progressPct = computed(() => {
-  const total = runningCount.value
+  const total = checkedCount.value
   if (!total) return 0
-  const done = results.value.length
-  return Math.min(100, Math.round((done / total) * 100))
+  return Math.min(100, Math.round((doneCount.value / total) * 100))
 })
 
 const okCount = computed(() => results.value.filter(r => !r.error && r.exitCode === 0).length)

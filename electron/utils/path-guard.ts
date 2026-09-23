@@ -51,9 +51,9 @@ export async function assertSafePath(targetPath: string): Promise<void> {
   if (isInside(resolved, homeResolved)) {
     const relative = resolved.slice(homeResolved.length).replace(/^[\\/]+/, '')
     let topLevel = relative.split(/[\\/]/)[0]
-    // E19 修复：Windows 路径大小写不敏感 — 先 toLowerCase 再比对，
+    // E19 修复：Windows 路径大小写不敏感 — 先归一化再比对，
     // 否则 `.SSH` / `.Ssh` 可绕过主目录顶层敏感目录拦截
-    if (process.platform === 'win32') topLevel = topLevel.toLowerCase()
+    topLevel = normPath(topLevel)
     if (topLevel && HOME_TOPLEVEL_SENSITIVE.has(topLevel)) {
       throw new Error(`拒绝访问敏感路径: ${targetPath}`)
     }
@@ -62,8 +62,7 @@ export async function assertSafePath(targetPath: string): Promise<void> {
   // 审查修复：Windows 路径大小写不敏感 — 段比对须小写化，
   // 否则 `C:\Users\x\.SSH` / `.AWS` 可绕过任意位置拦截（顶层检查已有 E19，此处补齐）
   for (const seg of resolved.split(/[\\/]/)) {
-    const segCheck = process.platform === 'win32' ? seg.toLowerCase() : seg
-    if (ANYWHERE_SENSITIVE.has(segCheck)) {
+    if (ANYWHERE_SENSITIVE.has(normPath(seg))) {
       throw new Error(`拒绝访问敏感路径: ${targetPath}`)
     }
   }

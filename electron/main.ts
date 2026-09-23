@@ -114,6 +114,12 @@ const IMAGE_MIME_MAP: Record<string, string> = {
   '.bmp': 'image/bmp',
 }
 
+/** 背景图文件名前缀 + 存放目录（保存/清理/加载/删除四处共用，避免字面量散落） */
+const BG_FILE_PREFIX = 'background.'
+function backgroundDir(): string {
+  return join(app.getPath('userData'), 'backgrounds')
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -548,13 +554,13 @@ function setupFSIPC(): void {
       let finalExt = origExt
       let mime = IMAGE_MIME_MAP[origExt] || 'image/png'
       const stripDot = (e: string): string => (e.startsWith('.') ? e.slice(1) : e)
-      const bgDir = join(app.getPath('userData'), 'backgrounds')
+      const bgDir = backgroundDir()
       await mkdir(bgDir, { recursive: true })
       // 清理旧背景文件（不同扩展名残留），避免磁盘泄漏
       try {
         const existing = await readdir(bgDir)
         for (const f of existing) {
-          if (f.startsWith('background.')) {
+          if (f.startsWith(BG_FILE_PREFIX)) {
             await rm(join(bgDir, f))
           }
         }
@@ -583,7 +589,7 @@ function setupFSIPC(): void {
           }
         }
       }
-      const fileName = `background.${stripDot(finalExt) || 'png'}`
+      const fileName = `${BG_FILE_PREFIX}${stripDot(finalExt) || 'png'}`
       const targetPath = join(bgDir, fileName)
       await writeFile(targetPath, finalBuf)
       return { fileName, mime, name: basename(filePath) }
@@ -594,9 +600,9 @@ function setupFSIPC(): void {
 
   // 校验背景图文件名：必须为基础名、以 background. 开头、在 backgrounds 目录内
   function resolveBackgroundPath(fileName: string): string {
-    const bgDir = join(app.getPath('userData'), 'backgrounds')
+    const bgDir = backgroundDir()
     const base = basename(fileName)
-    if (!base.startsWith('background.')) {
+    if (!base.startsWith(BG_FILE_PREFIX)) {
       throw new Error('无效的背景图文件名')
     }
     const filePath = join(bgDir, base)
