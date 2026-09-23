@@ -120,6 +120,11 @@ function backgroundDir(): string {
   return join(app.getPath('userData'), 'backgrounds')
 }
 
+/** 保留原始 err.message，仅在缺失时兜底中文文案后重新抛出（fs IPC 处理器共用） */
+function fsErrorWith(err: unknown, fallback: string): Error {
+  return new Error((err as Error)?.message || fallback)
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -513,7 +518,7 @@ function setupFSIPC(): void {
         readOnly: size > 5 * 1024 * 1024,
       }
     } catch (err: any) {
-      throw new Error(err.message || '读取文件失败，请检查文件是否存在或是否有访问权限')
+      throw fsErrorWith(err, '读取文件失败，请检查文件是否存在或是否有访问权限')
     }
   })
 
@@ -594,7 +599,7 @@ function setupFSIPC(): void {
       await writeFile(targetPath, finalBuf)
       return { fileName, mime, name: basename(filePath) }
     } catch (err: any) {
-      throw new Error(err.message || '读取图片失败')
+      throw fsErrorWith(err, '读取图片失败')
     }
   })
 
@@ -624,7 +629,7 @@ function setupFSIPC(): void {
       const buf = await readFile(filePath)
       return `data:${mime};base64,${buf.toString('base64')}`
     } catch (err: any) {
-      throw new Error(err.message || '加载背景图失败')
+      throw fsErrorWith(err, '加载背景图失败')
     }
   })
 
@@ -638,7 +643,7 @@ function setupFSIPC(): void {
       }
       return true
     } catch (err: any) {
-      throw new Error(err.message || '删除背景图失败')
+      throw fsErrorWith(err, '删除背景图失败')
     }
   })
 
