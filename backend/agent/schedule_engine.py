@@ -216,7 +216,7 @@ class ScheduleEngine:
     async def _run_task(self, sched: dict) -> None:
         sid = sched["id"]
         run_id = uuid.uuid4().hex[:12]
-        started = db._now() if hasattr(db, "_now") else datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        started = db._now()
         run_in_db = False
         try:
             # 审查修复：DB 初始化移入 try — 原实现在 try 外执行，DB 异常时
@@ -363,7 +363,11 @@ class ScheduleEngine:
         out_limit = int(model_cfg.get("max_tokens") or ctx_limit)
         safe_out = max(1, min(out_limit, ctx_limit // 2))
         rt = model_cfg.get("reasoning_tokens")
-        safe_reasoning = min(int(rt or 0), safe_out) if rt else None
+        # 审查修复：0 是合法配置值（settings 文档："0 表示使用 max_output_tokens"），
+        # 原 `if rt else None` 把 0 塌成 None，而 contracts 里 None=不限制思考预算 →
+        # 配 0 反而拿到无上限，与意图相反（interactive 路径 routes/agent.py:834 保留 0）。
+        # 与相邻 temperature 的 _num_param(is not None) 同口径：仅未设置才回落 None。
+        safe_reasoning = min(int(rt), safe_out) if rt is not None else None
 
         cfg = HarnessAgentConfig(
             max_iterations=_SCHEDULE_MAX_ITERATIONS,

@@ -77,7 +77,12 @@ class ReadImageTool(BaseTool):
 
         if is_remote(context):
             # 契约模板：远端白名单 read_image 动词（base64 -i，容忍换行分隔）
-            ok, output = await run_headless(context, image_read_cmd(path), 20)
+            # 审查修复：base64 是字节协议，必须 keep_full=True——否则 exec_remote 的
+            # truncate_output 会把 ≳2.9KB 的图片切成"头+省略标记+尾"，本函数随后 re.sub
+            # 去空白只删换行删不掉中文标记，得到内嵌乱码的非法 data URI 却以 success 返回；
+            # 且下方按已截断串估长的 10MB 上限永不触发。与 remote_read_b64(ops_common:246)
+            # 同源，此前漏改。
+            ok, output = await run_headless(context, image_read_cmd(path), 20, keep_full=True)
             if not ok:
                 return ToolResult(False, output, "远程读取图片失败")
             b64 = re.sub(r"\s+", "", strip_remote_tail(output))

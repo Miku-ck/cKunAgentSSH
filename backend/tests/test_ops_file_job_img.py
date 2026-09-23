@@ -393,6 +393,34 @@ async def test_read_image_too_large(tmp_workspace):
     assert "过大" in res.error
 
 
+@pytest.mark.asyncio
+async def test_read_image_remote_requests_keep_full(monkeypatch):
+    """回归锁（Critical）：远端 read_image 走 base64 字节协议，必须以 keep_full=True
+    调用 run_headless。否则 exec_remote.truncate_output 会把 ≳2.9KB 的图片切成
+    "头+[输出已截断…]+尾"，本工具随后 re.sub 只删空白删不掉中文标记，得到内嵌乱码的
+    非法 data URI 却以 success 返回；且按截断串估长的 10MB 上限永不触发。与
+    remote_read_b64(ops_common:246) 同源，此前漏改。"""
+    import base64 as _b64
+
+    real_b64 = _b64.b64encode(b"\x89PNG\r\n\x1a\n" + b"Z" * 6000).decode("ascii")
+    wrapped = "\n".join(real_b64[i:i + 76] for i in range(0, len(real_b64), 76)) + "\n[exit_code=0]\n"
+    captured = {}
+
+    async def fake_run(ctx, command, timeout, keep_full=False):
+        captured["keep_full"] = keep_full
+        assert command.startswith("base64 -i "), f"read_image 远端模板漂移: {command!r}"
+        return True, wrapped
+
+    monkeypatch.setattr("agent.tools.builtin.ops_image.run_headless", fake_run)
+    res = await ReadImageTool().execute(_ctx(remote=True), path="/srv/logo.png")
+    assert captured.get("keep_full") is True, "base64 字节协议必须 keep_full=True"
+    assert res.success is True
+    assert res.output.startswith("data:image/png;base64,")
+    body = res.output.split("base64,", 1)[1]
+    assert body == real_b64  # 无损，哨兵/换行已剥离，未内嵌截断标记
+    assert "省略" not in body and "截断" not in body and "[exit_code" not in body
+
+
 # ── 后台任务：run → list → output → kill ──────
 @pytest.mark.skipif(not REQUIRES_SPAWN, reason="当前沙箱禁止派生子进程")
 @pytest.mark.asyncio
