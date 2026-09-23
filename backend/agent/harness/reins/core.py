@@ -19,6 +19,12 @@ logger = logging.getLogger(__name__)
 # 即可，由 extract_bound_command 统一取出，口径区分见该函数 docstring。
 _COMMAND_EXEC_TOOLS = {"shell_exec", "job_run"}
 
+# run 请求经 ctx.metadata 传入的权限模式键。harness 写入、plan_mode/auto_approve
+# 读取，三处共用同一字面量——单一来源以防写侧与读侧漂移导致权限模式静默失效
+# （harness 用 plan_mode 的引用写入，auto_approve 用自己的引用读取，历史上是两份
+# 各自定义的 "permission_mode"，值一旦不一致 auto_approve 将永远匹配不上）。
+MODE_KEY = "permission_mode"
+
 # 审批窗口兜底时长（秒）。重构后审批不再设 120s 短超时 —— 未授权签名保持等待至
 # grant/deny/会话结束。这里仅保留一个生产可配置的**兜底**（默认 600s），到期时
 # 走 permission_expired（前端把卡片标记 timeout 并保留），但**不移出等待集**、

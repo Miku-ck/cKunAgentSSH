@@ -77,12 +77,11 @@ from typing import Any, Optional
 
 from ..contracts import ReinDecision, ReinPoint, RunContext, TraceEvent
 from ..safety import classify_command
-from .core import _COMMAND_EXEC_TOOLS, command_from_args, extract_bound_command
+from .core import MODE_KEY, _COMMAND_EXEC_TOOLS, command_from_args, extract_bound_command
 
 logger = logging.getLogger(__name__)
 
-# run 请求可通过 ctx.metadata 传入的键；值 "plan" 时启用本模块
-MODE_KEY = "permission_mode"
+# MODE_KEY（ctx.metadata 权限模式键）单一来源见 core；值等于 MODE_PLAN 时启用本模块
 MODE_PLAN = "plan"
 
 # ── 工具级白名单：本身不改变目标机状态 ──────────────────────────────────────

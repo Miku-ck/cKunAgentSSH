@@ -28,11 +28,10 @@ from typing import Optional
 from agent.audit import append_record_async
 
 from ..contracts import ReinDecision, RunContext, TraceEvent
-from .core import _audit_target_id, _audit_target_type
+from .core import MODE_KEY, _audit_target_id, _audit_target_type
 
 logger = logging.getLogger(__name__)
 
-MODE_KEY = "permission_mode"
 MODE_AUTO = "auto"
 
 # DB/UI 侧开关：设置面板 PUT /settings/permission-policy 经 set_db_enabled 推送。
