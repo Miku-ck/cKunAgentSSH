@@ -321,6 +321,6 @@ class LogReadTool(BaseTool):
             return ToolResult(True, "未匹配到日志行", priority="low")
 
         if not ok:
-            return ToolResult(False, raw, f"日志读取失败，exit_code 非 0")
+            return ToolResult(False, raw, "日志读取失败，exit_code 非 0")
 
         return ToolResult(True, raw, priority="low")

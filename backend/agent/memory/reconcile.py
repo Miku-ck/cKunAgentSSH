@@ -313,7 +313,7 @@ def _threshold_decisions(cands: list, similars: list) -> "list[dict]":
                 break
         if dup is not None and not cand.get("id"):
             decisions.append({"index": i, "op": "NOOP", "target_id": dup.memory_id,
-                              "reason": f"阈值去重（无对账 LLM）"})
+                              "reason": "阈值去重（无对账 LLM）"})
         else:
             # 迁移行无 LLM 可裁决时按 ADD 语义"转正"（沿用原 id，不重复入库）。
             decisions.append({"index": i, "op": "ADD", "reason": "无对账 LLM，直接保留"})

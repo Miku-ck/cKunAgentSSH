@@ -21,7 +21,6 @@ from .clarification import (
     _CLARIFIABLE_TOOLS,
     _CLARIFICATION_CONTEXT,
     _CLARIFICATION_DONE,
-    _CLARIFICATION_MAX_ENTRIES,
     ClarificationInterceptor,
     _build_clarification_needed,
     _enforce_clarification_cap,

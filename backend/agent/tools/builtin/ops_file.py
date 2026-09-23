@@ -243,7 +243,7 @@ class FileEditTool(BaseTool):
     def _apply_replace(content, old, new):
         count = content.count(old)
         if count == 0:
-            return ToolResult(False, "", f"old_string 在文件中出现 0 次，无法替换")
+            return ToolResult(False, "", "old_string 在文件中出现 0 次，无法替换")
         if count > 1:
             return ToolResult(
                 False, "", f"old_string 在文件中出现 {count} 次，要求恰好 1 次，拒绝替换"
