@@ -977,15 +977,10 @@ const showSkillMenu = ref(false)
 const skillQuery = ref('')
 const skillActiveIdx = ref(0)
 
-/** 可用的技能列表 */
-const modeSkills = computed(() => {
-  return skillStore.enabledSkills
-})
-
 /** 根据查询串过滤技能 */
 const filteredSkills = computed(() => {
   const q = skillQuery.value.toLowerCase().trim()
-  const list = modeSkills.value
+  const list = skillStore.enabledSkills
   if (!q) return list.slice(0, 8)
   return list
     .filter(s =>
