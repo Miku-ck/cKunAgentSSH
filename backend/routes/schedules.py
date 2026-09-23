@@ -79,10 +79,12 @@ async def list_schedules():
 async def create_schedule(req: ScheduleIn):
     if req.schedule_type not in _SCHEDULE_TYPES:
         raise HTTPException(status_code=400, detail=f"不支持的周期类型: {req.schedule_type}")
-    _validate_fields(req.model_dump())
-    next_at = compute_next_run(req.model_dump())
+    # model_dump 对未变的 req 是确定性的，序列化一次复用即可
+    data = req.model_dump()
+    _validate_fields(data)
+    next_at = compute_next_run(data)
     created = await asyncio.to_thread(
-        db.create_schedule, {**req.model_dump(), "next_run_at": next_at}
+        db.create_schedule, {**data, "next_run_at": next_at}
     )
     get_schedule_engine().ensure_started()
     return created
