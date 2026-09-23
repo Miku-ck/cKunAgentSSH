@@ -248,6 +248,13 @@ export class BridgeWsClient {
 
         this.stopPing()
         this.ws = null
+        // 摘除事件句柄再关闭：本分支已自行 scheduleReconnect，若不 null onclose，
+        // socket 迟到的 close 事件会再调度一次重连（退避被双重翻倍 4×）——与
+        // armHelloAckTimeout / closeCurrent 的契约一致。
+        ws.onopen = null
+        ws.onmessage = null
+        ws.onclose = null
+        ws.onerror = null
         try {
           ws.close(1000)
         } catch {

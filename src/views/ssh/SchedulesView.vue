@@ -398,7 +398,9 @@ function notifyTransitions(prev: ScheduleRecord[], next: ScheduleRecord[]) {
     if (!before || !s.enabled) continue
     const body = NOTICE_BODIES[s.last_status]
     if (!body || s.last_status === before.last_status) continue
-    void api.notifyDesktop(`定时任务 · ${s.name}`, body)
+    // 桌面通知是 best-effort：ipcRenderer.invoke 会因主进程 assertTrustedSender/
+    // normalizeIpcError 抛错而 reject，不吞则成未处理拒绝（同 ptyResize/ptyDestroy 类）。
+    void api.notifyDesktop(`定时任务 · ${s.name}`, body).catch(() => {})
   }
 }
 
