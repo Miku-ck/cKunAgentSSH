@@ -36,10 +36,9 @@
           </span>
         </div>
 
-        <!-- 权威工具调用清单（含单步耗时） -->
-        <ToolOperationList :tool-calls="dbCalls" :default-expanded="true" hide-header />
+        <!-- 工具调用清单不在前端显示 -->
 
-        <p v-if="!dbCalls.length" class="ft-hint muted">该 run 无工具调用记录</p>
+        <p class="ft-hint muted">工具调用明细已隐藏</p>
         <p class="ft-time muted">run {{ runId.slice(0, 8) }}… · 始于 {{ trace.run.started_at || '-' }}</p>
       </template>
     </div>
@@ -56,8 +55,6 @@
  */
 import { computed, ref, watch } from 'vue'
 import { agentAdminApi, toFriendlyMessage, type AgentRunTrace } from '@/api/client'
-import ToolOperationList from './ToolOperationList.vue'
-
 const props = defineProps<{ runId: string }>()
 const emit = defineEmits<{ 'expand-change': [boolean] }>()
 
@@ -95,28 +92,7 @@ const stateChain = computed(() => {
   return out.slice(0, 24)
 })
 
-/** DB 行 → ToolOperationList 入口结构（arguments 兼容 JSON 字符串/对象） */
-const dbCalls = computed(() =>
-  (trace.value?.tool_calls || []).map((tc) => {
-    let args: Record<string, unknown> = {}
-    if (typeof tc.arguments === 'string') {
-      try { args = JSON.parse(tc.arguments) } catch { args = { command: tc.arguments } }
-    } else if (tc.arguments && typeof tc.arguments === 'object') {
-      args = tc.arguments
-    }
-    return {
-      id: tc.id || tc.created_at,
-      tool: tc.tool_name,
-      args,
-      result: tc.result ?? undefined,
-      // null（后端 NULL）= 结果从未回写。必须归一到 undefined，否则
-      // ToolOperationList 的「进行中」判据（result/success 都 === undefined）不成立，
-      // 半截调用会带着 success=null 显示成普通条目。
-      success: tc.success ?? undefined,
-      duration_ms: tc.duration_ms,
-    }
-  }),
-)
+// 工具调用明细不在前端展示，dbCalls 已移除
 </script>
 
 <style scoped>
