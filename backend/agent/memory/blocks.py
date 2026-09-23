@@ -28,10 +28,6 @@ def host_key(host_id: str) -> str:
     return f"{HOST_PREFIX}{host_id}"
 
 
-async def get(key: str):
-    return await asyncio.to_thread(mstore.get_block, key)
-
-
 async def put(key: str, value: str, updated_by: str) -> int:
     if not allowed_key(key):
         raise ValueError(f"非法块键: {key}")
