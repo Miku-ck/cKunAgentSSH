@@ -2373,7 +2373,9 @@ def create_schedule(data: dict) -> dict:
                 (data.get("name") or "").strip(),
                 data.get("schedule_type") or "interval",
                 int(data.get("interval_minutes") or 60),
-                int(data.get("time_hour") or 9),
+                # None 判定而非 `or`：0（午夜）是合法 time_hour，`0 or 9` 会把每日/每周/
+                # 每月任务静默挪到 09:00（与 compute_next_run 同源修复，勿回退成 or）。
+                int(data["time_hour"]) if data.get("time_hour") is not None else 9,
                 int(data.get("time_minute") or 0),
                 int(data.get("weekday") or 0),
                 int(data.get("day_of_month") or 1),

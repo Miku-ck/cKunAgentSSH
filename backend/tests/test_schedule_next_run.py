@@ -111,6 +111,23 @@ def _fresh_db(path) -> None:
     db.init_db(str(path))
 
 
+def test_create_schedule_persists_midnight_hour(tmp_path):
+    """回归：create_schedule 曾用 `int(data.get("time_hour") or 9)` 落库，
+    把午夜(0)静默改成 9——而路由允许 0、compute_next_run 也已按 is-not-None 修，
+    唯独落库这处漏改。首帧 next_run 从入参 dict 算(对)，之后每次 trigger 重算
+    读库行(9) → 任务永久挪到 09:00。钉死 time_hour=0 能原样落库。"""
+    import database as db
+
+    _fresh_db(tmp_path / "t.db")
+    db.create_schedule({
+        "id": "mid", "name": "mid", "schedule_type": "daily",
+        "time_hour": 0, "time_minute": 30,
+    })
+    row = db.get_schedule("mid")
+    assert row["time_hour"] == 0, row
+    assert row["time_minute"] == 30, row
+
+
 def test_prune_schedule_runs_keeps_latest_per_schedule(tmp_path):
     import database as db
 

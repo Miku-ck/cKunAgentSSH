@@ -265,11 +265,15 @@ class FileEditTool(BaseTool):
             # file_write 整体覆写（它手里只有 file_read 截断过的片段 → 覆盖即丢内容）
             reason = raw.decode("utf-8", errors="replace").strip()
             return ToolResult(False, "", f"远程读取原文件失败：{reason or '文件不存在或不可读'}")
-        content = raw.decode("utf-8", errors="replace")
+        # surrogateescape 而非 replace：errors="replace" 会把文件里每个非 UTF-8 字节
+        # （GBK/Latin-1 运维配置很常见）解码成 U+FFFD，回写即整文件不可逆损坏。
+        # surrogateescape 用码位保留原始字节，_apply_replace 只动 old_string 命中段，
+        # 回写时字节完全复原；对合法 UTF-8 与逐字节等价，无副作用。
+        content = raw.decode("utf-8", errors="surrogateescape")
         new_content = self._apply_replace(content, old_string, new_string)
         if isinstance(new_content, ToolResult):
             return new_content
-        data = new_content.encode("utf-8")
+        data = new_content.encode("utf-8", errors="surrogateescape")
         ok2, out2 = await run_headless(
             context, base64_write_cmd(path, data), self.meta.timeout
         )
