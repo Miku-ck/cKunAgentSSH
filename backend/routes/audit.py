@@ -36,25 +36,19 @@ async def audit_records(
 
     审查修复：query/count 是同步 sqlite，移入线程池避免阻塞事件循环
     """
+    # query 与 count 共用同一过滤集 —— 二者曾各自手抄参数，count 一度漏掉
+    # action/run_id 导致 total 与 items 过滤不一致；收敛到单一 filters 杜绝漂移。
+    filters = dict(
+        environment=environment,
+        target_id=target_id,
+        action=action,
+        conclusion=conclusion,
+        run_id=run_id,
+    )
     items, total = await asyncio.to_thread(
         lambda: (
-            query(
-                environment=environment,
-                target_id=target_id,
-                action=action,
-                conclusion=conclusion,
-                run_id=run_id,
-                limit=limit,
-                offset=offset,
-            ),
-            # 审查修复：count 过滤集与 query 对齐（原实现缺 action/run_id）
-            count(
-                environment=environment,
-                target_id=target_id,
-                action=action,
-                conclusion=conclusion,
-                run_id=run_id,
-            ),
+            query(**filters, limit=limit, offset=offset),
+            count(**filters),
         )
     )
     return {"items": items, "total": total}
