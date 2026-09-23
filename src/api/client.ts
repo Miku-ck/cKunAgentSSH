@@ -374,9 +374,6 @@ export const workflowApi = {
     return request<WorkflowSnapshot>(`/workflow?${q.toString()}`)
   },
 
-  /** 列出所有有工件的会话 ID（导航条按会话展示用） */
-  phases: () => request<{ conversation_ids: string[] }>(`/workflow/phases`),
-
   /**
    * 删除某个工件（幂等：本就不存在也返回成功）。
    * 返回删除后的 phase —— 阶段取已存在的最高阶，删掉 goal 会回落到 plan，
@@ -509,12 +506,13 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  // E3：审批授权保留时长（写入后端即时对 PermissionGate 生效，无需重启）
+  // E3：审批授权策略（写入后端即时对运行时生效，无需重启）。
+  // payload 字段全可选 =「不传 = 不改」，与后端 PermissionPolicyRequest 同契约。
   getPermissionPolicy: () =>
-    request<{ allowlist_ttl_hours: number }>('/settings/permission-policy'),
+    request<PermissionPolicy>('/settings/permission-policy'),
 
-  updatePermissionPolicy: (payload: { allowlist_ttl_hours: number }) =>
-    request<{ allowlist_ttl_hours: number }>('/settings/permission-policy', {
+  updatePermissionPolicy: (payload: Partial<PermissionPolicy>) =>
+    request<PermissionPolicy>('/settings/permission-policy', {
       method: 'PUT',
       body: JSON.stringify(payload),
     }),
@@ -1198,10 +1196,14 @@ export interface PermissionListResponse {
   ttl_hours?: number
 }
 
-/** GET/PUT /settings/permission-policy — 审批授权策略（E3） */
+/** GET/PUT /settings/permission-policy — 审批授权策略（E3 + 审批策略新字段） */
 export interface PermissionPolicy {
   /** 永久授权保留时长（小时）；0 = 永不过期（默认，即引入 TTL 前的行为） */
   allowlist_ttl_hours: number
+  /** 自动审批设置侧开关；env CKUN_AGENT_DISABLE_AUTO_APPROVE=1 优先级更高 */
+  auto_approve_enabled: boolean
+  /** 审批兜底等待秒数；0 = 永久等待（卡片不过期），默认 600 */
+  approval_fallback_s: number
 }
 
 /** POST /agent/permission/release-run/{run_id} — 清理某次 run 的全部 once 授权 */

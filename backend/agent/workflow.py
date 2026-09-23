@@ -99,22 +99,6 @@ def get_phase(conversation_id: str, base_dir: str | Path | None = None) -> str:
     return ""
 
 
-def get_phases(base_dir: str | Path | None = None) -> list[str]:
-    """列出所有拥有工件目录的会话 ID（供前端导航条按会话展示）。"""
-    base = Path(base_dir) if base_dir is not None else _DEFAULT_BASE_DIR
-    if not base.is_dir():
-        return []
-    out: list[str] = []
-    try:
-        for child in sorted(base.iterdir()):
-            if not child.is_dir():
-                continue
-            out.append(child.name)
-    except OSError:
-        return []
-    return out
-
-
 # ── 写工件 ──────────────────────────────────────────────────────────────────
 
 

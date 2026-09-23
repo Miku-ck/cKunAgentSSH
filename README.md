@@ -35,7 +35,7 @@ SSH 智能运维终端 — 集成 SSH 连接管理、远程终端、SFTP 文件�
 
 | 层 | 技术 | 用途 |
 |---|---|---|
-| 桌面框架 | Electron 33+ | 跨平台应用壳（Win / macOS / Linux） |
+| 桌面框架 | Electron 35 | 跨平台应用壳（Win / macOS / Linux） |
 | 前端 UI | Vue 3 + Vite 6 | 渲染进程，SPA |
 | 状态管理 | Pinia | 全局状态、会话管理 |
 | 代码编辑器 | Monaco Editor | 远程文件在线编辑 |
@@ -80,8 +80,8 @@ SSH 智能运维终端 — 集成 SSH 连接管理、远程终端、SFTP 文件�
         │  • Chat 流式对话 (SSE)          │
         │  • Agent Harness 框架          │
         │    - ReAct 决策循环            │
-        │    - 11 拦截器 (Reins)         │
-        │    - 22 工具 (Saddle)         │
+        │    - 13 拦截器 (Reins)         │
+        │    - 29 工具 (Saddle)         │
         │    - 动态预算 + 成本熔断       │
         │  • 会话持久化 (SQLite)          │
         │  • 模型配置 / 路由             │

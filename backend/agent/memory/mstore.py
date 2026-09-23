@@ -504,18 +504,6 @@ def retry_job(job_id: str) -> bool:
         conn.close()
 
 
-def pending_backfill_ids(limit: int = 200) -> list:
-    conn = _conn()
-    try:
-        rows = conn.execute(
-            "SELECT id FROM memories WHERE status='pending_reconcile' "
-            "ORDER BY created_at LIMIT ?", (limit,),
-        ).fetchall()
-        return [r["id"] for r in rows]
-    finally:
-        conn.close()
-
-
 # ── audit ──
 
 

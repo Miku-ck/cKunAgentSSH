@@ -27,10 +27,13 @@ const props = withDefaults(defineProps<{
   hideHeader?: boolean
   /** 要排除的工具类型列表（这些工具的调用不会显示，由其它面板负责展示） */
   excludeTools?: string[]
+  /** 紧凑模式：只显示一行摘要徽章，不展开命令列表（用于消息流内联） */
+  compact?: boolean
 }>(), {
   defaultExpanded: false,
   hideHeader: false,
   excludeTools: () => [],
+  compact: false,
 })
 
 const expanded = ref(props.defaultExpanded || props.hideHeader)
@@ -153,6 +156,13 @@ const actionStats = computed(() => {
 
 const totalRunning = computed(() => visibleToolCalls.value.filter(c => c.result === undefined && c.success === undefined).length)
 const totalFailed = computed(() => visibleToolCalls.value.filter(c => c.success === false).length)
+const compactStateClass = computed(() => {
+  if (totalRunning.value > 0) return 'running'
+  if (totalFailed.value > 0) return '' // default danger styling
+  if (hasVisible.value) return 'success'
+  return ''
+})
+
 const hasVisible = computed(() => visibleToolCalls.value.length > 0)
 const totalCount = computed(() => visibleToolCalls.value.length)
 
@@ -174,7 +184,18 @@ const statsText = computed((): string =>
 </script>
 
 <template>
-  <div v-if="hideHeader || hasVisible" class="tool-log" :class="{ embedded: hideHeader }">
+  <!-- 紧凑模式：一行摘要徽章，点击不展开 -->
+  <div v-if="compact" class="tool-log-compact" :class="compactStateClass" @click="toggle">
+    <span class="tl-compact-icon">■</span>
+    <span class="tl-compact-text">{{ headerTitle }}</span>
+    <span v-if="statsText && !totalRunning" class="tl-compact-stats">{{ statsText }}</span>
+    <svg class="tl-compact-arrow" :class="{ rotated: expanded }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11">
+      <polyline points="9 18 15 12 9 6" />
+    </svg>
+  </div>
+
+  <!-- 完整模式 -->
+  <div v-else-if="hideHeader || hasVisible" class="tool-log" :class="{ embedded: hideHeader }">
     <div v-if="!hideHeader" class="log-header" @click="toggle">
       <span class="log-title">{{ headerTitle }}</span>
       <span class="log-right">
@@ -210,6 +231,64 @@ const statsText = computed((): string =>
 </template>
 
 <style scoped>
+/* ── 紧凑模式 ── */
+.tool-log-compact {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+  border: 1px solid var(--danger-border, rgba(239,68,68,0.25));
+  background: var(--danger-soft, rgba(239,68,68,0.10));
+  color: var(--danger, #ef4444);
+  transition: background 0.15s ease;
+}
+.tool-log-compact:hover {
+  background: rgba(239,68,68,0.16);
+}
+/* 成功 / 运行中态的紧凑徽章 */
+.tool-log-compact.success {
+  border-color: var(--success-border, rgba(34,197,94,0.25));
+  background: var(--success-soft, rgba(34,197,94,0.10));
+  color: var(--success, #22c55e);
+}
+.tool-log-compact.success:hover {
+  background: rgba(34,197,94,0.16);
+}
+.tool-log-compact.running {
+  border-color: rgba(59,130,246,0.25);
+  background: rgba(59,130,246,0.10);
+  color: var(--accent, #3b82f6);
+}
+
+.tl-compact-icon {
+  font-size: 9px;
+  flex-shrink: 0;
+}
+.tl-compact-text {
+  flex-shrink: 0;
+}
+.tl-compact-stats {
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+.tl-compact-arrow {
+  color: inherit;
+  opacity: 0.6;
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+  margin-left: 2px;
+}
+.tl-compact-arrow.rotated {
+  transform: rotate(90deg);
+}
+
+/* ── 完整模式 ── */
 .tool-log {
   font-family: var(--font-sans);
 }

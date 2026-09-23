@@ -663,8 +663,6 @@ const plusActiveIdx = ref(0)
  * 未表态时后端 workflow_mode 省略 → 不注入任何姿态段，与"用户没选"一致。
  */
 const activeMode = ref<PostureKey | null>(null)
-/** 姿态类模式标签（按钮/菜单共用，取自 CAP_LABELS） */
-const MODE_LABELS = CAP_LABELS
 
 /** aria-activedescendant 目标 id（与 / 技能菜单同一无障碍模式） */
 const plusActiveOptionId = computed(() => {

@@ -54,16 +54,6 @@ async def get_workflow(
     }
 
 
-@router.get("/workflow/phases")
-async def get_workflow_phases():
-    """列出所有有工件的会话 ID（供导航条按会话展示）。"""
-    try:
-        return {"conversation_ids": await asyncio.to_thread(workflow.get_phases)}
-    except Exception as e:
-        logger.warning("[workflow] 列举工作流会话失败: %s", e)
-        return {"conversation_ids": []}
-
-
 @router.delete("/workflow/artifact", status_code=200)
 async def delete_workflow_artifact(
     conversation_id: str = Query(default="", description="会话后端 ID"),

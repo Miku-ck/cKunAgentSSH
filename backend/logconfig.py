@@ -8,7 +8,7 @@
 """
 import logging
 import sys
-from typing import Iterable, Optional
+from typing import Optional
 
 LEVELS: tuple[str, ...] = ("debug", "info", "warning", "error", "critical")
 DEFAULT_LEVEL = "warning"
@@ -58,7 +58,3 @@ def load_from_db() -> str:
         logging.getLogger(__name__).warning("日志级别读取失败，沿用 %s: %s", _current, e)
         return _current
     return apply_level(raw if raw is not None else DEFAULT_LEVEL, persist_note=False)
-
-
-def effective_levels() -> Iterable[str]:
-    return LEVELS

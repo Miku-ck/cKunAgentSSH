@@ -28,9 +28,3 @@ def tokenize(text: str) -> list[str]:
             seen.add(gram)
             out.append(gram)
     return out
-
-
-def match_query(query: str, max_tokens: int = 24) -> str:
-    """构造 FTS5 MATCH 串（token OR 联合，token 仅含字母数字/CJK，无需转义）。"""
-    toks = tokenize(query)[:max_tokens]
-    return " OR ".join(toks)

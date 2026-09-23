@@ -1,7 +1,7 @@
 # Agent 记忆系统整体重设计 — 设计规格
 
 日期：2026-09-22
-状态：待评审
+状态：已实施（§9/§10 口径已随第五轮清理对齐代码；第六轮清理删除了本 spec 遗留的零调用助手 `mstore.pending_backfill_ids` / `text.match_query`）
 范围：`backend/agent/memory*`、`backend/database.py`、`backend/routes/agent.py`、`backend/post_processor.py`、`backend/agent/harness/bridle.py`、`backend/agent/consciousness_tick.py`、`backend/agent/reflection.py`、前端记忆 UI / 设置面板。
 
 ---

@@ -301,7 +301,7 @@ DELETE /api/workflow/artifact?conversation_id=&kind=goal
   改为说明两枚 chip 同源（同一 `chipViews`）。
 - `routes/workflow.py` 模块 docstring 宣称"供前端**三段指示条**展示"——仓库里没有三段指示条，
   那是从未实现的描述；改为写明真实的两个展示位，并注明 `spec` 目前无展示位。
-- `workflow.get_phases()` docstring 说返回"阶段元数据"、实际返回会话 id 列表（§1.3）→ 与实现对齐（已随 D 修）。
+- `workflow.get_phases()` docstring 说返回"阶段元数据"、实际返回会话 id 列表（§1.3）→ 与实现对齐（已随 D 修）；第六轮清理进一步删除了无人消费的整条 `phases` 链（包装/路由/函数）。
 - × 的连带后果修正：泛化后两枚 chip 可以同场（plan.md 在盘上、本轮选了目标姿态），
   旧 `clearGoal` 无条件把姿态置 null，会让「计划」的 × 顺手关掉用户正在用的**目标**姿态
   → 改为只在"本 key 就是当前姿态"时清。

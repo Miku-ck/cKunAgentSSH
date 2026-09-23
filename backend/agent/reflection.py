@@ -533,24 +533,3 @@ class MetaReflection:
         except Exception as e:
             logger.warning("加载演化用反思失败: %s", e)
             return []
-
-    def build_prompt_injection(self, reflections: list[dict]) -> str:
-        """
-        将反思策略转为可注入到 system prompt 的文本
-        """
-        if not reflections:
-            return ""
-        lines = ["", "## 历史经验反思（供参考）"]
-        for r in reflections:
-            try:
-                import json
-                cfg = r.get("config", "{}")
-                cfg = json.loads(cfg) if isinstance(cfg, str) else cfg
-                suggestions = cfg.get("suggestions", [])
-                if suggestions:
-                    lines.append(f"- {r.get('content', '')}")
-                    for s in suggestions[:2]:
-                        lines.append(f"  · {s}")
-            except Exception:
-                lines.append(f"- {r.get('content', '')}")
-        return "\n".join(lines)

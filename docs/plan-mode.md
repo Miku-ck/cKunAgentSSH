@@ -73,7 +73,7 @@
 
 ### 2.3 顺带发现的一个真 bug
 
-`workflow.get_phases()` 的 docstring 说"列出所有有工件的会话**阶段元数据**（供前端导航条展示）"，实现里 `out.append(child.name)` 返回的却是 **`base_dir` 下的子目录名，即会话 id 列表**。名字、文档与语义三者不符；调用方若按"阶段"消费必然错。（未改 —— 该文件正在被另一条线写。）
+`workflow.get_phases()` 的 docstring 说"列出所有有工件的会话**阶段元数据**（供前端导航条展示）"，实现里 `out.append(child.name)` 返回的却是 **`base_dir` 下的子目录名，即会话 id 列表**。名字、文档与语义三者不符；调用方若按"阶段"消费必然错。（✅ 已收口：docstring 先随 goal-plan spec §5.6 对齐，随后第六轮清理把无人消费的整条 `phases` 链删除，见 §7.2。）
 
 ---
 
@@ -113,6 +113,8 @@
 选这个注入点是因为 `driver.py:199-202`：每轮 `messages = harness.bridle.assemble(ctx)` 之后才 `messages.extend(pre_decision.inject_messages)`。**`messages` 是局部变量、不写回 `ctx`**，所以每轮注入**不会累积上下文** —— 这正是"目标每轮注入"用的同一机制，直接复用即可。
 
 **③ 批准状态：sidecar 文件，不碰 `workflow.py` 的读写函数**
+
+> ❌ **本小节已被推翻**：goal-plan spec（`docs/superpowers/specs/2026-09-22-goal-plan-mechanics-design.md` §2.4）裁决不做 sidecar，批准状态唯一存储是 `PermissionGate`（+`raw_key`），见 §6.2 同款标注。以下正文保留为设计过程记录。
 
 在会话工件目录下加 `plan.meta.json`：
 
@@ -235,6 +237,8 @@ chip 的值现在确实进入 run 请求，链路三跳都在代码里：
 
 §3.2 给的 `plan.meta.json` sidecar 方案（`status: draft|approved|rejected` + `plan_hash` 绑版本，hash 变则批准作废）需要读写 `workflow.py` 的会话工件目录。**先对齐归属再写**，否则会出现两套「批准状态」—— 这正是本仓库反复出现的失败模式（同一份「布尔 app_setting 解析」曾在 `database.py` 与 `post_processor.py` 各写一遍且语义不同，第五轮清理才收敛成 `database.bool_app_setting`）。
 
+> ❌ **归属已裁决（goal-plan spec §2.4）**：批准状态唯一存储 = `PermissionGate`（`raw_key` 绑计划版本），sidecar 方案作废；批准门实现仍开放（README「尚未接线」口径不变）。
+
 ### 6.3 当时的现场记录（已不适用，留档）
 
 写作时（17:03–17:07）工作区**有另一条线在并发改**同一片区域：
@@ -279,11 +283,12 @@ $ grep -rn "CREATE TABLE.*goals" backend --include=*.py
 **当前状态：该迁移块已不在代码里**（`grep -n "goals" backend/database.py` 无命中），
 `tests/test_round8_fixes.py` 13 passed。本节保留为缺陷记录，不再是需要裁决的开放项。
 
-### 7.2 `workflow.get_phases()`：名字/文档与返回值不符
+### 7.2 `workflow.get_phases()`：名字/文档与返回值不符 —— 已随第六轮清理整链删除
 
-见 §2.3 —— docstring 曾写"阶段元数据"而实现返回会话 id 列表。HEAD 仍是那句错文档；
-函数本身没有调用方（`workflowApi.phases` 亦未接线），所以错文档目前不误导任何代码，
-只会误导读代码的人。归属线正在写这个文件，本轮不动它。
+见 §2.3 —— docstring 曾写"阶段元数据"而实现返回会话 id 列表。goal-plan spec §5.6 已把
+docstring 与实现对齐；而 `workflowApi.phases` 始终没有任何调用方，于是第六轮清理把
+整条孤儿链（`src/api/client.ts` 的 `phases` 包装 + `routes/workflow.py` 的
+`GET /workflow/phases` + `agent/workflow.py` 的 `get_phases()`）一并删除，缺陷就此收口。
 
 ## 8. 两处 git 记账错位（本轮真实发生，均未修）
 
