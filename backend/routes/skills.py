@@ -57,22 +57,24 @@ def update_skill_enabled(
         mode: 若指定模式，则更新该模式下的启用状态（skill_mode_config 表）。
               未指定 mode 时更新全局 enabled 状态。
     """
-    # per-mode 分支原先不校验技能是否存在（无外键），任意 skill_id 都会写进
-    # skill_mode_config 并返回 200 —— 要么留下脏配置，要么让前端以为开关生效了
-    if not db.get_skill(skill_id):
+    # 取一次技能行：既做存在性校验，也供下方判断全局 enabled —— 原实现在
+    # per-mode 分支里又 get_skill 一次，是对同一行的重复查询（中间
+    # upsert_skill_mode_config 只写 skill_mode_config 表，不改 skills.enabled，
+    # 复用首次读取安全）。per-mode 分支早期完全不校验存在性会写脏配置，故保留校验。
+    existing = db.get_skill(skill_id)
+    if not existing:
         raise HTTPException(status_code=404, detail="Skill not found")
+    enabled_val = 1 if req.enabled else 0
     if mode:
         # 按模式隔离：写入 skill_mode_config 表
-        result = db.upsert_skill_mode_config(skill_id, mode, 1 if req.enabled else 0)
+        result = db.upsert_skill_mode_config(skill_id, mode, enabled_val)
         # 同时确保全局 enabled=1（否则 per-mode 启用无意义）
-        if req.enabled:
-            existing = db.get_skill(skill_id)
-            if existing.get('enabled') != 1:
-                db.update_skill_enabled(skill_id, 1)
+        if req.enabled and existing.get('enabled') != 1:
+            db.update_skill_enabled(skill_id, 1)
         _reload_skill_registry()
         return result
     else:
-        result = db.update_skill_enabled(skill_id, 1 if req.enabled else 0)
+        result = db.update_skill_enabled(skill_id, enabled_val)
         if not result:
             raise HTTPException(status_code=404, detail="Skill not found")
         _reload_skill_registry()
