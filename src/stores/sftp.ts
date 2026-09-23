@@ -86,6 +86,17 @@ export const useSftpStore = defineStore('sftp', () => {
   // 批量传输并发上限：同一 SFTP 通道同时传输多个文件会互相争抢导致整体吞吐降低
   // 经验值 2-3 较优，超过 4 后单文件速度明显下降
   const MAX_CONCURRENT_TRANSFERS = 3
+  // 审查R2修复：并发门跨批次唤醒注册表 —— gateCount 按全局 running 计数，
+  // 但原实现的 scheduleNext 只在本批次任务 finally 里重入：先提交的批次占满
+  // 3 个并发门时，后提交的批次初始派发 0 个且永无唤醒 → 其 transfer 永久
+  // pending、Promise 永不 resolve。每个 runBatch 在跑期间登记自己的
+  // scheduleNext，任一任务完成时唤醒全部登记批次，批次结束时注销。
+  const batchSchedulers = new Set<() => void>()
+  function wakeBatchSchedulers(): void {
+    // 快照迭代：被唤醒的 scheduleNext 可能同步派发并即时完成（非 pending 跳过），
+    // 触发 finish() 注销自身，避免迭代中被 delete 影响
+    for (const fn of [...batchSchedulers]) fn()
+  }
   // 待删除传输记录定时器登记表：scheduleRemoveTransfer 登记、removeTransfer 注销、
   // disconnect 统一清空。避免断线重连后残留定时器按旧 id 误删新传输记录。
   const removeTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -878,13 +889,15 @@ async function remoteRefresh(): Promise<void> {
           const unlimited = def.kind === 'copy-local' || def.kind === 'copy-remote'
           if (!unlimited && gateCount() >= MAX_CONCURRENT_TRANSFERS) break
           const idx = nextIdx++
-          // F-5 竞态双保险：任务已不再是 pending（排队期间被取消）则跳过
+          // F-5 竞态双保险：任务已不再是 pending（含排队期间被删除移除）则跳过。
+          // 记录不存在（!t）同样跳过 —— 否则 deleteTransfer 删掉的 pending 任务
+          // 仍会派发 fn()，runUpload/runDownload 找不到记录后空转
           if (def.id) {
             const t = transfers.value.find(x => x.id === def.id)
-            if (t && t.status !== 'pending') {
+            if (!t || t.status !== 'pending') {
               results[idx] = { ok: false, error: new Error('task no longer pending') }
               finishedCount++
-              if (finishedCount >= total) resolve(results)
+              if (finishedCount >= total) finish()
               continue
             }
           }
@@ -893,10 +906,18 @@ async function remoteRefresh(): Promise<void> {
             .catch((error) => { results[idx] = { ok: false, error } })
             .finally(() => {
               finishedCount++
-              if (finishedCount >= total) resolve(results)
-              else scheduleNext()
+              // 审查R2修复：任务完成既推进本批次，也唤醒所有等待中的批次
+              // （含本批次）——原实现只重入本批次 scheduleNext，后提交批次饿死
+              if (finishedCount >= total) finish()
+              else wakeBatchSchedulers()
             })
         }
+      }
+      // 审查R2修复：登记本批次调度器供其他批次唤醒；resolve 时注销。
+      batchSchedulers.add(scheduleNext)
+      function finish(): void {
+        batchSchedulers.delete(scheduleNext)
+        resolve(results)
       }
       scheduleNext()
     })
@@ -1095,6 +1116,23 @@ function removeTransfer(id: string): void {
     if (idx >= 0) transfers.value.splice(idx, 1)
   }
 
+  /**
+   * 删除传输任务（含进行中/暂停中的任务）：
+   * running/paused 先发 sftpCancel 停掉主进程传输再移除记录，
+   * 避免直接 removeTransfer 留下后台还在传的孤儿任务。
+   * pending 主进程无记录，直接移除即可；随后 CANCELLED 拒绝到达时
+   * runUpload/runDownload 按找不到记录静默返回。
+   * 注：copy 类（本地 fsCopy / 远程 cp -r）主进程无取消通道，sftpCancel
+   * 是静默空操作 —— 记录会被移除但复制会继续到完成，与既有 cancel 行为一致。
+   */
+  function deleteTransfer(id: string): void {
+    const t = transfers.value.find(x => x.id === id)
+    if (t && (t.status === 'running' || t.status === 'paused')) {
+      void getApi().sftpCancel(id).catch(() => { /* 忽略取消失败 */ })
+    }
+    removeTransfer(id)
+  }
+
   function scheduleRemoveTransfer(id: string, delay = 3000): void {
     // 同一 id 重复调度时先清旧定时器，避免多个定时器重复回调
     const existing = removeTimers.get(id)
@@ -1133,7 +1171,7 @@ function removeTransfer(id: string): void {
     // selection
     toggleSelectLocal, toggleSelectRemote, clearSelection,
 // transfer
-uploadFiles, downloadFiles, cancelTransfer, pauseTransfer, resumeTransfer, retryTransfer, removeTransfer, applyProgress, clearCompleted,
+uploadFiles, downloadFiles, cancelTransfer, pauseTransfer, resumeTransfer, retryTransfer, removeTransfer, deleteTransfer, applyProgress, clearCompleted,
     // copy
     localCopy, remoteCopy,
     // zip

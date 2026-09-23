@@ -120,24 +120,57 @@
                 <span v-else-if="t.status === 'cancelled'" class="tl-percent-cancelled">已取消</span>
                 <span v-else class="tl-percent-pending">—</span>
               </div>
-              <button
-                v-if="t.status === 'running' || t.status === 'pending'"
-                class="tl-action tl-cancel"
-                :title="canPauseTransfer(t) ? '暂停' : '取消'"
-                @click.stop="canPauseTransfer(t) ? store.pauseTransfer(t.id) : store.cancelTransfer(t.id)"
-              >
-                <!-- F-6 修复：copy 类项不支持暂停，只给取消 -->
-                <svg v-if="canPauseTransfer(t)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-                <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-              <button
-                v-else-if="t.status === 'paused'"
-                class="tl-action tl-resume"
-                title="继续"
-                @click.stop="store.resumeTransfer(t.id)"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              </button>
+              <!-- 进行中且可暂停（upload/download）：暂停 + 删除 -->
+              <template v-if="t.status === 'running' && canPauseTransfer(t)">
+                <button
+                  class="tl-action tl-cancel"
+                  title="暂停"
+                  @click.stop="store.pauseTransfer(t.id)"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                </button>
+                <button
+                  class="tl-action tl-remove"
+                  title="删除任务"
+                  @click.stop="store.deleteTransfer(t.id)"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/></svg>
+                </button>
+              </template>
+              <!-- 进行中不可暂停（copy 类）或排队中：取消 + 删除 -->
+              <template v-else-if="t.status === 'running' || t.status === 'pending'">
+                <button
+                  class="tl-action tl-cancel"
+                  title="取消"
+                  @click.stop="store.cancelTransfer(t.id)"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+                <button
+                  class="tl-action tl-remove"
+                  title="删除任务"
+                  @click.stop="store.deleteTransfer(t.id)"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/></svg>
+                </button>
+              </template>
+              <!-- 暂停中：继续 + 删除 -->
+              <template v-else-if="t.status === 'paused'">
+                <button
+                  class="tl-action tl-resume"
+                  title="继续"
+                  @click.stop="store.resumeTransfer(t.id)"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                </button>
+                <button
+                  class="tl-action tl-remove"
+                  title="删除任务"
+                  @click.stop="store.deleteTransfer(t.id)"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/></svg>
+                </button>
+              </template>
               <button
                 v-else
                 class="tl-action tl-remove"
@@ -232,6 +265,11 @@
       <div v-if="transferCtxMenu.item && (transferCtxMenu.item.status === 'done' || transferCtxMenu.item.status === 'error' || transferCtxMenu.item.status === 'cancelled')" class="ctx-item" @click="store.removeTransfer(transferCtxMenu.item.id); transferCtxMenu.visible = false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"/></svg>
         移除记录
+      </div>
+      <!-- 进行中/暂停中/排队中的任务：删除 = 先停主进程传输再移除记录 -->
+      <div v-if="transferCtxMenu.item && (transferCtxMenu.item.status === 'running' || transferCtxMenu.item.status === 'paused' || transferCtxMenu.item.status === 'pending')" class="ctx-item" @click="store.deleteTransfer(transferCtxMenu.item.id); transferCtxMenu.visible = false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"/><path d="M5 6v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6"/><line x1="9" y1="6" x2="9" y2="20"/><line x1="15" y1="6" x2="15" y2="20"/></svg>
+        删除任务
       </div>
       <div v-if="transferCtxMenu.item" class="ctx-sep"></div>
       <div v-if="transferCtxMenu.item" class="ctx-item" @click="copyTransferPath(transferCtxMenu.item); transferCtxMenu.visible = false">
