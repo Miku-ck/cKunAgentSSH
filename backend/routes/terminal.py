@@ -104,7 +104,7 @@ async def predict_terminal_command(req: TerminalPredictRequest):
         context_parts.append(f"操作系统: {req.platform}")
     if req.recent_commands:
         recent = req.recent_commands[-10:]  # 最多取最近 10 条
-        context_parts.append(f"最近命令历史:\n" + "\n".join(f"  {i+1}. {cmd}" for i, cmd in enumerate(recent)))
+        context_parts.append("最近命令历史:\n" + "\n".join(f"  {i+1}. {cmd}" for i, cmd in enumerate(recent)))
     if req.current_input:
         context_parts.append(f"当前已输入: {req.current_input}")
 
