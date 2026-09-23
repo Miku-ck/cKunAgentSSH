@@ -153,7 +153,7 @@ v-show="s.id === store.activeSessionId"
     </div>
 
     <!-- AI 运维助手面板 -->
-    <SshAiPanel v-if="sshAiStore.showAiPanel" @close="sshAiStore.closeAiPanel()" />
+    <SshAiPanel v-if="sshAiStore.showAiPanel" ref="aiPanelRef" @close="sshAiStore.closeAiPanel()" />
 
     <!-- 连接弹窗 -->
     <ConnectionModal
@@ -200,7 +200,7 @@ v-show="s.id === store.activeSessionId"
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, onUnmounted, ref, nextTick, watch } from 'vue'
 import LocalTerminal from '@/components/ssh/LocalTerminal.vue'
 import RemoteTerminal from '@/components/ssh/RemoteTerminal.vue'
 import ConnectionModal from '@/components/ssh/ConnectionModal.vue'
@@ -218,6 +218,7 @@ import { useSettings } from '@/composables/useSettings'
 import { useCommandDelivery } from '@/composables/useCommandDelivery'
 import { useSshNavigation } from '@/composables/useSshNavigation'
 import { useTabContextMenu } from '@/composables/useTabContextMenu'
+import { qcHeightForAlign } from '@/utils/qc-align'
 
 const store = useSSHStore()
 const sshAiStore = useSshAiStore()
@@ -273,6 +274,52 @@ function handleTabCtxAction(action: string) {
 onMounted(() => {
   store.init()
 })
+
+// ── QuickCommandBar 顶线对齐 ──
+// QC 在 .ssh-main（左栏）底部，它在 y 上要对齐的不是右栏的分区顶线，而是
+// .input-container 的 border-bottom —— 也就是输入框底下那条 1px 分隔线。
+// 两栏同为 .ssh-view 的 stretch 子项、底边同 y，所以面板底边可直接当基线用。
+// 算式抽到 @/utils/qc-align（含"两条线必须同像素行"的不变量单测）。
+const aiPanelRef = ref<InstanceType<typeof SshAiPanel> | null>(null)
+let syncObs: ResizeObserver | null = null
+
+function setupQcSync() {
+  syncObs?.disconnect()
+  syncObs = null
+
+  const panelEl = aiPanelRef.value?.$el as HTMLElement | undefined
+  if (!panelEl) return
+
+  const container = panelEl.querySelector('.input-container') as HTMLElement | null
+  if (!container) return
+
+  const apply = () => {
+    const baseBottom = panelEl.getBoundingClientRect().bottom
+    const h = qcHeightForAlign(baseBottom, container.getBoundingClientRect().bottom)
+    if (h <= 0) return
+    const root = panelEl.closest('.ssh-view') as HTMLElement | null
+    if (!root) return
+    if (root.style.getPropertyValue('--qc-h') === `${h}px`) return
+    root.style.setProperty('--qc-h', `${h}px`)
+    console.log(`[qc-sync] --qc-h=${h}px（QC 顶线与输入框底部同线）`)
+  }
+
+  apply()
+  syncObs = new ResizeObserver(apply)
+  // 面板被拖窄时工具条换行 → 它自身变高、分隔线上移，必须重算
+  const toolbar = panelEl.querySelector('.input-toolbar') as HTMLElement | null
+  if (toolbar) syncObs.observe(toolbar)
+  // textarea 输入多行会把工具条顶上去 → 容器高度变、分隔线跟着移动
+  syncObs.observe(container)
+}
+
+onMounted(() => nextTick(setupQcSync))
+// QC bar 从隐藏切到显示时重新测量（此前若在窄面板下量过，值已经不准）
+watch(showCommandBar, (v) => { if (v) nextTick(setupQcSync) })
+// AI 面板是 v-if 条件挂载：关闭时整个输入区被卸载、ResizeObserver 观察的元素随之消失，
+// 重新打开必须重新测量。少了这一条，QC 会一直停在兜底 38px（比输入框底边低 5px）。
+watch(() => sshAiStore.showAiPanel, (v) => { if (v) nextTick(setupQcSync) })
+onUnmounted(() => syncObs?.disconnect())
 
 // 暴露方法给父组件（TitleBar 事件）
 defineExpose({

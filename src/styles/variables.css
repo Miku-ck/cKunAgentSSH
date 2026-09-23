@@ -64,6 +64,12 @@
   --accent-indigo-bg: rgba(129, 140, 248, 0.12);
   --accent-indigo-hover: rgba(129, 140, 248, 0.1);
 
+  /* 「目标」chip 强调色（粉）：与 indigo 同族的聊天强调色。
+     底/描边一律用 alpha，故 7 套主题共用无需逐个覆盖；只有文字色在浅色主题加深。 */
+  --accent-pink: #e879a9;
+  --accent-pink-bg: rgba(232, 121, 169, 0.14);
+  --accent-pink-border: rgba(232, 121, 169, 0.32);
+
   /* 状态卡片色（Agent 运行面板：规划/警告/错误/调试/标签） */
   --status-info-bg: #1a2d3d;
   --status-info-border: #2d4a5a;
@@ -149,6 +155,11 @@
   --accent-indigo-soft: #4f46e5;
   --accent-indigo-bg: rgba(79, 70, 229, 0.1);
   --accent-indigo-hover: rgba(79, 70, 229, 0.08);
+
+  /* 浅色主题：粉色文字加深（#e879a9 在白底只有 2.4:1），底色同步减淡 */
+  --accent-pink: #a51f6b;
+  --accent-pink-bg: rgba(165, 31, 107, 0.08);
+  --accent-pink-border: rgba(165, 31, 107, 0.24);
 
   /* 浅色主题：状态卡片转浅底深字 */
   --status-info-bg: #e8f1fa;

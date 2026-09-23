@@ -132,3 +132,40 @@ def test_memory_tool_guidance_present():
         assert name in prompt
     conv = _build_agent_system_prompt(_req(task="你好"), "", True)
     assert "记忆使用" not in conv
+
+
+# ── 对话姿态（workflow_mode：goal / plan / 未表态）──────────────────────────
+
+def test_goal_posture_injects_goal_prompt():
+    prompt = _build_agent_system_prompt(_req(workflow_mode="goal"), "", False)
+    assert "「目标」姿态" in prompt
+    assert "「计划」姿态" not in prompt
+
+
+def test_plan_posture_injects_plan_prompt():
+    prompt = _build_agent_system_prompt(_req(workflow_mode="plan"), "", False)
+    assert "「计划」姿态" in prompt
+    assert "「目标」姿态" not in prompt
+
+
+def test_absent_posture_injects_neither_prompt():
+    """未表态（字段缺省 → None）时两种姿态都不注入。
+
+    这是「目标」chip 的 × 能真正关掉的前提：若 None 退化成 goal，前端关掉姿态
+    与保持原样发出的是同一份提示词 —— 开关能拨，但拨的是个摆设。
+    """
+    prompt = _build_agent_system_prompt(_req(), "", False)
+    assert "「目标」姿态" not in prompt
+    assert "「计划」姿态" not in prompt
+    # 姿态缺席不影响其余注入
+    assert OPS_METHOD_CHANGE in prompt
+
+
+def test_workflow_mode_field_accepts_null_and_rejects_unknown():
+    """Optional[Literal] —— null 合法，脏值 422 而不是静默退化成某个姿态。"""
+    from pydantic import ValidationError
+
+    assert _req(workflow_mode=None).workflow_mode is None
+    for junk in ("Goal", "goals", "any"):
+        with pytest.raises(ValidationError):
+            _req(workflow_mode=junk)

@@ -78,7 +78,16 @@ describe('请求体里的 permission_mode', () => {
     runAgent({})
     const body = await firstBody()
     expect(body.permission_mode).toBe('normal')
+    // 姿态字段整个缺席，而不是被压成 'goal'：后端 None = 不注入任何姿态段。
+    // `?? 'goal'` 会让「没表态」和「选了目标」发出同一份请求，chip 的 × 随即失效。
+    expect('workflow_mode' in body).toBe(false)
+  })
+
+  it('显式 goal 姿态时字段真的进了请求体（不是只有 plan 才下发）', async () => {
+    runAgent({ workflowMode: 'goal', permissionMode: 'normal' })
+    const body = await firstBody()
     expect(body.workflow_mode).toBe('goal')
+    expect(body.permission_mode).toBe('normal')
   })
 
   it('显式 plan 时真的进了请求体（不是只改了 UI）', async () => {
@@ -107,10 +116,19 @@ describe('姿态 × 审批档 → permission_mode 的唯一口径', () => {
   it('非 plan 姿态：审批档仅认 auto，其余（含脏值）一律手动 normal', () => {
     expect(resolveRunModes('goal', 'auto')).toEqual({ workflowMode: 'goal', permissionMode: 'auto' })
     expect(resolveRunModes('goal', 'normal')).toEqual({ workflowMode: 'goal', permissionMode: 'normal' })
-    expect(resolveRunModes(undefined, undefined)).toEqual({ workflowMode: 'goal', permissionMode: 'normal' })
+    // 未表态 → 姿态字段为 undefined（下发时整键缺席），审批轴照常生效
+    expect(resolveRunModes(undefined, undefined)).toEqual({ workflowMode: undefined, permissionMode: 'normal' })
     for (const junk of [undefined, '', 'AUTO', 'aut0', ' plan', 'Always']) {
       expect(resolveRunModes('goal', junk).permissionMode).toBe('normal')
     }
+  })
+
+  it('只有精确的 goal/plan 算表态；大小写变体与未知值都归未表态', () => {
+    for (const junk of [undefined, '', 'GOAL', 'Goal', 'PLAN', 'spec', 'skill', 'auto', 'normal']) {
+      expect(resolveRunModes(junk).workflowMode).toBeUndefined()
+    }
+    // 脏值不许被"顺手当成目标"：那会让一个未生效的选择看起来像已生效
+    expect(resolveRunModes('goal').workflowMode).toBe('goal')
   })
 
   it('plan 姿态下审批轴休眠：哪怕 approval=auto 也必须是 plan', () => {

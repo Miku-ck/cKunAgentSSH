@@ -367,9 +367,9 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   /** 发送消息（固定 Agent 路径：AI 自主意图识别并调用工具，无需手动切换模式） */
   // M18：返回是否被接受（true=已入会话，false=早退拒绝），供组件回滚草稿
   // ── 会话工作流（Spec/Plan/Goal）──
-  // 权威在后端落盘的 markdown 工件（backend/agent/workflow.py），前端只做只读
-  // 缓存，供三段指示条展示。工件由 agent 经 spec_write/plan_write/goal_write
-  // 工具维护，前端不提供写接口（无状态，不伪造"已生效"）。
+  // 权威在后端落盘的 markdown 工件（backend/agent/workflow.py），前端只缓存与
+  // 展示。内容仍由 agent 经 spec_write/plan_write/goal_write 维护；唯一的写是
+  // 删除（clearWorkflowArtifact），只绑在工具条「目标」/「计划」chip 的 × 上。
   const workflowSnapshot = ref<WorkflowSnapshot>({ phase: '', spec: '', plan: '', goal: '' })
   const workflowPhase = computed(() => workflowSnapshot.value.phase)
 
@@ -385,6 +385,26 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     } catch (e) {
       console.warn('[ssh] 加载会话工作流失败（按空处理）:', e)
       workflowSnapshot.value = { phase: '', spec: '', plan: '', goal: '' }
+    }
+  }
+
+  /**
+   * 删除工件（chip 的 × 走这里），返回删除后的阶段供调用方提示。
+   * null = 没做成（无会话或请求失败）：此时不伪造空串，因为空串是一个合法阶段
+   * （「无任何工件」），把失败说成「已清空」会让用户以为 × 生效了。
+   */
+  async function clearWorkflowArtifact(
+    kind: 'spec' | 'plan' | 'goal',
+  ): Promise<{ phase: string } | null> {
+    const cid = persistence.currentConversation.value?.backendConvId
+    if (!cid) return null
+    try {
+      const r = await workflowApi.clearArtifact(cid, kind)
+      await loadWorkflow()
+      return { phase: r.phase }
+    } catch (e) {
+      console.warn('[ssh] 删除工作流工件失败:', e)
+      return null
     }
   }
 
@@ -602,5 +622,6 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     workflowSnapshot,
     workflowPhase,
     loadWorkflow,
+    clearWorkflowArtifact,
   }
 })

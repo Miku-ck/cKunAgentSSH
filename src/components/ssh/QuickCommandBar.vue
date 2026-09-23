@@ -25,8 +25,10 @@
       </div>
     </div>
 
+    <!-- 加号描边固定 1.8，与 AI 面板工具栏同尺寸图标（.plus-btn 加号 / 上传 / 权限芯片）同档：
+         同为 viewBox 24 缩到 14px，写 2.5 会渲染成 ~1.46px，比那组的 ~1.05px 明显更粗、看起来也更亮。 -->
     <button class="qc-add-btn" title="添加快捷命令" @click="openAdd">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="14" height="14">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14">
         <line x1="12" y1="5" x2="12" y2="19"/>
         <line x1="5" y1="12" x2="19" y2="12"/>
       </svg>
@@ -205,7 +207,9 @@ function handleDragEnd() {
 
 <style scoped>
 .quick-command-bar {
-  height: 38px;
+  /* 默认 38px，SshView 用 ResizeObserver 动态推 --qc-h 使本组件 border-top
+     与侧边 AI 面板 .input-section 顶线（.input-section border-top）水平对齐 */
+  height: var(--qc-h, 38px);
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -279,24 +283,27 @@ function handleDragEnd() {
 }
 
 .qc-add-btn {
-  width: 26px;
-  height: 26px;
-  display: flex;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg-base);
-  border: 1px solid #2a2a2a;
+  padding: 0;
+  border: 0;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
   border-radius: 4px;
-  color: #a0a0a0;
+  color: var(--text-secondary);
   cursor: pointer;
   flex-shrink: 0;
-  transition: all 0.15s;
+  transition: background 0.15s, color 0.15s;
 }
 
 .qc-add-btn:hover {
   background: var(--bg-hover);
-  color: #ffffff;
-  border-color: #3e3e42;
+  color: var(--text-primary);
 }
 
 .qc-add-btn:active {

@@ -7,7 +7,8 @@
  * - 任务规划（意图分类：级别/任务类型/思考预算）
  * - 警告（warnings）
  * - 人工介入求助卡片（AI 请求帮助，可忽略）
- * - 工具授权请求（允许本次/始终允许/忽略，命令工具绑定命令哈希）
+ * - 工具授权请求（允许本次/本会话允许/始终允许/忽略，命令工具绑定命令哈希；
+ *   session 档只对非 dangerous 卡开放，口径见 utils/approval-scopes.ts）
  * - 可见终端执行：待确认命令（确认/拒绝）与在途交付状态徽章
  * - 错误（errorMessage）
  *
@@ -22,6 +23,7 @@ import { useAgentStore, type PermissionRequest } from '@/stores/agent'
 import { useSSHStore } from '@/stores/ssh'
 import { useSettingsStore } from '@/stores/settings'
 import { agentApi } from '@/api/client'
+import { grantScopesForRisk, type GrantScope } from '@/utils/approval-scopes'
 import { useToastStore } from '@/stores/toast'
 import ClarifyingWizard from './ClarifyingWizard.vue'
 
@@ -93,9 +95,9 @@ async function denyRequest(reqId: string) {
   }
 }
 
-/** 授权（审查 M-3：提供"允许本次"(once) 与"始终允许"(always) 两档；
- *  命令工具始终允许时绑定该条具体命令，不会覆盖其他 dangerous 命令） */
-async function grantPermission(reqId: string, tool: string, scope: 'once' | 'always') {
+/** 授权（审查 M-3：once/session/always 三档，可见档位与后端契约对齐见
+ *  grantScopesForRisk；命令工具始终允许时绑定该条具体命令，不会覆盖其他 dangerous 命令） */
+async function grantPermission(reqId: string, tool: string, scope: GrantScope) {
   const req = agentStore.permissionRequests.find(r => r.id === reqId)
   if (!req || req.settling || req.resolved) return
   // 命令取 payload 原文（后端 permission_display_fields.command）：它才是授权键实际
@@ -342,6 +344,14 @@ const latestHelp = computed(() =>
           <button class="ap-btn ap-btn-grant" :disabled="focusPerm.settling" @click="grantPermission(focusPerm.id, focusPerm.tool, 'once')">
             {{ focusPerm.settling ? '处理中...' : '允许本次' }}
           </button>
+          <button
+            v-if="grantScopesForRisk(focusPerm.risk).includes('session')"
+            class="ap-btn ap-btn-session"
+            :disabled="focusPerm.settling"
+            @click="grantPermission(focusPerm.id, focusPerm.tool, 'session')"
+          >
+            本会话允许
+          </button>
           <button class="ap-btn ap-btn-always" :disabled="focusPerm.settling" @click="grantPermission(focusPerm.id, focusPerm.tool, 'always')">
             {{ cardCommand(focusPerm) ? '始终允许此命令' : '始终允许' }}
           </button>
@@ -350,9 +360,13 @@ const latestHelp = computed(() =>
         <div class="ap-hint">
           <template v-if="cardCommand(focusPerm)">
             「允许本次」只对这行命令生效，其他高风险命令仍会逐条询问；
+            「本会话允许」对本会话内同一命令免问（后端重启即失效）；
             「始终允许」只把这行命令（含其中的目标路径）写入本机持久授权清单，
             今后包括生产环境在内的同一命令不再询问、换一条仍会询问 ——
             拿不准就先选「允许本次」。
+          </template>
+          <template v-else-if="grantScopesForRisk(focusPerm.risk).includes('session')">
+            「本会话允许」对本会话内该工具免问（后端重启即失效），其他会话不受影响。
           </template>
           拒绝后本次运行内 AI 不会再请求同一条命令。
         </div>
@@ -812,6 +826,8 @@ const latestHelp = computed(() =>
 .ap-btn-grant:hover:not(:disabled) { filter: brightness(1.06); }
 .ap-btn-always { background: transparent; border-color: var(--status-success-border); color: var(--status-success-text); }
 .ap-btn-always:hover:not(:disabled) { background: var(--status-success-bg); }
+.ap-btn-session { background: transparent; border-color: var(--accent-cyan, #38bdf8); color: var(--accent-cyan, #38bdf8); }
+.ap-btn-session:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-cyan, #38bdf8) 12%, transparent); }
 .ap-btn-deny { background: transparent; border-color: var(--border-default); color: var(--text-secondary); }
 .ap-btn-deny:hover:not(:disabled) { border-color: var(--danger-text); color: var(--danger-text); background: var(--danger-bg); }
 .ap-resolved {

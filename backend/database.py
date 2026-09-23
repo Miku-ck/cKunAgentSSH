@@ -551,13 +551,29 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
 def _init_memory_v2(conn: sqlite3.Connection) -> None:
     """v2 记忆 schema 建表 + FTS5 侧表 + 一次性存量迁移（spec §4 / §7）。
 
-    全部幂等：建表用 IF NOT EXISTS；迁移以 app_settings('memory_v2.migrated') 为
-    闸门，中途失败不留半个标记（迁移与标记同一事务提交）。任何异常只降级
-    （记日志、置标记跳过），不拖垮应用启动——v2 表缺失时 mstore 调用方
-    （retriever/tick/routes）各自有 except 兜底。
+    幂等的前提是「IF NOT EXISTS 跳过 = 已经是我要的形状」，而 `memories` 这个表名
+    v1 三层记忆用过、列完全不同，所以先验表形状再建表（见下）。迁移以
+    app_settings('memory_v2.migrated') 为闸门；旧表被改名搁置的那一次，标记会被清掉
+    重跑整批 —— 缺列的表上迁移不可能成功过，而失败路径也置了标记，不清就等于把
+    存量永久锁在 agent_memories 里。任何异常只降级（记日志、置标记跳过），不拖垮
+    应用启动 —— v2 表缺失时 mstore 调用方（retriever/tick/routes）各自有 except 兜底。
     """
     import struct
     logger = logging.getLogger(__name__)
+
+    # v1 三层记忆占用的正是 `memories` 这个名字（列为 id/mode/content/…，没有 kind），
+    # 而 CREATE TABLE IF NOT EXISTS 遇到同名旧表会静默跳过 —— 缺的是整张表的列，不是
+    # 索引：此后每一条 v2 读写都抛 "no such column: kind"，v2 记忆在老库上整体失效。
+    # 旧表改名保留（一行不删），随后建真正的 v2 表；标记清见下方迁移闸门。
+    legacy_cols = {r[1] for r in conn.execute("PRAGMA table_info(memories)")}
+    revived_legacy = bool(legacy_cols) and "kind" not in legacy_cols
+    if revived_legacy:
+        conn.execute("ALTER TABLE memories RENAME TO memories_v1_layers")
+        logger.warning(
+            "memories 是 v1 三层记忆的旧表（缺 kind 等 v2 列，%d 行），已改名为 "
+            "memories_v1_layers 原样保留，重建 v2 表",
+            conn.execute("SELECT COUNT(*) FROM memories_v1_layers").fetchone()[0],
+        )
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS memories (
@@ -583,17 +599,15 @@ def _init_memory_v2(conn: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL
         )
     """)
-    # 历史遗留 v1 memories 表可能缺 kind/scope/status/updated_at 等新列，
-    # CREATE TABLE IF NOT EXISTS 不会重建已存在的表，裸建索引会因缺列抛
-    # "no such column" 而中断整个 init_db → 后端无法启动。这里降级处理：
-    # 缺列时跳过索引（仅此，不迁移数据），与下方 FTS5 段的降级先例一致。
+    # 索引建不上只是形状不符的症状，上面的闸门已经处理根因；这里仍兜一层 ——
+    # 半截迁移留下的第三种形状不该让整个 init_db 崩。
     try:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_kind_status ON memories(kind, status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_scope_status ON memories(scope, status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_updated ON memories(updated_at)")
     except sqlite3.OperationalError as e:
-        logger.warning("memories 旧表缺列，跳过 v2 索引（降级）: %s", e)
+        logger.error("memories 表形状异常，v2 索引未建: %s", e)
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS memory_jobs (
@@ -652,12 +666,23 @@ def _init_memory_v2(conn: sqlite3.Connection) -> None:
         logger.warning("FTS5 不可用，关键词检索退回词重叠: %s", e)
         conn.execute("INSERT OR REPLACE INTO app_settings(key,value) VALUES('memory_v2.fts','0')")
 
+    if revived_legacy:
+        # 旧 memories 表被改名搁置后，它留下的 FTS 行指向的 mid 已经不存在（或被
+        # 下面的重迁移复用），全部清掉由重迁移重建。放在建表之后：老库里这张侧表
+        # 可能根本还没建，提前 DELETE 会抛错。
+        conn.execute("DELETE FROM memory_fts")
+
     conn.commit()
 
     row = conn.execute(
         "SELECT value FROM app_settings WHERE key='memory_v2.migrated'"
     ).fetchone()
-    if row and row[0] == "1":
+    if revived_legacy:
+        # 缺列的旧表上这次迁移不可能成功过（INSERT 直接找不到 kind 列），而下面的
+        # 失败路径照样把标记置成 1 —— 存量就一直躺在 agent_memories 里没搬。清掉
+        # 标记重跑整批：本次是真表重建后的第一次，没有"半截迁移"可踩。
+        conn.execute("DELETE FROM app_settings WHERE key='memory_v2.migrated'")
+    elif row and row[0] == "1":
         return
     try:
         _migrate_memory_v1_to_v2(conn, struct)
@@ -688,6 +713,26 @@ def _migrate_memory_v1_to_v2(conn: sqlite3.Connection, struct_mod) -> None:
     """
     now = _now()
     batch_ids: list[str] = []
+
+    # 侧表由 mstore 的写入路径维护，而这里是直连批量 INSERT —— 不同步就会搬进一批
+    # 「面板里列得出、检索搜不到」的记忆（词法路只查 memory_fts，装了 sqlite-vec 时
+    # 向量路只查 memories_vec）。分词口径与 mstore._fts_sync 同源，故复用同一函数。
+    from agent.memory.text import tokenize
+    from agent.memory import vec as _v
+    fts_row = conn.execute("SELECT value FROM app_settings WHERE key='memory_v2.fts'").fetchone()
+    fts_on = bool(fts_row) and fts_row[0] == "1"
+
+    def _index_side(mid: str, title: str, content: str, blob) -> None:
+        if fts_on:
+            conn.execute("DELETE FROM memory_fts WHERE mid=?", (mid,))
+            toks = " ".join(tokenize(f"{title} {content}"))
+            if toks:
+                conn.execute("INSERT INTO memory_fts(mid, tok) VALUES(?,?)", (mid, toks))
+        if blob is None:
+            return
+        dim = len(blob) // 4
+        if _v.vec_available(conn) and _v.ensure_vec_table(conn, dim):
+            _v.vec_upsert(conn, mid, blob, dim)
 
     rows = conn.execute(
         "SELECT id, type, content, embedding, embedding_src, importance, "
@@ -723,6 +768,7 @@ def _migrate_memory_v1_to_v2(conn: sqlite3.Connection, struct_mod) -> None:
         )
         if status == "pending_reconcile":
             batch_ids.append(r["id"])
+        _index_side(r["id"], "", r["content"], blob)
 
     # reflection 策略 → kind=procedural（spec §2/§7）：直接 active，无需对账
     try:
@@ -735,22 +781,26 @@ def _migrate_memory_v1_to_v2(conn: sqlite3.Connection, struct_mod) -> None:
     for s in srows:
         body = f"{s['name']}: {s['content']}" if s["name"] else s["content"]
         created = s["created_at"] or now
+        sid = f"mig-{s['id']}"
+        title = (s["name"] or "")[:60]
         conn.execute(
             "INSERT OR IGNORE INTO memories "
             "(id,kind,scope,title,content,source,status,importance,pinned,use_count,"
             "valid_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
-                f"mig-{s['id']}", "procedural", "global", (s["name"] or "")[:60], body,
+                sid, "procedural", "global", title, body,
                 "migration", "active",
                 s["score"] if s["score"] is not None else 0.7,
                 0, 0, created, created, now,
             ),
         )
+        _index_side(sid, title, body, None)
 
     # 每 10 条 pending 投一个 backfill_reconcile job（priority=7 高于普通整理）
+    # OR IGNORE：job id 按批次下标生成，重跑必须撞上同 id 而不炸整批迁移。
     for i in range(0, len(batch_ids), 10):
         conn.execute(
-            "INSERT INTO memory_jobs(id,kind,payload,priority) VALUES (?,?,?,?)",
+            "INSERT OR IGNORE INTO memory_jobs(id,kind,payload,priority) VALUES (?,?,?,?)",
             (
                 f"mj-mig-{i}", "backfill_reconcile",
                 json.dumps({"ids": batch_ids[i:i + 10]}), 7,

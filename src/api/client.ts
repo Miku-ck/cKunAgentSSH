@@ -354,8 +354,9 @@ export interface Skill {
 
 // ── 会话工作流（Spec/Plan/Goal）──
 // 三阶段工作流：spec（规格）→ plan（计划）→ goal（成功标准/执行锚），产物为
-// 会话目录下 spec.md / plan.md / goal.md，由 agent 用 spec_write/plan_write/
-// goal_write 工具维护，前端只做只读展示（三段指示条）。无写接口。
+// 会话目录下 spec.md / plan.md / goal.md，内容只由 agent 用 spec_write/plan_write/
+// goal_write 工具维护。前端唯一的写操作是删除（「目标」chip 的 ×）：一个只能
+// 开启、无法关闭的开关等于没有开关。
 export interface WorkflowSnapshot {
   /** 当前阶段：''(无) / spec / plan / goal */
   phase: string
@@ -364,7 +365,7 @@ export interface WorkflowSnapshot {
   goal: string
 }
 
-/** Spec/Plan/Goal 工作流只读 API —— 对接 backend/routes/workflow.py */
+/** Spec/Plan/Goal 工作流 API —— 对接 backend/routes/workflow.py */
 export const workflowApi = {
   /** 读取某会话工作流阶段与三份工件；无会话/无工件返回空字符串字段（不是 404） */
   read: (conversationId: string) => {
@@ -373,9 +374,20 @@ export const workflowApi = {
     return request<WorkflowSnapshot>(`/workflow?${q.toString()}`)
   },
 
-  /** 列出所有有工件的会话 ID —— 前端导航条尚未接线，目前无调用方；
-   *  后端 GET /workflow/phases 与 agent/workflow.py:get_phases 已就绪。 */
+  /** 列出所有有工件的会话 ID（导航条按会话展示用） */
   phases: () => request<{ conversation_ids: string[] }>(`/workflow/phases`),
+
+  /**
+   * 删除某个工件（幂等：本就不存在也返回成功）。
+   * 返回删除后的 phase —— 阶段取已存在的最高阶，删掉 goal 会回落到 plan，
+   * 调用方据此提示用户连带后果，别让一次点击看起来"什么都没发生却被拦截了"。
+   */
+  clearArtifact: (conversationId: string, kind: 'spec' | 'plan' | 'goal') => {
+    const q = new URLSearchParams({ conversation_id: conversationId, kind })
+    return request<{ deleted: boolean; phase: string }>(`/workflow/artifact?${q.toString()}`, {
+      method: 'DELETE',
+    })
+  },
 }
 
 export const api = {
@@ -813,7 +825,10 @@ export interface StreamAgentOptions {
   contextWindow?: number
   visibleTerminal?: boolean
   sessionType?: 'local' | 'remote'
-  /** 对话姿态（goal/plan）—— 后端据此注入对应的姿态 system prompt */
+  /**
+   * 对话姿态（goal/plan）—— 后端据此注入对应的姿态 system prompt。
+   * undefined = 未表态，字段省略、后端不注入任何姿态段（chip 的 × 走这条）。
+   */
   workflowMode?: 'goal' | 'plan'
   /**
    * 权限模式（normal=手动审批 / auto=模型代判 / plan=只读强制）。
@@ -864,7 +879,12 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
           context_window: options.contextWindow ?? 20,
           visible_terminal: options.visibleTerminal ?? false,
           session_type: options.sessionType,
-          workflow_mode: options.workflowMode ?? 'goal',
+          // 未表态时省略该字段（后端 None = 不注入任何姿态段）。
+          // 与上方 enable_thinking 同一教训：`?? 'goal'` 会把「用户按 × 关掉了」
+          // 压成「又选了一次目标」，chip 消失了但行为什么都没变 —— 能关、关的是摆设。
+          ...(options.workflowMode === undefined
+            ? {}
+            : { workflow_mode: options.workflowMode }),
           permission_mode: options.permissionMode ?? 'normal',
         }),
         signal: abortController.signal,

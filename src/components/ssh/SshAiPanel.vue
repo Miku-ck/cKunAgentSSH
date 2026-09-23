@@ -10,6 +10,8 @@
     :agent-running="agentStore.isRunning"
     :creating="creating"
     :workflow-phase="store.workflowPhase"
+    :workflow-goal="store.workflowSnapshot.goal"
+    :workflow-plan="store.workflowSnapshot.plan"
     show-message-actions
     panel-title="运维知识助手"
     placeholder="询问运维问题..."
@@ -21,7 +23,8 @@
     @switch-conversation="handleSwitchConv"
     @delete-conversation="handleDeleteConv"
     @abort="handleAbort"
-    @open-goal="handleOpenGoal"
+    @open-phase="handleOpenPhase"
+    @clear-artifact="handleClearArtifact"
     @update:selected-model-id="store.setSelectedModel($event)"
     :upload-handler="handleUploadFiles"
   >
@@ -44,6 +47,7 @@ import { useToastStore } from '@/stores/toast'
 import SideChatPanel from '@/components/chat/SideChatPanel.vue'
 import AgentRunPanel from '@/components/agent/AgentRunPanel.vue'
 import type { ChatAttachment } from '@/api/client'
+import type { PostureKey } from '@/utils/run-modes'
 
 defineEmits<{ close: [] }>()
 
@@ -54,18 +58,50 @@ const toast = useToastStore()
 
 // ── 会话工作流（Spec/Plan/Goal）──
 
-/** 就地菜单点「目标」：向 agent 发起一条"进入目标阶段"的意图，触发其在
- *  Run 内经 goal_write 沉淀成功标准文档（阶段由后端按落盘工件推导，前端不伪造）。 */
-async function handleOpenGoal() {
+/** chip 名：提示文案用，与 SideChatPanel 里 chipViews 的 name 同一口径 */
+const CHIP_NAMES: Record<PostureKey, string> = { goal: '目标', plan: '计划' }
+
+/** 各阶段的合成消息。计划的措辞刻意只说"先给我看方案"，不说"等你批准"——
+ *  计划批准门（spec §2）还没实现，写出来就是一个点了没有下文的承诺。 */
+const PHASE_REQUESTS: Record<PostureKey, string> = {
+  goal:
+    '进入「目标（Goal）」阶段：请先向我确认本次要达成什么、怎么算成功，' +
+    '再用 goal_write 把可验收的成功标准沉淀为文档，作为本任务贯穿执行的锚点。',
+  plan:
+    '进入「计划（Plan）」阶段：请先只读调研目标机现状（不改变任何状态），' +
+    '再用 plan_write 把有序步骤写成方案，我看过方案后再决定是否执行。',
+}
+
+/** chip 主体「让 AI 生成…」= 发一条该阶段的合成消息，让 agent 在 Run 内经
+ *  spec/plan/goal_write 落盘工件（阶段由后端按落盘文件推导，前端不伪造）。
+ *  mode 必须一并传：「计划」浮层承诺的是只读调研，不带 plan 姿态就等于在
+ *  可写权限下"生成计划" —— 界面上那句话就成了假的。 */
+async function handleOpenPhase(kind: PostureKey) {
   if (agentStore.isRunning) {
     toast.error('AI 正在运行中，请等待完成或先中止')
     return
   }
-  const ok = await store.sendMessage(
-    '进入「目标（Goal）」阶段：请先向我确认本次要达成什么、怎么算成功，' +
-    '再用 goal_write 把可验收的成功标准沉淀为文档，作为本任务贯穿执行的锚点。',
-  )
+  await store.sendMessage(PHASE_REQUESTS[kind], { mode: kind })
   // 发送失败时草稿由 store 层已有逻辑同步，这里不需要额外回滚
+}
+
+/** 阶段 → 中文标签（提示回落后果用；'' = 无工件，不提示） */
+const PHASE_LABELS: Record<string, string> = { spec: '规格', plan: '计划', goal: '目标' }
+
+/** chip 的 ×：删除该模式的工件。
+ *  阶段取已存在的最高阶，删掉 goal 会回落到 plan/spec —— 不说出来，用户下次
+ *  发消息就撞在一个凭空冒出来的状态上（批准门、注入内容都随阶段变）。 */
+async function handleClearArtifact(kind: PostureKey) {
+  const name = CHIP_NAMES[kind]
+  const r = await store.clearWorkflowArtifact(kind)
+  if (!r) {
+    // null = 请求失败。不能退回「已移除」：空串是合法阶段（真的没有工件了），
+    // 把失败说成成功，用户会以为 × 生效了，而工件仍在每轮注入。
+    toast.error(`移除${name}失败，请稍后重试`)
+    return
+  }
+  const label = PHASE_LABELS[r.phase]
+  toast.info(label ? `已移除${name}，当前回到「${label}」阶段` : `已移除${name}`)
 }
 
 function handleAbort() {
@@ -74,8 +110,10 @@ function handleAbort() {
 
 // M18：发送被 store 早退拒绝（后端未就绪/无模型/建会话失败）时回滚组件草稿
 const panelRef = ref<InstanceType<typeof SideChatPanel> | null>(null)
-async function handleSend(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = [], mode?: string, approval?: 'normal' | 'auto') {
-  const ok = await store.sendMessage(content, { skillIds, attachments, mode, approval })
+async function handleSend(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = [], mode?: 'goal' | 'plan' | null, approval?: 'normal' | 'auto') {
+  // null = 用户没表态（chip 已关）：归一成 undefined，让 resolveRunModes 走
+  // 「不注入任何姿态」那一支。传成 'goal' 就是把「没选」读成「选了目标」。
+  const ok = await store.sendMessage(content, { skillIds, attachments, mode: mode ?? undefined, approval })
   if (!ok) panelRef.value?.restoreDraft()
 }
 

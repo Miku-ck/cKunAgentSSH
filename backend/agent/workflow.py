@@ -100,7 +100,7 @@ def get_phase(conversation_id: str, base_dir: str | Path | None = None) -> str:
 
 
 def get_phases(base_dir: str | Path | None = None) -> list[str]:
-    """列出所有有工件的会话阶段元数据（供前端导航条展示）。"""
+    """列出所有拥有工件目录的会话 ID（供前端导航条按会话展示）。"""
     base = Path(base_dir) if base_dir is not None else _DEFAULT_BASE_DIR
     if not base.is_dir():
         return []
@@ -146,6 +146,54 @@ def write_goal(conversation_id: str, content: str,
     base = base_dir if base_dir is not None else _DEFAULT_BASE_DIR
     path = _artifact_path(base, conversation_id, _GOAL_FILE)
     return _write_artifact(path, content)
+
+
+# ── 删工件（仅用户显式动作） ────────────────────────────────────────────────
+
+_KIND_FILES = {
+    "spec": _SPEC_FILE,
+    "plan": _PLAN_FILE,
+    "goal": _GOAL_FILE,
+}
+
+
+def _checked_artifact_path(base: str | Path, conversation_id: str, kind: str) -> Optional[Path]:
+    """入参白名单化后的工件路径；任一非法返回 None。
+
+    这是本模块唯一的删除入口，误放的代价（删掉他人会话工件、或 base_dir 之外的
+    任意文件）远大于误拦，所以不信任拼接：解析符号链接后要求路径仍落在 base 内。
+    用「是否落在 base 内」而非「id 是否像 32 位 hex」做判据 —— 后者会在 id 生成
+    规则变化时静默把删除变成空操作（跨层约定漂移）。
+    """
+    if kind not in _KIND_FILES or not conversation_id:
+        return None
+    base_root = Path(base).resolve()
+    path = (base_root / conversation_id / _KIND_FILES[kind]).resolve()
+    if not path.is_relative_to(base_root):
+        return None
+    return path
+
+
+def delete_artifact(conversation_id: str, kind: str,
+                    base_dir: str | Path | None = None) -> bool:
+    """删除某个工件。返回是否真的删掉了一个文件（不存在/入参非法返回 False，不抛）。
+
+    只由用户显式动作调用（前端「目标」/「计划」chip 的 ×）。刻意不提供对应的模型工具：
+    否则「计划批准门」有了逃逸口 —— 模型 plan_write 一个空内容就能把门关掉。
+    """
+    base = base_dir if base_dir is not None else _DEFAULT_BASE_DIR
+    path = _checked_artifact_path(base, conversation_id, kind)
+    if path is None:
+        logger.warning("[workflow] 拒绝删除非法工件 kind=%r cid=%r", kind, conversation_id)
+        return False
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    except OSError as e:
+        logger.warning("[workflow] 删除工件失败 %s: %s", path, e)
+        return False
+    return True
 
 
 # ── 读取 / 注入 ─────────────────────────────────────────────────────────────

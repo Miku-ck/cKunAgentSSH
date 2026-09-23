@@ -181,11 +181,13 @@
             <div v-if="showPlusMenu" id="plus-menu" class="plus-menu" role="menu" aria-label="切换对话姿态">
               <button
                 class="menu-item"
-                :class="{ 'is-active': plusActiveIdx === 0, 'is-selected': activeMode === 'goal', 'is-on': workflowPhase === 'goal' }"
-                role="menuitemradio"
-                :aria-checked="activeMode === 'goal'"
+                :class="{ 'is-active': plusActiveIdx === 0, 'is-selected': isGoalMode, 'is-on': workflowPhase === 'goal' }"
+                role="menuitemcheckbox"
+                :aria-checked="isGoalMode"
                 id="plus-opt-goal"
-                title="目标姿态：让 AI 聚焦本次要达成什么、怎么算成功"
+                :title="isGoalMode
+                  ? '目标姿态已开启：AI 会先确认要达成什么、怎么算成功。点击关闭'
+                  : '目标姿态：让 AI 聚焦本次要达成什么、怎么算成功'"
                 @click="pickCap('goal')"
                 @mouseenter="plusActiveIdx = 0"
               >
@@ -196,15 +198,17 @@
                   </svg>
                 </span>
                 <span class="mi-name">目标</span>
-                <span class="mi-desc">达成什么、怎么算完成</span>
-                <span class="mi-check" :class="{ show: activeMode === 'goal' }">
+                <span class="mi-desc"></span>
+                <span class="mi-check" :class="{ show: isGoalMode }">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="11" height="11"><polyline points="20 6 9 17 4 12"/></svg>
                 </span>
               </button>
 
-              <!-- 「计划」= 只读强制姿态的开关（qcode 形态：模式切换收进 + 菜单，
-                   工具条不再常驻 chip）。点亮态取当前姿态；审批下拉（手动/自动）
-                   是另一条轴，点亮计划时下拉休眠禁用，两处状态在 resolveRunModes 交汇。
+              <!-- 「计划」= 只读强制姿态的开关（qcode 形态：模式切换收进 + 菜单）。
+                   点亮态取当前姿态；审批下拉（手动/自动）是另一条轴，点亮计划时下拉
+                   休眠禁用，两处状态在 resolveRunModes 交汇。
+                   「目标」与此同形：两者各在工具条常驻一枚 chip（见 .chip-wrap /
+                   chipViews），因为"只选了姿态、还没有工件"的中间态需要常驻可见。
                    索引 1 与 CAP_KEYS 对齐 —— 此前 DOM 缺这一行但键盘导航仍会停在
                    plus-opt-plan 上（aria-activedescendant 指向不存在的元素），恢复该行同时修好它。 -->
               <button
@@ -227,7 +231,7 @@
                   </svg>
                 </span>
                 <span class="mi-name">计划</span>
-                <span class="mi-desc">先出方案再动手</span>
+                <span class="mi-desc"></span>
                 <span class="mi-check" :class="{ show: isPlanMode }">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="11" height="11"><polyline points="20 6 9 17 4 12"/></svg>
                 </span>
@@ -263,7 +267,7 @@
                   </svg>
                 </span>
                 <span class="mi-name">插件</span>
-                <span class="mi-desc">尚未接入</span>
+                <span class="mi-desc"></span>
                 <span class="mi-arrow">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="10" height="10"><path d="m9 6 6 6-6 6"/></svg>
                 </span>
@@ -287,7 +291,7 @@
                   </svg>
                 </span>
                 <span class="mi-name">技能</span>
-                <span class="mi-desc">从清单里挑</span>
+                <span class="mi-desc"></span>
                 <span class="mi-arrow">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="10" height="10"><path d="m9 6 6 6-6 6"/></svg>
                 </span>
@@ -372,6 +376,55 @@
             </div>
           </div>
 
+          <!-- 模式 chip（目标/计划共用一套）：常驻工具条，紧挨审批下拉。显隐见 script
+               里 chipViews 的注释（姿态 ∨ 工件，两者缺一都会说谎）。
+               主体点击看详情，× 点击关闭。 -->
+          <div v-for="c in chipViews" :key="c.kind" class="chip-wrap">
+            <div class="mode-chip" :class="{ 'is-open': openChip === c.kind }">
+              <button
+                class="mc-body"
+                :title="c.bodyTitle"
+                :aria-expanded="openChip === c.kind"
+                aria-haspopup="dialog"
+                @click="toggleChipDetail(c.kind)"
+              >
+                <span v-if="c.hasArtifact" class="mc-dot" :title="c.dotTitle"></span>
+                <span class="mc-name">{{ c.name }}</span>
+              </button>
+              <button
+                class="mc-close"
+                :aria-label="`移除${c.name}`"
+                :title="c.clearTitle"
+                @click="clearChip(c.kind)"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" width="10" height="10" aria-hidden="true">
+                  <path d="M18 6 6 18M6 6l12 12"/>
+                </svg>
+              </button>
+            </div>
+
+            <div
+              v-if="openChip === c.kind"
+              class="chip-pop"
+              role="dialog"
+              :aria-label="`${c.name}详情`"
+            >
+              <template v-if="c.hasArtifact">
+                <div class="cp-head">{{ c.artifactHead }}</div>
+                <pre class="cp-body">{{ c.artifact }}</pre>
+              </template>
+              <template v-else>
+                <div class="cp-head">{{ c.postureHead }}</div>
+                <p class="cp-desc">{{ c.postureDesc }}</p>
+                <button
+                  class="cp-act"
+                  :disabled="agentRunning"
+                  @click="emit('open-phase', c.kind); closeChipDetail()"
+                >{{ c.actLabel }}</button>
+              </template>
+            </div>
+          </div>
+
           <slot name="toolbar-left"></slot>
         </div>
         <div class="toolbar-right">
@@ -446,6 +499,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useSkillStore } from '@/stores/skills'
 import { useToastStore } from '@/stores/toast'
 import type { ChatAttachment } from '@/api/client'
+import type { PostureKey } from '@/utils/run-modes'
 
 const settingsStore = useSettingsStore()
 const skillStore = useSkillStore()
@@ -492,20 +546,27 @@ const props = defineProps<{
    * 展示，不在此伪造切换结果。
    */
   workflowPhase?: string
+  /** goal.md 原文（后端权威）。有内容时「目标」chip 才给"看详情"，否则只表姿态。 */
+  workflowGoal?: string
+  /** plan.md 原文（后端权威）。同上，驱动「计划」chip 的详情与实心点。 */
+  workflowPlan?: string
 }>()
 
 const emit = defineEmits<{
   close: []
-  /** mode = 对话姿态（goal/plan…），approval = 审批档（手动/自动）—— 两条独立轴，
+  /** mode = 对话姿态（goal/plan/null=未表态），approval = 审批档（手动/自动）—— 两条独立轴，
    *  合成 permission_mode 的唯一口径在 utils/run-modes.ts */
-  send: [content: string, skillIds: string[], attachments: ChatAttachment[], mode: string, approval: 'normal' | 'auto']
+  send: [content: string, skillIds: string[], attachments: ChatAttachment[], mode: PostureKey | null, approval: 'normal' | 'auto']
   'update:selectedModelId': [id: string]
   'new-chat': []
   'switch-conversation': [id: string]
   'delete-conversation': [id: string]
   abort: []
-  /** 进入目标阶段：通知父层让 AI 沉淀成功标准文档（不再打开本地编辑弹窗） */
-  'open-goal': []
+  /** 请求进入某阶段：通知父层发一条合成消息触发 agent 落盘对应工件（组件不碰网络）。
+   *  kind 由 chip 决定：goal → goal_write 沉淀成功标准，plan → plan_write 沉淀方案。 */
+  'open-phase': [kind: PostureKey]
+  /** 移除某模式的工件：父层删除对应 .md（组件不碰网络），并提示连带回落的阶段 */
+  'clear-artifact': [kind: PostureKey]
 }>()
 
 // ── 面板头部标题（未传时使用通用默认） ──
@@ -559,8 +620,9 @@ function removePendingFile(fileId: string) {
 
 // ── 能力入口 + 号菜单（视觉顺序：目标 / 计划 / 插件 / 技能）──
 // 四个条目的形态各不相同，不能压成同一种控件：
-// - 「目标」是工作流阶段（backend 以 goal_write 落盘成功标准、每轮注入 system prompt）：
-//   点它让父层触发 agent 沉淀，启用态由 props.workflowPhase 反映，非本地开关；
+// - 「目标」是对话姿态开关（点亮 → 下一次发送注入目标姿态提示词），并在工具条
+//   落一枚常驻 chip；本会话是否已有成功标准文档（goal.md，后端落盘）另说一轴，
+//   由 props.workflowPhase 反映在菜单的点亮底色与 chip 的圆点上；
 // - 「计划」是权限模式开关（qcode 形态：模式切换收进 + 菜单）：menuitemcheckbox，
 //   点亮 = 只读强制 + 计划姿态成对下发，再点退出；工具条权限下拉显示同一个状态；
 // - 「技能」从已启用清单里挑一个（与 / 触发同源），选中的以 skill-tags 呈现 ——
@@ -568,11 +630,13 @@ function removePendingFile(fileId: string) {
 // - 「插件」无清单可列，整行置灰。
 // 后端逻辑未接入者，改动点一律集中在 pickCap()。
 type CapKey = 'goal' | 'plan' | 'skill' | 'plugin'
+/** 菜单四项里真正是「姿态」的两个 —— 单选的当前姿态与 chip 的 kind 都取这个值域。
+ *  类型住在 utils/run-modes（姿态 → 后端字段的唯一映射点），侧栏与父面板共用，
+ *  不在两处各写一遍字面量。 */
 /**
- * 菜单里真正带开关语义的条目 —— 目前只有「计划」（menuitemcheckbox）。
+ * 菜单里真正带开关语义的条目 —— 「计划」与「目标」（都是 menuitemcheckbox）。
  *
- * 另外三项各自的形态不同，都不能用「开关」表达：
- *   goal   → 工作流阶段：触发 agent 沉淀，启用态由 workflowPhase 驱动（每轮注入）
+ * 另外两项各自的形态不同，都不能用「开关」表达：
  *   skill  → 从已启用技能清单里**挑一个**（挑中的以 skill-tags 呈现）
  *   plugin → 尚未接入，无可选项
  * 早期版本把它们一律做成菜单里的 checkbox，导致「计划」和「装插件」看起来
@@ -589,12 +653,16 @@ const showPlusMenu = ref(false)
 const plusActiveIdx = ref(0)
 
 /**
- * 当前对话姿态（单选，默认「目标」）—— 对应主流 Agent 的模式选择器。
+ * 当前对话姿态（可关的单选，缺省 null = 未表态）—— 对应主流 Agent 的模式选择器。
  * 只有「目标/计划」这类纵向姿态落进 activeMode（决定下一次消息注入的姿态）；
  * 「技能」从清单里挑、走 skill-tags，「插件」未接入、
  * 都没有"单一姿态"的含义，勾选态只对 activeMode 的两项成立。
+ *
+ * 缺省不是 'goal' 而是 null，是为了让「目标」chip 能被关掉：
+ * 'goal' 起步 + × 写回 'goal'，chip 消失了但后端行为一字未变（能关、关的是摆设）。
+ * 未表态时后端 workflow_mode 省略 → 不注入任何姿态段，与"用户没选"一致。
  */
-const activeMode = ref<CapKey>('goal')
+const activeMode = ref<PostureKey | null>(null)
 /** 姿态类模式标签（按钮/菜单共用，取自 CAP_LABELS） */
 const MODE_LABELS = CAP_LABELS
 
@@ -645,18 +713,18 @@ function closePlusMenu(refocus = false) {
   if (refocus) nextTick(() => inputRef.value?.focus())
 }
 
-/** 菜单项选择：目标 → 单选为当前对话姿态（影响下一次消息注入）；
- *  计划 → 权限模式开关（再点一次退出，回到目标姿态）；
+/** 菜单项选择：目标 → 姿态开关（点亮即注入目标姿态，再点回到未表态）；
+ *  计划 → 权限模式开关（再点一次退出，回到未表态）；
  *  技能 → 打开既有技能清单；插件未接入，兜住键盘 Enter。 */
 function pickCap(key: CapKey) {
-  // 目标：纵向姿态，单选覆盖 activeMode，随下一次发送传给后端作为姿态提示
+  // 目标：纵向姿态开关，随下一次发送传给后端作为姿态提示；点亮态同时驱动工具条 chip
   if (key === 'goal') {
-    activeMode.value = key
+    toggleGoalMode()
     closePlusMenu(true)
     return
   }
   // 计划：不是「选一个姿态」而是开关 —— 点亮即只读强制 + 计划提示词成对下发，
-  // 再点回到目标姿态。它是独立于审批下拉的另一条轴（plan 姿态下下拉休眠）。
+  // 再点退出（回到未表态，不是目标姿态）。它是独立于审批下拉的另一条轴（plan 姿态下下拉休眠）。
   if (key === 'plan') {
     togglePlanMode()
     closePlusMenu(true)
@@ -742,10 +810,121 @@ function pickPerm(key: 'normal' | 'auto') {
   closePermMenu(true)
 }
 
+/** + 菜单「目标」项 = 取反目标姿态。默认未表态（null），所以 chip 不是常驻的：
+ *  选了才亮，× 或再点一次即关 —— 与「计划」同为一个可关的开关，而非二选一单选。 */
+function toggleGoalMode() {
+  activeMode.value = isGoalMode.value ? null : 'goal'
+}
+
 /** + 菜单「计划」项 = 取反当前计划态（点亮即只读强制；审批档原样保留，
- *  退出计划后恢复生效） */
+ *  退出计划后回到未表态，而不是替用户选一个目标姿态） */
 function togglePlanMode() {
-  activeMode.value = isPlanMode.value ? 'goal' : 'plan'
+  activeMode.value = isPlanMode.value ? null : 'plan'
+}
+
+// ── 模式 chip（工具条常驻，紧挨审批下拉；目标/计划共用一套机制）──
+/**
+ * 每枚 chip 的显示条件取两根轴的**或**，因为它们各说一件事、缺一都会说谎：
+ *   activeMode === key     用户选了该姿态（下一次发送注入对应提示词）
+ *   workflowPhase === key  agent 已落盘该工件（hydrate_for_session 每轮都注入，与前端无关）
+ * 只看姿态：plan.md/goal.md 早就存在并持续生效，界面上却什么都没有 —— 工件在跑、UI 装死。
+ * 只看阶段：用户刚点了「目标」，chip 不出来，除非 AI 恰好写过对应文件 —— 点了没反应。
+ */
+const isGoalMode = computed(() => activeMode.value === 'goal')
+
+/** 某模式的工件原文。刻意从 props 直接取，不经 chipViews ——
+ *  × 的处理里"先读状态再改状态"若读到已重算过的视图，判定会随改动漂移。 */
+function artifactOf(kind: PostureKey): string {
+  return (kind === 'goal' ? props.workflowGoal : props.workflowPlan) ?? ''
+}
+
+interface ChipView {
+  kind: PostureKey
+  name: string
+  artifact: string
+  hasArtifact: boolean
+  bodyTitle: string
+  dotTitle: string
+  clearTitle: string
+  postureHead: string
+  postureDesc: string
+  artifactHead: string
+  actLabel: string
+}
+
+/** 文案集中在这一处：模板只认字段，不再散落三元表达式。
+ *  「计划」浮层刻意不提"批准"—— 计划批准门（spec §2）尚未实现，
+ *   在这里写「待批准」就是一个点了没用的假动作。 */
+const chipViews = computed<ChipView[]>(() => {
+  const goalArtifact = artifactOf('goal')
+  const planArtifact = artifactOf('plan')
+  const views: ChipView[] = [
+    {
+      kind: 'goal',
+      name: '目标',
+      artifact: goalArtifact,
+      hasArtifact: !!goalArtifact,
+      bodyTitle: goalArtifact
+        ? '查看本次任务的成功标准（已落盘，每轮注入）'
+        : '目标姿态已开启：本轮起围绕目标收敛。点击查看',
+      dotTitle: '本会话已有成功标准文档',
+      clearTitle: '移除目标：关闭姿态，并删除本会话的成功标准文档',
+      postureHead: '目标姿态已开启',
+      postureDesc: 'AI 会优先确认「要达成什么、怎么算成功」并围绕目标收敛。' +
+        '本会话还没有成功标准文档 —— 生成后它会每轮注入，chip 上会出现实心点。',
+      artifactHead: '本次任务的成功标准',
+      actLabel: '让 AI 生成成功标准',
+    },
+    {
+      kind: 'plan',
+      name: '计划',
+      artifact: planArtifact,
+      hasArtifact: !!planArtifact,
+      bodyTitle: planArtifact
+        ? '查看本会话已落盘的方案（每轮注入）'
+        : '计划姿态已开启：本轮只读调研并产出方案。点击查看',
+      dotTitle: '本会话已有方案文档',
+      clearTitle: '移除计划：关闭姿态，并删除本会话的方案文档',
+      postureHead: '计划姿态已开启',
+      postureDesc: '本轮只做只读调研并产出方案：写操作会被后端直接拒绝，' +
+        '工具条的审批下拉同时休眠。本会话还没有方案文档 —— 生成后它会每轮注入，' +
+        'chip 上会出现实心点。',
+      artifactHead: '本会话的方案',
+      actLabel: '让 AI 生成方案',
+    },
+  ]
+  return views.filter(v => activeMode.value === v.kind || props.workflowPhase === v.kind)
+})
+
+/** 同时只展开一枚 chip 的详情（两个浮层叠在工具条上方会互相遮住） */
+const openChip = ref<PostureKey | null>(null)
+
+/** 主体点击 = 展开详情。工件已落盘时给原文，否则说明当前只是姿态。 */
+function toggleChipDetail(kind: PostureKey) {
+  closePlusMenu()
+  closePermMenu()
+  closeSkillMenu()
+  openChip.value = openChip.value === kind ? null : kind
+}
+
+function closeChipDetail() {
+  openChip.value = null
+}
+
+/**
+ * × = 关掉。两件事一起做，少一件都是没关：
+ *   姿态置 null（下一次发送不再注入该姿态提示词）
+ *   删掉对应工件（否则它仍每轮注入，chip 消失只是眼不见为真）
+ * 删工件交给父层走 DELETE /api/workflow/artifact —— 组件不碰网络。
+ *
+ * 姿态只在"本 key 就是当前姿态"时才清：两枚 chip 可以同场（plan.md 在盘上、
+ * 本轮用户选了目标姿态），那时点「计划」的 × 若无条件置 null，就顺手关掉了
+ * 用户正在用的目标姿态。
+ */
+function clearChip(kind: PostureKey) {
+  if (artifactOf(kind) || props.workflowPhase === kind) emit('clear-artifact', kind)
+  if (activeMode.value === kind) activeMode.value = null
+  openChip.value = null
 }
 
 /** Enter/Space 由按钮自身的 click 处理，这里只管方向键与退出 */
@@ -792,9 +971,20 @@ function onDocClickOutsidePermMenu(e: MouseEvent) {
 onMounted(() => document.addEventListener('mousedown', onDocClickOutsidePermMenu))
 onUnmounted(() => document.removeEventListener('mousedown', onDocClickOutsidePermMenu))
 
+// 点 .chip-wrap 以外区域收起详情（同 .perm-wrap 的外点策略）。
+// 命中任一 .chip-wrap 都不关：点另一枚 chip 的主体时 toggleChipDetail 自己会切换过去。
+function onDocClickOutsideChip(e: MouseEvent) {
+  if (!openChip.value) return
+  const target = e.target as HTMLElement | null
+  if (target && target.closest?.('.chip-wrap')) return
+  closeChipDetail()
+}
+onMounted(() => document.addEventListener('mousedown', onDocClickOutsideChip))
+onUnmounted(() => document.removeEventListener('mousedown', onDocClickOutsideChip))
+
 // 三个浮层（+ 号菜单 / 技能菜单 / 权限菜单）互斥：同时只允许开一个
-watch(showPlusMenu, (v) => { if (v) closePermMenu() })
-watch(showPermMenu, (v) => { if (v) { closePlusMenu(); closeSkillMenu() } })
+watch(showPlusMenu, (v) => { if (v) { closePermMenu(); closeChipDetail() } })
+watch(showPermMenu, (v) => { if (v) { closePlusMenu(); closeSkillMenu(); closeChipDetail() } })
 
 // ── / 斜杠技能菜单 ──
 const selectedSkillIds = ref<string[]>([])
@@ -1247,15 +1437,19 @@ defineExpose({ focusInput, restoreDraft, prefill })
 .icon-btn {
   width: 24px;
   height: 24px;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: none;
+  padding: 0;
+  border: 0;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
   border-radius: 4px;
-  transition: all 0.15s;
+  transition: background 0.15s, color 0.15s;
 }
 
 .icon-btn:hover {
@@ -1477,7 +1671,10 @@ defineExpose({ focusInput, restoreDraft, prefill })
   align-items: center;
   justify-content: center;
   padding: 0;
-  border: none;
+  border: 0;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
   border-radius: 4px;
   background: transparent;
   color: var(--text-secondary);
@@ -1490,9 +1687,12 @@ defineExpose({ focusInput, restoreDraft, prefill })
   color: var(--text-primary);
 }
 
+.plus-btn:focus,
 .plus-btn:focus-visible {
-  outline: 2px solid var(--accent-primary);
-  outline-offset: 1px;
+  outline: none;
+  border: 0;
+  appearance: none;
+  -webkit-appearance: none;
 }
 
 .plus-btn:disabled {
@@ -1520,11 +1720,15 @@ defineExpose({ focusInput, restoreDraft, prefill })
   align-items: center;
   gap: 4px;
   padding: 0 6px;
-  border: none;
-  border-radius: 5px;
+  border: 0;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-secondary);
   font-family: var(--font-sans);
+  font-size: 12px;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
@@ -1645,6 +1849,159 @@ defineExpose({ focusInput, restoreDraft, prefill })
 
 .perm-opt .po-check.show {
   opacity: 1;
+}
+
+/* ── 模式 chip（工具条左侧，审批下拉之后；目标/计划共用同一套样式）──
+   与 .perm-btn 同底座（24px 高），但它是"当前生效的事"而非常驻控件，故给
+   粉底描边的胶囊形态；× 是它唯一的关闭入口（能开也能关，才不是摆设）。
+   两种模式不辨色，靠 .mc-name 的文字区分：本文件的 --accent-indigo 已被
+   菜单选中/高亮占满，再给「计划」另起 hue 会撞色。 */
+.chip-wrap {
+  position: relative;
+  display: flex;
+}
+
+.mode-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  border-radius: 12px;
+  background: var(--accent-pink-bg);
+  border: 1px solid var(--accent-pink-border);
+  overflow: hidden;
+}
+
+.mode-chip.is-open {
+  border-color: var(--accent-pink);
+}
+
+.mc-body {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 100%;
+  padding: 0 2px 0 8px;
+  border: 0;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  color: var(--accent-pink);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.mc-body:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
+.mc-name {
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* 实心点 = 对应工件（goal.md / plan.md）已落盘、每轮都在注入。只有姿态时不给点：
+   点与不点分别对应「有工件」与「只是选了姿态」，二者不可混为一谈。 */
+.mc-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-pink);
+  flex-shrink: 0;
+}
+
+.mc-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 100%;
+  border: 0;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  color: var(--accent-pink);
+  opacity: 0.7;
+  cursor: pointer;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.mc-close:hover {
+  opacity: 1;
+  background: var(--bg-hover);
+}
+
+.mc-close:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
+/* 详情浮层：向上展开（工具条贴面板底部），与 .perm-menu 同定位策略与层级 */
+.chip-pop {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  width: 280px;
+  padding: 10px;
+  background: var(--bg-elevated-solid);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.5);
+  z-index: 50;
+  transform-origin: bottom left;
+  animation: plus-menu-in 0.14s ease-out;
+}
+
+.chip-pop .cp-head {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.chip-pop .cp-body {
+  margin: 0;
+  max-height: 180px;
+  overflow-y: auto;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chip-pop .cp-desc {
+  margin: 0 0 8px;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-tertiary);
+}
+
+.chip-pop .cp-act {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--accent-pink-border);
+  border-radius: 4px;
+  background: var(--accent-pink-bg);
+  color: var(--accent-pink);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chip-pop .cp-act:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.chip-pop .cp-act:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
 }
 
 .plus-btn svg {
@@ -1811,6 +2168,8 @@ defineExpose({ focusInput, restoreDraft, prefill })
   /* 权限菜单与它的箭头同样受此约束（沿用既有口径：只关动画/位移，颜色过渡保留） */
   .perm-menu { animation: none; }
   .perm-btn .perm-caret { transition: none; }
+  /* chip 详情浮层的入场动画同受约束（.mc-close 只有颜色过渡，按本文件既有口径保留） */
+  .chip-pop { animation: none; }
 }
 
 /* ── / 触发技能菜单 ── */
@@ -1913,12 +2272,14 @@ defineExpose({ focusInput, restoreDraft, prefill })
   font-size: 11px;
 }
 
-/* Input Toolbar */
+/* Input Toolbar
+   与 .input-container padding 一致（0 4px），水平起始位与输入文字对齐。
+   按钮视觉区 12px，衬底左右各留 4px 空白 → padding: 4px 4px。 */
 .input-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 12px;
+  padding: 4px 4px;
   gap: 8px;
 }
 
@@ -1969,18 +2330,23 @@ defineExpose({ focusInput, restoreDraft, prefill })
 }
 
 .model-selector-btn {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 2px;
-  height: 22px;
+  height: 24px;
   background: transparent;
-  border: none;
-  color: var(--text-primary);
+  border: 0;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  color: var(--text-secondary);
   font-size: 11px;
   padding: 0 4px;
   cursor: pointer;
   font-family: var(--font-sans);
   white-space: nowrap;
+  border-radius: 4px;
+  transition: background 0.15s, color 0.15s;
 }
 
 .model-selector-btn:hover {
@@ -2069,17 +2435,21 @@ defineExpose({ focusInput, restoreDraft, prefill })
 
 /* Send Button */
 .send-btn {
-  width: 26px;
-  height: 26px;
-  display: flex;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: none;
+  padding: 0;
+  border: 0;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
   border-radius: 4px;
   background: var(--bg-hover);
   color: var(--text-primary);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background 0.15s, color 0.15s;
   flex-shrink: 0;
 }
 
@@ -2124,7 +2494,8 @@ defineExpose({ focusInput, restoreDraft, prefill })
 
 /* ── Toolbar buttons (scoped inside SideChatPanel, not relying on parent) ──
    统一底座：24×24 / radius 4 / 透明底 / 无框 —— +、上传、权限阀三个控件等高同线。
-   icon-only 按钮不留横向 padding（语言型如「自动审批」在 .perm-btn 里另外管）。 */
+   icon-only 按钮不留横向 padding（语言型如「自动审批」在 .perm-btn 里另外管）。
+   Electron + Chromium 会给 <button> 加原生 border/outline/appearance，必须逐项清零。 */
 .toolbar-btn {
   display: inline-flex;
   align-items: center;
@@ -2132,7 +2503,10 @@ defineExpose({ focusInput, restoreDraft, prefill })
   width: 24px;
   height: 24px;
   padding: 0;
-  border: none;
+  border: 0;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
   border-radius: 4px;
   background: transparent;
   color: var(--text-secondary);
@@ -2143,6 +2517,12 @@ defineExpose({ focusInput, restoreDraft, prefill })
 .toolbar-btn:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.toolbar-btn:focus,
+.toolbar-btn:focus-visible {
+  outline: none;
+  border: 0;
 }
 
 .toolbar-btn.active {
@@ -2158,6 +2538,7 @@ defineExpose({ focusInput, restoreDraft, prefill })
   width: 14px;
   height: 14px;
   display: block;
+  flex-shrink: 0;
 }
 
 /* 启用自定义背景图时，让右侧面板透明 */

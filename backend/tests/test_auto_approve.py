@@ -366,6 +366,29 @@ def test_gate_prod_升级后的_dangerous_不问模型(monkeypatch, audits):
     assert any(r.get("conclusion") == "denied" for r in audits)
 
 
+def test_gate_工具级裁决subject绑定bound命令(monkeypatch, audits):
+    """裁决 subject 与授权键必须是同一对象。
+
+    gate 弹卡前调 try_auto_approve 原本不传 bound_command（同上文
+    check_permission 却传了）→ _subject_of 退到 args.content，模型被问的是
+    「要写入的文件正文」，而放行后授权键绑的是「base64 写模板的路径哈希」——
+    两处不同物正是本仓库「跨层 key 漂移」缺陷家族的形态。
+    """
+    calls = _stub_judge(monkeypatch, False)
+    gate, _guard_obj = _guard()
+    args = {"path": "/tmp/app.txt", "content": "TOP-SECRET-BODY"}
+    ctx = _logged(_ctx(), "file_write", args)
+    d = asyncio.run(gate.check(ctx))
+    assert d.intercepted is True
+    from agent.harness.reins.core import extract_bound_command
+    bound, _free = extract_bound_command(create_registry_for_mode("ssh"),
+                                         "file_write", args)
+    assert bound and "/tmp/app.txt" in bound
+    assert len(calls) == 1
+    assert calls[0] == f"file_write: {bound}", "裁决 subject 偏离授权键绑定的那条命令"
+    assert "TOP-SECRET-BODY" not in calls[0], "文件正文不得充当裁决标的"
+
+
 # ── 6. 契约：HTTP 值域与 harness 归一化 ──────────────────────────────────────
 
 def test_请求模型接受_auto_且仍拦非法值():

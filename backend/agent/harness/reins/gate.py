@@ -702,8 +702,11 @@ class PermissionGate:
         # 自动审批（permission_mode="auto"）：工具级 dangerous / moderate 不可逆
         # 未授权时，弹卡前先让模型裁决一次（fail-closed，见 auto_approve 模块）。
         # prod 强化分支已在上方 return —— 合规授权必须出自用户预登记，不问模型。
+        # bound_command 与上方 check_permission 同源：裁决标的必须等于授权键绑定的
+        # 那条命令，否则模型批的是文件正文、键却绑在写模板路径上（两处不同物）。
         decision = await try_auto_approve(
-            ctx, tool, args, f"工具级风险 {risk} 需授权")
+            ctx, tool, args, f"工具级风险 {risk} 需授权",
+            bound_command=str(bound or ""))
         if decision is not None:
             return decision
 

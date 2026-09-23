@@ -268,22 +268,43 @@ DELETE /api/workflow/artifact?conversation_id=&kind=goal
 
 约束三条，写进该文件 docstring：
 
-1. `kind` 值域**仅** `spec|plan|goal`，白名单硬校验后拼路径，不接受任意文件名（防目录穿越——`conversation_id` 同理，必须走 `_session_dir` 的既有校验路径）。
+1. `kind` 值域**仅** `spec|plan|goal`，白名单硬校验后拼路径，不接受任意文件名。
+   **实现期修正**：原写"走 `_session_dir` 的既有校验路径"，实测 `_session_dir` 只做
+   `Path(base)/conversation_id` 拼接，**没有任何校验**（`agent/workflow.py:48-50`）——
+   依赖它等于把防线建在不存在的东西上。改为新增 `_checked_artifact_path()`：解析真实
+   路径（`resolve()`，跟随符号链接）后要求 `is_relative_to(base)`，否则返回 None → 拒删。
+   判据取"是否落在 base 内"而非"会话 id 是否像 32 位 hex"：后者会在 id 生成规则变化时
+   静默把删除变成空操作（跨层约定漂移是本仓反复出现的缺陷族），且 fail 方向是误放侧。
 2. **只允许用户显式动作触发**（该端点只挂在 chip 的 × 上）。不给模型任何删除工件的工具，否则设计 A 的批准门有了逃逸口：`plan_write` 一个空内容就能把门关掉。
-3. 幂等：文件不存在返回 204，不报错。
+3. 幂等：文件不存在不报错。实现为 200 + `{deleted: bool, phase: str}` 而非 204 ——
+   响应体必须带回删除后的阶段（见下条），204 按定义无 body，两者不能同时要。
 
 **删除 goal.md 的连带后果，必须一并处理**：`get_phase()` 取"已存在的最高阶"，删掉 goal.md 会回落到 `plan` 阶段——若此时 plan.md 尚未批准，设计 A 的批准门会立刻生效。这是**正确**行为（没目标了、计划也没批，当然不该继续写），但用户点一个 × 就撞上拦截会很费解，所以响应体返回删除后的 `phase`，前端据此提示"已清除目标，当前回到计划阶段（未批准）"。
 
 ### 5.5 计划批准状态也要可见（否则设计 A 是个看不见的门）
 
-同一个 chip 机制承载第二个状态：`workflowPhase === 'plan'` 且未批准 → 显示「计划待批准」chip，点击主体 = 批准（走 §2.4 的 grant），× = 驳回（走 §2.6）。这样 A 的门有了可见的入口，不必只在 SSE 流里等一张卡片飘过。
+**已落地的是它的前半（2026-09-23）**：目标 chip 泛化为一套 `chipViews` 机制，同时承载「计划」
+——显示条件与目标一致（`activeMode === 'plan'` ∨ `workflowPhase === 'plan'`），主体点击看 plan.md 原文
+（`GET /workflow` 早就返回它，此前全仓库没有一处渲染），× = 退姿态 + 删 plan.md。
+浮层文案刻意只说"只读调研 / 写操作会被拒绝"，**不出现"批准"字样**：批准门还没有，
+在 UI 上写「待批准」就是一个点了没有下文的假动作。
+
+剩下的后半即本节原意：A 落地时给同一机制**多带一个批准态字段**（不另起一套 chip），
+未批准时显示「计划待批准」、点击主体 = 批准（走 §2.4 的 grant）、× = 驳回（走 §2.6）。
+届时主体点击语义从"看详情"变"批准"，因此批准态必须与"看详情"态互斥，不能让一个按钮兼两义。
 
 批准状态**不新增前端权威判断**：由 `GET /workflow` 响应多带一个 `plan_approved: bool` 字段（后端查 `PermissionGate`，单源），前端只渲染。这是 §2.4"单一权威源"决定在读取侧的对称要求。
 
-### 5.6 顺带收口的两处命名/文档漂移
+### 5.6 顺带收口的文档/命名漂移
 
-- `SideChatPanel.vue:206` 注释"工具条不再常驻 chip" → 改为说明 chip 的显隐判据（反映 D 的新决定，不留一句已过时的话）。
-- `workflow.get_phases()` docstring 说返回"阶段元数据"、实际返回会话 id 列表（§1.3）→ 与实现对齐。
+- `SideChatPanel.vue` 「计划」菜单项上方那句"「目标」不同于计划的一点：它额外常驻一枚 chip"→ 泛化后为假，
+  改为说明两枚 chip 同源（同一 `chipViews`）。
+- `routes/workflow.py` 模块 docstring 宣称"供前端**三段指示条**展示"——仓库里没有三段指示条，
+  那是从未实现的描述；改为写明真实的两个展示位，并注明 `spec` 目前无展示位。
+- `workflow.get_phases()` docstring 说返回"阶段元数据"、实际返回会话 id 列表（§1.3）→ 与实现对齐（已随 D 修）。
+- × 的连带后果修正：泛化后两枚 chip 可以同场（plan.md 在盘上、本轮选了目标姿态），
+  旧 `clearGoal` 无条件把姿态置 null，会让「计划」的 × 顺手关掉用户正在用的**目标**姿态
+  → 改为只在"本 key 就是当前姿态"时清。
 
 ---
 
@@ -340,7 +361,16 @@ DELETE /api/workflow/artifact?conversation_id=&kind=goal
 | 值域 | `kind=../../etc/passwd`、`kind=notes` → 400/422 | 拼接路径未校验 |
 | **不可逃逸** | 全仓不存在任何让模型删除工件的工具（AST/grep 断言） | 给了模型删除能力 = A 的门可被 `plan_write` 空内容关掉 |
 | 批准可见 | `plan_approved` 由后端单源给出；前端不自行推断 | 前端另算一份批准状态（双源） |
-| 幂等 | 删不存在的工件 → 204 不报错 | 二次点击 500 |
+| 幂等 | 删不存在的工件 → 200 + `{"deleted": false}` 不报错（不是 204：响应体要带回 `phase`） | 二次点击 500 |
+
+**D 行的实际覆盖（2026-09-23）**：表里"值域 / 幂等 / 回落提示 / 不可逃逸"四行落在
+`backend/tests/test_workflow_artifact_delete.py`（10 项，含 plan kind、路径穿越、以及"模型侧无删除入口"
+那条不可逃逸断言）。
+前端七行**没有自动化用例**——仓库无 `@vue/test-utils`/jsdom，`vitest.config.ts` 未装
+`@vitejs/plugin-vue`，`.vue` 根本不可 import；为两枚 chip 引入一整套组件测试基建不是这一刀的账。
+代之以真浏览器逐项走查（`:5173`，`evaluate_script` 读 DOM）：计划 chip 出现/无圆点、浮层不含"批准"
+字样、外点收起、× 退姿态并解禁审批下拉、目标 chip 回归、以及叠加态下 × 只清本 key 的姿态。
+「批准可见」一行留给 A（`plan_approved` 尚不存在）。补齐组件测试基建登记为**已知缺口**，不是遗漏。
 
 ### 全量闸门
 
@@ -384,7 +414,7 @@ npx vitest run
 3. **C 的签名相等误判**：两轮都失败在**同名同参数**的工具上才叫无进展。合法的"同命令重试终于成功"（网络抖动）会被算作进展（因为它成功了），所以不会误停；但"每次都在不同的第二个工具上失败"会**判不出** blocked（签名集合不同），即漏判方向。漏判的兜底是 `max_goal_turns`，可接受。
 4. **A/C 的交叉影响**：`spawn_subagent` 在 `classify_plan_action` 下可间接执行任何东西（`docs/plan-mode.md` §3.1 的头号反例）。批准门复用同一判定，因此子 Agent 的写操作是否算"写"必须由既有判定给出答案，不能在本门里另开特例。若实测发现它被判为只读，那是 `classify_plan_action` 的缺陷，应在其自身修复并补反例用例，**不在本门打补丁**。
 
-4. **D 的删除端点是新表面积**：`routes/workflow.py` 今天是纯只读的，加 DELETE 等于给会话工件目录开了一条写路径。风险集中在路径拼接（`conversation_id` 与 `kind` 两个入参都会进文件名），必须走 `_session_dir` 的既有构造 + 白名单值域，且在 §6-D 的值域用例里钉死。**误放方向**（删掉别人的会话工件）比误拦严重得多，这条是 D 的首要防线。
+4. **D 的删除端点是新表面积**：`routes/workflow.py` 今天是纯只读的，加 DELETE 等于给会话工件目录开了一条写路径。风险集中在路径拼接（`conversation_id` 与 `kind` 两个入参都会进文件名）——但 `_session_dir` **不含任何校验**（只是 `Path(base)/cid` 拼接），所以防线是新写的 `_checked_artifact_path()`：kind 白名单 + `resolve()` 后 `is_relative_to(base)`，两层都在 `agent/workflow.py` 内，路由层只多一道 kind 值域的 400。**误放方向**（删掉别人的会话工件）比误拦严重得多，这条是 D 的首要防线；用例见 `tests/test_workflow_artifact_delete.py::test_delete_cannot_escape_base_dir`。
 5. **A/C 的交叉影响**：`spawn_subagent` 在 `classify_plan_action` 下可间接执行任何东西（`docs/plan-mode.md` §3.1 的头号反例）。批准门复用同一判定，因此子 Agent 的写操作是否算"写"必须由既有判定给出答案，不能在本门里另开特例。若实测发现它被判为只读，那是 `classify_plan_action` 的缺陷，应在其自身修复并补反例用例，**不在本门打补丁**。
 
 ### 7.3 交付切分
@@ -401,3 +431,11 @@ npx vitest run
 ## 8. 实施顺序建议
 
 `D → A → C → B`。D 让其余三块的状态可见、自身风险最低；A 是纯增量拦截器，补全 `docs/plan-mode.md` 悬空的不变量 I3；C 是 B 的止损阀，先于 B 存在才让 B 的成本敞口可接受。每块按 §6 各自的测试文件先写红用例再实现。
+
+### 8.1 D/D′ 已落地，落地时与本文有三处出入
+
+1. **`activeMode` 缺省从 `'goal'` 改成 `null`（未表态）** —— §5.2 只说"要扩成 `'goal'|'plan'|null`"，没说缺省。缺省必须一起改：保留 `'goal'` 起步，× 只是把同一个 `'goal'` 又发一遍，chip 消失了而行为一字未变。连带后果写清楚：**既有前端不传 `workflow_mode` 时，后端不再注入目标姿态提示词**（原先默认注入 goal 段）。这是有意的取舍 —— 没表态 ≠ 选了目标姿态；`permission_mode` 不受影响（`resolveRunModes` 里 goal 与 null 派生同一个审批档）。
+2. **`_session_dir` 没有校验**，见 §5.4 第 1 条的修正。
+3. **D′ 一次交付了两枚 chip，且 `emit` 面按 kind 收敛**：`open-goal`/`clear-goal` → `open-phase`/`clear-artifact`（都带 `PostureKey`），类型从 `utils/run-modes.ts` 导出共用。理由写在 §5.5/§5.6；`clearWorkflowArtifact(kind)` 与 `DELETE` 端点本就按 kind 泛化，所以「计划」这半**零后端改动**。
+
+**部署前提**：D 同时改了后端（`DELETE /api/workflow/artifact`、`workflow_mode` 可空）与前端。前端有 HMR，chip 立刻可见；**后端进程不重启则新端点不存在** —— 此时 chip 的 × 只关掉本地姿态，删工件的请求打到 404，表现为"关了但工件还在"。验收前先重启 `npm run dev:backend`。（D′ 的计划半轴不在这条前提上：它没动后端。）

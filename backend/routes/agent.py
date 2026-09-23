@@ -182,9 +182,11 @@ def _build_agent_system_prompt(
     if mode_prompt:
         parts.append(mode_prompt)
     # 对话姿态：由前端模式选择器决定（goal=聚焦目标 / plan=先方案后动手）。
-    # 仅对非纯对话型任务注入（纯问答不需要方法论姿态），缺省 goal 不改变既有行为。
-    if not is_conversation_task:
-        parts.append(_WORKFLOW_MODE_PROMPTS.get(req.workflow_mode, ""))
+    # 仅对非纯对话型任务注入（纯问答不需要方法论姿态）。
+    # workflow_mode 为 None = 用户未表态（前端 × 清掉后），此时不注入任何姿态段：
+    # 若退化成 goal，× 就只是个能让 chip 消失、却什么都不关的摆设。
+    if not is_conversation_task and req.workflow_mode is not None:
+        parts.append(_WORKFLOW_MODE_PROMPTS[req.workflow_mode])
     # 会话目标：每轮 run 都复现，是「目标不漂移」的主手段
     if goal_text:
         parts.append(goal_text)
@@ -402,8 +404,13 @@ class AgentRunRequest(BaseModel):
     # prod 预授权强化与 hardline 阻断不受该档影响。
     permission_mode: Literal["normal", "auto", "plan"] = "normal"
     # 对话姿态（goal/plan 单选，来自前端模式选择器）。驱动 _build_agent_system_prompt
-    # 注入对应的姿态前缀；缺省 "goal" —— 既有前端不传该字段时与之前一致。
-    workflow_mode: Literal["goal", "plan"] = "goal"
+    # 注入对应的姿态前缀。
+    # 可空是「目标」chip 的 × 能真正关掉的前提：前端 activeMode 允许 null 后，若这里
+    # 仍默认 "goal"，× 只是把同一个 'goal' 又发一遍 —— 用户看到 chip 消失而行为毫无
+    # 变化，那是「能关、但关的是个摆设」。缺省改为 None = 不注入任何姿态段；
+    # 老客户端不传该字段时行为随之变化（原先默认注入 goal 前缀），这是有意的：
+    # 没表态 ≠ 选了目标姿态。
+    workflow_mode: Optional[Literal["goal", "plan"]] = None
 
 
 # ── Routes ──
