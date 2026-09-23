@@ -65,9 +65,9 @@ export interface PermissionRequest {
   /** 已处理的卡片是否为「已授权」（已拒绝/过期的卡片文案不同） */
   granted?: boolean
   /**
-   * 审批超时标记（permission_expired）：按新语义「到期保留等待集」，
-   * 前端不再删卡也不置 resolved，仅打此标 + 留在队列供追溯；
-   * 焦点只由用户操作/运行结束推进。重发同命令时仍按未处理复用此卡。
+   * 审批超时标记（permission_expired）：用户裁决方案 A——到期卡保留操作按钮。
+   * 后端到期不摘签名，grant/deny 按 sig 仍可达，用户点「允许」即恢复执行；
+   * 此标仅作卡片上的超时标注，焦点仍占用可操作队列，重发同命令复用此卡。
    */
   expired?: boolean
   /** 归一化展示命令（问题 2 改进：让用户看到实际授权的规范化形态） */
@@ -194,15 +194,12 @@ export const useAgentStore = defineStore('agent', () => {
     || !!errorMessage.value
   )
 
-  // ── 单一焦点审批队列（spec refactor-approval-center） ──
-  // 待审批 = 未 resolved 且未 expired（仍在等待用户操作）；数组 append 序即年龄序，
-  // 队首恒为最旧一条 → 焦点。expired 单独归入追溯区，不再占用可操作焦点。
+  // ── 单一焦点审批队列（spec refactor-approval-center + 裁决A） ──
+  // 待审批 = 未 resolved；expired 卡保留可操作（后端到期不摘签名，grant 按
+  // sig 仍可达，点「允许」即恢复执行），仅多一枚超时角标。数组 append 序即
+  // 年龄序，队首恒为最旧一条 → 焦点。
   const pendingPermissions = computed(() =>
-    permissionRequests.value.filter(r => !r.resolved && !r.expired),
-  )
-  /** 超时保留项（可追溯展示，不参与焦点/批量操作） */
-  const expiredPermissions = computed(() =>
-    permissionRequests.value.filter(r => r.expired && !r.resolved),
+    permissionRequests.value.filter(r => !r.resolved),
   )
 
 
@@ -554,9 +551,8 @@ export const useAgentStore = defineStore('agent', () => {
         )
         // B11 修复：权限卡片只存在于 AI 面板内，面板关闭期间用户无法响应 —
         // 从非 pending → pending 转换时 toast 提醒（重复请求不重复弹）
-        // 审查R2修复：expired 卡不算「有 pending」——它已不可操作（归入追溯区），
-        // 原实现只要数组里留着过期卡，本 run 后续新审批卡就永远弹不出 toast
-        const hadPending = permissionRequests.value.some(r => !r.resolved && !r.expired)
+        // expired 卡按裁决A仍是可操作 pending：队列里已有待办时不重复弹 toast
+        const hadPending = permissionRequests.value.some(r => !r.resolved)
         if (!alreadyPending) {
           permissionRequests.value.push({
             id: `perm_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -604,20 +600,16 @@ export const useAgentStore = defineStore('agent', () => {
       }
 
       case 'permission_expired': {
-        // 审批窗口语义重构（spec refactor-approval-center）：permission_expired 不再
-        // "移除并拒绝"——后端改在到期后仍把签名留在等待集、等待至 grant/deny/会话结束。
-        // 前端相应不再置 resolved/摘卡，而是打 expired 标记保留在队列（供追溯），
-        // 焦点递进只由用户操作或运行结束触发；同一命令重发会复用本卡而非重复建卡。
+        // 审批窗口语义（spec refactor-approval-center + 裁决A）：permission_expired
+        // 不删卡、不置 resolved，只打 expired 标——卡片保留授权/拒绝按钮，
+        // 后端签名仍在等待集，用户随时点击可恢复执行。超时提示由面板的
+        // 「已超时」角标呈现，不再往 message 里追加（重发会刷成一串）。
         const key = permCardKey(event.tool || '', event.command)
         for (const r of permissionRequests.value) {
-          if (r.resolved) continue
+          if (r.resolved || r.expired) continue
           if (permCardKey(r.tool, r.command) === key) {
-            // 审查R2修复：后端可能对同一命令重发 permission_expired，
-            // 已 expired 的卡片再追加会把「（审批超时）」刷成一串
-            if (r.expired) continue
             r.expired = true
             r.settling = false
-            r.message = `${r.message}（审批超时）`
           }
         }
         break
@@ -754,7 +746,6 @@ export const useAgentStore = defineStore('agent', () => {
     isRunning,
     hasRunNotice,
     pendingPermissions,
-    expiredPermissions,
     pendingDeliveries,
     deliveries: agentDeliver.deliveries,
     // actions

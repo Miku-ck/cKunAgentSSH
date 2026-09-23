@@ -111,9 +111,7 @@ function cardCommand(req: PermissionRequest): string {
 const pendingPerms = computed(() => agentStore.pendingPermissions)
 /** E5：prod 专属警示的总开关（设置 → Agent 治理 → 运维策略） */
 const prodConfirmOn = computed(() => useSettingsStore().settings.agent.prodConfirm)
-/** 超时保留项（追溯区） */
-const expiredPerms = computed(() => agentStore.expiredPermissions)
-/** 已解决（已授权/已拒绝）项（追溯区） */
+/** 已解决（已授权/已拒绝）项（追溯区）；expired 卡按裁决A留在可操作队列，不进追溯 */
 const resolvedPerms = computed(() => agentStore.permissionRequests.filter(r => r.resolved))
 
 // 焦点在待审批队列内的索引；队列收缩/触发时钳制到合法范围
@@ -243,6 +241,7 @@ const latestHelp = computed(() =>
           <svg class="ap-ic ap-perm-accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
           <span class="ap-ttl ap-perm-ttl">AI 请求执行确认</span>
           <span class="ap-risk" :class="`risk-${focusPerm.risk}`">{{ riskLabel(focusPerm.risk) }}</span>
+          <span v-if="focusPerm.expired" class="ap-risk-pill ap-timeout-pill">已超时 · 授权仍可恢复</span>
           <span v-if="focusPerm.environment" class="ap-env" :class="`env-${focusPerm.environment}`">
             {{ focusPerm.environment === 'prod' ? '生产环境' : '测试环境' }}
           </span>
@@ -366,19 +365,12 @@ const latestHelp = computed(() =>
         </div>
       </div>
 
-      <!-- 追溯区：超时保留 + 已解决（不删数据） -->
-      <details v-if="expiredPerms.length > 0 || resolvedPerms.length > 0" class="ap-trace">
+      <!-- 追溯区：已解决（不删数据）；超时卡仍在可操作队列 -->
+      <details v-if="resolvedPerms.length > 0" class="ap-trace">
         <summary>
           <svg class="ap-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-          历史记录（{{ expiredPerms.length }} 超时 · {{ resolvedPerms.length }} 已处理）
+          历史记录（{{ resolvedPerms.length }} 已处理）
         </summary>
-        <div v-for="req in expiredPerms" :key="req.id" class="ap-trace-row">
-          <code class="ap-trace-cmd" :title="cardCommand(req) || req.tool">{{ cardCommand(req) || req.tool }}</code>
-          <span class="ap-trace-status ap-trace-timeout">
-            <svg class="ap-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-            已超时
-          </span>
-        </div>
         <div v-for="req in resolvedPerms" :key="req.id" class="ap-trace-row">
           <code class="ap-trace-cmd" :title="cardCommand(req) || req.tool">{{ cardCommand(req) || req.tool }}</code>
           <span v-if="req.granted" class="ap-trace-status" :class="`env-${req.environment || 'test'}`">
@@ -662,7 +654,7 @@ const latestHelp = computed(() =>
   font-weight: 600;
 }
 .ap-trace-status .ap-ic { width: 12px; height: 12px; }
-.ap-trace-timeout { color: var(--status-warn-text); }
+.ap-timeout-pill { background: transparent; border: 1px solid var(--status-warn-text); color: var(--status-warn-text); }
 .ap-trace-denied { color: var(--danger-text); }
 
 /* ── 通用 key/value 行 ── */

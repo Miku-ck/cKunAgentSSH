@@ -318,13 +318,21 @@ describe('授权卡片去重只认未处理的卡片', () => {
     const { store, push } = startRun()
     push(CARD)
     push({ type: 'permission_expired', tool: 'shell_exec', command: 'systemctl restart nginx' })
-    // 新语义（spec refactor-approval-center）：不删卡、不置 resolved，仅打 expired 标保留
+    // 裁决A：到期不删卡、不置 resolved，仅打 expired 标——卡片留在可操作队列，
+    // 后端签名仍在等待集，用户点「允许」即可恢复执行
     expect(store.permissionRequests[0].expired).toBe(true)
     expect(store.permissionRequests[0].resolved).toBeFalsy()
+    expect(store.pendingPermissions).toHaveLength(1)
+    // 超时提示走面板角标，不再往 message 里追加
+    expect(store.permissionRequests[0].message).not.toContain('审批超时')
 
     // 后端到期仍将签名保留在等待集 → 同一命令重发复用该卡，不再重复建卡
     push(CARD)
     expect(store.permissionRequests).toHaveLength(1)
+
+    // expired 卡仍可结算：授权后出队
+    store.resolvePermission(store.permissionRequests[0].id, true)
+    expect(store.pendingPermissions).toHaveLength(0)
   })
 
   it('不同命令各自一张卡（批了 A 不放行 B）', () => {
