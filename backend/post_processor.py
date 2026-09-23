@@ -465,6 +465,26 @@ _TITLE_PROMPT_TEMPLATE = """\
 """
 
 
+async def _apply_fallback_title(ctx: "TurnContext") -> None:
+    """LLM 不可用/失败时降级为本地规则摘要，避免会话名始终为 New Chat。
+
+    C-review MINOR-1：条件更新——窗口期内用户已改名则不覆盖。
+    """
+    title = _fallback_title(ctx.user_message)
+    if not title:
+        return
+    try:
+        applied = await asyncio.to_thread(
+            db.try_set_default_conversation_title,
+            ctx.conversation_id, title, tuple(_DEFAULT_TITLES))
+        if applied:
+            logger.info("[post_process:title] 已使用 fallback 更新标题: %s", title)
+        else:
+            logger.info("[post_process:title] 标题已在窗口期内被用户修改，放弃覆盖")
+    except Exception:
+        logger.exception("[post_process:title] fallback 更新标题失败")
+
+
 async def _generate_title(ctx: TurnContext, config: PostProcessConfig) -> None:
     """生成会话标题 — 标题仍是默认值时调用 LLM（幂等）
 
@@ -496,17 +516,7 @@ async def _generate_title(ctx: TurnContext, config: PostProcessConfig) -> None:
     if not model_cfg:
         logger.warning("[post_process:title] unknown model_id: %s", title_model)
         # 模型不可用也尽量给出规则摘要，避免标题始终为 New Chat
-        title = _fallback_title(ctx.user_message)
-        if title:
-            try:
-                # C-review MINOR-1：条件更新 — 窗口期内用户已改名则不覆盖
-                applied = await asyncio.to_thread(
-                    db.try_set_default_conversation_title,
-                    ctx.conversation_id, title, tuple(_DEFAULT_TITLES))
-                if applied:
-                    logger.info("[post_process:title] 已使用 fallback 更新标题: %s", title)
-            except Exception:
-                logger.exception("[post_process:title] fallback 更新标题失败")
+        await _apply_fallback_title(ctx)
         return
 
     # 标题只需用户问题，不需要 assistant 内容（降负担）
@@ -529,19 +539,7 @@ async def _generate_title(ctx: TurnContext, config: PostProcessConfig) -> None:
     )
     if not full_text:
         # LLM 失败时降级为本地规则摘要，避免会话名始终为 New Chat
-        title = _fallback_title(ctx.user_message)
-        if title:
-            try:
-                # C-review MINOR-1：条件更新 — LLM 窗口期内用户已改名则不覆盖
-                applied = await asyncio.to_thread(
-                    db.try_set_default_conversation_title,
-                    ctx.conversation_id, title, tuple(_DEFAULT_TITLES))
-                if applied:
-                    logger.info("[post_process:title] 已使用 fallback 更新标题: %s", title)
-                else:
-                    logger.info("[post_process:title] 标题已在窗口期内被用户修改，放弃覆盖")
-            except Exception:
-                logger.exception("[post_process:title] fallback 更新标题失败")
+        await _apply_fallback_title(ctx)
         return
 
     title = full_text.strip().strip('"\'').strip()[:MAX_TITLE_LEN]
