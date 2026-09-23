@@ -24,8 +24,6 @@ interface SftpEntry {
   mode: string
 }
 
-/** SSH 快捷命令 */
-
 /** SSH 连接配置(渲染进程与主进程共用形态) */
 interface SSHConnectionRecord {
   id: string

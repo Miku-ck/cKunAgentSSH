@@ -29,27 +29,14 @@ export interface SSHConnectionRecord {
   environment?: 'test' | 'prod'
 }
 
-/** 磁盘上的形态:敏感字段为加密后的 base64 字符串 */
-interface SSHConnectionRecordOnDisk {
-  id: string
-  name: string
-  host: string
-  port: number
-  username: string
-  authType: 'password' | 'privateKey' | 'agent'
+/**
+ * 磁盘上的形态：只有两个敏感字段改名并加密，其余与内存形态逐字段相同。
+ * 原先这里手抄了第二份 15 字段清单 —— 加字段只改一处就会静默分叉（toDisk
+ * 少写即丢数据、且类型不报错），故派生而非复制。
+ */
+interface SSHConnectionRecordOnDisk extends Omit<SSHConnectionRecord, 'password' | 'passphrase'> {
   passwordEnc?: string
-  privateKeyPath?: string
   passphraseEnc?: string
-  /** 备注,旧记录可能缺失 */
-  note?: string
-  tags: string[]
-  readyTimeout?: number
-  keepaliveInterval?: number
-  lastConnectedAt?: number
-  createdAt: number
-  updatedAt: number
-  /** 目标环境标记('test' | 'prod'),旧记录缺失时默认 'test' */
-  environment?: 'test' | 'prod'
 }
 
 function getStorePath(): string {

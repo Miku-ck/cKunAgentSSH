@@ -288,13 +288,14 @@ interface SSHConnectionConfig {
   keepaliveInterval?: number
 }
 
-export interface SSHTestResult {
+/** 渲染层副本见 src/env.d.ts（跨 tsconfig 边界不能 import，与本模块是否导出无关） */
+interface SSHTestResult {
   ok: boolean
   message: string
   latencyMs: number
 }
 
-export interface SftpEntry {
+interface SftpEntry {
   name: string
   path: string
   isDirectory: boolean
