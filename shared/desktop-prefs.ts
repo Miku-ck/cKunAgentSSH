@@ -25,7 +25,7 @@ export const DEFAULT_DESKTOP_PREFS: DesktopPrefs = {
   desktopNotifications: true,
 }
 
-export const DESKTOP_PREF_KEYS = ['autoLaunch', 'minimizeToTray', 'desktopNotifications'] as const
+const DESKTOP_PREF_KEYS = ['autoLaunch', 'minimizeToTray', 'desktopNotifications'] as const
 
 /**
  * 磁盘/IPC 传入值 → 完整偏好。

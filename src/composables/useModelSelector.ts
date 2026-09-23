@@ -5,7 +5,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import type { ModelConfig } from '@/api/client'
 
-export interface UseModelSelectorOptions {
+interface UseModelSelectorOptions {
   /** 当前选中的模型 ID（getter） */
   getSelectedId: () => string
   /** 更新选中的模型 ID（setter） */

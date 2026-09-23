@@ -32,7 +32,7 @@ export type SettingCategory =
   | 'memory'
   | 'ops'
 
-export interface AppSettings {
+interface AppSettings {
   chat: {
     sendShortcut: 'enter' | 'shiftEnter'
     thinkingExpanded: boolean

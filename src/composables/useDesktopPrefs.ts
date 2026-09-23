@@ -14,7 +14,7 @@ function api() {
   return typeof window !== 'undefined' ? window.electronAPI : undefined
 }
 
-export type PrefKey = keyof DesktopPrefs
+type PrefKey = keyof DesktopPrefs
 
 /** 主进程回包可能缺字段（版本不匹配），统一过一遍 normalize 再落地 */
 function asPrefs(raw: unknown): DesktopPrefs {

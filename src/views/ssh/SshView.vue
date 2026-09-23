@@ -301,7 +301,6 @@ function setupQcSync() {
     if (!root) return
     if (root.style.getPropertyValue('--qc-h') === `${h}px`) return
     root.style.setProperty('--qc-h', `${h}px`)
-    console.log(`[qc-sync] --qc-h=${h}px（QC 顶线与输入框底部同线）`)
   }
 
   apply()

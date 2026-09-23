@@ -16,7 +16,7 @@
  * 宿主组件不要再抄一份条件：漏掉一项就等于那块内容永远不挂载。
  *
  * 注：常规运行状态（thinking/acting、迭代计数、工具调用流）不在本面板展示 —
- * 工具调用明细见消息气泡内联轨迹（AgentTraceInline / ToolOperationList）。
+ * 工具调用明细见消息气泡内联轨迹（AgentTraceInline）与运行交付面板。
  */
 import { computed, ref, watch } from 'vue'
 import { useAgentStore, type PermissionRequest } from '@/stores/agent'

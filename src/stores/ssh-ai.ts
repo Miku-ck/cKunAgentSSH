@@ -25,7 +25,7 @@ const TASK_CHAR_LIMIT = 50000
 
 // ── SSH 特有数据模型 ──
 
-export interface SshAiContext {
+interface SshAiContext {
   connectionName?: string
   host?: string
   username?: string
@@ -44,11 +44,11 @@ export interface SshAiContext {
 }
 
 /** SSH 消息（兼容 ModeMessage，context 强类型为 SshAiContext） */
-export interface SshAiMessage extends ModeMessage {
+interface SshAiMessage extends ModeMessage {
   context?: SshAiContext
 }
 
-export interface SshAiConversation extends ModeConversation {
+interface SshAiConversation extends ModeConversation {
   messages: SshAiMessage[]
 }
 

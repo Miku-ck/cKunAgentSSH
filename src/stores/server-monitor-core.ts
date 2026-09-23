@@ -112,7 +112,7 @@ export interface ServerMetrics {
   gpuProcs: GpuProcessEntry[]
 }
 
-export interface MonitorErrorInfo {
+interface MonitorErrorInfo {
   code: string
   /** 用户友好提示（中文，可直接展示） */
   message: string

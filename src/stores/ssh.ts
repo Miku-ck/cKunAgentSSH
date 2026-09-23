@@ -18,7 +18,7 @@ export interface TerminalSession {
   createdAt?: number      // 会话创建时间戳（用于判断本地终端是否“启动即退出”）
 }
 
-export interface CommandHistoryEntry {
+interface CommandHistoryEntry {
   sessionId: string
   command: string
   count: number
@@ -26,7 +26,7 @@ export interface CommandHistoryEntry {
 }
 
 /** 命令链条目：记录连续命令对 (prevCmd -> nextCmd) */
-export interface CommandChainEntry {
+interface CommandChainEntry {
   sessionId: string
   prevCmd: string
   nextCmd: string

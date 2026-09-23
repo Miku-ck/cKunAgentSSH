@@ -15,7 +15,7 @@ import { ref, reactive } from 'vue'
 import { postToolResult, agentApi } from '@/api/client'
 import { useSSHStore } from '@/stores/ssh'
 
-export type DeliveryStatus =
+type DeliveryStatus =
   | 'pending_confirm'
   | 'writing'
   | 'capturing'

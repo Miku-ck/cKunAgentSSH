@@ -27,7 +27,7 @@ export function finalizeAgentMessage(
     // 整条固化连带 agentTrace 一起丢
     if (msgs[i].role === 'assistant' && String(msgs[i].id ?? '').startsWith('temp-agent-')) {
       const trace = agentStore.snapshot()
-      // 固化时把「从未回填结果」的调用落成明确状态：ToolOperationList 用
+      // 固化时把「从未回填结果」的调用落成明确状态：内联轨迹用
       // result/success 双 undefined 判「进行中」，运行已经结束却还挂着进行中，
       // 卡片会永远写着「进行中 · N 个操作」——而同一轮回放（DB 里 success 为 NULL）
       // 现在也走同一套判据，两处必须同时收敛成「未回写」而不是互相矛盾。

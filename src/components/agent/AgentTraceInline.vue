@@ -27,7 +27,7 @@ const isPreparing = computed(() => props.isLive && !hasToolCalls.value && !props
 
 <template>
   <div class="agent-trace-inline">
-    <!-- 扁平日志体：聚合统计与折叠控制交由内部 ToolOperationList / 深度思考 -->
+    <!-- 扁平日志体：当前仅承载准备中占位提示 -->
     <div class="trace-body">
       <!-- H14 修复：准备中占位提示 -->
       <div v-if="isPreparing" class="preparing-row">

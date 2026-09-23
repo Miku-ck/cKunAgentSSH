@@ -53,7 +53,7 @@ function withApiToken(headers: Record<string, string>): Record<string, string> {
 /**
  * 统一错误对象：携带用户友好的 message，同时保留原始错误用于调试。
  */
-export class FriendlyError extends Error {
+class FriendlyError extends Error {
   constructor(
     message: string,
     public original: unknown,

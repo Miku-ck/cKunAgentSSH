@@ -11,13 +11,13 @@ import type { Terminal } from '@xterm/xterm'
 import { useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
 
-export interface AskAiButtonState {
+interface AskAiButtonState {
   visible: boolean
   x: number
   y: number
 }
 
-export interface UseTerminalContextOptions {
+interface UseTerminalContextOptions {
   /** 当前 xterm 实例（未初始化/已卸载返回 null） */
   getTerminal: () => Terminal | null
   /** 当前终端会话 ID（store sessions 维度） */

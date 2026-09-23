@@ -7,7 +7,7 @@ import { ref, computed } from 'vue'
 import { useToastStore } from './toast'
 import { toFriendlyMessage } from '@/api/client'
 
-export type TransferKind = 'upload' | 'download' | 'copy-local' | 'copy-remote'
+type TransferKind = 'upload' | 'download' | 'copy-local' | 'copy-remote'
 
 export interface TransferItem {
   id: string

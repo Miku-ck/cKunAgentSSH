@@ -73,7 +73,7 @@ class SkillRegistry:
 
     @staticmethod
     def _compile_trigger_pattern(word: str) -> re.Pattern:
-        """构造触发词匹配正则：
+        r"""构造触发词匹配正则：
         - 纯 ASCII 字母数字：用 ASCII 断言而不是 `\b`（避免 git 命中 digit）
         - 其余（含空格/标点/中文的短语）：转义后直接 substring 匹配
         返回的 Pattern 仅用于 .search()，大小写无关。

@@ -107,13 +107,13 @@ export const THRESHOLDS = {
   gpuUtilLow: 5,
 } as const
 
-export interface Divergence {
+interface Divergence {
   key: 'load-cpu' | 'swap-full' | 'gpu-idle'
   tone: 'nv-warm' | 'nv-hot'
   text: string
 }
 
-export interface DivergenceInput {
+interface DivergenceInput {
   load1: number
   cpuUsed: number
   swapPct: number

@@ -22,7 +22,7 @@
  */
 export type PostureKey = 'goal' | 'plan'
 
-export interface RunModes {
+interface RunModes {
   /** undefined = 未表态：字段省略，后端不注入任何姿态段 */
   workflowMode?: PostureKey
   permissionMode: 'normal' | 'auto' | 'plan'

@@ -26,7 +26,7 @@ function makeStore(over: Record<string, unknown> = {}): Store {
       iterations: 1,
       duration: 2,
       toolCalls: [
-        // 从未回填：result/success 双 undefined（ToolOperationList 的「进行中」判据）
+        // 从未回填：result/success 双 undefined（内联轨迹的「进行中」判据）
         { id: 'a', tool: 'shell_exec', args: {}, timestamp: 1 },
         // 回填过但结果为空串：空串是合法结果，不能被当成「没跑完」
         { id: 'b', tool: 'file_read', args: {}, timestamp: 2, result: '', success: true },

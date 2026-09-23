@@ -10,7 +10,7 @@ export interface BulkResult {
   error?: string
 }
 
-export interface DiffLine {
+interface DiffLine {
   line: string
   /** 出现该行的节点数量 */
   count: number

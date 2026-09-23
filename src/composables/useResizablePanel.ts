@@ -4,7 +4,7 @@
  */
 import { ref, onUnmounted } from 'vue'
 
-export interface ResizablePanelOptions {
+interface ResizablePanelOptions {
   /** 最小宽度 (px)，默认 280 */
   minWidth?: number
   /** 最大宽度 (px)，默认 800 */

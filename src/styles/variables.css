@@ -92,7 +92,6 @@
   --log-muted: #8b949e;
   --log-fail: #f85149;
   --log-fail-text: #ffa198;
-  --log-running: #58a6ff;
 
   /* 人工介入/权限卡片 */
   --card-warn-border: #4a4533;
@@ -183,7 +182,6 @@
   --log-muted: #656d76;
   --log-fail: #cf222e;
   --log-fail-text: #a40e26;
-  --log-running: #0969da;
 
   /* 浅色主题：人工介入/权限卡片 */
   --card-warn-border: #e5d5a8;

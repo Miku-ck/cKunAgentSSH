@@ -13,7 +13,7 @@ import { StreamingThinkScrubber } from '@/utils/think-scrubber'
 import { useToastStore } from './toast'
 import { useAgentDeliver } from '@/composables/useAgentDeliver'
 
-export interface ToolCallEntry {
+interface ToolCallEntry {
   id: string
   tool: string
   args: Record<string, unknown>
@@ -31,7 +31,7 @@ export interface ToolCallEntry {
   deliveryToolId?: string
 }
 
-export interface HumanHelpRequest {
+interface HumanHelpRequest {
   id: string
   reason: string
   tool?: string
@@ -89,7 +89,7 @@ export interface PermissionRequest {
 }
 
 /** 澄清向导运行时状态（clarification_needed 事件触发后填充） */
-export interface ClarificationWizardState {
+interface ClarificationWizardState {
   runId: string
   tool: string
   toolCallId: string
@@ -124,7 +124,7 @@ function permCardKey(tool: string, command?: string): string {
   return command ? `${tool}::${command}` : tool
 }
 
-export type AgentRunStatus = 'idle' | 'running' | 'completed' | 'failed'
+type AgentRunStatus = 'idle' | 'running' | 'completed' | 'failed'
 
 export const useAgentStore = defineStore('agent', () => {
   // ── State ──
