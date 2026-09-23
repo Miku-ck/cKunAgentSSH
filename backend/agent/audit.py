@@ -236,7 +236,7 @@ def _build_filters(
     """按固定列序拼 WHERE 子句与对应参数；返回 (where, params)，params 为新列表。"""
     conds: list[str] = []
     params: list[Any] = []
-    for col, val in zip(_FILTER_COLUMNS, (environment, target_id, action, conclusion, run_id)):
+    for col, val in zip(_FILTER_COLUMNS, (environment, target_id, action, conclusion, run_id), strict=True):
         if val:
             conds.append(f"{col} = ?")
             params.append(val)
