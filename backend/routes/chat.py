@@ -39,6 +39,15 @@ def _uploads_root() -> Path:
     return Path(db._db_path).parent / "uploads"
 
 
+def _sanitize_conv(raw: str) -> str:
+    """会话目录名消毒：仅保留字母数字/连字符/下划线，防止路径穿越。
+
+    上传落盘与会话删除级联清理两处共用同一规则 —— 此前各抄一份 re.sub，
+    靠注释维持一致（典型跨处漂移风险），现收敛到此单一实现。
+    """
+    return re.sub(r"[^A-Za-z0-9_\-]", "", raw or "")
+
+
 @router.post("/chat/upload")
 async def upload_chat_file(
     file: UploadFile = File(...),
@@ -65,7 +74,7 @@ async def upload_chat_file(
 
     file_id = uuid.uuid4().hex
     # 消毒 conversation_id：仅保留字母数字/连字符/下划线，防止路径穿越；空则兜底 "general"
-    safe_conv = re.sub(r"[^A-Za-z0-9_\-]", "", conversation_id or "") or "general"
+    safe_conv = _sanitize_conv(conversation_id) or "general"
     conv_dir = _uploads_root() / safe_conv
     # C-review MINOR-5：同步磁盘 IO 放线程池 — 原实现 async 路由内直接
     # mkdir/write_bytes（最多 10MB），阻塞事件循环（其余 db 调用都已 to_thread）
@@ -143,11 +152,11 @@ def delete_conversation(cid: str):
     if not deleted:
         raise HTTPException(status_code=404, detail="Conversation not found")
     # B-MINOR 修复：级联清理 <db_dir>/uploads/<conv>/ 目录，
-    # 避免会话删除后上传文件无限堆积（与上传接口的消毒规则保持一致；
+    # 避免会话删除后上传文件无限堆积（消毒走 _sanitize_conv，与上传接口同一实现；
     # 空会话 id 落入共享的 "general" 目录，不删除）
     try:
         import shutil as _shutil
-        safe_conv = re.sub(r"[^A-Za-z0-9_\-]", "", cid or "")
+        safe_conv = _sanitize_conv(cid)
         if safe_conv:
             root = _uploads_root().resolve()
             conv_dir = (root / safe_conv).resolve()
