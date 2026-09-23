@@ -141,7 +141,7 @@ export class BridgeWsClient {
       }
     }
 
-    ws.onclose = (ev) => {
+    ws.onclose = () => {
       this.connecting = false
       this.stopPing()
       this.ws = null

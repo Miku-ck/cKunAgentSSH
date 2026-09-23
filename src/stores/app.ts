@@ -35,7 +35,7 @@ export const useAppStore = defineStore('app', () => {
 
           backendPort.value = port
         }
-      }).catch((err) => {
+      }).catch(() => {
         // 后端尚未起监听时查询失败属预期，继续轮询
 
       }).finally(() => {
@@ -70,7 +70,7 @@ export const useAppStore = defineStore('app', () => {
           setBackendStatus('ready', port)
         }
       }
-    }).catch((err) => {
+    }).catch(() => {
 
     })
 

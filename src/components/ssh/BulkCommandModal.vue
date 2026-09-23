@@ -125,7 +125,7 @@ import {
   diffResults, resultsConsistent, decideBulkDispatch, type BulkResult,
 } from '@/composables/bulkCommandDiff'
 
-const emit = defineEmits<{ close: [] }>()
+defineEmits<{ close: [] }>()
 
 const sshStore = useSSHStore()
 const sshAiStore = useSshAiStore()

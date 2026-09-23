@@ -5,7 +5,6 @@
 import * as pty from 'node-pty'
 import { BrowserWindow } from 'electron'
 import { homedir } from 'os'
-import { join } from 'path'
 import { statSync } from 'fs'
 import { LS_COLORS_NO_BACKGROUND } from './utils/terminal-colors'
 

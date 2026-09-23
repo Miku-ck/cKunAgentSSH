@@ -264,9 +264,9 @@ export class BackendManager {
         })
       })
 
-      this.process.stdout?.on('data', (data: Buffer) => {
-        // backend stdout 已通过状态事件透传，省略控制台回显
-      })
+      // 空监听器不是遗漏：挂 'data' 才会把 stdout 推入 flowing 模式，
+      // 不消费则子进程会因管道缓冲写满而阻塞。backend stdout 已由状态事件透传。
+      this.process.stdout?.on('data', () => {})
 
       this.process.stderr?.on('data', (data: Buffer) => {
         try { console.error(`[Python] ${data.toString().trim()}`) } catch { /* EPIPE on exit */ }

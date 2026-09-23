@@ -406,7 +406,7 @@ async function remoteRefresh(): Promise<void> {
     // 且 runBatch 派发前按 id 检查 status 防竞态
     runBatch(tasks.map(t => ({ fn: () => runLocalCopy(t.id, t.src, t.dest), id: t.id, kind: 'copy-local' as const }))).then(async (results) => {
       if (results.some(r => r.ok)) await localRefresh()
-    }).catch((err) => {
+    }).catch(() => {
       // C2 修复：防止 post-batch refresh 抛错导致未捕获 Promise rejection
 
     })
@@ -454,7 +454,7 @@ async function remoteRefresh(): Promise<void> {
     // F-6 修复：带上 id/kind（同 localCopy）
     runBatch(tasks.map(t => ({ fn: () => runRemoteCopy(t.id, t.src, t.dest), id: t.id, kind: 'copy-remote' as const }))).then(async (results) => {
       if (results.some(r => r.ok)) await remoteRefresh()
-    }).catch((err) => {
+    }).catch(() => {
       // C2 修复：防止 post-batch refresh 抛错导致未捕获 Promise rejection
 
     })
@@ -1113,7 +1113,7 @@ function retryTransfer(id: string): void {
     : kind === 'download' ? () => runDownload(newId, sshSessionId.value, from, to)
     : kind === 'copy-local' ? () => runLocalCopy(newId, from, to)
     : () => runRemoteCopy(newId, from, to)
-  runBatch([{ fn: task, id: newId, kind }]).catch((err) => {
+  runBatch([{ fn: task, id: newId, kind }]).catch(() => {
 
   })
 }

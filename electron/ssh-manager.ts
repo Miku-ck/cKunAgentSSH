@@ -379,7 +379,6 @@ export class SSHManager {
   private mainWindow: BrowserWindow | null = null
   // s1 修复：known_hosts 存储（host:port → sha256 指纹），TOFU 模型
   private knownHosts = new Map<string, string>()
-  private knownHostsLoaded = false
   // E-1 修复：single-flight 加载 Promise — 并发连接共享同一次磁盘加载，
   // 消除"标志先置位、文件未读完"的竞态窗口（并发连接按空表 TOFU 并覆写磁盘表）
   private loadPromise: Promise<void> | null = null
@@ -418,9 +417,10 @@ export class SSHManager {
 
   /**
    * 加载 known_hosts 文件到内存（懒加载，single-flight）
-   * E-1 修复：原实现 `knownHostsLoaded = true` 在 await readFile 完成前同步置位，
+   * E-1 修复：原实现用一个 `loaded` 布尔标志，且在 await readFile 完成前同步置位，
    * 并发连接在竞态窗口内按空表 TOFU，且各自的后续 save 以子集覆写磁盘 known_hosts。
-   * 现在所有并发调用共享同一个 Promise，标志在加载完成（finally）后才置位。
+   * 现在所有并发调用共享同一个 loadPromise：加载未完成前它非空即天然挡住重复触发，
+   * 调用方 await 它即可保证读到已填充的表，无需再另设就绪标志。
    */
   private loadKnownHosts(): Promise<void> {
     if (!this.loadPromise) {
@@ -433,8 +433,6 @@ export class SSHManager {
           }
         } catch {
           // 文件不存在或解析失败 → 空表，后续 TOFU 逐步填充
-        } finally {
-          this.knownHostsLoaded = true
         }
       })()
     }

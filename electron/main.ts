@@ -945,8 +945,6 @@ function setupPtyIPC(): void {
       if (isPowerShell) {
         // PowerShell 补全：调用内置 CompleteInput API
         const safePrefix = prefix.replace(/'/g, "''")
-        const safeCmd = cmd.replace(/'/g, "''")
-        const segmentsJson = JSON.stringify(prevSegments || [])
         const line = isCommand
           ? `${safePrefix}`
           : `${prevSegments?.join(' ') || ''} ${safePrefix}`.trim()
