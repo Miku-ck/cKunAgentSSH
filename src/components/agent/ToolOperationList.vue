@@ -25,12 +25,22 @@ const props = withDefaults(defineProps<{
   defaultExpanded?: boolean
   /** 嵌入模式：隐藏自身折叠头，交由父组件控制展开 */
   hideHeader?: boolean
+  /** 要排除的工具类型列表（这些工具的调用不会显示，由其它面板负责展示） */
+  excludeTools?: string[]
 }>(), {
   defaultExpanded: false,
   hideHeader: false,
+  excludeTools: () => [],
 })
 
 const expanded = ref(props.defaultExpanded || props.hideHeader)
+
+// 过滤掉 excludeTools 中指定的工具类型
+const visibleToolCalls = computed(() =>
+  props.excludeTools.length === 0
+    ? props.toolCalls
+    : props.toolCalls.filter(tc => !props.excludeTools.includes(tc.tool)),
+)
 
 function toggle() {
   expanded.value = !expanded.value
@@ -134,16 +144,17 @@ function fmtDuration(ms?: number | null): string {
 // ── 按动作类型聚合统计（用于折叠头） ──
 const actionStats = computed(() => {
   const stats = new Map<string, number>()
-  for (const tc of props.toolCalls) {
+  for (const tc of visibleToolCalls.value) {
     const verb = verbFor(tc.tool)
     stats.set(verb, (stats.get(verb) || 0) + 1)
   }
   return Array.from(stats.entries())
 })
 
-const totalRunning = computed(() => props.toolCalls.filter(c => c.result === undefined && c.success === undefined).length)
-const totalFailed = computed(() => props.toolCalls.filter(c => c.success === false).length)
-const totalCount = computed(() => props.toolCalls.length)
+const totalRunning = computed(() => visibleToolCalls.value.filter(c => c.result === undefined && c.success === undefined).length)
+const totalFailed = computed(() => visibleToolCalls.value.filter(c => c.success === false).length)
+const hasVisible = computed(() => visibleToolCalls.value.length > 0)
+const totalCount = computed(() => visibleToolCalls.value.length)
 
 const headerTitle = computed((): string => {
   const n = totalCount.value
@@ -163,7 +174,7 @@ const statsText = computed((): string =>
 </script>
 
 <template>
-  <div class="tool-log" :class="{ embedded: hideHeader }">
+  <div v-if="hideHeader || hasVisible" class="tool-log" :class="{ embedded: hideHeader }">
     <div v-if="!hideHeader" class="log-header" @click="toggle">
       <span class="log-title">{{ headerTitle }}</span>
       <span class="log-right">
@@ -185,7 +196,7 @@ const statsText = computed((): string =>
 
     <div v-show="expanded" class="log-body">
       <div
-        v-for="tc in toolCalls"
+        v-for="tc in visibleToolCalls"
         :key="tc.id"
         class="log-item"
         :class="{ failed: tc.success === false, running: tc.result === undefined && tc.success === undefined }"

@@ -37,11 +37,12 @@ const isPreparing = computed(() => props.isLive && !hasToolCalls.value && !props
         </span>
       </div>
 
-      <!-- 工具调用日志（自带折叠头） -->
+      <!-- 工具调用日志（自带折叠头，已交付到可见终端的 shell_exec/job_run 由 deliveries 面板负责，此处排除） -->
       <ToolOperationList
         v-if="hasToolCalls"
         :tool-calls="trace.toolCalls"
         :default-expanded="isLive"
+        :exclude-tools="['shell_exec', 'job_run']"
       />
     </div>
   </div>
