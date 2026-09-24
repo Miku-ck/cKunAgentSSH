@@ -234,6 +234,9 @@ defineEmits<{ close: [] }>()
 const toast = useToastStore()
 const tab = ref<'memories' | 'jobs' | 'blocks'>('memories')
 const loading = ref(false)
+// 三个列表加载器共用单调序号守卫：连点搜索/快切 tab 时，迟到的旧响应
+// 不得覆盖新结果、也不得提前熄灭新请求的 loading
+let loadSeq = 0
 const error = ref('')
 
 const memories = ref<MemoryRow[]>([])
@@ -308,6 +311,7 @@ function scopeShort(scope: string): string {
 }
 
 async function loadMemories() {
+  const seq = ++loadSeq
   loading.value = true
   error.value = ''
   try {
@@ -317,11 +321,13 @@ async function loadMemories() {
       q: filters.value.q.trim() || undefined,
       limit: 100,
     })
+    if (seq !== loadSeq) return
     memories.value = data.memories
   } catch (e) {
+    if (seq !== loadSeq) return
     error.value = toFriendlyMessage(e, '记忆加载失败')
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 
@@ -329,18 +335,28 @@ async function loadStats() {
   try { stats.value = await agentAdminApi.memoryStats() } catch { /* 头部统计是增强项 */ }
 }
 async function loadJobs() {
+  const seq = ++loadSeq
   loading.value = true
   error.value = ''
-  try { jobs.value = (await agentAdminApi.listMemoryJobs()).jobs }
-  catch (e) { error.value = toFriendlyMessage(e, '队列加载失败') }
-  finally { loading.value = false }
+  try {
+    const data = await agentAdminApi.listMemoryJobs()
+    if (seq !== loadSeq) return
+    jobs.value = data.jobs
+  }
+  catch (e) { if (seq === loadSeq) error.value = toFriendlyMessage(e, '队列加载失败') }
+  finally { if (seq === loadSeq) loading.value = false }
 }
 async function loadBlocks() {
+  const seq = ++loadSeq
   loading.value = true
   error.value = ''
-  try { blocks.value = (await agentAdminApi.listMemoryBlocks()).blocks }
-  catch (e) { error.value = toFriendlyMessage(e, '画像块加载失败') }
-  finally { loading.value = false }
+  try {
+    const data = await agentAdminApi.listMemoryBlocks()
+    if (seq !== loadSeq) return
+    blocks.value = data.blocks
+  }
+  catch (e) { if (seq === loadSeq) error.value = toFriendlyMessage(e, '画像块加载失败') }
+  finally { if (seq === loadSeq) loading.value = false }
 }
 
 function switchTab(next: typeof tab.value) {

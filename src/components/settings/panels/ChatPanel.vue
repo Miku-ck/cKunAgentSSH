@@ -98,7 +98,7 @@
         <input
           v-model.number="retention.keepCount"
           type="number"
-          min="10"
+          min="0"
           max="100000"
           class="setting-number"
           @change="onRetentionCountChange"
@@ -177,8 +177,20 @@ function onRetentionToggle(v: boolean) {
   void saveRetention({ enabled: v })
 }
 
-function onRetentionCountChange() {
-  const n = Math.max(10, Math.min(100000, Number(retention.value.keepCount) || 1000))
+function onRetentionCountChange(ev?: Event) {
+  // 钳制区间与后端 Field(ge=0, le=100000) 一致：0 是合法值（清空全部已结束会话），
+  // 原 min=10 会把用户输入的 0 静默改成 10；'' 经 Number 塌成 0 会误发"全清"指令，
+  // 故用原始输入串判空，空/NaN 回弹默认值但不保存。
+  const raw = ev?.target ? (ev.target as HTMLInputElement).value : null
+  if (raw === null || raw.trim() === '') {
+    retention.value.keepCount = 1000
+    return
+  }
+  const n = Math.max(0, Math.min(100000, Number(raw)))
+  if (!Number.isFinite(n)) {
+    retention.value.keepCount = 1000
+    return
+  }
   retention.value.keepCount = n
   void saveRetention({ keepCount: n })
 }

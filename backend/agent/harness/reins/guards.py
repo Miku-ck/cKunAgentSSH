@@ -132,7 +132,7 @@ class FilesystemGuard:
                         }],
                     )
                 # 生产环境强化（合规）：危险命令仅接受预授权 allowlist，禁止临时一次审批
-                env = (getattr(ctx, "environment", "test") or "test")
+                env = _audit_environment(ctx)
                 if env == "prod":
                     if not self.permission_gate.is_permanently_allowed(
                             tool, args, bound_command=bound):
@@ -372,7 +372,7 @@ class AuditLogger:
         # 与 blocked/denied 记录不重复。
         try:
             args = last.get("args") or {}
-            command = command_from_args(args)
+            command = str(command_from_args(args))
             await append_record_async(
                 action=str(last.get("tool", "")),
                 conclusion="executed" if last.get("success") else "failed",

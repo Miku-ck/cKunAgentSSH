@@ -467,7 +467,7 @@ function formPayload() {
   return {
     name: form.name.trim(),
     schedule_type: form.schedule_type,
-    interval_minutes: form.interval_minutes || FORM_DEFAULTS.interval_minutes,
+    interval_minutes: numOr(form.interval_minutes, FORM_DEFAULTS.interval_minutes),
     time_hour: numOr(form.time_hour, FORM_DEFAULTS.time_hour),
     time_minute: numOr(form.time_minute, FORM_DEFAULTS.time_minute),
     weekday: numOr(form.weekday, FORM_DEFAULTS.weekday),

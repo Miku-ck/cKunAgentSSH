@@ -285,7 +285,7 @@
             <!-- Footer -->
             <div class="modal-footer">
               <button class="btn btn-ghost" @click="closeDialog">取消</button>
-              <button class="btn btn-primary" :disabled="!canSave" @click="handleSave">
+              <button class="btn btn-primary" :disabled="!canSave || saving" @click="handleSave">
                 {{ isEditing ? '保存' : '添加' }}
               </button>
             </div>
@@ -377,6 +377,9 @@ const canSave = computed(() => {
   return true
 })
 
+// 网络往返期间禁用保存入口：连点会重复创建同名模型/叠加并发更新
+const saving = ref(false)
+
 function selectProvider(p: ProviderDef) {
   form.provider = p.id
   if (p.baseUrl && !isEditing.value) {
@@ -447,7 +450,16 @@ function closeDialog() {
 }
 
 async function handleSave() {
-  if (!canSave.value) return
+  if (!canSave.value || saving.value) return
+  saving.value = true
+  try {
+  await doSave()
+  } finally {
+    saving.value = false
+  }
+}
+
+async function doSave() {
   const trim = (s: string) => (s || '').trim()
   // 数字输入框可以被清空或手打成越界值（min/max 只约束步进器，不拦手打）。
   // 原样提交会撞上后端 Field 的同款区间（0-2 / 1-1000000）→ pydantic 原文进 toast。

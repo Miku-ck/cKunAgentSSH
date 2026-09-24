@@ -566,6 +566,10 @@ export class BackendManager {
         const req = http.get(`http://127.0.0.1:${port}/api/health`, (res) => {
           if (res.statusCode === 200) {
             res.resume()
+            // 成功即终结本次尝试：不置 settled 的话，resolve 前已在途的 socket
+            // 'error' 回调仍会多排一轮 check（幂等但留悬空定时器）。
+            settled = true
+            req.destroy()
             resolve()
           } else {
             res.resume()

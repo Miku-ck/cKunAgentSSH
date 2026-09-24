@@ -367,7 +367,7 @@ export interface SshReconnectStatus {
   maxAttempts: number
   /** reconnecting/retry 阶段：下一次尝试前的退避等待（ms） */
   delayMs?: number
-  /** gave-up 阶段：exhausted=3 次均失败 | config-missing=连接配置已删除 | cancelled=重连被取消（如断开后连接配置被删除，tab 仍在） */
+  /** gave-up 阶段：exhausted=RECONNECT_MAX_ATTEMPTS 次均失败 | config-missing=连接配置已删除 | cancelled=重连被取消（如断开后连接配置被删除，tab 仍在） */
   reason?: 'exhausted' | 'config-missing' | 'cancelled'
 }
 

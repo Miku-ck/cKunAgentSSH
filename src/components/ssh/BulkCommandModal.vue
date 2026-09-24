@@ -1,5 +1,5 @@
 <template>
-  <div class="bulk-modal-mask" @click.self="$emit('close')">
+  <div class="bulk-modal-mask" @click.self="requestClose">
     <div class="bulk-modal">
       <div class="bulk-title">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
@@ -8,7 +8,7 @@
           共 {{ okCount }} 台成功 · {{ failedCount }} 台失败
           <template v-if="results.length > 1 && !allConsistent"> · 存在差异</template>
         </span>
-        <button class="bulk-close" title="关闭" @click="$emit('close')">×</button>
+        <button class="bulk-close" title="关闭" @click="requestClose">×</button>
       </div>
 
       <!-- 下发前配置 -->
@@ -54,7 +54,7 @@
             {{ showDiff ? '返回逐节点视图' : '差异对比' }}
           </button>
           <button class="sc-btn" @click="askAi">⚡ AI 分析结果</button>
-          <button class="sc-btn" @click="$emit('close')">关闭</button>
+          <button class="sc-btn" @click="requestClose">关闭</button>
         </div>
 
         <!-- 差异对比视图 -->
@@ -95,7 +95,7 @@
 
       <!-- 底部按钮（配置态） -->
       <div v-if="!results.length && !running" class="bulk-footer">
-        <button class="sc-btn" @click="$emit('close')">取消</button>
+        <button class="sc-btn" @click="requestClose">取消</button>
         <button class="sc-btn primary" :disabled="!canRun" @click="run">
           {{ checking ? '安全判定中…' : `执行（${checkedCount} 台并行）` }}
         </button>
@@ -125,7 +125,24 @@ import {
   diffResults, resultsConsistent, decideBulkDispatch, type BulkResult,
 } from '@/composables/bulkCommandDiff'
 
-defineEmits<{ close: [] }>()
+/** 统一关闭入口：执行中关闭需确认——sshExec 不随关窗取消，且重开弹窗即"失忆"，
+ *  可对同一批节点无感知地重复并发下发同一命令 */
+async function requestClose() {
+  if (running.value) {
+    const { confirm } = useConfirm()
+    const ok = await confirm({
+      title: '命令仍在执行',
+      message: `${liveChecked.value.length} 台节点的命令尚未全部返回，关闭后结果将被丢弃。确定关闭？`,
+      confirmText: '仍要关闭',
+      cancelText: '继续等待',
+      danger: true,
+    })
+    if (!ok) return
+  }
+  emit('close')
+}
+
+const emit = defineEmits<{ close: [] }>()
 
 const sshStore = useSSHStore()
 const sshAiStore = useSshAiStore()
@@ -148,8 +165,11 @@ function hostOf(s: TerminalSession): string {
   return conn ? `${conn.name} (${conn.username}@${conn.host})` : s.name
 }
 
-const checkedCount = computed(() => checked.value.length)
-const canRun = computed(() => command.value.trim().length > 0 && checked.value.length > 0 && !running.value && !checking.value)
+const checkedCount = computed(() => liveChecked.value.length)
+// 执行期间目标会话可能断开：watch 对 checked 只增不减，若直接用 checked.length，
+// 断开的目标会永远留在进度分母里（条到不了 100%）。取与活动会话的交集兜底。
+const liveChecked = computed(() => checked.value.filter(id => remoteSessions.value.some(s => s.id === id)))
+const canRun = computed(() => command.value.trim().length > 0 && liveChecked.value.length > 0 && !running.value && !checking.value)
 
 const doneCount = computed(() => results.value.length)
 
@@ -231,7 +251,7 @@ async function confirmBeforeRun(cmd: string, targets: TerminalSession[]): Promis
 async function run() {
   if (!canRun.value) return
   const cmd = command.value.trim()
-  const targets = remoteSessions.value.filter(s => checked.value.includes(s.id))
+  const targets = remoteSessions.value.filter(s => liveChecked.value.includes(s.id))
   if (!targets.length) return
 
   // 判定要走一次网络往返，期间禁用入口避免重复点击堆叠确认框
