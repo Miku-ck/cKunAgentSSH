@@ -128,25 +128,10 @@ onMounted(() => {
 })
 </script>
 
+<style scoped src="./settings-panel-base.css"></style>
 <style scoped>
-.panel { height: 100%; display: flex; flex-direction: column; }
-.panel-header { margin-bottom: 20px; flex-shrink: 0; }
-.panel-header h3 {
-  margin: 0 0 4px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-.panel-desc {
-  margin: 0;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-.panel-body {
-  flex: 1;
-  overflow-y: auto;
-  padding-right: 4px;
-}
+/* 面板骨架与 .setting-select 见 settings-panel-base.css */
+
 .slider-row { display: flex; align-items: center; gap: 12px; }
 .setting-range {
   width: 160px; height: 4px;

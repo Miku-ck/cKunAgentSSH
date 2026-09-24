@@ -610,14 +610,14 @@ return String(n)
 
 </script>
 
+<style scoped src="./settings-panel-base.css"></style>
 <style scoped>
+/* 面板骨架与 .setting-select 见 settings-panel-base.css */
+
 .models-panel { height: 100%; display: flex; flex-direction: column; }
 
-.panel-header { margin-bottom: 16px; flex-shrink: 0; }
-.panel-header h3 { margin: 0 0 4px; font-size: 14px; font-weight: 600; color: var(--text-primary); }
-.panel-desc { margin: 0; font-size: 12px; color: var(--text-secondary); }
-
-.panel-body { flex: 1; overflow-y: auto; scrollbar-width: none; }
+/* 有意的本地差异：卡片网格隐藏滚动条（骨架的 overflow-y / padding-right 仍生效） */
+.panel-body { scrollbar-width: none; }
 .panel-body::-webkit-scrollbar { display: none; }
 
 /* 工具栏 */
@@ -724,7 +724,6 @@ return String(n)
 }
 .badge-cap { background: #3fb95022; color: #3fb950; border: 1px solid #3fb95044; }
 .badge-provider { background: color-mix(in srgb, var(--text-secondary) 13%, transparent); color: var(--text-secondary); border: 1px solid #ffffff10; }
-
 
 /* 测试状态 */
 .test-status {

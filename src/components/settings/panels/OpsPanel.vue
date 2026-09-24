@@ -265,12 +265,10 @@ onMounted(() => {
 })
 </script>
 
+<style scoped src="./settings-panel-base.css"></style>
 <style scoped>
-.panel { height: 100%; display: flex; flex-direction: column; }
-.panel-header { margin-bottom: 16px; flex-shrink: 0; }
-.panel-header h3 { margin: 0 0 4px; font-size: 14px; font-weight: 600; color: var(--text-primary); }
-.panel-desc { margin: 0; font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
-.panel-body { flex: 1; overflow-y: auto; padding-right: 4px; }
+/* 面板骨架与 .setting-select 见 settings-panel-base.css */
+
 .section { margin-bottom: 24px; }
 .section-title {
   margin: 0 0 6px;
@@ -320,24 +318,6 @@ onMounted(() => {
 }
 .form-input:focus { border-color: var(--accent-primary); }
 .form-input.input-error { border-color: #cf8a80; }
-.setting-select {
-  height: 28px;
-  padding: 0 24px 0 8px;
-  background: var(--bg-input);
-  border: 1px solid var(--border-input);
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
-  font-size: 12px;
-  font-family: inherit;
-  outline: none;
-  cursor: pointer;
-  -webkit-appearance: none;
-  appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%238b949e' stroke-width='1.5' stroke-linecap='round'%3E%3Cpolyline points='3 5 6 8 9 5'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 6px center;
-}
-.setting-select:focus { border-color: var(--accent-primary); }
 .btn {
   height: 28px;
   padding: 0 12px;

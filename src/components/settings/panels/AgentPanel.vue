@@ -765,40 +765,10 @@ onMounted(() => {
 })
 </script>
 
+<style scoped src="./settings-panel-base.css"></style>
+<style scoped src="./settings-groups.css"></style>
 <style scoped>
-.panel { height: 100%; display: flex; flex-direction: column; }
-.panel-header { margin-bottom: 16px; flex-shrink: 0; }
-.panel-header h3 { margin: 0 0 4px; font-size: 14px; font-weight: 600; color: var(--text-primary); }
-.panel-desc { margin: 0; font-size: 12px; color: var(--text-secondary); }
-.panel-body { flex: 1; overflow-y: auto; padding-right: 4px; }
-
-.grp {
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  margin-bottom: 10px;
-  background: var(--bg-input);
-}
-.grp-head {
-  display: flex; align-items: center; gap: 8px; width: 100%;
-  padding: 10px 12px; background: none; border: none; cursor: pointer;
-  color: var(--text-primary); font-size: 13px; font-family: inherit; text-align: left;
-}
-.grp.static .grp-head { cursor: default; }
-.grp-caret { transition: transform .15s; font-size: 11px; color: var(--text-tertiary); }
-.grp-caret.open { transform: rotate(90deg); }
-.grp-title { font-weight: 600; }
-.grp-badge { margin-left: auto; font-size: 11px; color: var(--text-secondary); }
 .grp-badge.live { color: var(--accent-primary); }
-.grp.static .grp-badge { display: none; }
-.grp-body { padding: 2px 12px 12px; }
-
-.hint { margin: 0 0 8px; font-size: 11.5px; line-height: 1.5; color: var(--text-secondary); }
-.hint.err { color: #d98f86; }
-.hint.muted { color: var(--text-tertiary); }
-.link-btn {
-  background: none; border: none; color: var(--accent-primary);
-  cursor: pointer; font-size: 11.5px; font-family: inherit; padding: 0; text-decoration: underline;
-}
 
 .risk-group { margin-bottom: 10px; }
 .risk-label {
@@ -813,7 +783,6 @@ onMounted(() => {
   padding: 7px 4px; border-top: 1px solid var(--border-subtle);
 }
 .strat-row.off { opacity: .55; }
-.tool-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .tool-name { font-size: 12.5px; font-family: ui-monospace, Consolas, monospace; color: var(--text-primary); }
 .strat-name { font-size: 12.5px; font-weight: 600; color: var(--text-primary); }
 .tool-desc {
@@ -821,24 +790,8 @@ onMounted(() => {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .tool-flags { display: flex; gap: 4px; flex-shrink: 0; }
-.flag {
-  font-size: 10px; padding: 1px 6px; border-radius: 8px; white-space: nowrap;
-  border: 1px solid var(--border-default); color: var(--text-tertiary);
-}
-.flag.ok { color: #7fbc92; border-color: rgba(127,188,146,.35); }
-.flag.vio { color: #a98fd0; border-color: rgba(169,143,208,.35); }
 .flag.info { color: #7aa2d0; border-color: rgba(122,162,208,.35); }
 .strat-meta { display: flex; gap: 5px; margin-top: 3px; }
-
-.btn {
-  flex-shrink: 0; height: 24px; padding: 0 10px; border-radius: 4px;
-  background: none; border: 1px solid var(--border-default);
-  color: var(--text-primary); font-size: 11.5px; font-family: inherit; cursor: pointer;
-}
-.btn.sm { height: 22px; padding: 0 8px; font-size: 11px; }
-.btn.danger { color: #cf8a80; border-color: rgba(207,138,128,.4); }
-.btn.danger:hover { background: rgba(207,138,128,.08); }
-.btn:disabled { opacity: .5; cursor: default; }
 
 .budget-row { display: flex; gap: 16px; margin: 8px 0 4px; }
 .budget-field { display: flex; flex-direction: column; gap: 4px; }
@@ -865,15 +818,8 @@ onMounted(() => {
 }
 .ops-toggle-row:first-of-type { border-top: none; }
 .ops-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.setting-select {
-  flex-shrink: 0; height: 26px; padding: 0 22px 0 8px;
-  background: var(--bg-input); border: 1px solid var(--border-default);
-  border-radius: 4px; color: var(--text-primary);
-  font-size: 12px; font-family: inherit; outline: none; cursor: pointer;
-  -webkit-appearance: none; appearance: none;
-}
+.setting-select { flex-shrink: 0; }
 .setting-select:disabled { opacity: .5; cursor: default; }
-.setting-select:focus { border-color: var(--accent-primary); }
 .slider-inline { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
 .slider-inline .setting-range { flex: 1; max-width: 320px; }
 .slider-value { font-size: 12px; color: var(--text-secondary); min-width: 40px; text-align: right; }
@@ -893,5 +839,4 @@ onMounted(() => {
 .allow-row { display: flex; gap: 8px; align-items: center; margin: 8px 0 4px; }
 .text-input { flex: 1; min-width: 0; }
 .text-input.wide { flex: 2; }
-.hint code { font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
 </style>
