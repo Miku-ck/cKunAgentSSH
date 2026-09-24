@@ -87,12 +87,6 @@
   --status-tag-border: rgba(86, 156, 214, 0.2);
   --status-tag-text: #a8b3bd;
 
-  /* 工具日志色（Agent 轨迹） */
-  --log-text: #c9d1d9;
-  --log-muted: #8b949e;
-  --log-fail: #f85149;
-  --log-fail-text: #ffa198;
-
   /* 人工介入/权限卡片 */
   --card-warn-border: #4a4533;
   --card-perm-bg: #2d221a;
@@ -176,12 +170,6 @@
   --status-tag-bg: rgba(31, 111, 178, 0.08);
   --status-tag-border: rgba(31, 111, 178, 0.25);
   --status-tag-text: #1f6fb2;
-
-  /* 浅色主题：工具日志（GitHub 亮色） */
-  --log-text: #1f2328;
-  --log-muted: #656d76;
-  --log-fail: #cf222e;
-  --log-fail-text: #a40e26;
 
   /* 浅色主题：人工介入/权限卡片 */
   --card-warn-border: #e5d5a8;

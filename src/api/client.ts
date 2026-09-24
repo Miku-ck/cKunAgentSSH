@@ -429,8 +429,8 @@ export const api = {
   getDefaultModel: (mode?: string) =>
     request<{ id: string; name?: string; model_id?: string }>(`/settings/models/default${mode ? `?mode=${mode}` : ''}`),
 
-  // 后端路由：PATCH /settings/models/default?model_id=...&mode=...（两个参数都是 query）
-  // 顺序敏感：FastAPI 中 /models/default 注册在 /models/{config_id} 之前，别改成 path 参数
+  // 两个参数都在 query（不是 path）：PATCH /settings/models/default?model_id=...&mode=...
+  // 顺序敏感：FastAPI 里 default 那条必须注册在 /settings/models/{config_id} 之前，别改成 path 参数
   setDefaultModel: (modelId: string, mode: 'ssh' = 'ssh') => {
     const q = new URLSearchParams({ model_id: modelId, mode })
     return request<{ default: string; mode: string }>(`/settings/models/default?${q.toString()}`, {
@@ -827,7 +827,6 @@ export interface StreamAgentOptions {
   /** 历史上下文条数（设置"上下文窗口"，1-100） */
   contextWindow?: number
   visibleTerminal?: boolean
-  sessionType?: 'local' | 'remote'
   /**
    * 对话姿态（goal/plan）—— 后端据此注入对应的姿态 system prompt。
    * undefined = 未表态，字段省略、后端不注入任何姿态段（chip 的 × 走这条）。
@@ -881,7 +880,6 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
           auto_skill_match: options.autoSkillMatch ?? true,
           context_window: options.contextWindow ?? 20,
           visible_terminal: options.visibleTerminal ?? false,
-          session_type: options.sessionType,
           // 未表态时省略该字段（后端 None = 不注入任何姿态段）。
           // 与上方 enable_thinking 同一教训：`?? 'goal'` 会把「用户按 × 关掉了」
           // 压成「又选了一次目标」，chip 消失了但行为什么都没变 —— 能关、关的是摆设。

@@ -227,7 +227,6 @@ export const useAgentStore = defineStore('agent', () => {
     autoSkillMatch?: boolean
     contextWindow?: number
     visibleTerminal?: boolean
-    sessionType?: 'local' | 'remote'
     /** 对话姿态（goal/plan）—— 透传后端注入姿态 system prompt */
     workflowMode?: 'goal' | 'plan'
     /** 权限模式（normal=手动审批 / auto=模型代判 / plan=只读强制）—— 缺省 normal */

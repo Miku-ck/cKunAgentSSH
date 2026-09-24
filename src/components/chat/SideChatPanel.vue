@@ -2393,20 +2393,6 @@ defineExpose({ focusInput, restoreDraft, prefill })
   letter-spacing: 0.2px;
 }
 
-.model-dropdown-item .model-id {
-  font-size: 10px;
-  color: var(--text-tertiary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.model-dropdown-item:hover .model-id,
-.model-dropdown-item.active .model-id {
-  color: inherit;
-  opacity: 0.7;
-}
-
 /* Send Button */
 .send-btn {
   width: 24px;

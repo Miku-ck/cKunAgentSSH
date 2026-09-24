@@ -592,7 +592,6 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       maxCostUsd: useSettingsStore().settings.agent.maxCostUsd || undefined,
       maxTotalTokens: useSettingsStore().settings.agent.maxTotalTokens || undefined,
       visibleTerminal: true,
-      sessionType: ctx?.sessionType || 'local',
       // 用户显式选择的技能 ID（后端 SkillRein 会与自动匹配的合并去重）
       skillIds,
       // 对话设置：自动技能匹配开关 + 上下文窗口条数
