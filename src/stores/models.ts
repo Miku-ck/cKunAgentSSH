@@ -5,10 +5,10 @@
  */
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
-import { api, type ModelConfig } from '@/api/client'
+import { api, type ModelSummary } from '@/api/client'
 
 export const useModelsStore = defineStore('models', () => {
-  const models = ref<ModelConfig[]>([])
+  const models = ref<ModelSummary[]>([])
 
   // in-flight 守卫：并发触发只下发一次 api.getModels()，消除启动阶段的重复请求。
   let fetchModelsPromise: Promise<void> | null = null

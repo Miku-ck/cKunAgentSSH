@@ -486,8 +486,8 @@ npm run build          # 构建生产版本（out/main|preload|renderer）
 npm run typecheck      # 前端类型检查（vue-tsc，web + node/electron 两份 tsconfig 都要过）
 npm test               # 前端单测（vitest）
 npm run test:backend   # 后端单测（pytest）
-npm run ci             # 本地门禁：typecheck + vitest + pytest
-bash scripts/ci-check.sh   # 一键 CI（上述 + 构建，与 .github/workflows/ci.yml 检查项一致）
+npm run ci             # 本地门禁：转调 scripts/ci-check.sh（同一份清单，含构建）
+bash scripts/ci-check.sh   # 同上，直接跑（与 .github/workflows/ci.yml 检查项一致）
 npm run package        # electron-builder 打包（Windows nsis + portable）
 ```
 
@@ -513,7 +513,7 @@ npm run package        # electron-builder 打包（Windows nsis + portable）
 - **代码签名**：未配置证书（win 无 `certificateFile`），electron-builder 跳过
   签名并打警告 — 内网分发场景预期行为， SmartScreen 需自行处理。
 - **CI**：仓库托管在 Gitee，`.github/workflows/ci.yml` 仅在推 GitHub 时生效；
-  Gitee 侧以 `npm run ci` / `bash scripts/ci-check.sh` 作为等效门禁。
+  Gitee 侧以 `bash scripts/ci-check.sh`（等价 `npm run ci`）作为等效门禁。
 
 ## License
 

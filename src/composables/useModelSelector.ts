@@ -3,7 +3,7 @@
  * 从 SideChatPanel 中提取的通用模型选择逻辑（聊天与 SSH AI 面板共用同一宿主）。
  */
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import type { ModelConfig } from '@/api/client'
+import type { ModelSummary } from '@/api/client'
 
 interface UseModelSelectorOptions {
   /** 当前选中的模型 ID（getter） */
@@ -11,7 +11,7 @@ interface UseModelSelectorOptions {
   /** 更新选中的模型 ID（setter） */
   setSelectedId: (id: string) => void
   /** 可用模型列表 */
-  models: () => ModelConfig[]
+  models: () => ModelSummary[]
 }
 
 export function useModelSelector(options: UseModelSelectorOptions) {

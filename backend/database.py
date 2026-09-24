@@ -1030,23 +1030,6 @@ def update_conversation_status(cid: str, status: str) -> None:
         conn.close()
 
 
-def update_conversation_title(cid: str, title: str) -> Optional[dict]:
-    """更新会话标题"""
-    now = _now()
-    conn = _get_conn()
-    try:
-        cur = conn.execute(
-            "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
-            (title, now, cid),
-        )
-        conn.commit()
-        if cur.rowcount == 0:
-            return None
-        return {"id": cid, "title": title, "updated_at": now}
-    finally:
-        conn.close()
-
-
 def try_set_default_conversation_title(cid: str, title: str,
                                        default_titles: tuple) -> bool:
     """C-review MINOR-1：仅当当前标题仍是默认值时才更新（原子 check-and-act）。

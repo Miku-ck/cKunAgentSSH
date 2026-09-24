@@ -274,6 +274,12 @@ export interface ModelConfig {
   updated_at?: string
 }
 
+/** GET /models 只投影这六个字段（见 backend/routes/models.py），不是完整的 ModelConfig */
+export type ModelSummary = Pick<
+  ModelConfig,
+  'id' | 'name' | 'model_id' | 'provider' | 'supports_thinking' | 'is_default'
+>
+
 export interface ModelConfigPayload {
   name: string
   base_url: string
@@ -420,7 +426,7 @@ export const api = {
 
   // 模型
   getModels: () =>
-    request<ModelConfig[]>('/models'),
+    request<ModelSummary[]>('/models'),
 
   // 模型配置管理
   getModelConfigs: () =>

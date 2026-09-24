@@ -11,7 +11,7 @@
     "typecheck": "vue-tsc -p tsconfig.web.json --noEmit && vue-tsc -p tsconfig.node.json --noEmit",
     "test": "vitest run",
     "test:backend": "cd backend && python -m pytest -q",
-    "ci": "npm run typecheck && npm run test && npm run test:backend",
+    "ci": "bash scripts/ci-check.sh",
     "preview": "electron-vite preview",
     "dev:backend": "cd backend && python main.py --host 0.0.0.0",
     "package": "node scripts/package.js",

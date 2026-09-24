@@ -487,7 +487,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import type { ModelConfig } from '@/api/client'
+import type { ModelSummary } from '@/api/client'
 import type { ConvGroup } from '@/types/chat'
 import MessageItem from '@/components/chat/MessageItem.vue'
 import HistoryPanel from '@/components/chat/HistoryPanel.vue'
@@ -528,7 +528,7 @@ const props = defineProps<{
   currentConvId: string | null
   messages: DisplayMsg[]
   selectedModelId: string
-  models: ModelConfig[]
+  models: ModelSummary[]
   groupedConversations: ConvGroup[]
   showMessageActions?: boolean
   agentRunning?: boolean

@@ -12,7 +12,7 @@ import { useAgentStore } from './agent'
 import { useAppStore } from './app'
 import { useSettingsStore } from './settings'
 import { useToastStore } from './toast'
-import { api, workflowApi, type ChatAttachment, type ModelConfig, type WorkflowSnapshot } from '@/api/client'
+import { api, workflowApi, type ChatAttachment, type WorkflowSnapshot } from '@/api/client'
 import { useChatPersistence } from '@/composables/useChatPersistence'
 import { useModelsStore } from './models'
 import { finalizeAgentMessage, type AgentMessage } from '@/utils/finalizeAgentMessage'
@@ -71,7 +71,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     const list = modelsStore.models
     // 只有列表非空才谈「失效」：fetchModels 失败会把列表留空，据空列表判定失效
     // 就把用户手选的模型静默换成了后端默认值 —— 取不到列表 ≠ 模型已删除。
-    const usable = (id?: string) => !list.length || list.some((m: ModelConfig) => m.id === id)
+    const usable = (id?: string) => !list.length || list.some((m) => m.id === id)
     const sid = persistence.selectedModelId.value
     if (sid && usable(sid)) return sid
     try {

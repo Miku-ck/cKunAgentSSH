@@ -99,14 +99,9 @@ async def upload_chat_file(
 
 
 class CreateConversationRequest(BaseModel):
-    # 与 PATCH（UpdateTitleRequest）同一上限：标题会整份写进 localStorage 的会话缓存，
-    # 建会话时不设限等于留下一条绕过校验的路径
+    # 标题会整份写进 localStorage 的会话缓存，建会话时不设限等于留下一条绕过校验的路径
     title: Optional[str] = Field(None, max_length=200)
     mode: Literal["ssh"] = "ssh"  # 标记会话所属模式，用于历史隔离
-
-
-class UpdateTitleRequest(BaseModel):
-    title: str = Field(..., min_length=1, max_length=200)
 
 
 # ── 会话 CRUD ──
@@ -165,15 +160,3 @@ def delete_conversation(cid: str):
     except Exception:
         pass
     return {"deleted": True}
-
-
-@router.patch("/chat/conversations/{cid}")
-def update_conversation(cid: str, req: UpdateTitleRequest):
-    """更新会话标题"""
-    conv = db.get_conversation(cid)
-    if not conv:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    result = db.update_conversation_title(cid, req.title)
-    if not result:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    return result
