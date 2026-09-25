@@ -259,10 +259,6 @@ class SSEAdapter:
             result["options"] = cur.get("options", []) or []
             result["allow_custom"] = cur.get("allow_custom", True)
             result["reason"] = payload.get("reason", "")
-        elif kind == "clarification_done":
-            result["tool"] = payload.get("tool", "")
-            result["tool_call_id"] = payload.get("tool_call_id", "")
-            result["summary"] = payload.get("summary", "")
-            result["answers"] = payload.get("answers", {})
-
+        # clarification_done 无需投影字段：前端只按事件类型关闭向导，
+        # answers/summary 只进生产端 payload 与注入消息，不上 SSE 线
         return result
