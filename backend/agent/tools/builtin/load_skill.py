@@ -3,6 +3,7 @@ import logging
 
 from agent.tools import BaseTool, ToolMeta, ToolResult
 from skill_registry import get_skill_registry
+from prompts import SSH_MODE
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ class LoadSkillTool(BaseTool):
         registry = get_skill_registry()
         # slug 精确比对：模型常在 JSON 字符串尾部带空格/换行，raw 比对会报
         # 「未找到技能」，模型看不出是自己填错了，只能盲目重试同一 slug
-        skill = registry.get_by_slug((skill_slug or "").strip(), mode=context.mode)
+        skill = registry.get_by_slug((skill_slug or "").strip(), mode=SSH_MODE)
 
         if not skill:
             return ToolResult(
@@ -75,5 +76,5 @@ class LoadSkillTool(BaseTool):
             "请在后续轮次中遵循上述技能内容执行。"
         )
 
-        logger.info("load_skill 调用: %s (mode=%s)", skill_slug, context.mode)
+        logger.info("load_skill 调用: %s (mode=%s)", skill_slug, SSH_MODE)
         return ToolResult(success=True, output=output, priority="high")

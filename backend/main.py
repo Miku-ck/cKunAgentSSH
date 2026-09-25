@@ -18,7 +18,6 @@ from config import settings
 from database import init_db
 from database import seed_models_async
 from routes.chat import router as chat_router
-from routes.models import router as models_router
 from routes.settings import router as settings_router
 from routes.skills import router as skills_router
 from routes.agent import router as agent_router
@@ -225,7 +224,6 @@ async def health():
 
 # 注册路由
 app.include_router(chat_router, prefix="/api")
-app.include_router(models_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
 app.include_router(skills_router, prefix="/api")
 app.include_router(agent_router, prefix="/api")

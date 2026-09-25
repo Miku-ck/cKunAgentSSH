@@ -92,7 +92,7 @@ class SpecWriteTool(WriteWorkflowArtifactTool):
         "required": ["content"],
     }
     meta = ToolMeta(risk_level="safe", reversible=True, cacheable=False,
-                    idempotent=True, mode_scope=["ssh"])
+                    idempotent=True)
     artifact = "spec"
     kind_label = "规格文档"
     action_label = "规格已写入"
@@ -118,7 +118,7 @@ class PlanWriteTool(WriteWorkflowArtifactTool):
         "required": ["content"],
     }
     meta = ToolMeta(risk_level="safe", reversible=True, cacheable=False,
-                    idempotent=True, mode_scope=["ssh"])
+                    idempotent=True)
     artifact = "plan"
     kind_label = "执行计划"
     action_label = "执行计划已写入"
@@ -144,7 +144,7 @@ class GoalWriteTool(WriteWorkflowArtifactTool):
         "required": ["content"],
     }
     meta = ToolMeta(risk_level="safe", reversible=True, cacheable=False,
-                    idempotent=True, mode_scope=["ssh"])
+                    idempotent=True)
     artifact = "goal"
     kind_label = "成功标准"
     action_label = "成功标准已设定"

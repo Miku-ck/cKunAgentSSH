@@ -189,7 +189,7 @@ def _prod_gate(monkeypatch) -> PermissionGate:
 
 
 def _prod_ctx(tool: str, args: dict, environment: str) -> RunContext:
-    ctx = RunContext.new(task="t", mode="ssh", config=AgentConfig(),
+    ctx = RunContext.new(task="t", config=AgentConfig(),
                          environment=environment)
     ctx.tool_calls_log.append({"tool": tool, "args": args,
                                "iteration": 1, "success": None})

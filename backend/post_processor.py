@@ -24,13 +24,11 @@ from typing import Optional
 
 import database as db
 from llm_adapter import chat_stream
-from prompts import MODE_PROMPTS
+from prompts import SSH_MODE_PROMPT
 
 logger = logging.getLogger(__name__)
 
-AUTO_SKILL_CATEGORY = {
-    "ssh": "运维脚本",
-}
+AUTO_SKILL_CATEGORY = "运维脚本"
 
 MAX_TITLE_LEN = 20
 
@@ -98,7 +96,6 @@ def set_post_process_config(cfg: PostProcessConfig) -> None:
 @dataclass
 class TurnContext:
     """单轮对话上下文 — 传给各子任务"""
-    mode: str
     conversation_id: str
     user_message: str
     assistant_content: str
@@ -613,7 +610,7 @@ async def _extract_memories(ctx: TurnContext, config: PostProcessConfig) -> None
     )
 
     messages = [
-        {"role": "system", "content": MODE_PROMPTS.get(ctx.mode, MODE_PROMPTS["ssh"])},
+        {"role": "system", "content": SSH_MODE_PROMPT},
         {"role": "user", "content": _MEMORY_PROMPT_TEMPLATE.format(
             max_count=config.max_memories_per_turn,
             user_message=ctx.user_message[:1000],
@@ -750,7 +747,7 @@ async def _generate_skill(ctx: TurnContext, config: PostProcessConfig) -> None:
     )
 
     messages = [
-        {"role": "system", "content": MODE_PROMPTS.get(ctx.mode, MODE_PROMPTS["ssh"])},
+        {"role": "system", "content": SSH_MODE_PROMPT},
         {"role": "user", "content": _SKILL_PROMPT_TEMPLATE.format(
             user_message=ctx.user_message[:1000],
             assistant_content=truncated_content + (
@@ -797,7 +794,7 @@ async def _generate_skill(ctx: TurnContext, config: PostProcessConfig) -> None:
         if not isinstance(skill, dict):
             continue
         created = await asyncio.to_thread(
-            _create_auto_skill_with_quality_gate, skill, ctx.mode, config
+            _create_auto_skill_with_quality_gate, skill, config
         )
         if created:
             created_count += 1
@@ -851,7 +848,6 @@ def _llm_text(value) -> str:
 
 def _create_auto_skill_with_quality_gate(
     skill_dict: dict,
-    mode: str,
     config: PostProcessConfig,
 ) -> Optional[dict]:
     """创建技能 — 带 slug 去重 + 质量门"""
@@ -888,7 +884,7 @@ def _create_auto_skill_with_quality_gate(
             slug=slug,
             system_prompt=system_prompt,
             description=description,
-            category=AUTO_SKILL_CATEGORY.get(mode, "其他"),
+            category=AUTO_SKILL_CATEGORY,
             source="auto",
             is_builtin=0,
             enabled=0,
@@ -905,7 +901,6 @@ def _create_auto_skill_with_quality_gate(
 
 
 async def post_process_after_turn(
-    mode: str,
     conversation_id: str,
     user_message: str,
     assistant_content: str,
@@ -935,7 +930,6 @@ async def post_process_after_turn(
 
     # 构建 TurnContext
     ctx = TurnContext(
-        mode=mode,
         conversation_id=conversation_id,
         user_message=user_message,
         assistant_content=assistant_content,
@@ -984,7 +978,6 @@ class PostProcessManager:
 
     async def submit(
         self,
-        mode: str,
         conversation_id: str,
         user_message: str,
         assistant_content: str,
@@ -1009,7 +1002,7 @@ class PostProcessManager:
             # 占位 None 防止 callback 先触发时 _discard 找不到 key
             self._tasks[task_id] = None  # type: ignore[assignment]
             task = asyncio.create_task(self._run_with_timeout(
-                mode, conversation_id, user_message,
+                conversation_id, user_message,
                 assistant_content, assistant_reasoning,
                 model_id, turn_index,
             ))
@@ -1031,7 +1024,6 @@ class PostProcessManager:
 
     async def _run_with_timeout(
         self,
-        mode: str,
         conversation_id: str,
         user_message: str,
         assistant_content: str,
@@ -1043,7 +1035,6 @@ class PostProcessManager:
         try:
             await asyncio.wait_for(
                 post_process_after_turn(
-                    mode=mode,
                     conversation_id=conversation_id,
                     user_message=user_message,
                     assistant_content=assistant_content,

@@ -453,7 +453,7 @@ async function handleSave() {
   if (!canSave.value || saving.value) return
   saving.value = true
   try {
-  await doSave()
+    await doSave()
   } finally {
     saving.value = false
   }

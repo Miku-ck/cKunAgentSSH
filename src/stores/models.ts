@@ -5,18 +5,18 @@
  */
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
-import { api, type ModelSummary } from '@/api/client'
+import { api, type ModelConfig } from '@/api/client'
 
 export const useModelsStore = defineStore('models', () => {
-  const models = ref<ModelSummary[]>([])
+  const models = ref<ModelConfig[]>([])
 
-  // in-flight 守卫：并发触发只下发一次 api.getModels()，消除启动阶段的重复请求。
+  // in-flight 守卫：并发触发只下发一次 api.getModelConfigs()，消除启动阶段的重复请求。
   let fetchModelsPromise: Promise<void> | null = null
   async function fetchModels() {
     if (fetchModelsPromise) return fetchModelsPromise
     fetchModelsPromise = (async () => {
       try {
-        models.value = await api.getModels()
+        models.value = await api.getModelConfigs()
       } catch (e) {
         console.error('[models] fetchModels failed:', e)
         models.value = []

@@ -57,7 +57,7 @@ def _no_audit_writes(monkeypatch):
 
 
 def _ctx(config: AgentConfig, tracker: Optional[_FakeTracker]) -> RunContext:
-    ctx = RunContext.new(task="测试任务", mode="ssh", config=config)
+    ctx = RunContext.new(task="测试任务", config=config)
     if tracker is not None:
         ctx.metadata["cost_tracker"] = tracker
     return ctx

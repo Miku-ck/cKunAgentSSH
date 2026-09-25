@@ -46,7 +46,7 @@ def _reset_explain_cache():
 
 def _ctx(task: str = "把项目旧的构建产物清掉，重新出一版包") -> RunContext:
     ctx = RunContext.new(
-        task=task, mode="ssh", config=AgentConfig(),
+        task=task, config=AgentConfig(),
         environment="test", ssh_session_id="sess-abc-123",
     )
     ctx.tool_calls_log.append({

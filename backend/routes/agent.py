@@ -34,7 +34,7 @@ import database as db
 from routes.terminal import _get_model_config
 from sse_utils import sse_event
 from agent.audit import append_record_async
-from agent.tools import create_registry_for_mode, ToolRegistry
+from agent.tools import create_registry, ToolRegistry
 from agent.memory import mstore
 from agent.memory import budget as memory_budget
 from agent.memory import reconcile as memory_reconcile
@@ -45,7 +45,7 @@ from agent.reflection import MetaReflection, RunTrace
 from agent.evolution import EvolutionEngine
 from agent.cost_tracker import CostTracker
 from agent.pending_delivery import PendingDeliveries
-from prompts import _current_time_str
+from prompts import _current_time_str, SSH_MODE, SSH_MODE_PROMPT
 from safe_tokens import safe_max_tokens
 # Harness 框架（P8：切换到 Harness）
 from agent.harness import Harness, HarnessConfig
@@ -63,7 +63,6 @@ HEARTBEAT_INTERVAL = 15
 async def _run_reflection_and_evolution(
     run_id: str,
     task: str,
-    mode: str,
     final_state: str,
     iterations: int,
     tool_calls: list[dict],
@@ -94,7 +93,7 @@ async def _run_reflection_and_evolution(
         trace = RunTrace(
             run_id=run_id,
             task=task,
-            mode=mode,
+            mode=SSH_MODE,
             final_state=final_state,
             iterations=iterations,
             tool_calls=tool_calls,
@@ -104,7 +103,7 @@ async def _run_reflection_and_evolution(
         )
         result = reflection_mgr.reflect(trace)
         reflection_mgr.save_reflection(
-            result, mode=mode, task=task,
+            result, mode=SSH_MODE, task=task,
             cost_usd=cost_usd, iterations=iterations, total_tokens=total_tokens,
         )
         logger.info(
@@ -113,14 +112,14 @@ async def _run_reflection_and_evolution(
         )
 
         # 加载近 10 条反思，触发演化 — 用未过滤的"最近"视图，不是高分注入视图
-        recent = reflection_mgr.load_reflections_for_evolution(mode, limit=10)
+        recent = reflection_mgr.load_reflections_for_evolution(SSH_MODE, limit=10)
         if len(recent) >= 3:  # 至少 3 条反思才演化
-            evolved = evolution_mgr.evolve(mode=mode, recent_reflections=recent)
+            evolved = evolution_mgr.evolve(mode=SSH_MODE, recent_reflections=recent)
             if evolved.adjustments:
-                evolution_mgr.save_evolved_config(evolved, mode=mode)
+                evolution_mgr.save_evolved_config(evolved, mode=SSH_MODE)
                 logger.info(
                     "策略演化完成 (mode=%s, adjustments=%d): %s",
-                    mode, len(evolved.adjustments), "; ".join(evolved.adjustments),
+                    SSH_MODE, len(evolved.adjustments), "; ".join(evolved.adjustments),
                 )
 
     try:
@@ -169,7 +168,7 @@ def _build_agent_system_prompt(
             对话型任务同样注入 —— 用户一旦声明目标即为全程约束，纪律第 4 条
             处理的正是「新要求与目标冲突」，纯问答场景同样适用。
     """
-    from prompts import MODE_PROMPTS, OPS_METHOD_CHANGE, OPS_METHOD_READONLY
+    from prompts import OPS_METHOD_CHANGE, OPS_METHOD_READONLY
 
     # 开头注入当前时间（解决 LLM 训练数据截止导致日期/星期回答过时的问题）
     time_injection = (
@@ -178,10 +177,7 @@ def _build_agent_system_prompt(
     )
 
     # 拼装：时间 + 模式基础 prompt + 用户 system_prompt + 画像块
-    mode_prompt = MODE_PROMPTS.get(req.mode, "")
-    parts = [time_injection]
-    if mode_prompt:
-        parts.append(mode_prompt)
+    parts = [time_injection, SSH_MODE_PROMPT]
     # 对话姿态：由前端模式选择器决定（goal=聚焦目标 / plan=先方案后动手）。
     # 仅对非纯对话型任务注入（纯问答不需要方法论姿态）。
     # workflow_mode 为 None = 用户未表态（前端 × 清掉后），此时不注入任何姿态段：
@@ -288,10 +284,10 @@ def _load_active_goal_text(conversation_id: str) -> str:
         return ""
 
 
-def _load_evolved_config(evolution_mgr: "EvolutionEngine", mode: str) -> Optional[dict]:
+def _load_evolved_config(evolution_mgr: "EvolutionEngine") -> Optional[dict]:
     """读取最新演化配置，失败按「无演化配置」降级（调用方在 to_thread 中执行）"""
     try:
-        return evolution_mgr.load_latest_evolved_config(mode)
+        return evolution_mgr.load_latest_evolved_config(SSH_MODE)
     except Exception as e:
         logger.warning("加载演化配置失败: %s", e)
         return None
@@ -366,9 +362,6 @@ class AgentRunRequest(BaseModel):
     task: str = Field(..., min_length=1, max_length=50000)
     conversation_id: str
     model_id: str = ""
-    # E 修复：mode 白名单校验（Pydantic Literal，非法值 → 422），
-    # 防止任意 mode 串绕过注册表/权限边界
-    mode: Literal["ssh"] = "ssh"
     system_prompt: Optional[str] = None
     ssh_session_id: Optional[str] = None
     # 目标环境标记（test/prod）— 驱动生产环境高风险命令的审计与审批强化
@@ -567,11 +560,11 @@ async def agent_run(req: AgentRunRequest, request: Request):
     """启动 Agent — SSE 流式返回运行过程"""
     # C-review MINOR-12：进程启动后首次请求做滞留 run 对账
     await _reconcile_stale_runs_once()
-    # ── 按 mode 选择默认模型（兜底）──
+    # ── 按 SSH 模式选择默认模型（兜底）──
     # 审查 M-13：db 同步调用放线程池，避免阻塞事件循环（卡住所有并发请求/心跳）
     effective_model_id = req.model_id
     if not effective_model_id:
-        default_model = await asyncio.to_thread(db.get_default_model, req.mode)
+        default_model = await asyncio.to_thread(db.get_default_model, SSH_MODE)
         if default_model:
             # 审查外热修：同 chat.py — 优先行主键 id（原优先 LLM 模型名会 404 模型不存在）
             effective_model_id = default_model.get("id") or default_model.get("model_id")
@@ -580,7 +573,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
         if default_model:
             effective_model_id = default_model.get("id") or default_model.get("model_id")
     if not effective_model_id:
-        raise HTTPException(status_code=400, detail=f"未找到 mode={req.mode} 的默认模型，请先配置模型")
+        raise HTTPException(status_code=400, detail="未找到默认模型，请先配置模型")
 
     req.model_id = effective_model_id
 
@@ -593,15 +586,15 @@ async def agent_run(req: AgentRunRequest, request: Request):
     # 避免纯聊天用户产生空 DB 查询开销
     get_global_tick().ensure_started()
 
-    # ── 按 mode 过滤显式 skill_ids ──
+    # ── 按模式过滤显式 skill_ids ──
     if req.skill_ids:
-        disabled_skill_ids = set(await asyncio.to_thread(db.list_disabled_skills_for_mode, req.mode))
+        disabled_skill_ids = set(await asyncio.to_thread(db.list_disabled_skills_for_mode, SSH_MODE))
         original_skill_ids = req.skill_ids
         req.skill_ids = [sid for sid in req.skill_ids if sid not in disabled_skill_ids]
         if len(req.skill_ids) != len(original_skill_ids):
             logger.info(
                 "Agent 显式 skill_ids 按 mode=%s 过滤: %d -> %d",
-                req.mode, len(original_skill_ids), len(req.skill_ids),
+                SSH_MODE, len(original_skill_ids), len(req.skill_ids),
             )
 
     # 获取历史消息（条数来自前端"上下文窗口"设置）
@@ -668,7 +661,6 @@ async def agent_run(req: AgentRunRequest, request: Request):
 
         _host_ctx = _RunContext.new(
             task=req.task or "",
-            mode=req.mode,
             ssh_session_id=req.ssh_session_id or "",
         )
         host_profile_text = await ensure_host_profile(_host_ctx)
@@ -716,7 +708,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
         + [m for m in memory_contents if isinstance(m, str)]
     )
     # 演化配置可能把 thinking 打开，所以 thinking 必须先于 safe_max_tokens 定稿
-    _evolved_cfg = await asyncio.to_thread(_load_evolved_config, evolution_mgr, req.mode)
+    _evolved_cfg = await asyncio.to_thread(_load_evolved_config, evolution_mgr)
     thinking_on = _resolve_thinking(req, _evolved_cfg)
     _safe_max = safe_max_tokens(
         model_cfg.get("max_tokens"),
@@ -751,7 +743,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
     # 对话型任务强制禁用工具 schema：用户问"你是什么模型"时不应看到 shell_exec/web_search 等工具
     # 否则 LLM 会被工具 schema 引导去调用工具，产生无关内容
     effective_enable_tools = req.enable_tools and not is_conversation_task
-    tool_registry = create_registry_for_mode(req.mode) if effective_enable_tools else ToolRegistry()
+    tool_registry = create_registry() if effective_enable_tools else ToolRegistry()
     # 成本追踪器
     cost_tracker = CostTracker(model_id=model_cfg.get("model_id") or model_cfg["id"])
     # 组装
@@ -782,7 +774,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
             conversation_id=req.conversation_id,
             task=req.task,
             max_iterations=req.max_iterations,
-            mode=req.mode,
+            mode=SSH_MODE,
             model_used=model_cfg.get("model_id") or model_cfg["id"],
         )
 
@@ -842,7 +834,6 @@ async def agent_run(req: AgentRunRequest, request: Request):
                 )
                 async for trace_event in harness.run(
                     task=req.task,
-                    mode=req.mode,
                     conversation_id=req.conversation_id,
                     ssh_session_id=req.ssh_session_id,
                     environment=req.environment,
@@ -1030,7 +1021,6 @@ async def agent_run(req: AgentRunRequest, request: Request):
 
                             from post_processor import get_post_process_manager
                             await get_post_process_manager().submit(
-                                mode=req.mode,
                                 conversation_id=req.conversation_id,
                                 user_message=req.task,
                                 assistant_content=total_content,
@@ -1102,7 +1092,6 @@ async def agent_run(req: AgentRunRequest, request: Request):
                             _run_reflection_and_evolution(
                                 run_id=run_id,
                                 task=req.task,
-                                mode=req.mode,
                                 final_state=final_state,
                                 iterations=event.get("iterations", 0),
                                 tool_calls=run_trace_tool_calls,
@@ -1146,7 +1135,6 @@ async def agent_run(req: AgentRunRequest, request: Request):
                             _run_reflection_and_evolution(
                                 run_id=run_id,
                                 task=req.task,
-                                mode=req.mode,
                                 final_state="failed",
                                 iterations=0,  # error 时迭代数未知
                                 tool_calls=run_trace_tool_calls,
@@ -1304,14 +1292,14 @@ async def agent_tool_result(req: ToolResultRequest):
 
 
 @router.get("/agent/tools")
-def list_tools(mode: str = "ssh"):
-    """查询当前模式可用的工具列表（含启用状态）"""
+def list_tools():
+    """查询可用工具列表（含启用状态）"""
     # 获取所有工具类的元信息（包括未注册的，用于显示被禁用的工具）
     from agent.tools.builtin import get_all_tool_classes
-    all_tools_info = get_all_tool_classes(mode)
+    all_tools_info = get_all_tool_classes()
 
     tools = []
-    disabled_list = db.list_disabled_tools(mode)
+    disabled_list = db.list_disabled_tools(SSH_MODE)
     for tool_cls in all_tools_info:
         # 实例化以读取 name/description/parameters（这些可能是实例属性或类属性）
         instance = tool_cls()
@@ -1320,14 +1308,13 @@ def list_tools(mode: str = "ssh"):
             "description": instance.description,
             "parameters": instance.parameters,
             "risk_level": instance.meta.risk_level,
-            "mode_scope": instance.meta.mode_scope,
             "enabled": instance.name not in disabled_list,
             # 透传工具元数据，供前端展示
             "timeout": instance.meta.timeout,
             "cacheable": instance.meta.cacheable,
             "reversible": instance.meta.reversible,
         })
-    return {"mode": mode, "tools": tools}
+    return {"mode": SSH_MODE, "tools": tools}
 
 
 class UpdateToolEnabledRequest(BaseModel):

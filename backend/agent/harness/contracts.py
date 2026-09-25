@@ -308,7 +308,6 @@ class RunContext:
     """
     run_id: str
     task: str
-    mode: str
     conversation_id: str
     system_prompt: str
     history: list[dict[str, str]]
@@ -345,12 +344,11 @@ class RunContext:
     visible_terminal: bool = False
 
     @classmethod
-    def new(cls, task: str, mode: str, **opts) -> "RunContext":
+    def new(cls, task: str, **opts) -> "RunContext":
         """工厂方法 — 生成新 run_id"""
         return cls(
             run_id=uuid.uuid4().hex,
             task=task,
-            mode=mode,
             conversation_id=opts.get("conversation_id", ""),
             ssh_session_id=opts.get("ssh_session_id", ""),
             environment=opts.get("environment", "test"),

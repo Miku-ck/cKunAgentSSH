@@ -104,7 +104,6 @@ _OBS_META = ToolMeta(
     reversible=True,
     idempotent=True,
     timeout=15.0,
-    mode_scope=["ssh"],
 )
 
 class SysOverviewTool(BaseTool):

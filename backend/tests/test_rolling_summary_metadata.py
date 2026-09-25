@@ -23,7 +23,7 @@ def _bridle() -> Bridle:
 
 
 def _make_ctx(n_old: int = 20) -> RunContext:
-    ctx = RunContext.new(task="测试任务", mode="ssh", config=AgentConfig())
+    ctx = RunContext.new(task="测试任务", config=AgentConfig())
     for i in range(n_old):
         ctx.messages.append({"role": "user", "content": f"早期问题 {i} " + "x" * 50})
         ctx.messages.append({"role": "assistant", "content": f"早期回答 {i} " + "y" * 50})
@@ -96,7 +96,7 @@ def test_assemble_injects_summary_from_metadata():
 def test_no_summary_when_nothing_old():
     """无足够旧消息时不生成摘要，也不清掉既有 metadata"""
     b = _bridle()
-    ctx = RunContext.new(task="测试", mode="ssh", config=AgentConfig())
+    ctx = RunContext.new(task="测试", config=AgentConfig())
     ctx.messages.append({"role": "user", "content": "唯一问题"})
     ctx.messages.append({"role": "assistant", "content": "唯一回答"})
     ctx.metadata["context_summary"] = "保留的既有摘要"

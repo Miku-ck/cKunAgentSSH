@@ -32,6 +32,18 @@ export default defineConfig({
     server: {
       host: process.env.VITE_HOST || '127.0.0.1',
       port: Number(process.env.VITE_PORT) || 5173,
+      // 启动性能优化：Electron 拉起 dev server 后立即预热入口与重依赖，
+      // transform 与窗口加载并行 —— 否则首屏每个未缓存模块都要现场编译，
+      // 白屏时间被 monaco/xterm 等大依赖的按需 transform 串起来。
+      warmup: {
+        clientFiles: [
+          './src/main.ts',
+          './src/monaco-setup.ts',
+          './src/App.vue',
+          './src/components/ssh/RemoteTerminal.vue',
+          './src/components/ssh/LocalTerminal.vue',
+        ],
+      },
     },
     build: {
       outDir: 'out/renderer',

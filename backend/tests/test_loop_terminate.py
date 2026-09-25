@@ -17,7 +17,7 @@ from agent.harness.reins import LoopDetector, PermissionGate
 
 
 def _make_ctx() -> RunContext:
-    return RunContext.new(task="测试任务", mode="ssh")
+    return RunContext.new(task="测试任务")
 
 
 def _log_call(ctx: RunContext, name: str = "shell_exec", command: str = "echo hi") -> None:

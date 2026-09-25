@@ -145,8 +145,6 @@ export const useAgentStore = defineStore('agent', () => {
   const _contentScrubber = new StreamingThinkScrubber()
   const _reasoningScrubber = new StreamingThinkScrubber()
   const lastRunId = ref<string>('')
-  // C3 修复：记录当前运行模式，避免 keep-alive 下跨组件 watch 重复 push
-  const currentMode = ref<'ssh' | ''>('')
   // 审查 M-19：记录本次运行发起时的【源会话 ID】。
   // Agent 运行期间用户可能切换会话 — 完成固化必须落回源会话（临时占位消息
   // 推在哪个会话就固化哪个），不能按"完成时刻的当前会话"决定
@@ -209,7 +207,6 @@ export const useAgentStore = defineStore('agent', () => {
     task: string
     conversationId: string
     modelId: string
-    mode?: 'ssh'
     systemPrompt?: string
     sshSessionId?: string
     environment?: 'test' | 'prod'
@@ -245,8 +242,6 @@ export const useAgentStore = defineStore('agent', () => {
 
     status.value = 'running'
     currentState.value = 'thinking'
-    // C3 修复：记录当前模式，watch 内据此判断是否为本组件的运行
-    currentMode.value = options.mode || 'ssh'
     // 审查 M-19：锁定源会话（_reset 已清空，这里重新写入）
     currentConversationId.value = options.conversationId || ''
 
@@ -347,7 +342,6 @@ export const useAgentStore = defineStore('agent', () => {
     agentDeliver.resetDeliveries()
     costInfo.value = null
     lastRunId.value = ''
-    currentMode.value = ''
     currentConversationId.value = ''
     intentionInfo.value = null
     clarificationWizard.value = null
@@ -739,7 +733,6 @@ export const useAgentStore = defineStore('agent', () => {
     permissionRequests,
     costInfo,
     lastRunId,
-    currentMode,
     currentConversationId,
     intentionInfo,
     clarificationWizard,

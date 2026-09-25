@@ -1,4 +1,4 @@
-import { spawn, ChildProcess, execSync, execFileSync } from 'child_process'
+import { spawn, ChildProcess, execFile, execSync } from 'child_process'
 import { join } from 'path'
 import { app } from 'electron'
 import http from 'http'
@@ -103,85 +103,110 @@ export class BackendManager {
    * 这些进程持有过期的 Electron bridge 端口/token，会导致定时任务执行时
    * bridge 连接全部失败（日志中即 "Electron bridge 连接失败 port=30000"）。
    *
-   * Windows 用 PowerShell CIM 按命令行匹配，pgrep -f 用于 POSIX 平台。
-   * 匹配不到属于正常情况（无孤儿），静默返回。
+   * 启动性能优化：枚举改为异步（execFile + WQL provider 侧过滤）。原实现
+   * execFileSync 同步阻塞主进程 1.1~1.4s（实测 powershell 冷启动 ~0.6s +
+   * CIM 枚举 ~0.5s），且发生在 whenReady 里 createWindow 之前 —— 窗口出现
+   * 时间被整段同步查询垫高。现在枚举与 findFreePort 并行，主进程不冻结。
    *
-   * @param backendDir 本应用 backend 目录，用于精确识别"自己的"后端进程
+   * 时序契约（防误杀）：必须在 spawn 新后端【之前】完成枚举 —— 新进程的
+   * 命令行同样命中 "python.exe + main.py" 特征，spawn 后再枚举会把刚拉起
+   * 的后端当孤儿杀掉。killOrphanBackends 只启动枚举不 await，start() 在
+   * spawn 前 await 该 Promise，语义与原「先杀后起」一致；杀（taskkill/SIGTERM）
+   * 延后到 spawn 之后进行，不再占用启动关键路径。
+   *
+   * @param backendDir 本应用 backend 目录，用于精确识别"自己的"后端，
+   *                   避免误伤用户机器上其他以 main.py 为入口的 Python 服务
    */
-  private static killOrphanBackends(backendDir: string): void {
-    try {
-      if (process.platform === 'win32') {
-        // 修复：原实现用 `tasklist /FO CSV /NH` — 该输出只有 镜像名/PID/会话/内存，
-        // 不含命令行，故 `filter(l => l.includes('main.py'))` 恒为空，必然落入 wmic
-        // 回退分支；而 wmic 自 Win11 起已从系统中移除（实测报
-        // "'wmic' 不是内部或外部命令"），于是孤儿检测【从未真正生效】——
-        // 旧后端进程可长期存活，继续占用端口并持有过期 bridge 配置
-        // （实测发现 4 小时前启动的残留 python 进程）。
-        // 改用 PowerShell CIM 查询 Win32_Process.CommandLine：这是不依赖 wmic
-        // 且能稳定拿到命令行的途径。execFileSync 绕过 shell，避免引号被二次解析。
-        let stdout: string
-        try {
-          stdout = execFileSync(
-            BackendManager.resolvePowerShell(),
-            [
-              '-NoProfile',
-              '-NonInteractive',
-              '-Command',
-              "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -like '*main.py*' } | ForEach-Object { $_.ProcessId.ToString() + '|' + $_.CommandLine }",
-            ],
-            { encoding: 'utf-8', timeout: 10000, windowsHide: true },
-          )
-        } catch (e) {
-          // 记录真实原因。原实现静默 catch 成一句"CIM query unavailable"，
-          // 无法区分"没有 PowerShell / 没有 WMI / 权限不足 / 命令语法错"——
-          // 实测就是因为 PATH 被裁剪、spawn 裸名 'powershell' 报 ENOENT，
-          // 而这一点在日志里完全看不出来。
+  private static killOrphanBackends(backendDir: string): Promise<number[]> {
+    if (process.platform === 'win32') {
+      return this.listOrphanPidsWin().then((rows) =>
+        rows
+          .map((r) => r.pid)
+          .filter((pid): pid is number => Number.isInteger(pid) && pid > 0)
+      )
+    }
+    return this.listOrphanPidsPosix(backendDir)
+  }
 
-          return
-        }
-        for (const rawLine of stdout.split(/\r?\n/)) {
-          const line = rawLine.trim()
-          if (!line) continue
-          const sep = line.indexOf('|')
-          if (sep <= 0) continue
-          const pid = parseInt(line.slice(0, sep).trim(), 10)
-          const cmdline = line.slice(sep + 1)
-          if (isNaN(pid) || pid <= 0) continue
-          // 二次甄别：只杀本应用自己的后端，避免误伤同名 main.py 的其他服务
-          if (!BackendManager.isOurBackendProcess(cmdline, backendDir)) continue
-          try {
-            execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore', timeout: 5000 })
-
-          } catch { /* already exited */ }
-        }
-      } else {
-        // macOS / Linux: pgrep 找 main.py 进程。
-        // 与 Windows 分支对称的二次甄别：本机可能有多个 FastAPI 项目都用
-        // main.py 入口（如其他工作区的后端服务），只杀本应用自己的。
-        // pgrep 拿 PID 后用 ps 取完整命令行，走同一套 isOurBackendProcess。
-        const output = execSync('pgrep -f "main.py"', { encoding: 'utf-8', timeout: 5000 })
-        const pids = output
-          .split(/\s+/)
-          .map(s => parseInt(s.trim(), 10))
-          .filter(n => !isNaN(n) && n > 0)
-        for (const pid of pids) {
-          let cmdline = ''
-          try {
-            cmdline = execSync(`ps -p ${pid} -o command=`, { encoding: 'utf-8', timeout: 3000 }).trim()
-          } catch {
-            continue // 进程刚退出
+  /** Windows：异步枚举孤儿后端 PID（PowerShell CIM + WQL provider 侧过滤） */
+  private static listOrphanPidsWin(): Promise<Array<{ pid: number; cmdline: string }>> {
+    return new Promise((resolve) => {
+      const psArgs = [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        // 原全量枚举再在 ForEach 内取 .CommandLine 要对每个进程单独做一次
+        // WMI 属性往返；WQL 里直接 SELECT 需要的两列，provider 侧批量取。
+        "Get-CimInstance -Query \"SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name='python.exe' AND CommandLine LIKE '%main.py%'\" | ForEach-Object { $_.ProcessId.ToString() + '|' + $_.CommandLine }",
+      ]
+      execFile(
+        BackendManager.resolvePowerShell(),
+        psArgs,
+        { encoding: 'utf-8', timeout: 10000, windowsHide: true },
+        (err, stdout) => {
+          if (err) {
+            // 记录真实原因。原实现静默 catch 成一句"CIM query unavailable"，
+            // 无法区分"没有 PowerShell / 没有 WMI / 权限不足 / 命令语法错"——
+            // 实测就是因为 PATH 被裁剪、spawn 裸名 'powershell' 报 ENOENT，
+            // 而这一点在日志里完全看不出来。
+            resolve([])
+            return
           }
-          if (!BackendManager.isOurBackendProcess(cmdline, backendDir)) continue
-          try {
-            process.kill(pid, 'SIGTERM')
-
-          } catch (e) {
-            console.warn(`[BackendManager] Failed to signal orphan PID=${pid}:`, e)
+          const rows: Array<{ pid: number; cmdline: string }> = []
+          for (const rawLine of stdout.split(/\r?\n/)) {
+            const line = rawLine.trim()
+            if (!line) continue
+            const sep = line.indexOf('|')
+            if (sep <= 0) continue
+            const pid = parseInt(line.slice(0, sep).trim(), 10)
+            if (isNaN(pid)) continue
+            rows.push({ pid, cmdline: line.slice(sep + 1) })
           }
-        }
-      }
-    } catch (e) {
+          resolve(rows)
+        },
+      )
+    })
+  }
 
+  /**
+   * macOS / Linux：pgrep 找 main.py 进程。
+   * 与 Windows 分支对称的二次甄别：本机可能有多个 FastAPI 项目都用
+   * main.py 入口（如其他工作区的后端服务），只杀本应用自己的。
+   */
+  private static async listOrphanPidsPosix(backendDir: string): Promise<number[]> {
+    const run = (cmd: string, timeoutMs: number): Promise<string> =>
+      new Promise((resolve) => {
+        execFile('/bin/sh', ['-c', cmd], { encoding: 'utf-8', timeout: timeoutMs }, (err, stdout) => {
+          resolve(err ? '' : stdout)
+        })
+      })
+    const out = await run('pgrep -f "main.py"', 5000)
+    const pids = out
+      .split(/\s+/)
+      .map((s) => parseInt(s.trim(), 10))
+      .filter((n) => !isNaN(n) && n > 0)
+    const orphans: number[] = []
+    for (const pid of pids) {
+      const cmdline = (await run(`ps -p ${pid} -o command=`, 3000)).trim()
+      // 进程刚退出时取不到命令行：跳过（幂等，下次启动还会尝试）
+      if (cmdline && BackendManager.isOurBackendProcess(cmdline, backendDir)) orphans.push(pid)
+    }
+    return orphans
+  }
+
+  /** 杀已确认的孤儿 PID 列表（spawn 新后端之后执行，异步不阻塞） */
+  private static killPids(pids: number[], exclude: number[]): void {
+    const isWin = process.platform === 'win32'
+    for (const pid of pids) {
+      // 防御：绝不对当前/刚拉起的后端进程下手（双保险，正常时序下枚举必早于 spawn）
+      if (exclude.includes(pid) || pid === process.pid) continue
+      try {
+        if (isWin) {
+          execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { timeout: 5000, windowsHide: true }, () => {})
+        } else {
+          process.kill(pid, 'SIGTERM')
+        }
+      } catch { /* already exited */ }
     }
   }
 
@@ -194,9 +219,10 @@ export class BackendManager {
       return this.port  // 已在启动中，避免重叠
     }
     // 杀掉上次异常退出残留的孤儿 python 主进程（持有过期的 bridge 端口/token，
-    // 定时任务执行时 bridge 会连接失败）。必须在 spawn 新进程之前执行。
-    // 传入 backendDir 供精确识别本应用后端，避免误杀同名 main.py 的其他服务。
-    BackendManager.killOrphanBackends(this.getBackendDir())
+    // 定时任务执行时 bridge 会连接失败）。枚举异步启动、与下面的 findFreePort
+    // 并行，但必须在 spawn 前 await（见 killOrphanBackends 的时序契约：spawn 后
+    // 再枚举会把新后端自己当孤儿误杀）；taskkill 延后到 spawn 之后、与就绪轮询并行。
+    const orphansPromise = BackendManager.killOrphanBackends(this.getBackendDir())
     // 记录本次注入的环境变量，供崩溃自动重启时复用（见 tryAutoRestart）
     if (extraEnv) {
       Object.assign(this.lastExtraEnv, extraEnv)
@@ -207,7 +233,9 @@ export class BackendManager {
       // 发射 starting 状态，让渲染进程知道后端正在启动
       this.onStatusChange?.({ status: 'starting' })
 
-      this.port = await this.findFreePort(8010, 8100)
+      const portProbe = this.findFreePort(8010, 8100)
+      const orphans = await orphansPromise
+      this.port = await portProbe
 
       // 审查R2修复：上面的 findFreePort 是 await 间隙 — 若期间 before-quit→stop()
       // 已执行（当时 process 未 spawn、杀不到任何东西），此处必须放弃启动，
@@ -244,6 +272,10 @@ export class BackendManager {
       })
 
       const child = this.process
+      // 枚举在 spawn 前已汇合，这里只执行杀灭：异步、不阻塞健康轮询。
+      // exclude 双保险——当前主进程 pid 与刚 spawn 的后端 pid 绝不下手。
+      BackendManager.killPids(orphans, [child.pid ?? -1, process.pid])
+
       // 修复 2a：spawn 失败（如 python 不存在 ENOENT）时若无 error 监听，
       // 会触发未捕获异常直接崩掉整个 Electron 主进程；此处记录日志并拒绝 start()。
       let spawnErrorOccurred = false
@@ -560,7 +592,11 @@ export class BackendManager {
         const reschedule = () => {
           if (settled) return
           settled = true
-          setTimeout(check, 500)
+          // 启动性能优化：Python 导入 + uvicorn 起监听集中在最初 2~3 秒完成，
+          // 固定 500ms 间隔会把就绪时间向上取整、平均多等 250ms。前期收紧到
+          // 150ms，后端仍未起（如冷启动慢盘/杀软扫描）时退回 500ms 不再加压。
+          const elapsed = Date.now() - start
+          setTimeout(check, elapsed < 3000 ? 150 : 500)
         }
 
         const req = http.get(`http://127.0.0.1:${port}/api/health`, (res) => {

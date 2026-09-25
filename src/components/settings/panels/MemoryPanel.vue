@@ -11,59 +11,19 @@
       </SettingRow>
 
       <SettingRow label="容量上限" desc="每个记忆类别保留多少条活跃条目，超出由后台整理退休（手动新增的条目不受此限）">
-        <div class="slider-row">
-          <input
-            type="range"
-            v-model.number="memory.maxItems"
-            min="10"
-            max="500"
-            step="10"
-            class="setting-range"
-          />
-          <span class="slider-value">{{ memory.maxItems }} 条</span>
-        </div>
+        <SettingSlider v-model="memory.maxItems" :min="10" :max="500" :step="10" unit=" 条" />
       </SettingRow>
 
       <SettingRow label="检索注入预算" desc="每轮运行按相关性注入 system prompt 的历史经验上限（token）">
-        <div class="slider-row">
-          <input
-            type="range"
-            v-model.number="memory.injectBudgetTokens"
-            min="200"
-            max="8000"
-            step="100"
-            class="setting-range"
-          />
-          <span class="slider-value">{{ memory.injectBudgetTokens }} t</span>
-        </div>
+        <SettingSlider v-model="memory.injectBudgetTokens" :min="200" :max="8000" :step="100" unit=" t" />
       </SettingRow>
 
       <SettingRow label="画像块预算" desc="常驻画像块（用户偏好/主机画像/规则）的独立上限 —— 与注入预算分账，改大这一项不会削减那一侧">
-        <div class="slider-row">
-          <input
-            type="range"
-            v-model.number="memory.blocksBudgetTokens"
-            min="200"
-            max="8000"
-            step="100"
-            class="setting-range"
-          />
-          <span class="slider-value">{{ memory.blocksBudgetTokens }} t</span>
-        </div>
+        <SettingSlider v-model="memory.blocksBudgetTokens" :min="200" :max="8000" :step="100" unit=" t" />
       </SettingRow>
 
       <SettingRow label="检索等待上限" desc="预检索超过这个秒数就放弃（降级为按新近兜底），避免首字节被慢向量服务拖住">
-        <div class="slider-row">
-          <input
-            type="range"
-            v-model.number="memory.searchTimeoutS"
-            min="0.5"
-            max="30"
-            step="0.5"
-            class="setting-range"
-          />
-          <span class="slider-value">{{ memory.searchTimeoutS }} s</span>
-        </div>
+        <SettingSlider v-model="memory.searchTimeoutS" :min="0.5" :max="30" :step="0.5" unit=" s" />
       </SettingRow>
 
       <SettingRow label="后台整理调用模型" desc="开启后由模型消解矛盾与重复；关闭则只做阈值去重，记忆仍会写入">
@@ -106,6 +66,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
 import SettingRow from '@/components/settings/fields/SettingRow.vue'
+import SettingSlider from '@/components/settings/fields/SettingSlider.vue'
 import ToggleSwitch from '@/components/settings/fields/ToggleSwitch.vue'
 import AgentMemoryView from '@/components/agent/AgentMemoryView.vue'
 
@@ -130,27 +91,8 @@ onMounted(() => {
 
 <style scoped src="./settings-panel-base.css"></style>
 <style scoped>
-/* 面板骨架与 .setting-select 见 settings-panel-base.css */
+/* 面板骨架与 .setting-select 见 settings-panel-base.css；滑杆样式见 SettingSlider.vue */
 
-.slider-row { display: flex; align-items: center; gap: 12px; }
-.setting-range {
-  width: 160px; height: 4px;
-  -webkit-appearance: none; appearance: none;
-  background: var(--bg-slider);
-  border-radius: 2px; outline: none; cursor: pointer;
-}
-.setting-range::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 14px; height: 14px; border-radius: 50%;
-  background: var(--accent-primary);
-  border: 2px solid var(--bg-input);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.35);
-  cursor: pointer;
-}
-.slider-value {
-  font-size: 12px; color: var(--text-secondary);
-  min-width: 48px; text-align: right;
-}
 .section-divider {
   height: 1px; background: var(--border-subtle);
   margin: 20px 0;

@@ -100,7 +100,7 @@ def remote(monkeypatch):
 
 
 def _ctx(**kw) -> ToolContext:
-    base = dict(ssh_session_id="sess-1", mode="ssh", environment="test",
+    base = dict(ssh_session_id="sess-1", environment="test",
                 visible_terminal=False, agent_run_id="run-1")
     base.update(kw)
     return ToolContext(**base)

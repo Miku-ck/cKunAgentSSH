@@ -107,7 +107,6 @@ class FileReadTool(BaseTool):
         reversible=True,
         idempotent=True,
         timeout=30.0,
-        mode_scope=["ssh"],
     )
 
     @classmethod
@@ -193,7 +192,6 @@ class FileWriteTool(BaseTool):
         reversible=False,
         idempotent=True,
         timeout=30.0,
-        mode_scope=["ssh"],
     )
 
     @classmethod
@@ -233,7 +231,6 @@ class FileEditTool(BaseTool):
         reversible=False,
         idempotent=False,
         timeout=30.0,
-        mode_scope=["ssh"],
     )
 
     @classmethod
@@ -299,7 +296,6 @@ class FileGlobTool(BaseTool):
         reversible=True,
         idempotent=True,
         timeout=30.0,
-        mode_scope=["ssh"],
     )
 
     async def execute(self, context, path, pattern):
@@ -353,7 +349,6 @@ class FileGrepTool(BaseTool):
         reversible=True,
         idempotent=True,
         timeout=30.0,
-        mode_scope=["ssh"],
     )
 
     @classmethod

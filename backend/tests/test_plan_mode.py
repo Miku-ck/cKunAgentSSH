@@ -22,7 +22,7 @@ from agent.harness.safety import _SAFE_VERBS
 
 def _ctx(mode: str | None = "plan", tool: str = "", args: dict | None = None) -> RunContext:
     """造一个最小 RunContext；mode=None 表示完全不设置 permission_mode 键。"""
-    ctx = RunContext.new(task="测试任务", mode="ssh")
+    ctx = RunContext.new(task="测试任务")
     if mode is not None:
         ctx.metadata[pm.MODE_KEY] = mode
     if tool:

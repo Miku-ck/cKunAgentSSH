@@ -21,6 +21,7 @@ import logging
 from typing import Optional
 
 from agent.tools import BaseTool, ToolResult, ToolMeta, ToolContext
+from prompts import SSH_MODE
 
 logger = logging.getLogger(__name__)
 
@@ -127,9 +128,9 @@ class SpawnSubagentTool(BaseTool):
         """
         from agent.harness.llm_client import StreamLLMClient
 
-        # 从 DB 获取当前模式的默认模型配置
+        # 从 DB 获取默认模型配置
         # D 修复（事件循环阻塞）：内部含多次同步 db 查询，放线程池执行
-        model_cfg = await asyncio.to_thread(self._get_model_config, tool_ctx)
+        model_cfg = await asyncio.to_thread(self._get_model_config)
         if not model_cfg:
             # 失败必须以异常上抛：原实现 return "[子 Agent] 未找到可用模型配置…" 会被
             # execute 包成 ToolResult(True)，主 Agent 把这句错误文本当成子 Agent 的分析
@@ -189,19 +190,18 @@ class SpawnSubagentTool(BaseTool):
 
         return result.content or "[子 Agent 未返回内容]"
 
-    def _get_model_config(self, tool_ctx: ToolContext) -> Optional[dict]:
-        """从 DB 获取当前模式的默认模型配置
+    def _get_model_config(self) -> Optional[dict]:
+        """从 DB 获取默认模型配置
 
         优先级：
-        1. 当前模式（tool_ctx.mode）的默认模型
+        1. SSH 模式的默认模型
         2. 全局默认模型
         3. 任意一个可用模型
         """
         try:
             import database as db
-            mode = tool_ctx.mode or "ssh"
             # 1. 模式默认 → 2. 全局默认 → 3. 任意可用（list_models_config 返回 list[dict]，取前 10 个）
-            model = db.get_default_model(mode)
+            model = db.get_default_model(SSH_MODE)
             if not model:
                 model = db.get_default_model(None)
             if not model:

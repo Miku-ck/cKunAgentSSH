@@ -42,7 +42,7 @@ CMD = "rm -rf *"
 
 
 def _ctx() -> RunContext:
-    return RunContext.new(task="测试", mode="ssh", config=AgentConfig())
+    return RunContext.new(task="测试", config=AgentConfig())
 
 
 def _log_call(ctx: RunContext, tool: str = "shell_exec", command: str = CMD) -> None:

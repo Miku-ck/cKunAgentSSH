@@ -269,9 +269,6 @@ describe('settings setDefaultModel', () => {
     lsMap.clear()
     for (const fn of Object.values(apiMock)) fn.mockClear()
     for (const fn of Object.values(agentApiMock)) fn.mockClear()
-    // refreshChatModels 会拉 ./models 并触发 api.getModels —— 提供空实现，
-    // 避免动态 import 报错打断主流程断言（外层 .catch 也会吞掉）
-    ;(apiMock as Record<string, unknown>).getModels = vi.fn(async () => [])
     apiMock.setDefaultModel.mockImplementation(async () => ({ default: 'm2', mode: 'ssh' }))
     // vi.fn 从初始 `async () => []` 推出 never[]；显式断言绕开 mockResolvedValue 的窄化
     apiMock.getModelConfigs.mockResolvedValue([
@@ -285,7 +282,7 @@ describe('settings setDefaultModel', () => {
     const s = useSettingsStore()
     const ok = await s.setDefaultModel('m2')
     expect(ok).toBe(true)
-    expect(apiMock.setDefaultModel).toHaveBeenCalledWith('m2', 'ssh')
+    expect(apiMock.setDefaultModel).toHaveBeenCalledWith('m2')
     expect(apiMock.getModelConfigs).toHaveBeenCalled()
     expect(s.modelConfigs.find((m) => m.id === 'm2')?.is_default_ssh).toBe(true)
     expect(s.modelsError).toBe('')

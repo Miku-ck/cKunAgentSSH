@@ -38,7 +38,7 @@ def _no_file_io(monkeypatch):
 
 
 def _ctx(environment: str = "test") -> RunContext:
-    return RunContext.new(task="测试", mode="ssh", config=AgentConfig(),
+    return RunContext.new(task="测试", config=AgentConfig(),
                           environment=environment)
 
 

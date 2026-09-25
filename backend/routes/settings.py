@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 import database as db
 import netconfig
+from prompts import SSH_MODE
 
 
 router = APIRouter(tags=["settings"])
@@ -61,22 +62,19 @@ class UpdateModelRequest(BaseModel):
 # 注意：/settings/models/default 必须注册在 /settings/models/{config_id} 之前，
 # 否则 FastAPI 按注册顺序匹配时 "default" 会被 {config_id} 路径先捕获导致功能失效。
 @router.patch("/settings/models/default")
-def set_default_model(
-    model_id: str = Query(..., description="要设为默认的模型 id"),
-    mode: Literal["ssh"] = Query("ssh", description="模式"),
-):
+def set_default_model(model_id: str = Query(..., description="要设为默认的模型 id")):
     """设置默认模型"""
     model = db.get_model_config(model_id)
     if not model:
         raise HTTPException(status_code=404, detail="Model not found")
-    db.set_default_model(model_id, mode=mode)
-    return {"default": model_id, "mode": mode}
+    db.set_default_model(model_id, mode=SSH_MODE)
+    return {"default": model_id, "mode": SSH_MODE}
 
 
 @router.get("/settings/models/default")
-def get_default_model(mode: Literal["ssh"] = Query("ssh")):
+def get_default_model():
     """获取默认模型"""
-    model = db.get_default_model(mode=mode)
+    model = db.get_default_model(mode=SSH_MODE)
     if not model:
         # 回退：返回第一个模型
         models = db.list_models_config()

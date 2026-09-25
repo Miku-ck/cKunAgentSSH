@@ -41,7 +41,6 @@ class _FakeRegistry:
 def _make_ctx(auto_skill_match, skill_ids=()):
     ctx = RunContext.new(
         task="帮我写个 git 脚本",
-        mode="ssh",
         skill_ids=list(skill_ids),
         auto_skill_match=auto_skill_match,
     )
@@ -96,8 +95,8 @@ async def test_auto_match_off_no_explicit_no_injection(monkeypatch):
 
 def test_runcontext_auto_skill_match_default_true():
     """未传参时默认开启（与请求模型默认值一致，兼容旧调用方）。"""
-    assert RunContext.new(task="t", mode="ssh").auto_skill_match is True
-    assert RunContext.new(task="t", mode="ssh", auto_skill_match=False).auto_skill_match is False
+    assert RunContext.new(task="t").auto_skill_match is True
+    assert RunContext.new(task="t", auto_skill_match=False).auto_skill_match is False
 
 
 # ── AgentRunRequest：context_window / auto_skill_match 契约 ─────────────────

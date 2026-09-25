@@ -26,7 +26,6 @@ from post_processor import (
 
 def _ctx(turn_index: int = 1) -> TurnContext:
     return TurnContext(
-        mode="ssh",
         conversation_id="conv-13b",
         user_message="怎么查 nginx 错误日志",
         assistant_content="用 tail -f /var/log/nginx/error.log 查看",
@@ -177,7 +176,7 @@ def test_submit_follows_live_config_not_construction_snapshot(monkeypatch):
 
         pp.set_post_process_config(PostProcessConfig(enabled=False))
         task_id = asyncio.run(mgr.submit(
-            mode="ssh", conversation_id="c1",
+            conversation_id="c1",
             user_message="q", assistant_content="a",
         ))
         assert task_id == "", "后处理已关闭，submit 仍按构造时的旧快照放行任务"

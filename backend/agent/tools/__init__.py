@@ -37,7 +37,6 @@ class ToolMeta:
     # （write/shell/delete/move/spawn_subagent）重试会放大副作用
     # （命令双跑、写入两次、子 Agent 双启动）。默认 False（安全方向）。
     idempotent: bool = False
-    mode_scope: list[str] = field(default_factory=lambda: ["ssh"])
     # 问题 5：per-action 风险覆盖。当调用 args 中指定了特定 action 时，
     # PermissionGate 在 prod 环境按此处声明的风险等级处理（默认按 risk_level）。
     # 例如 service_manage 工具 risk_level=moderate，但 stop/restart 在 prod
@@ -94,7 +93,6 @@ class BaseTool:
 class ToolContext:
     """工具执行上下文 — 传入工具的运行时信息"""
     ssh_session_id: str = ""        # SSH 会话 ID（SSH 模式）
-    mode: str = "ssh"               # 当前模式
     conversation_id: str = ""
     agent_run_id: str = ""
     # 审查修复（P2 E6）：子 Agent / spawn_subagent 需要向主 Agent 的
@@ -165,10 +163,10 @@ class ToolRegistry:
             return ToolResult(success=False, output="", error=str(e))
 
 
-def create_registry_for_mode(mode: str) -> ToolRegistry:
-    """根据模式创建工具注册中心，注册该模式可用的工具"""
+def create_registry() -> ToolRegistry:
+    """创建工具注册中心，注册全部内置工具（work/ide 移除后 mode 轴已坍缩）"""
     from agent.tools.builtin import register_builtin_tools
 
     registry = ToolRegistry()
-    register_builtin_tools(registry, mode)
+    register_builtin_tools(registry)
     return registry

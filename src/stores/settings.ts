@@ -407,7 +407,7 @@ export const useSettingsStore = defineStore('settings', () => {
    */
   async function setDefaultModel(id: string): Promise<boolean> {
     try {
-      await api.setDefaultModel(id, 'ssh')
+      await api.setDefaultModel(id)
       await fetchModelConfigs()
       // 模型选择器与 ssh-ai store 各自缓存了默认模型的 id，切换后必须刷新，
       // 否则 ChatPanel 顶部仍显示旧模型、下一次运行仍走旧 endpoint

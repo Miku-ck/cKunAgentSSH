@@ -75,7 +75,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     const sid = persistence.selectedModelId.value
     if (sid && usable(sid)) return sid
     try {
-      const def = await api.getDefaultModel('ssh')
+      const def = await api.getDefaultModel()
       if (def?.id && usable(def.id)) return def.id
     } catch { /* ignore */ }
     return list[0]?.id
@@ -156,7 +156,6 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   // 修复 P3-4：面板卸载不会丢失 Agent 结果。
   const agentStore = useAgentStore()
   watch(() => agentStore.status, (newStatus, oldStatus) => {
-    if (agentStore.currentMode !== 'ssh') return
     // M17：abort 使状态 running→idle（非 completed/failed），原 watch 漏捕 →
     // temp-agent 占位消息（空内容）永久残留历史。补 running→idle 分支，
     // 以 aborted 标志区分"用户中止"与 C10 并发保护的直接 abortFn()（后者不固化）。
@@ -334,7 +333,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
 
   // ── 4. System Prompt 构建：运维专家 + SSH 环境信息 + 终端现场上下文 ──
   function buildSystemPrompt(ctx?: SshAiContext): string {
-    // 模式基础 prompt（"运维助手"）由后端根据 mode='ssh' 注入
+    // 模式基础 prompt（"运维助手"）由后端固定注入（mode 轴已坍缩为单一 SSH）
     let prompt = ''
 
     if (ctx?.sessionType === 'remote') {
@@ -566,7 +565,6 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       task: effectiveContent,
       conversationId: conv.backendConvId!,
       modelId: persistence.selectedModelId.value,
-      mode: 'ssh',
       systemPrompt,
       // 可见终端执行模式：无论本地/远程都把活动会话 id 传给后端，
       // 后端据此把 shell_exec 交付到当前可见终端执行（而非 headless）

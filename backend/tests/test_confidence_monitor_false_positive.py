@@ -20,7 +20,7 @@ _EXIT_SENTINEL_RE = re.compile(r"\[exit_code=-?\d+\]")
 
 
 def _make_ctx() -> RunContext:
-    return RunContext.new(task="排查任务", mode="ssh")
+    return RunContext.new(task="排查任务")
 
 
 def _add_assistant(ctx: RunContext, content: str) -> None:

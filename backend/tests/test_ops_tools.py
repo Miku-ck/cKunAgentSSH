@@ -8,7 +8,7 @@ import asyncio
 
 import pytest
 
-from agent.tools import ToolContext, create_registry_for_mode
+from agent.tools import ToolContext, create_registry
 from agent.tools.builtin import (
     get_all_tool_classes,
     SysOverviewTool,
@@ -31,7 +31,7 @@ NEW_TOOLS = {
 
 
 def _ctx(**kwargs) -> ToolContext:
-    base = dict(ssh_session_id="", mode="ssh",
+    base = dict(ssh_session_id="",
                 environment="test", visible_terminal=False)
     base.update(kwargs)
     return ToolContext(**base)
@@ -43,12 +43,12 @@ async def _run(coro):
 
 # ── 注册与元数据 ─────────────────────────────
 def test_new_tools_registered_in_ssh_scope():
-    names = {cls().name for cls in get_all_tool_classes("ssh")}
+    names = {cls().name for cls in get_all_tool_classes()}
     assert NEW_TOOLS <= names
 
 
 def test_registry_contains_new_tool_names():
-    reg = create_registry_for_mode("ssh")
+    reg = create_registry()
     assert NEW_TOOLS <= set(reg.names())
 
 

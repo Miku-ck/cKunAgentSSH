@@ -59,7 +59,6 @@ class ReadImageTool(BaseTool):
         reversible=True,
         idempotent=True,
         timeout=20.0,
-        mode_scope=["ssh"],
     )
 
     def _validate(self, path):

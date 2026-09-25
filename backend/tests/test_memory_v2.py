@@ -576,13 +576,13 @@ def test_degraded_probe_text_is_not_a_host_fact(memdb):
 
 def _ctx(session_id: str = "s1"):
     from agent.tools import ToolContext
-    return ToolContext(ssh_session_id=session_id, mode="ssh",
+    return ToolContext(ssh_session_id=session_id,
                        conversation_id="c1", agent_run_id="r1")
 
 
 def _tool_registry():
-    from agent.tools import create_registry_for_mode
-    return create_registry_for_mode("ssh")
+    from agent.tools import create_registry
+    return create_registry()
 
 
 def test_memory_tools_registered(memdb):

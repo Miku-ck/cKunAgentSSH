@@ -56,7 +56,6 @@ _RUN_META = ToolMeta(
     reversible=False,
     idempotent=False,
     timeout=30.0,
-    mode_scope=["ssh"],
 )
 # job_list / job_output 只读不改变状态，安全且可重复执行。
 _READ_META = ToolMeta(
@@ -64,7 +63,6 @@ _READ_META = ToolMeta(
     reversible=True,
     idempotent=True,
     timeout=15.0,
-    mode_scope=["ssh"],
 )
 
 

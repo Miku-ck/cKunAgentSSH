@@ -24,7 +24,7 @@ import agent.harness.reins.gate as _gate_mod
 import agent.harness.reins.guards as _guards_mod
 from agent.harness.contracts import AgentConfig, RunContext
 from agent.harness.reins import FilesystemGuard, PermissionGate
-from agent.tools import create_registry_for_mode
+from agent.tools import create_registry
 
 NGINX = "/etc/nginx/nginx.conf"        # dangerous：敏感路径写
 PLANT = "/root/.ssh/authorized_keys"   # hardline：绝对阻断
@@ -49,11 +49,11 @@ def audits(monkeypatch):
 
 
 def _saddle():
-    return SimpleNamespace(registry=create_registry_for_mode("ssh"))
+    return SimpleNamespace(registry=create_registry())
 
 
 def _ctx(mode: str | None = "auto", environment: str = "test") -> RunContext:
-    ctx = RunContext.new(task="重启一下 nginx", mode="ssh", config=AgentConfig(),
+    ctx = RunContext.new(task="重启一下 nginx", config=AgentConfig(),
                          environment=environment)
     if mode is not None:
         ctx.metadata[_aa.MODE_KEY] = mode
@@ -340,7 +340,7 @@ def test_guard_用户拒绝过的命令不被模型翻案(monkeypatch, audits):
     gate, guard = _guard()
     ctx = _write_ctx()
     from agent.harness.reins.core import extract_bound_command
-    bound, _ = extract_bound_command(create_registry_for_mode("ssh"),
+    bound, _ = extract_bound_command(create_registry(),
                                      "file_write", ctx.tool_calls_log[-1]["args"])
     gate.deny_command("file_write", str(bound), ctx.run_id)
     d = asyncio.run(guard.check(ctx))
@@ -414,7 +414,7 @@ def test_gate_工具级裁决subject绑定bound命令(monkeypatch, audits):
     d = asyncio.run(gate.check(ctx))
     assert d.intercepted is True
     from agent.harness.reins.core import extract_bound_command
-    bound, _free = extract_bound_command(create_registry_for_mode("ssh"),
+    bound, _free = extract_bound_command(create_registry(),
                                          "file_write", args)
     assert bound and "/tmp/app.txt" in bound
     assert len(calls) == 1

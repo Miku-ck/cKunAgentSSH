@@ -19,7 +19,7 @@ import base64
 import pytest
 
 from agent.harness.safety import classify_command, classify_constructed_command
-from agent.tools import create_registry_for_mode
+from agent.tools import create_registry
 from agent.tools.builtin.ops_common import (
     _CLASSIFY_PAYLOAD,
     base64_read_cmd,
@@ -29,7 +29,7 @@ from agent.tools.builtin.ops_common import (
 
 
 def _bound(tool: str, args: dict):
-    impl = create_registry_for_mode("ssh").get(tool)
+    impl = create_registry().get(tool)
     assert impl is not None, f"工具 {tool} 未注册"
     return impl.bound_command(args)
 
@@ -133,8 +133,8 @@ def test_log_read_rejects_traversal():
     import asyncio
 
     from agent.tools import ToolContext
-    impl = create_registry_for_mode("ssh").get("log_read")
-    res = asyncio.run(impl.execute(ToolContext(mode="ssh"),
+    impl = create_registry().get("log_read")
+    res = asyncio.run(impl.execute(ToolContext(),
                                    path="/var/log/../../etc/shadow"))
     assert not res.success and "越界" in (res.error or "")
 
@@ -178,7 +178,7 @@ def test_traversal_path_has_no_bound_command(tool, args):
 ])
 def test_schedule_op_command_is_classified_as_free_form(command, level):
     """定时任务是"现在埋雷、未来自动引爆"，入库前必须按模型自由输入判一次"""
-    impl = create_registry_for_mode("ssh").get("schedule_op")
+    impl = create_registry().get("schedule_op")
     bound = impl.bound_command({"action": "create", "command": command})
     assert bound == command
     assert impl.bound_command_is_free_form is True
@@ -198,6 +198,6 @@ def test_tools_without_shell_surface_declare_no_bound_command(tool):
     """ops_service / ops_obs 的观测类工具动词由代码枚举 + shlex.quote，没有自由文本
     或路径槽位，不存在等价的 shell 绕过面；套上内容判定只会把 test 下的 stop/restart
     从会话授权退化成逐条审批。不纳入是决定，不是遗漏。"""
-    impl = create_registry_for_mode("ssh").get(tool)
+    impl = create_registry().get(tool)
     assert impl is not None, f"{tool} 不在 ssh registry —— 本测试的登记前提已失效"
     assert impl.bound_command({}) is None

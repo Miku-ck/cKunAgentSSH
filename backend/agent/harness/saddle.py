@@ -390,7 +390,6 @@ class Saddle:
         """从 RunContext 构造 ToolContext（原 agent.tools.ToolContext）"""
         from agent.tools import ToolContext
         return ToolContext(
-            mode=ctx.mode,
             conversation_id=ctx.conversation_id,
             agent_run_id=ctx.run_id,
             ssh_session_id=ctx.ssh_session_id,

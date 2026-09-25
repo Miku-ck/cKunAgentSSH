@@ -24,7 +24,7 @@ import agent.harness.reins.guards as _guards_mod
 from agent.harness.contracts import AgentConfig, RunContext
 from agent.harness.reins import FilesystemGuard, PermissionGate
 from agent.harness.reins.core import extract_bound_command
-from agent.tools import create_registry_for_mode
+from agent.tools import create_registry
 from agent.tools.builtin.ops_common import base64_write_cmd_for_classification
 
 PLANT = "/root/.ssh/authorized_keys"       # hardline：SSH 植入/提权
@@ -49,7 +49,7 @@ def audits(monkeypatch):
 
 
 def _saddle():
-    return SimpleNamespace(registry=create_registry_for_mode("ssh"))
+    return SimpleNamespace(registry=create_registry())
 
 
 def _gate():
@@ -61,7 +61,7 @@ def _guard(gate):
 
 
 def _ctx(environment="test") -> RunContext:
-    return RunContext.new(task="测试", mode="ssh", config=AgentConfig(),
+    return RunContext.new(task="测试", config=AgentConfig(),
                           environment=environment)
 
 
@@ -87,7 +87,7 @@ async def _chain(ctx, gate, guard):
 
 
 def _bound(tool, args):
-    cmd, _free = extract_bound_command(create_registry_for_mode("ssh"), tool, args)
+    cmd, _free = extract_bound_command(create_registry(), tool, args)
     return cmd
 
 

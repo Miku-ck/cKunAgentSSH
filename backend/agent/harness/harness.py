@@ -158,7 +158,6 @@ class Harness:
     async def run(
         self,
         task: str,
-        mode: str,
         conversation_id: str = "",
         ssh_session_id: Optional[str] = None,
         environment: str = "test",
@@ -220,7 +219,6 @@ class Harness:
         # 构建 RunContext
         ctx = RunContext.new(
             task=task,
-            mode=mode,
             conversation_id=conversation_id,
             ssh_session_id=ssh_session_id,
             environment=environment,

@@ -19,7 +19,7 @@ RUN = "run-todo-test"
 
 
 def _ctx(run_id: str = RUN) -> ToolContext:
-    return ToolContext(ssh_session_id="", mode="ssh", environment="test",
+    return ToolContext(ssh_session_id="", environment="test",
                        visible_terminal=False, agent_run_id=run_id)
 
 
@@ -109,7 +109,7 @@ async def test_runs_are_isolated_and_clear_releases():
 
 @pytest.mark.asyncio
 async def test_missing_run_id_degrades_without_raising():
-    ctx = ToolContext(ssh_session_id="", mode="ssh", environment="test",
+    ctx = ToolContext(ssh_session_id="", environment="test",
                       visible_terminal=False)
     res = await TodoWriteTool().execute(ctx, action="create", content="x")
     assert res.success and "降级" in res.output

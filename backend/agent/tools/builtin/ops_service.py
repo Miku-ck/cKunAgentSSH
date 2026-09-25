@@ -86,7 +86,6 @@ class ServiceManageTool(BaseTool):
         risk_level="moderate",
         reversible=False,
         timeout=30.0,
-        mode_scope=["ssh"],
         # 问题 5：stop/restart 在 prod 环境升级为 dangerous，每次需要显式审批
         # （原 moderate + session 级授权：首次审批后同 session 内免审，生产风险偏高）
         destructive_actions=frozenset(_DESTRUCTIVE_ACTIONS),

@@ -1,11 +1,11 @@
 """
 内置工具包 — 运维 Agent 工具集
 
-完整工具类清单以下方 _ALL_TOOL_CLASSES 为单一事实源（按 mode_scope 过滤后注册），
-此处不再另抄一份易漂移的枚举。概览分组：shell 执行 / 联网 / 待办 / 技能按需加载 /
+完整工具类清单以下方 _ALL_TOOL_CLASSES 为单一事实源（work/ide 模式已移除，
+现存工具全部注册，不再按 mode_scope 过滤），此处不再另抄一份易漂移的枚举。
+概览分组：shell 执行 / 联网 / 待办 / 技能按需加载 /
 子 Agent，运维观测与服务·定时·后台任务，远程文件读写·编辑·检索，图片查看，
-记忆自编辑，以及 Spec/Plan/Goal 工作流落盘。work/ide 模式已移除，现存工具一律
-ssh 作用域。
+记忆自编辑，以及 Spec/Plan/Goal 工作流落盘。
 """
 import logging
 
@@ -94,19 +94,16 @@ _ALL_TOOL_CLASSES: list[type[BaseTool]] = [
 ]
 
 
-def register_builtin_tools(registry: ToolRegistry, mode: str) -> None:
-    """根据模式注册可用的内置工具
-
-    遍历显式 _ALL_TOOL_CLASSES，按 ToolMeta.mode_scope 动态过滤 + DB 开关过滤。
-    """
+def register_builtin_tools(registry: ToolRegistry) -> None:
+    """注册全部内置工具，再按 DB 开关移除被禁用的工具"""
     for tool_cls in _ALL_TOOL_CLASSES:
-        if mode in tool_cls.meta.mode_scope:
-            registry.register(tool_cls())
+        registry.register(tool_cls())
 
-    # 按 DB 配置移除被禁用的工具
+    # 按 DB 配置移除被禁用的工具（mode='all' 全局禁用 + SSH 模式禁用一并生效）
     try:
         import database as db
-        disabled_list = db.list_disabled_tools(mode)
+        from prompts import SSH_MODE
+        disabled_list = db.list_disabled_tools(SSH_MODE)
         for name in disabled_list:
             if registry.get(name):
                 registry.unregister(name)
@@ -114,15 +111,12 @@ def register_builtin_tools(registry: ToolRegistry, mode: str) -> None:
         # DB 未初始化时降级为不过滤（保持原有行为）
         pass
 
-    logger.info("模式 %s 注册了 %d 个工具: %s", mode, len(registry.names()), registry.names())
+    logger.info("注册了 %d 个工具: %s", len(registry.names()), registry.names())
 
 
-def get_all_tool_classes(mode: str | None = None) -> list[type[BaseTool]]:
-    """获取指定模式下所有工具类（不经过 DB 过滤，用于 UI 展示）
+def get_all_tool_classes() -> list[type[BaseTool]]:
+    """获取所有工具类（不经过 DB 过滤，用于 UI 展示）
 
     返回工具类列表，调用方自行实例化读取 name/description/parameters。
-    mode 为 None 时返回全部工具类。
     """
-    if mode is None:
-        return list(_ALL_TOOL_CLASSES)
-    return [cls for cls in _ALL_TOOL_CLASSES if mode in cls.meta.mode_scope]
+    return list(_ALL_TOOL_CLASSES)

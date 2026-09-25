@@ -66,17 +66,7 @@
           <div class="runtime-row">
             <label class="runtime-field">
               <span class="runtime-label">最大迭代步数</span>
-              <div class="slider-inline">
-                <input
-                  v-model.number="runtimeCfg.maxIterations"
-                  type="range"
-                  min="1"
-                  max="500"
-                  step="1"
-                  class="setting-range"
-                />
-                <span class="slider-value">{{ runtimeCfg.maxIterations }}</span>
-              </div>
+              <SettingSlider v-model="runtimeCfg.maxIterations" class="slider-inline" :min="1" :max="500" unit="" />
             </label>
             <p class="hint muted runtime-desc">
               后端 <code>max_iterations</code> 允许 1-500。动态预算开启时优先使用演化习得值，越界才退回此上限。
@@ -372,6 +362,7 @@ import { parseBackendTs } from '@/utils/format'
 import { useSettingsStore } from '@/stores/settings'
 import { useConfirm } from '@/composables/useConfirm'
 import ToggleSwitch from '@/components/settings/fields/ToggleSwitch.vue'
+import SettingSlider from '@/components/settings/fields/SettingSlider.vue'
 
 const toast = useToastStore()
 const settingsStore = useSettingsStore()
@@ -557,7 +548,7 @@ async function loadTools() {
   toolsLoading.value = true
   toolsError.value = ''
   try {
-    const data = await agentAdminApi.getTools('ssh')
+    const data = await agentAdminApi.getTools()
     tools.value = data.tools
   } catch (e) {
     toolsError.value = toFriendlyMessage(e, '工具列表加载失败')
@@ -820,22 +811,8 @@ onMounted(() => {
 .ops-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .setting-select { flex-shrink: 0; }
 .setting-select:disabled { opacity: .5; cursor: default; }
-.slider-inline { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
-.slider-inline .setting-range { flex: 1; max-width: 320px; }
-.slider-value { font-size: 12px; color: var(--text-secondary); min-width: 40px; text-align: right; }
-.setting-range {
-  height: 4px;
-  -webkit-appearance: none; appearance: none;
-  background: var(--bg-slider);
-  border-radius: 2px; outline: none; cursor: pointer;
-}
-.setting-range::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 14px; height: 14px; border-radius: 50%;
-  background: var(--accent-primary);
-  border: 2px solid var(--bg-input);
-  cursor: pointer;
-}
+.slider-inline { margin-top: 6px; }
+.slider-inline :deep(.setting-range) { flex: 1; max-width: 320px; }
 .allow-row { display: flex; gap: 8px; align-items: center; margin: 8px 0 4px; }
 .text-input { flex: 1; min-width: 0; }
 .text-input.wide { flex: 2; }

@@ -32,7 +32,7 @@ def test_audit_logger_appends_executed(monkeypatch):
     conn = _audit_conn()
     monkeypatch.setattr(db, "_get_conn", lambda: conn)
 
-    ctx = RunContext.new(task="t", mode="ssh", ssh_session_id="sess1")
+    ctx = RunContext.new(task="t", ssh_session_id="sess1")
     ctx.tool_calls_log.append(
         {"tool": "shell_exec", "args": {"command": "ls -la"}, "iteration": 1, "success": True}
     )
@@ -51,7 +51,7 @@ def test_audit_logger_appends_failed(monkeypatch):
     conn = _audit_conn()
     monkeypatch.setattr(db, "_get_conn", lambda: conn)
 
-    ctx = RunContext.new(task="t", mode="ssh")
+    ctx = RunContext.new(task="t")
     ctx.tool_calls_log.append(
         {"tool": "read_file", "args": {"path": "x"}, "iteration": 0, "success": False}
     )

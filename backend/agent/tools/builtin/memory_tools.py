@@ -73,7 +73,7 @@ class MemorySearchTool(BaseTool):
         },
         "required": ["query"],
     }
-    meta = ToolMeta(risk_level="safe", mode_scope=["ssh"], idempotent=True, timeout=15.0)
+    meta = ToolMeta(risk_level="safe", idempotent=True, timeout=15.0)
 
     async def execute(self, context, **kwargs) -> ToolResult:
         query = (kwargs.get("query") or "").strip()
@@ -130,7 +130,7 @@ class MemoryAddTool(BaseTool):
         },
         "required": ["content", "kind"],
     }
-    meta = ToolMeta(risk_level="safe", mode_scope=["ssh"], timeout=10.0)
+    meta = ToolMeta(risk_level="safe", timeout=10.0)
 
     async def execute(self, context, **kwargs) -> ToolResult:
         content = (kwargs.get("content") or "").strip()
@@ -192,7 +192,7 @@ class MemoryInvalidateTool(BaseTool):
         },
         "required": ["memory_id", "reason"],
     }
-    meta = ToolMeta(risk_level="safe", mode_scope=["ssh"], timeout=10.0)
+    meta = ToolMeta(risk_level="safe", timeout=10.0)
 
     async def execute(self, context, **kwargs) -> ToolResult:
         memory_id = (kwargs.get("memory_id") or "").strip()
@@ -233,7 +233,7 @@ class BlockUpdateTool(BaseTool):
         },
         "required": ["key", "new_string"],
     }
-    meta = ToolMeta(risk_level="safe", mode_scope=["ssh"], timeout=10.0)
+    meta = ToolMeta(risk_level="safe", timeout=10.0)
 
     async def execute(self, context, **kwargs) -> ToolResult:
         key = (kwargs.get("key") or "").strip()

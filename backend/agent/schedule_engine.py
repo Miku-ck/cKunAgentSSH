@@ -305,8 +305,8 @@ class ScheduleEngine:
             base_url=model_cfg["base_url"],
             api_key=model_cfg.get("api_key") or "",
         )
-        from agent.tools import create_registry_for_mode
-        tool_registry = create_registry_for_mode("ssh")
+        from agent.tools import create_registry
+        tool_registry = create_registry()
         cost_tracker = CostTracker(model_id=model_name)
         harness.assemble(
             llm_client=llm_client,
@@ -401,7 +401,6 @@ class ScheduleEngine:
         try:
             async for ev in harness.run(
                 task=prompt,
-                mode="ssh",
                 conversation_id=conversation_id,
                 ssh_session_id=ssh_session_id,
                 environment="prod",
@@ -544,11 +543,9 @@ def compute_next_run(sched: dict, now: datetime | None = None) -> str:
 def _build_schedule_system_prompt(sched: dict) -> str:
     parts = []
     try:
-        from prompts import _current_time_str, MODE_PROMPTS
+        from prompts import _current_time_str, SSH_MODE_PROMPT
         parts.append(f"[系统时间] 当前时间：{_current_time_str()}。")
-        mode_prompt = MODE_PROMPTS.get("ssh", "")
-        if mode_prompt:
-            parts.append(mode_prompt)
+        parts.append(SSH_MODE_PROMPT)
     except Exception:
         pass
     parts.append(

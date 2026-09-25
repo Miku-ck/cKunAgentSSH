@@ -16,7 +16,6 @@ from post_processor import PostProcessConfig, TurnContext, _generate_title
 
 def _ctx(turn_index: int) -> TurnContext:
     return TurnContext(
-        mode="ssh",
         conversation_id="conv1",
         user_message="怎么查 nginx 错误日志",
         assistant_content="用 tail -f /var/log/nginx/error.log 查看",

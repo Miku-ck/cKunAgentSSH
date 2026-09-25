@@ -21,7 +21,7 @@ _NO_UNIT = "没有对应的 unit"
 
 
 def _ctx() -> ToolContext:
-    return ToolContext(ssh_session_id="", mode="ssh", environment="test",
+    return ToolContext(ssh_session_id="", environment="test",
                        visible_terminal=False)
 
 

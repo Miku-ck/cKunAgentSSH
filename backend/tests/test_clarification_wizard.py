@@ -43,7 +43,7 @@ from agent.harness.reins import (
 
 def _make_ctx(tool: str = "shell_exec", args: dict | None = None) -> RunContext:
     """构造一个最小化的 RunContext 用于拦截器测试"""
-    ctx = RunContext.new(task="test task", mode="ssh", config=AgentConfig())
+    ctx = RunContext.new(task="test task", config=AgentConfig())
     ctx.tool_calls_log = [{
         "tool": tool,
         "args": args or {"command": "rm -rf *"},

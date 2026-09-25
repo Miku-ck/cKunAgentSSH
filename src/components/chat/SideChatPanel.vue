@@ -487,7 +487,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import type { ModelSummary } from '@/api/client'
+import type { ModelConfig } from '@/api/client'
 import type { ConvGroup } from '@/types/chat'
 import MessageItem from '@/components/chat/MessageItem.vue'
 import HistoryPanel from '@/components/chat/HistoryPanel.vue'
@@ -528,7 +528,7 @@ const props = defineProps<{
   currentConvId: string | null
   messages: DisplayMsg[]
   selectedModelId: string
-  models: ModelSummary[]
+  models: ModelConfig[]
   groupedConversations: ConvGroup[]
   showMessageActions?: boolean
   agentRunning?: boolean
@@ -1332,10 +1332,6 @@ function handleDelete(id: string) {
 }
 
 // ── 暴露方法（供父组件调用） ──
-function focusInput() {
-  nextTick(() => inputRef.value?.focus())
-}
-
 /** 预填输入框草稿（「问 AI」等外部入口注入问题草稿，用户可修改后发送） */
 function prefill(text: string) {
   if (!text) return
@@ -1346,7 +1342,7 @@ function prefill(text: string) {
   })
 }
 
-defineExpose({ focusInput, restoreDraft, prefill })
+defineExpose({ restoreDraft, prefill })
 </script>
 
 <style scoped>

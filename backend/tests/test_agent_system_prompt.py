@@ -14,7 +14,7 @@ from routes.agent import AgentRunRequest, _build_agent_system_prompt
 PROFILE = "[目标机环境] 发行版: Ubuntu 22.04.3 LTS; init: systemd; 包管理器: apt-get"
 
 def _req(**kw) -> AgentRunRequest:
-    base = dict(task="重启 nginx", conversation_id="c1", mode="ssh")
+    base = dict(task="重启 nginx", conversation_id="c1")
     base.update(kw)
     return AgentRunRequest(**base)
 

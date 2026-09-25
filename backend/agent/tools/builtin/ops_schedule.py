@@ -16,7 +16,7 @@ import database as db
 # 注意：compute_next_run / get_schedule_engine 在方法内惰性导入，
 # 避免 builtin 工具 import 时与 agent.schedule_engine 形成循环依赖。
 
-meta = ToolMeta(risk_level="moderate", reversible=False, timeout=10.0, mode_scope=["ssh"])
+meta = ToolMeta(risk_level="moderate", reversible=False, timeout=10.0)
 
 # cron 字段位置：min hour dom month dow
 _CRON_MIN, _CRON_HOUR, _CRON_DOM, _CRON_MONTH, _CRON_DOW = range(5)

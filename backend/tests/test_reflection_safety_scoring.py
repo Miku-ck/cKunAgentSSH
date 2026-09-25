@@ -12,7 +12,7 @@ from agent.reflection import MetaReflection, RunTrace
 
 def _trace(tool_calls, final_state="completed", warnings=None):
     return RunTrace(
-        run_id="r1", task="清理日志", mode="ssh",
+        run_id="r1", task="清理日志",
         final_state=final_state, iterations=len(tool_calls) + 1,
         tool_calls=tool_calls, warnings=warnings or [],
     )

@@ -35,7 +35,7 @@ class ShellExecTool(BaseTool):
         },
         "required": ["command"],
     }
-    meta = ToolMeta(risk_level="moderate", reversible=False, timeout=30.0, mode_scope=["ssh"])
+    meta = ToolMeta(risk_level="moderate", reversible=False, timeout=30.0)
 
     async def execute(self, context, command, timeout=30):
         # 超时钳制（1-120 秒）；非数字回可读提示而不是裸 ValueError

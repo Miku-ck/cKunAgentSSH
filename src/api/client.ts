@@ -274,12 +274,6 @@ export interface ModelConfig {
   updated_at?: string
 }
 
-/** GET /models 只投影这六个字段（见 backend/routes/models.py），不是完整的 ModelConfig */
-export type ModelSummary = Pick<
-  ModelConfig,
-  'id' | 'name' | 'model_id' | 'provider' | 'supports_thinking' | 'is_default'
->
-
 export interface ModelConfigPayload {
   name: string
   base_url: string
@@ -424,21 +418,17 @@ export const api = {
     })
   },
 
-  // 模型
-  getModels: () =>
-    request<ModelSummary[]>('/models'),
-
-  // 模型配置管理
+  // 模型配置管理（聊天下拉与设置面板共用同一数据源 GET /settings/models）
   getModelConfigs: () =>
     request<ModelConfig[]>('/settings/models'),
 
-  getDefaultModel: (mode?: string) =>
-    request<{ id: string; name?: string; model_id?: string }>(`/settings/models/default${mode ? `?mode=${mode}` : ''}`),
+  getDefaultModel: () =>
+    request<{ id: string; name?: string; model_id?: string }>('/settings/models/default'),
 
-  // 两个参数都在 query（不是 path）：PATCH /settings/models/default?model_id=...&mode=...
-  // 顺序敏感：FastAPI 里 default 那条必须注册在 /settings/models/{config_id} 之前，别改成 path 参数
-  setDefaultModel: (modelId: string, mode: 'ssh' = 'ssh') => {
-    const q = new URLSearchParams({ model_id: modelId, mode })
+  // model_id 在 query（不是 path）—— 顺序敏感：FastAPI 里 default 那条必须
+  // 注册在 /settings/models/{config_id} 之前，别改成 path 参数
+  setDefaultModel: (modelId: string) => {
+    const q = new URLSearchParams({ model_id: modelId })
     return request<{ default: string; mode: string }>(`/settings/models/default?${q.toString()}`, {
       method: 'PATCH',
     })
@@ -711,7 +701,6 @@ export interface AgentSSEEvent {
   success?: boolean
   message?: string
   iterations?: number
-  state_history?: Array<{ from: string; event: string; to: string }>
   // human_help_needed 事件专用字段
   reason?: string
   // permission_needed 事件专用字段
@@ -750,9 +739,6 @@ export interface AgentSSEEvent {
   allow_custom?: boolean
   /** 全量步骤（后端一次推送）：前端本地逐步推进时按索引取题 */
   steps?: AgentClarificationStep[]
-  // clarification_done 事件专用字段
-  answers?: Record<string, { choice: string; custom_text?: string }>
-  summary?: string
 }
 
 export interface AgentCostSnapshot {
@@ -813,7 +799,6 @@ export interface StreamAgentOptions {
   task: string
   conversationId: string
   modelId: string
-  mode?: 'ssh'
   systemPrompt?: string
   sshSessionId?: string
   environment?: 'test' | 'prod'
@@ -867,7 +852,6 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
           task: options.task,
           conversation_id: options.conversationId,
           model_id: options.modelId,
-          mode: options.mode || 'ssh',
           system_prompt: options.systemPrompt,
           ssh_session_id: options.sshSessionId,
           environment: options.environment || 'test',
@@ -1188,7 +1172,6 @@ export interface AgentToolInfo {
   name: string
   description: string
   risk_level: 'safe' | 'moderate' | 'dangerous'
-  mode_scope: string[]
   enabled: boolean
   reversible: boolean
   cacheable: boolean
@@ -1356,8 +1339,8 @@ export interface AgentRunTrace {
 
 export const agentAdminApi = {
   /** 工具清单（含启用状态、风险档） */
-  getTools: (mode = 'ssh') =>
-    request<AgentToolsResponse>(`/agent/tools?mode=${encodeURIComponent(mode)}`),
+  getTools: () =>
+    request<AgentToolsResponse>('/agent/tools'),
 
   /** 启用/禁用工具 */
   setToolEnabled: (toolName: string, enabled: boolean) =>

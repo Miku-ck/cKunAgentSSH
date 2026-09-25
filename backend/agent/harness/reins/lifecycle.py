@@ -9,6 +9,7 @@ from typing import Optional
 
 from ..contracts import ReinDecision, ReinPoint, RunContext, TraceEvent
 from .clarification import release_clarification_run
+from prompts import SSH_MODE
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ class SkillRein:
             if ctx.auto_skill_match:
                 # D 修复（事件循环阻塞）：registry 内部含同步 db 查询，放线程池执行
                 auto_matched = await asyncio.to_thread(
-                    registry.match_skills, ctx.task, ctx.mode, max_results=3
+                    registry.match_skills, ctx.task, SSH_MODE, max_results=3
                 )
                 auto_ids = {s['id'] for s in auto_matched}
 
@@ -56,13 +57,13 @@ class SkillRein:
                 return ReinDecision()
 
             parts = []
-            catalog = await asyncio.to_thread(registry.build_skill_catalog, all_ids, ctx.mode)
+            catalog = await asyncio.to_thread(registry.build_skill_catalog, all_ids, SSH_MODE)
             if catalog:
                 parts.append(catalog)
 
             if explicit_ids:
                 preload = await asyncio.to_thread(
-                    registry.build_skill_preload, list(explicit_ids), ctx.mode
+                    registry.build_skill_preload, list(explicit_ids), SSH_MODE
                 )
                 if preload:
                     parts.append(preload)
@@ -141,7 +142,7 @@ class ReflectionRein:
 
         payload = {
             "run_id": ctx.run_id,
-            "mode": ctx.config.mode if hasattr(ctx.config, "mode") else "ssh",
+            "mode": SSH_MODE,
             "final_state": ctx.state.value if ctx.state else "unknown",
             "iterations": ctx.iteration,
             "max_iterations": ctx.config.max_iterations,

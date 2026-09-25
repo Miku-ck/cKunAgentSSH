@@ -16,7 +16,6 @@ from agent.tools import ToolContext
 def _ctx(**kwargs) -> ToolContext:
     base = dict(
         ssh_session_id="sess-remote",
-        mode="ssh",
         environment="test",
         visible_terminal=False,
         agent_run_id="run-1",
