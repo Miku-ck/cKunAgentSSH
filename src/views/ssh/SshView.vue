@@ -63,7 +63,7 @@ v-show="s.id === store.activeSessionId"
 
         <!-- RemoteManager 页面 -->
         <div v-show="activeNavPage === 'remote-mgr'" class="rm-page">
-          <RemoteManager
+          <RemoteManager v-if="pageMounted('remote-mgr')"
             @connect="handleRmConnect"
             @edit="editConnection"
             @new-connection="editConnection(null)"
@@ -74,22 +74,22 @@ v-show="s.id === store.activeSessionId"
 
         <!-- SFTP 文件传输页面 -->
         <div v-show="activeNavPage === 'sftp'" class="sftp-page">
-          <SftpView />
+          <SftpView v-if="pageMounted('sftp')" />
         </div>
 
         <!-- 运维审计页面 -->
         <div v-show="activeNavPage === 'audit'" class="audit-page">
-          <AuditView />
+          <AuditView v-if="pageMounted('audit')" />
         </div>
 
         <!-- 定时任务页面 -->
         <div v-show="activeNavPage === 'schedules'" class="schedules-page">
-          <SchedulesView :active="activeNavPage === 'schedules'" />
+          <SchedulesView v-if="pageMounted('schedules')" :active="activeNavPage === 'schedules'" />
         </div>
 
         <!-- 监控仪表盘页面 -->
         <div v-show="activeNavPage === 'dashboard'" class="dashboard-page">
-          <DashboardView />
+          <DashboardView v-if="pageMounted('dashboard')" />
         </div>
 
         <!-- Quick Start 页面 -->
@@ -200,18 +200,24 @@ v-show="s.id === store.activeSessionId"
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, nextTick, watch } from 'vue'
+import { onMounted, onUnmounted, ref, nextTick, watch, defineAsyncComponent } from 'vue'
 import LocalTerminal from '@/components/ssh/LocalTerminal.vue'
 import RemoteTerminal from '@/components/ssh/RemoteTerminal.vue'
-import ConnectionModal from '@/components/ssh/ConnectionModal.vue'
-import SftpView from '@/components/ssh/SftpView.vue'
-import RemoteManager from '@/components/ssh/RemoteManager.vue'
-import QuickCommandBar from '@/components/ssh/QuickCommandBar.vue'
-import SshAiPanel from '@/components/ssh/SshAiPanel.vue'
 import IconMonitor from '@/components/icons/IconMonitor.vue'
-import AuditView from '@/views/ssh/AuditView.vue'
-import SchedulesView from '@/views/ssh/SchedulesView.vue'
-import DashboardView from '@/views/ssh/DashboardView.vue'
+// 启动性能优化：非首屏功能整体移出启动关键路径 —
+// 原实现全部静态 import + v-show（组件启动即全部挂载），每加一条功能线主包
+// 就长大一截（index.js 一度 10MB，Monaco 文件编辑器占大头）。现在：
+//   1. defineAsyncComponent 拆包，chunk 只在首次访问该页面时下载；
+//   2. v-show 改「sticky-visited」v-if — 访问过才挂载、之后保持挂载，
+//      保留 v-show 的状态不丢语义（切换标签不重置 SFTP 树/审计列表等）。
+const ConnectionModal = defineAsyncComponent(() => import('@/components/ssh/ConnectionModal.vue'))
+const SftpView = defineAsyncComponent(() => import('@/components/ssh/SftpView.vue'))
+const RemoteManager = defineAsyncComponent(() => import('@/components/ssh/RemoteManager.vue'))
+const QuickCommandBar = defineAsyncComponent(() => import('@/components/ssh/QuickCommandBar.vue'))
+const SshAiPanel = defineAsyncComponent(() => import('@/components/ssh/SshAiPanel.vue'))
+const AuditView = defineAsyncComponent(() => import('@/views/ssh/AuditView.vue'))
+const SchedulesView = defineAsyncComponent(() => import('@/views/ssh/SchedulesView.vue'))
+const DashboardView = defineAsyncComponent(() => import('@/views/ssh/DashboardView.vue'))
 import { useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useSettings } from '@/composables/useSettings'
@@ -260,6 +266,13 @@ const {
   closeModal,
   handleSaved,
 } = useSshNavigation(focusActiveTerminal, terminalRefs)
+
+// ── sticky-visited 页面挂载闸门（配合上方 defineAsyncComponent）──
+type PageKey = typeof activeNavPage.value
+const visitedPages = ref<Partial<Record<PageKey, boolean>>>({})
+// immediate：恢复场景下 activeNavPage 可能已不是 home，首帧即放行该页挂载
+watch(activeNavPage, (p) => { if (p !== 'home') visitedPages.value[p] = true }, { immediate: true })
+const pageMounted = (p: PageKey): boolean => !!visitedPages.value[p]
 
 // 标签右键菜单（内部注册全局 click 关闭监听）
 const { tabCtxMenu, showTabContextMenu } = useTabContextMenu()
@@ -315,9 +328,11 @@ function setupQcSync() {
 onMounted(() => nextTick(setupQcSync))
 // QC bar 从隐藏切到显示时重新测量（此前若在窄面板下量过，值已经不准）
 watch(showCommandBar, (v) => { if (v) nextTick(setupQcSync) })
-// AI 面板是 v-if 条件挂载：关闭时整个输入区被卸载、ResizeObserver 观察的元素随之消失，
-// 重新打开必须重新测量。少了这一条，QC 会一直停在兜底 38px（比输入框底边低 5px）。
-watch(() => sshAiStore.showAiPanel, (v) => { if (v) nextTick(setupQcSync) })
+// 监听面板实例而非 showAiPanel：SshAiPanel 是 defineAsyncComponent，首次打开
+// 时 chunk 尚未 resolve，showAiPanel 翻转后的 nextTick 里 ref 还是 null，
+// 观察器永远装不上、QC 停在兜底 38px。ref 在内部实例真正挂载后才置位，
+// 关闭→重开（含缓存秒挂）也都会再次触发重测。
+watch(aiPanelRef, (el) => { if (el) nextTick(setupQcSync) })
 onUnmounted(() => syncObs?.disconnect())
 
 // 暴露方法给父组件（TitleBar 事件）

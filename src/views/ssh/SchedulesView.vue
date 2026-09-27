@@ -209,7 +209,7 @@ import { useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useAgentStore } from '@/stores/agent'
 
-// SshView 里本页常驻（v-show），active 标记当前是否停留在定时任务页
+// SshView 里本页 sticky-visited（首访挂载、之后保持），active 标记当前是否停留在定时任务页
 const props = defineProps<{ active?: boolean }>()
 
 const toast = useToastStore()
@@ -424,14 +424,17 @@ function stopListPoll() {
   listPollTimer = null
 }
 
+// immediate：sticky-visited v-if 挂载即 active=true，无初始 false→true 跳变，
+// 首访的加载与轮询自启必须由 immediate 回调完成（onMounted 不再重复 load）
 watch(() => props.active, (on) => {
-  if (on) {
+  // props 缺省（独立渲染场景）按活跃处理，保证至少加载一次
+  if (on || props.active === undefined) {
     load()
     startListPoll()
   } else {
     stopListPoll()
   }
-})
+}, { immediate: true })
 
 // AI 聊天里 schedule_op 直接写库（绕过 REST），结果事件驱动列表失效刷新
 watch(() => agentStore.scheduleRev, () => { load(true) })
@@ -654,9 +657,8 @@ function askAiDiagnose(s: ScheduleRecord, r: ScheduleRun) {
   sshAiStore.askAi(lines.join('\n'))
 }
 
-onMounted(async () => {
-  await load()
-  // 倒计时定时器由 hasCountdownTarget watch 按需启停（load 后 items 变化自动触发）
+onMounted(() => {
+  // 首屏加载与列表轮询已由上方 watch(active, {immediate}) 承担，此处只补主机列表
   // 加载远程管理的主机列表，供「目标主机」下拉使用（仅在未加载时拉取）
   if (sshStore.connections.length === 0) {
     sshStore.loadConnections()
@@ -666,7 +668,7 @@ onMounted(async () => {
 onUnmounted(() => {
   stopCountdownTick()
   stopListPoll()
-  // 卸载前收起「立即执行」轮询：本页常驻(v-show)时通常不触发，但 SshView 整体
+  // 卸载前收起「立即执行」轮询：sticky-visited 下本页通常不触发，但 SshView 整体
   // 卸载/热更新后后台仍会 load() 数百次
   for (const t of runPollTimers) clearInterval(t)
   runPollTimers.clear()

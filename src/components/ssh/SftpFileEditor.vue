@@ -102,7 +102,10 @@
 <script setup lang="ts">
 import { formatBytes } from '@/utils/format'
 import { ref, computed, watch, onUnmounted, nextTick, markRaw } from 'vue'
-import * as monaco from 'monaco-editor/esm/vs/editor/editor.api.js'
+// 启动性能优化：monaco 本体不再静态 import（曾占主包 ~10MB、拖慢冷启动），
+// 经 monaco-setup.loadMonaco() 在首次打开编辑器时动态加载；此处仅类型引用（编译期擦除）
+import type * as MonacoNs from 'monaco-editor/esm/vs/editor/editor.api.js'
+import { loadMonaco } from '@/monaco-setup'
 import { getLanguage } from '@/utils/language'
 import { useToastStore } from '@/stores/toast'
 import { toFriendlyMessage } from '@/api/client'
@@ -143,8 +146,8 @@ const readOnlyReason = computed(() => {
 })
 
 const container = ref<HTMLElement | null>(null)
-let editor: monaco.editor.IStandaloneCodeEditor | null = null
-let model: monaco.editor.ITextModel | null = null
+let editor: MonacoNs.editor.IStandaloneCodeEditor | null = null
+let model: MonacoNs.editor.ITextModel | null = null
 
 // 未保存关闭确认
 const unsavedDialog = ref({
@@ -204,7 +207,9 @@ async function loadFile(): Promise<void> {
     loading.value = false
     await nextTick()
     if (!isFreshLoad(seq, path, side)) return
-    initEditor()
+    // 必须 await：initEditor 内 loadMonaco 失败要落进本函数的 catch 显示错误，
+    // 用 void 会让拒绝变成 unhandled rejection，编辑器区静默空白
+    await initEditor(seq, path, side)
   } catch (err: any) {
     if (!isFreshLoad(seq, path, side)) return
     error.value = toFriendlyMessage(err, '打开失败')
@@ -214,7 +219,14 @@ async function loadFile(): Promise<void> {
   }
 }
 
-function initEditor(): void {
+async function initEditor(seq: number, path: string, side: 'local' | 'remote'): Promise<void> {
+  if (!container.value) return
+  // 动态块首开时这里 await 一次 monaco 加载（后续命中同一 promise，即时返回）；
+  // loadMonaco 返回 any，断言回模块命名空间类型以恢复 editor/model 的非空窄化
+  const monaco = await loadMonaco() as typeof import('monaco-editor/esm/vs/editor/editor.api.js')
+  // 慢加载期间用户可能已关闭/切换文件 — 复用加载路径的竞态守卫
+  if (!isFreshLoad(seq, path, side)) return
+  // 组件已卸载（isFreshLoad 查不到这个维度）时 container 已被模板 ref 置空
   if (!container.value) return
   disposeEditor()
   model = markRaw(monaco.editor.createModel(content.value, language.value))
