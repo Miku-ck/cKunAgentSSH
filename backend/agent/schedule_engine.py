@@ -345,11 +345,13 @@ class ScheduleEngine:
                 # probe 内部已全量捕获异常，此处仅为防御未来改动
                 probe_error = classify_bridge_error(e)
             if probe_error is not None:
+                # ElectronBridge 从不暴露 port（连接端口在 bridge_relay 侧），
+                # 曾在此读 bridge.port → AttributeError 顶掉 BridgeError，
+                # 把「桥不可达」的诊断信息换成一条属性错误
                 logger.warning(
-                    "schedule=%s 桥接探活失败 [%s] port=%s",
-                    sched["id"], probe_error.value, bridge.port,
+                    "schedule=%s 桥接探活失败 [%s]", sched["id"], probe_error.value,
                 )
-                raise BridgeError(probe_error, f"port={bridge.port}")
+                raise BridgeError(probe_error)
             # 3. 正式建连
             try:
                 conn = await bridge.connect_ssh(host)
