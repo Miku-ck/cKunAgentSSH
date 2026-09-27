@@ -121,6 +121,9 @@ export class BackendManager {
     if (process.platform === 'win32') {
       return this.listOrphanPidsWin().then((rows) =>
         rows
+          // 二次甄别不可省：WQL 只按 python.exe + '%main.py%' 粗筛，用户机器上
+          // 其他以 main.py 为入口的 Python 服务同样命中（与 POSIX 分支对称）
+          .filter((r) => BackendManager.isOurBackendProcess(r.cmdline, backendDir))
           .map((r) => r.pid)
           .filter((pid): pid is number => Number.isInteger(pid) && pid > 0)
       )
@@ -149,6 +152,7 @@ export class BackendManager {
             // 无法区分"没有 PowerShell / 没有 WMI / 权限不足 / 命令语法错"——
             // 实测就是因为 PATH 被裁剪、spawn 裸名 'powershell' 报 ENOENT，
             // 而这一点在日志里完全看不出来。
+            console.warn('[BackendManager] CIM orphan enumeration failed:', err.message)
             resolve([])
             return
           }
