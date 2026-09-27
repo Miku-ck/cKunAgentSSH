@@ -2,9 +2,20 @@
  * SSH Manager — ssh2 远程连接管理
  * 在 Electron 主进程中运行，管理 SSH 连接和 Shell 通道
  */
-import { Client, ClientChannel } from 'ssh2'
-import type { SFTPWrapper } from 'ssh2'
+import type { Client, ClientChannel, SFTPWrapper } from 'ssh2'
 import { LS_COLORS_NO_BACKGROUND } from './utils/terminal-colors'
+
+// ssh2 的 require 实测 ~1.3s（纯 JS+crypto 依赖链），静态导入会串在主进程模块
+// 评估期、窗口 show 之前。挪为懒加载：setupSSHIPC 后台预热（用户点连接前已就位，
+// 零额外等待），doConnect/testConnection 内 await 兜底预热未完成的首次连接。
+type Ssh2ClientCtor = typeof import('ssh2').Client
+let ssh2Loading: Promise<Ssh2ClientCtor> | null = null
+export function loadSsh2(): Promise<Ssh2ClientCtor> {
+  if (!ssh2Loading) {
+    ssh2Loading = import('ssh2').then((m) => m.Client)
+  }
+  return ssh2Loading
+}
 import { assertKeyFileSafe } from './utils/path-guard'
 import { BrowserWindow, app } from 'electron'
 import { SSHError, classifyRawError, toFriendlyZh } from './ssh-error'
@@ -616,7 +627,7 @@ export class SSHManager {
     // s1 修复：加载 known_hosts（审查 M-1：验证上下文已由 buildConnectConfig
     // 的每连接闭包捕获，不再使用共享槽位）
     await this.loadKnownHosts()
-    const client = new Client()
+    const client = new (await loadSsh2())()
     const connectConfig = this.buildConnectConfig(config)
     // s3 修复：连接配置已提取后立即清除内存中的明文密码/passphrase
     config.password = undefined
@@ -1151,7 +1162,7 @@ export class SSHManager {
     const start = Date.now()
     // s1 修复：测试连接也走同样的 host key 验证（每连接闭包，审查 M-1）
     await this.loadKnownHosts()
-    const client = new Client()
+    const client = new (await loadSsh2())()
     const connectConfig = this.buildConnectConfig(config)
 
     return new Promise((resolve) => {

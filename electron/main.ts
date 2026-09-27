@@ -7,7 +7,7 @@ import { homedir } from 'os'
 import { execSync, execFile, spawn } from 'child_process'
 import { BackendManager } from './backend-manager'
 import { PtyManager, clampPtyDimension } from './pty-manager'
-import { SSHManager } from './ssh-manager'
+import { loadSsh2, SSHManager } from './ssh-manager'
 import { SSHError, toIpcTransport } from './ssh-error'
 import { SSHStore, type SSHConnectionRecord } from './ssh-store'
 import { ElectronBridge, BridgeOp } from './electron-bridge'
@@ -1065,6 +1065,9 @@ function setupSSHIPC(): void {
   sshManager = new SSHManager()
   sshStore = new SSHStore()
   if (mainWindow) sshManager.setWindow(mainWindow)
+  // ssh2 懒加载预热：窗口 show 后台并行加载（~1.3s），用户点连接前已就位；
+  // 失败不致命——doConnect/testConnection 内还有 await loadSsh2() 兜底路径。
+  void loadSsh2().catch((err) => console.warn('[main] ssh2 预热失败（首次连接时将重试）:', err))
 
   // 重连修复：重连时主进程自取已保存的连接配置（safeStorage 解密后的凭据），
   // 渲染层无需（也不应）经 IPC 传递凭据

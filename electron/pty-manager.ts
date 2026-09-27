@@ -2,15 +2,24 @@
  * PTY Manager — node-pty 终端实例池管理
  * 在 Electron 主进程中运行
  */
-import * as pty from 'node-pty'
+import type * as PtyNamespace from 'node-pty'
 import { BrowserWindow } from 'electron'
 import { homedir } from 'os'
 import { statSync } from 'fs'
 import { LS_COLORS_NO_BACKGROUND } from './utils/terminal-colors'
 
+// node-pty 的 require 含原生 .node 二进制加载（实测 ~290ms），静态导入会把
+// 这笔开销挂在主进程模块评估期——窗口 show 之前。挪到首次 spawn 时动态加载，
+// 模块缓存保证后续终端不再付费。
+let ptyMod: typeof PtyNamespace | null = null
+async function loadPty(): Promise<typeof PtyNamespace> {
+  if (!ptyMod) ptyMod = await import('node-pty')
+  return ptyMod
+}
+
 interface PtySession {
   id: string
-  process: pty.IPty
+  process: PtyNamespace.IPty
   shell: string
   cwd: string
 }
@@ -83,7 +92,7 @@ export class PtyManager {
   }
 
   /** 创建新终端会话 */
-  create(opts?: { shell?: string; args?: string[]; cwd?: string; cols?: number; rows?: number }): { id: string; shell: string } {
+  async create(opts?: { shell?: string; args?: string[]; cwd?: string; cols?: number; rows?: number }): Promise<{ id: string; shell: string }> {
     const id = `pty-${this.nextId++}`
     const defaultShell = this.getDefaultShell()
     let shell = opts?.shell || defaultShell
@@ -161,9 +170,9 @@ export class PtyManager {
     // 将底层平台错误（node-pty spawn 抛出的 ENOENT / conpty 不可用等）转为
     // 可直接展示给用户的中文错误；否则渲染层只能拿到晦涩的英文原文。
     const shellLabel = shellBase.split(/[\\/]/).pop() || shell
-    let proc: pty.IPty
+    let proc: PtyNamespace.IPty
     try {
-      proc = pty.spawn(shell, finalArgs, {
+      proc = (await loadPty()).spawn(shell, finalArgs, {
         name: 'xterm-256color',
         cols,
         rows,
