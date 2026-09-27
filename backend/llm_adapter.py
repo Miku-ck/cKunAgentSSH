@@ -6,17 +6,30 @@ LLM 适配器 — OpenAI 兼容异步流式客户端
 - 流式文本输出 (content + reasoning)
 - Function Calling / Tool Calls（流式分片累积）
 """
+from __future__ import annotations
+
 import json
 import logging
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import AsyncGenerator
 
-import openai
-
 import netconfig
 
 logger = logging.getLogger(__name__)
+
+
+def _openai():
+    """惰性导入 openai SDK（启动性能优化）。
+
+    SDK 的 pydantic 类型模型（openai.types.*，含 graders/responses/beta 全家桶）
+    实测占后端冷启动 import 链 268ms / 730ms —— 而它只在真正发起 LLM 请求时才
+    需要。放在模块顶层会把这 268ms 压进 lifespan 之前的启动关键路径。
+    类型注解一律保持字符串形式（如 "openai.AsyncOpenAI"），运行时不求值。
+    """
+    import openai
+    return openai
+
 
 # H5 修复：客户端复用池，按 (base_url, api_key) 缓存 AsyncOpenAI 实例
 # 避免每次 chat_stream 都新建客户端导致连接池泄漏
@@ -73,7 +86,7 @@ async def _get_client(base_url: str, api_key: str) -> openai.AsyncOpenAI:
         _client_cache.move_to_end(key)
         return client
     # 未命中：创建新客户端
-    client = openai.AsyncOpenAI(
+    client = _openai().AsyncOpenAI(
         api_key=api_key or "EMPTY",
         base_url=base_url,
         # 修复：分别配置连接超时和读取超时，流式输出时读取超时可能过短
@@ -283,7 +296,7 @@ async def _chat_stream_impl(
             [m.get("role") for m in kwargs["messages"]],
         )
         stream = await client.chat.completions.create(**kwargs)
-    except openai.BadRequestError as e:
+    except _openai().BadRequestError as e:
         # vLLM 未启用 --enable-auto-tool-choice 时，传 tools 也可能被拒
         # 降级：移除 tools/tool_choice 后重试（纯文本对话）
         err_msg = str(e).lower()

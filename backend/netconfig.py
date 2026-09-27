@@ -9,15 +9,27 @@
 - 代理 URL 可以带 userinfo（http://user:pass@host:port 是常见形态），
   所以任何日志/诊断输出必须走 redact_proxy()，绝不回显原始值。
 """
+from __future__ import annotations
+
 import logging
 import os
 import re
 from typing import Optional
 from urllib.parse import urlsplit
 
-import httpx
-
 logger = logging.getLogger(__name__)
+
+
+def _httpx():
+    """惰性导入 httpx（启动性能优化，与 llm_adapter._openai 同源）。
+
+    httpx 及其 h11/certifi/ssl 依赖链实测 ~72ms，只在真正发出站请求时
+    才需要构造客户端/超时对象；放在模块顶层会把这段开销压进启动关键路径
+    （main/routes/database 都 import 本模块）。类型注解一律靠
+    __future__.annotations 延迟求值，运行时不再触碰 httpx 名称。
+    """
+    import httpx
+    return httpx
 
 TIMEOUT_MIN, TIMEOUT_MAX = 5, 600
 RETRY_MIN, RETRY_MAX = 0, 3
@@ -151,12 +163,22 @@ def http_timeout(default=None):
     t = int(get_policy()["timeout_seconds"])
     if t <= 0:
         return default
-    return httpx.Timeout(connect=min(10.0, float(t)), read=max(60.0, float(t)),
-                         write=float(t), pool=float(t))
+    return _httpx().Timeout(connect=min(10.0, float(t)), read=max(60.0, float(t)),
+                            write=float(t), pool=float(t))
 
 
-# openai SDK 的流式默认（引入 G5 之前 llm_adapter 用的就是这组值）
-LLM_TIMEOUT_DEFAULT = httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)
+# openai SDK 的流式默认（引入 G5 之前 llm_adapter 用的就是这组值）。
+# 经模块级 __getattr__（PEP 562）惰性构造并缓存：httpx.Timeout 是导入期求值
+# 的表达式，直写会把整个 httpx 链拉回启动关键路径。
+_LLM_TIMEOUT_SPEC = dict(connect=10.0, read=300.0, write=10.0, pool=10.0)
+
+
+def __getattr__(name: str):
+    if name == "LLM_TIMEOUT_DEFAULT":
+        value = _httpx().Timeout(**_LLM_TIMEOUT_SPEC)
+        globals()["LLM_TIMEOUT_DEFAULT"] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def proxy_http_client(**kwargs) -> httpx.AsyncClient:
@@ -165,7 +187,7 @@ def proxy_http_client(**kwargs) -> httpx.AsyncClient:
     proxy = proxy_url()
     if proxy:
         kwargs["proxy"] = proxy
-    return httpx.AsyncClient(**kwargs)
+    return _httpx().AsyncClient(**kwargs)
 
 
 def new_client(default_timeout: Optional[float] = None, **kwargs) -> httpx.AsyncClient:
@@ -180,7 +202,7 @@ def new_client(default_timeout: Optional[float] = None, **kwargs) -> httpx.Async
     proxy = proxy_url()
     if proxy:
         kwargs["proxy"] = proxy
-    return httpx.AsyncClient(**kwargs)
+    return _httpx().AsyncClient(**kwargs)
 
 
 def new_sync_client(default_timeout: Optional[float] = None, **kwargs) -> httpx.Client:
@@ -190,4 +212,4 @@ def new_sync_client(default_timeout: Optional[float] = None, **kwargs) -> httpx.
     proxy = proxy_url()
     if proxy:
         kwargs["proxy"] = proxy
-    return httpx.Client(**kwargs)
+    return _httpx().Client(**kwargs)

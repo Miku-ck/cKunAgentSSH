@@ -365,7 +365,9 @@ def test_lru_eviction_preserves_inflight_counter(monkeypatch):
     la._client_cache.clear()
     la._client_in_flight.clear()
     monkeypatch.setattr(la, "_CLIENT_CACHE_MAX", 1)
-    monkeypatch.setattr(la.openai, "AsyncOpenAI", _FakeClient)
+    # openai 现为惰性导入（_openai() 返回 sys.modules['openai']），直接 patch 模块本体
+    import openai as _openai_mod
+    monkeypatch.setattr(_openai_mod, "AsyncOpenAI", _FakeClient)
 
     async def scenario():
         key_a = ("http://a.test/v1", "kA")
