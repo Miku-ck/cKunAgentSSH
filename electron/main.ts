@@ -561,15 +561,6 @@ function setupFSIPC(): void {
       const stripDot = (e: string): string => (e.startsWith('.') ? e.slice(1) : e)
       const bgDir = backgroundDir()
       await mkdir(bgDir, { recursive: true })
-      // 清理旧背景文件（不同扩展名残留），避免磁盘泄漏
-      try {
-        const existing = await readdir(bgDir)
-        for (const f of existing) {
-          if (f.startsWith(BG_FILE_PREFIX)) {
-            await rm(join(bgDir, f))
-          }
-        }
-      } catch { /* 目录读取失败忽略 */ }
       let finalBuf: Buffer = await readFile(filePath)
       // 对超过阈值的大图进行缩放压缩，避免 base64/IPC 与 CSS 渲染压力过大
       const COMPRESS_THRESHOLD = 2 * 1024 * 1024
@@ -597,18 +588,37 @@ function setupFSIPC(): void {
       const fileName = `${BG_FILE_PREFIX}${stripDot(finalExt) || 'png'}`
       const targetPath = join(bgDir, fileName)
       await writeFile(targetPath, finalBuf)
+      // 新文件落盘成功后再清理旧背景文件（不同扩展名残留）：清理若先于写入，
+      // writeFile 失败（磁盘满等）会把旧图删掉而新图没写成，设置仍指向已不存在的
+      // 旧文件名，重启后背景静默消失。
+      try {
+        const existing = await readdir(bgDir)
+        for (const f of existing) {
+          if (f.startsWith(BG_FILE_PREFIX) && f !== fileName) {
+            await rm(join(bgDir, f))
+          }
+        }
+      } catch { /* 目录读取失败忽略 */ }
       return { fileName, mime, name: basename(filePath) }
     } catch (err: any) {
       throw fsErrorWith(err, '读取图片失败')
     }
   })
 
-  // 校验背景图文件名：必须为基础名、以 background. 开头、在 backgrounds 目录内
+  // 校验背景图文件名：必须为基础名、以 background. 开头、扩展名在图片白名单内、
+  // 在 backgrounds 目录内
   function resolveBackgroundPath(fileName: string): string {
     const bgDir = backgroundDir()
     const base = basename(fileName)
     if (!base.startsWith(BG_FILE_PREFIX)) {
       throw new Error('无效的背景图文件名')
+    }
+    // 扩展名必须在 MIME 白名单内：不校验的话，渲染进程可通过其他 IPC（userData
+    // 不在敏感路径表）写入 background.html 之类的文件，这里会把它当 image/png
+    // 读成 data URL 交给渲染进程渲染
+    const ext = extname(base).toLowerCase()
+    if (!IMAGE_MIME_MAP[ext]) {
+      throw new Error('不支持的背景图格式')
     }
     const filePath = join(bgDir, base)
     // 路径遍历二次校验：确保解析后的路径仍在 bgDir 内
@@ -627,6 +637,11 @@ function setupFSIPC(): void {
       const ext = extname(filePath).toLowerCase()
       const mime = IMAGE_MIME_MAP[ext] || 'image/png'
       const buf = await readFile(filePath)
+      // 与 selectImage 的 15MB 写入上限同口径：防止 userData/backgrounds 里的
+      // 文件被其他路径替换成超大文件后整读进内存再 base64（体积再涨 1/3）打爆 IPC
+      if (buf.length > 15 * 1024 * 1024) {
+        throw new Error('背景图文件过大')
+      }
       return `data:${mime};base64,${buf.toString('base64')}`
     } catch (err: any) {
       throw fsErrorWith(err, '加载背景图失败')

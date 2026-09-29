@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>首页（Quick Start）布局重构 · 方案对比</title>
+<style>
+/* ============================================================
+ * 首页布局重构对比稿
+ * 令牌与 src/styles/variables.css 深色主题一致（默认主题）
+ * 顶部切换器：现状 / A 双栏工作台 / B 搜索优先 / C 卡片网格
+ * ============================================================ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg-base: #000000;
+  --bg-elevated: #1a1a1e;
+  --bg-hover: rgba(255,255,255,0.06);
+  --bg-active: rgba(255,255,255,0.12);
+  --bg-input: #101013;
+  --border-default: #3e3e42;
+  --border-subtle: #2d2d30;
+  --text-primary: #cccccc;
+  --text-secondary: #969696;
+  --text-tertiary: #878787;
+  --accent-primary: #0078d4;
+  --accent-green: #4ec9b0;
+  --accent-red: #f48771;
+  --accent-orange: #ce9178;
+  --metric-cool: #35c93f;
+  --radius-sm: 4px; --radius-md: 6px; --radius-lg: 8px;
+  --font-sans: system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, "Courier New", monospace;
+  --transition-fast: 150ms ease;
+  --titlebar-h: 32px;
+  --tabbar-h: 34px;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── 顶部方案切换器 ── */
+.switcher {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 52px;
+  padding: 0 16px;
+  background: #0d0d0f;
+  border-bottom: 1px solid var(--border-default);
+}
+.switcher-title { font-size: 12px; color: var(--text-tertiary); margin-right: 4px; white-space: nowrap; }
+.switcher-tabs { display: flex; gap: 4px; }
+.switcher-tabs button {
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+.switcher-tabs button:hover { background: var(--bg-hover); color: var(--text-primary); }
+.switcher-tabs button.on {
+  background: rgba(0,120,212,0.14);
+  border-color: var(--accent-primary);
+  color: #6cb8f0;
+}
+.switcher-note {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.switcher-note b { color: var(--text-secondary); font-weight: 600; }
+
+/* ── 模拟应用框架（标题栏 + 标签栏），给方案提供上下文 ── */
+.frame { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
+.mock-titlebar {
+  flex-shrink: 0;
+  height: var(--titlebar-h);
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-base);
+  padding: 0 8px;
+}
+.mock-brand { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); padding: 0 8px; }
+.mock-titlebar-actions { display: flex; margin-left: auto; }
+.mock-tb-btn {
+  width: 36px; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-secondary);
+}
+.mock-tb-btn.active { color: #4ade80; }
+.mock-win { display: flex; }
+.mock-win span { width: 40px; height: 100%; display: flex; align-items: center; justify-content: center; color: #666; font-size: 10px; }
+
+.mock-tabbar {
+  flex-shrink: 0;
+  height: var(--tabbar-h);
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-base);
+  padding: 0 6px;
+}
+.mock-tab {
+  height: calc(var(--tabbar-h) - 4px);
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+.mock-tab.active {
+  color: var(--text-primary);
+  border-color: var(--border-default);
+  margin-bottom: -1px; padding-bottom: 1px;
+}
+.mock-tab-plus {
+  height: calc(var(--tabbar-h) - 4px);
+  width: calc(var(--tabbar-h) - 4px);
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border-default);
+  border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  margin-bottom: -1px;
+  color: var(--accent-primary);
+}
+
+.stage { flex: 1; min-height: 0; position: relative; background: var(--bg-base); }
+.variant { position: absolute; inset: 0; overflow: auto; }
+.variant[hidden] { display: none; }
+
+/* ── 通用小件 ── */
+.dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.dot.on { background: var(--metric-cool); }
+.dot.idle { background: #4a4a4e; }
+.badge {
+  font-size: 9px; font-weight: 600; letter-spacing: 0.5px;
+  padding: 1.5px 5px; border-radius: 3px; line-height: 1.4;
+  text-transform: uppercase; flex-shrink: 0;
+}
+.badge.prod { background: rgba(244,135,113,0.12); color: var(--accent-red); border: 1px solid rgba(244,135,113,0.3); }
+.badge.test { background: rgba(78,201,176,0.10); color: var(--accent-green); border: 1px solid rgba(78,201,176,0.25); }
+.mono { font-family: var(--font-mono); }
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner {
+  width: 12px; height: 12px; flex-shrink: 0;
+  border: 2px solid rgba(0,120,212,0.25);
+  border-top-color: var(--accent-primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+.section-label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; color: var(--text-tertiary);
+}
+
+/* ============================================================
+ * 现状（基线）：与 SshView.vue .quick-start 一致
+ * ============================================================ */
+.v-current { display: flex; flex-direction: column; align-items: center; padding: 40px 24px; }
+.qs-header {
+  display: flex; align-items: center; gap: 8px;
+  color: var(--accent-primary); font-size: 18px; font-weight: 600; margin-bottom: 24px;
+}
+.qs-search {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; max-width: 520px; height: 36px; padding: 0 12px;
+  border: 1px solid var(--border-default); border-radius: var(--radius-md);
+  color: var(--text-tertiary); margin-bottom: 32px;
+}
+.qs-input { flex: 1; border: none; background: transparent; color: var(--text-primary); font-size: 13px; outline: none; }
+.qs-input::placeholder { color: var(--text-tertiary); }
+.qs-section { width: 100%; max-width: 520px; margin-bottom: 28px; }
+.qs-section-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-tertiary); margin-bottom: 12px; }
+.qs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 12px; }
+.qs-card {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 16px 8px; border-radius: var(--radius-md); border: 1px solid transparent; cursor: pointer;
+}
+.qs-card:hover { background: var(--bg-hover); border-color: var(--border-default); }
+.qs-card-icon {
+  width: 48px; height: 48px; display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-lg); border: 1px solid var(--border-subtle);
+}
+.qs-card-icon.local { background: rgba(0,120,212,0.08); color: var(--accent-primary); }
+.qs-card-icon.remote { background: rgba(63,185,80,0.08); color: var(--accent-green); }
+.qs-card-label { font-size: 12px; color: var(--text-primary); font-weight: 500; max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qs-card-meta { font-size: 10px; color: var(--text-tertiary); font-family: var(--font-mono); max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ============================================================
+ * 方案 A · 双栏工作台
+ * 左栏：本地终端（紧凑行）+ 新建连接；右栏：远程连接列表行
+ * ============================================================ */
+.v-a { display: flex; }
+.a-rail {
+  width: 256px; flex-shrink: 0;
+  display: flex; flex-direction: column;
+  border-right: 1px solid var(--border-subtle);
+  padding: 16px 12px;
+  background: var(--bg-base);
+}
+.a-rail .section-label { padding: 0 8px; margin-bottom: 10px; }
+.a-shell-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border-radius: var(--radius-md);
+  font-size: 13px; color: var(--text-secondary); cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.a-shell-row:hover { background: var(--bg-hover); color: var(--text-primary); }
+.a-shell-row svg { color: var(--accent-primary); flex-shrink: 0; }
+.a-rail-foot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; padding: 8px 0 0; }
+.a-new-btn {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  height: 34px; border: 1px dashed var(--border-default); border-radius: var(--radius-md);
+  background: transparent; color: var(--text-secondary);
+  font-size: 12px; font-family: var(--font-sans); cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.a-new-btn:hover { border-color: var(--accent-primary); color: #6cb8f0; background: rgba(0,120,212,0.06); }
+.a-manage-link {
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+  font-size: 11px; color: var(--text-tertiary); cursor: pointer; padding: 2px;
+}
+.a-manage-link:hover { color: var(--text-secondary); }
+
+.a-main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 18px 22px 16px; }
+.a-main-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-shrink: 0; }
+.a-main-title { font-size: 14px; font-weight: 600; }
+.a-count {
+  font-size: 11px; color: var(--text-tertiary);
+  border: 1px solid var(--border-subtle); border-radius: 10px; padding: 1px 8px;
+  font-variant-numeric: tabular-nums;
+}
+.a-search {
+  margin-left: auto; width: 240px; height: 32px;
+  display: flex; align-items: center; gap: 8px; padding: 0 10px;
+  border: 1px solid var(--border-default); border-radius: var(--radius-md);
+  background: var(--bg-input); color: var(--text-tertiary);
+  transition: border-color var(--transition-fast);
+}
+.a-search:focus-within { border-color: var(--accent-primary); }
+.a-search input { flex: 1; border: none; background: transparent; color: var(--text-primary); font-size: 12px; outline: none; }
+.a-search input::placeholder { color: var(--text-tertiary); }
+
+.a-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.a-row {
+  display: flex; align-items: center; gap: 12px;
+  height: 46px; padding: 0 12px;
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+  background: var(--bg-elevated); cursor: pointer; flex-shrink: 0;
+  transition: border-color var(--transition-fast);
+}
+.a-row:hover { border-color: var(--border-default); }
+.a-row .dot { margin-right: 2px; }
+.a-name { font-size: 13px; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 8px; }
+.a-host { font-size: 12px; color: var(--text-secondary); width: 168px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.a-user { font-size: 11px; color: var(--text-tertiary); width: 92px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.a-last { font-size: 11px; color: var(--text-tertiary); width: 84px; flex-shrink: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.a-actions { display: none; align-items: center; gap: 6px; flex-shrink: 0; }
+.a-row:hover .a-actions { display: flex; }
+.a-row:hover .a-last { display: none; }
+.a-conn-btn {
+  height: 26px; padding: 0 12px; border: none; border-radius: var(--radius-sm);
+  background: var(--accent-primary); color: #fff; font-size: 11px; cursor: pointer;
+  font-family: var(--font-sans);
+}
+.a-conn-btn:hover { background: #1a86dd; }
+.a-edit-btn {
+  width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+  background: transparent; color: var(--text-secondary); cursor: pointer;
+}
+.a-edit-btn:hover { color: var(--text-primary); }
+.a-row.connecting { cursor: default; }
+.a-row.connecting:hover { border-color: var(--border-subtle); }
+.a-row.connecting .a-actions { display: none; }
+.a-connecting-note { font-size: 11px; color: #6cb8f0; width: 84px; text-align: right; flex-shrink: 0; }
+.a-foot {
+  flex-shrink: 0; display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 4px 0; font-size: 11px; color: var(--text-tertiary);
+  border-top: 1px solid var(--border-subtle); margin-top: 12px;
+}
+.a-foot a { color: var(--text-secondary); cursor: pointer; }
+.a-foot a:hover { color: #6cb8f0; }
+
+/* ============================================================
+ * 方案 B · 搜索优先（命令栏风格）
+ * 大搜索 + 最近使用 chips + 本地/远程两栏
+ * ============================================================ */
+.v-b { display: flex; flex-direction: column; align-items: center; padding: 44px 24px 32px; }
+.b-wrap { width: 100%; max-width: 660px; }
+.b-title {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 17px; font-weight: 600; margin-bottom: 16px;
+}
+.b-title svg { color: var(--accent-primary); }
+.b-search {
+  display: flex; align-items: center; gap: 10px;
+  height: 48px; padding: 0 14px;
+  border: 1px solid var(--border-default); border-radius: var(--radius-lg);
+  background: var(--bg-input); color: var(--text-tertiary);
+  transition: all var(--transition-fast);
+}
+.b-search:focus-within { border-color: var(--accent-primary); box-shadow: 0 0 0 3px rgba(0,120,212,0.14); }
+.b-search input { flex: 1; border: none; background: transparent; color: var(--text-primary); font-size: 14px; outline: none; }
+.b-search input::placeholder { color: var(--text-tertiary); }
+.b-kbd {
+  font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary);
+  border: 1px solid var(--border-default); border-radius: 4px; padding: 1px 6px;
+  background: var(--bg-elevated);
+}
+.b-block { margin-top: 26px; }
+.b-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.b-chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 7px 12px;
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+  background: var(--bg-elevated); font-size: 12px; color: var(--text-secondary); cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.b-chip:hover { border-color: var(--border-default); color: var(--text-primary); }
+.b-chip .chip-host { font-size: 10px; color: var(--text-tertiary); font-family: var(--font-mono); }
+.b-cols { display: grid; grid-template-columns: 236px 1fr; gap: 24px; margin-top: 26px; }
+.b-local-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.b-local-tile {
+  display: flex; align-items: center; gap: 8px;
+  padding: 11px 12px;
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+  background: var(--bg-elevated); font-size: 12px; color: var(--text-secondary); cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.b-local-tile:hover { border-color: var(--border-default); color: var(--text-primary); }
+.b-local-tile svg { color: var(--accent-primary); flex-shrink: 0; }
+.b-remote-list { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
+.b-remote-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border-radius: var(--radius-sm); cursor: pointer;
+  transition: background var(--transition-fast);
+}
+.b-remote-row:hover { background: var(--bg-hover); }
+.b-remote-name { font-size: 12.5px; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 8px; }
+.b-remote-host { margin-left: auto; font-size: 11px; color: var(--text-tertiary); font-family: var(--font-mono); flex-shrink: 0; }
+.b-more {
+  margin-top: 6px; padding: 6px 10px; font-size: 11px;
+  color: var(--text-tertiary); cursor: pointer; text-align: center;
+  border: 1px dashed var(--border-subtle); border-radius: var(--radius-sm);
+}
+.b-more:hover { color: var(--text-secondary); border-color: var(--border-default); }
+
+/* ============================================================
+ * 方案 C · 卡片网格（居中宽栏，改动最小）
+ * ============================================================ */
+.v-c { display: flex; flex-direction: column; align-items: center; padding: 36px 24px; }
+.c-wrap { width: 100%; max-width: 760px; }
+.c-head { display: flex; align-items: center; margin-bottom: 22px; }
+.c-title { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 600; }
+.c-title svg { color: var(--accent-primary); }
+.c-search {
+  margin-left: auto; width: 280px; height: 34px;
+  display: flex; align-items: center; gap: 8px; padding: 0 12px;
+  border: 1px solid var(--border-default); border-radius: var(--radius-md);
+  background: var(--bg-input); color: var(--text-tertiary);
+  transition: border-color var(--transition-fast);
+}
+.c-search:focus-within { border-color: var(--accent-primary); }
+.c-search input { flex: 1; border: none; background: transparent; color: var(--text-primary); font-size: 13px; outline: none; }
+.c-search input::placeholder { color: var(--text-tertiary); }
+.c-section { margin-bottom: 24px; }
+.c-label-row { display: flex; align-items: center; margin-bottom: 10px; }
+.c-label-row .manage { margin-left: auto; font-size: 11px; color: var(--text-tertiary); cursor: pointer; }
+.c-label-row .manage:hover { color: var(--text-secondary); }
+.c-shells { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.c-shell-tile {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 14px 8px;
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+  background: var(--bg-elevated); cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.c-shell-tile:hover { border-color: var(--border-default); }
+.c-shell-tile svg { color: var(--accent-primary); }
+.c-shell-tile span { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
+.c-shell-tile:hover span { color: var(--text-primary); }
+.c-conns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.c-card {
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+  background: var(--bg-elevated); cursor: pointer;
+  transition: all var(--transition-fast);
+  position: relative;
+}
+.c-card:hover { border-color: var(--accent-primary); }
+.c-card-top { display: flex; align-items: center; gap: 8px; }
+.c-card-name { font-size: 13px; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.c-card-host { margin-top: 5px; font-size: 11px; color: var(--text-tertiary); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.c-card-foot { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 11px; color: var(--text-tertiary); }
+.c-card-foot .go { margin-left: auto; color: #6cb8f0; opacity: 0; transition: opacity var(--transition-fast); }
+.c-card:hover .go { opacity: 1; }
+.c-new-card {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  border: 1px dashed var(--border-default); border-radius: var(--radius-md);
+  color: var(--text-secondary); font-size: 12px; cursor: pointer;
+  min-height: 82px;
+  transition: all var(--transition-fast);
+}
+.c-new-card:hover { border-color: var(--accent-primary); color: #6cb8f0; background: rgba(0,120,212,0.05); }
+</style>
+</head>
+<body>
+
+<!-- ── 方案切换器 ── -->
+<div class="switcher">
+  <span class="switcher-title">首页布局重构</span>
+  <div class="switcher-tabs" id="tabs">
+    <button data-v="current" class="on">现状</button>
+    <button data-v="a">A · 双栏工作台</button>
+    <button data-v="b">B · 搜索优先</button>
+    <button data-v="c">C · 卡片网格</button>
+  </div>
+  <span class="switcher-note" id="note"></span>
+</div>
+
+<div class="frame">
+  <!-- ── 模拟标题栏（与 TitleBar.vue 一致） ── -->
+  <div class="mock-titlebar">
+    <div class="mock-brand">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+        <rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/>
+      </svg>
+      <span>cKunAgentSSH</span>
+    </div>
+    <div class="mock-titlebar-actions">
+      <div class="mock-tb-btn active"><span style="font-size:11px;font-weight:600;letter-spacing:0.5px">AI</span></div>
+      <div class="mock-tb-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 16 14"/></svg></div>
+      <div class="mock-tb-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div>
+      <div class="mock-tb-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg></div>
+      <div class="mock-tb-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M9 12l2 2 4-4"/><path d="M20 12a8 8 0 1 1-2.34-5.66"/></svg></div>
+      <div class="mock-tb-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></div>
+      <div class="mock-tb-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-2.83 1.15V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
+    </div>
+    <div class="mock-win"><span>—</span><span>□</span><span>✕</span></div>
+  </div>
+
+  <!-- ── 模拟标签栏 ── -->
+  <div class="mock-tabbar">
+    <div class="mock-tab active">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg>
+      dev-gpu-01
+    </div>
+    <div class="mock-tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg>
+      prod-web-01
+    </div>
+    <div class="mock-tab-plus">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    </div>
+  </div>
+
+  <div class="stage">
+    <!-- ══════════ 现状（基线） ══════════ -->
+    <section class="variant v-current" id="v-current">
+      <div class="qs-header">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        <span>Quick Start</span>
+      </div>
+      <div class="qs-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input class="qs-input" placeholder="搜索终端或连接..." />
+      </div>
+      <div class="qs-section">
+        <div class="qs-section-title">本地终端</div>
+        <div class="qs-grid">
+          <div class="qs-card"><div class="qs-card-icon local"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></div><span class="qs-card-label">PowerShell</span></div>
+          <div class="qs-card"><div class="qs-card-icon local"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></div><span class="qs-card-label">CMD</span></div>
+          <div class="qs-card"><div class="qs-card-icon local"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></div><span class="qs-card-label">Git Bash</span></div>
+          <div class="qs-card"><div class="qs-card-icon local"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></div><span class="qs-card-label">WSL</span></div>
+        </div>
+      </div>
+      <div class="qs-section">
+        <div class="qs-section-title">远程连接</div>
+        <div class="qs-grid">
+          <div class="qs-card"><div class="qs-card-icon remote"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg></div><span class="qs-card-label">prod-web-01</span><span class="qs-card-meta">192.168.10.11</span></div>
+          <div class="qs-card"><div class="qs-card-icon remote"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg></div><span class="qs-card-label">prod-db-01</span><span class="qs-card-meta">192.168.10.21</span></div>
+          <div class="qs-card"><div class="qs-card-icon remote"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg></div><span class="qs-card-label">dev-gpu-01</span><span class="qs-card-meta">10.0.8.21</span></div>
+          <div class="qs-card"><div class="qs-card-icon remote"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg></div><span class="qs-card-label">dev-gpu-02</span><span class="qs-card-meta">10.0.8.22</span></div>
+          <div class="qs-card"><div class="qs-card-icon remote"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg></div><span class="qs-card-label">k8s-master</span><span class="qs-card-meta">10.10.1.5</span></div>
+          <div class="qs-card"><div class="qs-card-icon remote"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg></div><span class="qs-card-label">backup-nas</span><span class="qs-card-meta">192.168.10.100</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══════════ 方案 A · 双栏工作台 ══════════ -->
+    <section class="variant v-a" id="v-a" hidden>
+      <div class="a-rail">
+        <div class="section-label">本地终端</div>
+        <div class="a-shell-row"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>PowerShell</div>
+        <div class="a-shell-row"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>CMD</div>
+        <div class="a-shell-row"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>Git Bash</div>
+        <div class="a-shell-row"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>WSL</div>
+        <div class="a-rail-foot">
+          <button class="a-new-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>新建连接</button>
+          <div class="a-manage-link">管理连接 →</div>
+        </div>
+      </div>
+      <div class="a-main">
+        <div class="a-main-head">
+          <span class="a-main-title">远程连接</span>
+          <span class="a-count">8</span>
+          <div class="a-search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input placeholder="搜索名称 / IP / 用户…" />
+          </div>
+        </div>
+        <div class="a-list">
+          <div class="a-row">
+            <span class="dot on"></span>
+            <span class="a-name">prod-web-01 <span class="badge prod">prod</span></span>
+            <span class="a-host mono">192.168.10.11:22</span>
+            <span class="a-user mono">root</span>
+            <span class="a-last">12 分钟前</span>
+            <span class="a-actions"><button class="a-conn-btn">连接</button><button class="a-edit-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button></span>
+          </div>
+          <div class="a-row connecting">
+            <span class="spinner"></span>
+            <span class="a-name">dev-gpu-01 <span class="badge test">test</span></span>
+            <span class="a-host mono">10.0.8.21:2222</span>
+            <span class="a-user mono">kun</span>
+            <span class="a-connecting-note">连接中…</span>
+          </div>
+          <div class="a-row">
+            <span class="dot idle"></span>
+            <span class="a-name">prod-db-01 <span class="badge prod">prod</span></span>
+            <span class="a-host mono">192.168.10.21:22</span>
+            <span class="a-user mono">postgres</span>
+            <span class="a-last">昨天 18:32</span>
+            <span class="a-actions"><button class="a-conn-btn">连接</button><button class="a-edit-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button></span>
+          </div>
+          <div class="a-row">
+            <span class="dot idle"></span>
+            <span class="a-name">prod-web-02 <span class="badge prod">prod</span></span>
+            <span class="a-host mono">192.168.10.12:22</span>
+            <span class="a-user mono">root</span>
+            <span class="a-last">2 小时前</span>
+            <span class="a-actions"><button class="a-conn-btn">连接</button><button class="a-edit-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button></span>
+          </div>
+          <div class="a-row">
+            <span class="dot idle"></span>
+            <span class="a-name">k8s-master <span class="badge test">test</span></span>
+            <span class="a-host mono">10.10.1.5:22</span>
+            <span class="a-user mono">k8sadmin</span>
+            <span class="a-last">昨天 09:15</span>
+            <span class="a-actions"><button class="a-conn-btn">连接</button><button class="a-edit-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button></span>
+          </div>
+          <div class="a-row">
+            <span class="dot idle"></span>
+            <span class="a-name">dev-gpu-02 <span class="badge test">test</span></span>
+            <span class="a-host mono">10.0.8.22:2222</span>
+            <span class="a-user mono">kun</span>
+            <span class="a-last">3 天前</span>
+            <span class="a-actions"><button class="a-conn-btn">连接</button><button class="a-edit-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button></span>
+          </div>
+          <div class="a-row">
+            <span class="dot idle"></span>
+            <span class="a-name">staging-app <span class="badge test">test</span></span>
+            <span class="a-host mono">172.16.30.5:22</span>
+            <span class="a-user mono">deploy</span>
+            <span class="a-last">上周五</span>
+            <span class="a-actions"><button class="a-conn-btn">连接</button><button class="a-edit-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button></span>
+          </div>
+          <div class="a-row">
+            <span class="dot idle"></span>
+            <span class="a-name">backup-nas <span class="badge test">test</span></span>
+            <span class="a-host mono">192.168.10.100:22</span>
+            <span class="a-user mono">nasadmin</span>
+            <span class="a-last">上周</span>
+            <span class="a-actions"><button class="a-conn-btn">连接</button><button class="a-edit-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button></span>
+          </div>
+        </div>
+        <div class="a-foot">
+          <span>按最近连接排序 · 悬停行可编辑</span>
+          <a>全部连接 →</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══════════ 方案 B · 搜索优先 ══════════ -->
+    <section class="variant v-b" id="v-b" hidden>
+      <div class="b-wrap">
+        <div class="b-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          开始一个会话
+        </div>
+        <div class="b-search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input placeholder="输入名称、IP 或用户开始连接…" />
+          <span class="b-kbd">Ctrl K</span>
+        </div>
+
+        <div class="b-block">
+          <div class="section-label">最近使用</div>
+          <div class="b-chips">
+            <div class="b-chip"><span class="dot on"></span>dev-gpu-01 <span class="chip-host">10.0.8.21</span></div>
+            <div class="b-chip"><span class="dot on"></span>prod-web-01 <span class="chip-host">192.168.10.11</span></div>
+            <div class="b-chip"><span class="dot idle"></span>prod-db-01 <span class="chip-host">192.168.10.21</span></div>
+            <div class="b-chip"><span class="dot idle"></span>k8s-master <span class="chip-host">10.10.1.5</span></div>
+            <div class="b-chip"><span class="dot idle"></span>staging-app <span class="chip-host">172.16.30.5</span></div>
+          </div>
+        </div>
+
+        <div class="b-cols">
+          <div>
+            <div class="section-label">本地终端</div>
+            <div class="b-local-grid">
+              <div class="b-local-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>PowerShell</div>
+              <div class="b-local-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>CMD</div>
+              <div class="b-local-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>Git Bash</div>
+              <div class="b-local-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>WSL</div>
+            </div>
+          </div>
+          <div>
+            <div class="section-label">远程连接</div>
+            <div class="b-remote-list">
+              <div class="b-remote-row"><span class="dot on"></span><span class="b-remote-name">prod-web-01 <span class="badge prod">prod</span></span><span class="b-remote-host">192.168.10.11:22</span></div>
+              <div class="b-remote-row"><span class="dot idle"></span><span class="b-remote-name">prod-db-01 <span class="badge prod">prod</span></span><span class="b-remote-host">192.168.10.21:22</span></div>
+              <div class="b-remote-row"><span class="dot idle"></span><span class="b-remote-name">prod-web-02 <span class="badge prod">prod</span></span><span class="b-remote-host">192.168.10.12:22</span></div>
+              <div class="b-remote-row"><span class="dot idle"></span><span class="b-remote-name">dev-gpu-02 <span class="badge test">test</span></span><span class="b-remote-host">10.0.8.22:2222</span></div>
+              <div class="b-remote-row"><span class="dot idle"></span><span class="b-remote-name">backup-nas <span class="badge test">test</span></span><span class="b-remote-host">192.168.10.100:22</span></div>
+              <div class="b-more">全部 8 个连接 →</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══════════ 方案 C · 卡片网格 ══════════ -->
+    <section class="variant v-c" id="v-c" hidden>
+      <div class="c-wrap">
+        <div class="c-head">
+          <div class="c-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            Quick Start
+          </div>
+          <div class="c-search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input placeholder="搜索终端或连接..." />
+          </div>
+        </div>
+
+        <div class="c-section">
+          <div class="c-label-row"><span class="section-label">本地终端</span></div>
+          <div class="c-shells">
+            <div class="c-shell-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg><span>PowerShell</span></div>
+            <div class="c-shell-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg><span>CMD</span></div>
+            <div class="c-shell-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg><span>Git Bash</span></div>
+            <div class="c-shell-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg><span>WSL</span></div>
+          </div>
+        </div>
+
+        <div class="c-section">
+          <div class="c-label-row"><span class="section-label">远程连接</span><span class="manage">管理 →</span></div>
+          <div class="c-conns">
+            <div class="c-card">
+              <div class="c-card-top"><span class="dot on"></span><span class="c-card-name">prod-web-01</span><span class="badge prod">prod</span></div>
+              <div class="c-card-host">192.168.10.11:22 · root</div>
+              <div class="c-card-foot"><span>12 分钟前</span><span class="go">连接 →</span></div>
+            </div>
+            <div class="c-card">
+              <div class="c-card-top"><span class="spinner"></span><span class="c-card-name">dev-gpu-01</span><span class="badge test">test</span></div>
+              <div class="c-card-host">10.0.8.21:2222 · kun</div>
+              <div class="c-card-foot"><span>连接中…</span></div>
+            </div>
+            <div class="c-card">
+              <div class="c-card-top"><span class="dot idle"></span><span class="c-card-name">prod-db-01</span><span class="badge prod">prod</span></div>
+              <div class="c-card-host">192.168.10.21:22 · postgres</div>
+              <div class="c-card-foot"><span>昨天 18:32</span><span class="go">连接 →</span></div>
+            </div>
+            <div class="c-card">
+              <div class="c-card-top"><span class="dot idle"></span><span class="c-card-name">prod-web-02</span><span class="badge prod">prod</span></div>
+              <div class="c-card-host">192.168.10.12:22 · root</div>
+              <div class="c-card-foot"><span>2 小时前</span><span class="go">连接 →</span></div>
+            </div>
+            <div class="c-card">
+              <div class="c-card-top"><span class="dot idle"></span><span class="c-card-name">k8s-master</span><span class="badge test">test</span></div>
+              <div class="c-card-host">10.10.1.5:22 · k8sadmin</div>
+              <div class="c-card-foot"><span>昨天 09:15</span><span class="go">连接 →</span></div>
+            </div>
+            <div class="c-new-card">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              新建连接
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+const NOTES = {
+  current: '<b>现状</b> · 居中单列 520px：标题 → 搜索 → 本地 4 图标 → 远程图标网格。宽窗口留白大；连接只展示名称 + IP，无端口/用户/环境/最近连接。',
+  a: '<b>A · 双栏工作台</b> · 左栏固定本地终端 + 新建入口；右栏连接列表行，带环境徽标、最近连接、悬停「连接/编辑」。宽窗口利用率最高，连接多时最易扫读；结构改动最大。',
+  b: '<b>B · 搜索优先</b> · 大搜索框（Ctrl+K）为第一入口，下方「最近使用」chips + 本地/远程两栏。高频搜索用户最快；不搜索时信息偏少，本地终端被降到次要位置。',
+  c: '<b>C · 卡片网格</b> · 保持居中单列但放宽到 760px：本地 4 个横向瓦片 + 远程两列信息卡片（环境徽标/端口/用户/最近连接）+ 虚线新建卡。改动最小、最接近现有体验。',
+};
+const tabs = document.getElementById('tabs');
+const note = document.getElementById('note');
+function show(id) {
+  document.querySelectorAll('.variant').forEach(v => v.hidden = v.id !== 'v-' + id);
+  tabs.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.v === id));
+  note.innerHTML = NOTES[id];
+}
+tabs.addEventListener('click', e => {
+  const btn = e.target.closest('button');
+  if (btn) show(btn.dataset.v);
+});
+show('current');
+</script>
+</body>
+</html>

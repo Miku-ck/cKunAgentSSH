@@ -42,10 +42,21 @@
 2. **`memory_tools.py` / `vec.py` / `embedding.py` 并非「零测试」**：`test_memory_v2.py:588-676` 端到端跑了四个工具，`:192` 有 blob 往返用例。S3 的发现全部限定在这些测试**确实没覆盖**的分支（越权 target_id、add_memory 之后抛错、`sid==""` 守卫、pinned×对账、地板清扫）。
 3. **spec 侧 §11:269** 声称 cosine 回退「按 scope 分桶 + LRU」，实现是 `ORDER BY updated_at DESC LIMIT 1000` 单扫（`mstore.py:350-354`）——inventory 里「embedding 维度不符会降级算」的既有判断不受影响。
 
-## 规格轴漂移（`2026-09-22-agent-memory-redesign-design.md`，12 条，全部 ◐ 除注明）
+## 规格轴漂移（`2026-09-22-agent-memory-redesign-design.md`，12 条 → 9 条独立行）
 
-未实现：①§4.2:112/§5:178「维度变更触发全量重嵌入」——全仓 grep 重嵌入相关词仅命中 `mstore.py:97` 一句注释，且 `vec.ensure_vec_table` 在维度变化时**直接 DROP** `memories_vec` ⇒ 换 embedding 模型后只有新记忆有可用向量，永久；②§5:172「所有动作写 memory_audit」——批处理路径一条不写（=S3-02）；③§4.1:82/§12:279「pinned 对账不碰」（=S3-04 ✅）；④§4.1:100 hostId 用档案 id（=S3-03 ✅）；⑤§4.1:101「episodic 从 run 关联 host 推断 / 候选带 host 提示抽为 `host:*`」——**没有任何写源会产出 `host:` scope**（episodic 硬编 `global`，抽取丢弃 LLM 的 scope 字段而 prompt 仍在要它），`run:` scope 能被 UI 写入却永不被 `context_scopes` 取回，spec 列的 `project` scope 全仓不存在；⑥§11:272「非法 JSON 重试 1 次 + importance×0.8 + `malformed-fallback` 审计」——四项全无（`_call_llm` 解析失败直接返 None）；⑦§4.2:106 FTS 建表口径与实现（应用侧 2-gram）不同；⑧§9:230 列表按 source 筛选 + 取代链展开、§9:239 embedding 探活——UI 均无；⑨§4.4:150 审计动词表与渲染器的 `PIN/EDIT` 不匹配（`set_pinned` 无审计）；⑩§7:212/§4.3:133 的超限/拒空只保护 agent 路径（=S3-07）；⑪§4.1:80 的 `rejected` 状态后端**从不写入**，UI 却有该筛选项 ⇒ 恒空（✅ 逻辑显然，未逐行）；⑫`MemoryPanel.vue:59` 注释「PUT 是全字段覆盖」与 a8e588c 统一后的「不传=不改」相反（文档漂移，store 恒发全键 ⇒ 无行为后果）。
-代码实现了而文档未提：第三档 `_overlap_hits` 词面重叠召回（`mstore.py:312-327`）、按连接缓存 sqlite-vec 可用性（`vec.py:37-55`）。
+其中 4 条与上方发现同因，**不重复计条**：②「所有动作写 memory_audit」= S3-02；③「pinned 对账不碰」= S3-04 ✅；④「hostId 用档案 id」= S3-03 ✅；⑩「超限/拒空只保护 agent 路径」= S3-07。其余 8 条 + 1 条反向缺口成表如下（严重度按「有无行为后果」裁，纯文档失真一律 Minor）。
+
+| ID | 维度 | 严重度 | 核验 | 标题 | 主 file:line | 可达性 |
+|---|---|---|---|---|---|---|
+| S3-09 | b | Major | ◐ | spec §4.2:112/§5:178 要求「维度变更触发全量重嵌入」，实现是**直接 DROP** `memories_vec` ⇒ 换 embedding 模型后只有新记忆有可用向量，且不可恢复 | `vec.ensure_vec_table` ↔ `mstore.py:97`（全仓 grep 重嵌入仅命中这句注释） | 换 embedding 模型时 |
+| S3-10 | b | Minor | ◐ | scope 体系缺写源：`host:*` 无任何产出方（episodic 硬编 `global`、抽取丢弃 LLM 返回的 scope 字段而 prompt 仍在要它），`run:` 可被 UI 写入却永不被 `context_scopes` 取回，spec 列的 `project` 全仓不存在 | `reconcile.py`（episodic 写入）+ `mstore.context_scopes` ↔ spec §4.1:101 | 恒（能力空转） |
+| S3-11 | b | Minor | ◐ | spec §11:272 的非法 JSON 四项兜底（重试 1 次、`importance×0.8`、`malformed-fallback` 审计、可见降级）全部未实现 ⇒ `_call_llm` 解析失败直接返回 None | `reconcile._call_llm` ↔ spec §11:272 | 恒（LLM 返回非纯 JSON 时静默丢一整批候选） |
+| S3-12 | b | Minor | ◐ | FTS 建表口径与实现不同：spec §4.2:106 写的是 SQL 侧分词，实现是应用侧 2-gram | `mstore.py` FTS 建表 ↔ spec §4.2:106 | 恒（召回行为与文档不一致，无崩溃面） |
+| S3-13 | b | Minor | ◐ | spec §9:230 的「列表按 source 筛选 + 取代链展开」与 §9:239 的「embedding 探活」在 UI 均无 | `AgentMemoryView.vue` ↔ spec §9:230/§9:239 | 恒（特性缺口，非缺陷） |
+| S3-14 | b | Minor | ◐ | 审计动词表（spec §4.4:150）与渲染器的 `PIN/EDIT` 不匹配，且 `set_pinned` 根本不落审计 | `mstore.set_pinned` ↔ 审计动词表 ↔ `AgentMemoryView.vue` 渲染分支 | 每次钉/取钉 |
+| S3-15 | b | Minor | ✅ | `rejected` 状态后端**从不写入**，UI 却有该筛选项 ⇒ 恒空列表（一个用户永远不会命中，因而永远不会被报告的筛选项） | `mstore` 状态写入集 ↔ `AgentMemoryView.vue` 筛选下拉 ↔ spec §4.1:80 | 恒（逻辑显然，未逐行） |
+| S3-16 | b | Minor | ◐ | `MemoryPanel.vue:59` 注释仍写「PUT 是全字段覆盖」，与 `a8e588c` 统一后的「不传=不改」相反（store 恒发全键 ⇒ 无行为后果，纯文档） | `MemoryPanel.vue:59` ↔ `client.ts` 的 PUT 形状 | 恒 |
+| S3-17 | b | Minor | ✅ | 反向缺口（代码有、文档无）：第三档 `_overlap_hits` 词面重叠召回、按连接缓存 sqlite-vec 可用性 —— 两处均未在 spec 登记 | `mstore.py:312-327`、`vec.py:37-55` | 恒 |
 
 ## 无发现类目（subagent 明确核过，我认可其口径）
 

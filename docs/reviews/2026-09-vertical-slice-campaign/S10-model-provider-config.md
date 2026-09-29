@@ -20,12 +20,12 @@
 
 | ID | 维度 | 严重度 | 核验 | 标题 | 主 file:line | 可达性 |
 |---|---|---|---|---|---|---|
-| S10-01 | a | Major | ✅ | anchor `schedule_engine._resolve_model()` 只读全局 ⊕，而面板 ★ 文案明写「SSH 默认 = 对话/终端/**定时任务**读的那档」 | anchor `schedule_engine.py:439` + `:291-293` ↔ anchor `ModelsPanel.vue:7-9` | 恒（只勾 ★ 的配置形态是面板唯一默认入口） |
+| S10-01 | a | Major | ✅ | 【9634dee 已修】anchor `schedule_engine._resolve_model()` 只读全局 ⊕，而面板 ★ 文案明写「SSH 默认 = 对话/终端/**定时任务**读的那档」 | anchor `schedule_engine.py:439` + `:291-293` ↔ anchor `ModelsPanel.vue:7-9` | 恒（只勾 ★ 的配置形态是面板唯一默认入口） |
 | S10-02 | a | Major | ✅ | `GET /settings/models/default` 的兜底链跳过全局档直落 `list[0]` ⇒ 两个面板对「默认模型是哪条」给出不同答案 | anchor `routes/settings.py:87-92` ↔ `ssh-ai.ts:78-81`、`ChatPanel.vue:132` | 恒（只勾 ⊕ 不勾 ★ 时） |
 | S10-03 | b | Major | ✅ | `base_url` 无 scheme/凭据校验、不脱敏回传渲染端并原样进日志 —— 而同仓对 proxy URL 三件全做 | anchor `routes/settings.py:24`、`database.py:1594`、`routes/settings.py:193-197` ↔ `netconfig.py:61-88`、`routes/settings.py:595-627` | 需用户把凭据写进 base_url（企业网关文档确有此形态）；面板对该字段零引导 |
-| S10-04 | c | Major | ✅ | `models_config.top_p` 在 anchor 只有终端预测一个读者，Agent 交互/定时/子 Agent 三条主链恒 0.9 | anchor `llm_client.py:45-54,75-85` ↔ `llm_adapter.py:192,232`；唯一读点 anchor `routes/terminal.py:129,144` | 恒 |
-| S10-05 | c | Major | ✅ | `reasoning_tokens`：类型面声明、后端可写、运行时真消费，但 anchor 面板从不提交 ⇒ 所有模型钉在默认 8192 | anchor `client.ts:270,292` ↔ `ModelsPanel.vue:367-380,491-502`（form 无此字段）↔ 消费点 anchor `routes/agent.py:826`、`schedule_engine.py:381-386`、`safe_tokens.py:53` | 恒（任何想调思考预算的用户） |
-| S10-06 | d | Major | ✅ | `reasoning_tokens=0` 塌成「思考不设上限」，与其自身 Field 说明相反（0-塌陷族第三例，前次只修了 `None` 那一半） | anchor `llm_adapter.py:264` ↔ `routes/settings.py:37` 说明、`safe_tokens.py:51-53` 反义、`schedule_engine.py:382-385` 注释 | anchor 需手调 API；面板补输入项后即一键可达 |
+| S10-04 | c | Major | ✅ | 【9634dee 已修】`models_config.top_p` 在 anchor 只有终端预测一个读者，Agent 交互/定时/子 Agent 三条主链恒 0.9 | anchor `llm_client.py:45-54,75-85` ↔ `llm_adapter.py:192,232`；唯一读点 anchor `routes/terminal.py:129,144` | 恒 |
+| S10-05 | c | Major | ✅ | 【9634dee 已修】`reasoning_tokens`：类型面声明、后端可写、运行时真消费，但 anchor 面板从不提交 ⇒ 所有模型钉在默认 8192 | anchor `client.ts:270,292` ↔ `ModelsPanel.vue:367-380,491-502`（form 无此字段）↔ 消费点 anchor `routes/agent.py:826`、`schedule_engine.py:381-386`、`safe_tokens.py:53` | 恒（任何想调思考预算的用户） |
+| S10-06 | d | Major | ✅ | 【⚠️ 9634dee 把本条从「需 curl」升级为「面板一键可达」】`reasoning_tokens=0` 塌成「思考不设上限」，与其自身 Field 说明相反（0-塌陷族第三例，前次只修了 `None` 那一半） | anchor `llm_adapter.py:264` ↔ `routes/settings.py:37` 说明、`safe_tokens.py:51-53` 反义、`schedule_engine.py:382-385` 注释 | **恒**（9634dee 已把思考预算做成表单可改项、`min="0"`，而 `ModelsPanel.vue:479-480` 的新注释写的正是「`reasoning_tokens=0`（= 跟随输出预算）」—— 与实际「不带 `thinking_budget` = 无上限」相反） |
 | S10-07 | d | Major | ✅ | 空 `api_key` 被当成「未配置模型」⇒ 面板默认 provider（自定义/vLLM）建的模型永久拿不到 LLM 自动审批与命令解释 | anchor `auto_approve.py:106`、`command_explain.py:391` ↔ anchor `ModelsPanel.vue:182,335,372,511`、`routes/settings.py:25`、`llm_adapter.py:82,90` | 立刻可达且是默认路径（`provider` 初值 `'vllm'`） |
 | S10-08 | d | Major | ✅ | `_fix_model_name_and_id` 每次 `init_db` 无条件执行，任何含 `/` 的显示名都会与 model_id 互换，且用户改回来下次启动再翻 | anchor `database.py:519-520`（调用点无 once 闸门）+ `:811-828` | 可达；形态是「改名后下次重启莫名坏掉」 |
 | S10-09 | d | Major | ✅ | 种子探测的 3s 预算被用户 HTTP 超时**替换**（read 另有 60s 下限），启动关键路径最长可挂 20 分钟，违反 spec 的「总预算 ≤6s、绝不阻塞启动」 | anchor `database.py:843` → anchor `netconfig.py:173-184,225-232` + anchor `main.py:74` ↔ spec `:54` | 需 `VLLM_BASE_URL` + `http.timeout_seconds>0` + 端点可连不响应 |
@@ -39,11 +39,25 @@
 | S10-17 | a | Minor | ✅ | `get_default_model` 用 `LIMIT 1` 无 `ORDER BY`，双默认时读数不确定，而 `list_models_config` 的排序键是 `sort_order, created_at` | anchor `database.py:1814` vs `:1590`；对照 `:1576`、`:1619` 两处都写了 `ORDER BY rowid LIMIT 1` | 需先存在 2 行同档默认（anchor 写路径保证唯一 ⇒ 仅手改库/并发交错） |
 | S10-18 | a | Minor | ✅ | 后处理头图兜底只读全局档，且三条分支都以字面量 `"Qwen3-VL"` 收尾 —— 那是本 spec 明确删除的旧硬编码种子名 | anchor `post_processor.py:921-929` ↔ spec `:11-13` | 生产路径不可达（anchor `routes/agent.py:1031` 恒传 id）⇒ 潜伏 |
 | S10-19 | d | Minor | ✅ | `create_model_config` 路由把**任何**异常折成 400 + `str(e)`：「database is locked」这类服务端故障显示为输入错误 | anchor `routes/settings.py:104-125` ↔ 同文件 `:294-297`、`:562-564`（都是 500 + 中文说明） | 可达（并发写库时，即本仓共享锁常态） |
-| S10-20 | d | Minor | ✅ | `netconfig.TIMEOUT_MIN = 5` 后端零消费者（写入区间一律 low=0），而**前端有个同名常量是 0** 且真在驱动 UI | anchor `netconfig.py:34` ↔ anchor `database.py:2142-2143`、`routes/settings.py:488` ↔ anchor `useOpsSettings.ts:22,69,90,161` + `OpsPanel.vue:53,71` | 残留声明 + 跨上下文同名异值，易误读为「存在 5s 保护」 |
+| S10-20 | d | Minor | ✅ | 【9634dee 已修】`netconfig.TIMEOUT_MIN = 5` 后端零消费者（写入区间一律 low=0），而**前端有个同名常量是 0** 且真在驱动 UI | anchor `netconfig.py:34` ↔ anchor `database.py:2142-2143`、`routes/settings.py:488` ↔ anchor `useOpsSettings.ts:22,69,90,161` + `OpsPanel.vue:53,71` | 残留声明 + 跨上下文同名异值，易误读为「存在 5s 保护」 |
 | S10-21 | d | Minor | ✅ | 测试连接报错「连接超时 (Ns)」里的 N 不是真正生效的上限（read 被抬到 ≥60s） | anchor `routes/settings.py:228-237` ↔ anchor `netconfig.py:173-184` | 可达（用户设过 `http.timeout_seconds` 且 ≤60 时读数与实际不符） |
 | S10-22 | d | Minor | ✅ | `_resolve_model_pk` 的双键回退在 `get_model_config` 又抄一遍；`model_id` 无唯一约束，重名时静默命中 rowid 最小者 | anchor `database.py:1558-1581` vs `:1613-1621`、schema `:213-233` | 重名可达（面板无去重校验、create 也不查）；PK/名称冲突不可达 ⇒ 降级 |
 | S10-23 | b | Minor | ✅ | spec 组件图写 `_seed_models(conn)`/`_insert_model`，代码是 `seed_models_async`/`_insert_seed_model`；spec 未随 P2-E9 更新 | `specs/2026-09-02-…:44-47` ↔ anchor `database.py:858,920` | 恒（文档漂移） |
 | S10-24 | c | Tradeoff | ✅ | `routes/agent.py:34 from routes.terminal import _get_model_config` 的跨 router 私有依赖：低危但零收益，且本仓已有 `safe_tokens.py` 专门为此类耦合建过解 | anchor `routes/agent.py:34` ↔ anchor `routes/terminal.py:29-31` ↔ `safe_tokens.py:1-5` docstring | 恒；风险面是「谁改那个包装就顺手改了 Agent 主链，而两处都没有测试」 |
+
+## 落库状态更新（2026-09-29 15:03，`9634dee`）
+
+本片写作期间，并行会话把在写的 21 个文件提交了（`9634dee fix(settings): 打通模型采样参数链路并修正设置项语义`）。我逐条 `git show 9634dee:<path>` 复核后，**正文里所有「工作树已在修（未提交）」现在应读作「已落库」**：
+
+| 本片条目 | 9634dee 的证据 | 状态 |
+|---|---|---|
+| S10-01（`_resolve_model` 只读全局档） | `git show 9634dee:backend/agent/schedule_engine.py:451-452` = `get_default_model(SSH_MODE, mask_key=False) or get_default_model(None, …)` | **已修** |
+| S10-04（`top_p` 全链无人传） | `9634dee:backend/agent/harness/llm_client.py:56,86`（形参 + 转发）、`contracts.py`（+22 行，含 `__post_init__` 校界）、`stirrups.py`、`routes/agent.py` | **已修** |
+| S10-05（面板不提交 `reasoning_tokens`） | `9634dee:src/components/settings/panels/ModelsPanel.vue:310-315,406,486,523,533` | **已修** |
+| S10-20（`TIMEOUT_MIN` 后即死） | `9634dee:backend/netconfig.py:37` = `TIMEOUT_MIN, TIMEOUT_MAX = 0, 600`，`:115` 起被两处夹紧引用 | **已修** |
+| **S10-06（`reasoning_tokens=0` 塌成无上限）** | 9634dee 把该值做成表单可改项且 `min="0"`，`ModelsPanel.vue:479-480` 的新注释把 0 解释为「跟随输出预算」 | **⚠️ 恶化** —— 从「需要 curl」变成「面板一键可达」，且新增文案本身就是错的语义 |
+
+⇒ 裁决时请把 S10-01/04/05/20 当作「已由并发提交顺带解决」，只需确认无需回归测试；而 **S10-06 需要你现在就看**，因为落库之后它已经是用户能踩到的路径了。
 
 ## 详情
 

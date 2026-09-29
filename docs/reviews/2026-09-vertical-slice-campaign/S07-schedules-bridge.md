@@ -55,7 +55,7 @@
 | S7-18 | a | Minor | ✅ | 空 `task_prompt` 也能建成任务，无头那次自动换成内置默认巡检词——用户要的和他拿到的不是同一件事 | `ops_schedule.py:233-254` + anchor `schedule_engine.py:317-319` | 恒（模型漏参） |
 | S7-19 | a | Minor | ✅ | anchor 启动注释写「懒启动，仅在存在定时任务时 begin」，实现是无条件 `start()` ⇒ 零任务用户也每 30s 空转一次全表查询 | anchor `main.py:117-120` | 恒（无害但注释说谎） |
 
-**跨切片引用（不在本片计数，避免双计）**：`_resolve_model()` 只读全局 ⊕ 而面板 ★ 文案承诺定时任务读 SSH 档 —— 见 **S10-01**（同一事实，home 在模型档位解析那侧）。本片只补充它的下游后果：`未配置默认模型` 的 RuntimeError 经 S7-01 之外的 `:271-275` 分支记成 failed，错误串里连 code 都没有。
+**跨切片引用（不在本片计数，避免双计）**：`_resolve_model()` 只读全局 ⊕ 而面板 ★ 文案承诺定时任务读 SSH 档 —— 见 **S10-01**（同一事实，home 在模型档位解析那侧；**已由并行提交 `9634dee` 修掉**，`git show 9634dee:backend/agent/schedule_engine.py:451-452` 现为 SSH-first → global 两级回落）。本片只补充它的下游后果：`未配置默认模型` 的 RuntimeError 经 S7-01 之外的 `:271-275` 分支记成 failed，错误串里连 code 都没有。
 
 ## 详情
 
