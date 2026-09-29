@@ -92,8 +92,9 @@ def test_llm_list_tolerates_null_and_scalar():
 def test_null_text_fields_do_not_lose_the_skill(base_db):
     """slug/description 为 null 时仍应按 name 兜底建技能，而不是整条抛异常。"""
     created = _create_auto_skill_with_quality_gate(
+        # 没有 mode 形参：db.create_skill 从来没有 mode 列，旧测试多传了一个
+        # 「ssh」，函数改签名后这三条用例就一直在 TypeError 上红着。
         _skill_dict(name="Nginx Log Triage", slug=None, description=None),
-        "ssh",
         PostProcessConfig(),
     )
     assert created is not None
@@ -104,14 +105,14 @@ def test_null_text_fields_do_not_lose_the_skill(base_db):
 def test_non_string_system_prompt_rejected_not_fabricated(base_db):
     """system_prompt 回数组不得被 str() 伪造成通过长度门的正文。"""
     assert _create_auto_skill_with_quality_gate(
-        _skill_dict(system_prompt=["第一步", "第二步"]), "ssh", PostProcessConfig()
+        _skill_dict(system_prompt=["第一步", "第二步"]), PostProcessConfig()
     ) is None
 
 
 def test_auto_skill_persists_split_trigger_words(base_db):
     """端到端：逗号串触发词必须真正落到 skills 行里，否则技能永不触发。"""
     created = _create_auto_skill_with_quality_gate(
-        _skill_dict(trigger_words="nginx,日志,502"), "ssh", PostProcessConfig()
+        _skill_dict(trigger_words="nginx,日志,502"), PostProcessConfig()
     )
     assert created is not None
     row = db.get_skill_by_slug(created["slug"])

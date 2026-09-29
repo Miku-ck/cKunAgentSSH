@@ -2202,7 +2202,9 @@ def get_conv_retention() -> dict:
     """
     return {
         "enabled": bool_app_setting("conv_retention.enabled", False),
-        "keep_count": _int_app_setting("conv_retention.keep_count", 1000),
+        # 区间与写入侧 Field 同口径：这条设置打开后是真删用户会话的，脏行/越界行
+        # 必须回默认而不是原样放出去（keep_count 会进 DELETE ... rn > ?）。
+        "keep_count": _int_app_setting("conv_retention.keep_count", 1000, low=0, high=100000),
     }
 
 

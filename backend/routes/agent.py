@@ -324,6 +324,9 @@ def _resolve_evolution_config(
     """
     max_iter = req.max_iterations
     temperature = model_cfg.get("temperature", 0.7)
+    # 演化不改 top_p（agent_strategies 没有这一项），所以只取模型行的值；
+    # 越界/脏行由 AgentConfig.__post_init__ 在唯一入口兜住，这里不再夹一遍。
+    top_p = model_cfg.get("top_p", 0.9)
     max_tokens = safe_max
     if evolved_cfg:
         # 只有用户开着「动态步数预算」时，演化学到的迭代上限才接管。
@@ -350,6 +353,7 @@ def _resolve_evolution_config(
         "thinking": thinking,
         "max_iter": max_iter,
         "temperature": temperature,
+        "top_p": top_p,
         "max_tokens": max_tokens,
     }
 
@@ -720,6 +724,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
     effective_thinking = _evo["thinking"]
     effective_max_iter = _evo["max_iter"]
     effective_temperature = _evo["temperature"]
+    effective_top_p = _evo["top_p"]
     effective_max_tokens = _evo["max_tokens"]
 
     # 生成 run_id（12 位 hex：审查 MINOR 修复，8 位在数万 run 量级下生日碰撞显著，
@@ -820,6 +825,9 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     max_iterations=effective_max_iter,
                     # 修复：应用演化后的 temperature（原实现硬编码 model_cfg.get("temperature", 0.7)）
                     temperature=effective_temperature,
+                    # 模型行的核采样：此前这一层没有 top_p 字段，chat_stream 恒用
+                    # 自己的 0.9 默认，设置页改 top_p 对 Agent 运行毫无影响
+                    top_p=effective_top_p,
                     # H13 修复 C7：应用演化后的 max_tokens（原实现硬编码 _safe_max）
                     max_tokens=effective_max_tokens,
                     # 推理/思考内容的 token 预算上限（来自模型配置，作为意图识别预算的上限）

@@ -61,7 +61,11 @@ class FakeLLM:
         FakeLLM.instances.append(self)
 
     async def call(self, messages, tools, model, temperature, max_tokens,
-                   enable_thinking, reasoning_max_tokens=None):
+                   enable_thinking, reasoning_max_tokens=None, top_p=0.9):
+        # top_p 是本轮新加的形参（模型行的核采样此前根本不往下传）。
+        # 记下来而不是只加个默认值吞掉：见 test_model_top_p_reaches_llm。
+        self.top_p = top_p
+        self.temperature = temperature
         self.calls.append(messages)
         from agent.harness.contracts import LLMOutput
         return LLMOutput(content="OK", prompt_tokens=10, completion_tokens=2)
@@ -259,6 +263,38 @@ def test_context_window_out_of_bounds_422(app_env):
     resp = app_env.post("/api/agent/run", json=payload)
     assert resp.status_code == 422
     assert not FakeLLM.instances, "422 时不应触发 LLM 调用"
+
+
+# ── 模型行的采样参数：面板改了要真的到 LLM 请求里 ─────────────────────────────
+
+
+def test_model_top_p_reaches_llm(app_env):
+    """models_config.top_p → Harness AgentConfig → StreamLLMClient.call。
+
+    本轮之前这一跳是断的：AgentConfig 没有 top_p 字段，llm_client 也不接这个形参，
+    chat_stream 恒用自己的 0.9 默认 —— 设置页与接口文档里的 top_p 写了也没人读。
+    """
+    FakeLLM.instances.clear()
+    db.update_model_config(app_env._e2e_model_id, top_p=0.33, temperature=0.2)
+    payload = {"task": "当前任务TP", "conversation_id": app_env._e2e_ctx,
+               "model_id": app_env._e2e_model_id}
+    run_agent(app_env, payload)
+
+    assert FakeLLM.instances, "run 没走到 LLM 调用"
+    seen = FakeLLM.instances[-1]
+    assert seen.top_p == 0.33, f"模型行的 top_p 没传到 LLM 调用：{seen.top_p}"
+    assert seen.temperature == 0.2, f"同一跳上的 temperature 也没到：{seen.temperature}"
+
+
+def test_dirty_top_p_row_falls_back_instead_of_400(app_env):
+    """越界/脏的 top_p 在 AgentConfig 入口回落默认，而不是发出一个必 400 的请求。"""
+    FakeLLM.instances.clear()
+    db.update_model_config(app_env._e2e_model_id, top_p=1.7)
+    payload = {"task": "当前任务BAD", "conversation_id": app_env._e2e_ctx,
+               "model_id": app_env._e2e_model_id}
+    run_agent(app_env, payload)
+
+    assert FakeLLM.instances[-1].top_p == 0.9, "越界 top_p 原样放给了上游"
 
 
 # ── autoSkillMatch：触发词匹配与技能注入 ─────────────────────────────────────

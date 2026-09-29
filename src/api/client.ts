@@ -283,14 +283,14 @@ export interface ModelConfigPayload {
   api_key?: string
   model_id?: string
   provider?: string
-  supports_thinking?: boolean
-  supports_image?: boolean
-  supports_tool_calling?: boolean
+  // supports_thinking / supports_image / supports_tool_calling 不在写入体里：
+  // 三列运行时无消费者，面板也不再提供勾选（给了开关就等于承诺它会生效）。
+  // 读侧仍回传（ModelConfig），卡片徽标按库里的历史值显示。
   temperature?: number
+  top_p?: number
   max_tokens?: number
   max_output_tokens?: number
   reasoning_tokens?: number
-  top_p?: number
   is_default_ssh?: boolean
 }
 
@@ -813,9 +813,9 @@ export interface StreamAgentOptions {
   enableDynamicBudget?: boolean
   /** E1：意图识别 + 思考预算控制，关闭 = 降级为无规划阶段 / 无引导语注入 */
   enableIntentionGuide?: boolean
-  /** 成本熔断上限（USD），不传 = 后端默认 */
+  /** 成本熔断上限（USD）。不传 = 后端默认；显式 0 = 后端解释为「不设上限」 */
   maxCostUsd?: number
-  /** token 熔断上限，不传 = 后端默认 */
+  /** token 熔断上限。不传 = 后端默认；显式 0 = 不设上限 */
   maxTotalTokens?: number
   skillIds?: string[]
   /** 是否启用触发词自动技能匹配（设置"自动技能匹配"，默认开启） */
@@ -869,8 +869,10 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
           max_iterations: options.maxIterations ?? 100,
           enable_dynamic_budget: options.enableDynamicBudget ?? true,
           enable_intention_guide: options.enableIntentionGuide ?? true,
-          ...(options.maxCostUsd ? { max_cost_usd: options.maxCostUsd } : {}),
-          ...(options.maxTotalTokens ? { max_total_tokens: options.maxTotalTokens } : {}),
+          // 显式 0 也要发出去：`options.maxCostUsd ? …` 会把「关闭熔断」这个合法
+          // 取值连同 0 一起抹掉，于是后端永远收不到禁用指令（仍按 $2 熔断）。
+          ...(options.maxCostUsd !== undefined ? { max_cost_usd: options.maxCostUsd } : {}),
+          ...(options.maxTotalTokens !== undefined ? { max_total_tokens: options.maxTotalTokens } : {}),
           skill_ids: options.skillIds || [],
           auto_skill_match: options.autoSkillMatch ?? true,
           context_window: options.contextWindow ?? 20,

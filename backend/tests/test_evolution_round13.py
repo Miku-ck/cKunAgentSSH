@@ -118,7 +118,9 @@ def test_subagent_model_lookup_failure_raises_instead_of_success_text(monkeypatc
     from agent.tools.builtin.spawn_subagent import SpawnSubagentTool
 
     tool = SpawnSubagentTool()
-    monkeypatch.setattr(tool, "_get_model_config", lambda ctx: None)
+    # _get_model_config(self) 不带 ctx 形参（模型来自默认档解析，不是按 run 上下文取）；
+    # 替身多一个 ctx 会让本用例在 TypeError 上红，永远跑不到它要验的 RuntimeError。
+    monkeypatch.setattr(tool, "_get_model_config", lambda: None)
     with pytest.raises(RuntimeError):
         asyncio.run(
             tool._run_subagent(

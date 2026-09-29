@@ -112,7 +112,9 @@ function handleClick(e: MouseEvent) {
 
 <style scoped>
 .markdown-body {
-  font-size: 13px;
+  /* 对话设置里的「消息字号」写进 --chat-font-size（useAppearance）。
+     这里此前是裸 13px，控件调了只有 :root 上的变量在变，气泡文字一动不动。 */
+  font-size: var(--chat-font-size, 13px);
   line-height: 1.7;
   color: var(--text-primary);
 }

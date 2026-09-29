@@ -225,22 +225,14 @@
                 </div>
                 <Transition name="collapse">
                   <div v-if="showAdvanced" class="advanced-body">
-                    <!-- 能力开关 -->
-                    <div class="capability-row">
-                      <label class="capability-item">
-                        <input type="checkbox" v-model="form.supports_tool_calling" class="form-checkbox" />
-                        <span>工具调用</span>
-                      </label>
-                      <label class="capability-item">
-                        <input type="checkbox" v-model="form.supports_image" class="form-checkbox" />
-                        <span>图片输入</span>
-                      </label>
-                      <label class="capability-item">
-                        <input type="checkbox" v-model="form.supports_thinking" class="form-checkbox" />
-                        <span>思考模式</span>
-                      </label>
+                    <!-- 能力勾选已撤：supports_thinking / supports_image / supports_tool_calling
+                         三列在运行时无任何消费者（思考走 enable_thinking 与演化配置、
+                         工具下发走 enable_tools、图片从不按模型判定），勾与不勾都不改变行为，
+                         而不勾「工具调用」的模型照样收到全量工具 schema。库里那三列保留
+                         （seed 与旧数据仍回填卡片徽标），但不再给一个「看起来能管」的开关。 -->
+                    <div v-if="!isEditing" class="capability-row">
                       <!-- 仅新建时可勾选。编辑时的"切换默认"由卡片上的独立入口负责 -->
-                      <label v-if="!isEditing" class="capability-item">
+                      <label class="capability-item">
                         <input type="checkbox" v-model="form.is_default_ssh" class="form-checkbox" />
                         <span>设为 SSH 默认模型</span>
                       </label>
@@ -257,6 +249,23 @@
                           min="0"
                           max="2"
                           step="0.1"
+                          class="temp-range"
+                        />
+                      </div>
+                    </div>
+
+                    <!-- 核采样：后端 Field(ge=0, le=1)，此前只有新建时发过 0.9，
+                         编辑表单从不提交，用户改不动也看不见 -->
+                    <div class="form-group">
+                      <label class="form-label">Top P（核采样）</label>
+                      <div class="temp-slider-row">
+                        <input v-model.number="form.top_p" class="form-input temp-input" type="number" min="0" max="1" step="0.05" />
+                        <input
+                          type="range"
+                          v-model.number="form.top_p"
+                          min="0"
+                          max="1"
+                          step="0.05"
                           class="temp-range"
                         />
                       </div>
@@ -292,6 +301,22 @@
                           {{ formatTokenCount(opt) }}
                         </button>
                       </div>
+                    </div>
+
+                    <!-- 思考预算：intention 分级、driver 每轮扩缩、schedule_engine 都按它算，
+                         0 = 回落到「输出（最大回复长度）」。此前面板从不提交，
+                         所有模型被钉死在建表默认 8192 上。 -->
+                    <div class="form-group">
+                      <label class="form-label">思考预算（reasoning tokens）</label>
+                      <input
+                        v-model.number="form.reasoning_tokens"
+                        class="form-input"
+                        type="number"
+                        min="0"
+                        max="1000000"
+                        step="1024"
+                      />
+                      <p class="form-hint">思考/推理内容的独立上限；填 0 = 跟随上面的输出长度</p>
                     </div>
                   </div>
                 </Transition>
@@ -348,6 +373,10 @@ const PROVIDERS: ProviderDef[] = [
 // 预算、历史被更早截断），编辑一条 max_tokens 为 NULL 的旧行更会把 4096 落库。
 const DEFAULT_CONTEXT_TOKENS = 16384
 const DEFAULT_OUTPUT_TOKENS = 4096
+// 与后端 CreateModelRequest.reasoning_tokens 的默认值同口径（routes/settings.py）。
+// 面板此前不提供这一项，所有模型都被钉在建表默认上；提供后新建默认仍取该值。
+const DEFAULT_REASONING_TOKENS = 8192
+const DEFAULT_TOP_P = 0.9
 
 const INPUT_TOKEN_OPTIONS = [4096, 8192, 16384, 262144, 1000000]
 const OUTPUT_TOKEN_OPTIONS = [4096, 8192, 16384, 262144, 1000000]
@@ -370,12 +399,11 @@ const form = reactive({
   base_url: '',
   api_key: '',
   provider: 'vllm',
-  supports_thinking: false,
-  supports_image: false,
-  supports_tool_calling: false,
   temperature: 0.7,
+  top_p: DEFAULT_TOP_P,
   max_tokens: DEFAULT_CONTEXT_TOKENS,
   max_output_tokens: DEFAULT_OUTPUT_TOKENS,
+  reasoning_tokens: DEFAULT_REASONING_TOKENS,
   is_default_ssh: false,
 })
 
@@ -410,12 +438,11 @@ function resetForm() {
   form.base_url = ''
   form.api_key = ''
   form.provider = 'vllm'
-  form.supports_thinking = false
-  form.supports_image = false
-  form.supports_tool_calling = false
   form.temperature = 0.7
+  form.top_p = DEFAULT_TOP_P
   form.max_tokens = DEFAULT_CONTEXT_TOKENS
   form.max_output_tokens = DEFAULT_OUTPUT_TOKENS
+  form.reasoning_tokens = DEFAULT_REASONING_TOKENS
   form.is_default_ssh = false
 }
 
@@ -448,12 +475,15 @@ function openEditDialog(m: ModelConfig) {
   hasExistingKey.value = hasReal
   maskedApiKey.value = hasReal ? masked : ''
   form.api_key = hasReal ? masked : ''
-  form.supports_thinking = !!m.supports_thinking
-  form.supports_image = !!m.supports_image
-  form.supports_tool_calling = !!m.supports_tool_calling
   form.temperature = m.temperature ?? 0.7
+  // ?? 而不是 ||：top_p=0 与 reasoning_tokens=0（= 跟随输出预算）都是合法读数，
+  // 用 || 会把它们显示成默认值，于是"看一眼再保存"就把 0 改成了 0.9 / 8192。
+  // 旧行为止于「面板根本不提交这两个键」，所以 NULL 行保持 NULL；现在表单
+  // 看得见它们，NULL 行按后端默认反显并在保存时落库（与运行时的回落值一致）。
+  form.top_p = m.top_p ?? DEFAULT_TOP_P
   form.max_tokens = m.max_tokens ?? DEFAULT_CONTEXT_TOKENS
   form.max_output_tokens = m.max_output_tokens ?? DEFAULT_OUTPUT_TOKENS
+  form.reasoning_tokens = m.reasoning_tokens ?? DEFAULT_REASONING_TOKENS
   // 默认隐藏 API Key
   showApiKey.value = false
   showAdvanced.value = false
@@ -486,26 +516,24 @@ async function doSave() {
     return Math.min(hi, Math.max(lo, n))
   }
   form.temperature = clampNum(form.temperature, 0.7, 0, 2)
+  form.top_p = clampNum(form.top_p, DEFAULT_TOP_P, 0, 1)
   form.max_tokens = clampNum(form.max_tokens, DEFAULT_CONTEXT_TOKENS, 1, 1000000)
   form.max_output_tokens = clampNum(form.max_output_tokens, DEFAULT_OUTPUT_TOKENS, 1, 1000000)
+  // 下限 0 与后端 Field(ge=0) 一致：0 是「跟随输出预算」的合法读数，不能钳成 1
+  form.reasoning_tokens = clampNum(form.reasoning_tokens, DEFAULT_REASONING_TOKENS, 0, 1000000)
   const payload: ModelConfigPayload = {
     name: trim(form.name),
     base_url: trim(form.base_url),
     model_id: trim(form.model_id),  // 始终发送字符串（含空串），确保清空也能落库
     provider: form.provider,
-    supports_thinking: form.supports_thinking,
-    supports_image: form.supports_image,
-    supports_tool_calling: form.supports_tool_calling,
     temperature: form.temperature,
+    top_p: form.top_p,
     max_tokens: form.max_tokens,
     max_output_tokens: form.max_output_tokens,
+    reasoning_tokens: form.reasoning_tokens,
   }
-  // top_p 仅新建时发送默认值；编辑时 UI 从未暴露该字段，不发以保留后端原值
-  if (!isEditing.value) {
-    payload.top_p = 0.9
-    // 「设为 SSH 默认」只在创建时生效；已存在模型的默认切换走独立入口，避免与编辑语义混淆
-    if (form.is_default_ssh) payload.is_default_ssh = true
-  }
+  // 「设为 SSH 默认」只在创建时生效；已存在模型的默认切换走独立入口，避免与编辑语义混淆
+  if (!isEditing.value && form.is_default_ssh) payload.is_default_ssh = true
   const trimmedKey = trim(form.api_key)
   // 本地部署不发送 api_key；编辑时若值与原脱敏值相同表示未修改，不发送
   if (!isLocalProvider.value && trimmedKey) {
@@ -892,6 +920,7 @@ return String(n)
 /* ── Form ── */
 .form-group { display: flex; flex-direction: column; gap: 4px; }
 .form-label { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
+.form-hint { margin: 0; font-size: 11px; color: var(--text-tertiary); }
 .required { color: #f85149; }
 .form-input {
   width: 100%;

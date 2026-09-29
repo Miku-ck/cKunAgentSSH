@@ -384,6 +384,25 @@ describe('settings 脏 localStorage 校验（全键）', () => {
     // terminal.fontSize 类型是宽 number（面板给 12..18 连续档），区间合法就保留
     expect(s.settings.appearance.terminal.fontSize).toBe(13.7)
   })
+
+  it('上下文窗口下限与后端 Field(ge=1) 同口径：1-4 是合法读数，不再被折回 20', async () => {
+    // 后端允许 1，面板滑杆也到 1；旧闸门写 5，于是手填的 2 会被静默改成 20，
+    // 用户以为设了「只带最后两条」，实际带的是 20 条。
+    const s = await storeWithSaved({ chat: { contextWindow: 2 } })
+    expect(s.settings.chat.contextWindow).toBe(2)
+    const out = await storeWithSaved({ chat: { contextWindow: 0 } })
+    expect(out.settings.chat.contextWindow).toBe(20)
+  })
+
+  it('breakerDisabled：默认关、脏值不翻开、真值保留（它一开就撤掉硬止损）', async () => {
+    const s = await storeWithSaved({})
+    expect(s.settings.agent.breakerDisabled).toBe(false)
+    // 'yes'/1/{} 都不能替用户决定"这次运行没有成本上限"
+    const dirty = await storeWithSaved({ agent: { breakerDisabled: 'yes' } })
+    expect(dirty.settings.agent.breakerDisabled).toBe(false)
+    const on = await storeWithSaved({ agent: { breakerDisabled: true } })
+    expect(on.settings.agent.breakerDisabled).toBe(true)
+  })
 })
 
 /**

@@ -586,9 +586,16 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       // 姿态=plan 时 permissionMode 恒为 'plan'（审批档休眠）；否则取审批轴
       // （'auto' 模型代判 / 其余手动）。
       ...resolveRunModes(agentMode, approval),
-      // 成本/token 熔断预算（设置 → Agent 治理 → 运行预算；0 = 不传，走后端默认）
-      maxCostUsd: useSettingsStore().settings.agent.maxCostUsd || undefined,
-      maxTotalTokens: useSettingsStore().settings.agent.maxTotalTokens || undefined,
+      // 成本/token 熔断预算（设置 → Agent 治理 → 运行预算）。
+      // 数字框里的 0 = 不发这个字段（走后端默认）；「关闭熔断」才发显式 0，
+      // 后端把显式 0 解释为不设上限。两种 0 语义相反，所以由独立布尔区分，
+      // 不能让 `|| undefined` 把用户要的"关掉"又折回默认。
+      maxCostUsd: useSettingsStore().settings.agent.breakerDisabled
+        ? 0
+        : (useSettingsStore().settings.agent.maxCostUsd || undefined),
+      maxTotalTokens: useSettingsStore().settings.agent.breakerDisabled
+        ? 0
+        : (useSettingsStore().settings.agent.maxTotalTokens || undefined),
       visibleTerminal: true,
       // 用户显式选择的技能 ID（后端 SkillRein 会与自动匹配的合并去重）
       skillIds,

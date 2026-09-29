@@ -259,6 +259,9 @@ class AgentConfig:
     """Agent 运行配置 — 替代原 engine.py 的 AgentConfig"""
     max_iterations: int = 100
     temperature: float = 0.7
+    # 核采样：models_config.top_p 一直有值、面板可改，但此前没有任何一条路径把它
+    # 传给 chat_stream（那里硬默认 0.9），所以用户在设置页改的 top_p 从不生效。
+    top_p: float = 0.9
     max_tokens: Optional[int] = None  # None 表示不传 max_tokens，由 vLLM 自决输出上限
     enable_thinking: bool = False
     enable_tools: bool = True
@@ -294,6 +297,24 @@ class AgentConfig:
     enable_progressive_gathering: bool = True
     # reclassify_interval: 每隔 N 轮迭代重新评估意图等级
     reclassify_interval: int = 5
+
+    def __post_init__(self) -> None:
+        """温度/核采样在唯一入口校界，而不是各调用点各夹一次。
+
+        models_config 的两列只被写侧 Field(ge/le) 管住：升级前的旧行、手改的库、
+        以及 schedule/interactive 两条通道读到的值都可能越界，而越界的 temperature
+        或 top_p 发出去就是上游 400 —— 整轮 run 直接失败，用户看不到原因。
+        越界回默认而不是钳到边界：一行 "5" 并不说明用户想要 2.0。
+        """
+        def _bound(value, lo, hi, fallback):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return fallback
+            if not (lo <= value <= hi):   # NaN 也走这里：任何比较都为 False
+                return fallback
+            return float(value)
+
+        self.temperature = _bound(self.temperature, 0.0, 2.0, 0.7)
+        self.top_p = _bound(self.top_p, 0.0, 1.0, 0.9)
 
 
 @dataclass
@@ -388,5 +409,6 @@ class LLMClient(Protocol):
         max_tokens: int,
         enable_thinking: bool,
         reasoning_max_tokens: Optional[int] = None,
+        top_p: float = 0.9,
     ) -> LLMOutput:
         ...

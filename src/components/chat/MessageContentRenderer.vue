@@ -36,7 +36,9 @@ const showThinkingDots = computed(() => {
 .message-content {
   width: 100%;
   line-height: 1.7;
-  font-size: 14px;
+  /* 这条若不跟着变量走，它就成了气泡里最后说话的那一层：
+     .message-bubble 改了字号，正文仍是裸 14px */
+  font-size: var(--chat-font-size, 14px);
   color: var(--text-primary);
   text-align: left;
 }

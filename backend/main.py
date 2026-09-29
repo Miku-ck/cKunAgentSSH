@@ -105,7 +105,14 @@ async def lifespan(_app: FastAPI):
         _pol = _db.get_permission_policy()
         set_allowlist_ttl_hours(_pol["allowlist_ttl_hours"])
         set_db_enabled(_pol["auto_approve_enabled"])
-        if _db.get_app_setting("permission.approval_fallback_s") is not None:
+        # 「用户写过」要用带区间的判定，不是「这一行存在」：手工改成 "abc" 或
+        # 越界值的脏行，get_permission_policy 会回默认 600 读数，若仍按"写过"推给
+        # 运行时，就把运维的 CKUNAGENTIC_PERMISSION_APPROVAL_FALLBACK_S 永久锁掉了
+        # —— 与 netconfig 的 retry/timeout env 兜底同一教训（database.get_http_policy
+        # 的 *_set 就是为此而存在）。
+        _fallback_set = _db.is_int_app_setting_set(
+            "permission.approval_fallback_s", 600, low=0, high=86400)[1]
+        if _fallback_set:
             set_approval_fallback_seconds(_pol["approval_fallback_s"])
     except Exception as e:
         logger.warning("[cKunAgentic] Permission policy load skipped: %s", e)

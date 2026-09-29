@@ -51,7 +51,9 @@
       </SettingRow>
 
       <SettingRow label="上下文窗口" desc="保留最近多少条消息作为上下文">
-        <SettingSlider v-model="settings.chat.contextWindow" :min="5" :max="100" unit=" 条" />
+        <!-- 下限 1 与后端 Field(ge=1) 同口径；原 min=5 让「只带最后一条」这一档
+             在面板上根本选不出来（e2e 回归用例自己就用 context_window: 2） -->
+        <SettingSlider v-model="settings.chat.contextWindow" :min="1" :max="100" unit=" 条" />
       </SettingRow>
 
       <div class="section-divider" />
@@ -93,7 +95,7 @@
       <SettingRow
         v-if="retention.enabled"
         label="保留会话数"
-        desc="按最近活跃保留的会话条数，超出部分自动清理"
+        desc="按最近活跃保留的会话条数，超出部分自动清理；填 0 = 不限制，也就是一条都不删"
       >
         <input
           v-model.number="retention.keepCount"
@@ -126,6 +128,9 @@ const toast = useToastStore()
 // 原来是 onMounted 里 api.getDefaultModel 一次性拉 → 用户切了默认后
 // 本面板仍显示旧值。改派生后，只要 fetchModelConfigs 刷新过一次
 // （SettingsDialog 打开时 ModelsPanel 会拉），卡片 star 与这里就同步。
+// 这条 ssh → global 的两级链必须与运行时的取档顺序一致（routes/agent.py、
+// terminal、schedule_engine、reconcile 都是 ssh 优先再回落全局档），少一级就会
+// 出现「面板写着当前默认是 B，实际跑的是 A」。
 const defaultSshModel = computed(() => {
   const list = settingsStore.modelConfigs
   if (!list.length) return null
@@ -145,8 +150,9 @@ const retentionSaving = ref(false)
 async function loadRetention() {
   try {
     const data = await api.getConvRetention()
-    // ?? 而不是 ||：keep_count=0 是后端允许写入的合法值（清空全部已结束会话），
-    // 用 || 会把它显示成 1000 —— 界面说留 1000 条、实际在删用户的会话。
+    // ?? 而不是 ||：0 是后端允许写入的合法值，用 || 会把它显示成 1000。
+    // 注意 0 的含义是「不限制 = 一条都不删」（prune_conversations 的 <=0 早退），
+    // 不是「清空全部」—— 旧注释与旧文案都反着写，用户会以为开了却不清库。
     retention.value = { enabled: !!data.enabled, keepCount: data.keep_count ?? 1000 }
   } catch {
     // 加载失败保持默认关闭（安全方向）
@@ -178,9 +184,9 @@ function onRetentionToggle(v: boolean) {
 }
 
 function onRetentionCountChange(ev?: Event) {
-  // 钳制区间与后端 Field(ge=0, le=100000) 一致：0 是合法值（清空全部已结束会话），
-  // 原 min=10 会把用户输入的 0 静默改成 10；'' 经 Number 塌成 0 会误发"全清"指令，
-  // 故用原始输入串判空，空/NaN 回弹默认值但不保存。
+  // 钳制区间与后端 Field(ge=0, le=100000) 一致。输入框被清空时 Number('') 塌成 0，
+  // 而 0 = 「不限制 = 一条都不删」：清空一下就把刚打开的清理又关掉了，所以空/NaN
+  // 回弹默认值但不保存。原 min=10 会把用户显式输入的 0 静默改成 10。
   const raw = ev?.target ? (ev.target as HTMLInputElement).value : null
   if (raw === null || raw.trim() === '') {
     retention.value.keepCount = 1000
@@ -197,6 +203,11 @@ function onRetentionCountChange(ev?: Event) {
 
 onMounted(async () => {
   void loadRetention()
+  // 与 MemoryPanel 的 loadMemorySettings 同型：本面板挂载时补拉一次后处理，
+  // 覆盖「启动时后端未就绪 → store 静默降级到 localStorage 默认值」。缺这一步时
+  // 面板显示的四项可能与库里相反，而用户第一次拨动任一开关就是整包 PUT 四项 ——
+  // 会把没碰过的三个开关按本地默认值写回去。
+  void settingsStore.loadPostProcessSettings()
   // 首次进对话面板时若还没拉过模型列表，这里补一次；有数据后 computed 会自动填
   if (!settingsStore.modelConfigs.length) void settingsStore.fetchModelConfigs()
 })

@@ -46,7 +46,20 @@
               />
             </label>
           </div>
-          <p class="hint muted">修改即时保存到本地设置，下一次运行生效（0 表示不覆盖后端默认）。</p>
+          <div class="runtime-toggle-row">
+            <div class="runtime-toggle-info">
+              <span class="runtime-label">关闭预算熔断</span>
+              <span class="runtime-desc">
+                后端把显式 <code>0</code> 解释为「不设上限」。长批量任务被默认的 $2 /
+                3M token 掐断时用它；代价是这次跑飞了没有硬止损。
+              </span>
+            </div>
+            <ToggleSwitch v-model="budget.breakerDisabled" />
+          </div>
+          <p class="hint muted">
+            修改即时保存到本地设置，下一次运行生效。数字框里的 0 = 不覆盖后端默认；
+            要真正取消熔断请勾上面那一项（它才发显式的 0）。
+          </p>
         </div>
       </section>
 
@@ -523,7 +536,9 @@ function normalizeBudget() {
   }
 }
 const budgetSummary = computed(() => {
-  const { maxCostUsd, maxTotalTokens } = budget.value
+  const { maxCostUsd, maxTotalTokens, breakerDisabled } = budget.value
+  // 勾选关闭时，两个数字框里的值不再随请求发出，徽标若仍显示它们就是撒谎。
+  if (breakerDisabled) return '熔断已关'
   const parts: string[] = []
   if (maxCostUsd > 0) parts.push(`$${maxCostUsd}`)
   if (maxTotalTokens > 0) parts.push(`${(maxTotalTokens / 1000).toFixed(0)}K tok`)

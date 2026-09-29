@@ -363,7 +363,11 @@ class ConversationRetentionRequest(BaseModel):
     # 全字段 Optional =「不传 = 不改」：keep_count 默认值若为 1000，只发 enabled 的
     # 调用会把用户精心调过的保留条数静默改回去 —— 而这条开关打开后是会删会话的。
     enabled: Optional[bool] = None
-    keep_count: Optional[int] = Field(None, ge=0, le=100000)
+    # 0 是「不限制 = 一条都不删」的哨兵（database.prune_conversations 的 <=0 早退），
+    # 不是「清空全部」。面板文案此前反着写，用户会以为填 0 就能清库，实际开了开关
+    # 却永远不清理。要清空请显式删会话，不给一个数字输入框批量删用户数据的权力。
+    keep_count: Optional[int] = Field(None, ge=0, le=100000,
+                                      description="保留最近多少条已结束会话；0 = 不限制（不清理）")
 
 
 @router.get("/settings/conv-retention")
@@ -488,7 +492,8 @@ class HttpSettingsRequest(BaseModel):
     timeout_seconds: Optional[int] = Field(None, ge=0, le=600,
                                            description="上游请求超时秒数；0 = 用各端点原默认")
     retry_count: Optional[int] = Field(None, ge=0, le=3,
-                                        description="传输层/5xx/429 重试次数；LLM 走 SDK max_retries")
+                                       description="重试次数，仅 LLM 调用生效（openai SDK max_retries）；"
+                                                   "embedding/网页抓取/连接测试用裸 httpx 客户端，不重试")
 
 
 async def _http_view() -> dict:
@@ -597,8 +602,8 @@ _DIAG_SECRET_HINTS = ("api_key", "token", "secret", "password", "proxy")
 
 # 纯数值的设置键：值不可能是凭证，诊断面板要能读到真实读数。
 # 必须逐键列举，不能用前缀 —— models_config.api_key 这类键同样带点，而前缀放行会
-# 直接把明文密钥放出去。清单与 get_* 读取器一一对应（16 个 app_settings 键里
-# 9 个是数值/布尔，其余 7 个是开关与字符串）。
+# 直接把明文密钥放出去。新增一个带 secret hint 的数值键时，这里要同键加一行，
+# 否则它会在诊断面板里被掩成「已设置」而读不到数（历史事故：max_total_tokens）。
 _DIAG_NUMERIC_KEYS = frozenset({
     "conv_retention.keep_count",
     "http.retry_count",

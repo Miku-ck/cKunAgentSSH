@@ -19,6 +19,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import database as db
+from prompts import SSH_MODE
 from agent.harness import Harness, HarnessConfig
 from agent.harness.contracts import AgentConfig as HarnessAgentConfig
 from agent.harness.llm_client import StreamLLMClient
@@ -34,6 +35,8 @@ _SCHEDULE_CONVERSATION_PREFIX = "sched-"
 _RUNS_PRUNE_INTERVAL_S = 6 * 3600
 # 模型未配置 temperature 时的兜底值（与 models_config 列默认值一致）
 _DEFAULT_TEMPERATURE = 0.7
+# 与 AgentConfig.top_p 的默认值同口径（contracts.py）
+_DEFAULT_TOP_P = 0.9
 
 
 def _num_param(value, default: float) -> float:
@@ -388,6 +391,8 @@ class ScheduleEngine:
         cfg = HarnessAgentConfig(
             max_iterations=_SCHEDULE_MAX_ITERATIONS,
             temperature=_num_param(model_cfg.get("temperature"), _DEFAULT_TEMPERATURE),
+            # 与交互式运行同口径：定时任务读的也是模型行的 top_p，不再各通道一个行为
+            top_p=_num_param(model_cfg.get("top_p"), _DEFAULT_TOP_P),
             max_tokens=safe_out,
             max_reasoning_tokens=safe_reasoning,
             enable_thinking=True,
@@ -435,8 +440,17 @@ class ScheduleEngine:
 
     @staticmethod
     def _resolve_model() -> dict | None:
-        """取默认模型（未掩码）供 Harness 调用。"""
-        default = db.get_default_model(None, mask_key=False)
+        """取默认模型（未掩码）供 Harness 调用。
+
+        先 SSH 档再全局档，与 reconcile.py / spawn_subagent.py / terminal 同一口径：
+        设置页的 ★ 说明写的就是「对话 / 终端 / 定时任务读的那档」，而这里此前只读
+        全局 is_default —— 用户只勾了 ★ 没勾 ⊕ 时，定时巡检报「未配置默认模型」，
+        或者跑在他以为已经让位给 ★ 的那条 ⊕ 模型上。
+        """
+        default = (
+            db.get_default_model(SSH_MODE, mask_key=False)
+            or db.get_default_model(None, mask_key=False)
+        )
         if not default:
             return None
         mid = default.get("id") or default.get("model_id")

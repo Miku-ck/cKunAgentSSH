@@ -51,6 +51,9 @@ class StreamLLMClient:
         max_tokens: int,
         enable_thinking: bool,
         reasoning_max_tokens: int | None = None,
+        # 放在末尾并带默认值：既有调用方（含测试替身）不传也能跑，
+        # 而 harness 的真实调用点会显式把 models_config.top_p 递进来。
+        top_p: float = 0.9,
     ) -> LLMOutput:
         """调用 LLM，收集完整响应；期间通过 _on_chunk 实时推送 token
 
@@ -78,6 +81,9 @@ class StreamLLMClient:
             model=model,
             messages=messages,
             temperature=temperature,
+            # 模型配置里的 top_p 此前在这一层被丢弃：chat_stream 自己带 0.9 默认，
+            # 于是设置页改成什么都是 0.9。
+            top_p=top_p,
             max_tokens=max_tokens,
             enable_thinking=enable_thinking,
             tools=tools if tools else None,

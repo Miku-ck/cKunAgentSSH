@@ -1095,8 +1095,18 @@ def get_post_process_manager() -> PostProcessManager:
 
 
 def init_post_process_manager(config: Optional[PostProcessConfig] = None) -> PostProcessManager:
-    """初始化全局 PostProcessManager（由 main.py 调用）"""
+    """初始化全局 PostProcessManager（由 main.py 调用）。
+
+    config 必须同时推进模块级 _config：submit() 每次取的是那份全局值（构造快照会被
+    它覆盖，见 submit 内注释），只传给 Manager 等于没传 —— 重启后库里写着
+    post_process.enabled=false，运行时却按 dataclass 默认（全开）跑，而
+    GET /settings/post-process 直读 DB 仍报 false。面板与运行时各说各话，
+    且用户看到的是"我关掉了"。PUT 路径本来就走 set_post_process_config，
+    启动路径漏了同一步，这里补齐让两条路径共用一个口径。
+    """
     global _manager
+    if config is not None:
+        set_post_process_config(config)
     _manager = PostProcessManager(config)
     return _manager
 

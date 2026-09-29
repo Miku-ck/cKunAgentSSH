@@ -62,12 +62,20 @@ def test_reasoning_budget_only_deducted_when_thinking_on():
 def test_evolution_config_falls_back_without_evolved_row():
     """演化配置缺失/加载失败（_load_evolved_config 返回 None）时回到用户与模型默认值。"""
     evo = _resolve_evolution_config(_req(), {"temperature": 0.3}, 4096, None, False)
-    assert evo == {"thinking": False, "max_iter": 100, "temperature": 0.3, "max_tokens": 4096}
+    # 契约新增 top_p：模型行没这一列时按 0.9 反显（与 chat_stream / AgentConfig 同默认）
+    assert evo == {
+        "thinking": False, "max_iter": 100, "temperature": 0.3,
+        "top_p": 0.9, "max_tokens": 4096,
+    }
     evo2 = _resolve_evolution_config(
-        _req(), {"temperature": 0.3}, 4096,
+        _req(), {"temperature": 0.3, "top_p": 0.4}, 4096,
         {"max_iterations": 7, "temperature": 0.1, "max_tokens": 2048}, True,
     )
-    assert evo2 == {"thinking": True, "max_iter": 7, "temperature": 0.1, "max_tokens": 2048}
+    # 演化不改 top_p（agent_strategies 没有这一项）：仍取模型行的 0.4
+    assert evo2 == {
+        "thinking": True, "max_iter": 7, "temperature": 0.1,
+        "top_p": 0.4, "max_tokens": 2048,
+    }
 
 
 def test_stale_takeover_covers_every_terminal_status(monkeypatch):

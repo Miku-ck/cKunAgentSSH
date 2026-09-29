@@ -56,7 +56,7 @@
           </div>
         </SettingRow>
 
-        <SettingRow label="失败重试次数" desc="只重试传输层错误、429 与 5xx；400/401/404 不重，免得把坏请求打成一串">
+        <SettingRow label="失败重试次数" desc="只对 LLM 调用生效（走 openai SDK 的 max_retries，重传输层错误与 429/5xx）。embedding、网页抓取与「测试连接」用的是裸 httpx 客户端，不重试。">
           <select v-model.number="retryDraft" class="setting-select">
             <option v-for="n in retryOptions" :key="n" :value="n">{{ n }} 次</option>
           </select>

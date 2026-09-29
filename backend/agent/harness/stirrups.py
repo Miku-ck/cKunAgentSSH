@@ -199,6 +199,7 @@ class Stirrups:
                     tools=tools,
                     model=ctx.llm_model,
                     temperature=ctx.config.temperature,
+                    top_p=ctx.config.top_p,
                     max_tokens=ctx.config.max_tokens,
                     enable_thinking=ctx.config.enable_thinking,
                     reasoning_max_tokens=reasoning_budget,

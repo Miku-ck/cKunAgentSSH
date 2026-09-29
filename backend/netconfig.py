@@ -31,7 +31,10 @@ def _httpx():
     import httpx
     return httpx
 
-TIMEOUT_MIN, TIMEOUT_MAX = 5, 600
+# 下限 0 = 「不覆盖」哨兵（各调用点沿用自己的原默认超时），不是最小可用值。
+# 此前这里写着 5，而两处夹紧都硬编码 0 作下限、面板注释又自称与本常量同口径 ——
+# 一个没人读的常量只会诱导出下一次「按 5 修好」的改动，把那层哨兵语义弄丢。
+TIMEOUT_MIN, TIMEOUT_MAX = 0, 600
 RETRY_MIN, RETRY_MAX = 0, 3
 _ALLOWED_SCHEMES = ("http", "https", "socks5", "socks5h", "socks4", "socks4a")
 # 只到 scheme + host[:port] 为止；userinfo 一律不取
@@ -109,7 +112,7 @@ def load_policy_from_db() -> dict:
     """
     global _policy, _loaded
     _loaded = True
-    timeout = _env_int("CKUN_HTTP_TIMEOUT", 0, 0, TIMEOUT_MAX)
+    timeout = _env_int("CKUN_HTTP_TIMEOUT", 0, TIMEOUT_MIN, TIMEOUT_MAX)
     retries = _env_int("CKUN_HTTP_RETRIES", 1, RETRY_MIN, RETRY_MAX)
     proxy = os.environ.get("CKUN_HTTP_PROXY", "").strip()
     try:
@@ -149,7 +152,7 @@ def set_policy(proxy_url: str, timeout_seconds: int, retry_count: int) -> dict:
     proxy = normalize_proxy_url(proxy_url)
     _policy = {
         "proxy_url": proxy,
-        "timeout_seconds": _clamp_int(timeout_seconds, 0, 0, TIMEOUT_MAX),
+        "timeout_seconds": _clamp_int(timeout_seconds, 0, TIMEOUT_MIN, TIMEOUT_MAX),
         "retry_count": _clamp_int(retry_count, 1, RETRY_MIN, RETRY_MAX),
     }
     _loaded = True

@@ -58,6 +58,13 @@ interface AppSettings {
     /** 单次 run token 熔断上限，0 = 使用后端默认 */
     maxTotalTokens: number
     /**
+     * 关闭运行预算熔断：后端把显式 0 解释为「不设上限」，而上面两个数字的 0 在
+     * 本 store 里一直是「不发这个字段」—— 两种 0 不能共用一个数，所以这里单列一个
+     * 布尔，由 ssh-ai 在发请求时翻成显式 0。此前"关掉熔断"根本发不出去，
+     * 长批跑只能在 $2 处断掉。
+     */
+    breakerDisabled: boolean
+    /**
      * E4：新建 SSH 连接的默认环境标记。逐条仍可在连接表单里改，这里只定初值。
      * 默认 'test'：误标成 prod 会让每条危险命令都走"必须预登记 allowlist"，
      * 测试机上日常运维直接跑不动。
@@ -186,7 +193,9 @@ export const useSettingsStore = defineStore('settings', () => {
       autoScroll: asBool(saved?.chat?.autoScroll, true),
       messageFontSize: asEnum(saved?.chat?.messageFontSize, [12, 13, 14, 15] as const, 13),
       markdown: asBool(saved?.chat?.markdown, true),
-      contextWindow: asNumber(saved?.chat?.contextWindow, 20, 5, 100),
+      // 下限 1 与后端 routes/agent.py 的 Field(ge=1) 同口径。原区间写 5，
+      // 于是手填/历史遗留的 1-4 会被静默改回 20 —— 而这三处区间各有说法已漂过一次。
+      contextWindow: asNumber(saved?.chat?.contextWindow, 20, 1, 100),
       autoSkillMatch: asBool(saved?.chat?.autoSkillMatch, true),
       enableThinking: asEnum(
         saved?.chat?.enableThinking, ['inherit', 'on', 'off'] as const, 'inherit'),
@@ -197,6 +206,7 @@ export const useSettingsStore = defineStore('settings', () => {
       enableIntentionGuide: asBool(saved?.agent?.enableIntentionGuide, true),
       maxCostUsd: asNumber(saved?.agent?.maxCostUsd, 0, 0, 100000),
       maxTotalTokens: asNumber(saved?.agent?.maxTotalTokens, 0, 0, 1e12),
+      breakerDisabled: asBool(saved?.agent?.breakerDisabled, false),
       defaultEnvironment: asEnum(
         saved?.agent?.defaultEnvironment, ['test', 'prod'] as const, 'test'),
       prodConfirm: asBool(saved?.agent?.prodConfirm, true),
