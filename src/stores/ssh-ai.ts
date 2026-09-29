@@ -99,6 +99,16 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     persistence.setSelectedModel(id)
   }
 
+  // ── 审批档（纯审批轴） ──
+
+  /** 原先是 SideChatPanel 的组件局部 ref，首页输入卡读不到；两处各持一档就是
+   *  第二条通路。刻意不持久化 —— 与提升前一致：重启回到手动审批。 */
+  const approvalMode = ref<'normal' | 'auto'>('normal')
+
+  function setApprovalMode(mode: 'normal' | 'auto') {
+    approvalMode.value = mode
+  }
+
   // ── 会话 CRUD ──
 
   async function createConversation(title?: string): Promise<ModeConversation> {
@@ -616,6 +626,9 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     groupedConversations: persistence.groupedConversations,
     fetchDefaultModel,
     setSelectedModel,
+    // ── 审批档 ──
+    approvalMode,
+    setApprovalMode,
     createConversation,
     switchConversation,
     deleteConversation,

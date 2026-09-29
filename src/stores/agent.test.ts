@@ -29,6 +29,7 @@ vi.mock('@/api/client', () => ({
   },
   agentApi: {
     denyCommand: vi.fn(async () => ({ ok: true })),
+    grantPermission: vi.fn(async () => ({ ok: true })),
     submitClarification: vi.fn(async () => ({ run_id: '', status: 'ok', steps: 0 })),
     skipClarification: vi.fn(async () => ({ run_id: '', status: 'ok' })),
   },
@@ -365,5 +366,95 @@ describe('授权卡片去重只认未处理的卡片', () => {
     })
     expect(store.permissionRequests[0].explain).toBeUndefined()
     expect(store.permissionRequests[1].explain).toBe('重启 nginx 进程')
+  })
+})
+
+// ── 审批结算下沉到 store（spec 2026-09-29-home-command-panel · 接缝 S3）──
+// 授权/拒绝原先写在 AgentRunPanel.vue:77-102 里，首页队列要复用就得整段抄一份：
+// 而那段里每一条都是踩出来的口径（命令取 payload 原文、settling 守卫、失败留卡
+// 可重试）。抄一份就是第二条会各自漂移的通路，故提进 store 供两处调用。
+describe('审批结算 approvePermission', () => {
+  const grantMock = agentApi.grantPermission as unknown as ReturnType<typeof vi.fn>
+
+  function pendingCard() {
+    const h = startRun()
+    h.push({
+      type: 'permission_needed',
+      tool: 'shell_exec',
+      command: 'nginx -s reload',
+      args: { command: 'nginx -s reload' },
+      risk: 'dangerous',
+      reversible: false,
+      run_id: 'r1',
+    })
+    const req = h.store.permissionRequests[0]
+    expect(req).toBeTruthy()
+    return { ...h, req }
+  }
+
+  beforeEach(() => {
+    runs.length = 0
+    setActivePinia(createPinia())
+    grantMock.mockClear()
+  })
+
+  it('回传 run_id 与会话 id，命令取 payload 原文而非 args.command', async () => {
+    const { store, req } = pendingCard()
+    await store.approvePermission(req.id, 'once')
+    expect(grantMock).toHaveBeenCalledWith(
+      'shell_exec', 'once', 'nginx -s reload', 'r1', req.conversationId)
+  })
+
+  it('成功后卡片保留在数组里（面板要显示「已授权」），但离开待审批队列', async () => {
+    const { store, req } = pendingCard()
+    await store.approvePermission(req.id, 'once')
+    expect(store.permissionRequests).toHaveLength(1)
+    expect(req.resolved).toBe(true)
+    expect(req.granted).toBe(true)
+    expect(store.pendingPermissions).toHaveLength(0)
+  })
+
+  it('结算中或已结算的卡片不再重复发授权请求', async () => {
+    const { store, req } = pendingCard()
+    req.settling = true
+    await store.approvePermission(req.id, 'once')
+    expect(grantMock).not.toHaveBeenCalled()
+
+    req.settling = false
+    req.resolved = true
+    await store.approvePermission(req.id, 'once')
+    expect(grantMock).not.toHaveBeenCalled()
+  })
+
+  it('后端授权失败时卡片留在待审批队列、settling 复位以便重试', async () => {
+    const { store, req } = pendingCard()
+    grantMock.mockRejectedValueOnce(new Error('500'))
+    await store.approvePermission(req.id, 'once')
+    expect(req.resolved).toBeFalsy()
+    expect(req.settling).toBe(false)
+    expect(store.pendingPermissions).toHaveLength(1)
+  })
+
+  it('队列里多张卡时只结算指定的那一张', async () => {
+    const { store, push, req } = pendingCard()
+    push({ type: 'permission_needed', tool: 'file_write', command: '/etc/hosts', risk: 'dangerous', run_id: 'r1' })
+    expect(store.pendingPermissions).toHaveLength(2)
+
+    await store.approvePermission(req.id, 'once')
+    const other = store.permissionRequests.find(r => r.id !== req.id)
+    expect(req.resolved).toBe(true)
+    expect(other?.resolved).toBeFalsy()
+    expect(store.pendingPermissions).toHaveLength(1)
+  })
+
+  it('重复点击是 skipped、后端失败才是 failed —— 调用方据此决定要不要弹错', async () => {
+    const { store, req, push } = pendingCard()
+    expect(await store.approvePermission(req.id, 'once')).toBe('granted')
+    // 同一张卡再点一次：已结算，静默跳过而非报「授权失败」
+    expect(await store.approvePermission(req.id, 'once')).toBe('skipped')
+
+    push({ type: 'permission_needed', tool: 'shell_exec', command: 'systemctl restart nginx', risk: 'dangerous', run_id: 'r1' })
+    grantMock.mockRejectedValueOnce(new Error('500'))
+    expect(await store.approvePermission(store.pendingPermissions[0].id, 'once')).toBe('failed')
   })
 })

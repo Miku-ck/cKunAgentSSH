@@ -94,6 +94,11 @@ v-show="s.id === store.activeSessionId"
 
         <!-- Quick Start 页面 -->
         <div v-show="(showHome || store.sessions.length === 0) && activeNavPage === 'home'" class="quick-start">
+          <!-- 首页主角：下达 + 跨 run 待放行汇总（Quick Start 启动器暂留在下方，
+               标签态改造在下一片一并处理） -->
+          <HomeCommandCard />
+          <HomeApprovalQueue />
+
           <div class="qs-header">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
             <span>Quick Start</span>
@@ -204,6 +209,10 @@ import { onMounted, onUnmounted, ref, nextTick, watch, defineAsyncComponent } fr
 import LocalTerminal from '@/components/ssh/LocalTerminal.vue'
 import RemoteTerminal from '@/components/ssh/RemoteTerminal.vue'
 import IconMonitor from '@/components/icons/IconMonitor.vue'
+// 首页主角静态引入：下面那批 defineAsyncComponent 拆的是"首次访问才下载"的页面，
+// 而指令卡与待放行队列是打开应用第一眼要看到的东西，不该等一个 chunk。
+import HomeCommandCard from '@/components/home/HomeCommandCard.vue'
+import HomeApprovalQueue from '@/components/home/HomeApprovalQueue.vue'
 // 启动性能优化：非首屏功能整体移出启动关键路径 —
 // 原实现全部静态 import + v-show（组件启动即全部挂载），每加一条功能线主包
 // 就长大一截（index.js 一度 10MB，Monaco 文件编辑器占大头）。现在：

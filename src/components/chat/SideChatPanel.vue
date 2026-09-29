@@ -497,9 +497,12 @@ import { useSettings } from '@/composables/useSettings'
 import { useAgentStore } from '@/stores/agent'
 import { useSettingsStore } from '@/stores/settings'
 import { useSkillStore } from '@/stores/skills'
+import { useSshAiStore } from '@/stores/ssh-ai'
 import { useToastStore } from '@/stores/toast'
 import type { ChatAttachment } from '@/api/client'
-import type { PostureKey } from '@/utils/run-modes'
+// 档位与文案单点定义在 utils/run-modes：首页输入卡读的是同一份，两处各写一遍
+// 就会对同样两个档位给出不同说明
+import { APPROVAL_OPTIONS as PERM_OPTIONS, APPROVAL_LABELS as PERM_LABELS, type PostureKey } from '@/utils/run-modes'
 import { formatBytes } from '@/utils/format'
 
 const settingsStore = useSettingsStore()
@@ -736,14 +739,11 @@ function pickCap(key: CapKey) {
  * stores/ssh-ai.ts 经 resolveRunModes(activeMode, approval) 派生 —— 这里是
  * **展示**同源（下拉文案 + 「计划」菜单项点亮），不存在自相矛盾的状态。
  */
-const approvalMode = ref<'normal' | 'auto'>('normal')
+const sshAi = useSshAiStore()
+/** 档位存在 ssh-ai store 而非组件内：首页输入卡与这里必须共享同一档，
+ *  各存一份就是第二条通路（用户在首页选「自动」、侧栏仍按「手动」发送）。 */
+const approvalMode = computed(() => sshAi.approvalMode)
 const isPlanMode = computed(() => activeMode.value === 'plan')
-
-const PERM_OPTIONS: ReadonlyArray<{ key: 'normal' | 'auto'; label: string; desc: string }> = [
-  { key: 'normal', label: '手动审批', desc: '危险操作逐条确认' },
-  { key: 'auto', label: '自动审批', desc: '模型代判，拿不准仍弹卡' },
-]
-const PERM_LABELS: Record<'normal' | 'auto', string> = { normal: '手动审批', auto: '自动审批' }
 
 const showPermMenu = ref(false)
 const permMenuRef = ref<HTMLElement | null>(null)
@@ -785,7 +785,7 @@ function togglePermMenu() {
 /** 审批档选择（纯审批轴）：不再触碰姿态 —— plan 的开关只在 + 菜单，
  *  两轴交汇发生在 resolveRunModes（plan 姿态下审批档休眠）。 */
 function pickPerm(key: 'normal' | 'auto') {
-  approvalMode.value = key
+  sshAi.setApprovalMode(key)
   closePermMenu(true)
 }
 

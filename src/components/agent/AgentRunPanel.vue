@@ -22,14 +22,18 @@ import { computed, ref, watch } from 'vue'
 import { useAgentStore, type PermissionRequest } from '@/stores/agent'
 import { useSSHStore } from '@/stores/ssh'
 import { useSettingsStore } from '@/stores/settings'
-import { agentApi } from '@/api/client'
-import { grantScopesForRisk, type GrantScope } from '@/utils/approval-scopes'
-import { useToastStore } from '@/stores/toast'
+import { grantScopesForRisk } from '@/utils/approval-scopes'
+// 展示口径与首页待放行队列共用一份（别名保持模板调用点不变）
+import {
+  approvalCommand as cardCommand,
+  approvalRiskLabel as riskLabel,
+  approvalTargetLabel,
+} from '@/utils/approval-display'
+import { useApprovalActions } from '@/composables/useApprovalActions'
 import ClarifyingWizard from './ClarifyingWizard.vue'
 
 const agentStore = useAgentStore()
 const sshStore = useSSHStore()
-const toast = useToastStore()
 
 function levelLabel(level: string): string {
   const map: Record<string, string> = {
@@ -55,57 +59,12 @@ function taskTypeLabel(type: string): string {
   return map[type] || type
 }
 
-/** 风险等级人读文案：英文 dangerous/moderate 对非专业用户没有信息量 */
-function riskLabel(risk: string): string {
-  const map: Record<string, string> = { dangerous: '高危', moderate: '中风险', safe: '低风险' }
-  return map[risk] || risk
-}
+/** 审批目标主机展示：口径在 utils/approval-display，首页待放行队列共用同一份 */
+const targetLabel = (req: PermissionRequest): string =>
+  approvalTargetLabel(req, sshStore.sessions, sshStore.connections)
 
-/** 审批目标主机展示名 — 后端只带 ssh_session_id，可读标签在前端按会话反查 */
-function targetLabel(req: PermissionRequest): string {
-  if (!req.sshSessionId) return ''
-  const session = sshStore.sessions.find(s => s.id === req.sshSessionId)
-  const conn = session?.connectionId
-    ? sshStore.connections.find(c => c.id === session.connectionId)
-    : undefined
-  if (conn) return `${conn.name || conn.host}（${conn.username}@${conn.host}）`
-  // 连接记录被删除或本地终端会话：退到会话名，再不行显示会话 id 片段（至少可辨识）
-  return session?.name || `会话 ${req.sshSessionId.slice(0, 8)}`
-}
-
-/** 明确拒绝：后端登记后本 run 内 AI 重发同一条命令不再弹卡片 */
-async function denyRequest(reqId: string) {
-  if (!await agentStore.denyPermission(reqId)) {
-    toast.error('拒绝登记失败，请重试')
-  }
-}
-
-/** 授权（审查 M-3：once/session/always 三档，可见档位与后端契约对齐见
- *  grantScopesForRisk；命令工具始终允许时绑定该条具体命令，不会覆盖其他 dangerous 命令） */
-async function grantPermission(reqId: string, tool: string, scope: GrantScope) {
-  const req = agentStore.permissionRequests.find(r => r.id === reqId)
-  if (!req || req.settling || req.resolved) return
-  // 命令取 payload 原文（后端 permission_display_fields.command）：它才是授权键实际
-  // 绑定的那条串。原先从 args.command 猜，job_run 用的是 args.cmd 因而永远传空 →
-  // 键退化成裸工具名；file_write 更是根本没有 command 参数。
-  const command = req.command
-  req.settling = true
-  try {
-    // 回传发起审批的 run_id / 会话 id：once 按 run 键控、session 按会话键控
-    await agentApi.grantPermission(tool, scope, command, req.runId, req.conversationId)
-    agentStore.resolvePermission(reqId, true)
-  } catch (e) {
-    req.settling = false
-    console.error('授权失败:', e)
-    toast.error('授权失败，请重试')
-  }
-}
-
-/** 卡片上「授权命令」一行要显示的串：优先归一化形态（剥混淆、可比较），
- *  退回 payload 原文（写入/定时任务类工具显示的是实际落盘的模板）。 */
-function cardCommand(req: PermissionRequest): string {
-  return req.normalizedCommand || req.command || ''
-}
+/** 结算的用户可见层与首页待放行队列共用一份（别名保持模板调用点不变） */
+const { approve: grantPermission, deny: denyRequest } = useApprovalActions()
 
 // ── 单一焦点审批队列（spec refactor-approval-center） ──
 const pendingPerms = computed(() => agentStore.pendingPermissions)
@@ -147,7 +106,7 @@ async function grantAll() {
   if (batchBusy.value || pendingPerms.value.length === 0) return
   batchBusy.value = true
   for (const req of [...pendingPerms.value]) {
-    await grantPermission(req.id, req.tool, 'once')
+    await grantPermission(req.id, 'once')
   }
   batchBusy.value = false
 }
@@ -311,18 +270,18 @@ const latestHelp = computed(() =>
           </details>
         </div>
         <div class="ap-actions">
-          <button class="ap-btn ap-btn-grant" :disabled="focusPerm.settling" @click="grantPermission(focusPerm.id, focusPerm.tool, 'once')">
+          <button class="ap-btn ap-btn-grant" :disabled="focusPerm.settling" @click="grantPermission(focusPerm.id, 'once')">
             {{ focusPerm.settling ? '处理中...' : '允许本次' }}
           </button>
           <button
             v-if="grantScopesForRisk(focusPerm.risk).includes('session')"
             class="ap-btn ap-btn-session"
             :disabled="focusPerm.settling"
-            @click="grantPermission(focusPerm.id, focusPerm.tool, 'session')"
+            @click="grantPermission(focusPerm.id, 'session')"
           >
             本会话允许
           </button>
-          <button class="ap-btn ap-btn-always" :disabled="focusPerm.settling" @click="grantPermission(focusPerm.id, focusPerm.tool, 'always')">
+          <button class="ap-btn ap-btn-always" :disabled="focusPerm.settling" @click="grantPermission(focusPerm.id, 'always')">
             {{ cardCommand(focusPerm) ? '始终允许此命令' : '始终允许' }}
           </button>
           <button class="ap-btn ap-btn-deny" :disabled="focusPerm.settling" @click="denyRequest(focusPerm.id)">拒绝</button>

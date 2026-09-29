@@ -12,6 +12,7 @@ import { agentApi, streamAgentRun, type AgentSSEEvent, type AgentCostSnapshot, t
 import { StreamingThinkScrubber } from '@/utils/think-scrubber'
 import { useToastStore } from './toast'
 import { useAgentDeliver } from '@/composables/useAgentDeliver'
+import type { GrantScope } from '@/utils/approval-scopes'
 
 interface ToolCallEntry {
   id: string
@@ -357,6 +358,35 @@ export const useAgentStore = defineStore('agent', () => {
   /** 用户忽略某次权限请求（仅关闭卡片，后端仍在等待，超时后按拒绝处理） */
   function dismissPermission(id: string) {
     permissionRequests.value = permissionRequests.value.filter(r => r.id !== id)
+  }
+
+  /**
+   * 授权一条审批（审查 M-3：once/session/always 三档，档位可见性见
+   * grantScopesForRisk）。原先这段写在 AgentRunPanel 里，首页待放行队列要复用
+   * 就得整段抄一份 —— 而里面每一条都是踩出来的口径，抄一份就是第二条会各自漂移
+   * 的通路，故下沉到 store 供两处调用。
+   *
+   * 返回三态而非布尔：调用方对「已结算/结算中」要静默跳过，对「后端失败」要弹
+   * 重试提示，两者都返回 false 就会把用户的重复点击报成授权失败。
+   */
+  async function approvePermission(id: string, scope: GrantScope): Promise<'granted' | 'skipped' | 'failed'> {
+    const req = permissionRequests.value.find(r => r.id === id)
+    if (!req || req.settling || req.resolved) return 'skipped'
+    // 命令取 payload 原文（后端 permission_display_fields.command）：它才是授权键实际
+    // 绑定的那条串。从 args.command 猜，job_run 用的是 args.cmd 因而永远传空 →
+    // 键退化成裸工具名；file_write 更是根本没有 command 参数。
+    const command = req.command
+    req.settling = true
+    try {
+      // 回传发起审批的 run_id / 会话 id：once 按 run 键控、session 按会话键控
+      await agentApi.grantPermission(req.tool, scope, command, req.runId, req.conversationId)
+      resolvePermission(id, true)
+      return 'granted'
+    } catch (e) {
+      req.settling = false
+      console.error('授权失败:', e)
+      return 'failed'
+    }
   }
 
   /**
@@ -750,6 +780,7 @@ export const useAgentStore = defineStore('agent', () => {
     snapshot,
     dismissHelp,
     dismissPermission,
+    approvePermission,
     denyPermission,
     resolvePermission,
     confirmDeliver,

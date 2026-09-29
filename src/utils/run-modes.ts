@@ -22,6 +22,20 @@
  */
 export type PostureKey = 'goal' | 'plan'
 
+/**
+ * 审批档 = 用户可选的两种「谁来批准」。
+ * 文案在此单点定义：首页输入卡与侧栏面板各写一份的话，改了一处，两处就会对同样
+ * 两个档位给出不同的说明 —— 而用户看不出自己点的到底是哪个。
+ */
+export type ApprovalKey = 'normal' | 'auto'
+
+export const APPROVAL_OPTIONS: ReadonlyArray<{ key: ApprovalKey; label: string; desc: string }> = [
+  { key: 'normal', label: '手动审批', desc: '危险操作逐条确认' },
+  { key: 'auto', label: '自动审批', desc: '模型代判，拿不准仍弹卡' },
+]
+
+export const APPROVAL_LABELS: Record<ApprovalKey, string> = { normal: '手动审批', auto: '自动审批' }
+
 interface RunModes {
   /** undefined = 未表态：字段省略，后端不注入任何姿态段 */
   workflowMode?: PostureKey
