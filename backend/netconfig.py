@@ -41,15 +41,21 @@ _policy: dict = {"proxy_url": "", "timeout_seconds": 0, "retry_count": 1}
 _loaded = False
 
 
-def _int_env(name: str, default: int) -> int:
-    """环境变量兜底：企业网络里代理常由运维统一注入，不该要求用户逐个开设置页。"""
+def _env_int(name: str, default: int, low: int, high: int) -> int:
+    """带区间的 env 读取，口径与 db._int_app_setting 一致：非法/越界回默认，
+    **不钳到边界** —— env 里写 99 不代表运维想要 3 次重试，回默认才是诚实读数。
+    """
     raw = os.environ.get(name, "").strip()
     if not raw:
         return default
     try:
-        return int(raw)
+        value = int(raw)
     except ValueError:
         return default
+    if value < low or value > high:
+        logger.warning("环境变量 %s=%s 超出 %d..%d，按默认 %d 处理", name, raw, low, high, default)
+        return default
+    return value
 
 
 def normalize_proxy_url(raw: Optional[str]) -> str:
@@ -94,23 +100,34 @@ def load_policy_from_db() -> dict:
     """从 app_settings 读取策略并缓存；数据库不可读时退回 env/内置默认。
 
     区间夹紧在 db.get_http_policy()（与 memory.max_items / allowlist TTL 同一个
-    读取范式）：这里只负责"读不到时怎么办"。
+    读取范式）：这里只负责"读不到时怎么办"，以及 env 与库里的行谁优先。
+
+    优先级口径（与 main.py 对 approval_fallback_s 的启动回填同款）：
+    **库里没有这一行 → 用 env 注入；用户写过 → 以 DB 为准**，包括显式写的 0
+    （重试 0 = 不重试、超时 0 = 各调用点沿用原默认）。此前这里是无条件覆盖，
+    运维注入的 CKUN_HTTP_RETRIES 实际上永远读不到，等于死代码。
     """
     global _policy, _loaded
     _loaded = True
-    proxy = ""
-    timeout = 0
-    retries = _int_env("CKUN_HTTP_RETRIES", 1)
+    timeout = _env_int("CKUN_HTTP_TIMEOUT", 0, 0, TIMEOUT_MAX)
+    retries = _env_int("CKUN_HTTP_RETRIES", 1, RETRY_MIN, RETRY_MAX)
+    proxy = os.environ.get("CKUN_HTTP_PROXY", "").strip()
     try:
         import database as db
         stored = db.get_http_policy()
-        proxy = stored["proxy_url"]
-        timeout = stored["timeout_seconds"]
-        retries = stored["retry_count"]
+        # 代理口径本轮未变（旧代码在 try 之后有等价的 if not proxy 兜底）：库里
+        # 非空值才压过 env，空行/缺行时 env 说话。
+        if stored["proxy_url"]:
+            proxy = stored["proxy_url"]
+        # 缺行才让 env 说话；有行（含显式 0）就是用户的权威值
+        if stored["timeout_set"]:
+            timeout = stored["timeout_seconds"]
+        if stored["retry_set"]:
+            retries = stored["retry_count"]
     except Exception as e:
         logger.warning("HTTP 策略读取失败，沿用直连默认: %s", e)
-    if not proxy:
-        proxy = os.environ.get("CKUN_HTTP_PROXY", "").strip()
+    # 区间夹紧只用于 PUT 写路径；这里的 env 值已由 _env_int 校验，DB 值已由
+    # db.is_int_app_setting_set 校验，越界一律回默认而不是钳到边界。
     try:
         proxy = normalize_proxy_url(proxy)
     except ValueError:

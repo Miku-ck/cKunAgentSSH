@@ -258,6 +258,134 @@ describe('settings 运维策略字段（E4/E5）', () => {
     expect(s.settings.agent.prodConfirm).toBe(false)
   })
 })
+
+/**
+ * round 22：脏值校验从「只有 agent 两个字段」扩展到全部本地设置键。
+ * `??` 只挡 undefined/null，手改（或被写坏的）localStorage 里放 'no' / 0 / {}
+ * 就会原样流进 settings：布尔开关变成 truthy 的 'no'（UI 显示关、实际开），
+ * 枚举变成面板里没有的值（CSS class 拼不出来，主题静默失效），
+ * 数值变成字符串（字号 '13px' 之类的拼接一路带到渲染层）。
+ */
+async function storeWithSaved(raw: unknown) {
+  lsMap.set('ckunagentic:settings', JSON.stringify(raw))
+  vi.useRealTimers()
+  vi.resetModules()
+  setActivePinia(createPinia())
+  const { useSettingsStore: fresh } = await import('@/stores/settings')
+  return fresh()
+}
+
+describe('settings 脏 localStorage 校验（全键）', () => {
+  it('枚举键：非法值回落默认，合法值原样保留', async () => {
+    const dirty = await storeWithSaved({
+      chat: { sendShortcut: 'tab', enableThinking: 'yes' },
+      appearance: {
+        theme: 'neon', accent: 'cyan',
+        themeGradientMode: 'diagonal', themeGradientDirection: 'xx',
+      },
+    })
+    expect(dirty.settings.chat.sendShortcut).toBe('enter')
+    expect(dirty.settings.chat.enableThinking).toBe('inherit')
+    expect(dirty.settings.appearance.theme).toBe('dark')
+    expect(dirty.settings.appearance.accent).toBe('blue')
+    expect(dirty.settings.appearance.themeGradientMode).toBe('glow')
+    expect(dirty.settings.appearance.themeGradientDirection).toBe('tb')
+
+    const ok = await storeWithSaved({
+      chat: { sendShortcut: 'shiftEnter', enableThinking: 'off' },
+      appearance: {
+        theme: 'forest', accent: 'green',
+        themeGradientMode: 'linear', themeGradientDirection: 'lr',
+      },
+    })
+    expect(ok.settings.chat.sendShortcut).toBe('shiftEnter')
+    expect(ok.settings.chat.enableThinking).toBe('off')
+    expect(ok.settings.appearance.theme).toBe('forest')
+    expect(ok.settings.appearance.themeGradientDirection).toBe('lr')
+  })
+
+  it('布尔键：字符串/数字/对象都不算开，默认 false 的键不会被 truthy 脏值打开', async () => {
+    const s = await storeWithSaved({
+      chat: { markdown: 'false', autoScroll: 0, thinkingExpanded: {}, autoSkillMatch: 'no' },
+      agent: { dynamicBudget: 'yes', enableIntentionGuide: 1 },
+      postProcess: { enabled: 'no' },
+      memory: { enabled: 0, reconcileLlmEnabled: 'true' },
+      appearance: { animation: 'off', backgroundEnabled: 'yes', themeGradientEnabled: {} },
+    })
+    // 默认开的键：脏值 → 回到 true（而不是变成 'no' 这种 truthy 假关）
+    expect(s.settings.chat.markdown).toBe(true)
+    expect(s.settings.agent.dynamicBudget).toBe(true)
+    expect(s.settings.postProcess.enabled).toBe(true)
+    expect(s.settings.memory.enabled).toBe(true)
+    // 默认关的键：脏值 → 回到 false（'yes' 绝不能把背景打开）
+    expect(s.settings.appearance.backgroundEnabled).toBe(false)
+    expect(s.settings.appearance.themeGradientEnabled).toBe(false)
+    expect(s.settings.chat.autoScroll).toBe(true)
+    expect(s.settings.appearance.animation).toBe(true)
+  })
+
+  it('数值键：非有限数与越界回默认（不钳边界），区间内合法值保留', async () => {
+    const s = await storeWithSaved({
+      chat: { messageFontSize: '13', contextWindow: 'abc' },
+      agent: { maxIterations: '50', maxCostUsd: -1, maxTotalTokens: {} },
+      memory: { maxItems: -5, injectBudgetTokens: 'x' },
+      appearance: {
+        uiFontSize: null, backgroundOpacity: 101, backgroundOverlay: -20,
+        themeGradientStrength: 999, backgroundVersion: 'v2',
+        backgroundImage: 42, themeGradientStartColor: {},
+        terminal: { fontSize: 0, fontFamily: 42 },
+      },
+    })
+    expect(s.settings.chat.messageFontSize).toBe(13)
+    expect(s.settings.chat.contextWindow).toBe(20)
+    expect(s.settings.agent.maxIterations).toBe(100)
+    expect(s.settings.agent.maxCostUsd).toBe(0)
+    expect(s.settings.memory.maxItems).toBe(100)
+    expect(s.settings.memory.injectBudgetTokens).toBe(1500)
+    expect(s.settings.appearance.uiFontSize).toBe(13)
+    expect(s.settings.appearance.backgroundOpacity).toBe(80)
+    expect(s.settings.appearance.backgroundOverlay).toBe(60)
+    expect(s.settings.appearance.themeGradientStrength).toBe(30)
+    expect(s.settings.appearance.backgroundVersion).toBe(0)
+    // 字符串键同规矩：CSS url() 与颜色值里塞进数字/对象会让整条背景样式失效
+    expect(s.settings.appearance.backgroundImage).toBe('')
+    expect(s.settings.appearance.themeGradientStartColor).toBe('')
+    expect(s.settings.appearance.terminal.fontSize).toBe(14)
+    expect(s.settings.appearance.terminal.fontFamily).toBe('jetbrains')
+
+    const ok = await storeWithSaved({
+      chat: { messageFontSize: 14, contextWindow: 50 },
+      agent: { maxIterations: 1, maxCostUsd: 2.5 },
+      appearance: {
+        uiFontSize: 15, backgroundOpacity: 30,
+        terminal: { fontSize: 16, fontFamily: 'mono' },
+      },
+    })
+    expect(ok.settings.chat.messageFontSize).toBe(14)
+    expect(ok.settings.chat.contextWindow).toBe(50)
+    expect(ok.settings.agent.maxIterations).toBe(1)
+    expect(ok.settings.agent.maxCostUsd).toBe(2.5)
+    expect(ok.settings.appearance.uiFontSize).toBe(15)
+    expect(ok.settings.appearance.backgroundOpacity).toBe(30)
+    expect(ok.settings.appearance.terminal.fontSize).toBe(16)
+    expect(ok.settings.appearance.terminal.fontFamily).toBe('mono')
+  })
+
+  it('联合类型数值键（messageFontSize）只认面板真有的档位，区间内非档位值同样回落', async () => {
+    // 类型是 12|13|14|15，用「区间夹紧 + as 断言」放行 13.5 就是把类型谎写进运行时：
+    // 面板 select 里没有这一项，徽标显示空白、字号却真的生效了。
+    const s = await storeWithSaved({
+      chat: { messageFontSize: 13.5 },
+      appearance: { uiFontSize: 16, terminal: { fontSize: 13.7 } },
+    })
+    expect(s.settings.chat.messageFontSize).toBe(13)
+    // 界面字号的下拉只到 15，放行 16 会让 select 显示空白却按 16px 生效
+    expect(s.settings.appearance.uiFontSize).toBe(13)
+    // terminal.fontSize 类型是宽 number（面板给 12..18 连续档），区间合法就保留
+    expect(s.settings.appearance.terminal.fontSize).toBe(13.7)
+  })
+})
+
 /**
  * A1：卡片级"设为 SSH 默认"入口。store 负责 PATCH + 重拉列表，
  * UI 侧靠 modelConfigs 响应式派生显示，无须自己再拉一次 default。
@@ -282,10 +410,31 @@ describe('settings setDefaultModel', () => {
     const s = useSettingsStore()
     const ok = await s.setDefaultModel('m2')
     expect(ok).toBe(true)
-    expect(apiMock.setDefaultModel).toHaveBeenCalledWith('m2')
+    expect(apiMock.setDefaultModel).toHaveBeenCalledWith('m2', 'ssh')
     expect(apiMock.getModelConfigs).toHaveBeenCalled()
     expect(s.modelConfigs.find((m) => m.id === 'm2')?.is_default_ssh).toBe(true)
     expect(s.modelsError).toBe('')
+  })
+
+  /**
+   * round 22 / C9：全局默认（is_default）一直有活消费者（后处理、对话附件摘要等
+   * 非 SSH 链路），但 UI 只能写 is_default_ssh，前端永远改不动那一档。
+   * store 必须把档位透传给后端，不能吞掉。
+   */
+  it('global 档位原样透传给后端 API', async () => {
+    const s = useSettingsStore()
+    const ok = await s.setDefaultModel('m2', 'global')
+    expect(ok).toBe(true)
+    expect(apiMock.setDefaultModel).toHaveBeenCalledWith('m2', 'global')
+    expect(apiMock.getModelConfigs).toHaveBeenCalled()
+  })
+
+  it('404 等后端拒绝仍走失败路径，不因档位不同而吞错', async () => {
+    const s = useSettingsStore()
+    apiMock.setDefaultModel.mockRejectedValueOnce(new Error('404 模型不存在: ghost'))
+    const ok = await s.setDefaultModel('ghost', 'global')
+    expect(ok).toBe(false)
+    expect(s.modelsError).toContain('404')
   })
 
   it('失败时置 modelsError，返回 false 且列表保持原样', async () => {
@@ -306,6 +455,7 @@ describe('settings setDefaultModel', () => {
 
 /**
  * C3：appearance.fontSize 重命名为 uiFontSize（它与 chat.messageFontSize、
+
  * appearance.terminal.fontSize 三套字号同名不同物）。老用户的 localStorage 里
  * 只有旧 key，读不到就等于把人家调过的字号打回 13。
  */

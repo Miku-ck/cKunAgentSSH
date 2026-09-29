@@ -1555,6 +1555,32 @@ _MC_COLS = (
 )
 
 
+def _resolve_model_pk(ref: str) -> Optional[str]:
+    """把「行主键 id」或「LLM 模型名（model_id 列）」统一解析成行主键；解析不到返回 None。
+
+    读路径（get_model_config）一直认两种键 —— Agent 后处理与默认模型兜底都传模型名；
+    写路径此前只认行主键，于是 PATCH default 传模型名时：存在性检查过 → 清 others 的
+    UPDATE 按 id != 名字匹配到**全部**行（真默认被清掉）→ 置一的 UPDATE 匹配 0 行 →
+    结果是 0 个默认模型，而响应 200。读写必须共用一个解析器，否则每加一个写入口
+    就要再踩一遍（round 14 已登记）。
+    """
+    if not ref:
+        return None
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id FROM models_config WHERE id = ?", (ref,)
+        ).fetchone()
+        if row is None:
+            row = conn.execute(
+                "SELECT id FROM models_config WHERE model_id = ? ORDER BY rowid LIMIT 1",
+                (ref,),
+            ).fetchone()
+        return row["id"] if row else None
+    finally:
+        conn.close()
+
+
 def list_models_config() -> list[dict]:
     """获取所有模型配置（按 sort_order 正序，api_key 已脱敏）"""
     conn = _get_conn()
@@ -1662,13 +1688,17 @@ def create_model_config(
 def update_model_config(config_id: str, **kwargs) -> Optional[dict]:
     """更新模型配置（支持部分字段）
 
-    参数 config_id 为记录主键（id 列），与 kwargs 中的 model_id 字段互不冲突。
+    config_id 认行主键 id 也认模型名（与 get_model_config / set_default_model 同一
+    解析器），kwargs 里的 model_id 字段与此互不冲突。
     """
+    pk = _resolve_model_pk(config_id)
+    if pk is None:
+        return None
     allowed = {
         "name", "model_id", "provider", "base_url", "api_key",
         "supports_thinking", "supports_image", "supports_tool_calling",
         "temperature", "max_tokens", "max_output_tokens", "reasoning_tokens", "top_p", "sort_order",
-        "is_default_ssh",
+        "is_default", "is_default_ssh",
     }
     sets = []
     params = []
@@ -1684,7 +1714,7 @@ def update_model_config(config_id: str, **kwargs) -> Optional[dict]:
             sets.append(f"{k} = ?")
             params.append(1 if isinstance(v, bool) else v)
     # 记录是否存在（优先判断，避免 rowcount 0 的误判）
-    existing = get_model_config(config_id)
+    existing = get_model_config(pk)
     if not existing:
         return None
     if not sets:
@@ -1692,62 +1722,78 @@ def update_model_config(config_id: str, **kwargs) -> Optional[dict]:
     now = _now()
     sets.append("updated_at = ?")
     params.append(now)
-    # config_id 必须放在最后，对应 SQL 中 WHERE id = ? 的位置
-    params.append(config_id)
+    # pk 必须放在最后，对应 SQL 中 WHERE id = ? 的位置
+    params.append(pk)
     conn = _get_conn()
     try:
         conn.execute(
             f"UPDATE models_config SET {', '.join(sets)} WHERE id = ?",
             params,
         )
-        # 如果更新了默认标记，需清除其他模型的默认标记
-        if kwargs.get("is_default_ssh"):
-            conn.execute("UPDATE models_config SET is_default_ssh = 0 WHERE id != ?", (config_id,))
+        # 默认标记是唯一标记：置了某一档就得清掉同档的其它行，与 set_default_model
+        # 同一个原语，免得两处对"唯一"的理解各写各的
+        for col, key in (("is_default", "is_default"), ("is_default_ssh", "is_default_ssh")):
+            if kwargs.get(key):
+                conn.execute(
+                    f"UPDATE models_config SET {col} = 0 WHERE id != ?", (pk,))
         conn.commit()
         # rowcount 0 不代表记录不存在——SQLite 在值未变化时不计入 rowcount
-        return get_model_config(config_id)
+        return get_model_config(pk)
     finally:
         conn.close()
 
 
 def delete_model_config(model_id: str) -> bool:
-    """删除模型配置（默认模型不可删除）"""
+    """删除模型配置（默认模型不可删除，任一档都算）"""
+    pk = _resolve_model_pk(model_id)
+    if pk is None:
+        return False
     conn = _get_conn()
     try:
         row = conn.execute(
             "SELECT is_default, is_default_ssh FROM models_config WHERE id = ?",
-            (model_id,),
+            (pk,),
         ).fetchone()
         if row and (row["is_default"] or row["is_default_ssh"]):
             raise ValueError("Cannot delete a model that is set as default")
-        cur = conn.execute("DELETE FROM models_config WHERE id = ?", (model_id,))
+        cur = conn.execute("DELETE FROM models_config WHERE id = ?", (pk,))
         conn.commit()
         return cur.rowcount > 0
     finally:
         conn.close()
 
 
+# 默认档位 → 列名。mode=None 沿用历史口径（不传 = 全局档），"ssh" 是 routes 里
+# SSH_MODE 的取值；显式收窄成这张表，别让"任何非 ssh 的值"都落进 SSH 列。
+_DEFAULT_COLUMNS = {None: "is_default", "global": "is_default", "ssh": "is_default_ssh"}
+
+
 def set_default_model(model_id: str, mode: Optional[str] = None) -> None:
     """设置默认模型。
-    mode 为 None 时设置全局 is_default；
-    mode 为 'ssh' 时设置 SSH 模式的默认模型。
+
+    mode：None 或 "global" → 全局 is_default；"ssh" → SSH 模式默认。
+    model_id 认行主键也认模型名（_resolve_model_pk）；解析不到抛 ValueError ——
+    旧实现按名字传进来会"清掉真默认 + 目标匹配 0 行 + 静默成功"，是本函数的
+    主要踩坑面。
 
     审查修复：原实现"全清 + 置一"为两条非原子 UPDATE，并发切换可产生
     0 个或 2 个默认模型（两条语句间交错）。改为单条条件 UPDATE
     （清 others 带 WHERE id != 目标后提交同一事务），消除中间状态。
     """
+    if mode not in _DEFAULT_COLUMNS:
+        raise ValueError(f"未知的默认档位 {mode!r}（可用：global / ssh）")
+    pk = _resolve_model_pk(model_id)
+    if pk is None:
+        raise ValueError(f"模型不存在: {model_id}")
+    col = _DEFAULT_COLUMNS[mode]
     conn = _get_conn()
     try:
-        if mode is None:
-            col = "is_default"
-        else:
-            col = "is_default_ssh"
         # 两条 UPDATE 置于同一隐式事务，最后一次性 commit（保持原子性）
         conn.execute(
-            f"UPDATE models_config SET {col} = 0 WHERE id != ?", (model_id,)
+            f"UPDATE models_config SET {col} = 0 WHERE id != ?", (pk,)
         )
         conn.execute(
-            f"UPDATE models_config SET {col} = 1 WHERE id = ?", (model_id,)
+            f"UPDATE models_config SET {col} = 1 WHERE id = ?", (pk,)
         )
         conn.commit()
     finally:
@@ -2081,16 +2127,28 @@ def count_rows(table: str) -> Optional[int]:
 
 
 def get_http_policy() -> dict:
-    """出站 HTTP 策略（G4/G5）。唯一读取点：routes/settings.py 的 GET/PUT 与
-    启动回填；进程内实际生效值由 netconfig 缓存。
+    """出站 HTTP 策略（G4/G5）。唯一读取点：netconfig 的启动/重载；进程内实际
+    生效值由 netconfig 缓存，routes/settings.py 的 GET/PUT 读的是那份缓存。
 
     区间与写入侧 Field 同口径：超时 0..600（0 = 不覆盖调用点默认），重试 0..3。
     代理在库里可能带 userinfo，读取时原样返回，脱敏是展示层的责任。
+
+    retry_set / timeout_set 把"库里有没有一行合法值"如实带出去：netconfig 靠它决定
+    env 兜底该不该让位（缺行才用 env，用户写过就以 DB 为准，显式写的 0 也算写过）。
+    这里不读 env —— env 优先级归 netconfig 单管，两边各读一份会让规则在两个文件里
+    各演化一遍。脏行/越界行按默认读数显示但不算"用户设定"，免得一个改坏的值
+    永久锁掉运维注入。
     """
+    timeout, timeout_set = is_int_app_setting_set(
+        "http.timeout_seconds", 0, low=0, high=600)
+    retries, retry_set = is_int_app_setting_set(
+        "http.retry_count", 1, low=0, high=3)
     return {
         "proxy_url": (get_app_setting("http.proxy_url") or "").strip(),
-        "timeout_seconds": _int_app_setting("http.timeout_seconds", 0, low=0, high=600),
-        "retry_count": _int_app_setting("http.retry_count", 1, low=0, high=3),
+        "timeout_seconds": timeout,
+        "retry_count": retries,
+        "timeout_set": timeout_set,
+        "retry_set": retry_set,
     }
 
 
@@ -2109,16 +2167,31 @@ def _int_app_setting(key: str, default: int, low: Optional[int] = None, high: Op
     low/high 传入时按写入区间一并校验：越界同样回默认值（不钳到边界——库里那行是
     什么用户意图不可知，默认值是唯一说得过去的读数）。
     """
+    value, explicit = is_int_app_setting_set(key, default, low=low, high=high)
+    return value if explicit else default
+
+
+def is_int_app_setting_set(key: str, default: int,
+                           low: Optional[int] = None,
+                           high: Optional[int] = None) -> tuple[int, bool]:
+    """返回 (读数, 这一行是不是用户写下的合法值)。
+
+    "合法"= 存在、非空、能按 int 解析、且不越 low/high。脏行与越界行都算 False：
+    调用方（netconfig 的 env 兜底）据此决定该不该让 env 说话 —— 一个手工改坏的
+    值不该永久锁掉运维注入。读数按 _int_app_setting 的口径回默认，不钳边界。
+    """
     raw = get_app_setting(key)
+    if raw is None or not str(raw).strip():
+        return default, False
     try:
-        value = int(raw) if raw is not None and str(raw).strip() else default
+        value = int(raw)
     except (TypeError, ValueError):
-        return default
+        return default, False
     if low is not None and value < low:
-        return default
+        return default, False
     if high is not None and value > high:
-        return default
-    return value
+        return default, False
+    return value, True
 
 
 def get_conv_retention() -> dict:

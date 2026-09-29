@@ -1,0 +1,4 @@
+# 测试与开发依赖（不进运行时镜像；生产打包只装 requirements.txt）
+# README 的「跑后端测试」与 .github/workflows/ci.yml 都指向这份，别再各自 pip install。
+pytest>=8.0
+pytest-asyncio>=0.24

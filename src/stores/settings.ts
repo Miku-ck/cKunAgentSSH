@@ -1,8 +1,9 @@
 import { defineStore } from 'pinia'
 import { nextTick, onScopeDispose, ref, watch } from 'vue'
-import { api, agentApi, toFriendlyMessage, type ModelConfig, type ModelConfigPayload } from '@/api/client'
+import { api, agentApi, toFriendlyMessage, type ModelConfig, type ModelConfigPayload, type ModelDefaultMode } from '@/api/client'
 // 外观枚举只在 useAppearance 里定义一次（store 与设置面板都从这里取，抄两份会漂）
 import type { Accent, GradientDirection, GradientMode, Theme } from '@/composables/useAppearance'
+import { ACCENT_MAP } from '@/composables/useAppearance'
 import { useToastStore } from './toast'
 
 /**
@@ -132,6 +133,45 @@ function loadFromLocalStorage(): Partial<AppSettings> | null {
 const saved = loadFromLocalStorage()
 
 /**
+ * localStorage 是可被手改、被旧版本写入、被扩展污染的输入源，`saved?.x ?? 默认`
+ * 只挡得住 null/undefined：'no' 是 truthy、'13' 是字符串、999 越界照样流到渲染层
+ * （CSS 类拼不出来、字号变成 '13pxpx'、开关显示关实际开）。所以每条本地设置都过
+ * 一遍下面的闸门，脏值一律回落默认，而不是钳到边界——把 999 钳成 100 会让用户
+ * 以为自己填的值生效了。
+ */
+function asBool(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback
+}
+
+function asEnum<T extends string | number>(value: unknown, allowed: readonly T[], fallback: T): T {
+  return (allowed as readonly unknown[]).includes(value) ? value as T : fallback
+}
+
+function asNumber(value: unknown, fallback: number, lo: number, hi: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= lo && value <= hi
+    ? value
+    : fallback
+}
+
+function asString(value: unknown, fallback: string): string {
+  return typeof value === 'string' ? value : fallback
+}
+
+// 枚举白名单写成 Record<Union, true> 再取键：漏一项是编译错误，
+// 直接抄一份字符串数组则不会报错——正是本仓反复出现的"抄两份清单"漂移族。
+const THEMES = Object.keys({
+  dark: true, light: true, system: true, 'blue-screen': true,
+  forest: true, mint: true, bee: true, coral: true,
+} as Record<Theme, true>) as Theme[]
+const ACCENTS = Object.keys(ACCENT_MAP) as Accent[]
+const GRADIENT_MODES = Object.keys({
+  glow: true, linear: true, radial: true,
+} as Record<GradientMode, true>) as GradientMode[]
+const GRADIENT_DIRECTIONS = Object.keys({
+  tb: true, bt: true, lr: true, rl: true, tlbr: true, trbl: true,
+} as Record<GradientDirection, true>) as GradientDirection[]
+
+/**
  * 重命名前的 appearance 行：`fontSize` 曾指"界面基础字号"，与 chat 消息字号、
  * 终端字号三者同名不同物。旧 key 只读兼容一次，下次全量序列化自然消失。
  */
@@ -141,63 +181,61 @@ const savedAppearance = (saved?.appearance ?? {}) as LegacyAppearance
 export const useSettingsStore = defineStore('settings', () => {
   const settings = ref<AppSettings>({
     chat: {
-      sendShortcut: saved?.chat?.sendShortcut ?? 'enter',
-      thinkingExpanded: saved?.chat?.thinkingExpanded ?? true,
-      autoScroll: saved?.chat?.autoScroll ?? true,
-      messageFontSize: saved?.chat?.messageFontSize ?? 13,
-      markdown: saved?.chat?.markdown ?? true,
-      contextWindow: saved?.chat?.contextWindow ?? 20,
-      autoSkillMatch: saved?.chat?.autoSkillMatch ?? true,
-      enableThinking:
-        saved?.chat?.enableThinking === 'on' || saved?.chat?.enableThinking === 'off'
-          ? saved?.chat?.enableThinking
-          : 'inherit',
+      sendShortcut: asEnum(saved?.chat?.sendShortcut, ['enter', 'shiftEnter'] as const, 'enter'),
+      thinkingExpanded: asBool(saved?.chat?.thinkingExpanded, true),
+      autoScroll: asBool(saved?.chat?.autoScroll, true),
+      messageFontSize: asEnum(saved?.chat?.messageFontSize, [12, 13, 14, 15] as const, 13),
+      markdown: asBool(saved?.chat?.markdown, true),
+      contextWindow: asNumber(saved?.chat?.contextWindow, 20, 5, 100),
+      autoSkillMatch: asBool(saved?.chat?.autoSkillMatch, true),
+      enableThinking: asEnum(
+        saved?.chat?.enableThinking, ['inherit', 'on', 'off'] as const, 'inherit'),
     },
     agent: {
-      maxIterations: saved?.agent?.maxIterations ?? 100,
-      dynamicBudget: saved?.agent?.dynamicBudget ?? true,
-      enableIntentionGuide: saved?.agent?.enableIntentionGuide ?? true,
-      maxCostUsd: saved?.agent?.maxCostUsd ?? 0,
-      maxTotalTokens: saved?.agent?.maxTotalTokens ?? 0,
-      defaultEnvironment: saved?.agent?.defaultEnvironment === 'prod' ? 'prod' : 'test',
-      // 只认真布尔：手改过的 localStorage 里塞字符串/数字时，`?? true` 会原样放行，
-      // 于是 prodConfirm 变成 truthy 的 'no' —— 用户以为关了，实际还开着。
-      prodConfirm: typeof saved?.agent?.prodConfirm === 'boolean' ? saved.agent.prodConfirm : true,
+      maxIterations: asNumber(saved?.agent?.maxIterations, 100, 1, 500),
+      dynamicBudget: asBool(saved?.agent?.dynamicBudget, true),
+      enableIntentionGuide: asBool(saved?.agent?.enableIntentionGuide, true),
+      maxCostUsd: asNumber(saved?.agent?.maxCostUsd, 0, 0, 100000),
+      maxTotalTokens: asNumber(saved?.agent?.maxTotalTokens, 0, 0, 1e12),
+      defaultEnvironment: asEnum(
+        saved?.agent?.defaultEnvironment, ['test', 'prod'] as const, 'test'),
+      prodConfirm: asBool(saved?.agent?.prodConfirm, true),
     },
     postProcess: {
-      enabled: saved?.postProcess?.enabled ?? true,
-      generateTitle: saved?.postProcess?.generateTitle ?? true,
-      extractMemory: saved?.postProcess?.extractMemory ?? true,
-      generateSkill: saved?.postProcess?.generateSkill ?? true,
+      enabled: asBool(saved?.postProcess?.enabled, true),
+      generateTitle: asBool(saved?.postProcess?.generateTitle, true),
+      extractMemory: asBool(saved?.postProcess?.extractMemory, true),
+      generateSkill: asBool(saved?.postProcess?.generateSkill, true),
     },
     memory: {
-      enabled: saved?.memory?.enabled ?? true,
-      maxItems: saved?.memory?.maxItems ?? 100,
-      injectBudgetTokens: saved?.memory?.injectBudgetTokens ?? 1500,
-      blocksBudgetTokens: saved?.memory?.blocksBudgetTokens ?? 1200,
-      searchTimeoutS: saved?.memory?.searchTimeoutS ?? 8,
-      reconcileLlmEnabled: saved?.memory?.reconcileLlmEnabled ?? true,
+      enabled: asBool(saved?.memory?.enabled, true),
+      maxItems: asNumber(saved?.memory?.maxItems, 100, 10, 500),
+      injectBudgetTokens: asNumber(saved?.memory?.injectBudgetTokens, 1500, 200, 8000),
+      blocksBudgetTokens: asNumber(saved?.memory?.blocksBudgetTokens, 1200, 200, 8000),
+      searchTimeoutS: asNumber(saved?.memory?.searchTimeoutS, 8, 0.5, 30),
+      reconcileLlmEnabled: asBool(saved?.memory?.reconcileLlmEnabled, true),
     },
     appearance: {
-      theme: saved?.appearance?.theme ?? 'dark',
-      accent: saved?.appearance?.accent ?? 'blue',
-      uiFontSize: savedAppearance.uiFontSize ?? savedAppearance.fontSize ?? 13,
-      animation: saved?.appearance?.animation ?? true,
-      backgroundEnabled: saved?.appearance?.backgroundEnabled ?? false,
-      backgroundImage: saved?.appearance?.backgroundImage ?? '',
-      backgroundVersion: saved?.appearance?.backgroundVersion ?? 0,
-      backgroundOpacity: saved?.appearance?.backgroundOpacity ?? 80,
-      backgroundOverlay: saved?.appearance?.backgroundOverlay ?? 60,
-      themeGradientEnabled: saved?.appearance?.themeGradientEnabled ?? false,
-      themeGradientStrength: saved?.appearance?.themeGradientStrength ?? 30,
-      themeGradientMode: saved?.appearance?.themeGradientMode ?? 'glow',
-      themeGradientDirection: saved?.appearance?.themeGradientDirection ?? 'tb',
-      themeGradientStartColor: saved?.appearance?.themeGradientStartColor ?? '',
-      themeGradientEndColor: saved?.appearance?.themeGradientEndColor ?? '',
+      theme: asEnum(saved?.appearance?.theme, THEMES, 'dark'),
+      accent: asEnum(saved?.appearance?.accent, ACCENTS, 'blue'),
+      uiFontSize: asNumber(savedAppearance.uiFontSize ?? savedAppearance.fontSize, 13, 12, 15),
+      animation: asBool(saved?.appearance?.animation, true),
+      backgroundEnabled: asBool(saved?.appearance?.backgroundEnabled, false),
+      backgroundImage: asString(saved?.appearance?.backgroundImage, ''),
+      backgroundVersion: asNumber(saved?.appearance?.backgroundVersion, 0, 0, Number.MAX_SAFE_INTEGER),
+      backgroundOpacity: asNumber(saved?.appearance?.backgroundOpacity, 80, 0, 100),
+      backgroundOverlay: asNumber(saved?.appearance?.backgroundOverlay, 60, 0, 100),
+      themeGradientEnabled: asBool(saved?.appearance?.themeGradientEnabled, false),
+      themeGradientStrength: asNumber(saved?.appearance?.themeGradientStrength, 30, 0, 100),
+      themeGradientMode: asEnum(saved?.appearance?.themeGradientMode, GRADIENT_MODES, 'glow'),
+      themeGradientDirection: asEnum(
+        saved?.appearance?.themeGradientDirection, GRADIENT_DIRECTIONS, 'tb'),
+      themeGradientStartColor: asString(saved?.appearance?.themeGradientStartColor, ''),
+      themeGradientEndColor: asString(saved?.appearance?.themeGradientEndColor, ''),
       terminal: {
-        fontSize: saved?.appearance?.terminal?.fontSize ?? 14,
-        fontFamily: saved?.appearance?.terminal?.fontFamily ?? 'jetbrains',
-        aiPredictionEnabled: saved?.appearance?.terminal?.aiPredictionEnabled ?? false,
+        fontSize: asNumber(saved?.appearance?.terminal?.fontSize, 14, 12, 18),
+        fontFamily: asString(saved?.appearance?.terminal?.fontFamily, 'jetbrains'),
+        aiPredictionEnabled: asBool(saved?.appearance?.terminal?.aiPredictionEnabled, false),
       },
     },
   })
@@ -220,51 +258,43 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
-  // debounce 的代价：改完设置立刻关窗（<300ms）这次改动就永久丢了 ——
-  // 外观/对话/运行预算这些都是纯本地设置，丢了用户完全无感，只会以为没保存过。
-  // pagehide 是 Chromium 渲染进程里最可靠的收尾点（beforeunload 需返回值才触发）。
-  // 可选链：单测的 window 垫片只有 setTimeout/clearTimeout。
-  const flushOnPageHide = () => {
-    clearTimeout(saveTimer)
-    persistSettings()
-  }
-  window.addEventListener?.('pagehide', flushOnPageHide)
-  onScopeDispose(() => window.removeEventListener?.('pagehide', flushOnPageHide))
-
-  // 记忆设置变更时同步到后端
-  let memorySyncTimer: number | undefined
-  // 后端回填不算用户改动：loadMemorySettings 写这几个字段会惊动 deep watch，
-  // 于是启动时把刚读到的值原样 POST 回去（白写一次）；响应缺字段时更会把
-  // undefined 落进本地、再推给后端 —— 一次异常响应就污染设置。
-  let applyingRemoteMemory = false
-  // 上一成功同步到后端的快照：sync 失败时把本地回滚到这里，
+  // 记忆后端同步：debounce 到期与 pagehide 强 flush 共用同一实现。
+  // applyingRemoteMemory：后端回填不算用户改动——loadMemorySettings 写这几个
+  // 字段会惊动 deep watch，于是启动时把刚读到的值原样 POST 回去（白写一次）；
+  // 响应缺字段时更会把 undefined 落进本地、再推给后端——一次异常响应就污染设置。
+  // lastSyncedMemory：上一成功同步的快照，sync 失败时本地回滚到这里，
   // 否则"UI 显示新值 / DB 仍是旧值"的静默背离会长期存在。
+  let memorySyncTimer: number | undefined
+  let applyingRemoteMemory = false
   let lastSyncedMemory: AppSettings['memory'] = { ...settings.value.memory }
+  async function syncMemoryToBackend() {
+    const mem = { ...settings.value.memory }
+    try {
+      await agentApi.updateMemorySettings({
+        enabled: mem.enabled,
+        max_items: mem.maxItems,
+        inject_budget_tokens: mem.injectBudgetTokens,
+        blocks_budget_tokens: mem.blocksBudgetTokens,
+        search_timeout_s: mem.searchTimeoutS,
+        reconcile_llm_enabled: mem.reconcileLlmEnabled,
+      })
+      lastSyncedMemory = mem
+    } catch (e) {
+      const toast = useToastStore()
+      const msg = e instanceof Error ? e.message : String(e)
+      // 回滚本身要走 settings 响应式；先置闸门吞掉 watch，等本轮 watcher 冲刷完再放开
+      applyingRemoteMemory = true
+      settings.value.memory = { ...lastSyncedMemory }
+      window.setTimeout(() => { applyingRemoteMemory = false }, 0)
+      toast.error(`记忆设置同步失败，已回滚: ${msg}`, 5000)
+    }
+  }
   watch(
     () => settings.value.memory,
-    (mem) => {
+    () => {
       if (applyingRemoteMemory) return
       clearTimeout(memorySyncTimer)
-      memorySyncTimer = window.setTimeout(() => {
-        agentApi.updateMemorySettings({
-          enabled: mem.enabled,
-          max_items: mem.maxItems,
-          inject_budget_tokens: mem.injectBudgetTokens,
-          blocks_budget_tokens: mem.blocksBudgetTokens,
-          search_timeout_s: mem.searchTimeoutS,
-          reconcile_llm_enabled: mem.reconcileLlmEnabled,
-        }).then(() => {
-          lastSyncedMemory = { ...settings.value.memory }
-        }).catch((e) => {
-          const toast = useToastStore()
-          const msg = e instanceof Error ? e.message : String(e)
-          // 回滚本身要走 settings 响应式；先置闸门吞掉 watch，等本轮 watcher 冲刷完再放开
-          applyingRemoteMemory = true
-          settings.value.memory = { ...lastSyncedMemory }
-          window.setTimeout(() => { applyingRemoteMemory = false }, 0)
-          toast.error(`记忆设置同步失败，已回滚: ${msg}`, 5000)
-        })
-      }, 500)
+      memorySyncTimer = window.setTimeout(() => void syncMemoryToBackend(), 500)
     },
     { deep: true }
   )
@@ -288,37 +318,57 @@ export const useSettingsStore = defineStore('settings', () => {
     finally { applyingRemoteMemory = false }
   }
 
-  // 后处理设置变更时同步到后端
+  // 后处理后端同步：与 syncMemoryToBackend 同型（闸门/基线/回滚口径一致）
   let postProcessSyncTimer: number | undefined
-  // 同 applyingRemoteMemory：后端回填不回写、且只接受布尔字段
   let applyingRemotePostProcess = false
-  // 同 lastSyncedMemory：sync 失败回滚基线
   let lastSyncedPostProcess: AppSettings['postProcess'] = { ...settings.value.postProcess }
+  async function syncPostProcessToBackend() {
+    const pp = { ...settings.value.postProcess }
+    try {
+      await api.updatePostProcessSettings({
+        enabled: pp.enabled,
+        generate_title: pp.generateTitle,
+        extract_memory: pp.extractMemory,
+        generate_skill: pp.generateSkill,
+      })
+      lastSyncedPostProcess = pp
+    } catch (e) {
+      // C35 修复：用 toFriendlyMessage 转换，不再暴露原始 e.message（技术细节）
+      const toast = useToastStore()
+      applyingRemotePostProcess = true
+      settings.value.postProcess = { ...lastSyncedPostProcess }
+      window.setTimeout(() => { applyingRemotePostProcess = false }, 0)
+      toast.error(`${toFriendlyMessage(e, '后处理设置同步失败')}，已回滚`, 5000)
+    }
+  }
   watch(
     () => settings.value.postProcess,
-    (pp) => {
+    () => {
       if (applyingRemotePostProcess) return
       clearTimeout(postProcessSyncTimer)
-      postProcessSyncTimer = window.setTimeout(() => {
-        api.updatePostProcessSettings({
-          enabled: pp.enabled,
-          generate_title: pp.generateTitle,
-          extract_memory: pp.extractMemory,
-          generate_skill: pp.generateSkill,
-        }).then(() => {
-          lastSyncedPostProcess = { ...settings.value.postProcess }
-        }).catch((e) => {
-          // C35 修复：用 toFriendlyMessage 转换，不再暴露原始 e.message（技术细节）
-          const toast = useToastStore()
-          applyingRemotePostProcess = true
-          settings.value.postProcess = { ...lastSyncedPostProcess }
-          window.setTimeout(() => { applyingRemotePostProcess = false }, 0)
-          toast.error(`${toFriendlyMessage(e, '后处理设置同步失败')}，已回滚`, 5000)
-        })
-      }, 500)
+      postProcessSyncTimer = window.setTimeout(() => void syncPostProcessToBackend(), 500)
     },
     { deep: true }
   )
+
+  // debounce 的代价：改完设置立刻关窗（<300ms）这次改动就永久丢了 ——
+  // 外观/对话/运行预算这些都是纯本地设置，丢了用户完全无感，只会以为没保存过。
+  // pagehide 是 Chromium 渲染进程里最可靠的收尾点（beforeunload 需返回值才触发）。
+  // 后端同步分区同理要 flush：否则本地 localStorage 拿新值、后端停在旧值，
+  // 下次启动 load*Settings 以后端为准把改动静默冲掉（原实现只保住了 localStorage 半边）。
+  // 可选链：单测的 window 垫片只有 setTimeout/clearTimeout。
+  const flushOnPageHide = () => {
+    clearTimeout(saveTimer)
+    clearTimeout(memorySyncTimer)
+    clearTimeout(postProcessSyncTimer)
+    persistSettings()
+    // fire-and-forget：sync 实现内部自带 catch→回滚→toast；关窗场景 toast/toFriendly
+    // 均无意义，渲染进程拆除可能掐断在途 fetch，属尽力而为（比原样丢 500ms 窗口好）。
+    void syncMemoryToBackend()
+    void syncPostProcessToBackend()
+  }
+  window.addEventListener?.('pagehide', flushOnPageHide)
+  onScopeDispose(() => window.removeEventListener?.('pagehide', flushOnPageHide))
 
   // 初始化时从后端加载后处理设置（字段缺失/类型不对就保留本地值，不写回后端）
   async function loadPostProcessSettings() {
@@ -402,12 +452,14 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   /**
-   * A1：把某条模型设为 SSH 模式默认。后端会原子清掉其他条的 is_default_ssh
-   * （db.set_default_model），所以本地只需重新拉列表即可让卡片徽标同步。
+   * A1：把某条模型设为默认。mode='ssh' 写 is_default_ssh（对话/终端/定时任务读它），
+   * mode='global' 写 is_default（SSH 档未设时后处理与 terminal 的兜底链读它）。
+   * 后端两档都是"原子清其他 + 置一"（db.set_default_model），所以本地只需重新拉列表
+   * 即可让卡片徽标同步。
    */
-  async function setDefaultModel(id: string): Promise<boolean> {
+  async function setDefaultModel(id: string, mode: ModelDefaultMode = 'ssh'): Promise<boolean> {
     try {
-      await api.setDefaultModel(id)
+      await api.setDefaultModel(id, mode)
       await fetchModelConfigs()
       // 模型选择器与 ssh-ai store 各自缓存了默认模型的 id，切换后必须刷新，
       // 否则 ChatPanel 顶部仍显示旧模型、下一次运行仍走旧 endpoint

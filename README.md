@@ -211,6 +211,7 @@ cKunAgentSSH/
 │   ├── logconfig.py                   # 后端日志级别与 root handler
 │   ├── sse_utils.py                   # SSE 工具函数
 │   ├── requirements.txt               # Python 依赖
+│   ├── requirements-dev.txt           # 测试依赖（pytest / pytest-asyncio）
 │   ├── requirements-optional.txt      # 可选依赖（trafilatura 网页正文提取）
 │   │
 │   ├── agent/                         # Agent 智能体框架
@@ -468,6 +469,9 @@ npm install
 
 # 安装 Python 依赖
 cd backend && pip install -r requirements.txt && cd ..
+
+# 跑后端测试还需要测试依赖（CI 的 ubuntu job 装同一份）
+cd backend && pip install -r requirements-dev.txt && cd ..
 
 # 可选：web_fetch 工具增强（网页正文提取，未安装时自动降级）
 cd backend && pip install -r requirements-optional.txt && cd ..

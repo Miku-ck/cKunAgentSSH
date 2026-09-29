@@ -274,6 +274,9 @@ export interface ModelConfig {
   updated_at?: string
 }
 
+/** 默认模型档位：与后端 routes/settings.py 的 DefaultMode 逐字对应 */
+export type ModelDefaultMode = 'ssh' | 'global'
+
 export interface ModelConfigPayload {
   name: string
   base_url: string
@@ -427,9 +430,11 @@ export const api = {
 
   // model_id 在 query（不是 path）—— 顺序敏感：FastAPI 里 default 那条必须
   // 注册在 /settings/models/{config_id} 之前，别改成 path 参数
-  setDefaultModel: (modelId: string) => {
-    const q = new URLSearchParams({ model_id: modelId })
-    return request<{ default: string; mode: string }>(`/settings/models/default?${q.toString()}`, {
+  // mode：'ssh' 写 is_default_ssh（对话/终端/定时任务档），'global' 写 is_default
+  // （SSH 档未设时后处理与 terminal 兜底链读的档）。不传 = 'ssh'，与 A1 控件同口径。
+  setDefaultModel: (modelId: string, mode: ModelDefaultMode = 'ssh') => {
+    const q = new URLSearchParams({ model_id: modelId, mode })
+    return request<{ default: string; mode: ModelDefaultMode }>(`/settings/models/default?${q.toString()}`, {
       method: 'PATCH',
     })
   },
@@ -1011,8 +1016,8 @@ export interface MemorySettings {
 }
 
 export const agentApi = {
-  // 记忆设置 —— 字段与后端 MemorySettingsRequest 一一对应：PUT 是全字段覆盖，
-  // 少传一个就等于把后端那一项静默重置回默认值。
+  // 记忆设置 —— 后端 MemorySettingsRequest 全字段 Optional：不传 = 不改。
+  // 这里仍按完整对象提交（面板一次编辑整组），类型保持必填以防漏项静默保留旧值。
   getMemorySettings: () =>
     request<MemorySettings>('/settings/memory'),
 

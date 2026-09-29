@@ -3,6 +3,10 @@
     <header class="panel-header">
       <h3>模型</h3>
       <p class="panel-desc">管理 LLM 提供商与模型配置</p>
+      <p class="panel-desc">
+        两档默认互不影响：★ SSH 默认 = 对话 / 终端 / 定时任务读的那档；
+        ⊕ 全局默认 = SSH 档未设时，起标题等后台链路兜底读的那档。
+      </p>
     </header>
 
     <div class="panel-body">
@@ -58,11 +62,23 @@
                 class="btn-icon"
                 :class="{ 'btn-icon-default-active': m.is_default_ssh }"
                 :title="m.is_default_ssh ? '已是 SSH 默认模型' : '设为 SSH 默认模型'"
-                :disabled="m.is_default_ssh || defaultingIds.has(m.id)"
-                @click="handleSetDefault(m)"
+                :disabled="m.is_default_ssh || defaultingIds.has(key(m.id, 'ssh'))"
+                @click="handleSetDefault(m, 'ssh')"
               >
-                <svg v-if="defaultingIds.has(m.id)" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/></svg>
+                <svg v-if="defaultingIds.has(key(m.id, 'ssh'))" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/></svg>
                 <svg v-else viewBox="0 0 24 24" width="14" height="14" :fill="m.is_default_ssh ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+              </button>
+              <!-- C9：全局默认（is_default）。此前 UI 只能写 SSH 档，而全局档是活消费者
+                   （后处理起标题、terminal/agent 在 SSH 档未设时的兜底链）——看得到回落却调不到。 -->
+              <button
+                class="btn-icon"
+                :class="{ 'btn-icon-default-active': m.is_default }"
+                :title="m.is_default ? '已是全局默认模型' : '设为全局默认模型'"
+                :disabled="m.is_default || defaultingIds.has(key(m.id, 'global'))"
+                @click="handleSetDefault(m, 'global')"
+              >
+                <svg v-if="defaultingIds.has(key(m.id, 'global'))" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/></svg>
+                <svg v-else viewBox="0 0 24 24" width="14" height="14" :fill="m.is_default ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
               </button>
               <button class="btn-icon" title="编辑" @click="openEditDialog(m)">
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
@@ -301,7 +317,7 @@ import { reactive, ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
-import type { ModelConfig } from '@/api/client'
+import type { ModelConfig, ModelConfigPayload, ModelDefaultMode } from '@/api/client'
 
 const store = useSettingsStore()
 const toast = useToastStore()
@@ -472,7 +488,7 @@ async function doSave() {
   form.temperature = clampNum(form.temperature, 0.7, 0, 2)
   form.max_tokens = clampNum(form.max_tokens, DEFAULT_CONTEXT_TOKENS, 1, 1000000)
   form.max_output_tokens = clampNum(form.max_output_tokens, DEFAULT_OUTPUT_TOKENS, 1, 1000000)
-  const payload: any = {
+  const payload: ModelConfigPayload = {
     name: trim(form.name),
     base_url: trim(form.base_url),
     model_id: trim(form.model_id),  // 始终发送字符串（含空串），确保清空也能落库
@@ -540,22 +556,32 @@ async function handleDelete(id: string, name: string) {
   }
 }
 
-// ── A1：设为 SSH 默认 ──
+// ── A1 / C9：设为默认（两档）──
 // 审查R2修复：单值 defaultingId 在并发设置时会互相清忙态（后发起的把前一个的
-// 忙标记顶掉，前一个完成后又置空 → 还在跑的条目丢转圈/按钮重新可点），改 Set 增删
+// 忙标记顶掉，前一个完成后又置空 → 还在跑的条目丢转圈/按钮重新可点），改 Set 增删。
+// round 22 起同一张卡有两枚控件（ssh / global），键必须带档位，否则两枚互相顶忙态。
 const defaultingIds = ref(new Set<string>())
-async function handleSetDefault(m: ModelConfig) {
+const key = (id: string, mode: ModelDefaultMode) => `${id}:${mode}`
+
+const DEFAULT_MODE_LABEL: Record<ModelDefaultMode, string> = {
+  ssh: 'SSH',
+  global: '全局',
+}
+
+async function handleSetDefault(m: ModelConfig, mode: ModelDefaultMode) {
+  const label = DEFAULT_MODE_LABEL[mode]
   const ok = await confirm({
-    title: '设为 SSH 默认模型',
-    message: `将「${m.name}」设为 SSH 模式默认模型？当前默认会被取消，下一次 Agent 运行即生效。`,
+    title: `设为 ${label} 默认模型`,
+    message: `将「${m.name}」设为${label}模式默认模型？当前${label}默认会被取消，下一次相关调用即生效。`,
     confirmText: '设为默认',
   })
   if (!ok) return
-  defaultingIds.value.add(m.id)
-  const success = await store.setDefaultModel(m.id)
-  defaultingIds.value.delete(m.id)
+  const k = key(m.id, mode)
+  defaultingIds.value.add(k)
+  const success = await store.setDefaultModel(m.id, mode)
+  defaultingIds.value.delete(k)
   if (success) {
-    toast.success(`「${m.name}」已设为 SSH 默认`)
+    toast.success(`「${m.name}」已设为${label}默认`)
   } else {
     toast.error(store.modelsError || '设置默认模型失败', 6000)
   }

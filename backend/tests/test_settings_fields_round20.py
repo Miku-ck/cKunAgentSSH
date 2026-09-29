@@ -118,17 +118,19 @@ def test_post_process_restart_reads_same(client, clean_pp_config):
     assert fresh.skill_interval == pp.PostProcessConfig().skill_interval
 
 
-def test_post_process_partial_payload_fills_defaults(client, clean_pp_config):
-    """请求体四个字段都有默认值 True：只发一项 = 其余三项被打开并落库。
+def test_post_process_partial_payload_keeps_other_switches(client, clean_pp_config):
+    """契约变更（round 22）：四字段全 Optional，只发一项 = 只改那一项。
 
-    前端始终整包提交（AgentPanel 传满四个键），这里把语义钉住 —— 哪天有人
-    改成增量提交，就会静默把没带的开关打开。
+    这里原本钉的是"四字段都有默认值 True，只发一项会把其余三项静默打开并落库"，
+    并以此警告别改成增量提交。改成 Optional 才是安全方向：前端本来就整包提交，
+    增量语义只会影响 API 调用方，而"少传即打开"对调用方是不可见的枪。
+    现契约由 tests/test_settings_contract_round22.py 整体钉住。
     """
     client.put("/api/settings/post-process", json={
         "enabled": True, "generate_title": False, "extract_memory": False, "generate_skill": False})
     r = client.put("/api/settings/post-process", json={"enabled": False})
-    assert r.json() == {"enabled": False, "generate_title": True,
-                        "extract_memory": True, "generate_skill": True}
+    assert r.json() == {"enabled": False, "generate_title": False,
+                        "extract_memory": False, "generate_skill": False}
     assert client.get("/api/settings/post-process").json() == r.json()
 
 

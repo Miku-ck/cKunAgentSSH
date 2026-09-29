@@ -59,16 +59,26 @@ class UpdateModelRequest(BaseModel):
 
 # ── 模型配置 CRUD ──
 
+# 默认档位：ssh = SSH_MODE（对话/终端/定时任务用的档），global = is_default 全局档。
+# 全局档不是历史包袱：post_processor、terminal/agent 的兜底链在"SSH 档没设"时读它，
+# 但设置页此前只能写 SSH 档 —— 用户看得到回落却调不到它。现在两档都可设。
+DefaultMode = Literal["ssh", "global"]
+
+
 # 注意：/settings/models/default 必须注册在 /settings/models/{config_id} 之前，
 # 否则 FastAPI 按注册顺序匹配时 "default" 会被 {config_id} 路径先捕获导致功能失效。
 @router.patch("/settings/models/default")
-def set_default_model(model_id: str = Query(..., description="要设为默认的模型 id")):
-    """设置默认模型"""
+def set_default_model(
+    model_id: str = Query(..., description="要设为默认的模型：行主键 id 或 LLM 模型名皆可"),
+    mode: DefaultMode = Query(SSH_MODE, description="默认档位：ssh（默认）或 global"),
+):
+    """设置默认模型。不传 mode = SSH 档（与 round 18 的前端控件同口径）。"""
+    try:
+        db.set_default_model(model_id, mode=None if mode == "global" else SSH_MODE)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     model = db.get_model_config(model_id)
-    if not model:
-        raise HTTPException(status_code=404, detail="Model not found")
-    db.set_default_model(model_id, mode=SSH_MODE)
-    return {"default": model_id, "mode": SSH_MODE}
+    return {"default": (model or {}).get("id") or model_id, "mode": mode}
 
 
 @router.get("/settings/models/default")
@@ -245,15 +255,18 @@ async def test_model_connection(config_id: str):
 
 
 class MemorySettingsRequest(BaseModel):
-    enabled: bool = True
-    max_items: int = Field(100, ge=10, le=500)
+    """记忆设置写入体。全字段 Optional =「不传 = 不改」（与 /settings/http 同款契约）：
+    带默认值的请求模型会让只发一项的调用把其余五项静默抹回默认。
+    """
+    enabled: Optional[bool] = None
+    max_items: Optional[int] = Field(None, ge=10, le=500)
     # 两条注入通道分账的 token 预算：画像块（常驻）与检索注入（每轮按相关性）
-    inject_budget_tokens: int = Field(1500, ge=200, le=8000)
-    blocks_budget_tokens: int = Field(1200, ge=200, le=8000)
+    inject_budget_tokens: Optional[int] = Field(None, ge=200, le=8000)
+    blocks_budget_tokens: Optional[int] = Field(None, ge=200, le=8000)
     # 预检索等待上限：embedding API 慢时用户在等 SSE 首字节，上限越短越早放弃
-    search_timeout_s: float = Field(8.0, ge=0.5, le=30.0)
+    search_timeout_s: Optional[float] = Field(None, ge=0.5, le=30.0)
     # 关掉 = 后台整理只做阈值去重，不调模型；记忆仍会写入，只是不再消解矛盾
-    reconcile_llm_enabled: bool = True
+    reconcile_llm_enabled: Optional[bool] = None
 
 
 @router.get("/settings/memory")
@@ -264,15 +277,24 @@ def get_memory_settings():
 
 @router.put("/settings/memory")
 def update_memory_settings(req: MemorySettingsRequest):
-    """更新记忆设置"""
-    db.set_app_setting("memory.enabled", "true" if req.enabled else "false")
-    db.set_app_setting("memory.max_items", str(req.max_items))
-    db.set_app_setting("memory.inject_budget_tokens", str(req.inject_budget_tokens))
-    db.set_app_setting("memory.blocks_budget_tokens", str(req.blocks_budget_tokens))
-    db.set_app_setting("memory.search_timeout_s", str(req.search_timeout_s))
-    db.set_app_setting(
-        "memory.reconcile_llm_enabled", "true" if req.reconcile_llm_enabled else "false",
-    )
+    """更新记忆设置：未出现的键保持原值，整批单事务落库。"""
+    data = req.model_dump(exclude_none=True)  # 未出现的键 = 不改
+    updates: dict[str, str] = {}
+    for field in ("enabled", "reconcile_llm_enabled"):
+        if field in data:
+            updates[f"memory.{field}"] = "true" if data[field] else "false"
+    for field in ("max_items", "inject_budget_tokens", "blocks_budget_tokens",
+                  "search_timeout_s"):
+        if field in data:
+            updates[f"memory.{field}"] = str(data[field])
+    if updates:
+        # 与审批策略/HTTP 策略同款：逐条 set_app_setting 各自提交，中途一条失败
+        # 会留下「库里一半新一半旧」，而 GET 又把另一半当已生效报给面板。
+        try:
+            db.update_app_settings_bulk(updates)
+        except Exception as e:
+            raise HTTPException(
+                status_code=500, detail=f"记忆设置写入失败，已整体回滚: {e}")
     return db.get_memory_settings()
 
 
@@ -338,8 +360,10 @@ def update_permission_policy(req: PermissionPolicyRequest):
 # ── 会话保留清理（用户数据，默认关闭）──
 
 class ConversationRetentionRequest(BaseModel):
-    enabled: bool = False
-    keep_count: int = Field(1000, ge=0, le=100000)
+    # 全字段 Optional =「不传 = 不改」：keep_count 默认值若为 1000，只发 enabled 的
+    # 调用会把用户精心调过的保留条数静默改回去 —— 而这条开关打开后是会删会话的。
+    enabled: Optional[bool] = None
+    keep_count: Optional[int] = Field(None, ge=0, le=100000)
 
 
 @router.get("/settings/conv-retention")
@@ -351,8 +375,18 @@ def get_conv_retention():
 @router.put("/settings/conv-retention")
 def update_conv_retention(req: ConversationRetentionRequest):
     """更新会话保留设置。enabled=false（默认）时不做任何自动清理。"""
-    db.set_app_setting("conv_retention.enabled", "true" if req.enabled else "false")
-    db.set_app_setting("conv_retention.keep_count", str(req.keep_count))
+    data = req.model_dump(exclude_none=True)  # 未出现的键 = 不改
+    updates: dict[str, str] = {}
+    if "enabled" in data:
+        updates["conv_retention.enabled"] = "true" if data["enabled"] else "false"
+    if "keep_count" in data:
+        updates["conv_retention.keep_count"] = str(data["keep_count"])
+    if updates:
+        try:
+            db.update_app_settings_bulk(updates)
+        except Exception as e:
+            raise HTTPException(
+                status_code=500, detail=f"会话保留设置写入失败，已整体回滚: {e}")
     return db.get_conv_retention()
 
 
@@ -360,10 +394,16 @@ def update_conv_retention(req: ConversationRetentionRequest):
 
 
 class PostProcessSettingsRequest(BaseModel):
-    enabled: bool = True
-    generate_title: bool = True
-    extract_memory: bool = True
-    generate_skill: bool = True
+    """后处理开关写入体。全字段 Optional =「不传 = 不改」：四个字段都带默认 True
+    时，只发 enabled=false 的调用会把三个子任务开关静默打开。
+    """
+    enabled: Optional[bool] = None
+    generate_title: Optional[bool] = None
+    extract_memory: Optional[bool] = None
+    generate_skill: Optional[bool] = None
+
+
+_PP_KEYS = ("enabled", "generate_title", "extract_memory", "generate_skill")
 
 
 @router.get("/settings/post-process")
@@ -372,33 +412,32 @@ def get_post_process_settings():
     from post_processor import load_post_process_config_from_db
 
     cfg = load_post_process_config_from_db()
-    keys = ("enabled", "generate_title", "extract_memory", "generate_skill")
-    return {k: getattr(cfg, k) for k in keys}
+    return {k: getattr(cfg, k) for k in _PP_KEYS}
 
 
 @router.put("/settings/post-process")
 def update_post_process_settings(req: PostProcessSettingsRequest):
     """更新后处理设置并同步到全局 PostProcessConfig"""
-    from post_processor import set_post_process_config, PostProcessConfig
+    from post_processor import set_post_process_config, load_post_process_config_from_db
 
-    db.set_app_setting("post_process.enabled", "true" if req.enabled else "false")
-    db.set_app_setting("post_process.generate_title", "true" if req.generate_title else "false")
-    db.set_app_setting("post_process.extract_memory", "true" if req.extract_memory else "false")
-    db.set_app_setting("post_process.generate_skill", "true" if req.generate_skill else "false")
-
-    cfg = PostProcessConfig(
-        enabled=req.enabled,
-        generate_title=req.generate_title,
-        extract_memory=req.extract_memory,
-        generate_skill=req.generate_skill,
-    )
-    set_post_process_config(cfg)
-    return {
-        "enabled": cfg.enabled,
-        "generate_title": cfg.generate_title,
-        "extract_memory": cfg.extract_memory,
-        "generate_skill": cfg.generate_skill,
+    data = req.model_dump(exclude_none=True)  # 未出现的键 = 不改
+    updates = {
+        f"post_process.{k}": "true" if data[k] else "false"
+        for k in _PP_KEYS if k in data
     }
+    if updates:
+        # 逐条 set_app_setting 中途失败会留下「库里一半新一半旧」，而下面仍会把
+        # 全量新值推进内存 cfg —— GET 报的一半和实际跑的一半对不上。
+        try:
+            db.update_app_settings_bulk(updates)
+        except Exception as e:
+            raise HTTPException(
+                status_code=500, detail=f"后处理设置写入失败，已整体回滚: {e}")
+    # 与重启回填共用同一个读函数：两条路径若各拼一次 cfg，非开关字段（超时/频率）
+    # 就会在 PUT 后被重置成 dataclass 默认，而重启后不是。
+    cfg = load_post_process_config_from_db()
+    set_post_process_config(cfg)
+    return {k: getattr(cfg, k) for k in _PP_KEYS}
 
 
 # ── 网络工具密钥（Tavily 等）──
@@ -452,15 +491,18 @@ class HttpSettingsRequest(BaseModel):
                                         description="传输层/5xx/429 重试次数；LLM 走 SDK max_retries")
 
 
-def _http_view() -> dict:
+async def _http_view() -> dict:
     # 展示**生效**策略（netconfig 已合并 env 兜底），不是库里的原始行：只看库的话，
     # 代理由 CKUN_HTTP_PROXY 注入的部署里面板会显示"无代理"，而请求其实都在走。
-    policy = netconfig.get_policy()
+    # 审查 M-13 补漏：get_policy 首访会懒加载 load_policy_from_db（同步 SQLite 读），
+    # 本路由 async（httpx 异步探测才保持 async），同步读必须进线程池。
+    policy = (netconfig._policy if netconfig._loaded
+              else await asyncio.to_thread(netconfig.load_policy_from_db))
     return {
         # 与 api_key 同一套做法：只回脱敏形态，前端改代理时要显式重填
         "proxy_url_masked": netconfig.redact_proxy(policy["proxy_url"]),
         "proxy_url_set": bool(policy["proxy_url"]),
-        "proxy_source": _proxy_source(),
+        "proxy_source": await asyncio.to_thread(_proxy_source),
         "timeout_seconds": policy["timeout_seconds"],
         "retry_count": policy["retry_count"],
     }
@@ -478,7 +520,7 @@ def _proxy_source() -> str:
 @router.get("/settings/http")
 async def get_http_settings():
     """获取出站 HTTP 策略（代理只回脱敏值）。"""
-    return _http_view()
+    return await _http_view()
 
 
 @router.put("/settings/http")
@@ -489,7 +531,9 @@ async def update_http_settings(req: HttpSettingsRequest):
     在建 client 时就固化了；不清缓存，用户配好代理后仍会直连到后端重启为止。
     """
     data = req.model_dump(exclude_none=True)  # 未出现的键 = 不改
-    cur = netconfig.get_policy()
+    # 审查 M-13 补漏：本 handler 的同步 DB 读写（懒加载/整批落库）进线程池
+    cur = (netconfig._policy if netconfig._loaded
+           else await asyncio.to_thread(netconfig.load_policy_from_db))
     proxy = cur["proxy_url"]
     timeout = cur["timeout_seconds"]
     retries = cur["retry_count"]
@@ -514,14 +558,14 @@ async def update_http_settings(req: HttpSettingsRequest):
     if "retry_count" in data:
         updates["http.retry_count"] = str(retries)
     try:
-        db.update_app_settings_bulk(updates)
+        await asyncio.to_thread(db.update_app_settings_bulk, updates)
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"HTTP 策略写入失败，已整体回滚，运行时未变更: {e}")
     netconfig.set_policy(proxy, timeout, retries)
     from llm_adapter import invalidate_client_cache
     dropped = await invalidate_client_cache()
-    return {**_http_view(), "clients_rebuilt": dropped["dropped"]}
+    return {**(await _http_view()), "clients_rebuilt": dropped["dropped"]}
 
 
 # ── 日志级别（G9）──
@@ -551,11 +595,42 @@ def update_log_level(req: LogLevelRequest):
 # 键名含这些子串的 app_settings 值一律脱敏：代理 URL 可带密码、tavily/模型 key 是密钥
 _DIAG_SECRET_HINTS = ("api_key", "token", "secret", "password", "proxy")
 
+# 纯数值的设置键：值不可能是凭证，诊断面板要能读到真实读数。
+# 必须逐键列举，不能用前缀 —— models_config.api_key 这类键同样带点，而前缀放行会
+# 直接把明文密钥放出去。清单与 get_* 读取器一一对应（16 个 app_settings 键里
+# 9 个是数值/布尔，其余 7 个是开关与字符串）。
+_DIAG_NUMERIC_KEYS = frozenset({
+    "conv_retention.keep_count",
+    "http.retry_count",
+    "http.timeout_seconds",
+    "memory.blocks_budget_tokens",
+    "memory.inject_budget_tokens",
+    "memory.max_items",
+    "memory.search_timeout_s",
+    "permission.allowlist_ttl_hours",
+    "permission.approval_fallback_s",
+})
+
+
+def _is_numeric_setting_value(value: str) -> bool:
+    try:
+        float(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
 
 def _mask_value(key: str, value: str) -> str:
     lowered = key.lower()
     if "proxy" in lowered:
+        # 代理分支先于一切：口令可能是纯数字，不能让数值例外放它过去
         return netconfig.redact_proxy(value)
+    if lowered in _DIAG_NUMERIC_KEYS and _is_numeric_setting_value(value):
+        # `token` 这个 hint 会顺手命中 inject_budget_tokens / blocks_budget_tokens，
+        # 把纯数值预算掩成"已设置"等于让诊断面板读不到它最该读的读数。放行条件是
+        # 「在白名单里」且「值确实解析为数字」—— 两者缺一仍按密钥处理，所以一个
+        # 16 位纯数字的 tavily key 依旧被打码。
+        return value
     if any(h in lowered for h in _DIAG_SECRET_HINTS):
         # 与 web-tools 的密钥展示同一口径（前 4 后 4），两处两种掩码法只会让人猜不准
         return (value[:4] + "…" + value[-4:]) if len(value) > 12 else ("已设置" if value else "")
@@ -574,17 +649,24 @@ async def get_diagnostics():
     from agent.consciousness_tick import get_global_tick
     from agent.bridge_relay import get_bridge_relay
 
-    db_path = db.get_db_path() or app_config.db_path
+    # 审查 M-13 补漏：本 handler 的所有 SQLite 读写（含懒加载路径）进线程池，
+    # busy_timeout=5s 锁竞争时不再冻结事件循环（SSE/agent 流同循环共生）。
+    db_path = await asyncio.to_thread(db.get_db_path) or app_config.db_path
     size_bytes = None
-    try:
-        size_bytes = os.path.getsize(db_path) if db_path and os.path.exists(db_path) else None
-    except OSError:
-        size_bytes = None
+    if db_path:
+        try:
+            size_bytes = await asyncio.to_thread(os.path.getsize, db_path)
+        except OSError:
+            size_bytes = None
 
     tick = get_global_tick()
     relay = get_bridge_relay()
-    snapshot = db.list_app_settings()
-    policy = netconfig.get_policy()
+    snapshot, counts, policy = await asyncio.gather(
+        asyncio.to_thread(db.list_app_settings),
+        asyncio.to_thread(db.diag_counts),
+        asyncio.to_thread(
+            netconfig.load_policy_from_db if not netconfig._loaded else netconfig.get_policy),
+    )
     # 读模块全局而不是 _get_global_permission_gate_sync()：后者会在诊断请求里顺手
     # 建一个 gate（加载 allowlist、跑一次过期剪枝），诊断面板不该有写副作用。
     import agent.harness.reins.gate as gate_mod
@@ -605,7 +687,7 @@ async def get_diagnostics():
         "database": {
             "path": db_path,
             "size_bytes": size_bytes,
-            "counts": db.diag_counts(),
+            "counts": counts,
         },
         "logging": {"level": logconfig.get_level(), "levels": list(logconfig.LEVELS)},
         "http": {
