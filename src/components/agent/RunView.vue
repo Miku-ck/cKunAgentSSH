@@ -18,7 +18,8 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import { useSSHStore } from '@/stores/ssh'
 import { approvalTargetLabel } from '@/utils/approval-display'
-import { buildTraceModel } from '@/utils/run-trace'
+import { buildTraceModel, mergeStream } from '@/utils/run-trace'
+import ApprovalCard from './ApprovalCard.vue'
 
 const agent = useAgentStore()
 const ssh = useSSHStore()
@@ -26,6 +27,8 @@ const ssh = useSSHStore()
 const emit = defineEmits<{ backHome: [] }>()
 
 const trace = computed(() => buildTraceModel(agent.toolCalls))
+/** 调用与待放行审批按时间归并成一条流（为什么不能把审批挂在调用上，见 mergeStream 注释） */
+const stream = computed(() => mergeStream(trace.value, agent.pendingPermissions))
 
 /** 步号读 iteration（后端循环计数器），不读 steps.length —— 只思考不调工具的迭代
  *  不产生条目，用数组下标当步号会跳号。 */
@@ -128,27 +131,33 @@ function stateOf(e: { result?: string; success?: boolean }): string {
     </header>
 
     <div class="rv-stream">
-      <article
-        v-for="e in trace.events"
-        :key="e.id"
-        class="rv-card"
-        :class="stateOf(e)"
-      >
-        <div class="rv-card-head">
-          <span class="tool mono">{{ e.tool }}</span>
-          <span v-if="e.iteration !== undefined" class="iter">第 {{ e.iteration + 1 }} 批</span>
-          <span v-if="e.durationMs !== undefined" class="dur mono">{{ (e.durationMs / 1000).toFixed(1) }}s</span>
-          <span v-if="stateOf(e) === 'failed'" class="tag bad">失败</span>
-          <span v-if="stateOf(e) === 'running'" class="tag run">执行中</span>
-        </div>
-        <code class="rv-cmd mono" :title="headline(e)">{{ headline(e) }}</code>
-        <details v-if="e.result" class="rv-out">
-          <summary>输出 {{ e.result.length }} 字</summary>
-          <pre class="mono">{{ e.result }}</pre>
-        </details>
-      </article>
+      <template v-for="item in stream" :key="item.key">
+        <article
+          v-if="item.kind === 'tool'"
+          class="rv-card"
+          :class="stateOf(item.entry)"
+        >
+          <div class="rv-card-head">
+            <span class="tool mono">{{ item.entry.tool }}</span>
+            <span v-if="item.entry.iteration !== undefined" class="iter">第 {{ item.entry.iteration + 1 }} 批</span>
+            <span v-if="item.entry.durationMs !== undefined" class="dur mono">{{ (item.entry.durationMs / 1000).toFixed(1) }}s</span>
+            <span v-if="stateOf(item.entry) === 'failed'" class="tag bad">失败</span>
+            <span v-if="stateOf(item.entry) === 'running'" class="tag run">执行中</span>
+          </div>
+          <code class="rv-cmd mono" :title="headline(item.entry)">{{ headline(item.entry) }}</code>
+          <details v-if="item.entry.result" class="rv-out">
+            <summary>输出 {{ item.entry.result.length }} 字</summary>
+            <pre class="mono">{{ item.entry.result }}</pre>
+          </details>
+        </article>
 
-      <p v-if="!trace.events.length" class="rv-empty">
+        <!-- 待放行：与侧栏托盘、首页队列同一张卡、同一个对象，在这儿批等于在那儿批 -->
+        <div v-else class="rv-approval">
+          <ApprovalCard :req="item.req" />
+        </div>
+      </template>
+
+      <p v-if="!stream.length" class="rv-empty">
         {{ agent.isRunning ? 'AI 正在思考，还没开始调用工具' : '这次运行没有产生工具调用' }}
       </p>
     </div>
@@ -236,8 +245,7 @@ function stateOf(e: { result?: string; success?: boolean }): string {
   gap: 9px;
 }
 .rv-card {
-  max-width: 940px;
-  padding: 9px 12px 10px;
+  max-width: 940px;  padding: 9px 12px 10px;
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
   border-left: 2px solid var(--border-default);
@@ -246,6 +254,8 @@ function stateOf(e: { result?: string; success?: boolean }): string {
 .rv-card.done { border-left-color: var(--status-success-border) }
 .rv-card.failed { border-left-color: var(--danger-border) }
 .rv-card.running { border-left-color: var(--accent-primary) }
+/* 内联审批卡与工具卡同宽，两种卡片在流里对齐成一条竖线 */
+.rv-approval { max-width: 940px }
 .rv-card-head {
   display: flex;
   align-items: center;

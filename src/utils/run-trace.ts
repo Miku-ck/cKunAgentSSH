@@ -102,3 +102,44 @@ export function buildTraceModel(entries: readonly TraceInputEntry[]): TraceModel
 
   return { events, steps, activeStepIndex }
 }
+
+/** 待决审批的最小形状 —— agent store 的 PermissionRequest 结构上满足它 */
+export interface TraceApprovalLike {
+  id: string
+  tool: string
+  command?: string
+  timestamp: number
+}
+
+/** 带审批项的流元素。A 用实际形状（agent 的 PermissionRequest）参数化，
+ *  消费方拿回来还能直接喂给审批卡组件，不用为了过类型再断言一次。 */
+export type TraceStreamItem<A extends TraceApprovalLike = TraceApprovalLike> =
+  | { kind: 'tool'; key: string; ts: number; stepIndex: number; entry: TraceEventView }
+  | { kind: 'approval'; key: string; ts: number; req: A }
+
+/**
+ * 把"工具调用"与"待你放行"归并成一条按时间往下长的流。
+ *
+ * 为什么不能把审批卡挂到"它挡住的那条调用"上：GateRein 是 PRE_TOOL_CALL 卡点
+ * （backend/agent/harness/reins/gate.py:79），permission_needed 在
+ * tool_call_start **之前** 就发出来了（driver.py:518 发事件、525 才发起调用）——
+ * 卡片出现的那一刻，前端根本还没有那条调用可挂。所以只能各按自己的时间戳落位。
+ */
+export function mergeStream<A extends TraceApprovalLike>(
+  model: TraceModel,
+  approvals: readonly A[],
+): TraceStreamItem<A>[] {
+  const items: TraceStreamItem<A>[] = model.events.map(e => ({
+    kind: 'tool',
+    key: `t:${e.id}`,
+    ts: e.timestamp,
+    stepIndex: e.stepIndex,
+    entry: e,
+  }))
+  for (const req of approvals) {
+    items.push({ kind: 'approval', key: `a:${req.id}`, ts: req.timestamp, req })
+  }
+  // 同毫秒时（工具刚回填、审批紧随其后）不让两类的相对次序随机：调用在前
+  return items.sort((a, b) => a.ts - b.ts
+    || (a.kind === b.kind ? 0 : a.kind === 'tool' ? -1 : 1))
+}

@@ -13,7 +13,7 @@
  *      事件流不能因此把先到的结果挪到后面。
  */
 import { describe, expect, it } from 'vitest'
-import { buildTraceModel, type TraceInputEntry } from '@/utils/run-trace'
+import { buildTraceModel, mergeStream, type TraceInputEntry } from '@/utils/run-trace'
 
 function entry(over: Partial<TraceInputEntry> & { tool: string }): TraceInputEntry {
   return { id: `e_${over.tool}_${Math.random()}`, timestamp: 0, ...over }
@@ -98,6 +98,47 @@ describe('步状态', () => {
   it('缺 success 的已回填条目算完成，不算失败', () => {
     const m = buildTraceModel([entry({ tool: 'a', iteration: 0, result: 'x' })])
     expect(m.steps[0].state).toBe('done')
+  })
+})
+
+describe('mergeStream：调用与审批按时间归并', () => {
+  const tool = (id: string, ts: number) => entry({ id, tool: 'shell_exec', timestamp: ts, iteration: 0, result: 'ok', success: true })
+  const model = (...entries: TraceInputEntry[]) => buildTraceModel(entries)
+
+  it('没有审批时顺序与事件流一致', () => {
+    const m = model(tool('t1', 10), tool('t2', 20))
+    const s = mergeStream(m, [])
+    expect(s.map(i => i.kind)).toEqual(['tool', 'tool'])
+    expect(s.map(i => i.key)).toEqual(['t:t1', 't:t2'])
+  })
+
+  it('审批按自己的时间戳插在两条调用之间', () => {
+    // 后端顺序如此：permission_needed 在 tool_call_start **之前** 发出
+    // （GateRein 是 PRE_TOOL_CALL 卡点），所以审批只能靠时间落位，
+    // 挂不到"那条正在执行的调用"上 —— 那一刻那条调用还不存在
+    const m = model(tool('t1', 10), tool('t2', 40))
+    const s = mergeStream(m, [{ id: 'p1', tool: 'shell_exec', command: 'systemctl restart nginx', timestamp: 25 }])
+    expect(s.map(i => i.kind)).toEqual(['tool', 'approval', 'tool'])
+    expect(s[1].key).toBe('a:p1')
+  })
+
+  it('同一时刻工具卡排在前，排序不抖动', () => {
+    const m = model(tool('t1', 10))
+    const s = mergeStream(m, [{ id: 'p1', tool: 'file_write', timestamp: 10 }])
+    expect(s.map(i => i.kind)).toEqual(['tool', 'approval'])
+  })
+
+  it('不修改传入的模型', () => {
+    const m = model(tool('t1', 10))
+    const before = JSON.stringify(m)
+    mergeStream(m, [{ id: 'p1', tool: 'a', timestamp: 5 }])
+    expect(JSON.stringify(m)).toBe(before)
+  })
+
+  it('工具项带上 stepIndex，时间线联动用得上', () => {
+    const m = model(tool('t1', 10))
+    const s = mergeStream(m, [])
+    expect(s[0].kind === 'tool' && s[0].stepIndex).toBe(0)
   })
 })
 
