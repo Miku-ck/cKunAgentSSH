@@ -179,6 +179,17 @@ export const useAgentStore = defineStore('agent', () => {
    * 与 snapshot 的 duration 同源同一格，两处不会量出两个时长。
    */
   const runStartedAt = ref(0)
+  /**
+   * 本次 run 的指令原文（runAgent 的 task 入参）。run-head 要显示它、run 标签
+   * 标题要摘要它，而这两个地方都不能去"当前会话的最后一条用户消息"里捞：
+   * 那条捞法在用户运行中切了会话之后就指向另一个会话（M-19 修的就是这类串台）。
+   * 与 runStartedAt 同性质 —— 按 run 覆写，_reset 不碰它（runAgent 紧跟着就写新值）。
+   */
+  const lastTask = ref('')
+  /** 本次 run 绑定的终端会话 id（runAgent 的 sshSessionId 入参）。
+   *  与 lastTask 同一个理由：run-head 的「目标主机」不能读"此刻的活动会话"，
+   *  运行中切了会话就会把主机 A 的 run 标成主机 B —— 用户据此批准的就是错的目标。 */
+  const lastSshSessionId = ref('')
 
   // 可见终端执行模式：交付编排器（模块级单例，跨组件共享）
   const agentDeliver = useAgentDeliver()
@@ -251,6 +262,8 @@ export const useAgentStore = defineStore('agent', () => {
     _reset()
 
     runStartedAt.value = Date.now()
+    lastTask.value = options.task
+    lastSshSessionId.value = options.sshSessionId || ''
 
     status.value = 'running'
     currentState.value = 'thinking'
@@ -770,6 +783,12 @@ export const useAgentStore = defineStore('agent', () => {
     content,
     reasoning,
     runStartedAt,
+    lastTask,
+    lastSshSessionId,
+    // 步号两项此前没导出：只有 snapshot() 这个一次性出口用得上，而 run-head 要
+    // 在运行中持续显示「第 n 步」
+    iteration,
+    totalIterations,
     toolCalls,
     warnings,
     errorMessage,

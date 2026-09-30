@@ -21,13 +21,28 @@
             v-for="s in store.sessions"
             :key="s.id"
             class="term-tab"
-            :class="{ active: s.id === store.activeSessionId && !showHome }"
+            :class="{ active: s.id === store.activeSessionId && terminalVisible }"
             @click="activateTerminal(s.id)"
             @contextmenu.prevent="showTabContextMenu($event, s.id)"
           >
             <IconMonitor v-if="s.type === 'remote'" :width="12" :height="12" :stroke-width="2" />
             <span class="tab-label">{{ s.name }}</span>
             <button class="tab-close" @click.stop="store.closeSession(s.id)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+
+          <!-- run 标签：本次运行的过程与轨迹，可关（关掉后凭 trace 号去历史找回） -->
+          <div
+            v-if="runTabVisible"
+            class="term-tab run-tab"
+            :class="{ active: showRun && activeNavPage === 'home' }"
+            :title="agentStore.lastTask"
+            @click="openRunView"
+          >
+            <span class="run-dot" :class="{ live: agentStore.isRunning }" aria-hidden="true"></span>
+            <span class="tab-label">{{ runTabTitle }}</span>
+            <button class="tab-close" @click.stop="closeRunView">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
@@ -39,15 +54,15 @@
 
       <!-- 内容区包装器: flex:1 + position:relative 为内部绝对定位提供参照 -->
       <div class="content-area">
-        <!-- 终端内容区 (始终渲染以保持终端实例, 首页标签活动时被盖住) -->
-        <div class="term-content" v-if="store.sessions.length > 0" v-show="!showHome">
+        <!-- 终端内容区 (始终渲染以保持终端实例, 首页/运行标签活动时被盖住) -->
+        <div class="term-content" v-if="store.sessions.length > 0" v-show="terminalVisible">
           <template v-for="s in store.sessions" :key="s.id">
 <LocalTerminal
 v-if="s.type === 'local'"
 :ref="(el) => { if (el) terminalRefs[s.id] = el; else delete terminalRefs[s.id] }"
 :pty-id="s.id"
 :shell="s.shell"
-:visible="s.id === store.activeSessionId && !showHome"
+:visible="s.id === store.activeSessionId && terminalVisible"
 v-show="s.id === store.activeSessionId"
 @exit="handleLocalExit(s.id, $event)"
 />
@@ -55,7 +70,7 @@ v-show="s.id === store.activeSessionId"
 v-if="s.type === 'remote'"
 :ref="(el) => { if (el) terminalRefs[s.id] = el; else delete terminalRefs[s.id] }"
 :ssh-id="s.id"
-:visible="s.id === store.activeSessionId && !showHome"
+:visible="s.id === store.activeSessionId && terminalVisible"
 v-show="s.id === store.activeSessionId"
 @close="handleRemoteClose(s.id)"
 />
@@ -98,6 +113,12 @@ v-show="s.id === store.activeSessionId"
           <HomeTargetTitle @bulk="showBulk = true" />
           <HomeCommandCard />
           <HomeApprovalQueue />
+        </div>
+
+        <!-- 运行视图：一条指令的过程与轨迹。挂在 SshView 层而不是侧栏 slot 里 ——
+             关掉 AI 面板也要能看过程（详见 RunView 头注）。 -->
+        <div v-if="showRun && activeNavPage === 'home'" class="run-page">
+          <RunView @back-home="goHome" />
         </div>
       </div>
 
@@ -156,7 +177,7 @@ v-show="s.id === store.activeSessionId"
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, nextTick, watch, defineAsyncComponent } from 'vue'
+import { onMounted, onUnmounted, ref, computed, nextTick, watch, defineAsyncComponent } from 'vue'
 import LocalTerminal from '@/components/ssh/LocalTerminal.vue'
 import RemoteTerminal from '@/components/ssh/RemoteTerminal.vue'
 import IconMonitor from '@/components/icons/IconMonitor.vue'
@@ -181,8 +202,10 @@ const SshAiPanel = defineAsyncComponent(() => import('@/components/ssh/SshAiPane
 const AuditView = defineAsyncComponent(() => import('@/views/ssh/AuditView.vue'))
 const SchedulesView = defineAsyncComponent(() => import('@/views/ssh/SchedulesView.vue'))
 const DashboardView = defineAsyncComponent(() => import('@/views/ssh/DashboardView.vue'))
+const RunView = defineAsyncComponent(() => import('@/components/agent/RunView.vue'))
 import { useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
+import { useAgentStore } from '@/stores/agent'
 import { useSettings } from '@/composables/useSettings'
 import { useCommandDelivery } from '@/composables/useCommandDelivery'
 import { useSshNavigation } from '@/composables/useSshNavigation'
@@ -191,6 +214,7 @@ import { qcHeightForAlign } from '@/utils/qc-align'
 
 const store = useSSHStore()
 const sshAiStore = useSshAiStore()
+const agentStore = useAgentStore()
 const { openSettings } = useSettings()
 
 // 终端组件引用映射（key: sessionId, value: 组件实例）
@@ -199,10 +223,14 @@ const terminalRefs: Record<string, any> = {}
 // 命令投递 + 终端聚焦（内部注册 ssh:focus-terminal / ssh:deliver-command 监听）
 const { focusActiveTerminal } = useCommandDelivery(terminalRefs)
 
-// 页面导航 + 终端生命周期 + 模态框 + 远程连接 + 首页/终端标签态
+// 页面导航 + 终端生命周期 + 模态框 + 远程连接 + 首页/运行/终端三态
 const {
-  showHome,
   homeTabActive,
+  showRun,
+  terminalVisible,
+  runTabVisible,
+  openRunView,
+  closeRunView,
   activeNavPage,
   showModal,
   editingConnection,
@@ -230,6 +258,15 @@ const {
 
 /** 首页目标菜单里「全部 N 台」拉起的批量下发弹窗 */
 const showBulk = ref(false)
+
+/**
+ * run 标签标题 = 指令首行摘要。task 里可能拼了附件正文（_sendAgentMessageInner
+ * 把附件内联进 task），所以只取首行再截断，全文在 run-head 与 title 提示里。
+ */
+const runTabTitle = computed(() => {
+  const line = (agentStore.lastTask || '运行').split('\n')[0].trim()
+  return line.length > 22 ? `${line.slice(0, 22)}…` : line
+})
 
 // ── sticky-visited 页面挂载闸门（配合上方 defineAsyncComponent）──
 type PageKey = typeof activeNavPage.value
@@ -467,6 +504,33 @@ defineExpose({
   padding: 48px 24px;
   overflow-y: auto;
   z-index: 10;
+}
+
+/* ─── Run View Page ─── */
+.run-page {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  display: flex;
+  overflow: hidden;
+  background: var(--bg-base);
+}
+
+/* run 标签的状态点：跑起来才闪，结束时静止 —— 与文案里的状态互为冗余 */
+.run-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+.run-dot.live { background: var(--accent-green); animation: run-pulse 1.1s steps(2, start) infinite }
+@keyframes run-pulse { 50% { opacity: .3 } }
+@media (prefers-reduced-motion: reduce) {
+  .run-dot.live { animation: none }
 }
 
 /* ─── RemoteManager Page ─── */

@@ -2,6 +2,7 @@
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { useSSHStore, type SSHConnection } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
+import { useAgentStore } from '@/stores/agent'
 import { useServerMonitorStore } from '@/stores/server-monitor'
 import { useSftpStore } from '@/stores/sftp'
 import { useToastStore } from '@/stores/toast'
@@ -20,6 +21,8 @@ export function useSshNavigation(
 ) {
   const store = useSSHStore()
   const sshAiStore = useSshAiStore()
+  // 只读 run 状态用于决定 run 标签该不该出现 —— 导航层不驱动运行，反过来才是
+  const agent = useAgentStore()
   const sftpStore = useSftpStore()
   const monitorStore = useServerMonitorStore()
   const toast = useToastStore()
@@ -39,9 +42,40 @@ export function useSshNavigation(
   /** 首页标签的点亮判定：独立页面（远程管理/SFTP/…）盖在上面时不该亮 */
   const homeTabActive = computed(() => showHome.value && activeNavPage.value === 'home')
 
+  // ─── 运行视图标签态（spec 2026-09-29 故事 15/21） ───
+  /**
+   * 运行视图是第三态（首页 / 运行 / 终端），与首页同样是盖在 term-content 之上的
+   * 浮层 —— 终端实例照样不能卸载。
+   */
+  const showRun = ref(false)
+  /** 用户手动关掉 run 标签：本次 run 不再自动出现（故事 21「关掉后凭 trace 号找回」） */
+  const runTabClosed = ref(false)
+  /** 终端是否真的显示中：首页/运行/独立页面任一盖着都不算 */
+  const terminalVisible = computed(() => !showHome.value && !showRun.value)
+  const runTabVisible = computed(
+    () => !runTabClosed.value && (agent.isRunning || agent.lastRunId !== ''),
+  )
+  // 新 run 起（含上一轮被关过）标签重新出现：lastRunId 在 _reset 里清空、
+  // 随后由 state 事件写回，所以它的每次变化都对应"有一轮新的东西可看"
+  watch(() => agent.lastRunId, () => { runTabClosed.value = false })
+
+  function openRunView() {
+    showRun.value = true
+    showHome.value = false
+    activeNavPage.value = 'home'
+  }
+
+  function closeRunView() {
+    showRun.value = false
+    runTabClosed.value = true
+    // 关掉没有"上一层"可回：终端此刻可能正被别的会话标签占着，跳过去等于把用户
+    // 刚在看的东西换掉，回首页是唯一不会猜错的目标
+    goHome()
+  }
+
   // 快捷命令条只在终端态出现（故事 23）：首页与独立页面都不占那 30px
   const showCommandBar = computed(() =>
-    store.activeSessionId !== '' && !homeTabActive.value && activeNavPage.value === 'home'
+    store.activeSessionId !== '' && terminalVisible.value && activeNavPage.value === 'home'
   )
 
   // 延迟聚焦定时器 ID 列表，组件卸载时清理
@@ -50,11 +84,13 @@ export function useSshNavigation(
   // ─── 页面切换 ───
   function goHome() {
     showHome.value = true
+    showRun.value = false
     activeNavPage.value = 'home'
   }
 
   function activateTerminal(sessionId: string) {
     showHome.value = false
+    showRun.value = false
     activeNavPage.value = 'home'
     store.switchSession(sessionId)
     // 等待 Vue 切换渲染后，让终端获取焦点，用户可立即输入
@@ -72,6 +108,7 @@ export function useSshNavigation(
       goHome()
     } else {
       showHome.value = true
+      showRun.value = false
       activeNavPage.value = 'remote-mgr'
       // 切到独立页面时自动收起 AI 助手面板（点 AI 图标可重新展开）
       sshAiStore.closeAiPanel()
@@ -84,6 +121,7 @@ export function useSshNavigation(
       return
     }
     showHome.value = true
+    showRun.value = false
     activeNavPage.value = 'sftp'
     // 切到独立页面时自动收起 AI 助手面板（点 AI 图标可重新展开）
     sshAiStore.closeAiPanel()
@@ -118,6 +156,7 @@ export function useSshNavigation(
       goHome()
     } else {
       showHome.value = true
+      showRun.value = false
       activeNavPage.value = 'audit'
       // 切到独立页面时自动收起 AI 助手面板（点 AI 图标可重新展开）
       sshAiStore.closeAiPanel()
@@ -129,6 +168,7 @@ export function useSshNavigation(
       goHome()
     } else {
       showHome.value = true
+      showRun.value = false
       activeNavPage.value = 'schedules'
       // 切到独立页面时自动收起 AI 助手面板（点 AI 图标可重新展开）
       sshAiStore.closeAiPanel()
@@ -140,6 +180,7 @@ export function useSshNavigation(
       goHome()
     } else {
       showHome.value = true
+      showRun.value = false
       activeNavPage.value = 'dashboard'
       // 切到独立页面时自动收起 AI 助手面板（点 AI 图标可重新展开）
       sshAiStore.closeAiPanel()
@@ -151,6 +192,7 @@ export function useSshNavigation(
     try {
       await store.createLocalTerminal(shellName)
       showHome.value = false
+      showRun.value = false
     } catch (err: any) {
       console.error('[openLocalShell] Failed:', shellName, err)
       toast.error(toFriendlyMessage(err, `${shellName} 打开失败`))
@@ -229,6 +271,7 @@ export function useSshNavigation(
       // 之上的绝对定位浮层（SshView.vue .rm-page z-index:10）。从 Remote Manager
       // 列表点连接时浮层不消失，新终端已经在跑却被自己来的那一页挡住。
       showHome.value = false
+      showRun.value = false
       activeNavPage.value = 'home'
       // 等待 Vue 渲染 RemoteTerminal 组件后，让终端获取焦点
       // C28 修复：定时器触发后自摘除
@@ -338,7 +381,12 @@ export function useSshNavigation(
 
   return {
     showHome,
+    showRun,
     homeTabActive,
+    terminalVisible,
+    runTabVisible,
+    openRunView,
+    closeRunView,
     activeNavPage,
     showAiPanel: sshAiStore.showAiPanel,
     showModal,

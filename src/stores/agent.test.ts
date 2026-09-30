@@ -485,6 +485,18 @@ describe('整程计时与每步耗时', () => {
     nowSpy.mockRestore()
   })
 
+  it('lastTask/lastSshSessionId 记的是本次 run 的入参，新一轮覆写', () => {
+    const store = useAgentStore()
+    store.runAgent({ task: '看看 web-01 内存', conversationId: 'c1', modelId: 'm1', sshSessionId: 's1' })
+    expect(store.lastTask).toBe('看看 web-01 内存')
+    expect(store.lastSshSessionId).toBe('s1')
+    // run-head 的指令原文与目标主机都读这两格，不去捞"当前会话最后一条消息 /
+    // 此刻的活动会话"—— 那两种捞法在运行中切了会话就指向另一个 run（M-19 同因）
+    store.runAgent({ task: '换一条：清磁盘', conversationId: 'c1', modelId: 'm1' })
+    expect(store.lastTask).toBe('换一条：清磁盘')
+    expect(store.lastSshSessionId).toBe('')
+  })
+
   it('tool_call_result 带的 duration_ms 落到该次调用上', () => {
     const { store, push } = startRun()
     push({ type: 'state', state: 'acting', iteration: 0, run_id: 'r1' })
