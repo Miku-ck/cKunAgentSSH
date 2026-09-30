@@ -16,7 +16,7 @@ import { api, workflowApi, type ChatAttachment, type WorkflowSnapshot } from '@/
 import { useChatPersistence } from '@/composables/useChatPersistence'
 import { useModelsStore } from './models'
 import { finalizeAgentMessage, type AgentMessage } from '@/utils/finalizeAgentMessage'
-import { resolveRunModes } from '@/utils/run-modes'
+import { resolveRunModes, type ApprovalKey, type PostureKey } from '@/utils/run-modes'
 import type { ModeConversation, ModeMessage } from '@/types/chat'
 
 // 后端 AgentRunRequest.task 的 max_length（routes/agent.py），与聊天输入框的
@@ -103,10 +103,26 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
 
   /** 原先是 SideChatPanel 的组件局部 ref，首页输入卡读不到；两处各持一档就是
    *  第二条通路。刻意不持久化 —— 与提升前一致：重启回到手动审批。 */
-  const approvalMode = ref<'normal' | 'auto'>('normal')
+  const approvalMode = ref<ApprovalKey>('normal')
 
-  function setApprovalMode(mode: 'normal' | 'auto') {
+  function setApprovalMode(mode: ApprovalKey) {
     approvalMode.value = mode
+  }
+
+  // ── 对话姿态（纵向轴，与审批档互不覆写） ──
+
+  /**
+   * 原先是 SideChatPanel.vue:649 的组件私有 ref。首页 ＋ 菜单要点「计划」，它与
+   * 审批档就是同一条理由：两处各存一份＝用户在首页点了计划、侧栏仍按未表态发送。
+   *
+   * 缺省是 null 而不是 'goal'：'goal' 起步配上 chip 的 × 写回 'goal'，chip 消失了
+   * 但后端一字未变（能关、关的是摆设）。未表态时 workflow_mode 省略、后端不注入
+   * 任何姿态段，与"用户没选"一致。刻意不持久化 —— 本次会话的意图，重启回默认。
+   */
+  const posture = ref<PostureKey | null>(null)
+
+  function setPosture(mode: PostureKey | null) {
+    posture.value = mode
   }
 
   // ── 会话 CRUD ──
@@ -629,6 +645,9 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     // ── 审批档 ──
     approvalMode,
     setApprovalMode,
+    // ── 对话姿态 ──
+    posture,
+    setPosture,
     createConversation,
     switchConversation,
     deleteConversation,

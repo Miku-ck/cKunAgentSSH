@@ -636,6 +636,7 @@ const CAP_KEYS: CapKey[] = ['goal', 'plan', 'plugin', 'skill']
 const showPlusMenu = ref(false)
 const plusActiveIdx = ref(0)
 
+const sshAi = useSshAiStore()
 /**
  * 当前对话姿态（可关的单选，缺省 null = 未表态）—— 对应主流 Agent 的模式选择器。
  * 只有「目标/计划」这类纵向姿态落进 activeMode（决定下一次消息注入的姿态）；
@@ -645,8 +646,15 @@ const plusActiveIdx = ref(0)
  * 缺省不是 'goal' 而是 null，是为了让「目标」chip 能被关掉：
  * 'goal' 起步 + × 写回 'goal'，chip 消失了但后端行为一字未变（能关、关的是摆设）。
  * 未表态时后端 workflow_mode 省略 → 不注入任何姿态段，与"用户没选"一致。
+ *
+ * 状态存在 ssh-ai store 而不是组件内，与审批档（见下方 approvalMode）同一条理由：
+ * 首页 ＋ 菜单也要点亮「计划」，两处各持一份就是第二条通路。变量名仍叫 activeMode ——
+ * 它在下面十几处带着"下一条消息注入哪个姿态"的语义，改名只会淹没真正的变化。
  */
-const activeMode = ref<PostureKey | null>(null)
+const activeMode = computed<PostureKey | null>({
+  get: () => sshAi.posture,
+  set: v => sshAi.setPosture(v),
+})
 
 /** aria-activedescendant 目标 id（与 / 技能菜单同一无障碍模式） */
 const plusActiveOptionId = computed(() => {
@@ -739,7 +747,6 @@ function pickCap(key: CapKey) {
  * stores/ssh-ai.ts 经 resolveRunModes(activeMode, approval) 派生 —— 这里是
  * **展示**同源（下拉文案 + 「计划」菜单项点亮），不存在自相矛盾的状态。
  */
-const sshAi = useSshAiStore()
 /** 档位存在 ssh-ai store 而非组件内：首页输入卡与这里必须共享同一档，
  *  各存一份就是第二条通路（用户在首页选「自动」、侧栏仍按「手动」发送）。 */
 const approvalMode = computed(() => sshAi.approvalMode)

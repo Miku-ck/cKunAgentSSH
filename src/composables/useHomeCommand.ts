@@ -3,8 +3,8 @@
  *
  * spec 2026-09-29-home-command-panel · 接缝 S3。刻意只做"下达"：
  * 发送一律走 useSshAiStore().sendMessage（唯一通路，内含模型有效性校验、会话
- * 创建、终端上下文采集与 resolveRunModes 装配），审批档读 store 而不是自己存
- * 一份 —— 首页与侧栏必须是同一档，否则用户在一处选了什么，另一处不算。
+ * 创建、终端上下文采集与 resolveRunModes 装配），审批档与姿态都读 store 而不是
+ * 自己存一份 —— 首页与侧栏必须是同一档，否则用户在一处选了什么，另一处不算。
  */
 import { computed, ref } from 'vue'
 import { useSshAiStore } from '@/stores/ssh-ai'
@@ -28,7 +28,12 @@ export function useHomeCommand() {
       toast.info('AI 正在运行中，请等待完成')
       return false
     }
-    if (!await sshAi.sendMessage(text, { approval: sshAi.approvalMode })) return false
+    // 审批档与姿态都取自 store：首页 ＋ 菜单点亮的东西必须真的随这次下达出去，
+    // 否则它只是首页的装饰（侧栏那条通路 SshAiPanel.vue:116 早就是这么传的）。
+    if (!await sshAi.sendMessage(text, {
+      approval: sshAi.approvalMode,
+      mode: sshAi.posture ?? undefined,
+    })) return false
     draft.value = ''
     return true
   }

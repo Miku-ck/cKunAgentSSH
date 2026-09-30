@@ -10,13 +10,18 @@ import { ref } from 'vue'
 
 const sendMessage = vi.fn(async () => true)
 const approvalMode = ref<'normal' | 'auto'>('normal')
+const posture = ref<'goal' | 'plan' | null>(null)
 const isRunning = ref(false)
 const info = vi.fn()
 
 // pinia 会把 store 里的 ref 解包成裸值，mock 必须同形：直接返回 ref 对象的话
 // `!agent.isRunning` 恒为 false（对象永远真值），测出来的是 mock 的假象。
 vi.mock('@/stores/ssh-ai', () => ({
-  useSshAiStore: () => ({ sendMessage, get approvalMode() { return approvalMode.value } }),
+  useSshAiStore: () => ({
+    sendMessage,
+    get approvalMode() { return approvalMode.value },
+    get posture() { return posture.value },
+  }),
 }))
 vi.mock('@/stores/agent', () => ({
   useAgentStore: () => ({ get isRunning() { return isRunning.value } }),
@@ -32,6 +37,7 @@ describe('useHomeCommand', () => {
     sendMessage.mockClear()
     info.mockClear()
     approvalMode.value = 'normal'
+    posture.value = null
     isRunning.value = false
   })
 
@@ -47,7 +53,20 @@ describe('useHomeCommand', () => {
     const c = useHomeCommand()
     c.draft.value = '  把 nginx worker_connections 提到 4096  '
     expect(await c.submit()).toBe(true)
-    expect(sendMessage).toHaveBeenCalledWith('把 nginx worker_connections 提到 4096', { approval: 'auto' })
+    expect(sendMessage).toHaveBeenCalledWith('把 nginx worker_connections 提到 4096', { approval: 'auto', mode: undefined })
+  })
+
+  it('＋ 菜单点亮的姿态随同一次下达出去', async () => {
+    // 审批档先例（be13504）已经证明：状态存在 store 里但下达时不带上，
+    // 首页选的东西就只是首页的装饰 —— 姿态这条轴要防的就是同一个错。
+    posture.value = 'plan'
+    const c = useHomeCommand()
+    c.draft.value = '看看 nginx 配置为什么报错'
+    expect(await c.submit()).toBe(true)
+    expect(sendMessage).toHaveBeenCalledWith(
+      '看看 nginx 配置为什么报错',
+      { approval: 'normal', mode: 'plan' },
+    )
   })
 
   it('发送成功后清空草稿', async () => {

@@ -60,3 +60,43 @@ describe('ssh-ai 审批档', () => {
     expect([...lsMap.keys()].filter(k => k.includes('approval'))).toHaveLength(0)
   })
 })
+
+/**
+ * 对话姿态（目标/计划）—— 故事 5 的 ＋ 菜单项要落在首页，而它原先是
+ * SideChatPanel.vue:649 的组件私有 ref。与审批档同一条理由：两处各存一份
+ * 就是第二条通路，用户在首页点「计划」、侧栏仍按未表态发送。
+ */
+describe('ssh-ai 姿态轴', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    lsMap.clear()
+  })
+
+  it('默认未表态（null），不是 goal —— 缺省 goal 会让「目标」chip 关不掉', () => {
+    expect(useSshAiStore().posture).toBeNull()
+  })
+
+  it('setPosture 点亮与退出', () => {
+    const store = useSshAiStore()
+    store.setPosture('plan')
+    expect(store.posture).toBe('plan')
+    store.setPosture(null)
+    expect(store.posture).toBeNull()
+  })
+
+  it('点亮计划不覆写审批档：休眠只发生在发送装配时，退出计划回到用户原档', () => {
+    const store = useSshAiStore()
+    store.setApprovalMode('auto')
+    store.setPosture('plan')
+    expect(store.approvalMode).toBe('auto')
+    store.setPosture(null)
+    expect(store.approvalMode).toBe('auto')
+  })
+
+  it('姿态与审批档互不落 localStorage（本次会话的意图，重启回默认）', () => {
+    const store = useSshAiStore()
+    store.setPosture('plan')
+    store.setApprovalMode('auto')
+    expect([...lsMap.keys()].filter(k => /approval|posture|mode/i.test(k))).toHaveLength(0)
+  })
+})

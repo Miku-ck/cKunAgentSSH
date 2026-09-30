@@ -2,10 +2,12 @@
 /**
  * 首页指令卡（spec 2026-09-29-home-command-panel · 用户故事 1–9）
  *
- * 只做下达：发送走 useHomeCommand → ssh-ai.sendMessage 这一条通路；审批档与
- * 模型都读 store 而不是组件内自存，保证首页选的东西在侧栏同样算数。
- * ＋ 菜单（技能 / 附件 / 终端选区）本片未接：那几项状态目前仍散在 SideChatPanel
- * 内部，先放个按不动的按钮就是假入口，留到后续切片一并提出来。
+ * 只做下达：发送走 useHomeCommand → ssh-ai.sendMessage 这一条通路；审批档、姿态
+ * 都读 store 而不是组件内自存，保证首页选的东西在侧栏同样算数。
+ *
+ * ＋ 菜单按"后端有消费者"筛过（spec 故事 5 的 2026-09-30 修订记着砍掉的三项与证据）：
+ * 这一片接 **计划姿态**，技能 / 终端现场 / 本地附件各是一片。菜单里没有的那几项
+ * 不是漏了 —— 是点亮后后端一字不变，那类开关在这仓里叫「亮的空开关」。
  */
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useHomeCommand } from '@/composables/useHomeCommand'
@@ -15,7 +17,7 @@ import { useAgentStore } from '@/stores/agent'
 import { useModelsStore } from '@/stores/models'
 import { useSettingsStore } from '@/stores/settings'
 import { useSshAiStore } from '@/stores/ssh-ai'
-import { APPROVAL_OPTIONS, type ApprovalKey } from '@/utils/run-modes'
+import { APPROVAL_OPTIONS, PERMISSION_LABELS, resolveRunModes, type ApprovalKey } from '@/utils/run-modes'
 
 const agent = useAgentStore()
 const sshAi = useSshAiStore()
@@ -27,10 +29,14 @@ const { draft, canSend, submit } = useHomeCommand()
 const approvalMode = computed(() => sshAi.approvalMode)
 const showPermMenu = ref(false)
 const permRef = ref<HTMLElement | null>(null)
+const showPlusMenu = ref(false)
+const plusRef = ref<HTMLElement | null>(null)
 
 /** 点外面收起。useModelSelector 自带这一层，审批菜单不能只有它能被点外面关掉 */
 function onDocClick(e: MouseEvent) {
-  if (permRef.value && !permRef.value.contains(e.target as Node)) showPermMenu.value = false
+  const t = e.target as Node
+  if (permRef.value && !permRef.value.contains(t)) showPermMenu.value = false
+  if (plusRef.value && !plusRef.value.contains(t)) showPlusMenu.value = false
 }
 
 onMounted(() => document.addEventListener('click', onDocClick))
@@ -40,6 +46,21 @@ function pickPerm(key: ApprovalKey) {
   sshAi.setApprovalMode(key)
   showPermMenu.value = false
 }
+
+/** 「计划」是开关不是单选：点亮即只读强制，再点退出回到**未表态**，
+ *  而不是替用户选一个目标姿态（与侧栏 togglePlanMode 同语义）。 */
+function togglePlan() {
+  sshAi.setPosture(sshAi.posture === 'plan' ? null : 'plan')
+  showPlusMenu.value = false
+}
+
+const isPlan = computed(() => sshAi.posture === 'plan')
+/** 审批档按钮上那一行字与发送装配同源：plan 姿态下 resolveRunModes 恒压出 'plan'
+ *  （permission-mode.test.ts 锁着），所以这里显示「只读计划」而不是用户原档 ——
+ *  界面不能宣称一个不会生效的选择。禁用是**展示**层，用户的 approvalMode 没被改写。 */
+const permLabel = computed(() =>
+  PERMISSION_LABELS[resolveRunModes(sshAi.posture ?? undefined, approvalMode.value).permissionMode],
+)
 
 const { showModelDropdown, modelSelectorRef, currentModelName, selectModel } = useModelSelector({
   getSelectedId: () => sshAi.selectedModelId,
@@ -97,15 +118,34 @@ onMounted(() => { void sshAi.fetchDefaultModel() })
       @keydown="onKeydown"
     />
     <div class="hcc-foot">
+      <div ref="plusRef" class="hcc-sel">
+        <button
+          type="button"
+          class="hcc-btn plus"
+          :disabled="running"
+          :aria-expanded="showPlusMenu"
+          title="添加上下文"
+          @click.stop="showPlusMenu = !showPlusMenu"
+        >＋</button>
+        <div v-if="showPlusMenu" class="hcc-menu" @click.stop>
+          <button type="button" class="hcc-opt" :class="{ on: isPlan }" @click="togglePlan">
+            <span class="ol">计划</span>
+            <span class="od">只读调研，写操作直接拒绝</span>
+            <span class="ot">{{ isPlan ? '✓' : '' }}</span>
+          </button>
+        </div>
+      </div>
+
       <div ref="permRef" class="hcc-sel">
         <button
           type="button"
           class="hcc-btn"
-          :disabled="running"
+          :disabled="running || isPlan"
           :aria-expanded="showPermMenu"
+          :title="isPlan ? '计划姿态下写操作被直接拒绝，「谁来批准」不参与本次裁决' : ''"
           @click.stop="showPermMenu = !showPermMenu"
         >
-          审批 · <b>{{ APPROVAL_OPTIONS.find(o => o.key === approvalMode)?.label }}</b>
+          审批 · <b>{{ permLabel }}</b>
         </button>
         <div v-if="showPermMenu" class="hcc-menu" @click.stop>
           <button
@@ -156,6 +196,22 @@ onMounted(() => { void sshAi.fetchDefaultModel() })
           </button>
         </div>
       </div>
+
+      <!-- 故事 6：加进来的每一项都在底栏留一枚可移除的 chip。姿态这枚必须连目标态
+           一起显形 —— 侧栏也能点亮它，首页若只显计划就是从中间截走的故事。 -->
+      <span
+        v-if="sshAi.posture"
+        class="hcc-chip"
+        :title="isPlan ? '本轮只读：写操作会被直接拒绝' : '本轮聚焦要达成什么、怎么算成功'"
+      >
+        {{ isPlan ? '计划' : '目标' }}
+        <button
+          type="button"
+          class="hcc-chip-x"
+          aria-label="移除该姿态"
+          @click="sshAi.setPosture(null)"
+        >×</button>
+      </span>
 
       <span v-if="running" class="hcc-note">AI 正在运行中</span>
 
@@ -234,6 +290,36 @@ onMounted(() => { void sshAi.fetchDefaultModel() })
 .hcc-btn:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--text-tertiary) }
 .hcc-btn:disabled { opacity: .5; cursor: default }
 .hcc-btn.empty b { color: var(--accent-orange) }
+/* ＋ 是底栏唯一的上下文入口（故事 5），做成方角小方块让它一眼是"加"而不是一个词 */
+.hcc-btn.plus { width: 26px; padding: 0; justify-content: center; font-size: 15px }
+/* 可移除的 chip（故事 6）：底色用 --bg-input 而不是 elevated —— 它表示"这条消息
+   会带上它"，比卡面暗一档才读得出是附加物，不是卡片自身的装饰 */
+.hcc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 4px 0 8px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.hcc-chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1;
+}
+.hcc-chip-x:hover { background: var(--bg-hover); color: var(--text-primary) }
 .hcc-menu {
   position: absolute;
   left: 0;
