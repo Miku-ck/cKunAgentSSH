@@ -5,6 +5,17 @@
       <!-- 标签栏 -->
       <div class="term-tabs">
         <div class="tabs-scroll">
+          <!-- 首页标签：恒在、不可关闭，是打开应用时的第一个屏 -->
+          <div
+            class="term-tab home-tab"
+            :class="{ active: homeTabActive }"
+            title="首页"
+            @click="goHome"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M4 11l8-7 8 7v9a1 1 0 0 1-1 1h-4v-6h-6v6H5a1 1 0 0 1-1-1z"/></svg>
+            <span class="tab-label">首页</span>
+          </div>
+
           <!-- 终端标签 -->
           <div
             v-for="s in store.sessions"
@@ -21,24 +32,14 @@
             </button>
           </div>
 
-          <!-- 新建按钮（加号，跟随终端标签右侧） -->
-          <button
-            class="new-tab-btn"
-            :class="{ active: showHome && activeNavPage === 'home' }"
-            title="新建终端"
-            @click="goHome"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-              <line x1="12" y1="5" x2="12" y2="19"/>
-              <line x1="5" y1="12" x2="19" y2="12"/>
-            </svg>
-          </button>
+          <!-- 新建终端（本地 shell / 已配好的远程连接） -->
+          <NewTerminalMenu @open-local="openLocalShell" @open-remote="connectRemote" />
         </div>
       </div>
 
       <!-- 内容区包装器: flex:1 + position:relative 为内部绝对定位提供参照 -->
       <div class="content-area">
-        <!-- 终端内容区 (始终渲染以保持终端实例, 被quick-start覆盖或隐藏) -->
+        <!-- 终端内容区 (始终渲染以保持终端实例, 首页标签活动时被盖住) -->
         <div class="term-content" v-if="store.sessions.length > 0" v-show="!showHome">
           <template v-for="s in store.sessions" :key="s.id">
 <LocalTerminal
@@ -92,64 +93,11 @@ v-show="s.id === store.activeSessionId"
           <DashboardView v-if="pageMounted('dashboard')" />
         </div>
 
-        <!-- Quick Start 页面 -->
-        <div v-show="(showHome || store.sessions.length === 0) && activeNavPage === 'home'" class="quick-start">
-          <!-- 首页主角：下达 + 跨 run 待放行汇总（Quick Start 启动器暂留在下方，
-               标签态改造在下一片一并处理） -->
+        <!-- 首页：目标主机 + 下达 + 跨 run 待放行汇总 -->
+        <div v-show="homeTabActive" class="home-pane">
+          <HomeTargetTitle @bulk="showBulk = true" />
           <HomeCommandCard />
           <HomeApprovalQueue />
-
-          <div class="qs-header">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-            <span>Quick Start</span>
-          </div>
-
-          <div class="qs-search">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            <input v-model="qsSearch" placeholder="搜索终端或连接..." class="qs-input" />
-          </div>
-
-          <!-- 本地终端 -->
-          <div class="qs-section">
-            <div class="qs-section-title">本地终端</div>
-            <div class="qs-grid">
-              <div
-                v-for="shell in filteredShells"
-                :key="shell"
-                class="qs-card"
-                @click="openLocalShell(shell)"
-              >
-                <div class="qs-card-icon local">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-                </div>
-                <span class="qs-card-label">{{ shell }}</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- 远程连接 -->
-          <div class="qs-section">
-            <div class="qs-section-title">远程连接</div>
-            <div class="qs-grid">
-              <div
-                v-for="conn in filteredConnections"
-                :key="conn.id"
-                class="qs-card"
-                @click="connectRemote(conn)"
-                @contextmenu.prevent="editConnection(conn)"
-              >
-                <div class="qs-card-icon remote">
-                  <IconMonitor :width="20" :height="20" :stroke-width="2" />
-                </div>
-                <span class="qs-card-label">{{ conn.name }}</span>
-                <span class="qs-card-meta">{{ conn.host }}</span>
-              </div>
-            </div>
-          </div>
-
-          <div v-if="filteredShells.length === 0 && filteredConnections.length === 0" class="qs-empty">
-            没有匹配的结果
-          </div>
         </div>
       </div>
 
@@ -159,6 +107,9 @@ v-show="s.id === store.activeSessionId"
 
     <!-- AI 运维助手面板 -->
     <SshAiPanel v-if="sshAiStore.showAiPanel" ref="aiPanelRef" @close="sshAiStore.closeAiPanel()" />
+
+    <!-- 多节点批量下发（首页目标主机的「全部 N 台」入口；远程管理页同一组件） -->
+    <BulkCommandModal v-if="showBulk" @close="showBulk = false" />
 
     <!-- 连接弹窗 -->
     <ConnectionModal
@@ -210,9 +161,11 @@ import LocalTerminal from '@/components/ssh/LocalTerminal.vue'
 import RemoteTerminal from '@/components/ssh/RemoteTerminal.vue'
 import IconMonitor from '@/components/icons/IconMonitor.vue'
 // 首页主角静态引入：下面那批 defineAsyncComponent 拆的是"首次访问才下载"的页面，
-// 而指令卡与待放行队列是打开应用第一眼要看到的东西，不该等一个 chunk。
+// 而目标标题、指令卡与待放行队列是打开应用第一眼要看到的东西，不该等一个 chunk。
+import HomeTargetTitle from '@/components/home/HomeTargetTitle.vue'
 import HomeCommandCard from '@/components/home/HomeCommandCard.vue'
 import HomeApprovalQueue from '@/components/home/HomeApprovalQueue.vue'
+import NewTerminalMenu from '@/components/ssh/NewTerminalMenu.vue'
 // 启动性能优化：非首屏功能整体移出启动关键路径 —
 // 原实现全部静态 import + v-show（组件启动即全部挂载），每加一条功能线主包
 // 就长大一截（index.js 一度 10MB，Monaco 文件编辑器占大头）。现在：
@@ -220,6 +173,7 @@ import HomeApprovalQueue from '@/components/home/HomeApprovalQueue.vue'
 //   2. v-show 改「sticky-visited」v-if — 访问过才挂载、之后保持挂载，
 //      保留 v-show 的状态不丢语义（切换标签不重置 SFTP 树/审计列表等）。
 const ConnectionModal = defineAsyncComponent(() => import('@/components/ssh/ConnectionModal.vue'))
+const BulkCommandModal = defineAsyncComponent(() => import('@/components/ssh/BulkCommandModal.vue'))
 const SftpView = defineAsyncComponent(() => import('@/components/ssh/SftpView.vue'))
 const RemoteManager = defineAsyncComponent(() => import('@/components/ssh/RemoteManager.vue'))
 const QuickCommandBar = defineAsyncComponent(() => import('@/components/ssh/QuickCommandBar.vue'))
@@ -245,9 +199,10 @@ const terminalRefs: Record<string, any> = {}
 // 命令投递 + 终端聚焦（内部注册 ssh:focus-terminal / ssh:deliver-command 监听）
 const { focusActiveTerminal } = useCommandDelivery(terminalRefs)
 
-// 页面导航 + 终端生命周期 + 模态框 + 远程连接 + Quick Start + 自动回首页
+// 页面导航 + 终端生命周期 + 模态框 + 远程连接 + 首页/终端标签态
 const {
   showHome,
+  homeTabActive,
   activeNavPage,
   showModal,
   editingConnection,
@@ -261,9 +216,6 @@ const {
   toggleSchedules,
   toggleDashboard,
   showAiPanel,
-  qsSearch,
-  filteredShells,
-  filteredConnections,
   openLocalShell,
   handleLocalExit,
   connectRemote,
@@ -275,6 +227,9 @@ const {
   closeModal,
   handleSaved,
 } = useSshNavigation(focusActiveTerminal, terminalRefs)
+
+/** 首页目标菜单里「全部 N 台」拉起的批量下发弹窗 */
+const showBulk = ref(false)
 
 // ── sticky-visited 页面挂载闸门（配合上方 defineAsyncComponent）──
 type PageKey = typeof activeNavPage.value
@@ -379,7 +334,7 @@ defineExpose({
   min-height: 0;
 }
 
-/* ─── Content Area (终端和Quick Start的容器) ─── */
+/* ─── Content Area (终端与首页/各独立页面的容器) ─── */
 .content-area {
   flex: 1;
   position: relative;
@@ -411,39 +366,6 @@ defineExpose({
 
 .tabs-scroll::-webkit-scrollbar {
   display: none;
-}
-
-/* Home按钮(加号) - 跟随终端标签右侧,样式与 term-tab 一致但无内容 */
-.new-tab-btn {
-  height: calc(var(--tabbar-h) - 4px);
-  width: calc(var(--tabbar-h) - 4px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid transparent;
-  border-bottom: none;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-  background: transparent;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: all var(--transition-fast);
-}
-
-.new-tab-btn:hover {
-  color: var(--text-secondary);
-  background: var(--bg-hover);
-}
-
-.new-tab-btn:active {
-  background: var(--bg-active);
-}
-
-.new-tab-btn.active {
-  color: var(--accent-primary);
-  border-color: var(--border-default);
-  margin-bottom: -1px;
-  padding-bottom: 1px;
 }
 
 .term-tab {
@@ -532,8 +454,8 @@ defineExpose({
 
 /* ─── Directory Panel ─── */
 
-/* ─── Quick Start ─── */
-.quick-start {
+/* ─── Home Pane ─── */
+.home-pane {
   position: absolute;
   top: 0;
   left: 0;
@@ -542,7 +464,7 @@ defineExpose({
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 40px 24px;
+  padding: 48px 24px;
   overflow-y: auto;
   z-index: 10;
 }
@@ -601,135 +523,6 @@ defineExpose({
   bottom: 0;
   z-index: 10;
   overflow: hidden;
-}
-
-.qs-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--accent-primary);
-  font-size: 18px;
-  font-weight: 600;
-  margin-bottom: 24px;
-}
-
-.qs-search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  max-width: 520px;
-  height: 36px;
-  padding: 0 12px;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  color: var(--text-tertiary);
-  margin-bottom: 32px;
-  transition: border-color var(--transition-fast);
-}
-
-.qs-search:focus-within {
-  border-color: var(--accent-primary);
-}
-
-.qs-input {
-  flex: 1;
-  border: none;
-  background: transparent;
-  color: var(--text-primary);
-  font-size: 13px;
-  font-family: var(--font-sans);
-  outline: none;
-}
-
-.qs-input::placeholder {
-  color: var(--text-tertiary);
-}
-
-.qs-section {
-  width: 100%;
-  max-width: 520px;
-  margin-bottom: 28px;
-}
-
-.qs-section-title {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--text-tertiary);
-  margin-bottom: 12px;
-}
-
-.qs-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
-  gap: 12px;
-}
-
-.qs-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 16px 8px;
-  border-radius: var(--radius-md);
-  border: 1px solid transparent;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-}
-
-.qs-card:hover {
-  background: var(--bg-hover);
-  border-color: var(--border-default);
-}
-
-.qs-card-icon {
-  width: 48px;
-  height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border-subtle);
-}
-
-.qs-card-icon.local {
-  background: rgba(88, 166, 255, 0.08);
-  color: var(--accent-primary);
-}
-
-.qs-card-icon.remote {
-  background: rgba(63, 185, 80, 0.08);
-  color: var(--accent-green);
-}
-
-.qs-card-label {
-  font-size: 12px;
-  color: var(--text-primary);
-  font-weight: 500;
-  text-align: center;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 80px;
-}
-
-.qs-card-meta {
-  font-size: 10px;
-  color: var(--text-tertiary);
-  font-family: var(--font-mono);
-  text-align: center;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 80px;
-}
-
-.qs-empty {
-  color: var(--text-tertiary);
-  font-size: 13px;
-  padding: 20px;
 }
 
 /* ─── Tab Context Menu ─── */

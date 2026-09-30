@@ -301,7 +301,7 @@ cKunAgentSSH/
 
 - **App.vue** — 根布局：TitleBar + SshView，直接渲染 SSH 界面
 - **TitleBar.vue** — 自定义标题栏：品牌标识 + 窗口控制按钮
-- **SshView.vue** — SSH 主视图：Quick Start 首页 / 远程管理 / 本地终端 / SFTP / AI 面板 / 监控仪表盘 / 定时任务 / 快捷命令栏
+- **SshView.vue** — SSH 主视图：首页（目标主机 + 指令卡 + 待放行队列）/ ＋ 新建终端 / 远程管理 / 本地终端 / SFTP / AI 面板 / 监控仪表盘 / 定时任务 / 快捷命令栏
 
 ### 状态管理
 

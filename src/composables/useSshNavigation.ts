@@ -1,4 +1,4 @@
-// useSshNavigation.ts — 页面导航 + 终端生命周期 + Quick Start + 模态框 + 远程连接
+// useSshNavigation.ts — 页面导航 + 终端生命周期 + 首页标签态 + 模态框 + 远程连接
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { useSSHStore, type SSHConnection } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
@@ -8,8 +8,8 @@ import { useToastStore } from '@/stores/toast'
 import { toFriendlyMessage } from '@/api/client'
 import { extractSSHError, isRetryable } from '@/ssh-error-types'
 
-/** 本地终端列表常量 */
-const LOCAL_SHELLS = ['PowerShell', 'CMD', 'Git Bash', 'WSL']
+/** 本地终端列表常量（供标签条 ＋ 菜单渲染，动作仍走本文件的 openLocalShell） */
+export const LOCAL_SHELLS = ['PowerShell', 'CMD', 'Git Bash', 'WSL']
 
 /** 远程连接防抖间隔 */
 const CONNECT_DEBOUNCE_MS = 2000
@@ -25,13 +25,23 @@ export function useSshNavigation(
   const toast = useToastStore()
 
   // ─── 布局状态 ───
+  /**
+   * 首页是否处于活动态。首页现在是标签条第一个、不可关闭的标签，而实现上仍是
+   * 一个盖在 term-content 之上的浮层：终端实例必须一直挂载（xterm 一卸载 buffer
+   * 就没了），所以"看不见"只能靠这个标志表达。
+   * 标签该不该点亮看 homeTabActive —— 独立页面盖上来时它仍为 true。
+   */
   const showHome = ref(true)
   const activeNavPage = ref<'home' | 'remote-mgr' | 'sftp' | 'audit' | 'schedules' | 'dashboard'>('home')
   const showModal = ref(false)
   const editingConnection = ref<SSHConnection | undefined>(undefined)
 
+  /** 首页标签的点亮判定：独立页面（远程管理/SFTP/…）盖在上面时不该亮 */
+  const homeTabActive = computed(() => showHome.value && activeNavPage.value === 'home')
+
+  // 快捷命令条只在终端态出现（故事 23）：首页与独立页面都不占那 30px
   const showCommandBar = computed(() =>
-    store.activeSessionId !== '' && !showHome.value && activeNavPage.value === 'home'
+    store.activeSessionId !== '' && !homeTabActive.value && activeNavPage.value === 'home'
   )
 
   // 延迟聚焦定时器 ID 列表，组件卸载时清理
@@ -136,25 +146,6 @@ export function useSshNavigation(
     }
   }
 
-  // ─── Quick Start 搜索过滤 ───
-  const qsSearch = ref('')
-
-  const filteredShells = computed(() => {
-    const q = qsSearch.value.toLowerCase().trim()
-    if (!q) return LOCAL_SHELLS
-    return LOCAL_SHELLS.filter(s => s.toLowerCase().includes(q))
-  })
-
-  const filteredConnections = computed(() => {
-    const q = qsSearch.value.toLowerCase().trim()
-    if (!q) return store.connections
-    return store.connections.filter(c =>
-      c.name.toLowerCase().includes(q) ||
-      c.host.toLowerCase().includes(q) ||
-      c.username.toLowerCase().includes(q)
-    )
-  })
-
   // ─── 本地终端 ───
   async function openLocalShell(shellName: string) {
     try {
@@ -226,7 +217,7 @@ export function useSshNavigation(
       return
     }
     lastConnectAtById[conn.id] = now
-    // loading 由本函数统一持有：Quick Start 卡片与失败「重试」按钮过去直接调用本
+    // loading 由本函数统一持有：＋ 菜单与失败「重试」按钮过去直接调用本
     // 函数而不经过 handleRmConnect，既没有转圈反馈，finally 又会清掉同期
     // 另一次连接的状态
     connecting.value = true
@@ -347,6 +338,7 @@ export function useSshNavigation(
 
   return {
     showHome,
+    homeTabActive,
     activeNavPage,
     showAiPanel: sshAiStore.showAiPanel,
     showModal,
@@ -360,9 +352,6 @@ export function useSshNavigation(
     toggleAudit,
     toggleSchedules,
     toggleDashboard,
-    qsSearch,
-    filteredShells,
-    filteredConnections,
     openLocalShell,
     handleLocalExit,
     connectRemote,
