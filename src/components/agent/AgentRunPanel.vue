@@ -19,21 +19,17 @@
  * 工具调用明细见消息气泡内联轨迹（AgentTraceInline）与运行交付面板。
  */
 import { computed, ref, watch } from 'vue'
-import { useAgentStore, type PermissionRequest } from '@/stores/agent'
-import { useSSHStore } from '@/stores/ssh'
-import { useSettingsStore } from '@/stores/settings'
-import { grantScopesForRisk } from '@/utils/approval-scopes'
+import { useAgentStore } from '@/stores/agent'
 // 展示口径与首页待放行队列共用一份（别名保持模板调用点不变）
 import {
   approvalCommand as cardCommand,
   approvalRiskLabel as riskLabel,
-  approvalTargetLabel,
 } from '@/utils/approval-display'
 import { useApprovalActions } from '@/composables/useApprovalActions'
+import ApprovalCard from './ApprovalCard.vue'
 import ClarifyingWizard from './ClarifyingWizard.vue'
 
 const agentStore = useAgentStore()
-const sshStore = useSSHStore()
 
 function levelLabel(level: string): string {
   const map: Record<string, string> = {
@@ -59,17 +55,11 @@ function taskTypeLabel(type: string): string {
   return map[type] || type
 }
 
-/** 审批目标主机展示：口径在 utils/approval-display，首页待放行队列共用同一份 */
-const targetLabel = (req: PermissionRequest): string =>
-  approvalTargetLabel(req, sshStore.sessions, sshStore.connections)
-
 /** 结算的用户可见层与首页待放行队列共用一份（别名保持模板调用点不变） */
 const { approve: grantPermission, deny: denyRequest } = useApprovalActions()
 
 // ── 单一焦点审批队列（spec refactor-approval-center） ──
 const pendingPerms = computed(() => agentStore.pendingPermissions)
-/** E5：prod 专属警示的总开关（设置 → Agent 治理 → 运维策略） */
-const prodConfirmOn = computed(() => useSettingsStore().settings.agent.prodConfirm)
 /** 已解决（已授权/已拒绝）项（追溯区）；expired 卡按裁决A留在可操作队列，不进追溯 */
 const resolvedPerms = computed(() => agentStore.permissionRequests.filter(r => r.resolved))
 
@@ -194,112 +184,14 @@ const latestHelp = computed(() =>
         </button>
       </div>
 
-      <!-- 单一焦点卡：最旧一条未处理 -->
-      <div v-if="focusPerm" class="ap-card ap-perm">
-        <div class="ap-head">
-          <svg class="ap-ic ap-perm-accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-          <span class="ap-ttl ap-perm-ttl">AI 请求执行确认</span>
-          <span class="ap-risk" :class="`risk-${focusPerm.risk}`">{{ riskLabel(focusPerm.risk) }}</span>
-          <span v-if="focusPerm.expired" class="ap-risk-pill ap-timeout-pill">已超时 · 授权仍可恢复</span>
-          <span v-if="focusPerm.environment" class="ap-env" :class="`env-${focusPerm.environment}`">
-            {{ focusPerm.environment === 'prod' ? '生产环境' : '测试环境' }}
-          </span>
-          <span class="ap-sp"></span>
-          <button
-            v-if="pendingPerms.length > 1"
-            class="ap-icon-btn"
-            title="上一项"
-            aria-label="切换到上一条待审批项"
-            @click="focusPrev"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
-          </button>
-          <button
-            v-if="pendingPerms.length > 1"
-            class="ap-icon-btn"
-            title="下一项"
-            aria-label="切换到下一条待审批项"
-            @click="focusNext"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
-          </button>
-          <button
-            v-if="!agentStore.isRunning"
-            class="ap-icon-btn"
-            title="忽略"
-            aria-label="忽略该请求"
-            @click="agentStore.dismissPermission(focusPerm.id)"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
-        </div>
-        <div class="ap-body">
-          <!-- 阅读顺序：我要做的事 → 后果 → 目标机器 -->
-          <!-- E5：prod 提示受「生产环境额外确认」开关控制。关掉只是不再多问一句，
-               风险判定本身（dangerous 审批 / prod 预授权 allowlist / hardline 阻断）不受影响 -->
-          <div v-if="focusPerm.environment === 'prod' && prodConfirmOn" class="ap-prod-warn">
-            目标为生产环境主机，误操作影响线上业务，请格外确认后再授权。
-          </div>
-          <div v-if="focusPerm.task" class="ap-keyval" :title="focusPerm.task">
-            <span class="ap-k">你的请求</span>
-            <span class="ap-v ap-2line">{{ focusPerm.task }}</span>
-          </div>
-          <div v-if="focusPerm.explain" class="ap-keyval">
-            <span class="ap-k">这条命令会做什么</span>
-            <span class="ap-v">{{ focusPerm.explain }}</span>
-            <span v-if="focusPerm.explainSource === 'llm'" class="ap-tag-inline">AI 生成，仅供参考</span>
-          </div>
-          <div v-if="targetLabel(focusPerm)" class="ap-keyval">
-            <span class="ap-k">目标主机</span>
-            <code class="ap-code">{{ targetLabel(focusPerm) }}</code>
-          </div>
-          <div class="ap-msg">{{ focusPerm.message }}</div>
-          <div class="ap-keyval">
-            <span class="ap-k">工具:</span>
-            <code class="ap-code">{{ focusPerm.tool }}</code>
-            <span class="ap-k ap-k-gap">可逆:</span>
-            <span class="ap-v">{{ focusPerm.reversible ? '是' : '否' }}</span>
-            <template v-if="cardCommand(focusPerm)">
-              <span class="ap-k ap-k-gap">授权命令:</span>
-              <code class="ap-code ap-code-normal">{{ cardCommand(focusPerm) }}</code>
-            </template>
-          </div>
-          <details v-if="focusPerm.args && Object.keys(focusPerm.args).length > 0" class="ap-args">
-            <summary>参数</summary>
-            <pre>{{ JSON.stringify(focusPerm.args, null, 2) }}</pre>
-          </details>
-        </div>
-        <div class="ap-actions">
-          <button class="ap-btn ap-btn-grant" :disabled="focusPerm.settling" @click="grantPermission(focusPerm.id, 'once')">
-            {{ focusPerm.settling ? '处理中...' : '允许本次' }}
-          </button>
-          <button
-            v-if="grantScopesForRisk(focusPerm.risk).includes('session')"
-            class="ap-btn ap-btn-session"
-            :disabled="focusPerm.settling"
-            @click="grantPermission(focusPerm.id, 'session')"
-          >
-            本会话允许
-          </button>
-          <button class="ap-btn ap-btn-always" :disabled="focusPerm.settling" @click="grantPermission(focusPerm.id, 'always')">
-            {{ cardCommand(focusPerm) ? '始终允许此命令' : '始终允许' }}
-          </button>
-          <button class="ap-btn ap-btn-deny" :disabled="focusPerm.settling" @click="denyRequest(focusPerm.id)">拒绝</button>
-        </div>
-        <div class="ap-hint">
-          <template v-if="cardCommand(focusPerm)">
-            「允许本次」只对这行命令生效，其他高风险命令仍会逐条询问；
-            「本会话允许」对本会话内同一命令免问（后端重启即失效）；
-            「始终允许」只把这行命令（含其中的目标路径）写入本机持久授权清单，
-            今后包括生产环境在内的同一命令不再询问、换一条仍会询问 ——
-            拿不准就先选「允许本次」。
-          </template>
-          <template v-else-if="grantScopesForRisk(focusPerm.risk).includes('session')">
-            「本会话允许」对本会话内该工具免问（后端重启即失效），其他会话不受影响。
-          </template>
-          拒绝后本次运行内 AI 不会再请求同一条命令。
-        </div>
-      </div>
+      <!-- 单一焦点卡：最旧一条未处理（卡体与运行视图内联审批共用一个组件） -->
+      <ApprovalCard
+        v-if="focusPerm"
+        :req="focusPerm"
+        :nav-count="pendingPerms.length"
+        @prev="focusPrev"
+        @next="focusNext"
+      />
 
       <!-- 折叠的排队项（+N 条待处理） -->
       <div v-if="queueCount > 0" class="ap-queue">
@@ -383,35 +275,9 @@ const latestHelp = computed(() =>
   font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
 }
 
-/* ── 通用卡片骨架 ── */
-.ap-card {
-  background: var(--bg-elevated, var(--bg-base));
-  border: 1px solid var(--card-warn-border, var(--border-default));
-  border-radius: 10px;
-  overflow: hidden;
-  box-shadow: 0 3px 12px -4px rgba(0, 0, 0, 0.35);
-}
-.ap-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 13px;
-  border-bottom: 1px solid var(--border-default, rgba(255, 255, 255, 0.08));
-}
-.ap-ic {
-  width: 15px;
-  height: 15px;
-  flex-shrink: 0;
-  color: var(--text-secondary);
-}
-.ap-ttl {
-  font-weight: 600;
-  font-size: 13px;
-  letter-spacing: 0.2px;
-  color: var(--text-primary);
-}
-.ap-sp { flex: 1; }
-.ap-body { padding: 12px 13px; }
+/* ── 通用卡片骨架 / key-value 行 / 徽章 / 按钮：见 @/styles/approval-card.css ──
+ * 那一份现在由 ApprovalCard 与本面板共同消费，抄回 scoped 就是两处漂移的开始。
+ * 这里只留下面板自己的布局与覆盖规则。 */
 
 /* ── 规划/意图卡片 ── */
 .ap-intention { background: var(--bg-elevated, var(--bg-base)); border-color: var(--status-info-border); }
@@ -613,128 +479,13 @@ const latestHelp = computed(() =>
   font-weight: 600;
 }
 .ap-trace-status .ap-ic { width: 12px; height: 12px; }
-.ap-timeout-pill { background: transparent; border: 1px solid var(--status-warn-text); color: var(--status-warn-text); }
 .ap-trace-denied { color: var(--danger-text); }
 
-/* ── 通用 key/value 行 ── */
-.ap-keyval {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 6px;
-  font-size: 12px;
-  margin-bottom: 7px;
-}
-.ap-k { color: var(--text-tertiary); flex: none; }
-.ap-k-gap { margin-left: 10px; }
-.ap-v { color: var(--text-primary); }
-.ap-2line {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.ap-code {
-  background: var(--bg-input, var(--bg-base));
-  border: 1px solid var(--border-default);
-  padding: 1px 6px;
-  border-radius: 4px;
-  color: var(--accent-cyan, #38bdf8);
-  font-size: 11.5px;
-}
-.ap-code-normal { color: var(--accent-cyan, #38bdf8); font-style: italic; }
-.ap-tag-inline { font-size: 10.5px; color: var(--text-tertiary); margin-left: 2px; }
-.ap-msg { color: var(--text-primary); font-size: 12.5px; line-height: 1.5; margin-bottom: 7px; }
-
-/* 参数折叠块 */
-.ap-args {
-  border: 1px solid var(--border-default);
-  border-radius: 6px;
-  background: var(--bg-input, var(--bg-base));
-  margin: 4px 0 8px;
-}
-.ap-args summary {
-  cursor: pointer;
-  list-style: none;
-  padding: 5px 10px;
-  color: var(--text-tertiary);
-  font-size: 11px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.ap-args summary::-webkit-details-marker { display: none; }
-.ap-args summary::before { content: "+"; }
-.ap-args[open] summary::before { content: "−"; }
-.ap-args pre {
-  padding: 0 12px 9px;
-  color: var(--text-secondary);
-  font-size: 10.5px;
-  white-space: pre-wrap;
-  overflow-x: auto;
-}
-
-/* ── 权限卡片 ── */
-.ap-perm { background: var(--bg-elevated, var(--bg-base)); border-color: var(--card-perm-border); }
-.ap-perm-accent { color: var(--danger-text, #ef4444); }
-.ap-perm-ttl { color: var(--card-perm-text); }
-.ap-risk { font-size: 10.5px; font-weight: 700; padding: 2px 9px; border-radius: 999px; }
-.ap-risk.risk-moderate { background: var(--card-perm-border); color: var(--card-perm-text); }
-.ap-risk.risk-dangerous { background: var(--danger-bg); color: var(--danger-text); }
-.ap-env { font-size: 10.5px; font-weight: 600; padding: 2px 9px; border-radius: 999px; }
-.ap-env.env-prod { background: var(--danger-bg); color: var(--danger-text); }
-.ap-env.env-test { background: var(--card-perm-border); color: var(--text-secondary); }
-.ap-prod-warn {
-  font-size: 11.5px;
-  color: var(--danger-text);
-  background: var(--danger-bg);
-  border: 1px solid var(--danger-border);
-  border-radius: 7px;
-  padding: 7px 11px;
-  margin-bottom: 9px;
-  line-height: 1.5;
-}
-
-/* ── 通用动作区/按钮 ── */
-.ap-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding: 0 13px 11px; }
-.ap-btn {
-  font-family: inherit;
-  font-size: 11.5px;
-  font-weight: 600;
-  padding: 6px 14px;
-  border-radius: 7px;
-  border: 1px solid transparent;
-  cursor: pointer;
-  transition: transform 0.15s, background 0.18s, box-shadow 0.18s;
-}
-.ap-btn:active { transform: translateY(1px); }
-.ap-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.ap-btn-grant { background: var(--status-success-bg); border-color: var(--status-success-border); color: var(--status-success-text); }
-.ap-btn-grant:hover:not(:disabled) { filter: brightness(1.06); }
-.ap-btn-always { background: transparent; border-color: var(--status-success-border); color: var(--status-success-text); }
-.ap-btn-always:hover:not(:disabled) { background: var(--status-success-bg); }
-.ap-btn-session { background: transparent; border-color: var(--accent-cyan, #38bdf8); color: var(--accent-cyan, #38bdf8); }
-.ap-btn-session:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-cyan, #38bdf8) 12%, transparent); }
-.ap-btn-deny { background: transparent; border-color: var(--border-default); color: var(--text-secondary); }
-.ap-btn-deny:hover:not(:disabled) { border-color: var(--danger-text); color: var(--danger-text); background: var(--danger-bg); }
-.ap-hint {
-  font-size: 10.5px;
-  color: var(--text-tertiary);
-  border-top: 1px dashed var(--border-default);
-  padding: 8px 13px 10px;
-  line-height: 1.6;
-}
+/* ── 折叠的排队项摘要（卡体样式见 ApprovalCard / approval-card.css） ── */
 
 /* ── 命令待确认 ── */
 .ap-deliver { background: var(--bg-elevated, var(--bg-base)); border-color: var(--card-warn-border); }
 .ap-deliver-accent { color: var(--status-warn-text, #f59e0b); }
-.ap-risk-pill {
-  font-size: 10px;
-  background: var(--danger-bg);
-  color: var(--danger-text);
-  padding: 2px 9px;
-  border-radius: 999px;
-}
 .ap-deliver-code {
   margin: 0 0 11px;
   background: var(--bg-input, var(--bg-base));
@@ -783,25 +534,5 @@ const latestHelp = computed(() =>
   border-radius: 8px;
 }
 .ap-error .ap-ic { color: currentColor; }
-
-/* ── 通用图标按钮（忽略） ── */
-.ap-icon-btn {
-  background: none;
-  border: none;
-  color: var(--text-tertiary);
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
-  cursor: pointer;
-  display: grid;
-  place-items: center;
-  transition: background 0.18s, color 0.18s;
-}
-.ap-icon-btn:hover { background: var(--bg-hover, var(--bg-input, var(--bg-base))); color: var(--text-primary); }
-.ap-icon-btn svg { width: 14px; height: 14px; }
-
-@media (prefers-reduced-motion: reduce) {
-  .ap-btn, .ap-icon-btn { transition: none; }
-}
 </style>
 

@@ -1,0 +1,186 @@
+/**
+ * 审批卡片的共享视觉词汇（.ap-* 里"卡本身"的那部分）
+ *
+ * 原先整份住在 AgentRunPanel 的 scoped style 里，所以只有侧栏托盘用得上这套
+ * 卡。现在侧栏托盘、运行视图内联审批都要渲染同一张卡 —— 把 CSS 再抄一份进组件，
+ * 就是第三处开始漂移的地方（改了一处、另一处的按钮配色悄悄变掉）。
+ *
+ * 只放"卡"用得上的：卡骨架、key/value 行、徽章、参数折叠、动作按钮、说明条。
+ * 各宿主自己的布局（托盘头 / 折叠队列 / 追溯区 / 意图卡 / 交付卡…）仍留在各自
+ * scoped 里，它们用 `.ap-perm-tray .ap-ic` 这类带宿主的复合选择器覆盖全局值。
+ *
+ * 类名此前只被 AgentRunPanel 一个组件使用（已核：全仓 `ap-` 无第二个使用者），
+ * 所以从 scoped 提升为全局不会撞到别的组件。
+ */
+
+/* ── 卡骨架 ── */
+.ap-card {
+  background: var(--bg-elevated, var(--bg-base));
+  border: 1px solid var(--card-warn-border, var(--border-default));
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 3px 12px -4px rgba(0, 0, 0, 0.35);
+}
+.ap-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 13px;
+  border-bottom: 1px solid var(--border-default, rgba(255, 255, 255, 0.08));
+}
+.ap-ic {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+.ap-ttl {
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.2px;
+  color: var(--text-primary);
+}
+.ap-sp { flex: 1; }
+.ap-body { padding: 12px 13px; }
+
+/* ── key/value 行与正文 ── */
+.ap-keyval {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+  margin-bottom: 7px;
+}
+.ap-k { color: var(--text-tertiary); flex: none; }
+.ap-k-gap { margin-left: 10px; }
+.ap-v { color: var(--text-primary); }
+.ap-2line {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.ap-code {
+  background: var(--bg-input, var(--bg-base));
+  border: 1px solid var(--border-default);
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--accent-cyan, #38bdf8);
+  font-size: 11.5px;
+}
+.ap-code-normal { color: var(--accent-cyan, #38bdf8); font-style: italic; }
+.ap-tag-inline { font-size: 10.5px; color: var(--text-tertiary); margin-left: 2px; }
+.ap-msg { color: var(--text-primary); font-size: 12.5px; line-height: 1.5; margin-bottom: 7px; }
+
+/* ── 参数折叠块 ── */
+.ap-args {
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--bg-input, var(--bg-base));
+  margin: 4px 0 8px;
+}
+.ap-args summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 5px 10px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ap-args summary::-webkit-details-marker { display: none; }
+.ap-args summary::before { content: "+"; }
+.ap-args[open] summary::before { content: "−"; }
+.ap-args pre {
+  padding: 0 12px 9px;
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+/* ── 权限卡：配色与徽章 ── */
+.ap-perm { background: var(--bg-elevated, var(--bg-base)); border-color: var(--card-perm-border); }
+.ap-perm-accent { color: var(--danger-text, #ef4444); }
+.ap-perm-ttl { color: var(--card-perm-text); }
+.ap-risk { font-size: 10.5px; font-weight: 700; padding: 2px 9px; border-radius: 999px; }
+.ap-risk.risk-moderate { background: var(--card-perm-border); color: var(--card-perm-text); }
+.ap-risk.risk-dangerous { background: var(--danger-bg); color: var(--danger-text); }
+.ap-env { font-size: 10.5px; font-weight: 600; padding: 2px 9px; border-radius: 999px; }
+.ap-env.env-prod { background: var(--danger-bg); color: var(--danger-text); }
+.ap-env.env-test { background: var(--card-perm-border); color: var(--text-secondary); }
+/* 顺序承载信息：两条同为单类选择器、后写的赢。原 scoped 版里 .ap-timeout-pill
+   就排在 .ap-risk-pill 前面，所以「已超时」角标拿的是 danger 底色 + warn 描边 ——
+   看着不像本意，但这是搬移前的既成外观，改它属于另一件事，这里原样保留。 */
+.ap-timeout-pill { background: transparent; border: 1px solid var(--status-warn-text); color: var(--status-warn-text); }
+.ap-risk-pill {
+  font-size: 10px;
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  padding: 2px 9px;
+  border-radius: 999px;
+}
+.ap-prod-warn {
+  font-size: 11.5px;
+  color: var(--danger-text);
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
+  border-radius: 7px;
+  padding: 7px 11px;
+  margin-bottom: 9px;
+  line-height: 1.5;
+}
+
+/* ── 动作区与按钮 ── */
+.ap-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding: 0 13px 11px; }
+.ap-btn {
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: transform 0.15s, background 0.18s, box-shadow 0.18s;
+}
+.ap-btn:active { transform: translateY(1px); }
+.ap-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.ap-btn-grant { background: var(--status-success-bg); border-color: var(--status-success-border); color: var(--status-success-text); }
+.ap-btn-grant:hover:not(:disabled) { filter: brightness(1.06); }
+.ap-btn-always { background: transparent; border-color: var(--status-success-border); color: var(--status-success-text); }
+.ap-btn-always:hover:not(:disabled) { background: var(--status-success-bg); }
+.ap-btn-session { background: transparent; border-color: var(--accent-cyan, #38bdf8); color: var(--accent-cyan, #38bdf8); }
+.ap-btn-session:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-cyan, #38bdf8) 12%, transparent); }
+.ap-btn-deny { background: transparent; border-color: var(--border-default); color: var(--text-secondary); }
+.ap-btn-deny:hover:not(:disabled) { border-color: var(--danger-text); color: var(--danger-text); background: var(--danger-bg); }
+.ap-hint {
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  border-top: 1px dashed var(--border-default);
+  padding: 8px 13px 10px;
+  line-height: 1.6;
+}
+
+/* ── 图标按钮（忽略 / 上一项 / 下一项） ── */
+.ap-icon-btn {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: background 0.18s, color 0.18s;
+}
+.ap-icon-btn:hover { background: var(--bg-hover, var(--bg-input, var(--bg-base))); color: var(--text-primary); }
+.ap-icon-btn svg { width: 14px; height: 14px; }
+
+/* 卡内等宽字体由宿主给（AgentRunPanel 的 .agent-run-panel 上就有）——
+   这里不重复声明：全局再钉一份字体会盖掉宿主的选择。 */
+@media (prefers-reduced-motion: reduce) {
+  .ap-btn, .ap-icon-btn { transition: none; }
+}
