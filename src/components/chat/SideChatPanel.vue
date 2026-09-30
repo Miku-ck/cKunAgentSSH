@@ -159,7 +159,7 @@
       <!-- 工具栏 -->
       <div class="input-toolbar">
         <div class="toolbar-left">
-          <!-- 能力入口（目标 / 计划 / 技能 / 插件），位于上传按钮左侧。
+          <!-- 能力入口（目标 / 计划 / 技能），位于上传按钮左侧。
                工具栏贴面板底部，故菜单向上展开（与 / 技能菜单同层、同定位策略）。 -->
           <div class="plus-wrap">
             <button
@@ -181,7 +181,7 @@
             <div v-if="showPlusMenu" id="plus-menu" class="plus-menu" role="menu" aria-label="切换对话姿态">
               <button
                 class="menu-item"
-                :class="{ 'is-active': plusActiveIdx === 0, 'is-selected': isGoalMode, 'is-on': workflowPhase === 'goal' }"
+                :class="{ 'is-active': plusActiveIdx === plusIdx('goal'), 'is-selected': isGoalMode, 'is-on': workflowPhase === 'goal' }"
                 role="menuitemcheckbox"
                 :aria-checked="isGoalMode"
                 id="plus-opt-goal"
@@ -189,7 +189,7 @@
                   ? '目标姿态已开启：AI 会先确认要达成什么、怎么算成功。点击关闭'
                   : '目标姿态：让 AI 聚焦本次要达成什么、怎么算成功'"
                 @click="pickCap('goal')"
-                @mouseenter="plusActiveIdx = 0"
+                @mouseenter="plusActiveIdx = plusIdx('goal')"
               >
                 <span class="mi-ico">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13">
@@ -209,11 +209,12 @@
                    休眠禁用，两处状态在 resolveRunModes 交汇。
                    「目标」与此同形：两者各在工具条常驻一枚 chip（见 .chip-wrap /
                    chipViews），因为"只选了姿态、还没有工件"的中间态需要常驻可见。
-                   索引 1 与 CAP_KEYS 对齐 —— 此前 DOM 缺这一行但键盘导航仍会停在
-                   plus-opt-plan 上（aria-activedescendant 指向不存在的元素），恢复该行同时修好它。 -->
+                   行上的高亮索引由 plusIdx('plan') 现取，不写死数字 —— 曾经写死过：
+                   DOM 缺这一行而键盘导航仍停在 plus-opt-plan 上，aria-activedescendant
+                   指到一个不存在的元素。恢复该行，并把索引改为从 CAP_KEYS 派生。 -->
               <button
                 class="menu-item"
-                :class="{ 'is-active': plusActiveIdx === 1, 'is-on': isPlanMode }"
+                :class="{ 'is-active': plusActiveIdx === plusIdx('plan'), 'is-on': isPlanMode }"
                 role="menuitemcheckbox"
                 :aria-checked="isPlanMode"
                 id="plus-opt-plan"
@@ -221,7 +222,7 @@
                   ? '计划模式已开启：只读调研，写操作会被直接拒绝。点击退出'
                   : '计划模式：先只读调研并产出计划，批准后再动手'"
                 @click="pickCap('plan')"
-                @mouseenter="plusActiveIdx = 1"
+                @mouseenter="plusActiveIdx = plusIdx('plan')"
               >
                 <span class="mi-ico">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13">
@@ -237,53 +238,23 @@
                 </span>
               </button>
 
-              <!-- 分组约定：带 › 的进「二级清单」（插件 / 技能），不带的直接改状态
+              <!-- 分组约定：带 › 的进「二级清单」（技能），不带的直接改状态
                    （目标 / 计划）。上一版这里是一条 .menu-divider 横线 —— 那是我按
                    「任务层 / 能力层」自己推的分层；参考形态各行是**等距**的
                    （行距一律 ~29px，无横线造成的突增），说明它靠尾标而非横线
                    表达分组，故去掉横线、改由 › 承担，键盘顺序同步为视觉顺序。 -->
 
-              <!-- 插件：全仓没有任何插件清单与加载端（grep plugin 只命中本文件），
-                   故整行置灰且**不开**二级菜单 —— 不给 aria-haspopup，避免对读屏
-                   承诺一个打不开的菜单；也不挂 @mouseenter（disabled 元素本就不派发
-                   鼠标事件，且即便派发，键盘高亮也不该落到一个点不动的行上）。
-                   尾标保留 › 是把它归入「带清单的项」这一族，纯视觉归属；
-                   左边文案写明「尚未接入」，不做假启用。 -->
-              <button
-                class="menu-item is-disabled"
-                :class="{ 'is-active': plusActiveIdx === 2 }"
-                role="menuitem"
-                id="plus-opt-plugin"
-                aria-disabled="true"
-                disabled
-                title="插件尚未接入：全仓没有插件清单与加载端，此处只保留入口位"
-              >
-                <span class="mi-ico">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13">
-                    <rect x="3" y="3" width="7" height="7" rx="1.5"/>
-                    <rect x="14" y="3" width="7" height="7" rx="1.5"/>
-                    <rect x="3" y="14" width="7" height="7" rx="1.5"/>
-                    <path d="M14 17.5h7M17.5 14v7"/>
-                  </svg>
-                </span>
-                <span class="mi-name">插件</span>
-                <span class="mi-desc"></span>
-                <span class="mi-arrow">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="10" height="10"><path d="m9 6 6 6-6 6"/></svg>
-                </span>
-              </button>
-
               <!-- 技能：打开的是既有技能清单（与 / 触发同一份 filteredSkills），
                    所以它不是开关、也不带勾选态；挑中的技能以 skill-tags 呈现 -->
               <button
                 class="menu-item"
-                :class="{ 'is-active': plusActiveIdx === 3 }"
+                :class="{ 'is-active': plusActiveIdx === plusIdx('skill') }"
                 role="menuitem"
                 id="plus-opt-skill"
                 aria-haspopup="menu"
                 title="从已启用技能中挑一个附加到本次输入"
                 @click="pickCap('skill')"
-                @mouseenter="plusActiveIdx = 3"
+                @mouseenter="plusActiveIdx = plusIdx('skill')"
               >
                 <span class="mi-ico">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13">
@@ -610,23 +581,27 @@ function removePendingFile(fileId: string) {
   sshAi.removePendingAttachment(fileId)
 }
 
-// ── 能力入口 + 号菜单（视觉顺序：目标 / 计划 / 插件 / 技能）──
-// 四个条目的形态各不相同，不能压成同一种控件：
+// ── 能力入口 + 号菜单（视觉顺序：目标 / 计划 / 技能）──
+// 三个条目的形态各不相同，不能压成同一种控件：
 // - 「目标」是对话姿态开关（点亮 → 下一次发送注入目标姿态提示词），并在工具条
 //   落一枚常驻 chip；本会话是否已有成功标准文档（goal.md，后端落盘）另说一轴，
 //   由 props.workflowPhase 反映在菜单的点亮底色与 chip 的圆点上；
 // - 「计划」是权限模式开关（qcode 形态：模式切换收进 + 菜单）：menuitemcheckbox，
 //   点亮 = 只读强制 + 计划姿态成对下发，再点退出；工具条权限下拉显示同一个状态；
 // - 「技能」从已启用清单里挑一个（与 / 触发同源），选中的以 skill-tags 呈现 ——
-//   它不是开关，所以菜单里不给勾选态；
-// - 「插件」无清单可列，整行置灰。
-// 后端逻辑未接入者，改动点一律集中在 pickCap()。
-type CapKey = 'goal' | 'plan' | 'skill' | 'plugin'
+//   它不是开关，所以菜单里不给勾选态。
+// 原先这里还有第四行「插件」，整行置灰写着"尚未接入"：全仓没有插件清单也没有
+// 加载端（backend 下 grep plugin 零命中），点亮后请求体一字不变。2026-09-30 随
+// 首页 ＋ 菜单同一裁决把它删了（spec §6 的「已裁定不做」表记着证据）—— 留一个
+// 永远点不亮的行不是"入口位"，是让用户替我们做本该我们做的判断。
+type CapKey = 'goal' | 'plan' | 'skill'
 /**
  * 键盘导航顺序 —— 必须与 DOM 里的视觉顺序一致，否则 ↑↓ 会「跳着走」。
- * 视觉顺序见模板：目标 → 计划 → 插件 → 技能（插件在技能之前）。
+ * 行上的高亮/悬停一律走 plusIdx(key) 取，不写死数字：写过一次死索引，DOM 里删了
+ * 一行而数组没动，aria-activedescendant 就指到一个不存在的元素上。
  */
-const CAP_KEYS: CapKey[] = ['goal', 'plan', 'plugin', 'skill']
+const CAP_KEYS: CapKey[] = ['goal', 'plan', 'skill']
+const plusIdx = (key: CapKey) => CAP_KEYS.indexOf(key)
 
 const showPlusMenu = ref(false)
 const plusActiveIdx = ref(0)
@@ -635,8 +610,7 @@ const sshAi = useSshAiStore()
 /**
  * 当前对话姿态（可关的单选，缺省 null = 未表态）—— 对应主流 Agent 的模式选择器。
  * 只有「目标/计划」这类纵向姿态落进 activeMode（决定下一次消息注入的姿态）；
- * 「技能」从清单里挑、走 skill-tags，「插件」未接入、
- * 都没有"单一姿态"的含义，勾选态只对 activeMode 的两项成立。
+ * 「技能」从清单里挑、走 skill-tags，没有"单一姿态"的含义，勾选态只对 activeMode 的两项成立。
  *
  * 缺省不是 'goal' 而是 null，是为了让「目标」chip 能被关掉：
  * 'goal' 起步 + × 写回 'goal'，chip 消失了但后端行为一字未变（能关、关的是摆设）。
@@ -657,26 +631,9 @@ const plusActiveOptionId = computed(() => {
   return key ? `plus-opt-${key}` : undefined
 })
 
-/**
- * 键盘导航跳过的条目：disabled 项既点不了、也不该成为落点
- * —— 否则 ↑↓ 会停在「插件」上，回车毫无反应，读起来像坏了。
- * 索引仍按 CAP_KEYS 计数（aria-activedescendant 靠索引取 id），只跳过、不压缩。
- */
-const PLUS_SKIP: ReadonlySet<CapKey> = new Set<CapKey>(['plugin'])
-
 function stepPlusMenu(dir: 1 | -1) {
   const n = CAP_KEYS.length
-  let i = plusActiveIdx.value
-  for (let step = 0; step < n; step++) {
-    i = (i + dir + n) % n
-    const key = CAP_KEYS[i]
-    if (key && !PLUS_SKIP.has(key)) {
-      plusActiveIdx.value = i
-      return
-    }
-  }
-  // 全部被跳过时保持原位。当前只有「插件」一项 disabled，走不到这里；
-  // 写成 for 循环是为了将来加第二项 disabled 时不用改逻辑。
+  plusActiveIdx.value = (plusActiveIdx.value + dir + n) % n
 }
 
 function togglePlusMenu() {
@@ -700,7 +657,7 @@ function closePlusMenu(refocus = false) {
 
 /** 菜单项选择：目标 → 姿态开关（点亮即注入目标姿态，再点回到未表态）；
  *  计划 → 权限模式开关（再点一次退出，回到未表态）；
- *  技能 → 打开既有技能清单；插件未接入，兜住键盘 Enter。 */
+ *  技能 → 打开既有技能清单。 */
 function pickCap(key: CapKey) {
   // 目标：纵向姿态开关，随下一次发送传给后端作为姿态提示；点亮态同时驱动工具条 chip
   if (key === 'goal') {
@@ -721,8 +678,6 @@ function pickCap(key: CapKey) {
     openSkillMenuFromPlus()
     return
   }
-  // 插件：无清单可列。按钮已 disabled 拦住鼠标，这里兜住键盘 Enter
-  if (key === 'plugin') return
 }
 
 // ── 权限模式（发往后端的 AgentRunRequest.permission_mode）──
@@ -2075,8 +2030,7 @@ defineExpose({ restoreDraft, prefill })
   text-overflow: ellipsis;
 }
 
-/* 子菜单指示 ›：标记「会展开一份清单」这一族（插件 / 技能）。
-   注意它只表达**归属**，不表达「能开」—— 插件那行是 disabled，箭头也随整行置灰。
+/* 子菜单指示 ›：标记「会展开一份清单」这一族（技能）。
    （.mi-desc 的 margin-left:auto 已把 desc 及其后的箭头一起推到右端） */
 .plus-menu .mi-arrow {
   flex-shrink: 0;
@@ -2088,27 +2042,6 @@ defineExpose({ restoreDraft, prefill })
 .plus-menu .menu-item:hover .mi-arrow,
 .plus-menu .menu-item.is-active .mi-arrow {
   color: var(--accent-indigo);
-}
-
-/* 未接入的条目：置灰 + 不参与 hover 反馈，避免看起来可点 */
-.plus-menu .menu-item.is-disabled,
-.plus-menu .menu-item:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.plus-menu .menu-item:disabled:hover {
-  background: transparent;
-}
-
-.plus-menu .menu-item:disabled:hover .mi-ico {
-  color: var(--text-secondary);
-}
-
-/* disabled 的按钮仍会命中 :hover（CSS 层面不排除 :disabled），
-   所以箭头必须显式回落，否则悬停时变强调色 —— 这行就成假启用了 */
-.plus-menu .menu-item:disabled:hover .mi-arrow {
-  color: var(--text-tertiary);
 }
 
 /* 已选中项（单选姿态）：图标与说明转为启用色 */

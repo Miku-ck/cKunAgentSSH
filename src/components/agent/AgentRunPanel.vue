@@ -163,7 +163,10 @@ const latestHelp = computed(() =>
       </button>
     </div>
 
-    <!-- 权限请求：单一焦点审批托盘 -->
+    <!-- 权限请求：审批托盘之一。"单一焦点"这句已经不适用 —— 同一份
+         agentStore.permissionRequests 现在有三个入口（这里 / 首页待放行队列 /
+         运行视图内联卡），三处渲染的是同一对象、结算走同一个 approve/deny，
+         所以不矛盾；要不要在 run 标签活动时段落隐去这层是待裁决 C2。 -->
     <div class="permission-section" v-if="agentStore.permissionRequests.length > 0">
       <!-- 托盘头：汇总计数 + 人工介入角标 + 批量操作 -->
       <div class="ap-perm-tray">
