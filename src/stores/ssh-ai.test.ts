@@ -168,3 +168,34 @@ describe('终端现场折叠', () => {
     expect([...lsMap.keys()].filter(k => /terminal|context|snapshot/i.test(k))).toHaveLength(0)
   })
 })
+
+/**
+ * 待发送的本地附件（故事 5/6 第四项）。原先是 SideChatPanel.vue:587 的组件私有 ref，
+ * 首页 ＋ 菜单要选文件就得同技能一样提进 store —— 两处各存一份的话，首页挂的文件
+ * 侧栏发不出去，反之亦然。上传本身不在这一片：store.uploadFiles 早就存在。
+ */
+describe('ssh-ai 待发送附件', () => {
+  const att = (id: string) => ({ file_id: id, filename: `${id}.log`, content: 'x', truncated: false })
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    lsMap.clear()
+  })
+
+  it('默认没有附件', () => {
+    expect(useSshAiStore().pendingAttachments).toEqual([])
+  })
+
+  it('setPendingAttachments 整份覆写（与技能同一条 API 口径）', () => {
+    const store = useSshAiStore()
+    store.setPendingAttachments([att('a'), att('b')])
+    expect(store.pendingAttachments.map(f => f.file_id)).toEqual(['a', 'b'])
+    store.setPendingAttachments(store.pendingAttachments.filter(f => f.file_id !== 'a'))
+    expect(store.pendingAttachments.map(f => f.file_id)).toEqual(['b'])
+  })
+
+  it('附件不落 localStorage —— 文件内容进 store 已经很贵，跨会话留着更没道理', () => {
+    useSshAiStore().setPendingAttachments([att('a')])
+    expect([...lsMap.keys()].filter(k => /attach|file/i.test(k))).toHaveLength(0)
+  })
+})

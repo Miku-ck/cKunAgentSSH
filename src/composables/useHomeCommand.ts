@@ -18,6 +18,29 @@ export function useHomeCommand() {
 
   const draft = ref('')
   const canSend = computed(() => draft.value.trim().length > 0 && !agent.isRunning)
+  /** ＋ 菜单选完文件到挂上 chip 之间的那段：菜单项靠它显示"上传中"并禁用，
+   *  否则双击会发两次上传（与侧栏 uploading 同一个防御） */
+  const uploading = ref(false)
+
+  /** 本地附件：走 store 既有的 uploadFiles → /chat/upload（后端真读真返），
+   *  成功项追加进待发送附件；单个文件失败由 uploadFiles 内部逐个 toast，
+   *  这里只兜它整体抛出的非预期异常 —— 静默失败比报错更难查。 */
+  async function attachFiles(files: File[]): Promise<void> {
+    if (!files.length || uploading.value) return
+    uploading.value = true
+    try {
+      const results = await sshAi.uploadFiles(files)
+      if (results.length) sshAi.setPendingAttachments([...sshAi.pendingAttachments, ...results])
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      uploading.value = false
+    }
+  }
+
+  function removeAttachment(fileId: string) {
+    sshAi.setPendingAttachments(sshAi.pendingAttachments.filter(f => f.file_id !== fileId))
+  }
 
   /** 返回 false = 没发出去（空草稿 / 运行中 / 后端早退），草稿原样留着 */
   async function submit(): Promise<boolean> {
@@ -34,13 +57,16 @@ export function useHomeCommand() {
       approval: sshAi.approvalMode,
       mode: sshAi.posture ?? undefined,
       skillIds: [...sshAi.selectedSkillIds],
+      attachments: [...sshAi.pendingAttachments],
     })) return false
-    // 技能是"这一条消息带什么"，不是常驻档：发完即清，否则下一条静默复用同一份
-    // 技能目录（侧栏在 emit 时清、被拒时由 restoreDraft 放回，这里是同一语义）。
+    // 技能与附件是"这一条消息带什么"，不是常驻档：发完即清，否则下一条静默复用
+    // 同一份技能目录 / 再把整份文件重注入一遍（侧栏在 emit 时清、被拒时由
+    // restoreDraft 放回，这里是同一语义）。
     sshAi.setSelectedSkillIds([])
+    sshAi.setPendingAttachments([])
     draft.value = ''
     return true
   }
 
-  return { draft, canSend, submit }
+  return { draft, canSend, uploading, attachFiles, removeAttachment, submit }
 }

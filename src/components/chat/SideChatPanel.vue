@@ -584,7 +584,9 @@ const showHistoryPanel = ref(false)
 
 // ── 文件上传附件 ──
 const fileInputRef = ref<HTMLInputElement | null>(null)
-const pendingFiles = ref<ChatAttachment[]>([])
+/** 附件存在 ssh-ai store：首页 ＋ 菜单与这里必须同一份，各存一份就是第二条通路。
+ *  与技能同一 API 口径 —— 只给整份覆写，添加/移除由调用方算好传进来。 */
+const pendingFiles = computed(() => sshAi.pendingAttachments)
 const uploading = ref(false)
 
 function handleUploadClick() {
@@ -600,7 +602,7 @@ async function handleFileChange(e: Event) {
   try {
     const results = await props.uploadHandler(files)
     // 追加已上传成功的附件（失败的文件由 handler 内部 toast 提示）
-    pendingFiles.value.push(...results)
+    sshAi.setPendingAttachments([...pendingFiles.value, ...results])
   } catch (err: unknown) {
     // 防御：handler 出现非预期异常时给出提示，避免静默无反馈
     const msg = err instanceof Error ? err.message : String(err)
@@ -612,7 +614,7 @@ async function handleFileChange(e: Event) {
 }
 
 function removePendingFile(fileId: string) {
-  pendingFiles.value = pendingFiles.value.filter(f => f.file_id !== fileId)
+  sshAi.setPendingAttachments(pendingFiles.value.filter(f => f.file_id !== fileId))
 }
 
 // ── 能力入口 + 号菜单（视觉顺序：目标 / 计划 / 插件 / 技能）──
@@ -1310,7 +1312,7 @@ function handleSend() {
   const attachments = [...pendingFiles.value]
   lastDraft.value = { text, skillIds, attachments }
   sshAi.setSelectedSkillIds([])
-  pendingFiles.value = []
+  sshAi.setPendingAttachments([])
   inputText.value = ''
   if (inputRef.value) inputRef.value.style.height = 'auto'
   emit('send', text, skillIds, attachments, activeMode.value, approvalMode.value)
@@ -1323,7 +1325,7 @@ function restoreDraft() {
   lastDraft.value = null
   inputText.value = text
   sshAi.setSelectedSkillIds(skillIds)
-  pendingFiles.value = attachments
+  sshAi.setPendingAttachments(attachments)
   nextTick(() => {
     autoResize()
     inputRef.value?.focus()

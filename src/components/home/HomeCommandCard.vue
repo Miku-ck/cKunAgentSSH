@@ -5,9 +5,10 @@
  * 只做下达：发送走 useHomeCommand → ssh-ai.sendMessage 这一条通路；审批档、姿态
  * 都读 store 而不是组件内自存，保证首页选的东西在侧栏同样算数。
  *
- * ＋ 菜单按"后端有消费者"筛过（spec 故事 5 的 2026-09-30 修订记着砍掉的三项与证据）：
- * 这一片接 **计划姿态**，技能 / 终端现场 / 本地附件各是一片。菜单里没有的那几项
- * 不是漏了 —— 是点亮后后端一字不变，那类开关在这仓里叫「亮的空开关」。
+ * ＋ 菜单按"后端有消费者"筛过（spec 故事 5 的 2026-09-30 修订记着砍掉的三项与证据），
+ * 现在四项齐了：**计划姿态 / 终端现场 / 本地文件 / 技能**。菜单里没有的那几项不是漏了
+ * —— 是点亮后后端一字不变，那类开关在这仓里叫「亮的空开关」。
+ * 「远端文件」按字面做要另接 sftpReadFile → 注入通路，仍是一片未开的工单。
  */
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useHomeCommand } from '@/composables/useHomeCommand'
@@ -26,7 +27,24 @@ const modelsStore = useModelsStore()
 const skillsStore = useSkillStore()
 const settings = useSettingsStore()
 const { openSettings } = useSettings()
-const { draft, canSend, submit } = useHomeCommand()
+const { draft, canSend, submit, attachFiles, removeAttachment, uploading } = useHomeCommand()
+
+/** 本地文件选择：input 藏在卡片里，＋ 菜单只负责唤起 —— 与侧栏那个回形针按钮
+ *  走的是同一个 store.uploadFiles 通路，不是第二条上传实现。 */
+const fileInputRef = ref<HTMLInputElement | null>(null)
+
+function pickFiles() {
+  fileInputRef.value?.click()
+  showPlusMenu.value = false
+}
+
+async function onFilesPicked(e: Event) {
+  const input = e.target as HTMLInputElement
+  const files = input.files ? Array.from(input.files) : []
+  // 立刻清空 value：否则"再选一次同一个文件"不触发 change，用户以为没挂上
+  input.value = ''
+  await attachFiles(files)
+}
 
 const approvalMode = computed(() => sshAi.approvalMode)
 const showPermMenu = ref(false)
@@ -152,9 +170,17 @@ onMounted(() => {
       class="hcc-input"
       rows="2"
       spellcheck="false"
-      placeholder="说人话就行 —— 例如：昨天 21 点之后 web-01 内存一直在涨，看看是什么进程，先别动它"
+      placeholder="..."
       @input="grow"
       @keydown="onKeydown"
+    />
+    <input
+      ref="fileInputRef"
+      type="file"
+      multiple
+      class="hcc-file"
+      :disabled="running || uploading"
+      @change="onFilesPicked"
     />
     <div class="hcc-foot">
       <div ref="plusRef" class="hcc-sel">
@@ -181,6 +207,15 @@ onMounted(() => {
             <span class="ol">终端现场</span>
             <span class="od">选区与最近命令随消息带上</span>
             <span class="ot">{{ sshAi.attachTerminalContext ? '✓' : '' }}</span>
+          </button>
+          <button
+            type="button"
+            class="hcc-opt"
+            :disabled="uploading"
+            @click="pickFiles"
+          >
+            <span class="ol">{{ uploading ? '上传中…' : '本地文件' }}</span>
+            <span class="od">内容随指令注入，不是发给模型的路径</span>
           </button>
           <div class="hcc-sep">技能</div>
           <button
@@ -300,9 +335,24 @@ onMounted(() => {
         >×</button>
       </span>
 
+      <span
+        v-for="f in sshAi.pendingAttachments"
+        :key="f.file_id"
+        class="hcc-chip"
+        :title="f.truncated ? '文件较大，只注入开头节选 —— 模型看到的是节选，不是全文' : f.filename"
+      >
+        {{ f.filename }}
+        <button
+          type="button"
+          class="hcc-chip-x"
+          :aria-label="`移除附件 ${f.filename}`"
+          @click="removeAttachment(f.file_id)"
+        >×</button>
+      </span>
+
       <span v-if="running" class="hcc-note">AI 正在运行中</span>
 
-      <button type="button" class="hcc-send" :disabled="!canSend" @click="send">交给它</button>
+      <button type="button" class="hcc-send" :disabled="!canSend" @click="send">执行</button>
     </div>
   </div>
 </template>
@@ -386,6 +436,9 @@ onMounted(() => {
 .hcc-btn.empty b { color: var(--accent-orange) }
 /* ＋ 是底栏唯一的上下文入口（故事 5），做成方角小方块让它一眼是"加"而不是一个词 */
 .hcc-btn.plus { width: 26px; padding: 0; justify-content: center; font-size: 15px }
+/* 文件选择器不进底栏（故事 5：＋ 之外不常驻"添加"按钮），只借程序化 click 唤起。
+   display:none 的 input 在 Chromium 里照样能被 .click() 打开，侧栏用的是同一招。 */
+.hcc-file { display: none }
 /* 可移除的 chip（故事 6）：底色用 --bg-input 而不是 elevated —— 它表示"这条消息
    会带上它"，比卡面暗一档才读得出是附加物，不是卡片自身的装饰 */
 .hcc-chip {
@@ -445,7 +498,9 @@ onMounted(() => {
   border-radius: var(--radius-sm);
   transition: background var(--transition-fast);
 }
-.hcc-opt:hover { background: var(--bg-hover) }
+.hcc-opt:hover:not(:disabled) { background: var(--bg-hover) }
+/* 上传中：菜单项禁用要有可见差别，否则用户以为点了没反应，再点一次 */
+.hcc-opt:disabled { opacity: .55; cursor: default }
 .hcc-opt .ol { grid-column: 1; font-size: 12px; color: var(--text-primary) }
 .hcc-opt .od { grid-column: 1; font-size: 11px; color: var(--text-tertiary); line-height: 1.45 }
 .hcc-opt .ot {

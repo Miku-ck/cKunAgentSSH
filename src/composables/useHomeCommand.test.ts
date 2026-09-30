@@ -9,29 +9,36 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
 
 const sendMessage = vi.fn(async () => true)
+const uploadFiles = vi.fn(async () => [] as { file_id: string; filename: string; content: string; truncated: boolean }[])
 const approvalMode = ref<'normal' | 'auto'>('normal')
 const posture = ref<'goal' | 'plan' | null>(null)
 const selectedSkillIds = ref<string[]>([])
+const pendingAttachments = ref<{ file_id: string; filename: string; content: string; truncated: boolean }[]>([])
 const setSelectedSkillIds = vi.fn((ids: string[]) => { selectedSkillIds.value = ids })
+const setPendingAttachments = vi.fn((list: typeof pendingAttachments.value) => { pendingAttachments.value = list })
 const isRunning = ref(false)
 const info = vi.fn()
+const error = vi.fn()
 
 // pinia 会把 store 里的 ref 解包成裸值，mock 必须同形：直接返回 ref 对象的话
 // `!agent.isRunning` 恒为 false（对象永远真值），测出来的是 mock 的假象。
 vi.mock('@/stores/ssh-ai', () => ({
   useSshAiStore: () => ({
     sendMessage,
+    uploadFiles,
     setSelectedSkillIds,
+    setPendingAttachments,
     get approvalMode() { return approvalMode.value },
     get posture() { return posture.value },
     get selectedSkillIds() { return selectedSkillIds.value },
+    get pendingAttachments() { return pendingAttachments.value },
   }),
 }))
 vi.mock('@/stores/agent', () => ({
   useAgentStore: () => ({ get isRunning() { return isRunning.value } }),
 }))
 vi.mock('@/stores/toast', () => ({
-  useToastStore: () => ({ info }),
+  useToastStore: () => ({ info, error }),
 }))
 
 const { useHomeCommand } = await import('@/composables/useHomeCommand')
@@ -39,11 +46,15 @@ const { useHomeCommand } = await import('@/composables/useHomeCommand')
 describe('useHomeCommand', () => {
   beforeEach(() => {
     sendMessage.mockClear()
+    uploadFiles.mockClear()
     setSelectedSkillIds.mockClear()
+    setPendingAttachments.mockClear()
     info.mockClear()
+    error.mockClear()
     approvalMode.value = 'normal'
     posture.value = null
     selectedSkillIds.value = []
+    pendingAttachments.value = []
     isRunning.value = false
   })
 
@@ -57,13 +68,15 @@ describe('useHomeCommand', () => {
     expect(selectedSkillIds.value).toEqual([])
   })
 
-  it('下达被拒时保留技能，与草稿同生同死', async () => {
+  it('下达被拒时保留技能与附件，与草稿同生同死', async () => {
     sendMessage.mockResolvedValueOnce(false)
     selectedSkillIds.value = ['sk-log']
+    pendingAttachments.value = [{ file_id: 'f1', filename: 'nginx.log', content: 'boom', truncated: false }]
     const c = useHomeCommand()
     c.draft.value = '查一下磁盘'
     expect(await c.submit()).toBe(false)
     expect(selectedSkillIds.value).toEqual(['sk-log'])
+    expect(pendingAttachments.value).toHaveLength(1)
   })
 
   it('空草稿不发送', async () => {
@@ -80,7 +93,7 @@ describe('useHomeCommand', () => {
     expect(await c.submit()).toBe(true)
     expect(sendMessage).toHaveBeenCalledWith(
       '把 nginx worker_connections 提到 4096',
-      { approval: 'auto', mode: undefined, skillIds: [] },
+      { approval: 'auto', mode: undefined, skillIds: [], attachments: [] },
     )
   })
 
@@ -93,7 +106,7 @@ describe('useHomeCommand', () => {
     expect(await c.submit()).toBe(true)
     expect(sendMessage).toHaveBeenCalledWith(
       '看看 nginx 配置为什么报错',
-      { approval: 'normal', mode: 'plan', skillIds: [] },
+      { approval: 'normal', mode: 'plan', skillIds: [], attachments: [] },
     )
   })
 
@@ -104,8 +117,25 @@ describe('useHomeCommand', () => {
     expect(await c.submit()).toBe(true)
     expect(sendMessage).toHaveBeenCalledWith(
       '查一下磁盘',
-      { approval: 'normal', mode: undefined, skillIds: ['sk-log', 'sk-disk'] },
+      { approval: 'normal', mode: undefined, skillIds: ['sk-log', 'sk-disk'], attachments: [] },
     )
+  })
+
+  it('附件随同一次下达出去，发出后与技能一起清空（都是一次性附加）', async () => {
+    pendingAttachments.value = [{ file_id: 'f1', filename: 'nginx.log', content: 'boom', truncated: false }]
+    const c = useHomeCommand()
+    c.draft.value = '这份日志说明了什么'
+    expect(await c.submit()).toBe(true)
+    expect(sendMessage).toHaveBeenCalledWith(
+      '这份日志说明了什么',
+      {
+        approval: 'normal',
+        mode: undefined,
+        skillIds: [],
+        attachments: [{ file_id: 'f1', filename: 'nginx.log', content: 'boom', truncated: false }],
+      },
+    )
+    expect(pendingAttachments.value).toEqual([])
   })
 
   it('发送成功后清空草稿', async () => {
@@ -132,5 +162,31 @@ describe('useHomeCommand', () => {
     expect(sendMessage).not.toHaveBeenCalled()
     expect(info).toHaveBeenCalled()
     expect(c.draft.value).toBe('再跑一条')
+  })
+
+  it('选中的文件上传成功后挂进待发送附件', async () => {
+    uploadFiles.mockResolvedValueOnce([
+      { file_id: 'f1', filename: 'nginx.log', content: 'boom', truncated: false },
+    ])
+    const c = useHomeCommand()
+    await c.attachFiles([new File(['boom'], 'nginx.log')])
+    expect(uploadFiles).toHaveBeenCalledTimes(1)
+    expect(pendingAttachments.value.map(f => f.file_id)).toEqual(['f1'])
+    expect(c.uploading.value).toBe(false)
+  })
+
+  it('一个文件都没选时不发上传请求', async () => {
+    const c = useHomeCommand()
+    await c.attachFiles([])
+    expect(uploadFiles).not.toHaveBeenCalled()
+  })
+
+  it('上传整体抛错时给 toast —— 静默失败比报错更难查（单文件失败由 uploadFiles 自己 toast）', async () => {
+    uploadFiles.mockRejectedValueOnce(new Error('后端 500'))
+    const c = useHomeCommand()
+    await c.attachFiles([new File(['x'], 'a.log')])
+    expect(error).toHaveBeenCalledWith('后端 500')
+    expect(pendingAttachments.value).toEqual([])
+    expect(c.uploading.value).toBe(false)
   })
 })

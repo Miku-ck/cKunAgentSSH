@@ -161,6 +161,15 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     selectedSkillIds.value = ids
   }
 
+  /** 已上传、待随下一条消息注入的本地附件。原先是 SideChatPanel.vue:587 的组件私有
+   *  ref —— 首页 ＋ 菜单选的文件挂不到侧栏，反之也一样。上传通路不在这片：
+   *  uploadFiles 早就存在，/chat/upload 也是后端真读真返的那条。 */
+  const pendingAttachments = ref<ChatAttachment[]>([])
+
+  function setPendingAttachments(list: ChatAttachment[]) {
+    pendingAttachments.value = list
+  }
+
   // ── 会话 CRUD ──
 
   async function createConversation(title?: string): Promise<ModeConversation> {
@@ -697,6 +706,9 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     // ── 技能选择 ──
     selectedSkillIds,
     setSelectedSkillIds,
+    // ── 待发送附件 ──
+    pendingAttachments,
+    setPendingAttachments,
     // ── 终端现场（故事 5/6 第三项）──
     attachTerminalContext,
     setAttachTerminalContext,
