@@ -61,10 +61,12 @@
 
 15. 作为运维，下达后自动进入这条指令的运行视图；标签条上它占一个标签，标题是指令摘要，可关闭。
 16. 作为运维，运行视图顶部固定显示：指令原文、`● 运行中 + 计时`、`第 n/m 步`、trace 号、目标主机链、模型与审批方式、`回首页`、`中止`。
+    > 修订 2026-09-30：`第 n/m 步` 落成 **`第 n 步`**。m（总步数）在 run 结束前不存在：`totalIterations` 来自 done 事件，`maxIterations` 是前端自己发出去的值、后端不回传（见 §8 表）。把发送值当分母印出来，就是一个借来的假上限。
 17. 作为运维，左栏是计划时间线：每步一个状态（完成 / 等待 / 未开始）与耗时，纵向连接线串起来。
     > 修订 2026-09-30：实现前先核了数据源，**前端没有"计划步骤"这种结构**。可用的只有：`ToolCallEntry[]`（带 `iteration` 分组、`result`/`success` 是否回填、`timestamp`）与 `intentionInfo`（意图分类，AgentRunPanel 已把它渲染成"任务规划"区块）。`workflowSnapshot.plan` 是落盘的 markdown 工件，只在计划姿态下存在，不是每次 run 都有。
     > 所以时间线按 `iteration` 批次铺工具调用：`result` 已回填=完成、在跑=等待、还没到=未开始。耗时只有 `timestamp` 差值可取，口径是**距上一步的间隔**，不能标成"该步耗时"——那会给出一个数据里不存在的精度。真正的每步时长属于后端事件，本片不改 SSE（§6）。
 18. 作为运维，右栏是事件流，按时间往下长；只读工具卡显示命令与输出，写操作卡显示带行号的 diff 与快照路径。
+    > 修订 2026-09-30：后半句**本片不做** —— 前端没有 diff / 快照路径任何数据源（§8 表、§6 末条）。写操作卡降级为「命令 + 纯文本输出 + 风险与可逆性角标」。
 19. 作为运维，点时间线某一步，右栏滚到对应事件并高亮一下。
 20. 作为运维，审批请求就地出现在事件流里它该出现的位置，我不必跳到别处去批。
 21. 作为运维，run 结束后标签仍在，内容定格；关闭该标签后，凭 trace 号能在 `历史任务` / 运维审计里找回。
@@ -119,6 +121,7 @@
 - 不做终端分屏 / tmux 复用。
 - 不做浅色主题下手记配色的全量适配（先保证深色 + atelier 两套）。
 - 不把预览稿 A / B / C″ 三版落地。
+- **不做带行号的 diff 卡与快照路径**（故事 18 的后半句）。核过：前端没有任何 diff / patch / 快照路径字段，后端把工具结果 `str()` 后作为纯文本下发（`routes/agent.py:953-955`），SSE 里也没有这类事件。要做等于无源，只能先改后端 —— 那超出"不改 SSE 协议"（§6 第二条）。写操作卡降级为「命令 + 纯文本输出 + 风险与可逆性角标」，等后端补字段再单独一片。
 
 ## 7. 补充说明
 
@@ -126,3 +129,54 @@
 - **`designs/` 目录当前有两个来源。** 本轮生成的 7 份，与另一会话生成的 `home-layout-ai-panel.html`、`home-B-deck-grounded.html`、`home-B-deck-realskin.html`、`ai-home-mockups/`、`docs/home-layout-ai-panels/`（v1–v5）。后者同样是"AI 指令面板首页"命题，落地前需与用户确认保留哪一支，避免两套首页语言同时进代码。
 - **规格说明书位置。** 项目既有约定是 `docs/superpowers/specs/YYYY-MM-DD-*-design.md`（已有 4 份），本文件跟随该约定，不新建 `docs/specs/`。
 - **可分片性。** 三态天然可垂直切片：外壳标签态（S2）→ 首页输入卡与队列（S3）→ 运行视图（S1）→ atelier 主题（S4）。每片独立可验证，主题最后做，因为它不阻塞功能。
+
+## 8. 运行视图：数据源清点（2026-09-30，预览稿 #pane-run 逐元素对照实现）
+
+规则：先确认数据在不在，再谈版面。下面每一行都带 文件:行号，标 **有** 的是能直接渲染的，标 **缺** 的要么改口径要么砍，不做"UI 亮着、约束不存在"的空开关。
+
+| #pane-run 元素 | 数据源现状 | 结论 |
+|---|---|---|
+| 指令原文（task） | `intentionInfo` 无 task；`PermissionRequest.task` 只到卡片级；live 的最后一条 user 消息可取（`ssh-ai.ts` messages），跨 run 找回走 REST `getRunTrace`（`client.ts:1313`） | **有**（live 取消息，历史取 REST） |
+| ● 运行中 + 计时 | `runStartTime` 是模块级 `let`、非 reactive、未导出（`agent.ts:170`）；只有事后一次性 `snapshot().duration`（`agent.ts:310`） | **缺 live 计时**：提为 `ref` 导出后视图侧单点 tick |
+| 第 n/m 步 | `iteration` 有且能稳定分组；`totalIterations` 来自 done 事件（`agent.ts:136`）—— **run 结束前 m 不存在**。`maxIterations` 是前端发送值（`client.ts:869`），后端不回传 | 改成 **第 n 步**，不显示 `/m`（否则是个假分母） |
+| trace 号 | `lastRunId`（`agent.ts:148`），`_reset()` 只在 `runAgent()` 起手调（`agent.ts:240`），切会话/关面板不清 → 本 run 期间稳定可读 | **有** |
+| 目标主机链 | 活动会话派生已存在：`useHomeTarget.targetLabel`、`approval-display.ts:approvalTargetLabel` | **有** |
+| 模型 + 审批档 | `ssh-ai.selectedModelId` / `approvalMode`；文案 `run-modes.APPROVAL_LABELS` | **有** |
+| 左栏计划时间线（步骤条目） | **无任何结构化步骤数据**。`workflowSnapshot.plan` 是一整段 markdown 字符串（`client.ts:363-369`），REST 填充、只在 run 终态刷新（`ssh-ai.ts:177`），且仅计划姿态下才有 | **缺**：时间线只能按 `iteration` 分组 `toolCalls` 拼（故事 17 已修订）；不解析 markdown 装成"计划步骤" |
+| 每步耗时 | `ToolCallEntry` 无时长字段（`agent.ts:17-33`）。但后端 SSE 的 `tool_call_result` **带 `duration_ms`**（`telemetry.py:165`），前端 `_handleEvent` 没读、类型没声明（`agent.ts:509-515`）—— 数据在信上被丢弃 | 时间线口径 = 接住 `duration_ms`（不改协议、非推算） |
+| 右栏事件流（命令 + 输出） | `toolCalls[]` 齐：`tool/args/result/success/iteration/callId`。`result` 是纯文本（后端 `str()`，`agent.py:953-955`） | **有**，但没有任何工具卡组件可复用（`AgentTraceInline` / `AgentFullTrace` 都明说不渲染工具调用）→ 新建 |
+| 写操作卡带行号 diff + 快照路径 | **完全无源**：无 diff / patch / 快照路径事件或字段。`AgentMemoryView.vue:494` 的 `diffLineRanges` 是记忆版本比对，不是文件 diff | **砍**（见 §6 新增条目），或后端补字段另开一片 |
+| 审批就地内联 | 逻辑已全共用（`useApprovalActions` + `approval-display` + `approval-scopes`），但**焦点卡模板没组件化**（`AgentRunPanel.vue:198-302`），首页队列走的是另一套平铺形态 | 先抽 `ApprovalCard.vue` 再内联，否则第三份复制 |
+| 中止 | `agentStore.abort`（`agent.ts:281-298`）现成；现有入口在 `SideChatPanel` → `SshAiPanel` 链上，**无确认框** | **有**，运行视图决定是否包 `useConfirm` |
+| 已中止 vs 已完成 | `status` ∈ idle/running/completed/failed；`aborted` + status=idle 区分中止（`agent.ts:128,173`）。`snapshot()` **不含 content**（`agent.ts:303-325`） | 故事 22 口径成立，可据此显式标"已中止" |
+
+**两个必须先解决的坑（不解决会在新视图里复发）**
+
+1. **AgentRunPanel 的挂载洞**：它挂在 `SideChatPanel.vue:58` 的 slot 里，而那个 slot 处在 `displayMessages.length === 0` 的 `v-else` 分支内 —— 从首页下达、首条消息还没进 store 时，整块面板（含澄清向导）**根本没挂载**。运行视图若复用同一 slot 会继承这个洞。视图应挂在 `SshView` 层，与首页/终端平级。
+2. **过期文案**：`settings/panels/AgentPanel.vue:345` 写着"每步命令已内联在气泡执行卡"，与代码不符（工具调用从来没在气泡里渲染过）。运行视图落地后这条才第一次变成真话——落地前别顺手改它。
+
+**接缝（补 §5）**
+
+- **S1a `utils/run-trace.ts`（纯函数，新建）** —— `iteration` 分组、状态判定（result 是否回填 / success）、`duration_ms` 累加。时间线与事件流都读它的输出，避免两处各写一遍分组。
+- **S1b `agent.ts` 最小改动** —— 只加两件事：`runStartTime` 由 `let` 改 `ref` 并导出；`ToolCallEntry.durationMs` 接住事件里已有的 `duration_ms`。**不动** `_reset()` 语义、不动固化路径、不动 status 判定。这两处是运行视图唯一的 store 变更。
+- **S1c `ApprovalCard.vue`** —— 从 `AgentRunPanel.vue:198-302` 抽出，托盘 / 首页队列 / 运行视图三处共用同一卡体与动作。
+
+## 9. 运行视图切片计划（每片独立可验证，顺序即依赖）
+
+约束：运行视图**不改现有逻辑**。既有通路（首页 → `ssh-ai.sendMessage` → `runAgent`）、审批语义、`_reset()`/固化路径、status 判定一概不动；对 store 的改动仅限 S1b 那两条加法。每片合入的判据都是 `typecheck` 0 错误 + `vitest` 全绿 + 上一片的用例不红。
+
+| 片 | 内容 | 故事 | 阻塞于 | 可单测的接缝 |
+|---|---|---|---|---|
+| R0 | store 两点加法：`runStartedAt: ref`、`ToolCallEntry.durationMs` 接住已下发的 `duration_ms` | 16、17 | — | S1b（agent.test.ts：接住时长、缺字段时不写 0 假装量过、`_reset` 后为 null） |
+| R1 | `utils/run-trace.ts`：按 `iteration` 分组 + 步状态判定 + 时长累加（纯函数） | 17、18 | — | S1a（新测试文件，红→绿） |
+| R2 | 抽 `ApprovalCard.vue`，三处改读它（托盘 / 首页队列 / 后续内联） | 12、20 | — | 无新逻辑，判据是既有 4 处调用点行为不变 |
+| R3 | 运行视图外壳：`run` 标签 + run-head + 空流区，挂在 SshView 层 | 15、16、21 | R0 | S2（run 标签的开关/激活/可关） |
+| R4 | 事件流卡（只读工具卡 / 写操作卡：命令 + 纯文本输出 + 风险角标）+ 审批就地内联 | 18、20 | R1、R2 | S1a 输出形状 |
+| R5 | 左栏时间线 + 点步定位高亮 + 终态定格与"已中止" | 17、19、21、22 | R3、R4 | S1 + S1a |
+
+R0–R2 互不阻塞，可以先合、各自独立可验证；R3 之后才第一次改变用户可见的导航。
+
+**开工前待裁决两件（不影响 R0–R2，可并行推进）**
+
+1. **run 标签与右侧 AI 面板的关系**：并存（面板继续承担问答、run 标签承担过程，数据同源）还是运行视图接管面板里的轨迹区？spec §4 现取"并存、同源不复制"，但 `AgentRunPanel` 的审批托盘与运行视图内联审批同屏出现会重复 —— 需要定一个：托盘在 run 标签活动时段落隐去，还是保留。
+2. **diff 卡**：砍（§6 已按砍写）还是补后端字段？补字段=改 `tool_call_result` 负载，与"不改 SSE 协议"冲突，需你放行才做。
