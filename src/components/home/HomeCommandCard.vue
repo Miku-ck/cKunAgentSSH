@@ -81,6 +81,21 @@ function toggleSkill(id: string) {
   sshAi.setSelectedSkillIds(cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id])
 }
 
+function toggleTerminalContext() {
+  sshAi.setAttachTerminalContext(!sshAi.attachTerminalContext)
+  showPlusMenu.value = false
+}
+
+/** 这枚 chip 只在**真会带东西**时出现：开关开着但既没选区也没最近命令时，
+ *  写着「终端现场」就是谎 —— 而故事 6 要 chip 的初衷正是"看得见带了什么"。 */
+const terminalCtxLabel = computed(() => {
+  if (!sshAi.attachTerminalContext) return ''
+  const c = sshAi.terminalContext
+  if (c.selection) return `终端选区 · ${c.selection.split('\n').filter(l => l.trim()).length} 行`
+  if (c.recent.length) return `终端现场 · 最近 ${c.recent.length} 条`
+  return ''
+})
+
 const { showModelDropdown, modelSelectorRef, currentModelName, selectModel } = useModelSelector({
   getSelectedId: () => sshAi.selectedModelId,
   setSelectedId: (id) => sshAi.setSelectedModel(id),
@@ -156,6 +171,16 @@ onMounted(() => {
             <span class="ol">计划</span>
             <span class="od">只读调研，写操作直接拒绝</span>
             <span class="ot">{{ isPlan ? '✓' : '' }}</span>
+          </button>
+          <button
+            type="button"
+            class="hcc-opt"
+            :class="{ on: sshAi.attachTerminalContext }"
+            @click="toggleTerminalContext"
+          >
+            <span class="ol">终端现场</span>
+            <span class="od">选区与最近命令随消息带上</span>
+            <span class="ot">{{ sshAi.attachTerminalContext ? '✓' : '' }}</span>
           </button>
           <div class="hcc-sep">技能</div>
           <button
@@ -262,6 +287,16 @@ onMounted(() => {
           class="hcc-chip-x"
           :aria-label="`移除技能 ${s.name}`"
           @click="toggleSkill(s.id)"
+        >×</button>
+      </span>
+
+      <span v-if="terminalCtxLabel" class="hcc-chip" title="摘掉后这条指令不带终端现场">
+        {{ terminalCtxLabel }}
+        <button
+          type="button"
+          class="hcc-chip-x"
+          aria-label="本次不带终端现场"
+          @click="sshAi.setAttachTerminalContext(false)"
         >×</button>
       </span>
 

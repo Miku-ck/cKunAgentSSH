@@ -54,6 +54,31 @@ interface SshAiConversation extends ModeConversation {
 
 import { genId } from '@/utils/id'
 
+/** 活动终端现场上下文（selection 为空时不传）— 供「问 AI」入口采集。
+ *  sessionId 标记快照来源终端：发送前切 tab/关会话时用于防串主机（见 sendMessage） */
+export type TerminalSnapshot = { sessionId: string | null; selection: string; cwd: string; recent: string[] }
+
+const NO_TERMINAL_CONTEXT: TerminalSnapshot = { sessionId: null, selection: '', cwd: '', recent: [] }
+
+/**
+ * 「这条消息到底带不带终端现场」的唯一折叠 —— 三态暂存 × 用户开关 × 现场采集。
+ *
+ * 抽成纯函数是因为它原先长在 setup 的闭包变量里：首页既读不到、也关不掉
+ * （spec 故事 5/6 第三项，2026-09-30 裁决：提进 store + 开关 + chip）。
+ * liveSnapshot 用惰性函数而不是值：关着开关时不该去读终端（读操作会挂上响应式依赖）。
+ */
+export function pickTerminalSnapshot(
+  staged: TerminalSnapshot | null | undefined,
+  attach: boolean,
+  liveSnapshot: () => TerminalSnapshot,
+): TerminalSnapshot {
+  // 开关先判：它覆盖已暂存的现场 —— 用户此刻明确说了不要，比之前点过的「问 AI」更新。
+  // sessionId 为 null 也让 sendMessage 里的防串主机复查自然跳过（没什么可防的）。
+  if (!attach) return NO_TERMINAL_CONTEXT
+  if (staged === null) return NO_TERMINAL_CONTEXT
+  return staged ?? liveSnapshot()
+}
+
 export const useSshAiStore = defineStore('ssh-ai', () => {
   // ── 1. 通用对话能力（单一 ssh 模式，直接组合 useChatPersistence） ──
 
@@ -320,10 +345,6 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     }
   }
 
-  /** 活动终端现场上下文（selection 为空时不传）— 供「问 AI」入口采集。
-   *  sessionId 标记快照来源终端：发送前切 tab/关会话时用于防串主机（见 sendMessage） */
-  type TerminalSnapshot = { sessionId: string | null; selection: string; cwd: string; recent: string[] }
-
   function getTerminalSnapshot(): TerminalSnapshot {
     const sshStore = useSSHStore()
     const session = sshStore.activeSession
@@ -337,13 +358,28 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     }
   }
 
-  // 暂存「问 AI」时采集的现场快照，三态语义：
+  // 暂存「问 AI」时采集的现场快照（三态语义见 pickTerminalSnapshot）：
   //   undefined — 未表态（面板里直接输入）→ 发送时现场采集
   //   null      — 纯文本入口刻意不要终端现场（批量下发结果 / 监控指标 / 失败诊断，
   //               问题文本已自带上下文；活动终端与问题所指主机未必同一台）
   //   对象      — 点击「问 AI」时暂存的现场（选区登记随即被清空，只能此刻采集）；
   //               发送时来源终端已切走/关闭则丢弃改现场采集，防"主机 B 身份 + 主机 A 现场"
-  let pendingSnapshot: TerminalSnapshot | null | undefined
+  // 原先是 setup 闭包里的 let —— 首页读不到也关不掉，故提为响应式状态。
+  const stagedSnapshot = ref<TerminalSnapshot | null | undefined>(undefined)
+
+  /** 底栏「终端现场」开关。缺省 **开**，与提升前的无条件采集逐分支一致：
+   *  把一个隐式行为显式化不等于顺手改掉它。关掉 = 走纯文本入口那条空快照分支。 */
+  const attachTerminalContext = ref(true)
+
+  function setAttachTerminalContext(on: boolean) {
+    attachTerminalContext.value = on
+  }
+
+  /** 这条消息**将**带上的现场（不消费暂存）。首页 chip 与侧栏同源读这一份，
+   *  免得两处各自算一遍三态 —— 那正是这套折叠要防的东西。 */
+  const terminalContext = computed(() =>
+    pickTerminalSnapshot(stagedSnapshot.value, attachTerminalContext.value, getTerminalSnapshot),
+  )
 
   /** 终端「问 AI」入口：选中内容 → 预填 AI 面板问题草稿（上下文随消息自动注入） */
   function askAiAboutSelection(question?: string) {
@@ -354,7 +390,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     pendingPrefill.value = { text }
     // 调用方自带问题文本（监控指标「问 AI」）时不暂存现场：问题所指主机与活动
     // 终端未必同一台，拼进无关终端的选区/历史只会误导模型。
-    pendingSnapshot = q ? null : snap
+    stagedSnapshot.value = q ? null : snap
     if (!showAiPanel.value) showAiPanel.value = true
   }
 
@@ -364,7 +400,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     const q = (text || '').trim()
     if (!q) return
     pendingPrefill.value = { text: q }
-    pendingSnapshot = null
+    stagedSnapshot.value = null
     if (!showAiPanel.value) showAiPanel.value = true
   }
 
@@ -542,13 +578,12 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       return false
     }
 
-    // 消费暂存快照（三态语义见 pendingSnapshot 定义）。纯文本入口标 null 时必须
+    // 消费暂存快照（三态语义见 pickTerminalSnapshot）。纯文本入口标 null 时必须
     // 跳过现场采集——原先这里无条件重新采集，把「不采集终端上下文」的入口约定
     // 又破掉了：批量下发/AI 诊断发问时会混入此刻活跃的无关终端选区与命令历史。
-    const staged = pendingSnapshot
-    pendingSnapshot = undefined
-    let snapshot: TerminalSnapshot =
-      staged === null ? { sessionId: null, selection: '', cwd: '', recent: [] } : staged ?? getTerminalSnapshot()
+    const staged = stagedSnapshot.value
+    stagedSnapshot.value = undefined
+    let snapshot: TerminalSnapshot = pickTerminalSnapshot(staged, attachTerminalContext.value, getTerminalSnapshot)
     // 防串主机：暂存快照来源终端已切走（或原会话已关闭）→ 改现场采集
     if (snapshot.sessionId && snapshot.sessionId !== useSSHStore().activeSessionId) {
       snapshot = getTerminalSnapshot()
@@ -662,6 +697,10 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     // ── 技能选择 ──
     selectedSkillIds,
     setSelectedSkillIds,
+    // ── 终端现场（故事 5/6 第三项）──
+    attachTerminalContext,
+    setAttachTerminalContext,
+    terminalContext,
     createConversation,
     switchConversation,
     deleteConversation,

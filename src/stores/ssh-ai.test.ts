@@ -35,7 +35,7 @@ vi.mock('@/api/client', () => ({
   streamAgentRun: vi.fn(() => () => {}),
 }))
 
-const { useSshAiStore } = await import('@/stores/ssh-ai')
+const { useSshAiStore, pickTerminalSnapshot } = await import('@/stores/ssh-ai')
 
 describe('ssh-ai 审批档', () => {
   beforeEach(() => {
@@ -128,5 +128,43 @@ describe('ssh-ai 技能选择', () => {
   it('技能选择不落 localStorage —— 选了什么技能是本次会话的意图', () => {
     useSshAiStore().setSelectedSkillIds(['a'])
     expect([...lsMap.keys()].filter(k => /skill/i.test(k))).toHaveLength(0)
+  })
+})
+
+/**
+ * 终端现场该不该跟着这条消息走 —— 三态折叠抽成纯函数（pickTerminalSnapshot），
+ * 因为它原先长在 setup 闭包变量里：首页读不到、也关不掉（故事 5/6 第三项）。
+ * 这四条就是把原先只有 askAi* 入口能走到的分支逐个钉住。
+ */
+describe('终端现场折叠', () => {
+  const snap = (who: string) => ({ sessionId: who, selection: `sel-${who}`, cwd: `/c/${who}`, recent: [who] })
+  const NONE = { sessionId: null, selection: '', cwd: '', recent: [] }
+
+  it('未表态且开关开着 → 现场采集（今天的默认行为，一字不变）', () => {
+    expect(pickTerminalSnapshot(undefined, true, () => snap('live'))).toEqual(snap('live'))
+  })
+
+  it('有暂存现场 → 用暂存的，不重采（选区登记随即被清空，只有那一刻拿得到）', () => {
+    expect(pickTerminalSnapshot(snap('staged'), true, () => snap('live'))).toEqual(snap('staged'))
+  })
+
+  it('纯文本入口标了不带 → 空快照，连 cwd 与最近命令也不带', () => {
+    expect(pickTerminalSnapshot(null, true, () => snap('live'))).toEqual(NONE)
+  })
+
+  it('开关关掉 → 空快照，且覆盖掉已暂存的现场（用户此刻明确说了不要）', () => {
+    expect(pickTerminalSnapshot(snap('staged'), false, () => snap('live'))).toEqual(NONE)
+    expect(pickTerminalSnapshot(undefined, false, () => snap('live'))).toEqual(NONE)
+  })
+
+  it('默认开关是开的 —— 提升为设置项这件事本身不改变任何既有行为', () => {
+    expect(useSshAiStore().attachTerminalContext).toBe(true)
+  })
+
+  it('开关不落 localStorage（与审批档/姿态同一约定）', () => {
+    const store = useSshAiStore()
+    store.setAttachTerminalContext(false)
+    expect(store.attachTerminalContext).toBe(false)
+    expect([...lsMap.keys()].filter(k => /terminal|context|snapshot/i.test(k))).toHaveLength(0)
   })
 })
