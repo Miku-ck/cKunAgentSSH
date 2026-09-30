@@ -216,11 +216,15 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
    *  往服务器磁盘拷一遍 —— 但截断口径必须与后端逐字相同（chat.py 的
    *  MAX_ATTACHMENT_CHARS = 50_000）：同一个日志经"下载后上传"与"直接挂远端"若截在
    *  不同长度，模型看到的就不是同一份东西。
-   *  同一路径再挑一次 = 换新版内容（远端文件刚被改过），而不是挂出第二枚 chip。 */
-  function addRemoteAttachment(input: { path: string; content: string; size?: number }): ChatAttachment {
+   *  同一台机器上同一路径再挑一次 = 换新版内容（远端文件刚被改过），而不是挂出第二枚
+   *  chip；身份里带 source（哪台机器）是另一半 —— 只按路径去重，A 机挑过 /etc/hosts
+   *  再切到 B 机挑同名文件会把 A 那份静默顶掉，而 chip 上只写着 `hosts`，看不出少了什么。 */
+  function addRemoteAttachment(input: {
+    path: string; content: string; size?: number; source: string
+  }): ChatAttachment {
     const truncated = input.content.length > ATTACHMENT_CHAR_LIMIT
     const att: ChatAttachment = {
-      file_id: `${REMOTE_ID_PREFIX}${input.path}`,
+      file_id: `${REMOTE_ID_PREFIX}${input.source}:${input.path}`,
       filename: input.path.split('/').filter(Boolean).pop() || input.path,
       size: input.size ?? input.content.length,
       content: truncated ? input.content.slice(0, ATTACHMENT_CHAR_LIMIT) : input.content,

@@ -259,23 +259,23 @@ describe('ssh-ai 远端文件附件', () => {
     uploadChatFile.mockClear()
   })
 
-  it('挂上后是一枚标准附件：basename 作文件名、路径作身份', () => {
+  it('挂上后是一枚标准附件：basename 作文件名、"哪台机+路径"作身份', () => {
     const store = useSshAiStore()
-    const a = store.addRemoteAttachment({ path: '/etc/nginx/nginx.conf', content: 'user nginx;' })
+    const a = store.addRemoteAttachment({ path: '/etc/nginx/nginx.conf', content: 'user nginx;', source: 'root@web-1' })
     expect(store.pendingAttachments).toEqual([
-      { file_id: 'remote:/etc/nginx/nginx.conf', filename: 'nginx.conf', content: 'user nginx;', truncated: false, size: 11 },
+      { file_id: 'remote:root@web-1:/etc/nginx/nginx.conf', filename: 'nginx.conf', content: 'user nginx;', truncated: false, size: 11 },
     ])
-    expect(a.file_id).toBe('remote:/etc/nginx/nginx.conf')
+    expect(a.file_id).toBe('remote:root@web-1:/etc/nginx/nginx.conf')
   })
 
   it('不上传 —— 内容已经在手上，没必要再往服务器磁盘拷一份', () => {
-    useSshAiStore().addRemoteAttachment({ path: '/etc/hosts', content: '127.0.0.1 localhost' })
+    useSshAiStore().addRemoteAttachment({ path: '/etc/hosts', content: '127.0.0.1 localhost', source: 'root@web-1' })
     expect(uploadChatFile).not.toHaveBeenCalled()
   })
 
   it('超过注入上限就截断并标 truncated —— 不标记，模型会把节选当全文下结论', () => {
     const store = useSshAiStore()
-    const a = store.addRemoteAttachment({ path: '/var/log/big.log', content: 'x'.repeat(ATTACHMENT_CHAR_LIMIT + 7) })
+    const a = store.addRemoteAttachment({ path: '/var/log/big.log', content: 'x'.repeat(ATTACHMENT_CHAR_LIMIT + 7), source: 'root@web-1' })
     expect(a.content).toHaveLength(ATTACHMENT_CHAR_LIMIT)
     expect(a.truncated).toBe(true)
     // 上限与后端 routes/chat.py 的 MAX_ATTACHMENT_CHARS 同值：那边改了这个数，
@@ -283,17 +283,26 @@ describe('ssh-ai 远端文件附件', () => {
     expect(ATTACHMENT_CHAR_LIMIT).toBe(50_000)
   })
 
-  it('同一路径再挑一次是换成新内容，不是挂出第二枚 chip', () => {
+  it('同一台机同一路径再挑一次是换新内容，不是挂出第二枚 chip', () => {
     const store = useSshAiStore()
-    store.addRemoteAttachment({ path: '/etc/hosts', content: 'old' })
-    store.addRemoteAttachment({ path: '/etc/hosts', content: 'new' })
+    store.addRemoteAttachment({ path: '/etc/hosts', content: 'old', source: 'root@web-1' })
+    store.addRemoteAttachment({ path: '/etc/hosts', content: 'new', source: 'root@web-1' })
     expect(store.pendingAttachments).toHaveLength(1)
     expect(store.pendingAttachments[0].content).toBe('new')
   })
 
+  it('换了机器就必须是另一枚 —— 只按路径去重会静默顶掉上一台那份', () => {
+    // 首页目标主机可以中途换：A 机挑 /etc/hosts 后切到 B 机再挑同名文件，
+    // 身份里没 host 的话 chip 数量不变、内容换掉，用户完全看不出少了 A 机那份。
+    const store = useSshAiStore()
+    store.addRemoteAttachment({ path: '/etc/hosts', content: 'from-a', source: 'root@web-1' })
+    store.addRemoteAttachment({ path: '/etc/hosts', content: 'from-b', source: 'root@web-2' })
+    expect(store.pendingAttachments.map(f => f.content)).toEqual(['from-a', 'from-b'])
+  })
+
   it('chip 的 × 摘得掉远端附件 —— 与本地附件同一个 removePendingAttachment', () => {
     const store = useSshAiStore()
-    const a = store.addRemoteAttachment({ path: '/etc/hosts', content: 'x' })
+    const a = store.addRemoteAttachment({ path: '/etc/hosts', content: 'x', source: 'root@web-1' })
     store.removePendingAttachment(a.file_id)
     expect(store.pendingAttachments).toEqual([])
   })

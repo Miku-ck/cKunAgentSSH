@@ -79,6 +79,10 @@ async function load(path: string) {
   loading.value = true
   error.value = ''
   try {
+    // 主进程所有 sftp* 调用都过 requireSftp —— 通道没开直接抛 SFTP_SESSION_REQUIRED。
+    // 首页这条通路先前只能"顺便"用：你得先去 SFTP 面板连一次才能列目录。
+    // openSftp 自身幂等（已开即 return），且不关：通道按会话键控，SFTP 面板共用同一条。
+    await api.sftpOpen(sid)
     const list = await api.sftpList(sid, path)
     if (seq !== listSeq) return
     entries.value = list
@@ -101,7 +105,12 @@ async function pick(entry: SftpEntry) {
   try {
     const file = await api.sftpReadFile(sid, entry.path)
     if (seq !== readSeq) return
-    sshAi.addRemoteAttachment({ path: entry.path, content: file.content, size: file.size })
+    sshAi.addRemoteAttachment({
+      path: entry.path,
+      content: file.content,
+      size: file.size,
+      source: session.value?.shell || session.value?.name || 'remote',
+    })
     emit('picked', { path: entry.path, filename: entry.name })
   } catch (err) {
     if (seq !== readSeq) return
