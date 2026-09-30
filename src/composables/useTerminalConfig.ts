@@ -2,6 +2,7 @@ import { watch } from 'vue'
 import type { Terminal, ITerminalOptions, ITheme } from '@xterm/xterm'
 import type { FitAddon } from '@xterm/addon-fit'
 import { useSettingsStore } from '@/stores/settings'
+import { isHexColor } from '@/utils/appearance-tokens'
 
 /** 终端字号允许范围（与设置面板滑块一致），防御 localStorage 越界值 */
 const MIN_FONT_SIZE = 12
@@ -53,14 +54,40 @@ const TERMINAL_DARK_THEME: ITheme = {
 }
 
 /**
+ * hex 色 + 透明度百分比 → rgba 字符串。
+ * 非法输入回落 'transparent'（= auto 模式的现状行为），不抛错——
+ * 设置值可能被历史脏 localStorage 污染，渲染层只该降级不该炸。
+ */
+export function hexToRgba(hex: string, opacityPct: number): string {
+  if (!isHexColor(hex)) return 'transparent'
+  const int = parseInt(hex.slice(1), 16)
+  const r = (int >> 16) & 255
+  const g = (int >> 8) & 255
+  const b = int & 255
+  const a = Math.max(0, Math.min(100, opacityPct)) / 100
+  return `rgba(${r}, ${g}, ${b}, ${a})`
+}
+
+/**
+ * 按设置解析当前终端主题：auto 返回原暗色主题（背景透明，跟随主题底色/全局背景图），
+ * solid 把用户色转 rgba 写进 background。build 与 watch 共用，避免两处口径漂。
+ */
+export function resolveTerminalTheme(): ITheme {
+  const store = useSettingsStore()
+  const t = store.settings.appearance.terminal
+  if (t.backgroundMode !== 'solid') return TERMINAL_DARK_THEME
+  return { ...TERMINAL_DARK_THEME, background: hexToRgba(t.backgroundColor, t.backgroundOpacity) }
+}
+
+/**
  * 构建 xterm Terminal 创建时的 options。
- * 字号/字体从设置读取；主题固定为暗色（背景跟随全局主题），不开放单独切换。
+ * 字号/字体/背景从设置读取；ANSI 颜色固定暗色，背景可跟随全局或自定义纯色。
  */
 export function buildTerminalOptions(extra?: ITerminalOptions): ITerminalOptions {
   const store = useSettingsStore()
   const t = store.settings.appearance.terminal
   return {
-    theme: TERMINAL_DARK_THEME,
+    theme: resolveTerminalTheme(),
     fontSize: clampFontSize(t.fontSize),
     fontFamily: getTerminalFontFamily(t.fontFamily),
     // 必须开启透明度，theme.background 才能使用透明/rgba 色，让全局背景图透出
@@ -70,10 +97,12 @@ export function buildTerminalOptions(extra?: ITerminalOptions): ITerminalOptions
 }
 
 /**
- * 监听终端字号/字体变化，动态应用到已创建的 terminal 实例（无需重建）。
+ * 监听终端字号/字体/背景变化，动态应用到已创建的 terminal 实例（无需重建）。
  * 字号/字体变化时调用 fitAddon.fit() 重新计算行列数，并通过 onResized 通知宿主
  * 把新的 cols/rows 下发给 PTY —— 容器尺寸没变，ResizeObserver 不会触发，
  * 少了这一步则 vim/htop 等按尺寸渲染的程序会在换字号后串列。
+ * 背景变化只换 theme 引用（xterm 需整体重赋才触发重绘），不影响单元格尺寸，
+ * 不进 fit/resize 流程。
  *
  * @param isActive 终端是否当前可见（不可见时跳过 fit，避免 0x0 计算错误；
  *                 重新可见时宿主的 visible 监听会补一次 fit + resize）
@@ -87,7 +116,7 @@ export function watchTerminalConfig(
   onResized?: () => void
 ): () => void {
   const store = useSettingsStore()
-  return watch(
+  const unsubFont = watch(
     [
       () => store.settings.appearance.terminal.fontSize,
       () => store.settings.appearance.terminal.fontFamily,
@@ -103,6 +132,18 @@ export function watchTerminalConfig(
       if (terminal.cols !== cols || terminal.rows !== rows) onResized?.()
     }
   )
+  const unsubBg = watch(
+    [
+      () => store.settings.appearance.terminal.backgroundMode,
+      () => store.settings.appearance.terminal.backgroundColor,
+      () => store.settings.appearance.terminal.backgroundOpacity,
+    ],
+    () => {
+      // 整体替换 theme 对象引用，xterm 才会重新解析颜色并触发重绘
+      terminal.options.theme = resolveTerminalTheme()
+    }
+  )
+  return () => { unsubFont(); unsubBg() }
 }
 
 /** 设置面板可用的终端字体选项 */

@@ -11,8 +11,9 @@
  * - 错误（errorMessage）
  *
  * 工具授权请求原先也在这里（审批托盘：单一焦点卡 + 批量 + 追溯），R1 起整块撤走 ——
- * 同一份 permissionRequests 现在只在首页「待你放行」队列与首页过程区的内联卡出现，
- * 结算仍走 store 的 approvePermission / denyPermission。`hasRunNotice` 里那一项
+ * 同一份 permissionRequests 现在只有两处画法，且分工不重叠：过程区的内联卡是
+ * 唯一的逐条决策位，首页那条计数窄条只管汇总、批量与追溯。结算仍走 store 的
+ * approvePermission / denyPermission。`hasRunNotice` 里那一项
  * 条件随之撤掉（留着会空挂一块面板）。
  *
  * 整块的显隐由 agentStore.hasRunNotice 决定（数据侧单一判定，逐区块对齐）——
@@ -106,9 +107,9 @@ const latestHelp = computed(() =>
     </div>
 
     <!-- 审批托盘已随侧栏退役移除（spec 2026-09-30-retire-ai-side-panel R1）。
-         同一份 agentStore.permissionRequests 现在只有两处画法：首页「待你放行」
-         队列（含批量与追溯）与首页过程区里的内联卡。批量/追溯不是丢了，是搬到
-         队列那边 —— 侧栏不再是结算面，结算仍走 store 的 approve/deny。 -->
+         同一份 agentStore.permissionRequests 现在只有两处画法，逐条决策位只剩一个：
+         过程区里的内联卡；首页那条窄条只报数、批量、追溯。批量/追溯不是丢了，是搬到
+         那边 —— 侧栏不再是结算面，结算仍走 store 的 approve/deny。 -->
 
     <!-- 可见终端执行：待确认命令 -->
     <div class="delivery-section" v-if="agentStore.pendingDeliveries.length > 0">

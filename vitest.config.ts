@@ -11,8 +11,10 @@ export default defineConfig({
     include: ['src/**/*.{test,spec}.ts'],
     environment: 'node',
     globals: false,
-    // 默认所有 .css 都被替换成空模块 —— variables.test.ts 用 ?raw 读令牌表，
-    // 空模块会让它"找不到主题块"而不是读到源码。只放行这一个文件走 Vite 原样加载。
-    css: { include: [/variables\.css/] },
+    // 默认所有 .css 都被替换成空模块 —— variables.test.ts 用 ?raw 读令牌表与
+    // 消费方，空模块会让它"找不到主题块"（或更坏：断言悄悄通过）而不是读到源码。
+    // 放行 global.css：::selection 那条消费方在它里面，令牌表与它的读取方必须在
+    // 同一份断言里对得上，否则 --wash 又是一个只写不读的令牌。
+    css: { include: [/variables\.css/, /global\.css/] },
   },
 })

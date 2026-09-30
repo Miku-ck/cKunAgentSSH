@@ -32,20 +32,9 @@
             </button>
           </div>
 
-          <!-- run 标签：本次运行的过程与轨迹，可关（关掉后凭 trace 号去历史找回） -->
-          <div
-            v-if="runTabVisible"
-            class="term-tab run-tab"
-            :class="{ active: showRun && activeNavPage === 'home' }"
-            :title="agentStore.lastTask"
-            @click="openRunView"
-          >
-            <span class="run-dot" :class="{ live: agentStore.isRunning }" aria-hidden="true"></span>
-            <span class="tab-label">{{ runTabTitle }}</span>
-            <button class="tab-close" @click.stop="closeRunView">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            </button>
-          </div>
+          <!-- 运行过程不再有标签：它直接长在首页下面（指令卡与待放行队列之后）。
+               标签那一版把首页整屏换掉，于是"看过程"和"下一条指令"变成互斥的两屏
+               —— 而下达之后人两样都要。 -->
 
           <!-- 新建终端（本地 shell / 已配好的远程连接） -->
           <NewTerminalMenu @open-local="openLocalShell" @open-remote="connectRemote" />
@@ -54,7 +43,7 @@
 
       <!-- 内容区包装器: flex:1 + position:relative 为内部绝对定位提供参照 -->
       <div class="content-area">
-        <!-- 终端内容区 (始终渲染以保持终端实例, 首页/运行标签活动时被盖住) -->
+        <!-- 终端内容区 (始终渲染以保持终端实例, 首页活动时被盖住) -->
         <div class="term-content" v-if="store.sessions.length > 0" v-show="terminalVisible">
           <template v-for="s in store.sessions" :key="s.id">
 <LocalTerminal
@@ -108,17 +97,15 @@ v-show="s.id === store.activeSessionId"
           <DashboardView v-if="pageMounted('dashboard')" />
         </div>
 
-        <!-- 首页：目标主机 + 下达 + 跨 run 待放行汇总 -->
+        <!-- 首页：目标主机 + 下达 + 待放行计数条（批量与追溯归它）+ 本轮过程（逐条决策在卡上） -->
         <div v-show="homeTabActive" class="home-pane">
           <HomeTargetTitle @bulk="showBulk = true" />
           <HomeCommandCard />
-          <HomeApprovalQueue @open-run="openRunView" />
-        </div>
-
-        <!-- 运行视图：一条指令的过程与轨迹。挂在 SshView 层而不是侧栏 slot 里 ——
-             关掉 AI 面板也要能看过程（详见 RunView 头注）。 -->
-        <div v-if="showRun && activeNavPage === 'home'" class="run-page">
-          <RunView @back-home="goHome" />
+          <HomeApprovalQueue @open-run="revealRun" />
+          <!-- 运行过程直接排在首页下面，不再是标签条上的一枚标签、也不再是另一屏。
+               仍挂在 SshView 层而不是侧栏 slot 里 —— 关掉 AI 面板也要能看过程
+               （详见 RunView 头注）。在终端里敲命令时它不抢屏：回到首页就在下面。 -->
+          <RunView v-if="runVisible" ref="runRef" />
         </div>
       </div>
 
@@ -223,14 +210,10 @@ const terminalRefs: Record<string, any> = {}
 // 命令投递 + 终端聚焦（内部注册 ssh:focus-terminal / ssh:deliver-command 监听）
 const { focusActiveTerminal } = useCommandDelivery(terminalRefs)
 
-// 页面导航 + 终端生命周期 + 模态框 + 远程连接 + 首页/运行/终端三态
+// 页面导航 + 终端生命周期 + 模态框 + 远程连接 + 首页/终端两态（运行过程已并入首页）
 const {
   homeTabActive,
-  showRun,
   terminalVisible,
-  runTabVisible,
-  openRunView,
-  closeRunView,
   activeNavPage,
   showModal,
   editingConnection,
@@ -260,13 +243,16 @@ const {
 const showBulk = ref(false)
 
 /**
- * run 标签标题 = 指令首行摘要。task 里可能拼了附件正文（_sendAgentMessageInner
- * 把附件内联进 task），所以只取首行再截断，全文在 run-head 与 title 提示里。
+ * 过程面板的可见条件（与先前那枚 run 标签同源）：正在跑，或有一轮跑完可回看。
+ * 它现在是首页里的一块，所以"要不要给它一屏"这个问题不存在了。
  */
-const runTabTitle = computed(() => {
-  const line = (agentStore.lastTask || '运行').split('\n')[0].trim()
-  return line.length > 22 ? `${line.slice(0, 22)}…` : line
-})
+const runVisible = computed(() => agentStore.isRunning || agentStore.lastRunId !== '')
+const runRef = ref<InstanceType<typeof RunView> | null>(null)
+
+/** 队列里点「看过程」：过程就在同一屏的下面，滚过去 —— 先前是换到另一屏。 */
+function revealRun() {
+  runRef.value?.$el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 
 // ── sticky-visited 页面挂载闸门（配合上方 defineAsyncComponent）──
 type PageKey = typeof activeNavPage.value
@@ -357,7 +343,10 @@ defineExpose({
   overflow: hidden;
   position: relative;
   min-height: 0;
-  background: var(--bg-base);
+  /* --canvas-bg 默认就是 --bg-base；手记在里面加了纸纹 + 光斑。
+     attachment:fixed 让标题条/标签条/画布取样同一个视口坐标，一条纸面不被切成三张 */
+  background: var(--canvas-bg);
+  background-attachment: fixed;
 }
 
 /* ─── Terminal Area ─── */
@@ -384,7 +373,8 @@ defineExpose({
   height: var(--tabbar-h);
   display: flex;
   align-items: center;
-  background: var(--bg-base);
+  background: var(--canvas-bg);
+  background-attachment: fixed;
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
   overflow: hidden;
@@ -504,33 +494,6 @@ defineExpose({
   padding: 48px 24px;
   overflow-y: auto;
   z-index: 10;
-}
-
-/* ─── Run View Page ─── */
-.run-page {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 10;
-  display: flex;
-  overflow: hidden;
-  background: var(--bg-base);
-}
-
-/* run 标签的状态点：跑起来才闪，结束时静止 —— 与文案里的状态互为冗余 */
-.run-dot {
-  width: 7px;
-  height: 7px;
-  flex-shrink: 0;
-  border-radius: 50%;
-  background: var(--text-tertiary);
-}
-.run-dot.live { background: var(--accent-green); animation: run-pulse 1.1s steps(2, start) infinite }
-@keyframes run-pulse { 50% { opacity: .3 } }
-@media (prefers-reduced-motion: reduce) {
-  .run-dot.live { animation: none }
 }
 
 /* ─── RemoteManager Page ─── */

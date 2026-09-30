@@ -77,7 +77,8 @@ async function close() { await api?.windowClose() }
   z-index: 1;
   height: var(--titlebar-h);
   border-bottom: 1px solid var(--border-subtle);
-  background: var(--bg-base);
+  background: var(--canvas-bg);
+  background-attachment: fixed;
   display: flex;
   align-items: center;
   flex-shrink: 0;
@@ -171,7 +172,7 @@ async function close() { await api?.windowClose() }
 
 .win-btn:hover {
   background: var(--bg-hover);
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .win-btn.close:hover {

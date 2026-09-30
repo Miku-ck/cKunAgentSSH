@@ -843,7 +843,7 @@ return String(n)
   font-family: inherit;
 }
 .btn-sm { padding: 4px 10px; font-size: 11px; }
-.btn-primary { background: var(--accent-primary); color: #fff; }
+.btn-primary { background: var(--accent-primary); color: var(--accent-on); }
 .btn-primary:hover { background: #4a9aef; }
 .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn-ghost { background: transparent; color: var(--text-secondary); }

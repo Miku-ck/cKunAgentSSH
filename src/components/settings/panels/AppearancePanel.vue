@@ -144,6 +144,25 @@
           </select>
         </SettingRow>
 
+        <SettingRow label="终端背景" desc="本地/远程终端的背景色方案">
+          <select v-model="settings.appearance.terminal.backgroundMode" class="setting-select">
+            <option v-for="(label, value) in terminalBgModeLabels" :key="value" :value="value">{{ label }}</option>
+          </select>
+        </SettingRow>
+
+        <template v-if="settings.appearance.terminal.backgroundMode === 'solid'">
+          <SettingRow label="背景颜色" desc="终端纯色背景">
+            <div class="gradient-color-row">
+              <input type="color" v-model="settings.appearance.terminal.backgroundColor" />
+              <span class="bg-color-text">{{ settings.appearance.terminal.backgroundColor }}</span>
+            </div>
+          </SettingRow>
+
+          <SettingRow label="背景透明度" desc="低于 100% 时与主题底色或全局背景图混合">
+            <SettingSlider v-model="settings.appearance.terminal.backgroundOpacity" :min="0" :max="100" unit="%" />
+          </SettingRow>
+        </template>
+
         <SettingRow label="AI 命令预测" desc="基于上下文智能预测下一步命令（需配置 AI 模型）">
           <ToggleSwitch v-model="settings.appearance.terminal.aiPredictionEnabled" />
         </SettingRow>
@@ -160,7 +179,7 @@ import SettingRow from '@/components/settings/fields/SettingRow.vue'
 import SettingSlider from '@/components/settings/fields/SettingSlider.vue'
 import ToggleSwitch from '@/components/settings/fields/ToggleSwitch.vue'
 import { TERMINAL_FONT_OPTIONS } from '@/composables/useTerminalConfig'
-import { ACCENT_MAP, type Accent, type GradientDirection, type GradientMode, type Theme } from '@/composables/useAppearance'
+import { ACCENT_MAP, type Accent, type GradientDirection, type GradientMode, type TerminalBgMode, type Theme } from '@/utils/appearance-tokens'
 
 const settingsStore = useSettingsStore()
 const settings = settingsStore.settings
@@ -310,6 +329,11 @@ const gradientDirectionLabels: Record<GradientDirection, string> = {
 
 // 终端字体选项
 const terminalFontOptions = TERMINAL_FONT_OPTIONS
+
+const terminalBgModeLabels: Record<TerminalBgMode, string> = {
+  auto: '跟随主题与全局背景',
+  solid: '自定义纯色',
+}
 </script>
 
 <style scoped src="./settings-panel-base.css"></style>
@@ -367,6 +391,12 @@ const terminalFontOptions = TERMINAL_FONT_OPTIONS
 .gradient-color-row input[type="color"]:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+/* 终端背景色当前值文本（色板取色器的回报） */
+.bg-color-text {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono, monospace);
 }
 .gradient-follow {
   display: flex;

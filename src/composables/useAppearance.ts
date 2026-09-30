@@ -3,30 +3,13 @@ import { useSettingsStore } from '@/stores/settings'
 // H13 修复：Monaco 主题跟随设置切换
 // 原实现 Monaco 主题在启动时硬编码，不随设置变化
 import { applyMonacoTheme } from '@/monaco-setup'
-
-// 外观枚举的唯一来源：settings store 的字段类型与设置面板的选项都从这里派生。
-// 此前 Theme/Accent 在 store 与面板里各抄一份，面板色板还另抄了一份 hex ——
-// 已经抄错：蓝色 swatch 显示 #58a6ff，实际写进 --accent-primary 的是 #0078d4。
-export type Theme = 'dark' | 'light' | 'system' | 'blue-screen' | 'forest' | 'mint' | 'bee' | 'coral' | 'atelier'
-export type Accent = 'blue' | 'purple' | 'green' | 'orange' | 'white' | 'forest' | 'mint' | 'bee' | 'coral' | 'verm'
-export type GradientMode = 'glow' | 'linear' | 'radial'
-export type GradientDirection = 'tb' | 'bt' | 'lr' | 'rl' | 'tlbr' | 'trbl'
-
-/** 强调色 → CSS 变量值（面板色板与 applyAccent 共用同一张表） */
-export const ACCENT_MAP: Record<Accent, { hex: string; rgb: string }> = {
-  blue:   { hex: '#0078d4', rgb: '0, 120, 212' },
-  purple: { hex: '#c586c0', rgb: '197, 134, 192' },
-  green:  { hex: '#4ec9b0', rgb: '78, 201, 176' },
-  orange: { hex: '#ce9178', rgb: '206, 145, 120' },
-  white:  { hex: '#ffffff', rgb: '255, 255, 255' },
-  forest: { hex: '#2ea44f', rgb: '46, 164, 79' },
-  mint:   { hex: '#5eead4', rgb: '94, 234, 212' },
-  bee:    { hex: '#f5c542', rgb: '245, 197, 66' },
-  coral:  { hex: '#ff7b72', rgb: '255, 123, 114' },
-  // 朱砂（手记主题的招牌色）。它是强调色不是主题色：--accent-primary 由这里
-  // 写进 :root 的内联样式，主题块里写同名令牌永远不生效（见 variables.css 注释）。
-  verm:   { hex: '#c2402a', rgb: '194, 64, 42' },
-}
+// 外观枚举与强调色表住在 @/utils/appearance-tokens —— 一个零依赖叶子模块。
+// 它们原本就在本文件里，但 store 要取 ACCENT_MAP 当白名单、本文件要取 store，
+// 于是成了真运行时环（环的形状与锁法见那个文件的头注）。
+import {
+  ACCENT_MAP, contrastOnAccent,
+  type Accent, type GradientDirection, type GradientMode, type Theme,
+} from '@/utils/appearance-tokens'
 
 // 修复：模块级标记，确保 darkMq 监听器只添加一次（多实例共享场景）
 let _systemThemeListenerAdded = false
@@ -96,6 +79,8 @@ export function useAppearance() {
     if (!v) return
     root.style.setProperty('--accent-primary', v.hex)
     root.style.setProperty('--accent-primary-rgb', v.rgb)
+    // 按钮/徽章把字压在 --accent-primary 上，前景必须跟着底色走（见 contrastOnAccent）
+    root.style.setProperty('--accent-on', contrastOnAccent(v.hex))
   }
 
   // ── 字号：界面基础字号（根元素）与消息正文字号是两套，分别应用 ──

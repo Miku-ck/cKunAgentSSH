@@ -611,13 +611,13 @@ onUnmounted(() => {
 .rm-btn.primary {
   background: var(--accent-primary);
   border-color: var(--accent-primary);
-  color: #fff;
+  color: var(--accent-on);
   font-weight: 500;
 }
 
 .rm-btn.primary:hover {
   filter: brightness(1.1);
-  color: #fff;
+  color: var(--accent-on);
 }
 
 .rm-btn.danger {

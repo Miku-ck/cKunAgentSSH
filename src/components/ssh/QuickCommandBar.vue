@@ -257,7 +257,7 @@ function handleDragEnd() {
 
 .qc-item:hover {
   background: var(--bg-hover);
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .qc-item:active {
@@ -334,7 +334,7 @@ function handleDragEnd() {
 
 .qc-ctx-item:hover {
   background: var(--bg-hover);
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .qc-ctx-item.danger:hover {

@@ -786,7 +786,7 @@ async function handleSave() {
 .btn-primary {
   border: none;
   background: var(--accent-primary);
-  color: #fff;
+  color: var(--accent-on);
   font-weight: 600;
 }
 

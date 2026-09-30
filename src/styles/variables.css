@@ -71,7 +71,6 @@
   --accent-pink-border: rgba(232, 121, 169, 0.32);
 
   /* 状态卡片色（Agent 运行面板：规划/警告/错误/调试/标签） */
-  --status-info-bg: #1a2d3d;
   --status-info-border: #2d4a5a;
   --status-info-text: #569cd6;
   --status-success-bg: #2d3d2d;
@@ -114,6 +113,32 @@
   /* 输入卡行线的颜色：默认透明 = 不画线。只有手记（米纸 + 墨线）给了实值，
      这样组件里那条 background-image 在所有主题共用，不需要主题分支。 */
   --rule-line: transparent;
+
+  /* ── 手记 v2 补进来的装饰令牌（designs/home-C-atelier-v2.html）──
+     全部沿用 --rule-line 那套写法：默认值 = 补它们之前的行为，只有 [data-theme=
+     "atelier"] 给实值，组件里因此不写任何主题分支。每条都有真实消费方
+     （variables.test.ts 里逐条钉着：无消费方 = 失效设置项）。 */
+
+  /* 结构画布的那一层漆。**不是第三个背景层级** —— 它替代的就是 --bg-base 那一层
+     的 paint（.titlebar/.term-tabs/.ssh-view 这三处上色的画布）。
+     手记在里面加了纸纹颗粒 + 双光斑：body 画不到，它被 .ssh-view 整片盖住。 */
+  --canvas-bg: var(--bg-base);
+
+  /* 记号笔：选中底色。默认值必须与 global.css 里 ::selection 原来的表达式逐字
+     相同，否则其余主题的选中色被顺手改掉。 */
+  --wash: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+
+  /* 指令卡底栏：手记把它画成"纸折了一道"（次级纸面渐变 + 虚线），其余主题
+     保持不画底 + 实线分隔。 */
+  --card-foot-bg: transparent;
+  --card-foot-rule: 1px solid var(--divider-primary);
+
+  /* 标题字族：手记是书本的衬线，其余主题跟随正文字族 */
+  --font-display: var(--font-sans);
+
+  /* 压在 --accent-primary 底上的前景色。归 applyAccent 由 ACCENT_MAP 算出来
+     （内联样式压过本块，主题里写它不生效 —— 同 --accent-primary 一条道理）。 */
+  --accent-on: #ffffff;
 
   /* 字体 */
   --font-sans: system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -159,7 +184,6 @@
   --accent-pink-border: rgba(165, 31, 107, 0.24);
 
   /* 浅色主题：状态卡片转浅底深字 */
-  --status-info-bg: #e8f1fa;
   --status-info-border: #b9d4ec;
   --status-info-text: #1f6fb2;
   --status-success-bg: #e6f4ea;
@@ -294,15 +318,20 @@
  *
  * 版面与主题解耦：下面只改令牌值，一个组件都没动 —— 同一套首页与运行视图在
  * 深色主题下也必须成立（spec 2026-09-29 §2）。色值取自权威预览稿
- * `designs/home-C-atelier-app.html` 的 :root。
+ * `designs/home-C-atelier-v2.html` 的 :root（原按 v1 稿 `home-C-atelier-app.html`
+ * 落库，两稿米纸/墨/朱砂同值，v2 多出的 wash / card-2 / 纸纹 / 展示衬线
+ * 补在块尾）。
  *
- * 三件刻意不做的事：
+ * 四件刻意不做的事：
  *   1. 不改 --titlebar-h / --tabbar-h（预览稿是 30/30，实际 32/34）：那是布局，
- *      归版面管，塞进主题就成了"换个配色顺手改高度"。
- *   2. 不写 --accent-primary：applyAccent 在 documentElement 上 setProperty，
- *      内联样式压过本块 —— 在这里写强调色是一条永远不生效的声明。朱砂以
- *      Accent 'verm' 提供，任何主题都能选。
+ *      归版面管，塞进主题就成了"换个配色顺手改高度"。同理 --font-display 只换
+ *      字族，不动 hero 的字号字重（稿子是 clamp(30→50px)/300，实际 19px/600）。
+ *   2. 不写 --accent-primary / --accent-on：applyAccent 在 documentElement 上
+ *      setProperty，内联样式压过本块 —— 在这里写强调色是一条永远不生效的声明。
+ *      朱砂以 Accent 'verm' 提供，任何主题都能选。
  *   3. 终端仍给深底：ANSI 主题固定暗色，米纸上开终端前景不可读（既有约定）。
+ *   4. 不照搬稿子的 --ink-3 #8a7f6e 与 --olive #6c7a4c：它们在纸上分别只有
+ *      3.3:1 / 对比不足，本块刻意加深（见 --text-tertiary / --accent-green）。
  */
 [data-theme="atelier"] {
   --bg-base: #f2ece1;            /* 米纸：窗口底/侧栏/面板头/工具条 */
@@ -339,7 +368,6 @@
   --accent-pink-bg: rgba(165, 31, 107, 0.08);
   --accent-pink-border: rgba(165, 31, 107, 0.24);
 
-  --status-info-bg: #e8eef6;
   --status-info-border: #c3d2e4;
   --status-info-text: #33507c;
   --status-success-bg: #e9eedd;
@@ -384,4 +412,32 @@
 
   /* 输入卡的行线：只有手记画得出横线，其余主题透明 = 同一份组件代码不加分支判断 */
   --rule-line: #d3c8b6;
+
+  /* ── v2 稿补进来的四件事（designs/home-C-atelier-v2.html）── */
+
+  /* 纸面本体：左上一个暖光斑、右下一片压暗，加一层内联 SVG 的 turbulence 颗粒。
+     颗粒写成 data: URI 是刻意的 —— CSP 的 img-src 放行 data:（electron/main.ts
+     installCsp），而素材路径会在打包后静默失效。SVG 自带 width/height=180，
+     所以 background 简写里的 background-size:auto 就是 180 的平铺，不必另给。
+     消费它的三处画布都要配 background-attachment:fixed，否则左上那枚光斑会在
+     标题条和画布上各来一遍，一条纸面被切成两张。 */
+  --canvas-bg:
+    radial-gradient(circle at 12% 6%, #fff8ec 0%, transparent 44%),
+    radial-gradient(circle at 90% 96%, #e7ddca 0%, transparent 48%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.05' numOctaves='2'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23g)' opacity='.42'/%3E%3C/svg%3E"),
+    var(--bg-base);
+
+  /* 记号笔底（选中文字时的那道 highlighter） */
+  --wash: #f6d8a8;
+
+  /* 卡脚：从次级纸面（稿子的 --card-2 #f6f0e6）折回卡面，上沿改成虚线。
+     这里刻意**不新增** --card-2 那条层级令牌：文件头写死背景只有两级，
+     第三级一旦立起来，后面每个容器都要重新回答"我该用哪级"。 */
+  --card-foot-bg: linear-gradient(#f6f0e6, #faf6ee);
+  --card-foot-rule: 1px dashed var(--border-default);
+
+  /* 标题字族：稿子用的是 Fraunces，但它走 Google Fonts，离线拿不到。
+     这里直接取稿子自己写下的回退值（Georgia 起），不引入网络引用。 */
+  --font-display: Georgia, "Iowan Old Style", "Palatino Linotype", "Source Han Serif SC",
+    "Songti SC", SimSun, serif;
 }

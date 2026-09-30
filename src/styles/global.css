@@ -43,13 +43,25 @@ body {
 ::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
 
-button { font-family: var(--font-sans); }
+/* 按钮的 UA 默认 chrome 必须在这里断掉：Chromium 给没写 border/background 的
+   <button> 一套 rgb(240,240,240) 灰底 + 2px outset 立体边 —— 它不属于任何主题，
+   在蓝屏/米纸上就是一块系统灰。首页的 .htt-btn 与新建终端菜单的四枚 .ntm-item
+   就是这么露出来的。类规则（0,1,0）压过本条（0,0,1），自带 chrome 的按钮不受影响；
+   只写 border-color 的 modifier 也安全，它必然骑在声明了完整 border 的 base 上。
+   不动 color：那会牵动一批依赖 UA buttontext 的按钮，是另一件事。 */
+button {
+  font-family: var(--font-sans);
+  border: 0;
+  background: transparent;
+}
 a { color: var(--accent-primary); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-/* ── 文本选中：跟随强调色，替换浏览器默认蓝 ── */
+/* ── 文本选中：跟随强调色，替换浏览器默认蓝 ──
+   --wash 在 :root 就等于原来这条表达式的值（其余主题逐像素不变），
+   只有手记把它换成记号笔的 #f6d8a8。 */
 ::selection {
-  background: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+  background: var(--wash);
   color: var(--text-primary);
 }
 

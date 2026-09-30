@@ -434,7 +434,7 @@ onUnmounted(() => {
   gap: 5px;
   background: var(--accent-primary);
   border: 1px solid var(--accent-primary);
-  color: #fff;
+  color: var(--accent-on);
   border-radius: 4px;
   cursor: pointer;
   font-size: 12px;
@@ -635,7 +635,7 @@ onUnmounted(() => {
 }
 .unsaved-btn.save {
   background: var(--accent-primary);
-  color: #fff;
+  color: var(--accent-on);
   border-color: var(--accent-primary);
 }
 .unsaved-btn.save:hover:not(:disabled) {

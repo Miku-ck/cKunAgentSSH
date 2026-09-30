@@ -9,6 +9,13 @@
  * 那一刻统一应用，主题不会丢。
  */
 
+// 主题枚举的唯一来源是 appearance-tokens（store 的字段类型、设置面板的选项、
+// settings 的白名单都从它派生）。这里原先手抄了第二份联合类型，且下面的表写成
+// Record<string, …> —— 新增主题忘了登记不会报错，只会静默拿到 ckun-dark：
+// 米纸主题下开出一个深色代码编辑器。改成按 Theme 穷举，漏一档 = 编译错误。
+// 取的是零依赖叶子模块，不是 useAppearance（那个 composable 反向依赖本模块的值）。
+import type { Theme } from '@/utils/appearance-tokens'
+
 // 默认深色：与拆分前"启动即 setTheme('ckun-dark')"的初始效果一致
 let loadedInstance: { editor: { setTheme(name: string): void } } | null = null
 let desiredTheme: AppTheme = 'dark'
@@ -45,11 +52,12 @@ export function applyMonacoTheme(theme: AppTheme): void {
 // 主题名解析（原驻 monaco-setup 的映射表，随懒加载拆分上移到轻量层）
 // ──────────────────────────────────────────────────────────────────────────────
 
-export type AppTheme = 'dark' | 'light' | 'system' | 'blue-screen' | 'forest' | 'mint' | 'bee' | 'coral' | 'atelier'
+export type AppTheme = Theme
 
 type MonacoThemeName = 'ckun-dark' | 'ckun-light' | 'ckun-blue-screen' | 'ckun-forest' | 'ckun-mint' | 'ckun-bee' | 'ckun-coral'
 
-const THEME_MAP: Record<string, MonacoThemeName> = {
+/** system 不进表：它在 resolve 里按媒体查询短路，给它一个固定值反而是第二个事实源 */
+const THEME_MAP: Record<Exclude<AppTheme, 'system'>, MonacoThemeName> = {
   dark: 'ckun-dark',
   light: 'ckun-light',
   'blue-screen': 'ckun-blue-screen',
@@ -65,5 +73,7 @@ function resolveMonacoThemeName(theme: AppTheme): MonacoThemeName {
   if (theme === 'system') {
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'ckun-dark' : 'ckun-light'
   }
-  return THEME_MAP[theme] || 'ckun-dark'
+  // 没有 `|| 'ckun-dark'` 兜底：表是穷举的，走到这里必然命中。留着那条兜底
+  // 就等于把"忘了登记新主题"从编译错误降级成一次静默的深色编辑器。
+  return THEME_MAP[theme]
 }

@@ -612,8 +612,10 @@ export const useAgentStore = defineStore('agent', () => {
         const alreadyPending = permissionRequests.value.some(
           r => !r.resolved && permCardKey(r.tool, r.command) === dupKey,
         )
-        // B11 修复：权限卡片只存在于 AI 面板内，面板关闭期间用户无法响应 —
-        // 从非 pending → pending 转换时 toast 提醒（重复请求不重复弹）
+        // B11 修复的现行版：卡片现在只画在首页过程区（C2 裁决），所以在终端/审计/远程管理
+        // 这些页面上它是不可见的 —— 从非 pending → pending 转换时 toast 提醒一句把人叫回
+        // 首页（重复请求不重复弹）。原先这句写的是「请打开 AI 面板」，那是托盘还在时的
+        // 地图，R1 之后照做也批不了东西。
         // expired 卡按裁决A仍是可操作 pending：队列里已有待办时不重复弹 toast
         const hadPending = permissionRequests.value.some(r => !r.resolved)
         if (!alreadyPending) {
@@ -640,7 +642,7 @@ export const useAgentStore = defineStore('agent', () => {
             conversationId: currentConversationId.value || undefined,
           })
           if (!hadPending) {
-            useToastStore().warning('AI 需要权限确认，请打开 AI 面板')
+            useToastStore().warning('AI 需要权限确认，回首页在过程里就地放行')
           }
         }
         break

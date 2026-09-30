@@ -333,7 +333,10 @@ describe('settings 脏 localStorage 校验（全键）', () => {
         uiFontSize: null, backgroundOpacity: 101, backgroundOverlay: -20,
         themeGradientStrength: 999, backgroundVersion: 'v2',
         backgroundImage: 42, themeGradientStartColor: {},
-        terminal: { fontSize: 0, fontFamily: 42 },
+        terminal: {
+          fontSize: 0, fontFamily: 42,
+          backgroundMode: 'image', backgroundOpacity: 200, backgroundColor: 'red',
+        },
       },
     })
     expect(s.settings.chat.messageFontSize).toBe(13)
@@ -352,13 +355,20 @@ describe('settings 脏 localStorage 校验（全键）', () => {
     expect(s.settings.appearance.themeGradientStartColor).toBe('')
     expect(s.settings.appearance.terminal.fontSize).toBe(14)
     expect(s.settings.appearance.terminal.fontFamily).toBe('jetbrains')
+    // 终端背景三件套同规矩：非法模式/越界透明度/非 hex 颜色全回默认
+    expect(s.settings.appearance.terminal.backgroundMode).toBe('auto')
+    expect(s.settings.appearance.terminal.backgroundOpacity).toBe(92)
+    expect(s.settings.appearance.terminal.backgroundColor).toBe('#0d1117')
 
     const ok = await storeWithSaved({
       chat: { messageFontSize: 14, contextWindow: 50 },
       agent: { maxIterations: 1, maxCostUsd: 2.5 },
       appearance: {
         uiFontSize: 15, backgroundOpacity: 30,
-        terminal: { fontSize: 16, fontFamily: 'mono' },
+        terminal: {
+          fontSize: 16, fontFamily: 'mono',
+          backgroundMode: 'solid', backgroundOpacity: 55, backgroundColor: '#FF8800',
+        },
       },
     })
     expect(ok.settings.chat.messageFontSize).toBe(14)
@@ -369,6 +379,16 @@ describe('settings 脏 localStorage 校验（全键）', () => {
     expect(ok.settings.appearance.backgroundOpacity).toBe(30)
     expect(ok.settings.appearance.terminal.fontSize).toBe(16)
     expect(ok.settings.appearance.terminal.fontFamily).toBe('mono')
+    expect(ok.settings.appearance.terminal.backgroundMode).toBe('solid')
+    expect(ok.settings.appearance.terminal.backgroundOpacity).toBe(55)
+    expect(ok.settings.appearance.terminal.backgroundColor).toBe('#FF8800')
+  })
+
+  it('终端背景三字段：localStorage 缺键时的默认（旧设置只有字号/字体，升级后必须落在 auto）', async () => {
+    const s = await storeWithSaved({})
+    expect(s.settings.appearance.terminal.backgroundMode).toBe('auto')
+    expect(s.settings.appearance.terminal.backgroundColor).toBe('#0d1117')
+    expect(s.settings.appearance.terminal.backgroundOpacity).toBe(92)
   })
 
   it('联合类型数值键（messageFontSize）只认面板真有的档位，区间内非档位值同样回落', async () => {

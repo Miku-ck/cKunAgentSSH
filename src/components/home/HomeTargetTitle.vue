@@ -46,7 +46,7 @@ function toBulk() {
         title="切换目标主机"
         :aria-expanded="open"
         @click.stop="open = !open"
-      >{{ targetLabel }}<span class="cap">▾</span></button>
+      >{{ targetLabel }}</button>
       <span v-if="open" class="htt-menu" @click.stop>
         <button
           v-for="o in options"
@@ -75,28 +75,34 @@ function toBulk() {
   width: 100%;
   max-width: 720px;
   margin: 0 0 14px;
+  /* 标题字族归主题（手记是书本的衬线）；字号字重是版面，不换主题该动它 */
+  font-family: var(--font-display);
   font-size: 19px;
   font-weight: 600;
   line-height: 1.5;
-  color: var(--text-primary);
+  /* 整句一律 --text-secondary：这行是问句不是标题栏，压一档它才不像一块招牌。
+     可点的那枚词只靠下划虚线认，不靠更亮的字色、也不靠图标（见 .htt-btn）。 */
+  color: var(--text-secondary);
   letter-spacing: .2px;
 }
-.htt-pick { position: relative; display: inline-block; margin: 0 5px }
+/* 不再给两侧塞 margin：先前是 5px，加上按钮自己的 6px padding，一个词左右凭空
+   多出 22px，整句的节奏就断在这里。参考稿写的也是"今天想让<em>服务器</em>替你做什么？"
+   —— 词与词之间没有额外空隙，区别只由下面那道虚线承担。 */
+.htt-pick { position: relative; display: inline-block }
 .htt-btn {
   display: inline-flex;
-  align-items: baseline;
-  gap: 3px;
-  padding: 1px 6px 2px;
   border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: 17px;
-  font-weight: 500;
-  color: var(--accent-primary);
+  /* 字族/字号/字重/字色一律继承整句：这枚先前是等宽 17px/500，夹在一行衬线里
+     像贴上去的标签。等宽确实更适合 username@host，但那件事已经由虚线说过一次了。 */
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+  border-bottom: 1px dashed var(--text-tertiary);
   cursor: pointer;
-  transition: background var(--transition-fast);
+  transition: background-color var(--transition-fast);
 }
-.htt-btn:hover, .htt-pick .htt-btn.open { background: var(--bg-hover) }
-.cap { font-size: 10px; color: var(--text-tertiary) }
+.htt-btn:hover, .htt-pick .htt-btn.open { background-color: var(--bg-hover) }
 .htt-menu {
   position: absolute;
   top: calc(100% + 6px);
@@ -106,7 +112,7 @@ function toBulk() {
   overflow-y: auto;
   padding: 4px;
   background: var(--bg-elevated-solid);
-  border: 1px solid var(--border-default);
+  /* 不画框：底色 + shadow 就够把它从页面上抬起来，边框本身就是那个"框" */
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
   font-family: var(--font-sans);

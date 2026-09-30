@@ -566,7 +566,7 @@ defineExpose({
 
 .reconnect-btn:hover:not(:disabled) {
   background: var(--accent-primary);
-  color: #fff;
+  color: var(--accent-on);
 }
 
 .reconnect-btn:disabled {

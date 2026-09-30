@@ -231,7 +231,7 @@ defineExpose({ open, close })
 
 .confirm-btn.ok {
   background: var(--accent-primary);
-  color: #ffffff;
+  color: var(--accent-on);
   border-color: var(--accent-primary);
 }
 

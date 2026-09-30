@@ -1,9 +1,11 @@
 import { defineStore } from 'pinia'
 import { nextTick, onScopeDispose, ref, watch } from 'vue'
 import { api, agentApi, toFriendlyMessage, type ModelConfig, type ModelConfigPayload, type ModelDefaultMode } from '@/api/client'
-// 外观枚举只在 useAppearance 里定义一次（store 与设置面板都从这里取，抄两份会漂）
-import type { Accent, GradientDirection, GradientMode, Theme } from '@/composables/useAppearance'
-import { ACCENT_MAP } from '@/composables/useAppearance'
+// 外观枚举只在 appearance-tokens 里定义一次（store 与设置面板都从这里取，抄两份会漂）。
+// 它不能住回 useAppearance.ts：本文件在模块顶层就取 ACCENT_MAP 的键当白名单，
+// 而 useAppearance 要取本文件的 store —— 那是个真运行时环，细节见那个叶子模块的头注。
+import type { Accent, GradientDirection, GradientMode, TerminalBgMode, Theme } from '@/utils/appearance-tokens'
+import { ACCENT_MAP, isHexColor } from '@/utils/appearance-tokens'
 import { useToastStore } from './toast'
 
 /**
@@ -122,6 +124,12 @@ interface AppSettings {
       fontSize: number
       fontFamily: string
       aiPredictionEnabled: boolean
+      /** 终端背景模式：auto=跟随主题/全局背景（现状），solid=自定义纯色 */
+      backgroundMode: TerminalBgMode
+      /** 纯色背景 hex（仅 solid 生效；非法值回落默认） */
+      backgroundColor: string
+      /** 纯色背景透明度 0-100（低于 100 时与下层主题底色/背景图混合） */
+      backgroundOpacity: number
     }
   }
 }
@@ -177,6 +185,14 @@ const GRADIENT_MODES = Object.keys({
 const GRADIENT_DIRECTIONS = Object.keys({
   tb: true, bt: true, lr: true, rl: true, tlbr: true, trbl: true,
 } as Record<GradientDirection, true>) as GradientDirection[]
+const TERMINAL_BG_MODES = Object.keys({
+  auto: true, solid: true,
+} as Record<TerminalBgMode, true>) as TerminalBgMode[]
+
+/** 颜色输入框/历史脏值都可能塞进非 hex，<input type="color"> 拿到会直接显示黑 */
+function asHexColor(value: unknown, fallback: string): string {
+  return isHexColor(value) ? value : fallback
+}
 
 /**
  * 重命名前的 appearance 行：`fontSize` 曾指"界面基础字号"，与 chat 消息字号、
@@ -246,6 +262,9 @@ export const useSettingsStore = defineStore('settings', () => {
         fontSize: asNumber(saved?.appearance?.terminal?.fontSize, 14, 12, 18),
         fontFamily: asString(saved?.appearance?.terminal?.fontFamily, 'jetbrains'),
         aiPredictionEnabled: asBool(saved?.appearance?.terminal?.aiPredictionEnabled, false),
+        backgroundMode: asEnum(saved?.appearance?.terminal?.backgroundMode, TERMINAL_BG_MODES, 'auto'),
+        backgroundColor: asHexColor(saved?.appearance?.terminal?.backgroundColor, '#0d1117'),
+        backgroundOpacity: asNumber(saved?.appearance?.terminal?.backgroundOpacity, 92, 0, 100),
       },
     },
   })

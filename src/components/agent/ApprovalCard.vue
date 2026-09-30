@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * ApprovalCard — 一张完整的授权卡（侧栏审批托盘 / 运行视图内联审批共用）
+ * ApprovalCard — 一张完整的授权卡（现在只有过程区内联这一个消费方）
  *
  * 从 AgentRunPanel 原样搬出，不是重写：读的数据（req）、四档动作的开放条件
  * （grantScopesForRisk）、prod 警示开关（E5）、超时卡仍可操作（裁决A）、说明文案
@@ -8,10 +8,12 @@
  * 卡体模板留在面板里就等于要抄第二遍，而审批文案这种"用户据此点按钮"的东西
  * 抄一份就会开始漂移。
  *
- * 焦点/翻页机制（focusIdx、上下项箭头）仍属于宿主：那是"托盘里只看一张"的交互，
- * 内联在事件流里的卡没有队列概念，所以 navCount 不传就没有箭头。
+ * 首页队列原先自己画了一套摘要形态的卡（三档，没有 session 档），C2 裁决后撤掉了：
+ * 过程搬进首页使两屏并成一屏，同一条待决请求上下各现一次、两个决策位，而下面这套
+ * 是更强的那套（四档 + prod 警示 + 忽略）。逐条决策归这里，队列只留批量与追溯。
+ *
  * 结算走 useApprovalActions → store 的 approvePermission/denyPermission，
- * 与首页待放行队列同一份逻辑（那里是摘要形态的卡，刻意不共用卡体）。
+ * 与首页那条计数窄条的批量结算同一份逻辑。
  */
 import { computed } from 'vue'
 import { useAgentStore, type PermissionRequest } from '@/stores/agent'
@@ -23,11 +25,7 @@ import { useApprovalActions } from '@/composables/useApprovalActions'
 
 const props = defineProps<{
   req: PermissionRequest
-  /** 宿主队列里还有几条待处理；<=1 时不渲染翻页箭头 */
-  navCount?: number
 }>()
-
-const emit = defineEmits<{ prev: []; next: [] }>()
 
 const agentStore = useAgentStore()
 const sshStore = useSSHStore()
@@ -36,7 +34,6 @@ const { approve: grantPermission, deny: denyRequest } = useApprovalActions()
 const req = computed(() => props.req)
 /** E5：prod 专属警示的总开关（设置 → Agent 治理 → 运维策略） */
 const prodConfirmOn = computed(() => useSettingsStore().settings.agent.prodConfirm)
-const canNav = computed(() => (props.navCount ?? 0) > 1)
 const targetLabel = computed(() => approvalTargetLabel(props.req, sshStore.sessions, sshStore.connections))
 const command = computed(() => approvalCommand(props.req))
 </script>
@@ -52,24 +49,6 @@ const command = computed(() => approvalCommand(props.req))
         {{ req.environment === 'prod' ? '生产环境' : '测试环境' }}
       </span>
       <span class="ap-sp"></span>
-      <button
-        v-if="canNav"
-        class="ap-icon-btn"
-        title="上一项"
-        aria-label="切换到上一条待审批项"
-        @click="emit('prev')"
-      >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
-      </button>
-      <button
-        v-if="canNav"
-        class="ap-icon-btn"
-        title="下一项"
-        aria-label="切换到下一条待审批项"
-        @click="emit('next')"
-      >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
-      </button>
       <button
         v-if="!agentStore.isRunning"
         class="ap-icon-btn"

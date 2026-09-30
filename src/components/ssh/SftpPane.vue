@@ -762,7 +762,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
 .mkdir-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .mkdir-btn.cancel { background: transparent; color: var(--text-secondary); }
 .mkdir-btn.cancel:hover:not(:disabled) { background: var(--bg-hover); }
-.mkdir-btn.confirm { background: var(--accent-primary); color: #fff; border-color: var(--accent-primary); }
+.mkdir-btn.confirm { background: var(--accent-primary); color: var(--accent-on); border-color: var(--accent-primary); }
 .mkdir-btn.confirm:hover:not(:disabled) { opacity: 0.9; }
 
 /* 拖拽目标视觉反馈 */

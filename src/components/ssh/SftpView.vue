@@ -1039,7 +1039,7 @@ async function onFileSaved(): Promise<void> {
   height: 16px;
   border-radius: 8px;
   background: var(--accent-primary);
-  color: #fff;
+  color: var(--accent-on);
   font-size: 10px;
   font-weight: 600;
   display: flex;
@@ -1169,7 +1169,7 @@ async function onFileSaved(): Promise<void> {
 }
 .rename-btn.cancel { background: transparent; color: var(--text-secondary); }
 .rename-btn.cancel:hover { background: var(--bg-hover); }
-.rename-btn.confirm { background: var(--accent-primary); color: #fff; border-color: var(--accent-primary); }
+.rename-btn.confirm { background: var(--accent-primary); color: var(--accent-on); border-color: var(--accent-primary); }
 .rename-btn.confirm:hover { opacity: 0.9; }
 
 /* 传输任务右键菜单 */

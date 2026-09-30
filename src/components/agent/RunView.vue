@@ -2,10 +2,12 @@
 /**
  * 运行视图 —— 一条指令的过程与轨迹（spec 2026-09-29-home-command-panel 故事 15–22）
  *
- * 挂在 SshView 层，与首页/终端平级，**不走 SideChatPanel 的 agent-panel slot**：
- * 那个 slot 处在 `displayMessages.length === 0` 的 v-else 分支里，首条消息进 store
- * 之前整块不挂载（AgentRunPanel 就吃过这个亏）。关掉右侧 AI 面板也要能看过程，
- * 才是这条视图存在的理由。
+ * 挂在 SshView 的首页里（指令卡与待放行队列下面），**不走 SideChatPanel 的
+ * agent-panel slot**：那个 slot 处在 `displayMessages.length === 0` 的 v-else
+ * 分支里，首条消息进 store 之前整块不挂载（AgentRunPanel 就吃过这个亏）。
+ * 关掉右侧 AI 面板也要能看过程，才是这块视图存在的理由。
+ * 2026-09-30：它先前是标签条上的一枚「执行」标签 + 整屏第三态，进这里要
+ * openRunView() 把首页换掉；现在它跟着首页一起滚，下达后两条路都在同一屏上。
  *
  * 数据只读 agent store 一份，不复制进消息气泡；轨迹分组走 utils/run-trace，
  * 与后面要加的时间线列共用同一次分组结果。
@@ -23,12 +25,12 @@ import { approvalTargetLabel } from '@/utils/approval-display'
 import { PERMISSION_LABELS } from '@/utils/run-modes'
 import { buildTraceModel, mergeStream } from '@/utils/run-trace'
 import ApprovalCard from './ApprovalCard.vue'
+import ThinkingBlock from '@/components/chat/ThinkingBlock.vue'
+import MessageContentRenderer from '@/components/chat/MessageContentRenderer.vue'
 
 const agent = useAgentStore()
 const ssh = useSSHStore()
 const models = useModelsStore()
-
-const emit = defineEmits<{ backHome: [] }>()
 
 const toast = useToastStore()
 
@@ -49,6 +51,16 @@ const stream = computed(() => mergeStream(trace.value, agent.pendingPermissions)
 /** 步号读 iteration（后端循环计数器），不读 steps.length —— 只思考不调工具的迭代
  *  不产生条目，用数组下标当步号会跳号。 */
 const stepNo = computed(() => (agent.totalIterations || agent.iteration + 1))
+
+/** 深度思考：与对话气泡同源（agentStore.reasoning），只读不改。RunView 此前只渲染
+ *  工具调用一份数据，思考过程丢了；这里补一块可折叠区，交互沿用 ThinkingBlock。 */
+const reasoning = computed(() => agent.reasoning || '')
+// 流式中默认展开、结束后回落到用户设置 thinkingExpanded —— 与 MessageItem 一致
+const thinkingDefaultOpen = computed(() => (agent.isRunning ? true : undefined))
+
+/** 模型输出结果（最终回答正文）：与对话气泡同源（agentStore.content）。RunView 此前
+ *  只有工具调用，没把回答带回来；这里补上，复用气泡同一个渲染器（markdown / 纯文本回退一致）。 */
+const answer = computed(() => agent.content || '')
 
 const targetLabel = computed(() =>
   approvalTargetLabel({ sshSessionId: agent.lastSshSessionId }, ssh.sessions, ssh.connections),
@@ -173,7 +185,7 @@ onUnmounted(() => { if (litTimer) clearTimeout(litTimer) })
           {{ PERMISSION_LABELS[agent.lastPermissionMode] }}
         </span>
         <span class="sp"></span>
-        <button type="button" class="b" @click="emit('backHome')">回首页</button>
+        <!-- 「回首页」撤掉：过程就长在首页上，没有"回去"这回事了 -->
         <button
           v-if="agent.isRunning"
           type="button"
@@ -227,7 +239,10 @@ onUnmounted(() => { if (litTimer) clearTimeout(litTimer) })
           </details>
         </article>
 
-        <!-- 待放行：与侧栏托盘、首页队列同一张卡、同一个对象，在这儿批等于在那儿批 -->
+        <!-- 待放行：与首页队列同一个对象、同一份结算（store 的 approve/deny）。
+             决策位就在这张卡上 —— 队列已经降为计数条。C1 之前过程是另一屏，
+             两屏各自可见所以不重复；并成一屏后必须择一，选卡不选条的理由见
+             spec 2026-09-29 C2 的裁决。 -->
         <div v-else class="rv-approval">
           <ApprovalCard :req="item.req" />
         </div>
@@ -238,27 +253,66 @@ onUnmounted(() => { if (litTimer) clearTimeout(litTimer) })
       </p>
       </div>
     </div>
+
+    <!-- 深度思考：工具调用轨迹下方；无 reasoning 时整块不渲染 -->
+    <div v-if="reasoning" class="rv-thinking">
+      <ThinkingBlock
+        :reasoning="reasoning"
+        :streaming="agent.isRunning"
+        :default-open="thinkingDefaultOpen"
+      />
+    </div>
+
+    <!-- 模型输出结果（最终回答）：运行中即使正文未至也占位（渲染器会显示思考小点） -->
+    <div v-if="answer || agent.isRunning" class="rv-answer">
+      <div class="rv-answer-label">输出结果</div>
+      <MessageContentRenderer
+        role="assistant"
+        :content="answer"
+        :streaming="agent.isRunning"
+        :is-last="true"
+      />
+    </div>
   </div>
 </template>
 
 <style scoped>
-/* 只用现有主题令牌 —— 手记主题是第四片的事 */
+/* 只用现有主题令牌 —— 手记主题只改令牌值，不动组件 */
+/**
+ * 过程面板现在是首页里的一块（先前是整屏的一第三态）：所以它跟着页面流，
+ * 自己不再撑满高度、也不再画一层画布底 —— 纸从首页那里透上来就行。
+ * 宽度与指令卡/待放行队列同栏（720），三者左边缘对得上。
+ */
 .rv {
   display: flex;
   flex-direction: column;
   width: 100%;
-  height: 100%;
-  min-height: 0;
-  /* 与 .ssh-view/.titlebar 同一层漆：纸纹要跨画布连续，见 variables.css --canvas-bg。
-     回落必须写 —— --canvas-bg 目前只在未提交的那套纸纹令牌表里有定义，缺了它
-     HEAD 里这行是无效声明，整块画布背景悄悄落回继承值。 */
-  background: var(--canvas-bg, var(--bg-base));
-  background-attachment: fixed;
+  max-width: 720px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
 }
 .rv-head {
   flex: none;
   padding: 12px 18px 10px;
   border-bottom: 1px solid var(--border-subtle);
+}
+/* 深度思考区：在工具调用轨迹下方，与头部/工具卡同左右幅（18px），顶部分隔线接轨迹 */
+.rv-thinking {
+  flex: none;
+  padding: 8px 18px;
+  border-top: 1px solid var(--border-subtle);
+}
+/* 模型输出结果：与轨迹/思考同左右幅，顶部分隔线接思考区 */
+.rv-answer {
+  flex: none;
+  padding: 10px 18px 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+.rv-answer-label {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-bottom: 6px;
 }
 .rv-task {
   font-size: 14px;

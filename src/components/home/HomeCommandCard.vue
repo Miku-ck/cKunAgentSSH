@@ -354,10 +354,12 @@ onMounted(() => {
           v-if="!noModel"
           type="button"
           class="hcc-btn"
+          title="切换模型"
+          aria-haspopup="listbox"
           :aria-expanded="showModelDropdown"
           @click.stop="showModelDropdown = !showModelDropdown"
         >
-          模型 · <b>{{ currentModelName }}</b>
+          <b>{{ currentModelName }}</b>
         </button>
         <button
           v-else
@@ -502,8 +504,8 @@ onMounted(() => {
   padding: 8px 10px 9px 12px;
   /* 底栏那一道折痕与次级纸面都归主题：--card-foot-* 在非手记主题 = 今天的样子
      （透明底 + 实线分隔），组件里不写主题分支（同 --rule-line 的做法） */
-  border-top: var(--card-foot-rule, 1px solid var(--divider-primary));
-  background: var(--card-foot-bg, transparent);
+  border-top: var(--card-foot-rule);
+  background: var(--card-foot-bg);
   flex-wrap: wrap;
 }
 .hcc-sel { position: relative }
@@ -618,7 +620,7 @@ onMounted(() => {
   background: var(--accent-primary);
   /* 前景由 applyAccent 按底色亮度算出来（--accent-on）：写死 #fff 时，
      强调色选「白色」就是白底白字 —— 这枚按钮整个消失，而它点得到 */
-  color: var(--accent-on, #fff);
+  color: var(--accent-on);
   font-size: 13px;
   font-weight: 600;
   transition: filter var(--transition-fast), opacity var(--transition-fast);

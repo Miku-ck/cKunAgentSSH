@@ -177,7 +177,7 @@ defineExpose({
 
 .completion-item.active {
   background: var(--accent-primary);
-  color: #ffffff;
+  color: var(--accent-on);
 }
 
 .item-icon {
@@ -188,7 +188,7 @@ defineExpose({
 }
 
 .completion-item.active .item-icon {
-  color: #ffffff;
+  color: var(--accent-on);
 }
 
 .item-text {

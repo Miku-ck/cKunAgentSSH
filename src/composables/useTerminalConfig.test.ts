@@ -25,7 +25,7 @@ g.window = {
 }
 
 import { useSettingsStore } from '@/stores/settings'
-import { watchTerminalConfig } from '@/composables/useTerminalConfig'
+import { watchTerminalConfig, hexToRgba, resolveTerminalTheme } from '@/composables/useTerminalConfig'
 
 function makeTerminal(cols = 80, rows = 24) {
   return { options: {} as Record<string, unknown>, cols, rows }
@@ -84,6 +84,56 @@ describe('watchTerminalConfig', () => {
     await nextTick()
 
     expect(t.options.fontSize).toBe(18)  // 字号仍然生效，只是留到可见时再算网格
+    expect(fitAddon.fit).not.toHaveBeenCalled()
+    expect(onResized).not.toHaveBeenCalled()
+  })
+})
+
+describe('终端背景（hexToRgba / resolveTerminalTheme / 动态生效）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    lsMap.clear()
+  })
+
+  it('hexToRgba：正常转换、透明度越界夹紧、非法 hex 回落 transparent', () => {
+    expect(hexToRgba('#0d1117', 50)).toBe('rgba(13, 17, 23, 0.5)')
+    expect(hexToRgba('#0d1117', 100)).toBe('rgba(13, 17, 23, 1)')
+    // 闸门在 store 层，渲染层再夹一道防御：越界不变成负 alpha 也不报错
+    expect(hexToRgba('#0d1117', 200)).toBe('rgba(13, 17, 23, 1)')
+    expect(hexToRgba('red', 50)).toBe('transparent')
+    expect(hexToRgba('#fff', 50)).toBe('transparent')  // 三位缩写不支持
+  })
+
+  it('resolveTerminalTheme：auto 背景透明，solid 写 rgba 且保留 ANSI 色字段', () => {
+    const settings = useSettingsStore()
+    // 默认 auto：与历史行为一致（背景透明跟随主题底色/全局背景图）
+    expect(resolveTerminalTheme().background).toBe('transparent')
+
+    settings.settings.appearance.terminal.backgroundMode = 'solid'
+    settings.settings.appearance.terminal.backgroundColor = '#1b3a26'
+    settings.settings.appearance.terminal.backgroundOpacity = 80
+    const theme = resolveTerminalTheme()
+    expect(theme.background).toBe('rgba(27, 58, 38, 0.8)')
+    // 只换 background，前景/ANSI 色盘不能丢
+    expect(theme.foreground).toBe('#e6edf3')
+    expect(theme.red).toBe('#f85149')
+  })
+
+  it('背景变化整体替换 theme 引用，且不触发 fit/resize 流程', async () => {
+    const t = makeTerminal()
+    const fitAddon = { fit: vi.fn() }
+    const onResized = vi.fn()
+    watchTerminalConfig(t as unknown as Terminal, fitAddon as unknown as FitAddon, () => true, onResized)
+
+    const settings = useSettingsStore()
+    settings.settings.appearance.terminal.backgroundMode = 'solid'
+    settings.settings.appearance.terminal.backgroundColor = '#000000'
+    settings.settings.appearance.terminal.backgroundOpacity = 100
+    await nextTick()
+
+    const theme = t.options.theme as { background?: string }
+    expect(theme.background).toBe('rgba(0, 0, 0, 1)')
+    // 背景不影响单元格尺寸：不能顺带 fit，否则多余 SIGWINCH 让 TUI 无谓重绘
     expect(fitAddon.fit).not.toHaveBeenCalled()
     expect(onResized).not.toHaveBeenCalled()
   })
