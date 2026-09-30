@@ -1913,6 +1913,33 @@ def delete_agent_strategy_route(strategy_id: str):
 # ── Trace Viewer + 成本追踪 ──
 
 
+@router.get("/agent/runs")
+async def list_agent_runs(
+    status: Optional[str] = Query(default=None, max_length=32),
+    run_id: Optional[str] = Query(default=None, max_length=128),
+    conversation_id: Optional[str] = Query(default=None, max_length=128),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    """按时间倒序列出 Agent 运行记录（首页「历史任务」退役后的回看入口）。
+
+    为什么要有这一条：此前只有 /agent/runs/{run_id}/trace 单查，前端要找回一条
+    已经跑完的 run 只能靠消息气泡里那枚 ▸轨迹 —— 会话被删，号就无处可查。
+    items 与 total 共用 database._run_filters，两个各抄一遍迟早对不上。
+    query/count 是同步 sqlite，移入线程池避免阻塞事件循环（与 /audit/records 同法）。
+    """
+    items, total = await asyncio.to_thread(
+        lambda: (
+            db.get_agent_runs(
+                conversation_id=conversation_id, status=status, run_id=run_id,
+                limit=limit, offset=offset,
+            ),
+            db.count_agent_runs(conversation_id=conversation_id, status=status, run_id=run_id),
+        )
+    )
+    return {"items": items, "total": total}
+
+
 @router.get("/agent/runs/{run_id}/trace")
 def get_agent_run_trace(run_id: str):
     """

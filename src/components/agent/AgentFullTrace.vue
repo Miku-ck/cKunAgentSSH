@@ -1,6 +1,6 @@
 <template>
-  <div class="full-trace">
-    <button class="ft-toggle" title="DB 权威记录：每步耗时 / 成本 / 状态流转" @click="onToggle">
+  <div class="full-trace" :class="{ inline }">
+    <button v-if="!inline" class="ft-toggle" title="DB 权威记录：每步耗时 / 成本 / 状态流转" @click="onToggle">
       <span class="ft-caret" :class="{ open: expanded }">▸</span>
       轨迹
     </button>
@@ -12,8 +12,8 @@
       </p>
 
       <template v-else-if="trace">
-        <!-- 元信息条 -->
-        <div class="ft-meta">
+        <!-- 元信息条：整表都是「这一条 run 跑成了什么样」的汇总 -->
+        <div v-if="!inline" class="ft-meta">
           <span class="ft-chip" :class="trace.run.status === 'completed' ? 'ok' : 'err'">
             {{ trace.run.status === 'completed' ? '完成' : '失败' }}
           </span>
@@ -35,11 +35,15 @@
             </template>
           </span>
         </div>
+        <!-- inline 时状态链是这一行的全部内容，缺了它展开就是片空白，得说一句 -->
+        <p v-else-if="inline" class="ft-hint muted">这条 run 没有状态流转记录</p>
 
         <!-- 工具调用清单不在前端显示 -->
 
-        <p class="ft-hint muted">工具调用明细已隐藏</p>
-        <p class="ft-time muted">run {{ runId.slice(0, 8) }}… · 始于 {{ trace.run.started_at || '-' }}</p>
+        <p v-if="!inline" class="ft-hint muted">工具调用明细已隐藏</p>
+        <!-- inline 时行上已经印着 trace 号、发起时间和各档汇总，这里只补行里没有的结束时刻 -->
+        <p v-if="!inline" class="ft-time muted">run {{ runId.slice(0, 8) }}… · 始于 {{ trace.run.started_at || '-' }}</p>
+        <p v-else-if="trace.run.completed_at" class="ft-time muted">结束 {{ trace.run.completed_at }}</p>
       </template>
     </div>
   </div>
@@ -52,18 +56,25 @@
  * 与消息内联快照（AgentTraceSnapshot，SSE 期间累积）互补：
  * 快照是运行视图，这里是落库视图 —— 每步 duration_ms、成本与状态历史
  * 以 DB 为准（回放审计口径）。清单行只展示动作与目标，不展开结果正文。
+ *
+ * inline=true 供「运行记录」表用：展开由宿主行控制，本体在文档流里（宿主的浮层
+ * 定位是绝对定位，塞进 <tr> 会飘出单元格），并且行上已印过的数字不再重印一遍。
  */
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { agentAdminApi, toFriendlyMessage, type AgentRunTrace } from '@/api/client'
-const props = defineProps<{ runId: string }>()
+const props = defineProps<{ runId: string; inline?: boolean }>()
 const emit = defineEmits<{ 'expand-change': [boolean] }>()
 
-const expanded = ref(false)
+const expanded = ref(!!props.inline)
 const loading = ref(false)
 const error = ref('')
 const trace = ref<AgentRunTrace | null>(null)
 
 watch(expanded, (v) => emit('expand-change', v))
+
+onMounted(() => {
+  if (props.inline) void fetchTrace()
+})
 
 async function onToggle() {
   expanded.value = !expanded.value
@@ -149,4 +160,21 @@ const stateChain = computed(() => {
 .ft-arrow { color: var(--text-tertiary); }
 .ft-time { margin: 0; font-size: 10.5px; }
 .muted { color: var(--text-tertiary); }
+/* inline（运行记录表）：展开由宿主那一行控制，本体落回文档流。
+   外壳一并拆掉 —— 宿主单元格已经给了底色和留白，再描一圈就是双层卡片。 */
+.full-trace.inline { display: block; width: 100%; }
+.inline .ft-body {
+  position: static;
+  top: auto;
+  left: auto;
+  right: auto;
+  z-index: auto;
+  max-height: none;
+  overflow: visible;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 0;
+  gap: 6px;
+}
 </style>

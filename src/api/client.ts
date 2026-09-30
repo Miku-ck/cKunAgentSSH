@@ -1349,6 +1349,31 @@ export interface AgentRunTrace {
   }>
 }
 
+/** GET /agent/runs 的列表行。
+ *
+ * 列集合就是后端那份投影（`database._RUN_LIST_COLUMNS`）：**没有**目标主机与审批档
+ * —— `agent_runs` 表里没存这两样，界面凭空画一格就等于借"当前设置里的选择"顶上去，
+ * 那是 run 归因那轮已经踩过的串台（运行中改设置会改写历史外观）。
+ * 整段 JSON 的 `state_history` / `context_summary` 也不在列表里，详情走 getRunTrace。 */
+export interface AgentRunRow {
+  id: string
+  conversation_id: string
+  task: string | null
+  status: string
+  mode: string | null
+  model_used: string | null
+  iteration: number
+  max_iterations: number
+  total_tokens: number
+  cost_usd: number
+  duration_ms: number
+  tool_call_count: number
+  started_at: string
+  completed_at: string | null
+}
+
+export interface AgentRunsResponse { items: AgentRunRow[]; total: number }
+
 export const agentAdminApi = {
   /** 工具清单（含启用状态、风险档） */
   getTools: () =>
@@ -1476,6 +1501,20 @@ export const agentAdminApi = {
   runMemoryTickNow: () => request<Record<string, unknown>>('/agent/tick/run', {
     method: 'POST',
   }),
+
+  /** 按时间倒序列出 run（历史回看的列表）。
+   *  runId 是 trace 号的**精确匹配**（后端 `id = ?`）—— 号是 12 位 hex，粘半个就是零条。 */
+  listRuns: (params: {
+    status?: string; runId?: string; conversationId?: string; limit?: number; offset?: number
+  } = {}) => {
+    const qs = new URLSearchParams()
+    if (params.status) qs.set('status', params.status)
+    if (params.runId) qs.set('run_id', params.runId)
+    if (params.conversationId) qs.set('conversation_id', params.conversationId)
+    if (params.limit !== undefined) qs.set('limit', String(params.limit))
+    if (params.offset !== undefined) qs.set('offset', String(params.offset))
+    return request<AgentRunsResponse>(`/agent/runs?${qs.toString()}`)
+  },
 
   /** 某次 run 的完整轨迹（DB 权威，含每调用耗时与成本） */
   getRunTrace: (runId: string) =>

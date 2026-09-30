@@ -1963,22 +1963,60 @@ def get_agent_run(run_id: str) -> Optional[dict]:
         conn.close()
 
 
-def get_agent_runs(conversation_id: str = None, limit: int = 20) -> list[dict]:
-    """获取 Agent 运行记录列表"""
+_RUN_LIST_COLUMNS = (
+    "id, conversation_id, task, status, mode, model_used, iteration, max_iterations, "
+    "total_tokens, cost_usd, duration_ms, tool_call_count, started_at, completed_at"
+)
+
+
+def _run_filters(conversation_id: str = None, status: str = None,
+                 run_id: str = None) -> tuple[str, list]:
+    """按固定列序拼 WHERE 与参数；值全走绑定，列名是这里的字面量。"""
+    conds: list[str] = []
+    params: list = []
+    for col, val in (("conversation_id", conversation_id), ("status", status), ("id", run_id)):
+        if val:
+            conds.append(f"{col} = ?")
+            params.append(val)
+    return (" WHERE " + " AND ".join(conds)) if conds else "", params
+
+
+def get_agent_runs(conversation_id: str = None, limit: int = 20, offset: int = 0,
+                   status: str = None, run_id: str = None,
+                   full: bool = False) -> list[dict]:
+    """Agent 运行记录列表（倒序）。
+
+    默认走**投影列**：`state_history` 与 `context_summary` 是整段 JSON 文本，
+    一张 50 行的表把它们全带上，列表接口自己就把响应撑大几十倍，而表格里没有
+    一列用得到。要整行传 full=True（旧调用方 consciousness_tick 走的就是这条）。
+    """
+    where, params = _run_filters(conversation_id, status, run_id)
+    cols = "*" if full else _RUN_LIST_COLUMNS
+    params = params + [limit, offset]
     conn = _get_conn()
     try:
-        if conversation_id:
-            rows = conn.execute(
-                "SELECT * FROM agent_runs WHERE conversation_id = ? "
-                "ORDER BY started_at DESC LIMIT ?",
-                (conversation_id, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM agent_runs ORDER BY started_at DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
+        rows = conn.execute(
+            f"SELECT {cols} FROM agent_runs{where} ORDER BY started_at DESC LIMIT ? OFFSET ?",
+            params,
+        ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def count_agent_runs(conversation_id: str = None, status: str = None,
+                     run_id: str = None) -> int:
+    """与列表同一份过滤条件的总数。
+
+    两处各抄一遍 WHERE 迟早对不上：审计表那边 count 曾漏掉 action/run_id，
+    翻页时"共 N 条"与眼前这几行不是同一个集合。
+    """
+    where, params = _run_filters(conversation_id, status, run_id)
+    conn = _get_conn()
+    try:
+        return conn.execute(
+            f"SELECT COUNT(*) FROM agent_runs{where}", params
+        ).fetchone()[0]
     finally:
         conn.close()
 
