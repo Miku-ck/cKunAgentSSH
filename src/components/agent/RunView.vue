@@ -18,6 +18,7 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import { useModelsStore } from '@/stores/models'
 import { useSSHStore } from '@/stores/ssh'
+import { useToastStore } from '@/stores/toast'
 import { approvalTargetLabel } from '@/utils/approval-display'
 import { PERMISSION_LABELS } from '@/utils/run-modes'
 import { buildTraceModel, mergeStream } from '@/utils/run-trace'
@@ -28,6 +29,18 @@ const ssh = useSSHStore()
 const models = useModelsStore()
 
 const emit = defineEmits<{ backHome: [] }>()
+
+const toast = useToastStore()
+
+/** 复制整串 trace。审计页的 run_id 是精确匹配，粘一半筛不出东西，所以给全号。 */
+function copyTrace() {
+  const id = agent.lastRunId
+  if (!id) return
+  navigator.clipboard.writeText(id).then(
+    () => toast.success(`trace ${id} 已复制，粘到运维审计的 trace 框即可找回这一轮`),
+    () => toast.error('复制失败，请手动选中 trace 号'),
+  )
+}
 
 const trace = computed(() => buildTraceModel(agent.toolCalls))
 /** 调用与待放行审批按时间归并成一条流（为什么不能把审批挂在调用上，见 mergeStream 注释） */
@@ -145,9 +158,16 @@ onUnmounted(() => { if (litTimer) clearTimeout(litTimer) })
         </span>
         <span class="m">第 {{ stepNo }} 步</span>
         <span v-if="targetLabel" class="m mono">{{ targetLabel }}</span>
-        <span v-if="agent.lastRunId" class="m mono" :title="`trace ${agent.lastRunId}`">
-          №{{ agent.lastRunId.slice(0, 8) }}
-        </span>
+        <!-- 整串 12 位 hex 才是审计能认的号（后端 _build_filters 是 run_id = ? 精确匹配，
+             8 位前缀筛不出东西），而且这 12 位是刻意从 8 位加长的 —— 8 位在数万 run 量级
+             下生日碰撞显著（agent.py:731）。截断显示等于把防碰撞的那几位扔掉，还看着像全号。 -->
+        <button
+          v-if="agent.lastRunId"
+          type="button"
+          class="m mono trace"
+          title="点击复制完整 trace 号，运维审计页按它筛这一轮的全部记录"
+          @click="copyTrace"
+        >№{{ agent.lastRunId }}</button>
         <span v-if="runModelName" class="m" title="本轮使用的模型（发起时记下，不随设置变化）">{{ runModelName }}</span>
         <span class="m" title="本轮的审批方式（发起时记下，不随设置变化）">
           {{ PERMISSION_LABELS[agent.lastPermissionMode] }}
@@ -229,7 +249,11 @@ onUnmounted(() => { if (litTimer) clearTimeout(litTimer) })
   width: 100%;
   height: 100%;
   min-height: 0;
-  background: var(--bg-base);
+  /* 与 .ssh-view/.titlebar 同一层漆：纸纹要跨画布连续，见 variables.css --canvas-bg。
+     回落必须写 —— --canvas-bg 目前只在未提交的那套纸纹令牌表里有定义，缺了它
+     HEAD 里这行是无效声明，整块画布背景悄悄落回继承值。 */
+  background: var(--canvas-bg, var(--bg-base));
+  background-attachment: fixed;
 }
 .rv-head {
   flex: none;
@@ -279,6 +303,17 @@ onUnmounted(() => { if (litTimer) clearTimeout(litTimer) })
   .tl-row.running .tl-dot { animation: none }
 }
 .m { color: var(--text-tertiary) }
+/* trace 号是一枚可点的读数，不是控件 —— 长得要和旁边那几格一模一样 */
+button.trace {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+button.trace:hover { color: var(--text-primary) }
 .b {
   height: 24px;
   padding: 0 11px;

@@ -6,23 +6,28 @@
  * 都读 store 而不是组件内自存，保证首页选的东西在侧栏同样算数。
  *
  * ＋ 菜单按"后端有消费者"筛过（spec 故事 5 的 2026-09-30 修订记着砍掉的三项与证据），
- * 现在四项齐了：**计划姿态 / 终端现场 / 本地文件 / 技能**。菜单里没有的那几项不是漏了
- * —— 是点亮后后端一字不变，那类开关在这仓里叫「亮的空开关」。
- * 「远端文件」按字面做要另接 sftpReadFile → 注入通路，仍是一片未开的工单。
+ * 菜单里是：**目标 / 计划 / 终端现场 / 本地文件 / 远端文件 / 技能**。没有的那几项不是
+ * 漏了 —— 是点亮后后端一字不变，那类开关在这仓里叫「亮的空开关」。
+ * 远端文件取进来后与 /chat/upload 的返回同形，注入通路仍只有一条（store 的
+ * addRemoteAttachment 负责截断口径，见那里的注释）。
  */
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import type { ChatAttachment } from '@/api/client'
 import { useHomeCommand } from '@/composables/useHomeCommand'
 import { useModelSelector } from '@/composables/useModelSelector'
 import { useSettings } from '@/composables/useSettings'
 import { useAgentStore } from '@/stores/agent'
 import { useModelsStore } from '@/stores/models'
 import { useSettingsStore } from '@/stores/settings'
-import { useSshAiStore } from '@/stores/ssh-ai'
+import { REMOTE_ID_PREFIX, useSshAiStore } from '@/stores/ssh-ai'
 import { useSkillStore } from '@/stores/skills'
-import { APPROVAL_OPTIONS, PERMISSION_LABELS, resolveRunModes, type ApprovalKey } from '@/utils/run-modes'
+import { useSSHStore } from '@/stores/ssh'
+import HomeRemoteFilePicker from './HomeRemoteFilePicker.vue'
+import { APPROVAL_OPTIONS, PERMISSION_LABELS, resolveRunModes, type ApprovalKey, type PermissionModeKey } from '@/utils/run-modes'
 
 const agent = useAgentStore()
 const sshAi = useSshAiStore()
+const ssh = useSSHStore()
 const modelsStore = useModelsStore()
 const skillsStore = useSkillStore()
 const settings = useSettingsStore()
@@ -46,6 +51,22 @@ async function onFilesPicked(e: Event) {
   await attachFiles(files)
 }
 
+/** ＋ 菜单的两个面：默认那几项，与远端文件的目录列表。每次重开都回默认面 ——
+ *  停在某个目录里重开，用户会以为自己点错了地方。 */
+const plusPane = ref<'root' | 'remote'>('root')
+
+function togglePlusMenu() {
+  showPlusMenu.value = !showPlusMenu.value
+  plusPane.value = 'root'
+}
+
+/** 取到一个远端文件：挂上 chip（底栏那枚就是反馈），菜单收起。
+ *  不再补一条 toast —— 同一个动作弹两下反而更像没生效。 */
+function onRemotePicked() {
+  plusPane.value = 'root'
+  showPlusMenu.value = false
+}
+
 const approvalMode = computed(() => sshAi.approvalMode)
 const showPermMenu = ref(false)
 const permRef = ref<HTMLElement | null>(null)
@@ -67,20 +88,44 @@ function pickPerm(key: ApprovalKey) {
   showPermMenu.value = false
 }
 
-/** 「计划」是开关不是单选：点亮即只读强制，再点退出回到**未表态**，
- *  而不是替用户选一个目标姿态（与侧栏 togglePlanMode 同语义）。 */
+/** 「计划」与「目标」都是开关不是单选：点亮即表态，再点退出回到**未表态**，
+ *  而不是替用户选另一个姿态（与侧栏 togglePlanMode 同语义）。两者共用 posture
+ *  这一个槽位（run-modes.ts 的 PostureKey = 'goal' | 'plan'），所以点一个会顶掉
+ *  另一个，而不是叠出第三种状态。 */
 function togglePlan() {
   sshAi.setPosture(sshAi.posture === 'plan' ? null : 'plan')
   showPlusMenu.value = false
 }
 
+function toggleGoal() {
+  sshAi.setPosture(sshAi.posture === 'goal' ? null : 'goal')
+  showPlusMenu.value = false
+}
+
 const isPlan = computed(() => sshAi.posture === 'plan')
+const isGoal = computed(() => sshAi.posture === 'goal')
+/** 档位只算一次：标签与图标都从它派生，避免"字写着自动、图标还是那张盾"。 */
+const permMode = computed(() =>
+  resolveRunModes(sshAi.posture ?? undefined, approvalMode.value).permissionMode,
+)
 /** 审批档按钮上那一行字与发送装配同源：plan 姿态下 resolveRunModes 恒压出 'plan'
  *  （permission-mode.test.ts 锁着），所以这里显示「只读计划」而不是用户原档 ——
  *  界面不能宣称一个不会生效的选择。禁用是**展示**层，用户的 approvalMode 没被改写。 */
-const permLabel = computed(() =>
-  PERMISSION_LABELS[resolveRunModes(sshAi.posture ?? undefined, approvalMode.value).permissionMode],
-)
+const permLabel = computed(() => PERMISSION_LABELS[permMode.value])
+
+/**
+ * 三档各自的图标。底图都是那张盾（"这一枚管的是放行"），盾里的记号区分档位：
+ *   手动 = 空盾（逐条由你按）；自动 = 一道闪电（模型代判）；只读计划 = 一横（写操作
+ *   根本不进审批）。共用工盾会骗人：切到自动审批，界面上什么都没变。
+ * 记号按 PermissionModeKey 穷举 —— 漏一档是编译错误，不是"那一档悄悄没记号"。
+ */
+const SHIELD = 'M12 3l7 3v5c0 4.6-3 8.2-7 10-4-1.8-7-5.4-7-10V6z'
+const PERM_MARKS: Record<PermissionModeKey, string | null> = {
+  normal: null,
+  auto: 'M13.2 7.2l-3.4 4.6h2.3l-.8 3.2 3.4-4.5h-2.2z',
+  plan: 'M9.2 12.2h5.6',
+}
+const permMark = computed(() => PERM_MARKS[permMode.value])
 
 /** ＋ 菜单的技能区。清单来自 skills store（后端那份，带设置页的开关状态），
  *  首页只挑已启用的 —— 未启用的技能点了也不会进 skill_ids（agent.py:594 按 mode 过滤）。 */
@@ -94,14 +139,31 @@ const pickedSkills = computed(() =>
   }),
 )
 
-/** 首页这枚是勾选控件，点已选中的要能取消 —— 但"怎么算重复""怎么摘掉"的算法归
- *  store（addSelectedSkill/removeSelectedSkill），这里只组合勾选语义。侧栏斜杠菜单
- *  用的是另一个组合（只加不减），两边共用同一对原子动作。 */
-function toggleSkill(id: string) {
-  if (sshAi.selectedSkillIds.includes(id)) sshAi.removeSelectedSkill(id)
-  else sshAi.addSelectedSkill(id)
+/** 远端文件取的是**当前 AI 目标那台机器**的文件 —— 与 shell_exec 落地同一口径
+ *  （useHomeTarget 改的也是 activeSessionId）。本地 shell 会话没有远端文件系统，
+ *  这时整项禁用并把理由写在副标题里，而不是点了弹一句"会话未连接"。 */
+const remoteSession = computed(() => {
+  const s = ssh.sessions.find(x => x.id === ssh.activeSessionId)
+  return s && s.type === 'remote' ? (s.shell || s.name) : ''
+})
+
+/** chip 的提示要说清"内容从哪来、模型看到多少"。远端与本地附件挂的是同一份列表、
+ *  同一枚 chip —— 不写来源就分不出这两类，同名文件尤其骗人。 */
+function attachmentTitle(f: ChatAttachment): string {
+  const from = f.file_id.startsWith(REMOTE_ID_PREFIX)
+    ? `远端 ${f.file_id.slice(REMOTE_ID_PREFIX.length)}`
+    : `本地 ${f.filename}`
+  return f.truncated ? `${from} · 文件较大，只注入开头节选 —— 模型看到的是节选，不是全文` : from
 }
 
+function toggleSkill(id: string) {
+  const cur = sshAi.selectedSkillIds
+  sshAi.setSelectedSkillIds(cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id])
+}
+
+/** 终端现场开关，缺省开着（关掉＝走纯文本入口那条空快照分支，默认行为一字不变）。
+ *  这枚开关必须在：底栏 chip 的 × 写的是同一个 attachTerminalContext，只有 × 就是
+ *  单向门 —— 手滑摘一次，这一整个会话都带不上终端现场，除非刷新页面。 */
 function toggleTerminalContext() {
   sshAi.setAttachTerminalContext(!sshAi.attachTerminalContext)
   showPlusMenu.value = false
@@ -173,7 +235,6 @@ onMounted(() => {
       class="hcc-input"
       rows="2"
       spellcheck="false"
-      placeholder="..."
       @input="grow"
       @keydown="onKeydown"
     />
@@ -193,13 +254,24 @@ onMounted(() => {
           :disabled="running"
           :aria-expanded="showPlusMenu"
           title="添加上下文"
-          @click.stop="showPlusMenu = !showPlusMenu"
+          @click.stop="togglePlusMenu"
         >＋</button>
         <div v-if="showPlusMenu" class="hcc-menu wide" @click.stop>
+          <HomeRemoteFilePicker
+            v-if="plusPane === 'remote'"
+            @back="plusPane = 'root'"
+            @picked="onRemotePicked"
+          />
+          <template v-else>
+          <!-- 五项：目标 / 计划 / 终端现场 / 本地文件 / 远端文件（技能在下面）。对勾紧跟字后面（原来钉在网格
+               第二列，隔着整行的宽度，读起来不像"这条被选了"而像另一列数据）。 -->
+          <button type="button" class="hcc-opt" :class="{ on: isGoal }" @click="toggleGoal">
+            <span class="ol">目标<span v-if="isGoal" class="ot">✓</span></span>
+            <span class="od">聚焦要达成什么、怎么算成功</span>
+          </button>
           <button type="button" class="hcc-opt" :class="{ on: isPlan }" @click="togglePlan">
-            <span class="ol">计划</span>
+            <span class="ol">计划<span v-if="isPlan" class="ot">✓</span></span>
             <span class="od">只读调研，写操作直接拒绝</span>
-            <span class="ot">{{ isPlan ? '✓' : '' }}</span>
           </button>
           <button
             type="button"
@@ -207,9 +279,8 @@ onMounted(() => {
             :class="{ on: sshAi.attachTerminalContext }"
             @click="toggleTerminalContext"
           >
-            <span class="ol">终端现场</span>
+            <span class="ol">终端现场<span v-if="sshAi.attachTerminalContext" class="ot">✓</span></span>
             <span class="od">选区与最近命令随消息带上</span>
-            <span class="ot">{{ sshAi.attachTerminalContext ? '✓' : '' }}</span>
           </button>
           <button
             type="button"
@@ -220,19 +291,28 @@ onMounted(() => {
             <span class="ol">{{ uploading ? '上传中…' : '本地文件' }}</span>
             <span class="od">内容随指令注入，不是发给模型的路径</span>
           </button>
+          <button
+            type="button"
+            class="hcc-opt"
+            :disabled="!remoteSession"
+            @click="plusPane = 'remote'"
+          >
+            <span class="ol">远端文件</span>
+            <span class="od">{{ remoteSession ? `从 ${remoteSession} 取一个文件的内容` : '需要先连上一台服务器' }}</span>
+          </button>
           <div class="hcc-sep">技能</div>
           <button
             v-for="s in skillOptions"
             :key="s.id"
             type="button"
-            class="hcc-opt single"
+            class="hcc-opt"
             :class="{ on: sshAi.selectedSkillIds.includes(s.id) }"
             @click="toggleSkill(s.id)"
           >
-            <span class="ol">{{ s.name }}</span>
-            <span class="ot">{{ sshAi.selectedSkillIds.includes(s.id) ? '✓' : '' }}</span>
+            <span class="ol">{{ s.name }}<span v-if="sshAi.selectedSkillIds.includes(s.id)" class="ot">✓</span></span>
           </button>
           <div v-if="!skillOptions.length" class="hcc-sep">没有已启用的技能</div>
+          </template>
         </div>
       </div>
 
@@ -245,7 +325,14 @@ onMounted(() => {
           :title="isPlan ? '计划姿态下写操作被直接拒绝，「谁来批准」不参与本次裁决' : ''"
           @click.stop="showPermMenu = !showPermMenu"
         >
-          审批 · <b>{{ permLabel }}</b>
+          <!-- 图标 + 档位名，不再写「审批 ·」：这三枚并排在底栏，各自是什么已经由
+               图标与菜单位置说明，重复一遍前缀只是把按钮撑宽。
+               盾形 = 谁来放行，盾里的记号分档位（见 PERM_MARKS）。 -->
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" aria-hidden="true">
+            <path :d="SHIELD" />
+            <path v-if="permMark" :d="permMark" />
+          </svg>
+          <b>{{ permLabel }}</b>
         </button>
         <div v-if="showPermMenu" class="hcc-menu" @click.stop>
           <button
@@ -256,9 +343,8 @@ onMounted(() => {
             :class="{ on: approvalMode === o.key }"
             @click="pickPerm(o.key)"
           >
-            <span class="ol">{{ o.label }}</span>
+            <span class="ol">{{ o.label }}<span v-if="approvalMode === o.key" class="ot">✓</span></span>
             <span class="od">{{ o.desc }}</span>
-            <span class="ot">{{ approvalMode === o.key ? '✓' : '' }}</span>
           </button>
         </div>
       </div>
@@ -287,12 +373,11 @@ onMounted(() => {
             v-for="m in modelsStore.models"
             :key="m.id"
             type="button"
-            class="hcc-opt single"
+            class="hcc-opt"
             :class="{ on: m.id === sshAi.selectedModelId }"
             @click="selectModel(m.id)"
           >
-            <span class="ol">{{ m.name || m.model_id || m.id }}</span>
-            <span class="ot">{{ m.id === sshAi.selectedModelId ? '✓' : '' }}</span>
+            <span class="ol">{{ m.name || m.model_id || m.id }}<span v-if="m.id === sshAi.selectedModelId" class="ot">✓</span></span>
           </button>
         </div>
       </div>
@@ -328,12 +413,12 @@ onMounted(() => {
         >×</button>
       </span>
 
-      <span v-if="terminalCtxLabel" class="hcc-chip" title="摘掉后这条指令不带终端现场">
+      <span v-if="terminalCtxLabel" class="hcc-chip" title="这枚 chip 的 × 会关掉终端现场开关，＋ 菜单里可以开回来">
         {{ terminalCtxLabel }}
         <button
           type="button"
           class="hcc-chip-x"
-          aria-label="本次不带终端现场"
+          aria-label="关掉终端现场（＋ 菜单里可以重新打开）"
           @click="sshAi.setAttachTerminalContext(false)"
         >×</button>
       </span>
@@ -342,7 +427,7 @@ onMounted(() => {
         v-for="f in sshAi.pendingAttachments"
         :key="f.file_id"
         class="hcc-chip"
-        :title="f.truncated ? '文件较大，只注入开头节选 —— 模型看到的是节选，不是全文' : f.filename"
+        :title="attachmentTitle(f)"
       >
         {{ f.filename }}
         <button
@@ -407,7 +492,9 @@ onMounted(() => {
   line-height: var(--hcc-lh);
   caret-color: var(--accent-primary);
 }
-.hcc-input::placeholder { color: var(--text-tertiary); opacity: .8 }
+/* 没有 placeholder：输入提示由上面那句问话承担（"今天想让 X 替你做什么？"），
+   框内再摆一个占位符是重复，而它先前是三个点 —— 读起来像框坏了。
+   所以这条 ::placeholder 规则也一并删掉：不匹配任何节点的规则就是死代码。 */
 .hcc-foot {
   display: flex;
   align-items: center;
@@ -420,21 +507,22 @@ onMounted(() => {
   flex-wrap: wrap;
 }
 .hcc-sel { position: relative }
+/* 底栏这三枚不画自己的皮：透明底 + 无边框，直接坐在卡面上（手记的卡脚另有那道
+   次级纸面渐变，它们跟着一起走）。先前它们是 --bg-base，比卡面 --bg-elevated 还暗
+   一档，看着像卡上挖的三个洞。UA chrome 由 global.css 的 button reset 断掉。 */
 .hcc-btn {
   display: flex;
   align-items: center;
   gap: 5px;
   height: 24px;
   padding: 0 9px;
-  border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  background: var(--bg-base);
   color: var(--text-secondary);
   font-size: 12px;
-  transition: background var(--transition-fast), border-color var(--transition-fast);
+  transition: background var(--transition-fast);
 }
 .hcc-btn b { font-weight: 500; color: var(--text-primary) }
-.hcc-btn:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--text-tertiary) }
+.hcc-btn:hover:not(:disabled) { background: var(--bg-hover) }
 .hcc-btn:disabled { opacity: .5; cursor: default }
 .hcc-btn.empty b { color: var(--accent-orange) }
 /* ＋ 是底栏唯一的上下文入口（故事 5），做成方角小方块让它一眼是"加"而不是一个词 */
@@ -442,17 +530,19 @@ onMounted(() => {
 /* 文件选择器不进底栏（故事 5：＋ 之外不常驻"添加"按钮），只借程序化 click 唤起。
    display:none 的 input 在 Chromium 里照样能被 .click() 打开，侧栏用的是同一招。 */
 .hcc-file { display: none }
-/* 可移除的 chip（故事 6）：底色用 --bg-input 而不是 elevated —— 它表示"这条消息
-   会带上它"，比卡面暗一档才读得出是附加物，不是卡片自身的装饰 */
+/* 可移除的 chip（故事 6）：底是"主题自己的墨按的一道渍"—— text-primary 7% 压在
+   卡面上，卡面是什么它就跟着是什么（手记的卡脚还有那道次级纸面渐变，chip 叠上去
+   照样读得出）。先前用的是 --bg-input：那是一个固定深色档，在蓝屏这类浅一档的卡面
+   上就成了一块比周围更黑的补丁，而不是"这条消息多带了个东西"。
+   边框同底栏其他控件一起撤掉（flat 到底，靠这道墨渍分辨边界）。 */
 .hcc-chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   height: 22px;
   padding: 0 4px 0 8px;
-  border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  background: var(--bg-input);
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
   color: var(--text-secondary);
   font-size: 11px;
 }
@@ -473,11 +563,15 @@ onMounted(() => {
 .hcc-menu {
   position: absolute;
   left: 0;
-  bottom: calc(100% + 6px);
+  /* 朝下开，与同屏的 .htt-menu 一个方向。先前是 bottom: calc(100% + 6px) 朝上，
+     而它在 .home-pane{overflow-y:auto} 里：实测菜单顶到 y=21、画布顶到 y=66，
+     上面 45px 被裁掉且**滚不回来**（负方向没有滚动区）。朝下溢出至少还在滚动
+     范围内。预览稿朝上开，但它不在被裁的滚动容器里。 */
+  top: calc(100% + 6px);
   width: 236px;
   padding: 4px;
   background: var(--bg-elevated);
-  border: 1px solid var(--border-default);
+  /* 不画框：与卡面同色的一层浮起，靠 shadow 与卡分离（边框是"框"这件事本身） */
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
   z-index: 30;
@@ -493,8 +587,8 @@ onMounted(() => {
 }
 .hcc-opt {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 1px 8px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
   width: 100%;
   text-align: left;
   padding: 6px 8px;
@@ -504,16 +598,16 @@ onMounted(() => {
 .hcc-opt:hover:not(:disabled) { background: var(--bg-hover) }
 /* 上传中：菜单项禁用要有可见差别，否则用户以为点了没反应，再点一次 */
 .hcc-opt:disabled { opacity: .55; cursor: default }
-.hcc-opt .ol { grid-column: 1; font-size: 12px; color: var(--text-primary) }
-.hcc-opt .od { grid-column: 1; font-size: 11px; color: var(--text-tertiary); line-height: 1.45 }
+.hcc-opt .ol { font-size: 12px; color: var(--text-primary) }
+.hcc-opt .od { font-size: 11px; color: var(--text-tertiary); line-height: 1.45 }
+/* 对勾跟在名字后面：它先前独占网格第二列、垂直跨两行，隔着整行宽度钉在最右，
+   读起来像另一列数据而不像"这一条被选了" */
 .hcc-opt .ot {
-  grid-row: 1 / 3;
-  align-self: center;
+  margin-left: 6px;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--accent-green);
 }
-.hcc-opt.single .ot { grid-row: 1 }
 .hcc-note { font-size: 11px; color: var(--text-tertiary) }
 .hcc-send {
   margin-left: auto;
@@ -522,10 +616,8 @@ onMounted(() => {
   border: 0;
   border-radius: var(--radius-sm);
   background: var(--accent-primary);
-  /* --accent-on 归主题/applyAccent 管，但 HEAD 里还没有它：variables.css 无定义，
-     applyAccent 也只写 --accent-primary/-rgb。不带 fallback 这条声明就在计算期失效，
-     前景退化成继承色 —— 全部 8 套主题的发送按钮都中招。先退回改动前的 #fff，等那边
-     把令牌定义上，fallback 自动失效，这里的语义不用改。 */
+  /* 前景由 applyAccent 按底色亮度算出来（--accent-on）：写死 #fff 时，
+     强调色选「白色」就是白底白字 —— 这枚按钮整个消失，而它点得到 */
   color: var(--accent-on, #fff);
   font-size: 13px;
   font-weight: 600;

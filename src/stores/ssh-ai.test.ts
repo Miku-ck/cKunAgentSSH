@@ -43,7 +43,7 @@ vi.mock('@/api/client', () => ({
   streamAgentRun: vi.fn(() => () => {}),
 }))
 
-const { useSshAiStore, pickTerminalSnapshot } = await import('@/stores/ssh-ai')
+const { useSshAiStore, pickTerminalSnapshot, ATTACHMENT_CHAR_LIMIT } = await import('@/stores/ssh-ai')
 
 describe('ssh-ai 审批档', () => {
   beforeEach(() => {
@@ -242,5 +242,59 @@ describe('ssh-ai 待发送附件', () => {
   it('附件不落 localStorage —— 文件内容进 store 已经很贵，跨会话留着更没道理', () => {
     useSshAiStore().setPendingAttachments([att('a')])
     expect([...lsMap.keys()].filter(k => /attach|file/i.test(k))).toHaveLength(0)
+  })
+})
+
+/**
+ * 远端文件挂为附件（spec 故事 5 的第五项，2026-09-30 裁决"另开一片"的那片）
+ *
+ * 关键约束：产出必须与 /chat/upload 的返回同形。注入通路只有一条
+ * （_sendAgentMessageInner 读 att.content/att.truncated 拼进 task），远端文件
+ * 若自搞一套字段，就是第二条下达通路 —— 正是这轮重构一路在防的东西。
+ */
+describe('ssh-ai 远端文件附件', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    lsMap.clear()
+    uploadChatFile.mockClear()
+  })
+
+  it('挂上后是一枚标准附件：basename 作文件名、路径作身份', () => {
+    const store = useSshAiStore()
+    const a = store.addRemoteAttachment({ path: '/etc/nginx/nginx.conf', content: 'user nginx;' })
+    expect(store.pendingAttachments).toEqual([
+      { file_id: 'remote:/etc/nginx/nginx.conf', filename: 'nginx.conf', content: 'user nginx;', truncated: false, size: 11 },
+    ])
+    expect(a.file_id).toBe('remote:/etc/nginx/nginx.conf')
+  })
+
+  it('不上传 —— 内容已经在手上，没必要再往服务器磁盘拷一份', () => {
+    useSshAiStore().addRemoteAttachment({ path: '/etc/hosts', content: '127.0.0.1 localhost' })
+    expect(uploadChatFile).not.toHaveBeenCalled()
+  })
+
+  it('超过注入上限就截断并标 truncated —— 不标记，模型会把节选当全文下结论', () => {
+    const store = useSshAiStore()
+    const a = store.addRemoteAttachment({ path: '/var/log/big.log', content: 'x'.repeat(ATTACHMENT_CHAR_LIMIT + 7) })
+    expect(a.content).toHaveLength(ATTACHMENT_CHAR_LIMIT)
+    expect(a.truncated).toBe(true)
+    // 上限与后端 routes/chat.py 的 MAX_ATTACHMENT_CHARS 同值：那边改了这个数，
+    // 同一份日志"下载再上传"与"直接挂远端"会截在不同长度。
+    expect(ATTACHMENT_CHAR_LIMIT).toBe(50_000)
+  })
+
+  it('同一路径再挑一次是换成新内容，不是挂出第二枚 chip', () => {
+    const store = useSshAiStore()
+    store.addRemoteAttachment({ path: '/etc/hosts', content: 'old' })
+    store.addRemoteAttachment({ path: '/etc/hosts', content: 'new' })
+    expect(store.pendingAttachments).toHaveLength(1)
+    expect(store.pendingAttachments[0].content).toBe('new')
+  })
+
+  it('chip 的 × 摘得掉远端附件 —— 与本地附件同一个 removePendingAttachment', () => {
+    const store = useSshAiStore()
+    const a = store.addRemoteAttachment({ path: '/etc/hosts', content: 'x' })
+    store.removePendingAttachment(a.file_id)
+    expect(store.pendingAttachments).toEqual([])
   })
 })

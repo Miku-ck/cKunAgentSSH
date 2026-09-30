@@ -40,9 +40,9 @@ const canAlways = (req: PermissionRequest) => grantScopesForRisk(req.risk).inclu
         v-if="agent.lastRunId"
         type="button"
         class="haq-goto"
-        :title="`trace ${agent.lastRunId}`"
+        :title="`进入这条 run · trace ${agent.lastRunId}`"
         @click="emit('open-run')"
-      >看过程 · №{{ agent.lastRunId.slice(0, 8) }}</button>
+      >看过程 · №{{ agent.lastRunId }}</button>
     </header>
 
     <article v-for="req in pending" :key="req.id" class="haq-card" :class="`r-${req.risk}`">
@@ -91,6 +91,10 @@ const canAlways = (req: PermissionRequest) => grantScopesForRisk(req.risk).inclu
   color: var(--text-secondary);
 }
 .haq-head .n {
+  /* 计数的手写体感归主题（稿子里 .gate-h .n 用的就是展示衬线）；字号不动。
+   * --font-display 目前只有纸纹那套未提交的令牌表里有定义，回落必须写：
+   * 缺了它，HEAD 里这一行就是无效声明，字号照旧而字体悄悄换掉，肉眼扫不出来。 */
+  font-family: var(--font-display, var(--font-sans));
   font-size: 15px;
   font-weight: 600;
   color: var(--accent-orange);
@@ -180,7 +184,8 @@ const canAlways = (req: PermissionRequest) => grantScopesForRisk(req.risk).inclu
 .b.pri {
   background: var(--accent-primary);
   border-color: var(--accent-primary);
-  color: #fff;
+  /* 同 .hcc-send：写死 #fff 时强调色选「白色」这枚「批准」按钮白底白字 */
+  color: var(--accent-on, #fff);
   font-weight: 600;
 }
 .b.pri:hover:not(:disabled) { filter: brightness(1.15); background: var(--accent-primary) }

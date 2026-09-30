@@ -22,6 +22,13 @@ import type { ModeConversation, ModeMessage } from '@/types/chat'
 // 后端 AgentRunRequest.task 的 max_length（routes/agent.py），与聊天输入框的
 // maxlength 同值：改这里必须同时改那两处，否则要么附件永远塞不进、要么 422。
 const TASK_CHAR_LIMIT = 50000
+/** 单个附件注入上限。与后端 routes/chat.py 的 MAX_ATTACHMENT_CHARS 同值 —— 那是
+ *  本地上传路径由后端执行的截断，远端文件不过后端，得由这边复刻同一个数。
+ *  两个数恰好都是 50_000 但语义不同（整条消息 vs 单个附件），不要合并成一个常量。 */
+export const ATTACHMENT_CHAR_LIMIT = 50_000
+/** 远端附件的 file_id 前缀。file_id 只在渲染层当身份用（不出网），但造它和认它
+ *  的必须是同一个常量 —— chip 的提示、去重都靠这个前缀分远端与本地。 */
+export const REMOTE_ID_PREFIX = 'remote:'
 
 // ── SSH 特有数据模型 ──
 
@@ -203,6 +210,24 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     } finally {
       uploadingAttachments.value = false
     }
+  }
+
+  /** 挂一个远端文件为附件。内容已经由 sftpReadFile 读到手上，不必再走 /chat/upload
+   *  往服务器磁盘拷一遍 —— 但截断口径必须与后端逐字相同（chat.py 的
+   *  MAX_ATTACHMENT_CHARS = 50_000）：同一个日志经"下载后上传"与"直接挂远端"若截在
+   *  不同长度，模型看到的就不是同一份东西。
+   *  同一路径再挑一次 = 换新版内容（远端文件刚被改过），而不是挂出第二枚 chip。 */
+  function addRemoteAttachment(input: { path: string; content: string; size?: number }): ChatAttachment {
+    const truncated = input.content.length > ATTACHMENT_CHAR_LIMIT
+    const att: ChatAttachment = {
+      file_id: `${REMOTE_ID_PREFIX}${input.path}`,
+      filename: input.path.split('/').filter(Boolean).pop() || input.path,
+      size: input.size ?? input.content.length,
+      content: truncated ? input.content.slice(0, ATTACHMENT_CHAR_LIMIT) : input.content,
+      truncated,
+    }
+    pendingAttachments.value = [...pendingAttachments.value.filter(f => f.file_id !== att.file_id), att]
+    return att
   }
 
   // ── 会话 CRUD ──
@@ -747,6 +772,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     pendingAttachments,
     setPendingAttachments,
     removePendingAttachment,
+    addRemoteAttachment,
     uploadingAttachments,
     uploadAttachments,
     // ── 终端现场（故事 5/6 第三项）──

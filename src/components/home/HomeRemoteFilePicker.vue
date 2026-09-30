@@ -1,0 +1,218 @@
+<script setup lang="ts">
+/**
+ * ＋ 菜单里的远端文件选择器（spec 2026-09-29-home-command-panel 故事 5 的第五项）
+ *
+ * 只读不传：`sftpList` 列目录、`sftpReadFile` 取内容，挂成附件后与 `/chat/upload`
+ * 返回的是同一形状，因此注入通路仍只有一条（见 ssh-ai.addRemoteAttachment）。
+ * 刻意不再把内容上传到服务器 uploads/ 目录 —— 东西已经在渲染进程手上，再拷一遍
+ * 只是多留一份副本。
+ *
+ * 起点是 '/'，与 SFTP 面板 connect 时的初值同一个口径（sftp.ts:129）；两处起点
+ * 不同的话，用户会以为"上次去的目录丢了"。
+ */
+import { computed, onMounted, ref } from 'vue'
+import { toFriendlyMessage } from '@/api/client'
+import { useSshAiStore } from '@/stores/ssh-ai'
+import { useSSHStore } from '@/stores/ssh'
+
+/** 与后端 chat.py 的 MAX_UPLOAD_SIZE 同值：超过它的文件主进程那边本来就抛，
+ *  灰在列表里比点下去吃一条错误提示省事。 */
+const READABLE_MAX = 10 * 1024 * 1024
+
+const emit = defineEmits<{
+  picked: [payload: { path: string; filename: string }]
+  back: []
+}>()
+
+const ssh = useSSHStore()
+const sshAi = useSshAiStore()
+
+const cwd = ref('/')
+const entries = ref<SftpEntry[]>([])
+const loading = ref(false)
+const error = ref('')
+/** 正在读的文件路径 —— 读取比列目录慢得多，没有可见反馈就是一次"点了没反应" */
+const reading = ref('')
+
+/** 列目录与读取各一个序号：连点 ".." 时慢的旧请求后到会覆盖新目录（SFTP 面板踩过，
+ *  那边是 B20）。两类请求互不相干，共用一个号会让"进目录"把在跑的读取判成过期。 */
+let listSeq = 0
+let readSeq = 0
+
+const session = computed(() => ssh.sessions.find(s => s.id === ssh.activeSessionId))
+/** 只有远程会话有远端文件系统：本地 shell 会话点了只会得到一句"会话未连接" */
+const usable = computed(() => session.value?.type === 'remote' && !!ssh.activeSessionId)
+const notText = (size: number) => size > READABLE_MAX
+
+/** readdir 的顺序不是人能读的：目录置顶、按名排。/etc 那种两百条的目录里，
+ *  不排序等于让用户滚着找。 */
+const sorted = computed(() =>
+  [...entries.value].sort((a, b) =>
+    Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name),
+  ),
+)
+
+function parentOf(path: string): string {
+  const trimmed = path.endsWith('/') ? path.slice(0, -1) : path
+  const idx = trimmed.lastIndexOf('/')
+  return idx <= 0 ? '/' : trimmed.slice(0, idx)
+}
+
+function fmtSize(n: number): string {
+  if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)}M`
+  if (n >= 1024) return `${Math.round(n / 1024)}K`
+  return `${n}B`
+}
+
+async function load(path: string) {
+  const api = window.electronAPI
+  if (!api) {
+    error.value = '远端文件仅在桌面端可用'
+    return
+  }
+  if (!usable.value) {
+    error.value = '当前没有远程终端会话可取文件'
+    return
+  }
+  const sid = ssh.activeSessionId as string
+  const seq = ++listSeq
+  loading.value = true
+  error.value = ''
+  try {
+    const list = await api.sftpList(sid, path)
+    if (seq !== listSeq) return
+    entries.value = list
+    cwd.value = path
+  } catch (err) {
+    if (seq !== listSeq) return
+    error.value = toFriendlyMessage(err, '列目录失败')
+  } finally {
+    if (seq === listSeq) loading.value = false
+  }
+}
+
+async function pick(entry: SftpEntry) {
+  const api = window.electronAPI
+  if (!api || !usable.value || entry.isDirectory || notText(entry.size)) return
+  const sid = ssh.activeSessionId as string
+  const seq = ++readSeq
+  reading.value = entry.path
+  error.value = ''
+  try {
+    const file = await api.sftpReadFile(sid, entry.path)
+    if (seq !== readSeq) return
+    sshAi.addRemoteAttachment({ path: entry.path, content: file.content, size: file.size })
+    emit('picked', { path: entry.path, filename: entry.name })
+  } catch (err) {
+    if (seq !== readSeq) return
+    error.value = toFriendlyMessage(err, '读取失败')
+  } finally {
+    if (seq === readSeq) reading.value = ''
+  }
+}
+
+onMounted(() => { load('/') })
+</script>
+
+<template>
+  <div class="hrp">
+    <div class="hrp-bar">
+      <button type="button" class="hrp-back" title="返回 ＋ 菜单" @click="emit('back')">‹</button>
+      <code class="hrp-path" :title="cwd">{{ cwd }}</code>
+      <button
+        type="button"
+        class="hrup-refresh"
+        title="重新列目录"
+        :disabled="loading"
+        @click="load(cwd)"
+      >↻</button>
+    </div>
+
+    <p v-if="!usable" class="hrp-hint">先在终端里连上一台服务器，才能取它的文件。</p>
+    <p v-else-if="error" class="hrp-hint err">{{ error }}</p>
+    <p v-else-if="loading" class="hrp-hint">列目录中…</p>
+
+    <ul v-else class="hrp-list">
+      <li v-if="cwd !== '/'">
+        <button type="button" class="hrp-row up" @click="load(parentOf(cwd))">..</button>
+      </li>
+      <li v-for="e in sorted" :key="e.path">
+        <button
+          type="button"
+          class="hrp-row"
+          :class="{ dir: e.isDirectory }"
+          :disabled="!e.isDirectory && (notText(e.size) || reading === e.path)"
+          :title="!e.isDirectory && notText(e.size) ? '超过 10MB，读不了' : e.path"
+          @click="e.isDirectory ? load(e.path) : pick(e)"
+        >
+          <span class="nm">{{ e.name }}</span>
+          <span v-if="e.isDirectory" class="sz">/</span>
+          <span v-else class="sz">{{ reading === e.path ? '读取中…' : fmtSize(e.size) }}</span>
+        </button>
+      </li>
+      <li v-if="!entries.length && cwd !== '/'"><p class="hrp-hint">空目录</p></li>
+    </ul>
+  </div>
+</template>
+
+<style scoped>
+/* 这套样式跟着 .hcc-menu.wide 的盒子走（220px 宽、260px 高、可滚）。
+   只用各主题都已有的令牌 —— 手记主题下它就是米纸上一份紧凑列表，别的主题下
+   也不该出现"这块没跟着换肤"的洞。 */
+.hrp { display: flex; flex-direction: column; gap: 2px }
+.hrp-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 2px 5px;
+  border-bottom: 1px solid var(--divider-primary);
+}
+.hrp-back,
+.hrup-refresh {
+  width: 18px;
+  height: 18px;
+  line-height: 16px;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+}
+.hrp-back:hover,
+.hrup-refresh:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary) }
+.hrp-path {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* 目录是"我在哪"，不是要读的代码 —— 让它比 .mono 轻一点 */
+  letter-spacing: 0;
+}
+.hrp-list { list-style: none; margin: 0; padding: 0; max-height: 208px; overflow-y: auto }
+.hrp-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.hrp-row:hover:not(:disabled) { background: var(--bg-hover) }
+.hrp-row:disabled { opacity: .55; cursor: default }
+.hrp-row .nm {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hrp-row.dir .nm { color: var(--accent-primary) }
+.hrp-row .sz { font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary) }
+.hrp-row.up { color: var(--text-secondary) }
+.hrp-hint { padding: 6px; font-size: 11px; color: var(--text-tertiary) }
+.hrp-hint.err { color: var(--danger-text) }
+</style>

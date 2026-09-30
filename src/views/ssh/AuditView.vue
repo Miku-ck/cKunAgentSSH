@@ -51,6 +51,21 @@
         <option value="skipped">已跳过 (skipped)</option>
       </select>
       <input v-model="filters.target_id" placeholder="目标 ID 过滤" @keyup.enter="loadFirst" />
+      <!-- 后端 run_id 是 `= ?` 精确匹配（audit.py:_build_filters），半个号筛不出东西 ——
+           运行视图头部的 № 点一下就是全号。 -->
+      <input
+        v-model="filters.run_id"
+        class="trace-input"
+        placeholder="trace 号（整串）"
+        title="按 trace 号找回某一条 run 的全部记录。运行视图/待放行队列头部点 № 可复制整串号"
+        @keyup.enter="loadFirst"
+      />
+      <button
+        v-if="filters.run_id"
+        class="audit-btn"
+        title="清空 trace 筛选"
+        @click="filters.run_id = ''; loadFirst()"
+      >清 trace</button>
     </div>
 
     <!-- 记录表 -->
@@ -63,6 +78,7 @@
             <th>操作人</th>
             <th>工具</th>
             <th>结论</th>
+            <th title="Agent 轮次号（run_id）；手动敲的命令没有这个，为空">trace</th>
             <th>命令 / 目标</th>
             <th>结果</th>
           </tr>
@@ -74,13 +90,14 @@
             <td>{{ r.operator }}</td>
             <td class="mono">{{ r.action }}</td>
             <td><span class="concl" :class="r.conclusion">{{ r.conclusion }}</span></td>
+            <td class="mono">{{ r.run_id || '—' }}</td>
             <td class="mono cmd" :title="r.command_raw">
               {{ r.command_raw || r.target_type + (r.target_id ? ' #' + shortId(r.target_id) : '') }}
             </td>
             <td class="result" :title="r.result">{{ truncate(r.result) }}</td>
           </tr>
           <tr v-if="!loading && records.length === 0">
-            <td colspan="7" class="empty">{{ total === 0 ? '暂无审计记录' : '没有匹配的记录' }}</td>
+            <td colspan="8" class="empty">{{ total === 0 ? '暂无审计记录' : '没有匹配的记录' }}</td>
           </tr>
         </tbody>
       </table>
@@ -123,10 +140,11 @@ const verifyState = ref<AuditVerifyResult | null>(null)
 const pageSize = 200
 const offset = ref(0)
 
-const filters = reactive<{ environment: string; conclusion: string; target_id: string }>({
+const filters = reactive<{ environment: string; conclusion: string; target_id: string; run_id: string }>({
   environment: '',
   conclusion: '',
   target_id: '',
+  run_id: '',
 })
 
 // 「归档清理」作用于整表，可点与否就必须看整表条数：total 是**当前筛选命中数**，
@@ -148,6 +166,7 @@ async function load() {
       environment: filters.environment || undefined,
       conclusion: filters.conclusion || undefined,
       target_id: filters.target_id || undefined,
+      run_id: filters.run_id.trim() || undefined,
       limit: pageSize,
       offset: offset.value,
     })
