@@ -36,10 +36,27 @@ export const APPROVAL_OPTIONS: ReadonlyArray<{ key: ApprovalKey; label: string; 
 
 export const APPROVAL_LABELS: Record<ApprovalKey, string> = { normal: '手动审批', auto: '自动审批' }
 
+/**
+ * 后端 AgentRunRequest.permission_mode 的取值域。比审批档多一个 'plan'：
+ * 那是计划姿态的只读强制档，用户点的是「计划」而不是这第三档。
+ */
+export type PermissionModeKey = 'normal' | 'auto' | 'plan'
+
+/** 未表态时后端实际跑的档位。run 归因与请求体共用这一个常量，
+ *  免得"发出去的档位"和"头部显示的档位"各写一遍默认值后对不上。 */
+export const PERMISSION_MODE_DEFAULT: PermissionModeKey = 'normal'
+
+/** run-head 上那一格审批方式的名字。两档文案复用 APPROVAL_LABELS，
+ *  避免同一个按钮在首页叫「自动审批」、在 run 头部叫别的。 */
+export const PERMISSION_LABELS: Record<PermissionModeKey, string> = {
+  ...APPROVAL_LABELS,
+  plan: '只读计划',
+}
+
 interface RunModes {
   /** undefined = 未表态：字段省略，后端不注入任何姿态段 */
   workflowMode?: PostureKey
-  permissionMode: 'normal' | 'auto' | 'plan'
+  permissionMode: PermissionModeKey
 }
 
 /**

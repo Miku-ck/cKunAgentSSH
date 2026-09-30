@@ -497,6 +497,18 @@ describe('整程计时与每步耗时', () => {
     expect(store.lastSshSessionId).toBe('')
   })
 
+  it('模型与审批档在发起那一刻记下，运行中改设置不改写这一轮', () => {
+    const store = useAgentStore()
+    store.runAgent({ task: 't', conversationId: 'c1', modelId: 'm-a', permissionMode: 'auto' })
+    expect(store.lastModelId).toBe('m-a')
+    expect(store.lastPermissionMode).toBe('auto')
+    // 未表态时记的是请求体实际发出去的那一档（PERMISSION_MODE_DEFAULT），不是空：
+    // run-head 因此能诚实说「手动审批」，而不是这一格干脆不显示
+    store.runAgent({ task: 't2', conversationId: 'c1', modelId: 'm-b' })
+    expect(store.lastModelId).toBe('m-b')
+    expect(store.lastPermissionMode).toBe('normal')
+  })
+
   it('tool_call_result 带的 duration_ms 落到该次调用上', () => {
     const { store, push } = startRun()
     push({ type: 'state', state: 'acting', iteration: 0, run_id: 'r1' })

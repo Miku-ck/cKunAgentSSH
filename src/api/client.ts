@@ -9,6 +9,7 @@
  */
 import { useAppStore } from '@/stores/app'
 import { extractSSHError, toFriendlySshMessage } from '@/ssh-error-types'
+import { PERMISSION_MODE_DEFAULT, type PermissionModeKey } from '@/utils/run-modes'
 
 const FALLBACK_PORT = 8010  // 后端 dev 默认端口（与 backend/main.py --port default 一致）
 
@@ -839,7 +840,7 @@ export interface StreamAgentOptions {
    * 'auto' 仅放宽审批卡的「谁来点头」那一维（fail-closed 在后端裁决器），
    * 不越过 hardline / prod 预授权 / 用户拒绝记忆任何一条边界。缺省 normal。
    */
-  permissionMode?: 'normal' | 'auto' | 'plan'
+  permissionMode?: PermissionModeKey
   onEvent: (event: AgentSSEEvent) => void
   onError: (error: string) => void
   onDone: () => void
@@ -887,7 +888,7 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
           ...(options.workflowMode === undefined
             ? {}
             : { workflow_mode: options.workflowMode }),
-          permission_mode: options.permissionMode ?? 'normal',
+          permission_mode: options.permissionMode ?? PERMISSION_MODE_DEFAULT,
         }),
         signal: abortController.signal,
       })

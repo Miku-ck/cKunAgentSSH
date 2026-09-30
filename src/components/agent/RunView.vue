@@ -10,19 +10,22 @@
  * 数据只读 agent store 一份，不复制进消息气泡；轨迹分组走 utils/run-trace，
  * 与后面要加的时间线列共用同一次分组结果。
  *
- * 头部刻意没放「模型 / 审批档」两项：那两个值此刻只存在于设置面板的当前选择里，
- * run 本身没记住自己是用哪档跑的。把"现在的选择"标成"这一轮的档位"是另一种串台
- * （运行中改设置就会看到历史被改写），等 run 归因字段定了再补，见任务清单。
+ * 头部的「模型 / 审批档」读的是 agent store 的归因两格（发起那一刻记下的值），
+ * 不是设置面板的当前选择 —— 后者会在运行中被改，把已经跑完的那一轮标成另一个
+ * 模型、另一档审批（故事 16 的修订记的就是这个坑）。
  */
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { useAgentStore } from '@/stores/agent'
+import { useModelsStore } from '@/stores/models'
 import { useSSHStore } from '@/stores/ssh'
 import { approvalTargetLabel } from '@/utils/approval-display'
+import { PERMISSION_LABELS } from '@/utils/run-modes'
 import { buildTraceModel, mergeStream } from '@/utils/run-trace'
 import ApprovalCard from './ApprovalCard.vue'
 
 const agent = useAgentStore()
 const ssh = useSSHStore()
+const models = useModelsStore()
 
 const emit = defineEmits<{ backHome: [] }>()
 
@@ -36,6 +39,12 @@ const stepNo = computed(() => (agent.totalIterations || agent.iteration + 1))
 
 const targetLabel = computed(() =>
   approvalTargetLabel({ sshSessionId: agent.lastSshSessionId }, ssh.sessions, ssh.connections),
+)
+
+/** 归因那一格只在"查得到名字"时出现：模型列表还没拉到、或那个模型已被删掉时，
+ *  宁可空着，也不把内部 id 印成一格用户读不懂的字，更不拿当前选择顶上去。 */
+const runModelName = computed(() =>
+  models.models.find(m => m.id === agent.lastModelId)?.name || '',
 )
 
 const statusText = computed(() => {
@@ -138,6 +147,10 @@ onUnmounted(() => { if (litTimer) clearTimeout(litTimer) })
         <span v-if="targetLabel" class="m mono">{{ targetLabel }}</span>
         <span v-if="agent.lastRunId" class="m mono" :title="`trace ${agent.lastRunId}`">
           №{{ agent.lastRunId.slice(0, 8) }}
+        </span>
+        <span v-if="runModelName" class="m" title="本轮使用的模型（发起时记下，不随设置变化）">{{ runModelName }}</span>
+        <span class="m" title="本轮的审批方式（发起时记下，不随设置变化）">
+          {{ PERMISSION_LABELS[agent.lastPermissionMode] }}
         </span>
         <span class="sp"></span>
         <button type="button" class="b" @click="emit('backHome')">回首页</button>

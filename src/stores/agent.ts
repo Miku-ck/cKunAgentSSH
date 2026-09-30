@@ -13,6 +13,7 @@ import { StreamingThinkScrubber } from '@/utils/think-scrubber'
 import { useToastStore } from './toast'
 import { useAgentDeliver } from '@/composables/useAgentDeliver'
 import type { GrantScope } from '@/utils/approval-scopes'
+import { PERMISSION_MODE_DEFAULT, type PermissionModeKey } from '@/utils/run-modes'
 
 interface ToolCallEntry {
   id: string
@@ -190,6 +191,12 @@ export const useAgentStore = defineStore('agent', () => {
    *  与 lastTask 同一个理由：run-head 的「目标主机」不能读"此刻的活动会话"，
    *  运行中切了会话就会把主机 A 的 run 标成主机 B —— 用户据此批准的就是错的目标。 */
   const lastSshSessionId = ref('')
+  /** 本次 run 的归因两格：发起那一刻实际发出去的值，run-head 只读它们。
+   *  与 lastTask 同一个理由 —— 读"设置面板里的当前选择"会在运行中改设置时把历史
+   *  改写：审批档从「手动」显示成「自动」，用户据此以为这一轮是模型代判跑完的。
+   *  审批档的缺省取 PERMISSION_MODE_DEFAULT，与请求体同一口径，不另抄一份 'normal'。 */
+  const lastModelId = ref('')
+  const lastPermissionMode = ref<PermissionModeKey>(PERMISSION_MODE_DEFAULT)
 
   // 可见终端执行模式：交付编排器（模块级单例，跨组件共享）
   const agentDeliver = useAgentDeliver()
@@ -250,7 +257,7 @@ export const useAgentStore = defineStore('agent', () => {
     /** 对话姿态（goal/plan）—— 透传后端注入姿态 system prompt */
     workflowMode?: 'goal' | 'plan'
     /** 权限模式（normal=手动审批 / auto=模型代判 / plan=只读强制）—— 缺省 normal */
-    permissionMode?: 'normal' | 'auto' | 'plan'
+    permissionMode?: PermissionModeKey
   }) {
     // C10 修复：并发保护 — 如果有正在运行的流，先中止它，避免多个流并行导致状态混乱
     if (abortFn) {
@@ -264,6 +271,8 @@ export const useAgentStore = defineStore('agent', () => {
     runStartedAt.value = Date.now()
     lastTask.value = options.task
     lastSshSessionId.value = options.sshSessionId || ''
+    lastModelId.value = options.modelId || ''
+    lastPermissionMode.value = options.permissionMode ?? PERMISSION_MODE_DEFAULT
 
     status.value = 'running'
     currentState.value = 'thinking'
@@ -785,6 +794,8 @@ export const useAgentStore = defineStore('agent', () => {
     runStartedAt,
     lastTask,
     lastSshSessionId,
+    lastModelId,
+    lastPermissionMode,
     // 步号两项此前没导出：只有 snapshot() 这个一次性出口用得上，而 run-head 要
     // 在运行中持续显示「第 n 步」
     iteration,
