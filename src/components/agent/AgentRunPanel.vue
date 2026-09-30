@@ -7,10 +7,13 @@
  * - 任务规划（意图分类：级别/任务类型/思考预算）
  * - 警告（warnings）
  * - 人工介入求助卡片（AI 请求帮助，可忽略）
- * - 工具授权请求（允许本次/本会话允许/始终允许/忽略，命令工具绑定命令哈希；
- *   session 档只对非 dangerous 卡开放，口径见 utils/approval-scopes.ts）
  * - 可见终端执行：待确认命令（确认/拒绝）
  * - 错误（errorMessage）
+ *
+ * 工具授权请求原先也在这里（审批托盘：单一焦点卡 + 批量 + 追溯），R1 起整块撤走 ——
+ * 同一份 permissionRequests 现在只在首页「待你放行」队列与首页过程区的内联卡出现，
+ * 结算仍走 store 的 approvePermission / denyPermission。`hasRunNotice` 里那一项
+ * 条件随之撤掉（留着会空挂一块面板）。
  *
  * 整块的显隐由 agentStore.hasRunNotice 决定（数据侧单一判定，逐区块对齐）——
  * 宿主组件不要再抄一份条件：漏掉一项就等于那块内容永远不挂载。
@@ -18,15 +21,8 @@
  * 注：常规运行状态（thinking/acting、迭代计数、工具调用流）不在本面板展示 —
  * 工具调用明细见消息气泡内联轨迹（AgentTraceInline）与运行交付面板。
  */
-import { computed, ref, watch } from 'vue'
+import { computed } from 'vue'
 import { useAgentStore } from '@/stores/agent'
-// 展示口径与首页待放行队列共用一份（别名保持模板调用点不变）
-import {
-  approvalCommand as cardCommand,
-  approvalRiskLabel as riskLabel,
-} from '@/utils/approval-display'
-import { useApprovalActions } from '@/composables/useApprovalActions'
-import ApprovalCard from './ApprovalCard.vue'
 import ClarifyingWizard from './ClarifyingWizard.vue'
 
 const agentStore = useAgentStore()
@@ -53,60 +49,6 @@ function taskTypeLabel(type: string): string {
     conversation: '对话',
   }
   return map[type] || type
-}
-
-/** 结算的用户可见层与首页待放行队列共用一份（别名保持模板调用点不变） */
-const { approve: grantPermission, deny: denyRequest } = useApprovalActions()
-
-// ── 单一焦点审批队列（spec refactor-approval-center） ──
-const pendingPerms = computed(() => agentStore.pendingPermissions)
-/** 已解决（已授权/已拒绝）项（追溯区）；expired 卡按裁决A留在可操作队列，不进追溯 */
-const resolvedPerms = computed(() => agentStore.permissionRequests.filter(r => r.resolved))
-
-// 焦点在待审批队列内的索引；队列收缩/触发时钳制到合法范围
-const focusIdx = ref(0)
-watch(() => pendingPerms.value.length, (n) => {
-  if (focusIdx.value >= n) focusIdx.value = Math.max(0, n - 1)
-})
-/** 焦点卡 = 待审批队列里最旧一条（队首），随结算自动向前 */
-const focusPerm = computed(() => pendingPerms.value[focusIdx.value] ?? pendingPerms.value[0] ?? null)
-/** 折叠的排队数（除焦点外其余待处理） */
-const queueCount = computed(() => Math.max(0, pendingPerms.value.length - 1))
-/** 待处理队列折叠列表是否展开 */
-const queueOpen = ref(false)
-
-function focusNext() {
-  const n = pendingPerms.value.length
-  if (n <= 1) return
-  focusIdx.value = (focusIdx.value + 1) % n
-}
-function focusPrev() {
-  const n = pendingPerms.value.length
-  if (n <= 1) return
-  focusIdx.value = (focusIdx.value - 1 + n) % n
-}
-function focusAt(i: number) {
-  if (i >= 0 && i < pendingPerms.value.length) focusIdx.value = i
-}
-
-// 批量审批：快照待审批 id 再逐条按正常授权/拒绝流程结算（grantPermission /
-// denyRequest 自身幂等：resolved/settling 会自动跳过）
-const batchBusy = ref(false)
-async function grantAll() {
-  if (batchBusy.value || pendingPerms.value.length === 0) return
-  batchBusy.value = true
-  for (const req of [...pendingPerms.value]) {
-    await grantPermission(req.id, 'once')
-  }
-  batchBusy.value = false
-}
-async function denyAll() {
-  if (batchBusy.value || pendingPerms.value.length === 0) return
-  batchBusy.value = true
-  for (const req of [...pendingPerms.value]) {
-    await denyRequest(req.id)
-  }
-  batchBusy.value = false
 }
 
 // ── 人工介入提示（Task 3：降级为顶部细条通知，只显示最近一条） ──
@@ -163,81 +105,10 @@ const latestHelp = computed(() =>
       </button>
     </div>
 
-    <!-- 权限请求：审批托盘之一。"单一焦点"这句已经不适用 —— 同一份
-         agentStore.permissionRequests 现在有三个入口（这里 / 首页待放行队列 /
-         运行视图内联卡），三处渲染的是同一对象、结算走同一个 approve/deny，
-         所以不矛盾；要不要在 run 标签活动时段落隐去这层是待裁决 C2。 -->
-    <div class="permission-section" v-if="agentStore.permissionRequests.length > 0">
-      <!-- 托盘头：汇总计数 + 人工介入角标 + 批量操作 -->
-      <div class="ap-perm-tray">
-        <svg class="ap-ic ap-perm-accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-        <span class="ap-ttl ap-perm-ttl">审批队列</span>
-        <span class="ap-tray-count">{{ pendingPerms.length }} 待处理</span>
-        <span
-          v-if="agentStore.humanHelpRequests.length > 0"
-          class="ap-badge ap-badge-warn"
-          role="status"
-        >{{ agentStore.humanHelpRequests.length }} 次人工介入</span>
-        <span class="ap-sp"></span>
-        <button class="ap-btn ap-btn-grant" :disabled="batchBusy || pendingPerms.length === 0" @click="grantAll">
-          {{ batchBusy ? '处理中...' : `全部允许本次（${pendingPerms.length}）` }}
-        </button>
-        <button class="ap-btn ap-btn-deny" :disabled="batchBusy || pendingPerms.length === 0" @click="denyAll">
-          {{ batchBusy ? '处理中...' : `全部拒绝（${pendingPerms.length}）` }}
-        </button>
-      </div>
-
-      <!-- 单一焦点卡：最旧一条未处理（卡体与运行视图内联审批共用一个组件） -->
-      <ApprovalCard
-        v-if="focusPerm"
-        :req="focusPerm"
-        :nav-count="pendingPerms.length"
-        @prev="focusPrev"
-        @next="focusNext"
-      />
-
-      <!-- 折叠的排队项（+N 条待处理） -->
-      <div v-if="queueCount > 0" class="ap-queue">
-        <button class="ap-queue-toggle" :aria-expanded="queueOpen" @click="queueOpen = !queueOpen">
-          <svg v-if="queueOpen" class="ap-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 15 12 9 18 15"/></svg>
-          <svg v-else class="ap-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-          <span v-if="queueOpen">收起待处理</span>
-          <span v-else>+{{ queueCount }} 条待处理</span>
-        </button>
-        <div v-if="queueOpen" class="ap-queue-list">
-          <button
-            v-for="(req, i) in pendingPerms"
-            :key="req.id"
-            class="ap-queue-item"
-            :class="{ 'is-focus': i === focusIdx }"
-            @click="focusAt(i)"
-          >
-            <span class="ap-queue-ic" :class="`risk-${req.risk}`">!</span>
-            <code class="ap-queue-cmd" :title="cardCommand(req) || req.tool">{{ cardCommand(req) || req.tool }}</code>
-            <span class="ap-risk ap-risk-mini" :class="`risk-${req.risk}`">{{ riskLabel(req.risk) }}</span>
-          </button>
-        </div>
-      </div>
-
-      <!-- 追溯区：已解决（不删数据）；超时卡仍在可操作队列 -->
-      <details v-if="resolvedPerms.length > 0" class="ap-trace">
-        <summary>
-          <svg class="ap-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-          历史记录（{{ resolvedPerms.length }} 已处理）
-        </summary>
-        <div v-for="req in resolvedPerms" :key="req.id" class="ap-trace-row">
-          <code class="ap-trace-cmd" :title="cardCommand(req) || req.tool">{{ cardCommand(req) || req.tool }}</code>
-          <span v-if="req.granted" class="ap-trace-status" :class="`env-${req.environment || 'test'}`">
-            <svg class="ap-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-            已授权
-          </span>
-          <span v-else class="ap-trace-status ap-trace-denied">
-            <svg class="ap-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            已拒绝
-          </span>
-        </div>
-      </details>
-    </div>
+    <!-- 审批托盘已随侧栏退役移除（spec 2026-09-30-retire-ai-side-panel R1）。
+         同一份 agentStore.permissionRequests 现在只有两处画法：首页「待你放行」
+         队列（含批量与追溯）与首页过程区里的内联卡。批量/追溯不是丢了，是搬到
+         队列那边 —— 侧栏不再是结算面，结算仍走 store 的 approve/deny。 -->
 
     <!-- 可见终端执行：待确认命令 -->
     <div class="delivery-section" v-if="agentStore.pendingDeliveries.length > 0">
@@ -345,146 +216,8 @@ const latestHelp = computed(() =>
 }
 .ap-help-accent { color: var(--status-warn-text, #f59e0b); }
 
-/* ── 审批托盘头（Task 2：批量操作 + 汇总计数 + 人工介入角标） ── */
-.ap-perm-tray {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 8px 13px;
-  background: var(--bg-elevated, var(--bg-input, var(--bg-base)));
-  border: 1px solid var(--border-default);
-  border-radius: 10px;
-}
-.ap-perm-tray .ap-ic { flex: none; }
-.ap-tray-count {
-  font-size: 11px;
-  color: var(--text-secondary);
-  background: var(--card-perm-border, var(--border-default));
-  padding: 2px 9px;
-  border-radius: 999px;
-}
-.ap-perm-tray .ap-btn { padding: 4px 11px; }
-
-/* ── 折叠的排队项（+N 条待处理） ── */
-.ap-queue { display: flex; flex-direction: column; gap: 4px; }
-.ap-queue-toggle {
-  align-self: flex-start;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-family: inherit;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  background: var(--bg-input, var(--bg-base));
-  border: 1px solid var(--border-default);
-  border-radius: 7px;
-  padding: 5px 11px;
-  cursor: pointer;
-  transition: background 0.18s, color 0.18s;
-}
-.ap-queue-toggle:hover { background: var(--bg-hover, var(--bg-input)); color: var(--text-primary); }
-.ap-queue-toggle .ap-ic { width: 12px; height: 12px; }
-.ap-queue-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  border: 1px solid var(--border-default);
-  border-radius: 8px;
-  padding: 5px;
-  background: var(--bg-elevated, var(--bg-base));
-}
-.ap-queue-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-family: inherit;
-  text-align: left;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  padding: 6px 9px;
-  cursor: pointer;
-  transition: background 0.18s, border-color 0.18s;
-}
-.ap-queue-item:hover { background: var(--bg-hover, var(--bg-input)); }
-.ap-queue-item.is-focus {
-  background: var(--bg-input, var(--card-perm-bg));
-  border-color: var(--card-perm-border, var(--border-default));
-}
-.ap-queue-ic {
-  flex: none;
-  width: 16px;
-  height: 16px;
-  display: grid;
-  place-items: center;
-  font-weight: 800;
-  font-size: 10px;
-  border-radius: 50%;
-}
-.ap-queue-ic.risk-dangerous { background: var(--danger-bg); color: var(--danger-text); }
-.ap-queue-ic.risk-moderate { background: var(--status-warn-bg); color: var(--status-warn-text); }
-.ap-queue-ic.risk-safe { background: var(--status-success-bg); color: var(--status-success-text); }
-.ap-queue-cmd {
-  flex: 1;
-  min-width: 0;
-  font-family: inherit;
-  font-size: 11.5px;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.ap-risk-mini { font-size: 9.5px; padding: 1px 7px; }
-
-/* ── 追溯区：超时保留 + 已解决 ── */
-.ap-trace {
-  border: 1px solid var(--border-default);
-  border-radius: 8px;
-  background: var(--bg-input, var(--bg-base));
-}
-.ap-trace summary {
-  cursor: pointer;
-  list-style: none;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 6px 11px;
-  color: var(--text-tertiary);
-  font-size: 11px;
-}
-.ap-trace summary::-webkit-details-marker { display: none; }
-.ap-trace summary .ap-ic { width: 13px; height: 13px; }
-.ap-trace-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 11px;
-  border-top: 1px solid var(--border-default);
-}
-.ap-trace-cmd {
-  flex: 1;
-  min-width: 0;
-  font-family: inherit;
-  font-size: 11px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.ap-trace-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex: none;
-  font-size: 10.5px;
-  font-weight: 600;
-}
-.ap-trace-status .ap-ic { width: 12px; height: 12px; }
-.ap-trace-denied { color: var(--danger-text); }
-
-/* ── 折叠的排队项摘要（卡体样式见 ApprovalCard / approval-card.css） ── */
+/* 审批托盘 / 折叠队列 / 追溯区的样式随托盘一起删（R1）：它们的唯一消费方在模板里
+   已经没有了。批量与追溯不是丢了，是搬进首页「待你放行」队列。 */
 
 /* ── 命令待确认 ── */
 .ap-deliver { background: var(--bg-elevated, var(--bg-base)); border-color: var(--card-warn-border); }
@@ -502,28 +235,6 @@ const latestHelp = computed(() =>
   word-break: break-all;
   font-family: inherit;
 }
-
-/* ── 徽章：圆点前缀 + 文字 + 配色三重传达（不依赖单一颜色） ── */
-.ap-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.4px;
-  padding: 2px 9px;
-  border-radius: 999px;
-  line-height: 1;
-}
-.ap-badge::before {
-  content: "";
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: currentColor;
-}
-.ap-badge-warn { color: var(--status-warn-text); background: var(--status-warn-bg); }
 
 /* ── 错误 ── */
 .ap-error {

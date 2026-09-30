@@ -217,7 +217,8 @@ export const useAgentStore = defineStore('agent', () => {
     !!intentionInfo.value
     || warnings.value.length > 0
     || hasHumanHelpRequest.value
-    || permissionRequests.value.length > 0
+    // 审批托盘从侧栏退役后，本面板不再渲染 permissionRequests —— 这个条件必须跟着撤：
+    // 留着它，"只有一条待放行"的时候面板会整块挂载却空无一物。
     || pendingDeliveries.value.length > 0
     || !!errorMessage.value
   )

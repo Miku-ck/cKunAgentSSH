@@ -22,5 +22,24 @@ export function useApprovalActions() {
     if (!await agent.denyPermission(id)) toast.error('拒绝登记失败，请重试')
   }
 
-  return { approve, deny }
+  /**
+   * 批量结算。两个细节：
+   * - **先快照 id 再逐条走正常流程**：approvePermission/denyPermission 自身幂等
+   *   （resolved/settling 自动跳过），循环期间新到的卡不在这份快照里，因此不会被
+   *   "全部允许"顺手批掉 —— 批量批准一条还没弹给用户的命令是不可逆的。
+   * - **按结果而不是按返回值报数**：denyPermission 对"已结算"也返回 false，
+   *   拿返回值累加会把幂等跳过报成失败。结算完还剩几条，就是没批掉几条。
+   */
+  async function settleAll(action: 'approve' | 'deny'): Promise<void> {
+    const ids = agent.pendingPermissions.map(r => r.id)
+    if (ids.length === 0) return
+    for (const id of ids) {
+      if (action === 'approve') await agent.approvePermission(id, 'once')
+      else await agent.denyPermission(id)
+    }
+    const left = agent.pendingPermissions.length
+    if (left > 0) toast.error(`${left} 条没结算掉，请逐条重试`)
+  }
+
+  return { approve, deny, settleAll }
 }

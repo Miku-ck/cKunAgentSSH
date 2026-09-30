@@ -208,6 +208,15 @@ describe('权限卡片决策在途互斥', () => {
     expect(store.lastRunId).toBe('')
   })
 
+  it('只剩待放行卡片时决策面板不挂载 —— 审批托盘退役后它不渲染这块，条件必须跟着撤', () => {
+    const { store, push } = startRun()
+    addCard(store, push)
+    expect(store.permissionRequests).toHaveLength(1)
+    // hasRunNotice 里原先含 permissionRequests：托盘撤走后这一项会让面板整块挂载
+    // 却空无一物（其余区块全 v-if 关闭），是个看得见的空壳。
+    expect(store.hasRunNotice).toBe(false)
+  })
+
   it('拒绝请求在途期间卡片置为 settling', async () => {
     const { store, push } = startRun()
     const req = addCard(store, push)
