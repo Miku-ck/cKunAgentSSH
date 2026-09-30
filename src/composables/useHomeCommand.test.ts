@@ -103,6 +103,17 @@ describe('useHomeCommand', () => {
     expect(sendMessage).not.toHaveBeenCalled()
   })
 
+  it('只挂附件不打字也发得出去（与侧栏同一口径，否则文件白挂）', async () => {
+    pendingAttachments.value = [{ file_id: 'f1', filename: 'nginx.log', content: 'boom', truncated: false }]
+    const c = useHomeCommand()
+    expect(c.canSend.value).toBe(true)
+    expect(await c.submit()).toBe(true)
+    expect(sendMessage).toHaveBeenCalledWith('', {
+      approval: 'normal', mode: undefined, skillIds: [],
+      attachments: [{ file_id: 'f1', filename: 'nginx.log', content: 'boom', truncated: false }],
+    })
+  })
+
   it('发送走 sendMessage，并带上 store 里的审批档', async () => {
     approvalMode.value = 'auto'
     const c = useHomeCommand()

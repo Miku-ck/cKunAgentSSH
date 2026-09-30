@@ -17,7 +17,11 @@ export function useHomeCommand() {
   const toast = useToastStore()
 
   const draft = ref('')
-  const canSend = computed(() => draft.value.trim().length > 0 && !agent.isRunning)
+  /** 与侧栏同一口径：只挂文件不打字也算"可以下达"（SideChatPanel :1300 允许空文本
+   *  带附件发送）。首页若把文本当硬条件，用户会得到"文件挂上了但『交给它』是灰的"。 */
+  const canSend = computed(() =>
+    !agent.isRunning && (draft.value.trim().length > 0 || sshAi.pendingAttachments.length > 0),
+  )
   /** 上传锁住在 store（全仓一把）：首页与侧栏挂的是同一份 pendingAttachments，
    *  各自一把锁时后完成的那个会拿陈旧副本 spread，抹掉前一个刚挂上的文件。 */
   const uploading = computed(() => sshAi.uploadingAttachments)
@@ -40,7 +44,8 @@ export function useHomeCommand() {
   /** 返回 false = 没发出去（空草稿 / 运行中 / 后端早退），草稿原样留着 */
   async function submit(): Promise<boolean> {
     const text = draft.value.trim()
-    if (!text) return false
+    // 空文本 + 空附件才拦；只有附件时照发（store 会把附件内容拼进 task）
+    if (!text && !sshAi.pendingAttachments.length) return false
     // 与侧栏同一口径：运行中给出明确反馈，不静默吞掉用户刚打的字
     if (agent.isRunning) {
       toast.info('AI 正在运行中，请等待完成')
