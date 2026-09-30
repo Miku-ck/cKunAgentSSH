@@ -29,6 +29,11 @@ interface ToolCallEntry {
    *  把「[用户拒绝执行]」写回轨迹。交付状态本身不在这里存：权威源是
    *  agentDeliver.deliveries（面板读的就是它），原先这里另抄一份 deliveryStatus
    *  没有任何读者，还会与 deliveries 的 writing/done 漂移（中止后停在 capturing）。 */
+  /** 后端实测的该次工具调用耗时（毫秒）。
+   *  undefined = 事件里没带这个字段，**没量过**；0 = 量到了 0。两者不能合并，
+   *  否则运行视图会把"缺数据"显示成"瞬时完成"。后端一直在发（telemetry 的
+   *  tool_call_result 分支），此前前端声明里就没有它，所以也就一直没读。 */
+  durationMs?: number
   deliveryToolId?: string
 }
 
@@ -166,8 +171,14 @@ export const useAgentStore = defineStore('agent', () => {
   const scheduleRev = ref(0)
 
   let abortFn: (() => void) | null = null
-  // 记录运行开始时间，用于 snapshot() 计算 duration
-  let runStartTime: number = 0
+  /**
+   * 本次 run 的起点（epoch ms）；0 = 从未跑过。runAgent 每次覆写，_reset 不碰它
+   * —— snapshot() 在 run 收尾时还要读这一格。
+   * 原先它是模块级 let：非响应式，所以只有 snapshot() 这个一次性出口能用得上，
+   * 运行视图要的「● 运行中 + 计时」拿不到。改成 ref 之后视图自己 tick 一个数，
+   * 与 snapshot 的 duration 同源同一格，两处不会量出两个时长。
+   */
+  const runStartedAt = ref(0)
 
   // 可见终端执行模式：交付编排器（模块级单例，跨组件共享）
   const agentDeliver = useAgentDeliver()
@@ -239,7 +250,7 @@ export const useAgentStore = defineStore('agent', () => {
     // 重置状态
     _reset()
 
-    runStartTime = Date.now()
+    runStartedAt.value = Date.now()
 
     status.value = 'running'
     currentState.value = 'thinking'
@@ -299,7 +310,7 @@ export const useAgentStore = defineStore('agent', () => {
 
   /** 生成当前运行状态的快照（不重置状态），用于固化到 ChatMessage.agentTrace */
   function snapshot(): AgentTraceSnapshot {
-    const durationMs = runStartTime > 0 ? Date.now() - runStartTime : 0
+    const durationMs = runStartedAt.value > 0 ? Date.now() - runStartedAt.value : 0
     return {
       // H14 修复：human_help 状态在快照中显示为 failed 以兼容类型，currentState 保留 human_help
       // 中止同样是"没跑完"：原实现只认 failed，用户中止后固化的 trace 卡片写着
@@ -510,6 +521,8 @@ export const useAgentStore = defineStore('agent', () => {
             // 落库归一为字符串，保证「undefined = 未回填」这个判据成立
             tc.result = event.result ?? ''
             tc.success = event.success
+            // 只在事件真带这个字段时写：`?? 0` 会把"后端没量"变成"量到 0 毫秒"
+            if (typeof event.duration_ms === 'number') tc.durationMs = event.duration_ms
             if (event.tool === 'schedule_op' && event.success && (tc.args?.action ?? 'create') !== 'list') {
               scheduleRev.value++
             }
@@ -756,6 +769,7 @@ export const useAgentStore = defineStore('agent', () => {
     status,
     content,
     reasoning,
+    runStartedAt,
     toolCalls,
     warnings,
     errorMessage,

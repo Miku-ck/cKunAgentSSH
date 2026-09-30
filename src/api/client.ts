@@ -704,6 +704,10 @@ export interface AgentSSEEvent {
   args?: Record<string, unknown>
   result?: string
   success?: boolean
+  /** tool_call_result 专用：后端实测的该次调用耗时。SSE 一直在发
+   *  （backend/agent/harness/telemetry.py 的 tool_call_result 分支），
+   *  这里此前没声明也没读 —— 不是新字段，是接住一个被丢弃的既有读数。 */
+  duration_ms?: number
   message?: string
   iterations?: number
   // human_help_needed 事件专用字段

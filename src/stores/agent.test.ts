@@ -458,3 +458,62 @@ describe('审批结算 approvePermission', () => {
     expect(await store.approvePermission(store.pendingPermissions[0].id, 'once')).toBe('failed')
   })
 })
+
+describe('整程计时与每步耗时', () => {
+  beforeEach(() => {
+    runs.length = 0
+    setActivePinia(createPinia())
+  })
+
+  it('runAgent 记下整程起点，固化快照的 duration 口径不变', () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000)
+    const { store } = startRun()
+    nowSpy.mockReturnValue(4_600)
+    expect(store.runStartedAt).toBe(1_000)
+    // 运行视图按这一个数自己 tick；snapshot 仍走同一算式，两处不会量出两个时长
+    expect(store.snapshot().duration).toBe(3.6)
+    nowSpy.mockRestore()
+  })
+
+  it('新一轮 run 重置起点，整程计时不从上一轮接着走', () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000)
+    startRun()
+    nowSpy.mockReturnValue(9_000)
+    const { store } = startRun()
+    expect(store.runStartedAt).toBe(9_000)
+    expect(store.snapshot().duration).toBe(0)
+    nowSpy.mockRestore()
+  })
+
+  it('tool_call_result 带的 duration_ms 落到该次调用上', () => {
+    const { store, push } = startRun()
+    push({ type: 'state', state: 'acting', iteration: 0, run_id: 'r1' })
+    push({ type: 'tool_call_start', tool: 'shell_exec', args: { command: 'df -h' }, iteration: 0, tool_call_id: 'c1' })
+    push({ type: 'tool_call_result', tool: 'shell_exec', result: 'ok', success: true, iteration: 0, tool_call_id: 'c1', duration_ms: 420 })
+    expect(store.toolCalls[0].durationMs).toBe(420)
+  })
+
+  it('事件里没有 duration_ms 时不写值 —— 不能拿 0 冒充「量过、量到 0」', () => {
+    const { store, push } = startRun()
+    push({ type: 'tool_call_start', tool: 'shell_exec', args: {}, iteration: 0, tool_call_id: 'c1' })
+    push({ type: 'tool_call_result', tool: 'shell_exec', result: 'ok', success: true, iteration: 0, tool_call_id: 'c1' })
+    expect(store.toolCalls[0].durationMs).toBeUndefined()
+  })
+
+  it('后端量到 0 就如实记 0，怎么标是显示侧的事', () => {
+    const { store, push } = startRun()
+    push({ type: 'tool_call_start', tool: 'shell_exec', args: {}, iteration: 0, tool_call_id: 'c1' })
+    push({ type: 'tool_call_result', tool: 'shell_exec', result: '', success: false, iteration: 0, tool_call_id: 'c1', duration_ms: 0 })
+    expect(store.toolCalls[0].durationMs).toBe(0)
+  })
+
+  it('时长按 tool_call_id 配对回填，不落进同名的另一条调用', () => {
+    const { store, push } = startRun()
+    push({ type: 'tool_call_start', tool: 'shell_exec', args: { command: 'a' }, iteration: 0, tool_call_id: 'c1' })
+    push({ type: 'tool_call_start', tool: 'shell_exec', args: { command: 'b' }, iteration: 0, tool_call_id: 'c2' })
+    push({ type: 'tool_call_result', tool: 'shell_exec', result: 'b 的输出', success: true, iteration: 0, tool_call_id: 'c2', duration_ms: 50 })
+    expect(store.toolCalls[0].durationMs).toBeUndefined()
+    expect(store.toolCalls[1].durationMs).toBe(50)
+    expect(store.toolCalls[1].result).toBe('b 的输出')
+  })
+})
