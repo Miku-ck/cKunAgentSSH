@@ -161,6 +161,17 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     selectedSkillIds.value = ids
   }
 
+  /** 技能的两个动作，去重/移除的算法只在这里有一份：原先首页和侧栏各算一遍
+   *  `includes ? filter : [...spread]`，而"只给整份覆写"这个 API 的立身理由正是不让
+   *  人抄两份。语义**不**是 toggle —— 侧栏斜杠菜单点已选中的技能是"不加"，把它改成
+   *  取消就是顺手改掉既有行为。要不要取消是各界面的事，组合留在调用方，算法在这。 */
+  function addSelectedSkill(id: string) {
+    if (!selectedSkillIds.value.includes(id)) selectedSkillIds.value = [...selectedSkillIds.value, id]
+  }
+
+  function removeSelectedSkill(id: string) {
+    selectedSkillIds.value = selectedSkillIds.value.filter(x => x !== id)
+  }
   /** 已上传、待随下一条消息注入的本地附件。原先是 SideChatPanel.vue:587 的组件私有
    *  ref —— 首页 ＋ 菜单选的文件挂不到侧栏，反之也一样。上传通路不在这片：
    *  uploadFiles 早就存在，/chat/upload 也是后端真读真返的那条。 */
@@ -168,6 +179,30 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
 
   function setPendingAttachments(list: ChatAttachment[]) {
     pendingAttachments.value = list
+  }
+
+  /** 摘掉一个附件。与技能同一理由：移除的算法（按 file_id 过滤）只该有一份，
+   *  首页 chip 的 × 与侧栏标签的 × 各写一遍就会漂。 */
+  function removePendingAttachment(fileId: string) {
+    pendingAttachments.value = pendingAttachments.value.filter(f => f.file_id !== fileId)
+  }
+
+  /** 上传中锁只有这一把。首页与侧栏挂的是同一份 pendingAttachments，各自一把时
+   *  后完成的那个会拿陈旧副本覆盖，把前一个刚挂上的文件抹掉。 */
+  const uploadingAttachments = ref(false)
+
+  /** 上传并追加到待发送附件；返回挂上的个数。单文件失败由 uploadFiles 内部逐个
+   *  toast，这里不重复报 —— 整体抛出来才是意外，交给调用方决定怎么显示。 */
+  async function uploadAttachments(files: File[]): Promise<number> {
+    if (!files.length || uploadingAttachments.value) return 0
+    uploadingAttachments.value = true
+    try {
+      const results = await uploadFiles(files)
+      if (results.length) pendingAttachments.value = [...pendingAttachments.value, ...results]
+      return results.length
+    } finally {
+      uploadingAttachments.value = false
+    }
   }
 
   // ── 会话 CRUD ──
@@ -706,9 +741,14 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     // ── 技能选择 ──
     selectedSkillIds,
     setSelectedSkillIds,
+    addSelectedSkill,
+    removeSelectedSkill,
     // ── 待发送附件 ──
     pendingAttachments,
     setPendingAttachments,
+    removePendingAttachment,
+    uploadingAttachments,
+    uploadAttachments,
     // ── 终端现场（故事 5/6 第三项）──
     attachTerminalContext,
     setAttachTerminalContext,

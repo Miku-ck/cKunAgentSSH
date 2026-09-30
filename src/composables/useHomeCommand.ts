@@ -18,28 +18,23 @@ export function useHomeCommand() {
 
   const draft = ref('')
   const canSend = computed(() => draft.value.trim().length > 0 && !agent.isRunning)
-  /** ＋ 菜单选完文件到挂上 chip 之间的那段：菜单项靠它显示"上传中"并禁用，
-   *  否则双击会发两次上传（与侧栏 uploading 同一个防御） */
-  const uploading = ref(false)
+  /** 上传锁住在 store（全仓一把）：首页与侧栏挂的是同一份 pendingAttachments，
+   *  各自一把锁时后完成的那个会拿陈旧副本 spread，抹掉前一个刚挂上的文件。 */
+  const uploading = computed(() => sshAi.uploadingAttachments)
 
-  /** 本地附件：走 store 既有的 uploadFiles → /chat/upload（后端真读真返），
-   *  成功项追加进待发送附件；单个文件失败由 uploadFiles 内部逐个 toast，
-   *  这里只兜它整体抛出的非预期异常 —— 静默失败比报错更难查。 */
+  /** 本地附件：上传 + 追加 + 锁都在 store（与侧栏同一条通路，不是第二条）。
+   *  单文件失败由 store 内部逐个 toast；整体抛出交给调用侧的 toast。 */
   async function attachFiles(files: File[]): Promise<void> {
     if (!files.length || uploading.value) return
-    uploading.value = true
     try {
-      const results = await sshAi.uploadFiles(files)
-      if (results.length) sshAi.setPendingAttachments([...sshAi.pendingAttachments, ...results])
+      await sshAi.uploadAttachments(files)
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : String(err))
-    } finally {
-      uploading.value = false
     }
   }
 
   function removeAttachment(fileId: string) {
-    sshAi.setPendingAttachments(sshAi.pendingAttachments.filter(f => f.file_id !== fileId))
+    sshAi.removePendingAttachment(fileId)
   }
 
   /** 返回 false = 没发出去（空草稿 / 运行中 / 后端早退），草稿原样留着 */

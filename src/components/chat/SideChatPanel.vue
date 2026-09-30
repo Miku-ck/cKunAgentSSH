@@ -301,7 +301,6 @@
 
           <!-- 上传文件附件 -->
           <button
-            v-if="uploadHandler"
             class="toolbar-btn upload-btn"
             :disabled="uploading || agentRunning"
             :title="uploading ? '上传中...' : agentRunning ? '当前响应中，请稍后再上传' : '上传文件（文本类，单文件 ≤ 10MB）'"
@@ -342,7 +341,7 @@
                 <circle cx="12" cy="12" r="9"/>
                 <path d="M12 12V3a9 9 0 0 1 9 9z" fill="currentColor" stroke="none"/>
               </svg>
-              <span class="perm-name">{{ PERM_LABELS[approvalMode] }}</span>
+              <span class="perm-name">{{ permLabel }}</span>
               <svg class="perm-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="9" height="9" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
             </button>
 
@@ -502,7 +501,7 @@ import { useToastStore } from '@/stores/toast'
 import type { ChatAttachment } from '@/api/client'
 // 档位与文案单点定义在 utils/run-modes：首页输入卡读的是同一份，两处各写一遍
 // 就会对同样两个档位给出不同说明
-import { APPROVAL_OPTIONS as PERM_OPTIONS, APPROVAL_LABELS as PERM_LABELS, type PostureKey } from '@/utils/run-modes'
+import { APPROVAL_OPTIONS as PERM_OPTIONS, PERMISSION_LABELS, resolveRunModes, type ApprovalKey, type PostureKey } from '@/utils/run-modes'
 import { formatBytes } from '@/utils/format'
 
 const settingsStore = useSettingsStore()
@@ -541,8 +540,6 @@ const props = defineProps<{
   emptyDesc?: string
   /** 面板头部标题（默认 "AI 助手"） */
   panelTitle?: string
-  /** 上传处理函数：由父组件注入（返回上传成功的附件列表）；未注入则不显示上传入口 */
-  uploadHandler?: (files: File[]) => Promise<ChatAttachment[]>
   /**
    * 当前会话工作流阶段（''/spec/plan/goal，后端权威）。驱动菜单「目标」项的
    * 点亮态：goal → 目标项点亮。「计划」项点亮与否取当前姿态（开关状态），
@@ -560,7 +557,7 @@ const emit = defineEmits<{
   close: []
   /** mode = 对话姿态（goal/plan/null=未表态），approval = 审批档（手动/自动）—— 两条独立轴，
    *  合成 permission_mode 的唯一口径在 utils/run-modes.ts */
-  send: [content: string, skillIds: string[], attachments: ChatAttachment[], mode: PostureKey | null, approval: 'normal' | 'auto']
+  send: [content: string, skillIds: string[], attachments: ChatAttachment[], mode: PostureKey | null, approval: ApprovalKey]
   'update:selectedModelId': [id: string]
   'new-chat': []
   'switch-conversation': [id: string]
@@ -584,10 +581,11 @@ const showHistoryPanel = ref(false)
 
 // ── 文件上传附件 ──
 const fileInputRef = ref<HTMLInputElement | null>(null)
-/** 附件存在 ssh-ai store：首页 ＋ 菜单与这里必须同一份，各存一份就是第二条通路。
- *  与技能同一 API 口径 —— 只给整份覆写，添加/移除由调用方算好传进来。 */
+/** 附件、上传中锁都住在 ssh-ai store：首页 ＋ 菜单与这里挂的是同一份
+ *  pendingAttachments，各自一把锁时后完成的那个会拿陈旧副本 spread，抹掉前一个
+ *  刚挂上的文件。上传+追加也在 store（见 uploadAttachments），这里不再第二条通路。 */
 const pendingFiles = computed(() => sshAi.pendingAttachments)
-const uploading = ref(false)
+const uploading = computed(() => sshAi.uploadingAttachments)
 
 function handleUploadClick() {
   fileInputRef.value?.click()
@@ -597,24 +595,19 @@ async function handleFileChange(e: Event) {
   const input = e.target as HTMLInputElement
   const files = input.files ? Array.from(input.files) : []
   input.value = '' // 允许重复选择同一文件
-  if (files.length === 0 || !props.uploadHandler || uploading.value) return
-  uploading.value = true
+  if (files.length === 0 || uploading.value) return
   try {
-    const results = await props.uploadHandler(files)
-    // 追加已上传成功的附件（失败的文件由 handler 内部 toast 提示）
-    sshAi.setPendingAttachments([...pendingFiles.value, ...results])
+    // 单文件失败由 store 内部逐个 toast（失败项不在返回值里），这里只兜整体异常
+    await sshAi.uploadAttachments(files)
   } catch (err: unknown) {
-    // 防御：handler 出现非预期异常时给出提示，避免静默无反馈
     const msg = err instanceof Error ? err.message : String(err)
     toast.error(`上传失败：${msg}`)
     console.error('[SideChatPanel] upload failed:', err)
-  } finally {
-    uploading.value = false
   }
 }
 
 function removePendingFile(fileId: string) {
-  sshAi.setPendingAttachments(pendingFiles.value.filter(f => f.file_id !== fileId))
+  sshAi.removePendingAttachment(fileId)
 }
 
 // ── 能力入口 + 号菜单（视觉顺序：目标 / 计划 / 插件 / 技能）──
@@ -753,6 +746,12 @@ function pickCap(key: CapKey) {
  *  各存一份就是第二条通路（用户在首页选「自动」、侧栏仍按「手动」发送）。 */
 const approvalMode = computed(() => sshAi.approvalMode)
 const isPlanMode = computed(() => activeMode.value === 'plan')
+/** 下拉上这一行字与发送装配同源：plan 姿态下真实下发是 'plan'，这里还印
+ *  「手动审批」就是宣称一个不会生效的选择 —— 上面 :740 的注释要求的正是这件事，
+ *  先前只做到 disabled 与 title，标签漏了。 */
+const permLabel = computed(() =>
+  PERMISSION_LABELS[resolveRunModes(activeMode.value ?? undefined, approvalMode.value).permissionMode],
+)
 
 const showPermMenu = ref(false)
 const permMenuRef = ref<HTMLElement | null>(null)
@@ -793,7 +792,7 @@ function togglePermMenu() {
 
 /** 审批档选择（纯审批轴）：不再触碰姿态 —— plan 的开关只在 + 菜单，
  *  两轴交汇发生在 resolveRunModes（plan 姿态下审批档休眠）。 */
-function pickPerm(key: 'normal' | 'auto') {
+function pickPerm(key: ApprovalKey) {
   sshAi.setApprovalMode(key)
   closePermMenu(true)
 }
@@ -1115,9 +1114,8 @@ function pickSkill(skill: { id: string; name: string }) {
     inputText.value = inputText.value.slice(0, skillTriggerPos) + inputText.value.slice(end)
     caretPos = skillTriggerPos
   }
-  if (!selectedSkillIds.value.includes(skill.id)) {
-    sshAi.setSelectedSkillIds([...selectedSkillIds.value, skill.id])
-  }
+  // 语义保持原样：斜杠菜单点已选中的技能是"不加"，不是取消（取消走标签的 ×）
+  sshAi.addSelectedSkill(skill.id)
   closeSkillMenu()
   requestAnimationFrame(() => {
     if (el && caretPos >= 0) {
@@ -1131,7 +1129,7 @@ function pickSkill(skill: { id: string; name: string }) {
 }
 
 function removeSkill(id: string) {
-  sshAi.setSelectedSkillIds(selectedSkillIds.value.filter(sid => sid !== id))
+  sshAi.removeSelectedSkill(id)
 }
 
 // ── Agent 执行轨迹 ──

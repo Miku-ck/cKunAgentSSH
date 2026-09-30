@@ -26,7 +26,6 @@
     @open-phase="handleOpenPhase"
     @clear-artifact="handleClearArtifact"
     @update:selected-model-id="store.setSelectedModel($event)"
-    :upload-handler="handleUploadFiles"
   >
 
     <template #agent-panel>
@@ -47,7 +46,7 @@ import { useToastStore } from '@/stores/toast'
 import SideChatPanel from '@/components/chat/SideChatPanel.vue'
 import AgentRunPanel from '@/components/agent/AgentRunPanel.vue'
 import type { ChatAttachment } from '@/api/client'
-import type { PostureKey } from '@/utils/run-modes'
+import type { ApprovalKey, PostureKey } from '@/utils/run-modes'
 
 defineEmits<{ close: [] }>()
 
@@ -81,7 +80,10 @@ async function handleOpenPhase(kind: PostureKey) {
     toast.error('AI 正在运行中，请等待完成或先中止')
     return
   }
-  await store.sendMessage(PHASE_REQUESTS[kind], { mode: kind })
+  // approval 必须一并传：chip 走的是"合成消息"这条路，漏掉它就会被 resolveRunModes
+  // 压成 normal —— 用户选了自动审批，点「让 AI 生成方案」却按手动档跑，且界面上
+  // 没有任何地方说这件事。这是 store 化之后剩下的第三条下达通路。
+  await store.sendMessage(PHASE_REQUESTS[kind], { mode: kind, approval: store.approvalMode })
   // 发送失败时草稿由 store 层已有逻辑同步，这里不需要额外回滚
 }
 
@@ -110,16 +112,11 @@ function handleAbort() {
 
 // M18：发送被 store 早退拒绝（后端未就绪/无模型/建会话失败）时回滚组件草稿
 const panelRef = ref<InstanceType<typeof SideChatPanel> | null>(null)
-async function handleSend(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = [], mode?: 'goal' | 'plan' | null, approval?: 'normal' | 'auto') {
+async function handleSend(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = [], mode?: PostureKey | null, approval?: ApprovalKey) {
   // null = 用户没表态（chip 已关）：归一成 undefined，让 resolveRunModes 走
   // 「不注入任何姿态」那一支。传成 'goal' 就是把「没选」读成「选了目标」。
   const ok = await store.sendMessage(content, { skillIds, attachments, mode: mode ?? undefined, approval })
   if (!ok) panelRef.value?.restoreDraft()
-}
-
-/** 上传对话附件：委托给 store（内部会逐个调用 /chat/upload 并 toast 失败） */
-async function handleUploadFiles(files: File[]): Promise<ChatAttachment[]> {
-  return store.uploadFiles(files)
 }
 
 // 新建对话防重复提交

@@ -23,12 +23,20 @@ g.window = {
   clearTimeout: (id: unknown) => clearTimeout(id as number),
 }
 
+const uploadChatFile = vi.fn(async (_convId: string, file: File) => ({
+  file_id: `id-${file.name}`,
+  filename: file.name,
+  content: 'x',
+  truncated: false,
+}))
+
 // store 工厂在 setup 内 fire-and-forget 调 syncBackendConversations，
 // 不给垫片会在每次 import 时打真网络并留下未处理的 rejection。
 vi.mock('@/api/client', () => ({
   api: {
     listConversations: vi.fn(async () => []),
     getDefaultModel: vi.fn(async () => undefined),
+    uploadChatFile: (...args: unknown[]) => uploadChatFile(...(args as [string, File])),
   },
   workflowApi: { get: vi.fn(async () => null) },
   agentApi: { grantPermission: vi.fn(async () => ({})), denyCommand: vi.fn(async () => ({})) },
@@ -129,6 +137,20 @@ describe('ssh-ai 技能选择', () => {
     useSshAiStore().setSelectedSkillIds(['a'])
     expect([...lsMap.keys()].filter(k => /skill/i.test(k))).toHaveLength(0)
   })
+
+  it('addSelectedSkill 幂等、removeSelectedSkill 摘掉（去重只有这一份实现）', () => {
+    const store = useSshAiStore()
+    store.addSelectedSkill('a')
+    // 侧栏斜杠菜单点已选中的技能是"不加"而不是"取消" —— 这不是 toggle，别改
+    store.addSelectedSkill('a')
+    expect(store.selectedSkillIds).toEqual(['a'])
+    store.addSelectedSkill('b')
+    expect(store.selectedSkillIds).toEqual(['a', 'b'])
+    store.removeSelectedSkill('a')
+    expect(store.selectedSkillIds).toEqual(['b'])
+    store.removeSelectedSkill('不存在')
+    expect(store.selectedSkillIds).toEqual(['b'])
+  })
 })
 
 /**
@@ -180,10 +202,33 @@ describe('ssh-ai 待发送附件', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     lsMap.clear()
+    uploadChatFile.mockClear()
   })
 
   it('默认没有附件', () => {
     expect(useSshAiStore().pendingAttachments).toEqual([])
+  })
+
+  it('uploadAttachments 追加而不是覆盖，并发第二次被同一把锁挡住', async () => {
+    // 首页与侧栏挂的是同一份 pendingAttachments。各自一把锁时，后完成的那个会拿
+    // 陈旧副本 spread，把前一个刚挂上的文件抹掉 —— 用户看到的是"文件没挂上"。
+    const store = useSshAiStore()
+    store.setPendingAttachments([att('keep')])
+    const [n1, n2] = await Promise.all([
+      store.uploadAttachments([new File(['a'], 'a.log')]),
+      store.uploadAttachments([new File(['b'], 'b.log')]),
+    ])
+    expect(n1).toBe(1)
+    expect(n2).toBe(0)
+    expect(uploadChatFile).toHaveBeenCalledTimes(1)
+    expect(store.pendingAttachments.map(f => f.file_id)).toEqual(['keep', 'id-a.log'])
+    expect(store.uploadingAttachments).toBe(false)
+  })
+
+  it('没选文件时不发上传请求', async () => {
+    const store = useSshAiStore()
+    expect(await store.uploadAttachments([])).toBe(0)
+    expect(uploadChatFile).not.toHaveBeenCalled()
   })
 
   it('setPendingAttachments 整份覆写（与技能同一条 API 口径）', () => {

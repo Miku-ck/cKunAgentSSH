@@ -9,11 +9,26 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
 
 const sendMessage = vi.fn(async () => true)
-const uploadFiles = vi.fn(async () => [] as { file_id: string; filename: string; content: string; truncated: boolean }[])
+const pendingAttachments = ref<{ file_id: string; filename: string; content: string; truncated: boolean }[]>([])
+const uploadingAttachments = ref(false)
+/** 仿真 store.uploadAttachments：上传 + 追加 + 一把锁。真实实现在 ssh-ai.test.ts 里
+ *  直接测；这里只保证 composable 调的是它、不是自己再拼一遍 spread。 */
+const uploadAttachments = vi.fn(async (files: File[]) => {
+  if (!files.length || uploadingAttachments.value) return 0
+  uploadingAttachments.value = true
+  try {
+    const added = files.map(f => ({
+      file_id: `id-${f.name}`, filename: f.name, content: 'x', truncated: false,
+    }))
+    if (added.length) pendingAttachments.value = [...pendingAttachments.value, ...added]
+    return added.length
+  } finally {
+    uploadingAttachments.value = false
+  }
+})
 const approvalMode = ref<'normal' | 'auto'>('normal')
 const posture = ref<'goal' | 'plan' | null>(null)
 const selectedSkillIds = ref<string[]>([])
-const pendingAttachments = ref<{ file_id: string; filename: string; content: string; truncated: boolean }[]>([])
 const setSelectedSkillIds = vi.fn((ids: string[]) => { selectedSkillIds.value = ids })
 const setPendingAttachments = vi.fn((list: typeof pendingAttachments.value) => { pendingAttachments.value = list })
 const isRunning = ref(false)
@@ -25,13 +40,14 @@ const error = vi.fn()
 vi.mock('@/stores/ssh-ai', () => ({
   useSshAiStore: () => ({
     sendMessage,
-    uploadFiles,
+    uploadAttachments,
     setSelectedSkillIds,
     setPendingAttachments,
     get approvalMode() { return approvalMode.value },
     get posture() { return posture.value },
     get selectedSkillIds() { return selectedSkillIds.value },
     get pendingAttachments() { return pendingAttachments.value },
+    get uploadingAttachments() { return uploadingAttachments.value },
   }),
 }))
 vi.mock('@/stores/agent', () => ({
@@ -46,7 +62,7 @@ const { useHomeCommand } = await import('@/composables/useHomeCommand')
 describe('useHomeCommand', () => {
   beforeEach(() => {
     sendMessage.mockClear()
-    uploadFiles.mockClear()
+    uploadAttachments.mockClear()
     setSelectedSkillIds.mockClear()
     setPendingAttachments.mockClear()
     info.mockClear()
@@ -55,6 +71,7 @@ describe('useHomeCommand', () => {
     posture.value = null
     selectedSkillIds.value = []
     pendingAttachments.value = []
+    uploadingAttachments.value = false
     isRunning.value = false
   })
 
@@ -165,24 +182,21 @@ describe('useHomeCommand', () => {
   })
 
   it('选中的文件上传成功后挂进待发送附件', async () => {
-    uploadFiles.mockResolvedValueOnce([
-      { file_id: 'f1', filename: 'nginx.log', content: 'boom', truncated: false },
-    ])
     const c = useHomeCommand()
     await c.attachFiles([new File(['boom'], 'nginx.log')])
-    expect(uploadFiles).toHaveBeenCalledTimes(1)
-    expect(pendingAttachments.value.map(f => f.file_id)).toEqual(['f1'])
+    expect(uploadAttachments).toHaveBeenCalledTimes(1)
+    expect(pendingAttachments.value.map(f => f.file_id)).toEqual(['id-nginx.log'])
     expect(c.uploading.value).toBe(false)
   })
 
   it('一个文件都没选时不发上传请求', async () => {
     const c = useHomeCommand()
     await c.attachFiles([])
-    expect(uploadFiles).not.toHaveBeenCalled()
+    expect(uploadAttachments).not.toHaveBeenCalled()
   })
 
-  it('上传整体抛错时给 toast —— 静默失败比报错更难查（单文件失败由 uploadFiles 自己 toast）', async () => {
-    uploadFiles.mockRejectedValueOnce(new Error('后端 500'))
+  it('上传整体抛错时给 toast —— 静默失败比报错更难查（单文件失败由 store 自己 toast）', async () => {
+    uploadAttachments.mockRejectedValueOnce(new Error('后端 500'))
     const c = useHomeCommand()
     await c.attachFiles([new File(['x'], 'a.log')])
     expect(error).toHaveBeenCalledWith('后端 500')

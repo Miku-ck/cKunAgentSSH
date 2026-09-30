@@ -94,9 +94,12 @@ const pickedSkills = computed(() =>
   }),
 )
 
+/** 首页这枚是勾选控件，点已选中的要能取消 —— 但"怎么算重复""怎么摘掉"的算法归
+ *  store（addSelectedSkill/removeSelectedSkill），这里只组合勾选语义。侧栏斜杠菜单
+ *  用的是另一个组合（只加不减），两边共用同一对原子动作。 */
 function toggleSkill(id: string) {
-  const cur = sshAi.selectedSkillIds
-  sshAi.setSelectedSkillIds(cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id])
+  if (sshAi.selectedSkillIds.includes(id)) sshAi.removeSelectedSkill(id)
+  else sshAi.addSelectedSkill(id)
 }
 
 function toggleTerminalContext() {
@@ -412,8 +415,8 @@ onMounted(() => {
   padding: 8px 10px 9px 12px;
   /* 底栏那一道折痕与次级纸面都归主题：--card-foot-* 在非手记主题 = 今天的样子
      （透明底 + 实线分隔），组件里不写主题分支（同 --rule-line 的做法） */
-  border-top: var(--card-foot-rule);
-  background: var(--card-foot-bg);
+  border-top: var(--card-foot-rule, 1px solid var(--divider-primary));
+  background: var(--card-foot-bg, transparent);
   flex-wrap: wrap;
 }
 .hcc-sel { position: relative }
@@ -519,9 +522,11 @@ onMounted(() => {
   border: 0;
   border-radius: var(--radius-sm);
   background: var(--accent-primary);
-  /* 前景由 applyAccent 按底色亮度算出来（--accent-on）：写死 #fff 时，
-     强调色选「白色」就是白底白字 —— 这枚按钮整个消失，而它点得到 */
-  color: var(--accent-on);
+  /* --accent-on 归主题/applyAccent 管，但 HEAD 里还没有它：variables.css 无定义，
+     applyAccent 也只写 --accent-primary/-rgb。不带 fallback 这条声明就在计算期失效，
+     前景退化成继承色 —— 全部 8 套主题的发送按钮都中招。先退回改动前的 #fff，等那边
+     把令牌定义上，fallback 自动失效，这里的语义不用改。 */
+  color: var(--accent-on, #fff);
   font-size: 13px;
   font-weight: 600;
   transition: filter var(--transition-fast), opacity var(--transition-fast);
