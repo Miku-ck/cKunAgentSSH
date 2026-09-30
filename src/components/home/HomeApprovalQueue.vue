@@ -17,6 +17,11 @@ const agent = useAgentStore()
 const ssh = useSSHStore()
 const { approve, deny } = useApprovalActions()
 
+/** 导航状态归宿主（SshView → useSshNavigation）。这里绝不能自己再调一次
+ *  useSshNavigation()：那个 composable 每次调用都新建一份 showRun，点下去改的是
+ *  一份没人读的状态 —— 亮的空开关。 */
+const emit = defineEmits<{ 'open-run': [] }>()
+
 const pending = computed(() => agent.pendingPermissions)
 const target = (req: PermissionRequest) => approvalTargetLabel(req, ssh.sessions, ssh.connections)
 const canAlways = (req: PermissionRequest) => grantScopesForRisk(req.risk).includes('always')
@@ -28,6 +33,16 @@ const canAlways = (req: PermissionRequest) => grantScopesForRisk(req.risk).inclu
       <span class="t">待你放行</span>
       <span class="n">{{ pending.length }}</span>
       <span class="hint">批准即执行 · 拒绝则本条命令不再询问</span>
+      <!-- 故事 14 的后半句"点进那个 run 看上下文"。归属只在队头说一次：单 run 模型下
+           队列里所有卡都来自这条 run（_reset 连着清 permissionRequests 与 lastRunId，
+           agent.test.ts 有断言钉着），每张卡印一遍就是把同一个号重复 N 次。 -->
+      <button
+        v-if="agent.lastRunId"
+        type="button"
+        class="haq-goto"
+        :title="`trace ${agent.lastRunId}`"
+        @click="emit('open-run')"
+      >看过程 · №{{ agent.lastRunId.slice(0, 8) }}</button>
     </header>
 
     <article v-for="req in pending" :key="req.id" class="haq-card" :class="`r-${req.risk}`">
@@ -81,6 +96,19 @@ const canAlways = (req: PermissionRequest) => grantScopesForRisk(req.risk).inclu
   color: var(--accent-orange);
 }
 .haq-head .hint { margin-left: auto; font-size: 11px; color: var(--text-tertiary) }
+.haq-goto {
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.haq-goto:hover { background: var(--bg-hover); color: var(--text-primary) }
 .haq-card {
   display: flex;
   align-items: center;

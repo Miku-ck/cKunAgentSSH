@@ -196,6 +196,18 @@ describe('权限卡片决策在途互斥', () => {
     return req
   }
 
+  it('新一轮 run 把上一轮的待放行整批清掉 —— 队列里不会同时躺着两条 run 的卡', () => {
+    const { store, push } = startRun()
+    addCard(store, push)
+    expect(store.pendingPermissions).toHaveLength(1)
+    // 故事 14 写的"看出各条来自哪个 run"在单 run 模型下是**恒等**的：_reset() 连着
+    // 清 permissionRequests 与 lastRunId。所以归属只在队头说一次，不每张卡印一遍
+    // —— 印了就是把同一条 run 号重复 N 次，而 run 号一变这句才会开始承载信息。
+    store.runAgent({ task: '换一条', conversationId: 'c1', modelId: 'm1' })
+    expect(store.pendingPermissions).toHaveLength(0)
+    expect(store.lastRunId).toBe('')
+  })
+
   it('拒绝请求在途期间卡片置为 settling', async () => {
     const { store, push } = startRun()
     const req = addCard(store, push)

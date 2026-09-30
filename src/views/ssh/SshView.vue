@@ -112,7 +112,7 @@ v-show="s.id === store.activeSessionId"
         <div v-show="homeTabActive" class="home-pane">
           <HomeTargetTitle @bulk="showBulk = true" />
           <HomeCommandCard />
-          <HomeApprovalQueue />
+          <HomeApprovalQueue @open-run="openRunView" />
         </div>
 
         <!-- 运行视图：一条指令的过程与轨迹。挂在 SshView 层而不是侧栏 slot 里 ——
