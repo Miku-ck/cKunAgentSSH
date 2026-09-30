@@ -94,7 +94,11 @@ function headline(e: { tool: string; args?: Record<string, unknown> }): string {
   if (cmd) return cmd
   const keys = Object.keys(e.args || {})
   if (!keys.length) return e.tool
-  const preview = keys.slice(0, 3).map(k => `${k}=${String(e.args?.[k]).slice(0, 40)}`).join(' ')
+  const preview = keys.slice(0, 3).map(k => {
+    const v = String(e.args?.[k])
+    // 截断必须留痕：不给省略号，用户会把半截参数当全文
+    return `${k}=${v.length > 40 ? `${v.slice(0, 40)}…` : v}`
+  }).join(' ')
   return `${e.tool}(${preview})`
 }
 
@@ -102,6 +106,24 @@ function stateOf(e: { result?: string; success?: boolean }): string {
   if (e.result === undefined) return 'running'
   return e.success === false ? 'failed' : 'done'
 }
+
+// ── 时间线 ↔ 事件流联动：点某批，右栏滚到它第一条并亮一下 ──
+const streamRef = ref<HTMLElement | null>(null)
+const litStep = ref(-1)
+let litTimer: ReturnType<typeof setTimeout> | null = null
+
+function focusStep(stepIndex: number) {
+  // data-step 存的就是批次号，querySelector 拿到的第一个匹配即该批最早那条
+  // （同批的卡在 DOM 里按到达序相邻，审批插在其间不影响"第一条"是谁）
+  const el = streamRef.value?.querySelector<HTMLElement>(`[data-step="${stepIndex}"]`)
+  if (!el) return
+  el.scrollIntoView({ block: 'nearest' })
+  litStep.value = stepIndex
+  if (litTimer) clearTimeout(litTimer)
+  litTimer = setTimeout(() => { litStep.value = -1 }, 1600)
+}
+
+onUnmounted(() => { if (litTimer) clearTimeout(litTimer) })
 </script>
 
 <template>
@@ -130,12 +152,33 @@ function stateOf(e: { result?: string; success?: boolean }): string {
       </div>
     </header>
 
-    <div class="rv-stream">
+    <div class="rv-body">
+      <!-- 左栏：按批的时间线。步号读 iteration（后端循环计数器），不是数组下标 -->
+      <nav v-if="trace.steps.length" class="rv-tl" aria-label="执行批次时间线">
+        <button
+          v-for="(s, i) in trace.steps"
+          :key="`tl-${i}`"
+          type="button"
+          class="tl-row"
+          :class="[s.state, { active: i === trace.activeStepIndex }]"
+          @click="focusStep(i)"
+        >
+          <span class="tl-dot" aria-hidden="true"></span>
+          <span class="tl-no">{{ s.iteration === null ? '未编号' : `第 ${s.iteration + 1} 批` }}</span>
+          <span class="tl-meta">
+            {{ s.eventIndexes.length }} 项<template v-if="s.durationMs !== undefined"> · {{ (s.durationMs / 1000).toFixed(1) }}s</template>
+            <template v-else-if="s.state === 'running'"> · 执行中</template>
+          </span>
+        </button>
+      </nav>
+
+      <div ref="streamRef" class="rv-stream">
       <template v-for="item in stream" :key="item.key">
         <article
           v-if="item.kind === 'tool'"
           class="rv-card"
-          :class="stateOf(item.entry)"
+          :class="[stateOf(item.entry), { lit: litStep === item.stepIndex }]"
+          :data-step="item.stepIndex"
         >
           <div class="rv-card-head">
             <span class="tool mono">{{ item.entry.tool }}</span>
@@ -160,6 +203,7 @@ function stateOf(e: { result?: string; success?: boolean }): string {
       <p v-if="!stream.length" class="rv-empty">
         {{ agent.isRunning ? 'AI 正在思考，还没开始调用工具' : '这次运行没有产生工具调用' }}
       </p>
+      </div>
     </div>
   </div>
 </template>
@@ -218,7 +262,8 @@ function stateOf(e: { result?: string; success?: boolean }): string {
 .rv-status.bad { color: var(--danger-text) }
 @keyframes rv-blink { 50% { opacity: .35 } }
 @media (prefers-reduced-motion: reduce) {
-  .rv-status.run .dot { animation: none }
+  .rv-status.run .dot,
+  .tl-row.running .tl-dot { animation: none }
 }
 .m { color: var(--text-tertiary) }
 .b {
@@ -235,8 +280,63 @@ function stateOf(e: { result?: string; success?: boolean }): string {
 .b.stop { border-color: var(--danger-border); color: var(--danger-text) }
 .b.stop:hover { background: var(--danger-bg) }
 
-.rv-stream {
+.rv-body {
   flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-wrap: wrap;
+}
+
+/* ── 左栏时间线 ── */
+.rv-tl {
+  position: relative;
+  flex: 0 0 212px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 10px;
+  border-right: 1px solid var(--border-subtle);
+}
+/* 纵向连接线：穿过每行状态点的中心 */
+.rv-tl::before {
+  content: "";
+  position: absolute;
+  left: 17px;
+  top: 20px;
+  bottom: 20px;
+  width: 1px;
+  background: var(--border-subtle);
+}
+.tl-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  gap: 1px 8px;
+  width: 100%;
+  padding: 6px 7px;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  transition: background var(--transition-fast);
+}
+.tl-row:hover { background: var(--bg-hover) }
+.tl-row.active { background: var(--bg-input) }
+.tl-dot {
+  grid-row: 1 / 3;
+  align-self: center;
+  justify-self: center;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+.tl-row.done .tl-dot { background: var(--status-success-border) }
+.tl-row.failed .tl-dot { background: var(--danger-text) }
+.tl-row.running .tl-dot { background: var(--accent-primary); animation: rv-blink 1.1s steps(2, start) infinite }
+.tl-no { font-size: 11.5px; color: var(--text-primary) }
+.tl-meta { font-size: 10.5px; color: var(--text-tertiary) }
+
+.rv-stream {
+  flex: 1 1 420px;
+  min-width: 0;
   min-height: 0;
   overflow-y: auto;
   padding: 14px 18px 20px;
@@ -254,6 +354,11 @@ function stateOf(e: { result?: string; success?: boolean }): string {
 .rv-card.done { border-left-color: var(--status-success-border) }
 .rv-card.failed { border-left-color: var(--danger-border) }
 .rv-card.running { border-left-color: var(--accent-primary) }
+/* 从时间线点过来的那一条亮一下（1.6s 后自动退），不滚走就找不到对应关系了 */
+.rv-card.lit {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 22%, transparent);
+}
 /* 内联审批卡与工具卡同宽，两种卡片在流里对齐成一条竖线 */
 .rv-approval { max-width: 940px }
 .rv-card-head {
