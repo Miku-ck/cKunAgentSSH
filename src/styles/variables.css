@@ -111,6 +111,10 @@
   /* 过渡 */
   --transition-fast: 150ms ease;
 
+  /* 输入卡行线的颜色：默认透明 = 不画线。只有手记（米纸 + 墨线）给了实值，
+     这样组件里那条 background-image 在所有主题共用，不需要主题分支。 */
+  --rule-line: transparent;
+
   /* 字体 */
   --font-sans: system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, "Courier New", monospace;
@@ -284,4 +288,100 @@
   --bg-input-solid: #261511;
   --bg-slider: #472a23;
   --border-input: #543028;
+}
+
+/* ── 手记主题（atelier：米纸 / 墨线 / 朱砂） ──
+ *
+ * 版面与主题解耦：下面只改令牌值，一个组件都没动 —— 同一套首页与运行视图在
+ * 深色主题下也必须成立（spec 2026-09-29 §2）。色值取自权威预览稿
+ * `designs/home-C-atelier-app.html` 的 :root。
+ *
+ * 三件刻意不做的事：
+ *   1. 不改 --titlebar-h / --tabbar-h（预览稿是 30/30，实际 32/34）：那是布局，
+ *      归版面管，塞进主题就成了"换个配色顺手改高度"。
+ *   2. 不写 --accent-primary：applyAccent 在 documentElement 上 setProperty，
+ *      内联样式压过本块 —— 在这里写强调色是一条永远不生效的声明。朱砂以
+ *      Accent 'verm' 提供，任何主题都能选。
+ *   3. 终端仍给深底：ANSI 主题固定暗色，米纸上开终端前景不可读（既有约定）。
+ */
+[data-theme="atelier"] {
+  --bg-base: #f2ece1;            /* 米纸：窗口底/侧栏/面板头/工具条 */
+  --bg-elevated: #faf6ee;        /* 卡面：比纸更亮一档，靠 1px 墨线分层 */
+  --bg-elevated-solid: #faf6ee;
+  --bg-hover: rgba(25, 21, 16, 0.06);
+  --bg-active: rgba(25, 21, 16, 0.12);
+  --divider-primary: #e4dccd;    /* rule-soft：分隔线要轻于边框线 */
+  --border-default: #d3c8b6;     /* rule：手记里"看得见的那条线" */
+  --border-subtle: #e4dccd;
+  --text-primary: #191510;       /* ink */
+  --text-secondary: #4a4237;     /* ink-2 */
+  --text-tertiary: #6b6152;      /* ink-3 加深：原稿 #8a7f6e 在纸上只有 3.3:1 */
+  --bg-input: #ece4d6;           /* 纸上的"凹陷"必须比纸暗，用卡面那个亮度就反了 */
+  --bg-input-solid: #ece4d6;
+  --bg-slider: #d3c8b6;
+  --border-input: #c9bca6;
+  --bg-terminal: #17181c;
+
+  /* 深色主题里这些是"亮粉亮青"，搬到纸上会糊成一片；手记的色板取自墨与矿物 */
+  --accent-purple: #7c4a76;
+  --accent-green: #4a6b3c;       /* 橄榄绿 */
+  --accent-orange: #8a5a1e;
+  --accent-red: #b3382a;
+  --accent-cyan: #2f5b74;        /* 代码/命令行的青色 → 深石板青 */
+  --accent-yellow: #7a5f14;
+
+  --accent-indigo: #3b4f7a;
+  --accent-indigo-soft: #2b3a5c;
+  --accent-indigo-bg: rgba(59, 79, 122, 0.10);
+  --accent-indigo-hover: rgba(59, 79, 122, 0.08);
+
+  --accent-pink: #a51f6b;
+  --accent-pink-bg: rgba(165, 31, 107, 0.08);
+  --accent-pink-border: rgba(165, 31, 107, 0.24);
+
+  --status-info-bg: #e8eef6;
+  --status-info-border: #c3d2e4;
+  --status-info-text: #33507c;
+  --status-success-bg: #e9eedd;
+  --status-success-border: #c6d1ab;
+  --status-success-text: #3f5a2a;
+  --status-warn-bg: #f6e2bd;
+  --status-warn-text: #7a5c00;
+  --status-error-bg: #f7e2dd;
+  --status-error-text: #a03018;
+  --status-debug-bg: #e8eef6;
+  --status-debug-text: #2e6b6b;
+  --status-tag-bg: rgba(59, 79, 122, 0.10);
+  --status-tag-border: rgba(59, 79, 122, 0.25);
+  --status-tag-text: #33507c;
+
+  /* 审批卡：纸黄 + 朱砂，"盖一个章"的观感靠这组值出来，不改卡的结构 */
+  --card-warn-border: #e2d3ad;
+  --card-perm-bg: #f8ecd7;
+  --card-perm-border: #d9b877;
+  --card-perm-text: #6b4d09;
+  --card-perm-btn-bg: #e9eedd;
+  --card-perm-btn-border: #4a6b3c;
+  --card-perm-btn-text: #3f5a2a;
+  --card-perm-btn-hover: #dbe4cb;
+  --card-perm-resolved: #4a6b3c;
+  --danger-bg: #f7e2dd;
+  --danger-border: #e0b3a4;
+  --danger-text: #a03018;
+
+  --radius-sm: 2px;              /* 手记是直角 + 墨线，圆角一大就变成另一套语言 */
+  --radius-md: 3px;
+  --radius-lg: 4px;
+  --shadow-sm: 0 1px 2px rgba(43, 39, 35, 0.14);
+  --shadow-lg: 0 8px 24px rgba(43, 39, 35, 0.18);
+
+  /* 一律本地字体族：断网与离线分发是常态（见 variables.test.ts 的同名断言）。
+     通用族收尾，是一个都没装时落到 serif/mono，而不是悄悄掉回系统无衬线。 */
+  --font-sans: Georgia, "Iowan Old Style", "Palatino Linotype", "Source Han Serif SC",
+    "Songti SC", SimSun, "Microsoft YaHei", serif;
+  --font-mono: "Cascadia Mono", Consolas, "DejaVu Sans Mono", Menlo, ui-monospace, monospace;
+  --line-height-normal: 1.7;     /* 手记的行距是它的呼吸 */
+
+  /* 输入卡的行线：只有手记画得出横线，其余主题透明 = 同一份组件代码不加分支判断 */
+  --rule-line: #d3c8b6;
 }

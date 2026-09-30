@@ -168,7 +168,7 @@ function asString(value: unknown, fallback: string): string {
 // 直接抄一份字符串数组则不会报错——正是本仓反复出现的"抄两份清单"漂移族。
 const THEMES = Object.keys({
   dark: true, light: true, system: true, 'blue-screen': true,
-  forest: true, mint: true, bee: true, coral: true,
+  forest: true, mint: true, bee: true, coral: true, atelier: true,
 } as Record<Theme, true>) as Theme[]
 const ACCENTS = Object.keys(ACCENT_MAP) as Accent[]
 const GRADIENT_MODES = Object.keys({

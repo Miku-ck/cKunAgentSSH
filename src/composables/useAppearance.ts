@@ -7,8 +7,8 @@ import { applyMonacoTheme } from '@/monaco-setup'
 // 外观枚举的唯一来源：settings store 的字段类型与设置面板的选项都从这里派生。
 // 此前 Theme/Accent 在 store 与面板里各抄一份，面板色板还另抄了一份 hex ——
 // 已经抄错：蓝色 swatch 显示 #58a6ff，实际写进 --accent-primary 的是 #0078d4。
-export type Theme = 'dark' | 'light' | 'system' | 'blue-screen' | 'forest' | 'mint' | 'bee' | 'coral'
-export type Accent = 'blue' | 'purple' | 'green' | 'orange' | 'white' | 'forest' | 'mint' | 'bee' | 'coral'
+export type Theme = 'dark' | 'light' | 'system' | 'blue-screen' | 'forest' | 'mint' | 'bee' | 'coral' | 'atelier'
+export type Accent = 'blue' | 'purple' | 'green' | 'orange' | 'white' | 'forest' | 'mint' | 'bee' | 'coral' | 'verm'
 export type GradientMode = 'glow' | 'linear' | 'radial'
 export type GradientDirection = 'tb' | 'bt' | 'lr' | 'rl' | 'tlbr' | 'trbl'
 
@@ -23,6 +23,9 @@ export const ACCENT_MAP: Record<Accent, { hex: string; rgb: string }> = {
   mint:   { hex: '#5eead4', rgb: '94, 234, 212' },
   bee:    { hex: '#f5c542', rgb: '245, 197, 66' },
   coral:  { hex: '#ff7b72', rgb: '255, 123, 114' },
+  // 朱砂（手记主题的招牌色）。它是强调色不是主题色：--accent-primary 由这里
+  // 写进 :root 的内联样式，主题块里写同名令牌永远不生效（见 variables.css 注释）。
+  verm:   { hex: '#c2402a', rgb: '194, 64, 42' },
 }
 
 // 修复：模块级标记，确保 darkMq 监听器只添加一次（多实例共享场景）

@@ -51,12 +51,19 @@ const noModel = computed(() => modelsStore.models.length === 0)
 const running = computed(() => agent.isRunning)
 
 const ta = ref<HTMLTextAreaElement | null>(null)
-/** 行数随内容长，但不超过四行 —— 再高首页就被自己的输入框挤走了 */
+/**
+ * 高度按行格算，不按像素拍：横线是按 --hcc-lh 重复画的，若 max 落在两行之间
+ * （原来写的 96px），第四行会被裁成半条线 —— 线在、字没了。
+ * 22px 行高 + 14/6 padding 与样式里的 --hcc-lh 同值，改动要两处一起看。
+ */
+const LH = 22
+const PAD = 20
 function grow() {
   const el = ta.value
   if (!el) return
   el.style.height = 'auto'
-  el.style.height = `${Math.min(96, Math.max(52, el.scrollHeight))}px`
+  const h = Math.min(LH * 4 + PAD, Math.max(LH * 2 + PAD, el.scrollHeight))
+  el.style.height = `${h}px`
 }
 
 async function send() {
@@ -172,11 +179,24 @@ onMounted(() => { void sshAi.fetchDefaultModel() })
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 16%, transparent);
 }
 .hcc-input {
+  /* 行线间距 = 行高。这两个值必须同源，否则线与字错开一格 —— 预览稿当初就是
+     靠把它收成一个变量才对齐的（用户标注："线和输入光标对齐"） */
+  --hcc-lh: 22px;
   display: block;
   width: 100%;
   box-sizing: border-box;
   padding: 14px 16px 6px;
   background: transparent;
+  /* 横线画在 textarea 自己的内容盒上：折行也跟着行走，不需要数行数。
+     --rule-line 只在手记主题有值，其余主题是 transparent（组件不写主题分支）。 */
+  background-image: linear-gradient(
+    to bottom,
+    transparent calc(var(--hcc-lh) - 1px),
+    var(--rule-line) calc(var(--hcc-lh) - 1px)
+  );
+  background-size: 100% var(--hcc-lh);
+  background-repeat: repeat-y;
+  background-origin: content-box;
   border: 0;
   outline: 0;
   resize: none;
@@ -184,7 +204,7 @@ onMounted(() => { void sshAi.fetchDefaultModel() })
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: 15px;
-  line-height: 22px;
+  line-height: var(--hcc-lh);
   caret-color: var(--accent-primary);
 }
 .hcc-input::placeholder { color: var(--text-tertiary); opacity: .8 }

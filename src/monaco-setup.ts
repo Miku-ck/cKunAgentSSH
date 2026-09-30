@@ -45,7 +45,7 @@ export function applyMonacoTheme(theme: AppTheme): void {
 // 主题名解析（原驻 monaco-setup 的映射表，随懒加载拆分上移到轻量层）
 // ──────────────────────────────────────────────────────────────────────────────
 
-export type AppTheme = 'dark' | 'light' | 'system' | 'blue-screen' | 'forest' | 'mint' | 'bee' | 'coral'
+export type AppTheme = 'dark' | 'light' | 'system' | 'blue-screen' | 'forest' | 'mint' | 'bee' | 'coral' | 'atelier'
 
 type MonacoThemeName = 'ckun-dark' | 'ckun-light' | 'ckun-blue-screen' | 'ckun-forest' | 'ckun-mint' | 'ckun-bee' | 'ckun-coral'
 
@@ -57,6 +57,8 @@ const THEME_MAP: Record<string, MonacoThemeName> = {
   mint: 'ckun-mint',
   bee: 'ckun-bee',
   coral: 'ckun-coral',
+  // 手记是浅底，编辑器不必再造一套色板 —— 复用 ckun-light 的浅底深字
+  atelier: 'ckun-light',
 }
 
 function resolveMonacoThemeName(theme: AppTheme): MonacoThemeName {

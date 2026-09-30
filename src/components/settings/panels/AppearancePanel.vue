@@ -270,6 +270,7 @@ const themeLabels: Record<Theme, string> = {
   mint: '薄荷',
   bee: '蜜蜂',
   coral: '珊瑚',
+  atelier: '手记',
   system: '跟随系统',
 }
 
@@ -283,6 +284,7 @@ const accentLabels: Record<Accent, string> = {
   mint: '薄荷',
   bee: '蜜蜂',
   coral: '珊瑚',
+  verm: '朱砂',
 }
 
 const accentOptions = (Object.keys(accentLabels) as Accent[]).map(value => ({

@@ -11,5 +11,8 @@ export default defineConfig({
     include: ['src/**/*.{test,spec}.ts'],
     environment: 'node',
     globals: false,
+    // 默认所有 .css 都被替换成空模块 —— variables.test.ts 用 ?raw 读令牌表，
+    // 空模块会让它"找不到主题块"而不是读到源码。只放行这一个文件走 Vite 原样加载。
+    css: { include: [/variables\.css/] },
   },
 })
