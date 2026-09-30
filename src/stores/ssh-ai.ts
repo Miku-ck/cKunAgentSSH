@@ -125,6 +125,17 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     posture.value = mode
   }
 
+  // ── 附到下一条消息的技能 ──
+
+  /** 原先是 SideChatPanel.vue:976 的组件私有 ref。只给"覆写整份"这一个动作：
+   *  侧栏标签的 ×、首页 chip 的 ×、发送后清空若各配一个 add/remove，去重逻辑就会被
+   *  抄成三份。技能本身在后端有真消费者（按 id 装进技能目录），不是前端装饰。 */
+  const selectedSkillIds = ref<string[]>([])
+
+  function setSelectedSkillIds(ids: string[]) {
+    selectedSkillIds.value = ids
+  }
+
   // ── 会话 CRUD ──
 
   async function createConversation(title?: string): Promise<ModeConversation> {
@@ -648,6 +659,9 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     // ── 对话姿态 ──
     posture,
     setPosture,
+    // ── 技能选择 ──
+    selectedSkillIds,
+    setSelectedSkillIds,
     createConversation,
     switchConversation,
     deleteConversation,

@@ -973,7 +973,9 @@ watch(showPlusMenu, (v) => { if (v) { closePermMenu(); closeChipDetail() } })
 watch(showPermMenu, (v) => { if (v) { closePlusMenu(); closeSkillMenu(); closeChipDetail() } })
 
 // ── / 斜杠技能菜单 ──
-const selectedSkillIds = ref<string[]>([])
+/** 选中的技能存在 ssh-ai store：首页 ＋ 菜单与这里必须同一份，各存一份就是第二条
+ *  通路（用户在首页挑了技能、侧栏发出去却没带）。写入一律整份覆写，见 store 注释。 */
+const selectedSkillIds = computed(() => sshAi.selectedSkillIds)
 const showSkillMenu = ref(false)
 const skillQuery = ref('')
 const skillActiveIdx = ref(0)
@@ -1112,7 +1114,7 @@ function pickSkill(skill: { id: string; name: string }) {
     caretPos = skillTriggerPos
   }
   if (!selectedSkillIds.value.includes(skill.id)) {
-    selectedSkillIds.value.push(skill.id)
+    sshAi.setSelectedSkillIds([...selectedSkillIds.value, skill.id])
   }
   closeSkillMenu()
   requestAnimationFrame(() => {
@@ -1127,7 +1129,7 @@ function pickSkill(skill: { id: string; name: string }) {
 }
 
 function removeSkill(id: string) {
-  selectedSkillIds.value = selectedSkillIds.value.filter(sid => sid !== id)
+  sshAi.setSelectedSkillIds(selectedSkillIds.value.filter(sid => sid !== id))
 }
 
 // ── Agent 执行轨迹 ──
@@ -1307,7 +1309,7 @@ function handleSend() {
   const skillIds = [...selectedSkillIds.value]
   const attachments = [...pendingFiles.value]
   lastDraft.value = { text, skillIds, attachments }
-  selectedSkillIds.value = []
+  sshAi.setSelectedSkillIds([])
   pendingFiles.value = []
   inputText.value = ''
   if (inputRef.value) inputRef.value.style.height = 'auto'
@@ -1320,7 +1322,7 @@ function restoreDraft() {
   const { text, skillIds, attachments } = lastDraft.value
   lastDraft.value = null
   inputText.value = text
-  selectedSkillIds.value = skillIds
+  sshAi.setSelectedSkillIds(skillIds)
   pendingFiles.value = attachments
   nextTick(() => {
     autoResize()

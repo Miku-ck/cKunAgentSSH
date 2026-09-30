@@ -28,12 +28,16 @@ export function useHomeCommand() {
       toast.info('AI 正在运行中，请等待完成')
       return false
     }
-    // 审批档与姿态都取自 store：首页 ＋ 菜单点亮的东西必须真的随这次下达出去，
+    // 审批档、姿态、技能都取自 store：＋ 菜单点亮的东西必须真的随这次下达出去，
     // 否则它只是首页的装饰（侧栏那条通路 SshAiPanel.vue:116 早就是这么传的）。
     if (!await sshAi.sendMessage(text, {
       approval: sshAi.approvalMode,
       mode: sshAi.posture ?? undefined,
+      skillIds: [...sshAi.selectedSkillIds],
     })) return false
+    // 技能是"这一条消息带什么"，不是常驻档：发完即清，否则下一条静默复用同一份
+    // 技能目录（侧栏在 emit 时清、被拒时由 restoreDraft 放回，这里是同一语义）。
+    sshAi.setSelectedSkillIds([])
     draft.value = ''
     return true
   }

@@ -11,6 +11,8 @@ import { ref } from 'vue'
 const sendMessage = vi.fn(async () => true)
 const approvalMode = ref<'normal' | 'auto'>('normal')
 const posture = ref<'goal' | 'plan' | null>(null)
+const selectedSkillIds = ref<string[]>([])
+const setSelectedSkillIds = vi.fn((ids: string[]) => { selectedSkillIds.value = ids })
 const isRunning = ref(false)
 const info = vi.fn()
 
@@ -19,8 +21,10 @@ const info = vi.fn()
 vi.mock('@/stores/ssh-ai', () => ({
   useSshAiStore: () => ({
     sendMessage,
+    setSelectedSkillIds,
     get approvalMode() { return approvalMode.value },
     get posture() { return posture.value },
+    get selectedSkillIds() { return selectedSkillIds.value },
   }),
 }))
 vi.mock('@/stores/agent', () => ({
@@ -35,10 +39,31 @@ const { useHomeCommand } = await import('@/composables/useHomeCommand')
 describe('useHomeCommand', () => {
   beforeEach(() => {
     sendMessage.mockClear()
+    setSelectedSkillIds.mockClear()
     info.mockClear()
     approvalMode.value = 'normal'
     posture.value = null
+    selectedSkillIds.value = []
     isRunning.value = false
+  })
+
+  it('技能是随消息的一次性附加：发出去之后清空，下一条不静默复用', async () => {
+    // 审批档与姿态是常驻档（发完保留），技能不是 —— 留着会让下一条指令带上
+    // 没人再要过的技能目录，而那会真改变后端装配（lifecycle.py:46）。
+    selectedSkillIds.value = ['sk-log']
+    const c = useHomeCommand()
+    c.draft.value = '查一下磁盘'
+    expect(await c.submit()).toBe(true)
+    expect(selectedSkillIds.value).toEqual([])
+  })
+
+  it('下达被拒时保留技能，与草稿同生同死', async () => {
+    sendMessage.mockResolvedValueOnce(false)
+    selectedSkillIds.value = ['sk-log']
+    const c = useHomeCommand()
+    c.draft.value = '查一下磁盘'
+    expect(await c.submit()).toBe(false)
+    expect(selectedSkillIds.value).toEqual(['sk-log'])
   })
 
   it('空草稿不发送', async () => {
@@ -53,7 +78,10 @@ describe('useHomeCommand', () => {
     const c = useHomeCommand()
     c.draft.value = '  把 nginx worker_connections 提到 4096  '
     expect(await c.submit()).toBe(true)
-    expect(sendMessage).toHaveBeenCalledWith('把 nginx worker_connections 提到 4096', { approval: 'auto', mode: undefined })
+    expect(sendMessage).toHaveBeenCalledWith(
+      '把 nginx worker_connections 提到 4096',
+      { approval: 'auto', mode: undefined, skillIds: [] },
+    )
   })
 
   it('＋ 菜单点亮的姿态随同一次下达出去', async () => {
@@ -65,7 +93,18 @@ describe('useHomeCommand', () => {
     expect(await c.submit()).toBe(true)
     expect(sendMessage).toHaveBeenCalledWith(
       '看看 nginx 配置为什么报错',
-      { approval: 'normal', mode: 'plan' },
+      { approval: 'normal', mode: 'plan', skillIds: [] },
+    )
+  })
+
+  it('选中的技能随同一次下达出去（后端按 id 装目录，不是前端摆设）', async () => {
+    selectedSkillIds.value = ['sk-log', 'sk-disk']
+    const c = useHomeCommand()
+    c.draft.value = '查一下磁盘'
+    expect(await c.submit()).toBe(true)
+    expect(sendMessage).toHaveBeenCalledWith(
+      '查一下磁盘',
+      { approval: 'normal', mode: undefined, skillIds: ['sk-log', 'sk-disk'] },
     )
   })
 

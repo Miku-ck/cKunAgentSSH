@@ -100,3 +100,33 @@ describe('ssh-ai 姿态轴', () => {
     expect([...lsMap.keys()].filter(k => /approval|posture|mode/i.test(k))).toHaveLength(0)
   })
 })
+
+/**
+ * 技能选择（故事 5/6 第二项）。原先是 SideChatPanel.vue:976 的组件私有 ref，
+ * 首页 ＋ 菜单要点它，就同审批档/姿态一样得提进 store。
+ * API 只给"覆写整份"：侧栏标签的 ×、首页 chip 的 ×、发送后清空，若各配一个
+ * add/remove 动作，去重逻辑就会被抄成三份。
+ */
+describe('ssh-ai 技能选择', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    lsMap.clear()
+  })
+
+  it('默认不预设任何技能', () => {
+    expect(useSshAiStore().selectedSkillIds).toEqual([])
+  })
+
+  it('setSelectedSkillIds 覆写整份', () => {
+    const store = useSshAiStore()
+    store.setSelectedSkillIds(['a', 'b'])
+    expect(store.selectedSkillIds).toEqual(['a', 'b'])
+    store.setSelectedSkillIds(store.selectedSkillIds.filter(id => id !== 'a'))
+    expect(store.selectedSkillIds).toEqual(['b'])
+  })
+
+  it('技能选择不落 localStorage —— 选了什么技能是本次会话的意图', () => {
+    useSshAiStore().setSelectedSkillIds(['a'])
+    expect([...lsMap.keys()].filter(k => /skill/i.test(k))).toHaveLength(0)
+  })
+})

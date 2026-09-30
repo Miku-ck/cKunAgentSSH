@@ -17,11 +17,13 @@ import { useAgentStore } from '@/stores/agent'
 import { useModelsStore } from '@/stores/models'
 import { useSettingsStore } from '@/stores/settings'
 import { useSshAiStore } from '@/stores/ssh-ai'
+import { useSkillStore } from '@/stores/skills'
 import { APPROVAL_OPTIONS, PERMISSION_LABELS, resolveRunModes, type ApprovalKey } from '@/utils/run-modes'
 
 const agent = useAgentStore()
 const sshAi = useSshAiStore()
 const modelsStore = useModelsStore()
+const skillsStore = useSkillStore()
 const settings = useSettingsStore()
 const { openSettings } = useSettings()
 const { draft, canSend, submit } = useHomeCommand()
@@ -61,6 +63,23 @@ const isPlan = computed(() => sshAi.posture === 'plan')
 const permLabel = computed(() =>
   PERMISSION_LABELS[resolveRunModes(sshAi.posture ?? undefined, approvalMode.value).permissionMode],
 )
+
+/** ＋ 菜单的技能区。清单来自 skills store（后端那份，带设置页的开关状态），
+ *  首页只挑已启用的 —— 未启用的技能点了也不会进 skill_ids（agent.py:594 按 mode 过滤）。 */
+const skillOptions = computed(() => skillsStore.enabledSkills)
+/** chip 只给查得到名字的：技能在设置页被删掉后，选中的 id 会悬空，
+ *  印一枚空白 chip 比不印更骗人。flatMap 兼作收窄类型，不另写谓词。 */
+const pickedSkills = computed(() =>
+  sshAi.selectedSkillIds.flatMap(id => {
+    const s = skillsStore.enabledSkills.find(sk => sk.id === id)
+    return s ? [s] : []
+  }),
+)
+
+function toggleSkill(id: string) {
+  const cur = sshAi.selectedSkillIds
+  sshAi.setSelectedSkillIds(cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id])
+}
 
 const { showModelDropdown, modelSelectorRef, currentModelName, selectModel } = useModelSelector({
   getSelectedId: () => sshAi.selectedModelId,
@@ -102,7 +121,12 @@ function onKeydown(e: KeyboardEvent) {
   void send()
 }
 
-onMounted(() => { void sshAi.fetchDefaultModel() })
+onMounted(() => {
+  void sshAi.fetchDefaultModel()
+  // 技能清单原先只在 SideChatPanel 的 setup 里装载（:513），而右侧 AI 面板没开时
+  // 那个组件根本不挂载 —— 首页的 ＋ 菜单就会永远空着。空表才装，不重复扫盘。
+  if (!skillsStore.skills.length) void skillsStore.loadBuiltinSkills()
+})
 </script>
 
 <template>
@@ -127,12 +151,25 @@ onMounted(() => { void sshAi.fetchDefaultModel() })
           title="添加上下文"
           @click.stop="showPlusMenu = !showPlusMenu"
         >＋</button>
-        <div v-if="showPlusMenu" class="hcc-menu" @click.stop>
+        <div v-if="showPlusMenu" class="hcc-menu wide" @click.stop>
           <button type="button" class="hcc-opt" :class="{ on: isPlan }" @click="togglePlan">
             <span class="ol">计划</span>
             <span class="od">只读调研，写操作直接拒绝</span>
             <span class="ot">{{ isPlan ? '✓' : '' }}</span>
           </button>
+          <div class="hcc-sep">技能</div>
+          <button
+            v-for="s in skillOptions"
+            :key="s.id"
+            type="button"
+            class="hcc-opt single"
+            :class="{ on: sshAi.selectedSkillIds.includes(s.id) }"
+            @click="toggleSkill(s.id)"
+          >
+            <span class="ol">{{ s.name }}</span>
+            <span class="ot">{{ sshAi.selectedSkillIds.includes(s.id) ? '✓' : '' }}</span>
+          </button>
+          <div v-if="!skillOptions.length" class="hcc-sep">没有已启用的技能</div>
         </div>
       </div>
 
@@ -213,6 +250,21 @@ onMounted(() => { void sshAi.fetchDefaultModel() })
         >×</button>
       </span>
 
+      <span
+        v-for="s in pickedSkills"
+        :key="s.id"
+        class="hcc-chip"
+        :title="s.description || s.name"
+      >
+        {{ s.name }}
+        <button
+          type="button"
+          class="hcc-chip-x"
+          :aria-label="`移除技能 ${s.name}`"
+          @click="toggleSkill(s.id)"
+        >×</button>
+      </span>
+
       <span v-if="running" class="hcc-note">AI 正在运行中</span>
 
       <button type="button" class="hcc-send" :disabled="!canSend" @click="send">交给它</button>
@@ -253,6 +305,10 @@ onMounted(() => { void sshAi.fetchDefaultModel() })
   background-size: 100% var(--hcc-lh);
   background-repeat: repeat-y;
   background-origin: content-box;
+  /* 必须 local：高度封顶 4 行 + overflow-y:hidden，长草稿在框内自己滚。默认的
+     scroll = 背景钉在元素上，文字滚、线不滚 → 线与字错开一格（正是上面注释
+     声明要避免的那个失败）。预览稿 grow() 不封顶所以碰不到，app 封顶就有。 */
+  background-attachment: local;
   border: 0;
   outline: 0;
   resize: none;
@@ -269,7 +325,10 @@ onMounted(() => { void sshAi.fetchDefaultModel() })
   align-items: center;
   gap: 8px;
   padding: 8px 10px 9px 12px;
-  border-top: 1px solid var(--divider-primary);
+  /* 底栏那一道折痕与次级纸面都归主题：--card-foot-* 在非手记主题 = 今天的样子
+     （透明底 + 实线分隔），组件里不写主题分支（同 --rule-line 的做法） */
+  border-top: var(--card-foot-rule);
+  background: var(--card-foot-bg);
   flex-wrap: wrap;
 }
 .hcc-sel { position: relative }
@@ -333,6 +392,14 @@ onMounted(() => { void sshAi.fetchDefaultModel() })
   z-index: 30;
 }
 .hcc-menu.wide { width: 220px; max-height: 260px; overflow-y: auto }
+/* 菜单里的小节标题（技能区）。刻意不是分隔线：手记那套语言靠字重与留白分组，
+   再加一条线会和输入卡的行线抢注意力。 */
+.hcc-sep {
+  padding: 7px 8px 3px;
+  font-size: 10px;
+  letter-spacing: .08em;
+  color: var(--text-tertiary);
+}
 .hcc-opt {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -362,7 +429,9 @@ onMounted(() => { void sshAi.fetchDefaultModel() })
   border: 0;
   border-radius: var(--radius-sm);
   background: var(--accent-primary);
-  color: #fff;
+  /* 前景由 applyAccent 按底色亮度算出来（--accent-on）：写死 #fff 时，
+     强调色选「白色」就是白底白字 —— 这枚按钮整个消失，而它点得到 */
+  color: var(--accent-on);
   font-size: 13px;
   font-weight: 600;
   transition: filter var(--transition-fast), opacity var(--transition-fast);
