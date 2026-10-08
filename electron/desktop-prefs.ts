@@ -158,7 +158,12 @@ export async function initDesktopPrefs(
     console.error('[DesktopPrefs] 加载失败，使用默认值:', e)
     prefs = { ...DEFAULT_DESKTOP_PREFS }
   }
-  if (prefs.autoLaunch && process.platform !== 'linux') {
+  if (prefs.autoLaunch && process.platform === 'linux') {
+    // applyAutoLaunch 在 Linux 必然抛错（见该函数），启动回填因此跳过它 —— 但跳过不
+    // 等于这一项还能用。落盘值与本平台能力不一致时按下面托盘那条同一口径关掉并写回，
+    // 否则设置页显示"开机自启 已开"而系统里什么都没有（库文件/换机器带来的陈旧值）。
+    await disablePref('autoLaunch', '[DesktopPrefs] 当前平台不支持开机自启，已关闭该项')
+  } else if (prefs.autoLaunch) {
     try {
       applyAutoLaunch(true)
     } catch (e) {
@@ -166,16 +171,35 @@ export async function initDesktopPrefs(
     }
   }
   if (prefs.minimizeToTray) {
-    if (trayIconAvailable()) {
-      ensureTray()
-    } else {
+    if (!trayIconAvailable()) {
       // 落盘值与内存值不一致会永久迷惑：这里把该项关掉并写回，UI 也就显示关
-      console.warn('[DesktopPrefs] 托盘图标缺失，已关闭"关窗隐藏到托盘"')
-      prefs = { ...prefs, minimizeToTray: false }
-      await writeToDisk(prefs).catch(() => undefined)
+      await disablePref('minimizeToTray', '[DesktopPrefs] 托盘图标缺失，已关闭"关窗隐藏到托盘"')
+    } else {
+      try {
+        ensureTray()
+      } catch (e) {
+        // 图标在、Tray 仍然起不来：Linux 缺 appindicator 宿主时 `new Tray()` 直接抛。
+        // 本函数 docstring 承诺"任何一步失败都不该让应用起不来"，而这一条曾是唯一
+        // 没被容错的一步 —— 它会让你在注册 IPC 之前就崩掉。同样关掉该项写回：
+        // shouldHideOnClose 还要求 tray !== null，所以不会留下"窗口被藏起来唤不回"。
+        await disablePref(
+          'minimizeToTray',
+          `[DesktopPrefs] 创建托盘失败，已关闭"关窗隐藏到托盘": ${String(e)}`,
+        )
+      }
     }
   }
   return getDesktopPrefs()
+}
+
+/** 落盘值与本机能力不一致时：改内存 → 写回磁盘 → 留一行警告（三处共用同一段处理） */
+async function disablePref(
+  key: 'autoLaunch' | 'minimizeToTray',
+  message: string,
+): Promise<void> {
+  console.warn(message)
+  prefs = { ...prefs, [key]: false }
+  await writeToDisk(prefs).catch(() => undefined)
 }
 
 /** 渲染进程 patch → 生效动作 → 落盘。动作失败抛错，由 IPC reject 提示用户（值不落盘） */
