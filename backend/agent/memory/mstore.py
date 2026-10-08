@@ -679,15 +679,27 @@ def decay_memories(days: int = 90, delta: float = 0.1, floor: float = 0.2) -> di
             "AND importance > ?",
             (delta, db._now(), f"-{days} day", floor),
         ).rowcount
-        c2 = conn.execute(
-            "UPDATE memories SET status='invalidated', invalid_at=?, updated_at=? "
-            "WHERE status='active' AND pinned=0 AND importance < ?",
-            (db._now(), db._now(), floor),
-        ).rowcount
+        # S3-02 修复：第二条原本是一条**没有年龄门槛**的地板清扫 —— 只要
+        # importance < floor 就在同一次 tick 里被作废，于是刚写入的低权重候选
+        # （抽取器常给 0.1~0.2）出生即死，用户视角是「记了却立刻消失」。现在它
+        # 与第一条共用同一个人群门槛（长期零命中且久未使用），跌破地板才清理的是
+        # 同批被降权的旧行。
+        stale = [row["id"] for row in conn.execute(
+            "SELECT id FROM memories "
+            "WHERE status='active' AND pinned=0 AND use_count=0 "
+            "AND ifnull(last_used_at, created_at) < datetime('now', ?) "
+            "AND importance < ?",
+            (f"-{days} day", floor),
+        ).fetchall()]
         conn.commit()
-        return {"decayed": c1, "invalidated": c2}
     finally:
         conn.close()
+    # 逐行走 retire()：原实现是裸 UPDATE，绕过 retire 后 memory_audit 一条都不写，
+    # 而 spec §4.4 要求「所有动作落审计」—— 用户翻历史抽屉时看不到任何东西，
+    # 只能看见记忆凭空变成 invalidated。retire 自带状态守卫，重复调用幂等。
+    for mid in stale:
+        retire(mid, reason=f"decay: 降权后 importance 跌破地板 {floor}", job_id="")
+    return {"decayed": c1, "invalidated": len(stale)}
 
 
 def retire_all_unpinned() -> int:

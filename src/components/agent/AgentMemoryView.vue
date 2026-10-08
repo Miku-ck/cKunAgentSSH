@@ -28,7 +28,6 @@
         <option value="pending_reconcile">待确认</option>
         <option value="invalidated">已失效</option>
         <option value="superseded">被取代</option>
-        <option value="rejected">已拒绝</option>
       </select>
       <input v-model="filters.q" class="mem-search" placeholder="搜索内容/标题"
              @keydown.enter="loadMemories" />
@@ -273,9 +272,12 @@ const auditFor = ref<MemoryRow | null>(null)
 const auditRows = ref<MemoryAuditRow[]>([])
 
 const kindText: Record<string, string> = { semantic: '事实', episodic: '经历', procedural: '规程' }
+// S3-15：状态词汇表与后端实际写入集对齐 —— 'rejected' 此前是恒不命中的一项
+// （mstore 只写 active / pending_reconcile / invalidated / superseded），
+// 用户永远不会点到它，因此也永远不会被报告出来。
 const statusText: Record<string, string> = {
   active: '生效', pending_reconcile: '待确认', invalidated: '已失效',
-  superseded: '被取代', rejected: '已拒绝',
+  superseded: '被取代',
 }
 const sourceText: Record<string, string> = {
   chat_extract: '对话提取', agent_tool: 'Agent 写入', run_summary: '运行总结',
@@ -632,7 +634,6 @@ onMounted(() => { loadStats(); loadMemories() })
 .mem-badge.status.pending_reconcile { color: var(--status-warn-text); border-color: color-mix(in srgb, var(--status-warn-text) 40%, transparent); }
 .mem-badge.status.invalidated,
 .mem-badge.status.superseded,
-.mem-badge.status.rejected,
 .mem-badge.status.failed { color: var(--status-error-text); border-color: color-mix(in srgb, var(--status-error-text) 40%, transparent); }
 .mem-badge.status.done { color: var(--text-tertiary); }
 .mem-badge.pin { color: var(--status-warn-text); border-color: color-mix(in srgb, var(--status-warn-text) 50%, transparent); }

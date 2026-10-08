@@ -487,6 +487,32 @@ def test_decay_and_retire_all(memdb):
     assert mstore.get_memory(alive)["status"] == "active"
 
 
+def test_decay_地板清扫有年龄门槛且落审计(memdb):
+    """S3-02 回归：跌破地板不等于「出生即死」，而且作废必须留审计。
+
+    原实现第二条 UPDATE 没有任何年龄门槛 —— 只要 importance < floor 就在同一次 tick
+    里被 invalidated。抽取器给新候选的 importance 常在 0.1~0.2，于是用户视角是
+    「记了却立刻消失」；而它是裸 UPDATE，绕过 retire() ⇒ memory_audit 一条都不写
+    （spec §4.4 要求所有动作落审计），历史抽屉里看不见任何解释。
+    """
+    fresh = mstore.add_memory(kind="semantic", content="新写入的低权重事实",
+                              source="chat_extract", importance=0.1)
+    result = mstore.decay_memories()
+    assert mstore.get_memory(fresh)["status"] == "active", "新行被无门槛的地板清扫带走了"
+    assert result["invalidated"] == 0
+
+    stale = mstore.add_memory(kind="semantic", content="久未使用的低权重事实",
+                              source="test", importance=0.1)
+    conn = db._get_conn()
+    conn.execute("UPDATE memories SET created_at=datetime('now','-400 day'),"
+                 " valid_at=datetime('now','-400 day') WHERE id=?", (stale,))
+    conn.commit()
+
+    assert mstore.decay_memories()["invalidated"] == 1
+    assert mstore.get_memory(stale)["status"] == "invalidated"
+    assert mstore.list_audit(stale), "地板作废没落审计，抽屉历史解释不了这次消失"
+
+
 def test_blocks_replace_and_limits(memdb):
     mstore.put_block("user-preferences", "用户喜欢简洁回答", "test")
     v2 = mstore.replace_in_block("user-preferences", "简洁回答", "详尽回答", "agent")
