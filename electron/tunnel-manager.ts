@@ -14,7 +14,10 @@
  *   按 CONNECT 目标逐连接 dial。安全边界：listenHost 强制 127.0.0.1
  *   （tunnel-store 已钳制，这里只消费）。
  * - 状态机 starting → active | error，stop 幂等；状态每次变更经 safeSend 推 tunnel:status。
- * - 已知限制：SSH 数据面断开后隧道不自动重连（网关数据面自带重连，见 GatewayTransport）。
+ * - 已知限制：数据面断开后隧道**不会**自己回来。SSH 侧不重连；网关侧虽然
+ *   GatewayManager 会退避重拨会话，但 onTransportDead 已经把这条会话上的隧道
+ *   拆掉并从表里摘了（state=error），会话恢复后还得由用户重新点启动。
+ *   「网关回来就自动重启隧道」是没做的产品决定，不是这里的实现细节。
  */
 import * as net from 'net'
 import type { Duplex } from 'stream'
@@ -51,6 +54,18 @@ interface TunnelSession {
 
 /** 按规则决定用哪条数据面并建好它。凭据由实现方自取，渲染层全程不碰明文。 */
 type TransportFactory = (rule: TunnelRule) => Promise<TunnelTransport>
+
+/**
+ * 监听失败的中文文案，按 error code 分别说。
+ * 原先任何 'error' 都翻译成「本机端口 … 已被占用」：1024 以下端口的 EACCES 和
+ * 非法监听地址同样走这条路，于是用户对着一个换多少个端口都填不好的权限问题
+ * 反复试 —— 占用只是其中一种，误报其余的都是白折腾。
+ */
+function listenFailureText(code: string, host: string, port: number): string {
+  if (code === 'EADDRINUSE') return `本机端口 ${host}:${port} 已被占用`
+  if (code === 'EACCES') return `本机无法监听 ${host}:${port}：该端口需要管理员权限（1024 以下）`
+  return `本机无法监听 ${host}:${port}：${code}`
+}
 
 export class TunnelManager {
   private sessions = new Map<string, TunnelSession>()
@@ -120,9 +135,22 @@ export class TunnelManager {
 
     // 本机端口预检（remote 的绑定端口在对端，本地探不了 → 由 bind() 报错兜底）
     if (rule.type !== 'remote') {
-      const host = rule.listenHost || '127.0.0.1'
-      if (await this.probePortInUse(host, rule.listenPort!)) {
-        const status: TunnelStatus = { id: rule.id, state: 'error', message: `本机端口 ${host}:${rule.listenPort} 已被占用` }
+      // 脏行要在监听之前就拒掉：validateRule 只守写侧（保存那一刻），手改过的
+      // tunnels.json 或旧版本残留可以带着 listenPort=undefined 走到这里，
+      // 而 listen(undefined) 是「绑一个随机高位端口」并且照样报 active ——
+      // 用户以为代理在 1080，实际上什么都没有。越界值同样拒绝，不夹到边界。
+      const port = rule.listenPort
+      if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) {
+        const status: TunnelStatus = { id: rule.id, state: 'error', message: '本地监听端口需为 1–65535 的整数' }
+        this.pushRaw(status)
+        return status
+      }
+      // -D 的 127.0.0.1 边界在读侧再申一次：写侧钳的是「保存时」的事实，
+      // 不是「监听时」的，脏行能把 SOCKS 开成局域网开放代理。
+      const host = rule.type === 'dynamic' ? '127.0.0.1' : rule.listenHost || '127.0.0.1'
+      const busy = await this.probePortInUse(host, port)
+      if (busy) {
+        const status: TunnelStatus = { id: rule.id, state: 'error', message: listenFailureText(busy, host, port) }
         this.pushRaw(status)
         return status
       }
@@ -385,7 +413,9 @@ export class TunnelManager {
       const b = this.remoteBind(s)
       // 共享会话上摘掉自己这条 bind 的订阅，否则停掉的规则还会被新连接唤醒
       s.transport.removeInbound(b)
-      void s.transport.unbind(b)
+      // unbind 现在与 bind 同走一条串行链并等 BIND_OK（原先是 delete 掉在途 BIND 的
+      // 结算句柄，把整条链焊死）。失败不需要上报：这条数据面本来就在拆。
+      s.transport.unbind(b).catch(() => {})
     }
     // 共享会话（网关一条会话服务多条规则）不能被单条隧道的停止关掉
     if (!s.transport.shared) s.transport.close()
@@ -417,13 +447,13 @@ export class TunnelManager {
 
   // ─────────────────────────── 端口预检 ───────────────────────────
 
-  /** true = 已被占用（保存前预检 / 启动前预检共用） */
-  private probePortInUse(host: string, port: number): Promise<boolean> {
+  /** null = 可用；否则返回监听失败的 error code（占用 / 权限 / 非法地址是三回事） */
+  private probePortInUse(host: string, port: number): Promise<string | null> {
     return new Promise(resolve => {
       const srv = net.createServer()
-      srv.once('error', () => resolve(true))
+      srv.once('error', (err: NodeJS.ErrnoException) => resolve(err.code || 'EADDRINUSE'))
       srv.listen(port, host, () => {
-        srv.close(() => resolve(false))
+        srv.close(() => resolve(null))
       })
     })
   }
@@ -434,9 +464,9 @@ export class TunnelManager {
       return { ok: false, message: '端口需为 1–65535 的整数' }
     }
     const h = host || '127.0.0.1'
-    const inUse = await this.probePortInUse(h, port)
-    return inUse
-      ? { ok: false, message: `本机端口 ${h}:${port} 已被占用` }
+    const busy = await this.probePortInUse(h, port)
+    return busy
+      ? { ok: false, message: listenFailureText(busy, h, port) }
       : { ok: true }
   }
 }
