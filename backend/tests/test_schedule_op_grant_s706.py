@@ -26,12 +26,25 @@ def test_every_action_gets_its_own_grant_key():
     )
 
 
-def test_bare_tool_name_key_is_gone():
-    """裸工具名那一支（bound_command=None）对三个正常 action 都不该再出现。"""
-    for args in ({"action": "list"},
-                 {"action": "cancel", "schedule_id": "sch-1"},
-                 {"action": "create", "task": "巡检"}):
-        assert _key(args) != "schedule_op", f"{args} 仍退化成工具级授权"
+def test_list_grant_does_not_exempt_mutating_actions():
+    """`list` 刻意不绑标的（它不改动任何东西，风险判据来自 ToolMeta moderate，
+    见 ops_schedule.bound_command 的注释），于是它的授权键就是裸工具名那一支。
+
+    这在本工具上**不构成漏洞**：会改动调度的两个动作都已经绑到自己的标的，键与
+    裸工具名不同 ⇒ 在查询卡片上点「始终允许」放行不到「删掉手工配好的任务」。
+    钉这个不变式，而不是钉「三个 action 都不许落裸键」——后者会把 list 的判据
+    从 ToolMeta 挤进命令分类兜底（得到「unknown command, default approval」）。
+    """
+    list_key = _key({"action": "list"})
+    assert list_key == "schedule_op"
+    for args in ({"action": "cancel", "schedule_id": "sch-1"},
+                 {"action": "create", "task": "巡检"},
+                 {"action": "create", "command": "du -sh /var/log"}):
+        assert _key(args) != list_key, f"{args} 与 list 共键：批查询的卡片放行了改动动作"
+
+    # cancel 不带 id 时无标的可绑 ⇒ 落裸键，但执行侧先把它拒了
+    # （ops_schedule._cancel: "cancel 需要提供 schedule_id 参数"），不会真删东西
+    assert _key({"action": "cancel"}) == list_key
 
 
 def test_cancel_is_declared_destructive_for_prod():

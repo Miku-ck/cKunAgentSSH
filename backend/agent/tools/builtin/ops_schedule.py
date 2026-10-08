@@ -255,13 +255,21 @@ class ScheduleOpTool(BaseTool):
         """入库前先判一次：定时任务是"现在埋雷、未来自动引爆"，推迟到那次无头 run
         才拒等于让 hardline 命令在库里躺着、等某个凌晨自己跑起来。
 
-        S7-06：每个 action 都必须给出自己的裁决标的。原先只有 `create` 带 command
-        时返回值，`list` / `cancel` / 只用 task_prompt 的 create 一律 None ⇒ 授权键
-        退回**裸工具名**（gate 的 `command_for_call` 拿不到命令就是这个形态），
-        用户对一张查询卡片点「始终允许」，永久放行的是该工具的全部 action，包括
-        删掉手工配好的任务。headless run 用同一份 registry，于是无人值守的定时
-        run 也能增删 schedules。键粒度收到 action（cancel 再收到具体 id）之后，
-        「批的是查询、拿到的是删除」这条路就断了。
+        S7-06：会改动/删除调度的 action 必须给出自己的裁决标的。原先只有
+        `create` 带 command 时返回值，`cancel`（以及只用 task_prompt 的 create）
+        一律 None ⇒ 授权键退回**裸工具名**（gate 的 `command_for_call` 拿不到
+        命令就是这个形态），用户对一张卡片点「始终允许」，永久放行的是该工具的
+        全部 action，包括删掉手工配好的任务。headless run 用同一份 registry，
+        于是无人值守的定时 run 也能增删 schedules。键粒度收到 action
+        （cancel 再收到具体 id）之后，「批的是查询、拿到的是删除」这条路就断了。
+
+        `list` **刻意不返回标的**：它既不改动也不删除任何东西，风险判据应当来自
+        ToolMeta（moderate，仍需会话授权）。一旦给它编一个 "schedule_op list"，
+        这串就会被当成命令送进内容分类器，得到「unknown command, default
+        approval」—— 判据从 ToolMeta 掉进命令分类兜底，审计里还可能被记成
+        内容级阻断（钉住这条口径的是
+        tests/test_permission_gate_content_bound_tools.py::test_schedule_op_non_create_falls_back_to_tool_level
+        与 tests/test_ops_content_classification.py::test_schedule_op_non_create_has_no_bound_command）。
         """
         action = (args.get("action") or "").strip()
         if action == "create":
@@ -274,8 +282,6 @@ class ScheduleOpTool(BaseTool):
         if action == "cancel":
             sid = str(args.get("schedule_id") or "").strip()
             return f"schedule_op cancel: {sid}" if sid else None
-        if action == "list":
-            return "schedule_op list"
         return None
 
     async def execute(self, context, action, mode="interval", interval_minutes=None,

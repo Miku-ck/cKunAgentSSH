@@ -91,6 +91,12 @@ def _payload_keys(method: str, src: str) -> set[str]:
     if not pm:
         raise AssertionError(f"{method} 的签名里找不到 payload 参数")
     rest = head[pm.end():]
+    # 泛型包装要先剥掉：`Partial<{ a: T; b: T }>` 是「部分更新 PUT」的写法
+    # （不传的键 = 不改），不剥的话下面那个可选组会把 "Partial" 本身当成接口名去
+    # client.ts 里找，报出「找不到接口 Partial」——契约本身没坏，是读法跟不上写法。
+    generic = re.match(r"\s*(?:Partial|Omit|Pick|Readonly)\s*<\s*", rest)
+    if generic:
+        rest = rest[generic.end():]
     if rest.lstrip().startswith("{"):
         return _keys_of_object(_balanced(rest, rest.index("{")))
     tm = re.match(r"\s*(?:Partial<)?([A-Za-z_][\w]*)>?", rest)
