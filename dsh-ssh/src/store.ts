@@ -3,6 +3,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { dataFile, expandHome } from './dsh-home.ts'
 import type { HostEntry } from './protocol.ts'
+import { createCredentialVault, type CredentialVault, type HostSecrets } from './vault.ts'
 
 const FILE = 'ckun-dsh-ssh.json'
 
@@ -13,15 +14,19 @@ interface StoreFile {
 
 /**
  * The host registry: one JSON file under the DSH home (~/.dsh/ckun-dsh-ssh.json),
- * written atomically with best-effort 0600. Passwords passphrases live here for
- * M1 (documented); moving them to the DSH credentials service is tracked work.
+ * written atomically with best-effort 0600. When the DSH credentials service is
+ * available, passwords/passphrases live in credential records (`ckun-ssh/<id>`
+ * grant records) and the JSON file carries no secrets; otherwise the secrets
+ * fall back to this 0600 file (the M1 path, still supported).
  */
 export class HostStore {
   private readonly file: string
+  private readonly vault: CredentialVault
   private data: StoreFile
 
-  constructor() {
+  constructor(vault?: CredentialVault) {
     this.file = dataFile(FILE)
+    this.vault = vault ?? createCredentialVault(undefined)
     this.data = this.load()
   }
 
@@ -55,27 +60,65 @@ export class HostStore {
     return this.data.hosts.find((h) => h.alias === alias)
   }
 
+  /**
+   * Entry with effective secrets resolved (credential vault first, legacy JSON
+   * as fallback). Connection paths must use this; summaries can use get().
+   */
+  async getWithSecrets(alias: string): Promise<HostEntry | undefined> {
+    const base = this.get(alias)
+    if (!base) return undefined
+    if (!this.vault.available) return base
+    const secrets = await this.vault.read(alias)
+    const merged: HostEntry = { ...base }
+    if (secrets.password) merged.password = secrets.password
+    if (secrets.passphrase) merged.passphrase = secrets.passphrase
+    return merged
+  }
+
   /** Insert or update one host; blank secrets keep the stored values (edit flow). */
-  upsert(input: Omit<HostEntry, 'createdAt' | 'updatedAt'>): HostEntry {
+  async upsert(input: Omit<HostEntry, 'createdAt' | 'updatedAt'>): Promise<HostEntry> {
     const now = Date.now()
     const existing = this.get(input.alias)
-    const next: HostEntry = { ...input, createdAt: existing?.createdAt ?? now, updatedAt: now }
+    const merged: HostSecrets = {
+      password: input.password || existing?.password || undefined,
+      passphrase: input.passphrase || existing?.passphrase || undefined,
+    }
+    const next: HostEntry = {
+      ...input,
+      password: undefined,
+      passphrase: undefined,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    }
+    if (!this.vault.available) {
+      next.password = merged.password
+      next.passphrase = merged.passphrase
+    }
     if (existing) {
-      if (!next.password && existing.password) next.password = existing.password
-      if (!next.passphrase && existing.passphrase) next.passphrase = existing.passphrase
       Object.assign(existing, next)
     } else {
       this.data.hosts.push(next)
     }
     this.save()
-    return next
+    if (this.vault.available) {
+      if (merged.password || merged.passphrase) await this.vault.save(input.alias, merged)
+      else await this.vault.remove(input.alias)
+    }
+    return { ...next, ...merged }
   }
 
-  remove(alias: string): boolean {
+  async remove(alias: string): Promise<boolean> {
     const before = this.data.hosts.length
     this.data.hosts = this.data.hosts.filter((h) => h.alias !== alias)
     const removed = this.data.hosts.length < before
     if (removed) this.save()
+    if (removed && this.vault.available) {
+      try {
+        await this.vault.remove(alias)
+      } catch {
+        /* record cleanup is best effort */
+      }
+    }
     return removed
   }
 
@@ -83,7 +126,7 @@ export class HostStore {
    * Import ~/.ssh/config Host blocks that are not already configured.
    * ProxyJump hosts get a tag; IdentityFile is mapped to key auth.
    */
-  importSshConfig(): { imported: number; skipped: number } {
+  async importSshConfig(): Promise<{ imported: number; skipped: number }> {
     const cfgPath = join(expandHome('~'), '.ssh', 'config')
     let text: string
     try {
@@ -99,13 +142,13 @@ export class HostStore {
     let imported = 0
     let skipped = 0
     let current: SshConfigBlock | undefined
-    const commit = () => {
+    const commit = async () => {
       if (current?.host && current.alias) {
         if (this.get(current.alias)) {
           skipped++
           return
         }
-        this.upsert({
+        await this.upsert({
           alias: current.alias,
           host: current.host,
           port: current.port ?? 22,
@@ -128,7 +171,7 @@ export class HostStore {
       if (!m) continue
       const [, key, value] = m
       if (key === 'Host') {
-        commit()
+        await commit()
         // skip wildcard/alias-less blocks
         if (value.includes('*') || value.includes('?')) continue
         current = { alias: value, host: value }
@@ -141,7 +184,7 @@ export class HostStore {
         else if (key === 'SetEnv' && value.startsWith('SSH_HOST_ENV=')) current.environment = value.slice('SSH_HOST_ENV='.length)
       }
     }
-    commit()
+    await commit()
     return { imported, skipped }
   }
 }

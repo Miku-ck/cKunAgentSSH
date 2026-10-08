@@ -247,9 +247,9 @@ export const useAgentStore = defineStore('agent', () => {
     enableDynamicBudget?: boolean
     /** E1：意图识别 + 思考预算控制总开关 */
     enableIntentionGuide?: boolean
-    /** 成本熔断上限（USD）；undefined/0 = 后端默认 */
+    /** 成本熔断上限（USD）；不传 = 后端默认，显式 0 = 不设上限（与 client.ts 同口径） */
     maxCostUsd?: number
-    /** token 熔断上限；undefined/0 = 后端默认 */
+    /** token 熔断上限；不传 = 后端默认，显式 0 = 不设上限 */
     maxTotalTokens?: number
     skillIds?: string[]
     autoSkillMatch?: boolean

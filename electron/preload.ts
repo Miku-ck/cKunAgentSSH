@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { SshReconnectStatus } from './ssh-manager'
 import type { TunnelStatus } from './tunnel-manager'
+import type { GatewayHostKeyEvent, GatewayStatus } from './gateway-manager'
 
 /**
  * 安全暴露给渲染进程的 API
@@ -171,6 +172,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_event: any, data: TunnelStatus) => callback(data)
     ipcRenderer.on('tunnel:status', handler)
     return () => ipcRenderer.removeListener('tunnel:status', handler)
+  },
+
+  // TLS 接入网关（安全接入）
+  gatewayList: () => ipcRenderer.invoke('gateway:list'),
+  gatewaySave: (rec: any) => ipcRenderer.invoke('gateway:save', rec),
+  gatewayDelete: (id: string) => ipcRenderer.invoke('gateway:delete', id),
+  gatewayConnect: (id: string) => ipcRenderer.invoke('gateway:connect', id),
+  gatewayDisconnect: (id: string) => ipcRenderer.invoke('gateway:disconnect', id),
+  gatewayStatusAll: () => ipcRenderer.invoke('gateway:statusAll'),
+  gatewayChannels: (id: string) => ipcRenderer.invoke('gateway:channels', id),
+  gatewayTrustHostKey: (id: string, spki: string) => ipcRenderer.invoke('gateway:trustHostKey', id, spki),
+  /** 会话状态变化（含重连退避进度），每次迁移推一条 */
+  onGatewayStatus: (callback: (data: GatewayStatus) => void) => {
+    const handler = (_event: any, data: GatewayStatus) => callback(data)
+    ipcRenderer.on('gateway:status', handler)
+    return () => ipcRenderer.removeListener('gateway:status', handler)
+  },
+  /** 首次见到网关证书（TOFU）：UI 确认后调 gatewayTrustHostKey 落库 */
+  onGatewayHostKeyNew: (callback: (data: GatewayHostKeyEvent) => void) => {
+    const handler = (_event: any, data: GatewayHostKeyEvent) => callback(data)
+    ipcRenderer.on('gateway:host-key-new', handler)
+    return () => ipcRenderer.removeListener('gateway:host-key-new', handler)
   },
   fsSelectFile: () => ipcRenderer.invoke('fs:selectFile'),
   fsSelectImage: () => ipcRenderer.invoke('fs:selectImage'),

@@ -49,12 +49,12 @@
       <!-- 结果对比 -->
       <div v-if="results.length && !running" class="bulk-results">
         <div class="bulk-results-toolbar">
-          <button class="sc-btn" :disabled="running" @click="reRun">重新执行</button>
-          <button v-if="results.length > 1" class="sc-btn" :class="{ active: showDiff }" @click="showDiff = !showDiff">
+          <button class="btn btn-ghost" :disabled="running" @click="reRun">重新执行</button>
+          <button v-if="results.length > 1" class="btn btn-ghost" :class="{ 'btn-primary': showDiff }" @click="showDiff = !showDiff">
             {{ showDiff ? '返回逐节点视图' : '差异对比' }}
           </button>
-          <button class="sc-btn" @click="askAi">⚡ AI 分析结果</button>
-          <button class="sc-btn" @click="requestClose">关闭</button>
+          <button class="btn btn-ghost" @click="askAi">⚡ AI 分析结果</button>
+          <button class="btn btn-ghost" @click="requestClose">关闭</button>
         </div>
 
         <!-- 差异对比视图 -->
@@ -95,8 +95,8 @@
 
       <!-- 底部按钮（配置态） -->
       <div v-if="!results.length && !running" class="bulk-footer">
-        <button class="sc-btn" @click="requestClose">取消</button>
-        <button class="sc-btn primary" :disabled="!canRun" @click="run">
+        <button class="btn btn-ghost" @click="requestClose">取消</button>
+        <button class="btn btn-primary" :disabled="!canRun" @click="run">
           {{ checking ? '安全判定中…' : `执行（${checkedCount} 台并行）` }}
         </button>
       </div>
@@ -424,19 +424,6 @@ watch(remoteSessions, (sessions) => {
 
 .bulk-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 
-.sc-btn {
-  padding: 4px 12px;
-  font-size: 12px;
-  border-radius: 6px;
-  border: 1px solid var(--border-subtle);
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-.sc-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
-.sc-btn:disabled { opacity: 0.5; cursor: default; }
-.sc-btn.primary { color: var(--accent-primary); border-color: var(--accent-primary); }
-.sc-btn.active { color: var(--accent-primary); border-color: var(--accent-primary); }
 
 .bulk-running { padding: 30px 0; display: flex; flex-direction: column; gap: 10px; align-items: center; }
 .bulk-progress-bar {

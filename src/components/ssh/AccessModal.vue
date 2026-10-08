@@ -38,15 +38,11 @@
             <label>SPKI 指纹：</label>
             <span class="mono val">{{ form.trustedSpki || '尚未确认 —— 首次连接时弹窗确认' }}</span>
           </div>
-          <p class="note">
-            口令在已建立并确认过指纹的 TLS 通道内发送；角色与允许集由网关下发，本机改不了。
-            改地址、端口或 CA 会清掉已确认的指纹，下次连接重新确认。
-          </p>
         </div>
       </div>
       <div class="dlg-foot">
-        <button class="btn primary" :disabled="!canSave" @click="save">确定</button>
-        <button class="btn" @click="emit('close')">取消</button>
+        <button class="btn btn-primary" :disabled="!canSave" @click="save">确定</button>
+        <button class="btn btn-ghost" @click="emit('close')">取消</button>
       </div>
     </div>
   </div>
@@ -103,7 +99,7 @@ async function save(): Promise<void> {
 
 <style scoped>
 /* 排布复刻 designs/hsc-replica-mockup-v2.html 的「修改连接」：右对齐标签 + 左对齐控件。
-   组件层零硬编码色值。 */
+   页脚按钮走全局 styles/button.css，本组件不声明按钮样式。 */
 .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 60; }
 .dialog {
   width: 500px;
@@ -165,23 +161,5 @@ async function save(): Promise<void> {
 }
 .adv-toggle svg { width: 13px; height: 13px; transition: transform var(--transition-fast); }
 .adv-toggle svg.rot { transform: rotate(-90deg); }
-.note { font-size: 11.5px; color: var(--text-tertiary); margin: 0 0 14px; line-height: 1.6; }
 .dlg-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 6px 18px 18px; }
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 5px 14px;
-  border-radius: var(--radius-sm);
-  font-size: 13px;
-  border: 1px solid var(--border-default);
-  background: none;
-  color: var(--text-primary);
-  cursor: pointer;
-  font-family: inherit;
-  transition: background var(--transition-fast), border-color var(--transition-fast);
-}
-.btn:hover { background: var(--bg-hover); }
-.btn.primary { color: var(--accent-primary); border-color: var(--accent-primary); }
-.btn:disabled { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
 </style>

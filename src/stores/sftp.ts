@@ -426,7 +426,9 @@ async function remoteRefresh(): Promise<void> {
       scheduleRemoveTransfer(id)
     } catch (err: any) {
       t.status = 'error'
-      t.error = err?.message || '复制失败'
+      // 兜底文案不能也叫「复制失败」：外层 toast 已经以「复制失败: 名字 —」开头，
+      // 撞上这个兜底就原样说两遍。
+      t.error = err?.message || '未返回错误详情'
       t.endTime = Date.now()
       toast.error(`复制失败: ${t.name} — ${t.error}`)
       scheduleRemoveTransfer(id, 10000)
@@ -476,7 +478,7 @@ async function remoteRefresh(): Promise<void> {
       // 那正是进程被杀/通道异常中断的形态，此时 cp -r 可能只拷了一半。
       // 与 main 进程其余 exec 判定（exitCode !== 0）保持一致。
       if (result.exitCode !== 0) {
-        throw new Error(result.stderr || '复制失败')
+        throw new Error(result.stderr || '远端未返回原因')
       }
       t.status = 'done'
       t.endTime = Date.now()
@@ -484,7 +486,9 @@ async function remoteRefresh(): Promise<void> {
       scheduleRemoveTransfer(id)
     } catch (err: any) {
       t.status = 'error'
-      t.error = err?.message || '复制失败'
+      // 兜底文案不能也叫「复制失败」：外层 toast 已经以「复制失败: 名字 —」开头，
+      // 撞上这个兜底就原样说两遍。
+      t.error = err?.message || '未返回错误详情'
       t.endTime = Date.now()
       toast.error(`复制失败: ${t.name} — ${t.error}`)
       scheduleRemoveTransfer(id, 10000)

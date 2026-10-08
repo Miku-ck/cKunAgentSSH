@@ -157,9 +157,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — 允许 Electron 渲染进程来源 + 任意主机:5173（dev server 浏览器访问，涵盖局域网 IP）
+# CORS — 允许 Electron 渲染进程来源 + dev server 来源（浏览器访问，涵盖局域网 IP）
 # file:// renderer 的 Origin 头为 "null"，必须显式列入否则 Chromium 拦响应致前端显示"连接失败"
-# 浏览器从任意主机:5173 进入时携带不同 Origin，统一用正则匹配放行（仅 dev 环境，生产用 app://）
+# 浏览器从哪台机器进来都带不同 Origin，故用正则匹配（仅 dev 环境，生产用 app://）
 app.add_middleware(
     CORSMiddleware,
     # 仅放行 dev server 来源：localhost/127.0.0.1 + 局域网私有 IP（10./172.16-31./192.168.）

@@ -13,7 +13,7 @@
 | 主机密钥 | 只由人工「测试连接 → 信任指纹」固定（TOFU）；agent 连接未固定主机 **fail closed**；密钥不匹配（疑似 MITM）一律拒绝 |
 | ssh_exec | `readonly` 直放；`mutating` 审批（prod 主机默认拒绝，`allowProdMutations` 可放宽为仍审批）；`dangerous` 审批+强警告（prod 恒拒） |
 | GUI 执行 | 面板终端/命令框是人类操作面，不走 agent 审批门 |
-| 凭证存储 | `~/.dsh/ckun-dsh-ssh.json`（0600，原子写）。M1 明文存密码，接入 DSH 凭证服务列入后续里程碑 |
+| 凭证存储 | 密码/密钥口令存入 **DSH 凭证服务**的记录（`ckun-ssh/<id>` grant 记录，如 `~/.dsh/.credentials.yaml`）；宿主无凭证服务时回退到 `~/.dsh/ckun-dsh-ssh.json`（0600，原子写）。主机元数据始终在 JSON，密钥只进凭证服务 |
 
 命令分类器（`src/security.ts`）按 `&&`/`||`/`;`/`|` 分段，取最强级别：
 `rm -rf /…`、mkfs、dd of=/dev/、shutdown、systemctl stop/restart、user 管理、

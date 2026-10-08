@@ -38,6 +38,7 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/dsh-credentials": "^0.2.0-rc.2",
     "@deepseek-ai/dsh-host-webserver": "^0.2.0-rc.2",
     "@deepseek-ai/dsh-system-prompt": "^0.2.0-rc.2",
     "@deepseek-ai/dsh-tools": "^0.2.0-rc.2",
@@ -50,7 +51,8 @@
   },
   "scripts": {
     "build": "node build.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node test/vault.test.mjs && node test/engine2.mjs"
   },
   "license": "MIT"
 }

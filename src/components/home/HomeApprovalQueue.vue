@@ -55,7 +55,7 @@ async function batch(kind: 'approve' | 'deny') {
         v-if="agent.lastRunId"
         type="button"
         class="haq-goto"
-        :title="`滚到那条卡 · trace ${agent.lastRunId}`"
+        title="滚到那条审批卡"
         @click="emit('open-run')"
       >看过程 · №{{ agent.lastRunId }}</button>
     </header>

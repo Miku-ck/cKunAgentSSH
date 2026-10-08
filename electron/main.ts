@@ -1292,6 +1292,11 @@ function setupSSHIPC(): void {
     return gatewayManager!.statusAll()
   })
 
+  // 「通道」页签：渲染层按需拉一次快照（不推送，通道生命周期太短，推一条废一条）
+  handleTrusted('gateway:channels', (_event, id: string) => {
+    return gatewayManager!.channelsOf(id)
+  })
+
   // TOFU 指纹确认：UI 上确认过才写库，不符一律硬失败（不降级为警告）
   handleTrusted('gateway:trustHostKey', async (_event, id: string, spki: string) => {
     return gatewayStore!.setSpki(id, spki)

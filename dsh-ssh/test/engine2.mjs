@@ -2,7 +2,7 @@
 // Verifies: fail-closed unpinned hosts, TOFU pinning, exec, shell + resize,
 // local port-forward tunnels, host-key mismatch (MITM) rejection, pool state.
 import { generateKeyPairSync } from 'node:crypto'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import net from 'node:net'
@@ -12,7 +12,7 @@ const fakeHome = mkdtempSync(join(tmpdir(), 'ckun-ssh-test-'))
 process.env.DSH_HOME = fakeHome
 
 const ssh2mod = await import('ssh2')
-const { Server, Client } = (ssh2mod.default ?? ssh2mod)
+const { Server } = ssh2mod.default ?? ssh2mod
 const { HostStore } = await import('../src/store.ts')
 const { SshEngine } = await import('../src/engine.ts')
 
@@ -28,7 +28,8 @@ const check = (name, cond, extra = '') => {
   }
 }
 
-// ssh2 的 Server 需要 pkcs1 PEM（BEGIN RSA PRIVATE KEY）；pkcs8 对它报 "Unsupported key format"
+// ssh2's key parser accepts PKCS#1 ("BEGIN RSA PRIVATE KEY") and OpenSSH
+// formats, but not the PKCS#8 that node emits by default — so request pkcs1.
 const makeKey = () => generateKeyPairSync('rsa', {
   modulusLength: 2048,
   publicKeyEncoding: { type: 'spki', format: 'pem' },
@@ -37,8 +38,8 @@ const makeKey = () => generateKeyPairSync('rsa', {
 const keyA = makeKey()
 const keyB = makeKey()
 
-/** Spin up one in-process SSH server with the given host key. */
-async function startServer(privPem, state) {
+/** Spin up one in-process SSH server with the given host key (optional fixed port). */
+async function startServer(privPem, state, listenOn = 0) {
   const server = new Server({ hostKeys: [{ key: privPem }] }, (client) => {
     // expected: refused handshakes (TOFU capture) surface as server-side errors
     client.on('error', () => {})
@@ -59,13 +60,14 @@ async function startServer(privPem, state) {
       session.on('pty', (a) => a())
       session.on('window-change', (accept2, reject2, size) => {
         state.lastWindow = [size.rows, size.cols]
-        accept2()
+        // window-change is fire-and-forget (client sends want_reply=0), so
+        // accept2 is often undefined — never call it unguarded.
+        if (typeof accept2 === 'function') accept2()
       })
       session.on('exec', (accept2, reject2, info) => {
         const stream = accept2()
         if (info.command === 'echo:hello') {
           stream.write('hello\n')
-          stream.stderr.write('')
           stream.exit(0)
           stream.close()
         } else if (info.command === 'boom') {
@@ -84,7 +86,14 @@ async function startServer(privPem, state) {
       })
     })
   })
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  // bind errors must reject the promise; post-bind errors are handled per-connection
+  await new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(listenOn, '127.0.0.1', () => {
+      server.removeListener('error', reject)
+      resolve()
+    })
+  })
   return server
 }
 
@@ -93,8 +102,25 @@ const echo = net.createServer((s) => s.pipe(s))
 await new Promise((r) => echo.listen(0, '127.0.0.1', r))
 const state = { echoPort: echo.address().port, lastWindow: null }
 
-const store = new HostStore()
-store.upsert({
+// In-memory credentials stand-in: the store keeps secrets in a vault record
+// (like ctx.credentials would), never in the JSON file.
+const records = new Map()
+const mockCredentials = {
+  readRecord: async (k) => records.get(k),
+  modifyRecord: async (k, mutate) => {
+    const next = await mutate(records.get(k))
+    if (next === undefined) records.delete(k)
+    else records.set(k, next)
+    return records.get(k)
+  },
+  deleteRecord: async (k) => {
+    records.delete(k)
+  },
+}
+const { createCredentialVault } = await import('../src/vault.ts')
+
+const store = new HostStore(createCredentialVault(mockCredentials))
+await store.upsert({
   alias: 'test',
   host: '127.0.0.1',
   port: 0, // patched after the server is up
@@ -107,7 +133,11 @@ store.upsert({
 
 const server1 = await startServer(keyA.privateKey, state)
 const port = server1.address().port
-store.upsert({ alias: 'test', host: '127.0.0.1', port, user: 'u', auth: 'password', password: 'x', environment: 'dev', tags: [] })
+await store.upsert({ alias: 'test', host: '127.0.0.1', port, user: 'u', auth: 'password', password: 'x', environment: 'dev', tags: [] })
+
+// the auth VALUE is the string "password", so match the JSON KEYS, not the substring
+const jsonStore = JSON.stringify(store.get('test'))
+check('secret lives in the credential record, not the JSON store', records.has('ckun-ssh/test') && !/"password":|"passphrase":/.test(jsonStore), jsonStore)
 
 const engine = new SshEngine(store, { maxOutputBytes: () => 65536, keepaliveMs: () => 10000 })
 
@@ -128,7 +158,6 @@ try {
   const t2 = await engine.testHost('test', true)
   check('test with pin connects + profile', t2.ok === true && t2.profile !== undefined && /^SHA256:/.test(t2.fingerprint ?? ''), JSON.stringify(t2))
 
-  const { readFileSync } = await import('node:fs')
   const kh = readFileSync(join(fakeHome, 'ckun-dsh-ssh-knownhosts'), 'utf8')
   check('known-hosts file written with pin', kh.includes('[127.0.0.1]:') && kh.split(' ').length >= 2, kh.slice(0, 60))
 
@@ -149,9 +178,10 @@ try {
   const r3 = await abortP
   check('aborted exec reports cancelled', r3.success === false && /cancel/i.test(r3.error ?? ''), JSON.stringify(r3))
 
-  // 6. shell + resize
+  // 6. shell + resize (fresh pool fetch — never reuse a stale reference)
+  const shellClient = await engine.connect('test', false)
   await new Promise((resolve, reject) => {
-    client.shell({ term: 'xterm-256color', cols: 100, rows: 30 }, {}, (err, ch) => {
+    shellClient.shell({ term: 'xterm-256color', cols: 100, rows: 30 }, {}, (err, ch) => {
       if (err) return reject(err)
       ch.on('data', (d) => {
         if (String(d).includes('echo:hi')) {
@@ -198,9 +228,23 @@ try {
   const hosts = engine.listHosts()
   check('listHosts shows pinned + connected', hosts[0].pinned === true && hosts[0].connected === true && hosts[0].keyPath === undefined)
 
-  // 9. MITM: same host:port, different host key -> must be refused
-  await new Promise((r) => server1.close(r))
-  const server2 = await startServer(keyB.privateKey, state)
+  // 9. MITM: same host:port, different host key -> must be refused.
+  // Drop the pooled connection so the next connect() re-handshakes (and
+  // re-verifies the host key) against the new server.
+  engine.disconnect('test')
+  // close() without a callback stops the listener immediately; re-bind the
+  // same port and retry while stale sockets linger.
+  server1.close()
+  let server2
+  for (let attempt = 0; ; attempt++) {
+    try {
+      server2 = await startServer(keyB.privateKey, state, port)
+      break
+    } catch (e) {
+      if (attempt >= 25 || !/EADDRINUSE/.test(String(e?.code ?? e))) throw e
+      await new Promise((r) => setTimeout(r, 100))
+    }
+  }
   let mitm = null
   try {
     await engine.connect('test', false)

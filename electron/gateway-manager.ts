@@ -12,7 +12,7 @@
  */
 import { app } from 'electron'
 import { GatewayStore, type GatewayRecord } from './gateway-store'
-import { GatewayTransport, type HostKeyDecision } from './transports/gateway-transport'
+import { GatewayTransport, type ChannelRow, type HostKeyDecision } from './transports/gateway-transport'
 import type { HelloOkPayload } from '../shared/gateway-mux'
 
 export type GatewayState = 'idle' | 'connecting' | 'online' | 'reconnecting' | 'error'
@@ -32,6 +32,15 @@ export interface GatewayStatus {
   sinceAt?: number
   /** 第几次重连（0 = 未断过） */
   attempt?: number
+}
+
+/** 首次见到网关证书时推给 UI 的确认事件（与 ssh:host-key-new 同一形状） */
+export interface GatewayHostKeyEvent {
+  id: string
+  name: string
+  host: string
+  port: number
+  spki: string
 }
 
 interface Entry {
@@ -65,6 +74,11 @@ export class GatewayManager {
     const e = this.entries.get(id)
     if (!e || e.state !== 'online' || !e.transport) return null
     return e.transport
+  }
+
+  /** 「通道」页签的数据源：帧层的可观测面是这条数据面唯一能自证的地方 */
+  channelsOf(id: string): ChannelRow[] {
+    return this.entries.get(id)?.transport?.channelRows() ?? []
   }
 
   private statusOf(e: Entry): GatewayStatus {

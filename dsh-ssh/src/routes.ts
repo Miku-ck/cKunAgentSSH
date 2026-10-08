@@ -93,13 +93,13 @@ export function makeRoutes(engine: SshEngine, store: HostStore): { routes: WebRo
             tags,
             description: body.description === undefined ? undefined : str(body.description) || undefined,
           }
-          store.upsert(entry)
+          await store.upsert(entry)
           return sendJson(res, 200, { ok: true, host: engine.listHosts(alias).find((h) => h.alias === alias) })
         }
         if (req.method === 'DELETE') {
           const alias = queryOf(req).get('alias') ?? ''
           if (!alias) return sendError(res, 400, 'alias query param required')
-          return sendJson(res, 200, { ok: store.remove(alias) })
+          return sendJson(res, 200, { ok: await store.remove(alias) })
         }
         sendError(res, 405, 'method not allowed')
       } catch (err) {
@@ -114,7 +114,7 @@ export function makeRoutes(engine: SshEngine, store: HostStore): { routes: WebRo
     handler: async (req, res) => {
       try {
         if (req.method !== 'POST') return sendError(res, 405, 'method not allowed')
-        const result = store.importSshConfig()
+        const result = await store.importSshConfig()
         return sendJson(res, 200, result)
       } catch (err) {
         sendError(res, 500, (err as Error).message)

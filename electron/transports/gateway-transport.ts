@@ -42,10 +42,17 @@ export class TunnelDeniedError extends Error {
 class MuxChannel extends Duplex {
   // 不能叫 closed —— node:stream 的 Duplex 自己有一个公开的 closed
   private torn = false
+  bytesUp = 0
+  bytesDown = 0
+  /** 对端已 FIN（它那一侧写完），本侧仍可继续写 */
+  peerFin = false
 
   constructor(
     private readonly sess: GatewaySession,
     readonly chan: number,
+    /** 本端发起时 = 目标；对端发起时 = 网关让我们回连的目标 */
+    readonly dst: { host: string; port: number },
+    readonly initiatedByPeer: boolean,
   ) {
     super({ highWaterMark: HIGH_WATER })
   }
@@ -56,6 +63,7 @@ class MuxChannel extends Duplex {
   }
 
   override _write(chunk: Buffer, _enc: BufferEncoding, cb: (e?: Error) => void): void {
+    this.bytesUp += chunk.length
     this.sess.writeBytes(encodeFrame({ type: 'data', chan: this.chan, payload: new Uint8Array(chunk) }), cb)
   }
 
@@ -74,17 +82,31 @@ class MuxChannel extends Duplex {
 
   pushData(buf: Buffer): void {
     if (this.torn) return
+    this.bytesDown += buf.length
     if (!this.push(buf)) this.sess.pauseSocket()
   }
 
   pushEof(): void {
     if (this.torn) return
+    this.peerFin = true
     this.push(null)
   }
 
   markClosed(): void {
     this.torn = true
   }
+}
+
+/** 通道表的一行，交给 UI 的「通道」页签展示 */
+export interface ChannelRow {
+  chan: number
+  /** true = 网关发起（-R），方向由 chan 奇偶隐含 */
+  fromPeer: boolean
+  dstHost: string
+  dstPort: number
+  bytesUp: number
+  bytesDown: number
+  state: 'open' | 'peer-fin'
 }
 
 export interface SessionOptions {
@@ -232,7 +254,7 @@ export class GatewaySession {
 
   /** 对端主动开一条通道（-R：网关绑定端口上来了连接） */
   private onPeerOpen(chan: number, p: { host: string; port: number }): void {
-    const ch = new MuxChannel(this, chan)
+    const ch = new MuxChannel(this, chan, { host: p.host, port: p.port }, true)
     this.channels.set(chan, ch)
     this.sendRaw(encodeFrame({ type: 'openOk', chan }))
     for (const h of this.inboundHandlers) h(ch)
@@ -242,7 +264,7 @@ export class GatewaySession {
     await this.ready
     const chan = allocChan('odd', new Set(this.channels.keys()))
     if (chan === null) throw new TunnelDeniedError('quota', '本端通道号段已耗尽')
-    const ch = new MuxChannel(this, chan)
+    const ch = new MuxChannel(this, chan, { host: dstHost, port: dstPort }, false)
     this.channels.set(chan, ch)
     const err = await new Promise<Error | null>(resolve => {
       this.pendingOpen.set(chan, resolve)
@@ -341,6 +363,19 @@ export class GatewaySession {
     this.resumeSocketIfIdle()
   }
 
+  /** 通道表快照（UI 的「通道」页签用）。方向由 chan 奇偶隐含，这里一并给出。 */
+  channelRows(): ChannelRow[] {
+    return [...this.channels.values()].map(c => ({
+      chan: c.chan,
+      fromPeer: c.initiatedByPeer,
+      dstHost: c.dst.host,
+      dstPort: c.dst.port,
+      bytesUp: c.bytesUp,
+      bytesDown: c.bytesDown,
+      state: c.peerFin ? 'peer-fin' : 'open',
+    }))
+  }
+
   kill(reason: string): void {
     if (this.dead) return
     this.dead = true
@@ -430,6 +465,10 @@ export class GatewayTransport implements TunnelTransport {
       sessionId: this.session?.info?.sessionId || '',
       spki: this.lastSpki,
     }
+  }
+
+  channelRows(): ChannelRow[] {
+    return this.session?.channelRows() ?? []
   }
 
   async start(): Promise<void> {

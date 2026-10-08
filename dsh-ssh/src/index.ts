@@ -21,6 +21,7 @@ import type {} from '@deepseek-ai/dsh-tools'
 import { SshEngine } from './engine.ts'
 import { makeRoutes } from './routes.ts'
 import { HostStore } from './store.ts'
+import { createCredentialVault } from './vault.ts'
 import { execPolicy } from './security.ts'
 import { sshConnectTool, sshExecTool, sshListTool } from './tools.ts'
 
@@ -102,7 +103,9 @@ Hosts whose host key is not pinned (state UNPINNED) cannot be connected — ask 
  * @param config - resolved (possibly live) config.
  */
 export function apply(ctx: Context, config: ResolvedConfig): void {
-  const store = new HostStore()
+  // Secrets go to the DSH credentials service when the host provides one;
+  // otherwise HostStore falls back to its 0600 JSON file.
+  const store = new HostStore(createCredentialVault(ctx.credentials))
   const engine = new SshEngine(store, {
     maxOutputBytes: () => val(config.maxOutputBytes, 65536),
     keepaliveMs: () => val(config.keepaliveMs, 30000),

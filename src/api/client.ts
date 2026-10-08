@@ -36,7 +36,6 @@ async function ensureApiToken(): Promise<void> {
         }
       }
     } catch {
-      // 获取失败保持 null，请求不带该头
       apiToken = null
     } finally {
       apiTokenPromise = null

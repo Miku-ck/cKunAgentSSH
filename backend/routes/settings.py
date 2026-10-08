@@ -171,7 +171,6 @@ async def test_model_connection(config_id: str):
     import httpx
     import time as _time
     import logging
-    import netconfig
 
     log = logging.getLogger("cKunAgentic.settings")
 
@@ -462,7 +461,7 @@ def get_web_tools_settings():
     source = "env" if env_key else ("db" if db_key else "")
     return {
         "tavily_api_key_set": bool(active),
-        "tavily_api_key_masked": (active[:4] + "…" + active[-4:]) if len(active) > 12 else ("已设置" if active else ""),
+        "tavily_api_key_masked": _mask_secret(active),
         "tavily_api_key_source": source,
     }
 
@@ -631,6 +630,12 @@ def _is_numeric_setting_value(value: str) -> bool:
     return True
 
 
+def _mask_secret(value: str) -> str:
+    """密钥展示的统一口径：前 4 后 4，短到拼回去没有意义的就只报「已设置」。
+    诊断面板与 web-tools 那页此前各写一份同样的表达式，改一处就会漏另一处。"""
+    return (value[:4] + "…" + value[-4:]) if len(value) > 12 else ("已设置" if value else "")
+
+
 def _mask_value(key: str, value: str) -> str:
     lowered = key.lower()
     if "proxy" in lowered:
@@ -643,8 +648,7 @@ def _mask_value(key: str, value: str) -> str:
         # 16 位纯数字的 tavily key 依旧被打码。
         return value
     if any(h in lowered for h in _DIAG_SECRET_HINTS):
-        # 与 web-tools 的密钥展示同一口径（前 4 后 4），两处两种掩码法只会让人猜不准
-        return (value[:4] + "…" + value[-4:]) if len(value) > 12 else ("已设置" if value else "")
+        return _mask_secret(value)
     return value
 
 

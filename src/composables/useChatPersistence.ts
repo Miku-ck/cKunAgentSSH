@@ -14,8 +14,6 @@ import type {
 
 import { genId } from '@/utils/id'
 import { parseBackendTs } from '@/utils/format'
-// 审查修复：原文件在 deleteConversation 失败分支使用了 useToastStore 但从未导入
-// （typecheck TS2304；运行时该分支一触发就抛 ReferenceError，toast 永远弹不出来）
 import { useToastStore } from '@/stores/toast'
 
 /** 后端 API 的会话模式标识（固定 Agent 模式后仅 ssh 一种） */

@@ -79,7 +79,7 @@
 
         <div class="modal-foot">
           <button class="btn" @click="emit('close')">取消</button>
-          <button class="btn primary" :disabled="!canSave" @click="save">
+          <button class="btn btn-primary" :disabled="!canSave" @click="save">
             {{ bindWarn ? '确认风险并保存' : '保存' }}
           </button>
         </div>

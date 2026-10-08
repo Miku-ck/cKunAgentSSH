@@ -18,17 +18,14 @@ const props = withDefaults(defineProps<{
   isLive: false,
 })
 
-// H14 修复：运行中且没有任何内容时显示"思考中..."占位提示
-// 工具调用情况不在前端显示（无 hasToolCalls 判定项，条件即 isLive 且无 reasoning）
+// 工具调用不进这个判定：条件就是 isLive 且无 reasoning，前端没有 hasToolCalls 这一项
 const isPreparing = computed(() => props.isLive && !props.trace.reasoning?.trim())
-// H15 修复：深度思考统一由外层 ThinkingBlock 展示，此处不再重复渲染
 </script>
 
 <template>
   <div class="agent-trace-inline">
     <!-- 扁平日志体：当前仅承载准备中占位提示 -->
     <div class="trace-body">
-      <!-- H14 修复：准备中占位提示 -->
       <div v-if="isPreparing" class="preparing-row">
         <span class="preparing-text">思考中</span>
         <span class="preparing-dots">
@@ -55,7 +52,6 @@ const isPreparing = computed(() => props.isLive && !props.trace.reasoning?.trim(
   gap: 6px;
 }
 
-/* H14 修复：准备中占位提示 */
 .preparing-row {
   display: flex;
   align-items: center;

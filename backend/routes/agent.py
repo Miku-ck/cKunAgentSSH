@@ -570,7 +570,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
     if not effective_model_id:
         default_model = await asyncio.to_thread(db.get_default_model, SSH_MODE)
         if default_model:
-            # 审查外热修：同 chat.py — 优先行主键 id（原优先 LLM 模型名会 404 模型不存在）
+            # 审查外热修：优先行主键 id（原优先 LLM 模型名会 404 模型不存在）
             effective_model_id = default_model.get("id") or default_model.get("model_id")
     if not effective_model_id:
         default_model = await asyncio.to_thread(db.get_default_model, None)

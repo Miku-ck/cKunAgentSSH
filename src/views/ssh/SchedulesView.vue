@@ -8,8 +8,8 @@
         <span class="schedules-sub" v-if="items.length">共 {{ items.length }} 个任务</span>
       </div>
       <div class="schedules-actions">
-        <button class="sc-btn" @click="load()" :disabled="loading">刷新</button>
-        <button class="sc-btn primary" @click="openCreate">新建任务</button>
+        <button class="btn btn-ghost" @click="load()" :disabled="loading">刷新</button>
+        <button class="btn btn-primary" @click="openCreate">新建任务</button>
       </div>
     </div>
 
@@ -73,7 +73,7 @@
           </div>
         </div>
         <div class="modal-actions">
-          <button class="sc-btn" @click="historyFor = null">关闭</button>
+          <button class="btn btn-ghost" @click="historyFor = null">关闭</button>
         </div>
       </div>
     </div>
@@ -184,8 +184,8 @@
           </label>
         </div>
         <div class="modal-actions">
-          <button class="sc-btn" @click="editing = null">取消</button>
-          <button class="sc-btn primary" @click="save" :disabled="saving || !form.name.trim()">保存</button>
+          <button class="btn btn-ghost" @click="editing = null">取消</button>
+          <button class="btn btn-primary" @click="save" :disabled="saving || !form.name.trim()">保存</button>
         </div>
       </div>
     </div>
@@ -690,19 +690,6 @@ onUnmounted(() => {
 .schedules-sub { font-size: 12px; color: var(--text-tertiary); font-weight: 400; }
 .schedules-actions { display: flex; gap: 8px; }
 
-.sc-btn {
-  padding: 4px 12px;
-  font-size: 12px;
-  border-radius: 6px;
-  border: 1px solid var(--border-subtle);
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: background var(--transition-fast), color var(--transition-fast);
-}
-.sc-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
-.sc-btn:disabled { opacity: 0.5; cursor: default; }
-.sc-btn.primary { color: var(--accent-primary); border-color: var(--accent-primary); }
 
 .schedule-list { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
 .schedule-card {

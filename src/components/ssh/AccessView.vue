@@ -6,10 +6,7 @@
       <button class="hsc-tab" :class="{ on: tab === 'conn' }" @click="tab = 'conn'">连接</button>
       <button class="hsc-tab" :class="{ on: tab === 'chan' }" @click="openChanTab">通道</button>
       <span class="spacer"></span>
-      <button class="add-conn" @click="openCreate">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        添加连接
-      </button>
+      <button class="btn btn-primary" @click="openCreate">＋ 添加连接</button>
     </div>
 
     <div class="hsc-body">
@@ -17,7 +14,7 @@
         <rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/>
       </svg>
 
-      <div v-if="tab === 'conn'" class="card-grid">
+      <div v-if="tab === 'conn'" class="card-grid" :class="{ 'is-empty': !accessStore.gateways.length }">
         <div v-for="gw in accessStore.gateways" :key="gw.id" class="conn-card">
           <div class="conn-head">
             <span class="conn-ico">
@@ -33,7 +30,8 @@
           <div class="conn-foot">
             <span class="st" :class="stClass(gw.id)">{{ stLabel(gw.id) }}</span>
             <button
-              class="btn solid sm"
+              class="btn btn-sm"
+              :class="stateOf(gw.id) === 'online' ? 'btn-danger' : 'btn-primary'"
               :disabled="busyId === gw.id || stateOf(gw.id) === 'connecting' || stateOf(gw.id) === 'reconnecting'"
               @click="toggle(gw.id)"
             >{{ actionLabel(gw.id) }}</button>
@@ -52,15 +50,10 @@
 
         <div v-if="!accessStore.gateways.length" class="empty">
           <div class="t">还没有接入网关</div>
-          <div class="d">网关是内网自己跑的一个单文件进程（gateway/hillgw.mjs）。添加后用口令登录，隧道规则再搭这条会话。</div>
-          <button class="btn primary" @click="openCreate">＋ 添加连接</button>
         </div>
       </div>
 
       <div v-else class="chan-pane">
-        <p class="pane-note">
-          奇数 chan 由本机分配、偶数由网关分配 —— 方向不占帧头字节，所以 -R 不需要第二套帧。
-        </p>
         <select v-if="onlineIds.length" v-model="chanGw" class="gw-pick">
           <option v-for="id in onlineIds" :key="id" :value="id">{{ nameOf(id) }}</option>
         </select>
@@ -73,12 +66,12 @@
               <td>{{ r.dstHost }}:{{ r.dstPort }}</td>
               <td>{{ fmt(r.bytesUp) }}</td>
               <td>{{ fmt(r.bytesDown) }}</td>
-              <td>{{ r.state === 'peer-fin' ? '已 FIN — 单向 EOF，等对端写完' : '开放' }}</td>
+              <td>{{ r.state === 'peer-fin' ? '已 FIN' : '开放' }}</td>
             </tr>
           </tbody>
         </table>
         <p v-else class="pane-note">{{ onlineIds.length ? '当前没有活动通道。' : '没有在线的网关。' }}</p>
-        <button class="btn sm refresh" :disabled="!onlineIds.length" @click="loadChannels">刷新</button>
+        <button class="btn btn-sm refresh" :disabled="!onlineIds.length" @click="loadChannels">刷新</button>
       </div>
     </div>
 
@@ -104,10 +97,9 @@
           <span class="lbl">本次收到的服务端证书 SPKI / SHA-256</span>
           {{ pending.spki }}
         </div>
-        <p class="foot">网关身份以 CA 签发的服务端证书为准，但 CA 覆盖整个内网，所以这里额外记一枚 SPKI 指纹；此后不符即硬失败，不降级为警告。</p>
         <div class="modal-foot">
-          <button class="btn" @click="rejectKey">取消</button>
-          <button class="btn primary" @click="acceptKey">信任并连接</button>
+          <button class="btn btn-ghost" @click="rejectKey">取消</button>
+          <button class="btn btn-primary" @click="acceptKey">信任并连接</button>
         </div>
       </div>
     </div>
@@ -271,7 +263,8 @@ onUnmounted(() => { if (delTimer) clearTimeout(delTimer) })
 
 <style scoped>
 /* 全量消费 variables.css 令牌，零硬编码色值（对齐 designs/hsc-replica-mockup-v2.html 的排布）。
-   注意：CTA 用描边而不是 HSC 的实心块 —— 见 TunnelView.vue 里 .btn.primary 的同一取舍。 */
+   按钮一律走全局 styles/button.css（.btn / .btn-primary / .btn-danger / .btn-ghost / .btn-sm），
+   本组件不另声明按钮样式，尺寸与字重因此与隧道页、连接弹窗完全同源。 */
 .access-view {
   position: absolute;
   inset: 0;
@@ -306,23 +299,17 @@ onUnmounted(() => { if (delTimer) clearTimeout(delTimer) })
   font-weight: 600;
 }
 .spacer { flex: 1; }
-.add-conn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  border: none;
-  background: none;
-  cursor: pointer;
-  color: var(--accent-primary);
-  font-size: 13px;
-  font-family: inherit;
-  padding: 13px 0 10px;
-  margin-bottom: -1px;
-}
-.add-conn:hover { text-decoration: underline; }
-.add-conn svg { width: 14px; height: 14px; }
+/* 标签条右端的主操作：按钮本体完全交给全局 .btn，这里只把它按到标签基线上 */
+.hsc-tabs > .btn { margin-bottom: 9px; }
 
-.hsc-body { flex: 1; overflow: auto; padding: 22px; position: relative; }
+.hsc-body {
+  flex: 1;
+  overflow: auto;
+  padding: 22px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
 /* 水印：HSC 那是他人商标，同位同透明度换成本产品 brand 图形 */
 .wm {
   position: absolute;
@@ -334,7 +321,8 @@ onUnmounted(() => { if (delTimer) clearTimeout(delTimer) })
   opacity: 0.07;
   pointer-events: none;
 }
-.card-grid { display: flex; flex-wrap: wrap; gap: 18px; align-content: flex-start; position: relative; }
+.card-grid { display: flex; flex-wrap: wrap; gap: 18px; align-content: flex-start; position: relative; flex: 1; }
+.card-grid.is-empty { justify-content: center; align-content: center; }
 
 .conn-card {
   width: 282px;
@@ -389,25 +377,6 @@ onUnmounted(() => { if (delTimer) clearTimeout(delTimer) })
 .st.err { color: var(--danger-text); }
 .st.warn { color: var(--status-warn-text); }
 
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 5px 14px;
-  border-radius: var(--radius-sm);
-  font-size: 13px;
-  border: 1px solid var(--border-default);
-  background: none;
-  color: var(--text-primary);
-  cursor: pointer;
-  font-family: inherit;
-  transition: background var(--transition-fast), border-color var(--transition-fast);
-}
-.btn:hover { background: var(--bg-hover); }
-.btn.primary { color: var(--accent-primary); border-color: var(--accent-primary); }
-.btn.sm { padding: 3px 12px; font-size: 12.5px; }
-.btn:disabled { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
 .icon-btn {
   width: 26px;
   height: 26px;
@@ -476,15 +445,14 @@ table.chan tr.fin td { color: var(--text-tertiary); }
 .statusbar .sep { color: var(--border-default); }
 
 .empty {
+  width: min(420px, 100%);
   border: 1px dashed var(--border-default);
   border-radius: var(--radius-lg);
   padding: 44px 20px;
   text-align: center;
   color: var(--text-tertiary);
 }
-.empty .t { color: var(--text-secondary); font-size: 13px; margin-bottom: 4px; }
-.empty .d { font-size: 12px; }
-.empty .btn { margin-top: 14px; }
+.empty .t { color: var(--text-secondary); font-size: 13px; }
 
 .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 60; }
 .overlay.show { display: flex; }
@@ -508,9 +476,7 @@ table.chan tr.fin td { color: var(--text-tertiary); }
   padding: 9px 10px;
   line-height: 1.6;
   word-break: break-all;
-  margin-bottom: 10px;
 }
 .spki .lbl { display: block; color: var(--text-tertiary); font-size: 10.5px; margin-bottom: 3px; }
-.foot { font-size: 11.5px; color: var(--text-tertiary); }
 .modal-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 </style>

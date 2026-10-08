@@ -88,6 +88,28 @@ export class SshEngine {
     return { connections, tunnels: [...this.tunnels.values()].map((t) => t.info) }
   }
 
+  /** True while the transport is usable (ssh2 keeps the socket on `_sock`). */
+  private isAlive(client: ClientType): boolean {
+    const sock = (client as unknown as { _sock?: { destroyed?: boolean } })._sock
+    return sock !== undefined && sock.destroyed !== true
+  }
+
+  /**
+   * Close one pooled connection. The next connect() re-handshakes and
+   * re-verifies the host key. GUI "断开连接 / 重新校验" uses this.
+   */
+  disconnect(alias: string): void {
+    const entry = this.pool.get(alias)
+    if (!entry) return
+    this.pool.delete(alias)
+    entry.state = 'closed'
+    try {
+      entry.client.destroy()
+    } catch {
+      /* ignore */
+    }
+  }
+
   /**
    * Get (or lazily create) the pooled connection for a host.
    * `allowTofu` permits pinning a first-seen host key — the GUI pin flow passes
@@ -95,9 +117,11 @@ export class SshEngine {
    */
   async connect(alias: string, allowTofu: boolean): Promise<ClientType> {
     const existing = this.pool.get(alias)
-    if (existing && existing.state === 'open') return existing.client
+    // Never hand out a dead transport: between the socket dying and the
+    // 'close' event landing, state may still read 'open'.
+    if (existing && existing.state === 'open' && this.isAlive(existing.client)) return existing.client
     if (existing) this.pool.delete(alias)
-    const host = this.store.get(alias)
+    const host = await this.store.getWithSecrets(alias)
     if (!host) throw new Error(`unknown host: ${alias}（先用 ssh_list 查看已配置主机）`)
     if (!allowTofu && !this.knownHosts.pinned(host.host, host.port || 22)) {
       throw new Error(
@@ -364,6 +388,8 @@ export class SshEngine {
       'for pm in dnf yum apt-get apt pacman zypper apk; do command -v $pm >/dev/null 2>&1 && { echo "P=$pm"; break; }; done; ' +
       'echo "K=$(uname -sr 2>/dev/null)"; echo "UP=$(uptime -p 2>/dev/null || uptime)"; echo "HD=$(cd ~ 2>/dev/null && pwd)"\' || true'
     const r = await this.exec(alias, probe, 15000)
+    // A transport-level failure must not masquerade as an (empty) profile.
+    if (r.error) throw new Error(r.error)
     const get = (k: string): string | undefined => {
       const m = r.stdout.match(new RegExp(`^${k}=(.*)$`, 'm'))
       return m ? m[1].trim() || undefined : undefined
@@ -513,7 +539,7 @@ export class SshEngine {
     this.stopAllTunnels()
     for (const conn of this.pool.values()) {
       try {
-        conn.client.end()
+        conn.client.destroy()
       } catch {
         /* ignore */
       }
