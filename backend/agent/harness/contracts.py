@@ -50,6 +50,15 @@ TERMINAL_RUN_STATES: frozenset[str] = frozenset(
 )
 
 
+# 会改动作文件系统工具名（run 摘要的 mutated 统计与预算守卫的「已触碰文件」共用）。
+# 原先 driver._FILE_MUTATION_TOOLS 与 flow._FILE_MUTATION_TOOLS 各写一份字面量，
+# 两者之间唯一的联系是 flow 那句「与 driver 对齐」的注释 —— 加一个注册名只改一处，
+# 摘要与预算就会静默分叉（一侧把文件变更算成未知工具）。
+# 必须用 builtin 实际注册名：work 模式旧名（write_file/patch_file/edit_file）已随
+# 全库清理移除，留旧名的那一侧正是 2026-09 那次修复的成因。
+FILE_MUTATION_TOOLS: frozenset[str] = frozenset({"file_write", "file_edit"})
+
+
 class ErrorType(str, Enum):
     """错误分类 — Stirrups 用于决定恢复策略"""
     TRANSIENT = "transient"        # 瞬时（网络/超时/503）— 重试

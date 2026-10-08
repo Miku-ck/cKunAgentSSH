@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from agent.audit import append_record_async
 from agent.remote_protocol import has_exit_sentinel
 
-from ..contracts import ReinDecision, ReinPoint, RunContext, TraceEvent
+from ..contracts import FILE_MUTATION_TOOLS, ReinDecision, ReinPoint, RunContext, TraceEvent
 from .core import _audit_environment, tool_call_signature
 
 logger = logging.getLogger(__name__)
@@ -305,11 +305,9 @@ class DynamicBudgetRein:
     point: ReinPoint = field(default=ReinPoint.POST_ITERATION, init=False)
     priority: int = field(default=3, init=False)
 
-    # 文件变更工具集（与 driver._FILE_MUTATION_TOOLS 对齐；必须用 builtin 实际
-    # 注册名 —— work 模式旧名 write_file/edit_file 等已随全库清理移除）
-    _FILE_MUTATION_TOOLS: frozenset = field(default_factory=lambda: frozenset({
-        "file_write", "file_edit",
-    }), init=False, repr=False)
+    # 文件变更工具集取自 contracts.FILE_MUTATION_TOOLS（唯一源，与 run 摘要共用）
+    _FILE_MUTATION_TOOLS: frozenset = field(
+        default_factory=lambda: FILE_MUTATION_TOOLS, init=False, repr=False)
     # 只读工具集：多次读取不同文件是合理的工作密度，应给予预算（旧名残留修复）
     _READONLY_TOOLS: frozenset = field(default_factory=lambda: frozenset({
         "file_read", "file_glob", "file_grep", "read_image", "log_read",

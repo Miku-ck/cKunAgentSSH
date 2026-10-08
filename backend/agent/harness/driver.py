@@ -32,6 +32,7 @@ from agent.intention import (
 )
 
 from .contracts import (
+    FILE_MUTATION_TOOLS,
     LLMOutput,
     ReinDecision,
     ReinPoint,
@@ -909,12 +910,7 @@ class Driver:
         yield done_event
 
 
-# 会修改文件系统的工具名（用于 run 摘要 mutated 统计）。
-# 必须是 builtin 实际注册名 —— work 模式旧名（write_file/patch_file 等）
-# 已随全库清理移除，残留旧名会让摘要统计静默失效（2026-09 修复）。
-_FILE_MUTATION_TOOLS = frozenset({
-    "file_write", "file_edit",
-})
+# 文件变更工具集取自 contracts.FILE_MUTATION_TOOLS（唯一源，与预算守卫共用）
 
 
 def _goal_acknowledged(content: str) -> Optional[bool]:
@@ -962,7 +958,7 @@ def _build_run_summary(ctx: RunContext) -> str:
     for entry in ctx.tool_calls_log:
         tool = entry.get("tool") or "unknown"
         tool_counts[tool] = tool_counts.get(tool, 0) + 1
-        if tool in _FILE_MUTATION_TOOLS and entry.get("success"):
+        if tool in FILE_MUTATION_TOOLS and entry.get("success"):
             args = entry.get("args") or {}
             path = args.get("path") or args.get("file_path") or args.get("target") or ""
             if path:
