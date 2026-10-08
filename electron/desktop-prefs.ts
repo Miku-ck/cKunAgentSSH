@@ -202,7 +202,14 @@ async function disablePref(
   await writeToDisk(prefs).catch(() => undefined)
 }
 
-/** 渲染进程 patch → 生效动作 → 落盘。动作失败抛错，由 IPC reject 提示用户（值不落盘） */
+/**
+ * 渲染进程 patch → 生效动作 → 落盘。
+ *
+ * 动作失败抛错、由 IPC reject 提示用户，且**值不落盘**——内存里的 prefs 也不动，
+ * 所以下一步失败时必须把上一步已经改到系统里的退回去：patch 同时带两项、
+ * 第一步（开机自启）成功而第二步（托盘）抛错时，不回滚就会留下"系统里有启动项而
+ * 应用自己不知道"的分叉，用户下次看到的是关着的开关，取消也关不掉那个启动项。
+ */
 export async function setDesktopPrefs(raw: unknown): Promise<DesktopPrefs> {
   const patch = prefsPatchOrNull(raw)
   if (!patch) throw new Error('没有可更新的桌面偏好字段')
@@ -210,10 +217,30 @@ export async function setDesktopPrefs(raw: unknown): Promise<DesktopPrefs> {
   if (next.minimizeToTray && !trayIconAvailable()) {
     throw new Error('托盘图标资源缺失（resources/icon.png），无法开启"关窗隐藏到托盘"')
   }
-  if ('autoLaunch' in patch && patch.autoLaunch !== prefs.autoLaunch) applyAutoLaunch(next.autoLaunch)
+  const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
+  let autoLaunchApplied: boolean | null = null
+  if ('autoLaunch' in patch && patch.autoLaunch !== prefs.autoLaunch) {
+    try {
+      applyAutoLaunch(next.autoLaunch)
+    } catch (e) {
+      throw new Error(`开机自启设置失败：${message(e)}`)
+    }
+    autoLaunchApplied = next.autoLaunch
+  }
   if ('minimizeToTray' in patch && patch.minimizeToTray !== prefs.minimizeToTray) {
-    if (next.minimizeToTray) ensureTray()
-    else destroyTray()
+    try {
+      if (next.minimizeToTray) ensureTray()
+      else destroyTray()
+    } catch (e) {
+      if (autoLaunchApplied !== null) {
+        try {
+          applyAutoLaunch(prefs.autoLaunch)
+        } catch (rollbackError) {
+          console.error('[DesktopPrefs] 回滚开机自启失败，系统状态可能与设置页不一致:', rollbackError)
+        }
+      }
+      throw new Error(`"关窗隐藏到托盘"设置失败：${message(e)}`)
+    }
   }
   prefs = next
   await enqueue(() => writeToDisk(prefs))

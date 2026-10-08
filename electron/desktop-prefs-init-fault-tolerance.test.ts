@@ -128,3 +128,47 @@ describe('initDesktopPrefs 的容错与陈旧值归一', () => {
     expect(out.minimizeToTray).toBe(false)
   })
 })
+
+/**
+ * setDesktopPrefs 的两步生效动作：第一步（开机自启）写系统、第二步（托盘）也可能抛。
+ * docstring 承诺"值不落盘"，但不回滚第一步就会留下系统里有启动项而应用自己不知道的分叉。
+ */
+describe('setDesktopPrefs —— 后一步失败要退掉前一步', () => {
+  it('托盘起不来时，已经打开的开机自启必须被退回去', async () => {
+    env.platform = 'win32'
+    env.prefsFile = JSON.stringify({
+      autoLaunch: false, minimizeToTray: false, desktopNotifications: true,
+    })
+    env.trayThrows = true
+    const mod = await load()
+    await mod.initDesktopPrefs(() => null)
+    env.loginItemCalls = []
+
+    await expect(
+      mod.setDesktopPrefs({ autoLaunch: true, minimizeToTray: true }),
+    ).rejects.toThrow('关窗隐藏到托盘')
+
+    expect(env.loginItemCalls).toEqual([
+      { openAtLogin: true },
+      { openAtLogin: false },   // 回滚：系统里不能留下没人认领的启动项
+    ])
+    expect(mod.getDesktopPrefs().autoLaunch).toBe(false)
+    const stored = JSON.parse(env.prefsFile)
+    expect(stored.autoLaunch).toBe(false)
+    expect(stored.minimizeToTray).toBe(false)
+  })
+
+  it('反向锁：第一步就失败时不去动托盘，也不落盘', async () => {
+    env.platform = 'linux'   // applyAutoLaunch 在 Linux 必然抛
+    env.prefsFile = JSON.stringify({
+      autoLaunch: false, minimizeToTray: false, desktopNotifications: true,
+    })
+    const mod = await load()
+    await mod.initDesktopPrefs(() => null)
+    env.loginItemCalls = []
+
+    await expect(mod.setDesktopPrefs({ autoLaunch: true })).rejects.toThrow('开机自启设置失败')
+    expect(env.loginItemCalls).toEqual([])
+    expect(JSON.parse(env.prefsFile).autoLaunch).toBe(false)
+  })
+})
