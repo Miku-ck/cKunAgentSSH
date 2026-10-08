@@ -166,3 +166,99 @@ def test_maybe_prune_registers_strong_task_ref_and_throttles(monkeypatch):
     leftover = asyncio.run(scenario())
     assert not leftover, "任务完成后未从 _bg_tasks 摘除"
     assert ran, "prune 未实际执行"
+
+
+# ── S7-01 / S7-02 / S7-03 / S7-04（纵向切片战役 S7 片四条 Major）──
+
+def test_run_task_按_done_终态定成败_而非正文是否非空(monkeypatch):
+    """被熔断 / 撞迭代上限的 run 不能再记 completed。
+
+    driver 的四条终止路径都只发 warning + done、不发 error，且 MAX_REACHED 在正文
+    为空时会用工具日志合成一份摘要当 content。旧判据 `not snippet and err` 因此
+    把腰斩的巡检记成一次正常完成，执行历史里躺着一份看起来完全正常的报告。
+    """
+    engine = ScheduleEngine(poll_seconds=1)
+    updates: list[dict] = []
+    marks: list[tuple[str, str]] = []
+
+    async def fake_agent_once(_sched, _run_id):
+        return "## 巡检报告（被迭代上限截断）", "", "max_reached"
+
+    monkeypatch.setattr(engine, "_run_agent_once", fake_agent_once)
+    monkeypatch.setattr(db, "create_schedule_run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        db, "mark_schedule_run",
+        lambda sid, st, **k: marks.append((sid, st)))
+    monkeypatch.setattr(
+        db, "update_schedule_run", lambda rid, **kw: updates.append(kw))
+
+    asyncio.run(engine._run_task({"id": "s1", "task_prompt": "巡检"}))
+
+    assert updates, "run 结果未落库"
+    assert updates[-1]["status"] == "failed", "非 completed 终态被记成 completed"
+    assert "max_reached" in updates[-1]["error"]
+    assert ("s1", "failed") in marks, "schedules.last_status 未同步为 failed"
+
+
+def test_trigger_未推进_next_run_时不起跑(monkeypatch):
+    """S7-03：next_run 没写成就照常起跑 = 每个 tick 重复一次无头 run。
+
+    行仍是到期态 ⇒ 下个 tick 依旧 due ⇒ 无限循环，每轮一次 Agent run + SSH 会话 +
+    模型计费，且全仓没有任何失败计数或退避。触发条件是 DB locked 或存量脏行
+    （compute_next_run 对 time_hour=25 抛 ValueError），两种都不需要先做什么坏事。
+    """
+    engine = ScheduleEngine(poll_seconds=1)
+    engine._last_prune_at = time.monotonic()
+    started: list[str] = []
+
+    async def fake_run_task(sched):
+        started.append(sched["id"])
+
+    def locked(*_a, **_k):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(engine, "_run_task", fake_run_task)
+    monkeypatch.setattr(db, "set_schedule_next_run", locked)
+
+    sched = {"id": "s1", "schedule_type": "interval", "interval_minutes": 60}
+    ok = asyncio.run(engine.trigger(sched))
+
+    assert ok is False
+    assert started == [], "推进失败仍起跑：无人值守地对目标机反复执行远程命令"
+    assert "s1" not in engine._executing, "跳过起跑时必须释放去重标记"
+
+
+def test_system_prompt_未指定主机时告知没有会话():
+    """S7-02：任务书让模型去巡检，却没告诉它这次没有可巡检的对象。"""
+    from agent.schedule_engine import _build_schedule_system_prompt
+
+    without = _build_schedule_system_prompt({"target_host": ""})
+    assert "没有可用的 SSH 会话" in without
+    assert "没有可用的 SSH 会话" not in _build_schedule_system_prompt(
+        {"target_host": "web-01"})
+
+
+def test_reap_stale_runs_启动时收尸遗留_running(monkeypatch):
+    """S7-04：running 的唯一出口是那个已经随进程死掉的 task。
+
+    后端被杀/崩溃重启后没人回收，last_status 停在 running，前端据此把「编辑」
+    「立即执行」置灰，用户只能删了重建；自愈要等下次到期（daily ≈ 最长 24 小时）。
+    """
+    engine = ScheduleEngine(poll_seconds=1)
+    reaped: list[str] = []
+    marks: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(db, "list_schedules", lambda: [
+        {"id": "s1", "last_status": "running"},
+        {"id": "s2", "last_status": "completed"},
+    ])
+    monkeypatch.setattr(
+        db, "fail_running_schedule_runs",
+        lambda sid, _err: reaped.append(sid) or 1)
+    monkeypatch.setattr(
+        db, "mark_schedule_run", lambda sid, st, **k: marks.append((sid, st)))
+
+    asyncio.run(engine._reap_stale_runs())
+
+    assert reaped == ["s1", "s2"]
+    assert marks == [("s1", "failed")], "只收 run 行会漏掉 last_status，按钮仍被置灰"

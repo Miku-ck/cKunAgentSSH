@@ -96,6 +96,31 @@ class ScheduleEngine:
             await asyncio.gather(*self._running_tasks.values(), return_exceptions=True)
             self._running_tasks.clear()
 
+    async def _reap_stale_runs(self) -> None:
+        """把上一次进程存活期遗留的 running 行收尸为 failed（S7-04）。
+
+        running 的唯一出口是那个已经随进程死掉的 task：后端被杀或崩溃后由
+        BackendManager 自动重启（Electron 主进程不受影响），没人回收这些行，
+        于是 schedules.last_status 停在 running，前端 isRunning(s) 据此把
+        「编辑」「立即执行」置灰，用户只能删了重建；自愈要等到下次到期
+        （daily 任务 ≈ 最长 24 小时），interval=1min 的任务则几乎每 60 次重启必中一次。
+        """
+        try:
+            rows = await asyncio.to_thread(db.list_schedules)
+            reaped = 0
+            for s in rows:
+                reaped += await asyncio.to_thread(
+                    db.fail_running_schedule_runs,
+                    s["id"], "后端重启导致本次执行中断",
+                )
+                if s.get("last_status") == "running":
+                    await asyncio.to_thread(db.mark_schedule_run, s["id"], "failed")
+            if reaped:
+                logger.warning(
+                    "schedule 引擎启动收尸：%d 条滞留 running 的 run 已标 failed", reaped)
+        except Exception as e:
+            logger.warning("schedule 遗留 running 收尸失败: %s", e)
+
     def ensure_started(self) -> None:
         self.start()
 
@@ -106,6 +131,7 @@ class ScheduleEngine:
         # （DB 瞬时 locked、next_run_at 脏值）就让自动调度永久停摆，
         # 而且日志之后毫无征兆 —— 只有下一次 create_schedule/run_now 的
         # ensure_started 才会把它救回来。
+        await self._reap_stale_runs()
         while not self._stop_event.is_set():
             try:
                 await self._tick_once()
@@ -162,7 +188,16 @@ class ScheduleEngine:
                 next_at = compute_next_run(sched)
                 await asyncio.to_thread(db.set_schedule_next_run, sid, next_at)
         except Exception as e:
-            logger.warning("schedule=%s 计算 next_run 失败: %s", sid, e)
+            # S7-03 修复：next_run 没推进成功也照常起跑 ⇒ 这一行仍是到期态，下个
+            # tick（≤poll_seconds）依旧判为 due 再触发一次，无上限、无退避、无失败
+            # 计数：每轮都是一次无头 Agent run + SSH 会话 + 模型计费，等于无人值守地
+            # 反复对目标机执行远程命令。改为 fail-closed —— 本次不起跑，把推进留给
+            # 下一轮 tick；日志也如实说「未推进」，原案文「计算 next_run 失败」把
+            # 真失败点（DB 写那一跳）说成了计算。
+            logger.warning(
+                "schedule=%s 未能推进 next_run，本次不起跑（下轮 tick 重试）: %r", sid, e)
+            self._executing.discard(sid)
+            return False
         # 审查修复：执行标记须保持到任务结束（_run_task 的 finally 中移除）。
         # 原实现在 DB 写入后立即 discard，任务尚未开始就释放了去重锁，
         # 运行时间超过 tick 间隔（30s）的任务会被每次 tick 重复触发，
@@ -244,9 +279,18 @@ class ScheduleEngine:
                 db.mark_schedule_run, sid, "running", last_run_at=started, last_run_id=run_id
             )
             run_in_db = True
-            content, err = await self._run_agent_once(sched, run_id)
+            content, err, state = await self._run_agent_once(sched, run_id)
             snippet = (content or "").strip()
-            status = "failed" if (not snippet and err) else "completed"
+            # S7-01 修复：终态由 done.state 决定，不再「正文非空就算 completed」。
+            # driver 的四条终止路径（成本熔断 / MAX_REACHED / 循环检测 force_terminate /
+            # human_help_needed）都只发 warning + done、不发 error，而 MAX_REACHED 在
+            # 正文为空时还会用工具日志合成一份摘要当 content —— 于是被腰斩的巡检在
+            # 执行历史里躺着一份看起来完全正常的 completed 报告。
+            if state and state != "completed":
+                status = "failed"
+                err = err or f"run 未正常收敛（终态 {state}）"
+            else:
+                status = "failed" if (not snippet and err) else "completed"
             await asyncio.to_thread(
                 db.update_schedule_run, run_id,
                 status=status, summary=snippet, error=err or "",
@@ -289,8 +333,13 @@ class ScheduleEngine:
             except Exception:
                 pass
 
-    async def _run_agent_once(self, sched: dict, run_id: str) -> tuple[str, str]:
-        """组装 Harness 无头运行一次，返回 (最终 report 文本, 内部错误信息)。"""
+    async def _run_agent_once(self, sched: dict, run_id: str) -> tuple[str, str, str]:
+        """组装 Harness 无头运行一次，返回 (最终 report 文本, 内部错误信息, 终态)。
+
+        终态来自 driver 的 done 事件 payload（completed / failed / max_reached /
+        human_help…），它是「这次到底收敛了没有」的唯一权威 —— S7-01：定时任务
+        的成败判据必须吃它，不能吃正文是否非空。
+        """
         model_cfg = await asyncio.to_thread(self._resolve_model)
         if not model_cfg:
             raise RuntimeError("未配置默认模型，无法执行定时任务")
@@ -404,6 +453,7 @@ class ScheduleEngine:
         conversation_id = _SCHEDULE_CONVERSATION_PREFIX + (sched["id"] or "")
 
         done_content = ""
+        done_state = ""
         error_msg = ""
         try:
             async for ev in harness.run(
@@ -423,6 +473,8 @@ class ScheduleEngine:
                 elif ev.kind == "done":
                     payload = ev.payload or {}
                     done_content = payload.get("content", "") or done_content
+                    # S7-01：driver 的 done 载荷一直带着终态，被丢的是消费端。
+                    done_state = payload.get("state") or done_state
         finally:
             # 任务结束（含异常路径）关闭自动建立的 SSH 会话，释放连接资源
             if ssh_session_id:
@@ -436,7 +488,7 @@ class ScheduleEngine:
                         "schedule=%s 关闭会话 %s 失败: %s",
                         sched["id"], ssh_session_id, e,
                     )
-        return done_content, error_msg
+        return done_content, error_msg, done_state
 
     @staticmethod
     def _resolve_model() -> dict | None:
@@ -562,6 +614,18 @@ def _build_schedule_system_prompt(sched: dict) -> str:
         from prompts import _current_time_str, SSH_MODE_PROMPT
         parts.append(f"[系统时间] 当前时间：{_current_time_str()}。")
         parts.append(SSH_MODE_PROMPT)
+        # S7-02：没有 target_host 就没有 SSH 会话，而这里此前无条件注入
+        # SSH_MODE_PROMPT、从不提这件事 —— 模型于是逐个试远程工具、全数撞上
+        # run_headless 的「缺少 SSH 会话」fail-closed，最后写一份「我无法连接」的
+        # 报告；正文非空 ⇒ 旧判据记 completed。UI 那个下拉首项写的是
+        # 「未指定（不执行远程命令）」，实现必须对得上这句话。
+        if not (sched.get("target_host") or "").strip():
+            parts.append(
+                "[执行环境] 本次任务未指定目标主机，因此没有可用的 SSH 会话。"
+                "不要调用任何远程工具（shell_exec / job_run / service_manage / "
+                "log_read 等一律以「缺少 SSH 会话」失败）；请只基于本地可得的信息"
+                "完成任务，并在报告开头写明本次没有可连接的目标主机。"
+            )
     except Exception:
         pass
     parts.append(
