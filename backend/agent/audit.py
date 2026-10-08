@@ -31,6 +31,20 @@ AUDIT_TABLE = "audit_log"
 _DEFAULT_ENV = "test"
 
 
+def _seal_environment(rows: list[dict[str, Any]]) -> str:
+    """轮转封缄记录该记在哪个环境下 —— 被清空的证据里出现过 prod 就记 prod。
+
+    审计页按 environment 过滤。原先封缄记录无条件写 _DEFAULT_ENV("test")，于是
+    对生产主机做完轮转，prod 视图里连一条「谁清的库」都看不到，这次轮转在 prod
+    审计面上凭空消失（S11-04）。取「任一行为 prod」这条单调规则而不是「众数/尾行」：
+    封缄必须在它清掉的那些记录**原本可见的视图里同样可见**，宁可让混合轮转在
+    prod 视图多出一条，也不能在 prod 视图少一条。
+    """
+    if any(str(r.get("environment") or "") == "prod" for r in rows):
+        return "prod"
+    return _DEFAULT_ENV
+
+
 def _table_absent(exc: BaseException) -> bool:
     """「表还没建」是真空，其余异常是没读到 —— S11-01 要的就是这条分界线。
 
@@ -435,7 +449,7 @@ def archive_and_clear(archive_dir: Optional[str] = None) -> dict[str, Any]:
             "operator": _operator(),
             "target_type": "system",
             "target_id": "",
-            "environment": _DEFAULT_ENV,
+            "environment": _seal_environment(rows),
             "action": "audit_cleared",
             "command_hash": "",
             "command_raw": "",
