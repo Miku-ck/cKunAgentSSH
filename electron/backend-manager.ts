@@ -372,7 +372,11 @@ export class BackendManager {
       })
 
       // 空监听器不是遗漏：挂 'data' 才会把 stdout 推入 flowing 模式，
-      // 不消费则子进程会因管道缓冲写满而阻塞。backend stdout 已由状态事件透传。
+      // 不消费则子进程会因管道缓冲写满而阻塞。
+      // 注意这里**只是丢弃**：stdout 内容不会进状态事件（onStatusChange 的载荷只有
+      // status/port/error），渲染层看不到后端日志。原先这句"已由状态事件透传"是假的，
+      // 会让人以为可以在 UI 里找到后端 stdout。要读后端输出只能看 stderr ——
+      // 它在下面被转进主进程控制台（'[Python] …'）。
       this.process.stdout?.on('data', () => {})
 
       this.process.stderr?.on('data', (data: Buffer) => {
@@ -481,9 +485,14 @@ export class BackendManager {
    * 杀当前子进程（含 Windows 进程树），并清理引用。幂等：进程已为空时直接返回。
    *
    * Windows 不支持 POSIX 信号：Node 在 Win 上把 SIGTERM/SIGKILL 都映射成
-   * TerminateProcess(主进程)，不杀子进程。而 uvicorn reload=true 时会 spawn
-   * reload 子进程——主 Python 被杀后 reload 子进程变孤儿继续 LISTENING 端口，
-   * 下次启动又 spawn 新的，越积越多（5 个僵尸进程占 8010-8014 的实测根因）。
+   * TerminateProcess(主进程)，不杀子进程。主 Python 被杀后它名下的任何子进程都会
+   * 变孤儿继续 LISTENING 端口，下次启动又 spawn 新的，越积越多
+   * （5 个僵尸进程占 8010-8014 的实测根因就是这个）。
+   *
+   * 归因更正：这里原先写的是"uvicorn reload=true 会 spawn reload 子进程"，而
+   * `backend/main.py` 明确 `reload=False`（那里的注释还专门说明为了健康检查不走
+   * reloader）。按树杀（taskkill /T /F）的防护本身是对的 —— 它管的是"任何派生子进程"
+   * 这一整类，不依赖 reload 开着；留着那句错归因会让人以为关掉 reload 就不用 /T 了。
    *
    * Windows 用 taskkill /T /F 杀整个进程树；POSIX 平台仍用 SIGTERM→SIGKILL。
    * 修复 2b：启动失败（超时等）路径也复用本方法清理孤儿进程。
@@ -505,7 +514,7 @@ export class BackendManager {
     const pid = proc.pid ?? 0
     const isWin = process.platform === 'win32'
 
-    // Windows: taskkill /T /F 杀整个进程树（含 uvicorn reload 子进程）
+    // Windows: taskkill /T /F 杀整个进程树（含主 Python 名下任何子进程）
     if (isWin && pid) {
       try {
         // 审查 MINOR：taskkill 对挂死的进程树可能长时间不返回（同步阻塞主进程）；
