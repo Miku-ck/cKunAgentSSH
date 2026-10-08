@@ -1395,6 +1395,11 @@ async def grant_tool_permission(req: PermissionGrantRequest):
     await append_record_async(
         action=f"permission_grant:{req.tool}",
         conclusion="approved",
+        # S2-04：审批决策必须带 run_id。docs/security-boundary.md §6 声明每条审批
+        # 记录可追到它服务的 run，而原实现八处 append_record 全都没传 run_id ——
+        # grant 这一处连 req.run_id 都攥在手里（scope=once 还强制它非空，否则 400）。
+        # 事后只能证明「有人批过 foo」，证不了「批的是哪次运行」，等保审计目标落空。
+        run_id=req.run_id,
         target_type="tool",
         target_id=grant_key,
         command_raw=req.command or "",
@@ -1422,6 +1427,8 @@ async def revoke_tool_permission(tool: str, command: Optional[str] = None,
     await append_record_async(
         action=f"permission_revoke:{tool}",
         conclusion="revoked",
+        # S2-04：这两处（撤销 / 手动登记永久授权）按设计不属于任何 run —— 它们改的是
+        # 跨 run 的 allowlist 与会话级状态，run_id 留空是正确取值，不是漏传。
         target_type="tool",
         target_id=command or tool,
         command_raw=command or "",
@@ -1479,6 +1486,8 @@ async def allow_tool_permission(req: AllowPermissionRequest):
         raise HTTPException(status_code=400, detail=str(e))
     await append_record_async(
         action=f"permission_allow_manual:{req.tool}",
+        # S2-04：手动登记永久授权不属于任何 run（它写的是跨 run 的 allowlist），
+        # run_id 留空是正确取值，不是漏传 —— 与 permission_revoke 同一条口径。
         # "granted" 不在 audit.append_record 的结论枚举里，会被静默改写为 "executed"
         # —— 手动登记永久授权就伪装成了"执行过一条命令"。用同义且在枚举内的值。
         conclusion="approved",
@@ -1565,10 +1574,10 @@ async def deny_command(req: DenyCommandRequest):
     await append_record_async(
         action=f"permission_deny_command:{req.tool}",
         conclusion="denied",
+        run_id=req.run_id,
         target_type="tool",
         target_id=denied_key,
         command_raw=req.command,
-        result=f"run={req.run_id or '-'}",
     )
     return {"tool": req.tool, "command": req.command,
             "run_id": req.run_id, "denied_key": denied_key}
@@ -1617,6 +1626,7 @@ async def release_run_permissions(run_id: str):
     await append_record_async(
         action=f"permission_release_run:{run_id}",
         conclusion="released",
+        run_id=run_id,
         target_type="run",
         target_id=run_id,
         result=f"released={released} denied={denied_count}",
@@ -1694,6 +1704,7 @@ async def submit_clarification_answer(req: ClarificationAnswerRequest):
     await append_record_async(
         action="clarification_answer",
         conclusion="answered",
+        run_id=req.run_id,
         target_type="run",
         target_id=req.run_id,
         result=f"steps={len(req.answers)}",
@@ -1717,6 +1728,7 @@ async def skip_clarification(req: ClarificationAnswerRequest):
     await append_record_async(
         action="clarification_skip",
         conclusion="skipped",
+        run_id=req.run_id,
         target_type="run",
         target_id=req.run_id,
     )
