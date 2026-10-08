@@ -8,7 +8,10 @@ export default defineConfig({
     alias: { '@': resolve(__dirname, 'src') },
   },
   test: {
-    include: ['src/**/*.{test,spec}.ts'],
+    // electron/** 也在范围内：数据面会话（gateway-transport）依赖 node:stream/tls，
+    // 搬不进 shared/（那边同时被 tsconfig.web 收，而 web 侧没有 node 类型）。
+    // 放在代码旁边、由 tsconfig.node 检查，是它唯一能被测到的位置。
+    include: ['src/**/*.{test,spec}.ts', 'electron/**/*.{test,spec}.ts'],
     environment: 'node',
     globals: false,
     // 默认所有 .css 都被替换成空模块 —— variables.test.ts 用 ?raw 读令牌表与
