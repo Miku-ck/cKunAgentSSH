@@ -116,6 +116,10 @@ export class SshEngine {
    * true; agent-originated connects must pass false (fail closed).
    */
   async connect(alias: string, allowTofu: boolean): Promise<ClientType> {
+    // disposed 原先只写不读：宿主每次 reload / volatile-update 都会 dispose()，
+    // 而 dispose 之后 connect() 照样能再握手出一池 SSH 会话 —— 那些会话已经
+    // 没有人持有、也没有下一个时机去销毁它们。关掉就是关掉了，得说得出口。
+    if (this.disposed) throw new Error('ssh engine disposed')
     const existing = this.pool.get(alias)
     // Never hand out a dead transport: between the socket dying and the
     // 'close' event landing, state may still read 'open'.
@@ -422,9 +426,13 @@ export class SshEngine {
       parts.push(acc)
     }
     for (const p of parts) {
-      await new Promise<void>((resolve) => {
+      await new Promise<void>((resolve, reject) => {
         sftp.mkdir(p, (err) => {
-          if (err && !/exist/i.test(err.message)) return resolve() // only missing is fine
+          // 「已存在」才是可继续；其余错误（权限、只读挂载、磁盘满）必须上抛。
+          // 两条分支都 resolve 时，调用方拿到的是「目录建好了」，随后 fastPut
+          // 才失败，报的是 upload 的错 —— 真实原因（建不了目录）在这一层被吞掉。
+          if (err && /exist/i.test(err.message)) return resolve()
+          if (err) return reject(new Error(`mkdir ${p}: ${err.message}`))
           resolve()
         })
       })
@@ -508,16 +516,32 @@ export class SshEngine {
     const addr = server.address()
     const boundPort = typeof addr === 'object' && addr !== null ? addr.port : localPort
     const info: TunnelInfo = { id: randomUUID().slice(0, 8), alias, localPort: boundPort, remoteHost, remotePort, state: 'open' }
-    this.tunnels.set(info.id, {
-      info,
-      close: () => {
-        info.state = 'closing'
+    // 只有 stopTunnel / dispose 会收这个 server，SSH 侧断开时什么都不做：
+    // 连接掉线后条目会永远停在 state:'open'，本机监听口继续接客户，
+    // 每条新连接都在一个死 client 上 forwardOut 失败 —— 界面显示"隧道开着"，
+    // 实际一个字节都过不去。把 close 挂到 client 的终止事件上，双向都收得干净。
+    let closed = false
+    const onClientDown = () => {
+      close()
+    }
+    const close = () => {
+      if (closed) return
+      closed = true
+      info.state = 'closing'
+      client.off('close', onClientDown)
+      client.off('error', onClientDown)
+      try {
         server.close()
         ;(server as net.Server & { closeAllConnections?: () => void }).closeAllConnections?.()
-        info.state = 'closed'
-        this.tunnels.delete(info.id)
-      },
-    })
+      } catch {
+        /* 已关 */
+      }
+      info.state = 'closed'
+      this.tunnels.delete(info.id)
+    }
+    client.on('close', onClientDown)
+    client.on('error', onClientDown)
+    this.tunnels.set(info.id, { info, close })
     return info
   }
 

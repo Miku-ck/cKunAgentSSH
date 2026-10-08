@@ -117,7 +117,10 @@ export function apply(ctx: Context, config: ResolvedConfig): void {
   const sync = (): void => {
     for (const dispose of surfaces.splice(0)) dispose()
     if (!val(config.enabled, true)) return
-    const { routes, upgrade } = makeRoutes(engine, store)
+    const { routes, upgrade, disposeRoutes } = makeRoutes(engine, store)
+    // 终端 WebSocket 与路由同生命周期：不注册这条 dispose，remount 之后旧标签页的
+    // socket 还在往一个已 dispose 的 engine 上灌数据（见 makeRoutes 的注释）
+    surfaces.push(disposeRoutes)
     for (const route of routes) surfaces.push(ctx.webServer.register(route))
     surfaces.push(ctx.webServer.registerUpgrade(upgrade))
     for (const tool of [sshListTool(engine), sshConnectTool(engine), sshExecTool(engine)]) {

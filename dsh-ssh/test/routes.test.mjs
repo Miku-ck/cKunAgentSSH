@@ -211,7 +211,8 @@ try {
     }
     ws.on('message', onMsg)
   })
-  check('terminal input echoed', true)
+  // 上一条 await 本身就是断言（8s 内等不到 echo:hi 就 reject），
+  // 这句 check(..., true) 永远不会失败，只会把「这里测过了」写在输出里。
   ws.send(JSON.stringify({ type: 'resize', cols: 120, rows: 40 }))
   await new Promise((r) => setTimeout(r, 300))
   check('terminal resize reached server (40,120)', Array.isArray(state.lastWindow) && state.lastWindow[0] === 40 && state.lastWindow[1] === 120, JSON.stringify(state.lastWindow))
@@ -224,6 +225,25 @@ try {
   const listed3 = await get('/api/ckun-ssh/hosts')
   check('host gone from list', listed3.body.hosts.every((h) => h.alias !== 'web'))
   check('secret record deleted with host', records.has('ckun-ssh/web') === false)
+
+  // --- 路径守卫与体积错误（本轮收紧）---
+  // 守卫按「整段」判 . / .. ：子串写法既误拦 /data/backup..2024 这种合法名字，
+  // 又完全不检查 name 参数（那才是真正能跑出 tmpdir 的那一个）。
+  const travUp = await fetch(`${base}/api/ckun-ssh/upload?alias=web&path=../etc&name=f`, { method: 'POST', body: 'x' })
+  check('upload rejects ".." as a segment with 400', travUp.status === 400, String(travUp.status))
+  const travDl = await fetch(`${base}/api/ckun-ssh/download?alias=web&path=/a/../b`)
+  check('download rejects ".." as a segment with 400', travDl.status === 400, String(travDl.status))
+  const legalDots = await fetch(`${base}/api/ckun-ssh/upload?alias=web&path=/data/backup..2024&name=f`, { method: 'POST', body: 'x' })
+  check('lock: ".." only as a substring is not rejected', legalDots.status !== 400, String(legalDots.status))
+  const nameTraversal = await fetch(`${base}/api/ckun-ssh/upload?alias=web&path=/tmp&name=..%2F..%2Fevil`, { method: 'POST', body: 'x' })
+  // 修好后 name 会被收成单段，请求会走到 engine.upload（本测试的假 SshEngine 没有 SFTP）
+  // 而不是安静地 200 —— 旧写法在这里是 200（文件已经写到 tmpdir 之外了）。
+  check('name traversal no longer reports a successful upload', nameTraversal.status !== 200, String(nameTraversal.status))
+  const oversize = await fetch(`${base}/api/ckun-ssh/hosts`, {
+    method: 'POST',
+    body: JSON.stringify({ alias: 'x'.repeat(1024 * 1024), host: 'h' }),
+  })
+  check('oversize JSON body answers 413 not 500', oversize.status === 413, String(oversize.status))
 
   engine.dispose()
 } finally {
