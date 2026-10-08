@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { SshReconnectStatus } from './ssh-manager'
+import type { TunnelStatus } from './tunnel-manager'
 
 /**
  * 安全暴露给渲染进程的 API
@@ -166,8 +167,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @param callback 状态回调
    * @returns 取消监听函数，务必在组件 onUnmounted 时调用以避免内存泄漏
    */
-  onTunnelStatus: (callback: (data: any) => void) => {
-    const handler = (_event: any, data: any) => callback(data)
+  onTunnelStatus: (callback: (data: TunnelStatus) => void) => {
+    const handler = (_event: any, data: TunnelStatus) => callback(data)
     ipcRenderer.on('tunnel:status', handler)
     return () => ipcRenderer.removeListener('tunnel:status', handler)
   },

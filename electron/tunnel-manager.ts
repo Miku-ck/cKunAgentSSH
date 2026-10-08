@@ -19,9 +19,7 @@ import type { Client } from 'ssh2'
 import * as net from 'net'
 import type { BrowserWindow } from 'electron'
 import type { SSHConnectionConfig } from './ssh-manager'
-import type { TunnelRule, TunnelType } from './tunnel-store'
-
-export type { TunnelType }
+import type { TunnelRule } from './tunnel-store'
 
 /** 运行状态（主进程 → 渲染层推送，不持久化）。渲染层副本见 src/env.d.ts */
 export interface TunnelStatus {
@@ -195,6 +193,10 @@ export class TunnelManager {
 
   private startLocal(s: TunnelSession): Promise<void> {
     return new Promise((resolve, reject) => {
+      // 桥接：setup 期间 SSH client 死亡时 forwardOut/listen 回调可能永不触发，
+      // 不接 reject 会让 start() 的 await 挂死（IPC tunnel:start 永不返回）。
+      // promise 已 settle 后触发为 no-op，后续错误由 onClientDead 统一处理。
+      s.client.once('error', reject)
       const server = net.createServer(sock => this.handleForwardConn(s, sock, s.rule.dstHost!, s.rule.dstPort!))
       s.server = server
       server.once('error', err => reject(err))
@@ -229,6 +231,8 @@ export class TunnelManager {
 
   private startRemote(s: TunnelSession): Promise<void> {
     return new Promise((resolve, reject) => {
+      // 桥接同 startLocal：forwardIn 回调在 client 死亡时可能永不触发 → 防挂死
+      s.client.once('error', reject)
       const bindHost = s.rule.remoteBindHost || '127.0.0.1'
       // 远端发起新连接（绑定端口有流量）→ accept 得到 ssh 通道，回连本机目标
       s.client.on('tcp connection', (info, accept, rej) => {
@@ -256,6 +260,7 @@ export class TunnelManager {
 
   private startDynamic(s: TunnelSession): Promise<void> {
     return new Promise((resolve, reject) => {
+      s.client.once('error', reject)
       const server = net.createServer(sock => this.handleSocksConn(s, sock))
       s.server = server
       server.once('error', err => reject(err))

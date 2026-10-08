@@ -26,7 +26,7 @@
 
           <div class="row-actions">
             <!-- D 类活动时提供一键复制代理地址 -->
-            <button v-if="row.rule.type === 'dynamic' && row.state === 'active'" class="copy-chip" :class="{ ok: copyingId === row.rule.id }" title="复制代理地址" @click="copyAddr(row.rule, $event)">
+            <button v-if="row.rule.type === 'dynamic' && row.state === 'active'" class="copy-chip" :class="{ ok: copyingId === row.rule.id }" title="复制代理地址" @click="copyAddr(row.rule)">
               {{ copyLabel(row.rule) }}
             </button>
             <button class="btn sm" :disabled="row.orphan || busyId === row.rule.id" :title="row.orphan ? '连接配置已删除，无法启动' : ''" @click="toggle(row.rule)">
@@ -56,7 +56,7 @@
 
           <div v-if="row.state === 'error' && row.message" class="row-err">
             <span>{{ row.message }}</span>
-            <button class="btn sm" @click="start(row.rule)">重试</button>
+            <button class="btn sm" @click="toggle(row.rule)">重试</button>
           </div>
         </div>
       </div>
@@ -197,7 +197,8 @@ function onSaved() {
   closeModal()
 }
 
-/** 启停：状态迁移由主进程推送 + 返回值合并；busy 只管按钮过渡态 */
+/** 启停：状态迁移由主进程推送 + 返回值合并；busy 只管按钮过渡态。
+ *  state=active → stop，其余（stopped/error/starting）→ start，重试按钮同路。 */
 async function toggle(rule: TunnelRule) {
   const state = tunnelStore.stateOf(rule.id)
   busyId.value = rule.id
@@ -206,17 +207,6 @@ async function toggle(rule: TunnelRule) {
     else await tunnelStore.start(rule.id)
   } catch (err: any) {
     toast.error(toFriendlyMessage(err, '隧道操作失败'))
-  } finally {
-    busyId.value = ''
-  }
-}
-
-async function start(rule: TunnelRule) {
-  busyId.value = rule.id
-  try {
-    await tunnelStore.start(rule.id)
-  } catch (err: any) {
-    toast.error(toFriendlyMessage(err, '隧道启动失败'))
   } finally {
     busyId.value = ''
   }
@@ -234,7 +224,7 @@ function askDelete(rule: TunnelRule) {
   delTimer = setTimeout(() => { confirmingId.value = '' }, 3000)
 }
 
-function copyAddr(rule: TunnelRule, _e: MouseEvent) {
+function copyAddr(rule: TunnelRule) {
   const addr = `socks5h://${rule.listenHost || '127.0.0.1'}:${rule.listenPort}`
   void navigator.clipboard?.writeText(addr).catch(() => {})
   copyingId.value = rule.id
