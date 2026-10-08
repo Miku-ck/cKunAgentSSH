@@ -65,11 +65,9 @@
       <div v-if="visibleRows.length === 0" class="empty">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg>
         <div class="t">{{ tunnelStore.rules.length === 0 ? '还没有隧道规则' : '没有符合当前筛选的隧道' }}</div>
-        <div class="d"> </div>
-    
+        <div class="d">通过已保存的连接建立端口转发，隧道独立于终端会话运行。</div>
+        <button v-if="tunnelStore.rules.length === 0 && hasConnections" class="btn primary" @click="openCreate">＋ 新建隧道</button>
       </div>
-
-     
     </div>
 
     <TunnelModal v-if="showModal" :rule="editingRule" @close="closeModal" @saved="onSaved" />
