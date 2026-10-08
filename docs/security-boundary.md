@@ -87,6 +87,8 @@
 | **提权链记忆** | `sudo`/`doas`/`runuser`/`pkexec`/`su` 为了对真正执行的命令做位置判定必须被剥掉，剥完链上就没人记得这是提权跑的——改为在剥离时按真实动词之前的前缀段回收一次。只看执行位置，`sudo` 出现在参数里不算 | `_privilege_verb_in_chain` | `nohup sudo id`、`env sudo ls`、`nice -n 5 sudo id`、`command sudo id` 曾判 safe，一张卡都不出 |
 | **动词归一** | 动词比较统一走 `_verb_of`：剥标点 → 去尾部分隔符 → 取 basename → 小写。绝对路径与 ANSI-C 拼接形态必须落到同一个名字上，且"目标分析"与"默认审批"两段共用，不许一段认得、一段认不出 | `_verb_of` | `/usr/bin/rm -rf ~` 曾判 safe（basename 只在默认审批那半生效）；`rm$'\x2f' -rf $'\x2f'` 解码后的 `rm/` 曾退化成 dangerous 兜底 |
 | **源侧与多目标** | 写目标扫描覆盖动词的**每一个**文件参数与**源**侧：`tee a b` 的第二个目标、`mv/cp/rsync` 的源、`tar` 归档的源、`dd if=`。tar 的 `--checkpoint[-action]=exec=`、`--to-command`、`-I/--use-compress-program` 等把外部程序接进数据流的开关按 dangerous | `_classify_write_targets` / `_is_sensitive_source` | `echo p \| tee /tmp/innocent /etc/ld.so.preload`（同内容直接重定向是 hardline）、`mv /root /tmp/x`、`tar cf x --checkpoint-action=exec=id /tmp` 曾判 safe |
+| **凭据路径的三种真实形态** | 凭据判据只有一条入口 `_is_secret_path`，它同时认：POSIX 斜杠（`_SECRET_FILE_RE`）、Windows 盘符/家目录（`_WIN_SECRET_PATH_RE`：大小写不敏感、`\` 与 `/` 同形、`.ssh` 目录本体与 `id_*` 私钥）、dotenv 家族（`_is_dotenv_path`：`.env` 与 `.env.<环境>`，`.example/.sample/.dist/.template/.tpl/.in/.default/.origin` 八个占位后缀豁免）。读侧与写侧共用这一条入口，`classify_command` 与 `classify_constructed_command` 因此不可能给出两个答案 | `_is_secret_path` / `_WIN_SECRET_PATH_RE` / `_is_dotenv_path` | `cat C:\Users\alice\.ssh\id_rsa`、`cat C:/Users/alice/.ssh/ID_RSA`（Windows 上就是同一个文件）、`cat /app/.env` 曾判 safe —— 而 §4 早就把 `.env` 写成敏感落点，文档声明的边界在代码里不存在 |
+| **植入前缀的路径边界** | 持久化前缀按 `t == p or t.startswith(p + "/")` 命中，与相邻的 `_is_sensitive_path` 同口径；兄弟名字（`/etc/passwdx`、`/etc/shadow_backup`、`/etc/passwd.new`）落到 dangerous 而不是 hardline。表里每项都必须是**完整文件名或完整目录名**：drop-in 目录（`/etc/sudoers.d`）单独登记，不再靠裸前缀顺带盖住 | `_is_persistence_target` | 裸前缀把"备份一份再编辑换回"这类标准手法永久封死（hardline 没有审批出口、预授权也放不走）；真身那一段 `mv /etc/passwd.new /etc/passwd` 照旧 hardline。`/etc/cron.d` 按契约表仍钉 dangerous，两种姿态是有意的 |
 
 误拦与误放是同一枚硬币的两面，所以回归测试 `test_safety_misjudgment.py` 双向都钉：
 上面每一条修正都带一组"必须仍是 hardline/dangerous"的反向锁（12 种真实 `reboot` 形态、
@@ -97,7 +99,11 @@
 摊到每次正常操作上。
 
 抗混淆：`normalize_command_for_detection` 做 NFKC、剥引号、剥反斜杠、命令链分段、
-子 shell 递归，然后分段送分类。
+子 shell 递归，然后分段送分类。剥反斜杠（抵御 `r\m` 这类拼写混淆）会连带吃掉 Windows
+路径的分隔符，所以它前面有一步 **Windows 路径折算**（`_WIN_PATH_FOLD_RE`：只折盘符
+`C:\…` 与家目录折叠后的 `~\…` 两段，命令位照旧被还原）—— 没有这一步，
+`cat C:\Users\alice\.ssh\id_rsa` 会先变成 `cat C:Usersalice.sshid_rsa`，形状没了，
+后面每一条路径判据都无从命中。
 
 两种口径，差别只在要不要默认审批：
 
@@ -120,7 +126,8 @@
 - `schedule_op`：`create` 的自由文本按 shell 口径判定并绑定；其他 action 回落到工具级。
 
 prod 下 `file_write` 的三档落点（本轮决策：**moderate 工具在 prod 不强制预授权**）：
-植入类 → hardline 阻断；敏感目录（`/etc/...`、`/var/log/...`、`.env`）→ dangerous
+植入类 → hardline 阻断；敏感目录（`/etc/...`、`/var/log/...`）与 dotenv 家族
+（`_is_dotenv_path`，含 `.env.production` 这类环境变体）→ dangerous
 且仅预授权、键按路径绑定；非敏感路径（`/tmp/x`）→ 会话授权，等同临时目录写。
 再收紧会让生产每次改配置都要预登记，收益/成本不成立。
 
@@ -177,6 +184,7 @@ denied, auto_allowed, approved, released, revoked, answered, skipped}`（`audit.
 | **E** | ① `Sandbox.validate` 第二层仅覆盖 `shell_exec`（`job_run` 与绑定命令工具无第二道）；② "始终允许"无二次确认（allowlist TTL 本轮已补，但**默认仍是永久**，且 TTL 只作用于 `always` 条目 —— once/session 各自按 run/会话终态清理）；③ `agent-exec.py` 的规则副本既没有归一化层，也仍是**整串**电源动词匹配 —— 后端改成执行位置判定后远端更严（`grep -i reboot` 在远端会被挡），方向安全但不等价 | 均为收敛度问题，不改变"默认不信任"的骨架 | 契约测试 `test_remote_whitelist_contract.py` 钉跨端一致性 |
 | **F** | 判定精度上仍接受的四处（本轮误判审查后剩下的）：① 相对路径递归删除 `rm -rf ./build`、`find ./logs -delete` 判 safe；② 在日志里 grep 字面量 `grep -n 'rm -rf /' audit.log` 仍 hardline；③ `env \| grep -i pass`、`cat /proc/1/environ` 判 safe；④ 无子命令的裸 `docker`/`kubectl`（含 `command -v docker 2>/dev/null` 这种探测写法）判 dangerous | ①绝对路径与敏感目标已全覆盖，相对路径的破坏面等于该账户本就能写的范围，收紧会让每次 `make clean` 都弹卡；②根删除保持整串口径，位置化会把 `find / -exec rm -rf {} +` 从 hardline 降成 dangerous，得不偿失；③读取进程环境既不是写操作也不命中凭据路径表，加黑名单会让所有 `env`/`printenv` 排查都要审批 —— 真正的风险是输出内容进模型上下文，与取舍 D 同源；④保守方向，成本是一张卡 | ①远端最小权限账户；②③④审计链 + dangerous 必经人批 |
 | **不对称** | `file_read/file_glob/file_grep` 在无 SSH 会话时降级读**本机**文件（仅 `..` 校验），与 `shell_exec` 的严格 fail-closed 不一致 | 有意的产品功能（本地文件浏览） | 路径遍历校验 + 审计 |
+| **凭据形态** | 收紧后的两处剩余面：① **主机私钥**不在表里（`cat /etc/ssh/ssh_host_rsa_key`、`cat C:/ProgramData/ssh/ssh_host_rsa_key` 实测均 safe）——POSIX 侧原本就没有这条规则，Windows 侧按"与既有覆盖面严格对齐"补，加宽它属于另一轮决策；② **UNC 网络共享**不折算（`cat \\srv\share\.ssh\id_rsa` 实测 safe）：无盘符前缀，而 POSIX 里以 `\\` 开头的 token 按 shell 语义是转义后的字面反斜杠，折成 `/` 会把 `\etc\passwd` 这类字面文件名当成 `/etc/passwd` 凭空误拦 | ①②都是覆盖面与凭空误拦的交换，本轮只钉"同一个文件换写法不换结论"这一条不变量 | 误拦侧实测：`find /data -name .env`、`--exclude=/data/app/.env` 这类"提到 dotenv 文件名但不读它"的写法现在会多一张审批卡（判据只看名字段是不是 dotenv，分不清是读取还是模式串）；ANSI-C 形态的盘符路径 `$'C:\\Users\\…'` 实测**已**覆盖（转义解码在前、折算在后），不要以为它和 UNC 一样漏；真上限是"读得到本机文件"这条不对称本身（上一行）+ 审计链，`.env.example` 家族与 `backend.env`/`.environment` 兄弟名字的豁免、上面每条实测都由 `test_safety_windows_and_dotenv_paths.py` 钉住 |
 | **口径差异** | 批量下发换用后端唯一判定源后，`kill -9 <pid>`、`cp` 非敏感路径判 safe → 不再弹确认；此前渲染层自带词表对任意 `kill/cp/mv` 都会问一句 | 保留第四套词表换取的收敛；与 AI 通道同口径 | 同一判定源、同一后果说明 |
 
 ## 8. 改判定规则要跑什么
@@ -189,7 +197,8 @@ cd backend && python -m pytest -q \
   tests/test_permission_gate_content_bound_tools.py \
   tests/test_permission_approval_lifecycle.py tests/test_audit_coverage.py \
   tests/test_permission_policy_round18.py \
-  tests/test_remote_whitelist_contract.py tests/test_safety_classify_endpoint.py
+  tests/test_remote_whitelist_contract.py tests/test_safety_classify_endpoint.py \
+  tests/test_safety_windows_and_dotenv_paths.py
 npx vitest run && npm run typecheck
 ```
 

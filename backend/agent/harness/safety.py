@@ -54,6 +54,10 @@ _BACKSLASH_ESCAPE_RE = re.compile(r"\\([^\n])")
 _EMPTY_STRING_RE = re.compile(r"''|\"\"")
 # ANSI-C 引用：$'\x2f' / $'\n' 等（bash）— C-review C1 实测绕过
 _ANSI_C_RE = re.compile(r"\$'((?:[^'\\]|\\.)*)'")
+# Windows 路径形态（盘符 `C:\…` 或 home 折叠后的 `~\…`）：其中的反斜杠是**分隔符**，
+# 不是转义。必须在 _BACKSLASH_ESCAPE_RE 归约之前先折成 /，详见
+# normalize_command_for_detection 第 5.5 步。
+_WIN_PATH_FOLD_RE = re.compile(r"(?:[A-Za-z]:|~)\\[^\s]*")
 
 _ANSI_C_ESCAPES = {
     "n": "\n", "t": "\t", "r": "\r", "a": "\a", "b": "\b",
@@ -124,6 +128,8 @@ def normalize_command_for_detection(command: str) -> str:
     4. 折叠 home 路径（绝对路径折叠回 ~）
     5. 解码 ANSI-C 引用（$'\\x2f' → /）— 必须在剥反斜杠之前，
        否则旧的第 5 步会把 $'\\x2f' 里的 \\x 剥成 x 主动破坏匹配
+    5.5 Windows 路径折算（C:\\Users\\… 与 ~\\.ssh\\… → 斜杠形态）— 同样必须在剥
+       反斜杠之前，否则私钥路径会被折成 C:Usersalice.sshid_rsa 这种谁也判不出的形态
     6. 剥反斜杠转义
     7. 剥空字符串
     """
@@ -143,6 +149,19 @@ def normalize_command_for_detection(command: str) -> str:
 
     # 5. 解码 ANSI-C 引用（C-review C1：rm$'\x2f' -rf $'\x2f' → rm/ -rf /）
     command = _ANSI_C_RE.sub(_decode_ansi_c, command)
+
+    # 5.5 Windows 路径折算（实测绕过，本仓凭据判据的主要缺口）：
+    #     `cat C:\Users\alice\.ssh\id_rsa` 里每个反斜杠都被第 6 步当转义吃掉，
+    #     归一化结果是 `cat C:Usersalice.sshid_rsa` —— 下游**每一条**路径判据
+    #     （_SECRET_FILE_RE / 持久化前缀 / 敏感目录 / rm 目标 / 正则表）全部失配，
+    #     而同一条路径写成 `C:/Users/alice/.ssh/id_rsa` 判 dangerous。Windows 本机
+    #     降级读取分支（file_read/file_grep/file_glob 无 SSH 会话时走 Python open()）
+    #     拿到的是真机路径，家目录形态还会先被第 4 步折成 `~\…`。
+    #     折算只作用于「盘符或 ~ 之后到下一个空白」这一段：命令位照旧
+    #     （`r\m` 混淆仍被第 6 步还原），POSIX 上以 `\` 开头的 UNC 与文件名里的裸
+    #     反斜杠不动 —— 前者登记在 docs/security-boundary.md §7，后者按 POSIX 语义
+    #     本就是转义，折成 / 会把 `\etc\passwd` 这种字面文件名当成 /etc/passwd 误拦。
+    command = _WIN_PATH_FOLD_RE.sub(lambda m: m.group(0).replace("\\", "/"), command)
 
     # 6. 剥反斜杠转义：把 `r\m` 还原为 `rm`
     #    连续多个反斜杠（如 `r\\m`）需循环归约直至稳定
@@ -327,9 +346,15 @@ _SENSITIVE_DIRS = (
 
 # 持久化/植入类写入目标（重定向 > / >> 或 tee 命中即 hardline）：
 # 篡改认证/权限/启动加载机制，属于植入后门行为
+# 每一项都是**完整文件名**或**完整目录名**：_is_persistence_target 按 `t == p` 与
+# `t.startswith(p + "/")` 两种形态命中，所以兄弟名字（/etc/passwd.new、/etc/sudoers.tmp）
+# 不再算植入 —— 但它们也不会顺带覆盖任何东西。/etc/sudoers.d 原本是靠裸前缀
+# `startswith("/etc/sudoers")` 意外落进来的（补边界后由用例 test_safety.py:56 报红抓回），
+# 它是 sudo 的 drop-in **目录**，同罪名单独登记。
+# /etc/cron.d 不在此列：契约表把它钉在 dangerous（写敏感路径），不是本轮该改的口径。
 _PERSISTENCE_PREFIXES = (
-    "/etc/passwd", "/etc/shadow", "/etc/sudoers", "/etc/gshadow",
-    "/etc/ld.so.preload",
+    "/etc/passwd", "/etc/shadow", "/etc/sudoers", "/etc/sudoers.d",
+    "/etc/gshadow", "/etc/ld.so.preload",
 )
 
 # 敏感读取目标（cat/less/head/tail/cp/dd 等命中即 dangerous）：
@@ -345,6 +370,61 @@ _SECRET_FILE_RE = re.compile(
     r"|/id_(?:rsa|dsa|ecdsa|ed25519)\b"
     r"|(?:^|[/~])\.ssh/?$)"
 )
+
+# Windows 形态的同一族凭据路径。为什么必须有：`file_read`/`file_grep`/`file_glob` 在无
+# SSH 会话时降级读**本机**文件（docs/security-boundary.md §7 的"不对称"条目），本机就是
+# Windows —— 实测同一条私钥写成 `C:/Users/a/.ssh/id_rsa` 判 dangerous、写成
+# `C:\Users\a\.ssh\id_rsa` 判 safe，而 Windows 文件系统既不分大小写也用反斜杠分隔，
+# 两者是同一个文件。覆盖面与 _SECRET_FILE_RE 严格对齐（.ssh 目录 + id_* 私钥），
+# 不额外加宽 —— 主机私钥另有缺口，登记在 §7。
+# IGNORECASE 只作用于带盘符的形态：Linux 上 `/etc/PASSWD` 不是 `/etc/passwd`，
+# 把大小写不敏感推广到 POSIX 等于凭空造出一批不存在的命中。
+_WIN_SECRET_PATH_RE = re.compile(
+    r"[a-z]:/(?:[^/]*/)*\.ssh(?:/?$|/(?:id_|authorized_keys))"
+    r"|[a-z]:/(?:[^/]*/)*id_(?:rsa|dsa|ecdsa|ed25519)\b"
+    r"|[a-z]:/(?:[^/]*/)?"
+    r"(?:users|home)/[^/]+/\.ssh/?$",
+    re.IGNORECASE,
+)
+
+# dotenv 家族：`.env` 及其 `.env.<环境>` 变体是应用凭据的标准落点
+# （DB 口令、API token、SESSION_SECRET 全在里面），Rails/Laravel/Django/Symfony 的
+# 默认约定。`docs/security-boundary.md` §4 一直把 `.env` 列在敏感落点里，代码却从未
+# 有对应规则 —— 实测 `cat /app/.env` 判 safe。
+# 占位模板惯例上不含真凭据、且开发里 cat 它们是日常操作，故整族豁免（见下面的用例）；
+# `.env.bak` / `.env.save` 这类**备份**不豁免 —— 备份里抄的就是真身。
+_DOTENV_PLACEHOLDER_SUFFIXES = frozenset({
+    ".example", ".sample", ".dist", ".template", ".tpl", ".in", ".default", ".origin",
+})
+
+
+def _is_dotenv_path(target: str) -> bool:
+    """目标文件名是否是 dotenv 家族（占位模板除外）"""
+    name = target.rsplit("/", 1)[-1]
+    if not name.startswith(".env"):
+        return False
+    rest = name[len(".env"):]
+    if not rest:                      # 就是 .env
+        return True
+    if not rest.startswith("."):      # `.environment` / `.envs` 这类兄弟名字
+        return False
+    return rest not in _DOTENV_PLACEHOLDER_SUFFIXES
+
+
+def _is_secret_path(target: str) -> bool:
+    """凭据/密钥类路径的统一判据（POSIX + Windows + dotenv 三种形态一条入口）
+
+    三条规则写在一处而不是散在调用点：读侧与写侧、`classify_command` 与
+    `classify_constructed_command` 必须对同一条路径给同一个答案，两处各抄一遍就是
+    本仓反复赔钱的「跨层清单漂移」。入参按 POSIX 形态传入；Windows 判据带盘符前缀，
+    POSIX 绝对路径天然不会命中它。dotenv 判据对两种形态都成立（反斜杠已在
+    `_normalize_target` 里折成斜杠）。
+    """
+    return bool(
+        _SECRET_FILE_RE.search(target)
+        or _WIN_SECRET_PATH_RE.search(target)
+        or _is_dotenv_path(target)
+    )
 
 # 解释器/脚本执行器（作为命令首 token 出现 → 至少 dangerous，需审批）
 # 字符串参数内容对 token 分析不可见，解释器调用是间接执行的主要载体
@@ -406,14 +486,25 @@ def _split_command_chain(text: str) -> list[str]:
 
 
 def _normalize_target(path: str) -> str:
-    """规范化目标路径：strip + 折叠连续的 / + 解析 ./.. 点分段
+    """规范化目标路径：strip + 反斜杠折成 / + 折叠连续的 / + 解析 ./.. 点分段
 
     B-7 配套修复：原实现只折叠连续 /，`rm -rf /../` 归一后仍是 "/../"，
     绕过根目录/敏感目录前缀匹配。改用 posixpath.normpath 解析点分段
     （normpath("/../") → "/"），保持原函数契约（strip + 折叠连续 /，
     空串返回 ""，~/$HOME 等非常规前缀不受影响）。
+
+    反斜杠折算让**一条**路径规则同时覆盖 Windows 形态：无 SSH 会话时的本机读取分支走
+    Python 原生 open()，路径就是 `C:\\Users\\a\\.ssh\\id_rsa`；只在此处折一次，下游所有
+    判据（敏感目录、.ssh、持久化、tar 源、tee 目标）自动同形态命中 —— 在每条规则里各写
+    一遍斜杠/反斜杠两套就是本仓反复赔钱的漂移。
+    分层说明：命令层还有一个折算点 `normalize_command_for_detection` 第 5.5 步，它管的
+    是**整条命令串**（正则表按字符串匹配，不经本函数），且必须早于该函数的剥反斜杠转义，
+    否则路径在进入这里之前就被折成 `C:Usersalice.sshid_rsa`。两处各管自己的入参形态，
+    不是同一条规则抄两遍。
+    残留代价：POSIX 上文件名里真含反斜杠时（`/tmp/a\\b`）会被按两个路径段判定；分类只读
+    形状、不碰文件系统，实际影响面是该名字本就不存在于常规运维路径。
     """
-    p = path.strip()
+    p = path.strip().replace("\\", "/")
     if not p:
         return ""
     norm = posixpath.normpath(p)
@@ -469,7 +560,11 @@ def _is_ssh_path(target: str) -> bool:
 def _is_persistence_target(target: str) -> bool:
     """写入目标是否命中持久化/植入类路径（重定向或 tee）"""
     t = _normalize_target(target)
-    if any(t == p or t.startswith(p) for p in _PERSISTENCE_PREFIXES):
+    # 边界用 `p + "/"` 而不是裸 startswith：与同文件 `_is_sensitive_path` 同口径。
+    # 裸前缀把 `/etc/passwdx`、`/etc/shadow_backup`、`/etc/passwd.new` 也算植入 ——
+    # hardline 没有审批出口、allowlist 也放不走，等于永久封死"备份后编辑再换回"这类
+    # 标准手法（真身那一段 `mv /etc/passwd.new /etc/passwd` 仍然照抓）。
+    if any(t == p or t.startswith(p + "/") for p in _PERSISTENCE_PREFIXES):
         return True
     # 任意 .ssh 目录下的写入（authorized_keys 植入等）
     return _is_ssh_path(t)
@@ -881,19 +976,23 @@ def _classify_exec_position(segment: str) -> tuple[str, str | None]:
 # 现在任何非 flag 参数命中 _SECRET_FILE_RE 即 dangerous：nl/sed/base64/grep 族
 # （ops_file 读模板实际使用的动词）依旧命中，覆盖面是原动词表的严格超集。
 def _classify_secret_read(segment: str) -> tuple[str, str | None]:
-    """读取/输出认证凭据与权限文件（/etc/shadow、*.ssh/id_* 等）→ dangerous"""
+    """读取/输出认证凭据与权限文件（/etc/shadow、*.ssh/id_*、.env 家族）→ dangerous"""
     try:
         tokens = shlex.split(segment, posix=True)
     except ValueError:
         tokens = segment.split()
     for t in tokens:
         if t.startswith("-"):
-            # F6：粘连值 flag（`grep -f/etc/shadow`）把路径混在 flag 位，
-            # 整串跳转会误放 —— 含 "/" 的 token 去掉前导 dash 后照查。
-            if "/" in t and _SECRET_FILE_RE.search(t.lstrip("-")):
-                return ("dangerous", f"read of credential file ({t.lstrip('-')})")
+            # F6：粘连值 flag 把路径混在 flag 位，整串跳转会误放。两种粘连形态都查：
+            # 无等号的 `grep -f/etc/shadow`（去前导 dash 后整串当值）与带等号的
+            # `--env-file=/srv/app/.env`（取等号后那段）。等号形态此前只靠"含 /"这条
+            # 隐式约束兜住，`--env-file=.env` 这类相对值整个漏过。
+            # 误拦代价：`find . -name=.env` 这类把 dotenv 当模式串的写法会多一张审批卡。
+            value = t.rsplit("=", 1)[1] if "=" in t else t.lstrip("-")
+            if value and _is_secret_path(_normalize_target(value)):
+                return ("dangerous", f"read of credential file ({value})")
             continue
-        if _SECRET_FILE_RE.search(t):
+        if _is_secret_path(_normalize_target(t)):
             return ("dangerous", f"read of credential file ({t})")
     return ("safe", None)
 
@@ -997,7 +1096,15 @@ def _classify_write_targets(text: str) -> tuple[str, str | None]:
         if _is_persistence_target(t):
             if best[0] != "hardline":
                 best = ("hardline", f"write to persistence/credential target ({t})")
-        elif _is_sensitive_path(t) or _is_home_relative(t):
+        elif (
+            _is_sensitive_path(t)
+            or _is_home_relative(t)
+            or _is_dotenv_path(_normalize_target(t))
+        ):
+            # dotenv 与读侧同一口径：docs/security-boundary.md §4 一直把 `.env` 列为敏感
+            # 落点，读侧这次补 Windows/dotenv 形态时写侧不能只接一半 —— 分两次收紧就是
+            # 本仓反复赔钱的「同一判据跨调用点漂移」。reason 字面量沿用原文，
+            # command_explain 的覆盖用例按它查表。
             if _SEVERITY[best[0]] < _SEVERITY["dangerous"]:
                 best = ("dangerous", f"write to sensitive path ({t})")
 
