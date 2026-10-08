@@ -227,7 +227,10 @@ npm run dev
 ```bash
 npm run dev            # 开发模式（Vite HMR + Electron）
 npm run dev:web        # 开发模式 + dev server 监听 0.0.0.0
-npm run dev:backend    # 单独启动 Python 后端
+npm run dev:backend    # 单独启动 Python 后端 —— 注意：这条同样绑 0.0.0.0
+                       # （与 dev:web 配套，供手机在同一局域网里访问；
+                       #  只要本机能用就改成 `npm run dev:backend -- --host 127.0.0.1`，
+                       #  main.py 自己的默认值是 127.0.0.1）
 npm run build          # 构建生产版本
 npm run typecheck      # 前端类型检查
 npm test               # 前端单测（vitest）
