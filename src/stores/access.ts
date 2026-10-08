@@ -101,6 +101,10 @@ export const useAccessStore = defineStore('access', () => {
     delete map[id]
     pushedIds.delete(id)
     statuses.value = map
+    // 待确认指纹跟着记录走：主进程的 pendingSpki 会随 drop() 清，但渲染层这一份
+    // 是本地数组，不清就留下一张指向已删网关的确认弹窗（pendingHostKeys[0] 即弹），
+    // 用户点「信任并连接」只会对着一个不存在的 id 报错。
+    pendingHostKeys.value = pendingHostKeys.value.filter(p => p.id !== id)
     await refresh()
   }
 
@@ -131,8 +135,10 @@ export const useAccessStore = defineStore('access', () => {
   }
 
   /**
-   * 取消确认：除了收弹窗，还要让主进程把待确认指纹清掉。
-   * 只出队的话「取消」等于什么都没撤销 —— 库里那份指纹已经写好了，下次连接不再问。
+   * 取消确认：除了收弹窗，还要让主进程把它手里那份待确认指纹清掉。
+   * 只出队的话「取消」等于什么都没撤销 —— 下次拨号到同一个 pendingSpki 判定路径，
+   * 用户会再看到一次确认请求，而那份指纹并没有被拒绝过。
+   * 注意：指纹落库只发生在 trustHostKey（用户点头）之后，这里不涉及库。
    */
   async function dismissHostKey(id: string, spki: string): Promise<void> {
     pendingHostKeys.value = pendingHostKeys.value.filter(p => !(p.id === id && p.spki === spki))

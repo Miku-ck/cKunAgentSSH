@@ -4,26 +4,26 @@
     <div class="dialog" role="dialog" aria-modal="true">
       <div class="dlg-head">
         <h2>{{ isNew ? '添加连接' : '修改连接' }}</h2>
-        <button class="dlg-x" :disabled="saving" @click="tryClose">✕</button>
+        <button class="dlg-x" aria-label="关闭" :disabled="saving" @click="tryClose">✕</button>
       </div>
       <div class="dlg-tabs">
         <span class="dlg-tab on">TLS/SSL</span>
       </div>
       <div class="dlg-body">
-        <div class="frow"><label>连接名称：</label><input v-model.trim="form.name" placeholder="留空则用地址"></div>
+        <div class="frow"><label for="acc-name">连接名称：</label><input id="acc-name" v-model.trim="form.name" placeholder="留空则用地址"></div>
         <div class="frow">
-          <label>服务器：</label>
-          <input v-model.trim="form.host" class="mono" placeholder="sg-lab.example.net">
+          <label for="acc-host">服务器：</label>
+          <input id="acc-host" v-model.trim="form.host" class="mono" placeholder="sg-lab.example.net">
         </div>
         <div class="frow">
-          <label>端口：</label>
-          <input v-model.number="form.port" class="mono" inputmode="numeric">
+          <label for="acc-port">端口：</label>
+          <input id="acc-port" v-model.number="form.port" class="mono" inputmode="numeric">
         </div>
         <div v-if="bad.port" class="ferr">端口需为 1–65535 的整数</div>
-        <div class="frow"><label>用户名：</label><input v-model.trim="form.user"></div>
+        <div class="frow"><label for="acc-user">用户名：</label><input id="acc-user" v-model.trim="form.user"></div>
         <div class="frow">
-          <label>口令：</label>
-          <input v-model="form.password" type="password" :placeholder="isNew ? '' : '留空 = 保留已存口令'">
+          <label for="acc-pass">口令：</label>
+          <input id="acc-pass" v-model="form.password" type="password" :placeholder="isNew ? '' : '留空 = 保留已存口令'">
         </div>
 
         <button class="adv-toggle" type="button" @click="advOpen = !advOpen">
@@ -32,8 +32,8 @@
         </button>
         <div v-show="advOpen">
           <div class="frow">
-            <label>CA 证书：</label>
-            <textarea v-model.trim="form.caPem" rows="3" class="mono" placeholder="粘贴 .crt（PEM）。留空则只按下面的指纹信任"></textarea>
+            <label for="acc-ca">CA 证书：</label>
+            <textarea id="acc-ca" v-model.trim="form.caPem" rows="3" class="mono" placeholder="粘贴 .crt（PEM）。留空则只按下面的指纹信任"></textarea>
           </div>
           <div class="frow">
             <label>SPKI 指纹：</label>

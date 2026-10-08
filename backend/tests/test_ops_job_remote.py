@@ -314,3 +314,50 @@ def test_job_run_in_command_exec_tools():
     # 内部 dangerous/hardline 命令必须被识别（wrapper 不介入分类）
     level, _ = classify_shell_args({"cmd": "rm -rf /"})
     assert level != "safe"
+
+
+# ── S6-02 / S6-03 / S6-05 回归：号占位、进程组判活、陈旧 rc ──────
+def test_next_id_reserves_before_the_await_window():
+    """S6-02：号一经发出就占坑，不等 await 远程启动之后。
+
+    原实现 mgr.add(entry) 落在 await _remote_launch（最长 20s）之后，两个并发
+    job_run 会拿到同一个号 → 撞进同一个 <root>/<id>：启动模板的 `>` 截断前一份
+    out.log、覆写 run.sh/rc，且后一次 add 把前一个作业的 pid 句柄与 kill 通道
+    整体替换掉。
+    """
+    mgr = oj.JobManager()
+    first = mgr._next_id()
+    second = mgr._next_id()          # 未 add()，第二个并发调用必须看到坑位
+    assert first != second
+    assert mgr.get(first) is None, "坑位不是条目：启动失败只跳号，不造出假作业"
+
+
+def test_job_launch_cmd_clears_stale_rc():
+    """S6-05：复用号必须先清掉上一任的 rc。
+
+    终态行不参与启动恢复 ⇒ 那些号在重启后就是空闲号，而远端 rc 还躺着旧退出码，
+    新作业第一次 job_output 就被判「已完成」并挂上死作业的码，随后 job_kill 拒止。
+    """
+    cmd = oj.job_launch_cmd("7", "sleep 5")
+    rc_line = f"rm -f {oj._JOBS_ROOT}/7/rc"
+    assert rc_line in cmd.splitlines()
+    assert cmd.index(rc_line) < cmd.index("setsid")
+
+
+def test_job_kill_cmd_verifies_the_group_it_signalled():
+    """S6-03：发信号按进程组，验证生死也必须按进程组。
+
+    命令自我 daemon 化（nginx、redis-server --daemonize yes、以 & 收尾）后组长已
+    退出而组成员还活着 ⇒ `kill -0 <leader>` 判成 DEAD ⇒ 作业标 killed 并回「已终止
+    （进程组已退出）」，而 SIGKILL 一次都没发出。
+    """
+    cmd = oj.job_kill_cmd(12345)
+    assert "kill -0 -- -12345" in cmd
+    assert "kill -0 12345" not in cmd
+    assert "kill -0 -- -$p" in oj.job_reconcile_alive_cmd([111, 222])
+
+
+def test_job_kill_cmd_rejects_non_numeric_pid():
+    """S6-21 / S6-16：pid 取自 DB 且要拼进远端命令串，脏值必须抛错而非送进 shell。"""
+    with pytest.raises(ValueError):
+        oj.job_kill_cmd("12345; rm -rf /")

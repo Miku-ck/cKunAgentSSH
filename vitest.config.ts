@@ -28,6 +28,7 @@ export default defineConfig({
         /approval-card\.css/,
         /settings-groups\.css/,
         /settings-panel-base\.css/,
+        /button\.css/,
       ],
     },
   },

@@ -144,6 +144,8 @@ interface GatewayStatus {
   message?: string
   /** 当前活动转发通道数 */
   channels?: number
+  /** 网关协商的心跳间隔（秒），仅在会话就绪后有值 */
+  heartbeatSec?: number
   role?: string
   sessionId?: string
   spki?: string

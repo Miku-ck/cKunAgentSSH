@@ -50,6 +50,9 @@
         <div v-if="!accessStore.gateways.length" class="empty">
           <!-- 「没读到」与「库里确实空的」不是一回事：前者说失败，后者才说没有 -->
           <div class="t">{{ accessStore.loaded ? '还没有接入网关' : '没读到网关列表' }}</div>
+          <!-- 这一页是常驻挂载的（SshView 的 pageMounted），onMounted 只会跑一次：
+               一次 IPC 抖动就会把失败态永久钉在屏幕上，非重启无解。给一个重试入口。 -->
+          <button v-if="!accessStore.loaded" class="btn btn-sm btn-ghost" @click="retryLoad">重试</button>
         </div>
       </div>
 
@@ -64,8 +67,8 @@
               <td>{{ r.chan }}</td>
               <td :class="r.fromPeer ? 'dir-g2c' : 'dir-c2g'">{{ r.fromPeer ? '网关→本机' : '本机→网关' }}</td>
               <td>{{ r.dstHost }}:{{ r.dstPort }}</td>
-              <td>{{ fmt(r.bytesUp) }}</td>
-              <td>{{ fmt(r.bytesDown) }}</td>
+              <td>{{ formatBytes(r.bytesUp) }}</td>
+              <td>{{ formatBytes(r.bytesDown) }}</td>
               <td>{{ r.state === 'peer-fin' ? '已 FIN' : '开放' }}</td>
             </tr>
           </tbody>
@@ -87,7 +90,9 @@
 
     <AccessModal v-if="modalOpen" :rec="editing" @close="modalOpen = false" @saved="onSaved" />
 
-    <!-- TOFU 指纹确认：与 SSH 首次连接同一套交互，两个信任面必须长一样 -->
+    <!-- TOFU 指纹确认。注意与 SSH 那侧**不是**同一套交互：SSH 首见指纹是自动信任 + 一条
+         toast（stores/ssh.ts 的 onHostKeyNew），网关这侧是阻断式弹窗、点了才落盘。
+         差异是有意的 —— 网关是持凭据的中继，放行一次的爆炸半径比一台目标机大。 -->
     <Teleport to="body">
     <div v-if="pending" class="overlay show">
       <div class="modal" role="dialog" aria-modal="true">
@@ -115,6 +120,7 @@ import { useTunnelStore } from '@/stores/tunnel'
 import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
 import { toFriendlyMessage } from '@/api/client'
+import { formatBytes } from '@/utils/format'
 
 const AccessModal = defineAsyncComponent(() => import('./AccessModal.vue'))
 
@@ -138,6 +144,11 @@ const connectedText = computed(() =>
   accessStore.onlineNames.length ? `已连接至 ${accessStore.onlineNames.join('、')}` : '未建立连接',
 )
 
+async function retryLoad(): Promise<void> {
+  const ok = await accessStore.refresh()
+  if (!ok) toast.error('网关列表读取失败，请稍后重试')
+}
+
 function nameOf(id: string): string {
   const g = accessStore.gateways.find(x => x.id === id)
   return g ? g.name || g.host : id
@@ -147,53 +158,66 @@ function stateOf(id: string): GatewayStatus['state'] {
   return accessStore.stateOf(id)
 }
 
+/** 状态 → 徽章类名/文案：整张表按 GatewayStatus['state'] 键控，新增状态漏项即编译错 */
+const ST_CLASS: Record<GatewayStatus['state'], string> = {
+  idle: 'off',
+  connecting: 'warn',
+  online: 'on',
+  reconnecting: 'warn',
+  error: 'err',
+}
+const ST_LABEL: Record<GatewayStatus['state'], string> = {
+  idle: '未连接',
+  connecting: '连接中',
+  online: '在线',
+  reconnecting: '重连中',
+  error: '失败',
+}
+
 /** 登录模式：口令是底座，配了 CA 才谈得上「证书」那一档 */
 function loginModeOf(gw: GatewayRecord): string {
   return gw.caPem ? 'TLS + CA 校验' : 'TLS'
 }
 
 function stClass(id: string): string {
-  const s = stateOf(id)
-  if (s === 'online') return 'on'
-  if (s === 'error') return 'err'
-  if (s === 'connecting' || s === 'reconnecting') return 'warn'
-  return 'off'
+  return ST_CLASS[stateOf(id)]
 }
 
 function stLabel(id: string): string {
   const st = accessStore.statusOf(id)
-  switch (st?.state) {
-    case 'online': return '在线'
-    case 'connecting': return '连接中'
-    case 'reconnecting': return `重连中 ${st.attempt || 1}`
-    case 'error': return '失败'
-    default: return '未连接'
-  }
+  const state = st?.state ?? 'idle'
+  // reconnecting 单独带 attempt；用函数表而不是把 switch 再抄一遍，
+  // Record<GatewayState, …> 让「新增一个状态却忘了在这里挂」变成编译错。
+  return state === 'reconnecting' ? `重连中 ${(st?.attempt ?? 0) || 1}` : ST_LABEL[state]
 }
 
+/**
+ * 「重连中」必须给一个能停下来的动词。退避循环是无限的（gateway-manager.scheduleRetry），
+ * 而原先这一档按钮既显示「连接」又被 disabled 半程 —— 点「连接」只是把下一次拨号提前
+ * （manager 里那条「退避期间点连接=现在就试」是有意的），谁都不停得掉循环，
+ * 唯一的出口只剩删掉整条记录。disconnect(id) 从任意状态都能停（清 timer + 拆会话）。
+ */
 function actionLabel(id: string): string {
-  return stateOf(id) === 'online' ? '断开' : '连接'
+  const s = stateOf(id)
+  if (s === 'online') return '断开'
+  if (s === 'reconnecting') return '停止重连'
+  return '连接'
 }
 
 function extra(id: string): string {
   const st = accessStore.statusOf(id)
   if (st?.state !== 'online') return st?.state === 'reconnecting' ? st.message || '' : ''
-  const bits = [`会话 ${st.sessionId || '-'}`, `角色 ${st.role || '-'}`, `心跳 30 s`]
-  if (st.channels) bits.push(`${st.channels} 通道`)
+  // 心跳是网关在 HELLO_OK 里协商下来的，不是常量：写死 30 会在 heartbeatSec=300
+  // 的部署上长期说谎。通道数为 0 是合法读数（在线但没人用），不能因为 falsy 就省掉。
+  const bits = [`会话 ${st.sessionId || '-'}`, `角色 ${st.role || '-'}`, `心跳 ${st.heartbeatSec ?? '-'} s`, `${st.channels ?? 0} 通道`]
   return bits.join(' · ')
-}
-
-function fmt(n: number): string {
-  if (!n) return '0'
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`
-  return `${(n / 1024 / 1024).toFixed(1)} MB`
 }
 
 async function toggle(id: string): Promise<void> {
   busyId.value = id
   try {
-    if (stateOf(id) === 'online') await accessStore.disconnect(id)
+    const s = stateOf(id)
+    if (s === 'online' || s === 'reconnecting') await accessStore.disconnect(id)
     else await accessStore.connect(id)
   } catch (err) {
     toast.error(toFriendlyMessage(err, '网关操作失败'))
@@ -236,8 +260,13 @@ async function askDelete(id: string): Promise<void> {
   if (!ok) return
   try {
     await accessStore.remove(id)
-    // 规则里引用它的条目会变成「网关未连接」，这里把列表拉一次让 UI 跟上
-    void tunnelStore.refreshRules()
+    // 删除会影响「引用它的规则」那一档展示，刷新一次让隧道页跟上。
+    // 原先是 `void refreshRules()`：tunnelList 走 IPC，失败即未处理拒绝（控制台里冒
+    // Unhandled promise rejection，用户看不到任何提示）。它也不能并进上面的 catch —
+    // 删除已经成功，把刷新失败报成「删除失败」是另一层谎。
+    await tunnelStore.refreshRules().catch(() => {
+      toast.error('隧道规则刷新失败，切到隧道页会重新加载')
+    })
   } catch (err) {
     toast.error(toFriendlyMessage(err, '删除失败'))
   }

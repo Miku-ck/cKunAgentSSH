@@ -20,6 +20,7 @@ import rawHomeQueue from '../components/home/HomeApprovalQueue.vue?raw'
 import rawApprovalCard from './approval-card.css?raw'
 import rawSettingsGroups from '../components/settings/panels/settings-groups.css?raw'
 import rawSettingsPanelBase from '../components/settings/panels/settings-panel-base.css?raw'
+import rawButton from './button.css?raw'
 
 /**
  * 剥掉注释再断言（CSS 块注释与模板里的 HTML 注释）。
@@ -45,6 +46,7 @@ const homeQueue = strip(rawHomeQueue)
  *  —— vitest 的 css.include 是白名单，不在表里的 .css 用 ?raw 拿到的是空串。 */
 const SHARED_STYLESHEETS: Record<string, string> = {
   'approval-card.css': strip(rawApprovalCard),
+  'button.css': strip(rawButton),
   'settings-groups.css': strip(rawSettingsGroups),
   'settings-panel-base.css': strip(rawSettingsPanelBase),
 }
@@ -237,6 +239,7 @@ describe('atelier（手记）主题的令牌覆盖', () => {
     // 另外钉住"文件真读到了"：css.include 是白名单，漏一项就把空串当成"没有违规"。
     expect(Object.keys(SHARED_STYLESHEETS).sort()).toEqual([
       'approval-card.css',
+      'button.css',
       'settings-groups.css',
       'settings-panel-base.css',
     ])

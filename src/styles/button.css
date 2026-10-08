@@ -53,8 +53,9 @@
 }
 
 /* ── Primary：强调色文本 + 50% alpha 描边 ──
-   color-mix 跟主题走，浅色主题下 50% alpha 也保可读；不设 color: accent-primary
-   因为部分面板已有自己的「上色」逻辑，留给 .btn.primary 这类 modifier 再挂。 */
+   color-mix 跟主题走，浅色主题下 50% alpha 也保可读。
+   强调色就只挂在这一档：基础 .btn 一律不吃强调色，面板想改按钮外观只需换变体，
+   不需要在自己作用域里再抄一份 color/border-color。 */
 .btn-primary {
   color: var(--accent-primary);
   border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent);

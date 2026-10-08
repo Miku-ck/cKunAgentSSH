@@ -271,3 +271,32 @@ def test_schedule_op_list_empty_is_success_with_output(monkeypatch):
         assert r.success is True
         assert r.output.strip()
     asyncio.run(go())
+
+
+def test_network_probe_监听段不被退出码哨兵吞掉(monkeypatch):
+    """S6-07 回归：[本地监听] 段曾经恒为空。
+
+    run_headless 对每一次成功执行都无条件把 [exit_code=…] 拼在正文之后，而原判据是
+    整串 `EXIT_CODE_PREFIX not in ss_out` ⇒ 恒假 ⇒ 这个成文的运维入口对「端口是否在
+    听」恒答否（输出「（无监听信息）」），模型与用户都会把它读成事实；netstat 回退支
+    也因同一判据不可达。同文件进程段早已用逐行跳过 —— 口径收敛到一处。
+    """
+    from agent.remote_protocol import EXIT_CODE_PREFIX
+    sentinel = f"{EXIT_CODE_PREFIX}0]"
+
+    async def fake_run(context, command, timeout=None):
+        if "ss -ltn" in command:
+            return True, "tcp  LISTEN  0  128  0.0.0.0:8080  0.0.0.0:*\n" + sentinel
+        if "netstat -an" in command:
+            return True, "tcp  LISTEN  0  128  0.0.0.0:9999\n" + sentinel
+        return True, ""
+
+    monkeypatch.setattr("agent.tools.builtin.ops_obs.run_headless", fake_run)
+
+    async def go():
+        return await NetworkProbeTool().execute(_ctx(), host="127.0.0.1", port=8080)
+
+    res = asyncio.run(go())
+    assert res.success is True
+    assert "0.0.0.0:8080" in res.output, "ss 的监听信息被整串哨兵判据吞掉"
+    assert "（无监听信息）" not in res.output
