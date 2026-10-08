@@ -669,15 +669,26 @@ def trim_pools(max_items: int) -> int:
 
 
 def decay_memories(days: int = 90, delta: float = 0.1, floor: float = 0.2) -> dict:
-    """长期无人用且零命中的降权，跌破地板 retire（自增强奖励回路已整体删除）。"""
+    """长期无人用且零命中的降权，跌破地板 retire（自增强奖励回路已整体删除）。
+
+    降权不碰 updated_at：它是账面记账不是内容编辑（mark_injected 计热度、set_pinned
+    改旗标同理）。updated_at 是本模块三处「新近」口径的唯一依据 —— _overlap_hits 取
+    最近 500 行做词法候选、vec_search 的 BLOB 兜底取最近 1000 行、recent_fallback_lines
+    直接按它挑注入 prompt 的记忆；而 decay 的人群恰好是全库最旧最零命中的那一批，
+    一刷就把它们重新钉到窗口顶部：库超过 500 条后新写好用的记忆被挤出候选，
+    兜底路注入的反而是刚被判「无用」的垃圾。
+    """
     conn = _conn()
     try:
+        # ROUND(...,4) 不是装饰：importance=0.3 减 0.1 在二进制浮点里是
+        # 0.19999999999999998，紧跟其后的地板判据 importance<0.2 就在同一次 tick 里
+        # 把「刚好降到地板」的行判死。地板的语义是降到就不再往下，不是差一个 eps。
         c1 = conn.execute(
-            "UPDATE memories SET importance = importance - ?, updated_at=? "
+            "UPDATE memories SET importance = ROUND(importance - ?, 4) "
             "WHERE status='active' AND pinned=0 AND use_count=0 "
             "AND ifnull(last_used_at, created_at) < datetime('now', ?) "
             "AND importance > ?",
-            (delta, db._now(), f"-{days} day", floor),
+            (delta, f"-{days} day", floor),
         ).rowcount
         # S3-02 修复：第二条原本是一条**没有年龄门槛**的地板清扫 —— 只要
         # importance < floor 就在同一次 tick 里被作废，于是刚写入的低权重候选
@@ -703,14 +714,22 @@ def decay_memories(days: int = 90, delta: float = 0.1, floor: float = 0.2) -> di
 
 
 def retire_all_unpinned() -> int:
+    """整库清空（pinned 除外）：逐行走 retire()，一条不落审计。
+
+    与 decay 的地板清扫同一个理由 —— spec §4.4 要求所有动作落审计，而裸 UPDATE 绕过
+    retire() 时 memory_audit 一行都不写：用户点完「清空记忆」，历史抽屉里没有任何解释，
+    只看见整库凭空 invalidated。retire 自带状态守卫（非 active/pending 命中 0 行返回
+    False），计数按返回值而非 rowcount。
+    """
     conn = _conn()
     try:
-        cur = conn.execute(
-            "UPDATE memories SET status='invalidated', invalid_at=?, updated_at=? "
-            "WHERE pinned=0 AND status IN ('active','pending_reconcile')",
-            (db._now(), db._now()),
-        )
-        conn.commit()
-        return cur.rowcount
+        ids = [r["id"] for r in conn.execute(
+            "SELECT id FROM memories "
+            "WHERE pinned=0 AND status IN ('active','pending_reconcile')"
+        ).fetchall()]
     finally:
         conn.close()
+    return sum(
+        1 for mid in ids
+        if retire(mid, reason="手动清空全部未固定记忆", job_id="")
+    )

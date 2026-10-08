@@ -513,6 +513,84 @@ def test_decay_地板清扫有年龄门槛且落审计(memdb):
     assert mstore.list_audit(stale), "地板作废没落审计，抽屉历史解释不了这次消失"
 
 
+def test_decay_不刷新_updated_at_否则降权垃圾霸占新近窗口(memdb):
+    """降权是账面记账，不是内容编辑 —— updated_at 一刷，最旧最没用的行就永远排最前。
+
+    updated_at 是本模块三处「新近」口径的唯一依据：_overlap_hits 取最近 500 行做词法
+    候选（FTS5 不可用时的主力路径）、vec_search 的 BLOB 兜底取最近 1000 行、
+    recent_fallback_lines 直接按它挑要注入 prompt 的记忆。原实现给 decay 的 UPDATE 带上
+    updated_at=now，而这批行恰好是全库最旧、零命中的那一批：每次 tick 都把它们重新钉到
+    窗口顶部，超过 500 条的库里刚写好的有用记忆被挤出候选，故障兜底注入的正是这些刚被
+    判「无用」的垃圾。同类的记账动作（mark_injected 计热度、set_pinned 改旗标）都不碰
+    updated_at —— 不一致的就是这一条。
+    """
+    conn = db._get_conn()
+    junk = mstore.add_memory(kind="semantic", content="久未使用的垃圾", source="test",
+                             importance=0.3)
+    mstore.add_memory(kind="semantic", content="刚写好且真被用到", source="test",
+                      importance=0.9)
+    conn.execute("UPDATE memories SET created_at=datetime('now','-400 day'),"
+                 " valid_at=datetime('now','-400 day'),"
+                 " updated_at=datetime('now','-400 day') WHERE id=?", (junk,))
+    conn.commit()
+    before = mstore.get_memory(junk)["updated_at"]
+
+    assert mstore.decay_memories()["decayed"] >= 1, "人群门槛没命中，这条用例在空转"
+    assert mstore.get_memory(junk)["importance"] < 0.3, "降权本身要生效"
+    assert mstore.get_memory(junk)["status"] == "active", (
+        "0.3 降一档应正好停在地板 0.2；被判死说明浮点漂移把地板当成了开区间")
+    assert mstore.get_memory(junk)["updated_at"] == before, (
+        "decay 刷新了 updated_at：最旧最没用的行被重新钉进新近窗口顶部")
+    lines = mstore.recent_fallback_lines(limit=1)
+    assert "刚写好且真被用到" in lines[0], f"按新近的兜底注入了降权垃圾：{lines[0]!r}"
+
+
+def test_decay_停在地板而不是擦过地板就死(memdb):
+    """地板 = 「不再往下」，不是「差一个 eps 就死」：0.3-0.1 在二进制浮点里是
+    0.19999999999999998，紧跟的 `importance < 0.2` 于是把正好降到地板的行判死 ——
+    比降权设计的收敛点早一档，且这条人群恰好是 decay 唯一会碰的那批（零命中且久未使用）。
+    """
+    conn = db._get_conn()
+    mid = mstore.add_memory(kind="semantic", content="刚好降到地板", source="test",
+                            importance=0.3)
+    conn.execute("UPDATE memories SET created_at=datetime('now','-400 day'),"
+                 " valid_at=datetime('now','-400 day') WHERE id=?", (mid,))
+    conn.commit()
+
+    result = mstore.decay_memories()
+    row = mstore.get_memory(mid)
+    assert result["invalidated"] == 0, f"正好落到地板的行被带走了：{result}"
+    assert row["status"] == "active"
+    assert abs(row["importance"] - 0.2) < 1e-9
+
+    # 反向锁：真跌破地板的（0.25 → 0.15）必须照旧被带走，别把地板修成免死金牌
+    below = mstore.add_memory(kind="semantic", content="会跌破地板", source="test",
+                              importance=0.25)
+    conn.execute("UPDATE memories SET created_at=datetime('now','-400 day'),"
+                 " valid_at=datetime('now','-400 day') WHERE id=?", (below,))
+    conn.commit()
+    assert mstore.decay_memories()["invalidated"] == 1
+    assert mstore.get_memory(below)["status"] == "invalidated"
+
+
+def test_retire_all_unpinned_逐行走_retire_才落审计(memdb):
+    """整库清空同样在「所有动作落审计」的适用范围内（spec §4.4）。
+
+    它是 decay 的兄弟，而同一族里 decay 的地板清扫已经改成逐行 retire() 并在注释里写明
+    「裸 UPDATE 绕过 retire ⇒ memory_audit 一条都不写」—— 这条还是裸 UPDATE：用户点完
+    「清空记忆」，历史抽屉里没有任何解释，只看见整库凭空 invalidated。
+    """
+    ids = [mstore.add_memory(kind="semantic", content=f"待清空 {i}", source="test")
+           for i in range(3)]
+    kept = mstore.add_memory(kind="semantic", content="pin 住", source="test", pinned=1)
+
+    assert mstore.retire_all_unpinned() == 3
+    for mid in ids:
+        assert mstore.get_memory(mid)["status"] == "invalidated"
+        assert mstore.list_audit(mid), f"{mid} 被整库清空作废，审计里却查不到"
+    assert mstore.get_memory(kept)["status"] == "active", "pinned 的行不该被清空带走"
+
+
 def test_blocks_replace_and_limits(memdb):
     mstore.put_block("user-preferences", "用户喜欢简洁回答", "test")
     v2 = mstore.replace_in_block("user-preferences", "简洁回答", "详尽回答", "agent")

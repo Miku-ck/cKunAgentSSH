@@ -142,6 +142,49 @@ def test_nonempty_legacy_rows_survive_the_rename(tmp_path):
     assert rows[0]["content"] == "三层记忆遗留内容 0"
 
 
+class _NoFts5:
+    """代理连接：让 USING fts5 的建表抛 "no such module: fts5"，等价于一个没编译
+    FTS5 的 SQLite —— 也就是 database.py 里那条 except 专为它写的路径。其余语句透传。
+    """
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql, *args):
+        if "using fts5" in sql.lower():
+            raise sqlite3.OperationalError("no such module: fts5")
+        return self._conn.execute(sql, *args)
+
+    def commit(self):
+        return self._conn.commit()
+
+    def rollback(self):
+        return self._conn.rollback()
+
+
+def test_fts5_absent_legacy_db_does_not_abort_startup(tmp_path):
+    """FTS5 不可用 + 老库需要改名：侧表根本没建起来，清理它的那条 DELETE 必须跳过。
+
+    原实现在建表 try/except 之后无条件 `DELETE FROM memory_fts`，抛
+    "no such table: memory_fts" 冲出 _init_memory_v2 → init_db，而 main.py 不接 ——
+    后果不是某个接口 500，是整个后端起不来，与本函数 docstring 承诺的
+    「任何异常只降级，不拖垮应用启动」正相反。
+    """
+    conn = _legacy_conn(str(tmp_path / "no-fts5.db"))
+
+    db._init_memory_v2(_NoFts5(conn))  # 不抛即通过
+
+    assert conn.execute("SELECT value FROM app_settings WHERE key='memory_v2.fts'"
+                        ).fetchone()[0] == "0", "FTS5 缺失必须落标记，让 mstore 退回词重叠"
+    assert not conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='memory_fts'"
+    ).fetchone()
+    # 降级不等于放弃迁移：跳过 DELETE 之后存量照样得搬进 v2，否则表白建
+    assert conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0] == 12
+    assert conn.execute(
+        "SELECT COUNT(*) FROM memories WHERE source='migration'").fetchone()[0] == 12
+
+
 @pytest.mark.parametrize("missing", ["status", "pinned"])
 def test_index_failure_on_bizarre_shape_does_not_abort(tmp_path, missing):
     """有 kind 但缺别的列的第三种形状：不能让 init_db 崩，索引建不上要能吞。

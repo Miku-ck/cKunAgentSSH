@@ -674,7 +674,16 @@ def _init_memory_v2(conn: sqlite3.Connection) -> None:
         # 旧 memories 表被改名搁置后，它留下的 FTS 行指向的 mid 已经不存在（或被
         # 下面的重迁移复用），全部清掉由重迁移重建。放在建表之后：老库里这张侧表
         # 可能根本还没建，提前 DELETE 会抛错。
-        conn.execute("DELETE FROM memory_fts")
+        # 闸门读 memory_v2.fts 而不是探 sqlite_master：这个标记就是上面 try/except
+        # 当场写的，与侧表是否真存在同源（迁移侧 _migrate_memory_v1_to_v2 读的也是它）。
+        # FTS5 不可用时表从未建起来，无条件 DELETE 抛 "no such table" 且不落在任何
+        # except 里 —— 它会一路冲出 init_db，把本函数「只降级不崩」的承诺变成后端
+        # 整个起不来。表不存在就没有残留行可清，跳过即正确。
+        fts_flag = conn.execute(
+            "SELECT value FROM app_settings WHERE key='memory_v2.fts'"
+        ).fetchone()
+        if fts_flag and fts_flag[0] == "1":
+            conn.execute("DELETE FROM memory_fts")
 
     conn.commit()
 
@@ -982,7 +991,13 @@ def create_conversation(title: str = "New Chat", mode: str = "ssh") -> dict:
 
 
 def list_conversations(limit: int = 50, offset: int = 0, mode: Optional[str] = None) -> list[dict]:
-    """获取会话列表 (按更新时间倒序)，附带最后一条消息预览和状态"""
+    """获取会话列表 (按更新时间倒序)，附带最后一条消息预览和状态
+
+    两处排序都带唯一兜底键（c.id / m.rowid）：_now() 只到秒，同批写入的行必然并列，
+    而翻页是两次独立请求 —— 没有兜底键时 SQLite 对同键行的次序由查询计划自己决定，
+    同一条会话会印在两页上、另一条永远翻不到；预览子查询同理，`LIMIT 1` 会在同秒的
+    用户消息和回复里挑一条随机的。与 get_agent_runs / get_recent_messages 同一口径。
+    """
     conn = _get_conn()
     try:
         conditions = []
@@ -996,10 +1011,10 @@ def list_conversations(limit: int = 50, offset: int = 0, mode: Optional[str] = N
             SELECT c.id, c.title, c.status, c.mode, c.created_at, c.updated_at,
                    (SELECT m.content FROM messages m
                     WHERE m.conversation_id = c.id
-                    ORDER BY m.created_at DESC LIMIT 1) AS preview
+                    ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1) AS preview
             FROM conversations c
             {where}
-            ORDER BY c.updated_at DESC
+            ORDER BY c.updated_at DESC, c.id DESC
             LIMIT ? OFFSET ?
         """, params).fetchall()
         return [dict(r) for r in rows]
@@ -1260,12 +1275,16 @@ def list_disabled_tools(mode: str = "all") -> list[str]:
 
 
 def list_skills(limit: int = 200, offset: int = 0) -> list[dict]:
-    """获取所有技能列表"""
+    """获取所有技能列表
+
+    updated_at 只到秒，同批导入/批量启停的技能会整片并列；带 id 兜底键才让
+    LIMIT/OFFSET 翻页可重复（否则同一条技能印在两页上、另一条翻不到）。
+    """
     conn = _get_conn()
     try:
         rows = conn.execute(
             "SELECT id, name, slug, description, category, system_prompt, source, is_builtin, enabled, priority, trigger_words, created_at, updated_at "
-            "FROM skills ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+            "FROM skills ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?",
             (limit, offset),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -2071,11 +2090,16 @@ def update_tool_call(tool_call_id: str, result: str, success: bool, duration_ms:
 
 
 def get_tool_calls(agent_run_id: str) -> list[dict]:
-    """获取某次 Agent 运行的所有工具调用"""
+    """获取某次 Agent 运行的所有工具调用
+
+    带 rowid（插入序）兜底：一次 run 里连续几个工具调用常常落在同一秒，只按
+    created_at 排时同键行的次序由查询计划决定，轨迹回放会印出「先重启服务、
+    后改配置」这种因果颠倒的顺序 —— id 是 uuid，不能当次序用，故用 rowid。
+    """
     conn = _get_conn()
     try:
         rows = conn.execute(
-            "SELECT * FROM tool_calls WHERE agent_run_id = ? ORDER BY created_at",
+            "SELECT * FROM tool_calls WHERE agent_run_id = ? ORDER BY created_at, rowid",
             (agent_run_id,),
         ).fetchall()
         return [dict(r) for r in rows]
