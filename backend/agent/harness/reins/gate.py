@@ -337,9 +337,7 @@ class PermissionGate:
         无交互式 UI 场景：默认拦截 dangerous 命令，除非已在 allowlist 中。
         命令执行工具按"工具+命令哈希"键检查（审查 M-3）。
         """
-        command = bound_command
-        if command is None and tool_name in _COMMAND_EXEC_TOOLS:
-            command = command_from_args(args)
+        command = self.command_for_call(tool_name, args, bound_command)
         key = self._grant_key(tool_name, command)
         # 问题 4：visible_terminal 拒绝标记检查 — 用户明确拒绝的命令不再免审
         # （即使永久 allowlist 中有该命令，当前 run 的拒绝状态也优先）
@@ -380,9 +378,7 @@ class PermissionGate:
         prod 下 file_write 写敏感路径预登记的键是 `file_write:<该路径模板哈希>`，
         漏传会退化成查裸工具名 → 批准过 /etc/nginx 就等于批准写任意路径。
         """
-        command = bound_command
-        if command is None and tool_name in _COMMAND_EXEC_TOOLS:
-            command = command_from_args(args)
+        command = self.command_for_call(tool_name, args, bound_command)
         key = self._grant_key(tool_name, command)
         return self._permanent_active(key)
 
@@ -452,6 +448,31 @@ class PermissionGate:
         """检查某 run 下某命令是否已被用户拒绝（严格 run_id 作用域，不查全局池）。"""
         key = self._grant_key(tool_name, command)
         return key in self._denied_commands.get(run_id, set())
+
+    def command_for_call(self, tool_name: str, args: dict,
+                         bound_command: Optional[str] = None) -> Optional[str]:
+        """本次调用的授权键命令位 —— 与 check_permission 的推导同源（单一数据源）。
+
+        bound_command 由调用方（FilesystemGuard / PermissionGate.check）按工具实际
+        执行的那条命令传入；命令执行工具未传时回退 command_from_args。两处曾各抄
+        一遍这段推导，抄漏的一方裁决标的与授权键绑到不同东西上。
+        """
+        if bound_command is not None:
+            return bound_command
+        if tool_name in _COMMAND_EXEC_TOOLS:
+            return command_from_args(args)
+        return None
+
+    def denied_for_call(self, tool_name: str, args: dict, run_id: str,
+                        bound_command: Optional[str] = None) -> bool:
+        """本次调用是否被用户显式拒绝过。
+
+        LLM 裁决器（auto_approve.try_auto_approve）调用前必须先过这道门：
+        auto_approve.py 头部把「用户明确拒绝过的命令」列为刻意不经过裁决器的路径，
+        并写明调用方负责保持这个顺序 —— 用户否决永远高于模型翻案。
+        """
+        return self.is_denied(
+            tool_name, self.command_for_call(tool_name, args, bound_command), run_id)
 
     def cleanup_run_once(self, run_id: str) -> int:
         """释放指定 run_id 的全部 once 授权。
@@ -704,11 +725,15 @@ class PermissionGate:
         # prod 强化分支已在上方 return —— 合规授权必须出自用户预登记，不问模型。
         # bound_command 与上方 check_permission 同源：裁决标的必须等于授权键绑定的
         # 那条命令，否则模型批的是文件正文、键却绑在写模板路径上（两处不同物）。
-        decision = await try_auto_approve(
-            ctx, tool, args, f"工具级风险 {risk} 需授权",
-            bound_command=str(bound or ""))
-        if decision is not None:
-            return decision
+        # S2-01 修复：check_permission 返回 False 无法区分「还没批过」与「用户拒绝
+        # 过」，原实现把两者一视同仁送进裁决器 ⇒ 自动审批可推翻用户的显式拒绝
+        # （FilesystemGuard 有这道门、这里漏了 —— 同一族防护写一处漏另一处）。
+        if not self.denied_for_call(tool, args, ctx.run_id, bound):
+            decision = await try_auto_approve(
+                ctx, tool, args, f"工具级风险 {risk} 需授权",
+                bound_command=str(bound or ""))
+            if decision is not None:
+                return decision
 
         # 未授权 → 发 permission_needed 事件 + 拦截
         # C-review M7：与 FilesystemGuard 相同的审批三态处理（首次发卡片 /

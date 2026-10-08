@@ -373,6 +373,24 @@ def test_gate_工具级不可逆_auto_裁负仍弹卡(monkeypatch, audits):
     assert any(e.kind == "permission_needed" for e in d.events)
 
 
+def test_gate_工具级用户拒绝过的命令不被模型翻案(monkeypatch, audits):
+    """S2-01 回归：自动审批不得推翻用户在 run 内的显式拒绝（工具级分支）。
+
+    FilesystemGuard 的 shell 分支有 is_denied 前置门，PermissionGate 的工具级
+    分支曾漏了 —— check_permission 返回 False 分不清「还没批过」与「拒绝过」，
+    于是用户点过「拒绝」的 service_manage(stop/restart) / schedule_op / job_kill
+    会被裁决器静默放行。用户否决永远高于模型翻案。
+    """
+    calls = _stub_judge(monkeypatch, True)  # 即便模型说 ALLOW
+    gate, _guard_obj = _guard()
+    ctx = _logged(_ctx(), "service_manage", {"action": "restart", "name": "nginx"})
+    gate.deny_command("service_manage", None, ctx.run_id)
+    d = asyncio.run(gate.check(ctx))
+    assert d.intercepted is True
+    assert calls == [], "用户显式拒绝后不得再刷 LLM"
+    assert not any(r.get("conclusion") == "auto_allowed" for r in audits)
+
+
 def test_gate_normal_档零差异(monkeypatch, audits):
     _forbidden_judge(monkeypatch)
     gate, _guard_obj = _guard()

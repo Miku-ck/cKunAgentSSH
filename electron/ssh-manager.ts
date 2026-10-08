@@ -1404,6 +1404,14 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
     const CHUNK_SIZE = 262144 // 256KB
     const CONCURRENCY = 8
     const VERIFY_SIZE = 4096 // 续传校验前 4KB
+    // S5-01 修复：.part.size 不等于「已连续写入」的字节数。上传是 CONCURRENCY 路
+    // 绝对偏移并发写，任一时刻在途的 chunk 至多 CONCURRENCY 个且下标连续，因此
+    // 「最远已写终点 F」与「连续完成边界 C」满足 C ≥ F - CONCURRENCY*CHUNK_SIZE；
+    // 服务端对中间未写区间零填充，size 只反映 F。续传于是取 size - RESUME_OVERLAP
+    // 这个可证明的下界为起点，并先把 .part 截回该下界：零填充洞要么被重写、要么
+    // 被截掉，不再可能被跳过。（原实现以 size 为起点、size===total 时直接 rename，
+    // 停滞或主进程被杀后续传跳过洞，产出中段全零的静默损坏文件。）
+    const RESUME_OVERLAP = CONCURRENCY * CHUNK_SIZE
 
     // 本地文件大小
     const total = (() => {
@@ -1431,7 +1439,7 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       this.safeSend('sftp:stalled', { id: transferId })
       if (!stalled) {
         stalled = true
-        // 停滞即停本传输写循环（上传并发 worker 的截断竞态防护，下载同形）：
+        // 停滞即停本传输写循环（防止旧传输迟到的 .part 写/截断与新传输交错）：
         // 渲染层按 STALLED 自动续传、新传输对同一 .part 重新校验续写；若旧
         // worker 仍在跑，其失败/收尾时的 .part 截断会越过新传输已写范围
         // （网络差 → stall 后旧写入更易出错 → 截断把新写入删成洞 → rename
@@ -1464,22 +1472,22 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       let partExists = false
       try {
         const partStat = await sftpStat(sftp, partPath)
-        if (partStat.size === total) {
-          // .part 与源文件大小一致，视为已完成，直接 rename
-          await sftpRename(sftp, partPath, remotePath)
-          sendProgress({ transferred: total, total })
-          return
-        }
-        // D12 修复：原实现 `partStat.size >= total` 直接 rename — 源文件缩小后
-        // 会把陈旧、过大的 .part 当完整结果。仅 `===` 才 rename；`>` 时前 4KB
-        // 校验无法区分"完成"与"源缩小"，fail-safe：删 .part 从头传
         let resumeSize = partStat.size
+        // D12 修复：原实现 `partStat.size >= total` 直接 rename — 源文件缩小后
+        // 会把陈旧、过大的 .part 当完整结果。`>` 时前 4KB 校验无法区分「完成」与
+        // 「源缩小」，fail-safe：删 .part 从头传。
         if (resumeSize > total) {
           try { await sftpUnlink(sftp, partPath) } catch { /* ignore */ }
           resumeSize = 0
         }
         if (resumeSize > 0) {
-          // 校验前 VERIFY_SIZE 字节
+          // S5-01 / S5-06 修复：原实现在 `size === total` 时无条件 rename，且以
+          // size 为续传起点 —— 零填充会把 size 顶到最远已写终点，两条路都交付
+          // 中段全零的文件且毫无提示。现在无论 size 是多少，都只信可信下界，
+          // 不再有「长度相等即判完成」的直接 rename。
+          const trustworthy = Math.max(0, resumeSize - RESUME_OVERLAP)
+          // 校验前 VERIFY_SIZE 字节：作用是「识别 .part 是不是同一个源文件的
+          // 残留」，不是完整性校验（它对 4KB 之后的洞毫无判别力）
           const verifyLen = Math.min(VERIFY_SIZE, resumeSize)
           const localHead = Buffer.alloc(verifyLen)
           const localFd = await fsPromises.open(localPath, 'r')
@@ -1489,9 +1497,21 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
           const remoteHead = await sftpRead(sftp, partHandle, 0, verifyLen)
           await sftpClose(sftp, partHandle)
           if (localHead.slice(0, verifyLen).equals(remoteHead.slice(0, verifyLen))) {
-            startOffset = resumeSize
-            transferred = startOffset
-            partExists = true
+            // 截回可信下界，越过连续边界的零填充与上一代传输的迟到写一并丢弃
+            let trimmed = false
+            try {
+              await sftpSetstatSize(sftp, partPath, trustworthy)
+              trimmed = true
+            } catch { /* 截断失败走下方兜底 */ }
+            if (trimmed) {
+              startOffset = trustworthy
+              transferred = startOffset
+              partExists = true
+            } else {
+              // 截不了就不可信：删 .part 从头传，宁可丢进度不可丢数据
+              try { await sftpUnlink(sftp, partPath) } catch { /* ignore */ }
+              partExists = false
+            }
           } else {
             // 校验失败，从头开始
             await sftpUnlink(sftp, partPath)
@@ -1528,11 +1548,12 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       }
 
       if (chunks.length > 0) {
-        // 并发写：各 chunk 写偏移互不重叠，可安全并发（M-5 的"顺序追加写"约束
-        // 是为续传无洞，这里改为失败时截断回连续写入边界来保证）。原实现写循环
-        // 串行 await，同时只有一个 256KB 块在途，吞吐被 RTT 锁死。
-        // 原语义保留：M-5 杜绝"越过 EOF 的零填充 + 中断后续传跳过零块"导致的
-        // 静默损坏 — 失败/取消时 .part 截断回连续完成边界，续传不踩洞
+        // 并发写：各 chunk 写偏移互不重叠，可安全并发。原实现写循环串行 await，
+        // 同时只有一个 256KB 块在途，吞吐被 RTT 锁死。
+        // 代价是 .part.size 不再等于连续前缀（服务端对未写的中间区间零填充），
+        // 因此续传不能以 size 为起点 —— 见上方 RESUME_OVERLAP 的可信下界。
+        // 失败/取消时这里还会截回精确连续边界（保住已传进度），但那只是优化：
+        // 真正的防洞保证由续传侧的下界截断提供，与本处是否执行无关。
         let firstError: Error | null = null
         let contiguousIdx = 0 // 从 startOffset 起连续完成的 chunk 数
         const doneSet = new Set<number>()
@@ -1568,10 +1589,11 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
         await Promise.all(Array.from({ length: Math.min(CONCURRENCY, chunks.length) }, () => worker()))
 
         // 失败或用户取消：.part 可能留有越过未写区的洞，截断回连续写入边界
-        // （startOffset + 已连续完成字节数），保证后续续传顺序写不踩洞。
+        // （startOffset + 已连续完成字节数），让下次续传少重传一段。
         // 停滞（stalled）路径例外：stallReject 已 reject IPC，渲染层可能立即用
         // 同一 .part 启动续传传输，此处迟到的 setstat 会把新传输已写范围截小，
-        // 反而制造洞 — 跳过截断，由续传侧的 4KB 校验 + 顺序写兜底
+        // 反而制造洞。跳过是安全的 —— 续传侧已不再以 size 为依据，它总会把
+        // .part 截回可信下界（见 RESUME_OVERLAP），本处截断只是进度优化。
         if (firstError || (cancelled && !stalled)) {
           const boundary = contiguousIdx >= chunks.length
             ? total
@@ -1680,7 +1702,7 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       this.safeSend('sftp:stalled', { id: transferId })
       if (!stalled) {
         stalled = true
-        // 停滞即停本传输写循环（上传并发 worker 的截断竞态防护，下载同形）：
+        // 停滞即停本传输写循环（防止旧传输迟到的 .part 写/截断与新传输交错）：
         // 渲染层按 STALLED 自动续传、新传输对同一 .part 重新校验续写；若旧
         // worker 仍在跑，其失败/收尾时的 .part 截断会越过新传输已写范围
         // （网络差 → stall 后旧写入更易出错 → 截断把新写入删成洞 → rename

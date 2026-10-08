@@ -164,16 +164,23 @@ class SkillRegistry:
                     return None
             return skill
 
+    def _enabled_skills_sorted(self, skill_ids: list[str], mode: str) -> list[dict]:
+        """按 id 取技能 → 只留本模式已启用的 → 按 priority 降序。
+
+        S8-01 / LEGACY #5：这段前导曾在 build_skill_catalog 与 build_skill_preload
+        里逐字重复（含 get_enabled_skills 的第二次禁用清单读取），收敛为一处。
+        """
+        skills = self.get_skills_by_ids(skill_ids)
+        enabled_ids = {s['id'] for s in self.get_enabled_skills(mode)}
+        picked = [s for s in skills if s['id'] in enabled_ids]
+        picked.sort(key=lambda s: s.get('priority', 0), reverse=True)
+        return picked
+
     def build_skill_catalog(self, skill_ids: list[str], mode: str) -> str:
         """构建 LLM 可见的可用技能目录（不含正文）"""
-        skills = self.get_skills_by_ids(skill_ids)
-        enabled = self.get_enabled_skills(mode)
-        enabled_ids = {s['id'] for s in enabled}
-        skills = [s for s in skills if s['id'] in enabled_ids]
+        skills = self._enabled_skills_sorted(skill_ids, mode)
         if not skills:
             return ""
-
-        skills.sort(key=lambda s: s.get('priority', 0), reverse=True)
 
         lines = [
             "[可用技能目录]",
@@ -182,7 +189,12 @@ class SkillRegistry:
             "",
         ]
         for idx, s in enumerate(skills, start=1):
-            trigger_words = json.loads(s.get('trigger_words', '[]'))
+            try:
+                trigger_words = json.loads(s.get('trigger_words') or '[]')
+            except (ValueError, TypeError):
+                # S8-02：一行脏 trigger_words 曾让整个技能目录静默消失
+                # （同文件 match_skills 有 JSON 兜底，这里漏了 —— 同族防护写一处漏一处）
+                trigger_words = []
             tw_str = ', '.join(trigger_words) if trigger_words else '无'
             lines.append(
                 f"{idx}. 技能名：{s.get('name', '')}（slug: {s.get('slug', '')}）\n"
@@ -198,14 +210,9 @@ class SkillRegistry:
         max_chars: int = 200,
     ) -> str:
         """为显式选择的技能构建简短预加载提示"""
-        skills = self.get_skills_by_ids(skill_ids)
-        enabled = self.get_enabled_skills(mode)
-        enabled_ids = {s['id'] for s in enabled}
-        skills = [s for s in skills if s['id'] in enabled_ids]
+        skills = self._enabled_skills_sorted(skill_ids, mode)
         if not skills:
             return ""
-
-        skills.sort(key=lambda s: s.get('priority', 0), reverse=True)
         lines = ["[已预加载技能提示]", ""]
         for s in skills:
             teaser = (s.get('system_prompt', '') or '')[:max_chars]

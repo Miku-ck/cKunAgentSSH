@@ -169,7 +169,11 @@ export function readCurrentLine(terminal: Terminal): { line: string; cursorPos: 
   const buffer = terminal.buffer.active
   const cursorY = buffer.cursorY
   const cursorX = buffer.cursorX
-  const line = buffer.getLine(cursorY)
+  // S6-01 修复：cursorY 是视口相对行号（0..rows-1），而 getLine(y) 吃 buffer 绝对
+  // 行号 —— 原实现直接 getLine(cursorY) 读到的是游标上方 baseY 行之前的历史输出
+  // （滚动过一段后 Tab 补全把陈旧行当输入行，并把整条候选不确认地写进活动 shell）。
+  // 绝对行 = baseY + cursorY，与 xterm 内部 Buffer.ts 的换算同式。
+  const line = buffer.getLine(buffer.baseY + cursorY)
   if (!line) return null
   const fullText = line.translateToString(true)
   return { line: fullText, cursorPos: cursorX }

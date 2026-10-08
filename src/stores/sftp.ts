@@ -24,9 +24,6 @@ export interface TransferItem {
   error?: string
   startTime: number
   endTime?: number
-  // 断点续传相关
-  resumeOffset?: number      // 已传输字节数（续传起点）
-  retryCount?: number        // 自动重试次数
 }
 
 // B20 修复：目录加载请求序号（模块级单调递增）。
@@ -1053,7 +1050,6 @@ function pauseTransfer(id: string): void {
   }
   // 暂停走主进程 sftp:cancel（AbortSignal 无法跨 IPC，前端不再持控制器）
   t.status = 'paused'
-  t.resumeOffset = t.transferred  // 记录断点位置
   // 审查修复（P2）：同 disconnect 路径 — 同步 try/catch 捕获不到
   // sftpCancel 返回 Promise 的 reject，改为挂 .catch
   void getApi().sftpCancel(id).catch(() => { /* 忽略取消失败 */ })
@@ -1076,7 +1072,7 @@ function resumeTransfer(id: string): void {
   t.error = undefined
   // P3 修复：续传后重置 startTime — 原实现沿用首次传输的 startTime，
   // 速度/剩余时间按总耗时（含暂停间隙）计算而失真。重置后速度/ETA
-  // 只反映本段传输（resumeOffset 仍记录断点，不受影响）。
+  // 只反映本段传输。
   t.startTime = Date.now()
   // 根据方向重新启动传输，从断点处继续
   // （断点位置由主进程扫描 .part 文件确定，前端无需传递）

@@ -181,8 +181,9 @@ class FilesystemGuard:
                         # 位置约束：① 在 pending 记账之前 —— 放行不该留半张等待签名；
                         # ② 在 is_denied 兜底之前先做同一检查 —— 用户明确拒绝过的命令
                         # 不能被模型翻案，用户否决永远高于裁决。
-                        if not self.permission_gate.is_denied(
-                                tool, str(cmd) if cmd else None, ctx.run_id):
+                        if not self.permission_gate.denied_for_call(
+                                tool, args, ctx.run_id,
+                                str(cmd) if cmd else None):
                             decision = await try_auto_approve(
                                 ctx, tool, args, reason or "",
                                 bound_command=str(cmd or ""))
