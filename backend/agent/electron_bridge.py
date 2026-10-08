@@ -55,7 +55,17 @@ class BridgeError(RuntimeError):
         self.detail = detail
         self.original = original
         self.suggestion = self.suggestion_for(code)
-        super().__init__(f"[{code.value}] {detail}" if detail else f"[{code.value}] {self.suggestion}")
+        # S7-14：原实现是「detail 非空就只报 detail」，于是同一种错误有四条文案 ——
+        # 只有 probe 那一条（不带 detail）能把「请查看主进程日志」这类可操作指引带出来。
+        # 三条带 detail 的 raise（未注入 token / 空 sessionId / 反向推断的原始异常）
+        # 恰好是最需要指引的那几种，用户只看到一段技术串。
+        # 两段都要：detail 是给排查者的根因，suggestion 是给用户的下一步。
+        # 不会干扰反向推断 —— classify_bridge_error 对 BridgeError 实例直接取 code，
+        # 不去嗅探文本（这条由测试钉住，见 test_bridge_error_suggestion_s714.py）。
+        message = f"[{code.value}] {self.suggestion}"
+        if detail:
+            message = f"[{code.value}] {detail}｜{self.suggestion}"
+        super().__init__(message)
 
 
 # 桥接错误 → 用户建议映射（模块级常量，BridgeError 类外维护便于扩展）
