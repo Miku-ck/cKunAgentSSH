@@ -379,8 +379,15 @@ export interface SshReconnectStatus {
   maxAttempts: number
   /** reconnecting/retry 阶段：下一次尝试前的退避等待（ms） */
   delayMs?: number
-  /** gave-up 阶段：exhausted=RECONNECT_MAX_ATTEMPTS 次均失败 | config-missing=连接配置已删除 | cancelled=重连被取消（如断开后连接配置被删除，tab 仍在） */
-  reason?: 'exhausted' | 'config-missing' | 'cancelled'
+  /** gave-up 阶段：exhausted=RECONNECT_MAX_ATTEMPTS 次均失败 | config-missing=连接配置已删除 | cancelled=重连被取消（如断开后连接配置被删除，tab 仍在）| not-retryable=确定性失败，重连窗口直接收摊（S4-04） */
+  reason?: 'exhausted' | 'config-missing' | 'cancelled' | 'not-retryable'
+  /**
+   * gave-up 阶段带上最后一次失败的分类结果（S0-18：此前 12 次尝试跑完就把已分类的
+   * SSHError 丢掉，UI 只能恒说「自动重连失败」，用户看不出是口令错、主机密钥变了
+   * 还是会话数超限）。
+   */
+  errorCode?: string
+  errorMessage?: string
 }
 
 export class SSHManager {
@@ -1099,10 +1106,27 @@ export class SSHManager {
       if (!this.isReconnectCurrent(id, entry, gen)) return
       entry.inFlight = false
       console.warn(`[ssh] 重连第 ${attempt}/${RECONNECT_MAX_ATTEMPTS} 次失败:`, err instanceof Error ? err.message : err)
+      // S0-18：把已分类的失败原因随 gave-up 带给渲染层
+      const sshErr = err instanceof SSHError ? err : null
+      const classified = { errorCode: sshErr?.code, errorMessage: sshErr?.friendly }
+      // S4-04 修复：确定性失败不进重连窗口。原实现完全不看错误分类，照跑满 12 次
+      // （退避累计约 4~5 分钟）：认证失败（口令错/私钥口令错/keyboard-interactive）
+      // 连撞 12 次会踩 sshd 的 MaxAuthTries，把源 IP 关进惩罚窗口，连用户手动去连
+      // 都连不上；主机密钥变更则会把 12 条「疑似中间人攻击」toast 堆在屏幕上不消失。
+      // 这类要靠用户修配置才能恢复，重试排程只会把情况弄得更糟 —— 直接收摊，
+      // 保留重连条目让手动「重连」仍然可用。
+      if (sshErr && !sshErr.retryable) {
+        this.safeSend('ssh:reconnect', {
+          id, phase: 'gave-up', attempt, maxAttempts: RECONNECT_MAX_ATTEMPTS,
+          reason: 'not-retryable', ...classified,
+        })
+        return
+      }
       if (attempt >= RECONNECT_MAX_ATTEMPTS) {
         // 全部尝试失败：通知前端显示手动「重连」按钮
         this.safeSend('ssh:reconnect', {
-          id, phase: 'gave-up', attempt, maxAttempts: RECONNECT_MAX_ATTEMPTS, reason: 'exhausted',
+          id, phase: 'gave-up', attempt, maxAttempts: RECONNECT_MAX_ATTEMPTS,
+          reason: 'exhausted', ...classified,
         })
       } else {
         this.scheduleReconnectAttempt(id, attempt + 1)

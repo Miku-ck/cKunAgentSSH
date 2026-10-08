@@ -82,8 +82,11 @@ interface SshReconnectStatus {
   maxAttempts: number
   /** reconnecting/retry 阶段：下一次尝试前的退避等待（ms） */
   delayMs?: number
-  /** gave-up 阶段：exhausted=3 次均失败 | config-missing=连接配置已删除 | cancelled=重连被取消（如断开后连接配置被删除，tab 仍在） */
-  reason?: 'exhausted' | 'config-missing' | 'cancelled'
+  /** gave-up 阶段：exhausted=RECONNECT_MAX_ATTEMPTS 次均失败 | config-missing=连接配置已删除 | cancelled=重连被取消（如断开后连接配置被删除，tab 仍在）| not-retryable=确定性失败，重连窗口直接收摊（S4-04） */
+  reason?: 'exhausted' | 'config-missing' | 'cancelled' | 'not-retryable'
+  /** gave-up 阶段带上最后一次失败的分类结果，UI 得以说清是口令错还是主机密钥变了（S0-18） */
+  errorCode?: string
+  errorMessage?: string
 }
 
 /** SSH 隧道规则（主进程定义见 electron/tunnel-store.ts，此处为渲染层副本） */

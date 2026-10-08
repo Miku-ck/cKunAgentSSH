@@ -383,9 +383,17 @@ onMounted(() => {
         emit('close')
         return
       }
-      // 3 次均失败：状态条显示「重连」按钮
+      // 耗尽（exhausted）或确定性失败（not-retryable，如口令错/主机密钥变更）：
+      // 状态条显示「重连」按钮。S0-18：带上主进程已分类的失败原因，
+      // 否则屏幕上无论什么原因都是同一句话，用户不知道要改配置还是等网络恢复。
       reconnectGaveUp.value = true
-      appendReconnectLine('[自动重连失败，可点击「重连」手动重试]', '\x1b[31m')
+      const detail = data.errorMessage ? `：${data.errorMessage}` : ''
+      appendReconnectLine(
+        data.reason === 'not-retryable'
+          ? `[自动重连已停止${detail}，修正连接配置后可点击「重连」手动重试]`
+          : `[自动重连失败${detail}，可点击「重连」手动重试]`,
+        '\x1b[31m',
+      )
     }
   })
 
