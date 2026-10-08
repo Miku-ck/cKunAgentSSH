@@ -2568,23 +2568,27 @@ def mark_schedule_run(
     last_run_at: Optional[str] = None,
     last_run_id: str = "",
 ) -> None:
+    """回写调度行的上次执行状态：一次调用只发一条 UPDATE。
+
+    原先是三条 —— 同一行、同一事务、三个写操作加三次索引维护，而 updated_at 只写在
+    第一条里。`last_run_at` / `last_run_id` 的「不传或传空串 = 保持原值」是调用方唯一
+    在用的形态（schedule_engine.py:324/340/349 收尾那几支只带状态过来），合并成一条时
+    必须原样保留，否则面板「上次执行」那一列每次跑完都被抹空。
+    """
+    sets, params = ["last_status = ?", "updated_at = ?"], [status, _now()]
+    if last_run_at:
+        sets.append("last_run_at = ?")
+        params.append(last_run_at)
+    if last_run_id:
+        sets.append("last_run_id = ?")
+        params.append(last_run_id)
+    params.append(schedule_id)
     conn = _get_conn()
     try:
+        # 拼进 SQL 的只有上面这几个字面量，值一律走占位符
         conn.execute(
-            """UPDATE schedules SET last_status = ?, updated_at = ?
-               WHERE id = ?""",
-            (status, _now(), schedule_id),
+            f"UPDATE schedules SET {', '.join(sets)} WHERE id = ?", params
         )
-        if last_run_at:
-            conn.execute(
-                "UPDATE schedules SET last_run_at = ? WHERE id = ?",
-                (last_run_at, schedule_id),
-            )
-        if last_run_id:
-            conn.execute(
-                "UPDATE schedules SET last_run_id = ? WHERE id = ?",
-                (last_run_id, schedule_id),
-            )
         conn.commit()
     finally:
         conn.close()
