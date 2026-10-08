@@ -685,14 +685,21 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     const systemPrompt = buildSystemPrompt(ctx)
 
     let conv = persistence.currentConversation.value as SshAiConversation | undefined
+    let implicitCreate = false
     if (!conv) {
       const title = effectiveContent.slice(0, 30) + (effectiveContent.length > 30 ? '...' : '')
       conv = await createConversation(title) as SshAiConversation
+      implicitCreate = true
     }
     if (!conv) return false
 
     try {
-      await persistence.ensureBackendConversation(conv)
+      // S9-05：这一支刚用本地派生的 30 字摘要建了会话，紧接着就把**同一个串**当
+      // 标题写进后端 ⇒ 后端那行「生下来就带着非默认标题」，而 post_processor 起
+      // 标题的门槛是 title ∈ _DEFAULT_TITLES，LLM 与规则兜底两条路就此永久早退
+      // （对照：「+」新建走的是 'New Chat'，所以那条路径的标题生成能跑）。
+      // 本地列表继续显示摘要（即时反馈），后端那行送占位标题、把命名交给生成器。
+      await persistence.ensureBackendConversation(conv, implicitCreate ? 'New Chat' : undefined)
     } catch {
       toast.error('创建会话失败')
       return false

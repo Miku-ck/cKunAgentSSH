@@ -18,6 +18,7 @@ import {
   type AgentRunRow,
 } from '@/api/client'
 import AgentFullTrace from '@/components/agent/AgentFullTrace.vue'
+import { RUN_STATE_LABELS, runStatusLabel } from '@/utils/agent-run-status'
 import { formatBackendTs } from '@/utils/format'
 
 const PAGE = 50
@@ -33,16 +34,11 @@ const traceFilter = ref('')
 const expanded = ref('')
 
 /** 状态取值来自后端 `database._TERMINAL_RUN_STATUSES` + 两个在途值，
- *  少列一个就有一类 run 筛不出来；对不上的值这里显示原文，不猜翻译。 */
-const STATUS_LABELS: Record<string, string> = {
-  init: '初始化',
-  running: '运行中',
-  completed: '完成',
-  failed: '失败',
-  human_help: '请求人工介入',
-  max_reached: '达到迭代上限',
-}
-const statusLabel = (s: string) => STATUS_LABELS[s] || s
+ *  少列一个就有一类 run 筛不出来；对不上的值这里显示原文，不猜翻译。
+ *  表收敛在 src/utils/agent-run-status.ts —— AgentFullTrace 的卡片标签与这里
+ *  曾经是两份手抄（S9-13 同族的「各抄一份」形态）。 */
+const STATUS_LABELS = RUN_STATE_LABELS
+const statusLabel = runStatusLabel
 
 const hasMore = computed(() => offset.value + rows.value.length < total.value)
 

@@ -10,6 +10,7 @@
 import { useAppStore } from '@/stores/app'
 import { extractSSHError, toFriendlySshMessage } from '@/ssh-error-types'
 import { PERMISSION_MODE_DEFAULT, type PermissionModeKey } from '@/utils/run-modes'
+import type { RunTerminalState } from '@/utils/agent-run-status'
 
 const FALLBACK_PORT = 8010  // 后端 dev 默认端口（与 backend/main.py --port default 一致）
 
@@ -802,8 +803,13 @@ export interface AgentIntentionInfo {
  * 使历史会话切换后仍能显示该次运行的执行过程摘要
  */
 export interface AgentTraceSnapshot {
-  /** 最终状态：completed / failed */
-  status: 'completed' | 'failed'
+  /**
+   * 终态 —— S9-13：原只声明 completed | failed，而生产者写的是后端原始终态
+   * （权威集合 contracts.TERMINAL_RUN_STATES：completed/failed/human_help/max_reached）。
+   * 类型窄于能力面时，snapshot() 只能折叠，固化下来的记录就分不清「迭代耗尽」
+   * 和「失败」—— 这两种结局用户下一步该做的事完全不同。
+   */
+  status: RunTerminalState
   /** 当前 Agent 状态机状态：thinking / acting / observing / completed / failed 等 */
   currentState: string
   /** 实际完成的迭代次数 */

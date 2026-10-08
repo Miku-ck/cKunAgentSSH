@@ -256,10 +256,19 @@ export function useChatPersistence(options: {
     saveConversations(conversations.value)
   }
 
-  async function ensureBackendConversation(conv: ModeConversation): Promise<void> {
+  /**
+   * 确保后端有这一行会话。
+   *
+   * `backendTitle` 是给后端看的标题，与本地列表显示的 `conv.title` 刻意分开：
+   * S9-05 —— 隐式建会话时本地派生的 30 字摘要一旦落库，就永远不在
+   * `post_processor._DEFAULT_TITLES` 里了，而后端起标题的门槛正是
+   * 「当前标题 ∈ 默认集合」⇒ LLM 与规则兜底两条路都永久早退，
+   * 会话标题就此停在摘要串上。传占位标题即可把命名权交还给后端生成。
+   */
+  async function ensureBackendConversation(conv: ModeConversation, backendTitle?: string): Promise<void> {
     if (conv.backendConvId) return
     try {
-      const backendConv = await api.createConversation(conv.title, API_MODE)
+      const backendConv = await api.createConversation(backendTitle ?? conv.title, API_MODE)
       conv.backendConvId = backendConv.id
       saveConversations(conversations.value)
     } catch (e) {

@@ -14,8 +14,12 @@
       <template v-else-if="trace">
         <!-- 元信息条：整表都是「这一条 run 跑成了什么样」的汇总 -->
         <div v-if="!inline" class="ft-meta">
-          <span class="ft-chip" :class="trace.run.status === 'completed' ? 'ok' : 'err'">
-            {{ trace.run.status === 'completed' ? '完成' : '失败' }}
+          <!-- S9-13：run.status 是后端原始终态（completed/failed/human_help/
+               max_reached），二元 `=== 'completed' ? '完成' : '失败'` 会把
+               「迭代耗尽」和「需要人工介入」都念成「失败」——这三种结局用户
+               下一步该做的事完全不同。标签与配色走共享判定。 -->
+          <span class="ft-chip" :class="runStatusChip(trace.run.status)">
+            {{ runStatusLabel(trace.run.status) }}
           </span>
           <span class="ft-chip">迭代 {{ trace.run.iteration ?? '-' }}/{{ trace.run.max_iterations ?? '-' }}</span>
           <span class="ft-chip">{{ (trace.cost.duration_ms / 1000).toFixed(1) }}s</span>
@@ -66,6 +70,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { agentAdminApi, toFriendlyMessage, type AgentRunTrace } from '@/api/client'
 import { formatBackendTs } from '@/utils/format'
+import { runStatusChip, runStatusLabel } from '@/utils/agent-run-status'
 const props = defineProps<{ runId: string; inline?: boolean }>()
 const emit = defineEmits<{ 'expand-change': [boolean] }>()
 

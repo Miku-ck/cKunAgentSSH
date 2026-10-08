@@ -304,6 +304,31 @@ describe('运行结束时的快照读数', () => {
     expect(store.snapshot().status).toBe('failed')
   })
 
+  it('迭代耗尽（max_reached）不报「完成」，快照里保留原始终态', () => {
+    const { store, push } = startRun()
+    // S9-13：done 事件带的是后端原始终态，原分支只列了 failed / human_help，
+    // max_reached 落到 else ⇒ 面板与固化记录都说「完成」。
+    push({ type: 'done', state: 'max_reached', iterations: 12, run_id: 'r1' })
+    expect(store.status).toBe('failed')
+    expect(store.snapshot().status).toBe('max_reached')
+  })
+
+  it('需要人工介入（human_help）在快照里不再被折成 failed', () => {
+    const { store, push } = startRun()
+    push({ type: 'done', state: 'human_help', iterations: 4, run_id: 'r1' })
+    expect(store.status).toBe('failed')
+    // 折叠是「为了兼容两值类型」的产物；类型补全后原样落库，
+    // 卡片才分得清「请求人工介入」与「失败」
+    expect(store.snapshot().status).toBe('human_help')
+  })
+
+  it('正常完成仍记 completed', () => {
+    const { store, push } = startRun()
+    push({ type: 'done', state: 'completed', iterations: 2, run_id: 'r1' })
+    expect(store.status).toBe('completed')
+    expect(store.snapshot().status).toBe('completed')
+  })
+
   it('未回填的调用在快照里保持双 undefined（判据留给固化侧收敛）', () => {
     const { store, push } = startRun()
     push({ type: 'tool_call_start', tool: 'shell_exec', args: {}, iteration: 0, tool_call_id: 'c1' })

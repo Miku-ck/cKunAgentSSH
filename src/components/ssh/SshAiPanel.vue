@@ -43,6 +43,7 @@ import { useSshAiStore } from '@/stores/ssh-ai'
 import { useModelsStore } from '@/stores/models'
 import { useAgentStore } from '@/stores/agent'
 import { useToastStore } from '@/stores/toast'
+import { useConfirm } from '@/composables/useConfirm'
 import SideChatPanel from '@/components/chat/SideChatPanel.vue'
 import AgentRunPanel from '@/components/agent/AgentRunPanel.vue'
 import type { ChatAttachment } from '@/api/client'
@@ -54,6 +55,7 @@ const store = useSshAiStore()
 const modelsStore = useModelsStore()
 const agentStore = useAgentStore()
 const toast = useToastStore()
+const { confirm } = useConfirm()
 
 // ── 会话工作流（Spec/Plan/Goal）──
 
@@ -168,6 +170,18 @@ function handleSwitchConv(id: string) {
 }
 
 async function handleDeleteConv(id: string) {
+  // S9-06：这是全应用**唯一**没有二次确认的不可逆用户数据删除入口 —— 后端一条
+  // DELETE 就把消息历史 + 附件目录 rmtree 掉，而其余破坏性入口（定时任务/快捷
+  // 命令/远程管理/SFTP/模型面板）都走 useConfirm。补齐同一口径，别让人误点一下
+  // 垃圾桶就没了整段对话。
+  const conv = store.conversations.find(c => c.id === id)
+  const ok = await confirm({
+    title: '删除对话',
+    message: `确认删除对话「${conv?.title || '未命名'}」及其全部消息与附件？此操作不可恢复。`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
   await store.deleteConversation(id)
 }
 

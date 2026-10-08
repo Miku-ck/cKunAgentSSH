@@ -14,6 +14,7 @@ import { useToastStore } from './toast'
 import { useAgentDeliver } from '@/composables/useAgentDeliver'
 import type { GrantScope } from '@/utils/approval-scopes'
 import { PERMISSION_MODE_DEFAULT, type PermissionModeKey } from '@/utils/run-modes'
+import { isRunTerminalState } from '@/utils/agent-run-status'
 
 interface ToolCallEntry {
   id: string
@@ -347,10 +348,17 @@ export const useAgentStore = defineStore('agent', () => {
   function snapshot(): AgentTraceSnapshot {
     const durationMs = runStartedAt.value > 0 ? Date.now() - runStartedAt.value : 0
     return {
-      // H14 修复：human_help 状态在快照中显示为 failed 以兼容类型，currentState 保留 human_help
-      // 中止同样是"没跑完"：原实现只认 failed，用户中止后固化的 trace 卡片写着
-      // 「已完成」，而消息正文是「(已中止)」——同一条消息自相矛盾。
-      status: status.value === 'failed' || aborted.value || currentState.value === 'human_help' ? 'failed' : 'completed',
+      // S9-13：类型不再只有两值 ⇒ 不必把 human_help / max_reached 折成 failed，
+      // 原样落库，卡片才分得清「需要人工介入 / 迭代耗尽 / 失败」——这三种结局
+      // 用户下一步该做的事完全不同。中止仍记 failed（它确实没跑完，而且没有
+      // 专门的终态串；原实现踩过同一坑：正文写「(已中止)」而卡片写「已完成」）。
+      status: aborted.value
+        ? 'failed'
+        : isRunTerminalState(currentState.value)
+          ? currentState.value
+          : status.value === 'failed'
+            ? 'failed'
+            : 'completed',
       currentState: currentState.value || 'completed',
       iterations: totalIterations.value || iteration.value + 1,
       duration: Math.round(durationMs / 100) / 10, // 秒，保留1位小数
@@ -805,7 +813,12 @@ export const useAgentStore = defineStore('agent', () => {
         // S1-02 同口径（不传 runId，理由见 error 分支）
         agentDeliver.abortRun()
         // H14 修复：支持 human_help 终止态，保留 currentState 供 UI 显示"需要人工介入"
-        status.value = event.state === 'failed' || event.state === 'human_help' ? 'failed' : 'completed'
+        // S9-13 同族：done 事件带的是后端原始终态（contracts.TERMINAL_RUN_STATES），
+        // 这里只列了 failed / human_help，max_reached（迭代耗尽）落到 else 分支
+        // ⇒ 跑满上限却没干完的 run 被面板报成「完成」。
+        status.value = event.state === 'failed' || event.state === 'human_help' || event.state === 'max_reached'
+          ? 'failed'
+          : 'completed'
         // 保留有意义的 currentState（如 human_help），仅在 event.state 为空时回退
         if (event.state) {
           currentState.value = event.state
