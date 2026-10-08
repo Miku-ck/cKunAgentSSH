@@ -135,10 +135,32 @@ def test_裁决输出解析只认第一行_ALLOW(raw, expected):
 
 # ── 2. fail-closed：真实 _judge_once 的所有失败面 ────────────────────────────
 
-def test_未配置模型_directly_判负(audits):
+def test_未配置端点_directly_判负(audits):
+    ctx = _ctx()
+    ctx.llm_base_url = ""
+    assert asyncio.run(_aa._judge_once(ctx, "shell_exec: x", "r")) is False
+
+
+def test_空_api_key_不算未配置模型(monkeypatch, audits):
+    """S10-07：空 api_key 是本仓承认的合法态 —— 面板 provider 初值是「自定义/vLLM」
+    （isLocal，连密钥输入框都不渲染），库里存的就是空串，`llm_adapter._get_client`
+    也按 `api_key or "EMPTY"` 处理。原守卫用 `not ctx.llm_api_key` 把它判成
+    「没配模型」⇒ 本地 vLLM 用户把自动审批开关拨上去也永不生效。
+    这条同时钉住「问到的仍然是那个空串」，别让谁顺手改成 "EMPTY" 又写回模型配置。
+    """
+    import post_processor
+
+    asked: list = []
+
+    async def _fake(**kw):
+        asked.append(kw["model_cfg"]["api_key"])
+        return "ALLOW"
+
+    monkeypatch.setattr(post_processor, "_call_llm_with_timeout", _fake)
     ctx = _ctx()
     ctx.llm_api_key = ""
-    assert asyncio.run(_aa._judge_once(ctx, "shell_exec: x", "r")) is False
+    assert asyncio.run(_aa._judge_once(ctx, "shell_exec: x", "r")) is True
+    assert asked == [""]
 
 
 def test_总闸关闭_不问模型(monkeypatch, audits):

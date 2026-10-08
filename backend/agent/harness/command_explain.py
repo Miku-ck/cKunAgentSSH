@@ -388,7 +388,9 @@ async def maybe_explain_via_llm(
     emit = ctx.metadata.get("emit_event")
     if emit is None:
         return  # 无事件通道（如脱离 Harness 的单测/调度复用），纯静态
-    if not ctx.llm_base_url or not ctx.llm_api_key:
+    if not ctx.llm_base_url:
+        # S10-07：与 auto_approve._judge_once 同修 —— 空 api_key 是本地 vLLM 的
+        # 正常形态，不是「没配模型」；原条件让命令解释对这类配置永久缺席。
         return
 
     key = explain_cache_key(tool, display_cmd or str(command))

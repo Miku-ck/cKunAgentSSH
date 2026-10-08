@@ -103,7 +103,11 @@ async def _judge_once(ctx: RunContext, subject: str, reason: str) -> bool:
     """一次性 LLM 裁决调用。任何失败路径返回 False（回退弹卡）。"""
     if not auto_approve_effective():
         return False
-    if not ctx.llm_base_url or not ctx.llm_api_key:
+    # S10-07：只问 base_url。空 api_key 是本仓承认的合法态（面板的「自定义/vLLM」
+    # 是 provider 初值且不渲染密钥输入框，库里存的就是空串；llm_adapter._get_client
+    # 也按 `api_key or "EMPTY"` 处理）。原条件把它当成「没配模型」⇒ 自动审批对
+    # 本地 vLLM 用户**永不生效**，开关拨上去没反应。
+    if not ctx.llm_base_url:
         return False
     from post_processor import _call_llm_with_timeout
 
