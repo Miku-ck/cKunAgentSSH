@@ -16,7 +16,11 @@ import database as db
 # 注意：compute_next_run / get_schedule_engine 在方法内惰性导入，
 # 避免 builtin 工具 import 时与 agent.schedule_engine 形成循环依赖。
 
-meta = ToolMeta(risk_level="moderate", reversible=False, timeout=10.0)
+# S7-06：cancel 是删除用户手工配好的任务，声明成 destructive —— gate 在 prod 环境
+# 按 args["action"] 命中该集合时把它当 dangerous（只接受用户预登记的 allowlist，
+# 不让模型代批）。原先这里没声明，prod 的巡检 run 也能靠一次「始终允许」删任务。
+meta = ToolMeta(risk_level="moderate", reversible=False, timeout=10.0,
+                destructive_actions=frozenset({"cancel"}))
 
 # cron 字段位置：min hour dom month dow
 _CRON_MIN, _CRON_HOUR, _CRON_DOM, _CRON_MONTH, _CRON_DOW = range(5)
@@ -187,11 +191,30 @@ class ScheduleOpTool(BaseTool):
     @classmethod
     def bound_command(cls, args: dict) -> str | None:
         """入库前先判一次：定时任务是"现在埋雷、未来自动引爆"，推迟到那次无头 run
-        才拒等于让 hardline 命令在库里躺着、等某个凌晨自己跑起来。"""
-        if args.get("action") != "create":
-            return None
-        cmd = args.get("command")
-        return cmd if isinstance(cmd, str) and cmd.strip() else None
+        才拒等于让 hardline 命令在库里躺着、等某个凌晨自己跑起来。
+
+        S7-06：每个 action 都必须给出自己的裁决标的。原先只有 `create` 带 command
+        时返回值，`list` / `cancel` / 只用 task_prompt 的 create 一律 None ⇒ 授权键
+        退回**裸工具名**（gate 的 `command_for_call` 拿不到命令就是这个形态），
+        用户对一张查询卡片点「始终允许」，永久放行的是该工具的全部 action，包括
+        删掉手工配好的任务。headless run 用同一份 registry，于是无人值守的定时
+        run 也能增删 schedules。键粒度收到 action（cancel 再收到具体 id）之后，
+        「批的是查询、拿到的是删除」这条路就断了。
+        """
+        action = (args.get("action") or "").strip()
+        if action == "create":
+            cmd = args.get("command")
+            if isinstance(cmd, str) and cmd.strip():
+                return cmd
+            # 只给 task_prompt 的 create 同样要绑：那才是未来真正被执行的东西
+            prompt = (args.get("task") or "").strip()
+            return f"schedule_op create: {prompt[:400]}" if prompt else None
+        if action == "cancel":
+            sid = str(args.get("schedule_id") or "").strip()
+            return f"schedule_op cancel: {sid}" if sid else None
+        if action == "list":
+            return "schedule_op list"
+        return None
 
     async def execute(self, context, action, mode="interval", interval_minutes=None,
                       cron=None, task=None, command=None, schedule_id=None, name=None):

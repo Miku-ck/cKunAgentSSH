@@ -262,3 +262,75 @@ def test_reap_stale_runs_启动时收尸遗留_running(monkeypatch):
 
     assert reaped == ["s1", "s2"]
     assert marks == [("s1", "failed")], "只收 run 行会漏掉 last_status，按钮仍被置灰"
+
+
+def test_first_tick_fanout_is_capped_globally(monkeypatch):
+    """S7-05：开机首 tick 把 N 个到期任务一次性扇出时，同时在跑的无头 run 有上限。
+
+    _executing 只是 per-schedule 去重，原先没有任何全局闸门：一次 tick 能拉起
+    N 条 connect_ssh + N 份模型调用 + N 份熔断预算，叠上 ssh-manager 的
+    SESSION_LIMIT=64，连用户自己的终端都连不上。
+    """
+    engine = ScheduleEngine(poll_seconds=1)
+    engine._last_prune_at = time.monotonic()
+    peak = 0
+    live = 0
+
+    async def fake_run_agent_once(sched, run_id):
+        nonlocal peak, live
+        live += 1
+        peak = max(peak, live)
+        await asyncio.sleep(0.02)
+        live -= 1
+        return "ok", "", "completed"
+
+    monkeypatch.setattr(engine, "_run_agent_once", fake_run_agent_once)
+    for fn in ("create_schedule_run", "mark_schedule_run", "update_schedule_run"):
+        monkeypatch.setattr(db, fn, lambda *_a, **_k: None)
+
+    async def _scenario():
+        await asyncio.gather(*[
+            engine._run_task({"id": f"s{i}", "schedule_type": "interval"})
+            for i in range(12)
+        ])
+
+    asyncio.run(_scenario())
+    assert peak <= 4, f"全局并发闸门没生效：同时跑了 {peak} 个无头 run"
+    assert peak >= 2, "闸门是限流不是串行化，一次一个会把补跑拖成分钟级"
+    assert not engine._executing, f"run 结束后去重标记没释放: {engine._executing}"
+
+
+def test_task_cancelled_while_waiting_its_slot_is_not_stuck(monkeypatch):
+    """排队期间被删除/关停取消的任务，不能永久占着「执行中」。
+
+    _run_task_inner 的 finally 才是回收 _executing 的地方，而它压根没开始跑 ——
+    那一支必须 _run_task 自己补，否则这个 schedule 到进程重启前再也不会触发。
+    """
+    engine = ScheduleEngine(poll_seconds=1)
+    engine._last_prune_at = time.monotonic()
+    hold = asyncio.Event()
+
+    async def fake_run_agent_once(sched, run_id):
+        if str(sched["id"]).startswith("holder"):
+            await hold.wait()
+        return "ok", "", "completed"
+
+    monkeypatch.setattr(engine, "_run_agent_once", fake_run_agent_once)
+    for fn in ("create_schedule_run", "mark_schedule_run", "update_schedule_run"):
+        monkeypatch.setattr(db, fn, lambda *_a, **_k: None)
+
+    async def _scenario():
+        holders = [asyncio.create_task(engine._run_task({"id": f"holder-{i}"}))
+                   for i in range(4)]
+        await asyncio.sleep(0.05)  # 四个槽位全部占住
+        queued_id = "queued"
+        engine._executing.add(queued_id)  # 模拟 trigger 已打的去重标记
+        queued = asyncio.create_task(engine._run_task({"id": queued_id}))
+        await asyncio.sleep(0.02)
+        queued.cancel()
+        await asyncio.gather(queued, return_exceptions=True)
+        hold.set()
+        await asyncio.gather(*holders, return_exceptions=True)
+
+    asyncio.run(_scenario())
+    assert "queued" not in engine._executing, "排队中被取消的任务把「执行中」留住了"

@@ -30,6 +30,11 @@ logger = logging.getLogger(__name__)
 
 _SCHEDULE_POLL_SECONDS = 30
 _SCHEDULE_MAX_ITERATIONS = 8
+# S7-05：同一时刻最多跑几个定时 Agent run。开机首 tick 会把所有到期任务一次性扇出
+# （每个 = 一条 connect_ssh + 一份模型调用 + 一份熔断预算），而 _executing 只做
+# per-schedule 去重，原先没有任何全局上限；ssh-manager 的 SESSION_LIMIT=64 会被
+# 几十条并发会话顶穿，连用户自己的终端都连不上。
+_MAX_CONCURRENT_SCHEDULE_RUNS = 4
 _SCHEDULE_CONVERSATION_PREFIX = "sched-"
 # schedule_runs 清理节流间隔（秒）
 _RUNS_PRUNE_INTERVAL_S = 6 * 3600
@@ -69,6 +74,8 @@ class ScheduleEngine:
         # （"任务已删除" vs "服务停止"），避免 cancel 与 finally 的竞态误写
         self._deleted_sids: set[str] = set()
         self._last_prune_at = 0.0  # schedule_runs 清理节流（monotonic）
+        # S7-05：全局并发闸门。见 _run_task 处的说明。
+        self._run_slots = asyncio.Semaphore(_MAX_CONCURRENT_SCHEDULE_RUNS)
 
     # ── 生命周期 ──
     def start(self) -> None:
@@ -266,6 +273,25 @@ class ScheduleEngine:
 
     # ── 无头执行 ──
     async def _run_task(self, sched: dict) -> None:
+        """带全局闸门的入口：排队而不是丢弃，超出槽位的 run 错峰开跑（S7-05）。
+
+        等待槽位期间还没写 schedule_runs，所以不会留下假的 running 行；但如果在这
+        期间被 cancel（删除任务 / 关停），_run_task_inner 的 finally 根本没跑过 ——
+        得在这里自己回收 _executing/_running_tasks，否则该 schedule 到进程重启前
+        都被当成「执行中」，再也不会触发。inner 的 finally 也做同样的 discard，
+        两处都是幂等操作。
+        """
+        sid = sched["id"]
+        try:
+            async with self._run_slots:
+                await self._run_task_inner(sched)
+        except asyncio.CancelledError:
+            self._executing.discard(sid)
+            self._running_tasks.pop(sid, None)
+            self._deleted_sids.discard(sid)
+            raise
+
+    async def _run_task_inner(self, sched: dict) -> None:
         sid = sched["id"]
         run_id = uuid.uuid4().hex[:12]
         started = db._now()
