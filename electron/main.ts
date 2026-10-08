@@ -1207,8 +1207,11 @@ function setupSSHIPC(): void {
 
 // ─── Skills IPC（转发到后端 HTTP API）─────────────────
 async function callBackendApi(path: string, options?: RequestInit): Promise<any> {
-  const port = backendManager?.getPort() ?? 0
-  if (!port) throw new Error('后端未就绪')
+  // 端口在 spawn 前就分配好了 —— 直接读 getPort() 会把渲染进程挂载时抢发的 skills IPC
+  // 打到一个还没起监听的端口上（ECONNREFUSED）。等健康检查通过再转发，
+  // 崩溃自动重启期间也是连上新实例后再转发。
+  if (!backendManager) throw new Error('后端未就绪')
+  const port = await backendManager.whenReady()
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options?.headers as Record<string, string> | undefined || {}),

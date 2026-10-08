@@ -1988,7 +1988,12 @@ def get_agent_runs(conversation_id: str = None, limit: int = 20, offset: int = 0
 
     默认走**投影列**：`state_history` 与 `context_summary` 是整段 JSON 文本，
     一张 50 行的表把它们全带上，列表接口自己就把响应撑大几十倍，而表格里没有
-    一列用得到。要整行传 full=True（旧调用方 consciousness_tick 走的就是这条）。
+    一列用得到。两个现调用方（`GET /agent/runs`、consciousness_tick 的失败回看）
+    都只读投影里的列，`full=True` 目前没有生产调用方，留作真要整行时的出口。
+
+    倒序必须带 `id` 兜底：`_now()` 只到秒，同一秒起的多条 run 在 SQLite 里次序
+    由查询计划自己决定。翻页是两次独立请求，没有 tiebreak 就会把同一条印在两页上、
+    同时漏掉另一条，页脚的"第 51–100 条 / 共 N 条"跟着分叉。
     """
     where, params = _run_filters(conversation_id, status, run_id)
     cols = "*" if full else _RUN_LIST_COLUMNS
@@ -1996,7 +2001,7 @@ def get_agent_runs(conversation_id: str = None, limit: int = 20, offset: int = 0
     conn = _get_conn()
     try:
         rows = conn.execute(
-            f"SELECT {cols} FROM agent_runs{where} ORDER BY started_at DESC LIMIT ? OFFSET ?",
+            f"SELECT {cols} FROM agent_runs{where} ORDER BY started_at DESC, id DESC LIMIT ? OFFSET ?",
             params,
         ).fetchall()
         return [dict(r) for r in rows]

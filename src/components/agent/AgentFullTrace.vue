@@ -41,9 +41,12 @@
         <!-- 工具调用清单不在前端显示 -->
 
         <p v-if="!inline" class="ft-hint muted">工具调用明细已隐藏</p>
-        <!-- inline 时行上已经印着 trace 号、发起时间和各档汇总，这里只补行里没有的结束时刻 -->
-        <p v-if="!inline" class="ft-time muted">run {{ runId.slice(0, 8) }}… · 始于 {{ trace.run.started_at || '-' }}</p>
-        <p v-else-if="trace.run.completed_at" class="ft-time muted">结束 {{ trace.run.completed_at }}</p>
+        <!-- inline 时行上已经印着 trace 号、发起时间和各档汇总，这里只补行里没有的结束时刻。
+             两端都必须过 formatBackendTs：后端存的是 UTC naive 串（database._now），
+             原样印 = 比本地钟面早 8 小时，而同一张表的行上印的是本地时间（RunHistoryView），
+             同一条 run 上下两个时刻互相矛盾 —— 这是本仓记过的「时区接缝」家族。 -->
+        <p v-if="!inline" class="ft-time muted">run {{ runId.slice(0, 8) }}… · 始于 {{ formatBackendTs(trace.run.started_at) || '-' }}</p>
+        <p v-else-if="trace.run.completed_at" class="ft-time muted">结束 {{ formatBackendTs(trace.run.completed_at) }}</p>
       </template>
     </div>
   </div>
@@ -62,6 +65,7 @@
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { agentAdminApi, toFriendlyMessage, type AgentRunTrace } from '@/api/client'
+import { formatBackendTs } from '@/utils/format'
 const props = defineProps<{ runId: string; inline?: boolean }>()
 const emit = defineEmits<{ 'expand-change': [boolean] }>()
 

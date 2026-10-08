@@ -15,6 +15,17 @@ export default defineConfig({
     // 消费方，空模块会让它"找不到主题块"（或更坏：断言悄悄通过）而不是读到源码。
     // 放行 global.css：::selection 那条消费方在它里面，令牌表与它的读取方必须在
     // 同一份断言里对得上，否则 --wash 又是一个只写不读的令牌。
-    css: { include: [/variables\.css/, /global\.css/] },
+    // 其余三份同理，且它们是被"全仓扫"类守卫扫的对象：漏一份 = 那条守卫对那个文件
+    // 恒真（approval-card.css 曾因此带着 14 处 var() 回落值躲过裸引用守卫，
+    // 而回落值 #38bdf8/#ef4444 早已和 :root 的 #9cdcfe/#ff6b6b 漂移）。
+    css: {
+      include: [
+        /variables\.css/,
+        /global\.css/,
+        /approval-card\.css/,
+        /settings-groups\.css/,
+        /settings-panel-base\.css/,
+      ],
+    },
   },
 })

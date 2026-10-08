@@ -16,6 +16,9 @@ import rawRunView from '../components/agent/RunView.vue?raw'
 import rawHomeCard from '../components/home/HomeCommandCard.vue?raw'
 import rawHomeTitle from '../components/home/HomeTargetTitle.vue?raw'
 import rawHomeQueue from '../components/home/HomeApprovalQueue.vue?raw'
+import rawApprovalCard from './approval-card.css?raw'
+import rawSettingsGroups from '../components/settings/panels/settings-groups.css?raw'
+import rawSettingsPanelBase from '../components/settings/panels/settings-panel-base.css?raw'
 
 /**
  * 剥掉注释再断言（CSS 块注释与模板里的 HTML 注释）。
@@ -34,6 +37,15 @@ const runView = strip(rawRunView)
 const homeCard = strip(rawHomeCard)
 const homeTitle = strip(rawHomeTitle)
 const homeQueue = strip(rawHomeQueue)
+
+/** 共享样式表（不是某个组件内联的 <style> 块）：它们就是令牌层的直接消费方，
+ *  所以单独按"裸引用"约束。留空字符串等于守卫恒真，故先钉住三份都真读到了东西
+ *  —— vitest 的 css.include 是白名单，不在表里的 .css 用 ?raw 拿到的是空串。 */
+const SHARED_STYLESHEETS: Record<string, string> = {
+  'approval-card.css': strip(rawApprovalCard),
+  'settings-groups.css': strip(rawSettingsGroups),
+  'settings-panel-base.css': strip(rawSettingsPanelBase),
+}
 
 /** 取某个 `[data-theme="x"]` 块的原文（到第一个 `}` 为止 —— 主题块内不嵌套规则） */
 function blockOf(theme: string): string {
@@ -58,6 +70,22 @@ const rootValueOf = (token: string) => valueOf(css, token)
  *  改 :root 时它会静默留在后面，正是这轮一路在防的"两份定义"。 */
 const readsVar = (src: string, token: string) =>
   new RegExp(`var\\(${token}[,)]`).test(src)
+
+/** 找出「给 :root 令牌写回落值」的位置。按 :root 令牌表迭代，而不是手抄一枚枚清单：
+ *  抄的那份只覆盖今天点名的几枚，第 N+1 枚加进 :root 时没有任何东西逼人登记。
+ *  运行时注入的属性（--theme-gradient / --gradient-alpha / --chat-font-size / --qc-h /
+ *  --rm-grid-cols / --app-bg-*）不在 :root 定义，它们行上的回落是**活**的（setProperty
+ *  之前的那一次绘制要读得出东西），按 :root 迭代的写法天然放过。 */
+function fallbackOffenders(sheets: Record<string, string>): string[] {
+  const defined = tokensOf(css.match(/:root\s*\{[\s\S]*?\}/)![0])
+  const hits: string[] = []
+  for (const [file, src] of Object.entries(sheets)) {
+    for (const token of defined) {
+      if (new RegExp(`var\\(\\s*${token}\\s*,`).test(src)) hits.push(`${file} ${token}`)
+    }
+  }
+  return hits
+}
 
 /** 取一条选择器规则的**声明体**（`{}` 内、不跨块）。
  *  直接用 `[\s\S]*?` 往后扫会一路读到下一条规则 —— 于是"这条规则里有 X"其实是
@@ -173,6 +201,32 @@ describe('atelier（手记）主题的令牌覆盖', () => {
     for (const token of ['--canvas-bg', '--wash', '--card-foot-bg', '--card-foot-rule', '--font-display', '--accent-on']) {
       expect(ALL_SOURCES, `${token} 有消费方写了回落值`).not.toMatch(new RegExp(`var\\(${token},`))
     }
+  })
+
+  it('共享样式表里全部 :root 令牌一律裸引用（迭代令牌表，不抄清单）', () => {
+    // 上一条按枚点名，approval-card.css 就带着 14 处 var() 回落躲过去了，而那些
+    // 回落早已和 :root 分叉：--accent-cyan 是 #9cdcfe、回落写 #38bdf8，--danger-text
+    // 是 #ff6b6b、回落写 #ef4444。分叉又读不到 = 假保险，所以这条扫**整张** :root 表。
+    // 另外钉住"文件真读到了"：css.include 是白名单，漏一项就把空串当成"没有违规"。
+    expect(Object.keys(SHARED_STYLESHEETS).sort()).toEqual([
+      'approval-card.css',
+      'settings-groups.css',
+      'settings-panel-base.css',
+    ])
+    for (const [file, src] of Object.entries(SHARED_STYLESHEETS)) {
+      expect(src.length, `${file} 读到空串 —— vitest.config.ts 的 css.include 漏了它`)
+        .toBeGreaterThan(80)
+    }
+    expect(fallbackOffenders(SHARED_STYLESHEETS)).toEqual([])
+  })
+
+  it('裸引用守卫自己会红（变异自检：解析类守卫绿着骗人比没有更糟）', () => {
+    const target = SHARED_STYLESHEETS['approval-card.css']
+    const mutated = {
+      'approval-card.css': target.replace('.ap-code {', '.ap-code { color: var(--accent-cyan, #38bdf8);'),
+    }
+    expect(mutated['approval-card.css']).not.toBe(target)
+    expect(fallbackOffenders(mutated)).toEqual(['approval-card.css --accent-cyan'])
   })
 
   it('强调色底上不许写死白字：全仓扫，前景只能读 --accent-on', () => {

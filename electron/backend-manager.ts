@@ -6,6 +6,13 @@ import { mkdirSync, existsSync, renameSync, copyFileSync } from 'fs'
 import { homedir } from 'os'
 import { randomBytes } from 'crypto'
 
+/** whenReady 的等待者：就绪/失败/超时三选一，各自只能被唤醒一次 */
+type ReadyWaiter = {
+  timer: ReturnType<typeof setTimeout>
+  resolve: (port: number) => void
+  reject: (err: Error) => void
+}
+
 /**
  * Python FastAPI 后端进程管理器
  * 负责 spawn、健康检查、优雅关闭、崩溃自动重启
@@ -49,9 +56,57 @@ export class BackendManager {
    */
   private lastExtraEnv: Record<string, string> = {}
 
+  /**
+   * 后端是否已通过健康检查、真正可服务。
+   * this.port 在 spawn【之前】就分配好了（findFreePort 的返回值），所以"端口非 0"
+   * 只代表"选定了一个端口"，不代表"有人在那个端口上监听" —— 按端口判断可服务状态
+   * 必然拿到 ECONNREFUSED。
+   */
+  private ready = false
+  private readonly readyWaiters = new Set<ReadyWaiter>()
+
   /** 返回当前后端 API token（即使未启动也已生成，供启动前查询） */
   getApiToken(): string {
     return this.apiToken
+  }
+
+  /**
+   * 等待后端进入可服务状态并返回端口；已就绪立即 resolve。
+   * 供主进程转发后端 HTTP 请求前使用（渲染进程挂载时抢发的 IPC 会早于 uvicorn 起监听）。
+   * 崩溃自动重启期间同样适用：等待者会被这一次新实例的就绪唤醒。
+   * 超时/本次启动失败则 reject，调用方按普通后端错误处理，不会永久挂起。
+   */
+  whenReady(timeoutMs = 15_000): Promise<number> {
+    if (this.ready) return Promise.resolve(this.port)
+    return new Promise<number>((resolve, reject) => {
+      const waiter: ReadyWaiter = {
+        timer: setTimeout(
+          () => this.finishReady(waiter, new Error('后端服务启动超时，请稍后重试')),
+          timeoutMs,
+        ),
+        resolve,
+        reject,
+      }
+      this.readyWaiters.add(waiter)
+    })
+  }
+
+  /** 唤醒单个等待者（已从集合移除才生效，保证 resolve/reject 只发生一次） */
+  private finishReady(waiter: ReadyWaiter, err?: Error): void {
+    if (!this.readyWaiters.delete(waiter)) return
+    clearTimeout(waiter.timer)
+    if (err) waiter.reject(err)
+    else waiter.resolve(this.port)
+  }
+
+  /**
+   * 置就绪标志并唤醒全部等待者。
+   * err 非空 = 本次启动已失败（spawn 错误 / 健康检查超时），等待者收到错误，
+   * 而不是挂到超时才动。
+   */
+  private markReady(err?: Error): void {
+    this.ready = !err
+    for (const waiter of [...this.readyWaiters]) this.finishReady(waiter, err)
   }
 
   /**
@@ -311,6 +366,8 @@ export class BackendManager {
       this.process.on('exit', (code) => {
 
         this.process = null
+        // 进程已死，端口上再没有人监听；重启完成前 whenReady 的等待者必须继续等
+        this.ready = false
 
         // 非主动停止且非 spawn 失败时尝试自动重启
         if (!this.intentionalStop && !spawnErrorOccurred && code !== 0) {
@@ -337,8 +394,12 @@ export class BackendManager {
         // 修复 2b：启动失败（spawn 错误或超时）时清理已 spawn 的子进程，
         // 避免留下孤儿进程占用端口；随后按原有失败语义向上抛出。
         this.killCurrentProcess()
+        // 唤醒 whenReady 等待者：本次启动已确定失败，让它们立即拿到错误，
+        // 而不是挂到自己的超时才动
+        this.markReady(err instanceof Error ? err : new Error(String(err)))
         throw err
       }
+      this.markReady()
       return this.port
     } finally {
       this.starting = false
@@ -414,6 +475,10 @@ export class BackendManager {
   private killCurrentProcess(): void {
     const proc = this.process
     if (!proc) return
+
+    // 就绪标志先落地：下面 removeAllListeners 会摘掉 'exit' 监听，
+    // 那条路径上的 ready=false 也就不会执行了（stop() 主动停止走这里）
+    this.ready = false
 
     // Optimization 修复：杀进程前移除所有监听器，防止闭包（含 this）长期持有旧 process 引用
     proc.stdout?.removeAllListeners()
