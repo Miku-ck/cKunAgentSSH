@@ -102,6 +102,11 @@ v-show="s.id === store.activeSessionId"
           <TunnelView v-if="pageMounted('tunnels')" />
         </div>
 
+        <!-- TLS 接入网关（安全接入）页面 -->
+        <div v-show="activeNavPage === 'access'" class="tunnel-page">
+          <AccessView v-if="pageMounted('access')" />
+        </div>
+
         <!-- 首页：目标主机 + 下达 + 待放行计数条（批量与追溯归它）+ 本轮过程（逐条决策在卡上） -->
         <div v-show="homeTabActive" class="home-pane">
           <HomeTargetTitle @bulk="showBulk = true" />
@@ -195,11 +200,13 @@ const AuditView = defineAsyncComponent(() => import('@/views/ssh/AuditView.vue')
 const SchedulesView = defineAsyncComponent(() => import('@/views/ssh/SchedulesView.vue'))
 const DashboardView = defineAsyncComponent(() => import('@/views/ssh/DashboardView.vue'))
 const TunnelView = defineAsyncComponent(() => import('@/components/ssh/TunnelView.vue'))
+const AccessView = defineAsyncComponent(() => import('@/components/ssh/AccessView.vue'))
 const RunView = defineAsyncComponent(() => import('@/components/agent/RunView.vue'))
 import { useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useAgentStore } from '@/stores/agent'
 import { useTunnelStore } from '@/stores/tunnel'
+import { useAccessStore } from '@/stores/access'
 import { useSettings } from '@/composables/useSettings'
 import { useCommandDelivery } from '@/composables/useCommandDelivery'
 import { useSshNavigation } from '@/composables/useSshNavigation'
@@ -234,6 +241,7 @@ const {
   toggleSchedules,
   toggleDashboard,
   toggleTunnels,
+  toggleAccess,
   showAiPanel,
   openLocalShell,
   handleLocalExit,
@@ -284,6 +292,8 @@ onMounted(() => {
   // 隧道状态订阅全局存活（不挂在 TunnelView 上）：规则列表 + 运行状态推送
   // 在应用会话内持续更新，切到隧道页时数据已就绪
   void useTunnelStore().init()
+  // 网关会话的订阅同样挂在这里（组件常驻）：状态条与卡片的「在线」不能只在接入页活着
+  void useAccessStore().init()
 })
 
 // ── QuickCommandBar 顶线对齐 ──
@@ -342,6 +352,7 @@ defineExpose({
   toggleSchedules,
   toggleDashboard,
   toggleTunnels,
+  toggleAccess,
   openSettings,
   activeNavPage,
   showAiPanel,

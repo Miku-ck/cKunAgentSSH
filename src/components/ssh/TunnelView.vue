@@ -4,7 +4,7 @@
       <div class="page-head">
         <h1>隧道</h1>
         <span class="head-spacer"></span>
-        <button class="btn primary" :disabled="!hasConnections" :title="hasConnections ? '' : '请先在远程终端页创建连接'" @click="openCreate">＋ 新建隧道</button>
+        <button class="btn btn-primary" :disabled="!hasConnections" :title="hasConnections ? '' : '请先在远程终端页创建连接'" @click="openCreate">＋ 新建隧道</button>
       </div>
 
       <!-- 状态筛选（计数随启停/删除实时变化） -->
@@ -29,7 +29,7 @@
             <button v-if="row.rule.type === 'dynamic' && row.state === 'active'" class="copy-chip" :class="{ ok: copyingId === row.rule.id }" title="复制代理地址" @click="copyAddr(row.rule)">
               {{ copyLabel(row.rule) }}
             </button>
-            <button class="btn sm" :disabled="row.orphan || busyId === row.rule.id" :title="row.orphan ? '连接配置已删除，无法启动' : ''" @click="toggle(row.rule)">
+            <button class="btn btn-sm" :disabled="row.orphan || busyId === row.rule.id" :title="row.orphan ? '连接配置已删除，无法启动' : ''" @click="toggle(row.rule)">
               {{ row.toggleLabel }}
             </button>
             <button class="icon-btn" title="编辑" :disabled="row.orphan" @click="openEdit(row.rule)">
@@ -56,7 +56,7 @@
 
           <div v-if="row.state === 'error' && row.message" class="row-err">
             <span>{{ row.message }}</span>
-            <button class="btn sm" @click="toggle(row.rule)">重试</button>
+            <button class="btn btn-sm" @click="toggle(row.rule)">重试</button>
           </div>
         </div>
       </div>
@@ -65,7 +65,7 @@
       <div v-if="visibleRows.length === 0" class="empty">
         <div class="t">{{ tunnelStore.rules.length === 0 ? '还没有隧道规则' : '没有符合当前筛选的隧道' }}</div>
         <div class="d">通过已保存的连接建立端口转发，隧道独立于终端会话运行。</div>
-        <button v-if="tunnelStore.rules.length === 0 && hasConnections" class="btn primary" @click="openCreate">＋ 新建隧道</button>
+        <button v-if="tunnelStore.rules.length === 0 && hasConnections" class="btn btn-primary" @click="openCreate">＋ 新建隧道</button>
       </div>
     </div>
 
@@ -267,33 +267,6 @@ onUnmounted(() => {
 .head-spacer {
   flex: 1;
 }
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
-  border-radius: var(--radius-sm);
-  font-size: 12.5px;
-  border: 1px solid var(--border-default);
-  background: transparent;
-  color: var(--text-primary);
-  cursor: pointer;
-  transition: background var(--transition-fast), border-color var(--transition-fast);
-}
-.btn:hover { background: var(--bg-hover); }
-.btn.primary {
-  /* 与 SchedulesView 的同类 CTA 同形（.sc-btn.primary）：强调只走描边与字色，不铺色块。
-     实心 --accent-primary 摆在纸上就是整页最响的一块皮，而它不属于任何主题。 */
-  color: var(--accent-primary);
-  border-color: var(--accent-primary);
-}
-.btn.sm {
-  padding: 3px 9px;
-  font-size: 12px;
-  min-width: 52px;
-  justify-content: center;
-}
-.btn:disabled { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
 .icon-btn {
   width: 28px;
   height: 28px;

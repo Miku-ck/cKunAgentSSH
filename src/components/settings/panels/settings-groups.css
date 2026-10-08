@@ -3,8 +3,7 @@
  * （28 条选择器 0 漂移）。两面板以 <style scoped src> 引入；各自的专有项留在本地：
  *   AgentPanel: .grp-badge.live / .risk-* / .tool-row 等行内样式
  *   SkillsPanel: .skill-row / .skill-* 与 .skill-content
- * 注意 `.btn` 只有这两块面板同值（OpsPanel/ModelsPanel 的 .btn 是 28px 另一套），
- * 所以本文件绝不能被那些面板引入。
+ * `.btn` 已收敛到全局 styles/button.css；本文件不再声明按钮样式。
  */
 
 .grp {
@@ -46,12 +45,3 @@
 .flag.ok { color: var(--status-success-text); border-color: color-mix(in srgb, var(--status-success-text) 35%, transparent); }
 .flag.vio { color: var(--accent-purple); border-color: color-mix(in srgb, var(--accent-purple) 35%, transparent); }
 
-.btn {
-  flex-shrink: 0; height: 24px; padding: 0 10px; border-radius: 4px;
-  background: none; border: 1px solid var(--border-default);
-  color: var(--text-primary); font-size: 11.5px; font-family: inherit; cursor: pointer;
-}
-.btn.sm { height: 22px; padding: 0 8px; font-size: 11px; }
-.btn.danger { color: var(--status-error-text); border-color: color-mix(in srgb, var(--status-error-text) 40%, transparent); }
-.btn.danger:hover { background: color-mix(in srgb, var(--status-error-text) 8%, transparent); }
-.btn:disabled { opacity: .5; cursor: default; }

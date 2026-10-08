@@ -32,8 +32,8 @@
       </select>
       <input v-model="filters.q" class="mem-search" placeholder="搜索内容/标题"
              @keydown.enter="loadMemories" />
-      <button class="mem-btn" @click="loadMemories">搜索</button>
-      <button class="mem-btn" @click="addingNew = !addingNew">{{ addingNew ? '收起' : '新增' }}</button>
+      <button class="btn" @click="loadMemories">搜索</button>
+      <button class="btn" @click="addingNew = !addingNew">{{ addingNew ? '收起' : '新增' }}</button>
     </div>
 
     <!-- ── 手动新增：直写 active 并置顶，不经对账管线 ── -->
@@ -56,7 +56,7 @@
           <span class="mem-importance">{{ newMem.importance.toFixed(2) }}</span>
         </label>
         <span class="mem-new-hint">直写生效并置顶，不经对账；不带向量，关键词检索照常命中</span>
-        <button class="mem-btn sm" :disabled="!newMem.content.trim() || addingBusy"
+        <button class="btn btn-sm" :disabled="!newMem.content.trim() || addingBusy"
                 @click="onAdd">{{ addingBusy ? '写入中…' : '写入' }}</button>
       </div>
     </div>
@@ -89,8 +89,8 @@
               <span>· {{ fmtDate(m.created_at) }}</span>
               <span class="spacer" />
               <template v-if="editingId === m.id">
-                <button class="mem-btn sm" :disabled="saving === m.id" @click="saveEdit(m)">保存</button>
-                <button class="mem-btn sm" @click="editingId = ''">取消</button>
+                <button class="btn btn-sm" :disabled="saving === m.id" @click="saveEdit(m)">保存</button>
+                <button class="btn btn-sm" @click="editingId = ''">取消</button>
               </template>
               <template v-else>
                 <button class="mem-lnk" @click="startEdit(m)">编辑</button>
@@ -108,7 +108,7 @@
       <template v-else-if="tab === 'jobs'">
         <div class="mem-jobs-bar">
           <span class="mem-new-hint">对账 / 池修剪 / 衰减按定时跑；这里可立刻催一轮</span>
-          <button class="mem-btn sm" :disabled="tickBusy" @click="onTickNow">
+          <button class="btn btn-sm" :disabled="tickBusy" @click="onTickNow">
             {{ tickBusy ? '整理中…' : '立即整理' }}
           </button>
         </div>
@@ -149,8 +149,8 @@
             <div class="mem-meta">
               <span class="spacer" />
               <template v-if="blockEditKey === b.key">
-                <button class="mem-btn sm" :disabled="saving === b.key" @click="saveBlock(b)">保存</button>
-                <button class="mem-btn sm" @click="cancelBlockEdit">取消</button>
+                <button class="btn btn-sm" :disabled="saving === b.key" @click="saveBlock(b)">保存</button>
+                <button class="btn btn-sm" @click="cancelBlockEdit">取消</button>
               </template>
               <template v-else>
                 <button class="mem-lnk" @click="startBlockEdit(b)">编辑</button>
@@ -200,12 +200,12 @@
     <footer class="mem-foot">
       <template v-if="clearArmed">
         <span class="prune-q">作废全部未置顶记忆？置顶项不受影响。</span>
-        <button class="mem-btn danger" @click="onClear">确认</button>
-        <button class="mem-btn" @click="clearArmed = false">取消</button>
+        <button class="btn btn-danger" @click="onClear">确认</button>
+        <button class="btn" @click="clearArmed = false">取消</button>
       </template>
       <template v-else>
-        <button class="mem-btn" @click="reload">刷新</button>
-        <button v-if="tab === 'memories'" class="mem-btn danger" :disabled="!memories.length" @click="clearArmed = true">清空</button>
+        <button class="btn" @click="reload">刷新</button>
+        <button v-if="tab === 'memories'" class="btn btn-danger" :disabled="!memories.length" @click="clearArmed = true">清空</button>
       </template>
     </footer>
   </div>
@@ -660,7 +660,7 @@ onMounted(() => { loadStats(); loadMemories() })
   color: var(--text-secondary); font-size: 11px; font-family: inherit;
 }
 .mem-lnk:hover { color: var(--accent-primary); }
-.mem-lnk.danger:hover { color: #cf8a80; }
+.mem-lnk.danger:hover { color: var(--danger-text); }
 .mem-lnk:disabled { opacity: .5; cursor: default; }
 .mem-drawer {
   border-top: 1px solid var(--border-default); padding: 8px 12px; max-height: 180px; overflow-y: auto;
@@ -678,14 +678,6 @@ onMounted(() => { loadStats(); loadMemories() })
   font-size: 11.5px; color: var(--text-secondary); flex-shrink: 0;
 }
 .prune-q { flex: 1; }
-.mem-btn {
-  height: 24px; padding: 0 10px; border-radius: 4px; font-size: 11.5px; font-family: inherit;
-  background: none; border: 1px solid var(--border-default); color: var(--text-primary); cursor: pointer;
-}
-.mem-btn:hover:not(:disabled) { border-color: var(--accent-primary); }
-.mem-btn:disabled { opacity: .45; cursor: default; }
-.mem-btn.danger { color: #cf8a80; border-color: rgba(207,138,128,.4); }
-.mem-btn.sm { height: 20px; padding: 0 8px; font-size: 11px; }
 .mem-new {
   display: flex; flex-direction: column; gap: 5px; padding: 8px 12px;
   border-bottom: 1px solid var(--border-subtle);

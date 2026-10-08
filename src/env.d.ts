@@ -89,6 +89,10 @@ interface TunnelRule {
   name: string
   /** 引用 SSHConnectionRecord.id（弱引用：连接被删 → 启动报 config-missing） */
   connectionId: string
+  /** 数据面：缺省视为 'ssh'（存量规则零迁移）；'gateway' 时走下面的网关会话 */
+  via?: 'ssh' | 'gateway'
+  /** 引用 GatewayRecord.id（仅 via='gateway'） */
+  gatewayId?: string
   type: 'local' | 'remote' | 'dynamic'
   /** 默认 127.0.0.1，仅 local 可自定义；dynamic 强制 127.0.0.1 */
   listenHost?: string
@@ -111,6 +115,64 @@ interface TunnelStatus {
   message?: string
   connections?: number
   startedAt?: number
+}
+
+/** TLS 接入网关记录（主进程定义见 electron/gateway-store.ts；口令不出主进程） */
+interface GatewayRecord {
+  id: string
+  name: string
+  host: string
+  port: number
+  /** CA（PEM），缺省时信任判定完全交给下面的指纹 */
+  caPem?: string
+  /** 已确认的服务端 SPKI 指纹（sha256/…），缺省 = 首次连接走 TOFU */
+  trustedSpki?: string
+  user: string
+  /** 仅保存时上行；下行副本里永远没有这个字段 */
+  password?: string
+  autoConnect: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+/** 网关会话状态（主进程 → 渲染层推送，channel: gateway:status；不持久化） */
+interface GatewayStatus {
+  id: string
+  name: string
+  host: string
+  port: number
+  state: 'idle' | 'connecting' | 'online' | 'reconnecting' | 'error'
+  message?: string
+  /** 当前活动转发通道数 */
+  channels?: number
+  role?: string
+  sessionId?: string
+  spki?: string
+  sinceAt?: number
+  /** 第几次重连（0 = 未断过） */
+  attempt?: number
+}
+
+/** 首次见到网关证书（TOFU），UI 确认后调 gatewayTrustHostKey 落库 */
+interface GatewayHostKeyEvent {
+  id: string
+  name: string
+  host: string
+  port: number
+  spki: string
+}
+
+/** 通道表的一行（主进程定义见 electron/transports/gateway-transport.ts） */
+interface GatewayChannelRow {
+  chan: number
+  /** true = 网关发起（-R）；方向由 chan 奇偶隐含，这里给的是可读标签 */
+  fromPeer: boolean
+  dstHost: string
+  dstPort: number
+  bytesUp: number
+  bytesDown: number
+  /** peer-fin = 对端已单向 EOF，本侧仍可写 */
+  state: 'open' | 'peer-fin'
 }
 
 interface ElectronAPI {
@@ -205,6 +267,17 @@ interface ElectronAPI {
   /** 保存前预检：本机监听端口被占即时报（而非启动时才暴露 EADDRINUSE） */
   tunnelCheckPort: (host: string, port: number) => Promise<{ ok: boolean; message?: string }>
   onTunnelStatus: (callback: (data: TunnelStatus) => void) => () => void
+  // TLS 接入网关（安全接入）
+  gatewayList: () => Promise<GatewayRecord[]>
+  gatewaySave: (rec: GatewayRecord) => Promise<GatewayRecord>
+  gatewayDelete: (id: string) => Promise<void>
+  gatewayConnect: (id: string) => Promise<GatewayStatus>
+  gatewayDisconnect: (id: string) => Promise<GatewayStatus>
+  gatewayStatusAll: () => Promise<GatewayStatus[]>
+  gatewayChannels: (id: string) => Promise<GatewayChannelRow[]>
+  gatewayTrustHostKey: (id: string, spki: string) => Promise<void>
+  onGatewayStatus: (callback: (data: GatewayStatus) => void) => () => void
+  onGatewayHostKeyNew: (callback: (data: GatewayHostKeyEvent) => void) => () => void
   // Skills
   listSkills: (mode?: string) => Promise<any[]>
   updateSkillEnabled: (id: string, enabled: boolean, mode?: string) => Promise<{ id: string; enabled: boolean }>

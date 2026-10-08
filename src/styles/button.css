@@ -1,0 +1,91 @@
+/**
+ * button.css —— 跨面板统一按钮系统
+ *
+ * 收敛前 7 个组件各写一份 .btn：ModelsPanel (无边框/6px/500) · OpsPanel (28px/4px) ·
+ * settings-groups (24px/4px) · mem-btn (24px/4px) · TunnelView (自适应/sm) ·
+ * rm-btn (自适应/sm) · approval-card (自适应/7px)。尺寸/字重/圆角各唱各的调，
+ * 最大的疙瘩在 ConnectionModal：它是唯一用实心 --accent-primary 色块做主操作的，
+ * 直接违反「操作按钮偏好纯文字彩色样式（无边框/背景）」的偏好。
+ *
+ * 这套收敛后：所有面板走同一个「文本色 + 透明底 + hover 浮 --bg-hover」底座，
+ * 语义只用字色和描边（统一 40–50% alpha）表达；不再有任何一块实心底色 CTA。
+ *
+ * 语义：
+ *   .btn         次级/中性操作
+ *   .btn-primary 业务主操作（开/关/保存/连接）
+ *   .btn-danger  不可逆操作（删除/清空/断开）
+ *   .btn-ghost   比次级更弱的按钮（取消/跳过/非模态辅助）
+ *   .btn-sm      紧凑场景再小一圈（表格内、折叠条、记忆抽屉）
+ *
+ * Consumers：遇到直接引用原 scoped 类名的 Vue 组件，同步把模板 class 换为 .btn-*；
+ * 那些组件原来的 scoped .btn 块（若无再被引用）一并删除。
+ */
+
+/* ── 底座 ──
+   solid = 透明描边：hover 加 background 时布局不会跳 1px。字重回归 400：
+   ModelsPanel 原来的 500 在深色/米纸两套主题下都压过正文太多，正文找不回
+   视觉主次。 */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 4px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 400;
+  font-family: inherit;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+  user-select: none;
+}
+.btn:hover:not(:disabled) { background: var(--bg-hover); }
+.btn:active:not(:disabled) { background: var(--bg-active); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
+/* ── Primary：强调色文本 + 50% alpha 描边 ──
+   color-mix 跟主题走，浅色主题下 50% alpha 也保可读；不设 color: accent-primary
+   因为部分面板已有自己的「上色」逻辑，留给 .btn.primary 这类 modifier 再挂。 */
+.btn-primary {
+  color: var(--accent-primary);
+  border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent);
+}
+.btn-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+}
+
+/* ── Danger：危险文本 + 40% alpha 描边 ── */
+.btn-danger {
+  color: var(--danger-text);
+  border-color: color-mix(in srgb, var(--danger-text) 40%, transparent);
+}
+.btn-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger-text) 8%, transparent);
+}
+
+/* ── Ghost：次级文本，无描边 ──
+   比中性 .btn 再弱一档，用在取消/跳过/非模态辅助格。 */
+.btn-ghost {
+  color: var(--text-secondary);
+}
+.btn-ghost:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* ── 紧凑尺寸：表格行、折叠条、记忆抽屉 ── */
+.btn-sm {
+  height: 20px;
+  padding: 0 8px;
+  font-size: 11px;
+  border-radius: 3px;
+}

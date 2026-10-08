@@ -275,3 +275,41 @@ gatewayId?: string        // via==='gateway' 必填，弱引用 GatewayRecord.id
 （`via`/`gatewayId` + 校验）、`electron/main.ts`（`transportFactory` 注入 + 新 IPC + will-quit 清理）、
 `electron/preload.ts`、`src/env.d.ts`、`src/stores/tunnel.ts`、`src/components/ssh/TunnelModal.vue`、
 `src/composables/useSshNavigation.ts`、`src/views/ssh/SshView.vue`、`src/layouts/TitleBar.vue`、`src/App.vue`
+
+## 11. 实施回填（2026-10-08 当日，M1–M4 落地后）
+
+本节**覆盖**上文与之冲突的表述。评审后动手时撞出五处偏离，逐条记下，不留文档与代码各说一套。
+
+1. **§2.2 的认证模型换了主从**。原稿以「一次性令牌换长期客户端证书（mTLS）」为主、口令不提。
+   对照 Hillstone Secure Connect 的实际表单（用户名 + 密码 + 记住密码）后改为：
+   **口令是底座，证书是可选第二因子**。`AuthPayload` 因此是 `{user, password, token?}`，
+   `token` 字段留着但本版无签发方。连带结论：**Node 的 crypto 只能解析 X.509、不能签发**，
+   所以网关不内置 CA，服务端证书与私钥是部署前提（openssl 或既有 PKI），
+   「一次性令牌换证书」那条路要等接进 PKI 才谈得上。
+2. **§1.1 的「len 超限致命」是不可达检查**。`len` 取 u16，上限就是它自己。致命判定收敛成四类：
+   `ver≠1` / 未知 type / OPEN 的 chan 奇偶非法或撞号 / 控制帧 JSON 解析失败。
+3. **帧表补了三个类型**：`bind 0x0d` / `unbind 0x0e` / `bindOk 0x0f`。原稿 §3.1 要求
+   `TunnelTransport.bind()`，而 SSH 侧有 `forwardIn` 对位、帧表里却没有表达 —— `-R` 无处落地。
+   失败复用 `openErr` + `chan=0`，不新增错误帧。
+4. **网关侧一条会话服务多条隧道**（§3.1 未预见）。SSH 数据面是「每条隧道各开一条连接」，
+   因为对端是用户自己的 SSH 服务器、没有会话概念；而网关的身份是**登录出来的**，
+   界面上「连接/断开」的对象是网关而非某条规则。新增 `electron/gateway-manager.ts` 持
+   `gatewayId → GatewayTransport` 一张表，重连退避也收在这层（每条隧道各自退避会打出 N 倍风暴）。
+   连带给 `TunnelTransport` 加了 `readonly shared: boolean`：`tunnel-manager.teardown()` 原先无条件
+   `close()`，共享会话会被单条隧道的停止关掉 —— 这是实施时才暴露出来的真 bug。
+5. **§6 的 UI 范围收窄**。接入页只放「连接 / 通道」两个页签：HSC 的 日志/设置 两页在本版
+   没有对应数据面，不放空标签（本仓先例：侧栏那枚永灰的「插件」行是被拆掉的）。
+   「最优通道」「网关探测」两个开关同理不进 UI —— UDP 承载是二期，画一个不接线的开关等于
+   造一个失效设置项。CTA 用**描边**而非 HSC 的实心块，与 `TunnelView.vue:284-289` 同一取舍；
+   `designs/hsc-replica-mockup-v2.html` 已同步改成描边，稿码一致。
+
+**测试口径的变更**：`vitest.config.ts` 的 include 加了 `electron/**/*.test.ts`。会话层依赖
+`node:stream`，搬不进 `shared/`（那边同时被 `tsconfig.web` 收，而 web 侧没有 node 类型），
+放在代码旁边是唯一能被测到的位置。假对端用自写的内存 Duplex —— `stream.Duplex.pair()`
+在本机 Node 24 上不存在（`typeof === 'undefined'`）。
+
+**验收结果**：`npm run typecheck` 两侧 0 错；`npx vitest run` 434 绿（新增 43 帧层 + 14 会话层），
+其中 `src/styles/variables.test.ts` 的 22 条按目录前缀扫，`src/components/ssh/` 在网内，
+两个新组件因此被自动纳入「禁 hex / 禁字面字族 / 禁令牌回落值 / 强调色底禁写死白字 /
+:root 令牌须有消费方」五条守卫。`node gateway/hillgw.mjs --selftest` 16 项全过，
+其中 6 条 golden 字节与 TS 测试里的字面量逐字相同 —— 两份实现的防漂移锚点。

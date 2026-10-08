@@ -264,7 +264,7 @@
               <option v-for="t in tools" :key="t.name" :value="t.name" />
             </datalist>
             <input v-model.trim="allowCommand" class="text-input wide" placeholder="绑定命令（可选；省略 = 工具级授权）" />
-            <button class="btn" :disabled="!allowTool || allowing" @click="onAllow">
+            <button class="btn btn-primary" :disabled="!allowTool || allowing" @click="onAllow">
               {{ allowing ? '登记中…' : '手动授权' }}
             </button>
           </div>
@@ -279,7 +279,7 @@
               <span class="tool-name">{{ p.tool }}</span>
               <span class="tool-desc">{{ p.keys.length }} 条授权键（{{ p.keys.map(k => k.split(':')[1] || '工具级').slice(0, 3).join('、') }}{{ p.keys.length > 3 ? ' …' : '' }}）</span>
             </div>
-            <button class="btn danger" :disabled="revoking === p.tool" @click="onRevoke(p.tool, p.keys.length)">
+            <button class="btn btn-danger" :disabled="revoking === p.tool" @click="onRevoke(p.tool, p.keys.length)">
               {{ revoking === p.tool ? '撤销中…' : '全部撤销' }}
             </button>
           </div>
@@ -313,7 +313,7 @@
               autocomplete="off"
             />
             <button class="btn" :disabled="tavilySaving || !tavilyInput" @click="onSaveTavily">保存</button>
-            <button v-if="webTools.tavily_api_key_set && webTools.tavily_api_key_source === 'db'" class="btn danger" :disabled="tavilySaving" @click="onClearTavily">清除</button>
+            <button v-if="webTools.tavily_api_key_set && webTools.tavily_api_key_source === 'db'" class="btn btn-danger" :disabled="tavilySaving" @click="onClearTavily">清除</button>
           </div>
         </div>
       </section>
@@ -355,7 +355,7 @@
               :model-value="!!s.enabled"
               @update:model-value="(v: boolean) => onToggleStrategy(s, v)"
             />
-            <button class="btn danger sm" @click="onDeleteStrategy(s)">淘汰</button>
+            <button class="btn btn-danger btn-sm" @click="onDeleteStrategy(s)">淘汰</button>
           </div>
         </div>
       </section>

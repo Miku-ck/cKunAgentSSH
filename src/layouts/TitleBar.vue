@@ -26,6 +26,9 @@
       <button class="titlebar-action-btn" :class="{ active: activePage === 'tunnels' }" title="隧道" @click="emit('action-tunnels')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg>
       </button>
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'access' }" title="安全接入（TLS）" @click="emit('action-access')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9.5 11.5 11 13l3.5-3.5"/></svg>
+      </button>
       <button class="titlebar-action-btn" :class="{ active: activePage === 'audit' }" title="运维审计" @click="emit('action-audit')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M9 12l2 2 4-4"/><path d="M20 12a8 8 0 1 1-2.34-5.66"/></svg>
       </button>
@@ -56,7 +59,7 @@ const api = window.electronAPI
 
 defineProps<{
   /** 当前激活的功能页，对应图标高亮 */
-  activePage: 'home' | 'remote-mgr' | 'sftp' | 'audit' | 'ai' | 'schedules' | 'dashboard' | 'tunnels'
+  activePage: 'home' | 'remote-mgr' | 'sftp' | 'audit' | 'ai' | 'schedules' | 'dashboard' | 'tunnels' | 'access'
 }>()
 
 const emit = defineEmits<{
@@ -67,6 +70,7 @@ const emit = defineEmits<{
   'action-sftp': []
   'action-dashboard': []
   'action-tunnels': []
+  'action-access': []
   'action-settings': []
 }>()
 

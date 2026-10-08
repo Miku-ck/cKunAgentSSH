@@ -32,9 +32,9 @@
                   触发词：{{ r.triggerWords.slice(0, 6).join('、') }}{{ r.triggerWords.length > 6 ? ' …' : '' }}
                 </span>
               </div>
-              <button class="btn sm" @click="r.expanded = !r.expanded">{{ r.expanded ? '收起' : '正文' }}</button>
+              <button class="btn btn-sm" @click="r.expanded = !r.expanded">{{ r.expanded ? '收起' : '正文' }}</button>
               <ToggleSwitch :model-value="r.on" @update:model-value="(v: boolean) => onToggle(r, v)" />
-              <button v-if="r.source !== 'builtin'" class="btn danger sm" @click="onDelete(r)">删除</button>
+              <button v-if="r.source !== 'builtin'" class="btn btn-danger btn-sm" @click="onDelete(r)">删除</button>
             </div>
             <div v-if="r.expanded" class="skill-content">
               <pre>{{ r.system_prompt.slice(0, 4000) }}{{ r.system_prompt.length > 4000 ? `\n… [共 ${r.system_prompt.length} 字符]` : '' }}</pre>

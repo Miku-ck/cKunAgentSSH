@@ -34,7 +34,7 @@
             @keydown.enter.prevent="saveProxy()"
           />
           <button class="btn" :disabled="savingProxy" @click="saveProxy()">应用代理</button>
-          <button class="btn ghost" :disabled="!proxySet || savingProxy" @click="clearProxy()">清除</button>
+          <button class="btn btn-ghost" :disabled="!proxySet || savingProxy" @click="clearProxy()">清除</button>
         </div>
         <p class="hint">
           代理地址只单向提交，页面读回的是脱敏值（不含口令）。保存后已建立的模型连接会按新策略重建；
@@ -117,7 +117,7 @@
       <section class="section">
         <div class="diag-head">
           <h4 class="section-title">诊断快照</h4>
-          <button class="btn ghost" :disabled="diagLoading" @click="refreshDiagnostics()">
+          <button class="btn btn-ghost" :disabled="diagLoading" @click="refreshDiagnostics()">
             {{ diagLoading ? '读取中…' : '刷新' }}
           </button>
         </div>
@@ -319,20 +319,6 @@ onMounted(() => {
 }
 .form-input:focus { border-color: var(--accent-primary); }
 .form-input.input-error { border-color: var(--status-error-text); }
-.btn {
-  height: 28px;
-  padding: 0 12px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-input);
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
-  font-size: 12px;
-  font-family: inherit;
-  cursor: pointer;
-}
-.btn:hover:not(:disabled) { border-color: var(--accent-primary); }
-.btn:disabled { opacity: .5; cursor: not-allowed; }
-.btn.ghost { background: transparent; color: var(--text-secondary); }
 .diag-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
 .diag-grid {
   display: grid;

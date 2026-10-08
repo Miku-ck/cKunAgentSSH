@@ -7,11 +7,11 @@
         <span>远程管理</span>
       </div>
       <div class="rm-header-actions">
-        <button v-if="remoteSessionCount > 1" class="rm-btn" @click="showBulkModal = true" title="对当前活动远程会话批量下发命令并对比结果">
+        <button v-if="remoteSessionCount > 1" class="btn" @click="showBulkModal = true" title="对当前活动远程会话批量下发命令并对比结果">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
           批量下发（{{ remoteSessionCount }} 台）
         </button>
-        <button class="rm-btn primary" @click="$emit('new-connection')" title="新建连接">
+        <button class="btn btn-primary" @click="$emit('new-connection')" title="新建连接">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           新建连接
         </button>
@@ -82,11 +82,11 @@
     <!-- 批量操作栏 -->
     <div v-if="selectedIds.size > 0" class="rm-batch-bar">
       <span class="batch-info">已选 {{ selectedIds.size }} 项</span>
-      <button class="rm-btn danger" @click="handleDeleteBatch">
+      <button class="btn btn-danger" @click="handleDeleteBatch">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
         删除
       </button>
-      <button class="rm-btn" @click="clearSelection">取消选择</button>
+      <button class="btn" @click="clearSelection">取消选择</button>
     </div>
 
     <!-- 右键菜单 -->
@@ -577,50 +577,6 @@ onUnmounted(() => {
 }
 
 /* 按钮 */
-.rm-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 12px;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 12px;
-  font-family: var(--font-sans);
-  transition: all var(--transition-fast);
-}
-
-.rm-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.rm-btn.primary {
-  /* 强调只走描边与字色，不铺色块 —— 与 .sc-btn.primary / TunnelView 的 .btn.primary 同形。
-     实心 --accent-primary 摆在纸上就是页面上最响的一块皮，它不属于任何主题。 */
-  border-color: var(--accent-primary);
-  color: var(--accent-primary);
-  font-weight: 500;
-}
-
-.rm-btn.primary:hover {
-  background: var(--bg-hover);
-  color: var(--accent-primary);
-}
-
-.rm-btn.danger {
-  color: var(--accent-red);
-  border-color: rgba(244, 135, 113, 0.3);
-}
-
-.rm-btn.danger:hover {
-  background: rgba(244, 135, 113, 0.1);
-  color: var(--accent-red);
-}
-
 /* 批量栏 */
 .rm-batch-bar {
   display: flex;

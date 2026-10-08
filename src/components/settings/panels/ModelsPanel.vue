@@ -926,28 +926,6 @@ return String(n)
 .model-empty .hint { font-size: 12px; color: var(--text-tertiary); }
 
 /* 按钮 */
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border: none;
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.15s;
-  font-family: inherit;
-}
-.btn-sm { padding: 4px 10px; font-size: 11px; }
-/* 强调走字色，不铺色块：实心 --accent-primary 摆在纸上就是这一页最响的一块皮，而它
-   不属于任何主题。--accent-on 一并去掉 —— 没有底了，前景得自己站得住。 */
-.btn-primary { color: var(--accent-primary); }
-.btn-primary:hover { background: var(--bg-hover); }
-.btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
-.btn-ghost { background: transparent; color: var(--text-secondary); }
-.btn-ghost:hover { background: var(--bg-hover); color: var(--text-primary); }
-.btn-ghost:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .btn-icon {
   width: 28px; height: 28px;
