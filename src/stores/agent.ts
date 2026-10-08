@@ -302,6 +302,15 @@ export const useAgentStore = defineStore('agent', () => {
         currentState.value = 'failed'
         // B11 修复：run 结束清理权限请求状态，防止面板里残留过期授权按钮
         permissionRequests.value = []
+        // S1-02 修复：这是第四个「run 终态」清理点（另外三处是 SSE error 事件、
+        // done 事件、abort()），此前只清一半，把代码里已写明的口径漏了一条：
+        // 向导继续挂着 = 让用户答一张没人收的题（visible 常驻的蒙皮盖在已终止的
+        // run 上），而 pending_confirm 的交付徽章还写着「命令待确认」——点确认会
+        // 把命令写进活着的 PTY/SSH 终端，而没有任何 run 在等它的结果。
+        // 传 runId：流是被截断的（后端重启/代理 idle-timeout/断网），服务端未必走
+        // 过终态清理，这一次释放有机会生效；失败只 warn，与 abort() 同一处理。
+        clarificationWizard.value = null
+        agentDeliver.abortRun(lastRunId.value || undefined)
         // H14 修复：流结束后清除 abortFn，避免对已结束的流调用 abort 重置状态
         abortFn = null
       },
@@ -699,6 +708,11 @@ export const useAgentStore = defineStore('agent', () => {
         // run 已终止：澄清向导继续挂着的话，用户答题只会 POST 到一个
         // 后端不再等待的 run_id（clarification_done 永不回来，卡片永不消失）
         clarificationWizard.value = null
+        // S1-02 同口径：run 已终态，pending_confirm 的徽章必须失去派发能力
+        // （点确认会把命令写进活终端，而没有 run 在等结果）。不传 runId：终态
+        // 事件说明服务端已随 ReflectionRein 清过该 run 的 once 授权，再 POST 一次
+        // 只会撞 404。
+        agentDeliver.abortRun()
         // H1 修复：不在 error 事件清理 abortFn，此时流可能仍未关闭
         // abortFn 由 onDone/onError 回调（真正代表流结束）清理
         break
@@ -788,6 +802,8 @@ export const useAgentStore = defineStore('agent', () => {
         clarificationWizard.value = null
         // B11 修复：run 结束清理权限请求状态，防止面板里残留过期授权按钮
         permissionRequests.value = []
+        // S1-02 同口径（不传 runId，理由见 error 分支）
+        agentDeliver.abortRun()
         // H14 修复：支持 human_help 终止态，保留 currentState 供 UI 显示"需要人工介入"
         status.value = event.state === 'failed' || event.state === 'human_help' ? 'failed' : 'completed'
         // 保留有意义的 currentState（如 human_help），仅在 event.state 为空时回退

@@ -32,6 +32,7 @@ vi.mock('@/api/client', () => ({
     grantPermission: vi.fn(async () => ({ ok: true })),
     submitClarification: vi.fn(async () => ({ run_id: '', status: 'ok', steps: 0 })),
     skipClarification: vi.fn(async () => ({ run_id: '', status: 'ok' })),
+    releaseRunPermissions: vi.fn(async () => ({ ok: true })),
   },
   postToolResult: vi.fn(async () => ({})),
 }))
@@ -591,5 +592,77 @@ describe('整程计时与每步耗时', () => {
     expect(store.toolCalls[0].durationMs).toBeUndefined()
     expect(store.toolCalls[1].durationMs).toBe(50)
     expect(store.toolCalls[1].result).toBe('b 的输出')
+  })
+})
+
+describe('run 终态的四处清理必须一致（S1-02）', () => {
+  beforeEach(() => {
+    runs.length = 0
+    setActivePinia(createPinia())
+  })
+
+  const releaseMock = (agentApi as any).releaseRunPermissions as ReturnType<typeof vi.fn>
+
+  /** 铺好「澄清向导开着 + 一条待确认交付」的现场 */
+  function armedRun() {
+    const h = startRun()
+    h.push({ type: 'state', state: 'thinking', run_id: 'r1' })
+    h.push({
+      type: 'clarification_needed',
+      run_id: 'r1',
+      tool: 'shell_exec',
+      tool_call_id: 'tc-r1',
+      args: {},
+      reason: '命令含通配符',
+      question: '确认目标文件？',
+      options: [{ id: 'a', label: 'A' }],
+      current_step: 0,
+      total_steps: 1,
+    })
+    h.push({
+      type: 'tool_deliver',
+      tool_id: 'td-1',
+      command: 'rm -rf /tmp/x',
+      session_id: 's1',
+      requires_confirm: true,
+      run_id: 'r1',
+    })
+    expect(h.store.clarificationWizard).not.toBeNull()
+    expect(h.store.deliveries[0].status).toBe('pending_confirm')
+    return h
+  }
+
+  it('流被截断（onError）也要关向导、并让待确认交付失去派发能力', () => {
+    const h = armedRun()
+    releaseMock.mockClear()
+
+    runs[runs.length - 1].onError('stream cut')
+
+    expect(h.store.clarificationWizard).toBeNull()
+    expect(h.store.deliveries[0].status).toBe('aborted')
+    // 流是被截断的：服务端未必走过终态清理，这一次释放要带上 run_id 试一次
+    expect(releaseMock).toHaveBeenCalledWith('r1')
+  })
+
+  it('done 终态事件关向导、夺走派发能力，但不再 POST 释放', () => {
+    const h = armedRun()
+    releaseMock.mockClear()
+
+    h.push({ type: 'done', iterations: 2, run_id: 'r1', state: 'completed' })
+
+    expect(h.store.clarificationWizard).toBeNull()
+    expect(h.store.deliveries[0].status).toBe('aborted')
+    expect(releaseMock).not.toHaveBeenCalled()
+  })
+
+  it('error 终态事件同口径', () => {
+    const h = armedRun()
+    releaseMock.mockClear()
+
+    h.push({ type: 'error', message: 'boom', run_id: 'r1' })
+
+    expect(h.store.clarificationWizard).toBeNull()
+    expect(h.store.deliveries[0].status).toBe('aborted')
+    expect(releaseMock).not.toHaveBeenCalled()
   })
 })
