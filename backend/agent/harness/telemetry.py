@@ -213,6 +213,13 @@ class SSEAdapter:
             result["state_history"] = payload.get("state_history", [])
             result["cost"] = payload.get("cost")
             result["run_id"] = payload.get("run_id", "")
+            # 生产者在 driver 的 done 载荷里就写了 context_summary（spec §8：run 内
+            # 滚动摘要随 done 出栈，由 routes 落到 agent_runs 行），routes 也一直在读
+            # （:979 落库、:1077 喂 episodic job）。这一段 done 投影是**白名单**，
+            # 当时没跟着补 —— 于是那条链两头都在、中间断了：agent_runs.context_summary
+            # 恒为 NULL，跨 run 的滚动摘要永不复用，轨迹回放也拿不到摘要。
+            # 不报错、不告警，只是永远读不到 —— 这一族的典型形态。
+            result["context_summary"] = payload.get("context_summary", "")
         # H13 修复 B3：补全三种事件类型的字段提取
         elif kind == "intention":
             # H14: 嵌套在 intention 字段下，与前端 AgentIntentionInfo 接口对齐
