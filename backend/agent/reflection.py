@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
+from agent.harness.contracts import TERMINAL_RUN_STATES
+
 logger = logging.getLogger(__name__)
 
 # ── 成本评分阈值（USD） ──
@@ -315,8 +317,9 @@ class MetaReflection:
 
     # ── H12 新增：状态转移异常检测 ──
 
-    # 终态：进入后不应再转移出去
-    _TERMINAL_STATES = {"completed", "failed", "max_reached"}
+    # 终态：进入后不应再转移出去。原这份手抄漏了 human_help（枚举注释明写它是终止态），
+    # 于是以人工介入结束的 run 在反思侧永远报不出「终态后继续转移」
+    _TERMINAL_STATES = TERMINAL_RUN_STATES
 
     def _detect_state_anomalies(
         self, state_history: list[dict], final_state: str

@@ -39,6 +39,17 @@ class State(str, Enum):
     HUMAN_HELP = "human_help"  # H14 新增：人工介入状态（终止态）
 
 
+# run 的终态集合：进入后不应再转移出去，同时是「这个会话还有没有在跑的 run」的判据。
+# 这份清单原先在三处各抄一遍 —— database.update_agent_run（置 completed_at）、
+# routes/agent.py（释放陈旧 run 占位）、agent/reflection.py（状态转移异常检测），
+# 且 reflection 那份漏了 HUMAN_HELP，与上面枚举自己的注释「终止态」矛盾：
+# 一条以人工介入结束的 run 在反思侧被视作仍可继续，转移异常一条都不报。
+# 用 .value 收进集合而不是直接放成员：str-Enum 的哈希语义不保证与裸字符串一致。
+TERMINAL_RUN_STATES: frozenset[str] = frozenset(
+    st.value for st in (State.COMPLETED, State.FAILED, State.MAX_REACHED, State.HUMAN_HELP)
+)
+
+
 class ErrorType(str, Enum):
     """错误分类 — Stirrups 用于决定恢复策略"""
     TRANSIENT = "transient"        # 瞬时（网络/超时/503）— 重试

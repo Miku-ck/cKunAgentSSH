@@ -50,6 +50,7 @@ from safe_tokens import safe_max_tokens
 # Harness 框架（P8：切换到 Harness）
 from agent.harness import Harness, HarnessConfig
 from agent.harness.contracts import AgentConfig as HarnessAgentConfig
+from agent.harness.contracts import TERMINAL_RUN_STATES
 from agent.harness.llm_client import StreamLLMClient
 from agent.harness.telemetry import SSEAdapter
 
@@ -438,12 +439,10 @@ async def _acquire_run_slot(conversation_id: str, run_id: str) -> Optional[str]:
                 row = await asyncio.to_thread(db.get_agent_run, existing)
                 if row is not None:
                     status_text = row.get("status", "")
-                    # 终态集合与 database.update_agent_run 的 _TERMINAL_RUN_STATUSES
-                    # 对齐：漏掉 human_help / max_reached 时，这两种结束的 run 的内存
-                    # 占位永不自愈 → 该会话永久报「已有运行中的 Agent 任务」
-                    stale = row.get("status") in (
-                        "completed", "failed", "human_help", "max_reached",
-                    )
+                    # 终态集合取自 contracts.TERMINAL_RUN_STATES（唯一源）。漏掉
+                    # human_help / max_reached 时，这两种结束的 run 的内存占位永不
+                    # 自愈 → 该会话永久报「已有运行中的 Agent 任务」
+                    stale = row.get("status") in TERMINAL_RUN_STATES
             except Exception:
                 stale = False
             if not stale:
