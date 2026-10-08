@@ -136,8 +136,14 @@ if __name__ == "__main__":
 ```
 
 要点：
-- 所有文件类动词都再经 `_in_workspace` 二次校验，路径越界（含 `..`）一律拒绝——
+- 所有文件类动词都再经**工作区归属校验**，路径越界（含 `..`）一律拒绝——
   与 `ops_file._is_traversal` 形成**客户端 + 服务端双校验**。
+  > 本节代码块是早期设计草图。落地实现在 `scripts/deploy/agent-exec.py`，同一职责
+  > 的函数叫 `_in_root(path, root)` / `_ws(tok)`：除 `normpath` 外还按 `os.sep` 比较
+  > （挡掉 `/srv/ckun-agent-evil` 这类前缀粘连逃逸）、先 `_unquote` 剥单层引号
+  > （挡掉 `'/srv/ckun-agent/../x'` 的引号包裹形态），并额外校验 `JOBS_ROOT`。
+  > 逐动词的校验器（`v_b64_read`/`v_b64_write`/`v_rm_f`/…）在模板不匹配时抛
+  > `TemplateMismatch`，比草图的「匹配即放行」更严。
 - `job` 动词只接受白名单文件名、只执行已注册脚本，杜绝 `ops_job` 远端任意命令执行。
 - wrapper 本身属主 root、mode 755、`ckunagent` 不可写，防篡改。
 
