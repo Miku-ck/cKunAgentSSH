@@ -2,7 +2,7 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import App from './App.vue'
 import './styles/global.css'
-// 审批卡片的共享视觉词汇：卡体现在由侧栏托盘、运行视图内联审批共同渲染，
+// 审批卡片的共享视觉词汇：同一张卡由首页过程区的内联卡与运行面板共同渲染，
 // 样式必须只有一份 —— 留在任一组件的 scoped 里，另一个消费者就得抄一遍。
 import './styles/approval-card.css'
 // 启动性能优化：原 `import './monaco-setup'` 静态链入 Monaco 全家桶（~10MB），

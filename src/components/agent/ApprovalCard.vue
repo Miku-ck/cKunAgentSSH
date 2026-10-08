@@ -10,13 +10,21 @@
  *
  * 首页队列原先自己画了一套摘要形态的卡（三档，没有 session 档），C2 裁决后撤掉了：
  * 过程搬进首页使两屏并成一屏，同一条待决请求上下各现一次、两个决策位，而下面这套
- * 是更强的那套（四档 + prod 警示 + 忽略）。逐条决策归这里，队列只留批量与追溯。
+ * 是更强的那套（四档 + prod 警示）。逐条决策归这里，队列只留批量与追溯。
+ *
+ * 卡头上原来那枚「忽略」× 已删：它挂的条件是 `!agentStore.isRunning`，而卡片只活在
+ * run 运行期间（done/error/abort/_reset 四条出口都把 permissionRequests 清空），
+ * 条件永不为真 = 渲染不出来的控件。旁边 AgentRunPanel 人工介入条上的同款 × 是活的
+ * （humanHelpRequests 只在 _reset 清，run 结束后仍留着）—— 照抄宿主的条件、没抄它的
+ * 生命周期，就是这个家族的来路。要加回来得先定语义：运行中点掉 = 卡没了、后端仍在等
+ * 裁决，120s 兜底按拒绝处理，而用户已经没有第二个决策位；只对**已超时**的卡（req.expired）
+ * 开放才是安全形态。这属于裁决，不是顺手补。
  *
  * 结算走 useApprovalActions → store 的 approvePermission/denyPermission，
  * 与首页那条计数窄条的批量结算同一份逻辑。
  */
 import { computed } from 'vue'
-import { useAgentStore, type PermissionRequest } from '@/stores/agent'
+import type { PermissionRequest } from '@/stores/agent'
 import { useSSHStore } from '@/stores/ssh'
 import { useSettingsStore } from '@/stores/settings'
 import { grantScopesForRisk } from '@/utils/approval-scopes'
@@ -27,7 +35,6 @@ const props = defineProps<{
   req: PermissionRequest
 }>()
 
-const agentStore = useAgentStore()
 const sshStore = useSSHStore()
 const { approve: grantPermission, deny: denyRequest } = useApprovalActions()
 
@@ -49,15 +56,6 @@ const command = computed(() => approvalCommand(props.req))
         {{ req.environment === 'prod' ? '生产环境' : '测试环境' }}
       </span>
       <span class="ap-sp"></span>
-      <button
-        v-if="!agentStore.isRunning"
-        class="ap-icon-btn"
-        title="忽略"
-        aria-label="忽略该请求"
-        @click="agentStore.dismissPermission(req.id)"
-      >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-      </button>
     </div>
     <div class="ap-body">
       <!-- 阅读顺序：我要做的事 → 后果 → 目标机器 -->

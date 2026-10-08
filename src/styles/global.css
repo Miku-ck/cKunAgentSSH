@@ -9,7 +9,7 @@
 html {
   height: 100%;
   width: 100%;
-  /* rem 基准：外观设置（useAppearance.applyFontSize）以 inline style 覆盖此值 */
+  /* rem 基准：外观设置（useAppearance.applyUiFontSize）以 inline style 覆盖此值 */
   font-size: 13px;
 }
 

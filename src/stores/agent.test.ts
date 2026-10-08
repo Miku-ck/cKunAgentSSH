@@ -42,6 +42,8 @@ vi.mock('@/stores/ssh', () => ({
 
 const { useAgentStore } = await import('@/stores/agent')
 const { agentApi } = await import('@/api/client')
+// 档位表是纯函数（无 store 依赖），可以直接静态导入
+import { grantScopesForRisk } from '@/utils/approval-scopes'
 
 /** 只暴露测试需要的 mock 面（denyCommand 在工厂里已是 vi.fn） */
 const denyMock = agentApi.denyCommand as unknown as ReturnType<typeof vi.fn>
@@ -477,6 +479,35 @@ describe('审批结算 approvePermission', () => {
     push({ type: 'permission_needed', tool: 'shell_exec', command: 'systemctl restart nginx', risk: 'dangerous', run_id: 'r1' })
     grantMock.mockRejectedValueOnce(new Error('500'))
     expect(await store.approvePermission(store.pendingPermissions[0].id, 'once')).toBe('failed')
+  })
+})
+
+describe('风险等级缺失时不得替用户判成宽松档', () => {
+  beforeEach(() => {
+    runs.length = 0
+    setActivePinia(createPinia())
+    denyMock.mockResolvedValue({ ok: true })
+  })
+
+  it('事件没带 risk → 卡片按「后端没说过」处理，档位回落到 fail-closed', () => {
+    const { store, push } = startRun()
+    // telemetry.to_sse_dict 对缺字段发的是**空串**（`payload.get("risk", "")`），
+    // 所以线上真实形态就是 risk:''。曾写成 `event.risk || 'moderate'`：空串被换成
+    // 中风险档、卡片多出「本会话允许」—— 正是 approval-scopes 头部写明的"假承诺"
+    // （后端对 dangerous 刻意忽略 session 缓存，按钮点了也不兑现）。
+    push({ type: 'permission_needed', tool: 'shell_exec', command: 'kill -9 1234', risk: '', run_id: 'r1' })
+    const req = store.permissionRequests[0]
+    expect(req).toBeTruthy()
+    expect(req.risk).toBe('')
+    expect(grantScopesForRisk(req.risk)).toEqual(['once', 'always'])
+  })
+
+  it('显式 moderate 仍给 session 档（上一条不是一刀切掉档位）', () => {
+    const { store, push } = startRun()
+    push({ type: 'permission_needed', tool: 'service_manage', command: '', risk: 'moderate', run_id: 'r1' })
+    const req = store.permissionRequests[0]
+    expect(req.risk).toBe('moderate')
+    expect(grantScopesForRisk(req.risk)).toEqual(['once', 'session', 'always'])
   })
 })
 

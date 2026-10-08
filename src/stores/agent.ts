@@ -623,7 +623,10 @@ export const useAgentStore = defineStore('agent', () => {
             id: `perm_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
             tool: evtTool,
             args: event.args || {},
-            risk: event.risk || 'moderate',
+            // 风险等级原样收：缺字段就是「后端没说」。这里不能写 `|| 'moderate'` ——
+            // 那等于替用户把未知判成宽松档，而 approval-scopes 的 fail-closed 口径
+            // 是"除精确 moderate 外一律按 dangerous 只给 once/always"，被这一句抢在前面失效。
+            risk: event.risk ?? '',
             reversible: event.reversible ?? false,
             message: event.message || `需要授权: ${evtTool}`,
             timestamp: Date.now(),
