@@ -19,6 +19,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -28,6 +29,18 @@ logger = logging.getLogger(__name__)
 
 AUDIT_TABLE = "audit_log"
 _DEFAULT_ENV = "test"
+
+
+def _table_absent(exc: BaseException) -> bool:
+    """「表还没建」是真空，其余异常是没读到 —— S11-01 要的就是这条分界线。
+
+    首次运行前审计表不存在（还没有任何一条记录），这一情形必须继续返回空/0，
+    否则新装机一进审计页就是一条错误；锁冲突、坏盘、schema 损坏这些都照抛。
+    """
+    return (
+        isinstance(exc, sqlite3.OperationalError)
+        and "no such table" in str(exc).lower()
+    )
 
 # 合法结论枚举 —— 单一事实来源。审计页的筛选下拉（src/views/ssh/AuditView.vue 的
 # filters.conclusion）与 docs/security-boundary.md §6 的口径清单必须与这里逐字相等，
@@ -265,7 +278,13 @@ def query(
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
-    """按条件查询审计记录（倒序）"""
+    """按条件查询审计记录（倒序）
+
+    S11-01：读不到就抛，不再吞成空列表 —— 「空列表」在审计页只有一个合法含义：
+    确实一条记录都没有。原先把 DB 故障也折成空列表，于是锁冲突/坏盘时的界面与
+    轮转清空后的界面一模一样，等于用「确认没有」冒充「我没读到」。
+    页面本来就有 error 通道（AuditView 的 `加载审计记录失败`），抛上去即可见。
+    """
     where, params = _build_filters(environment, target_id, action, conclusion, run_id)
     params.append(limit)
     params.append(offset)
@@ -279,8 +298,10 @@ def query(
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, row)) for row in cur.fetchall()]
     except Exception as e:
+        if _table_absent(e):
+            return []
         logger.warning("审计查询失败: %s", e)
-        return []
+        raise
 
 
 def count(
@@ -291,15 +312,18 @@ def count(
     run_id: Optional[str] = None,
 ) -> int:
     """审计记录计数。过滤集与 query 共用 _build_filters，天然一致
-    （曾手抄漏 action/run_id 导致 total 与 items 分叉，现收敛到唯一构造点）。"""
+    （曾手抄漏 action/run_id 导致 total 与 items 分叉，现收敛到唯一构造点）。
+    失败口径同 query：表还没建 = 0 条，其余异常照抛（S11-01）。"""
     where, params = _build_filters(environment, target_id, action, conclusion, run_id)
     try:
         conn = database._get_conn()
         cur = conn.execute(f"SELECT COUNT(*) FROM {AUDIT_TABLE} {where}", params)
         return int(cur.fetchone()[0])
     except Exception as e:
+        if _table_absent(e):
+            return 0
         logger.warning("审计计数失败: %s", e)
-        return 0
+        raise
 
 
 def verify() -> dict[str, Any]:

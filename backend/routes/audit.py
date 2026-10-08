@@ -45,12 +45,19 @@ async def audit_records(
         conclusion=conclusion,
         run_id=run_id,
     )
-    items, total = await asyncio.to_thread(
-        lambda: (
-            query(**filters, limit=limit, offset=offset),
-            count(**filters),
+    try:
+        items, total = await asyncio.to_thread(
+            lambda: (
+                query(**filters, limit=limit, offset=offset),
+                count(**filters),
+            )
         )
-    )
+    except Exception as e:
+        # S11-01：读不到就报 500。审计页有 error 通道，让它说「加载审计记录失败」，
+        # 而不是拿着空 items 渲染出一个「一条记录都没有」的假清白。
+        # detail 用固定文案，不把 sqlite 原始串端给用户（S0-24 同口径）。
+        logger.warning("审计记录读取失败: %s", e)
+        raise HTTPException(status_code=500, detail="审计记录读取失败，请稍后重试") from e
     return {"items": items, "total": total}
 
 
