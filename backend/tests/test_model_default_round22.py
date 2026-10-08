@@ -144,3 +144,34 @@ def test_models_list_exposes_both_flags_for_panel(client, two_models):
     # 而不是断前缀（sk-a**** 是合法形态）。
     for full_key in ("sk-aaa", "sk-bbb"):
         assert full_key not in text
+
+
+# ── 读路径的档位顺序 ────────────────────────────────────────────────────────
+
+def _get_default(client):
+    r = client.get("/api/settings/models/default")
+    assert r.status_code == 200, r.text
+    return r.json()["id"]
+
+
+def test_get_default_without_ssh_flag_uses_global_row(client, two_models):
+    """只标了全局档（⊕）时，运行时（routes/agent.py、terminal、schedule_engine）
+    读的就是那一行；端点先前缺这一级，直接落到 models[0] —— 前端按它预选模型，
+    于是「面板上 ★ 亮在 A」与「实际跑的是列表第一行 B」同时成立。"""
+    db, a_id, b_id = two_models
+    db.set_default_model(b_id, mode="global")
+    assert _get_default(client) == b_id
+    assert _get_default(client) != a_id
+
+
+def test_get_default_prefers_ssh_over_global(client, two_models):
+    _, a_id, b_id = two_models
+    client.patch("/api/settings/models/default", params={"model_id": a_id, "mode": "global"})
+    client.patch("/api/settings/models/default", params={"model_id": b_id, "mode": "ssh"})
+    assert _get_default(client) == b_id
+
+
+def test_get_default_falls_back_to_first_row_when_nothing_marked(client, two_models):
+    """一个默认都没标时的兜底留给前端选出一个能跑的模型，别把它改成 404。"""
+    first = client.get("/api/settings/models").json()[0]["id"]
+    assert _get_default(client) == first

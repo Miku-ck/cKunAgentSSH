@@ -83,8 +83,14 @@ def set_default_model(
 
 @router.get("/settings/models/default")
 def get_default_model():
-    """获取默认模型"""
-    model = db.get_default_model(mode=SSH_MODE)
+    """获取默认模型 —— 档位顺序必须与运行时的兜底链一致：ssh → global，
+    再谈"一个都没标"的兜底。原实现只有 ssh 一级就直接落到 models[0]，于是
+    只标了全局档（⊕）时这条端点报的是列表第一行，而 routes/agent.py、terminal、
+    schedule_engine 真正会用全局档那一行 —— 前端据它预选模型，选出来的和
+    「★ 是亮在谁身上」不一致，用户在对话页看到的默认模型是猜的。
+    """
+    model = (db.get_default_model(mode=SSH_MODE)
+             or db.get_default_model(mode=None))
     if not model:
         # 回退：返回第一个模型
         models = db.list_models_config()
