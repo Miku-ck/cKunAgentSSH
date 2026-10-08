@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HSC 复刻 · TLS 接入 UI v2 — cKunAgentSSH</title>
+<style>
+/* ============================================================
+ * v2：按 Hillstone Secure Connect 客户端截图逐区块 1:1 排布，
+ *     颜色不做原样取色，全部映射到 src/styles/variables.css 令牌。
+ *     v1（tls-gateway-ui-mockup-v1.html）的「行列表 + chips + 内嵌明细」形态作废。
+ *
+ * 复刻对照（截图 → 本稿）：
+ *   窗口 1：标签条（连接 + 4 项，active 走蓝色下划线）/ ＋添加连接 / 大水印 /
+ *           连接卡（图标块 + 加粗标题 + 服务器·端口·用户名·登录模式四行 KV + 分隔线 +
+ *           右下「在线」文字状态 + 实心「断开」钮）/ 底部状态条（图标 + 在线 … 共 N 个连接）
+ *   窗口 2：「修改连接」标题 + ✕ / TLS/SSL 页签带下划线 / 右对齐标签表单 /
+ *           绿色开关 / 高级配置折叠 / 确定(实心) + 取消(描边)
+ *
+ * 一处与既有实现约定的冲突，需要裁决（本稿按复刻优先执行）：
+ *   HSC 的「断开 / 确定」是实心色块，而 TunnelView.vue:284-289 刻意把 .btn.primary
+ *   改成只描边不铺色（理由：实心摆在纸上就是整页最响的一块皮）。这里保留实心，
+ *   因为它属于被复刻对象的原生形态，不是我们的 CTA。
+ *
+ * 截图里被打码的部分（其余 4 个页签名、弹窗第二个页签名）本稿用我方语义占位，
+ * 已标注 TODO，等你给准确名字再替换，不自行编定。
+ * ============================================================ */
+
+/* ===== 令牌：搬自 src/styles/variables.css，值逐字一致 ===== */
+:root {
+  --bg-base: #000000;
+  --bg-elevated: #1a1a1e;
+  --bg-elevated-solid: #1a1a1e;
+  --bg-hover: rgba(255,255,255,0.06);
+  --bg-active: rgba(255,255,255,0.12);
+  --divider-primary: #1a1a1a;
+  --border-default: #3e3e42;
+  --border-subtle: #2d2d30;
+  --text-primary: #cccccc;
+  --text-secondary: #969696;
+  --text-tertiary: #878787;
+  --bg-input: #101013;
+  --bg-input-solid: #101013;
+  --bg-slider: #303030;
+  --border-input: #303030;
+  --accent-primary: #0078d4;
+  --accent-purple: #c586c0;
+  --accent-green: #4ec9b0;
+  --accent-orange: #ce9178;
+  --accent-red: #f48771;
+  --accent-cyan: #9cdcfe;
+  --accent-yellow: #dcdcaa;
+  --accent-indigo: #818cf8;
+  --accent-indigo-bg: rgba(129, 140, 248, 0.12);
+  --status-info-border: #2d4a5a;
+  --status-info-text: #569cd6;
+  --status-success-bg: #2d3d2d;
+  --status-success-border: #4a6a4a;
+  --status-success-text: #6abf6a;
+  --status-warn-bg: #2d2d1a;
+  --status-warn-text: #dcdcaa;
+  --status-error-bg: #2d1a1a;
+  --status-error-text: #bf6a6a;
+  --danger-bg: #4a1a1a;
+  --danger-border: #6a2d2d;
+  --danger-text: #ff6b6b;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.2);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.4);
+  --transition-fast: 150ms ease;
+  --canvas-bg: var(--bg-base);
+  --wash: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+  --accent-on: #ffffff;
+  --font-sans: system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, "Courier New", monospace;
+  --titlebar-h: 32px;
+  --tabbar-h: 34px;
+  --tint-l: var(--accent-cyan);
+  --tint-r: var(--accent-purple);
+  --tint-d: var(--accent-indigo);
+}
+[data-theme="light"] {
+  --bg-base: #ffffff; --bg-elevated: #ffffff; --bg-elevated-solid: #ffffff;
+  --bg-hover: rgba(0,0,0,0.04); --bg-active: rgba(0,0,0,0.08);
+  --divider-primary: #e0e0e0; --border-default: #d0d0d0; --border-subtle: #e0e0e0;
+  --text-primary: #000000; --text-secondary: #555555; --text-tertiary: #6e6e6e;
+  --bg-input: #ffffff; --bg-input-solid: #ffffff; --bg-slider: #d0d0d0; --border-input: #c0c0c0;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.08); --shadow-lg: 0 8px 24px rgba(0,0,0,0.15);
+  --accent-indigo: #4f46e5; --accent-indigo-bg: rgba(79, 70, 229, 0.1);
+  --tint-l: #0e7490; --tint-r: #7c3a72; --tint-d: #4338ca;
+  --status-info-border: #b7d3e8; --status-info-text: #1a6bab;
+  --status-success-bg: #e6f4ea; --status-success-border: #b7e0c2; --status-success-text: #1e7e34;
+  --status-warn-bg: #faf3dc; --status-warn-text: #7a5c00;
+  --status-error-bg: #fdecea; --status-error-text: #c62828;
+  --danger-bg: #fdecea; --danger-border: #f3c2bd; --danger-text: #c62828;
+}
+[data-theme="blue-screen"] {
+  --bg-base: #0a1628; --bg-elevated: #142d52; --bg-elevated-solid: #142d52;
+  --bg-hover: rgba(255,255,255,0.06); --bg-active: rgba(255,255,255,0.12);
+  --divider-primary: #0f2138; --border-default: #1e3a5f; --border-subtle: #152d50;
+  --text-primary: #c8ddf0; --text-secondary: #8aa8c8; --text-tertiary: #7d9cc0;
+  --bg-input: #0f2039; --bg-input-solid: #0f2039; --bg-slider: #1a3a6e; --border-input: #1e3a5f;
+}
+[data-theme="forest"] {
+  --bg-base: #0b1a12; --bg-elevated: #1b3a26; --bg-elevated-solid: #1b3a26;
+  --bg-hover: rgba(255,255,255,0.05); --bg-active: rgba(255,255,255,0.10);
+  --divider-primary: #13261b; --border-default: #2a4a36; --border-subtle: #1d3526;
+  --text-primary: #d3e8d9; --text-secondary: #9db8a4; --text-tertiary: #93ac9c;
+  --bg-input: #132719; --bg-input-solid: #132719; --bg-slider: #26402f; --border-input: #2a4a36;
+}
+[data-theme="mint"] {
+  --bg-base: #0a1b1a; --bg-elevated: #1a413c; --bg-elevated-solid: #1a413c;
+  --bg-hover: rgba(255,255,255,0.05); --bg-active: rgba(255,255,255,0.10);
+  --divider-primary: #122928; --border-default: #27514e; --border-subtle: #1c3a38;
+  --text-primary: #d0ece8; --text-secondary: #9cc4bf; --text-tertiary: #96bab5;
+  --bg-input: #122b28; --bg-input-solid: #122b28; --bg-slider: #24504b; --border-input: #27514e;
+}
+[data-theme="bee"] {
+  --bg-base: #1a1206; --bg-elevated: #3d2d12; --bg-elevated-solid: #3d2d12;
+  --bg-hover: rgba(255,255,255,0.05); --bg-active: rgba(255,255,255,0.10);
+  --divider-primary: #2b2010; --border-default: #57411f; --border-subtle: #3f2f18;
+  --text-primary: #ece0c4; --text-secondary: #c2b08a; --text-tertiary: #b8a47a;
+  --bg-input: #281d0a; --bg-input-solid: #281d0a; --bg-slider: #4a3a1e; --border-input: #57411f;
+}
+[data-theme="coral"] {
+  --bg-base: #180d0b; --bg-elevated: #3a221c; --bg-elevated-solid: #3a221c;
+  --bg-hover: rgba(255,255,255,0.05); --bg-active: rgba(255,255,255,0.10);
+  --divider-primary: #2a1713; --border-default: #543028; --border-subtle: #3d211c;
+  --text-primary: #f0dcd7; --text-secondary: #c5a6a0; --text-tertiary: #bfa09a;
+  --bg-input: #261511; --bg-input-solid: #261511; --bg-slider: #472a23; --border-input: #543028;
+}
+[data-theme="atelier"] {
+  --bg-base: #f2ece1; --bg-elevated: #faf6ee; --bg-elevated-solid: #faf6ee;
+  --bg-hover: rgba(25, 21, 16, 0.06); --bg-active: rgba(25, 21, 16, 0.12);
+  --divider-primary: #e4dccd; --border-default: #d3c8b6; --border-subtle: #e4dccd;
+  --text-primary: #191510; --text-secondary: #4a4237; --text-tertiary: #6b6152;
+  --bg-input: #ece4d6; --bg-input-solid: #ece4d6; --bg-slider: #d3c8b6; --border-input: #c9bca6;
+  --accent-purple: #7c4a76; --accent-green: #4a6b3c; --accent-red: #b3382a;
+  --accent-cyan: #2f5b74; --accent-yellow: #7a5f14; --accent-indigo: #3b4f7a;
+  --accent-indigo-bg: rgba(59, 79, 122, 0.10);
+  --status-info-border: #c9bca6; --status-info-text: #2f5b74;
+  --status-success-bg: #e9eedd; --status-success-border: #c6d1ab; --status-success-text: #3f5a2a;
+  --status-warn-bg: #f6e2bd; --status-warn-text: #7a5c00;
+  --status-error-bg: #f7e2dd; --status-error-text: #a03018;
+  --danger-bg: #f7e2dd; --danger-border: #e0b3a4; --danger-text: #a03018;
+  --radius-sm: 2px; --radius-md: 3px; --radius-lg: 4px;
+  --shadow-sm: 0 1px 2px rgba(43, 39, 35, 0.14); --shadow-lg: 0 8px 24px rgba(43, 39, 35, 0.18);
+  --font-sans: Georgia, "Iowan Old Style", "Palatino Linotype", "Source Han Serif SC", "Songti SC", SimSun, "Microsoft YaHei", serif;
+  --font-mono: "Cascadia Mono", Consolas, "DejaVu Sans Mono", Menlo, ui-monospace, monospace;
+  --tint-l: #2f5b74; --tint-r: #7c4a76; --tint-d: #3b4f7a;
+  --canvas-bg:
+    radial-gradient(circle at 12% 6%, #fff8ec 0%, transparent 44%),
+    radial-gradient(circle at 90% 96%, #e7ddca 0%, transparent 48%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.05' numOctaves='2'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23g)' opacity='.42'/%3E%3C/svg%3E"),
+    var(--bg-base);
+  --wash: #f6d8a8;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; border-radius: var(--radius-sm); }
+::selection { background: var(--wash); }
+body {
+  background: var(--bg-base); font-family: var(--font-sans); font-size: 13px; color: var(--text-primary);
+  min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; padding: 22px 18px;
+}
+[hidden] { display: none !important; }
+
+/* ───── 窗口外壳 ───── */
+.win-frame {
+  width: min(1180px, 100%); height: min(770px, calc(100vh - 130px)); min-height: 560px;
+  border: 1px solid var(--border-default); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg); background: var(--canvas-bg); background-attachment: fixed;
+  overflow: hidden; display: flex; flex-direction: column;
+}
+/* 我们的 TitleBar（HSC 是独立小程序没有这层；本产品里它是全局的，复刻页只能放在它下面） */
+.titlebar {
+  height: var(--titlebar-h); flex: none; display: flex; align-items: center;
+  border-bottom: 1px solid var(--border-subtle); background: var(--canvas-bg); background-attachment: fixed; user-select: none;
+}
+.tb-brand { display: flex; align-items: center; gap: 6px; padding: 0 12px; color: var(--text-secondary); font-size: 12px; font-weight: 500; }
+.tb-drag { flex: 1; height: 100%; }
+.tb-actions { display: flex; align-items: center; gap: 2px; height: 100%; }
+.tb-btn {
+  width: 36px; height: 100%; display: flex; align-items: center; justify-content: center; border: none;
+  background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 11px; font-weight: 600;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.tb-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.tb-btn.active { color: var(--status-success-text); text-shadow: 0 0 8px color-mix(in srgb, var(--status-success-text) 45%, transparent); }
+.tb-btn svg { width: 14px; height: 14px; }
+.win-btn { width: 46px; height: 100%; display: flex; align-items: center; justify-content: center; border: none; background: transparent; color: var(--text-secondary); cursor: pointer; }
+.win-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.win-btn.close:hover { --win-close: #e81123; background: var(--win-close); color: #ffffff; }
+
+/* ───── HSC 主体：标签条 + 内容 + 状态条 ───── */
+.hsc { flex: 1; display: flex; flex-direction: column; position: relative; overflow: hidden; min-height: 0; }
+.hsc-tabs {
+  flex: none; display: flex; align-items: flex-end; gap: 26px; padding: 0 22px;
+  border-bottom: 1px solid var(--divider-primary);
+}
+.hsc-tab {
+  padding: 13px 0 10px; font-size: 14px; color: var(--text-secondary); cursor: pointer;
+  border: none; background: none; font-family: var(--font-sans);
+  border-bottom: 2px solid transparent; margin-bottom: -1px; transition: color var(--transition-fast);
+}
+.hsc-tab:hover { color: var(--text-primary); }
+.hsc-tab.on { color: var(--accent-primary); border-bottom-color: var(--accent-primary); font-weight: 600; }
+.hsc-tab .todo { font-family: var(--font-mono); font-size: 9px; color: var(--text-tertiary); vertical-align: super; }
+.hsc-tabs .spacer { flex: 1; }
+.add-conn {
+  display: inline-flex; align-items: center; gap: 5px; border: none; background: none; cursor: pointer;
+  color: var(--accent-primary); font-size: 13px; font-family: var(--font-sans); padding: 13px 0 10px; margin-bottom: -1px;
+}
+.add-conn:hover { text-decoration: underline; }
+.add-conn svg { width: 14px; height: 14px; }
+
+.hsc-body { flex: 1; overflow: auto; padding: 22px; position: relative; }
+/* 水印：截图里是 Hillstone 的 H 字标。那是他人商标，同位同透明度换成本产品 brand 图形 */
+.wm { position: absolute; right: 18px; bottom: 6px; width: 300px; height: 300px; color: var(--accent-primary); opacity: .07; pointer-events: none; }
+
+.card-grid { display: flex; flex-wrap: wrap; gap: 18px; align-content: flex-start; position: relative; }
+.conn-card {
+  width: 282px; background: var(--bg-elevated); border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md); box-shadow: var(--shadow-sm); padding: 14px 16px 12px;
+  transition: border-color var(--transition-fast);
+}
+.conn-card:hover { border-color: var(--border-default); }
+.conn-head { display: flex; align-items: center; gap: 9px; margin-bottom: 12px; }
+.conn-ico {
+  width: 32px; height: 32px; flex: none; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--accent-primary) 13%, transparent); color: var(--accent-primary);
+}
+.conn-ico svg { width: 17px; height: 17px; }
+.conn-title { font-size: 14px; font-weight: 700; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kv { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: 13px; line-height: 25px; }
+.kv .k { color: var(--text-secondary); flex: none; }
+.kv .v { color: var(--text-primary); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kv .v.mono { font-family: var(--font-mono); }
+.conn-rule { height: 1px; background: var(--divider-primary); margin: 10px 0 9px; }
+.conn-foot { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+.st { font-size: 13px; }
+.st.on { color: var(--accent-primary); }
+.st.off { color: var(--text-tertiary); }
+.st.err { color: var(--danger-text); }
+.st.warn { color: var(--status-warn-text); }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 5px 14px;
+  border-radius: var(--radius-sm); font-size: 13px; border: 1px solid var(--border-default);
+  background: transparent; color: var(--text-primary); cursor: pointer; font-family: var(--font-sans);
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+.btn:hover { background: var(--bg-hover); }
+/* 复刻优先：HSC 的主动作是实心块（与本仓 .btn.primary 的描边约定冲突，见文件头） */
+.btn.solid { background: var(--accent-primary); border-color: var(--accent-primary); color: var(--accent-on); }
+.btn.solid:hover { background: color-mix(in srgb, var(--accent-primary) 88%, var(--text-primary)); }
+.btn.sm { padding: 3px 12px; font-size: 12.5px; }
+.btn:disabled { opacity: .45; cursor: not-allowed; pointer-events: none; }
+.icon-btn { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; border-radius: var(--radius-sm); color: var(--text-secondary); cursor: pointer; }
+.icon-btn svg { width: 14px; height: 14px; }
+.icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+.statusbar {
+  flex: none; height: 30px; display: flex; align-items: center; gap: 7px; padding: 0 14px;
+  border-top: 1px solid var(--border-subtle); background: var(--canvas-bg); background-attachment: fixed;
+  font-size: 12px; color: var(--text-secondary);
+}
+.statusbar svg { width: 13px; height: 13px; }
+.statusbar .right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.statusbar .sep { color: var(--border-default); }
+
+/* 通道 / 日志 / 设置 三个页签的内容 */
+table.chan { width: 100%; max-width: 900px; border-collapse: collapse; font-family: var(--font-mono); font-size: 12px; }
+table.chan th { text-align: left; font-weight: 500; color: var(--text-tertiary); font-size: 11.5px; padding: 0 10px 7px 0; border-bottom: 1px solid var(--divider-primary); }
+table.chan td { padding: 6px 10px 6px 0; border-bottom: 1px solid var(--divider-primary); }
+table.chan tr:last-child td { border-bottom: none; }
+.dir-c2g { color: var(--tint-l); }
+.dir-g2c { color: var(--tint-r); }
+tr.fin td { color: var(--text-tertiary); }
+tr.denied td { color: var(--danger-text); }
+.pane-note { font-size: 12px; color: var(--text-tertiary); margin: 0 0 14px; }
+.log { font-family: var(--font-mono); font-size: 11.5px; line-height: 1.85; color: var(--text-secondary); max-width: 900px; }
+.log .t { color: var(--text-tertiary); }
+.log .ok { color: var(--status-success-text); }
+.log .bad { color: var(--danger-text); }
+.log .info { color: var(--status-info-text); }
+
+/* ───── 弹窗：修改连接 ───── */
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: none; align-items: center; justify-content: center; z-index: 60; }
+.overlay.show { display: flex; }
+.dialog {
+  width: 500px; max-height: 88vh; overflow-y: auto; background: var(--bg-elevated);
+  border: 1px solid var(--border-default); border-radius: var(--radius-md); box-shadow: var(--shadow-lg);
+}
+.dlg-head { display: flex; align-items: center; padding: 14px 18px 0; }
+.dlg-head h2 { font-size: 15px; font-weight: 600; }
+.dlg-x { margin-left: auto; border: none; background: none; color: var(--text-secondary); font-size: 17px; cursor: pointer; line-height: 1; }
+.dlg-x:hover { color: var(--text-primary); }
+.dlg-tabs { display: flex; gap: 34px; padding: 0 18px; border-bottom: 1px solid var(--divider-primary); margin-top: 8px; }
+.dlg-tab { padding: 10px 0 9px; font-size: 13.5px; color: var(--text-secondary); border: none; background: none; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; font-family: var(--font-sans); }
+.dlg-tab.on { color: var(--accent-primary); border-bottom-color: var(--accent-primary); font-weight: 600; }
+.dlg-body { padding: 20px 18px 4px; }
+/* 右对齐标签 + 左对齐控件：HSC 表单的原生排布 */
+.frow { display: grid; grid-template-columns: 104px 1fr; align-items: center; gap: 14px; margin-bottom: 16px; }
+.frow > label { text-align: right; font-size: 13px; color: var(--text-secondary); }
+.frow input {
+  width: 100%; height: 34px; background: var(--bg-input); border: 1px solid var(--border-input);
+  border-radius: var(--radius-sm); color: var(--text-primary); padding: 0 10px; font-size: 13px;
+  font-family: var(--font-sans); outline: none;
+}
+.frow input:focus { border-color: var(--accent-primary); }
+.frow input.mono { font-family: var(--font-mono); }
+.sw { width: 40px; height: 20px; flex: none; border-radius: 10px; background: var(--bg-slider); border: none; position: relative; cursor: pointer; padding: 0; transition: background var(--transition-fast); }
+.sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--bg-elevated-solid); box-shadow: var(--shadow-sm); transition: left var(--transition-fast); }
+.sw.on { background: var(--accent-green); }
+.sw.on::after { left: 22px; }
+.sw-row { display: flex; align-items: center; gap: 9px; font-size: 13px; color: var(--text-primary); }
+.adv-toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--accent-primary); cursor: pointer; border: none; background: none; font-family: var(--font-sans); padding: 0; margin-bottom: 16px; }
+.adv-toggle svg { width: 13px; height: 13px; transition: transform var(--transition-fast); }
+.adv-toggle.closed svg { transform: rotate(-90deg); }
+.dlg-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 6px 18px 18px; }
+.hintline { grid-column: 2; font-size: 11.5px; color: var(--text-tertiary); margin-top: -10px; }
+
+/* ───── 演示控件 ───── */
+.demo-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center;
+  font-size: 11.5px; color: var(--text-tertiary); background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle); border-radius: 20px; padding: 6px 14px; box-shadow: var(--shadow-sm);
+}
+.demo-bar select, .demo-bar button {
+  height: 24px; background: var(--bg-input); border: 1px solid var(--border-input); border-radius: var(--radius-sm);
+  color: var(--text-primary); font-size: 11.5px; font-family: var(--font-sans); padding: 0 8px; cursor: pointer;
+}
+.demo-bar button.on { border-color: var(--accent-primary); color: var(--accent-primary); }
+</style>
+</head>
+<body>
+
+<div class="win-frame">
+
+  <!-- 我们的 TitleBar（非复刻对象，是本产品的既有外壳） -->
+  <div class="titlebar">
+    <div class="tb-brand">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg>
+      <span>cKunAgentSSH</span>
+    </div>
+    <div class="tb-drag"></div>
+    <div class="tb-actions">
+      <button class="tb-btn" title="AI 运维助手">AI</button>
+      <button class="tb-btn" title="定时任务"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 16 14"/></svg></button>
+      <button class="tb-btn" title="监控仪表盘"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></button>
+      <button class="tb-btn" title="远程终端"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg></button>
+      <button class="tb-btn" title="隧道"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg></button>
+      <button class="tb-btn active" title="安全接入（TLS）"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9.5 11.5 11 13l3.5-3.5"/></svg></button>
+      <button class="tb-btn" title="运维审计"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><path d="M20 12a8 8 0 1 1-2.34-5.66"/></svg></button>
+      <button class="tb-btn" title="SFTP"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
+      <button class="tb-btn" title="设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+    </div>
+    <div>
+      <button class="win-btn" title="最小化"><svg width="12" height="12"><line x1="1" y1="6" x2="11" y2="6" stroke="currentColor" stroke-width="1.2"/></svg></button>
+      <button class="win-btn" title="最大化"><svg width="12" height="12" viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></button>
+      <button class="win-btn close" title="关闭"><svg width="12" height="12" viewBox="0 0 12 12"><line x1="2" y1="2" x2="10" y2="10" stroke="currentColor" stroke-width="1.2"/><line x1="10" y1="2" x2="2" y2="10" stroke="currentColor" stroke-width="1.2"/></svg></button>
+    </div>
+  </div>
+
+  <div class="hsc">
+    <!-- ───── 复刻窗口 1 顶部：标签条 + ＋添加连接 ───── -->
+    <div class="hsc-tabs">
+      <button class="hsc-tab on" data-p="conn" onclick="pane('conn',this)">连接</button>
+      <button class="hsc-tab" data-p="chan" onclick="pane('chan',this)">通道<span class="todo">?</span></button>
+      <button class="hsc-tab" data-p="log" onclick="pane('log',this)">日志<span class="todo">?</span></button>
+      <button class="hsc-tab" data-p="set" onclick="pane('set',this)">设置<span class="todo">?</span></button>
+      <span class="spacer"></span>
+      <button class="add-conn" onclick="openDlg()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        添加连接
+      </button>
+    </div>
+
+    <div class="hsc-body">
+      <svg class="wm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg>
+
+      <!-- ═══ 页签 1：连接（截图 1 的 1:1） ═══ -->
+      <div class="card-grid" id="p-conn">
+
+        <!-- 卡 1：与截图逐字段对齐 -->
+        <div class="conn-card">
+          <div class="conn-head">
+            <span class="conn-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg></span>
+            <span class="conn-title">113.247.243.3</span>
+          </div>
+          <div class="kv"><span class="k">服务器：</span><span class="v mono">113.247.243.3</span></div>
+          <div class="kv"><span class="k">端口：</span><span class="v mono">4433</span></div>
+          <div class="kv"><span class="k">用户名：</span><span class="v">liantong</span></div>
+          <div class="kv"><span class="k">登录模式：</span><span class="v">TLS</span></div>
+          <div class="conn-rule"></div>
+          <div class="conn-foot">
+            <span class="st on">在线</span>
+            <button class="btn solid sm" onclick="disc(this)">断开</button>
+            <button class="icon-btn" title="修改连接" onclick="openDlg()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></button>
+          </div>
+        </div>
+
+        <!-- 卡 2：未连接 -->
+        <div class="conn-card">
+          <div class="conn-head">
+            <span class="conn-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg></span>
+            <span class="conn-title">ops-gw.internal</span>
+          </div>
+          <div class="kv"><span class="k">服务器：</span><span class="v mono">ops-gw.internal</span></div>
+          <div class="kv"><span class="k">端口：</span><span class="v mono">4433</span></div>
+          <div class="kv"><span class="k">用户名：</span><span class="v">ckun</span></div>
+          <div class="kv"><span class="k">登录模式：</span><span class="v">TLS + 客户端证书</span></div>
+          <div class="conn-rule"></div>
+          <div class="conn-foot">
+            <span class="st off">未连接</span>
+            <button class="btn solid sm" onclick="conn(this)">连接</button>
+            <button class="icon-btn" title="修改连接" onclick="openDlg()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></button>
+          </div>
+        </div>
+
+        <!-- 卡 3：失败态（SPKI 不符） -->
+        <div class="conn-card">
+          <div class="conn-head">
+            <span class="conn-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg></span>
+            <span class="conn-title">vpn-edge.example.net</span>
+          </div>
+          <div class="kv"><span class="k">服务器：</span><span class="v mono">vpn-edge.example.net</span></div>
+          <div class="kv"><span class="k">端口：</span><span class="v mono">443</span></div>
+          <div class="kv"><span class="k">用户名：</span><span class="v">ckun</span></div>
+          <div class="kv"><span class="k">登录模式：</span><span class="v">TLS</span></div>
+          <div class="conn-rule"></div>
+          <div class="conn-foot">
+            <span class="st err">指纹不符</span>
+            <button class="btn sm" onclick="alert('本机记录的 SPKI 与本次收到的不一致，已硬失败。\n确认网关确已换证后才可重新信任。')">详情</button>
+            <button class="icon-btn" title="修改连接" onclick="openDlg()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></button>
+          </div>
+        </div>
+
+        <!-- 卡 4：重连中 -->
+        <div class="conn-card">
+          <div class="conn-head">
+            <span class="conn-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg></span>
+            <span class="conn-title">10.0.0.9</span>
+          </div>
+          <div class="kv"><span class="k">服务器：</span><span class="v mono">10.0.0.9</span></div>
+          <div class="kv"><span class="k">端口：</span><span class="v mono">4433</span></div>
+          <div class="kv"><span class="k">用户名：</span><span class="v">deploy</span></div>
+          <div class="kv"><span class="k">登录模式：</span><span class="v">TLS（最优通道）</span></div>
+          <div class="conn-rule"></div>
+          <div class="conn-foot">
+            <span class="st warn">重连中 3</span>
+            <button class="btn sm" disabled>连接</button>
+            <button class="icon-btn" title="修改连接" onclick="openDlg()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ═══ 页签 2：通道 ═══ -->
+      <div id="p-chan" hidden>
+        <p class="pane-note">当前会话的活动通道。奇数由本机分配、偶数由网关分配，方向不占帧头字节。</p>
+        <table class="chan">
+          <thead><tr><th>chan</th><th>方向</th><th>目标</th><th>规则</th><th>↑</th><th>↓</th><th>状态</th></tr></thead>
+          <tbody>
+            <tr><td>17</td><td class="dir-c2g">本机→网关</td><td>db.internal:5432</td><td>L 8080</td><td>412 KB</td><td>3.1 MB</td><td>开放</td></tr>
+            <tr><td>19</td><td class="dir-c2g">本机→网关</td><td>grafana.internal:3000</td><td>L 8081</td><td>8 KB</td><td>220 KB</td><td>开放</td></tr>
+            <tr><td>12</td><td class="dir-g2c">网关→本机</td><td>localhost:6379</td><td>R 8443</td><td>900 KB</td><td>1.4 MB</td><td>开放</td></tr>
+            <tr class="fin"><td>21</td><td class="dir-c2g">本机→网关</td><td>redis-a:6379</td><td>L 16379</td><td>512 KB</td><td>0</td><td>已 FIN — 单向 EOF，等对端写完</td></tr>
+            <tr class="denied"><td>23</td><td class="dir-c2g">本机→网关</td><td>metadata:80</td><td>L 18080</td><td>—</td><td>—</td><td>OPEN_ERR denied-by-dns（解析出 169.254.169.254）</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- ═══ 页签 3：日志 ═══ -->
+      <div id="p-log" hidden>
+        <p class="pane-note">会话面日志。命令审计仍在「运维审计」页，这里不重复一份。</p>
+        <div class="log">
+          <div><span class="t">14:51:02</span> <span class="info">TCP</span> 113.247.243.3:4433 建立</div>
+          <div><span class="t">14:51:02</span> <span class="info">TLS</span> 握手完成 · TLS 1.3 · TLS_AES_256_GCM_SHA384 · rtt 41 ms</div>
+          <div><span class="t">14:51:03</span> <span class="ok">AUTH</span> 口令认证通过 · role: prod · 策略版本 2026-10-08.3</div>
+          <div><span class="t">14:51:03</span> <span class="ok">HELLO_OK</span> sid a3f9c1 · 心跳 30 s · 通道上限 256</div>
+          <div><span class="t">14:51:33</span> PING/PONG seq 1 · 41 ms</div>
+          <div><span class="t">14:52:11</span> <span class="bad">OPEN_ERR</span> chan 23 metadata:80 → denied-by-dns（169.254.169.254 不在允许集）</div>
+          <div><span class="t">14:56:04</span> <span class="bad">PING</span> 连续 3 次无 PONG → 进入重连退避 1 s</div>
+          <div><span class="t">14:56:05</span> <span class="info">RECONNECT</span> 第 1 次 · 丢弃在途 5 chan</div>
+        </div>
+      </div>
+
+      <!-- ═══ 页签 4：设置 ═══ -->
+      <div id="p-set" hidden>
+        <p class="pane-note">接入面自己的开关。应用级外观（主题/字号）在右上「设置」里，不在这里重复。</p>
+        <div class="frow"><label>开机启动：</label><div class="sw-row"><button class="sw on" onclick="sw(this)"></button><span>随系统登录启动并最小化到托盘</span></div></div>
+        <div class="frow"><label>自动连接：</label><div class="sw-row"><button class="sw on" onclick="sw(this)"></button><span>启动后自动连接上次在线的连接</span></div></div>
+        <div class="frow"><label>断线重连：</label><div class="sw-row"><button class="sw on" onclick="sw(this)"></button><span>指数退避 1 s → 30 s，成功后在途通道不迁移</span></div></div>
+        <div class="frow"><label>虚拟网卡：</label><div class="sw-row"><button class="sw" onclick="sw(this)"></button><span>L3 全隧道，本版未实现（需驱动与路由接管）</span></div></div>
+      </div>
+    </div>
+
+    <!-- ───── 复刻窗口 1 底部：状态条 ───── -->
+    <div class="statusbar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+      <span id="sb-state">在线</span>
+      <span class="right">
+        <span id="sb-right">已连接至 113.247.243.3</span>
+        <span class="sep">|</span>
+        <span id="sb-count">共 4 个连接</span>
+      </span>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 复刻窗口 2：修改连接 ═══════════ -->
+<div class="overlay" id="dlg">
+  <div class="dialog">
+    <div class="dlg-head"><h2 id="dlg-title">修改连接</h2><button class="dlg-x" onclick="closeDlg()">✕</button></div>
+    <div class="dlg-tabs">
+      <button class="dlg-tab on">TLS/SSL</button>
+      <button class="dlg-tab">通用<span style="font-size:9px;vertical-align:super">?</span></button>
+    </div>
+    <div class="dlg-body">
+      <div class="frow"><label>连接名称：</label><input type="text" value="113.247.243.3"></div>
+      <div class="frow"><label>服务器：</label><input type="text" class="mono" value="113.247.243.3"></div>
+      <div class="frow"><label>端口：</label><input type="text" class="mono" value="4433"></div>
+      <div class="frow"><label>记住认证类型：</label><div class="sw-row"><button class="sw on" onclick="sw(this)"></button></div></div>
+      <div class="frow"><label>用户名：</label><input type="text" value="liantong"></div>
+      <div class="frow"><label>密码：</label><input type="password" value="liantongpw"></div>
+      <div class="frow"><label></label><div class="sw-row"><button class="sw on" onclick="sw(this)"></button><span>记住密码</span></div></div>
+      <div class="hintline" style="grid-column:1/-1;margin:-6px 0 14px">口令在 TLS 通道内发送，服务端鉴权后由网关下发角色；证书是可选的第二因子，不是唯一凭据。</div>
+
+      <button class="adv-toggle" onclick="adv(this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+        高级配置
+      </button>
+      <div id="adv">
+        <div class="frow"><label>最优通道：</label><div class="sw-row"><button class="sw on" onclick="sw(this)"></button></div><div class="hintline">优先走 UDP 承载，失败回落 TCP（避开 TCP-in-TCP 头阻）</div></div>
+        <div class="frow"><label>网关探测：</label><div class="sw-row"><button class="sw on" onclick="sw(this)"></button></div><div class="hintline">建连前先探网关可达性与能力，再决定认证方式</div></div>
+        <div class="frow"><label>SPKI 指纹：</label><input type="text" class="mono" value="sha256/4pR7nQv0Lm2sX8tAeK6dYu1cB3jHf5gWq9zS0oN2mKd=" readonly></div>
+        <div class="frow"><label>客户端证书：</label><div class="sw-row"><button class="sw" onclick="sw(this)"></button><span>未启用 · 启用后需一次性令牌注册</span></div></div>
+      </div>
+    </div>
+    <div class="dlg-foot">
+      <button class="btn solid" onclick="closeDlg()">确定</button>
+      <button class="btn" onclick="closeDlg()">取消</button>
+    </div>
+  </div>
+</div>
+
+<div class="demo-bar">
+  <span>演示控件（不属于 app）</span>
+  <select id="theme">
+    <option value="">深色（默认）</option><option value="light">浅色</option><option value="blue-screen">蓝屏</option>
+    <option value="forest">森林</option><option value="mint">薄荷</option><option value="bee">蜜蜂</option>
+    <option value="coral">珊瑚</option><option value="atelier">手记</option>
+  </select>
+  <button class="on" onclick="pane('conn',null,this)">连接页</button>
+  <button onclick="openDlg()">修改连接弹窗</button>
+</div>
+
+<script>
+  const themeSel = document.getElementById('theme')
+  themeSel.addEventListener('change', () => {
+    const t = themeSel.value
+    if (t) document.documentElement.dataset.theme = t
+    else delete document.documentElement.dataset.theme
+  })
+
+  function pane(id, tab, demoBtn) {
+    ['conn', 'chan', 'log', 'set'].forEach(k => { document.getElementById('p-' + k).hidden = k !== id })
+    document.querySelectorAll('.hsc-tab').forEach(t => t.classList.toggle('on', t.dataset.p === id))
+    if (demoBtn) document.querySelectorAll('.demo-bar button').forEach(b => b.classList.toggle('on', b === demoBtn))
+  }
+
+  function sw(btn) { btn.classList.toggle('on') }
+
+  function adv(btn) {
+    const box = document.getElementById('adv')
+    box.hidden = !box.hidden
+    btn.classList.toggle('closed', box.hidden)
+  }
+
+  function openDlg() { document.getElementById('dlg').classList.add('show') }
+  function closeDlg() { document.getElementById('dlg').classList.remove('show') }
+  document.getElementById('dlg').addEventListener('click', e => { if (e.target.id === 'dlg') closeDlg() })
+
+  /* 断开 / 连接：状态条与卡片状态同步，避免截图里那种「在线」和底部状态条各说各话 */
+  function disc(btn) {
+    const card = btn.closest('.conn-card')
+    card.querySelector('.st').className = 'st off'
+    card.querySelector('.st').textContent = '未连接'
+    btn.textContent = '连接'
+    btn.className = 'btn solid sm'
+    btn.onclick = conn.bind(null, btn)
+    syncBar()
+  }
+  function conn(btn) {
+    const card = btn.closest('.conn-card')
+    card.querySelector('.st').className = 'st on'
+    card.querySelector('.st').textContent = '在线'
+    btn.textContent = '断开'
+    btn.onclick = disc.bind(null, btn)
+    syncBar()
+  }
+  function syncBar() {
+    const on = [...document.querySelectorAll('#p-conn .st.on')].map(s => s.closest('.conn-card').querySelector('.conn-title').textContent)
+    document.getElementById('sb-state').textContent = on.length ? '在线' : '未连接'
+    document.getElementById('sb-right').textContent = on.length ? '已连接至 ' + on.join('、') : '未建立连接'
+  }
+</script>
+</body>
+</html>
