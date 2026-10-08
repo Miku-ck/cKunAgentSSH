@@ -328,12 +328,22 @@ def get_permission_policy():
 
 
 @router.put("/settings/permission-policy")
-def update_permission_policy(req: PermissionPolicyRequest):
+async def update_permission_policy(req: PermissionPolicyRequest):
     """更新审批授权策略，并即时推给进程内运行时（gate TTL / auto_approve 开关 /
     core 兜底时长）。
 
     只写库不够：三者都是进程内状态，不推这一步，改完设置要重启后端才生效 ——
     而用户刚把时长调小到 24h，恰恰是希望立刻把不再想要的预授权收回来。
+
+    S2-03 修复：本路由必须是 `async def`。原实现是同步 `def`，FastAPI 把它丢进
+    anyio 线程池执行，于是三个运行时 mutator 在**非事件循环线程**上改全局状态 ——
+    其中 `set_allowlist_ttl_hours` 还会直接动进程级 PermissionGate 单例并调用
+    `prune_expired_allowlist()`（删键 + 落 allowlist 文件），而同一时刻事件循环上
+    的 `check_permission`/grant 正在读同一批状态。同族的 grant/revoke/release-run/
+    deny-command 四条端点正是为消掉这一类竞态改成 async def 的（口径见
+    routes/agent.py 的 grant 路由 docstring：「回到循环后互斥天然成立」），
+    这条漏了一处 —— 而它是唯一会**删授权**的那条腿。
+    落库与末尾的策略读回走 asyncio.to_thread，与 agent.py 把审计写移出循环同款。
     """
     # 审查R2修复：多键逐条 set_app_setting 各自提交，中途一条失败会让库里
     # 「一半新一半旧」，而内存策略仍按全量新值应用，两边各说各话。改为
@@ -348,10 +358,11 @@ def update_permission_policy(req: PermissionPolicyRequest):
     if req.approval_fallback_s is not None:
         updates["permission.approval_fallback_s"] = str(req.approval_fallback_s)
     try:
-        db.update_app_settings_bulk(updates)
+        await asyncio.to_thread(db.update_app_settings_bulk, updates)
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"审批策略写入失败，已整体回滚，运行时未变更: {e}")
+    # 以下三个调用现在都跑在事件循环上：与 gate 的消费方串行，不再跨线程改状态
     if req.allowlist_ttl_hours is not None:
         from agent.harness.reins.gate import set_allowlist_ttl_hours
         set_allowlist_ttl_hours(req.allowlist_ttl_hours)
@@ -361,7 +372,7 @@ def update_permission_policy(req: PermissionPolicyRequest):
     if req.approval_fallback_s is not None:
         from agent.harness.reins.core import set_approval_fallback_seconds
         set_approval_fallback_seconds(req.approval_fallback_s)
-    return db.get_permission_policy()
+    return await asyncio.to_thread(db.get_permission_policy)
 
 
 # ── 会话保留清理（用户数据，默认关闭）──
