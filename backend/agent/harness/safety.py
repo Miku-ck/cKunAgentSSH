@@ -1330,6 +1330,107 @@ _DANGEROUS_SUBACTIONS: dict[str, frozenset[str]] = {
 }
 
 
+def subaction_writes(base: str, tokens: list[str]) -> str | None:
+    """白名单子命令之下更深一层的写动词：返回命中的原文，没命中返回 None。
+
+    必须扫**子命令之后**的全部 token。只比第一个 token 看不见第二层：
+    `ip link set eth0 down` 里 `link` 在白名单里、`set` 才是断网动作，
+    按第一个 token 判定的写法会放行它（实测计划模式那侧正是这样漏的，
+    后果是远程 SSH 会话直接失联）。
+    """
+    bad = _DANGEROUS_SUBACTIONS.get(base)
+    if not bad:
+        return None
+    hit = next((t for t in tokens[2:] if t in bad), "")
+    return f"{base} {hit}" if hit else None
+
+
+# ── 「同一个子命令既能列也能写」的形态判定 ──────────────────────────────────
+# 上面那张子命令表只认第一个非 flag token，于是 git 的三个列表型子命令全漏：
+#   git branch -D feat          删分支（可能是未合并的工作）           实测 safe
+#   git tag v1.0.0              建 ref                                 实测 safe
+#   git remote set-url origin https://evil.example/x.git
+#                               换远端 —— 之后任何 push/fetch 都把代码交给攻击者
+#                                                        实测 safe
+# 三条都既不审批、又穿过计划模式的「只读」承诺，所以按形态登记而不是按子命令登记：
+#   (只读 flag, 可再跟一个位置参数的只读 token, 明确写库的 token)
+# 规则：命中写 token 即写；否则逐段消费只读形态，**剩下任何没登记上的 token
+# （包括位置参数）一律按写处理** —— `git branch new-feature` 建分支就是靠这条挡的。
+_GIT_AMBIGUOUS_FORMS: dict[str, tuple[frozenset[str], frozenset[str], frozenset[str]]] = {
+    "branch": (
+        frozenset({"-a", "--all", "-r", "--remotes", "-e", "-v", "-vv", "-vvv",
+                   "--verbose", "-l", "--list", "--show-current", "--color",
+                   "--column", "-i", "--ignored"}),
+        frozenset({"--merged", "--no-merged", "--contains", "--no-contains",
+                   "--points-at", "--format", "--sort"}),
+        frozenset({"-d", "-D", "--delete", "-m", "-M", "--move", "-c", "-C", "--copy",
+                   "-u", "--unset-upstream", "--edit-description", "-f", "--force",
+                   "--set-upstream-to"}),
+    ),
+    "tag": (
+        frozenset({"-l", "--list", "--color", "--column"}),
+        frozenset({"--contains", "--no-contains", "--points-at", "--format",
+                   "--sort", "-v", "--verify"}),
+        frozenset({"-a", "--annotate", "-s", "--sign", "-u", "--local-user",
+                   "-F", "--file", "-m", "--message", "-d", "-D", "--delete",
+                   "--cleanup", "--depends-on", "--create-reflog", "-f", "--force"}),
+    ),
+    "remote": (
+        frozenset({"-v", "--verbose", "-n", "--no-configuration"}),
+        frozenset({"show", "get-url"}),
+        frozenset({"add", "remove", "rm", "rename", "mv", "set-url", "set-head",
+                   "set-branches", "set-shallow", "prune", "update", "switch",
+                   "-f", "--fetch"}),
+    ),
+}
+
+# `git <只读子命令>` 也能把输出落盘或把执行权交给外部程序
+_GIT_ALWAYS_WRITE_FLAGS: frozenset[str] = frozenset({
+    "--output", "--output-directory", "--ext-diff", "--textconv",
+})
+
+
+def _flag_stem(token: str) -> str:
+    """`--output=/tmp/x` → `--output`；其余原样返回。"""
+    return token.split("=", 1)[0]
+
+
+def git_form_writes(tokens: list[str]) -> str | None:
+    """git 命令的形态判定：会写仓库状态返回原因片段，确认只读返回 None。
+
+    只读形态之外的 token 一律按写处理，代价是极少数只读用法也会多弹一次审批
+    （`git tag -l 'v1*'` 的 pattern、`git branch --no-merged devel` 的 commit
+    都是位置参数 ⇒ 判写）。这是刻意选的方向：列表命令被误拦只是多点一次「允许」，
+    删分支/换远端被误放则是丢代码或 supply-chain。
+    """
+    if len(tokens) < 2:
+        return None
+    always_hit = next((t for t in tokens[1:] if _flag_stem(t) in _GIT_ALWAYS_WRITE_FLAGS), "")
+    if always_hit:
+        return f"git {_flag_stem(always_hit)}"
+    form = _GIT_AMBIGUOUS_FORMS.get(tokens[1])
+    if form is None:
+        return None
+    read_flags, read_with_arg, write_markers = form
+    rest = tokens[2:]
+    hit = next((t for t in rest if _flag_stem(t) in write_markers), "")
+    if hit:
+        return f"git {tokens[1]} {hit}"
+    i = 0
+    while i < len(rest):
+        stem = _flag_stem(rest[i])
+        if stem in read_flags:
+            i += 1
+            continue
+        if stem in read_with_arg:
+            i += 2  # 只读 token + 至多一个参数（`git remote show origin`）
+            continue
+        break
+    if i < len(rest):
+        return f"git {tokens[1]} {' '.join(rest[i:])}"
+    return None
+
+
 def _classify_unknown_default(segment: str) -> tuple[str, str | None]:
     """C-review C1：默认审批 — 首 token 不在只读白名单 → dangerous（需审批）
 
@@ -1408,9 +1509,13 @@ def _classify_unknown_default(segment: str) -> tuple[str, str | None]:
             if t.startswith("-"):
                 continue
             if t in sub:
-                bad = _DANGEROUS_SUBACTIONS.get(base)
-                if bad and any(x in bad for x in tokens[2:]):
-                    return ("dangerous", f"{base} {t} with destructive sub-action")
+                deep = subaction_writes(base, tokens)
+                if deep:
+                    return ("dangerous", f"{deep} with destructive sub-action")
+                if base == "git":
+                    writes = git_form_writes(tokens)
+                    if writes:
+                        return ("dangerous", f"{writes} (writes repository state, default approval)")
                 return ("safe", None)
             return ("dangerous", f"{base} {t} (operational verb, default approval)")
         return ("dangerous", f"unrecognizable command ({first})")

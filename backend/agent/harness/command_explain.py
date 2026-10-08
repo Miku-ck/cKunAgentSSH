@@ -228,6 +228,9 @@ CONSEQUENCE_RULES: list[tuple[re.Pattern, str, bool]] = [
      "硬重置工作区，尚未提交的本地改动会被全部丢弃。", False),
     (re.compile(r"^git clean force"),
      "强制清除未跟踪文件（含被忽略的文件），这些文件没有备份就无法找回。", False),
+    (re.compile(r"^(?P<target>.+?) \(writes repository state, default approval\)"),
+     "这条 git 命令看着像在查、其实在写（{target}）：删掉的分支和标签不容易找回，"
+     "改了 remote 之后每次 push/fetch 都会把代码交给新地址。", False),
 
     # ── 运维类操作（动词 + 子命令在 reason 头部）──
     (re.compile(r"^(?P<target>\S+ \S+) with destructive sub-action"),

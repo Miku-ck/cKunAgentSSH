@@ -76,7 +76,12 @@ import re
 from typing import Any, Optional
 
 from ..contracts import ReinDecision, ReinPoint, RunContext, TraceEvent
-from ..safety import classify_command, classify_constructed_command
+from ..safety import (
+    classify_command,
+    classify_constructed_command,
+    git_form_writes,
+    subaction_writes,
+)
 from .core import MODE_KEY, _COMMAND_EXEC_TOOLS, command_from_args, extract_bound_command
 
 logger = logging.getLogger(__name__)
@@ -167,11 +172,10 @@ PLAN_VERB_SUBCOMMANDS: dict[str, frozenset[str]] = {
     "helm": frozenset({"list", "get", "status", "history", "template"}),
 }
 
-# 子命令白名单之下仍需挡掉的深动词（safety._DANGEROUS_SUBACTIONS 同义）
-_DANGEROUS_SUBACTIONS: dict[str, frozenset[str]] = {
-    "ip": frozenset({"set", "del", "flush", "down", "add"}),
-    "git": frozenset({"checkout", "reset"}),
-}
+# 子命令白名单之下仍需挡掉的深动词：**不在这里复制表**，统一走
+# `safety.subaction_writes`（原副本既与 safety 漂移，又比错了 token ——
+# 拿子命令 `link` 去查 {set,del,flush,down,add} 永远不命中，
+# 于是 `ip link set eth0 down` 在这一层是放行的，断网=远程会话失联）。
 
 # 带写副作用的 flag：命中即拒
 _WRITE_FLAGS: dict[str, frozenset[str]] = {
@@ -265,8 +269,27 @@ def _segments(command: str) -> list[list[str]]:
     return segs
 
 
-def _check_verb(tokens: list[str]) -> str:
-    """检查单个段的动词与参数；返回拒绝原因，空串表示这一段只读。"""
+def _write_flag_hit(token: str, flags: frozenset[str]) -> bool:
+    """认得三种写法：`-o`、`--output=…`、粘连短 flag `-o/tmp/x`。
+
+    原实现只比 `t.split("=")[0]`，粘连形态整段去查表必然不命中 ⇒
+    `sort -o/tmp/pwned /etc/hostname` 实测在「不能改任何东西」的计划模式下把文件写了出来。
+    """
+    if not token.startswith("-"):
+        return False
+    if token.split("=", 1)[0] in flags:
+        return True
+    return len(token) > 2 and token[1] != "-" and token[:2] in flags
+
+
+def _check_verb(tokens: list[str], template: bool = False) -> str:
+    """检查单个段的动词与参数；返回拒绝原因，空串表示这一段只读。
+
+    `template=True` 只用于工具自带的客户端模板：动词由代码写死，「动词不在只读白名单」
+    这一条不该套（`base64` 正是被这一条挡死，计划模式每次读文件都失败）。放松的只有这一条：
+    结构性禁止动词仍然查（模板会把模型给的值插进命令行，插进去的东西仍可能带写 flag）、
+    写 flag、子命令表、深动词、git 形态一条不少。
+    """
     if not tokens:
         return ""
     verb = tokens[0].rsplit("/", 1)[-1]  # 允许 /bin/ls 这类绝对路径写法
@@ -284,18 +307,26 @@ def _check_verb(tokens: list[str]) -> str:
         if not sub or sub not in PLAN_VERB_SUBCOMMANDS[verb]:
             return (f"`{verb}` 只允许只读子命令"
                     f"（{'/'.join(sorted(PLAN_VERB_SUBCOMMANDS[verb]))}），`{sub or '∅'}` 不在其中")
-        if sub in _DANGEROUS_SUBACTIONS.get(verb, frozenset()):
-            return f"`{verb} {sub}` 会改变状态"
+        deep = subaction_writes(verb, tokens)
+        if deep:
+            return f"`{verb} {sub}` 之下还有写动词（{deep}），计划模式只允许只读排查"
+        if verb == "git":
+            writes = git_form_writes(tokens)
+            if writes:
+                return f"`{writes}` 会写仓库状态，计划模式只允许只读排查"
         return ""
 
     write_flags = _WRITE_FLAGS.get(verb)
     if write_flags:
-        hit = next((t for t in tokens[1:] if t.split("=")[0] in write_flags), "")
+        hit = next((t for t in tokens[1:] if _write_flag_hit(t, write_flags)), "")
         if hit:
             return f"`{verb} {hit}` 带写副作用"
         # find/journalctl/dmesg/sort/date 未命中写 flag 即视为只读，继续放行
 
     if verb in PLAN_READ_ONLY_VERBS or write_flags:
+        return ""
+
+    if template:
         return ""
 
     return f"`{verb}` 不在计划模式的只读白名单里"
@@ -361,6 +392,14 @@ def classify_plan_bound_command(command: str) -> tuple[bool, str]:
     level, reason = classify_constructed_command(cmd)
     if level != "safe":
         return False, f"命令被判为 {level}（{reason or '未说明'}），计划模式只允许只读排查"
+
+    # 结构侧仍然逐段查（template=True：只免掉「未知动词要审批」这一条）。
+    # 少了这一层，模板里插进模型给的值就没人管：`sort -o/tmp/pwned`、
+    # `ip link set eth0 down` 都会以「只读工具」的身份通过。
+    for tokens in _segments(cmd):
+        why = _check_verb(tokens, template=True)
+        if why:
+            return False, f"{why}，计划模式只允许只读排查"
 
     return True, ""
 
