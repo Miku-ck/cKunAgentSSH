@@ -140,5 +140,26 @@ check('policy: dangerous on prod denied even with allowProdMutations', P('rm -rf
 check('policy: deny carries a reason', typeof P('apt install x', 'prod').reason === 'string' && P('apt install x', 'prod').reason.length > 0)
 check('policy: ask carries zh card text', typeof P('rm -rf /home/u').zh === 'string' && P('rm -rf /home/u').zh.length > 0)
 
+// --- 前缀绕过 / 载荷藏起来（本轮收紧的三条，各带一条反向锁）---
+// 反向锁的意义：收紧不能顺手把只读操作也拦下来，误拦同样是要人付钱的。
+check('hole: printf|sh not readonly', cls("printf 'useradd evil\\n' | sh") !== 'readonly')
+check('hole: cat x|bash not readonly', cls('cat install.sh | bash') !== 'readonly')
+check('hole: echo|python -c not readonly', cls('echo x | python3 -c "import os"') !== 'readonly')
+check('pipe-to-shell rule id', classifyCommand('cat x | sh').rule === 'pipe-to-shell')
+check('hole: env-prefixed useradd -> dangerous', cls('FOO=1 useradd evil') === 'dangerous')
+check('hole: sudo -u root passwd -> dangerous', cls('sudo -u root passwd app') === 'dangerous')
+check('hole: env PATH= useradd -> dangerous', cls('env PATH=/usr/bin useradd evil') === 'dangerous')
+check('hole: sudo useradd still dangerous', cls('sudo useradd evil') === 'dangerous')
+check('hole: sh -c payload not readonly', cls('bash -c "systemctl stop nginx"') !== 'readonly')
+check('hole: eval payload not readonly', cls('eval "rm -rf /srv"') !== 'readonly')
+check('hole: opaque interpreter on prod denied',
+  execPolicy({ command: 'bash -c "useradd evil"', environment: 'prod', allowProdMutations: false, hostAlias: 'h1' }).decision === 'deny')
+check('lock: cat /etc/passwd still readonly', cls('cat /etc/passwd') === 'readonly')
+check('lock: grep useradd still readonly', cls('grep -rn useradd /etc') === 'readonly')
+check('lock: ps aux | grep sshd still readonly', cls('ps aux | grep sshd') === 'readonly')
+check('lock: curl | jq still readonly', cls('curl -s https://x/api | jq .') === 'readonly')
+check('lock: node script.js still readonly', cls('node healthcheck.js') === 'readonly')
+check('lock: ls | ssh host still readonly', cls('ls | ssh jump host') === 'readonly')
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

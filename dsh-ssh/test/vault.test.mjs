@@ -37,7 +37,18 @@ check('alias passthrough', secretIdForAlias('gpu-01') === 'gpu-01', secretIdForA
 check('alias lowercased', secretIdForAlias('My GPU 01') === 'my-gpu-01', secretIdForAlias('My GPU 01'))
 check('alias leading digit', secretIdForAlias('123') === 'h-123', secretIdForAlias('123'))
 check('alias junk collapsed', secretIdForAlias('a..b!!c') === 'a-b-c', secretIdForAlias('a..b!!c'))
-check('alias empty', secretIdForAlias('!!!') === 'host', secretIdForAlias('!!!'))
+check('alias empty', secretIdForAlias('!!!').startsWith('host-'), secretIdForAlias('!!!'))
+// 收集式命名塌到同一个 id = 两台机器共用一条凭据记录：A 的口令会被递给 B。
+// 空/被截断这两种「有损」结果必须带上原名的摘要来分开；健康的 ASCII 名保持原键不变。
+check('alias empty is per-alias', secretIdForAlias('!!!') !== secretIdForAlias('???'))
+check('alias all-CJK distinct', secretIdForAlias('生产库') !== secretIdForAlias('测试库'), `${secretIdForAlias('生产库')} / ${secretIdForAlias('测试库')}`)
+check('alias all-CJK legal segment', /^[a-z][a-z0-9-]*$/.test(secretIdForAlias('生产库')), secretIdForAlias('生产库'))
+check('alias long collision split', (() => {
+  const a = 'x'.repeat(70) + '-one'
+  const b = 'x'.repeat(70) + '-two'
+  return secretIdForAlias(a) !== secretIdForAlias(b)
+})(), secretIdForAlias('x'.repeat(70) + '-one'))
+check('alias passthrough unaffected by digest rule', secretIdForAlias('gpu-01') === 'gpu-01')
 
 // missing service -> unavailable vault, all no-ops
 const off = createCredentialVault(undefined)

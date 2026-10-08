@@ -24,7 +24,11 @@ interface Rule {
   id: string
   zh: string
   re?: RegExp
-  /** Optional extra predicate for compound logic (used alone when no re). */
+  /**
+   * Extra predicate. When a rule carries both, they are ANDed: `re` is the
+   * cheap pre-filter and `test` the compound logic. (Previously `test` silently
+   * replaced `re`, so e.g. rm-recursive-root's /\brm\s+/ was decorative.)
+   */
   test?: (cmd: string) => boolean
 }
 
@@ -51,8 +55,18 @@ const DANGEROUS_RULES: Rule[] = [
   { id: 'dd-blockdev', zh: '直接写块设备（dd of=/dev/...），可摧毁磁盘', re: /\bdd\b[\s\S]*?\bof=\/dev\// },
   { id: 'power', zh: '关机 / 重启 / 停机，远程服务立即中断', re: /\b(shutdown|reboot|halt|poweroff|init\s+[06])\b/ },
   { id: 'service-stop', zh: '停止/重启/禁用系统服务，相关服务中断', re: /\b(systemctl|service)\s+[\s\S]*?\b(stop|restart|disable|mask)\b/ },
-  // anchored to the command position so path names like /etc/passwd never match
-  { id: 'user-mgmt', zh: '修改账户 / 口令 / 授权，可能影响登录与提权', re: /^\s*(?:sudo\s+(?:-\S+\s+)*|doas\s+|pkexec\s+(?:-\S+\s+)*)?(?:userdel|useradd|usermod|groupdel|passwd|chpasswd|visudo|chsh)\b/ },
+  // Anchored to the command position so path names like /etc/passwd never match,
+  // but the anchor must tolerate what actually precedes a command in practice:
+  // `FOO=1 useradd x`, `sudo -u root passwd y`, `env PATH=/x useradd z`. Without
+  // those, the whole prefix-skipping family classified as READONLY and ran with no
+  // approval card on a prod host — an approval gate that only covers the tidy form.
+  // `(?:\S+\s+)*` is greedy but backtracks, so `sudo useradd x` still matches the
+  // verb right after the wrapper (a fixed `\s+` after the flag list broke exactly that).
+  {
+    id: 'user-mgmt',
+    zh: '修改账户 / 口令 / 授权，可能影响登录与提权',
+    re: /^\s*(?:[\w.]+=(?:'[^']*'|"[^"]*"|\S+)\s+)*(?:(?:sudo|doas|pkexec|env|nohup|time|command)\s+(?:\S+\s+)*)?(?:userdel|useradd|usermod|groupadd|groupdel|groupmod|gpasswd|passwd|chpasswd|visudo|chsh|chfn|newusers)\b/,
+  },
   { id: 'etc-write', zh: '覆盖写入 /etc 下的系统配置', re: />>?\s*\/etc\// },
   // no \b before -F: a hyphen is a non-word char, so \b never holds there
   { id: 'firewall-flush', zh: '清空/关闭防火墙规则，暴露所有端口', re: /\b(iptables|nft|firewall-cmd|ufw)\b[\s\S]*?(?:\s-F\b|\s+flush\b|\s+disable\b|--permanent)/ },
@@ -77,12 +91,48 @@ const MUTATING_RULES: Rule[] = [
   { id: 'docker-write', zh: '变更容器/镜像/卷（docker）', test: dockerMutates },
   { id: 'k8s-write', zh: '变更 Kubernetes 资源（kubectl）', re: /\bkubectl\s+[\s\S]*?\b(delete|apply|replace|patch|scale|drain|cordon|uncordon|rollout\s+(resume|retry)|label\s+(-\S+\s+)*-[a-z]+\s+\S+=\S*--overwrite)\b/ },
   { id: 'process-kill', zh: '终止进程', re: /\b(kill|pkill|killall|tkill)\b/ },
+  // 解释器的内联程序（sh -c / python -c / eval）：真正的动作在参数里，分类器读不到，
+  // 于是把它当只读就等于让载荷绕过审批卡。归到 mutating：非 prod 出卡，prod 默认拒。
+  { id: 'opaque-interpreter', zh: '由 shell/解释器内联执行，实际动作不可见', test: opaqueWrapper },
   { id: 'db-write', zh: '对数据库执行写操作', re: /\b(mysql|psql|redis-cli|mongosh)\b[\s\S]*?\b(UPDATE|DELETE|DROP|TRUNCATE|INSERT|ALTER|CREATE|GRANT|REVOKE|FLUSH|SET\s+GLOBAL)\b/i },
   { id: 'crontab-set', zh: '修改定时任务', re: /\bcrontab\b(?!.*-r\b)/ },
 ]
 
-/** Piped download-to-shell spans segment boundaries (the | is a segment split), so it must be checked on the whole command before splitting. */
-const PIPE_TO_SHELL = /\b(curl|wget)\b[\s\S]*?\|\s*(?:ba|z|da)?sh\b/
+/**
+ * Piping into a shell/interpreter hands the pipe's content to a second parser, so
+ * the dangerous verb is invisible to per-segment matching:
+ * `printf 'useradd evil\n' | sh` split into `printf …` + `sh`, both READONLY, and
+ * the command auto-ran on a prod host with no card. curl/wget was covered; this is
+ * the same hole with any other producer.
+ */
+const PIPE_TO_SHELL = /\|\s*(?:sudo|doas)\s+(?:-\S+\s+)*(?:[\w./-]*\/)?(?:ba|z|k|da)?sh\b|\|\s*(?:[\w./-]*\/)?(?:ba|z|k|da)?sh\b|\|\s*(?:[\w./-]*\/)?python\d*\s+|\|\s*(?:[\w./-]*\/)?(?:perl|ruby|node|php)\b/
+
+/**
+ * An interpreter invoked with an inline program (`sh -c "…"` / `python -c "…"`) or
+ * `eval` carries its real effect inside an argument the classifier does not read.
+ * Classifying it READONLY because the visible wrapper looks innocent means the
+ * payload never gets an approval card, so the honest answer is "opaque" → mutating.
+ * First token only, after the usual wrappers/assignments are skipped.
+ */
+const INTERPRETERS = /^(?:ba|z|k|da)?sh$|^(?:python\d*|perl|ruby|node|php|expect|irb)$|^env$/
+const OPAQUE_FLAGS = /^(-[lc]$|--eval$|-e$|-r$|--command$)/
+
+function opaqueWrapper(cmd: string): boolean {
+  const tokens = cmd.trim().split(/\s+/)
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i]
+    if (/^[\w.]+=/.test(t)) continue // FOO=1 bash -c '…'
+    if (/^(sudo|doas|nohup|time|command|exec)$/.test(t)) continue
+    if (/^-\S+$/.test(t)) continue // sudo -u root bash -c '…'
+    if (t === 'eval' || t === 'source' || t === '.') return true
+    const base = t.split('/').pop() ?? t
+    if (!INTERPRETERS.test(base)) return false
+    // env 自己不是解释器：跳过它继续看下一个真实 token（env bash -c …）
+    if (base === 'env') continue
+    return tokens.slice(i + 1).some(x => OPAQUE_FLAGS.test(x))
+  }
+  return false
+}
 
 /** A redirect whose target is a real file (not /dev/* and not a file descriptor). */
 function hasFileRedirect(cmd: string): boolean {
@@ -118,7 +168,7 @@ const SEGMENT_SPLIT = /\s*(?:&&|\|\||;|\||\$\(|`)/
 /** Classify one whole (possibly compound) shell command string. */
 export function classifyCommand(command: string): CommandVerdict {
   // Pipe-to-shell crosses segment boundaries, so check the whole string first.
-  if (PIPE_TO_SHELL.test(command)) return { cls: 'mutating', rule: 'package-upload', zh: '在远程安装/写入二进制或脚本' }
+  if (PIPE_TO_SHELL.test(command)) return { cls: 'mutating', rule: 'pipe-to-shell', zh: '把管道内容交给 shell/解释器执行' }
   const segments = command.split(SEGMENT_SPLIT).filter((s) => s.trim() !== '')
   if (segments.length === 0) segments.push(command)
   let cls: CommandClass = 'readonly'
@@ -135,13 +185,14 @@ export function classifyCommand(command: string): CommandVerdict {
 }
 
 function classifySingle(cmd: string): CommandVerdict {
+  // 两条谓词同时存在时是「与」：re 是便宜的预筛，test 是复合判定。
+  // 原先 test 存在就完全不看 re，于是 rm-recursive-root 那条 /\brm\s+/ 只是装饰。
+  const matches = (rule: Rule) => (rule.re ? rule.re.test(cmd) : true) && (!rule.test || rule.test(cmd))
   for (const rule of DANGEROUS_RULES) {
-    const hit = rule.test ? rule.test(cmd) : rule.re!.test(cmd)
-    if (hit) return { cls: 'dangerous', rule: rule.id, zh: rule.zh }
+    if (matches(rule)) return { cls: 'dangerous', rule: rule.id, zh: rule.zh }
   }
   for (const rule of MUTATING_RULES) {
-    const hit = rule.test ? rule.test(cmd) : rule.re!.test(cmd)
-    if (hit) return { cls: 'mutating', rule: rule.id, zh: rule.zh }
+    if (matches(rule)) return { cls: 'mutating', rule: rule.id, zh: rule.zh }
   }
   return { cls: 'readonly' }
 }

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { CredentialKey, CredentialRecord } from '@deepseek-ai/dsh-credentials'
 
 /** Per-host SSH secrets. Only non-empty fields are meaningful. */
@@ -41,15 +42,28 @@ const SCOPE = 'ckun-ssh'
 
 const SEGMENT = /^[a-z][a-z0-9-]*$/
 
-/** Map a user-facing alias to a legal credential-key id segment. */
+/**
+ * Map a user-facing alias to a legal credential-key id segment.
+ *
+ * When sanitisation is LOSSY the result gets a digest of the raw alias appended.
+ * Without that, every alias whose characters all get stripped — any all-CJK alias,
+ * e.g. `生产库` and `测试库` — collapses to the single id `host`, and two different
+ * machines then read and write ONE credential record: host A's password is offered
+ * to host B (a wrong-secret login, or worse, A's secret authenticating on B). The
+ * same applies to the >64-char truncation.
+ *
+ * Healthy ASCII aliases are untouched, so existing records keep their keys —
+ * the digest only appears where the old shape was already colliding.
+ */
 export function secretIdForAlias(alias: string): string {
+  const digest = createHash('sha256').update(alias, 'utf8').digest('hex').slice(0, 10)
   let id = alias.toLowerCase().replace(/[^a-z0-9-]+/g, '-')
   id = id.replace(/-+/g, '-').replace(/^-+|-+$/g, '')
-  if (!id) return 'host'
-  if (!/^[a-z]/.test(id)) id = `h-${id}`
-  if (id.length > 64) id = id.slice(0, 64).replace(/-+$/, '')
-  if (!SEGMENT.test(id)) return 'host'
-  return id
+  if (!/^[a-z]/.test(id)) id = id ? `h-${id}` : ''
+  const truncated = id.length > 64
+  if (truncated) id = id.slice(0, 64).replace(/-+$/, '')
+  if (!id || !SEGMENT.test(id)) return `host-${digest}`
+  return truncated ? `${id}-${digest}` : id
 }
 
 /** The grant payload shape this plugin writes (opaque to the seam). */
