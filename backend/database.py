@@ -1673,25 +1673,23 @@ def list_models_config() -> list[dict]:
 def get_model_config(model_id: str, mask_key: bool = True) -> Optional[dict]:
     """根据 id 获取模型配置（mask_key=True 时 api_key 已脱敏）
 
-    审查外热修：调用方可能传入行主键 id（model-<uuid>）或 LLM 模型名
-    （model_id 列，如 qwen3.8-27b）— Agent 后处理原样传模型名、chat/agent
-    的默认模型兜底也优先取模型名，导致按 id 查询落空、记忆/标题/技能提取
-    被静默跳过（日志 unknown model_id 告警）。现先按行 id 查，落空再按
-    model_id 列回退（重名取 rowid 最小的第一行）。
+    调用方可能传入行主键 id（model-<uuid>）或 LLM 模型名（model_id 列，如
+    qwen3.8-27b）— Agent 后处理原样传模型名、chat/agent 的默认模型兜底也优先取
+    模型名。两种键的解析规则**只存在于 `_resolve_model_pk` 一处**（S10-22）：
+    此前这里抄了第二份「先按 id、落空再按 model_id 回退」，读写两侧各种一份，
+    以后调整匹配规则（例如重名取舍）就会只改一边而留下会静默失效的副本。
     """
     if not model_id:
+        return None
+    pk = _resolve_model_pk(model_id)
+    if pk is None:
         return None
     conn = _get_conn()
     try:
         row = conn.execute(
             f"SELECT {_MC_COLS} FROM models_config WHERE id = ?",
-            (model_id,),
+            (pk,),
         ).fetchone()
-        if row is None:
-            row = conn.execute(
-                f"SELECT {_MC_COLS} FROM models_config WHERE model_id = ? ORDER BY rowid LIMIT 1",
-                (model_id,),
-            ).fetchone()
         if not row:
             return None
         result = dict(row)
