@@ -222,6 +222,14 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
     polling.value = false
     activeSshId = ''
     targetSshId = ''
+    // 读数与历史要一起清：只停表不清数据的话，DashboardView 会照常渲染上一台
+    // 主机最后一次采样的 CPU/内存/磁盘（标题还写着已关闭的 host，且没有任何
+    // 「这是旧的」提示），而「当前终端没有远程连接」那个空态分支再也走不到。
+    current.value = null
+    cpuHistory.value = []
+    memHistory.value = []
+    loadHistory.value = []
+    gpuHist.value = {}
     if (timer) {
       clearTimeout(timer)
       timer = null

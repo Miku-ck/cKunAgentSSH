@@ -106,11 +106,16 @@ export function useChatPersistence(options: {
   async function syncBackendConversations() {
     try {
       const remote = await api.listConversations(50, 0, API_MODE)
-      const byLocalId = new Map(conversations.value.map((c) => [c.id, c]))
+      // 这三个集必须在 await **之后**取。原实现在 await 之前就快照了
+      // `conversations.value`，然后把那份旧快照赋回去并落盘 —— 这一句
+      // 「本地新建未同步的会话不能丢」的注释因此正好说了反话：往返期间
+      // 新建/发过消息的会话既从列表里消失，也被从 localStorage 里抹掉。
+      const live = conversations.value
+      const byLocalId = new Map(live.map((c) => [c.id, c]))
       const byBackendId = new Map(
-        conversations.value.filter((c) => c.backendConvId).map((c) => [c.backendConvId as string, c]),
+        live.filter((c) => c.backendConvId).map((c) => [c.backendConvId as string, c]),
       )
-      const merged = [...conversations.value]
+      const merged = [...live]
       for (const r of remote as Array<{ id: string; title: string; created_at: string; updated_at: string }>) {
         const match = byBackendId.get(r.id) ?? byLocalId.get(r.id)
         if (match) {
