@@ -279,7 +279,6 @@ export const useSkillStore = defineStore('skills', () => {
   return {
     skills,
     enabledSkills,
-    isLoading,
     loadBuiltinSkills,
     // 设置页改动技能后需回灌对话侧菜单：remoteSkills 只在 loadBuiltinSkills 时拉一次
     loadRemoteSkills,

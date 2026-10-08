@@ -829,7 +829,6 @@ export const useAgentStore = defineStore('agent', () => {
     abort,
     snapshot,
     dismissHelp,
-    dismissPermission,
     approvePermission,
     denyPermission,
     resolvePermission,

@@ -8,7 +8,7 @@ import { applyMonacoTheme } from '@/monaco-setup'
 // 于是成了真运行时环（环的形状与锁法见那个文件的头注）。
 import {
   ACCENT_MAP, contrastOnAccent,
-  type Accent, type GradientDirection, type GradientMode, type Theme,
+  type Accent, type GradientDirection, type Theme,
 } from '@/utils/appearance-tokens'
 
 // 修复：模块级标记，确保 darkMq 监听器只添加一次（多实例共享场景）
