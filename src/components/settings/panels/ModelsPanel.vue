@@ -151,7 +151,7 @@
     <Teleport to="body">
       <Transition name="modal-fade">
         <div v-if="showDialog" class="modal-overlay">
-          <div class="modal-container">
+          <div class="modal-container" role="dialog" aria-modal="true">
             <!-- Header -->
             <div class="modal-header">
               <h4>{{ isEditing ? '编辑模型' : '添加模型' }}</h4>
@@ -743,15 +743,22 @@ function handleClickOutside(e: MouseEvent) {
   }
 }
 
+// Escape 关闭模型对话框
+function handleKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && showDialog.value) closeDialog()
+}
+
 onMounted(() => {
   if (store.modelConfigs.length === 0 && !store.modelsLoading) {
     store.fetchModelConfigs()
   }
   document.addEventListener('click', handleClickOutside)
+  window.addEventListener('keydown', handleKeydown)
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('click', handleClickOutside)
+  window.removeEventListener('keydown', handleKeydown)
 })
 
 // ── 辅助函数 ──
@@ -951,10 +958,10 @@ return String(n)
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 10000;
+  z-index: 2100;
 }
 .modal-container {
-  background: var(--bg-input-solid);
+  background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
   border-radius: 10px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
