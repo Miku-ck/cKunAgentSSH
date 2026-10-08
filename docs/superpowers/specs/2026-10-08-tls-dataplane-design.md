@@ -300,8 +300,18 @@ gatewayId?: string        // via==='gateway' 必填，弱引用 GatewayRecord.id
 5. **§6 的 UI 范围收窄**。接入页只放「连接 / 通道」两个页签：HSC 的 日志/设置 两页在本版
    没有对应数据面，不放空标签（本仓先例：侧栏那枚永灰的「插件」行是被拆掉的）。
    「最优通道」「网关探测」两个开关同理不进 UI —— UDP 承载是二期，画一个不接线的开关等于
-   造一个失效设置项。CTA 用**描边**而非 HSC 的实心块，与 `TunnelView.vue:284-289` 同一取舍；
-   `designs/hsc-replica-mockup-v2.html` 已同步改成描边，稿码一致。
+   造一个失效设置项。
+6. **组件名与皮都在验收时被改了**。§6 写的 `GatewayView.vue` 落地为
+   `AccessView.vue` + `AccessModal.vue`（标题栏入口 `安全接入（TLS）`）。用户在实页上圈了四条：
+   - 按钮不再由组件自带 scoped `.btn` 定义，一律走 `src/styles/button.css` 的全局系统
+     （`.btn` / `.btn-primary` / `.btn-danger` / `.btn-ghost` / `.btn-sm`，24px 高 12px 字）；
+     「断开」按该文件的语义表归 danger。页签条右端的「＋添加连接」原是裸文本链接钮，
+     与全页其他按钮不同族，改为同一颗 `.btn.btn-primary`。稿子同步把按钮块换成 button.css 逐字规则。
+   - 空态只留一行「还没有接入网关」并在页面体内居中，不再重复一颗添加按钮（入口已在页签条上）。
+   - 删掉所有解释性灰字段落（空态说明、通道页的 chan 奇偶说明、弹窗里的口令传输说明、
+     TOFU 弹窗的 pinning 说理）。**口径：这类 prose 属冗余，此后不写** —— 见记忆
+     [[feedback-ui-no-redundant-helper-prose]]。字段级的一次性提示（如「留空 = 保留已存口令」）
+     不算这类，它是输入语义而不是讲课。
 
 **测试口径的变更**：`vitest.config.ts` 的 include 加了 `electron/**/*.test.ts`。会话层依赖
 `node:stream`，搬不进 `shared/`（那边同时被 `tsconfig.web` 收，而 web 侧没有 node 类型），
@@ -313,3 +323,7 @@ gatewayId?: string        // via==='gateway' 必填，弱引用 GatewayRecord.id
 两个新组件因此被自动纳入「禁 hex / 禁字面字族 / 禁令牌回落值 / 强调色底禁写死白字 /
 :root 令牌须有消费方」五条守卫。`node gateway/hillgw.mjs --selftest` 16 项全过，
 其中 6 条 golden 字节与 TS 测试里的字面量逐字相同 —— 两份实现的防漂移锚点。
+改完四条批注后同一对命令复跑，仍是 0 错 / 434 绿。
+渲染这一层本机拿不到截图（浏览器视口 0×0），改用量测核对：空态盒在页面体内的中心点
+(416, 433) 对容器中心 (415.5, 433)，页签条按钮 computed 为 24px 高 / 12px 字 / 4px 圆角 /
+透明底 + `color-mix(accent 50%)` 描边 —— 与 button.css 逐字一致；组件内已无 scoped `.btn` 声明。
