@@ -2218,7 +2218,7 @@ defineExpose({ restoreDraft, prefill })
   gap: 4px;
   height: 22px;
   padding: 0 8px;
-  border: 1px dashed #4d4d50;
+  border: 1px dashed var(--border-default);
   border-radius: 6px;
   color: var(--text-secondary);
   font-size: 11px;

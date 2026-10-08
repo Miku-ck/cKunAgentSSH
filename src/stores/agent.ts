@@ -170,6 +170,9 @@ export const useAgentStore = defineStore('agent', () => {
   // 绕过 REST 路由，SchedulesView 靠 watch 本计数做失效刷新。
   // 不进 _reset()——它跨 run 单调递增，重置会丢掉运行间隙的变更通知
   const scheduleRev = ref(0)
+  // 澄清向导关闭定时器池——clarification_done 后 800ms 自动清除向导组件。
+  // 组件卸载时 _reset 统一清理，避免挂载间隙 timer 访问已销毁响应式对象
+  const pendingWizardTimers = new Set<ReturnType<typeof setTimeout>>()
 
   let abortFn: (() => void) | null = null
   /**
@@ -380,6 +383,9 @@ export const useAgentStore = defineStore('agent', () => {
     currentConversationId.value = ''
     intentionInfo.value = null
     clarificationWizard.value = null
+    // 清理所有 pending 的向导关闭定时器，避免组件卸载后 timer 仍触发回调
+    for (const timerId of pendingWizardTimers) clearTimeout(timerId)
+    pendingWizardTimers.clear()
     _helpRequestedThisRun = false
     aborted.value = false
   }
@@ -753,11 +759,13 @@ export const useAgentStore = defineStore('agent', () => {
           wiz.submitted = true
         }
         // 短暂延迟后清除（让组件播放一个完成动画/提示）
-        setTimeout(() => {
+        const timerId = setTimeout(() => {
           if (clarificationWizard.value === wiz) {
             clarificationWizard.value = null
           }
+          pendingWizardTimers.delete(timerId)
         }, 800)
+        pendingWizardTimers.add(timerId)
         break
       }
 

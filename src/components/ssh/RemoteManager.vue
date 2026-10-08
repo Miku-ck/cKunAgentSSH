@@ -630,7 +630,7 @@ onUnmounted(() => {
 }
 
 .ctx-item.danger:hover {
-  background: rgba(244, 135, 113, 0.15);
+  background: color-mix(in srgb, var(--accent-red) 15%, transparent);
   color: var(--accent-red);
 }
 

@@ -558,7 +558,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   padding: 1px 6px; font-size: 10px; border-radius: 8px;
   background: var(--bg-active); color: var(--text-tertiary);
 }
-.badge.online { color: var(--accent-green); background: rgba(78,201,176,0.12); }
+.badge.online { color: var(--accent-green); background: color-mix(in srgb, var(--accent-green) 12%, transparent); }
 .badge.offline { color: var(--text-tertiary); background: var(--bg-hover); }
 
 .pane-actions { display: flex; gap: 1px; }
@@ -621,7 +621,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   border-radius: 4px;
 }
 .drive-option:hover { background: var(--bg-hover); color: var(--text-primary); }
-.drive-option.active { color: var(--accent-cyan); background: rgba(0,120,212,0.1); }
+.drive-option.active { color: var(--accent-cyan); background: color-mix(in srgb, var(--accent-primary) 10%, transparent); }
 .drive-option svg { flex-shrink: 0; }
 
 .breadcrumb {
@@ -677,7 +677,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   border-bottom: 1px solid transparent;
 }
 .file-row:hover { background: var(--bg-hover); }
-.file-row.selected { background: rgba(0,120,212,0.15); border-color: rgba(0,120,212,0.3); }
+.file-row.selected { background: color-mix(in srgb, var(--accent-primary) 15%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent); }
 
 .file-name { display: flex; align-items: center; gap: 8px; overflow: hidden; }
 .file-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -722,7 +722,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
 /* 新建文件夹对话框（风格与 SftpView 的 rename 对话框一致） */
 .mkdir-overlay {
   position: fixed; inset: 0;
-  background: rgba(0,0,0,0.5);
+  background: rgba(0,0,0,0.6);
   display: flex; align-items: center; justify-content: center;
   z-index: 1001;
 }
@@ -769,7 +769,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
 .sftp-pane.drag-target::after {
   content: '';
   position: absolute; inset: 0;
-  background: rgba(78,201,176,0.08);
+  background: color-mix(in srgb, var(--accent-green) 8%, transparent);
   border: 2px dashed var(--accent-green);
   pointer-events: none; z-index: 5;
 }

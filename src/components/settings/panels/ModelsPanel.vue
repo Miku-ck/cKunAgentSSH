@@ -3,10 +3,6 @@
     <header class="panel-header">
       <h3>模型</h3>
       <p class="panel-desc">管理 LLM 提供商与模型配置</p>
-      <p class="panel-desc">
-        两档默认互不影响：★ SSH 默认 = 对话 / 终端 / 定时任务读的那档；
-        ⊕ 全局默认 = SSH 档未设时，起标题等后台链路兜底读的那档。
-      </p>
     </header>
 
     <div class="panel-body">
@@ -59,14 +55,14 @@
             </div>
             <div class="model-card-actions">
               <!-- 审查R2修复：忙态判断由单值 === 改为 Set.has（并发操作互不顶掉） -->
-              <button class="btn-icon" title="测试连接" @click="handleTest(m.id)" :disabled="testingIds.has(m.id)">
+              <button class="icon-btn" title="测试连接" @click="handleTest(m.id)" :disabled="testingIds.has(m.id)">
                 <svg v-if="!testingIds.has(m.id)" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
                 <div v-else class="spinner spinner-sm" />
               </button>
               <!-- A1：切换 SSH 默认模型；已是默认时按钮置灰，靠 title 解释为什么点不动 -->
               <button
-                class="btn-icon"
-                :class="{ 'btn-icon-default-active': m.is_default_ssh }"
+                class="icon-btn"
+                :class="{ 'icon-btn-default-active': m.is_default_ssh }"
                 :title="m.is_default_ssh ? '已是 SSH 默认模型' : '设为 SSH 默认模型'"
                 :disabled="m.is_default_ssh || defaultingIds.has(key(m.id, 'ssh'))"
                 @click="handleSetDefault(m, 'ssh')"
@@ -77,8 +73,8 @@
               <!-- C9：全局默认（is_default）。此前 UI 只能写 SSH 档，而全局档是活消费者
                    （后处理起标题、terminal/agent 在 SSH 档未设时的兜底链）——看得到回落却调不到。 -->
               <button
-                class="btn-icon"
-                :class="{ 'btn-icon-default-active': m.is_default }"
+                class="icon-btn"
+                :class="{ 'icon-btn-default-active': m.is_default }"
                 :title="m.is_default ? '已是全局默认模型' : '设为全局默认模型'"
                 :disabled="m.is_default || defaultingIds.has(key(m.id, 'global'))"
                 @click="handleSetDefault(m, 'global')"
@@ -86,14 +82,14 @@
                 <svg v-if="defaultingIds.has(key(m.id, 'global'))" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/></svg>
                 <svg v-else viewBox="0 0 24 24" width="14" height="14" :fill="m.is_default ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
               </button>
-              <button class="btn-icon" title="编辑" @click="openEditDialog(m)">
+              <button class="icon-btn" title="编辑" @click="openEditDialog(m)">
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
               </button>
               <!-- 默认模型删不掉是后端的硬规则（database.py delete 前查两档 is_default 直接
                    raise ValueError），而面板原来照样可点，失败把英文原文弹进 toast，且全仓
                    没有"取消默认"的入口 —— 一旦成为默认就看起来永久删不掉。先把话说在前面。 -->
               <button
-                class="btn-icon btn-icon-danger"
+                class="icon-btn icon-btn-danger"
                 :disabled="isAnyDefault(m)"
                 :title="isAnyDefault(m) ? '默认模型不可删除：先把默认切到别的模型' : '删除'"
                 @click="handleDelete(m.id, m.name)"
@@ -934,7 +930,7 @@ return String(n)
 
 /* 按钮 */
 
-.btn-icon {
+.icon-btn {
   width: 28px; height: 28px;
   display: flex; align-items: center; justify-content: center;
   background: transparent;
@@ -944,11 +940,11 @@ return String(n)
   cursor: pointer;
   transition: all 0.15s;
 }
-.btn-icon:hover { background: var(--bg-hover); color: var(--text-primary); }
-.btn-icon:disabled { opacity: 0.3; cursor: not-allowed; }
-.btn-icon-danger:hover { background: color-mix(in srgb, var(--danger-text) 10%, transparent); color: var(--danger-text); }
-.btn-icon-default-active { color: var(--accent-yellow); opacity: 1 !important; }
-.btn-icon-default-active:disabled { opacity: 0.75 !important; cursor: default; }
+.icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.icon-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+.icon-btn-danger:hover { background: color-mix(in srgb, var(--danger-text) 10%, transparent); color: var(--danger-text); }
+.icon-btn-default-active { color: var(--accent-yellow); opacity: 1 !important; }
+.icon-btn-default-active:disabled { opacity: 0.75 !important; cursor: default; }
 
 /* ── Modal ── */
 .modal-overlay {

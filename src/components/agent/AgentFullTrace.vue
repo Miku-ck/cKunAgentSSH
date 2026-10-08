@@ -107,7 +107,6 @@ const stateChain = computed(() => {
   return out.slice(0, 24)
 })
 
-// 工具调用明细不在前端展示，dbCalls 已移除
 </script>
 
 <style scoped>
@@ -139,7 +138,7 @@ const stateChain = computed(() => {
   border-radius: 8px;
 }
 .ft-hint { margin: 0; font-size: 11.5px; color: var(--text-secondary); }
-.ft-hint.err { color: #d98f86; }
+.ft-hint.err { color: var(--status-error-text); }
 .ft-hint.muted { color: var(--text-tertiary); }
 .ft-retry {
   background: none; border: none; color: var(--accent-primary);
@@ -151,8 +150,8 @@ const stateChain = computed(() => {
   border: 1px solid var(--border-default); color: var(--text-secondary);
   font-family: ui-monospace, Consolas, monospace;
 }
-.ft-chip.ok { color: #7fbc92; border-color: rgba(127,188,146,.35); }
-.ft-chip.err { color: #cf8a80; border-color: rgba(207,138,128,.35); }
+.ft-chip.ok { color: var(--status-success-text); border-color: color-mix(in srgb, var(--status-success-text) 35%, transparent); }
+.ft-chip.err { color: var(--status-error-text); border-color: color-mix(in srgb, var(--status-error-text) 35%, transparent); }
 .ft-chip.muted { color: var(--text-tertiary); }
 .ft-states { display: flex; align-items: center; gap: 6px; font-size: 11px; flex-wrap: wrap; }
 .ft-states-label { color: var(--text-tertiary); }

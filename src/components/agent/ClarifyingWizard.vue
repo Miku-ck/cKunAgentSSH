@@ -310,11 +310,11 @@ onUnmounted(() => {
 .clarify-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(0, 0, 0, 0.6);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 3200;
+  z-index: 2500;
   backdrop-filter: blur(2px);
 }
 
@@ -339,7 +339,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   padding: 10px 14px 8px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .clarify-header-left {
@@ -370,11 +370,11 @@ onUnmounted(() => {
 /* ── 命令上下文条 ── */
 .clarify-context {
   padding: 8px 14px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
   gap: 6px;
-  background: rgba(0, 0, 0, 0.18);
+  background: var(--bg-input);
 }
 
 .ctx-cmd {
@@ -393,7 +393,7 @@ onUnmounted(() => {
   padding: 1px 5px;
   border: 1px solid var(--border-subtle);
   border-radius: 2px;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--bg-hover);
 }
 
 .ctx-cmd-text {
@@ -401,7 +401,7 @@ onUnmounted(() => {
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--status-info-text);
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--bg-input);
   border-radius: 2px;
   padding: 3px 7px;
   overflow: hidden;
@@ -462,7 +462,7 @@ onUnmounted(() => {
   width: 100%;
   min-height: 34px;
   padding: 6px 10px;
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--bg-input);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -475,7 +475,7 @@ onUnmounted(() => {
 }
 
 .clarify-option:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--bg-hover);
   border-color: var(--border-default);
   color: var(--text-primary);
 }
@@ -497,7 +497,7 @@ onUnmounted(() => {
   font-size: 10px;
   font-weight: 700;
   font-family: var(--font-mono);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--bg-hover);
   color: var(--text-tertiary);
   border: 1px solid var(--border-subtle);
   transition: all 0.1s ease;
@@ -506,7 +506,9 @@ onUnmounted(() => {
 
 .badge.selected {
   background: var(--card-perm-text);
-  color: #1a1a0a;
+  /* 压在 --card-perm-text 上的前景：深色主题是暖黄底（需深字）、浅色/手记是深褐底
+     （需浅字）。--bg-base 两头都对（黑/白），故不写死 -- */
+  color: var(--bg-base);
   border-color: var(--card-perm-text);
 }
 
@@ -543,8 +545,8 @@ onUnmounted(() => {
   justify-content: flex-end;
   gap: 6px;
   padding: 8px 14px 10px;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
-  background: rgba(0, 0, 0, 0.18);
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-input);
 }
 
 .cbtn {

@@ -1480,27 +1480,12 @@ if (!gotSingleInstanceLock) {
   })
 }
 
-app.whenReady().then(async () => {
-  // 双保险：非主实例不启动任何服务（quit 与 ready 的时序竞态下仍然安全）
-  if (!gotSingleInstanceLock) return
-  installCsp()
-  setupWindowIPC()
-  setupFSIPC()
-  // 桌面偏好必须在 createWindow 之前回填：关窗隐藏分支要在第一个窗口存在前就位
-  await initDesktopPrefs(() => mainWindow)
-  createWindow()
-  setupPtyIPC()
-  setupSSHIPC()
-  setupSkillsIPC()
-  setupSftpIPC()
-
   // 审查修复：顶层异常兜底 — 原实现无 uncaughtException/unhandledRejection
   // 处理器，主进程任何未捕获异常（IPC handler 竞态、异步回调遗漏的 reject）
   // 直接崩掉整个应用（丢 PTY/SSH 连接 + 后端进程变孤儿）。
-  // 策略：记日志 + 尽力保活；连续 3 次 uncaught 视为不可恢复，主动退出
-  // 审查R2修复：计数改为 60s 时间窗 — 原 uncaughtCount 只增不清零，"连续3次"
-  // 实为进程生命周期内任意 3 次分散异常即 app.quit()。现仅统计窗口内的异常，
-  // 超出窗口的历史记录自动重置。
+  // 策略：记日志 + 尽力保活；60s 窗口内 3 次 uncaught 视为不可恢复，主动退出。
+  // 审查修复：提前到 whenReady 之前——installCsp / setupFSIPC 等同步调用
+  // 若抛出异常，未注册 handler 将直接崩溃。
   const UNCAUGHT_WINDOW_MS = 60_000
   const uncaughtTimes: number[] = []
   process.on('uncaughtException', (err) => {
@@ -1522,6 +1507,20 @@ app.whenReady().then(async () => {
     // 直接退出会把一次可恢复错误放大成应用崩溃
     console.error('[main] unhandledRejection:', reason)
   })
+
+app.whenReady().then(async () => {
+  // 双保险：非主实例不启动任何服务（quit 与 ready 的时序竞态下仍然安全）
+  if (!gotSingleInstanceLock) return
+  installCsp()
+  setupWindowIPC()
+  setupFSIPC()
+  // 桌面偏好必须在 createWindow 之前回填：关窗隐藏分支要在第一个窗口存在前就位
+  await initDesktopPrefs(() => mainWindow)
+  createWindow()
+  setupPtyIPC()
+  setupSSHIPC()
+  setupSkillsIPC()
+  setupSftpIPC()
 
   // Start Electron bridge for backend → main process remote execution
   if (sshManager) {
@@ -1609,6 +1608,9 @@ app.on('before-quit', () => {
   ptyManager?.destroyAll()
   sshManager?.disconnectAll()
   tunnelManager?.stopAll()
+  // 审查修复：before-quit 是 macOS 唯一退出路径（window-all-closed 的 darwin
+  // 分支跳过清理），此前遗漏 gatewayManager 会导致网关 TLS 连接 + 重连定时器泄漏
+  gatewayManager?.stopAll()
   backendManager?.stop()
   bridgeWsClient?.stop()
   electronBridge?.stop()

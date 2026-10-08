@@ -70,7 +70,6 @@
           </tbody>
         </table>
         <p v-else class="pane-note">{{ onlineIds.length ? '当前没有活动通道。' : '没有在线的网关。' }}</p>
-        <button class="btn btn-sm refresh" :disabled="!onlineIds.length" @click="loadChannels">刷新</button>
       </div>
     </div>
 
@@ -108,7 +107,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineAsyncComponent, ref, onMounted, onUnmounted } from 'vue'
+import { computed, defineAsyncComponent, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useAccessStore } from '@/stores/access'
 import { useTunnelStore } from '@/stores/tunnel'
 import { useToastStore } from '@/stores/toast'
@@ -240,14 +239,20 @@ async function askDelete(id: string): Promise<void> {
 
 function openChanTab(): void {
   tab.value = 'chan'
+  // 这里刚赋值时 watch 会自己取一次，别再显式取第二遍；只有下拉本来就有值（回到本页）
+  // 才需要这条显式调用，否则 watch 不触发。
   if (!chanGw.value && onlineIds.value.length) chanGw.value = onlineIds.value[0]
-  void loadChannels()
+  else void loadChannels()
 }
 
 async function loadChannels(): Promise<void> {
   if (!chanGw.value) { rows.value = []; return }
   rows.value = await accessStore.channels(chanGw.value)
 }
+
+/** 通道表原先只有 openChanTab() 取一次，切网关的下拉不重取 —— 那枚「刷新」是唯一的补救
+ *  入口。按批注去掉按钮后，这条 watch 把重取挂回下拉本身（选谁 = 要看谁的通道）。 */
+watch(chanGw, () => void loadChannels())
 
 async function acceptKey(): Promise<void> {
   if (!pending.value) return
@@ -432,7 +437,6 @@ table.chan tr:last-child td { border-bottom: none; }
 table.chan tr.fin td { color: var(--text-tertiary); }
 .dir-c2g { color: var(--tint-l); }
 .dir-g2c { color: var(--tint-r); }
-.refresh { margin-top: 14px; }
 
 .statusbar {
   flex: none;
@@ -451,8 +455,6 @@ table.chan tr.fin td { color: var(--text-tertiary); }
 
 .empty {
   width: min(420px, 100%);
-  border: 1px dashed var(--border-default);
-  border-radius: var(--radius-lg);
   padding: 44px 20px;
   text-align: center;
   color: var(--text-tertiary);

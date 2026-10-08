@@ -36,7 +36,7 @@ ALLOWED_UPLOAD_NAMES = {"makefile", "dockerfile"}
 
 def _uploads_root() -> Path:
     """上传文件根目录：与数据库同目录下的 uploads/（跨重装稳定）"""
-    return Path(db._db_path).parent / "uploads"
+    return Path(db.get_db_path()).parent / "uploads"
 
 
 def _sanitize_conv(raw: str) -> str:

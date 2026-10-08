@@ -334,7 +334,7 @@ onMounted(refresh)
 .audit-btn.danger:hover:not(:disabled) {
   color: var(--accent-red);
   border-color: var(--accent-red);
-  background: rgba(224, 108, 96, 0.12);
+  background: color-mix(in srgb, var(--accent-red) 12%, transparent);
 }
 .audit-btn:disabled { opacity: 0.5; cursor: default; }
 .audit-filters {
@@ -382,7 +382,7 @@ onMounted(refresh)
   vertical-align: top;
 }
 .audit-table tr:hover td { background: var(--bg-hover); }
-.audit-table tr.prod td { background: rgba(244, 135, 113, 0.05); }
+.audit-table tr.prod td { background: color-mix(in srgb, var(--accent-red) 5%, transparent); }
 .mono { font-family: var(--font-mono); }
 .env {
   font-size: 11px;

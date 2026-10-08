@@ -18,6 +18,18 @@ import logging
 from typing import Any, AsyncIterator, Optional
 
 from agent.remote_protocol import EXIT_CODE_PREFIX
+# 审查修复：热路径 import 提到模块级——原实现每轮迭代 from...import 跑 4 次
+# （classify / reclassify / get_guide_for_iteration / detect_batch_reading），
+# Python 缓存模块但 attribute lookup 仍每轮跑一次。循环外提一次即可。
+from agent.intention import (
+    TaskType,
+    classify as classify_intention,
+    detect_batch_reading,
+    get_guide_for_iteration,
+    get_progressive_gathering_guide,
+    get_reasoning_budget_for_iteration,
+    reclassify,
+)
 
 from .contracts import (
     LLMOutput,
@@ -79,7 +91,6 @@ class Driver:
         model_max_reasoning = ctx.config.max_reasoning_tokens  # 保存模型配置的上限
         if ctx.config.enable_intention_guide:
             try:
-                from agent.intention import classify as classify_intention
                 intention = classify_intention(ctx.task, max_budget=model_max_reasoning)
                 # 意图识别的预算不能超过模型配置的上限
                 if intention.reasoning_budget is not None and model_max_reasoning is not None:
@@ -138,7 +149,6 @@ class Driver:
                 and iteration % ctx.config.reclassify_interval == 0
             ):
                 try:
-                    from agent.intention import reclassify
                     new_intention = reclassify(
                         original=intention,
                         iteration=iteration,
@@ -211,10 +221,6 @@ class Driver:
             #   - 其他等级 → 保持原引导
             if intention is not None:
                 try:
-                    from agent.intention import (
-                        get_guide_for_iteration,
-                        get_reasoning_budget_for_iteration,
-                    )
                     guide = get_guide_for_iteration(intention, iteration)
                     # 动态调整本轮思考预算（首轮保持完整，后续收紧到 1024）
                     # 必须带 model_max_reasoning 钳制：intention.reasoning_budget 是
@@ -357,7 +363,6 @@ class Driver:
                 and intention is not None
             ):
                 try:
-                    from agent.intention import detect_batch_reading, get_progressive_gathering_guide
                     if detect_batch_reading(llm_out.tool_calls, threshold=3):
                         guide = get_progressive_gathering_guide(iteration)
                         # 修复：使用 "user" 角色而非 "system"，避免添加到消息末尾时触发 400 错误
@@ -802,8 +807,6 @@ class Driver:
         - QUERY / RESEARCH：保持全部工具，由 guide prompt 引导模型主动联网
         - 其他：保持全部工具
         """
-        from agent.intention import TaskType
-
         if intention.task_type == TaskType.CONVERSATION:
             logger.info("意图为 CONVERSATION，禁用所有工具 schema")
             return []
