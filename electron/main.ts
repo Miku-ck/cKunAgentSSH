@@ -553,7 +553,9 @@ function setupFSIPC(): void {
   handleTrusted('fs:selectImage', async () => {
     const result = await dialog.showOpenDialog(mainWindow!, {
       properties: ['openFile'],
-      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }],
+      // 白名单只有一处：IMAGE_MIME_MAP。对话框再抄一份扩展名清单，
+      // 就是「加了新格式忘改另一份」的下一次分叉。
+      filters: [{ name: 'Images', extensions: Object.keys(IMAGE_MIME_MAP).map(e => e.slice(1)) }],
     })
     if (result.canceled || result.filePaths.length === 0) return null
     const filePath = result.filePaths[0]
@@ -565,9 +567,18 @@ function setupFSIPC(): void {
         throw new Error('图片过大（超过 15MB），请选择更小的图片')
       }
       const origExt = extname(filePath).toLowerCase()
+      // 认不出的扩展名必须当场拒绝，而不是回落到 'image/png'：
+      // 挑一个无扩展名或 .tif 的文件（对话框能切「所有文件」），原先会把它按
+      // `background.png` 写盘、对外报 image/png —— 扩展名与字节不符，重启后
+      // resolveBackgroundPath 按白名单放行、渲染端拿到一张打不开的"PNG"，
+      // 而旧的那张可用背景已经在随后的清理里删掉了，用户等于把背景弄丢。
+      const declaredMime = IMAGE_MIME_MAP[origExt]
+      if (!declaredMime) {
+        throw new Error(`不支持的图片格式 ${origExt || '（无扩展名）'}，请选择 ${Object.keys(IMAGE_MIME_MAP).join(' / ')}`)
+      }
       // finalExt/mime 在压缩分支可能被重写，确保扩展名与实际字节流一致
       let finalExt = origExt
-      let mime = IMAGE_MIME_MAP[origExt] || 'image/png'
+      let mime = declaredMime
       const stripDot = (e: string): string => (e.startsWith('.') ? e.slice(1) : e)
       const bgDir = backgroundDir()
       await mkdir(bgDir, { recursive: true })
@@ -595,7 +606,7 @@ function setupFSIPC(): void {
           }
         }
       }
-      const fileName = `${BG_FILE_PREFIX}${stripDot(finalExt) || 'png'}`
+      const fileName = `${BG_FILE_PREFIX}${stripDot(finalExt)}`
       const targetPath = join(bgDir, fileName)
       await writeFile(targetPath, finalBuf)
       // 新文件落盘成功后再清理旧背景文件（不同扩展名残留）：清理若先于写入，
@@ -925,7 +936,9 @@ function setupPtyIPC(): void {
   })
 
   handleTrusted('pty:resize', (_event, id: string, cols: number, rows: number) => {
-    ptyManager!.resize(id, cols, rows)
+    // 与 pty:create / ssh:connect / ssh:reconnect 同一把钳子：resize 是这四条里
+    // 唯一还直传渲染层数值的一条，非法 cols/rows 会直接进 node-pty 的 ioctl。
+    ptyManager!.resize(id, clampPtyDimension(cols, 80, 1, 1000), clampPtyDimension(rows, 24, 1, 500))
   })
 
   handleTrusted('pty:destroy', (_event, id: string) => {
@@ -1160,7 +1173,8 @@ function setupSSHIPC(): void {
   })
 
   handleTrusted('ssh:resize', (_event, id: string, cols: number, rows: number) => {
-    sshManager!.resize(id, cols, rows)
+    // 同 pty:resize：钳制补齐，别让四条路径里只有三条设防
+    sshManager!.resize(id, clampPtyDimension(cols, 80, 1, 1000), clampPtyDimension(rows, 24, 1, 500))
   })
 
   handleTrusted('ssh:disconnect', (_event, id: string) => {
@@ -1597,17 +1611,12 @@ app.on('window-all-closed', () => {
   // 审查修复：darwin 分支不再销毁 PTY/SSH/后端 — 原实现关最后一个窗口即
   // disconnectAll + stop 后端，但 macOS 上应用仍驻留 Dock，点图标 activate
   // 重建窗口后后端已死且不重启（whenReady 只跑一次），应用半残。
-  // 资源释放统一交给 before-quit（真正退出时才执行）。
-  if (process.platform !== 'darwin') {
-    ptyManager?.destroyAll()
-    sshManager?.disconnectAll()
-    tunnelManager?.stopAll()
-    gatewayManager?.stopAll()
-    backendManager?.stop()
-    bridgeWsClient?.stop()
-    electronBridge?.stop()
-    app.quit()
-  }
+  //
+  // 非 darwin 分支原先把那七条释放语句又抄了一遍：app.quit() 必然触发
+  // before-quit，同一批资源于是释放两次，而清单是两份 —— 已经分叉过一次
+  // （gatewayManager 只补进了 before-quit 那份，注释里就写着这件事）。
+  // 释放清单只留 before-quit 一处：这里只负责「窗口全关 = 退出」。
+  if (process.platform !== 'darwin') app.quit()
 })
 
 app.on('before-quit', () => {
