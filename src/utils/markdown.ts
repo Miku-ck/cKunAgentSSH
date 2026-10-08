@@ -41,6 +41,22 @@ function decodeHtml(s: string): string {
  * - 每个代码块包裹在 .code-block-wrapper 中，附带语言标签和复制按钮
  * - 整体经 DOMPurify 净化，移除 onerror/onclick 等危险属性与 <script> 标签
  */
+/**
+ * S9-01 修复：此前只 ADD_ATTR、从没禁过任何标签/属性，而 DOMPurify 的**默认白名单
+ * 含 `<style>` 与 `style=`** —— 被渲染的 markdown 里有远端主机书写的内容（终端回显、
+ * 读来的文件正文、工具输出），于是它们拿到的是全文档级 CSS：`position:fixed;inset:0`
+ * 覆盖整个窗口、把敏感内容渲染到不可见处、用 `url()` 外带页面结构。
+ *
+ * 只禁样式通道，其余保持默认（代码块高亮靠 class，由 highlight.js 生成，无内联样式；
+ * 复制按钮是 `<button type="button">`，不在禁止之列）。原 ADD_ATTR 里的 `class` 是
+ * DOMPurify 默认已含项（S9-22 登记的空操作），删掉；`target` 留着（外链新标签打开）。
+ */
+const SANITIZE_OPTIONS = {
+  ADD_ATTR: ['target'],
+  FORBID_TAGS: ['style'],
+  FORBID_ATTR: ['style'],
+}
+
 export function renderMarkdown(text: string): string {
   if (!text) return ''
   try {
@@ -72,11 +88,9 @@ export function renderMarkdown(text: string): string {
           `</div>`
       },
     )
-    return DOMPurify.sanitize(highlighted, {
-      ADD_ATTR: ['class', 'target'],
-    })
+    return DOMPurify.sanitize(highlighted, SANITIZE_OPTIONS)
   } catch (e) {
     console.warn('[renderMarkdown] failed, falling back to sanitized plain text:', e)
-    return DOMPurify.sanitize(text)
+    return DOMPurify.sanitize(text, SANITIZE_OPTIONS)
   }
 }
