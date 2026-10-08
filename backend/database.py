@@ -2850,6 +2850,13 @@ def prune_conversations(keep_count: int = 1000) -> int:
 
 
 # ── 远程后台任务注册表（agent_jobs）──────────────────────────────
+# 终态清单的单一事实源：`update_agent_job_status`（要不要落 finished_at）、
+# `get_running_agent_jobs`（哪些行算"还没结束"）、`ops_job.JobManager.update_status`
+# （内存侧要不要触发淘汰）三处共用同一份。此前各抄一遍字面量，而 `exited`
+# 只在内存侧算终态 —— 库里它 finished_at 恒 NULL 且每次重启都被"恢复"成在跑任务。
+JOB_TERMINAL_STATUSES: tuple[str, ...] = ("finished", "failed", "killed", "exited")
+
+
 def save_agent_job(job_id: str, run_id: str, session_id: str, cmd: str,
                    pid: int | None, log_dir: str, status: str = "running",
                    out_offset: int = 0) -> None:
@@ -2895,7 +2902,7 @@ def update_agent_job_status(job_id: str, status: str,
     """
     conn = _get_conn()
     try:
-        terminal = status in ("finished", "failed", "killed")
+        terminal = status in JOB_TERMINAL_STATUSES
         if terminal:
             conn.execute(
                 """UPDATE agent_jobs SET status = ?, exit_code = ?,
@@ -2927,15 +2934,22 @@ def update_agent_job_offset(job_id: str, out_offset: int) -> None:
 
 
 def get_running_agent_jobs() -> list[dict]:
-    """列出全部未终结的远程任务（backend 重启后恢复注册表用）。"""
+    """列出全部未终结的远程任务（backend 重启后恢复注册表用）。
+
+    终态集合取 `JOB_TERMINAL_STATUSES`，与写侧 `update_agent_job_status` 同源 ——
+    写侧认终态、这里不认，那条已判死的记录就会在每次重启时被"恢复"成在跑任务。
+    `created_at` 只到秒（`_now()`），同秒并列是常态，补 `job_id` 让恢复顺序确定。
+    """
     conn = _get_conn()
     try:
+        marks = ",".join("?" for _ in JOB_TERMINAL_STATUSES)
         rows = conn.execute(
-            """SELECT job_id, run_id, session_id, cmd, pid, log_dir, status,
+            f"""SELECT job_id, run_id, session_id, cmd, pid, log_dir, status,
                       out_offset, created_at
                FROM agent_jobs
-               WHERE status NOT IN ('finished', 'failed', 'killed')
-               ORDER BY created_at""",
+               WHERE status NOT IN ({marks})
+               ORDER BY created_at, job_id""",
+            JOB_TERMINAL_STATUSES,
         ).fetchall()
         return [dict(r) for r in rows]
     finally:

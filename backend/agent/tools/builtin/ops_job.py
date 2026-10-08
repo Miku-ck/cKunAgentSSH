@@ -29,6 +29,7 @@
 """
 import asyncio
 import base64
+import calendar
 import shlex
 import threading
 import time
@@ -158,7 +159,11 @@ class JobManager:
                 return
             entry.status = status
             entry.exit_code = exit_code
-            if status in ("finished", "failed", "killed", "exited"):
+            # 终态清单取 database.JOB_TERMINAL_STATUSES（单一事实源，惰性导入与
+            # _persist_status 同一口径）：内存判终态、库侧判落 finished_at、恢复查询判
+            # "还没结束"的三处必须同一个答案，此前各抄一份，`exited` 只在前一处算终态。
+            import database as db
+            if status in db.JOB_TERMINAL_STATUSES:
                 self._evict_terminal_locked()
         if entry.remote:
             _persist_status(entry.job_id, status, exit_code)
@@ -200,7 +205,10 @@ class JobManager:
             if not job_id or self.get(job_id):
                 continue
             try:
-                start_ts = time.mktime(time.strptime(
+                # created_at 由 database._now() 写成 **UTC** 字符串，而 time.mktime 按
+                # **本地时区**解释 struct_time：UTC+8 主机上刚建的任务恢复后"已运行
+                # 28800 秒"，这个读数还会进模型上下文。timegm 是 UTC 口径的 mktime。
+                start_ts = calendar.timegm(time.strptime(
                     row.get("created_at") or "", "%Y-%m-%d %H:%M:%S"))
             except Exception:
                 start_ts = time.time()
@@ -736,7 +744,15 @@ async def _reconcile_remote(mgr: JobManager, entries: List[JobEntry]) -> None:
             continue
         ctx = _session_ctx(sid)
         pid_list = [e.pid for e in group]
-        ok, out = await run_headless(ctx, job_reconcile_alive_cmd(pid_list), timeout=15)
+        # 两次回传都要 keep_full（字节协议通道口径，见 exec_remote）：默认通道会
+        # truncate_output 头尾保留，把标记行插进正文中间 ——
+        #   · 判活清单被截 → 被截掉的 pid 不在 alive 集合里 → 活着的任务被判成已退出；
+        #   · rc 清单是被 `dead` **按下标**索引的 → 截断后整体错位，把 A 的退出码记到
+        #     B 头上（下面那条"只跳真正的哨兵行"的过滤防的是哨兵行错位，这是同一根因另一条路）。
+        # 单行只有 1~10 字节，越界要约几百上千条同会话任务同时存在，属"一次写错、
+        # 平时不发作"的隐患，所以从结构上断掉而不是加行数上限。
+        ok, out = await run_headless(
+            ctx, job_reconcile_alive_cmd(pid_list), timeout=15, keep_full=True)
         if not ok:
             # 本会话桥接不可达 — 保持原状态下次再对账。必须是 continue：
             # return 会让排在后面的会话整轮不被检查，而那些会话完全正常。
@@ -751,7 +767,8 @@ async def _reconcile_remote(mgr: JobManager, entries: List[JobEntry]) -> None:
             continue
         # 死掉的任务读 rc 文件定终态
         dead_dirs = [e.log_dir for e in dead]
-        ok2, out2 = await run_headless(ctx, job_reconcile_rcs_cmd(dead_dirs), timeout=15)
+        ok2, out2 = await run_headless(
+            ctx, job_reconcile_rcs_cmd(dead_dirs), timeout=15, keep_full=True)
         rcs = out2.splitlines() if ok2 else []
         # 只跳真正的哨兵行（含 `=`）：少一个 `=` 的宽松写法会把恰好以
         # "[exit_code" 开头的 rc 数据行一起删掉，后续 rcs[i] 与 dead_dirs 的

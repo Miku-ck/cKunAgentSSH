@@ -261,6 +261,88 @@ async def test_reconcile_dead_without_rc(monkeypatch):
     assert oj.JobManager.instance().get("j1").status == "exited"
 
 
+# ── 对账读 rc：位置对齐 + 恢复时按 UTC 解释 created_at ───────────
+
+@pytest.mark.asyncio
+async def test_对账两次回传都必须按字节协议取回(monkeypatch):
+    """判活清单与 rc 清单都是**按下标/整行**解析的，而 run_headless 默认 truncate_output。
+
+    截断会把标记行插进正文中间（`…[输出已截断，省略中间 N 字符]…`），splitlines 之后
+    下标整体错位 —— 结果是把 A 任务的退出码记到 B 任务头上（`_reconcile_remote` 里
+    "只跳真正的哨兵行"那条注释防的是哨兵行错位，这是同一根因的另一条路）。rc 每行
+    1~3 字节，要约 1300 条同时对账才会越界，所以这是一次性写错、平时不发作的那类隐患：
+    用 keep_full 从结构上断掉。
+    """
+    opts = []
+
+    async def fake(context, command, timeout=30, keep_full=False):
+        opts.append(keep_full)
+        if "kill -0" in command:
+            return True, "11 DEAD\n[exit_code=0]"
+        return True, "3\n[exit_code=0]"
+
+    monkeypatch.setattr(oj, "run_headless", fake)
+    _entry("j1", pid=11)
+    await oj.JobListTool().execute(_ctx())
+    # opts = [判活, 读 rc]
+    assert len(opts) == 2, opts
+    assert opts == [True, True], (
+        "对账的两次回传都必须 keep_full：判活清单被截会把活任务判成已退出，"
+        "rc 清单被截会整体错位、把 A 的退出码记到 B 头上")
+
+
+def test_restore_按_UTC_解释_created_at(monkeypatch):
+    """`database._now()` 落库的是 UTC 字符串，而 `time.mktime` 按**本地时区**解释 struct_time。
+
+    实测在 UTC+8 主机上：刚创建的远程任务被重启恢复后，job_list 报「已经跑了
+    28800 秒」—— 八小时凭空出现，且这条读数会进模型上下文影响后续判断。
+    """
+    import calendar
+    import time as _time
+    from datetime import datetime, timezone
+
+    import database as db
+
+    created = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    rows = [{
+        "job_id": "j9", "created_at": created, "cmd": "sleep 1", "pid": 777,
+        "log_dir": "/tmp/ckun_agent_jobs/j9", "status": "running",
+        "session_id": "sess-remote", "run_id": "run-1", "out_offset": 0,
+    }]
+    monkeypatch.setattr(db, "get_running_agent_jobs", lambda: rows)
+    monkeypatch.setattr(oj.JobManager, "_restored", False, raising=False)
+
+    mgr = oj.JobManager.instance()
+    mgr._ensure_restored()
+    e = mgr.get("j9")
+    assert e is not None, "恢复分支没跑起来，测试无效"
+    expected = calendar.timegm(_time.strptime(created, "%Y-%m-%d %H:%M:%S"))
+    assert abs(e.start_ts - expected) < 2, (
+        f"start_ts={e.start_ts} 与 UTC 口径差 {e.start_ts - expected:.0f}s：按本地时区解了 UTC 串")
+    assert oj._running_seconds(e, _time.time()) < 5
+
+
+def test_终态清单只许有一处字面量():
+    """状态字面量在三处各抄一遍时必然漂移：`update_status` 判终态、
+    `update_agent_job_status` 落 finished_at、`get_running_agent_jobs` 选恢复行。
+
+    实测漂移的后果：`exited` 只在内存侧算终态，库里它永远 `finished_at IS NULL`，
+    而且每次后端重启都被"恢复"成在跑任务（本文件上面那条 exited 用例就是它的来源）。
+    所以清单收进 `database.JOB_TERMINAL_STATUSES` 单一事实源，这里钉"不许再出现第二份
+    字面量"—— 行为侧的锁在 test_agent_job_carryover_and_legacy_migrate.py。
+    """
+    import pathlib
+
+    import database as db
+
+    assert set(db.JOB_TERMINAL_STATUSES) == {"finished", "failed", "killed", "exited"}
+    here = pathlib.Path(__file__).resolve().parents[1] / "agent" / "tools" / "builtin" / "ops_job.py"
+    src = here.read_text(encoding="utf-8")
+    assert "JOB_TERMINAL_STATUSES" in src, "ops_job 没有复用库侧终态清单"
+    assert '"finished", "failed", "killed", "exited"' not in src, (
+        "ops_job 里又抄了一份终态字面量清单 —— 两份清单必然漂移")
+
+
 # ── 字节守恒：offset 推进必须与 out.log 真实字节对齐 ─────────────
 # 读回内容必须逐字节还原（旧 splitlines+rejoin 会把 CRLF/孤立 CR 归一损坏）；
 # offset 每轮必须推进"日志段全长"，否则下一轮 tail -c +n 重复读或跳丢。

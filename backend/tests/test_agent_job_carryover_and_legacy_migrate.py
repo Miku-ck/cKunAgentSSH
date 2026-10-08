@@ -99,3 +99,25 @@ def test_migrate_survives_db_without_name_column(tmp_workspace):
     # 补完列必须还能按现列集读出来（SELECT 列清单与补列结果一致）
     assert db.list_models_config(), "迁移后模型列表不能为空"
     db._close_all_connections()
+
+
+def test_exited_是终态_finished_at_要落且不再被恢复(job_db):
+    """ops_job 的对账把"进程组已消失但没留下 rc"落成状态 `exited`。
+
+    库侧原先只认 ('finished','failed','killed') 三个字面量：`exited` 行既不落
+    finished_at（前端按「已结束」渲染时拿不到结束时间），又被 get_running_agent_jobs
+    当未终结任务返回 —— 每次后端重启都把这条已经判死的记录"恢复"成在跑任务，
+    再对账一轮、再写一次 exited，永不收敛。
+    """
+    db.save_agent_job("e1", "run-1", "sess-1", "sleep 1", 11, "/logs/e1", "running", 0)
+    db.update_agent_job_status("e1", "exited", None)
+
+    status, _offset, _code, finished_at, _run = _row("e1")
+    assert status == "exited"
+    assert finished_at, "exited 是终态：finished_at 不能留 NULL"
+
+    restored = {r["job_id"] for r in db.get_running_agent_jobs()}
+    assert "e1" not in restored, f"未终结查询把终态行又捞回来了：{restored}"
+    # 反向锁：真在跑的任务必须仍在恢复清单里，否则重启就丢任务
+    db.save_agent_job("r1", "run-1", "sess-1", "sleep 2", 22, "/logs/r1", "running", 0)
+    assert "r1" in {r["job_id"] for r in db.get_running_agent_jobs()}
