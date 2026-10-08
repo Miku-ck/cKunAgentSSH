@@ -246,24 +246,33 @@ def test_clarification_conclusion_preserved(monkeypatch, conclusion):
     assert row["conclusion"] == conclusion
 
 
-def test_audit_conclusion_whitelist_matches_frontend_list():
-    """前端结论下拉与后端白名单必须同源：前端可筛而后端写不进的项 = 永远为空的筛选，
-    后端能写而前端筛不出的项 = 审计页里看不见的记录。"""
+def test_audit_conclusion_三处清单同源():
+    """后端枚举、前端结论下拉、安全文档 §6 必须同源。
+
+    前端可筛而后端写不进的项 = 永远为空的筛选，后端能写而前端筛不出的项 = 审计页里
+    看不见的记录；而 `docs/security-boundary.md` §5 给「人工交互通道不加事前阻断」辩护
+    的前提就是「事后审计可追」—— 文档把口径写窄等于把替代防线写薄。实测这份守卫加入时
+    文档就少两个值（answered/skipped）。
+    """
     import re
     from pathlib import Path
 
-    audit_src = Path(audit.__file__).read_text(encoding="utf-8")
-    m = re.search(r"if conclusion not in \((.*?)\):", audit_src, re.S)
-    assert m, "白名单写法变化，请同步本测试"
-    written = set(re.findall(r'"([^"]+)"', m.group(1)))
+    written = set(audit.LEGAL_CONCLUSIONS)
+    assert len(written) == 10, f"枚举成员数变了（{sorted(written)}）：先确认三处是否同步"
 
     vue = Path(audit.__file__).parents[2] / "src" / "views" / "ssh" / "AuditView.vue"
     block = re.search(r'<select v-model="filters\.conclusion".*?</select>',
                       vue.read_text(encoding="utf-8"), re.S).group(0)
     shown = {v for v in re.findall(r'<option value="([a-z_]+)"', block) if v}
 
-    assert shown == written
-    assert {"answered", "skipped", "released", "revoked"} <= shown
+    doc = Path(audit.__file__).parents[2] / "docs" / "security-boundary.md"
+    m = re.search(r"conclusion ∈ \{([^}]*)\}", doc.read_text(encoding="utf-8"))
+    assert m, "文档 §6 没有 `conclusion ∈ {…}` 这行（口径被改写，守卫该红在这里）"
+    documented = {x.strip() for x in m.group(1).split(",") if x.strip()}
+
+    assert shown == written, f"仅下拉有 {shown - written}，仅枚举有 {written - shown}"
+    assert documented == written, f"仅文档有 {documented - written}，仅枚举有 {written - documented}"
+    assert {"answered", "skipped", "released", "revoked"} <= written
 
 
 # ── 包内技能空扫描不得当成「全删」 ────────────────────────────────────────

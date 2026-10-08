@@ -61,7 +61,9 @@ def _log(ctx: RunContext, command: str = CMD) -> None:
 
 
 def _guard() -> FilesystemGuard:
-    gate = PermissionGate()
+    from types import SimpleNamespace
+    from agent.tools import create_registry
+    gate = PermissionGate(saddle=SimpleNamespace(registry=create_registry()))
     gate._confirmed_permanent = set()
     return FilesystemGuard(permission_gate=gate)
 
@@ -369,3 +371,73 @@ def test_denied_command_leaves_no_pending_sig():
         _log(ctx)
         last = asyncio.run(det.check(ctx))
     assert last.intercepted and last.terminate, "被拒命令的重发应由循环检测兜底终止"
+
+
+# ── 兜底到期的审计落链：两条分支都要有 ──────────────────────────────────────
+
+def _log_tool(ctx: RunContext, tool: str, args: dict) -> None:
+    ctx.tool_calls_log.append({
+        "tool": tool,
+        "args": args,
+        "iteration": len(ctx.tool_calls_log),
+        "success": None,
+    })
+
+
+def _expire_pending(ctx: RunContext) -> None:
+    sig = tool_call_signature(ctx.tool_calls_log[-1])
+    ctx.metadata["permission_pending"][sig] = (
+        time.monotonic() - (reins_mod.approval_fallback_seconds() + 1))
+
+
+def test_兜底到期两条分支都落审计链(monkeypatch):
+    """命令级（FilesystemGuard）与工具级（PermissionGate）的过期判定必须同等可追。
+
+    安全边界 §6 承诺「AI 试了什么没成功同样可追」，而 §5 给人工交互通道不加事前阻断的
+    辩护也建立在这条承诺上。原实现只有守卫那半边在兜底到期时记 `denied`；
+    PermissionGate 的同一分支发了 permission_expired 却不落链 —— 于是
+    `service_manage` 这类**工具级**危险工具的一次过期审批在审计页里查不到任何痕迹，
+    与它自己的 prod 分支（同函数内就有一次 append_record_async）也不一致。
+    """
+    captured = {"gate": [], "guard": []}
+
+    def _cap(bucket: str):
+        async def _f(**kw):
+            captured[bucket].append(kw)
+            return None
+        return _f
+
+    monkeypatch.setattr(_gate_mod, "append_record_async", _cap("gate"))
+    monkeypatch.setattr(_guards_mod, "append_record_async", _cap("guard"))
+
+    # 工具级：service_manage（ToolMeta 里就是 dangerous，无 bound_command）
+    from types import SimpleNamespace
+    from agent.tools import create_registry
+    gate = PermissionGate(saddle=SimpleNamespace(registry=create_registry()))
+    gate._confirmed_permanent = set()
+    ctx = _ctx()
+    _log_tool(ctx, "service_manage", {"action": "restart", "service": "nginx"})
+    asyncio.run(gate.check(ctx))
+    _expire_pending(ctx)
+    _log_tool(ctx, "service_manage", {"action": "restart", "service": "nginx"})
+    d = asyncio.run(gate.check(ctx))
+    assert d.intercepted and any(e.kind == "permission_expired" for e in d.events)
+    gate_expired = [r for r in captured["gate"]
+                    if str(r.get("result", "")).startswith("approval_expired")]
+    assert gate_expired, f"工具级兜底到期没落审计链，抓到：{captured['gate']}"
+    assert gate_expired[0]["conclusion"] == "denied"
+    assert gate_expired[0]["action"] == "service_manage"
+
+    # 命令级：既有行为，作对照（同一条 result 前缀，同一张审计页）
+    g = FilesystemGuard(
+        permission_gate=gate, saddle=SimpleNamespace(registry=create_registry()))
+    ctx2 = _ctx()
+    _log(ctx2)
+    asyncio.run(g.check(ctx2))
+    _expire_pending(ctx2)
+    _log(ctx2)
+    asyncio.run(g.check(ctx2))
+    guard_expired = [r for r in captured["guard"]
+                     if str(r.get("result", "")).startswith("approval_expired")]
+    assert guard_expired, "命令级兜底到期同样要落链"
+    assert guard_expired[0]["conclusion"] == "denied"

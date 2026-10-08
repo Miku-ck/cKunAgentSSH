@@ -774,6 +774,18 @@ class PermissionGate:
             # 兜底到期 → 保留等待集（不 pop），发 permission_expired 把卡标记
             # timeout 保留；注入提示引导用户确认后重新发起。等待集未移除，兜底
             # 窗口内同命令重发仍被拦截、复用待办而不重复建卡。
+            # 审计：与 FilesystemGuard 的同名分支同一口径 —— 这条判定必须进链。
+            # 原先只有守卫那半边记 denied，工具级授权的过期尝试只发事件不落链，
+            # 而「AI 试了什么没成功同样可追」（security-boundary §6）正靠这些记录兑现。
+            await append_record_async(
+                action=tool, conclusion="denied",
+                run_id=ctx.run_id, iteration=ctx.iteration,
+                target_type=_audit_target_type(ctx),
+                target_id=_audit_target_id(ctx),
+                environment=environment,
+                command_raw=str(bound or ""),
+                result=f"approval_expired: {tool}",
+            )
             return ReinDecision(
                 intercepted=True,
                 intercept_reason=f"审批已过期（保留待办，等待确认）: {tool}",

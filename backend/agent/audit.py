@@ -29,6 +29,16 @@ logger = logging.getLogger(__name__)
 AUDIT_TABLE = "audit_log"
 _DEFAULT_ENV = "test"
 
+# 合法结论枚举 —— 单一事实来源。审计页的筛选下拉（src/views/ssh/AuditView.vue 的
+# filters.conclusion）与 docs/security-boundary.md §6 的口径清单必须与这里逐字相等，
+# 钉在 backend/tests/test_audit_conclusion_sources.py；增删值改那两处，别只改这里。
+# "released"：once 授权按 run 释放（release-run 兜底端点写入此结论）
+# "answered"/"skipped"：澄清向导的两个终态（routes/agent.py clarification 端点）
+LEGAL_CONCLUSIONS: tuple[str, ...] = (
+    "executed", "failed", "blocked", "denied", "auto_allowed",
+    "approved", "released", "revoked", "answered", "skipped",
+)
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 工具函数
@@ -134,14 +144,16 @@ def append_record(
     operator: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
     """追加一条审计记录（审计失败静默，返回 None 不阻塞 Agent）"""
-    # 合法结论白名单（单一事实来源，非法值静默落 "executed"）。
-    # "released"：once 授权按 run 释放（release-run 兜底端点写入此结论）
-    # "answered"/"skipped"：澄清向导的两个终态（routes/agent.py clarification 端点）。
-    # 漏配过一次：它们被静默改写成 "executed"，用户在审计链里的决策语义就此丢失 ——
-    # 增删结论值时同步 src/views/ssh/AuditView.vue 的筛选下拉。
-    if conclusion not in ("executed", "failed", "blocked", "denied",
-                          "auto_allowed", "approved", "released", "revoked",
-                          "answered", "skipped"):
+    if conclusion not in LEGAL_CONCLUSIONS:
+        # 白名单保证枚举列有界，但"静默改成 executed"会让这条链式签名记录声称
+        # 「这条命令执行过了」—— 历史上 answered/skipped 就是这样被改名的。不阻塞
+        # Agent 的前提下改为留痕：原始结论进 result（它在本条记录的哈希覆盖范围内），
+        # 并在日志上吵一句，让加新值不加白名单这件事在开发期就看得见。
+        raw = " ".join(str(conclusion).split())[:60]
+        logger.warning("审计结论非法，按 executed 落库: action=%s conclusion_raw=%s",
+                       action, raw)
+        marker = f"conclusion_raw={raw}"
+        result = f"{result}｜{marker}" if result else marker
         conclusion = "executed"
     environment = environment or _DEFAULT_ENV
     record = {

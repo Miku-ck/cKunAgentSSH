@@ -6,7 +6,8 @@
 > §3.1 给判定精度的四条修正口径，§7 登记已知取舍（B/D/E/F/不对称/口径差异）——
 > 这些是有意不做的，不是漏掉的。
 >
-> 行号会漂，判定逻辑不会：改任何一条规则前先读 `backend/agent/harness/safety.py` 本身。
+> 行号会漂，判定逻辑不会：**本文锚点一律用符号名**（改符号会编译/收集失败，改行号不会）。
+> 改任何一条规则前先读 `backend/agent/harness/safety.py` 本身。
 
 ## 0. 一句话结论
 
@@ -18,7 +19,7 @@
 
 | 威胁 | 边界内的应对 | 边界外的依赖 |
 |---|---|---|
-| 模型误判/幻觉，执行破坏性命令 | 内容级分类 + dangerous 逐条发卡审批 + 120s 超时按拒绝 | — |
+| 模型误判/幻觉，执行破坏性命令 | 内容级分类 + dangerous 逐条发卡审批 + 未决期间该命令不放行（兜底到期也不放行） | — |
 | 模型被远端输出注入（prompt injection） | 间接：命令仍需人批；hardline 无条件阻断 | 已知取舍 D |
 | 模型经"合法工具"绕底线（写 authorized_keys） | 工具自报 `bound_command`，与 shell 同口径判定 | — |
 | 一次批准 = 永久放行任意路径 | 授权键绑定命令/路径哈希（`tool:<sha16>`） | allowlist 无 TTL：取舍 E |
@@ -32,9 +33,9 @@
 
 | # | 层 | 位置 | 职责 | 可否禁用 |
 |---|---|---|---|---|
-| 1 | 命令风险分类器 | `safety.py:1018 classify_command` / `:1086 classify_constructed_command` | 唯一判定源，产出 `hardline / dangerous / safe` | 否（无开关） |
-| 2 | 策略层拦截器 | `reins/guards.py:29 FilesystemGuard`(priority 10)、`reins/gate.py:33 PermissionGate`(priority 8) | 按**内容**或工具级风险决定 阻断/审批/放行 | `safety_critical=True`，异常即拦截；`contracts.py` 无禁用开关 |
-| 3 | 执行前底线复检 | `saddle.py:50 Sandbox.validate` | 不可禁用的第二道 hardline 复检 | 否（**当前仅覆盖 `shell_exec`**，见取舍 E） |
+| 1 | 命令风险分类器 | `safety.py` 的 `classify_command` / `classify_constructed_command` | 唯一判定源，产出 `hardline / dangerous / safe` | 否（无开关） |
+| 2 | 策略层拦截器 | `reins/guards.py` 的 `FilesystemGuard`(priority 10)、`reins/gate.py` 的 `PermissionGate`(priority 8) | 按**内容**或工具级风险决定 阻断/审批/放行 | `safety_critical=True`，异常即拦截；`contracts.py` 无禁用开关 |
+| 3 | 执行前底线复检 | `saddle.py` 的 `Sandbox.validate` | 不可禁用的第二道 hardline 复检 | 否（**当前仅覆盖 `shell_exec`**，见取舍 E） |
 | 4 | 远端纵深 | `scripts/deploy/agent-exec.py` + `ckunagent` + `ForceCommand` | 不依赖任何一端自觉的真上限 | 由部署侧决定 |
 
 拦截器执行顺序按 priority **升序**，即 `PermissionGate(8)` 先于 `FilesystemGuard(10)`。
@@ -42,7 +43,7 @@
 
 - `PermissionGate` 对 `_COMMAND_EXEC_TOOLS`（`shell_exec`/`job_run`）直接放行给守卫，
   避免工具级 `risk_level` 一刀切挡住内容级判定；对**自报 `bound_command` 且内容非 safe**
-  的工具同样让位（`gate.py:440`），因为 dangerous 的审批三态/超时/拒绝记忆/prod 闸门
+  的工具同样让位（`gate.py` 的绑定命令让位分支），因为 dangerous 的审批三态/超时/拒绝记忆/prod 闸门
   已在守卫里实现 —— 同一判定有两处实现必然漂移。
 - 内容 safe 的绑定命令工具仍回到 ToolMeta 流程，但**授权键仍绑定该命令**（§4）。
 
@@ -51,7 +52,7 @@
 | 判定 | 处置 |
 |---|---|
 | `hardline` | 无条件阻断，allowlist 也放不走（守卫在 allowlist 之前判定），审计 `conclusion=blocked`，注入 `[系统拦截]` 让模型换路 |
-| `dangerous` | 发审批卡片；超时 120s（`reins/core.py:24`）按拒绝并记忆；prod 环境只认**预登记 allowlist**，临时审批一律拒（`prod_deny_no_allowlist`） |
+| `dangerous` | 发审批卡片；**未决期间该命令不放行**。审批不再设"超时即拒"的短窗口 —— 待授权签名保持等待至 grant/deny/会话结束，只留一个可配置的**兜底时长**（`reins/core.py` 的 `approval_fallback_seconds()`，默认 600s，设置面板 PUT `/settings/permission-policy` 即时生效，0 = 永久等待，上限 86400s）：到期发 `permission_expired` 把卡片标记为超时并**保留待办**（不移出等待集、同命令重发复用待办而不重复建卡），审计记 `denied` 且 `result` 带 `approval_expired`。prod 环境只认**预登记 allowlist**，临时审批一律拒（`prod_deny_no_allowlist`） |
 | `safe` | 放行 |
 | 权限门缺失 | fail-closed 拒绝（`permission_gate_missing`） |
 
@@ -107,7 +108,7 @@
 
 ## 4. 授权键语义（"批准这一条"而不是"批准这个工具"）
 
-`gate.py:133 _grant_key`：**只要拿得到命令**，键就是 `tool:<sha256(规范化命令)[:16]>`；
+`gate.py` 的 `_grant_key`：**只要拿得到命令**，键就是 `tool:<sha256(规范化命令)[:16]>`；
 拿不到才是裸工具名。于是：
 
 - `shell_exec` / `job_run`：批准的是那一行命令。
@@ -157,16 +158,21 @@ prod 主机**而弹的确认框。三条主判定不受该开关影响：dangero
 ## 6. 审计
 
 `backend/agent/audit.py`：链式签名 append-only。`conclusion ∈ {executed, failed, blocked,
-denied, auto_allowed, approved, released, revoked}`（`audit.py:139` 是唯一枚举，非法值静默
-落成 `executed`），含 `environment`、`command_raw`、`run_id`。阻断记 `blocked`、prod 无预授权
-与审批超时/拒绝记 `denied`（`result` 里带 `prod_deny_no_allowlist` / `approval_needed` 等成因），
+denied, auto_allowed, approved, released, revoked, answered, skipped}`（`audit.py` 的
+`LEGAL_CONCLUSIONS` 是唯一枚举；三份清单 —— 枚举、审计页筛选下拉
+`src/views/ssh/AuditView.vue`、本节 —— 逐字相等，钉在 `backend/tests/test_audit_conclusion_sources.py`。
+非法值仍落 `executed` 以保住列的有界性，但原始结论会追加进 `result` 并记一条 warning ——
+过去它是静默改写，等于让一条不可篡改的记录声称「这条命令执行过了」），
+含 `environment`、`command_raw`、`run_id`。阻断记 `blocked`、prod 无预授权
+与审批超时/拒绝记 `denied`（`result` 里带 `prod_deny_no_allowlist` / `approval_needed` /
+`approval_expired` 等成因），
 因此"AI 试了什么没成功"同样可追 —— 这是 §5 里人工通道不加事前阻断的前提。
 
 ## 7. 已知取舍登记（有意不做，不是漏了）
 
 | 编号 | 内容 | 为什么接受 | 真上限在哪 |
 |---|---|---|---|
-| **B** | `environment` 由客户端声明（`routes/agent.py:268 Literal["test","prod"]="test"`，来源是渲染层抄连接标签），后端无主机清单、不校验 `ssh_session_id ↔ environment` | 后端不持有可信主机清单，派生不出真值；加校验需要先做主机资产 | prod 强化是"客户端诚实则诚实"的闸门；上限是远端 `ckunagent` 最小权限 |
+| **B** | `environment` 由客户端声明（`routes/agent.py` 请求模型里的 `environment: Literal["test","prod"] = "test"`，来源是渲染层抄连接标签），后端无主机清单、不校验 `ssh_session_id ↔ environment` | 后端不持有可信主机清单，派生不出真值；加校验需要先做主机资产 | prod 强化是"客户端诚实则诚实"的闸门；上限是远端 `ckunagent` 最小权限 |
 | **D** | 间接 prompt 注入：远端输出以 `role=tool` 原样回灌，无不可信标记（`ops_common.py` → `driver.py`），且记忆/反思/host_profile 三条持久化回路会以 system 消息注回 | 内容级标记与被注入检测是独立一轮工作，误报面大 | dangerous 命令仍必经人批；prod 仅预授权 |
 | **E** | ① `Sandbox.validate` 第二层仅覆盖 `shell_exec`（`job_run` 与绑定命令工具无第二道）；② "始终允许"无二次确认（allowlist TTL 本轮已补，但**默认仍是永久**，且 TTL 只作用于 `always` 条目 —— once/session 各自按 run/会话终态清理）；③ `agent-exec.py` 的规则副本既没有归一化层，也仍是**整串**电源动词匹配 —— 后端改成执行位置判定后远端更严（`grep -i reboot` 在远端会被挡），方向安全但不等价 | 均为收敛度问题，不改变"默认不信任"的骨架 | 契约测试 `test_remote_whitelist_contract.py` 钉跨端一致性 |
 | **F** | 判定精度上仍接受的四处（本轮误判审查后剩下的）：① 相对路径递归删除 `rm -rf ./build`、`find ./logs -delete` 判 safe；② 在日志里 grep 字面量 `grep -n 'rm -rf /' audit.log` 仍 hardline；③ `env \| grep -i pass`、`cat /proc/1/environ` 判 safe；④ 无子命令的裸 `docker`/`kubectl`（含 `command -v docker 2>/dev/null` 这种探测写法）判 dangerous | ①绝对路径与敏感目标已全覆盖，相对路径的破坏面等于该账户本就能写的范围，收紧会让每次 `make clean` 都弹卡；②根删除保持整串口径，位置化会把 `find / -exec rm -rf {} +` 从 hardline 降成 dangerous，得不偿失；③读取进程环境既不是写操作也不命中凭据路径表，加黑名单会让所有 `env`/`printenv` 排查都要审批 —— 真正的风险是输出内容进模型上下文，与取舍 D 同源；④保守方向，成本是一张卡 | ①远端最小权限账户；②③④审计链 + dangerous 必经人批 |
@@ -188,7 +194,7 @@ npx vitest run && npm run typecheck
 ```
 
 约束：新增工具若能产生写盘/读凭据/自由命令副作用，必须实现 `BaseTool.bound_command`
-（`agent/tools/__init__.py:79`）并在 `test_ops_content_classification.py` 的契约表里登记；
+（`agent/tools/__init__.py` 的 `BaseTool.bound_command`）并在 `test_ops_content_classification.py` 的契约表里登记；
 不纳入的也要登记，否则后人无法区分"决策"与"漏了"。
 `test_command_explain.py` 逐条断言每个 `reason` 都有中文后果说明 —— 加规则要同时加解释。
 `test_safety_misjudgment.py` 是双向锁：往只读白名单 `_SAFE_VERBS` 里加动词，必须同时给它配
