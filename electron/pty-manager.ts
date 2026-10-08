@@ -24,6 +24,73 @@ interface PtySession {
   cwd: string
 }
 
+/**
+ * S4-01 修复：白名单此前按 **basename 后缀**放行 ——
+ * `allowed.some(s => shell === s || shell.endsWith('/' + s) || shell.endsWith('\\' + s))`，
+ * 于是渲染进程给 `C:\Users\me\AppData\Local\Temp\cmd.exe`（任何目录下改名放着的可执行
+ * 文件）都算命中，起的是一个带完整 preload API 面的 PTY 会话。
+ *
+ * 现规则：
+ * - 整串精确命中白名单项 → 放行（bare 名交系统搜索顺序解析，POSIX 绝对路径原样命中）；
+ * - 带目录的路径 → 必须 ①basename 是白名单里的程序名，且 ②所在目录受信任：
+ *   主进程当前 PATH 上的目录，或 SystemRoot / Program Files / 标准 bin 目录之内。
+ *   PATH 由主进程环境给出、渲染进程写不进去，而把 Git、PowerShell 7 这类非标准安装
+ *   位置纳进来靠的正是它 —— 只收紧「渲染进程任意指定的目录」这一条，不至于打掉真实
+ *   用户的终端。
+ *
+ * 抽成纯函数并导出：安全判据必须可测（本仓 pty 侧此前零测试）。
+ */
+export interface ShellTrustContext {
+  caseInsensitive: boolean
+  pathDirs: string[]
+  systemRoots: string[]
+}
+
+export function isAllowedShell(shellRaw: string, allowed: string[], ctx: ShellTrustContext): boolean {
+  const norm = (p: string): string =>
+    (ctx.caseInsensitive ? p.toLowerCase() : p).replace(/\\/g, '/').replace(/\/+$/, '')
+  const nameOf = (p: string): string => {
+    const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
+    return i < 0 ? p : p.slice(i + 1)
+  }
+  const shell = norm(shellRaw)
+  if (allowed.some(s => norm(s) === shell)) return true
+
+  const sepIdx = Math.max(shellRaw.lastIndexOf('/'), shellRaw.lastIndexOf('\\'))
+  if (sepIdx < 0) return false
+  const base = norm(nameOf(shellRaw))
+  if (!base) return false
+  if (!allowed.some(s => norm(nameOf(s)) === base)) return false
+
+  const dir = norm(shellRaw.slice(0, sepIdx))
+  if (ctx.pathDirs.some(d => norm(d) === dir)) return true
+  return ctx.systemRoots.some(r => {
+    const n = norm(r)
+    return n.length > 0 && (dir === n || dir.startsWith(n + '/'))
+  })
+}
+
+/** 从主进程环境构造受信任目录集合（渲染进程的输入进不了这里）。 */
+export function buildShellTrustContext(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): ShellTrustContext {
+  const win = platform === 'win32'
+  const systemRoot = env.SystemRoot || (win ? 'C:\\Windows' : '')
+  const roots = win
+    ? [
+        systemRoot,
+        env.ProgramFiles,
+        env['ProgramFiles(x86)'],
+      ].filter((r): r is string => Boolean(r))
+    : ['/bin', '/usr/bin', '/usr/local/bin', '/sbin', '/usr/sbin']
+  return {
+    caseInsensitive: win || platform === 'darwin',
+    pathDirs: (env.PATH || env.Path || '').split(win ? ';' : ':').filter(Boolean),
+    systemRoots: roots,
+  }
+}
+
 // M3 修复：允许的 shell 白名单，防止渲染进程启动任意命令
 const ALLOWED_SHELLS: Record<string, string[]> = {
   // P1 修复：补 wsl.exe — 此前 UI 的"WSL"选项（ssh.ts 解析为 System32\wsl.exe）
@@ -112,7 +179,7 @@ export class PtyManager {
     const platform = process.platform
     const allowed = ALLOWED_SHELLS[platform] || []
     let shellBase = shell.toLowerCase()
-    const isAllowed = allowed.some(s => shellBase === s.toLowerCase() || shellBase.endsWith('/' + s.toLowerCase()) || shellBase.endsWith('\\' + s.toLowerCase()))
+    const isAllowed = isAllowedShell(shell, allowed, buildShellTrustContext(platform))
     let finalArgs = args
     if (!isAllowed) {
       console.warn(`[PtyManager] shell "${shell}" 不在白名单中，回退到默认: ${defaultShell}`)
