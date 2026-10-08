@@ -2,18 +2,27 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, statSync } from 'node:fs'
 import net from 'node:net'
 import { dirname } from 'node:path'
-import { Client, SFTPWrapper } from 'ssh2'
-import type { ConnectConfig } from 'ssh2'
+import ssh2mod from 'ssh2'
+import type { Client as ClientType, ConnectConfig, SFTPWrapper } from 'ssh2'
+
+// ssh2 is CJS; its named ESM re-exports are unreliable, so destructure the default.
+const { Client } = ssh2mod as unknown as { Client: new () => ClientType }
 import { KnownHosts } from './knownhosts.ts'
 import { expandHome } from './dsh-home.ts'
 import type { HostStore } from './store.ts'
 import type { EnvProfile, ExecResult, HostEntry, HostSummary, RemoteDirEntry, StateSnapshot, TestResult, TunnelInfo, TunnelState } from './protocol.ts'
+import { fingerprint } from './knownhosts.ts'
 
 interface PooledConn {
   alias: string
-  client: Client
+  client: ClientType
   state: 'connecting' | 'open' | 'closed'
   profile?: EnvProfile
+}
+
+/** An ssh error that carries the fingerprint of the presented host key. */
+export interface SshKeyError extends Error {
+  fingerprint?: string
 }
 
 interface LiveTunnel {
@@ -37,10 +46,12 @@ export class SshEngine {
   private readonly knownHosts: KnownHosts
   private disposed = false
 
-  constructor(
-    private readonly store: HostStore,
-    private readonly opts: EngineOptions,
-  ) {
+  private readonly store: HostStore
+  private readonly opts: EngineOptions
+
+  constructor(store: HostStore, opts: EngineOptions) {
+    this.store = store
+    this.opts = opts
     this.knownHosts = new KnownHosts()
   }
 
@@ -82,7 +93,7 @@ export class SshEngine {
    * `allowTofu` permits pinning a first-seen host key — the GUI pin flow passes
    * true; agent-originated connects must pass false (fail closed).
    */
-  async connect(alias: string, allowTofu: boolean): Promise<Client> {
+  async connect(alias: string, allowTofu: boolean): Promise<ClientType> {
     const existing = this.pool.get(alias)
     if (existing && existing.state === 'open') return existing.client
     if (existing) this.pool.delete(alias)
@@ -122,9 +133,53 @@ export class SshEngine {
     }
   }
 
-  private openClient(client: Client, host: HostEntry, allowTofu: boolean): Promise<void> {
+  /**
+   * Complete the key exchange with an UNPINNED host just to learn its key,
+   * then refuse. Key exchange precedes authentication, so no credentials are
+   * needed. This is what feeds the GUI "trust fingerprint" dialog.
+   */
+  private captureHostKey(host: HostEntry): Promise<{ fingerprint: string }> {
     const port = host.port || 22
     return new Promise((resolve, reject) => {
+      const client = new Client()
+      let fp: string | undefined
+      let settled = false
+      const cfg: ConnectConfig = {
+        host: host.host,
+        port,
+        username: host.user,
+        readyTimeout: 15000,
+        hostVerifier: (raw: Buffer, cb: (ok: boolean) => void) => {
+          fp = fingerprint(raw)
+          return cb(false)
+        },
+      }
+      client.on('error', (err: Error) => {
+        if (settled) return
+        settled = true
+        try {
+          client.end()
+        } catch {
+          /* ignore */
+        }
+        if (fp) resolve({ fingerprint: fp })
+        else reject(new Error(`ssh error: ${err.message}`))
+      })
+      client.on('ready', () => {
+        if (settled) return
+        settled = true
+        if (fp) resolve({ fingerprint: fp })
+        else reject(new Error('host key not presented'))
+      })
+      client.connect(cfg)
+    })
+  }
+
+  private openClient(client: ClientType, host: HostEntry, allowTofu: boolean): Promise<void> {
+    const port = host.port || 22
+    return new Promise((resolve, reject) => {
+      /** Fingerprint of the key the server just presented (for error enrichment). */
+      let offeredFp: string | undefined
       const cfg: ConnectConfig = {
         host: host.host,
         port,
@@ -136,12 +191,15 @@ export class SshEngine {
           const v = this.knownHosts.verify(host.host, port, raw)
           if (v.status === 'matched') return cb(true)
           if (v.status === 'new') {
+            offeredFp = v.fingerprint
             if (allowTofu) {
               this.knownHosts.pin(host.host, port, raw)
               return cb(true)
             }
             return cb(false)
           }
+          // mismatch: remember the presented key so the GUI can offer a re-pin
+          offeredFp = v.actual
           return cb(false)
         },
       }
@@ -173,15 +231,18 @@ export class SshEngine {
           resolve()
         }
       })
-      client.on('error', (err: Error) =>
-        fail(
-          new Error(
-            /verification failed/i.test(err.message)
-              ? `host key rejected: ${err.message}（主机密钥未固定或与固定指纹不符；请在 SSH 面板测试连接并信任指纹）`
-              : `ssh error: ${err.message}`,
-          ),
-        ),
-      )
+      client.on('error', (err: Error) => {
+        const e = new Error(
+          /verification failed/i.test(err.message)
+            ? `host key rejected: ${err.message}（主机密钥与固定值不符——可能是密钥轮换，也可能存在中间人；请在 SSH 面板测试连接核对指纹）`
+            : `ssh error: ${err.message}`,
+        )
+        if (offeredFp) {
+          const ke: SshKeyError = e
+          ke.fingerprint = offeredFp
+        }
+        fail(e)
+      })
       client.on('keyboard-interactive', (_name, _instructions, _lang, _prompts, finish) => {
         fail(new Error('interactive authentication is not supported; use password or key auth'))
         finish([])
@@ -190,22 +251,40 @@ export class SshEngine {
     })
   }
 
-  /** GUI "test connection": connect (optionally pinning) then collect the profile. */
+  /**
+   * GUI "test connection":
+   *  - pinned host (or pin=true): real connect, TOFU pins first-seen keys,
+   *    then an environment profile is collected;
+   *  - unpinned + pin=false: capture the presented key via a refused handshake
+   *    and hand its fingerprint to the trust dialog (the only TOFU entry point).
+   */
   async testHost(alias: string, pin: boolean): Promise<TestResult> {
     const host = this.store.get(alias)
     if (!host) return { ok: false, error: `unknown host: ${alias}` }
+    const port = host.port || 22
+    const alreadyPinned = this.knownHosts.pinned(host.host, port)
     try {
+      if (!pin && !alreadyPinned) {
+        const { fingerprint: fp } = await this.captureHostKey(host)
+        return {
+          ok: false,
+          error: `主机密钥未固定（${host.host}:${port}）。核对下方指纹后信任。`,
+          needsPin: true,
+          fingerprint: fp,
+        }
+      }
       await this.connect(alias, pin)
       const profile = await this.profile(alias)
-      return { ok: true, profile, fingerprint: this.knownHosts.fingerprintOf(host.host, host.port || 22) }
+      return { ok: true, profile, fingerprint: this.knownHosts.fingerprintOf(host.host, port) }
     } catch (err) {
-      const message = (err as Error).message
-      const isPinIssue = message.includes('not pinned') || message.includes('verification') || message.includes('host key')
+      const e = err as SshKeyError
+      const isKeyRejection = /verification failed/i.test(e.message)
       return {
         ok: false,
-        error: message,
-        needsPin: pin ? false : isPinIssue,
-        fingerprint: pin ? this.knownHosts.fingerprintOf(host.host, host.port || 22) : undefined,
+        error: e.message,
+        // a rejected key (unpinned or mismatched) is re-pinnable from the dialog
+        needsPin: !pin && (isKeyRejection || /not pinned/i.test(e.message)),
+        fingerprint: e.fingerprint ?? (pin ? this.knownHosts.fingerprintOf(host.host, port) : undefined),
       }
     }
   }

@@ -181,10 +181,16 @@ export function HostFormDialog({ api, existing, onClose, onSaved }: HostFormDial
         </div>
         {pinOffer !== null && (
           <div>
-            <div className="ckun-ssh-note">
-              首次连接该主机（主机密钥未固定）。核对下方 SHA256 指纹（可在目标机器上执行
-              <span className="ckun-ssh-mono"> ssh-keygen -lf &lt;host key&gt;</span> 或在同网段机器上用
-              <span className="ckun-ssh-mono"> ssh -o BatchMode=yes</span> 交叉验证）后信任：
+            <div className={existing?.pinned ? 'ckun-ssh-error' : 'ckun-ssh-note'}>
+              {existing?.pinned
+                ? '⚠ 主机密钥与已固定的指纹不一致（可能是密钥轮换，也可能是中间人攻击）。重新固定将替换原指纹，请确认：'
+                : '首次连接该主机（主机密钥未固定）。核对下方 SHA256 指纹（可在目标机器上执行 '}
+              {existing?.pinned ? null : (
+                <>
+                  <span className="ckun-ssh-mono"> ssh-keygen -lf &lt;host key&gt;</span> 或在同网段机器上用
+                  <span className="ckun-ssh-mono"> ssh -o BatchMode=yes</span> 交叉验证）后信任：
+                </>
+              )}
             </div>
             <div className="ckun-ssh-fingerprint">{pinOffer.fingerprint}</div>
             <div className="ckun-ssh-form-row">

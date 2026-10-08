@@ -57,6 +57,18 @@ describe('golden 字节向量（防与 gateway/hillgw.mjs 那份自含实现漂�
     expect(bytes.length).toBe(HEADER_LEN + utf8('{"seq":7}').length)
   })
 
+  it('bindOk chan=0（-R 的 forwardIn 对位，无 payload）', () => {
+    expect(hex(encodeFrame({ type: 'bindOk', chan: 0 }))).toBe('010f000000000000')
+  })
+
+  it('BIND 的 JSON 形状与键序', () => {
+    expect(
+      hex(encodeFrame({ type: 'bind', chan: 0, payload: { bindHost: '127.0.0.1', bindPort: 8443 } })),
+    ).toBe(
+      '010d0000000000287b2262696e64486f7374223a223132372e302e302e31222c2262696e64506f7274223a383434337d',
+    )
+  })
+
   it('头 8 字节：ver u8 | type u8 | chan u32 BE | len u16 BE', () => {
     const b = encodeFrame({ type: 'data', chan: 0x01020304, payload: utf8('x') })
     expect(b[0]).toBe(1)
@@ -71,7 +83,7 @@ describe('golden 字节向量（防与 gateway/hillgw.mjs 那份自含实现漂�
 describe('round-trip', () => {
   const cases: MuxFrame[] = [
     { type: 'hello', chan: 0, payload: { clientVersion: '1.4.0', deviceName: 'ckun-win', selfReportedUser: 'ckun' } },
-    { type: 'auth', chan: 0, payload: { token: 'enr-7f3a' } },
+    { type: 'auth', chan: 0, payload: { user: 'liantong', password: 's3cr3t' } },
     { type: 'helloOk', chan: 0, payload: { sessionId: 'a3f9c1', heartbeatSec: 30, maxChannels: 256, role: 'prod', policyVersion: '2026-10-08.3' } },
     { type: 'open', chan: 17, payload: { host: 'db.internal', port: 5432 } },
     { type: 'openOk', chan: 17 },
@@ -83,6 +95,9 @@ describe('round-trip', () => {
     { type: 'ping', chan: 0, seq: 1 },
     { type: 'pong', chan: 0, seq: 1 },
     { type: 'goaway', chan: 0, payload: { reason: '网关优雅下线', lastChan: 21 } },
+    { type: 'bind', chan: 0, payload: { bindHost: '0.0.0.0', bindPort: 8443 } },
+    { type: 'unbind', chan: 0, payload: { bindHost: '127.0.0.1', bindPort: 8443 } },
+    { type: 'bindOk', chan: 0 },
   ]
   for (const f of cases) {
     it(`${f.type} chan=${f.chan}`, () => {

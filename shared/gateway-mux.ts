@@ -43,6 +43,10 @@ export const FRAME_TYPE = {
   ping: 0x0a,
   pong: 0x0b,
   goaway: 0x0c,
+  /** 让对端在 bindHost:bindPort 上监听（-R 的 forwardIn 对位）。失败复用 openErr + chan=0 */
+  bind: 0x0d,
+  unbind: 0x0e,
+  bindOk: 0x0f,
 } as const
 
 export type FrameTypeName = keyof typeof FRAME_TYPE
@@ -67,8 +71,16 @@ export interface HelloPayload {
   selfReportedUser?: string
 }
 
+/**
+ * 认证载荷。身份面是「TLS 通道内口令」，与 Hillstone Secure Connect 的实际形态一致
+ * （它的连接表单就是 用户名 + 密码 + 记住密码）。
+ * token 字段留给「一次性令牌换长期客户端证书」那条路，本版未实现，所以恒缺省。
+ */
 export interface AuthPayload {
-  token: string
+  user: string
+  /** 只在已建立并pin过的 TLS 会话内发送；服务端存 sha256，比对走 timingSafeEqual */
+  password: string
+  token?: string
 }
 
 export interface HelloOkPayload {
@@ -97,6 +109,11 @@ export interface GoawayPayload {
   lastChan: number
 }
 
+export interface BindPayload {
+  bindHost: string
+  bindPort: number
+}
+
 export type MuxFrame =
   | { type: 'hello'; chan: number; payload: HelloPayload }
   | { type: 'auth'; chan: number; payload: AuthPayload }
@@ -110,6 +127,9 @@ export type MuxFrame =
   | { type: 'ping'; chan: number; seq: number }
   | { type: 'pong'; chan: number; seq: number }
   | { type: 'goaway'; chan: number; payload: GoawayPayload }
+  | { type: 'bind'; chan: number; payload: BindPayload }
+  | { type: 'unbind'; chan: number; payload: BindPayload }
+  | { type: 'bindOk'; chan: number }
 
 /** 帧已不可继续解析（版本不符 / 未知 type / 奇偶非法 / JSON 坏）。调用方必须销毁整条会话。 */
 export class MuxProtocolError extends Error {
@@ -161,6 +181,7 @@ export function encodeFrame(f: MuxFrame): Uint8Array {
     case 'openOk':
     case 'fin':
     case 'rst':
+    case 'bindOk':
       payload = EMPTY
       break
     case 'ping':
@@ -289,7 +310,12 @@ function decodeBody(typeName: FrameTypeName, chan: number, payload: Uint8Array):
     case 'openOk':
     case 'fin':
     case 'rst':
+    case 'bindOk':
       return { type: typeName, chan }
+    case 'bind':
+      return { type: 'bind', chan, payload: parseJson<BindPayload>('bind', payload) }
+    case 'unbind':
+      return { type: 'unbind', chan, payload: parseJson<BindPayload>('unbind', payload) }
     case 'ping':
       return { type: 'ping', chan, seq: parseJson<{ seq: number }>('ping', payload).seq }
     case 'pong':
