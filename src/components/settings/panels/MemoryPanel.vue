@@ -130,14 +130,5 @@ onMounted(() => {
 }
 .manage-btn:hover { background: var(--bg-hover); }
 .foot-hint.unread { color: var(--status-warn-text); }
-.retry-btn {
-  padding: 1px 8px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  background: var(--bg-input);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-.retry-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+/* .retry-btn 见 settings-panel-base.css（与 ChatPanel 的读失败提示行共用一份） */
 </style>

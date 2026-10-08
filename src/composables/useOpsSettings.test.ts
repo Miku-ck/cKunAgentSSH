@@ -165,6 +165,55 @@ describe('useOpsSettings', () => {
     expect(o.diagnostics.value?.database.path).toBe('D:/x/ckun.db')
   })
 
+  it('表单脏时诊断刷新只回填代理显示，不吃未保存的超时草稿', async () => {
+    const o = useOpsSettings()
+    await o.load()
+    // 走输入框那条路：面板里用户打的是 timeoutText，watch 才折算成 draft
+    o.timeoutText.value = '90'
+    o.retryDraft.value = 3
+    await nextTick()
+    expect(o.httpDirty.value).toBe(true)
+    expect(await o.refreshDiagnostics()).toBe(true)
+    // 快照里是 60/1：照抄进表单就把用户刚打的字抹了，还会顺手推进回滚基线
+    expect(o.timeoutDraft.value).toBe(90)
+    expect(o.retryDraft.value).toBe(3)
+    expect(o.timeoutText.value).toBe('90')
+    expect(o.httpDirty.value).toBe(true)
+    // 代理读数照旧收敛（它与草稿无关，且快照报的就是生效值）
+    expect(o.proxyMasked.value).toBe('socks5h://corp:1080')
+  })
+
+  it('保存代理同样不动未保存的超时草稿', async () => {
+    const o = useOpsSettings()
+    await o.load()
+    o.timeoutDraft.value = 120
+    o.proxyDraft.value = 'http://p:3128'
+    // 测试桩按 payload 回显 httpView()：不带 timeout_seconds 时它是 45（后端原值）
+    expect(await o.saveProxy()).toBe(true)
+    expect(o.timeoutDraft.value).toBe(120)
+    expect(o.proxyMasked.value).toBe('http://corp-proxy:3128')
+  })
+
+  it('日志级别读失败不该把已拿到的网络区一起拖成空态', async () => {
+    const o = useOpsSettings()
+    apiMock.getLogLevel.mockRejectedValueOnce(new Error('500'))
+    await o.load()
+    // 原实现用 Promise.all：这一路否决让 applyHttp 根本没跑，网络区显示本地默认 0/1
+    expect(o.timeoutDraft.value).toBe(45)
+    expect(o.retryDraft.value).toBe(2)
+    expect(o.proxySet.value).toBe(true)
+    expect(o.loadError.value).toContain('日志级别读取失败')
+    expect(o.loadError.value).toContain('500')
+  })
+
+  it('网络区读失败时日志级别仍可显示后端真值', async () => {
+    const o = useOpsSettings()
+    apiMock.getHttpSettings.mockRejectedValueOnce(new Error('connection refused'))
+    await o.load()
+    expect(o.logLevel.value).toBe('warning')
+    expect(o.loadError.value).toContain('网络设置读取失败')
+  })
+
   it('诊断失败只标记本区错误，不清空已有快照', async () => {
     const o = useOpsSettings()
     await o.refreshDiagnostics()

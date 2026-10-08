@@ -62,6 +62,10 @@
         <span class="default-model-label">当前默认模型（ssh）</span>
         <span class="default-model-name">{{ defaultModelName }}</span>
         <span v-if="defaultModelId" class="default-model-id">{{ defaultModelId }}</span>
+        <p v-if="!defaultSshModel && settingsStore.modelConfigs.length" class="hint saving">
+          没有任何模型被标为默认 —— 在「模型」页点「★ SSH 默认」指定一个。
+          对话里手选过模型时按那一个跑；两者都缺时后端会以「未找到默认模型」拒绝这次运行。
+        </p>
       </div>
 
       <div class="section-divider" />
@@ -139,8 +143,11 @@ const toast = useToastStore()
 // 出现「面板写着当前默认是 B，实际跑的是 A」。
 const defaultSshModel = computed(() => {
   const list = settingsStore.modelConfigs
-  if (!list.length) return null
-  return list.find((m) => m.is_default_ssh) ?? list.find((m) => m.is_default) ?? list[0]
+  // 只认打了标记的行。原来还有第三级 ?? list[0]，抄的是 GET /settings/models/default
+  // 的兜底，而运行时（routes/agent.py、terminal、schedule_engine）只有 ssh → global
+  // 两级、都没有就 400「未找到默认模型」。把没标记的第一行报成"当前默认"，等于替
+  // ModelsPanel 的星标撒谎：那一页一个星都没亮，这一页却写着默认是 B。
+  return list.find((m) => m.is_default_ssh) ?? list.find((m) => m.is_default) ?? null
 })
 const defaultModelName = computed(() => {
   const m = defaultSshModel.value

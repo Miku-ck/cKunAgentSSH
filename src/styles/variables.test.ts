@@ -320,6 +320,28 @@ describe('atelier（手记）主题的令牌覆盖', () => {
     expect(hit('const TERMINAL_UNDERLAY = \'#17181c\'')).toBe(false)
   })
 
+  it('同一族里也不许把字族写成字面量：等宽只能读 --font-mono', () => {
+    // 手记主题重写的是整套字族（--font-sans 落到 Georgia/宋体衬线、--font-mono 落到
+    // Cascadia Mono），而组件里抄一句 `ui-monospace, Consolas, monospace` 或
+    // `'JetBrains Mono', 'Fira Code', Consolas, monospace` 就绕过了它 —— 米纸衬线版面上
+    // 独独一处工具名/模型 ID 是 Windows 控制台字。和颜色同一条病：漏了不报错，只是不跟主题。
+    // 只认两种写法：`inherit`（跟着父级，本轮 .htt-btn 立的口径）与读字族令牌。
+    const offenders: string[] = []
+    for (const [file, src] of scopedSources()) {
+      for (const value of fontFamilies(src)) {
+        if (!/^(?:inherit|var\(--font-[a-z0-9-]+\))$/.test(value)) offenders.push(`${file} font-family: ${value}`)
+      }
+    }
+    expect(offenders).toEqual([])
+
+    // 变异自检：字面量与带回落的写法都要红（回落是 :root 那条声明的第二份副本）
+    expect(fontFamilies('.a { font-family: ui-monospace, Consolas, monospace; }')).toEqual(['ui-monospace, Consolas, monospace'])
+    expect(fontFamilies('.a { font-family: var(--font-mono, monospace); }')).toEqual(['var(--font-mono, monospace)'])
+    expect(/^(?:inherit|var\(--font-[a-z0-9-]+\))$/.test('inherit')).toBe(true)
+    expect(/^(?:inherit|var\(--font-[a-z0-9-]+\))$/.test('var(--font-mono)')).toBe(true)
+    expect(/^(?:inherit|var\(--font-[a-z0-9-]+\))$/.test('monospace')).toBe(false)
+  })
+
   it('纸纹落在上色的结构画布上，不是 body', () => {
     // body 的纸纹会被 .ssh-view{background:var(--bg-base)} 整片盖住（首页画布是
     // 透明的 .home-pane，它背后正是 .ssh-view）。所以令牌必须由**真正上色的那一层**

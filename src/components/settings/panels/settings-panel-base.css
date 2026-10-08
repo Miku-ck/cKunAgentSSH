@@ -42,3 +42,18 @@
 }
 .setting-select:hover { border-color: var(--border-default); }
 .setting-select:focus { border-color: var(--accent-primary); }
+
+/* 「重试」小按钮：MemoryPanel 与 ChatPanel 的读失败提示行共用。
+   ChatPanel 先前只写了类名没写规则 —— scoped 样式不跨组件，那颗按钮什么皮都没有：
+   global.css 的 button reset 断了边框与底色，剩下的就是 UA 默认字号硬贴在 11.5px 的
+   提示文案旁边，且没有 color（跟着父级取 --text-primary 那一档亮度）。 */
+.retry-btn {
+  padding: 1px 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.retry-btn:hover { color: var(--text-primary); background: var(--bg-hover); }

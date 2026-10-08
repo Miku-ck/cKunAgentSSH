@@ -726,7 +726,7 @@ onUnmounted(() => {
 .row-btn.danger:hover { color: var(--accent-red); border-color: var(--accent-red); }
 .schedule-card-meta { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--text-secondary); margin-top: 8px; }
 .meta-item b { color: var(--text-primary); font-weight: 600; }
-.mono { font-family: monospace; }
+.mono { font-family: var(--font-mono); }
 .schedule-card-body { margin-top: 8px; font-size: 12px; }
 .schedule-card-body .k { color: var(--text-tertiary); margin-bottom: 4px; }
 .prompt { color: var(--text-secondary); white-space: pre-wrap; }

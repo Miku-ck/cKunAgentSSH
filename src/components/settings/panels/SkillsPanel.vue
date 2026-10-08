@@ -189,5 +189,5 @@ onMounted(load)
   border: 1px dashed var(--border-default); border-radius: 4px; padding: 8px; margin: 2px 4px 8px;
   max-height: 240px; overflow-y: auto;
 }
-.skill-content pre { margin: 0; font-size: 11px; font-family: ui-monospace, Consolas, monospace; color: var(--text-secondary); white-space: pre-wrap; word-break: break-word; }
+.skill-content pre { margin: 0; font-size: 11px; font-family: var(--font-mono); color: var(--text-secondary); white-space: pre-wrap; word-break: break-word; }
 </style>
