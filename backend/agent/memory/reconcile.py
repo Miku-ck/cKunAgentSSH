@@ -127,6 +127,31 @@ async def _similar_existing(cand: dict, embed_client) -> list:
     return hits
 
 
+async def _target_actionable(memory_id: str) -> bool:
+    """裁决点名的 target 能否被对账触碰：行存在、仍 active、且没被用户钉住。
+
+    不给 mstore.retire/supersede 加 pinned/存在性条件：用户在界面上对自己的钉住行
+    做删除/取代是显式意图，那是另一条通道；本模块的契约是「自动对账不碰 pinned」，
+    并且不能让一个不存在的 id 走进「add_memory 已 commit、supersede 才抛错」的位置。
+    """
+    row = await asyncio.to_thread(mstore.get_memory, memory_id)
+    if not row:
+        logger.warning(
+            "[reconcile] 裁决 target_id=%s 在库里不存在，按缺 target 同款降级", memory_id)
+        return False
+    if row.get("status") != "active":
+        logger.warning(
+            "[reconcile] 裁决 target_id=%s 状态为 %s（非 active），按缺 target 同款降级",
+            memory_id, row.get("status"))
+        return False
+    if row.get("pinned"):
+        logger.info(
+            "[reconcile] target_id=%s 被用户钉住，对账路径不触碰，按缺 target 同款降级",
+            memory_id)
+        return False
+    return True
+
+
 def _cand_block_for_prompt(cands: list, similars: list) -> str:
     parts = []
     for i, (c, hits) in enumerate(zip(cands, similars)):
@@ -356,8 +381,27 @@ async def _reconcile_candidates(
         # 却并非该候选所指"的无关记忆，静默毁数据。按本模块"宁可误留不误杀"降级：
         # UPDATE 无 target → ADD（保留候选增量，不动既有行）；DELETE 无 target → NOOP
         # （丢弃候选，不作废任何行）。降级后的 op 才计入 counters，令统计与实际效果一致。
-        if op in ("UPDATE", "DELETE") and not d.get("target_id"):
-            op = "ADD" if op == "UPDATE" else "NOOP"
+        if op in ("UPDATE", "DELETE"):
+            target_id = d.get("target_id")
+            # S3-01 / S3-04 修复：「给了 target」不等于「target 可用」。两种不可用都按
+            # 本模块既有的「缺 target」同款降级（UPDATE→ADD / DELETE→NOOP）：
+            # ① 行不存在或已非 active —— supersede 会在 add_memory 已 commit 之后抛
+            #    ValueError（`_apply` 的顺序），留下 active 孤儿行 + 零条审计，job 留在
+            #    pending 被反复重放（LEGACY #3 的确定性触发路径，UI 点「重试」还会把
+            #    attempts 归零、每点一次再叠 3 份重复）；
+            # ② 行被用户钉住 —— spec 明令对账路径不碰 pinned，而 retire 的 WHERE 只有
+            #    状态守卫、supersede 是裸 `id=?`，_similar_existing 也只看 active。
+            # 注：战役报告建议的另一半（target 必须属于**本候选**的对照面）没有采纳 ——
+            # 它与既有测试 test_delete_invalidates_not_physical 锁定的契约冲突（该用例
+            # 的 target 由调用方直接点名、不经检索）。要不要收紧到「只认 prompt 里
+            # 展示过的 id」是一个真实的产品裁决点，不是可以顺手改掉的实现细节。
+            if target_id and not await _target_actionable(target_id):
+                target_id = None
+            if not target_id:
+                op = "ADD" if op == "UPDATE" else "NOOP"
+                # 清掉裁决里的 target_id：_apply 还会读它，留着等于把刚拒掉的
+                # 那个 id 又交给下游（NOOP 分支拿它写审计标签）
+                d = {**d, "target_id": None}
         counters[op] = counters.get(op, 0) + 1
         await _apply(cand, op, d, similars[i], job_id, embed_client)
     return counters

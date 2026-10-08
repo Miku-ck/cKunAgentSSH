@@ -275,6 +275,56 @@ def test_delete_invalidates_not_physical(memdb, monkeypatch):
     assert mstore.list_memories(status="invalidated")  # 行仍在，供审计
 
 
+def test_reconcile_拒绝不存在的_target_不留孤儿行(memdb, monkeypatch):
+    """S3-01 / LEGACY #3：幻觉 target 不能把这次对账打成「孤儿行 + 零审计 + 反复重放」。
+
+    _apply 的 UPDATE 分支顺序是 add_memory（线程池里已 commit）→ supersede(target)；
+    supersede 对不存在的 old_id 抛 ValueError ⇒ 新行留在库里、memory_audit 一条都没写、
+    job 停在 pending 被下个 tick 重放。UI 的「重试」把 attempts 归零 ⇒ 每点一次再叠
+    最多 3 份重复，最终表现为「同文条目 2-3 份」且抽屉历史解释不了。
+    """
+    mstore.enqueue_job(reconcile.JOB_CANDIDATE, {"items": [
+        {"title": "", "content": "候选Y", "kind": "semantic", "scope": "global"}]})
+
+    async def fake_llm(prompt, block, cfg):
+        return [{"index": 0, "op": "UPDATE", "target_id": "no-such-memory-id",
+                 "merged_content": "候选Y 合并后", "reason": "给了个库里没有的 id"}]
+    monkeypatch.setattr(reconcile, "_call_llm", fake_llm)
+
+    result = _process(FakeEmbed())
+
+    rows = mstore.list_memories()
+    assert len(rows) == 1, f"降级后应只有一条 ADD，实际 {len(rows)} 条（孤儿/重复）"
+    assert rows[0]["content"] == "候选Y"
+    assert result["applied"].get("UPDATE", 0) == 0
+    assert mstore.list_audit(rows[0]["id"]), "作废/取代必须留审计痕迹"
+    assert mstore.list_jobs(status="pending") == [], "job 应正常收尾，不再被反复重放"
+
+
+def test_reconcile_不碰用户钉住的记忆(memdb, monkeypatch):
+    """S3-04：pinned 是「别碰」标记，spec 明令自动对账不得触碰。
+
+    此前 retire 的 WHERE 只有状态守卫、supersede 是裸 `id=?`，_similar_existing 也只看
+    status='active' ⇒ 用户手写并钉住的事实可被一次对账静默改写或作废。
+    """
+    kept = mstore.add_memory(kind="semantic", content="生产库口令轮换周期 90 天",
+                             source="manual")
+    assert mstore.set_pinned(kept, True)
+    mstore.enqueue_job(reconcile.JOB_CANDIDATE, {"items": [
+        {"title": "", "content": "口令每 60 天轮换", "kind": "semantic", "scope": "global"}]})
+
+    async def fake_llm(prompt, block, cfg):
+        return [{"index": 0, "op": "DELETE", "target_id": kept, "reason": "认为已过时"}]
+    monkeypatch.setattr(reconcile, "_call_llm", fake_llm)
+
+    _process(FakeEmbed())
+
+    assert mstore.get_memory(kept)["status"] == "active", "钉住的行被对账作废了"
+    assert mstore.get_memory(kept)["pinned"] == 1
+    assert not mstore.list_audit(kept, limit=5) or all(
+        a["action"] != "DELETE" for a in mstore.list_audit(kept))
+
+
 def test_update_missing_target_id_degrades_to_add_not_hits_fallback(memdb, monkeypatch):
     """审查修复锁定（CRITICAL）：prompt 明确要求 UPDATE/DELETE 给 target_id；LLM 若违约
     漏给，旧实现回落到相似度首位 hits[0]，会 supersede 一条并非目标的相似记忆。现降级为
