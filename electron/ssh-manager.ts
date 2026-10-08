@@ -19,6 +19,7 @@ export function loadSsh2(): Promise<Ssh2ClientCtor> {
 import { assertKeyFileSafe } from './utils/path-guard'
 import { BrowserWindow, app } from 'electron'
 import { SSHError, classifyRawError, toFriendlyZh } from './ssh-error'
+import { encodeTransferErrorName, isTransferRetryable, type TransferErrorCode } from '../shared/transfer-error-core'
 import { readFileSync, statSync } from 'fs'
 import { promises as fsPromises } from 'fs'
 import { posix, join } from 'path'
@@ -35,29 +36,26 @@ const EXEC_RECONNECT_WAIT_MS = 10000
 
 // ════════════════════════════════════════════════
 //   传输错误分类（断点续传 / 友好提示 / 自动重试依据）
+//   码集与 retryable 判定在 shared/transfer-error-core.ts（S0-15：渲染端要按
+//   同一口径决定是否自动续传，两处各抄一份必然漂移）
 // ════════════════════════════════════════════════
-type TransferErrorCode =
-  | 'NETWORK' | 'DISK_FULL' | 'PERMISSION' | 'NOT_FOUND'
-  | 'CANCELLED' | 'STALLED' | 'REMOTE_CHANGED' | 'RENAME_FAILED' | 'UNKNOWN'
-
 interface TransferError {
   code: TransferErrorCode
   message: string
-  retryable: boolean
   originalError?: Error
 }
 
 /** 根据原始错误归类为 TransferError，便于前端决定是否自动重试 */
 function classifyTransferError(err: unknown, cancelled: boolean): TransferError {
   if (cancelled) {
-    return { code: 'CANCELLED', message: '已取消', retryable: false }
+    return { code: 'CANCELLED', message: '已取消' }
   }
   const msg = (err instanceof Error ? err.message : String(err)).toLowerCase()
   // SFTP 状态码 4 (SSH_FX_FAILURE)：ssh2 对该状态只报裸文本 "Failure"（无
   // "SSH_FX_FAILURE:" 前缀），原始 err.code 即数值 4。与下方 ssh_fx_failure 同归
   // NETWORK — 服务端通用错误多由瞬时负载引起，不可判 UNKNOWN 删 .part 丢进度
   if ((err as { code?: unknown } | null)?.code === 4) {
-    return { code: 'NETWORK', message: '网络中断，已保存进度可续传', retryable: true, originalError: err as Error }
+    return { code: 'NETWORK', message: '网络中断，已保存进度可续传', originalError: err as Error }
   }
   if (msg.includes('econnreset') || msg.includes('etimedout') || msg.includes('epipe')
       || msg.includes('socket hang up') || msg.includes('read epipe') || msg.includes('write epipe')
@@ -65,26 +63,34 @@ function classifyTransferError(err: unknown, cancelled: boolean): TransferError 
       // 服务端通用错误，常由瞬时负载导致 — 原实现按 'failure' 子串一律判 PERMISSION
       // 不可重试，一抖动就删 .part 丢全部进度。归 NETWORK（可重试，保留 .part）
       || msg.includes('ssh_fx_failure')) {
-    return { code: 'NETWORK', message: '网络中断，已保存进度可续传', retryable: true, originalError: err as Error }
+    return { code: 'NETWORK', message: '网络中断，已保存进度可续传', originalError: err as Error }
   }
   if (msg.includes('enospc') || msg.includes('no space left') || msg.includes('disk full')) {
-    return { code: 'DISK_FULL', message: '磁盘空间不足', retryable: false, originalError: err as Error }
+    return { code: 'DISK_FULL', message: '磁盘空间不足', originalError: err as Error }
   }
   // 仅明确的 permission denied 类状态判不可重试（不再匹配泛化的 'failure' 子串）
   if (msg.includes('eacces') || msg.includes('permission denied') || msg.includes('ssh_fx_permission_denied')) {
-    return { code: 'PERMISSION', message: '权限不足或目标被占用', retryable: false, originalError: err as Error }
+    return { code: 'PERMISSION', message: '权限不足或目标被占用', originalError: err as Error }
   }
   if (msg.includes('enoent') || msg.includes('no such file')) {
-    return { code: 'NOT_FOUND', message: '文件不存在或已被删除', retryable: false, originalError: err as Error }
+    return { code: 'NOT_FOUND', message: '文件不存在或已被删除', originalError: err as Error }
   }
-  return { code: 'UNKNOWN', message: `传输失败: ${err instanceof Error ? err.message : String(err)}`, retryable: false, originalError: err as Error }
+  return { code: 'UNKNOWN', message: `传输失败: ${err instanceof Error ? err.message : String(err)}`, originalError: err as Error }
 }
 
-/** 将 TransferError 包装为可抛出的 Error（携带 code/retryable 字段） */
+/**
+ * 将 TransferError 包装为可抛出的 Error。
+ *
+ * S0-15：自定义 code/retryable 属性是「可能存活」的那条腿，name 腿才是本仓
+ * 实证保真性最强的通道（normalizeIpcError 对 SSHError 就是这么双写的）。
+ * 渲染端 describeTransferError 两条腿都读，任一存活即可恢复 code，retryable
+ * 由 code 现推 —— 不再依赖那个可能已被 IPC 抹掉的布尔属性。
+ */
 function toTransferError(tErr: TransferError): Error {
   const e = new Error(tErr.message) as Error & { code?: string; retryable?: boolean }
+  e.name = encodeTransferErrorName(tErr.code)
   e.code = tErr.code
-  e.retryable = tErr.retryable
+  e.retryable = isTransferRetryable(tErr.code)
   return e
 }
 
@@ -1547,7 +1553,7 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
         cancelFn()
         // 错误对象形态与 NETWORK 一致（Error + code/retryable），渲染层按
         // retryable 统一走自动续传路径
-        stallReject?.(toTransferError({ code: 'STALLED', message: '传输停滞，网络可能不稳定', retryable: true }))
+        stallReject?.(toTransferError({ code: 'STALLED', message: '传输停滞，网络可能不稳定' }))
       }
     })
 
@@ -1737,11 +1743,12 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       sendProgress({ transferred: total, total })
     } catch (err) {
       // 错误分类
-      const tErr = heartbeat.isStalled()
-        ? { code: 'STALLED' as const, message: '传输停滞，网络可能不稳定', retryable: true }
+      const tErr: TransferError = heartbeat.isStalled()
+        ? { code: 'STALLED', message: '传输停滞，网络可能不稳定' }
         : classifyTransferError(err, cancelled)
-      // 不可重试的错误清理 .part
-      if (!tErr.retryable && tErr.code !== 'CANCELLED') {
+      // 不可重试的错误清理 .part —— 判据与渲染端的自动续传共用
+      // isTransferRetryable(code)（S0-15），两侧不可能再对同一 code 有两种理解
+      if (!isTransferRetryable(tErr.code) && tErr.code !== 'CANCELLED') {
         try { await sftpUnlink(sftp, partPath) } catch { /* ignore */ }
       }
       throw toTransferError(tErr)
@@ -1823,7 +1830,7 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
         cancelFn()
         // 错误对象形态与 NETWORK 一致（Error + code/retryable），渲染层按
         // retryable 统一走自动续传路径
-        stallReject?.(toTransferError({ code: 'STALLED', message: '传输停滞，网络可能不稳定', retryable: true }))
+        stallReject?.(toTransferError({ code: 'STALLED', message: '传输停滞，网络可能不稳定' }))
       }
     })
 
@@ -1905,7 +1912,7 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
         let off = 0
         for (;;) {
           if (cancelled) {
-            throw toTransferError({ code: 'CANCELLED', message: '传输已取消', retryable: false })
+            throw toTransferError({ code: 'CANCELLED', message: '传输已取消' })
           }
           const buf = await sftpRead(sftp, downloadRemoteHandle, off, CHUNK_SIZE)
           if (buf.length === 0) break
@@ -2014,16 +2021,15 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
         tErr = {
           code: 'RENAME_FAILED',
           message: `下载已完成，但重命名为最终文件失败：${err instanceof Error ? err.message : String(err)}。请重试下载（数据已保留为 .part）`,
-          retryable: true,
           originalError: err as Error,
         }
       } else {
         tErr = heartbeat.isStalled()
-          ? { code: 'STALLED' as const, message: '传输停滞，网络可能不稳定', retryable: true }
+          ? { code: 'STALLED', message: '传输停滞，网络可能不稳定' }
           : classifyTransferError(err, cancelled)
       }
-      // 不可重试的错误清理 .part
-      if (!tErr.retryable && tErr.code !== 'CANCELLED') {
+      // 不可重试的错误清理 .part（判据与渲染端同源，见 isTransferRetryable）
+      if (!isTransferRetryable(tErr.code) && tErr.code !== 'CANCELLED') {
         try { await fsPromises.unlink(partPath) } catch { /* ignore */ }
       }
       throw toTransferError(tErr)

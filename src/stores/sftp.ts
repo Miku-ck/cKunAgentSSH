@@ -5,9 +5,10 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { useToastStore } from './toast'
-import { toFriendlyMessage } from '@/api/client'
+import { toFriendlyMessage, unwrapIpcErrorEnvelope } from '@/api/client'
 import { extractSSHError } from '@/ssh-error-types'
 import { isUnsafeRemoteName } from '@/utils/remote-name'
+import { describeTransferError } from '@/utils/transfer-error'
 
 type TransferKind = 'upload' | 'download' | 'copy-local' | 'copy-remote'
 
@@ -129,7 +130,7 @@ export const useSftpStore = defineStore('sftp', () => {
       await loadRemote('/')
     } catch (err: any) {
       online.value = false
-      remoteError.value = err?.message || 'SFTP 打开失败'
+      remoteError.value = unwrapIpcErrorEnvelope(err?.message || '') || 'SFTP 打开失败'
       // 失败时关闭 SSH
       try { await getApi().sshDisconnect(id) } catch { }
       sshSessionId.value = ''
@@ -165,7 +166,7 @@ export const useSftpStore = defineStore('sftp', () => {
       await loadRemote(target)
     } catch (err: any) {
       online.value = false
-      remoteError.value = err?.message || 'SFTP 打开失败'
+      remoteError.value = unwrapIpcErrorEnvelope(err?.message || '') || 'SFTP 打开失败'
       // 复用模式下不关闭 SSH 连接（终端仍需要）
       try { await getApi().sftpClose(terminalSshId) } catch { }
       sshSessionId.value = ''
@@ -249,7 +250,7 @@ export const useSftpStore = defineStore('sftp', () => {
       selectedLocal.value = new Set()
     } catch (err: any) {
       if (mySeq !== localLoadSeq) return
-      localError.value = err?.message || '读取本地目录失败'
+      localError.value = unwrapIpcErrorEnvelope(err?.message || '') || '读取本地目录失败'
     } finally {
       // 仅最新请求负责复位 loading（&& !silent 会让「非静默导航 + 期间发起的静默刷新」
       // 两条请求都跳过复位 —— 列表已加载完却永久停在「加载中...」）
@@ -347,7 +348,7 @@ async function localRefresh(): Promise<void> {
       selectedRemote.value = new Set()
     } catch (err: any) {
       if (mySeq !== remoteLoadSeq) return
-      remoteError.value = err?.message || '读取远程目录失败'
+      remoteError.value = unwrapIpcErrorEnvelope(err?.message || '') || '读取远程目录失败'
     } finally {
       // 与 loadLocal 同步：最新请求一律复位，静默与否只影响是否显示 loading
       if (mySeq === remoteLoadSeq) loadingRemote.value = false
@@ -427,7 +428,9 @@ async function remoteRefresh(): Promise<void> {
       t.status = 'error'
       // 兜底文案不能也叫「复制失败」：外层 toast 已经以「复制失败: 名字 —」开头，
       // 撞上这个兜底就原样说两遍。
-      t.error = err?.message || '未返回错误详情'
+      // S0-24：先剥 Electron 的 invoke 信封再落给用户 —— 否则内部通道名
+      // （'fs:copy' 之类）连同 "Error invoking remote method" 一起进用户可见区
+      t.error = unwrapIpcErrorEnvelope(err?.message || '') || '未返回错误详情'
       t.endTime = Date.now()
       toast.error(`复制失败: ${t.name} — ${t.error}`)
       scheduleRemoveTransfer(id, 10000)
@@ -487,7 +490,9 @@ async function remoteRefresh(): Promise<void> {
       t.status = 'error'
       // 兜底文案不能也叫「复制失败」：外层 toast 已经以「复制失败: 名字 —」开头，
       // 撞上这个兜底就原样说两遍。
-      t.error = err?.message || '未返回错误详情'
+      // S0-24：先剥 Electron 的 invoke 信封再落给用户 —— 否则内部通道名
+      // （'fs:copy' 之类）连同 "Error invoking remote method" 一起进用户可见区
+      t.error = unwrapIpcErrorEnvelope(err?.message || '') || '未返回错误详情'
       t.endTime = Date.now()
       toast.error(`复制失败: ${t.name} — ${t.error}`)
       scheduleRemoveTransfer(id, 10000)
@@ -986,8 +991,9 @@ async function remoteRefresh(): Promise<void> {
       toast.success(`上传成功: ${t.name}`)
       scheduleRemoveTransfer(id)
     } catch (err: any) {
-      const code = err?.code as string | undefined
-      const retryable = err?.retryable as boolean | undefined
+      // S0-15：code 两条腿都读（Error.name 前缀是跨 IPC 保真性最强的通道），
+      // retryable 改由 code 现推 —— 不再依赖那个可能已被结构化克隆丢掉的布尔属性
+      const { code, retryable, message } = describeTransferError(err)
       // 审查 M-18：暂停路径 — pauseTransfer 已把状态置为 'paused' 并记录断点，
       // 随后 sftp:cancel 触发的 CANCELLED 拒绝不能覆盖暂停状态、不能弹错误、
       // 更不能把暂停中的任务 10s 后移除（原实现会，导致用户无法"恢复"）
@@ -997,14 +1003,14 @@ async function remoteRefresh(): Promise<void> {
       // B10：disconnect 已先行置 cancelled 并 sftpCancel — CANCELLED 拒绝静默吞掉
       if (statusNow === 'cancelled') return
       // NETWORK/STALLED 错误自动重试一次（断点续传，主进程按 .part 自动定位）。
-      // 判定只看 err.retryable（主进程 STALLED reject 与 NETWORK 同形态，均带 retryable: true），
-      // err.code 不参与判定
+      // 判定只看 retryable（由 code 经 isTransferRetryable 现推，与主进程
+      // 保留/删除 .part 的判据同源）
       if (retryable && !retried) {
         toast.info(`正在自动续传: ${t.name}…`)
         return runUpload(id, sid, localPath, remotePath, true)
       }
       t.status = code === 'CANCELLED' ? 'cancelled' : 'error'
-      t.error = err?.message || '上传失败'
+      t.error = message || '上传失败'
       t.endTime = Date.now()
       // 取消是用户行为，不弹错误 toast
       if (code !== 'CANCELLED') {
@@ -1032,8 +1038,9 @@ async function remoteRefresh(): Promise<void> {
       toast.success(`下载成功: ${t.name}`)
       scheduleRemoveTransfer(id)
     } catch (err: any) {
-      const code = err?.code as string | undefined
-      const retryable = err?.retryable as boolean | undefined
+      // S0-15：code 两条腿都读（Error.name 前缀是跨 IPC 保真性最强的通道），
+      // retryable 改由 code 现推 —— 不再依赖那个可能已被结构化克隆丢掉的布尔属性
+      const { code, retryable, message } = describeTransferError(err)
       // 审查 M-18：暂停路径保护（同 runUpload）— 已暂停的任务不被 CANCELLED
       // 覆盖状态、不弹错误、不移除（宽化为 string：TS 看不到跨函数赋值）
       const statusNow: string = t.status
@@ -1041,13 +1048,13 @@ async function remoteRefresh(): Promise<void> {
       // B10：disconnect 已先行置 cancelled 并 sftpCancel — CANCELLED 拒绝静默吞掉
       if (statusNow === 'cancelled') return
       // NETWORK/STALLED 错误自动重试一次（断点续传，主进程按 .part 自动定位）
-      // 判定只看 err.retryable（STALLED 与 NETWORK 同形态），err.code 不参与判定
+      // 判定只看 retryable（由 code 现推，见 describeTransferError）
       if (retryable && !retried) {
         toast.info(`正在自动续传: ${t.name}…`)
         return runDownload(id, sid, remotePath, localPath, true)
       }
       t.status = code === 'CANCELLED' ? 'cancelled' : 'error'
-      t.error = err?.message || '下载失败'
+      t.error = message || '下载失败'
       t.endTime = Date.now()
       if (code !== 'CANCELLED') {
         // F-3：重试耗尽后区分停滞

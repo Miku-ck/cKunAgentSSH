@@ -11,44 +11,75 @@
 
 // ════════════════════════════════════════════════
 //   错误码枚举（稳定契约，不要轻易改字符串值）
+//   S0-23：成员表与运行时校验函数由**同一个数组**派生 —— 类型 union 与
+//   isSSHErrorCode 的名单不可能再各改各的（新增成员漏进名单 = 回读侧把合法码
+//   判成非法；旧成员删了没删名单 = 幽灵码继续被当成契约的一部分）。
 // ════════════════════════════════════════════════
-export type SSHErrorCode =
+export const SSH_ERROR_CODES = [
   // 网络层
-  | 'CONN_REFUSED'       // 主机拒绝连接（端口未开 / 防火墙）
-  | 'CONN_TIMEOUT'       // TCP 超时（网络不可达、IP 错）
-  | 'CONN_RESET'         // 连接被远端重置
-  | 'DNS_FAIL'           // 域名解析失败
-  | 'NETWORK_ERROR'      // 其他网络异常
+  'CONN_REFUSED',       // 主机拒绝连接（端口未开 / 防火墙）
+  'CONN_TIMEOUT',       // TCP 超时（网络不可达、IP 错）
+  'CONN_RESET',         // 连接被远端重置
+  'DNS_FAIL',           // 域名解析失败
+  'NETWORK_ERROR',      // 其他网络异常
 
   // 认证层
-  | 'AUTH_PASSWORD'      // 密码认证失败
-  | 'AUTH_KEY'           // 私钥认证失败（密钥不匹配 / 路径错）
-  | 'AUTH_PASSPHRASE'    // 私钥需要 passphrase 但没给或给错
-  | 'AUTH_AGENT'         // SSH agent 认证失败
-  | 'AUTH_UNKNOWN'       // 认证阶段失败，原因不明
+  'AUTH_PASSWORD',      // 密码认证失败
+  'AUTH_KEY',           // 私钥认证失败（密钥不匹配 / 路径错）
+  'AUTH_PASSPHRASE',    // 私钥需要 passphrase 但没给或给错
+  'AUTH_AGENT',         // SSH agent 认证失败
+  'AUTH_UNKNOWN',       // 认证阶段失败，原因不明
 
   // 主机密钥
-  | 'HOST_KEY_MISMATCH'  // 服务器密钥与 known_hosts 不匹配
-  | 'HOST_KEY_UNKNOWN'   // 新主机且未确认信任
+  'HOST_KEY_MISMATCH',  // 服务器密钥与 known_hosts 不匹配
+  'HOST_KEY_UNKNOWN',   // 新主机且未确认信任
 
   // SFTP 子系统
-  | 'SFTP_INIT_FAIL'     // SFTP 子系统打开失败（服务端不支持 / 没装）
-  | 'SFTP_PERMISSION'    // 远端文件权限不足
-  | 'SFTP_NOT_FOUND'     // 远端路径不存在
-  | 'SFTP_SPACE'         // 远端磁盘空间不足
-  | 'SFTP_FAIL'          // 其他 SFTP 操作失败
+  'SFTP_INIT_FAIL',     // SFTP 子系统打开失败（服务端不支持 / 没装）
+  'SFTP_PERMISSION',    // 远端文件权限不足
+  'SFTP_NOT_FOUND',     // 远端路径不存在
+  'SFTP_SPACE',         // 远端磁盘空间不足
+  'SFTP_FAIL',          // 其他 SFTP 操作失败
 
   // 命令执行
-  | 'EXEC_TIMEOUT'       // 命令执行超时
-  | 'EXEC_FAIL'          // 命令执行失败
+  'EXEC_TIMEOUT',       // 命令执行超时
+  'EXEC_FAIL',          // 命令执行失败
 
   // 会话 / 资源
-  | 'SESSION_NOT_FOUND'  // 会话不存在或已断开
-  | 'SESSION_LIMIT'      // 会话数已达上限
-  | 'SFTP_SESSION_REQUIRED' // 需要 SFTP 会话但未打开
+  'SESSION_NOT_FOUND',  // 会话不存在或已断开
+  'SESSION_LIMIT',      // 会话数已达上限
+  'SFTP_SESSION_REQUIRED', // 需要 SFTP 会话但未打开
 
   // 兜底
-  | 'UNKNOWN'
+  'UNKNOWN',
+] as const
+
+export type SSHErrorCode = typeof SSH_ERROR_CODES[number]
+
+/** 运行时校验：跨进程传来的 code 字符串是否属于本契约（S0-23） */
+export function isSSHErrorCode(value: unknown): value is SSHErrorCode {
+  return typeof value === 'string' && (SSH_ERROR_CODES as readonly string[]).includes(value)
+}
+
+/**
+ * IPC 透传形状 —— 主进程 toIpcTransport 产出、渲染端 extractSSHError 消费。
+ * S0-23：原先两个进程各抄一份 interface，注释写着「完全对齐」但没有任何东西
+ * 保证它；收敛到这里之后，形状漂移会变成编译期错误。
+ */
+export interface SSHErrorTransport {
+  /** 类型哨兵，用于前端 extractSSHError 识别 */
+  __sshError: true
+  code: SSHErrorCode
+  /** 友好中文描述（始终可用；生产端渲染，消费端优先采信） */
+  message: string
+  retryable: boolean
+  /**
+   * 原始技术信息（S0-24）：生产方的 detail 优先，其次才是原始 Error 的消息。
+   * 契约是「只在开发模式的详情区显示」—— 渲染端必须按 import.meta.env.DEV 门控，
+   * 不要把 getaddrinfo / Cannot parse privateKey 这类串直接端给用户。
+   */
+  detail?: string
+}
 
 /** 是否可重试（前端据此决定是否显示"重试"按钮） */
 export function isRetryable(code: SSHErrorCode): boolean {

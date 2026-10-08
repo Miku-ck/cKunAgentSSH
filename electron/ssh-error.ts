@@ -10,10 +10,10 @@
  *     前端由 extractSSHError()（src/ssh-error-types.ts）解析 __sshError 哨兵还原结构化错误
  */
 
-import type { SSHErrorCode } from '../shared/ssh-error-core'
+import type { SSHErrorCode, SSHErrorTransport } from '../shared/ssh-error-core'
 import { isRetryable, toFriendlyZh } from '../shared/ssh-error-core'
 
-export type { SSHErrorCode }
+export type { SSHErrorCode, SSHErrorTransport }
 export { isRetryable, toFriendlyZh }
 
 /**
@@ -109,13 +109,8 @@ export class SSHError extends Error {
 // ════════════════════════════════════════════════
 //   IPC 传输格式 & 序列化
 // ════════════════════════════════════════════════
-export interface SSHErrorTransport {
-  __sshError: true       // 类型哨兵，用于前端 extractSSHError 识别
-  code: SSHErrorCode
-  message: string        // 友好中文描述（始终可用）
-  retryable: boolean
-  detail?: string        // 原始技术信息（开发模式才显示给终端用户）
-}
+// SSHErrorTransport 形状来自 shared/ssh-error-core（S0-23：两进程各抄一份的
+// 那版已删，"完全对齐"从此由编译器保证）
 
 /** 序列化为可跨 IPC 传输的纯 JSON 对象（Electron IPC 自动序列化 Error 会丢失 name/code） */
 export function toIpcTransport(err: SSHError): SSHErrorTransport {

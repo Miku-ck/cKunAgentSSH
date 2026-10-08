@@ -5,7 +5,7 @@ import { useSshAiStore } from '@/stores/ssh-ai'
 import { useServerMonitorStore } from '@/stores/server-monitor'
 import { useSftpStore } from '@/stores/sftp'
 import { useToastStore } from '@/stores/toast'
-import { toFriendlyMessage } from '@/api/client'
+import { toFriendlyMessage, unwrapIpcErrorEnvelope } from '@/api/client'
 import { extractSSHError, isRetryable } from '@/ssh-error-types'
 
 /** 本地终端列表常量（供标签条 ＋ 菜单渲染，动作仍走本文件的 openLocalShell） */
@@ -291,8 +291,13 @@ export function useSshNavigation(
       // v2 改进：结构化错误优先提取 SSHErrorTransport，带详情与重试按钮
       const sshTransport = extractSSHError(err)
       const friendlyMsg = toFriendlyMessage(err, 'SSH 连接失败')
-      const details = sshTransport?.detail
-        || (err instanceof Error && err.message !== friendlyMsg ? err.message : undefined)
+      // S0-24：detail 与原始 message 属开发态诊断 —— transport 的字段契约写的就是
+      // 「开发模式才显示给终端用户」，而此前这里没有任何门控：getaddrinfo /
+      // Cannot parse privateKey 连同 Electron 信封（含内部通道名）一起进了可见区。
+      const rawMsg = err instanceof Error ? unwrapIpcErrorEnvelope(err.message) : ''
+      const details = import.meta.env.DEV
+        ? sshTransport?.detail || (rawMsg && rawMsg !== friendlyMsg ? rawMsg : undefined)
+        : undefined
       const actions = (sshTransport && isRetryable(sshTransport.code))
         ? [{ label: '重试', onClick: () => connectRemote(conn) }]
         : undefined
