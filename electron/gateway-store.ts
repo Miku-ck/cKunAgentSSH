@@ -26,7 +26,6 @@ export interface GatewayRecord {
   user: string
   /** 落盘为 enc:base64；listPublic() 里抹掉 */
   password?: string
-  autoConnect: boolean
   createdAt: number
   updatedAt: number
 }
@@ -53,7 +52,12 @@ function encrypt(plain?: string): string | undefined {
 
 function decrypt(stored?: string): string | undefined {
   if (!stored) return undefined
-  if (!stored.startsWith('enc:')) return stored
+  if (!stored.startsWith('enc:')) {
+    // 库里出现非 enc: 前缀 = 有人手改过文件，或上一版把明文写了进去。
+    // 把它当口令用等于替那份明文打掩护（与 ssh-store 同口径）：宁可连不上，也不外发明文。
+    console.warn('[GatewayStore] 网关凭据不是 enc: 密文格式，按不可用处理（请重新输入口令）')
+    return undefined
+  }
   if (!safeStorage.isEncryptionAvailable()) return undefined
   try {
     return safeStorage.decryptString(Buffer.from(stored.slice(4), 'base64'))
@@ -61,6 +65,16 @@ function decrypt(stored?: string): string | undefined {
     console.warn('[GatewayStore] 口令解密失败（系统钥匙串可能已重置）:', e)
     return undefined
   }
+}
+
+/** SPKI 指纹的形状（与 peerSpki 的输出一致） */
+const SPKI_SHAPE = /^sha256\/[A-Za-z0-9+/=]{43,44}$/
+
+/** 地址/端口/CA 变了，之前确认的指纹就不再作数 —— 那是另一台机器或另一张证书 */
+function identityChanged(prev: GatewayRecord, input: GatewayRecord): boolean {
+  return prev.host !== input.host.trim()
+    || prev.port !== input.port
+    || (prev.caPem || '') !== (input.caPem?.trim() || '')
 }
 
 function isPort(v: unknown): v is number {
@@ -159,14 +173,10 @@ export class GatewayStore {
     return run
   }
 
-  /** 渲染层用：不含口令 */
+  /** 渲染层用：不含口令。读失败一律上抛 —— 吞成空列表会让 UI 说「还没有接入网关」，
+   *  而库里那几条好好的，只是这一秒没读到（本仓在设置面板上为同一件事修过一轮） */
   async list(): Promise<PublicGatewayRecord[]> {
-    try {
-      return (await readAllFromDisk()).map(strip)
-    } catch (e) {
-      console.error('[GatewayStore] list 读取失败，降级为空列表:', e)
-      return []
-    }
+    return (await readAllFromDisk()).map(strip)
   }
 
   /** 主进程建连用：含解密后的口令 */
@@ -182,22 +192,28 @@ export class GatewayStore {
       const all = await readAllFromDisk()
       const now = Date.now()
       const idx = all.findIndex(r => r.id === input.id)
+      const prev = idx !== -1 ? all[idx] : undefined
+      // 逐字段挑，不 ...input：渲染层能塞什么进来就该被审什么，指纹尤其不能由它写
       const stored: GatewayRecord = {
-        ...input,
         id: input.id || genId(),
-        host: input.host.trim(),
         name: input.name.trim(),
-        createdAt: idx !== -1 ? all[idx].createdAt : now,
+        host: input.host.trim(),
+        port: input.port,
+        user: input.user.trim(),
+        caPem: input.caPem?.trim() || undefined,
+        createdAt: prev ? prev.createdAt : now,
         updatedAt: now,
+        // 指纹只有主进程能改（TOFU 确认走 setSpki）；地址/端口/CA 变了就作废
+        trustedSpki: prev && !identityChanged(prev, input) ? prev.trustedSpki : undefined,
       }
       validateGateway(stored, all)
-      // 留空 = 保留原值（与 ssh-store 的凭据口径一致），落盘前才换成密文
-      const plain = input.password || (idx !== -1 ? all[idx].password : undefined)
-      stored.password = encrypt(plain) ?? (idx !== -1 ? all[idx].password : undefined)
-      // 地址或 CA 变了，之前确认的指纹就不该继续作数
-      if (idx !== -1 && (all[idx].host !== stored.host || all[idx].port !== stored.port || all[idx].caPem !== stored.caPem)) {
-        stored.trustedSpki = undefined
+      if (!safeStorage.isEncryptionAvailable() && input.password) {
+        // 与 ssh-store 同口径：加密不可用时新口令落不了盘，说破而不是假装存上了
+        console.warn('[GatewayStore] safeStorage 不可用，本次提交的口令不会持久化（每次连接需重新输入）')
       }
+      // 留空 = 保留原值。库里那份是 enc: 密文，绝不能再进 encrypt 一遍 ——
+      // 叠一层后 decrypt 解出来的是 "enc:…" 这串文本，被当口令送上门，认证永久失败。
+      stored.password = encrypt(input.password) ?? prev?.password
       if (idx !== -1) all[idx] = stored
       else all.push(stored)
       await writeAllToDisk(all)
@@ -208,6 +224,7 @@ export class GatewayStore {
   /** TOFU 确认后写指纹 */
   async setSpki(id: string, spki: string): Promise<void> {
     return this.enqueue(async () => {
+      if (!SPKI_SHAPE.test(spki)) throw new Error('指纹形状不合法（期望 sha256/<base64>）')
       const all = await readAllFromDisk()
       const rec = all.find(r => r.id === id)
       if (!rec) throw new Error('网关记录不存在')

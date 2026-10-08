@@ -183,6 +183,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   gatewayStatusAll: () => ipcRenderer.invoke('gateway:statusAll'),
   gatewayChannels: (id: string) => ipcRenderer.invoke('gateway:channels', id),
   gatewayTrustHostKey: (id: string, spki: string) => ipcRenderer.invoke('gateway:trustHostKey', id, spki),
+  // 取消 TOFU：让主进程清掉待确认指纹，否则「取消」只是把弹窗收起来（什么也没撤销）
+  gatewayHostKeyReject: (id: string) => ipcRenderer.invoke('gateway:hostKeyReject', id),
   /** 会话状态变化（含重连退避进度），每次迁移推一条 */
   onGatewayStatus: (callback: (data: GatewayStatus) => void) => {
     const handler = (_event: any, data: GatewayStatus) => callback(data)

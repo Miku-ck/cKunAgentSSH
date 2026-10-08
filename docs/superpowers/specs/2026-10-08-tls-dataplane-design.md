@@ -327,3 +327,90 @@ gatewayId?: string        // via==='gateway' 必填，弱引用 GatewayRecord.id
 渲染这一层本机拿不到截图（浏览器视口 0×0），改用量测核对：空态盒在页面体内的中心点
 (416, 433) 对容器中心 (415.5, 433)，页签条按钮 computed 为 24px 高 / 12px 字 / 4px 圆角 /
 透明底 + `color-mix(accent 50%)` 描边 —— 与 button.css 逐字一致；组件内已无 scoped `.btn` 声明。
+
+## 12. 双轴审查后的修复回填（同日，M1–M5 之后）
+
+对 §1–§11 的产物做了一次标准轴 / 规格轴分离审查，逐条验码后修掉下面这些。本节的写法仍是
+**覆盖上文冲突表述**，上文保留原句以便看出改了什么。
+
+### 12.1 运行期缺陷（四条，都是"看着接上了、其实没通"）
+
+1. **网关的下行方向根本没发 DATA**（`hillgw.mjs` 的 `Channel.writeOut` 写的是 `this.sock`，
+   而那正是目标连接 —— 目标的回包被倒回目标自己，客户端一个字节都收不到；`-L` 与 `-R` 两条
+   路径都中招）。现在拆成 `writeSock`（本端 socket ← 客户端）与 `toClient`（DATA 帧 → 客户端），
+   两个方向各有一套背压：写侧满就压对应那一侧的读，且用 `slowTarget/slowClient` 记水位，
+   避免重复 pause 在同一 socket 上叠 drain 监听器。
+2. **未认证即可 BIND**：`onFrame` 原先不检查 `this.user`，未登录的 TLS 对端能让我在任意
+   `bindHost:bindPort` 上 listen（`OPEN` 只因 `role=null → allow:[]` 侥幸 fail-closed）。
+   现在认证前只放行 `hello/auth/ping/pong/goaway`，其余一律作废会话。
+3. **chan 登记晚于 `await dns.lookup`**：解析窗口内同 chan 的第二个 OPEN 能通过撞号检查并覆盖
+   表项（两条目标连接共用一个号 = 数据串台），`maxChannels` 也数不准。改为策略判定通过后
+   同步占位、失败路径各自摘掉。
+4. **一条共享会话上多条 `-R` 互相串台**：`onInbound` 原先是广播数组，一条入站连接会被每条规则
+   各自回连、同一条通道被 `pipe` 进两个本机目标；且停掉的规则永不摘订阅。
+   改为按 **bind 身份**键控派发：`BIND` 帧带上 `targetHost/targetPort`（网关据此回连，也据此
+   回指），网关发起的 `OPEN` 回带 `bindHost/bindPort`，客户端按这个键找订阅者，`teardown`
+   必须 `removeInbound` + `unbind`。`BIND_OK` 不回带身份，所以 bind 在客户端侧串行发起。
+   连带把 `TunnelTransport.onDead` 改成返回取消函数（不摘就是在共享会话上漏整个 session 对象），
+   并在 `TunnelManager.teardown` 里调用。
+
+### 12.2 信任面（§2.1 此前被反着实现）
+
+- 原实现是"首见指纹 → 立刻写库 → 继续发 AUTH → 再推 UI 确认"。后果有两条：用户点"取消"撤销不了
+  任何事（库里已经写好了），而口令在确认之前就发给了未验证的对端 —— 那个确认没有重量。
+- 现在 `hostKeyProbe` 只判定不落盘；判定为 `new` 时 `connect()` 在发出 AUTH **之前**拆掉 socket
+  并抛 `GatewayHostKeyPendingError(spki)`，manager 记下待确认指纹并推事件；
+  `gateway:trustHostKey` 校验提交值等于本次握手实收值才落库，另加 `gateway:hostKeyReject`
+  让"取消"真的清掉待确认项。`mismatch` 仍是硬失败、不降级为警告（未变）。
+- 因此渲染层再也拿不到指纹的写权：`gateway-store.save()` 逐字段挑，不再 `...input`，
+  `trustedSpki` 只由主进程 TOFU 路径写入，`setSpki` 校验 `sha256/<base64>` 形状。
+
+### 12.3 凭据与状态诚实性
+
+- **编辑留空口令会把密文再加密一层**（`encrypt(all[idx].password)`，解出来是 `enc:…` 这串文本，
+  被当口令送上门 → 改一次就永久认证失败，且每保存一次叠一层）。改为照 `ssh-store` 的口径：
+  只加密本次提交的新明文，没有新口令就原样保留库里的密文。
+- `decrypt()` 不再把非 `enc:` 前缀的内容当明文口令用（与"绝不落明文"的自述一致）。
+- `gatewayStore.list()` 读失败不再降级成空列表；`access.ts` 的 `init/refresh` 返回是否读到，
+  失败时页面说"没读到网关列表"并弹一条 toast，而不是印成"还没有接入网关"。
+- `statusAll` 的快照只补没被推送过的 id（此前整表替换会把 `Promise.all` 在途时到达的
+  "连接中/在线"抹回 idle，且不会再补推）。
+- 主动 `close()` 必须 settle 在途的 `ready/dial/bind`（`kill()` 早就这么做，主动关闭漏了 →
+  点"断开"时 `gateway:connect` / `tunnel:start` 的 invoke 永不返回）。两个 transport 同一口径。
+- `resumeSocketIfIdle` 的门槛从写侧 `writableNeedDrain` 改回读侧 `readableLength`：拿写侧水位
+  判读侧暂停，会在写侧 drain 完成后没人再解，整条共享 socket 永久停读。
+- 网关被主动断开/删除时联动停掉挂在它上的隧道（`setOnGatewayDown` → `stopByGateway`），
+  §11.4 说的"一条会话服务多条隧道"至此才补齐后半句。
+
+### 12.4 帧表与命名（文档此前与实现各说一套）
+
+- §5 的 IPC 通道名以实现为准：`vpn:statusAll/vpn:hostKeyTrust/vpn:host-key-new` →
+  **`gateway:statusAll` / `gateway:trustHostKey` / `gateway:host-key-new`**，另加
+  `gateway:list/save/delete/connect/disconnect/status/channels/hostKeyReject`。
+- `FRAME_TYPE.bind 0x0d / unbind 0x0e / bindOk 0x0f` 的 payload 形状按 12.1(4) 变更：
+  `BindPayload { bindHost, bindPort, targetHost, targetPort }`，`OpenPayload` 增可选
+  `bindHost/bindPort`。两侧 golden 字节同步更新（TS 用例与 `--selftest` 逐字相同那条）。
+- 心跳 `ping/pong` 的 chan 归一在两份实现里都做了（JS 此前只在调用点传 0，没在 `encodeFrame`
+  里归一），并补一条"外部传非零 chan 也必须归零"的 golden —— 这条归一此前没有锚点。
+- 删除无消费方的 `GatewayRecord.autoConnect`（§11.5 自己定的"不接线的开关不进 UI"，字段却留着），
+  `GatewayEndpoint.trustedSpki` 同理（校验全在 probe 里，这个字段声明后没人读）。
+- 网关启动时校验 `roles[].allow`：`ports` 写成裸数字（漏了数组）会在 `matchAllow` 里
+  `Number.some` 抛 TypeError，从 async `doOpen` 逸出成未处理拒绝直接打死进程 —— 现在开机就报错。
+- `ipDenied` 的 IPv6 判定改成字节展开后按前缀位比对：`fe80::/10` 段内此前只认 `fe80` 前缀
+  （漏 fe9x–febf），`0:0:0:0:0:0:0:1` 未压缩写法漏判，而 `::ffff:127.0.0.1` 直接绕开 127/8 ——
+  拒绝清单被绕一次就是开放中继。读不懂的 v6 字面量按拒处理。
+
+### 12.5 §8 端到端的实际处置
+
+`§8` 要求的"起真网关 + 真 TLS"没有做：Node 不能签发证书，夹具要外部 openssl，成本与收益不匹配。
+替代做法是两条能自动跑的字节级往返：
+- 客户端侧继续用内存 Duplex 假对端（新增用例覆盖大块写切帧、主动 close 落回在途、
+  按 bind 身份派发、无人认领回 RST、取消订阅）；
+- 网关侧在 `--selftest` 里补了 **loopback 三 socket 全链路**（AUTH → BIND → 服务连进来 →
+  两个方向的 DATA 都要到得了对端）与"未认证即 BIND 必须硬停且不建监听"两条。
+  下行方向那个 bug 正是靠这两条先跑红、修完再跑绿才被抓到的 —— 原先 16 项全绿也带着它。
+
+**仍未做**（不粉饰）：主进程装配层（`gateway-manager` / `tunnel-manager` 的 via 分支 /
+`gateway-store`）没有自动化测试，12.1–12.3 里那几条并发与时序修正是靠读码 + 类型检查 +
+selftest/会话层用例兜住的；`-R` 默认绑定地址仍待 §9 裁决（现在至少认证门槛在了）；
+每条网关会话的累计字节数没有展示位（只有通道表逐行）。

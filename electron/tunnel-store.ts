@@ -57,6 +57,10 @@ function isPort(v: unknown): v is number {
   return typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 65535
 }
 
+/** 数据面身份：-R 查重按它比，SSH 连接与 TLS 网关各自独立 */
+const planeOf = (r: TunnelRule): string => (r.via === 'gateway' ? `gw:${r.gatewayId ?? ''}` : `ssh:${r.connectionId ?? ''}`)
+const planeLabel = (r: TunnelRule): string => (r.via === 'gateway' ? '网关' : '连接')
+
 /**
  * 结构校验：save 时强制（渲染层还有一层 UI 校验，这里是最终防线）。
  * 抛 Error（中文文案，IPC 直接透传给用户）。
@@ -96,9 +100,11 @@ function validateRule(rule: TunnelRule, all: TunnelRule[]): void {
       }
     }
     if (other.type === 'remote' && rule.type === 'remote') {
-      // 跨连接的服务端占用由启动时报错兜底；同连接同绑定端点在这里拦截
-      if (other.connectionId === rule.connectionId && `${(other.remoteBindHost || '127.0.0.1').toLowerCase()}:${other.bindPort}` === bindKey) {
-        throw new Error(`远端绑定 ${bindKey} 已被同一连接的其他隧道使用`)
+      // 跨数据面的服务端占用由启动时报错兜底；同一条数据面上的同绑定端点在这里拦截。
+      // 判据必须含数据面身份：两条网关规则若只比 connectionId，两边都是 undefined，
+      // 会把「不同网关上的同一个端口」误判成重复（那两台机器互不相干）。
+      if (planeOf(other) === planeOf(rule) && `${(other.remoteBindHost || '127.0.0.1').toLowerCase()}:${other.bindPort}` === bindKey) {
+        throw new Error(`远端绑定 ${bindKey} 已被同一条${planeLabel(rule)}的其他隧道使用`)
       }
     }
   }

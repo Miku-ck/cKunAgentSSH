@@ -12,6 +12,12 @@ export const useAccessStore = defineStore('access', () => {
   const pendingHostKeys = ref<GatewayHostKeyEvent[]>([])
   const loaded = ref(false)
   let unsubscribers: (() => void)[] = []
+  /**
+   * 已经由主进程推送落过的网关 id。statusAll 的快照是「请求那一刻」的视图，
+   * 到达时可能已经晚于一次推送 —— 只补没推过的 id，不覆盖推过的，否则「连接中」会被印回 idle
+   * 且不会再有第二次推送。
+   */
+  const pushedIds = new Set<string>()
 
   const onlineCount = computed(() =>
     Object.values(statuses.value).filter(s => s.state === 'online').length,
@@ -30,39 +36,53 @@ export const useAccessStore = defineStore('access', () => {
     return statuses.value[id]
   }
 
-  async function refresh(): Promise<void> {
+  /** @returns true = 真的读到了。false = IPC 失败，调用方必须说破，不能让它看起来像「库里是空的」 */
+  async function refresh(): Promise<boolean> {
     const api = window.electronAPI
-    if (!api) return
-    gateways.value = await api.gatewayList()
+    if (!api) return false
+    try {
+      gateways.value = await api.gatewayList()
+      // 读到空列表也算读到了：否则随后判空态会把「确实是空的」说成「没读到」
+      loaded.value = true
+      return true
+    } catch {
+      return false
+    }
   }
 
   /** 在 SshView onMounted 调用（组件常驻，订阅即全局存活） */
-  async function init(): Promise<void> {
+  async function init(): Promise<boolean> {
     const api = window.electronAPI
-    if (!api || unsubscribers.length) return
-    unsubscribers.push(
-      api.onGatewayStatus(s => {
-        statuses.value = { ...statuses.value, [s.id]: s }
-      }),
-      api.onGatewayHostKeyNew(evt => {
-        // 同一条网关重复推（重连时再遇见）只留最新一份，否则弹窗会叠
-        pendingHostKeys.value = [
-          ...pendingHostKeys.value.filter(p => p.id !== evt.id),
-          evt,
-        ]
-      }),
-    )
-    const [list, all] = await Promise.all([api.gatewayList(), api.gatewayStatusAll()])
-    gateways.value = list
-    const map: Record<string, GatewayStatus> = {}
-    for (const s of all) map[s.id] = s
-    statuses.value = map
-    loaded.value = true
-  }
-
-  function dispose(): void {
-    unsubscribers.forEach(u => u())
-    unsubscribers = []
+    if (!api) return false
+    if (!unsubscribers.length) {
+      unsubscribers.push(
+        api.onGatewayStatus(s => {
+          pushedIds.add(s.id)
+          statuses.value = { ...statuses.value, [s.id]: s }
+        }),
+        api.onGatewayHostKeyNew(evt => {
+          // 同一条网关重复推（重连时再遇见）只留最新一份，否则弹窗会叠
+          pendingHostKeys.value = [
+            ...pendingHostKeys.value.filter(p => p.id !== evt.id),
+            evt,
+          ]
+        }),
+      )
+    }
+    try {
+      const [list, all] = await Promise.all([api.gatewayList(), api.gatewayStatusAll()])
+      gateways.value = list
+      const map = { ...statuses.value }
+      for (const s of all) {
+        if (!pushedIds.has(s.id)) map[s.id] = s
+      }
+      statuses.value = map
+      loaded.value = true
+      return true
+    } catch {
+      // 读不到就维持 loaded=false：空态由 UI 决定怎么说，这里不把失败洗成空
+      return false
+    }
   }
 
   async function save(rec: GatewayRecord): Promise<GatewayRecord> {
@@ -79,6 +99,7 @@ export const useAccessStore = defineStore('access', () => {
     await api.gatewayDelete(id)
     const map = { ...statuses.value }
     delete map[id]
+    pushedIds.delete(id)
     statuses.value = map
     await refresh()
   }
@@ -87,6 +108,7 @@ export const useAccessStore = defineStore('access', () => {
     const api = window.electronAPI
     if (!api) throw new Error('electronAPI 不可用')
     const s = await api.gatewayConnect(id)
+    pushedIds.add(s.id)
     statuses.value = { ...statuses.value, [s.id]: s }
     return s
   }
@@ -95,11 +117,12 @@ export const useAccessStore = defineStore('access', () => {
     const api = window.electronAPI
     if (!api) throw new Error('electronAPI 不可用')
     const s = await api.gatewayDisconnect(id)
+    pushedIds.add(s.id)
     statuses.value = { ...statuses.value, [s.id]: s }
     return s
   }
 
-  /** 确认 TOFU：指纹落库后该条重新连接；取消则留在列表里等用户显式再试 */
+  /** 确认 TOFU：主进程校验过「本次握手实际收到的那份」才落库，之后该条重新连接 */
   async function trustHostKey(id: string, spki: string): Promise<void> {
     const api = window.electronAPI
     if (!api) throw new Error('electronAPI 不可用')
@@ -107,8 +130,13 @@ export const useAccessStore = defineStore('access', () => {
     pendingHostKeys.value = pendingHostKeys.value.filter(p => !(p.id === id && p.spki === spki))
   }
 
-  function dismissHostKey(id: string, spki: string): void {
+  /**
+   * 取消确认：除了收弹窗，还要让主进程把待确认指纹清掉。
+   * 只出队的话「取消」等于什么都没撤销 —— 库里那份指纹已经写好了，下次连接不再问。
+   */
+  async function dismissHostKey(id: string, spki: string): Promise<void> {
     pendingHostKeys.value = pendingHostKeys.value.filter(p => !(p.id === id && p.spki === spki))
+    await window.electronAPI?.gatewayHostKeyReject(id)
   }
 
   async function channels(id: string): Promise<GatewayChannelRow[]> {
@@ -128,7 +156,6 @@ export const useAccessStore = defineStore('access', () => {
     statusOf,
     init,
     refresh,
-    dispose,
     save,
     remove,
     connect,

@@ -97,6 +97,13 @@ export interface OpenPayload {
   proto?: 'tcp'
   /** 预留给「按进程授权」：V1 恒缺省，加驱动时不改帧格式（§2.4） */
   app?: string
+  /**
+   * 仅网关发起的 OPEN（-R）带：回指是哪条 BIND 的监听口收进了连接。
+   * 一条共享会话上挂着多条 -R 规则，客户端靠它把入站派发到正确的那条，
+   * 而不是广播给每条规则（广播 = 同一条通道被 pipe 进两个本机目标）。
+   */
+  bindHost?: string
+  bindPort?: number
 }
 
 export interface OpenErrPayload {
@@ -112,6 +119,9 @@ export interface GoawayPayload {
 export interface BindPayload {
   bindHost: string
   bindPort: number
+  /** 入站连接建立后，客户端要回连的本机目标（-R 的语义：远端开口 → 本机服务） */
+  targetHost: string
+  targetPort: number
 }
 
 export type MuxFrame =

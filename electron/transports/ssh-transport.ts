@@ -9,7 +9,7 @@
  */
 import { Duplex } from 'node:stream'
 import type { Client } from 'ssh2'
-import type { TunnelTransport } from '../tunnel-transport'
+import type { RemoteBind, TunnelTransport } from '../tunnel-transport'
 
 type RejectPending = (reason: string) => void
 
@@ -20,7 +20,7 @@ export class SshTransport implements TunnelTransport {
   private deadFlag = false
   private deadReason = 'SSH 连接已断开'
   private readonly pending = new Set<RejectPending>()
-  private readonly inboundHandlers: ((stream: Duplex) => void)[] = []
+  private inbound: ((stream: Duplex) => void) | undefined
   private readonly deadHandlers: ((reason: string) => void)[] = []
 
   constructor(private readonly client: Client) {
@@ -30,7 +30,7 @@ export class SshTransport implements TunnelTransport {
     client.on('tcp connection', (info, accept, reject) => {
       try {
         const stream = accept()
-        for (const h of this.inboundHandlers) h(stream)
+        this.inbound?.(stream)
       } catch {
         try { reject() } catch { /* 已断开 */ }
       }
@@ -48,7 +48,8 @@ export class SshTransport implements TunnelTransport {
     // 在途的 dial/bind 永不回调是 SSH 客户端死亡时的真实形状，不 settle 就是 IPC 挂死
     for (const reject of [...this.pending]) reject(reason)
     this.pending.clear()
-    for (const h of this.deadHandlers) h(reason)
+    // 快照后再通知：回调里可能摘掉自己，迭代活数组会跳过后面的订阅者
+    for (const h of [...this.deadHandlers]) h(reason)
   }
 
   dial(dstHost: string, dstPort: number, originHost: string, originPort: number): Promise<Duplex> {
@@ -67,12 +68,12 @@ export class SshTransport implements TunnelTransport {
     })
   }
 
-  bind(bindHost: string, bindPort: number): Promise<void> {
+  bind(b: RemoteBind): Promise<void> {
     if (this.deadFlag) return Promise.reject(new Error(this.deadReason))
     return new Promise<void>((resolve, reject) => {
       const settleDead: RejectPending = reason => reject(new Error(reason))
       this.pending.add(settleDead)
-      this.client.forwardIn(bindHost, bindPort, err => {
+      this.client.forwardIn(b.bindHost, b.bindPort, err => {
         this.pending.delete(settleDead)
         if (err) reject(err)
         else resolve()
@@ -80,31 +81,48 @@ export class SshTransport implements TunnelTransport {
     })
   }
 
-  unbind(bindHost: string, bindPort: number): Promise<void> {
+  unbind(b: RemoteBind): Promise<void> {
     return new Promise<void>(resolve => {
       try {
-        this.client.unforwardIn(bindHost, bindPort, () => resolve())
+        this.client.unforwardIn(b.bindHost, b.bindPort, () => resolve())
       } catch {
         resolve()
       }
     })
   }
 
-  onInbound(handler: (stream: Duplex) => void): void {
-    this.inboundHandlers.push(handler)
+  /**
+   * SSH 每条隧道各持一条连接，一个订阅者就够，所以忽略 bind 身份（接口为共享会话而设）。
+   * 'tcp connection' 事件也不带「是哪条 forwardIn 收进来的」信息 —— 无从按身份过滤。
+   */
+  onInbound(_b: RemoteBind, handler: (stream: Duplex) => void): void {
+    this.inbound = handler
   }
 
-  onDead(handler: (reason: string) => void): void {
+  removeInbound(_b: RemoteBind): void {
+    this.inbound = undefined
+  }
+
+  onDead(handler: (reason: string) => void): () => void {
     if (this.deadFlag) {
       handler(this.deadReason)
-      return
+      return () => {}
     }
     this.deadHandlers.push(handler)
+    return () => {
+      const i = this.deadHandlers.indexOf(handler)
+      if (i >= 0) this.deadHandlers.splice(i, 1)
+    }
   }
 
-  /** 主动关闭不触发 onDead —— 那是拆除，不是故障 */
+  /**
+   * 主动关闭不触发 onDead —— 那是拆除，不是故障。
+   * 但在途的 dial/bind 必须落回：调用方是 `await transport.bind(...)`，
+   * 不 settle 就是一次永不返回的 IPC invoke（与 kill() 同一形状）。
+   */
   close(): void {
     this.deadFlag = true
+    for (const reject of [...this.pending]) reject('本端已主动关闭隧道数据面')
     this.pending.clear()
     try {
       this.client.end()

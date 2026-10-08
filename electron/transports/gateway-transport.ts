@@ -5,14 +5,14 @@
  *   GatewaySession  一条已连上的 Duplex 上的帧编排（chan 表、半关闭、背压、心跳）
  *   GatewayTransport 连接与信任面（TLS + SPKI pinning + 口令认证 + 重连退避）
  *
- * 为什么把 session 收出来：它不需要证书就能测。测试用 stream.Duplex.pair() 接一个
- * 假对端即可跑通帧语义；而 Node 的 crypto 只能解析 X.509、不能签发，证书夹具得靠
- * 外部 openssl —— 把可测的部分和需要 PKI 夹具的部分分开，是这里唯一的取舍。
+ * 为什么把 session 收出来：它不需要证书就能测。测试用自写的内存 Duplex 接一个假对端
+ * 即可跑通帧语义（Node 24 没有 stream.Duplex.pair()）；而 Node 的 crypto 只能解析 X.509、
+ * 不能签发，证书夹具得靠外部 openssl —— 把可测的部分和需要 PKI 夹具的部分分开，是这里唯一的取舍。
  *
  * 三条坑的落点（§1.1）：
  *   迟到帧   → onFrame 里 channels.get 拿不到就 return，不杀会话
  *   半关闭   → MuxChannel._final 发 FIN（只关自己这一向），_destroy 才发 RST
- *   背压     → _write 里 socket 写不动就不 cb()，让 pipe 自己把上游暂停
+ *   背压     → writeBytes 里 socket 写不动就不 cb()，让 pipe 自己把上游暂停
  */
 import { Duplex } from 'stream'
 import * as tls from 'tls'
@@ -23,11 +23,13 @@ import {
   encodeFrame,
   GLOBAL_CHAN,
   MuxProtocolError,
+  splitData,
   type HelloOkPayload,
   type MuxFrame,
   type OpenErrCode,
+  type OpenPayload,
 } from '../../shared/gateway-mux'
-import type { TunnelTransport } from '../tunnel-transport'
+import type { RemoteBind, TunnelTransport } from '../tunnel-transport'
 
 const HIGH_WATER = 256 * 1024
 
@@ -37,6 +39,18 @@ export class TunnelDeniedError extends Error {
     this.name = 'TunnelDeniedError'
   }
 }
+
+/** 首见证书：会话在发 AUTH 之前就被拆掉，等用户在 UI 上确认指纹后重拨（§2.1） */
+export class GatewayHostKeyPendingError extends Error {
+  constructor(readonly spki: string) {
+    super('首次连接：需确认服务端证书指纹')
+    this.name = 'GatewayHostKeyPendingError'
+  }
+}
+
+/** bind 身份 = 派发键。大小写与网关侧 doBind 的 key 归一保持同一口径 */
+const bindKey = (bindHost: string, bindPort: number): string =>
+  `${String(bindHost).toLowerCase()}:${bindPort}`
 
 /** 一条转发通道：读方向由 DATA 喂，写方向发 DATA；end()=FIN，destroy()=RST */
 class MuxChannel extends Duplex {
@@ -64,7 +78,10 @@ class MuxChannel extends Duplex {
 
   override _write(chunk: Buffer, _enc: BufferEncoding, cb: (e?: Error) => void): void {
     this.bytesUp += chunk.length
-    this.sess.writeBytes(encodeFrame({ type: 'data', chan: this.chan, payload: new Uint8Array(chunk) }), cb)
+    // DATA 的 payload 受 u16 上限：大块写必须切成若干帧，否则 encodeFrame 在 _write 里
+    // throw，流机制把它当成通道致命错误 —— 一次 1 MB 的写就把整条通道打死了
+    const frames = splitData(this.chan, new Uint8Array(chunk)).map(f => encodeFrame(f))
+    this.sess.writeFrames(frames, cb)
   }
 
   /** end() 只关自己这一向：对端还能写完它那一侧的数据 */
@@ -123,11 +140,14 @@ export class GatewaySession {
     hasChannel: c => this.channels.has(c),
   })
   private readonly pendingOpen = new Map<number, (err: Error | null) => void>()
-  private readonly inboundHandlers: ((s: Duplex) => void)[] = []
+  /** 入站订阅按 bind 身份键控：一条共享会话上多条 -R 规则不能互相收到对方的连接 */
+  private readonly inboundHandlers = new Map<string, (s: Duplex) => void>()
   private readonly deadHandlers: ((reason: string) => void)[] = []
   private readyResolve: ((v: HelloOkPayload) => void) | null = null
   private readyReject: ((e: Error) => void) | null = null
-  private pendingBind: ((e: Error | null) => void) | null = null
+  private readonly pendingBind = new Map<string, (e: Error | null) => void>()
+  /** BIND_OK 不回带身份，所以同一条会话上的 bind 只能串行发起 */
+  private bindChain: Promise<unknown> = Promise.resolve()
   private pingTimer: NodeJS.Timeout | null = null
   private missedPong = 0
   private seq = 0
@@ -201,9 +221,8 @@ export class GatewaySession {
         const code = f.payload.code
         const message = f.payload.message
         if (f.chan === GLOBAL_CHAN) {
-          if (this.pendingBind) {
-            this.pendingBind(new TunnelDeniedError(code, message))
-            this.pendingBind = null
+          if (this.pendingBind.size) {
+            this.settleBind(new TunnelDeniedError(code, message))
             return
           }
           if (!this.info) {
@@ -237,8 +256,7 @@ export class GatewaySession {
         this.closeChannel(f.chan)
         return
       case 'bindOk':
-        this.pendingBind?.(null)
-        this.pendingBind = null
+        this.settleBind(null)
         return
       case 'ping':
         this.sendRaw(encodeFrame({ type: 'pong', chan: GLOBAL_CHAN, seq: f.seq }))
@@ -253,14 +271,29 @@ export class GatewaySession {
   }
 
   /** 对端主动开一条通道（-R：网关绑定端口上来了连接） */
-  private onPeerOpen(chan: number, p: { host: string; port: number }): void {
+  private onPeerOpen(chan: number, p: OpenPayload): void {
+    // 按 bind 身份派发。广播给每条规则 = 一条入站被两条规则各自回连、
+    // 同一条通道被 pipe 进两个本机目标（串台），且停掉的规则还会被唤醒。
+    const h = p.bindHost === undefined || p.bindPort === undefined
+      ? undefined
+      : this.inboundHandlers.get(bindKey(p.bindHost, p.bindPort))
+    if (!h) {
+      // 没人认领这条 bind（规则已停 / 对端越权开口）：RST 回去，不留悬空通道
+      this.sendRaw(encodeFrame({ type: 'rst', chan }))
+      return
+    }
     const ch = new MuxChannel(this, chan, { host: p.host, port: p.port }, true)
     this.channels.set(chan, ch)
     this.sendRaw(encodeFrame({ type: 'openOk', chan }))
-    for (const h of this.inboundHandlers) h(ch)
+    h(ch)
   }
 
-  async dial(dstHost: string, dstPort: number): Promise<Duplex> {
+  /** origin* 不进 OPEN 帧：允许集不看发起方地址，多一字段就多一处两侧必须同步的字节 */
+  dial(dstHost: string, dstPort: number, _originHost: string, _originPort: number): Promise<Duplex> {
+    return this.openChannel(dstHost, dstPort)
+  }
+
+  private async openChannel(dstHost: string, dstPort: number): Promise<Duplex> {
     await this.ready
     const chan = allocChan('odd', new Set(this.channels.keys()))
     if (chan === null) throw new TunnelDeniedError('quota', '本端通道号段已耗尽')
@@ -278,32 +311,65 @@ export class GatewaySession {
     return ch
   }
 
-  bind(bindHost: string, bindPort: number): Promise<void> {
+  bind(b: RemoteBind): Promise<void> {
+    const key = bindKey(b.bindHost, b.bindPort)
+    // BIND_OK 不回带身份，并发发起会分不清谁成了；控制面这类操作不频繁，串行即可
+    const run = this.bindChain.then(() => this.doBind(key, b))
+    this.bindChain = run.catch(() => undefined)
+    return run
+  }
+
+  private doBind(key: string, b: RemoteBind): Promise<void> {
     return this.ready.then(
       () =>
         new Promise<void>((resolve, reject) => {
-          if (this.pendingBind) {
-            reject(new Error('上一条 bind 仍在途中'))
-            return
-          }
-          this.pendingBind = e => (e ? reject(e) : resolve())
-          this.sendRaw(encodeFrame({ type: 'bind', chan: GLOBAL_CHAN, payload: { bindHost, bindPort } }))
+          this.pendingBind.set(key, e => (e ? reject(e) : resolve()))
+          this.sendRaw(encodeFrame({
+            type: 'bind',
+            chan: GLOBAL_CHAN,
+            payload: { bindHost: b.bindHost, bindPort: b.bindPort, targetHost: b.targetHost, targetPort: b.targetPort },
+          }))
         }),
     )
   }
 
-  unbind(bindHost: string, bindPort: number): Promise<void> {
-    this.sendRaw(encodeFrame({ type: 'unbind', chan: GLOBAL_CHAN, payload: { bindHost, bindPort } }))
+  unbind(b: RemoteBind): Promise<void> {
+    this.pendingBind.delete(bindKey(b.bindHost, b.bindPort))
+    this.sendRaw(encodeFrame({
+      type: 'unbind',
+      chan: GLOBAL_CHAN,
+      payload: { bindHost: b.bindHost, bindPort: b.bindPort, targetHost: b.targetHost, targetPort: b.targetPort },
+    }))
     return Promise.resolve()
   }
 
-  onInbound(h: (s: Duplex) => void): void {
-    this.inboundHandlers.push(h)
+  /** 在途 bind 只可能有一个（bind 已串行），所以「第一个」就是该结掉的那个 */
+  private settleBind(e: Error | null): void {
+    const first = this.pendingBind.entries().next()
+    if (first.done) return
+    const [key, cb] = first.value
+    this.pendingBind.delete(key)
+    cb(e)
   }
 
-  onDead(h: (reason: string) => void): void {
-    if (this.dead) h('数据面已断开')
-    else this.deadHandlers.push(h)
+  onInbound(b: RemoteBind, h: (s: Duplex) => void): void {
+    this.inboundHandlers.set(bindKey(b.bindHost, b.bindPort), h)
+  }
+
+  removeInbound(b: RemoteBind): void {
+    this.inboundHandlers.delete(bindKey(b.bindHost, b.bindPort))
+  }
+
+  onDead(h: (reason: string) => void): () => void {
+    if (this.dead) {
+      h('数据面已断开')
+      return () => {}
+    }
+    this.deadHandlers.push(h)
+    return () => {
+      const i = this.deadHandlers.indexOf(h)
+      if (i >= 0) this.deadHandlers.splice(i, 1)
+    }
   }
 
   /** 写一帧并按 socket 的反馈决定何时 cb（背压的唯一入口） */
@@ -312,9 +378,38 @@ export class GatewaySession {
       cb(new Error('数据面已断开'))
       return
     }
-    const ok = (this.sock.write(Buffer.from(frame.buffer, frame.byteOffset, frame.length)) as boolean)
-    if (ok) cb()
-    else this.sock.once('drain', () => cb())
+    let settled = false
+    const done = (e?: Error): void => {
+      if (settled) return
+      settled = true
+      cb(e)
+    }
+    const ok = this.sock.write(Buffer.from(frame.buffer, frame.byteOffset, frame.length)) as boolean
+    if (ok) done()
+    else {
+      this.sock.once('drain', () => done())
+      // socket 被 destroy 时 drain 永不到来；不结这一笔就是把上层 _write 永久挂起
+      this.sock.once('close', () => done(new Error('数据面已断开')))
+    }
+  }
+
+  /** 依次写完一帧序列，全部落地（或第一个失败）后回调一次 */
+  writeFrames(frames: Uint8Array[], cb: (e?: Error) => void): void {
+    if (!frames.length) {
+      cb()
+      return
+    }
+    let at = 0
+    const step = (e?: Error): void => {
+      if (e) {
+        cb(e)
+        return
+      }
+      at += 1
+      if (at >= frames.length) cb()
+      else this.writeBytes(frames[at], step)
+    }
+    this.writeBytes(frames[0], step)
   }
 
   sendRaw(frame: Uint8Array): void {
@@ -329,7 +424,9 @@ export class GatewaySession {
   /** 任一通道消费过就解除整条 socket 的暂停（V1 不做窗口，共享 socket 会头阻） */
   resumeSocketIfIdle(): void {
     if (!this.readPaused) return
-    if ([...this.channels.values()].some(c => c.writableNeedDrain)) return
+    // 判据只能是读侧水位：写侧 writableNeedDrain 与「还要不要压着读」无关，
+    // 拿它当门槛会在写侧 drain 完成后没人再来解，整条共享 socket 永久停读
+    if ([...this.channels.values()].some(c => c.readableLength > 0)) return
     this.readPaused = false
     this.sock.resume()
   }
@@ -384,8 +481,8 @@ export class GatewaySession {
     this.readyReject = null
     for (const [, cb] of this.pendingOpen) cb(new Error(reason))
     this.pendingOpen.clear()
-    this.pendingBind?.(new Error(reason))
-    this.pendingBind = null
+    for (const [, cb] of this.pendingBind) cb(new Error(reason))
+    this.pendingBind.clear()
     for (const [, ch] of this.channels) {
       ch.markClosed()
       ch.destroy()
@@ -396,7 +493,9 @@ export class GatewaySession {
     } catch {
       /* 已断开 */
     }
-    for (const h of this.deadHandlers) h(reason)
+    // 先取快照再逐个通知：回调里可能摘掉自己（隧道 teardown 就摘），
+    // 直接迭代活数组会让 splice 之后的下一个订阅者被跳过
+    for (const h of [...this.deadHandlers]) h(reason)
   }
 
   close(): void {
@@ -404,6 +503,14 @@ export class GatewaySession {
     this.sendRaw(encodeFrame({ type: 'goaway', chan: GLOBAL_CHAN, payload: { reason: '客户端主动断开', lastChan: 0 } }))
     this.dead = true
     if (this.pingTimer) clearInterval(this.pingTimer)
+    // 在途的 dial/bind/ready 一样要落回（与 kill() 同形状，区别只在不推 onDead）：
+    // 调用方是 `await transport.dial(...)`，不 settle 就是一次永不返回的 IPC invoke
+    this.readyReject?.(new Error('已主动关闭数据面'))
+    this.readyReject = null
+    for (const [, cb] of this.pendingOpen) cb(new Error('已主动关闭数据面'))
+    this.pendingOpen.clear()
+    for (const [, cb] of this.pendingBind) cb(new Error('已主动关闭数据面'))
+    this.pendingBind.clear()
     for (const [, ch] of this.channels) {
       ch.markClosed()
       ch.destroy()
@@ -423,8 +530,6 @@ export interface GatewayEndpoint {
   port: number
   /** CA（PEM）。缺省时只信 SPKI 指纹那一张证书 —— 自签网关的常见形态 */
   caPem?: string
-  /** 已确认的服务端 SPKI 指纹（sha256/…）。缺省 = 首次连接走 TOFU */
-  trustedSpki?: string
   user: string
   password: string
   clientVersion: string
@@ -443,14 +548,14 @@ export class GatewayTransport implements TunnelTransport {
   private session: GatewaySession | null = null
   private starting = false
   private closingIntentionally = false
-  private readonly inboundHandlers: ((s: Duplex) => void)[] = []
+  private readonly inboundBindings = new Map<string, { b: RemoteBind; h: (s: Duplex) => void }>()
   private readonly deadHandlers: ((reason: string) => void)[] = []
   private lastSpki = ''
 
   constructor(
     private readonly ep: GatewayEndpoint,
     private readonly hostKeyProbe: HostKeyProbe,
-    private readonly onSessionReady: (info: HelloOkPayload, spki: string) => void = () => {},
+    private readonly onSessionReady: (info: HelloOkPayload) => void = () => {},
   ) {}
 
   get dead(): boolean {
@@ -482,17 +587,17 @@ export class GatewayTransport implements TunnelTransport {
         clientVersion: this.ep.clientVersion,
         deviceName: this.ep.deviceName,
       })
-      sess.onInbound(s => {
-        for (const h of this.inboundHandlers) h(s)
-      })
+      // 重连后是一条全新的 session：已登记的 -R 订阅要重新挂上去，否则老规则的
+      // 监听口在对端还亮着，而连接进来没人接
+      for (const { b, h } of this.inboundBindings.values()) sess.onInbound(b, h)
       sess.onDead(reason => {
         if (this.closingIntentionally) return
-        for (const h of this.deadHandlers) h(reason)
+        for (const h of [...this.deadHandlers]) h(reason)
       })
       this.session = sess
       sess.hello()
       const info = await sess.ready
-      this.onSessionReady(info, this.lastSpki)
+      this.onSessionReady(info)
     } finally {
       this.starting = false
     }
@@ -523,32 +628,50 @@ export class GatewayTransport implements TunnelTransport {
         if (decision === 'mismatch') {
           return fail(new Error('服务端证书指纹与本机记录不一致，已硬失败'))
         }
+        if (decision === 'new') {
+          // 首次见到这张证书：在发出 AUTH 之前就断掉。口令是底座认证（§11.1），
+          // 一路把口令发给未验证的对端再回头问用户「要不要信任」，那个确认毫无重量 ——
+          // 由 manager 把它变成待确认事件，用户点头后重拨一次才是同一次握手。
+          return fail(new GatewayHostKeyPendingError(spki))
+        }
         resolve(sock)
       })
     })
   }
 
-  dial(dstHost: string, dstPort: number): Promise<Duplex> {
+  dial(dstHost: string, dstPort: number, originHost: string, originPort: number): Promise<Duplex> {
     if (!this.session) return Promise.reject(new Error('网关会话未建立'))
-    return this.session.dial(dstHost, dstPort)
+    return this.session.dial(dstHost, dstPort, originHost, originPort)
   }
 
-  bind(bindHost: string, bindPort: number): Promise<void> {
+  bind(b: RemoteBind): Promise<void> {
     if (!this.session) return Promise.reject(new Error('网关会话未建立'))
-    return this.session.bind(bindHost, bindPort)
+    return this.session.bind(b)
   }
 
-  unbind(bindHost: string, bindPort: number): Promise<void> {
-    return this.session?.unbind(bindHost, bindPort) ?? Promise.resolve()
+  unbind(b: RemoteBind): Promise<void> {
+    return this.session?.unbind(b) ?? Promise.resolve()
   }
 
-  onInbound(h: (s: Duplex) => void): void {
-    this.inboundHandlers.push(h)
+  onInbound(b: RemoteBind, h: (s: Duplex) => void): void {
+    this.session?.onInbound(b, h)
+    this.inboundBindings.set(bindKey(b.bindHost, b.bindPort), { b, h })
   }
 
-  onDead(h: (reason: string) => void): void {
+  removeInbound(b: RemoteBind): void {
+    const key = bindKey(b.bindHost, b.bindPort)
+    this.inboundBindings.delete(key)
+    this.session?.removeInbound(b)
+  }
+
+  onDead(h: (reason: string) => void): () => void {
     this.deadHandlers.push(h)
-    this.session?.onDead(h)
+    const offSession = this.session?.onDead(h)
+    return () => {
+      const i = this.deadHandlers.indexOf(h)
+      if (i >= 0) this.deadHandlers.splice(i, 1)
+      offSession?.()
+    }
   }
 
   close(): void {

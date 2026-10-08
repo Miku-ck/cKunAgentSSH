@@ -1100,6 +1100,8 @@ function setupSSHIPC(): void {
       try { mainWindow.webContents.send(channel, data) } catch { /* 窗口已销毁 */ }
     }
   })
+  // 网关被主动断开 / 删除时联动停掉挂在它上面的隧道（被动断开由 onDead 拆，见 tunnel-manager）
+  gatewayManager.setOnGatewayDown((id) => tunnelManager?.stopByGateway(id))
   tunnelManager.setTransportFactory(async (rule) => {
     if (rule.via === 'gateway') {
       // 隧道搭网关的共享会话：没连接就先在「安全接入」页连接，不在这里偷偷替用户建会话
@@ -1297,9 +1299,15 @@ function setupSSHIPC(): void {
     return gatewayManager!.channelsOf(id)
   })
 
-  // TOFU 指纹确认：UI 上确认过才写库，不符一律硬失败（不降级为警告）
+  // TOFU 指纹确认：UI 上确认过才写库，不符一律硬失败（不降级为警告）。
+  // 校验走 manager —— 它手里才有「本次握手实际收到的那份」，渲染层自填的字符串不作数。
   handleTrusted('gateway:trustHostKey', async (_event, id: string, spki: string) => {
-    return gatewayStore!.setSpki(id, spki)
+    return gatewayManager!.trustHostKey(id, spki)
+  })
+
+  // 用户取消确认：只清待记录，不落指纹；下次连接重新问一遍
+  handleTrusted('gateway:hostKeyReject', (_event, id: string) => {
+    return gatewayManager!.rejectHostKey(id)
   })
 
   // 后端端口查询（渲染进程启动时兜底获取，防止 backend:status 事件丢失）

@@ -130,7 +130,6 @@ interface GatewayRecord {
   user: string
   /** 仅保存时上行；下行副本里永远没有这个字段 */
   password?: string
-  autoConnect: boolean
   createdAt: number
   updatedAt: number
 }
@@ -276,6 +275,8 @@ interface ElectronAPI {
   gatewayStatusAll: () => Promise<GatewayStatus[]>
   gatewayChannels: (id: string) => Promise<GatewayChannelRow[]>
   gatewayTrustHostKey: (id: string, spki: string) => Promise<void>
+  /** 取消 TOFU 确认：主进程清掉待确认指纹（不落库），下次连接重新问 */
+  gatewayHostKeyReject: (id: string) => Promise<void>
   onGatewayStatus: (callback: (data: GatewayStatus) => void) => () => void
   onGatewayHostKeyNew: (callback: (data: GatewayHostKeyEvent) => void) => () => void
   // Skills

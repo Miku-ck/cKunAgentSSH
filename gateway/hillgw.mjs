@@ -51,6 +51,8 @@ const FT = {
   bindOk: 0x0f,
 }
 const FT_NAMES = new Map(Object.entries(FT).map(([k, v]) => [v, k]))
+/** 认证前唯一放行的帧类型（其余一律视为劫持/越权） */
+const PRE_AUTH = new Set(['hello', 'auth', 'ping', 'pong', 'goaway'])
 
 class MuxProtocolError extends Error {}
 
@@ -60,6 +62,8 @@ const textDec = new TextDecoder()
 function encodeFrame(type, chan, payloadObj, raw) {
   const code = FT[type]
   if (code === undefined) throw new Error(`未知帧类型：${type}`)
+  // 心跳不占通道号：与 TS 侧 encodeFrame 同一归一，否则两份实现写出的字节不同
+  if (type === 'ping' || type === 'pong') chan = GLOBAL_CHAN
   let payload
   if (type === 'data') payload = raw ?? new Uint8Array(0)
   else if (type === 'openOk' || type === 'fin' || type === 'rst' || type === 'bindOk') payload = new Uint8Array(0)
@@ -127,7 +131,12 @@ const DENY_V4_CIDR = [
   ['127.0.0.0', 8],    // 网关本机回环
   ['0.0.0.0', 8],
 ]
-const DENY_V6_PREFIX = ['::1', 'fe80', 'fc00', 'fd00']
+/** fe80::/10 链路本地（含 fe80–febf，只比 'fe80' 前缀会漏）；fc00::/7 一段就盖住 fc00 与 fd00 */
+const DENY_V6 = [
+  { pfx: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1], bits: 128 },
+  { pfx: [0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], bits: 10 },
+  { pfx: [0xfc, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], bits: 7 },
+]
 
 const ipToLong = (ip) => {
   const parts = ip.split('.').map(Number)
@@ -144,20 +153,77 @@ function inCidr(ip, [base, bits]) {
   return (a & mask) === (b & mask)
 }
 
+/** 前 bits 位逐字节比对 */
+function inPrefix(bytes, pfx, bits) {
+  for (let i = 0; i < 16; i++) {
+    if (bits <= 0) return true
+    if (bits >= 8) {
+      if (bytes[i] !== pfx[i]) return false
+      bits -= 8
+      continue
+    }
+    const mask = (0xff << (8 - bits)) & 0xff
+    return (bytes[i] & mask) === (pfx[i] & mask)
+  }
+  return true
+}
+
+/**
+ * IPv6 展开成 16 字节，处理 '::' 压缩与 IPv4-mapped 尾段（::ffff:127.0.0.1）。
+ * 拿字符串比前缀会漏掉 fe9x–febf 这类同段地址，也会让 ::ffff:127.0.0.1 绕开 127/8 ——
+ * 拒绝清单被绕一次，网关就成了开放中继。
+ */
+function v6ToBytes(ip) {
+  const parts = String(ip).toLowerCase().split('::')
+  if (parts.length > 2) return null
+  const expand = str => {
+    const list = str ? str.split(':') : []
+    const out = []
+    for (let i = 0; i < list.length; i++) {
+      const g = list[i]
+      if (g.includes('.')) {
+        const v4 = ipToLong(g)
+        if (v4 === null || i !== list.length - 1) return null
+        out.push((v4 >>> 16) & 0xffff, v4 & 0xffff)
+        continue
+      }
+      if (!/^[0-9a-f]{1,4}$/.test(g)) return null
+      out.push(Number.parseInt(g, 16))
+    }
+    return out
+  }
+  const head = expand(parts[0])
+  const tail = parts.length === 2 ? expand(parts[1]) : null
+  if (head === null || (parts.length === 2 && tail === null)) return null
+  if (parts.length === 1) return head.length === 8 ? toBytes(head) : null
+  if (head.length + tail.length > 7) return null // '::' 至少代表一组零
+  return toBytes([...head, ...Array(8 - head.length - tail.length).fill(0), ...tail])
+}
+
+const toBytes = groups => {
+  const out = new Uint8Array(16)
+  groups.forEach((g, i) => { out[i * 2] = g >>> 8; out[i * 2 + 1] = g & 0xff })
+  return out
+}
+
 /** true = 这个 IP 不许作为转发目标 */
 export function ipDenied(ip) {
   const v = String(ip).toLowerCase()
   if (v.includes(':')) {
-    const compact = v.replace(/:/g, '')
-    if (compact === '1') return true // ::1
-    return DENY_V6_PREFIX.some(p => v.startsWith(p.endsWith(':') ? p : `${p}:`) || v === p)
+    const bytes = v6ToBytes(v)
+    if (!bytes) return true // 读不懂的 IPv6 字面量一律拒：宁可拒错也不放行
+    const front = bytes.slice(0, 10).every(b => b === 0)
+    const v4Tail = front && ((bytes[10] === 0 && bytes[11] === 0) || (bytes[10] === 0xff && bytes[11] === 0xff))
+    if (v4Tail && ipDenied(`${bytes[12]}.${bytes[13]}.${bytes[14]}.${bytes[15]}`)) return true
+    return DENY_V6.some(({ pfx, bits }) => inPrefix(bytes, pfx, bits))
   }
   return DENY_V4_CIDR.some(cidr => inCidr(v, cidr))
 }
 
+const isPort = v => Number.isInteger(v) && v >= 1 && v <= 65535
+
 /** ports: [5432, "8000-8100", "*"] */
-function portAllowed(spec, port) {
-  if (spec === '*') return true
+function portAllowed(spec, port) {  if (spec === '*') return true
   if (typeof spec === 'number') return spec === port
   const m = /^(\d+)-(\d+)$/.exec(String(spec))
   if (m) return port >= Number(m[1]) && port <= Number(m[2])
@@ -187,19 +253,41 @@ class Channel {
     this.dead = false
     this.peerFin = false
     this.outFin = false
+    /** 各方向独立记水位：重复 pause 会往同一 socket 上叠 drain 监听器 */
+    this.slowTarget = false
+    this.slowClient = false
   }
 
   send(type, obj, raw) {
     this.sess.send(type, this.chan, obj, raw)
   }
 
-  /** 网关 → 客户端方向写数据；写不动就暂停源读取（背压，不做窗口流控） */
-  writeOut(buf) {
+  /** 写进本机侧 socket（-L 是本机目标，-R 是本地服务连接）；写不动就压住会话读 */
+  writeSock(buf) {
     if (this.dead || !this.sock) return
-    if (!this.sock.write(buf)) {
-      this.sock.pause?.()
-      this.sock.once('drain', () => this.sock.resume?.())
-    }
+    if (this.sock.write(buf) || this.slowTarget) return
+    this.slowTarget = true
+    this.sess.sock.pause()
+    this.sock.once('drain', () => {
+      this.slowTarget = false
+      this.sess.sock.resume()
+    })
+  }
+
+  /**
+   * 本机侧 → 客户端：编成 DATA 帧发出；会话写不动就压住本机侧 socket 读。
+   * 方向不能与 writeSock 混用 —— 写回 ch.sock 就是把目标的回包倒回目标自己，
+   * 客户端一个字节都收不到（--selftest 的「DATA 回程」用例钉的就是这条）。
+   */
+  toClient(buf) {
+    if (this.dead || !this.sock) return
+    if (this.sess.write('data', this.chan, null, buf) || this.slowClient) return
+    this.slowClient = true
+    this.sock.pause()
+    this.sess.sock.once('drain', () => {
+      this.slowClient = false
+      this.sock.resume()
+    })
   }
 
   close(rst) {
@@ -236,13 +324,19 @@ class Session {
     sock.on('close', () => this.kill('客户端已断开'))
   }
 
-  send(type, chan = GLOBAL_CHAN, obj, raw) {
-    if (this.dead) return
+  /** 写一帧并回报 socket 的反馈（false = 缓冲已满，调用方据此压住来源） */
+  write(type, chan = GLOBAL_CHAN, obj, raw) {
+    if (this.dead) return true
     try {
-      this.sock.write(encodeFrame(type, chan, obj, raw))
+      return this.sock.write(encodeFrame(type, chan, obj, raw))
     } catch (err) {
       this.kill(`写帧失败: ${err.message}`)
+      return true
     }
+  }
+
+  send(type, chan = GLOBAL_CHAN, obj, raw) {
+    this.write(type, chan, obj, raw)
   }
 
   onBytes(chunk) {
@@ -259,6 +353,10 @@ class Session {
   }
 
   onFrame(f) {
+    // 认证之前只放行握手/心跳/下线。少这一道，未登录的对端就能让我在任意
+    // bindHost:bindPort 上 listen（OPEN 只是侥幸被 role=null→allow:[] 兜住），
+    // 网关当场变成开放中继。
+    if (!this.user && !PRE_AUTH.has(f.type)) return this.kill(`未认证即发 ${f.type}，会话作废`)
     switch (f.type) {
       case 'hello':
         this.hello = f.payload
@@ -277,7 +375,7 @@ class Session {
         const ch = this.channels.get(f.chan)
         // 迟到帧（通道已 FIN/RST）丢弃即可，不是协议错误
         if (!ch || ch.dead || f.payload.length === 0) return
-        ch.writeOut(f.payload)
+        ch.writeSock(f.payload)
         return
       }
       case 'fin': {
@@ -356,28 +454,33 @@ class Session {
       return
     }
     // 逐 IP 校验：否则允许集里的域名可以被一次 DNS 变更指到元数据地址（§2.3）
+    const ch = new Channel(this, chan)
+    // 占位必须在这次 await 之前：否则同 chan 的第二个 OPEN 会在解析窗口里通过撞号检查
+    // （解码器的 hasChannel 此刻还说没有），覆盖表项后两条目标连接共用一个通道号 —— 数据串台，
+    // 而 maxChannels 也数不准。失败路径各自摘掉。
+    this.channels.set(chan, ch)
     let addrs
     try {
       addrs = await dns.lookup(p.host, { all: true, verbatim: true })
     } catch (err) {
+      this.channels.delete(chan)
       this.send('openErr', chan, { code: 'target-unreachable', message: `${p.host} 解析失败：${err.code || err.message}` })
       return
     }
     const literal = ipToLong(p.host) !== null
     const bad = addrs.find(a => ipDenied(a.address) || (literal && a.address !== p.host))
     if (bad) {
+      this.channels.delete(chan)
       log(this, 'BAD', `OPEN chan=${chan} ${p.host}:${p.port} → denied-by-dns (${bad.address})`)
       this.send('openErr', chan, { code: 'denied-by-dns', message: `${p.host} 解析出 ${bad.address}，不在允许范围` })
       return
     }
-    const ch = new Channel(this, chan)
-    this.channels.set(chan, ch)
     // 连**校验过的那个 IP**，不重新解析：否则校验与连接之间还能被重绑一次
     const sock = net.connect({ host: addrs[0].address, port: p.port })
     ch.sock = sock
     sock.setNoDelay(true)
     sock.on('connect', () => this.send('openOk', chan))
-    sock.on('data', buf => ch.writeOut(buf))
+    sock.on('data', buf => ch.toClient(buf))
     sock.on('end', () => {
       if (!ch.outFin) { ch.outFin = true; ch.send('fin', chan) }
     })
@@ -389,7 +492,12 @@ class Session {
   }
 
   doBind(p) {
-    const key = `${String(p.bindHost).toLowerCase()}:${p.bindPort}`
+    // BIND 的入参来自对端，边界上就验掉：listen 到 undefined:NaN 会让进程在 net 里抛
+    if (!p || typeof p.bindHost !== 'string' || !isPort(p.bindPort) || !isPort(p.targetPort)) {
+      this.send('openErr', GLOBAL_CHAN, { code: 'malformed-request', message: 'BIND 需要 bindHost、bindPort 与 targetPort' })
+      return
+    }
+    const key = `${p.bindHost.toLowerCase()}:${p.bindPort}`
     if (this.listeners.has(key)) {
       this.send('openErr', GLOBAL_CHAN, { code: 'malformed-request', message: `绑定 ${key} 已存在` })
       return
@@ -401,9 +509,15 @@ class Session {
       this.channels.set(chan, ch)
       ch.sock = sock
       sock.setNoDelay(true)
-      // 方向由 chan 奇偶隐含：这是网关发起的 open（偶数号段）
-      this.send('open', chan, { host: p.targetHost || 'localhost', port: p.targetPort || p.bindPort })
-      sock.on('data', buf => ch.writeOut(buf))
+      // 方向由 chan 奇偶隐含：这是网关发起的 open（偶数号段）。
+      // 回带 bind 身份：一条会话上挂着多条 -R 规则，客户端要按它派发而不是广播给每条规则
+      this.send('open', chan, {
+        host: p.targetHost || 'localhost',
+        port: p.targetPort,
+        bindHost: p.bindHost,
+        bindPort: p.bindPort,
+      })
+      sock.on('data', buf => ch.toClient(buf))
       sock.on('end', () => { if (!ch.outFin) { ch.outFin = true; ch.send('fin', chan) } })
       sock.on('error', () => ch.close(true))
       sock.on('close', () => ch.close(false))
@@ -466,6 +580,20 @@ function start(cfgPath) {
     if ('password' in u) throw new Error('users[].password 不接受明文，请改用 --hash 生成 passwordSha256')
     if (!u.user || !u.passwordSha256 || !u.role) throw new Error('users[] 需要 user / passwordSha256 / role 三个字段')
   }
+  // 策略写错要在启动时炸，不要等第一条 OPEN 在 async 路径里抛 TypeError 打死进程：
+  // ports 写成裸数字（漏了数组）就是这种写法，matchAllow 里的 .some 当场没得调
+  for (const [name, role] of Object.entries(cfg.roles || {})) {
+    if (!Array.isArray(role.allow)) throw new Error(`roles.${name}.allow 必须是数组`)
+    for (const e of role.allow) {
+      if (!e || typeof e.host !== 'string' || !e.host.trim()) throw new Error(`roles.${name}.allow[] 需要 host 字符串`)
+      if (e.ports !== undefined && !Array.isArray(e.ports)) throw new Error(`roles.${name}.allow[] 的 ports 必须是数组，如 [5432] 或 ["8000-8100"]`)
+      for (const p of e.ports || []) {
+        if (p !== '*' && !isPort(p) && !/^(\d+(-\d+)?)$/.test(String(p))) {
+          throw new Error(`roles.${name}.allow[] 的端口只能是数字、"*" 或 "a-b"，收到 ${JSON.stringify(p)}`)
+        }
+      }
+    }
+  }
   const server = tls.createServer(
     { cert: fs.readFileSync(cfg.tls.cert), key: fs.readFileSync(cfg.tls.key), minVersion: 'TLSv1.2' },
     sock => {
@@ -486,16 +614,18 @@ function start(cfgPath) {
 }
 
 /** 自比对：帧字节与策略判定必须和 TS 侧一字不差 */
-function selftest() {
+async function selftest() {
   const cases = [
     ['DATA chan=17', encodeFrame('data', 17, null, textEnc.encode('abc')), '0107000000110003616263'],
     ['FIN chan=12', encodeFrame('fin', 12), '01080000000c0000'],
     ['OPEN chan=19', encodeFrame('open', 19, { host: 'db.internal', port: 5432 }),
       '01040000001300227b22686f7374223a2264622e696e7465726e616c222c22706f7274223a353433327d'],
-    ['BIND chan=0', encodeFrame('bind', 0, { bindHost: '127.0.0.1', bindPort: 8443 }),
-      '010d0000000000287b2262696e64486f7374223a223132372e302e302e31222c2262696e64506f7274223a383434337d'],
+    ['BIND chan=0', encodeFrame('bind', 0, { bindHost: '127.0.0.1', bindPort: 8443, targetHost: 'localhost', targetPort: 6379 }),
+      '010d0000000000537b2262696e64486f7374223a223132372e302e302e31222c2262696e64506f7274223a383434332c22746172676574486f7374223a226c6f63616c686f7374222c22746172676574506f7274223a363337397d'],
     ['BINDOK chan=0', encodeFrame('bindOk', 0), '010f000000000000'],
     ['PING 归零 chan', encodeFrame('ping', GLOBAL_CHAN, { seq: 7 }), '010a0000000000097b22736571223a377d'],
+    // 传进来的 chan 非零也必须归零 —— 两侧 encodeFrame 的这条归一只有这一处锚点
+    ['PING 外部 chan 被归零', encodeFrame('ping', 17, { seq: 7 }), '010a0000000000097b22736571223a377d'],
   ]
   let fail = 0
   for (const [name, got, want] of cases) {
@@ -521,19 +651,151 @@ function selftest() {
     [ipDenied('169.254.169.254'), true, '云元数据'],
     [ipDenied('127.0.0.1'), true, '回环'],
     [ipDenied('::1'), true, 'IPv6 回环'],
+    [ipDenied('0:0:0:0:0:0:0:1'), true, 'IPv6 回环未压缩写法'],
+    [ipDenied('::ffff:127.0.0.1'), true, 'IPv4-mapped 绕回环'],
     [ipDenied('fe80::1'), true, '链路本地'],
+    [ipDenied('febf::1'), true, '链路本地 /10 段尾'],
+    [ipDenied('fec0::1'), false, '站点本地不在清单内'],
+    [ipDenied('fd12::1'), true, 'ULA fc00::/7 段内'],
+    [ipDenied('2001:db8::1'), false, '可路由 v6'],
     [ipDenied('10.0.0.9'), false, '内网正常地址'],
+    [ipDenied('fe80:zz::1'), true, '读不懂的 v6 字面量按拒处理'],
   ]
   for (const [got, want, name] of policy) {
     console.log(`${got === want ? 'ok  ' : 'FAIL'} 策略 ${name}`)
     if (got !== want) fail++
   }
+  fail += await selftestLoopback()
+  fail += await selftestUnauth()
   console.log(fail ? `\n${fail} 项不通过` : '\n全部通过')
   process.exit(fail ? 1 : 0)
 }
 
+/**
+ * 对端模拟器：一条 socket 上收帧/发帧。parity 传本端号段（客户端面用 'odd'，
+ * 于是到达本端的 OPEN 必须是网关分配的偶数号）。
+ */
+function makePeer(sock, parity) {
+  const dec = createDecoder(parity, () => false)
+  const frames = []
+  sock.on('data', chunk => frames.push(...dec.push(chunk)))
+  return {
+    send: (type, chan, obj, raw) => sock.write(encodeFrame(type, chan, obj, raw)),
+    /** 轮询等一个满足条件的帧；超时返回 null —— 自比对要的是「红」，不是挂死 */
+    until: async (pred, ms = 1500) => {
+      const t0 = Date.now()
+      while (Date.now() - t0 < ms) {
+        const hit = frames.find(pred)
+        if (hit) return hit
+        await new Promise(r => setTimeout(r, 10))
+      }
+      return null
+    },
+  }
+}
+
+const say = (ok, name) => {
+  console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}`)
+  return ok ? 0 : 1
+}
+
+/** 拿一个刚释放的端口：selftest 里 bind 不能撞别人的监听口 */
+async function freePort() {
+  return new Promise(resolve => {
+    const probe = net.createServer()
+    probe.listen(0, '127.0.0.1', () => {
+      const port = probe.address().port
+      probe.close(() => resolve(port))
+    })
+  })
+}
+
+/**
+ * -R 全链路字节往返：AUTH → BIND → 服务连进来 → 两个方向都要到得了对端。
+ * 这条是「网关把目标回包写回目标自己」的回归锚点 —— 只用假对端的单测抓不到它，
+ * 而 loopback 目标按 §2.3 一律被 doOpen 拒掉，所以走 bind 这条路测真接线。
+ */
+async function selftestLoopback() {
+  const cfg = {
+    users: [{ user: 't', passwordSha256: sha256hex('pw'), role: 'r' }],
+    roles: { r: { allow: [] } },
+    heartbeatSec: 3600,
+  }
+  const bindPort = await freePort()
+  let sess = null
+  const gwSide = net.createServer(sock => { sess = new Session(sock, cfg, 'selftest') })
+  await new Promise(r => gwSide.listen(0, '127.0.0.1', r))
+  const cli = net.connect(gwSide.address().port, '127.0.0.1')
+  await new Promise(r => cli.once('connect', r))
+  while (!sess) await new Promise(r => setTimeout(r, 10))
+  const peer = makePeer(cli, 'odd')
+  let fail = 0
+  try {
+    peer.send('auth', GLOBAL_CHAN, { user: 't', password: 'pw' })
+    fail += say(!!(await peer.until(f => f.type === 'helloOk')), '端到端 AUTH 换到 HELLO_OK')
+    peer.send('bind', GLOBAL_CHAN, { bindHost: '127.0.0.1', bindPort, targetHost: 'svc.local', targetPort: 6379 })
+    fail += say(!!(await peer.until(f => f.type === 'bindOk')), `端到端 BIND 127.0.0.1:${bindPort}`)
+
+    const svc = net.connect(bindPort, '127.0.0.1')
+    await new Promise(r => svc.once('connect', r))
+    const opened = await peer.until(f => f.type === 'open')
+    // 方向由 chan 奇偶隐含：网关发起的 open 必须带偶数号，并回带 BIND 声明的回连目标
+    fail += say(
+      !!opened && opened.chan % 2 === 0 && opened.payload.host === 'svc.local' && opened.payload.port === 6379,
+      '端到端 网关发起 OPEN（偶数 chan + 回连目标原样带回）',
+    )
+    if (!opened) return fail
+
+    let svcSeen = ''
+    svc.on('data', b => { svcSeen += b.toString() })
+    peer.send('data', opened.chan, null, textEnc.encode('up'))
+    const t0 = Date.now()
+    while (!svcSeen.includes('up') && Date.now() - t0 < 1500) await new Promise(r => setTimeout(r, 10))
+    fail += say(svcSeen.includes('up'), '端到端 客户端→本机服务 的 DATA 落地')
+
+    svc.write('down')
+    const down = await peer.until(f => f.type === 'data' && f.chan === opened.chan)
+    fail += say(!!down && textDec.decode(down.payload) === 'down', '端到端 本机服务→客户端 的 DATA 回程')
+    svc.destroy()
+  } finally {
+    sess.kill('selftest 收尾')
+    cli.destroy()
+    gwSide.close()
+  }
+  return fail
+}
+
+/** 未认证就能让网关在任意端口 listen，是把网关变成开放中继 —— 必须硬停会话 */
+async function selftestUnauth() {
+  const cfg = {
+    users: [{ user: 't', passwordSha256: sha256hex('pw'), role: 'r' }],
+    roles: { r: { allow: [] } },
+    heartbeatSec: 3600,
+  }
+  const bindPort = await freePort()
+  let sess = null
+  const gwSide = net.createServer(sock => { sess = new Session(sock, cfg, 'selftest') })
+  await new Promise(r => gwSide.listen(0, '127.0.0.1', r))
+  const cli = net.connect(gwSide.address().port, '127.0.0.1')
+  await new Promise(r => cli.once('connect', r))
+  while (!sess) await new Promise(r => setTimeout(r, 10))
+  const peer = makePeer(cli, 'odd')
+  let closed = false
+  cli.on('close', () => { closed = true })
+  try {
+    peer.send('bind', GLOBAL_CHAN, { bindHost: '127.0.0.1', bindPort, targetHost: 'x', targetPort: 1 })
+    const t0 = Date.now()
+    while (!closed && Date.now() - t0 < 1500) await new Promise(r => setTimeout(r, 10))
+    // 会话被打死之外，监听口一个都没起来才算数
+    return say(closed && sess.listeners.size === 0, '未认证即 BIND 被硬停且没建监听')
+  } finally {
+    cli.destroy()
+    gwSide.close()
+  }
+}
+
 const argv = process.argv.slice(2)
-if (argv.includes('--selftest')) selftest()
+if (argv.includes('--selftest')) selftest().catch(err => { console.error(err); process.exit(1) })
 else if (argv.includes('--hash')) {
   const i = argv.indexOf('--hash')
   const pw = argv[i + 1]

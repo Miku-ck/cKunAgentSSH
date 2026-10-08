@@ -8,7 +8,8 @@
  * - 本文件只管**编排**：本机 listener、SOCKS5 解析、通道记账、状态机。数据面怎么来的
  *   （forwardOut / 帧复用）一律经 TunnelTransport，不出现 ssh2 类型。
  * - local(-L)：本机 net.Server → transport.dial(dst) 双向 pipe。
- * - remote(-R)：transport.bind(bindHost:bindPort) + onInbound → net.connect(本机 dst) 回连。
+ * - remote(-R)：transport.bind(bind 身份 + 回连目标) + onInbound(同一身份) → net.connect 回连本机。
+ *   网关是一条会话服务多条规则，所以订阅按 bind 身份键控，停止时必须摘掉。
  * - dynamic(-D)：内置极简 SOCKS5 server（无认证 / 仅 CONNECT，约百行，不引依赖），
  *   按 CONNECT 目标逐连接 dial。安全边界：listenHost 强制 127.0.0.1
  *   （tunnel-store 已钳制，这里只消费）。
@@ -18,7 +19,7 @@
 import * as net from 'net'
 import type { Duplex } from 'stream'
 import type { BrowserWindow } from 'electron'
-import type { TunnelTransport } from './tunnel-transport'
+import type { RemoteBind, TunnelTransport } from './tunnel-transport'
 import type { TunnelRule } from './tunnel-store'
 
 /** 运行状态（主进程 → 渲染层推送，不持久化）。渲染层副本见 src/env.d.ts */
@@ -39,6 +40,8 @@ interface TunnelSession {
   server?: net.Server
   /** 活动转发通道（local/dynamic: 本机 socket；remote: 回连 socket），stop 时逐个销毁 */
   conns: Set<net.Socket>
+  /** 摘掉这条会话在数据面上挂的死亡回调（共享会话上不停就会漏闭包与 session 对象） */
+  offDead?: () => void
   state: TunnelStatus['state']
   message?: string
   startedAt?: number
@@ -141,7 +144,7 @@ export class TunnelManager {
       // 经下方 catch 落进 status.message
       const transport = await this.transportFactory(rule)
       session.transport = transport
-      transport.onDead(reason => this.onTransportDead(session, reason))
+      session.offDead = transport.onDead(reason => this.onTransportDead(session, reason))
 
       if (rule.type === 'local') await this.startLocal(session)
       else if (rule.type === 'remote') await this.startRemote(session)
@@ -217,10 +220,28 @@ export class TunnelManager {
 
   // ─────────────────────────── remote (-R) ───────────────────────────
 
+  /** -R 规则的完整绑定描述：对端开口 + 入站要回连的本机目标 */
+  private remoteBind(s: TunnelSession): RemoteBind {
+    const r = s.rule
+    return {
+      bindHost: r.remoteBindHost || '127.0.0.1',
+      bindPort: r.bindPort!,
+      targetHost: r.dstHost!,
+      targetPort: r.dstPort!,
+    }
+  }
+
   private async startRemote(s: TunnelSession): Promise<void> {
+    const b = this.remoteBind(s)
     // 先订阅入站再 bind：反过来会漏掉对端刚起来就打进来的第一条连接
-    s.transport.onInbound(stream => this.handleInbound(s, stream))
-    await s.transport.bind(s.rule.remoteBindHost || '127.0.0.1', s.rule.bindPort!)
+    s.transport.onInbound(b, stream => this.handleInbound(s, stream))
+    try {
+      await s.transport.bind(b)
+    } catch (err) {
+      // bind 没成就留下订阅，等于在共享会话上挂一个永远等不到连接的回调
+      s.transport.removeInbound(b)
+      throw err
+    }
   }
 
   /** 对端绑定端口上有新连接 → 回连本机目标 */
@@ -351,6 +372,8 @@ export class TunnelManager {
 
   /** 拆 listener / 销毁活动通道 / 关数据面。remote 先 best-effort unbind */
   private teardown(s: TunnelSession): void {
+    s.offDead?.()
+    s.offDead = undefined
     try { s.server?.close() } catch { /* ignore */ }
     s.server = undefined
     for (const c of s.conns) {
@@ -359,7 +382,10 @@ export class TunnelManager {
     s.conns.clear()
     if (!s.transport) return
     if (s.rule.type === 'remote') {
-      void s.transport.unbind(s.rule.remoteBindHost || '127.0.0.1', s.rule.bindPort!)
+      const b = this.remoteBind(s)
+      // 共享会话上摘掉自己这条 bind 的订阅，否则停掉的规则还会被新连接唤醒
+      s.transport.removeInbound(b)
+      void s.transport.unbind(b)
     }
     // 共享会话（网关一条会话服务多条规则）不能被单条隧道的停止关掉
     if (!s.transport.shared) s.transport.close()
@@ -369,6 +395,23 @@ export class TunnelManager {
   stopAll(): void {
     for (const id of [...this.sessions.keys()]) {
       void this.stop(id)
+    }
+  }
+
+  /**
+   * 网关被主动断开或删除时联动停掉挂在它上的隧道（spec §11.4 的后半）。
+   * 被动断开由 onDead 拆；主动 close() 按定义不推 onDead，不联动的结果是本机监听口继续
+   * accept、每条进来的连接只得到一句「网关会话未建立」—— 状态显示活动而流量全失败。
+   */
+  stopByGateway(gatewayId: string): void {
+    for (const s of [...this.sessions.values()]) {
+      if (s.rule.via !== 'gateway' || s.rule.gatewayId !== gatewayId) continue
+      s.closing = true
+      s.state = 'stopped'
+      s.message = '所在网关已断开'
+      this.teardown(s)
+      this.sessions.delete(s.rule.id)
+      this.pushSession(s)
     }
   }
 

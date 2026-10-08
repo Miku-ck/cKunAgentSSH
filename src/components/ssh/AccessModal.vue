@@ -1,10 +1,10 @@
 <template>
   <Teleport to="body">
-  <div class="overlay show" @click.self="emit('close')">
+  <div class="overlay show" @click.self="tryClose">
     <div class="dialog" role="dialog" aria-modal="true">
       <div class="dlg-head">
         <h2>{{ isNew ? '添加连接' : '修改连接' }}</h2>
-        <button class="dlg-x" @click="emit('close')">✕</button>
+        <button class="dlg-x" :disabled="saving" @click="tryClose">✕</button>
       </div>
       <div class="dlg-tabs">
         <span class="dlg-tab on">TLS/SSL</span>
@@ -37,13 +37,13 @@
           </div>
           <div class="frow">
             <label>SPKI 指纹：</label>
-            <span class="mono val">{{ form.trustedSpki || '尚未确认 —— 首次连接时弹窗确认' }}</span>
+            <span class="mono val">{{ spkiDisplay || '尚未确认 —— 首次连接时弹窗确认' }}</span>
           </div>
         </div>
       </div>
       <div class="dlg-foot">
-        <button class="btn btn-primary" :disabled="!canSave" @click="save">确定</button>
-        <button class="btn btn-ghost" @click="emit('close')">取消</button>
+        <button class="btn btn-primary" :disabled="!canSave || saving" @click="save">确定</button>
+        <button class="btn btn-ghost" :disabled="saving" @click="tryClose">取消</button>
       </div>
     </div>
   </div>
@@ -57,33 +57,36 @@ import { useToastStore } from '@/stores/toast'
 import { toFriendlyMessage } from '@/api/client'
 
 const props = defineProps<{ rec?: GatewayRecord }>()
-const emit = defineEmits<{ close: []; saved: [rec: GatewayRecord] }>()
-
-// Escape 关闭
-function handleKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') emit('close')
-}
-onMounted(() => window.addEventListener('keydown', handleKeydown))
-onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
+const emit = defineEmits<{ close: []; saved: [rec: GatewayRecord, submittedPassword: boolean] }>()
 
 const accessStore = useAccessStore()
 const toast = useToastStore()
 const advOpen = ref(false)
+const saving = ref(false)
 const isNew = computed(() => !props.rec?.id)
 
-const form = reactive<GatewayRecord>({
+/** 指纹由主进程的 TOFU 确认写入，表单只读展示；父组件关掉弹窗要等在途保存落地 */
+const spkiDisplay = computed(() => props.rec?.trustedSpki || '')
+function tryClose(): void {
+  if (!saving.value) emit('close')
+}
+
+// Escape 关闭（在途保存时不关，见 tryClose）
+function handleKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') tryClose()
+}
+onMounted(() => window.addEventListener('keydown', handleKeydown))
+onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
+
+const form = reactive({
   id: props.rec?.id || '',
   name: props.rec?.name || '',
   host: props.rec?.host || '',
   port: props.rec?.port || 4433,
   caPem: props.rec?.caPem || '',
-  trustedSpki: props.rec?.trustedSpki || '',
   user: props.rec?.user || '',
   // 编辑时留空 = 保留原口令（store 侧同一口径），所以初值必须是空而不是解密后的口令
   password: '',
-  autoConnect: props.rec?.autoConnect ?? false,
-  createdAt: props.rec?.createdAt || 0,
-  updatedAt: props.rec?.updatedAt || 0,
 })
 
 const bad = computed(() => ({
@@ -92,24 +95,32 @@ const bad = computed(() => ({
 const canSave = computed(() => !!form.host && !!form.user && !bad.value.port)
 
 async function save(): Promise<void> {
-  if (!canSave.value) return
-  const payload: GatewayRecord = { ...form, name: form.name || form.host }
+  if (!canSave.value || saving.value) return
+  const payload: Partial<GatewayRecord> & { password?: string } = {
+    ...form,
+    id: form.id,
+    name: form.name || form.host,
+  }
   if (!payload.password) delete payload.password
   if (!payload.caPem) delete payload.caPem
+  const submittedPassword = !!form.password
+  saving.value = true
   try {
-    const saved = await accessStore.save(payload)
-    // 把 store 里可能已被清掉的指纹带回给父组件（改地址时会被清）
-    emit('saved', { ...saved, password: payload.password } as GatewayRecord)
+    const saved = await accessStore.save(payload as GatewayRecord)
+    emit('saved', saved, submittedPassword)
   } catch (err) {
     toast.error(toFriendlyMessage(err, '保存失败'))
+  } finally {
+    saving.value = false
   }
 }
 </script>
 
 <style scoped>
 /* 排布复刻 designs/hsc-replica-mockup-v2.html 的「修改连接」：右对齐标签 + 左对齐控件。
-   页脚按钮走全局 styles/button.css，本组件不声明按钮样式。 */
-.overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 60; }
+   页脚按钮走全局 styles/button.css，本组件不声明按钮样式。
+   z-index 跟同目录的 ConnectionModal 同层：Teleport 到 body 后它已不在页面容器里。 */
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 1000; }
 .dialog {
   width: 500px;
   max-height: 88vh;

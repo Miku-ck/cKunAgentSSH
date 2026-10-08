@@ -61,11 +61,15 @@ describe('golden 字节向量（防与 gateway/hillgw.mjs 那份自含实现漂�
     expect(hex(encodeFrame({ type: 'bindOk', chan: 0 }))).toBe('010f000000000000')
   })
 
-  it('BIND 的 JSON 形状与键序', () => {
+  it('BIND 的 JSON 形状与键序（含入站要回连的本机目标）', () => {
     expect(
-      hex(encodeFrame({ type: 'bind', chan: 0, payload: { bindHost: '127.0.0.1', bindPort: 8443 } })),
+      hex(encodeFrame({
+        type: 'bind',
+        chan: 0,
+        payload: { bindHost: '127.0.0.1', bindPort: 8443, targetHost: 'localhost', targetPort: 6379 },
+      })),
     ).toBe(
-      '010d0000000000287b2262696e64486f7374223a223132372e302e302e31222c2262696e64506f7274223a383434337d',
+      '010d0000000000537b2262696e64486f7374223a223132372e302e302e31222c2262696e64506f7274223a383434332c22746172676574486f7374223a226c6f63616c686f7374222c22746172676574506f7274223a363337397d',
     )
   })
 
@@ -95,8 +99,8 @@ describe('round-trip', () => {
     { type: 'ping', chan: 0, seq: 1 },
     { type: 'pong', chan: 0, seq: 1 },
     { type: 'goaway', chan: 0, payload: { reason: '网关优雅下线', lastChan: 21 } },
-    { type: 'bind', chan: 0, payload: { bindHost: '0.0.0.0', bindPort: 8443 } },
-    { type: 'unbind', chan: 0, payload: { bindHost: '127.0.0.1', bindPort: 8443 } },
+    { type: 'bind', chan: 0, payload: { bindHost: '0.0.0.0', bindPort: 8443, targetHost: 'localhost', targetPort: 6379 } },
+    { type: 'unbind', chan: 0, payload: { bindHost: '127.0.0.1', bindPort: 8443, targetHost: 'localhost', targetPort: 6379 } },
     { type: 'bindOk', chan: 0 },
   ]
   for (const f of cases) {
