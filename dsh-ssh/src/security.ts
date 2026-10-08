@@ -51,7 +51,8 @@ const DANGEROUS_RULES: Rule[] = [
   { id: 'dd-blockdev', zh: '直接写块设备（dd of=/dev/...），可摧毁磁盘', re: /\bdd\b[\s\S]*?\bof=\/dev\// },
   { id: 'power', zh: '关机 / 重启 / 停机，远程服务立即中断', re: /\b(shutdown|reboot|halt|poweroff|init\s+[06])\b/ },
   { id: 'service-stop', zh: '停止/重启/禁用系统服务，相关服务中断', re: /\b(systemctl|service)\s+[\s\S]*?\b(stop|restart|disable|mask)\b/ },
-  { id: 'user-mgmt', zh: '修改账户 / 口令 / 授权，可能影响登录与提权', re: /\b(userdel|usermod|passwd|chpasswd|visudo|chsh|pkexec)\b/ },
+  // anchored to the command position so path names like /etc/passwd never match
+  { id: 'user-mgmt', zh: '修改账户 / 口令 / 授权，可能影响登录与提权', re: /^\s*(?:sudo\s+(?:-\S+\s+)*|doas\s+|pkexec\s+(?:-\S+\s+)*)?(?:userdel|useradd|usermod|groupdel|passwd|chpasswd|visudo|chsh)\b/ },
   { id: 'etc-write', zh: '覆盖写入 /etc 下的系统配置', re: />>?\s*\/etc\// },
   { id: 'firewall-flush', zh: '清空/关闭防火墙规则，暴露所有端口', re: /\b(iptables|nft|firewall-cmd|ufw)\b[\s\S]*?\b(-F|flush|disable|--permanent)\b/ },
   { id: 'kill-pid1', zh: '终止 1 号进程，导致系统/容器崩溃', re: /\bkill\s+(-\d+\s+|-[a-z]+\s+)?1\b/ },
@@ -60,7 +61,8 @@ const DANGEROUS_RULES: Rule[] = [
 ]
 
 const MUTATING_RULES: Rule[] = [
-  { id: 'file-write', zh: '写入/覆盖文件', re: /\btee\b|>>?\s*(?!\/dev\/)/ },
+  // >& and /dev/* targets are not file writes (2>&1, >/dev/null must stay read-only)
+  { id: 'file-write', zh: '写入/覆盖文件', re: /\btee\b|>>?\s*(?!\/dev\/|&)/ },
   { id: 'file-mut', zh: '移动/复制/新建/改属主权限文件', re: /\b(mv|cp|mkdir|touch|ln|chmod|chown|install|truncate|unlink)\b/ },
   { id: 'sed-i', zh: '原地修改文件内容（sed -i）', re: /\bsed\s+(-\S+\s+)*-i/ },
   { id: 'pkg-manager', zh: '安装/卸载/升级软件包，变更系统', re: /\b(apt(-get)?|yum|dnf|pacman|zypper|apk|gem|cargo|pip3?|npm|yarn|pnpm)\b[\s\S]*?\b(install|remove|uninstall|upgrade|purge|add|update|publish|link)\b/ },

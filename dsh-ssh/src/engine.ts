@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, statSync } from 'node:fs'
-import { dirname, basename } from 'node:path'
+import net from 'node:net'
+import { dirname } from 'node:path'
 import { Client, SFTPWrapper } from 'ssh2'
 import type { ConnectConfig } from 'ssh2'
 import { KnownHosts } from './knownhosts.ts'
@@ -59,6 +60,7 @@ export class SshEngine {
       port: h.port,
       user: h.user,
       auth: h.auth,
+      keyPath: h.keyPath,
       environment: h.environment,
       tags: h.tags,
       description: h.description,
@@ -130,7 +132,7 @@ export class SshEngine {
         keepaliveInterval: Math.max(5000, this.opts.keepaliveMs()),
         keepaliveCountMax: 4,
         readyTimeout: 15000,
-        hostVerifier: (raw, cb) => {
+        hostVerifier: (raw: Buffer, cb: (ok: boolean) => void) => {
           const v = this.knownHosts.verify(host.host, port, raw)
           if (v.status === 'matched') return cb(true)
           if (v.status === 'new') {
@@ -146,7 +148,7 @@ export class SshEngine {
       if (host.auth === 'key') {
         const keyPath = expandHome(host.keyPath || '~/.ssh/id_ed25519')
         try {
-          cfg.privateKeys = [readFileSync(keyPath, 'utf8')]
+          cfg.privateKey = readFileSync(keyPath, 'utf8')
         } catch (e) {
           return reject(new Error(`cannot read key file ${keyPath}: ${(e as Error).message}`))
         }
@@ -171,13 +173,18 @@ export class SshEngine {
           resolve()
         }
       })
-      client.on('error', (err: Error) => fail(new Error(`ssh error: ${err.message}`)))
-      client.on('verification-required', (err: Error) =>
-        fail(new Error(`host key rejected: ${err.message}（密钥未固定或与固定指纹不符；请在 SSH 面板中重新测试连接）`)),
+      client.on('error', (err: Error) =>
+        fail(
+          new Error(
+            /verification failed/i.test(err.message)
+              ? `host key rejected: ${err.message}（主机密钥未固定或与固定指纹不符；请在 SSH 面板测试连接并信任指纹）`
+              : `ssh error: ${err.message}`,
+          ),
+        ),
       )
-      client.on('keyboard-interactive', (_n, _i, _l, _p, cb) => {
+      client.on('keyboard-interactive', (_name, _instructions, _lang, _prompts, finish) => {
         fail(new Error('interactive authentication is not supported; use password or key auth'))
-        cb([])
+        finish([])
       })
       client.connect(cfg)
     })
@@ -188,8 +195,8 @@ export class SshEngine {
     const host = this.store.get(alias)
     if (!host) return { ok: false, error: `unknown host: ${alias}` }
     try {
-      const client = await this.connect(alias, pin)
-      const profile = await this.profile(alias, client)
+      await this.connect(alias, pin)
+      const profile = await this.profile(alias)
       return { ok: true, profile, fingerprint: this.knownHosts.fingerprintOf(host.host, host.port || 22) }
     } catch (err) {
       const message = (err as Error).message
@@ -326,14 +333,21 @@ export class SshEngine {
       sftp.readdir(remotePath, (err, files) => {
         if (err) return reject(new Error(`ls ${remotePath}: ${err.message}`))
         resolve(
-          files.map((f) => ({
-            name: f.name,
-            path: remotePath === '/' ? `/${f.name}` : `${remotePath.replace(/\/$/, '')}/${f.name}`,
-            type: f.attrs.type === 1 ? 'dir' : f.attrs.type === 2 ? 'link' : 'file',
-            size: f.attrs.size ?? 0,
-            mtime: (f.attrs.mtime ?? 0) * 1000,
-            mode: f.attrs.mode !== undefined ? (0o7777 & f.attrs.mode).toString(8) : '',
-          })),
+          files.map((f) => {
+            const type: RemoteDirEntry['type'] = f.attrs.isDirectory()
+              ? 'dir'
+              : f.attrs.isSymbolicLink()
+                ? 'link'
+                : 'file'
+            return {
+              name: f.filename,
+              path: remotePath === '/' ? `/${f.filename}` : `${remotePath.replace(/\/$/, '')}/${f.filename}`,
+              type,
+              size: f.attrs.size ?? 0,
+              mtime: (f.attrs.mtime ?? 0) * 1000,
+              mode: f.attrs.mode !== undefined ? (0o7777 & f.attrs.mode).toString(8) : '',
+            }
+          }),
         )
       })
     })
@@ -360,21 +374,43 @@ export class SshEngine {
     return statSync(localPath).size
   }
 
-  /** Start a local port-forward: 127.0.0.1:localPort -> remoteHost:remotePort through the host. */
+  /**
+   * Start a local port-forward (ssh -L semantics): 127.0.0.1:localPort ->
+   * remoteHost:remotePort through the pooled connection. ssh2 has no built-in
+   * local forward, so we listen locally and pipe each connection through a
+   * direct-tcpip channel (client.forwardOut).
+   */
   async startTunnel(alias: string, localPort: number, remoteHost: string, remotePort: number): Promise<TunnelInfo> {
     const client = await this.connect(alias, false)
-    const info: TunnelInfo = { id: randomUUID().slice(0, 8), alias, localPort, remoteHost, remotePort, state: 'open' }
-    await new Promise<void>((resolve, reject) => {
-      client.forwardLocal(localPort, remoteHost, remotePort, (err) => (err ? reject(new Error(`forwardLocal :${localPort}: ${err.message}`)) : resolve()))
+    const server = net.createServer((socket) => {
+      let fwd: import('ssh2').ClientChannel | undefined
+      socket.once('error', () => fwd?.destroy())
+      client.forwardOut('127.0.0.1', 0, remoteHost, remotePort, (err, stream) => {
+        if (err) {
+          socket.destroy()
+          return
+        }
+        fwd = stream
+        stream.once('error', () => socket.destroy())
+        socket.once('close', () => stream.destroy())
+        socket.pipe(stream).pipe(socket)
+      })
     })
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', (err) => reject(new Error(`listen 127.0.0.1:${localPort}: ${err.message}`)))
+      server.listen(localPort, '127.0.0.1', () => resolve())
+    })
+    const addr = server.address()
+    const boundPort = typeof addr === 'object' && addr !== null ? addr.port : localPort
+    const info: TunnelInfo = { id: randomUUID().slice(0, 8), alias, localPort: boundPort, remoteHost, remotePort, state: 'open' }
     this.tunnels.set(info.id, {
       info,
       close: () => {
         info.state = 'closing'
-        client.unforwardLocal(localPort, () => {
-          info.state = 'closed'
-          this.tunnels.delete(info.id)
-        })
+        server.close()
+        ;(server as net.Server & { closeAllConnections?: () => void }).closeAllConnections?.()
+        info.state = 'closed'
+        this.tunnels.delete(info.id)
       },
     })
     return info
