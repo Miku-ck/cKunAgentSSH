@@ -76,7 +76,7 @@ import re
 from typing import Any, Optional
 
 from ..contracts import ReinDecision, ReinPoint, RunContext, TraceEvent
-from ..safety import classify_command
+from ..safety import classify_command, classify_constructed_command
 from .core import MODE_KEY, _COMMAND_EXEC_TOOLS, command_from_args, extract_bound_command
 
 logger = logging.getLogger(__name__)
@@ -106,6 +106,12 @@ PLAN_READ_ONLY_TOOLS: frozenset[str] = frozenset({
     "web_search", "web_fetch",
     # 自身只读 / 计划表示
     "load_skill", "memory_search", "todo_write",
+    # 计划工件本身：与 todo_write 同一类，写的是"计划怎么表达"，不是目标机的状态。
+    # 这三条必须在白名单里 —— PLAN_DISCIPLINE 每轮都命令模型「调研完成后用 plan_write
+    # 输出有序步骤」，而本表原本不含它们：实测 classify_plan_action("plan_write", …)
+    # 直接回「在计划模式下不可用」，于是计划模式永远产不出计划（模型照命令再调一次
+    # 就是重复调用，第三次被 LoopDetector terminate 掉整个 run）。spec/goal 同一条路径。
+    "plan_write", "spec_write", "goal_write",
 })
 
 # ── 命令级白名单：严格子集，逐项都是「读了不会改」 ──────────────────────────
@@ -321,10 +327,41 @@ def classify_plan_action(
             "或 shell_exec 跑只读命令（如 systemctl status <name>）。"
         )
 
-    # 白名单工具若自带"本次真实执行命令"（BaseTool.bound_command），一样要过命令级判定
+    # 白名单工具若自带"本次真实执行命令"（BaseTool.bound_command），一样要过内容级判定
     bound, _free_form = extract_bound_command(registry, tool, args)
     if bound:
-        return classify_plan_command(bound)
+        return classify_plan_bound_command(bound)
+    return True, ""
+
+
+def classify_plan_bound_command(command: str) -> tuple[bool, str]:
+    """白名单工具自带的客户端模板：动词由代码写死，不套「未知动词默认审批」，也不查计划动词表。
+
+    实测原实现对模板走了 `classify_plan_command`：`file_read`（明确在白名单里）的模板是
+    `base64 <path>`，`base64` 不在 `PLAN_READ_ONLY_VERBS`、也不在 safety 的只读动词表
+    ⇒ 每一次计划模式读文件都回「命令被判为 dangerous（unknown command, default approval
+    (base64)）」—— 只读阶段连读都读不了。默认审批那条规则的动机是"模型手敲的未知动词
+    不得免审"，而模板的动词由不得模型选，safety 自己对这个场景也有现成口径
+    （`classify_constructed_command`）。
+
+    放松的只有"动词由谁选"这一层：路径级判定一条不少（凭据读取、写落点、命令替换、
+    输出重定向），所以 `base64 /etc/shadow` 仍然拒。
+    """
+    cmd = (command or "").strip()
+    if not cmd:
+        return False, "命令为空，按只读约束拒绝"
+
+    if _RE_CMD_SUBST.search(cmd):
+        return False, "命令含命令替换（$(...) 或反引号），无法确认只读"
+
+    redirect = _find_write_redirect(cmd)
+    if redirect:
+        return False, f"输出重定向 `{redirect}` 会写文件，计划模式下不允许落盘"
+
+    level, reason = classify_constructed_command(cmd)
+    if level != "safe":
+        return False, f"命令被判为 {level}（{reason or '未说明'}），计划模式只允许只读排查"
+
     return True, ""
 
 

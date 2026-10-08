@@ -541,3 +541,48 @@ def test_HTTP_层把_permission_mode_交给_run_运行时通路():
     sig.bind_partial(task=req.task, permission_mode=req.permission_mode)
 
 
+
+
+# ── 5. 带真实 registry 的判定（前面那一整组都不带，bound_command 分支从没被走过）──
+# PlanModeGuard() 不带 saddle 时 `_registry()` 返回 None，`extract_bound_command`
+# 直接短路成 (None, False) → 函数尾部 `return True, ""`。于是 ALLOWED_TOOLS 那张表
+# 看着在验「file_read 读 /etc/nginx/nginx.conf 被允许」，实际连模板判定都没进 ——
+# 而生产路径（harness.py 装配 saddle → ctx.metadata）是有 registry 的。
+# 实测带真实 registry 时：白名单里的 file_read 每条都被拒（模板动词 base64 不在
+# 计划动词表里 ⇒ 走 safety 的「未知动词默认审批」），而 PLAN_DISCIPLINE 命令模型
+# 用来产出计划的 plan_write/spec_write/goal_write 干脆不在工具白名单里 ⇒ 计划模式
+# 永远产不出计划。两条都是 BLOCKER 级：一个是只读阶段连读都读不了，一个是模式自相矛盾。
+
+from agent.tools import create_registry  # noqa: E402  放在本组开头，保持上面用例零改动
+
+
+@pytest.mark.parametrize("tool,args", [
+    ("plan_write", {"steps": ["读配置", "改 nginx.conf", "reload 验证"]}),
+    ("spec_write", {"content": "# 验收标准\n- 站点可访问"}),
+    ("goal_write", {"objective": "把 nginx 502 排查清楚"}),
+])
+def test_计划模式的计划工件必须可用(tool, args):
+    ok, why = pm.classify_plan_action(tool, args, create_registry())
+    assert ok is True, f"{tool} 被拒 ⇒ 计划模式产不出计划：{why}"
+
+
+def test_放行计划工件不等于放行目标机写入():
+    """反向锁：这三条是"计划怎么表达"，真正改目标机的 file_write 必须仍然拒。"""
+    ok, why = pm.classify_plan_action(
+        "file_write", {"path": "/etc/nginx/nginx.conf", "content": "x"}, create_registry())
+    assert ok is False, "file_write 被放行 ⇒ 只读承诺没了"
+    assert "不可用" in why or "改变目标机状态" in why
+
+
+def test_白名单只读工具的模板不得被默认审批挡掉():
+    reg = create_registry()
+    ok, why = pm.classify_plan_action("file_read", {"path": "/etc/nginx/nginx.conf"}, reg)
+    assert ok is True, f"计划模式连只读文件都被拒：{why}"
+
+
+def test_模板口径不放松路径判定():
+    """反向锁：换成客户端模板口径后，凭据路径仍然必须拒 —— 放松的只有"动词由谁选"。"""
+    reg = create_registry()
+    ok, why = pm.classify_plan_action("file_read", {"path": "/etc/shadow"}, reg)
+    assert ok is False, "计划模式能读 /etc/shadow ⇒ 只读阶段泄凭据"
+    assert "credential" in why or "凭据" in why
