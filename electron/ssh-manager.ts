@@ -642,7 +642,16 @@ export class SSHManager {
       client.on('error', (err: Error) => {
         if (!settled) reject(SSHError.from(err))
       })
-      client.connect(connectConfig)
+      // S0-12：connect() 的同步抛出（如私钥加密但没给 passphrase ⇒
+      // "Cannot parse privateKey: …no passphrase given"，发生在建 sock 之前，
+      // 无泄漏）必须过 SSHError.from —— 原实现让它以裸 Error 逃出 Promise，
+      // 绕过分类器与 handleTrusted 的 __sshError 序列化，到渲染端只剩
+      // 「服务暂时不可用」。口径同 testConnection 的 try/catch。
+      try {
+        client.connect(connectConfig)
+      } catch (err) {
+        reject(SSHError.from(err, undefined, config.authType))
+      }
     })
   }
 
@@ -849,7 +858,14 @@ export class SSHManager {
         this.destroySession(id, client)
       })
 
-      client.connect(connectConfig)
+      // S0-12：同 openRawClient —— connect() 的同步抛出要走分类器，
+      // 否则加密私钥缺 passphrase 这类「配置错、可自助修复」的失败在 UI 上
+      // 塌成「服务暂时不可用」，而 AUTH_PASSPHRASE 的专门文案永远不出现。
+      try {
+        client.connect(connectConfig)
+      } catch (err) {
+        wrappedReject(SSHError.from(err, undefined, config.authType))
+      }
     })
   }
 
@@ -1294,7 +1310,8 @@ export class SSHManager {
       try {
         client.connect(connectConfig)
       } catch (err: any) {
-        const code = classifyRawError(err)
+        // 同族口径：同步抛出也带 authType，认证类配置错才归得准
+        const code = classifyRawError(err, config.authType)
         done(false, toFriendlyZh(code, err?.message))
       }
 

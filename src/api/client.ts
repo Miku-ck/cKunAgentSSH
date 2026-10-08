@@ -78,6 +78,25 @@ function isTechnicalErrorMessage(msg: string): boolean {
 }
 
 /**
+ * 剥掉 Electron IPC 的投递信封。
+ *
+ * S0-13：主进程 reject 到达渲染端时恒为
+ * `Error invoking remote method '<channel>': Error: <原始 message>`，
+ * 而 TECHNICAL_ERROR_PATTERNS 里有一条 `/Error:\s/i` —— 信封本身就带 `Error: `，
+ * 于是**任何**非 SSHError 的主进程抛错都被改写成「服务暂时不可用，请稍后重试」，
+ * 具体根因（会话不存在 / 参数校验失败 / 目标目录不合法…）永远看不到。
+ * 同仓既有口径：src/stores/server-monitor-core.ts 的 describeMonitorError
+ * 也是先剥信封再判文案。
+ */
+export function unwrapIpcErrorEnvelope(msg: string): string {
+  if (!msg) return msg
+  const root = msg
+    .replace(/^Error invoking remote method '[^']+'\s*:\s*/, '')
+    .replace(/^Error:\s*/i, '')
+  return root || msg
+}
+
+/**
  * 把底层/代码级错误转换为用户可读的友好提示。
  * v2 改进：优先识别 SSHErrorTransport（结构化错误，精准文案），再回退原有模式匹配。
  */
@@ -85,12 +104,16 @@ export function toFriendlyMessage(e: unknown, fallback = '操作失败，请稍�
   // v2：优先提取 SSH 结构化错误（精确文案）
   const sshTransport = extractSSHError(e)
   if (sshTransport) {
-    return toFriendlySshMessage(sshTransport.code, sshTransport.detail)
+    // S0-14：transport.message 是主进程用共享文案表渲染好的成品，直接采信；
+    // 原实现拿 (code, detail=undefined) 重渲染 ⇒ 把「30秒」「会话 x 不存在」
+    // 这类只有生产端知道的 detail 抹掉了。detail 仅在 message 缺失时兜底。
+    // 同仓口径见 describeMonitorError（用 t.message）。
+    return sshTransport.message || toFriendlySshMessage(sshTransport.code, sshTransport.detail)
   }
 
   if (e instanceof FriendlyError) return e.message
   if (e instanceof Error) {
-    const msg = e.message
+    const msg = unwrapIpcErrorEnvelope(e.message)
     if (!msg) return fallback
     if (/Backend not ready|后端未就绪/i.test(msg)) return '后端服务未就绪，请稍后重试'
     if (/fetch failed|NetworkError|Failed to fetch|网络连接失败/i.test(msg)) return '网络连接失败，请检查服务是否运行'

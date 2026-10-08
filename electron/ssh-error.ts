@@ -35,8 +35,12 @@ export function classifyRawError(raw: unknown, authType?: 'password' | 'privateK
   if (/enotfound|getaddrinfo|dns/.test(msg)) return 'DNS_FAIL'
   if (/enetwork|socket hang up|epipe|network/.test(msg)) return 'NETWORK_ERROR'
 
-  // 私钥加密但缺 passphrase（keyParser 阶段报错，不含 "authentication" 字样）
-  if (/no passphrase was provided/.test(msg)) return 'AUTH_PASSPHRASE'
+  // 私钥加密但缺/错 passphrase（keyParser 阶段抛错，走不到下面的认证分支）。
+  // S0-16：正则原文 "no passphrase was provided" 是 ssh2 从不产出的措辞 ⇒ 死分支，
+  // 真消息见 node_modules/ssh2/lib/protocol/keyParser.js（"…but no passphrase given"
+  // / "OpenSSH key integrity check failed -- bad passphrase?"），且被 client.js
+  // 再包一层 "Cannot parse privateKey: …"。
+  if (/no passphrase given|bad passphrase/.test(msg)) return 'AUTH_PASSPHRASE'
 
   // 认证层（ssh2 的 client-authentication 级错误是可靠信号，消息匹配作兜底）
   if (/authentication|auth.*fail|all configured authentication methods failed/.test(msg)
@@ -69,6 +73,12 @@ export class SSHError extends Error {
   readonly original: unknown
   /** 自动生成的友好中文提示 */
   readonly friendly: string
+  /**
+   * S0-14：构造方给出的上下文（超时秒数、会话 id、主机名等）。
+   * 此前只用来生成 friendly 就丢弃，transport 里只剩 original.message ⇒
+   * 渲染端重渲染时把「30秒」这种刚写进文案的数字丢了。
+   */
+  readonly detail?: string
 
   constructor(
     code: SSHErrorCode,
@@ -84,6 +94,7 @@ export class SSHError extends Error {
     this.retryable = isRetryable(code)
     this.original = opts.original
     this.friendly = friendly
+    this.detail = opts.detail
   }
 
   /** 工厂方法：从原始 Error 自动分类并实例化（authType 用于精确归类认证失败） */
@@ -113,7 +124,10 @@ export function toIpcTransport(err: SSHError): SSHErrorTransport {
     code: err.code,
     message: err.message,
     retryable: err.retryable,
-    detail: err.original instanceof Error ? err.original.message : undefined,
+    // S0-14：优先构造方的 detail，其次才是原始 Error 的技术消息 ——
+    // 原实现只读 original.message，主动 throw 的 SSHError（无 original）到渲染端
+    // 就只剩 code，detail 恒 undefined。
+    detail: err.detail ?? (err.original instanceof Error ? err.original.message : undefined),
   }
 }
 

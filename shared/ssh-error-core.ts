@@ -74,8 +74,16 @@ export function toFriendlyZh(code: SSHErrorCode, detail?: string): string {
       return `连接超时。请检查网络连通性，或在连接配置中增大"连接超时"值`
     case 'CONN_RESET':
       return '连接被远端重置，可能是服务拒绝、防火墙拦截或网络波动。可稍后重试'
-    case 'DNS_FAIL':
-      return `无法解析主机名"${detail || ''}"，请检查主机地址是否正确`
+    case 'DNS_FAIL': {
+      // S0-14：原实现是唯一没有 detail 判空的成员 ⇒ detail 缺失时产出
+      // 「无法解析主机名""」。detail 通常是 Node 原始消息
+      // （"getaddrinfo ENOTFOUND foo.example"），整串塞进引号会把英文技术串
+      // 混进中文 toast，因此只取其中的主机名。
+      const host = /(?:enotfound|enoname|eai_again)\s+(\S+)/i.exec(detail || '')?.[1]
+      return host
+        ? `无法解析主机名"${host}"，请检查主机地址是否正确`
+        : '主机名无法解析，请检查主机地址是否正确'
+    }
     case 'NETWORK_ERROR':
       return `网络异常：${detail || '请检查网络'}`
 
