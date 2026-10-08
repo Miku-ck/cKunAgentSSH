@@ -361,7 +361,8 @@ export class TunnelManager {
     if (s.rule.type === 'remote') {
       void s.transport.unbind(s.rule.remoteBindHost || '127.0.0.1', s.rule.bindPort!)
     }
-    s.transport.close()
+    // 共享会话（网关一条会话服务多条规则）不能被单条隧道的停止关掉
+    if (!s.transport.shared) s.transport.close()
   }
 
   /** 应用退出时全量清理（main.ts before-quit / window-all-closed 调用） */

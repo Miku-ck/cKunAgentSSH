@@ -31,4 +31,9 @@ export interface TunnelTransport {
   close(): void
   readonly kind: 'ssh' | 'gateway'
   readonly dead: boolean
+  /**
+   * true = 这条数据面被多条隧道共用（网关侧一条会话服务多条规则）。
+   * 单条隧道停止时不得 close 它，否则会把同网关的其他隧道一起带走。
+   */
+  readonly shared: boolean
 }

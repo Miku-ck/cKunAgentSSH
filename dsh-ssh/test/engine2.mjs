@@ -43,7 +43,9 @@ async function startServer(privPem, state) {
     // expected: refused handshakes (TOFU capture) surface as server-side errors
     client.on('error', () => {})
     client.on('authentication', (ctx) => ctx.accept())
-    client.on('tcp connection', (info, accept, reject) => {
+    // NOTE: ssh2 Server emits 'tcpip' (not 'tcp connection') for direct-tcpip,
+    // with the callback signature (accept, reject, info)
+    client.on('tcpip', (accept, reject, info) => {
       const stream = accept()
       // pipe through a tiny local echo server (stands in for the "remote" service)
       const sock = net.connect(state.echoPort, '127.0.0.1', () => {

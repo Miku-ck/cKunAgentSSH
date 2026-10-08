@@ -403,6 +403,8 @@ export type HostKeyProbe = (spki: string) => HostKeyDecision
 
 export class GatewayTransport implements TunnelTransport {
   readonly kind = 'gateway' as const
+  /** 一条网关会话服务多条隧道，单条隧道停止时不得关闭它 */
+  readonly shared = true
   private session: GatewaySession | null = null
   private starting = false
   private closingIntentionally = false

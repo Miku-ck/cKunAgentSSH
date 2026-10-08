@@ -15,6 +15,8 @@ type RejectPending = (reason: string) => void
 
 export class SshTransport implements TunnelTransport {
   readonly kind = 'ssh' as const
+  /** 每条 SSH 隧道各持一条连接，停止时可以关 */
+  readonly shared = false
   private deadFlag = false
   private deadReason = 'SSH 连接已断开'
   private readonly pending = new Set<RejectPending>()

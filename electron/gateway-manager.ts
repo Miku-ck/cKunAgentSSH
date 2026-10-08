@@ -50,16 +50,11 @@ const MAX_BACKOFF_MS = 30_000
 
 export class GatewayManager {
   private readonly entries = new Map<string, Entry>()
-  private win: BrowserWindow | null = null
 
   constructor(
     private readonly store: GatewayStore,
     private readonly push: (channel: string, data: unknown) => void,
   ) {}
-
-  setWindow(win: BrowserWindow): void {
-    this.win = win
-  }
 
   statusAll(): GatewayStatus[] {
     return [...this.entries.values()].map(e => this.statusOf(e))

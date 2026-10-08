@@ -13,6 +13,8 @@ import { SSHStore, type SSHConnectionRecord } from './ssh-store'
 import { TunnelStore, type TunnelRule } from './tunnel-store'
 import { TunnelManager } from './tunnel-manager'
 import { SshTransport } from './transports/ssh-transport'
+import { GatewayStore, type GatewayRecord } from './gateway-store'
+import { GatewayManager } from './gateway-manager'
 import { ElectronBridge, BridgeOp } from './electron-bridge'
 import { BridgeWsClient } from './bridge-ws-client'
 import {
@@ -32,6 +34,8 @@ let sshManager: SSHManager | null = null
 let sshStore: SSHStore | null = null
 let tunnelStore: TunnelStore | null = null
 let tunnelManager: TunnelManager | null = null
+let gatewayStore: GatewayStore | null = null
+let gatewayManager: GatewayManager | null = null
 let electronBridge: ElectronBridge | null = null
 let bridgeWsClient: BridgeWsClient | null = null
 
@@ -1089,7 +1093,20 @@ function setupSSHIPC(): void {
   tunnelStore = new TunnelStore()
   tunnelManager = new TunnelManager()
   if (mainWindow) tunnelManager.setWindow(mainWindow)
+  gatewayStore = new GatewayStore()
+  gatewayManager = new GatewayManager(gatewayStore, (channel, data) => {
+    // 窗口销毁后 webContents.send 会抛，加守卫（与 sftp:progress 同一口径）
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try { mainWindow.webContents.send(channel, data) } catch { /* 窗口已销毁 */ }
+    }
+  })
   tunnelManager.setTransportFactory(async (rule) => {
+    if (rule.via === 'gateway') {
+      // 隧道搭网关的共享会话：没连接就先在「安全接入」页连接，不在这里偷偷替用户建会话
+      const t = rule.gatewayId ? gatewayManager!.transportOf(rule.gatewayId) : null
+      if (!t) throw new Error('网关未连接，请先在「安全接入」页连接该网关')
+      return t
+    }
     // 凭据主进程自取（渲染层全程无明文）；连接配置被删 → 抛中文文案，落 status.message
     const config = await sshStore!.get(rule.connectionId)
     if (!config) throw new Error('连接配置已删除，请重建连接或删除本条隧道规则')
@@ -1243,6 +1260,41 @@ function setupSSHIPC(): void {
   // 保存前预检：本机监听端口被占即时报（而非启动时才暴露 EADDRINUSE）
   handleTrusted('tunnel:checkPort', (_event, host: string, port: number) => {
     return tunnelManager!.checkPort(host, port)
+  })
+
+  // ── TLS 接入网关（安全接入）──
+  // 设计见 docs/superpowers/specs/2026-10-08-tls-dataplane-design.md：
+  // 一条网关 = 一条共享会话（gateway-manager），隧道规则经 transportFactory 搭车；
+  // 口令只在主进程解出，渲染层拿到的 list 里没有该字段。
+  handleTrusted('gateway:list', async () => {
+    return gatewayStore!.list()
+  })
+
+  handleTrusted('gateway:save', async (_event, rec: GatewayRecord) => {
+    return gatewayStore!.save(rec)
+  })
+
+  handleTrusted('gateway:delete', async (_event, id: string) => {
+    // 先停会话（含在途重连定时器），再删记录
+    await gatewayManager!.drop(id)
+    return gatewayStore!.delete(id)
+  })
+
+  handleTrusted('gateway:connect', async (_event, id: string) => {
+    return gatewayManager!.connect(id)
+  })
+
+  handleTrusted('gateway:disconnect', async (_event, id: string) => {
+    return gatewayManager!.disconnect(id)
+  })
+
+  handleTrusted('gateway:statusAll', () => {
+    return gatewayManager!.statusAll()
+  })
+
+  // TOFU 指纹确认：UI 上确认过才写库，不符一律硬失败（不降级为警告）
+  handleTrusted('gateway:trustHostKey', async (_event, id: string, spki: string) => {
+    return gatewayStore!.setSpki(id, spki)
   })
 
   // 后端端口查询（渲染进程启动时兜底获取，防止 backend:status 事件丢失）
@@ -1538,6 +1590,7 @@ app.on('window-all-closed', () => {
     ptyManager?.destroyAll()
     sshManager?.disconnectAll()
     tunnelManager?.stopAll()
+    gatewayManager?.stopAll()
     backendManager?.stop()
     bridgeWsClient?.stop()
     electronBridge?.stop()
