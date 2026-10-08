@@ -43,6 +43,10 @@ interface SSHConnectionRecord {
   note?: string
   /** 目标环境标记('test' | 'prod'). 驱动生产环境高风险命令的审计与审批强化. 旧数据默认 'test' */
   environment?: 'test' | 'prod'
+  /** S4-03：主进程保存时附上来的凭据告警 —— 'encryption-unavailable' 表示系统密钥环
+   *  不可用，本次提交的密码/passphrase 没有落盘（不落明文）。渲染层据此提示用户，
+   *  否则「保存成功」是假信号，下次连接才暴露成认证失败。 */
+  credentialNotice?: 'encryption-unavailable'
   tags: string[]
   readyTimeout?: number       // 毫秒
   keepaliveInterval?: number  // 毫秒

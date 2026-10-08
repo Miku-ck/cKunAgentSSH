@@ -27,6 +27,10 @@ export interface SSHConnectionRecord {
   updatedAt: number
   /** 目标环境标记('test' | 'prod'). 驱动生产环境高风险命令的审计与审批强化. 旧数据默认 'test' */
   environment?: 'test' | 'prod'
+  /** S4-03：保存结果里的凭据告警。'encryption-unavailable' = 系统密钥环不可用，
+   *  本次提交的 password/passphrase 没有落盘（encrypt() 拒绝写明文）。
+   *  随 IPC 回传给渲染层提示用户 —— 此前这个事实只存在于主进程 console.warn。 */
+  credentialNotice?: 'encryption-unavailable'
 }
 
 /**
@@ -268,7 +272,14 @@ export class SSHStore {
   }
 
   private async doSave(input: SSHConnectionRecord): Promise<SSHConnectionRecord> {
-    if (!safeStorage.isEncryptionAvailable() && (input.password || input.passphrase)) {
+    // S4-03 修复：encrypt() 在 safeStorage 不可用时返回 ''（不落明文，行为本身正确），
+    // 但这个事实此前只写进主进程的 console.warn —— 渲染层收到的是「保存成功」，
+    // 用户以为密码已存好，下次连接直接 USERAUTH_FAILURE。本文件头部立的
+    // 「调用方须先检查 isEncryptionAvailable 并提示改用私钥认证」契约没人实现，
+    // 现由保存动作本身把事实随记录回传。
+    const credentialDropped =
+      !safeStorage.isEncryptionAvailable() && Boolean(input.password || input.passphrase)
+    if (credentialDropped) {
       console.warn('[SSHStore] safeStorage 加密不可用，密码/passphrase 将不持久化（每次连接需重新输入或改用私钥认证）')
     }
     const records = await readAllFromDisk()
@@ -303,7 +314,9 @@ export class SSHStore {
     }
 
     await writeAllToDisk(records)
-    return record
+    return credentialDropped
+      ? { ...record, credentialNotice: 'encryption-unavailable' as const }
+      : record
   }
 
   /** 按 ID 读取单条记录（含解密后的凭据；仅主进程内部使用，不直接暴露给渲染进程） */

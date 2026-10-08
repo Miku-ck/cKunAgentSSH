@@ -540,6 +540,18 @@ export const useSSHStore = defineStore('ssh', () => {
   }
 
   // ─── 连接管理(走 IPC 持久化) ──────────────────
+  /**
+   * S4-03：主进程保存时若系统密钥环不可用，密码/passphrase 不会落盘（不落明文），
+   * 而它把这件事随记录回传（credentialNotice）。这里负责让它对用户可见 —— 否则
+   * 「保存成功」是假信号，用户要到下次连接认证失败才发现。
+   */
+  function warnIfCredentialDropped(rec: SSHConnection): void {
+    if (rec.credentialNotice !== 'encryption-unavailable') return
+    useToastStore().warning(
+      '系统密钥环不可用，本次密码/passphrase 未保存 —— 下次连接需重新输入，或改用私钥认证',
+    )
+  }
+
   async function addConnection(conn: Omit<SSHConnection, 'id' | 'createdAt' | 'updatedAt' | 'tags' | 'note'> & { tags?: string[]; note?: string }): Promise<string> {
     const api = window.electronAPI
     if (!api) throw new Error('Electron API not available')
@@ -553,6 +565,7 @@ export const useSSHStore = defineStore('ssh', () => {
     } as SSHConnection
     const saved = await api.sshSaveConnection(record)
     connections.value.push(saved)
+    warnIfCredentialDropped(saved)
     return saved.id
   }
 
@@ -578,6 +591,7 @@ export const useSSHStore = defineStore('ssh', () => {
     }
     const saved = await api.sshSaveConnection(merged)
     connections.value[idx] = saved
+    warnIfCredentialDropped(saved)
   }
 
   async function removeConnection(id: string): Promise<void> {
