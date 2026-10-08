@@ -392,7 +392,13 @@ class WebFetchTool(BaseTool):
             # G4 有意**不**接 netconfig 代理：这里是「用解析出的 IP 直连 + sni_hostname
             # 保留原域名」的 DNS rebinding 守卫。一旦交给代理，代理服务器自己重新解析
             # 域名，这层守卫整体失效；宁可让纯代理出网环境下的 web_fetch 不可用。
-            async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
+            # S6-08：整请求**总**时限。httpx 的标量 timeout 是「每次套接字操作」的
+            # 超时，不是整请求 deadline —— 慢滴流服务端每 <15s 吐一个 64KB 块，就能在
+            # 10MB 上限内把这次调用钉住几分钟，重定向链最多再乘 6 ⇒ 模型选一个 URL
+            # 就能占死整个 run。这里用工具自己声明的 meta.timeout（30s）作总预算，
+            # 顺带让那个字段不再是装饰 —— 它过去只有路由里那份建议性清单读它。
+            async with asyncio.timeout(self.meta.timeout), \
+                    httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
                 direct_url = self._build_direct_url(parsed, ip_or_reason)
                 status, location, html = await self._get_with_limit(
                     client, direct_url, headers, hostname,
@@ -456,6 +462,14 @@ class WebFetchTool(BaseTool):
         except httpx.ConnectError as e:
             logger.warning("Web fetch 连接失败: %s", url)
             return ToolResult(False, "", f"连接失败: {e}")
+        except TimeoutError:
+            # asyncio.timeout 到点抛的是内置 TimeoutError（3.11 起与
+            # asyncio.TimeoutError 同一个类），与上面的 httpx 逐操作超时不是一回事
+            logger.warning("Web fetch 超过总时限 %ss: %s", self.meta.timeout, url)
+            return ToolResult(
+                False, "",
+                f"抓取超过总时限 {self.meta.timeout}s 已放弃（慢速或分块拖延的响应）: {url}",
+            )
         except Exception as e:
             logger.exception("Web fetch 失败: %s", url)
             return ToolResult(False, "", f"抓取失败: {e}")

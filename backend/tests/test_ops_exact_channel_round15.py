@@ -68,14 +68,17 @@ class _VirtualRemote:
             self.files[path] = base64.b64decode(m.group(1))
             return {"success": True, "output": "", "error": "", "exit_code": 0}
 
-        # job_read_cmd 模板（三段）：读 rc → printf CKUNJOB_RC= → tail -c +n out.log
+        # job_read_cmd 模板（四段）：读 rc → 量 out.log 字节数 → printf 两行头 → tail -c +n
         tail_m = re.search(r"tail -c \+(\d+) (\S+)/out\.log$", cmd)
         rc_m = re.match(r"^RC=; \[ -f (.+)/rc \]", cmd)
         if tail_m and rc_m:
             start = int(tail_m.group(1))
-            data = self.logs.get(f"{rc_m.group(1)}/out.log", b"")[start - 1:]
+            key = f"{rc_m.group(1)}/out.log"
+            log_bytes = self.logs.get(key, b"")
+            data = log_bytes[start - 1:]
             rc = self.rcs.get(rc_m.group(1), "")
-            body = f"CKUNJOB_RC={rc}\n".encode() + data
+            # SZ 与真实模板同语义：tail **之前**测得的整文件字节数（远端权威读数，S6-04）
+            body = f"CKUNJOB_RC={rc}\nCKUNJOB_SZ={len(log_bytes)}\n".encode() + data
             return {"success": True, "output": body.decode("utf-8", errors="replace"),
                     "error": "", "exit_code": 0}
 

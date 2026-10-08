@@ -501,7 +501,8 @@ def v_job_rcs(cmd: str) -> bool:
 
 RE_JOB_READ = re.compile(
     r"^RC=; \[ -f (\S+)/rc \] && RC=\$\(cat \1/rc\); "
-    r"printf 'CKUNJOB_RC=%s\\n' \"\$RC\"; "
+    r"SZ=0; \[ -f \1/out\.log \] && SZ=\$\(wc -c < \1/out\.log\); "
+    r"printf 'CKUNJOB_RC=%s\\nCKUNJOB_SZ=%s\\n' \"\$RC\" \"\$SZ\"; "
     r"\[ -f \1/out\.log \] && tail -c \+\d+ \1/out\.log$"
 )
 

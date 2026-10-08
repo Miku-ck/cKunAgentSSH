@@ -165,6 +165,36 @@ async def test_remote_output_failed_rc(monkeypatch):
     assert e.exit_code == 137
 
 
+@pytest.mark.asyncio
+async def test_remote_output_offset_uses_remote_byte_size(monkeypatch):
+    """S6-04：offset 推进量取自远端 `wc -c` 读数，与回传字符串的编码形态无关。
+
+    段里塞满 U+FFFD —— 那是跨 TCP 分片的多字节字符（或非 UTF-8 日志）在 Electron
+    侧解码塌掉的产物。按 len(tail.encode('utf-8')) 推进时，三个替换符算成 9 字节，
+    比真实字节数虚高/虚低都不受控，下一轮 `tail -c +n` 就永久跳过若干字节，而且
+    漂移会被 _persist_offset 落盘、跨重启存活。
+    """
+    e = _entry(offset=100)
+    _fake_headless(monkeypatch, [
+        (True, "CKUNJOB_RC=\nCKUNJOB_SZ=137\n\uFFFD\uFFFD\uFFFD\n[exit_code=0]"),
+    ])
+    res = await oj.JobOutputTool().execute(_ctx(), job_id="j1")
+    assert res.success is True
+    assert e.out_offset == 137, "offset 必须是远端报的字节总数，而不是替换符重新编码的长度"
+    assert "CKUNJOB_SZ" not in res.output, "SZ 行是记账头，不得当日志内容交付"
+
+
+@pytest.mark.asyncio
+async def test_remote_output_size_smaller_than_consumed_repeats_not_skips(monkeypatch):
+    """SZ 在 tail 之前测得：读数只会偏小（重复读几个字节），不许跳丢。"""
+    e = _entry(offset=100)
+    _fake_headless(monkeypatch, [
+        (True, "CKUNJOB_RC=\nCKUNJOB_SZ=104\nlog tail\n[exit_code=0]"),
+    ])
+    await oj.JobOutputTool().execute(_ctx(), job_id="j1")
+    assert e.out_offset == 104, "偏小的读数照单采用，下一轮从 105 起重读未被确认的 3 字节"
+
+
 # ── job_kill 远程：TERM→KILL 升级链结果解析 ───────
 @pytest.mark.asyncio
 async def test_remote_kill_dead(monkeypatch):

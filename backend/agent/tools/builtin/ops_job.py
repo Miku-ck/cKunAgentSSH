@@ -300,12 +300,20 @@ def job_launch_cmd(job_id: str, cmd: str) -> str:
 
 
 def job_read_cmd(log_dir: str, offset: int) -> str:
-    """job_output 远端模板：读退出码文件 + 增量 tail 日志。"""
+    """job_output 远端模板：读退出码文件 + 报日志字节总数 + 增量 tail 日志。
+
+    S6-04：SZ 行是 **远端权威读数**。offset 的推进量原本按「回传字符串重新编码后的
+    长度」计算，而 tail 的内容在 Electron 侧是按 TCP 分片 `toString('utf-8')` 拼出来
+    的（无跨分片状态机），跨包的多字节字符与非 UTF-8 日志都会塌成 U+FFFD（3 字节）
+    ⇒ 推进量虚高 ⇒ `tail -c +n` 永久跳丢字节，且漂移被 _persist_offset 落盘、跨重启
+    存活。读数改由 `wc -c` 在 tail **之前**取，字节守恒就不再依赖字符串的编码往返。
+    """
     d = log_dir
     n = offset + 1
     return (
         f"RC=; [ -f {d}/rc ] && RC=$(cat {d}/rc); "
-        f"printf 'CKUNJOB_RC=%s\\n' \"$RC\"; "
+        f"SZ=0; [ -f {d}/out.log ] && SZ=$(wc -c < {d}/out.log); "
+        f"printf 'CKUNJOB_RC=%s\\nCKUNJOB_SZ=%s\\n' \"$RC\" \"$SZ\"; "
         f"[ -f {d}/out.log ] && tail -c +{n} {d}/out.log"
     )
 
@@ -401,13 +409,12 @@ async def _remote_read_locked(context, entry: JobEntry) -> tuple[str, Optional[i
     """真正的增量读取（由 _remote_read 在持 per-job 读锁时调用）。
 
     字节守恒不变量：offset 每次推进的量必须等于 **out.log** 自上次 offset
-    以来新增的字节数（= 响应体里 RC 行首个换行之后、末行 [exit_code=] 哨兵
-    之前的"日志段"全长，含尾部换行）。少推 → 下一轮 tail -c +n 重复读；
-    多推 → 永久跳丢日志。RC 行本身是 printf 格式字节、不在 out.log 里，
-    不计入；故 offset 用日志段全长（= tail -c +n 的原始输出），content 用
-    同段（该读命令几乎不产生 stderr——若产生则 exit_code≠0、ok=False 提前
-    返回，到不了 offset 更新）。剥哨兵不用 splitlines+rejoin：那会把日志里
-    的 CRLF/孤立 CR 归一成 \\n，损坏读回内容且错位 offset。
+    以来新增的字节数。少推 → 下一轮 tail -c +n 重复读；多推 → 永久跳丢日志。
+    推进量取自远端 `wc -c` 读数（CKUNJOB_SZ 行，S6-04）——不回传字符串的编码
+    长度：那条路径会把跨 TCP 分片的多字节字符与非 UTF-8 日志塌成 U+FFFD，
+    重新编码后虚高。RC/SZ 行本身是 printf 格式字节、不在 out.log 里，不计入。
+    剥哨兵不用 splitlines+rejoin：那会把日志里的 CRLF/孤立 CR 归一成 \\n，
+    损坏读回内容且错位 offset。
     """
     cmd = job_read_cmd(entry.log_dir, entry.out_offset)
     # keep_full：这里读的是「日志字节」，offset 记账按回传字节数推进。若走默认的
@@ -422,18 +429,32 @@ async def _remote_read_locked(context, entry: JobEntry) -> tuple[str, Optional[i
     i = out.rfind(f"\n{EXIT_CODE_PREFIX}")
     body = out[:i] if i != -1 else out
     rc: Optional[int] = None
+    size: Optional[int] = None
+    log_segment = body
     if body.startswith("CKUNJOB_RC="):
-        head, _sep, tail = body.partition("\n")
+        head, _sep, log_segment = body.partition("\n")
         val = head[len("CKUNJOB_RC="):].strip()
         if val.lstrip("-").isdigit():
             rc = int(val)
-        # 日志段 = RC 行首个换行之后的全部字节（tail -c +n 的原始输出）
-        content = _strip_sentinel(tail)
+        # SZ 行紧随 RC 行；对端模板过旧（没有这一行）时 size 保持 None，走下面的
+        # 保守分支
+        if log_segment.startswith("CKUNJOB_SZ="):
+            sz_line, _sep2, rest = log_segment.partition("\n")
+            raw = sz_line[len("CKUNJOB_SZ="):].strip()
+            if raw.isdigit():
+                size = int(raw)
+            log_segment = rest
+    # 日志段 = 头部行之后的全部字节（tail -c +n 的原始输出）
+    content = _strip_sentinel(log_segment)
+    if size is not None:
+        # S6-04：字节守恒改由远端读数决定，不再经过「字符串 ↔ 编码」往返。
+        # SZ 在 tail **之前**测得：若 tail 期间作业又写了字节，读数只会偏小
+        # ⇒ 下一轮重复读几个字节。偏小是本不变量唯一允许的误差方向（少推=重复，
+        # 多推=永久跳丢）。
+        entry.out_offset = size
     else:
-        # 意外形态（无 RC 行）：整体当内容，保守处理不跳丢
-        content = body
-        tail = body
-    entry.out_offset += len(tail.encode("utf-8"))
+        # 意外形态（无 RC/SZ 行）：按回传字节数推进，宁可重复也不跳丢
+        entry.out_offset += len(log_segment.encode("utf-8"))
     if content:
         # offset 推进立即落盘：中途崩溃/重启后不从头重读已见日志
         # （best-effort，DB 不可用时静默跳过，行为与修复前一致）
