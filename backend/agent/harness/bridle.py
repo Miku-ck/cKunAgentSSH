@@ -250,9 +250,16 @@ class Bridle:
         滑动窗口压缩 — 迁移自原 ContextManager.compress_if_needed
 
         保留 system + 最近 N 轮，早期消息替换为摘要
+
+        这里**不得**剥 priority：本函数的返回值会被 `_compress_run_into` 赋回
+        `ctx.messages`（内存态），而差异化截断/摘要正要读这个字段。剥字段的职责属于
+        唯一的出网边界 `assemble()`（Stirrups 的压缩重试也经 set_messages_rebuilder
+        =assemble 重取，见 harness.py 的装配处），原先在这里顺手剥掉等于把压缩器下一轮
+        要用的输入改坏：第一次压缩后 high 结果被当 normal 砍到 1000、low 噪声被当
+        normal 留 1000 而不再省略，优先级机制静默失效。
         """
         if not force and not self.should_compress(messages):
-            return self._strip_tool_priority(messages)
+            return list(messages)
 
         logger.info(
             "上下文压缩: %d tokens > %d 阈值",
@@ -265,7 +272,7 @@ class Bridle:
 
         keep_count = self.config.keep_recent_turns * 3
         if not force and len(conv_msgs) <= keep_count:
-            return self._strip_tool_priority(messages)
+            return list(messages)
 
         # force=True 时按优先级差异化截断超长 tool_result
         # high：保持完整(4000)，normal：1000，low：200 且超限直接省略
@@ -293,8 +300,8 @@ class Bridle:
                 conv_msgs[i] = {**msg, "content": new_content}
                 changed = True
             if changed:
-                return self._strip_tool_priority(system_msgs + conv_msgs)
-            return self._strip_tool_priority(messages)
+                return system_msgs + conv_msgs
+            return list(messages)
 
         # 按"原子段"切分，保证 assistant(tool_calls) 与其 tool 结果不被窗口边界拆散
         segments = self._split_segments(conv_msgs)
@@ -306,7 +313,7 @@ class Bridle:
         old_count = len(conv_msgs) - len(recent_msgs)
         if old_count <= 0:
             # 没有足够旧消息可压缩（总消息数 <= keep_count），保持原样、不生成空摘要
-            return self._strip_tool_priority(system_msgs + conv_msgs)
+            return system_msgs + conv_msgs
         old_msgs = conv_msgs[:old_count]
 
         # 早期消息压缩为一条摘要
@@ -353,7 +360,7 @@ class Bridle:
         summary_text = "以下是之前对话的摘要:\n" + "\n".join(summary_parts)
         summary_msg = {"role": "user", "content": summary_text}
 
-        return self._strip_tool_priority(system_msgs + [summary_msg] + recent_msgs)
+        return system_msgs + [summary_msg] + recent_msgs
 
     def _split_segments(self, conv: list[dict]) -> list[list[dict]]:
         """
@@ -385,15 +392,19 @@ class Bridle:
         return segments
 
     def _truncate_head_tail(self, content: str, max_chars: int) -> str:
-        """头尾保留截断：头部 head_chars + 中间省略提示 + 尾部 tail_chars"""
+        """头尾保留截断：头部 head_chars + 中间省略提示 + 尾部 tail_chars，结果不超 max_chars
+
+        省略提示本身也占预算。原实现只保证 `head + tail ≤ max_chars`，拼上标记后结果
+        比上限长（实测 max_chars=1000 给出 1024）—— 而调用方传进来的 max_chars 就是
+        "这条工具结果最多占多少上下文"的预算，被静默击穿等于白设。
+        标记里只有一个数字会变动，按其最长形态预留固定余量即可，不需要迭代收敛。
+        """
         if len(content) <= max_chars:
             return content
-        head = self.config.head_chars
-        tail = self.config.tail_chars
-        # 确保 head + tail 不超过 max_chars
-        if head + tail >= max_chars:
-            head = max_chars * 2 // 3
-            tail = max_chars - head
+        marker_reserve = 64
+        room = max(1, max_chars - marker_reserve)
+        head = min(self.config.head_chars, room * 2 // 3)
+        tail = min(self.config.tail_chars, room - head)
         omitted = len(content) - head - tail
         return content[:head] + f"\n... [已截断，省略中间 {omitted} 字符]\n" + content[-tail:]
 

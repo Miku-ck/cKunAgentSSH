@@ -106,3 +106,69 @@ def test_no_summary_when_nothing_old():
         isinstance(m.get("content"), str) and m["content"].startswith(_SUMMARY_PREFIX)
         for m in ctx.messages
     )
+
+
+# ── priority 的生命周期：压缩改写 ctx，剥离只该发生在发给 LLM 的边界 ──────
+# build_tool_result_message 给每条 tool 结果带 priority（low=日志噪声、high=必须留全的
+# 输出），compress_messages 按它差异化截断/摘要。但 compress_messages 的返回值会被
+# _compress_run_into 赋回 ctx.messages —— 它顺手做的 _strip_tool_priority 于是把
+# priority 从**内存态**里抹掉了。剥离本是 assemble()（唯一的 LLM 出口，stirrups 压缩
+# 重试也走 set_messages_rebuilder=assemble 重取）的职责，在这里做等于把压缩器自己要用的
+# 输入改坏：本 run 第一次压缩之后，high 结果被当 normal 砍到 1000 字符、low 噪声
+# 被当 normal 留 1000 字符而不是省略 —— 优先级机制静默失效，且没有任何用例覆盖过。
+
+def _tool_msgs() -> list[dict]:
+    return [
+        {"role": "tool", "tool_call_id": "c_low", "content": "L" * 3000, "priority": "low"},
+        {"role": "tool", "tool_call_id": "c_high", "content": "H" * 6000, "priority": "high"},
+    ]
+
+
+def test_压缩后内存里的tool消息仍带着priority():
+    b = _bridle()
+    ctx = _make_ctx(n_old=20)
+    for m in _tool_msgs():
+        ctx.messages.append(dict(m))
+    b._compress_run_into(ctx, force=True)
+
+    kept = [m for m in ctx.messages if m.get("role") == "tool"]
+    assert kept, "近期 tool 结果应被保留在 ctx.messages"
+    by_id = {m.get("tool_call_id"): m for m in kept}
+    assert by_id["c_low"].get("priority") == "low", (
+        f"压缩把 priority 从内存态抹掉了：{by_id['c_low'].get('priority')!r}")
+    assert by_id["c_high"].get("priority") == "high"
+
+
+def test_第二次压缩仍按priority差异化处理():
+    """上一条的下游后果，用真实链路而不是手搭的输入来断言。"""
+    b = _bridle()
+    ctx = _make_ctx(n_old=20)
+    for m in _tool_msgs():
+        ctx.messages.append(dict(m))
+    b._compress_run_into(ctx, force=True)
+
+    kept = [m for m in ctx.messages if m.get("role") == "tool"]
+    out = b.compress_messages(kept, force=True)
+    low = next(m for m in out if m.get("tool_call_id") == "c_low")
+    assert low["content"] == "[low-priority result omitted]", (
+        f"压缩过一次之后 low 优先级噪声就不再被省略了（实得 {len(low['content'])} 字符）："
+        "priority 已被上一轮压缩从内存态里抹掉")
+
+
+def test_assemble_发给llm的载荷仍然剥离priority():
+    """反向锁：priority 只许留在内存态，出网前必须剥（严格 vLLM 端点对非标准字段 400）。"""
+    b = _bridle()
+    ctx = _make_ctx(n_old=2)
+    for m in _tool_msgs():
+        ctx.messages.append(dict(m))
+    payload = b.assemble(ctx)
+    assert all("priority" not in m for m in payload), [
+        m for m in payload if "priority" in m]
+
+
+def test_头尾截断不得超过max_chars():
+    """_truncate_head_tail 的注释写着"确保 head + tail 不超过 max_chars"，实得超了：
+    head+tail 恰好等于 max_chars，再拼上省略提示 ⇒ 结果比上限长，调用方的预算被击穿。"""
+    b = _bridle()
+    out = b._truncate_head_tail("z" * 10_000, 1000)
+    assert len(out) <= 1000, f"声称上限 1000，实得 {len(out)} 字符"
