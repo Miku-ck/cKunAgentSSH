@@ -39,7 +39,7 @@ from typing import List, Optional
 
 from agent.tools import BaseTool, ToolResult, ToolMeta
 from agent.tools.builtin.ops_common import parse_int_arg, run_headless, truncate_output
-from agent.remote_protocol import EXIT_CODE_PREFIX, is_exit_code_line
+from agent.remote_protocol import EXIT_CODE_PREFIX, is_exit_code_line, remote_parts
 
 # 远程任务落盘根目录（目标机 /tmp 下，重启任务与日志的持久位置）
 _JOBS_ROOT = "/tmp/ckun_agent_jobs"
@@ -486,10 +486,40 @@ async def _remote_kill(context, entry: JobEntry) -> str:
     return f"未知结果: {out[:100]!r}"
 
 
+async def _read_dead_rc(context, entry: JobEntry) -> Optional[int]:
+    """进程组已消失时回读一次 rc 文件，区分"我们杀的"与"它自己跑完的"。
+
+    `job_kill_cmd` 回的 `CKUNJOB_DEAD` 只说明进程组不在了，两种成因分不出来：远程任务
+    在 job_list 对账之前内存里一直是 running，所以"用户点终止时任务早就结束了"是常态。
+    run.sh 只有走完最后一步才会写 rc —— 整进程组被 KILL 时 run.sh 自己也一起死了，
+    所以 **有 rc = 它自己跑完的，没 rc = 我们杀的**。不回读就直接落 killed 的话，
+    `update_status` 的 killed 粘滞防护（防 reader 把 killed 降级）会让这条永不回退，
+    真实退出码就此丢失。
+
+    复用对账的 `job_reconcile_rcs_cmd` 模板（远端白名单已接受该串，不需要重新下发
+    wrapper），并按字节协议取回（keep_full，理由见 `_reconcile_remote`）。
+    """
+    ok, out = await run_headless(
+        context, job_reconcile_rcs_cmd([entry.log_dir]), timeout=10, keep_full=True)
+    if not ok:
+        return None
+    body, _err, _rc = remote_parts(out)
+    for line in body.splitlines():
+        text = line.strip()
+        if text.lstrip("-").isdigit():
+            try:
+                return int(text)
+            except ValueError:
+                return None
+        if text:
+            return None  # rc 文件里不是个退出码：宁可当"没读到"，不编造
+    return None
+
+
 async def kill_remote_jobs_for_run(run_id: str) -> int:
     """run 取消/断连时清理该 run 名下全部在跑的远程任务（best-effort）。
 
-    返回成功终止的数量；单个失败不阻断其余。
+    返回已落终态的数量（被终止或确认已自行结束）；单个失败不阻断其余。
     """
     if not run_id:
         return 0
@@ -511,7 +541,11 @@ async def kill_remote_jobs_for_run(run_id: str) -> int:
     killed = 0
     for e, r in zip(targets, results):
         if isinstance(r, str) and r == "DEAD":
-            mgr.update_status(e.job_id, "killed", None)
+            rc = await _read_dead_rc(_session_ctx(e.ssh_session_id), e)
+            if rc is None:
+                mgr.update_status(e.job_id, "killed", None)
+            else:
+                mgr.update_status(e.job_id, "finished" if rc == 0 else "failed", rc)
             killed += 1
     return killed
 
@@ -898,10 +932,20 @@ class JobKillTool(BaseTool):
             ctx = _session_ctx(entry.ssh_session_id)
             result = await _remote_kill(ctx, entry)
             if result == "DEAD":
-                mgr.update_status(job_id, "killed", None)
+                # DEAD 只说明进程组不在了，不说明是谁让它不在的：回读 rc 定真实终态，
+                # 否则一条早就跑完并退出码 0 的任务会被永久记成「被你终止」
+                rc = await _read_dead_rc(ctx, entry)
+                if rc is None:
+                    mgr.update_status(job_id, "killed", None)
+                    return ToolResult(
+                        success=True,
+                        output=f"已终止远程 job {job_id}（进程组 {entry.pid} 已退出）",
+                    )
+                mgr.update_status(job_id, "finished" if rc == 0 else "failed", rc)
                 return ToolResult(
                     success=True,
-                    output=f"已终止远程 job {job_id}（进程组 {entry.pid} 已退出）",
+                    output=f"job {job_id} 的进程组在收到终止信号前已自行退出，"
+                           f"退出码 {rc}（按真实退出码记账，未记成 killed）",
                 )
             if result == "STILL":
                 # 审查R2修复：SIGKILL 后进程组仍在，原实现却标 killed —— 谎报终态：

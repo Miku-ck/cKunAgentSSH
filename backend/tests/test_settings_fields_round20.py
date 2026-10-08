@@ -185,7 +185,11 @@ def test_tool_toggle_defaults_to_global_mode(client, base_db):
 
 def test_tools_list_reports_enabled_flag(client, base_db):
     client.patch("/api/agent/tools/web_fetch/enabled", json={"enabled": False})
-    tools = client.get("/api/agent/tools", params={"mode": "ssh"}).json()
+    # 这条 GET 没有 mode 查询参数可传（routes/agent.py 的 list_tools 是零参数，
+    # 返回体里的 mode 是服务端固定的 SSH_MODE 常量）。原先挂一个
+    # params={"mode": "ssh"} 看着像在验模式隔离，实际整个被路由丢弃 ——
+    # 装饰性参数会教后来的人误以为这个接口按模式分答案。
+    tools = client.get("/api/agent/tools").json()
     assert tools["mode"] == "ssh"
     flags = {t["name"]: t["enabled"] for t in tools["tools"]}
     assert flags.get("web_fetch") is False

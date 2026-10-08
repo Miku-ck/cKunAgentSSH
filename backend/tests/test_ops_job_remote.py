@@ -218,6 +218,57 @@ async def test_remote_kill_still(monkeypatch):
     assert "SIGKILL" in res.error
 
 
+# ── 终止一个其实早就自己跑完的远程任务 ─────────────────────────
+# kill 模板回的 CKUNJOB_DEAD 有两种成因：我们把进程组杀了，或者它早就自行退出。
+# 远程任务在 job_list 对账之前内存里一直是 running，所以"用户点终止时任务十分钟
+# 前就结束了"是常态。原实现一律落 killed + exit_code=None，而 update_status 的
+# killed 粘滞防护让它永不回退 —— 真实退出码（run.sh 写下的 rc 文件）就此丢失。
+# 判据：run.sh 只有走完最后一步才写 rc；整进程组被 KILL 时 run.sh 自己也死了。
+# 所以**有 rc = 它自己跑完的，没 rc = 我们杀的**。
+
+def _kill_then_rc(monkeypatch, rc_out):
+    """kill 模板回 DEAD，随后的 rc 读取回 rc_out。"""
+    seen = []
+
+    async def fake(context, command, timeout=30, keep_full=False):
+        seen.append(command)
+        if "kill -" in command:
+            return True, "CKUNJOB_DEAD\n[exit_code=0]"
+        return True, rc_out
+
+    monkeypatch.setattr(oj, "run_headless", fake)
+    return seen
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rc_out,want", [
+    ("0\n[exit_code=0]", ("finished", 0)),
+    ("7\n[exit_code=0]", ("failed", 7)),
+    ("\n[exit_code=0]", ("killed", None)),      # run.sh 没走完 = 确实被我们杀了
+])
+async def test_job_kill_按_rc_落真实终态(monkeypatch, rc_out, want):
+    _entry("j1", pid=99)
+    seen = _kill_then_rc(monkeypatch, rc_out)
+    res = await oj.JobKillTool().execute(_ctx(), job_id="j1")
+    assert res.success is True
+    e = oj.JobManager.instance().get("j1")
+    assert (e.status, e.exit_code) == want, f"{e.status}/{e.exit_code} != {want}"
+    assert len(seen) == 2, f"没有回读 rc：{seen}"
+
+
+@pytest.mark.asyncio
+async def test_run_取消清理同样不得抹掉已结束的rc(monkeypatch):
+    """`kill_remote_jobs_for_run` 是 run 断连/取消时的清理路径，同一判据。"""
+    _entry("j1", run_id="run-A")
+    _entry("j2", run_id="run-A")
+    _kill_then_rc(monkeypatch, "0\n[exit_code=0]")
+    done = await oj.kill_remote_jobs_for_run("run-A")
+    mgr = oj.JobManager.instance()
+    assert done == 2
+    assert (mgr.get("j1").status, mgr.get("j1").exit_code) == ("finished", 0)
+    assert (mgr.get("j2").status, mgr.get("j2").exit_code) == ("finished", 0)
+
+
 # ── run 取消联动清理 ─────────────────────────────
 @pytest.mark.asyncio
 async def test_kill_remote_jobs_for_run(monkeypatch):
