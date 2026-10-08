@@ -56,8 +56,8 @@ async function startServer(privPem, state) {
       const session = accept()
       session.on('pty', (a) => a())
       session.on('window-change', (accept2, reject2, size) => {
-        accept2()
         state.lastWindow = [size.rows, size.cols]
+        accept2()
       })
       session.on('exec', (accept2, reject2, info) => {
         const stream = accept2()

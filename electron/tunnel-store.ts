@@ -13,6 +13,8 @@ import { readFile, writeFile, rename, mkdir, unlink } from 'fs/promises'
 import { existsSync } from 'fs'
 
 export type TunnelType = 'local' | 'remote' | 'dynamic'
+/** 数据面：借 SSH 通道，或走自家 TLS 网关。缺省视为 'ssh'，所以存量规则零迁移。 */
+export type TunnelVia = 'ssh' | 'gateway'
 
 export interface TunnelRule {
   id: string
@@ -20,6 +22,9 @@ export interface TunnelRule {
   name: string
   /** 引用 SSHConnectionRecord.id（弱引用：连接被删 → 启动报 config-missing） */
   connectionId: string
+  /** 引用 GatewayRecord.id（仅 via='gateway'） */
+  gatewayId?: string
+  via?: TunnelVia
   type: TunnelType
   /**
    * local:   本机 listenPort → (经SSH) → dstHost:dstPort
@@ -58,7 +63,11 @@ function isPort(v: unknown): v is number {
  */
 function validateRule(rule: TunnelRule, all: TunnelRule[]): void {
   if (!rule || typeof rule !== 'object') throw new Error('隧道规则无效')
-  if (typeof rule.connectionId !== 'string' || !rule.connectionId) throw new Error('必须选择一个 SSH 连接')
+  if (rule.via === 'gateway') {
+    if (typeof rule.gatewayId !== 'string' || !rule.gatewayId) throw new Error('必须选择一个 TLS 网关')
+  } else {
+    if (typeof rule.connectionId !== 'string' || !rule.connectionId) throw new Error('必须选择一个 SSH 连接')
+  }
   if (rule.type !== 'local' && rule.type !== 'remote' && rule.type !== 'dynamic') throw new Error('未知的隧道类型')
 
   if (rule.type === 'local' || rule.type === 'dynamic') {
