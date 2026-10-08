@@ -1,6 +1,7 @@
 <template>
+  <Teleport to="body">
   <div class="bulk-modal-mask" @click.self="requestClose">
-    <div class="bulk-modal">
+    <div class="bulk-modal" role="dialog" aria-modal="true">
       <div class="bulk-title">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
         多节点批量下发
@@ -102,6 +103,7 @@
       </div>
     </div>
   </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
@@ -115,7 +117,7 @@
  * 这里是「一个人的动作 × N 台机器」的放大点，执行前必经后端风险判定：
  * hardline 直接中止（无确认按钮），dangerous 二次确认，判定不可用则拒绝下发。
  */
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useSSHStore, type TerminalSession } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useSettingsStore } from '@/stores/settings'
@@ -143,6 +145,13 @@ async function requestClose() {
 }
 
 const emit = defineEmits<{ close: [] }>()
+
+// Escape 关闭（执行中走 requestClose 的二次确认）
+function handleKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') void requestClose()
+}
+onMounted(() => window.addEventListener('keydown', handleKeydown))
+onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
 
 const sshStore = useSSHStore()
 const sshAiStore = useSshAiStore()
@@ -339,7 +348,7 @@ watch(remoteSessions, (sessions) => {
 .bulk-modal-mask {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(0, 0, 0, 0.6);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -351,7 +360,7 @@ watch(remoteSessions, (sessions) => {
   max-height: 86vh;
   display: flex;
   flex-direction: column;
-  background: var(--bg-base);
+  background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
   border-radius: 12px;
   padding: 16px 18px;
@@ -390,7 +399,7 @@ watch(remoteSessions, (sessions) => {
   padding: 6px 8px;
   border-radius: 6px;
   border: 1px solid var(--border-subtle);
-  background: var(--bg-base);
+  background: var(--bg-input);
   color: var(--text-primary);
   resize: vertical;
 }

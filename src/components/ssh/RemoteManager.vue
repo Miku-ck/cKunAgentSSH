@@ -407,7 +407,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 44px;
+  height: var(--page-head-h);
   padding: 0 16px;
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
@@ -417,7 +417,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: var(--page-title-size);
   font-weight: 600;
   color: var(--text-primary);
   font-family: var(--font-sans);

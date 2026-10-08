@@ -49,8 +49,9 @@
     </div>
 
     <!-- 传输任务列表弹窗 -->
+    <Teleport to="body">
     <div v-if="showTransferList" class="transfer-overlay" @click.self="showTransferList = false">
-      <div class="transfer-panel">
+      <div class="transfer-panel" role="dialog" aria-modal="true">
         <div class="transfer-panel-header">
           <span class="transfer-panel-title">传输任务</span>
           <div class="transfer-panel-actions">
@@ -236,6 +237,7 @@
         </div>
       </div>
     </div>
+    </Teleport>
 
     <!-- 传输任务右键菜单 -->
     <div
@@ -288,8 +290,9 @@
     </div>
 
     <!-- 连接选择模态 -->
+    <Teleport to="body">
     <div v-if="showConnPicker" class="conn-overlay" @click.self="showConnPicker = false">
-      <div class="conn-dialog">
+      <div class="conn-dialog" role="dialog" aria-modal="true">
         <div class="conn-dialog-header">
           <span>选择 SSH 连接</span>
           <button class="conn-close" @click="showConnPicker = false">×</button>
@@ -315,6 +318,7 @@
         </div>
       </div>
     </div>
+    </Teleport>
 
     <!-- 右键菜单 -->
     <div
@@ -373,8 +377,9 @@
     </div>
 
     <!-- 重命名/新建对话框 -->
+    <Teleport to="body">
     <div v-if="renameDialog.visible" class="rename-overlay" @click.self="renameDialog.visible = false">
-      <div class="rename-dialog">
+      <div class="rename-dialog" role="dialog" aria-modal="true">
         <div class="rename-title">{{ renameDialog.isNew ? '新建文件夹' : '重命名' }}</div>
         <input
           ref="renameInput"
@@ -389,10 +394,12 @@
         </div>
       </div>
     </div>
+    </Teleport>
 
     <!-- 压缩包文件名对话框 -->
+    <Teleport to="body">
     <div v-if="zipDialog.visible" class="rename-overlay" @click.self="zipDialog.visible = false">
-      <div class="rename-dialog">
+      <div class="rename-dialog" role="dialog" aria-modal="true">
         <div class="rename-title">压缩为 zip</div>
         <input
           ref="zipInput"
@@ -407,6 +414,7 @@
         </div>
       </div>
     </div>
+    </Teleport>
 
     <!-- 弹窗文件编辑器 -->
     <SftpFileEditor
@@ -1013,7 +1021,7 @@ async function onFileSaved(): Promise<void> {
 .session-dot {
   width: 8px; height: 8px; border-radius: 50%;
 }
-.session-dot.online { background: var(--accent-green); box-shadow: 0 0 6px rgba(78,201,176,0.6); }
+.session-dot.online { background: var(--accent-green); box-shadow: 0 0 6px color-mix(in srgb, var(--accent-green) 60%, transparent); }
 .session-dot.offline { background: var(--text-tertiary); }
 .session-name { color: var(--text-primary); font-weight: 500; }
 .session-host { color: var(--text-tertiary); font-family: var(--font-mono); font-size: 11px; }
@@ -1027,8 +1035,8 @@ async function onFileSaved(): Promise<void> {
 }
 .session-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 .session-btn svg { width: 12px; height: 12px; }
-.session-btn.connect { color: var(--accent-green); border-color: rgba(78,201,176,0.4); }
-.session-btn.connect:hover { background: rgba(78,201,176,0.1); }
+.session-btn.connect { color: var(--accent-green); border-color: color-mix(in srgb, var(--accent-green) 40%, transparent); }
+.session-btn.connect:hover { background: color-mix(in srgb, var(--accent-green) 10%, transparent); }
 .session-btn.transfer { position: relative; }
 .session-btn.transfer.active { background: var(--bg-hover); color: var(--text-primary); }
 .transfer-badge {
@@ -1124,13 +1132,13 @@ async function onFileSaved(): Promise<void> {
   cursor: pointer; border-radius: 4px;
 }
 .ctx-item:hover { background: var(--bg-hover); color: var(--text-primary); }
-.ctx-item.danger:hover { background: rgba(248, 81, 73, 0.15); color: var(--accent-red); }
+.ctx-item.danger:hover { background: color-mix(in srgb, var(--accent-red) 15%, transparent); color: var(--accent-red); }
 .ctx-sep { height: 1px; margin: 4px 0; background: var(--border-subtle); }
 
 /* 重命名/新建对话框 */
 .rename-overlay {
   position: fixed; inset: 0;
-  background: rgba(0,0,0,0.5);
+  background: rgba(0,0,0,0.6);
   display: flex; align-items: center; justify-content: center;
   z-index: 1001;
 }
@@ -1150,7 +1158,7 @@ async function onFileSaved(): Promise<void> {
   width: 100%; height: 32px; padding: 0 10px;
   border: 1px solid var(--border-default);
   border-radius: 4px;
-  background: var(--bg-base);
+  background: var(--bg-input);
   color: var(--text-primary);
   font-size: 13px; outline: none;
   font-family: var(--font-sans);
@@ -1193,7 +1201,7 @@ async function onFileSaved(): Promise<void> {
 .transfer-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(0, 0, 0, 0.6);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1342,8 +1350,8 @@ async function onFileSaved(): Promise<void> {
   justify-content: center;
   flex-shrink: 0;
 }
-.tl-icon.up { background: rgba(78, 201, 176, 0.12); color: var(--accent-green); }
-.tl-icon.down { background: rgba(0, 200, 255, 0.12); color: var(--accent-cyan); }
+.tl-icon.up { background: color-mix(in srgb, var(--accent-green) 12%, transparent); color: var(--accent-green); }
+.tl-icon.down { background: color-mix(in srgb, var(--accent-cyan) 12%, transparent); color: var(--accent-cyan); }
 .tl-icon svg { width: 14px; height: 14px; }
 
 /* 信息 */

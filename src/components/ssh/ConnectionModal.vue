@@ -1,6 +1,7 @@
 <template>
+  <Teleport to="body">
   <div class="modal-overlay">
-    <div class="modal-dialog">
+    <div class="modal-dialog" role="dialog" aria-modal="true">
       <div class="modal-header">
         <h3>{{ isEdit ? '编辑连接' : '添加远程连接' }}</h3>
         <button class="modal-close" @click="handleOverlayClose">
@@ -181,6 +182,7 @@
       </div>
     </div>
   </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
@@ -418,7 +420,7 @@ async function handleSave() {
 .modal-dialog {
   width: 560px;
   max-height: 85vh;
-  background: var(--bg-base);
+  background: var(--bg-elevated);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);

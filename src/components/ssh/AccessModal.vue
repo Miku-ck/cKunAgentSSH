@@ -1,6 +1,7 @@
 <template>
+  <Teleport to="body">
   <div class="overlay show" @click.self="emit('close')">
-    <div class="dialog">
+    <div class="dialog" role="dialog" aria-modal="true">
       <div class="dlg-head">
         <h2>{{ isNew ? '添加连接' : '修改连接' }}</h2>
         <button class="dlg-x" @click="emit('close')">✕</button>
@@ -46,16 +47,24 @@
       </div>
     </div>
   </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, onMounted, onUnmounted } from 'vue'
 import { useAccessStore } from '@/stores/access'
 import { useToastStore } from '@/stores/toast'
 import { toFriendlyMessage } from '@/api/client'
 
 const props = defineProps<{ rec?: GatewayRecord }>()
 const emit = defineEmits<{ close: []; saved: [rec: GatewayRecord] }>()
+
+// Escape 关闭
+function handleKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') emit('close')
+}
+onMounted(() => window.addEventListener('keydown', handleKeydown))
+onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
 
 const accessStore = useAccessStore()
 const toast = useToastStore()
@@ -100,7 +109,7 @@ async function save(): Promise<void> {
 <style scoped>
 /* 排布复刻 designs/hsc-replica-mockup-v2.html 的「修改连接」：右对齐标签 + 左对齐控件。
    页脚按钮走全局 styles/button.css，本组件不声明按钮样式。 */
-.overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 60; }
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 60; }
 .dialog {
   width: 500px;
   max-height: 88vh;

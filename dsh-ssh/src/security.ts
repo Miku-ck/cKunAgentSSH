@@ -23,8 +23,8 @@ export interface CommandVerdict {
 interface Rule {
   id: string
   zh: string
-  re: RegExp
-  /** Optional extra predicate for compound logic. */
+  re?: RegExp
+  /** Optional extra predicate for compound logic (used alone when no re). */
   test?: (cmd: string) => boolean
 }
 
@@ -54,32 +54,71 @@ const DANGEROUS_RULES: Rule[] = [
   // anchored to the command position so path names like /etc/passwd never match
   { id: 'user-mgmt', zh: '修改账户 / 口令 / 授权，可能影响登录与提权', re: /^\s*(?:sudo\s+(?:-\S+\s+)*|doas\s+|pkexec\s+(?:-\S+\s+)*)?(?:userdel|useradd|usermod|groupdel|passwd|chpasswd|visudo|chsh)\b/ },
   { id: 'etc-write', zh: '覆盖写入 /etc 下的系统配置', re: />>?\s*\/etc\// },
-  { id: 'firewall-flush', zh: '清空/关闭防火墙规则，暴露所有端口', re: /\b(iptables|nft|firewall-cmd|ufw)\b[\s\S]*?\b(-F|flush|disable|--permanent)\b/ },
+  // no \b before -F: a hyphen is a non-word char, so \b never holds there
+  { id: 'firewall-flush', zh: '清空/关闭防火墙规则，暴露所有端口', re: /\b(iptables|nft|firewall-cmd|ufw)\b[\s\S]*?(?:\s-F\b|\s+flush\b|\s+disable\b|--permanent)/ },
   { id: 'kill-pid1', zh: '终止 1 号进程，导致系统/容器崩溃', re: /\bkill\s+(-\d+\s+|-[a-z]+\s+)?1\b/ },
   { id: 'history-clear', zh: '清空 shell 历史，破坏审计痕迹', re: /\bhistory\s+-c\b/ },
   { id: 'crontab-rm', zh: '删除全部定时任务', re: /\bcrontab\s+-r\b/ },
 ]
 
 const MUTATING_RULES: Rule[] = [
-  // >& and /dev/* targets are not file writes (2>&1, >/dev/null must stay read-only)
-  { id: 'file-write', zh: '写入/覆盖文件', re: /\btee\b|>>?\s*(?!\/dev\/|&)/ },
+  // >& and /dev/* targets are not file writes (2>&1, >/dev/null must stay read-only);
+  // a lookahead after \s* backtracks to zero width, so this uses a test fn instead
+  { id: 'file-write', zh: '写入/覆盖文件', test: hasFileRedirect },
   { id: 'file-mut', zh: '移动/复制/新建/改属主权限文件', re: /\b(mv|cp|mkdir|touch|ln|chmod|chown|install|truncate|unlink)\b/ },
+  // plain (non-recursive) deletion is mutating; recursive deletion of critical
+  // paths is caught earlier by the dangerous rm-recursive-root rule
+  { id: 'file-delete', zh: '删除文件/目录', re: /\b(rm|rmdir)\b/ },
   { id: 'sed-i', zh: '原地修改文件内容（sed -i）', re: /\bsed\s+(-\S+\s+)*-i/ },
   { id: 'pkg-manager', zh: '安装/卸载/升级软件包，变更系统', re: /\b(apt(-get)?|yum|dnf|pacman|zypper|apk|gem|cargo|pip3?|npm|yarn|pnpm)\b[\s\S]*?\b(install|remove|uninstall|upgrade|purge|add|update|publish|link)\b/ },
   { id: 'service-start', zh: '启动/启用系统服务', re: /\b(systemctl|service)\s+[\s\S]*?\b(start|enable|reload|restart)\b/ },
   { id: 'git-write', zh: '推送/硬重置/清理 git 仓库', re: /\bgit\s+[\s\S]*?\b(push|reset\s+--hard|clean\s+(-\S+\s+)*-f|checkout\s+-f|reset\s+--keep)\b/ },
-  { id: 'docker-write', zh: '变更容器/镜像/卷（docker）', re: /\bdocker\s+\w+\s+[\s\S]*?\b(rm|stop|start|kill|restart|system\s+prune|volume\s+rm|network\s+rm|tag|load|save|build)\b/ },
+  // `docker stop x` is a single word after docker — a two-word pattern never matched it
+  { id: 'docker-write', zh: '变更容器/镜像/卷（docker）', test: dockerMutates },
   { id: 'k8s-write', zh: '变更 Kubernetes 资源（kubectl）', re: /\bkubectl\s+[\s\S]*?\b(delete|apply|replace|patch|scale|drain|cordon|uncordon|rollout\s+(resume|retry)|label\s+(-\S+\s+)*-[a-z]+\s+\S+=\S*--overwrite)\b/ },
   { id: 'process-kill', zh: '终止进程', re: /\b(kill|pkill|killall|tkill)\b/ },
   { id: 'db-write', zh: '对数据库执行写操作', re: /\b(mysql|psql|redis-cli|mongosh)\b[\s\S]*?\b(UPDATE|DELETE|DROP|TRUNCATE|INSERT|ALTER|CREATE|GRANT|REVOKE|FLUSH|SET\s+GLOBAL)\b/i },
   { id: 'crontab-set', zh: '修改定时任务', re: /\bcrontab\b(?!.*-r\b)/ },
-  { id: 'package-upload', zh: '在远程安装/写入二进制或脚本', re: /\b(curl|wget)\b[\s\S]*?\|\s*(ba)?sh\b/ },
 ]
+
+/** Piped download-to-shell spans segment boundaries (the | is a segment split), so it must be checked on the whole command before splitting. */
+const PIPE_TO_SHELL = /\b(curl|wget)\b[\s\S]*?\|\s*(?:ba|z|da)?sh\b/
+
+/** A redirect whose target is a real file (not /dev/* and not a file descriptor). */
+function hasFileRedirect(cmd: string): boolean {
+  if (/\btee\b/.test(cmd)) return true
+  for (const hit of cmd.matchAll(/>>?\s*\S+/g)) {
+    const raw = hit[0]
+    // skip comparison/arrow operators: >=, <=, =>, ->
+    if (raw.length >= 2 && ['>=', '<=', '=>', '->'].includes(raw.slice(0, 2))) continue
+    const target = raw.replace(/^>>?\s*/, '')
+    if (target.startsWith('/dev/')) continue
+    if (target.startsWith('&')) continue // fd redirects: >&, >&2, 2>&1
+    if (/^\d+$/.test(target)) continue
+    return true
+  }
+  return false
+}
+
+const DOCKER_MUTATE_VERBS = new Set(['rm', 'stop', 'start', 'kill', 'restart', 'run', 'create', 'prune', 'tag', 'load', 'save', 'build', 'push'])
+const COMPOSE_MUTATE_VERBS = new Set(['up', 'down', 'create', 'delete', 'restart', 'stop', 'rm', 'build', 'push', 'scale'])
+
+/** Inspects the first `docker <w1> <w2>` in the segment (pipes/&& split into separate segments). */
+function dockerMutates(cmd: string): boolean {
+  const m = cmd.match(/\bdocker\s+(\S+)(?:\s+(\S+))?/)
+  if (!m) return false
+  const w1 = m[1]
+  const w2 = m[2]
+  if (w1 === 'compose' || w1 === 'swarm') return w2 !== undefined && COMPOSE_MUTATE_VERBS.has(w2)
+  return DOCKER_MUTATE_VERBS.has(w1) || (w2 !== undefined && DOCKER_MUTATE_VERBS.has(w2))
+}
 
 const SEGMENT_SPLIT = /\s*(?:&&|\|\||;|\||\$\(|`)/
 
 /** Classify one whole (possibly compound) shell command string. */
 export function classifyCommand(command: string): CommandVerdict {
+  // Pipe-to-shell crosses segment boundaries, so check the whole string first.
+  if (PIPE_TO_SHELL.test(command)) return { cls: 'mutating', rule: 'package-upload', zh: '在远程安装/写入二进制或脚本' }
   const segments = command.split(SEGMENT_SPLIT).filter((s) => s.trim() !== '')
   if (segments.length === 0) segments.push(command)
   let cls: CommandClass = 'readonly'
@@ -97,11 +136,12 @@ export function classifyCommand(command: string): CommandVerdict {
 
 function classifySingle(cmd: string): CommandVerdict {
   for (const rule of DANGEROUS_RULES) {
-    const hit = rule.test ? rule.test(cmd) : rule.re.test(cmd)
+    const hit = rule.test ? rule.test(cmd) : rule.re!.test(cmd)
     if (hit) return { cls: 'dangerous', rule: rule.id, zh: rule.zh }
   }
   for (const rule of MUTATING_RULES) {
-    if (rule.re.test(cmd)) return { cls: 'mutating', rule: rule.id, zh: rule.zh }
+    const hit = rule.test ? rule.test(cmd) : rule.re!.test(cmd)
+    if (hit) return { cls: 'mutating', rule: rule.id, zh: rule.zh }
   }
   return { cls: 'readonly' }
 }

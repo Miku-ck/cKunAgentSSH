@@ -1,6 +1,7 @@
 <template>
+  <Teleport to="body">
   <div v-if="visible" class="editor-overlay" @click.self="handleClose">
-    <div class="editor-dialog">
+    <div class="editor-dialog" role="dialog" aria-modal="true">
       <!-- 头部 -->
       <div class="editor-header">
         <div class="header-left">
@@ -75,7 +76,7 @@
 
     <!-- 未保存关闭确认 -->
     <div v-if="unsavedDialog.visible" class="unsaved-overlay" @click.self="dismissUnsavedDialog">
-      <div class="unsaved-dialog">
+      <div class="unsaved-dialog" role="dialog" aria-modal="true">
         <div class="unsaved-header">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
             <circle cx="12" cy="12" r="10"/>
@@ -97,11 +98,12 @@
       </div>
     </div>
   </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
 import { formatBytes } from '@/utils/format'
-import { ref, computed, watch, onUnmounted, nextTick, markRaw } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick, markRaw } from 'vue'
 // 启动性能优化：monaco 本体不再静态 import（曾占主包 ~10MB、拖慢冷启动），
 // 经 monaco-setup.loadMonaco() 在首次打开编辑器时动态加载；此处仅类型引用（编译期擦除）
 import type * as MonacoNs from 'monaco-editor/esm/vs/editor/editor.api.js'
@@ -323,6 +325,14 @@ function dismissUnsavedDialog(): void {
   unsavedDialog.value.visible = false
 }
 
+// Escape：先关未保存确认框，再走正常关闭
+function handleKeydown(e: KeyboardEvent): void {
+  if (e.key !== 'Escape') return
+  if (unsavedDialog.value.visible) dismissUnsavedDialog()
+  else void handleClose()
+}
+onMounted(() => window.addEventListener('keydown', handleKeydown))
+
 function discardAndClose(): void {
   unsavedDialog.value.visible = false
   emit('close')
@@ -337,6 +347,7 @@ async function saveAndClose(): Promise<void> {
 }
 
 onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown)
   // Optimization 修复：清理未触发的布局定时器
   _layoutTimers.forEach(t => clearTimeout(t))
   disposeEditor()
@@ -347,7 +358,7 @@ onUnmounted(() => {
 .editor-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.7);
+  background: rgba(0, 0, 0, 0.6);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -416,7 +427,7 @@ onUnmounted(() => {
   padding: 1px 6px;
   font-size: 10px;
   border-radius: 8px;
-  background: rgba(226, 192, 141, 0.12);
+  background: color-mix(in srgb, var(--accent-yellow) 12%, transparent);
   color: var(--accent-yellow);
   flex-shrink: 0;
 }
@@ -628,10 +639,10 @@ onUnmounted(() => {
 .unsaved-btn.discard {
   background: transparent;
   color: var(--accent-red);
-  border-color: rgba(244, 135, 113, 0.4);
+  border-color: color-mix(in srgb, var(--accent-red) 40%, transparent);
 }
 .unsaved-btn.discard:hover {
-  background: rgba(244, 135, 113, 0.12);
+  background: color-mix(in srgb, var(--accent-red) 12%, transparent);
 }
 .unsaved-btn.save {
   background: var(--accent-primary);

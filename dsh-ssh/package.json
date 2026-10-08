@@ -52,7 +52,7 @@
   "scripts": {
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "node test/vault.test.mjs && node test/engine2.mjs"
+    "test": "node test/vault.test.mjs && node test/security.test.mjs && node test/engine2.mjs && node test/routes.test.mjs && node test/client.test.mjs"
   },
   "license": "MIT"
 }

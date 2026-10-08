@@ -603,20 +603,20 @@ onMounted(() => { loadStats(); loadMemories() })
   background: none; border: none; cursor: pointer; font-size: 12px; font-family: inherit;
   padding: 4px 10px; border-radius: 5px; color: var(--text-secondary);
 }
-.mem-tabs button.on { background: var(--bg-hover, rgba(255,255,255,.06)); color: var(--text-primary); }
+.mem-tabs button.on { background: var(--bg-hover); color: var(--text-primary); }
 .mem-filters {
   display: flex; gap: 6px; padding: 8px 12px; align-items: center; flex-wrap: wrap;
   border-bottom: 1px solid var(--border-subtle);
 }
 .mem-filters select, .mem-search {
   font-size: 11.5px; font-family: inherit; color: var(--text-primary);
-  background: var(--bg-input, transparent); border: 1px solid var(--border-default);
+  background: var(--bg-input); border: 1px solid var(--border-default);
   border-radius: 4px; padding: 3px 6px;
 }
 .mem-search { flex: 1; min-width: 90px; }
 .mem-body { flex: 1; overflow-y: auto; padding: 4px 12px; }
 .mem-hint { font-size: 12px; color: var(--text-secondary); line-height: 1.6; }
-.mem-hint.err { color: #d98f86; }
+.mem-hint.err { color: var(--status-error-text); }
 .mem-list { list-style: none; margin: 0; padding: 0; }
 .mem-item { padding: 8px 0; border-bottom: 1px solid var(--border-subtle); }
 .mem-item:last-child { border-bottom: none; }
@@ -625,28 +625,28 @@ onMounted(() => { loadStats(); loadMemories() })
   font-size: 10px; padding: 0 6px; border-radius: 7px;
   border: 1px solid var(--border-default); color: var(--text-tertiary);
 }
-.mem-badge.kind.semantic { color: #7fbc92; border-color: rgba(127,188,146,.35); }
-.mem-badge.kind.episodic { color: #7aa2d0; border-color: rgba(122,162,208,.35); }
-.mem-badge.kind.procedural { color: #c9a4d6; border-color: rgba(201,164,214,.35); }
-.mem-badge.status.active { color: #7fbc92; border-color: rgba(127,188,146,.4); }
-.mem-badge.status.pending_reconcile { color: #d8b567; border-color: rgba(216,181,103,.4); }
+.mem-badge.kind.semantic { color: var(--status-success-text); border-color: color-mix(in srgb, var(--status-success-text) 35%, transparent); }
+.mem-badge.kind.episodic { color: var(--status-info-text); border-color: color-mix(in srgb, var(--status-info-text) 35%, transparent); }
+.mem-badge.kind.procedural { color: var(--accent-purple); border-color: color-mix(in srgb, var(--accent-purple) 35%, transparent); }
+.mem-badge.status.active { color: var(--status-success-text); border-color: color-mix(in srgb, var(--status-success-text) 40%, transparent); }
+.mem-badge.status.pending_reconcile { color: var(--status-warn-text); border-color: color-mix(in srgb, var(--status-warn-text) 40%, transparent); }
 .mem-badge.status.invalidated,
 .mem-badge.status.superseded,
 .mem-badge.status.rejected,
-.mem-badge.status.failed { color: #cf8a80; border-color: rgba(207,138,128,.4); }
+.mem-badge.status.failed { color: var(--status-error-text); border-color: color-mix(in srgb, var(--status-error-text) 40%, transparent); }
 .mem-badge.status.done { color: var(--text-tertiary); }
-.mem-badge.pin { color: #d8b567; border-color: rgba(216,181,103,.5); }
+.mem-badge.pin { color: var(--status-warn-text); border-color: color-mix(in srgb, var(--status-warn-text) 50%, transparent); }
 .mem-importance { margin-left: auto; font-size: 10px; color: var(--text-tertiary); font-family: ui-monospace, Consolas, monospace; }
 .mem-content {
   margin: 0 0 4px; font-size: 12px; color: var(--text-primary); line-height: 1.5;
   word-break: break-word;
   display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
 }
-.mem-content.err-text { color: #cf8a80; }
+.mem-content.err-text { color: var(--status-error-text); }
 .mem-edit {
   width: 100%; box-sizing: border-box; margin-bottom: 4px; resize: vertical;
   font-size: 12px; font-family: inherit; color: var(--text-primary);
-  background: var(--bg-input, transparent); border: 1px solid var(--accent-primary); border-radius: 4px; padding: 4px 6px;
+  background: var(--bg-input); border: 1px solid var(--accent-primary); border-radius: 4px; padding: 4px 6px;
 }
 .mem-block-view {
   margin: 0 0 4px; font-size: 11.5px; line-height: 1.5; color: var(--text-primary);
@@ -664,7 +664,7 @@ onMounted(() => { loadStats(); loadMemories() })
 .mem-lnk:disabled { opacity: .5; cursor: default; }
 .mem-drawer {
   border-top: 1px solid var(--border-default); padding: 8px 12px; max-height: 180px; overflow-y: auto;
-  background: var(--bg-sunken, rgba(0,0,0,.12));
+  background: var(--bg-input);
 }
 .drawer-head { display: flex; align-items: center; font-size: 11.5px; color: var(--text-primary); margin-bottom: 6px; }
 .drawer-head .mem-close { margin-left: auto; }
@@ -690,7 +690,7 @@ onMounted(() => { loadStats(); loadMemories() })
 .mem-new-row.end { justify-content: flex-end; }
 .mem-new-row select, .mem-new-row input {
   font-size: 11.5px; font-family: inherit; color: var(--text-primary);
-  background: var(--bg-input, transparent); border: 1px solid var(--border-default);
+  background: var(--bg-input); border: 1px solid var(--border-default);
   border-radius: 4px; padding: 3px 6px;
 }
 .mem-new-scope { width: 110px; }
@@ -702,16 +702,16 @@ onMounted(() => { loadStats(); loadMemories() })
 .mem-diff {
   max-height: 140px; overflow-y: auto; margin-bottom: 4px; padding: 4px 6px;
   border: 1px solid var(--border-subtle); border-radius: 4px;
-  background: var(--bg-sunken, rgba(0,0,0,.12));
+  background: var(--bg-input);
   font-family: ui-monospace, Consolas, monospace; font-size: 11px; line-height: 1.5;
 }
 .diff-line { display: flex; gap: 4px; white-space: pre-wrap; word-break: break-word; color: var(--text-secondary); }
-.diff-line.add { color: #7fbc92; background: rgba(127,188,146,.08); }
-.diff-line.del { color: #cf8a80; background: rgba(207,138,128,.08); }
+.diff-line.add { color: var(--status-success-text); background: color-mix(in srgb, var(--status-success-text) 8%, transparent); }
+.diff-line.del { color: var(--status-error-text); background: color-mix(in srgb, var(--status-error-text) 8%, transparent); }
 .diff-mark { width: 8px; flex-shrink: 0; opacity: .8; }
 .mem-history {
   margin-top: 5px; padding: 5px 8px; border-radius: 4px;
-  border: 1px solid var(--border-subtle); background: var(--bg-sunken, rgba(0,0,0,.12));
+  border: 1px solid var(--border-subtle); background: var(--bg-input);
 }
 .mem-history ul { list-style: none; margin: 0; padding: 0; }
 .mem-history li { display: flex; align-items: center; gap: 8px; font-size: 11px; padding: 2px 0; }

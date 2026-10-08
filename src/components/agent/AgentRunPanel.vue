@@ -155,7 +155,7 @@ const latestHelp = computed(() =>
  * 这里只留下面板自己的布局与覆盖规则。 */
 
 /* ── 规划/意图卡片 ── */
-.ap-intention { background: var(--bg-elevated, var(--bg-base)); border-color: var(--status-info-border); }
+.ap-intention { background: var(--bg-elevated); border-color: var(--status-info-border); }
 .ap-level {
   font-size: 11px;
   padding: 2px 9px;
@@ -165,7 +165,7 @@ const latestHelp = computed(() =>
 .ap-level.level-trivial,
 .ap-level.level-simple { background: var(--status-success-bg); color: var(--status-success-text); }
 .ap-level.level-moderate { background: var(--status-warn-bg); color: var(--status-warn-text); }
-.ap-level.level-complex { background: var(--status-error-bg); color: var(--accent-orange, #f59e0b); }
+.ap-level.level-complex { background: var(--status-error-bg); color: var(--accent-orange); }
 .ap-level.level-debug { background: var(--status-debug-bg); color: var(--status-debug-text); }
 .ap-intention-details {
   display: flex;
@@ -201,13 +201,13 @@ const latestHelp = computed(() =>
   align-items: center;
   gap: 8px;
   font-size: 12px;
-  color: var(--status-warn-text, #f59e0b);
-  background: var(--status-warn-bg, var(--bg-elevated, var(--bg-base)));
-  border: 1px solid var(--card-warn-border, rgba(245, 158, 11, 0.35));
+  color: var(--status-warn-text);
+  background: var(--status-warn-bg);
+  border: 1px solid var(--card-warn-border);
   border-radius: 8px;
   padding: 6px 10px;
 }
-.ap-help-msgbar .ap-ic { flex: none; color: var(--status-warn-text, #f59e0b); }
+.ap-help-msgbar .ap-ic { flex: none; color: var(--status-warn-text); }
 .ap-help-msg {
   flex: 1;
   min-width: 0;
@@ -215,22 +215,22 @@ const latestHelp = computed(() =>
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ap-help-accent { color: var(--status-warn-text, #f59e0b); }
+.ap-help-accent { color: var(--status-warn-text); }
 
 /* 审批托盘 / 折叠队列 / 追溯区的样式随托盘一起删（R1）：它们的唯一消费方在模板里
    已经没有了。批量与追溯不是丢了，是搬进首页「待你放行」队列。 */
 
 /* ── 命令待确认 ── */
-.ap-deliver { background: var(--bg-elevated, var(--bg-base)); border-color: var(--card-warn-border); }
-.ap-deliver-accent { color: var(--status-warn-text, #f59e0b); }
+.ap-deliver { background: var(--bg-elevated); border-color: var(--card-warn-border); }
+.ap-deliver-accent { color: var(--status-warn-text); }
 .ap-deliver-code {
   margin: 0 0 11px;
-  background: var(--bg-input, var(--bg-base));
+  background: var(--bg-input);
   border: 1px solid var(--border-default);
   border-radius: 6px;
   padding: 9px 11px;
   font-size: 11.5px;
-  color: var(--accent-orange, #f59e0b);
+  color: var(--accent-orange);
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-all;

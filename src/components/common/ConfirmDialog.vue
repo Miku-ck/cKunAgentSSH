@@ -140,7 +140,7 @@ defineExpose({ open, close })
 .confirm-dialog {
   width: 380px;
   max-width: calc(100vw - 32px);
-  background: var(--bg-base);
+  background: var(--bg-elevated);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);

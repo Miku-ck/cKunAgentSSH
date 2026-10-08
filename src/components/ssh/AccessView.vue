@@ -38,9 +38,8 @@
             <button class="icon-btn" title="修改连接" @click="openEdit(gw)">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg>
             </button>
-            <button class="icon-btn" :class="{ confirming: confirmingId === gw.id }" title="删除" @click="askDelete(gw.id)">
-              <svg v-if="confirmingId !== gw.id" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-              <template v-else>确认删除</template>
+            <button class="icon-btn" title="删除" @click="askDelete(gw.id)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
             </button>
           </div>
           <!-- 在线时的通道数与角色：这两项只有真会话能给出，写死就是假数据 -->
@@ -89,8 +88,9 @@
     <AccessModal v-if="modalOpen" :rec="editing" @close="modalOpen = false" @saved="onSaved" />
 
     <!-- TOFU 指纹确认：与 SSH 首次连接同一套交互，两个信任面必须长一样 -->
+    <Teleport to="body">
     <div v-if="pending" class="overlay show">
-      <div class="modal">
+      <div class="modal" role="dialog" aria-modal="true">
         <h2>确认网关身份</h2>
         <p class="lede">{{ pending.host }}:{{ pending.port }} · 本机第一次见到这张证书，或它与记录不符。</p>
         <div class="spki">
@@ -103,14 +103,16 @@
         </div>
       </div>
     </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onUnmounted, ref } from 'vue'
+import { computed, defineAsyncComponent, ref, onMounted, onUnmounted } from 'vue'
 import { useAccessStore } from '@/stores/access'
 import { useTunnelStore } from '@/stores/tunnel'
 import { useToastStore } from '@/stores/toast'
+import { useConfirm } from '@/composables/useConfirm'
 import { toFriendlyMessage } from '@/api/client'
 
 const AccessModal = defineAsyncComponent(() => import('./AccessModal.vue'))
@@ -118,15 +120,14 @@ const AccessModal = defineAsyncComponent(() => import('./AccessModal.vue'))
 const accessStore = useAccessStore()
 const tunnelStore = useTunnelStore()
 const toast = useToastStore()
+const { confirm } = useConfirm()
 
 const tab = ref<'conn' | 'chan'>('conn')
 const modalOpen = ref(false)
 const editing = ref<GatewayRecord | undefined>(undefined)
 const busyId = ref('')
-const confirmingId = ref('')
 const chanGw = ref('')
 const rows = ref<GatewayChannelRow[]>([])
-let delTimer: ReturnType<typeof setTimeout> | null = null
 
 const pending = computed(() => accessStore.pendingHostKeys[0])
 const onlineIds = computed(() =>
@@ -218,18 +219,23 @@ async function onSaved(saved: GatewayRecord): Promise<void> {
   })
 }
 
-/** 两段确认删除（与 TunnelView 同一条交互，不另发明一套） */
-function askDelete(id: string): void {
-  if (confirmingId.value === id) {
-    confirmingId.value = ''
-    if (delTimer) clearTimeout(delTimer)
-    accessStore.remove(id).catch(err => toast.error(toFriendlyMessage(err, '删除失败')))
+/** 删除网关：走全局确认框二次确认（与隧道页同一条交互，不再用内联两段确认） */
+async function askDelete(id: string): Promise<void> {
+  const gw = accessStore.gateways.find(g => g.id === id)
+  const ok = await confirm({
+    title: '删除连接',
+    message: `确定删除连接「${gw?.name ?? id}」？引用它的隧道规则将变为「网关未连接」。`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
+  try {
+    await accessStore.remove(id)
     // 规则里引用它的条目会变成「网关未连接」，这里把列表拉一次让 UI 跟上
     void tunnelStore.refreshRules()
-    return
+  } catch (err) {
+    toast.error(toFriendlyMessage(err, '删除失败'))
   }
-  confirmingId.value = id
-  delTimer = setTimeout(() => { confirmingId.value = '' }, 3000)
 }
 
 function openChanTab(): void {
@@ -258,7 +264,12 @@ function rejectKey(): void {
   if (pending.value) accessStore.dismissHostKey(pending.value.id, pending.value.spki)
 }
 
-onUnmounted(() => { if (delTimer) clearTimeout(delTimer) })
+// Escape 关闭 TOFU 指纹确认（等同取消）
+function handleKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && pending.value) rejectKey()
+}
+onMounted(() => window.addEventListener('keydown', handleKeydown))
+onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
 </script>
 
 <style scoped>
@@ -393,12 +404,6 @@ onUnmounted(() => { if (delTimer) clearTimeout(delTimer) })
 }
 .icon-btn svg { width: 14px; height: 14px; }
 .icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
-.icon-btn.confirming {
-  width: auto;
-  padding: 0 9px;
-  background: var(--danger-bg);
-  color: var(--danger-text);
-}
 
 .chan-pane { position: relative; max-width: 900px; }
 .pane-note { font-size: 12px; color: var(--text-tertiary); margin: 0 0 14px; }
@@ -454,7 +459,7 @@ table.chan tr.fin td { color: var(--text-tertiary); }
 }
 .empty .t { color: var(--text-secondary); font-size: 13px; }
 
-.overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 60; }
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; align-items: center; justify-content: center; z-index: 60; }
 .overlay.show { display: flex; }
 .modal {
   width: 520px;

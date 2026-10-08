@@ -157,7 +157,7 @@ defineExpose({ open, close })
   height: clamp(640px, 88vh, 860px);
   max-width: 96vw;
   max-height: 94vh;
-  background: var(--bg-base);
+  background: var(--bg-elevated);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);

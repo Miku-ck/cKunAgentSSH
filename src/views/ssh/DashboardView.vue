@@ -227,7 +227,8 @@ const Sparkline = defineComponent({
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 16px;
+  height: var(--page-head-h);
+  padding: 0 16px;
   border-bottom: 1px solid var(--border-subtle);
 }
 
@@ -235,7 +236,7 @@ const Sparkline = defineComponent({
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 14px;
+  font-size: var(--page-title-size);
   font-weight: 600;
 }
 

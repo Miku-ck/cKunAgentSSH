@@ -258,10 +258,11 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 12px;
+  height: var(--page-head-h);
   margin-bottom: 12px;
 }
 .page-head h1 {
-  font-size: 16px;
+  font-size: var(--page-title-size);
   font-weight: 600;
 }
 .head-spacer {

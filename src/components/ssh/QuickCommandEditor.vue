@@ -1,6 +1,7 @@
 <template>
+  <Teleport to="body">
   <div v-if="visible" class="qc-editor-overlay">
-    <div class="qc-editor-dialog">
+    <div class="qc-editor-dialog" role="dialog" aria-modal="true">
       <div class="qc-editor-header">
         <h3>{{ isEdit ? '编辑快捷命令' : '新建快捷命令' }}</h3>
         <button class="qc-editor-close" @click="handleClose">&times;</button>
@@ -64,10 +65,11 @@
       </div>
     </div>
   </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import type { QuickCommand } from '@/stores/quickCommands'
 import { PRESET_COLORS } from '@/stores/quickCommands'
 
@@ -113,6 +115,13 @@ function handleClose() {
   emit('close')
 }
 
+// Escape 关闭
+function handleKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') emit('close')
+}
+onMounted(() => window.addEventListener('keydown', handleKeydown))
+onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
+
 function handleSave() {
   if (!canSave.value) return
   emit('save', {
@@ -138,7 +147,7 @@ function handleSave() {
 .qc-editor-dialog {
   width: 420px;
   max-width: 90vw;
-  background: var(--bg-input-solid);
+  background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);

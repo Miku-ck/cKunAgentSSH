@@ -25,13 +25,13 @@
             </span>
           </div>
           <div class="schedule-card-actions">
-            <button class="row-btn" @click="toggle(s)" :title="s.enabled ? '停用' : '启用'">
+            <button class="btn btn-sm" @click="toggle(s)" :title="s.enabled ? '停用' : '启用'">
               {{ s.enabled ? '停用' : '启用' }}
             </button>
-            <button class="row-btn" :disabled="isRunning(s)" @click="openEdit(s)">编辑</button>
-            <button class="row-btn" @click="runNow(s)" :disabled="isRunning(s)">立即执行</button>
-            <button class="row-btn" @click="openHistory(s)">历史</button>
-            <button class="row-btn danger" @click="remove(s)">删除</button>
+            <button class="btn btn-sm" :disabled="isRunning(s)" @click="openEdit(s)">编辑</button>
+            <button class="btn btn-sm" @click="runNow(s)" :disabled="isRunning(s)">立即执行</button>
+            <button class="btn btn-sm" @click="openHistory(s)">历史</button>
+            <button class="btn btn-sm btn-danger" @click="remove(s)">删除</button>
           </div>
         </div>
         <div class="schedule-card-meta">
@@ -51,8 +51,9 @@
     </div>
 
     <!-- 空历史 Modal -->
+    <Teleport to="body">
     <div v-if="historyFor" class="modal-mask" @click.self="historyFor = null">
-      <div class="modal wide">
+      <div class="modal wide" role="dialog" aria-modal="true">
         <div class="modal-title">{{ historyTitle }} — 执行历史</div>
         <div class="modal-body">
           <div v-if="historyRuns.length === 0" class="empty-small">暂无执行记录</div>
@@ -67,7 +68,7 @@
               <div class="history-summary" v-if="r.summary">{{ r.summary }}</div>
               <div class="history-error" v-if="r.error">{{ r.error }}</div>
               <div class="history-actions" v-if="r.status === 'failed' && historyFor">
-                <button class="row-btn" @click="askAiDiagnose(historyFor, r)">⚡ AI 诊断此失败</button>
+                <button class="btn btn-sm" @click="askAiDiagnose(historyFor, r)">⚡ AI 诊断此失败</button>
               </div>
             </div>
           </div>
@@ -77,10 +78,12 @@
         </div>
       </div>
     </div>
+    </Teleport>
 
     <!-- 新建/编辑 Modal -->
+    <Teleport to="body">
     <div v-if="editing" class="modal-mask" @click.self="editing = null">
-      <div class="modal">
+      <div class="modal" role="dialog" aria-modal="true">
         <div class="modal-title">{{ editing.id ? '编辑任务' : '新建定时任务' }}</div>
         <div class="modal-body">
           <!-- 模板选择（仅新建时显示） -->
@@ -189,6 +192,7 @@
         </div>
       </div>
     </div>
+    </Teleport>
 
     <div v-if="loading" class="sc-loading">加载中…</div>
     <div v-if="error" class="sc-error">{{ error }}</div>
@@ -204,6 +208,7 @@ import {
   type ScheduleRun,
 } from '@/api/client'
 import { useToastStore } from '@/stores/toast'
+import { useConfirm } from '@/composables/useConfirm'
 import { formatBackendTs, parseBackendTs } from '@/utils/format'
 import { useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
@@ -213,6 +218,7 @@ import { useAgentStore } from '@/stores/agent'
 const props = defineProps<{ active?: boolean }>()
 
 const toast = useToastStore()
+const { confirm } = useConfirm()
 const sshStore = useSSHStore()
 const sshAiStore = useSshAiStore()
 const agentStore = useAgentStore()
@@ -562,7 +568,13 @@ async function openHistory(s: ScheduleRecord) {
 }
 
 async function remove(s: ScheduleRecord) {
-  if (!confirm(`确认删除定时任务「${s.name}」及其全部历史？`)) return
+  const ok = await confirm({
+    title: '删除定时任务',
+    message: `确认删除定时任务「${s.name}」及其全部历史？`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await scheduleApi.remove(s.id)
     toast.success('已删除')
@@ -657,15 +669,24 @@ function askAiDiagnose(s: ScheduleRecord, r: ScheduleRun) {
   sshAiStore.askAi(lines.join('\n'))
 }
 
+// Escape 关闭当前打开的弹窗
+function handleKeydown(e: KeyboardEvent) {
+  if (e.key !== 'Escape') return
+  if (historyFor.value) { historyFor.value = null; return }
+  if (editing.value) editing.value = null
+}
+
 onMounted(() => {
   // 首屏加载与列表轮询已由上方 watch(active, {immediate}) 承担，此处只补主机列表
   // 加载远程管理的主机列表，供「目标主机」下拉使用（仅在未加载时拉取）
   if (sshStore.connections.length === 0) {
     sshStore.loadConnections()
   }
+  window.addEventListener('keydown', handleKeydown)
 })
 
 onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown)
   stopCountdownTick()
   stopListPoll()
   // 卸载前收起「立即执行」轮询：sticky-visited 下本页通常不触发，但 SshView 整体
@@ -685,8 +706,8 @@ onUnmounted(() => {
   overflow: hidden;
   background: var(--bg-base);
 }
-.schedules-header { display: flex; align-items: center; justify-content: space-between; }
-.schedules-title { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; color: var(--text-primary); }
+.schedules-header { display: flex; align-items: center; justify-content: space-between; height: var(--page-head-h); }
+.schedules-title { display: flex; align-items: center; gap: 8px; font-size: var(--page-title-size); font-weight: 600; color: var(--text-primary); }
 .schedules-sub { font-size: 12px; color: var(--text-tertiary); font-weight: 400; }
 .schedules-actions { display: flex; gap: 8px; }
 
@@ -704,13 +725,6 @@ onUnmounted(() => {
 .toggle, .status { font-size: 11px; padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border-subtle); }
 .toggle.on { color: var(--accent-green); border-color: var(--accent-green); }
 .schedule-card-actions { display: flex; gap: 6px; }
-.row-btn {
-  font-size: 11px; padding: 2px 8px; border-radius: 4px;
-  border: 1px solid var(--border-subtle); background: transparent;
-  color: var(--text-tertiary); cursor: pointer;
-}
-.row-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
-.row-btn.danger:hover { color: var(--accent-red); border-color: var(--accent-red); }
 .schedule-card-meta { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--text-secondary); margin-top: 8px; }
 .meta-item b { color: var(--text-primary); font-weight: 600; }
 .mono { font-family: var(--font-mono); }
@@ -727,15 +741,15 @@ onUnmounted(() => {
 .sc-loading { color: var(--text-tertiary); font-size: 12px; }
 .sc-error { color: var(--accent-red); font-size: 12px; }
 
-.modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-.modal { width: 520px; max-width: 90vw; background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 16px; max-height: 80vh; overflow: auto; }
+.modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.modal { width: 520px; max-width: 90vw; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 16px; max-height: 80vh; overflow: auto; }
 .modal.wide { width: 680px; }
 .modal-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 12px; }
 .modal-body { display: flex; flex-direction: column; gap: 10px; }
 .field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-tertiary); }
 .field input, .field textarea, .field select {
   font-size: 12px; padding: 6px 8px; border-radius: 6px;
-  border: 1px solid var(--border-subtle); background: var(--bg-base); color: var(--text-primary);
+  border: 1px solid var(--border-subtle); background: var(--bg-input); color: var(--text-primary);
 }
 .field.check { flex-direction: row; align-items: center; gap: 6px; }
 .template-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
@@ -744,7 +758,7 @@ onUnmounted(() => {
   border: 1px solid var(--border-subtle); background: var(--bg-hover);
 }
 .template-chip:hover { border-color: var(--text-tertiary); }
-.template-chip.active { border-color: var(--accent-primary); color: var(--text-primary); background: rgba(59,130,246,0.08); }
+.template-chip.active { border-color: var(--accent-primary); color: var(--text-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
 .template-name { font-size: 12px; font-weight: 600; color: var(--text-primary); }
 .template-desc { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
 .sched-options { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
@@ -753,13 +767,13 @@ onUnmounted(() => {
   border: 1px solid var(--border-subtle); background: transparent; color: var(--text-secondary);
 }
 .sched-option:hover { color: var(--text-primary); background: var(--bg-hover); }
-.sched-option.active { color: var(--accent-primary); border-color: var(--accent-primary); background: rgba(59,130,246,0.08); }
+.sched-option.active { color: var(--accent-primary); border-color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
 .sched-subrow { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
 .sched-subrow .num { width: 56px; }
 .sched-subrow .sel { width: 92px; }
 .sched-subrow input.num, .sched-subrow select.sel {
   font-size: 12px; padding: 4px 6px; border-radius: 6px;
-  border: 1px solid var(--border-subtle); background: var(--bg-base); color: var(--text-primary);
+  border: 1px solid var(--border-subtle); background: var(--bg-input); color: var(--text-primary);
 }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 
