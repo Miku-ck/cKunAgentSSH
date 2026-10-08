@@ -9,26 +9,35 @@
 安全约束：所有用户输入的参数一律经 shlex.quote 注入固定命令模板，
 绝不允许用户直接提供任意命令文本。命令一律只读，非破坏性。
 """
+import re
 import shlex
 
 from agent.tools import BaseTool, ToolResult, ToolMeta
 from agent.tools.builtin.ops_common import TRAVERSAL_ERROR, clamp_int, is_traversal, parse_int_arg, run_headless
-from agent.remote_protocol import EXIT_CODE_PREFIX
+from agent.remote_protocol import EXIT_CODE_PREFIX, STDERR_SENTINEL
 
 # ── 远端命令构建（单一事实来源）──────────────────────────────
 # 契约源：与远端白名单执行器（scripts/deploy/agent-exec.py）对齐，
 # 由 backend/tests/test_remote_whitelist_contract.py 跨端校验。
 
-def _without_sentinel(raw: str) -> str:
-    """剔除 run_headless 恒追加的 [exit_code=…] 哨兵行，返回有效输出。
+def _remote_parts(raw: str) -> tuple[str, str, int | None]:
+    """把回传拆成 (stdout 正文, stderr 文本, 退出码)；退出码 None = 没在远端跑起来。
 
-    执行通道把退出码哨兵拼在正文之后（ops_common.run_headless），所以「整串不含
-    哨兵」这类判据对任何成功输出都恒假 —— 见 S6-07。逐行剔除才是与本文件进程段
-    一致的读法。
+    拼装顺序由 `ops_common.exec_remote` 决定（`:140-144`）：正文 → `[stderr]` 段 →
+    `[exit_code=N]` 哨兵，拆分口径必须与那里一致。每一次成功执行都无条件追加哨兵，
+    所以「整串不含哨兵」这类判据对任何成功输出都恒假（S6-07 就是栽在那儿），要拿
+    退出码就得从这个哨兵里读。观测工具判断"这是故障"只能看
+    stderr 段与退出码 —— 拿正文里的字样当判据会把日志本身当成故障（日志里出现
+    "No such file or directory" 恰恰说明它被读出来了）。退出码缺失则是通道根本没到
+    远端（缺会话 / 桥不可达 / 超时），此时任何"没有结果"的读数都是编造的。
     """
-    return "\n".join(
-        line for line in raw.splitlines() if EXIT_CODE_PREFIX not in line
-    ).strip()
+    m = re.search(re.escape(EXIT_CODE_PREFIX) + r"(-?\d+)\]", raw)
+    rc = int(m.group(1)) if m else None
+    head = raw[: m.start()] if m else raw
+    if STDERR_SENTINEL in head:
+        body, err = head.split(STDERR_SENTINEL, 1)
+        return body.strip(), " ".join(err.split()), rc
+    return head.strip(), "", rc
 
 
 def sys_overview_cmd(top: int) -> str:
@@ -166,10 +175,17 @@ class ProcessInspectTool(BaseTool):
     async def execute(self, context, query):
         # grep -v grep 排除 grep 自身进程条目
         command = process_inspect_cmd(query)
-        ok, raw = await run_headless(context, command, timeout=15)
+        _, raw = await run_headless(context, command, timeout=15)
+        body, err, rc = _remote_parts(raw)
+        # 先问"跑成了吗"，再问"看到了什么"：rc is None 意味着这条探测根本没到远端
+        # （缺会话 / 桥不可达 / 超时），此时"没有结果"不是观测结果，是故障。同文件
+        # sys_overview（`:146`）早就检查了这一点，这里原先漏了 —— 通道拒绝会回一句
+        # success=True 的「未找到匹配进程」，模型据此去 start 一个本来好好的服务。
+        if rc is None:
+            return ToolResult(False, raw, "进程探测未在远端执行（缺少 SSH 会话或远程通道不可用）")
 
         rows = []
-        for line in raw.splitlines():
+        for line in body.splitlines():
             if EXIT_CODE_PREFIX in line or line.startswith("PID "):
                 continue
             parts = line.split(None, 5)
@@ -185,6 +201,13 @@ class ProcessInspectTool(BaseTool):
             )
 
         if not rows:
+            # 模板是 `ps | grep q | grep -v grep`：管道退出码取最后一个 grep，
+            # 1 = 正常无匹配，>1 或 stderr 有内容（`ps: command not found` 会让整条
+            # 管道什么都没输出）都是故障，不能报成"没有这个进程"。
+            if err:
+                return ToolResult(False, raw, f"进程探测命令报错：{err[:200]}")
+            if rc > 1:
+                return ToolResult(False, raw, f"进程探测命令执行失败，退出码 {rc}")
             return ToolResult(True, "未找到匹配进程", priority="low")
 
         header = f"{'PID':<8} {'CPU%':>5} {'MEM%':>5}  {'状态':<4} {'命令':<12} 参数"
@@ -238,12 +261,18 @@ class NetworkProbeTool(BaseTool):
         else:
             # bash /dev/tcp 不可用或超时 → 尝试 nc
             ok2, out2 = await run_headless(context, nc_cmd, timeout=timeout)
-            if ok2 and ("succeeded" in out2 or "open" in out2):
-                connected = True
-            elif ok2:
-                connected = False
+            _, err2, rc2 = _remote_parts(out2)
+            if rc2 is None:
+                note = "（bash /dev/tcp 与 nc 均未在远端执行，连通性探测跳过）"
+            elif rc2 == 127 or (err2 and "command not found" in err2):
+                # 127 = nc 本身不存在。把"这台机没有 nc"报成「端口无法连接」会把排障
+                # 带到完全错误的方向，与上一条要修的假否读同罪。
+                note = f"（nc 不可用：{err2[:120] or '退出码 127'}）"
             else:
-                note = "（bash /dev/tcp 与 nc 均不可用，连通性探测跳过）"
+                # `nc -z` 是零 I/O 探测：退出码才是判据。原先要求回传文本里出现
+                # "succeeded"/"open"，而 busybox 等实现连接成功时什么都不打印 ——
+                # 开着的端口会被判成「无法连接」，这是能直接把排障带到错误方向的那种错。
+                connected = rc2 == 0
 
         # 本地监听状态：优先 ss，无结果时回退 netstat（跨平台健壮性）
         # S6-07：原判据是整串 `EXIT_CODE_PREFIX not in ss_out`，而 run_headless 对
@@ -251,12 +280,17 @@ class NetworkProbeTool(BaseTool):
         # 对「端口是否在听」这个核心问题恒答否，netstat 回退支也因此不可达。
         # 改为与本文件进程段（逐行跳过哨兵）同一口径。
         _, ss_out = await run_headless(context, netprobe_listen_cmd(str(port)), timeout=15)
-        listen = _without_sentinel(ss_out)
+        listen, _, rc_ss = _remote_parts(ss_out)
+        # rc_ss is None = 通道没跑，回传里是一句中文拒绝理由；当"监听信息"贴出来会让
+        # 操作员以为那是 ss 的输出。
+        if rc_ss is None:
+            listen = ""
         if not listen:
             _, net_out = await run_headless(
                 context, netprobe_listen_fallback_cmd(str(port)), timeout=15
             )
-            listen = _without_sentinel(net_out)
+            fb, _, rc_fb = _remote_parts(net_out)
+            listen = fb if rc_fb is not None else ""
 
         sections = []
         if connected is True:
@@ -317,22 +351,22 @@ class LogReadTool(BaseTool):
         else:
             command = log_tail_cmd(path, lines)
 
-        ok, raw = await run_headless(context, command, timeout=15)
-
-        # 文件不存在 / 无权访问 → 明确失败
-        lowered = raw.lower()
-        if "no such file" in lowered or "cannot open" in lowered or "permission denied" in lowered:
-            return ToolResult(
-                False,
-                raw,
-                f"无法读取日志文件: {path}（文件不存在或无权访问）",
-            )
-
-        if pattern and not ok:
-            # grep 无匹配或 exit_code 非 0
+        _, raw = await run_headless(context, command, timeout=15)
+        body, err_text, rc = _remote_parts(raw)
+        if rc is None:
+            return ToolResult(False, raw, "日志读取未在远端执行（缺少 SSH 会话或远程通道不可用）")
+        # 判据只用 stderr 段与退出码，绝不用正文：日志里出现 "no such file" /
+        # "permission denied" 是常态（那正是日志在记录的错误），按正文判失败会让这类
+        # 文件永远读不出来，还把真实内容藏进错误消息里 —— 原实现就是这样。
+        if not body and err_text:
+            return ToolResult(False, raw, f"无法读取日志文件: {path}：{err_text[:200]}")
+        if pattern and not body and rc <= 1:
+            # grep 无匹配。模板是 `grep … | tail -n …`，管道退出码取的是 tail，
+            # 所以这里不能靠 rc==1 认定"grep 没匹配"；空正文 + 空 stderr 才是。
             return ToolResult(True, "未匹配到日志行", priority="low")
+        if rc > 1:
+            return ToolResult(False, raw, f"日志读取失败: {path}（退出码 {rc}）")
 
-        if not ok:
-            return ToolResult(False, raw, "日志读取失败，exit_code 非 0")
-
-        return ToolResult(True, raw, priority="low")
+        # 返回正文而不是 raw：raw 末尾带着 [exit_code=N] 哨兵（有时还有 [stderr] 段），
+        # 原实现把它当日志内容交给模型，等于在日志里凭空多出一行执行元数据。
+        return ToolResult(True, body, priority="low")
