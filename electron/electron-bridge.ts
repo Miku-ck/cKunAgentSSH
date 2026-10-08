@@ -4,6 +4,8 @@ import { join } from 'path'
 import { app } from 'electron'
 import type { SSHManager } from './ssh-manager'
 import type { SSHStore } from './ssh-store'
+import type { SSHErrorCode } from '../shared/ssh-error-core'
+import { isSSHErrorCode, toFriendlyZh } from '../shared/ssh-error-core'
 
 // 桥接错误持久化日志，便于排查"WS 通道不通/命令执行失败"类环境问题
 // 写到 userData 目录（与其他持久化数据同处，不污染代码目录）。
@@ -79,13 +81,15 @@ export class ElectronBridge {
   /**
    * 桥接业务逻辑的**唯一实现**，WS 客户端（bridge-ws-client）收到 req 帧后调用：
    *
-   * - ping：纯健康检查，不触碰 SSH/业务逻辑
    * - ssh_exec：在既有 SSH 会话上执行远程命令
    * - ssh_connect：按连接 ID 建立轻量 SSH 会话（无 Shell，专供定时任务无头执行）
    * - ssh_disconnect：关闭桥建立的 SSH 会话
+   * - ssh_list_connections：只投影调度侧需要的定位字段（不含凭据）
+   *
+   * 心跳不在这里：`{type:'ping'}` 帧由 bridge_relay 就地应答，永不进 dispatch
+   * （S0-11：原先的 docstring 与 BridgeOp 都声明了一个不存在的 ping op）。
    *
    * 返回 {status, body}：status 为 HTTP 风格状态码，body 与后端预期的响应体同构。
-   * 业务异常在此捕获记日志并回 500（用户可见文案保持通用，细节只进日志）。
    */
   async dispatch(op: BridgeOp, data: Record<string, any>): Promise<DispatchResult> {
     data = data || {}
@@ -167,10 +171,27 @@ export class ElectronBridge {
       }
     } catch (err: any) {
       // 原实现把 err 整个吞掉，500 根因（execCommandWithExitCode 抛错、
-      // 会话丢失等）永远查不到；记日志后再回 500（用户可见文案保持通用）
+      // 会话丢失等）永远查不到；记日志后再回 500。
       console.error(`[ElectronBridge] ${op} 处理失败:`, err)
-      bridgeLog(`ERROR ${op}: ${err?.message || err}`)
-      return { status: 500, body: { success: false, error: '请求处理失败，请稍后重试' } }
+      // S0-09：这条腿原先把任意失败折成同一句「请求处理失败，请稍后重试」，而
+      // 渲染层那条腿（main.ts handleTrusted → toIpcTransport）保住了 code ——
+      // 同一个错误两种保真度。后端因此分不清「会话没了（可 ssh_connect 救回）」
+      // 「命令合法超时」「会话数触顶」，classify_bridge_error 的
+      // `"timeout" in msg` / `"未配置" in msg` 探针对该类恒不可达。
+      // 这里把已分类的 code 与它的用户文案带回响应体：error 走共享文案表
+      // （成员串本就是设计给用户看的中文），UNKNOWN 除外 —— 那一支的 detail
+      // 是原始技术串（getaddrinfo / Cannot parse privateKey），不该端给用户。
+      const code: SSHErrorCode | undefined = isSSHErrorCode(err?.code) ? err.code : undefined
+      const friendly = code && code !== 'UNKNOWN' ? toFriendlyZh(code, err?.detail) : undefined
+      bridgeLog(`ERROR ${op}: ${err?.message || err}${code ? ` [${code}]` : ''}`)
+      return {
+        status: 500,
+        body: {
+          success: false,
+          error: friendly || '请求处理失败，请稍后重试',
+          ...(code ? { code, retryable: err?.retryable === true } : {}),
+        },
+      }
     }
   }
 

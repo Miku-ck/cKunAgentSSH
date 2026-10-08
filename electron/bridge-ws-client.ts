@@ -277,13 +277,21 @@ export class BridgeWsClient {
 
   // ── 帧收发 ─────────────────────────────────────
 
-  private sendJson(obj: unknown): void {
+  /**
+   * 投递一帧。返回 false = **没发出去**（socket 已死或 send 抛错）。
+   *
+   * S0-05：原实现静默 return，既无日志也无错误路径 —— 于是「req 已执行、res 蒸发」
+   * 这一类失败完全不可观测，而它的后果是真实的资源泄漏（见 handleReq 的补偿）。
+   */
+  private sendJson(obj: unknown): boolean {
     const ws = this.ws
-    if (!ws || ws.readyState !== WS_STATE_OPEN) return
+    if (!ws || ws.readyState !== WS_STATE_OPEN) return false
     try {
       ws.send(JSON.stringify(obj))
+      return true
     } catch (err) {
-
+      console.warn('[BridgeWS] 帧投递失败:', (err as Error)?.message || err)
+      return false
     }
   }
 
@@ -304,6 +312,29 @@ export class BridgeWsClient {
       body = { success: false, error: '请求处理失败，请稍后重试' }
       console.error(`[BridgeWS] ${op} 处理失败:`, err)
     }
-    this.sendJson({ type: 'res', id, status, result: body })
+    if (this.sendJson({ type: 'res', id, status, result: body })) return
+    // S0-05 补偿：res 没投递出去 ⇒ 后端只能看到 WS_LOST，永远拿不到刚建好的
+    // 会话 id。ssh_connect 已在主进程落了真实会话（keepaliveInterval 让远端不回收
+    // 它，destroySession 只在 TCP close 时触发），于是留下一条健康、无人引用、
+    // 界面上看不见的会话，白占 SESSION_LIMIT(64) 的名额 —— 攒满后连用户自己的
+    // 交互终端都连不上。relay 侧的 fail-closed「绝不重发」保护的是请求幂等，
+    // 已经发生的非幂等副作用只能在这里回收。
+    await this.recoverOrphanSession(op, status, body)
+  }
+
+  /**
+   * res 投递失败时回收本次请求新建的会话。只对「ssh_connect 且 200」生效：
+   * 其余 op 要么幂等（exec/disconnect 重跑无害），要么本来就没有新副作用。
+   */
+  private async recoverOrphanSession(op: string, status: number, body: unknown): Promise<void> {
+    if (op !== 'ssh_connect' || status !== 200) return
+    const sessionId = (body as { sessionId?: unknown } | null)?.sessionId
+    if (typeof sessionId !== 'string' || !sessionId) return
+    console.warn(`[BridgeWS] ssh_connect 的 res 未投递，回收孤儿会话 ${sessionId}`)
+    try {
+      await this.dispatch('ssh_disconnect', { sessionId })
+    } catch (err) {
+      console.error(`[BridgeWS] 回收孤儿会话 ${sessionId} 失败:`, err)
+    }
   }
 }
