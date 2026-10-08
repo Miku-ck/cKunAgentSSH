@@ -456,6 +456,58 @@ async def _acquire_run_slot(conversation_id: str, run_id: str) -> Optional[str]:
         return None
 
 
+async def persist_interrupted_run(
+    *,
+    conversation_id: str,
+    run_id: str,
+    total_content: str,
+    total_reasoning: str,
+    tool_calls: list[dict],
+    iterations: int,
+    model_used: Optional[str],
+) -> bool:
+    """S1-01：断连/中止的 run 补落一条承载轨迹的 assistant 消息，返回是否真的写了。
+
+    原先整个落库区都在 SSE 的 done 分支里，而客户端断连时 engine_producer 在
+    `is_disconnected()` 处 break → sentinel → 消费循环正常退出，**done 分支根本没跑到**：
+    用户点「停止」后重载历史，只看到自己那句提问、半个回复都没有，而 tool_calls 行
+    早已写进库（证据在、承载体没了）。文案与形状沿用 done 分支「无正文也要落一条
+    承载轨迹」的同一口径。
+
+    流式期间什么都没产出（无正文、无推理、无工具调用）时**不写** —— 那种 run 连
+    「Agent 做过什么」都没有可展示的证据，插一条空消息等于把「我按了停止」伪造成
+    一句助手发言。
+
+    后处理（标题/记忆/技能提取）刻意不跑：它学的是「这一轮的完整答案」，而断连留下
+    的是半截输出，喂进去会用残缺样本污染记忆库。这一半是取舍、不是遗漏。
+    """
+    if not (total_content or total_reasoning or tool_calls):
+        return False
+    snapshot = {
+        "status": "failed",
+        # 与真失败的区别只记在这里：终态确实没跑完，原因是被中断而非模型/工具报错
+        "currentState": "interrupted",
+        "iterations": iterations,
+        "toolCalls": tool_calls,
+        "reasoning": total_reasoning or "",
+        "lastRunId": run_id,
+        # costInfo 缺席 = 「没读到」而不是 0：断连路径拿不到 done 事件的统计，
+        # 写全 0 会把实际已消耗的 token 报成没消耗（读侧 0 塌陷的同一族）。
+        "errorMessage": None,
+    }
+    await asyncio.to_thread(
+        db.add_message,
+        conversation_id=conversation_id,
+        role="assistant",
+        content=total_content or "(AI 运行中断，未产生输出)",
+        reasoning=total_reasoning if total_reasoning else None,
+        model_used=model_used,
+        run_id=run_id,
+        agent_trace=snapshot,
+    )
+    return True
+
+
 def _release_run_slot_sync(conversation_id: str, run_id: str) -> None:
     """同步释放占位（无 await，取消安全）。
 
@@ -880,6 +932,12 @@ async def agent_run(req: AgentRunRequest, request: Request):
         final_state: Optional[str] = None
         # error 事件是否到达过（反思调度的闸门，见循环末尾）
         error_seen = False
+        # S1-01 闸门：assistant 消息是否已落。done 分支落两次（有正文/无正文）中的
+        # 任一次置真，finally 的兜底段据此跳过 —— 断连的 run 走不到 done 分支，
+        # 那里留下的痕迹是**唯一**一份，不会与 done 的双写。
+        assistant_persisted = False
+        # S1-01 兜底段的 iterations 来源：done 事件带不到断连路径，取最后观测到的迭代号
+        last_iteration = 0
 
         # H14 修复：立即发送 state=thinking 事件，让前端马上显示"思考中..."提示
         # 原问题：从 fetch 发起到 driver 发出第一个 state 事件之间可能等 2-5 秒
@@ -904,6 +962,8 @@ async def agent_run(req: AgentRunRequest, request: Request):
                 elif event.get("type") == "reasoning":
                     total_reasoning += event["reasoning"]
                 elif event.get("type") == "tool_call_start":
+                    # S1-01：兜底段的进度证据只有这个迭代号可累积
+                    last_iteration = max(last_iteration, int(event.get("iteration", 0) or 0))
                     # 记录工具调用开始（审查 M-13：db 放线程池）
                     tc_id = await asyncio.to_thread(
                         db.add_tool_call,
@@ -1015,6 +1075,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
                                 run_id=run_id,
                                 agent_trace=agent_trace_snapshot,
                             )
+                            assistant_persisted = True
                             # 异步后处理 — 通过 PostProcessManager 统一管理
                             # （超时保护 + 生命周期管理 + 配置化启停）
                             try:
@@ -1056,6 +1117,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
                                 run_id=run_id,
                                 agent_trace=agent_trace_snapshot,
                             )
+                            assistant_persisted = True
                     except Exception as e:
                         logger.warning("done 事件处理失败: %s", e)
 
@@ -1215,6 +1277,28 @@ async def agent_run(req: AgentRunRequest, request: Request):
                 await asyncio.shield(kill_remote_jobs_for_run(run_id))
             except BaseException:
                 logger.warning("取消联动清理远程任务失败 (run_id=%s)", run_id, exc_info=True)
+            # S1-01：done 分支没跑到时补落 assistant 痕迹（闸门 assistant_persisted）。
+            # 收尾点选 finally 而非循环尾：渲染层 abort() 会让消费循环卡在下一次 yield
+            # 上并收到 GeneratorExit，那条路既到不了循环尾、也不被 except Exception 接住，
+            # 只有这里是正常 break / event_stream 异常 / GeneratorExit 三条路的共同收口。
+            # 每一步单独包 BaseException + shield，遵循本块开头成文的抗取消姿势。
+            if not assistant_persisted:
+                try:
+                    await asyncio.shield(
+                        persist_interrupted_run(
+                            conversation_id=req.conversation_id,
+                            run_id=run_id,
+                            total_content=total_content,
+                            total_reasoning=total_reasoning,
+                            tool_calls=run_trace_tool_calls,
+                            iterations=last_iteration,
+                            model_used=model_cfg.get("model_id") or model_cfg["id"],
+                        )
+                    )
+                except BaseException:
+                    logger.warning(
+                        "断连 run 的 assistant 痕迹落库失败 (run_id=%s)", run_id, exc_info=True
+                    )
             # 客户端断开时将 agent_run 标记为 failed（若仍为 running/init）
             try:
                 run = await asyncio.shield(asyncio.to_thread(db.get_agent_run, run_id))
