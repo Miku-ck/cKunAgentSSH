@@ -21,8 +21,8 @@ import re
 EXIT_CODE_PREFIX = "[exit_code="
 STDERR_SENTINEL = "[stderr]"
 
-# 退出码可为负（信号终止），生产者写的是 str(int)，故 -?\d+
-_EXIT_SENTINEL_RE = re.compile(re.escape(EXIT_CODE_PREFIX) + r"-?\d+\]")
+# 退出码可为负（信号终止），生产者写的是 str(int)，故 -?\d+；括号捕获组供 remote_parts 取数
+_EXIT_SENTINEL_RE = re.compile(re.escape(EXIT_CODE_PREFIX) + r"(-?\d+)\]")
 
 
 def is_exit_code_line(line: str) -> bool:
@@ -47,3 +47,32 @@ def has_sentinel_fragment(line: str) -> bool:
 def has_exit_sentinel(text: str) -> bool:
     """输出中是否出现 `[exit_code=N]` —— 命令确已在远端执行过的证据。"""
     return bool(_EXIT_SENTINEL_RE.search(text))
+
+
+def remote_parts(raw: str) -> tuple[str, str, int | None]:
+    """把回传拆成 (stdout 正文, stderr 文本, 退出码)；退出码 None = 没在远端跑起来。
+
+    拼装顺序由 `ops_common.exec_remote` 决定（`正文 → [stderr] 段 → [exit_code=N]`），
+    拆分口径必须与那里一致，所以拆解也收在本模块：消费方各处手抄一份拆分正则就是
+    本模块 docstring 里写的那场「跨层 key 漂移」事故本身。
+
+    为什么判"故障"只能看 stderr 段与退出码：
+    - 拿正文里的字样当判据会把日志本身当成故障（日志里出现
+      "No such file or directory" 恰恰说明它被读出来了）；
+    - 每一次成功执行都无条件追加哨兵，所以「整串不含哨兵」这类判据对任何成功输出恒假
+      （S6-07 就栽在那儿）；
+    - **管道串起来的模板退出码属于最后一段**：`nl -ba f | sed -n …` 里 nl 打不开文件
+      时 sed 仍然 0 退出，`ok`/`rc` 都是绿的，只有 stderr 段说真话。读类工具不查这一段
+      就会把"读失败"报成"文件为空/没有匹配"，模型据此得出相反结论。
+
+    退出码缺失（None）意味着通道根本没到远端（缺会话 / 桥不可达 / 超时），此时任何
+    "没有结果"的读数都是编造的，不是观测结果。
+    """
+    m = _EXIT_SENTINEL_RE.search(raw)
+    rc = int(m.group(1)) if m else None
+    head = raw[: m.start()] if m else raw
+    if STDERR_SENTINEL in head:
+        body, err = head.split(STDERR_SENTINEL, 1)
+        return body.strip(), " ".join(err.split()), rc
+    return head.strip(), "", rc
+

@@ -9,36 +9,15 @@
 安全约束：所有用户输入的参数一律经 shlex.quote 注入固定命令模板，
 绝不允许用户直接提供任意命令文本。命令一律只读，非破坏性。
 """
-import re
 import shlex
 
 from agent.tools import BaseTool, ToolResult, ToolMeta
 from agent.tools.builtin.ops_common import TRAVERSAL_ERROR, clamp_int, is_traversal, parse_int_arg, run_headless
-from agent.remote_protocol import EXIT_CODE_PREFIX, STDERR_SENTINEL
+from agent.remote_protocol import EXIT_CODE_PREFIX, remote_parts
 
 # ── 远端命令构建（单一事实来源）──────────────────────────────
 # 契约源：与远端白名单执行器（scripts/deploy/agent-exec.py）对齐，
 # 由 backend/tests/test_remote_whitelist_contract.py 跨端校验。
-
-def _remote_parts(raw: str) -> tuple[str, str, int | None]:
-    """把回传拆成 (stdout 正文, stderr 文本, 退出码)；退出码 None = 没在远端跑起来。
-
-    拼装顺序由 `ops_common.exec_remote` 决定（`:140-144`）：正文 → `[stderr]` 段 →
-    `[exit_code=N]` 哨兵，拆分口径必须与那里一致。每一次成功执行都无条件追加哨兵，
-    所以「整串不含哨兵」这类判据对任何成功输出都恒假（S6-07 就是栽在那儿），要拿
-    退出码就得从这个哨兵里读。观测工具判断"这是故障"只能看
-    stderr 段与退出码 —— 拿正文里的字样当判据会把日志本身当成故障（日志里出现
-    "No such file or directory" 恰恰说明它被读出来了）。退出码缺失则是通道根本没到
-    远端（缺会话 / 桥不可达 / 超时），此时任何"没有结果"的读数都是编造的。
-    """
-    m = re.search(re.escape(EXIT_CODE_PREFIX) + r"(-?\d+)\]", raw)
-    rc = int(m.group(1)) if m else None
-    head = raw[: m.start()] if m else raw
-    if STDERR_SENTINEL in head:
-        body, err = head.split(STDERR_SENTINEL, 1)
-        return body.strip(), " ".join(err.split()), rc
-    return head.strip(), "", rc
-
 
 def sys_overview_cmd(top: int) -> str:
     """sys_overview 远端模板：多行只读观测脚本（; 串联，缺失命令不影响其余）。"""
@@ -176,7 +155,7 @@ class ProcessInspectTool(BaseTool):
         # grep -v grep 排除 grep 自身进程条目
         command = process_inspect_cmd(query)
         _, raw = await run_headless(context, command, timeout=15)
-        body, err, rc = _remote_parts(raw)
+        body, err, rc = remote_parts(raw)
         # 先问"跑成了吗"，再问"看到了什么"：rc is None 意味着这条探测根本没到远端
         # （缺会话 / 桥不可达 / 超时），此时"没有结果"不是观测结果，是故障。同文件
         # sys_overview（`:146`）早就检查了这一点，这里原先漏了 —— 通道拒绝会回一句
@@ -261,7 +240,7 @@ class NetworkProbeTool(BaseTool):
         else:
             # bash /dev/tcp 不可用或超时 → 尝试 nc
             ok2, out2 = await run_headless(context, nc_cmd, timeout=timeout)
-            _, err2, rc2 = _remote_parts(out2)
+            _, err2, rc2 = remote_parts(out2)
             if rc2 is None:
                 note = "（bash /dev/tcp 与 nc 均未在远端执行，连通性探测跳过）"
             elif rc2 == 127 or (err2 and "command not found" in err2):
@@ -280,7 +259,7 @@ class NetworkProbeTool(BaseTool):
         # 对「端口是否在听」这个核心问题恒答否，netstat 回退支也因此不可达。
         # 改为与本文件进程段（逐行跳过哨兵）同一口径。
         _, ss_out = await run_headless(context, netprobe_listen_cmd(str(port)), timeout=15)
-        listen, _, rc_ss = _remote_parts(ss_out)
+        listen, _, rc_ss = remote_parts(ss_out)
         # rc_ss is None = 通道没跑，回传里是一句中文拒绝理由；当"监听信息"贴出来会让
         # 操作员以为那是 ss 的输出。
         if rc_ss is None:
@@ -289,7 +268,7 @@ class NetworkProbeTool(BaseTool):
             _, net_out = await run_headless(
                 context, netprobe_listen_fallback_cmd(str(port)), timeout=15
             )
-            fb, _, rc_fb = _remote_parts(net_out)
+            fb, _, rc_fb = remote_parts(net_out)
             listen = fb if rc_fb is not None else ""
 
         sections = []
@@ -352,7 +331,7 @@ class LogReadTool(BaseTool):
             command = log_tail_cmd(path, lines)
 
         _, raw = await run_headless(context, command, timeout=15)
-        body, err_text, rc = _remote_parts(raw)
+        body, err_text, rc = remote_parts(raw)
         if rc is None:
             return ToolResult(False, raw, "日志读取未在远端执行（缺少 SSH 会话或远程通道不可用）")
         # 判据只用 stderr 段与退出码，绝不用正文：日志里出现 "no such file" /

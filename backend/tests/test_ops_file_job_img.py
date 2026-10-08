@@ -179,8 +179,9 @@ async def test_file_read_remote_success_strips_sentinel(monkeypatch):
     回归锁：ops_file 曾在远端成功分支调用 strip_remote_tail 却未 import，
     导致真实 SSH 会话下 file_read 成功时抛 NameError（此前无测试覆盖远端
     成功分支，潜伏 8 轮）。此测试走完整远端成功路径，若 import 缺失会
-    NameError 而非返回内容。run_headless 返回 run.sh 哨兵形态，strip_remote_tail
-    须剥掉 [exit_code=..]，只留 nl 行号正文。
+    NameError 而非返回内容。run_headless 返回 run.sh 哨兵形态，成功分支现在走
+    remote_parts 拆正文（strip_remote_tail 只剥尾部、不看 [stderr] 段，管道模板下
+    会把 nl 的报错当文件正文回给模型 —— 见下面那组「管道退出码陷阱」用例）。
     """
     remote_body = "     1|root:x:0:0\n     2|bin:x:1:1\n[exit_code=0]\n"
     async def fake_run(ctx, command, timeout):
@@ -191,6 +192,94 @@ async def test_file_read_remote_success_strips_sentinel(monkeypatch):
     assert res.success is True
     assert "root:x:0:0" in res.output
     assert "[exit_code=" not in res.output  # 哨兵已剥离
+
+
+# ── 远端读类模板的管道退出码陷阱（成功形状的失败）──────────────
+# `nl -ba f | sed -n …` 与 `grep -rnE … | head -n …` 都是管道：shell 的退出码属于
+# **最后一段**。nl/grep 打不开路径时非零退出并写 stderr，而 sed/head 照样 0 退出 ——
+# 于是 run_headless 的 ok 为真、[exit_code=0] 也在，只有 [stderr] 段说真话。
+# 只看 ok 的两个远端分支因此把"读失败"报成"文件为空"/"没有匹配"（实测见下面的用例）。
+
+@pytest.mark.asyncio
+async def test_file_read_remote_nl失败不得报成文件为空(monkeypatch):
+    wire = "\n[stderr]\nnl: /srv/missing.conf: No such file or directory\n[exit_code=0]\n"
+
+    async def fake(ctx, command, timeout):
+        return True, wire
+
+    monkeypatch.setattr("agent.tools.builtin.ops_file.run_headless", fake)
+    res = await FileReadTool().execute(
+        _ctx(remote=True), path="/srv/missing.conf", offset=1, limit=10
+    )
+    assert res.success is False, f"读失败被报成 success={res.success}：{res.output!r}"
+    assert "无内容" not in res.output
+    assert "No such file" in res.error + res.output
+
+
+@pytest.mark.asyncio
+async def test_file_read_remote_空文件与越界offset仍是成功(monkeypatch):
+    """反向锁：正文空但没有 stderr 时，"无内容"是对的答案，不是故障。"""
+    async def fake(ctx, command, timeout):
+        return True, "[exit_code=0]\n"
+
+    monkeypatch.setattr("agent.tools.builtin.ops_file.run_headless", fake)
+    res = await FileReadTool().execute(
+        _ctx(remote=True), path="/srv/empty.conf", offset=500, limit=10
+    )
+    assert res.success is True
+    assert "无内容" in res.output
+
+
+@pytest.mark.asyncio
+async def test_file_read_remote_未在远端跑起来不得编造读数(monkeypatch):
+    """没有 [exit_code=…] 哨兵 = 通道根本没到远端（缺会话/桥不可达/超时）。"""
+    async def fake(ctx, command, timeout):
+        return False, ""
+
+    monkeypatch.setattr("agent.tools.builtin.ops_file.run_headless", fake)
+    res = await FileReadTool().execute(_ctx(remote=True), path="/srv/a.conf")
+    assert res.success is False
+
+
+@pytest.mark.asyncio
+async def test_file_grep_remote_grep失败不得报成没有匹配(monkeypatch):
+    wire = "\n[stderr]\ngrep: /srv/logs: No such file or directory\n[exit_code=0]\n"
+
+    async def fake(ctx, command, timeout):
+        return True, wire
+
+    monkeypatch.setattr("agent.tools.builtin.ops_file.run_headless", fake)
+    res = await FileGrepTool().execute(_ctx(remote=True), path="/srv/logs", pattern="ERROR")
+    assert res.success is False, f"grep 失败被报成 success={res.success}：{res.output!r}"
+    assert "未匹配" not in res.output
+    assert "No such file" in res.error + res.output
+
+
+@pytest.mark.asyncio
+async def test_file_grep_remote_真的没有匹配仍是成功(monkeypatch):
+    """反向锁：grep 无匹配时不写 stderr（退出码 1 也被 head 吞掉），这必须是"没匹配"。"""
+    async def fake(ctx, command, timeout):
+        return True, "[exit_code=0]\n"
+
+    monkeypatch.setattr("agent.tools.builtin.ops_file.run_headless", fake)
+    res = await FileGrepTool().execute(_ctx(remote=True), path="/srv/app", pattern="NOPE")
+    assert res.success is True
+    assert "未匹配到内容" in res.output
+
+
+def test_remote_parts_拆出口令哨兵的三种形态():
+    """协议拆解收在 remote_protocol 单一实现源，消费方不再各抄一份正则。"""
+    from agent.remote_protocol import remote_parts
+
+    body, err, rc = remote_parts("hello\n[exit_code=0]\n")
+    assert (body, err, rc) == ("hello", "", 0)
+    body, err, rc = remote_parts("a\n[stderr]\nboom\n[exit_code=-9]\n")
+    assert (body, err, rc) == ("a", "boom", -9)
+    body, err, rc = remote_parts("")
+    assert (body, err, rc) == ("", "", None)
+    # 正文里出现 "No such file" 不算 stderr —— 那恰恰说明它被读出来了
+    body, err, rc = remote_parts("No such file or directory\n[exit_code=0]\n")
+    assert (body, err, rc) == ("No such file or directory", "", 0)
 
 
 

@@ -25,6 +25,7 @@ import re
 import shlex
 
 from agent.tools import BaseTool, ToolResult, ToolMeta
+from agent.remote_protocol import remote_parts
 from agent.tools.builtin.ops_common import (
     TRAVERSAL_ERROR,
     base64_read_cmd,
@@ -37,7 +38,6 @@ from agent.tools.builtin.ops_common import (
     parse_int_arg,
     remote_read_b64,
     run_headless,
-    strip_remote_tail,
     truncate_output,
 )
 
@@ -47,7 +47,12 @@ from agent.tools.builtin.ops_common import (
 # 由 backend/tests/test_remote_whitelist_contract.py 跨端校验。
 
 def file_read_cmd(path: str, offset: int, limit: int) -> str:
-    """file_read 远端模板：带行号读取 [offset, offset+limit-1] 片段。"""
+    """file_read 远端模板：带行号读取 [offset, offset+limit-1] 片段。
+
+    注意这条是**管道**：退出码属于最后一段（sed），`nl` 打不开文件时整条仍然 0 退出，
+    所以 `ok`/`exit_code` 不能当"读到了"的证据。失败证据只在 `[stderr]` 段里，
+    调用方必须走 `remote_parts` 拆出来看。
+    """
     qpath = shlex.quote(path)
     start, stop = offset, offset + limit - 1
     return f"nl -ba {qpath} | sed -n '{start},{stop}p'"
@@ -60,7 +65,12 @@ def file_glob_cmd(path: str, pattern: str) -> str:
 
 
 def file_grep_cmd(path: str, pattern: str, max_lines: int) -> str:
-    """file_grep 远端模板：正则递归搜索 + 限行。"""
+    """file_grep 远端模板：正则递归搜索 + 限行。
+
+    同样是管道：退出码取 `head`（恒 0），`grep` 打不开路径时 `ok` 仍然为真。
+    注意 grep **无匹配**时不写 stderr、只是退出码 1（也被管道吞掉），所以
+    "无匹配"与"路径不存在"两种结果只能靠 `[stderr]` 段区分。
+    """
     qpat, qpath = shlex.quote(pattern), shlex.quote(path)
     return f"grep -rnE --color=never {qpat} {qpath} | head -n {max_lines}"
 
@@ -147,10 +157,15 @@ class FileReadTool(BaseTool):
         if is_remote(context):
             cmd = file_read_cmd(path, offset, limit)
             ok, output = await run_headless(context, cmd, self.meta.timeout)
-            if not ok:
-                return ToolResult(False, output, "读取文件失败")
-            body = strip_remote_tail(output)
-            if not body.strip():
+            # 模板是管道，`ok`/`rc` 取的是 sed 的退出码 —— nl 打不开文件时整条仍 0 退出，
+            # 唯一的故障证据在 [stderr] 段里。不查它就会把读失败报成"文件为空"，
+            # 甚至把 `[stderr] nl: ... No such file` 当成文件正文回给模型。
+            body, err, rc = remote_parts(output)
+            if rc is None or err or not ok:
+                return ToolResult(
+                    False, body, f"读取文件失败: {err or '远程通道未返回退出码（未在远端执行）'}"
+                )
+            if not body:
                 return ToolResult(True, f"无内容（offset {offset} 超出文件末尾或文件为空）")
             return ToolResult(True, body)
 
@@ -402,10 +417,16 @@ class FileGrepTool(BaseTool):
         if is_remote(context):
             cmd = file_grep_cmd(path, pattern, max_lines)
             ok, output = await run_headless(context, cmd, self.meta.timeout)
-            lines = drop_sentinel_lines(output)
+            # 与 file_read 同一条管道陷阱：退出码属于 head。grep 打不开路径时写 stderr
+            # 但整条 0 退出，原先"只在没有输出时才看 ok"的写法会回一句成功态的
+            # 「未匹配到内容」—— 路径不存在与真的没匹配是两种结论，只能靠 [stderr] 段分。
+            body, err, rc = remote_parts(output)
+            if rc is None or err or not ok:
+                return ToolResult(
+                    False, body, f"grep 查找失败: {err or '远程通道未返回退出码（未在远端执行）'}"
+                )
+            lines = body.splitlines()
             if not lines:
-                if not ok and output.strip():
-                    return ToolResult(False, output, "grep 查找失败")
                 return ToolResult(True, f"未匹配到内容：{pattern}")
             return ToolResult(True, truncate_output("\n".join(lines)))
 
