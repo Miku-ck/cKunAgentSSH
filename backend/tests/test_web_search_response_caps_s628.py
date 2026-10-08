@@ -152,3 +152,37 @@ def test_html_legs_honor_the_response_cap(monkeypatch, method):
     result = _run(getattr(web_tools.WebSearchTool(), method)("q", 5))
     assert result.success is False, method
     assert "上限" in (result.error or ""), (method, result.error)
+
+
+# ── 输出侧的字符预算（S6-28 的另一半：封顶读 ≠ 上下文可控）─────────────────
+
+def test_format_results_caps_every_field():
+    """此前只有 snippet 截了 300，title/url 是多长给多长。"""
+    out = web_tools._format_results([{
+        "title": "T" * 5000, "url": "u" * 5000, "snippet": "s" * 5000,
+    }])
+    assert "T" * web_tools._MAX_SEARCH_FIELD_CHARS in out
+    assert "T" * (web_tools._MAX_SEARCH_FIELD_CHARS + 1) not in out
+    assert "u" * (web_tools._MAX_SEARCH_FIELD_CHARS + 1) not in out
+    assert len(out) <= web_tools._MAX_SEARCH_OUTPUT_CHARS
+
+
+def test_format_results_caps_the_whole_block():
+    """字段都截过 300，条数仍能把总量推到上下文装不下的量级。"""
+    raw = [{"title": f"t{i}", "url": "https://e", "snippet": "x" * 300}
+           for i in range(200)]
+    assert len(web_tools._format_results(raw)) <= web_tools._MAX_SEARCH_OUTPUT_CHARS
+
+
+def test_tavily_output_goes_through_the_same_limits(monkeypatch):
+    """三条腿共用一个格式化出口 —— 否则「只给 HTML 两级加了上限」会重演。"""
+    import netconfig
+
+    payload = json.dumps({
+        "results": [{"title": "T" * 9000, "url": "https://e", "content": "c"}],
+    }).encode()
+    client = _FakeClient(_StreamResp(chunks=[payload]))
+    monkeypatch.setattr(netconfig, "new_client", lambda **kw: client)
+    result = _run(web_tools.WebSearchTool()._search_tavily("q", 5, "k"))
+    assert result.success is True
+    assert len(result.output) <= web_tools._MAX_SEARCH_OUTPUT_CHARS

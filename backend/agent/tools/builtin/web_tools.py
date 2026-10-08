@@ -31,6 +31,12 @@ _MAX_FETCH_CHARS = 100_000
 # fetch 加了，搜索腿没道理漏着。
 _MAX_SEARCH_BYTES = 2 * 1024 * 1024
 
+# S6-28 的另一半：封顶读只保证「不会把几 MB 拉进内存」，不保证「进上下文的字数量
+# 可控」。单条结果的 title/url/answer 长度同样由对端决定（300 字只截了 snippet），
+# 所以逐字段截 + 整段再给一个总上限，喂给模型的搜索文本才有可预测的预算。
+_MAX_SEARCH_FIELD_CHARS = 300
+_MAX_SEARCH_OUTPUT_CHARS = 12_000
+
 
 class ResponseTooLarge(RuntimeError):
     """响应体超过 _MAX_SEARCH_BYTES —— 与各腿既有的 `except Exception` 文案兼容。"""
@@ -216,17 +222,21 @@ class WebSearchTool(BaseTool):
             # 格式化输出
             parts = []
             if data.get("answer"):
-                parts.append(f"摘要: {data['answer']}\n")
+                parts.append(
+                    f"摘要: {str(data['answer'])[:_MAX_SEARCH_OUTPUT_CHARS]}\n")
 
             # S6-28：`max_results` 此前只当请求参数发出去，返回列表本身没在本地
             # 截过 —— 服务端（或中间层）多给就全量进上下文，上限完全看对方心情。
-            results = (data.get("results") or [])[:max_results]
-            for i, result in enumerate(results, 1):
-                parts.append(
-                    f"{i}. {result.get('title', '无标题')}\n"
-                    f"   URL: {result.get('url', '')}\n"
-                    f"   {result.get('content', '')[:300]}"
-                )
+            results = [{
+                "title": r.get("title"),
+                "url": r.get("url"),
+                "snippet": r.get("content"),
+            } for r in (data.get("results") or [])[:max_results]]
+            # 排版与 360 / DDG 两条腿本就是同一个形状，故共用格式化函数：
+            # 字段截断规则改一处三条腿同时生效，不会再出现「只给两级加了上限」。
+            body = _format_results(results)
+            if body:
+                parts.append(body)
 
             # 搜索结果：常规优先级
             return ToolResult(True, "\n\n".join(parts) if parts else "无搜索结果", priority="normal")
@@ -372,13 +382,14 @@ class WebSearchTool(BaseTool):
 
 
 def _format_results(results: list[dict]) -> str:
-    """把 {title,url,snippet} 列表排成喂给模型的编号文本（360 / DDG 共用）"""
-    return "\n\n".join(
-        f"{i}. {r.get('title') or '无标题'}\n"
-        f"   URL: {r.get('url', '')}\n"
-        f"   {(r.get('snippet') or '')[:300]}"
+    """把 {title,url,snippet} 列表排成喂给模型的编号文本（三条腿共用）"""
+    text = "\n\n".join(
+        f"{i}. {(r.get('title') or '无标题')[:_MAX_SEARCH_FIELD_CHARS]}\n"
+        f"   URL: {(r.get('url') or '')[:_MAX_SEARCH_FIELD_CHARS]}\n"
+        f"   {(r.get('snippet') or '')[:_MAX_SEARCH_FIELD_CHARS]}"
         for i, r in enumerate(results, 1)
     )
+    return text[:_MAX_SEARCH_OUTPUT_CHARS]
 
 
 def _strip_html(html: str) -> str:
