@@ -145,6 +145,20 @@ async def run_schedule_now(schedule_id: str):
         raise HTTPException(status_code=404, detail="任务不存在")
     engine = get_schedule_engine()
     engine.ensure_started()
+    # S7-07：桥断开时回 ok:true 是谎报 —— trigger 只 create_task，真正的失败要等
+    # 那次无头 run 走到建会话那一步，用户看到的是「已触发立即执行」的 toast，
+    # 真实结局要么 30s 轮询后落到卡片状态，要么主动去翻历史。需要远程会话的任务
+    # 在触发前先探一次活（探活预算 1s），失败就地给原因码，不启动注定失败的 run。
+    if (sched.get("target_host") or "").strip():
+        from agent.electron_bridge import ElectronBridge
+
+        bridge_err = await ElectronBridge().probe()
+        if bridge_err is not None:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Electron 桥当前不可达（{bridge_err.value}），本次未触发；"
+                       "请确认主进程在运行后重试",
+            )
     started = await engine.trigger(sched, manual=True)
     if not started:
         # 上一次还没跑完：trigger 会静默丢弃本次触发，此时回 ok:true 等于

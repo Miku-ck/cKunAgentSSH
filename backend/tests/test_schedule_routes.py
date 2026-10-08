@@ -180,3 +180,61 @@ def test_unknown_ids_return_404(client):
     assert client.delete("/api/schedules/nope").status_code == 404
     assert client.post("/api/schedules/nope/run").status_code == 404
     assert client.get("/api/schedules/nope/runs").status_code == 404
+
+
+class _ProbeBridge:
+    """记录调用次数的假桥：probe 返回 None=可达，返回错误码=不可达。"""
+
+    calls = 0
+
+    def __init__(self, result=None):
+        self._result = result
+
+    async def probe(self):
+        type(self).calls += 1
+        return self._result
+
+
+def test_run_now_preflights_bridge_when_host_needed(client, monkeypatch):
+    """S7-07：桥不可达时不能再回 ok:true —— trigger 只 create_task，谎报的失败
+    要等那次无头 run 走到建会话才露头（30s 轮询之后），用户先看到的是一条
+    「已触发立即执行」的 toast。"""
+    import agent.electron_bridge as eb
+
+    monkeypatch.setattr(eb, "ElectronBridge", lambda: _ProbeBridge(eb.BridgeErrorCode.WS_LOST))
+    _ProbeBridge.calls = 0
+    row = _create(client, target_host="conn-1")
+
+    resp = client.post(f"/api/schedules/{row['id']}/run")
+
+    assert resp.status_code == 503, resp.text
+    assert "桥" in resp.json()["detail"]
+    assert _ProbeBridge.calls == 1
+    assert client.engine.triggered == [], "探活失败就不该启动注定失败的 run"
+
+
+def test_run_now_proceeds_when_bridge_is_up(client, monkeypatch):
+    import agent.electron_bridge as eb
+
+    monkeypatch.setattr(eb, "ElectronBridge", lambda: _ProbeBridge(None))
+    _ProbeBridge.calls = 0
+    row = _create(client, target_host="conn-1")
+
+    resp = client.post(f"/api/schedules/{row['id']}/run")
+
+    assert resp.status_code == 200, resp.text
+    assert client.engine.triggered == [row["id"]]
+
+
+def test_run_now_without_target_host_does_not_touch_bridge(client, monkeypatch):
+    """没目标主机的任务不需要会话，不该为它探活（也不该被探活失败挡死）。"""
+    import agent.electron_bridge as eb
+
+    monkeypatch.setattr(eb, "ElectronBridge", lambda: _ProbeBridge(eb.BridgeErrorCode.WS_LOST))
+    _ProbeBridge.calls = 0
+    row = _create(client)
+
+    resp = client.post(f"/api/schedules/{row['id']}/run")
+
+    assert resp.status_code == 200, resp.text
+    assert _ProbeBridge.calls == 0

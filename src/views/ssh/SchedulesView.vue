@@ -210,6 +210,7 @@ import {
 import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
 import { formatBackendTs, parseBackendTs } from '@/utils/format'
+import { pickNotices } from '@/utils/schedule-notify'
 import { useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useAgentStore } from '@/stores/agent'
@@ -383,30 +384,17 @@ async function load(silent = false) {
 }
 
 /**
- * 轮询到 last_status 转态时补一条桌面通知（G8）。后台调度器触发的执行没有前端
- * 动作可挂靠，列表轮询是唯一能看到它进展的地方。
- *   · 基线 = 上一次列表；首次加载（旧列表为空）只建基线不通知，
- *     否则每次打开页面都会把存量 completed 历史重播一遍。
- *   · 只对"有结果"的状态发：pending/running 是过程态，停用中的任务不算转态。
- *   · 是否真弹由主进程判定（总开关 + 窗口是否聚焦 + 系统支持），这里只管发。
+ * 轮询到新一次执行有结果时补桌面通知（G8）。判据是纯函数，见
+ * `src/utils/schedule-notify.ts`（S7-08：按 last_run_id 去重，不是按状态字符串）；
+ * 是否真弹由主进程判定（总开关 + 窗口是否聚焦 + 系统支持），这里只管发。
  */
-const NOTICE_BODIES: Record<string, string> = {
-  completed: '执行完毕',
-  failed: '执行失败，可在历史里查看',
-  waiting_permission: '有需要审批的命令',
-}
-
 function notifyTransitions(prev: ScheduleRecord[], next: ScheduleRecord[]) {
   const api = window.electronAPI
-  if (!api?.notifyDesktop || prev.length === 0) return
-  for (const s of next) {
-    const before = prev.find((p) => p.id === s.id)
-    if (!before || !s.enabled) continue
-    const body = NOTICE_BODIES[s.last_status]
-    if (!body || s.last_status === before.last_status) continue
+  if (!api?.notifyDesktop) return
+  for (const notice of pickNotices(prev, next)) {
     // 桌面通知是 best-effort：ipcRenderer.invoke 会因主进程 assertTrustedSender/
     // normalizeIpcError 抛错而 reject，不吞则成未处理拒绝（同 ptyResize/ptyDestroy 类）。
-    void api.notifyDesktop(`定时任务 · ${s.name}`, body).catch(() => {})
+    void api.notifyDesktop(notice.title, notice.body).catch(() => {})
   }
 }
 
