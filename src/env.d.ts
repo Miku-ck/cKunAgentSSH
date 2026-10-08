@@ -217,6 +217,8 @@ interface ElectronAPI {
   fsExists: (filePath: string) => Promise<boolean>
   fsStat: (filePath: string) => Promise<{ isDirectory: boolean; isFile: boolean; size: number; modified: number }>
   fsResolveProgram: (name: string) => Promise<string | null>
+  /** OS 原生拖拽的 File → 本地真实路径（Electron 32 起 File.path 已移除，S5-07） */
+  getPathForFile: (file: File) => string
   fsZipLocal: (sources: string[], localZipPath: string) => Promise<void>
   fsUnzipLocal: (localZipPath: string, localDestDir: string) => Promise<void>
   ptyCreate: (opts?: { shell?: string; args?: string[]; cwd?: string; cols?: number; rows?: number }) => Promise<{ id: string; shell: string }>

@@ -1969,7 +1969,20 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
     }
   }
 
-  /** 将字符串内容写回远程文件 */
+  /**
+   * 将字符串内容写回远程文件。
+   *
+   * S5-10 修复：先写 `<path>.part` 再 rename 覆盖，不再原地 O_TRUNC。
+   * `sftp.writeFile(path)` 打开远端文件时就已清空原内容，而网络抖动、通道关闭、
+   * 主进程被杀都发生在「旧内容已空、新内容只写了一半」的那一刻 —— 编辑器里一次
+   * Ctrl+S 就能把远程文件砸成半截文件。「临时文件 + 收尾 rename」正是上/下载侧
+   * 一直在用的做法，这里补上同一形状。字节上限与读取侧（sftpReadFile 的 10MB）
+   * 对齐：超过 10MB 的内容本来也打不开来编辑。
+   *
+   * 残留风险（已权衡）：Windows SFTP 服务端在目标已存在时 rename 会失败，只能
+   * 先 unlink 再 rename，两者之间存在一个极小的空窗。POSIX 服务端走原子覆盖，
+   * 不经过这条分支。
+   */
   async sftpWriteFile(
     sshSessionId: string,
     remotePath: string,
@@ -1977,12 +1990,31 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
   ): Promise<void> {
     const sftp = this.requireSftp(sshSessionId)
     const buf = Buffer.from(content, 'utf-8')
-    await new Promise<void>((resolve, reject) => {
-      sftp.writeFile(remotePath, buf, (err) => {
-        if (err) reject(new Error('写入远程文件失败，请检查是否有写入权限'))
+    if (buf.length > 10 * 1024 * 1024) {
+      throw new Error('内容过大（超过 10MB），无法写入远程文件')
+    }
+    const partPath = remotePath + '.part'
+    const writePart = () => new Promise<void>((resolve, reject) => {
+      sftp.writeFile(partPath, buf, (err) => {
+        if (err) reject(err)
         else resolve()
       })
     })
+    try {
+      await writePart()
+      try {
+        await sftpRename(sftp, partPath, remotePath)
+      } catch {
+        // 目标已存在导致 rename 被拒（Windows 服务端形态）：清掉目标再试一次
+        await sftpUnlink(sftp, remotePath)
+        await sftpRename(sftp, partPath, remotePath)
+      }
+    } catch (err: any) {
+      // 失败不留半截 .part 迷惑下一次保存（编辑器的下次保存是全量内容，
+      // 与上传侧「保留 .part 供续传」的取舍不同）
+      await sftpUnlink(sftp, partPath).catch(() => {})
+      throw new Error(err?.message ? `写入远程文件失败：${err.message}` : '写入远程文件失败，请检查是否有写入权限')
+    }
   }
 
   /** 取消进行中的传输 */

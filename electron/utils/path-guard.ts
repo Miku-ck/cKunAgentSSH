@@ -84,12 +84,24 @@ function normPath(p: string): string {
   return process.platform === 'win32' ? p.toLowerCase() : p
 }
 
-/** 判断 resolved 是否位于 base 之下（含相等），边界按路径分隔符 */
+/** 判断 resolved 是否位于 base 之下（含相等），边界按路径分隔符。调用方须先 resolve 成绝对路径 */
 function isInside(resolved: string, base: string): boolean {
   const sep = process.platform === 'win32' ? '\\' : '/'
   const nResolved = normPath(resolved)
   const nBase = normPath(base)
   return nResolved === nBase || nResolved.startsWith(nBase + sep)
+}
+
+/**
+ * 同侧复制（fs:copy）的重叠判定：目标是否落在源自身之内（含完全相同）。
+ *
+ * 递归复制的 collect() 会在自己刚 mkdir 出来的子目录里再收集一遍源树，
+ * 于是 A → A/… 的自我嵌套会一路递归到系统路径长度上限，中途无法取消，
+ * 结束后留下一串删不掉的长路径残骸（S5-08）。两侧都先 resolve 成绝对路径，
+ * 免得 `a/../b` 这类等价写法绕过判定。
+ */
+export function isCopyTargetSelfNested(srcPath: string, destPath: string): boolean {
+  return isInside(pathResolve(destPath), pathResolve(srcPath))
 }
 
 /**

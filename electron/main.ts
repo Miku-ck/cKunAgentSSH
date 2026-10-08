@@ -26,7 +26,7 @@ import {
   setDesktopPrefs,
   shouldHideOnClose,
 } from './desktop-prefs'
-import { assertSafePath, allowDialogKeyPath } from './utils/path-guard'
+import { assertSafePath, allowDialogKeyPath, isCopyTargetSelfNested } from './utils/path-guard'
 
 let mainWindow: BrowserWindow | null = null
 let backendManager: BackendManager | null = null
@@ -744,12 +744,25 @@ function setupFSIPC(): void {
   })
 
   // 递归复制文件/目录（同侧复制粘贴），通过 sftp:progress 上报进度
+  // 审查修复（P2）+ S5-09：复制总量上限。原实现无上限，递归收集百万文件的整棵树
+  // 全部驻留内存（files 数组 + 逐文件 copyFile），可 OOM 崩主进程；而 P2 补的守卫
+  // 又放在 collect **之后** —— 恰恰是它要防的那次遍历已经把整棵树收进内存了。
+  // 现在边收边判，超限立刻中断。10 万文件或 10GB 已远超手工复制场景。
+  const MAX_COPY_FILES = 100_000
+  const MAX_COPY_BYTES = 10 * 1024 * 1024 * 1024
   handleTrusted('fs:copy', async (_event, srcPath: string, destPath: string, transferId: string) => {
     await assertSafePath(srcPath)
     await assertSafePath(destPath)
 
+    // S5-08：目标落在源之内（含同一目录「粘贴进自己」）= 无限递归，一条鼠标路径
+    // 就能造出删不掉的长路径残骸，必须在收集之前拒掉
+    if (isCopyTargetSelfNested(srcPath, destPath)) {
+      throw new Error('目标文件夹位于被复制项内部（或与源同一路径），已取消')
+    }
+
     // 收集所有文件并统计总大小
     const files: Array<{ src: string; dest: string; size: number }> = []
+    let collectedBytes = 0
     async function collect(src: string, dest: string, isRoot: boolean): Promise<void> {
       // E-5 修复：递归条目用 lstat（不跟随符号链接）— 原实现 stat 跟随符号
       // 链接，源树中的符号链接（如指向 ~/.ssh）会被 copyFile 跟随复制出
@@ -768,6 +781,13 @@ function setupFSIPC(): void {
       }
       if (st.isFile()) {
         files.push({ src, dest, size: st.size })
+        collectedBytes += st.size
+        if (files.length > MAX_COPY_FILES) {
+          throw new Error(`文件数过多（已超过 ${MAX_COPY_FILES}），请分批复制或用远端命令处理`)
+        }
+        if (collectedBytes > MAX_COPY_BYTES) {
+          throw new Error(`总大小超过 10GB 上限，请分批复制或用远端命令处理`)
+        }
       } else if (st.isDirectory()) {
         await mkdir(dest, { recursive: true })
         const entries = await readdir(src)
@@ -778,18 +798,7 @@ function setupFSIPC(): void {
     }
     await collect(srcPath, destPath, true)
 
-    // 审查修复（P2）：复制总量上限 — 原实现无上限，递归收集百万文件的整棵树
-    // 全部驻留内存（files 数组 + 逐文件 copyFile），可 OOM 崩主进程。
-    // 10 万文件或 10GB 已远超手工复制场景，超出提示用 sftp/远端命令处理。
-    const MAX_COPY_FILES = 100_000
-    const MAX_COPY_BYTES = 10 * 1024 * 1024 * 1024
-    if (files.length > MAX_COPY_FILES) {
-      throw new Error(`文件数过多（${files.length}，上限 ${MAX_COPY_FILES}），请分批复制或用远端命令处理`)
-    }
-    const total = files.reduce((sum, f) => sum + f.size, 0)
-    if (total > MAX_COPY_BYTES) {
-      throw new Error(`总大小超过 10GB 上限，请分批复制或用远端命令处理`)
-    }
+    const total = collectedBytes
     let transferred = 0
     let lastReport = 0
     // 修复 5：窗口销毁后 webContents.send 会抛异常，加守卫 + try/catch

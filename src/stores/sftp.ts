@@ -6,6 +6,8 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { useToastStore } from './toast'
 import { toFriendlyMessage } from '@/api/client'
+import { extractSSHError } from '@/ssh-error-types'
+import { isUnsafeRemoteName } from '@/utils/remote-name'
 
 type TransferKind = 'upload' | 'download' | 'copy-local' | 'copy-remote'
 
@@ -556,22 +558,39 @@ async function remoteRefresh(): Promise<void> {
   /**
    * 递归展开远程目录，返回所有文件的远程绝对路径 + 相对根目录的相对路径
    * 用于目录下载场景
+   *
+   * S5-12 修复：会话 id 由调用方钉死后传入，不再读实时的 `sshSessionId.value` ——
+   * 展开大目录要 await 多次 IPC，期间切换活动终端会让后续 readdir 打到另一台主机
+   * 的同名路径上（uploadFiles 早就钉 sid，这里漏了）。同一修法下，「会话已经没
+   * 了」不再被宽 catch 记成「目录不可读」而静默少收一半文件：那是两种要告诉用户
+   * 完全不同的事，前者必须中断整批。
    */
-  async function expandRemoteDir(remoteDir: string): Promise<Array<{ remotePath: string; relPath: string }>> {
+  async function expandRemoteDir(remoteDir: string, sid: string): Promise<Array<{ remotePath: string; relPath: string }>> {
     const result: Array<{ remotePath: string; relPath: string }> = []
     const stack: Array<{ dir: string; rel: string }> = [{ dir: remoteDir, rel: '' }]
     // P3 修复：同 expandLocalDir — 收集不可读而跳过的子目录并统一告警
     const skipped: string[] = []
+    const unsafe: string[] = []
     while (stack.length > 0) {
       const { dir, rel } = stack.pop()!
       let entries: SftpEntry[]
       try {
-        entries = await getApi().sftpList(sshSessionId.value, dir)
-      } catch {
+        entries = await getApi().sftpList(sid, dir)
+      } catch (err) {
+        const code = extractSSHError(err)?.code
+        if (code === 'SFTP_SESSION_REQUIRED' || code === 'SESSION_NOT_FOUND') {
+          throw new Error('SFTP 会话已断开，目录展开中断')
+        }
         skipped.push(dir)
         continue
       }
       for (const e of entries) {
+        // S5-13：条目名由服务器书写，畸形名（含分隔符 / `..`）会经 relPath 拼进
+        // 本地写路径并把落点挪出用户选的下载目录，这里逐项跳过而不是落地
+        if (isUnsafeRemoteName(e.name)) {
+          unsafe.push(`${dir}/${e.name}`)
+          continue
+        }
         const childRel = rel ? `${rel}/${e.name}` : e.name
         if (e.isDirectory) {
           stack.push({ dir: e.path, rel: childRel })
@@ -582,6 +601,9 @@ async function remoteRefresh(): Promise<void> {
     }
     if (skipped.length > 0) {
       toast.warning(`部分远程子目录因不可读被跳过（${skipped.length} 个）：${skipped.slice(0, 3).join('、')}${skipped.length > 3 ? ' …' : ''}`)
+    }
+    if (unsafe.length > 0) {
+      toast.warning(`部分远程条目因文件名不安全被跳过（${unsafe.length} 个）：${unsafe.slice(0, 3).join('、')}${unsafe.length > 3 ? ' …' : ''}`)
     }
     return result
   }
@@ -670,6 +692,11 @@ async function remoteRefresh(): Promise<void> {
 
     for (const rp of remotePaths) {
       const name = basenameRemote(rp)
+      // S5-13：末段名也是服务器书写的内容，与 expandRemoteDir 里同一判据
+      if (isUnsafeRemoteName(name)) {
+        toast.error(`远程文件名不安全，已跳过：${rp}`)
+        continue
+      }
       const localBase = await getApi().fsPathJoin(localBaseDir, name)
 
       // 判断是文件还是目录：优先查 remoteEntries 缓存；
@@ -690,8 +717,15 @@ async function remoteRefresh(): Promise<void> {
       }
 
       if (isDir) {
-        // 目录：递归展开
-        const files = await expandRemoteDir(rp)
+        // 目录：递归展开（sid 钉死传入，S5-12）
+        let files: Array<{ remotePath: string; relPath: string }>
+        try {
+          files = await expandRemoteDir(rp, sid)
+        } catch (err) {
+          // 会话断开这类致命原因：整批不派发，不给用户一份悄悄少了一半的清单
+          toast.error((err as Error)?.message || '目录展开失败')
+          return
+        }
         for (const f of files) {
           const localPath = await getApi().fsPathJoin(localBase, f.relPath)
           // 确保本地父目录存在（fsMkdir 是 recursive）

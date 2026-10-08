@@ -499,10 +499,18 @@ function onDrop(e: DragEvent): void {
   if (props.side !== 'remote' || !store.online) return
   const files = e.dataTransfer?.files
   if (!files || files.length === 0) return
-  // Electron 扩展：File 对象包含 path 属性指向本地真实路径
+  // S5-07 修复：Electron 32 起 File.path 被移除，原实现读到的恒为 undefined
+  // —— 拖任意文件进远程面板都只弹「无法获取拖入文件的本地路径」，这个功能从
+  // 升级那天起就是死的。改用 preload 暴露的 webUtils.getPathForFile（必须在
+  // drop 事件同步上下文里取，返回值空串表示拿不到路径）
+  const getter = window.electronAPI?.getPathForFile
+  if (!getter) {
+    toast.warning('当前版本不支持读取拖入文件的本地路径')
+    return
+  }
   const localPaths: string[] = []
   for (let i = 0; i < files.length; i++) {
-    const fp = (files[i] as any).path as string | undefined
+    const fp = getter(files[i])
     if (fp) localPaths.push(fp)
   }
   if (localPaths.length === 0) {

@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { SshReconnectStatus } from './ssh-manager'
 import type { TunnelStatus } from './tunnel-manager'
 import type { GatewayHostKeyEvent, GatewayStatus } from './gateway-manager'
@@ -49,6 +49,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   fsExists: (filePath: string) => ipcRenderer.invoke('fs:exists', filePath),
   fsStat: (filePath: string) => ipcRenderer.invoke('fs:stat', filePath),
   fsResolveProgram: (name: string) => ipcRenderer.invoke('fs:resolveProgram', name),
+  /**
+   * OS 原生拖拽取本地真实路径（S5-07）。
+   * Electron 32 起 `File.path` 被移除，contextIsolation 下渲染层拿不到它，
+   * 于是「拖文件到远程侧上传」这条路一直是死的（拖任何文件都只弹
+   * 「无法获取拖入文件的本地路径」）。webUtils.getPathForFile 是唯一受支持的
+   * 替代，且只能在 preload 里调用——渲染层直接把 File 传过来即可。
+   */
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
   // 本地 ZIP 打包/解压
   fsZipLocal: (sources: string[], localZipPath: string) => ipcRenderer.invoke('fs:zipLocal', sources, localZipPath),
   fsUnzipLocal: (localZipPath: string, localDestDir: string) => ipcRenderer.invoke('fs:unzipLocal', localZipPath, localDestDir),
