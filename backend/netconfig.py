@@ -91,6 +91,36 @@ def redact_proxy(url: Optional[str]) -> str:
     return f"{(sp.scheme or '').lower()}://{host}"
 
 
+# S10-03：URL 带凭据的不止代理 —— base_url 同样允许
+# `https://user:token@ai-gateway.example/v1`（企业 OpenAI 兼容网关的常见文档形态，
+# httpx/openai 都照此认证）。redact_proxy 只能处理「整串就是一个 URL」，而实际外泄
+# 面是**自由文本**：httpx 的异常 str() 会把请求 URL 原样嵌进消息，上游 4xx 响应体
+# 也常回显请求地址，两者都被 routes/settings.py 直接写进日志和返回给渲染层的
+# detail。所以这里做的是文本级替换，只吃 userinfo 段、其余原样保留。
+_URL_USERINFO_RE = re.compile(
+    r"(?P<scheme>[a-zA-Z][a-zA-Z0-9+.\-]*://)"
+    r"(?P<user>[^\s/@:]*)(?::(?P<pass>[^\s/@]*))?@"
+)
+
+
+def redact_urls_in_text(text: Optional[str]) -> str:
+    """把任意文本中内嵌 URL 的 userinfo 打成 `scheme://***@host`。
+
+    只用于「日志 / 回传渲染端」出口，不改写真正要发出的请求。无凭据的文本原样返回，
+    因此调用点可以无条件套上它，不必先判断这条 URL 是否带口令。
+    """
+    if not text:
+        return ""
+
+    def _sub(m: re.Match) -> str:
+        if not m.group("user") and not m.group("pass"):
+            # `https://@host` 这种空 userinfo 不必打码
+            return m.group(0)
+        return f"{m.group('scheme')}***@"
+
+    return _URL_USERINFO_RE.sub(_sub, text)
+
+
 def _clamp_int(raw, default: int, low: int, high: int) -> int:
     try:
         value = int(raw)

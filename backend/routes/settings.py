@@ -197,7 +197,8 @@ async def test_model_connection(config_id: str):
 
     log.info(
         "[TEST] config_id=%s base_url=%s model_name=%s (fallback_id=%s) api_key_len=%d",
-        config_id, models_url, model_name, used_fallback_id,
+        config_id, netconfig.redact_urls_in_text(models_url), model_name,
+        used_fallback_id,
         len(api_key) if api_key != "EMPTY" else 0,
     )
 
@@ -234,7 +235,7 @@ async def test_model_connection(config_id: str):
         # 超时上限来自 G5 设置（用户没设 = 原来的 10s）；报实际值，否则用户按
         # 「10s 都连不上」去查网络，而真实上限其实是他自己调成的 5s。
         limit = netconfig.timeout_seconds(10.0)
-        log.warning("[TEST] timeout (%ss) url=%s", limit, models_url)
+        log.warning("[TEST] timeout (%ss) url=%s", limit, netconfig.redact_urls_in_text(models_url))
         return {
             "status": "error",
             "detail": f"连接超时 ({int(limit)}s)",
@@ -242,18 +243,19 @@ async def test_model_connection(config_id: str):
             "timeout_seconds": int(limit),
         }
     except httpx.HTTPStatusError as e:
-        log.warning(
-            "[TEST] upstream HTTP %d: %s",
-            e.response.status_code, e.response.text[:200],
-        )
+        # S10-03：detail 会经渲染层 toast 出来，而上游错误体和 httpx 异常消息都常把
+        # 请求 URL 原样回显 —— base_url 带凭据（企业网关形态）时口令就这样离开后端。
+        body = netconfig.redact_urls_in_text(e.response.text[:200])
+        log.warning("[TEST] upstream HTTP %d: %s", e.response.status_code, body)
         return {
             "status": "error",
-            "detail": f"HTTP {e.response.status_code}: {e.response.text[:200]}",
+            "detail": f"HTTP {e.response.status_code}: {body}",
             "model_name": model_name,
         }
     except Exception as e:
-        log.warning("[TEST] unexpected: %s", e)
-        return {"status": "error", "detail": str(e) or type(e).__name__, "model_name": model_name}
+        detail = netconfig.redact_urls_in_text(str(e)) or type(e).__name__
+        log.warning("[TEST] unexpected: %s", detail)
+        return {"status": "error", "detail": detail, "model_name": model_name}
 
 
 # ── 记忆设置 ──
