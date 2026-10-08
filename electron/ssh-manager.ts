@@ -2202,6 +2202,33 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
   // ════════════════════════════════════════════════
 
   /**
+   * S5-19：打包结果收尾的唯一去处（zip 的 zip 支与 python 回退支共用）。
+   *
+   * 只有「确实失败」才删半成品；「结果未知」时**保留产物**并用一条说清不确定性的
+   * 文案报出去 —— 归档可能早已写完，删掉它等于把用户要的东西弄没了，而谎报成功
+   * 又会让他在下次解压时才发现。
+   */
+  private async finishZipResult(
+    sshSessionId: string,
+    remoteZipPath: string,
+    result: { stdout: string; stderr: string; exitCode: number | null },
+  ): Promise<void> {
+    const outcome = classifyExit(result.exitCode)
+    const detail = (result.stderr || result.stdout || '').trim()
+    if (outcome === 'ok') return
+    if (outcome === 'failed') {
+      // Bug 3 修复：失败时清理半成品 zip 文件，避免残留在远程服务器
+      try { await this.sftpDelete(sshSessionId, remoteZipPath) } catch { /* ignore */ }
+      throw new Error(`远程打包失败: ${detail || '未知错误'}`)
+    }
+    const kept = await this.sftpExists(sshSessionId, remoteZipPath).catch(() => false)
+    if (kept) {
+      throw new Error(`打包结果未知（通道未回 exit-status）：归档已保留 ${remoteZipPath}，请解压确认`)
+    }
+    throw new Error(`远程打包失败: 未生成归档（通道未回 exit-status）${detail ? `: ${detail}` : ''}`)
+  }
+
+  /**
    * 在远程服务器打包文件/目录为 zip
    * @param sshSessionId SSH 会话 ID
    * @param sources 要打包的远程路径列表（相对 cwd 或绝对路径）
@@ -2240,11 +2267,7 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       const quotedSources = sources.map(s => shellQuoteRemote(s)).join(' ')
       const cmd = `cd ${shellQuoteRemote(cwd)} && zip -r -y ${shellQuoteRemote(remoteZipPath)} ${quotedSources}`
       const result = await this.execCommandWithExitCode(sshSessionId, cmd, 300)
-      if (result.exitCode !== 0) {
-        // Bug 3 修复：失败时清理半成品 zip 文件，避免残留在远程服务器
-        try { await this.sftpDelete(sshSessionId, remoteZipPath) } catch { /* ignore */ }
-        throw new Error(`远程打包失败: ${(result.stderr || result.stdout || '').trim() || '未知错误'}`)
-      }
+      await this.finishZipResult(sshSessionId, remoteZipPath, result)
       return result
     }
 
@@ -2282,11 +2305,7 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       // 清理临时脚本（无论成功与否）
       try { await this.sftpDelete(sshSessionId, tmpScript) } catch { /* ignore */ }
     }
-    if (result.exitCode !== 0) {
-      // Bug 3 修复：失败时清理半成品 zip 文件，避免残留在远程服务器
-      try { await this.sftpDelete(sshSessionId, remoteZipPath) } catch { /* ignore */ }
-      throw new Error(`远程打包失败: ${(result.stderr || result.stdout || '').trim() || '未知错误'}`)
-    }
+    await this.finishZipResult(sshSessionId, remoteZipPath, result)
     return result
   }
 
@@ -2311,6 +2330,11 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       // -o 覆盖不询问，-q 安静（避免大量输出），-d 指定目录
       const cmd = `unzip -o -q ${shellQuoteRemote(remoteZipPath)} -d ${shellQuoteRemote(remoteDestDir)}`
       const result = await this.execCommandWithExitCode(sshSessionId, cmd, 300)
+      // S5-19：exit-status 缺失只说明「不知道」—— 解压可能已经完成，报「失败」会让人
+      // 重复解压并误以为目录是坏的。既不谎报成功也不假装失败。
+      if (classifyExit(result.exitCode) === 'unknown') {
+        throw new Error('解压结果未知（通道未回 exit-status），请核对目标目录')
+      }
       if (result.exitCode !== 0) {
         throw new Error(`远程解压失败: ${(result.stderr || result.stdout || '').trim() || '未知错误'}`)
       }
@@ -2343,6 +2367,10 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       // 清理临时脚本（无论成功与否）
       try { await this.sftpDelete(sshSessionId, tmpScript) } catch { /* ignore */ }
     }
+    if (classifyExit(result.exitCode) === 'unknown') {
+      // S5-19：同 unzip 支 —— 未知不等于失败
+      throw new Error('解压结果未知（通道未回 exit-status），请核对目标目录')
+    }
     if (result.exitCode !== 0) {
       throw new Error(`远程解压失败: ${(result.stderr || result.stdout || '').trim() || '未知错误'}`)
     }
@@ -2353,6 +2381,22 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
 /** 远程路径单引号转义（用于 SSH exec 命令拼接） */
 function shellQuoteRemote(s: string): string {
   return `'${s.replace(/'/g, "'\\''")}'`
+}
+
+/**
+ * S5-19：exec 通道的三态结果 —— `exitCode === null` 是**不知道**，不是失败。
+ *
+ * ssh2 只在收到 exit-status 时填这个数（`close` 事件不带它），所以精简 sshd 不回
+ * exit-status、或命令被 OOM kill 之后，读数都是 null。原实现按 `!== 0` 判失败并
+ * **unlink 归档**：打包其实已经写完的产物被删掉了，用户点「压缩」得到的是一句
+ * 「远程打包失败」加上一份不存在的文件。
+ */
+export type ExecOutcome = 'ok' | 'failed' | 'unknown'
+
+export function classifyExit(exitCode: number | null): ExecOutcome {
+  if (exitCode === 0) return 'ok'
+  if (exitCode === null) return 'unknown'
+  return 'failed'
 }
 
 /** 将数值 mode(含文件类型位)转为 'drwxr-xr-x' 形式 */
