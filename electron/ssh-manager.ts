@@ -23,7 +23,7 @@ import { encodeTransferErrorName, isTransferRetryable, type TransferErrorCode } 
 import { readFileSync, statSync } from 'fs'
 import { promises as fsPromises } from 'fs'
 import { posix, join } from 'path'
-import { createHash } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
 import { StringDecoder } from 'string_decoder'
 
 /** exec 命令输出累积上限（1MB），超过后截断并在返回结果附提示，防止无界内存增长 */
@@ -402,6 +402,29 @@ export class SSHManager {
   private sftpSessions = new Map<string, SFTPWrapper>()
   private transfers = new Map<string, () => void>()
   private nextId = 1
+  /**
+   * S0-06：会话 id 必须带一个每次启动重新随机的段。
+   *
+   * `nextId` 每次主进程启动都从 1 重来，而 `agent_jobs.session_id` 是**跨重启持久**
+   * 的（远程 nohup 作业按设计在主进程重启后继续跑，`_ensure_restored` 把那串 id 原样
+   * 拉回内存继续用）。旧格式 `ssh-1` 于是在新进程里必然可能已经是**另一个**会话 ——
+   * 桥接那条腿没有任何所有权判定（`ssh_exec` / `ssh_disconnect` 只验「非空字符串」），
+   * 结果是一个陈旧作业能对用户正在用的终端下发命令，或者把它 disconnect 掉
+   * （disconnect 还带 cancelReconnect + teardownSession）。
+   *
+   * 带 bootTag 后旧 id 在新进程里恒不存在：恢复的作业得到「会话不存在」这条诚实答案，
+   * 而不是误命中。id 全仓不解析（`grep "startsWith('ssh"` 零命中），渲染层与后端都当
+   * 不透明字符串存取，故改形状不触碰任何契约。随机而非自增：可猜的 id 让「按 id 下发
+   * 命令」这条面在提示注入下变便宜。
+   */
+  private readonly bootTag = randomBytes(4).toString('hex')
+  /**
+   * S0-06：由桥接（后端 `connect_ssh`）建立的会话 id。`electron_bridge.py:200-205`
+   * 的 docstring 早就写了「关闭由 connect_ssh 建立的 SSH 会话」，但那条限制只存在于
+   * 散文里，dispatch 只验 sessionId 是不是非空字符串 ⇒ 后端可以对**用户正在用的终端
+   * tab** 下发 disconnect（还连带 cancelReconnect + teardownSession）。现在有了判据。
+   */
+  private bridgeSessionIds = new Set<string>()
   private mainWindow: BrowserWindow | null = null
   // s1 修复：known_hosts 存储（host:port → sha256 指纹），TOFU 模型
   private knownHosts = new Map<string, string>()
@@ -611,9 +634,21 @@ export class SSHManager {
     return connectConfig
   }
 
+  /**
+   * S0-06：会话 id 的唯一发放点，形状 `kind-<bootTag>-<序号>`。
+   *
+   * 抽成一等方法是因为这条不变量必须能被测出来：**两个进程（= 两个实例）发出的 id
+   * 集合不得有任何交集**。原形状是 `ssh-${nextId++}`，而 `nextId` 每次启动归零，
+   * 于是上一进程持久化进 `agent_jobs.session_id` 的 `ssh-1` 与这一进程的 `ssh-1`
+   * 天生同串 —— 恢复的远程作业因此能对用户的终端下发命令（见 bootTag 的注释）。
+   */
+  newSessionId(kind: 'ssh' | 'sftp'): string {
+    return `${kind}-${this.bootTag}-${this.nextId++}`
+  }
+
   /** 建立 SSH 连接并创建 Shell 通道 */
   async connect(config: SSHConnectionConfig, cols: number, rows: number): Promise<{ id: string; name: string }> {
-    const id = `ssh-${this.nextId++}`
+    const id = this.newSessionId('ssh')
     // 审查R2修复：doConnect 内部多返回 client 字段（供重连拆除用），此处剥离 —
     // Client 对象不可结构化克隆，泄漏给渲染进程 IPC 会报错
     const { client: _client, ...pub } = await this.doConnect(id, config, true, cols, rows)
@@ -622,9 +657,22 @@ export class SSHManager {
 
   /** 建立 SSH 连接,不创建 Shell 通道(用于 SFTP) */
   async connectSftp(config: SSHConnectionConfig): Promise<{ id: string; name: string }> {
-    const id = `sftp-${this.nextId++}`
+    const id = this.newSessionId('sftp')
     const { client: _client, ...pub } = await this.doConnect(id, config, false)
     return pub
+  }
+
+  /**
+   * S0-06：登记「这条会话是桥接建的」。由调用方（electron-bridge 的 ssh_connect）
+   * 在建连成功后打这个标记 —— connectSftp 本身被渲染层 SFTP 面板与桥接共用，
+   * 从方法名分不出来源，故所有权记在真正那条发起腿上。
+   */
+  markBridgeSession(id: string): void {
+    this.bridgeSessionIds.add(id)
+  }
+
+  isBridgeSession(id: string): boolean {
+    return this.bridgeSessionIds.has(id)
   }
 
   /**
@@ -1285,6 +1333,8 @@ export class SSHManager {
     try { session.stream?.close() } catch { /* ignore */ }
     try { session.client.end() } catch { /* ignore */ }
     this.sessions.delete(id)
+    // S0-06：会话没了就把「桥接建的」这条归属一起摘掉 —— 判据只对活着的会话有意义
+    this.bridgeSessionIds.delete(id)
   }
 
   /** 测试连接:建立成功后立即断开,不写入 sessions */

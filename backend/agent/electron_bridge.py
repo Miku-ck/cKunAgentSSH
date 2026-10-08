@@ -212,7 +212,12 @@ class ElectronBridge:
         return connections if isinstance(connections, list) else []
 
     async def disconnect_ssh(self, session_id: str, timeout: float = 15.0) -> dict:
-        """关闭由 connect_ssh 建立的 SSH 会话，释放连接资源。"""
+        """关闭由 connect_ssh 建立的 SSH 会话，释放连接资源。
+
+        S0-06：这句限制现在有机制承载了 —— 主进程按「connect_ssh 建连时登记的归属
+        集合」判，拿着别的会话 id 过来回 403 而不会拆掉用户的终端。会话 id 另带一次
+        启动随机的段，因此 `agent_jobs` 里跨重启恢复的旧 id 也只会得到「会话不存在」。
+        """
         if not self.is_available():
             self._raise_unavailable()
 

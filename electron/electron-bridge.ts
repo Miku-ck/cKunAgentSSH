@@ -129,6 +129,8 @@ export class ElectronBridge {
             return { status: 404, body: { success: false, error: `连接配置不存在: ${connectionId}` } }
           }
           const { id, name } = await this.sshManager.connectSftp(conn)
+          // S0-06：登记这条会话归桥接所有 —— ssh_disconnect 只认这个标记
+          this.sshManager.markBridgeSession(id)
           return { status: 200, body: { success: true, sessionId: id, name } }
         }
 
@@ -161,6 +163,15 @@ export class ElectronBridge {
           const sessionId = data.sessionId
           if (typeof sessionId !== 'string' || !sessionId) {
             return { status: 400, body: { success: false, error: 'Missing sessionId' } }
+          }
+          // S0-06：这条 docstring 承诺（「关闭由 connect_ssh 建立的 SSH 会话」）原先
+          // 没有机制承载 —— 只验非空字符串，后端拿着 id 就能关掉用户的终端 tab。
+          // 现在的判据是桥接建连时登记的归属集合。
+          if (!this.sshManager.isBridgeSession(sessionId)) {
+            return {
+              status: 403,
+              body: { success: false, error: '桥接只能关闭由 connect_ssh 建立的会话' },
+            }
           }
           this.sshManager.disconnect(sessionId)
           return { status: 200, body: { success: true } }

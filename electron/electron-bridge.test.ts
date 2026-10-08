@@ -76,3 +76,47 @@ describe('dispatch 的失败保真度（S0-09）', () => {
     expect(r.status).toBe(404)
   })
 })
+
+/**
+ * S0-06：`electron_bridge.py` 的 docstring 一直写着「关闭由 connect_ssh 建立的 SSH
+ * 会话」，而 dispatch 只验 sessionId 是非空字符串 —— 承诺没有机制承载。
+ */
+describe('ssh_disconnect 的所有权（S0-06）', () => {
+  function harness() {
+    const owned = new Set<string>()
+    const disconnect = vi.fn()
+    const connectSftp = vi.fn(async () => ({ id: 'sftp-ffff0000-7', name: 'web-01' }))
+    const sshStore = {
+      list: async () => [{ id: 'c1', name: 'web-01', host: 'h', port: 22, username: 'u', authType: 'key' }],
+    }
+    const bridge = new ElectronBridge({
+      sshManager: {
+        execCommandWithExitCode: vi.fn(),
+        connectSftp,
+        disconnect,
+        markBridgeSession: (id: string) => owned.add(id),
+        isBridgeSession: (id: string) => owned.has(id),
+      } as never,
+      sshStore: sshStore as never,
+    })
+    return { bridge, disconnect, connectSftp, owned }
+  }
+
+  it('不是桥接建的会话：403 且一行拆除代码都不执行', async () => {
+    const { bridge, disconnect } = harness()
+    const r = await bridge.dispatch('ssh_disconnect', { sessionId: 'ssh-ffff0000-1' })
+    expect(r.status).toBe(403)
+    expect(disconnect).not.toHaveBeenCalled()
+  })
+
+  it('connect_ssh 建的会话被登记，因此随后的 disconnect 合法', async () => {
+    const { bridge, disconnect, owned } = harness()
+    const conn = await bridge.dispatch('ssh_connect', { connectionId: 'c1' })
+    expect(conn.status).toBe(200)
+    expect(owned.has('sftp-ffff0000-7')).toBe(true)
+
+    const r = await bridge.dispatch('ssh_disconnect', { sessionId: 'sftp-ffff0000-7' })
+    expect(r.status).toBe(200)
+    expect(disconnect).toHaveBeenCalledWith('sftp-ffff0000-7')
+  })
+})
