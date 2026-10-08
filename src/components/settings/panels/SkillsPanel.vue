@@ -71,6 +71,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { api, toFriendlyMessage } from '@/api/client'
 import { useToastStore } from '@/stores/toast'
 import { useSkillStore } from '@/stores/skills'
+import { useConfirm } from '@/composables/useConfirm'
 import ToggleSwitch from '@/components/settings/fields/ToggleSwitch.vue'
 
 interface SkillRow {
@@ -87,6 +88,7 @@ interface SkillRow {
 const MODE = 'ssh'
 const toast = useToastStore()
 const skillStore = useSkillStore()
+const { confirm } = useConfirm()
 const open = reactive({ list: true })
 const rows = ref<SkillRow[]>([])
 const loading = ref(false)
@@ -111,21 +113,36 @@ function parseTriggerWords(raw: unknown): string[] {
   }
 }
 
+/**
+ * 写操作序号：一次 GET 的响应可能晚于期间的 PATCH/DELETE 才到（网络抖动、后端慢），
+ * 那份快照记的是改动前的启用状态，照抄回行列表就是把用户刚拨的开关按回去，且不报错。
+ * 序号变了就丢弃这份过期快照。
+ */
+let mutationSeq = 0
+/** 仍在途的开关（技能 id）：响应没回来前，刷新按本地乐观值显示这一行 */
+const pendingToggles = ref(new Set<string>())
+
 async function load() {
   loading.value = true
   error.value = ''
+  const seq = mutationSeq
   try {
     const data = await api.listSkills(MODE)
-    rows.value = data.map((s) => ({
-      id: s.id,
-      name: s.name,
-      description: s.description ?? '',
-      source: s.source,
-      system_prompt: s.system_prompt ?? '',
-      triggerWords: parseTriggerWords(s.trigger_words),
-      on: s.mode_enabled === undefined ? s.enabled === 1 : s.mode_enabled,
-      expanded: false,
-    }))
+    if (seq !== mutationSeq) return
+    rows.value = data.map((s) => {
+      const prev = rows.value.find((r) => r.id === s.id)
+      const serverOn = s.mode_enabled === undefined ? s.enabled === 1 : s.mode_enabled
+      return {
+        id: s.id,
+        name: s.name,
+        description: s.description ?? '',
+        source: s.source,
+        system_prompt: s.system_prompt ?? '',
+        triggerWords: parseTriggerWords(s.trigger_words),
+        on: prev && pendingToggles.value.has(s.id) ? prev.on : serverOn,
+        expanded: false,
+      }
+    })
   } catch (e) {
     error.value = toFriendlyMessage(e, '技能列表加载失败')
   } finally {
@@ -136,6 +153,7 @@ async function load() {
 async function onToggle(r: SkillRow, next: boolean) {
   const prev = r.on
   r.on = next
+  pendingToggles.value.add(r.id)
   try {
     await api.updateSkillEnabled(r.id, next, MODE)
     // 对话侧 "/" 菜单读的是 skillStore 缓存，不回灌就一直是改动前的列表
@@ -143,13 +161,24 @@ async function onToggle(r: SkillRow, next: boolean) {
   } catch (e) {
     r.on = prev
     toast.error(`技能「${r.name}」${next ? '启用' : '停用'}失败：${toFriendlyMessage(e)}`)
+  } finally {
+    pendingToggles.value.delete(r.id)
+    mutationSeq++
   }
 }
 
 async function onDelete(r: SkillRow) {
+  const ok = await confirm({
+    title: '删除技能',
+    message: `删除技能「${r.name}」？库里只有这一份，删除不可恢复。`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await api.deleteSkill(r.id)
     rows.value = rows.value.filter((x) => x.id !== r.id)
+    mutationSeq++
     void skillStore.loadRemoteSkills()
     toast.success(`已删除技能「${r.name}」`)
   } catch (e) {
@@ -161,6 +190,7 @@ async function onSyncPackaged() {
   syncing.value = true
   try {
     const result = await api.syncPackagedSkills()
+    mutationSeq++
     await load()
     void skillStore.loadRemoteSkills()
     toast.success(`包内技能同步完成（${result.upserted} 条）`)

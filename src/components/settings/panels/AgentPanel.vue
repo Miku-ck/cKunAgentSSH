@@ -17,6 +17,7 @@
           <p class="hint">
             每次 Agent 运行的成本上限（美元）与 token 上限。超出后 run 以
             <code>budget_exceeded</code> 终止，已完成的工具效果保留。0 = 使用后端默认预算。
+            这两项落在对话与终端的运行上；后台定时任务另有内置上限，不受这里约束。
           </p>
           <div class="budget-row">
             <label class="budget-field">
@@ -85,6 +86,8 @@
             </label>
             <p class="hint muted runtime-desc">
               后端 <code>max_iterations</code> 允许 1-500。动态预算开启时优先使用演化习得值，越界才退回此上限。
+              这一项与上面的预算都只约束对话/终端里的运行：后台定时任务是 <code>schedule_engine</code>
+              固定的 8 步加内置上限，不读设置页这几个值。
             </p>
           </div>
           <div class="runtime-toggle-row">
@@ -118,7 +121,7 @@
           </p>
           <p v-if="!policyLoaded" class="hint err">
             未能读取服务端的授权策略：下面三项显示的是本地默认值，不代表库里是什么。
-            <button class="link-btn" @click="loadPermissionPolicy">重试</button>
+            <button class="link-btn" @click="loadPermissionPolicy({ notify: true })">重试</button>
           </p>
 
           <div class="ops-toggle-row">
@@ -132,7 +135,7 @@
             <select
               v-model.number="ttlDraft"
               class="setting-select"
-              :disabled="ttlSaving"
+              :disabled="policySaving"
               @change="onTtlChange"
             >
               <option v-for="o in ttlOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
@@ -215,7 +218,10 @@
         </button>
         <div v-show="open.tools" class="grp-body">
           <p v-if="toolsLoading" class="hint">加载中…</p>
-          <p v-else-if="toolsError" class="hint err">{{ toolsError }}</p>
+          <p v-else-if="toolsError" class="hint err">
+            {{ toolsError }}
+            <button class="link-btn" @click="loadTools({ notify: true })">重试</button>
+          </p>
           <template v-else>
             <p class="hint">关闭后该工具不再暴露给模型执行。危险档（dangerous）命令级授权仍需逐条审批。</p>
             <div v-for="grp in toolGroups" :key="grp.risk" class="risk-group">
@@ -245,12 +251,12 @@
         <button class="grp-head" @click="open.perm = !open.perm">
           <span class="grp-caret" :class="{ open: open.perm }">▸</span>
           <span class="grp-title">审批授权</span>
-          <span class="grp-badge">{{ permTools.length }} 个工具已永久授权 · {{ policyLoaded ? ttlText(allowlistTtl) : '授权时长未读取' }}</span>
+          <span class="grp-badge">{{ permSummary }}</span>
         </button>
         <div v-show="open.perm" class="grp-body">
           <p class="hint">
             审批弹窗点"始终允许"后写入此白名单（持久化，进程重启仍生效{{ allowlistTtl ? `，但按「运维策略 → 授权保留时长」${ttlText(allowlistTtl)}后自动失效` : '' }}）。撤销立即生效。
-            <button class="link-btn" @click="loadPermissions">刷新</button>
+            <button class="link-btn" @click="loadPermissions({ notify: true })">刷新</button>
           </p>
           <div class="allow-row">
             <input v-model.trim="allowTool" class="text-input" placeholder="工具名（如 shell_exec）" list="perm-tool-names" />
@@ -263,7 +269,11 @@
             </button>
           </div>
           <p class="hint muted">命令工具建议填绑定命令：授权键是命令哈希绑定（改命令即失效）；hardline 底线命令不受白名单放行。</p>
-          <p v-if="!permTools.length" class="hint muted">暂无永久授权</p>
+          <p v-if="permError" class="hint err">
+            {{ permError }}：下面这份清单不代表库里有什么。
+            <button class="link-btn" @click="loadPermissions({ notify: true })">重试</button>
+          </p>
+          <p v-else-if="!permTools.length" class="hint muted">暂无永久授权</p>
           <div v-for="p in permTools" :key="p.tool" class="perm-row">
             <div class="tool-info">
               <span class="tool-name">{{ p.tool }}</span>
@@ -282,13 +292,17 @@
           <span class="grp-caret" :class="{ open: open.webtools }">▸</span>
           <span class="grp-title">Web 搜索密钥</span>
           <span class="grp-badge" :class="{ live: webTools.tavily_api_key_set }">
-            {{ webTools.tavily_api_key_set ? `已配置（${webTools.tavily_api_key_source === 'env' ? '环境变量' : '本地存储'}）` : '未配置' }}
+            {{ tavilyBadge }}
           </span>
         </button>
         <div v-show="open.webtools" class="grp-body">
           <p class="hint">
             web_search 工具优先走 Tavily（结构化摘要 + 答案），未配置密钥时自动降级
             360/DuckDuckGo 免费搜索。环境变量 <code>TAVILY_API_KEY</code> 优先于此处的本地存储。
+          </p>
+          <p v-if="webToolsError" class="hint err">
+            {{ webToolsError }}：上面那枚「未配置」不代表服务端的状态。
+            <button class="link-btn" @click="loadWebTools({ notify: true })">重试</button>
           </p>
           <div class="allow-row">
             <input
@@ -310,16 +324,20 @@
           <span class="grp-caret" :class="{ open: open.strat }">▸</span>
           <span class="grp-title">策略与自演化</span>
           <span class="grp-badge" :class="{ live: tickStatus?.running }">
-            {{ tickStatus ? (tickStatus.running ? '意识循环运行中' : '意识循环已停') : '加载中…' }}
+            {{ tickStatus ? (tickStatus.running ? '意识循环运行中' : '意识循环已停')
+              : (tickError ? '循环状态未读取' : '加载中…') }}
           </span>
         </button>
         <div v-show="open.strat" class="grp-body">
           <p class="hint">
             Agent 每次运行后自动反思并演化配置策略，<b>下一轮运行即刻读回生效</b>（当前立场：自动应用 + 全程可见）。
             这里可逐条停用或淘汰不再合理的演化，无需重启。
-            <button class="link-btn" @click="loadStrategies">刷新</button>
+            <button class="link-btn" @click="loadStrategies({ notify: true })">刷新</button>
           </p>
-          <p v-if="stratError" class="hint err">{{ stratError }}</p>
+          <p v-if="stratError" class="hint err">
+            {{ stratError }}
+            <button class="link-btn" @click="loadStrategies({ notify: true })">重试</button>
+          </p>
           <p v-else-if="!strategies.length" class="hint muted">尚无演化策略（运行若干任务后自动产生）</p>
           <div v-for="s in strategies" :key="s.id" class="strat-row" :class="{ off: !s.enabled }">
             <div class="tool-info">
@@ -414,7 +432,6 @@ const ttlOptions: { value: number; label: string }[] = [
 // allowlistTtl = 与后端一致的基线；ttlDraft = 选择框当前值（保存失败时回滚到基线）
 const allowlistTtl = ref(0)
 const ttlDraft = ref(0)
-const ttlSaving = ref(false)
 /**
  * 后端策略是否真读到过。没读到过的时候 allowlistTtl/autoApprove/approvalFallback
  * 三个基线只是本地硬编码的默认值 —— 把它们印在头栏上就等于宣称"库里就是这个"。
@@ -427,6 +444,12 @@ const approvalFallback = ref(600)
 const fallbackDraft = ref(600)
 const autoApprove = ref(true)
 const autoApproveBaseline = ref(true)
+/**
+ * 三项写操作（TTL / 自动审批 / 兜底等待）共用这一个「在途」标记，不是偷懒：
+ * 每次 PUT 的回包是整行权威值，面板拿它收敛。两条并发 PUT 的响应乱序到达时，
+ * 后到的那份可能是"前一次改动提交之前"读到的整行 —— 于是库里已是新值、面板显示旧值。
+ * 一次只放行一条写，这条路径就不存在了（原实现 TTL 用独立的 ttlSaving，正好留出这个缝）。
+ */
 const policySaving = ref(false)
 const fallbackOptions: { value: number; label: string }[] = [
   { value: 0, label: '永久等待（不标记超时）' },
@@ -449,7 +472,11 @@ function syncPolicyFields(data: { auto_approve_enabled: boolean; approval_fallba
   fallbackDraft.value = approvalFallback.value
 }
 
-async function loadPermissionPolicy() {
+/**
+ * @param notify 用户显式点「重试」时才弹 toast。挂载时那五路并发都失败会各弹一条，
+ *   后端没就绪时一次开设置页能叠五条 toast —— 挂载路径改走一条汇总（见 onMounted）。
+ */
+async function loadPermissionPolicy(opts: { notify?: boolean } = {}): Promise<boolean> {
   try {
     const data = await api.getPermissionPolicy()
     const hours = Number.isFinite(data.allowlist_ttl_hours) ? data.allowlist_ttl_hours : 0
@@ -457,20 +484,23 @@ async function loadPermissionPolicy() {
     ttlDraft.value = hours
     syncPolicyFields(data)
     policyLoaded.value = true
+    return true
   } catch (e) {
     policyLoaded.value = false
-    toast.error(`授权策略加载失败：${toFriendlyMessage(e)}`)
+    if (opts.notify) toast.error(`授权策略加载失败：${toFriendlyMessage(e)}`)
+    return false
   }
 }
 
 async function onTtlChange() {
   const next = ttlDraft.value
   if (!Number.isFinite(next) || next === allowlistTtl.value) return
-  ttlSaving.value = true
+  policySaving.value = true
   try {
     const data = await api.updatePermissionPolicy({ allowlist_ttl_hours: next })
     allowlistTtl.value = Number.isFinite(data.allowlist_ttl_hours) ? data.allowlist_ttl_hours : next
     ttlDraft.value = allowlistTtl.value
+    syncPolicyFields(data)
     toast.success(allowlistTtl.value
       ? `永久授权将在 ${ttlText(allowlistTtl.value)}后失效，已到期条目即刻撤销`
       : '永久授权已恢复为不过期')
@@ -480,7 +510,7 @@ async function onTtlChange() {
     ttlDraft.value = allowlistTtl.value
     toast.error(`授权时长保存失败：${toFriendlyMessage(e)}`)
   } finally {
-    ttlSaving.value = false
+    policySaving.value = false
   }
 }
 
@@ -592,14 +622,17 @@ const toolGroups = computed(() =>
 )
 const enabledToolCount = computed(() => tools.value.filter((t) => t.enabled).length)
 
-async function loadTools() {
+async function loadTools(opts: { notify?: boolean } = {}): Promise<boolean> {
   toolsLoading.value = true
   toolsError.value = ''
   try {
     const data = await agentAdminApi.getTools()
     tools.value = data.tools
+    return true
   } catch (e) {
     toolsError.value = toFriendlyMessage(e, '工具列表加载失败')
+    if (opts.notify) toast.error(toolsError.value)
+    return false
   } finally {
     toolsLoading.value = false
   }
@@ -619,6 +652,11 @@ async function onToggleTool(t: AgentToolInfo, next: boolean) {
 // ── 审批白名单 ──
 const permKeys = ref<string[]>([])
 const revoking = ref('')
+// 与 policyLoaded 同一件事的另一半：读失败时 permKeys 是空数组，而空数组既可能是
+// "库里确实没有永久授权"，也可能是"根本没读到"。先前只有后者会发生的 toast（一条会
+// 消失的提示），头栏徽标却照旧写着「0 个工具已永久授权」。
+const permLoaded = ref(false)
+const permError = ref('')
 const permTools = computed(() => {
   const map = new Map<string, string[]>()
   for (const key of permKeys.value) {
@@ -629,14 +667,25 @@ const permTools = computed(() => {
   return [...map.entries()].map(([tool, keys]) => ({ tool, keys }))
 })
 
-async function loadPermissions() {
+async function loadPermissions(opts: { notify?: boolean } = {}): Promise<boolean> {
+  permError.value = ''
   try {
     const data = await agentAdminApi.listPermissions()
     permKeys.value = data.tools
+    permLoaded.value = true
+    return true
   } catch (e) {
-    toast.error(`授权列表加载失败：${toFriendlyMessage(e)}`)
+    permError.value = toFriendlyMessage(e, '授权列表加载失败')
+    permLoaded.value = false
+    if (opts.notify) toast.error(`授权列表加载失败：${permError.value}`)
+    return false
   }
 }
+
+const permSummary = computed(() => [
+  permLoaded.value ? `${permTools.value.length} 个工具已永久授权` : '授权列表未读取',
+  policyLoaded.value ? ttlText(allowlistTtl.value) : '授权时长未读取',
+].join(' · '))
 
 async function onRevoke(tool: string, keyCount: number) {
   const ok = await confirm({
@@ -701,13 +750,31 @@ const webTools = reactive({
 })
 const tavilyInput = ref('')
 const tavilySaving = ref(false)
+// 徽标先前只有「已配置 / 未配置」两档：GET 失败时 tavily_api_key_set 停在本地默认
+// false，于是面板把"没读到"报成"确认没配"，用户会去重设一个本来就存在的密钥。
+const webToolsError = ref('')
+const tavilyBadge = computed(() => {
+  if (webToolsError.value) return '密钥状态未读取'
+  return webTools.tavily_api_key_set
+    ? `已配置（${webTools.tavily_api_key_source === 'env' ? '环境变量' : '本地存储'}）`
+    : '未配置'
+})
 
-async function loadWebTools() {
+function applyWebTools(data: Partial<typeof webTools>) {
+  Object.assign(webTools, data)
+  // 写回执同样是权威状态：保存成功后还挂着"未读取"的徽标就成了假话
+  webToolsError.value = ''
+}
+
+async function loadWebTools(opts: { notify?: boolean } = {}): Promise<boolean> {
+  webToolsError.value = ''
   try {
-    const data = await api.getWebToolsSettings()
-    Object.assign(webTools, data)
+    applyWebTools(await api.getWebToolsSettings())
+    return true
   } catch (e) {
-    toast.error(`Web 工具设置加载失败：${toFriendlyMessage(e)}`)
+    webToolsError.value = toFriendlyMessage(e, 'Web 工具设置加载失败')
+    if (opts.notify) toast.error(`Web 工具设置加载失败：${webToolsError.value}`)
+    return false
   }
 }
 
@@ -715,8 +782,7 @@ async function onSaveTavily() {
   if (!tavilyInput.value) return
   tavilySaving.value = true
   try {
-    const data = await api.updateWebToolsSettings({ tavily_api_key: tavilyInput.value })
-    Object.assign(webTools, data)
+    applyWebTools(await api.updateWebToolsSettings({ tavily_api_key: tavilyInput.value }))
     tavilyInput.value = ''
     toast.success('Tavily 密钥已保存')
   } catch (e) {
@@ -729,8 +795,7 @@ async function onSaveTavily() {
 async function onClearTavily() {
   tavilySaving.value = true
   try {
-    const data = await api.updateWebToolsSettings({ tavily_api_key: '' })
-    Object.assign(webTools, data)
+    applyWebTools(await api.updateWebToolsSettings({ tavily_api_key: '' }))
     toast.success('已清除本地存储的 Tavily 密钥')
   } catch (e) {
     toast.error(`清除失败：${toFriendlyMessage(e)}`)
@@ -743,19 +808,30 @@ async function onClearTavily() {
 const strategies = ref<AgentStrategyItem[]>([])
 const stratError = ref('')
 const tickStatus = ref<TickStatusResponse | null>(null)
+// tick 状态读失败与"还没读到"是两回事：先前 null 只被当作加载中，徽标就永远停在
+// 「加载中…」，而那次 GET 已经失败过了 —— 徽标是唯一报这个状态的地方，没有别的线索。
+const tickError = ref(false)
 
-async function loadStrategies() {
+/** @returns 策略列表与循环状态是否都读到了（notify 的口径见 loadPermissionPolicy） */
+async function loadStrategies(opts: { notify?: boolean } = {}): Promise<boolean> {
   stratError.value = ''
-  try {
-    const [sData, tick] = await Promise.all([
-      agentAdminApi.listStrategies({ mode: 'ssh' }),
-      agentAdminApi.getTickStatus().catch(() => null),
-    ])
-    strategies.value = sData.strategies
-    tickStatus.value = tick
-  } catch (e) {
-    stratError.value = toFriendlyMessage(e, '策略列表加载失败')
+  tickError.value = false
+  // 分开收：策略列表读到了，不该因为循环状态那次 GET 抖动而一起看不见
+  const [sRes, tRes] = await Promise.allSettled([
+    agentAdminApi.listStrategies({ mode: 'ssh' }),
+    agentAdminApi.getTickStatus(),
+  ])
+  if (sRes.status === 'fulfilled') strategies.value = sRes.value.strategies
+  else {
+    stratError.value = toFriendlyMessage(sRes.reason, '策略列表加载失败')
+    if (opts.notify) toast.error(stratError.value)
   }
+  if (tRes.status === 'fulfilled') tickStatus.value = tRes.value
+  else {
+    tickStatus.value = null
+    tickError.value = true
+  }
+  return sRes.status === 'fulfilled' && tRes.status === 'fulfilled'
 }
 
 async function onToggleStrategy(s: AgentStrategyItem, next: boolean) {
@@ -795,12 +871,29 @@ function fmtDate(iso: string): string {
   }
 }
 
-onMounted(() => {
-  void loadTools()
-  void loadPermissions()
-  void loadPermissionPolicy()
-  void loadStrategies()
-  void loadWebTools()
+// 挂载时的五路读取各有自己的内联提示位，但其中三组（审批授权 / Web 密钥 / 策略演化）
+// 默认折叠 —— 折叠时内联提示看不见，所以失败仍要走 toast。原实现每路各弹一条，
+// 后端没就绪时打开这页会一次叠出五条同样的"加载失败"。
+const MOUNT_LOADS: { label: string; run: () => Promise<boolean> }[] = [
+  { label: '工具开关', run: loadTools },
+  { label: '授权列表', run: loadPermissions },
+  { label: '授权策略', run: loadPermissionPolicy },
+  { label: '演化策略', run: loadStrategies },
+  { label: 'Web 搜索密钥', run: loadWebTools },
+]
+
+onMounted(async () => {
+  const results = await Promise.all(
+    MOUNT_LOADS.map(async (l) => ({ label: l.label, ok: await l.run() })),
+  )
+  const failed = results.filter((r) => !r.ok).map((r) => r.label)
+  if (failed.length) {
+    toast.error(
+      `未能读取服务端的 ${failed.length} 项设置：${failed.join('、')}。`
+      + '这些分组现在显示的是本地默认值，展开对应分组可重试',
+      6000,
+    )
+  }
 })
 </script>
 

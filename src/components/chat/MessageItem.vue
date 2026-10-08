@@ -115,8 +115,9 @@ const hasTraceAction = computed(
   max-width: 92%;
   padding: 10px 14px;
   border-radius: 10px;
-  /* 与 MarkdownStream 同一变量：设置里的「消息字号」必须真的落到气泡上 */
-  font-size: var(--chat-font-size, 14px);
+  /* 与 MarkdownStream 同一变量：设置里的「消息字号」必须真的落到气泡上。
+     回落值取 store 的默认档 13（不是 14）—— 注入前那一帧两套字号会打架。 */
+  font-size: var(--chat-font-size, 13px);
   line-height: 1.6;
 }
 

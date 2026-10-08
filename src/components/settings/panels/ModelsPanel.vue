@@ -223,6 +223,15 @@
                 </div>
               </div>
 
+              <!-- 本地部署把整块 Key 藏了，但这一行库里可能还存着此前远程部署时的密钥，
+                   而面板此时画的是一张"本地不需要 Key"的干净脸。后端把 api_key 的空串
+                   定义为「保留原值」（database.update_model_config），所以这一页没有任何
+                   办法把它清掉 —— 不说破就等于替库里那份凭证打掩护。 -->
+              <p v-if="isLocalProvider && isEditing && hasExistingKey" class="form-hint">
+                本地部署不会用到 API Key，但这条模型仍存着此前设置的密钥；改回远程提供商时它会重新生效。
+                后端把留空当作「保留原值」，这一页清不掉它 —— 要彻底去掉只能删除这条模型重建。
+              </p>
+
               <!-- 模型名称 -->
               <div class="form-group">
                 <label class="form-label">模型名称 <span class="required">*</span></label>
@@ -322,6 +331,14 @@
                           {{ formatTokenCount(opt) }}
                         </button>
                       </div>
+                      <p class="form-hint">
+                        这是想要的上限 —— 运行时与「按上下文窗口算出的上限」「窗口减去本轮输入与思考预算的余量」取小，
+                        选了这么大不代表每一轮都能跑满。
+                      </p>
+                      <p v-if="outputDegraded" class="form-hint warn">
+                        已到上下文窗口的 80%：后端把这档当误配，实际会用
+                        min(131072, max(8192, 窗口/4))，不是你选的这一个。
+                      </p>
                     </div>
 
                     <!-- 思考预算：intention 分级、driver 每轮扩缩、schedule_engine 都按它算，
@@ -471,6 +488,15 @@ const withCurrent = (opts: number[], current: number) =>
   opts.includes(current) ? opts : [...opts, current].sort((a, b) => a - b)
 const inputTokenOptions = computed(() => withCurrent(INPUT_TOKEN_OPTIONS, form.max_tokens))
 const outputTokenOptions = computed(() => withCurrent(OUTPUT_TOKEN_OPTIONS, form.max_output_tokens))
+
+/**
+ * safe_tokens.safe_max_tokens 的误配降级条件：max_output_tokens ≥ 上下文窗口的 80%
+ * 时后端不采纳这个值，改用 min(131072, max(8192, 窗口/4))。芯片选到窗口的一半以上
+ * 就会撞上它 —— 存进去的是选中的那一档、跑起来的却是另一档，而 UI 上没有任何痕迹。
+ */
+const outputDegraded = computed(() =>
+  form.max_tokens > 0 && form.max_output_tokens > 0
+  && form.max_output_tokens >= form.max_tokens * 0.8)
 
 function selectProvider(p: ProviderDef) {
   form.provider = p.id
@@ -994,6 +1020,7 @@ return String(n)
 .form-group { display: flex; flex-direction: column; gap: 4px; }
 .form-label { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
 .form-hint { margin: 0; font-size: 11px; color: var(--text-tertiary); }
+.form-hint.warn { color: var(--status-warn-text); }
 .required { color: var(--danger-text); }
 .form-input {
   width: 100%;

@@ -37,8 +37,9 @@ const showThinkingDots = computed(() => {
   width: 100%;
   line-height: 1.7;
   /* 这条若不跟着变量走，它就成了气泡里最后说话的那一层：
-     .message-bubble 改了字号，正文仍是裸 14px */
-  font-size: var(--chat-font-size, 14px);
+     .message-bubble 改了字号，正文仍是裸值。回落与 MessageItem/MarkdownStream 同一档
+     （store 默认 13），三处各写一个数就是注入前那一帧的字号打架。 */
+  font-size: var(--chat-font-size, 13px);
   color: var(--text-primary);
   text-align: left;
 }
