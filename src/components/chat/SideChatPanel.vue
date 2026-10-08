@@ -1149,9 +1149,12 @@ async function scrollToBottom() {
   }
 }
 
+// S9-19：面板是 `v-if` 条件挂载的（SshView），挂载时消息已经在那儿了 —— 不带
+// immediate 的 length watch 只在**变化**时触发，于是重新打开面板永远停在顶部，
+// 正好是文档记过的「子组件晚于其数据事件创建」那一类的新实例。
 watch(() => props.messages.length, () => {
   scrollToBottom()
-})
+}, { immediate: true })
 
 // Agent 运行中 content/reasoning 通过 agentStore 实时更新，需单独监听以触发滚动
 watch(() => agentStore.content, () => {

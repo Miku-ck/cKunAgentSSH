@@ -256,10 +256,14 @@ async function request<T>(path: string, options?: RequestInit, _retrying = false
 export interface Conversation {
   id: string
   title: string
-  status: 'in_progress' | 'completed' | 'failed'
+  // S9-12：原声明含 'failed'，但 conversations.status 全仓只有两个写入点
+  // （routes/agent.py 标 in_progress / completed，database.py 的 stale 复位也只写
+  // completed），没有生产者。留着会让下一个读者写出永不成立的分支。
+  status: 'in_progress' | 'completed'
   mode?: string
   created_at: string
   updated_at: string
+  /** 后端 list_conversations 的相关子查询产物；渲染层当前无读者。 */
   preview?: string
 }
 
