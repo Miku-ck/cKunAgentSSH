@@ -79,3 +79,34 @@ describe('toFriendlyMessage — 采信 transport.message（S0-14）', () => {
     expect(toFriendlyMessage(e)).toBe('会话数已达上限，请关闭闲置连接后重试')
   })
 })
+
+/**
+ * S5-14：调用点把 store 里的错误**字符串**直接交进来（SftpPane 的地址栏提交读
+ * `store.localError`，而那是 `ref('')`）。原实现只有 SSHError / FriendlyError /
+ * Error 三支，string 一律掉到 fallback ⇒ 真因永不可见。
+ */
+describe('toFriendlyMessage — 裸字符串这条腿（S5-14）', () => {
+  const fallback = '路径不存在或无法访问'
+
+  it('安全拦截不再被说成文件系统问题', () => {
+    expect(toFriendlyMessage('拒绝访问敏感路径: C:/Users/x/.ssh', fallback))
+      .toBe('拒绝访问敏感路径: C:/Users/x/.ssh')
+  })
+
+  it('业务串直出，与 Error 那条腿同一结果', () => {
+    const msg = '目标文件夹位于被复制项内部（或与源同一路径），已取消'
+    expect(toFriendlyMessage(msg, fallback)).toBe(toFriendlyMessage(new Error(msg), fallback))
+  })
+
+  it('字符串同样先剥信封、同样被技术串拦下', () => {
+    expect(toFriendlyMessage(env('SSH 会话不存在或已断开'), fallback))
+      .toBe('SSH 会话不存在或已断开')
+    expect(toFriendlyMessage('Traceback (most recent call last): boom', fallback))
+      .toBe('服务暂时不可用，请稍后重试')
+  })
+
+  it('空串与 undefined 仍回 fallback', () => {
+    expect(toFriendlyMessage('', fallback)).toBe(fallback)
+    expect(toFriendlyMessage(undefined, fallback)).toBe(fallback)
+  })
+})

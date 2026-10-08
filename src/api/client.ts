@@ -98,6 +98,20 @@ export function unwrapIpcErrorEnvelope(msg: string): string {
 }
 
 /**
+ * 把「一段消息」映射成用户可读文案。Error 与裸 string 两条腿共用它 ——
+ * 规则抄两份的话，下一次加一条模式只会加在其中一份上。
+ */
+function friendlyFromMessage(raw: string, fallback: string): string {
+  const msg = unwrapIpcErrorEnvelope(raw)
+  if (!msg) return fallback
+  if (/Backend not ready|后端未就绪/i.test(msg)) return '后端服务未就绪，请稍后重试'
+  if (/fetch failed|NetworkError|Failed to fetch|网络连接失败/i.test(msg)) return '网络连接失败，请检查服务是否运行'
+  if (/未登录|登录已过期|Unauthorized|401/i.test(msg)) return '未登录或登录已过期，请重新登录'
+  if (isTechnicalErrorMessage(msg)) return '服务暂时不可用，请稍后重试'
+  return msg
+}
+
+/**
  * 把底层/代码级错误转换为用户可读的友好提示。
  * v2 改进：优先识别 SSHErrorTransport（结构化错误，精准文案），再回退原有模式匹配。
  */
@@ -113,15 +127,12 @@ export function toFriendlyMessage(e: unknown, fallback = '操作失败，请稍�
   }
 
   if (e instanceof FriendlyError) return e.message
-  if (e instanceof Error) {
-    const msg = unwrapIpcErrorEnvelope(e.message)
-    if (!msg) return fallback
-    if (/Backend not ready|后端未就绪/i.test(msg)) return '后端服务未就绪，请稍后重试'
-    if (/fetch failed|NetworkError|Failed to fetch|网络连接失败/i.test(msg)) return '网络连接失败，请检查服务是否运行'
-    if (/未登录|登录已过期|Unauthorized|401/i.test(msg)) return '未登录或登录已过期，请重新登录'
-    if (isTechnicalErrorMessage(msg)) return '服务暂时不可用，请稍后重试'
-    return msg
-  }
+  if (e instanceof Error) return friendlyFromMessage(e.message, fallback)
+  // S5-14：裸字符串是这条缝上完全合法的错误形状 —— store 的 `localError` /
+  // `remoteError` 就是 `ref('')`，而调用点（SftpPane 地址栏提交）把它原样交进来。
+  // 缺这一支时恒落 fallback：用户输 `C:\Users\<u>\.ssh` 得到的不是「拒绝访问敏感
+  // 路径」，而是「路径不存在或无法访问」—— 把一次安全拦截说成文件系统问题。
+  if (typeof e === 'string') return friendlyFromMessage(e, fallback)
   return fallback
 }
 
