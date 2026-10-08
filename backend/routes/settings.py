@@ -521,8 +521,13 @@ async def _http_view() -> dict:
 
 
 def _proxy_source() -> str:
-    """代理来自哪里：库里那行，还是环境变量兜底（运维统一注入的形态）。"""
-    if (db.get_app_setting("http.proxy_url") or "").strip():
+    """代理来自哪里：库里那行，还是环境变量兜底（运维统一注入的形态）。
+
+    S0-01：判据必须与 netconfig.load_policy_from_db 用的是同一条（行存在即权威，
+    空串是「清除」），不能再自己抄一份「非空才算 db 来源」—— 那样面板会把用户
+    刚清除掉的代理标成「来自环境变量」，而请求其实已经直连了，说与做两头错开。
+    """
+    if db.get_http_policy()["proxy_set"]:
         return "db"
     if (os.environ.get("CKUN_HTTP_PROXY") or "").strip():
         return "env"

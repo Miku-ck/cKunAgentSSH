@@ -148,11 +148,12 @@ def load_policy_from_db() -> dict:
     try:
         import database as db
         stored = db.get_http_policy()
-        # 代理口径本轮未变（旧代码在 try 之后有等价的 if not proxy 兜底）：库里
-        # 非空值才压过 env，空行/缺行时 env 说话。
-        if stored["proxy_url"]:
+        # S0-01：代理与 timeout/retry 现在同一条判据 —— 缺行才让 env 说话，
+        # 有行（含空串 = 面板上点了「清除代理」）就是用户的权威值。此前这里判的是
+        # `if stored["proxy_url"]`，空串为假 ⇒ 「清除」当场生效、重启即失效，
+        # 运维注入的 CKUN_HTTP_PROXY 会静默复活并把用户刚做的动作覆盖掉。
+        if stored["proxy_set"]:
             proxy = stored["proxy_url"]
-        # 缺行才让 env 说话；有行（含显式 0）就是用户的权威值
         if stored["timeout_set"]:
             timeout = stored["timeout_seconds"]
         if stored["retry_set"]:
