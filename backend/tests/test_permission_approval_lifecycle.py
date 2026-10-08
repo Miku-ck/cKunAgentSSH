@@ -256,6 +256,93 @@ def test_driver_releases_pending_on_failure():
     )
 
 
+def test_driver_releases_pending_on_visible_terminal_delivery(monkeypatch):
+    """S2-02 回归：可见终端交付路径也必须移出「等待审批」集。
+
+    该分支 `await self._emit_and_await_visible(...)` 之后直接 `continue`，跳过了
+    pop —— 而 ssh-ai.ts 硬编 visibleTerminal: true，这是默认路径而非边角。滞留
+    签名的两条后果：① guards 的 is_first=False 分支 events 为空、不再发
+    permission_needed（用户无卡可点），注入文案却仍写着「已在界面上向用户请求授权，
+    请重新发起完全相同的命令（授权后会被放行）」，空转到兜底时长；② flow.py 对在册
+    签名直接 no-op ⇒ 该命令永久豁免循环检测。
+    """
+    class _NoopTelemetry:
+        async def emit(self, ev):
+            return None
+
+    class _StubBridle:
+        def build_tool_result_message(self, tc_id, text, priority="normal"):
+            return {"role": "tool", "tool_call_id": tc_id, "content": text}
+
+    class _StubReins:
+        async def check(self, point, ctx):
+            from agent.harness.contracts import ReinDecision
+            return ReinDecision()
+
+    class _DeliverSaddle:
+        async def execute(self, tc, ctx, auto_rollback=True):
+            return ToolResult(
+                success=True, output="", duration_ms=1,
+                pending_delivery={
+                    "tool_id": "td-1", "command": CMD,
+                    "session_id": "pty-1", "requires_confirm": False,
+                },
+            ), None
+
+    class _StubHarness:
+        bridle = _StubBridle()
+        saddle = _DeliverSaddle()
+        reins = _StubReins()
+        cost_tracker = None
+
+    import agent.pending_delivery as pd_mod
+
+    class _Reg:
+        rejected = False
+        success = True
+        output = "done"
+        exit_code = 0
+
+    async def _ok_wait(tool_id):
+        return None
+
+    async def _hang_wait(tool_id):
+        await asyncio.sleep(1)  # 远超 timeout_of → 走 TimeoutError 收尾
+
+    async def _drive(wait_impl, timeout_s):
+        monkeypatch.setattr(pd_mod.PendingDeliveries, "wait", wait_impl)
+        monkeypatch.setattr(
+            pd_mod.PendingDeliveries, "timeout_of", lambda tool_id: timeout_s)
+        monkeypatch.setattr(
+            pd_mod.PendingDeliveries, "get", lambda tool_id: _Reg())
+        monkeypatch.setattr(
+            pd_mod.PendingDeliveries, "remove", lambda tool_id: None)
+
+        ctx = _ctx()
+        _log(ctx)  # _finish_visible 要写 tool_calls_log[-1]
+        sig = tool_call_signature({"tool": "shell_exec", "args": {"command": CMD}})
+        ctx.metadata["permission_pending"] = {sig: time.monotonic()}
+
+        await ctx.transition(State.ACTING, event="need_tool")
+        driver = Driver()
+        llm_out = LLMOutput(tool_calls=[ToolCall(
+            id="tc1", name="shell_exec", args={"command": CMD})])
+        async for _ev in driver._execute_tool_calls(
+                llm_out, ctx, _StubHarness(), _NoopTelemetry(), 0):
+            pass
+        return ctx, sig
+
+    for label, wait_impl, timeout_s in (
+        ("交付成功", _ok_wait, 5),
+        ("交付超时", _hang_wait, 0.01),
+    ):
+        ctx, sig = asyncio.run(_drive(wait_impl, timeout_s))
+        assert sig not in ctx.metadata.get("permission_pending", {}), (
+            f"{label}收尾后签名仍留在「等待审批」集：同命令本 run 内不再出卡"
+            "且永久豁免循环检测"
+        )
+
+
 def test_denied_command_leaves_no_pending_sig():
     """审查R2修复：拒绝判定必须落在 pending[sig] 记账**之前**。
 

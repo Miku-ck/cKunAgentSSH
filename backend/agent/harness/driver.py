@@ -565,14 +565,7 @@ class Driver:
             # 滞留 pending：同命令重试走 is_first=False 分支不再建卡（用户无卡
             # 可点），注入文案却称"已在界面上请求授权"，空转至 600s 兜底；
             # 且 pending 内签名永久豁免循环检测。授权既已消费，成败都应出集。
-            pending = ctx.metadata.get("permission_pending")
-            if pending:
-                try:
-                    from .reins import tool_call_signature
-                    pending.pop(tool_call_signature(
-                        {"tool": tc.name, "args": tc.args}), None)
-                except Exception:
-                    pass
+            self._pop_permission_pending(ctx, tc)
 
             # ── post_tool_call ──
             post_tool_decision = await harness.reins.check(ReinPoint.POST_TOOL_CALL, ctx)
@@ -756,6 +749,26 @@ class Driver:
             # 无论成功/超时/异常/外部取消（CancelledError），都清理注册项防泄漏
             PendingDeliveries.remove(tool_id)
 
+    def _pop_permission_pending(self, ctx: RunContext, tc: ToolCall) -> None:
+        """把本次调用的签名移出「等待审批」集 —— 成败、是否走可见终端都要出集。
+
+        S2-02：可见终端分支的 `continue` 跳过了这一步，后果有两条，都在默认路径上
+        （ssh-ai.ts 硬编 visibleTerminal: true）：① 授权既已在 check_permission
+        放行时消费掉，滞留的旧签名让同命令本 run 内永不再出卡（guards 的
+        is_first=False 分支 events 为空），而注入文案仍写着「已在界面上向用户请求
+        授权，请重新发起完全相同的命令（授权后会被放行）」—— 原卡已 resolved 进
+        只读追溯区，用户无从照做，只能空转到兜底时长；② flow.py 对在册签名直接
+        no-op，等于该命令永久豁免循环检测。
+        """
+        pending = ctx.metadata.get("permission_pending")
+        if not pending:
+            return
+        try:
+            from .reins import tool_call_signature
+            pending.pop(tool_call_signature({"tool": tc.name, "args": tc.args}), None)
+        except Exception:
+            pass
+
     async def _finish_visible(
         self,
         ctx: RunContext,
@@ -769,6 +782,9 @@ class Driver:
     ) -> TraceEvent:
         """可见终端恢复后收尾：更新日志、追加消息历史、pop span、发 tool_call_result。"""
         ctx.tool_calls_log[-1]["success"] = success
+        # S2-02：交付路径与 headless 路径同口径 —— 超时/被拒/注册项丢失/成功
+        # 四种收尾都必须把签名移出「等待审批」集。
+        self._pop_permission_pending(ctx, tc)
         # 审查R2修复：pending_delivery 分支 continue 跳过了 POST_TOOL_CALL 链，
         # 真实交付到可见终端执行过的命令在执行层没有任何 executed/failed 审计
         # （该链当前唯一成员 AuditLogger 不拦截，直接触发其落审计即可）。

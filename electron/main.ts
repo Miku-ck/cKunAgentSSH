@@ -954,12 +954,24 @@ function setupPtyIPC(): void {
   // Windows PowerShell：使用 [System.Management.Automation.CommandCompletion]::CompleteInput
   // macOS/Linux bash：使用 compgen（识别 function/alias/command/file）
   handleTrusted('pty:completeCommand', (_event, opts: { ptyId: string; cmd: string; prefix: string; cwd: string; isCommand: boolean; prevSegments: string[]; shell?: string }) => {
-    return new Promise<string>((resolve) => {
+    // S4-02 修复：这条通道是全仓 24 个文件原语里唯一不吃 assertSafePath 的 ——
+    // 渲染层给什么目录，主进程就在里面枚举、`cd`、spawn 补全子进程。补全本身不新增
+    // 写面，但会把敏感目录（.ssh / .aws 之类）的条目名回显给渲染进程，与同族通道的
+    // 姿态不一致；prefix 里的 `..` 还能把枚举目录解析到该 cwd 之外。
+    // 执行体因此改 async：门在 promise 内 await，被拒时按「无候选」收尾（渲染层
+    // 已把空串当无补全处理，不必 reject）。
+    return new Promise<string>(async (resolve) => {
       const { ptyId, cmd, prefix, cwd, isCommand, prevSegments, shell } = opts
       const isPowerShell = process.platform === 'win32' && (!shell || /powershell|pwsh/i.test(shell))
       const isCmd = process.platform === 'win32' && !!shell && /cmd/i.test(shell)
       // 若前端未提供 cwd，回退到 PTY 会话的初始工作目录
       const actualCwd: string = cwd || ptyManager!.getCwd(ptyId) || process.cwd()
+      try {
+        await assertSafePath(actualCwd)
+      } catch {
+        resolve('')
+        return
+      }
 
       if (isCmd) {
         // CMD 弱补全：命令名在 PATH 中查找，参数仅做路径/文件名补全
@@ -973,6 +985,13 @@ function setupPtyIPC(): void {
           if (sepIndex >= 0) {
             dir = pathResolve(dir, prefix.slice(0, sepIndex))
             filePrefix = prefix.slice(sepIndex + 1)
+          }
+          try {
+            // prefix 里的 `..` 会把枚举目录解析到已放行的 actualCwd 之外，过同一道门
+            await assertSafePath(dir)
+          } catch {
+            resolve('')
+            return
           }
           const files = listFilesByPrefix(dir, filePrefix)
           resolve(files.map((f) => `file:${f}`).join('\n'))
