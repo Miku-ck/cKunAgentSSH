@@ -104,7 +104,10 @@
           </div>
           <label class="field">
             <span>任务名称 *</span>
-            <input v-model="form.name" placeholder="例如：每日系统健康巡检" />
+            <!-- maxlength 与后端 Field(max_length=100) 同口径（S7-11）：超出去是 422，
+                 而名称只是展示用串，静默截断不改变任何判定 —— 与 AgentPanel 那条
+                 「截断会让授权键对不上」的顾虑不同族。 -->
+            <input v-model="form.name" maxlength="100" placeholder="例如：每日系统健康巡检" />
           </label>
           <div class="field">
             <span>触发时间</span>

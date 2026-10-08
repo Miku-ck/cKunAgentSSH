@@ -22,9 +22,14 @@ import database as db
 meta = ToolMeta(risk_level="moderate", reversible=False, timeout=10.0,
                 destructive_actions=frozenset({"cancel"}))
 
+# S7-11：与 routes/schedules.py 的 ScheduleIn/SchedulePatch 同一组入库上限 —— 那边由
+# pydantic 挡（422），这条入口是工具直接写库、不经 pydantic，故在此各判一次。
+# 数字两边不一致时 test_schedule_entry_bounds_s711.py 会红（同一口径靠守卫钉住，不靠记性）。
+_NAME_MAX_LEN = 100
+_TASK_PROMPT_MAX_LEN = 50_000
+
 # cron 字段位置：min hour dom month dow
 _CRON_MIN, _CRON_HOUR, _CRON_DOM, _CRON_MONTH, _CRON_DOW = range(5)
-
 # 引擎 weekday 编码：0=周一 … 6=周日
 _CRON_DOW_TO_WEEKDAY = {
     1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5,
@@ -329,6 +334,18 @@ class ScheduleOpTool(BaseTool):
             task_prompt = f"{task_prompt}\n请执行以下命令并把结果写进结论：\n{command}".strip()
 
         task_name = (name or "").strip() or _default_name(mode, parsed)
+
+        # S7-11：入库前的一次长度闸门。没有它，一条 500KB 的 task 会安静地写进库，
+        # 然后每次触发都整份进那次无头 run 的上下文（烧钱且必然超窗口）—— 而同样
+        # 的内容从 REST 那侧进来是 422。空名同理：工具这侧靠 _default_name 兜住，
+        # 只补上限。
+        if len(task_name) > _NAME_MAX_LEN:
+            return ToolResult(False, "",
+                              f"name 过长（{len(task_name)} > {_NAME_MAX_LEN}）")
+        if len(task_prompt) > _TASK_PROMPT_MAX_LEN:
+            return ToolResult(False, "",
+                              f"task/command 组合后过长（{len(task_prompt)} > "
+                              f"{_TASK_PROMPT_MAX_LEN}），请精简任务描述")
 
         host_id, host_note, host_err = await _resolve_target_host(target_host)
         if host_err:
