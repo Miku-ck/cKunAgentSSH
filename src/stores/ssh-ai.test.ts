@@ -38,7 +38,8 @@ vi.mock('@/api/client', () => ({
     getDefaultModel: vi.fn(async () => undefined),
     uploadChatFile: (...args: unknown[]) => uploadChatFile(...(args as [string, File])),
   },
-  workflowApi: { get: vi.fn(async () => null) },
+  // 契约是「无工件返回空字符串字段，不是 null / 404」（client.ts:396），桩照此写
+  workflowApi: { read: vi.fn(async () => ({ phase: '', spec: '', plan: '', goal: '' })) },
   agentApi: { grantPermission: vi.fn(async () => ({})), denyCommand: vi.fn(async () => ({})) },
   streamAgentRun: vi.fn(() => () => {}),
 }))
@@ -305,5 +306,90 @@ describe('ssh-ai 远端文件附件', () => {
     const a = store.addRemoteAttachment({ path: '/etc/hosts', content: 'x', source: 'root@web-1' })
     store.removePendingAttachment(a.file_id)
     expect(store.pendingAttachments).toEqual([])
+  })
+})
+
+/**
+ * 换会话必须带走暂存输入（技能 chip + 待发送附件）。
+ *
+ * 这两份是 store 级共享状态（首页 HomeCommandCard 与侧栏 SideChatPanel 挂同一份），
+ * 而 switch/create/delete 三条切会话路径原先只清 workflowSnapshot —— 同一处注释里
+ * 已经写清理由（「否则界面会显示上一个会话的 Spec/Plan/Goal，而它们并没有被注入本轮
+ * 上下文」），暂存的技能与附件是同一个症状的另一半：chip 还亮着，用户按发送就把上一
+ * 会话选的技能与文件发进了这一会话。附件更硬一层 —— /chat/upload 是按 backendConvId
+ * 归档的（uploadFiles 的注释），A 会话上传的文件挂在 B 会话头上既落不进 B 的目录，
+ * 也不会随 B 删除而清理。
+ */
+describe('ssh-ai 换会话带走暂存输入', () => {
+  const stage = (store: ReturnType<typeof useSshAiStore>) => {
+    store.addSelectedSkill('s1')
+    store.addRemoteAttachment({ path: '/etc/hosts', content: 'from-a', source: 'root@web-1' })
+  }
+
+  it('switchConversation 清掉技能与附件', async () => {
+    const store = useSshAiStore()
+    const a = await store.createConversation('A')
+    await store.createConversation('B')
+    stage(store)
+    expect(store.selectedSkillIds).toEqual(['s1'])
+    expect(store.pendingAttachments).toHaveLength(1)
+
+    await store.switchConversation(a.id)
+
+    expect(store.selectedSkillIds).toEqual([])
+    expect(store.pendingAttachments).toEqual([])
+  })
+
+  it('createConversation 也清 —— 新建就是换新会话，不是接着上一会话的输入', async () => {
+    const store = useSshAiStore()
+    await store.createConversation('A')
+    stage(store)
+
+    await store.createConversation('B')
+
+    expect(store.selectedSkillIds).toEqual([])
+    expect(store.pendingAttachments).toEqual([])
+  })
+
+  it('删掉当前会话后不留上一会话的工件与暂存输入', async () => {
+    const store = useSshAiStore()
+    const a = await store.createConversation('A')
+    const b = await store.createConversation('B')
+    stage(store)
+    store.workflowSnapshot = { phase: 'plan', spec: 'S', plan: 'P', goal: 'G' }
+
+    await store.deleteConversation(b.id)
+
+    const ids = store.conversations.map(c => c.id)
+    expect(ids).not.toContain(b.id)
+    expect(ids).toContain(a.id)
+    expect(store.selectedSkillIds).toEqual([])
+    expect(store.pendingAttachments).toEqual([])
+    expect(store.workflowSnapshot.phase).toBe('')
+  })
+
+  it('反向锁：删的不是当前会话时，暂存输入必须留着', async () => {
+    const store = useSshAiStore()
+    const a = await store.createConversation('A')
+    await store.createConversation('B')
+    stage(store)
+
+    await store.deleteConversation(a.id)
+
+    expect(store.selectedSkillIds).toEqual(['s1'])
+    expect(store.pendingAttachments).toHaveLength(1)
+  })
+
+  it('反向锁：不动会话时暂存输入得留着 —— 别把清空写成一次性缓冲', async () => {
+    const store = useSshAiStore()
+    await store.createConversation('A')
+    stage(store)
+    // 与"换会话"无关的动作一律不该抹掉输入：改档位、再加一枚技能、再挂一个文件
+    store.setApprovalMode('auto')
+    store.addSelectedSkill('s2')
+    store.addRemoteAttachment({ path: '/etc/passwd', content: 'p', source: 'root@web-1' })
+
+    expect(store.selectedSkillIds).toEqual(['s1', 's2'])
+    expect(store.pendingAttachments.map(f => f.filename)).toEqual(['hosts', 'passwd'])
   })
 })

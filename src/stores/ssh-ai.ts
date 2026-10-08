@@ -234,6 +234,16 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     return att
   }
 
+  /** 换会话（切/建/删后落到另一条）时必须清掉的暂存输入。
+   *  这份状态是 store 级的 —— 首页 HomeCommandCard 与侧栏 SideChatPanel 挂同一份，
+   *  留着就等于把上一会话挑的技能与文件发进当前会话。附件更硬一层：/chat/upload 按
+   *  backendConvId 归档（见 uploadFiles 的注释），A 会话上传的文件挂在 B 会话头上既
+   *  落不进 B 的目录，也不会随 B 的删除被清理。 */
+  function _clearStagedInput() {
+    selectedSkillIds.value = []
+    pendingAttachments.value = []
+  }
+
   // ── 会话 CRUD ──
 
   async function createConversation(title?: string): Promise<ModeConversation> {
@@ -242,11 +252,13 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     // 工作流按会话存储：新会话没有工件，清掉上一会话的缓存（否则界面会显示
     // 上一个会话的 Spec/Plan/Goal，而它们并没有被注入本轮上下文）
     workflowSnapshot.value = { phase: '', spec: '', plan: '', goal: '' }
+    _clearStagedInput()
     return conv
   }
 
   async function switchConversation(id: string) {
     persistence.switchConversation(id)
+    _clearStagedInput()
     // 工作流随会话切换重新加载：工件按会话落盘，界面必须与之一致
     void loadWorkflow()
     // P2 修复：启动合并进来的后端会话本地无消息缓存（messages:[]），
@@ -272,7 +284,14 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   }
 
   async function deleteConversation(id: string) {
+    const before = persistence.currentConversation.value?.id
     await persistence.deleteConversation(id)
+    // 只有删掉的正是当前会话（当前落到了另一条）才算换会话；从列表里删一条旧的
+    // 不该顺手抹掉用户正在输入的技能与附件。
+    if (persistence.currentConversation.value?.id !== before) {
+      _clearStagedInput()
+      void loadWorkflow()
+    }
   }
 
   /** 手动触发会话列表响应式更新（shallowRef 内部对象原地变更后调用，如 Agent 模式直接 push 消息） */
