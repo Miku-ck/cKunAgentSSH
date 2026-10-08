@@ -238,3 +238,33 @@ def test_run_now_without_target_host_does_not_touch_bridge(client, monkeypatch):
 
     assert resp.status_code == 200, resp.text
     assert _ProbeBridge.calls == 0
+
+
+# ── S7-12：PATCH 的「不发 = 不改」是前端少发键的前提，这条契约必须被钉住 ──
+
+def test_patch_name_only_keeps_next_run_at(client):
+    """改个错别字不许把下次执行重锚。
+
+    后端按**键是否出现**判「调度参数变了」，所以前端一旦每次保存都带上全部调度键
+    （原实现就是把它当 PUT 用），interval 任务本来马上要跑的那一次会被推迟一整个周期。
+    前端已改为只发改过的键（SchedulesView 的 changedPayload），这里锁住它依赖的那一侧。
+    """
+    row = _create(client, schedule_type="interval", interval_minutes=30)
+    resp = client.patch(f"/api/schedules/{row['id']}", json={"name": "每日巡检2"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["name"] == "每日巡检2"
+    assert body["interval_minutes"] == 30
+    assert body["next_run_at"] == row["next_run_at"]
+
+
+def test_patch_schedule_key_does_reanchor(client):
+    """对照组：真的改了调度参数就必须重算，否则这条修复会悄悄把 S7 的老缺陷改回来。"""
+    row = _create(client, schedule_type="interval", interval_minutes=30)
+    stale = "2020-01-01 00:00:00"
+    db.set_schedule_next_run(row["id"], stale)
+    resp = client.patch(f"/api/schedules/{row['id']}", json={"interval_minutes": 60})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["interval_minutes"] == 60
+    assert body["next_run_at"] > stale

@@ -438,9 +438,21 @@ watch(() => agentStore.scheduleRev, () => { load(true) })
 
 function openCreate() {
   resetForm()
+  formBaseline = { ...form }
   selectedTemplate.value = null
   editing.value = {} as ScheduleRecord
 }
+
+/**
+ * S7-12：进入表单时的那一份字段值，用于「只发改过的键」。
+ *
+ * 后端的 PATCH 契约是「不发 = 不改」，并按**键是否出现**判断调度参数变了
+ * （`routes/schedules.py` 的 `_SCHEDULE_KEYS & set(patch.keys())`）⇒ 原实现每次保存
+ * 都带上全部十个键，只改个错别字也会把 interval 任务的 `next_run_at` 重锚到
+ * 「现在 + 一个周期」：本来马上要跑的那一次被整整推迟一个周期。
+ * 基线取 `openEdit` 回填**之后**的表单（缺省值已在那一步归一），不再另抄一份默认值。
+ */
+let formBaseline: ScheduleForm = { ...FORM_DEFAULTS }
 
 /** 编辑已有任务：把记录回填到表单并进入编辑态（模板选择在编辑态隐藏） */
 function openEdit(s: ScheduleRecord) {
@@ -455,6 +467,7 @@ function openEdit(s: ScheduleRecord) {
   form.target_host = s.target_host ?? ''
   form.task_prompt = s.task_prompt ?? ''
   form.enabled = !!s.enabled
+  formBaseline = { ...form }
   selectedTemplate.value = null
   editing.value = s
 }
@@ -478,12 +491,29 @@ function formPayload() {
   }
 }
 
+/** 只保留与进入表单时不同的键（S7-12，见 formBaseline 的注释） */
+function changedPayload(): Partial<ScheduleForm> {
+  const current = formPayload()
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(current) as (keyof ScheduleForm)[]) {
+    if (current[key] !== formBaseline[key]) out[key] = current[key]
+  }
+  return out as Partial<ScheduleForm>
+}
+
 async function save() {
   if (!form.name.trim()) return
   saving.value = true
   try {
     if (editing.value?.id) {
-      await scheduleApi.update(editing.value.id, formPayload())
+      const patch = changedPayload()
+      if (Object.keys(patch).length === 0) {
+        // 一个键都没变就不发请求：空 PATCH 会走进 update_schedule 的「无 SET」分支，
+        // 而这里真正想说的是「什么都没改，别动 next_run_at」
+        editing.value = null
+        return
+      }
+      await scheduleApi.update(editing.value.id, patch)
       toast.success('任务已更新')
     } else {
       await scheduleApi.create(formPayload())
