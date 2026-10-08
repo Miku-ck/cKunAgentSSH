@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, shell, dialog, session, nativeImage } from 'electron'
 import { join, resolve as pathResolve, dirname, basename, extname } from 'path'
+import { pathToFileURL } from 'url'
 import { is } from '@electron-toolkit/utils'
 import { readdir, readFile, writeFile, stat, lstat, mkdir, rename, rm, realpath, copyFile } from 'fs/promises'
 import { existsSync, readdirSync } from 'fs'
@@ -198,6 +199,16 @@ function createWindow(): void {
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     try { allowedOrigins.add(new URL(process.env['ELECTRON_RENDERER_URL']).origin) } catch { /* ignore */ }
   }
+  // S9-02 修复：prod 那一支此前只判 `parsed.protocol === 'file:'` —— 任意本地文档
+  // 都能被换进这个窗口，而窗口带着完整 preload API 面：assertTrustedSender 判的是
+  // 发送者身份/帧归属，不是来源目录，于是「一份由 agent/远端主机写到磁盘的 HTML」
+  // 一次导航就拿到整套 IPC（读写文件、起 PTY、连 SSH）。渲染层 markdown 里的链接
+  // 是最短路径。现把 file: 导航限制在应用自己的渲染层目录内（与下方 loadFile 同源）。
+  const rendererRootHref = pathToFileURL(join(__dirname, '../renderer')).href + '/'
+  const isOwnRendererFile = (href: string): boolean =>
+    process.platform === 'win32'
+      ? href.toLowerCase().startsWith(rendererRootHref.toLowerCase())
+      : href.startsWith(rendererRootHref)
   mainWindow.webContents.on('will-navigate', (event, url) => {
     let parsed: URL
     try {
@@ -206,10 +217,10 @@ function createWindow(): void {
       event.preventDefault()
       return
     }
-    // file:// 的 origin 是 "file://"，prod 模式允许（loadFile 加载的本地资源）
+    // file:// 的 origin 是 "file://"，prod 模式仅允许应用自身的渲染层资源
     const isAllowed =
       (is.dev && allowedOrigins.has(parsed.origin)) ||
-      (!is.dev && parsed.protocol === 'file:') ||
+      (!is.dev && parsed.protocol === 'file:' && isOwnRendererFile(parsed.href)) ||
       url === mainWindow?.webContents.getURL()
     if (!isAllowed) {
       event.preventDefault()

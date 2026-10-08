@@ -96,6 +96,22 @@ onUnmounted(() => {
 /** 事件委托：点击代码块复制按钮时复制代码到剪贴板 */
 function handleClick(e: MouseEvent) {
   const target = e.target as HTMLElement
+  // S9-02 修复：markdown 里的链接此前无人拦截。被渲染的内容带着远端主机/agent 书写的
+  // 文本，一条 `[报告](file:///C:/Users/…/x.html)` 就是一次主窗口导航，而窗口带着完整
+  // preload API 面。现一律 preventDefault：http(s) 交系统浏览器（window.open 走主进程
+  // windowOpenHandler 的 openExternal + deny，与外链既有行为一致），其余协议拒绝并提示。
+  const anchor = target.closest?.('a') as HTMLAnchorElement | null
+  if (anchor?.href) {
+    e.preventDefault()
+    let protocol = ''
+    try { protocol = new URL(anchor.href).protocol } catch { protocol = '' }
+    if (protocol === 'http:' || protocol === 'https:') {
+      window.open(anchor.href, '_blank', 'noopener,noreferrer')
+    } else {
+      toast.warning('已在应用内拦截非 http(s) 链接')
+    }
+    return
+  }
   if (!target.classList.contains('code-copy-btn')) return
   const wrapper = target.closest('.code-block-wrapper')
   const codeEl = wrapper?.querySelector('code')
