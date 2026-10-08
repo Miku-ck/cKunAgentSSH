@@ -516,9 +516,6 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE models_config ADD COLUMN model_id TEXT")
             cols.add('model_id')
 
-        # 修正 name 与 model_id 的值（它们可能正好反了）
-        _fix_model_name_and_id(conn)
-
         # 幂等补齐所有查询依赖的列（与 CREATE TABLE 保持一致）。
         # 旧库可能缺少 reasoning_tokens/top_p/sort_order 等，若不补，
         # list_models_config / get_model_config 的 SELECT 会因 "no such column"
@@ -546,6 +543,13 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
             if col not in cols:
                 conn.execute(f"ALTER TABLE models_config ADD COLUMN {col} {col_def}")
                 cols.add(col)
+
+        # 修正 name 与 model_id 的值（它们可能正好反了）。
+        # 必须在上面那段补列之后：这个函数自己 SELECT id, name, model_id，
+        # 而 name 正是补列循环里的一项 —— 原先它在循环之前跑，一个没有 name 列的
+        # 旧库会在 init_db 里抛 OperationalError，而 init_db 只有 try/finally、
+        # main.py 也不接 → 后端直接起不来（不是某个接口 500，是整个服务不启动）。
+        _fix_model_name_and_id(conn)
 
 
 def _init_memory_v2(conn: sqlite3.Connection) -> None:
@@ -2766,8 +2770,13 @@ def save_agent_job(job_id: str, run_id: str, session_id: str, cmd: str,
                    out_offset: int = 0) -> None:
     """写入/更新一条远程后台任务记录（启动时调用）。
 
-    upsert 的 UPDATE 子句不覆盖 out_offset：save 只在任务启动时调用
-    （offset 恒 0），运行期 offset 由 update_agent_job_offset 推进。
+    UPDATE 分支必须把游标与终态字段一起重置：job_id 由进程内的自增序号分配，
+    重启后从 1 重新开始，而 agent_jobs 里的**终态**行永远不会被清理
+    （_ensure_restored 只捞未终结行，全仓也没有 DELETE FROM agent_jobs），
+    于是新任务会复用旧任务的 job_id 撞上这一行。不重置的话
+    out_offset 还是上一次读到的字节数 —— job_output 会从那个偏移之后才开始给，
+    新任务最前面的输出直接找不回来；exit_code / finished_at 也会把
+    「已经退出了」的旧结论挂在一条 running 的行上。
     """
     conn = _get_conn()
     try:
@@ -2781,7 +2790,11 @@ def save_agent_job(job_id: str, run_id: str, session_id: str, cmd: str,
                    cmd = excluded.cmd,
                    pid = excluded.pid,
                    log_dir = excluded.log_dir,
-                   status = excluded.status""",
+                   status = excluded.status,
+                   out_offset = excluded.out_offset,
+                   exit_code = NULL,
+                   finished_at = NULL,
+                   created_at = excluded.created_at""",
             (job_id, run_id, session_id, cmd, pid, log_dir, status, out_offset),
         )
         conn.commit()
