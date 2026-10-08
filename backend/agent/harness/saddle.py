@@ -52,8 +52,16 @@ class Sandbox:
         args = call.args
 
         # shell 命令检查 — H13 修复 B4：复用 safety.classify_command（与 FilesystemGuard 同源）
-        if tool in ("shell_exec",):
-            cmd = args.get("command") or args.get("shell", "")
+        # S1-04 修复：命令入口清单与取命令的键都用 reins/core.py 的单一来源。
+        # 原先这里硬写 ("shell_exec",) 且只读 command/shell 两个键，而
+        # `_COMMAND_EXEC_TOOLS = {"shell_exec","job_run"}` 的注释明写「job_run 同属
+        # 命令入口」，`command_from_args` 的口径是 command/shell/cmd 三键。
+        # 于是 `job_run(action=…, cmd="rm -rf …")` 在这层没有任何内容级拦截 ——
+        # 而本类的 docstring 自称「不像 FilesystemGuard 那样可被装配方裁剪的
+        # 不可禁用底线」，声称不可依赖的那一层恰恰是它唯一漏掉的那一层。
+        from .reins.core import _COMMAND_EXEC_TOOLS, command_from_args
+        if tool in _COMMAND_EXEC_TOOLS:
+            cmd = command_from_args(args)
             if isinstance(cmd, str) and cmd:
                 from .safety import classify_command
                 level, reason = classify_command(cmd)
