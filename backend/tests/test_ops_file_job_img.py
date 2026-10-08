@@ -43,6 +43,11 @@ def _spawn_allowed() -> bool:
 
     必须探测 asyncio.create_subprocess_exec — 与 subprocess.run 走不同路径，
     存在前者被拒而后者可用的沙箱。
+
+    探测本身必须有上界：它在**模块导入期**执行，`p.wait()` 无界时整个文件一条用例
+    都跑不到就挂住（实测 `pytest tests/test_ops_file_job_img.py` 静默 400s+，
+    连带把同批次里其他文件一起拖停 —— 收集期的挂起没有测试输出，只表现为整批超时）。
+    沙箱拒绝派生时给出的应当是 False（跳过 job 用例），不是无限等待。
     """
     import subprocess
     import sys
@@ -51,13 +56,19 @@ def _spawn_allowed() -> bool:
                        capture_output=True, timeout=15)
     except Exception:
         return False
-    try:
-        async def _a():
-            p = await asyncio.create_subprocess_exec(
-                sys.executable, "-c", "pass", stdout=asyncio.subprocess.PIPE)
+
+    async def _a():
+        p = await asyncio.create_subprocess_exec(
+            sys.executable, "-c", "pass", stdout=asyncio.subprocess.PIPE)
+        try:
             await p.wait()
-            return p.returncode == 0
-        return asyncio.run(_a())
+        finally:
+            if p.returncode is None:
+                p.kill()
+        return p.returncode == 0
+
+    try:
+        return asyncio.run(asyncio.wait_for(_a(), timeout=15))
     except Exception:
         return False
 
@@ -337,6 +348,74 @@ async def test_file_glob_local(tmp_workspace):
     assert res.success is True
     assert "a.log" in res.output
     assert "b.txt" not in res.output
+
+
+# ── file_glob 本地分支的锚定（pattern 也是路径参数）──────────
+# 模块 docstring 的安全约束第 1 条写的是「所有路径均校验…不得包含 `..`，杜绝越界访问」，
+# 第 5 条写的是「大输出经 truncate_output 截断」。实测两条在 file_glob 的本地分支上都不成立：
+# `path=srv, pattern=../x_outside/*.log` 返回了 srv 之外的文件（`rglob` 不阻止 `..` 分段），
+# 而远端分支 `find {path} -name {pattern}` 天生锚定在 path 内 —— 同一条约束两个分支一个有一个没有。
+# 参数描述还写着「相对该目录或绝对均可」，而 pathlib 对绝对模式直接抛
+# NotImplementedError("Non-relative patterns are unsupported")：模型照着说明填就一定报错。
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", [
+    "../x_outside/*.log",
+    "inner/../x_outside/*.log",
+])
+async def test_file_glob_local_模式含_点分段必须拒绝(tmp_workspace, bad):
+    srv = Path(tmp_workspace) / "srv"
+    (srv / "inner").mkdir(parents=True)
+    (srv / "inner" / "a.log").write_text("x", encoding="utf-8")
+    outside = Path(tmp_workspace) / "x_outside"
+    outside.mkdir()
+    (outside / "secret.log").write_text("x", encoding="utf-8")
+
+    res = await FileGlobTool().execute(_ctx(), path=str(srv), pattern=bad)
+    assert res.success is False, f"模式 {bad!r} 返回了 {res.output!r}：越界读取"
+    assert "越界" in (res.output + res.error)
+
+
+@pytest.mark.asyncio
+async def test_file_glob_local_合法相对模式照旧可用(tmp_workspace):
+    """反向锁：收紧 pattern 校验不能把正常用法一起挡掉。"""
+    srv = Path(tmp_workspace) / "srv"
+    (srv / "inner").mkdir(parents=True)
+    (srv / "inner" / "a.log").write_text("x", encoding="utf-8")
+    for keep in ("*.log", "**/*.log", "inner/*.log"):
+        res = await FileGlobTool().execute(_ctx(), path=str(srv), pattern=keep)
+        assert res.success is True, f"{keep!r} 被判失败：{res.error}"
+        assert "a.log" in res.output
+
+
+@pytest.mark.asyncio
+async def test_file_glob_local_绝对模式给中文契约而非_pathlib_报错(tmp_workspace):
+    srv = Path(tmp_workspace) / "srv"
+    srv.mkdir()
+    res = await FileGlobTool().execute(
+        _ctx(), path=str(srv), pattern=str(srv / "*.log")
+    )
+    assert res.success is False
+    assert "相对" in res.error, f"模型收到 {res.error!r}：不知道该怎么改参数"
+    # 参数说明不得再承诺「绝对均可」——说明与实现不一致时模型会照着说明填
+    desc = FileGlobTool.parameters["properties"]["pattern"]["description"]
+    assert "绝对" not in desc, desc
+
+
+@pytest.mark.asyncio
+async def test_file_glob_local_大输出照旧截断(tmp_workspace):
+    from agent.truncation_limits import TRUNC_THRESHOLD
+
+    srv = Path(tmp_workspace) / "srv"
+    srv.mkdir()
+    n = TRUNC_THRESHOLD // 20 + 40
+    for i in range(n):
+        (srv / f"long_file_name_{i:05d}.log").write_text("x", encoding="utf-8")
+    res = await FileGlobTool().execute(_ctx(), path=str(srv), pattern="*.log")
+    assert res.success is True
+    assert len(res.output) < TRUNC_THRESHOLD, (
+        f"本地分支返回 {len(res.output)} 字符未截断：远端分支截、本地不截")
+    assert "输出已截断" in res.output
 
 
 @pytest.mark.asyncio

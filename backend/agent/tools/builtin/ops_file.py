@@ -9,6 +9,8 @@
 
 安全约束：
   1. 所有路径均校验绝对路径归一化后不得包含 `..`，杜绝越界访问；
+     `file_glob` 的 pattern 同样是路径参数（`rglob` 不阻止 `..` 分段），与 path
+     同一校验、同一拒绝文案；远端 `find -name` 天生锚定在起始目录内，两个分支同口径；
   2. 远程命令一律经 shlex.quote 转义（file_write/编辑用 base64，天然不必转义）；
   3. **写/编辑（file_write/file_edit）仅限远程 SSH 会话**：与 shell_exec、
      ops_common.run_headless 同一 fail-closed 口径 — 缺少 SSH 会话即拒绝，
@@ -280,6 +282,13 @@ class FileEditTool(BaseTool):
         return ToolResult(True, "已替换 1 处")
 
 
+# glob 模式的绝对定位前缀：`/x`、`\srv\x`、`C:\x`。两个分支都不支持绝对模式
+# （pathlib 对它抛 NotImplementedError，远端 `find -name` 从不匹配带斜杠的文件名）。
+# 不用 PurePath(...).is_absolute() 判定：它的结论随平台变（POSIX 上 `C:/x` 不算绝对，
+# Windows 上 `/x` 也不算），而这条约束在两平台上是同一条。
+_ABSOLUTE_PATTERN_RE = re.compile(r"^(?:[A-Za-z]:[/\\]|[/\\])")
+
+
 class FileGlobTool(BaseTool):
     name = "file_glob"
     description = "按 glob 模式在指定目录下递归查找文件，返回匹配文件列表。"
@@ -287,7 +296,10 @@ class FileGlobTool(BaseTool):
         "type": "object",
         "properties": {
             "path": {"type": "string", "description": "起始目录绝对路径"},
-            "pattern": {"type": "string", "description": "glob 匹配模式（相对该目录或绝对均可）"},
+            "pattern": {
+                "type": "string",
+                "description": "glob 匹配模式，必须是相对 path 的模式（如 '*.log'、'**/*.log'），不得含 `..`",
+            },
         },
         "required": ["path", "pattern"],
     }
@@ -299,7 +311,14 @@ class FileGlobTool(BaseTool):
     )
 
     async def execute(self, context, path, pattern):
+        # pattern 同样是路径参数：只校验 path 时，`path=srv, pattern=../x/*.log`
+        # 就能列出 srv 之外的文件（远端模板 `find {path} -name {pattern}` 天生锚定
+        # 在 path 内，两个分支必须同口径 —— 见 tests/test_ops_file_job_img.py）
         if is_traversal(path):
+            return ToolResult(False, "", TRAVERSAL_ERROR)
+        if not isinstance(pattern, str) or not pattern.strip():
+            return ToolResult(False, "", "pattern 需为 glob 模式（如 '*.log'），收到空值")
+        if is_traversal(pattern):
             return ToolResult(False, "", TRAVERSAL_ERROR)
 
         if is_remote(context):
@@ -310,22 +329,30 @@ class FileGlobTool(BaseTool):
             lines = drop_sentinel_lines(output)
             if not lines:
                 return ToolResult(True, f"未匹配到文件：{pattern}")
-            return ToolResult(True, "\n".join(lines))
+            return ToolResult(True, truncate_output("\n".join(lines)))
 
         # 本地：pathlib 递归查找
         base = pathlib.Path(path)
         if not base.is_dir():
             return ToolResult(False, "", f"起始目录不存在或不是目录: {path}")
-        pat = pattern.lstrip("/\\")
-        try:
-            matches = sorted(
-                str(p.resolve()) for p in base.rglob(pat) if p.is_file()
+        if _ABSOLUTE_PATTERN_RE.match(pattern):
+            # pathlib 对绝对模式抛 NotImplementedError（原样透传给模型是一句英文
+            # "Non-relative patterns are unsupported"，看不出该怎么改），且远端
+            # `find -name` 从不支持绝对模式 —— 提前拒绝并给出可执行的改法
+            return ToolResult(
+                False, "", f"pattern 必须是相对 {path} 的 glob 模式，收到绝对路径 {pattern!r}"
             )
+        root = base.resolve()
+        try:
+            # 逐条命中后仍要按解析结果复核：3.11 的 rglob 会跟着符号链接目录进去，
+            # 而 find 默认不跟随；resolve 后落在 root 之外的一律丢弃，两个口径对齐
+            resolved = [p.resolve() for p in base.rglob(pattern) if p.is_file()]
+            matches = sorted(str(p) for p in resolved if p.is_relative_to(root))
         except Exception as e:
             return ToolResult(False, "", f"glob 查找失败: {e}")
         if not matches:
             return ToolResult(True, f"未匹配到文件：{pattern}")
-        return ToolResult(True, "\n".join(matches))
+        return ToolResult(True, truncate_output("\n".join(matches)))
 
 
 class FileGrepTool(BaseTool):
