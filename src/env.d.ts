@@ -82,6 +82,37 @@ interface SshReconnectStatus {
   reason?: 'exhausted' | 'config-missing' | 'cancelled'
 }
 
+/** SSH 隧道规则（主进程定义见 electron/tunnel-store.ts，此处为渲染层副本） */
+interface TunnelRule {
+  id: string
+  /** 展示名，可空（UI 显示自动名「L 8080 → db:5432」式） */
+  name: string
+  /** 引用 SSHConnectionRecord.id（弱引用：连接被删 → 启动报 config-missing） */
+  connectionId: string
+  type: 'local' | 'remote' | 'dynamic'
+  /** 默认 127.0.0.1，仅 local 可自定义；dynamic 强制 127.0.0.1 */
+  listenHost?: string
+  listenPort?: number
+  /** 默认 127.0.0.1，仅 remote；0.0.0.0 需 UI 显式确认风险 */
+  remoteBindHost?: string
+  bindPort?: number
+  dstHost?: string
+  dstPort?: number
+  autoStart: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+/** 隧道运行状态（主进程 → 渲染层推送，channel: tunnel:status；不持久化） */
+interface TunnelStatus {
+  id: string
+  state: 'starting' | 'active' | 'error' | 'stopped'
+  /** error 时给人看的失败原因 */
+  message?: string
+  connections?: number
+  startedAt?: number
+}
+
 interface ElectronAPI {
   windowMinimize: () => Promise<void>
   /**
@@ -164,6 +195,16 @@ interface ElectronAPI {
   sshDuplicateConnection: (id: string) => Promise<SSHConnectionRecord>
   sshTestConnection: (config: Omit<SSHConnectionRecord, 'tags' | 'createdAt' | 'updatedAt'>) => Promise<SSHTestResult>
   sshMigrateLegacy: (legacy: any[]) => Promise<number>
+  // SSH 隧道（端口转发）
+  tunnelList: () => Promise<TunnelRule[]>
+  tunnelSave: (rule: TunnelRule) => Promise<TunnelRule>
+  tunnelDelete: (id: string) => Promise<void>
+  tunnelStart: (id: string) => Promise<TunnelStatus>
+  tunnelStop: (id: string) => Promise<TunnelStatus>
+  tunnelStatusAll: () => Promise<TunnelStatus[]>
+  /** 保存前预检：本机监听端口被占即时报（而非启动时才暴露 EADDRINUSE） */
+  tunnelCheckPort: (host: string, port: number) => Promise<{ ok: boolean; message?: string }>
+  onTunnelStatus: (callback: (data: TunnelStatus) => void) => () => void
   // Skills
   listSkills: (mode?: string) => Promise<any[]>
   updateSkillEnabled: (id: string, enabled: boolean, mode?: string) => Promise<{ id: string; enabled: boolean }>

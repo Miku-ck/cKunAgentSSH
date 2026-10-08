@@ -637,8 +637,8 @@ async function handleSave() {
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
-  background: rgba(0, 120, 212, 0.06);
-  border: 1px solid rgba(0, 120, 212, 0.15);
+  background: color-mix(in srgb, var(--accent-primary) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 15%, transparent);
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
   font-size: 12px;
@@ -711,14 +711,14 @@ async function handleSave() {
 }
 
 .test-result.success {
-  background: rgba(78, 201, 176, 0.08);
-  border: 1px solid rgba(78, 201, 176, 0.25);
+  background: color-mix(in srgb, var(--accent-green) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-green) 25%, transparent);
   color: var(--accent-green);
 }
 
 .test-result.fail {
-  background: rgba(244, 135, 113, 0.08);
-  border: 1px solid rgba(244, 135, 113, 0.2);
+  background: color-mix(in srgb, var(--accent-red) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-red) 20%, transparent);
   color: var(--accent-red);
 }
 
@@ -727,8 +727,8 @@ async function handleSave() {
   align-items: center;
   gap: 6px;
   padding: 8px 12px;
-  background: rgba(244, 135, 113, 0.08);
-  border: 1px solid rgba(244, 135, 113, 0.2);
+  background: color-mix(in srgb, var(--accent-red) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-red) 20%, transparent);
   border-radius: var(--radius-sm);
   color: var(--accent-red);
   font-size: 12px;

@@ -65,7 +65,7 @@ const iconMap: Record<ToastType, string> = {
   border-radius: 8px;
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-lg);
   cursor: pointer;
   pointer-events: auto;
   font-size: 13px;
@@ -95,7 +95,7 @@ const iconMap: Record<ToastType, string> = {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-family: 'Consolas', monospace;
+  font-family: var(--font-mono);
 }
 
 .toast-message {
@@ -119,7 +119,9 @@ const iconMap: Record<ToastType, string> = {
 .toast-details-text {
   margin: 0;
   padding: 8px 10px;
-  background: rgba(0, 0, 0, 0.3);
+  /* 凹陷块走 --bg-input（同 approval-card 的 .ap-code）：rgba(0,0,0,.3) 在深色卡上
+     是对的，在浅色主题的白卡上就是一块灰渍，与主题的层级约定无关地变暗 */
+  background: var(--bg-input);
   border-radius: 4px;
   font-family: var(--font-mono);
   font-size: 11px;
@@ -152,24 +154,27 @@ const iconMap: Record<ToastType, string> = {
 }
 
 .toast-action-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-hover);
 }
 
 .toast-action-btn.dismiss {
   opacity: 0.6;
 }
 
-.toast-success { border-left: 3px solid #3fb950; }
-.toast-success .toast-icon { background: rgba(63, 185, 80, 0.2); color: #3fb950; }
+/* 四档状态色一律读主题令牌：#3fb950/#f85149/#58a6ff/#d29922 是终端 ANSI 色板
+   （见 useTerminalConfig.TERMINAL_DARK_THEME），它按约定固定暗色、不随主题走，
+   搬到浅色/手记的 toast 上就是白纸上糊一片。 */
+.toast-success { border-left: 3px solid var(--status-success-text); }
+.toast-success .toast-icon { background: color-mix(in srgb, var(--status-success-text) 20%, transparent); color: var(--status-success-text); }
 
-.toast-error { border-left: 3px solid #f85149; }
-.toast-error .toast-icon { background: rgba(248, 81, 73, 0.2); color: #f85149; }
+.toast-error { border-left: 3px solid var(--danger-text); }
+.toast-error .toast-icon { background: color-mix(in srgb, var(--danger-text) 20%, transparent); color: var(--danger-text); }
 
-.toast-info { border-left: 3px solid #58a6ff; }
-.toast-info .toast-icon { background: rgba(88, 166, 255, 0.2); color: #58a6ff; }
+.toast-info { border-left: 3px solid var(--status-info-text); }
+.toast-info .toast-icon { background: color-mix(in srgb, var(--status-info-text) 20%, transparent); color: var(--status-info-text); }
 
-.toast-warning { border-left: 3px solid #d29922; }
-.toast-warning .toast-icon { background: rgba(210, 153, 34, 0.2); color: #d29922; }
+.toast-warning { border-left: 3px solid var(--status-warn-text); }
+.toast-warning .toast-icon { background: color-mix(in srgb, var(--status-warn-text) 20%, transparent); color: var(--status-warn-text); }
 
 /* 过渡动画 */
 .toast-enter-active { animation: toast-in 0.25s ease; }

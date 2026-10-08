@@ -215,7 +215,10 @@ function handleDragEnd() {
   align-items: center;
   gap: 8px;
   padding: 0 10px;
-  background: var(--bg-base);
+  /* 与 .ssh-view/.term-tabs 同一层画布：手记的纸纹要一路 continuous，命令条画平色
+     就是在终端底下横切一条不带纹理的带子（见 variables.css --canvas-bg 注） */
+  background: var(--canvas-bg);
+  background-attachment: fixed;
   border-top: 1px solid var(--border-subtle);
   position: relative;
   z-index: 15;
@@ -242,10 +245,11 @@ function handleDragEnd() {
   display: flex;
   align-items: center;
   gap: 6px;
-  background: var(--bg-base);
-  border: 1px solid #2a2a2a;
+  /* 不画自己的皮（同首页 .hcc-btn）：底色透画布，识别靠 borderColor=cmd.color 那条内联边框 */
+  background: transparent;
+  border: 1px solid var(--border-subtle);
   border-radius: 4px;
-  color: #cccccc;
+  color: var(--text-primary);
   font-size: 12px;
   font-family: var(--font-sans);
   cursor: pointer;
@@ -276,7 +280,7 @@ function handleDragEnd() {
 
 
 .qc-empty {
-  color: #606060;
+  color: var(--text-tertiary);
   font-size: 12px;
   user-select: none;
   padding: 0 4px;
@@ -315,10 +319,12 @@ function handleDragEnd() {
   z-index: 9999;
   min-width: 120px;
   padding: 4px 0;
-  background: var(--bg-base);
+  /* 浮起层：菜单归 --bg-elevated（variables.css 头部的两级背景约定），
+     与同屏的 .tab-ctx-menu / .ntm-menu 同一张皮 */
+  background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
   border-radius: 6px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-lg);
 }
 
 .qc-ctx-item {
@@ -327,7 +333,7 @@ function handleDragEnd() {
   gap: 8px;
   padding: 6px 12px;
   font-size: 12px;
-  color: #cccccc;
+  color: var(--text-secondary);
   cursor: pointer;
   transition: background 0.1s;
 }
@@ -338,7 +344,7 @@ function handleDragEnd() {
 }
 
 .qc-ctx-item.danger:hover {
-  background: rgba(248, 81, 73, 0.15);
+  background: color-mix(in srgb, var(--accent-red) 15%, transparent);
   color: var(--accent-red);
 }
 
@@ -346,5 +352,10 @@ function handleDragEnd() {
   height: 1px;
   margin: 4px 0;
   background: var(--border-subtle);
+}
+
+/* 全局背景图模式下这条带子跟着画布一起让位（同 .ssh-view/.term-tabs/.titlebar） */
+:global(.app.has-background) .quick-command-bar {
+  background: transparent !important;
 }
 </style>

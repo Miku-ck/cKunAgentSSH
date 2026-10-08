@@ -163,7 +163,7 @@ defineExpose({ open, close })
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: rgba(88, 166, 255, 0.12);
+  background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
   color: var(--accent-primary);
   display: flex;
   align-items: center;
@@ -171,8 +171,8 @@ defineExpose({ open, close })
 }
 
 .confirm-icon.danger {
-  background: rgba(248, 81, 73, 0.12);
-  color: #f85149;
+  background: var(--danger-bg);
+  color: var(--danger-text);
 }
 
 .confirm-title {
@@ -202,7 +202,9 @@ defineExpose({ open, close })
   gap: 8px;
   padding: 12px 20px 16px;
   border-top: 1px solid var(--border-subtle);
-  background: rgba(0, 0, 0, 0.2);
+  /* 压暗卡脚用画布自己的色，而不是 rgba(0,0,0,.2)：深色主题下两者同值，
+     浅/手记主题下黑色 20% 会把白卡脚糊成灰渍 */
+  background: color-mix(in srgb, var(--bg-base) 20%, transparent);
 }
 
 .confirm-btn {
@@ -236,26 +238,31 @@ defineExpose({ open, close })
 }
 
 .confirm-btn.ok:hover {
-  background: #4a8fe3;
-  border-color: #4a8fe3;
+  /* 同一枚强调色的浅一档，而不是写死的 #4a8fe3：强调色选绿/橙/朱砂时，
+     主按钮一 hover 就跳成蓝 —— 非 hover 态本来读 --accent-primary */
+  background: color-mix(in srgb, var(--accent-primary) 85%, white);
+  border-color: color-mix(in srgb, var(--accent-primary) 85%, white);
 }
 
 .confirm-btn.ok:focus {
-  box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.4);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 40%, transparent);
 }
 
+/* 危险档沿用审批卡的三件套（--danger-bg/-border/-text）：这套令牌在浅色与手记
+   都有转浅档，写死 #f85149 时白字压在浅主题的红上只有 2.4:1 */
 .confirm-btn.ok.danger {
-  background: #f85149;
-  border-color: #f85149;
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  border-color: var(--danger-border);
 }
 
 .confirm-btn.ok.danger:hover {
-  background: #e64643;
-  border-color: #e64643;
+  background: var(--danger-border);
+  border-color: var(--danger-border);
 }
 
 .confirm-btn.ok.danger:focus {
-  box-shadow: 0 0 0 2px rgba(248, 81, 73, 0.4);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger-text) 40%, transparent);
 }
 
 /* 过渡动画 */

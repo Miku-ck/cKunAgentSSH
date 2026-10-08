@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>隧道 UI v3 — 主题一致版 · cKunAgentSSH</title>
+<style>
+/* ============================================================
+ * v3：与主题系统一致 —— 组件层零色值、零主题分支，
+ * 全部消费 src/styles/variables.css 的真实令牌；主题块原样搬入，
+ * 右上角切换器驱动 documentElement[data-theme]，8 套主题逐套成立。
+ * ============================================================ */
+
+/* ===== 以下主题令牌搬自 src/styles/variables.css（值逐字一致） ===== */
+:root {
+  --bg-base: #000000;
+  --bg-elevated: #1a1a1e;
+  --bg-elevated-solid: #1a1a1e;
+  --bg-hover: rgba(255,255,255,0.06);
+  --bg-active: rgba(255,255,255,0.12);
+  --divider-primary: #1a1a1a;
+  --border-default: #3e3e42;
+  --border-subtle: #2d2d30;
+  --text-primary: #cccccc;
+  --text-secondary: #969696;
+  --text-tertiary: #878787;
+  --bg-terminal: #000000;
+  --bg-input: #101013;
+  --bg-input-solid: #101013;
+  --bg-slider: #303030;
+  --border-input: #303030;
+  --accent-primary: #0078d4;
+  --accent-purple: #c586c0;
+  --accent-green: #4ec9b0;
+  --accent-orange: #ce9178;
+  --accent-red: #f48771;
+  --accent-cyan: #9cdcfe;
+  --accent-yellow: #dcdcaa;
+  --accent-indigo: #818cf8;
+  --accent-indigo-soft: #a5b4fc;
+  --accent-indigo-bg: rgba(129, 140, 248, 0.12);
+  --danger-bg: #4a1a1a;
+  --danger-border: #6a2d2d;
+  --danger-text: #ff6b6b;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.2);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.4);
+  --transition-fast: 150ms ease;
+  --canvas-bg: var(--bg-base);
+  --wash: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+  --accent-on: #ffffff;
+  --font-sans: system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, "Courier New", monospace;
+  --titlebar-h: 32px;
+  /* 隧道 UI 本地语义令牌：徽标文字色。深色系直接吃 accent；
+     浅色/米纸主题下 accent-cyan 等是为深底设计的，直接上卡面不可读 → 本地加深。
+     实现时应把这三条补进 variables.css（有消费方，符合维护约定）。 */
+  --tint-l: var(--accent-cyan);
+  --tint-r: var(--accent-purple);
+  --tint-d: var(--accent-indigo);
+}
+[data-theme="light"] {
+  --bg-base: #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-elevated-solid: #ffffff;
+  --bg-hover: rgba(0,0,0,0.04);
+  --bg-active: rgba(0,0,0,0.08);
+  --divider-primary: #e0e0e0;
+  --border-default: #d0d0d0;
+  --border-subtle: #e0e0e0;
+  --text-primary: #000000;
+  --text-secondary: #555555;
+  --text-tertiary: #6e6e6e;
+  --bg-terminal: #17181c;
+  --bg-input: #ffffff;
+  --bg-input-solid: #ffffff;
+  --bg-slider: #d0d0d0;
+  --border-input: #c0c0c0;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.08);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.15);
+  --accent-indigo: #4f46e5;
+  --accent-indigo-soft: #4f46e5;
+  --accent-indigo-bg: rgba(79, 70, 229, 0.1);
+  --tint-l: #0e639c;   /* #9cdcfe 在白底 1.6:1 → 加深 */
+  --tint-r: #8a3d7d;   /* #c586c0 在白底不足 → 加深 */
+  --tint-d: var(--accent-indigo);
+  --danger-bg: #fdecea;
+  --danger-border: #f3c2bd;
+  --danger-text: #c62828;
+}
+[data-theme="blue-screen"] {
+  --bg-base: #0a1628;
+  --bg-elevated: #142d52;
+  --bg-elevated-solid: #142d52;
+  --bg-hover: rgba(255,255,255,0.06);
+  --bg-active: rgba(255,255,255,0.12);
+  --divider-primary: #0f2138;
+  --border-default: #1e3a5f;
+  --border-subtle: #152d50;
+  --text-primary: #c8ddf0;
+  --text-secondary: #8aa8c8;
+  --text-tertiary: #7d9cc0;
+  --bg-input: #0f2039;
+  --bg-input-solid: #0f2039;
+  --bg-slider: #1a3a6e;
+  --border-input: #1e3a5f;
+}
+[data-theme="forest"] {
+  --bg-base: #0b1a12;
+  --bg-elevated: #1b3a26;
+  --bg-elevated-solid: #1b3a26;
+  --bg-hover: rgba(255,255,255,0.05);
+  --bg-active: rgba(255,255,255,0.10);
+  --divider-primary: #13261b;
+  --border-default: #2a4a36;
+  --border-subtle: #1d3526;
+  --text-primary: #d3e8d9;
+  --text-secondary: #9db8a4;
+  --text-tertiary: #93ac9c;
+  --bg-input: #132719;
+  --bg-input-solid: #132719;
+  --bg-slider: #26402f;
+  --border-input: #2a4a36;
+}
+[data-theme="mint"] {
+  --bg-base: #0a1b1a;
+  --bg-elevated: #1a413c;
+  --bg-elevated-solid: #1a413c;
+  --bg-hover: rgba(255,255,255,0.05);
+  --bg-active: rgba(255,255,255,0.10);
+  --divider-primary: #122928;
+  --border-default: #27514e;
+  --border-subtle: #1c3a38;
+  --text-primary: #d0ece8;
+  --text-secondary: #9cc4bf;
+  --text-tertiary: #96bab5;
+  --bg-input: #122b28;
+  --bg-input-solid: #122b28;
+  --bg-slider: #24504b;
+  --border-input: #27514e;
+}
+[data-theme="bee"] {
+  --bg-base: #1a1206;
+  --bg-elevated: #3d2d12;
+  --bg-elevated-solid: #3d2d12;
+  --bg-hover: rgba(255,255,255,0.05);
+  --bg-active: rgba(255,255,255,0.10);
+  --divider-primary: #2b2010;
+  --border-default: #57411f;
+  --border-subtle: #3f2f18;
+  --text-primary: #ece0c4;
+  --text-secondary: #c2b08a;
+  --text-tertiary: #b8a47a;
+  --bg-input: #281d0a;
+  --bg-input-solid: #281d0a;
+  --bg-slider: #4a3a1e;
+  --border-input: #57411f;
+}
+[data-theme="coral"] {
+  --bg-base: #180d0b;
+  --bg-elevated: #3a221c;
+  --bg-elevated-solid: #3a221c;
+  --bg-hover: rgba(255,255,255,0.05);
+  --bg-active: rgba(255,255,255,0.10);
+  --divider-primary: #2a1713;
+  --border-default: #543028;
+  --border-subtle: #3d211c;
+  --text-primary: #f0dcd7;
+  --text-secondary: #c5a6a0;
+  --text-tertiary: #bfa09a;
+  --bg-input: #261511;
+  --bg-input-solid: #261511;
+  --bg-slider: #472a23;
+  --border-input: #543028;
+}
+[data-theme="atelier"] {
+  --bg-base: #f2ece1;
+  --bg-elevated: #faf6ee;
+  --bg-elevated-solid: #faf6ee;
+  --bg-hover: rgba(25, 21, 16, 0.06);
+  --bg-active: rgba(25, 21, 16, 0.12);
+  --divider-primary: #e4dccd;
+  --border-default: #d3c8b6;
+  --border-subtle: #e4dccd;
+  --text-primary: #191510;
+  --text-secondary: #4a4237;
+  --text-tertiary: #6b6152;
+  --bg-input: #ece4d6;
+  --bg-input-solid: #ece4d6;
+  --bg-slider: #d3c8b6;
+  --border-input: #c9bca6;
+  --bg-terminal: #17181c;
+  --accent-purple: #7c4a76;
+  --accent-green: #4a6b3c;
+  --accent-red: #b3382a;
+  --accent-cyan: #2f5b74;
+  --accent-yellow: #7a5f14;
+  --accent-indigo: #3b4f7a;
+  --accent-indigo-bg: rgba(59, 79, 122, 0.10);
+  --danger-bg: #f7e2dd;
+  --danger-border: #e0b3a4;
+  --danger-text: #a03018;
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
+  --shadow-sm: 0 1px 2px rgba(43, 39, 35, 0.14);
+  --shadow-lg: 0 8px 24px rgba(43, 39, 35, 0.18);
+  --font-sans: Georgia, "Iowan Old Style", "Palatino Linotype", "Source Han Serif SC", "Songti SC", SimSun, "Microsoft YaHei", serif;
+  --font-mono: "Cascadia Mono", Consolas, "DejaVu Sans Mono", Menlo, ui-monospace, monospace;
+  --line-height-normal: 1.7;
+  --canvas-bg:
+    radial-gradient(circle at 12% 6%, #fff8ec 0%, transparent 44%),
+    radial-gradient(circle at 90% 96%, #e7ddca 0%, transparent 48%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.05' numOctaves='2'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23g)' opacity='.42'/%3E%3C/svg%3E"),
+    var(--bg-base);
+  --wash: #f6d8a8;
+}
+
+/* ===== 组件层：只消费令牌，无一个硬编码色值 ===== */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; border-radius: var(--radius-sm); }
+::selection { background: var(--wash); }
+body {
+  background: var(--canvas-bg); background-attachment: fixed;
+  color: var(--text-primary); font-family: var(--font-sans); font-size: 13px;
+  height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+/* 标题栏：真实 --titlebar-h（32px），画布走 --canvas-bg（手记纸纹只铺一层） */
+.titlebar {
+  height: var(--titlebar-h); flex: none; display: flex; align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--canvas-bg); background-attachment: fixed;
+  padding: 0 12px; gap: 4px; user-select: none;
+}
+.brand { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 12px; margin-right: 16px; }
+.tb-btn {
+  width: 28px; height: calc(var(--titlebar-h) - 6px); display: flex; align-items: center; justify-content: center;
+  background: none; border: none; border-radius: var(--radius-sm); color: var(--text-secondary); cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.tb-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.tb-btn.active { background: var(--bg-active); color: var(--text-primary); }
+.tb-btn svg { width: 14px; height: 14px; }
+.spacer { flex: 1; }
+.win-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--border-default); margin-left: 8px; }
+
+/* 主题切换器 */
+.theme-select {
+  height: 24px; background: var(--bg-input); border: 1px solid var(--border-input);
+  border-radius: var(--radius-sm); color: var(--text-primary); font-size: 11.5px;
+  font-family: var(--font-sans); padding: 0 4px; cursor: pointer; margin-right: 10px;
+}
+
+.page { flex: 1; overflow-y: auto; padding: 20px 24px 48px; }
+.page-inner { max-width: 860px; margin: 0 auto; }
+.page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.page-head h1 { font-size: 16px; font-weight: 600; }
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 12px; border-radius: var(--radius-sm); font-size: 12.5px;
+  border: 1px solid var(--border-default); background: transparent;
+  color: var(--text-primary); cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+.btn:hover { background: var(--bg-hover); }
+.btn.primary { background: var(--accent-primary); border-color: var(--accent-primary); color: var(--accent-on); }
+.btn.sm { padding: 3px 9px; font-size: 12px; min-width: 52px; justify-content: center; }
+.btn:disabled { opacity: .45; cursor: not-allowed; pointer-events: none; }
+.icon-btn {
+  width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
+  background: none; border: none; border-radius: var(--radius-sm); color: var(--text-secondary); cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.icon-btn svg { width: 14px; height: 14px; }
+.icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.icon-btn.confirming { width: auto; padding: 0 9px; gap: 5px; background: var(--danger-bg); color: var(--danger-text); font-size: 12px; }
+.icon-btn.confirming:hover { background: var(--danger-border); }
+
+.chips { display: flex; gap: 6px; margin-bottom: 14px; }
+.chip {
+  padding: 3px 10px; border-radius: 12px; font-size: 11.5px; cursor: pointer;
+  border: 1px solid var(--border-subtle); background: transparent; color: var(--text-secondary);
+  transition: all var(--transition-fast);
+}
+.chip:hover { border-color: var(--border-default); color: var(--text-primary); }
+.chip.on { background: var(--bg-active); border-color: var(--border-default); color: var(--text-primary); }
+.chip .n { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-tertiary); }
+.chip.on .n { color: var(--text-secondary); }
+
+.tunnel-list { display: flex; flex-direction: column; gap: 8px; }
+.tunnel-row {
+  background: var(--bg-elevated); border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md); box-shadow: var(--shadow-sm);
+  padding: 11px 14px;
+  display: grid; grid-template-columns: 10px 1fr auto; grid-template-areas: "dot main act" ". meta act";
+  gap: 3px 12px; align-items: start;
+  transition: border-color var(--transition-fast);
+}
+.tunnel-row:hover { border-color: var(--border-default); }
+.tunnel-row.error { border-color: var(--danger-border); }
+.tunnel-row.orphan { opacity: .75; }
+
+.dot { grid-area: dot; width: 9px; height: 9px; border-radius: 50%; background: var(--text-tertiary); margin-top: 5px; }
+.dot.active { background: var(--accent-green); box-shadow: 0 0 6px color-mix(in srgb, var(--accent-green) 50%, transparent); }
+.dot.busy { background: var(--accent-yellow); animation: pulse 1.2s ease-in-out infinite; }
+.dot.error { background: var(--accent-red); }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+
+.row-main { grid-area: main; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.badge { font-family: var(--font-mono); font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: var(--radius-sm); flex: none; }
+.badge.L { color: var(--tint-l); background: color-mix(in srgb, var(--tint-l) 12%, transparent); }
+.badge.R { color: var(--tint-r); background: color-mix(in srgb, var(--tint-r) 14%, transparent); }
+.badge.D { color: var(--tint-d); background: color-mix(in srgb, var(--tint-d) 14%, transparent); }
+.badge.warn { color: var(--accent-yellow); background: color-mix(in srgb, var(--accent-yellow) 12%, transparent); font-weight: 400; }
+
+.rule-path { font-family: var(--font-mono); font-size: 12.5px; }
+.arrow { color: var(--text-tertiary); margin: 0 2px; }
+
+.row-meta { grid-area: meta; display: flex; align-items: center; gap: 10px; font-size: 11.5px; color: var(--text-tertiary); }
+.row-meta .conn-name { color: var(--text-secondary); }
+.cnt {
+  font-family: var(--font-mono); font-size: 10.5px;
+  color: var(--accent-green);
+  background: color-mix(in srgb, var(--accent-green) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-green) 25%, transparent);
+  border-radius: 8px; padding: 0 7px; line-height: 16px;
+}
+.row-meta .orphan-tag { color: var(--accent-yellow); }
+
+.row-actions { grid-area: act; display: flex; align-items: center; gap: 4px; }
+.copy-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-family: var(--font-mono); font-size: 11px;
+  color: var(--tint-l); background: var(--bg-input);
+  border: 1px solid var(--border-input); border-radius: var(--radius-sm);
+  padding: 2px 8px; cursor: pointer;
+  transition: border-color var(--transition-fast);
+}
+.copy-chip:hover { border-color: var(--accent-primary); }
+.copy-chip.ok { color: var(--accent-green); border-color: color-mix(in srgb, var(--accent-green) 40%, transparent); }
+
+.row-err {
+  grid-area: meta; margin-top: 5px;
+  font-size: 11.5px; color: var(--danger-text);
+  background: var(--danger-bg); border: 1px solid var(--danger-border);
+  border-radius: var(--radius-sm); padding: 5px 9px;
+  display: flex; align-items: center; gap: 10px;
+}
+.row-err .btn { margin-left: auto; }
+
+.empty {
+  border: 1px dashed var(--border-default); border-radius: var(--radius-lg);
+  padding: 44px 20px; text-align: center; color: var(--text-tertiary);
+}
+.empty svg { width: 28px; height: 28px; margin-bottom: 10px; color: var(--text-secondary); }
+.empty .t { color: var(--text-secondary); font-size: 13px; margin-bottom: 4px; }
+.empty .btn { margin-top: 14px; }
+
+.foot-hint { margin-top: 14px; font-size: 11.5px; color: var(--text-tertiary); display: flex; gap: 6px; align-items: baseline; }
+.foot-hint code { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
+
+/* 弹窗：唯一浮起层 = --bg-elevated + --shadow-lg（浅色主题靠阴影分层） */
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: none; align-items: center; justify-content: center; z-index: 50; }
+.overlay.show { display: flex; }
+.modal {
+  width: 480px; max-height: 86vh; overflow-y: auto;
+  background: var(--bg-elevated); border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg); padding: 18px 20px 16px; box-shadow: var(--shadow-lg);
+}
+.modal h2 { font-size: 14px; font-weight: 600; margin-bottom: 16px; }
+.close-x { float: right; background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 16px; margin: -4px -6px 0 0; }
+.field { margin-bottom: 14px; }
+.field > label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 5px; }
+.field input, .field select {
+  width: 100%; height: 30px; background: var(--bg-input); border: 1px solid var(--border-input);
+  border-radius: var(--radius-sm); color: var(--text-primary); padding: 0 9px;
+  font-size: 12.5px; font-family: var(--font-sans); outline: none;
+}
+.field input:focus, .field select:focus { border-color: var(--accent-primary); }
+.field input:disabled { opacity: .5; cursor: not-allowed; }
+.field input.invalid { border-color: var(--accent-red); }
+.field .hint { font-size: 11px; color: var(--text-tertiary); margin-top: 4px; }
+.field .err { font-size: 11px; color: var(--danger-text); margin-top: 4px; display: none; }
+.field.bad .err { display: block; }
+.field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+.seg { display: flex; border: 1px solid var(--border-input); border-radius: var(--radius-sm); overflow: hidden; }
+.seg button {
+  flex: 1; height: 30px; background: transparent; border: none; color: var(--text-secondary);
+  font-size: 12.5px; font-family: var(--font-sans); cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  transition: background var(--transition-fast);
+}
+.seg button + button { border-left: 1px solid var(--border-input); }
+.seg button.on { background: var(--accent-indigo-bg); color: var(--text-primary); }
+.mini { font-family: var(--font-mono); font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: var(--radius-sm); }
+.mini.l { color: var(--tint-l); background: color-mix(in srgb, var(--tint-l) 12%, transparent); }
+.mini.r { color: var(--tint-r); background: color-mix(in srgb, var(--tint-r) 14%, transparent); }
+.mini.d { color: var(--tint-d); background: color-mix(in srgb, var(--tint-d) 16%, transparent); }
+
+.confirm-box {
+  display: none; gap: 8px; align-items: flex-start; font-size: 11.5px; color: var(--danger-text);
+  background: var(--danger-bg); border: 1px solid var(--danger-border);
+  border-radius: var(--radius-sm); padding: 8px 10px; margin-bottom: 14px;
+}
+.confirm-box.show { display: flex; }
+.modal-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+
+.demo-note {
+  position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+  font-size: 11.5px; color: var(--text-tertiary);
+  background: var(--bg-elevated); border: 1px solid var(--border-subtle);
+  border-radius: 20px; padding: 6px 16px; z-index: 10; box-shadow: var(--shadow-sm);
+}
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="titlebar">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg>
+    cKunAgentSSH
+  </div>
+  <button class="tb-btn" title="AI 运维助手"><span style="font-size:10px;font-weight:700">AI</span></button>
+  <button class="tb-btn" title="定时任务"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 16 14"/></svg></button>
+  <button class="tb-btn" title="监控仪表盘"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></button>
+  <button class="tb-btn" title="远程终端"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg></button>
+  <button class="tb-btn" title="运维审计"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><path d="M20 12a8 8 0 1 1-2.34-5.66"/></svg></button>
+  <button class="tb-btn" title="SFTP"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
+  <button class="tb-btn active" title="隧道">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg>
+  </button>
+  <div class="spacer"></div>
+  <!-- 主题切换器：8 套主题逐套验证 -->
+  <select class="theme-select" id="theme-select" title="主题">
+    <option value="">深色（默认）</option>
+    <option value="light">浅色</option>
+    <option value="blue-screen">蓝屏</option>
+    <option value="forest">森林</option>
+    <option value="mint">薄荷</option>
+    <option value="bee">蜜蜂</option>
+    <option value="coral">珊瑚</option>
+    <option value="atelier">手记</option>
+  </select>
+  <button class="tb-btn" title="设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0-2.28.33A2 2 0 0 1 14 13.5V3a2 2 0 1 0-4 0v10.5a2 2 0 0 1-3.12 1.83A1.65 1.65 0 0 0 4.6 15H3a2 2 0 1 0 0 4"/></svg></button>
+  <div class="win-dot"></div><div class="win-dot"></div><div class="win-dot"></div>
+</div>
+
+<div class="page">
+  <div class="page-inner">
+    <div class="page-head">
+      <h1>隧道</h1>
+      <span style="flex:1"></span>
+      <button class="btn primary" onclick="openModal()">＋ 新建隧道</button>
+    </div>
+
+    <div class="chips" id="chips">
+      <button class="chip on" data-f="all">全部 <span class="n"></span></button>
+      <button class="chip" data-f="active">活动 <span class="n"></span></button>
+      <button class="chip" data-f="error">错误 <span class="n"></span></button>
+      <button class="chip" data-f="stopped">已停止 <span class="n"></span></button>
+    </div>
+
+    <div class="tunnel-list" id="list">
+
+      <div class="tunnel-row" data-state="active">
+        <span class="dot active"></span>
+        <div class="row-main">
+          <span class="badge L">L</span>
+          <span class="rule-path">127.0.0.1:8080<span class="arrow">→</span>db.internal:5432</span>
+        </div>
+        <div class="row-actions">
+          <button class="btn sm" data-act="toggle" onclick="toggleRow(this)">停止</button>
+          <button class="icon-btn" title="编辑" onclick="openModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></button>
+          <button class="icon-btn" title="删除" onclick="confirmDel(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+        </div>
+        <div class="row-meta">
+          <span class="conn-name">生产机</span>
+          <span data-state-label>活动</span>
+          <span class="cnt">2 conn</span>
+        </div>
+      </div>
+
+      <div class="tunnel-row" data-state="active">
+        <span class="dot active"></span>
+        <div class="row-main">
+          <span class="badge D">D</span>
+          <span class="rule-path">127.0.0.1:1080<span class="arrow">·</span><span style="color:var(--text-secondary);font-size:12px">SOCKS5</span></span>
+          <span class="badge warn">仅本机</span>
+        </div>
+        <div class="row-actions">
+          <button class="copy-chip" title="复制代理地址" onclick="copyAddr(this)">socks5h://127.0.0.1:1080 ⧉</button>
+          <button class="btn sm" data-act="toggle" onclick="toggleRow(this)">停止</button>
+          <button class="icon-btn" title="编辑" onclick="openModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></button>
+          <button class="icon-btn" title="删除" onclick="confirmDel(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+        </div>
+        <div class="row-meta">
+          <span class="conn-name">生产机</span>
+          <span data-state-label>活动</span>
+          <span class="cnt">5 conn</span>
+        </div>
+      </div>
+
+      <div class="tunnel-row error" data-state="error">
+        <span class="dot error"></span>
+        <div class="row-main">
+          <span class="badge R">R</span>
+          <span class="rule-path">0.0.0.0:6379<span class="arrow">→</span>localhost:6379</span>
+          <span class="badge warn">对远端网段开放</span>
+        </div>
+        <div class="row-actions">
+          <button class="btn sm" data-act="toggle" onclick="toggleRow(this)">重试</button>
+          <button class="icon-btn" title="编辑" onclick="openModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></button>
+          <button class="icon-btn" title="删除" onclick="confirmDel(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+        </div>
+        <div class="row-meta">
+          <span class="conn-name">内网跳板</span>
+          <span data-state-label>错误</span>
+        </div>
+        <div class="row-err">
+          <span>远端端口绑定被拒：服务端 PermitListenPort 不含 6379（或端口已被占用）。</span>
+        </div>
+      </div>
+
+      <div class="tunnel-row" data-state="stopped">
+        <span class="dot"></span>
+        <div class="row-main">
+          <span class="badge L">L</span>
+          <span class="rule-path">127.0.0.1:3306<span class="arrow">→</span>rds-test:3306</span>
+        </div>
+        <div class="row-actions">
+          <button class="btn sm" data-act="toggle" onclick="toggleRow(this)">启动</button>
+          <button class="icon-btn" title="编辑" onclick="openModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></button>
+          <button class="icon-btn" title="删除" onclick="confirmDel(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+        </div>
+        <div class="row-meta">
+          <span class="conn-name">测试库</span>
+          <span data-state-label>已停止</span>
+        </div>
+      </div>
+
+      <div class="tunnel-row orphan" data-state="orphan">
+        <span class="dot"></span>
+        <div class="row-main">
+          <span class="badge L">L</span>
+          <span class="rule-path">127.0.0.1:9090<span class="arrow">→</span>grafana:3000</span>
+        </div>
+        <div class="row-actions">
+          <button class="btn sm" disabled title="连接配置已删除，无法启动">启动</button>
+          <button class="icon-btn" title="编辑" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></button>
+          <button class="icon-btn" title="删除" onclick="confirmDel(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+        </div>
+        <div class="row-meta">
+          <span class="orphan-tag">⚠ 连接「旧监控机」已删除</span>
+          <span>— 删除本规则或重建连接后可用</span>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="empty" id="empty" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg>
+      <div class="t">没有符合当前筛选的隧道</div>
+      <div> </div>
+      <button class="btn primary" onclick="openModal()">＋ 新建隧道</button>
+    </div>
+
+
+  </div>
+</div>
+
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <button class="close-x" onclick="closeModal()">✕</button>
+    <h2>新建隧道</h2>
+
+    <div class="field">
+      <label>类型</label>
+      <div class="seg" id="seg">
+        <button class="on" data-t="local" onclick="pick('local')"><span class="mini l">L</span>本地转发</button>
+        <button data-t="remote" onclick="pick('remote')"><span class="mini r">R</span>远程转发</button>
+        <button data-t="dynamic" onclick="pick('dynamic')"><span class="mini d">D</span>动态 SOCKS5</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>连接</label>
+      <select><option>生产机 — root@10.0.0.8</option><option>内网跳板 — deploy@10.0.0.3</option><option>测试库 — ops@192.168.1.20</option></select>
+    </div>
+
+    <div class="field">
+      <label>名称（可选）</label>
+      <input type="text" placeholder="留空则自动生成，如「L 8080 → db.internal:5432」">
+    </div>
+
+    <div class="field-grid" id="fg-listen">
+      <div class="field">
+        <label>本地监听地址</label>
+        <input type="text" value="127.0.0.1" id="listen-host">
+        <div class="hint" id="listen-hint" hidden>D 类固定 127.0.0.1，不对局域网开放</div>
+      </div>
+      <div class="field" id="f-listen-port">
+        <label>本地监听端口</label>
+        <input type="number" value="8080" id="listen-port" oninput="validatePort(this)">
+        <div class="err">端口需为 1–65535 的整数</div>
+      </div>
+    </div>
+
+    <div class="field-grid" id="fg-bind" hidden>
+      <div class="field">
+        <label>远端绑定地址</label>
+        <input type="text" value="127.0.0.1" id="bind-host" oninput="bindWarn(this.value)">
+      </div>
+      <div class="field">
+        <label>远端绑定端口</label>
+        <input type="number" value="6379" oninput="validatePort(this)">
+        <div class="err">端口需为 1–65535 的整数</div>
+      </div>
+    </div>
+    <div class="confirm-box" id="bind-warn">
+      <span>⚠</span>
+      <span>绑定 0.0.0.0 将把该端口暴露给远端所在网段的任意主机，请确认远端防火墙策略。</span>
+    </div>
+
+    <div class="field-grid" id="fg-dst">
+      <div class="field">
+        <label id="dst-label">目标主机</label>
+        <input type="text" value="db.internal" id="dst-host">
+        <div class="hint" id="dst-hint">从远端视角解析（不是你本机）</div>
+      </div>
+      <div class="field">
+        <label>目标端口</label>
+        <input type="number" value="5432" oninput="validatePort(this)">
+        <div class="err">端口需为 1–65535 的整数</div>
+      </div>
+    </div>
+
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal()">取消</button>
+      <button class="btn primary" id="save-btn" onclick="save()">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="demo-note">v3：组件层零硬编码色值 —— 右上角切换 8 套主题逐套验证；切「手记」看衬线 + 直角 + 米纸整套装换</div>
+
+<script>
+  /* 主题切换：与 app 同机制 —— documentElement[data-theme]（默认深色 = 空值） */
+  const themeSelect = document.getElementById('theme-select')
+  themeSelect.addEventListener('change', () => {
+    const t = themeSelect.value
+    if (t) document.documentElement.dataset.theme = t
+    else delete document.documentElement.dataset.theme
+  })
+
+  /* ===== 筛选 + 实时计数 ===== */
+  let filter = 'all'
+  function applyFilter() {
+    let shown = 0
+    document.querySelectorAll('#list .tunnel-row').forEach(r => {
+      const show = filter === 'all' || r.dataset.state === filter
+      r.hidden = !show
+      if (show) shown++
+    })
+    document.getElementById('empty').hidden = shown > 0
+    const counts = { all: 0, active: 0, error: 0, stopped: 0 }
+    document.querySelectorAll('#list .tunnel-row').forEach(r => {
+      counts.all++
+      if (counts[r.dataset.state] !== undefined) counts[r.dataset.state]++
+    })
+    document.querySelectorAll('#chips .chip').forEach(c => {
+      c.querySelector('.n').textContent = counts[c.dataset.f]
+    })
+  }
+  document.querySelectorAll('#chips .chip').forEach(c => {
+    c.addEventListener('click', () => {
+      filter = c.dataset.f
+      document.querySelectorAll('#chips .chip').forEach(x => x.classList.toggle('on', x === c))
+      applyFilter()
+    })
+  })
+
+  /* ===== 启停过渡态 ===== */
+  function toggleRow(btn) {
+    const row = btn.closest('.tunnel-row')
+    const dot = row.querySelector('.dot')
+    const label = row.querySelector('[data-state-label]')
+    const stopping = btn.textContent === '停止'
+    btn.disabled = true
+    btn.textContent = stopping ? '停止中…' : '启动中…'
+    dot.className = 'dot busy'
+    label.textContent = stopping ? '停止中' : '启动中'
+    setTimeout(() => finish(row, stopping ? 'stopped' : 'active'), 900)
+  }
+  function finish(row, state) {
+    row.dataset.state = state
+    row.classList.remove('error')
+    const dot = row.querySelector('.dot')
+    const label = row.querySelector('[data-state-label]')
+    const btn = row.querySelector('[data-act="toggle"]')
+    dot.className = 'dot' + (state === 'active' ? ' active' : '')
+    label.textContent = state === 'active' ? '活动' : '已停止'
+    btn.disabled = false
+    btn.textContent = state === 'active' ? '停止' : '启动'
+    applyFilter()
+  }
+
+  /* ===== 删除两段确认 ===== */
+  let delTimer = null
+  function confirmDel(btn) {
+    if (btn.classList.contains('confirming')) {
+      clearTimeout(delTimer)
+      btn.closest('.tunnel-row').remove()
+      applyFilter()
+      return
+    }
+    btn.classList.add('confirming')
+    btn.textContent = '确认删除'
+    delTimer = setTimeout(resetDel.bind(null, btn), 3000)
+  }
+  function resetDel(btn) {
+    btn.classList.remove('confirming')
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>'
+  }
+
+  /* ===== 复制代理地址 ===== */
+  function copyAddr(chip) {
+    const addr = chip.textContent.replace(/ [⧉✓].*$/, '').replace(' ⧉', '').replace(' ✓ 已复制', '')
+    ;(navigator.clipboard ? navigator.clipboard.writeText(addr) : Promise.reject())
+      .catch(() => {})
+      .finally(() => {
+        chip.classList.add('ok')
+        chip.textContent = addr + ' ✓ 已复制'
+        setTimeout(() => { chip.classList.remove('ok'); chip.textContent = addr + ' ⧉' }, 1600)
+      })
+  }
+
+  /* ===== 弹窗 ===== */
+  function openModal() { document.getElementById('overlay').classList.add('show') }
+  function closeModal() { document.getElementById('overlay').classList.remove('show') }
+  document.getElementById('overlay').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal() })
+
+  function pick(t) {
+    document.querySelectorAll('#seg button').forEach(b => b.classList.toggle('on', b.dataset.t === t))
+    document.getElementById('fg-listen').hidden = t === 'remote'
+    document.getElementById('fg-bind').hidden = t !== 'remote'
+    document.getElementById('fg-dst').hidden = t === 'dynamic'
+    const lh = document.getElementById('listen-host'), hint = document.getElementById('listen-hint')
+    if (t === 'dynamic') { lh.value = '127.0.0.1'; lh.disabled = true; hint.hidden = false }
+    else { lh.disabled = false; hint.hidden = true }
+    document.getElementById('dst-label').textContent = t === 'remote' ? '本机目标主机（远端回连到这）' : '目标主机'
+    document.getElementById('dst-host').value = t === 'remote' ? 'localhost' : 'db.internal'
+    document.getElementById('bind-warn').classList.remove('show')
+  }
+  function bindWarn(v) {
+    document.getElementById('bind-warn').classList.toggle('show', v === '0.0.0.0' || v === '::')
+  }
+  function validatePort(input) {
+    const v = Number(input.value)
+    const bad = !Number.isInteger(v) || v < 1 || v > 65535
+    input.classList.toggle('invalid', bad)
+    input.closest('.field').classList.toggle('bad', bad)
+    document.getElementById('save-btn').disabled = !!document.querySelector('.modal .field.bad')
+  }
+  function save() {
+    const p = document.getElementById('listen-port').value
+    if (p === '3306') alert('预检失败：本机端口 3306 已被占用（EADDRINUSE）— 保存前即时报，而非启动时')
+    else closeModal()
+  }
+
+  applyFilter()
+</script>
+</body>
+</html>

@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest'
 import rawVariables from './variables.css?raw'
 import rawGlobal from './global.css?raw'
 import rawSshView from '../views/ssh/SshView.vue?raw'
+import rawQuickCommandBar from '../components/ssh/QuickCommandBar.vue?raw'
 import rawTitleBar from '../layouts/TitleBar.vue?raw'
 import rawRunView from '../components/agent/RunView.vue?raw'
 import rawHomeCard from '../components/home/HomeCommandCard.vue?raw'
@@ -32,6 +33,7 @@ const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/<!--[\s
 const css = strip(rawVariables)
 const globalCss = strip(rawGlobal)
 const sshView = strip(rawSshView)
+const quickCommandBar = strip(rawQuickCommandBar)
 const titleBar = strip(rawTitleBar)
 const runView = strip(rawRunView)
 const homeCard = strip(rawHomeCard)
@@ -117,6 +119,7 @@ const ORPHAN_TOKENS_ALLOWLIST: string[] = []
 const STRUCTURAL_CANVASES: Record<string, string> = {
   '.ssh-view / .term-tabs': sshView,
   '.titlebar': titleBar,
+  '.quick-command-bar': quickCommandBar,
 }
 
 describe('atelier（手记）主题的令牌覆盖', () => {
@@ -245,6 +248,48 @@ describe('atelier（手记）主题的令牌覆盖', () => {
       }
     }
     expect(offenders).toEqual([])
+  })
+
+  it('终端页面那一族不许把颜色写成字面量：只能读令牌，或自报组件局部令牌', () => {
+    // 这轮在终端页修的一整批（快捷命令条 #cccccc、补全浮层 #79c0ff、标题条 #4ade80
+    // 与窗口按钮 #cccccc、确认框 hover 跳成 #4a8fe3、toast 四档 ANSI 色）都是同一个形状：
+    // 深色主题的字面量抄进了组件，切到浅色/手记就糊成一片，而切强调色时它纹丝不动。
+    // 漏一条不会编译报错，只会在米纸上留一块黑 —— 所以按目录前缀扫，新文件自动在网内。
+    //
+    // 唯一豁免的形状是"组件局部令牌的声明"（`--x: #hex`）：那是 GpuNvtopPanel 立的做法
+    // —— 固定深色的终端复刻面板把调色板集中在一块并写明改色只改这里。写进属性值就没人
+    // 再看第二遍，声明成局部令牌至少是一处可读、可核对的来源。
+    const TERMINAL_PAGE_SCOPE = [
+      'src/components/ssh/',
+      'src/views/ssh/',
+      'src/components/home/',
+      'src/components/common/',
+      'src/layouts/',
+    ]
+    const inScope = Object.entries(SOURCE_FILES).filter(([file]) =>
+      TERMINAL_PAGE_SCOPE.some((prefix) => file.startsWith(prefix)),
+    )
+    // 空串守卫：glob 没命中、或 ?raw 拿到的是空模块（vitest 的 css.include 是白名单）时，
+    // offender 恒空 —— 那条断言就成了假的绿。逐个钉住"真读到了东西"。
+    expect(inScope.length).toBeGreaterThan(20)
+    const blank = inScope.filter(([, src]) => src.trim().length < 20).map(([file]) => file)
+    expect(blank, '这些在网内的文件读到了空串').toEqual([])
+
+    const offenders: string[] = []
+    for (const [file, src] of inScope) {
+      src.split('\n').forEach((line, i) => {
+        if (!/#[0-9a-fA-F]{3,8}\b/.test(line)) return
+        if (/^\s*--[a-z0-9-]+\s*:/.test(line)) return
+        offenders.push(`${file}:${i + 1} ${line.trim()}`)
+      })
+    }
+    expect(offenders).toEqual([])
+
+    // 变异自检：解析器绿着骗人比没有更糟（同上方"裸引用守卫自己会红"一条做法）
+    const probe = '  .qc-item {\n    color: #cccccc;\n  }\n'
+    const probeHit = probe.split('\n').filter((l) => /#[0-9a-fA-F]{3,8}\b/.test(l)
+      && !/^\s*--[a-z0-9-]+\s*:/.test(l))
+    expect(probeHit).toHaveLength(1)
   })
 
   it('纸纹落在上色的结构画布上，不是 body', () => {

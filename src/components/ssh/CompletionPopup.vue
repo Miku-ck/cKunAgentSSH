@@ -143,10 +143,11 @@ defineExpose({
   z-index: 2000;
   min-width: 180px;
   max-width: 420px;
-  background: var(--bg-input-solid);
+  /* 浮起层归 --bg-elevated（variables.css 两级背景约定：菜单/下拉是浮起不是凹陷） */
+  background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
   border-radius: 4px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-lg);
   overflow-y: auto;
   overflow-x: hidden;
   padding: 4px 0;
@@ -154,11 +155,6 @@ defineExpose({
 
 .completion-popup::-webkit-scrollbar {
   width: 6px;
-}
-
-.completion-popup::-webkit-scrollbar-thumb {
-  background: #3e3e42;
-  border-radius: 3px;
 }
 
 .completion-item {
@@ -184,7 +180,7 @@ defineExpose({
   width: 13px;
   height: 13px;
   flex-shrink: 0;
-  color: #79c0ff;
+  color: var(--accent-cyan);
 }
 
 .completion-item.active .item-icon {

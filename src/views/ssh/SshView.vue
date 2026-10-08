@@ -97,6 +97,11 @@ v-show="s.id === store.activeSessionId"
           <DashboardView v-if="pageMounted('dashboard')" />
         </div>
 
+        <!-- SSH 隧道页面 -->
+        <div v-show="activeNavPage === 'tunnels'" class="tunnel-page">
+          <TunnelView v-if="pageMounted('tunnels')" />
+        </div>
+
         <!-- 首页：目标主机 + 下达 + 待放行计数条（批量与追溯归它）+ 本轮过程（逐条决策在卡上） -->
         <div v-show="homeTabActive" class="home-pane">
           <HomeTargetTitle @bulk="showBulk = true" />
@@ -189,10 +194,12 @@ const SshAiPanel = defineAsyncComponent(() => import('@/components/ssh/SshAiPane
 const AuditView = defineAsyncComponent(() => import('@/views/ssh/AuditView.vue'))
 const SchedulesView = defineAsyncComponent(() => import('@/views/ssh/SchedulesView.vue'))
 const DashboardView = defineAsyncComponent(() => import('@/views/ssh/DashboardView.vue'))
+const TunnelView = defineAsyncComponent(() => import('@/components/ssh/TunnelView.vue'))
 const RunView = defineAsyncComponent(() => import('@/components/agent/RunView.vue'))
 import { useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useAgentStore } from '@/stores/agent'
+import { useTunnelStore } from '@/stores/tunnel'
 import { useSettings } from '@/composables/useSettings'
 import { useCommandDelivery } from '@/composables/useCommandDelivery'
 import { useSshNavigation } from '@/composables/useSshNavigation'
@@ -226,6 +233,7 @@ const {
   toggleAudit,
   toggleSchedules,
   toggleDashboard,
+  toggleTunnels,
   showAiPanel,
   openLocalShell,
   handleLocalExit,
@@ -273,6 +281,9 @@ function handleTabCtxAction(action: string) {
 
 onMounted(() => {
   store.init()
+  // 隧道状态订阅全局存活（不挂在 TunnelView 上）：规则列表 + 运行状态推送
+  // 在应用会话内持续更新，切到隧道页时数据已就绪
+  void useTunnelStore().init()
 })
 
 // ── QuickCommandBar 顶线对齐 ──
@@ -330,6 +341,7 @@ defineExpose({
   toggleAudit,
   toggleSchedules,
   toggleDashboard,
+  toggleTunnels,
   openSettings,
   activeNavPage,
   showAiPanel,
@@ -552,6 +564,17 @@ defineExpose({
   overflow: hidden;
 }
 
+/* ─── Tunnel Page ─── */
+.tunnel-page {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  overflow: hidden;
+}
+
 /* ─── Tab Context Menu ─── */
 .tab-ctx-menu {
   position: fixed;
@@ -561,7 +584,7 @@ defineExpose({
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
   border-radius: 6px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-lg);
 }
 
 .tab-ctx-item {
@@ -581,7 +604,7 @@ defineExpose({
 }
 
 .tab-ctx-item.danger:hover {
-  background: rgba(244, 135, 113, 0.15);
+  background: color-mix(in srgb, var(--accent-red) 15%, transparent);
   color: var(--accent-red);
 }
 

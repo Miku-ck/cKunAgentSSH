@@ -52,6 +52,12 @@
   --accent-cyan: #9cdcfe;
   --accent-yellow: #dcdcaa;
 
+  /* 隧道徽标文字色（L/R/D）。深色主题跟随同名强调色，浅色主题各档在 @media 内加深
+     保白底对比度。TunnelView/TunnelModal 读 var(--tint-l/-r/-d, var(--accent-*-))。 */
+  --tint-l: var(--accent-cyan);
+  --tint-r: var(--accent-purple);
+  --tint-d: var(--accent-indigo);
+
   /* 监控指标色板（正常/警戒/危险）：仪表盘顶部卡片、磁盘条 与 GpuNvtopPanel 细条共用。
      统一阈值：正常 <60 绿 / 警戒 ≥60 ≤80 黄 / 危险 >80 红。 */
   --metric-cool: #35c93f;
@@ -171,6 +177,16 @@
   --border-input: #c0c0c0;
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.08);
   --shadow-lg: 0 8px 24px rgba(0,0,0,0.15);
+
+  /* 浅色主题：命令行/代码青色加深（#9cdcfe 在白底只有 1.4:1 —— 补全浮层的图标、
+     审批卡代码体、SFTP 面包屑当前层与文本文件图标都读它，浅主题下等于隐形）。
+     取本块已有的 --status-debug-text 同值，不另造新色；做法与下面 indigo/pink 两条一致。 */
+  --accent-cyan: #0e7490;
+
+  /* 浅色主题：隧道徽标文字加深保白底对比度（#9cdcfe/c586c0/818cf8 在白底仅 1.6–2.8:1） */
+  --tint-l: #0e7490;
+  --tint-r: #7c3a72;
+  --tint-d: #4338ca;
 
   /* 浅色主题：indigo 加深保证对比度 */
   --accent-indigo: #4f46e5;
@@ -350,6 +366,11 @@
   --bg-slider: #d3c8b6;
   --border-input: #c9bca6;
   --bg-terminal: #17181c;
+
+  /* 手记：隧道徽标（L/R/D）*/
+  --tint-l: #2f5b74;
+  --tint-r: #7c4a76;
+  --tint-d: #3b4f7a;
 
   /* 深色主题里这些是"亮粉亮青"，搬到纸上会糊成一片；手记的色板取自墨与矿物 */
   --accent-purple: #7c4a76;

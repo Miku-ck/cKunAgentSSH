@@ -23,6 +23,9 @@
       <button class="titlebar-action-btn" :class="{ active: activePage === 'remote-mgr' }" title="远程终端" @click="emit('action-remote')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg>
       </button>
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'tunnels' }" title="隧道" @click="emit('action-tunnels')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg>
+      </button>
       <button class="titlebar-action-btn" :class="{ active: activePage === 'audit' }" title="运维审计" @click="emit('action-audit')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M9 12l2 2 4-4"/><path d="M20 12a8 8 0 1 1-2.34-5.66"/></svg>
       </button>
@@ -53,7 +56,7 @@ const api = window.electronAPI
 
 defineProps<{
   /** 当前激活的功能页，对应图标高亮 */
-  activePage: 'home' | 'remote-mgr' | 'sftp' | 'audit' | 'ai' | 'schedules' | 'dashboard'
+  activePage: 'home' | 'remote-mgr' | 'sftp' | 'audit' | 'ai' | 'schedules' | 'dashboard' | 'tunnels'
 }>()
 
 const emit = defineEmits<{
@@ -63,6 +66,7 @@ const emit = defineEmits<{
   'action-audit': []
   'action-sftp': []
   'action-dashboard': []
+  'action-tunnels': []
   'action-settings': []
 }>()
 
@@ -141,14 +145,15 @@ async function close() { await api?.windowClose() }
   color: var(--text-primary);
 }
 
-/* 当前功能页图标高亮（亮绿色） */
+/* 当前功能页图标高亮。取 --status-success-text 而不是写死一档绿：
+   #4ade80 在白底只有 1.9:1、在米纸上更淡，浅/手记主题下"当前页"反而看不见 */
 .titlebar-action-btn.active {
-  color: #4ade80;
-  text-shadow: 0 0 8px rgba(74, 222, 128, 0.45);
+  color: var(--status-success-text);
+  text-shadow: 0 0 8px color-mix(in srgb, var(--status-success-text) 45%, transparent);
 }
 
 .titlebar-action-btn.active:hover {
-  color: #4ade80;
+  color: var(--status-success-text);
 }
 
 .titlebar-action-btn .ai-text {
@@ -165,7 +170,9 @@ async function close() { await api?.windowClose() }
   justify-content: center;
   border: none;
   background: transparent;
-  color: #cccccc;
+  /* 与左邻的 .titlebar-action-btn 同一档文字：#cccccc 是深色主题的 --text-primary，
+     写在浅/手记的画布上只有 1.6:1，三枚窗口按钮基本隐形 */
+  color: var(--text-secondary);
   cursor: pointer;
   transition: background var(--transition-fast), color var(--transition-fast);
 }
@@ -176,8 +183,12 @@ async function close() { await api?.windowClose() }
 }
 
 .win-btn.close:hover {
-  background: #e81123;
-  color: #fff;
+  /* 关窗按钮的红是 Windows 平台约定（用户对手上这三枚按钮的既有预期），
+     不属于主题色板，所以写成组件局部色、不跟 --accent-* 走 */
+  --win-close: #e81123;
+  --win-close-on: #ffffff;
+  background: var(--win-close);
+  color: var(--win-close-on);
 }
 
 :global(.app.has-background) .titlebar {

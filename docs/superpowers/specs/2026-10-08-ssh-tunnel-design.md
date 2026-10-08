@@ -99,6 +99,7 @@ interface TunnelSession {
 | `tunnel:start`     | `(id) → TunnelStatus`             | 拉起；失败也以 status 返回而非 throw，UI 直接渲染 message |
 | `tunnel:stop`      | `(id) → TunnelStatus`             | 停止                                        |
 | `tunnel:statusAll` | `() → TunnelStatus[]`             | 渲染层启动时恢复视图                                |
+| `tunnel:checkPort` | `(host, port) → { ok, message? }` | 保存前预检本机监听端口被占即时报（评审补充，实现已含）              |
 
 ### 推送（复用 `safeSend`，窗口重建不丢事件的机制已有）
 
@@ -119,6 +120,12 @@ interface TunnelSession {
    - **TunnelView.vue**：规则列表 + 状态列。行结构：`[状态点] L 8080 → db.internal:5432 · 生产机`，类型徽标 L/R/D，操作列 启动/停止/编辑/删除。错误状态就地展示 message（toast 兜底走现有 toast store）。
    - **TunnelModal.vue**：新建/编辑弹窗。连接下拉复用 `sshStore.connections`（无凭据副本，只有连接名）；类型单切后按类型显隐字段；dynamic 时 listenHost 输入禁用并标注 127.0.0.1；remote 填 0.0.0.0 弹确认。
 5. **不改** ConnectionModal/ConnectionRow：V1 不做「连接级隧道配置」，规则集中在一个页面管理，避免拉出迁移。
+
+UI 终稿以 `designs/tunnel-ui-mockup-v3.html` 为准（评审 v1 → v2 → v3）：
+组件层零硬编码色值、全量消费 variables.css 令牌（8 套主题逐套验证）；徽标底色用
+`color-mix` 派生。**待补令牌**：light 主题下 `--accent-cyan/--accent-purple` 在白底
+不可读（1.6:1），需在 variables.css 增补 `--tint-l/--tint-r/--tint-d` 三条语义令牌
+（深色主题默认回落到 accent 值，有真实消费方，符合该文件维护约定）。
 
 状态订阅：新建 `src/stores/tunnel.ts`（Pinia），持有 rules/statuses 两个 map，`onTunnelStatus` 合并状态；app 启动时 `tunnel:list` + `tunnel:statusAll` 各拉一次。
 

@@ -389,18 +389,20 @@ onMounted(refresh)
   border-radius: 8px;
   font-weight: 600;
 }
-.env.test { color: var(--accent-green); background: rgba(63, 185, 80, 0.12); }
-.env.prod { color: var(--accent-red); background: rgba(244, 135, 113, 0.12); }
+.env.test { color: var(--accent-green); background: color-mix(in srgb, var(--accent-green) 12%, transparent); }
+.env.prod { color: var(--accent-red); background: color-mix(in srgb, var(--accent-red) 12%, transparent); }
 .concl {
   font-size: 11px;
   padding: 1px 8px;
   border-radius: 8px;
 }
-.concl.executed, .concl.auto_allowed, .concl.approved { color: var(--accent-green); background: rgba(63, 185, 80, 0.12); }
-.concl.blocked { color: var(--accent-orange); background: rgba(229, 165, 75, 0.12); }
-.concl.denied { color: var(--accent-red); background: rgba(244, 135, 113, 0.12); }
-.concl.failed { color: #ff7b72; background: rgba(255, 123, 114, 0.12); }
-.concl.released, .concl.revoked, .concl.answered, .concl.skipped { color: #8b949e; background: rgba(139, 148, 158, 0.12); }
+/* 底色由文字那枚令牌自己派生：原先压的是终端 ANSI 档（rgba(63,185,80/.229,165,75/…)），
+   与 --accent-green/orange/red 不同 hue，墨绿字压 GitHub 绿、朱砂字压 GitHub 红 */
+.concl.executed, .concl.auto_allowed, .concl.approved { color: var(--accent-green); background: color-mix(in srgb, var(--accent-green) 12%, transparent); }
+.concl.blocked { color: var(--accent-orange); background: color-mix(in srgb, var(--accent-orange) 12%, transparent); }
+.concl.denied { color: var(--accent-red); background: color-mix(in srgb, var(--accent-red) 12%, transparent); }
+.concl.failed { color: var(--danger-text); background: color-mix(in srgb, var(--danger-text) 12%, transparent); }
+.concl.released, .concl.revoked, .concl.answered, .concl.skipped { color: var(--text-tertiary); background: color-mix(in srgb, var(--text-tertiary) 12%, transparent); }
 .cmd { max-width: 40ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .result { max-width: 30ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-tertiary); }
 .empty { text-align: center; color: var(--text-tertiary); padding: 24px; }

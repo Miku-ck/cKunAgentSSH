@@ -284,7 +284,8 @@ async function pipelineReadWrite(
   }
 }
 
-interface SSHConnectionConfig {
+/** 渲染层副本见 src/env.d.ts（跨 tsconfig 边界不能 import，与本模块是否导出无关） */
+export interface SSHConnectionConfig {
   id: string
   name: string
   host: string
@@ -610,6 +611,31 @@ export class SSHManager {
     const id = `sftp-${this.nextId++}`
     const { client: _client, ...pub } = await this.doConnect(id, config, false)
     return pub
+  }
+
+  /**
+   * 隧道专用：建立裸 ssh2 Client（无 shell/sftp 通道），生命周期由调用方
+   * （TunnelManager）全权管理 —— 不进 sessions 池、不走自动重连。
+   * 复用 buildConnectConfig：TOFU 主机密钥校验 / 认证 / keepalive / 压缩
+   * 与终端连接完全一致，known_hosts 懒加载复用同一条 single-flight 路径。
+   */
+  async openRawClient(config: SSHConnectionConfig): Promise<Client> {
+    await this.loadKnownHosts()
+    const client = new (await loadSsh2())()
+    const connectConfig = this.buildConnectConfig(config)
+    // s3 同款口径：连接配置已提取后立即清除内存中的明文密码/passphrase
+    config.password = undefined
+    config.passphrase = undefined
+    return new Promise((resolve, reject) => {
+      // settled 前 error → reject；settled 后 caller（TunnelManager）已挂自己的
+      // 'error' 处理器，这里吞掉避免双重处理，也避免无人监听时 EventEmitter throw
+      let settled = false
+      client.on('ready', () => { settled = true; resolve(client) })
+      client.on('error', (err: Error) => {
+        if (!settled) reject(SSHError.from(err))
+      })
+      client.connect(connectConfig)
+    })
   }
 
   private async doConnect(

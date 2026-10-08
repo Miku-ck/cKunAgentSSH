@@ -148,7 +148,7 @@ function formatDate(ts: number): string {
 }
 
 .conn-row.selected {
-  background: rgba(0, 120, 212, 0.12);
+  background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
 }
 
 /* 单元格基础样式 */
@@ -197,11 +197,12 @@ function formatDate(ts: number): string {
 
 .status-dot.on {
   background: var(--accent-green);
-  box-shadow: 0 0 4px rgba(78, 201, 176, 0.5);
+  box-shadow: 0 0 4px color-mix(in srgb, var(--accent-green) 50%, transparent);
 }
 
 .status-dot.off {
-  background: #4a4a4a;
+  /* 55% 的 --text-tertiary 在深色底上落回原来那档 #4a4a4a，浅/手记主题则跟着主题的灰走 */
+  background: color-mix(in srgb, var(--text-tertiary) 55%, transparent);
 }
 
 /* ── 名称 ── */
@@ -251,17 +252,17 @@ function formatDate(ts: number): string {
 }
 
 .auth-badge.password {
-  background: rgba(0, 120, 212, 0.12);
+  background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
   color: var(--accent-primary);
 }
 
 .auth-badge.privateKey {
-  background: rgba(197, 134, 192, 0.12);
+  background: color-mix(in srgb, var(--accent-purple) 12%, transparent);
   color: var(--accent-purple);
 }
 
 .auth-badge.agent {
-  background: rgba(78, 201, 176, 0.12);
+  background: color-mix(in srgb, var(--accent-green) 12%, transparent);
   color: var(--accent-green);
 }
 
@@ -319,11 +320,11 @@ function formatDate(ts: number): string {
 
 .row-btn.connect {
   color: var(--accent-primary);
-  border-color: rgba(0, 120, 212, 0.3);
+  border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent);
 }
 
 .row-btn.connect:hover {
-  background: rgba(0, 120, 212, 0.1);
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
 }
 
 .row-btn.more {
@@ -342,7 +343,7 @@ function formatDate(ts: number): string {
   pointer-events: none;
   opacity: 0.85;
   border-color: var(--accent-primary);
-  background: rgba(0, 120, 212, 0.08);
+  background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
 }
 .row-btn.connect .spinner {
   animation: spin 0.8s linear infinite;

@@ -580,6 +580,10 @@ defineExpose({
 
 /* 「问 AI」悬浮按钮：选区上方，点击把选中内容送进 AI 面板 */
 .ask-ai-float-btn {
+  /* 同 LocalTerminal：hover 底是 --accent-indigo（主题固定的靛档，三套主题都是深值），
+     不是用户强调色，所以前景不能读 --accent-on —— 那个是 applyAccent 按 --accent-primary
+     亮度算的，强调色选白/薄荷时它翻成深字，压在靛底上反而糊。 */
+  --ask-on: #ffffff;
   position: absolute;
   z-index: 20;
   display: inline-flex;
@@ -598,7 +602,7 @@ defineExpose({
 
 .ask-ai-float-btn:hover {
   background: var(--accent-indigo);
-  color: #fff;
+  color: var(--ask-on);
 }
 
 .remote-terminal :deep(.xterm-viewport) {

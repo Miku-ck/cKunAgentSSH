@@ -10,6 +10,8 @@ import { PtyManager, clampPtyDimension } from './pty-manager'
 import { loadSsh2, SSHManager } from './ssh-manager'
 import { SSHError, toIpcTransport } from './ssh-error'
 import { SSHStore, type SSHConnectionRecord } from './ssh-store'
+import { TunnelStore, type TunnelRule } from './tunnel-store'
+import { TunnelManager } from './tunnel-manager'
 import { ElectronBridge, BridgeOp } from './electron-bridge'
 import { BridgeWsClient } from './bridge-ws-client'
 import {
@@ -27,6 +29,8 @@ let backendManager: BackendManager | null = null
 let ptyManager: PtyManager | null = null
 let sshManager: SSHManager | null = null
 let sshStore: SSHStore | null = null
+let tunnelStore: TunnelStore | null = null
+let tunnelManager: TunnelManager | null = null
 let electronBridge: ElectronBridge | null = null
 let bridgeWsClient: BridgeWsClient | null = null
 
@@ -151,6 +155,7 @@ function createWindow(): void {
   // 仍会各自完成初次绑定，语义不变）。
   if (ptyManager) ptyManager.setWindow(mainWindow)
   if (sshManager) sshManager.setWindow(mainWindow)
+  if (tunnelManager) tunnelManager.setWindow(mainWindow)
 
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
@@ -1079,6 +1084,14 @@ function stripCredentials(rec: SSHConnectionRecord): SSHConnectionRecord {
 function setupSSHIPC(): void {
   sshManager = new SSHManager()
   sshStore = new SSHStore()
+  // 隧道：复用 sshStore 取凭据 + sshManager.openRawClient 建 TOFU 一致的裸连接
+  tunnelStore = new TunnelStore()
+  tunnelManager = new TunnelManager()
+  if (mainWindow) tunnelManager.setWindow(mainWindow)
+  tunnelManager.setConfigProvider(async (connectionId) => {
+    return sshStore!.get(connectionId)
+  })
+  tunnelManager.setClientFactory(config => sshManager!.openRawClient(config))
   if (mainWindow) sshManager.setWindow(mainWindow)
   // ssh2 懒加载预热：窗口 show 后台并行加载（~1.3s），用户点连接前已就位；
   // 失败不致命——doConnect/testConnection 内还有 await loadSsh2() 兜底路径。
@@ -1190,6 +1203,43 @@ function setupSSHIPC(): void {
 
   handleTrusted('ssh:migrateLegacy', (_event, legacy: any[]) => {
     return sshStore!.migrateLegacy(legacy)
+  })
+
+  // ── SSH 隧道（端口转发）──
+  // 设计见 docs/superpowers/specs/2026-10-08-ssh-tunnel-design.md：
+  // 规则持久化走 TunnelStore，运行态走 TunnelManager（独立 ssh2 client，与终端
+  // 会话解耦）；凭据经 configProvider 主进程自取，渲染层全程无明文。
+  handleTrusted('tunnel:list', async () => {
+    return tunnelStore!.list()
+  })
+
+  handleTrusted('tunnel:save', async (_event, rule: TunnelRule) => {
+    return tunnelStore!.save(rule)
+  })
+
+  handleTrusted('tunnel:delete', async (_event, id: string) => {
+    // 运行中的隧道先停（幂等），再删规则
+    if (tunnelManager) await tunnelManager.stop(id)
+    return tunnelStore!.delete(id)
+  })
+
+  handleTrusted('tunnel:start', async (_event, id: string) => {
+    const rule = await tunnelStore!.get(id)
+    if (!rule) throw new Error(`隧道规则 ${id} 不存在`)
+    return tunnelManager!.start(rule)
+  })
+
+  handleTrusted('tunnel:stop', async (_event, id: string) => {
+    return tunnelManager!.stop(id)
+  })
+
+  handleTrusted('tunnel:statusAll', () => {
+    return tunnelManager!.statusAll()
+  })
+
+  // 保存前预检：本机监听端口被占即时报（而非启动时才暴露 EADDRINUSE）
+  handleTrusted('tunnel:checkPort', (_event, host: string, port: number) => {
+    return tunnelManager!.checkPort(host, port)
   })
 
   // 后端端口查询（渲染进程启动时兜底获取，防止 backend:status 事件丢失）
@@ -1484,6 +1534,7 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     ptyManager?.destroyAll()
     sshManager?.disconnectAll()
+    tunnelManager?.stopAll()
     backendManager?.stop()
     bridgeWsClient?.stop()
     electronBridge?.stop()
@@ -1496,6 +1547,7 @@ app.on('before-quit', () => {
   markQuitting()
   ptyManager?.destroyAll()
   sshManager?.disconnectAll()
+  tunnelManager?.stopAll()
   backendManager?.stop()
   bridgeWsClient?.stop()
   electronBridge?.stop()

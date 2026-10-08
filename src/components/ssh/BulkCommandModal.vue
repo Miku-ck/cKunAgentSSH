@@ -485,9 +485,11 @@ watch(remoteSessions, (sessions) => {
   border-radius: 4px;
   flex-shrink: 0;
 }
-.col-badge.ok { color: var(--accent-green); background: rgba(63, 185, 80, 0.12); }
-.col-badge.fail { color: var(--accent-red); background: rgba(229, 83, 75, 0.12); }
-.col-badge.err { color: var(--accent-red); background: rgba(229, 83, 75, 0.12); }
+/* 底色用文字那枚令牌自己的色派生：原先的 rgba(63,185,80,.12)/rgba(229,83,75,.12) 是
+   终端 ANSI 档，与主题无关，手记的墨绿/朱砂文字就压在一块 GitHub 绿的渍上 */
+.col-badge.ok { color: var(--accent-green); background: color-mix(in srgb, var(--accent-green) 12%, transparent); }
+.col-badge.fail { color: var(--accent-red); background: color-mix(in srgb, var(--accent-red) 12%, transparent); }
+.col-badge.err { color: var(--accent-red); background: color-mix(in srgb, var(--accent-red) 12%, transparent); }
 .col-dur { margin-left: auto; font-size: 10px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 .bulk-col-body {
   margin: 0;
@@ -525,11 +527,11 @@ watch(remoteSessions, (sessions) => {
   flex-shrink: 0;
   font-size: 10px;
   color: var(--accent-orange);
-  background: rgba(210, 153, 34, 0.1);
+  background: color-mix(in srgb, var(--accent-orange) 10%, transparent);
   padding: 0 5px;
   border-radius: 4px;
 }
-.bulk-diff-line.inconsistent { background: rgba(210, 153, 34, 0.07); }
+.bulk-diff-line.inconsistent { background: color-mix(in srgb, var(--accent-orange) 7%, transparent); }
 .bulk-diff-line.inconsistent .diff-text { color: var(--accent-orange); }
 .bulk-empty { padding: 30px 0; text-align: center; color: var(--text-tertiary); font-size: 12px; }
 </style>

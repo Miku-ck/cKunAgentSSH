@@ -151,6 +151,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sshDuplicateConnection: (id: string) => ipcRenderer.invoke('ssh:duplicateConnection', id),
   sshTestConnection: (config: any) => ipcRenderer.invoke('ssh:testConnection', config),
   sshMigrateLegacy: (legacy: any[]) => ipcRenderer.invoke('ssh:migrateLegacy', legacy),
+
+  // SSH 隧道（端口转发）
+  tunnelList: () => ipcRenderer.invoke('tunnel:list'),
+  tunnelSave: (rule: any) => ipcRenderer.invoke('tunnel:save', rule),
+  tunnelDelete: (id: string) => ipcRenderer.invoke('tunnel:delete', id),
+  tunnelStart: (id: string) => ipcRenderer.invoke('tunnel:start', id),
+  tunnelStop: (id: string) => ipcRenderer.invoke('tunnel:stop', id),
+  tunnelStatusAll: () => ipcRenderer.invoke('tunnel:statusAll'),
+  // 保存前预检：本机监听端口被占即时报（而非启动时才暴露 EADDRINUSE）
+  tunnelCheckPort: (host: string, port: number) => ipcRenderer.invoke('tunnel:checkPort', host, port),
+  /**
+   * 监听隧道状态变化（主进程推送，每次状态迁移一条）
+   * @param callback 状态回调
+   * @returns 取消监听函数，务必在组件 onUnmounted 时调用以避免内存泄漏
+   */
+  onTunnelStatus: (callback: (data: any) => void) => {
+    const handler = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('tunnel:status', handler)
+    return () => ipcRenderer.removeListener('tunnel:status', handler)
+  },
   fsSelectFile: () => ipcRenderer.invoke('fs:selectFile'),
   fsSelectImage: () => ipcRenderer.invoke('fs:selectImage'),
   fsLoadBackgroundImage: (fileName: string) => ipcRenderer.invoke('fs:loadBackgroundImage', fileName),
