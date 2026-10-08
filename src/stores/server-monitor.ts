@@ -202,10 +202,22 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
   function start(sshId: string) {
     const session = sshStore.sessions.find(s => s.id === sshId)
     if (!session || session.type !== 'remote') return
+    // stop() 负责全部清零，这里不再抄第二份清单 —— 上一版正是在两处各写一份，
+    // stop() 那份漏了 lastError/errorCount/prevStat，于是关掉主机后仪表盘仍然
+    // 挂着「监控已中断」，而「当前终端没有远程连接」的空态整条不可达。
     stop()
     activeSshId = sshId
     targetSshId = sshId
     polling.value = true
+    void sample()
+    scheduleNext()
+  }
+
+  /** 停表并清空全部读数：唯一的状态清零入口 */
+  function stop() {
+    polling.value = false
+    activeSshId = ''
+    targetSshId = ''
     current.value = null
     cpuHistory.value = []
     memHistory.value = []
@@ -214,22 +226,6 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
     errorCount.value = 0
     lastError.value = null
     prevStat = null
-    void sample()
-    scheduleNext()
-  }
-
-  function stop() {
-    polling.value = false
-    activeSshId = ''
-    targetSshId = ''
-    // 读数与历史要一起清：只停表不清数据的话，DashboardView 会照常渲染上一台
-    // 主机最后一次采样的 CPU/内存/磁盘（标题还写着已关闭的 host，且没有任何
-    // 「这是旧的」提示），而「当前终端没有远程连接」那个空态分支再也走不到。
-    current.value = null
-    cpuHistory.value = []
-    memHistory.value = []
-    loadHistory.value = []
-    gpuHist.value = {}
     if (timer) {
       clearTimeout(timer)
       timer = null

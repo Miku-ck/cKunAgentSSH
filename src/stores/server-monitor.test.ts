@@ -320,3 +320,42 @@ describe('describeMonitorError', () => {
     expect(r.message).toBe('指标采集失败，请检查连接后重试')
   })
 })
+
+/**
+ * stop() 的状态清零完整性。
+ *
+ * 这里曾经连出两次同族缺陷：stop() 只停表不清读数（DashboardView 继续渲染上一台
+ * 主机最后一次采样，空态分支不可达），补上清零后又漏了 lastError —— 而
+ * DashboardView 的分支顺序是「先 v-if=lastError，再 v-else 空态」，于是关掉主机、
+ * 开一个本地 shell，看到的仍是「监控已中断：…（连接恢复后自动重连）」，指向一个
+ * 已经不存在的会话，且这一整个页面会话期间再也回不到空态。
+ * start()/stop() 各抄一份清单就是漂移的入口，现在只有 stop() 一处。
+ */
+describe('stop() 必须清空全部读数（含错误态）', () => {
+  it('停表后不留任何上一台主机的状态', async () => {
+    const { createPinia, setActivePinia } = await import('pinia')
+    setActivePinia(createPinia())
+    const { useServerMonitorStore } = await import('./server-monitor')
+    const mon = useServerMonitorStore()
+
+    // 先跑一轮 start 的真实路径留下脏状态：无 electronAPI 的采样必然失败并记 lastError
+    mon.current = { host: 'A', sshId: 's-1' } as never
+    mon.cpuHistory.push(12)
+    mon.memHistory.push(30)
+    mon.loadHistory.push(1.2)
+    mon.gpuHist = { '0': [1, 2] } as never
+    mon.lastError = { message: '监控已中断', code: 'SESSION_NOT_FOUND', retryable: true } as never
+    mon.polling = true
+
+    mon.stop()
+
+    expect(mon.polling).toBe(false)
+    expect(mon.current).toBe(null)
+    expect(mon.cpuHistory).toEqual([])
+    expect(mon.memHistory).toEqual([])
+    expect(mon.loadHistory).toEqual([])
+    expect(mon.gpuHist).toEqual({})
+    // 这条是补漏的那一项：lastError 不清，空态分支永远不可达
+    expect(mon.lastError).toBe(null)
+  })
+})

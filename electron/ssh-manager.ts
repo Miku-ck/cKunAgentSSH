@@ -23,6 +23,7 @@ import { readFileSync, statSync } from 'fs'
 import { promises as fsPromises } from 'fs'
 import { posix, join } from 'path'
 import { createHash } from 'crypto'
+import { StringDecoder } from 'string_decoder'
 
 /** exec 命令输出累积上限（1MB），超过后截断并在返回结果附提示，防止无界内存增长 */
 const MAX_EXEC_OUTPUT_BYTES = 1024 * 1024
@@ -673,6 +674,15 @@ export class SSHManager {
       client.on('ready', () => {
         if (!withShell) {
           const name = config.name || `${config.username}@${config.host}`
+          // 同 shell 分支的陈旧续体守卫：SFTP 专用连接也是按 id 入池，迟到握手
+          // 一样会把新代挤出去、让拆只有在旧 client 上
+          const incumbent = this.sessions.get(id)
+          if (incumbent && incumbent.client !== client) {
+            console.warn(`[ssh] 会话 ${id} 的迟到握手被丢弃（池中已是另一代连接）`)
+            try { client.end() } catch { /* ignore */ }
+            wrappedResolve({ id, name, client })
+            return
+          }
           this.sessions.set(id, { id, connectionId: config.id, client, stream: null, name, cwd: '' })
           // 审查R2修复：携带 client，供陈旧重连续体精确拆除自身连接（见 runReconnectAttempt）
           wrappedResolve({ id, name, client })
@@ -691,6 +701,24 @@ export class SSHManager {
             }
 
             const name = config.name || `${config.username}@${config.host}`
+            // 陈旧续体守卫：建 shell 期间用户又点了一次「重连」，新一代先落地并
+            // 占住了同一个 id。此处若无条件 set，旧握手会把新代的条目整行挤掉，
+            // 随后 runReconnectAttempt 的陈旧分支按身份拆掉自己刚装的行 —— 于是新
+            // 连接还在往 ssh:data 里吐字，会话池里却已经没有这个 id：终端能看不能
+            // 打字（write 报 SESSION_NOT_FOUND），远端那条 SSH 连接谁也都关不掉。
+            // 「池中已有同 id 就绝不替换」是重连逻辑本来就依赖的不变量
+            // （reconnect/scheduleReconnectAttempt/runReconnectAttempt 三处入口都
+            // 用 sessions.has(id) 早退），这里只是把它落实在安装点上。
+            const incumbent = this.sessions.get(id)
+            if (incumbent && incumbent.client !== client) {
+              console.warn(`[ssh] 会话 ${id} 的迟到握手被丢弃（池中已是另一代连接）`)
+              try { stream.close() } catch { /* ignore */ }
+              try { client.end() } catch { /* ignore */ }
+              // 仍按成功出栈：调用方拿到的是**本轮自己的** client，其陈旧分支的
+              // teardownSession(id, 本 client) 因池中是新代而跳过，不会误关新会话
+              wrappedResolve({ id, name, client })
+              return
+            }
             this.sessions.set(id, {
               id,
               connectionId: config.id,
@@ -728,9 +756,19 @@ export class SSHManager {
             stream.write(initCmd)
 
             // Shell 数据 → 渲染进程（同时解析 OSC 7 提取 cwd）
+            // S6-04 同款根因，这里当时漏了：`data.toString('utf-8')` 对每个 TCP
+            // 分片独立解码，ssh2 的 shell 流按任意字节边界切片，被切在两片之间的
+            // 三字节汉字会在前一片尾、后一片头各产出一个 U+FFFD —— 中文日志
+            // 与中文文件名在终端里显示成乱码问号，且回滚缓冲区已经写坏，无法恢复。
+            // exec 通道（同文件 execCommandWithExitCode）已改 StringDecoder，交互
+            // shell 这条是同一缺陷的最后一个出口。
+            const shellDecoder = new StringDecoder('utf8')
             stream.on('data', (data: Buffer) => {
-              const text = data.toString('utf-8')
+              const text = shellDecoder.write(data)
+              if (!text) return  // 整片都是不完整序列的尾字节，不必空发一次 IPC
               // 解析 OSC 7 序列提取当前工作目录，支持 BEL (\x07) 和 ST (ESC \) 两种结束符
+              // 已知残留：OSC 序列本身被切在两片之间时这一帧仍解析不到（cwd 少更新一次），
+              // 与字符损坏相比只是显示滞后，补滚动尾巴会让同一序列被匹配两次，故不在此处做。
               const osc7Match = text.match(/\x1b\]7;file:\/\/[^\/]*([^\x07\x1b]*)(?:\x07|\x1b\\)/)
               if (osc7Match) {
                 const session = this.sessions.get(id)
@@ -931,13 +969,20 @@ export class SSHManager {
           return text.length > remain ? acc + text.slice(0, remain) : acc + text
         }
 
+        // S6-04 的传输侧根因：`data.toString('utf-8')` 对每个 TCP 分片**独立**解码，
+        // 被切在两片之间的多字节字符（中文作业日志很常见）会在前一片尾部和后一片
+        // 头部各产生一个 U+FFFD。StringDecoder 把不完整的尾字节留到下一次 write，
+        // 解码结果与「整块字节一次 toString」一致。
+        const stdoutDecoder = new StringDecoder('utf8')
+        const stderrDecoder = new StringDecoder('utf8')
+
         stream.on('data', (data: Buffer) => {
-          stdout = appendCapped(stdout, data.toString('utf-8'))
+          stdout = appendCapped(stdout, stdoutDecoder.write(data))
           if (stdout.length >= MAX_EXEC_OUTPUT_BYTES) stdoutTruncated = true
         })
         if (stream.stderr) {
           stream.stderr.on('data', (data: Buffer) => {
-            stderr = appendCapped(stderr, data.toString('utf-8'))
+            stderr = appendCapped(stderr, stderrDecoder.write(data))
             if (stderr.length >= MAX_EXEC_OUTPUT_BYTES) stderrTruncated = true
           })
         }
@@ -949,6 +994,9 @@ export class SSHManager {
           if (!settled) {
             settled = true
             const TRUNCATED_NOTE = '\n[输出已截断，超过 1MB 上限]'
+            // 冲掉解码器里可能残留的半个多字节字符（流恰好在字符中间收尾）
+            stdout = appendCapped(stdout, stdoutDecoder.end())
+            stderr = appendCapped(stderr, stderrDecoder.end())
             resolve({
               stdout: stdoutTruncated ? stdout + TRUNCATED_NOTE : stdout,
               stderr: stderrTruncated ? stderr + TRUNCATED_NOTE : stderr,
@@ -1524,12 +1572,25 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
           // 残留」，不是完整性校验（它对 4KB 之后的洞毫无判别力）
           const verifyLen = Math.min(VERIFY_SIZE, resumeSize)
           const localHead = Buffer.alloc(verifyLen)
-          const localFd = await fsPromises.open(localPath, 'r')
-          await localFd.read(localHead, 0, verifyLen, 0)
-          await localFd.close()
+          // 原实现在这里 `const localFd = …` 重声明了同名外层变量，外层 finally 看到的
+          // 仍是 null：read/sftpRead/sftpOpen 任一处抛出，本地 fd 或远端 handle 就漏一个
+          // ——每次断线重连的续传校验都漏一对，长跑必撞 fd 上限。改成各自带 finally 的
+          // 独立作用域，谁开谁关。
+          {
+            const headFd = await fsPromises.open(localPath, 'r')
+            try {
+              await headFd.read(localHead, 0, verifyLen, 0)
+            } finally {
+              try { await headFd.close() } catch { /* ignore */ }
+            }
+          }
+          let remoteHead: Buffer = Buffer.alloc(0)
           const partHandle = await sftpOpen(sftp, partPath, 'r')
-          const remoteHead = await sftpRead(sftp, partHandle, 0, verifyLen)
-          await sftpClose(sftp, partHandle)
+          try {
+            remoteHead = await sftpRead(sftp, partHandle, 0, verifyLen)
+          } finally {
+            try { await sftpClose(sftp, partHandle) } catch { /* ignore */ }
+          }
           if (localHead.slice(0, verifyLen).equals(remoteHead.slice(0, verifyLen))) {
             // 截回可信下界，越过连续边界的零填充与上一代传输的迟到写一并丢弃
             let trimmed = false
@@ -1816,6 +1877,46 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       // 类型收窄（此时两者保证非空），供异步闭包内使用
       const downloadRemoteHandle = remoteHandle
       const downloadLocalFd = localFd
+
+      // stat.size 对 /proc/*、/sys/*、正在增长的日志都报 0，而这类文件确实能读出
+      // 字节。原实现照 total=0 构造出空的分块列表 —— 一个字节都不读，直接把刚截断
+      // 成空的 .part 覆盖到操作员已有的本地文件上，再回一个 100%「完成」。
+      // 未知长度改走「按块顺序读到短读为止」：读多少写多少；超过上限明确报错，
+      // 绝不无界地把远端流灌进本地磁盘（远端 /dev/zero 就是这种流）。
+      if (total === 0) {
+        const UNKNOWN_SIZE_LIMIT = 64 * 1024 * 1024
+        let off = 0
+        for (;;) {
+          if (cancelled) {
+            throw toTransferError({ code: 'CANCELLED', message: '传输已取消', retryable: false })
+          }
+          const buf = await sftpRead(sftp, downloadRemoteHandle, off, CHUNK_SIZE)
+          if (buf.length === 0) break
+          let written = 0
+          while (written < buf.length) {
+            const { bytesWritten } = await downloadLocalFd.write(
+              buf, written, buf.length - written, off + written)
+            if (bytesWritten <= 0) {
+              throw new Error(`本地写入停滞: 偏移 ${off + written} 处无法继续写入`)
+            }
+            written += bytesWritten
+          }
+          off += buf.length
+          if (off > UNKNOWN_SIZE_LIMIT) {
+            throw new Error(
+              `远端报告大小为 0 但已读出 ${off} 字节，超出未知长度下载上限 ${UNKNOWN_SIZE_LIMIT} 字节，已中止`)
+          }
+          sendProgress({ transferred: off, total: 0 })
+        }
+        // 续传复用 .part 时是以 'r+' 打开的（不截断）：读出比残留短的内容，
+        // 不 truncate 就会把上一代的尾巴留在交付文件里
+        await downloadLocalFd.truncate(off)
+        transferred = off
+        downloadComplete = true
+        await renameOverwrite(partPath, localPath)
+        sendProgress({ transferred: off, total: off })
+        return
+      }
 
       // 4. 构造分块列表
       const chunks: Array<{ offset: number; length: number }> = []
