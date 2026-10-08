@@ -1,8 +1,8 @@
 import { spawn, ChildProcess, execFile, execSync } from 'child_process'
-import { join } from 'path'
+import { join, basename } from 'path'
 import { app } from 'electron'
 import http from 'http'
-import { mkdirSync, existsSync, renameSync, copyFileSync } from 'fs'
+import { mkdirSync, existsSync, renameSync, copyFileSync, unlinkSync } from 'fs'
 import { homedir } from 'os'
 import { randomBytes } from 'crypto'
 
@@ -596,20 +596,67 @@ export class BackendManager {
     ]
     for (const legacy of legacyCandidates) {
       if (!existsSync(legacy)) continue
+      const family = BackendManager.legacyDbFamily(legacy)
       try {
-        // rename 跨卷失败时回退到 copy
-        try {
-          renameSync(legacy, targetPath)
-        } catch {
-          copyFileSync(legacy, targetPath)
-        }
-
+        BackendManager.moveDbFamily(family, targetDir, targetPath)
         return targetPath
       } catch (e) {
         console.warn(`[BackendManager] Failed to migrate DB from ${legacy}:`, e)
       }
     }
     return targetPath
+  }
+
+  /**
+   * S0-08：一次迁移必须搬的文件集合。
+   *
+   * 后端 `PRAGMA journal_mode=WAL`（backend/database.py），已提交的事务会合法地
+   * 留在 `ckunagentic.db-wal` 里，直到 checkpoint 才回写主文件。原实现只 rename
+   * 主 `.db`，于是 SQLite 在目标目录新建一个空 `-wal`，旧目录那份 wal 里最新的
+   * 事务成为孤儿 —— 而且下一次启动 `existsSync(targetPath)` 会直接早退，把这个
+   * 半迁移态永久锁死。丢的是 SSH 连接记录与凭据、agent 记忆、定时任务，
+   * 且用户看不到任何错误。
+   */
+  static legacyDbFamily(
+    legacy: string,
+    exists: (p: string) => boolean = existsSync,
+  ): string[] {
+    return [legacy, `${legacy}-wal`, `${legacy}-shm`].filter((p) => exists(p))
+  }
+
+  /**
+   * 把整族文件落到 targetDir。先整批暂存成 `.part`，再逐个同目录 rename ——
+   * 主库只有在三件都拷成功之后才会出现在目标位置，所以任何中途失败都不会留下
+   * 「有主库、缺 wal」的半迁移态（那正是原实现被 existsSync 早退锁死的那个坑）。
+   */
+  private static moveDbFamily(
+    family: string[],
+    targetDir: string,
+    targetPath: string,
+  ): void {
+    const staged = family.map((from) => {
+      const to = join(targetDir, basename(from))
+      return { from, to, part: `${to}.part` }
+    })
+    try {
+      for (const s of staged) copyFileSync(s.from, s.part)
+    } catch (e) {
+      for (const s of staged) {
+        try { unlinkSync(s.part) } catch { /* 没拷出来就不必清 */ }
+      }
+      throw e
+    }
+    for (const s of staged) renameSync(s.part, s.to)
+    // 源文件最后删，且删失败只当噪声：此刻目标已完整，旧位置多留一份不影响正确性
+    // （下次启动走 existsSync(targetPath) 早退，不会再读它）。
+    for (const s of staged) {
+      try { unlinkSync(s.from) } catch (e) {
+        console.warn(`[BackendManager] legacy DB source left behind: ${s.from}`, e)
+      }
+    }
+    if (!existsSync(targetPath)) {
+      throw new Error(`migration produced no target DB: ${targetPath}`)
+    }
   }
 
   /**
