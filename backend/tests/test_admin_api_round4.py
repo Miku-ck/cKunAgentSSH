@@ -142,6 +142,12 @@ def test_memory_settings_budget_bounds_and_dead_strategy(settings_client, monkey
                         lambda k, d=None: store.get(k, d))
     monkeypatch.setattr(settings_mod.db, "set_app_setting",
                         lambda k, v: store.__setitem__(k, v))
+    # round 22 把这条路由的写入换成单事务批量（逐条 set_app_setting 各自提交 =
+    # 中途失败库里一半新一半旧，而 GET 把另一半当已生效报给面板）。spy 必须跟着
+    # 挪到真实写路径上：只挂 set_app_setting 的话断言看的是**没人走的**那条，
+    # 红法还伪装成「键没写进去」，同时整批真写进了测试环境之外的库。
+    monkeypatch.setattr(settings_mod.db, "update_app_settings_bulk",
+                        lambda settings: store.update(settings))
 
     resp = settings_client.put("/api/settings/memory", json={"inject_budget_tokens": 99999})
     assert resp.status_code == 422
