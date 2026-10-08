@@ -28,10 +28,17 @@ function getTerminalFontFamily(key: string): string {
   return TERMINAL_FONT_FAMILIES[key] ?? TERMINAL_FONT_FAMILIES[DEFAULT_FONT_KEY]
 }
 
+/**
+ * 终端正文前景色 —— ANSI 主题固定暗色，这条不随主题走。
+ * 单列导出是因为设置面板要拿它算对比度：用户自选的终端纯色底如果和它太近，
+ * 终端文字就没了（见 AppearancePanel 的终端背景提示）。
+ */
+export const TERMINAL_FOREGROUND = '#e6edf3'
+
 /** 统一的终端暗色主题：背景透明以跟随全局背景，只控制文字/光标/ANSI 颜色 */
 const TERMINAL_DARK_THEME: ITheme = {
   background: 'transparent',
-  foreground: '#e6edf3',
+  foreground: TERMINAL_FOREGROUND,
   cursor: '#58a6ff',
   cursorAccent: '#111111',
   selectionBackground: '#264f78',

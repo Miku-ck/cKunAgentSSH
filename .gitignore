@@ -99,3 +99,6 @@ runtime/*
 
 # 一次性诊断脚本输出（生成器在 .workbuddy/ 下，勿入库）
 .scope-selectors-report.txt
+
+# SSH 开发临时探针/笔记（不入库）
+.dsh-ssh-dev/

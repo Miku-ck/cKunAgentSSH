@@ -77,16 +77,22 @@ export function useOpsSettings() {
     return Math.min(max, Math.max(min, Math.floor(n)))
   }
 
+  /**
+   * 把后端回包写进界面。`keepDrafts` 只给诊断刷新用：那份读数不是本表单的
+   * 一次写回执，用户正在框里打的字还没保存，跟着回填就等于把草稿吃了
+   * （点了「刷新」看快照，自己的输入却消失了）。
+   */
   function applyHttp(data: {
     proxy_url_masked?: string
     proxy_url_set?: boolean
     proxy_source?: string
     timeout_seconds?: number
     retry_count?: number
-  }) {
+  }, opts: { keepDrafts?: boolean } = {}) {
     proxyMasked.value = data.proxy_url_masked ?? ''
     proxySet.value = data.proxy_url_set === true
     proxySource.value = data.proxy_source === 'db' || data.proxy_source === 'env' ? data.proxy_source : ''
+    if (opts.keepDrafts) return
     timeoutDraft.value = clampInt(data.timeout_seconds, TIMEOUT_MIN, TIMEOUT_MAX, 0)
     timeoutText.value = String(timeoutDraft.value)
     retryDraft.value = clampInt(data.retry_count, 0, RETRY_MAX, 1)
@@ -106,12 +112,18 @@ export function useOpsSettings() {
     loading.value = true
     loadError.value = ''
     try {
-      // 并发拉取：日志级别读不到不该把网络区也拖成空态
-      const [http, level] = await Promise.all([api.getHttpSettings(), api.getLogLevel()])
-      applyHttp(http)
-      applyLevel(level)
-    } catch (e: unknown) {
-      loadError.value = toFriendlyMessage(e, '运维设置加载失败')
+      // 分开收：Promise.all 会一路否决 —— 日志级别那次 GET 抖动就把已经拿到的
+      // 网络区一起拖成空态（原实现的注释写着"不该拖垮网络区"，代码做的正是那件事）。
+      const [http, level] = await Promise.allSettled([api.getHttpSettings(), api.getLogLevel()])
+      if (http.status === 'fulfilled') applyHttp(http.value)
+      if (level.status === 'fulfilled') applyLevel(level.value)
+      const failures: { label: string; reason: unknown }[] = []
+      if (http.status === 'rejected') failures.push({ label: '网络设置', reason: http.reason })
+      if (level.status === 'rejected') failures.push({ label: '日志级别', reason: level.reason })
+      if (failures.length) {
+        const labels = failures.map((f) => f.label).join('、')
+        loadError.value = `${labels}读取失败：${toFriendlyMessage(failures[0].reason, '后端可能未就绪')}`
+      }
     } finally {
       loading.value = false
     }
@@ -127,7 +139,7 @@ export function useOpsSettings() {
     savingProxy.value = true
     try {
       const data = await api.updateHttpSettings({ proxy_url: value })
-      applyHttp(data)
+      applyHttp(data, { keepDrafts: httpDirty.value })
       proxyDraft.value = ''
       const rebuilt = (data as { clients_rebuilt?: number }).clients_rebuilt ?? 0
       toast.success(rebuilt ? `代理已生效，${rebuilt} 个模型连接已按新策略重建` : '代理已生效')
@@ -144,9 +156,16 @@ export function useOpsSettings() {
     savingProxy.value = true
     try {
       const data = await api.updateHttpSettings({ proxy_url: '' })
-      applyHttp(data)
+      applyHttp(data, { keepDrafts: httpDirty.value })
       proxyDraft.value = ''
-      toast.success('已清除代理，出站请求恢复直连')
+      // applyHttp 已把"现在实际生效的代理来自哪里"同步进 proxySource：库里的行清空了，
+      // 环境变量 CKUN_HTTP_PROXY 注入的那份照旧在跑。这时候说"恢复直连"是假话，
+      // 用户会以为出站已经直连了。
+      toast.success(
+        proxySource.value === 'env'
+          ? '已清除设置页的代理；出站仍在走环境变量 CKUN_HTTP_PROXY'
+          : '已清除代理，出站请求恢复直连',
+      )
       return true
     } catch (e: unknown) {
       toast.error(`清除代理失败：${toFriendlyMessage(e)}`, 5000)
@@ -204,7 +223,8 @@ export function useOpsSettings() {
     try {
       const d = await api.getDiagnostics()
       diagnostics.value = d
-      // 诊断报的就是生效值，顺手回填两处控件（面板开着时别处改过也能看到）
+      // 诊断报的就是生效值，顺手回填两处控件（面板开着时别处改过也能看到）；
+      // 但表单有未保存的改动时只回填代理显示，不动超时/重试草稿与回滚基线。
       applyLevel(d.logging)
       applyHttp({
         proxy_url_masked: d.http.proxy,
@@ -212,7 +232,7 @@ export function useOpsSettings() {
         proxy_source: proxySource.value,
         timeout_seconds: d.http.timeout_seconds,
         retry_count: d.http.retry_count,
-      })
+      }, { keepDrafts: httpDirty.value })
       return true
     } catch (e: unknown) {
       diagError.value = toFriendlyMessage(e, '诊断信息获取失败')

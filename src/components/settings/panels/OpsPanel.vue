@@ -280,7 +280,7 @@ onMounted(() => {
 }
 .state-text { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-primary); }
 .muted { color: var(--text-tertiary); }
-.mono { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; }
+.mono { font-family: var(--font-mono); font-size: 11.5px; }
 .badge {
   padding: 1px 6px;
   border-radius: 999px;
@@ -288,7 +288,7 @@ onMounted(() => {
   border: 1px solid var(--border-subtle);
 }
 .badge-ok { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); }
-.badge-warn { color: #d7a54a; border-color: rgba(215, 165, 74, .4); }
+.badge-warn { color: var(--status-warn-text); border-color: color-mix(in srgb, var(--status-warn-text) 40%, transparent); }
 .inline-form { display: flex; align-items: center; gap: 8px; margin: 4px 0 6px; }
 .grow { flex: 1; min-width: 0; }
 .num-row { display: flex; align-items: center; gap: 6px; }
@@ -296,14 +296,14 @@ onMounted(() => {
 .unit { font-size: 12px; color: var(--text-secondary); }
 .row-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
 .hint { margin: 4px 0 0; font-size: 11.5px; color: var(--text-tertiary); line-height: 1.55; }
-.hint.error { color: #cf8a80; }
+.hint.error { color: var(--status-error-text); }
 .panel-error {
   margin: 0 0 10px;
   padding: 6px 10px;
   font-size: 12px;
-  color: #cf8a80;
-  background: rgba(207, 138, 128, .08);
-  border: 1px solid rgba(207, 138, 128, .25);
+  color: var(--status-error-text);
+  background: color-mix(in srgb, var(--status-error-text) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--status-error-text) 25%, transparent);
   border-radius: var(--radius-sm);
 }
 .form-input {
@@ -318,11 +318,11 @@ onMounted(() => {
   outline: none;
 }
 .form-input:focus { border-color: var(--accent-primary); }
-.form-input.input-error { border-color: #cf8a80; }
+.form-input.input-error { border-color: var(--status-error-text); }
 .btn {
   height: 28px;
   padding: 0 12px;
-  background: var(--bg-elevated, var(--bg-input));
+  background: var(--bg-elevated);
   border: 1px solid var(--border-input);
   border-radius: var(--radius-sm);
   color: var(--text-primary);

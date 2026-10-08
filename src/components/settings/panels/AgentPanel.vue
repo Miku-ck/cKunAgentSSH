@@ -24,9 +24,10 @@
               <input
                 v-model.number="budget.maxCostUsd"
                 class="num-input"
-                :class="{ 'input-error': !Number.isFinite(budget.maxCostUsd) || budget.maxCostUsd < 0 }"
+                :class="{ 'input-error': budgetCostInvalid }"
                 type="number"
-                min="0"
+                :min="BUDGET_LIMITS.maxCostUsd.min"
+                :max="BUDGET_LIMITS.maxCostUsd.max"
                 step="0.1"
                 placeholder="0"
                 @change="normalizeBudget"
@@ -37,9 +38,10 @@
               <input
                 v-model.number="budget.maxTotalTokens"
                 class="num-input"
-                :class="{ 'input-error': !Number.isFinite(budget.maxTotalTokens) || budget.maxTotalTokens < 0 }"
+                :class="{ 'input-error': budgetTokenInvalid }"
                 type="number"
-                min="0"
+                :min="BUDGET_LIMITS.maxTotalTokens.min"
+                :max="BUDGET_LIMITS.maxTotalTokens.max"
                 step="10000"
                 placeholder="0"
                 @change="normalizeBudget"
@@ -113,6 +115,10 @@
           <p class="hint">
             授权保留时长落在后端 <code>~/.ckunagentic/allowlist.txt</code> 的判定上，改完即刻生效（无需重启）；
             自动审批开关与审批兜底等待同样即时落到后端裁决链路。下面的默认环境等其余项是本机渲染端策略。
+          </p>
+          <p v-if="!policyLoaded" class="hint err">
+            未能读取服务端的授权策略：下面三项显示的是本地默认值，不代表库里是什么。
+            <button class="link-btn" @click="loadPermissionPolicy">重试</button>
           </p>
 
           <div class="ops-toggle-row">
@@ -239,7 +245,7 @@
         <button class="grp-head" @click="open.perm = !open.perm">
           <span class="grp-caret" :class="{ open: open.perm }">▸</span>
           <span class="grp-title">审批授权</span>
-          <span class="grp-badge">{{ permTools.length }} 个工具已永久授权 · {{ ttlText(allowlistTtl) }}</span>
+          <span class="grp-badge">{{ permTools.length }} 个工具已永久授权 · {{ policyLoaded ? ttlText(allowlistTtl) : '授权时长未读取' }}</span>
         </button>
         <div v-show="open.perm" class="grp-body">
           <p class="hint">
@@ -372,7 +378,7 @@ import {
 } from '@/api/client'
 import { useToastStore } from '@/stores/toast'
 import { parseBackendTs } from '@/utils/format'
-import { useSettingsStore } from '@/stores/settings'
+import { useSettingsStore, BUDGET_LIMITS } from '@/stores/settings'
 import { useConfirm } from '@/composables/useConfirm'
 import ToggleSwitch from '@/components/settings/fields/ToggleSwitch.vue'
 import SettingSlider from '@/components/settings/fields/SettingSlider.vue'
@@ -409,6 +415,12 @@ const ttlOptions: { value: number; label: string }[] = [
 const allowlistTtl = ref(0)
 const ttlDraft = ref(0)
 const ttlSaving = ref(false)
+/**
+ * 后端策略是否真读到过。没读到过的时候 allowlistTtl/autoApprove/approvalFallback
+ * 三个基线只是本地硬编码的默认值 —— 把它们印在头栏上就等于宣称"库里就是这个"。
+ * 一条会消失的 toast 不是状态，这里要的是一个能一直看见的说法。
+ */
+const policyLoaded = ref(false)
 // 审批策略新两字段：同款「基线 + 草稿 + 失败回滚」。autoApprove=false 时
 // auto 档不再问模型、逐条弹卡（env kill switch 在后端仍压过这里的开关）。
 const approvalFallback = ref(600)
@@ -444,7 +456,9 @@ async function loadPermissionPolicy() {
     allowlistTtl.value = hours
     ttlDraft.value = hours
     syncPolicyFields(data)
+    policyLoaded.value = true
   } catch (e) {
+    policyLoaded.value = false
     toast.error(`授权策略加载失败：${toFriendlyMessage(e)}`)
   }
 }
@@ -509,7 +523,11 @@ async function onAutoApproveToggle(v: boolean) {
 
 const opsSummary = computed(() => {
   const a = opsCfg.value
-  const parts = [`授权 ${ttlText(allowlistTtl.value)}`, autoApprove.value ? '自动审批开' : '自动审批关']
+  const parts: string[] = []
+  // 读失败时不许把本地硬编码的基线（0 = 永久、autoApprove = 开）当成服务端的确定值报头：
+  // 那正是"面板写着什么、库里跑什么"两回事的来源，而唯一线索是一条会消失的 toast。
+  if (!policyLoaded.value) parts.push('授权策略未读取')
+  else parts.push(`授权 ${ttlText(allowlistTtl.value)}`, autoApprove.value ? '自动审批开' : '自动审批关')
   parts.push(`新连接 ${a.defaultEnvironment === 'prod' ? 'prod' : 'test'}`)
   parts.push(a.prodConfirm ? 'prod 确认开' : 'prod 确认关')
   return parts.join(' · ')
@@ -520,19 +538,34 @@ const opsSummary = computed(() => {
 // 落库前归一化：清空/非法 = 0（= 用后端默认预算）。
 // R4：归零本身是"改了没生效"，必须让用户看到 —— 只静默折 0，budgetSummary
 // 又显示"后端默认"，用户以为保存了 -5 或 1e9 实际被吞。toast + 边框双通道。
+//
+// 上界与 store 的 asNumber 闸门共用 BUDGET_LIMITS（同一份，见 settings.ts）：
+// 面板原来只管 lo，于是 $50 能填进去、下次启动被闸门静默折回 0 —— 用户以为自己
+// 设过预算。越界同样走"toast + 红框"这条已建成的通道，不新开一套说法。
+// 红框判据与 normalizeBudget 共用这一对 computed：两处各写一遍区间就是第二份事实源，
+// 上一轮它只写了下界（<0），于是越上界的值框不红、却会被闸门静默折成 0。
+const budgetCostInvalid = computed(() => {
+  const v = budget.value.maxCostUsd
+  return !Number.isFinite(v) || v < BUDGET_LIMITS.maxCostUsd.min || v > BUDGET_LIMITS.maxCostUsd.max
+})
+const budgetTokenInvalid = computed(() => {
+  const v = budget.value.maxTotalTokens
+  return !Number.isFinite(v) || v < BUDGET_LIMITS.maxTotalTokens.min
+    || v > BUDGET_LIMITS.maxTotalTokens.max || !Number.isInteger(Number(v))
+})
+
 function normalizeBudget() {
   const a = settingsStore.settings.agent
   const rawCost = a.maxCostUsd
   const rawTok = a.maxTotalTokens
-  const badCost = !Number.isFinite(rawCost) || rawCost < 0
-  const badTok =
-    !Number.isFinite(rawTok) || rawTok < 0 || !Number.isInteger(Number(rawTok))
-  a.maxCostUsd = Number.isFinite(rawCost) ? Math.max(0, rawCost) : 0
-  a.maxTotalTokens = Number.isFinite(rawTok)
-    ? Math.max(0, Math.floor(rawTok))
-    : 0
+  const badCost = budgetCostInvalid.value
+  const badTok = budgetTokenInvalid.value
+  const clamp = (v: unknown, lo: number, hi: number) =>
+    Number.isFinite(v) ? Math.min(hi, Math.max(lo, v as number)) : lo
+  a.maxCostUsd = clamp(rawCost, BUDGET_LIMITS.maxCostUsd.min, BUDGET_LIMITS.maxCostUsd.max)
+  a.maxTotalTokens = Math.floor(clamp(rawTok, BUDGET_LIMITS.maxTotalTokens.min, BUDGET_LIMITS.maxTotalTokens.max))
   if (badCost || badTok) {
-    toast.warning('预算输入非法，已回退为"后端默认"（0）', 4000)
+    toast.warning('预算输入超出可保存的范围，已回退到最近的合法值（0 = 后端默认）', 4000)
   }
 }
 const budgetSummary = computed(() => {
@@ -781,22 +814,22 @@ onMounted(() => {
   font-size: 11px; color: var(--text-tertiary); margin: 6px 0 4px;
   text-transform: none; font-weight: 600;
 }
-.risk-label.dangerous { color: #cf8a80; }
-.risk-label.moderate { color: #c8a25e; }
+.risk-label.dangerous { color: var(--status-error-text); }
+.risk-label.moderate { color: var(--status-warn-text); }
 
 .tool-row, .perm-row, .strat-row {
   display: flex; align-items: center; gap: 10px;
   padding: 7px 4px; border-top: 1px solid var(--border-subtle);
 }
 .strat-row.off { opacity: .55; }
-.tool-name { font-size: 12.5px; font-family: ui-monospace, Consolas, monospace; color: var(--text-primary); }
+.tool-name { font-size: 12.5px; font-family: var(--font-mono); color: var(--text-primary); }
 .strat-name { font-size: 12.5px; font-weight: 600; color: var(--text-primary); }
 .tool-desc {
   font-size: 11px; color: var(--text-secondary);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .tool-flags { display: flex; gap: 4px; flex-shrink: 0; }
-.flag.info { color: #7aa2d0; border-color: rgba(122,162,208,.35); }
+.flag.info { color: var(--status-info-text); border-color: color-mix(in srgb, var(--status-info-text) 35%, transparent); }
 .strat-meta { display: flex; gap: 5px; margin-top: 3px; }
 
 .budget-row { display: flex; gap: 16px; margin: 8px 0 4px; }
@@ -808,7 +841,7 @@ onMounted(() => {
   color: var(--text-primary); font-size: 12px; font-family: inherit;
 }
 .num-input { width: 120px; }
-.num-input.input-error { border-color: #cf8a80; }
+.num-input.input-error { border-color: var(--status-error-text); }
 .runtime-row { margin: 8px 0; }
 .runtime-field { display: block; }
 .runtime-label { font-size: 12px; color: var(--text-primary); font-weight: 500; }

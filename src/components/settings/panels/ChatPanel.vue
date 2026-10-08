@@ -107,6 +107,12 @@
         />
       </SettingRow>
       <p v-if="retentionSaving" class="hint saving">保存中…</p>
+      <!-- 读失败时说实话：现在这套是本地默认，不是库里的值。保存只发改动过的那一项，
+           所以不会再抹掉库里另一项，但"显示得和库里一样"这件事仍然是假的 -->
+      <p v-if="retentionUnread" class="hint saving unread">
+        未能读到服务端当前保留策略，以上为本地默认值。
+        <button type="button" class="retry-btn" @click="loadRetention">重试</button>
+      </p>
     </div>
   </div>
 </template>
@@ -146,6 +152,9 @@ const defaultModelId = computed(() => defaultSshModel.value?.model_id || '')
 // ── 会话保留（服务端设置，默认关闭；删除用户数据，故默认不启用）──
 const retention = ref<{ enabled: boolean; keepCount: number }>({ enabled: false, keepCount: 1000 })
 const retentionSaving = ref(false)
+// 读失败必须说破：这时面板上显示的是本地默认值，不是库里的真值。
+// 原实现的 catch 是空的，用户看到的 "{关闭, 1000}" 与库里实际的 "{开启, 20}" 毫无关系。
+const retentionUnread = ref(false)
 
 async function loadRetention() {
   try {
@@ -154,13 +163,22 @@ async function loadRetention() {
     // 注意 0 的含义是「不限制 = 一条都不删」（prune_conversations 的 <=0 早退），
     // 不是「清空全部」—— 旧注释与旧文案都反着写，用户会以为开了却不清库。
     retention.value = { enabled: !!data.enabled, keepCount: data.keep_count ?? 1000 }
+    retentionUnread.value = false
   } catch {
-    // 加载失败保持默认关闭（安全方向）
+    // 加载失败保持默认关闭（安全方向），但把"没读到"标出来并给重试入口
+    retentionUnread.value = true
   }
 }
 
 async function saveRetention(patch: Partial<{ enabled: boolean; keepCount: number }>) {
   const prev = { ...retention.value }
+  // 只发被改动的那一项。后端 ConversationRetentionRequest 两字段都是 Optional，注释
+  // 就写着「只发 enabled 的调用不该把用户调过的 keep_count 改回去」，而原实现恒发整包：
+  // GET 没成功时本地带着 {false,1000}，拨一下开关就把库里真实的 keep_count 抹成 1000,
+  // 而这条设置打开后是会真删会话的。
+  const body: Partial<{ enabled: boolean; keep_count: number }> = {}
+  if (patch.enabled !== undefined) body.enabled = patch.enabled
+  if (patch.keepCount !== undefined) body.keep_count = patch.keepCount
   const next = {
     enabled: patch.enabled ?? prev.enabled,
     keepCount: patch.keepCount ?? prev.keepCount,
@@ -169,10 +187,12 @@ async function saveRetention(patch: Partial<{ enabled: boolean; keepCount: numbe
   retention.value = { ...next }
   retentionSaving.value = true
   try {
-    await api.updateConvRetention({ enabled: next.enabled, keep_count: next.keepCount })
+    // 回包是整份权威值，拿它收敛：连带把之前没读到的另一半也对齐
+    const data = await api.updateConvRetention(body)
+    retention.value = { enabled: !!data.enabled, keepCount: data.keep_count ?? next.keepCount }
+    retentionUnread.value = false
   } catch (e: unknown) {
     retention.value = { ...prev }
-    // 失败只回滚开关、不提示 → 用户看到"点了没反应"，会反复重试
     toast.error(toFriendlyMessage(e, '会话保留设置保存失败'))
   } finally {
     retentionSaving.value = false
@@ -268,6 +288,6 @@ onMounted(async () => {
 .default-model-id {
   font-size: 11px;
   color: var(--text-tertiary);
-  font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+  font-family: var(--font-mono);
 }
 </style>

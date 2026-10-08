@@ -53,6 +53,18 @@ export function isHexColor(value: unknown): value is string {
 }
 
 /**
+ * 两色之间的 WCAG 对比度（1–21，与顺序无关）。
+ *
+ * 单独成函数而不是让调用方各自抄 `(L1+0.05)/(L2+0.05)`：那条表达式就是
+ * contrastOnAccent 的判据本体，抄第二份迟早和 3:1 阈值分叉。
+ */
+export function contrastRatio(a: string, b: string): number {
+  const la = relativeLuminance(a)
+  const lb = relativeLuminance(b)
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)
+}
+
+/**
  * 压在 --accent-primary 底上的前景色：按 WCAG 相对亮度算，白字读到 <3:1 就换深字。
  *
  * 为什么不手写一张 accent → on 的表：那会是第三份需要跟人同步的色表（面板色板
@@ -65,9 +77,7 @@ export function isHexColor(value: unknown): value is string {
  * 蜜蜂 1.6、绿 2.0、珊瑚 2.5、橙 2.7、紫 2.8 翻成深字（这七档今天就是白字糊亮底）。
  */
 export function contrastOnAccent(hex: string): string {
-  const lum = relativeLuminance(hex)
-  // 白字的对比度 = (1.0 + 0.05) / (底色亮度 + 0.05)
-  return 1.05 / (lum + 0.05) < 3 ? ON_LIGHT : ON_DARK
+  return contrastRatio('#ffffff', hex) < 3 ? ON_LIGHT : ON_DARK
 }
 
 /** sRGB 相对亮度（WCAG 定义） */
@@ -79,4 +89,23 @@ export function relativeLuminance(hex: string): number {
     const lin = c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
     return sum + lin * weights[i]
   }, 0)
+}
+
+/**
+ * 半透明色压在不透明底色上的终值（逐通道线性插值，与浏览器 compositing 同口径）。
+ *
+ * 为什么需要它而不是直接拿 fg 算对比度：设置面板里"终端纯色背景 + 透明度"这一组
+ * 的实际底是主题的 --bg-terminal（各套主题都是深值），40% 的白落在深底上仍是灰，
+ * 按原色算就会误报"文字看不见"。
+ */
+export function blendHex(fgHex: string, alphaPct: number, baseHex: string): string {
+  if (!isHexColor(fgHex) || !isHexColor(baseHex)) return fgHex
+  const a = Math.max(0, Math.min(100, alphaPct)) / 100
+  const f = parseInt(fgHex.slice(1), 16)
+  const b = parseInt(baseHex.slice(1), 16)
+  const out = [16, 8, 0].map(shift => {
+    const v = Math.round(((f >> shift) & 255) * a + ((b >> shift) & 255) * (1 - a))
+    return v.toString(16).padStart(2, '0')
+  })
+  return `#${out.join('')}`
 }

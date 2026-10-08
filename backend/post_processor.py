@@ -594,6 +594,14 @@ async def _extract_memories(ctx: TurnContext, config: PostProcessConfig) -> None
     """提取记忆 + 相似度去重"""
     if not config.extract_memory:
         return
+    # 记忆总开关（设置面板「记忆」页第一行那枚）：面板文案承诺"关闭后 Agent 运行时
+    # 不再注入历史记忆，也不会从对话沉淀新记忆"，而原来这里只看 extract_memory 这一个
+    # 子开关。后果是关掉总开关后仍然每轮调一次模型提取，并把候选 job 堆进队列 ——
+    # ConsciousnessTick 在关闭期间整体早退（consciousness_tick.py:138）不消费它们，
+    # 于是重新打开的那一刻把整段关闭期的候选一次性冲进对账。
+    # 后端读一次 app_setting 的代价远小于一次白烧的 LLM 调用。
+    if not (await asyncio.to_thread(db.get_memory_settings)).get("enabled", True):
+        return
     # 频率控制
     if ctx.turn_index % config.memory_interval != 0:
         return

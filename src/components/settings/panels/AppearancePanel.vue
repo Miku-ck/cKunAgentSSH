@@ -52,7 +52,7 @@
              不"顺手"帮用户关开关（那是隐式 surprise），只把状态说破 -->
         <p
           v-if="!Number.isFinite(settings.appearance.themeGradientStrength) || settings.appearance.themeGradientStrength <= 0"
-          class="gradient-zero-hint"
+          class="field-hint"
         >
           强度为 0：渐变实际未生效，可拖动滑块上调；若不需要渐变请关闭总开关。
         </p>
@@ -73,7 +73,7 @@
           <div class="gradient-color-row">
             <input
               type="color"
-              :value="settings.appearance.themeGradientStartColor || DEFAULT_GRADIENT_START"
+              :value="settings.appearance.themeGradientStartColor || followedStart"
               :disabled="followStart"
               @input="onStartColorInput"
             />
@@ -88,7 +88,7 @@
           <div class="gradient-color-row">
             <input
               type="color"
-              :value="settings.appearance.themeGradientEndColor || DEFAULT_GRADIENT_END"
+              :value="settings.appearance.themeGradientEndColor || followedEnd"
               :disabled="followEnd"
               @input="onEndColorInput"
             />
@@ -161,6 +161,14 @@
           <SettingRow label="背景透明度" desc="低于 100% 时与主题底色或全局背景图混合">
             <SettingSlider v-model="settings.appearance.terminal.backgroundOpacity" :min="0" :max="100" unit="%" />
           </SettingRow>
+
+          <!-- 终端 ANSI 主题按约定固定暗色（见 useTerminalConfig 头注），底色却是用户自选的：
+               浅色落在深底上还有救（半透明混合），选到不透明的浅底就是白字糊白底。
+               不替他改色（那是隐式 surprise），只把状态说破 —— 同上方渐变强度为 0 那条做法。 -->
+          <p v-if="terminalBgUnreadable" class="field-hint">
+            所选背景过浅：终端文字（固定浅色 ANSI）会读不出来。请把背景改深一档、降低透明度，
+            或把「终端背景」切回跟随主题。
+          </p>
         </template>
 
         <SettingRow label="AI 命令预测" desc="基于上下文智能预测下一步命令（需配置 AI 模型）">
@@ -172,23 +180,42 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch, computed, onMounted } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useToastStore } from '@/stores/toast'
 import SettingRow from '@/components/settings/fields/SettingRow.vue'
 import SettingSlider from '@/components/settings/fields/SettingSlider.vue'
 import ToggleSwitch from '@/components/settings/fields/ToggleSwitch.vue'
-import { TERMINAL_FONT_OPTIONS } from '@/composables/useTerminalConfig'
-import { ACCENT_MAP, type Accent, type GradientDirection, type GradientMode, type TerminalBgMode, type Theme } from '@/utils/appearance-tokens'
+import { TERMINAL_FONT_OPTIONS, TERMINAL_FOREGROUND } from '@/composables/useTerminalConfig'
+import { ACCENT_MAP, blendHex, contrastRatio, isHexColor, type Accent, type GradientDirection, type GradientMode, type TerminalBgMode, type Theme } from '@/utils/appearance-tokens'
 
 const settingsStore = useSettingsStore()
 const settings = settingsStore.settings
 const toast = useToastStore()
 const previewUrl = ref('')
 
-// ── 主题渐变自定义（颜色跟随默认的占位色仅用于色板显示） ──
-const DEFAULT_GRADIENT_START = '#818cf8'
-const DEFAULT_GRADIENT_END = '#0f0f0f'
+// ── 主题渐变自定义 ──
+// 勾了"跟随"时色板该显示什么：读 documentElement 上那两枚令牌的**当前计算值**，
+// 而不是再抄一份占位 hex —— 原来抄的 #0f0f0f 在浅色/手记主题下与真实的终点色
+// （白 / 米纸）完全相反，用户看着一块黑去判断一个白底的渐变。
+const FOLLOW_FALLBACK = { start: '#818cf8', end: '#0f0f0f' }
+const followedStart = ref(FOLLOW_FALLBACK.start)
+const followedEnd = ref(FOLLOW_FALLBACK.end)
+
+function refreshFollowedSwatches() {
+  const cs = getComputedStyle(document.documentElement)
+  const read = (name: string, fallback: string) => {
+    const v = cs.getPropertyValue(name).trim()
+    return isHexColor(v) ? v : fallback
+  }
+  followedStart.value = read('--accent-primary', FOLLOW_FALLBACK.start)
+  followedEnd.value = read('--bg-base', FOLLOW_FALLBACK.end)
+}
+// useAppearance 的 watcher 在 App.vue 里更早注册，同一次改动会先它跑完；
+// post flush + 挂载各读一次，覆盖"面板打开时已经是某个主题"这条路
+watch(() => [settings.appearance.theme, settings.appearance.accent], refreshFollowedSwatches, { flush: 'post' })
+onMounted(refreshFollowedSwatches)
+
 const followStart = ref(!settings.appearance.themeGradientStartColor)
 const followEnd = ref(!settings.appearance.themeGradientEndColor)
 
@@ -330,6 +357,24 @@ const gradientDirectionLabels: Record<GradientDirection, string> = {
 // 终端字体选项
 const terminalFontOptions = TERMINAL_FONT_OPTIONS
 
+/**
+ * 自选的终端纯色底与固定浅色 ANSI 前景（TERMINAL_FOREGROUND）是否还读得出来。
+ *
+ * 透明度必须参与计算：40% 的白落在主题的深终端底上仍是灰，按原色算就是误报。
+ * 底层取各套主题 --bg-terminal 里最浅的一档（浅色/手记的 #17181c）作保守下限 ——
+ * 真实的底只会更深，算出来的对比度只会更宽，所以这条提示不会漏报也不会多报。
+ * 阈值沿用 contrastOnAccent 的 3:1（半粗字形的可读线），不另立一套判据。
+ */
+const TERMINAL_UNDERLAY = '#17181c'
+const terminalBgUnreadable = computed(() => {
+  const t = settings.appearance.terminal
+  if (t.backgroundMode !== 'solid' || !isHexColor(t.backgroundColor)) return false
+  return contrastRatio(
+    TERMINAL_FOREGROUND,
+    blendHex(t.backgroundColor, t.backgroundOpacity, TERMINAL_UNDERLAY),
+  ) < 3
+})
+
 const terminalBgModeLabels: Record<TerminalBgMode, string> = {
   auto: '跟随主题与全局背景',
   solid: '自定义纯色',
@@ -358,11 +403,14 @@ const terminalBgModeLabels: Record<TerminalBgMode, string> = {
 }
 .swatch-btn:hover { transform: scale(1.15); }
 .swatch-btn.active {
-  border-color: #ffffff;
+  /* 描边取卡面自身的色而不是写死白：浅色主题的卡片就是白的，白环等于没有选中态；
+     「白色」还是一枚可选强调色，白圈套白块更是彻底隐形 */
+  border-color: var(--bg-elevated-solid);
   box-shadow: 0 0 0 2px rgba(var(--accent-primary-rgb), 0.4);
 }
 
-.gradient-zero-hint {
+/* 状态说破条（渐变强度为 0 / 终端纯色底过浅共用）：不改用户的设置，只讲清现在实际是什么效果 */
+.field-hint {
   margin: -4px 0 8px;
   padding: 6px 10px;
   font-size: 12px;
@@ -396,7 +444,7 @@ const terminalBgModeLabels: Record<TerminalBgMode, string> = {
 .bg-color-text {
   font-size: 11px;
   color: var(--text-secondary);
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
 }
 .gradient-follow {
   display: flex;
@@ -460,7 +508,7 @@ const terminalBgModeLabels: Record<TerminalBgMode, string> = {
 
 .bg-btn.danger:hover {
   border-color: var(--danger-text);
-  background: rgba(248, 81, 73, 0.1);
+  background: color-mix(in srgb, var(--danger-text) 10%, transparent);
 }
 
 .bg-preview-row {

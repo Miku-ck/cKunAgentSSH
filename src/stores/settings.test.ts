@@ -9,8 +9,11 @@
  *
  * 测试跑在 node 环境，故先补 localStorage / window 两个最小垫片。
  *
- * 记忆设置字段与后端 MemorySettingsRequest（v2 六项）严格同集合：PUT 是全字段
- * 覆盖，测试里漏断言一项就等于放任面板把它静默重置回默认值。
+ * 记忆设置字段与后端 MemorySettingsRequest（v2 六项）严格同集合。
+ * 但 PUT 不是"全字段覆盖"—— 后端是 model_dump(exclude_none=True)，不传 = 不改，
+ * 所以 store 只发真正改动过的字段。这条是本轮修掉的核心：整包 PUT 在"启动那次 GET
+ * 没成功"时会把前端从未读到过的后端真值按本地默认写回库（会话保留那条甚至会真删数据）。
+ * 于是下面的断言口径是"payload 恰好等于改动集"，而不是"六项齐全"。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
@@ -113,12 +116,133 @@ describe('settings 后端回填', () => {
 
     s.settings.memory.maxItems = 42
     await vi.advanceTimersByTimeAsync(2000)
-    expect(agentApiMock.updateMemorySettings).toHaveBeenCalledWith({
-      enabled: true, max_items: 42, inject_budget_tokens: 1500,
-      blocks_budget_tokens: 1200, search_timeout_s: 8, reconcile_llm_enabled: true,
-    })
+    // 只发改动过的那一项：其余五项库里是什么就是什么，前端不替用户做主
+    expect(agentApiMock.updateMemorySettings).toHaveBeenCalledWith({ max_items: 42 })
     expect(lsMap.get('ckunagentic:settings')).toContain('"maxItems":42')
   })
+
+  it('一次改多项 = 一次 PUT 带上这两项，其余字段照旧不发', async () => {
+    const s = useSettingsStore()
+    await s.loadMemorySettings()
+    await nextTick()
+    agentApiMock.updateMemorySettings.mockClear()
+
+    s.settings.memory.maxItems = 42
+    s.settings.memory.enabled = false
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(agentApiMock.updateMemorySettings).toHaveBeenCalledTimes(1)
+    expect(agentApiMock.updateMemorySettings).toHaveBeenCalledWith({ max_items: 42, enabled: false })
+  })
+
+  /**
+   * R7（本轮）：整包 PUT 的两条数据丢失路径。后端两个 PUT 都是 exclude_none 的
+   * 部分更新，"不传 = 不改"，所以前端只该发改动过的字段：
+   * - 启动 GET 失败（后端未就绪 —— Electron 冷启动这是常态路径）时本地是代码默认，
+   *   整包提交会把库里从未被读到的字段按默认写回去；
+   * - 面板挂载补拉的 GET 若抢在待发的 PUT 之前返回，用户那次编辑会被旧快照覆写，
+   *   然后旧值再被写回库、基线照推进 —— 不报错也不留痕。
+   */
+  describe('不发未改动的字段', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.useFakeTimers()
+    lsMap.clear()
+    for (const fn of Object.values(apiMock)) fn.mockClear()
+    for (const fn of Object.values(agentApiMock)) fn.mockClear()
+    apiMock.getPostProcessSettings.mockResolvedValue({
+      enabled: true, generate_title: true, extract_memory: true, generate_skill: true,
+    })
+    agentApiMock.getMemorySettings.mockResolvedValue(MEMORY_V2)
+    apiMock.updatePostProcessSettings.mockImplementation(async () => ({}))
+    agentApiMock.updateMemorySettings.mockImplementation(async () => ({}))
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it('GET 失败过也绝不发未改动的字段', async () => {
+    const s = useSettingsStore()
+    agentApiMock.getMemorySettings.mockRejectedValueOnce(new Error('backend not ready'))
+    await s.loadMemorySettings()
+    await nextTick()
+    expect(s.memoryLoaded).toBe(false)
+    agentApiMock.updateMemorySettings.mockClear()
+
+    s.settings.memory.searchTimeoutS = 3
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(agentApiMock.updateMemorySettings).toHaveBeenCalledTimes(1)
+    expect(agentApiMock.updateMemorySettings).toHaveBeenCalledWith({ search_timeout_s: 3 })
+  })
+
+  it('没有改动就一次都不发（含 flush 场景）', async () => {
+    const s = useSettingsStore()
+    await s.loadMemorySettings()
+    await nextTick()
+    agentApiMock.updateMemorySettings.mockClear()
+    // 写回同一个值：deep watch 会响，但 diff 是空的 → 不该有 PUT
+    s.settings.memory.maxItems = MEMORY_V2.max_items
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(agentApiMock.updateMemorySettings).not.toHaveBeenCalled()
+  })
+
+  it('PUT 回包是整份权威值，用它收敛未发送的字段', async () => {
+    const s = useSettingsStore()
+    agentApiMock.getMemorySettings.mockRejectedValueOnce(new Error('down'))
+    await s.loadMemorySettings()
+    await nextTick()
+    agentApiMock.updateMemorySettings.mockResolvedValueOnce({
+      ...MEMORY_V2, max_items: 42, inject_budget_tokens: 600,
+    })
+
+    s.settings.memory.maxItems = 42
+    await vi.advanceTimersByTimeAsync(2000)
+    // inject_budget_tokens 前端从没读到过，靠回包对齐到库里的 600
+    expect(s.settings.memory.injectBudgetTokens).toBe(600)
+    expect(s.memoryLoaded).toBe(false)
+  })
+
+  it('GET 在途期间的用户改动不被旧快照吃掉', async () => {
+    const s = useSettingsStore()
+    await s.loadMemorySettings()
+    await nextTick()
+    agentApiMock.updateMemorySettings.mockClear()
+
+    // 面板挂载补拉：GET 发出后、返回前，用户拨了一下滑杆。
+    // 旧实现在这里把闸门开着（applyingRemote 覆盖整个回填），watcher 直接 return
+    // → 改动永不 POST；就算 POST 了，GET 的旧快照也已把本地覆回 100。
+    let resolveGet!: (v: unknown) => void
+    agentApiMock.getMemorySettings.mockImplementationOnce(
+      () => new Promise((r) => { resolveGet = r }),
+    )
+    const loading = s.loadMemorySettings()
+    await nextTick()
+    s.settings.memory.maxItems = 77
+    resolveGet({ ...MEMORY_V2, max_items: 100 })
+    await loading
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(s.settings.memory.maxItems).toBe(77)
+    expect(agentApiMock.updateMemorySettings).toHaveBeenCalledWith({ max_items: 77 })
+  })
+
+  it('并发两次 load 只发一次 GET', async () => {
+    const s = useSettingsStore()
+    const p1 = s.loadMemorySettings()
+    const p2 = s.loadMemorySettings()
+    await Promise.all([p1, p2])
+    expect(agentApiMock.getMemorySettings).toHaveBeenCalledTimes(1)
+  })
+
+  it('后处理同样只发改动过的开关', async () => {
+    const s = useSettingsStore()
+    await s.loadPostProcessSettings()
+    await nextTick()
+    apiMock.updatePostProcessSettings.mockClear()
+
+    s.settings.postProcess.generateSkill = false
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(apiMock.updatePostProcessSettings).toHaveBeenCalledTimes(1)
+    expect(apiMock.updatePostProcessSettings).toHaveBeenCalledWith({ generate_skill: false })
+  })
+})
 
   it('后处理回填同样不回写，且接受合法值', async () => {
     const s = useSettingsStore()

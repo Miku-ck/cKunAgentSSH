@@ -122,6 +122,30 @@ const STRUCTURAL_CANVASES: Record<string, string> = {
   '.quick-command-bar': quickCommandBar,
 }
 
+/** 「不许把主题写死」这条约束的管辖区：终端页那一族 + 设置那一族。
+ *  按目录前缀扫，新文件自动在网内（两处共用，颜色与字族两条断言同一张网）。 */
+const TOKENIZED_SCOPE = [
+  'src/components/ssh/',
+  'src/views/ssh/',
+  'src/components/home/',
+  'src/components/common/',
+  'src/layouts/',
+  // 设置这一族（7 个面板 + 3 个控件 + 2 份共享样式）与终端页同一个病灶：
+  // 深色主题的字面量抄进组件，切浅色/手记就糊，切强调色又纹丝不动。
+  // 2026-10-08 两轮清完，这里连屏一起钉住。
+  'src/components/settings/',
+]
+
+const scopedSources = () =>
+  Object.entries(SOURCE_FILES).filter(([file]) =>
+    TOKENIZED_SCOPE.some((prefix) => file.startsWith(prefix)),
+  )
+
+/** 一条声明的字族取值（`font-family:` 到本条声明结束）。跨行声明也认。 */
+function fontFamilies(src: string): string[] {
+  return [...src.matchAll(/(?:^|[;{])\s*font-family:\s*([^;}]*)/g)].map(m => m[1].trim())
+}
+
 describe('atelier（手记）主题的令牌覆盖', () => {
   it('浅色主题覆盖的令牌，手记一个都不能少', () => {
     // 少一条 = 那条在米纸底上仍是深色主题的值。深色底写死的 status-*/danger-*/
@@ -259,16 +283,7 @@ describe('atelier（手记）主题的令牌覆盖', () => {
     // 唯一豁免的形状是"组件局部令牌的声明"（`--x: #hex`）：那是 GpuNvtopPanel 立的做法
     // —— 固定深色的终端复刻面板把调色板集中在一块并写明改色只改这里。写进属性值就没人
     // 再看第二遍，声明成局部令牌至少是一处可读、可核对的来源。
-    const TERMINAL_PAGE_SCOPE = [
-      'src/components/ssh/',
-      'src/views/ssh/',
-      'src/components/home/',
-      'src/components/common/',
-      'src/layouts/',
-    ]
-    const inScope = Object.entries(SOURCE_FILES).filter(([file]) =>
-      TERMINAL_PAGE_SCOPE.some((prefix) => file.startsWith(prefix)),
-    )
+    const inScope = scopedSources()
     // 空串守卫：glob 没命中、或 ?raw 拿到的是空模块（vitest 的 css.include 是白名单）时，
     // offender 恒空 —— 那条断言就成了假的绿。逐个钉住"真读到了东西"。
     expect(inScope.length).toBeGreaterThan(20)
@@ -279,17 +294,30 @@ describe('atelier（手记）主题的令牌覆盖', () => {
     for (const [file, src] of inScope) {
       src.split('\n').forEach((line, i) => {
         if (!/#[0-9a-fA-F]{3,8}\b/.test(line)) return
+        // 注释里提一句"先前是 #cccccc"是这仓的写法，不是违规（strip 只剥块注释与 HTML 注释，
+        // TS 的 // 行注释得在这里自己跳过）
+        if (/^\s*(\/\/|\*|\/\/\/)/.test(line)) return
+        // 豁免形状一：CSS 自定义属性声明（组件局部调色板，GpuNvtopPanel 立的做法）
         if (/^\s*--[a-z0-9-]+\s*:/.test(line)) return
+        // 豁免形状二：UPPER_SNAKE 命名常量 —— 同一件事的 JS 版本：一处声明、有名字、可核对，
+        // 而不是把 hex 混进模板串/内联样式里。TERMINAL_UNDERLAY 这种算对比度的输入值属于这类。
+        if (/^\s*(?:const|let)\s+[A-Z][A-Z0-9_]*\b\s*[:=]/.test(line)) return
         offenders.push(`${file}:${i + 1} ${line.trim()}`)
       })
     }
     expect(offenders).toEqual([])
 
     // 变异自检：解析器绿着骗人比没有更糟（同上方"裸引用守卫自己会红"一条做法）
-    const probe = '  .qc-item {\n    color: #cccccc;\n  }\n'
-    const probeHit = probe.split('\n').filter((l) => /#[0-9a-fA-F]{3,8}\b/.test(l)
-      && !/^\s*--[a-z0-9-]+\s*:/.test(l))
-    expect(probeHit).toHaveLength(1)
+    const hit = (l: string) => /#[0-9a-fA-F]{3,8}\b/.test(l)
+      && !/^\s*(\/\/|\*|\/\/\/)/.test(l)
+      && !/^\s*--[a-z0-9-]+\s*:/.test(l)
+      && !/^\s*(?:const|let)\s+[A-Z][A-Z0-9_]*\b\s*[:=]/.test(l)
+    expect(hit('  color: #cccccc;')).toBe(true)
+    expect(hit('  border: 1px solid #2a2a2a;')).toBe(true)
+    expect(hit('  font-family: var(--font-mono, monospace); color: #79c0ff;')).toBe(true)
+    expect(hit('  // 先前是 #cccccc，现在读令牌')).toBe(false)
+    expect(hit('  --nv-bg: #050505;')).toBe(false)
+    expect(hit('const TERMINAL_UNDERLAY = \'#17181c\'')).toBe(false)
   })
 
   it('纸纹落在上色的结构画布上，不是 body', () => {

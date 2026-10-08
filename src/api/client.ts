@@ -463,12 +463,13 @@ export const api = {
       '/settings/post-process',
     ),
 
-  updatePostProcessSettings: (payload: {
+  // 与 /settings/memory 同款：后端 PUT 是 exclude_none 的部分更新，只发改过的字段
+  updatePostProcessSettings: (payload: Partial<{
     enabled: boolean
     generate_title: boolean
     extract_memory: boolean
     generate_skill: boolean
-  }) =>
+  }>) =>
     request<{ enabled: boolean; generate_title: boolean; extract_memory: boolean; generate_skill: boolean }>(
       '/settings/post-process',
       {
@@ -481,7 +482,9 @@ export const api = {
   getConvRetention: () =>
     request<{ enabled: boolean; keep_count: number }>('/settings/conv-retention'),
 
-  updateConvRetention: (payload: { enabled: boolean; keep_count: number }) =>
+  // 收 Partial：后端两字段都是 Optional（「不传 = 不改」），整包提交会在读失败时
+  // 把库里用户调过的另一项按本地默认抹掉（这条设置是会真删会话的）
+  updateConvRetention: (payload: Partial<{ enabled: boolean; keep_count: number }>) =>
     request<{ enabled: boolean; keep_count: number }>(
       '/settings/conv-retention',
       {
@@ -1021,14 +1024,15 @@ export interface MemorySettings {
   search_timeout_s: number
   reconcile_llm_enabled: boolean
 }
-
 export const agentApi = {
   // 记忆设置 —— 后端 MemorySettingsRequest 全字段 Optional：不传 = 不改。
-  // 这里仍按完整对象提交（面板一次编辑整组），类型保持必填以防漏项静默保留旧值。
+  // 因此这里收 Partial：store 只把真正改过的字段发出去（settings.ts 的 createBackendSync）。
+  // 曾经按整份对象提交，于是"启动 GET 没成功 + 用户拨一下开关"会把前端从未读到过的
+  // 字段按本地默认写回库，静默覆盖后端真值。响应仍按整份读回，用于收敛本地。
   getMemorySettings: () =>
     request<MemorySettings>('/settings/memory'),
 
-  updateMemorySettings: (data: MemorySettings) =>
+  updateMemorySettings: (data: Partial<MemorySettings>) =>
     request<MemorySettings>('/settings/memory', {
       method: 'PUT',
       body: JSON.stringify(data),

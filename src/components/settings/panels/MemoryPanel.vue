@@ -14,11 +14,11 @@
         <SettingSlider v-model="memory.maxItems" :min="10" :max="500" :step="10" unit=" 条" />
       </SettingRow>
 
-      <SettingRow label="检索注入预算" desc="每轮运行按相关性注入 system prompt 的历史经验上限（token）">
+      <SettingRow label="检索注入预算" desc="每轮运行按相关性注入 system prompt 的历史经验预算（token）。这是「想要多少」：实际取它与模型窗口份额的较小值，小窗口下上半段滑杆不会再生效">
         <SettingSlider v-model="memory.injectBudgetTokens" :min="200" :max="8000" :step="100" unit=" t" />
       </SettingRow>
 
-      <SettingRow label="画像块预算" desc="常驻画像块（用户偏好/主机画像/规则）的独立上限 —— 与注入预算分账，改大这一项不会削减那一侧">
+      <SettingRow label="画像块预算" desc="常驻画像块（用户偏好/主机画像/规则）的独立预算 —— 与注入预算分账，改大这一项不会削减那一侧；同样按模型窗口取小">
         <SettingSlider v-model="memory.blocksBudgetTokens" :min="200" :max="8000" :step="100" unit=" t" />
       </SettingRow>
 
@@ -37,7 +37,13 @@
         <span class="stats-value">{{ statsText }}</span>
       </div>
       <p class="foot-hint">
-        修改即时同步到后端；同步失败时自动回滚到上一次成功值。
+        修改即时同步到后端，且只发你改动过的那几项；同步失败时自动回滚到上一次成功值。
+      </p>
+      <!-- 读不到后端时说实话：面板上这套是本地值，可能与服务端不一致。
+           数据已经安全了（整包覆盖那条路径没了），但"看起来就等于库里"是假的。 -->
+      <p v-if="!settingsStore.memoryLoaded" class="foot-hint unread">
+        尚未读到服务端当前值，以上为本地保存值。
+        <button type="button" class="retry-btn" @click="settingsStore.loadMemorySettings()">重试</button>
       </p>
 
       <SettingRow label="记忆管理" desc="浏览/检索/置顶/编辑/失效已有记忆，查看对账队列与画像块（含历史回滚）">
@@ -56,9 +62,10 @@
 /**
  * 记忆设置面板 —— 字段与后端 MemorySettingsRequest（v2 六项）严格同集合。
  *
- * PUT 是全字段覆盖，面板漏渲染一项就等于把它静默重置回默认值，所以这里
- * 不做"可选展示"，六个字段全部可见可改。
- * 全部通过 settings store 的 deep watch 自动同步（含 R6 回滚基线），面板自身
+ * 同步走 store 的 createBackendSync：只发改过的字段，所以面板漏渲染一项不再会把它
+ * 静默重置（那是旧"整包 PUT"版本的风险，注释留在这里说明为什么六项仍要全部可见 ——
+ * 看不见就改不了，而不是看不见就被清零）。
+ * 全部通过 settings store 的 deep watch 自动同步（含回滚基线），面板自身
  * 不再直接调 updateMemorySettings，避免与 watcher 双写。
  * 记忆体本身（列表/编辑/新增/失效/审计/对账队列/画像块）内嵌 AgentMemoryView，
  * 点「打开记忆管理」才挂载。
@@ -121,5 +128,16 @@ onMounted(() => {
   border-radius: var(--radius-sm);
   cursor: pointer;
 }
-.manage-btn:hover { background: var(--bg-hover, rgba(255, 255, 255, .06)); }
+.manage-btn:hover { background: var(--bg-hover); }
+.foot-hint.unread { color: var(--status-warn-text); }
+.retry-btn {
+  padding: 1px 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.retry-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
 </style>

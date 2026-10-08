@@ -28,15 +28,23 @@
         <span>加载中...</span>
       </div>
 
-      <!-- 错误提示 -->
-      <div v-else-if="store.modelsError" class="state-error">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#f85149" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+      <!-- 错误提示：只有"没有列表可展示"时才占整块。
+           原实现是无条件 v-else-if，于是任何一次 modelsError（GET 抖动、删除被拒、
+           设为默认失败）都会把用户能用的模型卡片全部藏起来 —— 数据还在 store 里，
+           界面上却像全没了。列表还在时降级成挂在头顶的一条横幅。 -->
+      <div v-else-if="store.modelsError && !store.modelConfigs.length" class="state-error">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
         {{ store.modelsError }}
         <button class="btn btn-ghost btn-sm" @click="store.fetchModelConfigs()">重试</button>
       </div>
 
       <!-- 模型列表 -->
       <div v-else class="model-list">
+        <div v-if="store.modelsError" class="state-error">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+          {{ store.modelsError }}
+          <button class="btn btn-ghost btn-sm" @click="store.fetchModelConfigs()">重试</button>
+        </div>
         <div
           v-for="m in store.modelConfigs"
           :key="m.id"
@@ -83,7 +91,15 @@
               <button class="btn-icon" title="编辑" @click="openEditDialog(m)">
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
               </button>
-              <button class="btn-icon btn-icon-danger" title="删除" @click="handleDelete(m.id, m.name)">
+              <!-- 默认模型删不掉是后端的硬规则（database.py delete 前查两档 is_default 直接
+                   raise ValueError），而面板原来照样可点，失败把英文原文弹进 toast，且全仓
+                   没有"取消默认"的入口 —— 一旦成为默认就看起来永久删不掉。先把话说在前面。 -->
+              <button
+                class="btn-icon btn-icon-danger"
+                :disabled="isAnyDefault(m)"
+                :title="isAnyDefault(m) ? '默认模型不可删除：先把默认切到别的模型' : '删除'"
+                @click="handleDelete(m.id, m.name)"
+              >
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
               </button>
             </div>
@@ -126,7 +142,7 @@
         </div>
 
         <div v-if="store.modelConfigs.length === 0" class="model-empty">
-          <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="#606060" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
           <p>暂无模型配置</p>
           <p class="hint">点击「添加模型」配置第一个 LLM 端点</p>
         </div>
@@ -153,7 +169,9 @@
                 <label class="form-label">提供商 <span class="required">*</span></label>
                 <div class="provider-select" @click="showProviderDropdown = !showProviderDropdown" ref="providerRef">
                   <div class="provider-selected">
-                    <span>{{ selectedProvider?.label || '选择提供商' }}</span>
+                    <!-- 未知 provider（库里的历史值，如建表默认 'custom'）显示原值而不是
+                         "选择提供商"：那一行是假的空态，实际值好好的，只是不在选项表里 -->
+                    <span>{{ selectedProvider?.label || form.provider || '选择提供商' }}</span>
                     <svg class="provider-arrow" :class="{ open: showProviderDropdown }" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
                   </div>
                   <Transition name="dropdown">
@@ -208,13 +226,16 @@
               <!-- 模型名称 -->
               <div class="form-group">
                 <label class="form-label">模型名称 <span class="required">*</span></label>
-                <input v-model="form.name" class="form-input" placeholder="如：Qwen3-VL-8B-Instruct" />
+                <!-- maxlength 与后端 Field(max_length=100) 同口径：超出去是 422，
+                     而 backendErrorDetail 会把 pydantic 英文原文（"String should have at
+                     most 100 characters"）原样弹进 toast —— 边界拦在这里更省事 -->
+                <input v-model="form.name" class="form-input" maxlength="100" placeholder="如：Qwen3-VL-8B-Instruct" />
               </div>
 
               <!-- 模型 ID -->
               <div class="form-group">
                 <label class="form-label">模型 ID</label>
-                <input v-model="form.model_id" class="form-input" placeholder="" />
+                <input v-model="form.model_id" class="form-input" maxlength="200" placeholder="" />
               </div>
 
               <!-- 高级配置 -->
@@ -276,7 +297,7 @@
                       <label class="form-label">输入（上下文长度）</label>
                       <div class="token-chips">
                         <button
-                          v-for="opt in INPUT_TOKEN_OPTIONS"
+                          v-for="opt in inputTokenOptions"
                           :key="opt"
                           class="token-chip"
                           :class="{ active: form.max_tokens === opt }"
@@ -292,7 +313,7 @@
                       <label class="form-label">输出（最大回复长度）</label>
                       <div class="token-chips">
                         <button
-                          v-for="opt in OUTPUT_TOKEN_OPTIONS"
+                          v-for="opt in outputTokenOptions"
                           :key="opt"
                           class="token-chip"
                           :class="{ active: form.max_output_tokens === opt }"
@@ -409,10 +430,18 @@ const form = reactive({
 
 const selectedProvider = computed(() => PROVIDERS.find(p => p.id === form.provider))
 const isLocalProvider = computed(() => selectedProvider.value?.isLocal ?? false)
+/**
+ * API Key 必填只对本面板认识的非本地提供商成立。
+ * 后端 provider 列没有白名单、建表默认就是 'custom'，而它不在这份可选项里 ——
+ * 按"远程必填 key"处理会让这条已存在的记录永久灰掉保存按钮（字段还显示着，
+ * 但空 key + 灰按钮 = 谁都改不动它）。未知 provider 照常显示 key 字段、可填可留，
+ * 只是不再强制：面板自己的选项表不能反过来把库里已有的数据锁死。
+ */
+const keyRequired = computed(() => !!selectedProvider.value && !isLocalProvider.value)
 // 非本地部署时 API Key 必填；本地部署不需要
 const canSave = computed(() => {
   if (!form.name || !form.base_url || !form.provider) return false
-  if (!isLocalProvider.value) {
+  if (keyRequired.value) {
     // 新建时必须填 key；编辑时 key 不能为空（除非和原脱敏值一样表示保留原值）
     const key = (form.api_key || '').trim()
     if (!isEditing.value && !key) return false
@@ -423,6 +452,25 @@ const canSave = computed(() => {
 
 // 网络往返期间禁用保存入口：连点会重复创建同名模型/叠加并发更新
 const saving = ref(false)
+
+/**
+ * 对话框会话号。doSave 要 await 一次网络往返，期间用户完全可以取消后重开另一个对话框
+ * （编辑 → 取消 → 添加），而原实现在 await 之后才读 isEditing/editingId：
+ * 回填时会把刚打开的"添加模型"对话框关掉，toast 还说成「模型已添加」。
+ * 每次开对话框 +1，await 之后先比会话号，不是自己那一轮就不关窗、不报成功。
+ */
+let dialogSeq = 0
+
+/**
+ * 预设档 + 当前值。库里可能是 8000 这类不在 5 枚预设档上的值（手填过的旧数据、
+ * 别的写入方），而芯片高亮用的是 `=== opt` —— 于是一枚都不亮，用户看不到现在
+ * 是多少，也无法原样保留（只能整格换成列表值）。补一枚显示实际值的芯片：
+ * 它自然就是亮的那枚，不点它则原值不变。
+ */
+const withCurrent = (opts: number[], current: number) =>
+  opts.includes(current) ? opts : [...opts, current].sort((a, b) => a - b)
+const inputTokenOptions = computed(() => withCurrent(INPUT_TOKEN_OPTIONS, form.max_tokens))
+const outputTokenOptions = computed(() => withCurrent(OUTPUT_TOKEN_OPTIONS, form.max_output_tokens))
 
 function selectProvider(p: ProviderDef) {
   form.provider = p.id
@@ -448,6 +496,7 @@ function resetForm() {
 
 function openCreateDialog() {
   resetForm()
+  dialogSeq++
   isEditing.value = false
   editingId.value = ''
   hasExistingKey.value = false
@@ -463,6 +512,7 @@ function openCreateDialog() {
 
 function openEditDialog(m: ModelConfig) {
   resetForm()
+  dialogSeq++
   isEditing.value = true
   editingId.value = m.id
   form.name = m.name
@@ -510,7 +560,13 @@ async function doSave() {
   // 数字输入框可以被清空或手打成越界值（min/max 只约束步进器，不拦手打）。
   // 原样提交会撞上后端 Field 的同款区间（0-2 / 1-1000000）→ pydantic 原文进 toast。
   // 提交前按后端口径钳制，并把钳好的值写回表单，避免界面显示 5、实际存 2。
+  //
+  // 空串必须先短路回 fallback：`type=number` 上的 v-model.number 在框被清空时给的是
+  // ''（looseToNumber 的 parseFloat('') 是 NaN → 原样返回），而 Number('') === 0 且
+  // 有限 —— 于是"清空温度"会静默存成 0、"清空思考预算"存成 0（后端读作"跟随输出预算"），
+  // 落在 lo=1 的字段上更是直接把窗口写成 1 token。清空 = 没填，不是填了 0。
   const clampNum = (value: unknown, fallback: number, lo: number, hi: number) => {
+    if (value === '' || value === null || value === undefined) return fallback
     const n = typeof value === 'number' ? value : Number(value)
     if (!Number.isFinite(n)) return fallback
     return Math.min(hi, Math.max(lo, n))
@@ -542,20 +598,25 @@ async function doSave() {
     }
   }
   let result: ModelConfig | null
-  if (isEditing.value) {
-    result = await store.updateModelConfig(editingId.value, payload)
+  // 会话号与"这一轮到底是编辑还是新建"都必须在 await 之前定死（见 dialogSeq 注）
+  const mySeq = dialogSeq
+  const wasEditing = isEditing.value
+  const wasEditingId = editingId.value
+  if (wasEditing) {
+    result = await store.updateModelConfig(wasEditingId, payload)
   } else {
     result = await store.createModelConfig(payload)
   }
+  if (mySeq !== dialogSeq) return
   if (result) {
     // 持久化校验在 store.createModelConfig 内置：若刚创建的 id 不在列表，store.modelsError 会被置告警
-    if (!isEditing.value && store.modelsError) {
+    if (!wasEditing && store.modelsError) {
       toast.error(`模型未持久化：${store.modelsError}`, 8000)
       // 不关对话框，让用户看到 toast 并可重试
     } else {
       // 保存成功后关闭窗口（× / 取消 / 保存均有关闭入口；点遮罩不关，防止误触丢表单）
       closeDialog()
-      toast.success(isEditing.value ? '模型已更新' : '模型已添加')
+      toast.success(wasEditing ? '模型已更新' : '模型已添加')
     }
   } else {
     const raw = store.modelsError || '保存失败，请检查输入或后端连接'
@@ -567,6 +628,13 @@ async function doSave() {
 }
 
 async function handleDelete(id: string, name: string) {
+  // 按钮已经置灰，这里兜"另一个窗口刚把它设成默认"的竞态：
+  // 后端那句 ValueError 是英文原文，直通 toast 就等于把内部错误码给用户看
+  const row = store.modelConfigs.find(m => m.id === id)
+  if (row && isAnyDefault(row)) {
+    toast.warning('默认模型不可删除：先把默认切到别的模型')
+    return
+  }
   const ok = await confirm({
     title: '删除模型',
     message: `确定删除模型「${name}」？此操作不可撤销。`,
@@ -580,7 +648,12 @@ async function handleDelete(id: string, name: string) {
     delete testStatus[id]
     toast.success(`已删除模型「${name}」`)
   } else {
-    toast.error(store.modelsError || '删除失败', 6000)
+    // 后端拒绝删除默认模型时给的是英文 ValueError 原文，直通 toast 等于把内部错误码当文案
+    const raw = store.modelsError || ''
+    toast.error(
+      /default/i.test(raw) ? '默认模型不可删除：先把默认切到别的模型' : (raw || '删除失败'),
+      6000,
+    )
   }
 }
 
@@ -704,11 +777,11 @@ return String(n)
   font-size: 13px;
   color: var(--text-secondary);
 }
-.state-error { color: #f85149; flex-direction: column; align-items: flex-start; gap: 8px; }
+.state-error { color: var(--danger-text); flex-direction: column; align-items: flex-start; gap: 8px; }
 
 .spinner {
   width: 16px; height: 16px;
-  border: 2px solid #2d2d30;
+  border: 2px solid var(--border-subtle);
   border-top-color: var(--accent-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -726,12 +799,12 @@ return String(n)
 
 .model-card {
   background: var(--bg-input);
-  border: 1px solid #2d2d30;
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
   padding: 14px 16px;
   transition: border-color 0.15s;
 }
-.model-card:hover { border-color: #444; }
+.model-card:hover { border-color: var(--border-default); }
 .model-card.is-default { border-color: color-mix(in srgb, var(--accent-primary) 20%, transparent); background: color-mix(in srgb, var(--accent-primary) 3%, transparent); }
 
 .model-card-header {
@@ -760,7 +833,7 @@ return String(n)
 }
 .field-label { color: var(--text-secondary); min-width: 56px; }
 .field-value { color: var(--text-primary); }
-.field-monospace { font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 11px; }
+.field-monospace { font-family: var(--font-mono); font-size: 11px; }
 
 .model-params {
   display: flex;
@@ -769,7 +842,7 @@ return String(n)
 }
 .param-chip {
   background: var(--bg-input);
-  border: 1px solid #2d2d30;
+  border: 1px solid var(--border-subtle);
   border-radius: 4px;
   padding: 3px 8px;
   display: flex;
@@ -788,8 +861,8 @@ return String(n)
   font-weight: 500;
   white-space: nowrap;
 }
-.badge-cap { background: #3fb95022; color: #3fb950; border: 1px solid #3fb95044; }
-.badge-provider { background: color-mix(in srgb, var(--text-secondary) 13%, transparent); color: var(--text-secondary); border: 1px solid #ffffff10; }
+.badge-cap { background: color-mix(in srgb, var(--status-success-text) 13%, transparent); color: var(--status-success-text); border: 1px solid color-mix(in srgb, var(--status-success-text) 27%, transparent); }
+.badge-provider { background: color-mix(in srgb, var(--text-secondary) 13%, transparent); color: var(--text-secondary); border: 1px solid color-mix(in srgb, var(--text-primary) 8%, transparent); }
 
 /* 测试状态 */
 .test-status {
@@ -799,10 +872,10 @@ return String(n)
   font-size: 12px;
   margin-top: 8px;
   padding-top: 8px;
-  border-top: 1px solid #2d2d30;
+  border-top: 1px solid var(--border-subtle);
 }
-.test-ok { color: #3fb950; }
-.test-error { color: #f85149; }
+.test-ok { color: var(--status-success-text); }
+.test-error { color: var(--danger-text); }
 .test-testing { color: var(--text-secondary); }
 .test-latency {
   margin-left: auto;
@@ -810,9 +883,9 @@ return String(n)
   font-weight: 500;
   padding: 1px 8px;
   border-radius: 10px;
-  background: #3fb95022;
-  color: #3fb950;
-  border: 1px solid #3fb95044;
+  background: color-mix(in srgb, var(--status-success-text) 13%, transparent);
+  color: var(--status-success-text);
+  border: 1px solid color-mix(in srgb, var(--status-success-text) 27%, transparent);
 }
 
 /* 空状态 */
@@ -822,11 +895,11 @@ return String(n)
   align-items: center;
   justify-content: center;
   padding: 40px 20px;
-  color: #606060;
+  color: var(--text-tertiary);
   gap: 8px;
 }
 .model-empty p { margin: 0; font-size: 13px; }
-.model-empty .hint { font-size: 12px; color: #505050; }
+.model-empty .hint { font-size: 12px; color: var(--text-tertiary); }
 
 /* 按钮 */
 .btn {
@@ -844,10 +917,10 @@ return String(n)
 }
 .btn-sm { padding: 4px 10px; font-size: 11px; }
 .btn-primary { background: var(--accent-primary); color: var(--accent-on); }
-.btn-primary:hover { background: #4a9aef; }
+.btn-primary:hover { background: color-mix(in srgb, var(--accent-primary) 85%, white); }
 .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn-ghost { background: transparent; color: var(--text-secondary); }
-.btn-ghost:hover { background: #ffffff10; color: var(--text-primary); }
+.btn-ghost:hover { background: var(--bg-hover); color: var(--text-primary); }
 .btn-ghost:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .btn-icon {
@@ -860,10 +933,10 @@ return String(n)
   cursor: pointer;
   transition: all 0.15s;
 }
-.btn-icon:hover { background: #ffffff10; color: var(--text-primary); }
+.btn-icon:hover { background: var(--bg-hover); color: var(--text-primary); }
 .btn-icon:disabled { opacity: 0.3; cursor: not-allowed; }
-.btn-icon-danger:hover { background: #f8514915; color: #f85149; }
-.btn-icon-default-active { color: #e3b341; opacity: 1 !important; }
+.btn-icon-danger:hover { background: color-mix(in srgb, var(--danger-text) 10%, transparent); color: var(--danger-text); }
+.btn-icon-default-active { color: var(--accent-yellow); opacity: 1 !important; }
 .btn-icon-default-active:disabled { opacity: 0.75 !important; cursor: default; }
 
 /* ── Modal ── */
@@ -878,7 +951,7 @@ return String(n)
 }
 .modal-container {
   background: var(--bg-input-solid);
-  border: 1px solid #2d2d30;
+  border: 1px solid var(--border-subtle);
   border-radius: 10px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
   width: 90vw;
@@ -896,7 +969,7 @@ return String(n)
   align-items: center;
   justify-content: space-between;
   padding: 16px 20px;
-  border-bottom: 1px solid #2d2d30;
+  border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
 .modal-header h4 { margin: 0; font-size: 14px; font-weight: 600; }
@@ -907,13 +980,13 @@ return String(n)
   background: transparent; border: none; border-radius: 4px;
   color: var(--text-secondary); cursor: pointer; transition: all 0.15s;
 }
-.modal-close:hover { background: #ffffff10; color: var(--text-primary); }
+.modal-close:hover { background: var(--bg-hover); color: var(--text-primary); }
 
 .modal-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; }
 .modal-footer {
   display: flex; justify-content: flex-end; gap: 8px;
   padding: 12px 20px;
-  border-top: 1px solid #2d2d30;
+  border-top: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
 
@@ -921,12 +994,12 @@ return String(n)
 .form-group { display: flex; flex-direction: column; gap: 4px; }
 .form-label { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
 .form-hint { margin: 0; font-size: 11px; color: var(--text-tertiary); }
-.required { color: #f85149; }
+.required { color: var(--danger-text); }
 .form-input {
   width: 100%;
   padding: 8px 10px;
   background: var(--bg-input);
-  border: 1px solid #2d2d30;
+  border: 1px solid var(--border-subtle);
   border-radius: 6px;
   color: var(--text-primary);
   font-size: 13px;
@@ -936,7 +1009,7 @@ return String(n)
   box-sizing: border-box;
 }
 .form-input:focus { border-color: var(--accent-primary); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 20%, transparent); }
-.form-input::placeholder { color: #606060; }
+.form-input::placeholder { color: var(--text-tertiary); }
 
 .label-row {
   display: flex;
@@ -945,7 +1018,7 @@ return String(n)
 }
 .local-note {
   font-size: 11px;
-  color: #3fb950;
+  color: var(--status-success-text);
 }
 
 /* API Key */
@@ -972,7 +1045,7 @@ return String(n)
   cursor: pointer;
   transition: all 0.15s;
 }
-.btn-eye:hover { color: var(--accent-primary); background: #ffffff10; }
+.btn-eye:hover { color: var(--accent-primary); background: var(--bg-hover); }
 
 /* ── 提供商选择器 ── */
 .provider-select {
@@ -985,13 +1058,13 @@ return String(n)
   gap: 8px;
   padding: 8px 10px;
   background: var(--bg-input);
-  border: 1px solid #2d2d30;
+  border: 1px solid var(--border-subtle);
   border-radius: 6px;
   color: var(--text-primary);
   font-size: 13px;
   transition: border-color 0.15s;
 }
-.provider-selected:hover { border-color: #444; }
+.provider-selected:hover { border-color: var(--border-default); }
 .provider-arrow {
   margin-left: auto;
   transition: transform 0.15s;
@@ -1005,7 +1078,7 @@ return String(n)
   left: 0;
   right: 0;
   background: var(--bg-input-solid);
-  border: 1px solid #2d2d30;
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   z-index: 10;
@@ -1038,7 +1111,7 @@ return String(n)
 
 /* ── 高级配置 ── */
 .advanced-section {
-  border: 1px solid #2d2d30;
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
   overflow: hidden;
 }
@@ -1055,7 +1128,7 @@ return String(n)
   user-select: none;
 }
 .advanced-toggle:hover { color: var(--text-primary); }
-.advanced-toggle svg { transition: transform 0.2s; color: #606060; }
+.advanced-toggle svg { transition: transform 0.2s; color: var(--text-tertiary); }
 .advanced-toggle svg.open { transform: rotate(180deg); }
 
 .advanced-body {
@@ -1097,7 +1170,7 @@ return String(n)
 .form-checkbox {
   width: 14px;
   height: 14px;
-  accent-color: #58a6ff;
+  accent-color: var(--accent-primary);
   margin: 0;
   flex-shrink: 0;
 }
@@ -1150,7 +1223,7 @@ return String(n)
 .token-chip {
   padding: 5px 12px;
   background: var(--bg-input);
-  border: 1px solid #2d2d30;
+  border: 1px solid var(--border-subtle);
   border-radius: 6px;
   font-size: 12px;
   color: var(--text-secondary);
@@ -1158,7 +1231,7 @@ return String(n)
   transition: all 0.15s;
   font-family: inherit;
 }
-.token-chip:hover { border-color: #444; color: var(--text-primary); }
+.token-chip:hover { border-color: var(--border-default); color: var(--text-primary); }
 .token-chip.active {
   background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
   border-color: color-mix(in srgb, var(--accent-primary) 33%, transparent);

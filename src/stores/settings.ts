@@ -136,6 +136,16 @@ interface AppSettings {
 
 const LS_KEY = 'ckunagentic:settings'
 
+/**
+ * 运行预算熔断的合法区间 —— 面板的输入上界与下面 asNumber 的闸门共用这一份。
+ * 两处各写一遍是本仓的老漂移族：面板放行 $50 而闸门 hi=100000 之外一律折 0，
+ * 于是"填进去的值重启就没了"，且没有任何提示。
+ */
+export const BUDGET_LIMITS = {
+  maxCostUsd: { min: 0, max: 100000 },
+  maxTotalTokens: { min: 0, max: 1e12 },
+} as const
+
 function loadFromLocalStorage(): Partial<AppSettings> | null {
   try {
     const raw = localStorage.getItem(LS_KEY)
@@ -220,8 +230,10 @@ export const useSettingsStore = defineStore('settings', () => {
       maxIterations: asNumber(saved?.agent?.maxIterations, 100, 1, 500),
       dynamicBudget: asBool(saved?.agent?.dynamicBudget, true),
       enableIntentionGuide: asBool(saved?.agent?.enableIntentionGuide, true),
-      maxCostUsd: asNumber(saved?.agent?.maxCostUsd, 0, 0, 100000),
-      maxTotalTokens: asNumber(saved?.agent?.maxTotalTokens, 0, 0, 1e12),
+      maxCostUsd: asNumber(saved?.agent?.maxCostUsd, 0,
+        BUDGET_LIMITS.maxCostUsd.min, BUDGET_LIMITS.maxCostUsd.max),
+      maxTotalTokens: asNumber(saved?.agent?.maxTotalTokens, 0,
+        BUDGET_LIMITS.maxTotalTokens.min, BUDGET_LIMITS.maxTotalTokens.max),
       breakerDisabled: asBool(saved?.agent?.breakerDisabled, false),
       defaultEnvironment: asEnum(
         saved?.agent?.defaultEnvironment, ['test', 'prod'] as const, 'test'),
@@ -256,8 +268,11 @@ export const useSettingsStore = defineStore('settings', () => {
       themeGradientMode: asEnum(saved?.appearance?.themeGradientMode, GRADIENT_MODES, 'glow'),
       themeGradientDirection: asEnum(
         saved?.appearance?.themeGradientDirection, GRADIENT_DIRECTIONS, 'tb'),
-      themeGradientStartColor: asString(saved?.appearance?.themeGradientStartColor, ''),
-      themeGradientEndColor: asString(saved?.appearance?.themeGradientEndColor, ''),
+      // 这两条过 asHexColor 而不是 asString：useAppearance 把值原样拼进 --theme-gradient，
+      // 再交给 background: var(...) —— 属性值那侧没有第二道闸门，'#fff), url(x' 这类串会被
+      // 直接当 CSS 片段代入。非法即回落 ''（'' 本来就是"跟随强调色/主题底色"的既有语义）。
+      themeGradientStartColor: asHexColor(saved?.appearance?.themeGradientStartColor, ''),
+      themeGradientEndColor: asHexColor(saved?.appearance?.themeGradientEndColor, ''),
       terminal: {
         fontSize: asNumber(saved?.appearance?.terminal?.fontSize, 14, 12, 18),
         fontFamily: asString(saved?.appearance?.terminal?.fontFamily, 'jetbrains'),
@@ -287,148 +302,212 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
-  // 记忆后端同步：debounce 到期与 pagehide 强 flush 共用同一实现。
-  // applyingRemoteMemory：后端回填不算用户改动——loadMemorySettings 写这几个
-  // 字段会惊动 deep watch，于是启动时把刚读到的值原样 POST 回去（白写一次）；
-  // 响应缺字段时更会把 undefined 落进本地、再推给后端——一次异常响应就污染设置。
-  // lastSyncedMemory：上一成功同步的快照，sync 失败时本地回滚到这里，
-  // 否则"UI 显示新值 / DB 仍是旧值"的静默背离会长期存在。
-  let memorySyncTimer: number | undefined
-  let applyingRemoteMemory = false
-  let lastSyncedMemory: AppSettings['memory'] = { ...settings.value.memory }
-  async function syncMemoryToBackend() {
-    const mem = { ...settings.value.memory }
-    try {
-      await agentApi.updateMemorySettings({
-        enabled: mem.enabled,
-        max_items: mem.maxItems,
-        inject_budget_tokens: mem.injectBudgetTokens,
-        blocks_budget_tokens: mem.blocksBudgetTokens,
-        search_timeout_s: mem.searchTimeoutS,
-        reconcile_llm_enabled: mem.reconcileLlmEnabled,
-      })
-      lastSyncedMemory = mem
-    } catch (e) {
-      const toast = useToastStore()
-      const msg = e instanceof Error ? e.message : String(e)
-      // 回滚本身要走 settings 响应式；先置闸门吞掉 watch，等本轮 watcher 冲刷完再放开
-      applyingRemoteMemory = true
-      settings.value.memory = { ...lastSyncedMemory }
-      window.setTimeout(() => { applyingRemoteMemory = false }, 0)
-      toast.error(`记忆设置同步失败，已回滚: ${msg}`, 5000)
-    }
-  }
-  watch(
-    () => settings.value.memory,
-    () => {
-      if (applyingRemoteMemory) return
-      clearTimeout(memorySyncTimer)
-      memorySyncTimer = window.setTimeout(() => void syncMemoryToBackend(), 500)
-    },
-    { deep: true }
-  )
-
-  // 初始化时从后端加载记忆设置（只接受形状正确的字段，缺失即保留本地值）
-  async function loadMemorySettings() {
-    applyingRemoteMemory = true
-    try {
-      const data = await agentApi.getMemorySettings()
-      const mem = settings.value.memory
-      if (typeof data.enabled === 'boolean') mem.enabled = data.enabled
-      if (Number.isFinite(data.max_items)) mem.maxItems = data.max_items
-      if (Number.isFinite(data.inject_budget_tokens)) mem.injectBudgetTokens = data.inject_budget_tokens
-      if (Number.isFinite(data.blocks_budget_tokens)) mem.blocksBudgetTokens = data.blocks_budget_tokens
-      if (Number.isFinite(data.search_timeout_s)) mem.searchTimeoutS = data.search_timeout_s
-      if (typeof data.reconcile_llm_enabled === 'boolean') mem.reconcileLlmEnabled = data.reconcile_llm_enabled
-      await nextTick()  // 等本轮 watcher 冲刷完再放开闸门
-      // 后端值即"最后一次已知一致状态"，作为 sync 失败时的回滚基线
-      lastSyncedMemory = { ...settings.value.memory }
-    } catch { /* 后端未就绪时使用 localStorage 默认值 */ }
-    finally { applyingRemoteMemory = false }
+  /**
+   * 后端同步分区（memory / postProcess 共用这一套机制）的三条不变量，本轮修出来的：
+   *
+   * 1. **只发真正改过的字段。** 后端两个 PUT 都是 `model_dump(exclude_none=True)`
+   *    （routes/settings.py 的 update_memory_settings / update_post_process_settings），
+   *    「不传 = 不改」。原来每次发全量：启动那次 GET 没成功（后端未就绪是常态，
+   *    getBaseUrl 冷启动直接抛）时本地带着代码默认，用户拨一下开关就把五个他从未
+   *    读到过的字段按默认写回库 —— 静默覆盖后端真值，而会话保留那条是会真删数据的。
+   * 2. **PUT/GET 回来的整份权威值用来收敛本地**，未发送的字段以库为准，
+   *    「前端没读到过后端」这个状态在第一次往返后自愈。
+   * 3. **load 与 sync 互斥、并发 load 去重。** App.vue 启动拉 + 面板挂载补拉会撞在一起，
+   *    GET 抢在待发的 PUT 之前返回就会把本地覆回旧值、再把旧值写回库、基线照推进 ——
+   *    用户那次编辑既不报错也不留痕。回填期间新落地的改动记为 dirty：跳过覆写、
+   *    基线不为它推进、并重新排一次发送。
+   */
+  interface BackendSectionSpec<L extends Record<string, string | number | boolean>> {
+    /** 本地键 → 后端键。唯一一份字段映射，patch/回填/回滚三条路径共用（抄第二份就是本仓的老漂移族） */
+    map: Record<keyof L, string>
+    read: () => L
+    write: (next: L) => void
+    get: () => Promise<unknown>
+    put: (patch: Record<string, string | number | boolean>) => Promise<unknown>
+    /** 失败提示的措辞前缀；回滚 toast 统一走 toFriendlyMessage，不再裸泄 e.message */
+    label: string
   }
 
-  // 后处理后端同步：与 syncMemoryToBackend 同型（闸门/基线/回滚口径一致）
-  let postProcessSyncTimer: number | undefined
-  let applyingRemotePostProcess = false
-  let lastSyncedPostProcess: AppSettings['postProcess'] = { ...settings.value.postProcess }
-  async function syncPostProcessToBackend() {
-    const pp = { ...settings.value.postProcess }
-    try {
-      await api.updatePostProcessSettings({
-        enabled: pp.enabled,
-        generate_title: pp.generateTitle,
-        extract_memory: pp.extractMemory,
-        generate_skill: pp.generateSkill,
-      })
-      lastSyncedPostProcess = pp
-    } catch (e) {
-      // C35 修复：用 toFriendlyMessage 转换，不再暴露原始 e.message（技术细节）
-      const toast = useToastStore()
-      applyingRemotePostProcess = true
-      settings.value.postProcess = { ...lastSyncedPostProcess }
-      window.setTimeout(() => { applyingRemotePostProcess = false }, 0)
-      toast.error(`${toFriendlyMessage(e, '后处理设置同步失败')}，已回滚`, 5000)
+  function createBackendSync<L extends Record<string, string | number | boolean>>(spec: BackendSectionSpec<L>) {
+    const localKeys = Object.keys(spec.map) as (keyof L)[]
+    const localOfRemote = (rk: string) => localKeys.find(k => spec.map[k] === rk)
+
+    let syncTimer: number | undefined
+    let applyingRemote = false
+    let baseline: L = { ...spec.read() }
+    let loading: Promise<void> | null = null
+    // 面板拿它说一句实话：读失败时面板显示的是本地默认值，不是库里的真值。
+    // 数据已经安全了（只发改过的字段），但"看起来和库里一样"是假的。
+    const loaded = ref(false)
+
+    const pendingPatch = (): Record<string, string | number | boolean> => {
+      const cur = spec.read()
+      const out: Record<string, string | number | boolean> = {}
+      for (const k of localKeys) {
+        if (cur[k] !== baseline[k]) out[spec.map[k]] = cur[k]
+      }
+      return out
+    }
+
+    /** 逐字段守卫地落进本地：形状不对就丢弃保留本地值；skip 里的后端键不覆写 */
+    const applyRemote = (data: unknown, skip?: Set<string>) => {
+      if (!data || typeof data !== 'object') return
+      const next = { ...spec.read() } as Record<string, unknown>
+      for (const [rk, v] of Object.entries(data as Record<string, unknown>)) {
+        if (skip?.has(rk)) continue
+        const lk = localOfRemote(rk)
+        if (!lk) continue
+        const cur = next[lk as string]
+        const ok = typeof cur === 'boolean' ? typeof v === 'boolean'
+          : typeof cur === 'number' ? typeof v === 'number' && Number.isFinite(v)
+            : typeof v === 'string'
+        if (ok) next[lk as string] = v
+      }
+      applyingRemote = true
+      spec.write(next as L)
+    }
+
+    const releaseGateSoon = () => window.setTimeout(() => { applyingRemote = false }, 0)
+
+    const runSync = async (): Promise<void> => {
+      const patch = pendingPatch()
+      if (!Object.keys(patch).length) return          // 没改动就一次不发（含 pagehide 强 flush）
+      const sentBaseline = baseline
+      try {
+        applyRemote(await spec.put(patch))
+        await nextTick()
+        baseline = { ...spec.read() }
+      } catch (e) {
+        // 只回滚真正发过的那几个字段，其余保持本地
+        const cur = { ...spec.read() } as Record<string, unknown>
+        for (const rk of Object.keys(patch)) {
+          const lk = localOfRemote(rk)
+          if (lk) cur[lk as string] = (sentBaseline as Record<string, unknown>)[lk as string]
+        }
+        applyingRemote = true
+        spec.write(cur as L)
+        useToastStore().error(`${toFriendlyMessage(e, `${spec.label}同步失败`)}，已回滚`, 5000)
+      } finally {
+        releaseGateSoon()
+      }
+    }
+
+    watch(() => spec.read(), () => {
+      if (applyingRemote) return
+      clearTimeout(syncTimer)
+      syncTimer = window.setTimeout(() => void runSync(), 500)
+    }, { deep: true })
+
+    const doLoad = async (): Promise<void> => {
+      clearTimeout(syncTimer)
+      syncTimer = undefined
+      await runSync()                                  // 待发改动先落地，再读权威值
+      applyingRemote = true
+      try {
+        const data = await spec.get()
+        const dirty = pendingPatch()                   // GET 往返期间新落地的改动
+        applyRemote(data, new Set(Object.keys(dirty)))
+        await nextTick()
+        const cur = spec.read()
+        const advanced = { ...baseline } as Record<string, unknown>
+        for (const k of localKeys) {
+          if (!(spec.map[k] in dirty)) advanced[k as string] = cur[k]
+        }
+        baseline = advanced as L
+        loaded.value = true
+        if (Object.keys(dirty).length) {
+          clearTimeout(syncTimer)
+          syncTimer = window.setTimeout(() => void runSync(), 500)
+        }
+      } catch { /* 后端未就绪：本地值与 baseline 都原样留着，改动仍会在下次只发 diff */ }
+      finally { applyingRemote = false }
+    }
+
+    return {
+      /** 并发去重：启动拉与面板补拉共用同一次往返，不会有两个响应互相覆写 */
+      load: (): Promise<void> => (loading ??= doLoad().finally(() => { loading = null })),
+      /** 是否至少成功读到过一次后端 —— 面板据此说实话，而不是把本地默认演成库里值 */
+      loaded,
+      /** pagehide 收尾：无待发改动时是空操作 */
+      flush: (): void => {
+        clearTimeout(syncTimer)
+        syncTimer = undefined
+        void runSync()
+      },
     }
   }
-  watch(
-    () => settings.value.postProcess,
-    () => {
-      if (applyingRemotePostProcess) return
-      clearTimeout(postProcessSyncTimer)
-      postProcessSyncTimer = window.setTimeout(() => void syncPostProcessToBackend(), 500)
+
+  const memorySection = createBackendSync<AppSettings['memory']>({
+    label: '记忆设置',
+    map: {
+      enabled: 'enabled',
+      maxItems: 'max_items',
+      injectBudgetTokens: 'inject_budget_tokens',
+      blocksBudgetTokens: 'blocks_budget_tokens',
+      searchTimeoutS: 'search_timeout_s',
+      reconcileLlmEnabled: 'reconcile_llm_enabled',
     },
-    { deep: true }
-  )
+    read: () => settings.value.memory,
+    write: (next) => { settings.value.memory = next },
+    get: () => agentApi.getMemorySettings(),
+    put: (patch) => agentApi.updateMemorySettings(patch),
+  })
+
+  const postProcessSection = createBackendSync<AppSettings['postProcess']>({
+    label: '后处理设置',
+    map: {
+      enabled: 'enabled',
+      generateTitle: 'generate_title',
+      extractMemory: 'extract_memory',
+      generateSkill: 'generate_skill',
+    },
+    read: () => settings.value.postProcess,
+    write: (next) => { settings.value.postProcess = next },
+    get: () => api.getPostProcessSettings(),
+    put: (patch) => api.updatePostProcessSettings(patch),
+  })
+
+  const loadMemorySettings = memorySection.load
+  const loadPostProcessSettings = postProcessSection.load
 
   // debounce 的代价：改完设置立刻关窗（<300ms）这次改动就永久丢了 ——
   // 外观/对话/运行预算这些都是纯本地设置，丢了用户完全无感，只会以为没保存过。
   // pagehide 是 Chromium 渲染进程里最可靠的收尾点（beforeunload 需返回值才触发）。
   // 后端同步分区同理要 flush：否则本地 localStorage 拿新值、后端停在旧值，
-  // 下次启动 load*Settings 以后端为准把改动静默冲掉（原实现只保住了 localStorage 半边）。
+  // 下次启动 load 以后端为准把改动静默冲掉（原实现只保住了 localStorage 半边）。
   // 可选链：单测的 window 垫片只有 setTimeout/clearTimeout。
   const flushOnPageHide = () => {
     clearTimeout(saveTimer)
-    clearTimeout(memorySyncTimer)
-    clearTimeout(postProcessSyncTimer)
     persistSettings()
-    // fire-and-forget：sync 实现内部自带 catch→回滚→toast；关窗场景 toast/toFriendly
-    // 均无意义，渲染进程拆除可能掐断在途 fetch，属尽力而为（比原样丢 500ms 窗口好）。
-    void syncMemoryToBackend()
-    void syncPostProcessToBackend()
+    // fire-and-forget：sync 内部自带 catch→回滚→toast；关窗场景 toast 无意义，
+    // 渲染进程拆除可能掐断在途 fetch，属尽力而为（比原样丢 500ms 窗口好）。
+    memorySection.flush()
+    postProcessSection.flush()
   }
   window.addEventListener?.('pagehide', flushOnPageHide)
   onScopeDispose(() => window.removeEventListener?.('pagehide', flushOnPageHide))
-
-  // 初始化时从后端加载后处理设置（字段缺失/类型不对就保留本地值，不写回后端）
-  async function loadPostProcessSettings() {
-    applyingRemotePostProcess = true
-    try {
-      const data = await api.getPostProcessSettings()
-      const pp = settings.value.postProcess
-      if (typeof data.enabled === 'boolean') pp.enabled = data.enabled
-      if (typeof data.generate_title === 'boolean') pp.generateTitle = data.generate_title
-      if (typeof data.extract_memory === 'boolean') pp.extractMemory = data.extract_memory
-      if (typeof data.generate_skill === 'boolean') pp.generateSkill = data.generate_skill
-      await nextTick()
-      lastSyncedPostProcess = { ...settings.value.postProcess }
-    } catch { /* 后端未就绪时使用 localStorage 默认值 */ }
-    finally { applyingRemotePostProcess = false }
-  }
 
   // ── 模型配置（来自后端 DB）──
   const modelConfigs = ref<ModelConfig[]>([])
   const modelsLoading = ref(false)
   const modelsError = ref('')
 
-  async function fetchModelConfigs() {
+  /**
+   * 重新拉取模型列表。返回是否真的拉成功 —— 调用方 createModelConfig 的"落库自检"
+   * 必须看这个返回值：GET 抖动时 modelConfigs 仍是旧列表，新 id 自然不在里面，
+   * 不区分就会把一次网络抖动报成「模型未在数据库中持久化」（数据库其实好好的）。
+   */
+  async function fetchModelConfigs(): Promise<boolean> {
     modelsLoading.value = true
     modelsError.value = ''
     try {
       const data = await api.getModelConfigs()
       modelConfigs.value = data
+      return true
     } catch (e: unknown) {
       console.error('[SettingsStore] Error fetching models:', e)
       modelsError.value = e instanceof Error ? e.message : String(e)
+      return false
     } finally {
       modelsLoading.value = false
     }
@@ -438,9 +517,11 @@ export const useSettingsStore = defineStore('settings', () => {
     try {
       const data = await api.createModelConfig(payload)
       // 重新拉取完整列表，确保与数据库一致
-      await fetchModelConfigs()
+      const refreshed = await fetchModelConfigs()
       // 持久化校验：刚创建的 id 必须出现在列表里，否则说明后端 INSERT 未真正落库（db 路径/迁移异常）
-      if (data && !modelConfigs.value.some(m => m.id === data.id)) {
+      // —— 但前提是这次 GET 真的成功了。GET 失败时列表是上一轮的陈旧值，新 id 当然不在里面，
+      // 不加这个条件就会把一次网络抖动报成"数据库没落库"（本仓踩过：抖动 → 假告警 → 用户以为丢数据）。
+      if (refreshed && data && !modelConfigs.value.some(m => m.id === data.id)) {
         console.error('[SettingsStore] created model not in fetched list — DB persistence may be broken:',
           { createdId: data.id, fetchedIds: modelConfigs.value.map(m => m.id) })
         modelsError.value = '模型已创建但未在数据库中持久化，重启后可能丢失。请检查后端 DB 路径日志。'
@@ -525,6 +606,8 @@ export const useSettingsStore = defineStore('settings', () => {
     settings,
     loadMemorySettings,
     loadPostProcessSettings,
+    memoryLoaded: memorySection.loaded,
+    postProcessLoaded: postProcessSection.loaded,
     modelConfigs,
     modelsLoading,
     modelsError,
