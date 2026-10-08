@@ -320,13 +320,17 @@ class Driver:
                     # 仅当还有下一轮预算时才注入自检：continue 回 while 需 iteration+1<max
                     # 成立，否则在最后一轮 continue 会直接落到 loop-else → 误判 MAX_REACHED
                     # 且自检永不被回答（agent 已声明完成，这里应正常收尾为 COMPLETED）。
-                    ctx.metadata["_goal_self_checked"] = True
                     try:
                         from agent.workflow import goal_self_check_prompt
                         self_check = goal_self_check_prompt(goal_text)
                     except Exception:
                         self_check = ""
                     if self_check:
+                        # 置位必须在自检真的注入之后：原先写在 try 之前，于是
+                        # goal 为纯空白（prompt 返回 ""）或 workflow 导入失败时，
+                        # 标记照样落下而自检从未发生 —— done 里的
+                        # workflow_goal.self_checked 因此会谎报「已对照成功标准自检」。
+                        ctx.metadata["_goal_self_checked"] = True
                         ctx.messages.append({"role": "user", "content": self_check})
                         continue
                 await ctx.transition(State.COMPLETED, event="done")
