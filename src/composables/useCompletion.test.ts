@@ -8,7 +8,7 @@ vi.mock('@/stores/ssh', () => ({ useSSHStore: vi.fn() }))
 vi.mock('@/api/client', () => ({ api: {} }))
 vi.mock('@/stores/settings', () => ({ useSettingsStore: vi.fn() }))
 
-import { fuzzyMatchCommand, readCurrentLine } from './useCompletion'
+import { fuzzyMatchCommand, readCurrentLine, stripPrompt } from './useCompletion'
 
 const CMDS = [
   'ls -lat',
@@ -107,5 +107,36 @@ describe('readCurrentLine 行号换算', () => {
 
   it('未滚动（baseY=0）时行为不变', () => {
     expect(readCurrentLine(fakeTerminal(0, 5, 3))?.line).toBe(PROMPT_LINE)
+  })
+})
+
+/**
+ * S6-15：删掉那条永不命中的 OSC 6973 精确通道后，边界判定全靠这里的启发式回退 ——
+ * 于是 docstring 里那组「验证用例」第一次有了执行它的地方。用例是原样从 docstring
+ * 搬来的：注释宣传的行为以前没人测，删代码时也就没人能证明行为没变。
+ */
+describe('stripPrompt（S6-15 删死通道后的唯一判据）', () => {
+  const cases: Array<[string, string, number]> = [
+    ['user@host:~/dir$ git ', 'git ', 17],
+    ['root@host:/# ls ', 'ls ', 13],
+    ['> git', 'git', 2],
+    ['PS C:\\> git', 'git', 8],
+    ['C:\\> git', 'git', 5],
+    ['用户@主机:~$ git ', 'git ', 13],
+    ['\x1b[32muser:~$\x1b[0m git', 'git', 8],
+    ['user@host:~$', '', 12],
+  ]
+
+  for (const [line, input, startCol] of cases) {
+    it(`${JSON.stringify(line)} -> input ${JSON.stringify(input)}, startCol ${startCol}`, () => {
+      const r = stripPrompt(line)
+      expect(r.input).toBe(input)
+      expect(r.startCol).toBe(startCol)
+    })
+  }
+
+  it('空 prompt 与无分隔符的行也不抛（回退支各管一段）', () => {
+    expect(stripPrompt('')).toEqual({ input: '', startCol: 0 })
+    expect(stripPrompt('   git status').input).toBe('git status')
   })
 })

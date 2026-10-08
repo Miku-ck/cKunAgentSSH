@@ -89,9 +89,7 @@ export interface CompletionInput {
   prevSegments: string[]
 }
 
-// 自定义 OSC 6973 标记序列（注入到 prompt 末尾，用于精确定位命令起点）
-const OSC_MARK = '\x1b]6973;\x07'
-// 回退正则：匹配常见 prompt 末尾分隔符 $ # > %，后可跟空白或位于行尾
+// prompt 分隔符正则：匹配常见 prompt 末尾 $ # > %，后可跟空白或位于行尾
 const PROMPT_TAIL_RE = /[#$>%](?:\s+|$)/g
 
 /** 去除 ANSI 转义序列（CSI / OSC / 其他单字节 escape） */
@@ -183,9 +181,14 @@ export function readCurrentLine(terminal: Terminal): { line: string; cursorPos: 
  * 剥离 prompt，返回用户输入和命令起点列号（均为终端显示列坐标）。
  *
  * 策略：
- * 1. 优先在原始行中查找 OSC 6973 标记，标记后即为用户输入起点。
- * 2. 无标记时回退正则，匹配最后一个 [$#>%] 分隔符（后可跟空白或行尾）。
- * 3. 仍无匹配时按行首空白缩进处理。
+ * 1. 正则匹配最后一个 [$#>%] 分隔符（后可跟空白或行尾）。
+ * 2. 仍无匹配时按行首空白缩进处理。
+ *
+ * S6-15：这里原本排着一层「优先找 OSC 6973 精确标记」，两条腿都不通 —— 全仓没有任何
+ * 一方把这个序列注进 prompt（`grep -rn 6973 src electron backend scripts` 只命中这处
+ * 消费者），而 xterm 把 OSC 吃进解析器状态、`translateToString` 永远不会带出它。
+ * 留着它的代价不是几行死码，而是 docstring 宣传了一个不存在的精确通道，让人以为
+ * 边界判定不靠启发式。
  *
  * 验证用例：
  * - 'user@host:~/dir$ git '        -> input 'git ',     startCol 17
@@ -195,20 +198,10 @@ export function readCurrentLine(terminal: Terminal): { line: string; cursorPos: 
  * - 'C:\\> git'                    -> input 'git',      startCol 5
  * - '用户@主机:~$ git '             -> input 'git ',     startCol 13（中文按宽 2 计）
  * - '\x1b[32muser:~$\x1b[0m git'  -> input 'git',      startCol 8
- * - '\x1b]6973;\x07git'           -> input 'git',      startCol 0
  * - 'user@host:~$'                 -> input '',         startCol 12
  */
 export function stripPrompt(line: string): { input: string; startCol: number } {
-  // 1. 优先用 OSC 标记（在原始行中匹配，避免被 stripAnsi 误伤）
-  const oscIdx = line.indexOf(OSC_MARK)
-  if (oscIdx >= 0) {
-    const visiblePrompt = stripAnsi(line.slice(0, oscIdx))
-    const startCol = displayWidth(visiblePrompt)
-    const input = stripAnsi(line.slice(oscIdx + OSC_MARK.length))
-    return { input, startCol }
-  }
-
-  // 2. 回退：去除 ANSI 后，找行内最后一个 prompt 分隔符
+  // 1. 去除 ANSI 后，找行内最后一个 prompt 分隔符
   const clean = stripAnsi(line)
   const promptMatches = [...clean.matchAll(PROMPT_TAIL_RE)]
   if (promptMatches.length > 0) {
@@ -220,7 +213,7 @@ export function stripPrompt(line: string): { input: string; startCol: number } {
     return { input, startCol }
   }
 
-  // 3. 最终回退：按行首空白缩进处理
+  // 2. 最终回退：按行首空白缩进处理
   const input = clean.trimStart()
   const leading = clean.slice(0, clean.length - input.length)
   const startCol = displayWidth(leading)
