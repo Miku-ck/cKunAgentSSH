@@ -13,7 +13,7 @@ vi.mock('electron', () => ({
   BrowserWindow: class {},
 }))
 
-import { isCopyTargetSelfNested } from './path-guard'
+import { isCopyTargetSelfNested, rejectSymlinkTarget } from './path-guard'
 
 const A = join('tree', 'a')
 const B = join('tree', 'b')
@@ -40,5 +40,32 @@ describe('isCopyTargetSelfNested', () => {
   it('等价写法（带 .. 与显式当前目录段）也判成自身', () => {
     expect(isCopyTargetSelfNested(A, join('tree', '.', 'a'))).toBe(true)
     expect(isCopyTargetSelfNested(join('tree', 'x', '..', 'a'), A)).toBe(true)
+  })
+})
+
+/**
+ * S5-15：目标侧的符号链接。源侧早已 lstat + 跳过，但目标侧原先直接 copyFile ——
+ * 目标目录里一条外部植入的链接就能把这一次写带到两个根之外，而那条路径从未经过
+ * assertSafePath（它是敏感目录黑名单，不是围栏）。
+ */
+describe('rejectSymlinkTarget（S5-15）', () => {
+  const dest = join('tree', 'a', 'notes.txt')
+  const statOf = (kind: 'symlink' | 'file' | 'dir'): { isSymbolicLink(): boolean } => ({
+    isSymbolicLink: () => kind === 'symlink',
+  })
+
+  it('目标是符号链接 = 中止，且文案带上是哪一条', () => {
+    const err = rejectSymlinkTarget(dest, statOf('symlink'))
+    expect(err).not.toBeNull()
+    expect(err).toContain(dest)
+  })
+
+  it('普通文件与目录 = 放行（覆盖写是复制的正常语义）', () => {
+    expect(rejectSymlinkTarget(dest, statOf('file'))).toBeNull()
+    expect(rejectSymlinkTarget(dest, statOf('dir'))).toBeNull()
+  })
+
+  it('目标还不存在（lstat 抛错）= 放行', () => {
+    expect(rejectSymlinkTarget(dest, null)).toBeNull()
   })
 })

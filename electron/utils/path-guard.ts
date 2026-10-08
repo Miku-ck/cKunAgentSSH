@@ -105,6 +105,24 @@ export function isCopyTargetSelfNested(srcPath: string, destPath: string): boole
 }
 
 /**
+ * S5-15：`fs:copy` 落盘前的**目标侧**判据。
+ *
+ * 源侧早就不跟随符号链接（lstat + 跳过），但目标侧原先直接 `copyFile(src, dest)`：
+ * 目标目录里一条**已存在**的链接（外部事先植入，或上一次复制留下的）会让这一写穿过
+ * 链接落到链接指向的位置 —— 而 `assertSafePath` 只验过复制的两个根，看不见这一跳。
+ * 返回 null = 可写；返回字符串 = 中止，把它作为错误文案交给调用方。
+ */
+export function rejectSymlinkTarget(
+  destPath: string,
+  st: { isSymbolicLink(): boolean } | null,
+): string | null {
+  if (st?.isSymbolicLink()) {
+    return `目标已存在且是符号链接，为避免写到链接指向的位置已中止: ${destPath}`
+  }
+  return null
+}
+
+/**
  * 私钥文件路径白名单校验（修复 1）：
  * realpath 解析后，仅当真实路径位于「用户主目录/.ssh 之下」或「app userData 之下」或
  * 「dialogAllowedKeyPaths（文件选择对话框选取）集合中」时放行，否则抛出中文提示 Error。

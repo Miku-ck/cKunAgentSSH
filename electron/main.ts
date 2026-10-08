@@ -26,7 +26,7 @@ import {
   setDesktopPrefs,
   shouldHideOnClose,
 } from './desktop-prefs'
-import { assertSafePath, allowDialogKeyPath, isCopyTargetSelfNested } from './utils/path-guard'
+import { assertSafePath, allowDialogKeyPath, isCopyTargetSelfNested, rejectSymlinkTarget } from './utils/path-guard'
 import { beginCopy, endCopy, requestCopyCancel } from './utils/copy-cancel'
 
 let mainWindow: BrowserWindow | null = null
@@ -826,6 +826,10 @@ function setupFSIPC(): void {
         // S5-11：真正耗时的是这一段 —— 每个文件之间都回头看一次取消标记。
         // 已复制的部件留在目标目录（复制本就不可回滚），渲染端按 cancelled 收尾。
         if (copyState.cancelled) throw new Error('复制已取消')
+        // S5-15：目标侧同名条目若是符号链接，copyFile 会顺着它写到链接指向处 ——
+        // 那两个根之外的位置从未经过 assertSafePath。
+        const destErr = rejectSymlinkTarget(f.dest, await lstat(f.dest).catch(() => null))
+        if (destErr) throw new Error(destErr)
         await mkdir(dirname(f.dest), { recursive: true })
         await copyFile(f.src, f.dest)
         transferred += f.size
