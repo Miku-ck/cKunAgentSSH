@@ -18,11 +18,24 @@ def _res(ok: bool, out: str = "", err: str = "") -> ToolResult:
 
 
 class _FakeResp:
+    """`client.stream` 的形状（S6-28 后搜索腿走封顶流式读，不再 `client.get`）"""
+
     def __init__(self, html: str):
-        self.text = html
+        self.headers = {}
+        self.encoding = "utf-8"
+        self._body = html.encode("utf-8")
 
     def raise_for_status(self) -> None:
         return None
+
+    async def aiter_bytes(self, _chunk_size):
+        yield self._body
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return False
 
 
 def _install_fake_httpx(monkeypatch, html: str) -> None:
@@ -34,7 +47,7 @@ def _install_fake_httpx(monkeypatch, html: str) -> None:
         async def __aexit__(self, *_exc):
             return False
 
-        async def get(self, _url, headers=None):
+        def stream(self, _method, _url, headers=None, json=None):
             return _FakeResp(html)
 
     monkeypatch.setattr(netconfig, "new_client", lambda **_kw: _FakeClient())

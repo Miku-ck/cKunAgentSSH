@@ -24,6 +24,55 @@ _MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 # 10MB 响应全量进上下文（约 2.5M token，必然超窗口且烧钱）
 _MAX_FETCH_CHARS = 100_000
 
+# S6-28：三条搜索腿的响应体上限。web_fetch 早在审查 M-4 就配了封顶流式读
+# （_get_with_limit），搜索这三条腿却直接 `resp.text` / `resp.json()` —— 数 MB 的
+# 搜索结果页会整个进内存，而随后的 `re.finditer(..., DOTALL)` 是在事件循环线程上
+# 对这几 MB 做正则。固定站点 ⇒ 多数是「大页面」而不是攻击，但同一条防护既然给
+# fetch 加了，搜索腿没道理漏着。
+_MAX_SEARCH_BYTES = 2 * 1024 * 1024
+
+
+class ResponseTooLarge(RuntimeError):
+    """响应体超过 _MAX_SEARCH_BYTES —— 与各腿既有的 `except Exception` 文案兼容。"""
+
+
+async def _read_capped(client, method: str, url: str, *,
+                       headers: dict | None = None, json_body: dict | None = None,
+                       cap: int = _MAX_SEARCH_BYTES) -> tuple[bytes, str]:
+    """流式读取并封顶，返回 (响应体, 编码名)。
+
+    与 `_get_with_limit` 同一手法，但那条绑着 SSRF 的 IP 固定与 sni 扩展，
+    搜索腿用真实域名，故另开这一条共用的。`raise_for_status` 留在读体之前，
+    保持各腿原先「4xx/5xx 走 except、报 搜索失败: …」的行为不变。
+
+    编码取自 `resp.encoding`（httpx 按 Content-Type 的 charset 推，缺省 utf-8），
+    HTML 型搜索页（360 常见 gbk）必须用它解，写死 utf-8 会把结果刮成乱码。
+    """
+    async with client.stream(method, url, headers=headers, json=json_body) as resp:
+        resp.raise_for_status()
+        encoding = resp.encoding or "utf-8"
+        clen = resp.headers.get("content-length")
+        if clen:
+            # Content-Length 可能是脏值（分块编码下服务器随便填）：解析不了就
+            # 只靠逐块累计那一道闸，不能因为读不出数字而放行超大响应
+            try:
+                over = int(clen) > cap
+            except ValueError:
+                over = False
+            if over:
+                raise ResponseTooLarge(
+                    f"搜索结果响应 {clen} 字节，超过 {cap // 1024}KB 上限")
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in resp.aiter_bytes(65536):
+            total += len(chunk)
+            if total > cap:
+                raise ResponseTooLarge(
+                    f"搜索结果响应超过 {cap // 1024}KB 上限（已读到 {total} 字节）")
+            chunks.append(chunk)
+        return b"".join(chunks), encoding
+
+
 # HTML 型搜索源（360 / DuckDuckGo）共用的浏览器 UA：两者都靠正则刮页面，
 # 缺一致的 Accept-Language/UA 容易被判定为爬虫返回验证页
 _BROWSER_HEADERS = {
@@ -149,26 +198,30 @@ class WebSearchTool(BaseTool):
     async def _search_tavily(self, query: str, max_results: int, api_key: str) -> ToolResult:
         """调用 Tavily Search API"""
         try:
+            import json
+
             import netconfig
             async with netconfig.new_client(default_timeout=15.0) as client:
-                resp = await client.post(
-                    "https://api.tavily.com/search",
-                    json={
+                raw, _enc = await _read_capped(
+                    client, "POST", "https://api.tavily.com/search",
+                    json_body={
                         "api_key": api_key,
                         "query": query,
                         "max_results": max_results,
                         "include_answer": True,
                     },
                 )
-                resp.raise_for_status()
-                data = resp.json()
+                data = json.loads(raw)
 
             # 格式化输出
             parts = []
             if data.get("answer"):
                 parts.append(f"摘要: {data['answer']}\n")
 
-            for i, result in enumerate(data.get("results", []), 1):
+            # S6-28：`max_results` 此前只当请求参数发出去，返回列表本身没在本地
+            # 截过 —— 服务端（或中间层）多给就全量进上下文，上限完全看对方心情。
+            results = (data.get("results") or [])[:max_results]
+            for i, result in enumerate(results, 1):
                 parts.append(
                     f"{i}. {result.get('title', '无标题')}\n"
                     f"   URL: {result.get('url', '')}\n"
@@ -192,9 +245,9 @@ class WebSearchTool(BaseTool):
 
             import netconfig
             async with netconfig.new_client(default_timeout=15.0, follow_redirects=True) as client:
-                resp = await client.get(search_url, headers=headers)
-                resp.raise_for_status()
-                html = resp.text
+                body, enc = await _read_capped(client, "GET", search_url,
+                                               headers=headers)
+                html = body.decode(enc, "replace")
 
             results = self._parse_360_html(html, max_results)
             if not results:
@@ -261,9 +314,9 @@ class WebSearchTool(BaseTool):
 
             import netconfig
             async with netconfig.new_client(default_timeout=15.0, follow_redirects=True) as client:
-                resp = await client.get(search_url, headers=headers)
-                resp.raise_for_status()
-                html = resp.text
+                body, enc = await _read_capped(client, "GET", search_url,
+                                               headers=headers)
+                html = body.decode(enc, "replace")
 
             results = self._parse_duckduckgo_html(html, max_results)
             if not results:
