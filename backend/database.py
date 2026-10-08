@@ -2256,7 +2256,7 @@ def get_http_policy() -> dict:
 
     retry_set / timeout_set / proxy_set 把"库里有没有一行合法值"如实带出去：
     netconfig 靠它决定 env 兜底该不该让位（缺行才用 env，用户写过就以 DB 为准，
-    显式写的 0 也算写过；代理的「显式写过」包含空串 = 清除）。
+    显式写的 0 也算写过）。
     这里不读 env —— env 优先级归 netconfig 单管，两边各读一份会让规则在两个文件里
     各演化一遍。脏行/越界行按默认读数显示但不算"用户设定"，免得一个改坏的值
     永久锁掉运维注入。
@@ -2265,14 +2265,12 @@ def get_http_policy() -> dict:
         "http.timeout_seconds", 0, low=0, high=600)
     retries, retry_set = is_int_app_setting_set(
         "http.retry_count", 1, low=0, high=3)
-    proxy_raw = get_app_setting("http.proxy_url")
     return {
-        "proxy_url": (proxy_raw or "").strip(),
-        # S0-01：代理此前漏了 *_set 这一路 —— timeout/retry 早就按「行存在即用户
-        # 表达过，显式写的 0 也算写过」判 env 让位，而代理用「非空才算数」。
-        # 空串面板值是合法的「清除」，于是「清除代理」成了一次性操作：当场直连，
-        # 重启后运维注入的 CKUN_HTTP_PROXY 又赢了回去，用户没有可持久表达「清空」的语义。
-        "proxy_set": proxy_raw is not None,
+        # 代理**故意没有** proxy_set。本仓口径是「库里非空才压过 env」，空串行与缺行
+        # 同等对待（round 19 登记、round 22 用两条测试钉住）。切片审查 S0-01 对此有
+        # 异议并要求产品裁决 —— 裁决之前不要在这里加「行存在即权威」的判据，
+        # 完整来龙去脉见 netconfig.load_policy_from_db 的注释。
+        "proxy_url": (get_app_setting("http.proxy_url") or "").strip(),
         "timeout_seconds": timeout,
         "retry_count": retries,
         "timeout_set": timeout_set,

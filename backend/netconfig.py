@@ -148,12 +148,17 @@ def load_policy_from_db() -> dict:
     try:
         import database as db
         stored = db.get_http_policy()
-        # S0-01：代理与 timeout/retry 现在同一条判据 —— 缺行才让 env 说话，
-        # 有行（含空串 = 面板上点了「清除代理」）就是用户的权威值。此前这里判的是
-        # `if stored["proxy_url"]`，空串为假 ⇒ 「清除」当场生效、重启即失效，
-        # 运维注入的 CKUN_HTTP_PROXY 会静默复活并把用户刚做的动作覆盖掉。
-        if stored["proxy_set"]:
+        # 代理口径**与 timeout/retry 不同，且是刻意的**：库里非空值才压过 env，
+        # 空行（面板点「清除代理」）与缺行一样轮到 env 兜底。
+        # ⚠️ 这不是漏改：切片审查把这里判成 S0-01「清除是一次性操作，重启后 env
+        # 复活」并要求裁决，而 round 19 登记的口径相反（「空串 = 清除该行、清完
+        # 才轮到 env 兜底」），round 22 用两条测试把它钉住，本仓另一会话在同一轮
+        # 里看过 S0-01 后明确保留旧口径。两种读法都自洽（env 到底是「运维默认」
+        # 还是「已被用户否决」），所以留待产品裁决，不要在裁决前单方面改 ——
+        # 我改过一次并撞掉那两条测试，回退了。
+        if stored["proxy_url"]:
             proxy = stored["proxy_url"]
+        # 缺行才让 env 说话；有行（含显式 0）就是用户的权威值
         if stored["timeout_set"]:
             timeout = stored["timeout_seconds"]
         if stored["retry_set"]:
@@ -216,6 +221,27 @@ def http_timeout(default=None):
         return default
     return _httpx().Timeout(connect=min(10.0, float(t)), read=max(60.0, float(t)),
                             write=float(t), pool=float(t))
+
+
+def effective_timeout_bounds(default=None) -> tuple[float, float]:
+    """这次请求**真正**会生效的 (connect, read) 上限 —— 供报错/诊断文案使用。
+
+    S10-21：原先「连接超时 (Ns)」里的 N 取的是 `timeout_seconds(10.0)`，也就是用户
+    设定的那个标量。但 http_timeout 把两个相位算成不同值（connect=min(10,t)、
+    read=max(60,t)）：用户设 5s、端点连上却慢回时，界面上写着「连接超时 (5s)」，
+    而真正到点的是 60s —— 一句比现状更误导的诊断，用户会按 5s 去查网络。
+    上限规则归 netconfig 单管，调用点不许再自己抄公式（抄一份就等于给下一次调整
+    留一个会静默失效的副本）。connect/read 分开返回，让调用方能按异常类型说准
+    到底是「连不上」还是「连上了没回应」。
+    """
+    to = http_timeout(default)
+    if to is None:
+        return 0.0, 0.0
+    read = getattr(to, "read", None)
+    if read is None:
+        # 调用点传的是标量默认（用户没设超时）→ 各相位同为该值
+        return float(to), float(to)
+    return float(to.connect), float(read)
 
 
 # openai SDK 的流式默认（引入 G5 之前 llm_adapter 用的就是这组值）。

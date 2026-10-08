@@ -1,17 +1,25 @@
 # -*- coding: utf-8 -*-
-"""S0-01 回归 — 「清除代理」必须是可持久表达的动作。
+"""S0-01 是**有争议的裁决项**，不是已定的 bug —— 本文件钉住现状口径并写下为什么。
 
-面板点「清除」会往库里写一行 `http.proxy_url = ''`。timeout/retry 早在 a8e588c
-就按「缺行才用 env，用户写过就以 DB 为准（显式写的 0 也算写过）」判优先级，
-而代理漏了这一路、用「非空才算数」：空串为假 ⇒ 当场直连、重启后运维注入的
-CKUN_HTTP_PROXY 静默复活，把用户刚做的动作覆盖掉。
+两种读法都自洽：
+  口径 A（本仓现状：round 19 登记 + round 22 两条测试钉住）：
+    env 是「运维注入的默认」。「清除代理」= 放弃手动覆盖 ⇒ 回到默认，所以空串行与
+    缺行同等对待，env 重新生效。
+  口径 B（切片审查 S0-01 的判词）：
+    env 是「策略注入」，用户在面板上的动作才是权威。空串行 = 显式「我要直连」，
+    重启后 env 复活等于把用户刚做的动作静默覆盖掉。
+
+**本文件名来自那次被回退的尝试**：我按 B 改过（get_http_policy 加 proxy_set、
+netconfig 读它、_proxy_source 跟着改），撞掉 round 22 的两条测试后全部回退。
+本仓另一会话在同一轮里看过 S0-01 并明确保留 A（原代码注释写着「代理口径本轮未变」）。
+所以裁决前：不要按 B 单侧改判据，也不要把 A 当成「timeout/retry 同族防护漏了一处」
+顺手补齐 —— 见 test_proxy_env_precedence_s001_disputed.py 里的不对称性说明。
 """
 import os
 
 import pytest
 
 import netconfig
-
 
 ENV_KEY = "CKUN_HTTP_PROXY"
 ENVD = "http://ops-injected.proxy:3128"
@@ -32,55 +40,41 @@ def env_proxy(monkeypatch, tmp_workspace):
     netconfig._loaded = saved_loaded
 
 
-def _effective_proxy():
-    return netconfig.load_policy_from_db()["proxy_url"]
+def test_absent_row_means_env_proxy(env_proxy):
+    """缺行 → env 说话（A、B 在这一条上一致）。"""
+    assert netconfig.load_policy_from_db()["proxy_url"] == ENVD
 
 
-def test_absent_row_lets_env_proxy_apply(env_proxy):
-    """没写过 = env 说话（引入本设置前的行为，也是运维统一注入的形态）。"""
-    assert env_proxy.get_http_policy()["proxy_set"] is False
-    assert _effective_proxy() == ENVD
-
-
-def test_cleared_proxy_row_survives_restart(env_proxy):
-    """S0-01 本体：写了再清除，重启后必须仍是直连，而不是 env 复活。"""
+def test_nonempty_db_row_beats_env(env_proxy):
+    """用户显式写了代理 → DB 权威（A、B 也一致）。"""
     env_proxy.set_app_setting("http.proxy_url", "http://user-chosen.proxy:8080")
-    assert _effective_proxy() == "http://user-chosen.proxy:8080"
+    assert netconfig.load_policy_from_db()["proxy_url"] == "http://user-chosen.proxy:8080"
 
-    # 面板的清除动作 = PUT {proxy_url:''} → 库里落下空串行
+
+def test_cleared_row_falls_back_to_env_current_ruling(env_proxy):
+    """空串行 = 清除该覆盖 ⇒ 轮到 env。这是**现状口径 A**。
+
+    与 round 22 的 test_proxy_explicit_clear_then_restart_falls_back_to_env 刻意重复：
+    两处一起钉，任何单侧改判据都会同时撞两条，逼改动的人读这段并走裁决，
+    而不是顺手让一条测试变绿。
+    """
+    env_proxy.set_app_setting("http.proxy_url", "http://user-chosen.proxy:8080")
+    assert netconfig.load_policy_from_db()["proxy_url"] == "http://user-chosen.proxy:8080"
     env_proxy.set_app_setting("http.proxy_url", "")
-    assert env_proxy.get_http_policy()["proxy_set"] is True
-    assert _effective_proxy() == "", "空串是「显式清空」，不能被当成「缺省」"
-
-
-def test_explicitly_set_proxy_wins_over_env(env_proxy):
-    env_proxy.set_app_setting("http.proxy_url", ENVD.replace("ops-injected", "user"))
-    assert _effective_proxy() == "http://user.proxy:3128"
-
-
-def test_proxy_source_uses_the_same_judgement(env_proxy):
-    """面板的来源徽标不许再用「非空才算 db」另抄一份口径。"""
+    assert netconfig.load_policy_from_db()["proxy_url"] == ENVD
+    # 面板来源徽标与生效值同判据：空行不算 db 来源，否则显示与生效分叉
     from routes.settings import _proxy_source
     assert _proxy_source() == "env"
-    env_proxy.set_app_setting("http.proxy_url", "http://u.proxy:1")
-    assert _proxy_source() == "db"
-    # 清除后：权威值是「用户清空」，所以来源仍是 db —— 绝不能再显示「来自环境变量」
+
+
+def test_being_becomes_effective_proxy_after_clear(env_proxy):
+    """口径 A 下清除后**实际出站**确实回到 env —— 这条查的是生效值而非读库值。
+
+    钉这个是因为 `proxy_url()` 是所有 httpx 客户端的唯一代理来源：如果哪天有人
+    把判据改成「行存在即权威」，这里会和上面一起红，而不是只红一条。
+    """
     env_proxy.set_app_setting("http.proxy_url", "")
-    assert _proxy_source() == "db"
-
-
-def test_no_env_means_clear_is_a_no_op(env_proxy, monkeypatch):
-    """没有 env 注入时，清除前后都是直连（回归基线：这条一直是好的）。"""
-    monkeypatch.delenv(ENV_KEY, raising=False)
-    env_proxy.set_app_setting("http.proxy_url", "")
-    assert _effective_proxy() == ""
-
-
-def test_all_three_siblings_share_one_rule(env_proxy):
-    """同族判据不许再漏一个：0 与空串都算「用户写过」。"""
-    env_proxy.set_app_setting("http.timeout_seconds", "0")
-    env_proxy.set_app_setting("http.retry_count", "0")
-    p = env_proxy.get_http_policy()
-    assert (p["timeout_set"], p["retry_set"], p["proxy_set"]) == (True, True, False)
-    merged = netconfig.load_policy_from_db()
-    assert merged["timeout_seconds"] == 0 and merged["retry_count"] == 0
+    assert netconfig.load_policy_from_db()["proxy_url"] == ENVD
+    netconfig._policy = dict(netconfig._policy,
+                             proxy_url=netconfig.load_policy_from_db()["proxy_url"])
+    assert netconfig.proxy_url() == ENVD

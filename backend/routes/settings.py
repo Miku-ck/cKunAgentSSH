@@ -2,6 +2,7 @@
 模型与设置路由 — 模型配置 CRUD + 连接测试
 """
 import asyncio
+import logging
 import os
 import sys
 from typing import Optional, Literal
@@ -13,6 +14,8 @@ import database as db
 import netconfig
 from prompts import SSH_MODE
 
+
+logger = logging.getLogger("cKunAgentic.settings")
 
 router = APIRouter(tags=["settings"])
 
@@ -127,8 +130,16 @@ def create_model_config(req: CreateModelRequest):
             reasoning_tokens=req.reasoning_tokens,
         )
         return result
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        # S10-19：服务端故障不是输入错误。原实现把**任何**异常折成 400 + str(e)，
+        # 于是 "database is locked" / "disk I/O error" / 缺列这类运维问题在面板上
+        # 显示成「你填的东西不对」—— 用户会反复改表单，而真正的原因在库里。
+        # 入参校验由 CreateModelRequest 的 Field 约束负责（到不了这里就 422 了），
+        # 所以这条 except 收到的几乎全是服务端侧异常。
+        logger.exception("模型配置创建失败")
+        raise HTTPException(status_code=500, detail=f"模型配置保存失败：{e}")
 
 
 @router.patch("/settings/models/{config_id}")
@@ -170,9 +181,8 @@ async def test_model_connection(config_id: str):
     """
     import httpx
     import time as _time
-    import logging
 
-    log = logging.getLogger("cKunAgentic.settings")
+    log = logger
 
     # 审查 M-13：db 同步调用放线程池（本路由因 httpx 异步探测保持 async）
     model = await asyncio.to_thread(db.get_model_config, config_id, mask_key=False)
@@ -231,16 +241,28 @@ async def test_model_connection(config_id: str):
         latency_ms = int((_time.monotonic() - start) * 1000)
         log.info("[TEST] ok latency=%dms", latency_ms)
         return {"status": "ok", "latency_ms": latency_ms, "model_name": model_name}
-    except httpx.TimeoutException:
-        # 超时上限来自 G5 设置（用户没设 = 原来的 10s）；报实际值，否则用户按
-        # 「10s 都连不上」去查网络，而真实上限其实是他自己调成的 5s。
-        limit = netconfig.timeout_seconds(10.0)
-        log.warning("[TEST] timeout (%ss) url=%s", limit, netconfig.redact_urls_in_text(models_url))
+    except httpx.ConnectTimeout as e:
+        # S10-21：说准是哪一相到点。「连不上」和「连上了没回应」是两件不同的事，
+        # 混成一句「连接超时 (Ns)」会让用户去查错的方向（N 此前还是用户设定的标量，
+        # 而 connect 相被 netconfig 夹到 min(10,t)，两者都不等于报出的数）。
+        connect_limit, _ = netconfig.effective_timeout_bounds(10.0)
+        log.warning("[TEST] connect timeout (<=%ss) url=%s", connect_limit,
+                    netconfig.redact_urls_in_text(models_url))
         return {
             "status": "error",
-            "detail": f"连接超时 ({int(limit)}s)",
+            "detail": f"无法建立连接（连接上限 {int(connect_limit)}s）",
             "model_name": model_name,
-            "timeout_seconds": int(limit),
+            "timeout_seconds": int(connect_limit),
+        }
+    except httpx.TimeoutException:
+        _, read_limit = netconfig.effective_timeout_bounds(10.0)
+        log.warning("[TEST] read timeout (<=%ss) url=%s", read_limit,
+                    netconfig.redact_urls_in_text(models_url))
+        return {
+            "status": "error",
+            "detail": f"已连上但服务端未在时限内响应（读取上限 {int(read_limit)}s）",
+            "model_name": model_name,
+            "timeout_seconds": int(read_limit),
         }
     except httpx.HTTPStatusError as e:
         # S10-03：detail 会经渲染层 toast 出来，而上游错误体和 httpx 异常消息都常把
@@ -532,13 +554,15 @@ async def _http_view() -> dict:
 
 
 def _proxy_source() -> str:
-    """代理来自哪里：库里那行，还是环境变量兜底（运维统一注入的形态）。
+    """代理来自哪里：库里那行（非空才算），还是环境变量兜底（运维统一注入的形态）。
 
-    S0-01：判据必须与 netconfig.load_policy_from_db 用的是同一条（行存在即权威，
-    空串是「清除」），不能再自己抄一份「非空才算 db 来源」—— 那样面板会把用户
-    刚清除掉的代理标成「来自环境变量」，而请求其实已经直连了，说与做两头错开。
+    判据必须与 netconfig.load_policy_from_db 用的**同一条**（「库里非空才算 db 来源」）。
+    这里曾随切片审查 S0-01 改成「行存在即权威、空串算清除」，于是面板在用户清除代理
+    后显示「来自数据库」，而请求其实照 env 走 —— 显示与生效又分叉。
+    S0-01 本身对不对留待产品裁决（来龙去脉见 netconfig.load_policy_from_db 的注释），
+    裁决前不要单侧改这条，也不要把它当「同族防护漏一处」顺手补齐。
     """
-    if db.get_http_policy()["proxy_set"]:
+    if (db.get_app_setting("http.proxy_url") or "").strip():
         return "db"
     if (os.environ.get("CKUN_HTTP_PROXY") or "").strip():
         return "env"

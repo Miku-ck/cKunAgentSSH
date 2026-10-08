@@ -284,9 +284,46 @@ def test_connection_test_reports_effective_timeout(client, clean_policy, base_db
     finally:
         netconfig.new_client = orig
     assert body["status"] == "error"
-    assert "7s" in body["detail"]
-    assert body["timeout_seconds"] == 7
+    # S10-21：本条原先断言 detail/timeout_seconds 是用户设定的 7s —— 那恰恰是本条
+    # 要防的错误，只是当时连写测试的人一起信了「7 就是生效上限」。ReadTimeout 到点
+    # 的相位是 read，而 http_timeout 把它抬到 max(60, t)=60；报 7s 会让用户按 5s 的
+    # 思路去查网络。现在报的是真正生效的 read 上限。
+    assert "60" in body["detail"], body["detail"]
+    assert body["timeout_seconds"] == 60
     assert seen["default_timeout"] == 10.0  # 调用点默认仍是原来的 10s
+
+
+def test_connect_timeout_is_reported_as_connect_not_read(client, clean_policy, base_db):
+    """「连不上」与「连上了没回应」是两件事，各自的上限也不同（min(10,t) vs max(60,t)）。"""
+    import asyncio
+
+    import database as db
+    import httpx
+
+    cfg = db.create_model_config(
+        name="t2", base_url="http://upstream.test/v1", api_key="k",
+        model_id="m1", provider="custom",
+    )
+
+    class _ConnectFail:
+        async def get(self, url, **kwargs):
+            raise httpx.ConnectTimeout("no route")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    clean_policy.set_policy("", 7, 0)
+    orig = netconfig.new_client
+    netconfig.new_client = lambda **kw: _ConnectFail()
+    try:
+        body = client.post(f"/api/settings/models/{cfg['id']}/test").json()
+    finally:
+        netconfig.new_client = orig
+    assert body["timeout_seconds"] == 7, "connect 相 = min(10, 7) = 7"
+    assert "建立连接" in body["detail"]
 
 
 # ── G9 日志级别 ─────────────────────────────────────────────────────────────
