@@ -425,6 +425,13 @@ async function remoteRefresh(): Promise<void> {
       toast.success(`复制成功: ${t.name}`)
       scheduleRemoveTransfer(id)
     } catch (err: any) {
+      // S5-11：取消走 cancelTransfer（先置 cancelled 再发 sftpCancel），断开连接走
+      // disconnect 同法，两者都会让 fs:copy 抛「复制已取消」。与 runUpload/runDownload
+      // 的 B10 口径一致：看到 cancelled 即静默返回，别再弹一次「复制失败」盖掉「已取消」。
+      // 记录已被删掉（deleteTransfer 对进行中的复制）同样静默 —— 用户要的就是它停。
+      // （宽化为 string：TS 控制流分析看不到 cancelTransfer 跨函数的赋值）
+      const statusNow: string = t.status
+      if (statusNow === 'cancelled' || !transfers.value.some(x => x.id === id)) return
       t.status = 'error'
       // 兜底文案不能也叫「复制失败」：外层 toast 已经以「复制失败: 名字 —」开头，
       // 撞上这个兜底就原样说两遍。
@@ -1077,6 +1084,22 @@ async function cancelTransfer(id: string): Promise<void> {
     scheduleRemoveTransfer(id, 10000)
     return
   }
+  // S5-11：远程同侧复制是一条 `cp -r`，走 sshExec — 关掉通道并不会让远端进程停下，
+  // 主进程本就没有可取消的句柄。原实现把 id 直接发给 sftpCancel，等于静默空操作，
+  // 行一直停在「复制中」。与 pauseTransfer 的 F-6 同一手法：显式判定 + 说清楚。
+  if (t && t.kind === 'copy-remote') {
+    toast.info(`远端复制无法中途取消，会一直跑到完成: ${t.name}`)
+    return
+  }
+  // S5-11：本地复制是主进程的逐文件循环，现在真能取消（fs:copy 查协作标记后抛错）。
+  // 与上传/下载同一顺序：先置 cancelled 再发 sftpCancel，runLocalCopy 的 catch
+  // 看到 cancelled 即静默返回，不会二次弹「复制失败」。已复制的部件留在目标目录。
+  if (t && t.kind === 'copy-local' && t.status === 'running') {
+    t.status = 'cancelled'
+    t.endTime = Date.now()
+    toast.info(`已取消复制: ${t.name}`)
+    scheduleRemoveTransfer(id, 10000)
+  }
   try { await getApi().sftpCancel(id) } catch { /* ignore */ }
 }
 
@@ -1176,8 +1199,8 @@ function removeTransfer(id: string): void {
    * 避免直接 removeTransfer 留下后台还在传的孤儿任务。
    * pending 主进程无记录，直接移除即可；随后 CANCELLED 拒绝到达时
    * runUpload/runDownload 按找不到记录静默返回。
-   * 注：copy 类（本地 fsCopy / 远程 cp -r）主进程无取消通道，sftpCancel
-   * 是静默空操作 —— 记录会被移除但复制会继续到完成，与既有 cancel 行为一致。
+   * 注：S5-11 之后本地复制（fsCopy）已有取消通道 —— 删行会真的让它停下；
+   * 远程 cp -r 仍会在远端跑到完成（记录已移除，但远端进程不受我们控制）。
    */
   function deleteTransfer(id: string): void {
     const t = transfers.value.find(x => x.id === id)

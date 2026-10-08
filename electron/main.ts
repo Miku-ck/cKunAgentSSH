@@ -27,6 +27,7 @@ import {
   shouldHideOnClose,
 } from './desktop-prefs'
 import { assertSafePath, allowDialogKeyPath, isCopyTargetSelfNested } from './utils/path-guard'
+import { beginCopy, endCopy, requestCopyCancel } from './utils/copy-cancel'
 
 let mainWindow: BrowserWindow | null = null
 let backendManager: BackendManager | null = null
@@ -760,10 +761,15 @@ function setupFSIPC(): void {
       throw new Error('目标文件夹位于被复制项内部（或与源同一路径），已取消')
     }
 
+    // S5-11：登记协作式取消标记 —— `sftp:cancel` 这条通道会把它置位（见 copy-cancel.ts）
+    const copyState = beginCopy(transferId)
+
     // 收集所有文件并统计总大小
     const files: Array<{ src: string; dest: string; size: number }> = []
     let collectedBytes = 0
     async function collect(src: string, dest: string, isRoot: boolean): Promise<void> {
+      // S5-11：收集阶段在大目录树上本身就要跑几十秒，取消同样要在这里看得见
+      if (copyState.cancelled) throw new Error('复制已取消')
       // E-5 修复：递归条目用 lstat（不跟随符号链接）— 原实现 stat 跟随符号
       // 链接，源树中的符号链接（如指向 ~/.ssh）会被 copyFile 跟随复制出
       // 链接目标内容造成泄露。符号链接条目跳过并 warn；根节点仍可跟随
@@ -796,32 +802,39 @@ function setupFSIPC(): void {
         }
       }
     }
-    await collect(srcPath, destPath, true)
+    try {
+      await collect(srcPath, destPath, true)
 
-    const total = collectedBytes
-    let transferred = 0
-    let lastReport = 0
-    // 修复 5：窗口销毁后 webContents.send 会抛异常，加守卫 + try/catch
-    const safeSendProgress = (data: unknown): void => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        try { mainWindow.webContents.send('sftp:progress', data) } catch { /* 窗口已销毁等场景忽略 */ }
+      const total = collectedBytes
+      let transferred = 0
+      let lastReport = 0
+      // 修复 5：窗口销毁后 webContents.send 会抛异常，加守卫 + try/catch
+      const safeSendProgress = (data: unknown): void => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          try { mainWindow.webContents.send('sftp:progress', data) } catch { /* 窗口已销毁等场景忽略 */ }
+        }
       }
-    }
-    const report = () => {
-      const now = Date.now()
-      if (now - lastReport > 100) {
-        lastReport = now
-        safeSendProgress({ id: transferId, transferred, total })
+      const report = () => {
+        const now = Date.now()
+        if (now - lastReport > 100) {
+          lastReport = now
+          safeSendProgress({ id: transferId, transferred, total })
+        }
       }
-    }
 
-    for (const f of files) {
-      await mkdir(dirname(f.dest), { recursive: true })
-      await copyFile(f.src, f.dest)
-      transferred += f.size
-      report()
+      for (const f of files) {
+        // S5-11：真正耗时的是这一段 —— 每个文件之间都回头看一次取消标记。
+        // 已复制的部件留在目标目录（复制本就不可回滚），渲染端按 cancelled 收尾。
+        if (copyState.cancelled) throw new Error('复制已取消')
+        await mkdir(dirname(f.dest), { recursive: true })
+        await copyFile(f.src, f.dest)
+        transferred += f.size
+        report()
+      }
+      safeSendProgress({ id: transferId, transferred: total, total })
+    } finally {
+      endCopy(transferId)
     }
-    safeSendProgress({ id: transferId, transferred: total, total })
   })
 
   // 移到回收站
@@ -1483,6 +1496,9 @@ function setupSftpIPC(): void {
     return sshManager!.sftpDownload(transferId, sshSessionId, remotePath, localPath)
   })
   handleTrusted('sftp:cancel', (_event, transferId: string) => {
+    // S5-11：这一条通道原本只通知 SSHManager 的传输表，而本地复制（fs:copy）不在
+    // 那张表里 ⇒ 渲染端对复制行点「取消」是静默空操作。两条腿都打一下。
+    requestCopyCancel(transferId)
     sshManager!.sftpCancel(transferId)
   })
   handleTrusted('sftp:readFile', (_event, sshSessionId: string, remotePath: string) => {
