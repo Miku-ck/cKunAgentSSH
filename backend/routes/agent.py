@@ -1340,7 +1340,9 @@ def update_tool_enabled(tool_name: str, req: UpdateToolEnabledRequest, mode: str
 
 
 class PermissionGrantRequest(BaseModel):
-    tool: str = Field(..., description="工具名")
+    # 与 AllowPermissionRequest 同口径限长：这个键会原样落进 allowlist.txt，
+    # 不限长度就等于给授权清单文件开了一个无界写入入口（字符集校验管不住长度）
+    tool: str = Field(..., min_length=1, max_length=64, description="工具名")
     # 审查 M-3：默认 scope 从 "always" 收紧为 "once"（仅放行下一次调用）。
     # 原默认 always 会在用户点一次后永久免审批。
     scope: str = Field("once", description="授权范围：once（仅本次）/ session（会话）/ always（永久）")
@@ -1469,7 +1471,13 @@ async def allow_tool_permission(req: AllowPermissionRequest):
     """
     from agent.harness.reins import _get_global_permission_gate_sync
     pg = _get_global_permission_gate_sync()
-    grant_key = pg.grant(req.tool, scope="always", command=req.command)
+    # 与 grant 路由同一姿态：gate 的入参校验按 ValueError 报，翻译成 400。
+    # 少了这一层，一条带空格/换行的工具名会变成 500 —— 而这条路径的输入是
+    # 设置面板里的自由文本框，用户手抖粘个尾空格是常态。
+    try:
+        grant_key = pg.grant(req.tool, scope="always", command=req.command)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     await append_record_async(
         action=f"permission_allow_manual:{req.tool}",
         # "granted" 不在 audit.append_record 的结论枚举里，会被静默改写为 "executed"

@@ -33,6 +33,20 @@ from .core import (
 
 logger = logging.getLogger(__name__)
 
+# allowlist 文件的条目格式（一行一条，工具名或 工具名:16位hex）。读侧校验与写侧
+# 校验必须共用这一份定义 —— 写侧不校验时，一条带空格/换行的工具名照样落盘，
+# 面板显示「已授权」，重启后读侧按本表判非法直接丢弃，事故当场才发现预授权早没了。
+# 锚位用 \Z 而不是 $：Python 的 $ 会放过「尾随换行」，带一个行尾换行的工具名照样算合法，
+# 而 allowlist.txt 是一行一条 —— 放过尾随换行等于多写一个空行（读侧按空行丢弃，
+# 面板却显示「已授权」）。这条格式规则同时管住读侧与写侧，所以必须严格到串尾。
+_ALLOWLIST_TOOL_NAME_RE = re.compile(r'^[A-Za-z0-9_.-]+\Z')
+_ALLOWLIST_GRANT_KEY_RE = re.compile(r'^[A-Za-z0-9_.-]+:[0-9a-f]{16}\Z')
+
+
+def is_valid_allowlist_entry(line: str) -> bool:
+    """单条目是否落在允许格式内（写侧入口用，与 _validate_allowlist_entry 同口径）"""
+    return bool(_ALLOWLIST_GRANT_KEY_RE.match(line) or _ALLOWLIST_TOOL_NAME_RE.match(line))
+
 # E3：永久授权保留时长（小时）。0 = 永不过期，即 allowlist 引入 TTL 之前的行为。
 # 上限与 routes/settings.py 的 Field(le=) 同口径，读取侧脏值不至于是无限大。
 ALLOWLIST_TTL_MAX_HOURS = 8760
@@ -126,11 +140,9 @@ class PermissionGate:
 
         Returns: (valid, reason_if_invalid)
         """
-        _TOOL_NAME_RE = re.compile(r'^[A-Za-z0-9_.-]+$')
-        _GRANT_KEY_RE = re.compile(r'^[A-Za-z0-9_.-]+:[0-9a-f]{16}$')
-        if _GRANT_KEY_RE.match(line):
+        if _ALLOWLIST_GRANT_KEY_RE.match(line):
             return True, ""
-        if _TOOL_NAME_RE.match(line):
+        if _ALLOWLIST_TOOL_NAME_RE.match(line):
             return True, ""
         return False, (
             f"allowlist 第 {lineno} 行格式无效: {line!r}（"
@@ -390,7 +402,19 @@ class PermissionGate:
         command: 命令执行工具时传入被批准的具体命令（审查 M-3 命令级绑定）
         conversation_id: C-review M11 — session 授权绑定到发起授权的会话
         run_id: 问题 1 改进 — once 授权绑定到发起授权的 run_id（消除跨 run 竞态）
+
+        tool_name 必须在 allowlist 的条目格式内：scope=always 的授权要落
+        `allowlist.txt` 一行一条，一个含空白/换行/非 ASCII 的工具名照样写得进去，
+        于是两种坏结果同时发生 —— 带尾空格的名字永远匹配不上 check_permission
+        （面板显示「已授权」，事故时发现预授权是空的），而带 `\\n` 的名字会被写成
+        **两行**，等于凭空多出一条没人批准过的预授权记录。读侧的
+        `_validate_allowlist_entry` 一直会丢掉这类行，所以这不是新增限制，
+        只是把「写进去的东西必须读得回来」这条隐含前提摆到写侧。
         """
+        if not _ALLOWLIST_TOOL_NAME_RE.match(tool_name or ""):
+            raise ValueError(
+                f"工具名 {tool_name!r} 不在授权清单允许的格式内"
+                "（期望 ^[A-Za-z0-9_.-]+$，不接受空白、换行或斜杠）")
         key = self._grant_key(tool_name, command)
         if scope == 'once':
             # once 授权必须绑定 run_id：无归属的授权无法被 check 消费、
