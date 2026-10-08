@@ -40,7 +40,18 @@ export function useChatPersistence(options: {
         console.warn(`[useChatPersistence] ${storageKey} 内容不是数组，重置为空列表`)
         return []
       }
-      return parsed.filter((c: any) => c && typeof c === 'object' && Array.isArray(c.messages))
+      // S9-18：`temp-agent-` 是运行中占位气泡的 id 前缀，只在「同一次 run 还活着」
+      // 期间有意义（ssh-ai 的终态 watch 负责把它换成真结果或移除）。页面重载后那场
+      // run 必然已经没了 ⇒ 复原回来的占位永远等不到回填，界面上是一只永久空白的
+      // 助手气泡。读侧直接丢弃，比让它挂着再由 UI 猜要诚实。
+      return parsed
+        .filter((c: any) => c && typeof c === 'object' && Array.isArray(c.messages))
+        .map((c: any) => ({
+          ...c,
+          messages: c.messages.filter(
+            (m: any) => !(m?.role === 'assistant' && String(m?.id).startsWith('temp-agent-')),
+          ),
+        }))
     } catch (e) {
       // m3 修复：JSON 解析失败时输出警告，便于排查数据损坏问题
       console.warn(`[useChatPersistence] 解析 ${storageKey} 失败，重置为空列表:`, e)
