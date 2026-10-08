@@ -109,8 +109,11 @@ function sendCommand(e: MouseEvent, cmd: QuickCommand) {
   if (!api) return
   const writer = session.type === 'local' ? api.ptyWrite : api.sshWrite
   writer(sessionId, cmd.command).catch((err: any) => {
-    console.error('[quickCommand] send failed:', err)
-    toast.error('命令发送失败')
+    console.error('[quickCommand] send failed:', sessionId, err)
+    // S4-06：ssh:write / pty:write 在会话缺失时不再静默 no-op，而是抛
+    // SESSION_NOT_FOUND / 本地终端已关闭 —— 这条 catch 从不可达死码变成唯一
+    // 的用户反馈通道。带上原因，重连窗口里点快捷命令不会再「点了没反应」。
+    toast.error(`命令未发送：${err?.message || String(err)}`)
   })
   // 发送命令后将焦点还给活动终端，用户可手动按 Enter 执行
   window.dispatchEvent(new CustomEvent('ssh:focus-terminal'))

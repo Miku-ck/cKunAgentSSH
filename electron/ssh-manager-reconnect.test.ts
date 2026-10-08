@@ -163,3 +163,18 @@ describe('自动重连的错误分类', () => {
     expect(gaveUpEvents(h.sent)).toHaveLength(0)
   })
 })
+
+describe('write 的会话缺失行为（S4-06）', () => {
+  it('会话不在池里时抛 SESSION_NOT_FOUND —— 渲染层的 .catch 由此可达', () => {
+    const h = harness()
+    expect(() => h.mgr.write('ssh-404', 'ls\n')).toThrowError(/不存在或已断开/)
+  })
+
+  it('会话在池里时照常写入（抛错只针对缺失）', () => {
+    const h = harness()
+    const stream = { write: vi.fn() }
+    ;(h.mgr as unknown as { sessions: Map<string, unknown> }).sessions.set(ID, { stream })
+    h.mgr.write(ID, 'ls\n')
+    expect(stream.write).toHaveBeenCalledWith('ls\n')
+  })
+})

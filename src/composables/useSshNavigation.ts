@@ -240,6 +240,18 @@ export function useSshNavigation(
   }
 
   async function connectRemote(conn: SSHConnection) {
+    // S4-05 修复：进入即判「本连接是否已有一笔在途」。防抖只是 2s 时间窗，
+    // 挡不住握手/认证慢的主机（readyTimeout 默认 15s）——Quick Start 卡片不渲染
+    // connecting 态、等待期毫无反馈，>2s 的第二次点击会真开第二条会话
+    // （store.connectRemote 两次都 push，MAX_SESSIONS=20 也挡不住 2 条）。
+    // pendingConnId 就是「哪笔连接在途」的唯一事实源，此前只在 releaseConnectLock
+    // 里被读，入口根本没看过。同一判据顺带修掉 releaseConnectLock 的后半边：
+    // debounce 分支过去会对自己这一笔在途的锁放行（pendingConnId===conn.id 时
+    // 清掉 connecting/pending），仍在连接的那一行重新可点。
+    if (pendingConnId.value === conn.id) {
+      toast.info('该主机正在连接中，请稍候')
+      return
+    }
     const now = Date.now()
     const lastConnectAt = lastConnectAtById[conn.id] || 0
     if (now - lastConnectAt < CONNECT_DEBOUNCE_MS) {

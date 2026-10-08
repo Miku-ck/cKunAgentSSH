@@ -815,12 +815,22 @@ export class SSHManager {
     })
   }
 
-  /** 写入数据到 Shell */
+  /**
+   * 写入数据到 Shell。
+   *
+   * S4-06 修复：会话缺失改为抛错，不再静默 no-op。抛的是 SESSION_NOT_FOUND
+   * （与本文件 execCommandWithExitCode / reconnect 的既有做法一致）——
+   * handleTrusted 会把 SSHError 序列化成 transport 透传，渲染层的 .catch
+   * 由此变成可达路径。原实现 no-op + void handler ⇒ invoke 恒 resolve，
+   * 快捷命令在断线重连窗口里点了等于没点，而那条「命令发送失败」toast
+   * 是永远走不到的死码。
+   */
   write(id: string, data: string): void {
     const session = this.sessions.get(id)
-    if (session?.stream) {
-      session.stream.write(data)
+    if (!session?.stream) {
+      throw new SSHError('SESSION_NOT_FOUND', { detail: `会话 ${id} 不存在或 shell 通道已关闭` })
     }
+    session.stream.write(data)
   }
 
   /** 调整终端大小 */

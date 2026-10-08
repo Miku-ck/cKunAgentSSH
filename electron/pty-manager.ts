@@ -281,12 +281,16 @@ export class PtyManager {
     return { id, shell }
   }
 
-  /** 写入数据到终端 */
+  /**
+   * 写入数据到终端。会话缺失抛错（S4-06，与 ssh-manager.write 同一修法）：
+   * void handler + no-op 会让渲染层的 .catch 永不触发，快捷命令静默丢失。
+   */
   write(id: string, data: string): void {
     const session = this.sessions.get(id)
-    if (session) {
-      session.process.write(data)
+    if (!session) {
+      throw new Error('本地终端已关闭，内容未写入')
     }
+    session.process.write(data)
   }
 
   /** 调整终端大小 */

@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { buildShellTrustContext, isAllowedShell } from './pty-manager'
+import { PtyManager, buildShellTrustContext, isAllowedShell } from './pty-manager'
 
 const WIN_SHELLS = ['cmd.exe', 'powershell.exe', 'pwsh.exe', 'bash.exe', 'git-bash.exe', 'wsl.exe']
 const POSIX_SHELLS = ['/bin/zsh', '/bin/bash', '/bin/sh', '/usr/bin/zsh', '/usr/bin/bash']
@@ -78,5 +78,12 @@ describe('buildShellTrustContext', () => {
     expect(ctx.caseInsensitive).toBe(false)
     expect(ctx.pathDirs).toEqual(['/usr/bin', '/bin'])
     expect(ctx.systemRoots).toEqual(['/bin', '/usr/bin', '/usr/local/bin', '/sbin', '/usr/sbin'])
+  })
+})
+
+describe('write 的会话缺失行为（S4-06）', () => {
+  it('抛错而不是静默 no-op —— 否则渲染层 .catch 不可达，快捷命令静默丢失', () => {
+    const mgr = new PtyManager()
+    expect(() => mgr.write('pty-404', 'ls\n')).toThrow(/已关闭/)
   })
 })

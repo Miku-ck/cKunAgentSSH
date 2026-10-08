@@ -336,15 +336,21 @@ onMounted(() => {
   // 监听 SSH 关闭
   unsubClose = api.onSshClose(({ id, willReconnect }) => {
     if (id === props.sshId) {
-      // C27 修复：会话关闭时清理补全请求序号（防 _completionRequestIds 泄漏）
-      releaseCompletionSession(props.sshId)
       flushBuffer(true) // 刷新行缓冲，避免尾部数据丢失
       if (willReconnect) {
         // 重连修复：意外断开，主进程将自动重连 — 保留 tab（不 emit close/
         // removeSession）与 xterm 实例（scrollback 保留），具体提示行由紧随的
         // ssh:reconnect 状态事件写入。用户主动断开不发本事件，不受影响
+        //
+        // S4-08 修复：补全会话状态同样保留。releaseCompletionSession 的契约是
+        // 「会话关闭时清理」，此前无条件跑在这个提前返回之前，而重连沿用同一个
+        // 会话 id：序号被删后从 0 重启，断连前那条仍在途的补全响应回来时
+        // requestId 反而匹配上「最新」一次，把陈旧候选列表渲染给新一次 Tab；
+        // _aiPredictInFlight 被清则重新打开「双发 LLM 请求」的口子。
         return
       }
+      // C27 修复：会话真正关闭时才清理补全请求序号（防 _completionRequestIds 泄漏）
+      releaseCompletionSession(props.sshId)
       terminal?.write('\r\n\x1b[33m[SSH connection closed]\x1b[0m\r\n')
       emit('close')
     }
