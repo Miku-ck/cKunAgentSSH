@@ -8,11 +8,14 @@
 运行: python -m pytest backend/tests/test_reflection_safety_scoring.py -v
 """
 from agent.reflection import MetaReflection, RunTrace
+from prompts import SSH_MODE
 
 
 def _trace(tool_calls, final_state="completed", warnings=None):
+    # mode 是 RunTrace 的第三个必填位（31ac0e0 的清理把这里落下没补，整套 7 例
+    # 在 master 上是红的）；与 routes/agent.py 的生产构造同值。
     return RunTrace(
-        run_id="r1", task="清理日志",
+        run_id="r1", task="清理日志", mode=SSH_MODE,
         final_state=final_state, iterations=len(tool_calls) + 1,
         tool_calls=tool_calls, warnings=warnings or [],
     )

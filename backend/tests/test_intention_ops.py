@@ -129,11 +129,16 @@ def test_is_change_defaults_false_on_dataclass():
 def test_reclassify_preserves_is_change_on_change():
     original = classify("重启 nginx")
     assert original.is_change is True
-    # iteration=5 / max_iterations=6 → remaning≤3 触发紧急度提升 → changed=True
+    # 本例只关心「重分类换了对象时 is_change 是否透传」，触发信号用**仍在的**升级
+    # 分支（连续失败 ≥3 ⇒ TRIVIAL→MODERATE）。原实现用的是 remaining≤3 的紧急度
+    # 提升分支，那条已在 aca7427 作为死码删除（driver 每 reclassify_interval=5 轮
+    # 才调本函数，max_iterations=100 时永不命中），测试当时没跟着改 ⇒ master 红。
+    log = [{"success": False} for _ in range(5)]
     new = reclassify(
-        original, iteration=5, tool_calls_log=[], errors=[], max_iterations=6,
+        original, iteration=5, tool_calls_log=log, errors=["boom"] * 5, max_iterations=20,
     )
     assert new is not original
+    assert new.level is not original.level
     assert new.is_change is True
 
 

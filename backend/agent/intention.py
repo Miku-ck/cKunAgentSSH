@@ -592,7 +592,9 @@ def reclassify(
     - 连续多轮工具失败 → 可能任务比预期复杂，升级
     - 工具调用数远超预期 → 任务拆解不足，升级
     - 执行顺畅、工具调用少 → 任务比预期简单，降级
-    - 接近末尾 → 追加收敛提示（可达性见下方分支注释）
+    （曾有第四条「接近末尾 → 追加收敛提示」，因 driver 每 5 轮才调本函数、
+    max_iterations=100 时永不命中，已随 aca7427 删除；每轮检查的同类提示在
+    driver 侧，每个 run 只发一次。）
 
     Args:
         max_budget: 模型配置的 reasoning_tokens 上限，用于动态调整预算
@@ -606,7 +608,8 @@ def reclassify(
     recent_failures = sum(
         1 for e in tool_calls_log[-5:] if e.get("success") is False
     )
-    remaining = max_iterations - iteration
+    # aca7427 删掉 remaining≤3 的紧急度分支后这个差值就没人读了（F841）；
+    # max_iterations 形参保留 —— 它是 driver 传进来的重分类上下文，签名即契约。
 
     level = original.level
     budget = original.reasoning_budget
