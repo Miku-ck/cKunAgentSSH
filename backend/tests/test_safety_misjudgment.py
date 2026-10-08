@@ -331,3 +331,56 @@ def test_shell_wording_keeps_default_approval_for_template_verbs():
         "printf '%s' 'BASE64_CONTENT_PAYLOAD' | base64 -d > /tmp/x.txt")
     assert level == "dangerous"
     assert "base64" in reason or "printf" in reason, reason
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 五、G1–G4：本轮实测的四条 fail-open 及其反向锁
+# ──────────────────────────────────────────────────────────────────────────────
+FALSE_PASSES_G = [
+    # G1 提权程序在 _WRAPPERS 里必须剥掉，剥完链上就没人在提权了
+    ("nohup sudo id", "dangerous"),
+    ("env sudo ls", "dangerous"),
+    ("nice -n 5 sudo id", "dangerous"),
+    ("command sudo id", "dangerous"),
+    ("bash -c 'sudo id'", "dangerous"),
+    # G2 绝对路径 / ANSI-C 拼接的删除：原先 basename 与整串比对各漏一半
+    ("/usr/bin/rm -rf /", "hardline"),
+    ("/bin/rm -rf /etc", "hardline"),
+    (r"rm$'\x2f' -rf $'\x2f'", "hardline"),
+    ("rm -rf $HOME", "hardline"),
+    # G3 tar 的开关能把归档命令变成任意程序执行
+    ("tar cf /tmp/t.tar --checkpoint-action=exec=id /tmp", "dangerous"),
+    ("tar -I mv a b", "dangerous"),
+    ("tar --use-compress-program=mv cf a.tar b", "dangerous"),
+    ("tar --to-command=sh cf a.tar", "dangerous"),
+    # G4 tee 的每个文件参数都是写入目标，前导的无辜路径不能顶掉后面的
+    ("echo p | tee /tmp/innocent /etc/ld.so.preload", "hardline"),
+    # 敏感目录作为「源」（原实现只查写目标）
+    ("mv /root /tmp/x", "dangerous"),
+    ("dd if=/etc/shadow of=/tmp/x", "dangerous"),
+]
+
+
+@pytest.mark.parametrize("cmd,want", FALSE_PASSES_G)
+def test_fail_passes_closed_this_round(cmd, want):
+    level, reason = classify_command(cmd)
+    _assert_level(cmd, want, level, reason)
+
+
+# 反向锁：收紧删除目标/提权链/tar 开关之后，日常运维写法不能被拖进审批卡。
+BENIGN_G = [
+    "rm -rf build dist node_modules",
+    "find . -name '*.log' -mtime +7 -delete",
+    "tar czf /tmp/backup.tar.gz /home/user/project",
+    "tar xzf app.tgz -C /srv",
+    "tar -czf /tmp/x.tgz -C /var/log .",
+    "echo hi > /tmp/out.txt",
+    "grep -c sudo /var/log/secure",
+    "ls -la /etc/sudo.conf",
+]
+
+
+@pytest.mark.parametrize("cmd", BENIGN_G)
+def test_benign_forms_stay_usable_this_round(cmd):
+    level, reason = classify_command(cmd)
+    assert level == "safe", f"{cmd!r} 被误判 {level}（{reason}）"

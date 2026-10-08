@@ -362,6 +362,13 @@ _INTERPRETER_PREFIXES = ("python3.", "python2.", "perl5.")
 # 可剥离的命令包装器/环境赋值前缀（检测真实首 token 用）
 _WRAPPERS = {"env", "nohup", "time", "sudo", "doas", "nice", "stdbuf", "xargs", "command"}
 
+# 提权程序。它们同时也在 _WRAPPERS 里（不剥掉就看不见真正执行的那条命令），
+# 所以「这次执行是提权的」这个事实只能在剥离前的前缀链里查 —— 见
+# _privilege_verb_in_chain。
+_PRIVILEGE_VERBS = {"sudo": "sudo command", "doas": "sudo command",
+                    "runuser": "sudo command", "pkexec": "sudo command",
+                    "su": "switch user"}
+
 # 重定向扫描：> 或 >> 后跟路径（排除 << / <<< / <> 噪声；2>&1 的目标 "1" 无害）
 # 检测副本已剥引号，无需引号组
 _REDIRECT_RE = re.compile(r"(?<!<)>{1,2}\s*([^\s;|&<>]+)")
@@ -498,10 +505,14 @@ def _token_rm_find_analysis(segment: str) -> tuple[str, str | None]:
             best = (level, reason)
 
     for idx, verb in enumerate(tokens):
-        # C-review C1：`rm/`（rm 与参数用 / 拼接的 shell 形态）视同 rm
-        if verb in ("rm", "rmdir") or verb.rstrip("/") in ("rm", "rmdir"):
+        # C-review C1：`rm/`（rm 与参数用 / 拼接的 shell 形态）视同 rm。
+        # 动词取 basename：`/usr/bin/rm -rf ~` 原先按整串比对认不出是 rm，于是这条
+        # 目标分析根本没跑，落到默认审批的 basename 特判里又被当成「token 分析已确认」
+        # 放行 —— 绝对路径反而比裸命令更宽松（实测判 safe、不开卡）。
+        name = _verb_of(verb)
+        if name in ("rm", "rmdir"):
             flags: set[str] = set()
-            target: str | None = None
+            targets: list[str] = []
             j = idx + 1
             while j < len(tokens):
                 t = tokens[j]
@@ -512,10 +523,12 @@ def _token_rm_find_analysis(segment: str) -> tuple[str, str | None]:
                     flags.update(t[1:])
                     j += 1
                     continue
-                target = t
-                break
+                # 每个非 flag 目标都要看，不能只看第一个：
+                # `rm -rf build /var` 里 /var 是第二个参数，原先整个被跳过。
+                targets.append(t)
+                j += 1
             recursive = ("r" in flags) or ("R" in flags)
-            if target is None:
+            if not targets:
                 # C-review C1：递归删除但无显式目标（`ls | xargs rm -rf` —
                 # 目标由 stdin/xargs 提供）= 未知目标 + 破坏性动词
                 if recursive:
@@ -523,30 +536,31 @@ def _token_rm_find_analysis(segment: str) -> tuple[str, str | None]:
                 continue
             # C-review C1：xargs 占位符目标（`ls | xargs -I{} rm -rf {}`）=
             # 未知目标 + 破坏性动词，递归删除时保守升级
-            if recursive and (target == "{}" or target.startswith("{}")):
-                _upd("dangerous", f"recursive delete with unknown (xargs) target ({verb} {target})")
+            if recursive and any(t == "{}" or t.startswith("{}") for t in targets):
+                _upd("dangerous", f"recursive delete with unknown (xargs) target ({verb} {targets[0]})")
                 continue
-            norm = _normalize_target(target)
-            # 家目录整体删除（~ / $HOME / ~/* 等）视同根目录
-            home_root_globs = {"~", "~/", "~/*", "$HOME", "$HOME/", "$HOME/*",
-                               "${HOME}", "${HOME}/", "${HOME}/*"}
-            if recursive:
-                if norm == "/":
-                    _upd("hardline", f"recursive delete of root filesystem ({verb} {target})")
-                elif norm in home_root_globs or (_is_home_root(norm) and _is_ssh_path(norm)):
-                    _upd("hardline", f"recursive delete of home directory or .ssh ({verb} {target})")
-                elif _is_home_relative(norm) and _is_ssh_path(norm):
-                    _upd("hardline", f"recursive delete of .ssh under home ({verb} {target})")
-                elif _is_home_relative(norm):
-                    _upd("dangerous", f"recursive delete under home directory ({verb} {target})")
-                elif norm.startswith("/"):
-                    if _is_sensitive_path(norm):
-                        _upd("hardline", f"recursive delete of sensitive system path ({verb} {target})")
-                    else:
-                        _upd("dangerous", f"recursive delete of absolute path ({verb} {target})")
-            elif _is_sensitive_path(norm) or _is_home_relative(norm):
-                _upd("dangerous", f"delete of sensitive system path or home ({verb} {target})")
-        elif verb == "find":
+            for target in targets:
+                norm = _normalize_target(target)
+                # 家目录整体删除（~ / $HOME / ~/* 等）视同根目录
+                home_root_globs = {"~", "~/", "~/*", "$HOME", "$HOME/", "$HOME/*",
+                                   "${HOME}", "${HOME}/", "${HOME}/*"}
+                if recursive:
+                    if norm == "/":
+                        _upd("hardline", f"recursive delete of root filesystem ({verb} {target})")
+                    elif norm in home_root_globs or (_is_home_root(norm) and _is_ssh_path(norm)):
+                        _upd("hardline", f"recursive delete of home directory or .ssh ({verb} {target})")
+                    elif _is_home_relative(norm) and _is_ssh_path(norm):
+                        _upd("hardline", f"recursive delete of .ssh under home ({verb} {target})")
+                    elif _is_home_relative(norm):
+                        _upd("dangerous", f"recursive delete under home directory ({verb} {target})")
+                    elif norm.startswith("/"):
+                        if _is_sensitive_path(norm):
+                            _upd("hardline", f"recursive delete of sensitive system path ({verb} {target})")
+                        else:
+                            _upd("dangerous", f"recursive delete of absolute path ({verb} {target})")
+                elif _is_sensitive_path(norm) or _is_home_relative(norm):
+                    _upd("dangerous", f"delete of sensitive system path or home ({verb} {target})")
+        elif name == "find":
             target = None
             destructive = False
             for t in tokens[idx + 1:]:
@@ -561,7 +575,7 @@ def _token_rm_find_analysis(segment: str) -> tuple[str, str | None]:
                         _upd("hardline", "find -delete/-exec on root filesystem")
                     elif _is_sensitive_path(norm) or _is_home_relative(norm):
                         _upd("dangerous", f"find -delete/-exec on sensitive system path ({target})")
-        elif verb in ("shred", "truncate"):
+        elif name in ("shred", "truncate"):
             # C-review C1：truncate -s 0 /etc/passwd — 原实现取"第一个非 flag
             # 参数"拿到 size 值 0 而非文件；-s/--size 的值必须跳过
             target = None
@@ -759,9 +773,14 @@ _ASSIGNMENT_RE = re.compile(r"[a-z_][a-z0-9_]*=\S*")
 
 
 def _verb_of(token: str) -> str:
-    """token → 可比较的动词名（剥标点、取 basename、小写）"""
-    base = _TOKEN_PUNCT_RE.sub("", token).rsplit("/", 1)[-1].lower()
-    return base
+    """token → 可比较的动词名（剥标点、去尾部分隔符、取 basename、小写）
+
+    尾部 `/` 必须先于 basename 剥掉：ANSI-C 绕过形态 `rm$'\\x2f' -rf $'\\x2f'`
+    解码后是 `rm/`，若先取 basename 会得到空串，rm 的全部目标判定就此失效
+    （实测退化成 dangerous 的「认不出命令」兜底，而 rm -rf / 应是 hardline）。
+    """
+    stripped = _TOKEN_PUNCT_RE.sub("", token).strip("/.").lower()
+    return stripped.rsplit("/", 1)[-1]
 
 
 def _first_exec_verb(tokens: list[str]) -> tuple[str, list[str]]:
@@ -774,6 +793,28 @@ def _first_exec_verb(tokens: list[str]) -> tuple[str, list[str]]:
     return "", []
 
 
+def _privilege_verb_in_chain(tokens: list[str], stripped: list[str]) -> str | None:
+    """真实动词之前被剥掉的那段前缀里出现的提权程序（sudo/doas/runuser/pkexec/su）。
+
+    sudo 与 doas 既登记在 _WRAPPERS（必须剥掉才能对真正执行的命令做位置判定），
+    于是剥离之后没有任何一处还知道「这条命令是提权跑的」：实测
+    `nohup sudo id`、`env sudo ls`、`nice -n 5 sudo id`、`xargs -a /tmp/f sudo id`、
+    `command sudo id` 五种写法全部判 safe、审批卡一张都不出，而 §3.1 写的恰恰是
+    「剥掉包装器之后落在首位的动词」这一判定。裸写 `sudo id` 能被判，加了包装器就漏 ——
+    这是同一判定只挂了一半。
+
+    只看真实动词之前的前缀段，所以 sudo 作为参数出现时不算：
+    `grep -c sudo /var/log/secure`、`strings /usr/bin/sudo`、`ls -la /etc/sudo.conf`
+    照旧 safe（误拦一张卡也是成本）。
+    """
+    cut = len(tokens) - len(stripped)
+    for t in tokens[:max(0, cut)]:
+        base = _verb_of(t)
+        if base in _PRIVILEGE_VERBS:
+            return _PRIVILEGE_VERBS[base]
+    return None
+
+
 def _classify_exec_position(segment: str) -> tuple[str, str | None]:
     """电源动词、提权前缀与格式化/裸设备写入按执行位置判定，返回本机制命中的最高严重度"""
     try:
@@ -783,7 +824,8 @@ def _classify_exec_position(segment: str) -> tuple[str, str | None]:
     if not tokens:
         return ("safe", None)
     head, _ = _first_exec_verb(tokens)
-    real, real_args = _first_exec_verb(_strip_prefix_wrappers(tokens))
+    stripped = _strip_prefix_wrappers(tokens)
+    real, real_args = _first_exec_verb(stripped)
     # bash -c 'reboot'：字符串参数就是待执行代码，退回整段匹配。
     # awk/sed 只在含 system(/exec( 等代码标记时同样处理，
     # 于是 awk 'BEGIN{system("reboot")}' 仍 hardline，awk '/reboot/{print}' 转 safe。
@@ -791,10 +833,15 @@ def _classify_exec_position(segment: str) -> tuple[str, str | None]:
         real in _AWK_LIKE_CODE_VERBS and _CODE_IN_ARG_RE.search(segment) is not None
     )
     best: tuple[str, str | None] = ("safe", None)
-    if head == "sudo":
-        best = ("dangerous", "sudo command")
-    elif head == "su":
-        best = ("dangerous", "switch user")
+    # 提权判定要同时看 head（裸写的 sudo）与剥离链（nohup sudo id 之类）：
+    # 只看 head 时 sudo 被当包装器吃掉，提权这件事在分类结果里完全不留痕。
+    privilege_reason = (
+        _PRIVILEGE_VERBS.get(head)
+        or _PRIVILEGE_VERBS.get(real)
+        or _privilege_verb_in_chain(tokens, stripped)
+    )
+    if privilege_reason:
+        best = ("dangerous", privilege_reason)
     # 审查R2修复：格式化文件系统与 dd 写裸设备只有在执行位置上才是破坏动作。
     # `grep -c mkfs /var/log/syslog`、`echo "dd if=/dev/zero of=/dev/sda 演示" >> notes.md`
     # 曾被整串匹配判 hardline —— 而 hardline 无审批出路，用户连"确认执行"都点不到。
@@ -920,6 +967,11 @@ _SENSITIVE_SOURCE_DIRS = (
     "/dev", "/sys", "/proc", "/var", "/opt", "/srv",
 )
 
+# tar 里这些选项后面可以跟「分离写法」的值（--directory /srv）。
+# 值不是归档也不是源，扫源时必须跳过。
+# 只收确定带值的短选项：-L(--dereference)、-B(--ignore-links) 无值，写进来会吞掉真源。
+_TAR_VALUE_FLAGS = ("-C", "-X", "-T", "--directory", "--exclude-from", "--files-from")
+
 
 def _is_sensitive_source(path: str) -> bool:
     t = _normalize_target(path)
@@ -966,7 +1018,10 @@ def _classify_write_targets(text: str) -> tuple[str, str | None]:
                     _check_target(a.lstrip("-"))
                 continue
             _check_target(a)
-            break  # 只取第一个文件目标
+            # 原先这里 break「只取第一个文件目标」：
+            # `echo p | tee /tmp/innocent /etc/ld.so.preload` 的第二个目标整个被跳过，
+            # 而同一份内容直接重定向到 /etc/ld.so.preload 是 hardline —— 加一个无辜的
+            # 前导路径就绕开了。tee 的每个文件参数都是写入目标，都要判。
     # 3. 写动词目标：cp/mv/install/ln/rsync 的最后一个非 flag 参数（B-3）
     #    与重定向/tee 用同一套 _check_target 判定，结果取更严重者（_check_target 内部合并）
     for segment in _split_command_chain(text):
@@ -994,14 +1049,46 @@ def _classify_write_targets(text: str) -> tuple[str, str | None]:
                             best = ("dangerous", f"move/copy sensitive system path as source ({s})")
                         break
         elif verb == "tar":
+            # tar 的开关可以把「归档命令」变成「把外部程序接进数据流」：
+            # --checkpoint[-action]=exec=CMD 每 N 条记录跑一次 CMD，
+            # -I/--use-compress-program 与 --to-command/--rsh-command 把执行权
+            # 整个交给调用方指定的程序。实测 `tar cf /tmp/t.tar
+            # --checkpoint-action=exec=id /tmp` 与 `tar -I mv a b` 都判 safe、
+            # 一张审批卡都不出 —— 等价于任意命令执行免审。
+            # 普通归档（tar czf backup.tar.gz dir / tar xzf app.tgz -C /srv）不受影响。
+            for t in tokens[1:]:
+                low = t.lower()
+                if low.startswith(("--checkpoint", "--to-command", "--rsh-command")):
+                    if _SEVERITY["dangerous"] > _SEVERITY[best[0]]:
+                        best = ("dangerous", "tar runs an external program (checkpoint/--to-command)")
+                    break
+                # 短开关大小写有别：-I 是压缩程序钩子，-i 只是忽略头选项。
+                # 原实现把 token 先 lower() 再和 "-I" 比，`tar -I mv a b` 永远匹配不上
+                # —— 一条不可能触发的规则等于没有规则。
+                if t == "-I" or low.startswith(("--use-compress-program", "--gzip-program",
+                                                "--bzip2-program", "--xz-program",
+                                                "--zstd-program")):
+                    if _SEVERITY["dangerous"] > _SEVERITY[best[0]]:
+                        best = ("dangerous", "tar pipes the archive through an external program")
+                    break
             # 5. C-review C1：tar 归档敏感目录（tar czf /tmp/x /etc）
-            #    第一个非 flag 参数是归档文件，其余是源
-            args = [t for t in tokens[1:] if not t.startswith("-")]
+            #    第一个非 flag 参数是归档文件，其余是源。
+            #    分离写法的选项值既不是源也不是归档（`tar xzf app.tgz -C /srv` 曾被当成
+            #    读取 /srv 判 dangerous —— 最常见的解压落盘写法被误拦）。
+            args: list[str] = []
+            skip_next = False
+            for t in tokens[1:]:
+                if skip_next:
+                    skip_next = False
+                    continue
+                if t.startswith("-"):
+                    skip_next = t in _TAR_VALUE_FLAGS  # --directory=/srv 值内联，不吞下一段
+                    continue
+                args.append(t)
             for s in args[1:]:
                 if _is_sensitive_source(s):
                     if _SEVERITY["dangerous"] > _SEVERITY[best[0]]:
                         best = ("dangerous", f"tar archives sensitive system path ({s})")
-                    break
         elif verb == "dd":
             # 6. C-review C1：dd 读敏感目录（dd if=/etc/hosts of=/tmp/x）
             for t in tokens[1:]:
@@ -1157,10 +1244,12 @@ def _classify_unknown_default(segment: str) -> tuple[str, str | None]:
 
     # ── 特判动词 ──
     if base in ("rm", "rmdir"):
-        # 走到这里说明 token 分析已确认目标非敏感/非递归未知目标 — 保持原 safe 语义
+        # 走到这里说明上面的 token 目标分析已经跑过（绝对路径也一样按 basename
+        # 认，见 _token_rm_find_analysis），目标非敏感/非递归未知才落到这里
         return ("safe", None)
     if base == "tar":
-        # 敏感目录作源已由 _classify_write_targets 判定 — 到这里即安全归档
+        # 敏感目录作源已由 _token_rm_find_analysis / _classify_write_targets 判定，
+        # 「把外部程序接进数据流」那几个开关也在那里判 —— 一条规则只写一处。
         return ("safe", None)
     if base == "sed":
         if any(t == "--in-place" or t.startswith("-i") for t in tokens[1:]):

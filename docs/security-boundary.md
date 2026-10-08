@@ -75,7 +75,7 @@
 
 ### 3.1 判定精度：位置、路径与写开关（误判审查后的口径）
 
-枚举表要挡的是"没见过的"，不能因此把"见得到的正常排查"打成高危。四条修正规则：
+枚举表要挡的是"没见过的"，不能因此把"见得到的正常排查"打成高危。修正口径：
 
 | 修正 | 规则 | 位置 | 挡掉的误判 |
 |---|---|---|---|
@@ -83,10 +83,17 @@
 | **安全设备** | `/dev/null`、`/dev/zero`、`/dev/urandom`、`/dev/stdout`、`/dev/tty*` 等既不是写敏感路径也不是敏感读取；`/dev/tcp/*`（反弹 shell）与 `/dev/sd*`（裸盘）不在其内 | `_is_safe_device` | `cmd 2>/dev/null` 这一族静默写法曾逐条要审批 |
 | **路径驱动** | 凭据读取不再要求首 token 是 `cat/dd/...`，任何非 flag 参数命中 `_SECRET_FILE_RE` 即 dangerous；awk/sed 的内联 `system()` 单独成条 | `_classify_secret_read` | `sort /etc/shadow`、`awk -F: '{print $1}' /etc/shadow`、`wc -c /root/.ssh/id_rsa` 曾判 safe |
 | **写开关** | 只读白名单动词的写副作用参数按写目标/独立成因判定：`sort -o <路径>`、`dmesg -C`、`ifconfig <网卡> down/promisc`、`hostname <新名>`；`kill` 进破坏性动词表（`kill -9 $(pgrep …)` 走间接展开规则）；curl/wget 的上传侧 `-T`/`-F @`/`--data-*`/`--post-file=` 命中凭据或敏感路径 → 外传 | `_classify_write_targets` / `_classify_exfiltration` / `_classify_unknown_default` | `curl -T /etc/shadow ftp://`、`dmesg -C`、`ifconfig eth0 down` 曾判 safe |
+| **提权链记忆** | `sudo`/`doas`/`runuser`/`pkexec`/`su` 为了对真正执行的命令做位置判定必须被剥掉，剥完链上就没人记得这是提权跑的——改为在剥离时按真实动词之前的前缀段回收一次。只看执行位置，`sudo` 出现在参数里不算 | `_privilege_verb_in_chain` | `nohup sudo id`、`env sudo ls`、`nice -n 5 sudo id`、`command sudo id` 曾判 safe，一张卡都不出 |
+| **动词归一** | 动词比较统一走 `_verb_of`：剥标点 → 去尾部分隔符 → 取 basename → 小写。绝对路径与 ANSI-C 拼接形态必须落到同一个名字上，且"目标分析"与"默认审批"两段共用，不许一段认得、一段认不出 | `_verb_of` | `/usr/bin/rm -rf ~` 曾判 safe（basename 只在默认审批那半生效）；`rm$'\x2f' -rf $'\x2f'` 解码后的 `rm/` 曾退化成 dangerous 兜底 |
+| **源侧与多目标** | 写目标扫描覆盖动词的**每一个**文件参数与**源**侧：`tee a b` 的第二个目标、`mv/cp/rsync` 的源、`tar` 归档的源、`dd if=`。tar 的 `--checkpoint[-action]=exec=`、`--to-command`、`-I/--use-compress-program` 等把外部程序接进数据流的开关按 dangerous | `_classify_write_targets` / `_is_sensitive_source` | `echo p \| tee /tmp/innocent /etc/ld.so.preload`（同内容直接重定向是 hardline）、`mv /root /tmp/x`、`tar cf x --checkpoint-action=exec=id /tmp` 曾判 safe |
 
 误拦与误放是同一枚硬币的两面，所以回归测试 `test_safety_misjudgment.py` 双向都钉：
 上面每一条修正都带一组"必须仍是 hardline/dangerous"的反向锁（12 种真实 `reboot` 形态、
 `rm -rf /`、`dd of=/dev/sda`、`echo x > /dev/tcp/…/4444`）。
+收紧侧同样带正向锁：`rm -rf build dist node_modules`、`tar czf /tmp/backup.tar.gz /home/user/project`、
+`tar xzf app.tgz -C /srv`、`grep -c sudo /var/log/secure`、`find . -name '*.log' -mtime +7 -delete`
+必须仍是 safe —— 归档目标目录（`-C` 的值）不是数据源，把日常备份打进审批卡只是把成本
+摊到每次正常操作上。
 
 抗混淆：`normalize_command_for_detection` 做 NFKC、剥引号、剥反斜杠、命令链分段、
 子 shell 递归，然后分段送分类。
