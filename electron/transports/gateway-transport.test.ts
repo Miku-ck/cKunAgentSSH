@@ -58,7 +58,7 @@ class FakePeer {
     })
   }
 
-  /** 认证一律放行；OPEN 回 openOk 并开启回显；BIND 回 bindOk */
+  /** 认证一律放行；OPEN 回 openOk 并开启回显；BIND/UNBIND 都回 bindOk（与 hillgw 的 doUnbind 同口径） */
   autoRespond(f: MuxFrame): void {
     if (f.type === 'auth') this.send({ type: 'helloOk', chan: GLOBAL_CHAN, payload: HELLO_OK })
     else if (f.type === 'open') {
@@ -66,7 +66,7 @@ class FakePeer {
       this.echo.set(f.chan, true)
     } else if (f.type === 'data' && this.echo.get(f.chan)) {
       this.send({ type: 'data', chan: f.chan, payload: f.payload })
-    } else if (f.type === 'bind') this.send({ type: 'bindOk', chan: GLOBAL_CHAN })
+    } else if (f.type === 'bind' || f.type === 'unbind') this.send({ type: 'bindOk', chan: GLOBAL_CHAN })
   }
 
   /** 只放行认证，其余帧留给用例自己应答 */
@@ -273,6 +273,24 @@ describe('-R 双向', () => {
     await vi.waitFor(() => expect(peer.of('bind')).toHaveLength(1))
     peer.send({ type: 'openErr', chan: GLOBAL_CHAN, payload: { code: 'denied-by-policy', message: '22 端口不允许绑定' } })
     await expect(binding).rejects.toMatchObject({ code: 'denied-by-policy' })
+    sess.close()
+  })
+
+  it('停止与在途 BIND 同一条规则：不能把它的结算句柄扔掉', async () => {
+    // 旧实现在 unbind() 里同步 pendingBind.delete(key) —— 删掉的是「同一条规则正在等
+    // BIND_OK 的那个回调」，回调没被调用就没人再唤醒它：bind() 永不 settle，
+    // 挂在 bindChain 上的每一次后续 bind 都排在一个死 Promise 后面，
+    // tunnel:start 的 IPC 调用因此不返回（界面卡在「启动中…」，只能删记录）。
+    // 这条对旧写法是超时红，不是绿。
+    const { sess, peer } = pair('auth')
+    const binding = sess.bind(BIND_PUBLIC)
+    const stopping = sess.unbind(BIND_PUBLIC)
+    await vi.waitFor(() => expect(peer.of('bind')).toHaveLength(1))
+    peer.send({ type: 'bindOk', chan: GLOBAL_CHAN })
+    await binding
+    await vi.waitFor(() => expect(peer.of('unbind')).toHaveLength(1))
+    peer.send({ type: 'bindOk', chan: GLOBAL_CHAN })
+    await stopping
     sess.close()
   })
 

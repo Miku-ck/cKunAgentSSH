@@ -740,6 +740,7 @@ async function selftest() {
   }
   fail += await selftestLoopback()
   fail += await selftestUnauth()
+  fail += await selftestBadPayload()
   console.log(fail ? `\n${fail} 项不通过` : '\n全部通过')
   process.exit(fail ? 1 : 0)
 }
@@ -865,6 +866,41 @@ async function selftestUnauth() {
     cli.destroy()
     gwSide.close()
   }
+}
+
+/**
+ * 形状错的 JSON 帧只能作废这一条会话，绝不能把网关进程自己打死。
+ * `null` 是合法 JSON：decodePayload 原先只在零字节时报错，于是 auth/hello 带一个
+ * `null` body 就走到 `p.user` / `f.payload.clientVersion`，TypeError 从 net 的
+ * 'data' 监听器冒出去 = uncaughtException = 这台网关上所有租户一起掉线。
+ * 未认证即可达，任何完成 TLS 握手的对端 4 个字节就能触发。
+ */
+async function selftestBadPayload() {
+  const cfg = {
+    users: [{ user: 't', passwordSha256: sha256hex('pw'), role: 'r' }],
+    roles: { r: { allow: [] } },
+    heartbeatSec: 3600,
+  }
+  let sess = null
+  const gwSide = net.createServer(sock => { sess = new Session(sock, cfg, 'selftest') })
+  await new Promise(r => gwSide.listen(0, '127.0.0.1', r))
+  const cli = net.connect(gwSide.address().port, '127.0.0.1')
+  await new Promise(r => cli.once('connect', r))
+  while (!sess) await new Promise(r => setTimeout(r, 10))
+  let closed = false
+  cli.on('close', () => { closed = true })
+  let fail = 0
+  try {
+    // 绕过 encodeFrame 的对象序列化：JSON.stringify(null) 正好是 "null"
+    cli.write(encodeFrame('auth', GLOBAL_CHAN, null))
+    const t0 = Date.now()
+    while (!closed && Date.now() - t0 < 1500) await new Promise(r => setTimeout(r, 10))
+    fail += say(closed && sess.dead, 'auth 带 null payload 只作废会话，不打死网关进程')
+  } finally {
+    cli.destroy()
+    gwSide.close()
+  }
+  return fail
 }
 
 const argv = process.argv.slice(2)
