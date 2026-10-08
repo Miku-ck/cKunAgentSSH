@@ -42,6 +42,8 @@ export interface HostSummary {
   port: number
   user: string
   auth: SshAuthKind
+  /** Not a secret (the key file path); surfaced so the edit dialog can prefill it. */
+  keyPath?: string
   environment?: string
   tags: string[]
   description?: string

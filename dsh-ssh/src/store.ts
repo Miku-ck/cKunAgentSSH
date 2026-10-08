@@ -91,9 +91,14 @@ export class HostStore {
     } catch {
       return { imported: 0, skipped: 0 }
     }
+    /** One parsed ~/.ssh/config Host block (proxyJump has no HostEntry counterpart in M1). */
+    interface SshConfigBlock extends Partial<Omit<HostEntry, 'tags'>> {
+      tags?: string[]
+      proxyJump?: string
+    }
     let imported = 0
     let skipped = 0
-    let current: Partial<HostEntry> | undefined
+    let current: SshConfigBlock | undefined
     const commit = () => {
       if (current?.host && current.alias) {
         if (this.get(current.alias)) {

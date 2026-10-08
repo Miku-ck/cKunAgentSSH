@@ -12,6 +12,7 @@ import { SSHError, toIpcTransport } from './ssh-error'
 import { SSHStore, type SSHConnectionRecord } from './ssh-store'
 import { TunnelStore, type TunnelRule } from './tunnel-store'
 import { TunnelManager } from './tunnel-manager'
+import { SshTransport } from './transports/ssh-transport'
 import { ElectronBridge, BridgeOp } from './electron-bridge'
 import { BridgeWsClient } from './bridge-ws-client'
 import {
@@ -1088,10 +1089,12 @@ function setupSSHIPC(): void {
   tunnelStore = new TunnelStore()
   tunnelManager = new TunnelManager()
   if (mainWindow) tunnelManager.setWindow(mainWindow)
-  tunnelManager.setConfigProvider(async (connectionId) => {
-    return sshStore!.get(connectionId)
+  tunnelManager.setTransportFactory(async (rule) => {
+    // 凭据主进程自取（渲染层全程无明文）；连接配置被删 → 抛中文文案，落 status.message
+    const config = await sshStore!.get(rule.connectionId)
+    if (!config) throw new Error('连接配置已删除，请重建连接或删除本条隧道规则')
+    return new SshTransport(await sshManager!.openRawClient(config))
   })
-  tunnelManager.setClientFactory(config => sshManager!.openRawClient(config))
   if (mainWindow) sshManager.setWindow(mainWindow)
   // ssh2 懒加载预热：窗口 show 后台并行加载（~1.3s），用户点连接前已就位；
   // 失败不致命——doConnect/testConnection 内还有 await loadSsh2() 兜底路径。
