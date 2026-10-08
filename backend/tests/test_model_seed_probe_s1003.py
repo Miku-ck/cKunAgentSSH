@@ -188,3 +188,87 @@ def test_seed_passes_api_key_to_probe(monkeypatch, tmp_path):
         assert seen == [("http://a.example/v1", "sk-real"), ("http://b.example/v1", "sk-real")]
     finally:
         db._close_all_connections()
+
+
+# ── S10-08：name/model_id 互换修正必须是一次性迁移 ────────────────────────────
+
+def _row(path, mid):
+    import sqlite3
+    conn = sqlite3.connect(path)
+    try:
+        return conn.execute(
+            "SELECT name, model_id FROM models_config WHERE id=?", (mid,)
+        ).fetchone()
+    finally:
+        conn.close()
+
+
+def _put(path, mid, name, model_id):
+    import sqlite3
+    conn = sqlite3.connect(path)
+    try:
+        # base_url/provider/created_at/updated_at 在 CREATE TABLE 里是
+        # NOT NULL 且无默认（补列循环的 DEFAULT 只在 ALTER TABLE 路径生效）
+        conn.execute(
+            "INSERT OR REPLACE INTO models_config"
+            "(id,name,model_id,base_url,provider,created_at,updated_at) "
+            "VALUES(?,?,?,'http://x','custom','2026-01-01 00:00:00','2026-01-01 00:00:00')",
+            (mid, name, model_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _flag(path):
+    import sqlite3
+    conn = sqlite3.connect(path)
+    try:
+        r = conn.execute(
+            "SELECT value FROM app_settings WHERE key='models.name_id_fixed'"
+        ).fetchone()
+        return r[0] if r else None
+    finally:
+        conn.close()
+
+
+def test_display_name_with_slash_survives_restart(tmp_path):
+    """S10-08：用户起的带斜杠显示名，第二次启动不再被当成 model_id 翻走。
+
+    原实现每次 init_db 无条件跑形状猜测，"Qwen/本地最优" 会被与 model_id 互换 ——
+    互换后真正发往服务端的 model 字段变成那句中文显示名，直接 4xx。
+    """
+    import database as db
+    path = str(tmp_path / "m.db")
+    db._close_all_connections()
+    db.init_db(path)
+    assert _flag(path) == "1", "首次 init_db 应置上一次闸门"
+
+    _put(path, "m1", "Qwen/本地最优", "qwen3-32b")
+    db._close_all_connections()
+    db.init_db(path)          # 第二次启动
+    assert _row(path, "m1") == ("Qwen/本地最优", "qwen3-32b")
+
+
+def test_legacy_swapped_rows_still_repaired_exactly_once(tmp_path):
+    """闸门不是把修复功能删掉：旧库的反向数据仍修一次，但只修一次。"""
+    import sqlite3
+    import database as db
+    path = str(tmp_path / "m.db")
+    db._close_all_connections()
+    db.init_db(path)
+    # 模拟引入闸门之前就存在的老库：没有标记，且 name/model_id 确实写反了
+    conn = sqlite3.connect(path)
+    conn.execute("DELETE FROM app_settings WHERE key='models.name_id_fixed'")
+    conn.commit()
+    conn.close()
+    _put(path, "m2", "Qwen/Qwen3-32B", "通义千问32B")
+
+    db._close_all_connections()
+    db.init_db(path)
+    assert _row(path, "m2") == ("通义千问32B", "Qwen/Qwen3-32B"), "一次性修复应生效"
+
+    db._close_all_connections()
+    db.init_db(path)
+    assert _row(path, "m2") == ("通义千问32B", "Qwen/Qwen3-32B"), "第二次启动不得再动"
+    db._close_all_connections()

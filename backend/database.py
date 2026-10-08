@@ -822,12 +822,26 @@ def _migrate_memory_v1_to_v2(conn: sqlite3.Connection, struct_mod) -> None:
 
 
 def _fix_model_name_and_id(conn: sqlite3.Connection) -> None:
-    """修正 models_config 表中 name 与 model_id 的值（仅当确实反了时）
+    """修正 models_config 表中 name 与 model_id 的值（仅当确实反了时）—— 一次性迁移。
 
-    幂等：只有当 name 看起来像 model_id（含 / 或 Qwen/ 前缀）且 model_id
-    看起来像显示名时才互换，避免重启后强制覆盖用户在前端的重命名。
+    S10-08 修复：用 app_settings('models.name_id_fixed') 做闸门，每个库只跑一次。
+    原实现每次 init_db 都无条件执行，而它的判据是纯形状猜测（"name 里有 / 就
+    当成 model_id"），于是任何合法显示名都会被翻：用户把模型改名成
+    "Qwen/2.5-Coder（本地）" 这类带斜杠的写法，下次启动 name 与 model_id 就互换
+    了 —— 更糟的是互换后发往服务端的 model 字段变成那句显示名，请求直接 4xx，
+    而用户看到的是"我没动过它，重启就坏了"。用户手动改回来，下次启动再翻一遍。
+
+    它本质是修早期种子写入顺序错误的一次性数据修复，跑完就该永久退休。
+    与 _init_memory_v2 的 memory_v2.migrated 同一范式。
     """
+    row = conn.execute(
+        "SELECT value FROM app_settings WHERE key='models.name_id_fixed'"
+    ).fetchone()
+    if row and row[0] == "1":
+        return
+
     rows = conn.execute("SELECT id, name, model_id FROM models_config").fetchall()
+    swapped = 0
     for r in rows:
         n, mid = r["name"], r["model_id"]
         if not n or not mid:
@@ -839,6 +853,14 @@ def _fix_model_name_and_id(conn: sqlite3.Connection) -> None:
                 "UPDATE models_config SET name = ?, model_id = ?, updated_at = ? WHERE id = ?",
                 (mid, n, _now(), r["id"])
             )
+            swapped += 1
+    # 置标记：这次跑过（哪怕一行都没改）就再也不跑。闸门放在猜测之后而不是之前，
+    # 老库升级后仍能补上那一次真正的修复。
+    conn.execute(
+        "INSERT OR REPLACE INTO app_settings(key,value) VALUES('models.name_id_fixed','1')"
+    )
+    if swapped:
+        logger.info("models_config: 一次性修正 name/model_id 互换 %d 行", swapped)
 
 
 def _probe_first_model(base_url: str, api_key: str = "EMPTY",
