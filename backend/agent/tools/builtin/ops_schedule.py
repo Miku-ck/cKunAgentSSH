@@ -44,7 +44,12 @@ def _is_digits(s: str) -> bool:
 def _parse_int_field(s: str, lo: int, hi: int, label: str, errs: list[str]) -> int | None:
     """解析单字段纯数字并校检区间；返回 None 表示该字段本身不合法（已入 errs）。"""
     if not _is_digits(s):
-        errs.append(f"{label} 必须是数字或 '*'，收到 {s!r}")
+        # S7-17：文案原先写「必须是数字或 '*'」，而 '*' 走到这里必定被拒 ——
+        # 模型照着指引重试 `* 9 * * *` 会撞回同一句自相矛盾的报错，原地打转。
+        # 这两个字段确实不认 '*'（daily/weekly/monthly 都要固定时分），所以改的是
+        # **文案**不是校验，并把唯一的出路一起说清楚。
+        hint = "，不支持 '*'（要每分钟/每小时都跑一次，请改用 mode=interval）" if s == "*" else ""
+        errs.append(f"{label} 必须是数字{hint}，收到 {s!r}")
         return None
     v = int(s)
     if not (lo <= v <= hi):
