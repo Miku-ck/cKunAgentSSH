@@ -351,7 +351,6 @@ const sysRows = computed<SysRow[]>(() => {
 }
 
 .nv-head { margin-bottom: 4px; }
-.nv-brand { color: var(--nv-brand); font-weight: 700; letter-spacing: 0.5px; }
 .nv-grow { flex: 1; }
 .nv-dim { color: var(--nv-dim); }
 
