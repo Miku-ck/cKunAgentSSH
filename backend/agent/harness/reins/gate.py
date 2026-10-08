@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -125,7 +126,6 @@ class PermissionGate:
 
         Returns: (valid, reason_if_invalid)
         """
-        import re
         _TOOL_NAME_RE = re.compile(r'^[A-Za-z0-9_.-]+$')
         _GRANT_KEY_RE = re.compile(r'^[A-Za-z0-9_.-]+:[0-9a-f]{16}$')
         if _GRANT_KEY_RE.match(line):

@@ -303,14 +303,25 @@ export function createMuxDecoder(opts: DecoderOptions): MuxDecoder {
   }
 }
 
+/**
+ * JSON 帧的 payload 必须解成普通对象。
+ * `null` / `5` / `"abc"` / `[]` 都是合法 JSON，却会让下面任意一处 `f.payload.code`
+ * 在 socket 的 'data' 监听器里抛 TypeError —— 对端只要发一帧 `auth` 带 body `null`
+ * 就能把消费方打进未捕获异常。形状错与 JSON 坏同级：帧边界已不可信，会话作废。
+ */
 function parseJson<T>(typeName: string, bytes: Uint8Array): T {
   if (bytes.length === 0) throw new MuxProtocolError(`${typeName} 帧缺少 payload`)
+  let parsed: unknown
   try {
-    return JSON.parse(dec.decode(bytes)) as T
+    parsed = JSON.parse(dec.decode(bytes))
   } catch {
     // JSON 坏 = 帧边界已经错位，继续解没有意义
     throw new MuxProtocolError(`${typeName} 帧 payload 不是合法 JSON`)
   }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new MuxProtocolError(`${typeName} 帧 payload 不是 JSON 对象`)
+  }
+  return parsed as T
 }
 
 function decodeBody(typeName: FrameTypeName, chan: number, payload: Uint8Array): MuxFrame {

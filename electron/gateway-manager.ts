@@ -32,6 +32,8 @@ export interface GatewayStatus {
   message?: string
   /** 当前活动转发通道数 */
   channels?: number
+  /** 网关协商的心跳间隔（秒），未连接时为空 */
+  heartbeatSec?: number
   role?: string
   sessionId?: string
   spki?: string
@@ -56,6 +58,8 @@ interface Entry {
   message?: string
   sinceAt?: number
   attempt: number
+  /** 网关协商下来的心跳秒数，仅在 HELLO_OK 之后有值 */
+  heartbeatSec?: number
   retryTimer: NodeJS.Timeout | null
   /** 主动断开 / 删除中：迟到的 close/error 不再触发重连 */
   closing: boolean
@@ -112,6 +116,7 @@ export class GatewayManager {
       state: e.state,
       message: e.message,
       channels: t ? t.stats.channels : 0,
+      heartbeatSec: e.state === 'online' ? e.heartbeatSec : undefined,
       role: t?.stats.role,
       sessionId: t?.stats.sessionId,
       spki: t?.stats.spki || e.rec.trustedSpki,
@@ -159,6 +164,13 @@ export class GatewayManager {
   }
 
   private async dial(e: Entry): Promise<void> {
+    // 每次拨号都重读记录。gateway:save 只落库、不会通知这一层，沿用内存里的旧 e.rec
+    // 意味着用户改完 host/port/口令后，自动重连照旧打旧地址、拿旧口令试（界面上已经
+    // 显示新值）；而 store 在身份变更时会清掉 trustedSpki，内存里那份旧钉值还会让
+    // decideHostKey 判成「指纹不一致」直接硬失败。读不到（记录被删）就沿用当前值，
+    // 由随后 transport 的失败路径收场 —— 这里不额外造第三种状态。
+    const fresh = await this.store.getWithSecret(e.rec.id).catch(() => undefined)
+    if (fresh) e.rec = fresh
     if (!e.rec.password) {
       e.state = 'error'
       e.message = '本机没有可用的口令（系统钥匙串不可用或未重新输入），请在弹窗里再填一次'
@@ -239,6 +251,9 @@ export class GatewayManager {
   }
 
   private onReady(e: Entry, info: HelloOkPayload): void {
+    // 心跳间隔是网关协商出来的，不能只活在 message 文案里：UI 要按字段显示，
+    // 抄一份「30 s」进模板就是把可变的运行时事实写死。
+    e.heartbeatSec = info.heartbeatSec
     e.message = `角色 ${info.role} · 心跳 ${info.heartbeatSec}s`
   }
 

@@ -138,8 +138,14 @@ export class BackendManager {
    *
    * 不能只匹配 "main.py" — 用户机器上其他 Python 项目同样可能以 main.py 为入口，
    * 误杀会破坏无关服务。要求命中本应用的启动特征之一：
-   *   1. 命令行包含本应用 backend 目录路径（覆盖 dev 与打包两种布局）
-   *   2. 命令行同时含本应用固定的启动参数组合（backendDir 位置变化时的兜底）
+   *   1. 命令行包含本应用 backend 目录路径（dev 与打包两种布局都覆盖；
+   *      spawn 传的是绝对脚本路径，否则这一条永远不会命中 —— 见 start()）
+   *   2. 命令行是 `<…>\backend\main.py` 且带本应用固定的启动参数与端口区间
+   *      （backendDir 位置变化时的兜底：装在别的目录的同一款应用）
+   *
+   * 兜底必须同时卡住目录名与 8010..8100 端口区间：只按 `main.py --port --host
+   * 127.0.0.1` 判定的话，任何 FastAPI 教程项目的命令行都能命中，而 taskkill
+   * 带 /T 会连它的整棵子进程树一起杀掉。
    */
   private static isOurBackendProcess(cmdline: string, backendDir: string): boolean {
     if (!cmdline) return false
@@ -149,8 +155,15 @@ export class BackendManager {
     const dir = backendDir.replace(/\//g, '\\').toLowerCase()
     if (dir && norm.includes(dir)) return true
 
-    // 兜底：本应用固定以 `main.py --port <n> --host 127.0.0.1` 启动
-    return norm.includes('--host 127.0.0.1') && norm.includes('--port')
+    const portMatch = /--port\s+(\d+)/.exec(norm)
+    const port = portMatch ? Number(portMatch[1]) : NaN
+    return (
+      norm.includes('\\backend\\main.py') &&
+      norm.includes('--host 127.0.0.1') &&
+      Number.isInteger(port) &&
+      port >= 8010 &&
+      port <= 8100
+    )
   }
 
   /**
@@ -312,7 +325,10 @@ export class BackendManager {
 
 
       // M2 修复：默认绑定 127.0.0.1，防止局域网内其他设备访问后端（含 API Key、SSH 凭据等敏感数据）
-      this.process = spawn(pythonCmd, ['main.py', '--port', String(this.port), '--host', '127.0.0.1'], {
+      // 脚本路径必须是绝对路径：命令行是 isOurBackendProcess 唯一的自有性判据，
+      // 传相对名 "main.py" 时 backendDir 那条精确匹配永远不会命中，
+      // 孤儿检测就只剩宽口径兜底在跑（宽口径必然误伤同签名的无关项目）。
+      this.process = spawn(pythonCmd, [join(backendDir, 'main.py'), '--port', String(this.port), '--host', '127.0.0.1'], {
         cwd: backendDir,
         env: {
           ...process.env,

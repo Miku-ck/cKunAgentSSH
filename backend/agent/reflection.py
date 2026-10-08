@@ -274,10 +274,6 @@ class MetaReflection:
                     f"可接受但偏高"
                 )
 
-        # ── H12 新增：工具调用冲突检测 ──
-        conflict_insights = self._detect_tool_conflicts(trace.tool_calls)
-        insights.extend(conflict_insights)
-
         # ── H12 新增：状态转移异常检测 ──
         anomaly_insights = self._detect_state_anomalies(trace.state_history, trace.final_state)
         insights.extend(anomaly_insights)
@@ -316,60 +312,6 @@ class MetaReflection:
             suggestions.append("本次运行表现优秀，可作为同类任务的范例")
 
         return suggestions
-
-    # ── H12 新增：工具调用冲突检测 ──
-
-    # 工具调用冲突组合（前者工具, 后者工具）— ssh 模式工具集（shell_exec 等）
-    # 无本地文件工具，暂无可检测的冲突模式
-    _CONFLICT_PATTERNS: list[tuple[str, str]] = []
-
-    def _detect_tool_conflicts(self, tool_calls: list[dict]) -> list[str]:
-        """检测事后工具调用冲突（浪费工作模式）
-
-        仅检测明确的"先做后撤销"模式，避免误报
-        """
-        if len(tool_calls) < 2:
-            return []
-
-        insights: list[str] = []
-        # 提取 (tool, path) 序列
-        seq: list[tuple[str, str]] = []
-        for tc in tool_calls:
-            if not isinstance(tc, dict):
-                continue
-            tool = tc.get("tool", "")
-            args = tc.get("args", {}) or {}
-            # 提取路径参数（统一字段名）
-            path = (
-                args.get("file_path") or args.get("path")
-                or args.get("source") or args.get("destination")
-                or args.get("target") or ""
-            )
-            if path:
-                try:
-                    import os
-                    path = os.path.normpath(str(path))
-                except Exception:
-                    path = str(path)
-                seq.append((tool, path))
-
-        # 滑动窗口检测相邻冲突对
-        seen_conflicts: set[tuple[str, str, str]] = set()
-        for i in range(len(seq) - 1):
-            tool_a, path_a = seq[i]
-            tool_b, path_b = seq[i + 1]
-            for pat_a, pat_b in self._CONFLICT_PATTERNS:
-                if tool_a == pat_a and tool_b == pat_b and path_a == path_b:
-                    key = (pat_a, pat_b, path_a)
-                    if key in seen_conflicts:
-                        continue
-                    seen_conflicts.add(key)
-                    insights.append(
-                        f"工具调用冲突：{pat_a}({path_a}) 后紧接 {pat_b}，前者工作被浪费"
-                    )
-                    break
-
-        return insights
 
     # ── H12 新增：状态转移异常检测 ──
 

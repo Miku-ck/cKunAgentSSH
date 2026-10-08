@@ -31,12 +31,22 @@ export class HostStore {
   }
 
   private load(): StoreFile {
+    let raw: string
     try {
-      const raw = JSON.parse(readFileSync(this.file, 'utf8')) as Partial<StoreFile>
-      return { version: 1, hosts: Array.isArray(raw.hosts) ? (raw.hosts as HostEntry[]) : [] }
-    } catch {
-      return { version: 1, hosts: [] }
+      raw = readFileSync(this.file, 'utf8')
+    } catch (err) {
+      // A missing file is a fresh install. Any other read failure (EBUSY/EPERM from
+      // Windows file locks or AV scanning) is NOT: returning an empty registry here
+      // means the next upsert() rewrites the file from that empty state and the whole
+      // registry — plus every pointer into a credential record — is gone. Same rule
+      // the Electron gateway store documents for its own load.
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return { version: 1, hosts: [] }
+      throw err
     }
+    // Corrupt JSON propagates for the same reason: an empty registry that gets saved
+    // back over the file is indistinguishable from the user deleting every host.
+    const parsed = JSON.parse(raw) as Partial<StoreFile>
+    return { version: 1, hosts: Array.isArray(parsed.hosts) ? (parsed.hosts as HostEntry[]) : [] }
   }
 
   private save(): void {
@@ -176,9 +186,16 @@ export class HostStore {
         if (value.includes('*') || value.includes('?')) continue
         current = { alias: value, host: value }
       } else if (current) {
-        if (key === 'HostName' && !current.host) current.host = value
-        else if (key === 'Port') current.port = Number(value)
-        else if (key === 'User') current.user = value
+        // HostName must win over the `Host` pattern: `current` is seeded with
+        // host = alias, so a "only if still unset" guard can never be true and every
+        // block like `Host work / HostName 10.0.0.5` imports pointing at the alias.
+        if (key === 'HostName') current.host = value
+        else if (key === 'Port') {
+          const port = Number(value)
+          // Number('abc') is NaN and the `?? 22` fallback downstream only catches
+          // null/undefined — a NaN port reaches ssh2 as an unusable value.
+          current.port = Number.isInteger(port) && port > 0 && port <= 65535 ? port : 22
+        } else if (key === 'User') current.user = value
         else if (key === 'IdentityFile') current.keyPath = value.split(/\s+/)[0]
         else if (key === 'ProxyJump') current.proxyJump = value
         else if (key === 'SetEnv' && value.startsWith('SSH_HOST_ENV=')) current.environment = value.slice('SSH_HOST_ENV='.length)

@@ -53,8 +53,3 @@ def _current_time_str() -> str:
     weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
     weekday = weekdays[now.weekday()]
     return f"{now.year}年{now.month:02d}月{now.day:02d}日 {weekday} {now.hour:02d}:{now.minute:02d}"
-
-
-# C-review NIT：原 POST_PROCESS_PROMPT 死代码已删除 — post_processor.py 实际使用
-# 自己的 _TITLE_PROMPT_TEMPLATE / _MEMORY_PROMPT_TEMPLATE / _SKILL_PROMPT_TEMPLATE，
-# 该常量从未被引用，且"10 字以内"与 MAX_TITLE_LEN=20 的语义不一致。

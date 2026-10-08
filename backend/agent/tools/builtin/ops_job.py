@@ -106,6 +106,7 @@ class JobManager:
 
     def __init__(self):
         self._jobs: dict[str, JobEntry] = {}
+        self._reserved: set[str] = set()
         self._lock = threading.Lock()
 
     @classmethod
@@ -124,11 +125,18 @@ class JobManager:
             while True:
                 self._seq += 1
                 candidate = str(self._seq)
-                if self.get(candidate) is None:
+                if self.get(candidate) is None and candidate not in self._reserved:
+                    # S6-02：号一经发出立刻占坑。原实现等到 await 远程启动（最长 20s）
+                    # 之后才 add()，第二个并发 job_run 看到同号空闲 ⇒ 两个作业撞进同一个
+                    # <jobs_root>/<id>：启动模板的 `>` 截断前一份 out.log、覆写 run.sh/rc，
+                    # 且随后的 mgr.add 替换掉第一个条目 —— 前一个作业的 pid 句柄与 kill
+                    # 通道一起丢失。启动失败时坑位不回收（只是跳号，无害）。
+                    self._reserved.add(candidate)
                     return candidate
 
     def add(self, entry: JobEntry) -> None:
         with self._lock:
+            self._reserved.discard(entry.job_id)
             self._jobs[entry.job_id] = entry
 
     def get(self, job_id: str) -> Optional[JobEntry]:
@@ -268,7 +276,14 @@ def _parse_remote_pid(output: str) -> Optional[int]:
 # 由 backend/tests/test_remote_whitelist_contract.py 跨端校验。
 
 def job_launch_cmd(job_id: str, cmd: str) -> str:
-    """job_run 远端启动模板：mkdir 目录 → base64 落 run.sh → setsid 后台运行 → echo $!。"""
+    """job_run 远端启动模板：mkdir 目录 → 清残留 rc → base64 落 run.sh → setsid 后台运行 → echo $!。
+
+    S6-05：必须先 rm -f rc。终态行（finished/failed/killed）不参与启动恢复，
+    于是它们的号在后端重启后就是空闲号，而远端 <dir>/rc 还躺着上一任的退出码 ⇒
+    复用该号的新作业第一次 job_output 就解析出陈旧 CKUNJOB_RC，刚启动即被判
+    「已完成」并挂上死作业的退出码，随后 job_kill 以「已不在运行」拒止 —— 而进程还在跑。
+    out.log 由 `>` 截断，无需额外清理。
+    """
     d = f"{_JOBS_ROOT}/{job_id}"
     script = f"{d}/run.sh"
     log = f"{d}/out.log"
@@ -277,6 +292,7 @@ def job_launch_cmd(job_id: str, cmd: str) -> str:
     sb64 = base64.b64encode(script_content.encode("utf-8")).decode("ascii")
     return (
         f"mkdir -p {d}\n"
+        f"rm -f {rc}\n"
         f"echo {sb64} | base64 -d > {script}\n"
         f"setsid bash {script} > {log} 2>&1 < /dev/null &\n"
         f"echo $!"
@@ -295,21 +311,31 @@ def job_read_cmd(log_dir: str, offset: int) -> str:
 
 
 def job_kill_cmd(pid: int) -> str:
-    """job_kill 远端模板：整进程组 TERM → 3s → KILL 升级。"""
+    """job_kill 远端模板：整进程组 TERM → 3s → KILL 升级。
+
+    S6-03：验证生死必须与发信号同口径 —— 打的是进程组 `-- -{pid}`，查的也得是
+    进程组。原实现用 `kill -0 {pid}`（组长）验证：被包命令自我 daemon 化
+    （nginx、redis-server --daemonize yes、任何以 & 收尾的）后组长已退出而组成员
+    还活着 ⇒ 判成 CKUNJOB_DEAD ⇒ 作业标 killed、回「已终止（进程组已退出）」，
+    而 SIGKILL 一次都没发出。当年 R2 的 STILL 诚实性修复只覆盖了「组长还活着」那支。
+    S6-21 / S6-16：pid 取自 DB 且要拼进远端命令串，此处强制 int 化，
+    脏值直接抛错而不是把任意文本送进 shell。
+    """
+    pid = int(pid)
     return (
         f"kill -TERM -- -{pid} 2>/dev/null; sleep 3; "
-        f"if kill -0 {pid} 2>/dev/null; then "
+        f"if kill -0 -- -{pid} 2>/dev/null; then "
         f"kill -KILL -- -{pid} 2>/dev/null; sleep 1; "
-        f"kill -0 {pid} 2>/dev/null && echo CKUNJOB_STILL || echo CKUNJOB_DEAD; "
+        f"kill -0 -- -{pid} 2>/dev/null && echo CKUNJOB_STILL || echo CKUNJOB_DEAD; "
         f"else echo CKUNJOB_DEAD; fi"
     )
 
 
 def job_reconcile_alive_cmd(pids) -> str:
-    """job_list 对账模板①：kill -0 批量判活。"""
-    pid_list = " ".join(str(p) for p in pids)
+    """job_list 对账模板①：按进程组批量判活（与 job_kill 同口径，见 S6-03）。"""
+    pid_list = " ".join(str(int(p)) for p in pids)
     return (
-        f"for p in {pid_list}; do kill -0 $p 2>/dev/null && echo \"$p ALIVE\" "
+        f"for p in {pid_list}; do kill -0 -- -$p 2>/dev/null && echo \"$p ALIVE\" "
         f"|| echo \"$p DEAD\"; done"
     )
 

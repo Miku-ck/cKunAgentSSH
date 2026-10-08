@@ -333,14 +333,32 @@ export class GatewaySession {
     )
   }
 
+  /**
+   * UNBIND 与 BIND 走同一条串行链，并且同样等 BIND_OK 兑现。
+   * 早前它直接 `pendingBind.delete(key)` 把在途 BIND 的结算句柄删掉而不调用：
+   * bind() 的 Promise 永不 settle → bindChain 的 `.catch` 永不触发 → 这条会话上
+   * 之后每一次 bind 都排在一个已死的 Promise 后面；发起方 tunnel:start 的 IPC
+   * 调用也就永远不返回（UI 卡在「启动中…」，只有删记录才能出来）。
+   */
   unbind(b: RemoteBind): Promise<void> {
-    this.pendingBind.delete(bindKey(b.bindHost, b.bindPort))
-    this.sendRaw(encodeFrame({
-      type: 'unbind',
-      chan: GLOBAL_CHAN,
-      payload: { bindHost: b.bindHost, bindPort: b.bindPort, targetHost: b.targetHost, targetPort: b.targetPort },
-    }))
-    return Promise.resolve()
+    const key = bindKey(b.bindHost, b.bindPort)
+    const run = this.bindChain.then(() => this.doUnbind(key, b))
+    this.bindChain = run.catch(() => undefined)
+    return run
+  }
+
+  private doUnbind(key: string, b: RemoteBind): Promise<void> {
+    return this.ready.then(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          this.pendingBind.set(key, e => (e ? reject(e) : resolve()))
+          this.sendRaw(encodeFrame({
+            type: 'unbind',
+            chan: GLOBAL_CHAN,
+            payload: { bindHost: b.bindHost, bindPort: b.bindPort, targetHost: b.targetHost, targetPort: b.targetPort },
+          }))
+        }),
+    )
   }
 
   /** 在途 bind 只可能有一个（bind 已串行），所以「第一个」就是该结掉的那个 */
@@ -438,12 +456,17 @@ export class GatewaySession {
   }
 
   private startHeartbeat(sec: number): void {
+    // heartbeatSec 由对端下发，必须当作不可信输入：Math.max(1, NaN) 仍是 NaN，
+    // setInterval(…, NaN) 按 1ms 处理 —— 一个坏网关能把客户端打成 PING 风暴。
+    // 越界/非有限值一律回落默认值（与 gateway-manager 侧的 30 同口径），不钳到边界。
+    const raw = Number(sec)
+    const every = Number.isFinite(raw) && raw >= 1 && raw <= 3600 ? Math.floor(raw) : 30
     if (this.pingTimer) clearInterval(this.pingTimer)
     this.pingTimer = setInterval(() => {
       if (this.dead) return
       if (++this.missedPong > 3) return this.kill('连续 3 次 PING 无 PONG')
       this.sendRaw(encodeFrame({ type: 'ping', chan: GLOBAL_CHAN, seq: ++this.seq }))
-    }, Math.max(1, sec) * 1000)
+    }, every * 1000)
     this.pingTimer.unref?.()
   }
 
@@ -452,6 +475,9 @@ export class GatewaySession {
     if (!ch) return
     ch.markClosed()
     this.channels.delete(chan)
+    // 必须与 dropChannel 一样解除背压：RST/FIN 是通道消失的常规路径，
+    // 压住会话读的那条通道被 RST 掉之后没人再触发 _read，整条共享会话就此停住。
+    this.resumeSocketIfIdle()
     setImmediate(() => ch.destroy())
   }
 

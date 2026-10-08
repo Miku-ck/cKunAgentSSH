@@ -112,15 +112,26 @@ function createDecoder(localParity, hasChannel) {
   }
 }
 
+/**
+ * JSON 帧的 payload 必须解成普通对象 —— 与 shared/gateway-mux.ts 的 parseJson 同一条规则，
+ * 两侧任一放宽都会让另一侧的 `p.user` / `f.payload.code` 在 'data' 监听器里抛出去。
+ * `null` 是合法 JSON：未认证的 hello/auth 带一个 `null` body 就能打死网关进程本身
+ * （所有租户一起掉线），所以形状错与 JSON 坏同级处理。
+ */
 function decodePayload(type, bytes) {
   if (type === 'data') return bytes
   if (type === 'openOk' || type === 'fin' || type === 'rst' || type === 'bindOk') return null
   if (bytes.length === 0) throw new MuxProtocolError(`${type} 帧缺少 payload`)
+  let parsed
   try {
-    return JSON.parse(textDec.decode(bytes))
+    parsed = JSON.parse(textDec.decode(bytes))
   } catch {
     throw new MuxProtocolError(`${type} 帧 payload 不是合法 JSON`)
   }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new MuxProtocolError(`${type} 帧 payload 不是 JSON 对象`)
+  }
+  return parsed
 }
 
 // ─────────────────────────── 授权（ZTNA 的正文） ───────────────────────────
@@ -256,6 +267,8 @@ class Channel {
     /** 各方向独立记水位：重复 pause 会往同一 socket 上叠 drain 监听器 */
     this.slowTarget = false
     this.slowClient = false
+    this.onTargetDrain = null
+    this.onClientDrain = null
   }
 
   send(type, obj, raw) {
@@ -267,11 +280,13 @@ class Channel {
     if (this.dead || !this.sock) return
     if (this.sock.write(buf) || this.slowTarget) return
     this.slowTarget = true
-    this.sess.sock.pause()
-    this.sock.once('drain', () => {
+    this.sess.pauseFor(this)
+    // 解除必须走 resumeFor：会话读是整条连接共享的，一条通道 drain 不能替别的通道解禁
+    this.onTargetDrain = () => {
       this.slowTarget = false
-      this.sess.sock.resume()
-    })
+      this.sess.resumeFor(this)
+    }
+    this.sock.once('drain', this.onTargetDrain)
   }
 
   /**
@@ -284,15 +299,28 @@ class Channel {
     if (this.sess.write('data', this.chan, null, buf) || this.slowClient) return
     this.slowClient = true
     this.sock.pause()
-    this.sess.sock.once('drain', () => {
+    this.onClientDrain = () => {
       this.slowClient = false
-      this.sock.resume()
-    })
+      try { this.sock.resume() } catch { /* 通道已关 */ }
+    }
+    this.sess.sock.once('drain', this.onClientDrain)
   }
 
   close(rst) {
     if (this.dead) return
     this.dead = true
+    // 背压登记要在这里清掉：destroy 之后 'drain' 永不到来，
+    // 少了这一步会话读就带着一个再没人解除的 pause 结束 —— 心跳照发，
+    // 看上去会话还活着，实际一个字节也不再流动，只能等连续 3 次 PING 无 PONG 才判死。
+    if (this.slowTarget) {
+      try { this.sock?.off('drain', this.onTargetDrain) } catch { /* 已断开 */ }
+      this.slowTarget = false
+      this.sess.resumeFor(this)
+    }
+    if (this.slowClient) {
+      try { this.sess.sock.off('drain', this.onClientDrain) } catch { /* 已断开 */ }
+      this.slowClient = false
+    }
     try { this.sock?.destroy() } catch { /* 已断开 */ }
     this.sess.channels.delete(this.chan)
     if (!this.outFin) {
@@ -318,6 +346,7 @@ class Session {
     this.startedAt = now()
     this.missedPong = 0
     this.decoder = createDecoder('even', c => this.channels.has(c))
+    this.slowChannels = new Set() // 正压着会话读的通道
     this.pingTimer = null
     sock.on('data', chunk => this.onBytes(chunk))
     sock.on('error', err => this.kill(`socket 错误: ${err.message}`))
@@ -339,6 +368,21 @@ class Session {
     this.write(type, chan, obj, raw)
   }
 
+  /**
+   * 会话读是共享资源，pause/resume 必须引用计数。
+   * 每条压住会话读的通道各自等自己本机侧 socket 的 'drain'；
+   * 谁先 drain 就解除整条会话的暂停，会把还在排队的另一条通道的 write 缓冲放成无上限增长。
+   */
+  pauseFor(ch) {
+    this.slowChannels.add(ch)
+    this.sock.pause()
+  }
+
+  resumeFor(ch) {
+    this.slowChannels.delete(ch)
+    if (this.slowChannels.size === 0 && !this.dead) this.sock.resume()
+  }
+
   onBytes(chunk) {
     let frames
     try {
@@ -349,7 +393,19 @@ class Session {
       this.kill(err.message)
       return
     }
-    for (const f of frames) this.onFrame(f)
+    // onFrame 必须逐帧包起来：解码器交出的是合法 JSON，字段形状却由对端说了算。
+    // 帧失同步（decoder.push 抛错）才整条会话作废；形状错只作废这一帧的发送方 ——
+    // 但绝不能吃异常：异常从 net/tls 的 'data' 监听器里冒出去就是 uncaughtException，
+    // 一台网关上所有租户的会话一起没。未认证即可达的 hello/auth 正是这个形状。
+    for (const f of frames) {
+      try {
+        this.onFrame(f)
+      } catch (err) {
+        log(this, 'FATAL', `帧处理异常 ${f.type}: ${err.message}`)
+        this.kill(`帧处理异常: ${err.message}`)
+        return
+      }
+    }
   }
 
   onFrame(f) {
@@ -358,11 +414,15 @@ class Session {
     // 网关当场变成开放中继。
     if (!this.user && !PRE_AUTH.has(f.type)) return this.kill(`未认证即发 ${f.type}，会话作废`)
     switch (f.type) {
-      case 'hello':
-        this.hello = f.payload
-        log(this, 'INFO', `HELLO ${f.payload.clientVersion || '?'} dev=${f.payload.deviceName || '?'} 自报=${f.payload.selfReportedUser || '-'}`)
+      case 'hello': {
+        // payload 由对端给，`null` 是合法 JSON（decodePayload 只在空字节时抛）
+        const h = f.payload || {}
+        this.hello = h
+        log(this, 'INFO', `HELLO ${h.clientVersion || '?'} dev=${h.deviceName || '?'} 自报=${h.selfReportedUser || '-'}`)
         return
+      }
       case 'auth':
+        if (!f.payload) return this.kill('auth 帧 payload 为空')
         return this.doAuth(f.payload)
       case 'ping':
         return this.send('pong', GLOBAL_CHAN, { seq: f.payload?.seq })
@@ -414,6 +474,9 @@ class Session {
       this.user = rec.user
       this.role = rec.role
     }
+    // 重放的 AUTH 不能再起一个心跳：pingTimer 只存最后一个句柄，前一个 setInterval
+    // 从此没人 clearInterval，会话 kill 之后照发 PING（写已销毁的 socket）。
+    if (!this.pingTimer) this.startHeartbeat()
     const role = (this.cfg.roles || {})[this.role] || { allow: [] }
     this.send('helloOk', GLOBAL_CHAN, {
       sessionId: this.sid,
@@ -476,6 +539,10 @@ class Session {
       return
     }
     // 连**校验过的那个 IP**，不重新解析：否则校验与连接之间还能被重绑一次
+    // await 期间会话可能已经 kill（客户端断开 / 帧错误）：kill 里 close 通道时
+    // ch.sock 还是 null，什么都关不到，所以必须在这里补一次存活检查再连，
+    // 否则留下一条通往内网目标的孤儿连接，且没有任何句柄能把它关掉。
+    if (this.dead) return
     const sock = net.connect({ host: addrs[0].address, port: p.port })
     ch.sock = sock
     sock.setNoDelay(true)
@@ -534,11 +601,17 @@ class Session {
   }
 
   doUnbind(p) {
-    const key = `${String(p.bindHost).toLowerCase()}:${p.bindPort}`
+    const b = p || {}
+    const key = `${String(b.bindHost).toLowerCase()}:${b.bindPort}`
     const server = this.listeners.get(key)
     if (server) {
       try { server.close() } catch { /* 已关 */ }
       this.listeners.delete(key)
+      log(this, 'OK', `UNBIND ${key}`)
+    } else {
+      // 认不出来的 UNBIND 要说出来：静默 bindOk 会让客户端以为规则已摘，
+      // 而网关上的 listener 还占着那个端口，以后重加同端口只会以「已存在」失败
+      log(this, 'BAD', `UNBIND ${key} 无对应绑定`)
     }
     this.send('bindOk', GLOBAL_CHAN)
   }

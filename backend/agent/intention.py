@@ -652,18 +652,6 @@ def reclassify(
             guide = _LEVEL_GUIDE.get(level, guide)
             changed = True
 
-    # ── 紧急度提升 ──
-    # 接近末尾（剩 ≤ 3 轮）→ 强调收敛。
-    # 可达性提醒：driver 只在 iteration % reclassify_interval(=5) == 0 调用本函数，
-    # 故该分支只在 max_iterations ≡ 1..3 (mod 5) 时命中（默认 100 永不命中）；
-    # driver 另有一个每轮都检查、且每 run 只发一次的同类提示。
-    if remaining <= 3 and iteration > 0:
-        guide += (
-            "\n\n[紧急] 剩余迭代机会不多，请立即收敛到当前进度，"
-            "不要再调用新工具，直接生成进度总结。"
-        )
-        changed = True
-
     if not changed:
         return original
 

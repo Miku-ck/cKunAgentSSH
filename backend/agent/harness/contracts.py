@@ -53,9 +53,7 @@ class ErrorType(str, Enum):
 
 class TracePhase(str, Enum):
     """事件阶段"""
-    PRE = "pre"
     DURING = "during"
-    POST = "post"
 
 
 @dataclass

@@ -31,7 +31,7 @@ interface BridgeEnv {
 }
 
 /** 桥接业务操作：与 WS req 帧（bridge-ws-client）共用同一实现（dispatch） */
-export type BridgeOp = 'ping' | 'ssh_exec' | 'ssh_connect' | 'ssh_disconnect'
+export type BridgeOp = 'ssh_exec' | 'ssh_connect' | 'ssh_disconnect'
 /** dispatch 结果：status 为 HTTP 风格状态码，body 与后端预期的响应体同构 */
 export interface DispatchResult {
   status: number
@@ -91,9 +91,6 @@ export class ElectronBridge {
     data = data || {}
     try {
       switch (op) {
-        case 'ping':
-          return { status: 200, body: { success: true, pong: true, ts: Date.now() } }
-
         case 'ssh_exec': {
           if (!data.sshSessionId || typeof data.sshSessionId !== 'string') {
             return { status: 400, body: { success: false, error: 'Missing sshSessionId' } }

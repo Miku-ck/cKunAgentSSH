@@ -159,12 +159,9 @@ export interface ExecPolicyInput {
   hostAlias: string
 }
 
-export type ExecPolicy =
-  | { decision: 'allow' }
-  | { decision: 'deny'; reason: string }
-  | { decision: 'ask'; reason: string; zh: string }
-
-export function execPolicy(input: ExecPolicyInput): ExecPolicy {
+export function execPolicy(
+  input: ExecPolicyInput,
+): { decision: 'allow' } | { decision: 'deny'; reason: string } | { decision: 'ask'; reason: string; zh: string } {
   const v = classifyCommand(input.command)
   const isProd = input.environment === 'prod'
   if (v.cls === 'readonly') return { decision: 'allow' }

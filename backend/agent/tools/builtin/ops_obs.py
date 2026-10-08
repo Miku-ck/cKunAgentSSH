@@ -19,6 +19,18 @@ from agent.remote_protocol import EXIT_CODE_PREFIX
 # 契约源：与远端白名单执行器（scripts/deploy/agent-exec.py）对齐，
 # 由 backend/tests/test_remote_whitelist_contract.py 跨端校验。
 
+def _without_sentinel(raw: str) -> str:
+    """剔除 run_headless 恒追加的 [exit_code=…] 哨兵行，返回有效输出。
+
+    执行通道把退出码哨兵拼在正文之后（ops_common.run_headless），所以「整串不含
+    哨兵」这类判据对任何成功输出都恒假 —— 见 S6-07。逐行剔除才是与本文件进程段
+    一致的读法。
+    """
+    return "\n".join(
+        line for line in raw.splitlines() if EXIT_CODE_PREFIX not in line
+    ).strip()
+
+
 def sys_overview_cmd(top: int) -> str:
     """sys_overview 远端模板：多行只读观测脚本（; 串联，缺失命令不影响其余）。"""
     return "\n".join(
@@ -234,16 +246,17 @@ class NetworkProbeTool(BaseTool):
                 note = "（bash /dev/tcp 与 nc 均不可用，连通性探测跳过）"
 
         # 本地监听状态：优先 ss，无结果时回退 netstat（跨平台健壮性）
-        listen = ""
+        # S6-07：原判据是整串 `EXIT_CODE_PREFIX not in ss_out`，而 run_headless 对
+        # 每一次成功执行都无条件追加该哨兵 ⇒ 条件恒假 ⇒ 本段永远输出「（无监听信息）」，
+        # 对「端口是否在听」这个核心问题恒答否，netstat 回退支也因此不可达。
+        # 改为与本文件进程段（逐行跳过哨兵）同一口径。
         _, ss_out = await run_headless(context, netprobe_listen_cmd(str(port)), timeout=15)
-        if ss_out.strip() and EXIT_CODE_PREFIX not in ss_out:
-            listen = ss_out.strip()
-        else:
+        listen = _without_sentinel(ss_out)
+        if not listen:
             _, net_out = await run_headless(
                 context, netprobe_listen_fallback_cmd(str(port)), timeout=15
             )
-            if net_out.strip() and EXIT_CODE_PREFIX not in net_out:
-                listen = net_out.strip()
+            listen = _without_sentinel(net_out)
 
         sections = []
         if connected is True:

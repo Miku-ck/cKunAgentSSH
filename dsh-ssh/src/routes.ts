@@ -41,6 +41,17 @@ function readBody(req: IncomingMessage): Promise<string> {
   })
 }
 
+/**
+ * Reduce a caller-supplied filename to a single safe path segment.
+ * Used by upload, where the value lands in both a local temp path and the
+ * remote target path — a traversal here escapes tmpdir locally and writes
+ * outside the requested directory remotely.
+ */
+function safeFileName(raw: string): string {
+  const base = raw.split(/[/\\]/).filter(Boolean).pop() ?? 'upload'
+  return base === '.' || base === '..' || base === '' ? 'upload' : base
+}
+
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   const text = await readBody(req)
   if (!text) return {}
@@ -216,7 +227,12 @@ export function makeRoutes(engine: SshEngine, store: HostStore): { routes: WebRo
         const q = queryOf(req)
         const alias = q.get('alias') ?? ''
         const remote = q.get('path') ?? ''
-        const name = q.get('name') ?? 'upload'
+        // `name` 同时进本地临时路径和远端目标路径，两处都按文件名用，所以在这里过一次：
+        // 未过滤时 name=..%2F..%2Fwindows%2Fwin.ini 会被解码成 '../../…'，join 之后
+        // 写盘落在 tmpdir 之外；同一串又拼进 `${remote}/${name}`，绕过上面那条
+        // remote.includes('..') 检查，在 SSH 主机上写出 ../../etc/sudoers。
+        // GUI 侧本来只传 basename（client/api.ts），此处收紧不影响正常调用。
+        const name = safeFileName(q.get('name') ?? 'upload')
         if (!alias || !remote || remote.includes('..')) return sendError(res, 400, 'alias and path query params required')
         const local = join(tmpdir(), `ckun-dsh-ssh-up-${Date.now()}-${randomUUID().slice(0, 8)}`, name)
         const { mkdirSync, writeFileSync } = await import('node:fs')

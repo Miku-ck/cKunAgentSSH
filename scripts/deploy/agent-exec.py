@@ -427,6 +427,7 @@ def v_netstat_listen(cmd: str) -> bool:
 
 RE_JOB_LAUNCH = re.compile(
     rf"^mkdir -p (\S+)\n"
+    rf"rm -f \1/rc\n"
     rf"echo ({_B64}) \| base64 -d > \1/run\.sh\n"
     rf"setsid bash \1/run\.sh > \1/out\.log 2>&1 < /dev/null &\n"
     rf"echo \$!$"
@@ -461,9 +462,9 @@ def v_job_launch(cmd: str) -> bool:
 
 RE_JOB_KILL = re.compile(
     r"^kill -TERM -- -([1-9]\d*) 2>/dev/null; sleep 3; "
-    r"if kill -0 \1 2>/dev/null; then "
+    r"if kill -0 -- -\1 2>/dev/null; then "
     r"kill -KILL -- -\1 2>/dev/null; sleep 1; "
-    r"kill -0 \1 2>/dev/null && echo CKUNJOB_STILL \|\| echo CKUNJOB_DEAD; "
+    r"kill -0 -- -\1 2>/dev/null && echo CKUNJOB_STILL \|\| echo CKUNJOB_DEAD; "
     r"else echo CKUNJOB_DEAD; fi$"
 )
 
@@ -474,7 +475,7 @@ def v_job_kill(cmd: str) -> bool:
 
 
 RE_JOB_ALIVE = re.compile(
-    r"^for p in ([1-9]\d*(?: [1-9]\d*)*); do kill -0 \$p 2>/dev/null "
+    r"^for p in ([1-9]\d*(?: [1-9]\d*)*); do kill -0 -- -\$p 2>/dev/null "
     r"&& echo \"\$p ALIVE\" \|\| echo \"\$p DEAD\"; done$"
 )
 
