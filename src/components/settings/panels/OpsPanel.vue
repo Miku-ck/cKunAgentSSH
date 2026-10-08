@@ -6,6 +6,10 @@
     </header>
 
     <div class="panel-body">
+      <!-- loading 此前在 composable 里维护却没有任何消费方：后端冷启动那几秒里
+           这一页是"什么都没发生"的空态，与"读失败"（有红条）和"读到了"（有值）
+           两种状态都分不清。给它一个出口，读失败时它已被置回 false。 -->
+      <p v-if="loading" class="hint">正在读取运维设置…</p>
       <p v-if="loadError" class="panel-error">{{ loadError }}</p>
 
       <section class="section">
@@ -174,6 +178,7 @@ const {
   diagnostics,
   diagLoading,
   diagError,
+  loading,
   loadError,
   load,
   saveProxy,

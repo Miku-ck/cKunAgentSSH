@@ -88,6 +88,15 @@
         <ToggleSwitch v-model="settings.postProcess.generateSkill" />
       </SettingRow>
 
+      <!-- 与 MemoryPanel 的 memoryLoaded 同一件事的另一半：后处理四项走的是同一套
+           createBackendSync（只发改动过的字段，数据侧不会再抹库），但"面板显示的就是
+           库里的值"这句话在第一次成功读到之前是假的 —— 启动时后端未就绪是常态，
+           那时这四项是 localStorage 默认，用户拨动任一开关前有权知道。 -->
+      <p v-if="!settingsStore.postProcessLoaded" class="hint saving unread">
+        尚未读到服务端后处理设置，以上为本地保存值。
+        <button type="button" class="retry-btn" @click="settingsStore.loadPostProcessSettings()">重试</button>
+      </p>
+
       <div class="section-divider" />
 
       <h4 class="section-title">会话保留</h4>
@@ -258,6 +267,10 @@ onMounted(async () => {
 }
 .setting-number:focus { border-color: var(--accent-primary); }
 .hint.saving { margin: 8px 0 0; font-size: 11px; color: var(--text-tertiary); }
+/* .unread 必须单独上色：模板里 class 写了 unread 却没有任何规则接它时，这条
+   「尚未读到服务端」的提示会跟普通灰字一个亮度 —— 与它在讲的事（显示的是本地
+   值，不是库里的）正好相反。MemoryPanel 的 .foot-hint.unread 是同一条规则。 */
+.hint.saving.unread { color: var(--status-warn-text); }
 
 .section-divider {
   height: 1px;

@@ -739,22 +739,33 @@ function handleClickOutside(e: MouseEvent) {
   }
 }
 
-// Escape 关闭模型对话框
+/**
+ * Escape 关闭模型对话框。
+ *
+ * 必须注册在 **捕获** 阶段：SettingsDialog 自己的 Esc 处理器也挂在 window 上，且
+ * 比本组件先注册（它在 App 挂载时就已存在）。两个都是 window 级监听器，同处一个
+ * 目标上的 stopPropagation 拦不住先跑的那个 —— 冒泡阶段停传播时外层已经关过窗了，
+ * 结果就是按一次 Esc 同时关掉编辑框和整个设置对话框。
+ * 捕获阶段先跑、preventDefault 打标记，SettingsDialog 那侧据此跳过（见它的注释）。
+ */
 function handleKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape' && showDialog.value) closeDialog()
+  if (e.key !== 'Escape' || !showDialog.value) return
+  e.preventDefault()
+  e.stopImmediatePropagation()
+  closeDialog()
 }
 
 onMounted(() => {
   if (store.modelConfigs.length === 0 && !store.modelsLoading) {
-    store.fetchModelConfigs()
+    void store.fetchModelConfigs()
   }
   document.addEventListener('click', handleClickOutside)
-  window.addEventListener('keydown', handleKeydown)
+  window.addEventListener('keydown', handleKeydown, true)
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('click', handleClickOutside)
-  window.removeEventListener('keydown', handleKeydown)
+  window.removeEventListener('keydown', handleKeydown, true)
 })
 
 // ── 辅助函数 ──
@@ -769,9 +780,9 @@ function isAnyDefault(m: ModelConfig): boolean {
 }
 
 function formatTokenCount(n: number): string {
-if (n >= 1000000) return (n / 1000000).toFixed(0) + 'M'
-if (n >= 1000) return (n / 1000).toFixed(0) + 'K'
-return String(n)
+  if (n >= 1000000) return (n / 1000000).toFixed(0) + 'M'
+  if (n >= 1000) return (n / 1000).toFixed(0) + 'K'
+  return String(n)
 }
 
 </script>
@@ -780,6 +791,10 @@ return String(n)
 <style scoped>
 /* 面板骨架与 .setting-select 见 settings-panel-base.css */
 
+/* 错误红统一取 --status-error-text，不用同义的 --danger-text：设置面板内
+   其余各处（settings-groups.css 的 .hint.err、AgentPanel 的输入框红边、
+   OpsPanel 的 .panel-error）都读这一枚，两枚混用只会让同一个"失败"语义
+   在同一页里出现两种深浅。 */
 .models-panel { height: 100%; display: flex; flex-direction: column; }
 
 /* 有意的本地差异：卡片网格隐藏滚动条（骨架的 overflow-y / padding-right 仍生效） */
@@ -804,7 +819,7 @@ return String(n)
   font-size: 13px;
   color: var(--text-secondary);
 }
-.state-error { color: var(--danger-text); flex-direction: column; align-items: flex-start; gap: 8px; }
+.state-error { color: var(--status-error-text); flex-direction: column; align-items: flex-start; gap: 8px; }
 
 .spinner {
   width: 16px; height: 16px;
@@ -902,7 +917,7 @@ return String(n)
   border-top: 1px solid var(--border-subtle);
 }
 .test-ok { color: var(--status-success-text); }
-.test-error { color: var(--danger-text); }
+.test-error { color: var(--status-error-text); }
 .test-testing { color: var(--text-secondary); }
 .test-latency {
   margin-left: auto;
@@ -942,7 +957,7 @@ return String(n)
 }
 .icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 .icon-btn:disabled { opacity: 0.3; cursor: not-allowed; }
-.icon-btn-danger:hover { background: color-mix(in srgb, var(--danger-text) 10%, transparent); color: var(--danger-text); }
+.icon-btn-danger:hover { background: color-mix(in srgb, var(--status-error-text) 10%, transparent); color: var(--status-error-text); }
 .icon-btn-default-active { color: var(--accent-yellow); opacity: 1 !important; }
 .icon-btn-default-active:disabled { opacity: 0.75 !important; cursor: default; }
 
@@ -1002,7 +1017,7 @@ return String(n)
 .form-label { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
 .form-hint { margin: 0; font-size: 11px; color: var(--text-tertiary); }
 .form-hint.warn { color: var(--status-warn-text); }
-.required { color: var(--danger-text); }
+.required { color: var(--status-error-text); }
 .form-input {
   width: 100%;
   padding: 8px 10px;
@@ -1160,11 +1175,12 @@ return String(n)
   padding-bottom: 0;
 }
 
-/* 能力开关 */
+/* 能力开关（三列勾选撤掉后只剩「设为 SSH 默认」一枚，网格留着就是给一个
+   复选框撑出两个空列位；单列行内排布即够，将来真加回多枚再改） */
 .capability-row {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
 }
 .capability-item {
   display: flex;

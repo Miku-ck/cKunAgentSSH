@@ -81,27 +81,29 @@ const IconOps = markRaw({
 const visible = ref(false)
 const activeCategory = ref<SettingCategory>('models')
 
-const categories: { id: SettingCategory; label: string; icon: Component }[] = [
-  { id: 'models',         label: '模型',   icon: IconModels },
-  { id: 'chat',           label: '对话',   icon: IconChat },
-  { id: 'appearance',     label: '外观',   icon: IconAppearance },
-  { id: 'skills',         label: '技能',   icon: IconSkills },
-  { id: 'agent',          label: 'Agent',  icon: IconAgent },
-  { id: 'memory',         label: '记忆',   icon: IconMemory },
-  { id: 'ops',            label: '运维',   icon: IconOps },
-]
-
-const panelMap: Record<SettingCategory, Component> = {
-  models:         markRaw(ModelsPanel),
-  chat:           markRaw(ChatPanel),
-  appearance:     markRaw(AppearancePanel),
-  skills:         markRaw(SkillsPanel),
-  agent:          markRaw(AgentPanel),
-  memory:         markRaw(MemoryPanel),
-  ops:            markRaw(OpsPanel),
+/**
+ * 分类清单的唯一一份。
+ *
+ * 先前是 `categories` 数组与 `panelMap` 各抄一遍七个 id：panelMap 靠
+ * Record<SettingCategory, …> 有编译期兜底（漏 key 报错），数组那一侧没有 ——
+ * 漏一项只是侧栏少一个入口，面板仍然存在、也仍能被 openSettings('xxx') 打开，
+ * 编译照过、运行照跑，只是用户从此找不到它。本仓这类"抄两份清单"漂过不止一次，
+ * 这里合成一份 Record，让标签、图标、面板三者受同一道编译检查。
+ */
+const PANELS: Record<SettingCategory, { label: string; icon: Component; panel: Component }> = {
+  models:     { label: '模型',  icon: IconModels,     panel: markRaw(ModelsPanel) },
+  chat:       { label: '对话',  icon: IconChat,       panel: markRaw(ChatPanel) },
+  appearance: { label: '外观',  icon: IconAppearance, panel: markRaw(AppearancePanel) },
+  skills:     { label: '技能',  icon: IconSkills,     panel: markRaw(SkillsPanel) },
+  agent:      { label: 'Agent', icon: IconAgent,      panel: markRaw(AgentPanel) },
+  memory:     { label: '记忆',  icon: IconMemory,     panel: markRaw(MemoryPanel) },
+  ops:        { label: '运维',  icon: IconOps,        panel: markRaw(OpsPanel) },
 }
 
-const currentPanel = computed(() => panelMap[activeCategory.value])
+const categories = (Object.keys(PANELS) as SettingCategory[])
+  .map((id) => ({ id, label: PANELS[id].label, icon: PANELS[id].icon }))
+
+const currentPanel = computed(() => PANELS[activeCategory.value].panel)
 
 function open(category: SettingCategory = 'models') {
   activeCategory.value = category
@@ -118,10 +120,14 @@ let keyHandler: ((e: KeyboardEvent) => void) | null = null
 watch(visible, (v) => {
   if (v) {
     keyHandler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        close()
-      }
+      if (e.key !== 'Escape') return
+      // 内层弹窗（如 ModelsPanel 的编辑对话框）先吃掉这次 Esc：它在 window 的**捕获**
+      // 阶段注册，比本处理器更早跑到，并已 preventDefault。没有这道判断，按一次 Esc
+      // 会把内层与整个设置对话框一起关掉 —— 用户只想关编辑框，结果整页设置连同
+      // 未保存的表单一起没了。冒泡阶段的 stopPropagation 救不了：那时外层已经跑过。
+      if (e.defaultPrevented) return
+      e.preventDefault()
+      close()
     }
     window.addEventListener('keydown', keyHandler)
   } else if (keyHandler) {

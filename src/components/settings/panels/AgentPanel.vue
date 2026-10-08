@@ -23,7 +23,7 @@
             <label class="budget-field">
               <span class="budget-label">成本上限（USD）</span>
               <input
-                v-model.number="budget.maxCostUsd"
+                v-model.number="agentCfg.maxCostUsd"
                 class="num-input"
                 :class="{ 'input-error': budgetCostInvalid }"
                 type="number"
@@ -37,7 +37,7 @@
             <label class="budget-field">
               <span class="budget-label">Token 上限</span>
               <input
-                v-model.number="budget.maxTotalTokens"
+                v-model.number="agentCfg.maxTotalTokens"
                 class="num-input"
                 :class="{ 'input-error': budgetTokenInvalid }"
                 type="number"
@@ -57,7 +57,7 @@
                 3M token 掐断时用它；代价是这次跑飞了没有硬止损。
               </span>
             </div>
-            <ToggleSwitch v-model="budget.breakerDisabled" />
+            <ToggleSwitch v-model="agentCfg.breakerDisabled" />
           </div>
           <p class="hint muted">
             修改即时保存到本地设置，下一次运行生效。数字框里的 0 = 不覆盖后端默认；
@@ -82,7 +82,7 @@
           <div class="runtime-row">
             <label class="runtime-field">
               <span class="runtime-label">最大迭代步数</span>
-              <SettingSlider v-model="runtimeCfg.maxIterations" class="slider-inline" :min="1" :max="500" unit="" />
+              <SettingSlider v-model="agentCfg.maxIterations" class="slider-inline" :min="1" :max="500" unit="" />
             </label>
             <p class="hint muted runtime-desc">
               后端 <code>max_iterations</code> 允许 1-500。动态预算开启时优先使用演化习得值，越界才退回此上限。
@@ -95,14 +95,14 @@
               <span class="runtime-label">动态步数预算</span>
               <span class="runtime-desc">允许演化模块按 <code>max_iterations</code>/温度/输出长度自学习覆盖</span>
             </div>
-            <ToggleSwitch v-model="runtimeCfg.dynamicBudget" />
+            <ToggleSwitch v-model="agentCfg.dynamicBudget" />
           </div>
           <div class="runtime-toggle-row">
             <div class="runtime-toggle-info">
               <span class="runtime-label">意图识别 + 思考引导</span>
               <span class="runtime-desc">关闭后 run 跳过规划阶段、无思考预算限制、无引导语注入（旧行为）</span>
             </div>
-            <ToggleSwitch v-model="runtimeCfg.enableIntentionGuide" />
+            <ToggleSwitch v-model="agentCfg.enableIntentionGuide" />
           </div>
         </div>
       </section>
@@ -190,7 +190,7 @@
                 只决定「添加连接」表单的初值，仍可逐条改；编辑已有连接时保留它原本的标记，不会被这里重写
               </span>
             </div>
-            <select v-model="opsCfg.defaultEnvironment" class="setting-select">
+            <select v-model="agentCfg.defaultEnvironment" class="setting-select">
               <option value="test">测试 (test)</option>
               <option value="prod">生产 (prod)</option>
             </select>
@@ -204,7 +204,7 @@
                 dangerous 逐条审批、prod 危险命令必须预登记 allowlist、hardline 无条件阻断 —— 三条都不受此开关影响
               </span>
             </div>
-            <ToggleSwitch v-model="opsCfg.prodConfirm" />
+            <ToggleSwitch v-model="agentCfg.prodConfirm" />
           </div>
         </div>
       </section>
@@ -407,22 +407,26 @@ const { confirm } = useConfirm()
 
 const open = reactive({ budget: false, runtime: true, ops: true, tools: true, perm: false, strat: false, webtools: false })
 
-// ── 运行预算（写本地设置，ssh-ai store 在下次运行时读取并随请求传给后端） ──
-const budget = computed(() => settingsStore.settings.agent)
+/**
+ * 三个折叠节（运行预算 / 运行控制 / 运维策略）读的都是同一份 agent 设置，
+ * 写本地设置即刻生效：ssh-ai store 在下一次运行时把它们随请求发给后端。
+ *
+ * 此前按节各立一个 computed（budget / runtimeCfg / opsCfg），三个表达式逐字相同 ——
+ * 同一份数据三份名字，改一处就得记着另外两处。收敛成一个。
+ */
+const agentCfg = computed(() => settingsStore.settings.agent)
 
-// A3/A4/E1：迭代步数 + 动态预算 + 意图引导。同 budget，写本地设置即生效
-const runtimeCfg = computed(() => settingsStore.settings.agent)
+// A3/A4/E1：迭代步数 + 动态预算 + 意图引导
 const runtimeSummary = computed(() => {
-  const a = runtimeCfg.value
+  const a = agentCfg.value
   const parts = [`≤${a.maxIterations} 步`]
   if (a.dynamicBudget) parts.push('动态')
   if (a.enableIntentionGuide) parts.push('意图引导')
   return parts.join(' · ')
 })
 
-// E3/E4/E5：运维策略。defaultEnvironment/prodConfirm 是本地设置（写 localStorage 即刻生效），
-// allowlist TTL 落在后端 gate，单独走 API + 失败回滚。
-const opsCfg = computed(() => settingsStore.settings.agent)
+// E3/E4/E5：运维策略。defaultEnvironment/prodConfirm 读上面的 agentCfg（写 localStorage
+// 即刻生效）；allowlist TTL / 自动审批 / 兜底等待落在后端 gate，单独走 API + 失败回滚。
 const ttlOptions: { value: number; label: string }[] = [
   { value: 0, label: '永久（不过期）' },
   { value: 24, label: '24 小时' },
@@ -552,7 +556,7 @@ async function onAutoApproveToggle(v: boolean) {
 }
 
 const opsSummary = computed(() => {
-  const a = opsCfg.value
+  const a = agentCfg.value
   const parts: string[] = []
   // 读失败时不许把本地硬编码的基线（0 = 永久、autoApprove = 开）当成服务端的确定值报头：
   // 那正是"面板写着什么、库里跑什么"两回事的来源，而唯一线索是一条会消失的 toast。
@@ -575,11 +579,11 @@ const opsSummary = computed(() => {
 // 红框判据与 normalizeBudget 共用这一对 computed：两处各写一遍区间就是第二份事实源，
 // 上一轮它只写了下界（<0），于是越上界的值框不红、却会被闸门静默折成 0。
 const budgetCostInvalid = computed(() => {
-  const v = budget.value.maxCostUsd
+  const v = agentCfg.value.maxCostUsd
   return !Number.isFinite(v) || v < BUDGET_LIMITS.maxCostUsd.min || v > BUDGET_LIMITS.maxCostUsd.max
 })
 const budgetTokenInvalid = computed(() => {
-  const v = budget.value.maxTotalTokens
+  const v = agentCfg.value.maxTotalTokens
   return !Number.isFinite(v) || v < BUDGET_LIMITS.maxTotalTokens.min
     || v > BUDGET_LIMITS.maxTotalTokens.max || !Number.isInteger(Number(v))
 })
@@ -599,7 +603,7 @@ function normalizeBudget() {
   }
 }
 const budgetSummary = computed(() => {
-  const { maxCostUsd, maxTotalTokens, breakerDisabled } = budget.value
+  const { maxCostUsd, maxTotalTokens, breakerDisabled } = agentCfg.value
   // 勾选关闭时，两个数字框里的值不再随请求发出，徽标若仍显示它们就是撒谎。
   if (breakerDisabled) return '熔断已关'
   const parts: string[] = []

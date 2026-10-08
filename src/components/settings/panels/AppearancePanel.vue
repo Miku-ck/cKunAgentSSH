@@ -501,14 +501,15 @@ const terminalBgModeLabels: Record<TerminalBgMode, string> = {
   background: var(--bg-hover);
 }
 
+/* 同 ModelsPanel：错误红取 --status-error-text，与设置面板其余各处同一枚 */
 .bg-btn.danger {
-  color: var(--danger-text);
+  color: var(--status-error-text);
   border-color: var(--border-input);
 }
 
 .bg-btn.danger:hover {
-  border-color: var(--danger-text);
-  background: color-mix(in srgb, var(--danger-text) 10%, transparent);
+  border-color: var(--status-error-text);
+  background: color-mix(in srgb, var(--status-error-text) 10%, transparent);
 }
 
 .bg-preview-row {
