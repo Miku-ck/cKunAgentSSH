@@ -31,7 +31,7 @@ interface BridgeEnv {
 }
 
 /** 桥接业务操作：与 WS req 帧（bridge-ws-client）共用同一实现（dispatch） */
-export type BridgeOp = 'ssh_exec' | 'ssh_connect' | 'ssh_disconnect'
+export type BridgeOp = 'ssh_exec' | 'ssh_connect' | 'ssh_disconnect' | 'ssh_list_connections'
 /** dispatch 结果：status 为 HTTP 风格状态码，body 与后端预期的响应体同构 */
 export interface DispatchResult {
   status: number
@@ -126,6 +126,31 @@ export class ElectronBridge {
           }
           const { id, name } = await this.sshManager.connectSftp(conn)
           return { status: 200, body: { success: true, sessionId: id, name } }
+        }
+
+        case 'ssh_list_connections': {
+          if (!this.sshStore) {
+            return { status: 500, body: { success: false, error: 'SSH store 未配置' } }
+          }
+          const all = await this.sshStore.list()
+          // 只投影调度侧需要的定位字段。sshStore.list() 返回的是**已解密**的记录
+          // （ssh_connect 正是拿它去建连的），原样回给后端等于把口令/passphrase
+          // 私钥路径发到 127.0.01 的 HTTP 响应体里，而这条通道没有鉴权。
+          return {
+            status: 200,
+            body: {
+              success: true,
+              connections: all.map((c) => ({
+                id: c.id,
+                name: c.name,
+                host: c.host,
+                port: c.port,
+                username: c.username,
+                authType: c.authType,
+                environment: c.environment ?? 'test',
+              })),
+            },
+          }
         }
 
         case 'ssh_disconnect': {

@@ -133,6 +133,61 @@ def _default_name(mode: str, parsed: dict) -> str:
     return "定时任务"
 
 
+async def _resolve_target_host(raw) -> tuple[str, str, str]:
+    """把模型给的目标主机写法归一化成连接配置 id（S7-09）。
+
+    返回 `(id, 说明, 错误)`。三个要点：
+
+    1. id 为空串是**合法档位**（只做模型侧检查、不建 SSH 会话），但必须在结果里写明
+       —— 原先 `target_host` 根本不在 schema 里，模型无从传，于是「让 Agent 每天巡检
+       web-01」建出来的任务天天跑、天天「已完成」、天天什么都没查（沉默降级，与 S7-02
+       的无会话路径拼成完整一条假动作）。
+    2. 主进程是唯一知道有哪些连接配置的地方，所以校验走桥；桥不可达/读不到列表时
+       **按原值收下并标注「未校验」**，不拿探活失败挡死建任务。
+    3. 命中不唯一或查不到时报错并列出可用目标 —— 这就是模型的发现路径，不需要再开
+       一个 list_hosts 动作。
+    """
+    value = (raw or "").strip() if isinstance(raw, str) else ""
+    if not value:
+        return "", "未指定 target_host：本任务不会建立 SSH 会话，也不会执行任何远程命令。", ""
+
+    from agent.electron_bridge import ElectronBridge
+
+    bridge = ElectronBridge()
+    note_prefix = ""
+    conns: list[dict] = []
+    if bridge.is_available():
+        try:
+            conns = await bridge.list_connections()
+        except Exception as e:  # 桥断了/主进程拒绝：降级为「未校验」
+            note_prefix = f"桥当前不可达（{type(e).__name__}），target_host 未校验；"
+    else:
+        note_prefix = "桥当前不可用，target_host 未校验；"
+
+    if conns:
+        by_id = {str(c.get("id") or ""): c for c in conns}
+        if value in by_id:
+            c = by_id[value]
+            return value, f"目标主机：{c.get('name')} ({c.get('username')}@{c.get('host')})。", ""
+        matches = [
+            c for c in conns
+            if value in (str(c.get("name") or ""), str(c.get("host") or ""),
+                         f"{c.get('username')}@{c.get('host')}")
+        ]
+        if len(matches) == 1:
+            mid = str(matches[0].get("id"))
+            return mid, f"已把 {value!r} 解析为连接配置 id={mid}。", ""
+        if len(matches) > 1:
+            opts = "、".join(f"{c.get('id')}({c.get('name')})" for c in matches)
+            return "", "", f"target_host {value!r} 命中 {len(matches)} 条连接配置，请改用具体的 id：{opts}"
+        opts = "、".join(
+            f"{c.get('id')}({c.get('name')} {c.get('username')}@{c.get('host')})" for c in conns
+        )
+        return "", "", f"找不到目标主机 {value!r}。可用连接配置：{opts}"
+
+    return value, f"{note_prefix}按原值 {value!r} 落库，运行时会以它作为连接配置 id。", ""
+
+
 class ScheduleOpTool(BaseTool):
     name = "schedule_op"
     description = (
@@ -179,6 +234,13 @@ class ScheduleOpTool(BaseTool):
                 "type": "string",
                 "description": "任务名称（可选，默认按规则派生）",
             },
+            "target_host": {
+                "type": "string",
+                "description": "目标主机：SSH 连接配置的 id，也可用唯一的连接名或 "
+                               "host / username@host 指代（会自动解析成 id）。"
+                               "留空 = 该任务不建立 SSH 会话、不执行任何远程命令。"
+                               "写错时结果会列出可用目标主机。",
+            },
         },
         "required": ["action"],
     }
@@ -217,19 +279,22 @@ class ScheduleOpTool(BaseTool):
         return None
 
     async def execute(self, context, action, mode="interval", interval_minutes=None,
-                      cron=None, task=None, command=None, schedule_id=None, name=None):
+                      cron=None, task=None, command=None, schedule_id=None, name=None,
+                      target_host=None):
         action = (action or "").strip()
         if action not in ("create", "list", "cancel"):
             return ToolResult(False, "", f"action 必须是 create|list|cancel，收到 {action!r}")
 
         if action == "create":
-            return await self._create(mode, interval_minutes, cron, task, command, name)
+            return await self._create(mode, interval_minutes, cron, task, command, name,
+                                      target_host)
         if action == "list":
             return await self._list()
         return await self._cancel(schedule_id)
 
     # ── create ──
-    async def _create(self, mode, interval_minutes, cron, task, command, name):
+    async def _create(self, mode, interval_minutes, cron, task, command, name,
+                      target_host=None):
         mode = (mode or "interval").strip()
         if mode not in ("interval", "cron"):
             return ToolResult(False, "", f"mode 必须是 interval|cron，收到 {mode!r}")
@@ -259,6 +324,10 @@ class ScheduleOpTool(BaseTool):
 
         task_name = (name or "").strip() or _default_name(mode, parsed)
 
+        host_id, host_note, host_err = await _resolve_target_host(target_host)
+        if host_err:
+            return ToolResult(False, "", host_err)
+
         data = {
             "name": task_name,
             "schedule_type": parsed["schedule_type"],
@@ -271,7 +340,10 @@ class ScheduleOpTool(BaseTool):
             # date.weekday()（0-6）比较，存 -1 等于埋一条永远不触发的周任务
             "weekday": parsed.get("weekday", 0),
             "day_of_month": parsed.get("day_of_month", 1),
-            "target_host": "",
+            # S7-09：解析后的连接配置 id（空串 = 本任务不建 SSH 会话）。原先这里是
+            # 硬编码 ""，而 schema 又没有 target_host 参数 —— 模型无从传，AI 排的班
+            # 永远不带目标主机。
+            "target_host": host_id,
             "task_prompt": task_prompt,
             "enabled": 1,
         }
@@ -294,7 +366,8 @@ class ScheduleOpTool(BaseTool):
         t = parsed["schedule_type"]
         return ToolResult(
             True,
-            f"已创建定时任务 schedule_id={sid}\n名称: {task_name}\n类型: {t}, 下次执行: {next_at}",
+            f"已创建定时任务 schedule_id={sid}\n名称: {task_name}\n类型: {t}, 下次执行: {next_at}\n"
+            f"{host_note}",
         )
 
     # ── list ──

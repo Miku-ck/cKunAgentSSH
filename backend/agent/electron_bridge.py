@@ -197,6 +197,20 @@ class ElectronBridge:
 
         return await self._send("ssh_connect", {"connectionId": connection_id}, timeout)
 
+    async def list_connections(self, timeout: float = 15.0) -> list[dict]:
+        """列出主进程保存的 SSH 连接配置（S7-09：定时任务需要目标主机 id）。
+
+        返回 [{id, name, host, port, username, authType, environment}] —— 主进程侧
+        已把凭据字段剥掉；这里只回读，不碰凭据。桥不可用时抛 BridgeError，由调用方
+        决定降级文案（定时任务工具据此把「不知道有哪些主机」如实告诉模型）。
+        """
+        if not self.is_available():
+            self._raise_unavailable()
+
+        result = await self._send("ssh_list_connections", {}, timeout)
+        connections = result.get("connections") if isinstance(result, dict) else None
+        return connections if isinstance(connections, list) else []
+
     async def disconnect_ssh(self, session_id: str, timeout: float = 15.0) -> dict:
         """关闭由 connect_ssh 建立的 SSH 会话，释放连接资源。"""
         if not self.is_available():
