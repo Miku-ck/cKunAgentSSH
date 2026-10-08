@@ -71,15 +71,11 @@
         @menu="showMenu"
       />
 
-      <!-- 空状态 -->
+      <!-- 空状态：只报「这里为什么是空的」。新建连接在头部一直有，
+           原先这里再放一枚同样的按钮，是把同一个动作在一个屏上画两遍。 -->
       <div v-if="filteredConnections.length === 0" class="rm-empty">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
         <div class="empty-title">{{ hasFilter ? '没有匹配的连接' : '还没有远程连接' }}</div>
         <div class="empty-desc">{{ hasFilter ? '尝试调整搜索或过滤条件' : '新建第一个连接,开始管理远程服务器' }}</div>
-        <button v-if="!hasFilter" class="rm-btn primary" @click="$emit('new-connection')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          新建连接
-        </button>
       </div>
     </div>
 
@@ -567,12 +563,6 @@ onUnmounted(() => {
   text-align: center;
 }
 
-.rm-empty svg {
-  color: var(--text-tertiary);
-  opacity: 0.4;
-  margin-bottom: 16px;
-}
-
 .empty-title {
   font-size: 14px;
   color: var(--text-secondary);
@@ -609,15 +599,16 @@ onUnmounted(() => {
 }
 
 .rm-btn.primary {
-  background: var(--accent-primary);
+  /* 强调只走描边与字色，不铺色块 —— 与 .sc-btn.primary / TunnelView 的 .btn.primary 同形。
+     实心 --accent-primary 摆在纸上就是页面上最响的一块皮，它不属于任何主题。 */
   border-color: var(--accent-primary);
-  color: var(--accent-on);
+  color: var(--accent-primary);
   font-weight: 500;
 }
 
 .rm-btn.primary:hover {
-  filter: brightness(1.1);
-  color: var(--accent-on);
+  background: var(--bg-hover);
+  color: var(--accent-primary);
 }
 
 .rm-btn.danger {

@@ -15,26 +15,18 @@
       </div>
     </div>
 
-    <!-- 无数据空态：错误优先于"采集中"，避免任何失败都被转圈遮罩（"一直卡在正在采集"根因） -->
+    <!-- 无数据空态：错误优先于"采集中"，避免任何失败都被转圈遮罩（"一直卡在正在采集"根因）。
+         三个分支都不再画图标：文案已经各自说清了是什么状态，图标只是同一句话的第二次表达。 -->
     <div v-if="!monitor.current" class="dash-empty">
       <template v-if="monitor.lastError">
-        <div class="dash-empty-icon dash-empty-icon-err">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="32" height="32"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-        </div>
-        <p>{{ monitor.polling ? '采集失败（自动重试中）' : '监控已中断' }}</p>
+        <p class="dash-empty-err">{{ monitor.polling ? '采集失败（自动重试中）' : '监控已中断' }}</p>
         <p class="dash-empty-sub">{{ monitor.lastError.message }}</p>
         <p v-if="monitor.lastError.retryable" class="dash-empty-sub dash-empty-sub-hint">连接恢复后将自动继续采集</p>
       </template>
       <template v-else-if="monitor.polling">
-        <div class="dash-empty-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="32" height="32"><path d="M21 12a9 9 0 1 1-6.2-8.56"/></svg>
-        </div>
         <p>正在采集服务器指标…</p>
       </template>
       <template v-else>
-        <div class="dash-empty-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="32" height="32"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
-        </div>
         <p>当前终端没有远程连接</p>
         <p class="dash-empty-sub">连接一台远程服务器后，指标将每 5 秒自动刷新</p>
       </template>
@@ -287,12 +279,9 @@ const Sparkline = defineComponent({
   font-size: 13px;
 }
 
-.dash-empty-icon {
-  color: var(--text-tertiary);
-  margin-bottom: 8px;
-}
-
-.dash-empty-icon-err {
+/* 图标位删掉后，错误态的红挪到文案上：这一档区分（失败 vs 还在采）本来就靠颜色说话，
+   只留图标不带红字等于把这条信息一起扔了。 */
+.dash-empty-err {
   color: var(--accent-red);
 }
 

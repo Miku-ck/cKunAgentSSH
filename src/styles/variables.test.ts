@@ -380,10 +380,16 @@ describe('atelier（手记）主题的令牌覆盖', () => {
     expect(btn).toMatch(/font-size:\s*inherit/)
     expect(btn).toMatch(/color:\s*inherit/)
     expect(btn).not.toMatch(/padding:/)
-    expect(btn).toMatch(/border-bottom:\s*1px dashed var\(--text-tertiary\)/)
     expect(ruleBlock(homeTitle, '.htt-pick')).not.toMatch(/margin:/)
-    // 整句压到 --text-secondary：这行是问句，不是一块招牌
-    expect(ruleBlock(homeTitle, '.htt')).toMatch(/color:\s*var\(--text-secondary\)/)
+    // 整句压到 --text-tertiary（用户判定：这行问句还要再灰一档，不是一块招牌），
+    // 于是虚线必须往上挪到 --text-secondary —— 那枚词的全部可点线索就是这道线
+    // （字族/字号/字重/字色都继承整句，见上面三条 inherit 断言）。两者同色 = 线白画，
+    // 所以这里钉的是**相对关系**，不只是两个绝对值：以后谁再挪一档，必须一起挪。
+    const lineToken = /border-bottom:\s*1px dashed var\((--[\w-]+)\)/.exec(btn)?.[1]
+    const sentenceToken = /color:\s*var\((--[\w-]+)\)/.exec(ruleBlock(homeTitle, '.htt'))?.[1]
+    expect(lineToken).toBe('--text-secondary')
+    expect(sentenceToken).toBe('--text-tertiary')
+    expect(lineToken).not.toBe(sentenceToken)
     // 当初给它画的是记号笔色块（--wash-mark）。改成虚线后那个令牌一个读取方都不剩，
     // 必须整条摘掉：只写不读的令牌 = 失效设置项（variables.css 头部维护约定）。
     expect(css).not.toContain('--wash-mark')

@@ -31,19 +31,17 @@
       <!-- 错误提示：只有"没有列表可展示"时才占整块。
            原实现是无条件 v-else-if，于是任何一次 modelsError（GET 抖动、删除被拒、
            设为默认失败）都会把用户能用的模型卡片全部藏起来 —— 数据还在 store 里，
-           界面上却像全没了。列表还在时降级成挂在头顶的一条横幅。 -->
+           界面上却像全没了。列表还在时降级成挂在头顶的一条横幅。
+           两块都只报事实：重试与头顶那枚「刷新」是同一个动作（store.fetchModelConfigs），
+           一屏摆两次等于把同一个 affordance 画两遍；图标同理，文案已经说是失败了。 -->
       <div v-else-if="store.modelsError && !store.modelConfigs.length" class="state-error">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
         {{ store.modelsError }}
-        <button class="btn btn-ghost btn-sm" @click="store.fetchModelConfigs()">重试</button>
       </div>
 
       <!-- 模型列表 -->
       <div v-else class="model-list">
         <div v-if="store.modelsError" class="state-error">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
           {{ store.modelsError }}
-          <button class="btn btn-ghost btn-sm" @click="store.fetchModelConfigs()">重试</button>
         </div>
         <div
           v-for="m in store.modelConfigs"
@@ -942,8 +940,10 @@ return String(n)
   font-family: inherit;
 }
 .btn-sm { padding: 4px 10px; font-size: 11px; }
-.btn-primary { background: var(--accent-primary); color: var(--accent-on); }
-.btn-primary:hover { background: color-mix(in srgb, var(--accent-primary) 85%, white); }
+/* 强调走字色，不铺色块：实心 --accent-primary 摆在纸上就是这一页最响的一块皮，而它
+   不属于任何主题。--accent-on 一并去掉 —— 没有底了，前景得自己站得住。 */
+.btn-primary { color: var(--accent-primary); }
+.btn-primary:hover { background: var(--bg-hover); }
 .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn-ghost { background: transparent; color: var(--text-secondary); }
 .btn-ghost:hover { background: var(--bg-hover); color: var(--text-primary); }

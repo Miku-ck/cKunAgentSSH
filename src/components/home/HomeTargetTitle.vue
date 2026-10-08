@@ -80,9 +80,9 @@ function toBulk() {
   font-size: 19px;
   font-weight: 600;
   line-height: 1.5;
-  /* 整句一律 --text-secondary：这行是问句不是标题栏，压一档它才不像一块招牌。
-     可点的那枚词只靠下划虚线认，不靠更亮的字色、也不靠图标（见 .htt-btn）。 */
-  color: var(--text-secondary);
+  /* 整句降到 --text-tertiary：这行是问句不是标题栏，再压一档它才不像一块招牌。
+     可点的那枚词只靠下划虚线认（线改走 --text-secondary，见 .htt-btn）。 */
+  color: var(--text-tertiary);
   letter-spacing: .2px;
 }
 /* 不再给两侧塞 margin：先前是 5px，加上按钮自己的 6px padding，一个词左右凭空
@@ -98,7 +98,9 @@ function toBulk() {
   font-size: inherit;
   font-weight: inherit;
   color: inherit;
-  border-bottom: 1px dashed var(--text-tertiary);
+  /* 虚线走 --text-secondary（比整句深一档）：整句降到 tertiary 之后，线若也用
+     tertiary 就和字同色，那枚词唯一的可点线索等于没画。 */
+  border-bottom: 1px dashed var(--text-secondary);
   cursor: pointer;
   transition: background-color var(--transition-fast);
 }

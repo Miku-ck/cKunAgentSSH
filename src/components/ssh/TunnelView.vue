@@ -63,7 +63,6 @@
 
       <!-- 空状态：无规则，或当前筛选下无匹配 -->
       <div v-if="visibleRows.length === 0" class="empty">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg>
         <div class="t">{{ tunnelStore.rules.length === 0 ? '还没有隧道规则' : '没有符合当前筛选的隧道' }}</div>
         <div class="d">通过已保存的连接建立端口转发，隧道独立于终端会话运行。</div>
         <button v-if="tunnelStore.rules.length === 0 && hasConnections" class="btn primary" @click="openCreate">＋ 新建隧道</button>
@@ -283,9 +282,10 @@ onUnmounted(() => {
 }
 .btn:hover { background: var(--bg-hover); }
 .btn.primary {
-  background: var(--accent-primary);
+  /* 与 SchedulesView 的同类 CTA 同形（.sc-btn.primary）：强调只走描边与字色，不铺色块。
+     实心 --accent-primary 摆在纸上就是整页最响的一块皮，而它不属于任何主题。 */
+  color: var(--accent-primary);
   border-color: var(--accent-primary);
-  color: var(--accent-on);
 }
 .btn.sm {
   padding: 3px 9px;
@@ -487,12 +487,6 @@ onUnmounted(() => {
   padding: 44px 20px;
   text-align: center;
   color: var(--text-tertiary);
-}
-.empty svg {
-  width: 28px;
-  height: 28px;
-  margin-bottom: 10px;
-  color: var(--text-secondary);
 }
 .empty .t {
   color: var(--text-secondary);

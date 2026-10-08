@@ -71,6 +71,8 @@ const approvalMode = computed(() => sshAi.approvalMode)
 const showPermMenu = ref(false)
 const permRef = ref<HTMLElement | null>(null)
 const showPlusMenu = ref(false)
+/** 技能区开合（默认折起）。菜单是定高滚动区，展开状态跟着组件活，不随菜单关闭重置。 */
+const skillsOpen = ref(false)
 const plusRef = ref<HTMLElement | null>(null)
 
 /** 点外面收起。useModelSelector 自带这一层，审批菜单不能只有它能被点外面关掉 */
@@ -300,17 +302,31 @@ onMounted(() => {
             <span class="ol">远端文件</span>
             <span class="od">{{ remoteSession ? `从 ${remoteSession} 取一个文件的内容` : '需要先连上一台服务器' }}</span>
           </button>
-          <div class="hcc-sep">技能</div>
+          <!-- 技能有 N 条时折起来：这枚菜单是定高滚动区（.wide 260px），技能一多
+               前五项就被挤出视野，而那五项才是每次下达都要碰的。折叠标题带条数；
+               已挂载的技能在卡面上有 chip，收起列表不会把"我挂了谁"藏起来。 -->
           <button
-            v-for="s in skillOptions"
-            :key="s.id"
+            v-if="skillOptions.length"
             type="button"
-            class="hcc-opt"
-            :class="{ on: sshAi.selectedSkillIds.includes(s.id) }"
-            @click="toggleSkill(s.id)"
+            class="hcc-sep fold"
+            :aria-expanded="skillsOpen"
+            @click="skillsOpen = !skillsOpen"
           >
-            <span class="ol">{{ s.name }}<span v-if="sshAi.selectedSkillIds.includes(s.id)" class="ot">✓</span></span>
+            <span class="fold-caret" :class="{ open: skillsOpen }">▸</span>技能
+            <span class="fold-n">{{ skillOptions.length }}</span>
           </button>
+          <div v-show="skillsOpen" class="hcc-fold-body">
+            <button
+              v-for="s in skillOptions"
+              :key="s.id"
+              type="button"
+              class="hcc-opt"
+              :class="{ on: sshAi.selectedSkillIds.includes(s.id) }"
+              @click="toggleSkill(s.id)"
+            >
+              <span class="ol">{{ s.name }}<span v-if="sshAi.selectedSkillIds.includes(s.id)" class="ot">✓</span></span>
+            </button>
+          </div>
           <div v-if="!skillOptions.length" class="hcc-sep">没有已启用的技能</div>
           </template>
         </div>
@@ -587,6 +603,24 @@ onMounted(() => {
   letter-spacing: .08em;
   color: var(--text-tertiary);
 }
+/* 折叠标题仍是"分组小字"这套语言，只补交互件该有的三件事：撑满一行、hover 有反馈、
+   caret 说清开合。不画框也不铺底 —— 它和上面那几枚 .hcc-opt 一样，是浮在卡面上的。 */
+.hcc-sep.fold {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-family: inherit;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast);
+}
+.hcc-sep.fold:hover { background: var(--bg-hover) }
+.fold-caret { transition: transform .15s; font-size: 11px }
+.fold-caret.open { transform: rotate(90deg) }
+.fold-n { margin-left: auto; letter-spacing: 0; color: var(--text-secondary) }
 .hcc-opt {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -617,14 +651,16 @@ onMounted(() => {
   padding: 0 18px;
   border: 0;
   border-radius: var(--radius-sm);
-  background: var(--accent-primary);
-  /* 前景由 applyAccent 按底色亮度算出来（--accent-on）：写死 #fff 时，
-     强调色选「白色」就是白底白字 —— 这枚按钮整个消失，而它点得到 */
-  color: var(--accent-on);
+  /* 与运维知识助手的提交件同一张皮（SideChatPanel 的 .send-btn）：底走主题的 hover 层、
+     字走主题的主文字色，强调色彻底不参与。它先前是实心 --accent-primary 配 --accent-on
+     前景（前景由 applyAccent 按底色亮度算，为的是强调色选「白色」时不要白底白字）——
+     现在没有强调色底了，那套亮度配对对这枚按钮不再成立。 */
+  background: var(--bg-hover);
+  color: var(--text-primary);
   font-size: 13px;
   font-weight: 600;
-  transition: filter var(--transition-fast), opacity var(--transition-fast);
+  transition: background var(--transition-fast), opacity var(--transition-fast);
 }
-.hcc-send:hover:not(:disabled) { filter: brightness(1.15) }
+.hcc-send:hover:not(:disabled) { background: var(--bg-active); color: var(--text-primary) }
 .hcc-send:disabled { opacity: .45; cursor: default }
 </style>
