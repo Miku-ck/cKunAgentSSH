@@ -194,7 +194,8 @@ async def chat_stream(
     tools: list[dict] | None = None,
     tool_choice: str = "auto",
     # 思考阶段 token 上限（仅 thinking 模型生效，限制 reasoning_content 长度）
-    # None 表示不限制；vLLM/Qwen3 通过 chat_template_kwargs.thinking_budget 传递
+    # None 表示不限制；0 表示「跟随本次 max_tokens」；vLLM/Qwen3 通过
+    # chat_template_kwargs.thinking_budget 传递（口径详见 _chat_stream_impl 的 S10-06 注释）
     reasoning_max_tokens: int | None = None,
 ) -> AsyncGenerator[StreamChunk, None]:
     """流式聊天补全（公开入口）
@@ -251,7 +252,8 @@ async def _chat_stream_impl(
         tool_choice: 工具选择策略 ("auto" / "none" / "required")
         reasoning_max_tokens: thinking 阶段 token 上限（仅 thinking 模型生效）
             通过 vLLM chat_template_kwargs.thinking_budget 传递，限制 reasoning_content 长度
-            None 表示不限制；用于意图识别后的思考预算控制
+            None 表示不限制；0 表示「跟随输出预算」（= 本次的 max_tokens）；
+            用于意图识别后的思考预算控制
     """
     # H5 修复：复用共享客户端
     client = await _get_client(base_url, api_key)
@@ -261,8 +263,18 @@ async def _chat_stream_impl(
         # chat_template_kwargs 会被 vLLM 注入到 chat template 渲染上下文
         # Qwen3 系列支持 enable_thinking（布尔）+ thinking_budget（int，思考 token 上限）
         tpl_kwargs: dict = {"enable_thinking": True}
-        if reasoning_max_tokens is not None and reasoning_max_tokens > 0:
-            tpl_kwargs["thinking_budget"] = reasoning_max_tokens
+        # S10-06：`> 0` 把合法值 0 当成「未设」⇒ 不下发 thinking_budget ⇒ vLLM 按
+        # **无上限**出思考，与 settings Field(ge=0) 的说明「0 表示使用
+        # max_output_tokens」、与面板表单文案「0 = 跟随输出预算」正好相反。
+        # schedule_engine 上一轮刚把 `if rt else None` 改成 `if rt is not None`
+        # （0-塌陷族），0 在这一层又被吞回去 —— 坑的下半段在此补齐：
+        # 0 → 用本次 max_tokens；没有 max_tokens 可跟时维持「不限制」，
+        # 不发明第三种含义。
+        budget = reasoning_max_tokens
+        if budget == 0:
+            budget = max_tokens
+        if budget:
+            tpl_kwargs["thinking_budget"] = budget
         extra_body["chat_template_kwargs"] = tpl_kwargs
 
     kwargs: dict = {
