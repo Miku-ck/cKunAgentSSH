@@ -722,18 +722,25 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   flex: 1;
-  padding: 16px;
-  gap: 12px;
   overflow: hidden;
   background: var(--bg-base);
 }
-.schedules-header { display: flex; align-items: center; justify-content: space-between; height: var(--page-head-h); }
-.schedules-title { display: flex; align-items: center; gap: 8px; font-size: var(--page-title-size); font-weight: 600; color: var(--text-primary); }
+/* 头部统一以 RemoteManager .rm-header 为准：44px 高 + 16px 侧距 + 底部分隔线 */
+.schedules-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--page-head-h);
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+.schedules-title { display: flex; align-items: center; gap: 8px; font-size: var(--page-title-size); font-weight: 600; color: var(--text-primary); font-family: var(--font-sans); }
 .schedules-sub { font-size: 12px; color: var(--text-tertiary); font-weight: 400; }
 .schedules-actions { display: flex; gap: 8px; }
 
 
-.schedule-list { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+.schedule-list { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 10px; padding: 12px 16px 16px; }
 .schedule-card {
   border: 1px solid var(--border-subtle);
   border-left: 3px solid var(--accent-primary);
@@ -758,9 +765,9 @@ onUnmounted(() => {
 .status.failed { color: var(--accent-red); border-color: var(--accent-red); }
 .status.waiting_permission { color: var(--accent-orange); border-color: var(--accent-orange); }
 
-.empty-state { color: var(--text-tertiary); font-size: 13px; text-align: center; padding: 50px 0; }
-.sc-loading { color: var(--text-tertiary); font-size: 12px; }
-.sc-error { color: var(--accent-red); font-size: 12px; }
+.empty-state { color: var(--text-tertiary); font-size: 13px; text-align: center; padding: 50px 16px; }
+.sc-loading { color: var(--text-tertiary); font-size: 12px; padding: 0 16px 12px; }
+.sc-error { color: var(--accent-red); font-size: 12px; padding: 0 16px 12px; }
 
 .modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 1000; }
 .modal { width: 520px; max-width: 90vw; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 16px; max-height: 80vh; overflow: auto; }

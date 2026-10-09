@@ -11,15 +11,22 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
           批量下发（{{ remoteSessionCount }} 台）
         </button>
-        <button class="btn btn-primary" @click="$emit('new-connection')" title="新建连接">
+        <button class="btn btn-primary" @click="handleCreate" :title="seg === 'gateway' ? '新建 TLS 网关连接' : '新建连接'">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          新建连接
+          {{ seg === 'gateway' ? '新建网关' : '新建连接' }}
         </button>
       </div>
     </div>
 
     <!-- 工具栏 -->
     <div class="rm-toolbar">
+      <!-- 分段：SSH 连接 / TLS 网关。原「安全接入」独立页并入远程管理 ——
+           两类连接此前是两个几乎同构的卡片页，用户分不清为什么要建两种连接；
+           网关当前也开不了终端，只服务隧道转发，作为远程管理的一个分段更诚实。 -->
+      <div class="rm-seg" role="tablist" aria-label="连接类型">
+        <button class="rm-seg-btn" :class="{ on: seg === 'ssh' }" role="tab" :aria-selected="seg === 'ssh'" @click="seg = 'ssh'">SSH 连接</button>
+        <button class="rm-seg-btn" :class="{ on: seg === 'gateway' }" role="tab" :aria-selected="seg === 'gateway'" @click="seg = 'gateway'">TLS 网关</button>
+      </div>
       <div class="rm-search">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         <input v-model="searchText" placeholder="搜索名称/主机/用户名/备注..." />
@@ -27,7 +34,7 @@
     </div>
 
     <!-- 列表 -->
-    <div class="rm-list">
+    <div class="rm-list" v-show="seg === 'ssh'">
       <!-- 表头 (列名可点击排序) -->
       <div
         class="rm-row-header"
@@ -79,8 +86,12 @@
       </div>
     </div>
 
+    <!-- TLS 接入网关（原「安全接入」页并入此分段）：连接卡片 + TOFU 指纹确认。
+         chunk 仍按需加载 —— 网关是小众路径，不进 SSH 连接列表的首次渲染。 -->
+    <AccessView v-if="seg === 'gateway'" ref="gatewayPane" :search="debouncedSearch" />
+
     <!-- 批量操作栏 -->
-    <div v-if="selectedIds.size > 0" class="rm-batch-bar">
+    <div v-if="seg === 'ssh' && selectedIds.size > 0" class="rm-batch-bar">
       <span class="batch-info">已选 {{ selectedIds.size }} 项</span>
       <button class="btn btn-danger" @click="handleDeleteBatch">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
@@ -123,7 +134,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onUnmounted, triggerRef } from 'vue'
+import { ref, computed, watch, onUnmounted, triggerRef, defineAsyncComponent } from 'vue'
 import ConnectionRow from './ConnectionRow.vue'
 import BulkCommandModal from './BulkCommandModal.vue'
 import { useSSHStore } from '@/stores/ssh'
@@ -131,6 +142,9 @@ import type { SSHConnection } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
 import { toFriendlyMessage } from '@/api/client'
+
+// TLS 接入网关段：整块按需加载（含 AccessModal / TOFU 弹窗的子 chunk）
+const AccessView = defineAsyncComponent(() => import('./AccessView.vue'))
 
 const emit = defineEmits<{
   connect: [id: string]
@@ -143,6 +157,15 @@ const props = defineProps<{
   connecting: boolean
   pendingConnId: string
 }>()
+
+const seg = ref<'ssh' | 'gateway'>('ssh')
+const gatewayPane = ref<{ openCreate(): void } | null>(null)
+
+/** 头部「新建」按钮分流：SSH 段沿用父组件的连接弹窗，网关段走 AccessView 的弹窗 */
+function handleCreate() {
+  if (seg.value === 'gateway') gatewayPane.value?.openCreate()
+  else emit('new-connection')
+}
 
 const store = useSSHStore()
 const toast = useToastStore()
@@ -437,6 +460,36 @@ onUnmounted(() => {
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
   flex-wrap: wrap;
+}
+
+/* 分段切换：SSH 连接 / TLS 网关（原「安全接入」页并入后的入口） */
+.rm-seg {
+  display: flex;
+  height: 30px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.rm-seg-btn {
+  padding: 0 14px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.rm-seg-btn + .rm-seg-btn { border-left: 1px solid var(--border-subtle); }
+
+.rm-seg-btn:hover { color: var(--text-primary); }
+
+.rm-seg-btn.on {
+  background: var(--bg-active);
+  color: var(--text-primary);
+  font-weight: 600;
 }
 
 .rm-search {

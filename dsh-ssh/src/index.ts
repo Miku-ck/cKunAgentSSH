@@ -105,7 +105,12 @@ Hosts whose host key is not pinned (state UNPINNED) cannot be connected — ask 
 export function apply(ctx: Context, config: ResolvedConfig): void {
   // Secrets go to the DSH credentials service when the host provides one;
   // otherwise HostStore falls back to its 0600 JSON file.
-  const store = new HostStore(createCredentialVault(ctx.credentials))
+  // ctx.get() — not a `ctx.credentials` property read — because the service is
+  // optional: a direct read throws "cannot get property ... without inject"
+  // for every profile that does not list it in `inject`, and cordis contexts
+  // are proxies that make the read happen before createCredentialVault can
+  // see `undefined` and fall back.
+  const store = new HostStore(createCredentialVault(ctx.get('credentials')))
   const engine = new SshEngine(store, {
     maxOutputBytes: () => val(config.maxOutputBytes, 65536),
     keepaliveMs: () => val(config.keepaliveMs, 30000),

@@ -1,4 +1,4 @@
-# cKunAgentic
+# cKunAgentSSH
 
 SSH 智能运维终端 — 集成 SSH 连接管理、远程终端、SFTP 文件传输与 AI 运维助手。深色 IDE 风格界面，统一字体（Segoe UI / SF Pro）与配色。
 
@@ -27,6 +27,7 @@ SSH 智能运维终端 — 集成 SSH 连接管理、远程终端、SFTP 文件�
 - **目标机环境画像**：run 开始自动探测发行版 / init / 包管理器 / 身份，注入系统提示，避免模型凭印象生成与发行版不匹配的命令
 - **运维方法论注入**：意图识别输出 `is_change`（变更 / 只读正交维度），按任务性质二选一注入变更纪律 / 只读取证方法论
 - **定时任务**：倒计时、历史耗时、失败 run 一键「AI 诊断」
+- **SSH 隧道**：TCP 端口转发 / SOCKS5 代理 / Dynamic 转发，规则持久化 + 状态机 + 端口冲突预检，不依赖终端会话独立 client
 - **CI 门禁**：`scripts/ci-check.sh` + GitHub Actions 工作流（后端 pytest / 前端 typecheck / vitest / 构建）
 
 ## 技术栈
@@ -61,7 +62,7 @@ SSH 智能运维终端 — 集成 SSH 连接管理、远程终端、SFTP 文件�
 │  ┌─ Renderer (Vue 3) ─┐    ┌─ Main (Node.js) ─────┐  │
 │  │                     │    │                       │  │
 │  │  SSH 终端 + AI 面板 │    │  node-pty (本地终端)  │  │
-│  │  Monaco Editor      │    │  ssh2 (远程终端)       │  │
+│  │  Monaco Editor      │    │  ssh2 (远程终端+隧道)  │  │
 │  │  xterm.js           │    │                       │  │
 │  │  Pinia              │    │  BackendManager       │  │
 │  │                     │    │  (spawn python.exe)   │  │
@@ -94,7 +95,7 @@ SSH 智能运维终端 — 集成 SSH 连接管理、远程终端、SFTP 文件�
 **三条数据流：**
 
 - **AI 对话**：Renderer → HTTP/SSE → Python FastAPI
-- **终端 / SSH / SFTP**：Renderer → Electron IPC → node-pty / ssh2（纯 Node.js，不经 Python）
+- **终端 / SSH / SFTP / 隧道**：Renderer → Electron IPC → node-pty / ssh2（纯 Node.js，不经 Python；隧道独立 client 不复用终端会话）
 - **Agent 远程执行**：Python 后端 → WS 反向通道（`/ws/bridge`，主进程出站拨号、长期保持）→ Electron 主进程 dispatch → ssh2。断线 fail-closed，在途请求绝不重发
 
 ## 项目结构
@@ -109,6 +110,10 @@ cKunAgentSSH/
 │   ├── pty-manager.ts                 # node-pty 终端实例池
 │   ├── ssh-manager.ts                 # ssh2 连接池 + SFTP
 │   ├── ssh-store.ts                   # 连接配置持久化存储（safeStorage 加密）
+│   ├── tunnel-manager.ts              # SSH 隧道管理（TCP/SOCKS5/Dynamic 转发）
+│   ├── tunnel-store.ts                # 隧道规则持久化
+│   ├── gateway-store.ts               # 网关连接持久化
+│   ├── gateway-manager.ts             # 网关连接管理
 │   └── utils/                         # 工具模块
 │
 ├── src/                               # Vue 3 渲染进程

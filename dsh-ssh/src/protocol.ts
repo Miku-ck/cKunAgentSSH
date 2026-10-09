@@ -51,13 +51,10 @@ export interface HostSummary {
   pinned: boolean
   /** Whether the connection pool currently holds an open channel. */
   connected: boolean
-  createdAt: number
-  updatedAt: number
 }
 
 /** Remote environment profile (target-machine fingerprint for the agent). */
 export interface EnvProfile {
-  alias: string
   hostname: string
   user: string
   homeDir?: string
@@ -108,7 +105,6 @@ export interface RemoteDirEntry {
   type: 'dir' | 'file' | 'link'
   size: number
   mtime: number
-  mode: string
 }
 
 /** Live engine snapshot for the GUI status bar. */

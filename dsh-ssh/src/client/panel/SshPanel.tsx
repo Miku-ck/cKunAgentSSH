@@ -18,7 +18,6 @@ interface SlotsApi {
   register(options: Record<string, unknown>, component: unknown): () => void
 }
 
-/** Sidebar icon: a terminal window glyph. */
 export function SshPanelIcon(): React.JSX.Element {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
@@ -29,7 +28,6 @@ export function SshPanelIcon(): React.JSX.Element {
   )
 }
 
-/** Import glyph: down arrow into a tray. */
 export function IconImport(): React.JSX.Element {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
@@ -40,7 +38,6 @@ export function IconImport(): React.JSX.Element {
   )
 }
 
-/** Kebab menu glyph. */
 export function IconKebab(): React.JSX.Element {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
@@ -51,7 +48,6 @@ export function IconKebab(): React.JSX.Element {
   )
 }
 
-/** Info glyph for the terminal exit banner. */
 export function IconInfo(): React.JSX.Element {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
@@ -85,7 +81,6 @@ export function registerSshPanel(slots: SlotsApi): () => void {
 
 type Tab = 'terminal' | 'files' | 'tunnels'
 
-/** The main panel component. */
 export function SshPanelPage(): React.JSX.Element {
   const [api, setApi] = useState<SshApi | null>(null)
   const [hosts, setHosts] = useState<HostSummary[]>([])
@@ -142,7 +137,7 @@ export function SshPanelPage(): React.JSX.Element {
       const res = await fetch('/api/ckun-ssh/hosts/import', { method: 'POST', credentials: 'same-origin' })
       const body = (await res.json()) as { imported: number; skipped: number }
       await refresh()
-      alert(`已从 ~/.ssh/config 导入 ${body.imported} 台主机（跳过已存在 ${body.skipped} 台）。密钥主机需先在面板测试连接固定指纹。`)
+      alert(`已导入 ${body.imported} 台（跳过已存在 ${body.skipped} 台）；密钥主机需先测试连接固定指纹。`)
     } catch (error) {
       setLoadError((error as Error).message)
     }
@@ -179,7 +174,7 @@ export function SshPanelPage(): React.JSX.Element {
                       </div>
                       <div className="ckun-ssh-target">
                         {h.user}@{h.host}:{h.port}
-                        {!h.pinned && <span className="ckun-ssh-badge warn"> 未固定</span>}
+                        {!h.pinned && <span className="ckun-ssh-badge warn">未固定</span>}
                       </div>
                     </span>
                     <span className="ckun-ssh-spacer" style={{ flex: 1 }} />
@@ -237,7 +232,7 @@ export function SshPanelPage(): React.JSX.Element {
                 </svg>
               </div>
               <div>从左侧选择一台主机开始</div>
-              <div className="ckun-ssh-note">终端 / SFTP 文件 / 本地端口隧道；agent 侧工具（ssh_list / ssh_connect / ssh_exec）与这里共享同一连接池</div>
+              <div className="ckun-ssh-note">终端 / 文件 / 隧道 — 与 agent 的 ssh_* 工具共享同一连接池</div>
             </div>
           )}
         </div>
@@ -250,8 +245,8 @@ export function SshPanelPage(): React.JSX.Element {
             <span className="ckun-ssh-mono">
               {selectedHost.user}@{selectedHost.host}:{selectedHost.port}
             </span>
-            <span>连接: {connState === 'open' ? '已连接（池）' : connState === 'connecting' ? '连接中…' : '未连接'}</span>
-            <span>{selectedHost.pinned ? '主机密钥: 已固定' : '主机密钥: 未固定（需测试连接后信任）'}</span>
+            <span>连接: {connState === 'open' ? '已连接' : connState === 'connecting' ? '连接中…' : '未连接'}</span>
+            <span>主机密钥: {selectedHost.pinned ? '已固定' : '未固定'}</span>
             {tunnelCount > 0 && <span>本机隧道 {tunnelCount}</span>}
           </>
         )}

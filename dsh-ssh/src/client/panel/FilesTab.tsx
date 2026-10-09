@@ -12,7 +12,6 @@ function fmtSize(bytes: number): string {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
 }
 
-/** 14px folder outline. */
 function FolderIcon(): React.JSX.Element {
   return (
     <svg className="ckun-ssh-file-icon dir" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round">
@@ -21,7 +20,6 @@ function FolderIcon(): React.JSX.Element {
   )
 }
 
-/** 14px file outline with a folded corner. */
 function FileIcon(): React.JSX.Element {
   return (
     <svg className="ckun-ssh-file-icon file" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
@@ -38,7 +36,6 @@ function parentOf(path: string): string {
   return trimmed.slice(0, idx)
 }
 
-/** The files (SFTP) subtab. */
 export function FilesTab({ alias, api }: { alias: string; api: SshApi }): React.JSX.Element {
   const [path, setPath] = useState('/')
   const [entries, setEntries] = useState<RemoteDirEntry[] | null>(null)
@@ -79,10 +76,10 @@ export function FilesTab({ alias, api }: { alias: string; api: SshApi }): React.
   }
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div className="ckun-ssh-files-bar">
         <button className="ckun-ssh-btn" disabled={path === '/'} onClick={() => void load(parentOf(path))}>
-          ⬆ 上级
+          上级
         </button>
         <input
           className="ckun-ssh-input ckun-ssh-mono"
@@ -96,7 +93,7 @@ export function FilesTab({ alias, api }: { alias: string; api: SshApi }): React.
           打开
         </button>
         <button className="ckun-ssh-btn" disabled={busy} onClick={() => fileRef.current?.click()}>
-          ⬆ 上传文件
+          上传文件
         </button>
         <input ref={fileRef} type="file" style={{ display: 'none' }} onChange={onPick} />
         <span className="ckun-ssh-note">上传到当前目录{busy ? '（进行中…）' : ''}</span>

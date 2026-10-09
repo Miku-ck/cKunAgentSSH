@@ -121,20 +121,25 @@ export const CSS_TEXT = `
 /* terminal */
 .ckun-ssh-term-wrap { position: absolute; inset: 0; padding: 8px 10px; }
 .ckun-ssh-term-wrap .xterm { height: 100%; background: transparent; }
-.ckun-ssh-term-error {
+/* terminal exit banner: neutral for a clean exit, .error for failures */
+.ckun-ssh-term-banner {
   position: absolute; left: 12px; top: 8px; right: 12px; padding: 8px 10px;
   display: flex; align-items: center; gap: 8px;
-  background: color-mix(in srgb, var(--dsw-alias-state-error-primary, #f85149) 15%, transparent);
-  border: 1px solid var(--dsw-alias-state-error-primary, #f85149);
+  background: var(--dsw-alias-bg-layer-2, #1d212b);
+  border: 1px solid var(--dsw-alias-border-l2, #333947);
   border-radius: 6px; font-size: 12px;
 }
-.ckun-ssh-term-error svg { flex: none; }
-.ckun-ssh-term-error-close {
+.ckun-ssh-term-banner.error {
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary, #f85149) 15%, transparent);
+  border-color: var(--dsw-alias-state-error-primary, #f85149);
+}
+.ckun-ssh-term-banner svg { flex: none; }
+.ckun-ssh-term-banner-close {
   margin-left: auto; width: 20px; height: 20px; flex: none;
   display: inline-flex; align-items: center; justify-content: center;
   border: none; background: transparent; color: inherit; cursor: pointer; border-radius: 4px;
 }
-.ckun-ssh-term-error-close:hover { background: color-mix(in srgb, var(--dsw-alias-state-error-primary, #f85149) 20%, transparent); }
+.ckun-ssh-term-banner-close:hover { background: color-mix(in srgb, currentColor 20%, transparent); }
 /* file row icons */
 .ckun-ssh-file-icon { display: inline-flex; vertical-align: -2px; margin-right: 6px; flex: none; }
 .ckun-ssh-file-icon.dir { color: var(--dsw-alias-brand-primary, #4c82f7); }
@@ -154,7 +159,7 @@ export const CSS_TEXT = `
 }
 .ckun-ssh-empty-row svg { display: block; margin: 0 auto 8px; opacity: .5; }
 .ckun-ssh-table tr:hover td { background: var(--dsw-alias-bg-layer-1, #171a21); }
-.ckun-ssh-form-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.ckun-ssh-form-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
 .ckun-ssh-form-row label { width: 72px; flex: none; color: var(--dsw-alias-label-secondary, #9aa1b0); font-size: 12px; }
 .ckun-ssh-input {
   flex: 1; padding: 5px 8px; font-size: 12px; min-width: 0;
@@ -187,7 +192,6 @@ export const CSS_TEXT = `
   from { opacity: 0; transform: scale(.98); }
   to { opacity: 1; transform: scale(1); }
 }
-.ckun-ssh-form-row { margin-bottom: 12px; }
 .ckun-ssh-fingerprint {
   position: relative;
   font-family: ui-monospace, Consolas, monospace; font-size: 11px; word-break: break-all;
@@ -206,9 +210,9 @@ export const CSS_TEXT = `
 .ckun-ssh-error { color: var(--dsw-alias-state-error-primary, #f85149); font-size: 12px; margin-top: 8px; white-space: pre-wrap; }
 .ckun-ssh-ok { color: var(--dsw-alias-state-success-primary, #3fb950); font-size: 12px; margin-top: 8px; }
 .ckun-ssh-files-bar {
-  display: flex; gap: 8px; padding: 10px 12px; align-items: center;
+  display: flex; gap: 8px; padding: 10px 12px; align-items: center; flex: none;
   border-bottom: 1px solid var(--dsw-alias-border-l1, #262a33);
 }
-.ckun-ssh-files-table { padding: 6px 12px 12px; overflow: auto; height: calc(100% - 52px); }
+.ckun-ssh-files-table { padding: 6px 12px 12px; overflow: auto; flex: 1; min-height: 0; }
 .ckun-ssh-mono { font-family: ui-monospace, Consolas, monospace; }
 `

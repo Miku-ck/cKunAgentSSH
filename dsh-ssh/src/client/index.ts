@@ -22,7 +22,6 @@ function injectCss(): void {
   }
 }
 
-/** The client services this half consumes. */
 export const inject = ['slots']
 
 /** Slot surface (typed locally to avoid a hard dependency on the slots package types). */
@@ -31,10 +30,7 @@ interface SlotsApi {
   register(options: Record<string, unknown>, component: unknown): () => void
 }
 
-/**
- * Mount the SSH panel into the GUI.
- * @param ctx - the client plugin context.
- */
+/** Mount the SSH panel into the GUI. */
 export function apply(ctx: ClientContext): void {
   try {
     injectCss()

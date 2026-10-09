@@ -5,23 +5,41 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { FitAddon } from '@xterm/addon-fit'
-import { Terminal } from '@xterm/xterm'
+import { Terminal, type ITheme } from '@xterm/xterm'
 import { openTerminal } from '../api.ts'
 import { IconInfo } from './SshPanel.tsx'
 
-/** 16-color ANSI palette aligned to the panel's token colors (GitHub Dark grays). */
-const ANSI = {
+// The xterm theme cannot read the dsw alias tokens directly (xterm wants
+// concrete colors), so mirror them as two fixed palettes keyed to the
+// body[data-ds-dark-theme] attribute the GUI theme service toggles.
+const ANSI_DARK = {
   black: '#484f58', red: '#ff7b72', green: '#3fb950', yellow: '#d29922',
   blue: '#4c82f7', magenta: '#bc8cff', cyan: '#39c5cf', white: '#e6e8ee',
   brightBlack: '#6e7681', brightRed: '#ffa198', brightGreen: '#56d364',
   brightYellow: '#e3b341', brightBlue: '#7ea6ff', brightMagenta: '#d2a8ff',
   brightCyan: '#56d4dd', brightWhite: '#f0f6fc',
 }
+const ANSI_LIGHT = {
+  black: '#24292f', red: '#cf222e', green: '#116329', yellow: '#9a6700',
+  blue: '#0550ae', magenta: '#8250df', cyan: '#1b7c83', white: '#57606a',
+  brightBlack: '#57606a', brightRed: '#a40e26', brightGreen: '#1a7f37',
+  brightYellow: '#6f4200', brightBlue: '#0969da', brightMagenta: '#6639ba',
+  brightCyan: '#39916f', brightWhite: '#24292f',
+}
 
-/** One interactive terminal for a host. */
+function isDarkTheme(): boolean {
+  return typeof document !== 'undefined' && document.body?.hasAttribute('data-ds-dark-theme') === true
+}
+
+function terminalTheme(): ITheme {
+  return isDarkTheme()
+    ? { background: 'transparent', foreground: '#e6e8ee', cursor: '#4c82f7', ...ANSI_DARK }
+    : { background: 'transparent', foreground: '#24292f', cursor: '#0969da', ...ANSI_LIGHT }
+}
+
 export function TerminalTab({ alias }: { alias: string }): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement | null>(null)
-  const [exitInfo, setExitInfo] = useState<string | null>(null)
+  const [exitInfo, setExitInfo] = useState<{ tone: 'note' | 'error'; text: string } | null>(null)
 
   useEffect(() => {
     const host = hostRef.current
@@ -31,11 +49,16 @@ export function TerminalTab({ alias }: { alias: string }): React.JSX.Element {
       fontSize: 13,
       cursorBlink: true,
       lineHeight: 1.3,
-      theme: { background: 'transparent', foreground: '#e6e8ee', cursor: '#4c82f7', ...ANSI },
+      theme: terminalTheme(),
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
     term.open(host)
+    // Re-skin when the GUI switches light/dark (attribute on <body>).
+    const themeObserver = typeof MutationObserver === 'undefined' ? undefined : new MutationObserver(() => {
+      term.options.theme = terminalTheme()
+    })
+    themeObserver?.observe(document.body, { attributes: true, attributeFilter: ['data-ds-dark-theme'] })
     let closed = false
     const socket = openTerminal(
       alias,
@@ -51,10 +74,11 @@ export function TerminalTab({ alias }: { alias: string }): React.JSX.Element {
         } else if (frame.type === 'output') {
           term.write(frame.data)
         } else if (frame.type === 'exit') {
-          setExitInfo(
-            `[会话结束${frame.code !== null && frame.code !== undefined ? ` · exit ${frame.code}` : ''}${frame.error ? ` · ${frame.error}` : ''}]`,
-          )
-          term.write(`\r\n\x1b[90m${`[会话结束${frame.code !== null && frame.code !== undefined ? ` (exit ${frame.code})` : ''}]`}\x1b[0m\r\n`)
+          const detail = frame.code !== null && frame.code !== undefined ? ` (exit ${frame.code})` : ''
+          const text = `[会话结束${detail}${frame.error ? ` · ${frame.error}` : ''}]`
+          const tone = frame.error !== undefined || (frame.code !== null && frame.code !== 0) ? 'error' : 'note'
+          setExitInfo({ tone, text })
+          term.write(`\r\n\x1b[90m${text}\x1b[0m\r\n`)
         }
       },
       () => {
@@ -73,6 +97,7 @@ export function TerminalTab({ alias }: { alias: string }): React.JSX.Element {
     ro.observe(host)
     return () => {
       closed = true
+      themeObserver?.disconnect()
       ro.disconnect()
       socket.close()
       term.dispose()
@@ -82,10 +107,10 @@ export function TerminalTab({ alias }: { alias: string }): React.JSX.Element {
   return (
     <div className="ckun-ssh-term-wrap">
       {exitInfo !== null && (
-        <div className="ckun-ssh-term-error">
+        <div className={`ckun-ssh-term-banner${exitInfo.tone === 'error' ? ' error' : ''}`}>
           <IconInfo />
-          <span>{exitInfo}（重新进入“终端”标签可再开一个 shell）</span>
-          <button className="ckun-ssh-term-error-close" title="关闭提示" onClick={() => setExitInfo(null)}>
+          <span>{exitInfo.text}（重新进入“终端”标签可再开一个 shell）</span>
+          <button className="ckun-ssh-term-banner-close" title="关闭提示" onClick={() => setExitInfo(null)}>
             <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
               <path d="M4 4l8 8M12 4l-8 8" />
             </svg>

@@ -276,7 +276,10 @@ export function createMuxDecoder(opts: DecoderOptions): MuxDecoder {
         const len = (buf[at + 6] << 8) | buf[at + 7]
 
         if (ver !== MUX_VERSION) {
-          throw new MuxProtocolError(`帧版本不符：期望 ${MUX_VERSION}，收到 ${ver}`)
+          // 「收到 34(0x22)」这类非 1 的小值几乎都是对端回了自家私有协议的帧
+          // （实测某防火墙 SSL VPN 即如此）—— 把这个可能性直接写进报错，
+          // 免得用户以为是客户端 bug 反复重装重试。
+          throw new MuxProtocolError(`帧版本不符：期望 ${MUX_VERSION}，收到 ${ver}（对端不是本产品的接入网关？请确认地址指向已部署 hillgw 的端口，而非防火墙/VPN 设备自身的服务端口）`)
         }
         const typeName = TYPE_NAMES.get(code)
         if (!typeName) {

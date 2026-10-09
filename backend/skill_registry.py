@@ -10,6 +10,13 @@ import database as db
 
 logger = logging.getLogger(__name__)
 
+# 预编译 _compile_trigger_pattern 内部使用的两个匹配器（避免每次调用 re.compile）
+_WORD_RE = re.compile(r'\w+', re.UNICODE)
+_ASCII_RE = re.compile(r'[A-Za-z0-9_]+')
+
+# 触发词 → 编译后 Pattern 的缓存（词表冷热不变时复用，消除重复 re_compile）
+_COMPILED_TRIGGER_CACHE: dict[str, re.Pattern] = {}
+
 
 class SkillRegistry:
     """技能注册表（线程安全，内存缓存）"""
@@ -34,6 +41,15 @@ class SkillRegistry:
                     return  # 未到重试间隔，跳过（继续服务旧缓存）
             try:
                 self._skills = db.list_all_skills()  # 返回所有技能（含 disabled）
+                # 性能：预解析 trigger_words JSON，避免 match_skills 每次重复 json.loads
+                # （Agent 每轮 LLM 调用都走 match_skills → 技能数 × 触发词数 × json.loads 开销）
+                for s in self._skills:
+                    tw_raw = s.get('trigger_words', '[]')
+                    try:
+                        words = json.loads(tw_raw) if isinstance(tw_raw, str) else list(tw_raw)
+                    except Exception:
+                        words = []
+                    s['_trigger_words_parsed'] = words
                 self._loaded = True
                 self._last_fail_time = 0
             except Exception as e:
@@ -82,20 +98,29 @@ class SkillRegistry:
         "网站返回502错误" 里两边都找不到词边界 → 命中不了。本项目消息几乎都是
         中文夹 ASCII（nginx/502/CPU），用 \b 等于内置技能触发词大面积失效。
         改成只把 ASCII 字母数字下划线视为"相邻字符"，中文边界即可命中。
+
+        性能：结果缓存于模块级 _COMPILED_TRIGGER_CACHE，词表冷热不变时零
+        编译开销（原实现每次 match_skills 都重新编译所有触发词）。
         """
+        cached = _COMPILED_TRIGGER_CACHE.get(word)
+        if cached is not None:
+            return cached
         w = word.strip()
         if not w:
-            return re.compile(r'(?!)')  # 永不匹配
+            pattern: re.Pattern = re.compile(r'(?!)')  # 永不匹配
         # 含非单词字符（空格、标点、中文等）：转义后直接匹配
-        if not re.fullmatch(r'\w+', w, flags=re.UNICODE):
-            return re.compile(re.escape(w), re.IGNORECASE)
+        elif not _WORD_RE.fullmatch(w):
+            pattern = re.compile(re.escape(w), re.IGNORECASE)
         # 纯 ASCII 字母数字：ASCII 邻接断言，避免短词误命中（如 git 命中 digit），
         # 同时不被中文文本卡住边界
-        if re.fullmatch(r'[A-Za-z0-9_]+', w):
-            return re.compile(
+        elif _ASCII_RE.fullmatch(w):
+            pattern = re.compile(
                 rf'(?<![A-Za-z0-9_]){re.escape(w)}(?![A-Za-z0-9_])', re.IGNORECASE)
-        # 含中文等非 ASCII 单词字符：直接 substring 匹配
-        return re.compile(re.escape(w), re.IGNORECASE)
+        else:
+            # 含中文等非 ASCII 单词字符：直接 substring 匹配
+            pattern = re.compile(re.escape(w), re.IGNORECASE)
+        _COMPILED_TRIGGER_CACHE[word] = pattern
+        return pattern
 
     def match_skills(self, message: str, mode: str, max_results: int = 3) -> list[dict]:
         """按触发词智能匹配技能。
@@ -113,10 +138,14 @@ class SkillRegistry:
 
         scored: list[tuple[float, dict]] = []
         for skill in enabled:
-            try:
-                trigger_words = json.loads(skill.get('trigger_words', '[]'))
-            except Exception:
-                trigger_words = []
+            trigger_words = skill.get('_trigger_words_parsed')
+            if trigger_words is None:
+                # reload() 未执行或失败时降级：实时解析（冷路径）
+                try:
+                    tw_raw = skill.get('trigger_words', '[]')
+                    trigger_words = json.loads(tw_raw) if isinstance(tw_raw, str) else list(tw_raw)
+                except Exception:
+                    trigger_words = []
             if not trigger_words:
                 continue
 
@@ -189,12 +218,14 @@ class SkillRegistry:
             "",
         ]
         for idx, s in enumerate(skills, start=1):
-            try:
-                trigger_words = json.loads(s.get('trigger_words') or '[]')
-            except (ValueError, TypeError):
-                # S8-02：一行脏 trigger_words 曾让整个技能目录静默消失
-                # （同文件 match_skills 有 JSON 兜底，这里漏了 —— 同族防护写一处漏一处）
-                trigger_words = []
+            # 复用 reload() 预解析的触发词列表（热路径在 match_skills，此处低频但保持一致性）
+            trigger_words = s.get('_trigger_words_parsed')
+            if trigger_words is None:
+                try:
+                    raw = s.get('trigger_words') or '[]'
+                    trigger_words = json.loads(raw) if isinstance(raw, str) else list(raw)
+                except (ValueError, TypeError):
+                    trigger_words = []
             tw_str = ', '.join(trigger_words) if trigger_words else '无'
             lines.append(
                 f"{idx}. 技能名：{s.get('name', '')}（slug: {s.get('slug', '')}）\n"

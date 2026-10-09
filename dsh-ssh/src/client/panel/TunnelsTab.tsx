@@ -13,7 +13,6 @@ function tunnelBadge(state: string): [string, string] {
   return ['closed', '已关闭']
 }
 
-/** The tunnels subtab. */
 export function TunnelsTab({ alias, api }: { alias: string; api: SshApi }): React.JSX.Element {
   const [tunnels, setTunnels] = useState<TunnelInfo[] | null>(null)
   const [localPort, setLocalPort] = useState('')
@@ -68,8 +67,8 @@ export function TunnelsTab({ alias, api }: { alias: string; api: SshApi }): Reac
 
   return (
     <div style={{ padding: '12px 14px', overflowY: 'auto', height: '100%' }}>
-      <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary, #9aa1b0)', marginBottom: 10 }}>
-        通过 {alias} 建立本地端口转发（等价 ssh -L 本机端口:目标:端口）。本机在 127.0.0.1 上监听。
+      <div className="ckun-ssh-note" style={{ marginBottom: 10 }}>
+        经 {alias} 建立本地端口转发（ssh -L 语义），本机监听 127.0.0.1。
       </div>
       <div className="ckun-ssh-form-row">
         <label>本机端口</label>

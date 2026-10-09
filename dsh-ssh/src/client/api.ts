@@ -40,7 +40,6 @@ function post(path: string, payload?: unknown): Promise<Response> {
   })
 }
 
-/** The SSH API surface the panel components use. */
 export interface SshApi {
   listHosts(query?: string): Promise<HostSummary[]>
   saveHost(host: Partial<HostEntry>): Promise<HostSummary>
@@ -113,7 +112,6 @@ export interface TerminalSocket {
   close(): void
 }
 
-/** Open one terminal WebSocket; frames arrive via onFrame. */
 export function openTerminal(alias: string, onFrame: (frame: TerminalServerFrame) => void, onClose: () => void): TerminalSocket {
   const socket = new WebSocket(terminalUrl(alias))
   socket.onmessage = (event: MessageEvent<string>) => {

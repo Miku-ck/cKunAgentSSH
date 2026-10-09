@@ -32,7 +32,7 @@ export function useSshNavigation(
    * 标签该不该点亮看 homeTabActive —— 独立页面盖上来时它仍为 true。
    */
   const showHome = ref(true)
-  const activeNavPage = ref<'home' | 'remote-mgr' | 'sftp' | 'audit' | 'schedules' | 'dashboard' | 'tunnels' | 'access'>('home')
+  const activeNavPage = ref<'home' | 'remote-mgr' | 'sftp' | 'audit' | 'schedules' | 'dashboard' | 'tunnels'>('home')
   const showModal = ref(false)
   const editingConnection = ref<SSHConnection | undefined>(undefined)
 
@@ -168,15 +168,7 @@ export function useSshNavigation(
     }
   }
 
-  function toggleAccess() {
-    if (activeNavPage.value === 'access') {
-      goHome()
-    } else {
-      showHome.value = true
-      activeNavPage.value = 'access'
-      sshAiStore.closeAiPanel()
-    }
-  }
+  // 「安全接入」已并入远程管理页（RemoteManager 的 TLS 网关分段），不再有独立导航页
 
   // ─── 本地终端 ───
   async function openLocalShell(shellName: string) {
@@ -403,7 +395,6 @@ export function useSshNavigation(
     toggleSchedules,
     toggleDashboard,
     toggleTunnels,
-    toggleAccess,
     openLocalShell,
     handleLocalExit,
     connectRemote,

@@ -29,7 +29,6 @@ interface FormState {
   description: string
 }
 
-/** The host form modal. */
 export function HostFormDialog({ api, existing, onClose, onSaved }: HostFormDialogProps): React.JSX.Element {
   const [form, setForm] = useState<FormState>({
     alias: existing?.alias ?? '',
@@ -94,11 +93,7 @@ export function HostFormDialog({ api, existing, onClose, onSaved }: HostFormDial
         const profile = result.profile
         setNote({
           ok: true,
-          text:
-            `连接成功` +
-            (profile?.distro ? ` · ${profile.distro}` : '') +
-            (profile?.pkgManager ? ` · 包管理 ${profile.pkgManager}` : '') +
-            (result.fingerprint ? ` · ${result.fingerprint}` : ''),
+          text: `连接成功` + (profile?.distro ? ` · ${profile.distro}` : ''),
         })
       } else if (result.needsPin && result.fingerprint !== undefined) {
         setPinOffer({ fingerprint: result.fingerprint })
@@ -182,7 +177,7 @@ export function HostFormDialog({ api, existing, onClose, onSaved }: HostFormDial
             <option value="">未指定</option>
             <option value="dev">dev</option>
             <option value="staging">staging</option>
-            <option value="prod">prod（生产：agent 禁变更）</option>
+            <option value="prod">prod（生产）</option>
           </select>
           <label>标签</label>
           <input className="ckun-ssh-input" value={form.tags} onChange={set('tags')} placeholder="gpu, k8s（逗号分隔）" />
@@ -196,7 +191,7 @@ export function HostFormDialog({ api, existing, onClose, onSaved }: HostFormDial
             <div className={existing?.pinned ? 'ckun-ssh-error' : 'ckun-ssh-note'}>
               {existing?.pinned
                 ? '⚠ 主机密钥与已固定的指纹不一致（可能是密钥轮换，也可能是中间人攻击）。重新固定将替换原指纹，请确认：'
-                : '首次连接该主机（主机密钥未固定）。核对下方 SHA256 指纹（可在目标机器上执行 '}
+                : '首次连接该主机，核对下方 SHA256 指纹（可在目标机器上执行 '}
               {existing?.pinned ? null : (
                 <>
                   <span className="ckun-ssh-mono"> ssh-keygen -lf &lt;host key&gt;</span> 或在同网段机器上用

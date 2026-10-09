@@ -29,6 +29,10 @@ export interface ProcessTopEntry {
   cpu: number
   mem: number
   name: string
+  user: string
+  rss: number      // KB
+  etime: string    // [[dd-]hh:]mm:ss
+  stat: string     // 进程状态码
 }
 export interface PortEntry {
   proto: 'tcp' | 'udp'
@@ -166,7 +170,7 @@ export const METRICS_CMD = [
   `echo "LOAD=$(cut -d" " -f1-3 /proc/loadavg)"`,
   `awk '/^MemTotal/{t=$2} /^MemAvailable/{a=$2} /^SwapTotal/{st=$2} /^SwapFree/{sf=$2} END{if (t>0) printf "MEM_TOTAL=%.0f\\nMEM_USED=%.0f\\nMEM_PCT=%.1f\\n", t/1024, (t-a)/1024, (t-a)/t*100; else print "MEM_TOTAL=0\\nMEM_USED=0\\nMEM_PCT=0"; printf "SWAP_TOTAL=%.0f\\nSWAP_USED=%.0f\\n", st/1024, (st-sf)/1024}' /proc/meminfo`,
   `df -m -P 2>/dev/null | awk 'NR>1 && $1 ~ /^\\// {printf "DISK=%s|%s|%s|%s\\n", $6, $2, $3, $5}'`,
-  `ps -eo pid,pcpu,pmem,comm --sort=-pcpu 2>/dev/null | awk 'NR>1 && NR<=7{printf "PROC=%s|%s|%s|%s\\n", $1, $2, $3, $4}'`,
+  `ps -eo pid,pcpu,pmem:6,user:10,rss,etime:10,stat:4,comm --sort=-pcpu 2>/dev/null | awk 'NR>1 && NR<=11{printf "PROC=%s|%s|%s|%s|%s|%s|%s|%s\\n", $1, $2, $3, $4, $5, $6, $7, $8}'`,
   `ss -lnt 2>/dev/null | awk 'NR>1 && match($4, /:[0-9]+$/) {port=substr($4,RSTART+1,RLENGTH-1); addr=substr($4,1,RSTART-1); printf "PORT=tcp|%s|%s\\n", addr, port}'`,
   `ss -lnu 2>/dev/null | awk 'NR>1 && match($4, /:[0-9]+$/) {port=substr($4,RSTART+1,RLENGTH-1); addr=substr($4,1,RSTART-1); printf "PORT=udp|%s|%s\\n", addr, port}'`,
   // GPU 采集四段式：① nvidia-smi 探测覆盖非登录 exec shell 的默认 PATH 盲区（sshd 给非交互 shell 的 PATH
@@ -264,8 +268,19 @@ export function parseMetricsRaw(raw: string, host?: string): ParsedMetrics | nul
       disks.push({ mount, total: inum(total), used: inum(used), percent: fnum(pct) })
       if (disks.length >= 8) disksFull = true
     } else if (line.startsWith('PROC=')) {
-      const [pid, pcpu, pmem, name] = line.slice(5).split('|')
-      procs.push({ pid: inum(pid), cpu: fnum(pcpu), mem: fnum(pmem), name: name || 'unknown' })
+      const p = line.slice(5).split('|')
+      if (p.length >= 8) {
+        procs.push({
+          pid: inum(p[0]),
+          cpu: fnum(p[1]),
+          mem: fnum(p[2]),
+          user: naStr(p[3]),
+          rss: inum(p[4]),
+          etime: naStr(p[5]),
+          stat: naStr(p[6]),
+          name: naStr(p[7]) || 'unknown',
+        })
+      }
     } else if (line.startsWith('PORT=')) {
       if (portsFull) continue
       const [proto, addr, port] = line.slice(5).split('|')

@@ -1,91 +1,53 @@
 <template>
+  <!-- TLS 接入网关面板：原先是一枚独立「安全接入」页（自带页头/通道页签/状态条），
+       现并入远程管理页作为「TLS 网关」分段。通道页签随断层摘除 —— via='gateway'
+       的隧道规则 UI 还造不出来，mux 通道表没有真实数据源；等 TunnelModal 支持
+       网关后再以卡片展开区的形式回来。 -->
   <div class="access-view">
-    <!-- 标签条：复刻 HSC 的 active 下划线形态。它的 日志/设置 两页本版没有对应数据面，
-         不放空标签（本仓已有先例：侧栏那枚永灰的「插件」行是被拆掉的，不是留着） -->
-    <div class="hsc-tabs">
-      <button class="hsc-tab" :class="{ on: tab === 'conn' }" @click="tab = 'conn'">连接</button>
-      <button class="hsc-tab" :class="{ on: tab === 'chan' }" @click="openChanTab">通道</button>
-      <span class="spacer"></span>
-      <button class="btn btn-primary" @click="openCreate">＋ 添加连接</button>
-    </div>
+    <svg class="wm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/>
+    </svg>
 
-    <div class="hsc-body">
-      <svg class="wm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/>
-      </svg>
-
-      <div v-if="tab === 'conn'" class="card-grid" :class="{ 'is-empty': !accessStore.gateways.length }">
-        <div v-for="gw in accessStore.gateways" :key="gw.id" class="conn-card">
-          <div class="conn-head">
-            <span class="conn-ico">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg>
-            </span>
-            <span class="conn-title" :title="gw.host">{{ gw.name }}</span>
-          </div>
-          <div class="kv"><span class="k">服务器：</span><span class="v mono">{{ gw.host }}</span></div>
-          <div class="kv"><span class="k">端口：</span><span class="v mono">{{ gw.port }}</span></div>
-          <div class="kv"><span class="k">用户名：</span><span class="v">{{ gw.user }}</span></div>
-          <div class="kv"><span class="k">登录模式：</span><span class="v">{{ loginModeOf(gw) }}</span></div>
-          <div class="conn-rule"></div>
-          <div class="conn-foot">
-            <span class="st" :class="stClass(gw.id)">{{ stLabel(gw.id) }}</span>
-            <button
-              class="btn btn-sm"
-              :class="stateOf(gw.id) === 'online' ? 'btn-danger' : 'btn-primary'"
-              :disabled="busyId === gw.id || stateOf(gw.id) === 'connecting' || stateOf(gw.id) === 'reconnecting'"
-              @click="toggle(gw.id)"
-            >{{ actionLabel(gw.id) }}</button>
-            <button class="icon-btn" title="修改连接" @click="openEdit(gw)">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg>
-            </button>
-            <button class="icon-btn" title="删除" @click="askDelete(gw.id)">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-            </button>
-          </div>
-          <!-- 在线时的通道数与角色：这两项只有真会话能给出，写死就是假数据 -->
-          <div v-if="extra(gw.id)" class="conn-meta">{{ extra(gw.id) }}</div>
-          <div v-if="stateOf(gw.id) === 'error'" class="conn-err">{{ accessStore.statusOf(gw.id)?.message || '连接失败' }}</div>
+    <div class="card-grid" :class="{ 'is-empty': !filteredGateways.length }">
+      <div v-for="gw in filteredGateways" :key="gw.id" class="conn-card">
+        <div class="conn-head">
+          <span class="conn-ico">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg>
+          </span>
+          <span class="conn-title" :title="gw.host">{{ gw.name }}</span>
         </div>
-
-        <div v-if="!accessStore.gateways.length" class="empty">
-          <!-- 「没读到」与「库里确实空的」不是一回事：前者说失败，后者才说没有 -->
-          <div class="t">{{ accessStore.loaded ? '还没有接入网关' : '没读到网关列表' }}</div>
-          <!-- 这一页是常驻挂载的（SshView 的 pageMounted），onMounted 只会跑一次：
-               一次 IPC 抖动就会把失败态永久钉在屏幕上，非重启无解。给一个重试入口。 -->
-          <button v-if="!accessStore.loaded" class="btn btn-sm btn-ghost" @click="retryLoad">重试</button>
+        <div class="kv"><span class="k">服务器：</span><span class="v mono">{{ gw.host }}</span></div>
+        <div class="kv"><span class="k">端口：</span><span class="v mono">{{ gw.port }}</span></div>
+        <div class="kv"><span class="k">用户名：</span><span class="v">{{ gw.user }}</span></div>
+        <div class="kv"><span class="k">登录模式：</span><span class="v">{{ loginModeOf(gw) }}</span></div>
+        <div class="conn-rule"></div>
+        <div class="conn-foot">
+          <span class="st" :class="stClass(gw.id)">{{ stLabel(gw.id) }}</span>
+          <button
+            class="btn btn-sm"
+            :class="stateOf(gw.id) === 'online' ? 'btn-danger' : 'btn-primary'"
+            :disabled="busyId === gw.id || stateOf(gw.id) === 'connecting' || stateOf(gw.id) === 'reconnecting'"
+            @click="toggle(gw.id)"
+          >{{ actionLabel(gw.id) }}</button>
+          <button class="icon-btn" title="修改连接" @click="openEdit(gw)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg>
+          </button>
+          <button class="icon-btn" title="删除" @click="askDelete(gw.id)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          </button>
         </div>
+        <!-- 在线时的通道数与角色：这两项只有真会话能给出，写死就是假数据 -->
+        <div v-if="extra(gw.id)" class="conn-meta">{{ extra(gw.id) }}</div>
+        <div v-if="stateOf(gw.id) === 'error'" class="conn-err">{{ accessStore.statusOf(gw.id)?.message || '连接失败' }}</div>
       </div>
 
-      <div v-else class="chan-pane">
-        <select v-if="onlineIds.length" v-model="chanGw" class="gw-pick">
-          <option v-for="id in onlineIds" :key="id" :value="id">{{ nameOf(id) }}</option>
-        </select>
-        <table v-if="rows.length" class="chan">
-          <thead><tr><th>chan</th><th>方向</th><th>目标</th><th>↑</th><th>↓</th><th>状态</th></tr></thead>
-          <tbody>
-            <tr v-for="r in rows" :key="r.chan" :class="{ fin: r.state === 'peer-fin' }">
-              <td>{{ r.chan }}</td>
-              <td :class="r.fromPeer ? 'dir-g2c' : 'dir-c2g'">{{ r.fromPeer ? '网关→本机' : '本机→网关' }}</td>
-              <td>{{ r.dstHost }}:{{ r.dstPort }}</td>
-              <td>{{ formatBytes(r.bytesUp) }}</td>
-              <td>{{ formatBytes(r.bytesDown) }}</td>
-              <td>{{ r.state === 'peer-fin' ? '已 FIN' : '开放' }}</td>
-            </tr>
-          </tbody>
-        </table>
-        <p v-else class="pane-note">{{ onlineIds.length ? '当前没有活动通道。' : '没有在线的网关。' }}</p>
+      <div v-if="!filteredGateways.length" class="empty">
+        <!-- 三种空不是一回事：搜索没命中、库里确实空的、IPC 没读到 —— 各说各的 -->
+        <div class="t">{{ emptyText }}</div>
+        <!-- onMounted 只会跑一次（面板随分段挂载则每次进入跑一次）：
+             一次 IPC 抖动就会把失败态永久钉在屏幕上，非重启无解。给一个重试入口。 -->
+        <button v-if="!accessStore.loaded" class="btn btn-sm btn-ghost" @click="retryLoad">重试</button>
       </div>
-    </div>
-
-    <!-- 底部状态条：与 HSC 同口径（左状态、右「已连接至 …｜共 N 个连接」） -->
-    <div class="statusbar">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
-      <span>{{ accessStore.onlineCount ? '在线' : '未连接' }}</span>
-      <span class="right">
-        <span>{{ connectedText }}</span>
-        <span class="sep">|</span>
-        <span>共 {{ accessStore.gateways.length }} 个连接</span>
-      </span>
     </div>
 
     <AccessModal v-if="modalOpen" :rec="editing" @close="modalOpen = false" @saved="onSaved" />
@@ -114,44 +76,50 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineAsyncComponent, ref, onMounted, onUnmounted, watch } from 'vue'
+import { computed, defineAsyncComponent, ref, onMounted, onUnmounted } from 'vue'
 import { useAccessStore } from '@/stores/access'
 import { useTunnelStore } from '@/stores/tunnel'
 import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
 import { toFriendlyMessage } from '@/api/client'
-import { formatBytes } from '@/utils/format'
 
 const AccessModal = defineAsyncComponent(() => import('./AccessModal.vue'))
 
+const props = defineProps<{
+  /** 远程管理工具栏的搜索词在此复用：按名称/主机/用户名过滤网关卡片 */
+  search?: string
+}>()
+
 const accessStore = useAccessStore()
+// 删网关要联动刷新引用它的隧道规则展示（TunnelView 的「网关未连接」档）
 const tunnelStore = useTunnelStore()
 const toast = useToastStore()
 const { confirm } = useConfirm()
 
-const tab = ref<'conn' | 'chan'>('conn')
 const modalOpen = ref(false)
 const editing = ref<GatewayRecord | undefined>(undefined)
 const busyId = ref('')
-const chanGw = ref('')
-const rows = ref<GatewayChannelRow[]>([])
 
 const pending = computed(() => accessStore.pendingHostKeys[0])
-const onlineIds = computed(() =>
-  accessStore.gateways.filter(g => accessStore.stateOf(g.id) === 'online').map(g => g.id),
-)
-const connectedText = computed(() =>
-  accessStore.onlineNames.length ? `已连接至 ${accessStore.onlineNames.join('、')}` : '未建立连接',
-)
+
+const filteredGateways = computed(() => {
+  const q = (props.search || '').toLowerCase().trim()
+  if (!q) return accessStore.gateways
+  return accessStore.gateways.filter(g =>
+    g.name.toLowerCase().includes(q) ||
+    g.host.toLowerCase().includes(q) ||
+    g.user.toLowerCase().includes(q))
+})
+
+const emptyText = computed(() => {
+  if (!accessStore.loaded) return '没读到网关列表'
+  if (!accessStore.gateways.length) return '还没有接入网关'
+  return '没有匹配的网关'
+})
 
 async function retryLoad(): Promise<void> {
   const ok = await accessStore.refresh()
   if (!ok) toast.error('网关列表读取失败，请稍后重试')
-}
-
-function nameOf(id: string): string {
-  const g = accessStore.gateways.find(x => x.id === id)
-  return g ? g.name || g.host : id
 }
 
 function stateOf(id: string): GatewayStatus['state'] {
@@ -192,10 +160,9 @@ function stLabel(id: string): string {
 }
 
 /**
- * 「重连中」必须给一个能停下来的动词。退避循环是无限的（gateway-manager.scheduleRetry），
- * 而原先这一档按钮既显示「连接」又被 disabled 半程 —— 点「连接」只是把下一次拨号提前
- * （manager 里那条「退避期间点连接=现在就试」是有意的），谁都不停得掉循环，
- * 唯一的出口只剩删掉整条记录。disconnect(id) 从任意状态都能停（清 timer + 拆会话）。
+ * 「重连中」必须给一个能停下来的动词。自动重连有上限（连续 3 次失败后 manager 停表
+ * 转「失败」），但上限内的等待仍可能很长 —— 这档按钮让用户随时主动停（disconnect
+ * 从任意状态都能停：清 timer + 拆会话），不必烧完 3 次预算。
  */
 function actionLabel(id: string): string {
   const s = stateOf(id)
@@ -207,8 +174,8 @@ function actionLabel(id: string): string {
 function extra(id: string): string {
   const st = accessStore.statusOf(id)
   if (st?.state !== 'online') return st?.state === 'reconnecting' ? st.message || '' : ''
-  // 心跳是网关在 HELLO_OK 里协商下来的，不是常量：写死 30 会在 heartbeatSec=300
-  // 的部署上长期说谎。通道数为 0 是合法读数（在线但没人用），不能因为 falsy 就省掉。
+  // 心跳是网关在 HELLO_OK 里协商下来的，不能把部署上常见的默认值硬编进去 ——
+  // 那会在其它部署上长期说谎。通道数为 0 是合法读数（在线但没人用），不能因为 falsy 就省掉。
   const bits = [`会话 ${st.sessionId || '-'}`, `角色 ${st.role || '-'}`, `心跳 ${st.heartbeatSec ?? '-'} s`, `${st.channels ?? 0} 通道`]
   return bits.join(' · ')
 }
@@ -248,7 +215,7 @@ async function onSaved(saved: GatewayRecord, submittedPassword: boolean): Promis
   })
 }
 
-/** 删除网关：走全局确认框二次确认（与隧道页同一条交互，不再用内联两段确认） */
+/** 删除网关：走全局确认框二次确认（与 SSH 连接删除同一条交互） */
 async function askDelete(id: string): Promise<void> {
   const gw = accessStore.gateways.find(g => g.id === id)
   const ok = await confirm({
@@ -271,23 +238,6 @@ async function askDelete(id: string): Promise<void> {
     toast.error(toFriendlyMessage(err, '删除失败'))
   }
 }
-
-function openChanTab(): void {
-  tab.value = 'chan'
-  // 这里刚赋值时 watch 会自己取一次，别再显式取第二遍；只有下拉本来就有值（回到本页）
-  // 才需要这条显式调用，否则 watch 不触发。
-  if (!chanGw.value && onlineIds.value.length) chanGw.value = onlineIds.value[0]
-  else void loadChannels()
-}
-
-async function loadChannels(): Promise<void> {
-  if (!chanGw.value) { rows.value = []; return }
-  rows.value = await accessStore.channels(chanGw.value)
-}
-
-/** 通道表原先只有 openChanTab() 取一次，切网关的下拉不重取 —— 那枚「刷新」是唯一的补救
- *  入口。按批注去掉按钮后，这条 watch 把重取挂回下拉本身（选谁 = 要看谁的通道）。 */
-watch(chanGw, () => void loadChannels())
 
 async function acceptKey(): Promise<void> {
   if (!pending.value) return
@@ -324,7 +274,7 @@ function handleKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape' && pending.value) void rejectKey()
 }
 
-// 进入本页先自证一次数据：app 挂载时那一次 init 若失败，这里说破，而不是让空态装成「还没有」
+// 进入本面板先自证一次数据：app 挂载时那一次 init 若失败，这里说破，而不是让空态装成「还没有」
 onMounted(() => {
   window.addEventListener('keydown', handleKeydown)
   if (accessStore.loaded) return
@@ -333,54 +283,23 @@ onMounted(() => {
   })
 })
 onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
+
+/** RemoteManager 头部的「新建网关」按钮经此拉起弹窗（新建入口只在头部画一处） */
+defineExpose({ openCreate })
 </script>
 
 <style scoped>
-/* 全量消费 variables.css 令牌，零硬编码色值（对齐 designs/hsc-replica-mockup-v2.html 的排布）。
+/* 全量消费 variables.css 令牌，零硬编码色值。
    按钮一律走全局 styles/button.css（.btn / .btn-primary / .btn-danger / .btn-ghost / .btn-sm），
-   本组件不另声明按钮样式，尺寸与字重因此与隧道页、连接弹窗完全同源。 */
+   本组件不另声明按钮样式。 */
+/* 面板根：占满远程管理页列表区（父容器 .remote-manager 是 flex column），
+   自身即滚动体 —— 原独立页的 .hsc-body 内滚随页头一起摘掉了 */
 .access-view {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.hsc-tabs {
-  flex: none;
-  display: flex;
-  align-items: flex-end;
-  gap: 26px;
-  padding: 0 22px;
-  border-bottom: 1px solid var(--divider-primary);
-}
-.hsc-tab {
-  padding: 13px 0 10px;
-  font-size: 14px;
-  color: var(--text-secondary);
-  border: none;
-  border-bottom: 2px solid transparent;
-  background: none;
-  cursor: pointer;
-  font-family: inherit;
-  margin-bottom: -1px;
-  transition: color var(--transition-fast);
-}
-.hsc-tab:hover { color: var(--text-primary); }
-.hsc-tab.on {
-  color: var(--accent-primary);
-  border-bottom-color: var(--accent-primary);
-  font-weight: 600;
-}
-.spacer { flex: 1; }
-/* 标签条右端的主操作：按钮本体完全交给全局 .btn，这里只把它按到标签基线上 */
-.hsc-tabs > .btn { margin-bottom: 9px; }
-
-.hsc-body {
-  flex: 1;
-  overflow: auto;
-  padding: 22px;
   position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
   display: flex;
   flex-direction: column;
 }
@@ -467,49 +386,6 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
 }
 .icon-btn svg { width: 14px; height: 14px; }
 .icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
-
-.chan-pane { position: relative; max-width: 900px; }
-.pane-note { font-size: 12px; color: var(--text-tertiary); margin: 0 0 14px; }
-.gw-pick {
-  height: 28px;
-  background: var(--bg-input);
-  border: 1px solid var(--border-input);
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
-  font-size: 12.5px;
-  font-family: inherit;
-  padding: 0 8px;
-  margin-bottom: 12px;
-}
-table.chan { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 12px; }
-table.chan th {
-  text-align: left;
-  font-weight: 500;
-  color: var(--text-tertiary);
-  font-size: 11.5px;
-  padding: 0 10px 7px 0;
-  border-bottom: 1px solid var(--divider-primary);
-}
-table.chan td { padding: 6px 10px 6px 0; border-bottom: 1px solid var(--divider-primary); color: var(--text-primary); }
-table.chan tr:last-child td { border-bottom: none; }
-table.chan tr.fin td { color: var(--text-tertiary); }
-.dir-c2g { color: var(--tint-l); }
-.dir-g2c { color: var(--tint-r); }
-
-.statusbar {
-  flex: none;
-  height: 30px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 0 14px;
-  border-top: 1px solid var(--border-subtle);
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-.statusbar svg { width: 13px; height: 13px; }
-.statusbar .right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-.statusbar .sep { color: var(--border-default); }
 
 .empty {
   width: min(420px, 100%);

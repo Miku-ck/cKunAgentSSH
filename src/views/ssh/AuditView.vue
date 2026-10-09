@@ -15,11 +15,11 @@
         >
           {{ verifyState ? (verifyState.intact ? '链完整' : '链被篡改!') : '未校验' }}
         </span>
-        <button class="audit-btn" @click="refresh" :disabled="loading">刷新</button>
-        <button class="audit-btn" @click="onVerify" :disabled="loading">校验</button>
-        <button class="audit-btn" @click="onExport" :disabled="loading" title="导出审计表全部记录为 CSV（追加式全量导出，不受当前筛选影响）">导出 CSV</button>
+        <button class="btn btn-ghost" @click="refresh" :disabled="loading">刷新</button>
+        <button class="btn" @click="onVerify" :disabled="loading">校验</button>
+        <button class="btn" @click="onExport" :disabled="loading" title="导出审计表全部记录为 CSV（追加式全量导出，不受当前筛选影响）">导出 CSV</button>
         <button
-          class="audit-btn danger"
+          class="btn btn-danger"
           @click="onClearArchived"
           :disabled="loading || clearing || tableIsEmpty"
           :title="`归档清理：后端审计表的全部记录先导出 CSV 存档到数据库目录（与当前筛选无关），再清空并写入封缄记录开启新审计链（证据不丢、链不断）`"
@@ -62,7 +62,7 @@
       />
       <button
         v-if="filters.run_id"
-        class="audit-btn"
+        class="btn btn-ghost"
         title="清空 trace 筛选"
         @click="filters.run_id = ''; loadFirst()"
       >清 trace</button>
@@ -105,11 +105,11 @@
 
     <!-- 分页：仅当有记录时显示（P3 修复，配合 offset 翻页） -->
     <div v-if="total > 0" class="audit-pager">
-      <button class="audit-btn" :disabled="offset === 0 || loading" @click="prevPage">上一页</button>
+      <button class="btn" :disabled="offset === 0 || loading" @click="prevPage">上一页</button>
       <span class="audit-pager-info">
         第 {{ offset + 1 }}–{{ Math.min(offset + records.length, total) }} 条 / 共 {{ total }} 条
       </span>
-      <button class="audit-btn" :disabled="offset + records.length >= total || loading" @click="nextPage">下一页</button>
+      <button class="btn" :disabled="offset + records.length >= total || loading" @click="nextPage">下一页</button>
     </div>
 
     <div v-if="loading" class="audit-loading">加载中…</div>
@@ -275,18 +275,19 @@ onMounted(refresh)
   height: 100%;
   display: flex;
   flex-direction: column;
-  padding: 16px 20px;
-  gap: 12px;
   background: var(--bg-base);
   color: var(--text-primary);
   overflow: hidden;
   box-sizing: border-box;
 }
+/* 头部统一以 RemoteManager .rm-header 为准：44px 高 + 16px 侧距 + 底部分隔线 */
 .audit-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   height: var(--page-head-h);
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
 .audit-title {
@@ -295,7 +296,8 @@ onMounted(refresh)
   gap: 8px;
   font-size: var(--page-title-size);
   font-weight: 600;
-  color: var(--accent-primary);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
 }
 .audit-sub {
   font-size: 12px;
@@ -316,31 +318,11 @@ onMounted(refresh)
 .audit-badge.ok { color: var(--accent-green); border-color: var(--accent-green); }
 .audit-badge.broken { color: var(--accent-red); border-color: var(--accent-red); }
 .audit-badge.idle { color: var(--text-tertiary); }
-.audit-btn {
-  background: transparent;
-  border: 1px solid var(--border-default);
-  color: var(--text-secondary);
-  border-radius: var(--radius-sm);
-  padding: 4px 12px;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-}
-.audit-btn:hover:not(:disabled) {
-  color: var(--text-primary);
-  border-color: var(--accent-primary);
-}
-.audit-btn.danger { color: var(--accent-red); border-color: var(--accent-red); }
-.audit-btn.danger:hover:not(:disabled) {
-  color: var(--accent-red);
-  border-color: var(--accent-red);
-  background: color-mix(in srgb, var(--accent-red) 12%, transparent);
-}
-.audit-btn:disabled { opacity: 0.5; cursor: default; }
 .audit-filters {
   display: flex;
   gap: 8px;
   flex-shrink: 0;
+  padding: 12px 16px;
 }
 .audit-filters select,
 .audit-filters input {
@@ -357,6 +339,7 @@ onMounted(refresh)
   overflow: auto;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
+  margin: 0 16px;
 }
 .audit-table {
   width: 100%;
@@ -413,8 +396,9 @@ onMounted(refresh)
   justify-content: center;
   gap: 12px;
   flex-shrink: 0;
+  padding: 12px 16px;
 }
 .audit-pager-info { font-size: 12px; color: var(--text-tertiary); }
-.audit-loading { color: var(--text-tertiary); font-size: 12px; }
-.audit-error { color: var(--accent-red); font-size: 12px; }
+.audit-loading { color: var(--text-tertiary); font-size: 12px; padding: 0 16px 12px; }
+.audit-error { color: var(--accent-red); font-size: 12px; padding: 0 16px 12px; }
 </style>

@@ -634,6 +634,15 @@ export class GatewayTransport implements TunnelTransport {
       const sock = tls.connect({
         host: this.ep.host,
         port: this.ep.port,
+        // 下限放到 TLSv1：现役网关盒子不少还停在 TLS 1.0（实测某联通网关仅
+        // AES256-SHA/AES128-SHA），Electron 35 主进程是 BoringSSL、默认下限 1.2，
+        // 握手直接 UNSUPPORTED_PROTOCOL。版本协商取双方共同支持的最高档 —— 放宽的
+        // 只是下限，能跑 1.2/1.3 的设备不会因此降级。身份不靠协议档位兜底：SPKI
+        // pinning（或 caPem 校验）仍然钉死对端，TLS 1.0 不放大中间人风险。
+        // 注意不能带 OpenSSL 3 的 `DEFAULT:@SECLEVEL=0` —— BoringSSL 解析不了
+        // SECLEVEL 语法，createSecureContext 直接 INVALID_COMMAND；且其默认套件表
+        // 本就含旧 CBC 套件，无需额外指定 ciphers。
+        minVersion: 'TLSv1',
         // 没给 CA 时仍要校验指纹：Node 要求 ca 非空才走自定义信任链，
         // 这里把「信任」完全交给 SPKI pinning，所以把 rejectUnauthorized 关掉、
         // 由下面的指纹比对决定放行与否 —— 少任何一步都会变成「谁都能中间人」。

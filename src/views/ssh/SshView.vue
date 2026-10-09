@@ -94,17 +94,14 @@ v-show="s.id === store.activeSessionId"
 
         <!-- 监控仪表盘页面 -->
         <div v-show="activeNavPage === 'dashboard'" class="dashboard-page">
-          <DashboardView v-if="pageMounted('dashboard')" />
+          <DashboardView
+            v-if="pageMounted('dashboard')"
+          />
         </div>
 
         <!-- SSH 隧道页面 -->
         <div v-show="activeNavPage === 'tunnels'" class="tunnel-page">
           <TunnelView v-if="pageMounted('tunnels')" />
-        </div>
-
-        <!-- TLS 接入网关（安全接入）页面 -->
-        <div v-show="activeNavPage === 'access'" class="tunnel-page">
-          <AccessView v-if="pageMounted('access')" />
         </div>
 
         <!-- 首页：目标主机 + 下达 + 待放行计数条（批量与追溯归它）+ 本轮过程（逐条决策在卡上） -->
@@ -200,7 +197,6 @@ const AuditView = defineAsyncComponent(() => import('@/views/ssh/AuditView.vue')
 const SchedulesView = defineAsyncComponent(() => import('@/views/ssh/SchedulesView.vue'))
 const DashboardView = defineAsyncComponent(() => import('@/views/ssh/DashboardView.vue'))
 const TunnelView = defineAsyncComponent(() => import('@/components/ssh/TunnelView.vue'))
-const AccessView = defineAsyncComponent(() => import('@/components/ssh/AccessView.vue'))
 const RunView = defineAsyncComponent(() => import('@/components/agent/RunView.vue'))
 import { useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
@@ -241,7 +237,6 @@ const {
   toggleSchedules,
   toggleDashboard,
   toggleTunnels,
-  toggleAccess,
   showAiPanel,
   openLocalShell,
   handleLocalExit,
@@ -270,6 +265,7 @@ function revealRun() {
   runRef.value?.$el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
+
 // ── sticky-visited 页面挂载闸门（配合上方 defineAsyncComponent）──
 type PageKey = typeof activeNavPage.value
 const visitedPages = ref<Partial<Record<PageKey, boolean>>>({})
@@ -292,7 +288,8 @@ onMounted(() => {
   // 隧道状态订阅全局存活（不挂在 TunnelView 上）：规则列表 + 运行状态推送
   // 在应用会话内持续更新，切到隧道页时数据已就绪
   void useTunnelStore().init()
-  // 网关会话的订阅同样挂在这里（组件常驻）：状态条与卡片的「在线」不能只在接入页活着
+  // 网关会话的订阅同样挂在这里（组件常驻）：网关卡片已并入远程管理页的 TLS 网关分段，
+  // 「在线」徽标不能只在那个分段挂载后才活着
   void useAccessStore().init()
 })
 
@@ -352,7 +349,6 @@ defineExpose({
   toggleSchedules,
   toggleDashboard,
   toggleTunnels,
-  toggleAccess,
   openSettings,
   activeNavPage,
   showAiPanel,

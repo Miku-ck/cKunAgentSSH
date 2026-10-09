@@ -271,7 +271,7 @@ def classify(task: str, max_budget: Optional[int] = None) -> IntentionResult:
     text_zh = task  # 中文匹配保留原文（lower 不影响中文）
 
     # 变更信号：命中运维变更动词（重启/删除/部署/安装/回滚…）
-    has_change_signal = _any_match_wordbounded(_CHANGE_MARKERS, text, text_zh)
+    has_change_signal = _any_match_wordbounded(_COMPILED_CHANGE, text, text_zh)
 
     # ── 0. 纯对话型任务识别（最高优先级，先判定）──
     # 短任务 + 命中对话 markers → 直接归为 CONVERSATION
@@ -281,17 +281,17 @@ def classify(task: str, max_budget: Optional[int] = None) -> IntentionResult:
     # 说明虽有问候词但本质是动作任务（如 "fix the hello bug"），不归为 CONVERSATION
     task_len = len(task)
     has_action_signal = (
-        _any_match_wordbounded(_REFACTOR_MARKERS, text, text_zh)
-        or _any_match_wordbounded(_DEBUG_MARKERS, text, text_zh)
-        or _any_match_wordbounded(_IMPLEMENT_MARKERS, text, text_zh)
-        or _any_match_wordbounded(_MODIFY_MARKERS, text, text_zh)
-        or _any_match_wordbounded(_RESEARCH_MARKERS, text, text_zh)
+        _any_match_wordbounded(_COMPILED_REFACTOR, text, text_zh)
+        or _any_match_wordbounded(_COMPILED_DEBUG, text, text_zh)
+        or _any_match_wordbounded(_COMPILED_IMPLEMENT, text, text_zh)
+        or _any_match_wordbounded(_COMPILED_MODIFY, text, text_zh)
+        or _any_match_wordbounded(_COMPILED_RESEARCH, text, text_zh)
         or has_change_signal
     )
     if (
         task_len < 60
         and not has_action_signal
-        and _any_match_wordbounded(_CONVERSATION_MARKERS, text)
+        and _any_match_wordbounded(_COMPILED_CONVERSATION, text, text_zh)
     ):
         return IntentionResult(
             level=IntentionLevel.TRIVIAL,
@@ -312,22 +312,22 @@ def classify(task: str, max_budget: Optional[int] = None) -> IntentionResult:
     task_type = TaskType.QUERY
     type_confidence = 0.5
 
-    if _any_match_wordbounded(_REFACTOR_MARKERS, text, text_zh):
+    if _any_match_wordbounded(_COMPILED_REFACTOR, text, text_zh):
         task_type = TaskType.REFACTOR
         type_confidence = 0.9
-    elif _any_match_wordbounded(_DEBUG_MARKERS, text, text_zh):
+    elif _any_match_wordbounded(_COMPILED_DEBUG, text, text_zh):
         task_type = TaskType.DEBUG
         type_confidence = 0.85
-    elif _any_match_wordbounded(_RESEARCH_MARKERS, text, text_zh):
+    elif _any_match_wordbounded(_COMPILED_RESEARCH, text, text_zh):
         task_type = TaskType.RESEARCH
         type_confidence = 0.75
-    elif _any_match_wordbounded(_IMPLEMENT_MARKERS, text, text_zh):
+    elif _any_match_wordbounded(_COMPILED_IMPLEMENT, text, text_zh):
         task_type = TaskType.IMPLEMENT
         type_confidence = 0.8
-    elif _any_match_wordbounded(_MODIFY_MARKERS, text, text_zh):
+    elif _any_match_wordbounded(_COMPILED_MODIFY, text, text_zh):
         task_type = TaskType.MODIFY
         type_confidence = 0.75
-    elif _any_match_wordbounded(_QUERY_MARKERS, text, text_zh):
+    elif _any_match_wordbounded(_COMPILED_QUERY, text, text_zh):
         task_type = TaskType.QUERY
         type_confidence = 0.8
 
@@ -347,13 +347,13 @@ def classify(task: str, max_budget: Optional[int] = None) -> IntentionResult:
     level_confidence = type_confidence
 
     # 2.1 多步骤信号 → 提升到至少 moderate
-    has_multi_step = _any_match_wordbounded(_MULTI_STEP_MARKERS, text, text_zh)
+    has_multi_step = _any_match_wordbounded(_COMPILED_MULTI_STEP, text, text_zh)
     if has_multi_step and level in (IntentionLevel.TRIVIAL, IntentionLevel.SIMPLE):
         level = IntentionLevel.MODERATE
         level_confidence = max(level_confidence, 0.75)
 
     # 2.2 复杂度信号 → 提升到 complex（只读查询只到 moderate）
-    has_complexity = _any_match_wordbounded(_COMPLEXITY_MARKERS, text, text_zh)
+    has_complexity = _any_match_wordbounded(_COMPILED_COMPLEXITY, text, text_zh)
     if has_complexity and level in (IntentionLevel.TRIVIAL, IntentionLevel.SIMPLE, IntentionLevel.MODERATE):
         # complex 的引导要求「首轮只做规划、不许调用工具」（见 _LEVEL_GUIDE）。
         # 只读查询没有数据无从规划 —— 抬到 complex 等于白烧一轮再拿 16 倍的思考预算，
@@ -372,7 +372,7 @@ def classify(task: str, max_budget: Optional[int] = None) -> IntentionResult:
 
     # 2.4 否定/简化信号 → 降一级（但不低于 trivial）
     # 注意：modify/implement 至少保持 simple（写操作不能降到 trivial）
-    has_simplify = _any_match_wordbounded(_SIMPLIFY_MARKERS, text, text_zh)
+    has_simplify = _any_match_wordbounded(_COMPILED_SIMPLIFY, text, text_zh)
     if has_simplify:
         new_level = _decrease_level(level)
         # 写操作类型不能降到 trivial（trivial 暗示只读）
@@ -466,32 +466,76 @@ def classify(task: str, max_budget: Optional[int] = None) -> IntentionResult:
 # 内部辅助
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _any_match_wordbounded(
-    markers: list[str], text: str, text_zh: str | None = None
-) -> bool:
-    """词边界感知的 marker 匹配（避免英文 marker 误命中文件名/代码片段）
+# 预编译：将纯 ASCII 词边界正则从每次调用编译提升为模块加载时一次性编译。
+# classify() 对同一组 marker 列表调用 _any_match_wordbounded 约 8 次（每级任务类型判断一次），
+# 每次 70+ 个 marker 各自 re.compile + re.search 是纯粹的重复开销。
+# 编译后的 (is_word, compiled_or_escaped, is_regex) 元组在模块生命周期内缓存。
+_PreCompiled = tuple[bool, re.Pattern | str, bool]
 
-    - 纯 ASCII 字母数字 marker：前后不能是字母数字或文件名分隔符，
-      例：'list' 不命中 'list()'，'hello' 不命中 'hello.py'；
-          但命中 'list files'、'hello!'、'hello world'。
-    - 含空格/中文/连字符的 marker：直接 substring 匹配（短语本身足够特异）。
+
+def _precompile_markers(markers: list[str]) -> tuple[_PreCompiled, ...]:
+    """模块加载时一次性预编译 marker 正则/子串描述符。
+
+    返回值可被 _any_match_wordbounded 复用，消除每次调用的 re.compile 开销。
     """
-    if not text:
-        return False
-    search_text = text_zh if text_zh is not None else text
+    result: list[_PreCompiled] = []
     for m in markers:
         w = m.strip()
         if not w:
             continue
-        # 含空格或非 ASCII 字母数字 _：直接 substring
+        # 含空格或非 ASCII 字母数字 _：直接 substring 匹配（短语足够特异）
         if ' ' in w or not re.fullmatch(r'[A-Za-z0-9_]+', w):
-            if re.search(re.escape(w), search_text, re.IGNORECASE):
-                return True
+            result.append((False, re.escape(w), True))  # (非整词, 转义文本, 走substring)
             continue
         # 纯 ASCII 字母数字：前后不能是字母数字或常见代码/文件名分隔符
-        pattern = rf'(?<![A-Za-z0-9._/\\()\-]){re.escape(w)}(?![A-Za-z0-9._/\\()\-])'
-        if re.search(pattern, text, re.IGNORECASE):
-            return True
+        pattern = (
+            rf'(?<![A-Za-z0-9._/\\()\-]){re.escape(w)}'
+            rf'(?![A-Za-z0-9._/\\()\-])'
+        )
+        result.append((True, re.compile(pattern, re.IGNORECASE), False))
+    return tuple(result)
+
+
+# 全量 marker 预编译：覆盖 classify / reclassify / _any_match_wordbounded 全部调用点
+_COMPILED_REFACTOR = _precompile_markers(_REFACTOR_MARKERS)
+_COMPILED_IMPLEMENT = _precompile_markers(_IMPLEMENT_MARKERS)
+_COMPILED_DEBUG = _precompile_markers(_DEBUG_MARKERS)
+_COMPILED_RESEARCH = _precompile_markers(_RESEARCH_MARKERS)
+_COMPILED_QUERY = _precompile_markers(_QUERY_MARKERS)
+_COMPILED_MODIFY = _precompile_markers(_MODIFY_MARKERS)
+_COMPILED_CHANGE = _precompile_markers(_CHANGE_MARKERS)
+_COMPILED_CONVERSATION = _precompile_markers(_CONVERSATION_MARKERS)
+_COMPILED_SIMPLIFY = _precompile_markers(_SIMPLIFY_MARKERS)
+_COMPILED_MULTI_STEP = _precompile_markers(_MULTI_STEP_MARKERS)
+_COMPILED_COMPLEXITY = _precompile_markers(_COMPLEXITY_MARKERS)
+
+
+def _any_match_wordbounded(
+    precompiled: tuple[_PreCompiled, ...],
+    text: str,
+    search_text: str,
+) -> bool:
+    """词边界感知的 marker 匹配（避免英文 marker 误命中文档名/代码片段）
+
+    接受预编译描述符（替代原始 marker 列表），消除每次调用的正则编译开销。
+    语义与原实现完全一致：
+    - 纯 ASCII 字母数字 marker：词边界匹配，例 'list' 不命中 'list()'、'hello' 不命中 'hello.py'。
+    - 含空格/中文/连字符 marker：re.escape 后子串匹配。
+
+    Args:
+        precompiled: _precompile_markers() 在模块加载时产出的描述符元组。
+        text: 已 .lower() 的文本（ASCII 正则搜索源）。
+        search_text: 保留原文的文本（中文/短语 substring 搜索源）。
+    """
+    if not text:
+        return False
+    for is_word, compiled, is_substr in precompiled:
+        if is_substr:
+            if re.search(compiled, search_text, re.IGNORECASE):
+                return True
+        else:
+            if compiled.search(text):
+                return True
     return False
 
 

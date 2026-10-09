@@ -77,8 +77,6 @@ export class SshEngine {
       description: h.description,
       pinned: this.knownHosts.pinned(h.host, h.port || 22),
       connected: this.pool.get(h.alias)?.state === 'open',
-      createdAt: h.createdAt,
-      updatedAt: h.updatedAt,
     }
   }
 
@@ -399,7 +397,6 @@ export class SshEngine {
       return m ? m[1].trim() || undefined : undefined
     }
     return {
-      alias,
       hostname: get('H') ?? '',
       user: get('U') ?? '',
       homeDir: get('HD'),
@@ -458,7 +455,6 @@ export class SshEngine {
               type,
               size: f.attrs.size ?? 0,
               mtime: (f.attrs.mtime ?? 0) * 1000,
-              mode: f.attrs.mode !== undefined ? (0o7777 & f.attrs.mode).toString(8) : '',
             }
           }),
         )

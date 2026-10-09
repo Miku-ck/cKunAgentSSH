@@ -1,11 +1,16 @@
 <template>
   <div class="tunnel-view">
-    <div class="tunnel-inner">
-      <div class="page-head">
-        <h1>隧道</h1>
-        <span class="head-spacer"></span>
-        <button class="btn btn-primary" :disabled="!hasConnections" :title="hasConnections ? '' : '请先在远程终端页创建连接'" @click="openCreate">＋ 新建隧道</button>
+    <div class="page-head">
+      <div class="page-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+        <span>隧道</span>
       </div>
+      <span class="head-spacer"></span>
+      <button class="btn btn-primary" :disabled="!hasConnections" :title="hasConnections ? '' : '请先在远程终端页创建连接'" @click="openCreate">＋ 新建隧道</button>
+    </div>
+
+    <!-- 正文：头部钉住，仅此处滚动 -->
+    <div class="tunnel-body">
 
       <!-- 状态筛选（计数随启停/删除实时变化） -->
       <div class="chips">
@@ -63,7 +68,7 @@
 
       <!-- 空状态：无规则，或当前筛选下无匹配 -->
       <div v-if="visibleRows.length === 0" class="empty">
-        <div class="t">{{ tunnelStore.rules.length === 0 ? '还没有隧道规则' : '没有符合当前筛选的隧道' }}</div>
+        <div>{{ tunnelStore.rules.length === 0 ? '还没有隧道规则' : '没有符合当前筛选的隧道' }}</div>
         <div class="d">通过已保存的连接建立端口转发，隧道独立于终端会话运行。</div>
         <button v-if="tunnelStore.rules.length === 0 && hasConnections" class="btn btn-primary" @click="openCreate">＋ 新建隧道</button>
       </div>
@@ -243,30 +248,39 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-/* 全量消费 variables.css 令牌，零硬编码色值（对齐 designs/tunnel-ui-mockup-v3.html） */
 .tunnel-view {
   position: absolute;
   inset: 0;
-  overflow-y: auto;
-  padding: 20px 24px 48px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-base);
 }
-.tunnel-inner {
-  max-width: 860px;
-  margin: 0 auto;
-}
+/* 头部统一以 RemoteManager .rm-header 为准：44px 高 + 16px 侧距 + 底部分隔线 */
 .page-head {
   display: flex;
   align-items: center;
-  gap: 12px;
+  flex-shrink: 0;
   height: var(--page-head-h);
-  margin-bottom: 12px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border-subtle);
 }
-.page-head h1 {
+.page-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: var(--page-title-size);
   font-weight: 600;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
 }
 .head-spacer {
   flex: 1;
+}
+.tunnel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px 24px;
 }
 .icon-btn {
   width: 28px;
@@ -456,21 +470,16 @@ onUnmounted(() => {
 .row-err .btn { margin-left: auto; }
 
 .empty {
-  border: 1px dashed var(--border-default);
-  border-radius: var(--radius-lg);
-  padding: 44px 20px;
   text-align: center;
+  padding: 50px 0;
   color: var(--text-tertiary);
-}
-.empty .t {
-  color: var(--text-secondary);
   font-size: 13px;
-  margin-bottom: 4px;
 }
 .empty .d {
   font-size: 12px;
+  margin-top: 4px;
 }
-.empty .btn { margin-top: 14px; }
+.empty .btn { margin-top: 16px; }
 
 .foot-hint {
   margin-top: 14px;

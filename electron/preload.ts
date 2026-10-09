@@ -101,6 +101,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sshReconnect: (id: string, cols?: number, rows?: number) => ipcRenderer.invoke('ssh:reconnect', id, cols, rows),
   sshGetCwd: (id: string) => ipcRenderer.invoke('ssh:getCwd', id),
   sshExec: (id: string, command: string, timeoutSec?: number) => ipcRenderer.invoke('ssh:exec', id, command, timeoutSec),
+  /** 终止远端进程。signal 默认 SIGTERM(15)，可选 SIGKILL(9) 等 */
+  sshKillProcess: (id: string, pid: number, signal?: number) => ipcRenderer.invoke('ssh:killProcess', id, pid, signal),
   /**
    * 监听 SSH 终端输出数据
    * @param callback 数据回调

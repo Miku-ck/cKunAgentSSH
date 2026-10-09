@@ -12,7 +12,6 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { useSSHStore } from './ssh'
-import { useSshAiStore } from './ssh-ai'
 import {
   METRICS_CMD,
   parseMetricsRaw,
@@ -77,30 +76,6 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
   function pushHistory(arr: number[], v: number) {
     arr.push(v)
     if (arr.length > HISTORY_MAX) arr.shift()
-  }
-
-  /** 监控指标异常/选中片段 → 预填 AI 面板（复用 A 的 pendingPrefill 通路） */
-  function askAiAboutMetrics(hint: string) {
-    const m = current.value
-    if (!m) return
-    const lines = [
-      `请帮我分析这台服务器（${m.host || '未知'}）的当前运行状态：`,
-      `CPU 使用率 ${m.cpu.used.toFixed(1)}%（iowait ${m.cpu.iowait.toFixed(1)}%），负载 ${m.load.join(' / ')}`,
-      `内存 ${m.mem.percent.toFixed(1)}%（${(m.mem.used / 1024).toFixed(2)}G / ${(m.mem.total / 1024).toFixed(2)}G）`,
-    ]
-    const rd = rootDisk.value
-    if (rd) {
-      lines.push(`根分区使用 ${rd.percent}%（${(rd.used / 1024).toFixed(0)}G / ${(rd.total / 1024).toFixed(0)}G）`)
-    }
-    if (m.procs.length) {
-      lines.push('TOP 进程: ' + m.procs.map(p => `${p.name}(pid ${p.pid}, cpu ${p.cpu.toFixed(1)}%)`).join(', '))
-    }
-    if (m.gpus.length) {
-      lines.push('GPU: ' + m.gpus.map(g => `${g.name}(util ${g.utilization.toFixed(0)}%, 显存 ${g.memPercent.toFixed(0)}% ${(g.memUsed / 1024).toFixed(1)}G / ${(g.memTotal / 1024).toFixed(1)}G, ${g.temperature}℃)`).join(', '))
-    }
-    lines.push(hint)
-    const sshAi = useSshAiStore()
-    sshAi.askAiAboutSelection(lines.join('\n'))
   }
 
   /** 采样一次。返回 true = 成功取到指标。
@@ -246,6 +221,5 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
     lastError,
     start,
     stop,
-    askAiAboutMetrics,
   }
 })

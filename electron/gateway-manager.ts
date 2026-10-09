@@ -66,6 +66,9 @@ interface Entry {
 }
 
 const MAX_BACKOFF_MS = 30_000
+/** 自动重连上限：连续失败这么多次后停表报错，等用户手动「连接」。无限退避只会把
+ *  网关日志刷满，而用户侧永远挂着一块「重连中」的假希望。 */
+const MAX_RETRIES = 3
 
 export class GatewayManager {
   private readonly entries = new Map<string, Entry>()
@@ -158,6 +161,9 @@ export class GatewayManager {
     }
     e.rec = rec
     e.closing = false
+    // 手动连接 = 新的一轮重试预算。不清零的话，上一轮把 attempt 烧满 3 次后，
+    // 这一轮第一次失败就会被上限拦住 —— 手动重试永远只剩一次机会。
+    e.attempt = 0
     this.entries.set(id, e)
     await this.dial(e)
     return this.statusOf(e)
@@ -268,6 +274,13 @@ export class GatewayManager {
 
   private scheduleRetry(e: Entry): void {
     if (e.retryTimer) return
+    // 上一轮的预算已经烧完：停表、报错，把下一步交给用户（手动「连接」会重置 attempt）
+    if (e.attempt >= MAX_RETRIES) {
+      e.state = 'error'
+      e.message = `连续 ${MAX_RETRIES} 次重连失败，已停止自动重连；请检查地址/网络后点「连接」重试`
+      this.emit(e)
+      return
+    }
     e.attempt += 1
     // 指数退避 + ±20% jitter：多条网关同时断线时不会一起回头打服务器
     const base = Math.min(MAX_BACKOFF_MS, 1000 * 2 ** Math.min(e.attempt - 1, 5))

@@ -251,6 +251,8 @@ interface ElectronAPI {
   sshGetCwd: (id: string) => Promise<string>
   // C8：timeoutSec 可选，默认 30 秒，主进程钳制 1..600
   sshExec: (sshSessionId: string, command: string, timeoutSec?: number) => Promise<{ stdout: string; stderr: string; exitCode: number | null }>
+  // 终止远端进程：signal 可选 SIGTERM(15)/SIGKILL(9)/SIGHUP(1)/SIGINT(2)/SIGCONT(18)/SIGSTOP(19)/SIGTSTP(20)，默认 SIGTERM
+  sshKillProcess: (sshSessionId: string, pid: number, signal?: number) => Promise<{ code: number; stdout: string; stderr: string }>
   onSshData: (callback: (data: { id: string; data: string }) => void) => () => void
   // 重连修复：willReconnect=true 表示意外断开且主进程将自动重连 —
   // 渲染层保留 tab 等待重连（不 removeSession）；false/缺省走原关闭清理流程。

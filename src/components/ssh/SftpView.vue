@@ -6,25 +6,25 @@
         <div class="session-dot" :class="store.online ? 'online' : 'offline'"></div>
         <span class="session-name">{{ store.online ? store.connectionName : '未连接远程' }}</span>
         <span v-if="store.online" class="session-host">{{ store.connectionHost }}</span>
-        <span v-else class="session-host">仅本地模式</span>
+        
       </div>
       <div class="session-right">
         <!-- 传输任务按钮 -->
-        <button class="session-btn transfer" :class="{ active: showTransferList }" @click="showTransferList = !showTransferList">
+        <button class="btn transfer" :class="{ active: showTransferList }" @click="showTransferList = !showTransferList">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/><polyline points="7 16 12 21 17 16"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
           <span v-if="store.transfers.length > 0" class="transfer-badge">{{ store.transfers.length }}</span>
           传输任务
         </button>
-        <button v-if="!store.online" class="session-btn connect" @click="showConnPicker = true">
+        <button v-if="!store.online" class="btn btn-primary" @click="showConnPicker = true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
           连接远程
         </button>
         <template v-else>
-          <button class="session-btn" @click="showConnPicker = true">
+          <button class="btn" @click="showConnPicker = true">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
             切换
           </button>
-          <button class="session-btn" @click="handleDisconnect">
+          <button class="btn btn-danger" @click="handleDisconnect">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
             断开
           </button>
@@ -1006,39 +1006,30 @@ async function onFileSaved(): Promise<void> {
   background: var(--bg-base);
 }
 
-/* 会话状态栏 */
+/* 会话状态栏：头部几何与 RemoteManager .rm-header 对齐（44px + 16px 侧距） */
 .sftp-session-bar {
-  height: 36px;
+  height: var(--page-head-h);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 12px;
+  padding: 0 16px;
   background: var(--bg-base);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
-.session-left { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.session-left { display: flex; align-items: center; gap: 8px; }
 .session-dot {
   width: 8px; height: 8px; border-radius: 50%;
 }
 .session-dot.online { background: var(--accent-green); box-shadow: 0 0 6px color-mix(in srgb, var(--accent-green) 60%, transparent); }
 .session-dot.offline { background: var(--text-tertiary); }
-.session-name { color: var(--text-primary); font-weight: 500; }
+.session-name { color: var(--text-primary); font-size: var(--page-title-size); font-weight: 600; font-family: var(--font-sans); }
 .session-host { color: var(--text-tertiary); font-family: var(--font-mono); font-size: 11px; }
-.session-right { display: flex; gap: 6px; }
-.session-btn {
-  height: 26px; padding: 0 10px; font-size: 12px;
-  background: transparent; border: 1px solid var(--border-default);
-  color: var(--text-secondary); border-radius: 4px; cursor: pointer;
-  display: flex; align-items: center; gap: 5px;
-  font-family: var(--font-sans);
-}
-.session-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
-.session-btn svg { width: 12px; height: 12px; }
-.session-btn.connect { color: var(--accent-green); border-color: color-mix(in srgb, var(--accent-green) 40%, transparent); }
-.session-btn.connect:hover { background: color-mix(in srgb, var(--accent-green) 10%, transparent); }
-.session-btn.transfer { position: relative; }
-.session-btn.transfer.active { background: var(--bg-hover); color: var(--text-primary); }
+.session-right { display: flex; gap: 8px; }
+/* 按钮本体交给全局 .btn / .btn-primary / .btn-danger，这里只补角标锚点与图标尺寸 */
+.session-right .btn { position: relative; }
+.session-right .btn svg { width: 12px; height: 12px; }
+.session-right .btn.transfer.active { background: var(--bg-hover); color: var(--text-primary); }
 .transfer-badge {
   position: absolute;
   top: -4px;

@@ -46,59 +46,52 @@ if not API_TOKEN:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """初始化数据库 + 启动后台意识 tick"""
+    import asyncio as _asyncio
+
+    # 模块顶层导入：原 lifespan 内联 import 每次调用重复解析模块路径查找
+    import logconfig
+    import netconfig
+    import builtin_skills as _bs
+    import database as _db
+    from post_processor import init_post_process_manager, load_post_process_config_from_db
+
     init_db(settings.db_path)
     logger.info("[cKunAgentic] Database initialized: %s", settings.db_path)
 
-    # G4/G5/G9：出站 HTTP 策略与日志级别回填。必须早于任何上游请求 —— 下面的
-    # seed_models_async 就会打 /models，任何 AsyncOpenAI 客户端也在此后首次建立。
-    # 顺序上先日志级别：策略加载失败本身要能被记下来。
-    try:
-        import logconfig
-        import netconfig
-        logconfig.load_from_db()
-        netconfig.load_policy_from_db()
-    except Exception as e:
-        logger.warning("[cKunAgentic] HTTP/log policy load skipped: %s", e)
+    # G4/G5/G9：出站 HTTP 策略与日志级别回填策略 与 内置运维技能同步 三者互不依赖，
+    # 并行执行：logconfig/netconfig 是 DB 读（决定后续 seed_models_async 的 HTTP 出站策略），
+    # 技能同步是文件→DB 写。原实现三者串行，实测共 150-400ms；并行后耗时取决于最慢的那条。
+    # seed_models_async（发 HTTP 探测）必须等 netconfig 完成 —— 放在下一批并行里。
+    _log_cfg_t = _asyncio.to_thread(logconfig.load_from_db)
+    _net_cfg_t = _asyncio.to_thread(netconfig.load_policy_from_db)
+    _skills_t = _asyncio.to_thread(_bs.sync_packaged_skills)
+    await _asyncio.gather(_log_cfg_t, _net_cfg_t, _skills_t, return_exceptions=True)
+    logger.debug("[cKunAgentic] log/net config + packaged skills sync completed")
 
-    # 包内内置运维技能同步（backend/skills_builtin/*，线程池执行不阻塞事件循环）
-    try:
-        import asyncio as _asyncio
-        import builtin_skills as _bs
-        await _asyncio.to_thread(_bs.sync_packaged_skills)
-    except Exception as e:
-        logger.warning("[cKunAgentic] Packaged builtin skills sync skipped: %s", e)
-
-    # 审查修复（P2 E9）：模型种子探测（httpx.get 同步阻塞）从 init_db 移至
-    # 独立异步入口，放 asyncio.to_thread 线程池执行，不阻塞事件循环
-    try:
+    # 上一批完成后：seed_models_async 打 /models 需要 netconfig 出站策略已就绪。
+    # 以下四个任务互不依赖，全部并行：
+    #   - seed_models_async: HTTP 探测可用模型
+    #   - reset_stale_in_progress_conversations: DB 写（崩溃恢复）
+    #   - load_post_process_config_from_db: DB 读
+    #   - permission_policy（allowlist TTL / auto_approve / fallback 回填）：DB 读 + 写模块值
+    async def _seed_models():
         await seed_models_async(settings.db_path)
-    except Exception as e:
-        logger.warning("[cKunAgentic] Model seed probe skipped: %s", e)
 
-    # 启动对账：崩溃/重启后滞留 in_progress 的会话复位为 completed。
-    # Agent run 在运行中崩溃时复位逻辑丢失，会话会永久滞留 in_progress。
-    # 仅启动时执行一次 — 正常运行中 in_progress 表示真有 run 进行中。
-    try:
-        import asyncio as _asyncio
-        import database as _db
+    async def _reset_stale():
         _n = await _asyncio.to_thread(_db.reset_stale_in_progress_conversations)
         if _n:
             logger.info("[cKunAgentic] Reset %s stale in_progress conversation(s)", _n)
-    except Exception as e:
-        logger.warning("[cKunAgentic] Stale conversation reset skipped: %s", e)
 
-    # 修复：从数据库加载后处理配置，避免使用默认值导致用户设置不生效
-    from post_processor import init_post_process_manager, load_post_process_config_from_db
-    post_config = load_post_process_config_from_db()
-    init_post_process_manager(post_config)
+    def _load_post_config():
+        post_config = load_post_process_config_from_db()
+        init_post_process_manager(post_config)
 
-    # E3：allowlist 保留时长回填。必须在任何 PermissionGate 单例创建前写入模块值，
-    # 否则首次加载 allowlist 时按 TTL=0 判定，过期条目要等到下次重启才不会被撤销。
-    # 审批策略另两字段同段回填：auto_approve 的 DB 开关（env kill switch 在调用处
-    # 仍优先）；兜底时长只在 DB 有显式行时才推 —— 从未在设置面板改过的用户，
-    # CKUNAGENTIC_PERMISSION_APPROVAL_FALLBACK_S 的 env 覆盖保持有效。
-    try:
-        import database as _db
+    def _load_permission_policy():
+        # E3：allowlist 保留时长回填。必须在任何 PermissionGate 单例创建前写入模块值，
+        # 否则首次加载 allowlist 时按 TTL=0 判定，过期条目要等到下次重启才不会被撤销。
+        # 审批策略另两字段同段回填：auto_approve 的 DB 开关（env kill switch 在调用处
+        # 仍优先）；兜底时长只在 DB 有显式行时才推 —— 从未在设置面板改过的用户，
+        # CKUNAGENTIC_PERMISSION_APPROVAL_FALLBACK_S 的 env 覆盖保持有效。
         from agent.harness.reins.auto_approve import set_db_enabled
         from agent.harness.reins.core import set_approval_fallback_seconds
         from agent.harness.reins.gate import set_allowlist_ttl_hours
@@ -106,7 +99,7 @@ async def lifespan(_app: FastAPI):
         set_allowlist_ttl_hours(_pol["allowlist_ttl_hours"])
         set_db_enabled(_pol["auto_approve_enabled"])
         # 「用户写过」要用带区间的判定，不是「这一行存在」：手工改成 "abc" 或
-        # 越界值的脏行，get_permission_policy 会回默认 600 读数，若仍按"写过"推给
+        # 越界值的脏行，get_permission_policy 会回默认 600 读数，若仍按"写给"推给
         # 运行时，就把运维的 CKUNAGENTIC_PERMISSION_APPROVAL_FALLBACK_S 永久锁掉了
         # —— 与 netconfig 的 retry/timeout env 兜底同一教训（database.get_http_policy
         # 的 *_set 就是为此而存在）。
@@ -114,8 +107,14 @@ async def lifespan(_app: FastAPI):
             "permission.approval_fallback_s", 600, low=0, high=86400)[1]
         if _fallback_set:
             set_approval_fallback_seconds(_pol["approval_fallback_s"])
-    except Exception as e:
-        logger.warning("[cKunAgentic] Permission policy load skipped: %s", e)
+
+    await _asyncio.gather(
+        _seed_models(),
+        _reset_stale(),
+        _asyncio.to_thread(_load_post_config),
+        _asyncio.to_thread(_load_permission_policy),
+        return_exceptions=True,
+    )
 
     # 意识 tick 延迟启动：仅首次 Agent 运行时触发（ensure_started），
     # 避免纯聊天用户产生空 DB 查询开销

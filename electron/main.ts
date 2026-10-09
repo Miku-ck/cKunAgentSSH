@@ -41,11 +41,7 @@ let gatewayManager: GatewayManager | null = null
 let electronBridge: ElectronBridge | null = null
 let bridgeWsClient: BridgeWsClient | null = null
 
-// 审查修复：IPC sender 校验 — 原实现所有 ipcMain.handle 均不校验请求来源，
-// 任何受控渲染进程（XSS/外部 file:// 导航/未来新增窗口）都能直调
-// ssh:connect、fs:*、backend:getToken 等危险 API。
-// 本应用只有唯一主窗口（单实例锁 + 固定 renderer 入口），校验策略：
-// 请求必须来自当前主窗口的 webContents。
+  // IPC sender 校验：仅允许主窗口的渲染进程发起调用，防止 XSS / 外部导航接管 IPC。
 function assertTrustedSender(event: Electron.IpcMainInvokeEvent): void {
   if (!mainWindow || mainWindow.isDestroyed()) {
     throw new Error('主窗口不存在，拒绝 IPC 请求')
@@ -55,16 +51,7 @@ function assertTrustedSender(event: Electron.IpcMainInvokeEvent): void {
   }
 }
 
-/**
- * 审查修复：带 sender 校验的 IPC handler 注册（见 assertTrustedSender）。
- * 用法：所有 ipcMain.handle 一律改走本函数，事件原样透传给业务 handler
- * （业务侧 `_event` 参数签名不受影响）。
- *
- * v2 改进：自动识别 SSHError 并序列化为 transport 格式透传 Electron IPC。
- * 原始 SSHError 经过 IPC 后会退化为普通 Error（丢失 name/code），
- * handleTrusted 在边界拦截并以 __sshError 哨兵字段携带完整错误信息，
- * 前端 extractSSHError()（src/ssh-error-types.ts）据此还原结构化错误。
- */
+/** 带 sender 校验 + SSHError 序列化的 IPC handler 注册（所有 ipcMain.handle 一律走此）。 */
 function handleTrusted(
   channel: string,
   fn: (event: Electron.IpcMainInvokeEvent, ...args: any[]) => any,
@@ -86,11 +73,7 @@ function handleTrusted(
   })
 }
 
-/** 把业务错误标准化为 IPC 透传格式：SSHError → 结构化 object；普通 Error → 同类 object *
- * 双重冗余设计确保跨 Electron 版本兼容：
- *   1. e.name = 'SSHError:<code>' — name 在所有 Electron 版都能透传（已验证 32+保真）
- *   2. e.__sshError = transport — 自定义属性（Electron 32+ 序列化保真性已改进，保留作为增强）
- *   前端 detectSSHError() 优先读 __sshError；缺失时回退解析 e.name 前缀 */
+/** 错误 SSHError → IPC 可序列化的 transport 格式（双通道：__sshError 增强 + name 前缀兜底）。 */
 function normalizeIpcError(err: unknown): Error {
   if ((err as any)?.__sshError) {
     // 已是 transport（二次穿透防護）
@@ -99,10 +82,8 @@ function normalizeIpcError(err: unknown): Error {
   if (isSSHError(err)) {
     const transport = toIpcTransport(err as any)
     const e = new Error(transport.message) as Error & { __sshError?: any; name: string }
-    e.name = `SSHError:${transport.code}`  // name 字段跨平台保真性最强
+    e.name = `SSHError:${transport.code}`
     e.__sshError = transport
-    // 保留原始 SSHError 堆栈（指向 ssh-manager.ts 中的真实抛出点），
-    // 而非指向 normalizeIpcError 本身，方便开发期诊断
     if ((err as Error).stack) {
       e.stack = `${e.name}: ${e.message}\n${(err as Error).stack}`
     }
@@ -154,12 +135,7 @@ function createWindow(): void {
     }
   })
 
-  // 审查R2修复：ptyManager/sshManager 的 setWindow 原本只在 whenReady 里
-  // setupPtyIPC/setupSSHIPC 各调用一次；macOS activate 销毁窗口后重建时，
-  // 两个 manager 仍持已销毁窗口，safeSend 的 isDestroyed 判断让所有推送
-  // （pty:data/ssh:data/sftp:progress/host-key）静默丢失。每次创建窗口后
-  // 重新绑定（首次启动时 manager 尚未创建，判空跳过，随后 setup 函数
-  // 仍会各自完成初次绑定，语义不变）。
+  // 重建窗口后重新绑定 manager 窗口引用（macOS activate）。首次启动时 manager 尚未创建，判空跳过。
   if (ptyManager) ptyManager.setWindow(mainWindow)
   if (sshManager) sshManager.setWindow(mainWindow)
   if (tunnelManager) tunnelManager.setWindow(mainWindow)
@@ -177,15 +153,11 @@ function createWindow(): void {
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    // M3 修复：details.url 可能是非标准格式（如 file://、about:blank、javascript:、
-    // 自定义协议），new URL 对某些畸形 URL 会抛异常，导致整个处理器崩溃。
-    // 用 try/catch 保护，无法解析的 URL 一律 deny，不再用 shell.openExternal 打开。
     let protocol = ''
     try {
       protocol = new URL(details.url).protocol
     } catch {
-      // 畸形 URL：拒绝打开
-      return { action: 'deny' }
+      return { action: 'deny' }  // 畸形 URL 一律拒绝
     }
     if (protocol === 'http:' || protocol === 'https:') {
       shell.openExternal(details.url)
@@ -193,18 +165,12 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
-  // 审查 M-2：阻止主窗口被导航到任意外部地址（原实现完全没有 will-navigate 守卫，
-  // <a href> 点击、location 赋值、XSS 均可把整个应用窗口劫持到外部站点）。
-  // 只允许同源导航（dev 为 Vite URL，prod 为 file:// 本地文件），其余一律 preventDefault。
+  // 导航守卫：仅允许自身渲染层同源导航，防止外部站点通过链接/劫持接管应用窗口。
   const allowedOrigins = new Set<string>()
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     try { allowedOrigins.add(new URL(process.env['ELECTRON_RENDERER_URL']).origin) } catch { /* ignore */ }
   }
-  // S9-02 修复：prod 那一支此前只判 `parsed.protocol === 'file:'` —— 任意本地文档
-  // 都能被换进这个窗口，而窗口带着完整 preload API 面：assertTrustedSender 判的是
-  // 发送者身份/帧归属，不是来源目录，于是「一份由 agent/远端主机写到磁盘的 HTML」
-  // 一次导航就拿到整套 IPC（读写文件、起 PTY、连 SSH）。渲染层 markdown 里的链接
-  // 是最短路径。现把 file: 导航限制在应用自己的渲染层目录内（与下方 loadFile 同源）。
+  // prod file: 导航限制在应用渲染层目录内（避免任意本地文档通过窗口获取 preload IPC 面）。
   const rendererRootHref = pathToFileURL(join(__dirname, '../renderer')).href + '/'
   const isOwnRendererFile = (href: string): boolean =>
     process.platform === 'win32'
@@ -218,14 +184,12 @@ function createWindow(): void {
       event.preventDefault()
       return
     }
-    // file:// 的 origin 是 "file://"，prod 模式仅允许应用自身的渲染层资源
     const isAllowed =
       (is.dev && allowedOrigins.has(parsed.origin)) ||
       (!is.dev && parsed.protocol === 'file:' && isOwnRendererFile(parsed.href)) ||
       url === mainWindow?.webContents.getURL()
     if (!isAllowed) {
       event.preventDefault()
-      // 外部 http(s) 链接交给系统浏览器，保持与 windowOpenHandler 一致的行为
       if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
         shell.openExternal(url)
       }
@@ -239,9 +203,7 @@ function createWindow(): void {
   }
 }
 
-// D16 修复：CSP 响应头注入原注册在 createWindow() 内 — 窗口重建（macOS
-// activate）会重复叠加 onHeadersReceived 回调。移到 whenReady 一次性执行，
-// 模块级标志防重
+// CSP 一次性安装（防止 macOS 窗口重建时重复叠加 onHeadersReceived 回调）
 let cspInstalled = false
 function installCsp(): void {
   if (cspInstalled) return
@@ -360,7 +322,6 @@ function findProgramInPath(name: string): string | null {
 
 /** 在 PATH 中查找以 prefix 开头的可执行文件，返回去重后的命令名列表（不含扩展名，用于 CMD 弱补全） */
 function findProgramsInPathByPrefix(prefix: string): string[] {
-  // m5 修复：根据平台选择正确的 PATH 分隔符（Windows 用 ;，其他用 :）
   const isWindows = process.platform === 'win32'
   const paths = (process.env.PATH || '').split(isWindows ? ';' : ':')
   const exts = (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(isWindows ? ';' : ':')
@@ -370,7 +331,7 @@ function findProgramsInPathByPrefix(prefix: string): string[] {
     try {
       const entries = readdirSync(dir, { withFileTypes: true })
       for (const entry of entries) {
-        if (!entry.isFile() && !entry.isSymbolicLink()) continue
+        if (!entry.isFile() && !entry.isSymbolicLink()) continue  // 仅文件和符号链接
         const name = entry.name
         const dotIndex = name.lastIndexOf('.')
         if (dotIndex <= 0) continue
@@ -412,8 +373,6 @@ function findGitBashFromRegistry(): string | null {
   ]
   for (const query of queries) {
     try {
-      // 审查 MINOR：原 execSync 无 timeout — 注册表被第三方 provider 锁定时 reg 进程
-      // 会挂起，主进程（同步阻塞）随之整体冻死；3s 超时兜底
       const output = execSync(query, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'], timeout: 3000 })
       const match = output.match(/InstallPath\s+REG_SZ\s+(.+)/)
       if (match) {
@@ -428,11 +387,7 @@ function findGitBashFromRegistry(): string | null {
   return null
 }
 
-/**
- * 审查R2修复：fs handler 的 catch-all 会把 assertSafePath 抛出的「拒绝访问敏感路径」
- * 改写成通用"读取/写入失败"文案，吞掉安全事件。此辅助在 catch 中识别该前缀时
- * 原样透传并 console.warn 留痕（对照各 handler 既有的「文件过大」白名单做法）。
- */
+/** 敏感路径拒绝事件不在 catch 中改写成通用文案（透传 + warn）。 */
 function rethrowIfSensitivePath(err: any): void {
   if (typeof err?.message === 'string' && err.message.startsWith('拒绝访问敏感路径')) {
     console.warn(`[fs] 敏感路径访问被拒绝: ${err.message}`)
@@ -476,7 +431,7 @@ function setupFSIPC(): void {
       })
       return items
     } catch (err: any) {
-      rethrowIfSensitivePath(err) // 审查R2修复：敏感路径拒绝事件不被通用文案吞掉
+      rethrowIfSensitivePath(err)
       throw new Error('读取目录失败，请检查路径是否存在或是否有访问权限')
     }
   })
@@ -485,17 +440,14 @@ function setupFSIPC(): void {
   handleTrusted('fs:readFile', async (_event, filePath: string) => {
     try {
       await assertSafePath(filePath)
-      // 审查 M-10：大小上限（与 fs:readFileForEditor 的 10MB 一致）。原实现无上限，
-      // 渲染进程可让主进程把任意大的文件整体读入内存（字符串）再 IPC 传回，
-      // 大文件直接打爆主/渲染两侧内存
-      const s = await stat(filePath)
+      const s = await stat(filePath)  // 10MB 大小上限
       if (s.size > 10 * 1024 * 1024) {
         throw new Error('文件过大（超过 10MB），无法读取')
       }
       const content = await readFile(filePath, 'utf-8')
       return content
     } catch (err: any) {
-      rethrowIfSensitivePath(err) // 审查R2修复：敏感路径拒绝事件不被通用文案吞掉
+      rethrowIfSensitivePath(err)
       throw new Error(err?.message && err.message.includes('文件过大')
         ? err.message
         : '读取文件失败，请检查文件是否存在或是否有访问权限')
@@ -506,14 +458,12 @@ function setupFSIPC(): void {
   handleTrusted('fs:writeFile', async (_event, filePath: string, content: string) => {
     try {
       await assertSafePath(filePath)
-      // E21：写入内容大小上限（50MB）— 原实现无上限，渲染进程可传入超大
-      // 字符串耗尽内存/磁盘
-      if (Buffer.byteLength(content, 'utf-8') > 50 * 1024 * 1024) {
+      if (Buffer.byteLength(content, 'utf-8') > 50 * 1024 * 1024) {  // 50MB 大小上限
         throw new Error('内容过大（超过 50MB），无法写入')
       }
       await writeFile(filePath, content, 'utf-8')
     } catch (err: any) {
-      rethrowIfSensitivePath(err) // 审查R2修复：敏感路径拒绝事件不被通用文案吞掉
+      rethrowIfSensitivePath(err)
       throw new Error(err?.message && err.message.includes('内容过大')
         ? err.message
         : '写入文件失败，请检查路径是否存在或是否有写入权限')
@@ -551,13 +501,7 @@ function setupFSIPC(): void {
     })
     if (result.canceled) return null
     const filePath = result.filePaths[0]
-    // 修复 1：把用户通过对话框选取的文件加入私钥白名单（realpath 后），
-    // 使 ssh-manager 的 assertKeyFileSafe 放行该路径（支持符号链接场景）。
-    try {
-      allowDialogKeyPath(await realpath(filePath))
-    } catch {
-      // realpath 失败（如文件在对话框关闭后消失）：不加入白名单，选择结果仍返回
-    }
+    try { allowDialogKeyPath(await realpath(filePath)) } catch { /* 路径消失则跳过白名单 */ }
     return filePath
   })
 
@@ -565,8 +509,7 @@ function setupFSIPC(): void {
   handleTrusted('fs:selectImage', async () => {
     const result = await dialog.showOpenDialog(mainWindow!, {
       properties: ['openFile'],
-      // 白名单只有一处：IMAGE_MIME_MAP。对话框再抄一份扩展名清单，
-      // 就是「加了新格式忘改另一份」的下一次分叉。
+      // 白名单只有 IMAGE_MIME_MAP 一处；对话框 filters 直接派生（避免两处登记分叉）
       filters: [{ name: 'Images', extensions: Object.keys(IMAGE_MIME_MAP).map(e => e.slice(1)) }],
     })
     if (result.canceled || result.filePaths.length === 0) return null
@@ -579,11 +522,7 @@ function setupFSIPC(): void {
         throw new Error('图片过大（超过 15MB），请选择更小的图片')
       }
       const origExt = extname(filePath).toLowerCase()
-      // 认不出的扩展名必须当场拒绝，而不是回落到 'image/png'：
-      // 挑一个无扩展名或 .tif 的文件（对话框能切「所有文件」），原先会把它按
-      // `background.png` 写盘、对外报 image/png —— 扩展名与字节不符，重启后
-      // resolveBackgroundPath 按白名单放行、渲染端拿到一张打不开的"PNG"，
-      // 而旧的那张可用背景已经在随后的清理里删掉了，用户等于把背景弄丢。
+      // 不认识的扩展名当场拒绝（避免扩展名与 mime 不匹配导致背景丢失）
       const declaredMime = IMAGE_MIME_MAP[origExt]
       if (!declaredMime) {
         throw new Error(`不支持的图片格式 ${origExt || '（无扩展名）'}，请选择 ${Object.keys(IMAGE_MIME_MAP).join(' / ')}`)
@@ -702,10 +641,8 @@ function setupFSIPC(): void {
   handleTrusted('fs:getDrives', async () => {
     if (process.platform !== 'win32') return []
     try {
-      const { execFile } = await import('node:child_process')
       const { promisify } = await import('node:util')
-      // P3 修复：局部改名 drivesExecFileAsync — 原同名 const 遮蔽了模块级
-      // execFileAsync（压缩/解压用 Promise 封装），消除变量遮蔽，行为不变
+      // 复用模块级已静态导入的 execFile（line 8），不再重复动态 import
       const drivesExecFileAsync = promisify(execFile)
       // 使用 wmic 获取本地磁盘盘符列表
       const { stdout } = await drivesExecFileAsync('wmic', ['logicaldisk', 'get', 'caption'])
@@ -744,36 +681,26 @@ function setupFSIPC(): void {
     await rename(oldPath, newPath)
   })
 
-  // 递归复制文件/目录（同侧复制粘贴），通过 sftp:progress 上报进度
-  // 审查修复（P2）+ S5-09：复制总量上限。原实现无上限，递归收集百万文件的整棵树
-  // 全部驻留内存（files 数组 + 逐文件 copyFile），可 OOM 崩主进程；而 P2 补的守卫
-  // 又放在 collect **之后** —— 恰恰是它要防的那次遍历已经把整棵树收进内存了。
-  // 现在边收边判，超限立刻中断。10 万文件或 10GB 已远超手工复制场景。
+  // 递归复制文件/目录（10万文件 / 10GB 上限；收集阶段实时判限）
   const MAX_COPY_FILES = 100_000
   const MAX_COPY_BYTES = 10 * 1024 * 1024 * 1024
   handleTrusted('fs:copy', async (_event, srcPath: string, destPath: string, transferId: string) => {
     await assertSafePath(srcPath)
     await assertSafePath(destPath)
 
-    // S5-08：目标落在源之内（含同一目录「粘贴进自己」）= 无限递归，一条鼠标路径
-    // 就能造出删不掉的长路径残骸，必须在收集之前拒掉
+    // 目标位于源内部 → 无限递归
     if (isCopyTargetSelfNested(srcPath, destPath)) {
       throw new Error('目标文件夹位于被复制项内部（或与源同一路径），已取消')
     }
 
-    // S5-11：登记协作式取消标记 —— `sftp:cancel` 这条通道会把它置位（见 copy-cancel.ts）
-    const copyState = beginCopy(transferId)
+    const copyState = beginCopy(transferId)  // 协作式取消
 
     // 收集所有文件并统计总大小
     const files: Array<{ src: string; dest: string; size: number }> = []
     let collectedBytes = 0
     async function collect(src: string, dest: string, isRoot: boolean): Promise<void> {
-      // S5-11：收集阶段在大目录树上本身就要跑几十秒，取消同样要在这里看得见
       if (copyState.cancelled) throw new Error('复制已取消')
-      // E-5 修复：递归条目用 lstat（不跟随符号链接）— 原实现 stat 跟随符号
-      // 链接，源树中的符号链接（如指向 ~/.ssh）会被 copyFile 跟随复制出
-      // 链接目标内容造成泄露。符号链接条目跳过并 warn；根节点仍可跟随
-      // （根路径已经 assertSafePath 的 realpath 校验，不可能是指向敏感目录的链接）
+      // lstat 不跟随符号链接（避免 ~/.ssh 等内容被复制泄露）
       const st = isRoot
         ? await stat(src)
         : await lstat(src).catch((e) => {
@@ -808,7 +735,6 @@ function setupFSIPC(): void {
       const total = collectedBytes
       let transferred = 0
       let lastReport = 0
-      // 修复 5：窗口销毁后 webContents.send 会抛异常，加守卫 + try/catch
       const safeSendProgress = (data: unknown): void => {
         if (mainWindow && !mainWindow.isDestroyed()) {
           try { mainWindow.webContents.send('sftp:progress', data) } catch { /* 窗口已销毁等场景忽略 */ }
@@ -823,11 +749,7 @@ function setupFSIPC(): void {
       }
 
       for (const f of files) {
-        // S5-11：真正耗时的是这一段 —— 每个文件之间都回头看一次取消标记。
-        // 已复制的部件留在目标目录（复制本就不可回滚），渲染端按 cancelled 收尾。
         if (copyState.cancelled) throw new Error('复制已取消')
-        // S5-15：目标侧同名条目若是符号链接，copyFile 会顺着它写到链接指向处 ——
-        // 那两个根之外的位置从未经过 assertSafePath。
         const destErr = rejectSymlinkTarget(f.dest, await lstat(f.dest).catch(() => null))
         if (destErr) throw new Error(destErr)
         await mkdir(dirname(f.dest), { recursive: true })
@@ -991,12 +913,7 @@ function setupPtyIPC(): void {
   // Windows PowerShell：使用 [System.Management.Automation.CommandCompletion]::CompleteInput
   // macOS/Linux bash：使用 compgen（识别 function/alias/command/file）
   handleTrusted('pty:completeCommand', (_event, opts: { ptyId: string; cmd: string; prefix: string; cwd: string; isCommand: boolean; prevSegments: string[]; shell?: string }) => {
-    // S4-02 修复：这条通道是全仓 24 个文件原语里唯一不吃 assertSafePath 的 ——
-    // 渲染层给什么目录，主进程就在里面枚举、`cd`、spawn 补全子进程。补全本身不新增
-    // 写面，但会把敏感目录（.ssh / .aws 之类）的条目名回显给渲染进程，与同族通道的
-    // 姿态不一致；prefix 里的 `..` 还能把枚举目录解析到该 cwd 之外。
-    // 执行体因此改 async：门在 promise 内 await，被拒时按「无候选」收尾（渲染层
-    // 已把空串当无补全处理，不必 reject）。
+    // cwd 须过 assertSafePath；拒绝时按「无候选」收尾（渲染层空串当无补全）
     return new Promise<string>(async (resolve) => {
       const { ptyId, cmd, prefix, cwd, isCommand, prevSegments, shell } = opts
       const isPowerShell = process.platform === 'win32' && (!shell || /powershell|pwsh/i.test(shell))
@@ -1255,6 +1172,17 @@ function setupSSHIPC(): void {
     return sshManager!.execCommandWithExitCode(id, command, t)
   })
 
+  // 终止远端进程：信号编号白名单 + PID 整型校验，防止命令注入 / 误操作系统进程
+  handleTrusted('ssh:killProcess', async (_event, id: string, pid: number, signal?: number) => {
+    if (typeof id !== 'string' || !id) throw new Error('INVALID_SESSION_ID')
+    if (!Number.isInteger(pid) || pid <= 0) throw new Error('INVALID_PID')
+    const ALLOWED = new Set([1, 2, 9, 15, 18, 19, 20])
+    const sig = typeof signal === 'number' && Number.isInteger(signal) && ALLOWED.has(signal) ? signal : 15
+    const cmd = `kill -${sig} ${pid}`
+    const r = await sshManager!.execCommandWithExitCode(id, cmd, 10)
+    return { code: r.exitCode ?? -1, stdout: r.stdout, stderr: r.stderr }
+  })
+
   // 连接配置管理
   // 审查修复（P2 E10）：连接列表返回前剥离明文密码/passphrase —
   // 原实现直接返回 SSHStore 完整记录（含解密后的 password/passphrase），
@@ -1456,11 +1384,6 @@ function setupSkillsIPC(): void {
   })
 }
 
-// 审查清理：旧 safeStorage 凭证 IPC（auth:isEncryptionAvailable/encryptString/
-// decryptString/setBackendToken）与 Bearer token 缓存链路已移除 — 渲染层零调用，
-// 且后端只校验 X-API-Token（callBackendApi 注入），Bearer 路径为旧鉴权契约残留。
-// 连接凭据加解密现由 ssh-store 在主进程内直接用 safeStorage 完成。
-
 // ─── SFTP IPC ───────────────────────────────────────
 function setupSftpIPC(): void {
   handleTrusted('sftp:open', (_event, sshSessionId: string) => {
@@ -1488,9 +1411,7 @@ function setupSftpIPC(): void {
   handleTrusted('sftp:delete', (_event, sshSessionId: string, remotePath: string) => {
     return sshManager!.sftpDelete(sshSessionId, remotePath)
   })
-  // 上传/下载：审查修复 — 本地路径须过 assertSafePath（原实现 remotePath 走
-  // 远程侧无本地风险，但 localPath 是渲染进程任意字符串，受控渲染进程可写
-  // 到系统任意位置如 C:\Windows\Temp 或读敏感文件内容上传到远程）
+  // 上传/下载：本地路径须过 assertSafePath（防止受控渲染进程读写系统位置）
   handleTrusted('sftp:upload', async (_event, transferId: string, sshSessionId: string, localPath: string, remotePath: string) => {
     await assertSafePath(localPath)
     return sshManager!.sftpUpload(transferId, sshSessionId, localPath, remotePath)
@@ -1500,9 +1421,7 @@ function setupSftpIPC(): void {
     return sshManager!.sftpDownload(transferId, sshSessionId, remotePath, localPath)
   })
   handleTrusted('sftp:cancel', (_event, transferId: string) => {
-    // S5-11：这一条通道原本只通知 SSHManager 的传输表，而本地复制（fs:copy）不在
-    // 那张表里 ⇒ 渲染端对复制行点「取消」是静默空操作。两条腿都打一下。
-    requestCopyCancel(transferId)
+    requestCopyCancel(transferId)  // 同时通知 fs:copy 和 sftp 传输表
     sshManager!.sftpCancel(transferId)
   })
   handleTrusted('sftp:readFile', (_event, sshSessionId: string, remotePath: string) => {
@@ -1520,22 +1439,13 @@ function setupSftpIPC(): void {
     return sshManager!.sftpUnzipRemote(sshSessionId, remoteZipPath, remoteDestDir)
   })
 
-  // 远程终端命令补全：在已建立的 SSH 连接上执行 compgen
-  // 关键：使用 bash -lic 加载完整登录交互环境，识别 alias/function（conda 等 shell 函数）
-  // 同时 source /etc/profile.d/conda.sh 兼容非 .bashrc 安装
-  // 输出格式：每行 "type:text"，type ∈ {func,alias,cmd,file,arg}，让前端能排序/去重
-  // 重要：SSH exec 通道的默认工作目录是用户主目录，不是交互式 shell 的当前目录。
-  //       通过 OSC 7 跟踪交互式 shell 的 cwd，在补全命令前 cd 到该目录。
+  // 远程终端命令补全（bash -lic + OSC 7 cwd 跟踪）
   handleTrusted('ssh:completeCommand', async (_event, sshSessionId: string, opts: { cmd: string; prefix: string; isCommand: boolean; prevSegments: string[] }) => {
     const { prefix, isCommand, cmd, prevSegments } = opts
     const scriptBody = buildBashCompletionScript({ isCommand, cmd, prefix, prevSegments })
-    // 获取交互式 shell 的当前工作目录，将 cd 前缀合并到 scriptBody 中统一转义
-    // 避免 shellQuote 产生的单引号未转义就嵌入外层单引号导致路径断裂
-    const cwd = sshManager!.getCwd(sshSessionId)
+    const cwd = sshManager!.getCwd(sshSessionId)  // OSC 7 跟踪的交互式 cwd
     const fullScript = cwd ? `cd ${shellQuote(cwd)} && ${scriptBody}` : scriptBody
-    // 远程通过 SSH 执行命令字符串，需要把脚本体安全嵌入单引号参数
-    const shellCmd = `bash -lic '${escapeBashScript(fullScript)}' 2>/dev/null`
-    return sshManager!.execCommand(sshSessionId, shellCmd)
+    return sshManager!.execCommand(sshSessionId, `bash -lic '${escapeBashScript(fullScript)}' 2>/dev/null`)
   })
 }
 
@@ -1544,10 +1454,7 @@ function setupSftpIPC(): void {
 // 注意：不使用 setPath('userData') 以避免破坏数据库/SSH 连接等现有数据路径
 app.commandLine.appendSwitch('disable-gpu-disk-cache')
 
-// 审查 M-9：单实例锁（原实现完全没有，grep 验证零 requestSingleInstanceLock）。
-// 原行为：可同时启动多个应用实例 — 第二个实例再拉起一套 Python 后端（端口冲突/
-// 双写同一 SQLite）、再开一组 PTY/SSH 连接、重复注册 IPC 处理器。
-// 现在：第二个实例退出，并把第一个实例的窗口带到前台。
+// 单实例锁：第二个实例启动时退出，并把第一个实例窗口带到前台。
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
 if (!gotSingleInstanceLock) {
   app.quit()
@@ -1561,18 +1468,13 @@ if (!gotSingleInstanceLock) {
   })
 }
 
-  // 审查修复：顶层异常兜底 — 原实现无 uncaughtException/unhandledRejection
-  // 处理器，主进程任何未捕获异常（IPC handler 竞态、异步回调遗漏的 reject）
-  // 直接崩掉整个应用（丢 PTY/SSH 连接 + 后端进程变孤儿）。
-  // 策略：记日志 + 尽力保活；60s 窗口内 3 次 uncaught 视为不可恢复，主动退出。
-  // 审查修复：提前到 whenReady 之前——installCsp / setupFSIPC 等同步调用
-  // 若抛出异常，未注册 handler 将直接崩溃。
+  // 顶层异常兜底：记日志 + 尽力保活；60s 内 3 次 uncaught 视不可恢复主动退出。
+  // 注册早于 whenReady —— installCsp 等同步调用若抛异常，未注册 handler 会直接崩溃。
   const UNCAUGHT_WINDOW_MS = 60_000
   const uncaughtTimes: number[] = []
   process.on('uncaughtException', (err) => {
     console.error('[main] uncaughtException:', err)
     const now = Date.now()
-    // 只保留 60s 窗口内的记录（含本次）
     while (uncaughtTimes.length > 0 && now - uncaughtTimes[0] > UNCAUGHT_WINDOW_MS) {
       uncaughtTimes.shift()
     }
@@ -1584,9 +1486,7 @@ if (!gotSingleInstanceLock) {
     }
   })
   process.on('unhandledRejection', (reason) => {
-    // 只记日志不退出 — 未捕获的 promise rejection 多为业务侧遗漏 catch，
-    // 直接退出会把一次可恢复错误放大成应用崩溃
-    console.error('[main] unhandledRejection:', reason)
+    console.error('[main] unhandledRejection:', reason)  // 只记日志不退出
   })
 
 app.whenReady().then(async () => {
@@ -1595,13 +1495,14 @@ app.whenReady().then(async () => {
   installCsp()
   setupWindowIPC()
   setupFSIPC()
-  // 桌面偏好必须在 createWindow 之前回填：关窗隐藏分支要在第一个窗口存在前就位
-  await initDesktopPrefs(() => mainWindow)
-  createWindow()
   setupPtyIPC()
   setupSSHIPC()
   setupSkillsIPC()
   setupSftpIPC()
+  // 启动性能优化：initDesktopPrefs 读盘不阻塞首屏；关窗隐藏按默认值（不隐藏）走，
+  // prefs 就绪后 shouldHideOnClose / tray 的后续状态由模块内内存更新生效。
+  initDesktopPrefs(() => mainWindow).catch(e => console.warn('[main] initDesktopPrefs 失败:', e))
+  createWindow()
 
   // Start Electron bridge for backend → main process remote execution
   if (sshManager) {
@@ -1667,25 +1568,15 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => {
-  // 审查修复：darwin 分支不再销毁 PTY/SSH/后端 — 原实现关最后一个窗口即
-  // disconnectAll + stop 后端，但 macOS 上应用仍驻留 Dock，点图标 activate
-  // 重建窗口后后端已死且不重启（whenReady 只跑一次），应用半残。
-  //
-  // 非 darwin 分支原先把那七条释放语句又抄了一遍：app.quit() 必然触发
-  // before-quit，同一批资源于是释放两次，而清单是两份 —— 已经分叉过一次
-  // （gatewayManager 只补进了 before-quit 那份，注释里就写着这件事）。
-  // 释放清单只留 before-quit 一处：这里只负责「窗口全关 = 退出」。
+  // macOS 关窗口不退出应用（Dock 保留，activate 重建窗口）；资源释放只在 before-quit 一处执行。
   if (process.platform !== 'darwin') app.quit()
 })
 
 app.on('before-quit', () => {
-  // 先落"正在退出"标记：紧随其后的 close 事件不能再走隐藏分支，否则应用退不掉
-  markQuitting()
+  markQuitting()  // 防止 close 事件走隐藏分支
   ptyManager?.destroyAll()
   sshManager?.disconnectAll()
   tunnelManager?.stopAll()
-  // 审查修复：before-quit 是 macOS 唯一退出路径（window-all-closed 的 darwin
-  // 分支跳过清理），此前遗漏 gatewayManager 会导致网关 TLS 连接 + 重连定时器泄漏
   gatewayManager?.stopAll()
   backendManager?.stop()
   bridgeWsClient?.stop()

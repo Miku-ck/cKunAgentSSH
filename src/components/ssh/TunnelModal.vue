@@ -2,7 +2,7 @@
   <Teleport to="body">
     <div class="tunnel-overlay" @click.self="emit('close')">
       <div class="modal">
-        <button class="close-x" @click="emit('close')">✕</button>
+        <button class="modal-close" @click="emit('close')" aria-label="关闭">✕</button>
         <h2>{{ isEdit ? '编辑隧道' : '新建隧道' }}</h2>
 
         <div class="field">
@@ -240,29 +240,40 @@ async function save(): Promise<void> {
   z-index: 100;
 }
 .modal {
-  width: 480px;
-  max-height: 86vh;
+  width: 520px;
+  max-width: 90vw;
+  max-height: 80vh;
   overflow-y: auto;
   background: var(--bg-elevated);
-  border: 1px solid var(--border-default);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
-  padding: 18px 20px 16px;
+  padding: 16px 20px;
   box-shadow: var(--shadow-lg);
+  position: relative;
 }
 .modal h2 {
   font-size: 14px;
   font-weight: 600;
   margin-bottom: 16px;
 }
-.close-x {
-  float: right;
+.modal-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
   background: none;
   border: none;
   color: var(--text-secondary);
   cursor: pointer;
   font-size: 16px;
-  margin: -4px -6px 0 0;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast), color var(--transition-fast);
 }
+.modal-close:hover { background: var(--bg-hover); color: var(--text-primary); }
 .field {
   margin-bottom: 14px;
 }

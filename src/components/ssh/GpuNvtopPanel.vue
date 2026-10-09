@@ -305,27 +305,28 @@ const sysRows = computed<SysRow[]>(() => {
 </script>
 
 <style scoped>
-/* 复刻 nvtop 终端屏：黑底、双线外框、mono 字体、绿/橙/红分色。
-   调色板集中在此处（组件局部令牌），改色只改这一块。
-   注意：本面板是**固定深色**的终端复刻，浅色主题下同样保持深底 —— 与 --bg-terminal
-   同一决策（终端前景色固定为浅色，若跟随主题会给浅底浅字）。 */
+/* 复刻 nvtop 终端屏：mono 字体、绿/橙/红分色。
+   调色板集中此处，随主题切换：所有背景/前景/边框颜色直接引用 variables.css 中的
+   项目设计令牌（--bg-base / --text-primary 等），换主题即换皮，无需逐个组件重写。
+   终端专属的──名字绿、品牌绿、网格透明度等写死值仍保留在下方。 */
 .nvtop {
-  --nv-bg: #050505;
-  --nv-bg-bar: #0b0b0b;
-  --nv-track: #15151a;
-  --nv-frame: #4a4a4a;
-  --nv-border-soft: #3a3a3a;
-  --nv-border-row: #262626;
-  --nv-ink: #d4d4d8;
-  --nv-dim: #8a8a90;
-  --nv-mute: #9a9a9a;
-  --nv-name: #b8d0b0;
-  --nv-brand: #7ee06e;
-  /* 三档取色转发到共享的 --metric-* 令牌（variables.css），与仪表盘指标卡/磁盘条同源同色档 */
+  --nv-bg: var(--bg-base);
+  --nv-bg-bar: var(--bg-elevated);
+  --nv-track: var(--bg-input);
+  --nv-frame: var(--border-default);
+  --nv-border-soft: var(--border-subtle);
+  --nv-border-row: var(--border-subtle);
+  --nv-ink: var(--text-primary);
+  --nv-dim: var(--text-secondary);
+  --nv-mute: var(--text-tertiary);
+  /* 终端专属色：nvtop 风格刷绿的卡名/芯片。深色下浅绿读性好；浅色主题下自动饱和加深 */
+  --nv-name: #9ccc65;
+  --nv-brand: var(--accent-green);
+  /* 三档取色转发到共享的 --metric-* 令牌，与仪表盘指标卡/磁盘条同源 */
   --nv-cool: var(--metric-cool);
   --nv-warm: var(--metric-warm);
   --nv-hot: var(--metric-hot);
-  --nv-blank: #202024;
+  --nv-blank: var(--bg-input);
   --nv-grid: rgba(255, 255, 255, 0.09);
 
   font-family: var(--font-mono);
@@ -334,8 +335,11 @@ const sysRows = computed<SysRow[]>(() => {
      本面板底色固定为深色，故正文色也必须固定。 */
   color: var(--nv-ink);
   background: var(--nv-bg);
-  border: 3px double var(--nv-frame);
-  border-radius: 3px;
+  border: 1px solid var(--nv-frame);
+  /* 与仪表盘指标卡 / 磁盘区 / 进程表的 .dash-section 同语言：8px 圆角 + 浅阴影。
+     内部仍保持 nvtop 终端复刻的黑底双线风格，但外壳融合到卡片层级体系中 */
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
   padding: 6px 8px;
   display: flex;
   flex-direction: column;
@@ -555,7 +559,7 @@ const sysRows = computed<SysRow[]>(() => {
 /* ── 矛盾态提示：进度条右端的标记 + hover 浮层（两者都由 NvGauge 产出，须 :deep 穿透）── */
 
 /* 标记的填充色与进度条填充同色系（都可能落在同一条绿/黄/红条上），
-   故必须带深色描边，否则条长接近满格时标记会糊进填充里、等于没有。 */
+   故必须带与底色反差描边，否则条长接近满格时标记会糊进填充里、等于没有。 */
 :deep(.nv-mark) {
   position: absolute;
   right: 3px;
@@ -563,7 +567,7 @@ const sysRows = computed<SysRow[]>(() => {
   width: 9px;
   height: 9px;
   transform: translateY(-50%);
-  stroke: var(--nv-bg);
+  stroke: var(--nv-mark-stroke, var(--nv-bg));
   stroke-width: 0.9;
   fill: var(--nv-warm);
   pointer-events: none;
@@ -657,5 +661,15 @@ const sysRows = computed<SysRow[]>(() => {
 @media (max-width: 860px) {
   .nv-sys-item { grid-template-columns: 66px 92px 1fr 50px; gap: 6px; }
   .nv-cells { grid-template-columns: 26px 110px 36px 40px 34px 88px 60px 104px 44px 40px 56px; }
+}
+</style>
+
+<!-- 浅色主题例外覆盖：深色写死的终端专属色在浅色下对比度不足，在此翻转。
+     其余背景/前景/边框全都由 scoped .nvtop 中的项目令牌驱动，此处不动。 -->
+<style>
+[data-theme="light"] .nvtop {
+  --nv-name: #2d6a1a;
+  --nv-grid: rgba(0, 0, 0, 0.1);
+  --nv-mark-stroke: #ffffff;
 }
 </style>
