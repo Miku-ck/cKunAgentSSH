@@ -544,7 +544,7 @@ def test_HTTP_层把_permission_mode_交给_run_运行时通路():
 
 
 # ── 5. 带真实 registry 的判定（前面那一整组都不带，bound_command 分支从没被走过）──
-# PlanModeGuard() 不带 saddle 时 `_registry()` 返回 None，`extract_bound_command`
+# PlanModeGuard() 不带 saddle 时 `core.resolve_registry()` 返回 None，`extract_bound_command`
 # 直接短路成 (None, False) → 函数尾部 `return True, ""`。于是 ALLOWED_TOOLS 那张表
 # 看着在验「file_read 读 /etc/nginx/nginx.conf 被允许」，实际连模板判定都没进 ——
 # 而生产路径（harness.py 装配 saddle → ctx.metadata）是有 registry 的。

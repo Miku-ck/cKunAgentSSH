@@ -82,7 +82,7 @@ from ..safety import (
     git_form_writes,
     subaction_writes,
 )
-from .core import MODE_KEY, _COMMAND_EXEC_TOOLS, command_from_args, extract_bound_command
+from .core import MODE_KEY, _COMMAND_EXEC_TOOLS, command_from_args, extract_bound_command, resolve_registry
 
 logger = logging.getLogger(__name__)
 
@@ -471,7 +471,7 @@ class PlanModeGuard:
         last = ctx.tool_calls_log[-1]
         tool = str(last.get("tool") or "")
         args = last.get("args") or {}
-        registry = _registry(ctx, self.saddle)
+        registry = resolve_registry(ctx, self.saddle)
 
         try:
             allowed, reason = classify_plan_action(tool, args, registry)
@@ -514,14 +514,3 @@ class PlanDisciplineRein:
         if not plan_mode_active(ctx):
             return ReinDecision()
         return ReinDecision(inject_messages=[{"role": "user", "content": PLAN_DISCIPLINE}])
-
-
-def _registry(ctx: RunContext, saddle: Any) -> Any:
-    """取 per-run registry：ctx.metadata 优先，回落构造函数注入的 saddle。
-
-    与 `gate.PermissionGate._lookup_meta` 同口径 —— 进程级单例的 saddle 字段会被
-    并发 run 覆盖，所以 per-run 的引用要从 ctx 里拿。
-    """
-    per_run = (getattr(ctx, "metadata", None) or {}).get("saddle")
-    owner = per_run or saddle
-    return getattr(owner, "registry", None)

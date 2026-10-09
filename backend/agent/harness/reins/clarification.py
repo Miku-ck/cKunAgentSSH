@@ -146,7 +146,9 @@ def _shell_detect_vague(args: dict) -> Optional[str]:
     has_recurs = bool(_re.search(r'(?:^|\s)-[a-zA-Z]*[rR][a-zA-Z]*\b', lower))
     if not has_wildcard and not has_recurs:
         return None
-    # 3) 不含通配符/递归的精准单文件 rm/mv 视为明确（由权限门控兜底）
+    # 3) 走到这里必然同时满足「含破坏性动词」与「含通配符/递归」，才报影响范围不确定。
+    #    精准单文件的 rm 是在第 2 步 return None；`mv` 根本不在第 1 步的 _DESTRUCTIVE 表里
+    #    （只有 rm/rmdir/xargs/chmod/chown），它在第 1 步就退出 —— 两条不是同一个出口。
     return f"命令 {cmd!r} 使用通配符/递归操作但未指定具体目标文件，影响范围不确定"
 
 
