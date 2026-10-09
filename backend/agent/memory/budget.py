@@ -6,7 +6,8 @@ memory.blocks_budget_tokens（两者都不看窗口大小），摘要上限用 `
 比 intended 松 2~3 倍。这里把四本账放在一起算：用户在设置里给的值当作"想要多少"，
 窗口当作"能给多少"，取小者。
 
-口径统一在 cost_tracker.estimate_tokens（中英混合启发式），不再有任何字符估算。
+口径统一在 cost_tracker.estimate_tokens（中英混合启发式）：**所有预算与上限判定**都按 token。
+只有 `cap_text_tokens` 的收紧步长仍按字符推进（那是搜索刻度，不是预算口径）。
 """
 from __future__ import annotations
 
@@ -41,23 +42,31 @@ class MemoryBudget:
         win = int(window or 0)
         if win <= 0:
             win = _DEFAULT_WINDOW
-        reserve = max(1024, int(win * _RESERVE_SHARE))
-        headroom = max(win - reserve, _MIN_ACCOUNT * 3)
-        blocks = _clamp(blocks_wanted, int(headroom * _BLOCKS_SHARE))
-        injection = _clamp(injection_wanted, int(headroom * _INJECTION_SHARE))
-        summary = max(_MIN_ACCOUNT, int(headroom * _SUMMARY_SHARE))
-        # 剩下的都归 history（system 与 run 消息实际也花这本账，压缩阈值由 bridle 管）
-        history = max(_MIN_ACCOUNT, headroom - blocks - injection - summary)
+        # 地板值必须随窗口缩放。原写法把留量下限（1024）和账户下限（200×4）写成绝对
+        # 常量，于是窗口小于 1824 时「四本账 + 留量」必然超过窗口本身：实测 window=1024
+        # 分到 1824、window=1536 分到 1824。而 max_tokens 是 `Field(16384, ge=1)`
+        # （routes/settings.py），小窗口是合法输入 —— 超发的直接后果是注入照塞、请求
+        # 超限、再触发 INVALID_ARGS 压缩重试。
+        reserve_floor = min(1024, max(64, win // 2))
+        reserve = min(win, max(reserve_floor, int(win * _RESERVE_SHARE)))
+        headroom = max(0, win - reserve)
+        account_floor = min(_MIN_ACCOUNT, headroom // 4)
+        blocks = _clamp(blocks_wanted, int(headroom * _BLOCKS_SHARE), account_floor)
+        injection = _clamp(injection_wanted, int(headroom * _INJECTION_SHARE), account_floor)
+        summary = max(account_floor, int(headroom * _SUMMARY_SHARE))
+        # 剩下的都归 history（system 与 run 消息实际也花这本账，压缩阈值由 bridle 管）。
+        # history 不设下限：它是吸收余项的那一本，给下限就等于把超发的口子留在算式里。
+        history = max(0, headroom - blocks - injection - summary)
         return MemoryBudget(window=win, blocks=blocks, injection=injection,
                             summary=summary, history=history, reserve=reserve)
 
 
-def _clamp(wanted: int | None, ceiling: int) -> int:
+def _clamp(wanted: int | None, ceiling: int, floor: int = _MIN_ACCOUNT) -> int:
     """用户想要的值与窗口能给的值取小；未给值时用上限本身。"""
-    ceiling = max(_MIN_ACCOUNT, ceiling)
+    ceiling = max(floor, ceiling)
     if not wanted or int(wanted) <= 0:
         return ceiling
-    return max(_MIN_ACCOUNT, min(int(wanted), ceiling))
+    return max(floor, min(int(wanted), ceiling))
 
 
 def current(window: int | None) -> "MemoryBudget":
@@ -79,10 +88,14 @@ def current(window: int | None) -> "MemoryBudget":
 
 
 def cap_text_tokens(text: str, cap_tokens: int, *, marker: str = "[早期上下文已折叠]\n") -> str:
-    """把文本截到 cap_tokens 以内，保留尾部（近期内容更有价值）。
+    """把文本截到 cap_tokens 附近（放得下折叠标记就带上标记）。
 
     先按 estimate_tokens 反推出字符上限，再逐步收紧——中英混合文本下一次性反推可能仍偏大，
-    循环次数受文本长度约束（每轮至少砍 1/8）。
+    循环次数受文本长度约束（每轮至少砍 1/8）。上限判定全部用 token；`keep` 的 0.9 步长只是
+    搜索刻度（按字符推进），不是预算口径。留 1.2 的宽容度：宁可结果略超 cap，也不为了塞下
+    标记再砍正文。标记的成本按 `estimate_tokens(marker)`（6 token）计 —— 原写法拿
+    `len(marker)`（11 个字符）参与 token 预算比较，多算 5，分歧带上的样本会被误判为
+    「标记放不下」而把标记整个丢掉（见 tests/test_memory_budget_invariant.py）。
     """
     if cap_tokens <= 0 or estimate_tokens(text) <= cap_tokens:
         return text
@@ -90,4 +103,6 @@ def cap_text_tokens(text: str, cap_tokens: int, *, marker: str = "[早期上下�
     while keep > 16 and estimate_tokens(text[-keep:]) > cap_tokens:
         keep = max(16, keep - max(1, keep // 8))
     trimmed = text[-keep:]
-    return marker + trimmed if len(marker) + estimate_tokens(trimmed) <= cap_tokens * 1.2 else trimmed
+    if estimate_tokens(marker) + estimate_tokens(trimmed) <= int(cap_tokens * 1.2):
+        return marker + trimmed
+    return trimmed
