@@ -181,10 +181,17 @@ class BridgeRelay:
                 if mtype == "res":
                     fut = self._pending.pop(str(msg.get("id", "")), None)
                     if fut is not None and not fut.done():
+                        # 原写法 `int(msg.get("status") or 200)` 把「字段缺失」和
+                        # `status: 0` 都折成 200 —— 消费侧 `electron_bridge._ws_request`
+                        # 用 `status >= 400` 判失败，于是失败被伪装成成功：错误正文当结果
+                        # 返回、会话建了一半也照样算 200。缺字段/不可解析/越界都归 502
+                        # （网关没有拿到上游的合法状态码），与相邻的异常分支同侧。
                         try:
-                            status = int(msg.get("status") or 200)
+                            status = int(msg.get("status"))
                         except (TypeError, ValueError):
-                            status = 500
+                            status = 502
+                        if not 100 <= status <= 599:
+                            status = 502
                         fut.set_result((status, msg.get("result")))
                 elif mtype == "ping":
                     await self._safe_send(ws, json.dumps({"type": "pong"}))
