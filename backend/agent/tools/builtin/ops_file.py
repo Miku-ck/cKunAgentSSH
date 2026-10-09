@@ -81,6 +81,35 @@ _WRITE_REQUIRES_SSH = (
 )
 
 
+async def _verify_remote_write(context, path: str, expected: int, timeout: int) -> tuple[bool, str]:
+    """写完回验远端实际字节数。返回 (必须判失败, 必须转达给用户/模型的话)；话为空串 = 对上了。
+
+    为什么 `ok` 不足以证明写成功（本文件 `file_read_cmd` 的 docstring 早就写着这条判据，
+    读类工具都走了 `remote_parts`，写类工具此前却只看 `ok`）：
+    写盘模板是 `printf '%s' '<b64>' | base64 -d > path`，管道的退出码属于**最后一段**，
+    而 `> path` 的重定向在 printf 之前就把既有内容截成 0 字节。payload 撞上 ARG_MAX 时
+    printf 失败、base64 收到空输入仍然 0 退出 ⇒ 整条 ok/exit_code 全绿、文件已经空了，
+    旧实现在这里回「已写入 N 字节」。撤销腿在预快照不可用时是 NoOp（>200KB 就没有快照），
+    所以那条失败路径连"可恢复"都算不上。
+
+    回验命令本身失败/读不到数字时**不判失败**（那是"没读到"，不是"写坏了"），但要把
+    没验上的事实带出去 —— 静悄悄地把不确定冒充成已验证，就是这条修复要治的那件事。
+    """
+    ok, out = await run_headless(context, f"wc -c < {shlex.quote(path)}", timeout)
+    body, err, rc = remote_parts(out)
+    digits = body.strip()
+    if not ok or rc != 0 or not digits.isdigit():
+        reason = err or ("通道没有回验读数" if not ok else f"读数不是字节数：{body[:40]!r}")
+        return False, f"（未能回验远端字节数：{reason}）"
+    actual = int(digits)
+    if actual == expected:
+        return False, ""
+    return True, (
+        f"写入后回验不符：远端 {path} 实际 {actual} 字节，应为 {expected} 字节。"
+        "重定向已把既有内容截断，本次写入没有生效 —— 不要按已写入继续往下推。"
+    )
+
+
 def _write_bound_command(args: dict) -> str | None:
     """file_write / file_edit 共用：把真实落盘的 base64 写模板暴露给内容级判定。
 
@@ -228,7 +257,10 @@ class FileWriteTool(BaseTool):
         )
         if not ok:
             return ToolResult(False, output, "远程写入文件失败")
-        return ToolResult(True, f"已写入 {len(data)} 字节 -> {path}")
+        failed, note = await _verify_remote_write(context, path, len(data), self.meta.timeout)
+        if failed:
+            return ToolResult(False, "", note)
+        return ToolResult(True, f"已写入 {len(data)} 字节 -> {path}{note}")
 
 
 class FileEditTool(BaseTool):
@@ -294,7 +326,10 @@ class FileEditTool(BaseTool):
         )
         if not ok2:
             return ToolResult(False, out2, "远程写入文件失败")
-        return ToolResult(True, "已替换 1 处")
+        failed, note = await _verify_remote_write(context, path, len(data), self.meta.timeout)
+        if failed:
+            return ToolResult(False, "", note)
+        return ToolResult(True, f"已替换 1 处{note}")
 
 
 # glob 模式的绝对定位前缀：`/x`、`\srv\x`、`C:\x`。两个分支都不支持绝对模式

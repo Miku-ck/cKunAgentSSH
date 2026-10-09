@@ -340,6 +340,12 @@ async def _edit_with_content(monkeypatch, original, old, new):
         import base64 as _b64
         import re as _re
         _ = ctx, timeout
+        if command.startswith("wc -c <"):
+            # S14-01 之后写盘有一道字节回验。这里报"上一次真正写出去的内容有多少字节"，
+            # 与该命令在远端的读数同形；不接这条腿会在 _re.search 上抛 AttributeError ——
+            # 那是桩没跟上工具，不是工具坏了。
+            n = len(written[-1].encode("utf-8")) if written else 0
+            return True, f"{n}\n[exit_code=0]"
         b64 = _re.search(r"'([A-Za-z0-9+/=]+)'", command).group(1)
         written.append(_b64.b64decode(b64).decode("utf-8"))
         return True, "ok"
@@ -411,6 +417,10 @@ async def test_file_edit_remote_does_not_strip_bracket_lines(monkeypatch):
 
     async def fake_write(ctx, command, timeout):
         _ = ctx, timeout
+        if command.startswith("wc -c <"):
+            # S14-01 之后写盘有一道字节回验（同 _edit_with_content 里的处理）。
+            n = len(written[-1].encode("utf-8")) if written else 0
+            return True, f"{n}\n[exit_code=0]"
         # 从 write 命令还原内容：printf '%s' '<b64>' | base64 -d > path
         b64 = re.search(r"'([A-Za-z0-9+/=]+)'", command).group(1)
         written.append(_b64.b64decode(b64).decode("utf-8"))
