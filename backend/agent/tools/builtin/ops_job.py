@@ -638,6 +638,16 @@ class JobRunTool(BaseTool):
     meta = _RUN_META
 
     async def execute(self, context, **kwargs) -> ToolResult:
+        # 这条工具只认 cmd，而判定层认 command/shell/cmd 三键（reins.core）。模型若同时
+        # 给两个不同的键，「卡片上被批准的」和「真正跑的」就不是同一条命令 —— 那是审批
+        # 绕过，不是参数宽容。在这里拒绝，让歧义根本不存在（shell_exec 是位置签名，多余
+        # 键天然 TypeError 失败；两条命令入口必须同样拒绝，否则修一条漏一条）。
+        aliases = [k for k in ("command", "shell") if str(kwargs.get(k) or "").strip()]
+        if aliases:
+            return ToolResult(
+                success=False, output="",
+                error=f"拒绝执行：job_run 只接受 cmd，多余命令参数键 {aliases} 会让"
+                      f"审批对象与执行对象不一致，请只保留 cmd")
         cmd = (kwargs.get("cmd") or "").strip()
         if not cmd:
             return ToolResult(success=False, output="", error="cmd 不能为空")

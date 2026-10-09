@@ -103,11 +103,30 @@ def permission_display_fields(ctx: "RunContext", command: str = "") -> dict[str,
     }
 
 
+# 「装命令」的参数键。原本按 command→shell→cmd 取**第一个非空**，于是
+# `{"command": "echo DECOY", "cmd": "rm -rf /var/log"}` 让 FilesystemGuard /
+# PermissionGate / 计划模式 / Sandbox 底线 / 澄清全部只看得到 echo，而
+# `JobRunTool.execute(self, context, **kwargs)` 只读 cmd ⇒ 审批的对象和执行的对象
+# 不是同一条命令。`shell_exec` 是位置参数签名，多余键会被 registry 的 except 变成
+# TypeError 失败，所以这个洞只在 **kwargs 型命令入口上成立 —— 不对称本身就是线索。
+_COMMAND_ARG_KEYS = ("command", "shell", "cmd")
+
+
 def command_from_args(args: Any) -> str:
-    """从工具参数里取 shell 命令串（shell_exec 用 command、job_run 用 cmd）。"""
+    """从工具参数里取要执行的命令串。
+
+    多个命令键同时出现时**全部**纳入判定（按换行拼成多段脚本：分类器对每一段分别判，
+    任何一段高危都躲不掉），而不是挑一个 —— 挑哪个都由模型决定，等于把判定对象交给
+    被判定的一方。判定仍只有一个来源，各层不用各自猜键名。
+    """
     if not isinstance(args, dict):
         return ""
-    return args.get("command") or args.get("shell") or args.get("cmd") or ""
+    vals: list[str] = []
+    for key in _COMMAND_ARG_KEYS:
+        v = args.get(key)
+        if isinstance(v, str) and v.strip() and v not in vals:
+            vals.append(v)
+    return "\n".join(vals)
 
 
 def extract_bound_command(registry: Any, tool: str, args: Any) -> tuple[str | None, bool]:
@@ -277,9 +296,17 @@ class Reins:
                     point.value, type(interceptor).__name__, e, exc_info=True,
                 )
                 if safety_critical:
+                    # 与上面的拦截分支同一口径：已聚合的 events/inject_messages 不能因为
+                    # 这条 fail-closed 早退而蒸发（LoopDetector 纠偏、澄清答案注入都靠它们
+                    # 到达模型）。只回一条裸决策的话，模型只知道"被安全模块拦了"，不知道
+                    # 本轮原本还要它改什么。
                     return ReinDecision(
                         intercepted=True,
-                        intercept_reason=f"安全拦截器异常（fail-closed）: {type(interceptor).__name__}: {e}",
+                        intercept_reason=(
+                            f"安全拦截器异常（fail-closed）: "
+                            f"{type(interceptor).__name__}: {e}"),
+                        events=events,
+                        inject_messages=inject_messages,
                     )
                 # 非安全拦截器异常不阻塞主流程，继续下一个
                 continue

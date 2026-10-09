@@ -191,6 +191,8 @@ denied, auto_allowed, approved, released, revoked, answered, skipped}`（`audit.
 
 | **出网重定向** | 两条 HTML 搜索腿原本给 `netconfig.new_client` 传 `follow_redirects=True`，而落地地址从未校验（`_read_capped` 只回 (body, 编码)，最终 URL 根本没交回来）：Location 由对端决定 ⇒ `302 → http://127.0.0.1:8080/`、`302 → http://169.254.169.254/latest/meta-data/` 走的都是同一条请求链。现在不交给 httpx 跟：`_read_search_html` 自己跟，每一跳**先**按 web_fetch 那条公网规则复核（规则本体合并成单一入口 `_resolve_public_destination`，此前 fetch 里还另抄了一遍协议/空 host 判断）折好的 URL，再发请求；跳数与 fetch 共用 `_MAX_REDIRECTS`。剩余两面：① **不固定 IP** —— fetch 用解析出的 IP 直连 + `sni_hostname`，搜索腿把解析交给 httpx，所以「校验时解析到的地址」与「实际连接的地址」之间仍有 DNS 窗口，且 `gethostbyname` 只看一条 A 记录（多 A/AAAA 时可能校验一个、连另一个）；② Tavily 那条仍然不跟随（`api_key` 在 JSON body 里，307/308 会把 body 原样重投给 Location 指定的主机） | ①固定 IP 要绕开 netconfig 的统一代理出口并自己管 Host，为两条硬编码的公开搜索站不值当；②跟随的收益为零（那是 API 端点），代价是泄密钥 | 误拦侧实测：起始 URL 不校验（照旧直连，内网自建代理不受影响），只有跳转目标解析到内网/保留段才拒；**新增失败面**是「一次跳转解析两次」—— DNS 不通的环境里原本由 httpx 独自解析成功的路径，现在会先报 `DNS 解析失败` 再判搜索失败。误放侧真上限就是那个 DNS 窗口（①）。前提证明：`test_web_search_redirect_ssrf.py` 用真 httpx + MockTransport 钉住「`follow_redirects=True` 确实会一路打到 `http://127.0.0.1/admin` 并读回正文」；对照 pristine HEAD 副本跑 30 条用例 26 红，4 条绿的都是「行为不变」锁（Tavily 两条 + fetch 跳数常量 + 那个 httpx 前提） |
 
+| **参数键归一** | 判定层与执行层曾读不同的参数键：`command_from_args` 按 `command→shell→cmd` 取**第一个非空**，而 `JobRunTool.execute(**kwargs)` 只读 `cmd` ⇒ `{"command":"echo DECOY","cmd":"rm -rf /var/log"}` 让 FilesystemGuard / PermissionGate / 计划模式 / Sandbox 底线 / 澄清五层只看得到 echo，真正跑的是删库。现在提取器把三键的值**全部**纳入判定（换行拼成多段，分类器逐段判），两条命令入口也各自拒绝歧义（job_run 显式报错、shell_exec 因位置签名天然 TypeError）。剩余面：`ToolRegistry.execute` 仍不对照 `tool.parameters` 校验 args ⇒ 非命令类工具的多余键仍被静默接收。本轮实测内置工具**没有一处**读取未声明的参数键（脚本比对各类 `kwargs.get("x")` 与自身 `parameters.properties` 的差集，0 例），所以多余键今天改变不了执行内容 —— 但没有锁：这条不变量不在测试里，未来加 `**kwargs` 工具读新键就可能破 | 全局 schema 校验会一次改掉所有工具对模型脏参数的容忍度（模型今天多填 `explanation`/`purpose` 仍能跑通），收紧属于产品口径决策，不该夹在审批绕过的修复里 | `test_command_key_decoy_bypass.py`：14 条用例里 10 条在修复前红（含「整条审批链对 decoy 形状零拦截」这条端到端），另 4 条是「行为不变」锁（单键调用、重复同值、正常 cmd 空值报错、shell_exec 位置签名）修复前后都绿；`_COMMAND_ARG_KEYS` 是五层唯一的命令键来源，Sandbox 底线与 gate 的注释都指向它 |
+
 ## 8. 改判定规则要跑什么
 
 ```bash
@@ -206,6 +208,7 @@ cd backend && python -m pytest -q \
   tests/test_safety_git_form_and_glued_flags.py \
   tests/test_web_fetch_body_parse_bounds.py \
   tests/test_web_search_redirect_ssrf.py tests/test_web_search_response_caps_s628.py \
+  tests/test_command_key_decoy_bypass.py \
   tests/test_plan_mode.py
 npx vitest run && npm run typecheck
 ```
