@@ -103,3 +103,6 @@ runtime/*
 
 # SSH 开发临时探针/笔记（不入库）
 .dsh-ssh-dev/
+
+# brainstorm visual companion mockups
+.superpowers/
