@@ -65,7 +65,9 @@ async def lifespan(_app: FastAPI):
     _log_cfg_t = _asyncio.to_thread(logconfig.load_from_db)
     _net_cfg_t = _asyncio.to_thread(netconfig.load_policy_from_db)
     _skills_t = _asyncio.to_thread(_bs.sync_packaged_skills)
-    await _asyncio.gather(_log_cfg_t, _net_cfg_t, _skills_t, return_exceptions=True)
+    for _r in await _asyncio.gather(_log_cfg_t, _net_cfg_t, _skills_t, return_exceptions=True):
+        if isinstance(_r, Exception):
+            logger.warning("[cKunAgentic] 启动初始化（log/net 配置 / 技能同步）异常: %s", _r)
     logger.debug("[cKunAgentic] log/net config + packaged skills sync completed")
 
     # 上一批完成后：seed_models_async 打 /models 需要 netconfig 出站策略已就绪。
@@ -108,13 +110,15 @@ async def lifespan(_app: FastAPI):
         if _fallback_set:
             set_approval_fallback_seconds(_pol["approval_fallback_s"])
 
-    await _asyncio.gather(
+    for _r in await _asyncio.gather(
         _seed_models(),
         _reset_stale(),
         _asyncio.to_thread(_load_post_config),
         _asyncio.to_thread(_load_permission_policy),
         return_exceptions=True,
-    )
+    ):
+        if isinstance(_r, Exception):
+            logger.warning("[cKunAgentic] 启动初始化（模型探测 / 会话复位 / 后处理 / 审批策略）异常: %s", _r)
 
     # 意识 tick 延迟启动：仅首次 Agent 运行时触发（ensure_started），
     # 避免纯聊天用户产生空 DB 查询开销
