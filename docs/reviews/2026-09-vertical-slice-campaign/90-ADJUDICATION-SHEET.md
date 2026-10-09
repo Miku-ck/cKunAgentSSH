@@ -40,6 +40,7 @@ Minor 中可单侧修的也已一并落库。**下面这张短表才是真正等
 | S9-16 | 上传 `accept` 与 Python 侧 `ALLOWED_UPLOAD_EXTS` 同源：跨语言单一来源要新增端点或常量表 | 我没单方面定 |
 | S7-06 所有权 | AI 能否取消用户手工配的定时任务：现在只收紧了授权键粒度与 prod 升级，没加所有权判断 | 产品政策 |
 | S1-06 后半 | `budget_extended` / `reflection_request` 两类事件在渲染层**零消费者**：投影已改成只搬生产者真写的键（本轮已修，`test_trace_projection_keys_s106.py` 钉住），剩下要定的是**删掉这族事件**，还是接上 UI 让用户看得见「预算被延长」「反思已排队」 | producer `flow.py:393` / `lifecycle.py:157`，`src`+`shared` grep 零命中 |
+| 新增 W-01 | `GET /workflow` 读失败一律折成空对象（`routes/workflow.py:49-53`），而渲染层 `ssh-ai.ts:553-557` 的 catch 也「按空处理」⇒ 磁盘/权限读不到时「目标」「计划」两枚 chip 与「这个会话还没写过工件」看起来一模一样。要不要照设置面板那次的「未读到」诚实化改（保留上次已知快照 + 明示读取失败），还是接受降级 | 本轮只补了读侧测试 `test_workflow_read_degrade.py` 与 kind 清单漂移守卫，**没动语义** —— 这条改动会改 UI 可见状态，需先裁决 |
 
 已在 HEAD 复核确认**被并行会话顺带解决、无需裁决**的：S9-01/S9-02/S10-02、S5-13、S9-21、
 S13-02（MemoryPanel 注释已改对）、S9-22 的 `ADD_ATTR: ['class']` 空操作半条。
