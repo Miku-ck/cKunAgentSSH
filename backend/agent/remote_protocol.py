@@ -68,11 +68,26 @@ def remote_parts(raw: str) -> tuple[str, str, int | None]:
     退出码缺失（None）意味着通道根本没到远端（缺会话 / 桥不可达 / 超时），此时任何
     "没有结果"的读数都是编造的，不是观测结果。
     """
-    m = _EXIT_SENTINEL_RE.search(raw)
+    # 两处都取**最后**一次出现。生产侧是无条件追加在末尾的（`正文 → [stderr] 段 →
+    # [exit_code=N]`），而正文里本来就可能出现这两个字样 —— 这个工具在读的就是 CI 日志、
+    # agent 自己的输出文件。用 search()/子串判据时：
+    # - rc 是从**文件内容**里读出来的（`[exit_code=0]` 那行会让 rc 变 0，真的非零退出反而被忽略）；
+    # - `raw[:m.start()]` 把内容里那个字样之后的整截丢掉，读到的东西少了一截还报成功；
+    # - 日志里出现 `[stderr]` 恰恰说明它被读出来了，却会被当成远端错误 ⇒ 上层报「读取失败」
+    #   并把文件内容当作远端的报错转述给模型（本函数 docstring 里自己写的就是这个原则）。
+    m = None
+    for cand in _EXIT_SENTINEL_RE.finditer(raw):
+        m = cand
     rc = int(m.group(1)) if m else None
     head = raw[: m.start()] if m else raw
-    if STDERR_SENTINEL in head:
-        body, err = head.split(STDERR_SENTINEL, 1)
-        return body.strip(), " ".join(err.split()), rc
+    err_mark = f"\n{STDERR_SENTINEL}\n"
+    cut = head.rfind(err_mark)
+    if cut != -1:
+        return head[:cut].strip(), " ".join(head[cut + len(err_mark):].split()), rc
+    # 生产侧那个 `\n[stderr]` 的前导换行在「stdout 本来就是空」时是串首唯一的空白，
+    # 而链路上任何一处 strip（桥接、truncate_output）都会把它削掉 ⇒ 标记落到 0 位。
+    # 认漏这一种等于把「tail 读不到文件」的真空错误段当无事发生，上层会据此报成功。
+    if head.startswith(f"{STDERR_SENTINEL}\n"):
+        return "", " ".join(head[len(STDERR_SENTINEL) + 1:].split()), rc
     return head.strip(), "", rc
 
