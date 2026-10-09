@@ -3,7 +3,7 @@
 改造前各处各自拍脑袋：注入预算写在 memory.inject_budget_tokens、画像块写在
 memory.blocks_budget_tokens（两者都不看窗口大小），摘要上限用 `窗口 × 0.25 × 3 字符`
 的字符反推。结果是 8k 窗口的模型也可能被塞进 8000 token 注入，而摘要上限在中文下
-比 intended 松 2~3 倍。这里把四本账放在一起算：用户在设置里给的值当作"想要多少"，
+比 intended 松 2~3 倍。这里把三本账加一份留量放在一起算：用户在设置里给的值当作"想要多少"，
 窗口当作"能给多少"，取小者。
 
 口径统一在 cost_tracker.estimate_tokens（中英混合启发式）：**所有预算与上限判定**都按 token。
@@ -32,7 +32,6 @@ class MemoryBudget:
     blocks: int
     injection: int
     summary: int
-    history: int
     reserve: int
 
     @staticmethod
@@ -43,22 +42,22 @@ class MemoryBudget:
         if win <= 0:
             win = _DEFAULT_WINDOW
         # 地板值必须随窗口缩放。原写法把留量下限（1024）和账户下限（200×4）写成绝对
-        # 常量，于是窗口小于 1824 时「四本账 + 留量」必然超过窗口本身：实测 window=1024
+        # 常量，于是窗口小于 1824 时「三本账 + 留量」必然超过窗口本身：实测 window=1024
         # 分到 1824、window=1536 分到 1824。而 max_tokens 是 `Field(16384, ge=1)`
         # （routes/settings.py），小窗口是合法输入 —— 超发的直接后果是注入照塞、请求
         # 超限、再触发 INVALID_ARGS 压缩重试。
         reserve_floor = min(1024, max(64, win // 2))
         reserve = min(win, max(reserve_floor, int(win * _RESERVE_SHARE)))
         headroom = max(0, win - reserve)
-        account_floor = min(_MIN_ACCOUNT, headroom // 4)
+        account_floor = min(_MIN_ACCOUNT, headroom // 3)
         blocks = _clamp(blocks_wanted, int(headroom * _BLOCKS_SHARE), account_floor)
         injection = _clamp(injection_wanted, int(headroom * _INJECTION_SHARE), account_floor)
         summary = max(account_floor, int(headroom * _SUMMARY_SHARE))
-        # 剩下的都归 history（system 与 run 消息实际也花这本账，压缩阈值由 bridle 管）。
-        # history 不设下限：它是吸收余项的那一本，给下限就等于把超发的口子留在算式里。
-        history = max(0, headroom - blocks - injection - summary)
+        # 剩下那段不再单列「history 账户」：全仓没有任何地方读它（system 与 run 消息的
+        # 实际闸门是 bridle 的压缩阈值 = window×0.7，与本对象无关）。留着一个算出来的
+        # 字段只会让人以为调它能改变 history 的上限 —— 它谁也不管。
         return MemoryBudget(window=win, blocks=blocks, injection=injection,
-                            summary=summary, history=history, reserve=reserve)
+                            summary=summary, reserve=reserve)
 
 
 def _clamp(wanted: int | None, ceiling: int, floor: int = _MIN_ACCOUNT) -> int:

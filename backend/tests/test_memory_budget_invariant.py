@@ -30,31 +30,33 @@ _MARKER = "[早期上下文已折叠]\n"
 
 
 def _total(b: MemoryBudget) -> int:
-    return b.blocks + b.injection + b.summary + b.history + b.reserve
+    return b.blocks + b.injection + b.summary + b.reserve
 
 
 @pytest.mark.parametrize("window", [1, 8, 64, 128, 256, 512, 1024, 1536, 2048,
                                     4096, 8192, 16384, 32768, 128000])
-def test_四本账加留量不得超过窗口(window):
+def test_三本账加留量不得超过窗口(window):
     b = MemoryBudget.for_context(window)
     assert _total(b) <= window, (
-        f"window={window} 分出 {b.blocks}+{b.injection}+{b.summary}+{b.history}"
-        f"+{b.reserve}={_total(b)}，超出 {b.window} —— 按窗口分配是空话")
+        f"window={window} 分出 {b.blocks}+{b.injection}+{b.summary}+{b.reserve}"
+        f"={_total(b)}，超出 {b.window} —— 按窗口分配是空话")
     assert b.reserve <= window
-    assert min(b.blocks, b.injection, b.summary, b.history) >= 0
+    assert min(b.blocks, b.injection, b.summary) >= 0
+    assert not hasattr(b, "history"), (
+        "history 账户已删：全仓无人读它，留着只会被当成『调它能改 history 上限』的旋钮")
 
 
 @pytest.mark.parametrize("window,expect", [
     # 修复前实测值（HEAD 副本直接跑出来的），逐字钉住：大窗口的分配口径不许被小窗口的修法带偏
-    (2048, (1024, 200, 204, 256, 364)),
-    (4096, (1024, 460, 614, 768, 1230)),
-    (16384, (1966, 2162, 2883, 3604, 5769)),
-    (32768, (3932, 4325, 5767, 7209, 11535)),
-    (128000, (15360, 16896, 22528, 28160, 45056)),
+    (2048, (1024, 200, 204, 256)),
+    (4096, (1024, 460, 614, 768)),
+    (16384, (1966, 2162, 2883, 3604)),
+    (32768, (3932, 4325, 5767, 7209)),
+    (128000, (15360, 16896, 22528, 28160)),
 ])
 def test_大窗口额度与修复前逐字一致(window, expect):
     b = MemoryBudget.for_context(window)
-    got = (b.reserve, b.blocks, b.injection, b.summary, b.history)
+    got = (b.reserve, b.blocks, b.injection, b.summary)
     assert got == expect, f"window={window} 的分配从 {expect} 变成 {got}"
 
 

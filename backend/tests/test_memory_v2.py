@@ -685,8 +685,11 @@ def test_budget_clamps_accounts_to_window():
 
     tight = MemoryBudget.for_context(8192, blocks_wanted=8000, injection_wanted=8000)
     assert tight.blocks < tight.window and tight.injection < tight.window
+    # 求和不变量本身不变；`history` 这一项已删 —— 全仓只有这条断言在读它，而它读的方式
+    # 就是加进本行这个和里。留着这个字段只会让人以为调它能改 history 的上限
+    # （system 与 run 消息的实际闸门是 bridle 的 window×0.7 压缩阈值，与本对象无关）。
     assert (tight.blocks + tight.injection + tight.summary
-            + tight.history + tight.reserve) <= tight.window
+            + tight.reserve) <= tight.window
     assert tight.reserve >= 1024
 
     # 窗口足够大时设置值原样通过（小模型才会被夹）
