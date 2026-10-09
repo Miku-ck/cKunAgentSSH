@@ -1103,7 +1103,7 @@ function formatTokenCount(n: number): string {
   background: var(--bg-input-solid);
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-lg);
   z-index: 10;
   overflow: hidden;
   padding: 4px;

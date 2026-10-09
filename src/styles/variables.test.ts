@@ -323,6 +323,31 @@ describe('atelier（手记）主题的令牌覆盖', () => {
     expect(hit('const TERMINAL_UNDERLAY = \'#17181c\'')).toBe(false)
   })
 
+  it('已经存在的 --shadow-lg 不许再被抄成字面量', () => {
+    // --shadow-lg 三套主题各有各的值（深色 0.4 纯黑 / 浅色 0.15 / 手记 0.18 且带纸色底），
+    // 而组件里抄的那几处 `0 8px 24px rgba(0,0,0,0.4)` 与深色那一档逐字相同 —— 抄的就是深色，
+    // 切到米纸上会压出一块过重的黑影。和颜色同一条病：漏了不报错，只是不跟主题。
+    // 只认 box-shadow 属性用法，variables.css 里那三条令牌声明本身不会被这条抓到。
+    const COPIED = /box-shadow:\s*0 8px 24px\s+rgba\(/
+    const offenders: string[] = []
+    for (const [file, src] of Object.entries(SOURCE_FILES)) {
+      src.split('\n').forEach((line, i) => {
+        if (COPIED.test(line)) offenders.push(`${file}:${i + 1} ${line.trim()}`)
+      })
+    }
+    // 债账（同 ORPHAN_TOKENS_ALLOWLIST 的纪律）：并行会话正拿着的文件。
+    // 下面那条"债还在"的断言是故意钉的 —— 他们改完后这条会红，提醒把豁免删掉。
+    const DEBT: string[] = ['src/components/ssh/SftpView.vue']
+    expect(offenders.filter((o) => !DEBT.some((d) => o.startsWith(d)))).toEqual([])
+    expect(offenders.some((o) => DEBT.some((d) => o.startsWith(d)))).toBe(true)
+
+    // 变异自检：正则绿着骗人比没有更糟
+    expect(COPIED.test('  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);')).toBe(true)
+    expect(COPIED.test('  box-shadow: 0 8px 24px rgba(0,0,0,0.4);')).toBe(true)
+    expect(COPIED.test('  box-shadow: var(--shadow-lg);')).toBe(false)
+    expect(COPIED.test('  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);')).toBe(false)
+  })
+
   it('同一族里也不许把字族写成字面量：等宽只能读 --font-mono', () => {
     // 手记主题重写的是整套字族（--font-sans 落到 Georgia/宋体衬线、--font-mono 落到
     // Cascadia Mono），而组件里抄一句 `ui-monospace, Consolas, monospace` 或
