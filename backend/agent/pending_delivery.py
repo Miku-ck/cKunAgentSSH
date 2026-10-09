@@ -44,6 +44,11 @@ class PendingDelivery:
     success: bool = False
     exit_code: Optional[int] = None
     rejected: bool = False          # 用户拒绝执行
+    # requires_confirm 的交付被用户显式确认后才允许闭合成 success（S1-03）。
+    # 原先 resume() 什么都不回查，服务端分不出「用户从未确认」与「确认并已执行」，
+    # 于是一次没发生的执行可以被本地任意持 token 的调用方直接写成成功，
+    # 而 driver 随后把 "[已写入可见终端] …" 喂给模型并落审计。
+    confirmed_by_user: bool = False
     event: asyncio.Event = field(default_factory=asyncio.Event)
 
 
@@ -108,8 +113,13 @@ class PendingDeliveryManager:
         output: str = "",
         success: bool = False,
         exit_code: Optional[int] = None,
+        confirmed: bool = False,
     ) -> bool:
-        """前端回传：填充结果并唤醒等待方。返回 False 表示 tool_id 未知"""
+        """前端回传：填充结果并唤醒等待方。返回 False 表示 tool_id 未知
+
+        `confirmed` 由路由侧判定后传入（只有 HTTP 请求那一侧知道调用方声明了什么），
+        这里把它记到交付项上，供 driver 与审计读取「这次闭合到底有没有经过用户」。
+        """
         delivery = self.get(tool_id)
         if delivery is None:
             return False
@@ -117,6 +127,7 @@ class PendingDeliveryManager:
         delivery.success = bool(success)
         delivery.exit_code = exit_code
         delivery.rejected = False
+        delivery.confirmed_by_user = bool(confirmed)
         delivery.event.set()
         logger.debug(
             "可见终端待交付已恢复 (tool_id=%s, success=%s, exit_code=%s)",

@@ -1359,6 +1359,15 @@ class ToolResultRequest(BaseModel):
     # 用户点「拒绝」而非执行：必须区分于「执行失败」，否则模型看到
     # "[已写入可见终端] <cmd>"，以为破坏性命令已经在真实终端里跑过
     rejected: bool = False
+    # S1-03：发起回传的 run。不传 = 不声明，服务端照旧按 tool_id 认领；
+    # 传了就必须与 create() 时登记的 run 一致，否则一次跨 run 的冒名回传
+    # 能把另一个挂起循环直接闭合成成功。
+    run_id: Optional[str] = None
+    # requires_confirm 的交付：调用方必须显式声明「用户确认过」。
+    # 这不是密码学证明（本机持 token 的调用方想声明什么都能声明），但它把
+    # 「用户从未点确认」从**服务端无从分辨**变成**一个需要主动主张、且会留在
+    # 交付项上供审计读取的事实**（confirmed_by_user）。
+    confirmed: bool = False
 
 
 @router.post("/agent/tool-result")
@@ -1367,7 +1376,24 @@ async def agent_tool_result(req: ToolResultRequest):
 
     - 200：成功恢复对应的待交付命令
     - 404：tool_id 未知（可能已超时清除/会话结束）
+    - 403：run 归属对不上，或 requires_confirm 的交付未经确认（S1-03）
     """
+    delivery = PendingDeliveries.get(req.tool_id)
+    if delivery is None:
+        raise HTTPException(status_code=404, detail=f"tool_id 未知: {req.tool_id}")
+    if req.run_id is not None and req.run_id != delivery.run_id:
+        # 措辞与 tool_id 未知分开：这一条是「认领对了但越权」，排查时含义完全不同
+        logger.warning(
+            "拒绝跨 run 的交付回传 (tool_id=%s 属 run=%s，回传方自称 run=%s)",
+            req.tool_id, delivery.run_id, req.run_id,
+        )
+        raise HTTPException(status_code=403, detail="该待交付命令不属于此 run")
+    if not req.rejected and delivery.requires_confirm and not req.confirmed:
+        logger.warning(
+            "拒绝未经用户确认的交付回传 (tool_id=%s, run=%s)", req.tool_id, delivery.run_id
+        )
+        raise HTTPException(status_code=403, detail="该命令需要用户确认后才能回传执行结果")
+
     if req.rejected:
         ok = PendingDeliveries.reject(req.tool_id)
     else:
@@ -1376,6 +1402,7 @@ async def agent_tool_result(req: ToolResultRequest):
             output=req.output,
             success=req.success,
             exit_code=req.exit_code,
+            confirmed=req.confirmed,
         )
     if not ok:
         raise HTTPException(status_code=404, detail=f"tool_id 未知: {req.tool_id}")

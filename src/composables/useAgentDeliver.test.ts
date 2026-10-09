@@ -125,7 +125,9 @@ describe('可见终端交付', () => {
     expect(postMock).toHaveBeenCalledTimes(1)
     // 必须以 rejected=true 回传：后端据此走 reject()。漏掉时 Driver 写成
     // 「[已写入可见终端] rm -rf …」，模型以为破坏性命令已在真实终端执行过
-    expect(postMock.mock.calls[0]).toEqual(['t1', '[用户拒绝执行]', false, null, true])
+    // 末两位（S1-03）：run_id 归属 + confirmed 主张。拒绝这条腿没经过 deliverCommand，
+    // 所以 confirmed=false 是对的 —— 后端对 rejected 本来也不查确认。
+    expect(postMock.mock.calls[0]).toEqual(['t1', '[用户拒绝执行]', false, null, true, 'run-1', false])
     expect(denyMock).toHaveBeenCalledTimes(1)
     expect(d.deliveries.value).toHaveLength(1)
     expect(d.deliveries.value[0].status).toBe('rejected')
@@ -181,7 +183,8 @@ describe('全局捕获订阅集中化', () => {
     expect(d?.status).toBe('done')
     expect(d?.exit_code).toBe(0)
     expect(postMock).toHaveBeenCalledTimes(1)
-    expect(postMock.mock.calls[0]).toEqual(['t-g1', 'hello-from-global', true, 0, false])
+    // 走过 deliverCommand（自动交付或用户确认）⇒ 回传带 run_id 且 confirmed=true（S1-03）
+    expect(postMock.mock.calls[0]).toEqual(['t-g1', 'hello-from-global', true, 0, false, 'run-1', true])
 
     // 再次交付不重复订阅（模块级标志防重）
     useAgentDeliver().handleDeliver({

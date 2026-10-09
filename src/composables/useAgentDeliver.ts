@@ -49,6 +49,12 @@ export interface ToolDelivery {
   error?: string
   /** 问题 4：发起交付的 run_id（拒绝时用于标记 deny_command） */
   runId?: string
+  /**
+   * S1-03：本次交付是否走过 deliverCommand（自动交付，或用户点了确认）。
+   * 回传时据此声明 confirmed —— 服务端对 requires_confirm 的交付只接受
+   * 声明过确认的闭合，未经确认的失败上报不该冒充「用户已确认」。
+   */
+  confirmedByUi?: boolean
 }
 
 interface ToolDeliverPayload {
@@ -152,7 +158,15 @@ async function finishAndPost(toolId: string, output: string, success: boolean, e
   // 通知父层状态机，完成即不再参与后续捕获
   clearCapture(toolId)
   try {
-    await postToolResult(toolId, output, success, exitCode, rejected)
+    await postToolResult(
+      toolId,
+      output,
+      success,
+      exitCode,
+      rejected,
+      delivery?.runId,
+      delivery?.confirmedByUi === true,
+    )
   } catch (err) {
     console.error('[useAgentDeliver] 回传 tool-result 失败:', err)
     const d = findDelivery(toolId)
@@ -191,13 +205,18 @@ async function deliverCommand(toolId: string): Promise<void> {
   const delivery = findDelivery(toolId)
   if (!delivery) return
   if (isTerminalStatus(delivery.status)) return
+  // 走到这里就意味着这次交付经过了确认环节（requires_confirm 时由用户点击，
+  // 否则本就无需确认）——回传时的 confirmed 主张以此为据（S1-03）
+  delivery.confirmedByUi = true
 
   const ssh = useSSHStore()
   const session = ssh.sessions.find(s => s.id === delivery.session_id)
   if (!session) {
     delivery.status = 'done'
     delivery.output = '无可写终端'
-    void postToolResult(toolId, '无可写终端', false, null).catch(() => {})
+    void postToolResult(
+      toolId, '无可写终端', false, null, false, delivery.runId, delivery.confirmedByUi === true,
+    ).catch(() => {})
     return
   }
 
@@ -231,7 +250,10 @@ async function deliverCommand(toolId: string): Promise<void> {
     clearCapture(toolId)
     delivery.status = 'done'
     delivery.output = 'Electron API 未就绪，无法写入终端'
-    void postToolResult(toolId, 'Electron API 未就绪，无法写入终端', false, null).catch(() => {})
+    void postToolResult(
+      toolId, 'Electron API 未就绪，无法写入终端', false, null, false,
+      delivery.runId, delivery.confirmedByUi === true,
+    ).catch(() => {})
     return
   }
   const writer = session.type === 'local' ? api.ptyWrite : api.sshWrite
@@ -245,7 +267,9 @@ async function deliverCommand(toolId: string): Promise<void> {
     delivery.status = 'done'
     delivery.output = '写入终端失败'
     delivery.error = String((err as Error)?.message || err)
-    void postToolResult(toolId, '写入终端失败', false, null).catch(() => {})
+    void postToolResult(
+      toolId, '写入终端失败', false, null, false, delivery.runId, delivery.confirmedByUi === true,
+    ).catch(() => {})
     return
   }
 

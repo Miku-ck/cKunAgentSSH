@@ -1033,6 +1033,8 @@ export async function postToolResult(
   success: boolean,
   exitCode: number | null,
   rejected = false,
+  runId?: string,
+  confirmed = false,
 ): Promise<void> {
   await ensureApiToken()
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
@@ -1040,7 +1042,17 @@ export async function postToolResult(
   const res = await fetch(url, {
     method: 'POST',
     headers: withApiToken(headers),
-    body: JSON.stringify({ tool_id: toolId, output, success, exit_code: exitCode, rejected }),
+    // S1-03：run_id 让服务端能认出「认领对了但越权」的回传；confirmed 是对
+    // requires_confirm 交付的显式主张（后端拒绝未经确认的闭合）
+    body: JSON.stringify({
+      tool_id: toolId,
+      output,
+      success,
+      exit_code: exitCode,
+      rejected,
+      run_id: runId ?? null,
+      confirmed,
+    }),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
