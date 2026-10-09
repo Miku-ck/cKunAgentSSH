@@ -373,6 +373,7 @@ async def _reconcile_candidates(
     for d in decisions:
         if isinstance(d, dict) and isinstance(d.get("index"), int):
             by_index[d["index"]] = d
+    applied: dict = {}          # 归一内容 -> 本批已写入的 memory_id
     for i, cand in enumerate(cands):
         d = by_index.get(i) or {"op": "NOOP" if not priority_add else "ADD"}
         op = normalize_op(d.get("op"))
@@ -402,8 +403,20 @@ async def _reconcile_candidates(
                 # 清掉裁决里的 target_id：_apply 还会读它，留着等于把刚拒掉的
                 # 那个 id 又交给下游（NOOP 分支拿它写审计标签）
                 d = {**d, "target_id": None}
+        norm = _norm_content(cand.get("content"))
+        if op in ("ADD", "UPDATE") and norm and norm in applied:
+            # 同批兄弟候选已经写过同一内容了。`_similar_existing` 是在这个循环**之前**
+            # 一次性 gather 的，批内成员彼此看不见 ⇒ 一批 4 条相同内容落 4 行同文（实测），
+            # 而抽取器就是按批发多条（post_processor.py:667）—— 最常见的重复来源恰好是
+            # 这一批自己。降级为 NOOP：宁可误留不误杀，也不落第二行同文。
+            op = "NOOP"
+            d = {**d, "target_id": applied[norm],
+                 "reason": "同批重复（已由更早的候选写入）"}
         counters[op] = counters.get(op, 0) + 1
-        await _apply(cand, op, d, similars[i], job_id, embed_client)
+        touched = await _apply(cand, op, d, similars[i], job_id, embed_client)
+        # DELETE 的 touched 是被作废的既有行，与候选正文无关，不能当成"本批已写入的内容"
+        if touched and norm and op != "DELETE" and norm not in applied:
+            applied[norm] = touched
     return counters
 
 
@@ -424,7 +437,11 @@ def normalize_op(raw: object) -> str:
 
 async def _apply(cand: dict, op: str, decision: dict, hits: list, job_id: str,
                  embed_client) -> None:
-    """把一条裁决落到 memories + memory_audit。"""
+    """把一条裁决落到 memories + memory_audit。
+
+    返回本次实际动到的 memory_id（没动到任何行则 None）—— 调用方要用它在**批内**建立
+    「归一内容 -> 已写入行」的映射：`_similar_existing` 只看库里的既有行，看不见同批兄弟。
+    """
     reason = str(decision.get("reason") or "")[:300]
     # 只认裁决自己点名的 target。原先这里还兜到 `hits[0].memory_id`（相似度首位）——
     # 上面 379-383 的注释正是禁止这么做的：拿检索最靠前的那条去 supersede/retire 等于
@@ -459,6 +476,7 @@ async def _apply(cand: dict, op: str, decision: dict, hits: list, job_id: str,
             )
         await asyncio.to_thread(mstore.add_audit, mid, "ADD", new=cand["content"],
                                 reason=reason, job_id=job_id)
+        return mid
     elif op == "UPDATE" and target and target != cand.get("id"):
         # content 已在函数入口按最终入库文本确定（含 merged_content），向量同源
         if cand.get("id"):
@@ -481,6 +499,7 @@ async def _apply(cand: dict, op: str, decision: dict, hits: list, job_id: str,
         await asyncio.to_thread(mstore.add_audit, mid, "UPDATE", old=old_content,
                                 new=content, reason=f"supersedes {target}: {reason}",
                                 job_id=job_id)
+        return mid
     elif op == "DELETE" and target:
         ok = await asyncio.to_thread(mstore.retire, target, reason=reason or "reconcile DELETE",
                                      job_id=job_id)
@@ -491,6 +510,7 @@ async def _apply(cand: dict, op: str, decision: dict, hits: list, job_id: str,
                                     embedding_src=emb_src)
         elif ok and target == cand.get("id"):
             pass  # LLM 让候选自我作废：已被 retire 命中
+        return target if ok else None
     else:  # NOOP / 参数不足的降级
         if cand.get("id"):
             # 待确认旧记忆：NOOP=认可其存在（等价重复只保留双方各自身份，由 DELETE 处理矛盾）
@@ -499,8 +519,10 @@ async def _apply(cand: dict, op: str, decision: dict, hits: list, job_id: str,
                                     embedding_src=emb_src)
             await asyncio.to_thread(mstore.add_audit, cand["id"], "NOOP",
                                     new=cand["content"], reason=reason, job_id=job_id)
+            return cand["id"]
         else:
             await asyncio.to_thread(mstore.add_audit, target or "-", "NOOP",
                                     new=cand["content"],
                                     reason=f"candidate dropped as duplicate: {reason}",
                                     job_id=job_id)
+            return None

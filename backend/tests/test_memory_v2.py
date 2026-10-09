@@ -993,3 +993,23 @@ def test_调用点必须把scope与预算传下去():
     args = m.group(2)
     assert "scopes" in args, f"兜底没传 scope：{args}"
     assert "inject_budget_tokens" in args, f"兜底没传预算：{args}"
+
+
+def test_同一批的相同内容只落一行(memdb):
+    """`_similar_existing` 看得到库里的既有行，看不见同批兄弟（修复前实测）。
+
+    一批 4 条相同内容 ⇒ `applied={'ADD': 4}`、库里 4 行同文；同样 4 条分 4 个 job 发才
+    是 `{'ADD': 1, 'NOOP': 3}`。而抽取器就是按批发多条（post_processor.py:667），
+    所以最常见的重复来源恰恰是这一批自己 —— 召回侧两行同文会各占一份注入额度。
+    """
+    content = "生产 nginx 的 worker_connections 是 1024"
+    cands = [{"content": content, "kind": "semantic", "scope": "global",
+              "source": "chat_extract"} for _ in range(4)]
+    counters = _run(reconcile._reconcile_candidates(
+        cands, "job-batch-dup", None, {}, llm_enabled=False))
+
+    assert counters.get("ADD") == 1, f"同批重复被当成不同记忆写入：{counters}"
+    assert counters.get("NOOP") == 3, f"计数与实际落库效果不一致：{counters}"
+    rows = mstore.list_memories(kind="semantic", status="active", limit=50)
+    assert len(rows) == 1, f"库里出现同文行：{len(rows)}"
+    assert rows[0]["content"] == content
