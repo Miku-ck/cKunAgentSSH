@@ -375,7 +375,7 @@ async def _reconcile_candidates(
             by_index[d["index"]] = d
     for i, cand in enumerate(cands):
         d = by_index.get(i) or {"op": "NOOP" if not priority_add else "ADD"}
-        op = str(d.get("op", "NOOP")).upper()
+        op = normalize_op(d.get("op"))
         # LLM 若违反 prompt 约束（§44-47：UPDATE/DELETE 必须给 target_id）漏给目标，
         # 绝不能用相似度首位 hits[0] 兜底——那会 supersede/retire 一条"恰好检索得最靠前、
         # 却并非该候选所指"的无关记忆，静默毁数据。按本模块"宁可误留不误杀"降级：
@@ -407,11 +407,31 @@ async def _reconcile_candidates(
     return counters
 
 
+KNOWN_OPS: frozenset[str] = frozenset({"ADD", "UPDATE", "DELETE", "NOOP"})
+
+
+def normalize_op(raw: object) -> str:
+    """把模型给的 op 收进四个已知值，未知一律按 NOOP 记账。
+
+    `_apply` 的分支是 if ADD / elif UPDATE+target / elif DELETE+target / else NOOP，
+    所以未知 op（实测模型会回 `"MERGE"`）执行的其实是 NOOP 分支；而计数原先直接
+    `counters[op] += 1`，摘要里就多出一笔从未发生过的动作 —— job 统计与 UI 显示的效果
+    和实际落库不一致。计数必须与真正执行的分支同源，而不是与模型的措辞同源。
+    """
+    op = str(raw or "NOOP").strip().upper()
+    return op if op in KNOWN_OPS else "NOOP"
+
+
 async def _apply(cand: dict, op: str, decision: dict, hits: list, job_id: str,
                  embed_client) -> None:
     """把一条裁决落到 memories + memory_audit。"""
     reason = str(decision.get("reason") or "")[:300]
-    target = decision.get("target_id") or (hits[0].memory_id if hits else None)
+    # 只认裁决自己点名的 target。原先这里还兜到 `hits[0].memory_id`（相似度首位）——
+    # 上面 379-383 的注释正是禁止这么做的：拿检索最靠前的那条去 supersede/retire 等于
+    # 静默毁掉一条并非候选所指的无关记忆。今天它碰不到后果（读 target 的两个分支都被
+    # 上游的 target_id 校验挡过），但"死而不僵"的兜底会被下一个新增分支顺手接走，
+    # 删掉比留着安全。
+    target = decision.get("target_id")
     # 审查R2修复：嵌入必须按最终入库的 content 计算 —— UPDATE 分支存的是
     # merged_content，原实现却恒按 cand["content"] 算向量，向量与正文永久错位，
     # 语义检索按旧文本命中新正文。判据与下方 elif 条件一致；去重 NOOP 分支

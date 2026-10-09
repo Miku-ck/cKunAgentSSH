@@ -904,3 +904,35 @@ def test_retire_returns_false_when_row_already_inactive(memdb):
     # 第二次：行已是 invalidated，守卫 UPDATE 命中 0 行
     assert mstore.retire(mid, reason="重复作废") is False
     assert audit_cnt() == first_cnt  # 不得追加审计
+
+
+# ── 对账 op 与 target 的口径（审查队列第 4 条）──────────────────────────────
+
+def test_未知op按实际执行的分支记账():
+    """模型会回 `"MERGE"` 这类不在契约里的 op，`_apply` 走的是 else（NOOP）分支。
+
+    原实现 `counters[op] += 1` 直接拿模型的措辞计数 ⇒ job 摘要里出现一笔从没执行过的
+    MERGE，统计与落库效果不一致（实测 applied={'MERGE': 1} 而库里只多了一条 NOOP 审计）。
+    """
+    assert reconcile.normalize_op("MERGE") == "NOOP"
+    assert reconcile.normalize_op(" add ") == "ADD"
+    assert reconcile.normalize_op("update") == "UPDATE"
+    assert reconcile.normalize_op(None) == "NOOP"
+    assert reconcile.normalize_op("") == "NOOP"
+    for op in ("ADD", "UPDATE", "DELETE", "NOOP"):
+        assert reconcile.normalize_op(op) == op
+
+
+def test_对账不再兜到相似度首位():
+    """跨层契约锁：`_apply` 里不许出现 `hits[0]` 回落。
+
+    上面 `_target_actionable` 那段注释（reconcile.py:379-383）明令禁止「用检索最靠前的
+    那条当 target」—— 那会 supersede/retire 一条并非候选所指的无关记忆。它今天碰不到后果
+    （读 target 的分支都被上游校验挡过），但留着会被下一个新增分支顺手接走。
+    """
+    src = Path(reconcile.__file__).read_text(encoding="utf-8")
+    body = src.split("async def _apply(", 1)[1]
+    code = [ln for ln in body.splitlines() if not ln.strip().startswith("#")]
+    assert not any("hits[0]" in ln for ln in code), (
+        "_apply 的可执行行里又出现 hits[0] 兜底：相似度首位不是 target 的来源")
+    assert 'target = decision.get("target_id")' in "\n".join(code)
