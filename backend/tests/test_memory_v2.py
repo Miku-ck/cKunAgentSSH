@@ -936,3 +936,60 @@ def test_对账不再兜到相似度首位():
     assert not any("hits[0]" in ln for ln in code), (
         "_apply 的可执行行里又出现 hits[0] 兜底：相似度首位不是 target 的来源")
     assert 'target = decision.get("target_id")' in "\n".join(code)
+
+
+# ── 检索故障兜底：降级不该比正常注入更宽（审查队列第 2 条）───────────────────
+
+def test_兜底不得跨主机注入(memdb):
+    """修复前实测：host:B 的 run 兜底返回了 `(semantic/host:A) 主机A: nginx 监听 8080`。
+
+    正常路径的 scope 过滤在 `retrieve_for_injection` 里，兜底是另一条 SQL —— 两条约束
+    （scopes + 注入预算）在降级时一起丢了，而故障恰恰是最不该串机的时候。
+    """
+    for scope, text in (("host:A", "主机A: nginx 监听 8080"),
+                        ("host:B", "主机B: 数据盘 91%"),
+                        ("global", "全局: 术语表")):
+        mstore.add_memory(kind="semantic", content=text, source="chat_extract", scope=scope)
+    lines = mstore.recent_fallback_lines(5, ["global", "host:B"])
+    assert not any("host:A" in ln for ln in lines), f"兜底跨主机注入：{lines}"
+    assert any("主机B" in ln for ln in lines)
+    assert any("全局" in ln for ln in lines)
+
+
+def test_兜底不给scope时仍是全库形状(memdb):
+    """反向锁：无主机维度的调用方（scopes=None/空）行为不变，收紧只针对传了 scope 的路径。"""
+    mstore.add_memory(kind="semantic", content="主机A: 只在 A 有用", source="chat_extract",
+                      scope="host:A")
+    assert len(mstore.recent_fallback_lines(5, None)) == 1
+    assert len(mstore.recent_fallback_lines(5, [])) == 1
+
+
+def test_兜底受注入预算约束(memdb):
+    """实测修复前一条兜底吃掉 1975 token，而预算是 1500。"""
+    from agent.cost_tracker import estimate_tokens
+
+    for i in range(12):
+        mstore.add_memory(kind="semantic", content=f"记忆{i}：" + "很长" * 60,
+                          source="chat_extract")
+    budget = 400
+    lines = mstore.recent_fallback_lines(12, None, budget)
+    assert lines, "预算内一条都放不下时应有明确行为，而不是全量返回"
+    assert sum(estimate_tokens(ln) for ln in lines) <= budget
+    assert len(lines) < 12, "预算没起到截断作用"
+
+
+def test_调用点必须把scope与预算传下去():
+    """跨层契约头锁：函数支持了参数不等于调用方在用 —— 漏传就是本次缺陷的原始形态。
+
+    只读文件文本，不 `import routes.agent`：那会拉起整个路由层的导入期副作用
+    （建事件循环/客户端），正是本仓库「整文件 0 字节必挂」的那类形态。
+    """
+    import re
+
+    src = (Path(__file__).resolve().parents[1] / "routes" / "agent.py").read_text(
+        encoding="utf-8")
+    m = re.search(r"recent_fallback_lines,\s*(\d+),\s*([^)]*)\)", src)
+    assert m, "没找到兜底调用点（形态变了就同步改这条锁）"
+    args = m.group(2)
+    assert "scopes" in args, f"兜底没传 scope：{args}"
+    assert "inject_budget_tokens" in args, f"兜底没传预算：{args}"

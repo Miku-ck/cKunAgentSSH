@@ -604,7 +604,13 @@ async def _retrieve_memory_contents(
 
     if retrieve_failed and not contents:
         try:
-            contents = await asyncio.to_thread(mstore.recent_fallback_lines, 5)
+            # 兜底要带上正常路径同两条约束（scopes + 注入预算）。原写法只传 limit：
+            # 降级后别的没有，反而比正常注入更宽 —— host:B 的 run 会把 host:A 的经验
+            # 当成事实塞进 prompt，且实测一条兜底就吃掉 1975 token（预算 1500）。
+            contents = await asyncio.to_thread(
+                mstore.recent_fallback_lines, 5, scopes,
+                settings["inject_budget_tokens"],
+            )
         except Exception as e:
             logger.warning("记忆检索降级兜底同样失败，放弃注入: %s", e)
     return contents

@@ -9,6 +9,7 @@ import sqlite3
 
 import database as db
 
+from ..cost_tracker import estimate_tokens
 from . import vec as _vec
 from .text import tokenize
 
@@ -381,17 +382,40 @@ def render_line(row) -> str:
     )
 
 
-def recent_fallback_lines(limit: int = 5) -> list:
-    """检索故障兜底：仅按新近，不做相关性（仅限故障路径，v1 P1 教训保留）。"""
+def recent_fallback_lines(limit: int = 5, scopes=None, budget_tokens: int = 0) -> list:
+    """检索故障兜底：仅按新近，不做相关性（仅限故障路径，v1 P1 教训保留）。
+
+    scope 与预算两条约束在降级时**不能一起丢**。原实现无条件取全库 active：正常路径被
+    `retrieve_for_injection` 卡了 scope 和 `inject_budget_tokens`，降级后两者都没了 ——
+    实测 host:B 的 run 里兜底返回了 `(semantic/host:A) 主机A: nginx 监听 8080`，与
+    `retriever.context_scopes` 的「A 机的经验不能被当成 B 机的事实」直接矛盾；同一批实测
+    兜底注入 1975 token 对预算 1500。故障恰恰是最不该串机的时候。
+
+    排序补 `id` 兜底键：`updated_at` 是 UTC 秒级字符串，同秒写入的行次序不定，而这条
+    选的是「进 prompt 的是哪几条记忆」。
+    """
     conn = _conn()
     try:
+        where, params = _filters(scopes, None, None)
         rows = conn.execute(
-            "SELECT * FROM memories WHERE status='active' "
-            "ORDER BY updated_at DESC LIMIT ?", (limit,),
+            "SELECT * FROM memories WHERE status='active'"
+            + where + " ORDER BY updated_at DESC, id LIMIT ?",
+            (*params, limit),
         ).fetchall()
-        return [render_line(dict(r)) for r in rows]
+        lines = [render_line(dict(r)) for r in rows]
     finally:
         conn.close()
+    if budget_tokens <= 0:
+        return lines
+    kept: list = []
+    used = 0
+    for line in lines:
+        cost = estimate_tokens(line)
+        if used + cost > budget_tokens:
+            break
+        kept.append(line)
+        used += cost
+    return kept
 
 
 # ── 列表 / 管理 ──
