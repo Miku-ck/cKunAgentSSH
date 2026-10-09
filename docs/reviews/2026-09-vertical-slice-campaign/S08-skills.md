@@ -20,7 +20,7 @@
 | S8-01 | d | Minor | **LEGACY #5 确认成立**（实测重复块为 6+1 行，不是当年记的「前导三行」） | `skill_registry.py:169-174 + :176` vs `:201-206 + :208` | 恒（纯冗余） |
 | S8-02 | a | Minor | `build_skill_catalog` 的 `json.loads` 无兜底，而同文件 `match_skills` 有 → 一行脏 `trigger_words` 令技能目录静默消失 | `skill_registry.py:185` vs `:116-119` | 需 DB 行为非法 JSON |
 | S8-03 | b | Minor | `ReflectionRein` docstring 声称「路由层只需监听该事件即可触发」，而路由从不监听 `reflection_request` | `lifecycle.py:93` vs S1-06 | 恒（文档失真） |
-| S8-04 | a | **Major** | 技能在设置里关掉/删掉后，Agent 仍可能继续用旧的技能集：`_reload_skill_registry()` 吞异常，而 `reload()` 失败或被 5s 节流跳过时缓存仍标记已加载 ⇒ 读侧永不自愈 | `routes/skills.py:16-22,74,80,90,160` ↔ `skill_registry.py:35-41,53,81,178,185` | ✅（HEAD 逐行核过） |
+| S8-04 | a | **Major** | 技能在设置里关掉/删掉后，Agent 仍可能继续用旧的技能集：`_reload_skill_registry()` 吞异常，而 `reload()` 失败或被 5s 节流跳过时缓存仍标记已加载 ⇒ 读侧永不自愈 | `routes/skills.py:16-22,74,80,90,160` ↔ `skill_registry.py:28-43`（reload）/ `:37`（_loaded）/ `:65,149,156`（读侧 lazy 自愈） | ✅（HEAD 逐行核过；工作树副本因并行会话在改而下移 ~7 行） |
 
 ## 详情
 
