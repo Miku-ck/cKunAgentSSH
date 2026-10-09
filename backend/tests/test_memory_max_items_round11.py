@@ -90,3 +90,30 @@ def test_dirty_row_cannot_retire_whole_pool(memdb):
     assert mstore.trim_pools(0) == 3
     # v2 的 retire 是标记不是删除：行还在，只是退出召回
     assert len(mstore.list_memories(kind="semantic", status="invalidated")) == 3
+
+
+def test_修剪退役必须逐行落审计(memdb):
+    """修剪原先是全库唯一还在写裸 UPDATE 的退役路径（HEAD 副本实测 trim_pools(1)
+    retired=2 而 DELETE 审计 0 行）。
+
+    `decay_memories` 的地板清扫与 `retire_all_unpinned` 都已改成逐行 `retire()`，理由写在
+    各自的 docstring 里：spec §4.4 要求所有动作落审计，否则用户翻历史抽屉只看见记忆凭空
+    invalidated。修剪恰恰是「批量、按容量、没有任何人点击」的那条路径，最需要能解释的来源。
+    """
+    for i in range(3):
+        mstore.add_memory(kind="semantic", content=f"语义记忆 {i}", source="test")
+    assert mstore.trim_pools(1) == 2
+
+    conn = db._get_conn()
+    audited = {r["memory_id"] for r in conn.execute(
+        "SELECT memory_id FROM memory_audit WHERE action='DELETE'").fetchall()}
+    rows = conn.execute("SELECT id, status FROM memories").fetchall()
+    retired_ids = {r["id"] for r in rows if r["status"] == "invalidated"}
+    active_ids = {r["id"] for r in rows if r["status"] == "active"}
+
+    assert audited == retired_ids, f"审计集合与退役集合不一致：{audited} vs {retired_ids}"
+    assert not (audited & active_ids), "没退役的行被写了 DELETE 审计"
+    reasons = [r["reason"] for r in conn.execute(
+        "SELECT reason FROM memory_audit WHERE action='DELETE'").fetchall()]
+    assert reasons and all("池容量修剪" in x for x in reasons), (
+        f"审计没写明是修剪：{reasons}")

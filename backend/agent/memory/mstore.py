@@ -649,27 +649,37 @@ def trim_pools(max_items: int) -> int:
     """每 kind 保留 importance/use_count/新近 最优的 max_items 条，其余 retire。
 
     pinned 与 pending_reconcile（job 未消化）不参与（spec §5/§11）。
+
+    逐行走 retire()，不裸 UPDATE —— 与 `decay_memories` 的地板清扫、
+    `retire_all_unpinned` 同一条口径（spec §4.4「所有动作落审计」）：裸 UPDATE 时
+    memory_audit 一行都不写，用户翻历史抽屉只看见记忆凭空 invalidated，而修剪恰恰是
+    「批量、按容量、无人点击」的那条路径，最需要一个能解释的来源。计数按 retire 的
+    返回值而非 rowcount（状态守卫下非 active 行命中 0）。
     """
     conn = _conn()
-    total = 0
     try:
+        ids: list[str] = []
         for kind in ("semantic", "episodic", "procedural"):
-            cur = conn.execute(
-                "UPDATE memories SET status='invalidated', invalid_at=?, updated_at=? "
-                "WHERE id IN (SELECT id FROM memories WHERE kind=? AND status='active' "
-                "AND pinned=0 ORDER BY importance DESC, use_count DESC, created_at DESC "
-                "LIMIT -1 OFFSET ?)",
-                (db._now(), db._now(), kind, max_items),
-            )
-            total += cur.rowcount
-        conn.commit()
-        return total
+            ids += [r["id"] for r in conn.execute(
+                "SELECT id FROM memories WHERE kind=? AND status='active' AND pinned=0 "
+                "ORDER BY importance DESC, use_count DESC, created_at DESC, id "
+                "LIMIT -1 OFFSET ?",
+                (kind, max_items),
+            ).fetchall()]
     finally:
         conn.close()
+    return sum(
+        1 for mid in ids
+        if retire(mid, reason=f"池容量修剪：每 kind 保留 {max_items} 条", job_id="")
+    )
 
 
 def decay_memories(days: int = 90, delta: float = 0.1, floor: float = 0.2) -> dict:
-    """长期无人用且零命中的降权，跌破地板 retire（自增强奖励回路已整体删除）。
+    """长期无人用且零命中的降权，跌破地板 retire。
+
+    「零命中」的判据是 `use_count=0`，而 `mark_injected` 每被注入一次就 +1 —— 于是一次
+    进过 prompt 的记忆永久免疫本函数（不是「奖励回路已删除」，是这条豁免没有上限）。
+    这是有意的：热度是「这条记忆真的在用」的唯一信号，宁可漏衰减也不误伤在用的记忆。
 
     降权不碰 updated_at：它是账面记账不是内容编辑（mark_injected 计热度、set_pinned
     改旗标同理）。updated_at 是本模块三处「新近」口径的唯一依据 —— _overlap_hits 取
