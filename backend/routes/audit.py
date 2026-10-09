@@ -75,7 +75,14 @@ async def audit_verify():
     审查修复：与 records/export 同批 — verify 全表扫 + 逐行 sha256 是同步重活，
     直接跑在事件循环上会冻结所有并发请求（含聊天 SSE），移入线程池
     """
-    return await asyncio.to_thread(verify)
+    try:
+        return await asyncio.to_thread(verify)
+    except Exception as e:
+        # 读不到就报 500。审计页的 verify 有 catch（→「审计链校验失败」），
+        # 而原先返回的 intact=false 会被渲染成「链被篡改!」—— 见 agent.audit.verify
+        # 的注释：那是把一次读故障指控成篡改证据，比报空更糟。
+        logger.warning("审计链校验失败: %s", e)
+        raise HTTPException(status_code=500, detail="审计链校验失败，请稍后重试") from e
 
 
 @router.get("/audit/export")

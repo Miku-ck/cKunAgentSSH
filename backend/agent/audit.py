@@ -354,9 +354,15 @@ def verify() -> dict[str, Any]:
                 # 链已断，后续记录也不可信，但继续统计便于定位
             prev_hash = row[2]
     except Exception as e:
+        # S11-01 的反号兄弟：原先把读失败报成 {"intact": False}，而审计页拿到
+        # intact=false 就渲染「链被篡改!」（tooltip 是「检测到篡改: 」+ 空列表）。
+        # 一次锁冲突/坏盘于是对着评估方喊「审计证据被篡改」—— 这比报「没有记录」
+        # 更糟：它是一项不存在的指控。口径与 query/count/export 同一条线：
+        # 表还没建 = 空链、真空、自洽（0 条记录本来就没有可篡改的东西）；其余照抛。
+        if _table_absent(e):
+            return {"intact": True, "total": 0, "checked": 0, "broken": []}
         logger.warning("审计校验失败: %s", e)
-        return {"intact": False, "total": 0, "checked": 0,
-                "broken": [], "error": str(e)}
+        raise
     return {"intact": not broken, "total": total, "checked": checked,
             "broken": broken}
 

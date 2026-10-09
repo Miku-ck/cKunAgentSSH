@@ -667,7 +667,9 @@ export interface AuditVerifyResult {
   total: number
   checked: number
   broken: number[]
-  error?: string
+  // 原先还有个 error?: string —— 后端把读失败折成 {intact:false, error} 时才发它，
+  // 而审计页从不渲染这一字段（只显示「链被篡改!」）。现在读失败直接 500，
+  // 后端不再发这个键，留着就是一条幽灵字段（S1-06 同族）。
 }
 
 export const auditApi = {

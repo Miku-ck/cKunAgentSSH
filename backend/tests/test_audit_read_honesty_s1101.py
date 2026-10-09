@@ -180,3 +180,57 @@ def test_column_constants_equal_the_real_table(wired):
         action="shell_exec", conclusion="executed", target_id="sess-1", command_raw="ls",
     )
     assert set(written) - {"id", "created_at"} == set(audit._INSERT_COLUMNS)
+
+
+# ── S11-01 的反号兄弟：/audit/verify 原先把读失败报成「链被篡改」───────────────
+# 审计页拿到 intact=false 就渲染「链被篡改!」，tooltip 是「检测到篡改: 」+ 空列表。
+# 一次锁冲突/坏盘因此对着评估方指控「审计证据被篡改」—— 比报「没有记录」更糟，
+# 那是一项根本不存在的指控。
+
+def test_verify_says_intact_for_an_untouched_chain(wired):
+    client, _c = wired
+    _append(3)
+    out = client.get("/api/audit/verify").json()
+    assert out["intact"] is True and out["total"] == 3 and out["broken"] == []
+    # 契约面：读失败才是 500，成功响应里不该再有 error 键（渲染层从不读它）
+    assert set(out) == {"intact", "total", "checked", "broken"}
+
+
+def test_verify_names_the_row_actually_tampered(wired):
+    """intact=false 必须只在「确有其事」时出现，且要点得出是哪一行。"""
+    client, conn = wired
+    _append(3)
+    target = conn.execute(
+        f"SELECT id FROM {audit.AUDIT_TABLE} ORDER BY id LIMIT 1 OFFSET 1"
+    ).fetchone()[0]
+    conn.execute(
+        f"UPDATE {audit.AUDIT_TABLE} SET command_raw='rm -rf /' WHERE id=?", (target,)
+    )
+    out = client.get("/api/audit/verify").json()
+    assert out["intact"] is False
+    assert out["broken"] == [target]
+
+
+def test_verify_does_not_accuse_tampering_when_the_read_fails(wired, monkeypatch):
+    class _Broken:
+        def execute(self, *_a, **_k):
+            raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(db, "_get_conn", lambda: _Broken())
+    with pytest.raises(sqlite3.OperationalError):
+        audit.verify()
+
+    client, _c = wired
+    resp = client.get("/api/audit/verify")
+    assert resp.status_code == 500
+    detail = resp.json()["detail"]
+    assert "校验失败" in detail and "篡改" not in detail
+    assert "locked" not in detail, "不把驱动原始串端给用户"
+
+
+def test_verify_of_absent_table_is_vacuously_intact(monkeypatch):
+    """新装机还没有任何记录：空链本来就自洽，说成「篡改」或报错都不诚实。"""
+    conn = _conn(with_table=False)
+    monkeypatch.setattr(db, "_get_conn", lambda: conn)
+    out = audit.verify()
+    assert out == {"intact": True, "total": 0, "checked": 0, "broken": []}
