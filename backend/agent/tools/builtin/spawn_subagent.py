@@ -188,7 +188,14 @@ class SpawnSubagentTool(BaseTool):
             except Exception as rec_err:
                 logger.debug("子 Agent token 记录失败: %s", rec_err)
 
-        return result.content or "[子 Agent 未返回内容]"
+        # 空正文按失败处理，不当「子 Agent 的分析结果」：本文件对「模型配置取不到」已定了
+        # 同一口径（上方 `_run_subagent` 开头的 D 修复注释）—— 失败必须以异常上抛，
+        # 否则 execute 会包成 ToolResult(True)，主 Agent 把那句失败说明当成子 Agent 的分析
+        # 读进正文并计入成功徽章。空正文是它的另一副面孔：这里 enable_thinking=False，
+        # 「没有正文」就是没有产出，不是产出为空。
+        if not (result.content or "").strip():
+            raise RuntimeError("[子 Agent 返回空内容]")
+        return result.content
 
     def _get_model_config(self) -> Optional[dict]:
         """从 DB 获取默认模型配置
@@ -212,8 +219,16 @@ class SpawnSubagentTool(BaseTool):
             # 以上查询的 api_key 均已脱敏，子 Agent 的 LLM 调用需要真实 key，按 id 重取
             cfg_id = model.get("id")
             if cfg_id:
-                return db.get_model_config(cfg_id, mask_key=False) or model
+                fresh = db.get_model_config(cfg_id, mask_key=False)
+                if not fresh:
+                    # 退回那份**脱敏**的 cfg 等于一定拿去发一个必 401 的 key，
+                    # 故障点还被推远到「LLM 调用失败」—— 按 id 取不到就是没读到，直说。
+                    raise RuntimeError(f"模型配置按 id 读取失败: {cfg_id}")
+                return fresh
             return model
         except Exception as e:
+            # 「没读到」不许冒充「你没配模型」：原先这里吞成 None，调用方就会报
+            # 「未找到可用模型配置」—— 一句对用户设置状态的假话（S11-01 同族）。
+            # 现在照抛，由 execute 汇成「子 Agent 运行失败: <真实原因>」。
             logger.warning("获取模型配置失败: %s", e)
-        return None
+            raise
