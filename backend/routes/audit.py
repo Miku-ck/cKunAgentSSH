@@ -16,7 +16,14 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 
-from agent.audit import archive_and_clear, count, export_rows, query, verify
+from agent.audit import (
+    AUDIT_COLUMNS,
+    archive_and_clear,
+    count,
+    export_rows,
+    query,
+    verify,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["audit"])
@@ -81,13 +88,21 @@ async def audit_export():
     def _build() -> str:
         rows = export_rows()
         buf = io.StringIO()
-        writer = csv.DictWriter(buf, fieldnames=rows[0].keys() if rows else ["id"])
+        # 空表也要出完整表头：原先退化成 ["id"] 一列，导出的文件结构上
+        # 就不是审计日志（而读失败现在会抛，不会再冒充成空表）
+        writer = csv.DictWriter(buf, fieldnames=(rows[0].keys() if rows else AUDIT_COLUMNS))
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
         return buf.getvalue()
 
-    content = await asyncio.to_thread(_build)
+    try:
+        content = await asyncio.to_thread(_build)
+    except Exception as e:
+        # 与 /audit/records 同一口径（S11-01）：读不到就报错，别交付一份
+        # 看起来「审计没有记录」的 CSV —— 那是会交到评估方手里的产物
+        logger.warning("审计记录导出失败: %s", e)
+        raise HTTPException(status_code=500, detail="审计记录导出失败，请稍后重试") from e
     return Response(
         content="\ufeff" + content,  # BOM，便于 Excel 正确识别 UTF-8
         media_type="text/csv; charset=utf-8",

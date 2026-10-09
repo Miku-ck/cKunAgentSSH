@@ -205,27 +205,9 @@ def append_record(
             record["prev_hash"] = prev
             record["hash"] = _chain_hash(_canonical(record), prev)
             cur = conn.execute(
-                f"INSERT INTO {AUDIT_TABLE} "
-                f"(ts, operator, target_type, target_id, environment, action, "
-                f" command_hash, command_raw, result, conclusion, run_id, iteration, "
-                f" prev_hash, hash) "
-                f"VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    record["ts"],
-                    record["operator"],
-                    record["target_type"],
-                    record["target_id"],
-                    record["environment"],
-                    record["action"],
-                    record["command_hash"],
-                    record["command_raw"],
-                    record["result"],
-                    record["conclusion"],
-                    record["run_id"],
-                    record["iteration"],
-                    record["prev_hash"],
-                    record["hash"],
-                ),
+                f"INSERT INTO {AUDIT_TABLE} ({', '.join(_INSERT_COLUMNS)}) "
+                f"VALUES ({', '.join('?' * len(_INSERT_COLUMNS))})",
+                tuple(record[c] for c in _INSERT_COLUMNS),
             )
             record["id"] = cur.lastrowid
         except Exception:
@@ -380,7 +362,13 @@ def verify() -> dict[str, Any]:
 
 
 def export_rows() -> list[dict[str, Any]]:
-    """导出全部审计记录（供 CSV/JSON 导出）"""
+    """导出全部审计记录（供 CSV/JSON 导出）
+
+    失败口径与 query/count 同一条线（S11-01）：表还没建 = 真空、返回空列表，
+    其余异常照抛。导出比列表更严重 —— 产物是要交到评估方手里的文件，
+    把「没读到」折成空列表会产出一份看起来「审计没有记录」的 CSV，
+    而且轮转清空后的导出长得一模一样。
+    """
     try:
         conn = database._get_conn()
         cur = conn.execute(
@@ -389,8 +377,22 @@ def export_rows() -> list[dict[str, Any]]:
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, row)) for row in cur.fetchall()]
     except Exception as e:
+        if _table_absent(e):
+            return []
         logger.warning("审计导出失败: %s", e)
-        return []
+        raise
+
+
+# 表列的顺序清单 —— INSERT 列名与导出表头的唯一来源，顺序必须与 _AUDIT_SCHEMA 逐字一致。
+# 空表导出也要给出同一份表头：原先退化成只有 `id` 一列，于是「审计还没有记录」
+# 导出的是一个结构上根本不是审计日志的文件，交付给等保评估会被打回。
+AUDIT_COLUMNS: tuple[str, ...] = (
+    "id", "ts", "operator", "target_type", "target_id", "environment", "action",
+    "command_hash", "command_raw", "result", "conclusion", "run_id", "iteration",
+    "prev_hash", "hash", "created_at",
+)
+# 自增 id 与带默认值的 created_at 由库自己填，其余 14 列是记录本体的字段
+_INSERT_COLUMNS: tuple[str, ...] = AUDIT_COLUMNS[1:-1]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -461,16 +463,9 @@ def archive_and_clear(archive_dir: Optional[str] = None) -> dict[str, Any]:
         seal["prev_hash"] = ""  # 新链 genesis
         seal["hash"] = _chain_hash(_canonical(seal), "")
         conn.execute(
-            f"INSERT INTO {AUDIT_TABLE} "
-            f"(ts, operator, target_type, target_id, environment, action, "
-            f" command_hash, command_raw, result, conclusion, run_id, iteration, "
-            f" prev_hash, hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                seal["ts"], seal["operator"], seal["target_type"], seal["target_id"],
-                seal["environment"], seal["action"], seal["command_hash"],
-                seal["command_raw"], seal["result"], seal["conclusion"],
-                seal["run_id"], seal["iteration"], seal["prev_hash"], seal["hash"],
-            ),
+            f"INSERT INTO {AUDIT_TABLE} ({', '.join(_INSERT_COLUMNS)}) "
+            f"VALUES ({', '.join('?' * len(_INSERT_COLUMNS))})",
+            tuple(seal[c] for c in _INSERT_COLUMNS),
         )
         conn.execute("COMMIT")
         logger.info("审计归档轮转: %d 条 → %s", len(rows), archive_path)

@@ -110,3 +110,73 @@ def test_count_raises_instead_of_reporting_zero(wired, monkeypatch):
     with pytest.raises(sqlite3.OperationalError):
         audit.count()
     assert client.get("/api/audit/records").status_code == 500
+
+
+# ── 同族第二处：/audit/export ─────────────────────────────────────────────────
+# 导出比列表更重：产物是要交到评估方手里的文件。原先 export_rows 把任何异常折成
+# 空列表 ⇒ 交付一份看起来「审计没有记录」的 CSV，且与轮转清空后的导出无法区分；
+# 而空表的表头还退化成 ["id"] 一列，那份文件结构上根本不是审计日志。
+
+def test_export_rows_raises_instead_of_returning_empty(monkeypatch):
+    def _locked():
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(db, "_get_conn", _locked)
+    with pytest.raises(sqlite3.OperationalError):
+        audit.export_rows()
+
+
+def test_export_rows_treats_absent_table_as_genuinely_empty(monkeypatch):
+    conn = _conn(with_table=False)
+    monkeypatch.setattr(db, "_get_conn", lambda: conn)
+    assert audit.export_rows() == []
+
+
+def test_export_fails_loudly_instead_of_shipping_an_empty_csv(wired, monkeypatch):
+    import routes.audit as ra
+
+    def _locked(*_a, **_k):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(ra, "export_rows", _locked)
+    client, _c = wired
+    resp = client.get("/api/audit/export")
+    assert resp.status_code == 500
+    detail = resp.json()["detail"]
+    assert "导出失败" in detail
+    assert "locked" not in detail, "不把驱动原始串端给用户（S0-24 同口径）"
+
+
+def test_export_of_empty_table_still_carries_the_full_header(wired):
+    client, _c = wired
+    resp = client.get("/api/audit/export")
+    assert resp.status_code == 200
+    text = resp.content.decode("utf-8-sig")
+    assert text.splitlines()[0].split(",") == list(audit.AUDIT_COLUMNS)
+
+
+def test_export_keeps_chain_columns_with_rows(wired):
+    client, _c = wired
+    _append(3)
+    lines = client.get("/api/audit/export").content.decode("utf-8-sig").strip().splitlines()
+    assert len(lines) == 4  # 表头 + 3 条
+    header = lines[0].split(",")
+    assert {"hash", "prev_hash", "run_id"} <= set(header)
+
+
+def test_column_constants_equal_the_real_table(wired):
+    """INSERT 用 _INSERT_COLUMNS、导出表头用 AUDIT_COLUMNS —— 两份清单必须真的等于表的列。
+
+    这两处原先各抄一遍 14 个列名（append_record 与封缄各一份，导出再抄第三份），
+    收敛成常量后由这条守卫对账：schema 加了列而常量没改，导出表头就会和 SELECT *
+    错位，测试当场变红。
+    """
+    client, conn = wired
+    _append(1)
+    rec = conn.execute(f"SELECT * FROM {audit.AUDIT_TABLE}").fetchone()
+    assert tuple(rec.keys()) == audit.AUDIT_COLUMNS
+
+    written = audit.append_record(
+        action="shell_exec", conclusion="executed", target_id="sess-1", command_raw="ls",
+    )
+    assert set(written) - {"id", "created_at"} == set(audit._INSERT_COLUMNS)
