@@ -352,6 +352,14 @@ class ScheduleOpTool(BaseTool):
                               f"task/command 组合后过长（{len(task_prompt)} > "
                               f"{_TASK_PROMPT_MAX_LEN}），请精简任务描述")
 
+        # S7-18：模型漏参不能静默换成内置默认巡检词。空 task_prompt 入库后，无头那次
+        # 由 schedule_engine 兜一句「对当前环境执行一次例行检查」（那是历史行与 UI 留空
+        # 时的既有语义，这里不动），于是模型排下的「每天看磁盘水位」被替换成谁也没要求
+        # 过的检查 —— 工具这侧直接拒，让模型补齐 task/command 重试，比替它编一句描述诚实。
+        # 排在两组长度闸门之后：name 与 task 是两件独立的缺陷，先报哪个都得报全。
+        if not task_prompt:
+            return ToolResult(False, "", "create 必须提供非空的 task，或要执行的 command")
+
         host_id, host_note, host_err = await _resolve_target_host(target_host)
         if host_err:
             return ToolResult(False, "", host_err)

@@ -177,10 +177,21 @@ function isFreshLoad(seq: number, path: string, side: typeof props.side): boolea
   return seq === loadSeq && props.visible && props.path === path && props.side === side
 }
 
+// S5-16：保存落回「显示的那一份」。载入钉住 (path, side, sessionId) 三元组，
+// 而原 save() 用**实时 props** 重推同一个三元组 —— props 在编辑器打开期间变化时
+// （换会话、切侧、切文件），用户看到的内容来自 A，写进去的是 B，等于静默覆盖另一个
+// 文件。今天这被编辑器的全屏蒙皮挡住（切不动页），但守卫缺口是潜伏的：编辑器一旦
+// 改成非模态就立刻成立。null = 本轮没有成功载入过，不许保存。
+let loadedTarget: { path: string; side: typeof props.side; sessionId: string } | null = null
+
 async function loadFile(): Promise<void> {
   const seq = ++loadSeq
   const path = props.path
   const side = props.side
+  // 整个载入用同一份会话 id：原先「未连接」守卫读一次 props、请求再读一次，
+  // 中间变化时校验的是新会话、读的是旧会话
+  const sessionId = props.sshSessionId ?? ''
+  loadedTarget = null
   loading.value = true
   error.value = ''
   dirty.value = false
@@ -197,10 +208,12 @@ async function loadFile(): Promise<void> {
     if (side === 'local') {
       result = await api.fsReadFileForEditor(path)
     } else {
-      if (!props.sshSessionId) throw new Error('SSH 会话未连接')
-      result = await api.sftpReadFile(props.sshSessionId, path)
+      if (!sessionId) throw new Error('SSH 会话未连接')
+      result = await api.sftpReadFile(sessionId, path)
     }
     if (!isFreshLoad(seq, path, side)) return
+    // 内容已经落定 ⇒ 这一份的落点也钉住（save 只认它，不认实时 props）
+    loadedTarget = { path, side, sessionId }
     content.value = result.content
     originalContent.value = result.content
     size.value = result.size
@@ -288,6 +301,12 @@ function disposeEditor(): void {
 
 async function save(): Promise<void> {
   if (!dirty.value || readOnly.value || saving.value) return
+  // S5-16：只往「我显示的那一份」写。实时 props 此刻可能已经指向另一个文件/会话
+  const target = loadedTarget
+  if (!target) {
+    toast.error('文件尚未成功载入，未写入任何内容')
+    return
+  }
   saving.value = true
   try {
     // B9 修复：浏览器（非 Electron）下显式守卫，不再用非空断言
@@ -297,10 +316,10 @@ async function save(): Promise<void> {
       saving.value = false
       return
     }
-    if (props.side === 'local') {
-      await api.fsWriteFile(props.path, content.value)
+    if (target.side === 'local') {
+      await api.fsWriteFile(target.path, content.value)
     } else {
-      await api.sftpWriteFile(props.sshSessionId, props.path, content.value)
+      await api.sftpWriteFile(target.sessionId, target.path, content.value)
     }
     originalContent.value = content.value
     dirty.value = false
