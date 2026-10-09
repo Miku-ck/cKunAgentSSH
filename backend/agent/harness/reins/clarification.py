@@ -353,19 +353,58 @@ def _build_clarification_needed(run_id: str, tool: str, args: dict,
     )
 
 
-def _format_answers(answers: dict) -> str:
-    """把答案 dict 格式化为一段用户消息（注入 LLM 让模型按澄清结果重规划）"""
+def _step_field(step: object, name: str) -> str:
+    """steps 里存的可能是 ClarificationStep 对象，也可能是 dict（历史调用方两种都传）"""
+    if step is None:
+        return ""
+    if isinstance(step, dict):
+        value = step.get(name)
+    else:
+        value = getattr(step, name, None)
+    return value if isinstance(value, str) else ""
+
+
+def _option_label(step: object, choice: str) -> str:
+    """把答案字母还原成用户当时看见的选项文字。
+
+    向导的选项只存在于 `clarification_needed` 的 SSE payload 里（前端本地推进），
+    模型侧从头到尾只收到过一句「一个澄清问题正在等待用户回答」。所以注入文本里
+    只写 `Q1: A` 等于把用户的答案压缩成模型无法解读的字母 —— 实测原注入就是
+    "  Q1: A" / "  Q2: B" 两行，整条澄清回路对模型不产生任何可用信息。
+    """
+    if step is None or not choice:
+        return ""
+    options = step.get("options") if isinstance(step, dict) else getattr(step, "options", None)
+    for opt in options or []:
+        oid = opt.get("id") if isinstance(opt, dict) else getattr(opt, "id", None)
+        if oid == choice:
+            label = opt.get("label") if isinstance(opt, dict) else getattr(opt, "label", "")
+            return label if isinstance(label, str) else ""
+    return ""
+
+
+def _format_answers(answers: dict, steps: Optional[list] = None) -> str:
+    """把答案 dict 格式化为一段用户消息（注入 LLM 让模型按澄清结果重规划）
+
+    带出问题原文 + 选项文字，让模型（以及只拿到这段文本的审计/前端）不必回到向导
+    也能读懂「A」是什么。字母保留在前面，与 UI 上的选择一一对应。
+    """
     if not answers:
         return "用户选择跳过澄清，未指定具体范围。"
+    steps = steps or []
     lines = ["用户已回答澄清问题："]
     for step_idx in sorted(answers.keys(), key=lambda x: int(x)):
         a = answers[step_idx] if isinstance(answers[step_idx], dict) else {"choice": str(answers[step_idx])}
         choice = a.get("choice", "")
         custom_text = a.get("custom_text")
-        line = f"  Q{int(step_idx) + 1}: {choice}"
-        if choice == "custom" and custom_text:
-            line += f"（{custom_text}）"
-        lines.append(line)
+        idx = int(step_idx)
+        step = steps[idx] if 0 <= idx < len(steps) else None
+        question = _step_field(step, "question")
+        head = f"  Q{idx + 1}" + (f"「{question}」" if question else "")
+        label = _option_label(step, choice)
+        lines.append(f"{head} → {choice}. {label}" if label else f"{head} → {choice}")
+        if custom_text:
+            lines[-1] += f"（用户补充：{custom_text}）"
     return "\n".join(lines)
 
 
@@ -411,10 +450,19 @@ class ClarificationInterceptor:
 
         # ── 答案就绪 → 注入上下文 + 放行 ──
         if run_id in _CLARIFICATION_DONE:
+            # 答案是针对哪一次调用问的就还给谁。原先只看 run_id：答完之后紧接着的
+            # 第一次 PRE_TOOL_CALL（不管是不是同一个工具）都把答案消费掉。而等待期
+            # 注入的文案明写「请不要重试调用同一工具」，模型转去调别的工具是常态路径，
+            # 于是 ① 澄清被花在无关操作上（注入文本还接着说"请按上述澄清范围重新执行
+            # 操作"），② 向导上下文被 pop，真正触发澄清的那次调用再进来时无据可依。
+            pending_ctx = _CLARIFICATION_CONTEXT.get(run_id)
+            owner = str((pending_ctx or {}).get("tool") or "")
+            if owner and owner != tool:
+                return ReinDecision()
             answers = _CLARIFICATION_DONE.pop(run_id)
             ctx.metadata.pop("clarification_pending", None)
             ctx_info = _CLARIFICATION_CONTEXT.pop(run_id, None)
-            summary = _format_answers(answers)
+            summary = _format_answers(answers, (ctx_info or {}).get("steps") or [])
             done_ev = TraceEvent(
                 kind="clarification_done",
                 source="reins.clarification",
@@ -464,6 +512,11 @@ class ClarificationInterceptor:
             )
 
         # ── 无整治中的题 ── 仅在工具 intent 不明时才创建新题 ──
+        # 同一 run 只允许一张向导：上一张的答案还在等「它问的那次调用」来消费时，
+        # 再叠一张会覆盖 _CLARIFICATION_CONTEXT，用户已经答过的东西就此无主。
+        # 宁可这一次不澄清（审批层照旧挡危险命令），也不能丢答案。
+        if run_id in _CLARIFICATION_DONE:
+            return ReinDecision()
         entry = _CLARIFIABLE_TOOLS.get(tool)
         if not entry:
             return ReinDecision()   # 工具不在注册表：直达执行
