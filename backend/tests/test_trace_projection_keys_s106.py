@@ -79,6 +79,32 @@ def test_phantom_reason_is_gone():
     assert "reason" not in _projected_keys("budget_extended")
 
 
+def _human_help_payload_keys() -> set[str]:
+    at = FLOW.index('kind="human_help_needed"')
+    brace = FLOW.index("payload={", at) + len("payload=")
+    return _keys_from_block(_braced_block(FLOW, brace))
+
+
+def test_human_help_needed_projects_only_real_keys():
+    """投影原先读 tool/args（生产者只写 reason + confidence），UI 因此一直收到空字段。"""
+    produced = _human_help_payload_keys()
+    read = _projected_keys("human_help_needed")
+    assert produced and read
+    assert read <= produced, f"投影读了生产者不写的键: {sorted(read - produced)}"
+    assert "tool" not in read and "args" not in read
+
+
+def test_human_help_needed_carries_confidence():
+    out = SSEAdapter.to_sse_dict(
+        TraceEvent(kind="human_help_needed", source="reins.confidence_monitor",
+                   run_id="run-3", iteration=9,
+                   payload={"reason": "连续低置信度", "confidence": 0.31})
+    )
+    assert out["reason"] == "连续低置信度"
+    assert out["confidence"] == 0.31
+    assert "tool" not in out and "args" not in out
+
+
 def test_budget_extended_carries_the_why_fields_that_do_exist():
     """加预算的「为什么」是 added/files_edited/cap —— 现在真的搬到 Wire 上了。"""
     payload = {

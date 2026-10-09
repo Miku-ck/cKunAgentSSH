@@ -170,9 +170,11 @@ class SSEAdapter:
         elif kind == "error":
             result["message"] = payload.get("message", "")
         elif kind == "human_help_needed":
+            # S1-06：这里原先读 tool/args —— 生产者（ConfidenceMonitorRein）的 payload
+            # 只有 reason + confidence，于是这两个字段在 Wire 上恒为空，而真写了的
+            # confidence 反倒没被搬走。UI 只渲染 reason，故删幽灵字段、补真实那一个。
             result["reason"] = payload.get("reason", "")
-            result["tool"] = payload.get("tool", "")
-            result["args"] = payload.get("args", {})
+            result["confidence"] = payload.get("confidence", 0.0)
         elif kind == "permission_needed":
             result["tool"] = payload.get("tool", "")
             result["args"] = payload.get("args", {})

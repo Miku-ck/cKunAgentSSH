@@ -42,8 +42,8 @@ interface ToolCallEntry {
 interface HumanHelpRequest {
   id: string
   reason: string
-  tool?: string
-  args?: Record<string, unknown>
+  // S1-06：原先还带 tool?/args?，但后端那条事件的 payload 只有 reason + confidence，
+  // 于是这两个字段在 Wire 上恒为空、面板也从不渲染 —— 删掉幽灵字段。
   timestamp: number
 }
 
@@ -614,8 +614,6 @@ export const useAgentStore = defineStore('agent', () => {
           humanHelpRequests.value.push({
             id: `help_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
             reason: event.reason || 'AI 请求人类介入',
-            tool: event.tool,
-            args: event.args,
             timestamp: Date.now(),
           })
         }
