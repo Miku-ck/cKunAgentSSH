@@ -65,6 +65,13 @@ export class BackendManager {
   private ready = false
   private readonly readyWaiters = new Set<ReadyWaiter>()
 
+  /**
+   * 本次启动尝试期间后端 stderr 的尾部环形缓存（保留最后 4KB）。
+   * 健康检查超时 / 进程提前退出时拼进错误消息 —— 否则“后端服务启动超时”
+   * 这种只有一句话的报错，让人无法区分“Python 没装依赖”和“启动就是慢”。
+   */
+  private stderrTail = ''
+
   /** 返回当前后端 API token（即使未启动也已生成，供启动前查询） */
   getApiToken(): string {
     return this.apiToken
@@ -319,7 +326,7 @@ export class BackendManager {
       }
 
       const backendDir = this.getBackendDir()
-      const pythonCmd = this.getPythonCommand()
+      const python = await this.resolvePythonCommand()
       const dbPath = this.ensureDbPath(backendDir)
 
 
@@ -328,7 +335,7 @@ export class BackendManager {
       // 脚本路径必须是绝对路径：命令行是 isOurBackendProcess 唯一的自有性判据，
       // 传相对名 "main.py" 时 backendDir 那条精确匹配永远不会命中，
       // 孤儿检测就只剩宽口径兜底在跑（宽口径必然误伤同签名的无关项目）。
-      this.process = spawn(pythonCmd, [join(backendDir, 'main.py'), '--port', String(this.port), '--host', '127.0.0.1'], {
+      this.process = spawn(python.cmd, [...python.prefixArgs, join(backendDir, 'main.py'), '--port', String(this.port), '--host', '127.0.0.1'], {
         cwd: backendDir,
         env: {
           ...process.env,
@@ -374,13 +381,19 @@ export class BackendManager {
       // 空监听器不是遗漏：挂 'data' 才会把 stdout 推入 flowing 模式，
       // 不消费则子进程会因管道缓冲写满而阻塞。
       // 注意这里**只是丢弃**：stdout 内容不会进状态事件（onStatusChange 的载荷只有
-      // status/port/error），渲染层看不到后端日志。原先这句"已由状态事件透传"是假的，
+      // status/port/error），渲染层看不到后端日志。原先这句“已由状态事件透传”是假的，
       // 会让人以为可以在 UI 里找到后端 stdout。要读后端输出只能看 stderr ——
       // 它在下面被转进主进程控制台（'[Python] …'）。
       this.process.stdout?.on('data', () => {})
 
+      this.stderrTail = ''
       this.process.stderr?.on('data', (data: Buffer) => {
-        try { console.error(`[Python] ${data.toString().trim()}`) } catch { /* EPIPE on exit */ }
+        try {
+          const text = data.toString()
+          // 环形缓存尾部 4KB：启动失败时拼进错误消息，超时不再是“无头案”
+          this.stderrTail = (this.stderrTail + text).slice(-4000)
+          console.error(`[Python] ${text.trim()}`)
+        } catch { /* EPIPE on exit */ }
       })
 
       this.process.on('exit', (code) => {
@@ -407,9 +420,26 @@ export class BackendManager {
         }
       })
 
-      // 等待后端就绪（与 spawn 错误竞争：ENOENT 时立即失败，而不是等 15s 超时）
+      // 审查 M-7 补充：进程在就绪【之前】退出时立即失败，不再干等 15s 超时。
+      // 实测场景：Windows 的 Microsoft Store python 存根（App Execution Alias）
+      // spawn 成功但立即 exit code=9009 且无任何有效输出 —— 原实现只能等
+      // waitForReady 15s 超时，用户看到的是“启动超时”而非真实原因。
+      // 注意与下方 exit 处理器共生：它已置 pendingRestart，本 Promise 只负责
+      // 让 start() 立刻带着真实错误返回，自动重启链路不受影响。
+      const childExitPromise = new Promise<never>((_, reject) => {
+        child.once('exit', (code) => {
+          if (this.ready) return // 已就绪后的退出走崩溃自动重启，不归启动流程管
+          const tail = this.stderrTail.trim()
+          reject(new Error(
+            `后端进程在启动阶段退出（code=${code}）`
+            + (tail ? `，后端输出：${tail}` : '')
+          ))
+        })
+      })
+
+      // 等待后端就绪（与 spawn 错误/提前退出竞争：任一失败立即返回，而不是等 15s 超时）
       try {
-        await Promise.race([this.waitForReady(this.port, 15000), spawnErrorPromise])
+        await Promise.race([this.waitForReady(this.port, 15000), spawnErrorPromise, childExitPromise])
       } catch (err) {
         // 修复 2b：启动失败（spawn 错误或超时）时清理已 spawn 的子进程，
         // 避免留下孤儿进程占用端口；随后按原有失败语义向上抛出。
@@ -669,23 +699,71 @@ export class BackendManager {
   }
 
   /**
-   * 获取 Python 命令，解析顺序：
-   * 1. CKUN_PYTHON 环境变量（开发/排障显式指定）
+   * 解析 Python 命令，解析顺序：
+   * 1. CKUN_PYTHON 环境变量（开发/排障显式指定，不做探测直接信任）
    * 2. 打包后的内嵌运行时 resources/python-runtime/（构建时由 scripts/package.js
    *    把仓库根 runtime/ 拷入 extraResources；Portable Python 解压到此目录）
-   * 3. 系统 python / python3（回退 — 与 README「未内嵌运行时的源码构建」一致）
+   * 3. 逐个探测系统候选（Windows: python / python3 / py -3；POSIX: python3 / python）
+   *
+   * 探测的必要性：Windows 上裸名 'python' 可能解析到 Microsoft Store 的
+   * App Execution Alias 存根 —— spawn 成功、立即 exit 9009、无有效输出，
+   * 原实现的裸名回退只能等到健康检查 15s 超时且看不出原因。探测还顺带
+   * 验证了 fastapi/uvicorn 可导入，把“解释器存在但没装依赖”也挡在 spawn 之前。
+   * 全部候选不可用时抛出带尝试明细的错误，不再继续 spawn。
    */
-  private getPythonCommand(): string {
+  private async resolvePythonCommand(): Promise<{ cmd: string; prefixArgs: string[] }>
+  {
     const envOverride = process.env.CKUN_PYTHON?.trim()
-    if (envOverride && existsSync(envOverride)) return envOverride
+    if (envOverride) {
+      if (existsSync(envOverride)) return { cmd: envOverride, prefixArgs: [] }
+      console.warn(`[BackendManager] CKUN_PYTHON 指定的解释器不存在，回退到自动探测: ${envOverride}`)
+    }
     if (app.isPackaged) {
       const bundled =
         process.platform === 'win32'
           ? join(process.resourcesPath, 'python-runtime', 'python.exe')
           : join(process.resourcesPath, 'python-runtime', 'bin', 'python3')
-      if (existsSync(bundled)) return bundled
+      if (existsSync(bundled)) return { cmd: bundled, prefixArgs: [] }
     }
-    return process.platform === 'win32' ? 'python' : 'python3'
+
+    const candidates = process.platform === 'win32'
+      ? [
+          { cmd: 'python', prefixArgs: [] as string[] },
+          { cmd: 'python3', prefixArgs: [] },
+          { cmd: 'py', prefixArgs: ['-3'] },
+        ]
+      : [
+          { cmd: 'python3', prefixArgs: [] as string[] },
+          { cmd: 'python', prefixArgs: [] },
+        ]
+
+    const failures: string[] = []
+    for (const c of candidates) {
+      const label = [c.cmd, ...c.prefixArgs].join(' ')
+      if (await BackendManager.probePython(c.cmd, c.prefixArgs)) {
+        console.log(`[BackendManager] Using Python interpreter: ${label}`)
+        return c
+      }
+      failures.push(label)
+    }
+
+    throw new Error(
+      `未找到可运行后端的 Python 环境（需要 fastapi/uvicorn）。`
+      + `已尝试: ${failures.join('、')}。`
+      + `请安装依赖或设置 CKUN_PYTHON 环境变量指定解释器路径。`
+    )
+  }
+
+  /** 探测候选解释器：能执行且可导入 fastapi/uvicorn 才算可用（10s 超时兜底） */
+  private static probePython(cmd: string, prefixArgs: string[]): Promise<boolean> {
+    return new Promise((resolve) => {
+      execFile(
+        cmd,
+        [...prefixArgs, '-c', 'import fastapi, uvicorn'],
+        { timeout: 10000, windowsHide: true },
+        (err) => resolve(!err),
+      )
+    })
   }
 
   /**
@@ -722,7 +800,9 @@ export class BackendManager {
       const start = Date.now()
       const check = () => {
         if (Date.now() - start > timeoutMs) {
-          reject(new Error('后端服务启动超时，请稍后重试'))
+          // 附带 stderr 尾部：区分“启动慢”与“根本起不来”（如依赖缺失的 traceback）
+          const tail = this.stderrTail.trim()
+          reject(new Error('后端服务启动超时，请稍后重试' + (tail ? `，后端输出：${tail}` : '')))
           return
         }
 
