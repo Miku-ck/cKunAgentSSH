@@ -405,6 +405,23 @@ class FileGlobTool(BaseTool):
         return ToolResult(True, truncate_output("\n".join(matches)))
 
 
+def _grep_coverage_note(capped: bool, max_lines: int, unreadable: list) -> str:
+    """命中之后的覆盖度说明：截断与读不了的文件都必须说出来。
+
+    「正好 200 条」与「被截到 200 条」读起来一模一样，模型会把它当全量结论（S14-08）。
+    用「可能仍有」而不是「还有」：撞上上限时我们无法知道后面到底有没有匹配 —— 这条注脚
+    本身也不能撒谎。
+    """
+    parts = []
+    if capped:
+        parts.append(f"\n\n（已达 max_lines={max_lines} 上限，可能仍有匹配未列出）")
+    if unreadable:
+        shown = "；".join(unreadable[:3])
+        more = f"；另有 {len(unreadable) - 3} 个未列出" if len(unreadable) > 3 else ""
+        parts.append(f"\n\n（{len(unreadable)} 个文件读不了，未计入结果：{shown}{more}）")
+    return "".join(parts)
+
+
 class FileGrepTool(BaseTool):
     name = "file_grep"
     description = "按正则（RE2 风格）在文件或目录下递归搜索内容，返回匹配行。"
@@ -481,6 +498,8 @@ class FileGrepTool(BaseTool):
         base = target if target.is_dir() else target.parent
 
         results = []
+        unreadable = []
+        capped = False
         for fp in files:
             try:
                 with open(fp, "r", encoding="utf-8", errors="replace") as f:
@@ -493,12 +512,26 @@ class FileGrepTool(BaseTool):
                                 rel = str(fp)
                             results.append(f"{rel}:{lineno}:{text}")
                             if len(results) >= max_lines:
+                                capped = True
                                 break
-            except (IsADirectoryError, PermissionError, OSError):
+            except (IsADirectoryError, PermissionError, OSError) as e:
+                unreadable.append(f"{fp}: {e.strerror or type(e).__name__}")
                 continue
             if len(results) >= max_lines:
+                capped = True
                 break
 
         if not results:
+            # 「没读到」不能报成「确认没有」。远程那条腿会把 Permission denied 带回来
+            # （grep 退出码 2 与 1 是两件事，ops_obs 那族钉着这条），本地这条腿此前静默
+            # continue 后回「未匹配到内容」⇒ 同一个问题两条腿给相反答案。
+            if unreadable:
+                return ToolResult(
+                    False, "",
+                    f"未能完成搜索：{len(unreadable)} 个文件读不了，其余文件里没有匹配。"
+                    f"首个：{unreadable[0]}",
+                )
             return ToolResult(True, f"未匹配到内容：{pattern}")
-        return ToolResult(True, truncate_output("\n".join(results)))
+        return ToolResult(True, truncate_output("\n".join(results) + _grep_coverage_note(
+            capped=capped, max_lines=max_lines, unreadable=unreadable
+        )))
