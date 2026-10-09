@@ -392,13 +392,74 @@ def _format_results(results: list[dict]) -> str:
     return text[:_MAX_SEARCH_OUTPUT_CHARS]
 
 
+def _skip_script_style(html: str) -> str:
+    """线性扫掉 `<script>` / `<style>` 段，替代 `.*?</\\1>` 的 DOTALL 回溯。
+
+    非贪婪 DOTALL 遇到「有开标签、没有闭标签」时，会把 `.*?` 从该位置一路扩到全文末尾
+    才发现匹配失败 —— 代价是每个未闭合标签一次 O(len)。实测 4MB 正文：0 个未闭合
+    `<script>` 0.04s，50 个 1.20s，200 个 6.27s，800 个 **28.66s**，而标签个数由模型选的
+    URL 说了算（一个开标签 8 字节，10MB 上限内能塞几十万个）。
+
+    未闭合时按 HTML 自己的语义办：开标签之后的内容全在这个标签里，整段丢弃 —— 这也是
+    浏览器看到的结果，原来那种「匹配失败就整段留原文」反而是把脚本源码当正文喂给模型。
+    """
+    low = html.lower()
+    n = len(html)
+    out: list[str] = []
+    i = 0
+    while i < n:
+        script_at = _find_tag_start(low, "<script", i)
+        style_at = _find_tag_start(low, "<style", i)
+        hits = [p for p in (script_at, style_at) if p != -1]
+        if not hits:
+            out.append(html[i:])
+            break
+        j = min(hits)
+        tag = "script" if j == script_at else "style"
+        open_end = low.find(">", j)
+        if open_end == -1:
+            out.append(html[i:j])
+            break
+        close = low.find(f"</{tag}", open_end)
+        if close == -1:
+            out.append(html[i:j])
+            break
+        gt = low.find(">", close)
+        out.append(html[i:j])
+        i = n if gt == -1 else gt + 1
+    return "".join(out)
+
+
+def _find_tag_start(low: str, tag: str, start: int) -> int:
+    """找 `<script` / `<style`，要求后面是空白或 `>` —— `<scripting>` 不算。"""
+    pos = start
+    while True:
+        p = low.find(tag, pos)
+        if p == -1:
+            return -1
+        nxt = low[p + len(tag): p + len(tag) + 1]
+        if nxt in ("", " ", "\t", "\n", "\r", ">", "/"):
+            return p
+        pos = p + 1
+
+
+def _extract_body(html: str) -> str:
+    """正文提取（同步 CPU，调用方要放到线程里并纳入总时限）"""
+    try:
+        import trafilatura
+        text = trafilatura.extract(html) or _strip_html(html)
+    except ImportError:
+        text = _strip_html(html)
+    return text
+
+
 def _strip_html(html: str) -> str:
     """简易 HTML 标签去除（无 trafilatura 时的降级方案）"""
     import html as html_module
     import re
 
     # 去 script/style
-    html = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", html, flags=re.DOTALL | re.IGNORECASE)
+    html = _skip_script_style(html)
     # 去标签
     text = re.sub(r"<[^>]+>", "", html)
     # 解码 HTML 实体（&amp; &lt; &gt; &nbsp; &#39; &quot; 等）
@@ -406,6 +467,35 @@ def _strip_html(html: str) -> str:
     # 压缩空白
     text = re.sub(r"\s+", " ", text).strip()
     return text
+
+
+_TEXTUAL_TYPES = (
+    "text/", "application/json", "application/xml", "application/xhtml",
+    "application/javascript", "application/x-javascript", "application/rss",
+    "application/atom", "application/ld",
+)
+
+# 只把正文的前这么多字符交给解析器。输出本来就被 `max_chars`（上限 100k）截掉，
+# 拿 10MB 全量去解析只是为了得到一个 100k 的结果。
+_PARSE_WINDOW_CHARS = 1_000_000
+
+
+def _is_parsable_content(content_type: str) -> bool:
+    """只解析文本型响应。
+
+    原来这条路上没有内容类型判据：`_get_with_limit` 收满 10MB 任何类型的字节就
+    `decode("utf-8", "replace")` 成一个同尺寸的 Python 字符串，再交给正则/trafilatura。
+    实测 10MB 二进制解码后仍要占约 60MB 峰值，且解析纯耗 CPU。
+    Content-Type 缺失时**放行**：大量静态站与旧服务器不给这个头，一票否决会让
+    web_fetch 在真实环境下不可用；长度与解析窗口仍受上面两道约束。
+    """
+    if not content_type:
+        return True
+    base = content_type.split(";", 1)[0].strip().lower()
+    if not base:
+        return True
+    return any(base.startswith(t) for t in _TEXTUAL_TYPES) or (
+        "html" in base or "+json" in base or "+xml" in base)
 
 
 class WebFetchTool(BaseTool):
@@ -496,6 +586,9 @@ class WebFetchTool(BaseTool):
                     return ToolResult(
                         False, "", f"响应超过 {_MAX_RESPONSE_BYTES // (1024 * 1024)}MB 上限，拒绝抓取: {current_url}",
                     )
+                if status == 415:
+                    return ToolResult(
+                        False, "", f"响应不是可解析的文本类型，放弃抓取: {current_url}")
                 # 审查修复（P2）：重定向达到 5 次上限后 status 仍是 3xx，
                 # 原实现直接落入下方成功分支 — 302 响应体通常是空的，
                 # Agent 拿到"成功"的空正文继续推理
@@ -506,12 +599,14 @@ class WebFetchTool(BaseTool):
                 if status >= 400:
                     return ToolResult(False, "", f"HTTP 错误 {status}")
 
-            # 尝试用 trafilatura 提取正文（可选依赖）
-            try:
-                import trafilatura
-                text = trafilatura.extract(html) or _strip_html(html)
-            except ImportError:
-                text = _strip_html(html)
+                # 解析必须在总时限之内，而且不能占住事件循环。原实现把 trafilatura /
+                # `_strip_html` 放在 `async with asyncio.timeout(...)` **之外**：
+                # 一是完全脱窗（S6-08 那道 30s 总预算只管到网络），二是同步 CPU 直接跑在
+                # 事件循环线程上 —— 解析期间本进程所有 run/SSE 一起停摆。放线程里只是
+                # 归还事件循环（线程不可强杀），真正的兜底是「解析窗口 + 线性扫描 +
+                # 内容类型」三道上限。
+                text = await asyncio.to_thread(
+                    _extract_body, html[:_PARSE_WINDOW_CHARS])
 
             # 截断
             if len(text) > max_chars:
@@ -548,6 +643,8 @@ class WebFetchTool(BaseTool):
         - 重定向状态：location 为 Location 头，body 为空
         - 4xx/5xx：body 为空，调用方按 status 处理
         - 超限：返回 (413, "", "") 作为内部标记
+        - 非文本 Content-Type：返回 (415, "", "") 作为内部标记（在下载之前判，
+          二进制不必收满 10MB 再解码成同样尺寸的 Python 字符串）
         """
         async with client.stream(
             "GET", direct_url, headers=headers, extensions={"sni_hostname": sni},
@@ -556,6 +653,9 @@ class WebFetchTool(BaseTool):
                 return resp.status_code, resp.headers.get("location", ""), ""
             if resp.status_code >= 400:
                 return resp.status_code, "", ""
+            # 内容类型判据（放在下载之前，二进制就没必要收满 10MB 了）
+            if not _is_parsable_content(resp.headers.get("content-type", "")):
+                return 415, "", ""
             # 先查 Content-Length（若服务器提供），避免白白下载超大响应
             clen = resp.headers.get("content-length")
             if clen:

@@ -186,6 +186,7 @@ denied, auto_allowed, approved, released, revoked, answered, skipped}`（`audit.
 | **不对称** | `file_read/file_glob/file_grep` 在无 SSH 会话时降级读**本机**文件（仅 `..` 校验），与 `shell_exec` 的严格 fail-closed 不一致 | 有意的产品功能（本地文件浏览） | 路径遍历校验 + 审计 |
 | **凭据形态** | 收紧后的两处剩余面：① **主机私钥**不在表里（`cat /etc/ssh/ssh_host_rsa_key`、`cat C:/ProgramData/ssh/ssh_host_rsa_key` 实测均 safe）——POSIX 侧原本就没有这条规则，Windows 侧按"与既有覆盖面严格对齐"补，加宽它属于另一轮决策；② **UNC 网络共享**不折算（`cat \\srv\share\.ssh\id_rsa` 实测 safe）：无盘符前缀，而 POSIX 里以 `\\` 开头的 token 按 shell 语义是转义后的字面反斜杠，折成 `/` 会把 `\etc\passwd` 这类字面文件名当成 `/etc/passwd` 凭空误拦 | ①②都是覆盖面与凭空误拦的交换，本轮只钉"同一个文件换写法不换结论"这一条不变量 | 误拦侧实测：`find /data -name .env`、`--exclude=/data/app/.env` 这类"提到 dotenv 文件名但不读它"的写法现在会多一张审批卡（判据只看名字段是不是 dotenv，分不清是读取还是模式串）；ANSI-C 形态的盘符路径 `$'C:\\Users\\…'` 实测**已**覆盖（转义解码在前、折算在后），不要以为它和 UNC 一样漏；真上限是"读得到本机文件"这条不对称本身（上一行）+ 审计链，`.env.example` 家族与 `backend.env`/`.environment` 兄弟名字的豁免、上面每条实测都由 `test_safety_windows_and_dotenv_paths.py` 钉住 |
 | **口径差异** | 批量下发换用后端唯一判定源后，`kill -9 <pid>`、`cp` 非敏感路径判 safe → 不再弹确认；此前渲染层自带词表对任意 `kill/cp/mv` 都会问一句 | 保留第四套词表换取的收敛；与 AI 通道同口径 | 同一判定源、同一后果说明 |
+| **出网正文解析** | `web_fetch` 的 URL 由模型选，且它 `risk_level="safe"`、在计划模式白名单里 ⇒ 不需审批就能走到。三道新上限各自的取舍：① Content-Type **缺失时放行**（大量静态站与旧服务器不给这个头，一票否决会让功能在真实环境不可用；长度与解析窗口仍受约束）；② 解析挪进总时限并 `to_thread` —— 线程**不可强杀**，所以真正兜底是「线性扫描 + 1M 解析窗口 + 类型闸门」而不是那个 timeout；③ 未闭合 `<script>` 现在按 HTML 语义把开标签之后的内容整段丢弃（浏览器就是这么解析的），代价是被截断的页面少一段正文 | 修复前实测：4MB 正文 + 800 个未闭合 `<script>` 解析要 **28.66s**（非贪婪 DOTALL 每个未闭合标签重扫全文，标签 8 字节一个 ⇒ 10MB 内可放几十万），且这段同步 CPU 写在 `asyncio.timeout` 之外 ⇒ 事件循环被钉住，本进程所有 run/SSE 一起停；10MB 二进制经 `decode(utf-8, replace)` 后仍占约 60MB 峰值再进正则 | `test_web_fetch_body_parse_bounds.py`（含「解析必须在 timeout 之内、且走 to_thread」的位置锁）；真上限是「一次抓取最多占一个线程 + 1M 字符解析窗口」，仍没有按主机配额限并发 |
 | **子命令形态** | 白名单子命令里「既能列又能写」的那几条（`git branch` / `git tag` / `git remote`）现在按**形态**判定：出现任何未登记 token（含位置参数）即按写处理。换来的误拦实测有两处：`git tag -l 'v1*'` 的 pattern、`git branch --no-merged devel` 的 commit 都是位置参数 ⇒ 多一张审批卡。**另一侧不变**：`sort -o <file>`、`tee <file>` 这类"往非敏感路径落盘"在审批层仍判 safe（Agent 的正常工作区就是能写文件，`file_write` 另有闸门），只有计划模式把它挡下 | 误拦侧成本是一次点击；误放侧 `git remote set-url` 换掉远端后每次 push/fetch 都把代码交给新地址，是 supply-chain 路数，不是"改改本地状态" | 后果表已登记新 reason（`writes repository state`）；`test_safety_git_form_and_glued_flags.py` 双向钉：13 条写形态必经审批 + 16 条只读形态不被误拦 |
 
 ## 8. 改判定规则要跑什么
@@ -201,6 +202,7 @@ cd backend && python -m pytest -q \
   tests/test_remote_whitelist_contract.py tests/test_safety_classify_endpoint.py \
   tests/test_safety_windows_and_dotenv_paths.py \
   tests/test_safety_git_form_and_glued_flags.py \
+  tests/test_web_fetch_body_parse_bounds.py \
   tests/test_plan_mode.py
 npx vitest run && npm run typecheck
 ```
