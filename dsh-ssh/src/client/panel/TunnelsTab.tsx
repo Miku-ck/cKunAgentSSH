@@ -6,6 +6,13 @@ import { useCallback, useEffect, useState } from 'react'
 import type { SshApi } from '../api.ts'
 import type { TunnelInfo } from '../../protocol.ts'
 
+/** Tunnel state → [badge tone, label]. */
+function tunnelBadge(state: string): [string, string] {
+  if (state === 'open') return ['open', '已建立']
+  if (state === 'closing') return ['warn', '关闭中']
+  return ['closed', '已关闭']
+}
+
 /** The tunnels subtab. */
 export function TunnelsTab({ alias, api }: { alias: string; api: SshApi }): React.JSX.Element {
   const [tunnels, setTunnels] = useState<TunnelInfo[] | null>(null)
@@ -89,7 +96,12 @@ export function TunnelsTab({ alias, api }: { alias: string; api: SshApi }): Reac
           <tbody>
             {tunnels.length === 0 && (
               <tr>
-                <td colSpan={4} className="ckun-ssh-note">
+                <td colSpan={4} className="ckun-ssh-empty-row">
+                  <svg width="22" height="22" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3.5 9.5a3.5 3.5 0 0 1 0-7" />
+                    <path d="M12.5 6.5a3.5 3.5 0 0 1 0 7" />
+                    <path d="M5.5 12.75L10.5 3.25" />
+                  </svg>
                   当前主机没有隧道
                 </td>
               </tr>
@@ -100,7 +112,12 @@ export function TunnelsTab({ alias, api }: { alias: string; api: SshApi }): Reac
                 <td className="ckun-ssh-mono">
                   {t.remoteHost}:{t.remotePort}
                 </td>
-                <td>{t.state === 'open' ? '已建立' : t.state === 'closing' ? '关闭中' : '已关闭'}</td>
+                <td>
+                  {(() => {
+                    const [tone, label] = tunnelBadge(t.state)
+                    return <span className={`ckun-ssh-badge ${tone}`}>{label}</span>
+                  })()}
+                </td>
                 <td>
                   {t.state !== 'closed' && (
                     <button className="ckun-ssh-btn danger" disabled={busy} onClick={() => stop(t.id)}>

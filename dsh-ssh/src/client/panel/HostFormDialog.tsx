@@ -46,6 +46,7 @@ export function HostFormDialog({ api, existing, onClose, onSaved }: HostFormDial
   })
   const [testing, setTesting] = useState(false)
   const [pinOffer, setPinOffer] = useState<{ fingerprint: string } | null>(null)
+  const [copied, setCopied] = useState(false)
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null)
 
   const set = (key: keyof FormState) => (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
@@ -65,6 +66,17 @@ export function HostFormDialog({ api, existing, onClose, onSaved }: HostFormDial
       tags: form.tags.split(',').map((s) => s.trim()).filter(Boolean),
       description: form.description.trim() || undefined,
     })
+
+  /** Copy the offered fingerprint (silently degrades where the clipboard is blocked). */
+  const copyFingerprint = (fingerprint: string) => {
+    void navigator.clipboard?.writeText(fingerprint).then(
+      () => {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1500)
+      },
+      () => undefined,
+    )
+  }
 
   /** Test (persisting first so the store knows the host), then offer the pin step. */
   const doTest = async (pin: boolean) => {
@@ -192,7 +204,25 @@ export function HostFormDialog({ api, existing, onClose, onSaved }: HostFormDial
                 </>
               )}
             </div>
-            <div className="ckun-ssh-fingerprint">{pinOffer.fingerprint}</div>
+            <div className="ckun-ssh-fingerprint">
+              {pinOffer.fingerprint}
+              <button
+                className={`ckun-ssh-fingerprint-copy${copied ? ' copied' : ''}`}
+                title={copied ? '已复制' : '复制指纹'}
+                onClick={() => copyFingerprint(pinOffer.fingerprint)}
+              >
+                {copied ? (
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 8.5l3.25 3.25L13 4.75" />
+                  </svg>
+                ) : (
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+                    <path d="M10.5 5.5v-2A1.5 1.5 0 0 0 9 2H4A1.5 1.5 0 0 0 2.5 3.5V8A1.5 1.5 0 0 0 4 9.5h1.5" />
+                  </svg>
+                )}
+              </button>
+            </div>
             <div className="ckun-ssh-form-row">
               <button className="ckun-ssh-btn primary" disabled={testing} onClick={() => void doTest(true)}>
                 ✓ 信任并固定指纹

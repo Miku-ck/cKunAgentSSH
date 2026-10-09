@@ -12,6 +12,25 @@ function fmtSize(bytes: number): string {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
 }
 
+/** 14px folder outline. */
+function FolderIcon(): React.JSX.Element {
+  return (
+    <svg className="ckun-ssh-file-icon dir" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round">
+      <path d="M1.75 4.5A1.5 1.5 0 0 1 3.25 3h3L7.75 4.75h5A1.5 1.5 0 0 1 14.25 6.25v5A1.5 1.5 0 0 1 12.75 12.75H3.25A1.5 1.5 0 0 1 1.75 11.25v-6.75Z" />
+    </svg>
+  )
+}
+
+/** 14px file outline with a folded corner. */
+function FileIcon(): React.JSX.Element {
+  return (
+    <svg className="ckun-ssh-file-icon file" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 2.25h5.5l3 3v8.5H4z" />
+      <path d="M9.5 2.25v3h3" />
+    </svg>
+  )
+}
+
 function parentOf(path: string): string {
   const trimmed = path.replace(/\/+$/, '')
   const idx = trimmed.lastIndexOf('/')
@@ -98,6 +117,16 @@ export function FilesTab({ alias, api }: { alias: string; api: SshApi }): React.
               </tr>
             </thead>
             <tbody>
+              {entries.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="ckun-ssh-empty-row">
+                    <svg width="22" height="22" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round">
+                      <path d="M1.75 4.5A1.5 1.5 0 0 1 3.25 3h3L7.75 4.75h5A1.5 1.5 0 0 1 14.25 6.25v5A1.5 1.5 0 0 1 12.75 12.75H3.25A1.5 1.5 0 0 1 1.75 11.25v-6.75Z" />
+                    </svg>
+                    该目录为空
+                  </td>
+                </tr>
+              )}
               {entries.map((en) => (
                 <tr key={en.path}>
                   <td
@@ -107,7 +136,7 @@ export function FilesTab({ alias, api }: { alias: string; api: SshApi }): React.
                       if (en.type === 'dir') void load(en.path)
                     }}
                   >
-                    {en.type === 'dir' ? '📁 ' : '📄 '}
+                    {en.type === 'dir' ? <FolderIcon /> : <FileIcon />}
                     {en.name}
                   </td>
                   <td>{en.type === 'dir' ? '目录' : en.type === 'link' ? '链接' : '文件'}</td>

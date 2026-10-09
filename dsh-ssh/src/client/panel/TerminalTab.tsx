@@ -7,6 +7,16 @@ import { useEffect, useRef, useState } from 'react'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import { openTerminal } from '../api.ts'
+import { IconInfo } from './SshPanel.tsx'
+
+/** 16-color ANSI palette aligned to the panel's token colors (GitHub Dark grays). */
+const ANSI = {
+  black: '#484f58', red: '#ff7b72', green: '#3fb950', yellow: '#d29922',
+  blue: '#4c82f7', magenta: '#bc8cff', cyan: '#39c5cf', white: '#e6e8ee',
+  brightBlack: '#6e7681', brightRed: '#ffa198', brightGreen: '#56d364',
+  brightYellow: '#e3b341', brightBlue: '#7ea6ff', brightMagenta: '#d2a8ff',
+  brightCyan: '#56d4dd', brightWhite: '#f0f6fc',
+}
 
 /** One interactive terminal for a host. */
 export function TerminalTab({ alias }: { alias: string }): React.JSX.Element {
@@ -20,7 +30,8 @@ export function TerminalTab({ alias }: { alias: string }): React.JSX.Element {
       fontFamily: 'Cascadia Mono, Consolas, "Courier New", monospace',
       fontSize: 13,
       cursorBlink: true,
-      theme: { background: 'transparent', foreground: '#e6e8ee', cursor: '#4c82f7' },
+      lineHeight: 1.3,
+      theme: { background: 'transparent', foreground: '#e6e8ee', cursor: '#4c82f7', ...ANSI },
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
@@ -70,7 +81,17 @@ export function TerminalTab({ alias }: { alias: string }): React.JSX.Element {
 
   return (
     <div className="ckun-ssh-term-wrap">
-      {exitInfo !== null && <div className="ckun-ssh-term-error">{exitInfo}（关闭本提示无需操作；重新进入“终端”标签可再开一个 shell）</div>}
+      {exitInfo !== null && (
+        <div className="ckun-ssh-term-error">
+          <IconInfo />
+          <span>{exitInfo}（重新进入“终端”标签可再开一个 shell）</span>
+          <button className="ckun-ssh-term-error-close" title="关闭提示" onClick={() => setExitInfo(null)}>
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+              <path d="M4 4l8 8M12 4l-8 8" />
+            </svg>
+          </button>
+        </div>
+      )}
       <div ref={hostRef} style={{ height: '100%' }} />
     </div>
   )

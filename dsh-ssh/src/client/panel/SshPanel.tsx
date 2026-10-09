@@ -29,6 +29,39 @@ export function SshPanelIcon(): React.JSX.Element {
   )
 }
 
+/** Import glyph: down arrow into a tray. */
+export function IconImport(): React.JSX.Element {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8 2.5v7" />
+      <path d="M5 7l3 3 3-3" />
+      <path d="M3 10.75V13a1.5 1.5 0 0 0 1.5 1.5h7A1.5 1.5 0 0 0 13 13v-2.25" />
+    </svg>
+  )
+}
+
+/** Kebab menu glyph. */
+export function IconKebab(): React.JSX.Element {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+      <circle cx="3.25" cy="8" r="1.15" />
+      <circle cx="8" cy="8" r="1.15" />
+      <circle cx="12.75" cy="8" r="1.15" />
+    </svg>
+  )
+}
+
+/** Info glyph for the terminal exit banner. */
+export function IconInfo(): React.JSX.Element {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+      <circle cx="8" cy="8" r="6.25" />
+      <path d="M8 7.25v4" />
+      <circle cx="8" cy="4.75" r=".4" fill="currentColor" />
+    </svg>
+  )
+}
+
 /** Register the panel (sidebar row + main content). Returns a disposer. */
 export function registerSshPanel(slots: SlotsApi): () => void {
   const disposers: Array<() => void> = []
@@ -123,7 +156,7 @@ export function SshPanelPage(): React.JSX.Element {
             <span>SSH 主机</span>
             <span className="ckun-ssh-spacer" />
             <button className="ckun-ssh-icon-btn" title="从 ~/.ssh/config 导入" onClick={() => void importSshConfig()}>
-              ⇊
+              <IconImport />
             </button>
             <button className="ckun-ssh-btn primary" onClick={() => setDialog({ mode: 'create' })}>
               + 新主机
@@ -135,7 +168,7 @@ export function SshPanelPage(): React.JSX.Element {
             {hosts.length === 0 && loadError === '' && <div className="ckun-ssh-note" style={{ padding: '4px 8px' }}>暂无主机，点“+ 新主机”添加，或导入 ~/.ssh/config。</div>}
             {groups.map((group) => (
               <div key={group.env}>
-                <div className="ckun-ssh-group-title">{group.env}</div>
+                <div className="ckun-ssh-group-title">{group.env} · {group.hosts.length}</div>
                 {group.hosts.map((h) => (
                   <div key={h.alias} className={`ckun-ssh-host-row${selected === h.alias ? ' active' : ''}`} onClick={() => setSelected(h.alias)}>
                     <span className={`ckun-ssh-dot ${h.environment === 'prod' ? 'prod' : snapshot.connections[h.alias] === 'open' ? 'open' : snapshot.connections[h.alias] === 'connecting' ? 'connecting' : 'closed'}`} />
@@ -158,7 +191,7 @@ export function SshPanelPage(): React.JSX.Element {
                         setDialog({ mode: 'edit', host: h })
                       }}
                     >
-                      ⋯
+                      <IconKebab />
                     </button>
                   </div>
                 ))}
@@ -196,7 +229,13 @@ export function SshPanelPage(): React.JSX.Element {
             </>
           ) : (
             <div className="ckun-ssh-empty">
-              <div style={{ fontSize: 28 }}>⌨</div>
+              <div style={{ opacity: .6 }}>
+                <svg width="30" height="30" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="1.75" y="2.25" width="12.5" height="11.5" rx="1.75" />
+                  <path d="M4.25 5.25l2.75 2.75-2.75 2.75" />
+                  <path d="M8.5 10.75h3.25" />
+                </svg>
+              </div>
               <div>从左侧选择一台主机开始</div>
               <div className="ckun-ssh-note">终端 / SFTP 文件 / 本地端口隧道；agent 侧工具（ssh_list / ssh_connect / ssh_exec）与这里共享同一连接池</div>
             </div>
