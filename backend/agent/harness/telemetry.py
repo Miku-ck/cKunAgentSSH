@@ -231,9 +231,17 @@ class SSEAdapter:
                 "confidence": payload.get("confidence", 0.0),
             }
         elif kind == "budget_extended":
+            # S1-06：原投影读 `reason` —— 生产者（DynamicBudgetRein）从来没写过这个键，
+            # 于是线上永远带一个空 reason；而真正说明「为什么加预算」的 added / files_edited /
+            # cap 反被丢掉。与 done 少投影 context_summary 是同一族：两头都在、中间断了，
+            # 且不报错不告警。投影照生产者的实际键走。
             result["initial"] = payload.get("initial", 0)
             result["extended_to"] = payload.get("extended_to", 0)
-            result["reason"] = payload.get("reason", "")
+            result["added"] = payload.get("added", 0)
+            result["files_edited"] = payload.get("files_edited", 0)
+            result["files_read"] = payload.get("files_read", 0)
+            result["total_tool_calls"] = payload.get("total_tool_calls", 0)
+            result["cap"] = payload.get("cap", 0)
         elif kind == "reflection_request":
             result["final_state"] = payload.get("final_state", "")
             result["iterations"] = payload.get("iterations", 0)
@@ -241,6 +249,7 @@ class SSEAdapter:
             result["tool_calls_count"] = payload.get("tool_calls_count", 0)
             result["unique_tools"] = payload.get("unique_tools", [])
             result["failed_tools"] = payload.get("failed_tools", [])
+            result["has_warnings"] = payload.get("has_warnings", False)
             result["has_cost"] = payload.get("has_cost", False)
         elif kind == "tool_deliver":
             result["tool_id"] = payload.get("tool_id", "")
