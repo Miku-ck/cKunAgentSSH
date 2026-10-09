@@ -18,10 +18,10 @@ S00~S13 报告里**零次出现**：`agent/tools/builtin/ops_file.py`(468) · `a
 
 | ID | 维度 | 级别 | 位置 | 一句话 | 状态 |
 |---|---|---|---|---|---|
-| S14-01 | a | **Critical** | `ops_file.py:226-231` `:292-296` | 写类工具只看 `ok`，而 `printf … \| base64 -d > path` 的退出码属于最后一段：管道前半失败时留下 0 字节文件却回「已写入 N 字节」 | [待复核] |
+| S14-01 | a | **Critical** | `ops_file.py` FileWriteTool / FileEditTool 两处成功出口 | 写类工具只看 `ok`，而 `printf '%s' '…' \| base64 -d > path` 的退出码属于最后一段：`>` 先把既有内容截成 0 字节，printf 失败时 base64 收空输入仍 0 退出 ⇒ 回「已写入 N 字节」而文件是空的；撤销腿在预快照不可用（>200KB）时是 NoOp | **[已复核，已修 `341517b`]** |
 | S14-02 | a | **Major** | `remote_protocol.py:71-76` | 拆解用第一处匹配 + 子串判据，把正文里的 `[exit_code=0]` 当远端退出码、并丢掉该字样之后的正文 | **[已复核，已修 `3bf9e7f`]** |
 | S14-03 | a | **Major** | `ops_image.py:85-94` ↔ `ssh-manager.ts:1036-1040,1066` | 主进程 exec stdout 有 1MiB 上限并在末尾追加「[输出已截断…]」，而 base64 通道在它之前就截 ⇒ ≥~786KB 的远端图片拼成非法 base64 仍回成功；文档承诺的 10MB 上限远程永不触发 | [待复核] |
-| S14-04 | b | **Major** | `ops_file.py:462-463` → `:467-468` | 本地 grep 分支把逐个文件的 `OSError` `continue` 掉，最后回「未匹配到内容」；远程分支会带 Permission denied ⇒ 同一问题两条腿给相反答案 | [待复核] |
+| S14-04 | b | **Major** | `ops_file.py` FileGrepTool 本地分支的 `except (IsADirectoryError, PermissionError, OSError): continue` → `if not results: return ToolResult(True, "未匹配到内容")` | 本地 grep 把逐个文件的读失败静默 `continue`，最后回「未匹配到内容」；远程分支会带 Permission denied ⇒ 同一问题两条腿给相反答案 | **[已复核，未修]**（单侧可修：数出不可读文件数，`no results 且 unreadable>0` 必须判观测失败而不是"确认没有"） |
 | S14-05 | a/c | **Major** | `ops_file.py:174-176` `:364` `:443-451` | 本地分支在事件循环上做无上限阻塞文件 I/O（整文件 `readlines()`、全量 `rglob` 物化、整树扫行），`meta.timeout` 无人执行；仓内同形状写法是 `asyncio.to_thread` | [待复核] |
 | S14-06 | c | Major | `host_profile.py:13-22` + `routes/agent.py:730-735` + `memory/blocks.py:61` | 主机画像块按临时会话 id 建、从不删除，每次 run `list_blocks()` 全量扫 | [待复核] |
 | S14-07 | b | Minor | `ops_file.py:218-223` ↔ `ops_common.py:207` | `content` 无上限，整份 base64 拼进单个 shell 参数 | [待复核] |
