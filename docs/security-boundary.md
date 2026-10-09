@@ -189,6 +189,8 @@ denied, auto_allowed, approved, released, revoked, answered, skipped}`（`audit.
 | **出网正文解析** | `web_fetch` 的 URL 由模型选，且它 `risk_level="safe"`、在计划模式白名单里 ⇒ 不需审批就能走到。三道新上限各自的取舍：① Content-Type **缺失时放行**（大量静态站与旧服务器不给这个头，一票否决会让功能在真实环境不可用；长度与解析窗口仍受约束）；② 解析挪进总时限并 `to_thread` —— 线程**不可强杀**，所以真正兜底是「线性扫描 + 1M 解析窗口 + 类型闸门」而不是那个 timeout；③ 未闭合 `<script>` 现在按 HTML 语义把开标签之后的内容整段丢弃（浏览器就是这么解析的），代价是被截断的页面少一段正文 | 修复前实测：4MB 正文 + 800 个未闭合 `<script>` 解析要 **28.66s**（非贪婪 DOTALL 每个未闭合标签重扫全文，标签 8 字节一个 ⇒ 10MB 内可放几十万），且这段同步 CPU 写在 `asyncio.timeout` 之外 ⇒ 事件循环被钉住，本进程所有 run/SSE 一起停；10MB 二进制经 `decode(utf-8, replace)` 后仍占约 60MB 峰值再进正则 | `test_web_fetch_body_parse_bounds.py`（含「解析必须在 timeout 之内、且走 to_thread」的位置锁）；真上限是「一次抓取最多占一个线程 + 1M 字符解析窗口」，仍没有按主机配额限并发 |
 | **子命令形态** | 白名单子命令里「既能列又能写」的那几条（`git branch` / `git tag` / `git remote`）现在按**形态**判定：出现任何未登记 token（含位置参数）即按写处理。换来的误拦实测有两处：`git tag -l 'v1*'` 的 pattern、`git branch --no-merged devel` 的 commit 都是位置参数 ⇒ 多一张审批卡。**另一侧不变**：`sort -o <file>`、`tee <file>` 这类"往非敏感路径落盘"在审批层仍判 safe（Agent 的正常工作区就是能写文件，`file_write` 另有闸门），只有计划模式把它挡下 | 误拦侧成本是一次点击；误放侧 `git remote set-url` 换掉远端后每次 push/fetch 都把代码交给新地址，是 supply-chain 路数，不是"改改本地状态" | 后果表已登记新 reason（`writes repository state`）；`test_safety_git_form_and_glued_flags.py` 双向钉：13 条写形态必经审批 + 16 条只读形态不被误拦 |
 
+| **出网重定向** | 两条 HTML 搜索腿原本给 `netconfig.new_client` 传 `follow_redirects=True`，而落地地址从未校验（`_read_capped` 只回 (body, 编码)，最终 URL 根本没交回来）：Location 由对端决定 ⇒ `302 → http://127.0.0.1:8080/`、`302 → http://169.254.169.254/latest/meta-data/` 走的都是同一条请求链。现在不交给 httpx 跟：`_read_search_html` 自己跟，每一跳**先**按 web_fetch 那条公网规则复核（规则本体合并成单一入口 `_resolve_public_destination`，此前 fetch 里还另抄了一遍协议/空 host 判断）折好的 URL，再发请求；跳数与 fetch 共用 `_MAX_REDIRECTS`。剩余两面：① **不固定 IP** —— fetch 用解析出的 IP 直连 + `sni_hostname`，搜索腿把解析交给 httpx，所以「校验时解析到的地址」与「实际连接的地址」之间仍有 DNS 窗口，且 `gethostbyname` 只看一条 A 记录（多 A/AAAA 时可能校验一个、连另一个）；② Tavily 那条仍然不跟随（`api_key` 在 JSON body 里，307/308 会把 body 原样重投给 Location 指定的主机） | ①固定 IP 要绕开 netconfig 的统一代理出口并自己管 Host，为两条硬编码的公开搜索站不值当；②跟随的收益为零（那是 API 端点），代价是泄密钥 | 误拦侧实测：起始 URL 不校验（照旧直连，内网自建代理不受影响），只有跳转目标解析到内网/保留段才拒；**新增失败面**是「一次跳转解析两次」—— DNS 不通的环境里原本由 httpx 独自解析成功的路径，现在会先报 `DNS 解析失败` 再判搜索失败。误放侧真上限就是那个 DNS 窗口（①）。前提证明：`test_web_search_redirect_ssrf.py` 用真 httpx + MockTransport 钉住「`follow_redirects=True` 确实会一路打到 `http://127.0.0.1/admin` 并读回正文」；对照 pristine HEAD 副本跑 30 条用例 26 红，4 条绿的都是「行为不变」锁（Tavily 两条 + fetch 跳数常量 + 那个 httpx 前提） |
+
 ## 8. 改判定规则要跑什么
 
 ```bash
@@ -203,6 +205,7 @@ cd backend && python -m pytest -q \
   tests/test_safety_windows_and_dotenv_paths.py \
   tests/test_safety_git_form_and_glued_flags.py \
   tests/test_web_fetch_body_parse_bounds.py \
+  tests/test_web_search_redirect_ssrf.py tests/test_web_search_response_caps_s628.py \
   tests/test_plan_mode.py
 npx vitest run && npm run typecheck
 ```

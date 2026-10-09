@@ -8,7 +8,7 @@ import asyncio
 import ipaddress
 import logging
 import socket
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 
 from agent.tools import BaseTool, ToolResult, ToolMeta
 
@@ -37,15 +37,58 @@ _MAX_SEARCH_BYTES = 2 * 1024 * 1024
 _MAX_SEARCH_FIELD_CHARS = 300
 _MAX_SEARCH_OUTPUT_CHARS = 12_000
 
+# 重定向跳数上限。web_fetch 的逐跳校验链里原本写死三处 5（两处判断 + 一处错误文案），
+# 搜索腿再接一条链就必须共用同一个数 —— 否则「上限」会随调用点分家。
+_MAX_REDIRECTS = 5
+
+# 视为「要跟随」的 3xx。304 不在内：它没有 Location，也不是重定向。
+_REDIRECT_STATUSES = (301, 302, 303, 307, 308)
+
 
 class ResponseTooLarge(RuntimeError):
     """响应体超过 _MAX_SEARCH_BYTES —— 与各腿既有的 `except Exception` 文案兼容。"""
 
 
+class SsrfBlocked(RuntimeError):
+    """重定向目标不是公网可路由地址 / 跳数超上限 —— 同样被各腿的 except 兜住。"""
+
+
+async def _resolve_public_destination(url: str) -> tuple[bool, str, str]:
+    """URL 的 hostname 是否解析到公网可路由地址，返回 (放行, IP, 拒绝原因)。
+
+    web_fetch 与搜索腿共用这一条规则（两处各自写一遍「什么算内网」必然漂移）。
+    E 修复：socket.gethostbyname 是同步 DNS 查询，放线程池避免卡事件循环。
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False, "", f"不允许的协议: {parsed.scheme}"
+    hostname = parsed.hostname
+    if not hostname:
+        return False, "", "无效的 URL"
+    try:
+        ip = await asyncio.to_thread(socket.gethostbyname, hostname)
+    except socket.gaierror:
+        return False, "", f"DNS 解析失败: {hostname}"
+    safe, reason = _is_safe_ip(ip)
+    if not safe:
+        return False, "", reason
+    return True, ip, ""
+
+
+def _join_redirect(current: str, location: str) -> str:
+    """Location 可能是相对的（360 给 `/s?...`），按当前 URL 折成绝对地址再校验。
+
+    必须先折叠后校验：拿 `/s?q=x` 去查协议只会得到一条与真实目标无关的「协议不允许」
+    原因；而请求实际打到的 Host 是折叠出来的那台 —— 校验对象和请求对象必须是同一个
+    URL，否则复核形同虚设。
+    """
+    return urljoin(current, location.strip())
+
+
 async def _read_capped(client, method: str, url: str, *,
                        headers: dict | None = None, json_body: dict | None = None,
-                       cap: int = _MAX_SEARCH_BYTES) -> tuple[bytes, str]:
-    """流式读取并封顶，返回 (响应体, 编码名)。
+                       cap: int = _MAX_SEARCH_BYTES) -> tuple[bytes, str, str]:
+    """流式读取并封顶，返回 (响应体, 编码名, Location)。
 
     与 `_get_with_limit` 同一手法，但那条绑着 SSRF 的 IP 固定与 sni 扩展，
     搜索腿用真实域名，故另开这一条共用的。`raise_for_status` 留在读体之前，
@@ -53,10 +96,17 @@ async def _read_capped(client, method: str, url: str, *,
 
     编码取自 `resp.encoding`（httpx 按 Content-Type 的 charset 推，缺省 utf-8），
     HTML 型搜索页（360 常见 gbk）必须用它解，写死 utf-8 会把结果刮成乱码。
+
+    Location 只在 3xx 时带出，且 3xx 不下载正文：跟随与否由调用方决定
+    （见 `_read_search_html`），跟随时旧正文必然被丢弃，白占一次下载额度。
+    不跟随的 Tavily 腿拿到空 body —— 它原本也是 JSON 解析失败报错，只是那段正文
+    本来就用不上。
     """
     async with client.stream(method, url, headers=headers, json=json_body) as resp:
         resp.raise_for_status()
         encoding = resp.encoding or "utf-8"
+        if resp.status_code in _REDIRECT_STATUSES:
+            return b"", encoding, resp.headers.get("location", "")
         clen = resp.headers.get("content-length")
         if clen:
             # Content-Length 可能是脏值（分块编码下服务器随便填）：解析不了就
@@ -76,7 +126,28 @@ async def _read_capped(client, method: str, url: str, *,
                 raise ResponseTooLarge(
                     f"搜索结果响应超过 {cap // 1024}KB 上限（已读到 {total} 字节）")
             chunks.append(chunk)
-        return b"".join(chunks), encoding
+        return b"".join(chunks), encoding, ""
+
+
+async def _read_search_html(client, url: str, headers: dict) -> str:
+    """两条 HTML 腿共用的取页：封顶读 + 逐跳公网复核，返回解码后的页面文本。
+
+    httpx 侧一律 follow_redirects=False（netconfig 出口的那条不变量），跟随由这里手动
+    做 —— 这样每一跳都是「先校验目标地址、再发请求」，而不是 httpx 内部跟完之后再验
+    落地地址。搜索腿必须能跟：so.com / DDG 都会 302 到带来源参数的同站路径，直接关掉
+    等于把两条降级源刮成空页。
+    """
+    current = url
+    for _ in range(_MAX_REDIRECTS + 1):
+        body, enc, location = await _read_capped(client, "GET", current, headers=headers)
+        if not location:
+            return body.decode(enc, "replace")
+        next_url = _join_redirect(current, location)
+        safe, _ip, reason = await _resolve_public_destination(next_url)
+        if not safe:
+            raise SsrfBlocked(f"重定向被拦截: {reason}")
+        current = next_url
+    raise SsrfBlocked(f"重定向次数超过 {_MAX_REDIRECTS} 次上限，放弃搜索")
 
 
 # HTML 型搜索源（360 / DuckDuckGo）共用的浏览器 UA：两者都靠正则刮页面，
@@ -207,8 +278,11 @@ class WebSearchTool(BaseTool):
             import json
 
             import netconfig
+            # 这一条腿**故意**不跟重定向（区别于两条 HTML 腿的 _read_search_html）：
+            # api_key 在 JSON body 里，307/308 会把 body 原样重投给 Location 指定的
+            # 主机 ⇒ 等于把密钥交给对端说了算的地址。要跟随必须先改成 Header 鉴权。
             async with netconfig.new_client(default_timeout=15.0) as client:
-                raw, _enc = await _read_capped(
+                raw, _enc, _loc = await _read_capped(
                     client, "POST", "https://api.tavily.com/search",
                     json_body={
                         "api_key": api_key,
@@ -254,10 +328,8 @@ class WebSearchTool(BaseTool):
             headers = {**_BROWSER_HEADERS, "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"}
 
             import netconfig
-            async with netconfig.new_client(default_timeout=15.0, follow_redirects=True) as client:
-                body, enc = await _read_capped(client, "GET", search_url,
-                                               headers=headers)
-                html = body.decode(enc, "replace")
+            async with netconfig.new_client(default_timeout=15.0) as client:
+                html = await _read_search_html(client, search_url, headers)
 
             results = self._parse_360_html(html, max_results)
             if not results:
@@ -323,10 +395,8 @@ class WebSearchTool(BaseTool):
             headers = {**_BROWSER_HEADERS, "Accept-Language": "en-US,en;q=0.9"}
 
             import netconfig
-            async with netconfig.new_client(default_timeout=15.0, follow_redirects=True) as client:
-                body, enc = await _read_capped(client, "GET", search_url,
-                                               headers=headers)
-                html = body.decode(enc, "replace")
+            async with netconfig.new_client(default_timeout=15.0) as client:
+                html = await _read_search_html(client, search_url, headers)
 
             results = self._parse_duckduckgo_html(html, max_results)
             if not results:
@@ -522,13 +592,11 @@ class WebFetchTool(BaseTool):
             return ToolResult(False, "", "max_chars 必须是整数")
         max_chars = max(1, min(max_chars, _MAX_FETCH_CHARS))
 
-        # 解析 URL
+        # 解析 URL：parsed/hostname 后面拼直连地址要用。协议与空 host 的拒绝文案
+        # 只在 `_resolve_public_destination` 一处 —— 这里再抄一遍就会和搜索腿漂移，
+        # 而两处给出的原因本来必须一致。
         parsed = urlparse(url)
-        if parsed.scheme not in ("http", "https"):
-            return ToolResult(False, "", f"不允许的协议: {parsed.scheme}")
         hostname = parsed.hostname
-        if not hostname:
-            return ToolResult(False, "", "无效的 URL")
 
         # 预先解析并校验目标 IP，防止 DNS rebinding / SSRF
         # E 修复：内部同步 DNS 查询已放线程池，需 await
@@ -559,16 +627,14 @@ class WebFetchTool(BaseTool):
                 )
                 current_url = url
 
-                # 手动处理重定向（最多 5 次），每次重新解析并校验目标 IP
+                # 手动处理重定向（最多 _MAX_REDIRECTS 次），每次重新解析并校验目标 IP
                 redirect_count = 0
-                while status in (301, 302, 303, 307, 308) and redirect_count < 5:
+                while (status in _REDIRECT_STATUSES and location
+                       and redirect_count < _MAX_REDIRECTS):
                     redirect_count += 1
-                    next_url = location or ""
-                    if not next_url:
-                        break
-                    # 处理相对路径重定向
-                    if not next_url.startswith("http"):
-                        next_url = httpx.URL(current_url).join(next_url).str()
+                    # 相对 Location 先按当前 URL 折成绝对地址，再校验 —— 否则校验的和
+                    # 请求的不是同一个 URL（折叠后的 Host 才是真正要连的那一台）
+                    next_url = _join_redirect(current_url, location)
 
                     safe, next_ip_or_reason = await self._check_url_safe(next_url)
                     if not safe:
@@ -589,12 +655,16 @@ class WebFetchTool(BaseTool):
                 if status == 415:
                     return ToolResult(
                         False, "", f"响应不是可解析的文本类型，放弃抓取: {current_url}")
-                # 审查修复（P2）：重定向达到 5 次上限后 status 仍是 3xx，
-                # 原实现直接落入下方成功分支 — 302 响应体通常是空的，
-                # Agent 拿到"成功"的空正文继续推理
-                if status in (301, 302, 303, 307, 308):
+                if status in _REDIRECT_STATUSES:
+                    # 审查修复（P2）：重定向达到上限后 status 仍是 3xx，原实现直接落入
+                    # 下方成功分支 —— 302 响应体通常是空的，Agent 拿到"成功"的空正文继续
+                    # 推理。这里按原因分开报：跳数用完和「3xx 却不给 Location」是两回事，
+                    # 后者的文案说「次数超过 5 次上限」会让人去查一个不存在的环。
+                    if not location:
+                        return ToolResult(
+                            False, "", f"重定向响应没有 Location，放弃抓取: {current_url}")
                     return ToolResult(
-                        False, "", f"重定向次数超过 5 次上限，放弃抓取: {current_url}",
+                        False, "", f"重定向次数超过 {_MAX_REDIRECTS} 次上限，放弃抓取: {current_url}",
                     )
                 if status >= 400:
                     return ToolResult(False, "", f"HTTP 错误 {status}")
@@ -689,20 +759,8 @@ class WebFetchTool(BaseTool):
     async def _check_url_safe(self, url: str) -> tuple[bool, str]:
         """校验 URL 解析后的 IP 是否安全，并返回解析到的 IP（防 SSRF / DNS rebinding）
 
-        E 修复：socket.gethostbyname 是同步 DNS 查询，放线程池避免卡事件循环
+        规则本体在模块级 `_resolve_public_destination`（搜索腿的重定向复核共用）。
         """
-        parsed = urlparse(url)
-        if parsed.scheme not in ("http", "https"):
-            return False, f"不允许的协议: {parsed.scheme}"
-        hostname = parsed.hostname
-        if not hostname:
-            return False, "无效的 URL"
-        try:
-            ip = await asyncio.to_thread(socket.gethostbyname, hostname)
-        except socket.gaierror:
-            return False, f"DNS 解析失败: {hostname}"
-        safe, reason = _is_safe_ip(ip)
-        if not safe:
-            return False, reason
-        return True, ip
+        safe, ip_or_reason, reason = await _resolve_public_destination(url)
+        return (True, ip_or_reason) if safe else (False, reason)
 

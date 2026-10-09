@@ -81,10 +81,31 @@ def test_chunked_overflow_aborts_mid_stream():
 def test_body_and_encoding_returned_intact_under_cap():
     resp = _StreamResp(headers={"content-length": "6"}, chunks=[b"abc", b"def"],
                        encoding="gbk")
-    body, enc = _run(_read_capped(_FakeClient(resp), "GET", "https://x.test", cap=1024))
+    body, enc, location = _run(
+        _read_capped(_FakeClient(resp), "GET", "https://x.test", cap=1024))
     assert body == b"abcdef"
     # 编码必须原样带出：360 这类页面是 gbk，写死 utf-8 会把结果刮成乱码
     assert enc == "gbk"
+    assert location == "", "非 3xx 不该带出 Location"
+
+
+def test_3xx_yields_location_without_downloading_the_body():
+    """跟随重定向时旧正文必然被丢弃 —— 取到 Location 就收手，不占下载额度。"""
+    resp = _StreamResp(status=302, headers={"location": "/s?q=x"},
+                       chunks=[b"x" * 4096])
+    body, _enc, location = _run(
+        _read_capped(_FakeClient(resp), "GET", "https://x.test", cap=1024))
+    assert location == "/s?q=x"
+    assert body == b""
+    assert resp.pulled == 0, "3xx 的正文不该被下载"
+
+
+def test_304_is_not_a_redirect():
+    """304 没有 Location 也不是重定向：正文照常读，别让状态码集合把它跟丢。"""
+    resp = _StreamResp(status=304, chunks=[b"cached"])
+    body, _enc, location = _run(
+        _read_capped(_FakeClient(resp), "GET", "https://x.test", cap=1024))
+    assert (body, location) == (b"cached", "")
 
 
 def test_http_error_still_raises_before_reading_body():

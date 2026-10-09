@@ -272,6 +272,9 @@ def new_client(default_timeout: Optional[float] = None, **kwargs) -> httpx.Async
 
     follow_redirects 刻意沿用 httpx 默认（False）：调用点原来没开重定向的，
     接上这里也不该突然开始跟随（web_fetch 的 SSRF 守卫就依赖不跟随）。
+    确实需要跟随的调用点自己逐跳校验目标地址（web_search 的两条 HTML 腿见
+    web_tools._read_search_html）—— 别在这里打开开关：跟随一旦交给 httpx 内部，
+    复核就只能发生在「已经连上 Location 指的那个地址之后」。
     """
     to = http_timeout(default_timeout)
     if to is not None:

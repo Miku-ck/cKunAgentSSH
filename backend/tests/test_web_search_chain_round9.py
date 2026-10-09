@@ -20,6 +20,8 @@ def _res(ok: bool, out: str = "", err: str = "") -> ToolResult:
 class _FakeResp:
     """`client.stream` 的形状（S6-28 后搜索腿走封顶流式读，不再 `client.get`）"""
 
+    status_code = 200
+
     def __init__(self, html: str):
         self.headers = {}
         self.encoding = "utf-8"
