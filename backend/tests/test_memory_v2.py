@@ -654,6 +654,31 @@ def test_render_blocks_budget_drops_whole_block(memdb):
     assert _run(memory_blocks.render_for_context("s1", budget_tokens=1)) == ""
 
 
+def test_整块丢弃必须留日志(memdb, caplog):
+    """写入侧上限是字符（limit_chars 2000），注入这本账是 token 且随窗口缩放 —— 两条不同源。
+
+    实测 925 字符（604 token）的 user-preferences 在 window=2048（账户 200 token）与
+    4096（460）下整块不进 prompt，16384（2162）才回来。块是合法写入的、库里也有行，
+    修复前却没有任何痕迹：用户的观感就是「我写了，它没记住」。
+    """
+    import logging as _log
+
+    from agent.cost_tracker import estimate_tokens
+
+    value = "用户偏好：" + "请务必在变更前备份配置文件并复核端口监听状态。" * 40
+    mstore.put_block(memory_blocks.USER_PREFERENCES, value, "test")
+    cost = estimate_tokens(f"### {memory_blocks.USER_PREFERENCES}\n{value}")
+    assert cost > 1
+
+    with caplog.at_level(_log.WARNING, logger="agent.memory.blocks"):
+        text = _run(memory_blocks.render_for_context("s1", budget_tokens=cost - 1))
+    assert memory_blocks.USER_PREFERENCES not in text
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any(memory_blocks.USER_PREFERENCES in m for m in msgs), (
+        f"整块丢弃仍是静默行为：{msgs}")
+    assert any("画像账户" in m for m in msgs), "日志要写明是哪本账不够，而不是泛泛『超预算』"
+
+
 def test_budget_clamps_accounts_to_window():
     """spec §8：设置值是"想要多少"，窗口是"能给多少"，取小者。"""
     from agent.memory.budget import MemoryBudget

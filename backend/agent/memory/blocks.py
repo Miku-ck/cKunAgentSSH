@@ -5,9 +5,12 @@
 - 渲染顺序稳定，作为 system prompt 的 [画像] 段常驻
 """
 import asyncio
+import logging
 
 from ..cost_tracker import estimate_tokens
 from . import mstore
+
+logger = logging.getLogger(__name__)
 
 USER_PREFERENCES = "user-preferences"
 AGENT_RULES = "agent-rules"
@@ -48,6 +51,12 @@ async def render_for_context(host_id: str, budget_tokens: int) -> str:
 
     超预算时按整块丢弃而不是截字符：块内容是自编辑成的完整句子，
     切一半会改变语义（甚至反转「不要用 X」这类否定式规则）。
+
+    丢弃必须留日志：写入侧的上限是**字符**（`memory_blocks.limit_chars`，默认 2000），
+    这本账是**token** 且随模型窗口缩放，两条不同源 ⇒ 一条完全合法的块可以在小窗口模型上
+    永远不出现，而用户看到的就是「我写了，它没记住」。实测 925 字符（604 token）的
+    user-preferences 在 window=2048（账户 200 token）与 4096（460 token）下整块不出现，
+    16384（2162 token）才回来 —— 修复前库里与日志里都没有任何痕迹。
     """
     blocks = await asyncio.to_thread(mstore.list_blocks)
     by_key = {b["key"]: (b["value"] or "").strip() for b in blocks}
@@ -56,6 +65,7 @@ async def render_for_context(host_id: str, budget_tokens: int) -> str:
         keys.append(host_key(host_id))
 
     parts: list[str] = []
+    dropped: list[tuple[str, int]] = []
     used = 0
     for key in keys:
         value = by_key.get(key) or ""
@@ -64,9 +74,16 @@ async def render_for_context(host_id: str, budget_tokens: int) -> str:
         block_text = f"### {key}\n{value}"
         cost = estimate_tokens(block_text)
         if used + cost > budget_tokens:
+            dropped.append((key, cost))
             continue
         parts.append(block_text)
         used += cost
+    if dropped:
+        logger.warning(
+            "画像块超预算被整块丢弃：%s（画像账户 %d token）—— 写入按字符、注入按 token，"
+            "换更大的模型窗口或缩短该块才会重新出现",
+            ", ".join(f"{k}≈{c}tok" for k, c in dropped), budget_tokens,
+        )
     if not parts:
         return ""
     return "[画像] 以下为常驻已知事实，可直接引用\n" + "\n\n".join(parts)
