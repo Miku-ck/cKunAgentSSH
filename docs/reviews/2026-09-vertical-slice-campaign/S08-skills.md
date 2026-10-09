@@ -20,6 +20,7 @@
 | S8-01 | d | Minor | **LEGACY #5 确认成立**（实测重复块为 6+1 行，不是当年记的「前导三行」） | `skill_registry.py:169-174 + :176` vs `:201-206 + :208` | 恒（纯冗余） |
 | S8-02 | a | Minor | `build_skill_catalog` 的 `json.loads` 无兜底，而同文件 `match_skills` 有 → 一行脏 `trigger_words` 令技能目录静默消失 | `skill_registry.py:185` vs `:116-119` | 需 DB 行为非法 JSON |
 | S8-03 | b | Minor | `ReflectionRein` docstring 声称「路由层只需监听该事件即可触发」，而路由从不监听 `reflection_request` | `lifecycle.py:93` vs S1-06 | 恒（文档失真） |
+| S8-04 | a | **Major** | 技能在设置里关掉/删掉后，Agent 仍可能继续用旧的技能集：`_reload_skill_registry()` 吞异常，而 `reload()` 失败或被 5s 节流跳过时缓存仍标记已加载 ⇒ 读侧永不自愈 | `routes/skills.py:16-22,74,80,90,160` ↔ `skill_registry.py:35-41,53,81,178,185` | ✅（HEAD 逐行核过） |
 
 ## 详情
 
@@ -51,6 +52,30 @@ skills.sort(key=lambda s: s.get('priority', 0), reverse=True)  # :176 / :208
 - CLAIM：路由层从不读 `reflection_request` 事件（S1-06 已证 `src/` 与该事件零消费者、`routes/agent.py` 亦无监听点），反思的实际调度是路由自己写的两条：done 分支一条、`error_seen` 兜底一条。**docstring 描述的契约不是生效中的契约。**
 - 重要澄清（避免下游切片误读为功能缺陷）：我核了锚点 `:1107-1150`，`error_seen and final_state is None` 的兜底确实覆盖了「只有 error、没有 done」的运行，因此 docstring 里担心的「失败运行经常错过反思」**并不存在**；而 `:1130` 注释还专门记录了「原实现在 error 分支内直接调度 ⇒ 同一 run 落两条策略、污染 Evolution 的 recent-10 窗口」这个已修的坑。本条只裁文档，不裁行为。
 - 顺带证实与 S1-01 的分工：**客户端断连**（`:851 break`）既无 done 也无 error ⇒ `error_seen` 为假 ⇒ 补调度也不触发，反思同样缺席。这条缺席属 S1-01，不另计。
+
+### S8-04 [dim a][Major] 关掉的技能关不掉：写成功了，运行时缓存没换
+- LOCATION（`skill_registry.py` 的行号按 **HEAD**，工作树副本因并行会话在改而整体下移 ~7 行；
+  `routes/skills.py` 未被占用，行号两处一致）：`routes/skills.py:16-22` `_reload_skill_registry()` 把
+  `reload()` 的任何异常收成 `logger.warning` 后正常返回；调用点 `:74`（per-mode 启停）、`:80`（全局启停）、
+  `:90`（删除）、`:160`（内置同步）。`skill_registry.py:28-34`（HEAD 行号）`reload()` 在距上次失败不足
+  `_RETRY_INTERVAL=5s` 时**直接 return**（连查询都不发）；`:37` 只在成功时置 `_loaded = True`，失败路径
+  既不置假也不抛。读侧 `:65`（`get_enabled_skills`）、`:149`（`get_skills_by_ids`）、`:156`（`get_by_slug`）
+  的自愈条件是 `if not self._loaded` —— 而缓存**早就 loaded 过一次**，于是这个条件永远不成立。
+- CLAIM：用户在设置面板禁用或删除一个技能 ⇒ DB 写入成功 ⇒ 路由回 200 ⇒ `reload()` 失败或被 5s 节流
+  跳过（两条路都不可见）⇒ 内存里那份 `_skills` 仍是旧的、且 `_loaded=True` ⇒ 下一次 Agent run 的触发词匹配、
+  技能目录、`load_skill` 全部照旧命中**用户已经关掉/删掉的那个技能**。没有自愈点：读侧的 lazy reload
+  被 `_loaded` 挡住，写侧的下一次刷新要等用户再改一次技能（改的是同一条则可能被同一节流窗口吞掉）。
+  删除比禁用更糟：`delete_skill` 之后技能行已不在库里，而 `get_by_slug` 仍能从缓存返回它并通过
+  `enabled` 校验 ⇒ `load_skill` 把一条**已不存在的技能正文**喂给模型。
+- 这不是「性能换一致」的取舍：设置面板给的是「已保存」的确定回执，Agent 用的是另一套事实。
+  与 S11-01 同族（把「没生效」说成「已生效」），但方向相反、后果更硬 —— 那次是少报，这次是多跑。
+- 修法（必须在 `skill_registry.py` 侧做，路由侧兜不住）：① `reload()` 返回 bool，并在失败分支
+  `self._loaded = False` —— 读侧已有的 lazy reload 于是成为真正的自愈通道；② `_RETRY_INTERVAL` 只该限制
+  **读侧反复查故障库**，不该让写侧的显式刷新也吃这个窗口（写侧应强制绕过节流）；③
+  `_reload_skill_registry()` 不许再吞：至少 `logger.error` 带上动作与 skill_id，让「保存了但运行时没生效」
+  在日志里可读。守卫形状：改完一条技能后，`get_skill_registry()` 缓存里那条的 `enabled` 必须等于刚写入的值。
+- 阻塞状态：本轮记录时 `backend/skill_registry.py` 正被并行会话修改（工作树 M），②③两处改动会与之冲突，
+  故只登记不动码。待其落库后按当前 HEAD 复核再修。
 
 ## 未覆盖声明
 
