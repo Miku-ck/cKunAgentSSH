@@ -82,7 +82,9 @@ class ReadImageTool(BaseTool):
             # 去空白只删换行删不掉中文标记，得到内嵌乱码的非法 data URI 却以 success 返回；
             # 且下方按已截断串估长的 10MB 上限永不触发。与 remote_read_b64(ops_common:246)
             # 同源，此前漏改。
-            ok, output = await run_headless(context, image_read_cmd(path), 20, keep_full=True)
+            ok, output = await run_headless(
+                context, image_read_cmd(path), self.meta.timeout, keep_full=True
+            )
             if not ok:
                 return ToolResult(False, output, "远程读取图片失败")
             b64 = re.sub(r"\s+", "", strip_remote_tail(output))
