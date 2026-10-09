@@ -48,23 +48,12 @@ import MessageContentRenderer from './MessageContentRenderer.vue'
 import AgentTraceInline from '@/components/agent/AgentTraceInline.vue'
 import AgentFullTrace from '@/components/agent/AgentFullTrace.vue'
 import { useToastStore } from '@/stores/toast'
-import type { AgentTraceSnapshot } from '@/api/client'
-
-interface ChatMessage {
-  id: string
-  role: 'user' | 'assistant'
-  content?: string
-  reasoning?: string
-  streamingContent?: string
-  streamingReasoning?: string
-  duration?: number
-  agentTrace?: AgentTraceSnapshot
-}
+import type { BaseMessage } from '@/types/chat'
 
 const toast = useToastStore()
 
 const props = defineProps<{
-  message: ChatMessage
+  message: BaseMessage
   isStreaming?: boolean
   isLast?: boolean
 }>()

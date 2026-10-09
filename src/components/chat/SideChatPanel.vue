@@ -458,7 +458,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import type { ModelConfig } from '@/api/client'
-import type { ConvGroup } from '@/types/chat'
+import type { BaseMessage, ConvGroup } from '@/types/chat'
 import MessageItem from '@/components/chat/MessageItem.vue'
 import HistoryPanel from '@/components/chat/HistoryPanel.vue'
 import { useResizablePanel } from '@/composables/useResizablePanel'
@@ -483,23 +483,11 @@ const skillStore = useSkillStore()
 void skillStore.loadBuiltinSkills()
 const toast = useToastStore()
 
-// ── 消息接口（兼容 ModeMessage 和 MessageItem 的 ChatMessage） ──
-interface DisplayMsg {
-  id: string
-  role: 'user' | 'assistant'
-  content: string
-  reasoning?: string
-  streamingContent?: string
-  streamingReasoning?: string
-  duration?: number
-  [key: string]: any
-}
-
 // ── Props ──
 const props = defineProps<{
   conversations: Array<{ id: string; title: string; updated_at: string }>
   currentConvId: string | null
-  messages: DisplayMsg[]
+  messages: BaseMessage[]
   selectedModelId: string
   models: ModelConfig[]
   groupedConversations: ConvGroup[]
@@ -1090,7 +1078,7 @@ function removeSkill(id: string) {
 // ── Agent 执行轨迹 ──
 const agentStore = useAgentStore()
 
-function isLiveAgentRun(msg: DisplayMsg, idx: number): boolean {
+function isLiveAgentRun(msg: BaseMessage, idx: number): boolean {
   return !!props.agentRunning &&
     idx === props.messages.length - 1 &&
     msg.role === 'assistant' &&

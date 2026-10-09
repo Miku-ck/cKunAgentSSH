@@ -24,7 +24,14 @@
 「没有目标主机、别碰远程工具」这句守卫原先和可选上下文（时钟 + `SSH_MODE_PROMPT`）同在一个
 `try/except: pass` 里，那两段一失败守卫就一起消失，无头 run 于是退回逐个试远程工具、最后交出一份
 读起来像莫名失败的报告。
-Minor 中可单侧修的也已一并落库。**下面这张短表才是真正等你的东西** —— 每条都是一个只有你能定的
+Minor 中可单侧修的也已一并落库。**S9-22 剩下的半条（消息形态三套并行定义）本轮已收**：
+`MessageItem.vue` 的手抄 `ChatMessage`（把 `content` 放宽成可选、没有 `created_at`）与
+`SideChatPanel.vue` 的 `DisplayMsg`（带 `[key: string]: any` 兜住一切，注释自己写着
+「兼容 ModeMessage 和 MessageItem 的 ChatMessage」——第三套正是为弥合前两套已漂开的分歧而生的）
+都删掉，两个组件改为 import `@/types/chat` 的 `BaseMessage`；`web`/`node` 两个 tsconfig 各 0 错误
+⇒ 所有调用点本来就供得起规范形状。漂移守卫 `message-shape-source.test.ts`（6 例，`?raw` 读源码）
+钉住「chat 渲染目录里不许再有本地消息接口」。**不是裁决项，也不欠回归测试。**
+**下面这张短表才是真正等你的东西** —— 每条都是一个只有你能定的
 产品/契约取向，不是待查的 bug；填「采纳」我再开工单，填「驳回/延后」我把它登记进
 `docs/security-boundary.md` 或就地注释。
 
