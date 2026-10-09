@@ -636,24 +636,25 @@ def compute_next_run(sched: dict, now: datetime | None = None) -> str:
 
 def _build_schedule_system_prompt(sched: dict) -> str:
     parts = []
+    # S7-02 的守卫段先落：它只读 sched，不碰 import 与时钟，所以不该被下面那段
+    # 「可选上下文」的失败一起吞掉（原先整块包在一个 try/except: pass 里，
+    # `_current_time_str()` 或 prompts 导入一失败，连「本次没有 SSH 会话」这句都消失，
+    # 于是模型逐个试远程工具、全数撞上 fail-closed，报告读起来像一次莫名其妙的失败）。
+    if not (sched.get("target_host") or "").strip():
+        parts.append(
+            "[执行环境] 本次任务未指定目标主机，因此没有可用的 SSH 会话。"
+            "不要调用任何远程工具（shell_exec / job_run / service_manage / "
+            "log_read 等一律以「缺少 SSH 会话」失败）；请只基于本地可得的信息"
+            "完成任务，并在报告开头写明本次没有可连接的目标主机。"
+        )
     try:
         from prompts import _current_time_str, SSH_MODE_PROMPT
         parts.append(f"[系统时间] 当前时间：{_current_time_str()}。")
         parts.append(SSH_MODE_PROMPT)
-        # S7-02：没有 target_host 就没有 SSH 会话，而这里此前无条件注入
-        # SSH_MODE_PROMPT、从不提这件事 —— 模型于是逐个试远程工具、全数撞上
-        # run_headless 的「缺少 SSH 会话」fail-closed，最后写一份「我无法连接」的
-        # 报告；正文非空 ⇒ 旧判据记 completed。UI 那个下拉首项写的是
-        # 「未指定（不执行远程命令）」，实现必须对得上这句话。
-        if not (sched.get("target_host") or "").strip():
-            parts.append(
-                "[执行环境] 本次任务未指定目标主机，因此没有可用的 SSH 会话。"
-                "不要调用任何远程工具（shell_exec / job_run / service_manage / "
-                "log_read 等一律以「缺少 SSH 会话」失败）；请只基于本地可得的信息"
-                "完成任务，并在报告开头写明本次没有可连接的目标主机。"
-            )
-    except Exception:
-        pass
+    except Exception as e:
+        # 降级可以，但必须留痕：这段丢的是时区/模式上下文，出问题时该能在日志里看到
+        logger.warning("定时任务系统提示词的上下文段构建失败，已降级 (schedule=%s): %s",
+                       sched.get("sid") or sched.get("name") or "?", e)
     parts.append(
         "你现在以「定时任务」方式自动执行。请独立完成给定任务，"
         "并输出结构化中文报告：先给总体结论，再用 ## 二级标题分节说明发现的问题、"
