@@ -355,6 +355,9 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       // 结构上满足 AgentMessage 最小接口，显式断言（与固化函数签名对齐）
       finalizeAgentMessage(conv as unknown as { messages: AgentMessage[] }, agentStore)
       notifyConversationsChanged()
+      // 固化完成即"有回复可看"：面板关着时点亮顶栏未读点，用户不必自己记得开侧栏。
+      // 面板开着不写 —— 清零只归 watch(showAiPanel) 的开动作管，两个写点不抢一个状态。
+      if (!showAiPanel.value) unreadReply.value = true
     }
   })
 
@@ -364,6 +367,28 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   /** 终端上下文「问 AI」预填请求：终端组件选中后调用，面板打开并预填问题草稿。
    *  预填只发生一次（SshAiPanel watch 消费后置 null），用户可修改后再发送 */
   const pendingPrefill = ref<{ text: string } | null>(null)
+
+  /** 共享输入草稿：首页指令卡与侧栏输入框绑同一份 —— 切屏不丢字。原先两处
+   *  各自存本地 ref，首页打一半切到侧栏要重打。发送成功后由调用方清空
+   *  （useHomeCommand.submit / SideChatPanel.handleSend，语义与原先一致）。 */
+  const sharedDraft = ref('')
+  function setSharedDraft(text: string) {
+    sharedDraft.value = text
+  }
+
+  /** 未读回复徽章：Agent 跑完（含中止/失败的固化）且面板关着时点亮，面板一开
+   *  即清。TitleBar 的 AI 按钮读它画圆点 —— 让首页与侧栏这两个入口在视觉上
+   *  可感知是"同一个助手的两扇门"，而不是两个不相干的功能。 */
+  const unreadReply = ref(false)
+  watch(showAiPanel, (open) => {
+    if (open) unreadReply.value = false
+  })
+
+  /** 打开面板（与 toggle/close 并列的第三态入口）：供 RunView「在对话中继续」
+   *  等明确的"开"动作使用，不必先读当前状态再翻转。未读点由上面的 watch 清。 */
+  function openAiPanel() {
+    showAiPanel.value = true
+  }
 
   const appStore = useAppStore()
   const toast = useToastStore()
@@ -815,7 +840,13 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     // ── SSH 特有 API ──
     showAiPanel,
     toggleAiPanel,
+    openAiPanel,
     closeAiPanel,
+    // ── 共享输入草稿（首页指令卡 ↔ 侧栏输入框同一份）──
+    sharedDraft,
+    setSharedDraft,
+    // ── 顶栏未读徽章 ──
+    unreadReply,
     pendingPrefill,
     askAiAboutSelection,
     askAi,

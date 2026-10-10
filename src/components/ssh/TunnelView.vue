@@ -6,7 +6,7 @@
         <span>隧道</span>
       </div>
       <span class="head-spacer"></span>
-      <button class="btn btn-primary" :disabled="!hasConnections" :title="hasConnections ? '' : '请先在远程终端页创建连接'" @click="openCreate">＋ 新建隧道</button>
+      <button class="btn btn-primary" :disabled="!hasConnections" :title="hasConnections ? '' : '请先在远程终端页创建连接'" @click="openCreate">新建隧道</button>
     </div>
 
     <!-- 正文：头部钉住，仅此处滚动 -->
@@ -19,7 +19,11 @@
         </button>
       </div>
 
+      <!-- 空态与行共用 .tunnel-list：额外的同级空壳 div 会平分 flex:1，把空态的垂直居中顶偏 -->
       <div class="tunnel-list">
+        <div v-if="visibleRows.length === 0" class="empty">
+          <div>{{ tunnelStore.rules.length === 0 ? '还没有隧道规则' : '没有符合当前筛选的隧道' }}</div>
+        </div>
         <div v-for="row in visibleRows" :key="row.rule.id" class="tunnel-row" :class="{ error: row.state === 'error', orphan: row.orphan }">
           <span class="dot" :class="row.dotClass"></span>
 
@@ -65,13 +69,6 @@
           </div>
         </div>
       </div>
-
-      <!-- 空状态：无规则，或当前筛选下无匹配 -->
-      <div v-if="visibleRows.length === 0" class="empty">
-        <div>{{ tunnelStore.rules.length === 0 ? '还没有隧道规则' : '没有符合当前筛选的隧道' }}</div>
-        <div class="d">通过已保存的连接建立端口转发，隧道独立于终端会话运行。</div>
-        <button v-if="tunnelStore.rules.length === 0 && hasConnections" class="btn btn-primary" @click="openCreate">＋ 新建隧道</button>
-      </div>
     </div>
 
     <TunnelModal v-if="showModal" :rule="editingRule" @close="closeModal" @saved="onSaved" />
@@ -110,11 +107,6 @@ let delTimer: ReturnType<typeof setTimeout> | null = null
 let copyTimer: ReturnType<typeof setTimeout> | null = null
 
 const hasConnections = computed(() => sshStore.connections.length > 0)
-/** 第一个 D 类活动隧道的端口（footer 示例文案用） */
-const sockPort = computed(() => {
-  const d = tunnelStore.rules.find(r => r.type === 'dynamic' && tunnelStore.stateOf(r.id) === 'active')
-  return d?.listenPort ?? 1080
-})
 
 interface Row {
   rule: TunnelRule
@@ -128,12 +120,6 @@ interface Row {
   stateLabel: string
   toggleLabel: string
   message?: string
-}
-
-function autoName(rule: TunnelRule): string {
-  if (rule.type === 'local') return `L ${rule.listenPort} → ${rule.dstHost}:${rule.dstPort}`
-  if (rule.type === 'remote') return `R ${rule.remoteBindHost || '127.0.0.1'}:${rule.bindPort} → ${rule.dstHost}:${rule.dstPort}`
-  return `D SOCKS5 ${rule.listenHost || '127.0.0.1'}:${rule.listenPort}`
 }
 
 function pathOf(rule: TunnelRule): string {
@@ -171,7 +157,17 @@ const rows = computed<Row[]>(() =>
   }),
 )
 
-const visibleRows = computed(() => rows.value.filter(r => filter.value === 'all' || r.state === filter.value))
+// 「已停止」桶含 starting（见下方 counts），筛选判据必须与计数同口径，
+// 否则角标数字与点开后的条数对不上——瞬时态短暂存在也要诚实计入。
+const visibleRows = computed(() =>
+  rows.value.filter(r =>
+    filter.value === 'all'
+      ? true
+      : filter.value === 'stopped'
+        ? r.state === 'stopped' || r.state === 'starting'
+        : r.state === filter.value,
+  ),
+)
 
 const counts = computed<Record<FilterKey, number>>(() => {
   const c: Record<FilterKey, number> = { all: rows.value.length, active: 0, error: 0, stopped: 0 }
@@ -281,6 +277,9 @@ onUnmounted(() => {
   flex: 1;
   overflow-y: auto;
   padding: 12px 16px 24px;
+  /* flex 纵向布局：列表区撑满剩余空间，空态在其中双向居中 */
+  display: flex;
+  flex-direction: column;
 }
 .icon-btn {
   width: 28px;
@@ -329,6 +328,7 @@ onUnmounted(() => {
 .chip.on .n { color: var(--text-secondary); }
 
 .tunnel-list {
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -341,7 +341,8 @@ onUnmounted(() => {
   padding: 11px 14px;
   display: grid;
   grid-template-columns: 10px 1fr auto;
-  grid-template-areas: 'dot main act' '. meta act';
+  /* err 单独第三行：与 meta 同格会叠放，错误横幅盖住连接名那行 */
+  grid-template-areas: 'dot main act' '. meta act' '. err err';
   gap: 3px 12px;
   align-items: start;
   transition: border-color var(--transition-fast);
@@ -455,7 +456,7 @@ onUnmounted(() => {
 }
 
 .row-err {
-  grid-area: meta;
+  grid-area: err;
   margin-top: 5px;
   font-size: 11.5px;
   color: var(--danger-text);
@@ -470,28 +471,14 @@ onUnmounted(() => {
 .row-err .btn { margin-left: auto; }
 
 .empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   text-align: center;
   padding: 50px 0;
   color: var(--text-tertiary);
   font-size: 13px;
-}
-.empty .d {
-  font-size: 12px;
-  margin-top: 4px;
-}
-.empty .btn { margin-top: 16px; }
-
-.foot-hint {
-  margin-top: 14px;
-  font-size: 11.5px;
-  color: var(--text-tertiary);
-  display: flex;
-  gap: 6px;
-  align-items: baseline;
-}
-.foot-hint code {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-secondary);
 }
 </style>

@@ -31,6 +31,10 @@ const posture = ref<'goal' | 'plan' | null>(null)
 const selectedSkillIds = ref<string[]>([])
 const setSelectedSkillIds = vi.fn((ids: string[]) => { selectedSkillIds.value = ids })
 const setPendingAttachments = vi.fn((list: typeof pendingAttachments.value) => { pendingAttachments.value = list })
+// 共享草稿住 store（首页 ↔ 侧栏同一份）：mock 与真实 store 同形 —— getter 解包 +
+// setSharedDraft 写回，composable 的 computed 双向绑定才能走通。
+const sharedDraft = ref('')
+const setSharedDraft = vi.fn((text: string) => { sharedDraft.value = text })
 const isRunning = ref(false)
 const info = vi.fn()
 const error = vi.fn()
@@ -43,6 +47,8 @@ vi.mock('@/stores/ssh-ai', () => ({
     uploadAttachments,
     setSelectedSkillIds,
     setPendingAttachments,
+    setSharedDraft,
+    get sharedDraft() { return sharedDraft.value },
     get approvalMode() { return approvalMode.value },
     get posture() { return posture.value },
     get selectedSkillIds() { return selectedSkillIds.value },
@@ -72,6 +78,8 @@ describe('useHomeCommand', () => {
     selectedSkillIds.value = []
     pendingAttachments.value = []
     uploadingAttachments.value = false
+    sharedDraft.value = ''
+    setSharedDraft.mockClear()
     isRunning.value = false
   })
 

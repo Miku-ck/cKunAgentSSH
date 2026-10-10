@@ -12,7 +12,6 @@
           批量下发（{{ remoteSessionCount }} 台）
         </button>
         <button class="btn btn-primary" @click="handleCreate" :title="seg === 'gateway' ? '新建 TLS 网关连接' : '新建连接'">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           {{ seg === 'gateway' ? '新建网关' : '新建连接' }}
         </button>
       </div>
@@ -78,11 +77,10 @@
         @menu="showMenu"
       />
 
-      <!-- 空状态：只报「这里为什么是空的」。新建连接在头部一直有，
-           原先这里再放一枚同样的按钮，是把同一个动作在一个屏上画两遍。 -->
+      <!-- 空状态：一句话双向居中（对齐 Docker 页 .empty 的做法）。新建连接在头部一直有，
+           这里不放重复按钮；标题/说明拆两个 div 属冗余，压平成单行。 -->
       <div v-if="filteredConnections.length === 0" class="rm-empty">
-        <div class="empty-title">{{ hasFilter ? '没有匹配的连接' : '还没有远程连接' }}</div>
-        <div class="empty-desc">{{ hasFilter ? '尝试调整搜索或过滤条件' : '新建第一个连接,开始管理远程服务器' }}</div>
+        {{ hasFilter ? '没有匹配的连接' : '还没有远程连接' }}
       </div>
     </div>
 
@@ -563,6 +561,7 @@ onUnmounted(() => {
 .rm-row-header .cell-check {
   display: flex;
   align-items: center;
+  justify-content: center;
   opacity: 0;
   transition: opacity var(--transition-fast);
 }
@@ -580,7 +579,7 @@ onUnmounted(() => {
 }
 .rm-row-header .cell-status { width: 100%; }
 .rm-row-header .cell-time,
-.rm-row-header .cell-created { text-align: right; }
+.rm-row-header .cell-created { text-align: left; }
 
 /* 表头排序指示 */
 .sortable {
@@ -588,6 +587,7 @@ onUnmounted(() => {
   user-select: none;
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 4px;
   transition: color var(--transition-fast);
 }
@@ -605,28 +605,17 @@ onUnmounted(() => {
   display: inline-block;
 }
 
-/* 空状态 */
+/* 空状态：撑满列表区双向居中，单行短句 */
 .rm-empty {
+  height: 100%;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 60px 20px;
-  color: var(--text-tertiary);
-  text-align: center;
-}
-
-.empty-title {
+  padding: 0 20px;
   font-size: 14px;
-  color: var(--text-secondary);
   font-weight: 500;
-  margin-bottom: 4px;
-}
-
-.empty-desc {
-  font-size: 12px;
-  color: var(--text-tertiary);
-  margin-bottom: 16px;
+  color: var(--text-secondary);
+  text-align: center;
 }
 
 /* 按钮 */

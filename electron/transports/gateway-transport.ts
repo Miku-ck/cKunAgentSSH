@@ -701,11 +701,11 @@ export class GatewayTransport implements TunnelTransport {
 
   onDead(h: (reason: string) => void): () => void {
     this.deadHandlers.push(h)
-    const offSession = this.session?.onDead(h)
+    // 注意：start() 已向 session 注册了一个扇出闭包，统一遍历 this.deadHandlers 派发，
+    // 这里【不再】直接挂到 session 上 —— 否则 h 会被 session 直接再调一次，触发两次。
     return () => {
       const i = this.deadHandlers.indexOf(h)
       if (i >= 0) this.deadHandlers.splice(i, 1)
-      offSession?.()
     }
   }
 

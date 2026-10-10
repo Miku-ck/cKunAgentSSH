@@ -52,6 +52,10 @@ interface TunnelSession {
   closing: boolean
 }
 
+/** 每条隧道允许的最大并发活动通道数；超出后新连接直接拒掉，防止单条隧道
+ *  被海量并发连接（如 SOCKS5 代理被滥用）拖垮主进程事件循环与远端会话 */
+const MAX_CONNS_PER_TUNNEL = 256
+
 /** 按规则决定用哪条数据面并建好它。凭据由实现方自取，渲染层全程不碰明文。 */
 type TransportFactory = (rule: TunnelRule) => Promise<TunnelTransport>
 
@@ -228,6 +232,7 @@ export class TunnelManager {
 
   /** local/dynamic 共用：本机 socket → dial(dst) 双向 pipe */
   private async handleForwardConn(s: TunnelSession, sock: net.Socket, dstHost: string, dstPort: number): Promise<void> {
+    if (s.conns.size >= MAX_CONNS_PER_TUNNEL) { sock.destroy(); return }
     s.conns.add(sock)
     sock.on('close', () => s.conns.delete(sock))
     sock.on('error', () => { /* 由 close 清理 */ })
@@ -274,6 +279,7 @@ export class TunnelManager {
 
   /** 对端绑定端口上有新连接 → 回连本机目标 */
   private handleInbound(s: TunnelSession, stream: Duplex): void {
+    if (s.conns.size >= MAX_CONNS_PER_TUNNEL) { stream.destroy(); return }
     const sock = net.connect(s.rule.dstPort!, s.rule.dstHost!)
     s.conns.add(sock)
     sock.on('close', () => s.conns.delete(sock))
@@ -296,6 +302,7 @@ export class TunnelManager {
 
   /** 极简 SOCKS5：无认证（METHODS 一律回 NO-AUTH）、仅 CONNECT 命令、无 UDP/Bind */
   private handleSocksConn(s: TunnelSession, sock: net.Socket): void {
+    if (s.conns.size >= MAX_CONNS_PER_TUNNEL) { sock.destroy(); return }
     s.conns.add(sock)
     sock.on('close', () => s.conns.delete(sock))
     sock.on('error', () => sock.destroy())

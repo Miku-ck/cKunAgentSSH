@@ -239,6 +239,7 @@ onMounted(load)
   border-bottom: 1px solid var(--border-subtle);
   color: var(--text-secondary);
   vertical-align: top;
+  text-align: left;
 }
 .rhv-table .row { cursor: pointer }
 .rhv-table .row:hover td { background: var(--bg-hover) }
@@ -261,8 +262,9 @@ onMounted(load)
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-primary);
+  text-align: left;
 }
-.num { text-align: right; font-family: var(--font-mono); white-space: nowrap }
+.num { text-align: left; font-family: var(--font-mono); white-space: nowrap }
 .st {
   display: inline-block;
   padding: 1px 8px;

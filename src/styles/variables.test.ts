@@ -17,6 +17,7 @@ import rawRunView from '../components/agent/RunView.vue?raw'
 import rawHomeCard from '../components/home/HomeCommandCard.vue?raw'
 import rawHomeTitle from '../components/home/HomeTargetTitle.vue?raw'
 import rawHomeQueue from '../components/home/HomeApprovalQueue.vue?raw'
+import rawRunModes from '../utils/run-modes?raw'
 import rawApprovalCard from './approval-card.css?raw'
 import rawSettingsGroups from '../components/settings/panels/settings-groups.css?raw'
 import rawSettingsPanelBase from '../components/settings/panels/settings-panel-base.css?raw'
@@ -40,6 +41,7 @@ const runView = strip(rawRunView)
 const homeCard = strip(rawHomeCard)
 const homeTitle = strip(rawHomeTitle)
 const homeQueue = strip(rawHomeQueue)
+const runModes = strip(rawRunModes)
 
 /** 共享样式表（不是某个组件内联的 <style> 块）：它们就是令牌层的直接消费方，
  *  所以单独按"裸引用"约束。留空字符串等于守卫恒真，故先钉住三份都真读到了东西
@@ -425,8 +427,10 @@ describe('atelier（手记）主题的令牌覆盖', () => {
 
   it('审批图标按档位换记号，chip 的底是主题墨而不是固定深色档', () => {
     // 三档共用一张盾时，切到「自动审批」界面上什么都没变 —— 图标必须跟着档位走。
-    // 记号表按 PermissionModeKey 穷举（漏一档 = 编译错误），不另写第二份档位清单。
-    expect(homeCard).toMatch(/Record<PermissionModeKey,\s*string \| null>/)
+    // 记号表已上收到 run-modes（首页卡与侧栏审批钮共用一份，改一处不漏另一处），
+    // 按 PermissionModeKey 穷举（漏一档 = 编译错误），消费方必须真的读这张表而非自写图标。
+    expect(runModes).toMatch(/PERM_MARKS: Record<PermissionModeKey,\s*string \| null>/)
+    expect(homeCard).toMatch(/PERM_MARKS\[permMode\.value\]/)
     expect(homeCard).toMatch(/<path v-if="permMark" :d="permMark" \/>/)
     // chip 先前用 --bg-input（一个固定深色档），在浅一档的卡面上就是块更黑的补丁。
     // 现在压的是主题自己的墨：卡面是什么，它跟着是什么。

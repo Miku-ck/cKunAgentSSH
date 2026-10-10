@@ -63,6 +63,8 @@ interface Entry {
   retryTimer: NodeJS.Timeout | null
   /** 主动断开 / 删除中：迟到的 close/error 不再触发重连 */
   closing: boolean
+  /** 正在拨号中（单飞守卫）：防止 connect() 与 scheduleRetry 的 dial() 并发双拨号 */
+  dialing: boolean
 }
 
 const MAX_BACKOFF_MS = 30_000
@@ -90,11 +92,6 @@ export class GatewayManager {
 
   statusAll(): GatewayStatus[] {
     return [...this.entries.values()].map(e => this.statusOf(e))
-  }
-
-  /** 待确认指纹（UI 弹窗与 trustHostKey 校验都读这里，渲染层无从自填） */
-  pendingSpkiOf(id: string): string | undefined {
-    return this.pendingSpki.get(id)
   }
 
   /** 供 transportFactory 取：未在线返回 null */
@@ -152,7 +149,7 @@ export class GatewayManager {
     const rec = await this.store.getWithSecret(id)
     if (!rec) throw new Error('网关记录不存在')
     const e: Entry = existing ?? {
-      rec, transport: null, state: 'idle', attempt: 0, retryTimer: null, closing: false,
+      rec, transport: null, state: 'idle', attempt: 0, retryTimer: null, closing: false, dialing: false,
     }
     // 用户在退避期间点「连接」= 现在就试：掐掉定时器，否则两条 dial 会并行
     if (e.retryTimer) {
@@ -170,64 +167,73 @@ export class GatewayManager {
   }
 
   private async dial(e: Entry): Promise<void> {
-    // 每次拨号都重读记录。gateway:save 只落库、不会通知这一层，沿用内存里的旧 e.rec
-    // 意味着用户改完 host/port/口令后，自动重连照旧打旧地址、拿旧口令试（界面上已经
-    // 显示新值）；而 store 在身份变更时会清掉 trustedSpki，内存里那份旧钉值还会让
-    // decideHostKey 判成「指纹不一致」直接硬失败。读不到（记录被删）就沿用当前值，
-    // 由随后 transport 的失败路径收场 —— 这里不额外造第三种状态。
-    const fresh = await this.store.getWithSecret(e.rec.id).catch(() => undefined)
-    if (fresh) e.rec = fresh
-    if (!e.rec.password) {
-      e.state = 'error'
-      e.message = '本机没有可用的口令（系统钥匙串不可用或未重新输入），请在弹窗里再填一次'
-      this.emit(e)
-      return
-    }
-    e.state = e.attempt > 0 ? 'reconnecting' : 'connecting'
-    e.message = undefined
-    this.emit(e)
-    const transport = new GatewayTransport(
-      {
-        host: e.rec.host,
-        port: e.rec.port,
-        caPem: e.rec.caPem,
-        user: e.rec.user,
-        password: e.rec.password,
-        clientVersion: app.getVersion(),
-        deviceName: app.name,
-      },
-      spki => this.decideHostKey(e, spki),
-      info => this.onReady(e, info),
-    )
-    transport.onDead(reason => this.onDead(e, reason))
+    // 单飞守卫：scheduleRetry 直接调 dial() 绕过 connect() 的 connecting map，
+    // 重连拨号进行中用户点「连接」会再进 dial —— 挡掉并发拨号，避免两条 TLS
+    // 会话、其中一条成孤儿（监听器永不关闭）。
+    if (e.dialing) return
+    e.dialing = true
     try {
-      await transport.start()
-      if (e.closing) {
-        transport.close()
+      // 每次拨号都重读记录。gateway:save 只落库、不会通知这一层，沿用内存里的旧 e.rec
+      // 意味着用户改完 host/port/口令后，自动重连照旧打旧地址、拿旧口令试（界面上已经
+      // 显示新值）；而 store 在身份变更时会清掉 trustedSpki，内存里那份旧钉值还会让
+      // decideHostKey 判成「指纹不一致」直接硬失败。读不到（记录被删）就沿用当前值，
+      // 由随后 transport 的失败路径收场 —— 这里不额外造第三种状态。
+      const fresh = await this.store.getWithSecret(e.rec.id).catch(() => undefined)
+      if (fresh) e.rec = fresh
+      if (!e.rec.password) {
+        e.state = 'error'
+        e.message = '本机没有可用的口令（系统钥匙串不可用或未重新输入），请在弹窗里再填一次'
+        this.emit(e)
         return
       }
-      e.transport = transport
-      e.state = 'online'
-      e.sinceAt = Date.now()
-      e.attempt = 0
+      e.state = e.attempt > 0 ? 'reconnecting' : 'connecting'
+      e.message = undefined
       this.emit(e)
-    } catch (err) {
-      e.transport = null
-      e.state = 'error'
-      if (err instanceof GatewayHostKeyPendingError) {
-        // 首见指纹：会话在发出 AUTH 之前就被拆掉，口令没有外发（§2.1）。
-        // 这里只记账并推事件，落盘等用户点「信任并连接」。
-        this.pendingSpki.set(e.rec.id, err.spki)
-        e.message = '首次连接：需确认服务端证书指纹'
-        this.push('gateway:host-key-new', {
-          id: e.rec.id, name: e.rec.name, host: e.rec.host, port: e.rec.port, spki: err.spki,
-        })
-      } else {
-        e.message = (err as Error)?.message || String(err)
+      const transport = new GatewayTransport(
+        {
+          host: e.rec.host,
+          port: e.rec.port,
+          caPem: e.rec.caPem,
+          user: e.rec.user,
+          password: e.rec.password,
+          clientVersion: app.getVersion(),
+          deviceName: app.name,
+        },
+        spki => this.decideHostKey(e, spki),
+        info => this.onReady(e, info),
+      )
+      transport.onDead(reason => this.onDead(e, reason))
+      try {
+        await transport.start()
+        if (e.closing) {
+          transport.close()
+          return
+        }
+        e.transport = transport
+        e.state = 'online'
+        e.sinceAt = Date.now()
+        e.attempt = 0
+        this.emit(e)
+      } catch (err) {
+        e.transport = null
+        e.state = 'error'
+        if (err instanceof GatewayHostKeyPendingError) {
+          // 首见指纹：会话在发出 AUTH 之前就被拆掉，口令没有外发（§2.1）。
+          // 这里只记账并推事件，落盘等用户点「信任并连接」。
+          this.pendingSpki.set(e.rec.id, err.spki)
+          e.message = '首次连接：需确认服务端证书指纹'
+          this.push('gateway:host-key-new', {
+            id: e.rec.id, name: e.rec.name, host: e.rec.host, port: e.rec.port, spki: err.spki,
+          })
+        } else {
+          e.message = (err as Error)?.message || String(err)
+        }
+        this.emit(e)
+        // 口令错 / 指纹不符 / 被策略拒是配置问题，退避重试只会把网关日志刷满（§3.3）
+        if (!isFatalAuthError(err)) this.scheduleRetry(e)
       }
-      this.emit(e)
-      // 口令错 / 指纹不符 / 被策略拒是配置问题，退避重试只会把网关日志刷满（§3.3）
-      if (!isFatalAuthError(err)) this.scheduleRetry(e)
+    } finally {
+      e.dialing = false
     }
   }
 

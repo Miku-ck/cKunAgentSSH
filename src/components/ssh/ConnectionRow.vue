@@ -239,6 +239,7 @@ function formatDate(ts: number): string {
 .cell-auth {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
 }
 
 .auth-badge {
@@ -247,7 +248,7 @@ function formatDate(ts: number): string {
   border-radius: 3px;
   font-size: 10px;
   font-weight: 500;
-  text-align: center;
+  text-align: left;
   white-space: nowrap;
 }
 
@@ -275,14 +276,14 @@ function formatDate(ts: number): string {
 
 /* ── 最后连接时间 ── */
 .cell-time {
-  text-align: right;
+  text-align: left;
   font-size: 11px;
   color: var(--text-tertiary);
 }
 
 /* ── 创建时间 ── */
 .cell-created {
-  text-align: right;
+  text-align: left;
   font-size: 11px;
   color: var(--text-tertiary);
 }

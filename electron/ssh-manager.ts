@@ -20,7 +20,6 @@ import { assertKeyFileSafe } from './utils/path-guard'
 import { BrowserWindow, app } from 'electron'
 import { SSHError, classifyRawError, toFriendlyZh } from './ssh-error'
 import { encodeTransferErrorName, isTransferRetryable, type TransferErrorCode } from '../shared/transfer-error-core'
-import { readFileSync, statSync } from 'fs'
 import { promises as fsPromises } from 'fs'
 import { posix, join } from 'path'
 import { createHash, randomBytes } from 'crypto'
@@ -357,6 +356,9 @@ interface ReconnectEntry {
   timer: NodeJS.Timeout | null
   /** 是否有一次重连连接正在进行中 */
   inFlight: boolean
+  /** 断开前该会话是否已打开 SFTP 子系统（意外断连→自动重连后由主进程自动重开，
+   *  否则沿用终端会话的 SFTP 面板会在重连后全部抛 SFTP_SESSION_REQUIRED） */
+  sftpOpen?: boolean
 }
 
 /** 自动重连最大尝试次数 */
@@ -563,6 +565,8 @@ export class SSHManager {
     if (!session) return
     // 陈旧事件守卫：session 的 client 已是新连接（重连已重建），跳过
     if (client && session.client !== client) return
+    // 断开前是否开着 SFTP 子系统（在 closeSftp 清掉映射之前记录，供重连后自动重开）
+    const hadSftp = this.sftpSessions.has(id)
     this.closeSftp(id)
     this.sessions.delete(id)
     if (session.closeNotified) return
@@ -570,12 +574,14 @@ export class SSHManager {
     const willReconnect = this.reconnects.has(id)
     this.safeSend('ssh:close', { id, willReconnect })
     if (willReconnect) {
+      const entry = this.reconnects.get(id)
+      if (entry) entry.sftpOpen = hadSftp
       this.startAutoReconnect(id)
     }
   }
 
   /** 根据认证方式构建 ssh2 connect 配置 */
-  private buildConnectConfig(config: SSHConnectionConfig): any {
+  private async buildConnectConfig(config: SSHConnectionConfig): Promise<any> {
     const connectConfig: any = {
       host: config.host,
       port: config.port,
@@ -612,7 +618,7 @@ export class SSHManager {
         // 修复 1：读取私钥前做路径白名单校验（~/.ssh、userData 或文件选择对话框选取），
         // 防止渲染进程用任意路径读取敏感文件；校验失败直接抛出，由 ipcMain.handle 转 reject。
         assertKeyFileSafe(config.privateKeyPath)
-        connectConfig.privateKey = readFileSync(config.privateKeyPath, 'utf-8')
+        connectConfig.privateKey = await fsPromises.readFile(config.privateKeyPath, 'utf-8')
       }
       if (config.passphrase) {
         connectConfig.passphrase = config.passphrase
@@ -684,7 +690,7 @@ export class SSHManager {
   async openRawClient(config: SSHConnectionConfig): Promise<Client> {
     await this.loadKnownHosts()
     const client = new (await loadSsh2())()
-    const connectConfig = this.buildConnectConfig(config)
+    const connectConfig = await this.buildConnectConfig(config)
     // s3 同款口径：连接配置已提取后立即清除内存中的明文密码/passphrase
     config.password = undefined
     config.passphrase = undefined
@@ -725,15 +731,12 @@ export class SSHManager {
     // 的每连接闭包捕获，不再使用共享槽位）
     await this.loadKnownHosts()
     const client = new (await loadSsh2())()
-    const connectConfig = this.buildConnectConfig(config)
+    const connectConfig = await this.buildConnectConfig(config)
     // s3 修复：连接配置已提取后立即清除内存中的明文密码/passphrase
     config.password = undefined
     config.passphrase = undefined
 
     return new Promise((resolve, reject) => {
-      const wrappedResolve = (val: { id: string; name: string; client: Client }) => { resolve(val) }
-      const wrappedReject = (err: Error) => { reject(err) }
-
       client.on('ready', () => {
         if (!withShell) {
           const name = config.name || `${config.username}@${config.host}`
@@ -743,12 +746,12 @@ export class SSHManager {
           if (incumbent && incumbent.client !== client) {
             console.warn(`[ssh] 会话 ${id} 的迟到握手被丢弃（池中已是另一代连接）`)
             try { client.end() } catch { /* ignore */ }
-            wrappedResolve({ id, name, client })
+            resolve({ id, name, client })
             return
           }
           this.sessions.set(id, { id, connectionId: config.id, client, stream: null, name, cwd: '' })
           // 审查R2修复：携带 client，供陈旧重连续体精确拆除自身连接（见 runReconnectAttempt）
-          wrappedResolve({ id, name, client })
+          resolve({ id, name, client })
           return
         }
 
@@ -759,7 +762,7 @@ export class SSHManager {
           (err, stream) => {
             if (err) {
               client.end()
-              wrappedReject(new SSHError('EXEC_FAIL', { original: err }))
+              reject(new SSHError('EXEC_FAIL', { original: err }))
               return
             }
 
@@ -779,7 +782,7 @@ export class SSHManager {
               try { client.end() } catch { /* ignore */ }
               // 仍按成功出栈：调用方拿到的是**本轮自己的** client，其陈旧分支的
               // teardownSession(id, 本 client) 因池中是新代而跳过，不会误关新会话
-              wrappedResolve({ id, name, client })
+              resolve({ id, name, client })
               return
             }
             this.sessions.set(id, {
@@ -884,7 +887,7 @@ export class SSHManager {
               }
             }
 
-            wrappedResolve({ id, name, client })
+            resolve({ id, name, client })
           }
         )
       })
@@ -898,7 +901,7 @@ export class SSHManager {
         // 配置的认证方式归类，密码错才报 AUTH_PASSWORD（"密码认证失败"）
         // 而非泛化的 AUTH_UNKNOWN。password/passphrase 已在 buildConnectConfig
         // 后清除，但 authType 未被清除，此处可用
-        wrappedReject(SSHError.from(err, undefined, config.authType))
+        reject(SSHError.from(err, undefined, config.authType))
         // 断连诊断：连接就绪后（exec/监控期间）的传输层错误，原实现因 wrappedReject
         // 早已 resolve 而无从观测。记入主进程控制台，用于定位"频繁自动断开"的根因。
         console.error(`[ssh] 会话 ${id} 连接级错误:`, err?.message || err, { name: config.name })
@@ -918,7 +921,7 @@ export class SSHManager {
       try {
         client.connect(connectConfig)
       } catch (err) {
-        wrappedReject(SSHError.from(err, undefined, config.authType))
+        reject(SSHError.from(err, undefined, config.authType))
       }
     })
   }
@@ -1127,6 +1130,10 @@ export class SSHManager {
     }
     this.sessions.clear()
     this.transfers.clear()
+    // disconnectAll 不走 teardownSession（那里才摘 bridgeSessionIds），
+    // 此处统一清空桥接归属集合，避免死状态残留（会话 id 每次启动随机，
+    // 残留项永远不会命中新会话，但保持集合干净仍是正确做法）
+    this.bridgeSessionIds.clear()
   }
 
   // ════════════════════════════════════════════════
@@ -1280,6 +1287,11 @@ export class SSHManager {
     this.safeSend('ssh:reconnect', { id, phase: 'success', attempt, maxAttempts: RECONNECT_MAX_ATTEMPTS })
     // 重连成功后更新最后连接时间（与首连成功路径同语义）
     try { this.onReconnected?.(entry.connectionId) } catch { /* ignore */ }
+    // 断连前开着的 SFTP 子系统需在新 client 上重开（closeSftp 已在 destroySession
+    // 清掉映射），否则沿用该终端会话的 SFTP 面板会在重连后全部抛 SFTP_SESSION_REQUIRED
+    if (entry.sftpOpen) {
+      try { await this.openSftp(id) } catch { /* 重开失败则 SFTP 保持关闭，不阻断重连成功 */ }
+    }
   }
 
   /** in-flight 连接完成时校验：重连条目仍是开始时那条且代数未变（未被取消/重启） */
@@ -1343,7 +1355,7 @@ export class SSHManager {
     // s1 修复：测试连接也走同样的 host key 验证（每连接闭包，审查 M-1）
     await this.loadKnownHosts()
     const client = new (await loadSsh2())()
-    const connectConfig = this.buildConnectConfig(config)
+    const connectConfig = await this.buildConnectConfig(config)
 
     return new Promise((resolve) => {
       let settled = false
@@ -1568,10 +1580,9 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
     // 停滞或主进程被杀后续传跳过洞，产出中段全零的静默损坏文件。）
     const RESUME_OVERLAP = CONCURRENCY * CHUNK_SIZE
 
-    // 本地文件大小
-    const total = (() => {
-      try { return statSync(localPath).size } catch { throw new Error(`本地文件不存在或不可访问: ${localPath}`) }
-    })()
+    // 本地文件大小（P2 修复：async stat 替代同步 statSync，避免主线程阻塞）
+    let total = 0
+    try { total = (await fsPromises.stat(localPath)).size } catch { throw new Error(`本地文件不存在或不可访问: ${localPath}`) }
 
     const partPath = remotePath + '.part'
     let cancelled = false
@@ -1907,7 +1918,7 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       let startOffset = 0
       let partExists = false
       try {
-        const partStat = statSync(partPath)
+        const partStat = await fsPromises.stat(partPath)
         if (partStat.size === total) {
           // .part 与远程文件大小一致，视为已完成，直接 rename
           // 审查修复（P2）：覆盖语义 rename，避免 Windows 目标已存在 EPERM
@@ -1959,7 +1970,9 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       // 绝不无界地把远端流灌进本地磁盘（远端 /dev/zero 就是这种流）。
       if (total === 0) {
         const UNKNOWN_SIZE_LIMIT = 64 * 1024 * 1024
-        let off = 0
+        // 续传校验已通过的起点（resume 块里设过 startOffset/transferred）：从已验证
+        // 的前缀之后继续读，避免把已下载且校验一致的字节从头重传一遍
+        let off = startOffset
         for (;;) {
           if (cancelled) {
             throw toTransferError({ code: 'CANCELLED', message: '传输已取消' })

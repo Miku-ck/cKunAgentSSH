@@ -24,8 +24,8 @@ interface TunnelRule {
   name: string                  // 空则 UI 显示自动名「L 8080 → db:5432」式
   connectionId: string          // 引用 SSHConnectionRecord.id
   type: TunnelType
-  // local:   本机 listenPort → (经SSH) → dstHost:dstPort
-  // remote:  远端 bindPort   → (经SSH回) → 本机 dstHost:dstPort
+  // local:   本机 listenPort → ( SSH) → dstHost:dstPort
+  // remote:  远端 bindPort   → ( SSH回) → 本机 dstHost:dstPort
   // dynamic: 本机 listenPort 起 SOCKS5，目标由客户端 CONNECT 指定
   listenHost?: string           // 默认 127.0.0.1，仅 local 可自定义；dynamic 强制 127.0.0.1
   listenPort: number            // 1–65535
@@ -126,6 +126,11 @@ UI 终稿以 `designs/tunnel-ui-mockup-v3.html` 为准（评审 v1 → v2 → v3
 `color-mix` 派生。**待补令牌**：light 主题下 `--accent-cyan/--accent-purple` 在白底
 不可读（1.6:1），需在 variables.css 增补 `--tint-l/--tint-r/--tint-d` 三条语义令牌
 （深色主题默认回落到 accent 值，有真实消费方，符合该文件维护约定）。
+
+**回填（2026-10-10）**：空状态只留单行文案（「还没有隧道规则」/「没有符合当前筛选的
+隧道」），「新建隧道」入口只在页头部画一处——DESIGN.md 反模式条「空状态里重复头部
+已有的主操作按钮」在本页补齐。全仓其余页面（远程管理/安全接入/审计/定时任务/
+Docker/SFTP/dsh-ssh 隧道页签）同日排查后本已合规，无需改动。
 
 状态订阅：新建 `src/stores/tunnel.ts`（Pinia），持有 rules/statuses 两个 map，`onTunnelStatus` 合并状态；app 启动时 `tunnel:list` + `tunnel:statusAll` 各拉一次。
 

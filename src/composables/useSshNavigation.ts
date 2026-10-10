@@ -32,7 +32,7 @@ export function useSshNavigation(
    * 标签该不该点亮看 homeTabActive —— 独立页面盖上来时它仍为 true。
    */
   const showHome = ref(true)
-  const activeNavPage = ref<'home' | 'remote-mgr' | 'sftp' | 'audit' | 'schedules' | 'dashboard' | 'tunnels'>('home')
+  const activeNavPage = ref<'home' | 'remote-mgr' | 'sftp' | 'audit' | 'schedules' | 'dashboard' | 'tunnels' | 'docker'>('home')
   const showModal = ref(false)
   const editingConnection = ref<SSHConnection | undefined>(undefined)
 
@@ -163,6 +163,17 @@ export function useSshNavigation(
     } else {
       showHome.value = true
       activeNavPage.value = 'tunnels'
+      // 切到独立页面时自动收起 AI 助手面板（点 AI 图标可重新展开）
+      sshAiStore.closeAiPanel()
+    }
+  }
+
+  function toggleDocker() {
+    if (activeNavPage.value === 'docker') {
+      goHome()
+    } else {
+      showHome.value = true
+      activeNavPage.value = 'docker'
       // 切到独立页面时自动收起 AI 助手面板（点 AI 图标可重新展开）
       sshAiStore.closeAiPanel()
     }
@@ -395,6 +406,7 @@ export function useSshNavigation(
     toggleSchedules,
     toggleDashboard,
     toggleTunnels,
+    toggleDocker,
     openLocalShell,
     handleLocalExit,
     connectRemote,

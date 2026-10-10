@@ -59,7 +59,7 @@
       <div class="section-divider" />
 
       <div class="default-model-info">
-        <span class="default-model-label">当前默认模型（ssh）</span>
+        <span class="default-model-label">当前默认模型（{{ defaultModelTierText }}）</span>
         <span class="default-model-name">{{ defaultModelName }}</span>
         <span v-if="defaultModelId" class="default-model-id">{{ defaultModelId }}</span>
         <p v-if="!defaultSshModel && settingsStore.modelConfigs.length" class="hint saving">
@@ -158,10 +158,14 @@ const defaultSshModel = computed(() => {
   // ModelsPanel 的星标撒谎：那一页一个星都没亮，这一页却写着默认是 B。
   return list.find((m) => m.is_default_ssh) ?? list.find((m) => m.is_default) ?? null
 })
+// 档位说真话：命中的是全局档（⊕）时仍标（ssh）就是假的 —— ModelsPanel 里
+// 那颗星是亮在⊕上而不是★上，两处说法得和兜底链的同一条口径一致。
+const defaultModelTierText = computed(() =>
+  defaultSshModel.value?.is_default_ssh ? 'ssh' : '全局档回落')
 const defaultModelName = computed(() => {
   const m = defaultSshModel.value
   if (!m) return '未配置'
-  return m.name || m.model_id || m.id || '未配置'
+  return m.name || m.model_id || m.id
 })
 const defaultModelId = computed(() => defaultSshModel.value?.model_id || '')
 

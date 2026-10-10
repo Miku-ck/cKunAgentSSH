@@ -34,10 +34,27 @@ export interface ProcessTopEntry {
   etime: string    // [[dd-]hh:]mm:ss
   stat: string     // 进程状态码
 }
+/** 常见端口服务名（前端静态映射；采集端不查 /etc/services，避免命令膨胀与传输成本） */
+export const PORT_SERVICE_NAMES: Record<number, string> = {
+  21: 'ftp', 22: 'ssh', 23: 'telnet', 25: 'smtp', 53: 'dns', 80: 'http', 110: 'pop3', 143: 'imap',
+  443: 'https', 465: 'smtps', 587: 'submission', 1080: 'socks', 1433: 'mssql', 1521: 'oracle',
+  2181: 'zookeeper', 2375: 'docker', 2376: 'docker-tls', 2379: 'etcd', 3000: 'dev-server',
+  3306: 'mysql', 3389: 'rdp', 5432: 'postgresql', 5601: 'kibana', 5672: 'rabbitmq', 5900: 'vnc',
+  6379: 'redis', 6443: 'k8s-api', 8000: 'http-alt', 8080: 'http-proxy', 8443: 'https-alt',
+  8500: 'consul', 9090: 'prometheus', 9092: 'kafka', 9200: 'elasticsearch', 9100: 'node-exporter',
+  11211: 'memcached', 27017: 'mongodb',
+}
+
 export interface PortEntry {
   proto: 'tcp' | 'udp'
   addr: string
   port: number
+  /** 监听进程 PID（来自 ss -p；非特权采集看不到他人进程时缺失） */
+  pid?: number
+  /** 监听进程名 */
+  proc?: string
+  /** 同一端口的其他监听地址（通配符折叠后：主显示 IPv4，IPv6 地址收于此。IPv6 去括号便于展示） */
+  secondaryAddrs?: string[]
 }
 /** 单块 GPU 快照（nvidia-smi 采集）；null = 该字段远端返回 N/A（如被动散热卡无风扇、WSL 无功率） */
 export interface GpuSample {
@@ -102,7 +119,6 @@ export interface ServerMetrics {
   /** 交换分区 MB（nvtop 的 SWP 行；无 swap 时 total=0） */
   swap: { total: number; used: number }
   disks: DiskMount[]
-  procs: ProcessTopEntry[]
   ports: PortEntry[]
   /** GPU 列表（无 NVIDIA 驱动/无卡时为空数组） */
   gpus: GpuSample[]
@@ -146,6 +162,15 @@ export function describeMonitorError(e: unknown): MonitorErrorInfo {
       retryable: false,
     }
   }
+  // 本地硬超时兜底（withTimeout 标签）：远端响应慢/通道拥塞，后台重试会继续推进，
+  // 不能把内部标签 'metrics poll timeout' 直透给中文 UI，也不能标不可重试
+  if (/metrics poll timeout/i.test(msg)) {
+    return {
+      code: 'MON_TIMEOUT',
+      message: '指标采集超时（远端响应慢或通道拥塞），将自动重试',
+      retryable: true,
+    }
+  }
   // 兜底：剥掉 Electron IPC 的 "Error invoking remote method 'xxx':" 外壳，
   // 仅保留根因消息，避免把内部 IPC 细节暴露给用户
   const root = msg.replace(/^Error invoking remote method '[^']+'\s*:\s*/, '')
@@ -170,9 +195,15 @@ export const METRICS_CMD = [
   `echo "LOAD=$(cut -d" " -f1-3 /proc/loadavg)"`,
   `awk '/^MemTotal/{t=$2} /^MemAvailable/{a=$2} /^SwapTotal/{st=$2} /^SwapFree/{sf=$2} END{if (t>0) printf "MEM_TOTAL=%.0f\\nMEM_USED=%.0f\\nMEM_PCT=%.1f\\n", t/1024, (t-a)/1024, (t-a)/t*100; else print "MEM_TOTAL=0\\nMEM_USED=0\\nMEM_PCT=0"; printf "SWAP_TOTAL=%.0f\\nSWAP_USED=%.0f\\n", st/1024, (st-sf)/1024}' /proc/meminfo`,
   `df -m -P 2>/dev/null | awk 'NR>1 && $1 ~ /^\\// {printf "DISK=%s|%s|%s|%s\\n", $6, $2, $3, $5}'`,
-  `ps -eo pid,pcpu,pmem:6,user:10,rss,etime:10,stat:4,comm --sort=-pcpu 2>/dev/null | awk 'NR>1 && NR<=11{printf "PROC=%s|%s|%s|%s|%s|%s|%s|%s\\n", $1, $2, $3, $4, $5, $6, $7, $8}'`,
-  `ss -lnt 2>/dev/null | awk 'NR>1 && match($4, /:[0-9]+$/) {port=substr($4,RSTART+1,RLENGTH-1); addr=substr($4,1,RSTART-1); printf "PORT=tcp|%s|%s\\n", addr, port}'`,
-  `ss -lnu 2>/dev/null | awk 'NR>1 && match($4, /:[0-9]+$/) {port=substr($4,RSTART+1,RLENGTH-1); addr=substr($4,1,RSTART-1); printf "PORT=udp|%s|%s\\n", addr, port}'`,
+  // 端口进程归属的两级处理：
+  // ① 非特权用户对其他用户（常见为 root）的监听进程拿不到 pid（ss -p 需要读 /proc/<pid>/fd，
+  //    内核权限边界，ss 不报错只是整列留空）→ 追加 sudo -n 兼容收集，配了免密 sudo 的机器
+  //    能补全全部进程列；sudo 不存在或需密码时立即失败，不阻塞采集。
+  // ② -p 在极老 / busybox 环境可能不支持：不支持时整个 ss 报错退出，|| 兑底到不带 -p 的调用
+  //    （只是丢了进程列，端口本身仍完整）。两路输出可能有重叠行：awk 按 proto|addr|port 去重，
+  //    有 pid 的行优先覆盖无 pid 的行。
+  `(ss -ltnp 2>/dev/null || ss -ltn 2>/dev/null; sudo -n ss -ltnp 2>/dev/null) | awk 'NR>1 && match($4, /:[0-9]+$/) {port=substr($4,RSTART+1,RLENGTH-1); addr=substr($4,1,RSTART-1); pid=""; pname=""; if (match($0, /users:\\(\\("[^"]*",pid=[0-9]+/)) {seg=substr($0, RSTART+8, RLENGTH-8); split(seg, a, "\\\"" ); pname=a[2]; pid=a[3]; sub(/^,pid=/, "", pid)} k="tcp|"addr"|"port; if (!(k in R) || pid!="") R[k]=pid"|"pname} END {for (k in R) print "PORT="k"|"R[k]}'`,
+  `(ss -lnup 2>/dev/null || ss -lnu 2>/dev/null; sudo -n ss -lnup 2>/dev/null) | awk 'NR>1 && match($4, /:[0-9]+$/) {port=substr($4,RSTART+1,RLENGTH-1); addr=substr($4,1,RSTART-1); pid=""; pname=""; if (match($0, /users:\\(\\("[^"]*",pid=[0-9]+/)) {seg=substr($0, RSTART+8, RLENGTH-8); split(seg, a, "\\\"" ); pname=a[2]; pid=a[3]; sub(/^,pid=/, "", pid)} k="udp|"addr"|"port; if (!(k in R) || pid!="") R[k]=pid"|"pname} END {for (k in R) print "PORT="k"|"R[k]}'`,
   // GPU 采集四段式：① nvidia-smi 探测覆盖非登录 exec shell 的默认 PATH 盲区（sshd 给非交互 shell 的 PATH
   // 常不含 /usr/sbin/sbin——SUSE 系 RPM 驱动装在 /usr/sbin；WSL2 的桩在 /usr/lib/wsl/lib；runfile 装在
   // /usr/local/sbin）；② 探测全落空但内核驱动在场（/proc/driver/nvidia/version 存在）→ 输出 GPUERR= 自诊断
@@ -193,6 +224,15 @@ export const METRICS_CMD = [
   `NS=""; for c in nvidia-smi /usr/bin/nvidia-smi /usr/sbin/nvidia-smi /sbin/nvidia-smi /usr/local/bin/nvidia-smi /usr/local/sbin/nvidia-smi /usr/lib/wsl/lib/nvidia-smi; do command -v "$c" >/dev/null 2>&1 && NS="$c" && break; done; if [ -z "$NS" ]; then if [ -e /proc/driver/nvidia/version ]; then printf 'GPUERR=GPU driver present (kernel), but nvidia-smi not found in PATH or common dirs\\n'; fi; else TMP=/tmp/.ckun_gpu_err_$$; DEG=""; OUT=$("$NS" --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,power.limit,fan.speed,clocks.sm,clocks.mem,uuid,driver_version,pci.bus_id,performance_state,persistence_mode,compute_mode,ecc.errors.uncorrected.volatile.total --format=csv,noheader,nounits 2>"$TMP"); if ! printf '%s\\n' "$OUT" | grep -q '^[0-9]'; then DEG=1; OUT=$("$NS" --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu --format=csv,noheader,nounits 2>"$TMP"); fi; if ! printf '%s\\n' "$OUT" | grep -q '^[0-9]'; then ERR=$(printf '%s\\n' "$OUT" | head -1); if [ -z "$ERR" ]; then ERR=$(head -c 200 "$TMP" | tr '\\n\\r' '  '); fi; printf 'GPUERR=%s\\n' "$ERR"; fi; rm -f "$TMP"; printf '%s\\n' "$OUT" | awk -F', ' '/^[0-9]/{printf "GPU=%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\\n", $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18}'; if [ -n "$DEG" ]; then for q in index,uuid index,gpu_uuid; do UI=$("$NS" --query-gpu=$q --format=csv,noheader,nounits 2>/dev/null); if printf '%s\\n' "$UI" | grep -q '^[0-9]'; then printf '%s\\n' "$UI" | awk -F', ' '/^[0-9]/{printf "GPUINFO=%s|%s\\n", $1, $2}'; break; fi; done; XQ=$("$NS" --query-gpu=index,power.draw,power.limit,fan.speed,clocks.sm,clocks.mem,pci.bus_id --format=csv,noheader,nounits 2>/dev/null); if printf '%s\\n' "$XQ" | grep -q '^[0-9]'; then printf '%s\\n' "$XQ" | awk -F', ' '/^[0-9]/{printf "GPUX=%s|%s|%s|%s|%s|%s|%s\\n", $1, $2, $3, $4, $5, $6, $7}'; fi; DR=$( ("$NS" --version 2>/dev/null || "$NS" -v 2>/dev/null) | awk 'tolower($0) ~ /driver/ && !d {n=split($0,a,/[ \\t:]+/); for(i=1;i<=n;i++) if(a[i] ~ /^[0-9]+\\.[0-9.]*[0-9]$/) {print a[i]; d=1; break} }'); if [ -n "$DR" ]; then printf 'GPUDRV=%s\\n' "$DR"; fi; fi; APPS=$("$NS" --query-compute-apps=gpu_uuid,pid,used_memory,process_name --format=csv,noheader,nounits 2>/dev/null); if [ -n "$APPS" ] && ! printf '%s\\n' "$APPS" | grep -q '^GPU-'; then A2=$("$NS" --query-compute-apps=gpu_uuid,pid,used_memory --format=csv,noheader,nounits 2>/dev/null); if printf '%s\\n' "$A2" | grep -q '^GPU-'; then APPS="$A2"; fi; fi; printf '%s\\n' "$APPS" | awk -F', ' 'NF>=3 && c<20{out=$4; for(i=5;i<=NF;i++) out=out", "$i; printf "GPROC=%s|%s|%s|%s\\n", $1, $2, $3, out; c++}'; PIDS=$(printf '%s\\n' "$APPS" | awk -F', ' 'NF>=3{print $2}' | head -20 | paste -sd, -); if [ -n "$PIDS" ]; then ps -o pid=,user=,pcpu=,pmem=,etime= -p "$PIDS" 2>/dev/null | awk '{printf "GPS=%s|%s|%s|%s|%s\\n", $1, $2, $3, $4, $5}'; fi; fi`,
   `[ -n "$NS" ] && { CUV=$( ("$NS" --version 2>/dev/null || "$NS" -v 2>/dev/null) | awk 'BEGIN{IGNORECASE=1} {for(i=1;i<=NF;i++){ if($i=="CUDA"){ for(j=i+1;j<=NF;j++){ if($j ~ /^[0-9][0-9.]*$/) {print $j; exit} } } } }'); [ -n "$CUV" ] && printf 'GPUCUDA=%s\\n' "$CUV"; }`,
   'echo "===END==="' ,
+].join('; ')
+
+// ── 进程 TOP 独立采集命令（60s 慢轮询专用）──
+// 从 METRICS_CMD 拆出：ps --sort=-pcpu 排序开销不随 5s 快轮询放大（top 50，前端分页），
+// 进程表刷新频率独立为 60s（见 server-monitor.ts PROCS_INTERVAL_MS）
+export const PROCS_CMD = [
+  'echo "===CKUN_PROCS==="',
+  `ps -eo pid,pcpu,pmem:6,user:10,rss,etime:10,stat:4,comm --sort=-pcpu 2>/dev/null | awk 'NR>1 && NR<=51{printf "PROC=%s|%s|%s|%s|%s|%s|%s|%s\\n", $1, $2, $3, $4, $5, $6, $7, $8}'`,
+  'echo "===END==="',
 ].join('; ')
 
 // ── 解析 ──
@@ -231,7 +271,6 @@ export function parseMetricsRaw(raw: string, host?: string): ParsedMetrics | nul
   let mem: MemSample = { total: 0, used: 0, percent: 0 }
   const swap = { total: 0, used: 0 }
   const disks: DiskMount[] = []
-  const procs: ProcessTopEntry[] = []
   const ports: PortEntry[] = []
   const gpus: GpuSample[] = []
   let gpuError = ''
@@ -248,6 +287,21 @@ export function parseMetricsRaw(raw: string, host?: string): ParsedMetrics | nul
   let disksFull = false
   let portsFull = false
   let gpusFull = false
+  // ── 通配地址归一化 + 分组 ──
+  // ss 输出的通配地址有多种表示：IPv4 用 "0.0.0.0" 或 "*"，IPv6 用 "[::]" 或 "::"。
+  // 同一端口双栈监听时，这些行逻辑上是同一个绑定——按 proto|*|port 分组，
+  // 主显示偏好 IPv4 风格地址，IPv6 地址存入 secondaryAddrs。
+  const isV4Wild = (a: string) => a === '0.0.0.0' || a === '*'
+  const isV6Wild = (a: string) => a === '[::]' || a === '::'
+  const isWildcard = (a: string) => isV4Wild(a) || isV6Wild(a)
+  // 分组 key：通配地址归一化为 "*"，精确地址保留原值
+  const portGroupKey = (proto: string, addr: string, port: string | number) =>
+    `${proto}|${isWildcard(addr) ? '*' : addr}|${port}`
+  // 通配地址的展示形式：IPv4 → "0.0.0.0"，IPv6 → "[::]"
+  const wildDisplay = (addr: string) => isV6Wild(addr) ? '[::]' : '0.0.0.0'
+  // 判断哪个应做主展示：IPv4 优先（人类阅读友好）
+  const preferPrimary = (a: string, b: string) => isV4Wild(a) ? a : b
+  const portSeen = new Map<string, number>()  // groupKey → ports 数组下标
 
   for (const line of lines) {
     if (line.startsWith('STAT=')) {
@@ -267,26 +321,44 @@ export function parseMetricsRaw(raw: string, host?: string): ParsedMetrics | nul
       if (!mount || !mount.startsWith('/')) continue
       disks.push({ mount, total: inum(total), used: inum(used), percent: fnum(pct) })
       if (disks.length >= 8) disksFull = true
-    } else if (line.startsWith('PROC=')) {
-      const p = line.slice(5).split('|')
-      if (p.length >= 8) {
-        procs.push({
-          pid: inum(p[0]),
-          cpu: fnum(p[1]),
-          mem: fnum(p[2]),
-          user: naStr(p[3]),
-          rss: inum(p[4]),
-          etime: naStr(p[5]),
-          stat: naStr(p[6]),
-          name: naStr(p[7]) || 'unknown',
-        })
-      }
     } else if (line.startsWith('PORT=')) {
       if (portsFull) continue
-      const [proto, addr, port] = line.slice(5).split('|')
+      // 兼容两种行格式：proto|addr|port（旧采集）与 proto|addr|port|pid|proc（ss -p，进程信息可能缺失）
+      const [proto, rawAddr, port, pid, pname] = line.slice(5).split('|')
       if (proto === 'tcp' || proto === 'udp') {
-        ports.push({ proto, addr: addr || '0.0.0.0', port: inum(port) })
-        if (ports.length >= 30) portsFull = true
+        const raw = rawAddr || '0.0.0.0'
+        const gKey = portGroupKey(proto, raw, port)
+        const existingIdx = portSeen.get(gKey)
+        if (existingIdx !== undefined) {
+          const existing = ports[existingIdx]
+          // 决定主展示地址：IPv4 > IPv6；把非主的通配地址压入 secondaryAddrs
+          const primary = preferPrimary(existing.addr, wildDisplay(raw))
+          const dropped = primary === existing.addr ? wildDisplay(raw) : existing.addr
+          if (dropped !== primary) {
+            const secs = existing.secondaryAddrs ?? []
+            if (!secs.includes(dropped)) secs.push(dropped)
+            existing.secondaryAddrs = secs.length > 0 ? secs : undefined
+          }
+          existing.addr = primary
+          // pid 回填：有 pid 的行覆盖无 pid 的行
+          if (pid && !existing.pid) {
+            existing.pid = inum(pid)
+            existing.proc = pname || existing.proc
+          } else if (pname && !existing.proc) {
+            existing.proc = pname
+          }
+        } else {
+          portSeen.set(gKey, ports.length)
+          // 新建条目：通配地址统一为 "0.0.0.0"(v4) 或 "[::]"(v6) 展示
+          ports.push({
+            proto,
+            addr: isWildcard(raw) ? wildDisplay(raw) : raw,
+            port: inum(port),
+            pid: pid ? inum(pid) : undefined,
+            proc: pname || undefined,
+          })
+          if (ports.length >= 100) portsFull = true
+        }
       }
     } else if (line.startsWith('GPUERR=')) {
       gpuError = line.slice(7).trim().slice(0, 200)
@@ -378,7 +450,39 @@ export function parseMetricsRaw(raw: string, host?: string): ParsedMetrics | nul
       etime: ps?.etime ?? '',
     }]
   })
-  return { host, rawStat, load, mem, swap, disks, procs, ports, gpus, gpuError, gpuDriver, gpuCuda, gpuProcs }
+  return { host, rawStat, load, mem, swap, disks, ports, gpus, gpuError, gpuDriver, gpuCuda, gpuProcs }
+}
+
+/**
+ * 进程 TOP 解析（PROCS_CMD 输出 → 列表）。
+ * 标记行缺失（非本命令输出 / 远端 ps 不可用）返回空数组，调用方保留上次数据或置空。
+ */
+export function parseProcsRaw(raw: string): ProcessTopEntry[] {
+  const lines = raw.split('\n')
+  if (!lines.some(l => l.startsWith('===CKUN_PROCS==='))) return []
+  const procs: ProcessTopEntry[] = []
+  // 防御性去重：ps -eo 按 PID 唯一，但多次采样拼接时可能重复——按 pid 去重保留首条。
+  const pidSeen = new Set<number>()
+  for (const line of lines) {
+    if (!line.startsWith('PROC=')) continue
+    const p = line.slice(5).split('|')
+    if (p.length >= 8) {
+      const pid = inum(p[0])
+      if (pidSeen.has(pid)) continue
+      pidSeen.add(pid)
+      procs.push({
+        pid,
+        cpu: fnum(p[1]),
+        mem: fnum(p[2]),
+        user: naStr(p[3]),
+        rss: inum(p[4]),
+        etime: naStr(p[5]),
+        stat: naStr(p[6]),
+        name: naStr(p[7]) || 'unknown',
+      })
+    }
+  }
+  return procs
 }
 
 /**

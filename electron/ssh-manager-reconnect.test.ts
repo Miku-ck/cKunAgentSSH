@@ -164,6 +164,68 @@ describe('自动重连的错误分类', () => {
   })
 })
 
+describe('断连→重连后的 SFTP 子系统重开（S15-04）', () => {
+  it('destroySession 在 closeSftp 之前把「断开前有 SFTP」记进重连条目', () => {
+    const h = harness()
+    const anyMgr = h.mgr as unknown as {
+      sessions: Map<string, { id: string; client: unknown }>
+      sftpSessions: Map<string, unknown>
+      closeSftp: ReturnType<typeof vi.spyOn>
+      startAutoReconnect: ReturnType<typeof vi.spyOn>
+      destroySession: (id: string, client?: unknown) => void
+    }
+    const client = {}
+    anyMgr.sessions.set(ID, { id: ID, client })
+    anyMgr.sftpSessions.set(ID, { fake: 'sftp' })
+    const closeSftp = vi.spyOn(anyMgr, 'closeSftp').mockImplementation(() => {})
+    // 条目存在 = 意外断开会触发自动重连排程，本用例只验 sftpOpen 标记， mock 掉排程
+    vi.spyOn(anyMgr, 'startAutoReconnect').mockImplementation(() => {})
+
+    anyMgr.destroySession(ID, client)
+
+    // 映射必须已被读取（记录发生在 closeSftp 真删之前——这里 mock 掉真删，
+    // 用条目上的标记证明读取时机正确）
+    expect(closeSftp).toHaveBeenCalledWith(ID)
+    expect(h.entry()?.sftpOpen).toBe(true)
+  })
+
+  it('断开前没有 SFTP 时不标记，重连成功后也不重开', async () => {
+    const h = harness()
+    const openSftp = vi.spyOn(h.mgr as unknown as { openSftp: (id: string) => Promise<void> }, 'openSftp')
+    h.doConnect.mockResolvedValue({ id: ID, name: 'test', client: {} })
+
+    await h.run(1)
+
+    expect(h.entry()?.sftpOpen).toBeFalsy()
+    expect(openSftp).not.toHaveBeenCalled()
+  })
+
+  it('重连成功后按条目标记自动重开 SFTP', async () => {
+    const h = harness()
+    const openSftp = vi.spyOn(h.mgr as unknown as { openSftp: (id: string) => Promise<void> }, 'openSftp')
+    h.doConnect.mockResolvedValue({ id: ID, name: 'test', client: {} })
+    h.entry()!.sftpOpen = true
+
+    await h.run(1)
+
+    expect(openSftp).toHaveBeenCalledWith(ID)
+    // success 事件先于重发出栈（重开失败也不能污染重连成功语义，见 catch）
+    expect(reconnectEvents(h.sent).some((d) => d.phase === 'success')).toBe(true)
+  })
+
+  it('SFTP 重开抛错不阻断重连成功路径', async () => {
+    const h = harness()
+    const openSftp = vi.spyOn(h.mgr as unknown as { openSftp: (id: string) => Promise<void> }, 'openSftp')
+      .mockRejectedValue(new Error('sftp init fail'))
+    h.doConnect.mockResolvedValue({ id: ID, name: 'test', client: {} })
+    h.entry()!.sftpOpen = true
+
+    await expect(h.run(1)).resolves.toBeUndefined()
+    expect(openSftp).toHaveBeenCalledWith(ID)
+    expect(gaveUpEvents(h.sent)).toHaveLength(0)
+  })
+})
+
 describe('write 的会话缺失行为（S4-06）', () => {
   it('会话不在池里时抛 SESSION_NOT_FOUND —— 渲染层的 .catch 由此可达', () => {
     const h = harness()

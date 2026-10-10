@@ -201,7 +201,7 @@ onMounted(() => { load('/') })
 .hrp-list { list-style: none; margin: 0; padding: 0; max-height: 208px; overflow-y: auto }
 .hrp-row {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
   width: 100%;
   text-align: left;

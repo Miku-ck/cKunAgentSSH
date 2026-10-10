@@ -2,32 +2,49 @@
  * 服务器实时监控 — 远端指标轮询采集（B 阶段）
  *
  * 复用既有 ssh:exec IPC（exec channel，独立于终端 shell，不污染交互终端）。
- * 一条聚合命令取 CPU/内存/负载/磁盘/进程TOP/监听端口，key=value 行输出，
- * 解析失败或会话断开时静默失败（连续失败 3 次停止轮询）。
+ * 一条聚合命令取 CPU/内存/负载/磁盘/监听端口（5s 快轮询），进程 TOP 单独一条
+ * 命令 60s 慢轮询，解析失败或会话断开时静默失败（连续失败 3 次停止轮询）。
  *
  * 状态放 Pinia store：Dashboard 视图切换/卸载不中断轮询；
  * 会话全部关闭时由 useSshNavigation 的 watch 停止。
  * 纯解析/差分逻辑在 server-monitor-core.ts（无 vue 依赖，独立单测）。
  */
-import { computed, ref } from 'vue'
+import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import { useSSHStore } from './ssh'
 import {
   METRICS_CMD,
+  PROCS_CMD,
   parseMetricsRaw,
+  parseProcsRaw,
   computeCpuDiff,
   describeMonitorError,
   type ServerMetrics,
   type CpuSample,
-  type DiskMount,
+  type ProcessTopEntry,
   type RawStat,
 } from './server-monitor-core'
 import { isRetryable } from '../ssh-error-types'
 
 const POLL_INTERVAL_MS = 5000
+const PROCS_INTERVAL_MS = 60000 // 进程 TOP 慢轮询：ps 排序开销大，不随 5s 快轮询放大
 const HISTORY_MAX = 60       // 状态条 sparkline 保留点数（5min @ 5s）
 const FAIL_STOP_THRESHOLD = 3
 const RETRY_INTERVAL_MS = 15000 // 连续失败停止后，目标会话仍在时后台重试的间隔
+
+/** 切走某远程会话时保留其历史快照，切回时恢复，避免切 tab 丢 sparkline 数据 */
+interface RetainedHistory {
+  current: ServerMetrics | null
+  procs: ProcessTopEntry[]
+  cpu: number[]
+  mem: number[]
+  load: number[]
+  gpu: Record<string, { util: number[]; mem: number[] }>
+  errorCount: number
+  lastError: { message: string; code: string; retryable: boolean } | null
+  prevStat: RawStat | null
+}
+const RETAINED_MAX = 16
 
 /** 给 Promise 加硬超时兜底：超时 reject，保证 await 必 settle（用于防止采集卡死） */
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -44,6 +61,8 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
   const sshStore = useSSHStore()
 
   const current = ref<ServerMetrics | null>(null)
+  /** 进程 TOP（60s 慢轮询独立采样，与 5s 指标解耦；失败静默保留上次列表） */
+  const procs = ref<ProcessTopEntry[]>([])
   /** 历史序列（时间正序，长度 ≤ HISTORY_MAX）— 状态条 sparkline 数据源 */
   const cpuHistory = ref<number[]>([])
   const memHistory = ref<number[]>([])
@@ -57,7 +76,9 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
   const lastError = ref<{ message: string; code: string; retryable: boolean } | null>(null)
 
   let timer: ReturnType<typeof setTimeout> | null = null
+  let procsTimer: ReturnType<typeof setTimeout> | null = null
   let inflight = false
+  let procsInflight = false
   let activeSshId = ''
   /** 监控目标会话（连续失败停止后仍保留，用于后台重试；stop 时清空） */
   let targetSshId = ''
@@ -65,13 +86,38 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
   let retryTimer: ReturnType<typeof setTimeout> | null = null
   /** 上一次 CPU 原始计数器（跨轮次差分算使用率） */
   let prevStat: RawStat | null = null
+  /** 各会话的历史快照（切走保留、切回恢复），避免切换 tab 清空 sparkline 历史 */
+  const retained: Record<string, RetainedHistory> = {}
 
-  /** 首个根磁盘（状态条/卡片用） */
-  const rootDisk = computed<DiskMount | null>(() => {
-    const d = current.value?.disks
-    if (!d?.length) return null
-    return d.find(x => x.mount === '/') || d[0]
-  })
+  function retainActive(): void {
+    if (!activeSshId) return
+    retained[activeSshId] = {
+      current: current.value,
+      procs: procs.value,
+      cpu: cpuHistory.value,
+      mem: memHistory.value,
+      load: loadHistory.value,
+      gpu: gpuHist.value,
+      errorCount: errorCount.value,
+      lastError: lastError.value,
+      prevStat,
+    }
+    // 限制保留的会话数，避免长生命周期下无限增长
+    const keys = Object.keys(retained)
+    if (keys.length > RETAINED_MAX) delete retained[keys[0]]
+  }
+
+  function restoreFrom(saved: RetainedHistory): void {
+    current.value = saved.current
+    procs.value = saved.procs
+    cpuHistory.value = saved.cpu
+    memHistory.value = saved.mem
+    loadHistory.value = saved.load
+    gpuHist.value = saved.gpu
+    errorCount.value = saved.errorCount
+    lastError.value = saved.lastError
+    prevStat = saved.prevStat
+  }
 
   function pushHistory(arr: number[], v: number) {
     arr.push(v)
@@ -150,6 +196,35 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
     }, POLL_INTERVAL_MS)
   }
 
+  /** 进程 TOP 采样（60s 慢轮询）。失败静默：保留上次列表，不进指标错误条。 */
+  async function sampleProcs(): Promise<void> {
+    if (procsInflight || !polling.value || !activeSshId) return
+    const session = sshStore.sessions.find(s => s.id === activeSshId)
+    if (!session || session.type !== 'remote') return
+    procsInflight = true
+    try {
+      const res = await withTimeout(
+        window.electronAPI!.sshExec(activeSshId, PROCS_CMD, 10),
+        12000,
+        'procs poll timeout',
+      )
+      if (activeSshId !== session.id) return // 采样期间切换了会话
+      procs.value = parseProcsRaw(res.stdout)
+    } catch {
+      // 静默：进程表失败不干扰指标面板，下一轮 60s 自然重试
+    } finally {
+      procsInflight = false
+    }
+  }
+
+  function scheduleProcs() {
+    procsTimer = setTimeout(() => {
+      procsTimer = null
+      void sampleProcs()
+      scheduleProcs()
+    }, PROCS_INTERVAL_MS)
+  }
+
   /** 连续失败停止 5s 轮询，但进入后台重试：只要目标会话仍在列表，
    *  每隔 RETRY_INTERVAL_MS 再采样一次；采样成功即自动恢复轮询。
    *  这样"重连后自动恢复"对通道挂死/短暂不可达也成立（不只是换会话 id）。
@@ -177,15 +252,20 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
   function start(sshId: string) {
     const session = sshStore.sessions.find(s => s.id === sshId)
     if (!session || session.type !== 'remote') return
-    // stop() 负责全部清零，这里不再抄第二份清单 —— 上一版正是在两处各写一份，
-    // stop() 那份漏了 lastError/errorCount/prevStat，于是关掉主机后仪表盘仍然
-    // 挂着「监控已中断」，而「当前终端没有远程连接」的空态整条不可达。
+    // 保留上一会话的历史快照，随后 stop() 清零当前槽位；若目标会话已有快照则恢复，
+    // 避免切 tab 清空 sparkline 历史（数据丢失竞态）。stop() 仍负责定时器/轮询清理。
+    retainActive()
     stop()
+    const saved = retained[sshId]
+    if (saved) restoreFrom(saved)
     activeSshId = sshId
     targetSshId = sshId
     polling.value = true
     void sample()
     scheduleNext()
+    // 进程 TOP 首轮立即采一次，之后 60s 一轮
+    void sampleProcs()
+    scheduleProcs()
   }
 
   /** 停表并清空全部读数：唯一的状态清零入口 */
@@ -194,6 +274,7 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
     activeSshId = ''
     targetSshId = ''
     current.value = null
+    procs.value = []
     cpuHistory.value = []
     memHistory.value = []
     loadHistory.value = []
@@ -205,6 +286,10 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
       clearTimeout(timer)
       timer = null
     }
+    if (procsTimer) {
+      clearTimeout(procsTimer)
+      procsTimer = null
+    }
     if (retryTimer) {
       clearTimeout(retryTimer)
       retryTimer = null
@@ -213,6 +298,7 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
 
   return {
     current,
+    procs,
     cpuHistory,
     memHistory,
     loadHistory,

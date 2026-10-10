@@ -640,6 +640,7 @@ const sysRows = computed<SysRow[]>(() => {
 }
 
 .nv-proc-table td {
+  text-align: left;
   padding: 2px 8px 2px 6px;
   border-top: 1px solid var(--nv-border-row);
   font-variant-numeric: tabular-nums;

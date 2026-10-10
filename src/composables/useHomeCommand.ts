@@ -6,7 +6,7 @@
  * 创建、终端上下文采集与 resolveRunModes 装配），审批档与姿态都读 store 而不是
  * 自己存一份 —— 首页与侧栏必须是同一档，否则用户在一处选了什么，另一处不算。
  */
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useAgentStore } from '@/stores/agent'
 import { useToastStore } from '@/stores/toast'
@@ -16,7 +16,12 @@ export function useHomeCommand() {
   const agent = useAgentStore()
   const toast = useToastStore()
 
-  const draft = ref('')
+  /** 与侧栏同一份共享草稿（store 的 sharedDraft）：首页打一半切到侧栏接着写，
+   *  反向亦然。computed 双向绑定让 v-model 与 `draft.value = ''` 照常工作。 */
+  const draft = computed({
+    get: () => sshAi.sharedDraft,
+    set: (v: string) => sshAi.setSharedDraft(v),
+  })
   /** 与侧栏同一口径：只挂文件不打字也算"可以下达"（SideChatPanel :1300 允许空文本
    *  带附件发送）。首页若把文本当硬条件，用户会得到"文件挂上了但『交给它』是灰的"。 */
   const canSend = computed(() =>

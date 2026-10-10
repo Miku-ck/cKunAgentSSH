@@ -11,7 +11,7 @@
  *    捕获命令输出，回传 POST /agent/tool-result 恢复后端循环；
  * 4. 用户拒绝 / 写入失败 / 超时等均回传失败结果，避免后端挂死。
  */
-import { ref, reactive } from 'vue'
+import { ref } from 'vue'
 import { postToolResult, agentApi } from '@/api/client'
 import { useSSHStore } from '@/stores/ssh'
 
@@ -37,6 +37,22 @@ const TERMINAL_STATUSES: ReadonlySet<DeliveryStatus> = new Set([
 function isTerminalStatus(status: DeliveryStatus): boolean {
   return TERMINAL_STATUSES.has(status)
 }
+
+/** P2 修复：给一次性 IPC（postToolResult）加超时，避免后端/渲染层异常导致
+ *  promise 永久挂起、阻塞交付状态机收尾（clearCapture / 终态流转）。超时后
+ *  外层已推进，底层 IPC 若晚到也只是无人 await，不再拖累当前交付。 */
+async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} 超时（${ms}ms）`)), ms)
+  })
+  try {
+    return await Promise.race([p, timeout])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+const POST_RESULT_TIMEOUT_MS = 15000
 
 export interface ToolDelivery {
   tool_id: string
@@ -85,8 +101,8 @@ interface CaptureState {
 
 // ── 模块级状态 ──
 const deliveries = ref<ToolDelivery[]>([])
-/** session_id → tool_id：当前每个会话的活动捕获 */
-const activeCaptureBySession = reactive<Record<string, string>>({})
+/** session_id → tool_id 集合：允许同一会话并发多个捕获（按各自 marker 路由，互不干扰） */
+const activeCaptureBySession: Record<string, Set<string>> = {}
 /** tool_id → CaptureState */
 const captures = new Map<string, CaptureState>()
 
@@ -131,8 +147,10 @@ function clearCapture(toolId: string): void {
   if (!cap) return
   if (cap.timer) clearTimeout(cap.timer)
   captures.delete(toolId)
-  if (activeCaptureBySession[cap.session_id] === toolId) {
-    delete activeCaptureBySession[cap.session_id]
+  const set = activeCaptureBySession[cap.session_id]
+  if (set) {
+    set.delete(toolId)
+    if (set.size === 0) delete activeCaptureBySession[cap.session_id]
   }
 }
 
@@ -158,14 +176,18 @@ async function finishAndPost(toolId: string, output: string, success: boolean, e
   // 通知父层状态机，完成即不再参与后续捕获
   clearCapture(toolId)
   try {
-    await postToolResult(
-      toolId,
-      output,
-      success,
-      exitCode,
-      rejected,
-      delivery?.runId,
-      delivery?.confirmedByUi === true,
+    await withTimeout(
+      postToolResult(
+        toolId,
+        output,
+        success,
+        exitCode,
+        rejected,
+        delivery?.runId,
+        delivery?.confirmedByUi === true,
+      ),
+      POST_RESULT_TIMEOUT_MS,
+      'postToolResult',
     )
   } catch (err) {
     console.error('[useAgentDeliver] 回传 tool-result 失败:', err)
@@ -214,8 +236,11 @@ async function deliverCommand(toolId: string): Promise<void> {
   if (!session) {
     delivery.status = 'done'
     delivery.output = '无可写终端'
-    void postToolResult(
-      toolId, '无可写终端', false, null, false, delivery.runId, delivery.confirmedByUi === true,
+    void withTimeout(
+      postToolResult(
+        toolId, '无可写终端', false, null, false, delivery.runId, delivery.confirmedByUi === true,
+      ),
+      POST_RESULT_TIMEOUT_MS, 'postToolResult',
     ).catch(() => {})
     return
   }
@@ -240,7 +265,9 @@ async function deliverCommand(toolId: string): Promise<void> {
     timer: null,
   }
   captures.set(toolId, cap)
-  activeCaptureBySession[delivery.session_id] = toolId
+  const capSet = activeCaptureBySession[delivery.session_id] ?? new Set<string>()
+  capSet.add(toolId)
+  activeCaptureBySession[delivery.session_id] = capSet
   armTimeout(delivery)
 
   const api = window.electronAPI
@@ -250,9 +277,12 @@ async function deliverCommand(toolId: string): Promise<void> {
     clearCapture(toolId)
     delivery.status = 'done'
     delivery.output = 'Electron API 未就绪，无法写入终端'
-    void postToolResult(
-      toolId, 'Electron API 未就绪，无法写入终端', false, null, false,
-      delivery.runId, delivery.confirmedByUi === true,
+    void withTimeout(
+      postToolResult(
+        toolId, 'Electron API 未就绪，无法写入终端', false, null, false,
+        delivery.runId, delivery.confirmedByUi === true,
+      ),
+      POST_RESULT_TIMEOUT_MS, 'postToolResult',
     ).catch(() => {})
     return
   }
@@ -267,8 +297,11 @@ async function deliverCommand(toolId: string): Promise<void> {
     delivery.status = 'done'
     delivery.output = '写入终端失败'
     delivery.error = String((err as Error)?.message || err)
-    void postToolResult(
-      toolId, '写入终端失败', false, null, false, delivery.runId, delivery.confirmedByUi === true,
+    void withTimeout(
+      postToolResult(
+        toolId, '写入终端失败', false, null, false, delivery.runId, delivery.confirmedByUi === true,
+      ),
+      POST_RESULT_TIMEOUT_MS, 'postToolResult',
     ).catch(() => {})
     return
   }
@@ -329,13 +362,12 @@ async function rejectDeliver(toolId: string): Promise<void> {
 }
 
 /**
- * 纯文本输出解析：全局 onSshData/onPtyData 订阅把每个输出 chunk 喂进来
- * （ingestOutput 仍单独导出，单测直接驱动）。
- * 无活动捕获时立即返回（开销可忽略）。
+ * 把一段输出喂给单个活动捕获做解析。提取为独立函数以便同会话并发捕获时
+ * 逐个分发：每个捕获按各自 marker 路由，互不直接读写对方的 output。
+ * 依赖后端同会话串行执行（一个捕获的 BEGIN…END 区间不与其他捕获嵌套重叠），
+ * 否则并发捕获的输出行可能被错误归集——这是既有串行化假设的延续。
  */
-function ingestOutput(sessionId: string, data: string): void {
-  const toolId = activeCaptureBySession[sessionId]
-  if (!toolId) return
+function parseCaptureChunk(toolId: string, data: string): void {
   const cap = captures.get(toolId)
   if (!cap || cap.finished) return
 
@@ -366,7 +398,7 @@ function ingestOutput(sessionId: string, data: string): void {
       cap.finished = true
       const captured = cap.output.trim()
       const success = Number.isFinite(exitCode) && exitCode === 0
-      void finishAndPost(toolId, captured, success, Number.isFinite(exitCode) ? exitCode : null)
+      void finishAndPost(cap.tool_id, captured, success, Number.isFinite(exitCode) ? exitCode : null)
       return
     }
     // 跳过哨兵起始行以外的杂项行（如提示符/空行）
@@ -376,6 +408,21 @@ function ingestOutput(sessionId: string, data: string): void {
     }
     if (cap.output) cap.output += '\n'
     cap.output += line
+  }
+}
+
+/**
+ * 入口：全局 onSshData/onPtyData 订阅把每个输出 chunk 喂进来。
+ * 按 session 找到全部活动捕获并逐一分发（同一会话可并发多个捕获，按各自 marker 路由），
+ * 修复原先「后发的捕获覆盖单插槽、导致前一个捕获的输出被孤儿化、只能等 60s 超时」的问题。
+ * 仍单独导出供单测直接驱动；无活动捕获时立即返回。
+ */
+function ingestOutput(sessionId: string, data: string): void {
+  const set = activeCaptureBySession[sessionId]
+  if (!set || set.size === 0) return
+  // 复制一份：解析过程中 finishAndPost → clearCapture 会改 set，避免迭代异常
+  for (const toolId of [...set]) {
+    parseCaptureChunk(toolId, data)
   }
 }
 

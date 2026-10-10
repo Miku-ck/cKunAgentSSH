@@ -1,4 +1,4 @@
-import { watch } from 'vue'
+import { watch, onScopeDispose, getCurrentScope } from 'vue'
 import type { Terminal, ITerminalOptions, ITheme } from '@xterm/xterm'
 import type { FitAddon } from '@xterm/addon-fit'
 import { useSettingsStore } from '@/stores/settings'
@@ -150,7 +150,11 @@ export function watchTerminalConfig(
       terminal.options.theme = resolveTerminalTheme()
     }
   )
-  return () => { unsubFont(); unsubBg() }
+  const stop = () => { unsubFont(); unsubBg() }
+  // 若处于组件 setup 的作用域中（终端组件场景），作用域销毁时自动释放 watcher，
+  // 避免终端反复开关泄漏；否则退回返回显式 disposer 由调用方处理。
+  if (getCurrentScope()) onScopeDispose(stop)
+  return stop
 }
 
 /** 设置面板可用的终端字体选项 */

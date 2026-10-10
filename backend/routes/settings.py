@@ -76,8 +76,10 @@ def set_default_model(
     mode: DefaultMode = Query(SSH_MODE, description="默认档位：ssh（默认）或 global"),
 ):
     """设置默认模型。不传 mode = SSH 档（与 round 18 的前端控件同口径）。"""
+    # mode 直传：_DEFAULT_COLUMNS 本身就认 "global"/"ssh" 两个取值，
+    # 原来在这里把 "global" 折成 None 再进表是多一跳的翻译，两张映射表得同步维护。
     try:
-        db.set_default_model(model_id, mode=None if mode == "global" else SSH_MODE)
+        db.set_default_model(model_id, mode=mode)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     model = db.get_model_config(model_id)
@@ -182,12 +184,10 @@ async def test_model_connection(config_id: str):
     import httpx
     import time as _time
 
-    log = logger
-
     # 审查 M-13：db 同步调用放线程池（本路由因 httpx 异步探测保持 async）
     model = await asyncio.to_thread(db.get_model_config, config_id, mask_key=False)
     if not model:
-        log.warning("[TEST] config not found: %s", config_id)
+        logger.warning("[TEST] config not found: %s", config_id)
         raise HTTPException(status_code=404, detail="Model not found")
 
     base_url = model["base_url"].rstrip("/")
@@ -205,7 +205,7 @@ async def test_model_connection(config_id: str):
     models_url = f"{base_url}/models" if not base_url.endswith("/models") else base_url
     headers = {"Authorization": f"Bearer {api_key}"}
 
-    log.info(
+    logger.info(
         "[TEST] config_id=%s base_url=%s model_name=%s (fallback_id=%s) api_key_len=%d",
         config_id, netconfig.redact_urls_in_text(models_url), model_name,
         used_fallback_id,
@@ -216,7 +216,7 @@ async def test_model_connection(config_id: str):
     try:
         async with netconfig.new_client(default_timeout=10.0) as client:
             resp = await client.get(models_url, headers=headers)
-            log.info(
+            logger.info(
                 "[TEST] upstream HTTP %s, latency=%.0fms",
                 resp.status_code, (_time.monotonic() - start) * 1000,
             )
@@ -233,21 +233,21 @@ async def test_model_connection(config_id: str):
                     )
                 else:
                     detail = f"模型 {model_name} 不在服务端可用列表中"
-                log.warning(
+                logger.warning(
                     "[TEST] model not in upstream list: %s (available_count=%d)",
                     model_name, len(available),
                 )
                 return {"status": "error", "detail": detail, "model_name": model_name}
         latency_ms = int((_time.monotonic() - start) * 1000)
-        log.info("[TEST] ok latency=%dms", latency_ms)
+        logger.info("[TEST] ok latency=%dms", latency_ms)
         return {"status": "ok", "latency_ms": latency_ms, "model_name": model_name}
-    except httpx.ConnectTimeout as e:
+    except httpx.ConnectTimeout:
         # S10-21：说准是哪一相到点。「连不上」和「连上了没回应」是两件不同的事，
         # 混成一句「连接超时 (Ns)」会让用户去查错的方向（N 此前还是用户设定的标量，
         # 而 connect 相被 netconfig 夹到 min(10,t)，两者都不等于报出的数）。
         connect_limit, _ = netconfig.effective_timeout_bounds(10.0)
-        log.warning("[TEST] connect timeout (<=%ss) url=%s", connect_limit,
-                    netconfig.redact_urls_in_text(models_url))
+        logger.warning("[TEST] connect timeout (<=%ss) url=%s", connect_limit,
+                       netconfig.redact_urls_in_text(models_url))
         return {
             "status": "error",
             "detail": f"无法建立连接（连接上限 {int(connect_limit)}s）",
@@ -256,8 +256,8 @@ async def test_model_connection(config_id: str):
         }
     except httpx.TimeoutException:
         _, read_limit = netconfig.effective_timeout_bounds(10.0)
-        log.warning("[TEST] read timeout (<=%ss) url=%s", read_limit,
-                    netconfig.redact_urls_in_text(models_url))
+        logger.warning("[TEST] read timeout (<=%ss) url=%s", read_limit,
+                       netconfig.redact_urls_in_text(models_url))
         return {
             "status": "error",
             "detail": f"已连上但服务端未在时限内响应（读取上限 {int(read_limit)}s）",
@@ -268,7 +268,7 @@ async def test_model_connection(config_id: str):
         # S10-03：detail 会经渲染层 toast 出来，而上游错误体和 httpx 异常消息都常把
         # 请求 URL 原样回显 —— base_url 带凭据（企业网关形态）时口令就这样离开后端。
         body = netconfig.redact_urls_in_text(e.response.text[:200])
-        log.warning("[TEST] upstream HTTP %d: %s", e.response.status_code, body)
+        logger.warning("[TEST] upstream HTTP %d: %s", e.response.status_code, body)
         return {
             "status": "error",
             "detail": f"HTTP {e.response.status_code}: {body}",
@@ -276,7 +276,7 @@ async def test_model_connection(config_id: str):
         }
     except Exception as e:
         detail = netconfig.redact_urls_in_text(str(e)) or type(e).__name__
-        log.warning("[TEST] unexpected: %s", detail)
+        logger.warning("[TEST] unexpected: %s", detail)
         return {"status": "error", "detail": detail, "model_name": model_name}
 
 

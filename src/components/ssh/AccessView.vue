@@ -44,9 +44,6 @@
       <div v-if="!filteredGateways.length" class="empty">
         <!-- 三种空不是一回事：搜索没命中、库里确实空的、IPC 没读到 —— 各说各的 -->
         <div class="t">{{ emptyText }}</div>
-        <!-- onMounted 只会跑一次（面板随分段挂载则每次进入跑一次）：
-             一次 IPC 抖动就会把失败态永久钉在屏幕上，非重启无解。给一个重试入口。 -->
-        <button v-if="!accessStore.loaded" class="btn btn-sm btn-ghost" @click="retryLoad">重试</button>
       </div>
     </div>
 
@@ -116,11 +113,6 @@ const emptyText = computed(() => {
   if (!accessStore.gateways.length) return '还没有接入网关'
   return '没有匹配的网关'
 })
-
-async function retryLoad(): Promise<void> {
-  const ok = await accessStore.refresh()
-  if (!ok) toast.error('网关列表读取失败，请稍后重试')
-}
 
 function stateOf(id: string): GatewayStatus['state'] {
   return accessStore.stateOf(id)
@@ -349,7 +341,7 @@ defineExpose({ openCreate })
   white-space: nowrap;
 }
 .kv { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: 13px; line-height: 25px; }
-.kv .k { color: var(--text-secondary); flex: none; }
+.kv .k { color: var(--text-secondary); flex: none; text-align: left; }
 .kv .v { color: var(--text-primary); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mono { font-family: var(--font-mono); }
 .conn-rule { height: 1px; background: var(--divider-primary); margin: 10px 0 9px; }

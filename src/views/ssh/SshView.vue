@@ -48,7 +48,7 @@
           <template v-for="s in store.sessions" :key="s.id">
 <LocalTerminal
 v-if="s.type === 'local'"
-:ref="(el) => { if (el) terminalRefs[s.id] = el; else delete terminalRefs[s.id] }"
+:ref="getTerminalRefHandler(s.id)"
 :pty-id="s.id"
 :shell="s.shell"
 :visible="s.id === store.activeSessionId && terminalVisible"
@@ -57,7 +57,7 @@ v-show="s.id === store.activeSessionId"
 />
 <RemoteTerminal
 v-if="s.type === 'remote'"
-:ref="(el) => { if (el) terminalRefs[s.id] = el; else delete terminalRefs[s.id] }"
+:ref="getTerminalRefHandler(s.id)"
 :ssh-id="s.id"
 :visible="s.id === store.activeSessionId && terminalVisible"
 v-show="s.id === store.activeSessionId"
@@ -102,6 +102,11 @@ v-show="s.id === store.activeSessionId"
         <!-- SSH 隧道页面 -->
         <div v-show="activeNavPage === 'tunnels'" class="tunnel-page">
           <TunnelView v-if="pageMounted('tunnels')" />
+        </div>
+
+        <!-- Docker 管理页面（依附当前远程 SSH 会话） -->
+        <div v-show="activeNavPage === 'docker'" class="docker-page">
+          <DockerView v-if="pageMounted('docker')" @exec-terminal="activateTerminal($event)" />
         </div>
 
         <!-- 首页：目标主机 + 下达 + 待放行计数条（批量与追溯归它）+ 本轮过程（逐条决策在卡上） -->
@@ -197,6 +202,7 @@ const AuditView = defineAsyncComponent(() => import('@/views/ssh/AuditView.vue')
 const SchedulesView = defineAsyncComponent(() => import('@/views/ssh/SchedulesView.vue'))
 const DashboardView = defineAsyncComponent(() => import('@/views/ssh/DashboardView.vue'))
 const TunnelView = defineAsyncComponent(() => import('@/components/ssh/TunnelView.vue'))
+const DockerView = defineAsyncComponent(() => import('@/components/ssh/DockerView.vue'))
 const RunView = defineAsyncComponent(() => import('@/components/agent/RunView.vue'))
 import { useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
@@ -216,6 +222,20 @@ const { openSettings } = useSettings()
 
 // 终端组件引用映射（key: sessionId, value: 组件实例）
 const terminalRefs: Record<string, any> = {}
+// P2 修复：为每个会话 id 缓存一个【稳定身份】的 ref 回调，避免模板里内联箭头函数
+// 每次渲染都换身份 → Vue 对全部终端重复触发 detach/attach（终端实例虽不被重建，但 ref 回调被无谓调用）。
+const terminalRefHandlers = new Map<string, (el: any) => void>()
+function getTerminalRefHandler(id: string): (el: any) => void {
+  let h = terminalRefHandlers.get(id)
+  if (!h) {
+    h = (el: any) => {
+      if (el) terminalRefs[id] = el
+      else delete terminalRefs[id]
+    }
+    terminalRefHandlers.set(id, h)
+  }
+  return h
+}
 
 // 命令投递 + 终端聚焦（内部注册 ssh:focus-terminal / ssh:deliver-command 监听）
 const { focusActiveTerminal } = useCommandDelivery(terminalRefs)
@@ -237,6 +257,7 @@ const {
   toggleSchedules,
   toggleDashboard,
   toggleTunnels,
+  toggleDocker,
   showAiPanel,
   openLocalShell,
   handleLocalExit,
@@ -349,6 +370,7 @@ defineExpose({
   toggleSchedules,
   toggleDashboard,
   toggleTunnels,
+  toggleDocker,
   openSettings,
   activeNavPage,
   showAiPanel,
@@ -573,6 +595,17 @@ defineExpose({
 
 /* ─── Tunnel Page ─── */
 .tunnel-page {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  overflow: hidden;
+}
+
+/* ─── Docker Page ─── */
+.docker-page {
   position: absolute;
   top: 0;
   left: 0;

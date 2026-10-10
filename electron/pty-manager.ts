@@ -5,7 +5,7 @@
 import type * as PtyNamespace from 'node-pty'
 import { BrowserWindow } from 'electron'
 import { homedir } from 'os'
-import { statSync } from 'fs'
+import { promises as fsPromises } from 'fs'
 import { LS_COLORS_NO_BACKGROUND } from './utils/terminal-colors'
 
 // node-pty 的 require 含原生 .node 二进制加载（实测 ~290ms），静态导入会把
@@ -226,7 +226,7 @@ export class PtyManager {
     // （否则 pty.spawn 抛出底层平台错误，难以定位）
     let cwdStat
     try {
-      cwdStat = statSync(cwd)
+      cwdStat = await fsPromises.stat(cwd)
     } catch {
       throw new Error(`工作目录不存在或不可访问: ${cwd}`)
     }

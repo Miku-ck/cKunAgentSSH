@@ -1,9 +1,9 @@
 /**
  * server-monitor 解析逻辑测试（B 阶段）
- * fixture 取自真实 Linux（WSL2 Ubuntu 26.04）上 METRICS_CMD 的输出
+ * fixture 取自真实 Linux（WSL2 Ubuntu 26.04）上 METRICS_CMD / PROCS_CMD 的输出
  */
 import { describe, expect, it } from 'vitest'
-import { parseMetricsRaw, computeCpuDiff, describeMonitorError } from './server-monitor-core'
+import { parseMetricsRaw, parseProcsRaw, computeCpuDiff, describeMonitorError } from './server-monitor-core'
 
 const FIXTURE = [
   '===CKUN_MON===',
@@ -13,8 +13,6 @@ const FIXTURE = [
   'MEM_USED=677',
   'MEM_PCT=4.3',
   'DISK=/|1031019|128627|14%',
-  'PROC=1212|7.4|0.0|bash',
-  'PROC=784|4.8|0.6|dockerd',
   'PORT=tcp|0.0.0.0|22',
   'PORT=tcp|[::]|22',
   'PORT=udp|127.0.0.1|323',
@@ -56,19 +54,30 @@ describe('parseMetricsRaw', () => {
     expect(m!.disks[0]).toEqual({ mount: '/', total: 1031019, used: 128627, percent: 14 })
   })
 
-  it('解析进程 TOP', () => {
-    const m = parseMetricsRaw(FIXTURE)
-    expect(m!.procs).toHaveLength(2)
-    expect(m!.procs[0]).toEqual({ pid: 1212, cpu: 7.4, mem: 0, name: 'bash' })
-    expect(m!.procs[1]).toEqual({ pid: 784, cpu: 4.8, mem: 0.6, name: 'dockerd' })
+  it('解析进程 TOP（8 段格式，与 PROCS_CMD 真实输出一致）', () => {
+    const raw = [
+      '===CKUN_PROCS===',
+      'PROC=1212|7.4|0.0|root|5800|01:23:45|R|bash',
+      'PROC=784|4.8|0.6|docker|102400|3-04:11:09|S|dockerd',
+      '===END===',
+    ].join('\n')
+    const procs = parseProcsRaw(raw)
+    expect(procs).toHaveLength(2)
+    expect(procs[0]).toEqual({ pid: 1212, cpu: 7.4, mem: 0, user: 'root', rss: 5800, etime: '01:23:45', stat: 'R', name: 'bash' })
+    expect(procs[1]).toEqual({ pid: 784, cpu: 4.8, mem: 0.6, user: 'docker', rss: 102400, etime: '3-04:11:09', stat: 'S', name: 'dockerd' })
   })
 
-  it('解析监听端口（含 IPv6）', () => {
+  it('进程 TOP：标记行缺失返回空数组（非本命令输出）', () => {
+    expect(parseProcsRaw('PROC=1|1|1|root|1|1|R|x')).toEqual([])
+  })
+
+  it('解析监听端口（通配双栈折叠：0.0.0.0+[::] 合并为一条；精确地址独立）', () => {
     const m = parseMetricsRaw(FIXTURE)
-    expect(m!.ports).toHaveLength(4)
-    expect(m!.ports[0]).toEqual({ proto: 'tcp', addr: '0.0.0.0', port: 22 })
-    expect(m!.ports[1]).toEqual({ proto: 'tcp', addr: '[::]', port: 22 })
-    expect(m!.ports[3]).toEqual({ proto: 'udp', addr: '[::1]', port: 323 })
+    // FIXTURE 4 行端口：tcp 0.0.0.0:22 + tcp [::]:22 → 折叠为 1 条；udp 127.0.0.1:323 + udp [::1]:323 → 精确地址不折叠
+    expect(m!.ports).toHaveLength(3)
+    expect(m!.ports[0]).toMatchObject({ proto: 'tcp', addr: '0.0.0.0', port: 22, secondaryAddrs: ['[::]'] })
+    expect(m!.ports[1]).toMatchObject({ proto: 'udp', addr: '127.0.0.1', port: 323 })
+    expect(m!.ports[2]).toMatchObject({ proto: 'udp', addr: '[::1]', port: 323 })
   })
 
   it('解析 GPU（多卡，显存百分比自算 + 功耗/风扇/频率）', () => {
@@ -208,13 +217,115 @@ describe('parseMetricsRaw', () => {
     expect(m!.gpuError).toContain('Driver/library version mismatch')
   })
 
-  it('端口达上限(30)后 GPU 行仍被解析（回归：曾因 break 整循环丢 GPU）', () => {
-    const ports = Array.from({ length: 31 }, (_, i) => `PORT=tcp|0.0.0.0|${1000 + i}`)
+  it('端口达上限(100)后 GPU 行仍被解析（回归：曾因 break 整循环丢 GPU）', () => {
+    const ports = Array.from({ length: 101 }, (_, i) => `PORT=tcp|0.0.0.0|${1000 + i}`)
     const raw = ['===CKUN_MON===', 'STAT=1|2|3', 'MEM_TOTAL=100', ...ports, 'GPU=0|NVIDIA A100|50|1|2|60', '===END==='].join('\n')
     const m = parseMetricsRaw(raw)
-    expect(m!.ports).toHaveLength(30)
+    expect(m!.ports).toHaveLength(100)
     expect(m!.gpus).toHaveLength(1)
     expect(m!.gpus[0].powerDraw).toBeNull() // 短行（缺扩展段）不丢行，扩展字段 null
+  })
+
+  it('双栈通配地址（0.0.0.0 + [::]）→ 合并为一条，IPv4 主显示，IPv6 入 secondaryAddrs', () => {
+    const raw = [
+      '===CKUN_MON===', 'STAT=1|2|3', 'MEM_TOTAL=100',
+      'PORT=tcp|0.0.0.0|80|1234|nginx',
+      'PORT=tcp|[::]|80|1234|nginx',
+      'PORT=tcp|0.0.0.0|443|5678|nginx',
+      '===END===',
+    ].join('\n')
+    const m = parseMetricsRaw(raw)
+    expect(m!.ports).toHaveLength(2)
+    // port 80 合并为一条：IPv4 主显示，IPv6 在 secondaryAddrs
+    const p80 = m!.ports.find(p => p.port === 80)!
+    expect(p80.addr).toBe('0.0.0.0')
+    expect(p80.secondaryAddrs).toEqual(['[::]'])
+    // port 443 只有 IPv4，无 secondaryAddrs
+    const p443 = m!.ports.find(p => p.port === 443)!
+    expect(p443.addr).toBe('0.0.0.0')
+    expect(p443.secondaryAddrs).toBeUndefined()
+  })
+
+  it('通配地址格式变异（*/*[::]）→ 统一展示为 0.0.0.0/[::]', () => {
+    const raw = [
+      '===CKUN_MON===', 'STAT=1|2|3', 'MEM_TOTAL=100',
+      'PORT=tcp|*|22|100|sshd',     // * = IPv4 通配（busybox ss）
+      'PORT=tcp|::|22|100|sshd',    // :: = IPv6 通配（无括号格式）
+      '===END===',
+    ].join('\n')
+    const m = parseMetricsRaw(raw)
+    expect(m!.ports).toHaveLength(1)
+    expect(m!.ports[0]).toMatchObject({ addr: '0.0.0.0', secondaryAddrs: ['[::]'], port: 22 })
+  })
+
+  it('纯 IPv6 监听（仅 [::]）→ 主显示 [::]，无 secondaryAddrs', () => {
+    const raw = [
+      '===CKUN_MON===', 'STAT=1|2|3', 'MEM_TOTAL=100',
+      'PORT=tcp|[::]|8080|999|node',
+      '===END===',
+    ].join('\n')
+    const m = parseMetricsRaw(raw)
+    expect(m!.ports).toHaveLength(1)
+    expect(m!.ports[0].addr).toBe('[::]')
+    expect(m!.ports[0].secondaryAddrs).toBeUndefined()
+  })
+
+  it('精确地址（127.0.0.1 等）不参与通配折叠，独立成行', () => {
+    const raw = [
+      '===CKUN_MON===', 'STAT=1|2|3', 'MEM_TOTAL=100',
+      'PORT=tcp|127.0.0.1|5432|777|postgres',
+      'PORT=tcp|0.0.0.0|5432|888|postgres',
+      'PORT=tcp|[::1]|5432|999|postgres',
+      '===END===',
+    ].join('\n')
+    const m = parseMetricsRaw(raw)
+    expect(m!.ports).toHaveLength(3)  // 三个独立地址，不通配折叠
+  })
+
+  it('端口重复（同 proto|addr|port 多行）→ 去重保留首条，有 pid 行覆盖无 pid 行', () => {
+    const raw = [
+      '===CKUN_MON===', 'STAT=1|2|3', 'MEM_TOTAL=100',
+      'PORT=tcp|0.0.0.0|80||',          // 无 pid（非特权采集）
+      'PORT=tcp|0.0.0.0|80|1234|nginx', // 有 pid（sudo 补全）
+      'PORT=tcp|0.0.0.0|443|5678|nginx',
+      '===END===',
+    ].join('\n')
+    const m = parseMetricsRaw(raw)
+    expect(m!.ports).toHaveLength(2)
+    // tcp|0.0.0.0|80 合并为一条，pid 从 sudo 补全的行回填
+    expect(m!.ports[0]).toMatchObject({ proto: 'tcp', addr: '0.0.0.0', port: 80, pid: 1234, proc: 'nginx' })
+    expect(m!.ports[1]).toMatchObject({ proto: 'tcp', addr: '0.0.0.0', port: 443, pid: 5678 })
+  })
+
+  it('进程重复（同 PID 多行）→ 去重保留首条', () => {
+    const raw = [
+      '===CKUN_PROCS===',
+      'PROC=123|5.0|1.0|root|1024|01:00|R|bash',
+      'PROC=456|3.0|0.5|root|2048|02:00|S|sshd',
+      'PROC=123|9.9|9.9|root|9999|99:99|Rz|phantom', // 同 PID 重复行
+      '===END===',
+    ].join('\n')
+    const procs = parseProcsRaw(raw)
+    expect(procs).toHaveLength(2)
+    expect(procs[0].pid).toBe(123)
+    expect(procs[0].cpu).toBe(5.0)  // 保留首条，不覆盖为 9.9
+    expect(procs[1].pid).toBe(456)
+  })
+
+  it('PORT= 行带 ss -p 进程段 → pid/proc 解析；缺省段与旧三段格式向后兼容', () => {
+    const raw = [
+      '===CKUN_MON===', 'STAT=1|2|3', 'MEM_TOTAL=100',
+      'PORT=tcp|0.0.0.0|22|812|sshd',
+      'PORT=tcp|0.0.0.0|5432||', // 进程段为空（非特权采集看不到他人进程）
+      'PORT=udp|127.0.0.1|323', // 旧三段格式（升级前的采集端）
+      '===END===',
+    ].join('\n')
+    const m = parseMetricsRaw(raw)
+    expect(m!.ports[0]).toMatchObject({ proto: 'tcp', addr: '0.0.0.0', port: 22, pid: 812, proc: 'sshd' })
+    expect(m!.ports[1].pid).toBeUndefined()
+    expect(m!.ports[1].proc).toBeUndefined()
+    expect(m!.ports[2].pid).toBeUndefined()
+    expect(m!.ports[2].port).toBe(323)
   })
 
   it('磁盘达上限(8)后 GPU 行仍被解析（回归）', () => {
@@ -305,6 +416,14 @@ describe('describeMonitorError', () => {
     expect(r.retryable).toBe(false)
   })
 
+  it('轮询硬超时（withTimeout 标签）→ 中文文案 + 可重试（回归：曾直透英文 "metrics poll timeout"）', () => {
+    const r = describeMonitorError(new Error('metrics poll timeout'))
+    expect(r.code).toBe('MON_TIMEOUT')
+    expect(r.retryable).toBe(true)
+    expect(r.message).toContain('指标采集超时')
+    expect(r.message).not.toContain('metrics poll timeout')
+  })
+
   it('Electron IPC 外壳 → 剥离前缀只留根因', () => {
     const r = describeMonitorError(
       new Error("Error invoking remote method 'ssh:exec': 连接被远端重置"),
@@ -340,6 +459,7 @@ describe('stop() 必须清空全部读数（含错误态）', () => {
 
     // 先跑一轮 start 的真实路径留下脏状态：无 electronAPI 的采样必然失败并记 lastError
     mon.current = { host: 'A', sshId: 's-1' } as never
+    mon.procs.push({ pid: 1, cpu: 1, mem: 0, name: 'x', user: 'root', rss: 1, etime: '0:01', stat: 'S' })
     mon.cpuHistory.push(12)
     mon.memHistory.push(30)
     mon.loadHistory.push(1.2)
@@ -351,6 +471,8 @@ describe('stop() 必须清空全部读数（含错误态）', () => {
 
     expect(mon.polling).toBe(false)
     expect(mon.current).toBe(null)
+    // 进程 TOP 也要清零：不留上一台主机的进程表
+    expect(mon.procs).toEqual([])
     expect(mon.cpuHistory).toEqual([])
     expect(mon.memHistory).toEqual([])
     expect(mon.loadHistory).toEqual([])

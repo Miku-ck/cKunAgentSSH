@@ -1,11 +1,11 @@
 <template>
   <div class="dashboard-view">
-    <!-- 连接状态条：仿 SFTP 风格。有远程会话时显示主机名 + 已连接；
-         无会话时显示"未连接远程" + "连接远程"按钮。 -->
+    <!-- 连接状态条：仿 SFTP 风格。页面标题"监控仪表盘"；
+         无会话时提供"连接远程"按钮，有会话时显示主机名并可断开。 -->
     <div class="dash-conn-bar">
       <div class="conn-left">
         <div class="conn-dot" :class="hasRemoteSession ? 'online' : 'offline'"></div>
-        <span class="conn-name">{{ connStatusText }}</span>
+        <span class="conn-name">监控仪表盘</span>
         <span v-if="hasRemoteSession && monitor.current" class="conn-host">{{ monitor.current.host }}</span>
       </div>
       <div class="conn-right">
@@ -13,9 +13,8 @@
           监控已中断：{{ monitor.lastError.message }}
           <span v-if="monitor.lastError.retryable" class="conn-stopped-hint">（连接恢复后自动重连）</span>
         </span>
-        <span v-if="monitor.polling && !monitor.current" class="conn-collecting">正在采集服务器指标…</span>
-        <button v-if="hasRemoteSession" class="conn-btn" @click="handleDisconnect">断开</button>
-        <button class="conn-btn conn-btn-primary" @click="showConnPicker = true">连接远程</button>
+        <button v-if="hasRemoteSession" class="btn" @click="handleDisconnect">断开</button>
+        <button class="btn btn-primary" @click="showConnPicker = true">连接远程</button>
       </div>
     </div>
 
@@ -109,18 +108,27 @@
         />
       </div>
 
-      <!-- 进程 TOP -->
+      <!-- 进程（CPU）：ps 按 CPU 降序；GPU 占用进程已剔除至下方「进程（GPU）」表 -->
       <div class="dash-section">
-        <div class="section-title">进程 TOP（按 CPU）<span class="section-sub">前 10 · 每 5 秒刷新</span></div>
-        <div v-if="monitor.current.procs.length === 0" class="section-empty">未检测到进程信息</div>
+        <div class="section-title">
+          <span>进程（CPU）<span class="section-sub">共 {{ monitor.procs.length }} 个 · 每 60 秒刷新</span></span>
+          <span v-if="totalProcPages > 1" class="port-pager">
+            <button class="port-page-btn" :disabled="procPage === 0" title="上一页" @click="procPage--">‹</button>
+            <span class="port-page-ind">{{ procPage + 1 }}/{{ totalProcPages }}</span>
+            <button class="port-page-btn" :disabled="procPage >= totalProcPages - 1" title="下一页" @click="procPage++">›</button>
+          </span>
+        </div>
+        <div v-if="monitor.procs.length === 0" class="section-empty">未检测到进程信息</div>
         <table v-else class="proc-table">
           <thead>
             <tr><th>PID</th><th>名称</th><th>用户</th><th>CPU %</th><th>内存</th><th>运行</th><th>状态</th><th class="proc-act">操作</th></tr>
           </thead>
           <tbody>
-            <tr v-for="p in monitor.current.procs" :key="p.pid">
+            <tr v-for="p in pagedProcs" :key="p.pid">
               <td class="mono">{{ p.pid }}</td>
-              <td class="mono proc-name" :title="p.name">{{ p.name }}</td>
+              <td class="proc-name">
+                <span class="proc-name-text mono" :title="p.name">{{ p.name }}</span>
+              </td>
               <td class="mono">{{ p.user }}</td>
               <td :class="{ hot: p.cpu > 80 }">{{ p.cpu.toFixed(1) }}</td>
               <td>{{ formatRss(p.rss) }}</td>
@@ -132,16 +140,73 @@
         </table>
       </div>
 
-      <!-- 监听端口 -->
-      <div class="dash-section">
-        <div class="section-title">监听端口</div>
-        <div v-if="monitor.current.ports.length === 0" class="section-empty">未检测到监听端口（ss 不可用时为空）</div>
-        <div v-else class="port-list">
-          <span v-for="(pt, i) in monitor.current.ports" :key="i" class="port-chip" :class="{ udp: pt.proto === 'udp' }">
-            <span class="port-proto">{{ pt.proto.toUpperCase() }}</span>
-            {{ pt.addr }}:{{ pt.port }}
+      <!-- 进程（GPU）：nvidia-smi 采集的显存占用进程，随 5s 快轮询；无 GPU 机器不渲染此卡片 -->
+      <div v-if="monitor.current.gpus.length > 0" class="dash-section">
+        <div class="section-title">
+          <span>进程（GPU）<span class="section-sub">共 {{ gpuProcList.length }} 个 · 每 5 秒刷新</span></span>
+          <span v-if="totalGpuPages > 1" class="port-pager">
+            <button class="port-page-btn" :disabled="gpuPage === 0" title="上一页" @click="gpuPage--">‹</button>
+            <span class="port-page-ind">{{ gpuPage + 1 }}/{{ totalGpuPages }}</span>
+            <button class="port-page-btn" :disabled="gpuPage >= totalGpuPages - 1" title="下一页" @click="gpuPage++">›</button>
           </span>
         </div>
+        <div v-if="gpuProcList.length === 0" class="section-empty">暂无进程占用 GPU 显存</div>
+        <table v-else class="proc-table">
+          <thead>
+            <tr><th>显卡</th><th>PID</th><th>名称</th><th>用户</th><th>显存</th><th>CPU %</th><th>运行</th><th class="proc-act">操作</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="gp in pagedGpuProcs" :key="`${gp.gpuIndex}:${gp.pid}`">
+              <td class="mono">GPU {{ gp.gpuIndex }}</td>
+              <td class="mono">{{ gp.pid }}</td>
+              <td class="proc-name"><span class="proc-name-text mono" :title="gp.name">{{ gp.name }}</span></td>
+              <td class="mono">{{ gp.user }}</td>
+              <td>{{ formatRss(gp.memMB * 1024) }}</td>
+              <td>{{ gp.cpu === null ? '—' : gp.cpu.toFixed(1) }}</td>
+              <td class="proc-etime">{{ gp.etime || '—' }}</td>
+              <td class="proc-act"><button class="proc-kill" title="终止进程" @click="confirmGpuProcKill(gp)">终止</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- 监听端口 -->
+      <div class="dash-section">
+        <div class="section-title">
+          <span>监听端口<span class="section-sub">共 {{ monitor.current.ports.length }} 个{{ portCappedHint }}</span></span>
+          <span v-if="totalPortPages > 1" class="port-pager">
+            <button class="port-page-btn" :disabled="portPage === 0" title="上一页" @click="portPage--">‹</button>
+            <span class="port-page-ind">{{ portPage + 1 }}/{{ totalPortPages }}</span>
+            <button class="port-page-btn" :disabled="portPage >= totalPortPages - 1" title="下一页" @click="portPage++">›</button>
+          </span>
+        </div>
+        <div v-if="monitor.current.ports.length === 0" class="section-empty">未检测到监听端口（ss 不可用时为空）</div>
+        <table v-else class="port-table">
+          <thead>
+            <tr><th>协议</th><th>端口</th><th>监听地址</th><th>进程</th><th class="port-act">操作</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="pt in pagedPorts" :key="`${pt.proto}:${pt.addr}:${pt.port}`">
+              <td><span class="port-proto-tag" :class="{ udp: pt.proto === 'udp' }">{{ pt.proto.toUpperCase() }}</span></td>
+              <td class="mono port-num">
+                {{ pt.port }}<span v-if="svcName(pt.port)" class="port-svc">{{ svcName(pt.port) }}</span>
+                <span v-if="hasAltAddr(pt)" class="port-alt-hint" :title="altAddrTitle(pt)">⇄</span>
+              </td>
+              <td class="mono port-addr" :title="pt.addr">{{ pt.addr }}</td>
+              <td class="port-proc">
+                <template v-if="pt.proc">
+                  <span class="port-proc-name" :title="pt.proc">{{ pt.proc }}</span>
+                  <span v-if="pt.pid" class="port-pid mono">PID {{ pt.pid }}</span>
+                </template>
+                <span v-else class="port-proc-none">—</span>
+              </td>
+              <td class="port-act">
+                <button v-if="pt.pid" class="proc-kill" title="终止监听进程" @click="confirmPortKill(pt)">终止</button>
+                <span v-else class="port-proc-none" title="无权限获取监听进程 PID（需 root 或进程属主）">—</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </div>
 
@@ -185,9 +250,9 @@
             <button class="dc-close" @click="killDialog.visible = false">×</button>
           </div>
           <div class="dc-kill-body">
-            <p class="dc-kill-line"><span class="dc-killLabel">PID</span><span class="mono dc-killVal">{{ killDialog.proc?.pid }}</span></p>
-            <p class="dc-kill-line"><span class="dc-killLabel">名称</span><span class="dc-killVal">{{ killDialog.proc?.name }}</span></p>
-            <p class="dc-kill-line"><span class="dc-killLabel">用户</span><span class="mono dc-killVal">{{ killDialog.proc?.user }}</span></p>
+            <p class="dc-kill-line"><span class="dc-kill-label">PID</span><span class="mono dc-kill-val">{{ killDialog.target?.pid }}</span></p>
+            <p class="dc-kill-line"><span class="dc-kill-label">名称</span><span class="dc-kill-val">{{ killDialog.target?.name }}</span></p>
+            <p v-if="killDialog.target?.user" class="dc-kill-line"><span class="dc-kill-label">用户</span><span class="mono dc-kill-val">{{ killDialog.target.user }}</span></p>
             <p class="dc-kill-hint">SIGTERM 通知进程优雅退出；若进程未响应可使用 SIGKILL 强制终止。此操作不可撤销。</p>
           </div>
           <div class="dc-kill-actions">
@@ -208,13 +273,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineComponent, h, ref } from 'vue'
+import { computed, defineComponent, h, ref, watch, type Ref } from 'vue'
 import { useServerMonitorStore } from '@/stores/server-monitor'
 import { useSSHStore } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
+import { loadChartMax } from '@/utils/nvtop-scale'
 import GpuNvtopPanel from '@/components/ssh/GpuNvtopPanel.vue'
 import type { SSHConnection } from '@/stores/ssh'
-import type { ProcessTopEntry } from '@/stores/server-monitor-core'
+import type { ProcessTopEntry, PortEntry, GpuProcessEntry } from '@/stores/server-monitor-core'
+import { PORT_SERVICE_NAMES } from '@/stores/server-monitor-core'
 
 const monitor = useServerMonitorStore()
 const sshStore = useSSHStore()
@@ -228,10 +295,19 @@ const hasRemoteSession = computed(() =>
   sshStore.sessions.some(s => s.type === 'remote'),
 )
 
-/** 连接状态条文字：有远程会话时显示第一台远程会话名称，无会话时显示"未连接远程" */
-const connStatusText = computed(() => {
-  const remote = sshStore.sessions.find(s => s.type === 'remote')
-  return remote ? remote.name : '未连接远程'
+/**
+ * 监控目标会话：与 useSshNavigation 的 monitoredTarget 选择规则一致
+ * （活动远程会话优先，否则首个远程会话）；已有采样时直接按 sshId 回查，
+ * 保证「断开」按钮操作的就是正在被监控的那台（多台远程时不再错指）。
+ */
+const monitoredSession = computed(() => {
+  const sshId = monitor.current?.sshId
+  if (sshId) {
+    const s = sshStore.sessions.find(x => x.id === sshId)
+    if (s) return s
+  }
+  const remotes = sshStore.sessions.filter(s => s.type === 'remote')
+  return remotes.find(s => s.id === sshStore.activeSessionId) || remotes[0] || null
 })
 
 async function handleConnect(conn: SSHConnection): Promise<void> {
@@ -256,30 +332,41 @@ async function handleConnect(conn: SSHConnection): Promise<void> {
 }
 
 function handleDisconnect(): void {
-  const remote = sshStore.sessions.find(s => s.type === 'remote')
-  if (remote) {
-    sshStore.closeSession(remote.id)
+  const target = monitoredSession.value
+  if (target) {
+    sshStore.closeSession(target.id)
   }
 }
 
 // ── 终止进程 ──
-const killDialog = ref({ visible: false, proc: null as ProcessTopEntry | null, signal: 15 })
+const killDialog = ref({ visible: false, target: null as { pid: number; name: string; user?: string } | null, signal: 15 })
 const killing = ref(false)
 
 function confirmKill(proc: ProcessTopEntry): void {
-  killDialog.value = { visible: true, proc, signal: 15 }
+  killDialog.value = { visible: true, target: { pid: proc.pid, name: proc.name, user: proc.user }, signal: 15 }
+}
+
+/** 端口行终止：杀的是监听该端口的进程（pid 来自 ss -p） */
+function confirmPortKill(pt: PortEntry): void {
+  if (!pt.pid) return
+  killDialog.value = { visible: true, target: { pid: pt.pid, name: `端口 ${pt.port}（${pt.proc ?? '未知进程'}）` }, signal: 15 }
+}
+
+/** GPU 进程行终止：目标说明带卡号与显存，便于确认杀的是哪张卡的进程 */
+function confirmGpuProcKill(gp: GpuProcessEntry): void {
+  killDialog.value = { visible: true, target: { pid: gp.pid, name: `${gp.name}（GPU${gp.gpuIndex} · 显存 ${formatRss(gp.memMB * 1024)}）`, user: gp.user }, signal: 15 }
 }
 
 async function handleKill(signal: number): Promise<void> {
-  const proc = killDialog.value.proc
+  const target = killDialog.value.target
   const sshId = monitor.current?.sshId
-  if (!proc || !sshId) return
+  if (!target || !sshId) return
   killDialog.value.signal = signal
   killing.value = true
   try {
-    const r = await window.electronAPI!.sshKillProcess(sshId, proc.pid, signal)
+    const r = await window.electronAPI!.sshKillProcess(sshId, target.pid, signal)
     if (r.code === 0) {
-      useToastStore().success(`已发送 SIG${signal} 到 PID ${proc.pid}`)
+      useToastStore().success(`已发送 SIG${signal} 到 PID ${target.pid}`)
       killDialog.value.visible = false
     } else {
       const msg = (r.stderr || r.stdout || `exit code ${r.code}`).split('\n')[0].slice(0, 120)
@@ -332,11 +419,68 @@ function loadToneCls(): string {
   return 'tone-cool'
 }
 
-/** 负载 sparkline 上限：取峰值 1.5 倍，避免曲线贴底 */
-const loadMax = computed(() => {
-  const peak = Math.max(...monitor.loadHistory, 0.1)
-  return Math.max(1, peak * 1.5)
+/** 负载 sparkline 上限：与 NvGauge 同源（nvtop-scale.loadChartMax），不再两份实现 */
+const loadMax = computed(() => loadChartMax(monitor.loadHistory))
+
+/**
+ * 通用表格分页工厂：页码钳制（集合刷新时不重置，避免闪烁），
+ * 仅当前页越界时回退到末页。端口表与进程表共用。
+ */
+function makePager<T>(source: Ref<T[]>, size: number) {
+  const page = ref(0)
+  const total = computed(() => Math.max(1, Math.ceil(source.value.length / size)))
+  const paged = computed(() => source.value.slice(page.value * size, (page.value + 1) * size))
+  watch(total, (n) => {
+    if (page.value > n - 1) page.value = n - 1
+  })
+  return { page, total, paged }
+}
+
+/**
+ * 监听端口表分页：每页 10 行。采集端上限 100（server-monitor-core），
+ * 达上限时在标题尾部提示，避免静默截断。
+ * 排序：TCP 在前 UDP 在后，按端口号升序 —— 分页跨页顺序稳定。
+ */
+const PORT_PAGE_SIZE = 10
+const allPorts = computed(() => {
+  const list = monitor.current?.ports ?? []
+  return [...list].sort((a, b) =>
+    a.proto === b.proto ? a.port - b.port : a.proto === 'tcp' ? -1 : 1,
+  )
 })
+const { page: portPage, total: totalPortPages, paged: pagedPorts } = makePager(allPorts, PORT_PAGE_SIZE)
+const portCappedHint = computed(() => (allPorts.value.length >= 100 ? '（已达采集上限）' : ''))
+
+/** 常见端口的静态服务名（如 22→ssh、6379→redis）；映射表收拢在 server-monitor-core */
+const svcName = (port: number): string => PORT_SERVICE_NAMES[port] ?? ''
+
+/** 该端口是否有备选地址（通配符折叠后收进 secondaryAddrs 的 IPv4/IPv6 地址） */
+function hasAltAddr(pt: PortEntry): boolean {
+  return !!pt.secondaryAddrs && pt.secondaryAddrs.length > 0
+}
+
+/** ⇄ 标记的悬浮提示：列出所有备选地址 */
+function altAddrTitle(pt: PortEntry): string {
+  if (!pt.secondaryAddrs || pt.secondaryAddrs.length === 0) return ''
+  return '也监听：' + pt.secondaryAddrs.join('  ')
+}
+
+/** GPU 占用进程 PID 集合（nvidia-smi 采集）：进程（CPU）表据此剔除 GPU 进程 */
+const gpuPidSet = computed(() => new Set((monitor.current?.gpuProcs ?? []).map(gp => gp.pid)))
+
+/** 进程（CPU）表：剔除 GPU 占用进程（它们移至独立的进程（GPU）表），每页 10 行 */
+const PROC_PAGE_SIZE = 10
+const procList = computed(() => {
+  const gpu = gpuPidSet.value
+  return monitor.procs.filter(p => !gpu.has(p.pid))
+})
+const { page: procPage, total: totalProcPages, paged: pagedProcs } = makePager(procList, PROC_PAGE_SIZE)
+
+/** 进程（GPU）表：按显存降序，每页 10 行（采集端上限 20） */
+const gpuProcList = computed(() =>
+  [...(monitor.current?.gpuProcs ?? [])].sort((a, b) => b.memMB - a.memMB),
+)
+const { page: gpuPage, total: totalGpuPages, paged: pagedGpuProcs } = makePager(gpuProcList, PROC_PAGE_SIZE)
 
 // Sparkline 与状态条同构（手搓 SVG，避免引图表库）
 const Sparkline = defineComponent({
@@ -418,9 +562,11 @@ const Sparkline = defineComponent({
 .conn-dot.offline { background: var(--text-tertiary); }
 
 .conn-name {
-  font-size: 13px;
+  /* 页面标题：与统一头部规范及 SFTP .session-name 对齐 */
+  font-size: var(--page-title-size);
   font-weight: 600;
   color: var(--text-primary);
+  font-family: var(--font-sans);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -441,11 +587,6 @@ const Sparkline = defineComponent({
   flex-shrink: 0;
 }
 
-.conn-collecting {
-  font-size: 12px;
-  color: var(--text-tertiary);
-}
-
 .conn-stopped {
   font-size: 11px;
   color: var(--accent-red);
@@ -457,34 +598,6 @@ const Sparkline = defineComponent({
 
 .conn-stopped-hint {
   color: var(--text-tertiary);
-}
-
-.conn-btn {
-  padding: 5px 14px;
-  border: 1px solid var(--border-default);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 12px;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-  white-space: nowrap;
-}
-
-.conn-btn:hover {
-  border-color: var(--accent-indigo);
-  color: var(--accent-indigo);
-}
-
-.conn-btn-primary {
-  background: var(--accent-indigo);
-  border-color: var(--accent-indigo);
-  color: var(--accent-on, #fff);
-}
-
-.conn-btn-primary:hover {
-  filter: brightness(1.1);
-  color: var(--accent-on, #fff);
 }
 
 /* ── 空态 ── */
@@ -689,7 +802,8 @@ const Sparkline = defineComponent({
 }
 
 .proc-table th {
-  text-align: left;
+  /* 字段居中：表头与单元格同轴，数值列视觉对齐（用户指定） */
+  text-align: center;
   padding: 4px 8px;
   color: var(--text-tertiary);
   font-weight: 500;
@@ -698,6 +812,7 @@ const Sparkline = defineComponent({
 }
 
 .proc-table td {
+  text-align: center;
   padding: 5px 8px;
   border-bottom: 1px solid var(--border-subtle);
   font-variant-numeric: tabular-nums;
@@ -712,7 +827,16 @@ const Sparkline = defineComponent({
 }
 
 .proc-name {
-  max-width: 240px;
+  /* flex 让内层 span 块化，ellipsis 才生效；居中由 justify-content 负责
+     （text-align 对 flex 容器无效）。列宽自适应：不设 max-width，由 table-layout auto 按内容分配 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.proc-name-text {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -742,7 +866,7 @@ const Sparkline = defineComponent({
 
 .proc-act {
   width: 56px;
-  text-align: right;
+  text-align: center;
 }
 
 .proc-kill {
@@ -761,37 +885,150 @@ const Sparkline = defineComponent({
   opacity: 1;
 }
 
-.proc-kill:hover {
+.proc-kill:hover,
+.proc-kill:focus-visible {
   background: var(--bg-hover);
 }
 
-/* ── 端口 ── */
-.port-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+/* 键盘可达：不能只靠 hover 显形，否则 Tab 到按钮上也隐形 */
+.proc-table tr:focus-within .proc-kill,
+.proc-kill:focus {
+  opacity: 1;
 }
 
-.port-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 10px;
-  border: 1px solid var(--border-default);
-  border-radius: 4px;
+/* ── 端口表：与 proc-table 同构（同 th/td 节奏），进程列带 PID 关联 ── */
+.port-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.port-table th {
+  /* 字段居中：与 proc-table 同规则，表头与单元格同轴 */
+  text-align: center;
+  padding: 4px 8px;
+  color: var(--text-tertiary);
+  font-weight: 500;
   font-size: 11px;
-  font-family: var(--font-mono);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.port-table td {
+  text-align: center;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+.port-table tr:last-child td {
+  border-bottom: none;
+}
+
+.port-num {
   color: var(--text-primary);
 }
 
-.port-chip.udp {
-  border-style: dashed;
+.port-addr {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
 }
 
-.port-proto {
-  font-size: 9px;
+.port-proto-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--bg-hover);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
+.port-proto-tag.udp {
+  color: var(--metric-warm);
+}
+
+.port-proc-name {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.port-pid {
+  margin-left: 8px;
+  font-size: 10px;
   color: var(--text-tertiary);
-  letter-spacing: 0.5px;
+}
+
+.port-proc-none {
+  color: var(--text-tertiary);
+}
+
+.port-act {
+  width: 56px;
+  text-align: center;
+}
+
+.port-svc {
+  margin-left: 6px;
+  font-size: 10px;
+  font-family: var(--font-sans);
+  color: var(--text-tertiary);
+}
+
+/* ── 端口双栈标记 ⇄：通配地址折叠后提示存在备选地址（IPv4/IPv6） ── */
+.port-alt-hint {
+  margin-left: 4px;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  cursor: help;
+  vertical-align: middle;
+  opacity: 0.7;
+  transition: opacity var(--transition-fast);
+}
+.port-alt-hint:hover {
+  opacity: 1;
+  color: var(--text-secondary);
+}
+
+/* ── 端口分页器：嵌在 section-title 行右侧，轻量 ‹ x/y ›，不引整块分页组件 ── */
+.port-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.port-page-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1;
+  padding: 1px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.port-page-btn:hover:not(:disabled) {
+  color: var(--accent-indigo);
+  background: var(--bg-hover);
+}
+
+.port-page-btn:disabled {
+  color: var(--text-tertiary);
+  cursor: default;
+}
+
+.port-page-ind {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+  min-width: 30px;
+  text-align: center;
 }
 
 /* ── 窄窗口 ── */
@@ -806,7 +1043,7 @@ const Sparkline = defineComponent({
 }
 
 /* ===============================================================
-   连接选择弹窗。unstoped：scoped 属性进不到 Teleport 到 body 的元素，
+   连接选择弹窗。注意：scoped 属性进不到 Teleport 到 body 的元素，
    所以弹窗样式写在末尾非 scoped 的 <style> 块里。
    =============================================================== */
 </style>
@@ -1004,12 +1241,14 @@ const Sparkline = defineComponent({
 .dc-btn-danger {
   background: var(--accent-red);
   border-color: var(--accent-red);
-  color: #fff;
+  /* 实色底 + 对比前景，与兄弟 .dc-btn-warn 同惯例：深色主题 --bg-base 为黑，
+     红底黑字避开白字落在浅鲑红上的对比不足；不写字面量，守色板令牌纪律 */
+  color: var(--bg-base);
 }
 
 .dc-btn-danger:hover:not(:disabled) {
   filter: brightness(1.1);
-  color: #fff;
+  color: var(--bg-base);
 }
 
 .dc-btn-warn {

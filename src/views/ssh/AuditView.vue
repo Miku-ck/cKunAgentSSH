@@ -5,7 +5,6 @@
       <div class="audit-title">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M9 12l2 2 4-4"/><path d="M20 12a8 8 0 1 1-2.34-5.66"/></svg>
         <span>运维审计</span>
-        <span class="audit-sub" v-if="verifyState">全库 {{ verifyState.total }} 条记录</span>
       </div>
       <div class="audit-actions">
         <span
@@ -363,6 +362,7 @@ onMounted(refresh)
   padding: 6px 10px;
   border-bottom: 1px solid var(--border-subtle);
   vertical-align: top;
+  text-align: left;
 }
 .audit-table tr:hover td { background: var(--bg-hover); }
 .audit-table tr.prod td { background: color-mix(in srgb, var(--accent-red) 5%, transparent); }

@@ -337,7 +337,8 @@ onMounted(() => {
   margin-top: 8px;
   color: var(--text-secondary);
   font-weight: 600;
+  text-align: left;
 }
-.diag-k { color: var(--text-tertiary); }
-.diag-v { margin: 0; color: var(--text-primary); word-break: break-all; }
+.diag-k { color: var(--text-tertiary); text-align: left; }
+.diag-v { margin: 0; color: var(--text-primary); word-break: break-all; text-align: left; }
 </style>

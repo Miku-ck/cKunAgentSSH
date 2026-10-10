@@ -140,7 +140,7 @@
 
         <SettingRow label="终端字体" desc="SSH 本地/远程终端等宽字体（未安装将回退）">
           <select v-model="settings.appearance.terminal.fontFamily" class="setting-select">
-            <option v-for="f in terminalFontOptions" :key="f.value" :value="f.value">{{ f.label }}</option>
+            <option v-for="f in TERMINAL_FONT_OPTIONS" :key="f.value" :value="f.value">{{ f.label }}</option>
           </select>
         </SettingRow>
 
@@ -353,9 +353,6 @@ const gradientDirectionLabels: Record<GradientDirection, string> = {
   tlbr: '左上 → 右下',
   trbl: '右上 → 左下',
 }
-
-// 终端字体选项
-const terminalFontOptions = TERMINAL_FONT_OPTIONS
 
 /**
  * 自选的终端纯色底与固定浅色 ANSI 前景（TERMINAL_FOREGROUND）是否还读得出来。

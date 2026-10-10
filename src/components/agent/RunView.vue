@@ -20,6 +20,7 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import { useModelsStore } from '@/stores/models'
 import { useSSHStore } from '@/stores/ssh'
+import { useSshAiStore } from '@/stores/ssh-ai'
 import { useToastStore } from '@/stores/toast'
 import { approvalTargetLabel } from '@/utils/approval-display'
 import { PERMISSION_LABELS } from '@/utils/run-modes'
@@ -31,6 +32,7 @@ import MessageContentRenderer from '@/components/chat/MessageContentRenderer.vue
 const agent = useAgentStore()
 const ssh = useSSHStore()
 const models = useModelsStore()
+const sshAi = useSshAiStore()
 
 const toast = useToastStore()
 
@@ -139,6 +141,20 @@ function headline(e: { tool: string; args?: Record<string, unknown> }): string {
 function stateOf(e: { result?: string; success?: boolean }): string {
   if (e.result === undefined) return 'running'
   return e.success === false ? 'failed' : 'done'
+}
+
+// ── 在对话中继续：把"做事"面（首页）与"对话"面（侧栏）缝起来 ──
+// 本轮回复已由 ssh-ai store 的固化 watch 落到源会话（agent.currentConversationId）。
+// 有正文且已收尾才给入口：运行中"继续"无从谈起；中止/失败的残段也值得追问题句，
+// 所以不额外限制 status。找不到源会话（列表已无此会话）就不渲染 —— 点了必空的
+// 按钮比没有按钮更糟。
+const canContinueInChat = computed(() =>
+  !agent.isRunning && !!answer.value && !!agent.currentConversationId,
+)
+function continueInChat() {
+  const id = agent.currentConversationId
+  if (id && sshAi.currentConvId !== id) void sshAi.switchConversation(id)
+  sshAi.openAiPanel()
 }
 
 // ── 时间线 ↔ 事件流联动：点某批，右栏滚到它第一条并亮一下 ──
@@ -272,6 +288,15 @@ onUnmounted(() => { if (litTimer) clearTimeout(litTimer) })
         :streaming="agent.isRunning"
         :is-last="true"
       />
+      <!-- 收尾后给一条通往侧栏对话的路：本轮回复已固化进源会话，追问题句、
+           查历史都在那边。找不到源会话时整块不渲染（canContinueInChat 已含）。 -->
+      <button
+        v-if="canContinueInChat"
+        type="button"
+        class="rv-continue"
+        title="打开 AI 运维助手面板并定位到本次运行的会话"
+        @click="continueInChat"
+      >在对话中继续 →</button>
     </div>
   </div>
 </template>
@@ -313,6 +338,23 @@ onUnmounted(() => { if (litTimer) clearTimeout(litTimer) })
   font-size: 11px;
   color: var(--text-tertiary);
   margin-bottom: 6px;
+}
+/* 「在对话中继续」：文字链形态，不做按钮皮 —— 它是通往侧栏的路标，不是同级动作。
+   hover 才提亮到强调色，安静环境下不与输出结果抢注意力。 */
+.rv-continue {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--text-tertiary);
+  transition: color var(--transition-fast);
+}
+.rv-continue:hover {
+  color: var(--accent-primary);
 }
 .rv-task {
   font-size: 14px;

@@ -147,6 +147,12 @@ export const useAgentStore = defineStore('agent', () => {
   const totalIterations = ref(0)
   const humanHelpRequests = ref<HumanHelpRequest[]>([])
   const permissionRequests = ref<PermissionRequest[]>([])
+  // P2 修复：tool_call_result 按 callId 的 O(1) 索引，避免每条结果都线性扫全量 toolCalls（长会话 O(n²)）
+  const toolCallByCallId = new Map<string, ToolCallEntry>()
+  // shell_exec 待交付条目的栈（按入栈顺序，deliver 取最新未回填），避免 tool_deliver 每次反向全扫
+  const pendingShellExec: ToolCallEntry[] = []
+  // 单轮运行授权卡上限：超出时优先摘最老的【已处理】卡，pending 卡尽量保住，防止无界内存增长
+  const MAX_PERMISSION_CARDS = 500
   // P7: 成本信息 + 最近 run_id（供 TraceViewer 使用）
   const costInfo = ref<AgentCostSnapshot | null>(null)
   // 流式 think 块擦洗器（reasoning 模型可能在 content 流里混入 <think> 块）
@@ -389,6 +395,8 @@ export const useAgentStore = defineStore('agent', () => {
     currentState.value = ''
     iteration.value = 0
     toolCalls.value = []
+    toolCallByCallId.clear()
+    pendingShellExec.length = 0
     warnings.value = []
     errorMessage.value = ''
     totalIterations.value = 0
@@ -541,6 +549,8 @@ export const useAgentStore = defineStore('agent', () => {
             callId: event.tool_call_id,
           }
           toolCalls.value.push(entry)
+          if (entry.callId) toolCallByCallId.set(entry.callId, entry)
+          if (entry.tool === 'shell_exec') pendingShellExec.push(entry)
         }
         break
 
@@ -554,7 +564,8 @@ export const useAgentStore = defineStore('agent', () => {
           const eventIter = event.iteration
           let tc: ToolCallEntry | undefined
           if (event.tool_call_id) {
-            tc = toolCalls.value.find(t => t.callId === event.tool_call_id && t.result === undefined)
+            const candidate = toolCallByCallId.get(event.tool_call_id)
+            tc = candidate && candidate.result === undefined ? candidate : undefined
           }
           if (!tc && eventIter !== undefined) {
             tc = [...toolCalls.value].reverse().find(t => t.tool === event.tool && t.iteration === eventIter && t.result === undefined)
@@ -572,6 +583,12 @@ export const useAgentStore = defineStore('agent', () => {
             if (event.tool === 'schedule_op' && event.success && (tc.args?.action ?? 'create') !== 'list') {
               scheduleRev.value++
             }
+            // P2 修复：回填后从索引中摘除 —— 索引只保留「未回填」条目，避免后续事件误匹配
+            toolCallByCallId.delete(tc.callId ?? '')
+            if (tc.tool === 'shell_exec') {
+              const si = pendingShellExec.indexOf(tc)
+              if (si >= 0) pendingShellExec.splice(si, 1)
+            }
           }
         }
         break
@@ -581,7 +598,11 @@ export const useAgentStore = defineStore('agent', () => {
         if (!event.tool_id) break
         // 关联到 shell_exec 的 tool_call 条目，标记为待交付
         // （判据同 tool_call_result：空串结果算已回填，否则会挂到无输出的旧条目上）
-        const pendingTc = [...toolCalls.value].reverse().find(t => t.tool === 'shell_exec' && t.result === undefined)
+        // P2 修复：优先从 pendingShellExec 栈取最新未回填 shell_exec（O(1)），
+        // 栈为空（极端时序竞态）再退化为反向全扫兜底
+        const pendingTc = pendingShellExec.length
+          ? pendingShellExec[pendingShellExec.length - 1]
+          : [...toolCalls.value].reverse().find(t => t.tool === 'shell_exec' && t.result === undefined)
         if (pendingTc) {
           pendingTc.deliveryToolId = event.tool_id
         }
@@ -665,6 +686,12 @@ export const useAgentStore = defineStore('agent', () => {
             runId: event.run_id || lastRunId.value || undefined,
             conversationId: currentConversationId.value || undefined,
           })
+          // P2 修复：单轮运行授权卡上限，超出时优先摘最老【已处理】卡，保住 pending 卡
+          if (permissionRequests.value.length > MAX_PERMISSION_CARDS) {
+            const dropIdx = permissionRequests.value.findIndex(r => r.resolved)
+            if (dropIdx >= 0) permissionRequests.value.splice(dropIdx, 1)
+            else permissionRequests.value.shift()
+          }
           if (!hadPending) {
             useToastStore().warning('AI 需要权限确认，回首页在过程里就地放行')
           }

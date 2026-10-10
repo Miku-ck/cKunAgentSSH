@@ -53,6 +53,21 @@ export const PERMISSION_LABELS: Record<PermissionModeKey, string> = {
   plan: '只读计划',
 }
 
+/**
+ * 审批档位的图标，首页输入卡与侧栏面板共用 —— 路径在两处各写一遍，改一处漏一处
+ * 就是"同一个档位两副面孔"。底图都是那张盾（"这一枚管的是放行"），盾里的记号
+ * 区分档位：手动 = 空盾（逐条由你按）；自动 = 一道闪电（模型代判）；只读计划 =
+ * 一横（写操作根本不进审批）。共用工盾会骗人：切到自动审批，界面上什么都没变。
+ * 记号按 PermissionModeKey 穷举 —— 漏一档是编译错误，不是"那一档悄悄没记号"。
+ */
+export const PERM_SHIELD = 'M12 3l7 3v5c0 4.6-3 8.2-7 10-4-1.8-7-5.4-7-10V6z'
+
+export const PERM_MARKS: Record<PermissionModeKey, string | null> = {
+  normal: null,
+  auto: 'M13.2 7.2l-3.4 4.6h2.3l-.8 3.2 3.4-4.5h-2.2z',
+  plan: 'M9.2 12.2h5.6',
+}
+
 interface RunModes {
   /** undefined = 未表态：字段省略，后端不注入任何姿态段 */
   workflowMode?: PostureKey

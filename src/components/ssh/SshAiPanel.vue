@@ -13,10 +13,10 @@
     :workflow-goal="store.workflowSnapshot.goal"
     :workflow-plan="store.workflowSnapshot.plan"
     show-message-actions
-    panel-title="运维知识助手"
+    panel-title="AI 运维助手"
     placeholder="询问运维问题..."
-    empty-title="运维知识助手"
-    empty-desc="专注于 Linux/网络/数据库/容器运维问题"
+    empty-title="AI 运维助手"
+    empty-desc="对话与历史 — 多轮追问、终端「问 AI」与首页下达的记录都留在这里"
     @close="$emit('close')"
     @send="handleSend"
     @new-chat="handleNewChat"

@@ -27,8 +27,8 @@ export interface TunnelRule {
   via?: TunnelVia
   type: TunnelType
   /**
-   * local:   本机 listenPort → (经SSH) → dstHost:dstPort
-   * remote:  远端 bindPort   → (经SSH回) → 本机 dstHost:dstPort
+   * local:   本机 listenPort → ( SSH) → dstHost:dstPort
+   * remote:  远端 bindPort   → ( SSH回) → 本机 dstHost:dstPort
    * dynamic: 本机 listenPort 起 SOCKS5，目标由客户端 CONNECT 指定
    */
   /** 默认 127.0.0.1，仅 local 可自定义；dynamic 强制 127.0.0.1（安全边界：不对局域网开放） */

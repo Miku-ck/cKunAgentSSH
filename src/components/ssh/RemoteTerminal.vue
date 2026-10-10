@@ -447,10 +447,27 @@ onMounted(() => {
   terminal.element?.addEventListener('contextmenu', contextMenuHandler)
 
   // 监听容器大小变化
+  // 缩放节流：拖动分栏/窗口时 ResizeObserver 每帧触发，这里用 rAF 合并为每帧最多一次
+  // fit + 一次 sshResize IPC；并加 0 尺寸守卫，避免 v-show 过渡瞬时 0 尺寸向主进程
+  // 发 sshResize(id,0,0) 导致 PTY 尺寸异常。
+  let resizePending = false
   resizeObserver = new ResizeObserver(() => {
-    if (!terminal || !fitAddon || !props.visible) return
-    fitAddon.fit()
-    api.sshResize(props.sshId, terminal.cols, terminal.rows).catch(() => {})
+    if (!terminal || !fitAddon || !props.visible || resizePending) return
+    resizePending = true
+    requestAnimationFrame(() => {
+      resizePending = false
+      if (!terminal || !fitAddon || !props.visible) return
+      const beforeC = terminal.cols
+      const beforeR = terminal.rows
+      fitAddon.fit()
+      const c = terminal.cols
+      const r = terminal.rows
+      if (c <= 0 || r <= 0) return
+      // 网格未变时不打扰 PTY（同尺寸 SIGWINCH 会让部分 TUI 无谓重绘）
+      if (c !== beforeC || r !== beforeR) {
+        api.sshResize(props.sshId, c, r).catch(() => {})
+      }
+    })
   })
   resizeObserver.observe(containerRef.value)
 })

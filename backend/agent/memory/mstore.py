@@ -339,9 +339,19 @@ def vec_search(query_vec, limit: int = 20, scopes=None, kinds=None,
     try:
         knn = _vec.vec_knn(conn, blob, limit * 3)
         if knn is not None:
+            # P2 修复：原实现逐命中 SELECT 单条（N+1，命中 k 条就 k 次 DB 往返）。
+            # 改为一次性 IN 批量取回，本地建 id→row 字典后过滤，往返降到 1 次。
+            ids = [mid for mid, _ in knn]
+            row_map = {}
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                for r in conn.execute(
+                    f"SELECT * FROM memories WHERE id IN ({placeholders})", ids
+                ).fetchall():
+                    row_map[r["id"]] = r
             hits = []
             for mid, dist in knn:
-                row = conn.execute("SELECT * FROM memories WHERE id=?", (mid,)).fetchone()
+                row = row_map.get(mid)
                 if row and _row_pass(row, scopes, kinds, statuses):
                     hits.append((mid, max(0.0, 1.0 - dist)))
                 if len(hits) >= limit:

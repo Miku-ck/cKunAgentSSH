@@ -20,6 +20,7 @@
       @action-dashboard="sshViewRef?.toggleDashboard()"
       @action-sftp="sshViewRef?.toggleSftp()"
       @action-tunnels="sshViewRef?.toggleTunnels()"
+      @action-docker="sshViewRef?.toggleDocker()"
       @action-settings="sshViewRef?.openSettings()"
     />
     <div class="main">
@@ -47,7 +48,7 @@ useAppearance()
 const sshViewRef = ref<InstanceType<typeof SshView> | null>(null)
 
 // 当前激活的功能页：用于 TitleBar 图标高亮（ref 未挂载时为 'home'）
-const activePage = computed<'home' | 'remote-mgr' | 'sftp' | 'audit' | 'ai' | 'schedules' | 'dashboard' | 'tunnels'>(() => {
+const activePage = computed<'home' | 'remote-mgr' | 'sftp' | 'audit' | 'ai' | 'schedules' | 'dashboard' | 'tunnels' | 'docker'>(() => {
   const nav = sshViewRef.value?.activeNavPage
   if (nav && nav !== 'home') return nav
   if (sshViewRef.value?.showAiPanel) return 'ai'

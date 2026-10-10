@@ -11,7 +11,7 @@
  * 远端文件取进来后与 /chat/upload 的返回同形，注入通路仍只有一条（store 的
  * addRemoteAttachment 负责截断口径，见那里的注释）。
  */
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { ChatAttachment } from '@/api/client'
 import { useHomeCommand } from '@/composables/useHomeCommand'
 import { useModelSelector } from '@/composables/useModelSelector'
@@ -23,7 +23,7 @@ import { REMOTE_ID_PREFIX, useSshAiStore } from '@/stores/ssh-ai'
 import { useSkillStore } from '@/stores/skills'
 import { useSSHStore } from '@/stores/ssh'
 import HomeRemoteFilePicker from './HomeRemoteFilePicker.vue'
-import { APPROVAL_OPTIONS, PERMISSION_LABELS, resolveRunModes, type ApprovalKey, type PermissionModeKey } from '@/utils/run-modes'
+import { APPROVAL_OPTIONS, PERMISSION_LABELS, PERM_MARKS, PERM_SHIELD, resolveRunModes, type ApprovalKey } from '@/utils/run-modes'
 
 const agent = useAgentStore()
 const sshAi = useSshAiStore()
@@ -115,18 +115,8 @@ const permMode = computed(() =>
  *  界面不能宣称一个不会生效的选择。禁用是**展示**层，用户的 approvalMode 没被改写。 */
 const permLabel = computed(() => PERMISSION_LABELS[permMode.value])
 
-/**
- * 三档各自的图标。底图都是那张盾（"这一枚管的是放行"），盾里的记号区分档位：
- *   手动 = 空盾（逐条由你按）；自动 = 一道闪电（模型代判）；只读计划 = 一横（写操作
- *   根本不进审批）。共用工盾会骗人：切到自动审批，界面上什么都没变。
- * 记号按 PermissionModeKey 穷举 —— 漏一档是编译错误，不是"那一档悄悄没记号"。
- */
-const SHIELD = 'M12 3l7 3v5c0 4.6-3 8.2-7 10-4-1.8-7-5.4-7-10V6z'
-const PERM_MARKS: Record<PermissionModeKey, string | null> = {
-  normal: null,
-  auto: 'M13.2 7.2l-3.4 4.6h2.3l-.8 3.2 3.4-4.5h-2.2z',
-  plan: 'M9.2 12.2h5.6',
-}
+/** 图标与侧栏审批钮共用一份（run-modes 的 PERM_SHIELD / PERM_MARKS），档位记号
+ *  按上面的 permMode 派生 —— 标签与图标永远说的是同一个档。 */
 const permMark = computed(() => PERM_MARKS[permMode.value])
 
 /** ＋ 菜单的技能区。清单来自 skills store（后端那份，带设置页的开关状态），
@@ -211,6 +201,10 @@ async function send() {
   await nextTick()
   grow()
 }
+
+// 草稿是共享态（store 的 sharedDraft）：侧栏那边打字/清空也会落到这份 textarea，
+// 高度与行线要跟着重算 —— 否则切回首页时内容被 overflow-y:hidden 裁掉下半截。
+watch(draft, () => nextTick(grow))
 
 function onKeydown(e: KeyboardEvent) {
   if (e.key !== 'Enter') return
@@ -345,7 +339,7 @@ onMounted(() => {
                图标与菜单位置说明，重复一遍前缀只是把按钮撑宽。
                盾形 = 谁来放行，盾里的记号分档位（见 PERM_MARKS）。 -->
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" aria-hidden="true">
-            <path :d="SHIELD" />
+            <path :d="PERM_SHIELD" />
             <path v-if="permMark" :d="permMark" />
           </svg>
           <b>{{ permLabel }}</b>
@@ -361,41 +355,6 @@ onMounted(() => {
           >
             <span class="ol">{{ o.label }}<span v-if="approvalMode === o.key" class="ot">✓</span></span>
             <span class="od">{{ o.desc }}</span>
-          </button>
-        </div>
-      </div>
-
-      <div ref="modelSelectorRef" class="hcc-sel">
-        <button
-          v-if="!noModel"
-          type="button"
-          class="hcc-btn"
-          title="切换模型"
-          aria-haspopup="listbox"
-          :aria-expanded="showModelDropdown"
-          @click.stop="showModelDropdown = !showModelDropdown"
-        >
-          <b>{{ currentModelName }}</b>
-        </button>
-        <button
-          v-else
-          type="button"
-          class="hcc-btn empty"
-          title="尚未配置模型，点击去设置"
-          @click="openSettings('models')"
-        >
-          尚未配置模型 · <b>去设置</b>
-        </button>
-        <div v-if="showModelDropdown && !noModel" class="hcc-menu wide" @click.stop>
-          <button
-            v-for="m in modelsStore.models"
-            :key="m.id"
-            type="button"
-            class="hcc-opt"
-            :class="{ on: m.id === sshAi.selectedModelId }"
-            @click="selectModel(m.id)"
-          >
-            <span class="ol">{{ m.name || m.model_id || m.id }}<span v-if="m.id === sshAi.selectedModelId" class="ot">✓</span></span>
           </button>
         </div>
       </div>
@@ -458,7 +417,60 @@ onMounted(() => {
 
       <span v-if="running" class="hcc-note">AI 正在运行中</span>
 
-      <button type="button" class="hcc-send" :disabled="!canSend" @click="send">执行</button>
+      <!-- 模型选择器坐行尾（与侧栏 toolbar-right 的 [模型][发送] 同一座位）：
+           margin-left:auto 把它带着执行钮一起推到右边；下拉改从右缘向左展开，
+           面板按 left:0 开会伸出卡外。 -->
+      <div ref="modelSelectorRef" class="hcc-sel model-sel">
+        <button
+          v-if="!noModel"
+          type="button"
+          class="hcc-btn"
+          title="切换模型"
+          aria-haspopup="listbox"
+          :aria-expanded="showModelDropdown"
+          @click.stop="showModelDropdown = !showModelDropdown"
+        >
+          <b>{{ currentModelName }}</b>
+        </button>
+        <button
+          v-else
+          type="button"
+          class="hcc-btn empty"
+          title="尚未配置模型，点击去设置"
+          @click="openSettings('models')"
+        >
+          尚未配置模型 · <b>去设置</b>
+        </button>
+        <div v-if="showModelDropdown && !noModel" class="hcc-menu wide" @click.stop>
+          <button
+            v-for="m in modelsStore.models"
+            :key="m.id"
+            type="button"
+            class="hcc-opt"
+            :class="{ on: m.id === sshAi.selectedModelId }"
+            @click="selectModel(m.id)"
+          >
+            <span class="ol">{{ m.name || m.model_id || m.id }}<span v-if="m.id === sshAi.selectedModelId" class="ot">✓</span></span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 执行钮与侧栏提交件（SideChatPanel 的 .send-btn）完全同款：同一枚上行箭头、
+           同一张皮（底走主题 hover 层、字走主文字色），身形也一并对齐成 24×24。
+           它先前是 28px 高的宽体文字钮 —— 皮早已一致，这回连身形与语义也统一。 -->
+      <button
+        type="button"
+        class="hcc-send"
+        :disabled="!canSend"
+        title="执行"
+        aria-label="执行"
+        @click="send"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <line x1="12" y1="19" x2="12" y2="5"/>
+          <polyline points="5 12 12 5 19 12"/>
+        </svg>
+      </button>
     </div>
   </div>
 </template>
@@ -645,22 +657,33 @@ onMounted(() => {
   color: var(--accent-green);
 }
 .hcc-note { font-size: 11px; color: var(--text-tertiary) }
+/* 模型选择器坐底栏行尾：margin-left:auto 把它和执行钮一起推到右边（与侧栏
+   toolbar-right 的 [模型][发送] 同一座位）。下拉从右缘向左展开 —— 220px 的
+   面板按 left:0 开会伸出卡外。 */
+.hcc-sel.model-sel { margin-left: auto }
+.hcc-sel.model-sel .hcc-menu { left: auto; right: 0 }
+/* 与 AI 运维助手侧栏的提交件同一枚（SideChatPanel 的 .send-btn）：24×24 方块
+   箭头钮，底走主题的 hover 层、字走主题的主文字色，强调色彻底不参与。它先前是
+   28px 高的宽体文字钮 —— 皮早已一致，这回连身形与语义（上行箭头=发出）也统一。
+   圆角与 .send-btn 同为 4px 字面值：手记主题的 --radius-sm 是 2px，两处会对不上。 */
 .hcc-send {
-  margin-left: auto;
-  height: 28px;
-  padding: 0 18px;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
   border: 0;
-  border-radius: var(--radius-sm);
-  /* 与运维知识助手的提交件同一张皮（SideChatPanel 的 .send-btn）：底走主题的 hover 层、
-     字走主题的主文字色，强调色彻底不参与。它先前是实心 --accent-primary 配 --accent-on
-     前景（前景由 applyAccent 按底色亮度算，为的是强调色选「白色」时不要白底白字）——
-     现在没有强调色底了，那套亮度配对对这枚按钮不再成立。 */
+  outline: none;
+  appearance: none;
+  border-radius: 4px;
   background: var(--bg-hover);
   color: var(--text-primary);
-  font-size: 13px;
-  font-weight: 600;
-  transition: background var(--transition-fast), opacity var(--transition-fast);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
 }
 .hcc-send:hover:not(:disabled) { background: var(--bg-active); color: var(--text-primary) }
-.hcc-send:disabled { opacity: .45; cursor: default }
+.hcc-send:disabled { opacity: .5; cursor: not-allowed }
+.hcc-send svg { width: 14px; height: 14px }
 </style>

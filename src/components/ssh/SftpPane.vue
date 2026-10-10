@@ -14,8 +14,8 @@
     <!-- 标题栏 -->
     <div class="pane-header">
       <div class="pane-title">
-        <svg v-if="side === 'local'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-        <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        <svg v-if="side === 'local'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="12" rx="2"/><line x1="2" y1="20" x2="22" y2="20"/></svg>
+        <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
         <span>{{ side === 'local' ? '本地' : '远程' }}</span>
         <span v-if="side === 'remote'" class="badge" :class="store.online ? 'online' : 'offline'">
           {{ store.online ? 'online' : '未连接' }}
@@ -157,7 +157,6 @@
     <div v-if="side === 'remote' && !store.online" class="pane-empty-overlay">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
       <div class="empty-title">未连接远程服务器</div>
-      <div class="empty-desc">点击右上角"连接远程"按钮,选择一个 SSH 连接后即可浏览远程目录、拖拽上传/下载文件。</div>
     </div>
   </div>
 </template>
@@ -664,6 +663,8 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
 
 .file-list {
   flex: 1; overflow-y: auto; font-size: 12px;
+  /* 纵向 flex：加载/错误/空目录提示撑满剩余空间双向居中 */
+  display: flex; flex-direction: column;
 }
 .file-list-head {
   display: grid;
@@ -675,6 +676,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   color: var(--text-tertiary);
   font-size: 11px; font-weight: 500;
   position: sticky; top: 0; z-index: 1;
+  text-align: left;
 }
 .file-row {
   display: grid;
@@ -686,6 +688,10 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
 }
 .file-row:hover { background: var(--bg-hover); }
 .file-row.selected { background: color-mix(in srgb, var(--accent-primary) 15%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent); }
+
+.file-row > div {
+  text-align: left;
+}
 
 .file-name { display: flex; align-items: center; gap: 8px; overflow: hidden; }
 .file-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -699,6 +705,8 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
 }
 
 .pane-loading, .pane-error, .pane-empty-list {
+  flex: 1;
+  display: flex; align-items: center; justify-content: center;
   padding: 16px; text-align: center;
   font-size: 12px; color: var(--text-tertiary);
 }
@@ -716,7 +724,6 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
 }
 .pane-empty-overlay svg { width: 36px; height: 36px; opacity: 0.4; }
 .pane-empty-overlay .empty-title { font-size: 13px; color: var(--text-secondary); }
-.pane-empty-overlay .empty-desc { font-size: 11px; line-height: 1.6; max-width: 240px; }
 
 /* 文件列表渲染上限提示 */
 .pane-list-limit {

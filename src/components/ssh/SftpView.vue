@@ -4,7 +4,7 @@
     <div class="sftp-session-bar">
       <div class="session-left">
         <div class="session-dot" :class="store.online ? 'online' : 'offline'"></div>
-        <span class="session-name">{{ store.online ? store.connectionName : '未连接远程' }}</span>
+        <span class="session-name">SFTP</span>
         <span v-if="store.online" class="session-host">{{ store.connectionHost }}</span>
         
       </div>
@@ -16,7 +16,6 @@
           传输任务
         </button>
         <button v-if="!store.online" class="btn btn-primary" @click="showConnPicker = true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
           连接远程
         </button>
         <template v-else>

@@ -15,7 +15,7 @@
 
     <!-- 任务卡片 -->
     <div v-if="items.length === 0 && !loading" class="empty-state">暂无定时任务</div>
-    <div class="schedule-list">
+    <div v-if="items.length" class="schedule-list">
       <div v-for="s in items" :key="s.id" class="schedule-card">
         <div class="schedule-card-head">
           <div class="schedule-name">
@@ -754,18 +754,19 @@ onUnmounted(() => {
 .toggle.on { color: var(--accent-green); border-color: var(--accent-green); }
 .schedule-card-actions { display: flex; gap: 6px; }
 .schedule-card-meta { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--text-secondary); margin-top: 8px; }
+.meta-item { text-align: left; }
 .meta-item b { color: var(--text-primary); font-weight: 600; }
 .mono { font-family: var(--font-mono); }
 .schedule-card-body { margin-top: 8px; font-size: 12px; }
-.schedule-card-body .k { color: var(--text-tertiary); margin-bottom: 4px; }
-.prompt { color: var(--text-secondary); white-space: pre-wrap; }
+.schedule-card-body .k { color: var(--text-tertiary); margin-bottom: 4px; text-align: left; }
+.prompt { color: var(--text-secondary); white-space: pre-wrap; text-align: left; }
 
 .status.running { color: var(--accent-primary); border-color: var(--accent-primary); }
 .status.completed { color: var(--accent-green); border-color: var(--accent-green); }
 .status.failed { color: var(--accent-red); border-color: var(--accent-red); }
 .status.waiting_permission { color: var(--accent-orange); border-color: var(--accent-orange); }
 
-.empty-state { color: var(--text-tertiary); font-size: 13px; text-align: center; padding: 50px 16px; }
+.empty-state { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-tertiary); font-size: 13px; padding: 16px; }
 .sc-loading { color: var(--text-tertiary); font-size: 12px; padding: 0 16px 12px; }
 .sc-error { color: var(--accent-red); font-size: 12px; padding: 0 16px 12px; }
 

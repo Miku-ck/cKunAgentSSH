@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>cKunAgentSSH · Docker（远程）原型</title>
+<style>
+/* 令牌 1:1 取自 src/styles/variables.css :root 深色默认块 */
+:root {
+  --bg-base: #000000;
+  --bg-elevated: #1a1a1e;
+  --bg-hover: rgba(255,255,255,0.06);
+  --bg-active: rgba(255,255,255,0.12);
+  --divider-primary: #1a1a1a;
+  --border-default: #3e3e42;
+  --border-subtle: #2d2d30;
+  --text-primary: #cccccc;
+  --text-secondary: #969696;
+  --text-tertiary: #878787;
+  --bg-input: #101013;
+  --border-input: #303030;
+  --accent-primary: #0078d4;
+  --accent-cyan: #9cdcfe;
+  --accent-indigo: #818cf8;
+  --metric-cool: #35c93f;
+  --metric-warm: #d7d72f;
+  --metric-hot: #e7574c;
+  --danger-text: #ff6b6b;
+  --danger-border: #6a2d2d;
+  --status-success-text: #6abf6a;
+  --status-warn-text: #dcdcaa;
+  --status-error-text: #bf6a6a;
+  --status-debug-text: #9cdcfe;
+  --radius-sm: 4px; --radius-md: 6px; --radius-lg: 8px;
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.5);
+  --transition-fast: 150ms;
+  --font-sans: "Segoe UI", "Microsoft YaHei", sans-serif;
+  --font-mono: "Cascadia Code", Consolas, "JetBrains Mono", monospace;
+  --titlebar-h: 32px; --tabbar-h: 34px;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  background: var(--bg-base); color: var(--text-primary);
+  font-family: var(--font-sans); font-size: 13px; line-height: 1.4;
+  display: flex; flex-direction: column; overflow: hidden; -webkit-font-smoothing: antialiased;
+}
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
+button { font-family: inherit; cursor: pointer; }
+.mono { font-family: var(--font-mono); }
+:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
+
+/* TitleBar */
+.titlebar {
+  height: var(--titlebar-h); flex: none; display: flex; align-items: center; gap: 4px;
+  padding: 0 8px; background: var(--bg-base); border-bottom: 1px solid var(--divider-primary); user-select: none;
+}
+.app-name { font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-right: 8px; display: flex; align-items: center; gap: 6px; }
+.app-name svg { color: var(--accent-primary); }
+.tb-btn {
+  width: 30px; height: 24px; display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: none; border-radius: var(--radius-sm); color: var(--text-secondary);
+  transition: background var(--transition-fast), color var(--transition-fast); position: relative;
+}
+.tb-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.tb-btn.active { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); }
+.tb-btn.active::after { content: ""; position: absolute; bottom: -4px; left: 8px; right: 8px; height: 2px; background: var(--accent-primary); }
+.tb-spacer { flex: 1; }
+.win-btn { width: 40px; height: 24px; border: none; background: transparent; color: var(--text-secondary); }
+.win-btn:hover { background: var(--bg-hover); }
+.win-btn.close:hover { background: #e81123; color: #fff; } /* 平台约定色：Windows 关窗红 */
+
+/* 标签栏 */
+.term-tabs {
+  height: var(--tabbar-h); flex: none; display: flex; align-items: stretch; padding: 0 6px; gap: 2px;
+  background: var(--bg-base); border-bottom: 1px solid var(--divider-primary); user-select: none;
+}
+.term-tab {
+  display: inline-flex; align-items: center; gap: 6px; padding: 0 12px;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0; color: var(--text-secondary); font-size: 12px; cursor: pointer;
+  border-bottom: 2px solid transparent; transition: background var(--transition-fast), color var(--transition-fast);
+}
+.term-tab:hover { background: var(--bg-hover); color: var(--text-primary); }
+.term-tab.active { color: var(--text-primary); border-bottom-color: var(--accent-primary); background: var(--bg-elevated); }
+.tab-plus { display: inline-flex; align-items: center; padding: 0 10px; color: var(--text-secondary); border: none; background: transparent; font-size: 14px; }
+.tab-plus:hover { color: var(--accent-primary); }
+
+/* 页面 */
+.page { flex: 1; display: flex; min-height: 0; background: var(--bg-base); }
+.list-col { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+/* 顶部主机上下文条 */
+.ctx-bar {
+  flex: none; display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+  border-bottom: 1px solid var(--divider-primary);
+}
+.ctx-bar h3 { font-size: 14px; font-weight: 600; }
+.ctx-host {
+  display: inline-flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px;
+  background: var(--bg-input); border: 1px solid var(--border-input); border-radius: var(--radius-md); font-size: 12px;
+}
+.ctx-host svg { color: var(--accent-cyan); }
+.ctx-host select { background: transparent; border: none; color: var(--text-primary); font-size: 12px; font-family: inherit; outline: none; cursor: pointer; }
+.ctx-host select option { background: var(--bg-elevated); }
+.ctx-engine { font-size: 11px; color: var(--text-tertiary); }
+.ctx-link { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-secondary); }
+.dot-live { width: 6px; height: 6px; border-radius: 50%; background: var(--metric-cool); box-shadow: 0 0 6px color-mix(in srgb, var(--metric-cool) 60%, transparent); }
+
+/* 分段 + 搜索 + 动作 */
+.toolbar { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--divider-primary); }
+.seg { display: inline-flex; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 2px; gap: 2px; }
+.seg-btn {
+  border: none; background: transparent; color: var(--text-secondary); font-size: 12px; padding: 4px 12px; border-radius: var(--radius-sm);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.seg-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+.seg-btn.on { background: var(--bg-elevated); color: var(--accent-primary); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 40%, transparent); }
+.search { display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 10px; width: 220px; background: var(--bg-input); border: 1px solid var(--border-input); border-radius: var(--radius-md); color: var(--text-tertiary); }
+.search input { background: transparent; border: none; outline: none; color: var(--text-primary); font-size: 12px; flex: 1; }
+.search input::placeholder { color: var(--text-tertiary); }
+.tb-right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+
+/* 按钮 */
+.btn {
+  height: 24px; padding: 0 10px; border-radius: var(--radius-sm); font-size: 12px;
+  background: transparent; border: 1px solid transparent; color: var(--text-primary); display: inline-flex; align-items: center; gap: 5px;
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+}
+.btn:hover { background: var(--bg-hover); }
+.btn-primary { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent); }
+.btn-danger { color: var(--danger-text); border-color: color-mix(in srgb, var(--danger-text) 40%, transparent); }
+.btn-ghost { color: var(--text-secondary); }
+.btn-sm { height: 20px; padding: 0 8px; font-size: 11px; }
+
+/* 表头 + 容器行 */
+.head, .row {
+  display: grid; grid-template-columns: 14px minmax(160px, 1.3fr) minmax(180px, 1.4fr) 92px minmax(140px, 1fr) 148px;
+  gap: 12px; align-items: center; padding: 0 16px;
+}
+.head { height: 30px; border-bottom: 1px solid var(--border-subtle); font-size: 10px; color: var(--text-tertiary); letter-spacing: .8px; text-transform: uppercase; user-select: none; }
+.list { flex: 1; overflow-y: auto; }
+.row { height: 44px; border-bottom: 1px solid var(--divider-primary); cursor: pointer; transition: background var(--transition-fast); }
+.row:hover { background: var(--bg-hover); }
+.row.selected { background: var(--bg-elevated); box-shadow: inset 2px 0 0 var(--accent-primary); }
+.st-dot { width: 8px; height: 8px; border-radius: 50%; justify-self: center; }
+.st-dot.running { background: var(--metric-cool); }
+.st-dot.stopped { background: var(--text-tertiary); }
+.st-dot.exited { background: var(--metric-hot); }
+.r-name { font-family: var(--font-mono); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.r-image { min-width: 0; display: flex; align-items: center; gap: 6px; }
+.r-image .repo { font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tag { font-size: 10px; font-family: var(--font-mono); color: var(--accent-indigo); background: color-mix(in srgb, var(--accent-indigo) 12%, transparent); border: 1px solid color-mix(in srgb, var(--accent-indigo) 20%, transparent); border-radius: var(--radius-sm); padding: 0 5px; }
+.st { font-size: 11px; }
+.st.running { color: var(--status-success-text); }
+.st.stopped { color: var(--text-tertiary); }
+.st.exited { color: var(--status-error-text); }
+.r-ports { font-family: var(--font-mono); font-size: 10px; color: var(--accent-cyan); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.r-ports .none { color: var(--text-tertiary); font-family: var(--font-sans); }
+.r-acts { display: flex; gap: 2px; }
+.icon-btn {
+  width: 24px; height: 24px; border: none; background: transparent; border-radius: var(--radius-sm); color: var(--text-secondary);
+  display: inline-flex; align-items: center; justify-content: center; transition: background var(--transition-fast), color var(--transition-fast); position: relative;
+}
+.icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.icon-btn.start:hover { color: var(--metric-cool); }
+.icon-btn.stop:hover { color: var(--metric-warm); }
+.icon-btn.del:hover { color: var(--danger-text); }
+.icon-btn[data-tip]:hover::after {
+  content: attr(data-tip); position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+  background: var(--bg-elevated); border: 1px solid var(--border-default); color: var(--text-primary); font-size: 11px;
+  padding: 3px 8px; border-radius: var(--radius-sm); white-space: nowrap; z-index: 50; pointer-events: none; box-shadow: var(--shadow-lg);
+}
+
+/* 占位分段 */
+.ph { flex: 1; display: flex; flex-direction: column; }
+.ph table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ph th { text-align: left; padding: 8px 16px; color: var(--text-tertiary); font-size: 10px; letter-spacing: .8px; text-transform: uppercase; border-bottom: 1px solid var(--border-subtle); }
+.ph td { padding: 9px 16px; border-bottom: 1px solid var(--divider-primary); color: var(--text-secondary); }
+.ph td.mono { color: var(--text-primary); }
+
+/* 详情面板 */
+.detail { width: 360px; flex: none; display: flex; flex-direction: column; border-left: 1px solid var(--border-subtle); }
+.dp-head { padding: 10px 14px; border-bottom: 1px solid var(--divider-primary); display: flex; align-items: center; gap: 8px; }
+.dp-head .nm { font-family: var(--font-mono); font-size: 13px; font-weight: 600; }
+.badge { font-size: 10px; padding: 1px 7px; border-radius: 10px; color: var(--status-success-text); background: color-mix(in srgb, var(--status-success-text) 10%, transparent); border: 1px solid color-mix(in srgb, var(--status-success-text) 25%, transparent); }
+.dp-close { margin-left: auto; }
+.dp-body { flex: 1; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 14px; }
+.kv { display: grid; grid-template-columns: 84px 1fr; gap: 5px 10px; font-size: 12px; }
+.kv .k { color: var(--text-tertiary); }
+.kv .v { color: var(--text-primary); font-family: var(--font-mono); word-break: break-all; }
+.sec-t { font-size: 11px; color: var(--text-tertiary); letter-spacing: .8px; text-transform: uppercase; margin-bottom: 6px; }
+.log { background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); font-family: var(--font-mono); font-size: 11px; line-height: 1.7; padding: 10px; height: 220px; overflow-y: auto; color: var(--text-secondary); }
+.log .t { color: var(--text-tertiary); margin-right: 8px; }
+.log .info { color: var(--status-debug-text); }
+.log .warn { color: var(--status-warn-text); }
+.log .err { color: var(--status-error-text); }
+.dp-actions { display: flex; gap: 6px; }
+
+/* 状态栏 */
+.statusbar { height: 24px; flex: none; display: flex; align-items: center; gap: 16px; padding: 0 16px; border-top: 1px solid var(--divider-primary); font-size: 11px; color: var(--text-tertiary); user-select: none; }
+.statusbar .mono { color: var(--text-secondary); }
+.statusbar .right { margin-left: auto; }
+
+/* 确认框 */
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); backdrop-filter: blur(2px); z-index: 2000; display: none; align-items: center; justify-content: center; }
+.overlay.show { display: flex; }
+.confirm { width: 380px; background: var(--bg-elevated); border: 1px solid var(--danger-border); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); padding: 18px 20px; animation: pop .15s ease; }
+@keyframes pop { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: scale(1); } }
+.confirm h4 { font-size: 14px; margin-bottom: 8px; display: flex; gap: 8px; align-items: center; }
+.confirm h4 svg { color: var(--danger-text); }
+.confirm p { font-size: 12px; color: var(--text-secondary); line-height: 1.6; }
+.confirm .cmd { font-family: var(--font-mono); font-size: 11px; color: var(--accent-cyan); background: var(--bg-input); border-radius: var(--radius-sm); padding: 6px 10px; margin-top: 10px; border: 1px solid var(--border-subtle); }
+.confirm .acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+
+/* Toast */
+.toast { position: fixed; bottom: 44px; left: 50%; transform: translateX(-50%) translateY(8px); background: var(--bg-elevated); border: 1px solid var(--border-default); color: var(--text-primary); font-size: 12px; padding: 8px 16px; border-radius: var(--radius-md); box-shadow: var(--shadow-lg); z-index: 4000; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; display: flex; gap: 8px; align-items: center; }
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast svg { color: var(--metric-cool); }
+
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<!-- TitleBar：Docker 图标入口 -->
+<div class="titlebar">
+  <span class="app-name"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M7 9l3 3-3 3"/><path d="M12 15h5"/></svg>cKun Agent</span>
+  <button class="tb-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 11l8-7 8 7v9a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/></svg></button>
+  <button class="tb-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/></svg></button>
+  <button class="tb-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h16"/><path d="M4 6h10"/><path d="M14 18h6"/><circle cx="18" cy="6" r="2"/><circle cx="7" cy="18" r="2"/></svg></button>
+  <button class="tb-btn active"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 13h3v3H4zM9 13h3v3H9zM9 8h3v3H9zM14 13h3v3h-3zM4 18h16v2a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"/><path d="M18 12c1.5-2 4-2 5-1-.3 2-2 3.5-4.5 3.2"/></svg></button>
+  <button class="tb-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 13l2 2 4-4"/></svg></button>
+  <span class="tb-spacer"></span>
+  <button class="tb-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.3l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2.2-1.3L14 2h-4l-.4 2.4a7 7 0 0 0-2.2 1.3l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .9.1 1.3l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2.2 1.3L10 22h4l.4-2.4a7 7 0 0 0 2.2-1.3l2.4 1 2-3.4-2-1.6c.1-.4.1-.9.1-1.3z"/></svg></button>
+  <button class="win-btn">&#9472;</button><button class="win-btn">&#9633;</button><button class="win-btn close">&#10005;</button>
+</div>
+
+<!-- 标签栏 -->
+<div class="term-tabs">
+  <div class="term-tab"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 11l8-7 8 7v9a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/></svg>首页</div>
+  <div class="term-tab active"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l2.5 2.5L7 14"/><path d="M12 15h5"/></svg>prod-web-01</div>
+  <button class="tab-plus">＋</button>
+</div>
+
+<!-- Docker 页 -->
+<div class="page">
+  <div class="list-col">
+    <!-- 目标主机：绑定当前已连接 SSH 会话 -->
+    <div class="ctx-bar">
+      <h3>Docker</h3>
+      <span class="ctx-host">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l2.5 2.5L7 14"/><path d="M12 15h5"/></svg>
+        <select id="host-sel">
+          <option>prod-web-01 (10.20.3.11)</option>
+          <option>db-server (10.20.3.24)</option>
+        </select>
+      </span>
+      <span class="ctx-engine mono" id="engine-ver">Docker 27.1.1</span>
+      <span class="ctx-link"><span class="dot-live"></span>经 SSH 会话执行</span>
+    </div>
+
+    <div class="toolbar">
+      <div class="seg">
+        <button class="seg-btn on" data-seg="containers">容器</button>
+        <button class="seg-btn" data-seg="images">镜像</button>
+        <button class="seg-btn" data-seg="volumes">卷</button>
+        <button class="seg-btn" data-seg="networks">网络</button>
+      </div>
+      <div class="search"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input id="q" placeholder="按名称过滤…" /></div>
+      <div class="tb-right">
+        <button class="btn" id="btn-refresh"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>刷新</button>
+      </div>
+    </div>
+
+    <!-- 容器 -->
+    <div class="seg-view" id="v-containers">
+      <div class="head"><span></span><span>名称</span><span>镜像</span><span>状态</span><span>端口</span><span>操作</span></div>
+      <div class="list" id="c-list">
+        <div class="row selected" data-name="nginx-proxy">
+          <span class="st-dot running"></span>
+          <span class="r-name">nginx-proxy</span>
+          <span class="r-image"><span class="repo">nginx</span><span class="tag">1.27-alpine</span></span>
+          <span class="st running">Up 7d</span>
+          <span class="r-ports">80→80 · 443→443</span>
+          <span class="r-acts">
+            <button class="icon-btn stop" data-tip="停止"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>
+            <button class="icon-btn" data-tip="重启"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg></button>
+            <button class="icon-btn" data-tip="日志"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
+            <button class="icon-btn" data-tip="exec 进入终端"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>
+            <button class="icon-btn del" data-tip="删除" data-del="nginx-proxy"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>
+          </span>
+        </div>
+        <div class="row" data-name="api-gateway">
+          <span class="st-dot running"></span>
+          <span class="r-name">api-gateway</span>
+          <span class="r-image"><span class="repo">harbor.ckun.io/gateway</span><span class="tag">v2.4.1</span></span>
+          <span class="st running">Up 7d</span>
+          <span class="r-ports">8080→8080</span>
+          <span class="r-acts">
+            <button class="icon-btn stop" data-tip="停止"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>
+            <button class="icon-btn" data-tip="重启"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg></button>
+            <button class="icon-btn" data-tip="日志"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
+            <button class="icon-btn" data-tip="exec 进入终端"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>
+            <button class="icon-btn del" data-tip="删除" data-del="api-gateway"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>
+          </span>
+        </div>
+        <div class="row" data-name="migrate-job">
+          <span class="st-dot exited"></span>
+          <span class="r-name">migrate-job</span>
+          <span class="r-image"><span class="repo">harbor.ckun.io/migrate</span><span class="tag">v2.4.0</span></span>
+          <span class="st exited">Exit 137</span>
+          <span class="r-ports"><span class="none">未映射</span></span>
+          <span class="r-acts">
+            <button class="icon-btn start" data-tip="启动"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="6 4 20 12 6 20 6 4"/></svg></button>
+            <button class="icon-btn" data-tip="日志"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
+            <button class="icon-btn del" data-tip="删除" data-del="migrate-job"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>
+          </span>
+        </div>
+        <div class="row" data-name="redis-cache">
+          <span class="st-dot stopped"></span>
+          <span class="r-name">redis-cache</span>
+          <span class="r-image"><span class="repo">redis</span><span class="tag">7.2</span></span>
+          <span class="st stopped">Exit 0</span>
+          <span class="r-ports">6379→6379</span>
+          <span class="r-acts">
+            <button class="icon-btn start" data-tip="启动"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="6 4 20 12 6 20 6 4"/></svg></button>
+            <button class="icon-btn" data-tip="日志"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
+            <button class="icon-btn del" data-tip="删除" data-del="redis-cache"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 镜像 -->
+    <div class="seg-view ph hidden" id="v-images">
+      <table><thead><tr><th>仓库</th><th>标签</th><th>镜像 ID</th><th>大小</th><th>创建</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">nginx</td><td class="mono">1.27-alpine</td><td class="mono">8a1f2c3d</td><td class="mono">62.1MB</td><td>2 weeks ago</td></tr>
+        <tr><td class="mono">harbor.ckun.io/gateway</td><td class="mono">v2.4.1</td><td class="mono">b4c5d6e7</td><td class="mono">318MB</td><td>3 days ago</td></tr>
+        <tr><td class="mono">redis</td><td class="mono">7.2</td><td class="mono">f8a9b0c1</td><td class="mono">136MB</td><td>5 weeks ago</td></tr>
+      </tbody></table>
+    </div>
+    <!-- 卷 -->
+    <div class="seg-view ph hidden" id="v-volumes">
+      <table><thead><tr><th>驱动</th><th>卷名</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">local</td><td class="mono">prod-web-01_nginx-conf</td></tr>
+        <tr><td class="mono">local</td><td class="mono">prod-web-01_pgdata</td></tr>
+        <tr><td class="mono">local</td><td class="mono">prod-web-01_redis</td></tr>
+      </tbody></table>
+    </div>
+    <!-- 网络 -->
+    <div class="seg-view ph hidden" id="v-networks">
+      <table><thead><tr><th>网络 ID</th><th>驱动</th><th>名称</th><th>范围</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">a1b2c3d4</td><td class="mono">bridge</td><td class="mono">bridge</td><td class="mono">local</td></tr>
+        <tr><td class="mono">e5f6a7b8</td><td class="mono">bridge</td><td class="mono">app-net</td><td class="mono">local</td></tr>
+        <tr><td class="mono">c9d0e1f2</td><td class="mono">host</td><td class="mono">host</td><td class="mono">local</td></tr>
+      </tbody></table>
+    </div>
+  </div>
+
+  <!-- 详情面板 -->
+  <div class="detail">
+    <div class="dp-head">
+      <span class="st-dot running"></span>
+      <span class="nm">nginx-proxy</span>
+      <span class="badge">running</span>
+      <button class="icon-btn dp-close" data-tip="关闭"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="dp-body">
+      <div>
+        <div class="sec-t">容器信息</div>
+        <div class="kv">
+          <span class="k">镜像</span><span class="v">nginx:1.27-alpine</span>
+          <span class="k">容器 ID</span><span class="v">8f3c2a1d9e4b</span>
+          <span class="k">状态</span><span class="v">Up 7 days</span>
+          <span class="k">命令</span><span class="v">nginx -g 'daemon off;'</span>
+          <span class="k">端口</span><span class="v">0.0.0.0:80→80, :443→443</span>
+        </div>
+      </div>
+      <div>
+        <div class="sec-t">日志（docker logs --tail 200）</div>
+        <div class="log mono">
+          <div><span class="t">10:42:11</span><span class="info">[info]</span> GET /api/health 200 0.4ms</div>
+          <div><span class="t">10:41:57</span><span class="warn">[warn]</span> worker_connections near limit</div>
+          <div><span class="t">10:40:58</span><span class="err">[error]</span> upstream timed out /api/orders</div>
+          <div><span class="t">10:40:12</span><span class="info">[info]</span> reload config complete</div>
+        </div>
+      </div>
+      <div class="dp-actions">
+        <button class="btn btn-sm btn-primary" id="btn-exec">exec 进入终端</button>
+        <button class="btn btn-sm btn-danger" id="btn-stop">停止</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 状态栏 -->
+<div class="statusbar">
+  <span>prod-web-01 · 经 SSH 会话</span>
+  <span>容器 <span class="mono">4</span>（<span style="color:var(--status-success-text)">2</span> 运行 / <span style="color:var(--status-error-text)">1</span> 退出 / <span style="color:var(--text-tertiary)">1</span> 停止）</span>
+  <span class="right">docker ps · 12s 前</span>
+</div>
+
+<!-- 删除确认 -->
+<div class="overlay" id="ov-del">
+  <div class="confirm" role="dialog" aria-modal="true">
+    <h4><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>删除 <span class="mono" id="del-name" style="color:var(--accent-cyan)">nginx-proxy</span></h4>
+    <p>容器可写层数据将永久丢失（挂载卷保留）。</p>
+    <div class="cmd mono" id="del-cmd">docker rm -f nginx-proxy</div>
+    <div class="acts"><button class="btn btn-ghost" id="del-cancel">取消</button><button class="btn btn-danger" id="del-confirm">确认删除</button></div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg><span id="toast-msg">ok</span></div>
+
+<script>
+// 分段切换
+const segs = document.querySelectorAll('.seg-btn')
+segs.forEach(btn => btn.addEventListener('click', () => {
+  segs.forEach(b => b.classList.remove('on')); btn.classList.add('on')
+  document.querySelectorAll('.seg-view').forEach(v => v.classList.add('hidden'))
+  document.getElementById('v-' + btn.dataset.seg).classList.remove('hidden')
+}))
+
+// 行选中 → 详情面板名同步（原型演示）
+document.querySelectorAll('.row').forEach(r => r.addEventListener('click', e => {
+  if (e.target.closest('.icon-btn')) return
+  document.querySelectorAll('.row').forEach(x => x.classList.remove('selected')); r.classList.add('selected')
+  document.querySelector('.dp-head .nm').textContent = r.dataset.name
+}))
+
+// 名称过滤
+document.getElementById('q').addEventListener('input', e => {
+  const q = e.target.value.toLowerCase()
+  document.querySelectorAll('.row').forEach(r => { r.style.display = r.dataset.name.toLowerCase().includes(q) ? '' : 'none' })
+})
+
+// 删除 → 确认框
+document.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', e => {
+  e.stopPropagation()
+  document.getElementById('del-name').textContent = b.dataset.del
+  document.getElementById('del-cmd').textContent = 'docker rm -f ' + b.dataset.del
+  document.getElementById('ov-del').classList.add('show')
+}))
+const closeDel = () => document.getElementById('ov-del').classList.remove('show')
+document.getElementById('del-cancel').addEventListener('click', closeDel)
+document.getElementById('del-confirm').addEventListener('click', () => { closeDel(); toast('已删除容器') })
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDel() })
+
+document.getElementById('btn-exec').addEventListener('click', () => toast('docker exec → 新远程终端标签'))
+document.getElementById('btn-stop').addEventListener('click', () => toast('docker stop nginx-proxy'))
+document.getElementById('btn-refresh').addEventListener('click', () => toast('docker ps 已刷新'))
+document.getElementById('host-sel').addEventListener('change', e => {
+  document.querySelector('.statusbar span').textContent = e.target.value.split(' ')[0] + ' · 经 SSH 会话'
+  toast('切换目标主机')
+})
+
+let tTimer
+function toast(m) {
+  const t = document.getElementById('toast'); document.getElementById('toast-msg').textContent = m
+  t.classList.add('show'); clearTimeout(tTimer); tTimer = setTimeout(() => t.classList.remove('show'), 1600)
+}
+</script>
+</body>
+</html>

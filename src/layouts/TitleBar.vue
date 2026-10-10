@@ -11,8 +11,13 @@
     <div class="titlebar-drag" @dblclick="toggleMaximize"></div>
     <!-- 功能按钮 -->
     <div class="titlebar-actions" @dblclick.stop>
-      <button class="titlebar-action-btn" :class="{ active: activePage === 'ai' }" title="AI 运维助手" @click="emit('action-ai')">
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'ai' }" :title="agent.isRunning ? 'AI 运维助手（运行中）' : 'AI 运维助手'" @click="emit('action-ai')">
         <span class="ai-text">AI</span>
+        <!-- 两个入口在视觉上是同一个助手的两扇门：跑起来呼吸点、跑完且面板
+             关着时未读点（ssh-ai store 的 unreadReply，开面板即清）。
+             徽章只作辅助信道：title 文案同步说明状态，不单靠颜色传义。 -->
+        <span v-if="agent.isRunning" class="ai-badge run" aria-hidden="true"></span>
+        <span v-else-if="sshAi.unreadReply" class="ai-badge unread" aria-hidden="true"></span>
       </button>
       <button class="titlebar-action-btn" :class="{ active: activePage === 'schedules' }" title="定时任务" @click="emit('action-schedules')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 16 14"/></svg>
@@ -25,6 +30,9 @@
       </button>
       <button class="titlebar-action-btn" :class="{ active: activePage === 'tunnels' }" title="隧道" @click="emit('action-tunnels')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg>
+      </button>
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'docker' }" title="Docker 管理" @click="emit('action-docker')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M6 9.5h3v3H6zM11 9.5h3v3h-3zM11 6h3v3h-3z"/><path d="M3.5 12.5h13c1.6 0 3-.7 3.8-2 .7 2.3-.4 5-3.2 5H7a3.5 3.5 0 0 1-3.5-3z"/><path d="M3.5 12.5 2 10"/></svg>
       </button>
       <button class="titlebar-action-btn" :class="{ active: activePage === 'audit' }" title="运维审计" @click="emit('action-audit')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M9 12l2 2 4-4"/><path d="M20 12a8 8 0 1 1-2.34-5.66"/></svg>
@@ -52,11 +60,17 @@
 </template>
 
 <script setup lang="ts">
+import { useAgentStore } from '@/stores/agent'
+import { useSshAiStore } from '@/stores/ssh-ai'
+
 const api = window.electronAPI
+
+const agent = useAgentStore()
+const sshAi = useSshAiStore()
 
 defineProps<{
   /** 当前激活的功能页，对应图标高亮 */
-  activePage: 'home' | 'remote-mgr' | 'sftp' | 'audit' | 'ai' | 'schedules' | 'dashboard' | 'tunnels'
+  activePage: 'home' | 'remote-mgr' | 'sftp' | 'audit' | 'ai' | 'schedules' | 'dashboard' | 'tunnels' | 'docker'
 }>()
 
 const emit = defineEmits<{
@@ -67,6 +81,7 @@ const emit = defineEmits<{
   'action-sftp': []
   'action-dashboard': []
   'action-tunnels': []
+  'action-docker': []
   'action-settings': []
 }>()
 
@@ -160,6 +175,35 @@ async function close() { await api?.windowClose() }
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.5px;
+}
+
+/* AI 按钮状态徽章：绝对定位钉在按钮右上角，不挤动 "AI" 字本身。
+   运行中 = info 蓝呼吸；未读 = 强调色实心点。都用主题令牌，八套主题各自取值。 */
+.titlebar-action-btn {
+  position: relative;
+}
+.ai-badge {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.ai-badge.run {
+  background: var(--status-info-text);
+  animation: ai-badge-pulse 1.6s ease-in-out infinite;
+}
+.ai-badge.unread {
+  background: var(--accent-primary);
+}
+@keyframes ai-badge-pulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ai-badge.run { animation: none; }
 }
 
 .win-btn {

@@ -308,9 +308,12 @@
               @click="togglePermMenu"
               @keydown.down.prevent="openPermMenu()"
             >
-              <svg class="perm-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14" aria-hidden="true">
-                <circle cx="12" cy="12" r="9"/>
-                <path d="M12 12V3a9 9 0 0 1 9 9z" fill="currentColor" stroke="none"/>
+              <!-- 盾形 = 谁来放行，与首页输入卡的审批钮共用同一套（run-modes 的
+                   PERM_SHIELD / PERM_MARKS）：手动 = 空盾，自动 = 盾里一道闪电。
+                   档位记号跟 permMode 派生，标签与图标永远说的是同一个档。 -->
+              <svg class="perm-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true">
+                <path :d="PERM_SHIELD"/>
+                <path v-if="permMark" :d="permMark"/>
               </svg>
               <span class="perm-name">{{ permLabel }}</span>
               <svg class="perm-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="9" height="9" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
@@ -472,7 +475,7 @@ import { useToastStore } from '@/stores/toast'
 import type { ChatAttachment } from '@/api/client'
 // 档位与文案单点定义在 utils/run-modes：首页输入卡读的是同一份，两处各写一遍
 // 就会对同样两个档位给出不同说明
-import { APPROVAL_OPTIONS as PERM_OPTIONS, PERMISSION_LABELS, resolveRunModes, type ApprovalKey, type PostureKey } from '@/utils/run-modes'
+import { APPROVAL_OPTIONS as PERM_OPTIONS, PERMISSION_LABELS, PERM_MARKS, PERM_SHIELD, resolveRunModes, type ApprovalKey, type PostureKey } from '@/utils/run-modes'
 import { formatBytes } from '@/utils/format'
 
 const settingsStore = useSettingsStore()
@@ -535,7 +538,12 @@ const panelTitle = computed(() => props.panelTitle || 'AI 助手')
 // ── Refs ──
 const messagesEl = ref<HTMLElement | null>(null)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
-const inputText = ref('')
+/** 输入草稿住 ssh-ai store（sharedDraft）：与首页指令卡绑同一份，切屏不丢字。
+ *  computed 双向绑定 —— v-model 照常工作，写入落 store，本组件不再自存一份。 */
+const inputText = computed({
+  get: () => sshAi.sharedDraft,
+  set: (v: string) => sshAi.setSharedDraft(v),
+})
 const showHistoryPanel = ref(false)
 
 // ── 文件上传附件 ──
@@ -689,12 +697,17 @@ function pickCap(key: CapKey) {
  *  各存一份就是第二条通路（用户在首页选「自动」、侧栏仍按「手动」发送）。 */
 const approvalMode = computed(() => sshAi.approvalMode)
 const isPlanMode = computed(() => activeMode.value === 'plan')
+/** 档位只算一次：标签与图标都从它派生（与首页输入卡同一口径），避免
+ *  "字写着自动、图标还是手动那张盾"。plan 姿态下 resolveRunModes 恒压出 'plan'。 */
+const permMode = computed(() =>
+  resolveRunModes(activeMode.value ?? undefined, approvalMode.value).permissionMode,
+)
 /** 下拉上这一行字与发送装配同源：plan 姿态下真实下发是 'plan'，这里还印
  *  「手动审批」就是宣称一个不会生效的选择 —— 上面 :740 的注释要求的正是这件事，
  *  先前只做到 disabled 与 title，标签漏了。 */
-const permLabel = computed(() =>
-  PERMISSION_LABELS[resolveRunModes(activeMode.value ?? undefined, approvalMode.value).permissionMode],
-)
+const permLabel = computed(() => PERMISSION_LABELS[permMode.value])
+/** 盾里的档位记号：手动空盾、自动闪电、只读计划一横（run-modes 的 PERM_MARKS）。 */
+const permMark = computed(() => PERM_MARKS[permMode.value])
 
 const showPermMenu = ref(false)
 const permMenuRef = ref<HTMLElement | null>(null)
@@ -1229,6 +1242,10 @@ function autoResize() {
     el.style.height = Math.min(el.scrollHeight, 100) + 'px'
   }
 }
+
+// 草稿是共享态：在首页打字/清空也会落到这份 textarea 上，高度要跟着重算 ——
+// 否则切回侧栏时内容超出既定高度，被 overflow 裁掉下半截。
+watch(inputText, () => nextTick(autoResize))
 
 /** 是否可发送：有输入文字或有待发送附件（与按钮 disabled 保持一致） */
 const canSend = computed(() =>

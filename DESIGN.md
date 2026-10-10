@@ -11,6 +11,7 @@ cKunAgentSSH 前端（`src/`）的视觉 / 布局 / 交互 / 组件约定。**�
 - 颜色一律走令牌 `var(--*)`；透明色用 `color-mix(in srgb, var(--token) N%, transparent)` 派生。
 - 结构背景用 `--bg-base`，卡片/弹窗/菜单/浮层用 `--bg-elevated`。**只有这两级**。
 - 按钮用 `styles/button.css` 的 `.btn-*`；面板用 `settings-panel-base.css`；审批卡用 `approval-card.css`。
+- 空状态双向居中（容器 `flex:1` + 双向 flex center），单行文字说清「这里为什么是空的」。
 - 模态承载内容（`Teleport to body` + `Transition` + `role="dialog"`/`aria-modal` + Esc 关闭 + 卸载清理监听）。
 - 文字对比度 ≥ 4.5:1；终端底一律深色 `--bg-terminal`。
 - 破坏性操作（删除/清空/断开/危险命令）走 `ConfirmDialog` 二次确认。
@@ -25,6 +26,8 @@ cKunAgentSSH 前端（`src/`）的视觉 / 布局 / 交互 / 组件约定。**�
 - 在 `[data-theme]` 里写 `--accent-primary`（内联样式压过主题块，永不生效）。
 - 在主题块里改尺寸令牌（`--titlebar-h` 等属版面）。
 - 抽屉式交互（本项目偏好居中弹窗）。
+- 空状态里重复头部已有的主操作按钮；列表容器与空状态拆成两个同级空壳 div（会平分 `flex:1` 把居中顶偏）。
+- 新建/连接类主操作按钮配装饰图标（`+` / 箭头）——按钮只留文字。
 - 独立写 scoped `.btn`、或给共享令牌写回落值。
 
 ---
@@ -89,7 +92,7 @@ App.vue (flex column, 100vh)
 
 **审批/权限卡** [approval-card.css](src/styles/approval-card.css)（`.ap-*`）：`.ap-card`(`--bg-elevated` + `--card-warn-border` + 10px) · `.ap-perm` 权限变体 · `.ap-code`(mono + `--accent-cyan`) · `.ap-risk.*` / `.ap-env.*` 徽章 · `.ap-actions` + `.ap-btn-{grant,always,session,deny}`（语义色是卡片独立的绿/青/灰，不随强调色）。宿主布局留 scoped，覆盖用「宿主类 + .ap-ic」复合选择器。
 
-**图标**：内联 SVG，`stroke="currentColor"` + `fill="none"`（自动适配主题）。尺寸：标题栏/标签 14 · 设置导航 16 · 卡内 15 · 按钮内 14。复用图标放 `src/components/icons/`。
+**图标**：内联 SVG，`stroke="currentColor"` + `fill="none"`（自动适配主题）。尺寸：标题栏/标签 14 · 设置导航 16 · 卡内 15 · 按钮内 14。复用图标放 `src/components/icons/`。Docker 入口与页面空态统一鲸鱼图形。
 
 **目录**：`components/` 按域分 `common|ssh|agent|chat|home|settings|icons`；逻辑 `composables/`；状态 `stores/`（Pinia）。
 
