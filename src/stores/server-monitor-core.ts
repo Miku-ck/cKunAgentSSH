@@ -57,6 +57,20 @@ export interface PortEntry {
   secondaryAddrs?: string[]
   /** 同一端口的其他监听协议（TCP 主显示时收 UDP，反之亦然） */
   secondaryProtos?: ('tcp' | 'udp')[]
+  /**
+   * 合并行的其他监听进程 PID（TCP/UDP 同 addr+port 但分属不同进程时才登记）。
+   * 存在时主 pid/proc 只描述了合并行的一侧，UI 必须禁用行内「终止」——
+   * 杀一半留一半比不杀更糟。
+   */
+  secondaryPids?: number[]
+  /** 当前接收队列积压（已握手等待 accept 的连接数；0 = 无积压） */
+  recvq?: number
+  /** listen backlog 上限（Send-Q = 服务调用 listen() 传入的 backlog 值） */
+  sendq?: number
+  /** 监听网卡（从 ss 范围标识提取：lo/eth0/wlan0；无范围标识 = 全局监听显示 '*'） */
+  iface?: string
+  /** 监听进程属主用户名（PROCS_CMD 按 PID 关联） */
+  user?: string
 }
 /** 单块 GPU 快照（nvidia-smi 采集）；null = 该字段远端返回 N/A（如被动散热卡无风扇、WSL 无功率） */
 export interface GpuSample {
@@ -204,8 +218,14 @@ export const METRICS_CMD = [
   // ② -p 在极老 / busybox 环境可能不支持：不支持时整个 ss 报错退出，|| 兑底到不带 -p 的调用
   //    （只是丢了进程列，端口本身仍完整）。两路输出可能有重叠行：awk 按 proto|addr|port 去重，
   //    有 pid 的行优先覆盖无 pid 的行。
-  `(ss -ltnp 2>/dev/null || ss -ltn 2>/dev/null; sudo -n ss -ltnp 2>/dev/null) | awk 'NR>1 && match($4, /:[0-9]+$/) {port=substr($4,RSTART+1,RLENGTH-1); addr=substr($4,1,RSTART-1); pid=""; pname=""; if (match($0, /users:\\(\\("[^"]*",pid=[0-9]+/)) {seg=substr($0, RSTART+8, RLENGTH-8); split(seg, a, "\\\"" ); pname=a[2]; pid=a[3]; sub(/^,pid=/, "", pid)} k="tcp|"addr"|"port; if (!(k in R) || pid!="") R[k]=pid"|"pname} END {for (k in R) print "PORT="k"|"R[k]}'`,
-  `(ss -lnup 2>/dev/null || ss -lnu 2>/dev/null; sudo -n ss -lnup 2>/dev/null) | awk 'NR>1 && match($4, /:[0-9]+$/) {port=substr($4,RSTART+1,RLENGTH-1); addr=substr($4,1,RSTART-1); pid=""; pname=""; if (match($0, /users:\\(\\("[^"]*",pid=[0-9]+/)) {seg=substr($0, RSTART+8, RLENGTH-8); split(seg, a, "\\\"" ); pname=a[2]; pid=a[3]; sub(/^,pid=/, "", pid)} k="udp|"addr"|"port; if (!(k in R) || pid!="") R[k]=pid"|"pname} END {for (k in R) print "PORT="k"|"R[k]}'`,
+  // awk 端口输出格式：PORT=proto|addr|port|pid|pname|recvq|sendq|iface
+  //   recvq = $2 (Recv-Q：当前已握手等待 accept 的积压连接数)
+  //   sendq = $3 (Send-Q：listen backlog 上限)
+  //   iface = 从 addr 的范围标识提取（%lo/%eth0/...），无范围标识则 "*"；
+  //   方括号 IPv6（[fe80::1%eth0]）的 %eth0 后面还有 ']'，正则必须收住尾括号否则接口恒空
+  // 向后兼容：parseMetricsRaw 按字段个数解析（3/5/8 段），旧版采集器输出 3 或 5 段仍可正常解析。
+  `(ss -ltnp 2>/dev/null || ss -ltn 2>/dev/null; sudo -n ss -ltnp 2>/dev/null) | awk 'NR>1 && match($4, /:[0-9]+$/) {port=substr($4,RSTART+1,RLENGTH-1); addr=substr($4,1,RSTART-1); pid=""; pname=""; iface="*"; if (match(addr, /%[a-zA-Z0-9_.]+\\]?$/)) {iface=substr(addr,RSTART+1, RLENGTH-1); sub(/\\]$/, "", iface)} if (match($0, /users:\\(\\("[^"]*",pid=[0-9]+/)) {seg=substr($0, RSTART+8, RLENGTH-8); split(seg, a, "\\\"" ); pname=a[2]; pid=a[3]; sub(/^,pid=/, "", pid)} k="tcp|"addr"|"port; recvq=$2; sendq=$3; if (!(k in R) || pid!="") R[k]=pid"|"pname"|"recvq"|"sendq"|"iface} END {for (k in R) print "PORT="k"|"R[k]}'`,
+  `(ss -lnup 2>/dev/null || ss -lnu 2>/dev/null; sudo -n ss -lnup 2>/dev/null) | awk 'NR>1 && match($4, /:[0-9]+$/) {port=substr($4,RSTART+1,RLENGTH-1); addr=substr($4,1,RSTART-1); pid=""; pname=""; iface="*"; if (match(addr, /%[a-zA-Z0-9_.]+\\]?$/)) {iface=substr(addr,RSTART+1, RLENGTH-1); sub(/\\]$/, "", iface)} if (match($0, /users:\\(\\("[^"]*",pid=[0-9]+/)) {seg=substr($0, RSTART+8, RLENGTH-8); split(seg, a, "\\\"" ); pname=a[2]; pid=a[3]; sub(/^,pid=/, "", pid)} k="udp|"addr"|"port; recvq=$2; sendq=$3; if (!(k in R) || pid!="") R[k]=pid"|"pname"|"recvq"|"sendq"|"iface} END {for (k in R) print "PORT="k"|"R[k]}'`,
   // GPU 采集四段式：① nvidia-smi 探测覆盖非登录 exec shell 的默认 PATH 盲区（sshd 给非交互 shell 的 PATH
   // 常不含 /usr/sbin/sbin——SUSE 系 RPM 驱动装在 /usr/sbin；WSL2 的桩在 /usr/lib/wsl/lib；runfile 装在
   // /usr/local/sbin）；② 探测全落空但内核驱动在场（/proc/driver/nvidia/version 存在）→ 输出 GPUERR= 自诊断
@@ -353,10 +373,17 @@ export function parseMetricsRaw(raw: string, host?: string): ParsedMetrics | nul
       if (disks.length >= 8) disksFull = true
     } else if (line.startsWith('PORT=')) {
       if (portsFull) continue
-      // 兼容两种行格式：proto|addr|port（旧采集）与 proto|addr|port|pid|proc（ss -p，进程信息可能缺失）
-      const [proto, rawAddr, port, pid, pname] = line.slice(5).split('|')
+      // 字段按个数兼容：3（proto|addr|port）/ 5（+pid|pname）/ 8（+recvq|sendq|iface）
+      const f = line.slice(5).split('|')
+      const proto = f[0]
       if (proto === 'tcp' || proto === 'udp') {
-        const raw = stripScope(rawAddr || '0.0.0.0')
+        const raw = stripScope(f[1] || '0.0.0.0')
+        const port = f[2]
+        const pid = f[3]
+        const pname = f[4]
+        const recvq = f[5]
+        const sendq = f[6]
+        const iface = f[7]
         const gKey = portGroupKey(raw, port)
         const existingIdx = portSeen.get(gKey)
         if (existingIdx !== undefined) {
@@ -367,16 +394,27 @@ export function parseMetricsRaw(raw: string, host?: string): ParsedMetrics | nul
             backfillProc(existing, pid, pname)
           } else {
             // 2) 不同 proto（TCP+UDP 同端口）→ 合并为一个条目，proto 偏好 TCP：
-            //    两值相异且限于 tcp/udp，所以谁不是 tcp 谁就是落选侧
             const primaryProto: 'tcp' | 'udp' = proto === 'tcp' ? 'tcp' : existing.proto
             const droppedProto: 'tcp' | 'udp' = primaryProto === existing.proto ? proto : existing.proto
             const secProtos = existing.secondaryProtos ?? []
             if (!secProtos.includes(droppedProto)) secProtos.push(droppedProto)
             existing.proto = primaryProto
             existing.secondaryProtos = secProtos.length > 0 ? secProtos : undefined
+            // 两侧分属不同进程（如 tcp=dnsmasq/udp=另一服务）：主 pid 只能描述一侧，
+            // 落选侧 PID 登记进 secondaryPids，UI 据此禁用行内终止（杀一半留一半）
+            const incomingPid = pid ? inum(pid) : undefined
+            if (incomingPid && existing.pid && incomingPid !== existing.pid) {
+              const secPids = existing.secondaryPids ?? []
+              if (!secPids.includes(incomingPid)) secPids.push(incomingPid)
+              existing.secondaryPids = secPids
+            }
             mergeAddrDisplay(existing, raw)
             backfillProc(existing, pid, pname)
           }
+          // recvq/sendq/iface 回填：优先保留有值行（与 pid 逻辑一致）
+          if (recvq && existing.recvq === undefined) existing.recvq = inum(recvq)
+          if (sendq && existing.sendq === undefined) existing.sendq = inum(sendq)
+          if (iface && existing.iface === undefined) existing.iface = iface !== '*' ? iface : undefined
         } else {
           portSeen.set(gKey, ports.length)
           ports.push({
@@ -385,6 +423,9 @@ export function parseMetricsRaw(raw: string, host?: string): ParsedMetrics | nul
             port: inum(port),
             pid: pid ? inum(pid) : undefined,
             proc: pname || undefined,
+            recvq: recvq ? inum(recvq) : undefined,
+            sendq: sendq ? inum(sendq) : undefined,
+            iface: iface && iface !== '*' ? iface : undefined,
           })
           if (ports.length >= 100) portsFull = true
         }
@@ -512,6 +553,25 @@ export function parseProcsRaw(raw: string): ProcessTopEntry[] {
     }
   }
   return procs
+}
+
+/**
+ * 端口条目关联进程属主：按 PID 从 PROCS_CMD 输出中回填 user 字段。
+ * 结构性上限：PROCS_CMD 只采 CPU TOP 50，常驻监听进程（sshd/nginx/
+ * systemd-resolved 等）几乎都是低 CPU 休眠态不入榜 → 多数行匹配不到属
+ * 正常，UI 列头/单元格 tooltip 必须标注这一口径，别让用户误读成「无属主」。
+ * 纯函数副作用（直接修改 PortEntry）——调用方在 parseProcsRaw 之后调用即可。
+ */
+export function annotatePortUsers(ports: PortEntry[], procs: { pid: number; user?: string }[]): void {
+  const pidUser = new Map<number, string>()
+  for (const p of procs) {
+    if (p.pid && p.user) pidUser.set(p.pid, p.user)
+  }
+  for (const port of ports) {
+    if (port.pid && pidUser.has(port.pid)) {
+      port.user = pidUser.get(port.pid)
+    }
+  }
 }
 
 /**

@@ -185,7 +185,7 @@
         <div v-if="monitor.current.ports.length === 0" class="section-empty">未检测到监听端口（ss 不可用时为空）</div>
         <table v-else class="port-table">
           <thead>
-            <tr><th>协议</th><th>端口</th><th>监听地址</th><th>进程</th><th class="port-act">操作</th></tr>
+            <tr><th>协议</th><th>端口</th><th>监听地址</th><th>Backlog</th><th>Recv</th><th>接口</th><th>进程</th><th title="按 PID 在 CPU TOP 50 进程内关联；休眠监听进程（sshd/nginx 等）常不入榜，空值不代表无属主">属主</th><th class="port-act">操作</th></tr>
           </thead>
           <tbody>
             <tr v-for="pt in pagedPorts" :key="`${pt.proto}:${pt.addr}:${pt.port}`">
@@ -197,6 +197,9 @@
                 <span v-if="hasAltAddr(pt) || hasAltProto(pt)" class="port-alt-hint" :title="altAddrTitle(pt)">⇄</span>
               </td>
               <td class="mono port-addr" :title="pt.addr">{{ pt.addr }}</td>
+              <td class="mono port-backlog"><span v-if="pt.proto === 'udp'" class="port-proc-none" title="UDP 无连接，不存在 listen backlog 语义">—</span><span v-else-if="pt.sendq !== undefined" :title="`listen backlog 上限：${pt.sendq}`">{{ pt.sendq }}</span><span v-else class="port-proc-none">—</span></td>
+              <td class="mono port-recvq"><span v-if="pt.proto === 'udp'" class="port-proc-none" title="UDP 的 Recv-Q 是排队字节数而非等待 accept 的连接数，不按连接口径展示">—</span><span v-else-if="pt.recvq !== undefined" :class="{ 'port-recvq-warn': pt.recvq > 0 }" :title="pt.recvq > 0 ? `当前积压 ${pt.recvq} 个连接等待 accept` : '接收队列空闲'">{{ pt.recvq }}</span><span v-else class="port-proc-none">—</span></td>
+              <td class="mono port-iface"><span v-if="pt.iface" :title="`监听接口：${pt.iface}`">{{ pt.iface }}</span><span v-else class="port-proc-none" title="全局监听（无特定接口）">—</span></td>
               <td class="port-proc">
                 <template v-if="pt.proc">
                   <span class="port-proc-name" :title="pt.proc">{{ pt.proc }}</span>
@@ -204,8 +207,10 @@
                 </template>
                 <span v-else class="port-proc-none">—</span>
               </td>
+              <td class="mono port-user"><span v-if="pt.user" :title="`进程属主：${pt.user}`">{{ pt.user }}</span><span v-else class="port-proc-none" title="属主仅在 CPU TOP 50 进程内按 PID 关联，休眠监听进程常不入榜">—</span></td>
               <td class="port-act">
-                <button v-if="pt.pid" class="proc-kill" title="终止监听进程" @click="confirmPortKill(pt)">终止</button>
+                <button v-if="pt.pid && !pt.secondaryPids" class="proc-kill" title="终止监听进程" @click="confirmPortKill(pt)">终止</button>
+                <span v-else-if="pt.secondaryPids" class="port-proc-none" title="该端口由多个进程分别监听（TCP/UDP 不同 PID），合并行不具备一键终止条件；请到进程表分别处置">—</span>
                 <span v-else class="port-proc-none" title="无权限获取监听进程 PID（需 root 或进程属主）">—</span>
               </td>
             </tr>
@@ -492,7 +497,7 @@ function secondaryProtoTitle(pt: PortEntry): string {
 function altAddrTitle(pt: PortEntry): string {
   const parts: string[] = []
   if (pt.secondaryAddrs && pt.secondaryAddrs.length > 0) {
-    parts.push('也监听: ' + pt.secondaryAddrs.join('  '))
+    parts.push('也监听：' + pt.secondaryAddrs.join('  '))
   }
   const protoTitle = secondaryProtoTitle(pt)
   if (protoTitle) parts.push(protoTitle)
@@ -1005,6 +1010,31 @@ const Sparkline = defineComponent({
 .port-act {
   width: 56px;
   text-align: center;
+}
+
+/* ── 端口扩展列：Backlog / Recv / 接口 / 属主 ── */
+.port-backlog,
+.port-recvq,
+.port-iface,
+.port-user {
+  white-space: nowrap;
+}
+.port-backlog,
+.port-recvq {
+  width: 56px;
+  text-align: right;
+}
+.port-iface {
+  width: 52px;
+}
+.port-user {
+  width: 72px;
+}
+.port-recvq-warn {
+  /* 告警前景用 status 令牌：dark/light/atelier 三档均有实值，随主题切换；
+     不得写 var(--color-warn, #hex) 这种未定义令牌 + 字面兑底（守卫测试钉表面） */
+  color: var(--status-warn-text);
+  font-weight: 600;
 }
 
 .port-svc {

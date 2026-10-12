@@ -3,7 +3,7 @@
  * fixture 取自真实 Linux（WSL2 Ubuntu 26.04）上 METRICS_CMD / PROCS_CMD 的输出
  */
 import { describe, expect, it } from 'vitest'
-import { parseMetricsRaw, parseProcsRaw, computeCpuDiff, describeMonitorError } from './server-monitor-core'
+import { parseMetricsRaw, parseProcsRaw, annotatePortUsers, computeCpuDiff, describeMonitorError, type PortEntry } from './server-monitor-core'
 
 const FIXTURE = [
   '===CKUN_MON===',
@@ -342,6 +342,60 @@ describe('parseMetricsRaw', () => {
     })
   })
 
+  it('新字段 recvq/sendq/iface 解析 → 端口条目附带 backlog、队列、接口信息', () => {
+    const raw = [
+      '===CKUN_MON===', 'STAT=1|2|3', 'MEM_TOTAL=100',
+      'PORT=tcp|0.0.0.0|22|1234|sshd|0|128|*',
+      'PORT=tcp|127.0.0.53%lo|53|567|systemd-resolve|3|511|lo',
+      'PORT=udp|0.0.0.0|68|89|dhclient|0|64|*',
+      '===END===',
+    ].join('\n')
+    const m = parseMetricsRaw(raw)
+    expect(m!.ports).toHaveLength(3)
+
+    const ssh = m!.ports.find(p => p.port === 22)!
+    expect(ssh.recvq).toBe(0)
+    expect(ssh.sendq).toBe(128)
+    expect(ssh.iface).toBeUndefined()  // '*' = 全局监听，不展示接口
+
+    const dns = m!.ports.find(p => p.port === 53)!
+    expect(dns.recvq).toBe(3)
+    expect(dns.sendq).toBe(511)
+    expect(dns.iface).toBe('lo')
+
+    const dhcp = m!.ports.find(p => p.port === 68)!
+    expect(dhcp.recvq).toBe(0)
+    expect(dhcp.sendq).toBe(64)
+  })
+
+  it('TCP+UDP 同端口分属不同进程 → 合并行登记 secondaryPids（UI 据此禁用终止）', () => {
+    const raw = [
+      '===CKUN_MON===', 'STAT=1|2|3', 'MEM_TOTAL=100',
+      'PORT=tcp|0.0.0.0|5353|111|avahi',
+      'PORT=udp|0.0.0.0|5353|222|other-daemon',
+      '===END===',
+    ].join('\n')
+    const m = parseMetricsRaw(raw)
+    expect(m!.ports).toHaveLength(1)
+    expect(m!.ports[0]).toMatchObject({
+      proto: 'tcp', pid: 111, secondaryProtos: ['udp'], secondaryPids: [222],
+    })
+  })
+
+  it('TCP+UDP 同端口同一进程（systemd-resolved 形态）→ 不登记 secondaryPids', () => {
+    const raw = [
+      '===CKUN_MON===', 'STAT=1|2|3', 'MEM_TOTAL=100',
+      'PORT=tcp|127.0.0.53|53|567|systemd-resolve|0|511|lo',
+      'PORT=udp|127.0.0.53|53|567|systemd-resolve|0|0|lo',
+      '===END===',
+    ].join('\n')
+    const m = parseMetricsRaw(raw)
+    expect(m!.ports).toHaveLength(1)
+    expect(m!.ports[0].secondaryPids).toBeUndefined()
+    // recvq/sendq 取先到的 TCP 侧（UDP 的 Send-Q 是缓冲区字节数，不是 backlog）
+    expect(m!.ports[0]).toMatchObject({ proto: 'tcp', recvq: 0, sendq: 511 })
+  })
+
   it('方括号 IPv6 带 scope（[fe80::1%eth0]）→ 剥离 scope 保留右括号，与非 scope 变体去重', () => {
     const raw = [
       '===CKUN_MON===', 'STAT=1|2|3', 'MEM_TOTAL=100',
@@ -537,5 +591,17 @@ describe('stop() 必须清空全部读数（含错误态）', () => {
     expect(mon.gpuHist).toEqual({})
     // 这条是补漏的那一项：lastError 不清，空态分支永远不可达
     expect(mon.lastError).toBe(null)
+  })
+})
+
+describe('annotatePortUsers', () => {
+  it('端口 PID 匹配到进程 → 回填属主名', () => {
+    const rawPorts: PortEntry[] = [
+      { proto: 'tcp', addr: '0.0.0.0', port: 22, pid: 1234, proc: 'sshd' },
+      { proto: 'tcp', addr: '0.0.0.0', port: 80 },
+    ]
+    annotatePortUsers(rawPorts, [{ pid: 1234, user: 'root' }])
+    expect(rawPorts[0].user).toBe('root')
+    expect(rawPorts[1].user).toBeUndefined()
   })
 })

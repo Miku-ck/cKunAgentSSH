@@ -144,7 +144,9 @@ run 结束后（审批兜底到期、SSE 迟到/断连、`settling` 在途窗口
 前端随同收敛：run 终态后「允许本次」与批量「全部批准本次」禁用
 （`utils/approval-scopes.ts` 的 `onceGrantBlocked`，超时角标改写为
 "本轮已结束，请在新的运行中重新确认"）；session（按会话键控）与 always（永久）
-跨 run 仍可消费，不受影响。plan 姿态侧的配对强制见文件头 2026-10-11 补记 ——
+跨 run 仍可消费，不受影响。残留窄缝：前置读库与 run 收尾清池不是事务（TOCTOU），
+读库在途期间 run 恰好终态时死键仍会落成 —— 取舍登记在 §7「once 终态 409 的
+TOCTOU 窗口」。plan 姿态侧的配对强制见文件头 2026-10-11 补记 ——
 `workflow_mode='plan'` 时服务端把 `permission_mode` 压成 `'plan'`，prompt 声称
 只读则 PlanModeGuard 必须激活，两者只发其一就是「亮的空开关」。
 
@@ -211,6 +213,8 @@ denied, auto_allowed, approved, released, revoked, answered, skipped}`（`audit.
 
 | **参数键归一** | 判定层与执行层曾读不同的参数键：`command_from_args` 按 `command→shell→cmd` 取**第一个非空**，而 `JobRunTool.execute(**kwargs)` 只读 `cmd` ⇒ `{"command":"echo DECOY","cmd":"rm -rf /var/log"}` 让 FilesystemGuard / PermissionGate / 计划模式 / Sandbox 底线 / 澄清五层只看得到 echo，真正跑的是删库。现在提取器把三键的值**全部**纳入判定（换行拼成多段，分类器逐段判），两条命令入口也各自拒绝歧义（job_run 显式报错、shell_exec 因位置签名天然 TypeError）。剩余面：`ToolRegistry.execute` 仍不对照 `tool.parameters` 校验 args ⇒ 非命令类工具的多余键仍被静默接收。本轮实测内置工具**没有一处**读取未声明的参数键（脚本比对各类 `kwargs.get("x")` 与自身 `parameters.properties` 的差集，0 例），所以多余键今天改变不了执行内容 —— 但没有锁：这条不变量不在测试里，未来加 `**kwargs` 工具读新键就可能破 | 全局 schema 校验会一次改掉所有工具对模型脏参数的容忍度（模型今天多填 `explanation`/`purpose` 仍能跑通），收紧属于产品口径决策，不该夹在审批绕过的修复里 | `test_command_key_decoy_bypass.py`：14 条用例里 10 条在修复前红（含「整条审批链对 decoy 形状零拦截」这条端到端），另 4 条是「行为不变」锁（单键调用、重复同值、正常 cmd 空值报错、shell_exec 位置签名）修复前后都绿；`_COMMAND_ARG_KEYS` 是五层唯一的命令键来源，Sandbox 底线与 gate 的注释都指向它 |
 | **裁决同源** | 自动审批（permission_mode="auto"）的 LLM 裁决器与主 Agent 用**同一个模型配置**（`ctx.llm_base_url/api_key/model`）：提示注入若能操纵主模型，原则上也能以相近方式影响裁决模型 | 裁决上下文与主循环隔离（只见命令原文/风险理由/任务摘要，**不含工具输出**——注入主要经由工具输出进入），且 fail-closed（超时/异常/输出不合约定/总闸关闭一律回退弹卡）+ 不越 hardline / prod 预授权 / 用户 run 内显式拒绝三道既有边界；换独立模型做裁决的收益未证实，还多一套模型配置与运维面。登记此条是为了不把"模型审模型"误读成双保险 | dangerous 命令仍必经人批；prod 仅预授权；env 总闸 `CKUN_AGENT_DISABLE_AUTO_APPROVE` 可一键退回纯手动（优先级压过设置页开关） |
+
+| **once 终态 409 的 TOCTOU 窗口** | grant 的 run 状态前置校验经 `asyncio.to_thread(db.get_agent_run)` 读库：读库在途期间 run 恰好收尾清池，返回后落库的 once 键仍是死键；同理 `release-run` 端点已清池而 DB 行还是 `running`，校验也放行 | 读库返回到 `pg.grant` 之间无 await，事件循环单线程上不会与 cleanup 交错 —— 窗口只剩「读库在途」那一小段。彻底闭合需要活 run 注册表与 `cleanup_run_once` 同源摘挂（driver 防御清理 / ReflectionRein 终态 / release-run 三条通路都要接线），收益/成本不成立 | 死键只是永不被消费、不产生错误执行（once 消费时 PermissionGate 本就按 run 池查表，不扩权）；前端 `onceGrantBlocked` 先行压制绝大多数迟到点击，剩下的只有 SSE 断连与 run 终态赛跑的窄缝 |
 
 ## 8. 改判定规则要跑什么
 

@@ -25,7 +25,12 @@ from routes.agent import PermissionGrantRequest, grant_tool_permission
 
 @pytest.fixture
 def gate_env(monkeypatch):
-    """屏蔽 allowlist.txt 宿主文件 IO 与审计落库（本文件只关心端点裁决本身）。"""
+    """屏蔽 allowlist.txt 宿主文件 IO 与审计落库（本文件只关心端点裁决本身）。
+
+    teardown 清掉本文件落进进程级 PermissionGate 单例的授权：once 假 run 键、
+    conv-1 的 session 键、always 的永久内存集——全量跑今天不串味，但同文件
+    后续加断言或后续测试复用同名工具时会被这些残留误判「已授权」。
+    """
     monkeypatch.setattr(PermissionGate, "_save_permanent_allowlist", lambda self: None)
     monkeypatch.setattr(PermissionGate, "_load_permanent_allowlist", lambda self: set())
 
@@ -33,6 +38,13 @@ def gate_env(monkeypatch):
         return None
 
     monkeypatch.setattr(agent_mod, "append_record_async", _noop_audit)
+    yield
+    from agent.harness.reins import _get_global_permission_gate_sync
+    pg = _get_global_permission_gate_sync()
+    for run_id in ("run-live", "run-x"):
+        pg.cleanup_run_once(run_id)
+    # 不带 command：撤销 shell_exec 的工具级 + 全部命令绑定键（session/always 同源清）
+    pg.revoke("shell_exec")
 
 
 def _patch_run(monkeypatch, row):

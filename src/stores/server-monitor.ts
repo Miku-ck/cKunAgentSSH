@@ -17,6 +17,7 @@ import {
   PROCS_CMD,
   parseMetricsRaw,
   parseProcsRaw,
+  annotatePortUsers,
   computeCpuDiff,
   describeMonitorError,
   type ServerMetrics,
@@ -160,6 +161,7 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
       prevStat = parsed.rawStat
       const { rawStat: _discard, ...rest } = parsed
       current.value = { ...rest, sshId: session.id, cpu, ts: Date.now() }
+      annotatePortUsers(current.value.ports, procs.value)
       errorCount.value = 0
       lastError.value = null
       pushHistory(cpuHistory.value, cpu.used)
@@ -210,6 +212,9 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
       )
       if (activeSshId !== session.id) return // 采样期间切换了会话
       procs.value = parseProcsRaw(res.stdout)
+      // 属主关联不只挂 metrics tick：进程表刷新后立即回填，否则属主列最长
+      // 滞后一个采样周期（metrics 比 procs 快，新回填的 PID→user 要等下轮）
+      if (current.value) annotatePortUsers(current.value.ports, procs.value)
     } catch {
       // 静默：进程表失败不干扰指标面板，下一轮 60s 自然重试
     } finally {
