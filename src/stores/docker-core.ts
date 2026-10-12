@@ -172,16 +172,39 @@ export function parsePs(raw: string): ContainerRow[] {
   })
 }
 
+/**
+ * docker 各版本给出的 ID 形状不一：新版 CLI 是 12 位短 ID，老版 CLI 与 `{{json .}}`
+ * 直出结构体时是完整 `sha256:<64>`（或裸 64 位十六进制）。统一归一成 12 位短 ID：
+ * 它既是展示列的稳定宽度，也是能直接交给 `docker rmi` 的合法句柄 —— 原先裸
+ * `slice(0, 12)` 遇到带前缀的形态会截出 `sha256:8a1f2` 这种谁也不认识的引用，
+ * 删悬空镜像时必然报 No such image。非十六进制的值（`<none>`）原样透传。
+ */
+export function shortId(raw: unknown): string {
+  const s = String(raw ?? '').trim()
+  const i = s.lastIndexOf(':')
+  const tail = i >= 0 ? s.slice(i + 1) : s
+  return (/^[0-9a-f]{12,}$/i.test(tail) ? tail : s).slice(0, 12)
+}
+
 export function parseImages(raw: string): ImageRow[] {
   return rows(raw, 5).map(f => ({
-    id: f[0].slice(0, 12), repo: f[1] || '<none>', tag: f[2] || '<none>',
+    id: shortId(f[0]), repo: f[1] || '<none>', tag: f[2] || '<none>',
     size: f[3] || '', created: f[4] || '',
   }))
 }
 
-/** 镜像主标识（对齐新版 docker images 的 IMAGE 列）：悬空镜像无 repo:tag 时回落到短 ID */
+/**
+ * 镜像主标识（对齐新版 docker images 的 IMAGE 列）：悬空镜像无 repo:tag 时回落到短 ID。
+ * repo 与 tag 任一为 `<none>` 都要回落 —— 按摘要拉取（`nginx@sha256:…`）的那一行
+ * 是 repo 有名、tag 为 `<none>`，此时 `repo:<none>` 既不是可删的引用，也没有信息量。
+ */
 export function imageLabel(im: ImageRow): string {
-  return im.repo === '<none>' ? im.id : `${im.repo}:${im.tag}`
+  return im.repo === '<none>' || im.tag === '<none>' ? im.id : `${im.repo}:${im.tag}`
+}
+
+/** 镜像行的过滤串：展示句柄 + 原始 repo/tag 都算命中（回落短 ID 后仍能按仓库名搜到） */
+export function imageHaystack(im: ImageRow): string {
+  return `${imageLabel(im)} ${im.repo}:${im.tag}`.toLowerCase()
 }
 
 /**
@@ -253,6 +276,17 @@ export function humanSize(v: unknown): string | undefined {
   return (i === 0 ? x.toFixed(0) : x.toFixed(1)) + units[i]
 }
 
+/**
+ * 卷/网络标签列的一级线索：compose 项目名优先，其次标签条数，无标签 → 「—」。
+ * 两类资源的这一列形状相同，判据只留这一处（视图侧曾各抄一份完全一样的实现）。
+ */
+export function labelHint(labels?: Record<string, string>): string {
+  const proj = labels?.['com.docker.compose.project']
+  if (proj) return 'compose:' + proj
+  const n = labels ? Object.keys(labels).length : 0
+  return n ? `${n} 项` : '—'
+}
+
 export function parseVolumes(raw: string): VolumeRow[] {
   const json = jsonlRows(raw)
   if (json.length) {
@@ -285,7 +319,7 @@ export function parseNetworks(raw: string): NetworkRow[] {
   if (json.length) {
     return json.map(o => {
       const r: NetworkRow = {
-        id: String(o.ID || '').slice(0, 12),
+        id: shortId(o.ID),
         driver: String(o.Driver || ''),
         name: String(o.Name || ''),
         scope: String(o.Scope || ''),
@@ -297,7 +331,7 @@ export function parseNetworks(raw: string): NetworkRow[] {
   }
   return rows(raw, 4).map(f => {
     const r: NetworkRow = {
-      id: f[0].slice(0, 12), driver: f[1] || '', name: f[2] || '', scope: f[3] || '',
+      id: shortId(f[0]), driver: f[1] || '', name: f[2] || '', scope: f[3] || '',
     }
     const lb = parseLabels(f[4])
     if (Object.keys(lb).length) r.labels = lb
@@ -353,7 +387,7 @@ export function parseNetworkInspect(raw: string): NetworkInspect | null {
   }))
   return {
     name: String(v.Name || ''),
-    id: String(v.Id || '').slice(0, 12),
+    id: shortId(v.Id),
     driver: String(v.Driver || ''),
     scope: String(v.Scope || ''),
     internal: !!v.Internal,

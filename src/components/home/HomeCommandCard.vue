@@ -203,8 +203,10 @@ async function send() {
 }
 
 // 草稿是共享态（store 的 sharedDraft）：侧栏那边打字/清空也会落到这份 textarea，
-// 高度与行线要跟着重算 —— 否则切回首页时内容被 overflow-y:hidden 裁掉下半截。
-watch(draft, () => nextTick(grow))
+// 高度与行线要跟着重算 —— 否则切回首页时内容被 overflow-y:hidden 裁掉半截。
+// 与 SideChatPanel 的 autoResize 同一条口径带 immediate：本组件虽是 v-show 常驻，
+// 但「问 AI」预填若发生在挂载之前，只守变化的 watch 就永远不补这一次高度。
+watch(draft, () => nextTick(grow), { immediate: true })
 
 function onKeydown(e: KeyboardEvent) {
   if (e.key !== 'Enter') return

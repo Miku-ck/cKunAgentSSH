@@ -111,14 +111,16 @@
       <!-- 进程（CPU）：ps 按 CPU 降序；GPU 占用进程已剔除至下方「进程（GPU）」表 -->
       <div class="dash-section">
         <div class="section-title">
-          <span>进程（CPU）<span class="section-sub">共 {{ monitor.procs.length }} 个 · 每 60 秒刷新</span></span>
+          <span>进程（CPU）<span class="section-sub">共 {{ procList.length }} 个 · 每 60 秒刷新</span></span>
           <span v-if="totalProcPages > 1" class="port-pager">
             <button class="port-page-btn" :disabled="procPage === 0" title="上一页" @click="procPage--">‹</button>
             <span class="port-page-ind">{{ procPage + 1 }}/{{ totalProcPages }}</span>
             <button class="port-page-btn" :disabled="procPage >= totalProcPages - 1" title="下一页" @click="procPage++">›</button>
           </span>
         </div>
-        <div v-if="monitor.procs.length === 0" class="section-empty">未检测到进程信息</div>
+        <!-- 计数与空态都跟表体同源（procList）：procs 全是 GPU 进程时这张表确实一行不渲染，
+             但那不是「没检测到进程」，两件事别写成同一句话 -->
+        <div v-if="procList.length === 0" class="section-empty">{{ monitor.procs.length ? 'CPU 前列进程均已归入下方「进程（GPU）」表' : '未检测到进程信息' }}</div>
         <table v-else class="proc-table">
           <thead>
             <tr><th>PID</th><th>名称</th><th>用户</th><th>CPU %</th><th>内存</th><th>运行</th><th>状态</th><th class="proc-act">操作</th></tr>
@@ -277,6 +279,7 @@ import { computed, defineComponent, h, ref, watch, type Ref } from 'vue'
 import { useServerMonitorStore } from '@/stores/server-monitor'
 import { useSSHStore } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
+import { toFriendlyMessage } from '@/api/client'
 import { loadChartMax } from '@/utils/nvtop-scale'
 import GpuNvtopPanel from '@/components/ssh/GpuNvtopPanel.vue'
 import type { SSHConnection } from '@/stores/ssh'
@@ -315,16 +318,17 @@ async function handleConnect(conn: SSHConnection): Promise<void> {
   connecting.value = true
   pendingConnId.value = conn.id
   try {
-    await sshStore.connectRemote(conn.id, 80, 24)
-    sshStore.switchSession(
-      sshStore.sessions.find(s => s.type === 'remote' && s.connectionId === conn.id)?.id || '',
-    )
+    // 与 DockerView 同一条口径：用 connectRemote 返回的会话 id 切过去，不按 connectionId
+    // 回查 —— 同一主机已有会话时 find 命中的是最早那条，采样会挂到旧会话上，
+    // 新开这条白占一个远端 PTY。
+    const newId = await sshStore.connectRemote(conn.id, 80, 24)
+    sshStore.switchSession(newId)
     showConnPicker.value = false
     useToastStore().success(`已连接 ${conn.name}`)
   } catch (err: unknown) {
-    useToastStore().error(
-      err instanceof Error ? err.message : '连接失败',
-    )
+    // S0-24：握手/认证失败抛的是 SSHError transport 或 Electron 信封，
+    // 原样 err.message 会把 getaddrinfo、Cannot parse privateKey 这类技术串端给用户。
+    useToastStore().error(toFriendlyMessage(err, 'SSH 连接失败'))
   } finally {
     connecting.value = false
     pendingConnId.value = ''
@@ -369,11 +373,23 @@ async function handleKill(signal: number): Promise<void> {
       useToastStore().success(`已发送 SIG${signal} 到 PID ${target.pid}`)
       killDialog.value.visible = false
     } else {
-      const msg = (r.stderr || r.stdout || `exit code ${r.code}`).split('\n')[0].slice(0, 120)
-      useToastStore().error(msg || '终止失败')
+      // 远端 kill 的 stderr 是英文技术串（`kill: (1234): Operation not permitted`），
+      // 原样塞进 toast 违渲染侧隐藏技术信息的口径（S0-24 同一族）。而这一类失败有确定成因：
+      // 端口表里的 pid 可能是 `sudo -n ss -ltnp` 才看得见的 root 监听进程，kill 却走登录
+      // 用户的 exec 通道 ⇒ 必然 EPERM。报成因，不翻译原文。
+      const raw = (r.stderr || r.stdout || `exit code ${r.code}`).split('\n')[0].slice(0, 120)
+      const denied = /not permitted|permission denied|EPERM/i.test(raw)
+      useToastStore().error(
+        denied
+          ? '终止失败：该进程不属于当前登录用户（常见于 root 持有的监听进程），需 root 权限处理'
+          : '终止失败',
+        6000,
+        import.meta.env.DEV ? { details: raw } : undefined,
+      )
     }
   } catch (err: unknown) {
-    useToastStore().error(err instanceof Error ? err.message : '终止进程失败')
+    // 抛的是 SSHError transport（或 Electron 信封），原样 err.message 等于把内部通道名端给用户
+    useToastStore().error(toFriendlyMessage(err, '终止进程失败'))
   } finally {
     killing.value = false
   }

@@ -62,6 +62,7 @@
 <script setup lang="ts">
 import { useAgentStore } from '@/stores/agent'
 import { useSshAiStore } from '@/stores/ssh-ai'
+import type { NavPage } from '@/composables/useSshNavigation'
 
 const api = window.electronAPI
 
@@ -69,8 +70,8 @@ const agent = useAgentStore()
 const sshAi = useSshAiStore()
 
 defineProps<{
-  /** 当前激活的功能页，对应图标高亮 */
-  activePage: 'home' | 'remote-mgr' | 'sftp' | 'audit' | 'ai' | 'schedules' | 'dashboard' | 'tunnels' | 'docker'
+  /** 当前激活的功能页，对应图标高亮（'ai' 是面板开关态，不在独立页清单里） */
+  activePage: NavPage | 'ai'
 }>()
 
 const emit = defineEmits<{

@@ -5,11 +5,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   parsePs, parseImages, parseVolumes, parseNetworks, parseLogs, parseLabels,
-  parseVolumeInspect, parseNetworkInspect, humanSize,
+  parseVolumeInspect, parseNetworkInspect, humanSize, shortId, labelHint,
+  imageLabel, imageHaystack,
   stateFromStatus, sq, dockerErrorFromResult, describeThrownDockerError,
   volumeRmCmd, networkRmCmd, volumePruneCmd, networkPruneCmd,
   volumeInspectCmd, networkInspectCmd,
   VOLUMES_CMD, NETWORKS_CMD,
+  type ImageRow,
 } from './docker-core'
 
 const T = '\t'
@@ -70,11 +72,19 @@ describe('parsePs', () => {
 })
 
 describe('parseImages / parseVolumes / parseNetworks', () => {
-  it('images 截短 ID 到 12 位', () => {
+  it('images 的 ID 归一为 12 位短 ID（sha256: 前缀不能被算进长度）', () => {
     const raw = ['sha256:8a1f2c3d4e5f6a7b', 'nginx', '1.27-alpine', '62.1MB', '2 weeks ago'].join(T)
     const [im] = parseImages(raw)
-    expect(im.id).toBe('sha256:8a1f2c3'.slice(0, 12))
+    // 旧实现是裸 slice(0,12) → 'sha256:8a1f2'：既不是合法引用也没有可读性，
+    // 删悬空镜像时 `docker rmi sha256:8a1f2` 必然报 No such image。
+    expect(im.id).toBe('8a1f2c3d4e5f')
     expect(im).toMatchObject({ repo: 'nginx', tag: '1.27-alpine', size: '62.1MB' })
+  })
+  it('已是短 ID / 裸 64 位十六进制都归到同一形状', () => {
+    const short = ['8a1f2c3d4e5f', 'nginx', 'latest', '1MB', 'now'].join(T)
+    expect(parseImages(short)[0].id).toBe('8a1f2c3d4e5f')
+    const bare = ['8a1f2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b', 'x', 'y', '1MB', 'now'].join(T)
+    expect(parseImages(bare)[0].id).toBe('8a1f2c3d4e5f')
   })
   it('volumes 命令禁用 --verbose（老版本 Docker 不识别该 flag 直接报 unknown flag）', () => {
     // 老版本 (<23) docker volume ls 没有 --verbose，参数解析阶段就失败，
@@ -272,6 +282,45 @@ describe('dockerErrorFromResult', () => {
   })
   it('stderr 优先于合并 stdout（两者都有时取 stderr）', () => {
     expect(dockerErrorFromResult('permission denied while trying to connect to the Docker daemon socket', 1, 'irrelevant log')?.code).toBe('DOCKER_PERM')
+  })
+})
+
+describe('shortId / imageLabel / imageHaystack', () => {
+  it('shortId：带算法前缀、裸长十六进制、已截短三种形态都落到 12 位', () => {
+    expect(shortId('sha256:8a1f2c3d4e5f6a7b8c9d')).toBe('8a1f2c3d4e5f')
+    expect(shortId('8a1f2c3d4e5f6a7b8c9d')).toBe('8a1f2c3d4e5f')
+    expect(shortId('8a1f2c3d4e5f')).toBe('8a1f2c3d4e5f')
+  })
+  it('shortId：非十六进制的值原样透传，不当摘要剥（<none> 不许被裁）', () => {
+    expect(shortId('<none>')).toBe('<none>')
+    expect(shortId(null)).toBe('')
+    expect(shortId(undefined)).toBe('')
+  })
+  it('imageLabel：repo 与 tag 任一为 <none> 都回落到可删的短 ID', () => {
+    const mk = (repo: string, tag: string): ImageRow =>
+      ({ id: '8a1f2c3d4e5f', repo, tag, size: '', created: '' })
+    expect(imageLabel(mk('<none>', '<none>'))).toBe('8a1f2c3d4e5f')
+    // 按摘要拉取的行：repo 有名、Tag 是 <none>。原实现只判 repo，于是
+    // imageLabel 交出 'nginx:<none>' —— 那不是合法引用，docker rmi 必失败。
+    expect(imageLabel(mk('nginx', '<none>'))).toBe('8a1f2c3d4e5f')
+    expect(imageLabel(mk('harbor.ckun.io/migrate', 'v2.4.0'))).toBe('harbor.ckun.io/migrate:v2.4.0')
+  })
+  it('imageHaystack：回落到短 ID 的行仍按仓库名搜得到', () => {
+    const im: ImageRow = { id: '8a1f2c3d4e5f', repo: 'nginx', tag: '<none>', size: '', created: '' }
+    expect(imageHaystack(im)).toContain('nginx')
+    expect(imageHaystack(im)).toContain('8a1f2c3d4e5f')
+    expect(imageHaystack(im)).toContain('nginx:<none>')
+  })
+})
+
+describe('labelHint', () => {
+  it('compose 项目名优先于条数', () => {
+    expect(labelHint({ 'com.docker.compose.project': 'app', other: '1' })).toBe('compose:app')
+  })
+  it('无 compose 键给条数，空/缺失给「—」', () => {
+    expect(labelHint({ a: '1', b: '2' })).toBe('2 项')
+    expect(labelHint({})).toBe('—')
+    expect(labelHint(undefined)).toBe('—')
   })
 })
 

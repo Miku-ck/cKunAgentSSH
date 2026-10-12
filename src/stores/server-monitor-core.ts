@@ -53,7 +53,8 @@ export interface PortEntry {
   pid?: number
   /** 监听进程名 */
   proc?: string
-  /** 同一端口的其他监听地址（通配符折叠后：主显示 IPv4，IPv6 地址收于此。IPv6 去括号便于展示） */
+  /** 同一端口的其他监听地址（通配符折叠后：主显示 IPv4，IPv6 收于此，原样保留方括号 `[::]`
+   *  —— 与测试和 wildDisplay 一致，去括号反而看不出那是 IPv6 通配） */
   secondaryAddrs?: string[]
 }
 /** 单块 GPU 快照（nvidia-smi 采集）；null = 该字段远端返回 N/A（如被动散热卡无风扇、WSL 无功率） */

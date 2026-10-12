@@ -11,6 +11,14 @@ import { extractSSHError, isRetryable } from '@/ssh-error-types'
 /** 本地终端列表常量（供标签条 ＋ 菜单渲染，动作仍走本文件的 openLocalShell） */
 export const LOCAL_SHELLS = ['PowerShell', 'CMD', 'Git Bash', 'WSL']
 
+/**
+ * 独立功能页的唯一清单。此前 TitleBar 的 activePage prop 手抄了同一份联合类型，
+ * 加一页（Docker 就是最近一次）得同时改两处 —— 漏一处的表现是图标永远不亮，
+ * 类型检查却过得去（多出来的字面量只是没人传）。现在两处共用这一个源头。
+ */
+export type NavPage =
+  'home' | 'remote-mgr' | 'sftp' | 'audit' | 'schedules' | 'dashboard' | 'tunnels' | 'docker'
+
 /** 远程连接防抖间隔 */
 const CONNECT_DEBOUNCE_MS = 2000
 
@@ -32,7 +40,7 @@ export function useSshNavigation(
    * 标签该不该点亮看 homeTabActive —— 独立页面盖上来时它仍为 true。
    */
   const showHome = ref(true)
-  const activeNavPage = ref<'home' | 'remote-mgr' | 'sftp' | 'audit' | 'schedules' | 'dashboard' | 'tunnels' | 'docker'>('home')
+  const activeNavPage = ref<NavPage>('home')
   const showModal = ref(false)
   const editingConnection = ref<SSHConnection | undefined>(undefined)
 
@@ -64,6 +72,23 @@ export function useSshNavigation(
     activeNavPage.value = 'home'
   }
 
+  /**
+   * 独立页的统一开合。此前 remote-mgr / audit / schedules / dashboard / tunnels /
+   * docker 各抄一份完全相同的九行，只差页名 —— 于是「切到独立页要收起 AI 面板」
+   * 这类口径一旦改动就得同时改六处，漏一处就是页面之间行为不一致（新增第 7 页时
+   * 照着第 6 份抄，抄的是它的偏差）。判据只留这一处。
+   */
+  function togglePage(page: Exclude<NavPage, 'home'>): void {
+    if (activeNavPage.value === page) {
+      goHome()
+      return
+    }
+    showHome.value = true
+    activeNavPage.value = page
+    // 切到独立页面时自动收起 AI 助手面板（点 AI 图标可重新展开）
+    sshAiStore.closeAiPanel()
+  }
+
   function activateTerminal(sessionId: string) {
     showHome.value = false
     activeNavPage.value = 'home'
@@ -78,26 +103,13 @@ export function useSshNavigation(
     focusTimers.push(tid)
   }
 
-  function toggleRemoteManager() {
-    if (activeNavPage.value === 'remote-mgr') {
-      goHome()
-    } else {
-      showHome.value = true
-      activeNavPage.value = 'remote-mgr'
-      // 切到独立页面时自动收起 AI 助手面板（点 AI 图标可重新展开）
-      sshAiStore.closeAiPanel()
-    }
-  }
+  const toggleRemoteManager = (): void => togglePage('remote-mgr')
 
-  async function toggleSftp() {
-    if (activeNavPage.value === 'sftp') {
-      goHome()
-      return
-    }
-    showHome.value = true
-    activeNavPage.value = 'sftp'
-    // 切到独立页面时自动收起 AI 助手面板（点 AI 图标可重新展开）
-    sshAiStore.closeAiPanel()
+  /** SFTP 页的开合同 togglePage，之后再多做一步「复用活动远程会话把 SFTP 拉起来」 */
+  async function toggleSftp(): Promise<void> {
+    const leaving = activeNavPage.value === 'sftp'
+    togglePage('sftp')
+    if (leaving) return
 
     // 已有 SFTP 连接时无需重复连接
     if (sftpStore.online) return
@@ -124,60 +136,11 @@ export function useSshNavigation(
     sshAiStore.toggleAiPanel()
   }
 
-  function toggleAudit() {
-    if (activeNavPage.value === 'audit') {
-      goHome()
-    } else {
-      showHome.value = true
-      activeNavPage.value = 'audit'
-      // 切到独立页面时自动收起 AI 助手面板（点 AI 图标可重新展开）
-      sshAiStore.closeAiPanel()
-    }
-  }
-
-  function toggleSchedules() {
-    if (activeNavPage.value === 'schedules') {
-      goHome()
-    } else {
-      showHome.value = true
-      activeNavPage.value = 'schedules'
-      // 切到独立页面时自动收起 AI 助手面板（点 AI 图标可重新展开）
-      sshAiStore.closeAiPanel()
-    }
-  }
-
-  function toggleDashboard() {
-    if (activeNavPage.value === 'dashboard') {
-      goHome()
-    } else {
-      showHome.value = true
-      activeNavPage.value = 'dashboard'
-      // 切到独立页面时自动收起 AI 助手面板（点 AI 图标可重新展开）
-      sshAiStore.closeAiPanel()
-    }
-  }
-
-  function toggleTunnels() {
-    if (activeNavPage.value === 'tunnels') {
-      goHome()
-    } else {
-      showHome.value = true
-      activeNavPage.value = 'tunnels'
-      // 切到独立页面时自动收起 AI 助手面板（点 AI 图标可重新展开）
-      sshAiStore.closeAiPanel()
-    }
-  }
-
-  function toggleDocker() {
-    if (activeNavPage.value === 'docker') {
-      goHome()
-    } else {
-      showHome.value = true
-      activeNavPage.value = 'docker'
-      // 切到独立页面时自动收起 AI 助手面板（点 AI 图标可重新展开）
-      sshAiStore.closeAiPanel()
-    }
-  }
+  const toggleAudit = (): void => togglePage('audit')
+  const toggleSchedules = (): void => togglePage('schedules')
+  const toggleDashboard = (): void => togglePage('dashboard')
+  const toggleTunnels = (): void => togglePage('tunnels')
+  const toggleDocker = (): void => togglePage('docker')
 
   // 「安全接入」已并入远程管理页（RemoteManager 的 TLS 网关分段），不再有独立导航页
 

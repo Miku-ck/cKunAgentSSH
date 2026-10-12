@@ -248,7 +248,12 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
     }, RETRY_INTERVAL_MS)
   }
 
-  /** 开始监控指定远程会话（会话变化时由调用方 stop 后重新 start） */
+  /**
+   * 开始监控指定远程会话。切换会话**不需要**调用方先 stop：本函数自己按
+   * retainActive() → stop() 的顺序保留上一会话的历史快照再恢复目标会话的。
+   * 调用方抢先 stop() 会让 activeSshId 提前清空，retainActive 无从归档 ——
+   * 整套快照保留机制静默失效，表现为切 tab 后 sparkline 从头画。
+   */
   function start(sshId: string) {
     const session = sshStore.sessions.find(s => s.id === sshId)
     if (!session || session.type !== 'remote') return

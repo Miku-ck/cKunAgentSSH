@@ -38,7 +38,7 @@
             v-if="tab === 'volumes'"
             class="btn btn-danger-ghost"
             :disabled="!!busy || !volumes.length"
-            title="删除所有未被容器引用的卷（docker volume prune -f）"
+            title="删除未被容器引用的卷（docker volume prune -f）；Docker 23+ 默认只清匿名卷，具名卷需逐条删除"
             @click="doPruneVolumes"
           >
             <svg v-if="busy === 'prune:volumes'" class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="12" r="9" stroke-opacity="0.25"/><path d="M12 3a9 9 0 0 1 9 9" stroke-linecap="round"/></svg>
@@ -105,7 +105,7 @@
                     <svg v-if="busy === c.id" class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9" stroke-opacity="0.25"/><path d="M12 3a9 9 0 0 1 9 9" stroke-linecap="round"/></svg>
                     <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="6 4 20 12 6 20 6 4"/></svg>
                   </button>
-                  <button v-if="c.state === 'running'" class="icon-btn act-exec" title="exec 进入终端（新标签）" @click="doExec(c)">
+                  <button v-if="c.state === 'running'" class="icon-btn act-exec" title="exec 进入终端（新标签）" :disabled="busy === c.id" @click="doExec(c)">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
                   </button>
                   <button class="icon-btn act-restart" title="重启" :disabled="busy === c.id" @click="doRestart(c)">
@@ -127,14 +127,14 @@
               <colgroup><col style="width:50%"><col style="width:20%"><col style="width:18%"><col style="width:12%"></colgroup>
               <thead><tr><th>镜像</th><th>镜像 ID</th><th>内容大小</th><th>操作</th></tr></thead>
               <tbody>
-                <tr v-for="im in filteredImages" :key="im.id">
+                <tr v-for="im in filteredImages" :key="imageLabel(im)">
                   <td class="mono" :title="imageLabel(im)">{{ imageLabel(im) }}</td>
                   <td class="mono muted" :title="im.id">{{ im.id }}</td>
                   <td class="mono">{{ im.size }}</td>
                   <td>
                     <span class="c-acts">
-                      <button class="icon-btn act-del" title="删除镜像" :disabled="busy === im.id" @click="doRemoveImage(im)">
-                        <svg v-if="busy === im.id" class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9" stroke-opacity="0.25"/><path d="M12 3a9 9 0 0 1 9 9" stroke-linecap="round"/></svg>
+                      <button class="icon-btn act-del" title="删除镜像" :disabled="busy === imageLabel(im)" @click="doRemoveImage(im)">
+                        <svg v-if="busy === imageLabel(im)" class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9" stroke-opacity="0.25"/><path d="M12 3a9 9 0 0 1 9 9" stroke-linecap="round"/></svg>
                         <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
                       </button>
                     </span>
@@ -161,7 +161,7 @@
                   <td class="mono" :title="v.name">{{ v.name }}</td>
                   <td class="mono">{{ v.size || '—' }}</td>
                   <td class="use-hint" :class="volumeUseHint(v).tone">{{ volumeUseHint(v).text }}</td>
-                  <td class="mono label-hint" :title="v.labels ? Object.entries(v.labels).map(([k, val]) => k + '=' + val).join('\n') : ''">{{ volumeLabelHint(v) }}</td>
+                  <td class="mono label-hint" :title="v.labels ? Object.entries(v.labels).map(([k, val]) => k + '=' + val).join('\n') : ''">{{ labelHint(v.labels) }}</td>
                   <td>
                     <span class="c-acts" @click.stop>
                       <button class="icon-btn act-del" title="删除卷" :disabled="busy === 'v:' + v.name" @click="doRemoveVolume(v)">
@@ -192,7 +192,7 @@
                   <td class="mono">{{ n.driver }}</td>
                   <td class="mono" :title="n.name">{{ n.name }}</td>
                   <td class="muted">{{ n.scope }}</td>
-                  <td class="mono label-hint" :title="n.labels ? Object.entries(n.labels).map(([k, val]) => k + '=' + val).join('\n') : ''">{{ networkLabelHint(n) }}</td>
+                  <td class="mono label-hint" :title="n.labels ? Object.entries(n.labels).map(([k, val]) => k + '=' + val).join('\n') : ''">{{ labelHint(n.labels) }}</td>
                   <td>
                     <span class="c-acts" @click.stop>
                       <button class="icon-btn act-del" title="删除网络" :disabled="busy === 'n:' + n.name" @click="doRemoveNetwork(n)">
@@ -444,6 +444,7 @@
 // 定位：依附已连接的 SSH 会话，经 sshExec 在其远程主机上真执行 docker 命令。
 // 命令构造/解析/错误归类委托 docker-core.ts；本页只做 sshExec 编排与状态管理。
 import { computed, nextTick, ref, watch, onUnmounted } from 'vue'
+import { toFriendlyMessage } from '@/api/client'
 import { useSSHStore, type SSHConnection } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
@@ -452,7 +453,8 @@ import {
   logsCmd, startCmd, stopCmd, restartCmd, rmCmd, rmiCmd, execCmd,
   volumeRmCmd, networkRmCmd, volumePruneCmd, networkPruneCmd,
   volumeInspectCmd, networkInspectCmd,
-  parsePs, parseImages, parseVolumes, parseNetworks, parseLogs, imageLabel,
+  parsePs, parseImages, parseVolumes, parseNetworks, parseLogs, imageLabel, imageHaystack,
+  labelHint,
   parseVolumeInspect, parseNetworkInspect, humanSize,
   dockerErrorFromResult, describeThrownDockerError,
   type ContainerRow, type ImageRow, type VolumeRow, type NetworkRow, type DockerError,
@@ -502,13 +504,16 @@ async function handleConnect(conn: SSHConnection) {
   connecting.value = true
   pendingConnId.value = conn.id
   try {
-    await sshStore.connectRemote(conn.id, 80, 24)
-    const s = sshStore.sessions.find(x => x.type === 'remote' && x.connectionId === conn.id)
-    if (s) targetId.value = s.id
+    // 用 connectRemote 返回的那条会话 id，不按 connectionId 回查：同一主机已有会话时
+    // find 命中的是**最早那条**，目标会指回旧会话，而新开这条没人认领（多占一个远端
+    // PTY，还挂在终端标签列表里）。
+    targetId.value = await sshStore.connectRemote(conn.id, 80, 24)
     showConnPicker.value = false
     toast.success(`已连接 ${conn.name}`)
   } catch (err) {
-    toast.error(err instanceof Error ? err.message : '连接失败')
+    // S0-24 口径：握手/认证失败抛出的是 SSHError transport（或 Electron 信封），
+    // 原样 err.message 进 toast 等于把 getaddrinfo、Cannot parse privateKey 端给用户。
+    toast.error(toFriendlyMessage(err, 'SSH 连接失败'))
   } finally {
     connecting.value = false
     pendingConnId.value = ''
@@ -572,8 +577,10 @@ const filteredContainers = computed(() => {
   const rank = (c: ContainerRow): number => (isAbnormal(c) ? 0 : c.state === 'running' ? 1 : 2)
   return [...list].sort((a, b) => rank(a) - rank(b))
 })
+// 过滤串与行内展示同一个来源：悬空/按摘要拉取的行显示的是短 ID，原先只搜 repo:tag，
+// 搜屏幕上真正写着的那串 ID 反而一条都不命中。
 const filteredImages = computed(() =>
-  images.value.filter(im => (im.repo + ':' + im.tag).toLowerCase().includes(q())))
+  images.value.filter(im => imageHaystack(im).includes(q())))
 const filteredVolumes = computed(() =>
   volumes.value.filter(v => v.name.toLowerCase().includes(q())))
 const filteredNetworks = computed(() =>
@@ -600,18 +607,33 @@ const logsView = computed(() =>
 // 一次性 docker 执行：成功返回 stdout；docker 层/传输层错误统一归为 DockerError 抛出
 // id 默认取当前目标，但批量取数路径显式传入发起时的 id，避免执行中途切宿主后
 // 后续命令打到新宿主（见 loadAll 的代次守卫）
-async function dockerExec(cmd: string, id = targetId.value): Promise<string> {
+//
+// 取数与变更分预算：docker stop/restart/rm -f 自带 10s 的 SIGTERM→SIGKILL 宽限期，
+// 卡住的容器（D 状态、挂死的后端卷）能拖到几十秒，rmi/prune 也要真删层数据。
+// 原先 12 处变更动作共用 15s 一条预算，超时会把「远端其实正在成功」的命令报成失败，
+// 界面随即停在旧状态 —— 用户对着一个其实已经停掉的容器再点一次停止。
+const READ_TIMEOUT_SEC = 15
+const ACTION_TIMEOUT_SEC = 60
+
+async function dockerExec(
+  cmd: string, id = targetId.value, timeoutSec = READ_TIMEOUT_SEC,
+): Promise<string> {
   const api = window.electronAPI
   if (!id || !api) throw { code: 'NO_SESSION', message: '未选择目标主机', retryable: false } as DockerError
   let res
   try {
-    res = await api.sshExec(id, cmd, 15)
+    res = await api.sshExec(id, cmd, timeoutSec)
   } catch (err) {
     throw describeThrownDockerError(err)
   }
   const dErr = dockerErrorFromResult(res.stderr, res.exitCode, res.stdout)
   if (dErr) throw dErr
   return res.stdout
+}
+
+/** 变更类动作的入口：只有这一类需要放宽预算，取数路径继续用默认值 */
+function actionExec(cmd: string): Promise<string> {
+  return dockerExec(cmd, targetId.value, ACTION_TIMEOUT_SEC)
 }
 
 // 跨宿主竞态守卫：loadAll 内串行+并行共 4 个 await（单条硬超时 15s），用户中途切主机
@@ -661,18 +683,27 @@ async function loadAll(): Promise<void> {
   }
 }
 
+// 发起对象必须在 await 之后重新校验：慢的那次返回时用户可能已经切到另一个容器、
+// 换了宿主或关掉了详情，原样写回会把 A 的日志显示在 B 的窗口里 —— 对着错的日志排障
+// 比报一次错更糟。2.5s 跟随轮询让这种交叠成为常态而非边角（同 loadAll 的代次守卫理由）。
 async function loadLogs(quiet = false): Promise<void> {
-  logsError.value = null
   const c = selected.value
+  const id = targetId.value
+  const stillCurrent = (): boolean => selected.value === c && targetId.value === id
+  logsError.value = null
   if (!c) { logs.value = []; return }
   if (!quiet) logsLoading.value = true
   try {
-    logs.value = parseLogs(await dockerExec(logsCmd(c.name)))
+    const raw = await dockerExec(logsCmd(c.name), id)
+    if (!stillCurrent()) return
+    logs.value = parseLogs(raw)
     if (follow.value) await scrollLogsToBottom()
   } catch (e) {
+    // 旧请求的失败不该盖住新选中的视图；也不许在取代后熄灭新一轮的转圈
+    if (!stillCurrent()) return
     logsError.value = e as DockerError
   } finally {
-    if (!quiet) logsLoading.value = false
+    if (!quiet && stillCurrent()) logsLoading.value = false
   }
 }
 
@@ -731,13 +762,13 @@ async function withBusy(target: { id: string }, fn: () => Promise<void>): Promis
 }
 
 function doStart(c: ContainerRow) { return withBusy(c, async () => {
-  try { await dockerExec(startCmd(c.name)); toast.success(`已启动 ${c.name}`); await reloadContainers() } catch (e) { toastErr(e) }
+  try { await actionExec(startCmd(c.name)); toast.success(`已启动 ${c.name}`); await reloadContainers() } catch (e) { toastErr(e) }
 }) }
 function doStop(c: ContainerRow) { return withBusy(c, async () => {
-  try { await dockerExec(stopCmd(c.name)); toast.info(`已停止 ${c.name}`); await reloadContainers() } catch (e) { toastErr(e) }
+  try { await actionExec(stopCmd(c.name)); toast.info(`已停止 ${c.name}`); await reloadContainers() } catch (e) { toastErr(e) }
 }) }
 function doRestart(c: ContainerRow) { return withBusy(c, async () => {
-  try { await dockerExec(restartCmd(c.name)); toast.success(`已重启 ${c.name}`); await reloadContainers() } catch (e) { toastErr(e) }
+  try { await actionExec(restartCmd(c.name)); toast.success(`已重启 ${c.name}`); await reloadContainers() } catch (e) { toastErr(e) }
 }) }
 
 async function doRemove(c: ContainerRow) {
@@ -749,7 +780,7 @@ async function doRemove(c: ContainerRow) {
   })
   if (!ok) return
   await withBusy(c, async () => {
-    try { await dockerExec(rmCmd(c.name)); toast.success(`已删除 ${c.name}`); await reloadContainers() } catch (e) { toastErr(e) }
+    try { await actionExec(rmCmd(c.name)); toast.success(`已删除 ${c.name}`); await reloadContainers() } catch (e) { toastErr(e) }
   })
 }
 
@@ -785,37 +816,25 @@ async function reloadNetworks(): Promise<void> {
 }
 
 async function doRemoveImage(im: ImageRow) {
+  // 按「这一行的引用」删，不按镜像 ID 删：docker rmi <ID> 会把该 ID 上的**所有标签**
+  // 一起摘掉，而弹窗只承诺了当前这一行 —— 同一镜像多标签时用户会以为只删了一个，
+  // 实际把另一个也卸了。多标签行各自 untag，只有最后一个标签才带走层数据。
+  const ref = imageLabel(im)
   const ok = await confirm({
     title: '删除镜像',
-    message: `镜像 ${imageLabel(im)}（${im.id}）将被移除；若有容器正在使用它，删除会失败。`,
+    message: `将取消标签 ${ref}（${im.id}）；若它是该镜像上的最后一个标签，层数据一并删除。有容器（含已停止容器）正在使用时会失败。`,
     confirmText: '确认删除',
     danger: true,
   })
   if (!ok) return
-  await withBusy(im, async () => {
-    try { await dockerExec(rmiCmd(im.id)); toast.success(`已删除镜像 ${imageLabel(im)}`); await reloadImages() } catch (e) { toastErr(e) }
+  await withBusyKey(ref, async () => {
+    try { await actionExec(rmiCmd(ref)); toast.success(`已删除镜像 ${ref}`); await reloadImages() } catch (e) { toastErr(e) }
   })
 }
 
 // ── 卷：列表列展示辅助 + 详情弹窗 + rm/prune 编排 ──
 
-// 行内标签列展示：取 compose 项目名为一级线索，其次行数
-function volumeLabelHint(v: VolumeRow): string {
-  const lb = v.labels
-  if (!lb) return '—'
-  const proj = lb['com.docker.compose.project']
-  if (proj) return 'compose:' + proj
-  const n = Object.keys(lb).length
-  return n ? n + ' 项' : '—'
-}
-function networkLabelHint(n: NetworkRow): string {
-  const lb = n.labels
-  if (!lb) return '—'
-  const proj = lb['com.docker.compose.project']
-  if (proj) return 'compose:' + proj
-  const cnt = Object.keys(lb).length
-  return cnt ? cnt + ' 项' : '—'
-}
+// 卷与网络的标签列共用 docker-core 的 labelHint（此前是两份逐字符相同的实现）
 
 // linkCount 三元态：undefined（老 Docker 不支持）/ 0（未使用，可安全回收）/ >0（在用，rm 会失败）
 function volumeUseHint(v: VolumeRow): { text: string; tone: 'ok' | 'warn' | 'muted' } {
@@ -856,7 +875,7 @@ async function doRemoveVolume(v: VolumeRow) {
   if (!ok) return
   await withBusyKey('v:' + v.name, async () => {
     try {
-      await dockerExec(volumeRmCmd(v.name))
+      await actionExec(volumeRmCmd(v.name))
       toast.success(`已删除卷 ${v.name}`)
       if (selectedVolume.value?.name === v.name) selectedVolume.value = null
       await reloadVolumes()
@@ -873,7 +892,7 @@ async function doRemoveNetwork(n: NetworkRow) {
   if (!ok) return
   await withBusyKey('n:' + n.name, async () => {
     try {
-      await dockerExec(networkRmCmd(n.name))
+      await actionExec(networkRmCmd(n.name))
       toast.success(`已删除网络 ${n.name}`)
       if (selectedNetwork.value?.name === n.name) selectedNetwork.value = null
       await reloadNetworks()
@@ -893,14 +912,18 @@ function parseReclaimed(out: string): string | null {
 async function doPruneVolumes() {
   const ok = await confirm({
     title: '清理未使用的卷',
-    message: '将删除所有未被任何容器（包括已停止容器）引用的卷。数据不可恢复，请确保 compose 项目已全部启起来或已知风险。',
+    // 口径诚实：Docker 23+（API 1.42 起）`volume prune` 默认只清匿名卷，具名卷要显式
+    // --all。这里不发 --all（老版本 docker 不识别该 flag，参数解析阶段就整条失败，
+    // 与 VOLUMES_CMD 不用 --verbose 同一个理由），所以把实际范围写在确认框里，
+    // 而不是让用户以为一键收走了全部孤儿卷。
+    message: '将删除未被任何容器（包括已停止容器）引用的卷，数据不可恢复。注意：Docker 23+ 默认只清匿名卷、保留具名卷（实际范围以本机版本为准），具名卷请用行内「删除卷」逐个处理。',
     confirmText: '确认清理',
     danger: true,
   })
   if (!ok) return
   await withBusyKey('prune:volumes', async () => {
     try {
-      const out = await dockerExec(volumePruneCmd())
+      const out = await actionExec(volumePruneCmd())
       const reclaimed = parseReclaimed(out)
       const n = countPrunedLines(out)
       toast.success(reclaimed ? `已清理 ${n} 个未使用卷，回收 ${reclaimed}` : `已清理 ${n} 个未使用卷`)
@@ -919,7 +942,7 @@ async function doPruneNetworks() {
   if (!ok) return
   await withBusyKey('prune:networks', async () => {
     try {
-      const out = await dockerExec(networkPruneCmd())
+      const out = await actionExec(networkPruneCmd())
       const n = countPrunedLines(out)
       toast.success(`已清理 ${n} 个未使用网络`)
       selectedNetwork.value = null
@@ -929,23 +952,31 @@ async function doPruneNetworks() {
 }
 
 // exec 进终端：命令写进目标会话的交互 shell（自带 PTY，docker exec -it 可直接附着），再请求切到该终端
+// 走 withBusy(整行)：建会话 + 等 shell 就绪 + 写命令共三跳、约 0.5s 以上，期间连点会开出
+// 第二个终端标签（第一条远端 PTY 也挂在会话列表里没人认领）；同一行的启停/删除一并锁住，
+// 免得「exec 附着中」与「docker stop」打到同一个容器。
 async function doExec(c: ContainerRow) {
   const s = targetSession.value
   const api = window.electronAPI
   if (!s || !api) { toast.error('未连接目标主机'); return }
-  if (!s.connectionId) { toast.error('当前会话缺少连接配置，无法新开终端标签'); return }
-  try {
-    // 新开一个终端标签（复用同一连接配置、独立会话），不再把 docker exec 写进用户当前
-    // shell —— 那会盖掉他正敲的上下文。connectRemote 会 push 会话并置为 active。
-    const newId = await sshStore.connectRemote(s.connectionId, 80, 24)
-    emit('exec-terminal', newId)
-    // 留一点时间让新标签的 RemoteTerminal 挂载、远端登录 shell 打出提示符，再写命令：
-    // 早于组件订阅的 PTY 输出会丢帧，早于 shell 就绪则命令可能被登录流程吞掉。
-    await new Promise<void>(r => setTimeout(r, 500))
-    await api.sshWrite(newId, execCmd(c.name) + '\r')
-  } catch (err) {
-    toast.error(describeThrownDockerError(err).message)
-  }
+  // 先把 connectionId 落成局部量：属性收窄进不了 withBusy 的回调闭包，
+  // 直接在回调里用 s.connectionId 会被判成 string | undefined。
+  const connId = s.connectionId
+  if (!connId) { toast.error('当前会话缺少连接配置，无法新开终端标签'); return }
+  await withBusy(c, async () => {
+    try {
+      // 新开一个终端标签（复用同一连接配置、独立会话），不再把 docker exec 写进用户当前
+      // shell —— 那会盖掉他正敲的上下文。connectRemote 会 push 会话并置为 active。
+      const newId = await sshStore.connectRemote(connId, 80, 24)
+      emit('exec-terminal', newId)
+      // 留一点时间让新标签的 RemoteTerminal 挂载、远端登录 shell 打出提示符，再写命令：
+      // 早于组件订阅的 PTY 输出会丢帧，早于 shell 就绪则命令可能被登录流程吞掉。
+      await new Promise<void>(r => setTimeout(r, 500))
+      await api.sshWrite(newId, execCmd(c.name) + '\r')
+    } catch (err) {
+      toast.error(describeThrownDockerError(err).message)
+    }
+  })
 }
 
 // 目标主机变化：清空重取（不同主机容器集合不同）

@@ -1244,8 +1244,11 @@ function autoResize() {
 }
 
 // 草稿是共享态：在首页打字/清空也会落到这份 textarea 上，高度要跟着重算 ——
-// 否则切回侧栏时内容超出既定高度，被 overflow 裁掉下半截。
-watch(inputText, () => nextTick(autoResize))
+// 否则切回侧栏时内容超出既定高度，被 overflow 裁掉半截。
+// immediate 是必需的：SshAiPanel 挂在 v-if 下（SshView.vue:129），本组件在面板打开那一刻
+// 才创建，此刻草稿里已经有字（首页打的，或「问 AI」的 pendingPrefill）不算"变化"——
+// 只守变化的 watch 在挂载这一帧什么都不做，textarea 停在初始高度，正是这条注释要防的形状。
+watch(inputText, () => nextTick(autoResize), { immediate: true })
 
 /** 是否可发送：有输入文字或有待发送附件（与按钮 disabled 保持一致） */
 const canSend = computed(() =>

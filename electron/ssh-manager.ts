@@ -1919,7 +1919,11 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       let partExists = false
       try {
         const partStat = await fsPromises.stat(partPath)
-        if (partStat.size === total) {
+        // total===0 时绝不走这条捷径：stat.size 对 /proc/*、/sys/*、正在增长的日志恒报 0
+        // （见下方未知长度分支），而一次立刻停滞的尝试会留下 0 字节的 .part（retryable
+        // 路径刻意保留它）。`0 === 0` 命中就是把刚截空的 .part 覆盖到操作员已有的本地文件
+        // 上，再回一个 100%「完成」—— 与 :1966 那段注释封掉的是同一个洞，只是分块表那条腿。
+        if (total > 0 && partStat.size === total) {
           // .part 与远程文件大小一致，视为已完成，直接 rename
           // 审查修复（P2）：覆盖语义 rename，避免 Windows 目标已存在 EPERM
           downloadComplete = true
@@ -1970,9 +1974,11 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       // 绝不无界地把远端流灌进本地磁盘（远端 /dev/zero 就是这种流）。
       if (total === 0) {
         const UNKNOWN_SIZE_LIMIT = 64 * 1024 * 1024
-        // 续传校验已通过的起点（resume 块里设过 startOffset/transferred）：从已验证
-        // 的前缀之后继续读，避免把已下载且校验一致的字节从头重传一遍
-        let off = startOffset
+        // 起点恒为 0，不是「漏了续传」：total===0 时上面那一支已经把任何非空 .part 删掉
+        // （resumeSize > total=0 ⇒ unlink），0 字节的 .part 又过不了 `resumeSize > 0`，
+        // 于是 localFd 以 'w' 打开、文件被重新截断。写「从已验证前缀之后继续」会读出一条
+        // 这条路径里并不存在的续传语义。
+        let off = 0
         for (;;) {
           if (cancelled) {
             throw toTransferError({ code: 'CANCELLED', message: '传输已取消' })
