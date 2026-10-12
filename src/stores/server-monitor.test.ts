@@ -297,6 +297,64 @@ describe('parseMetricsRaw', () => {
     expect(m!.ports[1]).toMatchObject({ proto: 'tcp', addr: '0.0.0.0', port: 443, pid: 5678 })
   })
 
+  it('TCP + UDP 同端口 → 合并为一条，proto 偏好 TCP，UDP 入 secondaryProtos', () => {
+    const raw = [
+      '===CKUN_MON===', 'STAT=1|2|3', 'MEM_TOTAL=100',
+      'PORT=tcp|0.0.0.0|53|100|systemd-resolve',
+      'PORT=udp|0.0.0.0|53|100|systemd-resolve',
+      '===END===',
+    ].join('\n')
+    const m = parseMetricsRaw(raw)
+    expect(m!.ports).toHaveLength(1)
+    expect(m!.ports[0]).toMatchObject({
+      proto: 'tcp', addr: '0.0.0.0', port: 53,
+      secondaryProtos: ['udp'],
+      pid: 100, proc: 'systemd-resolve',
+    })
+  })
+
+  it('地址范围标识（127.0.0.53%lo）→ 剥离 scope 后与其他格式的去重合并', () => {
+    const raw = [
+      '===CKUN_MON===', 'STAT=1|2|3', 'MEM_TOTAL=100',
+      // 非特权 ss -ltn 输出不带 %scope
+      'PORT=tcp|127.0.0.53|53|100|systemd-resolve',
+      // 特权 sudo ss -ltnp 输出带 %scope（awk 两份输出的 key 不同）
+      'PORT=tcp|127.0.0.53%lo|53|100|systemd-resolve',
+      '===END===',
+    ].join('\n')
+    const m = parseMetricsRaw(raw)
+    expect(m!.ports).toHaveLength(1)  // scope 剥离后 key 相同，合并
+    expect(m!.ports[0]).toMatchObject({ proto: 'tcp', addr: '127.0.0.53', port: 53, pid: 100 })
+  })
+
+  it('TCP+UDP 同端口（scope 地址变体）→ 合并后只保留一条，addr 剥离 scope', () => {
+    const raw = [
+      '===CKUN_MON===', 'STAT=1|2|3', 'MEM_TOTAL=100',
+      'PORT=tcp|127.0.0.53%lo|53|100|systemd-resolve',
+      'PORT=udp|127.0.0.53|53||systemd-resolve',
+      '===END===',
+    ].join('\n')
+    const m = parseMetricsRaw(raw)
+    expect(m!.ports).toHaveLength(1)
+    expect(m!.ports[0]).toMatchObject({
+      proto: 'tcp', addr: '127.0.0.53', port: 53,
+      secondaryProtos: ['udp'], pid: 100,
+    })
+  })
+
+  it('方括号 IPv6 带 scope（[fe80::1%eth0]）→ 剥离 scope 保留右括号，与非 scope 变体去重', () => {
+    const raw = [
+      '===CKUN_MON===', 'STAT=1|2|3', 'MEM_TOTAL=100',
+      'PORT=tcp|[fe80::1]|8080|200|app',
+      // 特权 ss -ltnp 输出带 %ifname：截到 % 会丢右括号，需补回 ']'
+      'PORT=tcp|[fe80::1%eth0]|8080|200|app',
+      '===END===',
+    ].join('\n')
+    const m = parseMetricsRaw(raw)
+    expect(m!.ports).toHaveLength(1)
+    expect(m!.ports[0]).toMatchObject({ proto: 'tcp', addr: '[fe80::1]', port: 8080, pid: 200 })
+  })
+
   it('进程重复（同 PID 多行）→ 去重保留首条', () => {
     const raw = [
       '===CKUN_PROCS===',

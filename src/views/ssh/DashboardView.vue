@@ -189,10 +189,12 @@
           </thead>
           <tbody>
             <tr v-for="pt in pagedPorts" :key="`${pt.proto}:${pt.addr}:${pt.port}`">
-              <td><span class="port-proto-tag" :class="{ udp: pt.proto === 'udp' }">{{ pt.proto.toUpperCase() }}</span></td>
+              <td>
+                <span class="port-proto-tag" :class="{ udp: pt.proto === 'udp' }" :title="secondaryProtoTitle(pt)">{{ pt.proto.toUpperCase() }}</span>
+              </td>
               <td class="mono port-num">
                 {{ pt.port }}<span v-if="svcName(pt.port)" class="port-svc">{{ svcName(pt.port) }}</span>
-                <span v-if="hasAltAddr(pt)" class="port-alt-hint" :title="altAddrTitle(pt)">⇄</span>
+                <span v-if="hasAltAddr(pt) || hasAltProto(pt)" class="port-alt-hint" :title="altAddrTitle(pt)">⇄</span>
               </td>
               <td class="mono port-addr" :title="pt.addr">{{ pt.addr }}</td>
               <td class="port-proc">
@@ -475,10 +477,26 @@ function hasAltAddr(pt: PortEntry): boolean {
   return !!pt.secondaryAddrs && pt.secondaryAddrs.length > 0
 }
 
-/** ⇄ 标记的悬浮提示：列出所有备选地址 */
+/** 该端口是否有备选协议（TCP+UDP 同端口合并后收进 secondaryProtos） */
+function hasAltProto(pt: PortEntry): boolean {
+  return !!pt.secondaryProtos && pt.secondaryProtos.length > 0
+}
+
+/** 备选协议的提示文案（协议标签与 ⇄ 标记两处悬浮提示共用） */
+function secondaryProtoTitle(pt: PortEntry): string {
+  if (!hasAltProto(pt)) return ''
+  return '也' + pt.secondaryProtos!.map(p => p.toUpperCase()).join('/') + '协议'
+}
+
+/** ⇄ 标记的悬浮提示：列出所有备选地址 + 备选协议 */
 function altAddrTitle(pt: PortEntry): string {
-  if (!pt.secondaryAddrs || pt.secondaryAddrs.length === 0) return ''
-  return '也监听：' + pt.secondaryAddrs.join('  ')
+  const parts: string[] = []
+  if (pt.secondaryAddrs && pt.secondaryAddrs.length > 0) {
+    parts.push('也监听: ' + pt.secondaryAddrs.join('  '))
+  }
+  const protoTitle = secondaryProtoTitle(pt)
+  if (protoTitle) parts.push(protoTitle)
+  return parts.join('  •  ')
 }
 
 /** GPU 占用进程 PID 集合（nvidia-smi 采集）：进程（CPU）表据此剔除 GPU 进程 */

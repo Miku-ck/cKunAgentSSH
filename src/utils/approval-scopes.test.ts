@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { grantScopesForRisk } from './approval-scopes'
+import { grantScopesForRisk, onceGrantBlocked } from './approval-scopes'
 
 describe('审批卡可见的授权档位', () => {
   it('moderate 卡给 once/session/always 三档', () => {
@@ -16,5 +16,14 @@ describe('审批卡可见的授权档位', () => {
     for (const junk of ['', 'HIGH', 'DANGEROUS', undefined as unknown as string]) {
       expect(grantScopesForRisk(junk)).toEqual(['once', 'always'])
     }
+  })
+})
+
+describe('once 授权入口的 run 状态门', () => {
+  // P2 回归（2026-10-11）：once 按 run 键控，run 终态后点击只会落进死键
+  // （后端已 409），前端必须提前禁用 —— 禁止点出假「已授权」。
+  it('run 结束后 once 入口禁用；运行中不禁', () => {
+    expect(onceGrantBlocked(true)).toBe(false)
+    expect(onceGrantBlocked(false)).toBe(true)
   })
 })

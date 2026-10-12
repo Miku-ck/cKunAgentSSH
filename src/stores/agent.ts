@@ -74,8 +74,11 @@ export interface PermissionRequest {
   granted?: boolean
   /**
    * 审批超时标记（permission_expired）：用户裁决方案 A——到期卡保留操作按钮。
-   * 后端到期不摘签名，grant/deny 按 sig 仍可达，用户点「允许」即恢复执行；
+   * 后端到期不摘签名，grant/deny 按 sig 仍可达，run 运行中点「允许」即恢复执行；
    * 此标仅作卡片上的超时标注，焦点仍占用可操作队列，重发同命令复用此卡。
+   * P2 修复（2026-10-11）：once 档只在 run 运行中可达 —— run 终态后后端对
+   * scope=once 直接 409（once 键将永不被消费），前端「允许本次」按钮随之禁用；
+   * session/always 跨 run 仍可消费，不受影响。
    */
   expired?: boolean
   /** 归一化展示命令（问题 2 改进：让用户看到实际授权的规范化形态） */

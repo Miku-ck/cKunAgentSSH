@@ -12,3 +12,13 @@ export function grantScopesForRisk(risk: string): GrantScope[] {
   if (risk === 'moderate') return ['once', 'session', 'always']
   return ['once', 'always']
 }
+
+/**
+ * once 授权入口是否必须禁用：once 按 run 键控（后端 `tool:<sha16>` 键 + run 隔离，
+ * run 终态时 `cleanup_run_once` 清池）。run 已结束后点击只会落进一个永不被消费的
+ * 死键 —— 后端现在直接 409，前端必须提前禁用，别让用户点出一个假「已授权」。
+ * session（按会话键控）与 always（永久）跨 run 仍可消费，不受影响。
+ */
+export function onceGrantBlocked(runRunning: boolean): boolean {
+  return !runRunning
+}

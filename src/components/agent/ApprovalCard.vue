@@ -25,9 +25,10 @@
  */
 import { computed } from 'vue'
 import type { PermissionRequest } from '@/stores/agent'
+import { useAgentStore } from '@/stores/agent'
 import { useSSHStore } from '@/stores/ssh'
 import { useSettingsStore } from '@/stores/settings'
-import { grantScopesForRisk } from '@/utils/approval-scopes'
+import { grantScopesForRisk, onceGrantBlocked } from '@/utils/approval-scopes'
 import { approvalCommand, approvalRiskLabel, approvalTargetLabel } from '@/utils/approval-display'
 import { useApprovalActions } from '@/composables/useApprovalActions'
 
@@ -43,6 +44,11 @@ const req = computed(() => props.req)
 const prodConfirmOn = computed(() => useSettingsStore().settings.agent.prodConfirm)
 const targetLabel = computed(() => approvalTargetLabel(props.req, sshStore.sessions, sshStore.connections))
 const command = computed(() => approvalCommand(props.req))
+// P2 修复（2026-10-11）：once 按 run 键控 —— 后端 run 终态后 once 授权无处消费
+// （直接 409）。「允许本次」必须提前禁用，别让人点出一个假「已授权」。
+// 卡片虽在四条终态出口清空，但 SSE 迟到/断连/settling 在途都留出点击窗口。
+const agentStore = useAgentStore()
+const onceBlocked = computed(() => onceGrantBlocked(agentStore.isRunning))
 </script>
 
 <template>
@@ -51,7 +57,9 @@ const command = computed(() => approvalCommand(props.req))
       <svg class="ap-ic ap-perm-accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
       <span class="ap-ttl ap-perm-ttl">AI 请求执行确认</span>
       <span class="ap-risk" :class="`risk-${req.risk}`">{{ approvalRiskLabel(req.risk) }}</span>
-      <span v-if="req.expired" class="ap-risk-pill ap-timeout-pill">已超时 · 授权仍可恢复</span>
+      <span v-if="req.expired" class="ap-risk-pill ap-timeout-pill">
+        {{ onceBlocked ? '已超时 · 本轮已结束，请在新的运行中重新确认' : '已超时 · 授权仍可恢复' }}
+      </span>
       <span v-if="req.environment" class="ap-env" :class="`env-${req.environment}`">
         {{ req.environment === 'prod' ? '生产环境' : '测试环境' }}
       </span>
@@ -94,7 +102,12 @@ const command = computed(() => approvalCommand(props.req))
       </details>
     </div>
     <div class="ap-actions">
-      <button class="ap-btn ap-btn-grant" :disabled="req.settling" @click="grantPermission(req.id, 'once')">
+      <button
+        class="ap-btn ap-btn-grant"
+        :disabled="req.settling || onceBlocked"
+        :title="onceBlocked ? '本轮运行已结束，once 授权无处生效；请重新发起指令后再确认' : ''"
+        @click="grantPermission(req.id, 'once')"
+      >
         {{ req.settling ? '处理中...' : '允许本次' }}
       </button>
       <button

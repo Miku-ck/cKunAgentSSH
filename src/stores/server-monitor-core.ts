@@ -53,9 +53,10 @@ export interface PortEntry {
   pid?: number
   /** 监听进程名 */
   proc?: string
-  /** 同一端口的其他监听地址（通配符折叠后：主显示 IPv4，IPv6 收于此，原样保留方括号 `[::]`
-   *  —— 与测试和 wildDisplay 一致，去括号反而看不出那是 IPv6 通配） */
+  /** 同一端口的其他监听地址（通配符折叠后：主显示 IPv4，IPv6 收于此） */
   secondaryAddrs?: string[]
+  /** 同一端口的其他监听协议（TCP 主显示时收 UDP，反之亦然） */
+  secondaryProtos?: ('tcp' | 'udp')[]
 }
 /** 单块 GPU 快照（nvidia-smi 采集）；null = 该字段远端返回 N/A（如被动散热卡无风扇、WSL 无功率） */
 export interface GpuSample {
@@ -290,19 +291,47 @@ export function parseMetricsRaw(raw: string, host?: string): ParsedMetrics | nul
   let gpusFull = false
   // ── 通配地址归一化 + 分组 ──
   // ss 输出的通配地址有多种表示：IPv4 用 "0.0.0.0" 或 "*"，IPv6 用 "[::]" 或 "::"。
-  // 同一端口双栈监听时，这些行逻辑上是同一个绑定——按 proto|*|port 分组，
-  // 主显示偏好 IPv4 风格地址，IPv6 地址存入 secondaryAddrs。
+  // 同一端口双栈监听时，这些行逻辑上是同一个绑定——按 addr|port 分组（跨 proto），
+  // 主显示偏好 IPv4 风格地址 + TCP 协议，备选 proto/addr 存入 secondaryAddrs/secondaryProtos。
   const isV4Wild = (a: string) => a === '0.0.0.0' || a === '*'
   const isV6Wild = (a: string) => a === '[::]' || a === '::'
   const isWildcard = (a: string) => isV4Wild(a) || isV6Wild(a)
-  // 分组 key：通配地址归一化为 "*"，精确地址保留原值
-  const portGroupKey = (proto: string, addr: string, port: string | number) =>
-    `${proto}|${isWildcard(addr) ? '*' : addr}|${port}`
+  // 地址预处理：剥离 ss 输出的范围标识符，如 "127.0.0.53%lo" → "127.0.0.53"、"[::1%eth0]" → "[::1]"
+  // 原因：非特权 ss -ltn 不带 -p 时不输出 scope，而 sudo ss -ltnp 会带上 %ifname，
+  // 两份 awk 输出的 key 不同导致去重失败（"127.0.0.53:53" vs "127.0.0.53%lo:53" 被视为两个绑定）。
+  const stripScope = (addr: string): string => {
+    const bang = addr.indexOf('%')
+    if (bang < 0) return addr
+    // 方括号包裹的 IPv6（如 [fe80::1%eth0]）截到 % 会丢右括号，需补回 ']'
+    return addr.endsWith(']') ? addr.slice(0, bang) + ']' : addr.slice(0, bang)
+  }
+  // 分组 key：通配地址归一化为 "*" 以跨 v4/v6 折叠；精确地址剥离 scope
+  const portGroupKey = (addr: string, port: string | number) =>
+    `${isWildcard(addr) ? '*' : stripScope(addr)}|${port}`
   // 通配地址的展示形式：IPv4 → "0.0.0.0"，IPv6 → "[::]"
   const wildDisplay = (addr: string) => isV6Wild(addr) ? '[::]' : '0.0.0.0'
   // 判断哪个应做主展示：IPv4 优先（人类阅读友好）
   const preferPrimary = (a: string, b: string) => isV4Wild(a) ? a : b
   const portSeen = new Map<string, number>()  // groupKey → ports 数组下标
+  // pid/proc 回填：有 pid 的行覆盖无 pid 的行（同 proto 去重与跨 proto 合并共用）
+  const backfillProc = (existing: PortEntry, pid?: string, pname?: string) => {
+    if (pid && !existing.pid) {
+      existing.pid = inum(pid)
+      existing.proc = pname || existing.proc
+    } else if (pname && !existing.proc) {
+      existing.proc = pname
+    }
+  }
+  // 地址展示合并：通配归一后 IPv4 风格做主地址，落选侧压入 secondaryAddrs
+  const mergeAddrDisplay = (existing: PortEntry, raw: string) => {
+    const normalized = isWildcard(raw) ? wildDisplay(raw) : raw
+    const primary = preferPrimary(existing.addr, normalized)
+    const dropped = primary === existing.addr ? normalized : existing.addr
+    const secs = existing.secondaryAddrs ?? []
+    if (dropped !== primary && !secs.includes(dropped)) secs.push(dropped)
+    existing.addr = primary
+    existing.secondaryAddrs = secs.length > 0 ? secs : undefined
+  }
 
   for (const line of lines) {
     if (line.startsWith('STAT=')) {
@@ -327,30 +356,29 @@ export function parseMetricsRaw(raw: string, host?: string): ParsedMetrics | nul
       // 兼容两种行格式：proto|addr|port（旧采集）与 proto|addr|port|pid|proc（ss -p，进程信息可能缺失）
       const [proto, rawAddr, port, pid, pname] = line.slice(5).split('|')
       if (proto === 'tcp' || proto === 'udp') {
-        const raw = rawAddr || '0.0.0.0'
-        const gKey = portGroupKey(proto, raw, port)
+        const raw = stripScope(rawAddr || '0.0.0.0')
+        const gKey = portGroupKey(raw, port)
         const existingIdx = portSeen.get(gKey)
         if (existingIdx !== undefined) {
           const existing = ports[existingIdx]
-          // 决定主展示地址：IPv4 > IPv6；把非主的通配地址压入 secondaryAddrs
-          const primary = preferPrimary(existing.addr, wildDisplay(raw))
-          const dropped = primary === existing.addr ? wildDisplay(raw) : existing.addr
-          if (dropped !== primary) {
-            const secs = existing.secondaryAddrs ?? []
-            if (!secs.includes(dropped)) secs.push(dropped)
-            existing.secondaryAddrs = secs.length > 0 ? secs : undefined
-          }
-          existing.addr = primary
-          // pid 回填：有 pid 的行覆盖无 pid 的行
-          if (pid && !existing.pid) {
-            existing.pid = inum(pid)
-            existing.proc = pname || existing.proc
-          } else if (pname && !existing.proc) {
-            existing.proc = pname
+          if (existing.proto === proto) {
+            // 1) 同 proto → 地址去重合并 + pid 回填（secondaryProtos 不变）
+            mergeAddrDisplay(existing, raw)
+            backfillProc(existing, pid, pname)
+          } else {
+            // 2) 不同 proto（TCP+UDP 同端口）→ 合并为一个条目，proto 偏好 TCP：
+            //    两值相异且限于 tcp/udp，所以谁不是 tcp 谁就是落选侧
+            const primaryProto: 'tcp' | 'udp' = proto === 'tcp' ? 'tcp' : existing.proto
+            const droppedProto: 'tcp' | 'udp' = primaryProto === existing.proto ? proto : existing.proto
+            const secProtos = existing.secondaryProtos ?? []
+            if (!secProtos.includes(droppedProto)) secProtos.push(droppedProto)
+            existing.proto = primaryProto
+            existing.secondaryProtos = secProtos.length > 0 ? secProtos : undefined
+            mergeAddrDisplay(existing, raw)
+            backfillProc(existing, pid, pname)
           }
         } else {
           portSeen.set(gKey, ports.length)
-          // 新建条目：通配地址统一为 "0.0.0.0"(v4) 或 "[::]"(v6) 展示
           ports.push({
             proto,
             addr: isWildcard(raw) ? wildDisplay(raw) : raw,

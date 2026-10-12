@@ -503,8 +503,54 @@ def test_请求字段与_run_传参成对存在():
         ast.unparse(kw.value) for c in calls for kw in c.keywords
         if kw.arg == "permission_mode"
     ]
-    assert passed == ["req.permission_mode"], (
-        f"harness.run 没有（正确）传 permission_mode，实际 {passed} —— 计划模式不会生效")
+    # P1 修复（2026-10-11）：改传经 _paired_permission_mode 归一的局部变量，
+    # 不再直传 req.permission_mode —— 直传会绕开 plan 姿态的配对强制。
+    assert passed == ["permission_mode"], (
+        f"harness.run 应传配对归一后的局部变量 permission_mode，实际 {passed} —— "
+        "直传 req.permission_mode 会绕开 plan 配对强制")
+
+
+def test_plan_姿态强制配对_permission_mode():
+    """P1 回归：workflow_mode='plan' 时服务端必须把 permission_mode 压成 'plan'。
+
+    前端 resolveRunModes 恒成对下发，但 HTTP 边界不信任客户端 —— prompt 按
+    workflow_mode 注入「写操作会被直接拒绝」，PlanModeGuard 按 permission_mode
+    激活真正的拦截，只改一半就是「prompt 声称只读、强制不存在」的空开关。
+    """
+    from routes.agent import _paired_permission_mode as pair
+
+    assert pair("plan", "normal") == "plan"
+    assert pair("plan", "auto") == "plan"
+    assert pair("plan", "plan") == "plan"
+    # 反向是合法的纯只读请求：只读强制可以没有 plan 姿态 prompt
+    assert pair("goal", "auto") == "auto"
+    assert pair(None, "normal") == "normal"
+    assert pair(None, "plan") == "plan"
+
+
+def test_harness_run_不再直传_req_permission_mode():
+    """AST 防回归：harness.run 的 permission_mode 关键字不得是 req 属性直传。
+
+    _paired_permission_mode 的行为由上一条测试钉住；这条钉「调用点真的走了它」
+    —— 若有人把 agent_run 里的局部变量改回 req.permission_mode，配对强制静默失效。
+    """
+    import ast
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1] / "routes/agent.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    calls = [
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "run" and isinstance(n.func.value, ast.Name)
+        and n.func.value.id == "harness"
+    ]
+    assert calls, "routes/agent.py 里找不到 harness.run(...) 调用"
+    for c in calls:
+        for kw in c.keywords:
+            if kw.arg == "permission_mode":
+                assert not isinstance(kw.value, ast.Attribute), (
+                    "harness.run 直传了 req.permission_mode —— 绕开了 plan 配对强制")
 
 
 def test_请求模型的值域校验真的拦住非法值():

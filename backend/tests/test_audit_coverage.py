@@ -65,6 +65,10 @@ def test_audit_logger_appends_failed(monkeypatch):
 def test_grant_and_revoke_are_audited(monkeypatch):
     conn = _audit_conn()
     monkeypatch.setattr(db, "_get_conn", lambda: conn)
+    # P2 修复（2026-10-11）给 grant 加了 once 前置的 run 状态查询；get_agent_run
+    # 会 close 掉 _get_conn 返回的连接（生产中每次调用自建连接，无碍），这里共享
+    # 内存库会被关掉，故直接 stub 掉查询 —— 本测试只关心审计链，不关心该前置。
+    monkeypatch.setattr(db, "get_agent_run", lambda run_id: {"run_id": run_id, "status": "running"})
     # 屏蔽 allowlist.txt 文件 IO（测试不落宿主目录；_load 置空排除环境干扰）
     from agent.harness.reins import PermissionGate
     monkeypatch.setattr(PermissionGate, "_save_permanent_allowlist", lambda self: None)

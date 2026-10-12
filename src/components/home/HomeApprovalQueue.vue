@@ -16,6 +16,7 @@ import { computed, ref } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import { useApprovalActions } from '@/composables/useApprovalActions'
 import { approvalCommand } from '@/utils/approval-display'
+import { onceGrantBlocked } from '@/utils/approval-scopes'
 
 const agent = useAgentStore()
 const { settleAll } = useApprovalActions()
@@ -26,6 +27,9 @@ const { settleAll } = useApprovalActions()
 const emit = defineEmits<{ 'open-run': [] }>()
 
 const pending = computed(() => agent.pendingPermissions)
+// P2 修复（2026-10-11）：批量「批准本次」全是 once 授权，run 终态后无处消费
+// （后端 409）—— 与内联卡的「允许本次」同一道 run 状态门。
+const onceBlocked = computed(() => onceGrantBlocked(agent.isRunning))
 /** 已处理的卡不删数据（与内联卡原先同一口径）；超时卡按裁决 A 留在可操作队列，
  *  不进这里。队列空了但这里还有货时，整节仍要挂出来 —— 否则"批过什么"就查不到了。 */
 const resolved = computed(() => agent.permissionRequests.filter(r => r.resolved))
@@ -70,7 +74,14 @@ async function batch(kind: 'approve' | 'deny') {
       <button type="button" class="b" :disabled="batching" @click="batch('deny')">
         全部拒绝（{{ pending.length }}）
       </button>
-      <button type="button" class="b" :disabled="batching" @click="batch('approve')">
+      <!-- 批量批准都是 once 授权，共用内联卡同一道 run 状态门（onceBlocked）。 -->
+      <button
+        type="button"
+        class="b"
+        :disabled="batching || onceBlocked"
+        :title="onceBlocked ? '本轮运行已结束，once 授权无处生效' : ''"
+        @click="batch('approve')"
+      >
         {{ batching ? '处理中…' : `全部批准本次（${pending.length}）` }}
       </button>
     </div>

@@ -2,6 +2,8 @@
 
 > 状态：2026-09-20，随 `ea7768f`（ops_* 内容级判定）+ `9a647d1`（批量下发接唯一判定源）+ 判定精度修正 F1–F5（由 `backend/tests/test_safety_misjudgment.py` 双向钉住）落地。
 >
+> 2026-10-11 补记（审批审查）：once 授权的 run 终态 409（§4）、plan 姿态 ⇒ permission_mode 配对强制（`routes/agent.py` 的 `_paired_permission_mode`，plan 时 prompt 声称只读则 PlanModeGuard 必须激活）、自动审批裁决同源取舍登记（§7「裁决同源」）。
+>
 > 本文回答三件事：**边界在哪**、**什么算高危命令**、**为什么这样设计是对的**。
 > §3.1 给判定精度的四条修正口径，§7 登记已知取舍（B/D/E/F/不对称/口径差异）——
 > 这些是有意不做的，不是漏掉的。
@@ -131,6 +133,21 @@ prod 下 `file_write` 的三档落点（本轮决策：**moderate 工具在 prod
 且仅预授权、键按路径绑定；非敏感路径（`/tmp/x`）→ 会话授权，等同临时目录写。
 再收紧会让生产每次改配置都要预登记，收益/成本不成立。
 
+**once 授权的 run 终态语义**（2026-10-11 P2 修复）：once 键按 run 隔离，run 终态时
+`_release_run_interaction_state` → `cleanup_run_once` 清池。因此
+`POST /agent/permission/grant` 对 `scope=once` 前置校验目标 run 非终态
+（`db.get_agent_run`），行缺失或状态 ∈ `TERMINAL_RUN_STATES` 一律 409 —— 否则
+run 结束后（审批兜底到期、SSE 迟到/断连、`settling` 在途窗口）的迟到点击会落进
+一个永不被消费也不再清理的死键，前端却显示「已授权」。状态查询本身异常时
+告警放行：这条校验防的是死键泄漏 + 假授权提示的**完整性**问题，不是安全闸门
+（once 键消费时 PermissionGate 本就还要查表），拿不到证据不等于 run 已死。
+前端随同收敛：run 终态后「允许本次」与批量「全部批准本次」禁用
+（`utils/approval-scopes.ts` 的 `onceGrantBlocked`，超时角标改写为
+"本轮已结束，请在新的运行中重新确认"）；session（按会话键控）与 always（永久）
+跨 run 仍可消费，不受影响。plan 姿态侧的配对强制见文件头 2026-10-11 补记 ——
+`workflow_mode='plan'` 时服务端把 `permission_mode` 压成 `'plan'`，prompt 声称
+只读则 PlanModeGuard 必须激活，两者只发其一就是「亮的空开关」。
+
 **预授权条目可选带保留时长**（设置 → Agent 治理 → 运维策略 → 授权保留时长）：
 默认「永久」即本节全部文字的原始口径；改成 24h/7d/30d 后，`_permanent_active`
 在查表时把到期键当"从未预授权"处理（prod 危险命令因此回到 `prod_deny_no_allowlist`
@@ -167,7 +184,8 @@ prod 主机**而弹的确认框。三条主判定不受该开关影响：dangero
 `backend/agent/audit.py`：链式签名 append-only。`conclusion ∈ {executed, failed, blocked,
 denied, auto_allowed, approved, released, revoked, answered, skipped}`（`audit.py` 的
 `LEGAL_CONCLUSIONS` 是唯一枚举；三份清单 —— 枚举、审计页筛选下拉
-`src/views/ssh/AuditView.vue`、本节 —— 逐字相等，钉在 `backend/tests/test_audit_conclusion_sources.py`。
+`src/views/ssh/AuditView.vue`、本节 —— 逐字相等，钉在
+`backend/tests/test_ai_loop_round13c.py::test_audit_conclusion_三处清单同源`。
 非法值仍落 `executed` 以保住列的有界性，但原始结论会追加进 `result` 并记一条 warning ——
 过去它是静默改写，等于让一条不可篡改的记录声称「这条命令执行过了」），
 含 `environment`、`command_raw`、`run_id`。阻断记 `blocked`、prod 无预授权
@@ -192,6 +210,7 @@ denied, auto_allowed, approved, released, revoked, answered, skipped}`（`audit.
 | **出网重定向** | 两条 HTML 搜索腿原本给 `netconfig.new_client` 传 `follow_redirects=True`，而落地地址从未校验（`_read_capped` 只回 (body, 编码)，最终 URL 根本没交回来）：Location 由对端决定 ⇒ `302 → http://127.0.0.1:8080/`、`302 → http://169.254.169.254/latest/meta-data/` 走的都是同一条请求链。现在不交给 httpx 跟：`_read_search_html` 自己跟，每一跳**先**按 web_fetch 那条公网规则复核（规则本体合并成单一入口 `_resolve_public_destination`，此前 fetch 里还另抄了一遍协议/空 host 判断）折好的 URL，再发请求；跳数与 fetch 共用 `_MAX_REDIRECTS`。剩余两面：① **不固定 IP** —— fetch 用解析出的 IP 直连 + `sni_hostname`，搜索腿把解析交给 httpx，所以「校验时解析到的地址」与「实际连接的地址」之间仍有 DNS 窗口，且 `gethostbyname` 只看一条 A 记录（多 A/AAAA 时可能校验一个、连另一个）；② Tavily 那条仍然不跟随（`api_key` 在 JSON body 里，307/308 会把 body 原样重投给 Location 指定的主机） | ①固定 IP 要绕开 netconfig 的统一代理出口并自己管 Host，为两条硬编码的公开搜索站不值当；②跟随的收益为零（那是 API 端点），代价是泄密钥 | 误拦侧实测：起始 URL 不校验（照旧直连，内网自建代理不受影响），只有跳转目标解析到内网/保留段才拒；**新增失败面**是「一次跳转解析两次」—— DNS 不通的环境里原本由 httpx 独自解析成功的路径，现在会先报 `DNS 解析失败` 再判搜索失败。误放侧真上限就是那个 DNS 窗口（①）。前提证明：`test_web_search_redirect_ssrf.py` 用真 httpx + MockTransport 钉住「`follow_redirects=True` 确实会一路打到 `http://127.0.0.1/admin` 并读回正文」；对照 pristine HEAD 副本跑 30 条用例 26 红，4 条绿的都是「行为不变」锁（Tavily 两条 + fetch 跳数常量 + 那个 httpx 前提） |
 
 | **参数键归一** | 判定层与执行层曾读不同的参数键：`command_from_args` 按 `command→shell→cmd` 取**第一个非空**，而 `JobRunTool.execute(**kwargs)` 只读 `cmd` ⇒ `{"command":"echo DECOY","cmd":"rm -rf /var/log"}` 让 FilesystemGuard / PermissionGate / 计划模式 / Sandbox 底线 / 澄清五层只看得到 echo，真正跑的是删库。现在提取器把三键的值**全部**纳入判定（换行拼成多段，分类器逐段判），两条命令入口也各自拒绝歧义（job_run 显式报错、shell_exec 因位置签名天然 TypeError）。剩余面：`ToolRegistry.execute` 仍不对照 `tool.parameters` 校验 args ⇒ 非命令类工具的多余键仍被静默接收。本轮实测内置工具**没有一处**读取未声明的参数键（脚本比对各类 `kwargs.get("x")` 与自身 `parameters.properties` 的差集，0 例），所以多余键今天改变不了执行内容 —— 但没有锁：这条不变量不在测试里，未来加 `**kwargs` 工具读新键就可能破 | 全局 schema 校验会一次改掉所有工具对模型脏参数的容忍度（模型今天多填 `explanation`/`purpose` 仍能跑通），收紧属于产品口径决策，不该夹在审批绕过的修复里 | `test_command_key_decoy_bypass.py`：14 条用例里 10 条在修复前红（含「整条审批链对 decoy 形状零拦截」这条端到端），另 4 条是「行为不变」锁（单键调用、重复同值、正常 cmd 空值报错、shell_exec 位置签名）修复前后都绿；`_COMMAND_ARG_KEYS` 是五层唯一的命令键来源，Sandbox 底线与 gate 的注释都指向它 |
+| **裁决同源** | 自动审批（permission_mode="auto"）的 LLM 裁决器与主 Agent 用**同一个模型配置**（`ctx.llm_base_url/api_key/model`）：提示注入若能操纵主模型，原则上也能以相近方式影响裁决模型 | 裁决上下文与主循环隔离（只见命令原文/风险理由/任务摘要，**不含工具输出**——注入主要经由工具输出进入），且 fail-closed（超时/异常/输出不合约定/总闸关闭一律回退弹卡）+ 不越 hardline / prod 预授权 / 用户 run 内显式拒绝三道既有边界；换独立模型做裁决的收益未证实，还多一套模型配置与运维面。登记此条是为了不把"模型审模型"误读成双保险 | dangerous 命令仍必经人批；prod 仅预授权；env 总闸 `CKUN_AGENT_DISABLE_AUTO_APPROVE` 可一键退回纯手动（优先级压过设置页开关） |
 
 ## 8. 改判定规则要跑什么
 
@@ -202,7 +221,7 @@ cd backend && python -m pytest -q \
   tests/test_command_explain.py tests/test_ops_content_classification.py \
   tests/test_permission_gate_content_bound_tools.py \
   tests/test_permission_approval_lifecycle.py tests/test_audit_coverage.py \
-  tests/test_permission_policy_round18.py \
+  tests/test_permission_policy_round18.py tests/test_grant_dead_run.py \
   tests/test_remote_whitelist_contract.py tests/test_safety_classify_endpoint.py \
   tests/test_safety_windows_and_dotenv_paths.py \
   tests/test_safety_git_form_and_glued_flags.py \

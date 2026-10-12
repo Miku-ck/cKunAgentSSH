@@ -145,6 +145,22 @@ _WORKFLOW_MODE_PROMPTS = {
     ),
 }
 
+def _paired_permission_mode(workflow_mode: Optional[str], permission_mode: str) -> str:
+    """plan 姿态 ⇒ 只读强制的配对强制（P1 修复，审批审查 2026-10-11）。
+
+    前端 resolveRunModes 恒成对下发，但 HTTP 边界不能信任客户端：system prompt
+    按 workflow_mode 注入「写操作会被直接拒绝」，PlanModeGuard 按 permission_mode
+    激活真正的拦截 —— 客户端只发前者就是「prompt 声称只读、强制不存在」的空开关。
+    故 workflow_mode='plan' 时强制 permission_mode='plan' 并留痕。
+    反向（permission_mode='plan' 而姿态非 plan）是合法的纯只读请求，不改写。
+    """
+    if workflow_mode == "plan" and permission_mode != "plan":
+        logger.warning(
+            "workflow_mode=plan 与 permission_mode=%r 不配对，强制为 plan", permission_mode)
+        return "plan"
+    return permission_mode
+
+
 def _build_agent_system_prompt(
     req: "AgentRunRequest",
     profile_text: str,
@@ -749,6 +765,10 @@ async def agent_run(req: AgentRunRequest, request: Request):
     # to_thread（与其它 db 访问一致），失败/无目标降级为空串，不影响 run。
     goal_text = await asyncio.to_thread(_load_active_goal_text, req.conversation_id or "")
 
+    # P1 修复（审批审查 2026-10-11）：plan 姿态配对强制（理由见
+    # _paired_permission_mode docstring）；此局部变量是 harness.run 的唯一来源。
+    permission_mode = _paired_permission_mode(req.workflow_mode, req.permission_mode)
+
     # M3 修复：提取 system prompt 构建为独立函数
     final_system_prompt = _build_agent_system_prompt(
         req,
@@ -910,7 +930,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     run_id=run_id,
                     skill_ids=req.skill_ids,
                     auto_skill_match=req.auto_skill_match,
-                    permission_mode=req.permission_mode,
+                    permission_mode=permission_mode,
                 ):
                     # M2 修复：检测客户端断连后立即停止 producer，避免空转浪费算力
                     if await request.is_disconnected():
@@ -1493,10 +1513,32 @@ async def grant_tool_permission(req: PermissionGrantRequest):
     from agent.harness.reins import _get_global_permission_gate_sync
     if req.scope not in ("once", "session", "always"):
         raise HTTPException(status_code=400, detail="scope 必须是 once、session 或 always")
-    # once 授权严格按 run 隔离（run 终态自动清理）；缺失 run_id 的授权
-    # 无法被任何 run 消费，直接拒绝（原实现落空 run_id 全局池，有跨 run 竞态）
-    if req.scope == "once" and not req.run_id:
-        raise HTTPException(status_code=400, detail="scope=once 授权必须携带 run_id")
+    # once 授权的两道前置守卫（都只在 scope==once 时触发，合并到一个条件块）：
+    #   1) 缺 run_id：无法被任何 run 消费，直接 400（原实现落空 run_id 全局池，有跨 run 竞态）
+    #   2) run 已终态（P2 修复，审批审查 2026-10-11）：cleanup_run_once 已清空该 run 的池，
+    #      此刻落库的键永不被消费也不再被清理（死键泄漏），前端却显示「已授权」。典型触发：
+    #      审批兜底到期后 run 结束、SSE 迟到/断连窗口内的迟到点击。行缺失同样 409（fail-closed）：
+    #      审批卡只在 run 运行中产生，届时 DB 行必已存在，缺行说明 run_id 本身不可信。
+    if req.scope == "once":
+        if not req.run_id:
+            raise HTTPException(status_code=400, detail="scope=once 授权必须携带 run_id")
+        try:
+            _row = await asyncio.to_thread(db.get_agent_run, req.run_id)
+        except Exception as e:
+            # 查询本身失败不拦授权：这条校验防的是「死键泄漏 + 假已授权」的完整性
+            # 问题，不是安全闸门（once 键消费时 PermissionGate 本就还要查表）。
+            # 拿不到证据不等于 run 已死，告警放行。
+            logger.warning("grant 前置查询 run=%s 状态失败，放行授权: %s", req.run_id, e)
+        else:
+            _run_status = (_row or {}).get("status", "")
+            if _row is None or _run_status in TERMINAL_RUN_STATES:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"run {req.run_id} 已结束（status={_run_status or '不存在'}），"
+                        "once 授权无处消费；请在新的运行中重新确认该命令"
+                    ),
+                )
 
     # H13 修复 A5：session scope 改用进程级单例（原 501 限制移除）
     pg = _get_global_permission_gate_sync()
