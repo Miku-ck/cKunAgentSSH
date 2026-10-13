@@ -32,7 +32,10 @@ export interface TransferProgress {
   endTime?: number
 }
 
-const UNKNOWN = '—'
+/** 「读不出来」的显示字。格式化函数返回它，调用方也要拿它比对（比如决定要不要
+ *  给那一格加 dim 类），所以必须导出 —— 两处各写一个全角破折号，字面量一旦分叉，
+ *  比对就静默恒假，界面上「—」和「00:00」混着出现。 */
+export const UNKNOWN = '—'
 
 /** 0–100 的整数百分比；`total` 未知（0）时返回 0，由 isIndeterminate 决定怎么显示 */
 export function progressPercent(t: TransferProgress): number {

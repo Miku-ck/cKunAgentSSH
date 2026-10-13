@@ -52,7 +52,7 @@
         <div v-else class="pfill" :class="fillClass" :style="{ width: percent + '%' }" />
       </div>
       <span class="pnum" :class="{ dim: view.status !== 'running', ind: indeterminate }">
-        {{ indeterminate ? '—' : percent + '%' }}
+        {{ indeterminate ? UNKNOWN : percent + '%' }}
       </span>
     </div>
 
@@ -133,6 +133,7 @@ import {
   isIndeterminate,
   progressPercent,
   truncatePath,
+  UNKNOWN,
   type TransferStatus,
 } from '@/utils/transfer-format'
 
@@ -152,7 +153,6 @@ const emit = defineEmits<{
   context: [MouseEvent]
 }>()
 
-const UNKNOWN = '—'
 const v = computed(() => props.view)
 const progress = computed(() => ({
   status: v.value.status,
