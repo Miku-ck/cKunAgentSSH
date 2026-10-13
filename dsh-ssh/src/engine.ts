@@ -10,14 +10,13 @@ const { Client } = ssh2mod as unknown as { Client: new () => ClientType }
 import { KnownHosts } from './knownhosts.ts'
 import { expandHome } from './dsh-home.ts'
 import type { HostStore } from './store.ts'
-import type { EnvProfile, ExecResult, HostEntry, HostSummary, RemoteDirEntry, StateSnapshot, TestResult, TunnelInfo, TunnelState } from './protocol.ts'
+import type { EnvProfile, ExecResult, HostEntry, HostSummary, RemoteDirEntry, StateSnapshot, TestResult, TunnelInfo } from './protocol.ts'
 import { fingerprint } from './knownhosts.ts'
 
 interface PooledConn {
   alias: string
   client: ClientType
   state: 'connecting' | 'open' | 'closed'
-  profile?: EnvProfile
 }
 
 /** An ssh error that carries the fingerprint of the presented host key. */
@@ -94,7 +93,8 @@ export class SshEngine {
 
   /**
    * Close one pooled connection. The next connect() re-handshakes and
-   * re-verifies the host key. GUI "断开连接 / 重新校验" uses this.
+   * re-verifies the host key. No route exposes this — the live consumer is
+   * test/engine2.mjs.
    */
   disconnect(alias: string): void {
     const entry = this.pool.get(alias)
