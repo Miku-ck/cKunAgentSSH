@@ -295,8 +295,6 @@ def test_connection_test_reports_effective_timeout(client, clean_policy, base_db
 
 def test_connect_timeout_is_reported_as_connect_not_read(client, clean_policy, base_db):
     """「连不上」与「连上了没回应」是两件事，各自的上限也不同（min(10,t) vs max(60,t)）。"""
-    import asyncio
-
     import database as db
     import httpx
 

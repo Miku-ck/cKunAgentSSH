@@ -20,7 +20,6 @@ import {
 } from '../../shared/gateway-mux'
 
 const hex = (b: Uint8Array) => [...b].map(x => x.toString(16).padStart(2, '0')).join('')
-const fromHex = (s: string) => Uint8Array.from(s.match(/../g)!.map(h => parseInt(h, 16)))
 const utf8 = (s: string) => new TextEncoder().encode(s)
 
 /** 客户端侧解码器：本端奇数 chan，且当前没有任何存活通道 */

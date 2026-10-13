@@ -17,7 +17,6 @@
 
 运行: python -m pytest backend/tests/test_terminal_run_states_source.py -v
 """
-import ast
 import re
 from pathlib import Path
 

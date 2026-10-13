@@ -365,11 +365,10 @@ function decodeBody(typeName: FrameTypeName, chan: number, payload: Uint8Array):
  */
 export function allocChan(parity: Parity, used: ReadonlySet<number>): number | null {
   const start = parity === 'odd' ? 1 : 2
-  // u32 上界的一半才是本端可用的号段空间；这里取一个足够真实的上限，
+  // 号段上界 = start + 2*(0x10000-1) = 131072，够不着 u32 边界，所以这里没有溢出分支要防。
   // 真正的并发上限由网关下发的 maxChannels 决定，不是这里。
   for (let i = 0; i < 0x10000; i++) {
     const chan = start + i * 2
-    if (chan > 0xffffffff - 1) return null
     if (!used.has(chan)) return chan
   }
   return null

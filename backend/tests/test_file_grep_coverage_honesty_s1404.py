@@ -15,7 +15,6 @@ import builtins
 
 import pytest
 
-from agent.tools.builtin import ops_file
 from agent.tools.builtin.ops_file import FileGrepTool, _grep_coverage_note
 
 

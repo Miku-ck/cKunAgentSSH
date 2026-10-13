@@ -312,25 +312,7 @@ export class GatewaySession {
   }
 
   bind(b: RemoteBind): Promise<void> {
-    const key = bindKey(b.bindHost, b.bindPort)
-    // BIND_OK 不回带身份，并发发起会分不清谁成了；控制面这类操作不频繁，串行即可
-    const run = this.bindChain.then(() => this.doBind(key, b))
-    this.bindChain = run.catch(() => undefined)
-    return run
-  }
-
-  private doBind(key: string, b: RemoteBind): Promise<void> {
-    return this.ready.then(
-      () =>
-        new Promise<void>((resolve, reject) => {
-          this.pendingBind.set(key, e => (e ? reject(e) : resolve()))
-          this.sendRaw(encodeFrame({
-            type: 'bind',
-            chan: GLOBAL_CHAN,
-            payload: { bindHost: b.bindHost, bindPort: b.bindPort, targetHost: b.targetHost, targetPort: b.targetPort },
-          }))
-        }),
-    )
+    return this.queueBindOp('bind', b)
   }
 
   /**
@@ -341,19 +323,24 @@ export class GatewaySession {
    * 调用也就永远不返回（UI 卡在「启动中…」，只有删记录才能出来）。
    */
   unbind(b: RemoteBind): Promise<void> {
+    return this.queueBindOp('unbind', b)
+  }
+
+  private queueBindOp(type: 'bind' | 'unbind', b: RemoteBind): Promise<void> {
     const key = bindKey(b.bindHost, b.bindPort)
-    const run = this.bindChain.then(() => this.doUnbind(key, b))
+    // BIND_OK 不回带身份，并发发起会分不清谁成了；控制面这类操作不频繁，串行即可
+    const run = this.bindChain.then(() => this.sendBindOp(type, key, b))
     this.bindChain = run.catch(() => undefined)
     return run
   }
 
-  private doUnbind(key: string, b: RemoteBind): Promise<void> {
+  private sendBindOp(type: 'bind' | 'unbind', key: string, b: RemoteBind): Promise<void> {
     return this.ready.then(
       () =>
         new Promise<void>((resolve, reject) => {
           this.pendingBind.set(key, e => (e ? reject(e) : resolve()))
           this.sendRaw(encodeFrame({
-            type: 'unbind',
+            type,
             chan: GLOBAL_CHAN,
             payload: { bindHost: b.bindHost, bindPort: b.bindPort, targetHost: b.targetHost, targetPort: b.targetPort },
           }))
@@ -458,7 +445,7 @@ export class GatewaySession {
   private startHeartbeat(sec: number): void {
     // heartbeatSec 由对端下发，必须当作不可信输入：Math.max(1, NaN) 仍是 NaN，
     // setInterval(…, NaN) 按 1ms 处理 —— 一个坏网关能把客户端打成 PING 风暴。
-    // 越界/非有限值一律回落默认值（与 gateway-manager 侧的 30 同口径），不钳到边界。
+    // 越界/非有限值一律回落默认值（与 gateway/hillgw.mjs 下发侧的 `|| 30` 同口径），不钳到边界。
     const raw = Number(sec)
     const every = Number.isFinite(raw) && raw >= 1 && raw <= 3600 ? Math.floor(raw) : 30
     if (this.pingTimer) clearInterval(this.pingTimer)

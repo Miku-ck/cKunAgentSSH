@@ -23,8 +23,6 @@
 """
 import asyncio
 
-import pytest
-
 from agent.remote_protocol import EXIT_CODE_PREFIX, STDERR_SENTINEL
 from agent.tools.builtin.ops_obs import (
     LogReadTool,

@@ -27,7 +27,7 @@ export class SshTransport implements TunnelTransport {
     client.on('error', (err: Error) => this.kill(`SSH 连接错误: ${err.message}`))
     client.on('close', () => this.kill('SSH 连接已断开'))
     // 远端绑定端口上有新连接 → accept 出通道交给订阅者（-R）
-    client.on('tcp connection', (info, accept, reject) => {
+    client.on('tcp connection', (_info, accept, reject) => {
       try {
         const stream = accept()
         this.inbound?.(stream)
