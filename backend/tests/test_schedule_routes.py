@@ -8,6 +8,7 @@
 - 此前 /schedules 全部端点零 HTTP 测试覆盖。
 """
 import os
+from datetime import datetime, timedelta, timezone
 
 import fastapi
 import pytest
@@ -15,6 +16,11 @@ from fastapi.testclient import TestClient
 
 import database as db
 import routes.schedules as sched_mod
+
+
+def _fake_compute_next_run(data: dict) -> str:
+    """测试用 compute_next_run：返回一个确定在 60 分钟后的 ISO 时间戳（比『现在』晚即可）。"""
+    return (datetime.now(timezone.utc) + timedelta(minutes=60)).isoformat().replace('+00:00', 'Z')
 
 
 class _FakeEngine:
@@ -52,7 +58,11 @@ def base_db(tmp_workspace):
 @pytest.fixture
 def client(base_db, monkeypatch):
     engine = _FakeEngine()
-    monkeypatch.setattr(sched_mod, "get_schedule_engine", lambda: engine)
+    # schedule_engine 在 routes/schedules.py 里是函数内懒导入：每次调用重新
+    # from agent.schedule_engine import get_schedule_engine。必须补丁源头模块，
+    # 否则补丁只挂在被删掉的模块级符号上、函数内重新 import 又拿回真值。
+    monkeypatch.setattr("agent.schedule_engine.get_schedule_engine", lambda: engine)
+    monkeypatch.setattr("agent.schedule_engine.compute_next_run", _fake_compute_next_run)
     app = fastapi.FastAPI()
     app.include_router(sched_mod.router, prefix="/api")
     c = TestClient(app)

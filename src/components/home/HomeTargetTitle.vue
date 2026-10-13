@@ -60,7 +60,7 @@ function toBulk() {
           <span class="l2">{{ o.hint }}</span>
           <span class="tick">{{ o.active ? '✓' : '' }}</span>
         </button>
-        <span v-if="!options.length" class="htt-none">还没有打开的会话 —— 点标签条右侧的 ＋ 新建终端</span>
+        <span v-if="!options.length" class="htt-none">还没有打开的会话 请新建终端</span>
         <button v-if="canBulkDispatch" type="button" class="htt-opt bulk" @click="toBulk">
           <span class="l1">全部 {{ remoteCount }} 台</span>
           <span class="l2">批量下发 · 不改 AI 目标</span>
@@ -109,7 +109,11 @@ function toBulk() {
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
-  width: 268px;
+  /* 宽度随内容自适应：空态一行短文案不再撑出固定宽度的空盒子，
+     超长 user@host 由 max-width 兜底走省略号 */
+  width: max-content;
+  min-width: 140px;
+  max-width: 320px;
   max-height: 280px;
   overflow-y: auto;
   padding: 4px;

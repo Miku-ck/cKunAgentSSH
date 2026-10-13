@@ -68,13 +68,15 @@ afterEach(() => {
 })
 
 describe('resolvePythonCommand —— 候选探测与回退', () => {
-  it('win32：第一个候选可用时直接返回且不再探测后续', async () => {
+  it('win32：第一个候选可用时直接返回（并行探测全部候选，按优先级选首个成功）', async () => {
     setPlatform('win32')
     stubProbe(new Set(['python']))
 
     const r = await resolve()
     expect(r).toEqual({ cmd: 'python', prefixArgs: [] })
-    expect(execFileMock).toHaveBeenCalledTimes(1)
+    // 并行探测：Promise.all 一次性派发全部 3 个候选，不会因首命中而短路 ——
+    // 上限固定为一轮并行 spawn，性能不再随候选数量线性下降
+    expect(execFileMock).toHaveBeenCalledTimes(3)
     // 探测命令必须验证依赖可导入，而不是只看解释器能否执行
     expect(execFileMock.mock.calls[0][1]).toEqual(['-c', 'import fastapi, uvicorn'])
   })
@@ -98,13 +100,14 @@ describe('resolvePythonCommand —— 候选探测与回退', () => {
     await expect(resolve()).rejects.toThrow(/CKUN_PYTHON/)
   })
 
-  it('posix：优先 python3，回退 python', async () => {
+  it('posix：优先 python3，回退 python（并行探测 2 候选后按优先级选 py3）', async () => {
     setPlatform('linux')
     stubProbe(new Set(['python3']))
 
     const r = await resolve()
     expect(r).toEqual({ cmd: 'python3', prefixArgs: [] })
-    expect(execFileMock).toHaveBeenCalledTimes(1)
+    // 并行探测：2 个候选一次性派发，结果数组按优先级排序后取首命中
+    expect(execFileMock).toHaveBeenCalledTimes(2)
   })
 
   it('CKUN_PYTHON 显式指定且存在时不做探测直接信任', async () => {

@@ -15,7 +15,6 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 import database as db
-from agent.schedule_engine import get_schedule_engine, compute_next_run
 
 router = APIRouter(tags=["schedules"])
 
@@ -91,6 +90,7 @@ async def create_schedule(req: ScheduleIn):
     # model_dump 对未变的 req 是确定性的，序列化一次复用即可
     data = req.model_dump()
     _validate_fields(data)
+    from agent.schedule_engine import get_schedule_engine, compute_next_run
     next_at = compute_next_run(data)
     created = await asyncio.to_thread(
         db.create_schedule, {**data, "next_run_at": next_at}
@@ -130,6 +130,7 @@ async def update_schedule(schedule_id: str, req: SchedulePatch):
     # 下一个 tick 立即补跑一次；停用方向（true→false）不重算，保持原语义。
     reenabled = patch.get("enabled") is True and not existing.get("enabled")
     if (_SCHEDULE_KEYS & set(patch.keys())) or reenabled:
+        from agent.schedule_engine import compute_next_run
         next_at = compute_next_run(updated)
         await asyncio.to_thread(db.set_schedule_next_run, schedule_id, next_at)
         # 重读后返回：updated 取于写 next_run_at 之前，直接回给调用方会带上
@@ -141,6 +142,7 @@ async def update_schedule(schedule_id: str, req: SchedulePatch):
 @router.delete("/schedules/{schedule_id}")
 async def delete_schedule(schedule_id: str):
     # 走 engine：先取消在途的无头 Agent run 并落定执行历史，再删行
+    from agent.schedule_engine import get_schedule_engine
     ok = await get_schedule_engine().remove_schedule(schedule_id)
     if not ok:
         raise HTTPException(status_code=404, detail="任务不存在")
@@ -152,6 +154,7 @@ async def run_schedule_now(schedule_id: str):
     sched = await asyncio.to_thread(db.get_schedule, schedule_id)
     if not sched:
         raise HTTPException(status_code=404, detail="任务不存在")
+    from agent.schedule_engine import get_schedule_engine
     engine = get_schedule_engine()
     engine.ensure_started()
     # S7-07：桥断开时回 ok:true 是谎报 —— trigger 只 create_task，真正的失败要等

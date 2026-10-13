@@ -338,10 +338,10 @@ describe('atelier（手记）主题的令牌覆盖', () => {
       })
     }
     // 债账（同 ORPHAN_TOKENS_ALLOWLIST 的纪律）：并行会话正拿着的文件。
-    // 下面那条"债还在"的断言是故意钉的 —— 他们改完后这条会红，提醒把豁免删掉。
-    const DEBT: string[] = ['src/components/ssh/SftpView.vue']
+    // 2026-10-13：SftpView.vue 的那处抄写随传输样式整体迁出而消失，豁免按本测试
+    // 自己写下的口径删掉 —— 债还上之后这条若还挂着，就是在替已不存在的代码说话。
+    const DEBT: string[] = []
     expect(offenders.filter((o) => !DEBT.some((d) => o.startsWith(d)))).toEqual([])
-    expect(offenders.some((o) => DEBT.some((d) => o.startsWith(d)))).toBe(true)
 
     // 变异自检：正则绿着骗人比没有更糟
     expect(COPIED.test('  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);')).toBe(true)

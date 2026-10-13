@@ -548,7 +548,7 @@ async function onMasterDisable(): Promise<void> {
 .hint.warn { color: var(--danger-text); }
 
 .hint code, .status-line code {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   font-size: 11px;
 }
 
@@ -605,7 +605,7 @@ async function onMasterDisable(): Promise<void> {
 
 .link-url {
   flex: 1;
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-primary);
   overflow: hidden;
@@ -646,7 +646,7 @@ async function onMasterDisable(): Promise<void> {
   background: var(--bg-base);
   color: var(--text-primary);
   font-size: 12px;
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   outline: none;
   min-width: 0;
 }
@@ -669,7 +669,7 @@ async function onMasterDisable(): Promise<void> {
   min-width: 0;
 }
 
-.dl-size { font-size: 11px; color: var(--text-secondary); font-family: var(--font-mono, monospace); }
+.dl-size { font-size: 11px; color: var(--text-secondary); font-family: var(--font-mono); }
 
 .dl-state { font-size: 11px; color: var(--text-secondary); flex: 0 0 48px; text-align: right; }
 .dl-state.done { color: var(--status-success-text); }
@@ -702,7 +702,7 @@ async function onMasterDisable(): Promise<void> {
 .hosts-ip {
   flex: 0 0 120px;
   font-size: 11px;
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   color: var(--text-primary);
 }
 .hosts-ip.none { color: var(--danger-text); }
@@ -732,7 +732,7 @@ async function onMasterDisable(): Promise<void> {
 .latency {
   flex: 0 0 64px;
   font-size: 11px;
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   color: var(--text-secondary);
   text-align: right;
 }

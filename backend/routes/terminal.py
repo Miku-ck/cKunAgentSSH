@@ -12,7 +12,6 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 import database as db
-from llm_adapter import chat_stream
 from database import get_model_config as _db_get_model_config_raw
 
 logger = logging.getLogger(__name__)
@@ -133,6 +132,7 @@ async def predict_terminal_command(req: TerminalPredictRequest):
     try:
         # aclosing：超时取消时生成器停在半途，不显式关闭就要等 GC ——
         # llm_adapter 的 _client_in_flight 计数不归零，会挡住客户端 LRU 回收
+        from llm_adapter import chat_stream
         async def _read_stream() -> str:
             parts: list[str] = []
             async with aclosing(chat_stream(

@@ -737,16 +737,23 @@ export class BackendManager {
           { cmd: 'python', prefixArgs: [] },
         ]
 
-    const failures: string[] = []
-    for (const c of candidates) {
-      const label = [c.cmd, ...c.prefixArgs].join(' ')
-      if (await BackendManager.probePython(c.cmd, c.prefixArgs)) {
+    // 启动性能优化：所有候选解释器并行探测（Promise.all），
+    // 按优先级选第一个成功的返回。原实现串行逐个 spawn 探测（最快 1×、最慢 3×
+    // spawn 开销），无论几台候选现在都只等一轮并行探测完成。
+    const results = await Promise.all(
+      candidates.map((c) =>
+        BackendManager.probePython(c.cmd, c.prefixArgs).then((ok) => ({ ok, c })),
+      ),
+    )
+    for (const r of results) {
+      if (r.ok) {
+        const label = [r.c.cmd, ...r.c.prefixArgs].join(' ')
         console.log(`[BackendManager] Using Python interpreter: ${label}`)
-        return c
+        return r.c
       }
-      failures.push(label)
     }
 
+    const failures = candidates.map((c) => [c.cmd, ...c.prefixArgs].join(' '))
     throw new Error(
       `未找到可运行后端的 Python 环境（需要 fastapi/uvicorn）。`
       + `已尝试: ${failures.join('、')}。`

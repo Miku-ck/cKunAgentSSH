@@ -176,7 +176,9 @@ def test_predict_closes_llm_stream_on_timeout(base_db, monkeypatch):
         finally:
             closed["v"] = True
 
-    monkeypatch.setattr(term, "chat_stream", hanging_stream)
+    # terminal.py 的 chat_stream 已改为函数内懒导入（避免循环依赖），
+    # 必须补丁源头 llm_adapter 模块：补丁只挂在被删掉的模块级符号上没用。
+    monkeypatch.setattr("llm_adapter.chat_stream", hanging_stream)
     client = _make_client(term.router)
     resp = client.post("/api/terminal/predict", json={
         "session_id": "s1", "recent_commands": ["git status"], "cwd": "/tmp",

@@ -399,9 +399,44 @@ export interface SshReconnectStatus {
   errorMessage?: string
 }
 
+/**
+ * 独立传输连接（每传输一条专用 SSH 连接）。
+ *
+ * 传输提速动机：ssh2 的 SSH 通道窗口硬编码为 2 MB（Channel.js MAX_WINDOW），
+ * 单条 SSH 连接任何时刻最多 2 MB 数据在途，速度上限 ≈ 2MB ÷ RTT。多个传输
+ * 共用一条连接时瓜分同一个 2 MB 窗口，整体吞吐上不去。这里为传输单独维护
+ * 一批 SSH 连接（每主机一批，每条同时只服务一个传输）：N 个并发传输 = N 条
+ * 独立连接 = N × 2 MB 在途窗口，且与终端交互流量彻底解耦。
+ *
+ * 并发上限天然受渲染层并发门（maxConcurrent，默认 3、上限 8）约束 —— 每主机
+ * 同时在途的传输数不超过它，故连接数不会无界增长。
+ *
+ * 生命周期：租出（leased=true）→ 归还（leased=false，延时空闲回收）；意外
+ * 断开 dead 置位后下次 acquire 重建。不进重连体系（传输有 .part 续传）。
+ */
+interface TransferConn {
+  client: Client
+  sftp: SFTPWrapper
+  name: string
+  /** 是否已租给某个在途传输（同一连接同时只服务一个传输，独占 2 MB 窗口） */
+  leased: boolean
+  /** 连接/子系统已死标记（对端关闭后置位，避免继续派发新传输） */
+  dead: boolean
+  /** 空闲回收定时器 */
+  cleanupTimer: NodeJS.Timeout | null
+}
+
+/** 单主机独立传输连接的软上限（超过则复用最久未用连接，退化为共享窗口而非无界建连） */
+const TRANSFER_CONN_PER_HOST_CAP = 8
+/** 独立传输连接空闲回收超时（全部归还后保留多久供下一批复用） */
+const TRANSFER_CONN_IDLE_MS = 300000
+
 export class SSHManager {
   private sessions = new Map<string, SSHSession>()
   private sftpSessions = new Map<string, SFTPWrapper>()
+  // 独立传输连接池：key = 连接配置 id（connectionId，"主机"粒度），
+  // value = 该主机的一批传输连接（每条同时服务一个传输）
+  private transferConns = new Map<string, TransferConn[]>()
   private transfers = new Map<string, () => void>()
   private nextId = 1
   /**
@@ -1103,9 +1138,15 @@ export class SSHManager {
 
   /** 断开连接（用户主动：先取消所有待执行重连，不触发重连、不发 ssh:close） */
   disconnect(id: string): void {
+    // 先取连接配置 id（teardownSession 会删掉 session）—— 用于顺带回收该
+    // 主机名下的独立传输连接
+    const connId = this.sessions.get(id)?.connectionId
     // 重连修复：主动断开取消该会话的重连（清 timer + 代数 +1 使 in-flight 旧连接作废）
     this.cancelReconnect(id)
     this.teardownSession(id)
+    // 传输提速配套：终端/SFTP 会话被用户主动断开时，该主机的独立传输连接
+    // 一并断开（在途传输的在途写会失败，走 .part 续传重试）
+    this.dropTransferConnsForConnection(connId)
   }
 
   /** 清理所有会话（应用退出/关全部：同样取消所有待执行重连，防退出后定时器空转） */
@@ -1130,6 +1171,10 @@ export class SSHManager {
     }
     this.sessions.clear()
     this.transfers.clear()
+    // 传输提速配套：应用退出/关全部时回收所有独立传输连接
+    for (const cfgId of Array.from(this.transferConns.keys())) {
+      this.dropTransferConnsForConnection(cfgId)
+    }
     // disconnectAll 不走 teardownSession（那里才摘 bridgeSessionIds），
     // 此处统一清空桥接归属集合，避免死状态残留（会话 id 每次启动随机，
     // 残留项永远不会命中新会话，但保持集合干净仍是正确做法）
@@ -1435,6 +1480,124 @@ if (err) return reject(new SSHError('SFTP_INIT_FAIL', { original: err }))
     }
   }
 
+  /**
+   * 为一次传输取得一条独占的独立 SSH 连接上的 SFTP 子系统（传输提速专用）。
+   *
+   * 独立连接动机见 TransferConn 注释：ssh2 通道窗口 2 MB/连接是速度上限。
+   * 同主机优先复用空闲（leased=false 且存活）连接；无空闲且未达上限则新建
+   * （N 并发传输 = N 条独立连接 = N × 2 MB 窗口）；已达上限则退而复用队首
+   * （共享窗口，好过无界建连）。
+   *
+   * 返回 { sftp, release }：调用方在 finally 里 release() 归还（不关连接，
+   * 供下一个传输复用）。连接意外断开 dead 置位，下次 acquire 清理后重建。
+   */
+  private async acquireTransferSftp(
+    sshSessionId: string,
+  ): Promise<{ sftp: SFTPWrapper; release: () => void }> {
+    const session = this.sessions.get(sshSessionId)
+    if (!session) throw new SSHError('SESSION_NOT_FOUND')
+    const cfgId = session.connectionId
+    if (!cfgId) throw new SSHError('SFTP_SESSION_REQUIRED')
+
+    let conns = this.transferConns.get(cfgId)
+    if (conns && conns.some(c => c.dead)) {
+      // 清掉已死连接（对端关闭后残留池中的）
+      for (const c of conns.filter(c => c.dead)) this.destroyTransferConn(c)
+      conns = conns.filter(c => !c.dead)
+      if (conns.length > 0) this.transferConns.set(cfgId, conns)
+      else this.transferConns.delete(cfgId)
+    }
+
+    let conn = conns?.find(c => !c.leased && !c.dead)
+    if (!conn) {
+      if (!conns) conns = []
+      if (conns.length < TRANSFER_CONN_PER_HOST_CAP) {
+        // 无空闲且未达上限：新建一条（并发传输各占一条独立 2 MB 窗口连接）
+        conn = await this.createTransferConn(cfgId)
+        conns.push(conn)
+        this.transferConns.set(cfgId, conns)
+      } else {
+        // 达上限（8，与渲染层并发门上限一致）仍无空闲：建一条不入池的临时
+        // 连接，用完即拆 —— 正确性优先（绝不复用 leased 连接破坏租约），
+        // 该分支在门控正常时几乎不会触发
+        const tmp = await this.createTransferConn(cfgId)
+        return {
+          sftp: tmp.sftp,
+          release: () => this.destroyTransferConn(tmp),
+        }
+      }
+    }
+    if (conn.cleanupTimer) { clearTimeout(conn.cleanupTimer); conn.cleanupTimer = null }
+    conn.leased = true
+    return {
+      sftp: conn.sftp,
+      release: () => {
+        conn!.leased = false
+        this.scheduleTransferConnCleanup(cfgId)
+      },
+    }
+  }
+
+  /** 新建一条独立传输连接（复用 openRawClient 的 TOFU/认证/keepalive 口径） */
+  private async createTransferConn(cfgId: string): Promise<TransferConn> {
+    const config = await this.configProvider?.(cfgId)
+    if (!config) throw new SSHError('SFTP_SESSION_REQUIRED')
+    const client = await this.openRawClient(config)
+    const sftp = await new Promise<SFTPWrapper>((resolve, reject) => {
+      client.sftp((err, s) => (err ? reject(new SSHError('SFTP_INIT_FAIL', { original: err })) : resolve(s)))
+    })
+    const conn: TransferConn = {
+      client, sftp,
+      name: config.name || `${config.username}@${config.host}`,
+      leased: false, dead: false, cleanupTimer: null,
+    }
+    const markDead = (): void => { conn.dead = true }
+    client.on('close', markDead)
+    client.on('error', markDead)
+    return conn
+  }
+
+  /** 空闲回收排程：全部归还后延时回收整批连接（下一批传输免建连开销） */
+  private scheduleTransferConnCleanup(cfgId: string): void {
+    const conns = this.transferConns.get(cfgId)
+    if (!conns || conns.some(c => c.leased)) return // 无池或仍有在途传输
+    if (conns.some(c => c.dead)) { this.dropAllTransferConns(cfgId); return }
+    if (conns.some(c => c.cleanupTimer)) return // 已有排程则不重复
+    const timer = setTimeout(() => this.dropAllTransferConns(cfgId), TRANSFER_CONN_IDLE_MS)
+    for (const c of conns) c.cleanupTimer = timer
+  }
+
+  /** 拆除该主机全部传输连接（清池 + 断连接）；在途传输在场则拒绝 */
+  private dropAllTransferConns(cfgId: string): void {
+    const conns = this.transferConns.get(cfgId)
+    if (!conns) return
+    if (conns.some(c => c.leased)) return
+    this.transferConns.delete(cfgId)
+    for (const c of conns) this.destroyTransferConn(c)
+  }
+
+  /** 真正断开并丢弃一条连接对象（清定时器 + end；不碰池） */
+  private destroyTransferConn(conn: TransferConn): void {
+    if (conn.cleanupTimer) { clearTimeout(conn.cleanupTimer); conn.cleanupTimer = null }
+    try { conn.sftp.end() } catch { /* ignore */ }
+    try { conn.client.end() } catch { /* ignore */ }
+  }
+
+  /**
+   * 断开某连接配置下的全部传输连接（disconnect/断连时调用）。
+   * 用户主动断开语义：在途传输也一并断（dead 置位让其在途写失败、走续传）。
+   */
+  private dropTransferConnsForConnection(connectionId: string | undefined): void {
+    if (!connectionId) return
+    const conns = this.transferConns.get(connectionId)
+    if (!conns) return
+    this.transferConns.delete(connectionId)
+    for (const c of conns) {
+      c.dead = true
+      this.destroyTransferConn(c)
+    }
+  }
+
   /** 列远程目录,返回排序后的条目(目录在前,同类型按名称) */
   async sftpList(sshSessionId: string, remotePath: string): Promise<SftpEntry[]> {
     const sftp = this.requireSftp(sshSessionId)
@@ -1567,7 +1730,10 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
     localPath: string,
     remotePath: string,
   ): Promise<void> {
-    const sftp = this.requireSftp(sshSessionId)
+    // 传输提速：从连接池取独占的独立 SSH 连接（每条 2 MB 窗口），
+    // 不与终端会话瓜分窗口；release 在 runBody 的 finally 归还（停滞场景
+    // 延后归还，让续传的新传输天然拿到另一条连接，隔离旧的在途写）
+    const { sftp, release } = await this.acquireTransferSftp(sshSessionId)
     const CHUNK_SIZE = 262144 // 256KB
     const CONCURRENCY = 8
     const VERIFY_SIZE = 4096 // 续传校验前 4KB
@@ -1818,6 +1984,9 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       try { if (localFd) await localFd.close() } catch { /* ignore */ }
       try { if (remoteHandle) await sftpClose(sftp, remoteHandle) } catch { /* ignore */ }
       heartbeat.stop()
+      // 归还独立传输连接（供下一传输复用；停滞场景此处仍归还，但新续传
+      // 传输通常已在本 release 之前 acquire 到了另一条连接，天然隔离）
+      release()
       // C10 配套：渲染层按 STALLED 重试时可能已用同一 transferId 启动新传输，
       // 只清理本传输自己注册的取消函数，避免误删新传输的条目
       if (this.transfers.get(transferId) === cancelFn) {
@@ -1852,13 +2021,22 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
     remotePath: string,
     localPath: string,
   ): Promise<void> {
-    const sftp = this.requireSftp(sshSessionId)
+    // 传输提速：同 sftpUpload — 从连接池取独占独立 SSH 连接（2 MB 窗口/条），
+    // 不与终端会话瓜分窗口；release 在 runBody 的 finally 归还
+    const { sftp, release } = await this.acquireTransferSftp(sshSessionId)
     const CHUNK_SIZE = 262144 // 256KB
     const CONCURRENCY = 8
     const VERIFY_SIZE = 4096 // 续传校验前 4KB
 
     // 远程文件大小
-    const stat = await sftpStat(sftp, remotePath)
+    let stat: any
+    try {
+      stat = await sftpStat(sftp, remotePath)
+    } catch (err) {
+      // stat 失败发生在 runBody 之外：归还连接后再抛，避免租约泄漏
+      release()
+      throw err
+    }
     const total = stat.size || 0
 
     const partPath = localPath + '.part'
@@ -2107,6 +2285,9 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       try { await localFd?.close() } catch { /* ignore */ }
       try { if (remoteHandle) await sftpClose(sftp, remoteHandle) } catch { /* ignore */ }
       heartbeat.stop()
+      // 归还独立传输连接（供下一传输复用；停滞时旧连接仍在途写 → 本 release
+      // 延后到 runBody 退出，续传新传输天然拿到另一条连接，隔离旧在途写）
+      release()
       // C10 配套：渲染层按 STALLED 重试时可能已用同一 transferId 启动新传输，
       // 只清理本传输自己注册的取消函数，避免误删新传输的条目
       if (this.transfers.get(transferId) === cancelFn) {

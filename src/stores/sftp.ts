@@ -9,8 +9,11 @@ import { toFriendlyMessage, unwrapIpcErrorEnvelope } from '@/api/client'
 import { extractSSHError } from '@/ssh-error-types'
 import { isUnsafeRemoteName } from '@/utils/remote-name'
 import { describeTransferError } from '@/utils/transfer-error'
+import type { TransferKind, TransferStatus } from '@/utils/transfer-format'
 
-type TransferKind = 'upload' | 'download' | 'copy-local' | 'copy-remote'
+/** 并发上限的可调天花板。导出而不是让底栏再抄一份 8 —— 两边一旦分叉，
+ *  「+」号会在 store 还在钳的时候先停住，或反过来按下去没反应。 */
+export const MAX_CONCURRENT_CEIL = 8
 
 export interface TransferItem {
   id: string
@@ -23,10 +26,20 @@ export interface TransferItem {
   to: string
   transferred: number
   total: number
-  status: 'pending' | 'running' | 'paused' | 'done' | 'error' | 'cancelled'
+  // 状态联合类型来自 transfer-format（唯一来源）：判色与「是否不确定进度」的分支
+  // 必须和格式化函数认同一份成员表，抄第二份迟早和 'paused' 分叉。
+  status: TransferStatus
   error?: string
   startTime: number
   endTime?: number
+  /** 目录传输的分组标识：一次目录展开产生的 N 条任务共享同一个 groupId，
+   *  传输中心据此折叠成一行组头 + 组级汇总条。单文件/复制任务为 undefined（平铺显示）。
+   *  只用于展示归并 —— 调度、取消、续传仍逐条按 id 走，不引入组级 IPC。 */
+  groupId?: string
+  /** 组头显示名（被展开的那个目录名，带尾斜杠） */
+  groupLabel?: string
+  /** 入队时已知的文件字节数（大文件优先排序用；未知为 undefined，视为 0 排末尾） */
+  size?: number
 }
 
 // B20 修复：目录加载请求序号（模块级单调递增）。
@@ -83,9 +96,17 @@ export const useSftpStore = defineStore('sftp', () => {
   const transfers = ref<TransferItem[]>([])
   // m4 修复：transferSeq 移入 store state，避免模块级变量永不重置和多会话共享
   const transferSeq = ref(1)
-  // 批量传输并发上限：同一 SFTP 通道同时传输多个文件会互相争抢导致整体吞吐降低
-  // 经验值 2-3 较优，超过 4 后单文件速度明显下降
-  const MAX_CONCURRENT_TRANSFERS = 3
+  // 批量传输并发上限：独立传输连接落地后（主进程为每个并发传输各开一条 SSH
+  // 连接，各占 2 MB 通道窗口），并发传输不再瓜分同一窗口，默认值由 3 上调到 5
+  // —— 5 条独立窗口在高 RTT 链路上能把总吞吐拉近 5 倍带宽延迟积。仍设上限
+  // 8：再高会撞服务端 MaxSessions（通常 10）与本机连接数，且单机上行带宽
+  // 往往撑不住更多并行流。做成响应式是为了让传输中心底栏能就地调节。
+  const MAX_CONCURRENT_DEFAULT = 5
+  const maxConcurrent = ref(MAX_CONCURRENT_DEFAULT)
+  function setMaxConcurrent(n: number): void {
+    if (!Number.isFinite(n)) return
+    maxConcurrent.value = Math.min(MAX_CONCURRENT_CEIL, Math.max(1, Math.round(n)))
+  }
   // 审查R2修复：并发门跨批次唤醒注册表 —— gateCount 按全局 running 计数，
   // 但原实现的 scheduleNext 只在本批次任务 finally 里重入：先提交的批次占满
   // 3 个并发门时，后提交的批次初始派发 0 个且永无唤醒 → 其 transfer 永久
@@ -112,6 +133,47 @@ export const useSftpStore = defineStore('sftp', () => {
   const activeTransfers = computed(() =>
     transfers.value.filter(t => t.status === 'running' || t.status === 'pending' || t.status === 'paused')
   )
+
+  /** 队列计数 + 总进度 —— 供各 tab 的计数徽标与会话栏实时徽标消费。
+   *
+   *  刻意**不含**速度/剩余时间：那两个量是时间的函数，而 computed 拿不到会自己跳的
+   *  `now`，收进来就会被缓存成一个死值。
+   *
+   *  百分比按**字节**算，不按任务数：一个 12 文件的目录里 11 个小文件传完、第 12 个
+   *  800 MB 的还没动，按数计是 92%、按字节只有 8% —— 后者才是用户的体感。
+   *  `total === 0`（未知总量）的条目不进分母，否则一条远端复制会把整条队列钉死在
+   *  一个偏低的百分比上。
+   *
+   *  只暴露有人读的字段：已传/总字节与 indeterminate 都是算百分比的中间量，不对外
+   *  （无消费方=失效设置项）。 */
+  const queueStats = computed(() => {
+    const s = {
+      running: 0,
+      pending: 0,
+      paused: 0,
+      done: 0,
+      error: 0,
+      cancelled: 0,
+      bytesTransferred: 0,
+      bytesTotal: 0,
+    }
+    for (const t of transfers.value) {
+      s[t.status]++
+      s.bytesTransferred += t.transferred
+      if (t.total > 0) s.bytesTotal += t.total
+    }
+    return {
+      running: s.running,
+      pending: s.pending,
+      paused: s.paused,
+      done: s.done,
+      error: s.error,
+      cancelled: s.cancelled,
+      percent: s.bytesTotal > 0
+        ? Math.min(100, Math.round((s.bytesTransferred / s.bytesTotal) * 100))
+        : 0,
+    }
+  })
 
   // ─── 绑定 / 解绑 SSH 会话 ────────────────────
   /** 直接通过 SSH 连接 + SFTP 子系统打开远程会话(独立于终端会话) */
@@ -537,8 +599,8 @@ async function remoteRefresh(): Promise<void> {
    * 递归展开本地目录，返回所有文件的本地绝对路径 + 相对根目录的相对路径
    * 用于目录上传场景
    */
-  async function expandLocalDir(localDir: string): Promise<Array<{ localPath: string; relPath: string }>> {
-    const result: Array<{ localPath: string; relPath: string }> = []
+  async function expandLocalDir(localDir: string): Promise<Array<{ localPath: string; relPath: string; size: number }>> {
+    const result: Array<{ localPath: string; relPath: string; size: number }> = []
     const stack: Array<{ dir: string; rel: string }> = [{ dir: localDir, rel: '' }]
     // P3 修复：收集遍历中因不可读（无权限）而跳过的子目录，结束后统一告警
     // —— 原实现静默 continue，用户无从得知上传的目录结构不完整
@@ -557,7 +619,8 @@ async function remoteRefresh(): Promise<void> {
         if (e.isDirectory) {
           stack.push({ dir: e.path, rel: childRel })
         } else {
-          result.push({ localPath: e.path, relPath: childRel })
+          // 保留 FileEntry.size（fsReadDir 已带）：大文件优先排序要用
+          result.push({ localPath: e.path, relPath: childRel, size: e.size || 0 })
         }
       }
     }
@@ -577,8 +640,8 @@ async function remoteRefresh(): Promise<void> {
    * 了」不再被宽 catch 记成「目录不可读」而静默少收一半文件：那是两种要告诉用户
    * 完全不同的事，前者必须中断整批。
    */
-  async function expandRemoteDir(remoteDir: string, sid: string): Promise<Array<{ remotePath: string; relPath: string }>> {
-    const result: Array<{ remotePath: string; relPath: string }> = []
+  async function expandRemoteDir(remoteDir: string, sid: string): Promise<Array<{ remotePath: string; relPath: string; size: number }>> {
+    const result: Array<{ remotePath: string; relPath: string; size: number }> = []
     const stack: Array<{ dir: string; rel: string }> = [{ dir: remoteDir, rel: '' }]
     // P3 修复：同 expandLocalDir — 收集不可读而跳过的子目录并统一告警
     const skipped: string[] = []
@@ -607,7 +670,8 @@ async function remoteRefresh(): Promise<void> {
         if (e.isDirectory) {
           stack.push({ dir: e.path, rel: childRel })
         } else {
-          result.push({ remotePath: e.path, relPath: childRel })
+          // 保留 SftpEntry.size（sftpList 已带）：大文件优先排序要用
+          result.push({ remotePath: e.path, relPath: childRel, size: e.size || 0 })
         }
       }
     }
@@ -633,7 +697,7 @@ async function remoteRefresh(): Promise<void> {
     // 剩余文件上传到另一台主机的同一路径下
     const sid = sshSessionId.value
     const remoteBaseDir = targetDir ?? remoteCwd.value
-    const tasks: Array<{ id: string; localPath: string; remotePath: string }> = []
+    const tasks: Array<{ id: string; localPath: string; remotePath: string; size: number }> = []
 
     for (const lp of localPaths) {
       const name = basenameLocal(lp)
@@ -641,20 +705,27 @@ async function remoteRefresh(): Promise<void> {
 
       // 判断是文件还是目录：优先查 localEntries（应用内拖拽），否则用 fsStat（OS 拖拽）
       let isDir = false
+      // 入队时一并抓文件大小（大文件优先排序用；抓不到按 0 处理排末尾）
+      let fileSize = 0
       const localEntry = localEntries.value.find(e => e.path === lp)
       if (localEntry) {
         isDir = localEntry.isDirectory
+        fileSize = localEntry.size || 0
       } else {
         try {
           const st = await getApi().fsStat(lp)
           isDir = st.isDirectory
+          fileSize = st.size || 0
         } catch {
           // 无法获取信息，当作文件处理
         }
       }
 
       if (isDir) {
-        // 目录：递归展开
+        // 目录：递归展开。整批盖同一个 groupId，传输中心据此折叠成一行组头；
+        // 调度与取消仍逐条按 id 走。
+        const groupId = `g${transferSeq.value++}`
+        const groupLabel = `${name}/`
         const files = await expandLocalDir(lp)
         for (const f of files) {
           const remotePath = remoteBase + '/' + f.relPath
@@ -667,8 +738,10 @@ async function remoteRefresh(): Promise<void> {
             from: f.localPath, to: remotePath,
             transferred: 0, total: 0,
             status: 'pending', startTime: Date.now(),
+            groupId, groupLabel,
+            size: f.size,
           })
-          tasks.push({ id, localPath: f.localPath, remotePath })
+          tasks.push({ id, localPath: f.localPath, remotePath, size: f.size })
         }
       } else {
         // 文件：直接加入
@@ -678,10 +751,16 @@ async function remoteRefresh(): Promise<void> {
           from: lp, to: remoteBase,
           transferred: 0, total: 0,
           status: 'pending', startTime: Date.now(),
+          size: fileSize,
         })
-        tasks.push({ id, localPath: lp, remotePath: remoteBase })
+        tasks.push({ id, localPath: lp, remotePath: remoteBase, size: fileSize })
       }
     }
+
+    // 大文件优先：按 size 降序 —— 并发门先放大文件（各占一条独立连接的
+    // 2 MB 窗口），小文件填缝在后，减少"大文件排在一堆小文件后面干等"的
+    // 长尾延迟（稳定排序：同大小维持原顺序，目录内相对次序不乱）
+    tasks.sort((a, b) => b.size - a.size)
 
     // F-6 修复：带上 id/kind（runBatch 派发前检查 + 并发门计数）
     runBatch(tasks.map(t => ({ fn: () => runUpload(t.id, sid, t.localPath, t.remotePath), id: t.id, kind: 'upload' as const }))).then(async (results) => {
@@ -700,7 +779,7 @@ async function remoteRefresh(): Promise<void> {
     // 从另一台主机读取同名路径
     const sid = sshSessionId.value
     const localBaseDir = targetDir ?? localCwd.value
-    const tasks: Array<{ id: string; remotePath: string; localPath: string }> = []
+    const tasks: Array<{ id: string; remotePath: string; localPath: string; size: number }> = []
 
     for (const rp of remotePaths) {
       const name = basenameRemote(rp)
@@ -730,7 +809,7 @@ async function remoteRefresh(): Promise<void> {
 
       if (isDir) {
         // 目录：递归展开（sid 钉死传入，S5-12）
-        let files: Array<{ remotePath: string; relPath: string }>
+        let files: Array<{ remotePath: string; relPath: string; size: number }>
         try {
           files = await expandRemoteDir(rp, sid)
         } catch (err) {
@@ -738,6 +817,9 @@ async function remoteRefresh(): Promise<void> {
           toast.error((err as Error)?.message || '目录展开失败')
           return
         }
+        // 同 uploadFiles：一次目录展开的 N 条任务共享 groupId，展示层折叠成组头
+        const groupId = `g${transferSeq.value++}`
+        const groupLabel = `${name}/`
         for (const f of files) {
           const localPath = await getApi().fsPathJoin(localBase, f.relPath)
           // 确保本地父目录存在（fsMkdir 是 recursive）
@@ -751,21 +833,30 @@ async function remoteRefresh(): Promise<void> {
             from: f.remotePath, to: localPath,
             transferred: 0, total: 0,
             status: 'pending', startTime: Date.now(),
+            groupId, groupLabel,
+            size: f.size,
           })
-          tasks.push({ id, remotePath: f.remotePath, localPath })
+          tasks.push({ id, remotePath: f.remotePath, localPath, size: f.size })
         }
       } else {
-        // 文件：直接加入
+        // 文件：直接加入（大小从 remoteEntries 缓存取，取不到按 0 排末尾）
         const id = `t${transferSeq.value++}`
+        const remoteEntry = remoteEntries.value.find(e => e.path === rp)
+        const fileSize = remoteEntry?.size || 0
         transfers.value.push({
           id, direction: 'down', kind: 'download', name,
           from: rp, to: localBase,
           transferred: 0, total: 0,
           status: 'pending', startTime: Date.now(),
+          size: fileSize,
         })
-        tasks.push({ id, remotePath: rp, localPath: localBase })
+        tasks.push({ id, remotePath: rp, localPath: localBase, size: fileSize })
       }
     }
+
+    // 大文件优先：同 uploadFiles —— 并发门先放大文件（各占一条独立连接的
+    // 2 MB 窗口），小文件填缝在后，减少长尾延迟（稳定排序，同大小维持原序）
+    tasks.sort((a, b) => b.size - a.size)
 
     // F-6 修复：带上 id/kind（runBatch 派发前检查 + 并发门计数）
     runBatch(tasks.map(t => ({ fn: () => runDownload(t.id, sid, t.remotePath, t.localPath), id: t.id, kind: 'download' as const }))).then(async (results) => {
@@ -904,7 +995,7 @@ async function remoteRefresh(): Promise<void> {
   }
 
   /**
-   * 并发调度器：限制同时运行的传输任务数为 MAX_CONCURRENT_TRANSFERS
+   * 并发调度器：限制同时运行的传输任务数为 maxConcurrent（底栏可调，钳到 MAX_CONCURRENT_CEIL）
    * 返回每个任务的执行结果（ok/错误），全部完成才 resolve
    *
    * B26 修复：并发门只统计 upload/download（SFTP 通道争抢型任务），
@@ -945,7 +1036,7 @@ async function remoteRefresh(): Promise<void> {
         while (nextIdx < total) {
           const def = taskDefs[nextIdx]
           const unlimited = def.kind === 'copy-local' || def.kind === 'copy-remote'
-          if (!unlimited && gateCount() >= MAX_CONCURRENT_TRANSFERS) break
+          if (!unlimited && gateCount() >= maxConcurrent.value) break
           const idx = nextIdx++
           // F-5 竞态双保险：任务已不再是 pending（含排队期间被删除移除）则跳过。
           // 记录不存在（!t）同样跳过 —— 否则 deleteTransfer 删掉的 pending 任务
@@ -1159,7 +1250,7 @@ function resumeTransfer(id: string): void {
 function retryTransfer(id: string): void {
   const t = transfers.value.find(x => x.id === id)
   if (!t) return
-  const { kind, name, from, to } = t
+  const { kind, name, from, to, groupId, groupLabel } = t
   // direction 由 kind 唯一决定：upload/copy-local→up、download/copy-remote→down
   // （见各 push 点）。原式只判 'upload'，重试同侧本地复制会把方向图标翻成 'down'。
   const direction: 'up' | 'down' = kind === 'upload' || kind === 'copy-local' ? 'up' : 'down'
@@ -1170,6 +1261,8 @@ function retryTransfer(id: string): void {
     from, to,
     transferred: 0, total: 0,
     status: 'pending', startTime: Date.now(),
+    // 分组随原任务一起续命：重试目录里的单个文件不该把它甩出组头变成一条平铺行
+    groupId, groupLabel,
   })
   const task: () => Promise<void> =
     // 手动重试是当前上下文里的显式动作：投递到此刻的活动会话
@@ -1236,7 +1329,7 @@ function removeTransfer(id: string): void {
     loadingLocal, loadingRemote, localError, remoteError,
     selectedLocal, selectedRemote, transfers, clipboard,
     // computed
-    activeTransfers,
+    activeTransfers, queueStats,
     // session
     connect, connectFromTerminal, disconnect,
     // clipboard
@@ -1247,8 +1340,9 @@ function removeTransfer(id: string): void {
     loadRemote, remoteUp, remoteRefresh, remoteMkdir, remoteRename, remoteDelete,
     // selection
     toggleSelectLocal, toggleSelectRemote, clearSelection,
-// transfer
-uploadFiles, downloadFiles, cancelTransfer, pauseTransfer, resumeTransfer, retryTransfer, removeTransfer, deleteTransfer, applyProgress, clearCompleted,
+    // transfer
+    uploadFiles, downloadFiles, cancelTransfer, pauseTransfer, resumeTransfer, retryTransfer, removeTransfer, deleteTransfer, applyProgress, clearCompleted,
+    maxConcurrent, setMaxConcurrent,
     // copy
     localCopy, remoteCopy,
     // zip
