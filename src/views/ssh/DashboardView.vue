@@ -209,8 +209,8 @@
               </td>
               <td class="mono port-user"><span v-if="pt.user" :title="`进程属主：${pt.user}`">{{ pt.user }}</span><span v-else class="port-proc-none" title="属主仅在 CPU TOP 50 进程内按 PID 关联，休眠监听进程常不入榜">—</span></td>
               <td class="port-act">
-                <button v-if="pt.pid && !pt.secondaryPids" class="proc-kill" title="终止监听进程" @click="confirmPortKill(pt)">终止</button>
-                <span v-else-if="pt.secondaryPids" class="port-proc-none" title="该端口由多个进程分别监听（TCP/UDP 不同 PID），合并行不具备一键终止条件；请到进程表分别处置">—</span>
+                <button v-if="pt.pid && (!pt.secondaryPids || pt.secondaryPids.length === 0)" class="proc-kill" title="终止监听进程" @click="confirmPortKill(pt)">终止</button>
+                <span v-else-if="pt.secondaryPids && pt.secondaryPids.length > 0" class="port-proc-none" title="该端口由多个进程分别监听（TCP/UDP 不同 PID），合并行不具备一键终止条件；请到进程表分别处置">—</span>
                 <span v-else class="port-proc-none" title="无权限获取监听进程 PID（需 root 或进程属主）">—</span>
               </td>
             </tr>
@@ -837,6 +837,7 @@ const Sparkline = defineComponent({
 .proc-table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed; /* 钉死列宽：分页切换时浏览器不再按内容重排，防抖动 */
   font-size: 12px;
 }
 
@@ -939,6 +940,7 @@ const Sparkline = defineComponent({
 .port-table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed; /* 钉死列宽：数据/分页切换时浏览器不再按内容重排，防抖动 */
   font-size: 12px;
 }
 

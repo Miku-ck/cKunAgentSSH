@@ -343,6 +343,7 @@ onMounted(refresh)
 .audit-table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed; /* 钉死列宽：翻页时浏览器不再按内容重排，防抖动 */
   font-size: 12px;
 }
 .audit-table th {
