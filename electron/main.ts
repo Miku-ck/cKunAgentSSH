@@ -1,7 +1,6 @@
 import { app, BrowserWindow, ipcMain, shell, dialog, session, nativeImage } from 'electron'
 import { join, resolve as pathResolve, dirname, basename, extname } from 'path'
 import { pathToFileURL } from 'url'
-import { is } from '@electron-toolkit/utils'
 import { readdir, readFile, writeFile, stat, lstat, mkdir, rename, rm, realpath, copyFile } from 'fs/promises'
 import { existsSync, readdirSync } from 'fs'
 import { homedir } from 'os'
@@ -33,6 +32,10 @@ import { assertSafePath, allowDialogKeyPath, isCopyTargetSelfNested, rejectSymli
 import { beginCopy, endCopy, requestCopyCancel } from './utils/copy-cancel'
 
 let mainWindow: BrowserWindow | null = null
+// 开发态判定：原 `is.dev`（@electron-toolkit/utils）语义就是 `!app.isPackaged`，
+// 仅这一处用途，为一个布尔值拖一个依赖不值（依赖清单已删该包，保留 import 会让
+// 全新 install 后 typecheck 红、打包产物在 externalizeDepsPlugin 下启动即崩）
+const isDev = !app.isPackaged
 let backendManager: BackendManager | null = null
 let ptyManager: PtyManager | null = null
 let sshManager: SSHManager | null = null
@@ -173,7 +176,7 @@ function createWindow(): void {
 
   // 导航守卫：仅允许自身渲染层同源导航，防止外部站点通过链接/劫持接管应用窗口。
   const allowedOrigins = new Set<string>()
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+  if (isDev && process.env['ELECTRON_RENDERER_URL']) {
     try { allowedOrigins.add(new URL(process.env['ELECTRON_RENDERER_URL']).origin) } catch { /* ignore */ }
   }
   // prod file: 导航限制在应用渲染层目录内（避免任意本地文档通过窗口获取 preload IPC 面）。
@@ -191,8 +194,8 @@ function createWindow(): void {
       return
     }
     const isAllowed =
-      (is.dev && allowedOrigins.has(parsed.origin)) ||
-      (!is.dev && parsed.protocol === 'file:' && isOwnRendererFile(parsed.href)) ||
+      (isDev && allowedOrigins.has(parsed.origin)) ||
+      (!isDev && parsed.protocol === 'file:' && isOwnRendererFile(parsed.href)) ||
       url === mainWindow?.webContents.getURL()
     if (!isAllowed) {
       event.preventDefault()
@@ -202,7 +205,7 @@ function createWindow(): void {
     }
   })
 
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+  if (isDev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))

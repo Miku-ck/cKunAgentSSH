@@ -103,3 +103,19 @@ runtime/*
 
 # brainstorm visual companion mockups
 .superpowers/
+
+# UI 概念稿与核对截图（与 .superpowers/ 同性质的一次性产物，别混进提交）
+designs/
+
+# 直接对 vitest.config.ts 跑 tsc 留下的编译孪生文件 —— vite 找配置时 .js 排在 .ts 前面，
+# 留着就等于让测试读一份会过期的旧配置
+vitest.config.js
+vitest.config.d.ts
+
+# 一次性打包体积诊断脚本（本地探查 node_modules/asar 用，非构建链路，勿入库）
+.asarcheck.cjs
+.sizeprobe.cjs
+
+# 用 -c.directories.output= 试打包时落在仓库根的替代产物目录（330 MB 量级，
+# 每个都含完整 electron 运行时）；正式的 dist/ 已在上面忽略
+dist-*/

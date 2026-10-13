@@ -16,6 +16,8 @@
  * 曾经同批搬来的 `formatElapsed` 因「已运行」栏位被撤而无人消费，已删。
  */
 
+import { formatBytes } from './format'
+
 export type TransferStatus = 'pending' | 'running' | 'paused' | 'done' | 'error' | 'cancelled'
 
 /** 任务类别。store 的 TransferItem 与归并层的 GroupableTransfer 共指这一份，
@@ -65,16 +67,10 @@ export function remainingSeconds(t: TransferProgress, now: number): number | nul
   return Math.ceil((t.total - t.transferred) / speed)
 }
 
-/** 字节/秒 → `3.2 MB/s`；单位钳制到 GB/s，与 formatBytes 的 B/KB/MB/GB 同一阶梯 */
+/** 字节/秒 → `3.2 MB/s`。单位阶梯直接复用 formatBytes，不再自己抄一份
+ *  B/KB/MB/GB —— 两条阶梯迟早一条钳到 PB、一条钳到 GB，同一屏上速率和大小会打架。 */
 export function formatRate(bytesPerSec: number): string {
-  if (!bytesPerSec || bytesPerSec <= 0) return '0 B/s'
-  const KB = 1024
-  const MB = KB * 1024
-  const GB = MB * 1024
-  if (bytesPerSec < KB) return `${Math.round(bytesPerSec)} B/s`
-  if (bytesPerSec < MB) return `${(bytesPerSec / KB).toFixed(1)} KB/s`
-  if (bytesPerSec < GB) return `${(bytesPerSec / MB).toFixed(1)} MB/s`
-  return `${(bytesPerSec / GB).toFixed(2)} GB/s`
+  return formatBytes(bytesPerSec) + '/s'
 }
 
 /** 秒 → `mm:ss`，超过一小时带小时位 `h:mm:ss`。原实现输出裸秒（`剩余 125s`）。 */

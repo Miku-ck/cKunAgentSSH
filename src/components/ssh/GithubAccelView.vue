@@ -65,7 +65,7 @@
         <div v-for="d in visibleDownloads" :key="d.id" class="dl-row">
           <div class="dl-head">
             <span class="dl-name" :title="d.fileName">{{ d.fileName }}</span>
-            <span class="dl-size">{{ d.state === 'downloading' ? `${fmtBytes(d.transferred)}${d.total ? ' / ' + fmtBytes(d.total) : ''}` : (d.path ? fmtBytes(d.transferred) : '') }}</span>
+            <span class="dl-size">{{ d.state === 'downloading' ? `${formatBytes(d.transferred)}${d.total ? ' / ' + formatBytes(d.total) : ''}` : (d.path ? formatBytes(d.transferred) : '') }}</span>
             <span class="dl-state" :class="d.state">{{ dlStateText(d) }}</span>
             <button v-if="d.state === 'downloading'" class="btn btn-sm btn-ghost" @click="cancelDownload(d.id)">取消</button>
             <button v-if="d.state === 'done'" class="btn btn-sm btn-ghost" @click="revealDownload(d.id)">打开位置</button>
@@ -211,6 +211,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useGithubAccelStore } from '@/stores/github-accel'
 import { useToastStore } from '@/stores/toast'
+import { formatBytes } from '@/utils/format'
 import { type AccelLink } from '../../../shared/github-accel-core'
 
 const accel = useGithubAccelStore()
@@ -303,14 +304,6 @@ async function runProbe(): Promise<void> {
   } catch (e: any) {
     toast.error(e?.message || '测速失败')
   }
-}
-
-function fmtBytes(n: number): string {
-  if (!n || n <= 0) return '0 B'
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
 }
 
 function dlStateText(d: { state: string }): string {

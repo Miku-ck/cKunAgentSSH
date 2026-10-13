@@ -10,6 +10,7 @@
  */
 import { describe, expect, it } from 'vitest'
 
+import { formatBytes } from '@/utils/format'
 import {
   averageSpeed,
   formatClock,
@@ -101,7 +102,11 @@ describe('formatClock / formatRate', () => {
     expect(formatRate(512)).toBe('512 B/s')
     expect(formatRate(2048)).toBe('2.0 KB/s')
     expect(formatRate(3.2 * 1024 * 1024)).toBe('3.2 MB/s')
-    expect(formatRate(2 * 1024 ** 3)).toBe('2.00 GB/s')
+    expect(formatRate(2 * 1024 ** 3)).toBe('2.0 GB/s')
+    // 钉住"就是同一份阶梯"而不是"恰好数值相同"：再抄一份 ladder 就会在这里红
+    for (const v of [0, 512, 2048, 3.2 * 1024 * 1024, 2 * 1024 ** 3, 5 * 1024 ** 4]) {
+      expect(formatRate(v)).toBe(formatBytes(v) + '/s')
+    }
   })
 })
 

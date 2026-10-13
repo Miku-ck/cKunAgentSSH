@@ -14,6 +14,7 @@ import { computed, onMounted, ref } from 'vue'
 import { toFriendlyMessage } from '@/api/client'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useSSHStore } from '@/stores/ssh'
+import { formatBytes } from '@/utils/format'
 
 /** 与后端 chat.py 的 MAX_UPLOAD_SIZE 同值：超过它的文件主进程那边本来就抛，
  *  灰在列表里比点下去吃一条错误提示省事。 */
@@ -56,12 +57,6 @@ function parentOf(path: string): string {
   const trimmed = path.endsWith('/') ? path.slice(0, -1) : path
   const idx = trimmed.lastIndexOf('/')
   return idx <= 0 ? '/' : trimmed.slice(0, idx)
-}
-
-function fmtSize(n: number): string {
-  if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)}M`
-  if (n >= 1024) return `${Math.round(n / 1024)}K`
-  return `${n}B`
 }
 
 async function load(path: string) {
@@ -156,7 +151,7 @@ onMounted(() => { load('/') })
         >
           <span class="nm">{{ e.name }}</span>
           <span v-if="e.isDirectory" class="sz">/</span>
-          <span v-else class="sz">{{ reading === e.path ? '读取中…' : fmtSize(e.size) }}</span>
+          <span v-else class="sz">{{ reading === e.path ? '读取中…' : formatBytes(e.size) }}</span>
         </button>
       </li>
       <li v-if="!entries.length && cwd !== '/'"><p class="hrp-hint">空目录</p></li>

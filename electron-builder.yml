@@ -3,13 +3,41 @@ productName: cKunAgentSSH
 directories:
   buildResources: resources
   output: dist
+# ⚠️ 白名单，不是黑名单。此前这里写的是 `!src/*` 这类排除式，意思是「根目录下
+# 没被点名的东西全进 app.asar」—— 于是 dist*/（上一轮打包产物，内含 315 MB 的
+# app.asar）、.electron-cache/（下载来的 electron/nsis/7zip）、docs/、designs/
+# 一起被打进包里：实测 payload 从 187 MB 涨到 524 MB，并且 makensis 因为要 mmap
+# 541 MB 的单文件而 Internal compiler error #12345 直接失败。
+# 白名单里只放运行时真要读的东西：
+#   out/**        —— 主进程/预加载/渲染三端的编译产物（package.json 的 main 指向它）
+#   package.json  —— Electron 定位入口与 app version 的唯一来源
+#   resources/**  —— 托盘图标是运行时从 app 根读的，
+#                    electron/desktop-prefs.ts:218 找不到 resources/icon.png 就抛错；
+#                    buildResources 目录同时也是产物的一部分，不只是给 electron-builder 用的
+#   node_modules/** —— 生产依赖。node-module-collector 只收 dependencies
+#                    （现在只剩 node-pty/ssh2 及其传递依赖），渲染端那 10 个包已被
+#                    vite 打进 out/renderer，不需要在 node_modules 里再存一份
+# backend/ 与 runtime/ 走 extraResources（下面），源码目录 src/electron/shared/scripts
+# docs/gateway/designs/测试与构建配置一律不进包。
 files:
-  - '!**/.vscode/*'
-  - '!src/*'
-  - '!electron/*'
-  - '!backend/*'
-  - '!{.eslintignore,.eslintrc.cjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
-  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  - 'out/**'
+  - 'package.json'
+  - 'resources/**'
+  - 'node_modules/**'
+  # 原生模块（node-pty / cpu-features）在打包机上编译留下的中间产物与外部平台预编译：
+  # pdb/iobj/ipdb 是 MSVC 调试与增量链接产物，obj/ 与 build/deps/ 是编译中间目录，
+  # 运行时一个都不读；非 win32-x64 的 prebuilds 也用不到。实测这些占 161.6 MB
+  # （node-pty 一个包 152 MB，其中 90 MB 是 build/），剔掉后包体近乎减半。
+  # ⚠️ 只出 x64：若将来加 arm64 目标，win32-arm64 那行必须按 arch 分支，不能全排。
+  - '!node_modules/**/*.pdb'
+  - '!node_modules/**/*.iobj'
+  - '!node_modules/**/*.ipdb'
+  - '!node_modules/**/build/**/obj/**'
+  - '!node_modules/**/build/deps/**'
+  - '!node_modules/**/prebuilds/darwin*/**'
+  - '!node_modules/**/prebuilds/linux*/**'
+  - '!node_modules/**/prebuilds/win32-arm64/**'
+  - '!**/*.test.ts'
 asarUnpack:
   - '**/node-pty/**'
   - '**/ssh2/**'
@@ -24,8 +52,8 @@ extraResources:
       - '!*.pyc'
   # 内嵌 Python 运行时：把 Portable Python 解压到仓库根 runtime/ 即可随包分发到
   # resources/python-runtime/（解析逻辑见 electron/backend-manager.ts getPythonCommand）。
-  # 该条目由 scripts/package.js 在 runtime/ 有实际内容时动态追加（-c.extraResources），
-  # 未准备运行时时打警告并跳过 — 打包机回退系统 Python，不阻断构建。
+  # 该条目由 scripts/package.js 在 runtime/python.exe（POSIX 为 python3）存在时动态追加
+  # （-c.extraResources）；没准备运行时时打警告并跳过 — 打包机回退系统 Python，不阻断构建。
 win:
   executableName: cKunAgentSSH
   # resources/icon.png（buildResources）— electron-builder 自动生成多尺寸 .ico

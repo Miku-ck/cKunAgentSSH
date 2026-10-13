@@ -23,25 +23,19 @@ if (!process.env.NODE_OPTIONS || !process.env.NODE_OPTIONS.includes('use-system-
 const isWin = process.platform === 'win32'
 const builder = path.join(root, 'node_modules', '.bin', isWin ? 'electron-builder.cmd' : 'electron-builder')
 
-// 4) 内嵌 Python 运行时探测：仓库根 runtime/ 有实际内容（README.md 占位不算）
-//    时追加 extraResources → resources/python-runtime/；否则警告并回退系统 Python。
+// 4) 内嵌 Python 运行时探测：按 runtime/README.md 的契约认那枚解释器可执行文件
+//    （Windows runtime/python.exe，POSIX runtime/python3），而不是「除 README.md 外还有
+//    别的文件」—— 一个误落进来的日志/临时文件会让构建谎报「已就绪」，把只装着杂物的
+//    resources/python-runtime/ 打进包。运行时解析侧本来就会 existsSync(python.exe) 兜底，
+//    所以错的只是这条构建日志与这次多余拷贝。
+const fs = require('fs')
 const runtimeDir = path.join(root, 'runtime')
-let runtimeReady = false
-try {
-  const fs = require('fs')
-  runtimeReady =
-    fs.existsSync(runtimeDir) &&
-    fs
-      .readdirSync(runtimeDir)
-      .some((name) => name !== 'README.md')
-} catch {
-  runtimeReady = false
-}
+const runtimeProbe = path.join(runtimeDir, isWin ? 'python.exe' : 'python3')
+const runtimeReady = fs.existsSync(runtimeProbe)
 const extraArgs = process.argv.slice(2)
 const builderConfigArgs = ['-c', 'electron-builder.yml'] // 显式主配置，保证与生成片段合并
 if (runtimeReady) {
   console.log('[package] runtime/ 已就绪 → 打包内嵌 Python 运行时 (resources/python-runtime)')
-  const fs = require('fs')
   const snippet = path.join(root, '.electron-builder.runtime.yml')
   fs.writeFileSync(
     snippet,
@@ -55,8 +49,8 @@ if (runtimeReady) {
   builderConfigArgs.push('-c', snippet)
 } else {
   console.warn(
-    '[package] 警告：runtime/ 为空 — 本次打包不内嵌 Python 运行时，' +
-      '目标机需自装 Python（或依赖 CKUN_PYTHON 指定）。准备方式见 runtime/README.md',
+    '[package] 警告：未内嵌 Python 运行时（runtime/ 里没有 ' + path.basename(runtimeProbe) + '）— ' +
+      '本次打包的 app 依赖目标机自装 Python（或用 CKUN_PYTHON 指定）。准备方式见 runtime/README.md',
   )
 }
 const child = spawn(builder, [...builderConfigArgs, ...extraArgs], { stdio: 'inherit', shell: isWin })
