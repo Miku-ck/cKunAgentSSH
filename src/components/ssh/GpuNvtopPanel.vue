@@ -665,10 +665,15 @@ const sysRows = computed<SysRow[]>(() => {
 }
 </style>
 
-<!-- 浅色主题例外覆盖：深色写死的终端专属色在浅色下对比度不足，在此翻转。
-     其余背景/前景/边框全都由 scoped .nvtop 中的项目令牌驱动，此处不动。 -->
+<!-- 浅色系主题例外覆盖：nvtop 面板底随 --bg-base（浅底主题下自动变浅），
+     深色写死的终端专属色（亮绿卡名、白网格线、笔画描边）在浅底上对比不足/隐形，
+     在此翻转。其余背景/前景/边框全由 scoped .nvtop 的项目令牌驱动，此处不动。
+     选择器覆盖全部浅底主题：light / 手记 atelier / 浅墨 glass-light ——
+     旧版只认 light 一个，浅底的手记与浅墨会漏翻（抄一份清单的漂移族）。 -->
 <style>
-[data-theme="light"] .nvtop {
+[data-theme="light"] .nvtop,
+[data-theme="atelier"] .nvtop,
+[data-theme="glass-light"] .nvtop {
   --nv-name: #2d6a1a;
   --nv-grid: rgba(0, 0, 0, 0.1);
   --nv-mark-stroke: #ffffff;

@@ -223,7 +223,9 @@ defineExpose({ open, close })
 .settings-nav {
   width: 200px;
   flex-shrink: 0;
-  background: var(--bg-base);
+  /* 侧栏结构面：走 --canvas-bg（非玻璃主题=--bg-base 不变；玻璃下=transparent，
+     与右侧内容区共用弹窗自身的磨砂，避免“实心侧栏 vs 磨砂内容”两种材质）*/
+  background: var(--canvas-bg);
   border-right: 1px solid var(--border-subtle);
   padding: 12px 8px;
   overflow-y: auto;

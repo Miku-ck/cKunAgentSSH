@@ -1015,7 +1015,8 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--bg-base);
+  /* 整页结构画布：走 --canvas-bg（玻璃主题下=transparent，让渐变透上来；详见 DashboardView 同注）。 */
+  background: var(--canvas-bg);
 }
 
 /* 连接状态条：仿仪表盘，44px / 16px 侧距 / 底部分隔线 */

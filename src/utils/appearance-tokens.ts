@@ -15,7 +15,7 @@
  * 此前 Theme/Accent 在 store 与面板里各抄一份，面板色板还另抄了一份 hex ——
  * 已经抄错：蓝色 swatch 显示 #58a6ff，实际写进 --accent-primary 的是 #0078d4。
  */
-export type Theme = 'dark' | 'light' | 'system' | 'blue-screen' | 'forest' | 'mint' | 'bee' | 'coral' | 'atelier'
+export type Theme = 'dark' | 'light' | 'system' | 'blue-screen' | 'forest' | 'mint' | 'bee' | 'coral' | 'atelier' | 'glass' | 'glass-light'
 export type Accent = 'blue' | 'purple' | 'green' | 'orange' | 'white' | 'forest' | 'mint' | 'bee' | 'coral' | 'verm'
 export type GradientMode = 'glow' | 'linear' | 'radial'
 export type GradientDirection = 'tb' | 'bt' | 'lr' | 'rl' | 'tlbr' | 'trbl'

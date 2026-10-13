@@ -13,6 +13,15 @@
         </select>
       </SettingRow>
 
+      <!-- 玻璃/浅墨的折射质感依赖主题渐变色提供背景内容，缺时退化为素色毛玻璃。
+           只把状态说破，不隐式改用户设置（沿用本仓约定）。 -->
+      <p
+        v-if="(settings.appearance.theme === 'glass' || settings.appearance.theme === 'glass-light') && !settings.appearance.themeGradientEnabled"
+        class="field-hint"
+      >
+        玻璃质感需要背景有内容被折射，建议开启下方「主题渐变色」（否则退化为素色毛玻璃）。
+      </p>
+
       <SettingRow label="强调色" desc="主色调与高亮色">
         <div class="color-swatches">
           <button
@@ -317,6 +326,8 @@ const themeLabels: Record<Theme, string> = {
   bee: '蜜蜂',
   coral: '珊瑚',
   atelier: '手记',
+  glass: '玻璃',
+  'glass-light': '浅墨',
   system: '跟随系统',
 }
 

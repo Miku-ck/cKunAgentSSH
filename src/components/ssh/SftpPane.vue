@@ -542,7 +542,9 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   min-width: 0;
   overflow: hidden;
   position: relative;
-  background: var(--bg-base);
+  /* 结构面统一走 --canvas-bg（玻璃下=transparent 透出 body 同一层壁纸，
+     使所有非卡片背景一致；其余主题=--bg-base 零回归） */
+  background: var(--canvas-bg);
 }
 .sftp-pane.side-local { border-right: 1px solid var(--divider-primary); }
 
@@ -552,7 +554,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   align-items: center;
   justify-content: space-between;
   padding: 0 10px;
-  background: var(--bg-base);
+  background: var(--canvas-bg);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
@@ -636,7 +638,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   display: flex;
   align-items: center;
   padding: 0 10px; gap: 2px;
-  background: var(--bg-base);
+  background: var(--canvas-bg);
   overflow-x: auto; flex: 1;
   font-family: var(--font-mono); font-size: 11px;
   cursor: text;
@@ -717,7 +719,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   inset: 32px 0 0 0;
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
-  background: var(--bg-base);
+  background: var(--canvas-bg);
   padding: 24px; text-align: center;
   color: var(--text-tertiary); gap: 10px;
   z-index: 2;

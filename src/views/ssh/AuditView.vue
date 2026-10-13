@@ -274,7 +274,8 @@ onMounted(refresh)
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--bg-base);
+  /* 整页结构画布：走 --canvas-bg（玻璃主题下=transparent，让渐变透上来；详见 DashboardView 同注）。 */
+  background: var(--canvas-bg);
   color: var(--text-primary);
   overflow: hidden;
   box-sizing: border-box;

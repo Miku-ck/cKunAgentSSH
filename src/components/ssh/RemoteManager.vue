@@ -420,7 +420,8 @@ onUnmounted(() => {
   flex-direction: column;
   height: 100%;
   overflow: hidden;
-  background: var(--bg-base);
+  /* 整页结构画布：走 --canvas-bg（玻璃主题下=transparent，让渐变透上来；详见 DashboardView 同注）。 */
+  background: var(--canvas-bg);
 }
 
 /* 头部 */
@@ -627,7 +628,8 @@ onUnmounted(() => {
   height: 40px;
   padding: 0 16px;
   border-top: 1px solid var(--border-default);
-  background: var(--bg-base);
+  /* 底部批量操作栏：结构面走 --canvas-bg 与整页统一 */
+  background: var(--canvas-bg);
   flex-shrink: 0;
 }
 

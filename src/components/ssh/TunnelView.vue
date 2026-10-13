@@ -250,7 +250,8 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--bg-base);
+  /* 整页结构画布：走 --canvas-bg（玻璃下=transparent 透出壁纸） */
+  background: var(--canvas-bg);
 }
 /* 头部统一以 RemoteManager .rm-header 为准：44px 高 + 16px 侧距 + 底部分隔线 */
 .page-head {

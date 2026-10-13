@@ -567,7 +567,10 @@ const Sparkline = defineComponent({
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--bg-base);
+  /* 整页结构画布：走 --canvas-bg（默认=--bg-base，非玻璃主题逐像素不变；
+     玻璃主题下=transparent，让 body 主题渐变透上来被上层面板折射，
+     否则这块不透明实心层会把渐变盖死，玻璃在这些页面失效）。 */
+  background: var(--canvas-bg);
   font-family: var(--font-sans);
   color: var(--text-primary);
 }
@@ -674,7 +677,8 @@ const Sparkline = defineComponent({
   display: flex;
   flex-direction: column;
   gap: 18px;
-  background: var(--bg-base);
+  /* 内容滚动画布：同整页根走 --canvas-bg，连接后不再用实心 --bg-base 重新盖住渐变 */
+  background: var(--canvas-bg);
 }
 
 .dash-cards {

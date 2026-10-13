@@ -338,6 +338,218 @@
   --border-input: #543028;
 }
 
+/* ── 玻璃主题（macOS / iOS Apple 毛玻璃） ──
+ *
+ * 设计对标：macOS Sonoma 侧栏、iOS 控制中心、通知中心。
+ *
+ * 核心原理（三条token能写的）。Apple 毛玻璃视觉 = 高透明白底让背后的彩色
+ * 洅上来；blur/saturate 是 CSS 属性只能写在 global.css 里：
+ *   1. **透明底** — --bg-elevated 用 rgba(255,255,255,α) 让背后的彩色透上来，
+ *      玻璃透光洅色。α 在 0.08（面板/大卡片）到 0.14（小浮層），太浊没玻璃感、
+ *     太白字糊底。
+ *   2. **白亮色边框** — 1px rgba(255,255,255,0.18–0.25) 模拟玻璃断口的光折射，
+ *      与暗底上的 environment-light 反射。
+ *   3. **脏脏饱和染色** — 强调色 / 图标色取高饱和 pastel（#67e8f9、#d8b4fe），
+ *      它们在"透明底 +blur 洅色"上继续保持苹果特有的"水果糖"质感，不换成暗色。
+ *
+ * --bg-elevated / --bg-input 取值
+ * --------------------
+ *   关闭渐变时背景是纯黑 --bg-base。纯黑 + 8% 白 α = 约 #141418 中性灰，
+ *   完成"磨砂玻璃杯"的暗调外观。此时玻璃是暗的但纹理清楚。
+ *
+ *   开启渐变（强烈推荐，苹果毛玻璃靠彩色透出来）时 --bg-base body 上多了
+ *   一层蓝→品红→青的渐变环境。透明下面的玻璃把这层颜色"洅"出来 —
+ *   真正苹果感靠这条。开启后玻璃从"灰的"变"彩色的"。
+ *
+ *   ⚠ 注意：[data-gradient="on"] 那套 color-mix 覆盖 --bg-elevated 是给其它主题
+ *   用的 — 在玻璃主题里那层覆盖是无害的（color-mix(transparent) 保持 α）；
+ *   但彩色洅色效果打开渐变后会更惊艳。
+ *
+ * 为什么玻璃主题不用 --bg-elevated: white / rgba(255,255,255,0.85)？
+ * ----------------------------------------------------------------------
+ *   纯白底 + 重 α 在暗底上就是一张"白卡"完全没有玻璃感。苹果毛玻璃看起来
+ *   亮是因为背后有彩色；背后是纯黑时它本来就暗 — 这是物理。本主题让用户
+ *   开渐变，让玻璃洅出环境色；不开时至少也是纹理清楚的暗调毛玻璃。
+ */
+[data-theme="glass"] {
+  /* ── 玻璃（macOS 暗调 vibrancy）：深板岩底 + 半透白玻璃 + 顶缘内高光 ──
+     --canvas-bg: transparent 让 body 渐变透到结构画布之下，被面板 backdrop-filter
+     折射 —— 这是「苹果玻璃」成立的机制（见 spec 2026-10-13 §根因）。
+     bg-base 深板岩（非纯黑）是「渐变关」时的兜底：无彩色可折射时仍是耐看的素色暗玻璃。 */
+  --bg-base: #14161c;
+  --canvas-bg: transparent;
+
+  /* 玻璃底（核心）：半透白 → 背后彩色洅上来 */
+  --bg-elevated: rgba(255, 255, 255, 0.08);
+  --bg-elevated-solid: #23262f;
+  --bg-input: rgba(255, 255, 255, 0.05);
+  --bg-input-solid: #1d2029;
+
+  /* 交互：hover/active 白 α 递增，模拟光打在玻璃上的明暗变化 */
+  --bg-hover: rgba(255, 255, 255, 0.10);
+  --bg-active: rgba(255, 255, 255, 0.16);
+
+  /* 分隔 / 边框：亮色细线，玻璃断口折射 */
+  --divider-primary: rgba(255, 255, 255, 0.10);
+  --border-default: rgba(255, 255, 255, 0.20);
+  --border-subtle: rgba(255, 255, 255, 0.12);
+  --border-input: rgba(255, 255, 255, 0.16);
+  --bg-slider: rgba(255, 255, 255, 0.18);
+
+  /* 文字：近白（透明底下的字必须亮），次字稍沉但仍保持对比 */
+  --text-primary: #f5f6fa;
+  --text-secondary: rgba(245, 246, 250, 0.74);
+  --text-tertiary: rgba(245, 246, 250, 0.56);
+
+  /* 强调色：降一档饱和的 pastel（克制耐看，saturate 后不刺眼） */
+  --accent-cyan: #7dd3fc;
+  --accent-purple: #c4b5fd;
+  --accent-orange: #fdba74;
+  --accent-green: #86efac;
+  --accent-red: #fca5a5;
+  --accent-yellow: #fde68a;
+
+  /* 隧道徽标：pastel 在玻璃上直接可用，无需加深 */
+  --tint-l: #7dd3fc;
+  --tint-r: #c4b5fd;
+  --tint-d: #a5b4fc;
+
+  /* 状态色：透明底 + 饱和字，卡片 chip 色 */
+  --status-info-border: rgba(125, 211, 252, 0.30);
+  --status-info-text: #7dd3fc;
+  --status-success-bg: rgba(134, 239, 172, 0.14);
+  --status-success-border: rgba(134, 239, 172, 0.32);
+  --status-success-text: #86efac;
+  --status-warn-bg: rgba(253, 186, 116, 0.14);
+  --status-warn-text: #fdba74;
+  --status-error-bg: rgba(252, 165, 165, 0.14);
+  --status-error-text: #fca5a5;
+  --status-debug-bg: rgba(165, 180, 252, 0.14);
+  --status-debug-text: #a5b4fc;
+  --status-tag-bg: rgba(125, 211, 252, 0.12);
+  --status-tag-border: rgba(125, 211, 252, 0.26);
+  --status-tag-text: #93c5fd;
+
+  /* 终端：保持暗底（ANSI 主题约定） */
+  --bg-terminal: #0a0c11;
+
+  /* 圆角 & 阴影：大圆角 + 柔和扩散 + 顶缘内高光（光打在玻璃上沿） */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.10);
+  --shadow-lg: 0 16px 44px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.14), 0 0 0 0.5px rgba(255,255,255,0.10);
+
+  /* 强调色 token：indigo / pink */
+  --accent-indigo: #a5b4fc;
+  --accent-indigo-soft: #c7d2fe;
+  --accent-indigo-bg: rgba(165, 180, 252, 0.14);
+  --accent-indigo-hover: rgba(165, 180, 252, 0.10);
+
+  --accent-pink: #f0abfc;
+  --accent-pink-bg: rgba(240, 171, 252, 0.14);
+  --accent-pink-border: rgba(240, 171, 252, 0.32);
+}
+
+/* 玻璃（暗）渐变模式：绕开通用 color-mix 的高不透明派生，直接给半透白。
+   特异度 (0,2,0) 高于通用 [data-gradient="on"] 的 (0,1,0)，稳定生效。 */
+[data-theme="glass"][data-gradient="on"] {
+  --bg-elevated: rgba(255, 255, 255, 0.06);
+  --bg-input: rgba(255, 255, 255, 0.04);
+}
+
+/* ── 浅墨（macOS 浅底 vibrancy）：明亮壁纸 + 近白 frosted 面板 + 墨字 ──
+   --canvas-bg: transparent 同暗玻璃：透出 body 浅色渐变被折射。终端仍深底
+   （ANSI 约定，与手记同款「界面浅、终端深」取舍）。 */
+[data-theme="glass-light"] {
+  --bg-base: #eef1f7;
+  --canvas-bg: transparent;
+
+  --bg-elevated: rgba(255, 255, 255, 0.55);
+  --bg-elevated-solid: #ffffff;
+  --bg-input: rgba(255, 255, 255, 0.45);
+  --bg-input-solid: #f5f7fb;
+
+  --bg-hover: rgba(20, 25, 45, 0.06);
+  --bg-active: rgba(20, 25, 45, 0.10);
+
+  --divider-primary: rgba(20, 25, 45, 0.10);
+  --border-default: rgba(255, 255, 255, 0.70);
+  --border-subtle: rgba(20, 25, 45, 0.12);
+  --border-input: rgba(20, 25, 45, 0.16);
+  --bg-slider: rgba(20, 25, 45, 0.14);
+
+  --text-primary: #1d1d1f;
+  --text-secondary: rgba(20, 22, 35, 0.62);
+  --text-tertiary: rgba(20, 22, 35, 0.48);
+
+  /* 强调色：加深保浅底对比 */
+  --accent-cyan: #0891b2;
+  --accent-purple: #9333ea;
+  --accent-orange: #d97706;
+  --accent-green: #16a34a;
+  --accent-red: #dc2626;
+  --accent-yellow: #ca8a04;
+
+  --tint-l: #0891b2;
+  --tint-r: #9333ea;
+  --tint-d: #4f46e5;
+
+  /* 状态：深字 + 浅透明底 */
+  --status-info-border: rgba(8, 145, 178, 0.30);
+  --status-info-text: #0891b2;
+  --status-success-bg: rgba(22, 163, 74, 0.12);
+  --status-success-border: rgba(22, 163, 74, 0.30);
+  --status-success-text: #16a34a;
+  --status-warn-bg: rgba(217, 119, 6, 0.12);
+  --status-warn-text: #d97706;
+  --status-error-bg: rgba(220, 38, 38, 0.12);
+  --status-error-text: #dc2626;
+  --status-debug-bg: rgba(79, 70, 229, 0.10);
+  --status-debug-text: #4f46e5;
+  --status-tag-bg: rgba(8, 145, 178, 0.10);
+  --status-tag-border: rgba(8, 145, 178, 0.24);
+  --status-tag-text: #0e7490;
+
+  /* 终端：深底（ANSI 约定） */
+  --bg-terminal: #14161c;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --shadow-sm: 0 1px 3px rgba(60,70,110,0.14), inset 0 1px 0 rgba(255,255,255,0.80);
+  --shadow-lg: 0 14px 40px rgba(60,70,110,0.22), inset 0 1px 0 rgba(255,255,255,0.90), 0 0 0 0.5px rgba(255,255,255,0.60);
+
+  --accent-indigo: #4f46e5;
+  --accent-indigo-soft: #6366f1;
+  --accent-indigo-bg: rgba(79, 70, 229, 0.12);
+  --accent-indigo-hover: rgba(79, 70, 229, 0.08);
+
+  --accent-pink: #db2777;
+  --accent-pink-bg: rgba(219, 39, 119, 0.12);
+  --accent-pink-border: rgba(219, 39, 119, 0.28);
+
+  /* 人工介入/权限卡片 + 危险态：浅底深字（同 light，避免深色块落在 frosted 浅面上） */
+  --card-warn-border: #e5d5a8;
+  --card-perm-bg: #fdf6e3;
+  --card-perm-border: #e0c68a;
+  --card-perm-text: #7a5c00;
+  --card-perm-btn-bg: #e6f4ea;
+  --card-perm-btn-border: #34a853;
+  --card-perm-btn-text: #1e7e34;
+  --card-perm-btn-hover: #d4ecd9;
+  --card-perm-resolved: #34a853;
+  --danger-bg: #fdecea;
+  --danger-border: #f3c2bd;
+  --danger-text: #c62828;
+}
+
+/* 浅墨渐变模式：面板更透一点让浅色渐变洅上来，但墨字仍需底板撑对比。 */
+[data-theme="glass-light"][data-gradient="on"] {
+  --bg-elevated: rgba(255, 255, 255, 0.50);
+  --bg-input: rgba(255, 255, 255, 0.40);
+}
+
 /* ── 手记主题（atelier：米纸 / 墨线 / 朱砂） ──
  *
  * 版面与主题解耦：下面只改令牌值，一个组件都没动 —— 同一套首页与运行视图在
