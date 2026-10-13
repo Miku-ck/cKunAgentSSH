@@ -171,15 +171,11 @@ export function classifyCommand(command: string): CommandVerdict {
   if (PIPE_TO_SHELL.test(command)) return { cls: 'mutating', rule: 'pipe-to-shell', zh: '把管道内容交给 shell/解释器执行' }
   const segments = command.split(SEGMENT_SPLIT).filter((s) => s.trim() !== '')
   if (segments.length === 0) segments.push(command)
-  let cls: CommandClass = 'readonly'
-  let verdict: CommandVerdict = { cls }
+  let verdict: CommandVerdict = { cls: 'readonly' }
   for (const segment of segments) {
     const v = classifySingle(segment)
     if (v.cls === 'dangerous') return v
-    if (v.cls === 'mutating') {
-      cls = 'mutating'
-      verdict = v
-    }
+    if (v.cls === 'mutating') verdict = v
   }
   return verdict
 }

@@ -43,21 +43,7 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
-/** Plugin config as a profile patch declares it, before schema resolution. */
-export interface Config {
-  /** Master switch for the plugin (routes, tools, prompt section). */
-  enabled?: boolean
-  /** When true, a system-prompt section announces the SSH tools to every agent. */
-  announceToAgent?: boolean
-  /** Per-output cap for ssh_exec stdout/stderr, in bytes. */
-  maxOutputBytes?: number
-  /** ssh2 keepalive interval, in milliseconds. */
-  keepaliveMs?: number
-  /** Allow mutating (still approval-gated) commands on prod hosts. */
-  allowProdMutations?: boolean
-}
-
-/** The config the Host hands to apply — the runtime face of Config (fields may be live refs). */
+/** The config the Host hands to apply — the runtime face of the Config schema below. */
 export interface ResolvedConfig {
   enabled?: ConfigField<boolean>
   announceToAgent?: ConfigField<boolean>

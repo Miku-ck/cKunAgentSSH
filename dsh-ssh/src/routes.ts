@@ -11,7 +11,7 @@ import { WebSocketServer } from 'ws'
 import type { WebRoute, WebUpgradeRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { SshEngine } from './engine.ts'
 import type { HostStore } from './store.ts'
-import type { HostEntry } from './protocol.ts'
+import { API, type HostEntry } from './protocol.ts'
 
 function sendJson(res: ServerResponse, code: number, body: unknown): void {
   const text = JSON.stringify(body)
@@ -106,7 +106,7 @@ export function makeRoutes(engine: SshEngine, store: HostStore): { routes: WebRo
 
   routes.push({
     kind: 'exact',
-    path: '/api/ckun-ssh/hosts',
+    path: API.hosts,
     handler: async (req, res) => {
       try {
         if (req.method === 'GET') {
@@ -149,7 +149,7 @@ export function makeRoutes(engine: SshEngine, store: HostStore): { routes: WebRo
 
   routes.push({
     kind: 'exact',
-    path: '/api/ckun-ssh/hosts/import',
+    path: API.hostsImport,
     handler: async (req, res) => {
       try {
         if (req.method !== 'POST') return sendError(res, 405, 'method not allowed')
@@ -163,7 +163,7 @@ export function makeRoutes(engine: SshEngine, store: HostStore): { routes: WebRo
 
   routes.push({
     kind: 'exact',
-    path: '/api/ckun-ssh/test',
+    path: API.test,
     handler: async (req, res) => {
       try {
         if (req.method !== 'POST') return sendError(res, 405, 'method not allowed')
@@ -180,7 +180,7 @@ export function makeRoutes(engine: SshEngine, store: HostStore): { routes: WebRo
 
   routes.push({
     kind: 'exact',
-    path: '/api/ckun-ssh/exec',
+    path: API.exec,
     handler: async (req, res) => {
       try {
         if (req.method !== 'POST') return sendError(res, 405, 'method not allowed')
@@ -199,7 +199,7 @@ export function makeRoutes(engine: SshEngine, store: HostStore): { routes: WebRo
 
   routes.push({
     kind: 'exact',
-    path: '/api/ckun-ssh/ls',
+    path: API.ls,
     handler: async (req, res) => {
       try {
         if (req.method !== 'GET') return sendError(res, 405, 'method not allowed')
@@ -217,7 +217,7 @@ export function makeRoutes(engine: SshEngine, store: HostStore): { routes: WebRo
 
   routes.push({
     kind: 'exact',
-    path: '/api/ckun-ssh/download',
+    path: API.download,
     handler: async (req, res) => {
       try {
         if (req.method !== 'GET') return sendError(res, 405, 'method not allowed')
@@ -226,11 +226,12 @@ export function makeRoutes(engine: SshEngine, store: HostStore): { routes: WebRo
         const remote = q.get('path') ?? ''
         if (!alias || !remote) return sendError(res, 400, 'alias and path query params required')
         if (hasTraversalSegment(remote)) return sendError(res, 400, 'path must not contain "." or ".." segments')
-        const local = join(tmpdir(), `ckun-dsh-ssh-${Date.now()}-${randomUUID().slice(0, 8)}`, remote.split('/').filter(Boolean).pop() ?? 'file')
+        const baseName = remote.split('/').filter(Boolean).pop() ?? 'file'
+        const local = join(tmpdir(), `ckun-dsh-ssh-${Date.now()}-${randomUUID().slice(0, 8)}`, baseName)
         await engine.download(alias, remote, local)
         res.writeHead(200, {
           'content-type': 'application/octet-stream',
-          'content-disposition': `attachment; filename="${encodeURIComponent(remote.split('/').filter(Boolean).pop() ?? 'file')}"`,
+          'content-disposition': `attachment; filename="${encodeURIComponent(baseName)}"`,
         })
         // stream the temp file back, then let the client's next tick clean up
         const { createReadStream } = await import('node:fs')
@@ -249,7 +250,7 @@ export function makeRoutes(engine: SshEngine, store: HostStore): { routes: WebRo
 
   routes.push({
     kind: 'exact',
-    path: '/api/ckun-ssh/upload',
+    path: API.upload,
     handler: async (req, res) => {
       try {
         if (req.method !== 'POST') return sendError(res, 405, 'method not allowed')
@@ -281,7 +282,7 @@ export function makeRoutes(engine: SshEngine, store: HostStore): { routes: WebRo
 
   routes.push({
     kind: 'exact',
-    path: '/api/ckun-ssh/tunnel',
+    path: API.tunnel,
     handler: async (req, res) => {
       try {
         if (req.method !== 'POST') return sendError(res, 405, 'method not allowed')
@@ -316,7 +317,7 @@ export function makeRoutes(engine: SshEngine, store: HostStore): { routes: WebRo
 
   routes.push({
     kind: 'exact',
-    path: '/api/ckun-ssh/state',
+    path: API.state,
     handler: async (_req, res) => {
       sendJson(res, 200, engine.stateSnapshot())
     },
@@ -332,7 +333,7 @@ export function makeRoutes(engine: SshEngine, store: HostStore): { routes: WebRo
   const terminalWss = new WebSocketServer({ noServer: true })
 
   const upgrade: WebUpgradeRoute = {
-    path: '/api/ckun-ssh/terminal',
+    path: API.terminal,
     handler: (req, socket, head) => {
       const alias = queryOf(req).get('alias') ?? ''
       if (!alias) {

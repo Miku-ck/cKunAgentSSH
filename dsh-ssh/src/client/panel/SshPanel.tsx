@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { SshApi } from '../api.ts'
 import { createSshApi } from '../api.ts'
-import type { HostSummary, StateSnapshot } from '../../protocol.ts'
+import { API, type HostSummary, type StateSnapshot } from '../../protocol.ts'
 import { FilesTab } from './FilesTab.tsx'
 import { HostFormDialog } from './HostFormDialog.tsx'
 import { TerminalTab } from './TerminalTab.tsx'
@@ -134,7 +134,7 @@ export function SshPanelPage(): React.JSX.Element {
   const importSshConfig = useCallback(async () => {
     if (!api) return
     try {
-      const res = await fetch('/api/ckun-ssh/hosts/import', { method: 'POST', credentials: 'same-origin' })
+      const res = await fetch(API.hostsImport, { method: 'POST', credentials: 'same-origin' })
       const body = (await res.json()) as { imported: number; skipped: number }
       await refresh()
       alert(`已导入 ${body.imported} 台（跳过已存在 ${body.skipped} 台）；密钥主机需先测试连接固定指纹。`)

@@ -1,5 +1,4 @@
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { dataFile, expandHome } from './dsh-home.ts'
 import type { HostEntry } from './protocol.ts'

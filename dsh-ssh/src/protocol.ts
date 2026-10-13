@@ -5,6 +5,7 @@
 
 export const API = {
   hosts: '/api/ckun-ssh/hosts',
+  hostsImport: '/api/ckun-ssh/hosts/import',
   test: '/api/ckun-ssh/test',
   exec: '/api/ckun-ssh/exec',
   ls: '/api/ckun-ssh/ls',
