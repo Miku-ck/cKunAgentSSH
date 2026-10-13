@@ -155,7 +155,6 @@ cKunAgentSSH/
 │       └── tools/builtin/             # 29 个内置工具
 │
 ├── gateway/                           # 自营 TLS 接入网关（hillgw.mjs，零依赖单文件，独立部署）
-├── dsh-ssh/                           # @ckun/dsh-ssh 独立子工程：DSH 生态 SSH 运维插件（人机共用安全连接池）
 ├── scripts/                           # CI / 打包 / 部署脚本
 ├── docs/                              # 文档
 └── package.json

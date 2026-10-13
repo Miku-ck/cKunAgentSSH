@@ -1,8 +1,0 @@
-# @ckun/dsh-ssh bundle patch: inserts the plugin row into the profile roster.
-# Applied as a profile bundle layer (the `dsh.bundle.patch` manifest field).
-# The row is a bare plugin by package name: the node half (exports ".") runs in
-# the host process (SSH engine, /api/ckun-ssh routes, agent tools), and the
-# `./client` export is served to the web GUI.
-- insert:
-    - id: ckun-ssh
-      name: '@ckun/dsh-ssh'
