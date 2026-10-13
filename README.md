@@ -28,6 +28,8 @@ SSH 智能运维终端 — 集成 SSH 连接管理、远程终端、SFTP 文件�
 - **运维方法论注入**：意图识别输出 `is_change`（变更 / 只读正交维度），按任务性质二选一注入变更纪律 / 只读取证方法论
 - **定时任务**：倒计时、历史耗时、失败 run 一键「AI 诊断」
 - **SSH 隧道**：TCP 端口转发 / SOCKS5 代理 / Dynamic 转发，规则持久化 + 状态机 + 端口冲突预检，不依赖终端会话独立 client
+- **Docker 管理页**：依附远程 SSH 会话的容器 / 镜像 / 卷 / 网络四页签视图，按名称过滤，危险操作（如卷清理）走审批确认，兼容老版本 Docker CLI
+- **TLS 网关接入**：SSH 连接除直连外可经自营网关 `hillgw.mjs`（TLS + SPKI pinning + 口令认证 + 帧复用）中转，网关零依赖单文件，`node gateway/hillgw.mjs --selftest` 自校验
 - **CI 门禁**：`scripts/ci-check.sh` + GitHub Actions 工作流（后端 pytest / 前端 typecheck / vitest / 构建）
 
 ## 技术栈
@@ -126,12 +128,15 @@ cKunAgentSSH/
 │   │   ├── common/                    # 通用组件
 │   │   ├── agent/                     # Agent 组件
 │   │   ├── chat/                      # 聊天组件
+│   │   ├── home/                      # 首页组件
 │   │   ├── icons/                     # SVG 图标
 │   │   ├── settings/                  # 设置面板
-│   │   └── ssh/                       # SSH 核心组件
+│   │   └── ssh/                       # SSH 核心组件（终端 / SFTP / Docker / 仪表盘）
 │   ├── composables/                   # 组合式函数
 │   ├── stores/                        # Pinia 状态管理
 │   └── utils/                         # 工具函数
+│
+├── shared/                            # 主进程 / 渲染进程 / 网关跨端共享模块（错误分类、网关帧协议）
 │
 ├── backend/                           # Python FastAPI 后端
 │   ├── main.py                        # FastAPI 入口
@@ -149,7 +154,9 @@ cKunAgentSSH/
 │       ├── memory/                    # 记忆子系统
 │       └── tools/builtin/             # 29 个内置工具
 │
-├── scripts/                           # 脚本
+├── gateway/                           # 自营 TLS 接入网关（hillgw.mjs，零依赖单文件，独立部署）
+├── dsh-ssh/                           # @ckun/dsh-ssh 独立子工程：DSH 生态 SSH 运维插件（人机共用安全连接池）
+├── scripts/                           # CI / 打包 / 部署脚本
 ├── docs/                              # 文档
 └── package.json
 ```
@@ -169,7 +176,8 @@ cKunAgentSSH/
 ### 渲染进程
 
 - **SshView.vue** — SSH 主视图：首页（目标主机 + 指令卡 + 待放行队列）/ 远程管理 / 本地终端 / SFTP / AI 面板 / 监控仪表盘
-- **stores/** — Pinia 状态管理（ssh、sftp、ssh-ai、agent、settings 等）
+- **DockerView.vue** — 远程 Docker 资源管理：容器 / 镜像 / 卷 / 网络页签，命令经 SSH 会话执行并做版本兼容降级
+- **stores/** — Pinia 状态管理（ssh、sftp、ssh-ai、agent、docker、settings 等）
 
 ### Python 后端
 
