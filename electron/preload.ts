@@ -173,6 +173,36 @@ contextBridge.exposeInMainWorld('electronAPI', {
   tunnelStatusAll: () => ipcRenderer.invoke('tunnel:statusAll'),
   // 保存前预检：本机监听端口被占即时报（而非启动时才暴露 EADDRINUSE）
   tunnelCheckPort: (host: string, port: number) => ipcRenderer.invoke('tunnel:checkPort', host, port),
+
+  // GitHub 加速（镜像套件）
+  ghaccelGetConfig: () => ipcRenderer.invoke('ghaccel:getConfig'),
+  ghaccelSaveLists: (proxies: any[], webMirrors: any[]) => ipcRenderer.invoke('ghaccel:saveLists', proxies, webMirrors),
+  ghaccelProbeAll: () => ipcRenderer.invoke('ghaccel:probeAll'),
+  ghaccelGitStatus: () => ipcRenderer.invoke('ghaccel:gitStatus'),
+  ghaccelGitEnable: (prefix: string) => ipcRenderer.invoke('ghaccel:gitEnable', prefix),
+  ghaccelGitDisable: () => ipcRenderer.invoke('ghaccel:gitDisable'),
+  ghaccelSsh443Status: () => ipcRenderer.invoke('ghaccel:ssh443Status'),
+  ghaccelSsh443Apply: () => ipcRenderer.invoke('ghaccel:ssh443Apply'),
+  ghaccelSsh443Remove: () => ipcRenderer.invoke('ghaccel:ssh443Remove'),
+  ghaccelOpenExternal: (url: string) => ipcRenderer.invoke('ghaccel:openExternal', url),
+  // GitHub 加速下载器
+  ghaccelDownloadStart: (url: string, opts?: { gunzip?: boolean }) => ipcRenderer.invoke('ghaccel:downloadStart', url, opts),
+  ghaccelDownloadCancel: (id: string) => ipcRenderer.invoke('ghaccel:downloadCancel', id),
+  ghaccelDownloadList: () => ipcRenderer.invoke('ghaccel:downloadList'),
+  ghaccelShowItemInFolder: (id: string) => ipcRenderer.invoke('ghaccel:showItemInFolder', id),
+  // hosts 优选 IP（增强模式）
+  ghaccelHostsStatus: () => ipcRenderer.invoke('ghaccel:hostsStatus'),
+  ghaccelHostsPick: () => ipcRenderer.invoke('ghaccel:hostsPick'),
+  ghaccelHostsApply: (entries?: { domain: string; ip: string }[]) => ipcRenderer.invoke('ghaccel:hostsApply', entries),
+  ghaccelHostsRemove: () => ipcRenderer.invoke('ghaccel:hostsRemove'),
+  ghaccelSaveOptions: (patch: { lastProxyPrefix?: string }) =>
+    ipcRenderer.invoke('ghaccel:saveOptions', patch),
+  /** 下载进度与状态迁移（一条通道，state 区分）；返回取消监听函数 */
+  onGhaccelDownload: (callback: (data: any) => void) => {
+    const handler = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('ghaccel:download', handler)
+    return () => ipcRenderer.removeListener('ghaccel:download', handler)
+  },
   /**
    * 监听隧道状态变化（主进程推送，每次状态迁移一条）
    * @param callback 状态回调

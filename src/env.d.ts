@@ -124,6 +124,18 @@ interface TunnelStatus {
   startedAt?: number
 }
 
+/** GitHub 加速下载任务状态（主进程 → 渲染层，channel: ghaccel:download；不持久化） */
+interface GhDownloadStatus {
+  id: string
+  state: 'downloading' | 'done' | 'error' | 'cancelled'
+  path?: string
+  fileName?: string
+  transferred: number
+  /** 未知（chunked / 续传未探测）为 0 */
+  total: number
+  error?: string
+}
+
 /** TLS 接入网关记录（主进程定义见 electron/gateway-store.ts；口令不出主进程） */
 interface GatewayRecord {
   id: string
@@ -279,6 +291,41 @@ interface ElectronAPI {
   /** 保存前预检：本机监听端口被占即时报（而非启动时才暴露 EADDRINUSE） */
   tunnelCheckPort: (host: string, port: number) => Promise<{ ok: boolean; message?: string }>
   onTunnelStatus: (callback: (data: TunnelStatus) => void) => () => void
+  // GitHub 加速（镜像套件；主进程实现见 electron/github-accel.ts，类型源在 shared/github-accel-core.ts）
+  ghaccelGetConfig: () => Promise<import('../shared/github-accel-core').GithubAccelConfig>
+  ghaccelSaveLists: (
+    proxies: import('../shared/github-accel-core').AccelProxy[],
+    webMirrors: import('../shared/github-accel-core').AccelWebMirror[],
+  ) => Promise<import('../shared/github-accel-core').GithubAccelConfig>
+  ghaccelProbeAll: () => Promise<Array<{ id: string; name: string; target: string; ok: boolean; latencyMs: number | null; status?: number; error?: string }>>
+  ghaccelGitStatus: () => Promise<{
+    available: boolean
+    entries: Array<{ key: string; subsection: string; value: string }>
+    active: boolean
+    activeSubsection?: string
+    managed: boolean
+    backup: string | null
+    message?: string
+  }>
+  ghaccelGitEnable: (prefix: string) => Promise<ReturnType<ElectronAPI['ghaccelGitStatus']>>
+  ghaccelGitDisable: () => Promise<ReturnType<ElectronAPI['ghaccelGitStatus']>>
+  ghaccelSsh443Status: () => Promise<{ applied: boolean; path: string; exists: boolean; message?: string }>
+  ghaccelSsh443Apply: () => Promise<{ applied: boolean; path: string; exists: boolean }>
+  ghaccelSsh443Remove: () => Promise<{ applied: boolean; path: string; exists: boolean }>
+  ghaccelOpenExternal: (url: string) => Promise<void>
+  // GitHub 加速下载器（主进程实现见 electron/gh-download.ts）
+  ghaccelDownloadStart: (url: string, opts?: { gunzip?: boolean }) => Promise<GhDownloadStatus>
+  ghaccelDownloadCancel: (id: string) => Promise<void>
+  ghaccelDownloadList: () => Promise<GhDownloadStatus[]>
+  ghaccelShowItemInFolder: (id: string) => Promise<void>
+  onGhaccelDownload: (callback: (data: GhDownloadStatus) => void) => () => void
+  // hosts 优选 IP（主进程实现见 electron/gh-hosts.ts）
+  ghaccelHostsStatus: () => Promise<{ applied: boolean; path: string; writable: boolean; entries: { domain: string; ip: string }[]; message?: string }>
+  ghaccelHostsPick: () => Promise<Array<{ domain: string; ip: string | null; latencyMs: number | null; candidates: number; error?: string }>>
+  ghaccelHostsApply: (entries?: { domain: string; ip: string }[]) => Promise<ReturnType<ElectronAPI['ghaccelHostsStatus']>>
+  ghaccelHostsRemove: () => Promise<ReturnType<ElectronAPI['ghaccelHostsStatus']>>
+  ghaccelSaveOptions: (patch: { lastProxyPrefix?: string }) =>
+    Promise<import('../shared/github-accel-core').GithubAccelConfig>
   // TLS 接入网关（安全接入）
   gatewayList: () => Promise<GatewayRecord[]>
   gatewaySave: (rec: GatewayRecord) => Promise<GatewayRecord>

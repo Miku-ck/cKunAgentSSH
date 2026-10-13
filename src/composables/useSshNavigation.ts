@@ -17,7 +17,7 @@ export const LOCAL_SHELLS = ['PowerShell', 'CMD', 'Git Bash', 'WSL']
  * 类型检查却过得去（多出来的字面量只是没人传）。现在两处共用这一个源头。
  */
 export type NavPage =
-  'home' | 'remote-mgr' | 'sftp' | 'audit' | 'schedules' | 'dashboard' | 'tunnels' | 'docker'
+  'home' | 'remote-mgr' | 'sftp' | 'audit' | 'schedules' | 'dashboard' | 'tunnels' | 'docker' | 'github'
 
 /** 远程连接防抖间隔 */
 const CONNECT_DEBOUNCE_MS = 2000
@@ -141,6 +141,7 @@ export function useSshNavigation(
   const toggleDashboard = (): void => togglePage('dashboard')
   const toggleTunnels = (): void => togglePage('tunnels')
   const toggleDocker = (): void => togglePage('docker')
+  const toggleGithub = (): void => togglePage('github')
 
   // 「安全接入」已并入远程管理页（RemoteManager 的 TLS 网关分段），不再有独立导航页
 
@@ -370,6 +371,7 @@ export function useSshNavigation(
     toggleDashboard,
     toggleTunnels,
     toggleDocker,
+    toggleGithub,
     openLocalShell,
     handleLocalExit,
     connectRemote,

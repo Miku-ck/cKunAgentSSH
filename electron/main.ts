@@ -13,6 +13,9 @@ import { SSHError, toIpcTransport } from './ssh-error'
 import { SSHStore, type SSHConnectionRecord } from './ssh-store'
 import { TunnelStore, type TunnelRule } from './tunnel-store'
 import { TunnelManager } from './tunnel-manager'
+import { GithubAccelService } from './github-accel'
+import { GhDownloadManager } from './gh-download'
+import { GhHostsService } from './gh-hosts'
 import { SshTransport } from './transports/ssh-transport'
 import { GatewayStore, type GatewayRecord } from './gateway-store'
 import { GatewayManager } from './gateway-manager'
@@ -38,6 +41,9 @@ let tunnelStore: TunnelStore | null = null
 let tunnelManager: TunnelManager | null = null
 let gatewayStore: GatewayStore | null = null
 let gatewayManager: GatewayManager | null = null
+let githubAccel: GithubAccelService | null = null
+let ghDownload: GhDownloadManager | null = null
+let ghHosts: GhHostsService | null = null
 let electronBridge: ElectronBridge | null = null
 let bridgeWsClient: BridgeWsClient | null = null
 
@@ -1078,6 +1084,15 @@ function setupSSHIPC(): void {
   // 隧道：复用 sshStore 取凭据 + sshManager.openRawClient 建 TOFU 一致的裸连接
   tunnelStore = new TunnelStore()
   tunnelManager = new TunnelManager()
+  githubAccel = new GithubAccelService()
+  ghDownload = new GhDownloadManager()
+  ghHosts = new GhHostsService()
+  ghDownload.setSender((data) => {
+    // 窗口销毁后 webContents.send 会抛，加守卫（与 gateway:status 同一口径）
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try { mainWindow.webContents.send('ghaccel:download', data) } catch { /* 窗口已销毁 */ }
+    }
+  })
   if (mainWindow) tunnelManager.setWindow(mainWindow)
   gatewayStore = new GatewayStore()
   gatewayManager = new GatewayManager(gatewayStore, (channel, data) => {
@@ -1260,6 +1275,93 @@ function setupSSHIPC(): void {
   // 保存前预检：本机监听端口被占即时报（而非启动时才暴露 EADDRINUSE）
   handleTrusted('tunnel:checkPort', (_event, host: string, port: number) => {
     return tunnelManager!.checkPort(host, port)
+  })
+
+  // ── GitHub 加速（镜像套件，方案 A+）──
+  // 设计：shared/github-accel-core.ts 头注。无服务器场景下的镜像方案：
+  // 清单持久化走 github-accel.json；git/ssh 配置改动遵循"谁设置谁还原"。
+  handleTrusted('ghaccel:getConfig', () => {
+    return githubAccel!.getConfig()
+  })
+
+  handleTrusted('ghaccel:saveLists', (_event, proxies: any[], webMirrors: any[]) => {
+    return githubAccel!.saveLists(proxies, webMirrors)
+  })
+
+  handleTrusted('ghaccel:probeAll', () => {
+    return githubAccel!.probeAll()
+  })
+
+  handleTrusted('ghaccel:gitStatus', () => {
+    return githubAccel!.gitStatus()
+  })
+
+  handleTrusted('ghaccel:gitEnable', (_event, prefix: string) => {
+    return githubAccel!.gitEnable(prefix)
+  })
+
+  handleTrusted('ghaccel:gitDisable', () => {
+    return githubAccel!.gitDisable()
+  })
+
+  handleTrusted('ghaccel:ssh443Status', () => {
+    return githubAccel!.ssh443Status()
+  })
+
+  handleTrusted('ghaccel:ssh443Apply', () => {
+    return githubAccel!.ssh443Apply()
+  })
+
+  handleTrusted('ghaccel:ssh443Remove', () => {
+    return githubAccel!.ssh443Remove()
+  })
+
+  // 系统浏览器打开镜像站（仅限 http/https，防 file:// 等协议跳转）
+  handleTrusted('ghaccel:openExternal', (_event, url: string) => {
+    if (typeof url !== 'string' || !/^https:\/\//i.test(url)) throw new Error('仅允许打开 https 链接')
+    return shell.openExternal(url)
+  })
+
+  // ── GitHub 加速下载器（M2：流式落盘 + 进度推送 + Range 续传） ──
+  handleTrusted('ghaccel:downloadStart', (_event, url: string, opts?: { gunzip?: boolean }) => {
+    return ghDownload!.start(url, opts)
+  })
+
+  handleTrusted('ghaccel:downloadCancel', (_event, id: string) => {
+    ghDownload!.cancel(id)
+  })
+
+  handleTrusted('ghaccel:downloadList', () => {
+    return ghDownload!.list()
+  })
+
+  // 打开已完成的下载文件所在位置（id 必须先查我们的状态表，不接受渲染层路径）
+  handleTrusted('ghaccel:showItemInFolder', (_event, id: string) => {
+    const st = ghDownload!.statusOf(id)
+    if (!st || st.state !== 'done' || !st.path) throw new Error('下载任务不存在或未完成')
+    shell.showItemInFolder(st.path)
+  })
+
+  // ── hosts 优选 IP（M3 增强模式：DoH 解析 + TCP 测速 + 托管块写入/移除） ──
+  handleTrusted('ghaccel:hostsStatus', () => {
+    return ghHosts!.status()
+  })
+
+  handleTrusted('ghaccel:hostsPick', () => {
+    return ghHosts!.pick()
+  })
+
+  handleTrusted('ghaccel:hostsApply', (_event, entries?: { domain: string; ip: string }[]) => {
+    return ghHosts!.apply(entries)
+  })
+
+  handleTrusted('ghaccel:hostsRemove', () => {
+    return ghHosts!.remove()
+  })
+
+  // 总控选项：记住一键加速使用的镜像
+  handleTrusted('ghaccel:saveOptions', (_event, patch: { lastProxyPrefix?: string }) => {
+    return githubAccel!.saveOptions(patch)
   })
 
   // ── TLS 接入网关（安全接入）──

@@ -109,6 +109,11 @@ v-show="s.id === store.activeSessionId"
           <DockerView v-if="pageMounted('docker')" @exec-terminal="activateTerminal($event)" />
         </div>
 
+        <!-- GitHub 加速页面（镜像套件，纯本地功能） -->
+        <div v-show="activeNavPage === 'github'" class="gh-page">
+          <GithubAccelView v-if="pageMounted('github')" />
+        </div>
+
         <!-- 首页：目标主机 + 下达 + 待放行计数条（批量与追溯归它）+ 本轮过程（逐条决策在卡上） -->
         <div v-show="homeTabActive" class="home-pane">
           <HomeTargetTitle @bulk="showBulk = true" />
@@ -203,6 +208,7 @@ const SchedulesView = defineAsyncComponent(() => import('@/views/ssh/SchedulesVi
 const DashboardView = defineAsyncComponent(() => import('@/views/ssh/DashboardView.vue'))
 const TunnelView = defineAsyncComponent(() => import('@/components/ssh/TunnelView.vue'))
 const DockerView = defineAsyncComponent(() => import('@/components/ssh/DockerView.vue'))
+const GithubAccelView = defineAsyncComponent(() => import('@/components/ssh/GithubAccelView.vue'))
 const RunView = defineAsyncComponent(() => import('@/components/agent/RunView.vue'))
 import { useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
@@ -258,6 +264,7 @@ const {
   toggleDashboard,
   toggleTunnels,
   toggleDocker,
+  toggleGithub,
   showAiPanel,
   openLocalShell,
   handleLocalExit,
@@ -371,6 +378,7 @@ defineExpose({
   toggleDashboard,
   toggleTunnels,
   toggleDocker,
+  toggleGithub,
   openSettings,
   activeNavPage,
   showAiPanel,
@@ -613,6 +621,19 @@ defineExpose({
   bottom: 0;
   z-index: 10;
   overflow: hidden;
+}
+
+/* ─── GitHub 加速 Page ─── */
+.gh-page {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 /* ─── Tab Context Menu ─── */
