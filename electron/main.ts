@@ -1510,6 +1510,10 @@ function setupSftpIPC(): void {
   handleTrusted('sftp:exists', (_event, sshSessionId: string, remotePath: string) => {
     return sshManager!.sftpExists(sshSessionId, remotePath)
   })
+  // 查询单个远程路径的类型与大小（替代「sftpList 全量列目录探测 isDir」）
+  handleTrusted('sftp:stat', (_event, sshSessionId: string, remotePath: string) => {
+    return sshManager!.sftpStat(sshSessionId, remotePath)
+  })
   handleTrusted('sftp:rename', (_event, sshSessionId: string, oldPath: string, newPath: string) => {
     return sshManager!.sftpRename(sshSessionId, oldPath, newPath)
   })
@@ -1558,6 +1562,9 @@ function setupSftpIPC(): void {
 // 修复 GPU cache 权限问题：禁用 GPU 磁盘缓存（Windows GPU 进程无写权限时的拒绝访问错误）
 // 注意：不使用 setPath('userData') 以避免破坏数据库/SSH 连接等现有数据路径
 app.commandLine.appendSwitch('disable-gpu-disk-cache')
+// 修复：本机 GPU 驱动与 Electron v35 GPU 进程不兼容——未禁用时启动即崩（exit 3），
+// dev 与生产同理。no-sandbox 需通过 pnpm dev --noSandbox 注入（沙箱初始化先于主模块）。
+app.commandLine.appendSwitch('disable-gpu')
 
 // 单实例锁：第二个实例启动时退出，并把第一个实例窗口带到前台。
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
