@@ -279,7 +279,8 @@ describe('出厂配置', () => {
     expect(c.gitBackup).toBeNull()
   })
 
-  it('探测地址 = 前缀 + github 首页', () => {
-    expect(buildProbeUrl('https://m1.example/')).toBe('https://m1.example/https://github.com/')
+  it('探测地址 = 前缀 + raw 探测目标（ghproxy 类不代理首页，打首页只会 403）', () => {
+    expect(PROBE_TARGET).toContain('raw.githubusercontent.com')
+    expect(buildProbeUrl('https://m1.example/')).toBe(`https://m1.example/${PROBE_TARGET}`)
   })
 })
