@@ -6,9 +6,9 @@
   "private": true,
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "electron-vite dev --noSandbox",
-    "dev:web": "cmd /c \"set VITE_HOST=0.0.0.0&& electron-vite dev --noSandbox\"",
-    "dev:web:unix": "VITE_HOST=0.0.0.0 electron-vite dev --noSandbox",
+    "dev": "set ELECTRON_DISABLE_GPU=1&& electron-vite dev --noSandbox",
+    "dev:web": "cmd /c \"set ELECTRON_DISABLE_GPU=1&& set VITE_HOST=0.0.0.0&& electron-vite dev --noSandbox\"",
+    "dev:web:unix": "ELECTRON_DISABLE_GPU=1 VITE_HOST=0.0.0.0 electron-vite dev --noSandbox",
     "build": "electron-vite build",
     "typecheck": "vue-tsc -p tsconfig.web.json --noEmit && vue-tsc -p tsconfig.node.json --noEmit",
     "test": "vitest run",

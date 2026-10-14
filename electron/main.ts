@@ -1562,15 +1562,26 @@ function setupSftpIPC(): void {
 // 修复 GPU cache 权限问题：禁用 GPU 磁盘缓存（Windows GPU 进程无写权限时的拒绝访问错误）
 // 注意：不使用 setPath('userData') 以避免破坏数据库/SSH 连接等现有数据路径
 app.commandLine.appendSwitch('disable-gpu-disk-cache')
-// 修复：本机 GPU 驱动与 Electron v35 GPU 进程不兼容——未禁用时启动即崩（exit 3），
-// dev 与生产同理。no-sandbox 需通过 pnpm dev --noSandbox 注入（沙箱初始化先于主模块）。
+// 修复：本机 GPU 驱动与 Electron v35 不兼容——未禁用时启动即崩（exit 3），
+// dev 与生产同理。env ELECTRON_DISABLE_GPU=1 在 dev 脚本注入（GPU 进程先于主模块初始化）。
 app.commandLine.appendSwitch('disable-gpu')
+app.commandLine.appendSwitch('disable-gpu-compositing')
+app.commandLine.appendSwitch('disable-gpu-sandbox')
+app.commandLine.appendSwitch('disable-software-rasterizer')
 
 // 单实例锁：第二个实例启动时退出，并把第一个实例窗口带到前台。
+// 容错：Windows 用户数据目录权限错误（ERROR_ACCESS_DENIED）会令返回 false，
+// 实际无第二实例却误判退出。失败时记录警告但仍继续启动。
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
 if (!gotSingleInstanceLock) {
-  app.quit()
-} else {
+  const isLikelyPermissionIssue = process.platform === 'win32'
+  if (isLikelyPermissionIssue) {
+    console.warn('[main] 单实例锁获取失败（疑似 userData 目录权限问题），继续启动')
+  } else {
+    app.quit()
+  }
+}
+if (gotSingleInstanceLock || process.platform === 'win32') {
   app.on('second-instance', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore()
