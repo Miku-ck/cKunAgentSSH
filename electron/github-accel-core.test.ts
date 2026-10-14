@@ -29,6 +29,7 @@ import {
   validateWebMirrorHost,
   GITHUB_BASE,
   HOSTS_BLOCK_BEGIN,
+  PROBE_TARGET,
   SSH_BLOCK_BEGIN,
   SSH_BLOCK_END,
   type AccelProxy,

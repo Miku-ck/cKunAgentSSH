@@ -208,7 +208,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useGithubAccelStore } from '@/stores/github-accel'
 import { useToastStore } from '@/stores/toast'
 import { formatBytes } from '@/utils/format'
@@ -272,6 +272,15 @@ onMounted(async () => {
 function doConvert(): void {
   converted.value = accel.convert(inputUrl.value)
 }
+
+// 镜像清单（启停/增删/测速后）变化时，已转换的结果自动重算——否则新加的镜像不出现在结果里
+watch(
+  () => [accel.proxies, accel.webMirrors] as const,
+  () => {
+    if (inputUrl.value.trim() && converted.value) doConvert()
+  },
+  { deep: true },
+)
 
 /** clone 类链接展示为完整命令，下载/网页展示裸地址 */
 function displayUrl(link: AccelLink): string {
