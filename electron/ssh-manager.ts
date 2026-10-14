@@ -424,12 +424,42 @@ interface TransferConn {
   dead: boolean
   /** 空闲回收定时器 */
   cleanupTimer: NodeJS.Timeout | null
+  /** 本连接的 SSH 压缩开关（建连时按传输文件类型决定；池内复用按同值匹配，
+   *  避免「传媒体拿到一条给文本建的压缩连接」互相错配） */
+  compress: boolean
 }
 
 /** 单主机独立传输连接的软上限（超过则复用最久未用连接，退化为共享窗口而非无界建连） */
 const TRANSFER_CONN_PER_HOST_CAP = 8
 /** 独立传输连接空闲回收超时（全部归还后保留多久供下一批复用） */
 const TRANSFER_CONN_IDLE_MS = 300000
+
+/** 已压缩容器/媒体/二进制等不可再压的扩展名：对这类数据开 SSH zlib 是纯烧两端
+ *  CPU（包体持平甚至反膨胀），独立传输连接按文件类型改为关闭压缩。未收录的
+ *  扩展名按「可能可压缩」保持压缩 —— 保守方向，文本/代码/日志类的既有收益不动。
+ *  注意不含 'ts'：TypeScript 源码是文本（MPEG 传输流极少出现在 SFTP 场景）。 */
+const INCOMPRESSIBLE_TRANSFER_EXT = new Set([
+  // 压缩容器与打包格式
+  'zip', 'gz', 'bz2', 'xz', 'zst', 'lz4', '7z', 'rar', 'tar', 'tgz', 'tbz2', 'txz',
+  'jar', 'war', 'apk', 'docx', 'xlsx', 'pptx', 'epub',
+  // 图片
+  'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'ico', 'tif', 'tiff', 'heic', 'avif',
+  // 音视频
+  'mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v', '3gp',
+  'mp3', 'flac', 'ogg', 'opus', 'aac', 'wav', 'm4a', 'wma',
+  // 文档/磁盘镜像/二进制/字体
+  'pdf', 'iso', 'img', 'dmg', 'bin', 'exe', 'dll', 'so', 'dylib',
+  'woff', 'woff2', 'ttf', 'otf',
+])
+
+/** 按路径扩展名判断独立传输连接是否启用 SSH 压缩 */
+function shouldCompressTransfer(path: string): boolean {
+  const dot = path.lastIndexOf('.')
+  if (dot < 0) return true
+  const ext = path.slice(dot + 1).toLowerCase()
+  if (ext.length === 0 || ext.length > 5) return true
+  return !INCOMPRESSIBLE_TRANSFER_EXT.has(ext)
+}
 
 export class SSHManager {
   private sessions = new Map<string, SSHSession>()
@@ -722,10 +752,13 @@ export class SSHManager {
    * 复用 buildConnectConfig：TOFU 主机密钥校验 / 认证 / keepalive / 压缩
    * 与终端连接完全一致，known_hosts 懒加载复用同一条 single-flight 路径。
    */
-  async openRawClient(config: SSHConnectionConfig): Promise<Client> {
+  async openRawClient(config: SSHConnectionConfig, compress?: boolean): Promise<Client> {
     await this.loadKnownHosts()
     const client = new (await loadSsh2())()
     const connectConfig = await this.buildConnectConfig(config)
+    // 独立传输连接按文件类型关压缩（buildConnectConfig 恒开）：媒体/压缩容器
+    // 再过 zlib 只烧两端 CPU。undefined = 保持默认（true，终端连接不受影响）。
+    if (compress === false) connectConfig.compress = false
     // s3 同款口径：连接配置已提取后立即清除内存中的明文密码/passphrase
     config.password = undefined
     config.passphrase = undefined
@@ -1493,6 +1526,7 @@ if (err) return reject(new SSHError('SFTP_INIT_FAIL', { original: err }))
    */
   private async acquireTransferSftp(
     sshSessionId: string,
+    compress: boolean,
   ): Promise<{ sftp: SFTPWrapper; release: () => void }> {
     const session = this.sessions.get(sshSessionId)
     if (!session) throw new SSHError('SESSION_NOT_FOUND')
@@ -1508,19 +1542,21 @@ if (err) return reject(new SSHError('SFTP_INIT_FAIL', { original: err }))
       else this.transferConns.delete(cfgId)
     }
 
-    let conn = conns?.find(c => !c.leased && !c.dead)
+    // 同值 compress 才复用：压缩开关是建连参数，租到错配连接等于让媒体文件
+    // 白烧 zlib 或让文本文件丢掉压缩收益
+    let conn = conns?.find(c => !c.leased && !c.dead && c.compress === compress)
     if (!conn) {
       if (!conns) conns = []
       if (conns.length < TRANSFER_CONN_PER_HOST_CAP) {
         // 无空闲且未达上限：新建一条（并发传输各占一条独立 2 MB 窗口连接）
-        conn = await this.createTransferConn(cfgId)
+        conn = await this.createTransferConn(cfgId, compress)
         conns.push(conn)
         this.transferConns.set(cfgId, conns)
       } else {
         // 达上限（8，与渲染层并发门上限一致）仍无空闲：建一条不入池的临时
         // 连接，用完即拆 —— 正确性优先（绝不复用 leased 连接破坏租约），
         // 该分支在门控正常时几乎不会触发
-        const tmp = await this.createTransferConn(cfgId)
+        const tmp = await this.createTransferConn(cfgId, compress)
         return {
           sftp: tmp.sftp,
           release: () => this.destroyTransferConn(tmp),
@@ -1539,17 +1575,17 @@ if (err) return reject(new SSHError('SFTP_INIT_FAIL', { original: err }))
   }
 
   /** 新建一条独立传输连接（复用 openRawClient 的 TOFU/认证/keepalive 口径） */
-  private async createTransferConn(cfgId: string): Promise<TransferConn> {
+  private async createTransferConn(cfgId: string, compress: boolean): Promise<TransferConn> {
     const config = await this.configProvider?.(cfgId)
     if (!config) throw new SSHError('SFTP_SESSION_REQUIRED')
-    const client = await this.openRawClient(config)
+    const client = await this.openRawClient(config, compress)
     const sftp = await new Promise<SFTPWrapper>((resolve, reject) => {
       client.sftp((err, s) => (err ? reject(new SSHError('SFTP_INIT_FAIL', { original: err })) : resolve(s)))
     })
     const conn: TransferConn = {
       client, sftp,
       name: config.name || `${config.username}@${config.host}`,
-      leased: false, dead: false, cleanupTimer: null,
+      leased: false, dead: false, cleanupTimer: null, compress,
     }
     const markDead = (): void => { conn.dead = true }
     client.on('close', markDead)
@@ -1678,6 +1714,22 @@ if (err) return reject(new SSHError('SFTP_INIT_FAIL', { original: err }))
     }
   }
 
+  /**
+   * 查询单个远程路径的类型与大小（一次 SFTP stat 往返）。
+   * 供渲染层替代「sftpList 全量列目录只为探测 isDir」的旧路径 —— 万级文件的
+   * 目录拉全量列表再扔掉，是入队延迟的纯浪费。不存在时抛错（与 sftpList 探测
+   * 失败同语义，渲染层按「非目录」处理）。
+   */
+  async sftpStat(sshSessionId: string, remotePath: string): Promise<{ size: number; isDirectory: boolean; modified: number }> {
+    const sftp = this.requireSftp(sshSessionId)
+    const st = await sftpStat(sftp, remotePath)
+    return {
+      size: st.size || 0,
+      isDirectory: (st.mode & 0o170000) === 0o040000,
+      modified: (st.mtime || 0) * 1000,
+    }
+  }
+
   async sftpRename(sshSessionId: string, oldPath: string, newPath: string): Promise<void> {
     const sftp = this.requireSftp(sshSessionId)
     await new Promise<void>((resolve, reject) => {
@@ -1732,8 +1784,9 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
   ): Promise<void> {
     // 传输提速：从连接池取独占的独立 SSH 连接（每条 2 MB 窗口），
     // 不与终端会话瓜分窗口；release 在 runBody 的 finally 归还（停滞场景
-    // 延后归还，让续传的新传输天然拿到另一条连接，隔离旧的在途写）
-    const { sftp, release } = await this.acquireTransferSftp(sshSessionId)
+    // 延后归还，让续传的新传输天然拿到另一条连接，隔离旧的在途写）。
+    // 压缩按源文件类型决定：媒体/压缩容器关 zlib 省两端 CPU
+    const { sftp, release } = await this.acquireTransferSftp(sshSessionId, shouldCompressTransfer(localPath))
     const CHUNK_SIZE = 262144 // 256KB
     const CONCURRENCY = 8
     const VERIFY_SIZE = 4096 // 续传校验前 4KB
@@ -2022,8 +2075,9 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
     localPath: string,
   ): Promise<void> {
     // 传输提速：同 sftpUpload — 从连接池取独占独立 SSH 连接（2 MB 窗口/条），
-    // 不与终端会话瓜分窗口；release 在 runBody 的 finally 归还
-    const { sftp, release } = await this.acquireTransferSftp(sshSessionId)
+    // 不与终端会话瓜分窗口；release 在 runBody 的 finally 归还。
+    // 压缩按远端路径的文件类型决定（下载侧类型在远端，判据同为扩展名）
+    const { sftp, release } = await this.acquireTransferSftp(sshSessionId, shouldCompressTransfer(remotePath))
     const CHUNK_SIZE = 262144 // 256KB
     const CONCURRENCY = 8
     const VERIFY_SIZE = 4096 // 续传校验前 4KB

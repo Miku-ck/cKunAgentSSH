@@ -5,7 +5,8 @@
  * SSHManager 的传输表：本地复制（fs:copy 逐文件循环）没有句柄、远程复制（一条
  * `cp -r`）根本不受我们控制 ⇒ 点了 ✕ 什么也不会发生，行一直停在「复制中」。
  * 现在：本地复制真能被取消（先置 cancelled 再发信号，runLocalCopy 的 catch 静默收尾），
- * 远程复制把话说清楚；上传/下载这条既有路径的行为一字不改。
+ * 远程复制把话说清楚；上传/下载同顺序本地先置 cancelled —— 自动续传的退避间隙里
+ * 没有在途 IPC 可拒绝，不先置位「取消」会被吞，醒来后任务继续续传。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
@@ -120,13 +121,13 @@ describe('sftp store — 复制的取消语义（S5-11）', () => {
     expect(api.sftpCancel).not.toHaveBeenCalled()
   })
 
-  it('上传/下载这条既有路径一字不改：只发 sftpCancel，状态由主进程的 CANCELLED 回包决定', async () => {
+  it('上传/下载：与复制同顺序 —— 本地先置 cancelled 再发 sftpCancel（退避间隙取消不落空）', async () => {
     const store = useSftpStore()
     pushTransfer(store, { kind: 'upload', direction: 'up' })
 
     await store.cancelTransfer('t1')
 
+    expect(store.transfers[0].status).toBe('cancelled')
     expect(api.sftpCancel).toHaveBeenCalledWith('t1')
-    expect(store.transfers[0].status).toBe('running')
   })
 })

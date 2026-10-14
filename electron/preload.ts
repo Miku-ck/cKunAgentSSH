@@ -255,6 +255,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sftpMkdir: (sshSessionId: string, remotePath: string) => ipcRenderer.invoke('sftp:mkdir', sshSessionId, remotePath),
   sftpMkdirRecursive: (sshSessionId: string, remotePath: string) => ipcRenderer.invoke('sftp:mkdirRecursive', sshSessionId, remotePath),
   sftpExists: (sshSessionId: string, remotePath: string) => ipcRenderer.invoke('sftp:exists', sshSessionId, remotePath),
+  sftpStat: (sshSessionId: string, remotePath: string) => ipcRenderer.invoke('sftp:stat', sshSessionId, remotePath),
   sftpRename: (sshSessionId: string, oldPath: string, newPath: string) => ipcRenderer.invoke('sftp:rename', sshSessionId, oldPath, newPath),
   sftpDelete: (sshSessionId: string, remotePath: string) => ipcRenderer.invoke('sftp:delete', sshSessionId, remotePath),
   sftpUpload: (transferId: string, sshSessionId: string, localPath: string, remotePath: string) =>

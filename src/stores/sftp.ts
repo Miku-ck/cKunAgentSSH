@@ -64,6 +64,23 @@ function sshExecWithTimeout(
 export const useSftpStore = defineStore('sftp', () => {
   const toast = useToastStore()
 
+  /** 弱网下并发任务几乎同时失败：自动续传通知按 1s 窗口聚合，避免 5–8 个
+   *  并发任务 × 2 轮重试把 toast 刷屏。窗口内第一条进来先起定时器，窗口关闭
+   *  时把积攒的任务合成一条（按去重后数量）；单任务仍报名字，多任务报数量。 */
+  let autoRetryToastTimer: ReturnType<typeof setTimeout> | null = null
+  let autoRetryToastNames: string[] = []
+  function toastAutoRetryQueued(name: string): void {
+    autoRetryToastNames.push(name)
+    if (autoRetryToastTimer) return
+    autoRetryToastTimer = setTimeout(() => {
+      autoRetryToastTimer = null
+      const unique = [...new Set(autoRetryToastNames)]
+      autoRetryToastNames = []
+      const subject = unique.length === 1 ? unique[0] : `${unique.length} 个传输任务`
+      toast.info(`网络不稳，正在自动续传: ${subject}…`)
+    }, 1000)
+  }
+
   /** 安全获取 electronAPI，未就绪时抛出明确错误 */
   function getApi(): ElectronAPI {
     if (!window.electronAPI) throw new Error('Electron API 未就绪')
@@ -698,6 +715,8 @@ async function remoteRefresh(): Promise<void> {
     const sid = sshSessionId.value
     const remoteBaseDir = targetDir ?? remoteCwd.value
     const tasks: Array<{ id: string; localPath: string; remotePath: string; size: number }> = []
+    // 目录上传涉及的全部远程父目录（去重后并发创建，见循环后）
+    const remoteDirs = new Set<string>()
 
     for (const lp of localPaths) {
       const name = basenameLocal(lp)
@@ -730,8 +749,10 @@ async function remoteRefresh(): Promise<void> {
         for (const f of files) {
           const remotePath = remoteBase + '/' + f.relPath
           const remoteDir = remotePath.substring(0, remotePath.lastIndexOf('/'))
-          // 确保远程父目录存在
-          try { await getApi().sftpMkdirRecursive(sid, remoteDir) } catch { /* ignore */ }
+          // 父目录先记录，循环后去重并发创建 —— 此前在这里逐文件 await
+          // sftpMkdirRecursive（每次还要逐段 stat），1000 文件 × 3 层深 =
+          // 3000 次串行往返，任务还没开始传就先排几分钟队
+          remoteDirs.add(remoteDir)
           const id = `t${transferSeq.value++}`
           transfers.value.push({
             id, direction: 'up', kind: 'upload', name: f.relPath,
@@ -757,6 +778,13 @@ async function remoteRefresh(): Promise<void> {
       }
     }
 
+    // 去重后的父目录并发创建（sftpMkdirRecursive 幂等：mkdir 失败后 re-stat
+    // 判定已存在，并发建同一父目录安全）。失败静默 —— 建不了的目录留给传输
+    // 时暴露真实错误，不在入队期误伤整批。
+    if (remoteDirs.size > 0) {
+      await runPool([...remoteDirs], 8, d => getApi().sftpMkdirRecursive(sid, d).catch(() => { /* ignore */ }))
+    }
+
     // 大文件优先：按 size 降序 —— 并发门先放大文件（各占一条独立连接的
     // 2 MB 窗口），小文件填缝在后，减少"大文件排在一堆小文件后面干等"的
     // 长尾延迟（稳定排序：同大小维持原顺序，目录内相对次序不乱）
@@ -780,6 +808,8 @@ async function remoteRefresh(): Promise<void> {
     const sid = sshSessionId.value
     const localBaseDir = targetDir ?? localCwd.value
     const tasks: Array<{ id: string; remotePath: string; localPath: string; size: number }> = []
+    // 目录下载涉及的全部本地父目录（去重后并发创建，见循环后）
+    const localDirs = new Set<string>()
 
     for (const rp of remotePaths) {
       const name = basenameRemote(rp)
@@ -792,16 +822,16 @@ async function remoteRefresh(): Promise<void> {
 
       // 判断是文件还是目录：优先查 remoteEntries 缓存；
       // B8 修复：路径不在当前列表（如粘贴/拖拽其他目录条目）时，
-      // 用 sftpList 探测兜底 — 列目录成功即目录，失败（非目录/不存在）按文件处理。
-      // 注：IPC 契约未提供 sftpStat，故用现有 sftpList 探测
+      // 用 sftpStat 探测兜底 —— 一次往返拿类型。此前用 sftpList 全量列目录，
+      // 万级文件的目录要拉全量列表只为扔掉
       let isDir = false
       const remoteEntry = remoteEntries.value.find(e => e.path === rp)
       if (remoteEntry) {
         isDir = remoteEntry.isDirectory
       } else {
         try {
-          await getApi().sftpList(sid, rp)
-          isDir = true
+          const st = await getApi().sftpStat(sid, rp)
+          isDir = st.isDirectory
         } catch {
           isDir = false
         }
@@ -822,11 +852,11 @@ async function remoteRefresh(): Promise<void> {
         const groupLabel = `${name}/`
         for (const f of files) {
           const localPath = await getApi().fsPathJoin(localBase, f.relPath)
-          // 确保本地父目录存在（fsMkdir 是 recursive）
+          // 确保本地父目录存在（fsMkdir 是 recursive）：先记录，循环后去重并发创建
           const localDir = localPath.includes('\\')
             ? localPath.split('\\').slice(0, -1).join('\\')
             : localPath.split('/').slice(0, -1).join('/')
-          try { await getApi().fsMkdir(localDir) } catch { /* ignore */ }
+          localDirs.add(localDir)
           const id = `t${transferSeq.value++}`
           transfers.value.push({
             id, direction: 'down', kind: 'download', name: f.relPath,
@@ -839,10 +869,14 @@ async function remoteRefresh(): Promise<void> {
           tasks.push({ id, remotePath: f.remotePath, localPath, size: f.size })
         }
       } else {
-        // 文件：直接加入（大小从 remoteEntries 缓存取，取不到按 0 排末尾）
+        // 文件：直接加入（大小从 remoteEntries 缓存取；不在缓存里时 stat 一次
+        // 拿真实大小参与大文件优先排序，取不到按 0 排末尾）
         const id = `t${transferSeq.value++}`
         const remoteEntry = remoteEntries.value.find(e => e.path === rp)
-        const fileSize = remoteEntry?.size || 0
+        let fileSize = remoteEntry?.size || 0
+        if (!remoteEntry) {
+          try { fileSize = (await getApi().sftpStat(sid, rp)).size || 0 } catch { /* 保持 0 */ }
+        }
         transfers.value.push({
           id, direction: 'down', kind: 'download', name,
           from: rp, to: localBase,
@@ -852,6 +886,11 @@ async function remoteRefresh(): Promise<void> {
         })
         tasks.push({ id, remotePath: rp, localPath: localBase, size: fileSize })
       }
+    }
+
+    // 去重后的本地父目录并发创建（同上传侧 remoteDirs 的去重并行化）
+    if (localDirs.size > 0) {
+      await runPool([...localDirs], 8, d => getApi().fsMkdir(d).catch(() => { /* ignore */ }))
     }
 
     // 大文件优先：同 uploadFiles —— 并发门先放大文件（各占一条独立连接的
@@ -1072,7 +1111,7 @@ async function remoteRefresh(): Promise<void> {
     })
   }
 
-  async function runUpload(id: string, sid: string, localPath: string, remotePath: string, retried = false): Promise<void> {
+  async function runUpload(id: string, sid: string, localPath: string, remotePath: string, attempt = 1): Promise<void> {
     const t = transfers.value.find(x => x.id === id)
     if (!t) return
     // F-5 竞态双保险：任务在排队期间被取消则不再启动
@@ -1100,12 +1139,18 @@ async function remoteRefresh(): Promise<void> {
       if (statusNow === 'paused') return
       // B10：disconnect 已先行置 cancelled 并 sftpCancel — CANCELLED 拒绝静默吞掉
       if (statusNow === 'cancelled') return
-      // NETWORK/STALLED 错误自动重试一次（断点续传，主进程按 .part 自动定位）。
-      // 判定只看 retryable（由 code 经 isTransferRetryable 现推，与主进程
-      // 保留/删除 .part 的判据同源）
-      if (retryable && !retried) {
-        toast.info(`正在自动续传: ${t.name}…`)
-        return runUpload(id, sid, localPath, remotePath, true)
+      // NETWORK/STALLED 错误自动续传至多 AUTO_RETRY_MAX 次、按 1s/2s 指数退避
+      // （断点续传，主进程按 .part 自动定位）。判定只看 retryable（由 code 经
+      // isTransferRetryable 现推，与主进程保留/删除 .part 的判据同源）
+      if (retryable && attempt <= AUTO_RETRY_MAX) {
+        const delay = autoRetryDelayMs(attempt)
+        // 通知走 1s 聚合窗口（弱网下成批任务同时失败，逐条弹会刷屏）
+        toastAutoRetryQueued(t.name)
+        // 退避期间保持 running 占住并发门（1–2s 间隙不值得重新排队）；
+        // 若用户此刻暂停/取消/删除，醒来后按状态放弃重试
+        await sleep(delay)
+        if (transfers.value.find(x => x.id === id)?.status !== 'running') return
+        return runUpload(id, sid, localPath, remotePath, attempt + 1)
       }
       t.status = code === 'CANCELLED' ? 'cancelled' : 'error'
       t.error = message || '上传失败'
@@ -1121,7 +1166,7 @@ async function remoteRefresh(): Promise<void> {
     }
   }
 
-  async function runDownload(id: string, sid: string, remotePath: string, localPath: string, retried = false): Promise<void> {
+  async function runDownload(id: string, sid: string, remotePath: string, localPath: string, attempt = 1): Promise<void> {
     const t = transfers.value.find(x => x.id === id)
     if (!t) return
     // F-5 竞态双保险：任务在排队期间被取消则不再启动
@@ -1145,11 +1190,17 @@ async function remoteRefresh(): Promise<void> {
       if (statusNow === 'paused') return
       // B10：disconnect 已先行置 cancelled 并 sftpCancel — CANCELLED 拒绝静默吞掉
       if (statusNow === 'cancelled') return
-      // NETWORK/STALLED 错误自动重试一次（断点续传，主进程按 .part 自动定位）
+      // NETWORK/STALLED 错误自动续传至多 AUTO_RETRY_MAX 次、按 1s/2s 指数退避
+      // （断点续传，主进程按 .part 自动定位）。
       // 判定只看 retryable（由 code 现推，见 describeTransferError）
-      if (retryable && !retried) {
-        toast.info(`正在自动续传: ${t.name}…`)
-        return runDownload(id, sid, remotePath, localPath, true)
+      if (retryable && attempt <= AUTO_RETRY_MAX) {
+        const delay = autoRetryDelayMs(attempt)
+        // 通知走 1s 聚合窗口（同 runUpload）
+        toastAutoRetryQueued(t.name)
+        // 退避期间保持 running 占住并发门；被暂停/取消/删除则醒来后放弃
+        await sleep(delay)
+        if (transfers.value.find(x => x.id === id)?.status !== 'running') return
+        return runDownload(id, sid, remotePath, localPath, attempt + 1)
       }
       t.status = code === 'CANCELLED' ? 'cancelled' : 'error'
       t.error = message || '下载失败'
@@ -1189,6 +1240,15 @@ async function cancelTransfer(id: string): Promise<void> {
     t.status = 'cancelled'
     t.endTime = Date.now()
     toast.info(`已取消复制: ${t.name}`)
+    scheduleRemoveTransfer(id, 10000)
+  }
+  // 退避间隙（自动续传 sleep 中）没有在途 IPC 可拒绝，不先置位的话「取消」会被吞：
+  // 醒来后状态仍是 running，任务会继续续传。先本地置 cancelled 再发 sftpCancel，
+  // CANCELLED 拒绝到达 catch 时看到 cancelled 即静默返回（B10 同款顺序）；
+  // 记录移除在此排程（常规路径靠 catch 排程，该路径到不了了）
+  if (t && t.status === 'running' && (t.kind === 'upload' || t.kind === 'download')) {
+    t.status = 'cancelled'
+    t.endTime = Date.now()
     scheduleRemoveTransfer(id, 10000)
   }
   try { await getApi().sftpCancel(id) } catch { /* ignore */ }
@@ -1360,4 +1420,31 @@ function basenameLocal(path: string): string {
 function basenameRemote(path: string): string {
   const idx = path.lastIndexOf('/')
   return idx >= 0 ? path.substring(idx + 1) : path
+}
+
+/** 有界并发池：limit 路 worker 逐个消费 items。入队期建目录这类轻量 IPC 的
+ *  并行化专用，与传输并发门（runBatch）语义无关 —— 别混用。 */
+async function runPool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let idx = 0
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (idx < items.length) {
+      const item = items[idx++]
+      await fn(item)
+    }
+  })
+  await Promise.all(workers)
+}
+
+/** 自动续传策略：NETWORK/STALLED 类错误在初始尝试后最多再自动续传 AUTO_RETRY_MAX
+ *  次，间隔按 1s/2s 指数退避（±30% 抖动防齐步重试）。立即重试大概率撞上同一段
+ *  抖动白耗机会 —— 稍等让瞬断/拥塞窗口过去；断点由主进程按 .part 自动定位，
+ *  重试只补没传完的尾巴。 */
+const AUTO_RETRY_MAX = 2
+const AUTO_RETRY_BASE_MS = 1000
+function autoRetryDelayMs(attempt: number): number {
+  const base = AUTO_RETRY_BASE_MS * Math.pow(2, attempt - 1)
+  return Math.round(base * (0.7 + Math.random() * 0.6))
+}
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
 }

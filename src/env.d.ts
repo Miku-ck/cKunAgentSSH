@@ -352,6 +352,7 @@ interface ElectronAPI {
   sftpMkdir: (sshSessionId: string, remotePath: string) => Promise<void>
   sftpMkdirRecursive: (sshSessionId: string, remotePath: string) => Promise<void>
   sftpExists: (sshSessionId: string, remotePath: string) => Promise<boolean>
+  sftpStat: (sshSessionId: string, remotePath: string) => Promise<{ size: number; isDirectory: boolean; modified: number }>
   sftpRename: (sshSessionId: string, oldPath: string, newPath: string) => Promise<void>
   sftpDelete: (sshSessionId: string, remotePath: string) => Promise<void>
   sftpUpload: (transferId: string, sshSessionId: string, localPath: string, remotePath: string) => Promise<void>
