@@ -47,21 +47,22 @@ export interface GithubAccelConfig {
   lastProxyPrefix?: string
 }
 
-/** 内置代理镜像（公共镜像死亡率高，清单可在 UI 停用/增删，这里只是出厂值） */
+/**
+ * 内置代理镜像（2026-10-14 实测校准：gh.llkk.cc 超时已死，剔除）。
+ * 公共镜像死亡率高，清单可在 UI 停用/增删，这里只是出厂值。
+ */
 export function defaultProxies(): AccelProxy[] {
   return [
     { id: 'bp-ghproxy-net', name: 'ghproxy.net', prefix: 'https://ghproxy.net/', builtin: true, enabled: true },
     { id: 'bp-ghfast-top', name: 'ghfast.top', prefix: 'https://ghfast.top/', builtin: true, enabled: true },
     { id: 'bp-gh-proxy-com', name: 'gh-proxy.com', prefix: 'https://gh-proxy.com/', builtin: true, enabled: true },
-    { id: 'bp-gh-llkk-cc', name: 'gh.llkk.cc', prefix: 'https://gh.llkk.cc/', builtin: true, enabled: true },
   ]
 }
 
-/** 内置网页镜像站 */
+/** 内置网页镜像站（2026-10-14 实测校准：kkgithub/bgithub 已死——前者证书易主、后者超时，换成 gitcode） */
 export function defaultWebMirrors(): AccelWebMirror[] {
   return [
-    { id: 'bw-kkgithub', name: 'kkgithub', host: 'kkgithub.com', builtin: true, enabled: true },
-    { id: 'bw-bgithub', name: 'bgithub', host: 'bgithub.xyz', builtin: true, enabled: true },
+    { id: 'bw-gitcode', name: 'gitcode', host: 'gitcode.com', builtin: true, enabled: true },
   ]
 }
 
@@ -238,9 +239,15 @@ export function buildAccelLinks(parsed: ParsedGhUrl, proxies: AccelProxy[], webM
   return { links, canonical }
 }
 
-/** 测速探测地址：前缀 + GitHub 首页（所有 ghproxy 类服务都接受 /<github-url> 形式） */
+/**
+ * 测速探测地址：前缀 + 一个真实可代理的 raw 文件（实测校准——ghproxy 类服务
+ * 不代理 github 首页，打首页只会得到 403/404，把活镜像误判成失效）。
+ * git/git 仓库的 README 稳定存在，直连与代理都可达。
+ */
+export const PROBE_TARGET = 'https://raw.githubusercontent.com/git/git/master/README.md'
+
 export function buildProbeUrl(prefix: string): string {
-  return `${prefix}https://github.com/`
+  return `${prefix}${PROBE_TARGET}`
 }
 
 // ─── git url.insteadOf 全局改写 ───

@@ -19,6 +19,7 @@ import {
   buildGitRestoreArgs,
   buildGitSetArgs,
   buildProbeUrl,
+  PROBE_TARGET,
   defaultGithubAccelConfig,
   findGithubInsteadOf,
   hasSshBlock,
@@ -332,11 +333,11 @@ export class GithubAccelService {
     return Promise.all(jobs)
   }
 
-  /** 组装全部启用镜像的探测地址（含一个直连 github.com 对照组） */
+  /** 组装全部启用镜像的探测地址（含一个直连 raw 文件对照组，与代理同口径） */
   async probeAll(): Promise<(ProbeResult & { id: string; name: string })[]> {
     const config = await this.getConfig()
     const targets = [
-      { id: '__direct__', name: '直连 github.com（对照）', url: 'https://github.com/' },
+      { id: '__direct__', name: '直连对照', url: PROBE_TARGET },
       ...config.proxies.filter(p => p.enabled).map(p => ({ id: p.id, name: p.name, url: buildProbeUrl(p.prefix) })),
       ...config.webMirrors.filter(w => w.enabled).map(w => ({ id: w.id, name: w.name, url: `https://${w.host}/` })),
     ]
