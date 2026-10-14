@@ -88,9 +88,16 @@ function extractARecords(json: any): string[] {
   return [...new Set(out)]
 }
 
-/** 并发向两个公共 DoH 解析，取并集（一个被墙时另一个兜底） */
+/**
+ * 并发向四个公共 DoH 解析，取并集：
+ * - alidns / doh.pub：国内直连可达（实测 dns.google 超时、cloudflare ECONNRESET，
+ *   只有这两家活——它们是 M3 在无代理环境下成立的前提）
+ * - dns.google / cloudflare：海外备用
+ */
 async function resolveViaDoh(domain: string): Promise<string[]> {
   const urls = [
+    `https://dns.alidns.com/resolve?name=${domain}&type=A`,
+    `https://doh.pub/dns-query?name=${domain}&type=A`,
     `https://dns.google/resolve?name=${domain}&type=A`,
     `https://cloudflare-dns.com/dns-query?name=${domain}&type=A`,
   ]
