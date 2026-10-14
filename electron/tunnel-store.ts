@@ -11,6 +11,7 @@ import { app } from 'electron'
 import { join, dirname } from 'path'
 import { readFile, writeFile, rename, mkdir, unlink } from 'fs/promises'
 import { existsSync } from 'fs'
+import { isPort, portRangeError } from '../shared/port-core'
 
 export type TunnelType = 'local' | 'remote' | 'dynamic'
 /** 数据面：借 SSH 通道，或走自家 TLS 网关。缺省视为 'ssh'，所以存量规则零迁移。 */
@@ -53,10 +54,6 @@ function genId(): string {
   return `tnl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-function isPort(v: unknown): v is number {
-  return typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 65535
-}
-
 /** 数据面身份：-R 查重按它比，SSH 连接与 TLS 网关各自独立 */
 const planeOf = (r: TunnelRule): string => (r.via === 'gateway' ? `gw:${r.gatewayId ?? ''}` : `ssh:${r.connectionId ?? ''}`)
 const planeLabel = (r: TunnelRule): string => (r.via === 'gateway' ? '网关' : '连接')
@@ -75,14 +72,15 @@ function validateRule(rule: TunnelRule, all: TunnelRule[]): void {
   if (rule.type !== 'local' && rule.type !== 'remote' && rule.type !== 'dynamic') throw new Error('未知的隧道类型')
 
   if (rule.type === 'local' || rule.type === 'dynamic') {
-    if (!isPort(rule.listenPort)) throw new Error('本地监听端口需为 1–65535 的整数')
+    const port = rule.listenPort
+    if (!isPort(port)) throw new Error(portRangeError('本地监听'))
   }
   if (rule.type === 'local' || rule.type === 'remote') {
     if (typeof rule.dstHost !== 'string' || !rule.dstHost.trim()) throw new Error('必须填写目标主机')
-    if (!isPort(rule.dstPort)) throw new Error('目标端口需为 1–65535 的整数')
+    if (!isPort(rule.dstPort)) throw new Error(portRangeError('目标'))
   }
   if (rule.type === 'remote') {
-    if (!isPort(rule.bindPort)) throw new Error('远端绑定端口需为 1–65535 的整数')
+    if (!isPort(rule.bindPort)) throw new Error(portRangeError('远端绑定'))
   }
 
   // 安全边界：dynamic 强制 127.0.0.1（SOCKS 意味着本机任意进程可经此访问远端网段，

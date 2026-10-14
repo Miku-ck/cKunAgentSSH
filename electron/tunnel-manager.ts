@@ -24,6 +24,7 @@ import type { Duplex } from 'stream'
 import type { BrowserWindow } from 'electron'
 import type { RemoteBind, TunnelTransport } from './tunnel-transport'
 import type { TunnelRule } from './tunnel-store'
+import { isPort, portRangeError } from '../shared/port-core'
 
 /** 运行状态（主进程 → 渲染层推送，不持久化）。渲染层副本见 src/env.d.ts */
 export interface TunnelStatus {
@@ -144,8 +145,8 @@ export class TunnelManager {
       // 而 listen(undefined) 是「绑一个随机高位端口」并且照样报 active ——
       // 用户以为代理在 1080，实际上什么都没有。越界值同样拒绝，不夹到边界。
       const port = rule.listenPort
-      if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) {
-        const status: TunnelStatus = { id: rule.id, state: 'error', message: '本地监听端口需为 1–65535 的整数' }
+      if (!isPort(port)) {
+        const status: TunnelStatus = { id: rule.id, state: 'error', message: portRangeError('本地监听') }
         this.pushRaw(status)
         return status
       }
@@ -467,8 +468,8 @@ export class TunnelManager {
 
   /** tunnel:checkPort —— 渲染层保存前调用，本机端口被占即时报（而非启动时才炸） */
   async checkPort(host: string, port: number): Promise<{ ok: boolean; message?: string }> {
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      return { ok: false, message: '端口需为 1–65535 的整数' }
+    if (!isPort(port)) {
+      return { ok: false, message: portRangeError() }
     }
     const h = host || '127.0.0.1'
     const busy = await this.probePortInUse(h, port)

@@ -19,7 +19,7 @@
           <label for="acc-port">端口：</label>
           <input id="acc-port" v-model.number="form.port" class="mono" inputmode="numeric">
         </div>
-        <div v-if="bad.port" class="ferr">端口需为 1–65535 的整数</div>
+        <div v-if="bad.port" class="ferr">{{ portErrText }}</div>
         <div class="frow"><label for="acc-user">用户名：</label><input id="acc-user" v-model.trim="form.user"></div>
         <div class="frow">
           <label for="acc-pass">口令：</label>
@@ -55,6 +55,10 @@ import { computed, reactive, ref, onMounted, onUnmounted } from 'vue'
 import { useAccessStore } from '@/stores/access'
 import { useToastStore } from '@/stores/toast'
 import { toFriendlyMessage } from '@/api/client'
+import { isPort, portRangeError } from '../../../shared/port-core'
+
+/** 越界提示与主进程 gateway-store 同一句话（判据源 shared/port-core.ts） */
+const portErrText = portRangeError()
 
 const props = defineProps<{ rec?: GatewayRecord }>()
 const emit = defineEmits<{ close: []; saved: [rec: GatewayRecord, submittedPassword: boolean] }>()
@@ -90,7 +94,7 @@ const form = reactive({
 })
 
 const bad = computed(() => ({
-  port: !Number.isInteger(form.port) || form.port < 1 || form.port > 65535,
+  port: !isPort(form.port),
 }))
 const canSave = computed(() => !!form.host && !!form.user && !bad.value.port)
 

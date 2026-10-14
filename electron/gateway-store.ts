@@ -5,7 +5,8 @@
  * - 骨架照抄 tunnel-store.ts：写队列串行化 / tmp+rename 原子写 / 损坏文件隔离。
  * - 与 tunnel-store 的**唯一区别**是这里有口令：照 ssh-store.ts 的口径走 safeStorage，
  *   加密不可用时宁可不落盘也不写明文（ssh-store:271 同一处理由）。
- * - 渲染层只拿 listPublic()（口令字段抹掉），建连时主进程自己 get() 取。
+ * - 渲染层只拿 list()，返回的是 PublicGatewayRecord（口令字段由 strip() 抹掉），
+ *   建连时主进程自己 get() 取密文。
  * - SPKI 指纹直接记在记录上，不另开 known-hosts 文件：这里的身份就是 host:port 一条记录，
  *   拆两个文件只会让「改了地址指纹还留不留」变成需要同步的第二处状态。
  */
@@ -13,6 +14,7 @@ import { app, safeStorage } from 'electron'
 import { join, dirname } from 'path'
 import { readFile, writeFile, rename, mkdir, unlink } from 'fs/promises'
 import { existsSync } from 'fs'
+import { isPort, portRangeError } from '../shared/port-core'
 
 export interface GatewayRecord {
   id: string
@@ -24,7 +26,7 @@ export interface GatewayRecord {
   /** 已确认的服务端 SPKI 指纹（sha256/…）。缺省 = 首次连接走 TOFU */
   trustedSpki?: string
   user: string
-  /** 落盘为 enc:base64；listPublic() 里抹掉 */
+  /** 落盘为 enc:base64；list() 返回前由 strip() 抹掉 */
   password?: string
   createdAt: number
   updatedAt: number
@@ -77,15 +79,11 @@ function identityChanged(prev: GatewayRecord, input: GatewayRecord): boolean {
     || (prev.caPem || '') !== (input.caPem?.trim() || '')
 }
 
-function isPort(v: unknown): v is number {
-  return typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 65535
-}
-
 export function validateGateway(rec: GatewayRecord, all: GatewayRecord[]): void {
   if (!rec || typeof rec !== 'object') throw new Error('网关记录无效')
   if (typeof rec.name !== 'string' || !rec.name.trim()) throw new Error('必须填写网关名称')
   if (typeof rec.host !== 'string' || !rec.host.trim()) throw new Error('必须填写网关地址')
-  if (!isPort(rec.port)) throw new Error('端口需为 1–65535 的整数')
+  if (!isPort(rec.port)) throw new Error(portRangeError())
   if (typeof rec.user !== 'string' || !rec.user.trim()) throw new Error('必须填写用户名')
   const key = `${rec.host.trim().toLowerCase()}:${rec.port}`
   for (const other of all) {

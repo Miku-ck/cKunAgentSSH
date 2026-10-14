@@ -94,6 +94,7 @@ import { useTunnelStore } from '@/stores/tunnel'
 import { useSSHStore } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
 import { toFriendlyMessage } from '@/api/client'
+import { isPort, portRangeError } from '../../../shared/port-core'
 
 const props = defineProps<{ rule?: TunnelRule }>()
 const emit = defineEmits<{ close: []; saved: [] }>()
@@ -152,8 +153,8 @@ function touchBindWarn(): void {
 function validatePort(key: 'listenPort' | 'bindPort' | 'dstPort'): boolean {
   const raw = form[key]
   const v = Number(raw)
-  const ok = raw !== '' && Number.isInteger(v) && v >= 1 && v <= 65535
-  portErr[key] = ok ? '' : '端口需为 1–65535 的整数'
+  const ok = raw !== '' && isPort(v)
+  portErr[key] = ok ? '' : portRangeError()
   return ok
 }
 function touchPort(key: 'listenPort' | 'bindPort' | 'dstPort'): void {
