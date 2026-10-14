@@ -134,3 +134,70 @@ def test_reflection_request_projection_shape():
     assert out["final_state"] == "completed"
     assert out["tool_calls_count"] == 3
     assert out["has_warnings"] is True
+
+
+# ── 事件类型清单的跨层一致性 ────────────────────────────────────────────────
+# 同一份 SSE type 集合此前有三份手抄：后端 SSEAdapter._KIND_MAP、前端
+# AgentSSEEvent.type 联合、agent.ts 的 switch。前两份已经各自漂走两个值——
+# budget_extended / reflection_request / plan_mode_block 真的上了 Wire 却没人声明，
+# clarification_* 前端在 case 里处理着而后端清单里没有（只靠 get(kind, kind) 兜底）。
+# 漂移不报错，只是那两类事件在 Wire 上"存在"、在类型上"不存在"，加 default 也看不见。
+
+CLIENT_TS = BACKEND.parent / "src" / "api" / "client.ts"
+HARNESS = BACKEND / "agent" / "harness"
+
+
+def _emitted_kinds() -> set[str]:
+    """harness 里构造过的 TraceEvent kind。`kind="…"` 只出现在 TraceEvent(...) 形参位，
+    所以这一条正则同时覆盖 reins 与 driver；用字面量扫描，变量传入的 kind 不在其列。"""
+    kinds: set[str] = set()
+    for path in sorted(HARNESS.rglob("*.py")):
+        kinds |= set(re.findall(
+            r'kind="(\w+)"', path.read_text(encoding="utf-8", errors="replace")))
+    return kinds
+
+
+def _union_line(src: str) -> str:
+    m = re.search(r"export interface AgentSSEEvent\s*\{", src)
+    assert m, "client.ts 里找不到 AgentSSEEvent"
+    tm = re.search(r"\n\s*type:\s*([^\n]+)", src[m.end():m.end() + 4000])
+    assert tm, "AgentSSEEvent 里找不到 type 联合"
+    # 只吃一行：跨行会把接口里其它字面量算进枚举（同 test_model_default_mode_enum 的教训）
+    return tm.group(1)
+
+
+def _union_kinds(line: str) -> set[str]:
+    return set(re.findall(r"'(\w+)'", line))
+
+
+def test_kind_map_covers_every_emitted_kind():
+    emitted = _emitted_kinds()
+    assert {"clarification_needed", "plan_mode_block", "budget_extended"} <= emitted, (
+        "扫描没走进 reins/ —— 这条守卫会因为读不到东西而恒真")
+    declared = set(SSEAdapter._KIND_MAP)
+    missing = emitted - declared
+    assert not missing, (
+        f"这些 kind 上了 Wire 却不在 _KIND_MAP 里（只靠恒等兜底，清单不再是全集）: "
+        f"{sorted(missing)}")
+    unused = declared - emitted
+    assert not unused, f"_KIND_MAP 里有 harness 从不发出的死条目: {sorted(unused)}"
+
+
+def test_frontend_union_matches_backend_registry():
+    declared = set(SSEAdapter._KIND_MAP.values())
+    union = _union_kinds(_union_line(CLIENT_TS.read_text(encoding="utf-8")))
+    assert declared and union, "任一侧空集会把它变成恒真守卫"
+    assert declared == union, (
+        f"SSE type 清单漂移：后端发在 Wire 上但前端没声明 {sorted(declared - union)}；"
+        f"前端声明了但后端不会发 {sorted(union - declared)}")
+
+
+def test_guard_actually_catches_renamed_event_type():
+    """自检：改名联合里一个 type，比对必须判为漂移。改动限定在抽出来的那一行内，
+    否则 `'tool_deliver'` 之类同名字面量会被别处先命中，自检退化成空操作。"""
+    line = _union_line(CLIENT_TS.read_text(encoding="utf-8"))
+    declared = set(SSEAdapter._KIND_MAP.values())
+    mutated = _union_kinds(line.replace("'tool_deliver'", "'deliver_cmd'", 1))
+    assert "tool_deliver" not in mutated, "改名没命中 type 联合行，这条自检是摆设"
+    assert declared - mutated == {"tool_deliver"} and mutated - declared == {"deliver_cmd"}, (
+        f"改名后的联合没被判为漂移: {mutated ^ declared}")

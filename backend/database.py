@@ -1324,6 +1324,14 @@ def list_disabled_tools(mode: str = "all") -> list[str]:
 # ── 技能 CRUD ──
 
 
+# skills 全列（四处查询 + 一处 INSERT 共用）。与 _MC_COLS/_SCHEDULE_COLS 同族：
+# 各处各抄一份字面量时，加一列只会改到其中几处，其余读法永久拿不到那一列。
+_SKILLS_COLS = (
+    "id, name, slug, description, category, system_prompt, source, "
+    "is_builtin, enabled, priority, trigger_words, created_at, updated_at"
+)
+
+
 def list_skills(limit: int = 200, offset: int = 0) -> list[dict]:
     """获取所有技能列表
 
@@ -1333,7 +1341,7 @@ def list_skills(limit: int = 200, offset: int = 0) -> list[dict]:
     conn = _get_conn()
     try:
         rows = conn.execute(
-            "SELECT id, name, slug, description, category, system_prompt, source, is_builtin, enabled, priority, trigger_words, created_at, updated_at "
+            f"SELECT {_SKILLS_COLS} "
             "FROM skills ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?",
             (limit, offset),
         ).fetchall()
@@ -1347,7 +1355,7 @@ def list_all_skills() -> list[dict]:
     conn = _get_conn()
     try:
         rows = conn.execute(
-            "SELECT id, name, slug, description, category, system_prompt, source, is_builtin, enabled, priority, trigger_words, created_at, updated_at "
+            f"SELECT {_SKILLS_COLS} "
             "FROM skills ORDER BY priority DESC, updated_at DESC"
         ).fetchall()
         return [dict(r) for r in rows]
@@ -1373,7 +1381,7 @@ def get_skill(skill_id: str) -> Optional[dict]:
     conn = _get_conn()
     try:
         row = conn.execute(
-            "SELECT id, name, slug, description, category, system_prompt, source, is_builtin, enabled, priority, trigger_words, created_at, updated_at "
+            f"SELECT {_SKILLS_COLS} "
             "FROM skills WHERE id = ?",
             (skill_id,),
         ).fetchone()
@@ -1387,7 +1395,7 @@ def get_skill_by_slug(slug: str) -> Optional[dict]:
     conn = _get_conn()
     try:
         row = conn.execute(
-            "SELECT id, name, slug, description, category, system_prompt, source, is_builtin, enabled, priority, trigger_words, created_at, updated_at "
+            f"SELECT {_SKILLS_COLS} "
             "FROM skills WHERE slug = ?",
             (slug,),
         ).fetchone()
@@ -1426,7 +1434,7 @@ def create_skill(
             json.dumps(trigger_words, ensure_ascii=False) if trigger_words else "[]"
         )
         conn.execute(
-            "INSERT INTO skills (id, name, slug, description, category, system_prompt, source, is_builtin, enabled, priority, trigger_words, created_at, updated_at) "
+            f"INSERT INTO skills ({_SKILLS_COLS}) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (sid, name, slug, description, category, system_prompt, source, is_builtin, enabled, priority, trigger_words_json, now, now),
         )
