@@ -27,6 +27,13 @@ export default defineConfig({
   },
   renderer: {
     root: '.',
+    // 启动性能优化：终端（@xterm/*）是首屏真实依赖，显式登记进预构建，避免 Vite
+    // 在首个请求时才"发现"它们 → 触发一次 optimize + 页面 reload 的启动抖动。
+    // monaco-editor 刻意不在内：它已懒加载到 ./monaco-runtime（见 src/monaco-setup.ts），
+    // 只在首次打开文件编辑器时才 import，预构建它只会白白拖慢冷启动。
+    optimizeDeps: {
+      include: ['@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-web-links']
+    },
     // 绑定 IPv4 地址，避免 Electron 渲染进程连接超时（默认只绑 IPv6 ::1）
     // dev:web 场景设 VITE_HOST=0.0.0.0 允许局域网访问（electron-vite 不支持 --host CLI 选项）
     server: {

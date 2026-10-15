@@ -1,7 +1,8 @@
 # ADR 0001：主进程不再无条件禁用 GPU 渲染
 
-**状态：作废依据不成立，结论待重判（Undetermined）。三个渲染开关已于 2026-10-14 21:0x 恢复到提交
-`9ed8b12` 的状态，但「删开关导致启动失败」这个推断在同日 21:3x 被证伪。见文末回填。**
+**状态：已定案（Resolved，2026-10-15）。本机启动失败的真因是机器层 HVCI（内存完整性）开启，
+与三个渲染开关无关、也与仓库代码无关。三个开关保持 `9ed8b12` 状态不动（任何改动仍需真实窗口验证）。
+详见文末「定案」。**
 
 `electron/main.ts` 里 `disable-gpu` / `disable-gpu-compositing` / `disable-software-rasterizer`
 三个开关来自 76956f2 与 9ed8b12 两次「修启动崩溃」，其归因是"本机 GPU 驱动与 Electron v35 不兼容，
@@ -69,3 +70,23 @@ Code Integrity 驱动策略（事件 3099/3116，`Microsoft Windows Driver Polic
    15:00 落地的驱动策略更新。
 4. 取证口径：Git Bash/MSYS 会把 `0x80000003` 截成退出码 **3**，与 76956f2/9ed8b12 记录的
    「exit 3」只是数值撞脸；agent 侧任何 GUI 启动测量都不可信，就绪判据只能由用户在普通终端提供。
+
+---
+
+# 定案（2026-10-15）：真因是 HVCI，不是这三个开关
+
+上文回填里「恢复三个开关后照样起不来」是对的——它证伪了「开关」这条因果，但当时没找到真因。补上：
+
+- 注册表 `HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity\Enabled = 1`
+  → 本机 **HVCI / 内存完整性处于开启状态**。
+- HVCI 在 hypervisor 层强制 W^X，Chromium 浏览器进程的 V8 JIT（动态生成可执行代码）被拦截 →
+  浏览器进程在**加载任何应用 JS 之前**就被击杀。这正好解释上表最反直觉的一行：
+  `--no-sandbox --version` 出 `v35.7.5` exit 0（这条路径不做 JIT），而 `--no-sandbox .`
+  （起浏览器进程、跑 V8）就早退/崩。
+- 上表记的「15:00 Code Integrity 驱动策略更新」基本就是 Windows 打开内存完整性的时刻——那之后 Electron 再没起来过。
+- **因此本 ADR 的原始议题（该不该无条件禁用 GPU 渲染）依然没有结论**：正反两边都缺一次真实窗口验证。
+  三个开关继续冻结在 `9ed8b12` 状态，等 HVCI 关掉、应用能起来之后，再用**真实应用**做「加/不加开关」对照再判。
+- **`--no-sandbox` 必须保留**：上表第一行证明不带它时 Chromium 沙箱在本机根本初始化不了（`0x80000003`）。
+  它是本机必要绕行，不是元凶；删掉只会退化成沙箱初始化失败。
+
+修复（用户侧，需重启）：Windows 安全中心 → 设备安全性 → 内核隔离详细信息 → 关闭「内存完整性」→ 重启 → `npm run dev`。
