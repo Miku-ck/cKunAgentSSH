@@ -44,7 +44,7 @@ async def test_crud_round_trip():
 
     assert (await _tool(action="update", id=todo_id, status="in_progress")).success
     listed = await _tool(action="list")
-    assert f"[in_progress] 跑一遍后端闸门" in listed.output
+    assert "[in_progress] 跑一遍后端闸门" in listed.output
 
     assert (await _tool(action="delete", id=todo_id)).success
     assert "（无任务）" in (await _tool(action="list")).output

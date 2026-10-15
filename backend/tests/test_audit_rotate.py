@@ -67,7 +67,7 @@ def test_rotate_archives_seals_and_chain_intact(audit_env):
     seal = conn.execute("SELECT * FROM audit_log").fetchone()
     assert seal["action"] == "audit_cleared"
     assert seal["prev_hash"] == ""
-    assert f"archived=3" in seal["result"] and r["last_hash"] in seal["result"]
+    assert "archived=3" in seal["result"] and r["last_hash"] in seal["result"]
 
     # 封缄后继续追加，链依旧完好（新记录挂到封缄之后）
     _append_n(conn, 2)

@@ -868,7 +868,7 @@ def _fix_model_name_and_id(conn: sqlite3.Connection) -> None:
 # 模块 model_probe（见该文件 docstring）。此处顶层 re-export 保持既有调用点
 # （_seed_models 内两处）与测试的 db._probe_first_model 引用/monkeypatch 目标不变；
 # 本模块不再出现任何 netconfig 依赖。
-from model_probe import _probe_first_model  # noqa: F401
+from model_probe import _probe_first_model
 
 
 async def seed_models_async(db_path: str) -> None:

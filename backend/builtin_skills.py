@@ -183,7 +183,7 @@ def _previous_managed_slugs() -> set[str] | None:
         return None
     try:
         data = json.loads(raw)
-    except (json.JSONDecodeError, ValueError) as e:
+    except (json.JSONDecodeError, ValueError):
         bak = _STATE_FILE.with_name(f"{_STATE_FILE.name}.corrupt-{int(time.time())}.bak")
         logger.error(
             "[builtin_skills] 状态文件 JSON 解析失败（疑似半写损坏），本次不清理孤儿。备份: %s",
