@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """技能 JSON 截断钝化解析回归 — LLM 输出被切在字符串中途也尽量不整条丢技能。
 
 背景：本地小模型写长 system_prompt 时，max_tokens 不足会把输出切在

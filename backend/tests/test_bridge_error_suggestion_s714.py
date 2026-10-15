@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """S7-14 回归：同一条 BridgeError 不该有四条文案。
 
 原实现 `super().__init__(f"[{code}] {detail}" if detail else f"[{code}] {suggestion}")`

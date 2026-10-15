@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """S7-11 回归 — PATCH 不许绕开 POST 的入库上限，两条写入口同一组数字。
 
 `ScheduleIn.name` 有 min/max，而 `SchedulePatch.name` 原是裸 `Optional[str]`；

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """S14-04 / S14-08：本地 grep 不得把「没读到」说成「确认没有」，也不得悄悄截断。
 
 原形状：逐个文件的 `except (IsADirectoryError, PermissionError, OSError): continue` 没有

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """授权清单条目在**写入侧**的格式校验（读侧一直有，写侧没有）。
 
 `_validate_allowlist_entry` 只在加载时校验，`grant(scope="always")` 却把

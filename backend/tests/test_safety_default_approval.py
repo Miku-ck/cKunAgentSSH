@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """C-review C1 回归测试：命令分类器"默认审批"策略 + 实测绕过命令族。
 
 修复前：classify_command 未命中任何模式 → safe（默认放行），

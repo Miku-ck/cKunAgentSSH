@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """ops_* 内容级判定回归（安全边界审查 A1/A2/A3）。
 
 修复前：safety.classify_command 只挂在 shell_exec/job_run 一条路上，file_write 自己

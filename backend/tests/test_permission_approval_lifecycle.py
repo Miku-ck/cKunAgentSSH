@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """C-review M7 回归：审批等待三态处理 + 循环检测豁免 + 审批兜底。
 
 修复前：审批期间 run 继续重发（烧 LLM 调用）；重发签名进 LoopDetector 窗口，

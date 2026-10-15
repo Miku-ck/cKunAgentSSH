@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """审批绕过的钥匙孔：判定层与执行层读的不是同一个参数键。
 
 `command_from_args` 原本按 `command → shell → cmd` 取**第一个非空**，而

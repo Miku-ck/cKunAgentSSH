@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """内容级判定工具（file_write / file_edit / schedule_op）的授权闭环回归（A4/A5/A6）。
 
 修复前：这些工具按 meta.risk_level 判定，file_write 写 /root/.ssh/authorized_keys

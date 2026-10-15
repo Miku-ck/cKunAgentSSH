@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """C-review M10 回归：成本/token 硬熔断。
 
 修复前：max_iterations 可 500 + DynamicBudgetRein 可再放宽 2x，最坏 ~1000 次

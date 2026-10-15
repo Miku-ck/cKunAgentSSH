@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """远程后台任务（job_run target=remote）测试 — 方案 A：nohup/日志/PID。
 
 全部通过 monkeypatch 替换 ops_job 模块内的 run_headless（桥接远程执行），

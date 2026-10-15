@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """C-review M12 回归：滚动再摘要真正写入 metadata，历史不退化为嵌套 200 字符切片。
 
 修复前：_compress_run_into 只在"压缩结果含 system 消息"时写

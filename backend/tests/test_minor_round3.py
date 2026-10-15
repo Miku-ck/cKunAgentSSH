@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """C-review MINOR Round-3 回归（9 项未修复 MINOR 中可单测的部分）。
 
 覆盖：

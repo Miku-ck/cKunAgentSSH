@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """自动审批（permission_mode="auto"）—— LLM 审批裁决器回归测试。
 
 钉住四件事：

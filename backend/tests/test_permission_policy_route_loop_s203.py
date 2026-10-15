@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """S2-03 回归 — 改进程内审批运行时状态的路由必须是 async def（跑在事件循环上）。
 
 同步 `def` 路由会被 FastAPI 丢进 anyio 线程池，于是三个运行时 mutator 在非事件循环

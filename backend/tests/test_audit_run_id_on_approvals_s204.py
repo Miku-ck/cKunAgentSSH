@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """S2-04 回归 — 每条隶属某个 run 的审批决策必须在审计记录里带上 run_id。
 
 已退役的 docs/security-boundary.md §6 声明审计链可追「谁在哪个 run 里批了什么」，而

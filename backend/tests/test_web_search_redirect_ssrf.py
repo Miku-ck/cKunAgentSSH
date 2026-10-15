@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """搜索腿的重定向必须逐跳复核 —— 不能把「跟到哪儿」交给对端说了算。
 
 `netconfig.new_client` 的文档写着 follow_redirects 刻意沿用 httpx 默认（False），

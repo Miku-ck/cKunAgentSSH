@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """默认模型读取契约回归 — get_default_model 的列集合必须与 get_model_config 一致。
 
 背景：models_config 的 SELECT 列清单原本在三处各写一份字面量，

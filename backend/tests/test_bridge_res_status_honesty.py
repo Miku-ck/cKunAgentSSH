@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """bridge res 帧的 status 缺失/畸形不能长成成功。
 
 `bridge_relay` 收 res 帧时原先写的是 `status = int(msg.get("status") or 200)`。

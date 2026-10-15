@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """S1-04 回归 — Sandbox 这条「不可禁用」底线看的命令入口必须与全仓唯一清单一致。
 
 Sandbox 的 docstring 自称与 FilesystemGuard 不同：后者是 Reins 策略层、链可被装配方

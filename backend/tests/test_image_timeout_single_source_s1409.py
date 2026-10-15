@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """S14-09：read_image 的超时只有一个来源（`meta.timeout`）。
 
 原先 `meta` 里声明 `timeout=20.0`，调用点又抄一个裸 `20`。两处数字今天恰好相等，

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """done 事件的投影对账：生产者写了、落库方读了、中间投影层漏了。
 
 背景（实测缺陷）：driver 的 done 载荷里带着 `context_summary`（spec §8 写明「随 done

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """GET /workflow 读侧语义 + kind 清单漂移守卫（routes/workflow.py 此前只有 DELETE 侧有测试）。
 
 钉住三件事：

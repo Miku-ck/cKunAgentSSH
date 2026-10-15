@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """回归测试：ConfidenceMonitor 误报修复
 
 修复前三个缺陷（均为运维场景常见组合，非"Agent 真困惑"信号）：

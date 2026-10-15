@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """回归测试：C-review M6（LoopDetector 第 3 次触发真正终止 run）
 与 C-review M8（once 授权不再于每轮迭代末被清空）。
 """

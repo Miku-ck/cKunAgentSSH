@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """记忆预算的地毯式不变量：账户分出去的量不能超过窗口本身。
 
 `MemoryBudget.for_context` 的四本账 + 留量必须 ≤ window，否则「按窗口分配」这句话是空的：

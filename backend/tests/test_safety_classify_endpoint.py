@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """POST /agent/safety/classify 契约回归（安全边界审查 C-lite）。
 
 批量下发是「一个人的动作 × N 台机器」的放大点，此前渲染层自带一份

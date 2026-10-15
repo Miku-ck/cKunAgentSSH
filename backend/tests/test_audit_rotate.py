@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """审计归档轮转（archive_and_clear）回归测试。
 
 守护点：

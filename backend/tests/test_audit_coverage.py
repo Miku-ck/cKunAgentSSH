@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """回归测试：C-review C2 — 审计链必须覆盖"执行"与"批准"，不只是"拒绝"。
 
 修复前：append_record 只被 FilesystemGuard 的 blocked/denied 分支调用，

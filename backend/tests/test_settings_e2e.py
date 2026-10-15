@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """设置项端到端回归 — 真实 FastAPI 路由 + 真实 SQLite DB + mock LLM。
 
 与 test_settings_wiring.py（单元级契约断言）互补：本测试走完整

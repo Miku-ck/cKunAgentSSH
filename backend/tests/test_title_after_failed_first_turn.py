@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """M5 回归：首轮失败后标题门槛不得永久关闭。
 
 修复前：_generate_title 只在 is_first_turn（turn_index==0）生成标题，但首轮

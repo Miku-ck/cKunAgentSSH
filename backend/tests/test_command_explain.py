@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """command_explain 中文后果表覆盖测试。
 
 后果表按 safety.py 的英文 reason 文本匹配，因此 reason 文案一旦改动而后果表没跟上，

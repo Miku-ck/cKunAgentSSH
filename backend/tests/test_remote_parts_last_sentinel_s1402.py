@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """S14-02：`remote_parts` 必须按生产侧的拼装顺序拆，判据取**最后**一次出现。
 
 `ops_common.exec_remote` 的形状是 `正文 → [stderr] 段 → [exit_code=N]`，而本模块的

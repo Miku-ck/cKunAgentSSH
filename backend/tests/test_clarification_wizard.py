@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """澄清向导（Clarification Wizard）回归测试。
 
 覆盖：

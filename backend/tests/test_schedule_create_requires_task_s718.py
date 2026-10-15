@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """S7-18 回归 — schedule_op create 不许把漏参换成内置默认巡检词。
 
 空 task_prompt 入库后，无头那次由 schedule_engine 兜一句「对当前环境执行一次例行

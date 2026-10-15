@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """C-review M11 回归：session 级授权按 conversation_id 键控，不得跨会话泄漏。
 
 修复前：PermissionGate._confirmed_session 是进程级全局 set — 会话 A 的

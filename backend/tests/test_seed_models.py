@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """首启模型种子逻辑测试（seed_models_async / _probe_first_model）
 
 设计契约见 docs/superpowers/specs/2026-09-02-model-seed-env-driven-design.md：

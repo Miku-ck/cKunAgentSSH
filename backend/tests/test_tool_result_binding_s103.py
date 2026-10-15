@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """S1-03：/agent/tool-result 的 run 归属与 requires_confirm 回查。
 
 守护点：
