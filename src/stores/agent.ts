@@ -236,7 +236,7 @@ export const useAgentStore = defineStore('agent', () => {
     || !!errorMessage.value
   )
 
-  // ── 单一焦点审批队列（spec refactor-approval-center + 裁决A） ──
+  // ── 单一焦点审批队列 ──
   // 待审批 = 未 resolved；expired 卡保留可操作（后端到期不摘签名，grant 按
   // sig 仍可达，点「允许」即恢复执行），仅多一枚超时角标。数组 append 序即
   // 年龄序，队首恒为最旧一条 → 焦点。
@@ -719,7 +719,7 @@ export const useAgentStore = defineStore('agent', () => {
       }
 
       case 'permission_expired': {
-        // 审批窗口语义（spec refactor-approval-center + 裁决A）：permission_expired
+        // 审批窗口语义：permission_expired
         // 不删卡、不置 resolved，只打 expired 标——卡片保留授权/拒绝按钮，
         // 后端签名仍在等待集，用户随时点击可恢复执行。超时提示由面板的
         // 「已超时」角标呈现，不再往 message 里追加（重发会刷成一串）。
