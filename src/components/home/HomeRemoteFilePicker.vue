@@ -7,8 +7,8 @@
  * 刻意不再把内容上传到服务器 uploads/ 目录 —— 东西已经在渲染进程手上，再拷一遍
  * 只是多留一份副本。
  *
- * 起点是 '/'，与 SFTP 面板 connect 时的初值同一个口径（sftp.ts:129）；两处起点
- * 不同的话，用户会以为"上次去的目录丢了"。
+ * 浏览目录存在 store（remotePickerCwd）：SFTP 面板的 cwd 持久不丢，这里若是每次
+ * 打开都从 '/' 开始，用户会以为"上次去的目录丢了"——两处必须同一个口径。
  */
 import { computed, onMounted, ref } from 'vue'
 import { toFriendlyMessage } from '@/api/client'
@@ -28,7 +28,9 @@ const emit = defineEmits<{
 const ssh = useSSHStore()
 const sshAi = useSshAiStore()
 
-const cwd = ref('/')
+// 目录放在 store（remotePickerCwd）：＋菜单 v-if 挂载，组件销毁不丢浏览位置，
+// 重开仍停在用户上次所在目录（与 SFTP 面板 cwd 持久同一个口径）。
+const cwd = computed(() => sshAi.remotePickerCwd)
 const entries = ref<SftpEntry[]>([])
 const loading = ref(false)
 const error = ref('')
@@ -81,7 +83,7 @@ async function load(path: string) {
     const list = await api.sftpList(sid, path)
     if (seq !== listSeq) return
     entries.value = list
-    cwd.value = path
+    sshAi.remotePickerCwd = path
   } catch (err) {
     if (seq !== listSeq) return
     error.value = toFriendlyMessage(err, '列目录失败')
@@ -115,13 +117,21 @@ async function pick(entry: SftpEntry) {
   }
 }
 
-onMounted(() => { load('/') })
+onMounted(() => { load(cwd.value || '/') })
 </script>
 
 <template>
   <div class="hrp">
     <div class="hrp-bar">
-      <button type="button" class="hrp-back" title="返回 ＋ 菜单" @click="emit('back')">‹</button>
+      <!-- ‹ 只负责"上一级"：原先它 emit('back') 直接关掉整个选择器，在深层目录里
+           点它像"返回跳回标准页面"——列表里的 .. 与它语义重复却更不可见。 -->
+      <button
+        type="button"
+        class="hrp-back"
+        title="上一级"
+        :disabled="cwd === '/' || loading"
+        @click="load(parentOf(cwd))"
+      >‹</button>
       <code class="hrp-path" :title="cwd">{{ cwd }}</code>
       <button
         type="button"
@@ -130,6 +140,7 @@ onMounted(() => { load('/') })
         :disabled="loading"
         @click="load(cwd)"
       >↻</button>
+      <button type="button" class="hrp-back" title="关闭（返回 ＋ 菜单）" @click="emit('back')">×</button>
     </div>
 
     <p v-if="!usable" class="hrp-hint">先在终端里连上一台服务器，才能取它的文件。</p>

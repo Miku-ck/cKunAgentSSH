@@ -11,14 +11,18 @@
       <!-- ── 加速总控：一键启动 / 关闭 ── -->
       <section class="panel master">
         <div class="master-row">
-          <span class="dot" :class="accel.activeMeasureCount > 0 ? 'on' : 'off'"></span>
-          <span class="master-title">加速{{ accel.activeMeasureCount > 0 ? '运行中' : '未启动' }}</span>
+          <span class="dot" :class="masterOn ? 'on' : 'off'"></span>
+          <span class="master-title">加速{{ masterStateText }}</span>
           <span class="measure-chips">
             <span v-for="m in measureChips" :key="m.key" class="m-chip" :class="m.on ? 'on' : 'off'">{{ m.label }}</span>
           </span>
           <span class="head-spacer"></span>
-          <button class="btn btn-primary" :disabled="masterBusy" @click="onMasterEnable">启动加速</button>
-          <button class="btn" :disabled="masterBusy" @click="onMasterDisable">关闭加速</button>
+          <button
+            class="btn"
+            :class="masterOn ? 'btn-danger' : 'btn-primary'"
+            :disabled="masterBusy"
+            @click="masterOn ? onMasterDisable() : onMasterEnable()"
+          >{{ masterButtonLabel }}</button>
         </div>
         <div v-if="masterNote" class="hint" :class="{ warn: masterNoteWarn }">{{ masterNote }}</div>
       </section>
@@ -126,10 +130,10 @@
       <section class="panel">
         <div class="panel-title">
           hosts 优选 IP
-          <span v-if="accel.hosts?.applied" class="title-chip on">已生效</span>
+          <span v-if="hostsAgeChip" class="title-chip" :class="hostsAgeChip.cls">{{ hostsAgeChip.text }}</span>
           <span v-else class="title-chip off">未写入</span>
         </div>
-        <div class="hint">解决镜像覆盖不了的登录态网页与 API：解析 GitHub 官方最优 IP 写入系统 hosts（写入时弹 UAC 提权框，确认即生效）。</div>
+        <div class="hint">解决镜像覆盖不了的登录态网页与 API：解析 GitHub 官方最优 IP 写入系统 hosts（写入时弹 UAC 提权框，确认即生效）。本项独立于总控开关，需手动操作，总控不会代写。</div>
         <div v-if="accel.hosts" class="status-block">
           <div v-if="accel.hosts.applied && accel.hosts.entries.length" class="hosts-table">
             <div v-for="e in accel.hosts.entries" :key="e.domain" class="hosts-row">
@@ -225,8 +229,25 @@ const newProxyPrefix = ref('')
 const newWebHost = ref('')
 
 const masterBusy = ref(false)
+/** 本次总控动作的方向（执行中按钮文案用；与实时状态解耦，避免措施陆续生效时按钮来回翻转） */
+const masterMode = ref<'enable' | 'disable'>('enable')
 const masterNote = ref('')
 const masterNoteWarn = ref(false)
+
+/** 总控开关状态：任一措施生效即视为"加速已开启"，按钮相应切换为「关闭加速」 */
+const masterOn = computed(() => accel.activeMeasureCount > 0)
+
+/** 状态文案：全开/全关一笔带过，部分生效时明确 n/3，避免"已开启"名不副实 */
+const masterStateText = computed(() => {
+  const n = accel.activeMeasureCount
+  if (n === 0) return '未开启'
+  return n === 3 ? '已开启' : `部分开启（${n}/3）`
+})
+
+const masterButtonLabel = computed(() => {
+  if (masterBusy.value) return masterMode.value === 'enable' ? '正在启动加速…' : '正在关闭加速…'
+  return masterOn.value ? '关闭加速' : '启动加速'
+})
 
 const KIND_TITLES: Record<AccelLink['kind'], string> = {
   clone: 'git clone',
@@ -252,6 +273,19 @@ const probeTimeText = computed(() => {
   if (!accel.probedAt) return ''
   const d = new Date(accel.probedAt)
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
+})
+
+/**
+ * hosts 托管块的时效徽标。优选 IP 是某一次测速的快照，写进系统 hosts 后不会自己
+ * 更新；GitHub 轮换接入 IP 后它会从加速器变成阻断器，而界面上看不出任何异常。
+ * staleDays 为 null（旧版本或手改的块，无时间戳可比对）同样按 stale 处理 ——
+ * 判"未知=新鲜"才是风险，多提示一次点选的代价只是几个点击。
+ */
+const hostsAgeChip = computed(() => {
+  const h = accel.hosts
+  if (!h?.applied) return null
+  if (!h.stale) return { cls: 'on', text: '已生效' }
+  return { cls: 'warn', text: h.staleDays === null ? '时效未知' : `${h.staleDays} 天未更新` }
 })
 
 /** 界面只回看最近 8 个任务（主进程 5 分钟后从内存清终态） */
@@ -424,13 +458,14 @@ const STEP_LABEL: Record<string, string> = { git: 'git', ssh443: 'SSH 443', host
 
 async function onMasterEnable(): Promise<void> {
   masterBusy.value = true
+  masterMode.value = 'enable'
   masterNote.value = ''
   try {
     const steps = await accel.masterEnable()
     const failed = steps.filter(s => !s.ok)
     if (failed.length === 0) {
       masterNoteWarn.value = false
-      masterNote.value = '加速已全部启动'
+      masterNote.value = '加速已全部开启'
     } else {
       masterNoteWarn.value = true
       masterNote.value = `部分未生效：${failed.map(s => `${STEP_LABEL[s.key]}（${s.message || '失败'}）`).join('；')}`
@@ -445,6 +480,7 @@ async function onMasterEnable(): Promise<void> {
 
 async function onMasterDisable(): Promise<void> {
   masterBusy.value = true
+  masterMode.value = 'disable'
   masterNote.value = ''
   try {
     const steps = await accel.masterDisable()
@@ -539,6 +575,11 @@ async function onMasterDisable(): Promise<void> {
 .title-chip.on {
   color: var(--status-success-text);
   border-color: color-mix(in srgb, var(--status-success-text) 40%, transparent);
+}
+/* 时效告警：优选 IP 是测速快照，超阈值/未知都走这里催一次重选 */
+.title-chip.warn {
+  color: var(--status-warn-text);
+  border-color: color-mix(in srgb, var(--status-warn-text) 40%, transparent);
 }
 
 .hint {
@@ -645,7 +686,7 @@ async function onMasterDisable(): Promise<void> {
   padding: 0 8px;
   border-radius: 4px;
   border: 1px solid var(--border-subtle);
-  background: var(--bg-base);
+  background: var(--bg-input);
   color: var(--text-primary);
   font-size: 12px;
   font-family: var(--font-mono);
@@ -680,7 +721,7 @@ async function onMasterDisable(): Promise<void> {
 .dl-bar {
   height: 4px;
   border-radius: 2px;
-  background: var(--bg-base);
+  background: var(--bg-slider);
   overflow: hidden;
 }
 

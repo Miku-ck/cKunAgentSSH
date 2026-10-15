@@ -33,6 +33,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 后端信息
   getBackendPort: () => ipcRenderer.invoke('backend:getPort'),
   getBackendToken: () => ipcRenderer.invoke('backend:getToken'),
+  // 真就绪（健康检查通过）才 resolve；getBackendPort 非零不代表就绪
+  whenBackendReady: () => ipcRenderer.invoke('backend:whenReady'),
 
   // 文件系统
   fsReadDir: (dirPath: string) => ipcRenderer.invoke('fs:readDir', dirPath),
@@ -154,6 +156,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_event: any, data: any) => callback(data)
     ipcRenderer.on('ssh:host-key-mismatch', handler)
     return () => ipcRenderer.removeListener('ssh:host-key-mismatch', handler)
+  },
+  /**
+   * 监听「钉扎表读不出来、无法判断这台主机是否见过」的拒绝事件。
+   * 与 host-key-mismatch 分开发：那边的文案断言"密钥变更/中间人"，这里断言的是
+   * 本机 known_hosts 不可用，两种处置动作不同，混用会让用户去查服务器而不是查磁盘。
+   */
+  onHostKeyUnpinned: (callback: (data: { hostKey: string; fingerprint: string }) => void) => {
+    const handler = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('ssh:host-key-unpinned', handler)
+    return () => ipcRenderer.removeListener('ssh:host-key-unpinned', handler)
   },
 
   // SSH 连接配置管理

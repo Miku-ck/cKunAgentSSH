@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   parsePs, parseImages, parseVolumes, parseNetworks, parseLogs, parseLabels,
-  parseVolumeInspect, parseNetworkInspect, humanSize, shortId, labelHint,
+  parseVolumeInspect, parseNetworkInspect, shortId, labelHint,
   imageLabel, imageHaystack,
   stateFromStatus, sq, dockerErrorFromResult, describeThrownDockerError,
   volumeRmCmd, networkRmCmd, volumePruneCmd, networkPruneCmd,
@@ -113,7 +113,7 @@ describe('parseImages / parseVolumes / parseNetworks', () => {
       driver: 'local', name: 'pgdata', size: '1.0GB', linkCount: 1,
       labels: { 'com.docker.compose.project': 'app' },
     })
-    // 真实列表命令不发 --verbose，Size 缺失时 humanSize(undefined)=undefined 故不写入（显示「—」）；
+    // 真实列表命令不发 --verbose，Size 缺失时 formatBytesCompact(undefined)=undefined 故不写入（显示「—」）；
     // 此处合成的 Size:0 会得到 '0B'（空卷确为 0 字节），非字段缺失场景。
     expect(rows[1].name).toBe('orphan')
     expect(rows[1].linkCount).toBe(0)
@@ -150,24 +150,6 @@ describe('parseLabels', () => {
     expect(parseLabels('{bad')).toEqual({})
   })
 })
-
-describe('humanSize', () => {
-  it('bytes → 1024 进制人读', () => {
-    expect(humanSize(0)).toBe('0B')
-    expect(humanSize(1023)).toBe('1023B')
-    expect(humanSize(1024)).toBe('1.0KB')
-    expect(humanSize(1073741824)).toBe('1.0GB')
-  })
-  it('字符串透传 / 非法入 undefined', () => {
-    expect(humanSize('62.1MB')).toBe('62.1MB')
-    expect(humanSize('')).toBeUndefined()
-    expect(humanSize(null)).toBeUndefined()
-    expect(humanSize(undefined)).toBeUndefined()
-    expect(humanSize(-1)).toBeUndefined()
-    expect(humanSize(NaN)).toBeUndefined()
-  })
-})
-
 describe('inspect 解析', () => {
   it('volume inspect: 数组取首项，Usage 可选', () => {
     const raw = JSON.stringify([{

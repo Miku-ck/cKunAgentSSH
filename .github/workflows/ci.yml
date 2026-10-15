@@ -55,7 +55,8 @@ jobs:
         run: npm run postinstall || true
 
       - name: Backend tests
-        run: cd backend && python -m pytest tests/ -q
+        # 与本地 scripts/ci-check.sh 同一条命令，收集范围只有一个来源（npm run test:backend）
+        run: npm run test:backend
 
       - name: Frontend typecheck
         run: npm run typecheck
@@ -98,6 +99,35 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      # 发布包必须自带 Python：AI 侧要跑后端，后端要一个装了 fastapi/uvicorn 的解释器，
+      # 否则装到用户机器上就是"能开但全灭"。scripts/package.js 在没有 runtime/ 时会
+      # 直接 exit 1（理由与取舍见 docs/adr/0002-embed-python-runtime-and-hard-gate.md），
+      # 所以这一步是硬前置，不是优化。
+      # 用 astral-sh/python-build-standalone 的 install_only_stripped：自带可重定位的
+      # python.exe + Lib/，不需要像 Windows embeddable 那样手改 ._pth 再塞 pip。
+      - name: Prepare embedded Python runtime
+        shell: pwsh
+        env:
+          # 作业自带的只读 token：裸调 api.github.com 是按 IP 限流的，共享 runner
+          # IP 上这条 job 会变成随机红，而失败点看起来像"上游没资产"。
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $api = 'https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest'
+          $rel = Invoke-RestMethod -Uri $api -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; 'User-Agent' = 'cKunAgentSSH-ci' }
+          # 小版本号写死会让这条 job 在上游发版后悄悄 404；按 tag 扫资产，匹配不到就
+          # 在这里红并说明期望，而不是把失败推到下游打包步骤去。
+          $a = $rel.assets | Where-Object { $_.name -like 'cpython-3.11.*-x86_64-pc-windows-msvc-install_only_stripped.tar.gz' } | Select-Object -First 1
+          if (-not $a) { throw "release $($rel.tag_name) 里没有 windows x64 3.11 的 install_only_stripped 资产" }
+          Write-Host "使用 $($a.name)"
+          curl.exe -sSL -o "$env:RUNNER_TEMP\py.tar.gz" $a.browser_download_url
+          if (-not (Test-Path -LiteralPath 'runtime')) { New-Item -ItemType Directory -Path 'runtime' | Out-Null }
+          tar.exe -xzf "$env:RUNNER_TEMP\py.tar.gz" -C runtime --strip-components=1
+          if (-not (Test-Path -LiteralPath 'runtime\python.exe')) { throw '解压后 runtime/python.exe 不存在（解压布局变了？）' }
+          runtime\python.exe -m ensurepip --upgrade
+          runtime\python.exe -m pip install --no-cache-dir -r backend\requirements.txt
+          runtime\python.exe -c "import fastapi, uvicorn; print('backend deps ok')"
 
       # 打包真跑一次：files/asarUnpack 规则能不能把 node-pty/ssh2 的 .node 放对位置、
       # nsis 与 portable 两个产物能否出件，都只在 Windows runner 上成立。

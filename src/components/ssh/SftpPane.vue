@@ -20,7 +20,6 @@
         <span v-if="side === 'remote'" class="badge" :class="store.online ? 'online' : 'offline'">
           {{ store.online ? 'online' : '未连接' }}
         </span>
-        <span v-else class="badge">Local</span>
       </div>
       <div class="pane-actions">
         <button class="pane-btn" title="上一级" :disabled="!canUp" @click="goUp">
@@ -97,9 +96,14 @@
         <div>修改时间</div>
         <div>权限</div>
       </div>
-      <div v-if="loading" class="pane-loading">加载中...</div>
+      <!-- 未连接占位移进列表区：列头（名称/大小/修改时间/权限）与面包屑保持可见，
+           两侧面板结构逐行对齐；断开时 store 已清空 remoteEntries，不会有残行 -->
+      <div v-if="side === 'remote' && !store.online" class="pane-empty-overlay">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        <div class="empty-title">未连接远程服务器</div>
+      </div>
+      <div v-else-if="loading" class="pane-loading">加载中...</div>
       <div v-else-if="error" class="pane-error">{{ error }}</div>
-      <div v-else-if="entries.length === 0" class="pane-empty-list">目录为空</div>
       <div
         v-for="entry in displayEntries"
         :key="entry.path"
@@ -152,12 +156,6 @@
         </div>
       </div>
     </div>
-
-    <!-- 占位空状态(远程未连接) -->
-    <div v-if="side === 'remote' && !store.online" class="pane-empty-overlay">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-      <div class="empty-title">未连接远程服务器</div>
-    </div>
   </div>
 </template>
 
@@ -195,7 +193,6 @@ async function toggleDriveDropdown(): Promise<void> {
     return
   }
   showDriveDropdown.value = true
-  // 加载盘符列表
   drives.value = await store.getDrives()
 }
 
@@ -248,8 +245,10 @@ const cwd = computed(() =>
 )
 
 const canUp = computed(() => {
-  if (props.side === 'remote') return store.online && store.remoteCwd && store.remoteCwd !== '/'
-  return !!store.localCwd && store.localCwd !== '/'
+  // 与 store 里 parent 计算同口径：parent(cwd) === cwd 即已在根（Windows 盘符根
+  // C:\、POSIX /），按钮灰掉 —— 原先只判 !== '/'，Windows 上 C:\ 仍可点但空转。
+  if (props.side === 'remote') return store.online && !!store.remoteCwd && store.remoteParent() !== store.remoteCwd
+  return !!store.localCwd && store.localParent() !== store.localCwd
 })
 
 const breadcrumbs = computed(() => {
@@ -706,7 +705,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   color: var(--text-tertiary); font-family: var(--font-mono); font-size: 11px;
 }
 
-.pane-loading, .pane-error, .pane-empty-list {
+.pane-loading, .pane-error {
   flex: 1;
   display: flex; align-items: center; justify-content: center;
   padding: 16px; text-align: center;
@@ -714,15 +713,14 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
 }
 .pane-error { color: var(--accent-red); }
 
+/* 未连接占位：列表内的普通 flex 子项（不再整面绝对定位覆盖），
+   列头/面包屑保持可见，与本地侧结构对齐 */
 .pane-empty-overlay {
-  position: absolute;
-  inset: 32px 0 0 0;
+  flex: 1;
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
-  background: var(--canvas-bg);
   padding: 24px; text-align: center;
   color: var(--text-tertiary); gap: 10px;
-  z-index: 2;
 }
 .pane-empty-overlay svg { width: 36px; height: 36px; opacity: 0.4; }
 .pane-empty-overlay .empty-title { font-size: 13px; color: var(--text-secondary); }
@@ -759,7 +757,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   width: 100%; height: 32px; padding: 0 10px;
   border: 1px solid var(--border-default);
   border-radius: 4px;
-  background: var(--bg-base);
+  background: var(--bg-input);
   color: var(--text-primary);
   font-size: 13px; outline: none;
   font-family: var(--font-sans);

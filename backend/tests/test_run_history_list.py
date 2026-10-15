@@ -10,10 +10,14 @@
 """
 from pathlib import Path
 import re
+import sys
 
 import pytest
 
 import database as db
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from api_source import SOURCE_LABEL, frontend_api_source  # noqa: E402
 
 
 @pytest.fixture
@@ -130,15 +134,15 @@ def test_端点_越界分页参数被拒(runs_db):
 
 
 def _agent_run_row_keys() -> set[str]:
-    """解析 src/api/client.ts 里 AgentRunRow 接口的成员名（先剥注释）。
+    """解析 src/api 里 AgentRunRow 接口的成员名（先剥注释）。
 
     剥注释这条不是讲究排版：`//[^\n]*` 不去掉的话，接口上方那句"没有目标主机与
     审批档"会被当成字段名读进来（round22 的 CI-yml 解析守卫就是被注释里的
     `|| true` 骗过一次）。
     """
-    src = (Path(__file__).resolve().parents[2] / "src" / "api" / "client.ts").read_text(encoding="utf-8")
+    src = frontend_api_source()
     m = re.search(r"export interface AgentRunRow\s*\{([^}]*)\}", src)
-    assert m, "client.ts 里找不到 AgentRunRow 接口（改名或挪走了，守卫该红在这里）"
+    assert m, f"{SOURCE_LABEL} 里找不到 AgentRunRow 接口（改名或挪走了，守卫该红在这里）"
     body = re.sub(r"/\*[\s\S]*?\*/|//[^\n]*", "", m.group(1))
     return set(re.findall(r"^\s*(\w+)\s*:", body, re.MULTILINE))
 
@@ -148,7 +152,7 @@ def _projection_columns() -> set[str]:
 
 
 def test_列表键集合三层逐字段相等(runs_db):
-    """投影列 ⇄ 端点实发键 ⇄ client.ts 的 AgentRunRow，三份必须是同一个集合。
+    """投影列 ⇄ 端点实发键 ⇄ 前端声明的 AgentRunRow，三份必须是同一个集合。
 
     本仓反复付学费的「跨层键漂移」：改名只发生在一侧，两侧各自的用例都绿，
     而表格里那一格静默印空白。只钉"这一份有 14 个键"不够，要钉**两边相等**。
@@ -163,7 +167,7 @@ def test_列表键集合三层逐字段相等(runs_db):
 def test_键守卫自己会红_变异自检():
     """解析类守卫是代码：拿不到东西时它会绿着骗人，比没有守卫更糟。
 
-    变异必须打在**已抽取的块**上 —— 直接对整份 client.ts 做字符串替换会命中
+    变异必须打在**已抽取的块**上 —— 直接对整份前端 api 文本做字符串替换会命中
     同名别处（round23 抄这段时就踩过：改 top_p 命中的是读取侧 ModelConfig）。
     """
     keys = _agent_run_row_keys()

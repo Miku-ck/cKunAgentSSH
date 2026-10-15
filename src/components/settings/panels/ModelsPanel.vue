@@ -1159,7 +1159,9 @@ function formatTokenCount(n: number): string {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  background: var(--bg-base);
+  /* 不画底：折叠体是内容、不是第二层表面，先前画 --bg-base 等于在 --bg-elevated
+     的对话框上挖一个洞（且里面 .form-input / .token-chip 全取 --bg-input，洞比它们
+     还深一档）。上面那条 .advanced-toggle 才是控件皮肤，它读 --bg-input 是对的。 */
 }
 
 /* Collapse animation */

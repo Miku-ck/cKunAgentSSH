@@ -238,10 +238,10 @@
               :class="{ disabled: connecting }"
               @click="handleConnect(conn)"
             >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="2" y="3" width="20" height="14" rx="2"/><line x="8" y="21" x2="16" y2="21"/><line x="12" y="17" x2="12" y2="21"/></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
               <div class="dc-info">
                 <span class="dc-name">{{ conn.name }}</span>
-                <span class="dc-host">{{ conn.username }}@{{ conn.host }}:{{ conn.port }}</span>
+                <span class="dc-host">{{ conn.username }}@{{ conn.host }}:{{ conn.port }}<span v-if="connNote(conn)" class="dc-note" :title="connNote(conn)">{{ connNote(conn) }}</span></span>
               </div>
               <svg v-if="connecting && pendingConnId === conn.id" class="dc-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/></svg>
             </div>
@@ -284,7 +284,7 @@
 <script setup lang="ts">
 import { computed, defineComponent, h, ref, watch, type Ref } from 'vue'
 import { useServerMonitorStore } from '@/stores/server-monitor'
-import { useSSHStore } from '@/stores/ssh'
+import { connNote, useSSHStore } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
 import { toFriendlyMessage } from '@/api/client'
 import { loadChartMax } from '@/utils/nvtop-scale'
@@ -1228,6 +1228,13 @@ const Sparkline = defineComponent({
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 快连卡片上的备注：跟在主机行后，同为次级信息但用正文字族（备注多为中文） */
+.dc-note {
+  margin-left: 6px;
+  font-family: var(--font-sans);
+  color: var(--text-secondary);
 }
 
 .dc-spinner {

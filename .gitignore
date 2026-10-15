@@ -116,6 +116,13 @@ vitest.config.d.ts
 .asarcheck.cjs
 .sizeprobe.cjs
 
+# 本地安全审计备份与基准测试目录（一次性产物，勿入库）
+.audit-backup-*/
+.benchmarks/
+
 # 用 -c.directories.output= 试打包时落在仓库根的替代产物目录（330 MB 量级，
 # 每个都含完整 electron 运行时）；正式的 dist/ 已在上面忽略
 dist-*/
+
+# 本地双击启动 dev 的批处理壳（只为绕开本机 ELECTRON_RUN_AS_NODE 污染，非团队协作链路）
+start-dev.cmd

@@ -15,6 +15,24 @@ export function formatBytes(bytes: number): string {
 }
 
 /**
+ * 字节数 → 紧凑人类可读（无空格分隔，对齐 docker 自身口径）。
+ * 与 formatBytes 的语义差异是承重的：docker 的 Size 可能是预格式化字符串
+ * 或 int64 —— 字符串原样直通；非法输入（null/空串/负数/NaN）返回 undefined，
+ * 由调用方决定兜底文案（如「—」）。原 docker-core.ts humanSize 收编于此。
+ */
+export function formatBytesCompact(v: unknown): string | undefined {
+  if (v === null || v === undefined) return undefined
+  if (typeof v === 'string') return v || undefined
+  const n = Number(v)
+  if (!Number.isFinite(n) || n < 0) return undefined
+  if (n === 0) return '0B'
+  let i = 0
+  let x = n
+  while (x >= 1024 && i < SIZE_UNITS.length - 1) { x /= 1024; i++ }
+  return (i === 0 ? x.toFixed(0) : x.toFixed(1)) + SIZE_UNITS[i]
+}
+
+/**
  * 后端时间戳 → Date。
  * 后端统一存 UTC naive 字符串（database._now / compute_next_run 都是 "YYYY-MM-DD HH:MM:SS"），
  * 而 new Date("2026-09-21T07:00:00") 没有时区标记时按【本地时区】解释 —— UTC+8 下

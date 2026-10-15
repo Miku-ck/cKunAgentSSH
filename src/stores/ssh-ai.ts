@@ -198,6 +198,11 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
    *  后完成的那个会拿陈旧副本覆盖，把前一个刚挂上的文件抹掉。 */
   const uploadingAttachments = ref(false)
 
+  /** 远端文件选择器当前浏览的目录。放 store 而不是组件 ref：＋菜单是 v-if 挂载，
+   *  关一次菜单组件就销毁 —— 状态放组件里的话重开永远从 '/' 开始，用户浏览到
+   *  一半的目录整个丢掉（这正是"点返回跳回标准页面"观感的另一半成因）。 */
+  const remotePickerCwd = ref('/')
+
   /** 上传并追加到待发送附件；返回挂上的个数。单文件失败由 uploadFiles 内部逐个
    *  toast，这里不重复报 —— 整体抛出来才是意外，交给调用方决定怎么显示。 */
   async function uploadAttachments(files: File[]): Promise<number> {
@@ -829,6 +834,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     removePendingAttachment,
     addRemoteAttachment,
     uploadingAttachments,
+    remotePickerCwd,
     uploadAttachments,
     // ── 终端现场（故事 5/6 第三项）──
     attachTerminalContext,

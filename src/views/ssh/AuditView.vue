@@ -322,7 +322,12 @@ onMounted(refresh)
   display: flex;
   gap: 8px;
   flex-shrink: 0;
-  padding: 12px 16px;
+  /* 筛选条同样卡片化，与下方表格卡同边距对齐 */
+  margin: 12px 16px 0;
+  padding: 10px 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
 }
 .audit-filters select,
 .audit-filters input {
@@ -339,7 +344,8 @@ onMounted(refresh)
   overflow: auto;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  margin: 0 16px;
+  margin: 12px 16px 0;
+  background: var(--bg-elevated);
 }
 .audit-table {
   width: 100%;
@@ -350,7 +356,9 @@ onMounted(refresh)
 .audit-table th {
   position: sticky;
   top: 0;
-  background: var(--bg-base);
+  /* 表头浮在滚动行之上，须不透明：用 --bg-elevated-solid（实体主题与卡面同值，
+     玻璃主题下卡面半透明，滚动行也不会从表头底下透出来） */
+  background: var(--bg-elevated-solid);
   text-align: left;
   padding: 8px 10px;
   font-size: 11px;

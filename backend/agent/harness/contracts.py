@@ -167,9 +167,9 @@ class UndoAction(Protocol):
     撤销动作协议 — 工具执行前生成，失败时可回滚
 
     实现示例：
-    - FileWriteUndo: 保存原文件内容，reverse 时恢复
-    - ShellUndo:     记录命令，reverse 时执行反向命令（如 mkdir → rmdir）
-    - NoOpUndo:      只读工具（web_search 等），reverse 时空操作
+    - FileContentUndo: 保存原文件内容，reverse 时恢复
+    - ShellUndo:       记录命令，reverse 时执行反向命令（如 mkdir → rmdir）
+    - NoOpUndo:        只读工具（web_search 等），reverse 时空操作
     """
 
     async def apply_reverse(self) -> None:

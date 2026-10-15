@@ -165,6 +165,9 @@ class ToolRegistry:
 
 def create_registry() -> ToolRegistry:
     """创建工具注册中心，注册全部内置工具（work/ide 移除后 mode 轴已坍缩）"""
+    # 时序契约（⚠️ 勿提前到模块顶层）：builtin/* 反向 import 本包的 BaseTool，
+    # 顶层互拉会形成导入环。此处惰性导入时本包已完整初始化，BaseTool 必然
+    # 已定义 —— 任何新工具模块也必须遵循「只在包外函数体内 import 本包」。
     from agent.tools.builtin import register_builtin_tools
 
     registry = ToolRegistry()

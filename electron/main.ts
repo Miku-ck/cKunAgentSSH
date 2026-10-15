@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, shell, dialog, session, nativeImage } from
 import { join, resolve as pathResolve, dirname, basename, extname } from 'path'
 import { pathToFileURL } from 'url'
 import { readdir, readFile, writeFile, stat, lstat, mkdir, rename, rm, realpath, copyFile } from 'fs/promises'
-import { existsSync, readdirSync } from 'fs'
+import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs'
 import { homedir } from 'os'
 import { execSync, execFile, spawn } from 'child_process'
 import { BackendManager } from './backend-manager'
@@ -50,7 +50,7 @@ let ghHosts: GhHostsService | null = null
 let electronBridge: ElectronBridge | null = null
 let bridgeWsClient: BridgeWsClient | null = null
 
-  // IPC sender 校验：仅允许主窗口的渲染进程发起调用，防止 XSS / 外部导航接管 IPC。
+// IPC sender 校验：仅允许主窗口的渲染进程发起调用，防止 XSS / 外部导航接管 IPC。
 function assertTrustedSender(event: Electron.IpcMainInvokeEvent): void {
   if (!mainWindow || mainWindow.isDestroyed()) {
     throw new Error('主窗口不存在，拒绝 IPC 请求')
@@ -144,10 +144,11 @@ function createWindow(): void {
     }
   })
 
-  // 重建窗口后重新绑定 manager 窗口引用（macOS activate）。首次启动时 manager 尚未创建，判空跳过。
-  if (ptyManager) ptyManager.setWindow(mainWindow)
-  if (sshManager) sshManager.setWindow(mainWindow)
-  if (tunnelManager) tunnelManager.setWindow(mainWindow)
+  // manager 的窗口引用只在这一处绑定：setup*IPC 先于本函数执行，那时 mainWindow 还是 null，
+  // 各自再绑一遍是空操作。macOS activate 重建窗口也复用这里。
+  ptyManager?.setWindow(mainWindow)
+  sshManager?.setWindow(mainWindow)
+  tunnelManager?.setWindow(mainWindow)
 
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
@@ -311,8 +312,6 @@ function setupWindowIPC(): void {
 }
 
 // ─── File System IPC ────────────────────────────────
-// 敏感路径拦截逻辑（HOME_TOPLEVEL_SENSITIVE / ANYWHERE_SENSITIVE / assertSafePath）
-// 已迁至 ./utils/path-guard 并从此处导入，行为保持一致。
 
 /** 在 PATH 环境变量中查找可执行文件 */
 function findProgramInPath(name: string): string | null {
@@ -329,16 +328,25 @@ function findProgramInPath(name: string): string | null {
   return null
 }
 
+/** PATH 扫描预算（PERF-002）：补全发生在主进程事件循环上，System32 等大目录
+ * 单次 readdir 10~50ms，PATH 含网络盘/失效 UNC 时同步枚举会阻塞到 SMB 超时
+ * （可达数秒），期间所有终端的 PTY/SSH 数据转发全部冻结。改异步 readdir +
+ * 总预算兜底：超时即返回已有候选。 */
+const PATH_SCAN_BUDGET_MS = 200
+
 /** 在 PATH 中查找以 prefix 开头的可执行文件，返回去重后的命令名列表（不含扩展名，用于 CMD 弱补全） */
-function findProgramsInPathByPrefix(prefix: string): string[] {
+async function findProgramsInPathByPrefix(prefix: string): Promise<string[]> {
   const isWindows = process.platform === 'win32'
   const paths = (process.env.PATH || '').split(isWindows ? ';' : ':')
   const exts = (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(isWindows ? ';' : ':')
   const found = new Set<string>()
+  const lowerPrefix = prefix.toLowerCase()
+  const startedAt = Date.now()
   for (const dir of paths) {
     if (!dir) continue
+    if (Date.now() - startedAt > PATH_SCAN_BUDGET_MS) break
     try {
-      const entries = readdirSync(dir, { withFileTypes: true })
+      const entries = await readdir(dir, { withFileTypes: true })
       for (const entry of entries) {
         if (!entry.isFile() && !entry.isSymbolicLink()) continue  // 仅文件和符号链接
         const name = entry.name
@@ -346,7 +354,7 @@ function findProgramsInPathByPrefix(prefix: string): string[] {
         if (dotIndex <= 0) continue
         const baseName = name.slice(0, dotIndex)
         const ext = name.slice(dotIndex)
-        if (baseName.toLowerCase().startsWith(prefix.toLowerCase()) && exts.some((e) => e.toLowerCase() === ext.toLowerCase())) {
+        if (baseName.toLowerCase().startsWith(lowerPrefix) && exts.some((e) => e.toLowerCase() === ext.toLowerCase())) {
           found.add(baseName)
         }
       }
@@ -358,12 +366,13 @@ function findProgramsInPathByPrefix(prefix: string): string[] {
 }
 
 /** 列出目录下以 prefix 开头的文件/目录名（用于 CMD 弱补全） */
-function listFilesByPrefix(dir: string, prefix: string): string[] {
+async function listFilesByPrefix(dir: string, prefix: string): Promise<string[]> {
   try {
-    const entries = readdirSync(dir, { withFileTypes: true })
+    const entries = await readdir(dir, { withFileTypes: true })
+    const lowerPrefix = prefix.toLowerCase()
     const result: string[] = []
     for (const entry of entries) {
-      if (entry.name.toLowerCase().startsWith(prefix.toLowerCase())) {
+      if (entry.name.toLowerCase().startsWith(lowerPrefix)) {
         result.push(entry.name)
       }
     }
@@ -643,7 +652,6 @@ function setupFSIPC(): void {
     }
   })
 
-  // 获取用户主目录
   handleTrusted('fs:getHomePath', () => homedir())
 
   // 获取可用盘符（Windows 返回 ['C:\\', 'D:\\', ...]，其他平台返回 []）
@@ -677,7 +685,6 @@ function setupFSIPC(): void {
     }
   })
 
-  // 创建目录
   handleTrusted('fs:mkdir', async (_event, dirPath: string) => {
     await assertSafePath(dirPath)
     await mkdir(dirPath, { recursive: true })
@@ -757,15 +764,39 @@ function setupFSIPC(): void {
         }
       }
 
-      for (const f of files) {
-        if (copyState.cancelled) throw new Error('复制已取消')
-        const destErr = rejectSymlinkTarget(f.dest, await lstat(f.dest).catch(() => null))
-        if (destErr) throw new Error(destErr)
-        await mkdir(dirname(f.dest), { recursive: true })
-        await copyFile(f.src, f.dest)
-        transferred += f.size
-        report()
+      // PERF-004：有界并发复制 — 原实现逐文件串行 await（每文件 lstat+mkdir+
+      // copyFile 三次串行系统调用往返，Windows 单次约 5~15ms），海量小文件耗时
+      // 成倍放大。目标目录 mkdir 去重，8 路并发 copyFile；取消检查、symlink
+      // 目标防护与进度上报粒度保持不变，首个错误即停（与原串行语义一致）。
+      const COPY_CONCURRENCY = 8
+      const dirsDone = new Set<string>()
+      let nextIdx = 0
+      let firstError: Error | null = null
+      const worker = async (): Promise<void> => {
+        while (!firstError && !copyState.cancelled) {
+          const i = nextIdx++
+          if (i >= files.length) return
+          const f = files[i]
+          try {
+            const destErr = rejectSymlinkTarget(f.dest, await lstat(f.dest).catch(() => null))
+            if (destErr) throw new Error(destErr)
+            const dir = dirname(f.dest)
+            if (!dirsDone.has(dir)) {
+              await mkdir(dir, { recursive: true })
+              dirsDone.add(dir)
+            }
+            await copyFile(f.src, f.dest)
+          } catch (err) {
+            firstError = firstError ?? (err instanceof Error ? err : new Error(String(err)))
+            return
+          }
+          transferred += f.size
+          report()
+        }
       }
+      await Promise.all(Array.from({ length: Math.min(COPY_CONCURRENCY, files.length) }, () => worker()))
+      if (firstError) throw firstError
+      if (copyState.cancelled) throw new Error('复制已取消')
       safeSendProgress({ id: transferId, transferred: total, total })
     } finally {
       endCopy(transferId)
@@ -783,7 +814,6 @@ function setupFSIPC(): void {
     return join(...segments)
   })
 
-  // 检查文件是否存在
   handleTrusted('fs:exists', async (_event, filePath: string) => {
     await assertSafePath(filePath)
     return existsSync(filePath)
@@ -893,7 +923,6 @@ function execFileAsync(cmd: string, args: string[], timeoutSec: number): Promise
 // ─── PTY IPC ────────────────────────────────────────
 function setupPtyIPC(): void {
   ptyManager = new PtyManager()
-  if (mainWindow) ptyManager.setWindow(mainWindow)
 
   handleTrusted('pty:create', (_event, opts?: { shell?: string; args?: string[]; cwd?: string; cols?: number; rows?: number }) => {
     return ptyManager!.create(opts)
@@ -939,7 +968,7 @@ function setupPtyIPC(): void {
       if (isCmd) {
         // CMD 弱补全：命令名在 PATH 中查找，参数仅做路径/文件名补全
         if (isCommand) {
-          const cmds = findProgramsInPathByPrefix(prefix)
+          const cmds = await findProgramsInPathByPrefix(prefix)
           resolve(cmds.map((c) => `cmd:${c}`).join('\n'))
         } else {
           const sepIndex = Math.max(prefix.lastIndexOf('\\'), prefix.lastIndexOf('/'))
@@ -956,7 +985,7 @@ function setupPtyIPC(): void {
             resolve('')
             return
           }
-          const files = listFilesByPrefix(dir, filePrefix)
+          const files = await listFilesByPrefix(dir, filePrefix)
           resolve(files.map((f) => `file:${f}`).join('\n'))
         }
         return
@@ -1096,7 +1125,6 @@ function setupSSHIPC(): void {
       try { mainWindow.webContents.send('ghaccel:download', data) } catch { /* 窗口已销毁 */ }
     }
   })
-  if (mainWindow) tunnelManager.setWindow(mainWindow)
   gatewayStore = new GatewayStore()
   gatewayManager = new GatewayManager(gatewayStore, (channel, data) => {
     // 窗口销毁后 webContents.send 会抛，加守卫（与 sftp:progress 同一口径）
@@ -1118,9 +1146,8 @@ function setupSSHIPC(): void {
     if (!config) throw new Error('连接配置已删除，请重建连接或删除本条隧道规则')
     return new SshTransport(await sshManager!.openRawClient(config))
   })
-  if (mainWindow) sshManager.setWindow(mainWindow)
-  // ssh2 懒加载预热：窗口 show 后台并行加载（~1.3s），用户点连接前已就位；
-  // 失败不致命——doConnect/testConnection 内还有 await loadSsh2() 兜底路径。
+  // ssh2 懒加载预热：setup 阶段就发起，与随后的 createWindow + 首屏 transform 并行（~1.3s），
+  // 用户点连接前已就位；失败不致命——doConnect/testConnection 内还有 await loadSsh2() 兜底路径。
   void loadSsh2().catch((err) => console.warn('[main] ssh2 预热失败（首次连接时将重试）:', err))
 
   // 重连修复：重连时主进程自取已保存的连接配置（safeStorage 解密后的凭据），
@@ -1414,8 +1441,23 @@ function setupSSHIPC(): void {
   })
 
   // 后端端口查询（渲染进程启动时兜底获取，防止 backend:status 事件丢失）
+  // ⚠️ 返回值只代表"已选定端口"，不代表"有人在那个端口监听" —— this.port 在 spawn
+  // 之前就分配好了。渲染层可以用它做 URL 提示，但不能据此判定后端 ready（见 stores/app.ts）。
   handleTrusted('backend:getPort', () => {
     return backendManager?.getPort() ?? 0
+  })
+
+  // 后端真就绪（通过健康检查）才 resolve，并给出实际端口。
+  // 渲染层的兜底路径必须等这个，而不是等一个非零端口号。
+  // backendManager 在 whenReady 里晚于本 IPC 注册才赋值，故这里等它就位：
+  // 直接 reject 会让首屏在"其实一切正常"的情况下闪一个 error 态。
+  handleTrusted('backend:whenReady', async () => {
+    const deadline = Date.now() + 15_000
+    while (!backendManager) {
+      if (Date.now() > deadline) throw new Error('后端管理器未初始化')
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    return backendManager.whenReady()
   })
 
   // 后端 API token 查询（渲染层据此向后端请求携带 X-API-Token；未启动时返回空字符串）
@@ -1559,29 +1601,59 @@ function setupSftpIPC(): void {
 }
 
 // ─── App Lifecycle ──────────────────────────────────
-// 修复 GPU cache 权限问题：禁用 GPU 磁盘缓存（Windows GPU 进程无写权限时的拒绝访问错误）
+// 只禁 GPU 的**磁盘缓存**：它不改变渲染路径、无性能代价，挡的是"GPU 进程写不进缓存目录"
+// 那一类权限错误（沙箱内实测会出现）。
 // 注意：不使用 setPath('userData') 以避免破坏数据库/SSH 连接等现有数据路径
 app.commandLine.appendSwitch('disable-gpu-disk-cache')
-// 修复：本机 GPU 驱动与 Electron v35 不兼容——未禁用时启动即崩（exit 3），
-// dev 与生产同理。env ELECTRON_DISABLE_GPU=1 在 dev 脚本注入（GPU 进程先于主模块初始化）。
+// 本机 GPU 驱动与 Electron v35 不兼容：不禁用渲染，主进程在 GPU 初始化阶段就静默退出——
+// 窗口不弹、一行 [main] 日志都没有、WER 与事件日志零记录（2026-10-14 21:00 实测）。
+// 这三个开关由 76956f2/9ed8b12 引入，17:39 按 ADR 0001「已证伪」删掉后本机即起不来，现恢复。
+// 代价是全量走 CPU 渲染；再想删它们，先补同机「加/不加开关」的真实应用对照，别用最小外壳。
+// 回归守卫见 electron/main-gpu-switches.test.ts。
 app.commandLine.appendSwitch('disable-gpu')
 app.commandLine.appendSwitch('disable-gpu-compositing')
-app.commandLine.appendSwitch('disable-gpu-sandbox')
 app.commandLine.appendSwitch('disable-software-rasterizer')
+// ⚠️ 下面这条 disable-gpu-sandbox 不在那次批准的三项渲染开关之内 —— 删它等于放宽 GPU 子进程
+// 的沙箱边界（安全姿态），必须单独裁决，别按 ADR 0001 的口径顺手带走。
+app.commandLine.appendSwitch('disable-gpu-sandbox')
 
-// 单实例锁：第二个实例启动时退出，并把第一个实例窗口带到前台。
-// 容错：Windows 用户数据目录权限错误（ERROR_ACCESS_DENIED）会令返回 false，
-// 实际无第二实例却误判退出。失败时记录警告但仍继续启动。
+// 单实例锁。拿不到锁有两种成因，语义完全相反，必须分开处理：
+//   1) 真有别的应用实例在跑 → 本实例退出，由已有实例接收 second-instance 并带到前台；
+//   2) Windows 上 Chromium 建锁文件失败（实测 process_singleton_win.cc(468)
+//      "Lock file can not be created! Error code: 5"）→ 其实没有第二个实例，直接退出
+//      就是用户眼里的「双击没反应」。
+// 判别用 userData 可写探针：写不进去 = 权限成因，降级继续启动（单实例保证失效，
+// 但功能可用）；写得进去 = 认定真有实例，退出。不用进程枚举做判别 —— 那要在启动
+// 关键路径上补一次 PowerShell CIM，而这条链路刚把 1.1~1.4s 的同步枚举挪出 whenReady。
+// ⚠️ 改前的写法是「win32 打印继续启动，whenReady 里却 if (!gotSingleInstanceLock) return」，
+// 两条分支互相矛盾：实测走到那句之后窗口和后端都不创建，进程挂在原地（.qoder-run/app-nosb.log：
+// 该句 → EXIT=1；dev3.log 同形）。下面这两个变量是两条分支唯一的接缝，别再各写各的判据。
+function userDataWritable(): boolean {
+  try {
+    const dir = app.getPath('userData')
+    mkdirSync(dir, { recursive: true })
+    const probe = join(dir, '.single-instance-probe')
+    writeFileSync(probe, '1')
+    unlinkSync(probe)
+    return true
+  } catch (e) {
+    console.warn('[main] userData 目录不可写探针失败:', (e as Error).message)
+    return false
+  }
+}
+
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
+// 允许启动 = 拿到锁，或"拿不到锁但已证实是权限成因"的降级模式
+const mayStart = gotSingleInstanceLock || (!userDataWritable() && process.platform === 'win32')
 if (!gotSingleInstanceLock) {
-  const isLikelyPermissionIssue = process.platform === 'win32'
-  if (isLikelyPermissionIssue) {
-    console.warn('[main] 单实例锁获取失败（疑似 userData 目录权限问题），继续启动')
+  if (mayStart) {
+    console.warn('[main] 单实例锁创建失败（userData 不可写，非第二实例），以降级模式继续启动：单实例保证失效')
   } else {
+    console.warn('[main] 已有实例在运行，本实例退出')
     app.quit()
   }
 }
-if (gotSingleInstanceLock || process.platform === 'win32') {
+if (mayStart) {
   app.on('second-instance', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore()
@@ -1591,30 +1663,31 @@ if (gotSingleInstanceLock || process.platform === 'win32') {
   })
 }
 
-  // 顶层异常兜底：记日志 + 尽力保活；60s 内 3 次 uncaught 视不可恢复主动退出。
-  // 注册早于 whenReady —— installCsp 等同步调用若抛异常，未注册 handler 会直接崩溃。
-  const UNCAUGHT_WINDOW_MS = 60_000
-  const uncaughtTimes: number[] = []
-  process.on('uncaughtException', (err) => {
-    console.error('[main] uncaughtException:', err)
-    const now = Date.now()
-    while (uncaughtTimes.length > 0 && now - uncaughtTimes[0] > UNCAUGHT_WINDOW_MS) {
-      uncaughtTimes.shift()
-    }
-    uncaughtTimes.push(now)
-    if (uncaughtTimes.length >= 3) {
-      console.error(`[main] ${UNCAUGHT_WINDOW_MS / 1000} 秒内 3 次未捕获异常，退出应用`)
-      uncaughtTimes.length = 0
-      app.quit()
-    }
-  })
-  process.on('unhandledRejection', (reason) => {
-    console.error('[main] unhandledRejection:', reason)  // 只记日志不退出
-  })
+// 顶层异常兜底：记日志 + 尽力保活；60s 内 3 次 uncaught 视不可恢复主动退出。
+// 注册早于 whenReady —— installCsp 等同步调用若抛异常，未注册 handler 会直接崩溃。
+const UNCAUGHT_WINDOW_MS = 60_000
+const uncaughtTimes: number[] = []
+process.on('uncaughtException', (err) => {
+  console.error('[main] uncaughtException:', err)
+  const now = Date.now()
+  while (uncaughtTimes.length > 0 && now - uncaughtTimes[0] > UNCAUGHT_WINDOW_MS) {
+    uncaughtTimes.shift()
+  }
+  uncaughtTimes.push(now)
+  if (uncaughtTimes.length >= 3) {
+    console.error(`[main] ${UNCAUGHT_WINDOW_MS / 1000} 秒内 3 次未捕获异常，退出应用`)
+    uncaughtTimes.length = 0
+    app.quit()
+  }
+})
+process.on('unhandledRejection', (reason) => {
+  console.error('[main] unhandledRejection:', reason)  // 只记日志不退出
+})
 
 app.whenReady().then(async () => {
-  // 双保险：非主实例不启动任何服务（quit 与 ready 的时序竞态下仍然安全）
-  if (!gotSingleInstanceLock) return
+  // 双保险：非主实例（且非权限降级模式）不启动任何服务，quit 与 ready 的时序竞态下仍然安全。
+  // 判据必须与上面 mayStart 同源，否则「打印了继续启动却什么都不做」的僵尸分支会回来。
+  if (!mayStart) return
   installCsp()
   setupWindowIPC()
   setupFSIPC()

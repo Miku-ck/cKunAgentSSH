@@ -75,7 +75,7 @@ defineExpose({ focus })
   position: relative;
   display: flex;
   align-items: center;
-  background: var(--bg-base);
+  background: var(--bg-input);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   transition: border-color var(--transition-fast);

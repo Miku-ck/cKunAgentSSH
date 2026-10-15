@@ -136,7 +136,7 @@ Docker/SFTP/dsh-ssh 隧道页签）同日排查后本已合规，无需改动。
 
 ## 5. 安全边界与既有文档的关系
 
-- 与 `docs/p3-remote-least-privilege.md` 不冲突：该文档加固的是 agent 桥接通道（authorized_keys `restrict` 禁转发），走的是桥接专用 key；用户隧道走用户自己的凭据。但若目标主机账号用的就是 restrict key，`forwardOut/forwardIn` 会被服务端拒绝——错误信息透传 `message`，属预期行为。
+- 与 `docs/p3-remote-least-privilege.md`（**已随 2026-10 的 docs 收缩退役，仓内不再有原文**）不冲突：该文档加固的是 agent 桥接通道（authorized_keys `restrict` 禁转发），走的是桥接专用 key；用户隧道走用户自己的凭据。`restrict` 是目标主机上的 key 选项、不由本仓代码写入，所以若目标主机账号用的就是 restrict key，`forwardOut/forwardIn` 会被服务端拒绝——错误信息透传 `message`，属预期行为。
 - dynamic 强制 127.0.0.1（决策 3）；remote 默认 127.0.0.1，放宽需确认。隧道自身不写审计，V1 接受（运维审计页只覆盖命令面）。
 
 ## 6. 分期与测试

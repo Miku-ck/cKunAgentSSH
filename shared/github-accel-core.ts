@@ -268,8 +268,13 @@ export function buildGitSetArgs(prefix: string): string[] {
   return ['config', '--global', `url.${insteadOfSubsection(prefix)}.insteadOf`, GITHUB_BASE]
 }
 
+/** 按子节卸载 insteadOf（生产卸载的是「任意生效子节」，不限于本应用前缀推导值） */
+export function buildGitUnsetSubsectionArgs(subsection: string): string[] {
+  return ['config', '--global', '--unset', `url.${subsection}.insteadOf`]
+}
+
 export function buildGitUnsetArgs(prefix: string): string[] {
-  return ['config', '--global', '--unset', `url.${insteadOfSubsection(prefix)}.insteadOf`]
+  return buildGitUnsetSubsectionArgs(insteadOfSubsection(prefix))
 }
 
 /** 还原用户原有规则（backup.previousValue 非空时调用）：把子节改回旧前缀 */
@@ -366,6 +371,15 @@ export function hasSshBlock(existing: string): boolean {
 export const HOSTS_BLOCK_BEGIN = '# >>> cKunAgentSSH github-accel >>>'
 export const HOSTS_BLOCK_END = '# <<< cKunAgentSSH github-accel <<<'
 
+/** 块内生成时间戳行的前缀（只认紧跟 BEGIN 的那一行） */
+const HOSTS_GENERATED_PREFIX = '# generated: '
+
+/**
+ * 优选 IP 的提醒阈值。GitHub 轮换接入 IP 没有公开节奏，取 7 天的理由是"出问题之前
+ * 用户会被提醒一次"，而不是宣称 7 天后一定失效。
+ */
+export const HOSTS_STALE_AFTER_DAYS = 7
+
 /** hosts 托管块覆盖的域名（GitHub 访问的关键面：网页/API/raw/资源/CDN） */
 export function githubHostsDomains(): string[] {
   return [
@@ -386,16 +400,34 @@ export function isValidIPv4(ip: string): boolean {
   return parts.length === 4 && parts.every(p => /^\d{1,3}$/.test(p) && Number(p) <= 255)
 }
 
-export function renderHostsBlock(entries: { domain: string; ip: string }[]): string {
+export function renderHostsBlock(entries: { domain: string; ip: string }[], generatedAt: Date = new Date()): string {
+  // SEC-001：domain 与 IP 同为硬校验（纵深防御对齐）。原实现只校验 IP，
+  // domain 仅小写化 —— IPC 契约（ghaccel:hostsApply）接受渲染层任意输入，
+  // domain 带换行可向系统 hosts 注入任意行、带空格可当别名、带 # 可篡改
+  // 注释边界。HOST_RE 白名单字符集天然拒绝空白/#//，长度按 DNS 域名上限收口。
   const lines = entries
-    .filter(e => typeof e.domain === 'string' && typeof e.ip === 'string' && isValidIPv4(e.ip))
-    .map(e => `${e.ip}\t${e.domain.toLowerCase()}`)
-  return [HOSTS_BLOCK_BEGIN, ...lines, HOSTS_BLOCK_END].join('\n')
+    .filter(e => {
+      if (typeof e.domain !== 'string' || typeof e.ip !== 'string' || !isValidIPv4(e.ip)) return false
+      const domain = e.domain.trim().toLowerCase()
+      return domain.length <= 253 && HOST_RE.test(domain)
+    })
+    .map(e => `${e.ip}\t${e.domain.trim().toLowerCase()}`)
+  // 时间戳行紧跟 BEGIN：这是块内唯一被 hostsBlockAgeDays 认账的 generated 行，
+  // 用户或旧版本在块体里写的同类注释都不会影响时效判定。
+  // 拿到的是无效 Date 时宁可不写这行 —— 时效未知会被判成"该重选"，不会谎报新鲜。
+  const stamp = generatedAt instanceof Date && Number.isFinite(generatedAt.getTime())
+    ? [`${HOSTS_GENERATED_PREFIX}${generatedAt.toISOString()}`]
+    : []
+  return [HOSTS_BLOCK_BEGIN, ...stamp, ...lines, HOSTS_BLOCK_END].join('\n')
 }
 
 /** 写入/更新 hosts 托管块（已有标记块原位替换，否则文件尾追加） */
-export function applyHostsBlock(existing: string, entries: { domain: string; ip: string }[]): string {
-  const block = renderHostsBlock(entries)
+export function applyHostsBlock(
+  existing: string,
+  entries: { domain: string; ip: string }[],
+  generatedAt: Date = new Date(),
+): string {
+  const block = renderHostsBlock(entries, generatedAt)
   const begin = existing.indexOf(HOSTS_BLOCK_BEGIN)
   const end = existing.indexOf(HOSTS_BLOCK_END)
   if (begin !== -1 && end !== -1 && end > begin) {
@@ -422,4 +454,45 @@ export function hasHostsBlock(existing: string): boolean {
   const begin = existing.indexOf(HOSTS_BLOCK_BEGIN)
   const end = existing.indexOf(HOSTS_BLOCK_END)
   return begin !== -1 && end !== -1 && end > begin
+}
+
+/**
+ * 托管块的生成时间原文（ISO 串）；null = 块里没有可比对的 `# generated:` 行。
+ *
+ * 只认紧跟 BEGIN 的那一行：块体里出现同类注释（用户手改、旧版本残留）不影响判定。
+ *
+ * 为什么要时效：优选 IP 是某一次 DoH 解析 + TCP 测速的快照，写进系统 hosts 后
+ * 不会自己更新。GitHub 换了接入 IP，这块就从加速器变成阻断器，而用户看不出
+ * 任何异常——只有 hosts 文件里多了一段三年前写的注释都算不上的记录。
+ */
+export function hostsBlockGeneratedAt(existing: string): string | null {
+  const begin = existing.indexOf(HOSTS_BLOCK_BEGIN)
+  const end = existing.indexOf(HOSTS_BLOCK_END)
+  if (begin === -1 || end === -1 || end <= begin) return null
+  const body = existing.slice(begin + HOSTS_BLOCK_BEGIN.length, end)
+  const firstLine = body.replace(/^\r?\n/, '').split(/\r?\n/)[0] ?? ''
+  if (!firstLine.startsWith(HOSTS_GENERATED_PREFIX)) return null
+  const raw = firstLine.slice(HOSTS_GENERATED_PREFIX.length).trim()
+  return Number.isFinite(Date.parse(raw)) ? raw : null
+}
+
+/** 托管块写入至今的天数；null = 无可比对的生成时间戳（见 hostsBlockGeneratedAt） */
+export function hostsBlockAgeDays(existing: string, now: Date = new Date()): number | null {
+  const raw = hostsBlockGeneratedAt(existing)
+  if (raw === null) return null
+  if (!Number.isFinite(now.getTime())) return null
+  // 未来时间戳（改过系统时钟）按 0 天处理，不给负数，也不谎报"还能再用几天"
+  const diff = now.getTime() - Date.parse(raw)
+  return diff <= 0 ? 0 : Math.floor(diff / 86_400_000)
+}
+
+/**
+ * 是否该提醒用户重选。两种情况判 stale：超过阈值；或时效未知（旧版本写的块、
+ * 手改过的块）。未知一律算 stale 是有意的 —— 拿"新鲜"去担保一个无从考证的 IP
+ * 才是风险，多提示一次点选的代价只是几个点击。
+ */
+export function isHostsBlockStale(existing: string, now: Date = new Date()): boolean {
+  if (!hasHostsBlock(existing)) return false
+  const age = hostsBlockAgeDays(existing, now)
+  return age === null || age >= HOSTS_STALE_AFTER_DAYS
 }

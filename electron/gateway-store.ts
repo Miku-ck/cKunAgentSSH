@@ -11,9 +11,8 @@
  *   拆两个文件只会让「改了地址指纹还留不留」变成需要同步的第二处状态。
  */
 import { app, safeStorage } from 'electron'
-import { join, dirname } from 'path'
-import { readFile, writeFile, rename, mkdir, unlink } from 'fs/promises'
-import { existsSync } from 'fs'
+import { join } from 'path'
+import { JsonFileStore } from './utils/json-file-store'
 import { isPort, portRangeError } from '../shared/port-core'
 
 export interface GatewayRecord {
@@ -92,94 +91,33 @@ export function validateGateway(rec: GatewayRecord, all: GatewayRecord[]): void 
   }
 }
 
-async function readAllFromDisk(): Promise<GatewayRecord[]> {
-  const path = getStorePath()
-  if (!existsSync(path)) return []
-  let raw: string
-  try {
-    raw = await readFile(path, 'utf-8')
-  } catch (e) {
-    // 与 ssh-store 同口径：读失败必须上抛，否则下一次写会以空表覆写全库
-    throw new Error(`读取网关记录失败（文件可能被占用或权限不足，请重试）: ${e instanceof Error ? e.message : String(e)}`)
-  }
-  try {
-    const arr = JSON.parse(raw)
-    if (!Array.isArray(arr)) {
-      await quarantine(raw)
-      return []
-    }
-    const valid = arr.filter(
-      (r): r is GatewayRecord => !!r && typeof r === 'object' && typeof (r as { id?: unknown }).id === 'string',
-    )
-    if (valid.length !== arr.length) console.warn(`[GatewayStore] 含 ${arr.length - valid.length} 条无 id 损坏条目，已跳过`)
-    return valid
-  } catch {
-    console.warn('[GatewayStore] gateways.json 损坏（JSON 解析失败），已隔离原文件')
-    await quarantine(raw)
-    return []
-  }
-}
-
-async function quarantine(raw: string): Promise<void> {
-  const path = getStorePath()
-  try {
-    const bak = `${path}.corrupt-${Date.now()}.bak`
-    try {
-      await rename(path, bak)
-    } catch {
-      await writeFile(bak, raw, 'utf-8')
-    }
-    console.warn(`[GatewayStore] 损坏文件已备份到: ${bak}`)
-  } catch (e) {
-    console.warn('[GatewayStore] 备份损坏文件失败:', e)
-  }
-}
-
-async function writeAllToDisk(records: GatewayRecord[]): Promise<void> {
-  const path = getStorePath()
-  await mkdir(dirname(path), { recursive: true })
-  const tmp = path + '.tmp'
-  await writeFile(tmp, JSON.stringify(records, null, 2), 'utf-8')
-  try {
-    await rename(tmp, path)
-  } catch (err) {
-    const code = (err as { code?: string })?.code
-    if (code === 'EPERM' || code === 'EACCES' || code === 'EBUSY') {
-      await new Promise(r => setTimeout(r, 200))
-      try {
-        await rename(tmp, path)
-        return
-      } catch {
-        await writeFile(path, JSON.stringify(records, null, 2), 'utf-8')
-        try { await unlink(tmp) } catch { /* ignore */ }
-      }
-    } else throw err
-  }
-}
-
 const strip = (r: GatewayRecord): PublicGatewayRecord => {
   const { password: _password, ...rest } = r
   return rest
 }
 
 export class GatewayStore {
-  private writeQueue: Promise<unknown> = Promise.resolve()
+  /** 骨架收编（ARCH-007）：写队列/原子写/损坏隔离/读失败上抛统一走 JsonFileStore。
+   *  与 tunnel-store 的唯一域差异（safeStorage 口令加解密）仍留在本文件。 */
+  private readonly file = new JsonFileStore<GatewayRecord>({
+    path: getStorePath(),
+    logTag: '[GatewayStore]',
+    label: '网关记录',
+  })
 
   private enqueue<T>(op: () => Promise<T>): Promise<T> {
-    const run = this.writeQueue.then(op, op)
-    this.writeQueue = run.then(() => undefined, () => undefined)
-    return run
+    return this.file.enqueue(op)
   }
 
   /** 渲染层用：不含口令。读失败一律上抛 —— 吞成空列表会让 UI 说「还没有接入网关」，
    *  而库里那几条好好的，只是这一秒没读到（本仓在设置面板上为同一件事修过一轮） */
   async list(): Promise<PublicGatewayRecord[]> {
-    return (await readAllFromDisk()).map(strip)
+    return (await this.file.readAll()).map(strip)
   }
 
   /** 主进程建连用：含解密后的口令 */
   async getWithSecret(id: string): Promise<GatewayRecord | null> {
-    const all = await readAllFromDisk()
+    const all = await this.file.readAll()
     const rec = all.find(r => r.id === id)
     if (!rec) return null
     return { ...rec, password: decrypt(rec.password) }
@@ -187,7 +125,7 @@ export class GatewayStore {
 
   async save(input: GatewayRecord): Promise<PublicGatewayRecord> {
     return this.enqueue(async () => {
-      const all = await readAllFromDisk()
+      const all = await this.file.readAll()
       const now = Date.now()
       const idx = all.findIndex(r => r.id === input.id)
       const prev = idx !== -1 ? all[idx] : undefined
@@ -214,7 +152,7 @@ export class GatewayStore {
       stored.password = encrypt(input.password) ?? prev?.password
       if (idx !== -1) all[idx] = stored
       else all.push(stored)
-      await writeAllToDisk(all)
+      await this.file.writeAll(all)
       return strip(stored)
     })
   }
@@ -223,20 +161,20 @@ export class GatewayStore {
   async setSpki(id: string, spki: string): Promise<void> {
     return this.enqueue(async () => {
       if (!SPKI_SHAPE.test(spki)) throw new Error('指纹形状不合法（期望 sha256/<base64>）')
-      const all = await readAllFromDisk()
+      const all = await this.file.readAll()
       const rec = all.find(r => r.id === id)
       if (!rec) throw new Error('网关记录不存在')
       rec.trustedSpki = spki
       rec.updatedAt = Date.now()
-      await writeAllToDisk(all)
+      await this.file.writeAll(all)
     })
   }
 
   async delete(id: string): Promise<void> {
     return this.enqueue(async () => {
-      const all = await readAllFromDisk()
+      const all = await this.file.readAll()
       const kept = all.filter(r => r.id !== id)
-      if (kept.length !== all.length) await writeAllToDisk(kept)
+      if (kept.length !== all.length) await this.file.writeAll(kept)
     })
   }
 }

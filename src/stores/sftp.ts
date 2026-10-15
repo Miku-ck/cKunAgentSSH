@@ -1064,18 +1064,37 @@ async function remoteRefresh(): Promise<void> {
       let nextIdx = 0
       let finishedCount = 0
 
-      // B26：仅 upload/download 计入并发门
-      function gateCount(): number {
-        return transfers.value.filter(t =>
-          t.status === 'running' && (t.kind === 'upload' || t.kind === 'download')
-        ).length
+      // B26：仅 upload/download 计入并发门。
+      // PERF-003：原实现每次派发判定都对全量 transfers 做 filter（万级批次
+      // 累计 O(n²) 次元素访问，传输期间渲染进程掉秒级帧），现在两处收口：
+      // ① limit 早退——饱和态（批次常态）下扫到第 limit 个 running 即返回，
+      //    每轮唤醒均摊 O(limit) 而非 O(n)；
+      // ② 门计数按唤醒缓存 + 派发本地自增——while 循环同步执行、fn() 的
+      //    同步前缀（runUpload/runDownload 在首个 await 前置 running）必然
+      //    生效，故单轮内本地自增与全局真值恒一致；跨轮的外部增删（用户
+      //    手动传/删任务）在下一轮唤醒时重新读真值兜底。
+      function gateCount(limit?: number): number {
+        let count = 0
+        for (const t of transfers.value) {
+          if (t.status === 'running' && (t.kind === 'upload' || t.kind === 'download')) {
+            count++
+            if (limit !== undefined && count >= limit) return count
+          }
+        }
+        return count
       }
 
       function scheduleNext(): void {
+        // 本轮唤醒的并发门缓存（NaN = 尚未读全局真值）
+        let gate = Number.NaN
         while (nextIdx < total) {
           const def = taskDefs[nextIdx]
           const unlimited = def.kind === 'copy-local' || def.kind === 'copy-remote'
-          if (!unlimited && gateCount() >= maxConcurrent.value) break
+          if (!unlimited) {
+            if (Number.isNaN(gate)) gate = gateCount(maxConcurrent.value)
+            if (gate >= maxConcurrent.value) break
+            gate++
+          }
           const idx = nextIdx++
           // F-5 竞态双保险：任务已不再是 pending（含排队期间被删除移除）则跳过。
           // 记录不存在（!t）同样跳过 —— 否则 deleteTransfer 删掉的 pending 任务
@@ -1396,8 +1415,10 @@ function removeTransfer(id: string): void {
     copyToClipboard,
     // local
     loadLocal, initLocalHome, getDrives, localUp, localRefresh, localMkdir, localRename, localDelete,
+    localParent,
     // remote
     loadRemote, remoteUp, remoteRefresh, remoteMkdir, remoteRename, remoteDelete,
+    remoteParent,
     // selection
     toggleSelectLocal, toggleSelectRemote, clearSelection,
     // transfer

@@ -654,7 +654,6 @@ async def agent_run(req: AgentRunRequest, request: Request):
 
     req.model_id = effective_model_id
 
-    # 获取模型配置
     model_cfg = await asyncio.to_thread(_get_model_config, req.model_id)
     if not model_cfg:
         raise HTTPException(status_code=404, detail=f"模型不存在: {req.model_id}")

@@ -672,7 +672,9 @@ async def _extract_memories(ctx: TurnContext, config: PostProcessConfig) -> None
         return
     try:
         from agent.memory import mstore
-        from agent.memory.reconcile import JOB_CANDIDATE
+        # ARCH-002 环解除：JOB_CANDIDATE 常量归位 mstore，不再反向 import
+        # reconcile（reconcile 侧要复用本模块的 _call_llm_with_timeout）
+        from agent.memory.mstore import JOB_CANDIDATE
         await asyncio.to_thread(
             mstore.enqueue_job, JOB_CANDIDATE,
             {"items": items, "conv_id": ctx.conversation_id, "run_id": None},

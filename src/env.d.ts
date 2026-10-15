@@ -211,6 +211,8 @@ interface ElectronAPI {
   onBackendStatus: (callback: (data: { status: string; port?: number; error?: string }) => void) => () => void
   getBackendPort: () => Promise<number>
   getBackendToken: () => Promise<string>
+  /** 后端通过健康检查后才 resolve（值为实际端口）；getBackendPort 非零不代表就绪 */
+  whenBackendReady: () => Promise<number>
   fsReadDir: (dirPath: string) => Promise<FileEntry[]>
   fsReadFile: (filePath: string) => Promise<string>
   fsWriteFile: (filePath: string, content: string) => Promise<void>
@@ -272,9 +274,10 @@ interface ElectronAPI {
   onSshClose: (callback: (data: { id: string; willReconnect?: boolean }) => void) => () => void
   // 重连修复：重连状态变化（自动/手动重连进度，驱动终端系统行与状态区显示）
   onSshReconnect: (callback: (data: SshReconnectStatus) => void) => () => void
-  // s1 修复：主机密钥验证事件（首次连接通知 + 密钥变更警告）
+  // s1 修复：主机密钥验证事件（首次连接通知 + 密钥变更警告 + 钉扎表不可用拒绝）
   onHostKeyNew: (callback: (data: { hostKey: string; fingerprint: string }) => void) => () => void
   onHostKeyMismatch: (callback: (data: { hostKey: string; expected: string; got: string }) => void) => () => void
+  onHostKeyUnpinned: (callback: (data: { hostKey: string; fingerprint: string }) => void) => () => void
   sshListConnections: () => Promise<SSHConnectionRecord[]>
   sshSaveConnection: (conn: SSHConnectionRecord) => Promise<SSHConnectionRecord>
   sshDeleteConnection: (id: string) => Promise<void>
@@ -320,7 +323,19 @@ interface ElectronAPI {
   ghaccelShowItemInFolder: (id: string) => Promise<void>
   onGhaccelDownload: (callback: (data: GhDownloadStatus) => void) => () => void
   // hosts 优选 IP（主进程实现见 electron/gh-hosts.ts）
-  ghaccelHostsStatus: () => Promise<{ applied: boolean; path: string; writable: boolean; entries: { domain: string; ip: string }[]; message?: string }>
+  ghaccelHostsStatus: () => Promise<{
+    applied: boolean
+    path: string
+    writable: boolean
+    entries: { domain: string; ip: string }[]
+    /** 块的生成时间原文（ISO 串）；null = 块内无可比对的 `# generated:` 行 */
+    generatedAt: string | null
+    /** 块写入至今的天数；null = 块内无可比对的生成时间戳（旧版本或手改的块） */
+    staleDays: number | null
+    /** 是否该提示重选（超阈值或时效未知） */
+    stale: boolean
+    message?: string
+  }>
   ghaccelHostsPick: () => Promise<Array<{ domain: string; ip: string | null; latencyMs: number | null; candidates: number; error?: string }>>
   ghaccelHostsApply: (entries?: { domain: string; ip: string }[]) => Promise<ReturnType<ElectronAPI['ghaccelHostsStatus']>>
   ghaccelHostsRemove: () => Promise<ReturnType<ElectronAPI['ghaccelHostsStatus']>>

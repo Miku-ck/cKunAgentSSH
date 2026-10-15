@@ -99,13 +99,18 @@ def test_windows_job_runs_frontend_gates_and_build():
 
 
 def test_backend_pytest_stays_on_linux():
-    """两条 job 各跑一遍 1481 项后端用例不会多抓到缺陷，只会把 Windows 特有的
+    """两条 job 各跑一遍后端用例不会多抓到缺陷，只会把 Windows 特有的
     socketpair 抖动变成无人处理的永久红。"""
     blocks = _job_blocks()
     win = _win_job_body()
     assert "pytest" not in win, "后端 pytest 不该在 Windows job 里跑（见本文件 docstring）"
     ubuntu = "\n".join(b for b in blocks.values() if "ubuntu-latest" in b)
-    assert re.search(r"pytest", ubuntu), "ubuntu job 必须跑后端 pytest"
+    # 收集口径已收敛到 `npm run test:backend` 单一来源（与 scripts/ci-check.sh 同一条命令），
+    # 所以 job body 里未必再出现字面 pytest。意图不变：ubuntu 必须真的跑后端测试 ——
+    # 两种写法任一即可，两者都没有才红。
+    assert re.search(r"pytest|npm run test:backend", ubuntu), (
+        "ubuntu job 必须跑后端 pytest（直接调 pytest 或经 npm run test:backend）"
+    )
 
 
 def test_native_compile_failure_is_visible_on_windows():

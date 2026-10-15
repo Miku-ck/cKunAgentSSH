@@ -1,6 +1,6 @@
-"""面板实际提交的键 ⇄ client.ts 声明的 payload 类型（round 23）。
+"""面板实际提交的键 ⇄ src/api 声明的 payload 类型（round 23）。
 
-round 22 的键契约比的是「client.ts 的类型」与「后端 pydantic 模型」。那两条规则
+round 22 的键契约比的是「前端的类型」与「后端 pydantic 模型」。那两条规则
 抓不到本轮的真实事故：`ModelConfigPayload` 里声明了 reasoning_tokens，类型上
 「前端会发」，而 ModelsPanel.vue 组装 payload 时从来没写这一行 —— 于是所有模型
 被钉死在建表默认 8192 上，两端各自的测试还都是绿的。
@@ -21,7 +21,8 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_settings_key_contract_round22 import CLIENT_TS, _balanced, _keys_of_object  # noqa: E402
+from api_source import SOURCE_LABEL, frontend_api_source  # noqa: E402
+from test_settings_key_contract_round22 import _balanced, _keys_of_object  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PANEL_VUE = ROOT / "src" / "components" / "settings" / "panels" / "ModelsPanel.vue"
@@ -51,16 +52,16 @@ def panel_src():
 
 
 def _payload_block(src: str) -> str:
-    """client.ts 里 ModelConfigPayload 接口的整块文本（含两端花括号）。"""
+    """src/api 里 ModelConfigPayload 接口的整块文本（含两端花括号）。"""
     m = re.search(r"export interface ModelConfigPayload\s*\{", src)
     if not m:
-        raise AssertionError("client.ts 里找不到 ModelConfigPayload 接口")
+        raise AssertionError(f"{SOURCE_LABEL} 里找不到 ModelConfigPayload 接口")
     return _balanced(src, src.index("{", m.end() - 1))
 
 
 @pytest.fixture(scope="module")
 def declared_keys():
-    return _keys_of_object(_payload_block(CLIENT_TS.read_text(encoding="utf-8")))
+    return _keys_of_object(_payload_block(frontend_api_source()))
 
 
 def test_extractors_are_not_silently_empty(panel_src, declared_keys):
@@ -115,7 +116,7 @@ def test_guard_fails_when_declaration_drops_a_key():
     变异要落在 payload 这一块上：读侧的 `ModelConfig` 里也有一个同名的
     `top_p?: number`，整文件 replace(…, 1) 会先改掉它，本自检就成了空跑。
     """
-    block = _payload_block(CLIENT_TS.read_text(encoding="utf-8"))
+    block = _payload_block(frontend_api_source())
     mutated = block.replace("  top_p?: number", "  top_pX?: number")
     assert mutated != block, "ModelConfigPayload 里没找到 `top_p?: number`，本自检是空跑"
     keys = _keys_of_object(mutated)

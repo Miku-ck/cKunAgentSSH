@@ -7,7 +7,7 @@
  */
 import { app } from 'electron'
 import { join, dirname } from 'path'
-import { readFile, writeFile, rename, mkdir, unlink } from 'fs/promises'
+import { readFile, writeFile, rename, mkdir, unlink, copyFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import { homedir } from 'os'
 import { execFile } from 'child_process'
@@ -18,6 +18,7 @@ import {
   buildGitReadArgs,
   buildGitRestoreArgs,
   buildGitSetArgs,
+  buildGitUnsetSubsectionArgs,
   buildProbeUrl,
   PROBE_TARGET,
   defaultGithubAccelConfig,
@@ -400,7 +401,7 @@ export class GithubAccelService {
       if (existing && existing !== target) {
         // 已有别的规则：备份原值（若还有未还原的旧备份，保留最早那份），再移除旧规则
         if (!config.gitBackup) config.gitBackup = { prefix, previousValue: existing }
-        const unsetOld = await execGit(['config', '--global', '--unset', `url.${existing}.insteadOf`])
+        const unsetOld = await execGit(buildGitUnsetSubsectionArgs(existing))
         if (unsetOld.code !== 0) throw new Error(`移除旧规则失败: ${unsetOld.stderr.trim() || `退出码 ${unsetOld.code}`}`)
       } else if (!config.gitBackup) {
         // 原本没有规则（或接管凭证丢失）：备份标记 null，关闭时直接删除即可
@@ -431,7 +432,7 @@ export class GithubAccelService {
 
       if (before.activeSubsection) {
         // 按完整子节卸载（subsection 是什么就卸什么，与前缀推导无关）
-        const unset = await execGit(['config', '--global', '--unset', `url.${before.activeSubsection}.insteadOf`])
+        const unset = await execGit(buildGitUnsetSubsectionArgs(before.activeSubsection))
         // 退出码 5 = key 不存在（已被外部移除），视为成功
         if (unset.code !== 0 && unset.code !== 5) {
           throw new Error(`移除改写规则失败: ${unset.stderr.trim() || `退出码 ${unset.code}`}`)
@@ -465,6 +466,16 @@ export class GithubAccelService {
     let existing = ''
     if (existsSync(path)) {
       existing = await readFile(path, 'utf-8')
+    }
+    // 首次写入前备份 ~/.ssh/config（与 hosts/git 同款"改前留底"语义；托管块可精确移除，备份仅防意外）
+    if (existing && !hasSshBlock(existing)) {
+      try {
+        const dir = join(app.getPath('userData'), 'backups')
+        await mkdir(dir, { recursive: true })
+        await copyFile(path, join(dir, `ssh-config-backup-${Date.now()}`))
+      } catch (e) {
+        console.warn('[GithubAccel] ~/.ssh/config 备份失败（继续写入）:', e)
+      }
     }
     const next = applySshBlock(existing)
     await mkdir(dirname(path), { recursive: true })

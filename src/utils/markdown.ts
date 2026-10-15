@@ -23,7 +23,30 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
       rel ? `${rel} noopener noreferrer`.trim() : 'noopener noreferrer',
     )
   }
+
+  // SVG 几何属性值合法性校验：模型输出的内联 SVG 偶见伪代码表达式（如 rx="2.5*u"），
+  // DOMPurify 白名单只过滤标签/属性名，不校验值 —— 非法值落到 DOM 后 Chromium 报
+  // "Expected length" 告警且该属性失效。这里对纯数字语义的属性做值校验，非法即删。
+  if (node.namespaceURI?.startsWith('http://www.w3.org/2000/svg')) {
+    for (const attr of SVG_LENGTH_ATTRS) {
+      const val = node.getAttribute(attr)
+      if (val !== null && !isValidSvgLength(val)) {
+        node.removeAttribute(attr)
+      }
+    }
+  }
 })
+
+/** 仅接受纯数字语义的 SVG 属性：值必须是无符号数字或数字百分比 */
+const SVG_LENGTH_ATTRS = [
+  'x', 'y', 'cx', 'cy', 'r', 'rx', 'ry',
+  'width', 'height', 'x1', 'y1', 'x2', 'y2',
+] as const
+
+function isValidSvgLength(val: string): boolean {
+  // SVG length 语法：<sign><number>[exponent][unit]，负数/指数合法（如 x="-10"）
+  return /^[+-]?(\d+(\.\d+)?|\.\d+)([eE][+-]?\d+)?(%|em|ex|px|pt|pc|in|cm|mm)?$/.test(val)
+}
 
 /** 反转义 marked 输出的 HTML 实体，便于 hljs 重新高亮 */
 function decodeHtml(s: string): string {

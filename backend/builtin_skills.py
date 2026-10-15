@@ -11,7 +11,9 @@ frontmatter 解析用轻量正则（requirements 无 pyyaml）：只支持
 """
 import json
 import logging
+import os
 import re
+import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -123,14 +125,32 @@ def sync_packaged_skills() -> dict:
             logger.warning("[builtin_skills] 同步 %s 失败: %s", s["slug"], e)
 
     # 孤儿清理仅限本模块此前管理过的 slug（升级后删除的包内技能）
+    baseline_known = True
     try:
-        orphans = set(db.list_builtin_skill_slugs()) & _previous_managed_slugs() - _managed_slugs
+        previous = _previous_managed_slugs()
+        if previous is None:
+            # 状态文件读不出可信内容 → 无从判断"此前管过哪些"，任何清理都可能
+            # 把仍在使用的包内技能当孤儿删掉。这次跳过，下次读到好文件再收敛。
+            logger.warning("[builtin_skills] 状态文件不可信，本次跳过孤儿清理")
+            baseline_known = False
+            orphans: set[str] = set()
+        else:
+            orphans = set(db.list_builtin_skill_slugs()) & previous - _managed_slugs
         for slug in orphans:
             db.delete_builtin_skill_by_slug(slug)
     except Exception as e:
         logger.warning("[builtin_skills] 孤儿清理失败（不阻塞）: %s", e)
+        baseline_known = False
 
-    _persist_managed_slugs()
+    # 基准未知时不回写：把"当前管着的这一批"当新基准写下去，正好抹掉唯一能说明
+    # "此前还管过别的"的那份记录 —— 那些已从包内删掉的技能就此再也不会被认成孤儿，
+    # 库里永远留着一条没有任何地方还声明的技能，而且下一次读只会确认"确实管过这些"。
+    # 不回写没有副作用：orphans 的判据是 `库里的 ∩ previous`，previous 变旧只会少删、
+    # 不会多删，基准修好后自然收敛。
+    if baseline_known:
+        _persist_managed_slugs()
+    else:
+        logger.warning("[builtin_skills] 基准未知，本次保留原状态文件不覆写")
     if upserted:
         try:
             from skill_registry import get_skill_registry
@@ -142,25 +162,83 @@ def sync_packaged_skills() -> dict:
 
 
 _STATE_FILE = Path.home() / ".ckunagentic" / "builtin_skills_state.json"
+_STATE_VERSION = 1
 
 
-def _previous_managed_slugs() -> set[str]:
+def _previous_managed_slugs() -> set[str] | None:
+    """此前由本模块管理过的 slug；None = 读不出可信内容，调用方不得据此清理。
+
+    「文件不存在」和「文件读不出」必须分开：前者是首次运行，空集合是对的；
+    后者（半写损坏 / 结构异常 / 无读权限）返回空集合会让孤儿清理把
+    `此前管过 = 没有` 当成事实，虽然此处不删任何东西，但下一步写盘就会用
+    子集覆盖掉真实基准。返回 None 才能把"不知道"诚实传出去。
+    """
     try:
-        data = json.loads(_STATE_FILE.read_text(encoding="utf-8"))
-        return set(data.get("slugs", []))
-    except Exception:
+        raw = _STATE_FILE.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return set()
+    except OSError as e:
+        # 权限/IO 读失败按"不可信"处理（与文件不存在区分开）
+        logger.warning("[builtin_skills] 状态文件读取失败: %s", e)
+        return None
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError) as e:
+        bak = _STATE_FILE.with_name(f"{_STATE_FILE.name}.corrupt-{int(time.time())}.bak")
+        logger.error(
+            "[builtin_skills] 状态文件 JSON 解析失败（疑似半写损坏），本次不清理孤儿。备份: %s",
+            _quarantine_state_file(raw, bak),
+        )
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("slugs"), list):
+        # 与 JSON 解析失败同一处置：隔离留证。不隔离的话这份坏文件会一直躺在原地，
+        # 而调用方现在不再覆写它 —— 每轮同步都判为"基准未知"、永远不清理也不自愈。
+        bak = _STATE_FILE.with_name(f"{_STATE_FILE.name}.corrupt-{int(time.time())}.bak")
+        logger.error(
+            "[builtin_skills] 状态文件结构异常（期望 dict.slugs:list），本次不清理孤儿。备份: %s",
+            _quarantine_state_file(raw, bak),
+        )
+        return None
+    return {s for s in data["slugs"] if isinstance(s, str)}
+
+
+def _quarantine_state_file(raw: str, bak: Path) -> str:
+    """把损坏的状态文件挪走留证（rename 失败退化为复制），返回备份路径供日志。"""
+    try:
+        os.replace(_STATE_FILE, bak)
+    except OSError:
+        try:
+            bak.write_text(raw, encoding="utf-8")
+        except OSError as e:
+            logger.warning("[builtin_skills] 备份损坏状态文件失败: %s", e)
+            return f"（备份失败: {e}）"
+    return str(bak)
 
 
 def _persist_managed_slugs() -> None:
+    """原子写：临时文件 + os.replace。
+
+    直接 write_text 中断在中间就留下半个 JSON，下次启动读不出基准（见
+    _previous_managed_slugs）。tmp 名带 pid —— dev 实例与已安装实例共用
+    `~/.ckunagentic`，固定名会让两边互相截走对方的临时文件。
+    """
+    tmp = _STATE_FILE.with_name(f"{_STATE_FILE.name}.{os.getpid()}.tmp")
     try:
         _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _STATE_FILE.write_text(
-            json.dumps({"slugs": sorted(_managed_slugs)}, ensure_ascii=False),
-            encoding="utf-8",
+        payload = json.dumps(
+            {"version": _STATE_VERSION, "slugs": sorted(_managed_slugs)},
+            ensure_ascii=False,
         )
-    except Exception as e:
+        tmp.write_text(payload, encoding="utf-8")
+        os.replace(tmp, _STATE_FILE)
+    except OSError as e:
         logger.warning("[builtin_skills] 状态文件写入失败: %s", e)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
 
 
 def get_managed_slugs() -> set[str]:

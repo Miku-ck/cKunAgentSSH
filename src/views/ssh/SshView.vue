@@ -87,6 +87,11 @@ v-show="s.id === store.activeSessionId"
           <AuditView v-if="pageMounted('audit')" />
         </div>
 
+        <!-- 运行记录页面（agent_runs 权威轨迹全局列表；复用 AgentFullTrace） -->
+        <div v-show="activeNavPage === 'runs'" class="runs-page">
+          <RunHistoryView v-if="pageMounted('runs')" />
+        </div>
+
         <!-- 定时任务页面 -->
         <div v-show="activeNavPage === 'schedules'" class="schedules-page">
           <SchedulesView v-if="pageMounted('schedules')" :active="activeNavPage === 'schedules'" />
@@ -208,6 +213,8 @@ const SchedulesView = defineAsyncComponent(() => import('@/views/ssh/SchedulesVi
 const DashboardView = defineAsyncComponent(() => import('@/views/ssh/DashboardView.vue'))
 const TunnelView = defineAsyncComponent(() => import('@/components/ssh/TunnelView.vue'))
 const DockerView = defineAsyncComponent(() => import('@/components/ssh/DockerView.vue'))
+// DEAD-001 接线：视图本体与后端 listRuns / AgentFullTrace inline 早已就绪，此前仅缺导航入口
+const RunHistoryView = defineAsyncComponent(() => import('@/views/ssh/RunHistoryView.vue'))
 const GithubAccelView = defineAsyncComponent(() => import('@/components/ssh/GithubAccelView.vue'))
 const RunView = defineAsyncComponent(() => import('@/components/agent/RunView.vue'))
 import { useSSHStore } from '@/stores/ssh'
@@ -243,7 +250,7 @@ function getTerminalRefHandler(id: string): (el: any) => void {
   return h
 }
 
-// 命令投递 + 终端聚焦（内部注册 ssh:focus-terminal / ssh:deliver-command 监听）
+// 终端聚焦（useCommandDelivery 内部只注册 ssh:focus-terminal 监听；命令投递见其文件头的退役说明）
 const { focusActiveTerminal } = useCommandDelivery(terminalRefs)
 
 // 页面导航 + 终端生命周期 + 模态框 + 远程连接 + 首页/终端两态（运行过程已并入首页）
@@ -260,6 +267,7 @@ const {
   toggleSftp,
   toggleAiPanel,
   toggleAudit,
+  toggleRuns,
   toggleSchedules,
   toggleDashboard,
   toggleTunnels,
@@ -374,6 +382,7 @@ defineExpose({
   toggleRemoteManager,
   toggleSftp,
   toggleAudit,
+  toggleRuns,
   toggleSchedules,
   toggleDashboard,
   toggleTunnels,
@@ -569,6 +578,17 @@ defineExpose({
 
 /* ─── Audit Page ─── */
 .audit-page {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  overflow: hidden;
+}
+
+/* 运行记录页：容器形态与 audit 页同构（整页覆盖、内部自滚动） */
+.runs-page {
   position: absolute;
   top: 0;
   left: 0;

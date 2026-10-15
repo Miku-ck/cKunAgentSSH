@@ -16,7 +16,7 @@ SSH 智能运维终端 — 集成 SSH 连接管理、远程终端、SFTP 文件�
 - **GPU nvtop 面板**：nvitop 风格逐卡视图（算力/显存/温度/功耗/进程），双层量值图（进度条=当前值、趋势薄条=60 格历史），矛盾态检测（占卡不干活 / IO 等待 / SWAP 已满）以条端标记+悬浮提示呈现
 - **终端「问 AI」**：选中终端内容 → 选区旁悬浮按钮 → 预填 AI 面板问题草稿，随消息自动注入 cwd / 最近命令 / 选区上下文
 - **AI 运维助手**：流式对话 + 思考链、多模型切换、Agent 智能体（工具调用）
-- **Agent 框架（Harness）**：ReAct 决策循环、13 拦截器、29 工具、动态步数预算、循环检测、成本熔断
+- **Agent 框架（Harness）**：ReAct 决策循环、Reins 拦截器链、内置工具集、动态步数预算、循环检测、成本熔断
 - **Agent 记忆 v2**：单一写入方对账（去重/消解矛盾/失效）、混合检索（FTS5 + 向量）、常驻画像块、注入 token 预算；设置 → 记忆 可浏览/检索/置顶/编辑/失效记忆并查看对账队列与块历史
 - **计划模式**：前端 mode chip 成对下发 `workflow_mode=plan` + `permission_mode=plan`，后者由 `PlanModeGuard` 在审批卡之前就把写操作硬拦成只读
 - **澄清向导**：Agent 工具调用意图不明时拦截并弹出多步澄清卡片（A/B/C + 自定义），答完注入上下文放行、可跳过；精准调用零打扰
@@ -83,8 +83,8 @@ SSH 智能运维终端 — 集成 SSH 连接管理、远程终端、SFTP 文件�
         │  • Chat 流式对话 (SSE)          │
         │  • Agent Harness 框架          │
         │    - ReAct 决策循环            │
-        │    - 13 拦截器 (Reins)         │
-        │    - 29 工具 (Saddle)         │
+        │    - Reins 拦截器链            │
+        │    - Saddle 工具执行           │
         │    - 动态预算 + 成本熔断       │
         │  • 会话持久化 (SQLite)          │
         │  • 模型配置 / 路由             │
@@ -152,7 +152,7 @@ cKunAgentSSH/
 │   └── agent/                         # Agent 智能体框架
 │       ├── harness/                   # Harness 核心
 │       ├── memory/                    # 记忆子系统
-│       └── tools/builtin/             # 29 个内置工具
+│       └── tools/builtin/             # 内置工具（数量见下方 Saddle 条目）
 │
 ├── gateway/                           # 自营 TLS 接入网关（hillgw.mjs，零依赖单文件，独立部署）
 ├── scripts/                           # CI / 打包 / 部署脚本
@@ -190,7 +190,9 @@ cKunAgentSSH/
 采用马术装备隐喻设计，包含：
 
 - **Driver** — ReAct 决策循环主驱动
-- **Reins** — 13 个拦截器（技能注入、循环检测、权限审批、文件系统守护、澄清向导、计划模式等）
+- **Reins** — 13 个拦截器实例（默认装配；关 `enable_dynamic_budget` 则 12，定时任务走的就是这条。
+  清单以 `backend/agent/harness/reins/defaults.py` 的 `create_default_reins` 为准）：
+  技能注入、循环检测、权限审批、文件系统守护、澄清向导、计划模式等
 - **Bridle** — 上下文组装 + 压缩
 - **Saddle** — 工具执行 + 沙箱（29 个内置工具）
 - **Stirrups** — LLM 调用 + 重试
@@ -249,12 +251,14 @@ npm test               # 前端单测（vitest）
 npm run test:backend   # 后端单测（pytest）
 npm run ci             # 本地门禁
 npm run package        # electron-builder 打包
+npm run clean          # 清理 electron-builder 产物（dist / dist-*）与中间配置
+npm run preview        # 预览构建结果
 ```
 
 ### 打包与分发
 
-- **解释器解析顺序**：`CKUN_PYTHON` 环境变量 → 打包内 `resources/python-runtime/python.exe` → 系统 `python`
-- **内嵌 Python 运行时**：将 portable Python 准备到 `runtime/` 目录
+- **解释器解析顺序、内嵌 Python 运行时准备**：唯一来源是 [`runtime/README.md`](runtime/README.md)
+  （含 `CKUN_PYTHON` 口径、Windows/POSIX 平台路径映射、python-build-standalone 具体步骤）
 - **图标**：`resources/icon.png`
 - **代码签名**：未配置证书
 

@@ -80,7 +80,6 @@ TERMINAL_PREDICT_SYSTEM_PROMPT = """你是一个终端命令预测助手。根�
 @router.post("/terminal/predict")
 async def predict_terminal_command(req: TerminalPredictRequest):
     """预测终端下一步命令"""
-    # 获取模型配置
     model_id = req.model_id
     if not model_id:
         # 审查 M-13：db 同步调用放线程池，避免阻塞事件循环

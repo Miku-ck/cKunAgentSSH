@@ -23,11 +23,10 @@ from . import retriever
 
 logger = logging.getLogger(__name__)
 
-# job 类型
-JOB_EPISODIC = "episodic_summary"
-JOB_CANDIDATE = "candidate_fact"
-JOB_AGENT_ADD = "agent_add"
-JOB_BACKFILL = "backfill_reconcile"
+# job 类型（常量归位 mstore —— 投递方只依赖 mstore 不再反向 import 本模块，
+# 解 post_processor↔reconcile 环；此处保留同名引用，consciousness_tick /
+# memory_tools / routes 的 reconcile.JOB_* 调用点不动）
+from .mstore import JOB_BACKFILL, JOB_AGENT_ADD, JOB_CANDIDATE, JOB_EPISODIC
 
 _CHUNK_TIMEOUT = 30.0
 _TOTAL_TIMEOUT = 90.0

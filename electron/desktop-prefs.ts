@@ -23,6 +23,13 @@ let tray: Tray | null = null
 let quitting = false
 let resolveWindow: (() => BrowserWindow | null) | null = null
 
+/**
+ * Windows 通知归属身份（AppUserModelID）。必须与 electron-builder.yml 的 appId 同值
+ * —— 打包版那个值由 electron-builder 写进快捷方式，dev 版只能在这里设；两处漂开
+ * 后系统会把通知归到无人认领的身份、Toast 直接被丢弃。漂移由 app-user-model-id.test.ts 拦。
+ */
+export const APP_USER_MODEL_ID = 'com.ckun.agent-ssh'
+
 function storePath(): string {
   return join(app.getPath('userData'), 'desktop-prefs.json')
 }
@@ -147,7 +154,7 @@ export async function initDesktopPrefs(
   // dev（electron-vite dev 直跑 electron.exe）没有这一步，不设则通知被系统静默丢弃。
   if (process.platform === 'win32') {
     try {
-      app.setAppUserModelId('com.ckun.agent-ssh')  // 与 electron-builder.yml 的 appId 同值
+      app.setAppUserModelId(APP_USER_MODEL_ID)
     } catch (e) {
       console.warn('[DesktopPrefs] setAppUserModelId 失败:', e)
     }

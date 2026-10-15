@@ -32,6 +32,13 @@ export class BackendManager {
   private starting = false
   private readonly MAX_RESTART_ATTEMPTS = 3
   private readonly RESTART_COOLDOWN_MS = 60_000  // 60 秒内最多重启 MAX_RESTART_ATTEMPTS 次
+  /**
+   * 后端端口分配区间 —— 分配（findFreePort）与孤儿识别（isOurBackendProcess）
+   * 必须读同一个区间：两者各写一份字面量时，改了分配区间而忘了谓词，孤儿检测就
+   * 再也匹配不上自家进程，退化成宽口径兜底（那条分支会误伤同签名的无关项目）。
+   */
+  private static readonly BACKEND_PORT_MIN = 8010
+  private static readonly BACKEND_PORT_MAX = 8100
   private restartTimestamps: number[] = []
   /**
    * 审查 M-7：首次 start() 尚未返回（starting=true）期间后端崩溃时，
@@ -150,9 +157,9 @@ export class BackendManager {
    *   2. 命令行是 `<…>\backend\main.py` 且带本应用固定的启动参数与端口区间
    *      （backendDir 位置变化时的兜底：装在别的目录的同一款应用）
    *
-   * 兜底必须同时卡住目录名与 8010..8100 端口区间：只按 `main.py --port --host
-   * 127.0.0.1` 判定的话，任何 FastAPI 教程项目的命令行都能命中，而 taskkill
-   * 带 /T 会连它的整棵子进程树一起杀掉。
+   * 兜底必须同时卡住目录名与分配区间（BACKEND_PORT_MIN..BACKEND_PORT_MAX）：只按
+   * `main.py --port --host 127.0.0.1` 判定的话，任何 FastAPI 教程项目的命令行都能
+   * 命中，而 taskkill 带 /T 会连它的整棵子进程树一起杀掉。
    */
   private static isOurBackendProcess(cmdline: string, backendDir: string): boolean {
     if (!cmdline) return false
@@ -168,8 +175,8 @@ export class BackendManager {
       norm.includes('\\backend\\main.py') &&
       norm.includes('--host 127.0.0.1') &&
       Number.isInteger(port) &&
-      port >= 8010 &&
-      port <= 8100
+      port >= BackendManager.BACKEND_PORT_MIN &&
+      port <= BackendManager.BACKEND_PORT_MAX
     )
   }
 
@@ -312,7 +319,7 @@ export class BackendManager {
       // 发射 starting 状态，让渲染进程知道后端正在启动
       this.onStatusChange?.({ status: 'starting' })
 
-      const portProbe = this.findFreePort(8010, 8100)
+      const portProbe = this.findFreePort(BackendManager.BACKEND_PORT_MIN, BackendManager.BACKEND_PORT_MAX)
       const orphans = await orphansPromise
       this.port = await portProbe
 
@@ -326,10 +333,21 @@ export class BackendManager {
       }
 
       const backendDir = this.getBackendDir()
+      // spawn 前必须确认后端入口存在。理由不是"顺手加个校验"：Node 对「cwd 不存在」
+      // 报的同样是 ENOENT，且 err.path 仍是解释器名（实测 `spawn('node',['-v'],
+      // {cwd:'<不存在的目录>'})` → code=ENOENT / syscall=spawn node / path=node），
+      // 于是下面的 error 监听会把"后端目录没了"翻译成"没装 Python"，把人往完全
+      // 错误的方向查。本应用吃过一次这种误诊，见 getBackendDir 的两种启动形态。
+      const mainPyPath = join(backendDir, 'main.py')
+      if (!existsSync(mainPyPath)) {
+        throw new Error(
+          `后端入口文件不存在：${mainPyPath}`
+          + `（appPath=${app.getAppPath()} isPackaged=${app.isPackaged}）`
+          + ' — dev 请在仓库根启动，打包产物请检查 resources/backend 是否完整',
+        )
+      }
       const python = await this.resolvePythonCommand()
       const dbPath = this.ensureDbPath(backendDir)
-
-
 
       // M2 修复：默认绑定 127.0.0.1，防止局域网内其他设备访问后端（含 API Key、SSH 凭据等敏感数据）
       // 脚本路径必须是绝对路径：命令行是 isOurBackendProcess 唯一的自有性判据，
@@ -371,7 +389,9 @@ export class BackendManager {
           console.error('[BackendManager] Failed to spawn Python backend:', err)
           if (this.process === child) this.process = null
           const friendly = (err as NodeJS.ErrnoException)?.code === 'ENOENT'
-            ? '未检测到 Python 运行环境，请安装 Python 后重试'
+            // cwd 已在 spawn 前校验过（见上方 mainPyPath），走到这里 ENOENT 就真是
+            // 解释器不可执行 —— 消息里带上实际 spawn 的命令名，不再是泛指"Python"。
+            ? `未检测到可执行的 Python 解释器（spawn ${ (err as NodeJS.ErrnoException).path || python.cmd } 失败），请安装 Python 或用 CKUN_PYTHON 指定解释器路径`
             : `后端进程启动失败: ${err.message || String(err)}`
           this.onStatusChange?.({ status: 'error', error: friendly })
           reject(new Error(friendly))
@@ -397,7 +417,6 @@ export class BackendManager {
       })
 
       this.process.on('exit', (code) => {
-
         this.process = null
         // 进程已死，端口上再没有人监听；重启完成前 whenReady 的等待者必须继续等
         this.ready = false
@@ -451,6 +470,13 @@ export class BackendManager {
       }
       this.markReady()
       return this.port
+    } catch (err) {
+      // spawn 之前的失败（后端目录缺失 / 没有可用解释器 / 应用正在退出）也必须
+      // 唤醒 whenReady 的等待者：它们 otherwise 只能干等自己那 15s 超时，还拿不到
+      // 真实原因。markReady 幂等（等待者取空后才生效），spawn 之后那条失败路径
+      // 已在 Promise.race 的 catch 里唤醒过，这里重复调用无副作用。
+      this.markReady(err instanceof Error ? err : new Error(String(err)))
+      throw err
     } finally {
       this.starting = false
       // 审查 M-7：补发首次启动期间记录的重启意图（进程非零退出且非主动停止）
@@ -468,10 +494,7 @@ export class BackendManager {
    */
   private async tryAutoRestart(): Promise<void> {
     // 已在启动中（例如首次 start() 尚未结束），跳过避免与进行中的 start() 重叠
-    if (this.starting) {
-
-      return
-    }
+    if (this.starting) return
     const now = Date.now()
     // 清理过期的重启记录
     this.restartTimestamps = this.restartTimestamps.filter(t => now - t < this.RESTART_COOLDOWN_MS)
@@ -492,18 +515,11 @@ export class BackendManager {
     // M1 修复：延迟期间状态可能变化——
     //   - 用户可能调用了 stop()（intentionalStop=true），此时不应再自动重启
     //   - 外部可能已手动调用了 start()（starting=true），避免重复 spawn
-    if (this.intentionalStop) {
-
-      return
-    }
-    if (this.starting) {
-
-      return
-    }
+    if (this.intentionalStop) return
+    if (this.starting) return
 
     try {
       const port = await this.start(this.lastExtraEnv)
-
       this.onStatusChange?.({ status: 'ready', port })
     } catch (err) {
       console.error('[BackendManager] Auto-restart failed:', err)
@@ -550,7 +566,6 @@ export class BackendManager {
         // 审查 MINOR：taskkill 对挂死的进程树可能长时间不返回（同步阻塞主进程）；
         // 5s 超时兜底 — 超时后进程多半已在终止过程中，不再等待
         execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore', timeout: 5000 })
-
       } catch (e) {
         console.warn(`[BackendManager] taskkill failed (process may have exited or timed out):`, e)
       }
@@ -563,7 +578,6 @@ export class BackendManager {
     proc.kill('SIGTERM')
     const forceKillTimer = setTimeout(() => {
       if (this.process === proc) {
-
         proc.kill('SIGKILL')
       }
     }, 5000)
@@ -584,7 +598,6 @@ export class BackendManager {
     // 并放弃启动，不再遗留退出后的孤儿 python（见 start() 内 appQuitting 守卫）
     this.appQuitting = true
     if (!this.process) return
-
     this.killCurrentProcess()
   }
 

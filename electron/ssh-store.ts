@@ -3,9 +3,8 @@
  * 敏感字段(password/passphrase)使用 safeStorage 加密后存储
  */
 import { app, safeStorage } from 'electron'
-import { join, dirname } from 'path'
-import { readFile, writeFile, rename, mkdir, unlink } from 'fs/promises'
-import { existsSync } from 'fs'
+import { join } from 'path'
+import { JsonFileStore } from './utils/json-file-store'
 
 export interface SSHConnectionRecord {
   id: string
@@ -121,94 +120,6 @@ function fromDisk(rec: SSHConnectionRecordOnDisk): SSHConnectionRecord {
   }
 }
 
-async function readAllFromDisk(): Promise<SSHConnectionRecordOnDisk[]> {
-  const path = getStorePath()
-  if (!existsSync(path)) return []
-  let raw: string
-  try {
-    raw = await readFile(path, 'utf-8')
-  } catch (e) {
-    // E-2 修复：readFile 失败（含瞬态 EBUSY/EACCES）【向上抛】，不再按空表返回。
-    // 原实现失败后返回 []，随后的 save/delete/touchLastConnected 会以空数组为
-    // 基线覆写磁盘文件 — 用户全部 SSH 连接配置（含加密凭据）被静默永久抹掉。
-    // 写路径让错误自然上抛（IPC reject，用户重试即可）；读展示路径（list）在
-    // 调用方 catch 后降级为空列表，不崩 UI。
-    throw new Error(`读取 SSH 连接配置失败（文件可能被占用或权限不足，请重试）: ${e instanceof Error ? e.message : String(e)}`)
-  }
-  try {
-    const arr = JSON.parse(raw)
-    if (!Array.isArray(arr)) {
-      console.warn('[SSHStore] store 文件内容不是数组，已隔离损坏文件')
-      await quarantineCorruptFile(path, raw)
-      return []
-    }
-    // 结构损坏防御：合法 JSON 数组内混入 null/原始值（外部编辑或非原子写残留）时，
-    // 下游 findIndex/find/filter/map 及 fromDisk 一律 r.id → TypeError，会同时击穿
-    // list/save/delete/查重。此处按"缺字符串 id 即损坏"过滤，正常记录必带 id 不受影响。
-    const valid = arr.filter(
-      (r): r is SSHConnectionRecordOnDisk =>
-        !!r && typeof r === 'object' && typeof (r as { id?: unknown }).id === 'string',
-    )
-    if (valid.length !== arr.length) {
-      console.warn(`[SSHStore] store 含 ${arr.length - valid.length} 条无 id 损坏条目，已跳过`)
-    }
-    return valid
-  } catch (e) {
-    // 审查 M-8：损坏文件隔离到 .corrupt-<ts>.bak。原实现 JSON.parse 失败即静默
-    // 返回 []，随后的 save()/delete() 会以空数组为基线覆写磁盘文件 — 用户全部
-    // SSH 连接配置（含加密凭据）被静默永久抹掉，且无任何日志线索
-    console.error('[SSHStore] store 文件损坏（JSON 解析失败），已隔离原文件:', e)
-    await quarantineCorruptFile(path, raw)
-    return []
-  }
-}
-
-/** 把损坏的 store 文件移走（或复制）为带时间戳的 .bak，保留现场供恢复 */
-async function quarantineCorruptFile(path: string, raw: string): Promise<void> {
-  try {
-    const bak = `${path}.corrupt-${Date.now()}.bak`
-    try {
-      await rename(path, bak)
-    } catch {
-      // rename 失败（文件被占用等）：退回复制保留原文件
-      await writeFile(bak, raw, 'utf-8')
-    }
-    console.warn(`[SSHStore] 损坏文件已备份到: ${bak}`)
-  } catch (e) {
-    console.warn('[SSHStore] 备份损坏文件失败:', e)
-  }
-}
-
-async function writeAllToDisk(records: SSHConnectionRecordOnDisk[]): Promise<void> {
-  const path = getStorePath()
-  await mkdir(dirname(path), { recursive: true })
-  // 原子写入：先写临时文件，再 rename 替换，避免写入过程中断导致 json 损坏
-  const tmpPath = path + '.tmp'
-  await writeFile(tmpPath, JSON.stringify(records, null, 2), 'utf-8')
-  // M4 修复：Windows 上 rename 到已存在的目标可能因文件被占用（EPERM/EPERM）失败。
-  // 重试一次（短暂等待后），若仍失败则回退到直接写入目标文件——丢失原子性但保证持久化。
-  try {
-    await rename(tmpPath, path)
-  } catch (err: any) {
-    if (err && (err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'EBUSY')) {
-      // 短暂等待后重试一次（常见于杀毒软件/索引服务短暂占用）
-      await new Promise(r => setTimeout(r, 200))
-      try {
-        await rename(tmpPath, path)
-        return
-      } catch {
-        // 仍失败：回退到直接写入目标文件（非原子，但保证数据不丢）
-        console.warn('[SSHStore] rename 重试仍失败，回退到直接写入')
-        await writeFile(path, JSON.stringify(records, null, 2), 'utf-8')
-        // 清理临时文件
-        try { await unlink(tmpPath) } catch { /* ignore */ }
-      }
-    } else {
-      throw err
-    }
-  }
-}
-
 function genId(): string {
   return `conn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
@@ -237,29 +148,29 @@ function reencryptPlainOnDisk(records: SSHConnectionRecordOnDisk[]): void {
 
 export class SSHStore {
   /**
-   * 审查修复（P2）：读-改-写串行化队列。原实现 save/delete/duplicate/
-   * touchLastConnected/migrateLegacy 各自独立"读全量 → 改 → 写全量"，
-   * 两个写操作并发时会以各自的旧基线互相覆写（丢更新）。
-   * 参照 known-hosts 的 savePromise 链模式：所有写操作串在同一 promise 链上。
+   * ARCH-007 收编：读-改-写串行化队列 / tmp+rename 原子写 / 损坏文件隔离 /
+   * 读失败上抛四块骨架统一走 JsonFileStore（原为本类内联实现，与 tunnel/
+   * gateway store 逐字同构）。写操作经 this.enqueue 串入队列的语义不变。
    */
-  private writeQueue: Promise<unknown> = Promise.resolve()
+  private readonly file = new JsonFileStore<SSHConnectionRecordOnDisk>({
+    path: getStorePath(),
+    logTag: '[SSHStore]',
+    label: 'SSH 连接配置',
+  })
 
   /** 把写操作串入队列；前一个操作失败不阻断后续（各自重试语义不变） */
   private enqueue<T>(op: () => Promise<T>): Promise<T> {
-    const run = this.writeQueue.then(op, op)
-    // 吞掉队列链本身的错误，防止前一个操作的 reject 污染后续操作的链
-    this.writeQueue = run.then(() => undefined, () => undefined)
-    return run
+    return this.file.enqueue(op)
   }
   /**
-   * 列表（读展示路径）：E-2 修复 — readAllFromDisk 现在会把读取失败向上抛
+   * 列表（读展示路径）：E-2 修复 — file.readAll 现在会把读取失败向上抛
    * （防止空表覆写全库）。列表展示允许降级：catch 后返回 [] 并记日志，不崩 UI。
    * 写路径（save/delete/duplicate/touchLastConnected/migrateLegacy）让错误
    * 自然上抛，由 IPC reject 提示用户重试。
    */
   async list(): Promise<SSHConnectionRecord[]> {
     try {
-      const records = await readAllFromDisk()
+      const records = await this.file.readAll()
       return records.map(fromDisk)
     } catch (e) {
       console.error('[SSHStore] list 读取失败，降级为空列表:', e)
@@ -282,7 +193,7 @@ export class SSHStore {
     if (credentialDropped) {
       console.warn('[SSHStore] safeStorage 加密不可用，密码/passphrase 将不持久化（每次连接需重新输入或改用私钥认证）')
     }
-    const records = await readAllFromDisk()
+    const records = await this.file.readAll()
     reencryptPlainOnDisk(records)
     const now = Date.now()
 
@@ -313,7 +224,7 @@ export class SSHStore {
       records.push(toDisk(record))
     }
 
-    await writeAllToDisk(records)
+    await this.file.writeAll(records)
     return credentialDropped
       ? { ...record, credentialNotice: 'encryption-unavailable' as const }
       : record
@@ -321,7 +232,7 @@ export class SSHStore {
 
   /** 按 ID 读取单条记录（含解密后的凭据；仅主进程内部使用，不直接暴露给渲染进程） */
   async get(id: string): Promise<SSHConnectionRecord | null> {
-    const records = await readAllFromDisk()
+    const records = await this.file.readAll()
     const rec = records.find(r => r.id === id)
     return rec ? fromDisk(rec) : null
   }
@@ -331,11 +242,11 @@ export class SSHStore {
   }
 
   private async doDelete(id: string): Promise<void> {
-    const records = await readAllFromDisk()
+    const records = await this.file.readAll()
     reencryptPlainOnDisk(records)
     const filtered = records.filter(r => r.id !== id)
     if (filtered.length !== records.length) {
-      await writeAllToDisk(filtered)
+      await this.file.writeAll(filtered)
     }
   }
 
@@ -344,7 +255,7 @@ export class SSHStore {
   }
 
   private async doDuplicate(id: string): Promise<SSHConnectionRecord> {
-    const records = await readAllFromDisk()
+    const records = await this.file.readAll()
     reencryptPlainOnDisk(records)
     const src = records.find(r => r.id === id)
     if (!src) throw new Error(`Connection ${id} not found`)
@@ -360,7 +271,7 @@ export class SSHStore {
       updatedAt: now,
     }
     records.push(toDisk(clone))
-    await writeAllToDisk(records)
+    await this.file.writeAll(records)
     return clone
   }
 
@@ -370,12 +281,12 @@ export class SSHStore {
   }
 
   private async doTouchLastConnected(id: string): Promise<void> {
-    const records = await readAllFromDisk()
+    const records = await this.file.readAll()
     reencryptPlainOnDisk(records)
     const idx = records.findIndex(r => r.id === id)
     if (idx !== -1) {
       records[idx].lastConnectedAt = Date.now()
-      await writeAllToDisk(records)
+      await this.file.writeAll(records)
     }
   }
 
@@ -386,7 +297,7 @@ export class SSHStore {
   }
 
   private async doMigrateLegacy(legacy: any[]): Promise<number> {
-    const records = await readAllFromDisk()
+    const records = await this.file.readAll()
     reencryptPlainOnDisk(records)
     const existing = new Set(records.map(r => `${r.host}:${r.port}:${r.username}`))
     const now = Date.now()
@@ -418,7 +329,7 @@ export class SSHStore {
     }
 
     if (migrated > 0) {
-      await writeAllToDisk(records)
+      await this.file.writeAll(records)
     }
     return migrated
   }

@@ -34,8 +34,9 @@ import shlex
 import threading
 import time
 import types
+from collections import deque
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Deque, List, Optional
 
 from agent.tools import BaseTool, ToolResult, ToolMeta
 from agent.tools.builtin.ops_common import parse_int_arg, run_headless, truncate_output
@@ -74,7 +75,8 @@ class JobEntry:
     args: List[str]
     start_ts: float
     proc: Optional[asyncio.subprocess.Process] = None   # 本地形态
-    output: List[str] = field(default_factory=list)     # 本地输出缓冲
+    output: Deque[str] = field(default_factory=lambda: deque())  # 本地输出缓冲
+    output_bytes: int = 0            # output 当前字节总量（增量维护，避免每行全量重算）
     status: str = "running"          # running / finished / failed / killed / exited
     exit_code: Optional[int] = None
     reader_task: Optional[asyncio.Task] = None
@@ -601,12 +603,14 @@ async def _read_stream(stream, entry: JobEntry) -> None:
         text = line.decode("utf-8", errors="replace")
         with JobManager.instance()._lock:
             buf_list.append(text)
+            entry.output_bytes += len(text)
             # 上限：丢弃最旧的行保留最近内容（job_output 展示的是尾部，
-            # 头部旧日志对排障价值最低；丢行不保证行边界完整，仅防无界增长）
-            total = sum(len(t) for t in buf_list)
-            while total > _LOCAL_OUTPUT_CAP and len(buf_list) > 1:
-                total -= len(buf_list[0])
-                buf_list.pop(0)
+            # 头部旧日志对排障价值最低；丢行不保证行边界完整，仅防无界增长）。
+            # PERF：原实现每行对整个缓冲 sum(len) + pop(0)（均 O(n)），缓冲打满后
+            # 万条目稳态下每行万次扫描且直接跑在事件循环上；改为增量计数 + deque
+            # popleft，每行 O(1)
+            while entry.output_bytes > _LOCAL_OUTPUT_CAP and len(buf_list) > 1:
+                entry.output_bytes -= len(buf_list.popleft())
 
 
 def _running_seconds(entry: JobEntry, now: float) -> int:

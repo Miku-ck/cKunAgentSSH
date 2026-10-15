@@ -9,6 +9,7 @@
  * Go 模板的 printf 会把 \t 渲染成真实制表符（而非字面反斜杠 t），字段以 \t 分隔，
  * 解析层按 \t 拆行。字段内部（名称/镜像/命令）不含制表符，故拆分安全。
  */
+import { formatBytesCompact } from '../utils/format'
 
 import { extractSSHError } from '../ssh-error-types'
 
@@ -262,19 +263,9 @@ export function parseLabels(s: string | undefined | null): Record<string, string
 /**
  * Size 人读化：docker 给的是 bytes（int64）或已包好的字符串，两种都能接。
  * 采用 1024 进制，保留 1 小数位，对齐 docker 自己的习惯。
+ * ARCH-010：实现收归 utils/format.ts 单一源（formatBytesCompact），
+ * docker 域的字符串直通 / undefined 兜底语义由其原生提供。
  */
-export function humanSize(v: unknown): string | undefined {
-  if (v === null || v === undefined) return undefined
-  if (typeof v === 'string') return v || undefined
-  const n = Number(v)
-  if (!Number.isFinite(n) || n < 0) return undefined
-  if (n === 0) return '0B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
-  let i = 0
-  let x = n
-  while (x >= 1024 && i < units.length - 1) { x /= 1024; i++ }
-  return (i === 0 ? x.toFixed(0) : x.toFixed(1)) + units[i]
-}
 
 /**
  * 卷/网络标签列的一级线索：compose 项目名优先，其次标签条数，无标签 → 「—」。
@@ -295,7 +286,7 @@ export function parseVolumes(raw: string): VolumeRow[] {
         driver: String(o.Driver || ''),
         name: String(o.Name || ''),
       }
-      const sz = humanSize(o.Size)
+      const sz = formatBytesCompact(o.Size)
       if (sz) r.size = sz
       if (typeof o.LinkCount === 'number') r.linkCount = o.LinkCount
       const lb = asStrMap(o.Labels)

@@ -67,8 +67,9 @@ const THEME_MAP: Record<Exclude<AppTheme, 'system'>, MonacoThemeName> = {
   coral: 'ckun-coral',
   // 手记是浅底，编辑器不必再造一套色板 —— 复用 ckun-light 的浅底深字
   atelier: 'ckun-light',
-  // 玻璃（暗调）走 ckun-dark；浅墨（浅底）走 ckun-light —— 代码编辑器不随玻璃
-  // 半透材质走，只需明暗两档对齐（现状缺 glass 一档，穷举会编译报错，一并补齐）。
+  // 玻璃（Aero 暗档）走 ckun-dark；晶白（Aero 亮档）走 ckun-light —— 代码编辑器不随玻璃
+  // 半透材质走，只需明暗两档对齐。这张表是 Record<全部 Theme,…>，新增主题忘了登记
+  // 直接编译报错，所以玻璃两档在这里各有一条，不靠人眼记。
   glass: 'ckun-dark',
   'glass-light': 'ckun-light',
 }

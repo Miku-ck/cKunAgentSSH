@@ -4,11 +4,19 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "composite": true,
     "outDir": "./out",
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
     "types": ["node"]
   },
-  "include": ["electron/**/*", "shared/**/*.ts", "electron.vite.config.ts"]
+  "include": [
+    "electron/**/*",
+    "shared/**/*.ts",
+    "electron.vite.config.ts",
+    "vitest.config.ts"
+  ]
 }

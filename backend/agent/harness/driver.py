@@ -187,7 +187,7 @@ class Driver:
             remaining = ctx.config.max_iterations - (iteration + 1)
             if remaining <= 2 and not ctx.metadata.get("final_summary_hint_sent"):
                 ctx.metadata["final_summary_hint_sent"] = True
-                # 修复：使用 "user" 角色而非 "system"，避免添加到消息末尾时触发 400 错误
+                # user 角色（末尾注入的 400 约束，口径见 bridle._build）
                 ctx.messages.append({
                     "role": "user",
                     "content": (
@@ -230,7 +230,7 @@ class Driver:
                     ctx.config.max_reasoning_tokens = get_reasoning_budget_for_iteration(
                         intention, iteration, max_budget=model_max_reasoning,
                     )
-                    # 修复：引导语使用 "user" 角色而非 "system"，避免添加到消息末尾时触发 400 错误
+                    # 引导语走 user 角色（400 约束见 bridle._build）
                     if guide:
                         messages.append({"role": "user", "content": f"[意图引导] {guide}"})
                 except Exception as e:
@@ -349,8 +349,7 @@ class Driver:
             # ── 裁剪提示注入（必须在 tool 结果消息之后，保证 assistant.tool_calls
             #    与 role=tool 消息紧邻配对；user 提示插在中间会触发 OpenAI/vLLM 400）──
             if deferred:
-                # 注入提示：告诉 LLM 还有工具未执行，下轮继续
-                # 修复：使用 "user" 角色而非 "system"，避免添加到消息末尾时触发 400 错误
+                # 注入提示：告诉 LLM 还有工具未执行，下轮继续（角色取 user，见 bridle._build）
                 ctx.messages.append({
                     "role": "user",
                     "content": (
@@ -370,7 +369,7 @@ class Driver:
                 try:
                     if detect_batch_reading(llm_out.tool_calls, threshold=3):
                         guide = get_progressive_gathering_guide(iteration)
-                        # 修复：使用 "user" 角色而非 "system"，避免添加到消息末尾时触发 400 错误
+                        # 渐进收集引导走 user 角色（400 约束见 bridle._build）
                         ctx.messages.append({"role": "user", "content": f"[渐进收集] {guide}"})
                         logger.info("检测到批量读取，已注入渐进收集引导")
                 except Exception as e:

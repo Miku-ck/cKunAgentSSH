@@ -5,7 +5,8 @@ pydantic 默认**静默丢弃**未声明字段，于是漂移不报错、不 422
 去 —— 前面几轮的 reasoning_tokens、is_default_ssh 都是这么丢的。
 
 两侧都不该靠人肉对齐，所以这里直接读源码比对：
-- 前端：src/api/client.ts 里各 update/create 方法的 payload 类型（内联或具名接口）；
+- 前端：src/api 里各 update/create 方法的 payload 类型（内联或具名接口）；
+  ARCH-008 拆分后那份文本由 api_source 按 barrel 声明合并，读法只有一处；
 - 后端：routes/settings.py 里对应的请求模型 model_fields。
 
 方向是**不对称**的两条规则，而不是一句「两边相等」：
@@ -16,12 +17,15 @@ pydantic 默认**静默丢弃**未声明字段，于是漂移不报错、不 422
 运行: python -m pytest backend/tests/test_settings_key_contract_round22.py -v
 """
 import re
+import sys
 from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from api_source import SOURCE_LABEL, frontend_api_source  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[2]
-CLIENT_TS = ROOT / "src" / "api" / "client.ts"
 
 
 # ── TS 侧抽取 ───────────────────────────────────────────────────────────────
@@ -73,7 +77,7 @@ def _keys_of_object(block: str) -> set[str]:
 def _resolve_interface(name: str, src: str) -> set[str]:
     m = re.search(rf"export interface {name}\s*\{{", src)
     if not m:
-        raise AssertionError(f"client.ts 里找不到接口 {name}")
+        raise AssertionError(f"{SOURCE_LABEL} 里找不到接口 {name}")
     return _keys_of_object(_balanced(src, m.end() - 1))
 
 
@@ -85,7 +89,7 @@ def _payload_keys(method: str, src: str) -> set[str]:
     """
     m = re.search(rf"\n\s*{method}\s*[:(]", src)
     if not m:
-        raise AssertionError(f"client.ts 里找不到方法 {method}")
+        raise AssertionError(f"{SOURCE_LABEL} 里找不到方法 {method}")
     head = src[m.start():m.start() + 1200]
     pm = re.search(r"\b(?:payload|data|req)\s*:\s*", head)
     if not pm:
@@ -121,7 +125,7 @@ CONTRACTS = [
 
 @pytest.fixture(scope="module")
 def client_src():
-    return CLIENT_TS.read_text(encoding="utf-8")
+    return frontend_api_source()
 
 
 @pytest.fixture(scope="module")
@@ -157,7 +161,7 @@ def test_backend_required_keys_are_all_sent(method, model, client_src, models):
 def test_model_default_mode_enum_matches_backend(client_src, models):
     # 只吃一行：`[^;]+` 会跨行吞到下一个分号，把无关的字面量都算进枚举
     m = re.search(r"export type ModelDefaultMode\s*=\s*([^\n]+)", client_src)
-    assert m, "client.ts 里找不到 ModelDefaultMode"
+    assert m, f"{SOURCE_LABEL} 里找不到 ModelDefaultMode"
     ts = set(re.findall(r"'(\w+)'", m.group(1)))
     py = set(models.DefaultMode.__args__)
     assert ts == py, f"档位枚举漂移：前端 {sorted(ts)} ⇄ 后端 {sorted(py)}"
@@ -183,7 +187,7 @@ def test_guard_actually_catches_renamed_key(old, new, models):
     没有这条，抽取逻辑若写错（读不到键、或键集恒等于后端），上面两条规则会
     一路"通过"，成为摆设 —— 跨层契约测试最常见的失效方式。
     """
-    src = CLIENT_TS.read_text(encoding="utf-8")
+    src = frontend_api_source()
     iface = _balanced(src, src.index("{", re.search(r"export interface MemorySettings\b", src).end()))
     mutated_keys = _keys_of_object(iface.replace(f"{old}:", f"{new}:"))
     accepted = set(models.MemorySettingsRequest.model_fields)

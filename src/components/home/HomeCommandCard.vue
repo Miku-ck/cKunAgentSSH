@@ -219,8 +219,8 @@ function onKeydown(e: KeyboardEvent) {
 
 onMounted(() => {
   void sshAi.fetchDefaultModel()
-  // 技能清单原先只在 SideChatPanel 的 setup 里装载（:513），而右侧 AI 面板没开时
-  // 那个组件根本不挂载 —— 首页的 ＋ 菜单就会永远空着。空表才装，不重复扫盘。
+  // 技能清单原先只在 SideChatPanel 的 setup 里装载（那边的 `void skillStore.loadBuiltinSkills()`），
+  // 而右侧 AI 面板没开时那个组件根本不挂载 —— 首页的 ＋ 菜单就会永远空着。空表才装，不重复扫盘。
   if (!skillsStore.skills.length) void skillsStore.loadBuiltinSkills()
 })
 </script>

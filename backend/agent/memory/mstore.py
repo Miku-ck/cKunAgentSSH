@@ -15,6 +15,14 @@ from .text import tokenize
 
 _ACTIVE_STATUSES = ("active", "pending_reconcile")
 
+# job 类型（memory_jobs.kind 值域）。常量归位到存储侧：post_processor 等投递方
+# 只依赖 mstore 即可拿到 kind，不必反向 import reconcile —— 否则与
+# reconcile→post_processor 的 LLM 复用边（_call_llm_with_timeout）构成环。
+JOB_EPISODIC = "episodic_summary"
+JOB_CANDIDATE = "candidate_fact"
+JOB_AGENT_ADD = "agent_add"
+JOB_BACKFILL = "backfill_reconcile"
+
 _fts_flag: "bool | None" = None
 
 

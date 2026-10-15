@@ -467,6 +467,9 @@ import HistoryPanel from '@/components/chat/HistoryPanel.vue'
 import { useResizablePanel } from '@/composables/useResizablePanel'
 import { useModelSelector } from '@/composables/useModelSelector'
 import { useSettings } from '@/composables/useSettings'
+// ARCH-009：输入区三浮层（+ 姿态菜单 / / 技能菜单 / 审批下拉）的状态、过滤、
+// 键盘索引与外点关闭监听收编；本组件保留编排（互斥 watch、键盘分发、发送装配）
+import { useSkillMenu, usePlusMenu, usePermMenu } from '@/composables/useChatMenus'
 import { useAgentStore } from '@/stores/agent'
 import { useSettingsStore } from '@/stores/settings'
 import { useSkillStore } from '@/stores/skills'
@@ -586,21 +589,13 @@ function removePendingFile(fileId: string) {
 //   点亮 = 只读强制 + 计划姿态成对下发，再点退出；工具条权限下拉显示同一个状态；
 // - 「技能」从已启用清单里挑一个（与 / 触发同源），选中的以 skill-tags 呈现 ——
 //   它不是开关，所以菜单里不给勾选态。
+// ARCH-009：菜单状态/过滤/键盘索引/外点关闭监听收编进 useChatMenus 的三个
+// composable（下方接线），本组件保留 activeMode 姿态与开关本体（它们同时驱动
+// 工具条 chip 与发送装配，菜单只是入口之一）。
 // 原先这里还有第四行「插件」，整行置灰写着"尚未接入"：全仓没有插件清单也没有
 // 加载端（backend 下 grep plugin 零命中），点亮后请求体一字不变。2026-09-30 随
 // 首页 ＋ 菜单同一裁决把它删了（spec §6 的「已裁定不做」表记着证据）—— 留一个
 // 永远点不亮的行不是"入口位"，是让用户替我们做本该我们做的判断。
-type CapKey = 'goal' | 'plan' | 'skill'
-/**
- * 键盘导航顺序 —— 必须与 DOM 里的视觉顺序一致，否则 ↑↓ 会「跳着走」。
- * 行上的高亮/悬停一律走 plusIdx(key) 取，不写死数字：写过一次死索引，DOM 里删了
- * 一行而数组没动，aria-activedescendant 就指到一个不存在的元素上。
- */
-const CAP_KEYS: CapKey[] = ['goal', 'plan', 'skill']
-const plusIdx = (key: CapKey) => CAP_KEYS.indexOf(key)
-
-const showPlusMenu = ref(false)
-const plusActiveIdx = ref(0)
 
 const sshAi = useSshAiStore()
 /**
@@ -621,60 +616,29 @@ const activeMode = computed<PostureKey | null>({
   set: v => sshAi.setPosture(v),
 })
 
-/** aria-activedescendant 目标 id（与 / 技能菜单同一无障碍模式） */
-const plusActiveOptionId = computed(() => {
-  const key = CAP_KEYS[plusActiveIdx.value]
-  return key ? `plus-opt-${key}` : undefined
+// ── / 斜杠技能菜单（状态收编 useChatMenus.useSkillMenu）──
+const {
+  showSkillMenu, skillActiveIdx, filteredSkills, activeSkillOptionId,
+  detectSkillTrigger, closeSkillMenu, openSkillMenuFromPlus, pickSkill,
+} = useSkillMenu({
+  inputRef,
+  inputText,
+  enabledSkills: () => skillStore.enabledSkills,
+  addSelectedSkill: id => sshAi.addSelectedSkill(id),
+  afterPick: autoResize,
 })
 
-function stepPlusMenu(dir: 1 | -1) {
-  const n = CAP_KEYS.length
-  plusActiveIdx.value = (plusActiveIdx.value + dir + n) % n
-}
-
-function togglePlusMenu() {
-  if (showPlusMenu.value) {
-    closePlusMenu()
-    return
-  }
-  if (props.agentRunning) return
-  showPlusMenu.value = true
-  plusActiveIdx.value = 0
-  // 焦点留在输入框：键盘导航由 handleKeydown 统一处理（同 / 技能菜单的手感）
-  nextTick(() => inputRef.value?.focus())
-}
-
-function closePlusMenu(refocus = false) {
-  if (!showPlusMenu.value) return
-  showPlusMenu.value = false
-  plusActiveIdx.value = 0
-  if (refocus) nextTick(() => inputRef.value?.focus())
-}
-
-/** 菜单项选择：目标 → 姿态开关（点亮即注入目标姿态，再点回到未表态）；
- *  计划 → 权限模式开关（再点一次退出，回到未表态）；
- *  技能 → 打开既有技能清单。 */
-function pickCap(key: CapKey) {
-  // 目标：纵向姿态开关，随下一次发送传给后端作为姿态提示；点亮态同时驱动工具条 chip
-  if (key === 'goal') {
-    toggleGoalMode()
-    closePlusMenu(true)
-    return
-  }
-  // 计划：不是「选一个姿态」而是开关 —— 点亮即只读强制 + 计划提示词成对下发，
-  // 再点退出（回到未表态，不是目标姿态）。它是独立于审批下拉的另一条轴（plan 姿态下下拉休眠）。
-  if (key === 'plan') {
-    togglePlanMode()
-    closePlusMenu(true)
-    return
-  }
-  // 技能：打开既有技能清单（与「/」触发同一条路径），选中的以 skill-tags 呈现
-  if (key === 'skill') {
-    closePlusMenu(true)
-    openSkillMenuFromPlus()
-    return
-  }
-}
+// + 号姿态菜单（状态收编 useChatMenus.usePlusMenu）
+const {
+  showPlusMenu, plusActiveIdx, plusActiveOptionId, plusIdx,
+  stepPlusMenu, togglePlusMenu, closePlusMenu, pickCap, pickActiveCap,
+} = usePlusMenu({
+  agentRunning: () => !!props.agentRunning,
+  inputRef,
+  toggleGoalMode,
+  togglePlanMode,
+  openSkillMenuFromPlus,
+})
 
 // ── 权限模式（发往后端的 AgentRunRequest.permission_mode）──
 /**
@@ -709,49 +673,21 @@ const permLabel = computed(() => PERMISSION_LABELS[permMode.value])
 /** 盾里的档位记号：手动空盾、自动闪电、只读计划一横（run-modes 的 PERM_MARKS）。 */
 const permMark = computed(() => PERM_MARKS[permMode.value])
 
-const showPermMenu = ref(false)
 const permMenuRef = ref<HTMLElement | null>(null)
 const permTriggerRef = ref<HTMLButtonElement | null>(null)
 
-/** 菜单项（role=option）—— 键盘导航直接作用于真实 DOM，不另存一份索引状态，
- *  避免索引与 DOM 顺序（未来增删选项时）静默错位。 */
-function permOptionEls(): HTMLElement[] {
-  const root = permMenuRef.value
-  if (!root) return []
-  return Array.from(root.querySelectorAll<HTMLElement>('[role="option"]'))
-}
-
-function openPermMenu() {
-  if (props.agentRunning || isPlanMode.value) return
-  closePlusMenu()
-  closeSkillMenu()
-  showPermMenu.value = true
-  // 焦点移进菜单（button + role=listbox 的标准做法）：不这么做 ↑↓ 没有落点，
-  // 而输入框的 handleKeydown 不接管这个菜单。
-  nextTick(() => {
-    const els = permOptionEls()
-    const idx = PERM_OPTIONS.findIndex(o => o.key === approvalMode.value)
-    els[idx >= 0 ? idx : 0]?.focus()
-  })
-}
-
-function closePermMenu(refocus = false) {
-  if (!showPermMenu.value) return
-  showPermMenu.value = false
-  if (refocus) nextTick(() => permTriggerRef.value?.focus())
-}
-
-function togglePermMenu() {
-  if (showPermMenu.value) closePermMenu(true)
-  else openPermMenu()
-}
-
-/** 审批档选择（纯审批轴）：不再触碰姿态 —— plan 的开关只在 + 菜单，
- *  两轴交汇发生在 resolveRunModes（plan 姿态下审批档休眠）。 */
-function pickPerm(key: ApprovalKey) {
-  sshAi.setApprovalMode(key)
-  closePermMenu(true)
-}
+// 审批档下拉（状态收编 useChatMenus.usePermMenu；plan 姿态下休眠）
+const {
+  showPermMenu, openPermMenu, closePermMenu, togglePermMenu, pickPerm, handlePermMenuKeydown,
+} = usePermMenu({
+  agentRunning: () => !!props.agentRunning,
+  isPlanMode: () => isPlanMode.value,
+  approvalMode: () => approvalMode.value,
+  permMenuRef,
+  permTriggerRef,
+  closeOthers: () => { closePlusMenu(); closeSkillMenu() },
+  onPick: key => sshAi.setApprovalMode(key),
+})
 
 /** + 菜单「目标」项 = 取反目标姿态。默认未表态（null），所以 chip 不是常驻的：
  *  选了才亮，× 或再点一次即关 —— 与「计划」同为一个可关的开关，而非二选一单选。 */
@@ -870,50 +806,6 @@ function clearChip(kind: PostureKey) {
   openChip.value = null
 }
 
-/** Enter/Space 由按钮自身的 click 处理，这里只管方向键与退出 */
-function handlePermMenuKeydown(e: KeyboardEvent) {
-  const els = permOptionEls()
-  if (els.length === 0) return
-  const cur = els.indexOf(document.activeElement as HTMLElement)
-  if (e.key === 'ArrowDown') {
-    e.preventDefault()
-    els[(cur + 1 + els.length) % els.length]?.focus()
-    return
-  }
-  if (e.key === 'ArrowUp') {
-    e.preventDefault()
-    els[(cur - 1 + els.length) % els.length]?.focus()
-    return
-  }
-  if (e.key === 'Home') {
-    e.preventDefault()
-    els[0]?.focus()
-    return
-  }
-  if (e.key === 'End') {
-    e.preventDefault()
-    els[els.length - 1]?.focus()
-    return
-  }
-  if (e.key === 'Escape') {
-    e.preventDefault()
-    closePermMenu(true)
-    return
-  }
-  // Tab 移出即关（焦点交给下一个控件），不抢它的默认行为
-  if (e.key === 'Tab') closePermMenu()
-}
-
-// 点 .perm-wrap 以外区域关闭（同 .skill-menu / .plus-menu 的外点策略）
-function onDocClickOutsidePermMenu(e: MouseEvent) {
-  if (!showPermMenu.value) return
-  const target = e.target as HTMLElement | null
-  if (target && target.closest?.('.perm-wrap')) return
-  closePermMenu()
-}
-onMounted(() => document.addEventListener('mousedown', onDocClickOutsidePermMenu))
-onUnmounted(() => document.removeEventListener('mousedown', onDocClickOutsidePermMenu))
-
 // 点 .chip-wrap 以外区域收起详情（同 .perm-wrap 的外点策略）。
 // 命中任一 .chip-wrap 都不关：点另一枚 chip 的主体时 toggleChipDetail 自己会切换过去。
 function onDocClickOutsideChip(e: MouseEvent) {
@@ -933,29 +825,6 @@ watch(showPermMenu, (v) => { if (v) { closePlusMenu(); closeSkillMenu(); closeCh
 /** 选中的技能存在 ssh-ai store：首页 ＋ 菜单与这里必须同一份，各存一份就是第二条
  *  通路（用户在首页挑了技能、侧栏发出去却没带）。写入一律整份覆写，见 store 注释。 */
 const selectedSkillIds = computed(() => sshAi.selectedSkillIds)
-const showSkillMenu = ref(false)
-const skillQuery = ref('')
-const skillActiveIdx = ref(0)
-
-/** 根据查询串过滤技能 */
-const filteredSkills = computed(() => {
-  const q = skillQuery.value.toLowerCase().trim()
-  const list = skillStore.enabledSkills
-  if (!q) return list.slice(0, 8)
-  return list
-    .filter(s =>
-      s.name.toLowerCase().includes(q) ||
-      s.slug.toLowerCase().includes(q) ||
-      (s.description || '').toLowerCase().includes(q),
-    )
-    .slice(0, 8)
-})
-
-/** aria-activedescendant 目标 id（C-review NIT：技能菜单无障碍） */
-const activeSkillOptionId = computed(() => {
-  const item = filteredSkills.value[skillActiveIdx.value]
-  return item ? `skill-opt-${item.id}` : undefined
-})
 
 /** 已选技能标签（用于 UI 展示） */
 const selectedSkillTags = computed(() => {
@@ -978,111 +847,9 @@ function onInput() {
   detectSkillTrigger()
 }
 
-/** 触发菜单的 '/' 在输入框中的下标（选中技能后要抹掉整段 "/query"） */
-let skillTriggerPos = -1
-
-/** 检测 / 触发技能菜单 */
-function detectSkillTrigger() {
-  const el = inputRef.value
-  if (!el) return
-  const pos = el.selectionStart
-  const text = inputText.value.slice(0, pos)
-  const lastSlash = text.lastIndexOf('/')
-  if (lastSlash === -1) { closeSkillMenu(); return }
-
-  // 触发符前必须是空白或行首（避免路径、URL 误触发）
-  if (lastSlash > 0) {
-    const charBefore = text[lastSlash - 1]
-    if (charBefore && !/\s/.test(charBefore)) { closeSkillMenu(); return }
-  }
-
-  // / 后到光标位置之间不能有空白
-  const segment = text.slice(lastSlash + 1, pos)
-  if (/\s/.test(segment)) { closeSkillMenu(); return }
-
-  skillQuery.value = segment
-  skillActiveIdx.value = 0
-  skillTriggerPos = lastSlash
-  showSkillMenu.value = true
-}
-
-function closeSkillMenu() {
-  showSkillMenu.value = false
-  skillQuery.value = ''
-  skillActiveIdx.value = 0
-  skillTriggerPos = -1
-}
-
-/**
- * 从 + 菜单打开技能清单：与「/」触发复用同一份 filteredSkills/键盘导航，
- * 区别只是不经输入框文本 —— 故触发位置置 -1，pickSkill 会跳过「抹除 /query」
- * 那一步（它已按 skillTriggerPos >= 0 守卫），点选后焦点回到输入框。
- */
-function openSkillMenuFromPlus() {
-  skillQuery.value = ''
-  skillActiveIdx.value = 0
-  skillTriggerPos = -1
-  showSkillMenu.value = true
-}
-
 // + 号菜单与 / 技能菜单互斥：两者浮在同一输入区，需要保证同时只开一个
 watch(showPlusMenu, (v) => { if (v) closeSkillMenu() })
 watch(showSkillMenu, (v) => { if (v) closePlusMenu() })
-
-// 审查修复（P2）：点击菜单外区域关闭技能菜单 — 原实现只有 Esc/选中/失焦
-// 能关，鼠标点输入区外（如消息列表）菜单残留，视觉像死菜单
-function onDocClickOutsideSkillMenu(e: MouseEvent) {
-  if (!showSkillMenu.value) return
-  const target = e.target as HTMLElement | null
-  // 菜单自身或输入框内的点击不关闭（菜单项点击走 pickSkill 自行关闭）
-  if (target && target.closest?.('.skill-menu')) return
-  if (inputRef.value?.contains(target)) return
-  closeSkillMenu()
-}
-// 同理（+ 号菜单）：点菜单/按钮以外区域关闭。.plus-wrap 内含触发按钮与菜单，
-// 按钮自行处理开合，故容器内的 mousedown 不在此关闭。
-function onDocClickOutsidePlusMenu(e: MouseEvent) {
-  if (!showPlusMenu.value) return
-  const target = e.target as HTMLElement | null
-  if (target && target.closest?.('.plus-wrap')) return
-  closePlusMenu()
-}
-onMounted(() => {
-  document.addEventListener('mousedown', onDocClickOutsideSkillMenu)
-  document.addEventListener('mousedown', onDocClickOutsidePlusMenu)
-})
-onUnmounted(() => {
-  document.removeEventListener('mousedown', onDocClickOutsideSkillMenu)
-  document.removeEventListener('mousedown', onDocClickOutsidePlusMenu)
-})
-
-/** 选中技能：加入 selectedSkillIds（输入框上方以标签展示）。
- *  C-review NIT：原实现同时在输入框插入 "@技能名" 文本 — 文本与 skillIds
- *  双重注入可漂移（手动删文本技能仍附加 / 删标签文本残留在消息里）。
- *  现以 skillIds 为单一数据源，标签提供视觉反馈。 */
-function pickSkill(skill: { id: string; name: string }) {
-  const el = inputRef.value
-  // 抹掉唤起菜单的 "/query" 片段：斜杠只是触发符，留在输入框里会被当成正文发出去。
-  // （早先的实现用 "@技能名" 文本替换它，改为 skillIds 单一数据源时把替换一起删了）
-  let caretPos = -1
-  if (skillTriggerPos >= 0) {
-    const end = el?.selectionStart ?? inputText.value.length
-    inputText.value = inputText.value.slice(0, skillTriggerPos) + inputText.value.slice(end)
-    caretPos = skillTriggerPos
-  }
-  // 语义保持原样：斜杠菜单点已选中的技能是"不加"，不是取消（取消走标签的 ×）
-  sshAi.addSelectedSkill(skill.id)
-  closeSkillMenu()
-  requestAnimationFrame(() => {
-    if (el && caretPos >= 0) {
-      el.focus()
-      el.setSelectionRange(caretPos, caretPos)
-    } else {
-      inputRef.value?.focus()
-    }
-    autoResize()
-  })
-}
 
 function removeSkill(id: string) {
   sshAi.removeSelectedSkill(id)
@@ -1186,8 +953,7 @@ function handleKeydown(e: KeyboardEvent) {
     }
     if (e.key === 'Enter' || e.key === 'Tab') {
       e.preventDefault()
-      const key = CAP_KEYS[plusActiveIdx.value]
-      if (key) pickCap(key)
+      pickActiveCap()
       return
     }
     if (e.key === 'Escape') {

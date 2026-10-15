@@ -234,7 +234,7 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
               <div class="dk-info">
                 <span class="dk-name">{{ conn.name }}</span>
-                <span class="dk-host">{{ conn.username }}@{{ conn.host }}:{{ conn.port }}</span>
+                <span class="dk-host">{{ conn.username }}@{{ conn.host }}:{{ conn.port }}<span v-if="connNote(conn)" class="dk-note" :title="connNote(conn)">{{ connNote(conn) }}</span></span>
               </div>
               <svg v-if="connecting && pendingConnId === conn.id" class="dk-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/></svg>
             </div>
@@ -317,7 +317,7 @@
                   <template v-if="volInspect.usage">
                     <span class="k">引用容器</span><span class="v">{{ volInspect.usage?.refCount ?? '—' }}</span>
                     <template v-if="typeof volInspect.usage?.size === 'number'">
-                      <span class="k">占用空间</span><span class="v">{{ humanSize(volInspect.usage?.size) || '—' }}</span>
+                      <span class="k">占用空间</span><span class="v">{{ formatBytesCompact(volInspect.usage?.size) || '—' }}</span>
                     </template>
                   </template>
                 </div>
@@ -445,7 +445,7 @@
 // 命令构造/解析/错误归类委托 docker-core.ts；本页只做 sshExec 编排与状态管理。
 import { computed, nextTick, ref, watch, onUnmounted } from 'vue'
 import { toFriendlyMessage } from '@/api/client'
-import { useSSHStore, type SSHConnection } from '@/stores/ssh'
+import { connNote, useSSHStore, type SSHConnection } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
 import {
@@ -455,11 +455,12 @@ import {
   volumeInspectCmd, networkInspectCmd,
   parsePs, parseImages, parseVolumes, parseNetworks, parseLogs, imageLabel, imageHaystack,
   labelHint,
-  parseVolumeInspect, parseNetworkInspect, humanSize,
+  parseVolumeInspect, parseNetworkInspect,
   dockerErrorFromResult, describeThrownDockerError,
   type ContainerRow, type ImageRow, type VolumeRow, type NetworkRow, type DockerError,
   type VolumeInspect, type NetworkInspect,
 } from '@/stores/docker-core'
+import { formatBytesCompact } from '@/utils/format'
 
 const sshStore = useSSHStore()
 const toast = useToastStore()
@@ -989,7 +990,7 @@ watch(targetId, () => {
   void loadAll()
 }, { immediate: true })
 // 任一详情弹窗打开时挂 Esc；三个选中均为 null 时卸监。容器开日志，卷/网络开已在 click 里拉取。
-// 同时 watch 选中项 → 确保重选同一行时不重复拉 inspect（已在 openXXXDetail 里取）
+// 同时 watch 选中项 → 确保重选同一行时不重复拉 inspect（inspect 已在 openVolumeDetail / openNetworkDetail 里取过）
 function onDetailKey(e: KeyboardEvent) {
   if (e.key !== 'Escape') return
   if (selected.value) selected.value = null
@@ -1314,6 +1315,8 @@ onUnmounted(() => {
 .dk-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .dk-name { font-size: 13px; color: var(--text-primary); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dk-host { font-size: 11px; color: var(--text-tertiary); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 连接选择器上的备注：跟在主机行后，同仪表盘快连卡片口径 */
+.dk-note { margin-left: 6px; font-family: var(--font-sans); color: var(--text-secondary); }
 .dk-spinner { width: 16px; height: 16px; animation: dk-spin .8s linear infinite; flex-shrink: 0; }
 @keyframes dk-spin { to { transform: rotate(360deg); } }
 </style>

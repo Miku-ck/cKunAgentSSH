@@ -8,9 +8,8 @@
  * - 骨架照抄 ssh-store.ts：写队列串行化 / tmp+rename 原子写 / 损坏文件隔离。
  */
 import { app } from 'electron'
-import { join, dirname } from 'path'
-import { readFile, writeFile, rename, mkdir, unlink } from 'fs/promises'
-import { existsSync } from 'fs'
+import { join } from 'path'
+import { JsonFileStore } from './utils/json-file-store'
 import { isPort, portRangeError } from '../shared/port-core'
 
 export type TunnelType = 'local' | 'remote' | 'dynamic'
@@ -108,88 +107,22 @@ function validateRule(rule: TunnelRule, all: TunnelRule[]): void {
   }
 }
 
-async function readAllFromDisk(): Promise<TunnelRule[]> {
-  const path = getStorePath()
-  if (!existsSync(path)) return []
-  let raw: string
-  try {
-    raw = await readFile(path, 'utf-8')
-  } catch (e) {
-    // 同 ssh-store E-2 口径：读失败向上抛，防止后续写以空表覆写全库
-    throw new Error(`读取隧道规则失败（文件可能被占用或权限不足，请重试）: ${e instanceof Error ? e.message : String(e)}`)
-  }
-  try {
-    const arr = JSON.parse(raw)
-    if (!Array.isArray(arr)) {
-      await quarantineCorruptFile(path, raw)
-      return []
-    }
-    const valid = arr.filter(
-      (r): r is TunnelRule =>
-        !!r && typeof r === 'object' && typeof (r as { id?: unknown }).id === 'string',
-    )
-    if (valid.length !== arr.length) {
-      console.warn(`[TunnelStore] 含 ${arr.length - valid.length} 条无 id 损坏条目，已跳过`)
-    }
-    return valid
-  } catch {
-    console.warn('[TunnelStore] tunnels.json 损坏（JSON 解析失败），已隔离原文件')
-    await quarantineCorruptFile(path, raw)
-    return []
-  }
-}
-
-async function quarantineCorruptFile(path: string, raw: string): Promise<void> {
-  try {
-    const bak = `${path}.corrupt-${Date.now()}.bak`
-    try {
-      await rename(path, bak)
-    } catch {
-      await writeFile(bak, raw, 'utf-8')
-    }
-    console.warn(`[TunnelStore] 损坏文件已备份到: ${bak}`)
-  } catch (e) {
-    console.warn('[TunnelStore] 备份损坏文件失败:', e)
-  }
-}
-
-async function writeAllToDisk(records: TunnelRule[]): Promise<void> {
-  const path = getStorePath()
-  await mkdir(dirname(path), { recursive: true })
-  const tmpPath = path + '.tmp'
-  await writeFile(tmpPath, JSON.stringify(records, null, 2), 'utf-8')
-  // Windows rename 到已存在目标可能 EPERM/EBUSY：重试一次后回退直写（与 ssh-store 同款）
-  try {
-    await rename(tmpPath, path)
-  } catch (err: any) {
-    if (err && (err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'EBUSY')) {
-      await new Promise(r => setTimeout(r, 200))
-      try {
-        await rename(tmpPath, path)
-        return
-      } catch {
-        await writeFile(path, JSON.stringify(records, null, 2), 'utf-8')
-        try { await unlink(tmpPath) } catch { /* ignore */ }
-      }
-    } else {
-      throw err
-    }
-  }
-}
-
 export class TunnelStore {
-  /** 读-改-写串行化（同 ssh-store：防并发写互相覆写丢更新） */
-  private writeQueue: Promise<unknown> = Promise.resolve()
+  /** 骨架收编（ARCH-007）：写队列/原子写/损坏隔离/读失败上抛统一走 JsonFileStore */
+  private readonly file = new JsonFileStore<TunnelRule>({
+    path: getStorePath(),
+    logTag: '[TunnelStore]',
+    label: '隧道规则',
+  })
 
+  /** 读-改-写串行化（防并发写互相覆写丢更新），委托 JsonFileStore 队列 */
   private enqueue<T>(op: () => Promise<T>): Promise<T> {
-    const run = this.writeQueue.then(op, op)
-    this.writeQueue = run.then(() => undefined, () => undefined)
-    return run
+    return this.file.enqueue(op)
   }
 
   async list(): Promise<TunnelRule[]> {
     try {
-      return await readAllFromDisk()
+      return await this.file.readAll()
     } catch (e) {
       console.error('[TunnelStore] list 读取失败，降级为空列表:', e)
       return []
@@ -197,7 +130,7 @@ export class TunnelStore {
   }
 
   async get(id: string): Promise<TunnelRule | null> {
-    const records = await readAllFromDisk()
+    const records = await this.file.readAll()
     return records.find(r => r.id === id) ?? null
   }
 
@@ -206,7 +139,7 @@ export class TunnelStore {
   }
 
   private async doSave(input: TunnelRule): Promise<TunnelRule> {
-    const records = await readAllFromDisk()
+    const records = await this.file.readAll()
     const now = Date.now()
     const idx = records.findIndex(r => r.id === input.id)
     let record: TunnelRule
@@ -219,7 +152,7 @@ export class TunnelStore {
     validateRule(record, records)
     if (idx !== -1) records[idx] = record
     else records.push(record)
-    await writeAllToDisk(records)
+    await this.file.writeAll(records)
     return record
   }
 
@@ -228,10 +161,10 @@ export class TunnelStore {
   }
 
   private async doDelete(id: string): Promise<void> {
-    const records = await readAllFromDisk()
+    const records = await this.file.readAll()
     const filtered = records.filter(r => r.id !== id)
     if (filtered.length !== records.length) {
-      await writeAllToDisk(filtered)
+      await this.file.writeAll(filtered)
     }
   }
 }

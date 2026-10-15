@@ -131,6 +131,10 @@ class Bridle:
 
     def _build(self, ctx: RunContext) -> list[dict[str, str]]:
         """按当前 ctx 状态组装 messages（含已持久化的摘要），不触发压缩"""
+        # 400 约束的单一口径（其它注入点引用这里，别再各写一份）：OpenAI/vLLM 要求
+        # system 消息只能出现在开头，插到末尾即报 400。所以 driver.py / reins/guards.py
+        # 里末尾注入的纠偏、引导、提示一律走 "user" 角色；而已经躺在 ctx.history /
+        # ctx.messages 里的 system，由下面两处循环统一提到顶部。
         system_msgs: list[dict[str, str]] = []
         other_msgs: list[dict[str, str]] = []
 
@@ -160,8 +164,7 @@ class Bridle:
 
         # 3.5 上下文摘要注入（压缩后保留的早期 run 对话摘要）
         # 置于 history 之后、近期 run 之前：摘要浓缩的是本轮早期 run 消息，
-        # 时间上位于 history 之后，顺序符合时间线。
-        # 修复：使用 "user" 角色而非 "system"，避免 system 消息不在开头触发 400 错误
+        # 时间上位于 history 之后，顺序符合时间线。角色取 user，见本方法顶部的 400 约束。
         summary = ctx.metadata.get("context_summary")
         if summary:
             other_msgs.append({"role": "user", "content": f"[上下文摘要]\n{summary}"})
@@ -356,7 +359,7 @@ class Bridle:
         if prior_part is not None:
             summary_parts.append(prior_part)
 
-        # 修复：使用 "user" 角色而非 "system"，避免 system 消息不在开头触发 400 错误
+        # 摘要作为注入内容置于近期消息之前，但角色仍取 user（400 约束见 _build 顶部）
         summary_text = "以下是之前对话的摘要:\n" + "\n".join(summary_parts)
         summary_msg = {"role": "user", "content": summary_text}
 

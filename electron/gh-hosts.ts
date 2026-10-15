@@ -20,6 +20,9 @@ import {
   applyHostsBlock,
   githubHostsDomains,
   hasHostsBlock,
+  hostsBlockAgeDays,
+  hostsBlockGeneratedAt,
+  isHostsBlockStale,
   isValidIPv4,
   removeHostsBlock,
   HOSTS_BLOCK_BEGIN,
@@ -43,6 +46,16 @@ export interface HostsStatus {
   writable: boolean
   /** 托管块内容（便于 UI 展示当前生效的优选结果） */
   entries: { domain: string; ip: string }[]
+  /** 块的生成时间原文（ISO 串）；null = 块里没有可比对的 `# generated:` 行 */
+  generatedAt: string | null
+  /**
+   * 块写入至今的天数；null = 块里没有可比对的生成时间戳（旧版本或手改的块）。
+   * 优选 IP 是某一次测速的快照，写进系统 hosts 后不会自己更新，所以必须让 UI 能说
+   * "这是 N 天前测的 / 时效未知"，否则 GitHub 轮换 IP 后加速变成阻断而无人知。
+   */
+  staleDays: number | null
+  /** 是否该提示重选（超阈值或时效未知） */
+  stale: boolean
   message?: string
 }
 
@@ -50,6 +63,14 @@ const TCP_TEST_TIMEOUT_MS = 4000
 
 function hostsPath(): string {
   return join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'drivers', 'etc', 'hosts')
+}
+
+/**
+ * PowerShell 单引号字符串字面量。
+ * 路径里的单引号是合法字符（用户名可含 `'`），不翻倍转义会把命令拼成语法错误。
+ */
+function psLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
 }
 
 /** HTTPS GET JSON（DoH），带超时与单次重定向 */
@@ -89,24 +110,44 @@ function extractARecords(json: any): string[] {
 }
 
 /**
- * 并发向四个公共 DoH 解析，取并集：
- * - alidns / doh.pub：国内直连可达（实测 dns.google 超时、cloudflare ECONNRESET，
- *   只有这两家活——它们是 M3 在无代理环境下成立的前提）
- * - dns.google / cloudflare：海外备用
+ * 向公共 DoH 解析取并集，国内源优先：
+ * 1. 先并发 alidns / doh.pub（国内直连可达，实测 <1s 返回）——拿到 ≥1 个 IP 立即返回，
+ *    不等海外源；否则每个域名都要白等 dns.google 超时 / cloudflare ECONNRESET 的 6s，
+ *    8 个域名并行下整体 pick 仍被最慢源拖到 6s+。
+ * 2. 国内源全挂（无结果）才退 dns.google / cloudflare（海外备用）。
  */
 async function resolveViaDoh(domain: string): Promise<string[]> {
-  const urls = [
+  const domestic = [
     `https://dns.alidns.com/resolve?name=${domain}&type=A`,
     `https://doh.pub/dns-query?name=${domain}&type=A`,
+  ].map(u => fetchJson(u))
+  // 海外源仍然并发发起（真要走兜底时不该多等一次冷启动的 6s），但先挂一个吞掉
+  // 失败的 handler：国内源命中时下面会直接 return，这一批 promise 再没人 await，
+  // 它们的 ECONNRESET / 超时就会落到 main.ts 的 unhandledRejection 上，把"真出了
+  // 没人管的问题"埋进一堆本来就不打算采用的失败里。挂 handler 只改变是否惊动全局，
+  // 值与拒绝原因原样保留，兜底路径的 allSettled 判定不受影响。
+  const unimportant = (p: Promise<unknown>): Promise<unknown> => {
+    p.catch(() => { /* 结果未被采用即无所谓失败 */ })
+    return p
+  }
+  const overseas = [
     `https://dns.google/resolve?name=${domain}&type=A`,
     `https://cloudflare-dns.com/dns-query?name=${domain}&type=A`,
-  ]
-  const results = await Promise.allSettled(urls.map(u => fetchJson(u)))
-  const ips = new Set<string>()
-  for (const r of results) {
-    if (r.status === 'fulfilled') for (const ip of extractARecords(r.value)) ips.add(ip)
+  ].map(u => unimportant(fetchJson(u)))
+
+  const collect = async (jobs: Promise<unknown>[]): Promise<Set<string>> => {
+    const results = await Promise.allSettled(jobs)
+    const ips = new Set<string>()
+    for (const r of results) {
+      if (r.status === 'fulfilled') for (const ip of extractARecords(r.value)) ips.add(ip)
+    }
+    return ips
   }
-  return [...ips]
+
+  const fast = await collect(domestic)
+  if (fast.size > 0) return [...fast]
+  const slow = await collect(overseas)
+  return [...slow]
 }
 
 /** TCP connect:443 测速；失败返回 null */
@@ -166,13 +207,24 @@ export class GhHostsService {
     try {
       const content = await readFile(path, 'utf-8')
       const entries = parseBlockEntries(content)
-      return { applied: hasHostsBlock(content), path, writable: true, entries }
-    } catch (e: any) {
-      if (e?.code === 'ENOENT') return { applied: false, path, writable: false, entries: [], message: 'hosts 文件不存在' }
-      if (e?.code === 'EACCES' || e?.code === 'EPERM') {
-        return { applied: false, path, writable: false, entries: [], message: '无权限读取 hosts（需要管理员权限）' }
+      return {
+        applied: hasHostsBlock(content),
+        path,
+        writable: true,
+        entries,
+        generatedAt: hostsBlockGeneratedAt(content),
+        staleDays: hostsBlockAgeDays(content),
+        stale: isHostsBlockStale(content),
       }
-      return { applied: false, path, writable: false, entries: [], message: e instanceof Error ? e.message : String(e) }
+    } catch (e: any) {
+      // 读不到 hosts 就没有"托管块现状"可报，时效一律 null + 不提示过期
+      // （没有块的时候催用户重选是噪声；applied=false 已经把状态说清了）
+      const base = { applied: false, path, writable: false, entries: [], generatedAt: null, staleDays: null, stale: false }
+      if (e?.code === 'ENOENT') return { ...base, message: 'hosts 文件不存在' }
+      if (e?.code === 'EACCES' || e?.code === 'EPERM') {
+        return { ...base, message: '无权限读取 hosts（需要管理员权限）' }
+      }
+      return { ...base, message: e instanceof Error ? e.message : String(e) }
     }
   }
 
@@ -222,7 +274,7 @@ export class GhHostsService {
       if (e?.code === 'EACCES' || e?.code === 'EPERM') {
         throw new Error('无权限读取 hosts（需要以管理员权限运行应用）')
       }
-      if (e?.code === 'ENOENT') return { applied: false, path, writable: true, entries: [] }
+      if (e?.code === 'ENOENT') return { applied: false, path, writable: true, entries: [], generatedAt: null, staleDays: null, stale: false }
       throw e
     }
     const next = removeHostsBlock(existing)
@@ -231,7 +283,7 @@ export class GhHostsService {
         await writeFile(path, next, 'utf-8')
       } catch (e: any) {
         if (e?.code === 'EACCES' || e?.code === 'EPERM') {
-          await this.elevatedWrite(next)
+          await this.elevatedWrite(next, 'no-block')
         } else {
           throw e
         }
@@ -244,30 +296,44 @@ export class GhHostsService {
    * 方案 A：UAC 按需提权写 hosts。
    * 内容已在主进程算好（含标记块），提权子进程只做"整文件写入"这一个动作；
    * payload 走临时 JSON 文件，避免命令行长内容与引号转义地狱。
+   * expect：'block'=写入后应存在托管块（apply 场景）；'no-block'=写入后应不存在（remove 场景）。
    */
-  private async elevatedWrite(content: string): Promise<void> {
+  private async elevatedWrite(content: string, expect: 'block' | 'no-block' = 'block'): Promise<void> {
     const path = hostsPath()
     const tmpDir = join(app.getPath('userData'), 'tmp')
     await mkdir(tmpDir, { recursive: true })
     const stamp = Date.now()
     const payloadPath = join(tmpDir, `ghaccel-hosts-${stamp}.json`)
-    const scriptPath = join(tmpDir, `ghaccel-hosts-${stamp}.ps1`)
     await writeFile(payloadPath, JSON.stringify({ path, content }), 'utf-8')
-    // 脚本只做一件事：把 payload.content 原样写入 payload.path（UTF-8 无 BOM）
+    // SEC-002：脚本不再落盘。原实现把 .ps1 写到当前用户可写的 userData/tmp，
+    // 再让提权后的 PowerShell -File 执行它 —— 同一用户的低权限进程可在写入
+    // 与执行之间替换脚本内容（TOCTOU），让 UAC 弹窗后的管理员进程执行任意
+    // 代码。改用 -EncodedCommand（Base64/UTF-16LE 内联）后磁盘只剩 payload
+    // 数据文件，不再是代码通道。
+    // SEC-002b：但 payload 仍是用户可写目录里的**数据**，管理员进程读它之前可能被改。
+    // 早先的实现把写入目标也交给 payload.path，于是"被篡改最多改写 hosts 内容"并不
+    // 成立——改掉 path 就是拿着管理员权限往任意路径写任意字节，仍是提权。现在目标
+    // 路径钉在 -EncodedCommand 里（命令一旦拼好就不再变），payload 只携带 content；
+    // 自述的 path 与钉死值不一致即判定被改，直接失败，不落盘。
     const script = [
       "$ErrorActionPreference = 'Stop'",
-      `$payload = Get-Content -LiteralPath '${payloadPath}' -Raw -Encoding UTF8 | ConvertFrom-Json`,
+      `$target = ${psLiteral(path)}`,
+      `$payload = Get-Content -LiteralPath ${psLiteral(payloadPath)} -Raw -Encoding UTF8 | ConvertFrom-Json`,
+      // 文案里不许出现下面取消判据的那几个词（取消/拒绝/提升/无法执行）：本函数用
+      // stderr 匹配它们来识别"用户在 UAC 弹窗上按了取消"，而路径不符是被篡改，
+      // 撞上同一组词就会被报成"已取消管理员授权"，把一次攻击提示说成用户自己放弃了。
+      "if ($payload.path -cne $target) { throw 'payload 目标路径与命令内钉死的路径不符，写入已中止' }",
       '$bytes = [System.Text.Encoding]::UTF8.GetBytes($payload.content)',
-      '[System.IO.File]::WriteAllBytes($payload.path, $bytes)',
+      '[System.IO.File]::WriteAllBytes($target, $bytes)',
     ].join('\r\n')
-    await writeFile(scriptPath, script, 'utf-8')
+    const encoded = Buffer.from(script, 'utf-16le').toString('base64')
 
     const result = await new Promise<{ code: number; stdout: string; stderr: string }>((resolvePromise) => {
       execFile(
         'powershell.exe',
         [
           '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Command',
-          `Start-Process powershell.exe -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','${scriptPath}'`,
+          `Start-Process powershell.exe -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand','${encoded}'`,
         ],
         { windowsHide: true, timeout: 120000 }, // UAC 弹窗可能等用户很久，60s 不够
         (err, stdout, stderr) => {
@@ -282,7 +348,6 @@ export class GhHostsService {
 
     // 清理临时文件（提权子进程已结束，删得掉；删不掉也无害）
     try { await unlink(payloadPath) } catch { /* ignore */ }
-    try { await unlink(scriptPath) } catch { /* ignore */ }
 
     if (result.code !== 0) {
       const text = `${result.stdout}\n${result.stderr}`
@@ -296,7 +361,8 @@ export class GhHostsService {
 
     // 提权子进程退出码 0 不等于写成功（用户也可能在 UAC 弹窗后仍失败）——回读校验
     const status = await this.status()
-    if (!status.applied) throw new Error('提权后 hosts 校验未通过，写入可能未生效')
+    const matched = expect === 'block' ? status.applied : !status.applied
+    if (!matched) throw new Error('提权后 hosts 校验未通过，写入可能未生效')
   }
 
   private async backupHosts(path: string): Promise<void> {

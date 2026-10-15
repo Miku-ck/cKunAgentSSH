@@ -9,7 +9,7 @@
  * 抄一份进菜单就是第二条通路。
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { useSSHStore, type SSHConnection } from '@/stores/ssh'
+import { connNote, useSSHStore, type SSHConnection } from '@/stores/ssh'
 import { LOCAL_SHELLS } from '@/composables/useSshNavigation'
 
 const emit = defineEmits<{
@@ -35,7 +35,9 @@ const connections = computed(() =>
     !q.value ||
     c.name.toLowerCase().includes(q.value) ||
     c.host.toLowerCase().includes(q.value) ||
-    c.username.toLowerCase().includes(q.value),
+    c.username.toLowerCase().includes(q.value) ||
+    // 备注参与搜索：与远程管理页搜索同口径（connNote 单一来源）
+    connNote(c).toLowerCase().includes(q.value),
   ),
 )
 const empty = computed(() => shells.value.length === 0 && connections.value.length === 0)
@@ -139,6 +141,7 @@ function pickRemote(conn: SSHConnection) {
           >
             <span class="dot" :class="{ live: ssh.isOnline(conn.id) }" />
             <span class="lbl">{{ conn.name }}</span>
+            <span v-if="connNote(conn)" class="note" :title="connNote(conn)">{{ connNote(conn) }}</span>
             <span class="meta">{{ conn.username }}@{{ conn.host }}</span>
           </button>
         </div>
@@ -242,6 +245,16 @@ function pickRemote(conn: SSHConnection) {
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 130px;
+}
+.ntm-item .note {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 64px;
+  flex-shrink: 1;
+  min-width: 0;
 }
 .dot {
   width: 6px;

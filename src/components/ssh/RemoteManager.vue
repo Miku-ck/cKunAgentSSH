@@ -135,7 +135,7 @@
 import { ref, computed, watch, onUnmounted, triggerRef, defineAsyncComponent } from 'vue'
 import ConnectionRow from './ConnectionRow.vue'
 import BulkCommandModal from './BulkCommandModal.vue'
-import { useSSHStore } from '@/stores/ssh'
+import { connNote, useSSHStore } from '@/stores/ssh'
 import type { SSHConnection } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
@@ -204,7 +204,7 @@ const filteredConnections = computed(() => {
 
   if (q) {
     list = list.filter(c => {
-      const note = c.note || (c.tags || [])[0] || ''
+      const note = connNote(c)
       return c.name.toLowerCase().includes(q) ||
         c.host.toLowerCase().includes(q) ||
         c.username.toLowerCase().includes(q) ||

@@ -37,6 +37,14 @@ files:
   - '!node_modules/**/prebuilds/darwin*/**'
   - '!node_modules/**/prebuilds/linux*/**'
   - '!node_modules/**/prebuilds/win32-arm64/**'
+  # 同上口径：conpty 的 arm64 分发（win10-arm64/ 下 OpenConsole.exe+conpty.dll 1.3 MB）
+  # 在 x64 产物里永远不会被加载，与上面 prebuilds/win32-arm64 一起排掉。
+  - '!node_modules/**/third_party/conpty/**/win10-arm64/**'
+  # 编译器的增量记账文件：typecheck 用 composite 会在 out/ 根留下 *.tsbuildinfo，
+  # 运行时没人读（实测 dist-app5 的 asar 里就带着这两枚 110 KB 的文件）。
+  - '!**/*.tsbuildinfo'
+  # 依赖自带的测试文件：!test.ts 管不到已发布的 JS，运行时同样无人引用。
+  - '!**/*.test.js'
   - '!**/*.test.ts'
 asarUnpack:
   - '**/node-pty/**'
@@ -50,6 +58,17 @@ extraResources:
       - '!__pycache__/**'
       - '!**/__pycache__/**'
       - '!*.pyc'
+      - '!*.pyo'
+      # backend/tests 是 pytest 套件（实测 15 MB，占当前 app.asar 的相当比例），
+      # 运行时一行都不引用；里面还混着 tests/_tmp 的本机测试库（memv2-test.db 等），
+      # 随包发等于把本地开发数据带进发行物。
+      - '!tests/**'
+      - '!_tmp/**'
+      # 开发期落在 backend/ 的临时库与日志：*.db 之类的脏文件不该进包
+      - '!*.db'
+      - '!*.db-shm'
+      - '!*.db-wal'
+      - '!*.log'
   # 内嵌 Python 运行时：把 Portable Python 解压到仓库根 runtime/ 即可随包分发到
   # resources/python-runtime/（解析逻辑见 electron/backend-manager.ts getPythonCommand）。
   # 该条目由 scripts/package.js 在 runtime/python.exe（POSIX 为 python3）存在时动态追加

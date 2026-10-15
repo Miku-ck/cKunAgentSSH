@@ -2,7 +2,7 @@
 
 round 22 的 `test_settings_key_contract_round22.py` 只覆盖设置面的 8 个方法；
 **运行请求**这条链上一次都没被钉过，而它恰恰是本仓最容易说谎的接缝：
-`src/api/client.ts` 里 payload 是一个手写的内联对象（camelCase 选项 → snake_case
+`src/api/sse.ts` 里 payload 是一个手写的内联对象（camelCase 选项 → snake_case
  wire 键一个个手抄），pydantic 默认**静默丢弃**未声明字段 —— 前端多发一个键、
  或后端改了名，两边自己的测试都还是绿的，只是那一项永远进不去。
  本仓已经付过学费的实例：`reasoning_tokens` / `is_default_ssh` 就是这么丢的，
@@ -19,12 +19,13 @@ round 22 的 `test_settings_key_contract_round22.py` 只覆盖设置面的 8 个
 运行: python -m pytest backend/tests/test_agent_run_payload_contract.py -v
 """
 import re
+import sys
 from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
-CLIENT_TS = ROOT / "src" / "api" / "client.ts"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from api_source import SOURCE_LABEL, frontend_api_source  # noqa: E402
 
 
 def _balanced(text: str, start: int) -> str:
@@ -61,12 +62,12 @@ def _sent_wire_keys(block: str) -> set[str]:
 
 @pytest.fixture(scope="module")
 def payload_block() -> str:
-    src = CLIENT_TS.read_text(encoding="utf-8")
-    # 必须先从 streamAgentRun 切段：`body: JSON.stringify({` 在 client.ts 里不唯一
+    src = frontend_api_source()
+    # 必须先从 streamAgentRun 切段：`body: JSON.stringify({` 在前端 api 里不唯一
     # （会话改标题那处也是同样的写法），从全文找第一个命中会抽到一个 15 字节的
     # `{ title, mode }`，于是整条守卫抽出 0 个键还能「跑得绿」。
     fn_at = src.find("export function streamAgentRun")
-    assert fn_at >= 0, "client.ts 里找不到 streamAgentRun —— 解析前提已失效"
+    assert fn_at >= 0, f"{SOURCE_LABEL} 里找不到 streamAgentRun —— 解析前提已失效"
     body = src[fn_at:]
     marker = "body: JSON.stringify({"
     at = body.find(marker)

@@ -17,6 +17,7 @@
       @action-schedules="sshViewRef?.toggleSchedules()"
       @action-remote="sshViewRef?.toggleRemoteManager()"
       @action-audit="sshViewRef?.toggleAudit()"
+      @action-runs="sshViewRef?.toggleRuns()"
       @action-dashboard="sshViewRef?.toggleDashboard()"
       @action-sftp="sshViewRef?.toggleSftp()"
       @action-tunnels="sshViewRef?.toggleTunnels()"
@@ -37,6 +38,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useSettingsStore } from './stores/settings'
 import { useAppearance } from './composables/useAppearance'
+import type { NavPage } from './composables/useSshNavigation'
 import TitleBar from './layouts/TitleBar.vue'
 import ToastContainer from './components/common/ToastContainer.vue'
 import ConfirmDialogHolder from './components/common/ConfirmDialogHolder.vue'
@@ -49,7 +51,10 @@ useAppearance()
 const sshViewRef = ref<InstanceType<typeof SshView> | null>(null)
 
 // 当前激活的功能页：用于 TitleBar 图标高亮（ref 未挂载时为 'home'）
-const activePage = computed<'home' | 'remote-mgr' | 'sftp' | 'audit' | 'ai' | 'schedules' | 'dashboard' | 'tunnels' | 'docker' | 'github'>(() => {
+// ARCH-008 前哨：这份内联联合与 useSshNavigation 的 NavPage 是两份手抄 —— 收敛
+// 为 NavPage 去掉 'home' 加 'ai'，避免下一页接进来时两边漂移
+type TitlebarPage = NavPage | 'ai'
+const activePage = computed<TitlebarPage>(() => {
   const nav = sshViewRef.value?.activeNavPage
   if (nav && nav !== 'home') return nav
   if (sshViewRef.value?.showAiPanel) return 'ai'

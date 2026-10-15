@@ -376,7 +376,11 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr) 260px 120px 80px 124px 56px 76px 66px;
   gap: 8px; align-items: center; height: 26px; padding: 0 12px 0 10px;
-  flex-shrink: 0; background: var(--bg-base);
+  /* 画卡片自己那一层，不是 --bg-base：这枚是 sticky 表头，行会从它底下滚过，
+     透明（继承弹窗底）就等于让行文字压在表头文字上。先前取 --bg-base 是在
+     --bg-elevated 的对话框上挖洞。与页面里的 .file-list-head 同一读法 ——
+     表头永远与它所在的那一层同色，靠 border-bottom 认边界。 */
+  flex-shrink: 0; background: var(--bg-elevated);
   border-bottom: 1px solid var(--border-subtle);
   font-size: 11px; color: var(--text-tertiary);
   position: sticky; top: 0; z-index: 2;
@@ -408,7 +412,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
 .tc-foot {
   flex-shrink: 0; display: flex; align-items: center; gap: 14px;
   padding: 0 14px; height: 38px;
-  border-top: 1px solid var(--border-subtle); background: var(--bg-base);
+  border-top: 1px solid var(--border-subtle); background: var(--bg-elevated);
   font-family: var(--font-mono); font-size: 11px; line-height: 1; color: var(--text-tertiary);
 }
 .tc-foot b { color: var(--text-secondary); font-weight: 600; }

@@ -22,8 +22,8 @@ run() { # run <描述> <命令...>
   fi
 }
 
-# 1. 后端测试（含跨端白名单契约测试）
-run "后端 pytest" bash -c "cd backend && python -m pytest tests/ -q"
+# 1. 后端测试（含跨端白名单契约测试）—— 口径与 npm run test:backend / CI 同一来源
+run "后端 pytest" npm run --silent test:backend
 
 # 2. 前端类型检查
 run "前端 typecheck (vue-tsc)" npm run --silent typecheck

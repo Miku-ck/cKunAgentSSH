@@ -68,9 +68,8 @@ class FilesystemGuard:
             level, reason = (classify_command if is_free_form
                              else classify_constructed_command)(bound)
             if level == "hardline":
-                # 无条件阻断，不询问 PermissionGate
-                # 修复：使用 "user" 角色而非 "system"，因为 inject_messages 会被添加到消息列表末尾
-                # OpenAI API 要求 system 消息必须在开头，添加到末尾会触发 400 错误
+                # 无条件阻断，不询问 PermissionGate；纠偏注入落在消息列表末尾，
+                # 故角色取 user 而非 system（400 约束口径见 bridle._build）
                 cmd = bound
                 await append_record_async(
                     action=tool,

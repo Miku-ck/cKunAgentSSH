@@ -24,15 +24,26 @@ const isWin = process.platform === 'win32'
 const builder = path.join(root, 'node_modules', '.bin', isWin ? 'electron-builder.cmd' : 'electron-builder')
 
 // 4) 内嵌 Python 运行时探测：按 runtime/README.md 的契约认那枚解释器可执行文件
-//    （Windows runtime/python.exe，POSIX runtime/python3），而不是「除 README.md 外还有
+//    （Windows runtime/python.exe，POSIX runtime/bin/python3），而不是「除 README.md 外还有
 //    别的文件」—— 一个误落进来的日志/临时文件会让构建谎报「已就绪」，把只装着杂物的
 //    resources/python-runtime/ 打进包。运行时解析侧本来就会 existsSync(python.exe) 兜底，
 //    所以错的只是这条构建日志与这次多余拷贝。
+//    ⚠️ POSIX 的路径必须与运行时解析侧一字不差：electron/backend-manager.ts 读的是
+//    resources/python-runtime/bin/python3，而 from: runtime → to: python-runtime 是整目录
+//    平移，所以构建期要认的也是 runtime/bin/python3。此前这里探的是 runtime/python3，
+//    两边永远对不上 —— 探到的那次拷贝在包里没人能找到，没探到的那次又白打警告，
+//    mac/linux 目标等于从来没有内嵌运行时。
 const fs = require('fs')
 const runtimeDir = path.join(root, 'runtime')
-const runtimeProbe = path.join(runtimeDir, isWin ? 'python.exe' : 'python3')
+const runtimeProbe = isWin
+  ? path.join(runtimeDir, 'python.exe')
+  : path.join(runtimeDir, 'bin', 'python3')
 const runtimeReady = fs.existsSync(runtimeProbe)
 const extraArgs = process.argv.slice(2)
+// --allow-missing-runtime 是给"只想看看流水线其余部分跑不跑得通"的人留的逃生口，
+// 必须显式写出来 —— 默认路径不再接受缺运行时。
+const allowMissingRuntime = extraArgs.includes('--allow-missing-runtime')
+const builderPassThroughArgs = extraArgs.filter((a) => a !== '--allow-missing-runtime')
 const builderConfigArgs = ['-c', 'electron-builder.yml'] // 显式主配置，保证与生成片段合并
 if (runtimeReady) {
   console.log('[package] runtime/ 已就绪 → 打包内嵌 Python 运行时 (resources/python-runtime)')
@@ -47,13 +58,25 @@ if (runtimeReady) {
       "      - '!README.md'\n",
   )
   builderConfigArgs.push('-c', snippet)
+} else if (!allowMissingRuntime) {
+  // 硬失败而不是 warning：AI 侧要跑后端，后端要一个装了 fastapi/uvicorn 的 Python。
+  // 以前这里打一行警告照常出包，于是"能出一个装到别人机器上 AI 全灭的包"，
+  // 而且从产物上看不出任何异常。理由与取舍见 docs/adr/0002。
+  console.error(
+    '[package] 缺少内嵌 Python 运行时：' + runtimeProbe + ' 不存在。\n' +
+      '  发布包必须自带 Python，否则装到目标机上 AI 侧直接不可用。\n' +
+      '  · CI 由「Prepare embedded Python runtime」一步自动准备（见 .github/workflows/ci.yml）\n' +
+      '  · 本地准备方式见 runtime/README.md\n' +
+      '  · 确实要出无运行时的包（排障/试流水线）：加 --allow-missing-runtime',
+  )
+  process.exit(1)
 } else {
   console.warn(
-    '[package] 警告：未内嵌 Python 运行时（runtime/ 里没有 ' + path.basename(runtimeProbe) + '）— ' +
-      '本次打包的 app 依赖目标机自装 Python（或用 CKUN_PYTHON 指定）。准备方式见 runtime/README.md',
+    '[package] 警告（--allow-missing-runtime）：本次不内嵌 Python 运行时，' +
+      '产出的 app 依赖目标机自装 Python（或用 CKUN_PYTHON 指定）。不要把这个包发给用户。',
   )
 }
-const child = spawn(builder, [...builderConfigArgs, ...extraArgs], { stdio: 'inherit', shell: isWin })
+const child = spawn(builder, [...builderConfigArgs, ...builderPassThroughArgs], { stdio: 'inherit', shell: isWin })
 child.on('exit', (code) => process.exit(code === null ? 1 : code))
 child.on('error', (err) => {
   console.error('无法启动 electron-builder：', err.message)

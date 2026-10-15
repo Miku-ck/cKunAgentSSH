@@ -160,6 +160,7 @@ import {
 } from '@/composables/useOpsSettings'
 import { useDesktopPrefs } from '@/composables/useDesktopPrefs'
 import type { LogLevel } from '@/api/client'
+import { formatBytes } from '@/utils/format'
 
 const {
   proxyDraft,
@@ -203,10 +204,10 @@ function onLevelChange(e: Event) {
   void setLogLevel((e.target as HTMLSelectElement).value as LogLevel)
 }
 
+// 「未知」是后端 stat 失败（size_bytes 为 null），与 0 字节的空库是两回事，必须保住这个区分；
+// 数值→单位本身不再自己实现，交给 utils/format 的 formatBytes 单一源。
 function bytes(n: number | null): string {
-  if (n === null || !Number.isFinite(n)) return '未知'
-  const mb = n / (1024 * 1024)
-  return mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.round(n / 1024)} KB`
+  return n === null || !Number.isFinite(n) ? '未知' : formatBytes(n)
 }
 
 const diagGroups = computed(() => {

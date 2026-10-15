@@ -617,6 +617,10 @@ async def update_http_settings(req: HttpSettingsRequest):
     netconfig.set_policy(proxy, timeout, retries)
     from llm_adapter import invalidate_client_cache
     dropped = await invalidate_client_cache()
+    # PERF-005：embedding 的共享 httpx 客户端同样按 (超时, 代理) 缓存，策略
+    # 变更一并重建，避免旧代理配置的连接池残留
+    from agent.memory.embedding import invalidate_http_clients as invalidate_embed_clients
+    await invalidate_embed_clients()
     return {**(await _http_view()), "clients_rebuilt": dropped["dropped"]}
 
 

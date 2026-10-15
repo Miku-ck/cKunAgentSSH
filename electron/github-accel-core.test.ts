@@ -12,6 +12,7 @@ import {
   buildGitRestoreArgs,
   buildGitSetArgs,
   buildGitUnsetArgs,
+  buildGitUnsetSubsectionArgs,
   buildProbeUrl,
   defaultGithubAccelConfig,
   findGithubInsteadOf,
@@ -29,6 +30,10 @@ import {
   validateWebMirrorHost,
   GITHUB_BASE,
   HOSTS_BLOCK_BEGIN,
+  HOSTS_BLOCK_END,
+  hostsBlockAgeDays,
+  hostsBlockGeneratedAt,
+  isHostsBlockStale,
   PROBE_TARGET,
   SSH_BLOCK_BEGIN,
   SSH_BLOCK_END,
@@ -150,6 +155,11 @@ describe('git insteadOf', () => {
   it('set/unset/read 参数组装', () => {
     expect(buildGitSetArgs(prefix)).toEqual(['config', '--global', `url.${prefix}${GITHUB_BASE}.insteadOf`, GITHUB_BASE])
     expect(buildGitUnsetArgs(prefix)).toEqual(['config', '--global', '--unset', `url.${prefix}${GITHUB_BASE}.insteadOf`])
+    // 子节变体：生产卸载的是任意生效子节（github-accel.ts gitEnable/gitDisable），
+    // 前缀变体委托本函数 —— 两条路径都被测试钉住
+    expect(buildGitUnsetSubsectionArgs('https://old.example/https://github.com/')).toEqual([
+      'config', '--global', '--unset', 'url.https://old.example/https://github.com/.insteadOf',
+    ])
     expect(buildGitRestoreArgs('https://old.example/https://github.com/')).toEqual([
       'config', '--global', 'url.https://old.example/https://github.com/.insteadOf', GITHUB_BASE,
     ])
@@ -242,6 +252,33 @@ describe('hosts 托管块（M3）', () => {
     expect(isValidIPv4('a.b.c.d')).toBe(false)
   })
 
+  it('SEC-001：domain 注入向量被整条丢弃（换行/空格/#/非法字符/超长）', () => {
+    const block = renderHostsBlock([
+      // 换行注入：把任意域名指到攻击者 IP，影响全系统解析
+      { domain: 'evil.com\n1.2.3.4 attacker.example', ip: '140.82.112.4' },
+      // 空格当别名
+      { domain: 'a.com b.com', ip: '140.82.112.5' },
+      // 篡改注释边界
+      { domain: 'x.com # injected', ip: '140.82.112.6' },
+      // 非法字符（下划线/斜杠/大写混入后未按白名单放行）
+      { domain: 'bad_domain.example', ip: '140.82.112.7' },
+      { domain: 'a/b.example', ip: '140.82.112.8' },
+      // 超长域名（DNS 上限 253）
+      { domain: `${'a'.repeat(250)}.example.com`, ip: '140.82.112.9' },
+      // 合法项不受影响
+      { domain: 'github.com', ip: '140.82.112.4' },
+    ])
+    expect(block).toContain('140.82.112.4\tgithub.com')
+    expect(block).not.toContain('attacker.example')
+    expect(block).not.toContain('a.com b.com')
+    expect(block).not.toContain('injected')
+    expect(block).not.toContain('bad_domain')
+    expect(block).not.toContain('a/b')
+    expect(block).not.toContain(`${'a'.repeat(250)}`)
+    // 不产生空行（全被丢弃时只剩标记行）
+    expect(block.split('\n').every(l => l.length > 0)).toBe(true)
+  })
+
   it('apply → remove 往返恒等，且不碰块外内容', () => {
     const entries = githubHostsDomains().map((d, i) => ({ domain: d, ip: `140.82.112.${i + 1}` }))
     for (const raw of ['', '# my hosts\n127.0.0.1 localhost\n', '127.0.0.1 localhost\n\n# note\n']) {
@@ -267,6 +304,69 @@ describe('hosts 托管块（M3）', () => {
     expect(d).toContain('api.github.com')
     expect(d).toContain('raw.githubusercontent.com')
     expect(d).toContain('codeload.github.com')
+  })
+})
+
+describe('hosts 托管块的时效（优选 IP 不会自动更新）', () => {
+  const entries = [{ domain: 'github.com', ip: '1.2.3.4' }]
+  const DAY = 24 * 60 * 60 * 1000
+  const now = Date.UTC(2026, 9, 14, 12, 0, 0)
+
+  it('渲染块自带生成时间戳 —— 系统文件必须自己说明自己是哪天测的', () => {
+    const block = renderHostsBlock(entries, new Date(now))
+    expect(block).toContain(`${HOSTS_BLOCK_BEGIN}\n# generated: ${new Date(now).toISOString()}\n`)
+    expect(block).toContain('1.2.3.4\tgithub.com')
+    expect(block.trimEnd().endsWith(HOSTS_BLOCK_END)).toBe(true)
+  })
+
+  it('按时间戳算出已过去多少天', () => {
+    const content = renderHostsBlock(entries, new Date(now - 8 * DAY))
+    expect(hostsBlockAgeDays(content, new Date(now))).toBe(8)
+  })
+
+  it('原始生成时间也可读出（UI 要能说"哪天测的"，而不是只给天数）', () => {
+    const at = new Date(now - 8 * DAY)
+    expect(hostsBlockGeneratedAt(renderHostsBlock(entries, at))).toBe(at.toISOString())
+    expect(hostsBlockGeneratedAt(`${HOSTS_BLOCK_BEGIN}\n1.2.3.4\tgithub.com\n${HOSTS_BLOCK_END}`)).toBeNull()
+  })
+
+  it('6 天前算新鲜，7 天及以上算该重选', () => {
+    const fresh = renderHostsBlock(entries, new Date(now - 6 * DAY))
+    const old = renderHostsBlock(entries, new Date(now - 7 * DAY))
+    expect(isHostsBlockStale(fresh, new Date(now))).toBe(false)
+    expect(isHostsBlockStale(old, new Date(now))).toBe(true)
+  })
+
+  it('块里没有可比对的时间戳 → 时效未知：ageDays 为 null，且不得谎报新鲜', () => {
+    // 手写/旧版本写入的块没有 # generated: 行。把它当"新鲜"等于替用户担保一个
+    // 无从考证的 IP；当"过期"只是多提示一次重选，代价不对称。
+    const legacy = `${HOSTS_BLOCK_BEGIN}\n1.2.3.4\tgithub.com\n${HOSTS_BLOCK_END}\n`
+    expect(hostsBlockAgeDays(legacy, new Date(now))).toBeNull()
+    expect(isHostsBlockStale(legacy, new Date(now))).toBe(true)
+  })
+
+  it('时间戳被写成不可解析的值时同样按未知处理，不给 NaN 天', () => {
+    const broken = `${HOSTS_BLOCK_BEGIN}\n# generated: 昨天\n1.2.3.4\tgithub.com\n${HOSTS_BLOCK_END}\n`
+    expect(hostsBlockAgeDays(broken, new Date(now))).toBeNull()
+    expect(isHostsBlockStale(broken, new Date(now))).toBe(true)
+  })
+
+  it('块内多行里只认我们自己那条 generated: 标记（不被别处的注释劫持时效判定）', () => {
+    const tricky = [
+      HOSTS_BLOCK_BEGIN,
+      '# generated: 2000-01-01T00:00:00.000Z',
+      '# 用户自己的注释里也有 # generated: 2030-01-01T00:00:00.000Z',
+      '1.2.3.4\tgithub.com',
+      HOSTS_BLOCK_END,
+    ].join('\n')
+    expect(hostsBlockAgeDays(tricky, new Date(now))).toBeGreaterThan(9000)
+  })
+
+  it('applyHostsBlock 透传时间戳：替换旧块时不会把时间戳弄丢', () => {
+    const oldBlock = renderHostsBlock(entries, new Date(now - 30 * DAY))
+    const next = applyHostsBlock(`127.0.0.1 localhost\n\n${oldBlock}\n`, entries, new Date(now))
+    expect(hostsBlockAgeDays(next, new Date(now))).toBe(0)
+    expect(isHostsBlockStale(next, new Date(now))).toBe(false)
   })
 })
 

@@ -21,7 +21,7 @@ import { BrowserWindow, app } from 'electron'
 import { SSHError, classifyRawError, toFriendlyZh } from './ssh-error'
 import { encodeTransferErrorName, isTransferRetryable, type TransferErrorCode } from '../shared/transfer-error-core'
 import { promises as fsPromises } from 'fs'
-import { posix, join } from 'path'
+import { posix, join, dirname } from 'path'
 import { createHash, randomBytes } from 'crypto'
 import { StringDecoder } from 'string_decoder'
 
@@ -501,6 +501,9 @@ export class SSHManager {
   // E-1b 修复：串行化写入队列 — 每次保存排队到前一次完成之后，
   // 快照在实际写入时刻（then 回调内）构建，并发首连不再把磁盘表写成子集
   private savePromise: Promise<void> = Promise.resolve()
+  // 本次启动没能完整读出磁盘表（读失败或结构损坏）。此时任何写入都是拿内存里的
+  // 子集去覆盖可能仍存在的旧记录 —— 宁可这次会话不持久化，也不静默丢钉扎。
+  private knownHostsUnreadable = false
   // 重连修复：重连状态表（key = shell 会话 id）+ 配置读取器（main.ts 注入，
   // 重连时主进程自取已保存的连接配置与凭据，渲染层全程不参与）
   private reconnects = new Map<string, ReconnectEntry>()
@@ -537,36 +540,109 @@ export class SSHManager {
    * 并发连接在竞态窗口内按空表 TOFU，且各自的后续 save 以子集覆写磁盘 known_hosts。
    * 现在所有并发调用共享同一个 loadPromise：加载未完成前它非空即天然挡住重复触发，
    * 调用方 await 它即可保证读到已填充的表，无需再另设就绪标志。
+   *
+   * 「文件不存在」与「文件损坏」不是一回事：前者按空表 TOFU 是正常的初次运行；
+   * 后者按空表处理会让接下来的 TOFU 重新信任并重写磁盘 —— 主机密钥钉扎静默丢失，
+   * 中间人就藏在一次半写（进程被杀在 writeFile 中间）之后。故损坏必须隔离留证、
+   * 必须把告警打出来，处理手法与 ssh-store/tunnel-store 的 quarantine 保持一致。
    */
   private loadKnownHosts(): Promise<void> {
     if (!this.loadPromise) {
       this.loadPromise = (async () => {
+        const path = this.knownHostsPath
+        let raw: string
         try {
-          const raw = await fsPromises.readFile(this.knownHostsPath, 'utf-8')
-          const data = JSON.parse(raw) as Record<string, string>
-          for (const [key, fp] of Object.entries(data)) {
-            this.knownHosts.set(key, fp)
+          raw = await fsPromises.readFile(path, 'utf-8')
+        } catch (e) {
+          // ENOENT = 首次运行，空表等 TOFU 填充；其余（EPERM 等）是读失败，
+          // 不能当成"没有信任记录"，否则同样会诱发重写覆盖钉扎。
+          if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+            console.error('[ssh] 读取 known_hosts 失败，本次会话不写入磁盘以免覆盖既有记录:', (e as Error).message)
+            this.knownHostsUnreadable = true
           }
+          return
+        }
+        let data: unknown
+        try {
+          data = JSON.parse(raw)
         } catch {
-          // 文件不存在或解析失败 → 空表，后续 TOFU 逐步填充
+          console.error(
+            '[ssh] known_hosts 解析失败（文件疑似半写损坏）。已隔离备份并按空表处理：'
+            + '接下来的首次连接会重新 TOFU 信任，请人工核对主机密钥',
+          )
+          await this.quarantineCorruptKnownHosts(path, raw)
+          this.knownHostsUnreadable = true
+          return
+        }
+        if (!data || typeof data !== 'object' || Array.isArray(data)) {
+          console.error('[ssh] known_hosts 结构不是对象，已隔离备份并按空表处理')
+          await this.quarantineCorruptKnownHosts(path, raw)
+          this.knownHostsUnreadable = true
+          return
+        }
+        for (const [key, fp] of Object.entries(data as Record<string, string>)) {
+          if (typeof fp === 'string') this.knownHosts.set(key, fp)
         }
       })()
     }
     return this.loadPromise
   }
 
+  /** 把损坏文件挪到 .corrupt-<ts>.bak 留证（rename 失败则退化为复制） */
+  private async quarantineCorruptKnownHosts(path: string, raw: string): Promise<void> {
+    const bak = `${path}.corrupt-${Date.now()}.bak`
+    try {
+      await fsPromises.rename(path, bak)
+    } catch {
+      try {
+        await fsPromises.writeFile(bak, raw, 'utf-8')
+      } catch (e) {
+        console.warn('[ssh] 备份损坏 known_hosts 失败:', (e as Error).message)
+        return
+      }
+    }
+    console.warn(`[ssh] 损坏的 known_hosts 已备份到: ${bak}`)
+  }
+
   /**
    * 持久化 known_hosts 到磁盘（E-1b 修复：串行化）
    * 快照在 then 回调内构建 — 即实际写入时刻的全量内存表，排队保证
    * 并发首连的多次保存按序执行、后写覆盖先写，不再互相丢条目。
+   *
+   * 写入走 tmp + rename 原子替换（与 ssh-store/tunnel-store 同款）：直接 writeFile
+   * 中断在 halves 里就留下半个 JSON，下次启动只能按空表起步（见 loadKnownHosts）。
    */
   saveKnownHosts(): Promise<void> {
     this.savePromise = this.savePromise.then(async () => {
-      const data: Record<string, string> = {}
-      for (const [key, fp] of this.knownHosts) {
-        data[key] = fp
+      if (this.knownHostsUnreadable) {
+        // 磁盘上可能还有读不出来的旧记录，此刻写入等于用内存子集覆盖它 —— 不写。
+        console.warn('[ssh] 本次启动 known_hosts 未能完整读取，跳过写入以免覆盖既有记录')
+        return
       }
-      await fsPromises.writeFile(this.knownHostsPath, JSON.stringify(data, null, 2), 'utf-8')
+      const path = this.knownHostsPath
+      const payload = (() => {
+        const data: Record<string, string> = {}
+        for (const [key, fp] of this.knownHosts) data[key] = fp
+        return JSON.stringify(data, null, 2)
+      })()
+      await fsPromises.mkdir(dirname(path), { recursive: true })
+      const tmpPath = path + '.tmp'
+      await fsPromises.writeFile(tmpPath, payload, 'utf-8')
+      try {
+        await fsPromises.rename(tmpPath, path)
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code
+        // Windows 上目标被占用时 rename 可能 EPERM/EACCES/EBUSY：重试一次，
+        // 仍失败才回退直写（回退窗口内中断仍可能留半文件，但优于整条记录丢失）
+        if (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY') throw err
+        await new Promise(r => setTimeout(r, 200))
+        try {
+          await fsPromises.rename(tmpPath, path)
+        } catch {
+          await fsPromises.writeFile(path, payload, 'utf-8')
+          try { await fsPromises.unlink(tmpPath) } catch { /* ignore */ }
+        }
+      }
     }).catch((e) => {
       console.warn('[ssh] 保存 known_hosts 失败:', e)
     })
@@ -578,6 +654,8 @@ export class SSHManager {
    * - 首次连接：记录指纹并通知前端
    * - 指纹匹配：允许连接
    * - 指纹不匹配：拒绝连接（可能的中间人攻击）
+   * - 表读不出来 + 指纹没见过：拒绝并单独报（见 ssh:host-key-unpinned），此时
+   *   "没见过"这个事实本身不可信，不能拿它当首连授权
    *
    * 审查 M-1 修复：hostKey 由每次连接构造的闭包显式传入（不再读共享的
    * _verifyingHostKey 字段）。原实现在并发连接时存在两类问题：
@@ -591,6 +669,15 @@ export class SSHManager {
 
     const stored = this.knownHosts.get(hostKey)
     if (stored === undefined) {
+      // 钉扎表没读出来时，"内存里没有"并不等于"没见过这台主机"——磁盘上很可能还
+      // 留着它的记录，只是这次没读到。按首连 TOFU 放行等于把整会话的钉扎清零，
+      // 中间人只要让 known_hosts 坏一次（半写、权限、磁盘满）就能顶替服务器。
+      // loadKnownHosts 已经承认了这一点并只封住了写侧；读侧同一条件必须一起封。
+      if (this.knownHostsUnreadable) {
+        console.error('[ssh] known_hosts 未能完整读取，拒绝尚未钉扎的主机连接:', hostKey)
+        this.safeSend('ssh:host-key-unpinned', { hostKey, fingerprint: fp })
+        return false
+      }
       // 首次连接：信任并记录
       this.knownHosts.set(hostKey, fp)
       this.saveKnownHosts() // fire-and-forget
@@ -1801,12 +1888,23 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
 
     // 本地文件大小（P2 修复：async stat 替代同步 statSync，避免主线程阻塞）
     let total = 0
-    try { total = (await fsPromises.stat(localPath)).size } catch { throw new Error(`本地文件不存在或不可访问: ${localPath}`) }
+    try {
+      total = (await fsPromises.stat(localPath)).size
+    } catch {
+      // 与下载侧（stat 失败 release 再抛）对齐：此处失败发生在 runBody 之外，
+      // 不归还则 TransferConn 租约永不释放，池耗尽后该主机所有传输退化为
+      // 临时连接路径，每次多付完整握手开销
+      release()
+      throw new Error(`本地文件不存在或不可访问: ${localPath}`)
+    }
 
     const partPath = remotePath + '.part'
     let cancelled = false
     let lastProgress = Date.now()
     let transferred = 0
+    // 与下载侧 downloadComplete 对称：rename 前标记数据已完整写入 .part，
+    // rename 阶段失败据此归类 RENAME_FAILED（retryable、保留 .part）
+    let uploadComplete = false
     // C10 修复：心跳判定停滞后除发 sftp:stalled 事件外，还要 reject 该传输的
     // IPC Promise（渲染层 retryable 自动续传依赖它）。标记失效后同一传输只
     // reject 一次，后续进度回调对已失效传输忽略
@@ -2018,14 +2116,34 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
         throw new Error('CANCELLED')
       }
 
-      // 7. 完成：rename .part → remotePath
-      await sftpRename(sftp, partPath, remotePath)
+      // 7. 完成：rename .part → remotePath（覆盖语义，对齐 sftpWriteFile 同款
+      // 处理：Windows OpenSSH 的 rename 目标已存在即失败，覆盖上传必然在
+      // 此步失败）— 先标记数据已完整写入，rename 阶段失败保留 .part 供续传
+      uploadComplete = true
+      try {
+        await sftpRename(sftp, partPath, remotePath)
+      } catch {
+        // 目标已存在导致 rename 被拒（Windows 服务端形态）：清掉目标再试一次
+        await sftpUnlink(sftp, remotePath)
+        await sftpRename(sftp, partPath, remotePath)
+      }
       sendProgress({ transferred: total, total })
     } catch (err) {
-      // 错误分类
-      const tErr: TransferError = heartbeat.isStalled()
-        ? { code: 'STALLED', message: '传输停滞，网络可能不稳定' }
-        : classifyTransferError(err, cancelled)
+      // 错误分类。与下载侧（审查修复 P2）对称：rename 阶段（数据已完整
+      // 写入 .part）失败时保留 .part 并归类 RENAME_FAILED（retryable），
+      // 重试可续传完成，不再把已完整上传的数据当普通错误删掉
+      let tErr: TransferError
+      if (uploadComplete && !heartbeat.isStalled()) {
+        tErr = {
+          code: 'RENAME_FAILED',
+          message: `上传已完成，但重命名为最终文件失败：${err instanceof Error ? err.message : String(err)}。请重试上传（数据已保留为 .part）`,
+          originalError: err as Error,
+        }
+      } else {
+        tErr = heartbeat.isStalled()
+          ? { code: 'STALLED', message: '传输停滞，网络可能不稳定' }
+          : classifyTransferError(err, cancelled)
+      }
       // 不可重试的错误清理 .part —— 判据与渲染端的自动续传共用
       // isTransferRetryable(code)（S0-15），两侧不可能再对同一 code 有两种理解
       if (!isTransferRetryable(tErr.code) && tErr.code !== 'CANCELLED') {
@@ -2172,12 +2290,19 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
           resumeSize = 0
         }
         if (resumeSize > 0) {
-          // 校验前 VERIFY_SIZE 字节与远程一致
+          // 校验前 VERIFY_SIZE 字节与远程一致。
+          // 与上传侧 M7 修复同款：open/read/close 收进独立作用域各带 finally，
+          // 校验读失败（EIO/磁盘抖动）不再泄漏 fd
           const verifyLen = Math.min(VERIFY_SIZE, resumeSize)
-          const localPartFd = await fsPromises.open(partPath, 'r')
           const localHead = Buffer.alloc(verifyLen)
-          await localPartFd.read(localHead, 0, verifyLen, 0)
-          await localPartFd.close()
+          {
+            const localPartFd = await fsPromises.open(partPath, 'r')
+            try {
+              await localPartFd.read(localHead, 0, verifyLen, 0)
+            } finally {
+              try { await localPartFd.close() } catch { /* ignore */ }
+            }
+          }
           const remoteHead = await sftpRead(sftp, remoteHandle, 0, verifyLen)
           if (localHead.slice(0, verifyLen).equals(remoteHead.slice(0, verifyLen))) {
             startOffset = resumeSize
@@ -2189,8 +2314,13 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
             partExists = false
           }
         }
-      } catch {
-        // .part 不存在，正常流程
+      } catch (err: any) {
+        // ENOENT = 没有 .part，属正常流程；其他错误（校验读的磁盘错误、
+        // 远端 4KB 读的网络错误等）原实现一律静默当「无 .part」降级重下，
+        // 真实故障无线索 —— 仍走重下（宁可丢进度不可丢数据），但不再无声
+        if (err?.code !== 'ENOENT') {
+          console.warn(`[ssh] .part 续传校验异常，本次按全新下载处理 (${partPath}):`, err?.message ?? err)
+        }
       }
 
       // 3. 打开本地 .part（存在用 r+ 续写，不存在用 w 新建）
@@ -2231,6 +2361,9 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
             throw new Error(
               `远端报告大小为 0 但已读出 ${off} 字节，超出未知长度下载上限 ${UNKNOWN_SIZE_LIMIT} 字节，已中止`)
           }
+          // 本循环不更新 lastProgress 的话，慢速 tail / 大 /proc 文件读超过
+          // 30s 就会被心跳误判 STALLED（分块路径在 onWritten 里刷新，此处对齐）
+          lastProgress = Date.now()
           sendProgress({ transferred: off, total: 0 })
         }
         // 续传复用 .part 时是以 'r+' 打开的（不截断）：读出比残留短的内容，

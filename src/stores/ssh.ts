@@ -9,6 +9,16 @@ import { toFriendlyMessage } from '@/api/client'
 
 export type SSHConnection = SSHConnectionRecord
 
+/**
+ * 连接备注的单一来源读法：优先 note 字段，兼容旧数据（备注曾存进 tags[0]）。
+ * 所有展示/搜索连接备注的地方都必须走这里 —— 此前 ConnectionRow 与 RemoteManager
+ * 搜索各抄了一份 fallback，而仪表盘快连/新建终端菜单/定时任务下拉/Docker 选择器
+ * 干脆不显示，造成「这里显示那里不显示」。
+ */
+export function connNote(conn: Pick<SSHConnection, 'note' | 'tags'>): string {
+  return conn.note || conn.tags?.[0] || ''
+}
+
 export interface TerminalSession {
   id: string
   name: string
@@ -110,10 +120,20 @@ export const useSSHStore = defineStore('ssh', () => {
         0, // 不自动关闭，强制用户确认
       )
     })
+    // 钉扎表读不出来时的拒绝：不是"密钥变了"，是本机 known_hosts 不可用，
+    // 处置动作是修磁盘而不是查服务器，所以不并入上面那条文案。
+    const offUnpinned = api.onHostKeyUnpinned(({ hostKey }) => {
+      toast.error(
+        `${hostKey} 连接已被拒绝：本机 known_hosts 没能完整读出，无从判断这台主机是否见过。`
+        + '请修复或删除该文件后重连（首连会重新钉扎指纹）。',
+        0,
+      )
+    })
     // Pinia scope 销毁时清理监听器（HMR 场景）
     onScopeDispose(() => {
       if (typeof offNew === 'function') offNew()
       if (typeof offMismatch === 'function') offMismatch()
+      if (typeof offUnpinned === 'function') offUnpinned()
     })
   }
 

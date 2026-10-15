@@ -52,7 +52,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { SSHConnection } from '@/stores/ssh'
+import { connNote, type SSHConnection } from '@/stores/ssh'
 
 const props = defineProps<{
   connection: SSHConnection
@@ -87,12 +87,8 @@ const authLabel = computed(() => {
   }
 })
 
-// 备注显示文本(优先用 note, 兼容旧数据用 tags[0])
-const noteText = computed(() => {
-  if (props.connection.note) return props.connection.note
-  const firstTag = props.connection.tags?.[0]
-  return firstTag || ''
-})
+// 备注显示文本：note 优先、tags[0] 兜底，读法收归 connNote 单一来源
+const noteText = computed(() => connNote(props.connection))
 
 // 相对时间的基准由父级 tick 传入：Date.now() 不是响应式来源，写在 computed 里
 // 等于「挂载那一刻定稿」——刚连上时显示"刚刚"，之后几小时（甚至重开面板前）都不会

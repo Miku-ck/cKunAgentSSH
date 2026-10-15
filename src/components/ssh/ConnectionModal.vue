@@ -188,11 +188,12 @@
 <script setup lang="ts">
 import { ref, reactive, watch, onMounted, onUnmounted } from 'vue'
 import NoteInput from './NoteInput.vue'
-import { useSSHStore } from '@/stores/ssh'
+import { connNote, useSSHStore } from '@/stores/ssh'
 import type { SSHConnection } from '@/stores/ssh'
 import { useSettingsStore } from '@/stores/settings'
 import { useConfirm } from '@/composables/useConfirm'
 import { toFriendlyMessage } from '@/api/client'
+import { isPort } from '../../../shared/port-core'
 
 const props = defineProps<{
   editData?: SSHConnection
@@ -225,8 +226,8 @@ const form = reactive({
   password: props.editData?.password || '',
   privateKeyPath: props.editData?.privateKeyPath || '',
   passphrase: props.editData?.passphrase || '',
-  // 备注(单条字符串,最多 10 个字). 兼容旧数据:从 tags 数组中取第一个非空值
-  note: props.editData?.note ?? ((props.editData?.tags || [])[0] || ''),
+  // 备注(单条字符串,最多 10 个字). 兼容旧数据:读法走 connNote 单一来源（note 优先、tags[0] 兜底）
+  note: props.editData ? connNote(props.editData) : '',
   // 目标环境标记:生产环境危险命令将被强制要求预授权 allowlist
   // 新建时取「设置 → Agent 治理 → 运维策略」的默认环境（E4）；编辑已有连接
   // 仍以该条已存的标记为准，否则改默认值会静默重写历史归类。
@@ -275,10 +276,16 @@ function handleKeydown(e: KeyboardEvent) {
 onMounted(() => window.addEventListener('keydown', handleKeydown))
 onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
 
+// ARCH-011：端口判据收归 shared/port-core（与 TunnelModal/AccessModal 同源），
+// 夹取的交互形态保留：合法整数直通，非有限/小于下限回落默认 22，超上界钳 65535。
+// （附带修正：原先小数如 22.5 会原样放行进 buildPayload，整数判据下夹回 22）
+function clampPortValue(n: number): number {
+  if (isPort(n)) return n
+  return Number.isFinite(n) && n > 65535 ? 65535 : 22
+}
+
 function clampPort() {
-  const n = Number(form.port)
-  if (!Number.isFinite(n) || n < 1) form.port = 22
-  else if (n > 65535) form.port = 65535
+  form.port = clampPortValue(Number(form.port))
 }
 
 /** 将秒级输入安全转为毫秒;空/非法返回 undefined 让主进程用默认值。
@@ -295,7 +302,7 @@ function buildPayload() {
   return {
     name: form.name.trim() || `${form.username.trim()}@${form.host.trim()}`,
     host: form.host.trim(),
-    port: Math.min(65535, Math.max(1, Number(form.port) || 22)),
+    port: clampPortValue(Number(form.port) || 22),
     username: form.username.trim(),
     authType: form.authType,
     password: form.authType === 'password' ? form.password : undefined,
@@ -507,7 +514,7 @@ async function handleSave() {
 .form-group input[type="number"] {
   height: 32px;
   padding: 0 10px;
-  background: var(--bg-base);
+  background: var(--bg-input);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
@@ -531,7 +538,7 @@ async function handleSave() {
   height: 32px;
   width: 100%;
   padding: 0 10px;
-  background: var(--bg-base);
+  background: var(--bg-input);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
@@ -554,7 +561,7 @@ async function handleSave() {
 .auth-tabs {
   display: flex;
   gap: 2px;
-  background: var(--bg-base);
+  background: var(--bg-input);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   padding: 2px;
@@ -596,7 +603,7 @@ async function handleSave() {
   flex: 1;
   height: 32px;
   padding: 0 10px;
-  background: var(--bg-base);
+  background: var(--bg-input);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   color: var(--text-primary);

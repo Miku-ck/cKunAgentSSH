@@ -247,12 +247,14 @@ def test_clarification_conclusion_preserved(monkeypatch, conclusion):
 
 
 def test_audit_conclusion_三处清单同源():
-    """后端枚举、前端结论下拉、安全文档 §6 必须同源。
+    """后端枚举、前端结论下拉、契约文档必须同源。
 
     前端可筛而后端写不进的项 = 永远为空的筛选，后端能写而前端筛不出的项 = 审计页里
-    看不见的记录；而 `docs/security-boundary.md` §5 给「人工交互通道不加事前阻断」辩护
-    的前提就是「事后审计可追」—— 文档把口径写窄等于把替代防线写薄。实测这份守卫加入时
-    文档就少两个值（answered/skipped）。
+    看不见的记录；而"人工交互通道不加事前阻断"这条设计辩护的前提就是「事后审计可追」
+    —— 口径写窄等于把替代防线写薄。实测这份守卫加入时文档就少两个值（answered/skipped）。
+
+    口径载体原在 `docs/security-boundary.md §6`，该文档退役后搬到
+    `docs/contracts/audit-conclusions.md`（取舍见 docs/adr/0004）。
     """
     import re
     from pathlib import Path
@@ -265,9 +267,9 @@ def test_audit_conclusion_三处清单同源():
                       vue.read_text(encoding="utf-8"), re.S).group(0)
     shown = {v for v in re.findall(r'<option value="([a-z_]+)"', block) if v}
 
-    doc = Path(audit.__file__).parents[2] / "docs" / "security-boundary.md"
+    doc = Path(audit.__file__).parents[2] / "docs" / "contracts" / "audit-conclusions.md"
     m = re.search(r"conclusion ∈ \{([^}]*)\}", doc.read_text(encoding="utf-8"))
-    assert m, "文档 §6 没有 `conclusion ∈ {…}` 这行（口径被改写，守卫该红在这里）"
+    assert m, "契约文档没有 `conclusion ∈ {…}` 这行（口径被改写，守卫该红在这里）"
     documented = {x.strip() for x in m.group(1).split(",") if x.strip()}
 
     assert shown == written, f"仅下拉有 {shown - written}，仅枚举有 {written - shown}"

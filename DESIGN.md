@@ -39,9 +39,9 @@ cKunAgentSSH 前端（`src/`）的视觉 / 布局 / 交互 / 组件约定。**�
 **背景**：`--bg-base` 结构底 · `--bg-elevated` 唯一浮起层 · `--bg-input` 控件凹陷底 · `--bg-slider` 滑块轨道 · `--bg-terminal` 终端内容底（恒深）
 > `--bg-x` 与 `--bg-x-solid` 必须同值；`[data-gradient="on"]` 从 `-solid` 派生半透明（必须引用 `-solid`，否则自引用失效变透明）。
 
-**文字**：`--text-primary` 正文 · `--text-secondary` 次要 · `--text-tertiary` 最弱（≥4.5:1，已按主题加深）
+**文字**：`--text-primary` 正文 · `--text-secondary` 次要 · `--text-tertiary` 最弱（≥4.5:1，已按主题加深。**两个已知的不合格都在玻璃两档**：① 晶白 `--text-tertiary` 压在自身 `--bg-base` 上只有 3.27:1，是 10 档里唯一低于 4.5 的（其余 5.10–8.43，改动前 3.13 同样不合格）；② 结构面 `--canvas-bg: transparent` 使局部底色变成主题渐变的起点 = 用户强调色，那里浅色强调色档会整片吃紧。均登记在 spec 2026-10-14 §已知开放项）
 **边框**：`--border-default` 可见描边 · `--border-subtle` 弱分隔 · `--divider-primary` 分隔线 · `--border-input` 输入框
-**形状**：`--radius-sm/md/lg` = 4/6/8px（手记 2/3/4px） · `--shadow-sm/lg` · `--transition-fast` = 150ms
+**形状**：`--radius-sm/md/lg` = 4/6/8px（手记 2/3/4px；玻璃两档 3/5/8px —— Aero 的窗框是切出来的，属材质例外，见 `variables.css` 玻璃块头） · `--shadow-sm/lg` · `--transition-fast` = 150ms
 **字体**：`--font-sans` 正文 · `--font-mono` 命令/代码 · `--line-height-normal` · `--font-display` 标题 · `--chat-font-size` 消息正文
 **布局**：`--titlebar-h` = 32px · `--tabbar-h` = 34px
 **强调色**：`--accent-primary` / `--accent-primary-rgb` 单一事实源 · `--accent-on` 压强调色底的前景 · `--accent-cyan` 命令行/代码 · `--accent-indigo*` 聊天强调 · `--accent-pink*` 目标 chip
@@ -53,8 +53,10 @@ cKunAgentSSH 前端（`src/`）的视觉 / 布局 / 交互 / 组件约定。**�
 
 ## 主题系统
 
-枚举 `Theme`（[appearance-tokens.ts](src/utils/appearance-tokens.ts)）：`dark`（默认，移除 `data-theme`）· `light` · `system`（运行时解析 dark/light）· `blue-screen` · `forest` · `mint` · `bee` · `coral` · `atelier`（手记）。
+枚举 `Theme`（[appearance-tokens.ts](src/utils/appearance-tokens.ts)）：`dark`（默认，移除 `data-theme`）· `light` · `system`（运行时解析 dark/light）· `blue-screen` · `forest` · `mint` · `bee` · `coral` · `atelier`（手记）· `glass`（玻璃，Aero 暗档）· `glass-light`（晶白，Aero 亮档）。
 强调色 `Accent`：`blue/purple/green/orange/white/forest/mint/bee/coral/verm`，hex 表 = `ACCENT_MAP`。
+
+- **材质主题（玻璃两档）与其余九档不同**：它除颜色外还改 `--radius-*` / `--shadow-*`，并在 `global.css` 的主题作用域里加 `backdrop-filter` 与窗框镜面 —— 那些属于「材质」，不属于「版面」。原理与分档见 `variables.css` 玻璃块头。窗口级真透出桌面（`backgroundMaterial:'acrylic'`）尚未落地，卡在 GPU 门禁（spec 2026-10-14 §S0）。
 
 - 应用：根元素 `data-theme="<theme>"`；强调色由 `applyAccent()` 内联写 `--accent-primary/-rgb/--accent-on`。
 - `--accent-on` 由 `contrastOnAccent()` 按 WCAG 相对亮度算（<3:1 换深字）。
@@ -108,10 +110,9 @@ hover/active 用 `--bg-hover`/`--bg-active`，过渡 `var(--transition-fast)`；
 
 ## 校验
 
-```bash
-npm run typecheck   # 类型检查
-npm test            # vitest（variables.test.ts 含令牌消费方守卫）
-```
+命令清单只在 [README §命令](README.md#命令) 维护一份（本文件不复制，避免两边漂移）。改完样式/令牌最少要过
+`npm run typecheck` + `npm test`：`variables.test.ts` 是令牌消费方守卫，弹窗误用半透明 `--bg-*`
+而不是 `--bg-*-solid` 会被它直接判红。
 
 ## 参考
 

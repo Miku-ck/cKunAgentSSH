@@ -172,7 +172,7 @@
             <select v-model="form.target_host">
               <option value="">未指定（不执行远程命令）</option>
               <option v-for="c in connections" :key="c.id" :value="c.id">
-                {{ c.name }} — {{ c.username }}@{{ c.host }}
+                {{ connLabel(c) }} — {{ c.username }}@{{ c.host }}
               </option>
             </select>
           </label>
@@ -214,7 +214,7 @@ import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
 import { formatBackendTs, parseBackendTs } from '@/utils/format'
 import { pickNotices } from '@/utils/schedule-notify'
-import { useSSHStore } from '@/stores/ssh'
+import { connNote, useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useAgentStore } from '@/stores/agent'
 
@@ -232,7 +232,13 @@ const connections = computed(() => sshStore.connections)
 
 function hostLabel(v: string): string {
   const c = sshStore.connections.find(x => x.id === v)
-  return c ? `${c.name} (${c.username}@${c.host})` : v
+  return c ? `${connLabel(c)} (${c.username}@${c.host})` : v
+}
+
+/** 连接显示名：备注存在时以「名称（备注）」呈现，与其他列表的备注展示同口径 */
+function connLabel(c: { name: string; note?: string; tags: string[] }): string {
+  const note = connNote(c)
+  return note ? `${c.name}（${note}）` : c.name
 }
 
 const loading = ref(false)

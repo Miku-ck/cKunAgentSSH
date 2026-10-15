@@ -289,8 +289,11 @@ export const useGithubAccelStore = defineStore('github-accel', () => {
   // ─── 一键加速 / 关闭加速（总控） ───
 
   /**
-   * 启动加速：按顺序应用各措施 —— insteadOf（上次镜像，没测速时用第一个启用项）、
-   * SSH 443、hosts（无权限时按需 UAC 提权，方案 A）。单项失败不中断其余项。
+   * 启动加速：只编排零系统风险的两项 —— git insteadOf（全局 git 配置，可一键还原）、
+   * SSH 443（~/.ssh/config 托管块，可一键移除）。单项失败不中断其余项。
+   *
+   * 刻意不包含 hosts 优选：写 hosts 需要管理员授权且影响系统域名解析，必须由用户在
+   * 下方卡片里显式两步操作（「优选 IP」→「写入」）完成，总控不代劳。
    */
   async function masterEnable(): Promise<MasterStep[]> {
     const api = window.electronAPI
@@ -322,20 +325,6 @@ export const useGithubAccelStore = defineStore('github-accel', () => {
       steps.push({ key: 'ssh443', ok: false, message: e?.message })
     }
 
-    // hosts：有优选结果才写（会触发 UAC 提权）
-    try {
-      if (hostsPicks.value.length === 0) await hostsPick()
-      if (hostsReadyCount.value > 0) {
-        await api.ghaccelHostsApply()
-        steps.push({ key: 'hosts', ok: true })
-      } else {
-        steps.push({ key: 'hosts', ok: false, message: '优选 IP 无可用结果，已跳过' })
-      }
-      await refreshHosts()
-    } catch (e: any) {
-      await refreshHosts()
-      steps.push({ key: 'hosts', ok: false, message: e?.message })
-    }
     return steps
   }
 

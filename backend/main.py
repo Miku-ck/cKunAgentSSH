@@ -225,11 +225,11 @@ async def api_token_auth(request: Request, call_next):
 
 @app.get("/api/health")
 async def health():
-    """健康检查 — BackendManager 轮询此端点"""
-    return {
-        "status": "ok",
-        "version": app.version,
-    }
+    """健康检查 — BackendManager 轮询此端点（仅判 200）。
+
+    唯一免 token 端点，不回显版本号：本机其他进程探测到开放端口后可借此
+    指纹识别应用；版本细节由需认证的 /settings/diagnostics 提供。"""
+    return {"status": "ok"}
 
 
 # 注册路由

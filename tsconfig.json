@@ -1,4 +1,9 @@
 {
+  // 纯聚合入口，供 IDE 识别 project references —— 不参与编译，也别往这里加 include。
+  // 真正的检查是 npm run typecheck（vue-tsc 直连下面两个子配置）。
+  // ⚠️ 别在此起 `tsc -b`：两个子项目是 composite（要 emit 才允许被引用），
+  // 一旦构建就会向 out/ 吐出与 electron-vite 产物相撞的 JS，而 out/** 又在
+  // electron-builder 的白名单里 —— 结果是打包产物混入两套入口。
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
@@ -8,10 +13,9 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "isolatedModules": true,
-    "declaration": true,
-    "composite": true
+    "isolatedModules": true
   },
+  "files": [],
   "references": [
     { "path": "./tsconfig.node.json" },
     { "path": "./tsconfig.web.json" }

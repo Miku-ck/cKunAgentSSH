@@ -216,7 +216,7 @@ CREATE TABLE memory_audit (
 ## 8. 上下文组装与压缩（Bridle / 记忆块接入）
 
 - `bridle._build` 组装顺序改为：**blocks 段（`[画像]` user-preferences + 当前主机 + agent-rules，无条件常驻，预算 ≤1200 token）→ system → `[相关记忆]` → history → `[上下文摘要]` → run 消息**。
-- **`MemoryBudget` 统一预算**：新增单一函数按 `model.max_tokens` 依次分配（blocks 1200 / 记忆注入 1500 / history 条数窗 × 单条均值 / 摘要 25% 上限 / 余量给输出+安全垫），替换 `bridle.py:36-85`、`safe_tokens.py` 多处字符估算；token 估算统一用 `cost_tracker.estimate_tokens`（现 `safe_tokens.py:15-66` 的字符估算废弃为唯一口径）。
+- **`MemoryBudget` 统一预算**：新增单一函数按 `model.max_tokens` 依次分配（blocks 1200 / 记忆注入 1500 / history 条数窗 × 单条均值 / 摘要 25% 上限 / 余量给输出+安全垫），替换 `bridle.py:36-85` 的字符估算；token 估算统一收敛到 `cost_tracker.estimate_tokens`。`safe_tokens.py` 的 `safe_max_tokens` 也随之改为委托该估算器（模块仍存活，被 `routes/agent.py` 调用），并未废弃。
 - run 内压缩保持"溢出时规则摘要"（零延迟，不动）；**新增** run 成功后 `episodic_summary` job 让 tick 用 LLM 重写为语义摘要再入库（压缩质量在管线里解决，不拖慢对话）——即"快路径规则保底、后台 LLM 提质"。
 - `context_summary`（run 内滚动摘要）持久化到 `agent_runs` 行，供轨迹回放与 episodic job 作输入，不再随 run 消亡。
 
