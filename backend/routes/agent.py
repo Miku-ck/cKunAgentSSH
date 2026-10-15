@@ -1554,7 +1554,7 @@ async def grant_tool_permission(req: PermissionGrantRequest):
     await append_record_async(
         action=f"permission_grant:{req.tool}",
         conclusion="approved",
-        # S2-04：审批决策必须带 run_id。docs/security-boundary.md §6 声明每条审批
+        # S2-04：审批决策必须带 run_id。已退役的 docs/security-boundary.md §6 声明每条审批
         # 记录可追到它服务的 run，而原实现八处 append_record 全都没传 run_id ——
         # grant 这一处连 req.run_id 都攥在手里（scope=once 还强制它非空，否则 400）。
         # 事后只能证明「有人批过 foo」，证不了「批的是哪次运行」，等保审计目标落空。

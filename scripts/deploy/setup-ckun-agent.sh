@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # setup-ckun-agent.sh — 在目标 Linux 服务器上部署 cKunAgentSSH P3 远端最小权限账户
 #
-# 作用（对应 docs/p3-remote-least-privilege.md）：
+# 作用（对应已退役的 docs/p3-remote-least-privilege.md）：
 #   1. 创建专用无登录系统账户 ckunagent（无 sudo/特权组，nologin）
 #   2. 创建工件目录 /srv/ckun-agent（含 jobs/）+ 远程任务根 /tmp/ckun_agent_jobs
 #   3. 安装白名单执行器 agent-exec.py 到 /usr/local/bin/agent-exec（root 属主，锁权）

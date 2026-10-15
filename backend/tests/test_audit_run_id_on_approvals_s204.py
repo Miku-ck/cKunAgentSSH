@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """S2-04 回归 — 每条隶属某个 run 的审批决策必须在审计记录里带上 run_id。
 
-docs/security-boundary.md §6 声明审计链可追「谁在哪个 run 里批了什么」，而
+已退役的 docs/security-boundary.md §6 声明审计链可追「谁在哪个 run 里批了什么」，而
 routes/agent.py 的八处 append_record_async 原先**一处都没传** run_id：列有默认值
 ""，所以不是报错，只是永远为空 —— 事后能证明「批过 foo」，证不了批的是哪次运行。
 撤销与手动登记永久授权那两条按设计不属于任何 run（它们改的是跨 run 的 allowlist），

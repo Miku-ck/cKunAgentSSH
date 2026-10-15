@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ckun-agent-verify.sh — P3 远端最小权限账户部署后验证
 #
-# 对应 docs/p3-remote-least-privilege.md 第 6 节「验证清单（部署后必跑）」，
+# 对应已退役的 docs/p3-remote-least-privilege.md 第 6 节「验证清单（部署后必跑）」，
 # 6 项逐一断言并给出 PASS/FAIL 汇总。需要一条能登录受限账户的 SSH 通道
 # （已配好的受限公钥）；脚本用 ssh -i key user@host '<cmd>' 下发检查命令。
 #

@@ -8,7 +8,7 @@ Safety — 命令安全检测层
 - 只读命令白名单 + 默认审批（C-review C1：未入表命令不再默认放行）
 - sudo -S stdin 密码猜测守卫
 
-判定精度（误判审查后的四条口径，详见 docs/security-boundary.md §3.1）：
+判定精度（误判审查后的四条口径，原登记在已退役的 docs/security-boundary.md §3.1，取值以本文件为准）：
 - 电源动词与 sudo/su 按**执行位置**命中（_classify_exec_position），
   `journalctl -b | grep -i reboot` 这类只读排查不再被判 hardline
 - /dev/null 一类安全设备不算敏感读写目标（_is_safe_device）
@@ -159,7 +159,7 @@ def normalize_command_for_detection(command: str) -> str:
     #     拿到的是真机路径，家目录形态还会先被第 4 步折成 `~\…`。
     #     折算只作用于「盘符或 ~ 之后到下一个空白」这一段：命令位照旧
     #     （`r\m` 混淆仍被第 6 步还原），POSIX 上以 `\` 开头的 UNC 与文件名里的裸
-    #     反斜杠不动 —— 前者登记在 docs/security-boundary.md §7，后者按 POSIX 语义
+    #     反斜杠不动 —— 前者登记在已退役的 docs/security-boundary.md §7，后者按 POSIX 语义
     #     本就是转义，折成 / 会把 `\etc\passwd` 这种字面文件名当成 /etc/passwd 误拦。
     command = _WIN_PATH_FOLD_RE.sub(lambda m: m.group(0).replace("\\", "/"), command)
 
@@ -372,11 +372,11 @@ _SECRET_FILE_RE = re.compile(
 )
 
 # Windows 形态的同一族凭据路径。为什么必须有：`file_read`/`file_grep`/`file_glob` 在无
-# SSH 会话时降级读**本机**文件（docs/security-boundary.md §7 的"不对称"条目），本机就是
+# SSH 会话时降级读**本机**文件（原 docs/security-boundary.md §7 的"不对称"条目，该文档已退役），本机就是
 # Windows —— 实测同一条私钥写成 `C:/Users/a/.ssh/id_rsa` 判 dangerous、写成
 # `C:\Users\a\.ssh\id_rsa` 判 safe，而 Windows 文件系统既不分大小写也用反斜杠分隔，
 # 两者是同一个文件。覆盖面与 _SECRET_FILE_RE 严格对齐（.ssh 目录 + id_* 私钥），
-# 不额外加宽 —— 主机私钥另有缺口，登记在 §7。
+# 不额外加宽 —— 主机私钥另有缺口，同一份退役文档 §7 登记过，仍未补。
 # IGNORECASE 只作用于带盘符的形态：Linux 上 `/etc/PASSWD` 不是 `/etc/passwd`，
 # 把大小写不敏感推广到 POSIX 等于凭空造出一批不存在的命中。
 _WIN_SECRET_PATH_RE = re.compile(
@@ -389,7 +389,7 @@ _WIN_SECRET_PATH_RE = re.compile(
 
 # dotenv 家族：`.env` 及其 `.env.<环境>` 变体是应用凭据的标准落点
 # （DB 口令、API token、SESSION_SECRET 全在里面），Rails/Laravel/Django/Symfony 的
-# 默认约定。`docs/security-boundary.md` §4 一直把 `.env` 列在敏感落点里，代码却从未
+# 默认约定。已退役的 `docs/security-boundary.md` §4 把 `.env` 列在敏感落点里，代码却从未
 # 有对应规则 —— 实测 `cat /app/.env` 判 safe。
 # 占位模板惯例上不含真凭据、且开发里 cat 它们是日常操作，故整族豁免（见下面的用例）；
 # `.env.bak` / `.env.save` 这类**备份**不豁免 —— 备份里抄的就是真身。
@@ -1101,7 +1101,7 @@ def _classify_write_targets(text: str) -> tuple[str, str | None]:
             or _is_home_relative(t)
             or _is_dotenv_path(_normalize_target(t))
         ):
-            # dotenv 与读侧同一口径：docs/security-boundary.md §4 一直把 `.env` 列为敏感
+            # dotenv 与读侧同一口径：已退役的 docs/security-boundary.md §4 把 `.env` 列为敏感
             # 落点，读侧这次补 Windows/dotenv 形态时写侧不能只接一半 —— 分两次收紧就是
             # 本仓反复赔钱的「同一判据跨调用点漂移」。reason 字面量沿用原文，
             # command_explain 的覆盖用例按它查表。

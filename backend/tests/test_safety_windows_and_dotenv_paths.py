@@ -3,7 +3,7 @@
 `_SECRET_FILE_RE` 与写侧的持久化判据最初都按 POSIX 单形态写，而本产品有两条真实的
 Windows 通路：
 - `file_read` / `file_grep` / `file_glob` 在无 SSH 会话时降级读**本机**文件
-  （`docs/security-boundary.md` §7 的"不对称"条目），本机就是 Windows，路径形态是
+  （已退役的 `docs/security-boundary.md` §7 的"不对称"条目），本机就是 Windows，路径形态是
   `C:\\Users\\alice\\.ssh\\id_rsa`，且文件系统大小写不敏感；
 - `file_read` 的分类代理模板是 `base64 <path>`，斜杠/反斜杠两种写法进的是同一条判定。
 
@@ -11,7 +11,7 @@ Windows 通路：
     cat C:\\Users\\alice\\.ssh\\id_rsa      → safe      （同一路径写成 / 分隔是 dangerous）
     cat C:/Users/alice/.ssh/ID_RSA         → safe      （Windows 上这就是同一个私钥）
     cat /app/.env                           → safe      （dotenv 是应用凭据的标准落点）
-而 `docs/security-boundary.md` §4 一直把 `.env` 列在"敏感目录 → dangerous"的落点里 ——
+而已退役的 `docs/security-boundary.md` §4 把 `.env` 列在"敏感目录 → dangerous"的落点里 ——
 文档声明的边界在代码里不存在。
 
 误拦侧同样钉住，因为收紧凭据判定的代价必须由用例说清楚：
