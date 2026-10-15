@@ -10,8 +10,8 @@
  * 与写侧（store 落盘前）都走这里，越界值一律拒绝，不夹到边界。
  */
 
-const PORT_MIN = 1
-const PORT_MAX = 65535
+export const PORT_MIN = 1
+export const PORT_MAX = 65535
 
 /** 是否为合法 TCP 端口号（非整数 / 越界 / 非 number 都算不合法） */
 export function isPort(v: unknown): v is number {

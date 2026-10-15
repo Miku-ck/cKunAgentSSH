@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """S1-06：TraceEvent 的 SSE 投影不许读生产者从未写的键。
 
 `SSEAdapter.to_sse_dict` 是**白名单**投影：只把列出的键搬到 Wire 上。于是漂移有两种，

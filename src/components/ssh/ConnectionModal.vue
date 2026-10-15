@@ -193,7 +193,7 @@ import type { SSHConnection } from '@/stores/ssh'
 import { useSettingsStore } from '@/stores/settings'
 import { useConfirm } from '@/composables/useConfirm'
 import { toFriendlyMessage } from '@/api/client'
-import { isPort } from '../../../shared/port-core'
+import { isPort, PORT_MAX } from '../../../shared/port-core'
 
 const props = defineProps<{
   editData?: SSHConnection
@@ -281,7 +281,7 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
 // （附带修正：原先小数如 22.5 会原样放行进 buildPayload，整数判据下夹回 22）
 function clampPortValue(n: number): number {
   if (isPort(n)) return n
-  return Number.isFinite(n) && n > 65535 ? 65535 : 22
+  return Number.isFinite(n) && n > PORT_MAX ? PORT_MAX : 22
 }
 
 function clampPort() {
