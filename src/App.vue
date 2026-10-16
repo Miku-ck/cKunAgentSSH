@@ -37,6 +37,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useSettingsStore } from './stores/settings'
+import { useAppStore } from './stores/app'
 import { useAppearance } from './composables/useAppearance'
 import type { NavPage } from './composables/useSshNavigation'
 import TitleBar from './layouts/TitleBar.vue'
@@ -46,6 +47,7 @@ import SettingsDialogHolder from './components/common/SettingsDialogHolder.vue'
 import SshView from './views/ssh/SshView.vue'
 
 const settingsStore = useSettingsStore()
+const appStore = useAppStore()
 useAppearance()
 
 const sshViewRef = ref<InstanceType<typeof SshView> | null>(null)
@@ -105,8 +107,10 @@ const hasBackground = computed(
 )
 
 onMounted(async () => {
-  // 初始化设置（从后端同步）
+  // 初始化设置（从后端同步）：先等后端就绪再拉 —— 这两条 GET 挨个在后端起来前抢跑
+  // 只会拿到"后端服务未就绪"并静默失败（面板拿到的是默认值）。
   try {
+    await appStore.readyPromise
     await Promise.all([
       settingsStore.loadMemorySettings(),
       settingsStore.loadPostProcessSettings(),

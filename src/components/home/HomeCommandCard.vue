@@ -17,6 +17,7 @@ import { useHomeCommand } from '@/composables/useHomeCommand'
 import { useModelSelector } from '@/composables/useModelSelector'
 import { useSettings } from '@/composables/useSettings'
 import { useAgentStore } from '@/stores/agent'
+import { useAppStore } from '@/stores/app'
 import { useModelsStore } from '@/stores/models'
 import { useSettingsStore } from '@/stores/settings'
 import { REMOTE_ID_PREFIX, useSshAiStore } from '@/stores/ssh-ai'
@@ -28,6 +29,7 @@ import { APPROVAL_OPTIONS, PERMISSION_LABELS, PERM_MARKS, PERM_SHIELD, resolveRu
 const agent = useAgentStore()
 const sshAi = useSshAiStore()
 const ssh = useSSHStore()
+const app = useAppStore()
 const modelsStore = useModelsStore()
 const skillsStore = useSkillStore()
 const settings = useSettingsStore()
@@ -218,9 +220,13 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 onMounted(() => {
-  void sshAi.fetchDefaultModel()
+  // 启动可靠性：模型列表/默认模型要 GET 后端，gate 在就绪信号上 —— 后端通过健康检查才发，
+  // 消除首屏"fetchModels failed：后端服务未就绪"的抢跑 warn。闸门只在真正就绪时 resolve，
+  // 后端不起则不开、不发抢跑请求（模型选择器置空，不谎报）。
+  void app.readyPromise.then(() => sshAi.fetchDefaultModel()).catch(() => { /* 防御位：readyPromise 设认不 reject */ })
   // 技能清单原先只在 SideChatPanel 的 setup 里装载（那边的 `void skillStore.loadBuiltinSkills()`），
   // 而右侧 AI 面板没开时那个组件根本不挂载 —— 首页的 ＋ 菜单就会永远空着。空表才装，不重复扫盘。
+  // 这条走本地 electronAPI 扫盘、不碰后端 HTTP，无需 gate 就绪。
   if (!skillsStore.skills.length) void skillsStore.loadBuiltinSkills()
 })
 </script>

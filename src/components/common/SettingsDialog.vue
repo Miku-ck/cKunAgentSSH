@@ -166,10 +166,7 @@ defineExpose({ open, close })
   /* 设置窗是「窗口」不是卡片：与主窗口 .ssh-view / .titlebar 同一层结构画布。
      先前这里画 --bg-elevated（卡片层），而侧栏那一列单独画了 --canvas-bg ——
      同一个弹窗里两种材质，右侧整片底色也和全 app 的结构背景对不上。
-     收归 shell 一处上色的另一层意思：玻璃主题下这枚是 transparent，折射由
-     global.css 给 .settings-dialog 的 blur 做，侧栏与内容区这才真的共用弹窗
-     自身那一层磨砂（先前只在玻璃下成立，其余主题侧栏是 --bg-base、内容是
-     --bg-elevated）。非玻璃主题 = --bg-base，等于侧栏原先那一片颜色，
+     收归 shell 一处上色：--canvas-bg = --bg-base，等于侧栏原先那一片颜色，
      只是把整窗统一到它上面；浮起关系仍由 border + box-shadow 负责。 */
   background: var(--canvas-bg);
   border: 1px solid var(--border-default);

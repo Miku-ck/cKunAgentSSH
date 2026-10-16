@@ -250,7 +250,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  /* 整页结构画布：走 --canvas-bg（玻璃下=transparent 透出壁纸） */
+  /* 整页结构画布：走 --canvas-bg（默认=--bg-base，见 DashboardView 同注） */
   background: var(--canvas-bg);
 }
 /* 头部统一以 RemoteManager .rm-header 为准：44px 高 + 16px 侧距 + 底部分隔线 */

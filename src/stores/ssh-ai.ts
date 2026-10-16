@@ -116,7 +116,12 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   // P2 修复：store 初始化时合并后端会话列表。
   // 历史原仅靠 localStorage 恢复，换设备/清本地后丢失；后端保存了已同步的完整列表。
   // fire-and-forget：store 工厂在 pinia setup 内执行，不阻塞面板渲染。
-  void persistence.syncBackendConversations()
+  // 启动可靠性：gate 在 appStore.readyPromise 上 —— 后端通过健康检查才发这次 GET，
+  // 消除首屏 port=0 的抢跑 warn。闸门仅在真正就绪（含崩溃重启后）时 resolve；后端
+  // 始终不起则它永不 open，这次 GET 自然不发 —— 本地列表即权威（同原失败语义）。
+  void useAppStore().readyPromise
+    .then(() => persistence.syncBackendConversations())
+    .catch(() => { /* 防御位：readyPromise 设认不 reject，留作意外失败的兜底 */ })
 
   // ── 模型选择 ──
 

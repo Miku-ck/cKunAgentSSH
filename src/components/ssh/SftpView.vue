@@ -697,7 +697,7 @@ async function onFileSaved(): Promise<void> {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  /* 整页结构画布：走 --canvas-bg（玻璃主题下=transparent，让渐变透上来；详见 DashboardView 同注）。 */
+  /* 整页结构画布：走 --canvas-bg（默认=--bg-base；详见 DashboardView 同注）。 */
   background: var(--canvas-bg);
 }
 
@@ -708,7 +708,7 @@ async function onFileSaved(): Promise<void> {
   align-items: center;
   justify-content: space-between;
   padding: 0 16px;
-  /* 结构工具条：走 --canvas-bg 与整页统一（玻璃下透出壁纸） */
+  /* 结构工具条：走 --canvas-bg 与整页统一 */
   background: var(--canvas-bg);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;

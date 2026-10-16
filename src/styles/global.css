@@ -19,10 +19,9 @@ body {
   width: 100%;
   font-family: var(--font-sans);
   /* 叠层而非回退：--bg-base 实色打底 + 主题渐变图在上。
-     glow/radial 渐变中段含 transparent 断点（靠“内容不透明”兜底），而玻璃主题
-     把整页画布改成了透明，若仍用回退式 var(--theme-gradient, var(--bg-base))，
-     渐变透明处会露出窗口深色 backgroundColor（晶白（原浅墨）出现「亮蓝→黑带→浅底」割裂，
-     浅色主题同源隐患）。叠层使透明处始终露出主题自身 --bg-base，不依赖窗口底色。 */
+     glow/radial 渐变中段含 transparent 断点（靠“内容不透明”兜底），若仍用回退式
+     var(--theme-gradient, var(--bg-base))，渐变透明处会露出窗口深色 backgroundColor
+     （浅底主题出现「亮色→黑带→浅底」割裂，浅色主题同源隐患）。叠层使透明处始终露出主题自身 --bg-base，不依赖窗口底色。 */
   background-color: var(--bg-base);
   background-image: var(--theme-gradient, none);
   color: var(--text-primary);
@@ -98,116 +97,4 @@ a:hover { text-decoration: underline; }
     transition-duration: 0s !important;
     animation-duration: 0s !important;
   }
-}
-
-/* ── 玻璃主题（玻璃 / 晶白）：Windows 7 Aero 材质 backdrop-filter 折射层 ──
-   变量层给带色相的玻璃底；真正的毛玻璃需要 backdrop-filter 把背后内容折射上来。
-   施加策略（三档，性能优先）：
-   - 大浮层（设置/弹窗/主面板/标题栏）：玻璃 blur(30) saturate(200%) / 晶白 blur(30) saturate(215%)
-   - 中卡片（首页命令卡 .hcc）：玻璃 blur(24) saturate(185%) / 晶白 blur(24) saturate(200%)
-   - 有内容从其下滚过的 sticky 表头，与浮层对话框（下面 §frosted 那一档）：blur(20)
-   - 小控件 / 终端 / 编辑器 / **表格主体**不加 blur —— 实时刷新区 blur 徒耗性能。
-     注意这与上一条不矛盾：被 blur 的是 `th`（sticky 表头，内容从它底下滚过去），
-     不是 `tbody` 那些会刷新的行。
-
-   为什么 Aero 这一版的 saturate 比苹果那版高一档：Win7 玻璃的“鲜艳”不是来自折射上来的
-   颜色，而是来自 Colorization —— 窗框自己带蓝调，模糊把背后的细节抹掉之后必须靠饱和
-   把那块蓝撑起来，否则大 blur 只会得到一片发灰的雾。色相在 variables.css 的 --bg-elevated
-   里，这里只补它折射不动的那一半。
-
-   折射成立依赖背后有彩色内容：见 variables.css 的 --canvas-bg: transparent 与主题渐变色
-   系统（渐变关时玻璃仍带蓝调，只是没有可折射的层次 —— 比苹果那版的“灰玻璃杯”耐看，
-   原理见 variables.css 玻璃块头第 1 条）。
-   窗口级真透出桌面（Electron backgroundMaterial:'acrylic'）不在这里，那条受 GPU 门禁，
-   见 spec 2026-10-14 §S0；它落地时这一段的 blur 会与窗框模糊叠加，届时要重排并重取证。 */
-[data-theme="glass"] .settings-dialog,
-[data-theme="glass"] .confirm-dialog,
-[data-theme="glass"] .modal-dialog,
-[data-theme="glass"] .modal,
-[data-theme="glass"] .bulk-modal,
-[data-theme="glass"] .dialog,
-[data-theme="glass"] .panel,
-[data-theme="glass"] .titlebar {
-  -webkit-backdrop-filter: blur(30px) saturate(200%);
-  backdrop-filter: blur(30px) saturate(200%);
-}
-
-[data-theme="glass"] .hcc {
-  -webkit-backdrop-filter: blur(24px) saturate(185%);
-  backdrop-filter: blur(24px) saturate(185%);
-}
-
-[data-theme="glass-light"] .settings-dialog,
-[data-theme="glass-light"] .confirm-dialog,
-[data-theme="glass-light"] .modal-dialog,
-[data-theme="glass-light"] .modal,
-[data-theme="glass-light"] .bulk-modal,
-[data-theme="glass-light"] .dialog,
-[data-theme="glass-light"] .panel,
-[data-theme="glass-light"] .titlebar {
-  -webkit-backdrop-filter: blur(30px) saturate(215%);
-  backdrop-filter: blur(30px) saturate(215%);
-}
-
-[data-theme="glass-light"] .hcc {
-  -webkit-backdrop-filter: blur(24px) saturate(200%);
-  backdrop-filter: blur(24px) saturate(200%);
-}
-
-/* ── 玻璃 frosted sticky 表头 / 对话框 ──
-   这些面在玻璃模型里是唯一的例外：普通结构面全透明透出壁纸，但它们有内容
-   从其下滚过 / 是浮层对话框，需半透底 + blur 磨砂才不会“文字压在滚动内容上”。
-   组件自身保持 background: var(--bg-base) 不动 → 非玻璃主题零回归；这里用
-   :root[data-theme=…] 前缀把特异度提到 (0,3,*)，压过 scoped 组件的 .x th[data-v] (0,2,1)。 */
-:root[data-theme="glass"] .audit-table th,
-:root[data-theme="glass"] .ptable th,
-:root[data-theme="glass"] .rhv-table th,
-:root[data-theme="glass"] .rm-row-header,
-:root[data-theme="glass"] .file-list-head,
-:root[data-theme="glass"] .dt-dialog {
-  background: var(--bg-elevated);
-  -webkit-backdrop-filter: blur(20px) saturate(190%);
-  backdrop-filter: blur(20px) saturate(190%);
-}
-
-:root[data-theme="glass-light"] .audit-table th,
-:root[data-theme="glass-light"] .ptable th,
-:root[data-theme="glass-light"] .rhv-table th,
-:root[data-theme="glass-light"] .rm-row-header,
-:root[data-theme="glass-light"] .file-list-head,
-:root[data-theme="glass-light"] .dt-dialog {
-  background: var(--bg-elevated);
-  -webkit-backdrop-filter: blur(20px) saturate(205%);
-  backdrop-filter: blur(20px) saturate(205%);
-}
-
-/* ── Aero 窗框顶缘：标题栏是整窗唯一一条「窗框」，它得有自己的镜面 ──
-   .titlebar 已经在上面大浮层档里被折射了，但 Win7 的窗框除了半透还有一条从顶缘打
-   下来的镜面高光 —— 那是形状不是颜色，令牌写不出来（--shadow-sm/-lg 里的镜面属于
-   浮起面，标题栏不消费它们），所以留在主题作用域里。
-   为什么不写进 TitleBar.vue：layouts/ 在 variables.test.ts 的裸色值禁区内，而且写进
-   组件就等于让其余 9 档主题也长出一条它们不该有的窗框高光。边框色不在此处重复声明 ——
-   .titlebar 的 border-bottom 读 --border-subtle，玻璃两档已在变量层把它换成蓝白断口，
-   在这里再抄一遍就是第二份定义。 */
-:root[data-theme="glass"] .titlebar {
-  box-shadow: inset 0 1px 0 rgba(214, 238, 255, 0.34);
-}
-
-:root[data-theme="glass-light"] .titlebar {
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95);
-}
-
-/* ── 玻璃切边：两枚「不许画边框」的浮层菜单 ──
-   `.hcc-menu` 与 `.htt-menu` 被 variables.test.ts「首页的控件不画自己的皮」钉成无边框，
-   所以 variables.css 块头第 2 条那条「切边交给各面自己的描边」对它们永远不成立，
-   只能在这里补 —— 否则玻璃两档下这两层菜单与身后彻底只剩投影分界。
-   用的是**外**发丝（`0 0 0 1px`，画在描边盒之外）而不是 inset 环：那 25 枚有描边的面
-   不会被同一圈线压成双线，而这两枚本就没有边框，一根外线正好就是它们的玻璃断口。
-   `.hcc-menu` 尤其要紧 —— 它的填充与宿主 `.hcc` 读**同一枚** --bg-elevated，玻璃下两层
-   同色。颜色仍走 --border-default，不在这里抄第二份色值。 */
-:root[data-theme="glass"] .hcc-menu,
-:root[data-theme="glass"] .htt-menu,
-:root[data-theme="glass-light"] .hcc-menu,
-:root[data-theme="glass-light"] .htt-menu {
-  box-shadow: var(--shadow-lg), 0 0 0 1px var(--border-default);
 }

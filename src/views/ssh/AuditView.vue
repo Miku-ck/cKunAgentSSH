@@ -274,7 +274,7 @@ onMounted(refresh)
   height: 100%;
   display: flex;
   flex-direction: column;
-  /* 整页结构画布：走 --canvas-bg（玻璃主题下=transparent，让渐变透上来；详见 DashboardView 同注）。 */
+  /* 整页结构画布：走 --canvas-bg（默认=--bg-base；详见 DashboardView 同注）。 */
   background: var(--canvas-bg);
   color: var(--text-primary);
   overflow: hidden;
@@ -357,7 +357,7 @@ onMounted(refresh)
   position: sticky;
   top: 0;
   /* 表头浮在滚动行之上，须不透明：用 --bg-elevated-solid（实体主题与卡面同值，
-     玻璃主题下卡面半透明，滚动行也不会从表头底下透出来） */
+     渐变模式下卡面半透明，滚动行也不会从表头底下透出来） */
   background: var(--bg-elevated-solid);
   text-align: left;
   padding: 8px 10px;

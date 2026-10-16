@@ -541,8 +541,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   min-width: 0;
   overflow: hidden;
   position: relative;
-  /* 结构面统一走 --canvas-bg（玻璃下=transparent 透出 body 同一层壁纸，
-     使所有非卡片背景一致；其余主题=--bg-base 零回归） */
+  /* 结构面统一走 --canvas-bg（默认=--bg-base，所有非卡片背景一致；见 DashboardView 同注） */
   background: var(--canvas-bg);
 }
 .sftp-pane.side-local { border-right: 1px solid var(--divider-primary); }

@@ -428,15 +428,12 @@ describe('settings 脏 localStorage 校验（全键）', () => {
     expect(ok.settings.appearance.themeGradientDirection).toBe('lr')
   })
 
-  it('玻璃两档的 theme 键名原样放行：改名就是把用户静默踢回 dark', async () => {
-    // 2026-10-14 把这对主题从 macOS vibrancy 换成 Windows 7 Aero，**只换材质和中文标签、
-    // 不换 `glass` / `glass-light` 这两个键**：`asEnum` 遇到不认识的值回落 'dark'，
-    // 而这次回落是不吭声的 —— 正在用玻璃的人升级后只会看到界面变暗，没有任何报错，
-    // 连"我的主题没了"都说不清。所以「键名复用」这条设计决定由本用例钉住：
-    // 谁要改名（比如改成 aero / aero-light），这里当场红。
+  it('玻璃两档已删除：持久化的 glass / glass-light 脏值回落 dark，不再被白名单放行', async () => {
+    // 2026-10 删除「玻璃/晶白」两档主题后，`asEnum` 遇到不认识的值回落 'dark'；
+    // 旧键绝不能重新出现在 THEMES 白名单里，否则删掉的主题会被静默复活。
     for (const theme of ['glass', 'glass-light'] as const) {
       const s = await storeWithSaved({ appearance: { theme } })
-      expect(s.settings.appearance.theme).toBe(theme)
+      expect(s.settings.appearance.theme).toBe('dark')
     }
   })
 

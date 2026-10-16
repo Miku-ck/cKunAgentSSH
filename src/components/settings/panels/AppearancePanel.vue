@@ -13,15 +13,6 @@
         </select>
       </SettingRow>
 
-      <!-- 玻璃/晶白的折射质感依赖主题渐变色提供背景内容，缺时只剩素色磨砂玻璃。
-           只把状态说破，不隐式改用户设置（沿用本仓约定）。 -->
-      <p
-        v-if="(settings.appearance.theme === 'glass' || settings.appearance.theme === 'glass-light') && !settings.appearance.themeGradientEnabled"
-        class="field-hint"
-      >
-        玻璃质感要折射背景里的层次，建议开启下方「主题渐变色」（关着时仍是蓝玻璃，只是折射不到东西，只剩素色磨砂）。
-      </p>
-
       <SettingRow label="强调色" desc="主色调与高亮色">
         <div class="color-swatches">
           <button
@@ -326,8 +317,6 @@ const themeLabels: Record<Theme, string> = {
   bee: '蜜蜂',
   coral: '珊瑚',
   atelier: '手记',
-  glass: '玻璃',
-  'glass-light': '晶白',
   system: '跟随系统',
 }
 

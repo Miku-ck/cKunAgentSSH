@@ -126,3 +126,8 @@ dist-*/
 
 # 本地双击启动 dev 的批处理壳（只为绕开本机 ELECTRON_RUN_AS_NODE 污染，非团队协作链路）
 start-dev.cmd
+
+# 启动根因探针遗留目录（default_app.asar 被 SYSTEM/杀软持锁 EBUSY，删不掉；
+# 重启后可物理删除，在此之前先忽略，防止探针产物混进提交）
+aclprobe/
+tmpedist/

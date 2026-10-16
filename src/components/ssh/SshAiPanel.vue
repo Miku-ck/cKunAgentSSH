@@ -40,6 +40,7 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useSshAiStore } from '@/stores/ssh-ai'
+import { useAppStore } from '@/stores/app'
 import { useModelsStore } from '@/stores/models'
 import { useAgentStore } from '@/stores/agent'
 import { useToastStore } from '@/stores/toast'
@@ -52,6 +53,7 @@ import type { ApprovalKey, PostureKey } from '@/utils/run-modes'
 defineEmits<{ close: [] }>()
 
 const store = useSshAiStore()
+const app = useAppStore()
 const modelsStore = useModelsStore()
 const agentStore = useAgentStore()
 const toast = useToastStore()
@@ -186,11 +188,15 @@ async function handleDeleteConv(id: string) {
 }
 
 onMounted(() => {
-  store.fetchDefaultModel()
-  // 工作流工件落盘在后端、每轮 run 都会被注入（即使前端从不知道它存在）。
-  // 面板挂载时补一次读取：否则重启后阶段指示消失，但模型仍在按工件执行 ——
-  // 界面与注入不一致，比没这个功能更危险。
-  void store.loadWorkflow()
+  // 启动可靠性：两条都 GET 后端（模型列表 / 会话工作流工件），gate 在就绪信号上 ——
+  // 与首页、ssh-ai store 工厂同一闸门，避免面板在后端就绪前打开时刷抢跑 warn。
+  void app.readyPromise.then(() => {
+    store.fetchDefaultModel()
+    // 工作流工件落盘在后端、每轮 run 都会被注入（即使前端从不知道它存在）。
+    // 面板挂载时补一次读取：否则重启后阶段指示消失，但模型仍在按工件执行 ——
+    // 界面与注入不一致，比没这个功能更危险。
+    void store.loadWorkflow()
+  }).catch(() => { /* 防御位：readyPromise 设认不 reject */ })
 })
 </script>
 
