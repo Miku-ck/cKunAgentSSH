@@ -22,8 +22,7 @@ export const PAGE_SHORTCUTS: ReadonlyArray<{
   { page: 'tunnels', num: 5, label: '隧道' },
   { page: 'docker', num: 6, label: 'Docker 管理' },
   { page: 'github', num: 7, label: 'GitHub 加速' },
-  { page: 'runs', num: 8, label: '运行记录' },
-  { page: 'audit', num: 9, label: '运维审计' },
+  { page: 'audit', num: 8, label: '运维审计' },
 ]
 
 /** 「监控仪表盘 (Ctrl+Shift+3)」形式的 title 提示，供 TitleBar 引用 */

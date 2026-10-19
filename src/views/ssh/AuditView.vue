@@ -1,12 +1,24 @@
 <template>
   <div class="audit-view">
-    <!-- 头部：标题 + 链完整性状态 + 操作 -->
+    <!-- 头部：分段 + 链完整性状态 + 操作 -->
     <div class="audit-header">
-      <div class="audit-title">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M9 12l2 2 4-4"/><path d="M20 12a8 8 0 1 1-2.34-5.66"/></svg>
-        <span>运维审计</span>
+      <div class="audit-head-left">
+        <div class="audit-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M9 12l2 2 4-4"/><path d="M20 12a8 8 0 1 1-2.34-5.66"/></svg>
+          <span>运维审计</span>
+        </div>
+        <!-- 分段：事件流 / 运行列表。两者是同一条追溯链的两个视图 —— 前者按
+             命令逐条记（含手动敲的），后者按 run 汇总（步数/耗时/成本）。
+             原「运行记录」独立页并入此处，顶栏不再为它单占一栏。 -->
+        <div class="audit-seg" role="tablist" aria-label="追溯视图">
+          <button class="audit-seg-btn" :class="{ on: segment === 'events' }" role="tab"
+            :aria-selected="segment === 'events'" @click="segment = 'events'">事件流</button>
+          <button class="audit-seg-btn" :class="{ on: segment === 'runs' }" role="tab"
+            :aria-selected="segment === 'runs'" @click="segment = 'runs'">运行列表</button>
+        </div>
       </div>
-      <div class="audit-actions">
+      <!-- 链校验/导出/归档清理都作用于审计表本身，切到运行列表时它们没有对象 -->
+      <div v-if="segment === 'events'" class="audit-actions">
         <span
           class="audit-badge"
           :class="verifyState ? (verifyState.intact ? 'ok' : 'broken') : 'idle'"
@@ -26,6 +38,7 @@
       </div>
     </div>
 
+    <template v-if="segment === 'events'">
     <!-- 过滤器 -->
     <div class="audit-filters">
       <select v-model="filters.environment" @change="loadFirst">
@@ -51,12 +64,12 @@
       </select>
       <input v-model="filters.target_id" placeholder="目标 ID 过滤" @keyup.enter="loadFirst" />
       <!-- 后端 run_id 是 `= ?` 精确匹配（audit.py:_build_filters），半个号筛不出东西 ——
-           运行视图头部的 № 点一下就是全号。 -->
+           运行列表分段的 trace 列点一下就是全号。 -->
       <input
         v-model="filters.run_id"
         class="trace-input"
         placeholder="trace 号（整串）"
-        title="按 trace 号找回某一条 run 的全部记录。运行视图/待放行队列头部点 № 可复制整串号"
+        title="按 trace 号找回某一条 run 的全部记录。运行列表分段的 trace 列/待放行队列头部点 № 可复制整串号"
         @keyup.enter="loadFirst"
       />
       <button
@@ -113,15 +126,24 @@
 
     <div v-if="loading" class="audit-loading">加载中…</div>
     <div v-if="error" class="audit-error">{{ error }}</div>
+    </template>
+
+    <!-- 运行列表分段：agent_runs 按 run 汇总，点开一行读 DB 权威轨迹 -->
+    <AgentRunsTable v-else />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, defineAsyncComponent, onMounted, reactive, ref } from 'vue'
 import { auditApi, toFriendlyMessage, type AuditRecord, type AuditVerifyResult } from '@/api/client'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToastStore } from '@/stores/toast'
 import { formatBackendTs } from '@/utils/format'
+
+// 运行列表只在切到那一段时才挂载（同时才发第一次请求），审计表这一段不背它
+const AgentRunsTable = defineAsyncComponent(() => import('@/components/ssh/AgentRunsTable.vue'))
+
+const segment = ref<'events' | 'runs'>('events')
 
 const { confirm } = useConfirm()
 const toast = useToastStore()
@@ -301,6 +323,36 @@ onMounted(refresh)
   font-weight: 600;
   color: var(--text-primary);
   font-family: var(--font-sans);
+}
+.audit-head-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+/* 分段切换：与远程管理页的「SSH 连接 / TLS 网关」同一形态（同一族约束，不另画一份） */
+.audit-seg {
+  display: flex;
+  height: 26px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.audit-seg-btn {
+  padding: 0 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.audit-seg-btn + .audit-seg-btn { border-left: 1px solid var(--border-subtle); }
+.audit-seg-btn:hover { color: var(--text-primary); }
+.audit-seg-btn.on {
+  background: var(--bg-active);
+  color: var(--text-primary);
+  font-weight: 600;
 }
 .audit-sub {
   font-size: 12px;

@@ -10,6 +10,9 @@
   ＋菜单/模型/技能/附件 chips 不再是第二套实现，本文 §1 担心的「第二份上下文入口」由此消除；
   `showAiPanel` 引用从基线 31 处降到 19 处。回看能力落在 run 表页 `src/views/ssh/RunHistoryView.vue`
   （`SshView.vue:92` 按 `pageMounted('runs')` 懒挂载）＋ `AgentFullTrace.vue` 的轨迹详情。
+  —— 修订 2026-10-19：那张 run 表不再单占顶栏一栏（用户裁决「追溯这一族不该再多一个 tab」），
+  已并入运维审计页作为「运行列表」分段，视图本体改名 `src/components/ssh/AgentRunsTable.vue`；
+  上面那句路径与 `pageMounted('runs')` 就此失效，`GET /agent/runs` 与表内容不变。
   ③ 因此本文 §2 的行号基线**已全部失效**，只可当历史现场读；若将来仍要彻底摘掉侧栏，剩余工作量
   只是这层 `v-if` 宿主与 `SshView` 的接线，动手前必须重新核一遍现网代码。
 

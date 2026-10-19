@@ -12,19 +12,12 @@
     <!-- 正文：头部钉住，仅此处滚动 -->
     <div class="tunnel-body">
 
-      <!-- 状态筛选（计数随启停/删除实时变化） -->
-      <div class="chips">
-        <button v-for="f in FILTERS" :key="f.key" class="chip" :class="{ on: filter === f.key }" @click="filter = f.key">
-          {{ f.label }} <span class="n">{{ counts[f.key] }}</span>
-        </button>
-      </div>
-
       <!-- 空态与行共用 .tunnel-list：额外的同级空壳 div 会平分 flex:1，把空态的垂直居中顶偏 -->
       <div class="tunnel-list">
-        <div v-if="visibleRows.length === 0" class="empty">
-          <div>{{ tunnelStore.rules.length === 0 ? '还没有隧道规则' : '没有符合当前筛选的隧道' }}</div>
+        <div v-if="rows.length === 0" class="empty">
+          <div>还没有隧道规则</div>
         </div>
-        <div v-for="row in visibleRows" :key="row.rule.id" class="tunnel-row" :class="{ error: row.state === 'error', orphan: row.orphan }">
+        <div v-for="row in rows" :key="row.rule.id" class="tunnel-row" :class="{ error: row.state === 'error', orphan: row.orphan }">
           <span class="dot" :class="row.dotClass"></span>
 
           <div class="row-main">
@@ -89,15 +82,7 @@ const sshStore = useSSHStore()
 const toast = useToastStore()
 
 const TYPE_LABELS: Record<TunnelRule['type'], string> = { local: 'L', remote: 'R', dynamic: 'D' }
-const FILTERS = [
-  { key: 'all', label: '全部' },
-  { key: 'active', label: '活动' },
-  { key: 'error', label: '错误' },
-  { key: 'stopped', label: '已停止' },
-] as const
-type FilterKey = (typeof FILTERS)[number]['key']
 
-const filter = ref<FilterKey>('all')
 const showModal = ref(false)
 const editingRule = ref<TunnelRule | undefined>(undefined)
 const busyId = ref('')
@@ -156,27 +141,6 @@ const rows = computed<Row[]>(() =>
     }
   }),
 )
-
-// 「已停止」桶含 starting（见下方 counts），筛选判据必须与计数同口径，
-// 否则角标数字与点开后的条数对不上——瞬时态短暂存在也要诚实计入。
-const visibleRows = computed(() =>
-  rows.value.filter(r =>
-    filter.value === 'all'
-      ? true
-      : filter.value === 'stopped'
-        ? r.state === 'stopped' || r.state === 'starting'
-        : r.state === filter.value,
-  ),
-)
-
-const counts = computed<Record<FilterKey, number>>(() => {
-  const c: Record<FilterKey, number> = { all: rows.value.length, active: 0, error: 0, stopped: 0 }
-  for (const r of rows.value) {
-    if (r.state === 'active' || r.state === 'error' || r.state === 'stopped') c[r.state]++
-    else c.stopped++ // starting 并入已停止桶外的兜底：仍算非活动，归入「已停止」可被筛出
-  }
-  return c
-})
 
 function openCreate() {
   editingRule.value = undefined
@@ -309,26 +273,6 @@ onUnmounted(() => {
 }
 .icon-btn.confirming:hover { background: var(--danger-border); }
 .icon-btn:disabled { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
-
-.chips {
-  display: flex;
-  gap: 6px;
-  margin-bottom: 14px;
-}
-.chip {
-  padding: 3px 10px;
-  border-radius: 12px;
-  font-size: 11.5px;
-  cursor: pointer;
-  border: 1px solid var(--border-subtle);
-  background: transparent;
-  color: var(--text-secondary);
-  transition: all var(--transition-fast);
-}
-.chip:hover { border-color: var(--border-default); color: var(--text-primary); }
-.chip.on { background: var(--bg-active); border-color: var(--border-default); color: var(--text-primary); }
-.chip .n { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-tertiary); }
-.chip.on .n { color: var(--text-secondary); }
 
 .tunnel-list {
   flex: 1;

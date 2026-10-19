@@ -33,7 +33,6 @@
      <!-- 无远程会话 → 连接引导态：有保存的连接才可连 -->
      <div v-else-if="!monitor.current" class="dash-empty">
        <p>未连接远程服务器</p>
-       <p class="dash-empty-sub">连接一台远程服务器后，指标将每 5 秒自动刷新</p>
      </div>
 
      <div v-else class="dash-body">

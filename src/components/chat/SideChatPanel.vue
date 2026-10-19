@@ -37,7 +37,6 @@
           </slot>
         </div>
         <h3 class="empty-title">{{ emptyTitle }}</h3>
-        <p class="empty-desc">{{ emptyDesc }}</p>
       </div>
 
       <!-- 消息列表（历史面板打开时隐藏，见上方空状态注释） -->
@@ -502,7 +501,6 @@ const props = defineProps<{
   creating?: boolean
   placeholder?: string
   emptyTitle?: string
-  emptyDesc?: string
   /** 面板头部标题（默认 "AI 助手"） */
   panelTitle?: string
   /**
@@ -1227,14 +1225,6 @@ defineExpose({ restoreDraft, prefill })
   font-weight: 600;
   color: var(--text-primary);
   margin: 0;
-}
-
-.empty-desc {
-  font-size: 13px;
-  color: var(--text-secondary);
-  margin: 0;
-  text-align: center;
-  line-height: 1.5;
 }
 
 /* Messages List */

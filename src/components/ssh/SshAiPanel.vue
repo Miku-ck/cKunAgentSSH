@@ -16,7 +16,6 @@
     panel-title="AI 运维助手"
     placeholder="询问运维问题..."
     empty-title="AI 运维助手"
-    empty-desc="对话与历史 — 多轮追问、终端「问 AI」与首页下达的记录都留在这里"
     @close="$emit('close')"
     @send="handleSend"
     @new-chat="handleNewChat"

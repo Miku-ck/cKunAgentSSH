@@ -541,6 +541,8 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   min-width: 0;
   overflow: hidden;
   position: relative;
+  /* 与 global.css 的 ::-webkit-scrollbar 同宽；列头要按它跨过滚动条槽，故显式取一份 */
+  --pane-scrollbar-w: 6px;
   /* 结构面统一走 --canvas-bg（默认=--bg-base，所有非卡片背景一致；见 DashboardView 同注） */
   background: var(--canvas-bg);
 }
@@ -662,10 +664,17 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
 }
 
 .file-list {
-  flex: 1; overflow-y: auto; font-size: 12px;
+  flex: 1; overflow-x: hidden; overflow-y: auto; font-size: 12px;
+  /* 两侧栏的滚动条只在各自内容溢出时出现，会吃掉 6px 让 1fr 名称列变窄，
+     固定列（大小/修改时间/权限）就跟着左右错位 —— 恒定预留滚动条槽位 */
+  scrollbar-gutter: stable;
   /* 纵向 flex：加载/错误/空目录提示撑满剩余空间双向居中 */
   display: flex; flex-direction: column;
 }
+.file-list::-webkit-scrollbar { width: var(--pane-scrollbar-w); }
+/* 列头与行都是 flex 子项，默认 flex-shrink:1 会在条目溢出时被压到行盒高度
+   （26→18、28→18），而未连接的另一侧仍是标称高度 —— 两栏的横线逐行错位 */
+.file-list-head, .file-row, .pane-list-limit { flex-shrink: 0; }
 .file-list-head {
   display: grid;
   grid-template-columns: 1fr 80px 130px 90px;
@@ -677,6 +686,10 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   font-size: 11px; font-weight: 500;
   position: sticky; top: 0; z-index: 1;
   text-align: left;
+  /* 槽位在 padding box 之内，列头不铺过去右上角就会缺一块底色和分隔线；
+     多铺的宽度用 padding-right 补回，保证列位置仍与 .file-row 逐列相同 */
+  margin-right: calc(-1 * var(--pane-scrollbar-w));
+  padding-right: calc(10px + var(--pane-scrollbar-w));
 }
 .file-row {
   display: grid;

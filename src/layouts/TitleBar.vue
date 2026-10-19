@@ -24,7 +24,7 @@
       </button>
       <button class="titlebar-action-btn" :class="{ active: activePage === 'dashboard' }" :title="'监控仪表盘' + pageHint('dashboard')" aria-label="监控仪表盘" @click="emit('action-dashboard')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-        <span class="tb-label">仪表盘</span>
+        <span class="tb-label">监控</span>
       </button>
       <button class="titlebar-action-btn" :class="{ active: activePage === 'schedules' }" :title="'定时任务' + pageHint('schedules')" aria-label="定时任务" @click="emit('action-schedules')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 16 14"/></svg>
@@ -55,11 +55,6 @@
       </button>
       <!-- 追溯类 -->
       <span class="titlebar-sep" aria-hidden="true"></span>
-      <button class="titlebar-action-btn" :class="{ active: activePage === 'runs' }" :title="'运行记录' + pageHint('runs')" aria-label="运行记录" @click="emit('action-runs')">
-        <!-- 历史图标：时钟回拨（lucide history），与「会话内轨迹」同一语义族 -->
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
-        <span class="tb-label">记录</span>
-      </button>
       <button class="titlebar-action-btn" :class="{ active: activePage === 'audit' }" :title="'运维审计' + pageHint('audit')" aria-label="运维审计" @click="emit('action-audit')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M9 12l2 2 4-4"/><path d="M20 12a8 8 0 1 1-2.34-5.66"/></svg>
         <span class="tb-label">审计</span>
@@ -105,7 +100,6 @@ const emit = defineEmits<{
   'action-schedules': []
   'action-remote': []
   'action-audit': []
-  'action-runs': []
   'action-sftp': []
   'action-dashboard': []
   'action-tunnels': []

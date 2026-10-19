@@ -2104,7 +2104,7 @@ async def list_agent_runs(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
-    """按时间倒序列出 Agent 运行记录（首页「历史任务」退役后的回看入口）。
+    """按时间倒序列出 Agent 运行记录（运维审计页「运行列表」分段的数据源）。
 
     为什么要有这一条：此前只有 /agent/runs/{run_id}/trace 单查，前端要找回一条
     已经跑完的 run 只能靠消息气泡里那枚 ▸轨迹 —— 会话被删，号就无处可查。

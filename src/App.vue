@@ -17,7 +17,6 @@
       @action-schedules="sshViewRef?.toggleSchedules()"
       @action-remote="sshViewRef?.toggleRemoteManager()"
       @action-audit="sshViewRef?.toggleAudit()"
-      @action-runs="sshViewRef?.toggleRuns()"
       @action-dashboard="sshViewRef?.toggleDashboard()"
       @action-sftp="sshViewRef?.toggleSftp()"
       @action-tunnels="sshViewRef?.toggleTunnels()"

@@ -96,11 +96,6 @@ v-show="s.id === store.activeSessionId"
           <AuditView v-if="pageMounted('audit')" />
         </div>
 
-        <!-- 运行记录页面（agent_runs 权威轨迹全局列表；复用 AgentFullTrace） -->
-        <div v-show="activeNavPage === 'runs'" class="runs-page">
-          <RunHistoryView v-if="pageMounted('runs')" />
-        </div>
-
         <!-- 定时任务页面 -->
         <div v-show="activeNavPage === 'schedules'" class="schedules-page">
           <SchedulesView v-if="pageMounted('schedules')" :active="activeNavPage === 'schedules'" />
@@ -232,8 +227,6 @@ const SchedulesView = defineAsyncComponent(() => import('@/views/ssh/SchedulesVi
 const DashboardView = defineAsyncComponent(() => import('@/views/ssh/DashboardView.vue'))
 const TunnelView = defineAsyncComponent(() => import('@/components/ssh/TunnelView.vue'))
 const DockerView = defineAsyncComponent(() => import('@/components/ssh/DockerView.vue'))
-// DEAD-001 接线：视图本体与后端 listRuns / AgentFullTrace inline 早已就绪，此前仅缺导航入口
-const RunHistoryView = defineAsyncComponent(() => import('@/views/ssh/RunHistoryView.vue'))
 const GithubAccelView = defineAsyncComponent(() => import('@/components/ssh/GithubAccelView.vue'))
 const RunView = defineAsyncComponent(() => import('@/components/agent/RunView.vue'))
 const CommandPalette = defineAsyncComponent(() => import('@/components/common/CommandPalette.vue'))
@@ -298,7 +291,6 @@ const {
   toggleSftp,
   toggleAiPanel,
   toggleAudit,
-  toggleRuns,
   toggleSchedules,
   toggleDashboard,
   toggleTunnels,
@@ -321,7 +313,7 @@ const {
 const showBulk = ref(false)
 
 // ── 全局快捷键 + 命令面板（M1-P0）──
-// 独立页统一开关表：快捷键与命令面板共用，避免九个 toggle 各写一遍分发
+// 独立页统一开关表：快捷键与命令面板共用，避免八个 toggle 各写一遍分发
 const PAGE_TOGGLES: Record<Exclude<NavPage, 'home'>, () => void> = {
   'remote-mgr': toggleRemoteManager,
   sftp: () => void toggleSftp(),
@@ -331,7 +323,6 @@ const PAGE_TOGGLES: Record<Exclude<NavPage, 'home'>, () => void> = {
   tunnels: toggleTunnels,
   docker: toggleDocker,
   github: toggleGithub,
-  runs: toggleRuns,
 }
 
 const paletteOpen = ref(false)
@@ -484,7 +475,6 @@ defineExpose({
   toggleRemoteManager,
   toggleSftp,
   toggleAudit,
-  toggleRuns,
   toggleSchedules,
   toggleDashboard,
   toggleTunnels,
@@ -680,17 +670,6 @@ defineExpose({
 
 /* ─── Audit Page ─── */
 .audit-page {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 10;
-  overflow: hidden;
-}
-
-/* 运行记录页：容器形态与 audit 页同构（整页覆盖、内部自滚动） */
-.runs-page {
   position: absolute;
   top: 0;
   left: 0;

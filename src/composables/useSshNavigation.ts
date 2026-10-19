@@ -17,7 +17,7 @@ export const LOCAL_SHELLS = ['PowerShell', 'CMD', 'Git Bash', 'WSL']
  * 类型检查却过得去（多出来的字面量只是没人传）。现在两处共用这一个源头。
  */
 export type NavPage =
-  'home' | 'remote-mgr' | 'sftp' | 'audit' | 'schedules' | 'dashboard' | 'tunnels' | 'docker' | 'github' | 'runs'
+  'home' | 'remote-mgr' | 'sftp' | 'audit' | 'schedules' | 'dashboard' | 'tunnels' | 'docker' | 'github'
 
 /**
  * 标题条可高亮的页键（ARCH-008 收口）：独立页 + AI 面板开关态。
@@ -145,8 +145,6 @@ export function useSshNavigation(
   }
 
   const toggleAudit = (): void => togglePage('audit')
-  // 运行记录页（agent_runs 全局列表；DEAD-001 接线：视图/后端/inline 轨迹全现成，此前仅缺入口）
-  const toggleRuns = (): void => togglePage('runs')
   const toggleSchedules = (): void => togglePage('schedules')
   const toggleDashboard = (): void => togglePage('dashboard')
   const toggleTunnels = (): void => togglePage('tunnels')
@@ -377,7 +375,6 @@ export function useSshNavigation(
     toggleSftp,
     toggleAiPanel,
     toggleAudit,
-    toggleRuns,
     toggleSchedules,
     toggleDashboard,
     toggleTunnels,

@@ -44,18 +44,18 @@
           <input type="checkbox" :checked="allSelected" :indeterminate.prop="someSelected" @change="toggleSelectAll" />
         </div>
         <div class="cell-status"></div>
-        <div class="cell-name sortable" :class="{ active: sortKey === 'name' }" @click="setSort('name')">
+        <div class="cell-name sortable" @click="setSort('name')">
           名称
           <span class="sort-arrow" v-if="sortKey === 'name'">▾</span>
         </div>
         <div class="cell-host">主机</div>
         <div class="cell-auth">认证</div>
         <div class="cell-tags">备注</div>
-        <div class="cell-time sortable" :class="{ active: sortKey === 'recent' }" @click="setSort('recent')">
+        <div class="cell-time sortable" @click="setSort('recent')">
           最后连接
           <span class="sort-arrow" v-if="sortKey === 'recent'">▾</span>
         </div>
-        <div class="cell-created sortable" :class="{ active: sortKey === 'created' }" @click="setSort('created')">
+        <div class="cell-created sortable" @click="setSort('created')">
           创建时间
           <span class="sort-arrow" v-if="sortKey === 'created'">▾</span>
         </div>
@@ -597,10 +597,7 @@ onUnmounted(() => {
   color: var(--text-secondary);
 }
 
-.sortable.active {
-  color: var(--accent-primary);
-}
-
+/* 当前排序列只靠 ▾ 箭头表意：原先再上一道强调色，表头里就那一列与其他列不同色 */
 .sort-arrow {
   font-size: 10px;
   display: inline-block;
