@@ -358,6 +358,16 @@ export const useSSHStore = defineStore('ssh', () => {
     activeSessionId.value = id
   }
 
+  /** 标签拖拽排序：把 dragId 移到 targetId 当前位置（其余相对顺序不变） */
+  function reorderSessions(dragId: string, targetId: string): void {
+    if (dragId === targetId) return
+    const from = sessions.value.findIndex(s => s.id === dragId)
+    if (from === -1) return
+    const [moved] = sessions.value.splice(from, 1)
+    const to = sessions.value.findIndex(s => s.id === targetId)
+    sessions.value.splice(to === -1 ? sessions.value.length : to, 0, moved)
+  }
+
   // ─── 标签右键批量关闭 ──────────────────────
   async function handleTabContextAction(action: string, targetId: string): Promise<void> {
     const idx = sessions.value.findIndex(s => s.id === targetId)
@@ -654,6 +664,7 @@ export const useSSHStore = defineStore('ssh', () => {
     closeSession,
     removeSession,
     switchSession,
+    reorderSessions,
     handleTabContextAction,
     addConnection,
     updateConnection,

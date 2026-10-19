@@ -9,9 +9,12 @@
       <span class="brand-text">cKunAgentSSH</span>
     </div>
     <div class="titlebar-drag" @dblclick="toggleMaximize"></div>
-    <!-- 功能按钮 -->
+    <!-- 功能按钮：按语义分组（会话 / 资源 / 追溯），组间分隔线。
+         ≥1024px 时按钮常显 2 字标签（可发现性优先），以下收纳为纯图标；
+         title 里的快捷键提示来自 useGlobalShortcuts.PAGE_SHORTCUTS，单一来源。 -->
     <div class="titlebar-actions" @dblclick.stop>
-      <button class="titlebar-action-btn" :class="{ active: activePage === 'ai' }" :title="agent.isRunning ? 'AI 运维助手（运行中）' : 'AI 运维助手'" @click="emit('action-ai')">
+      <!-- 会话类 -->
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'ai' }" :title="agent.isRunning ? 'AI 运维助手（运行中，Ctrl+Shift+B）' : 'AI 运维助手 (Ctrl+Shift+B)'" aria-label="AI 运维助手" @click="emit('action-ai')">
         <span class="ai-text">AI</span>
         <!-- 两个入口在视觉上是同一个助手的两扇门：跑起来呼吸点、跑完且面板
              关着时未读点（ssh-ai store 的 unreadReply，开面板即清）。
@@ -19,36 +22,50 @@
         <span v-if="agent.isRunning" class="ai-badge run" aria-hidden="true"></span>
         <span v-else-if="sshAi.unreadReply" class="ai-badge unread" aria-hidden="true"></span>
       </button>
-      <button class="titlebar-action-btn" :class="{ active: activePage === 'schedules' }" title="定时任务" @click="emit('action-schedules')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 16 14"/></svg>
-      </button>
-      <button class="titlebar-action-btn" :class="{ active: activePage === 'dashboard' }" title="监控仪表盘" @click="emit('action-dashboard')">
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'dashboard' }" :title="'监控仪表盘' + pageHint('dashboard')" aria-label="监控仪表盘" @click="emit('action-dashboard')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        <span class="tb-label">仪表盘</span>
       </button>
-      <button class="titlebar-action-btn" :class="{ active: activePage === 'remote-mgr' }" title="远程终端" @click="emit('action-remote')">
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'schedules' }" :title="'定时任务' + pageHint('schedules')" aria-label="定时任务" @click="emit('action-schedules')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 16 14"/></svg>
+        <span class="tb-label">定时</span>
+      </button>
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'remote-mgr' }" :title="'远程终端' + pageHint('remote-mgr')" aria-label="远程终端" @click="emit('action-remote')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg>
+        <span class="tb-label">远程</span>
       </button>
-      <button class="titlebar-action-btn" :class="{ active: activePage === 'tunnels' }" title="隧道" @click="emit('action-tunnels')">
+      <!-- 资源类 -->
+      <span class="titlebar-sep" aria-hidden="true"></span>
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'tunnels' }" :title="'隧道' + pageHint('tunnels')" aria-label="SSH 隧道" @click="emit('action-tunnels')">
         <!-- 隧道图标：拱形洞口 + 地面 + 通道中线，与 TunnelView 页头同一枚 -->
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M4 20v-7a8 8 0 0 1 16 0v7"/><path d="M12 20v-7"/><path d="M2 20h20"/></svg>
+        <span class="tb-label">隧道</span>
       </button>
-      <button class="titlebar-action-btn" :class="{ active: activePage === 'docker' }" title="Docker 管理" @click="emit('action-docker')">
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'docker' }" :title="'Docker 管理' + pageHint('docker')" aria-label="Docker 管理" @click="emit('action-docker')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M6 9.5h3v3H6zM11 9.5h3v3h-3zM11 6h3v3h-3z"/><path d="M3.5 12.5h13c1.6 0 3-.7 3.8-2 .7 2.3-.4 5-3.2 5H7a3.5 3.5 0 0 1-3.5-3z"/><path d="M3.5 12.5 2 10"/></svg>
+        <span class="tb-label">Docker</span>
       </button>
-      <button class="titlebar-action-btn" :class="{ active: activePage === 'github' }" title="GitHub 加速" @click="emit('action-github')">
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'github' }" :title="'GitHub 加速' + pageHint('github')" aria-label="GitHub 加速" @click="emit('action-github')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+        <span class="tb-label">GitHub</span>
       </button>
-      <button class="titlebar-action-btn" :class="{ active: activePage === 'runs' }" title="运行记录" @click="emit('action-runs')">
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'sftp' }" :title="'SFTP' + pageHint('sftp')" aria-label="SFTP 文件传输" @click="emit('action-sftp')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        <span class="tb-label">SFTP</span>
+      </button>
+      <!-- 追溯类 -->
+      <span class="titlebar-sep" aria-hidden="true"></span>
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'runs' }" :title="'运行记录' + pageHint('runs')" aria-label="运行记录" @click="emit('action-runs')">
         <!-- 历史图标：时钟回拨（lucide history），与「会话内轨迹」同一语义族 -->
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+        <span class="tb-label">记录</span>
       </button>
-      <button class="titlebar-action-btn" :class="{ active: activePage === 'audit' }" title="运维审计" @click="emit('action-audit')">
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'audit' }" :title="'运维审计' + pageHint('audit')" aria-label="运维审计" @click="emit('action-audit')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M9 12l2 2 4-4"/><path d="M20 12a8 8 0 1 1-2.34-5.66"/></svg>
+        <span class="tb-label">审计</span>
       </button>
-      <button class="titlebar-action-btn" :class="{ active: activePage === 'sftp' }" title="SFTP" @click="emit('action-sftp')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-      </button>
-      <button class="titlebar-action-btn" title="设置" @click="emit('action-settings')">
+      <span class="titlebar-sep" aria-hidden="true"></span>
+      <button class="titlebar-action-btn" title="设置 (Ctrl+,)" aria-label="设置" @click="emit('action-settings')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
     </div>
@@ -70,7 +87,8 @@
 <script setup lang="ts">
 import { useAgentStore } from '@/stores/agent'
 import { useSshAiStore } from '@/stores/ssh-ai'
-import type { NavPage } from '@/composables/useSshNavigation'
+import { pageShortcutHint as pageHint } from '@/composables/useGlobalShortcuts'
+import type { TitlebarPage } from '@/composables/useSshNavigation'
 
 const api = window.electronAPI
 
@@ -79,7 +97,7 @@ const sshAi = useSshAiStore()
 
 defineProps<{
   /** 当前激活的功能页，对应图标高亮（'ai' 是面板开关态，不在独立页清单里） */
-  activePage: NavPage | 'ai'
+  activePage: TitlebarPage
 }>()
 
 const emit = defineEmits<{
@@ -153,12 +171,23 @@ async function close() { await api?.windowClose() }
   -webkit-app-region: no-drag;
 }
 
+/* 组间分隔线：会话 / 资源 / 追溯三个语义族的视觉断口 */
+.titlebar-sep {
+  width: 1px;
+  height: 14px;
+  margin: 0 3px;
+  background: var(--border-subtle);
+  flex-shrink: 0;
+}
+
 .titlebar-action-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
+  gap: 4px;
+  min-width: 36px;
   height: 100%;
+  padding: 0 7px;
   border: none;
   background: transparent;
   color: var(--text-secondary);
@@ -186,6 +215,15 @@ async function close() { await api?.windowClose() }
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.5px;
+}
+
+/* 常显 2 字标签：≥1024px 展开（可发现性优先），以下由断点收纳为纯图标。
+   取 --text-tertiary：标签是图标的辅助信道，视觉权重必须低于图标本身 */
+.tb-label {
+  font-size: 11px;
+  line-height: 1;
+  color: inherit;
+  white-space: nowrap;
 }
 
 /* AI 按钮状态徽章：绝对定位钉在按钮右上角，不挤动 "AI" 字本身。
@@ -250,13 +288,20 @@ async function close() { await api?.windowClose() }
   background: transparent !important;
 }
 
-/* ── 窄窗口：图标优先。
-   6 个功能按钮 + 3 个窗口按钮约占 350px，窗口收窄时品牌区会被压没，
-   故隐藏品牌文字、收紧按钮宽度，保证全部功能入口仍可点。 */
+/* ── 宽度收纳（三级）──
+   ≥1024px：图标 + 2 字标签（估算：10 枚按钮约 640px + 品牌 + 窗控 ≈ 900px）；
+   <1024px：标签收纳，回到纯图标（36px/枚），全部入口保留；
+   <760px：进一步收紧按钮与品牌区，保证 10+3 枚按钮全可点。 */
+@media (max-width: 1024px) {
+  .tb-label { display: none; }
+  .titlebar-action-btn { min-width: 36px; padding: 0; gap: 0; }
+  .titlebar-sep { margin: 0 1px; }
+}
+
 @media (max-width: 760px) {
   .titlebar-brand { padding: 0 8px; }
   .brand-text { display: none; }
-  .titlebar-action-btn { width: 30px; }
+  .titlebar-action-btn { min-width: 30px; }
   .win-btn { width: 38px; }
 }
 </style>

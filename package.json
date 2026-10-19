@@ -22,6 +22,7 @@
     "postinstall": "node scripts/rebuild-native.cjs"
   },
   "dependencies": {
+    "@xterm/addon-search": "^0.16.0",
     "node-pty": "^1.1.0",
     "ssh2": "^1.17.0"
   },

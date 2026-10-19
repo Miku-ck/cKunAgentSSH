@@ -19,6 +19,14 @@ export const LOCAL_SHELLS = ['PowerShell', 'CMD', 'Git Bash', 'WSL']
 export type NavPage =
   'home' | 'remote-mgr' | 'sftp' | 'audit' | 'schedules' | 'dashboard' | 'tunnels' | 'docker' | 'github' | 'runs'
 
+/**
+ * 标题条可高亮的页键（ARCH-008 收口）：独立页 + AI 面板开关态。
+ * 'home' 表示当前无标题条高亮项（首页态由标签条自己点亮）。
+ * App.vue 与 TitleBar.vue 必须共用这一份 —— 此前 App 内联手抄第二份联合，
+ * 加一页两处都要改，漏一处的表现是图标永远不亮。
+ */
+export type TitlebarPage = Exclude<NavPage, 'home'> | 'ai' | 'home'
+
 /** 远程连接防抖间隔 */
 const CONNECT_DEBOUNCE_MS = 2000
 

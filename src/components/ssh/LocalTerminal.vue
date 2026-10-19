@@ -9,6 +9,12 @@
       @select="applyCompletion"
       @cancel="hideCompletion"
     />
+    <!-- 终端内搜索条（Ctrl+Shift+F）：addon 父组件持有，条只管 UI -->
+    <TermSearchBar
+      v-if="searchOpen && searchAddonRef"
+      :addon="searchAddonRef"
+      @close="closeSearch"
+    />
     <!-- 「问 AI」悬浮按钮：选中终端内容后在选区上方出现 -->
     <button
       v-if="askAiBtn.visible && visible"
@@ -25,12 +31,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, shallowRef, onMounted, onUnmounted, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
+import { SearchAddon } from '@xterm/addon-search'
 import '@xterm/xterm/css/xterm.css'
 import CompletionPopup from './CompletionPopup.vue'
+import TermSearchBar from './TermSearchBar.vue'
 import { releaseCompletionSession } from '@/composables/useCompletion'
 import { useCompletionPopup } from '@/composables/useCompletionPopup'
 import { useSSHStore } from '@/stores/ssh'
@@ -56,6 +64,13 @@ let unsubExit: (() => void) | null = null
 let unsubTermConfig: (() => void) | null = null
 let resizeObserver: ResizeObserver | null = null
 let contextMenuHandler: ((e: Event) => void) | null = null
+/** 搜索 addon：模板需要传给 TermSearchBar，用 shallowRef 持有（addon 本身无需深度响应） */
+const searchAddonRef = shallowRef<SearchAddon | null>(null)
+const searchOpen = ref(false)
+function closeSearch(): void {
+  searchOpen.value = false
+  terminal?.focus()
+}
 
 const sshStore = useSSHStore()
 
@@ -102,6 +117,11 @@ onMounted(() => {
   terminal.loadAddon(fitAddon)
   terminal.loadAddon(new WebLinksAddon())
 
+  // 终端内搜索（Ctrl+Shift+F 唤起）：addon 与终端同生命周期，组件负责 dispose
+  const search = new SearchAddon()
+  terminal.loadAddon(search)
+  searchAddonRef.value = search
+
   terminal.open(containerRef.value)
 
   // 「问 AI」上下文采集启动（本地 cwd 取一次）
@@ -121,6 +141,23 @@ onMounted(() => {
     // 多终端并存时,仅当前可见(活动)终端响应全局快捷键
     // 避免不可见终端也触发补全,或拦截方向键导致活动终端浮层无法导航
     if (!props.visible) return
+
+    // 终端内搜索唤起（Ctrl+Shift+F）：^F 是 shell 前进字符，必须用 Shift 档避开。
+    // 拦截要早于补全逻辑（同为 document capture，先到先得）
+    if (searchOpen.value && e.key === 'Escape') {
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      e.stopPropagation()
+      closeSearch()
+      return
+    }
+    if (e.ctrlKey && e.shiftKey && (e.key === 'F' || e.key === 'f')) {
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      e.stopPropagation()
+      searchOpen.value = true
+      return
+    }
 
     // 浮层可见时：在 document 范围拦截键盘事件（不限于 terminal 容器内）
     // 这样即使焦点在外部，按 Tab 也能导航浮层
@@ -300,6 +337,7 @@ onUnmounted(() => {
     window.electronAPI.ptyDestroy(props.ptyId).catch(() => {})
   }
   terminal?.dispose()
+  searchAddonRef.value = null
   // 审查修复（P2）：卸载后 terminal 置 null — 原实现只 dispose 不清引用，
   // 卸载窗口内补全/渲染回调的 terminal 守卫失效，会在已 dispose 实例上操作
   terminal = null

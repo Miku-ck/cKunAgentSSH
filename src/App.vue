@@ -39,7 +39,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useSettingsStore } from './stores/settings'
 import { useAppStore } from './stores/app'
 import { useAppearance } from './composables/useAppearance'
-import type { NavPage } from './composables/useSshNavigation'
+import type { TitlebarPage } from './composables/useSshNavigation'
 import TitleBar from './layouts/TitleBar.vue'
 import ToastContainer from './components/common/ToastContainer.vue'
 import ConfirmDialogHolder from './components/common/ConfirmDialogHolder.vue'
@@ -53,9 +53,7 @@ useAppearance()
 const sshViewRef = ref<InstanceType<typeof SshView> | null>(null)
 
 // 当前激活的功能页：用于 TitleBar 图标高亮（ref 未挂载时为 'home'）
-// ARCH-008 前哨：这份内联联合与 useSshNavigation 的 NavPage 是两份手抄 —— 收敛
-// 为 NavPage 去掉 'home' 加 'ai'，避免下一页接进来时两边漂移
-type TitlebarPage = NavPage | 'ai'
+// ARCH-008 已收口：可高亮页键单一来源 = useSshNavigation 的 TitlebarPage
 const activePage = computed<TitlebarPage>(() => {
   const nav = sshViewRef.value?.activeNavPage
   if (nav && nav !== 'home') return nav

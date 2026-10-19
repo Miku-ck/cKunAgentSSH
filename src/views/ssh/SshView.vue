@@ -4,7 +4,7 @@
     <div class="ssh-main">
       <!-- 标签栏 -->
       <div class="term-tabs">
-        <div class="tabs-scroll">
+        <div class="tabs-scroll" @wheel.prevent="onTabsWheel">
           <!-- 首页标签：恒在、不可关闭，是打开应用时的第一个屏 -->
           <div
             class="term-tab home-tab"
@@ -16,18 +16,27 @@
             <span class="tab-label">首页</span>
           </div>
 
-          <!-- 终端标签 -->
+          <!-- 终端标签：中键关闭 / 拖拽排序 / title 全名（截断后可看全） -->
           <div
             v-for="s in store.sessions"
             :key="s.id"
             class="term-tab"
             :class="{ active: s.id === store.activeSessionId && terminalVisible }"
+            role="tab"
+            :aria-selected="s.id === store.activeSessionId && terminalVisible"
+            :title="s.name"
+            draggable="true"
             @click="activateTerminal(s.id)"
+            @auxclick.middle.prevent="store.closeSession(s.id)"
             @contextmenu.prevent="showTabContextMenu($event, s.id)"
+            @dragstart="onTabDragStart(s.id, $event)"
+            @dragover.prevent
+            @drop="onTabDrop(s.id, $event)"
+            @dragend="dragTabId = ''"
           >
             <IconMonitor v-if="s.type === 'remote'" :width="12" :height="12" :stroke-width="2" />
             <span class="tab-label">{{ s.name }}</span>
-            <button class="tab-close" @click.stop="store.closeSession(s.id)">
+            <button class="tab-close" aria-label="关闭终端" @click.stop="store.closeSession(s.id)">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
@@ -141,6 +150,16 @@ v-show="s.id === store.activeSessionId"
     <!-- 多节点批量下发（首页目标主机的「全部 N 台」入口；远程管理页同一组件） -->
     <BulkCommandModal v-if="showBulk" @close="showBulk = false" />
 
+    <!-- 命令面板（Ctrl+Shift+P）：页面 / 会话 / 连接 / 快捷命令统一入口 -->
+    <CommandPalette
+      v-if="paletteOpen"
+      @close="paletteOpen = false"
+      @navigate="onPaletteNavigate"
+      @go-home="onPaletteGoHome"
+      @activate-session="onPaletteActivateSession"
+      @connect="onPaletteConnect"
+    />
+
     <!-- 连接弹窗 -->
     <ConnectionModal
       v-if="showModal"
@@ -217,6 +236,7 @@ const DockerView = defineAsyncComponent(() => import('@/components/ssh/DockerVie
 const RunHistoryView = defineAsyncComponent(() => import('@/views/ssh/RunHistoryView.vue'))
 const GithubAccelView = defineAsyncComponent(() => import('@/components/ssh/GithubAccelView.vue'))
 const RunView = defineAsyncComponent(() => import('@/components/agent/RunView.vue'))
+const CommandPalette = defineAsyncComponent(() => import('@/components/common/CommandPalette.vue'))
 import { useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useAgentStore } from '@/stores/agent'
@@ -225,6 +245,8 @@ import { useAccessStore } from '@/stores/access'
 import { useSettings } from '@/composables/useSettings'
 import { useCommandDelivery } from '@/composables/useCommandDelivery'
 import { useSshNavigation } from '@/composables/useSshNavigation'
+import { useGlobalShortcuts } from '@/composables/useGlobalShortcuts'
+import type { NavPage } from '@/composables/useSshNavigation'
 import { useTabContextMenu } from '@/composables/useTabContextMenu'
 import { qcHeightForAlign } from '@/utils/qc-align'
 
@@ -297,6 +319,77 @@ const {
 
 /** 首页目标菜单里「全部 N 台」拉起的批量下发弹窗 */
 const showBulk = ref(false)
+
+// ── 全局快捷键 + 命令面板（M1-P0）──
+// 独立页统一开关表：快捷键与命令面板共用，避免九个 toggle 各写一遍分发
+const PAGE_TOGGLES: Record<Exclude<NavPage, 'home'>, () => void> = {
+  'remote-mgr': toggleRemoteManager,
+  sftp: () => void toggleSftp(),
+  audit: toggleAudit,
+  schedules: toggleSchedules,
+  dashboard: toggleDashboard,
+  tunnels: toggleTunnels,
+  docker: toggleDocker,
+  github: toggleGithub,
+  runs: toggleRuns,
+}
+
+const paletteOpen = ref(false)
+
+function closeActiveSession(): void {
+  if (store.activeSessionId) void store.closeSession(store.activeSessionId)
+}
+
+useGlobalShortcuts({
+  activateTerminal,
+  closeActiveSession,
+  toggleAiPanel,
+  toggleNavPage: (page) => PAGE_TOGGLES[page](),
+  togglePalette: () => { paletteOpen.value = !paletteOpen.value },
+  isPaletteOpen: () => paletteOpen.value,
+  openSettings,
+})
+
+// 命令面板动作：先收面板再执行，避免面板遮挡后续页面的转场反馈
+function onPaletteNavigate(page: Exclude<NavPage, 'home'>) {
+  paletteOpen.value = false
+  PAGE_TOGGLES[page]()
+}
+function onPaletteGoHome() {
+  paletteOpen.value = false
+  goHome()
+}
+function onPaletteActivateSession(id: string) {
+  paletteOpen.value = false
+  activateTerminal(id)
+}
+function onPaletteConnect(connId: string) {
+  paletteOpen.value = false
+  handleRmConnect(connId)
+}
+
+// ── 标签条增强：滚轮横滚 + 拖拽排序 ──
+// tabs-scroll 的滚动条是 display:none 的，滚轮 delta 默认不产生横向位移，这里手工转接
+function onTabsWheel(e: WheelEvent): void {
+  const el = e.currentTarget as HTMLElement
+  el.scrollLeft += e.deltaY + e.deltaX
+}
+
+const dragTabId = ref('')
+function onTabDragStart(id: string, e: DragEvent): void {
+  dragTabId.value = id
+  if (e.dataTransfer) {
+    e.dataTransfer.setData('text/plain', id)
+    e.dataTransfer.effectAllowed = 'move'
+  }
+}
+function onTabDrop(id: string, e: DragEvent): void {
+  e.preventDefault()
+  if (dragTabId.value && dragTabId.value !== id) {
+    store.reorderSessions(dragTabId.value, id)
+  }
+  dragTabId.value = ''
+}
 
 /**
  * 过程面板的可见条件（与先前那枚 run 标签同源）：正在跑，或有一轮跑完可回看。
