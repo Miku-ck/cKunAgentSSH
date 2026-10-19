@@ -51,7 +51,14 @@ def _parse_int_field(s: str, lo: int, hi: int, label: str, errs: list[str]) -> i
         hint = "，不支持 '*'（要每分钟/每小时都跑一次，请改用 mode=interval）" if s == "*" else ""
         errs.append(f"{label} 必须是数字{hint}，收到 {s!r}")
         return None
-    v = int(s)
+    try:
+        v = int(s)
+    except ValueError:
+        # _is_digits 用的是 str.isdigit()，它对 '²'、'٣' 这类 Unicode 数字同样为真，
+        # 而 int() 只认 ASCII 十进制：原样抛出去会逃出 execute，工具连 ToolResult
+        # 都回不了（同一个坑已在 interval_minutes 那条上修过，见 :319-321）。
+        errs.append(f"{label} 必须是 ASCII 数字，收到 {s!r}")
+        return None
     if not (lo <= v <= hi):
         errs.append(f"{label} 越界（允许 {lo}-{hi}），收到 {v}")
         return None

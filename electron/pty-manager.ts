@@ -237,9 +237,16 @@ export class PtyManager {
     // 将底层平台错误（node-pty spawn 抛出的 ENOENT / conpty 不可用等）转为
     // 可直接展示给用户的中文错误；否则渲染层只能拿到晦涩的英文原文。
     const shellLabel = shellBase.split(/[\\/]/).pop() || shell
+    const ptyModule = await loadPty()
+    // 上限检查到 sessions.set 之间原本隔着 stat 与 loadPty 两个 await，并发
+    // create（一次恢复多个标签）会全部读到同一个未越限的 size 而无界 spawn。
+    // await 之后到 spawn 之间是同步段，在这里复查才真正封住上限。
+    if (this.sessions.size >= MAX_PTY_SESSIONS) {
+      throw new Error('本地终端数量已达上限，请关闭闲置终端后重试')
+    }
     let proc: PtyNamespace.IPty
     try {
-      proc = (await loadPty()).spawn(shell, finalArgs, {
+      proc = ptyModule.spawn(shell, finalArgs, {
         name: 'xterm-256color',
         cols,
         rows,

@@ -47,6 +47,11 @@ export interface TransferItem {
 // 参照 App.vue 背景图 bgSeq 模式：await 后序号不匹配即丢弃过期结果。
 let localLoadSeq = 0
 let remoteLoadSeq = 0
+// 打开会话的代次。connect / connectFromTerminal 都要等一整套握手 + 列目录，期间
+// 用户可以再发起一次（`online` 还是 false，图标与「连接远程」都照常可点），两条并发
+// 完成时落败者会把全局身份抹成空串 —— 真正活着的那条会话因此再也关不掉（disconnect
+// 见 sshSessionId 为空直接跳过 sftpClose/sshDisconnect），地址栏与列表还会分属两台主机。
+let openSeq = 0
 
 /** 带超时的 sshExec（新契约：第三参 timeoutSec，默认 30 上限 600）。
  *  本地类型断言 — env.d.ts 的 ElectronAPI.sshExec 签名由主进程代理同步更新 */
@@ -196,23 +201,40 @@ export const useSftpStore = defineStore('sftp', () => {
   /** 直接通过 SSH 连接 + SFTP 子系统打开远程会话(独立于终端会话) */
   async function connect(connection: SSHConnectionRecord): Promise<void> {
     if (online.value) await disconnect()
+    const myOpen = ++openSeq
     reusingTerminal.value = false
     const plain = JSON.parse(JSON.stringify(connection))
     const { id, name } = await getApi().sshConnectSftp(plain)
+    if (myOpen !== openSeq) {
+      // 握手期间后起的打开已接管全局身份：这条新建的连接没人引用，就地拆掉并静默
+      // 退出。写全局状态会把新会话的身份改写成旧主机，抛错还会多弹一次失败。
+      try { await getApi().sshDisconnect(id) } catch { }
+      return
+    }
     sshSessionId.value = id
     connectionName.value = name || `${connection.username}@${connection.host}`
     connectionHost.value = `${connection.username}@${connection.host}:${connection.port}`
     try {
       await getApi().sftpOpen(id)
+      if (myOpen !== openSeq) {
+        try { await getApi().sftpClose(id) } catch { }
+        try { await getApi().sshDisconnect(id) } catch { }
+        return
+      }
       online.value = true
       remoteCwd.value = '/'
       await loadRemote('/')
     } catch (err: any) {
+      if (myOpen !== openSeq) {
+        try { await getApi().sshDisconnect(id) } catch { }
+        return
+      }
       online.value = false
       remoteError.value = unwrapIpcErrorEnvelope(err?.message || '') || 'SFTP 打开失败'
       // 失败时关闭 SSH
       try { await getApi().sshDisconnect(id) } catch { }
-      sshSessionId.value = ''
+      // 只在身份仍是本次打开设进去的那条时清空：否则抹掉的是后起会话的身份
+      if (sshSessionId.value === id) sshSessionId.value = ''
       throw err
     }
   }
@@ -227,12 +249,21 @@ export const useSftpStore = defineStore('sftp', () => {
     host: string,
   ): Promise<void> {
     if (online.value) await disconnect()
+    const myOpen = ++openSeq
     reusingTerminal.value = true
     sshSessionId.value = terminalSshId
     connectionName.value = name
     connectionHost.value = host
     try {
       await getApi().sftpOpen(terminalSshId)
+      if (myOpen !== openSeq) {
+        // 后起那次已接管全局状态。只有当前身份不是本终端时才回收本终端的 SFTP
+        // 子系统 —— 两次点开同一台时，关掉会把接管者一起打死。
+        if (sshSessionId.value !== terminalSshId) {
+          try { await getApi().sftpClose(terminalSshId) } catch { }
+        }
+        return
+      }
       online.value = true
       // 获取终端当前工作目录：优先用 OSC 7 跟踪值，为空则 exec pwd
       let cwd = await getApi().sshGetCwd(terminalSshId)
@@ -240,15 +271,23 @@ export const useSftpStore = defineStore('sftp', () => {
         const result = await getApi().sshExec(terminalSshId, 'pwd')
         cwd = (result.stdout || '').trim()
       }
+      if (myOpen !== openSeq) return
       const target = cwd || '/'
       remoteCwd.value = target
       await loadRemote(target)
     } catch (err: any) {
+      if (myOpen !== openSeq) {
+        // 旧代的失败不改全局在线态、也不弹给用户；自己那条子系统若没被接管就顺手回收
+        if (sshSessionId.value !== terminalSshId) {
+          try { await getApi().sftpClose(terminalSshId) } catch { }
+        }
+        return
+      }
       online.value = false
       remoteError.value = unwrapIpcErrorEnvelope(err?.message || '') || 'SFTP 打开失败'
       // 复用模式下不关闭 SSH 连接（终端仍需要）
       try { await getApi().sftpClose(terminalSshId) } catch { }
-      sshSessionId.value = ''
+      if (sshSessionId.value === terminalSshId) sshSessionId.value = ''
       reusingTerminal.value = false
       throw err
     }
@@ -274,6 +313,9 @@ export const useSftpStore = defineStore('sftp', () => {
     // 把死主机的目录列表和 remoteCwd 重新填回（online 已 false，列不可操作，且脏
     // cwd 带入下次连接）。bump 一下让那次 mySeq 失配即可。
     remoteLoadSeq++
+    // 同理推进打开代次：断线时若在途的 connect 还在握手，那一次回来后不该把
+    // online/sshSessionId 重新点亮成一台已经不存在的主机
+    openSeq++
     selectedRemote.value = new Set()
     // 跨主机的远程剪贴板必须一起清：不清则换主机后「粘贴」会把 A 机的绝对路径
     // cp -r 到 B 机上（canPaste 只比 side，比不出主机）
@@ -573,6 +615,10 @@ async function remoteRefresh(): Promise<void> {
       toast.success(`复制成功: ${t.name}`)
       scheduleRemoveTransfer(id)
     } catch (err: any) {
+      // 与 runRemoteCopy 的 S5-11 口径一致：取消或断开让 fs:copy 抛出时静默返回，
+      // 别再用「复制失败」盖掉「已取消」，也不给已被摘掉的记录改状态
+      const statusNow: string = t.status
+      if (statusNow === 'cancelled' || !transfers.value.some(x => x.id === id)) return
       t.status = 'error'
       // 兜底文案不能也叫「复制失败」：外层 toast 已经以「复制失败: 名字 —」开头，
       // 撞上这个兜底就原样说两遍。

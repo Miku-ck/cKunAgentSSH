@@ -106,6 +106,22 @@ _OBS_META = ToolMeta(
     timeout=15.0,
 )
 
+def _keyword_reject(value: str) -> str | None:
+    """关键词/子串槽位的取值守卫；非法时返回给用户看的说明。
+
+    模板按位置把值交给 grep：以 - 开头会被当成 grep 自己的选项（`-m1` 让 grep
+    把路径当模式、转从 stdin 读到超时，`--help` 把帮助文本当成观测内容返回），
+    控制字符则直接破坏整条命令。与同文件 path 的守卫同口径。
+    """
+    if any(ord(c) < 32 for c in value):
+        return "关键词包含非法控制字符"
+    if value.startswith("-"):
+        return ("关键词不能以 - 开头：模板按位置传给 grep，以 - 起头会被当成 grep 的选项"
+                "（-m1/--help 之类），不会按字面匹配。要搜以 - 开头的字面量，改用 shell_exec"
+                " 写 `grep -e '...'`，或用 file_grep 的正则形式")
+    return None
+
+
 class SysOverviewTool(BaseTool):
     name = "sys_overview"
     description = "读取系统只读概览：CPU 负载、内存、磁盘占用（TOP N）、开机时长、内核版本。"
@@ -152,6 +168,12 @@ class ProcessInspectTool(BaseTool):
     meta = _OBS_META
 
     async def execute(self, context, query):
+        query = str(query or "")
+        if not query.strip():
+            return ToolResult(False, "", "进程匹配关键字不能为空")
+        bad = _keyword_reject(query)
+        if bad:
+            return ToolResult(False, "", bad)
         # grep -v grep 排除 grep 自身进程条目
         command = process_inspect_cmd(query)
         _, raw = await run_headless(context, command, timeout=15)
@@ -324,6 +346,12 @@ class LogReadTool(BaseTool):
         if err:
             return ToolResult(False, "", err)
         lines = max(1, min(lines, 1000))
+
+        pattern = str(pattern or "")
+        if pattern:
+            bad = _keyword_reject(pattern)
+            if bad:
+                return ToolResult(False, "", bad)
 
         if pattern:
             command = log_grep_cmd(path, pattern, lines)

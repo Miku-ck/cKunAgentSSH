@@ -20,6 +20,7 @@
      服务本地终端场景的查看/诊断（Python 原生文件 API，只读无突变）；
   5. 大输出经 truncate_output 截断，防刷屏。
 """
+import asyncio
 import pathlib
 import re
 import shlex
@@ -198,28 +199,9 @@ class FileReadTool(BaseTool):
                 return ToolResult(True, f"无内容（offset {offset} 超出文件末尾或文件为空）")
             return ToolResult(True, body)
 
-        # 本地（Windows）：Python 原生文件 API
-        try:
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
-                all_lines = f.readlines()
-        except FileNotFoundError:
-            return ToolResult(False, "", f"文件不存在: {path}")
-        except PermissionError:
-            return ToolResult(False, "", f"无权限访问文件: {path}")
-        except IsADirectoryError:
-            return ToolResult(False, "", f"路径是目录而非文件: {path}")
-        except Exception as e:
-            return ToolResult(False, "", f"读取文件失败: {e}")
-
-        begin = offset - 1
-        selected = all_lines[begin : begin + limit]
-        if not selected:
-            return ToolResult(True, f"无内容（offset {offset} 超出文件末尾）")
-        out_lines = [
-            f"{lineno}: {ln.rstrip()}"
-            for lineno, ln in enumerate(selected, start=offset)
-        ]
-        return ToolResult(True, truncate_output("\n".join(out_lines)))
+        # 本地这条腿同样是纯同步的：readlines() 会把整个文件读进内存，
+        # 而这一切直接跑在事件循环上（对照 _local_grep 的同款处理）。
+        return await asyncio.to_thread(_local_read, path, offset, limit)
 
 
 class FileWriteTool(BaseTool):
@@ -381,28 +363,8 @@ class FileGlobTool(BaseTool):
                 return ToolResult(True, f"未匹配到文件：{pattern}")
             return ToolResult(True, truncate_output("\n".join(lines)))
 
-        # 本地：pathlib 递归查找
-        base = pathlib.Path(path)
-        if not base.is_dir():
-            return ToolResult(False, "", f"起始目录不存在或不是目录: {path}")
-        if _ABSOLUTE_PATTERN_RE.match(pattern):
-            # pathlib 对绝对模式抛 NotImplementedError（原样透传给模型是一句英文
-            # "Non-relative patterns are unsupported"，看不出该怎么改），且远端
-            # `find -name` 从不支持绝对模式 —— 提前拒绝并给出可执行的改法
-            return ToolResult(
-                False, "", f"pattern 必须是相对 {path} 的 glob 模式，收到绝对路径 {pattern!r}"
-            )
-        root = base.resolve()
-        try:
-            # 逐条命中后仍要按解析结果复核：3.11 的 rglob 会跟着符号链接目录进去，
-            # 而 find 默认不跟随；resolve 后落在 root 之外的一律丢弃，两个口径对齐
-            resolved = [p.resolve() for p in base.rglob(pattern) if p.is_file()]
-            matches = sorted(str(p) for p in resolved if p.is_relative_to(root))
-        except Exception as e:
-            return ToolResult(False, "", f"glob 查找失败: {e}")
-        if not matches:
-            return ToolResult(True, f"未匹配到文件：{pattern}")
-        return ToolResult(True, truncate_output("\n".join(matches)))
+        # rglob 整棵树同样不能落在事件循环上（对照 _local_grep）。
+        return await asyncio.to_thread(_local_glob, path, pattern)
 
 
 def _grep_coverage_note(capped: bool, max_lines: int, unreadable: list) -> str:
@@ -420,6 +382,112 @@ def _grep_coverage_note(capped: bool, max_lines: int, unreadable: list) -> str:
         more = f"；另有 {len(unreadable) - 3} 个未列出" if len(unreadable) > 3 else ""
         parts.append(f"\n\n（{len(unreadable)} 个文件读不了，未计入结果：{shown}{more}）")
     return "".join(parts)
+
+
+def _local_read(path: str, offset: int, limit: int) -> ToolResult:
+    """本地（无远程主机）这条腿：同步文件 API，必须跑在事件循环之外，理由见所属工具的 execute。"""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            all_lines = f.readlines()
+    except FileNotFoundError:
+        return ToolResult(False, "", f"文件不存在: {path}")
+    except PermissionError:
+        return ToolResult(False, "", f"无权限访问文件: {path}")
+    except IsADirectoryError:
+        return ToolResult(False, "", f"路径是目录而非文件: {path}")
+    except Exception as e:
+        return ToolResult(False, "", f"读取文件失败: {e}")
+
+    begin = offset - 1
+    selected = all_lines[begin : begin + limit]
+    if not selected:
+        return ToolResult(True, f"无内容（offset {offset} 超出文件末尾）")
+    out_lines = [
+        f"{lineno}: {ln.rstrip()}"
+        for lineno, ln in enumerate(selected, start=offset)
+    ]
+    return ToolResult(True, truncate_output("\n".join(out_lines)))
+
+
+def _local_glob(path: str, pattern: str) -> ToolResult:
+    """本地（无远程主机）这条腿：同步文件 API，必须跑在事件循环之外，理由见所属工具的 execute。"""
+    base = pathlib.Path(path)
+    if not base.is_dir():
+        return ToolResult(False, "", f"起始目录不存在或不是目录: {path}")
+    if _ABSOLUTE_PATTERN_RE.match(pattern):
+        # pathlib 对绝对模式抛 NotImplementedError（原样透传给模型是一句英文
+        # "Non-relative patterns are unsupported"，看不出该怎么改），且远端
+        # `find -name` 从不支持绝对模式 —— 提前拒绝并给出可执行的改法
+        return ToolResult(
+            False, "", f"pattern 必须是相对 {path} 的 glob 模式，收到绝对路径 {pattern!r}"
+        )
+    root = base.resolve()
+    try:
+        # 逐条命中后仍要按解析结果复核：3.11 的 rglob 会跟着符号链接目录进去，
+        # 而 find 默认不跟随；resolve 后落在 root 之外的一律丢弃，两个口径对齐
+        resolved = [p.resolve() for p in base.rglob(pattern) if p.is_file()]
+        matches = sorted(str(p) for p in resolved if p.is_relative_to(root))
+    except Exception as e:
+        return ToolResult(False, "", f"glob 查找失败: {e}")
+    if not matches:
+        return ToolResult(True, f"未匹配到文件：{pattern}")
+    return ToolResult(True, truncate_output("\n".join(matches)))
+
+
+def _local_grep(path: str, pattern: str, max_lines: int) -> ToolResult:
+    """file_grep 的本地（无远程主机）这条腿 —— 遍历与正则都在同步调用里，必须跑在事件循环之外，理由见 FileGrepTool.execute。"""
+    try:
+        regex = re.compile(pattern)
+    except re.error as e:
+        return ToolResult(False, "", f"正则表达式无效: {e}")
+
+    target = pathlib.Path(path)
+    if target.is_file():
+        files = iter([target])
+    elif target.is_dir():
+        files = (p for p in sorted(target.rglob("*")) if p.is_file())
+    else:
+        return ToolResult(False, "", f"路径不存在: {path}")
+    base = target if target.is_dir() else target.parent
+
+    results = []
+    unreadable = []
+    capped = False
+    for fp in files:
+        try:
+            with open(fp, "r", encoding="utf-8", errors="replace") as f:
+                for lineno, line in enumerate(f, 1):
+                    text = line.rstrip("\n")
+                    if regex.search(text):
+                        try:
+                            rel = str(fp.relative_to(base))
+                        except ValueError:
+                            rel = str(fp)
+                        results.append(f"{rel}:{lineno}:{text}")
+                        if len(results) >= max_lines:
+                            capped = True
+                            break
+        except (IsADirectoryError, PermissionError, OSError) as e:
+            unreadable.append(f"{fp}: {e.strerror or type(e).__name__}")
+            continue
+        if len(results) >= max_lines:
+            capped = True
+            break
+
+    if not results:
+        # 「没读到」不能报成「确认没有」。远程那条腿会把 Permission denied 带回来
+        # （grep 退出码 2 与 1 是两件事，ops_obs 那族钉着这条），本地这条腿此前静默
+        # continue 后回「未匹配到内容」⇒ 同一个问题两条腿给相反答案。
+        if unreadable:
+            return ToolResult(
+                False, "",
+                f"未能完成搜索：{len(unreadable)} 个文件读不了，其余文件里没有匹配。"
+                f"首个：{unreadable[0]}",
+            )
+        return ToolResult(True, f"未匹配到内容：{pattern}")
+    return ToolResult(True, truncate_output("\n".join(results) + _grep_coverage_note(
+        capped=capped, max_lines=max_lines, unreadable=unreadable
+    )))
 
 
 class FileGrepTool(BaseTool):
@@ -480,58 +548,14 @@ class FileGrepTool(BaseTool):
             lines = body.splitlines()
             if not lines:
                 return ToolResult(True, f"未匹配到内容：{pattern}")
-            return ToolResult(True, truncate_output("\n".join(lines)))
+            # 与本地腿同口径（S14-08）：撞上 max_lines 必须说出来，否则「正好 200 条」与
+            # 「被截到 200 条」读起来一模一样，模型会把它当全量结论。远程这条腿看不到
+            # 逐个文件的读失败，所以只报截断这一项。
+            note = _grep_coverage_note(capped=len(lines) >= max_lines, max_lines=max_lines, unreadable=[])
+            return ToolResult(True, truncate_output("\n".join(lines) + note))
 
-        # 本地：Python 正则逐行搜索
-        try:
-            regex = re.compile(pattern)
-        except re.error as e:
-            return ToolResult(False, "", f"正则表达式无效: {e}")
-
-        target = pathlib.Path(path)
-        if target.is_file():
-            files = iter([target])
-        elif target.is_dir():
-            files = (p for p in sorted(target.rglob("*")) if p.is_file())
-        else:
-            return ToolResult(False, "", f"路径不存在: {path}")
-        base = target if target.is_dir() else target.parent
-
-        results = []
-        unreadable = []
-        capped = False
-        for fp in files:
-            try:
-                with open(fp, "r", encoding="utf-8", errors="replace") as f:
-                    for lineno, line in enumerate(f, 1):
-                        text = line.rstrip("\n")
-                        if regex.search(text):
-                            try:
-                                rel = str(fp.relative_to(base))
-                            except ValueError:
-                                rel = str(fp)
-                            results.append(f"{rel}:{lineno}:{text}")
-                            if len(results) >= max_lines:
-                                capped = True
-                                break
-            except (IsADirectoryError, PermissionError, OSError) as e:
-                unreadable.append(f"{fp}: {e.strerror or type(e).__name__}")
-                continue
-            if len(results) >= max_lines:
-                capped = True
-                break
-
-        if not results:
-            # 「没读到」不能报成「确认没有」。远程那条腿会把 Permission denied 带回来
-            # （grep 退出码 2 与 1 是两件事，ops_obs 那族钉着这条），本地这条腿此前静默
-            # continue 后回「未匹配到内容」⇒ 同一个问题两条腿给相反答案。
-            if unreadable:
-                return ToolResult(
-                    False, "",
-                    f"未能完成搜索：{len(unreadable)} 个文件读不了，其余文件里没有匹配。"
-                    f"首个：{unreadable[0]}",
-                )
-            return ToolResult(True, f"未匹配到内容：{pattern}")
-        return ToolResult(True, truncate_output("\n".join(results) + _grep_coverage_note(
-            capped=capped, max_lines=max_lines, unreadable=unreadable
-        )))
+        # 本地这条腿原本是纯同步的：rglob 整棵树、逐个 open、逐行跑模型给的正则，
+        # 而 ToolRegistry.execute 直接 await 工具、没有任何 to_thread（对照 audit 的
+        # append_record_async 同款修法）。于是一次 file_grep 扫目录就能把整个事件循环
+        # 钉住：所有 SSE 流、聊天、终端中继一起停摆；`(a+)+$` 这类正则更是指数级耗时。
+        return await asyncio.to_thread(_local_grep, path, pattern, max_lines)

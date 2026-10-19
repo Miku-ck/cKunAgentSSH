@@ -420,10 +420,17 @@ def _is_secret_path(target: str) -> bool:
     POSIX 绝对路径天然不会命中它。dotenv 判据对两种形态都成立（反斜杠已在
     `_normalize_target` 里折成斜杠）。
     """
+    # 相对形态单独落地：远端 exec 的 cwd 默认是 HOME，`cat .ssh/authorized_keys` 读的
+    # 就是 `/home/<user>/.ssh/authorized_keys` —— 与绝对写法同一件事，必须同一答案
+    # （这正是本函数"读侧写侧同一个入口"的立意）。只在这里落地，不动 _normalize_target：
+    # 删除类规则吃的是"是否绝对路径"，全局落地会误伤 cwd 内的常规清理。
+    posix_form = target
+    if target and not target.startswith(("/", "~", "$")):
+        posix_form = "/" + target
     return bool(
-        _SECRET_FILE_RE.search(target)
+        _SECRET_FILE_RE.search(posix_form)
         or _WIN_SECRET_PATH_RE.search(target)
-        or _is_dotenv_path(target)
+        or _is_dotenv_path(posix_form)
     )
 
 # 解释器/脚本执行器（作为命令首 token 出现 → 至少 dangerous，需审批）
@@ -508,6 +515,14 @@ def _normalize_target(path: str) -> str:
     if not p:
         return ""
     norm = posixpath.normpath(p)
+    # 只把"确实向上逃逸出 cwd"的相对形态落地成绝对形态。远端 exec 的 cwd 默认就是
+    # HOME，所以 `rm -rf ../home` 与被判 hardline 的 `rm -rf /home` 指的是同一件事；
+    # 而全部路径判据都要求目标以 / 开头，不落地时递归删除直接走空（实测 hardline→safe）。
+    # 反过来，留在 cwd 内的相对写法（`.`、`build`、`./node_modules`）不能落地：
+    # 递归删除那组规则判的是"目标是否绝对路径"，硬折会把「清理本目录日志」读成
+    # 「从根往下删」—— test_safety_misjudgment 正是钉这批良性形态的反向锁。
+    if norm == ".." or norm.startswith("../"):
+        norm = posixpath.normpath("/" + norm)
     # posixpath.normpath 对恰好两个前导 / 有 POSIX 特殊语义（保留 "//x"），
     # 原契约是折叠为单个 /，此处对齐
     if norm.startswith("//"):
@@ -546,15 +561,11 @@ _SSH_DIR_RE = re.compile(r"(^|/)\.ssh(/|$)")
 def _is_ssh_path(target: str) -> bool:
     """目标是否位于任一 .ssh 目录下（凭据植入/擦除敏感点）
 
-    边界匹配不吃 `.ssh-backup` 这类兄弟名字；相对路径形态
-    `.ssh/authorized_keys` 远端 exec 的 cwd 默认就是 HOME，补前导斜杠
-    归一为绝对形态后与 ~/、$HOME/ 同一口径 —— 否则明文 authorized_keys
-    植入走相对路径变体即绕过 hardline。
+    边界匹配不吃 `.ssh-backup` 这类兄弟名字；相对路径形态（`.ssh/authorized_keys`）
+    由 _normalize_target 统一落地成绝对形态（远端 exec 的 cwd 默认就是 HOME），
+    本函数不再自己补前导斜杠 —— 同一条规则抄两遍就是漂移的开始。
     """
-    t = _normalize_target(target)
-    if t and not t.startswith(("/", "~", "$")):
-        t = "/" + t
-    return _SSH_DIR_RE.search(t) is not None
+    return _SSH_DIR_RE.search(_normalize_target(target)) is not None
 
 
 def _is_persistence_target(target: str) -> bool:

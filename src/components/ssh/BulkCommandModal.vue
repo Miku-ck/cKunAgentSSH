@@ -44,7 +44,7 @@
       <!-- 执行中 -->
       <div v-if="running" class="bulk-running">
         <div class="bulk-progress-bar"><div class="fill" :style="{ width: progressPct + '%' }"></div></div>
-        <div class="bulk-progress-text">正在 {{ checkedCount }} 台节点上执行…（{{ doneCount }}/{{ checkedCount }} 完成）</div>
+        <div class="bulk-progress-text">正在 {{ checkedCount }} 台节点上执行…（{{ doneShown }}/{{ checkedCount }} 完成）</div>
       </div>
 
       <!-- 结果对比 -->
@@ -181,6 +181,8 @@ const liveChecked = computed(() => checked.value.filter(id => remoteSessions.val
 const canRun = computed(() => command.value.trim().length > 0 && liveChecked.value.length > 0 && !running.value && !checking.value)
 
 const doneCount = computed(() => results.value.length)
+// 执行中会话断开会让分母缩小而 results 继续增长，按分母封顶避免出现"4/2"这类读数
+const doneShown = computed(() => Math.min(doneCount.value, checkedCount.value))
 
 // 进度 = 已完成节点数 / 总节点数
 const progressPct = computed(() => {

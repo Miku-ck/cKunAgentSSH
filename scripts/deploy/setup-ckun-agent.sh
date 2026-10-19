@@ -141,7 +141,10 @@ if [ -n "$PUBKEY_FILE" ]; then
   HOME_DIR="$(getent passwd "$AGENT_USER" | cut -d: -f6)"
   [ -n "$HOME_DIR" ] || die "无法解析账户家目录"
   install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 700 "$HOME_DIR"
-  install -o "$AGENT_USER" -g "$AGENT_USER" -m 600 /dev/null "$HOME_DIR/.ssh" 2>/dev/null || true
+  # .ssh 必须是目录：上一版在这里用 install /dev/null 把 .ssh 建成了普通文件，
+  # 下一行的 install -d 随即以 "File exists" 失败，set -euo pipefail 直接终止脚本 ——
+  # 公钥没装上、$HOME/.ssh 还留着一个坏文件，之后每次重跑都以同样方式失败。
+  # install -d 本身就负责"不存在则建、存在则不管"，目录权限也已由它给出。
   install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 700 "$HOME_DIR/.ssh"
   AK="$HOME_DIR/.ssh/authorized_keys"
   [ -f "$AK" ] || install -o "$AGENT_USER" -g "$AGENT_USER" -m 600 /dev/null "$AK"

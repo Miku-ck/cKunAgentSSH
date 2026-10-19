@@ -306,6 +306,12 @@ async function deliverCommand(toolId: string): Promise<void> {
     return
   }
 
+  // writer 在途期间这一轮 run 可能已收尾（abortRun / done 会把该交付置终态并
+  // clearCapture，把定时器与 captures 记录一起摘掉）。那时不能再把状态改回
+  // 'capturing'：命令已经写进活终端，而这一行会永远显示「捕获中」，直到下次
+  // run 的 resetDeliveries 才消失。
+  if (isTerminalStatus(delivery.status) || !captures.has(toolId)) return
+
   delivery.status = 'capturing'
 }
 

@@ -34,6 +34,11 @@ run "前端单测 (vitest)" bash -c "npx vitest run"
 # 4. 构建
 run "electron-vite build" npm run --silent build
 
+# 5. 网关字节漂移自检：hillgw.mjs 与 shared/gateway-mux.ts 是两套独立实现，
+#    金样用例钉住两侧必须一致的帧格式。file_grep 声称它是"漂移守卫"，但此前
+#    CI 与本地检查都不跑它 —— 改了 HEADER_LEN/帧序也照样全绿。
+run "网关 mux 字节漂移自检 (hillgw --selftest)" node gateway/hillgw.mjs --selftest
+
 step "结果"
 if [ "$FAILED" -eq 0 ]; then
   echo "全部检查通过 ✅"

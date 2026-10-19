@@ -250,6 +250,15 @@ function getTerminalRefHandler(id: string): (el: any) => void {
   return h
 }
 
+// useSshNavigation 清理的是 terminalRefs，这张按 sessionId 缓存的回调表它管不到。
+// 「复制终端」/开关标签每次都是新 id，不摘就是每个关掉的会话留一个闭包到应用退出。
+watch(() => store.sessions.map(s => s.id), (ids) => {
+  const active = new Set(ids)
+  for (const id of [...terminalRefHandlers.keys()]) {
+    if (!active.has(id)) terminalRefHandlers.delete(id)
+  }
+})
+
 // 终端聚焦（useCommandDelivery 内部只注册 ssh:focus-terminal 监听；命令投递见其文件头的退役说明）
 const { focusActiveTerminal } = useCommandDelivery(terminalRefs)
 

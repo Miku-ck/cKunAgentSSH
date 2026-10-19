@@ -58,6 +58,10 @@ jobs:
         # 与本地 scripts/ci-check.sh 同一条命令，收集范围只有一个来源（npm run test:backend）
         run: npm run test:backend
 
+      - name: Gateway mux selftest
+        # hillgw.mjs 与 shared/gateway-mux.ts 两套实现的帧格式金样；不跑就等于没有守卫
+        run: node gateway/hillgw.mjs --selftest
+
       - name: Frontend typecheck
         run: npm run typecheck
 
@@ -90,6 +94,10 @@ jobs:
       # 下重编 node-pty/ssh2。
       - name: Install dependencies (原生重编失败必须可见)
         run: npm ci
+
+      - name: Gateway mux selftest
+        # 与 ubuntu job 同一条：数据面两侧的字节一致性不分平台
+        run: node gateway/hillgw.mjs --selftest
 
       - name: Frontend typecheck
         run: npm run typecheck

@@ -390,9 +390,16 @@ async function onAdd() {
       kind: newMem.kind, content, title: newMem.title.trim(),
       scope: newMem.scope.trim() || 'global', importance: newMem.importance,
     })
-    // 当前筛选条件可能容不下这条（如按类型过滤），失败也不影响写入本身
-    if (!filters.value.kind && !filters.value.q.trim()) memories.value.unshift(r.memory)
-    else await loadMemories()
+    // 当前筛选条件可能容不下这条（如按类型过滤），失败也不影响写入本身。
+    // 快路径必须把状态轴也算上：status 默认就是 'active'，用户选「已失效/待确认/被取代」
+    // 时 kind 与 q 仍然为空 —— 只比这两轴会把一条 active 行插进别的状态的列表里，
+    // 停留到下次刷新，期间「作废/审计」都点得到这条不属于当前筛选的行。
+    const statusNow = filters.value.status
+    if (!filters.value.kind && !filters.value.q.trim() && (statusNow === 'active' || !statusNow)) {
+      memories.value.unshift(r.memory)
+    } else {
+      await loadMemories()
+    }
     newMem.content = ''
     newMem.title = ''
     addingNew.value = false

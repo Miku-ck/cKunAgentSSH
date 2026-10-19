@@ -210,6 +210,9 @@ async function onVerify() {
 }
 
 async function verify() {
+  // 先作废上一次结论：读不到审计表时若留着旧的 intact 结果，徽章会继续宣称
+  // 「链完整」，而下面同时报「审计链校验失败」——两个说法互相打脸
+  verifyState.value = null
   try {
     verifyState.value = await auditApi.verify()
   } catch (e) {

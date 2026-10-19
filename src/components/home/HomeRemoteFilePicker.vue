@@ -100,13 +100,17 @@ async function pick(entry: SftpEntry) {
   reading.value = entry.path
   error.value = ''
   try {
+    // 归属必须在 await 之前定下来：session 是跟着 activeSessionId 走的计算属性，
+    // 读一个几 MB 的文件期间切到 B 会话的话，旧写法会把 chip 写成 B、而注入的
+    // 内容来自 A（同名文件时尤其骗人）。sid 已经钉住了读取的那条会话，来源同源即可。
+    const source = session.value?.shell || session.value?.name || 'remote'
     const file = await api.sftpReadFile(sid, entry.path)
     if (seq !== readSeq) return
     sshAi.addRemoteAttachment({
       path: entry.path,
       content: file.content,
       size: file.size,
-      source: session.value?.shell || session.value?.name || 'remote',
+      source,
     })
     emit('picked', { path: entry.path, filename: entry.name })
   } catch (err) {

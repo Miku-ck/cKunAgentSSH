@@ -228,7 +228,14 @@ function probeOnce(url: string, redirectsLeft: number): Promise<ProbeResult> {
         // 重定向跟一次（ghproxy 类偶尔 302 到 CDN）
         if (status >= 300 && status < 400 && res.headers.location && redirectsLeft > 0) {
           res.resume()
-          const next = new URL(res.headers.location, url).toString()
+          // 同 gh-download：Location 畸形时 new URL 抛出会吞掉 done()，该次探测
+          // 永不 settle，probeAll 整体挂住，镜像排序界面停在转圈
+          let next: string
+          try {
+            next = new URL(res.headers.location, url).toString()
+          } catch (e: any) {
+            return done({ target: url, ok: false, latencyMs: null, error: e?.message ?? '重定向地址非法' })
+          }
           probeOnce(next, redirectsLeft - 1).then(r => done({ ...r, target: url }))
           return
         }
@@ -409,9 +416,13 @@ export class GithubAccelService {
       }
       config.gitBackup = { previousValue: config.gitBackup.previousValue, prefix }
 
+      // 备份先落盘再写新规则：上面已经 unset 掉用户的旧规则，若 set 抛错
+      // （.gitconfig.lock 被并发 git 占住、8s 超时、home 只读）就直接退出，
+      // 备份只存在于内存，用户的原规则从此无从还原（谁设置谁还原落空）。
+      await writeConfigToDisk(config)
+
       const set = await execGit(buildGitSetArgs(prefix))
       if (set.code !== 0) throw new Error(`写入 git 配置失败: ${set.stderr.trim() || `退出码 ${set.code}`}`)
-      await writeConfigToDisk(config)
       return this.gitStatus()
     })
   }

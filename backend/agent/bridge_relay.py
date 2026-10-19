@@ -108,14 +108,15 @@ class BridgeRelay:
                     ensure_ascii=False,
                 )
             )
-        except (RuntimeError, WebSocketDisconnect) as e:
-            # 发送时 socket 已死（对端刚断开）— 归为通道丢失
-            raise BridgeWsLostError(f"send failed: {e}") from e
-        try:
             return await asyncio.wait_for(fut, timeout)
         except asyncio.TimeoutError:
             raise BridgeWsLostError(f"request timeout op={op} after {timeout}s") from None
+        except (RuntimeError, WebSocketDisconnect) as e:
+            # 发送时 socket 已死（对端刚断开）— 归为通道丢失
+            raise BridgeWsLostError(f"send failed: {e}") from e
         finally:
+            # 注册与摘除必须同属一个 finally：发送失败也要清，否则这个 future
+            # 永久留在 _pending，之后被 stale 扫描设上没人取的 exception
             self._pending.pop(req_id, None)
 
     # ── 连接生命周期 ────────────────────────────────

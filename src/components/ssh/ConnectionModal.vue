@@ -255,9 +255,13 @@ const passphrasePlaceholder = isEdit && props.editData?.hasPassphrase
   : 'Passphrase'
 
 // 认证相关字段变动时清除旧的测试结果,避免误导
+// 同时推进测试代次：testing 只禁用页脚三个按钮，host/port/用户名这些输入框在测试期间
+// 照样可编辑（见 :24/:28/:35），改成 B 之后 A 的回包才落地 —— 没有代次判据就会把
+// A 的「连接成功 (45ms)」或失败原因印在 B 名下。
+let testSeq = 0
 watch(
   () => [form.host, form.port, form.username, form.authType, form.password, form.privateKeyPath, form.passphrase],
-  () => { testResult.value = null },
+  () => { testResult.value = null; testSeq++ },
 )
 
 // 审查修复（P2）：统一的关闭入口 — saving/testing 期间禁用
@@ -360,12 +364,17 @@ async function handleTest() {
   if (!api) { errorMsg.value = 'Electron API 不可用'; return }
 
   testing.value = true
+  const mySeq = ++testSeq
   try {
-    testResult.value = await api.sshTestConnection(toPlain({
+    const result = await api.sshTestConnection(toPlain({
       id: props.editData?.id || '',
       ...buildPayload(),
     }))
+    // 测试期间目标被改过（或被那个 watch 清过结果）⇒ 这一笔已不属于当前表单
+    if (mySeq !== testSeq) return
+    testResult.value = result
   } catch (err: any) {
+    if (mySeq !== testSeq) return
     testResult.value = { ok: false, message: toFriendlyMessage(err, '测试失败'), latencyMs: 0 }
   } finally {
     testing.value = false

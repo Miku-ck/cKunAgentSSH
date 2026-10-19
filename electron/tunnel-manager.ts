@@ -297,7 +297,10 @@ export class TunnelManager {
       const server = net.createServer(sock => this.handleSocksConn(s, sock))
       s.server = server
       server.once('error', err => reject(err))
-      server.listen(s.rule.listenPort!, s.rule.listenHost || '127.0.0.1', () => resolve())
+      // 无认证 SOCKS5 只能绑本机。start 里那次钳制只作用于端口预检，脏
+      // tunnels.json（手改或旧版本残留）带着 listenHost=0.0.0.0 照样会走到这里，
+      // 把代理开成局域网可达且免认证 —— 钳制必须落在真正 listen 的值上。
+      server.listen(s.rule.listenPort!, '127.0.0.1', () => resolve())
     })
   }
 
@@ -351,7 +354,14 @@ export class TunnelManager {
         let host: string
         if (atyp === 0x01) host = [...buf.subarray(addrStart, addrStart + 4)].join('.')
         else if (atyp === 0x03) host = buf.subarray(addrStart + 1, addrStart + 1 + buf[4]).toString('ascii')
-        else host = [...buf.subarray(addrStart, addrStart + 16)].join('.')
+        else {
+          // ATYP=0x04 是 16 字节 IPv6 原址：点分十进制拼出来的是一个永远不存在的
+          // 地址，双栈客户端的 IPv6 目标一律连不上。按 8 组冒分十六进制交给下层解析。
+          const b = buf.subarray(addrStart, addrStart + 16)
+          const groups: string[] = []
+          for (let i = 0; i < 16; i += 2) groups.push(b.readUInt16BE(i).toString(16))
+          host = groups.join(':')
+        }
         const port = buf.readUInt16BE(addrStart + addrLen)
 
         buf = buf.subarray(need)

@@ -92,6 +92,45 @@ def test_conversation_fast_path_still_works_without_change_verb():
     assert classify("hello").task_type is TaskType.CONVERSATION
 
 
+# ── 寒暄 + 只读请求：driver 对 CONVERSATION 物理清空工具表 ──────────────────
+# 只读动词与显式路径同样是动作信号。缺一条的后果不是"多花点 token"，而是
+# "你好，看下磁盘"这类请求跑不了任何命令（driver 对 CONVERSATION return []），
+# 模型只能凭训练印象作答。
+@pytest.mark.parametrize("task", [
+    "你好，看下磁盘",
+    "谢谢，看看 nginx 状态",
+    "你好 统计一下当前连接数",
+    "你好，查询一下服务器列表",
+    "你好，帮我查看 /var/log/messages",
+    "hi check the disk usage",
+    "hello, how many pods are running",
+    "hi verify the backup finished",
+    "hello look at the log",
+    "hey, status of web-01",
+    "hi list the processes",
+])
+def test_greeting_plus_read_request_keeps_tools(task: str):
+    """带问候的只读请求必须离开 CONVERSATION（否则工具表被清空）"""
+    assert classify(task).task_type is not TaskType.CONVERSATION
+
+
+@pytest.mark.parametrize("task", [
+    "你好", "你好呀", "谢谢", "在吗", "早上好", "再见", "你是真人吗",
+    "你是什么模型", "你能做什么", "hello", "hi", "hey there",
+    "who are you", "what are you", "which model are you", "what model are you",
+    "thanks a lot", "thank you",
+])
+def test_pure_chat_still_takes_the_conversation_fast_path(task: str):
+    """反向锁：只读动词表不得宽到把身份/能力询问推去调工具"""
+    assert classify(task).task_type is TaskType.CONVERSATION
+
+
+def test_显式路径本身就是动作信号():
+    """无动词、只有路径的短请求也不能被当成寒暄"""
+    assert classify("hi /etc/nginx/nginx.conf").task_type is not TaskType.CONVERSATION
+    assert classify("hello config/app.yaml").task_type is not TaskType.CONVERSATION
+
+
 def test_empty_task_defaults_to_not_change():
     r = classify("")
     assert r.is_change is False

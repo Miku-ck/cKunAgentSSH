@@ -170,6 +170,40 @@ async def test_send_request_timeout(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_send_failure_pops_pending_entry(monkeypatch):
+    """发送失败也必须摘掉 _pending。
+
+    修复前 `self._pending[req_id] = fut` 在锁内注册，而 pop 的 finally 挂在后面第二
+    个 try 上：send_text 抛 RuntimeError 走第一个 except 直接外抛，跳过 finally，那条
+    future 就永久留在 _pending 里，之后被 stale 扫描设上「无人取的 exception」。
+    """
+    monkeypatch.setenv("ELECTRON_BRIDGE_TOKEN", TOKEN)
+    relay = BridgeRelay()
+    set_bridge_relay(relay)
+    try:
+        ws = FakeWS()
+        handler = asyncio.create_task(relay.handle_bridge_ws(ws))
+        await ws.inbound.put(_hello())
+        await _wait_frame(ws, lambda f: f.get("type") == "hello-ack")
+
+        normal_send = ws.send_text
+
+        async def _dead_socket(_data: str) -> None:
+            raise RuntimeError("socket is closed")
+
+        ws.send_text = _dead_socket
+        with pytest.raises(BridgeWsLostError, match="send failed"):
+            await relay.send_request("ssh_exec", {"command": "ls"}, 1.0)
+        assert not relay._pending
+
+        ws.send_text = normal_send
+        ws.inbound.put_nowait(None)
+        await asyncio.wait_for(handler, 2.0)
+    finally:
+        set_bridge_relay(None)
+
+
+@pytest.mark.asyncio
 async def test_new_connection_replaces_old(monkeypatch):
     """新者胜：新连接 hello 后旧连接被关闭，旧连接在途请求失败（不双发前提）。"""
     monkeypatch.setenv("ELECTRON_BRIDGE_TOKEN", TOKEN)

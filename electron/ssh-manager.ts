@@ -1637,8 +1637,13 @@ if (err) return reject(new SSHError('SFTP_INIT_FAIL', { original: err }))
       if (conns.length < TRANSFER_CONN_PER_HOST_CAP) {
         // 无空闲且未达上限：新建一条（并发传输各占一条独立 2 MB 窗口连接）
         conn = await this.createTransferConn(cfgId, compress)
-        conns.push(conn)
-        this.transferConns.set(cfgId, conns)
+        // 建连要等一整个握手，期间并发 acquire 各自握着同一份空快照：谁后 set
+        // 谁覆盖，先入池的那条就连同它的 keepalive 一起再也找不到（归还时
+        // leased=false 落进无人持有的对象，清理与拆池都遍历不到）。
+        // 握手后重读池，把新连接并进当下活着的那份数组。
+        const live = this.transferConns.get(cfgId)
+        if (live) live.push(conn)
+        else this.transferConns.set(cfgId, [conn])
       } else {
         // 达上限（8，与渲染层并发门上限一致）仍无空闲：建一条不入池的临时
         // 连接，用完即拆 —— 正确性优先（绝不复用 leased 连接破坏租约），

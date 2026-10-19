@@ -43,6 +43,20 @@ async def replace(key: str, old: str, new: str, updated_by: str) -> int:
     return await asyncio.to_thread(mstore.replace_in_block, key, old, new, updated_by)
 
 
+# host-profile 块的保留条数：块键是 ssh_session_id，每次连接都是新键，而渲染只读
+# 当前主机那一条 ⇒ 其余条目永远读不到。留 50 条与 host_profile._CACHE_MAX 同量级，
+# 足够覆盖并发主机，又让这张表不会只增不减。用户写的 user-preferences / agent-rules
+# 不在这个前缀下，一条都不会被动（它们是意图，不是可重探的事实）。
+HOST_PROFILE_KEEP = 50
+
+
+async def prune_host_profiles() -> int:
+    """丢掉最老的 host-profile 块（含其历史）。返回删除条数。"""
+    return await asyncio.to_thread(
+        mstore.prune_blocks_by_prefix, HOST_PREFIX, HOST_PROFILE_KEEP
+    )
+
+
 async def render_for_context(host_id: str, budget_tokens: int) -> str:
     """组装 [画像] 段文本；无块返回空串。仅注入当前主机的 host 块。
 

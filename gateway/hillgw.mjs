@@ -486,7 +486,6 @@ class Session {
       policyVersion: this.cfg.policyVersion || 'unversioned',
     })
     log(this, 'OK', `AUTH 通过 user=${this.user} role=${this.role}`)
-    this.startHeartbeat()
   }
 
   startHeartbeat() {

@@ -750,6 +750,12 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     )
                 except Exception as e:
                     logger.warning("主机画像块写入失败（不影响 run）: %s", e)
+                # 写完顺手裁剪：块键每次连接都是新的，不裁就只增不减，而每轮 run 的
+                # render_for_context 会把这张表全量扫一遍（S14-06）
+                try:
+                    await memory_blocks.prune_host_profiles()
+                except Exception as e:
+                    logger.warning("主机画像块裁剪失败（不影响 run）: %s", e)
             try:
                 profile_text = await memory_blocks.render_for_context(
                     req.ssh_session_id or "", mem_settings["blocks_budget_tokens"],

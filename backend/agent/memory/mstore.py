@@ -611,6 +611,34 @@ def get_block(key: str):
         conn.close()
 
 
+def prune_blocks_by_prefix(prefix: str, keep: int) -> int:
+    """按前缀裁剪块表：只保留 updated_at 最新的 keep 条，其余连同其历史一起删。
+
+    键里带可再生成标识（host-profile:{ssh_session_id}）时，这张表只会增不会减，而
+    list_blocks() 每轮 run 全量扫一次。前缀由调用方给出：键空间归 blocks.py 定义，
+    这里再抄一份字面量就是第二个事实源。
+    """
+    conn = _conn()
+    try:
+        rows = conn.execute(
+            "SELECT key FROM memory_blocks WHERE key LIKE ? "
+            "ORDER BY updated_at DESC, key DESC LIMIT -1 OFFSET ?",
+            (f"{prefix}%", keep),
+        ).fetchall()
+        doomed = [r["key"] for r in rows]
+        for k in doomed:
+            conn.execute("DELETE FROM memory_blocks WHERE key=?", (k,))
+            conn.execute("DELETE FROM memory_block_history WHERE key=?", (k,))
+        if doomed:
+            conn.commit()
+        return len(doomed)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def list_blocks() -> list:
     conn = _conn()
     try:

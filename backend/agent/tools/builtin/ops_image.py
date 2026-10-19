@@ -34,6 +34,9 @@ def image_read_cmd(path: str) -> str:
 # 最大允许文件大小（字节，10MB）
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
+# base64 字母表之外的任何字符都说明回传不是完整的字节协议（截断标记、控制字符、
+_NON_B64_RE = re.compile(r"[^A-Za-z0-9+/=]")
+
 # 扩展名 -> MIME 映射（不含点，小写）
 _EXT_MIME = {
     "png": "image/png",
@@ -90,6 +93,18 @@ class ReadImageTool(BaseTool):
             b64 = re.sub(r"\s+", "", strip_remote_tail(output))
             if not b64:
                 return ToolResult(False, "", "远程读取图片为空或文件不存在")
+            # 回传的字节协议必须整段合法才算成功。主进程 exec 通道另有 1 MiB 上限，
+            # 撞线时往 stdout 末尾追加一句截断说明（与 keep_full 无关，剥哨兵也剥不掉它），
+            # 去空白后就嵌进 base64 里 —— 旧写法既认不出它，按已截断串估长的 10MB 上限又
+            # 永不触发，于是拿非法 base64 拼成 data URI 还回 success=True（S14-03）。
+            # 判据只看字符集，不去比对那串中文的措辞：跨端约定字符串会随文案漂移而失效。
+            if _NON_B64_RE.search(b64):
+                return ToolResult(
+                    False, "",
+                    "远程图片过大：单次 exec 回传上限约 1 MiB（约合 768 KB 图片），"
+                    "通道已把内容截断，剩下的不是合法 base64。请改用 shell_exec 分片读取"
+                    "（如 `split -b 512k` 后逐片 base64），或先压缩/缩小图片。",
+                )
             # 按 base64 长度估算原始字节数（约 len*3/4）
             if len(b64) * 3 // 4 > MAX_IMAGE_BYTES:
                 return ToolResult(False, "", "文件过大：超过 10MB 上限")

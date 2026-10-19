@@ -240,7 +240,10 @@ class WebSearchTool(BaseTool):
         max_results = max(1, min(max_results, 20))
 
         # 尝试 Tavily API（用户配置 key 时优先）
-        tavily_key = self._get_tavily_key()
+        # 取 key 要读 SQLite（get_app_setting），而这里是 async def：直接调用等于把
+        # 一次可能的 busy_timeout（PRAGMA busy_timeout=5000）压在事件循环上 —— 审计或
+        # 调度线程持写锁时，所有 run 与 SSE 流一起停摆。与本仓其余 DB 读同口径走线程。
+        tavily_key = await asyncio.to_thread(self._get_tavily_key)
         if tavily_key:
             result = await self._search_tavily(query, max_results, tavily_key)
             if result.success:

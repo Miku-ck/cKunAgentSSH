@@ -211,11 +211,15 @@ def append_record(
                 tuple(record[c] for c in _INSERT_COLUMNS),
             )
             record["id"] = cur.lastrowid
+            # COMMIT 必须落在同一个回滚守卫内：并发写者持共享锁时 COMMIT 会抛
+            # database is locked 而 in_transaction 仍为 True。原写法把它放在
+            # try/except 的 else 分支，异常被外层吞掉后半截事务就长在该线程上 ——
+            # 池化连接的 close 是 rollback-and-reuse，底层连接永不真正关闭，
+            # 写锁滞留后所有经 to_thread 的写都会在 busy_timeout 后失败。
+            conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
-        else:
-            conn.execute("COMMIT")
         return record
     except Exception as e:
         # 带上 action：调用方不再各自包 try/except（本函数已承诺"失败静默返回 None"），

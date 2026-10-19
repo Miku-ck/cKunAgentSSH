@@ -355,8 +355,12 @@ export class GhDownloadManager {
             this.finish(id, 'error', '重定向次数过多（>5），已中止')
             return resolvePromise('error')
           }
-          const next = new URL(res.headers.location, url).toString()
+          let next: string
           try {
+            // URL 解析也要一起兜住：Location 畸形时 new URL 在 'response' 回调里
+            // 抛出，fetchOnce 的 promise 永不 settle，任务就永久停在 downloading
+            // ——finish() 不执行、取消读不到、active 表里的条目也无界增长。
+            next = new URL(res.headers.location, url).toString()
             this.assertUrl(next)
           } catch (e: any) {
             this.finish(id, 'error', e?.message ?? '重定向地址非法')

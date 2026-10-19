@@ -372,9 +372,21 @@ class AuditLogger:
         # 与 blocked/denied 记录不重复。
         try:
             args = last.get("args") or {}
-            command = str(command_from_args(args))
+            tool_name = str(last.get("tool", ""))
+            try:
+                # executed 记录得说得出「实际执行了什么」：file_write / service_manage /
+                # schedule_op 这类工具自己拼命令，而 command_from_args 只认 command/shell/cmd
+                # 三个槽位 ⇒ 恒为空串，审计链里那条 executed 点不出被改的路径、被停的服务，
+                # 等保取证缺的正是在这一环。与 gate/guard 共用同一个提取器，三条路径一口径。
+                bound, _is_free_form = extract_bound_command(
+                    resolve_registry(ctx, None), tool_name, args
+                )
+            except Exception:
+                # 提取失败只退回旧口径：审计宁可粗，不能因这里抛错而整条丢掉
+                bound = None
+            command = str(bound) if bound else str(command_from_args(args))
             await append_record_async(
-                action=str(last.get("tool", "")),
+                action=tool_name,
                 conclusion="executed" if last.get("success") else "failed",
                 run_id=ctx.run_id,
                 iteration=ctx.iteration,

@@ -44,20 +44,29 @@ const extraArgs = process.argv.slice(2)
 // 必须显式写出来 —— 默认路径不再接受缺运行时。
 const allowMissingRuntime = extraArgs.includes('--allow-missing-runtime')
 const builderPassThroughArgs = extraArgs.filter((a) => a !== '--allow-missing-runtime')
-const builderConfigArgs = ['-c', 'electron-builder.yml'] // 显式主配置，保证与生成片段合并
+// 只允许传一份配置。两个 `-c` 会被 yargs 收成数组，electron-builder 把数组里的字符串
+// 折叠成 `extends = 最后一项`（builder.js:106-120），packager.js:256-258 再把这个字符串
+// 当成唯一配置文件读 —— 主配置整份被丢弃：files 白名单、asarUnpack、appId、win、nsis、
+// portable 全都不生效，`files: []` 意味着 app.asar 里没有 out/main/index.js，原生 .node
+// 也没被解包。而 directories.output 仍是 dist，CI 的 dist/*.exe 上传照样命中，绿色流水线
+// 可以把一个装上去谁也起不来的包一路抬进发布物。
+// 内嵌运行时改走配置自身的 `extends`（load.js 的 loadParentConfigsRecursively 会把父配置
+// 合回来），合并语义由 electron-builder 负责，不再靠参数顺序赌。
+let builderConfigArgs = ['-c', 'electron-builder.yml'] // 显式主配置，保证与生成片段合并
 if (runtimeReady) {
   console.log('[package] runtime/ 已就绪 → 打包内嵌 Python 运行时 (resources/python-runtime)')
   const snippet = path.join(root, '.electron-builder.runtime.yml')
   fs.writeFileSync(
     snippet,
-    'extraResources:\n' +
+    "extends: './electron-builder.yml'\n" +
+      'extraResources:\n' +
       '  - from: runtime\n' +
       '    to: python-runtime\n' +
       '    filter:\n' +
       "      - '**/*'\n" +
       "      - '!README.md'\n",
   )
-  builderConfigArgs.push('-c', snippet)
+  builderConfigArgs = ['-c', snippet]
 } else if (!allowMissingRuntime) {
   // 硬失败而不是 warning：AI 侧要跑后端，后端要一个装了 fastapi/uvicorn 的 Python。
   // 以前这里打一行警告照常出包，于是"能出一个装到别人机器上 AI 全灭的包"，

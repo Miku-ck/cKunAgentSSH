@@ -469,9 +469,20 @@ class PermissionGate:
         return key
 
     def is_denied(self, tool_name: str, command: Optional[str], run_id: str) -> bool:
-        """检查某 run 下某命令是否已被用户拒绝（严格 run_id 作用域，不查全局池）。"""
-        key = self._grant_key(tool_name, command)
-        return key in self._denied_commands.get(run_id, set())
+        """检查某 run 下某命令是否已被用户拒绝（严格 run_id 作用域，不查全局池）。
+
+        拒绝按「或」匹配，与授权的方向刻意相反：授权要逐条绑定（见 _grant_key），
+        否决则要整体生效 —— 工具级拒绝记下的是裸工具名键，而 bound_command 让
+        service_manage 这类工具改用命令级键；只比命令键的话，用户点「拒绝」留下的
+        工具级记录就不再命中，S2-01 的「用户否决高于模型翻案」被推翻。
+        """
+        denied = self._denied_commands.get(run_id)
+        if not denied:
+            return False
+        return (
+            self._grant_key(tool_name, None) in denied
+            or self._grant_key(tool_name, command) in denied
+        )
 
     def command_for_call(self, tool_name: str, args: dict,
                          bound_command: Optional[str] = None) -> Optional[str]:

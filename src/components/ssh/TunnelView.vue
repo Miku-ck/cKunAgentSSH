@@ -221,6 +221,8 @@ function askDelete(rule: TunnelRule) {
     return
   }
   confirmingId.value = rule.id
+  // 与下面 copyAddr 同法：旧定时器不先 clear，A 行那 3 秒到点会把 B 行的确认态抹掉
+  if (delTimer) clearTimeout(delTimer)
   delTimer = setTimeout(() => { confirmingId.value = '' }, 3000)
 }
 

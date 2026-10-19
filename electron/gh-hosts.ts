@@ -83,7 +83,15 @@ function fetchJson(url: string): Promise<unknown> {
       const req = https.get(target, { timeout: 6000, headers: { 'User-Agent': 'cKunAgentSSH-ghaccel-hosts' } }, (res) => {
         if (res.statusCode! >= 300 && res.statusCode! < 400 && res.headers.location && redirects > 0) {
           res.resume()
-          go(new URL(res.headers.location, target).toString(), redirects - 1)
+          // Location 畸形时 new URL 会在 'response' 回调里抛出，promise 既不
+          // resolve 也不 reject，DoH 查询就永久悬挂
+          let next: string
+          try {
+            next = new URL(res.headers.location, target).toString()
+          } catch (e) {
+            return fail(e)
+          }
+          go(next, redirects - 1)
           return
         }
         const chunks: Buffer[] = []

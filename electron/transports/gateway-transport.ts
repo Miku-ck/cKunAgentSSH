@@ -384,17 +384,29 @@ export class GatewaySession {
       return
     }
     let settled = false
+    let onDrain: (() => void) | null = null
+    let onClose: (() => void) | null = null
+    const detach = (): void => {
+      // 两个 once 只会命中其中一个：不主动摘掉另一个，每次背压写都在这条长命
+      // TLSSocket 上永久留一个监听器，连带 writeFrames 闭包（最多 64 KiB 缓冲）
+      // 一起被留住 —— bulk 传输跑久了就是 MaxListenersExceededWarning + 无界驻留。
+      if (onDrain) this.sock.off('drain', onDrain)
+      if (onClose) this.sock.off('close', onClose)
+    }
     const done = (e?: Error): void => {
       if (settled) return
       settled = true
+      detach()
       cb(e)
     }
     const ok = this.sock.write(Buffer.from(frame.buffer, frame.byteOffset, frame.length)) as boolean
     if (ok) done()
     else {
-      this.sock.once('drain', () => done())
+      onDrain = () => done()
       // socket 被 destroy 时 drain 永不到来；不结这一笔就是把上层 _write 永久挂起
-      this.sock.once('close', () => done(new Error('数据面已断开')))
+      onClose = () => done(new Error('数据面已断开'))
+      this.sock.once('drain', onDrain)
+      this.sock.once('close', onClose)
     }
   }
 

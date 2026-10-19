@@ -35,7 +35,7 @@ ssh_cmd() {
       "$USER@$HOST" "$@"
 }
 
-pass=0; fail=0; declare -a REPORT
+pass=0; fail=0; warn=0; declare -a REPORT
 check() { # check <描述> <期望:0非零/零> <实际退出码>
   local desc="$1" expect="$2" actual="$3"
   if [ "$expect" = "nonzero" ]; then
@@ -81,8 +81,14 @@ check "快照闭环·删除还原（rm -f）" zero $rc
 
 # ── 4. 无 sudo 提权 ─────────────────────────────────────────
 out="$(ssh_cmd "id -nG" 2>/dev/null || true)"
-# 受限账户应不在 sudo/docker/wheel/admin 任一特权组
-if echo "$out" | tr ' ' '\n' | grep -qE '^(sudo|docker|wheel|admin)$'; then
+# 受限账户应不在 sudo/docker/wheel/admin 任一特权组。
+# 但同一份清单第 2 节已经断言裸 `id` 会被 agent-exec 白名单拒掉（`:68` 那条 PASS），
+# 所以这条取不到任何输出是常态：原样走下去 grep 恒不命中，于是每次都记
+# 「PASS 无特权组提权」——一个从未真正执行过的安全检查，在报告里冒充了结论。
+if [ -z "$out" ]; then
+  REPORT+=("未核查  无特权组提权（id -nG 被白名单拒绝，拿不到组列表；请改用本地 getent group 或临时放开白名单跑一次）")
+  warn=$((warn+1))
+elif echo "$out" | tr ' ' '\n' | grep -qE '^(sudo|docker|wheel|admin)$'; then
   REPORT+=("FAIL  无特权组提权（发现特权组）"); fail=$((fail+1))
 else
   REPORT+=("PASS  无特权组提权"); pass=$((pass+1))
@@ -111,5 +117,5 @@ check "无端口转发（-W 被拒）" nonzero $rc
 echo
 printf '%s\n' "${REPORT[@]}"
 echo
-echo "== 结果: $pass 通过 / $fail 失败 =="
+echo "== 结果: $pass 通过 / $fail 失败 / $warn 未核查 =="
 [ $fail -eq 0 ] && { echo "全部通过 ✅"; exit 0; } || { echo "存在失败项，请排查"; exit 1; }

@@ -90,6 +90,12 @@ _RESEARCH_MARKERS = [
 ]
 _QUERY_MARKERS = [
     "读取", "列出", "查看", "显示", "show ", "list ", "cat ", "看一下", "查看一下",
+    # 只读动词的高频口语形态。缺一条就被纯对话快速路径吞掉，而 driver 对
+    # CONVERSATION 清空工具表 —— "你好，看下磁盘" 于是物理上跑不了任何命令。
+    # 刻意不收 "what is"/"see"：前者命中身份询问（"what is your name"），
+    # 后者是闲聊高频词（"nice to see you"），代价是把纯对话推去调工具。
+    "看下", "看看", "查下", "查查", "查询", "统计",
+    "check", "inspect", "verify", "status", "look at", "how many", "how much",
 ]
 _MODIFY_MARKERS = [
     "修改", "改为", "改成", "替换", "更新", "调整", "改一下", "改下", "rename",
@@ -287,6 +293,14 @@ def classify(task: str, max_budget: Optional[int] = None) -> IntentionResult:
         or _any_match_wordbounded(_COMPILED_MODIFY, text, text_zh)
         or _any_match_wordbounded(_COMPILED_RESEARCH, text, text_zh)
         or has_change_signal
+        # 只读动词与显式路径同样是动作信号。这里原先只看变更/调试类动词，于是
+        # "hi list the processes on web-01"、"你好，帮我查看 /var/log/messages"
+        # 因为不含变更动词就被判成 CONVERSATION —— 而 driver 对 CONVERSATION 直接
+        # 清空工具表（_filter_tools_by_intention），这类带问候的请求于是物理上跑不了
+        # 任何命令，模型只能凭训练印象作答（正是本模块立起来要避开的那个盲区）。
+        # 纯寒暄仍然留在 CONVERSATION：它既没有查询动词也没有路径。
+        or _any_match_wordbounded(_COMPILED_QUERY, text, text_zh)
+        or bool(_PATH_PATTERN.search(task))
     )
     if (
         task_len < 60

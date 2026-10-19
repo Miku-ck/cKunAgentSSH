@@ -55,6 +55,17 @@ def _failure_notice(output: str) -> str | None:
     return None
 
 
+def _invalid_reason(action, name) -> str | None:
+    """参数非法时给原因，合法返回 None。与 service_cmd/bound_command 同处一文件。"""
+    if action not in _ACTIONS:
+        return f"非法 action: {action!r}，仅支持 {', '.join(_ACTIONS)}"
+    if not name or not isinstance(name, str):
+        return "服务名称不能为空"
+    if not _NAME_RE.match(name):
+        return f"非法服务名称: {name!r}，仅允许字母数字、-、_、."
+    return None
+
+
 def service_cmd(action: str, name: str) -> str:
     """service_manage 远端模板：固定 systemctl 动词 + 校验后的服务名。
 
@@ -93,13 +104,23 @@ class ServiceManageTool(BaseTool):
 
     def _validate(self, action: str, name: str) -> str | None:
         """校验参数；合法返回 None，否则返回错误信息。"""
-        if action not in _ACTIONS:
-            return f"非法 action: {action!r}，仅支持 {', '.join(_ACTIONS)}"
-        if not name or not isinstance(name, str):
-            return "服务名称不能为空"
-        if not _NAME_RE.match(name):
-            return f"非法服务名称: {name!r}，仅允许字母数字、-、_、."
-        return None
+        return _invalid_reason(action, name)
+
+    @classmethod
+    def bound_command(cls, args: dict) -> str | None:
+        """报出本次将要真实执行的 systemctl 命令（与 execute 同一条模板）。
+
+        缺这一路时授权键退化成裸工具名：`status nginx` 那张卡上点「始终允许」写入
+        allowlist 的条目是 `service_manage`，prod 环境下 `stop sshd`（risk 已升级为
+        dangerous）走同一把键 ⇒ is_permanently_allowed 命中，一条都没问过就停服务。
+        现在键与判定都按 `systemctl <action> <name>` 逐条绑定，动作和服务名换掉就不再
+        复用那次授权。参数非法时返回 None —— 那种调用根本不会执行，与 file_write 同法。
+        """
+        action = args.get("action")
+        name = args.get("name")
+        if _invalid_reason(action, name) is not None:
+            return None
+        return service_cmd(action, name)
 
     async def execute(self, context, action: str, name: str) -> ToolResult:
         err = self._validate(action, name)

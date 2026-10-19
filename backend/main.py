@@ -27,6 +27,7 @@ from routes.schedules import router as schedules_router
 from routes.workflow import router as workflow_router
 from agent.consciousness_tick import get_global_tick
 from agent.bridge_relay import bridge_ws_endpoint
+import win_asyncio_teardown
 
 logger = logging.getLogger(__name__)
 
@@ -257,6 +258,9 @@ if __name__ == "__main__":
     # 使用 asyncio.run(Server.serve()) 代替 uvicorn.run()，
     # 避免 PowerShell 后台运行时 WatchFiles reloader 启动缓慢导致健康检查超时
     import asyncio
+
+    # 必须早于任何 transport 创建（win32 之外自动跳过）
+    win_asyncio_teardown.install()
     config = uvicorn.Config(
         "main:app",
         host=args.host,

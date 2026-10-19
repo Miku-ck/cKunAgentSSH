@@ -677,8 +677,11 @@ function stopCountdownTick() {
 const hasCountdownTarget = computed(() =>
   items.value.some(s => s.enabled && !!s.next_run_at),
 )
-watch(hasCountdownTarget, (on) => {
-  if (on) startCountdownTick()
+// 与上面的列表轮询同一道闸：本视图是 v-show 常驻（SshView 不卸载），只按"有没有任务"
+// 启停的话，切回首页后这个 1s 定时器还在跑 —— nowTick 一变，整棵隐藏子树连每行的
+// parseBackendTs().getTime() 都跟着重算，一直跑到应用退出。
+watch([hasCountdownTarget, () => props.active], ([on, active]) => {
+  if (on && (active || props.active === undefined)) startCountdownTick()
   else stopCountdownTick()
 }, { immediate: true })
 
