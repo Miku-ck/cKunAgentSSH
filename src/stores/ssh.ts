@@ -3,7 +3,7 @@
  * 连接配置通过 IPC 持久化到主进程(safeStorage 加密),不再走 localStorage
  */
 import { defineStore } from 'pinia'
-import { ref, computed, onScopeDispose } from 'vue'
+import { ref, computed, onScopeDispose, getCurrentScope } from 'vue'
 import { useToastStore } from './toast'
 import { toFriendlyMessage } from '@/api/client'
 
@@ -47,6 +47,11 @@ interface CommandChainEntry {
 const LEGACY_KEY = 'ckun-ssh-connections'
 
 export const useSSHStore = defineStore('ssh', () => {
+  // Pinia 只在 setup 的同步段 scope.run()，所以任何 await 之后（含 action 里）都拿不到
+  // 活跃 scope。这里先把本 store 的 scope 存下来，供 init() 尾部登记监听清理时用 ——
+  // 见 _setupHostKeyNotifications。
+  const _setupScope = getCurrentScope()
+
   // ─── State ────────────────────────────────────
   const connections = ref<SSHConnection[]>([])
   const sessions = ref<TerminalSession[]>([])
@@ -129,12 +134,16 @@ export const useSSHStore = defineStore('ssh', () => {
         0,
       )
     })
-    // Pinia scope 销毁时清理监听器（HMR 场景）
-    onScopeDispose(() => {
+    // Pinia scope 销毁时清理监听器（HMR 场景）。
+    // 注意：这里离 init() 的两个 await 已经远了，activeEffectScope 是 null —— 直接
+    // onScopeDispose 只会冒 "no active effect scope" 告警并且**不登记**，三条监听
+    // 从此摘不掉。改用 setup 同步段抓到的 scope run() 回去登记。
+    const removeHostKeyListener = () => {
       if (typeof offNew === 'function') offNew()
       if (typeof offMismatch === 'function') offMismatch()
       if (typeof offUnpinned === 'function') offUnpinned()
-    })
+    }
+    if (_setupScope) _setupScope.run(() => onScopeDispose(removeHostKeyListener))
   }
 
   async function migrateLegacyIfNeeded(): Promise<void> {
