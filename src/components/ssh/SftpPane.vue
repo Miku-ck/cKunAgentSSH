@@ -89,7 +89,7 @@
     </div>
 
     <!-- 文件列表 -->
-    <div class="file-list" ref="listRef">
+    <div class="file-list">
       <div class="file-list-head">
         <div>名称</div>
         <div>大小</div>
@@ -172,7 +172,6 @@ const toast = useToastStore()
 
 const isDragOver = ref(false)
 const isOsFileDrag = ref(false)  // 是否为 OS 原生文件拖拽（外部文件管理器拖入）
-const listRef = ref<HTMLElement | null>(null)
 const editingPath = ref(false)
 const pathInput = ref('')
 const pathInputRef = ref<HTMLInputElement | null>(null)
@@ -675,36 +674,32 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
 /* 列头与行都是 flex 子项，默认 flex-shrink:1 会在条目溢出时被压到行盒高度
    （26→18、28→18），而未连接的另一侧仍是标称高度 —— 两栏的横线逐行错位 */
 .file-list-head, .file-row, .pane-list-limit { flex-shrink: 0; }
-.file-list-head {
+/* 列宽只写一份：两栏逐列对齐的前提就是列头与行永远同值，分两处写是等着被改歪 */
+.file-list-head, .file-row {
   display: grid;
   grid-template-columns: 1fr 80px 130px 90px;
-  height: 26px; align-items: center;
+  align-items: center;
   padding: 0 10px;
+}
+.file-list-head {
+  height: 26px;
   background: var(--bg-base);
   border-bottom: 1px solid var(--border-subtle);
   color: var(--text-tertiary);
   font-size: 11px; font-weight: 500;
   position: sticky; top: 0; z-index: 1;
-  text-align: left;
   /* 槽位在 padding box 之内，列头不铺过去右上角就会缺一块底色和分隔线；
      多铺的宽度用 padding-right 补回，保证列位置仍与 .file-row 逐列相同 */
   margin-right: calc(-1 * var(--pane-scrollbar-w));
   padding-right: calc(10px + var(--pane-scrollbar-w));
 }
 .file-row {
-  display: grid;
-  grid-template-columns: 1fr 80px 130px 90px;
-  align-items: center;
-  padding: 0 10px; height: 28px;
+  height: 28px;
   cursor: default;
   border-bottom: 1px solid transparent;
 }
 .file-row:hover { background: var(--bg-hover); }
 .file-row.selected { background: color-mix(in srgb, var(--accent-primary) 15%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent); }
-
-.file-row > div {
-  text-align: left;
-}
 
 .file-name { display: flex; align-items: center; gap: 8px; overflow: hidden; }
 .file-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
