@@ -8,13 +8,13 @@
     </div>
 
     <div class="gh-body">
-      <!-- ── 加速总控：一键启动 / 关闭 ── -->
+      <!-- ── 加速总控：一键启动 / 关闭（只管辖 git + SSH 443 两项；hosts 始终手动） ── -->
       <section class="panel master">
         <div class="master-row">
           <span class="dot" :class="masterOn ? 'on' : 'off'"></span>
           <span class="master-title">加速{{ masterStateText }}</span>
           <span class="measure-chips">
-            <span v-for="m in measureChips" :key="m.key" class="m-chip" :class="m.on ? 'on' : 'off'">{{ m.label }}</span>
+            <span v-for="m in measureChips" :key="m.key" class="m-chip" :class="m.on ? 'on' : 'off'" :title="m.tip">{{ m.label }}</span>
           </span>
           <span class="head-spacer"></span>
           <button
@@ -24,6 +24,7 @@
             @click="masterOn ? onMasterDisable() : onMasterEnable()"
           >{{ masterButtonLabel }}</button>
         </div>
+        <div class="hint">总控只管理 <b>git 全局加速</b>与 <b>SSH 443</b> 两项；hosts 优选始终手动，总控既不代写、关闭时也不会移除。</div>
         <div v-if="masterNote" class="hint" :class="{ warn: masterNoteWarn }">{{ masterNote }}</div>
       </section>
 
@@ -51,13 +52,17 @@
           <template v-else>
             <div v-for="group in linkGroups" :key="group.kind" class="link-group">
               <div class="group-title">{{ group.title }}</div>
-              <div v-for="link in group.links" :key="link.url" class="link-row">
+              <div v-for="link in visibleLinks(group)" :key="link.url" class="link-row">
                 <span class="link-mirror">{{ link.mirrorName }}</span>
                 <code class="link-url" :title="link.url">{{ displayUrl(link) }}</code>
                 <button class="btn btn-sm" @click="copyText(displayUrl(link), link.url)">{{ copiedKey === link.url ? '已复制' : '复制' }}</button>
                 <button v-if="link.kind === 'web'" class="btn btn-sm btn-ghost" @click="openExternal(link.url)">打开</button>
                 <button v-if="link.kind === 'download'" class="btn btn-sm btn-primary" @click="startDownload(link)">下载</button>
               </div>
+              <!-- 有测速数据时默认只推最快一条，其余折叠；无数据则全量平铺（未测速的第一条不构成推荐） -->
+              <button v-if="canCollapseGroup(group)" class="btn btn-sm btn-ghost fold-toggle" @click="toggleGroup(group.kind)">
+                {{ expandedGroups[group.kind] ? '收起其他镜像' : `其他 ${group.links.length - 1} 个镜像 ▾` }}
+              </button>
             </div>
           </template>
         </div>
@@ -133,7 +138,7 @@
           <span v-if="hostsAgeChip" class="title-chip" :class="hostsAgeChip.cls">{{ hostsAgeChip.text }}</span>
           <span v-else class="title-chip off">未写入</span>
         </div>
-        <div class="hint">解决镜像覆盖不了的登录态网页与 API：解析 GitHub 官方最优 IP 写入系统 hosts（写入时弹 UAC 提权框，确认即生效）。本项独立于总控开关，需手动操作，总控不会代写。</div>
+        <div class="hint">解决镜像覆盖不了的登录态网页与 API：解析 GitHub 官方最优 IP 写入系统 hosts（写入时弹 UAC 提权框，确认即生效）。本项始终手动：总控不会代写，「关闭加速」也不会移除它。</div>
         <div v-if="accel.hosts" class="status-block">
           <div v-if="accel.hosts.applied && accel.hosts.entries.length" class="hosts-table">
             <div v-for="e in accel.hosts.entries" :key="e.domain" class="hosts-row">
@@ -237,11 +242,11 @@ const masterNoteWarn = ref(false)
 /** 总控开关状态：任一措施生效即视为"加速已开启"，按钮相应切换为「关闭加速」 */
 const masterOn = computed(() => accel.activeMeasureCount > 0)
 
-/** 状态文案：全开/全关一笔带过，部分生效时明确 n/3，避免"已开启"名不副实 */
+/** 状态文案：总控管辖的两项全开/全关一笔带过，部分生效时明确 n/2 */
 const masterStateText = computed(() => {
   const n = accel.activeMeasureCount
   if (n === 0) return '未开启'
-  return n === 3 ? '已开启' : `部分开启（${n}/3）`
+  return n === 2 ? '已开启' : `部分开启（${n}/2）`
 })
 
 const masterButtonLabel = computed(() => {
@@ -256,18 +261,62 @@ const KIND_TITLES: Record<AccelLink['kind'], string> = {
 }
 
 const measureChips = computed(() => [
-  { key: 'git', label: 'git', on: !!accel.git?.active },
-  { key: 'ssh443', label: 'SSH 443', on: !!accel.ssh443?.applied },
-  { key: 'hosts', label: 'hosts', on: !!accel.hosts?.applied },
+  { key: 'git', label: 'git', tip: 'git 全局加速（总控管辖）', on: !!accel.git?.active },
+  { key: 'ssh443', label: 'SSH 443', tip: 'SSH 走 443 端口（总控管辖）', on: !!accel.ssh443?.applied },
+  // hosts 独立于总控（不代写、关闭不移除），chip 上标「手动」防止误读为总控未生效项
+  { key: 'hosts', label: 'hosts·手动', tip: 'hosts 优选 IP（始终手动，不在总控管辖内）', on: !!accel.hosts?.applied },
 ])
 
-const linkGroups = computed(() => {
+interface LinkGroup {
+  kind: AccelLink['kind']
+  title: string
+  links: AccelLink[]
+}
+
+const linkGroups = computed<LinkGroup[]>(() => {
   if (!converted.value) return []
   const order: AccelLink['kind'][] = ['clone', 'download', 'web']
   return order
-    .map(kind => ({ kind, title: KIND_TITLES[kind], links: converted.value!.result.links.filter(l => l.kind === kind) }))
+    .map(kind => ({ kind, title: KIND_TITLES[kind], links: sortLinks(converted.value!.result.links.filter(l => l.kind === kind)) }))
     .filter(g => g.links.length > 0)
 })
+
+/** 组内按实测延迟升序（未测速的排后面、保持原相对顺序）——
+ *  测速完成后「最快」镜像自然排第一，与镜像源面板的「最快」徽标同一事实源 */
+function sortLinks(links: AccelLink[]): AccelLink[] {
+  return links
+    .map((link, i) => ({ link, i, r: accel.probeOf(link.mirrorId) }))
+    .sort((a, b) => {
+      const av = a.r?.ok && a.r.latencyMs !== null ? a.r.latencyMs : Infinity
+      const bv = b.r?.ok && b.r.latencyMs !== null ? b.r.latencyMs : Infinity
+      return av === bv ? a.i - b.i : av - bv
+    })
+    .map(x => x.link)
+}
+
+// ── 转换结果收敛：默认每类只展示推荐（实测最快）一条，其余折叠 ──
+// 启用 5 个镜像时全量平铺是 5 行 clone + 5 行下载，扫读成本远高于信息价值。
+// 只在「有测速数据且不止一条」时才折叠 —— 没测过速时第一条并非推荐，不收。
+const expandedGroups = ref<Record<string, boolean>>({})
+
+function groupHasProbe(g: LinkGroup): boolean {
+  return g.links.some(l => {
+    const r = accel.probeOf(l.mirrorId)
+    return !!r?.ok && r.latencyMs !== null
+  })
+}
+
+function canCollapseGroup(g: LinkGroup): boolean {
+  return g.links.length > 1 && groupHasProbe(g)
+}
+
+function visibleLinks(g: LinkGroup): AccelLink[] {
+  return canCollapseGroup(g) && !expandedGroups.value[g.kind] ? g.links.slice(0, 1) : g.links
+}
+
+function toggleGroup(kind: AccelLink['kind']): void {
+  expandedGroups.value[kind] = !expandedGroups.value[kind]
+}
 
 const probeTimeText = computed(() => {
   if (!accel.probedAt) return ''
@@ -298,6 +347,9 @@ onMounted(async () => {
     gitPrefix.value = accel.enabledProxies.find(p => p.prefix === accel.lastProxyPrefix)?.prefix
       ?? accel.enabledProxies[0]?.prefix
       ?? ''
+    // 首次进入自动测速：没有延迟数据时「最快」徽标、转换结果排序、镜像推荐全部失效，
+    // 用户面对一排「未测速」无从选起。仅在本会话从未测过时触发，不重复打扰。
+    if (!accel.probedAt && !accel.probing) void runProbe()
   } catch (e: any) {
     toast.error(e?.message || 'GitHub 加速配置加载失败')
   }
@@ -454,7 +506,7 @@ async function removeHosts(): Promise<void> {
 }
 
 // ─── 总控 ───
-const STEP_LABEL: Record<string, string> = { git: 'git', ssh443: 'SSH 443', hosts: 'hosts' }
+const STEP_LABEL: Record<string, string> = { git: 'git', ssh443: 'SSH 443' }
 
 async function onMasterEnable(): Promise<void> {
   masterBusy.value = true
@@ -629,6 +681,13 @@ async function onMasterDisable(): Promise<void> {
 
 .link-group { display: flex; flex-direction: column; gap: 4px; }
 .group-title { font-size: 11px; color: var(--text-secondary); }
+
+/* 折叠切换：左对齐、小号，视觉上属于组内附注而非独立动作 */
+.fold-toggle {
+  margin-top: 2px;
+  align-self: flex-start;
+  font-size: 11px;
+}
 
 .link-row {
   display: flex;

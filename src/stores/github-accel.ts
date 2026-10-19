@@ -20,8 +20,10 @@ type DownloadStatus = Awaited<ReturnType<NonNullable<typeof window.electronAPI>[
 type HostsStatus = Awaited<ReturnType<NonNullable<typeof window.electronAPI>['ghaccelHostsStatus']>>
 type HostsPickRow = Awaited<ReturnType<NonNullable<typeof window.electronAPI>['ghaccelHostsPick']>>[number]
 
-/** 一键加速单项结果：UI 总控卡逐项显示成败 */
-export interface MasterStep { key: 'git' | 'ssh443' | 'hosts'; ok: boolean; message?: string }
+/** 一键加速单项结果：UI 总控卡逐项显示成败。
+ *  hosts 不在其中 —— 总控对 hosts 是「既不代写也不移除」（enable/disable 都不碰），
+ *  hosts 始终手动。此前 disable 会顺手删 hosts，与视图文案「独立于总控」矛盾，已修。 */
+export interface MasterStep { key: 'git' | 'ssh443'; ok: boolean; message?: string }
 
 function genId(): string {
   return `ux-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -328,20 +330,13 @@ export const useGithubAccelStore = defineStore('github-accel', () => {
     return steps
   }
 
-  /** 关闭加速：逆序撤销全部措施。hosts 撤销同样按需 UAC。 */
+  /** 关闭加速：只撤销总控管辖的两项（git + ssh443）。hosts 是用户手动写入的
+   *  （含 UAC 提权），总控无权代删 —— 此前这里会 ghaccelHostsRemove，把用户
+   *  手动的 hosts 一并清掉，与视图文案「独立于总控」矛盾，已修。 */
   async function masterDisable(): Promise<MasterStep[]> {
     const api = window.electronAPI
     if (!api) throw new Error('electronAPI 不可用')
     const steps: MasterStep[] = []
-
-    try {
-      await api.ghaccelHostsRemove()
-      await refreshHosts()
-      steps.push({ key: 'hosts', ok: true })
-    } catch (e: any) {
-      await refreshHosts()
-      steps.push({ key: 'hosts', ok: false, message: e?.message })
-    }
 
     try {
       await api.ghaccelSsh443Remove()
@@ -361,12 +356,13 @@ export const useGithubAccelStore = defineStore('github-accel', () => {
     return steps
   }
 
-  /** 生效措施数（总控状态条用） */
+  /** 总控管辖的两项（git + ssh443）生效数。hosts 始终手动，不计入 ——
+   *  此前把 hosts 算进来，「已开启」判 n===3 永远到不了（总控不代写 hosts），
+   *  且手动写了 hosts 会让总控按钮卡在「关闭加速」无法启动剩余项。 */
   const activeMeasureCount = computed(() => {
     let n = 0
     if (git.value?.active) n++
     if (ssh443.value?.applied) n++
-    if (hosts.value?.applied) n++
     return n
   })
 
