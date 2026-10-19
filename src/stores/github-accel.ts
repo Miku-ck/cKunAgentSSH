@@ -21,9 +21,10 @@ type HostsStatus = Awaited<ReturnType<NonNullable<typeof window.electronAPI>['gh
 type HostsPickRow = Awaited<ReturnType<NonNullable<typeof window.electronAPI>['ghaccelHostsPick']>>[number]
 
 /** 一键加速单项结果：UI 总控卡逐项显示成败。
- *  hosts 不在其中 —— 总控对 hosts 是「既不代写也不移除」（enable/disable 都不碰），
- *  hosts 始终手动。此前 disable 会顺手删 hosts，与视图文案「独立于总控」矛盾，已修。 */
-export interface MasterStep { key: 'git' | 'ssh443'; ok: boolean; message?: string }
+ *  总控对称管辖全部三项（git / ssh443 / hosts）：启动 = 逐项开启（hosts 自动
+ *  优选 + 写入，一次 UAC），关闭 = 逐项还原。此前 enable 不含 hosts 而 disable
+ *  又删 hosts 的不对称语义已废弃 —— 用户预期是「启动加速后完全被动，不再手动」。 */
+export interface MasterStep { key: 'git' | 'ssh443' | 'hosts'; ok: boolean; message?: string }
 
 function genId(): string {
   return `ux-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -291,11 +292,13 @@ export const useGithubAccelStore = defineStore('github-accel', () => {
   // ─── 一键加速 / 关闭加速（总控） ───
 
   /**
-   * 启动加速：只编排零系统风险的两项 —— git insteadOf（全局 git 配置，可一键还原）、
-   * SSH 443（~/.ssh/config 托管块，可一键移除）。单项失败不中断其余项。
+   * 启动加速：编排全部三项 —— git insteadOf（全局 git 配置，可一键还原）、
+   * SSH 443（~/.ssh/config 托管块，可一键移除）、hosts（自动优选 + 写入，
+   * 弹一次 UAC 提权）。单项失败不中断其余项。
    *
-   * 刻意不包含 hosts 优选：写 hosts 需要管理员授权且影响系统域名解析，必须由用户在
-   * 下方卡片里显式两步操作（「优选 IP」→「写入」）完成，总控不代劳。
+   * hosts 纳入总控是产品决策（2026-10-19）：用户预期「启动加速后完全被动」，
+   * 手动两步优选/写入的心智负担高于一次 UAC 确认。优选 0 个可用 IP 时该项记失败，
+   * 其余项照常生效。
    */
   async function masterEnable(): Promise<MasterStep[]> {
     const api = window.electronAPI
@@ -327,16 +330,37 @@ export const useGithubAccelStore = defineStore('github-accel', () => {
       steps.push({ key: 'ssh443', ok: false, message: e?.message })
     }
 
+    try {
+      const picks = await api.ghaccelHostsPick()
+      if (!picks.some(r => r.ip)) {
+        steps.push({ key: 'hosts', ok: false, message: '优选未得到可用 IP' })
+      } else {
+        await api.ghaccelHostsApply()
+        await refreshHosts()
+        steps.push({ key: 'hosts', ok: true })
+      }
+    } catch (e: any) {
+      await refreshHosts()
+      steps.push({ key: 'hosts', ok: false, message: e?.message })
+    }
+
     return steps
   }
 
-  /** 关闭加速：只撤销总控管辖的两项（git + ssh443）。hosts 是用户手动写入的
-   *  （含 UAC 提权），总控无权代删 —— 此前这里会 ghaccelHostsRemove，把用户
-   *  手动的 hosts 一并清掉，与视图文案「独立于总控」矛盾，已修。 */
+  /** 关闭加速：逆序撤销全部三项（与 masterEnable 对称；hosts 移除同样按需 UAC）。 */
   async function masterDisable(): Promise<MasterStep[]> {
     const api = window.electronAPI
     if (!api) throw new Error('electronAPI 不可用')
     const steps: MasterStep[] = []
+
+    try {
+      await api.ghaccelHostsRemove()
+      await refreshHosts()
+      steps.push({ key: 'hosts', ok: true })
+    } catch (e: any) {
+      await refreshHosts()
+      steps.push({ key: 'hosts', ok: false, message: e?.message })
+    }
 
     try {
       await api.ghaccelSsh443Remove()
@@ -356,13 +380,12 @@ export const useGithubAccelStore = defineStore('github-accel', () => {
     return steps
   }
 
-  /** 总控管辖的两项（git + ssh443）生效数。hosts 始终手动，不计入 ——
-   *  此前把 hosts 算进来，「已开启」判 n===3 永远到不了（总控不代写 hosts），
-   *  且手动写了 hosts 会让总控按钮卡在「关闭加速」无法启动剩余项。 */
+  /** 总控管辖的三项生效数（hosts 已纳入总控，n/3 语义成立） */
   const activeMeasureCount = computed(() => {
     let n = 0
     if (git.value?.active) n++
     if (ssh443.value?.applied) n++
+    if (hosts.value?.applied) n++
     return n
   })
 

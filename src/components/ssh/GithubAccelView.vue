@@ -24,8 +24,14 @@
             @click="masterOn ? onMasterDisable() : onMasterEnable()"
           >{{ masterButtonLabel }}</button>
         </div>
-        <div class="hint">总控只管理 <b>git 全局加速</b>与 <b>SSH 443</b> 两项；hosts 优选始终手动，总控既不代写、关闭时也不会移除。</div>
+        <div class="hint">总控管理 <b>git 全局加速</b>、<b>SSH 443</b> 与 <b>hosts 优选</b>三项：启动后 git / SSH 推拉自动走加速，无需再做任何操作；hosts 写入与移除会各弹一次系统提权（UAC）确认。</div>
         <div v-if="masterNote" class="hint" :class="{ warn: masterNoteWarn }">{{ masterNote }}</div>
+        <!-- hosts 时效被动提醒：优选 IP 是快照，GitHub 轮换接入 IP 后会从加速器变阻断器；
+             在总控卡上直接给出「更新」入口，用户不需要记住 hosts 还要维护 -->
+        <div v-if="hostsStaleNote" class="hint warn">
+          {{ hostsStaleNote }}
+          <button class="btn btn-sm" :disabled="accel.hostsPicking || accel.hostsBusy" @click="refreshStaleHosts">更新 hosts</button>
+        </div>
       </section>
 
       <!-- ── 痛点①②③的日常入口：链接转换 ── -->
@@ -138,7 +144,7 @@
           <span v-if="hostsAgeChip" class="title-chip" :class="hostsAgeChip.cls">{{ hostsAgeChip.text }}</span>
           <span v-else class="title-chip off">未写入</span>
         </div>
-        <div class="hint">解决镜像覆盖不了的登录态网页与 API：解析 GitHub 官方最优 IP 写入系统 hosts（写入时弹 UAC 提权框，确认即生效）。本项始终手动：总控不会代写，「关闭加速」也不会移除它。</div>
+        <div class="hint">解决镜像覆盖不了的登录态网页与 API：解析 GitHub 官方最优 IP 写入系统 hosts（写入时弹 UAC 提权框）。已纳入总控：启动加速时自动优选并写入，「关闭加速」时一并移除；也可在下方单独操作。</div>
         <div v-if="accel.hosts" class="status-block">
           <div v-if="accel.hosts.applied && accel.hosts.entries.length" class="hosts-table">
             <div v-for="e in accel.hosts.entries" :key="e.domain" class="hosts-row">
@@ -242,11 +248,11 @@ const masterNoteWarn = ref(false)
 /** 总控开关状态：任一措施生效即视为"加速已开启"，按钮相应切换为「关闭加速」 */
 const masterOn = computed(() => accel.activeMeasureCount > 0)
 
-/** 状态文案：总控管辖的两项全开/全关一笔带过，部分生效时明确 n/2 */
+/** 状态文案：三项全开/全关一笔带过，部分生效时明确 n/3 */
 const masterStateText = computed(() => {
   const n = accel.activeMeasureCount
   if (n === 0) return '未开启'
-  return n === 2 ? '已开启' : `部分开启（${n}/2）`
+  return n === 3 ? '已开启' : `部分开启（${n}/3）`
 })
 
 const masterButtonLabel = computed(() => {
@@ -263,8 +269,7 @@ const KIND_TITLES: Record<AccelLink['kind'], string> = {
 const measureChips = computed(() => [
   { key: 'git', label: 'git', tip: 'git 全局加速（总控管辖）', on: !!accel.git?.active },
   { key: 'ssh443', label: 'SSH 443', tip: 'SSH 走 443 端口（总控管辖）', on: !!accel.ssh443?.applied },
-  // hosts 独立于总控（不代写、关闭不移除），chip 上标「手动」防止误读为总控未生效项
-  { key: 'hosts', label: 'hosts·手动', tip: 'hosts 优选 IP（始终手动，不在总控管辖内）', on: !!accel.hosts?.applied },
+  { key: 'hosts', label: 'hosts', tip: 'hosts 优选（启动加速时自动优选并写入，需一次 UAC 确认）', on: !!accel.hosts?.applied },
 ])
 
 interface LinkGroup {
@@ -506,7 +511,29 @@ async function removeHosts(): Promise<void> {
 }
 
 // ─── 总控 ───
-const STEP_LABEL: Record<string, string> = { git: 'git', ssh443: 'SSH 443' }
+const STEP_LABEL: Record<string, string> = { git: 'git', ssh443: 'SSH 443', hosts: 'hosts' }
+
+/** hosts 时效提醒（总控卡上）：applied 且 stale 时提示可能失效。
+ *  staleDays 为 null（旧版本或手改块、无时间戳）同样按待更新处理 —— 判「未知=新鲜」才是风险。 */
+const hostsStaleNote = computed(() => {
+  const h = accel.hosts
+  if (!h?.applied || !h.stale) return ''
+  return h.staleDays === null
+    ? 'hosts 优选时效未知，可能已失效'
+    : `hosts 优选已 ${h.staleDays} 天未更新，可能失效`
+})
+
+/** 总控卡上的一键更新：重新优选 + 写入（一次 UAC）。被动加速的最后一块：
+ *  用户不需要记住「hosts 要维护」，看到提醒点一下即可。 */
+async function refreshStaleHosts(): Promise<void> {
+  try {
+    await accel.hostsPick()
+    await accel.hostsApply()
+    toast.success('hosts 已重新优选并写入')
+  } catch (e: any) {
+    toast.error(e?.message || 'hosts 更新失败')
+  }
+}
 
 async function onMasterEnable(): Promise<void> {
   masterBusy.value = true
