@@ -1,7 +1,7 @@
 /**
  * 启动可靠性回归 — appStore.readyPromise 是初始数据加载的唯一就绪闸门。
  *
- * 原缺口：ssh-ai store 工厂、HomeCommandCard onMounted、App onMounted 都在后端还没
+ * 原缺口：ssh-ai store 工厂、首页 Composer onMounted、App onMounted 都在后端还没
  * 通过健康检查时就 fire-and-forget 发 GET，port=0 让 getBaseUrl 抛错、渲染层每次首屏
  * 打 3 条"后端服务未就绪"的 warn。这些调用没有共享的就绪信号可等——主进程的
  * whenBackendReady（走 /api/health 轮询）已在 appStore 里 await，但没对外暴露。

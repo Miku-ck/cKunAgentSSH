@@ -5,15 +5,23 @@
       <!-- 标签栏 -->
       <div class="term-tabs">
         <div class="tabs-scroll" @wheel.prevent="onTabsWheel">
-          <!-- 首页标签：恒在、不可关闭，是打开应用时的第一个屏 -->
+          <!-- 首页标签：恒在、不可关闭，是打开应用时的第一个屏。
+               AI 星芒取代房子：这里的主人是助手，不是一个"启动器"。 -->
           <div
             class="term-tab home-tab"
             :class="{ active: homeTabActive }"
-            title="首页"
+            role="tab"
+            :aria-selected="homeTabActive"
+            :title="homeTabLabel"
+            :aria-label="homeTabLabel"
+            tabindex="0"
             @click="goHome"
+            @keydown.enter.prevent="goHome"
+            @keydown.space.prevent="goHome"
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M4 11l8-7 8 7v9a1 1 0 0 1-1 1h-4v-6h-6v6H5a1 1 0 0 1-1-1z"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M12 3l1.8 4.9L18.7 9.7l-4.9 1.8L12 16.4l-1.8-4.9L5.3 9.7l4.9-1.8z"/><path d="M18.6 15.4l.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9-1.9-.7 1.9-.7z"/></svg>
             <span class="tab-label">首页</span>
+            <span v-if="presence !== 'idle'" class="home-tab-dot" :class="presence" aria-hidden="true"></span>
           </div>
 
           <!-- 终端标签：中键关闭 / 拖拽排序 / title 全名（截断后可看全） -->
@@ -47,6 +55,34 @@
 
           <!-- 新建终端（本地 shell / 已配好的远程连接） -->
           <NewTerminalMenu @open-local="openLocalShell" @open-remote="connectRemote" />
+        </div>
+
+        <!-- 会话入口固定在滚动区之外：终端标签再多也不会把这两枚挤走。
+             历史抽屉在 S2 挂载，这里先落按钮与状态。 -->
+        <div class="tab-actions">
+          <button
+            ref="homeHistoryBtnRef"
+            type="button"
+            class="tab-act"
+            title="历史记录"
+            aria-label="历史记录"
+            aria-controls="home-history-drawer"
+            :aria-expanded="homeHistoryOpen"
+            @click="toggleHomeHistory"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><polyline points="3 3 3 8 8 8"/><polyline points="12 7 12 12 15 14"/></svg>
+          </button>
+          <button
+            type="button"
+            class="tab-act"
+            :disabled="agentStore.isRunning"
+            :aria-disabled="agentStore.isRunning"
+            :title="agentStore.isRunning ? '运行中不可新建会话' : '新建会话'"
+            aria-label="新建会话"
+            @click="startNewTask"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M11 4H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-6"/><path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4z"/></svg>
+          </button>
         </div>
       </div>
 
@@ -115,7 +151,7 @@ v-show="s.id === store.activeSessionId"
 
         <!-- Docker 管理页面（依附当前远程 SSH 会话） -->
         <div v-show="activeNavPage === 'docker'" class="docker-page">
-          <DockerView v-if="pageMounted('docker')" @exec-terminal="activateTerminal($event)" />
+          <DockerView v-if="pageMounted('docker')" :active="activeNavPage === 'docker'" @exec-terminal="activateTerminal($event)" />
         </div>
 
         <!-- GitHub 加速页面（镜像套件，纯本地功能） -->
@@ -123,16 +159,13 @@ v-show="s.id === store.activeSessionId"
           <GithubAccelView v-if="pageMounted('github')" />
         </div>
 
-        <!-- 首页：目标主机 + 下达 + 待放行计数条（批量与追溯归它）+ 本轮过程（逐条决策在卡上） -->
-        <div v-show="homeTabActive" class="home-pane">
-          <HomeTargetTitle @bulk="showBulk = true" />
-          <HomeCommandCard />
-          <HomeApprovalQueue @open-run="revealRun" />
-          <!-- 运行过程直接排在首页下面，不再是标签条上的一枚标签、也不再是另一屏。
-               仍挂在 SshView 层而不是侧栏 slot 里 —— 关掉 AI 面板也要能看过程
-               （详见 RunView 头注）。在终端里敲命令时它不抢屏：回到首页就在下面。 -->
-          <RunView v-if="runVisible" ref="runRef" />
-        </div>
+        <!-- 首页：智能体任务台（消息区 + 常驻输入区，历史走右侧抽屉） -->
+        <HomeWorkspace
+          v-show="homeTabActive"
+          :history-open="homeHistoryOpen"
+          @close-history="closeHomeHistory"
+          @bulk="showBulk = true"
+        />
       </div>
 
       <!-- 快捷命令条 -->
@@ -140,7 +173,12 @@ v-show="s.id === store.activeSessionId"
     </div>
 
     <!-- AI 运维助手面板 -->
-    <SshAiPanel v-if="sshAiStore.showAiPanel" ref="aiPanelRef" @close="sshAiStore.closeAiPanel()" />
+    <SshAiPanel
+      v-if="sshAiStore.showAiPanel"
+      ref="aiPanelRef"
+      @close="sshAiStore.closeAiPanel()"
+      @open-home="onOpenHome"
+    />
 
     <!-- 多节点批量下发（首页目标主机的「全部 N 台」入口；远程管理页同一组件） -->
     <BulkCommandModal v-if="showBulk" @close="showBulk = false" />
@@ -204,11 +242,8 @@ import { onMounted, onUnmounted, ref, computed, nextTick, watch, defineAsyncComp
 import LocalTerminal from '@/components/ssh/LocalTerminal.vue'
 import RemoteTerminal from '@/components/ssh/RemoteTerminal.vue'
 import IconMonitor from '@/components/icons/IconMonitor.vue'
-// 首页主角静态引入：下面那批 defineAsyncComponent 拆的是"首次访问才下载"的页面，
-// 而目标标题、指令卡与待放行队列是打开应用第一眼要看到的东西，不该等一个 chunk。
-import HomeTargetTitle from '@/components/home/HomeTargetTitle.vue'
-import HomeCommandCard from '@/components/home/HomeCommandCard.vue'
-import HomeApprovalQueue from '@/components/home/HomeApprovalQueue.vue'
+// 首页是首屏要看到的东西，静态引入不走异步 chunk
+import HomeWorkspace from '@/components/home/HomeWorkspace.vue'
 import NewTerminalMenu from '@/components/ssh/NewTerminalMenu.vue'
 // 启动性能优化：非首屏功能整体移出启动关键路径 —
 // 原实现全部静态 import + v-show（组件启动即全部挂载），每加一条功能线主包
@@ -228,7 +263,6 @@ const DashboardView = defineAsyncComponent(() => import('@/views/ssh/DashboardVi
 const TunnelView = defineAsyncComponent(() => import('@/components/ssh/TunnelView.vue'))
 const DockerView = defineAsyncComponent(() => import('@/components/ssh/DockerView.vue'))
 const GithubAccelView = defineAsyncComponent(() => import('@/components/ssh/GithubAccelView.vue'))
-const RunView = defineAsyncComponent(() => import('@/components/agent/RunView.vue'))
 const CommandPalette = defineAsyncComponent(() => import('@/components/common/CommandPalette.vue'))
 import { useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
@@ -239,6 +273,8 @@ import { useSettings } from '@/composables/useSettings'
 import { useCommandDelivery } from '@/composables/useCommandDelivery'
 import { useSshNavigation } from '@/composables/useSshNavigation'
 import { useGlobalShortcuts } from '@/composables/useGlobalShortcuts'
+import { useAgentPresence } from '@/composables/useAgentPresence'
+import { useToastStore } from '@/stores/toast'
 import type { NavPage } from '@/composables/useSshNavigation'
 import { useTabContextMenu } from '@/composables/useTabContextMenu'
 import { qcHeightForAlign } from '@/utils/qc-align'
@@ -247,6 +283,8 @@ const store = useSSHStore()
 const sshAiStore = useSshAiStore()
 const agentStore = useAgentStore()
 const { openSettings } = useSettings()
+const toast = useToastStore()
+const { presence, pendingCount } = useAgentPresence()
 
 // 终端组件引用映射（key: sessionId, value: 组件实例）
 const terminalRefs: Record<string, any> = {}
@@ -311,6 +349,57 @@ const {
 
 /** 首页目标菜单里「全部 N 台」拉起的批量下发弹窗 */
 const showBulk = ref(false)
+
+/** 历史抽屉的开合。放在宿主而不是 useSshNavigation：那里每次调用都会新建一份状态。 */
+const homeHistoryOpen = ref(false)
+const homeHistoryBtnRef = ref<HTMLButtonElement | null>(null)
+
+/** 抽屉关闭（Esc / 遮罩 / 关闭钮 / 选中会话）后焦点回到历史按钮：
+ *  否则焦点落在被卸载的抽屉里，键盘用户会瞬移回文档开头。 */
+function closeHomeHistory() {
+  if (!homeHistoryOpen.value) return
+  homeHistoryOpen.value = false
+  void nextTick(() => homeHistoryBtnRef.value?.focus())
+}
+
+/** 状态点的文案与颜色同源（useAgentPresence）：颜色不是唯一信道，title/aria 说清是什么。 */
+const homeTabLabel = computed(() => {
+  if (presence.value === 'pending') return `首页 · ${pendingCount.value} 条待审批`
+  if (presence.value === 'running') return '首页 · 运行中'
+  if (presence.value === 'unread') return '首页 · 有新回复'
+  return '首页'
+})
+
+/** 任务台可见即「看见」：清未读，离开时关掉历史抽屉（它属于首页）。 */
+watch(homeTabActive, (active) => {
+  sshAiStore.setHomeVisible(active)
+  if (!active) homeHistoryOpen.value = false
+}, { immediate: true })
+
+function toggleHomeHistory() {
+  goHome()
+  homeHistoryOpen.value = !homeHistoryOpen.value
+}
+
+/** 「新建会话」：进入空白任务，不提前产生历史条目（首条消息发出才入历史）。 */
+function startNewTask() {
+  if (agentStore.isRunning) {
+    toast.info('AI 正在运行中，请等待完成')
+    return
+  }
+  if (!sshAiStore.beginNewTask()) {
+    toast.info('AI 正在运行中，请等待完成')
+    return
+  }
+  goHome()
+  homeHistoryOpen.value = false
+}
+
+/** 侧栏的「去任务台」：关掉侧栏再回首页，审批卡只在内联过程里结算 */
+function onOpenHome() {
+  sshAiStore.closeAiPanel()
+  goHome()
+}
 
 // ── 全局快捷键 + 命令面板（M1-P0）──
 // 独立页统一开关表：快捷键与命令面板共用，避免八个 toggle 各写一遍分发
@@ -381,19 +470,6 @@ function onTabDrop(id: string, e: DragEvent): void {
   }
   dragTabId.value = ''
 }
-
-/**
- * 过程面板的可见条件（与先前那枚 run 标签同源）：正在跑，或有一轮跑完可回看。
- * 它现在是首页里的一块，所以"要不要给它一屏"这个问题不存在了。
- */
-const runVisible = computed(() => agentStore.isRunning || agentStore.lastRunId !== '')
-const runRef = ref<InstanceType<typeof RunView> | null>(null)
-
-/** 队列里点「看过程」：过程就在同一屏的下面，滚过去 —— 先前是换到另一屏。 */
-function revealRun() {
-  runRef.value?.$el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-}
-
 
 // ── sticky-visited 页面挂载闸门（配合上方 defineAsyncComponent）──
 type PageKey = typeof activeNavPage.value
@@ -545,6 +621,67 @@ defineExpose({
   display: none;
 }
 
+/* 会话入口：固定在滚动区右侧，标签再多也不被挤走 */
+.tab-actions {
+  flex: 0 0 auto;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  border-left: 1px solid var(--border-subtle);
+}
+
+.tab-act {
+  width: 28px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.tab-act:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.tab-act:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+/* 首页状态点：待审批（警示黄）> 运行中（呼吸蓝）> 未读（强调色）。
+   颜色只是辅助信道 —— 标签的 title/aria-label 同时说明状态。 */
+.home-tab-dot {
+  width: 5px;
+  height: 5px;
+  margin-left: -1px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.home-tab-dot.pending { background: var(--status-warn-text); }
+.home-tab-dot.running {
+  background: var(--status-info-text);
+  animation: home-dot-pulse 1.6s ease-in-out infinite;
+}
+.home-tab-dot.unread { background: var(--accent-primary); }
+
+@keyframes home-dot-pulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-tab-dot.running { animation: none; }
+}
+
 .term-tab {
   height: calc(var(--tabbar-h) - 4px);
   padding: 0 10px;
@@ -630,21 +767,6 @@ defineExpose({
 }
 
 /* ─── Directory Panel ─── */
-
-/* ─── Home Pane ─── */
-.home-pane {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 48px 24px;
-  overflow-y: auto;
-  z-index: 10;
-}
 
 /* ─── RemoteManager Page ─── */
 .rm-page {

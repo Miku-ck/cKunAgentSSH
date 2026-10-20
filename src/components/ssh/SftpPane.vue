@@ -25,6 +25,7 @@
         <button class="pane-btn" title="上一级" :disabled="!canUp" @click="goUp">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
+        <SftpBookmarkMenu :side="side" :cwd="cwd" :online="store.online" :host-key="store.connectionHost" />
         <button class="pane-btn" title="刷新" @click="refresh">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
         </button>
@@ -165,6 +166,7 @@ import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { useSftpStore } from '@/stores/sftp'
 import { useToastStore } from '@/stores/toast'
 import { toFriendlyMessage } from '@/api/client'
+import SftpBookmarkMenu from './SftpBookmarkMenu.vue'
 
 const props = defineProps<{ side: 'local' | 'remote' }>()
 const store = useSftpStore()

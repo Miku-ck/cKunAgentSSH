@@ -9,37 +9,21 @@
       <span class="brand-text">cKunAgentSSH</span>
     </div>
     <div class="titlebar-drag" @dblclick="toggleMaximize"></div>
-    <!-- 功能按钮：按语义分组（会话 / 资源 / 追溯），组间分隔线。
+    <!-- 功能按钮：按语义分组（常用工具 / 会话与网络 / 追溯），组间分隔线。
+         常用工具组（AI + Docker / GitHub / SFTP）紧贴左侧品牌区——这四枚是最高频入口；
+         会话与网络组（监控 / 定时 / 远程 / 隧道）随后，审计与设置靠近窗口控制。
          ≥1024px 时按钮常显 2 字标签（可发现性优先），以下收纳为纯图标；
          title 里的快捷键提示来自 useGlobalShortcuts.PAGE_SHORTCUTS，单一来源。 -->
     <div class="titlebar-actions" @dblclick.stop>
-      <!-- 会话类 -->
-      <button class="titlebar-action-btn" :class="{ active: activePage === 'ai' }" :title="agent.isRunning ? 'AI 运维助手（运行中，Ctrl+Shift+B）' : 'AI 运维助手 (Ctrl+Shift+B)'" aria-label="AI 运维助手" @click="emit('action-ai')">
+      <!-- 常用工具：AI 助手 + Docker / GitHub / SFTP -->
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'ai' }" :title="aiTitle" aria-label="AI 运维助手" @click="emit('action-ai')">
         <span class="ai-text">AI</span>
-        <!-- 两个入口在视觉上是同一个助手的两扇门：跑起来呼吸点、跑完且面板
-             关着时未读点（ssh-ai store 的 unreadReply，开面板即清）。
-             徽章只作辅助信道：title 文案同步说明状态，不单靠颜色传义。 -->
-        <span v-if="agent.isRunning" class="ai-badge run" aria-hidden="true"></span>
-        <span v-else-if="sshAi.unreadReply" class="ai-badge unread" aria-hidden="true"></span>
-      </button>
-      <button class="titlebar-action-btn" :class="{ active: activePage === 'dashboard' }" :title="'监控仪表盘' + pageHint('dashboard')" aria-label="监控仪表盘" @click="emit('action-dashboard')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-        <span class="tb-label">监控</span>
-      </button>
-      <button class="titlebar-action-btn" :class="{ active: activePage === 'schedules' }" :title="'定时任务' + pageHint('schedules')" aria-label="定时任务" @click="emit('action-schedules')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 16 14"/></svg>
-        <span class="tb-label">定时</span>
-      </button>
-      <button class="titlebar-action-btn" :class="{ active: activePage === 'remote-mgr' }" :title="'远程终端' + pageHint('remote-mgr')" aria-label="远程终端" @click="emit('action-remote')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg>
-        <span class="tb-label">远程</span>
-      </button>
-      <!-- 资源类 -->
-      <span class="titlebar-sep" aria-hidden="true"></span>
-      <button class="titlebar-action-btn" :class="{ active: activePage === 'tunnels' }" :title="'隧道' + pageHint('tunnels')" aria-label="SSH 隧道" @click="emit('action-tunnels')">
-        <!-- 隧道图标：拱形洞口 + 地面 + 通道中线，与 TunnelView 页头同一枚 -->
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M4 20v-7a8 8 0 0 1 16 0v7"/><path d="M12 20v-7"/><path d="M2 20h20"/></svg>
-        <span class="tb-label">隧道</span>
+        <!-- 两个入口在视觉上是同一个助手的两扇门：徽章与首页状态点同源
+             （useAgentPresence），优先级待审批 > 运行中 > 未读；文案同步说明状态，
+             不单靠颜色传义。 -->
+        <span v-if="presence === 'pending'" class="ai-badge pending" aria-hidden="true"></span>
+        <span v-else-if="presence === 'running'" class="ai-badge run" aria-hidden="true"></span>
+        <span v-else-if="presence === 'unread'" class="ai-badge unread" aria-hidden="true"></span>
       </button>
       <button class="titlebar-action-btn" :class="{ active: activePage === 'docker' }" :title="'Docker 管理' + pageHint('docker')" aria-label="Docker 管理" @click="emit('action-docker')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M6 9.5h3v3H6zM11 9.5h3v3h-3zM11 6h3v3h-3z"/><path d="M3.5 12.5h13c1.6 0 3-.7 3.8-2 .7 2.3-.4 5-3.2 5H7a3.5 3.5 0 0 1-3.5-3z"/><path d="M3.5 12.5 2 10"/></svg>
@@ -54,6 +38,25 @@
       <button class="titlebar-action-btn" :class="{ active: activePage === 'sftp' }" :title="'SFTP' + pageHint('sftp')" aria-label="SFTP 文件传输" @click="emit('action-sftp')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
         <span class="tb-label">SFTP</span>
+      </button>
+      <!-- 会话与网络：监控 / 定时 / 远程终端 / 隧道 -->
+      <span class="titlebar-sep" aria-hidden="true"></span>
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'dashboard' }" :title="'监控仪表盘' + pageHint('dashboard')" aria-label="监控仪表盘" @click="emit('action-dashboard')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        <span class="tb-label">监控</span>
+      </button>
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'schedules' }" :title="'定时任务' + pageHint('schedules')" aria-label="定时任务" @click="emit('action-schedules')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 16 14"/></svg>
+        <span class="tb-label">定时</span>
+      </button>
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'remote-mgr' }" :title="'远程终端' + pageHint('remote-mgr')" aria-label="远程终端" @click="emit('action-remote')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg>
+        <span class="tb-label">远程</span>
+      </button>
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'tunnels' }" :title="'隧道' + pageHint('tunnels')" aria-label="SSH 隧道" @click="emit('action-tunnels')">
+        <!-- 隧道图标：拱形洞口 + 地面 + 通道中线，与 TunnelView 页头同一枚 -->
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M4 20v-7a8 8 0 0 1 16 0v7"/><path d="M12 20v-7"/><path d="M2 20h20"/></svg>
+        <span class="tb-label">隧道</span>
       </button>
       <!-- 追溯类 -->
       <span class="titlebar-sep" aria-hidden="true"></span>
@@ -83,17 +86,23 @@
 
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
-import { useAgentStore } from '@/stores/agent'
-import { useSshAiStore } from '@/stores/ssh-ai'
+import { useAgentPresence } from '@/composables/useAgentPresence'
 import { useGithubAccelStore } from '@/stores/github-accel'
 import { pageShortcutHint as pageHint } from '@/composables/useGlobalShortcuts'
 import type { TitlebarPage } from '@/composables/useSshNavigation'
 
 const api = window.electronAPI
 
-const agent = useAgentStore()
-const sshAi = useSshAiStore()
+const { presence, pendingCount } = useAgentPresence()
 const ghAccel = useGithubAccelStore()
+
+const AI_SHORTCUT = 'Ctrl+Shift+B'
+const aiTitle = computed(() => {
+  if (presence.value === 'pending') return `AI 运维助手（${pendingCount.value} 条待审批，${AI_SHORTCUT}）`
+  if (presence.value === 'running') return `AI 运维助手（运行中，${AI_SHORTCUT}）`
+  if (presence.value === 'unread') return `AI 运维助手（有新回复，${AI_SHORTCUT}）`
+  return `AI 运维助手 (${AI_SHORTCUT})`
+})
 
 /** 红点只看巡检结论；标题补充具体是哪一项异常（镜像优先） */
 const ghDegraded = computed(() => ghAccel.health?.state === 'degraded')
@@ -239,7 +248,8 @@ async function close() { await api?.windowClose() }
 }
 
 /* AI 按钮状态徽章：绝对定位钉在按钮右上角，不挤动 "AI" 字本身。
-   运行中 = info 蓝呼吸；未读 = 强调色实心点。都用主题令牌，八套主题各自取值。 */
+   待审批 = 警示色实心；运行中 = info 蓝呼吸；未读 = 强调色实心。
+   与首页标签状态点同源同优先级，全部用主题令牌。 */
 .titlebar-action-btn {
   position: relative;
 }
@@ -251,6 +261,9 @@ async function close() { await api?.windowClose() }
   height: 6px;
   border-radius: 50%;
   pointer-events: none;
+}
+.ai-badge.pending {
+  background: var(--status-warn-text);
 }
 .ai-badge.run {
   background: var(--status-info-text);

@@ -87,12 +87,12 @@
       <span class="nv-grow"></span>
       <span class="nv-host-chip">{{ metrics.host || 'no-host' }}</span>
     </div>
-    <table v-if="metrics.gpuProcs.length" class="nv-proc-table">
+    <table v-if="gpuProcs.length" class="nv-proc-table">
       <thead>
         <tr><th>GPU</th><th>PID</th><th>USER</th><th>GPU-MEM</th><th>%CPU</th><th>%MEM</th><th>TIME</th><th>COMMAND</th></tr>
       </thead>
       <tbody>
-        <tr v-for="p in metrics.gpuProcs" :key="p.gpuIndex + ':' + p.pid">
+        <tr v-for="p in gpuProcs" :key="p.gpuIndex + ':' + p.pid">
           <td>{{ p.gpuIndex }}</td>
           <td>{{ p.pid }}</td>
           <td>{{ p.user }}</td>
@@ -110,7 +110,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { GpuSample, ServerMetrics } from '@/stores/server-monitor-core'
+import type { GpuProcessEntry, GpuSample, ServerMetrics } from '@/stores/server-monitor-core'
 import { NvGauge } from './NvGauge'
 import {
   averageSeries,
@@ -126,6 +126,8 @@ import {
 
 const props = defineProps<{
   metrics: ServerMetrics
+  /** GPU 占用进程：不在 metrics 里 —— 它是 60s 慢轮询，metrics 每 5s 替换 */
+  gpuProcs: GpuProcessEntry[]
   gpuHist: Record<string, { util: number[]; mem: number[] }>
   cpuHist: number[]
   memHist: number[]

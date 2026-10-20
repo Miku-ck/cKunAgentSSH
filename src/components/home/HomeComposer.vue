@@ -1,19 +1,18 @@
 <script setup lang="ts">
 /**
- * 首页指令卡（spec 2026-09-29-home-command-panel · 用户故事 1–9）
+ * 首页常驻输入区（任务台 Composer）
  *
- * 只做下达：发送走 useHomeCommand → ssh-ai.sendMessage 这一条通路；审批档、姿态
- * 都读 store 而不是组件内自存，保证首页选的东西在侧栏同样算数。
+ * 发送只有 useHomeCommand → ssh-ai.sendMessage 一条通路，审批档与姿态读 store，
+ * 保证首页与侧栏选的东西互相算数。
  *
- * ＋ 菜单按"后端有消费者"筛过（spec 故事 5 的 2026-09-30 修订记着砍掉的三项与证据），
- * 菜单里是：**目标 / 计划 / 终端现场 / 本地文件 / 远端文件 / 技能**。没有的那几项不是
- * 漏了 —— 是点亮后后端一字不变，那类开关在这仓里叫「亮的空开关」。
- * 远端文件取进来后与 /chat/upload 的返回同形，注入通路仍只有一条（store 的
- * addRemoteAttachment 负责截断口径，见那里的注释）。
+ * 底栏顺序：＋ → 目标主机 chip → 分隔线 → 审批档 → chips → 模型 → 发送/停止。
+ * 目标主机只改 ssh store 的 activeSessionId（useHomeTarget），不切走首页、不聚焦
+ * 终端 —— 用户正在输入框里打字。
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { ChatAttachment } from '@/api/client'
 import { useHomeCommand } from '@/composables/useHomeCommand'
+import { useHomeTarget } from '@/composables/useHomeTarget'
 import { useModelSelector } from '@/composables/useModelSelector'
 import { useSettings } from '@/composables/useSettings'
 import { useAgentStore } from '@/stores/agent'
@@ -26,6 +25,8 @@ import { useSSHStore } from '@/stores/ssh'
 import HomeRemoteFilePicker from './HomeRemoteFilePicker.vue'
 import { APPROVAL_OPTIONS, PERMISSION_LABELS, PERM_MARKS, PERM_SHIELD, resolveRunModes, type ApprovalKey } from '@/utils/run-modes'
 
+const emit = defineEmits<{ bulk: [] }>()
+
 const agent = useAgentStore()
 const sshAi = useSshAiStore()
 const ssh = useSSHStore()
@@ -35,6 +36,21 @@ const skillsStore = useSkillStore()
 const settings = useSettingsStore()
 const { openSettings } = useSettings()
 const { draft, canSend, submit, attachFiles, removeAttachment, uploading } = useHomeCommand()
+const { targetLabel, options: targetOptions, pick: pickTarget, remoteCount, canBulkDispatch } = useHomeTarget()
+
+// ── 目标主机 chip ──
+const showTargetMenu = ref(false)
+const targetRef = ref<HTMLElement | null>(null)
+
+function chooseTarget(sessionId: string) {
+  pickTarget(sessionId)
+  showTargetMenu.value = false
+}
+
+function toBulk() {
+  emit('bulk')
+  showTargetMenu.value = false
+}
 
 /** 本地文件选择：input 藏在卡片里，＋ 菜单只负责唤起 —— 与侧栏那个回形针按钮
  *  走的是同一个 store.uploadFiles 通路，不是第二条上传实现。 */
@@ -82,6 +98,7 @@ function onDocClick(e: MouseEvent) {
   const t = e.target as Node
   if (permRef.value && !permRef.value.contains(t)) showPermMenu.value = false
   if (plusRef.value && !plusRef.value.contains(t)) showPlusMenu.value = false
+  if (targetRef.value && !targetRef.value.contains(t)) showTargetMenu.value = false
 }
 
 onMounted(() => document.addEventListener('click', onDocClick))
@@ -238,6 +255,8 @@ onMounted(() => {
       v-model="draft"
       class="hcc-input"
       rows="2"
+      placeholder="输入指令…"
+      aria-label="输入指令"
       spellcheck="false"
       @input="grow"
       @keydown="onKeydown"
@@ -333,6 +352,46 @@ onMounted(() => {
           </template>
         </div>
       </div>
+
+      <div ref="targetRef" class="hcc-sel">
+        <button
+          type="button"
+          class="hcc-btn hcc-target"
+          :aria-expanded="showTargetMenu"
+          aria-haspopup="menu"
+          title="目标主机 · 点击切换"
+          @click.stop="showTargetMenu = !showTargetMenu"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="6" rx="1"/>
+            <rect x="3" y="14" width="18" height="6" rx="1"/>
+            <line x1="7" y1="7" x2="7.01" y2="7"/>
+            <line x1="7" y1="17" x2="7.01" y2="17"/>
+          </svg>
+          <span class="host">{{ targetLabel }}</span>
+          <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" width="9" height="9" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div v-if="showTargetMenu" class="hcc-menu target-menu" @click.stop>
+          <button
+            v-for="o in targetOptions"
+            :key="o.sessionId"
+            type="button"
+            class="hcc-opt"
+            :class="{ on: o.active }"
+            @click="chooseTarget(o.sessionId)"
+          >
+            <span class="ol">{{ o.label }}<span v-if="o.active" class="ot">✓</span></span>
+            <span class="od">{{ o.hint }}</span>
+          </button>
+          <div v-if="!targetOptions.length" class="hcc-sep">还没有打开的会话 请新建终端</div>
+          <button v-if="canBulkDispatch" type="button" class="hcc-opt" @click="toBulk">
+            <span class="ol">全部 {{ remoteCount }} 台</span>
+            <span class="od">批量下发 · 不改 AI 目标</span>
+          </button>
+        </div>
+      </div>
+
+      <span class="hcc-divider" aria-hidden="true"></span>
 
       <div ref="permRef" class="hcc-sel">
         <button
@@ -463,10 +522,22 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- 执行钮与侧栏提交件（SideChatPanel 的 .send-btn）完全同款：同一枚上行箭头、
-           同一张皮（底走主题 hover 层、字走主文字色），身形也一并对齐成 24×24。
-           它先前是 28px 高的宽体文字钮 —— 皮早已一致，这回连身形与语义也统一。 -->
+      <!-- 运行中发送键换成停止键；输入框仍可编辑（下一轮草稿），Enter 由 submit()
+           的早退 toast 挡住，不排队、不清草稿。 -->
       <button
+        v-if="running"
+        type="button"
+        class="hcc-send hcc-stop"
+        title="停止"
+        aria-label="停止"
+        @click="agent.abort()"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <rect x="7" y="7" width="10" height="10" rx="1" fill="currentColor" stroke="none"/>
+        </svg>
+      </button>
+      <button
+        v-else
         type="button"
         class="hcc-send"
         :disabled="!canSend"
@@ -487,7 +558,7 @@ onMounted(() => {
 /* 只用现有主题令牌，不写死颜色 —— 主题层是第四片的事 */
 .hcc {
   width: 100%;
-  max-width: 720px;
+  max-width: 820px;
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
@@ -530,9 +601,11 @@ onMounted(() => {
   line-height: var(--hcc-lh);
   caret-color: var(--accent-primary);
 }
-/* 没有 placeholder：输入提示由上面那句问话承担（"今天想让 X 替你做什么？"），
-   框内再摆一个占位符是重复，而它先前是三个点 —— 读起来像框坏了。
-   所以这条 ::placeholder 规则也一并删掉：不匹配任何节点的规则就是死代码。 */
+/* 空态问句已经不再兼任输入提示（有消息后标题换成会话名），所以输入框
+   回到自己说明自己：一行 placeholder，颜色用三级文字，不与正文抢。 */
+.hcc-input::placeholder {
+  color: var(--text-tertiary);
+}
 .hcc-foot {
   display: flex;
   align-items: center;
@@ -565,6 +638,30 @@ onMounted(() => {
 .hcc-btn.empty b { color: var(--accent-orange) }
 /* ＋ 是底栏唯一的上下文入口（故事 5），做成方角小方块让它一眼是"加"而不是一个词 */
 .hcc-btn.plus { width: 26px; padding: 0; justify-content: center; font-size: 15px }
+/* 目标主机 chip：底栏里唯一带描边的控件 —— 它改的是「这条指令落到哪台机器」，
+   比其余开关重一档。远程会话名可能很长，max-width + ellipsis 保住行尾。 */
+.hcc-target {
+  max-width: 240px;
+  border: 1px solid var(--border-input);
+  background: var(--bg-input);
+  box-sizing: border-box;
+}
+.hcc-target svg { flex-shrink: 0; color: var(--text-tertiary) }
+.hcc-target .host {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+.hcc-target .chev { width: 9px; height: 9px }
+.hcc-divider {
+  width: 1px;
+  height: 14px;
+  margin: 0 2px;
+  background: var(--border-subtle);
+  flex-shrink: 0;
+}
 /* 文件选择器不进底栏（故事 5：＋ 之外不常驻"添加"按钮），只借程序化 click 唤起。
    display:none 的 input 在 Chromium 里照样能被 .click() 打开，侧栏用的是同一招。 */
 .hcc-file { display: none }
@@ -601,11 +698,10 @@ onMounted(() => {
 .hcc-menu {
   position: absolute;
   left: 0;
-  /* 朝下开，与同屏的 .htt-menu 一个方向。先前是 bottom: calc(100% + 6px) 朝上，
-     而它在 .home-pane{overflow-y:auto} 里：实测菜单顶到 y=21、画布顶到 y=66，
-     上面 45px 被裁掉且**滚不回来**（负方向没有滚动区）。朝下溢出至少还在滚动
-     范围内。预览稿朝上开，但它不在被裁的滚动容器里。 */
-  top: calc(100% + 6px);
+  /* 朝上开：Composer 是消息滚动区之外的常驻底栏，下方就是窗口底边。
+     朝下开在 960px 高窗口里会被窗口裁掉，且底栏不能滚。 */
+  top: auto;
+  bottom: calc(100% + 6px);
   width: 236px;
   padding: 4px;
   background: var(--bg-elevated);
@@ -615,6 +711,7 @@ onMounted(() => {
   z-index: 30;
 }
 .hcc-menu.wide { width: 220px; max-height: 260px; overflow-y: auto }
+.hcc-menu.target-menu { width: 260px; max-height: 260px; overflow-y: auto }
 /* 菜单里的小节标题（技能区）。刻意不是分隔线：手记那套语言靠字重与留白分组，
    再加一条线会和输入卡的行线抢注意力。 */
 .hcc-sep {
@@ -694,4 +791,7 @@ onMounted(() => {
 .hcc-send:hover:not(:disabled) { background: var(--bg-active); color: var(--text-primary) }
 .hcc-send:disabled { opacity: .5; cursor: not-allowed }
 .hcc-send svg { width: 14px; height: 14px }
+/* 停止键用危险色底：运行中它不是"再发一条"的替代，而是这轮唯一的出口。 */
+.hcc-stop { background: var(--danger-bg); color: var(--danger-text) }
+.hcc-stop:hover:not(:disabled) { background: var(--danger-border); color: var(--danger-text) }
 </style>

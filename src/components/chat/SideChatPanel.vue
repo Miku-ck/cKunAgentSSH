@@ -9,9 +9,8 @@
       <span class="panel-title">{{ panelTitle }}</span>
       <div class="header-spacer"></div>
       <div class="header-actions">
-        <button class="icon-btn" :class="{ loading: props.creating }" :title="props.creating ? '创建中...' : '新建对话'" :aria-label="props.creating ? '创建中...' : '新建对话'" :disabled="props.creating" @click="$emit('new-chat')">
-          <svg v-if="!props.creating" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          <svg v-else class="spinner" viewBox="0 0 24 24" fill="none" width="14" height="14"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.25"/><path d="M22 12a10 10 0 0 0-10-10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+        <button class="icon-btn" :title="agentRunning ? '运行中不可新建会话' : '新建对话'" :aria-label="agentRunning ? '运行中不可新建会话' : '新建对话'" :disabled="agentRunning" @click="$emit('new-chat')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         </button>
         <button class="icon-btn" title="历史记录" aria-label="历史记录" @click="showHistoryPanel = !showHistoryPanel">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
@@ -45,7 +44,7 @@
           <MessageItem
             :message="msg"
             :is-last="idx === props.messages.length - 1"
-            :is-streaming="isLiveAgentRun(msg, idx)"
+            :is-streaming="isLiveAt(idx)"
           >
             <template v-if="showMessageActions" #actions="{ content }">
               <slot name="message-actions" :content="content" :msg="msg"></slot>
@@ -63,6 +62,7 @@
         :groups="groupedConversations"
         :current-conv-id="currentConvId"
         :is-empty="conversations.length === 0"
+        :busy="agentRunning"
         @close="showHistoryPanel = false"
         @switch="handleSwitch"
         @delete="handleDelete"
@@ -479,6 +479,7 @@ import type { ChatAttachment } from '@/api/client'
 // 就会对同样两个档位给出不同说明
 import { APPROVAL_OPTIONS as PERM_OPTIONS, PERMISSION_LABELS, PERM_MARKS, PERM_SHIELD, resolveRunModes, type ApprovalKey, type PostureKey } from '@/utils/run-modes'
 import { formatBytes } from '@/utils/format'
+import { buildDisplayMessages, isLiveAgentRun } from '@/utils/display-messages'
 
 const settingsStore = useSettingsStore()
 const skillStore = useSkillStore()
@@ -498,7 +499,6 @@ const props = defineProps<{
   groupedConversations: ConvGroup[]
   showMessageActions?: boolean
   agentRunning?: boolean
-  creating?: boolean
   placeholder?: string
   emptyTitle?: string
   /** 面板头部标题（默认 "AI 助手"） */
@@ -856,11 +856,9 @@ function removeSkill(id: string) {
 // ── Agent 执行轨迹 ──
 const agentStore = useAgentStore()
 
-function isLiveAgentRun(msg: BaseMessage, idx: number): boolean {
-  return !!props.agentRunning &&
-    idx === props.messages.length - 1 &&
-    msg.role === 'assistant' &&
-    msg.id?.startsWith('temp-agent-')
+/** 与首页任务台共用同一判据：最后一条、assistant、temp-agent- 占位、运行中 */
+function isLiveAt(idx: number): boolean {
+  return isLiveAgentRun(props.messages, idx, !!props.agentRunning)
 }
 
 // ── 面板拖拽 ──
@@ -879,30 +877,18 @@ function handleSelectModel(id: string) {
 }
 
 // ── 消息显示 ──
-// 优化：仅对最后一条消息计算 live 状态，其余消息保持原始引用避免 O(n) 重渲染
+// live 合并收在 utils/display-messages：首页与侧栏必须走同一份，各写一遍就会出现
+// 「一边显示实时工具进度、另一边还是空占位」这种同会话两副面孔。只替换最后一条
+// live 占位，其余原引用返回，避免 O(n) 重渲染。
 const displayMessages = computed(() => {
-  const lastIdx = props.messages.length - 1
-  return props.messages.map((m, idx) => {
-    if (idx === lastIdx && isLiveAgentRun(m, idx)) {
-      return {
-        ...m,
-        // Agent 运行中：实时同步 agentStore 的 content/reasoning
-        // C-review NIT：原实现 reasoning 强制空串、注释声称"外层 ThinkingBlock
-        // 展示"，实际不存在该展示（运行中 reasoning 完全丢失）。现透传
-        // agentStore.reasoning，由 MessageItem 的 ThinkingBlock 渲染。
-        content: agentStore.content || m.content || m.streamingContent || '',
-        streamingContent: undefined,
-        reasoning: agentStore.reasoning || '',
-        streamingReasoning: undefined,
-        // 运行中的实时轨迹：不注入这一份，气泡里的内联轨迹要等到整轮跑完才出现 ——
-        // 期间用户看不到任何工具调用进度（AgentTraceInline 的 isLive 分支也因此永远
-        // 走不到）。lastRunId 必须清空：它是「查看轨迹」按钮的显示条件，而按钮拉的是
-        // 后端已固化的 run，运行中点开只会拿到半截结果并被组件缓存住不再刷新。
-        agentTrace: { ...agentStore.snapshot(), lastRunId: '' },
-      }
-    }
-    // 非活跃消息保持原始引用，避免不必要的重渲染
-    return m
+  if (!props.agentRunning) return props.messages
+  return buildDisplayMessages(props.messages, {
+    running: true,
+    content: agentStore.content,
+    reasoning: agentStore.reasoning,
+    // 运行中的实时轨迹快照；lastRunId 由纯函数清空 —— 它是「查看轨迹」按钮的显示
+    // 条件，而按钮拉的是后端已固化的 run，运行中点开只会拿到半截结果。
+    trace: agentStore.snapshot(),
   })
 })
 
@@ -1062,11 +1048,13 @@ function restoreDraft() {
 
 // ── 历史事件 ──
 function handleSwitch(id: string) {
+  if (props.agentRunning) return
   emit('switch-conversation', id)
   showHistoryPanel.value = false
 }
 
 function handleDelete(id: string) {
+  if (props.agentRunning) return
   emit('delete-conversation', id)
 }
 
@@ -1169,10 +1157,6 @@ defineExpose({ restoreDraft, prefill })
 .icon-btn:disabled {
   cursor: not-allowed;
   opacity: 0.6;
-}
-
-.icon-btn.loading {
-  pointer-events: none;
 }
 
 .icon-btn .spinner {

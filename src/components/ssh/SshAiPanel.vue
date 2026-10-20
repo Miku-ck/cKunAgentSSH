@@ -8,7 +8,6 @@
     :models="modelsStore.models"
     :grouped-conversations="store.groupedConversations"
     :agent-running="agentStore.isRunning"
-    :creating="creating"
     :workflow-phase="store.workflowPhase"
     :workflow-goal="store.workflowSnapshot.goal"
     :workflow-plan="store.workflowSnapshot.plan"
@@ -31,13 +30,13 @@
       <!-- 异常/决策面板：自身按 agentStore.hasRunNotice 决定挂不挂载内容。
          这里不要再写条件：曾经写过一份，而那份漏了澄清向导/任务规划/待确认交付，
          结果是需要用户决策时面板根本没挂载，用户只看到 toast，运行等到后端超时。 -->
-      <AgentRunPanel />
+      <AgentRunPanel @open-home="$emit('open-home')" />
     </template>
   </SideChatPanel>
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, watch, nextTick, onMounted } from 'vue'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useAppStore } from '@/stores/app'
 import { useModelsStore } from '@/stores/models'
@@ -49,7 +48,7 @@ import AgentRunPanel from '@/components/agent/AgentRunPanel.vue'
 import type { ChatAttachment } from '@/api/client'
 import type { ApprovalKey, PostureKey } from '@/utils/run-modes'
 
-defineEmits<{ close: [] }>()
+defineEmits<{ close: []; 'open-home': [] }>()
 
 const store = useSshAiStore()
 const app = useAppStore()
@@ -122,26 +121,17 @@ async function handleSend(content: string, skillIds: string[] = [], attachments:
   if (!ok) panelRef.value?.restoreDraft()
 }
 
-// 新建对话防重复提交
-const creating = ref(false)
-async function handleNewChat() {
-  if (creating.value) return
-  creating.value = true
-  try {
-    await store.createConversation()
-    // 最小锁定时间 500ms，防止快速重复点击
-    await new Promise(resolve => setTimeout(resolve, 500))
-  } finally {
-    creating.value = false
+// 新建会话：进入空白任务，不提前产生历史条目（首条消息发出才入历史）。
+// 本地置空是同步的，不配人工锁或转圈 —— 那只会让按钮看起来卡住。
+function handleNewChat() {
+  if (agentStore.isRunning) {
+    toast.info('AI 正在运行中，请等待完成')
+    return
+  }
+  if (!store.beginNewTask()) {
+    toast.info('AI 正在运行中，请等待完成')
   }
 }
-
-// 组件卸载时重置创建中标志，避免状态残留。
-// 不中止运行中的 Agent — Agent 运行设计为可跨面板存活（P3-4），结果固化在
-// store 层 watch，不依赖组件生命周期，面板重新打开即可继续查看。
-onUnmounted(() => {
-  creating.value = false
-})
 
 // ── 终端「问 AI」预填：store 请求预填 → 打开面板 + 注入问题草稿 ──
 // 每次请求都是新对象（watch 按引用触发）；消费后置 null 防重复。面板是 v-if 条件挂载，
@@ -167,10 +157,18 @@ watch(panelRef, () => {
 })
 
 function handleSwitchConv(id: string) {
-  store.switchConversation(id)
+  if (agentStore.isRunning) {
+    toast.info('AI 正在运行中，请等待完成')
+    return
+  }
+  void store.switchConversation(id)
 }
 
 async function handleDeleteConv(id: string) {
+  if (agentStore.isRunning) {
+    toast.info('AI 正在运行中，请等待完成')
+    return
+  }
   // S9-06：这是全应用**唯一**没有二次确认的不可逆用户数据删除入口 —— 后端一条
   // DELETE 就把消息历史 + 附件目录 rmtree 掉，而其余破坏性入口（定时任务/快捷
   // 命令/远程管理/SFTP/模型面板）都走 useConfirm。补齐同一口径，别让人误点一下

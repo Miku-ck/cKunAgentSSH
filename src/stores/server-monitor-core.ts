@@ -26,9 +26,13 @@ export interface DiskMount {
 }
 export interface ProcessTopEntry {
   pid: number
+  ppid: number
   cpu: number
   mem: number
+  /** comm：可执行名（内核限 15 字节）。uvicorn/gunicorn 起的进程全叫 python，仅凭它分不出服务 */
   name: string
+  /** 完整命令行（ps args）：区分同名进程的唯一依据；容器/短命进程可能为空 */
+  args: string
   user: string
   rss: number      // KB
   etime: string    // [[dd-]hh:]mm:ss
@@ -144,8 +148,6 @@ export interface ServerMetrics {
   gpuDriver: string
   /** CUDA 版本（nvitop 模式头部，从 nvidia-smi --version 提取；无 GPU 时空串） */
   gpuCuda: string
-  /** GPU 占用进程表（nvitop 模式；无占用时为空数组） */
-  gpuProcs: GpuProcessEntry[]
 }
 
 interface MonitorErrorInfo {
@@ -253,7 +255,10 @@ export const METRICS_CMD = [
 // 进程表刷新频率独立为 60s（见 server-monitor.ts PROCS_INTERVAL_MS）
 export const PROCS_CMD = [
   'echo "===CKUN_PROCS==="',
-  `ps -eo pid,pcpu,pmem:6,user:10,rss,etime:10,stat:4,comm --sort=-pcpu 2>/dev/null | awk 'NR>1 && NR<=51{printf "PROC=%s|%s|%s|%s|%s|%s|%s|%s\\n", $1, $2, $3, $4, $5, $6, $7, $8}'`,
+  // -ww：不限输出宽度。否则非 tty 下 ps 按 80 列截断 args，命令行只剩开头一截。
+  // ppid 与 args 两列：ppid 用来解释「同一程序为何多行」（父子进程），args 用来区分同名进程。
+  // args 固定放最后一列：它含空格、也可能含 |，awk 逐段重建后用尾段拼回，不会撑坏分段。
+  `ps -eww -o pid,ppid,pcpu,pmem:6,user:10,rss,etime:10,stat:4,comm,args --sort=-pcpu 2>/dev/null | awk 'NR>1 && NR<=51{a=""; for(i=10;i<=NF;i++) a=a (i>10?" ":"") $i; printf "PROC=%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\\n", $1, $2, $3, $4, $5, $6, $7, $8, $9, a}'`,
   'echo "===END==="',
 ].join('; ')
 
@@ -282,7 +287,17 @@ function naStr(s: string | undefined): string {
   return /^n\/a$/i.test(t) ? '' : t
 }
 
-export type ParsedMetrics = Omit<ServerMetrics, 'cpu' | 'ts'> & { rawStat: RawStat }
+export type ParsedMetrics = Omit<ServerMetrics, 'cpu' | 'ts'> & {
+  rawStat: RawStat
+  /**
+   * GPU 占用进程（GPROC × GPS join）。
+   *
+   * 故意不进 ServerMetrics：它跟的是 60s 慢轮询（表头写的就是每 60 秒刷新），
+   * 而 ServerMetrics 每 5s 整体替换。挂在里面会让视图的 computed 每 5s 重算一次，
+   * 即使快照没变 —— 所以由 store 单独持有、单独按 60s 换。
+   */
+  gpuProcs: GpuProcessEntry[]
+}
 
 export function parseMetricsRaw(raw: string, host?: string): ParsedMetrics | null {
   const lines = raw.split('\n')
@@ -536,19 +551,22 @@ export function parseProcsRaw(raw: string): ProcessTopEntry[] {
   for (const line of lines) {
     if (!line.startsWith('PROC=')) continue
     const p = line.slice(5).split('|')
-    if (p.length >= 8) {
+    // 9 段 = pid..comm（无命令行）；第 10 段起是 args，含 | 时要整段拼回
+    if (p.length >= 9) {
       const pid = inum(p[0])
       if (pidSeen.has(pid)) continue
       pidSeen.add(pid)
       procs.push({
         pid,
-        cpu: fnum(p[1]),
-        mem: fnum(p[2]),
-        user: naStr(p[3]),
-        rss: inum(p[4]),
-        etime: naStr(p[5]),
-        stat: naStr(p[6]),
-        name: naStr(p[7]) || 'unknown',
+        ppid: inum(p[1]),
+        cpu: fnum(p[2]),
+        mem: fnum(p[3]),
+        user: naStr(p[4]),
+        rss: inum(p[5]),
+        etime: naStr(p[6]),
+        stat: naStr(p[7]),
+        name: naStr(p[8]) || 'unknown',
+        args: p.slice(9).join('|').trim(),
       })
     }
   }

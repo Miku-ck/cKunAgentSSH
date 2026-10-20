@@ -100,6 +100,7 @@
         </div>
         <GpuNvtopPanel
           :metrics="monitor.current"
+          :gpu-procs="monitor.gpuProcs"
           :gpu-hist="monitor.gpuHist"
           :cpu-hist="monitor.cpuHistory"
           :mem-hist="monitor.memHistory"
@@ -122,13 +123,22 @@
         <div v-if="procList.length === 0" class="section-empty">{{ monitor.procs.length ? 'CPU 前列进程均已归入下方「进程（GPU）」表' : '未检测到进程信息' }}</div>
         <table v-else class="proc-table">
           <thead>
-            <tr><th>PID</th><th>名称</th><th>用户</th><th>CPU %</th><th>内存</th><th>运行</th><th>状态</th><th class="proc-act">操作</th></tr>
+            <tr>
+              <!-- 列宽重排：PID/用户/状态 原本各分到 1/7，短内容大量留白，把宽度让给名称列
+                   （名称要容纳命令行副行）。table-layout 已固定，列宽只由表头这一行决定 -->
+              <th class="col-pid">PID</th><th class="col-name">名称</th><th class="col-user">用户</th><th class="col-cpu">CPU %</th><th class="col-mem">内存</th><th class="col-etime">运行</th><th class="col-stat">状态</th><th class="proc-act">操作</th>
+            </tr>
           </thead>
           <tbody>
             <tr v-for="p in pagedProcs" :key="p.pid">
               <td class="mono">{{ p.pid }}</td>
               <td class="proc-name">
-                <span class="proc-name-text mono" :title="p.name">{{ p.name }}</span>
+                <div class="proc-name-box">
+                  <span class="proc-name-text mono" :title="procTitle(p)">{{ p.name }}</span>
+                  <!-- 副行放命令行：comm 只有可执行名（内核限 15 字节），uvicorn/gunicorn/celery
+                       起的进程全叫 python，不给参数就分不出是哪个服务 -->
+                  <span v-if="p.args" class="proc-cmd mono" :title="procTitle(p)">{{ shortCmd(p.args) }}</span>
+                </div>
               </td>
               <td class="mono">{{ p.user }}</td>
               <td :class="{ hot: p.cpu > 80 }">{{ p.cpu.toFixed(1) }}</td>
@@ -141,10 +151,11 @@
         </table>
       </div>
 
-      <!-- 进程（GPU）：nvidia-smi 采集的显存占用进程，随 5s 快轮询；无 GPU 机器不渲染此卡片 -->
+      <!-- 进程（GPU）：nvidia-smi 采集的显存占用进程。数据随 5s 快轮询采回，但表按 60s 换快照
+           （server-monitor.ts 的 GPU_PROCS_INTERVAL_MS）——所以这里写 60 秒是实话。无 GPU 机器不渲染此卡片 -->
       <div v-if="monitor.current.gpus.length > 0" class="dash-section">
         <div class="section-title">
-          <span>进程（GPU）<span class="section-sub">共 {{ gpuProcList.length }} 个 · 每 5 秒刷新</span></span>
+          <span>进程（GPU）<span class="section-sub">共 {{ gpuProcList.length }} 个 · 每 60 秒刷新</span></span>
           <span v-if="totalGpuPages > 1" class="port-pager">
             <button class="port-page-btn" :disabled="gpuPage === 0" title="上一页" @click="gpuPage--">‹</button>
             <span class="port-page-ind">{{ gpuPage + 1 }}/{{ totalGpuPages }}</span>
@@ -356,6 +367,24 @@ function confirmKill(proc: ProcessTopEntry): void {
   killDialog.value = { visible: true, target: { pid: proc.pid, name: proc.name, user: proc.user }, signal: 15 }
 }
 
+/** 名称单元格的悬停说明：同名进程靠命令行区分，短名本身没有信息量；顺带给出父子关系。
+    这里给完整命令行（含解释器绝对路径），副行展示的是省略版 */
+function procTitle(p: ProcessTopEntry): string {
+  const head = p.ppid ? `PID ${p.pid} · 父进程 ${p.ppid}` : `PID ${p.pid}`
+  return p.args ? `${head}\n${p.args}` : head
+}
+
+/**
+ * 副行的展示形态：首段若是绝对路径，只留 basename（/usr/local/bin/python3 → python3）。
+ * 同机两份 python 的公共前缀正是这条路径，它占掉近一半列宽却分不出服务；
+ * 真正有用的是解释器之后的模块名/脚本名。完整命令行仍在 title 里。
+ */
+function shortCmd(args: string): string {
+  const m = /^(\/\S+)\s+(.*)$/.exec(args)
+  if (!m) return args
+  return `${m[1].slice(m[1].lastIndexOf('/') + 1)} ${m[2]}`
+}
+
 /** 端口行终止：杀的是监听该端口的进程（pid 来自 ss -p） */
 function confirmPortKill(pt: PortEntry): void {
   if (!pt.pid) return
@@ -504,7 +533,7 @@ function altAddrTitle(pt: PortEntry): string {
 }
 
 /** GPU 占用进程 PID 集合（nvidia-smi 采集）：进程（CPU）表据此剔除 GPU 进程 */
-const gpuPidSet = computed(() => new Set((monitor.current?.gpuProcs ?? []).map(gp => gp.pid)))
+const gpuPidSet = computed(() => new Set(monitor.gpuProcs.map(gp => gp.pid)))
 
 /** 进程（CPU）表：剔除 GPU 占用进程（它们移至独立的进程（GPU）表），每页 10 行 */
 const PROC_PAGE_SIZE = 10
@@ -514,9 +543,11 @@ const procList = computed(() => {
 })
 const { page: procPage, total: totalProcPages, paged: pagedProcs } = makePager(procList, PROC_PAGE_SIZE)
 
-/** 进程（GPU）表：按显存降序，每页 10 行（采集端上限 20） */
+/** 进程（GPU）表：按显存降序，每页 10 行（采集端上限 20）。
+ *  数据源是 store 里独立的 gpuProcs（每 60 秒换一次），不是每 5s 替换的 current ——
+ *  否则表头写着 60 秒，实际每 5s 就在重算 */
 const gpuProcList = computed(() =>
-  [...(monitor.current?.gpuProcs ?? [])].sort((a, b) => b.memMB - a.memMB),
+  [...monitor.gpuProcs].sort((a, b) => b.memMB - a.memMB),
 )
 const { page: gpuPage, total: totalGpuPages, paged: pagedGpuProcs } = makePager(gpuProcList, PROC_PAGE_SIZE)
 
@@ -881,6 +912,37 @@ const Sparkline = defineComponent({
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: 100%;
+}
+
+/* 列宽：短名列按内容需要收窄，省下的宽度给名称列（它是唯一放两行的列） */
+.proc-table .col-pid   { width: 9%; }
+.proc-table .col-name  { width: 30%; }
+.proc-table .col-user  { width: 9%; }
+.proc-table .col-cpu   { width: 9%; }
+.proc-table .col-mem   { width: 10%; }
+.proc-table .col-etime { width: 12%; }
+.proc-table .col-stat  { width: 8%; }
+
+/* 名称双行：主行 comm（短、好扫）、副行命令行（分认同名进程）。
+   table-layout 已固定，列宽不因长命令行撑开，超长一律省略号，全文看 title */
+.proc-name-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.proc-cmd {
+  max-width: 100%;
+  font-size: 10px;
+  line-height: 1.25;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .hot {
@@ -1106,7 +1168,8 @@ const Sparkline = defineComponent({
   .disk-row { gap: 6px; }
   .disk-mount { width: 76px; font-size: 11px; }
   .disk-size { width: 84px; font-size: 10px; }
-  .proc-name { max-width: 110px; }
+  /* 原来这里封 .proc-name 110px 防溢出；列宽改按比例后固定布局自己会缩，
+     封顶反而白丢名称列的宽度（副行更需要它） */
 }
 
 /* ===============================================================

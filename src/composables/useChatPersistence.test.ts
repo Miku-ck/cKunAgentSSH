@@ -38,6 +38,49 @@ beforeEach(() => {
   vi.unstubAllGlobals()
 })
 
+/**
+ * 空白任务（spec 2026-10-20-home-agent-workbench §5.1）：
+ * 点「新建会话」只把当前指针挪开，不提前造一条空会话 —— 历史条目要等首条
+ * 消息发出后才由懒建路径产生，否则每点一次「新建」就多一条永远空着的记录。
+ */
+describe('beginNewTask 的空白任务语义', () => {
+  it('有恢复会话时把当前指针置空，会话列表不动', () => {
+    stubStorage({
+      [KEY]: JSON.stringify([
+        { id: 'c1', title: 'A', updated_at: 1, messages: [msg('u1', 'user')] },
+        { id: 'c2', title: 'B', updated_at: 2, messages: [msg('u2', 'user')] },
+      ]),
+    })
+    const { currentConvId, conversations, beginNewTask } = boot()
+    expect(currentConvId.value).toBe('c1')
+
+    beginNewTask()
+
+    expect(currentConvId.value).toBeNull()
+    expect(conversations.value.map((c: any) => c.id)).toEqual(['c1', 'c2'])
+  })
+
+  it('不写 localStorage —— 当前会话本来就不持久化，置空没有可存的东西', () => {
+    const raw = JSON.stringify([{ id: 'c1', title: 'A', updated_at: 1, messages: [] }])
+    const map = stubStorage({ [KEY]: raw })
+    const { beginNewTask } = boot()
+
+    beginNewTask()
+
+    expect(map.get(KEY)).toBe(raw)
+  })
+
+  it('空列表上调用保持空白任务，不制造新条目', () => {
+    stubStorage({})
+    const { currentConvId, conversations, beginNewTask } = boot()
+
+    beginNewTask()
+
+    expect(currentConvId.value).toBeNull()
+    expect(conversations.value).toEqual([])
+  })
+})
+
 describe('loadConversations 的占位清扫', () => {
   it('重载后不再留下永久空白的助手气泡', () => {
     stubStorage({

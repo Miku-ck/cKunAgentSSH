@@ -110,6 +110,11 @@ export interface AgentTraceSnapshot {
   iterations: number
   /** 运行耗时（秒） */
   duration?: number
+  /**
+   * 用户主动中止。中止没有独立终态串，status 仍记 failed；这里是历史重载后
+   * 区分「已中止」与「失败」的唯一依据。旧记录没有该字段时按 status 展示。
+   */
+  aborted?: boolean
   /** 工具调用记录数组（结构与 agentStore.toolCalls 一致） */
   toolCalls: Array<{
     id: string
@@ -119,6 +124,8 @@ export interface AgentTraceSnapshot {
     success?: boolean
     timestamp: number
     iteration?: number
+    /** 后端实测耗时；内联过程按批次求和展示。旧记录没有该字段时组头只显示步号 */
+    durationMs?: number
   }>
   /** 思考过程文本（reasoning 累积） */
   reasoning: string

@@ -5,6 +5,8 @@
       v-if="message.role === 'assistant' && message.agentTrace"
       :trace="message.agentTrace"
       :is-live="isStreaming && isLast"
+      :approvals="message.role === 'assistant' ? inlineApprovals : undefined"
+      :meta="processMeta"
     />
 
     <ThinkingBlock
@@ -49,6 +51,8 @@ import AgentTraceInline from '@/components/agent/AgentTraceInline.vue'
 import AgentFullTrace from '@/components/agent/AgentFullTrace.vue'
 import { useToastStore } from '@/stores/toast'
 import type { BaseMessage } from '@/types/chat'
+import type { PermissionRequest } from '@/stores/agent'
+import type { ProcessMeta } from '@/utils/process-status'
 
 const toast = useToastStore()
 
@@ -56,6 +60,10 @@ const props = defineProps<{
   message: BaseMessage
   isStreaming?: boolean
   isLast?: boolean
+  /** 仅当前 run 的 live 消息传入：审批卡只活在运行期，不写入 agentTrace */
+  inlineApprovals?: PermissionRequest[]
+  /** 仅与最近一次 run 匹配的消息传入：历史旧 run 不伪造当前模型/审批档/目标 */
+  processMeta?: ProcessMeta
 }>()
 
 const content = computed(() => props.message.streamingContent || props.message.content || '')

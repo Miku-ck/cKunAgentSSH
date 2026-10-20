@@ -2,7 +2,7 @@
  * server-monitor 解析逻辑测试（B 阶段）
  * fixture 取自真实 Linux（WSL2 Ubuntu 26.04）上 METRICS_CMD / PROCS_CMD 的输出
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { parseMetricsRaw, parseProcsRaw, annotatePortUsers, computeCpuDiff, describeMonitorError, type PortEntry } from './server-monitor-core'
 
 const FIXTURE = [
@@ -54,17 +54,34 @@ describe('parseMetricsRaw', () => {
     expect(m!.disks[0]).toEqual({ mount: '/', total: 1031019, used: 128627, percent: 14 })
   })
 
-  it('解析进程 TOP（8 段格式，与 PROCS_CMD 真实输出一致）', () => {
+  it('解析进程 TOP（10 段格式：ppid + comm + args，与 PROCS_CMD 真实输出一致）', () => {
     const raw = [
       '===CKUN_PROCS===',
-      'PROC=1212|7.4|0.0|root|5800|01:23:45|R|bash',
-      'PROC=784|4.8|0.6|docker|102400|3-04:11:09|S|dockerd',
+      'PROC=1212|1180|7.4|0.0|root|5800|01:23:45|R|bash|bash -lc ps -eo pid,comm',
+      'PROC=784|1|4.8|0.6|docker|102400|3-04:11:09|S|dockerd|/usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock',
       '===END===',
     ].join('\n')
     const procs = parseProcsRaw(raw)
     expect(procs).toHaveLength(2)
-    expect(procs[0]).toEqual({ pid: 1212, cpu: 7.4, mem: 0, user: 'root', rss: 5800, etime: '01:23:45', stat: 'R', name: 'bash' })
-    expect(procs[1]).toEqual({ pid: 784, cpu: 4.8, mem: 0.6, user: 'docker', rss: 102400, etime: '3-04:11:09', stat: 'S', name: 'dockerd' })
+    expect(procs[0]).toEqual({
+      pid: 1212, ppid: 1180, cpu: 7.4, mem: 0, user: 'root', rss: 5800,
+      etime: '01:23:45', stat: 'R', name: 'bash', args: 'bash -lc ps -eo pid,comm',
+    })
+    expect(procs[1]).toMatchObject({ pid: 784, ppid: 1, name: 'dockerd' })
+    expect(procs[1].args).toContain('--containerd=/run/containerd/containerd.sock')
+  })
+
+  it('进程 TOP：args 内含 | 也能整段拼回，无命令行时为空串', () => {
+    const raw = [
+      '===CKUN_PROCS===',
+      'PROC=22|1|1.0|0.1|root|100|00:10|Ss|python|/usr/bin/python3 -m uvicorn app:main --log-config a|b',
+      'PROC=33|1|0.5|0.1|root|100|00:10|R|python|',
+      '===END===',
+    ].join('\n')
+    const procs = parseProcsRaw(raw)
+    expect(procs[0].args).toBe('/usr/bin/python3 -m uvicorn app:main --log-config a|b')
+    expect(procs[0].ppid).toBe(1)
+    expect(procs[1].args).toBe('')
   })
 
   it('进程 TOP：标记行缺失返回空数组（非本命令输出）', () => {
@@ -412,9 +429,9 @@ describe('parseMetricsRaw', () => {
   it('进程重复（同 PID 多行）→ 去重保留首条', () => {
     const raw = [
       '===CKUN_PROCS===',
-      'PROC=123|5.0|1.0|root|1024|01:00|R|bash',
-      'PROC=456|3.0|0.5|root|2048|02:00|S|sshd',
-      'PROC=123|9.9|9.9|root|9999|99:99|Rz|phantom', // 同 PID 重复行
+      'PROC=123|1|5.0|1.0|root|1024|01:00|R|bash|bash',
+      'PROC=456|1|3.0|0.5|root|2048|02:00|S|sshd|sshd: root@pts/0',
+      'PROC=123|1|9.9|9.9|root|9999|99:99|Rz|phantom|phantom', // 同 PID 重复行
       '===END===',
     ].join('\n')
     const procs = parseProcsRaw(raw)
@@ -571,7 +588,7 @@ describe('stop() 必须清空全部读数（含错误态）', () => {
 
     // 先跑一轮 start 的真实路径留下脏状态：无 electronAPI 的采样必然失败并记 lastError
     mon.current = { host: 'A', sshId: 's-1' } as never
-    mon.procs.push({ pid: 1, cpu: 1, mem: 0, name: 'x', user: 'root', rss: 1, etime: '0:01', stat: 'S' })
+    mon.procs.push({ pid: 1, ppid: 0, cpu: 1, mem: 0, name: 'x', args: '', user: 'root', rss: 1, etime: '0:01', stat: 'S' })
     mon.cpuHistory.push(12)
     mon.memHistory.push(30)
     mon.loadHistory.push(1.2)
@@ -603,5 +620,76 @@ describe('annotatePortUsers', () => {
     annotatePortUsers(rawPorts, [{ pid: 1234, user: 'root' }])
     expect(rawPorts[0].user).toBe('root')
     expect(rawPorts[1].user).toBeUndefined()
+  })
+})
+
+/**
+ * GPU 进程表的展示节奏（GPU_PROCS_INTERVAL_MS）。
+ *
+ * GPROC/GPS 段和 CPU/内存挤在同一条 nvidia-smi 命令里，随 5s 快轮询一起回来；
+ * 而「进程（GPU）」表头写的是每 60 秒刷新 —— 所以表必须真的 60s 才换一次。
+ * 两条判据：到 60s 才换；换会话立刻换（否则新主机会看到上一台的进程）。
+ */
+describe('GPU 进程表 60s 换快照（采集仍是 5s）', () => {
+  const metricsWith = (pid: number, util: number) => [
+    '===CKUN_MON===',
+    'STAT=100|80|20',
+    'MEM_TOTAL=1024',
+    'MEM_USED=512',
+    'MEM_PCT=50',
+    'SWAP_TOTAL=0',
+    'SWAP_USED=0',
+    `GPU=0|NVIDIA A100|${util}|1024|40960|60|100|300|N/A|1500|9802|GPU-abc0|580.1|x|P0|Enabled|Default|N/A`,
+    `GPROC=GPU-abc0|${pid}|1008|python train.py`,
+    `GPS=${pid}|root|1.0|2.0|01:00:00`,
+    '===END===',
+  ].join('\n')
+
+  it('5 秒轮询不改表，60 秒才改；换会话立即改', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    const g = globalThis as unknown as Record<string, unknown>
+    let stdout = metricsWith(111, 50)
+    g.window = { electronAPI: { sshExec: async () => ({ stdout }) } }
+    g.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} }
+
+    const { createPinia, setActivePinia } = await import('pinia')
+    setActivePinia(createPinia())
+    const { useSSHStore } = await import('./ssh')
+    const ssh = useSSHStore()
+    ssh.connections.push({ id: 'c-1', host: 'h1' } as never)
+    ssh.sessions.push({ id: 's-1', type: 'remote', connectionId: 'c-1' } as never)
+    ssh.sessions.push({ id: 's-2', type: 'remote', connectionId: 'c-1' } as never)
+
+    const { useServerMonitorStore } = await import('./server-monitor')
+    const mon = useServerMonitorStore()
+
+    mon.start('s-1')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(mon.gpuProcs.map(p => p.pid)).toEqual([111])
+
+    // 远端数据已变，推进一个 5s 轮次
+    stdout = metricsWith(222, 70)
+    await vi.advanceTimersByTimeAsync(5000)
+    // 利用率这类 5s 字段照常跟新 —— 证明只节流进程表，不是整张卡停更
+    expect(mon.current!.gpus[0].utilization).toBe(70)
+    expect(mon.gpuProcs.map(p => p.pid)).toEqual([111])
+
+    // 到 60s 边界才换表
+    await vi.advanceTimersByTimeAsync(55000)
+    expect(mon.gpuProcs.map(p => p.pid)).toEqual([222])
+
+    // 换会话：不等 60s，立刻换成本会话的快照
+    stdout = metricsWith(333, 90)
+    mon.start('s-2')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(mon.gpuProcs.map(p => p.pid)).toEqual([333])
+
+    mon.stop()
+    // stop() 也要把这张表清干净（它不在 current 里，单靠 current=null 盖不住）
+    expect(mon.gpuProcs).toEqual([])
+    vi.useRealTimers()
+    delete g.window
+    delete g.localStorage
   })
 })

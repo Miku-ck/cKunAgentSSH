@@ -34,6 +34,36 @@
           <input v-model="query" placeholder="按名称过滤…" aria-label="过滤" />
         </div>
         <div class="tb-right">
+          <template v-if="tab === 'images'">
+            <button class="btn" title="从仓库拉取镜像（docker pull）" @click="openPull">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+              拉取镜像
+            </button>
+            <button class="btn" title="从远端 tar 加载镜像（docker load -i）" @click="openImport">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>
+              加载镜像
+            </button>
+            <button
+              class="btn btn-danger-ghost"
+              :disabled="!!busy || !images.length"
+              title="删除悬空镜像（docker image prune -f）：无标签且未被引用的中间层；有标签的镜像不受影响"
+              @click="doPruneImages"
+            >
+              <svg v-if="busy === 'prune:images'" class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="12" r="9" stroke-opacity="0.25"/><path d="M12 3a9 9 0 0 1 9 9" stroke-linecap="round"/></svg>
+              <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+              清理悬空
+            </button>
+            <button
+              class="btn btn-danger-ghost"
+              :disabled="!!busy || !images.length"
+              title="删除所有未被容器引用的镜像（docker image prune -a -f）：带标签镜像也在范围内，删除后需重新 pull"
+              @click="doPruneAllImages"
+            >
+              <svg v-if="busy === 'prune:images-all'" class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="12" r="9" stroke-opacity="0.25"/><path d="M12 3a9 9 0 0 1 9 9" stroke-linecap="round"/></svg>
+              <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/></svg>
+              清理未使用
+            </button>
+          </template>
           <button
             v-if="tab === 'volumes'"
             class="btn btn-danger-ghost"
@@ -85,33 +115,33 @@
             </div>
             <div class="list">
               <div v-for="c in filteredContainers" :key="c.id" class="crow" role="button" tabindex="0"
-                   :class="{ selected: selected?.id === c.id, abnormal: c.state === 'exited' }" :aria-pressed="selected?.id === c.id"
-                   @click="selected = c" @keydown.enter.prevent="selected = c" @keydown.space.prevent="selected = c">
-                <span class="st-dot" :class="c.state"></span>
+                   :class="{ selected: selected?.id === c.id, abnormal: isAbnormal(c) }" :aria-pressed="selected?.id === c.id"
+                   @click="selected = c" @keydown.enter.self.prevent="selected = c" @keydown.space.self.prevent="selected = c">
+                <span class="st-dot" :class="[c.state, { unhealthy: c.health === 'unhealthy' }]"></span>
                 <span class="c-id mono" :title="c.id">{{ c.id }}</span>
                 <span class="c-image"><span class="repo" :title="c.repo + ':' + c.tag">{{ c.repo }}</span><span class="tag mono">{{ c.tag }}</span></span>
                 <span class="c-cmd mono" :title="c.cmd">{{ c.cmd || '—' }}</span>
                 <span class="c-created">{{ c.created || '—' }}</span>
-                <span class="c-state" :class="c.state" :title="c.stateText">{{ c.stateText }}</span>
+                <span class="c-state" :class="[c.state, { unhealthy: c.health === 'unhealthy' }]" :title="c.stateText">{{ c.stateText }}</span>
                 <span class="c-ports mono" :class="{ none: !c.ports }" :title="c.ports || '未映射'">{{ c.ports || '未映射' }}</span>
                 <span class="c-name mono" :title="c.name">{{ c.name }}</span>
                 <!-- 行内统一操作列（单一操作面）：启停 toggle + exec（仅运行中）+ 重启 + 删除；均为图标，in-flight 禁用防连点 -->
                 <span class="c-acts" @click.stop>
-                  <button v-if="c.state === 'running'" class="icon-btn stop" title="停止" :disabled="busy === c.id" @click="doStop(c)">
+                  <button v-if="c.state === 'running'" class="icon-btn stop" title="停止" :disabled="!!busy" @click="doStop(c)">
                     <svg v-if="busy === c.id" class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9" stroke-opacity="0.25"/><path d="M12 3a9 9 0 0 1 9 9" stroke-linecap="round"/></svg>
                     <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
                   </button>
-                  <button v-else class="icon-btn start" title="启动" :disabled="busy === c.id" @click="doStart(c)">
+                  <button v-else class="icon-btn start" title="启动" :disabled="!!busy" @click="doStart(c)">
                     <svg v-if="busy === c.id" class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9" stroke-opacity="0.25"/><path d="M12 3a9 9 0 0 1 9 9" stroke-linecap="round"/></svg>
                     <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="6 4 20 12 6 20 6 4"/></svg>
                   </button>
-                  <button v-if="c.state === 'running'" class="icon-btn act-exec" title="exec 进入终端（新标签）" :disabled="busy === c.id" @click="doExec(c)">
+                  <button v-if="c.state === 'running'" class="icon-btn act-exec" title="exec 进入终端（新标签）" :disabled="!!busy" @click="doExec(c)">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
                   </button>
-                  <button class="icon-btn act-restart" title="重启" :disabled="busy === c.id" @click="doRestart(c)">
+                  <button class="icon-btn act-restart" title="重启" :disabled="!!busy" @click="doRestart(c)">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
                   </button>
-                  <button class="icon-btn act-del" title="删除" :disabled="busy === c.id" @click="doRemove(c)">
+                  <button class="icon-btn act-del" title="删除" :disabled="!!busy" @click="doRemove(c)">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
                   </button>
                 </span>
@@ -124,16 +154,20 @@
           <div v-else-if="tab === 'images'" class="list">
             <div v-if="partialErrors.images" class="list-empty err-hint">镜像取数失败：{{ partialErrors.images }}</div>
             <table v-else-if="filteredImages.length" class="ptable">
-              <colgroup><col style="width:50%"><col style="width:20%"><col style="width:18%"><col style="width:12%"></colgroup>
-              <thead><tr><th>镜像</th><th>镜像 ID</th><th>内容大小</th><th>操作</th></tr></thead>
+              <colgroup><col style="width:38%"><col style="width:18%"><col style="width:14%"><col style="width:16%"><col style="width:14%"></colgroup>
+              <thead><tr><th>镜像</th><th>镜像 ID</th><th>内容大小</th><th>引用</th><th>操作</th></tr></thead>
               <tbody>
                 <tr v-for="im in filteredImages" :key="imageLabel(im)">
                   <td class="mono" :title="imageLabel(im)">{{ imageLabel(im) }}</td>
                   <td class="mono muted" :title="im.id">{{ im.id }}</td>
                   <td class="mono">{{ im.size }}</td>
+                  <td class="use-hint" :class="imageUseHint(im).tone">{{ imageUseHint(im).text }}</td>
                   <td>
                     <span class="c-acts">
-                      <button class="icon-btn act-del" title="删除镜像" :disabled="busy === imageLabel(im)" @click="doRemoveImage(im)">
+                      <button class="icon-btn act-save" title="导出到远端目录（docker save）" :disabled="!!busy" @click="openExport(im)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 8v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8"/><path d="M2 3h20v5H2z"/><path d="M10 12h4"/></svg>
+                      </button>
+                      <button class="icon-btn act-del" title="删除镜像" :disabled="!!busy" @click="doRemoveImage(im)">
                         <svg v-if="busy === imageLabel(im)" class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9" stroke-opacity="0.25"/><path d="M12 3a9 9 0 0 1 9 9" stroke-linecap="round"/></svg>
                         <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
                       </button>
@@ -164,7 +198,7 @@
                   <td class="mono label-hint" :title="v.labels ? Object.entries(v.labels).map(([k, val]) => k + '=' + val).join('\n') : ''">{{ labelHint(v.labels) }}</td>
                   <td>
                     <span class="c-acts" @click.stop>
-                      <button class="icon-btn act-del" title="删除卷" :disabled="busy === 'v:' + v.name" @click="doRemoveVolume(v)">
+                      <button class="icon-btn act-del" title="删除卷" :disabled="!!busy" @click="doRemoveVolume(v)">
                         <svg v-if="busy === 'v:' + v.name" class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9" stroke-opacity="0.25"/><path d="M12 3a9 9 0 0 1 9 9" stroke-linecap="round"/></svg>
                         <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
                       </button>
@@ -195,7 +229,7 @@
                   <td class="mono label-hint" :title="n.labels ? Object.entries(n.labels).map(([k, val]) => k + '=' + val).join('\n') : ''">{{ labelHint(n.labels) }}</td>
                   <td>
                     <span class="c-acts" @click.stop>
-                      <button class="icon-btn act-del" title="删除网络" :disabled="busy === 'n:' + n.name" @click="doRemoveNetwork(n)">
+                      <button class="icon-btn act-del" :title="isBuiltinNetwork(n.name) ? '内置网络（bridge/host/none）不可删除' : '删除网络'" :disabled="!!busy || isBuiltinNetwork(n.name)" @click="doRemoveNetwork(n)">
                         <svg v-if="busy === 'n:' + n.name" class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9" stroke-opacity="0.25"/><path d="M12 3a9 9 0 0 1 9 9" stroke-linecap="round"/></svg>
                         <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
                       </button>
@@ -211,11 +245,16 @@
         <!-- 容器详情已改为居中弹窗（见下方 Teleport），列表列独享整幅宽度 -->
       </div>
 
-      <!-- 状态栏 -->
+      <!-- 状态栏：计数必须跟着当前 tab 走。此前这里不分页永远报容器，切到镜像/卷/网络后
+           数字对、对象错，比空着更容易误信。 -->
       <div class="statusbar">
         <span>{{ targetName }}</span>
         <span>远程 · SSH</span>
-        <span>容器 <span class="mono">{{ containers.length }}</span>（<span class="ok">{{ runningCount }}</span> 运行 / <span class="bad">{{ abnormalCount }}</span> 异常 / <span class="mono">{{ stoppedCount }}</span> 停止）</span>
+        <span v-if="tab === 'containers'">容器 <span class="mono">{{ containers.length }}</span>（<span class="ok">{{ runningCount }}</span> 运行 / <span class="bad">{{ abnormalCount }}</span> 异常 / <span class="mono">{{ stoppedCount }}</span> 停止）</span>
+        <span v-else-if="tab === 'images'">镜像 <span class="mono">{{ images.length }}</span><template v-if="unusedCountKnown && unusedImageCount">（<span class="warn">{{ unusedImageCount }}</span> 未使用<template v-if="danglingCount">，其中 <span class="warn">{{ danglingCount }}</span> 悬空</template>）</template><template v-else-if="danglingCount">（<span class="warn">{{ danglingCount }}</span> 悬空）</template></span>
+        <span v-else-if="tab === 'volumes'">卷 <span class="mono">{{ volumes.length }}</span><template v-if="unusedVolumeCount">（<span class="warn">{{ unusedVolumeCount }}</span> 未使用）</template></span>
+        <span v-else>网络 <span class="mono">{{ networks.length }}</span><template v-if="builtinNetworkCount">（<span class="mono">{{ builtinNetworkCount }}</span> 内置）</template></span>
+        <span v-if="truncated" class="sb-warn" title="单次 SSH 命令输出达到 1MB 上限，列表可能不完整">输出已截断</span>
         <span class="sb-right mono">{{ lastSync }}</span>
       </div>
     </template>
@@ -243,47 +282,67 @@
       </div>
     </Teleport>
 
-    <!-- 容器详情弹窗：点行打开，居中大幅面（820×78vh），日志吃满纵向空间（Teleport 到 body，Esc / 点遮罩 / × 关闭） -->
+    <!-- 容器详情：inspect / stats / logs 三条取数腿在子组件内自持（含轮询与陈旧回包守卫） -->
+    <DockerContainerDetail
+      v-if="tab === 'containers' && selected"
+      :container="selected"
+      :session-id="targetId"
+      @close="selected = null"
+    />
+
+    <!-- 镜像拉取：引用先校验；docker pull 的层下载远超读命令，走 600s 预算 -->
     <Teleport to="body">
-      <div v-if="tab === 'containers' && selected" class="dt-overlay" @click.self="selected = null">
-        <div class="dt-dialog" role="dialog" aria-modal="true" :aria-label="'容器详情：' + selected.name">
-          <div class="dp-head">
-            <span class="st-dot" :class="selected.state"></span>
-            <span class="dp-name mono">{{ selected.name }}</span>
-            <span class="badge" :class="selected.state">{{ selected.stateText }}</span>
-            <button class="icon-btn dp-close" title="关闭" aria-label="关闭" @click="selected = null">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            </button>
+      <div v-if="showPull" class="dk-overlay" @click.self="closePull">
+        <div class="dk-dialog" role="dialog" aria-modal="true" aria-label="拉取镜像">
+          <div class="dk-header">
+            <span>拉取镜像</span>
+            <button class="dk-close" :disabled="pulling" aria-label="关闭" @click="closePull">×</button>
           </div>
-          <div class="dp-body">
-            <section>
-              <h4>容器信息</h4>
-              <div class="kv">
-                <span class="k">镜像</span><span class="v">{{ selected.repo }}:{{ selected.tag }}</span>
-                <span class="k">容器 ID</span><span class="v">{{ selected.id }}</span>
-                <span class="k">状态</span><span class="v">{{ selected.stateText }}</span>
-                <span class="k">命令</span><span class="v">{{ selected.cmd }}</span>
-                <span class="k">端口</span><span class="v">{{ selected.ports || '未映射' }}</span>
-              </div>
-            </section>
-            <section class="logs-section">
-              <h4>
-                <span>日志 <span class="logs-sub mono">docker logs --tail 200</span></span>
-                <button class="follow-btn" :class="{ on: follow }" :aria-pressed="follow" title="实时跟随（每 2.5s 轮询增量）" @click="setFollow(!follow)">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 7v5l3 2"/></svg>
-                  跟随
-                </button>
-              </h4>
-              <div v-if="logsError" class="logs-err">{{ logsError.message }}</div>
-              <div v-else ref="logsEl" class="logs mono">
-                <div v-if="logsLoading && !logs.length" class="logs-hint">加载日志…</div>
-                <div v-else-if="!logs.length" class="logs-hint">（无日志输出）</div>
-                <div v-for="l in logsView" v-else :key="l.id" class="lrow" :class="l.cls">{{ l.text || ' ' }}</div>
-              </div>
-            </section>
-          </div>
+          <form class="pull-body" @submit.prevent="doPull">
+            <label class="pull-label" for="docker-pull-ref">镜像引用</label>
+            <input
+              id="docker-pull-ref"
+              ref="pullInputEl"
+              v-model="pullRef"
+              class="pull-input mono"
+              placeholder="nginx:1.27 或 harbor.example.com/app:tag"
+              autocomplete="off"
+              spellcheck="false"
+              :disabled="pulling"
+            />
+            <div v-if="pullRefInvalid" class="pull-invalid">引用格式不合法：不含空白，且不能以 - 开头</div>
+            <div v-if="pullError" class="pull-err">
+              <div>{{ pullError.message }}</div>
+              <div v-if="pullError.hint" class="pull-hint">{{ pullError.hint }}</div>
+            </div>
+            <div class="pull-foot">
+              <span v-if="pulling" class="pull-elapsed mono">{{ pullElapsed }}s</span>
+              <span class="pull-spacer"></span>
+              <button type="button" class="btn" :disabled="pulling" @click="closePull">取消</button>
+              <button type="submit" class="btn btn-primary" :disabled="pulling || !pullRef.trim() || pullRefInvalid">
+                <svg v-if="pulling" class="pull-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="12" r="9" stroke-opacity="0.25"/><path d="M12 3a9 9 0 0 1 9 9" stroke-linecap="round"/></svg>
+                拉取
+              </button>
+            </div>
+          </form>
         </div>
       </div>
+    </Teleport>
+
+    <!-- 镜像导出/加载（纯远端）：tar 只落在远端主机，两端都不经过本地 -->
+    <Teleport to="body">
+      <DockerImageTransferModal
+        v-if="transferMode"
+        :mode="transferMode"
+        :session-id="targetId"
+        :image="transferImage"
+        :running="transferRunning"
+        :error="transferError"
+        :elapsed="transferElapsed"
+        :initial-dir="lastTransferDir"
+        @close="closeTransfer"
+        @submit="onTransferSubmit"
+      />
     </Teleport>
 
     <!-- 卷详情弹窗：点行开，自适应高度（最高 78vh）；inspect 一次拉后展示元数据 + 标签 + 驱动选项，底部快捷删除 -->
@@ -293,12 +352,12 @@
           <div class="dp-head">
             <span class="dp-name mono">{{ selectedVolume.name }}</span>
             <span class="badge">{{ selectedVolume.driver }}</span>
-            <span v-if="selectedVolume.size" class="badge">{{ selectedVolume.size }}</span>
+            <span v-if="volumeUsageInfo.size" class="badge">{{ volumeUsageInfo.size }}</span>
             <span
-              v-if="typeof selectedVolume.linkCount === 'number'"
+              v-if="typeof volumeUsageInfo.refCount === 'number'"
               class="badge"
-              :class="selectedVolume.linkCount === 0 ? 'warn' : 'ok'"
-            >{{ selectedVolume.linkCount === 0 ? '未使用' : selectedVolume.linkCount + ' 个容器' }}</span>
+              :class="volumeUsageInfo.refCount === 0 ? 'warn' : 'ok'"
+            >{{ volumeUsageInfo.refCount === 0 ? '未使用' : volumeUsageInfo.refCount + ' 个容器' }}</span>
             <button class="icon-btn dp-close" title="关闭" aria-label="关闭" @click="selectedVolume = null">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
@@ -314,12 +373,8 @@
                   <span class="k">驱动</span><span class="v">{{ volInspect.driver }}</span>
                   <span class="k">创建时间</span><span class="v">{{ volInspect.createdAt || '—' }}</span>
                   <span class="k">挂载点</span><span class="v">{{ volInspect.mountpoint || '—' }}</span>
-                  <template v-if="volInspect.usage">
-                    <span class="k">引用容器</span><span class="v">{{ volInspect.usage?.refCount ?? '—' }}</span>
-                    <template v-if="typeof volInspect.usage?.size === 'number'">
-                      <span class="k">占用空间</span><span class="v">{{ formatBytesCompact(volInspect.usage?.size) || '—' }}</span>
-                    </template>
-                  </template>
+                  <span class="k">引用容器</span><span class="v">{{ volumeUsageInfo.refCount ?? '—' }}</span>
+                  <span class="k">占用空间</span><span class="v">{{ volumeUsageInfo.size || '—' }}</span>
                 </div>
               </section>
               <section v-if="Object.keys(volInspect.labels).length">
@@ -341,7 +396,7 @@
                 </div>
               </section>
               <div class="dp-actions">
-                <button class="btn btn-sm btn-danger" :disabled="busy === 'v:' + selectedVolume.name" @click="doRemoveVolume(selectedVolume)">删除卷</button>
+                <button class="btn btn-sm btn-danger" :disabled="!!busy" @click="doRemoveVolume(selectedVolume)">删除卷</button>
               </div>
             </template>
             <div v-else class="list-empty">无详情</div>
@@ -397,7 +452,7 @@
               </section>
               <section>
                 <h4>连接容器 <span class="logs-sub mono">{{ netInspect.containers.length }}</span></h4>
-                <div v-if="!netInspect.containers.length" class="list-empty sub">无容器连接（可安全删除）</div>
+                <div v-if="!netInspect.containers.length" class="list-empty sub">当前无容器连接</div>
                 <table v-else class="ptable sub">
                   <thead><tr><th>容器</th><th>IPv4</th><th>MAC</th></tr></thead>
                   <tbody>
@@ -428,7 +483,7 @@
                 </div>
               </section>
               <div class="dp-actions">
-                <button class="btn btn-sm btn-danger" :disabled="busy === 'n:' + selectedNetwork.name" @click="doRemoveNetwork(selectedNetwork)">删除网络</button>
+                <button class="btn btn-sm btn-danger" :title="isBuiltinNetwork(selectedNetwork.name) ? '内置网络（bridge/host/none）不可删除' : '删除网络'" :disabled="!!busy || isBuiltinNetwork(selectedNetwork.name)" @click="doRemoveNetwork(selectedNetwork)">删除网络</button>
               </div>
             </template>
             <div v-else class="list-empty">无详情</div>
@@ -445,23 +500,37 @@
 // 命令构造/解析/错误归类委托 docker-core.ts；本页只做 sshExec 编排与状态管理。
 import { computed, nextTick, ref, watch, onUnmounted } from 'vue'
 import { toFriendlyMessage } from '@/api/client'
+import { formatBytes } from '@/utils/format'
+import DockerContainerDetail from './DockerContainerDetail.vue'
+import DockerImageTransferModal from './DockerImageTransferModal.vue'
 import { connNote, useSSHStore, type SSHConnection } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
 import {
-  PS_CMD, IMAGES_CMD, VOLUMES_CMD, NETWORKS_CMD,
-  logsCmd, startCmd, stopCmd, restartCmd, rmCmd, rmiCmd, execCmd,
+  AUDIT_ACTION_DOCKER,
+  auditEnvironmentFor,
+  auditOutcomeForDispatchError,
+  auditResultForExit,
+  buildRemoteAuditRecord,
+  writeRemoteAudit,
+  type RemoteAuditConclusion,
+} from '@/composables/remoteAudit'
+import {
+  PS_CMD, IMAGES_CMD, VOLUMES_CMD, VOLUME_USAGE_CMD, NETWORKS_CMD,
+  startCmd, stopCmd, restartCmd, rmCmd, rmiCmd, execCmd, pullCmd, imagePruneCmd, imagePruneAllCmd,
+  dockerSaveCmd, dockerLoadCmd, classifyExit, saveTempPath,
   volumeRmCmd, networkRmCmd, volumePruneCmd, networkPruneCmd,
   volumeInspectCmd, networkInspectCmd,
-  parsePs, parseImages, parseVolumes, parseNetworks, parseLogs, imageLabel, imageHaystack,
-  labelHint,
+  parsePs, parseImages, parseVolumes, parseNetworks, imageLabel, imageHaystack, imageUsageCount,
+  parseVolumeUsage, mergeVolumeUsage, volumeUsageSummary, isOutputTruncated,
+  labelHint, countPrunedLines, isBuiltinNetwork,
   parseVolumeInspect, parseNetworkInspect,
   dockerErrorFromResult, describeThrownDockerError,
   type ContainerRow, type ImageRow, type VolumeRow, type NetworkRow, type DockerError,
   type VolumeInspect, type NetworkInspect,
 } from '@/stores/docker-core'
-import { formatBytesCompact } from '@/utils/format'
 
+const props = defineProps<{ active?: boolean }>()
 const sshStore = useSSHStore()
 const toast = useToastStore()
 const { confirm } = useConfirm()
@@ -528,14 +597,6 @@ function disconnectTarget() {
   toast.info(`已断开 ${s.name}`)
 }
 
-// 弹窗 Esc 关闭 + 卸载清理监听（DESIGN.md 模态硬规则）
-function onPickerKey(e: KeyboardEvent) { if (e.key === 'Escape') showConnPicker.value = false }
-watch(showConnPicker, open => {
-  if (open) document.addEventListener('keydown', onPickerKey)
-  else document.removeEventListener('keydown', onPickerKey)
-})
-onUnmounted(() => document.removeEventListener('keydown', onPickerKey))
-
 const tab = ref<TabKey>('containers')
 const query = ref('')
 
@@ -559,20 +620,58 @@ const loadError = ref<DockerError | null>(null)
 // 避免把「docker images/volumes/networks 报错」伪装成「该主机没有该资源」
 const partialErrors = ref<{ images?: string; volumes?: string; networks?: string }>({})
 const errText = (e: unknown): string => (e as DockerError)?.message || String(e)
-const lastSync = ref('')
-
-const logs = ref<string[]>([])
-const logsLoading = ref(false)
-const logsError = ref<DockerError | null>(null)
-const logsEl = ref<HTMLElement | null>(null)
-const follow = ref(false)
-let followTimer: ReturnType<typeof setInterval> | null = null
+// 同步时间按资源分槽：共用一个字段时，刷完镜像再切到卷页仍显示「docker images · 12:00」，
+// 读起来像卷列表也是那一刻取的。状态栏只展示当前 tab 那一格。
+const syncedAt = ref<Record<TabKey, string>>({ containers: '', images: '', volumes: '', networks: '' })
+/** 一次可标多类：loadAll 四类同取时四格写同一个时刻，"已同步" 不再分先后 */
+function markSynced(kind: TabKey | TabKey[], label: string): void {
+  const at = `${label} · ${new Date().toLocaleTimeString()}`
+  const next = { ...syncedAt.value }
+  for (const k of Array.isArray(kind) ? kind : [kind]) next[k] = at
+  syncedAt.value = next
+}
+const lastSync = computed(() => syncedAt.value[tab.value])
+// 单次 exec 输出上限 1MB：命中标记时列表可能缺行，状态栏必须明示，别让用户
+// 把「只看到前 N 个容器」当成主机真实状态。
+const truncated = ref(false)
+// 其中的 docker ps 单独记账：镜像「引用」列的准确性只取决于容器列表是否完整，
+// 不能因为 docker images 被截断就把所有镜像的引用状态都降级成「—」。
+const psTruncated = ref(false)
 
 const busy = ref('')
 const q = () => query.value.toLowerCase()
 
-/** 异常（非0退出）优先排序：exited → running → stopped，出事容器一眼可见 */
-const isAbnormal = (c: ContainerRow): boolean => c.state === 'exited'
+// ── 镜像拉取 ──
+// 层下载可能远超读命令：主进程把 ssh:exec 超时钳到 600s，这里用满；
+// --quiet 只留摘要行，避免进度条把 1MB 输出上限撑爆。
+const PULL_TIMEOUT_SEC = 600
+const IMAGE_REF_RE = /^[a-zA-Z0-9][a-zA-Z0-9._:@/-]*$/
+const showPull = ref(false)
+const pullRef = ref('')
+const pullInputEl = ref<HTMLInputElement | null>(null)
+const pulling = ref(false)
+const pullError = ref<DockerError | null>(null)
+const pullElapsed = ref(0)
+let pullClock: ReturnType<typeof setInterval> | null = null
+const pullRefInvalid = computed(() => {
+  const ref = pullRef.value.trim()
+  return !!ref && (ref.startsWith('-') || !IMAGE_REF_RE.test(ref))
+})
+
+// 连接选择 / 镜像拉取共用的 Esc：拉取在途时 closePull 自会拒绝
+function onOverlayKey(e: KeyboardEvent) {
+  if (e.key !== 'Escape') return
+  if (showPull.value) closePull()
+  else if (showConnPicker.value) showConnPicker.value = false
+}
+watch([showConnPicker, showPull], ([picker, pull]) => {
+  if (picker || pull) document.addEventListener('keydown', onOverlayKey)
+  else document.removeEventListener('keydown', onOverlayKey)
+})
+onUnmounted(() => document.removeEventListener('keydown', onOverlayKey))
+
+/** 异常优先排序：exited / health=unhealthy → running → stopped，出事容器一眼可见 */
+const isAbnormal = (c: ContainerRow): boolean => c.state === 'exited' || c.health === 'unhealthy'
 const filteredContainers = computed(() => {
   const list = containers.value.filter(c => c.name.toLowerCase().includes(q()))
   const rank = (c: ContainerRow): number => (isAbnormal(c) ? 0 : c.state === 'running' ? 1 : 2)
@@ -586,24 +685,31 @@ const filteredVolumes = computed(() =>
   volumes.value.filter(v => v.name.toLowerCase().includes(q())))
 const filteredNetworks = computed(() =>
   networks.value.filter(n => n.name.toLowerCase().includes(q())))
-const runningCount = computed(() => containers.value.filter(c => c.state === 'running').length)
+const runningCount = computed(() =>
+  containers.value.filter(c => c.state === 'running' && !isAbnormal(c)).length)
 const stoppedCount = computed(() => containers.value.filter(c => c.state === 'stopped').length)
 const abnormalCount = computed(() => containers.value.filter(isAbnormal).length)
 const hasContainers = computed(() => containers.value.length > 0)
-
-/** 日志行轻量着色：命中 error/panic/fatal → err；warn → warn；其余默认 */
-function logClass(line: string): string {
-  if (/error|panic|fatal|exception|failed/i.test(line)) return 'err'
-  if (/warn/i.test(line)) return 'warn'
-  return ''
+// 状态栏副标题用的三组细分计数：都是「清理」按钮的作用面，有值才显示（缺数时不报假的 0）。
+// 悬空镜像 = 无标签层（列表里显示的是短 ID），正是 image prune 的目标集合。
+const danglingCount = computed(() =>
+  images.value.filter(im => im.repo === '<none>' || im.tag === '<none>').length)
+// 「未使用」= 没有任何容器（含已停止）引用。docker ps 被 1MB 截断时列表不完整，
+// 此时一律不给计数/状态（显示「—」），宁可少报也不要把在用的镜像说成可删。
+const unusedCountKnown = computed(() => !psTruncated.value)
+const unusedImageCount = computed(() =>
+  unusedCountKnown.value
+    ? images.value.filter(im => imageUsageCount(im, containers.value) === 0).length
+    : 0)
+function imageUseHint(im: ImageRow): { text: string; tone: 'ok' | 'warn' | 'muted' } {
+  if (!unusedCountKnown.value) return { text: '—', tone: 'muted' }
+  const n = imageUsageCount(im, containers.value)
+  return n > 0 ? { text: `${n} 个容器`, tone: 'ok' } : { text: '未使用', tone: 'warn' }
 }
-
-// P2 修复：把日志行着色从模板里挪出来 —— 否则每帧渲染都对每行跑一次正则
-// （docker logs --tail 200 ≈ 200 行 × 每次响应式更新）。改为 logs 变化时一次性算好 {text, cls}，
-// 模板只做纯绑定，渲染开销随日志刷新频率而非组件重渲染频率发生。
-const logsView = computed(() =>
-  logs.value.map((line, i) => ({ id: i, text: line, cls: logClass(line) })),
-)
+// 未使用卷 = 引用容器数为 0；老版本 docker 不给 Links 时 linkCount 缺失，不凭空断言
+const unusedVolumeCount = computed(() => volumes.value.filter(v => v.linkCount === 0).length)
+// 内置网络（bridge/host/none）删不掉，计数在状态栏里解释那几枚置灰的删除按钮
+const builtinNetworkCount = computed(() => networks.value.filter(n => isBuiltinNetwork(n.name)).length)
 
 // 一次性 docker 执行：成功返回 stdout；docker 层/传输层错误统一归为 DockerError 抛出
 // id 默认取当前目标，但批量取数路径显式传入发起时的 id，避免执行中途切宿主后
@@ -616,65 +722,148 @@ const logsView = computed(() =>
 const READ_TIMEOUT_SEC = 15
 const ACTION_TIMEOUT_SEC = 60
 
+/** 审计目标在发起时定格：动作飞行途中切宿主，仍记实际执行的那台 */
+function dockerAuditTarget(id: string): { targetId: string; environment: 'test' | 'prod' } {
+  const s = remoteSessions.value.find(x => x.id === id)
+  const conn = s?.connectionId
+    ? sshStore.connections.find(c => c.id === s.connectionId)
+    : undefined
+  return {
+    targetId: conn ? `${conn.name} (${conn.username}@${conn.host})` : (s?.shell || s?.name || id),
+    environment: auditEnvironmentFor(s, sshStore.connections),
+  }
+}
+
+function writeDockerAudit(
+  target: { targetId: string; environment: 'test' | 'prod'; action: string },
+  cmd: string,
+  conclusion: RemoteAuditConclusion,
+  result: string,
+) {
+  void writeRemoteAudit(buildRemoteAuditRecord({
+    action: target.action,
+    conclusion,
+    targetId: target.targetId,
+    environment: target.environment,
+    command: cmd,
+    result,
+  })).then(ok => {
+    if (!ok) toast.warning('审计记录写入失败：本次 Docker 操作未进入审计链')
+  })
+}
+
 async function dockerExec(
-  cmd: string, id = targetId.value, timeoutSec = READ_TIMEOUT_SEC,
+  cmd: string, id = targetId.value, timeoutSec = READ_TIMEOUT_SEC, auditAction?: string,
 ): Promise<string> {
   const api = window.electronAPI
   if (!id || !api) throw { code: 'NO_SESSION', message: '未选择目标主机', retryable: false } as DockerError
+  // 只有变更动作传 auditAction；读路径（列表/日志/inspect）不写审计，
+  // 否则一次列表刷新就会往审计链里灌十几条噪声。
+  const auditCtx = auditAction
+    ? { action: auditAction, ...dockerAuditTarget(id) }
+    : null
+  const started = Date.now()
   let res
   try {
     res = await api.sshExec(id, cmd, timeoutSec)
   } catch (err) {
-    throw describeThrownDockerError(err)
+    const dErr = describeThrownDockerError(err)
+    if (auditCtx) {
+      const outcome = auditOutcomeForDispatchError(err, dErr.message, timeoutSec)
+      writeDockerAudit(auditCtx, cmd, outcome.conclusion, outcome.result)
+    }
+    throw dErr
   }
+  if (isOutputTruncated(res.stdout, res.stderr)) truncated.value = true
+  const durationMs = Date.now() - started
   const dErr = dockerErrorFromResult(res.stderr, res.exitCode, res.stdout)
+  if (auditCtx) {
+    // sshExec 回包 = 命令已下发；docker 返回非零（容器已不存在等）仍记 executed，
+    // 错误码附在 result 里供检索 —— 审计结论不是成败统计。
+    const base = auditResultForExit(res.exitCode, durationMs)
+    writeDockerAudit(
+      auditCtx, cmd, 'executed',
+      dErr ? `${base} docker_error=${dErr.code}` : base,
+    )
+  }
   if (dErr) throw dErr
   return res.stdout
 }
 
 /** 变更类动作的入口：只有这一类需要放宽预算，取数路径继续用默认值 */
 function actionExec(cmd: string): Promise<string> {
-  return dockerExec(cmd, targetId.value, ACTION_TIMEOUT_SEC)
+  return dockerExec(cmd, targetId.value, ACTION_TIMEOUT_SEC, AUDIT_ACTION_DOCKER)
 }
 
 // 跨宿主竞态守卫：loadAll 内串行+并行共 4 个 await（单条硬超时 15s），用户中途切主机
 // 会再触发一轮：旧轮若照常写入，会把 A 的容器盖进已切到 B 的页面（混合宿主数据是运维
 // 场景的危险误导），且旧轮 finally 会提前熄灭新轮的转圈。故每轮递增代次，写入前校验。
 let loadGen = 0
+// loadGen 只覆盖 loadAll；动作后的 reloadX 不经过它。切宿主时递增 epoch，并给每类列表
+// 各自一个请求序号：同一资源的并发重拉以最后发起者为准，旧回包（含旧宿主）一律丢弃。
+let targetEpoch = 0
+const listSeq = { containers: 0, images: 0, volumes: 0, networks: 0 }
+type ListKind = keyof typeof listSeq
+interface ListPin { id: string; epoch: number; seq: number }
+
+function pinList(kind: ListKind, id: string): ListPin {
+  return { id, epoch: targetEpoch, seq: ++listSeq[kind] }
+}
+function listFresh(kind: ListKind, p: ListPin): boolean {
+  return p.epoch === targetEpoch && p.id === targetId.value && p.seq === listSeq[kind]
+}
 
 async function loadAll(): Promise<void> {
   const id = targetId.value
   if (!id) return
   const gen = ++loadGen
+  const pins = {
+    containers: pinList('containers', id),
+    images: pinList('images', id),
+    volumes: pinList('volumes', id),
+    networks: pinList('networks', id),
+  }
   loading.value = true
   loadError.value = null
   partialErrors.value = {}
+  truncated.value = false
+  psTruncated.value = false
   try {
     // 容器为主视图；其失败即整体错误（未装 / 无权限都在此暴露）
-    const ps = parsePs(await dockerExec(PS_CMD, id))
-    if (gen !== loadGen) return // 已被新一轮取代，丢弃旧宿主写入
+    const psRaw = await dockerExec(PS_CMD, id)
+    const ps = parsePs(psRaw)
+    if (gen !== loadGen || !listFresh('containers', pins.containers)) return
     containers.value = ps
+    psTruncated.value = isOutputTruncated(psRaw)
     // 其余尽力而为：单个子命令失败不阻断整页，但要按 tab 如实上浮，不伪装成「没有资源」
     const [im, vo, ne] = await Promise.allSettled([
       dockerExec(IMAGES_CMD, id), dockerExec(VOLUMES_CMD, id), dockerExec(NETWORKS_CMD, id),
     ])
     if (gen !== loadGen) return
-    images.value = im.status === 'fulfilled' ? parseImages(im.value) : []
-    volumes.value = vo.status === 'fulfilled' ? parseVolumes(vo.value) : []
-    networks.value = ne.status === 'fulfilled' ? parseNetworks(ne.value) : []
-    partialErrors.value = {
-      images: im.status === 'rejected' ? errText(im.reason) : undefined,
-      volumes: vo.status === 'rejected' ? errText(vo.reason) : undefined,
-      networks: ne.status === 'rejected' ? errText(ne.reason) : undefined,
+    if (listFresh('images', pins.images)) {
+      images.value = im.status === 'fulfilled' ? parseImages(im.value) : []
     }
-    lastSync.value = 'docker ps · ' + new Date().toLocaleTimeString()
+    if (listFresh('volumes', pins.volumes)) {
+      volumes.value = vo.status === 'fulfilled' ? parseVolumes(vo.value) : []
+      // 用量来自 docker system df -v，可能比列表慢一个量级：不挡首屏，单独回填
+      if (vo.status === 'fulfilled') void enrichVolumeUsage(id, pins.volumes)
+    }
+    if (listFresh('networks', pins.networks)) {
+      networks.value = ne.status === 'fulfilled' ? parseNetworks(ne.value) : []
+    }
+    partialErrors.value = {
+      images: listFresh('images', pins.images) && im.status === 'rejected' ? errText(im.reason) : partialErrors.value.images,
+      volumes: listFresh('volumes', pins.volumes) && vo.status === 'rejected' ? errText(vo.reason) : partialErrors.value.volumes,
+      networks: listFresh('networks', pins.networks) && ne.status === 'rejected' ? errText(ne.reason) : partialErrors.value.networks,
+    }
+    markSynced(TABS.map(t => t.key), '已同步')
     // 详情已改弹窗：不再自动选中首个容器（否则进页面/刷新就弹模态）；仅当选中项已不在列表才清空
     const cur = selected.value
     if (cur && !containers.value.some(c => c.id === cur.id)) {
       selected.value = null
     }
   } catch (e) {
-    if (gen !== loadGen) return
+    if (gen !== loadGen || !listFresh('containers', pins.containers)) return
     loadError.value = e as DockerError
     containers.value = []; images.value = []; volumes.value = []; networks.value = []
     partialErrors.value = {}
@@ -684,42 +873,37 @@ async function loadAll(): Promise<void> {
   }
 }
 
-// 发起对象必须在 await 之后重新校验：慢的那次返回时用户可能已经切到另一个容器、
-// 换了宿主或关掉了详情，原样写回会把 A 的日志显示在 B 的窗口里 —— 对着错的日志排障
-// 比报一次错更糟。2.5s 跟随轮询让这种交叠成为常态而非边角（同 loadAll 的代次守卫理由）。
-async function loadLogs(quiet = false): Promise<void> {
-  const c = selected.value
-  const id = targetId.value
-  const stillCurrent = (): boolean => selected.value === c && targetId.value === id
-  logsError.value = null
-  if (!c) { logs.value = []; return }
-  if (!quiet) logsLoading.value = true
+/**
+ * 卷用量富集：docker volume ls 的 JSON 没有 UsageData（那是 GET /system/df 专有字段），
+ * 只能再跑一条 docker system df -v。失败/超时保持「—」，不影响卷管理主流程；
+ * 回包仍须通过列表序号校验——等待期间用户可能已切宿主或重拉，同名卷会跨宿主撞名。
+ */
+async function enrichVolumeUsage(id: string, pin: ListPin): Promise<void> {
   try {
-    const raw = await dockerExec(logsCmd(c.name), id)
-    if (!stillCurrent()) return
-    logs.value = parseLogs(raw)
-    if (follow.value) await scrollLogsToBottom()
-  } catch (e) {
-    // 旧请求的失败不该盖住新选中的视图；也不许在取代后熄灭新一轮的转圈
-    if (!stillCurrent()) return
-    logsError.value = e as DockerError
-  } finally {
-    if (!quiet && stillCurrent()) logsLoading.value = false
-  }
+    const usage = parseVolumeUsage(await dockerExec(VOLUME_USAGE_CMD, id, ACTION_TIMEOUT_SEC))
+    if (!listFresh('volumes', pin)) return
+    volumes.value = mergeVolumeUsage(volumes.value, usage)
+    const cur = selectedVolume.value
+    if (cur) {
+      const merged = volumes.value.find(v => v.name === cur.name)
+      if (merged) selectedVolume.value = merged
+    }
+  } catch { /* 增强项：保持列显示「—」 */ }
 }
 
-async function scrollLogsToBottom(): Promise<void> {
-  await nextTick()
-  const el = logsEl.value
-  if (el) el.scrollTop = el.scrollHeight
-}
-
-// 跟随：sshExec 是请求/响应、非流式，故用 2.5s 轮询 tail 伪跟随（不动后端）
-function setFollow(on: boolean): void {
-  if (followTimer) { clearInterval(followTimer); followTimer = null }
-  follow.value = on
-  if (on) followTimer = setInterval(() => { void loadLogs(true) }, 2500)
-}
+// 页面被 v-show 隐藏时组件仍挂载：Teleport 到 body 的弹窗会继续悬浮在别的页面上。
+// 隐藏即收起全部弹窗；拉取弹窗不阻塞关闭，在途 pull 由自身 finally 收尾。
+watch(() => props.active, (active) => {
+  if (active !== false) return
+  // 执行中的导出/加载不强收：关面板不等于停掉远端进程；其余情况跟随页面一起收起。
+  if (!transferRunning.value) transferMode.value = ''
+  showConnPicker.value = false
+  showPull.value = false
+  stopPullClock()
+  selected.value = null
+  selectedVolume.value = null
+  selectedNetwork.value = null
+})
 
 function refresh(): void { void loadAll() }
 
@@ -736,17 +920,26 @@ function toastErr(e: unknown): void {
   toast.error(d?.message || String(e), 6000, d?.hint ? { details: d.hint } : undefined)
 }
 
-// 容器动作只重跑 docker ps（镜像/卷/网络不受容器启停影响），避免每次动作全量刷新 4 条命令
+// 容器动作只重跑 docker ps（镜像/卷/网络不受容器启停影响），避免每次动作全量刷新 4 条命令。
+// 动作走的是 60s 预算：回包时用户完全可能已切到另一台主机，写回前必须校验发起时的宿主与序号。
 async function reloadContainers(): Promise<void> {
+  const id = targetId.value
+  if (!id) return
+  const pin = pinList('containers', id)
   try {
-    containers.value = parsePs(await dockerExec(PS_CMD))
-    lastSync.value = 'docker ps · ' + new Date().toLocaleTimeString()
+    const raw = await dockerExec(PS_CMD, id)
+    const next = parsePs(raw)
+    if (!listFresh('containers', pin)) return
+    containers.value = next
+    psTruncated.value = isOutputTruncated(raw)
+    markSynced('containers', 'docker ps')
     // 详情已改弹窗：不再自动选中首个容器（否则进页面/刷新就弹模态）；仅当选中项已不在列表才清空
     const cur = selected.value
     if (cur && !containers.value.some(c => c.id === cur.id)) {
       selected.value = null
     }
   } catch (e) {
+    if (!listFresh('containers', pin)) return
     loadError.value = e as DockerError
   }
 }
@@ -787,10 +980,17 @@ async function doRemove(c: ContainerRow) {
 
 // 镜像删除后只重跑 docker images（容器/卷/网络不受影响）；失败按 tab 如实上浮
 async function reloadImages(): Promise<void> {
+  const id = targetId.value
+  if (!id) return
+  const pin = pinList('images', id)
   try {
-    images.value = parseImages(await dockerExec(IMAGES_CMD))
+    const next = parseImages(await dockerExec(IMAGES_CMD, id))
+    if (!listFresh('images', pin)) return
+    images.value = next
     partialErrors.value.images = undefined
+    markSynced('images', 'docker images')
   } catch (e) {
+    if (!listFresh('images', pin)) return
     partialErrors.value.images = errText(e)
     images.value = []
   }
@@ -798,19 +998,34 @@ async function reloadImages(): Promise<void> {
 
 // 卷/网络单 tab 重拉：与 reloadImages 同构，失败不伪装为空列表
 async function reloadVolumes(): Promise<void> {
+  const id = targetId.value
+  if (!id) return
+  const pin = pinList('volumes', id)
   try {
-    volumes.value = parseVolumes(await dockerExec(VOLUMES_CMD))
+    const next = parseVolumes(await dockerExec(VOLUMES_CMD, id))
+    if (!listFresh('volumes', pin)) return
+    volumes.value = next
     partialErrors.value.volumes = undefined
+    markSynced('volumes', 'docker volume ls')
+    void enrichVolumeUsage(id, pin)
   } catch (e) {
+    if (!listFresh('volumes', pin)) return
     partialErrors.value.volumes = errText(e)
     volumes.value = []
   }
 }
 async function reloadNetworks(): Promise<void> {
+  const id = targetId.value
+  if (!id) return
+  const pin = pinList('networks', id)
   try {
-    networks.value = parseNetworks(await dockerExec(NETWORKS_CMD))
+    const next = parseNetworks(await dockerExec(NETWORKS_CMD, id))
+    if (!listFresh('networks', pin)) return
+    networks.value = next
     partialErrors.value.networks = undefined
+    markSynced('networks', 'docker network ls')
   } catch (e) {
+    if (!listFresh('networks', pin)) return
     partialErrors.value.networks = errText(e)
     networks.value = []
   }
@@ -823,13 +1038,268 @@ async function doRemoveImage(im: ImageRow) {
   const ref = imageLabel(im)
   const ok = await confirm({
     title: '删除镜像',
-    message: `将取消标签 ${ref}（${im.id}）；若它是该镜像上的最后一个标签，层数据一并删除。有容器（含已停止容器）正在使用时会失败。`,
+    message: `将取消标签 ${ref}（${im.id}）；若它是该镜像上的最后一个标签，层数据一并删除。有容器（含已停止容器）引用该镜像时，删除最后一个标签会失败。`,
     confirmText: '确认删除',
     danger: true,
   })
   if (!ok) return
   await withBusyKey(ref, async () => {
     try { await actionExec(rmiCmd(ref)); toast.success(`已删除镜像 ${ref}`); await reloadImages() } catch (e) { toastErr(e) }
+  })
+}
+
+// ── 镜像拉取 / 悬空清理 ──
+
+function startPullClock(): void {
+  stopPullClock()
+  pullElapsed.value = 0
+  pullClock = setInterval(() => { pullElapsed.value += 1 }, 1000)
+}
+function stopPullClock(): void {
+  if (pullClock) { clearInterval(pullClock); pullClock = null }
+}
+
+function openPull(): void {
+  if (pulling.value) return
+  pullRef.value = ''
+  pullError.value = null
+  showPull.value = true
+  void nextTick(() => pullInputEl.value?.focus())
+}
+
+// 在途拉取不可关闭：关掉再开会让两条 pull 的 finally 互相踩状态；页面隐藏走强制收起。
+function closePull(): void {
+  if (pulling.value) return
+  showPull.value = false
+  stopPullClock()
+}
+
+// ── 镜像导出 / 加载（纯远端）──
+// tar 只落在远端主机：docker save 的 stdout 是二进制流，走不了 sshExec 的文本通道，
+// 所以必须 -o 落盘；加载侧对称地 -i 读盘。两端都不经过本地，没有传输链路。
+const TRANSFER_TIMEOUT_SEC = 600
+
+type TransferMode = 'export' | 'import'
+const transferMode = ref<TransferMode | ''>('')
+const transferImage = ref<ImageRow | null>(null)
+const transferRunning = ref(false)
+const transferError = ref('')
+const transferElapsed = ref(0)
+/** 上次落盘目录：重开弹窗直接停在那儿，不用每次从 / 重新找 */
+const lastTransferDir = ref('')
+let transferClock: ReturnType<typeof setInterval> | null = null
+
+function startTransferClock(): void {
+  stopTransferClock()
+  transferElapsed.value = 0
+  transferClock = setInterval(() => { transferElapsed.value += 1 }, 1000)
+}
+function stopTransferClock(): void {
+  if (transferClock) { clearInterval(transferClock); transferClock = null }
+}
+
+/**
+ * save/load 专用执行：不复用 dockerExec 的 dockerErrorFromResult 归类。
+ * 后者把「有输出但 exit-status 缺失」（exitCode === null）判成 DOCKER_UNKNOWN 并抛出，
+ * 而 docker save 写完文件却没回 exit-status 是真会发生的：此时文件可能是完整的，
+ * 报失败会让人删掉一份好备份重导一遍。这里原样回包，由调用方按 classifyExit 三态
+ * 结合产物大小决定说法；审计照写。
+ */
+async function transferExec(cmd: string): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
+  const api = window.electronAPI
+  const id = targetId.value
+  if (!id || !api) throw { code: 'NO_SESSION', message: '未选择目标主机', retryable: false } as DockerError
+  const ctx = { action: AUDIT_ACTION_DOCKER, ...dockerAuditTarget(id) }
+  const started = Date.now()
+  try {
+    const res = await api.sshExec(id, cmd, TRANSFER_TIMEOUT_SEC)
+    writeDockerAudit(ctx, cmd, 'executed', auditResultForExit(res.exitCode, Date.now() - started))
+    return res
+  } catch (err) {
+    const dErr = describeThrownDockerError(err)
+    const outcome = auditOutcomeForDispatchError(err, dErr.message, TRANSFER_TIMEOUT_SEC)
+    writeDockerAudit(ctx, cmd, outcome.conclusion, outcome.result)
+    throw dErr
+  }
+}
+
+/** 产物大小，仅用于文案；读不到（SFTP 不可用 / 无权限）返回 0 */
+async function statSize(id: string, path: string): Promise<number> {
+  const api = window.electronAPI
+  if (!api || !id) return 0
+  try {
+    await api.sftpOpen(id)
+    return (await api.sftpStat(id, path)).size || 0
+  } catch {
+    return 0
+  }
+}
+
+/** 首行非空输出：docker 的报错主体几乎都在第一行，后面是建议动作 */
+function firstLine(s: string): string {
+  return (s || '').split('\n').map(l => l.trim()).find(Boolean) || ''
+}
+
+/** 失败原因：docker 的原话优先；没有就用退出码，unknown 不能写成「退出码 null」 */
+function execWhy(res: { stdout: string; stderr: string; exitCode: number | null }): string {
+  const detail = firstLine(res.stderr) || firstLine(res.stdout)
+  if (detail) return detail
+  return classifyExit(res.exitCode) === 'unknown' ? '命令未回退出码' : `退出码 ${res.exitCode}`
+}
+
+function transferFail(head: string, why: string, path: string, tmp = ''): DockerError {
+  // 超时只关 channel：远端 docker 大概率已死，但写了一半的 tar 会留下，
+  // 不说清楚用户会以为目录是干净的。gz 还多一个临时文件要指。
+  const where = tmp ? `${path}；临时文件：${tmp}` : path
+  return { code: 'DOCKER_EXEC_FAILED', message: `${head}：${why}`, hint: `可能残留半截文件：${where}`, retryable: true }
+}
+
+function dirOf(path: string): string {
+  const i = path.lastIndexOf('/')
+  return i <= 0 ? '/' : path.slice(0, i)
+}
+
+function openExport(im: ImageRow): void {
+  if (transferRunning.value) return
+  transferImage.value = im
+  transferError.value = ''
+  transferMode.value = 'export'
+}
+
+function openImport(): void {
+  if (transferRunning.value) return
+  transferImage.value = null
+  transferError.value = ''
+  transferMode.value = 'import'
+}
+
+function closeTransfer(): void {
+  if (transferRunning.value) return
+  transferMode.value = ''
+}
+
+async function onTransferSubmit(
+  p: { mode: 'export'; ref: string; path: string; gz: boolean } | { mode: 'import'; path: string },
+): Promise<void> {
+  if (transferRunning.value) return
+  const id = targetId.value
+  transferRunning.value = true
+  transferError.value = ''
+  startTransferClock()
+  try {
+    if (p.mode === 'export') {
+      const res = await transferExec(dockerSaveCmd(p.ref, p.path, p.gz))
+      const outcome = classifyExit(res.exitCode)
+      const tmp = p.gz ? saveTempPath(p.path) : ''
+      if (outcome === 'failed') throw transferFail('打包失败', execWhy(res), p.path, tmp)
+      // gz 由 `&&` 串在 save 之后、脚本以 $? 退出：exit 0 意味着 save 与 gzip 都成功，
+      // 产物必定完整 —— 不再用大小猜（scratch 镜像压完可能只有几百字节）。
+      // 大小只进文案：读不到不该把一次成功导出报成失败。
+      const size = await statSize(id, p.path)
+      if (outcome === 'unknown') {
+        toast.warning(size
+          ? `命令未回退出码；已生成 ${formatBytes(size)}，建议用加载验证完整性`
+          : `命令未回退出码，无法确认 ${p.path} 是否完整，建议用加载验证`)
+      } else {
+        toast.success(size ? `已导出 ${formatBytes(size)} 到 ${p.path}` : `已导出到 ${p.path}`)
+      }
+    } else {
+      const res = await transferExec(dockerLoadCmd(p.path))
+      const outcome = classifyExit(res.exitCode)
+      if (outcome === 'failed') throw transferFail('加载失败', execWhy(res), p.path)
+      if (outcome === 'unknown') {
+        toast.warning('命令未回退出码：镜像可能已载入，请刷新列表核对')
+      } else {
+        // docker load 成功会打印 Loaded image: <ref>，比自编文案有用
+        toast.success(firstLine(res.stderr) || firstLine(res.stdout) || '镜像已加载')
+      }
+    }
+    lastTransferDir.value = dirOf(p.path)
+    transferMode.value = ''
+    await reloadImages()
+  } catch (e) {
+    // 错误文案单一来源：这里把 hint（含「可能残留」路径）拼进来，弹窗只负责显示，
+    // 不自己再猜一次失败原因。
+    const d = e as DockerError
+    const base = d?.hint ? `${d.message}；${d.hint}` : (d?.message || String(e))
+    // 超时/断链是 reject，拿不到 exitCode，也就拿不到 transferFail 的 hint：
+    // 残留路径得在这里补，否则最可能留下半截文件的那条路径反而不提。
+    const tail = p.mode !== 'export'
+      ? ''
+      : p.gz
+        ? `可能残留半截文件：${p.path}；临时文件：${saveTempPath(p.path)}`
+        : `可能残留半截文件：${p.path}`
+    transferError.value = tail && !base.includes(p.path) ? `${base}；${tail}` : base
+  } finally {
+    transferRunning.value = false
+    stopTransferClock()
+  }
+}
+
+async function doPull(): Promise<void> {
+  if (pulling.value) return
+  const ref = pullRef.value.trim()
+  if (!ref || ref.startsWith('-') || !IMAGE_REF_RE.test(ref)) return
+  const id = targetId.value
+  pulling.value = true
+  pullError.value = null
+  startPullClock()
+  try {
+    await dockerExec(pullCmd(ref), id, PULL_TIMEOUT_SEC, AUDIT_ACTION_DOCKER)
+    toast.success(`已拉取 ${ref}`)
+    showPull.value = false
+    if (targetId.value === id) await reloadImages()
+  } catch (e) {
+    pullError.value = e as DockerError
+  } finally {
+    pulling.value = false
+    stopPullClock()
+  }
+}
+
+async function doPruneImages(): Promise<void> {
+  const ok = await confirm({
+    title: '清理悬空镜像',
+    message: '将删除所有悬空镜像（无标签、也未被其它镜像引用的中间层）；有标签的镜像不受影响。',
+    confirmText: '确认清理',
+    danger: true,
+  })
+  if (!ok) return
+  await withBusyKey('prune:images', async () => {
+    try {
+      const out = await actionExec(imagePruneCmd())
+      const reclaimed = parseReclaimed(out)
+      const n = countPrunedLines(out)
+      toast.success(reclaimed ? `已清理 ${n} 个悬空镜像，回收 ${reclaimed}` : `已清理 ${n} 个悬空镜像`)
+      await reloadImages()
+    } catch (e) { toastErr(e) }
+  })
+}
+
+async function doPruneAllImages(): Promise<void> {
+  // 作用面以 Docker 判定为准；列表计数只用于让用户预先知道大概删多少。
+  // docker ps 被截断时容器集合不全，计数会高估，此时不给数字。
+  const known = unusedCountKnown.value
+  const n = unusedImageCount.value
+  const k = danglingCount.value
+  const scope = known
+    ? `当前 ${n} 个未使用镜像${k ? `（其中 ${k} 个悬空）` : ''}。`
+    : '容器列表不完整，实际删除数由 Docker 判定。'
+  const ok = await confirm({
+    title: '清理未使用镜像',
+    message: `将删除所有未被任何容器（包括已停止容器）引用的镜像；带标签的镜像也在范围内，删除后需重新 pull，不可恢复。${scope}`,
+    confirmText: '确认清理',
+    danger: true,
+  })
+  if (!ok) return
+  await withBusyKey('prune:images-all', async () => {
+    try {
+      const out = await actionExec(imagePruneAllCmd())
+      const reclaimed = parseReclaimed(out)
+      const pruned = countPrunedLines(out)
+      toast.success(reclaimed ? `已清理 ${pruned} 个未使用镜像，回收 ${reclaimed}` : `已清理 ${pruned} 个未使用镜像`)
+      await reloadImages()
+    } catch (e) { toastErr(e) }
   })
 }
 
@@ -844,27 +1314,59 @@ function volumeUseHint(v: VolumeRow): { text: string; tone: 'ok' | 'warn' | 'mut
   return { text: `${v.linkCount} 个容器`, tone: 'ok' }
 }
 
-// inspect 弹窗开/关 + 子域加载
+// inspect 弹窗开/关 + 子域加载。快速点 A→B 时 A 的慢回包可能后到；关窗、切宿主同理，
+// 回包前必须确认「还是同一个弹窗、同一台主机」。
+let inspectSeq = 0
+
 async function openVolumeDetail(v: VolumeRow) {
+  const id = targetId.value
+  const seq = ++inspectSeq
   selectedVolume.value = v
   selectedNetwork.value = null
   volInspect.value = null
   inspectError.value = null
   inspectLoading.value = true
-  try { volInspect.value = parseVolumeInspect(await dockerExec(volumeInspectCmd(v.name))) }
-  catch (e) { inspectError.value = e as DockerError }
-  finally { inspectLoading.value = false }
+  const fresh = (): boolean =>
+    seq === inspectSeq && selectedVolume.value?.name === v.name && targetId.value === id
+  try {
+    const next = parseVolumeInspect(await dockerExec(volumeInspectCmd(v.name), id))
+    if (!fresh()) return
+    volInspect.value = next
+  } catch (e) {
+    if (!fresh()) return
+    inspectError.value = e as DockerError
+  } finally {
+    if (fresh()) inspectLoading.value = false
+  }
 }
 async function openNetworkDetail(n: NetworkRow) {
+  const id = targetId.value
+  const seq = ++inspectSeq
   selectedNetwork.value = n
   selectedVolume.value = null
   netInspect.value = null
   inspectError.value = null
   inspectLoading.value = true
-  try { netInspect.value = parseNetworkInspect(await dockerExec(networkInspectCmd(n.name))) }
-  catch (e) { inspectError.value = e as DockerError }
-  finally { inspectLoading.value = false }
+  const fresh = (): boolean =>
+    seq === inspectSeq && selectedNetwork.value?.id === n.id && targetId.value === id
+  try {
+    const next = parseNetworkInspect(await dockerExec(networkInspectCmd(n.name), id))
+    if (!fresh()) return
+    netInspect.value = next
+  } catch (e) {
+    if (!fresh()) return
+    inspectError.value = e as DockerError
+  } finally {
+    if (fresh()) inspectLoading.value = false
+  }
 }
+
+// 用量来源优先级：inspect 的 UsageData（新版才给）→ 列表富集的 system df；都缺则「—」
+const volumeUsageInfo = computed(() =>
+  selectedVolume.value
+    ? volumeUsageSummary(selectedVolume.value, volInspect.value)
+    : { refCount: undefined, size: undefined },
+)
 
 async function doRemoveVolume(v: VolumeRow) {
   const ok = await confirm({
@@ -901,10 +1403,7 @@ async function doRemoveNetwork(n: NetworkRow) {
   })
 }
 
-// prune 行名回收：docker 逐行打名称，末尾附 Total reclaimed space；取非命名行不算入个数
-function countPrunedLines(out: string): number {
-  return out.split('\n').map(s => s.trim()).filter(s => s && !/total reclaimed space/i.test(s)).length
-}
+// prune 行名回收已收敛到 docker-core.countPrunedLines（表头与回收空间行不算个数）
 function parseReclaimed(out: string): string | null {
   const m = out.match(/Total reclaimed space:\s*(\S+)/i)
   return m ? m[1] : null
@@ -980,17 +1479,17 @@ async function doExec(c: ContainerRow) {
   })
 }
 
-// 目标主机变化：清空重取（不同主机容器集合不同）
+// 目标主机变化：清空重取（不同主机容器集合不同）。epoch 先递增，作废所有在途回包。
 watch(targetId, () => {
+  targetEpoch++
+  showPull.value = false
+  stopPullClock()
   selected.value = null
   selectedVolume.value = null
   selectedNetwork.value = null
-  logs.value = []
-  setFollow(false)
   void loadAll()
 }, { immediate: true })
-// 任一详情弹窗打开时挂 Esc；三个选中均为 null 时卸监。容器开日志，卷/网络开已在 click 里拉取。
-// 同时 watch 选中项 → 确保重选同一行时不重复拉 inspect（inspect 已在 openVolumeDetail / openNetworkDetail 里取过）
+// 任一详情弹窗打开时挂 Esc；三个选中均为 null 时卸监。容器详情的日志/轮询在子组件内自理。
 function onDetailKey(e: KeyboardEvent) {
   if (e.key !== 'Escape') return
   if (selected.value) selected.value = null
@@ -998,13 +1497,13 @@ function onDetailKey(e: KeyboardEvent) {
   else if (selectedNetwork.value) selectedNetwork.value = null
 }
 watch([selected, selectedVolume, selectedNetwork], ([c, v, n]) => {
-  if (c) { document.addEventListener('keydown', onDetailKey); setFollow(false); void loadLogs() }
-  else if (v || n) { document.addEventListener('keydown', onDetailKey) }
-  else { document.removeEventListener('keydown', onDetailKey); setFollow(false) }
+  if (c || v || n) document.addEventListener('keydown', onDetailKey)
+  else document.removeEventListener('keydown', onDetailKey)
 })
 
 onUnmounted(() => {
-  if (followTimer) clearInterval(followTimer)
+  stopPullClock()
+  stopTransferClock()
   document.removeEventListener('keydown', onDetailKey)
 })
 </script>
@@ -1068,7 +1567,7 @@ onUnmounted(() => {
 }
 .search input { background: transparent; border: none; color: var(--text-primary); font-size: 12px; flex: 1; }
 .search input::placeholder { color: var(--text-tertiary); }
-.tb-right { margin-left: auto; }
+.tb-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 
 /* 正文：左列表 + 右详情 */
 .body { flex: 1; display: flex; min-height: 0; }
@@ -1103,6 +1602,8 @@ onUnmounted(() => {
 .st-dot.running { background: var(--status-success-text); }
 .st-dot.exited { background: var(--status-error-text); }
 .st-dot.stopped { background: var(--text-tertiary); }
+/* healthcheck 失败优先于 running 绿：容器还在跑，但已经在报错 */
+.st-dot.unhealthy { background: var(--status-error-text); }
 .c-id { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .c-image { min-width: 0; display: flex; align-items: center; gap: 6px; }
 .c-image .repo { font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1114,6 +1615,7 @@ onUnmounted(() => {
 .c-state.running { color: var(--status-success-text); }
 .c-state.exited { color: var(--status-error-text); }
 .c-state.stopped { color: var(--text-tertiary); }
+.c-state.unhealthy { color: var(--status-error-text); }
 .c-ports { font-size: 10px; color: var(--accent-cyan); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .c-ports.none { color: var(--text-tertiary); }
 .c-cmd { font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1134,6 +1636,7 @@ onUnmounted(() => {
 .icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 .icon-btn.start:hover { color: var(--status-success-text); }
 .icon-btn.stop:hover { color: var(--status-warn-text); }
+.icon-btn.act-save:hover { color: var(--accent-primary); }
 .icon-btn:disabled { opacity: .4; cursor: default; }
 .icon-btn:disabled:hover { background: transparent; color: var(--text-secondary); }
 .icon-btn.start:disabled:hover { color: var(--text-secondary); }
@@ -1148,18 +1651,7 @@ onUnmounted(() => {
 /* 异常优先：非0退出行左侧警示色带（选中时让位于 accent 选中条，不叠加）；用随主题的 status token */
 .crow.abnormal:not(.selected) { box-shadow: inset 3px 0 0 var(--status-error-text); }
 
-/* 镜像/卷/网络表：fixed 布局 + colgroup 比例列宽，随容器宽度自适应不横向溢出 */
-.ptable { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12px; }
-.ptable th {
-  text-align: left; padding: 8px 16px; color: var(--text-tertiary); font-size: 10px; letter-spacing: .8px;
-  text-transform: uppercase; border-bottom: 1px solid var(--border-subtle); font-weight: 400;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  /* 表头粘顶：外层 .list 纵向滚动时表头常驻（border-collapse 下底边会随滚动消失，用 inset 阴影补线） */
-  position: sticky; top: 0; z-index: 1; background: var(--bg-base);
-  box-shadow: inset 0 -1px 0 var(--border-subtle);
-}
-.ptable td { padding: 10px 16px; border-bottom: 1px solid var(--divider-primary); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
-.ptable td.muted { color: var(--text-secondary); }
+/* 镜像/卷/网络表：fixed 布局 + colgroup 比例列宽（基础样式在 docker-modal.css，弹窗内共用） */
 
 /* 卷/网络行可点击：整行 hover + 选中态。表格布局下 td 的 inset shadow 会沿列区断裂，选中条放在首单元格的左边框 */
 .ptable.clickable tbody tr { cursor: pointer; transition: background var(--transition-fast); }
@@ -1173,77 +1665,6 @@ onUnmounted(() => {
 .use-hint.muted { color: var(--text-tertiary); }
 /* 标签列：mono 风格，ellipsis + 原生 title 提示完整列表 */
 .label-hint { color: var(--text-secondary); font-size: 11px; }
-
-/* 容器详情弹窗（居中大幅面，日志吃满纵向空间；Teleport 到 body） */
-.dt-overlay {
-  position: fixed; inset: 0; z-index: 2000; display: flex; align-items: center; justify-content: center;
-  background: rgba(0, 0, 0, .6); backdrop-filter: blur(2px);
-}
-.dt-dialog {
-  width: min(820px, 100vw - 48px); height: min(78vh, 100vh - 96px);
-  display: flex; flex-direction: column; overflow: hidden;
-  background: var(--bg-base); border: 1px solid var(--border-default); border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
-}
-.dp-head { padding: 12px 18px; border-bottom: 1px solid var(--divider-primary); display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.dp-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
-.badge { font-size: 10px; padding: 1px 7px; border-radius: 10px; color: var(--text-tertiary); background: var(--bg-input); border: 1px solid var(--border-subtle); }
-.badge.running { color: var(--status-success-text); background: color-mix(in srgb, var(--status-success-text) 10%, transparent); border-color: color-mix(in srgb, var(--status-success-text) 25%, transparent); }
-.badge.exited { color: var(--status-error-text); background: color-mix(in srgb, var(--status-error-text) 10%, transparent); border-color: color-mix(in srgb, var(--status-error-text) 25%, transparent); }
-/* 卷弹窗头部三元徽章：在用=success，未使用=warn（与列表 tone 对齐） */
-.badge.ok { color: var(--status-success-text); background: color-mix(in srgb, var(--status-success-text) 10%, transparent); border-color: color-mix(in srgb, var(--status-success-text) 25%, transparent); }
-.badge.warn { color: var(--status-warn-text); background: color-mix(in srgb, var(--status-warn-text) 10%, transparent); border-color: color-mix(in srgb, var(--status-warn-text) 25%, transparent); }
-/* 网络特性 flag：internal/attachable/ingress/ipv6 小胶囊 */
-.flag {
-  display: inline-block; margin: 0 4px 2px 0; padding: 1px 6px;
-  font-family: var(--font-mono); font-size: 10px; color: var(--accent-indigo);
-  background: color-mix(in srgb, var(--accent-indigo) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent-indigo) 22%, transparent);
-  border-radius: var(--radius-sm);
-}
-/* 卷/网络详情弹窗：高度自适应（日志固定弹性高的容器弹窗不适合元数据展示），内部纵向滚动 */
-.dt-dialog-auto { height: auto; max-height: min(78vh, 100vh - 96px); }
-.dp-body-auto { overflow-y: auto; }
-.dp-close { margin-left: auto; }
-.dp-body { flex: 1; min-height: 0; padding: 16px 18px; display: flex; flex-direction: column; gap: 16px; }
-/* 日志区弹性填充剩余高度（dp-body 不再整体滚动，日志内部自滚） */
-.logs-section { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.dp-body h4 {
-  font-size: 11px; color: var(--text-tertiary); letter-spacing: .8px; text-transform: uppercase; font-weight: 400;
-  margin-bottom: 8px; display: flex; align-items: center; gap: 6px;
-}
-.logs-sub { color: var(--accent-primary); text-transform: none; letter-spacing: 0; font-size: 10px; font-weight: 400; }
-.follow-btn {
-  margin-left: auto; display: inline-flex; align-items: center; gap: 4px;
-  height: 20px; padding: 0 8px; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
-  background: transparent; color: var(--text-secondary); font-size: 11px; text-transform: none; letter-spacing: 0;
-  cursor: pointer; transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
-}
-.follow-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
-.follow-btn.on { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent); }
-.kv { display: grid; grid-template-columns: 68px 1fr; gap: 5px 10px; font-size: 12px; align-items: baseline; }
-.kv .k { color: var(--text-tertiary); text-align: left; }
-.kv .v { color: var(--text-primary); font-family: var(--font-mono); word-break: break-all; text-align: left; }
-/* 标签/驱动选项 kv 行：key 很长（com.docker.compose.*），加宽左列 */
-.kv-wide { grid-template-columns: minmax(140px, 220px) 1fr; }
-/* 详情弹窗内嵌小表（IPAM/连接容器）：去除粘顶、缩小 padding，与主表风格一致但不吸顶 */
-.ptable.sub { margin-top: 4px; }
-.ptable.sub th { position: static; padding: 6px 10px; box-shadow: inset 0 -1px 0 var(--border-subtle); }
-.ptable.sub td { padding: 6px 10px; }
-.list-empty.sub { padding: 12px 8px; font-size: 11px; }
-.logs {
-  background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
-  font-size: 11px; line-height: 1.6; padding: 10px; flex: 1; min-height: 120px; overflow-y: auto; color: var(--text-secondary);
-}
-.logs .lrow { white-space: pre-wrap; word-break: break-all; }
-.logs .lrow.err { color: var(--status-error-text); }
-.logs .lrow.warn { color: var(--status-warn-text); }
-.logs-hint { color: var(--text-tertiary); font-style: italic; }
-.logs-err {
-  background: var(--bg-input); border: 1px solid color-mix(in srgb, var(--status-error-text) 30%, transparent);
-  border-radius: var(--radius-md); padding: 10px; flex: 1; min-height: 120px; overflow-y: auto;
-  font-size: 11px; color: var(--status-error-text); line-height: 1.6; word-break: break-word;
-}
 
 /* 取数错误带：docker 未装 / 无权限 / 会话异常，集中一处如实上浮（对齐仪表盘错误态） */
 .err-band {
@@ -1277,6 +1698,9 @@ onUnmounted(() => {
 .statusbar .mono { color: var(--text-secondary); }
 .statusbar .ok { color: var(--status-success-text); }
 .statusbar .bad { color: var(--status-error-text); }
+.statusbar .sb-warn { color: var(--status-warn-text); }
+/* 悬空/未使用计数：可回收的量，用 warn 色与上方 danger-ghost 清理按钮呼应 */
+.statusbar .warn { color: var(--status-warn-text); }
 .sb-right { margin-left: auto; }
 
 /* 空态 */
@@ -1307,6 +1731,31 @@ onUnmounted(() => {
   font-size: 18px; line-height: 1; cursor: pointer; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center;
 }
 .dk-close:hover { color: var(--text-primary); background: var(--bg-hover); }
+.dk-close:disabled { opacity: .5; cursor: default; background: transparent; color: var(--text-tertiary); }
+
+/* 拉取镜像：引用输入 + 校验/错误提示 + 底部操作；层下载耗时长，等宽计时给出进度感 */
+.pull-body { display: flex; flex-direction: column; gap: 8px; padding: 16px 18px 18px; overflow-y: auto; }
+.pull-label { font-size: 12px; color: var(--text-secondary); }
+.pull-input {
+  width: 100%; padding: 8px 10px; font-size: 12px; box-sizing: border-box;
+  background: var(--bg-primary); color: var(--text-primary);
+  border: 1px solid var(--border-default); border-radius: var(--radius-md);
+}
+.pull-input:focus { outline: none; border-color: var(--accent-primary); }
+.pull-input:disabled { opacity: .6; }
+.pull-invalid { font-size: 11px; color: var(--status-warn-text); }
+.pull-err {
+  padding: 8px 10px; font-size: 12px; line-height: 1.5; color: var(--text-primary);
+  background: color-mix(in srgb, var(--status-error-text) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--status-error-text) 28%, transparent);
+  border-radius: var(--radius-md);
+}
+.pull-hint { margin-top: 4px; color: var(--text-secondary); }
+.pull-foot { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.pull-elapsed { font-size: 11px; color: var(--text-tertiary); }
+.pull-spacer { flex: 1; }
+.pull-spin { animation: dk-spin .8s linear infinite; }
+
 .dk-list { overflow-y: auto; padding: 8px; }
 .dk-empty { padding: 28px 18px; text-align: center; color: var(--text-tertiary); font-size: 13px; }
 .dk-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--radius-md); cursor: pointer; color: var(--accent-cyan); transition: background var(--transition-fast); }

@@ -246,6 +246,15 @@ export function useChatPersistence(options: {
     currentConvId.value = id
   }
 
+  /**
+   * 进入空白任务：只把当前指针挪开，不建条目也不落盘。
+   * 会话要等首条消息发出后由 `_sendAgentMessageInner` 的懒建路径创建 ——
+   * 提前建一条空会话会在历史列表里留下一行永远没内容的记录。
+   */
+  function beginNewTask() {
+    currentConvId.value = null
+  }
+
   async function deleteConversation(id: string) {
     const conv = conversations.value.find((c) => c.id === id)
     // 后端删不掉就保留本地条目并原样返回：本地先删会把服务端会话变成再也删不到的
@@ -304,6 +313,7 @@ export function useChatPersistence(options: {
     setSelectedModel,
     createConversation,
     switchConversation,
+    beginNewTask,
     deleteConversation,
     ensureBackendConversation,
     syncBackendConversations,

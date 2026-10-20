@@ -121,11 +121,21 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useSSHStore, type TerminalSession } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useSettingsStore } from '@/stores/settings'
+import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
 import { agentApi, toFriendlyMessage, type SafetyClassifyResult } from '@/api/client'
 import {
   diffResults, resultsConsistent, decideBulkDispatch, type BulkResult,
 } from '@/composables/bulkCommandDiff'
+import {
+  AUDIT_ACTION_BULK,
+  auditEnvironmentFor,
+  auditOutcomeForDispatchError,
+  auditResultForExit,
+  buildRemoteAuditRecord,
+  writeRemoteAudit,
+  type RemoteAuditConclusion,
+} from '@/composables/remoteAudit'
 
 /** 统一关闭入口：执行中关闭需确认——sshExec 不随关窗取消，且重开弹窗即"失忆"，
  *  可对同一批节点无感知地重复并发下发同一命令 */
@@ -155,6 +165,7 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
 
 const sshStore = useSSHStore()
 const sshAiStore = useSshAiStore()
+const toast = useToastStore()
 
 /** 当前活动远程会话（批量下发的可选目标） */
 const remoteSessions = computed(() => sshStore.sessions.filter(s => s.type === 'remote'))
@@ -280,35 +291,58 @@ async function run() {
   showDiff.value = false
 
   const api = window.electronAPI
+  // 审计任务与命令下发并行排队：每条结果先入列（进度/结果立即可见），
+  // 审计写失败只聚合提示一次，绝不回滚或阻塞已经下发的命令。
+  const auditTasks: Promise<boolean>[] = []
   await Promise.all(
     targets.map(async (s) => {
       const label = hostOf(s)
-      const start = Date.now()
-      let r: BulkResult
+      const environment = auditEnvironmentFor(s, sshStore.connections)
+      const started = Date.now()
+      const queueAudit = (conclusion: RemoteAuditConclusion, result: string) => {
+        auditTasks.push(writeRemoteAudit(buildRemoteAuditRecord({
+          action: AUDIT_ACTION_BULK,
+          conclusion,
+          targetId: label,
+          environment,
+          command: cmd,
+          result,
+        })))
+      }
       try {
         if (!api) throw new Error('Electron API 不可用')
         const res = await api.sshExec(s.id, cmd, timeoutSec.value)
+        const durationMs = Date.now() - started
         const out = res.stdout + (res.stderr ? (res.stdout ? '\n' : '') + res.stderr : '')
-        r = {
+        // 增量写入：进度条 / 已完成计数实时推进
+        results.value.push({
           label,
           lines: out.replace(/\r/g, '').split('\n'),
           exitCode: res.exitCode,
-          durationMs: Date.now() - start,
-        }
+          durationMs,
+        })
+        // 回包即「已下发」；非零退出码也是 executed（审计结论不是成败统计）
+        queueAudit('executed', auditResultForExit(res.exitCode, durationMs))
       } catch (e: unknown) {
-        r = {
+        const durationMs = Date.now() - started
+        const message = toFriendlyMessage(e, '执行失败')
+        results.value.push({
           label,
           lines: [],
           exitCode: null,
-          durationMs: Date.now() - start,
-          error: toFriendlyMessage(e, '执行失败'),
-        }
+          durationMs,
+          error: message,
+        })
+        const outcome = auditOutcomeForDispatchError(e, message, timeoutSec.value)
+        queueAudit(outcome.conclusion, outcome.result)
       }
-      // 增量写入：进度条 / 已完成计数实时推进
-      results.value.push(r)
     }),
   )
   running.value = false
+  const audited = await Promise.all(auditTasks)
+  if (audited.includes(false)) {
+    toast.warning('审计记录写入失败：本次批量下发未完整进入审计链')
+  }
 }
 
 /** 重新执行（同一命令、同一目标集） */

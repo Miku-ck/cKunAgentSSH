@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest'
 import MessageItemSource from './MessageItem.vue?raw'
 import SideChatPanelSource from './SideChatPanel.vue?raw'
 import chatTypesSource from '../../types/chat.ts?raw'
+import displayMessagesSource from '../../utils/display-messages.ts?raw'
 
 // 本地消息接口：interface XxxMessage / DisplayMsg / ChatMessage 一律算手抄。
 const LOCAL_MESSAGE_INTERFACE = /^[ \t]*(?:export[ \t]+)?interface[ \t]+\w*(?:Message|Msg)\b/m
@@ -31,7 +32,10 @@ describe('消息形态只有一个定义来源（S9-22）', () => {
   it('两个消费点的 prop 声明都落在规范类型上', () => {
     expect(MessageItemSource).toContain('message: BaseMessage')
     expect(SideChatPanelSource).toContain('messages: BaseMessage[]')
-    expect(SideChatPanelSource).toContain('isLiveAgentRun(msg: BaseMessage, idx: number)')
+    // live 判定已收归 utils/display-messages：两处都 import 同一份，
+    // 不再各自声明一个签名相同的本地函数（那正是第二套口径的入口）
+    expect(displayMessagesSource).toMatch(/messages: readonly BaseMessage\[\],\s*idx: number,\s*running: boolean,\s*\): boolean/)
+    expect(SideChatPanelSource).toMatch(/import\s*\{[^}]*\bisLiveAgentRun\b[^}]*\}\s*from\s*'@\/utils\/display-messages'/)
   })
 
   it('规范定义覆盖渲染路径真正读的那几个键', () => {

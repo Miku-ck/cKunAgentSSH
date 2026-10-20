@@ -13,10 +13,8 @@ import rawGlobal from './global.css?raw'
 import rawSshView from '../views/ssh/SshView.vue?raw'
 import rawQuickCommandBar from '../components/ssh/QuickCommandBar.vue?raw'
 import rawTitleBar from '../layouts/TitleBar.vue?raw'
-import rawRunView from '../components/agent/RunView.vue?raw'
-import rawHomeCard from '../components/home/HomeCommandCard.vue?raw'
-import rawHomeTitle from '../components/home/HomeTargetTitle.vue?raw'
-import rawHomeQueue from '../components/home/HomeApprovalQueue.vue?raw'
+import rawAgentTraceInline from '../components/agent/AgentTraceInline.vue?raw'
+import rawHomeComposer from '../components/home/HomeComposer.vue?raw'
 import rawRunModes from '../utils/run-modes?raw'
 import rawApprovalCard from './approval-card.css?raw'
 import rawSettingsGroups from '../components/settings/panels/settings-groups.css?raw'
@@ -37,10 +35,8 @@ const globalCss = strip(rawGlobal)
 const sshView = strip(rawSshView)
 const quickCommandBar = strip(rawQuickCommandBar)
 const titleBar = strip(rawTitleBar)
-const runView = strip(rawRunView)
-const homeCard = strip(rawHomeCard)
-const homeTitle = strip(rawHomeTitle)
-const homeQueue = strip(rawHomeQueue)
+const agentTraceInline = strip(rawAgentTraceInline)
+const homeComposer = strip(rawHomeComposer)
 const runModes = strip(rawRunModes)
 
 /** 共享样式表（不是某个组件内联的 <style> 块）：它们就是令牌层的直接消费方，
@@ -119,7 +115,7 @@ const ALL_SOURCES = Object.values(SOURCE_FILES).join('\n')
 const ORPHAN_TOKENS_ALLOWLIST: string[] = []
 
 /** 上色的结构画布：纸纹必须落在这里，而不是 body（见 structural-canvas 用例）。
-    RunView 不在列 —— 它 2026-09-30 起是首页里的一块，纸从首页透上来，自己不画底。 */
+    首页里的消息流与内联过程不在列 —— 它们长在首页这块浮层里，纸从首页透上来。 */
 const STRUCTURAL_CANVASES: Record<string, string> = {
   '.ssh-view / .term-tabs': sshView,
   '.titlebar': titleBar,
@@ -373,8 +369,8 @@ describe('atelier（手记）主题的令牌覆盖', () => {
   })
 
   it('纸纹落在上色的结构画布上，不是 body', () => {
-    // body 的纸纹会被 .ssh-view{background:var(--bg-base)} 整片盖住（首页画布是
-    // 透明的 .home-pane，它背后正是 .ssh-view）。所以令牌必须由**真正上色的那一层**
+    // body 的纸纹会被 .ssh-view{background:var(--bg-base)} 整片盖住（首页任务台是
+    // 透明的，它背后正是 .ssh-view）。所以令牌必须由**真正上色的那一层**
     // 消费，否则 = 永远看不见的空开关。
     for (const [name, src] of Object.entries(STRUCTURAL_CANVASES)) {
       expect(src, `${name} 仍在直接画 --bg-base，纸纹到不了它`).not.toMatch(/background:\s*var\(--bg-base\)/)
@@ -382,14 +378,14 @@ describe('atelier（手记）主题的令牌覆盖', () => {
     }
     // 终端内容区必须仍是 --bg-terminal：ANSI 主题固定暗色，米纸上开终端前景不可读
     expect(sshView).toMatch(/background:\s*var\(--bg-terminal\)/)
-    // RunView 反过来：它是首页里的一块，自己不再画一层画布底（纸从首页透上来）
-    expect(runView).not.toMatch(/background:\s*var\(--canvas-bg/)
+    // 内联过程反过来：它长在首页消息流里，自己不能再画一层画布底（纸从首页透上来）
+    expect(agentTraceInline).not.toMatch(/background:\s*var\(--canvas-bg/)
   })
 
   it('稿纸横线随 textarea 内部滚动（app 封顶 4 行，预览稿不封顶）', () => {
     // 背景默认 background-attachment: scroll = 钉在元素上。文字滚、线不滚 → 线与字
     // 错开，正是组件注释里声明要避免的那个失败。预览稿 grow() 无上限所以碰不到。
-    expect(homeCard).toMatch(/background-attachment:\s*local/)
+    expect(homeComposer).toMatch(/background-attachment:\s*local/)
   })
 
   it('UA 的灰色立体按钮 chrome 在 global.css 就被断掉', () => {
@@ -401,76 +397,74 @@ describe('atelier（手记）主题的令牌覆盖', () => {
     expect(globalCss).toMatch(/button\s*\{[^}]*background:\s*transparent/)
   })
 
-  it('标题那枚目标词与整句同字族同尺寸同间距，只留虚线作区别', () => {
-    // 它先前是 --accent-primary 上色 + 同色虚线，后又独立成等宽 17px/500，左右还各
-    // 塞了 5px margin 与 6px padding —— 一句问话里贴了一张标签。现在字族/字号/字重/
-    // 字色全继承，额外空隙清零，区别只剩下面那道虚线（参考稿也不留空隙）。
-    const btn = ruleBlock(homeTitle, '.htt-btn')
-    expect(btn).toMatch(/font-family:\s*inherit/)
-    expect(btn).toMatch(/font-size:\s*inherit/)
-    expect(btn).toMatch(/color:\s*inherit/)
-    expect(btn).not.toMatch(/padding:/)
-    expect(ruleBlock(homeTitle, '.htt-pick')).not.toMatch(/margin:/)
-    // 整句压到 --text-tertiary（用户判定：这行问句还要再灰一档，不是一块招牌），
-    // 于是虚线必须往上挪到 --text-secondary —— 那枚词的全部可点线索就是这道线
-    // （字族/字号/字重/字色都继承整句，见上面三条 inherit 断言）。两者同色 = 线白画，
-    // 所以这里钉的是**相对关系**，不只是两个绝对值：以后谁再挪一档，必须一起挪。
-    const lineToken = /border-bottom:\s*1px dashed var\((--[\w-]+)\)/.exec(btn)?.[1]
-    const sentenceToken = /color:\s*var\((--[\w-]+)\)/.exec(ruleBlock(homeTitle, '.htt'))?.[1]
-    expect(lineToken).toBe('--text-secondary')
-    expect(sentenceToken).toBe('--text-tertiary')
-    expect(lineToken).not.toBe(sentenceToken)
-    // 当初给它画的是记号笔色块（--wash-mark）。改成虚线后那个令牌一个读取方都不剩，
-    // 必须整条摘掉：只写不读的令牌 = 失效设置项（variables.css 头部维护约定）。
-    expect(css).not.toContain('--wash-mark')
-  })
-
   it('审批图标按档位换记号，chip 的底是主题墨而不是固定深色档', () => {
     // 三档共用一张盾时，切到「自动审批」界面上什么都没变 —— 图标必须跟着档位走。
     // 记号表已上收到 run-modes（首页卡与侧栏审批钮共用一份，改一处不漏另一处），
     // 按 PermissionModeKey 穷举（漏一档 = 编译错误），消费方必须真的读这张表而非自写图标。
     expect(runModes).toMatch(/PERM_MARKS: Record<PermissionModeKey,\s*string \| null>/)
-    expect(homeCard).toMatch(/PERM_MARKS\[permMode\.value\]/)
-    expect(homeCard).toMatch(/<path v-if="permMark" :d="permMark" \/>/)
+    expect(homeComposer).toMatch(/PERM_MARKS\[permMode\.value\]/)
+    expect(homeComposer).toMatch(/<path v-if="permMark" :d="permMark" \/>/)
     // chip 先前用 --bg-input（一个固定深色档），在浅一档的卡面上就是块更黑的补丁。
     // 现在压的是主题自己的墨：卡面是什么，它跟着是什么。
-    const chip = ruleBlock(homeCard, '.hcc-chip')
+    const chip = ruleBlock(homeComposer, '.hcc-chip')
     expect(chip).toMatch(/background:\s*color-mix\(in srgb,\s*var\(--text-primary\)/)
     expect(chip).not.toMatch(/background:\s*var\(--bg-input\)/)
     expect(chip).not.toMatch(/border:\s*1px solid/)
   })
 
-  it('底栏菜单朝下开：向上溢出在滚动画布里是拿不回来的', () => {
-    // 实测（.home-pane{overflow-y:auto}）：菜单顶到 y=21、画布顶到 y=66 → 上面
-    // 45px 被裁，且负方向没有滚动区，滚不动也点不到。朝下溢出至少还在滚动范围内。
-    // 同屏的 .htt-menu 一直就是朝下开的，这条把两者钉在同一方向。
-    expect(ruleBlock(homeCard, '.hcc-menu')).toMatch(/top:\s*calc\(100% \+ 6px\)/)
-    expect(ruleBlock(homeCard, '.hcc-menu')).not.toMatch(/bottom:\s*calc\(100%/)
-    expect(ruleBlock(homeTitle, '.htt-menu')).toMatch(/top:\s*calc\(100% \+ 6px\)/)
+  it('底栏菜单朝上开：Composer 在滚动区之外，朝下会被窗口底边裁掉', () => {
+    // Composer 固定在任务台底部，下方就是窗口边；它不在 .home-scroll 里，
+    // 朝上展开不会被任何滚动容器裁切。
+    expect(ruleBlock(homeComposer, '.hcc-menu')).toMatch(/bottom:\s*calc\(100% \+ 6px\)/)
+    expect(ruleBlock(homeComposer, '.hcc-menu')).not.toMatch(/top:\s*calc\(100%/)
   })
 
   it('首页的控件不画自己的皮：底栏三枚与两个下拉都没有边框', () => {
     // .hcc-btn 先前是 background:var(--bg-base) + 1px 边框，而 --bg-base 比它坐在
     // 上面的卡面 --bg-elevated 还暗一档 → 卡上像挖了三个洞。现在透明底无边框，
     // 皮由 global.css 的 button reset 提供，卡面（含手记卡脚那道次级纸面）自然透上来。
-    expect(ruleBlock(homeCard, '.hcc-btn')).not.toMatch(/border:\s*1px/)
-    expect(ruleBlock(homeCard, '.hcc-btn')).not.toMatch(/background:\s*var\(--bg-base\)/)
+    expect(ruleBlock(homeComposer, '.hcc-btn')).not.toMatch(/border:\s*1px/)
+    expect(ruleBlock(homeComposer, '.hcc-btn')).not.toMatch(/background:\s*var\(--bg-base\)/)
     // 下拉同理：抬起来靠 shadow，不靠边框
-    expect(ruleBlock(homeCard, '.hcc-menu')).not.toMatch(/border:\s*1px solid/)
-    expect(ruleBlock(homeTitle, '.htt-menu')).not.toMatch(/border:\s*1px solid/)
+    expect(ruleBlock(homeComposer, '.hcc-menu')).not.toMatch(/border:\s*1px solid/)
   })
 
-  it('逐条放行只有一个决策位：卡在内联，首页窄条不得再批', () => {
-    // C1 把过程区搬进首页之后，队列与内联卡同屏。同一条待决请求画两遍就是两把锁：
-    // 两处都能点批准，而两张卡的能力不一样（内联四档含 session，队列三档）。
-    // 裁决见 spec 2026-09-29-home-command-panel C2 —— 决策归卡，队列只报数、
-    // 批量（作用于「这一批」，与逐条不是同一件事）与追溯。
-    expect(runView).toMatch(/import ApprovalCard from '\.\/ApprovalCard\.vue'/)
-    expect(runView).toMatch(/<ApprovalCard\b/)
-    // 队列里出现 approve/deny 的逐条调用 = 第二个决策位回来了
-    expect(homeQueue).not.toMatch(/\bapprove\(/)
-    expect(homeQueue).not.toMatch(/\bdeny\(/)
-    expect(homeQueue).toMatch(/settleAll/)
-    expect(homeQueue).not.toMatch(/haq-card/)
+  it('逐条放行只有一个决策位：卡只在内联过程里，不再有第二条队列', () => {
+    // 同一条待决请求画两遍就是两把锁，而两张卡的能力可能不一样。旧的首页审批队列
+    // 已删除，逐条决策归 ApprovalCard，批量（作用于「这一批」）只是快捷结算。
+    expect(agentTraceInline).toMatch(/import ApprovalCard from '\.\/ApprovalCard\.vue'/)
+    expect(agentTraceInline).toMatch(/<ApprovalCard\b/)
+    expect(agentTraceInline).toMatch(/settleAll/)
+    // 内联过程里出现 approve/deny 的逐条调用 = 绕过 useApprovalActions 的第二条通路
+    expect(agentTraceInline).not.toMatch(/\bapprove\(/)
+    expect(agentTraceInline).not.toMatch(/\bdeny\(/)
+  })
+})
+
+describe('完整主题按手记标准重调（森林/蓝屏/薄荷/蜜蜂/珊瑚）', () => {
+  // 重调前这些主题只覆盖 16 枚结构令牌，status/card/danger/tint/accent 全落在
+  // 深色默认上 —— 彩底叠默认色相正是"换层皮"的观感来源。下面的断言把
+  // "一个完整主题"的覆盖集合与质感层钉住；浅色的令牌表就是基准。
+  const FULL_THEMES = ['forest', 'blue-screen', 'mint', 'bee', 'coral']
+
+  it.each(FULL_THEMES)('%s：浅色主题覆盖的令牌一个都不能少', (theme) => {
+    const tokens = tokensOf(blockOf(theme))
+    const missing = tokensOf(blockOf('light')).filter(t => !tokens.includes(t))
+    expect(missing).toEqual([])
+  })
+
+  it.each(FULL_THEMES)('%s：--bg-* 与同名 --bg-*-solid 同值', (theme) => {
+    const block = blockOf(theme)
+    for (const base of ['--bg-elevated', '--bg-input']) {
+      expect(valueOf(block, `${base}-solid`), `${base}-solid 要与 ${base} 同值`)
+        .toBe(valueOf(block, base))
+    }
+  })
+
+  it.each(FULL_THEMES)('%s：质感层自持（画布光 + 主题调投影）', (theme) => {
+    // 只换颜色的主题永远换不出性格：每个完整主题都有自己的画布光与投影色。
+    const block = blockOf(theme)
+    expect(valueOf(block, '--canvas-bg')).toContain('radial-gradient')
+    expect(valueOf(block, '--shadow-lg')).not.toBe(rootValueOf('--shadow-lg'))
   })
 })

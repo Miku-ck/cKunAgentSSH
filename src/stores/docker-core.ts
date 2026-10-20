@@ -16,23 +16,82 @@ import { extractSSHError } from '../ssh-error-types'
 // ── 数据类型 ──
 
 export type CState = 'running' | 'exited' | 'stopped'
+export type HealthState = 'healthy' | 'unhealthy' | 'starting'
 
 export interface ContainerRow {
   id: string
   name: string
   repo: string
   tag: string
+  /** docker ps 的 IMAGE 原始串：判断「镜像是否被容器引用」时按它做跨形态匹配 */
+  imageRef: string
   state: CState
+  /** docker ps 的 Status 里带的健康标记；无 healthcheck / 无标记时缺省 */
+  health?: HealthState
   stateText: string
   ports: string
   cmd: string
   created: string
 }
+
+/** 容器 inspect 的结构化投影：详情弹窗只消费这一层，不直接摸原始 JSON */
+export interface ContainerInspect {
+  id: string
+  name: string
+  image: string
+  imageId: string
+  imageDigest?: string
+  created: string
+  platform: string
+  state: {
+    status: string
+    running: boolean
+    paused: boolean
+    restarting: boolean
+    exitCode: number
+    oomKilled: boolean
+    startedAt: string
+    finishedAt: string
+    health?: HealthState
+    failingStreak?: number
+    lastHealth?: { exitCode: number; output: string; end: string }
+  }
+  restartCount: number
+  restartPolicy: string
+  entrypoint: string[]
+  cmd: string[]
+  workingDir: string
+  user: string
+  env: { key: string; value: string }[]
+  labels: Record<string, string>
+  healthcheck?: {
+    test: string
+    interval?: string
+    timeout?: string
+    startPeriod?: string
+    retries: number
+  }
+  ports: { container: string; host: string }[]
+  networks: { name: string; ip: string; gateway: string; mac: string }[]
+  mounts: { type: string; name: string; source: string; destination: string; rw: boolean }[]
+  resources: { memory?: string; cpus?: string; pidsLimit?: number }
+  compose?: { project: string; service: string; configFiles: string }
+}
+
+/** docker stats --no-stream 的原始显示串，解析层不重新格式化 */
+export interface ContainerStats {
+  cpuPerc: string
+  memUsage: string
+  memPerc: string
+  netIO: string
+  blockIO: string
+  pids: string
+}
 export interface ImageRow { id: string; repo: string; tag: string; size: string; created: string }
 /**
- * 卷行：Size/LinkCount 仅新版 docker 加 --verbose 才输出，而老版本（<23）
- * 根本不识别该 flag（unknown flag 直接失败），故列表命令不带 --verbose，
- * 对应字段常缺失，为可选；labels 来自 `json .Labels`，同样可能缺失。
+ * 卷行：Size/LinkCount 不在列表接口里（docker volume ls 没有 --verbose；
+ * API 的 UsageData 只随 GET /system/df 返回），故列表命令不取，由
+ * VOLUME_USAGE_CMD 异步富集；labels 来自 `{{json .}}` 的逗号拼接串。
  */
 export interface VolumeRow {
   driver: string
@@ -41,6 +100,8 @@ export interface VolumeRow {
   linkCount?: number
   labels?: Record<string, string>
 }
+/** system df -v 富集出的卷用量；两个字段都可能单独缺失 */
+export interface VolumeUsage { size?: string; linkCount?: number }
 /**
  * 网络行：`.ID .Driver .Name .Scope` 是 docker network ls 的原生四列；
  * labels 为增强列（Docker 17.06+ 支持 json 函数）。
@@ -94,12 +155,15 @@ export const PS_CMD =
   `docker ps -a --format '{{printf "%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s" .ID .Image .Command .RunningFor .Status .Ports .Names}}'`
 export const IMAGES_CMD =
   `docker images --format '{{printf "%s\\t%s\\t%s\\t%s\\t%s" .ID .Repository .Tag .Size .CreatedSince}}'`
-// 卷：不带 --verbose——老版本（<23）docker volume ls 无该 flag，参数解析阶段就报
-// unknown flag，整条命令失败。采用 `{{json .}}` 逐行 dump volumeContext，
-// 客户端按存在字段取值；Size/LinkCount 缺失时列表显示「—」，
-// 完整用量从详情弹窗的 `docker volume inspect`（Usage 字段）获取。
+// 卷：采用 `{{json .}}` 逐行 dump volumeContext。docker volume ls 没有 --verbose，
+// 列表本身不含用量（UsageData 仅 GET /system/df 返回），Size/Links 缺失时显示「—」，
+// 由下方的 VOLUME_USAGE_CMD 异步富集。
 export const VOLUMES_CMD =
   `docker volume ls --format '{{json .}}'`
+// 用量富集：只有在 -v 的自定义格式里才能拿到 .Volumes 的 UsageData；
+// --format 在旧版 docker 上可能不存在，失败就保持「—」，不影响主列表。
+export const VOLUME_USAGE_CMD =
+  `docker system df -v --format '{{range .Volumes}}{{printf "%s\\t%s\\t%s" .Name .Links .Size}}{{"\\n"}}{{end}}'`
 // 网络：同策略，json dump 避免 .Labels 在老版本不存在时模板失败
 export const NETWORKS_CMD =
   `docker network ls --format '{{json .}}'`
@@ -117,7 +181,9 @@ export const startCmd = (name: string): string => `docker start ${sq(name)}`
 export const stopCmd = (name: string): string => `docker stop ${sq(name)}`
 export const restartCmd = (name: string): string => `docker restart ${sq(name)}`
 export const rmCmd = (name: string): string => `docker rm -f ${sq(name)}`
-export const rmiCmd = (ref: string, force = true): string => `docker rmi${force ? ' -f' : ''} ${sq(ref)}`
+// 默认不强制：确认框承诺「有容器（含已停止）正在使用时会失败」，带上 -f 会强删
+// 并让引用它的容器变成悬空引用 —— 与用户确认的语义相反。
+export const rmiCmd = (ref: string, force = false): string => `docker rmi${force ? ' -f' : ''} ${sq(ref)}`
 export const execCmd = (name: string): string => `docker exec -it ${sq(name)} sh`
 export const volumeRmCmd = (name: string): string => `docker volume rm ${sq(name)}`
 export const networkRmCmd = (name: string): string => `docker network rm ${sq(name)}`
@@ -127,6 +193,124 @@ export const networkPruneCmd = (): string => `docker network prune -f`
 // inspect：一次拿一个对象的完整元数据，用于详情弹窗；docker 返回数组，取首元素
 export const volumeInspectCmd = (name: string): string => `docker volume inspect ${sq(name)}`
 export const networkInspectCmd = (name: string): string => `docker network inspect ${sq(name)}`
+export const containerInspectCmd = (name: string): string => `docker container inspect ${sq(name)}`
+// --no-stream：取一次快照而不是持续刷屏；{{json .}} 的键为 CPUPerc/MemUsage/... 原始显示串
+export const containerStatsCmd = (name: string): string =>
+  `docker stats --no-stream --format '{{json .}}' ${sq(name)}`
+// --quiet：非 TTY 下不吐进度条，只留结果/错误，避免 1MB 截断；耗时由调用方放长预算
+export const pullCmd = (ref: string): string => `docker pull --quiet ${sq(ref)}`
+// 不带 -a：只清 dangling（无标签层），不动任何带标签镜像
+export const imagePruneCmd = (): string => `docker image prune -f`
+// -a：连同带标签但未被任何容器（含已停止）引用的镜像一起清；破坏面更大，
+// 调用方必须把「带标签镜像也在范围内」写进确认框
+export const imagePruneAllCmd = (): string => `docker image prune -a -f`
+
+// ── 镜像导出 / 加载（纯远端执行）──
+// tar 只落在远端主机上：docker save 的 stdout 是二进制流，走不了 sshExec 的文本通道
+// （1MB 截断 + UTF-8 解码），所以必须落盘；加载侧对称地读盘。
+// 两端都不经过本地，所以不需要传输链路，也没有本地副本。
+//
+// 导出可选 gzip。既不能「先 -o 落到同名 .tar 再 gzip」（`app_v1.4.2.tar` 正是同目录
+// 里真实可能存在的旧备份，那一步会把它静默覆盖），也不能只写管道：POSIX 管道的退出码
+// 只反映最后一个命令，docker save 中途死掉时 gzip 照样退出 0，交出一份看起来完好、
+// 实际截断的备份 —— 备份工具最不该有的失败模式。
+//
+// 所以走「同目录临时文件」：save 先落 .<名>.part，成功后 gzip 到目标，末尾用 $?
+// 把两步的真实退出码带出来。临时文件放目标目录而不是 /tmp —— 后者常是 tmpfs，
+// 多 GB 镜像会把内存吃穿。save 失败时 gzip 不跑，目标位置的旧备份原样保留。
+export function saveTempPath(path: string): string {
+  const i = path.lastIndexOf('/')
+  if (i < 0) return `.${path}.part`
+  const name = path.slice(i + 1) || 'image'
+  return `${path.slice(0, i)}/.${name}.part`
+}
+
+const gzSaveCmd = (ref: string, remotePath: string): string => {
+  const tmp = sq(saveTempPath(remotePath))
+  return `docker save -o ${tmp} ${sq(ref)} && gzip -1 -c ${tmp} > ${sq(remotePath)}; rc=$?; rm -f ${tmp}; exit $rc`
+}
+
+/**
+ * gz=false 时 docker save 原样落盘；true 时先落临时文件再 gzip，路径本身应以 .tar.gz 结尾。
+ * 压缩级别取 -1：镜像层多是二进制，-6 省不下多少体积，但在 600s 预算里明显更慢。
+ */
+export const dockerSaveCmd = (ref: string, remotePath: string, gz = false): string =>
+  gz ? gzSaveCmd(ref, remotePath) : `docker save -o ${sq(remotePath)} ${sq(ref)}`
+// 加载不看后缀：docker load 按魔数识别 gzip / bzip2 / xz，.tar.gz 直接能读
+export const dockerLoadCmd = (remotePath: string): string =>
+  `docker load -i ${sq(remotePath)}`
+
+/** 已知归档后缀：顺序从长到短，先到先删 —— 否则 .tar.gz 会被当成 .tar 只剥一层 */
+const ARCHIVE_SUFFIX_RE = /(\.tar\.gz|\.tgz|\.tar|\.gz)$/i
+
+/** 镜像引用里取文件名用的一段：去掉 namespace 前缀，只留仓库名末段 */
+function repoTail(repo: string): string {
+  return repo.split('/').pop() || repo
+}
+
+/** 把任意串清成可做文件名的字符集（Docker 标签允许 + 和 @，文件系统不欢迎） */
+const fileSafe = (s: string): string => s.replace(/[^A-Za-z0-9._-]/g, '_')
+
+/**
+ * 导出时的默认文件名：仓库末段 + 标签，如 `app_v3.8.2.tar` / `app_v3.8.2.tar.gz`。
+ * 悬空镜像（repo 或 tag 为 `<none>`）用短 ID —— 与表格里显示的那串保持一致，
+ * 用户看到的和存下来的对得上。
+ */
+export function suggestTarName(repo: string, tag: string, id = '', gz = false): string {
+  const suffix = gz ? '.tar.gz' : '.tar'
+  if (!repo || repo === '<none>' || !tag || tag === '<none>') {
+    return `${fileSafe(id || repoTail(repo) || 'image')}${suffix}`
+  }
+  return `${fileSafe(repoTail(repo))}_${fileSafe(tag)}${suffix}`
+}
+
+/**
+ * 导出文件名校验：返回中文原因，合法返回 null。
+ * 只校验主体 —— 后缀由格式开关说了算，ensureTarSuffix 会把 .tar / .tar.gz / .tgz
+ * 统一归一到选中的那一种，所以用户敲什么后缀都不会落成「.gz.tar」这种四不像。
+ */
+export function validateSaveName(name: string): string | null {
+  const n = String(name || '').trim().replace(ARCHIVE_SUFFIX_RE, '')
+  if (!n || /^\.+$/.test(n)) return '文件名不能为空'
+  if (n.length > 200) return '文件名过长'
+  if (/[\/\\]/.test(n)) return '文件名不能包含 /'
+  if (n.includes('..')) return '文件名不能包含 ..'
+  if (n.startsWith('-')) return '文件名不能以 - 开头'
+  if (/[\x00-\x1f\x7f]/.test(n)) return '文件名不能包含控制字符'
+  return null
+}
+
+/** 把名字归一到选中的归档格式；空串原样返回（不造出 .tar 这种隐形文件名） */
+export function ensureTarSuffix(name: string, gz = false): string {
+  const n = String(name || '').trim()
+  if (!n) return n
+  // 先削尾点再剥后缀：`backup.` 直接拼会造出 `backup..tar`，而 validateSaveName
+  // 明令禁止 `..` —— 校验说合法、预览里却出现一个它自己会拒的名字
+  const body = n.replace(/\.+$/, '').replace(ARCHIVE_SUFFIX_RE, '')
+  return body ? `${body}${gz ? '.tar.gz' : '.tar'}` : n
+}
+
+/**
+ * 远端目录校验：必须是绝对路径。
+ * `docker save -o relative.tar` 会落在 sshd 的默认工作目录（通常是家目录），
+ * 用户以为存在 /tmp 里，回头找不到文件。
+ */
+export function validateRemoteDir(dir: string): string | null {
+  const d = String(dir || '').trim()
+  if (!d) return '目录不能为空'
+  if (!d.startsWith('/')) return '必须是绝对路径（以 / 开头）'
+  if (/[\x00-\x1f\x7f]/.test(d)) return '目录不能包含控制字符'
+  return null
+}
+
+/** 目录 + 文件名拼绝对路径：尾斜杠不重复，根目录不多加一道 */
+export function joinRemotePath(dir: string, name: string): string {
+  const d = String(dir || '').trim()
+  const n = String(name || '').trim()
+  const base = d ? d.replace(/\/+$/, '') || '/' : '/'
+  if (!n) return base
+  return base === '/' ? `/${n}` : `${base}/${n}`
+}
 
 // ── 解析 ──
 
@@ -147,9 +331,26 @@ function rows(raw: string, minFields: number): string[][] {
  */
 export function stateFromStatus(status: string): CState {
   const s = status.trim()
+  // docker ps 对暂停容器输出 "Up About an hour (Paused)"：必须先于 Up 判定，
+  // 否则会落到 running（绿色），状态计数与异常置顶一并失真。
+  if (/\(paused\)/i.test(s) || /^paused\b/i.test(s)) return 'stopped'
   if (/^up\b/i.test(s)) return 'running'
-  if (/^exited \(0\)/i.test(s) || /paused/i.test(s)) return 'stopped'
+  if (/^exited \(0\)/i.test(s)) return 'stopped'
   return 'exited'
+}
+
+/**
+ * docker ps 的 Status 里 healthcheck 以括号后缀出现：
+ * "Up 2 hours (healthy)" / "Up 2 hours (unhealthy)" / "Up 3s (health: starting)"。
+ * 它不影响 running 状态本身，但 unhealthy 必须能被上层看见并计为异常。
+ */
+export function healthFromStatus(status: string): HealthState | undefined {
+  const m = status.match(/\((healthy|unhealthy|health:\s*starting)\)/i)
+  if (!m) return undefined
+  const v = m[1].toLowerCase()
+  if (v === 'healthy') return 'healthy'
+  if (v === 'unhealthy') return 'unhealthy'
+  return 'starting'
 }
 
 /**
@@ -167,7 +368,9 @@ export function parsePs(raw: string): ContainerRow[] {
     const { repo, tag } = splitImage(f[1])
     return {
       id: f[0], repo, tag, name: f[6] || '',
-      state: stateFromStatus(f[4]), stateText: f[4],
+      // 保留原串：repo/tag 拆分丢掉了 ID / digest 形态，引用匹配需要它
+      imageRef: f[1] || '',
+      state: stateFromStatus(f[4]), health: healthFromStatus(f[4]), stateText: f[4],
       ports: f[5] || '', cmd: f[2] || '', created: f[3] || '',
     }
   })
@@ -206,6 +409,39 @@ export function imageLabel(im: ImageRow): string {
 /** 镜像行的过滤串：展示句柄 + 原始 repo/tag 都算命中（回落短 ID 后仍能按仓库名搜到） */
 export function imageHaystack(im: ImageRow): string {
   return `${imageLabel(im)} ${im.repo}:${im.tag}`.toLowerCase()
+}
+
+/**
+ * 容器的 IMAGE 串是否指向该镜像。docker ps 的 IMAGE 列随创建方式变形：
+ * `repo:tag`、latest 的裸 `repo`、短/完整 ID，以及按摘要创建时的 `repo@sha256:…`。
+ * 拿不准时按「在用」处理 —— 多算引用只会少删，不会把在用的镜像误判成可删。
+ */
+export function imageRefMatches(im: ImageRow, ref: string): boolean {
+  const r = String(ref ?? '').trim().toLowerCase()
+  if (!r) return false
+  const id = im.id.toLowerCase()
+  // ID 形态统一剥掉算法前缀再比前缀：短 ID、`sha256:<64>`、裸 64 位 hex 都能命中
+  const bare = r.startsWith('sha256:') ? r.slice(7) : r
+  if (id.length >= 12 && /^[0-9a-f]{12,}$/.test(bare) && bare.startsWith(id)) return true
+  // 悬空镜像没有仓库名，只剩 ID 可认
+  if (im.repo === '<none>') return false
+  const repo = im.repo.toLowerCase()
+  // 按摘要创建/拉取：容器记 `repo@sha256:…`，列表里同一镜像的 tag 为 <none>
+  if (r.startsWith(repo + '@')) return true
+  if (im.tag === '<none>') return false
+  const tag = im.tag.toLowerCase()
+  if (r === `${repo}:${tag}`) return true
+  // Docker 对 latest 的显示会省略 `:latest`
+  return tag === 'latest' && r === repo
+}
+
+/** 引用该镜像的容器数（按容器 ID 去重）；容器列表不完整时由调用方降级为「—」 */
+export function imageUsageCount(im: ImageRow, containers: ContainerRow[]): number {
+  const seen = new Set<string>()
+  for (const c of containers) {
+    if (imageRefMatches(im, c.imageRef)) seen.add(c.id || c.name)
+  }
+  return seen.size
 }
 
 /**
@@ -251,13 +487,30 @@ export function parseLabels(s: string | undefined | null): Record<string, string
     } catch { /* fall through */ }
   }
   const m = t.match(/^map\[(.*)\]$/)
-  if (!m) return {}
-  const out: Record<string, string> = {}
-  for (const pair of m[1].split(' ')) {
-    const i = pair.indexOf(':')
-    if (i > 0) out[pair.slice(0, i)] = pair.slice(i + 1)
+  if (m) {
+    const out: Record<string, string> = {}
+    for (const pair of m[1].split(' ')) {
+      const i = pair.indexOf(':')
+      if (i > 0) out[pair.slice(0, i)] = pair.slice(i + 1)
+    }
+    return out
   }
-  return out
+  // Docker formatter 把 Labels 拼成 "k=v,k2=v2"（无 map/json 包装）；
+  // 只在「逗号后紧跟下一个 key=」处切，容忍值内部含逗号。
+  if (!t.startsWith('{') && t.includes('=')) {
+    const out: Record<string, string> = {}
+    for (const pair of t.split(/,(?=[^,=]+=)/)) {
+      const i = pair.indexOf('=')
+      if (i > 0) out[pair.slice(0, i)] = pair.slice(i + 1)
+    }
+    return out
+  }
+  return {}
+}
+
+/** JSON 行的 Labels 可能是 map（inspect）或逗号串（list formatter），两种都接 */
+function jsonLabels(v: unknown): Record<string, string> {
+  return typeof v === 'string' ? parseLabels(v) : asStrMap(v)
 }
 
 /**
@@ -286,10 +539,17 @@ export function parseVolumes(raw: string): VolumeRow[] {
         driver: String(o.Driver || ''),
         name: String(o.Name || ''),
       }
+      // 真实列表输出里 Size/Links 是字符串（无 UsageData 时为 "N/A"）；
+      // 数字/数字串都归一，人读大小直通，N/A 视为缺失。
       const sz = formatBytesCompact(o.Size)
-      if (sz) r.size = sz
-      if (typeof o.LinkCount === 'number') r.linkCount = o.LinkCount
-      const lb = asStrMap(o.Labels)
+      if (sz && sz !== 'N/A') r.size = sz
+      const links = o.Links ?? o.LinkCount
+      if (typeof links === 'number' && Number.isInteger(links) && links >= 0) {
+        r.linkCount = links
+      } else if (typeof links === 'string' && /^\d+$/.test(links.trim())) {
+        r.linkCount = Number(links.trim())
+      }
+      const lb = jsonLabels(o.Labels)
       if (Object.keys(lb).length) r.labels = lb
       return r
     })
@@ -305,6 +565,51 @@ export function parseVolumes(raw: string): VolumeRow[] {
   })
 }
 
+/**
+ * `docker system df -v` 自定义格式的卷明细：Name \t Links \t Size。
+ * 该格式在旧版 docker 上可能不支持；调用方按尽力而为处理，失败保持缺失。
+ */
+export function parseVolumeUsage(raw: string): Map<string, VolumeUsage> {
+  const out = new Map<string, VolumeUsage>()
+  for (const f of rows(raw, 3)) {
+    const name = f[0].trim()
+    if (!name) continue
+    const u: VolumeUsage = {}
+    const links = f[1].trim()
+    if (/^\d+$/.test(links)) u.linkCount = Number(links)
+    const size = f[2].trim()
+    if (size && size !== 'N/A') u.size = size
+    if (u.size !== undefined || u.linkCount !== undefined) out.set(name, u)
+  }
+  return out
+}
+
+/** 按卷名把用量并进列表行；未命中的行保持原对象（避免无谓重渲染） */
+export function mergeVolumeUsage(
+  list: VolumeRow[], usage: Map<string, VolumeUsage>,
+): VolumeRow[] {
+  if (!usage.size) return list
+  return list.map(v => {
+    const u = usage.get(v.name)
+    return u ? { ...v, ...u } : v
+  })
+}
+
+/**
+ * 详情弹窗的用量口径：inspect 的 UsageData 优先，缺失时回落到列表富集值。
+ * 标准 volume inspect 不返回 UsageData，所以多数情况下实际走回落。
+ */
+export function volumeUsageSummary(
+  row: VolumeRow,
+  inspect?: Pick<VolumeInspect, 'usage'> | null,
+): { refCount?: number; size?: string } {
+  const u = inspect?.usage
+  return {
+    refCount: u?.refCount ?? row.linkCount,
+    size: u?.size !== undefined ? formatBytesCompact(u.size) : row.size,
+  }
+}
+
 export function parseNetworks(raw: string): NetworkRow[] {
   const json = jsonlRows(raw)
   if (json.length) {
@@ -315,7 +620,7 @@ export function parseNetworks(raw: string): NetworkRow[] {
         name: String(o.Name || ''),
         scope: String(o.Scope || ''),
       }
-      const lb = asStrMap(o.Labels)
+      const lb = jsonLabels(o.Labels)
       if (Object.keys(lb).length) r.labels = lb
       return r
     })
@@ -331,6 +636,23 @@ export function parseNetworks(raw: string): NetworkRow[] {
 }
 
 /**
+ * prune 输出 = 可选表头（Deleted Volumes:/Deleted Networks:）+ 每行一个名称
+ * + 卷才有的 Total reclaimed space。只数名称行，表头与汇总行都不算。
+ */
+export function countPrunedLines(out: string): number {
+  return out
+    .split('\n')
+    .map(s => s.trim())
+    .filter(s => s && !/^deleted (volumes|networks|images):$/i.test(s) && !/^total reclaimed space:/i.test(s))
+    .length
+}
+
+/** Docker 预置且拒绝删除的三张网络；自定义网络不能与它们重名，故按名称判定即可 */
+export function isBuiltinNetwork(name: string): boolean {
+  return name === 'bridge' || name === 'host' || name === 'none'
+}
+
+/**
  * docker volume/network inspect 输出为 JSON 数组；空数组或解析失败返回 null（上层据此显示「无详情」）。
  * 保持宽容：字段缺失时回落默认值，不让 UI 崩溃。
  */
@@ -339,7 +661,9 @@ export function parseVolumeInspect(raw: string): VolumeInspect | null {
   try { arr = JSON.parse(raw) } catch { return null }
   const v = (Array.isArray(arr) ? arr[0] : arr) as Record<string, unknown> | undefined
   if (!v || typeof v !== 'object') return null
-  const usage = v.Usage as Record<string, unknown> | undefined
+  // 标准 inspect 不含 UsageData（它只随 GET /system/df 返回）；字段名仍是 UsageData，
+  // 兼容 daemon 明确返回该字段时的解析。
+  const usage = v.UsageData as Record<string, unknown> | undefined
   return {
     name: String(v.Name || ''),
     driver: String(v.Driver || ''),
@@ -392,6 +716,185 @@ export function parseNetworkInspect(raw: string): NetworkInspect | null {
   }
 }
 
+/** inspect 的纳秒时长 → 人读；0/缺失表示未设置，不要显示成 0s */
+export function formatNsDuration(ns: unknown): string | undefined {
+  if (typeof ns !== 'number' || !Number.isFinite(ns) || ns <= 0) return undefined
+  if (ns >= 60e9) {
+    const m = Math.floor(ns / 60e9)
+    const s = Math.round((ns % 60e9) / 1e9)
+    return s ? `${m}m${s}s` : `${m}m`
+  }
+  if (ns >= 1e9) return `${Math.round(ns / 1e9)}s`
+  return `${Math.round(ns / 1e6)}ms`
+}
+
+function asRec(v: unknown): Record<string, unknown> {
+  return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {}
+}
+function asStr(v: unknown): string {
+  return typeof v === 'string' ? v : ''
+}
+function asStrArr(v: unknown): string[] {
+  return Array.isArray(v) ? v.map(x => String(x)) : []
+}
+function asNum(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) ? v : undefined
+}
+/** Docker 用 0001-01-01 表示「从未发生」（未启动/未结束），展示层不应把它当时间 */
+function inspectTime(v: unknown): string {
+  const s = asStr(v)
+  return s && !s.startsWith('0001-01-01') ? s : ''
+}
+
+/**
+ * 容器 inspect → 详情投影。字段全部宽容回落：老版本/不同驱动的 inspect 形状有差异，
+ * 缺项只留空，不让 UI 崩。
+ */
+export function parseContainerInspect(raw: string): ContainerInspect | null {
+  let arr: unknown
+  try { arr = JSON.parse(raw) } catch { return null }
+  const v = (Array.isArray(arr) ? arr[0] : arr) as Record<string, unknown> | undefined
+  if (!v || typeof v !== 'object') return null
+
+  const cfg = asRec(v.Config)
+  const hc = asRec(v.HostConfig)
+  const st = asRec(v.State)
+  const ns = asRec(v.NetworkSettings)
+  const labels = asStrMap(cfg.Labels)
+
+  const healthRec = asRec(st.Health)
+  const healthRaw = asStr(healthRec.Status).toLowerCase()
+  const health: HealthState | undefined =
+    healthRaw === 'healthy' || healthRaw === 'unhealthy' || healthRaw === 'starting'
+      ? healthRaw : undefined
+  const healthLog = Array.isArray(healthRec.Log) ? healthRec.Log : []
+  const last = healthLog.length ? asRec(healthLog[healthLog.length - 1]) : null
+
+  const rp = asRec(hc.RestartPolicy)
+  const rpName = asStr(rp.Name)
+  const rpMax = asNum(rp.MaximumRetryCount) ?? 0
+  const restartPolicy = rpName === 'on-failure' && rpMax > 0 ? `${rpName}:${rpMax}` : rpName
+
+  const env = asStrArr(cfg.Env).map(s => {
+    const i = s.indexOf('=')
+    return i < 0 ? { key: s, value: '' } : { key: s.slice(0, i), value: s.slice(i + 1) }
+  })
+
+  const hcCfg = asRec(cfg.Healthcheck)
+  const hcTest = asStrArr(hcCfg.Test)
+  const healthcheck = hcTest.length ? {
+    test: hcTest.join(' '),
+    interval: formatNsDuration(hcCfg.Interval),
+    timeout: formatNsDuration(hcCfg.Timeout),
+    startPeriod: formatNsDuration(hcCfg.StartPeriod),
+    retries: asNum(hcCfg.Retries) ?? 0,
+  } : undefined
+
+  // 实际绑定优先（含运行时端口映射）；没有时回落 HostConfig 的声明
+  const bound = asRec(ns.Ports)
+  const portsRaw = Object.keys(bound).length ? bound : asRec(hc.PortBindings)
+  const ports: ContainerInspect['ports'] = []
+  for (const [container, val] of Object.entries(portsRaw)) {
+    if (!Array.isArray(val) || !val.length) { ports.push({ container, host: '' }); continue }
+    for (const b of val) {
+      const br = asRec(b)
+      const ip = asStr(br.HostIp)
+      const port = asStr(br.HostPort)
+      ports.push({ container, host: port ? (ip ? `${ip}:${port}` : port) : '' })
+    }
+  }
+
+  const networks = Object.entries(asRec(ns.Networks)).map(([name, val]) => {
+    const n = asRec(val)
+    return { name, ip: asStr(n.IPAddress), gateway: asStr(n.Gateway), mac: asStr(n.MacAddress) }
+  })
+
+  const mounts = Array.isArray(v.Mounts) ? v.Mounts.map(m => {
+    const mr = asRec(m)
+    return {
+      type: asStr(mr.Type), name: asStr(mr.Name), source: asStr(mr.Source),
+      destination: asStr(mr.Destination), rw: !!mr.RW,
+    }
+  }) : []
+
+  const nano = asNum(hc.NanoCpus) ?? 0
+  const pidsLimit = asNum(hc.PidsLimit)
+  const project = labels['com.docker.compose.project']
+  const digest = Array.isArray(v.RepoDigests) ? asStr(v.RepoDigests[0]) : ''
+
+  return {
+    id: shortId(v.Id),
+    name: asStr(v.Name).replace(/^\/+/, ''),
+    image: asStr(cfg.Image),
+    imageId: shortId(v.Image),
+    imageDigest: digest || undefined,
+    created: asStr(v.Created),
+    platform: asStr(v.Platform),
+    state: {
+      status: asStr(st.Status),
+      running: !!st.Running,
+      paused: !!st.Paused,
+      restarting: !!st.Restarting,
+      exitCode: asNum(st.ExitCode) ?? 0,
+      oomKilled: !!st.OOMKilled,
+      startedAt: inspectTime(st.StartedAt),
+      finishedAt: inspectTime(st.FinishedAt),
+      health,
+      failingStreak: health ? asNum(healthRec.FailingStreak) : undefined,
+      lastHealth: last ? {
+        exitCode: asNum(last.ExitCode) ?? 0,
+        output: asStr(last.Output),
+        end: asStr(last.End),
+      } : undefined,
+    },
+    restartCount: asNum(v.RestartCount) ?? 0,
+    restartPolicy,
+    entrypoint: asStrArr(cfg.Entrypoint),
+    cmd: asStrArr(cfg.Cmd),
+    workingDir: asStr(cfg.WorkingDir),
+    user: asStr(cfg.User),
+    env,
+    labels,
+    healthcheck,
+    ports,
+    networks,
+    mounts,
+    resources: {
+      memory: formatBytesCompact(hc.Memory),
+      cpus: nano > 0 ? String(Number((nano / 1e9).toFixed(2))) : undefined,
+      pidsLimit: pidsLimit && pidsLimit > 0 ? pidsLimit : undefined,
+    },
+    compose: project ? {
+      project,
+      service: labels['com.docker.compose.service'] || '',
+      configFiles: labels['com.docker.compose.project.config_files'] || '',
+    } : undefined,
+  }
+}
+
+/** docker stats --no-stream 的一行 JSON；无输出（容器未运行）或坏行 → null */
+export function parseContainerStats(raw: string): ContainerStats | null {
+  const o = jsonlRows(raw)[0]
+  if (!o) return null
+  const s = (k: string): string => (o[k] === null || o[k] === undefined ? '' : String(o[k]))
+  return {
+    cpuPerc: s('CPUPerc'),
+    memUsage: s('MemUsage'),
+    memPerc: s('MemPerc'),
+    netIO: s('NetIO'),
+    blockIO: s('BlockIO'),
+    pids: s('PIDs'),
+  }
+}
+
+// 主进程在单次 exec 输出达到 1MB 上限后会追加这条说明（见 ssh-manager.ts）。
+// 这里只做标记识别，不发命令；列表解析对它天然无感，但要让用户知道结果不完整。
+const EXEC_TRUNCATED_NOTE = '[输出已截断，超过 1MB 上限]'
+
+export function isOutputTruncated(stdout: string, stderr = ''): boolean {
+  return stdout.includes(EXEC_TRUNCATED_NOTE) || stderr.includes(EXEC_TRUNCATED_NOTE)
+}
+
 /** 日志原文 → 行数组（去 CR、剥尾部单个空行；保留内部空行以贴合真实输出） */
 export function parseLogs(raw: string): string[] {
   const arr = raw.split('\n').map(l => l.replace(/\r$/, ''))
@@ -400,6 +903,20 @@ export function parseLogs(raw: string): string[] {
 }
 
 // ── 错误归类 ──
+
+/**
+ * exec 三态：`exitCode === null` 是「不知道」，不是失败。
+ * ssh2 只在收到 exit-status 时填这个数，精简 sshd 不回 exit-status、或命令被
+ * OOM kill 之后读数都是 null。与主进程 ssh-manager 的同名判定同一口径。
+ * 长任务（镜像 save/load）必须用它：写完文件却没回 exit-status 是真实存在的，
+ * 按失败处理会让人删掉一份好备份重导一遍。
+ */
+export type ExecOutcome = 'ok' | 'failed' | 'unknown'
+export function classifyExit(exitCode: number | null): ExecOutcome {
+  if (exitCode === 0) return 'ok'
+  if (exitCode === null) return 'unknown'
+  return 'failed'
+}
 
 /**
  * 依据 docker 命令的 stderr + 退出码归类错误。返回 null 表示无 docker 层错误。
@@ -429,6 +946,24 @@ export function dockerErrorFromResult(stderr: string, exitCode: number | null, m
       message: '无权访问 Docker：当前用户无法连接 docker.sock，或 dockerd 未运行',
       hint: '把用户加入 docker 组（usermod -aG docker $USER，重新登录生效），或以有权限的用户连接',
       retryable: false,
+    }
+  }
+  // 镜像仓库鉴权：pull 失败最常见且修法非显然（不是本机 docker.sock 权限）
+  if (/unauthorized|authentication required|denied: requested access|no basic auth credentials/i.test(e)) {
+    return {
+      code: 'DOCKER_AUTH',
+      message: '镜像仓库鉴权失败',
+      hint: '先在目标主机执行 docker login <registry>（或检查镜像是否公开），再重试拉取',
+      retryable: false,
+    }
+  }
+  // Docker Hub 匿名拉取限流：等一段时间或登录后重试
+  if (/toomanyrequests|pull rate limit/i.test(e)) {
+    return {
+      code: 'DOCKER_RATE_LIMIT',
+      message: '镜像仓库限流',
+      hint: '稍后重试；在目标主机执行 docker login 后重新拉取可提高额度',
+      retryable: true,
     }
   }
   // 目标已不存在（多因列表未刷新）

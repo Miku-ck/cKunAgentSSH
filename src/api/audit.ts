@@ -32,6 +32,30 @@ export interface AuditVerifyResult {
   // 后端不再发这个键，留着就是一条幽灵字段（S1-06 同族）。
 }
 
+/** 与 backend/agent/audit.py::LEGAL_CONCLUSIONS 逐字相等（契约见 docs/contracts/audit-conclusions.md） */
+export type AuditConclusion =
+  | 'executed' | 'failed' | 'blocked' | 'denied' | 'auto_allowed'
+  | 'approved' | 'released' | 'revoked' | 'answered' | 'skipped'
+
+/** 渲染层通道追加审计的请求体（operator/链字段由服务端生成，不在此列） */
+export interface AuditAppendInput {
+  action: string
+  conclusion: AuditConclusion
+  target_type?: string
+  target_id?: string
+  environment?: 'test' | 'prod'
+  command_raw?: string
+  result?: string
+  run_id?: string
+  iteration?: number
+}
+
+export interface AuditAppendResult {
+  ok: boolean
+  id: number
+  hash: string
+}
+
 export const auditApi = {
   /** 按条件查询审计记录 */
   query: (params: {
@@ -57,6 +81,13 @@ export const auditApi = {
   /** 全链完整性校验 */
   verify: () =>
     request<AuditVerifyResult>('/audit/verify'),
+
+  /** 渲染层人工通道追加审计（批量下发 / Docker 变更动作）；写失败抛错，由调用方降级提示 */
+  append: (input: AuditAppendInput) =>
+    request<AuditAppendResult>('/audit/append', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
 
   /** 归档式清理：全量 CSV 归档落盘后清空，写入封缄记录开新链（非裸删除） */
   clearArchived: () =>

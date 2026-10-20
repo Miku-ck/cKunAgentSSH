@@ -1,0 +1,140 @@
+/**
+ * Docker 详情弹窗的共享视觉词汇
+ *
+ * 消费者有两个：DockerView 的卷/网络详情与 DockerContainerDetail 的容器详情。
+ * 弹窗都 Teleport 到 body，且容器详情已拆成子组件 —— 留在任一组件 scoped 里，
+ * 另一个就得抄一份（改一处、另一处悄悄漂移）。与 approval-card.css 同构，
+ * 由 main.ts 引入。
+ *
+ * .badge / .kv / .logs / .flag 这类类名在 SftpPane、TunnelView、AccessView 等
+ * 组件里都有各自版本：本文件不裸写它们，统一收在 .dt-dialog 下，避免提升为
+ * 全局后串色。.dt-overlay / .dt-dialog / .ptable 全仓只此一处使用，可以裸写。
+ */
+
+/* ── 遮罩与弹窗骨架 ── */
+.dt-overlay {
+  position: fixed; inset: 0; z-index: 2000; display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, .6); backdrop-filter: blur(2px);
+}
+.dt-dialog {
+  width: min(820px, 100vw - 48px); height: min(78vh, 100vh - 96px);
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg-base); border: 1px solid var(--border-default); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+/* 卷/网络详情：元数据展示不需要固定弹性高，自适应高度 + 内部滚动 */
+.dt-dialog-auto { height: auto; max-height: min(78vh, 100vh - 96px); }
+
+.dp-head { padding: 12px 18px; border-bottom: 1px solid var(--divider-primary); display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.dt-dialog .dp-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.dp-close {
+  margin-left: auto; width: 24px; height: 24px; border: none; background: transparent; border-radius: var(--radius-sm);
+  color: var(--text-secondary); display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.dp-close svg { width: 14px; height: 14px; }
+.dp-close:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+.dp-body { flex: 1; min-height: 0; padding: 16px 18px; display: flex; flex-direction: column; gap: 16px; }
+.dp-body-auto { overflow-y: auto; }
+.dp-body h4 {
+  font-size: 11px; color: var(--text-tertiary); letter-spacing: .8px; text-transform: uppercase; font-weight: 400;
+  margin-bottom: 8px; display: flex; align-items: center; gap: 6px;
+}
+.logs-sub { color: var(--accent-primary); text-transform: none; letter-spacing: 0; font-size: 10px; font-weight: 400; }
+.logs-section { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+/* ── 徽章 ── */
+.dt-dialog .badge {
+  font-size: 10px; padding: 1px 7px; border-radius: 10px; color: var(--text-tertiary);
+  background: var(--bg-input); border: 1px solid var(--border-subtle); white-space: nowrap;
+}
+.dt-dialog .badge.running,
+.dt-dialog .badge.healthy {
+  color: var(--status-success-text);
+  background: color-mix(in srgb, var(--status-success-text) 10%, transparent);
+  border-color: color-mix(in srgb, var(--status-success-text) 25%, transparent);
+}
+.dt-dialog .badge.exited,
+.dt-dialog .badge.unhealthy {
+  color: var(--status-error-text);
+  background: color-mix(in srgb, var(--status-error-text) 10%, transparent);
+  border-color: color-mix(in srgb, var(--status-error-text) 25%, transparent);
+}
+.dt-dialog .badge.starting {
+  color: var(--status-warn-text);
+  background: color-mix(in srgb, var(--status-warn-text) 10%, transparent);
+  border-color: color-mix(in srgb, var(--status-warn-text) 25%, transparent);
+}
+.dt-dialog .badge.ok {
+  color: var(--status-success-text);
+  background: color-mix(in srgb, var(--status-success-text) 10%, transparent);
+  border-color: color-mix(in srgb, var(--status-success-text) 25%, transparent);
+}
+.dt-dialog .badge.warn {
+  color: var(--status-warn-text);
+  background: color-mix(in srgb, var(--status-warn-text) 10%, transparent);
+  border-color: color-mix(in srgb, var(--status-warn-text) 25%, transparent);
+}
+.dt-dialog .flag {
+  display: inline-block; margin: 0 4px 2px 0; padding: 1px 6px;
+  font-family: var(--font-mono); font-size: 10px; color: var(--accent-indigo);
+  background: color-mix(in srgb, var(--accent-indigo) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-indigo) 22%, transparent);
+  border-radius: var(--radius-sm);
+}
+
+/* ── 键值行 ── */
+.dt-dialog .kv { display: grid; grid-template-columns: 68px 1fr; gap: 5px 10px; font-size: 12px; align-items: baseline; }
+.dt-dialog .kv .k { color: var(--text-tertiary); text-align: left; }
+.dt-dialog .kv .v { color: var(--text-primary); font-family: var(--font-mono); word-break: break-all; text-align: left; }
+.dt-dialog .kv-wide { grid-template-columns: minmax(140px, 220px) 1fr; }
+
+/* ── 弹窗内嵌小表 ── */
+.ptable { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12px; }
+.ptable th {
+  text-align: left; padding: 8px 16px; color: var(--text-tertiary); font-size: 10px; letter-spacing: .8px;
+  text-transform: uppercase; border-bottom: 1px solid var(--border-subtle); font-weight: 400;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  position: sticky; top: 0; z-index: 1; background: var(--bg-base);
+  box-shadow: inset 0 -1px 0 var(--border-subtle);
+}
+.ptable td {
+  padding: 10px 16px; border-bottom: 1px solid var(--divider-primary); color: var(--text-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left;
+}
+.ptable td.muted { color: var(--text-secondary); }
+.ptable.sub { margin-top: 4px; }
+.ptable.sub th { position: static; padding: 6px 10px; box-shadow: inset 0 -1px 0 var(--border-subtle); }
+.ptable.sub td { padding: 6px 10px; }
+
+.dt-dialog .list-empty { padding: 24px 16px; color: var(--text-tertiary); font-size: 12px; text-align: center; }
+.dt-dialog .list-empty.sub { padding: 12px 8px; font-size: 11px; }
+.dt-dialog .load-band {
+  display: flex; align-items: center; justify-content: center; gap: 8px; flex: 1;
+  color: var(--text-tertiary); font-size: 12px;
+}
+.dt-dialog .mono { font-family: var(--font-mono); }
+
+/* ── 日志区 ── */
+.dt-dialog .follow-btn {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 4px;
+  height: 20px; padding: 0 8px; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+  background: transparent; color: var(--text-secondary); font-size: 11px; text-transform: none; letter-spacing: 0;
+  cursor: pointer; transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
+}
+.dt-dialog .follow-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+.dt-dialog .follow-btn.on { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent); }
+.dt-dialog .logs {
+  background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+  font-size: 11px; line-height: 1.6; padding: 10px; flex: 1; min-height: 120px; overflow-y: auto; color: var(--text-secondary);
+}
+.dt-dialog .logs .lrow { white-space: pre-wrap; word-break: break-all; }
+.dt-dialog .logs .lrow.err { color: var(--status-error-text); }
+.dt-dialog .logs .lrow.warn { color: var(--status-warn-text); }
+.dt-dialog .logs-hint { color: var(--text-tertiary); font-style: italic; }
+.dt-dialog .logs-err {
+  background: var(--bg-input); border: 1px solid color-mix(in srgb, var(--status-error-text) 30%, transparent);
+  border-radius: var(--radius-md); padding: 10px; flex: 1; min-height: 120px; overflow-y: auto;
+  font-size: 11px; color: var(--status-error-text); line-height: 1.6; word-break: break-word;
+}

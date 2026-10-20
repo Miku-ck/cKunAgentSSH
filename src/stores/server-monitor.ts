@@ -3,7 +3,8 @@
  *
  * 复用既有 ssh:exec IPC（exec channel，独立于终端 shell，不污染交互终端）。
  * 一条聚合命令取 CPU/内存/负载/磁盘/监听端口（5s 快轮询），进程 TOP 单独一条
- * 命令 60s 慢轮询，解析失败或会话断开时静默失败（连续失败 3 次停止轮询）。
+ * 命令 60s 慢轮询；GPU 占用进程随快轮询采回但按 60s 换表（见 GPU_PROCS_INTERVAL_MS）。
+ * 解析失败或会话断开时静默失败（连续失败 3 次停止轮询）。
  *
  * 状态放 Pinia store：Dashboard 视图切换/卸载不中断轮询；
  * 会话全部关闭时由 useSshNavigation 的 watch 停止。
@@ -22,6 +23,7 @@ import {
   describeMonitorError,
   type ServerMetrics,
   type CpuSample,
+  type GpuProcessEntry,
   type ProcessTopEntry,
   type RawStat,
 } from './server-monitor-core'
@@ -29,6 +31,10 @@ import { isRetryable } from '../ssh-error-types'
 
 const POLL_INTERVAL_MS = 5000
 const PROCS_INTERVAL_MS = 60000 // 进程 TOP 慢轮询：ps 排序开销大，不随 5s 快轮询放大
+// GPU 进程表的展示节奏：数据随 5s 快轮询回来（GPROC/GPS 段在同一条 nvidia-smi 命令里，
+// 拆不出去），但表只在 60s 边界换一次快照 —— 与「进程（CPU）」同频，免得同屏两张
+// 进程表各跳各的。注意它和 PROCS_INTERVAL_MS 是两个独立定时器，只保证频率一致、不对齐相位。
+const GPU_PROCS_INTERVAL_MS = 60000
 const HISTORY_MAX = 60       // 状态条 sparkline 保留点数（5min @ 5s）
 const FAIL_STOP_THRESHOLD = 3
 const RETRY_INTERVAL_MS = 15000 // 连续失败停止后，目标会话仍在时后台重试的间隔
@@ -37,6 +43,7 @@ const RETRY_INTERVAL_MS = 15000 // 连续失败停止后，目标会话仍在时
 interface RetainedHistory {
   current: ServerMetrics | null
   procs: ProcessTopEntry[]
+  gpuProcs: GpuProcessEntry[]
   cpu: number[]
   mem: number[]
   load: number[]
@@ -64,6 +71,9 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
   const current = ref<ServerMetrics | null>(null)
   /** 进程 TOP（60s 慢轮询独立采样，与 5s 指标解耦；失败静默保留上次列表） */
   const procs = ref<ProcessTopEntry[]>([])
+  /** GPU 占用进程（同 60s 节奏）。不挂在 current 上：current 每 5s 整体替换，
+   *  挂在里面会让视图的 computed 每 5s 重算一次，即使快照根本没变 */
+  const gpuProcs = ref<GpuProcessEntry[]>([])
   /** 历史序列（时间正序，长度 ≤ HISTORY_MAX）— 状态条 sparkline 数据源 */
   const cpuHistory = ref<number[]>([])
   const memHistory = ref<number[]>([])
@@ -87,6 +97,9 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
   let retryTimer: ReturnType<typeof setTimeout> | null = null
   /** 上一次 CPU 原始计数器（跨轮次差分算使用率） */
   let prevStat: RawStat | null = null
+  /** GPU 进程表快照所属会话 + 上次换表时刻（展示节流，非采集节流） */
+  let gpuProcsSshId = ''
+  let gpuProcsAt = 0
   /** 各会话的历史快照（切走保留、切回恢复），避免切换 tab 清空 sparkline 历史 */
   const retained: Record<string, RetainedHistory> = {}
 
@@ -95,6 +108,7 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
     retained[activeSshId] = {
       current: current.value,
       procs: procs.value,
+      gpuProcs: gpuProcs.value,
       cpu: cpuHistory.value,
       mem: memHistory.value,
       load: loadHistory.value,
@@ -111,6 +125,7 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
   function restoreFrom(saved: RetainedHistory): void {
     current.value = saved.current
     procs.value = saved.procs
+    gpuProcs.value = saved.gpuProcs
     cpuHistory.value = saved.cpu
     memHistory.value = saved.mem
     loadHistory.value = saved.load
@@ -159,8 +174,17 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
       if (!parsed) throw new Error('metrics parse failed')
       const cpu: CpuSample = computeCpuDiff(prevStat, parsed.rawStat)
       prevStat = parsed.rawStat
-      const { rawStat: _discard, ...rest } = parsed
-      current.value = { ...rest, sshId: session.id, cpu, ts: Date.now() }
+      const { rawStat: _discard, gpuProcs: freshGpuProcs, ...rest } = parsed
+      const now = Date.now()
+      // GPU 进程表：60s 边界才换（首次 / 换会话无条件换，否则新主机会看到上一台的进程）。
+      // 采集仍随 5s 快轮询回来：同一条 nvidia-smi 命令还要取利用率/显存，
+      // 拆成独立命令得复制整套 PATH 探测与老驱动降级链，回归风险大于省下的 0.2s。
+      if (gpuProcsSshId !== session.id || now - gpuProcsAt >= GPU_PROCS_INTERVAL_MS) {
+        gpuProcsSshId = session.id
+        gpuProcsAt = now
+        gpuProcs.value = freshGpuProcs
+      }
+      current.value = { ...rest, sshId: session.id, cpu, ts: now }
       annotatePortUsers(current.value.ports, procs.value)
       errorCount.value = 0
       lastError.value = null
@@ -292,6 +316,9 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
     errorCount.value = 0
     lastError.value = null
     prevStat = null
+    gpuProcsSshId = ''
+    gpuProcsAt = 0
+    gpuProcs.value = []
     if (timer) {
       clearTimeout(timer)
       timer = null
@@ -309,6 +336,7 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
   return {
     current,
     procs,
+    gpuProcs,
     cpuHistory,
     memHistory,
     loadHistory,

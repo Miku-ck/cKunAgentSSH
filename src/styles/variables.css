@@ -164,32 +164,49 @@
   --tabbar-h: 34px;              /* 与 views/ssh/SshView.vue 标签栏一致 */
 }
 
-/* ── 浅色主题 ── */
+/* ── 浅色主题 ──
+ *
+ * 2026-10-20 按手记标准重调：原稿纯白底 + 纯黑字、elevated 与 base 同色，
+ * 没有层级也没有温度（"线框稿"观感）。现在纸灰底 + 白卡分层、墨灰字，
+ * 投影带蓝灰调，画布右上左下加了一道极淡的光影。 */
 [data-theme="light"] {
-  --bg-base: #ffffff;
-  --bg-elevated: #ffffff;        /* 浮起层：纯白卡片，靠 border + shadow 分层 */
+  --bg-base: #f3f4f6;
+  --bg-elevated: #ffffff;        /* 白卡压在纸灰画布上，靠明度差 + 投影分层 */
   --bg-elevated-solid: #ffffff;
-  --bg-hover: rgba(0,0,0,0.04);
-  --bg-active: rgba(0,0,0,0.08);
-  --divider-primary: #e0e0e0;
-  --border-default: #d0d0d0;
-  --border-subtle: #e0e0e0;
-  --text-primary: #000000;
-  --text-secondary: #555555;
-  --text-tertiary: #6e6e6e; /* ≥4.5:1 对比度（白底） */
+  --bg-hover: rgba(16, 24, 40, 0.045);
+  --bg-active: rgba(16, 24, 40, 0.09);
+  --divider-primary: #e4e7eb;
+  --border-default: #ced3da;
+  --border-subtle: #e4e7eb;
+  --text-primary: #1a1d21;       /* 墨灰而非纯黑 */
+  --text-secondary: #4a5058;
+  --text-tertiary: #626a74;      /* 5.5:1（白卡）/ 5.0:1（纸灰底） */
   /* 终端 ANSI 主题固定暗色：浅色界面下必须给深底，否则前景 #e6edf3 不可读 */
   --bg-terminal: #17181c;
-  --bg-input: #ffffff;
-  --bg-input-solid: #ffffff;
-  --bg-slider: #d0d0d0;
-  --border-input: #c0c0c0;
-  --shadow-sm: 0 1px 2px rgba(0,0,0,0.08);
-  --shadow-lg: 0 8px 24px rgba(0,0,0,0.15);
+  --bg-input: #eef0f3;           /* 白卡上的"凹陷"：比卡面暗一档 */
+  --bg-input-solid: #eef0f3;
+  --bg-slider: #d3d8df;
+  --border-input: #c3c9d2;
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.07);
+  --shadow-lg: 0 8px 24px rgba(16, 24, 40, 0.12);
+  /* 画布：左上白光、右下淡影（消费方统一 background-attachment: fixed 取样） */
+  --canvas-bg:
+    radial-gradient(circle at 12% 6%, #ffffff 0%, transparent 46%),
+    radial-gradient(circle at 90% 96%, #e9ecf1 0%, transparent 50%),
+    var(--bg-base);
 
   /* 浅色主题：命令行/代码青色加深（#9cdcfe 在白底只有 1.4:1 —— 补全浮层的图标、
      审批卡代码体、SFTP 面包屑当前层与文本文件图标都读它，浅主题下等于隐形）。
      取本块已有的 --status-debug-text 同值，不另造新色；做法与下面 indigo/pink 两条一致。 */
   --accent-cyan: #0e7490;
+
+  /* 浅色主题：五枚强调色一并加深 —— 深色默认的亮紫/亮绿/亮橙/亮红/亮黄在白底
+     只有 1.3–2.6:1，等于隐形；色相保持与手记一致的"墨与矿物"取向。 */
+  --accent-purple: #7a3f8f;
+  --accent-green: #2e6b3a;
+  --accent-orange: #8a4a12;
+  --accent-red: #b3382a;
+  --accent-yellow: #7a5f14;
 
   /* 浅色主题：隧道徽标文字加深保白底对比度（#9cdcfe/c586c0/818cf8 在白底仅 1.6–2.8:1） */
   --tint-l: #0e7490;
@@ -238,104 +255,425 @@
   --danger-text: #c62828;
 }
 
-/* ── 蓝屏主题 ── */
+/* ── 蓝屏主题（深蓝） ──
+ * 与森林同一套完整度：低彩度中性 + 自持语义层 + 蓝调投影/画布光。
+ * 旧版 elevated #142d52 与边框 #1e3a5f 彩度偏高，整屏像一块蓝板。 */
 [data-theme="blue-screen"] {
-  --bg-base: #0a1628;
-  --bg-elevated: #142d52;
-  --bg-elevated-solid: #142d52;
-  --bg-hover: rgba(255,255,255,0.06);
-  --bg-active: rgba(255,255,255,0.12);
-  --divider-primary: #0f2138;
-  --border-default: #1e3a5f;
-  --border-subtle: #152d50;
-  --text-primary: #c8ddf0;
-  --text-secondary: #8aa8c8;
-  --text-tertiary: #7d9cc0;      /* ≥4.5:1（对比 --bg-elevated #142d52） */
-  --bg-terminal: #0a1628;
-  --bg-input: #0f2039;
-  --bg-input-solid: #0f2039;
-  --bg-slider: #1a3a6e;
-  --border-input: #1e3a5f;
+  --bg-base: #0b111c;
+  --bg-elevated: #161d2b;
+  --bg-elevated-solid: #161d2b;
+  --bg-hover: rgba(214, 226, 245, 0.06);
+  --bg-active: rgba(214, 226, 245, 0.12);
+  --divider-primary: #131a26;
+  --border-default: #2a3242;
+  --border-subtle: #1e2634;
+  --text-primary: #d7dee9;
+  --text-secondary: #a3aec0;
+  --text-tertiary: #8e9aac;      /* 6.4:1（对 base）/ 5.5:1（对 elevated） */
+  --bg-terminal: #080d16;
+  --bg-input: #111826;
+  --bg-input-solid: #111826;
+  --bg-slider: #283349;
+  --border-input: #36445b;
+
+  --tint-l: #7fc0e0;
+  --tint-r: #b9a6d8;
+  --tint-d: #9fb2e6;
+
+  --accent-purple: #c0a6d6;
+  --accent-green: #8fbf7d;
+  --accent-orange: #d9a06a;
+  --accent-red: #e08a78;
+  --accent-cyan: #8cc8c0;
+  --accent-yellow: #d8c67e;
+
+  --accent-indigo: #a3b0e0;
+  --accent-indigo-soft: #c0c9ee;
+  --accent-indigo-bg: rgba(163, 176, 224, 0.12);
+  --accent-indigo-hover: rgba(163, 176, 224, 0.10);
+
+  --accent-pink: #dd93b4;
+  --accent-pink-bg: rgba(221, 147, 180, 0.12);
+  --accent-pink-border: rgba(221, 147, 180, 0.30);
+
+  --status-info-border: #3c5566;
+  --status-info-text: #8fc3dd;
+  --status-success-bg: #1e2e20;
+  --status-success-border: #3d5c3d;
+  --status-success-text: #9ccc8a;
+  --status-warn-bg: #2e2817;
+  --status-warn-text: #dcc98a;
+  --status-error-bg: #331e19;
+  --status-error-text: #e69a88;
+  --status-debug-bg: #1c2a31;
+  --status-debug-text: #8fc3c8;
+  --status-tag-bg: rgba(143, 195, 221, 0.10);
+  --status-tag-border: rgba(143, 195, 221, 0.22);
+  --status-tag-text: #a9b8af;
+
+  --card-warn-border: #4a4330;
+  --card-perm-bg: #2a2214;
+  --card-perm-border: #55441f;
+  --card-perm-text: #e3c481;
+  --card-perm-btn-bg: #26371f;
+  --card-perm-btn-border: #5d8449;
+  --card-perm-btn-text: #cfe3b5;
+  --card-perm-btn-hover: #31452a;
+  --card-perm-resolved: #7fae66;
+  --danger-bg: #3a1f1a;
+  --danger-border: #673027;
+  --danger-text: #f19a8a;
+
+  --metric-cool: #6fce7e;
+  --metric-warm: #d8cf63;
+  --metric-hot: #ef7f67;
+
+  --shadow-sm: 0 1px 2px rgba(3, 7, 16, 0.45);
+  --shadow-lg: 0 8px 24px rgba(3, 7, 16, 0.55);
+
+  --canvas-bg:
+    radial-gradient(circle at 14% -6%, #16233a 0%, transparent 46%),
+    radial-gradient(circle at 92% 104%, #05090f 0%, transparent 52%),
+    var(--bg-base);
 }
 
-/* ── 森林主题（深墨绿） ── */
+/* ── 森林主题（深墨绿） ──
+ *
+ * 2026-10-20 按手记的完整度标准重调（样稿）：
+ *   1. 中性色低彩度——旧版 elevated/border 的 OKLCH 彩度 0.052，整屏"冒绿光"；
+ *      现在结构层全部 ≤0.033，绿意只留在画布光和强调色里。
+ *   2. 墨色而非纯白文字，层级用轻微明度步进（base→elevated 仅 1.16:1），
+ *      不再用一整块亮绿卡面硬拉层级。
+ *   3. 语义层全套自持：accent / status / card / danger / tint 不再继承深色默认，
+ *      保证绿底上色相不打架。
+ *   4. 质感层：绿调投影 + 左上苔光/右下荫影的画布，对应手记的纸面光斑；
+ *      字族与圆角有意不动——衬线是手记的签名，圆角一改就是另一套语言。
+ */
 [data-theme="forest"] {
-  --bg-base: #0b1a12;
-  --bg-elevated: #1b3a26;
-  --bg-elevated-solid: #1b3a26;
-  --bg-hover: rgba(255,255,255,0.05);
-  --bg-active: rgba(255,255,255,0.10);
-  --divider-primary: #13261b;
-  --border-default: #2a4a36;
-  --border-subtle: #1d3526;
-  --text-primary: #d3e8d9;
-  --text-secondary: #9db8a4;
-  --text-tertiary: #93ac9c;      /* ≥4.5:1（对比 --bg-elevated #1b3a26） */
-  --bg-terminal: #0b1a12;
-  --bg-input: #132719;
-  --bg-input-solid: #132719;
-  --bg-slider: #26402f;
-  --border-input: #2a4a36;
+  --bg-base: #0d1710;
+  --bg-elevated: #18261c;
+  --bg-elevated-solid: #18261c;
+  --bg-hover: rgba(214, 235, 220, 0.06);
+  --bg-active: rgba(214, 235, 220, 0.12);
+  --divider-primary: #122018;
+  --border-default: #2b3a30;
+  --border-subtle: #1f2d24;
+  --text-primary: #d6e4da;       /* 墨绿灰，非纯白 */
+  --text-secondary: #a3b5a8;
+  --text-tertiary: #8fa294;      /* 6.8:1（对比 --bg-base）/ 5.8:1（对比 --bg-elevated） */
+  --bg-terminal: #0a120d;
+  --bg-input: #121e16;
+  --bg-input-solid: #121e16;
+  --bg-slider: #26372b;
+  --border-input: #34473a;
+
+  /* 森林：隧道徽标（L/R/D）*/
+  --tint-l: #7fb7a6;
+  --tint-r: #b49ac4;
+  --tint-d: #93a3cf;
+
+  --accent-purple: #c0a6d6;
+  --accent-green: #8fbf7d;
+  --accent-orange: #d9a06a;
+  --accent-red: #e08a78;
+  --accent-cyan: #8cc8c0;
+  --accent-yellow: #d8c67e;
+
+  --accent-indigo: #a3b0e0;
+  --accent-indigo-soft: #c0c9ee;
+  --accent-indigo-bg: rgba(163, 176, 224, 0.12);
+  --accent-indigo-hover: rgba(163, 176, 224, 0.10);
+
+  --accent-pink: #dd93b4;
+  --accent-pink-bg: rgba(221, 147, 180, 0.12);
+  --accent-pink-border: rgba(221, 147, 180, 0.30);
+
+  --status-info-border: #3c5566;
+  --status-info-text: #8fc3dd;
+  --status-success-bg: #1e2e20;
+  --status-success-border: #3d5c3d;
+  --status-success-text: #9ccc8a;
+  --status-warn-bg: #2e2817;
+  --status-warn-text: #dcc98a;
+  --status-error-bg: #331e19;
+  --status-error-text: #e69a88;
+  --status-debug-bg: #1c2a31;
+  --status-debug-text: #8fc3c8;
+  --status-tag-bg: rgba(143, 195, 221, 0.10);
+  --status-tag-border: rgba(143, 195, 221, 0.22);
+  --status-tag-text: #a9b8af;
+
+  /* 审批卡：苔绿按钮 + 暖黄警示，压住绿底上的黄绿互染 */
+  --card-warn-border: #4a4330;
+  --card-perm-bg: #2a2214;
+  --card-perm-border: #55441f;
+  --card-perm-text: #e3c481;
+  --card-perm-btn-bg: #26371f;
+  --card-perm-btn-border: #5d8449;
+  --card-perm-btn-text: #cfe3b5;
+  --card-perm-btn-hover: #31452a;
+  --card-perm-resolved: #7fae66;
+  --danger-bg: #3a1f1a;
+  --danger-border: #673027;
+  --danger-text: #f19a8a;
+
+  /* 监控三档：绿=叶色而非荧光绿，避免与主题绿混成一片 */
+  --metric-cool: #6fce7e;
+  --metric-warm: #d8cf63;
+  --metric-hot: #ef7f67;
+
+  /* 绿调投影：黑投影压在深绿底上会发灰，带一点树荫色才沉得下去 */
+  --shadow-sm: 0 1px 2px rgba(3, 12, 7, 0.45);
+  --shadow-lg: 0 8px 24px rgba(3, 12, 7, 0.55);
+
+  /* 画布：左上苔光、右下荫影，对应手记的纸面光斑（消费方统一 fixed 取样） */
+  --canvas-bg:
+    radial-gradient(circle at 14% -6%, #1a2c20 0%, transparent 46%),
+    radial-gradient(circle at 92% 104%, #050b07 0%, transparent 52%),
+    var(--bg-base);
 }
 
-/* ── 薄荷主题（深青） ── */
+/* ── 薄荷主题（深青） ──
+ * 与森林同一套完整度：低彩度中性 + 自持语义层 + 青调投影/画布光。 */
 [data-theme="mint"] {
-  --bg-base: #0a1b1a;
-  --bg-elevated: #1a413c;
-  --bg-elevated-solid: #1a413c;
-  --bg-hover: rgba(255,255,255,0.05);
-  --bg-active: rgba(255,255,255,0.10);
-  --divider-primary: #122928;
-  --border-default: #27514e;
-  --border-subtle: #1c3a38;
-  --text-primary: #d0ece8;
-  --text-secondary: #9cc4bf;
-  --text-tertiary: #96bab5;      /* ≥4.5:1（对比 --bg-elevated #1a413c） */
-  --bg-terminal: #0a1b1a;
-  --bg-input: #122b28;
-  --bg-input-solid: #122b28;
-  --bg-slider: #24504b;
-  --border-input: #27514e;
+  --bg-base: #0a1618;
+  --bg-elevated: #15262a;
+  --bg-elevated-solid: #15262a;
+  --bg-hover: rgba(213, 235, 235, 0.06);
+  --bg-active: rgba(213, 235, 235, 0.12);
+  --divider-primary: #102023;
+  --border-default: #27393e;
+  --border-subtle: #1c2e32;
+  --text-primary: #d5e5e6;
+  --text-secondary: #a1b6b8;
+  --text-tertiary: #8ba1a3;      /* 6.7:1（对 base）/ 5.8:1（对 elevated） */
+  --bg-terminal: #071113;
+  --bg-input: #0f1e21;
+  --bg-input-solid: #0f1e21;
+  --bg-slider: #24383c;
+  --border-input: #31474c;
+
+  --tint-l: #7fd0c4;
+  --tint-r: #b9a6d8;
+  --tint-d: #9fb2e6;
+
+  --accent-purple: #c0a6d6;
+  --accent-green: #8fbf7d;
+  --accent-orange: #d9a06a;
+  --accent-red: #e08a78;
+  --accent-cyan: #8cc8c0;
+  --accent-yellow: #d8c67e;
+
+  --accent-indigo: #a3b0e0;
+  --accent-indigo-soft: #c0c9ee;
+  --accent-indigo-bg: rgba(163, 176, 224, 0.12);
+  --accent-indigo-hover: rgba(163, 176, 224, 0.10);
+
+  --accent-pink: #dd93b4;
+  --accent-pink-bg: rgba(221, 147, 180, 0.12);
+  --accent-pink-border: rgba(221, 147, 180, 0.30);
+
+  --status-info-border: #3c5566;
+  --status-info-text: #8fc3dd;
+  --status-success-bg: #1e2e20;
+  --status-success-border: #3d5c3d;
+  --status-success-text: #9ccc8a;
+  --status-warn-bg: #2e2817;
+  --status-warn-text: #dcc98a;
+  --status-error-bg: #331e19;
+  --status-error-text: #e69a88;
+  --status-debug-bg: #1c2a31;
+  --status-debug-text: #8fc3c8;
+  --status-tag-bg: rgba(143, 195, 221, 0.10);
+  --status-tag-border: rgba(143, 195, 221, 0.22);
+  --status-tag-text: #a9b8af;
+
+  --card-warn-border: #4a4330;
+  --card-perm-bg: #2a2214;
+  --card-perm-border: #55441f;
+  --card-perm-text: #e3c481;
+  --card-perm-btn-bg: #26371f;
+  --card-perm-btn-border: #5d8449;
+  --card-perm-btn-text: #cfe3b5;
+  --card-perm-btn-hover: #31452a;
+  --card-perm-resolved: #7fae66;
+  --danger-bg: #3a1f1a;
+  --danger-border: #673027;
+  --danger-text: #f19a8a;
+
+  --metric-cool: #6fce7e;
+  --metric-warm: #d8cf63;
+  --metric-hot: #ef7f67;
+
+  --shadow-sm: 0 1px 2px rgba(3, 12, 13, 0.45);
+  --shadow-lg: 0 8px 24px rgba(3, 12, 13, 0.55);
+
+  --canvas-bg:
+    radial-gradient(circle at 14% -6%, #16302f 0%, transparent 46%),
+    radial-gradient(circle at 92% 104%, #040b0c 0%, transparent 52%),
+    var(--bg-base);
 }
 
-/* ── 蜜蜂主题（深琥珀） ── */
+/* ── 蜜蜂主题（深琥珀） ──
+ * 与森林同一套完整度：低彩度暖中性 + 自持语义层 + 暖棕投影/画布光。 */
 [data-theme="bee"] {
-  --bg-base: #1a1206;
-  --bg-elevated: #3d2d12;
-  --bg-elevated-solid: #3d2d12;
-  --bg-hover: rgba(255,255,255,0.05);
-  --bg-active: rgba(255,255,255,0.10);
-  --divider-primary: #2b2010;
-  --border-default: #57411f;
-  --border-subtle: #3f2f18;
-  --text-primary: #ece0c4;
-  --text-secondary: #c2b08a;
-  --text-tertiary: #b8a47a;      /* ≥4.5:1（对比 --bg-elevated #3d2d12） */
-  --bg-terminal: #1a1206;
-  --bg-input: #281d0a;
-  --bg-input-solid: #281d0a;
-  --bg-slider: #4a3a1e;
-  --border-input: #57411f;
+  --bg-base: #17120a;
+  --bg-elevated: #282117;
+  --bg-elevated-solid: #282117;
+  --bg-hover: rgba(235, 224, 205, 0.06);
+  --bg-active: rgba(235, 224, 205, 0.12);
+  --divider-primary: #211a10;
+  --border-default: #3d3527;
+  --border-subtle: #2e271b;
+  --text-primary: #e8e0d2;
+  --text-secondary: #bdb3a2;
+  --text-tertiary: #a89d89;      /* 6.8:1（对 base）/ 5.9:1（对 elevated） */
+  --bg-terminal: #0f0b05;
+  --bg-input: #1f1910;
+  --bg-input-solid: #1f1910;
+  --bg-slider: #3a3020;
+  --border-input: #4b3f2c;
+
+  --tint-l: #7fc0d8;
+  --tint-r: #d8a6c4;
+  --tint-d: #a9b0e0;
+
+  --accent-purple: #c0a6d6;
+  --accent-green: #8fbf7d;
+  --accent-orange: #d9a06a;
+  --accent-red: #e08a78;
+  --accent-cyan: #8cc8c0;
+  --accent-yellow: #d8c67e;
+
+  --accent-indigo: #a3b0e0;
+  --accent-indigo-soft: #c0c9ee;
+  --accent-indigo-bg: rgba(163, 176, 224, 0.12);
+  --accent-indigo-hover: rgba(163, 176, 224, 0.10);
+
+  --accent-pink: #dd93b4;
+  --accent-pink-bg: rgba(221, 147, 180, 0.12);
+  --accent-pink-border: rgba(221, 147, 180, 0.30);
+
+  --status-info-border: #3c5566;
+  --status-info-text: #8fc3dd;
+  --status-success-bg: #1e2e20;
+  --status-success-border: #3d5c3d;
+  --status-success-text: #9ccc8a;
+  --status-warn-bg: #2e2817;
+  --status-warn-text: #dcc98a;
+  --status-error-bg: #331e19;
+  --status-error-text: #e69a88;
+  --status-debug-bg: #1c2a31;
+  --status-debug-text: #8fc3c8;
+  --status-tag-bg: rgba(143, 195, 221, 0.10);
+  --status-tag-border: rgba(143, 195, 221, 0.22);
+  --status-tag-text: #a9b8af;
+
+  --card-warn-border: #4a4330;
+  --card-perm-bg: #2a2214;
+  --card-perm-border: #55441f;
+  --card-perm-text: #e3c481;
+  --card-perm-btn-bg: #26371f;
+  --card-perm-btn-border: #5d8449;
+  --card-perm-btn-text: #cfe3b5;
+  --card-perm-btn-hover: #31452a;
+  --card-perm-resolved: #7fae66;
+  --danger-bg: #3a1f1a;
+  --danger-border: #673027;
+  --danger-text: #f19a8a;
+
+  --metric-cool: #6fce7e;
+  --metric-warm: #d8cf63;
+  --metric-hot: #ef7f67;
+
+  --shadow-sm: 0 1px 2px rgba(12, 8, 2, 0.50);
+  --shadow-lg: 0 8px 24px rgba(12, 8, 2, 0.60);
+
+  --canvas-bg:
+    radial-gradient(circle at 14% -6%, #2b2213 0%, transparent 46%),
+    radial-gradient(circle at 92% 104%, #0b0803 0%, transparent 52%),
+    var(--bg-base);
 }
 
-/* ── 珊瑚主题（深红珊瑚） ── */
+/* ── 珊瑚主题（深红珊瑚） ──
+ * 与森林同一套完整度：低彩度暖中性 + 自持语义层 + 红棕投影/画布光。 */
 [data-theme="coral"] {
-  --bg-base: #180d0b;
-  --bg-elevated: #3a221c;
-  --bg-elevated-solid: #3a221c;
-  --bg-hover: rgba(255,255,255,0.05);
-  --bg-active: rgba(255,255,255,0.10);
-  --divider-primary: #2a1713;
-  --border-default: #543028;
-  --border-subtle: #3d211c;
-  --text-primary: #f0dcd7;
-  --text-secondary: #c5a6a0;
-  --text-tertiary: #bfa09a;      /* ≥4.5:1（对比 --bg-elevated #3a221c） */
-  --bg-terminal: #180d0b;
-  --bg-input: #261511;
-  --bg-input-solid: #261511;
-  --bg-slider: #472a23;
-  --border-input: #543028;
+  --bg-base: #170f0e;
+  --bg-elevated: #291c1a;
+  --bg-elevated-solid: #291c1a;
+  --bg-hover: rgba(240, 220, 215, 0.06);
+  --bg-active: rgba(240, 220, 215, 0.12);
+  --divider-primary: #211514;
+  --border-default: #3e2c29;
+  --border-subtle: #2f211f;
+  --text-primary: #ecdcd8;
+  --text-secondary: #c2a9a4;
+  --text-tertiary: #ad938e;      /* 6.4:1（对 base）/ 5.5:1（对 elevated） */
+  --bg-terminal: #100908;
+  --bg-input: #201514;
+  --bg-input-solid: #201514;
+  --bg-slider: #3b2a27;
+  --border-input: #4d3733;
+
+  --tint-l: #86c9c0;
+  --tint-r: #e0a6bc;
+  --tint-d: #a9b2e6;
+
+  --accent-purple: #c0a6d6;
+  --accent-green: #8fbf7d;
+  --accent-orange: #d9a06a;
+  --accent-red: #e08a78;
+  --accent-cyan: #8cc8c0;
+  --accent-yellow: #d8c67e;
+
+  --accent-indigo: #a3b0e0;
+  --accent-indigo-soft: #c0c9ee;
+  --accent-indigo-bg: rgba(163, 176, 224, 0.12);
+  --accent-indigo-hover: rgba(163, 176, 224, 0.10);
+
+  --accent-pink: #dd93b4;
+  --accent-pink-bg: rgba(221, 147, 180, 0.12);
+  --accent-pink-border: rgba(221, 147, 180, 0.30);
+
+  --status-info-border: #3c5566;
+  --status-info-text: #8fc3dd;
+  --status-success-bg: #1e2e20;
+  --status-success-border: #3d5c3d;
+  --status-success-text: #9ccc8a;
+  --status-warn-bg: #2e2817;
+  --status-warn-text: #dcc98a;
+  --status-error-bg: #331e19;
+  --status-error-text: #e69a88;
+  --status-debug-bg: #1c2a31;
+  --status-debug-text: #8fc3c8;
+  --status-tag-bg: rgba(143, 195, 221, 0.10);
+  --status-tag-border: rgba(143, 195, 221, 0.22);
+  --status-tag-text: #a9b8af;
+
+  --card-warn-border: #4a4330;
+  --card-perm-bg: #2a2214;
+  --card-perm-border: #55441f;
+  --card-perm-text: #e3c481;
+  --card-perm-btn-bg: #26371f;
+  --card-perm-btn-border: #5d8449;
+  --card-perm-btn-text: #cfe3b5;
+  --card-perm-btn-hover: #31452a;
+  --card-perm-resolved: #7fae66;
+  --danger-bg: #3a1f1a;
+  --danger-border: #673027;
+  --danger-text: #f19a8a;
+
+  --metric-cool: #6fce7e;
+  --metric-warm: #d8cf63;
+  --metric-hot: #ef7f67;
+
+  --shadow-sm: 0 1px 2px rgba(14, 5, 4, 0.50);
+  --shadow-lg: 0 8px 24px rgba(14, 5, 4, 0.60);
+
+  --canvas-bg:
+    radial-gradient(circle at 14% -6%, #2e1d1a 0%, transparent 46%),
+    radial-gradient(circle at 92% 104%, #0c0605 0%, transparent 52%),
+    var(--bg-base);
 }
 
 /* ── 手记主题（atelier：米纸 / 墨线 / 朱砂） ──

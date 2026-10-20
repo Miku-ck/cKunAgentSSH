@@ -245,7 +245,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   }
 
   /** 换会话（切/建/删后落到另一条）时必须清掉的暂存输入。
-   *  这份状态是 store 级的 —— 首页 HomeCommandCard 与侧栏 SideChatPanel 挂同一份，
+   *  这份状态是 store 级的 —— 首页 Composer 与侧栏 SideChatPanel 挂同一份，
    *  留着就等于把上一会话挑的技能与文件发进当前会话。附件更硬一层：/chat/upload 按
    *  backendConvId 归档（见 uploadFiles 的注释），A 会话上传的文件挂在 B 会话头上既
    *  落不进 B 的目录，也不会随 B 的删除被清理。 */
@@ -365,9 +365,10 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       // 结构上满足 AgentMessage 最小接口，显式断言（与固化函数签名对齐）
       finalizeAgentMessage(conv as unknown as { messages: AgentMessage[] }, agentStore)
       notifyConversationsChanged()
-      // 固化完成即"有回复可看"：面板关着时点亮顶栏未读点，用户不必自己记得开侧栏。
-      // 面板开着不写 —— 清零只归 watch(showAiPanel) 的开动作管，两个写点不抢一个状态。
-      if (!showAiPanel.value) unreadReply.value = true
+      // 固化完成即"有回复可看"：面板关着、任务台也不在眼前时点亮顶栏未读点，
+      // 用户不必自己记得开侧栏。正看着任务台时不写 —— 回复已经显示在他眼前，
+      // 再亮一颗「有新回复」等于把看见的东西报成没看见。
+      if (!showAiPanel.value && !homeVisible.value) unreadReply.value = true
     }
   })
 
@@ -394,10 +395,13 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     if (open) unreadReply.value = false
   })
 
-  /** 打开面板（与 toggle/close 并列的第三态入口）：供 RunView「在对话中继续」
-   *  等明确的"开"动作使用，不必先读当前状态再翻转。未读点由上面的 watch 清。 */
-  function openAiPanel() {
-    showAiPanel.value = true
+  /** 任务台（首页）是否正被用户看着。由 SshView watch `homeTabActive` 同步。
+   *  与未读点配合：正看着任务台时回复已经显示在眼前，不该再亮未读。 */
+  const homeVisible = ref(false)
+
+  function setHomeVisible(visible: boolean) {
+    homeVisible.value = visible
+    if (visible) unreadReply.value = false
   }
 
   const appStore = useAppStore()
@@ -611,6 +615,25 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       console.warn('[ssh] 删除工作流工件失败:', e)
       return null
     }
+  }
+
+  /**
+   * 进入空白任务（spec 2026-10-20 故事 8/9）：
+   * - 只把当前会话指针置空，**不**提前建会话 —— 首条消息发出时才由懒建路径产生
+   *   历史条目；
+   * - 清掉属于上一轮会话的暂存输入与工作流缓存；
+   * - 保留审批档 / 模型 / 终端现场开关 —— 它们是「怎么跑」的偏好，不是哪条会话的输入；
+   * - 运行中直接拒绝：单 run 是全局状态，切走会让正在等待的审批与过程失去落点。
+   */
+  function beginNewTask(): boolean {
+    if (agentStore.isRunning) return false
+    persistence.beginNewTask()
+    sharedDraft.value = ''
+    _clearStagedInput()
+    posture.value = null
+    workflowSnapshot.value = { phase: '', spec: '', plan: '', goal: '' }
+    unreadReply.value = false
+    return true
   }
 
   async function sendMessage(content: string, options?: { skillIds?: string[]; attachments?: ChatAttachment[]; mode?: string; approval?: string }): Promise<boolean> {
@@ -848,11 +871,14 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     createConversation,
     switchConversation,
     deleteConversation,
+    beginNewTask,
     // ── SSH 特有 API ──
     showAiPanel,
     toggleAiPanel,
-    openAiPanel,
     closeAiPanel,
+    // ── 首页可见性与未读 ──
+    homeVisible,
+    setHomeVisible,
     // ── 共享输入草稿（首页指令卡 ↔ 侧栏输入框同一份）──
     sharedDraft,
     setSharedDraft,

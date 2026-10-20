@@ -55,14 +55,13 @@ export function useSshNavigation(
   /** 首页标签的点亮判定：独立页面（远程管理/SFTP/…）盖在上面时不该亮 */
   const homeTabActive = computed(() => showHome.value && activeNavPage.value === 'home')
 
-  // ─── 运行视图（2026-09-30 改：过程长在首页里，不再是第三态） ───
+  // ─── 运行过程（2026-10：过程内联在每条助手消息里，不再是独立一屏） ───
   /**
-   * 原先运行视图是第三态（首页 / 运行 / 终端）：openRunView() 把 showHome 关掉、
-   * 整屏换成 run，标签条上配一枚可关的「执行」标签。现在过程面板直接排在首页的
-   * 指令卡与待放行队列下面，所以这里**不再有 run 这一屏**：
-   * 首页在不在，就只看 showHome。
-   * 终端实例照样不能卸载 —— 首页（连同它下面的过程面板）仍是盖在 term-content
-   * 之上的浮层，"看不见"只能靠 showHome 表达。
+   * 运行视图曾短暂作为第三态（首页 / 运行 / 终端）：打开时把 showHome 关掉、整屏
+   * 换成运行过程。现在过程属于对应的助手回合，跟着消息流走，所以这里**没有 run
+   * 这一屏**：首页在不在，就只看 showHome。
+   * 终端实例照样不能卸载 —— 任务台仍是盖在 term-content 之上的浮层，
+   * "看不见"只能靠 showHome 表达。
    */
   const terminalVisible = computed(() => !showHome.value)
 

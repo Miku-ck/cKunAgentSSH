@@ -219,19 +219,20 @@ export const useAgentStore = defineStore('agent', () => {
   const hasHumanHelpRequest = computed(() => humanHelpRequests.value.length > 0)
 
   // 「运行面板有东西要显示」的唯一判定：逐项对齐 AgentRunPanel 实际渲染的区块
-  // （任务规划 / 警告 / 人工介入 / 工具授权 / 可见终端待确认命令 / 错误）。
+  // （任务规划 / 警告 / 人工介入 / 待放行提示 / 可见终端待确认命令 / 错误）。
   // 交付面板区块已删（在途交付不再进本面板），所以这里用 pendingDeliveries 而不是
   // 全量 deliveries——终态交付若还留在判定里，面板会挂着一块什么都不渲染的容器。
   // 原先这份条件是抄在宿主 SshAiPanel.vue 的 v-if 里的，而那份漏了任务规划、待确认
   // 交付与澄清向导：后端发 clarification_needed 时面板压根没挂载，向导渲染不出来，
   // 用户只看到一条 toast，运行干等到后端 TTL 超时。面板加区块而宿主忘记同步必然复发，
   // 所以条件搬回数据侧，宿主只负责无条件挂载。
+  // pendingPermissions 这一项对应侧栏顶部的「N 条待你放行 · 去任务台」：侧栏不结算，
+  // 但必须让人在这里就知道有东西在等，否则运行停住而侧栏看起来一切正常。
   const hasRunNotice = computed(() =>
     !!intentionInfo.value
     || warnings.value.length > 0
     || hasHumanHelpRequest.value
-    // 审批托盘从侧栏退役后，本面板不再渲染 permissionRequests —— 这个条件必须跟着撤：
-    // 留着它，"只有一条待放行"的时候面板会整块挂载却空无一物。
+    || pendingPermissions.value.length > 0
     || pendingDeliveries.value.length > 0
     || !!errorMessage.value
   )
@@ -371,6 +372,8 @@ export const useAgentStore = defineStore('agent', () => {
       currentState: currentState.value || 'completed',
       iterations: totalIterations.value || iteration.value + 1,
       duration: Math.round(durationMs / 100) / 10, // 秒，保留1位小数
+      // 中止与失败共用 failed 终态串；单独留一格，历史重载后才分得清两种结局。
+      aborted: aborted.value || undefined,
       // 深拷贝 toolCalls 避免引用共享
       toolCalls: toolCalls.value.map(tc => ({
         id: tc.id,
@@ -380,6 +383,7 @@ export const useAgentStore = defineStore('agent', () => {
         success: tc.success,
         timestamp: tc.timestamp,
         iteration: tc.iteration,
+        durationMs: tc.durationMs,
       })),
       reasoning: reasoning.value,
       lastRunId: lastRunId.value,

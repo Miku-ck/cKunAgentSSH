@@ -8,6 +8,7 @@
  * 刻意**不持久化** —— 与提升前一致：审批档是本次会话的意图，重启回到手动。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 
 // 测试跑在 node 环境（vitest.config.ts），补 localStorage 最小垫片
@@ -45,6 +46,7 @@ vi.mock('@/api/client', () => ({
 }))
 
 const { useSshAiStore, pickTerminalSnapshot, ATTACHMENT_CHAR_LIMIT } = await import('@/stores/ssh-ai')
+const { useAgentStore } = await import('@/stores/agent')
 
 describe('ssh-ai 审批档', () => {
   beforeEach(() => {
@@ -312,7 +314,7 @@ describe('ssh-ai 远端文件附件', () => {
 /**
  * 换会话必须带走暂存输入（技能 chip + 待发送附件）。
  *
- * 这两份是 store 级共享状态（首页 HomeCommandCard 与侧栏 SideChatPanel 挂同一份），
+ * 这两份是 store 级共享状态（首页 Composer 与侧栏 SideChatPanel 挂同一份），
  * 而 switch/create/delete 三条切会话路径原先只清 workflowSnapshot —— 同一处注释里
  * 已经写清理由（「否则界面会显示上一个会话的 Spec/Plan/Goal，而它们并没有被注入本轮
  * 上下文」），暂存的技能与附件是同一个症状的另一半：chip 还亮着，用户按发送就把上一
@@ -391,5 +393,110 @@ describe('ssh-ai 换会话带走暂存输入', () => {
 
     expect(store.selectedSkillIds).toEqual(['s1', 's2'])
     expect(store.pendingAttachments.map(f => f.filename)).toEqual(['hosts', 'passwd'])
+  })
+})
+
+/**
+ * 空白任务（spec 2026-10-20-home-agent-workbench 故事 8/9）：
+ * 「新建会话」只挪开指针并清掉属于上一轮的输入，不建历史条目、不中止 run。
+ */
+describe('ssh-ai beginNewTask', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    lsMap.clear()
+  })
+
+  it('清掉草稿/技能/附件/姿态/工作流/未读，保留审批档、模型、终端现场开关', async () => {
+    const store = useSshAiStore()
+    await store.createConversation('A')
+    store.setSharedDraft('打了一半的指令')
+    store.addSelectedSkill('s1')
+    store.addRemoteAttachment({ path: '/etc/hosts', content: 'x', source: 'root@web-1' })
+    store.setPosture('plan')
+    store.workflowSnapshot = { phase: 'plan', spec: 'S', plan: 'P', goal: 'G' }
+    store.unreadReply = true
+    store.setApprovalMode('auto')
+    store.setSelectedModel('m9')
+    store.setAttachTerminalContext(false)
+
+    expect(store.beginNewTask()).toBe(true)
+
+    expect(store.currentConvId).toBeNull()
+    expect(store.sharedDraft).toBe('')
+    expect(store.selectedSkillIds).toEqual([])
+    expect(store.pendingAttachments).toEqual([])
+    expect(store.posture).toBeNull()
+    expect(store.workflowSnapshot).toEqual({ phase: '', spec: '', plan: '', goal: '' })
+    expect(store.unreadReply).toBe(false)
+    expect(store.approvalMode).toBe('auto')
+    expect(store.selectedModelId).toBe('m9')
+    expect(store.attachTerminalContext).toBe(false)
+    // 不提前造条目：会话数仍是创建的那一条
+    expect(store.conversations).toHaveLength(1)
+  })
+
+  it('运行中拒绝：返回 false 且当前会话不变（UI 禁用之外的 store 兜底）', async () => {
+    const store = useSshAiStore()
+    const agent = useAgentStore()
+    const conv = await store.createConversation('A')
+    agent.status = 'running'
+
+    expect(store.beginNewTask()).toBe(false)
+
+    expect(store.currentConvId).toBe(conv.id)
+    await nextTick()
+  })
+})
+
+/**
+ * 首页可见时的未读语义（spec §5.2）：用户正看着任务台，回复已经显示在眼前，
+ * 再点一颗「有新回复」的未读点就是把他已经看见的东西报成没看见。
+ */
+describe('ssh-ai homeVisible 与未读', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    lsMap.clear()
+  })
+
+  it('回到首页（true）清未读；离开首页（false）不清', () => {
+    const store = useSshAiStore()
+    store.unreadReply = true
+
+    store.setHomeVisible(false)
+    expect(store.unreadReply).toBe(true)
+
+    store.setHomeVisible(true)
+    expect(store.unreadReply).toBe(false)
+  })
+
+  it('固化一轮回复时，面板关着且不在首页才点亮未读', async () => {
+    const store = useSshAiStore()
+    const agent = useAgentStore()
+    const conv = await store.createConversation('A')
+    conv.messages.push({ id: 'temp-agent-run1', role: 'assistant', content: '' } as never)
+    agent.currentConversationId = conv.id
+    agent.status = 'running'
+    await nextTick()
+
+    agent.status = 'completed'
+    await nextTick()
+
+    expect(store.unreadReply).toBe(true)
+  })
+
+  it('固化这轮时用户正停在首页 → 不点亮（回复已在他眼前）', async () => {
+    const store = useSshAiStore()
+    const agent = useAgentStore()
+    const conv = await store.createConversation('A')
+    conv.messages.push({ id: 'temp-agent-run2', role: 'assistant', content: '' } as never)
+    agent.currentConversationId = conv.id
+    store.setHomeVisible(true)
+    agent.status = 'running'
+    await nextTick()
+
+    agent.status = 'completed'
+    await nextTick()
+
+    expect(store.unreadReply).toBe(false)
   })
 })
