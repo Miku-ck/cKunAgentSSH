@@ -13,7 +13,7 @@
 
 「审计失败不阻塞 Agent」是本模块的既有契约（写库异常只记 warning 返回 None），所以这里
 不抛错：抛出去会让一次分类失误变成运行中断。三份清单（枚举 / 审计页下拉 / 安全文档 §6）
-的同源检查在 `test_ai_loop_round13c.py::test_audit_conclusion_三处清单同源`，不在此重复。
+的同源检查在 `test_ai_loop_round13c.py::test_audit_conclusion_四处清单同源`，不在此重复。
 """
 import logging
 import sqlite3

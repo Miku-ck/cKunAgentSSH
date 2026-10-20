@@ -14,12 +14,16 @@ router = APIRouter(tags=["skills"])
 
 
 def _reload_skill_registry() -> None:
-    """技能变更后刷新内存注册表缓存，确保 Agent 下次运行能看到最新技能"""
-    try:
-        from skill_registry import get_skill_registry
-        get_skill_registry().reload()
-    except Exception as e:
-        logger.warning("刷新技能注册表缓存失败: %s", e)
+    """技能变更后强制刷新内存注册表缓存，确保 Agent 下次运行能看到最新技能。
+
+    写侧必须绕过节流（force=True）：否则一次 DB 抖动后的 5s 窗口内，
+    用户刚关掉/删掉的技能仍会继续被注入。刷新失败不能吞 —— 数据库已经
+    写入成功而内存仍是旧状态，只回 200 等于告诉用户"已生效"。
+    """
+    from skill_registry import get_skill_registry
+    if not get_skill_registry().reload(force=True):
+        logger.error("技能已写入数据库，但刷新内存缓存失败")
+        raise HTTPException(status_code=500, detail="技能变更已保存，但刷新技能缓存失败，请稍后重试")
 
 
 class UpdateEnabledRequest(BaseModel):

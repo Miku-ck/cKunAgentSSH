@@ -32,13 +32,23 @@ class SkillRegistry:
         # mode → 最近一次成功读到的「该 mode 下被禁用的技能 id」
         self._disabled_cache: dict[str, set] = {}
 
-    def reload(self):
-        """从数据库重新加载所有技能"""
+    def reload(self, force: bool = False) -> bool:
+        """从数据库重新加载所有技能。
+
+        Args:
+            force: 写侧显式刷新置 True，绕过节流。用户刚禁用/删除技能时，
+                即使上一次 reload 失败（DB 抖动）也必须在本次请求内重读，
+                否则新状态要等节流窗口结束才生效，而 _loaded 仍为 True，
+                读侧 lazy 自愈也不会触发（S8-04）。
+
+        Returns:
+            True = 本次调用真的重读了数据库；False = 节流跳过或读取失败。
+        """
         with self._lock:
             # 失败后间隔 _RETRY_INTERVAL 秒再重试，避免对故障数据库反复查询
-            if self._last_fail_time > 0:
-                if time.monotonic() - self._last_fail_time < self._RETRY_INTERVAL:
-                    return  # 未到重试间隔，跳过（继续服务旧缓存）
+            if (not force and self._last_fail_time > 0
+                    and time.monotonic() - self._last_fail_time < self._RETRY_INTERVAL):
+                return False  # 未到重试间隔，跳过（继续服务旧缓存）
             try:
                 self._skills = db.list_all_skills()  # 返回所有技能（含 disabled）
                 # 性能：预解析 trigger_words JSON，避免 match_skills 每次重复 json.loads
@@ -52,6 +62,7 @@ class SkillRegistry:
                     s['_trigger_words_parsed'] = words
                 self._loaded = True
                 self._last_fail_time = 0
+                return True
             except Exception as e:
                 # 审查 MINOR 修复：失败时保留旧缓存。原实现 `self._skills = []` 把
                 # 此前加载成功的技能全部清空，DB 故障期间所有技能注入/触发词匹配
@@ -59,6 +70,7 @@ class SkillRegistry:
                 self._last_fail_time = time.monotonic()
                 logger.warning("[skill_registry] reload 失败，保留旧缓存（%d 条），%.1fs 后重试: %s",
                                len(self._skills), self._RETRY_INTERVAL, e)
+                return False
 
     def _disabled_ids_for_mode(self, mode: str) -> set:
         """某 mode 下被用户禁用的技能 id（每次真读，失败时沿用最近成功结果）

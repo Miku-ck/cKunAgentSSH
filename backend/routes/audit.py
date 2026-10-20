@@ -1,23 +1,28 @@
 """
-审计路由 — 运维审计查询 / 链完整性校验 / 导出 / 归档轮转
+审计路由 — 运维审计查询 / 链完整性校验 / 导出 / 归档轮转 / 渲染层通道追加
 
 对齐等保2.0「安全审计」：Agent 对本地/远程主机执行的命令与审批结论已由
-AuditEngine 追加式写入 audit_log（链式签名防篡改）。本路由以只读查询为主；
-唯一的受控写入口是 POST /audit/clear —— 它不是删除接口，而是「归档轮转」：
-全量导出 CSV 归档后清空 live 表，并写入 audit_cleared 封缄记录作为新链起点
-（见 agent.audit.archive_and_clear），历史证据经归档文件仍可离线验链。
+AuditEngine 追加式写入 audit_log（链式签名防篡改）。本路由以只读查询为主，
+受控写入口有两处：
+- POST /audit/append —— 渲染层人工交互通道（批量下发、Docker 变更动作）的追加；
+- POST /audit/clear —— 不是删除接口，而是「归档轮转」：全量导出 CSV 归档后
+  清空 live 表，并写入 audit_cleared 封缄记录作为新链起点（见
+  agent.audit.archive_and_clear），历史证据经归档文件仍可离线验链。
 """
 import asyncio
 import csv
 import io
 import logging
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from agent.audit import (
     AUDIT_COLUMNS,
+    LEGAL_CONCLUSIONS,
+    append_record_async,
     archive_and_clear,
     count,
     export_rows,
@@ -27,6 +32,78 @@ from agent.audit import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["audit"])
+
+
+class AuditAppendRequest(BaseModel):
+    """渲染层通道审计的追加请求。
+
+    extra="forbid"：operator / ts / hash / prev_hash 这些归因与链字段全部由
+    服务端生成。尤其 operator —— 客户端多传一律 422，别让调用方把动作归到
+    别人头上。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: str = Field(min_length=1, max_length=128)
+    conclusion: str
+    target_type: str = Field(default="", max_length=64)
+    target_id: str = Field(default="", max_length=256)
+    environment: Literal["test", "prod"] = "test"
+    command_raw: str = Field(default="", max_length=8192)
+    result: str = Field(default="", max_length=2048)
+    run_id: str = Field(default="", max_length=128)
+    iteration: int = Field(default=0, ge=0)
+
+    @field_validator("action")
+    @classmethod
+    def _action_not_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("action 不能为空")
+        return v
+
+    @field_validator("conclusion")
+    @classmethod
+    def _conclusion_is_legal(cls, v: str) -> str:
+        # HTTP 边界不沿用 append_record 的「非法结论改 executed + 留痕」兜底：
+        # 那是为了不阻塞 Agent 内部流程；调用方把 "executed " 拼错时，静默改名
+        # 等于让链式签名记录声称一条没发生过的执行。
+        if v not in LEGAL_CONCLUSIONS:
+            raise ValueError(f"非法审计结论：{v!r}")
+        return v
+
+
+@router.post("/audit/append")
+async def audit_append(payload: AuditAppendRequest):
+    """追加一条渲染层通道审计记录。
+
+    受全局 X-API-Token 中间件保护（与 /api/* 其余端点同口径）。写失败返回 500：
+    渲染层只提示、不阻塞已发生的远端动作，但绝不能返回 ok 让调用方误以为记上了。
+    """
+    try:
+        record = await append_record_async(
+            action=payload.action,
+            conclusion=payload.conclusion,
+            target_type=payload.target_type,
+            target_id=payload.target_id,
+            environment=payload.environment,
+            command_raw=payload.command_raw,
+            result=payload.result,
+            run_id=payload.run_id,
+            iteration=payload.iteration,
+        )
+    except Exception as e:
+        # append_record 已承诺「失败静默返回 None」，to_thread 本身抛异常是池层故障
+        logger.warning("审计追加失败: action=%s err=%s", payload.action, e)
+        raise HTTPException(status_code=500, detail="审计写入失败，请稍后重试") from e
+    if record is None:
+        # append_record 内部已记 warning；这里补上通道归因，便于区分是哪条链路丢的
+        logger.warning(
+            "审计追加失败: action=%s target=%s (append_record 返回 None)",
+            payload.action, payload.target_id,
+        )
+        raise HTTPException(status_code=500, detail="审计写入失败，请稍后重试")
+    return {"ok": True, "id": record["id"], "hash": record["hash"]}
 
 
 @router.get("/audit/records")

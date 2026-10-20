@@ -430,6 +430,17 @@ def classify(task: str, max_budget: Optional[int] = None) -> IntentionResult:
         TaskType.IMPLEMENT, TaskType.MODIFY, TaskType.REFACTOR,
     )
 
+    # 2.8 变更任务不得停留在只读档位：无显式只读动词的变更请求（"清理临时日志"）
+    # 在类型识别里落到默认 QUERY，实际是单步写操作，却只拿 256 token 只读预算。
+    # 显式只读动词（"查看启动日志"）保留 trivial —— 查日志不该按写任务分配预算。
+    if (
+        is_change
+        and level == IntentionLevel.TRIVIAL
+        and not _any_match_wordbounded(_COMPILED_QUERY, text, text_zh)
+    ):
+        level = IntentionLevel.SIMPLE
+        level_confidence = max(level_confidence, 0.75)
+
     # ── 3. 允许规划阶段？ ──
     # 仅 complex 等级且非 debug 允许首轮纯规划
     allow_planning = (level == IntentionLevel.COMPLEX and task_type != TaskType.DEBUG)

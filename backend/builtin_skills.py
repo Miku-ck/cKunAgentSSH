@@ -154,7 +154,7 @@ def sync_packaged_skills() -> dict:
     if upserted:
         try:
             from skill_registry import get_skill_registry
-            get_skill_registry().reload()
+            get_skill_registry().reload(force=True)
         except Exception as e:
             logger.warning("[builtin_skills] 注册表刷新失败: %s", e)
     logger.info("[builtin_skills] 包内技能同步完成：%d 条", upserted)

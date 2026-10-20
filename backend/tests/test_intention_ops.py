@@ -145,6 +145,36 @@ def test_change_flag_does_not_disturb_existing_level_and_budget():
     assert ro.reasoning_budget == 256
 
 
+@pytest.mark.parametrize("task", [
+    "清理临时日志",
+    "删除 /tmp 下的旧文件",
+    "重启 nginx",
+])
+def test_change_only_task_gets_write_level_budget(task):
+    """"清理临时日志"这类无显式只读动词的变更请求，实际是单步写操作。
+
+    原实现里 task_type 默认 QUERY ⇒ level=TRIVIAL / 256 token：
+    is_change 只影响方法论注入，破坏性任务反而拿到最低思考预算。
+    写操作不得停留在只读档（与 simplify 分支的既有口径一致）。
+    """
+    r = classify(task)
+    assert r.is_change is True
+    assert r.level is not IntentionLevel.TRIVIAL
+    assert r.reasoning_budget >= 512
+
+
+def test_explicit_read_verb_keeps_readonly_level():
+    """反向锁："查看启动日志"含变更词但显式只读动词 → 不得被抬成写档。
+
+    is_change 仍按保守口径为 True（注入变更方法论），等级却应保留只读档，
+    否则每次查日志都按写任务分配预算。
+    """
+    r = classify("查看启动日志")
+    assert r.is_change is True
+    assert r.level is IntentionLevel.TRIVIAL
+    assert r.reasoning_budget == 256
+
+
 def test_to_dict_exposes_is_change():
     d = classify("重启 nginx").to_dict()
     assert d["is_change"] is True
