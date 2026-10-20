@@ -9,20 +9,26 @@ import { onMounted, onUnmounted } from 'vue'
 import { useSSHStore } from '@/stores/ssh'
 import type { NavPage } from './useSshNavigation'
 
-/** 独立页 → Ctrl+Shift+数字 的映射（单一来源，TitleBar 的 title 提示也引用它） */
+/**
+ * 独立页 → Ctrl+Shift+数字 的映射（单一来源，TitleBar 的 title 提示也引用它）。
+ *
+ * 这里刻意**不存**页名文案：标题条的 aria-label、命令面板的「打开：×」条目各有
+ * 自己的措辞（同一页在三处是三种写法），把它们并成一份会直接改掉用户读到的字。
+ * 这份表管的是「哪些页有快捷键、分别是第几号」—— 页的清单由守卫
+ * （src/components/common/command-palette-pages.test.ts）与命令面板对账。
+ */
 export const PAGE_SHORTCUTS: ReadonlyArray<{
   page: Exclude<NavPage, 'home'>
   num: number
-  label: string
 }> = [
-  { page: 'remote-mgr', num: 1, label: '远程管理' },
-  { page: 'sftp', num: 2, label: 'SFTP' },
-  { page: 'dashboard', num: 3, label: '监控仪表盘' },
-  { page: 'schedules', num: 4, label: '定时任务' },
-  { page: 'tunnels', num: 5, label: '隧道' },
-  { page: 'docker', num: 6, label: 'Docker 管理' },
-  { page: 'github', num: 7, label: 'GitHub 加速' },
-  { page: 'audit', num: 8, label: '运维审计' },
+  { page: 'remote-mgr', num: 1 },
+  { page: 'sftp', num: 2 },
+  { page: 'dashboard', num: 3 },
+  { page: 'schedules', num: 4 },
+  { page: 'tunnels', num: 5 },
+  { page: 'docker', num: 6 },
+  { page: 'github', num: 7 },
+  { page: 'audit', num: 8 },
 ]
 
 /** 「监控仪表盘 (Ctrl+Shift+3)」形式的 title 提示，供 TitleBar 引用 */

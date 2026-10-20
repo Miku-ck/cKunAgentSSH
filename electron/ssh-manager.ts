@@ -20,6 +20,7 @@ import { assertKeyFileSafe } from './utils/path-guard'
 import { BrowserWindow, app } from 'electron'
 import { SSHError, classifyRawError, toFriendlyZh } from './ssh-error'
 import { encodeTransferErrorName, isTransferRetryable, type TransferErrorCode } from '../shared/transfer-error-core'
+import { classifyExit } from '../shared/exec-outcome-core'
 import { promises as fsPromises } from 'fs'
 import { posix, join, dirname } from 'path'
 import { createHash, randomBytes } from 'crypto'
@@ -2773,22 +2774,6 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
 /** 远程路径单引号转义（用于 SSH exec 命令拼接） */
 function shellQuoteRemote(s: string): string {
   return `'${s.replace(/'/g, "'\\''")}'`
-}
-
-/**
- * S5-19：exec 通道的三态结果 —— `exitCode === null` 是**不知道**，不是失败。
- *
- * ssh2 只在收到 exit-status 时填这个数（`close` 事件不带它），所以精简 sshd 不回
- * exit-status、或命令被 OOM kill 之后，读数都是 null。原实现按 `!== 0` 判失败并
- * **unlink 归档**：打包其实已经写完的产物被删掉了，用户点「压缩」得到的是一句
- * 「远程打包失败」加上一份不存在的文件。
- */
-export type ExecOutcome = 'ok' | 'failed' | 'unknown'
-
-export function classifyExit(exitCode: number | null): ExecOutcome {
-  if (exitCode === 0) return 'ok'
-  if (exitCode === null) return 'unknown'
-  return 'failed'
 }
 
 /** 将数值 mode(含文件类型位)转为 'drwxr-xr-x' 形式 */

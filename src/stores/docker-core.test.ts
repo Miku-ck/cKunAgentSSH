@@ -12,7 +12,7 @@ import {
   volumeInspectCmd, networkInspectCmd, rmiCmd, isOutputTruncated,
   containerInspectCmd, containerStatsCmd, pullCmd, imagePruneCmd, imagePruneAllCmd,
   dockerSaveCmd, dockerLoadCmd, saveTempPath, suggestTarName, validateSaveName, ensureTarSuffix,
-  validateRemoteDir, joinRemotePath, classifyExit,
+  validateRemoteDir, joinRemotePath,
   parseContainerInspect, parseContainerStats, formatNsDuration,
   countPrunedLines, isBuiltinNetwork,
   parseVolumeUsage, mergeVolumeUsage, volumeUsageSummary,
@@ -734,15 +734,6 @@ describe('镜像拉取错误归类', () => {
     expect(
       dockerErrorFromResult('permission denied while trying to connect to the Docker daemon socket', 1)?.code,
     ).toBe('DOCKER_PERM')
-  })
-})
-
-describe('classifyExit 三态', () => {
-  it('0 是 ok；null 是不知道（不是失败）；其余非零是 failed', () => {
-    expect(classifyExit(0)).toBe('ok')
-    expect(classifyExit(null)).toBe('unknown')
-    expect(classifyExit(1)).toBe('failed')
-    expect(classifyExit(127)).toBe('failed')
   })
 })
 

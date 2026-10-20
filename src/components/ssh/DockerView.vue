@@ -518,7 +518,7 @@ import {
 import {
   PS_CMD, IMAGES_CMD, VOLUMES_CMD, VOLUME_USAGE_CMD, NETWORKS_CMD,
   startCmd, stopCmd, restartCmd, rmCmd, rmiCmd, execCmd, pullCmd, imagePruneCmd, imagePruneAllCmd,
-  dockerSaveCmd, dockerLoadCmd, classifyExit, saveTempPath,
+  dockerSaveCmd, dockerLoadCmd, saveTempPath,
   volumeRmCmd, networkRmCmd, volumePruneCmd, networkPruneCmd,
   volumeInspectCmd, networkInspectCmd,
   parsePs, parseImages, parseVolumes, parseNetworks, imageLabel, imageHaystack, imageUsageCount,
@@ -529,6 +529,8 @@ import {
   type ContainerRow, type ImageRow, type VolumeRow, type NetworkRow, type DockerError,
   type VolumeInspect, type NetworkInspect,
 } from '@/stores/docker-core'
+// exec 三态判据与主进程 ssh-manager 同源（判据源 shared/exec-outcome-core.ts）
+import { classifyExit } from '../../../shared/exec-outcome-core'
 
 const props = defineProps<{ active?: boolean }>()
 const sshStore = useSSHStore()

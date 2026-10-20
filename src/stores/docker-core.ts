@@ -904,19 +904,9 @@ export function parseLogs(raw: string): string[] {
 
 // ── 错误归类 ──
 
-/**
- * exec 三态：`exitCode === null` 是「不知道」，不是失败。
- * ssh2 只在收到 exit-status 时填这个数，精简 sshd 不回 exit-status、或命令被
- * OOM kill 之后读数都是 null。与主进程 ssh-manager 的同名判定同一口径。
- * 长任务（镜像 save/load）必须用它：写完文件却没回 exit-status 是真实存在的，
- * 按失败处理会让人删掉一份好备份重导一遍。
- */
-export type ExecOutcome = 'ok' | 'failed' | 'unknown'
-export function classifyExit(exitCode: number | null): ExecOutcome {
-  if (exitCode === 0) return 'ok'
-  if (exitCode === null) return 'unknown'
-  return 'failed'
-}
+// exec 三态判据（`exitCode === null` 是「不知道」，不是失败）已收到
+// shared/exec-outcome-core.ts：主进程 ssh-manager 与渲染层共用一份，长任务
+// （镜像 save/load）必须按三态报，写完文件却没回 exit-status 是真实存在的。
 
 /**
  * 依据 docker 命令的 stderr + 退出码归类错误。返回 null 表示无 docker 层错误。

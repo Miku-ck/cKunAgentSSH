@@ -13,18 +13,9 @@ vi.mock('electron', () => ({
 }))
 vi.mock('ssh2', () => ({ Client: class {} }))
 
-import { SSHManager, classifyExit } from './ssh-manager'
+import { SSHManager } from './ssh-manager'
 
 type ExecResult = { stdout: string; stderr: string; exitCode: number | null }
-
-describe('classifyExit（S5-19 的三态判据）', () => {
-  it('0 是成功，null 是不知道，其余才是失败', () => {
-    expect(classifyExit(0)).toBe('ok')
-    expect(classifyExit(null)).toBe('unknown')
-    expect(classifyExit(1)).toBe('failed')
-    expect(classifyExit(127)).toBe('failed')
-  })
-})
 
 describe('sftpZipRemote 不再销毁结果未知的产物', () => {
   let mgr: SSHManager

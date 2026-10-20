@@ -46,7 +46,7 @@ reviews。
 | 2026-10-08-ssh-tunnel | 已落地（TCP / SOCKS5 / Dynamic） |
 | 2026-10-08-tls-dataplane | 已落地（隧道 TLS 数据面 + `gateway/hillgw.mjs`） |
 | 2026-10-09-dsh-ssh-ui-polish | 已落地（dsh-ssh 与 TLS 数据面两个新面已扫净） |
-| **2026-10-13-glass-theme-macos-vibrancy** | **已退役** — 玻璃两档主题随 `8c80e46` 删除，代码里 glass/aero/vibrancy 零残留 |
+| **2026-10-13-glass-theme-macos-vibrancy** | **已退役** — 玻璃两档主题随 `8c80e46` 删除，生产代码里 glass/aero/vibrancy 零残留（唯一命中是 `src/stores/settings.test.ts` 钉「持久化脏值回落 dark」的那条回归） |
 | **2026-10-14-aero-glass-theme** | **已退役** — 同上，`THEMES` 白名单已无此键，旧键值由 `asEnum` 闸门回落 `dark` |
 | **2026-10-14-glass-light-translucency** | **已退役** — 同上 |
 | 2026-10-20-docker-image-save-load | 已落地（镜像导出 tar / 加载） |

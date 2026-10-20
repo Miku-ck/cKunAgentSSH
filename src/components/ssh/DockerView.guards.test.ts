@@ -105,17 +105,20 @@ describe('镜像拉取与悬空清理', () => {
     expect(src).toMatch(/function closePull\(\): void \{[\s\S]*?pulling\.value/)
   })
   it('悬空清理只清 dangling，并复用通用 prune 计数', () => {
-    expect(src).toContain('imagePruneCmd()')
-    expect(src).toContain("'prune:images'")
-    expect(src).toContain('countPrunedLines')
+    // 按函数体断言：整文件的 toContain 分不清「悬空」与「未使用」两条腿各自用了
+    // 哪条命令，把 imagePruneCmd 挪到未使用那条里它照样绿。
+    const body = sliceFunction('async function doPruneImages(): Promise<void> {')
+    expect(body).toContain('imagePruneCmd()')
+    expect(body).toContain("'prune:images'")
+    expect(body).toContain('countPrunedLines')
   })
 })
 
 describe('未使用镜像清理', () => {
   it('保留悬空入口，另给独立的未使用入口', () => {
-    expect(src).toContain('imagePruneCmd()')
-    expect(src).toContain('imagePruneAllCmd()')
-    expect(src).toContain("'prune:images-all'")
+    const body = sliceFunction('async function doPruneAllImages(): Promise<void> {')
+    expect(body).toContain('imagePruneAllCmd()')
+    expect(body).toContain("'prune:images-all'")
     expect(src).toContain('清理未使用')
   })
   it('确认框写明带标签镜像也在范围内，并给出可预判的计数口径', () => {
