@@ -31,7 +31,7 @@
       <!-- 异常/决策面板：自身按 agentStore.hasRunNotice 决定挂不挂载内容。
          这里不要再写条件：曾经写过一份，而那份漏了澄清向导/任务规划/待确认交付，
          结果是需要用户决策时面板根本没挂载，用户只看到 toast，运行等到后端超时。 -->
-    <AgentRunPanel class="agent-run-panel-ssh" />
+      <AgentRunPanel />
     </template>
   </SideChatPanel>
 </template>
