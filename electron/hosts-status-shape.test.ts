@@ -35,6 +35,7 @@ function topLevelFieldNames(src: string, startRe: RegExp): string[] {
 }
 
 const hostsSrc = readFileSync(new URL('./gh-hosts.ts', import.meta.url), 'utf-8').replace(/\r\n/g, '\n')
+const accelSrc = readFileSync(new URL('./github-accel.ts', import.meta.url), 'utf-8').replace(/\r\n/g, '\n')
 const envSrc = readFileSync(new URL('../src/env.d.ts', import.meta.url), 'utf-8').replace(/\r\n/g, '\n')
 
 describe('HostsStatus 主进程与渲染层抄本同源', () => {
@@ -64,5 +65,28 @@ describe('HostsStatus 主进程与渲染层抄本同源', () => {
     ])
     const dropped = sample.replace('  staleDays: number | null\n', '')
     expect(topLevelFieldNames(dropped, /^export interface HostsStatus \{/)).not.toContain('staleDays')
+  })
+})
+
+describe('巡检/自检契约主进程与渲染层抄本同源', () => {
+  it('HealthStatus 字段集合逐字相等', () => {
+    const impl = topLevelFieldNames(accelSrc, /^export interface HealthStatus \{/)
+    const decl = topLevelFieldNames(envSrc, /^interface GhaccelHealthStatus \{/)
+
+    expect(impl.length, '主进程 HealthStatus 一个字段都没提取到，守卫等于空跑').toBeGreaterThan(0)
+    expect(decl.length, 'env.d.ts 一个字段都没提取到，守卫等于空跑').toBeGreaterThan(0)
+    expect(
+      [...decl].sort(),
+      `渲染层抄本与主进程不一致 —— 主进程: [${[...impl].sort()}] / 渲染层: [${[...decl].sort()}]`,
+    ).toEqual([...impl].sort())
+  })
+
+  it('SelfCheckRow 字段集合逐字相等', () => {
+    const impl = topLevelFieldNames(accelSrc, /^export interface SelfCheckRow \{/)
+    const decl = topLevelFieldNames(envSrc, /^interface GhaccelSelfCheckRow \{/)
+
+    expect(impl.length, '主进程 SelfCheckRow 一个字段都没提取到，守卫等于空跑').toBeGreaterThan(0)
+    expect(decl.length, 'env.d.ts 一个字段都没提取到，守卫等于空跑').toBeGreaterThan(0)
+    expect([...decl].sort()).toEqual([...impl].sort())
   })
 })

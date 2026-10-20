@@ -117,14 +117,44 @@ export interface ParsedGhUrl {
 
 const PAGE_SEGMENTS = new Set(['tree', 'blob', 'issues', 'pull', 'pulls', 'commit', 'commits', 'actions', 'wiki', 'settings', 'releases', 'tags', 'branches', 'network', 'graphs', 'security'])
 
+/** 剥掉引号（含成对的中文引号）——从聊天/文档里粘出来的地址常带着 */
+function stripQuotes(s: string): string {
+  return s.replace(/^[“”"'‘’]+|[“”"'‘’]+$/g, '')
+}
+
+/**
+ * 从完整命令里取出地址：`git clone [--flags] <url> [dir]`、
+ * `gh repo clone <url|owner/repo> [dir]`。取第一个非选项 token 而不是最后一个——
+ * `git clone <url> mydir` 的最后一个 token 是目标目录。
+ */
+function normalizeGhInput(input: string): string {
+  const raw = stripQuotes((input || '').trim())
+  const m = /^(?:git\s+clone|gh\s+repo\s+clone)(?:\s+([\s\S]*))?$/i.exec(raw)
+  if (!m) return raw
+  const tokens = (m[1] || '').split(/\s+/).filter(Boolean)
+  // 先找显式地址（带协议或 git@），避免把 --depth 1 / -b feature/x 的值当成地址；
+  // gh repo clone 允许 owner/repo，这时退回第一个非选项 token。
+  const isGh = /^gh\s+repo\s+clone/i.test(raw)
+  const addr = tokens.find(t => /^[a-z][\w+.-]*:\/\//i.test(t) || /^git@/i.test(t))
+    ?? (isGh ? tokens.find(t => !t.startsWith('-')) : undefined)
+  return addr ? stripQuotes(addr) : ''
+}
+
 /**
  * 解析用户粘贴的 GitHub 地址。宽容输入：
  * https://github.com/o/r(.git)(/…)、git@github.com:o/r(.git)、
  * raw.githubusercontent.com、codeload、ssh://git@github.com/o/r。
  */
 export function parseGithubUrl(input: string): ParsedGhUrl {
-  const raw = (input || '').trim()
+  const raw = normalizeGhInput(input)
   if (!raw) return { type: 'unknown', normalized: '' }
+
+  // owner/repo 简写（gh CLI / 聊天里常见的粘法）。只认两段，避免把任意本地路径
+  // 或多段页面路径误当仓库；三段及以上继续走 URL 解析。
+  const shorthand = /^([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)\/([A-Za-z0-9._-]+?)(?:\.git)?$/.exec(raw)
+  if (shorthand && !raw.includes('\\')) {
+    return { type: 'repo', normalized: `https://github.com/${shorthand[1]}/${shorthand[2]}`, owner: shorthand[1], repo: shorthand[2] }
+  }
 
   // git@github.com:owner/repo(.git) 或 ssh://git@github.com/owner/repo(.git)
   const sshScp = /^git@github\.com:([^/]+)\/([^/]+?)(\.git)?$/i.exec(raw)
@@ -173,6 +203,16 @@ export function parseGithubUrl(input: string): ParsedGhUrl {
     return {
       type: 'release-asset',
       normalized: `https://github.com/${owner}/${repo}/releases/download/${assetPath}`,
+      owner, repo, assetPath,
+    }
+  }
+  // 「最新版本资产」页面上复制出来的形式：releases/latest/download/<file>。
+  // GitHub 会重定向到具体 tag；下载器已支持重定向，保留 latest 原样即可。
+  if (rest[0] === 'releases' && rest[1] === 'latest' && rest[2] === 'download' && rest.length >= 4) {
+    const assetPath = rest.slice(3).join('/')
+    return {
+      type: 'release-asset',
+      normalized: `https://github.com/${owner}/${repo}/releases/latest/download/${assetPath}`,
       owner, repo, assetPath,
     }
   }
@@ -250,6 +290,15 @@ export function buildProbeUrl(prefix: string): string {
   return `${prefix}${PROBE_TARGET}`
 }
 
+/**
+ * 代理探测是否可用：只有 2xx 才算「拿到内容」。403/404/429 都说明镜像没替我们取到
+ * 真实存在的 RAW 文件，不能参与「最快」排序，也不能显示为可用。
+ * 网页镜像站的根地址另走宽松判据（见 github-accel.ts probe 的 kind）。
+ */
+export function isProxyProbeOk(status: number): boolean {
+  return Number.isFinite(status) && status >= 200 && status < 300
+}
+
 // ─── git url.insteadOf 全局改写 ───
 
 export const GITHUB_BASE = 'https://github.com/'
@@ -318,6 +367,30 @@ export function findGithubInsteadOf(entries: InsteadOfEntry[]): InsteadOfEntry |
 export const SSH_BLOCK_BEGIN = '# >>> cKunAgentSSH github-accel >>>'
 export const SSH_BLOCK_END = '# <<< cKunAgentSSH github-accel <<<'
 
+export interface SshGResult {
+  hostname: string | null
+  port: number | null
+}
+
+/**
+ * 解析 `ssh -G <host>` 的生效配置输出（小写 key + 空白分隔）。
+ * 自检用它确认托管块真的把 github.com 解析成 ssh.github.com:443；
+ * 缺字段返回 null，由调用方判失败而不是猜默认值。
+ */
+export function parseSshG(stdout: string): SshGResult {
+  let hostname: string | null = null
+  let port: number | null = null
+  for (const rawLine of (stdout || '').split(/\r?\n/)) {
+    const m = /^(\S+)\s+(.+)$/.exec(rawLine.trim())
+    if (!m) continue
+    const key = m[1].toLowerCase()
+    const value = m[2].trim()
+    if (key === 'hostname' && value) hostname = value
+    else if (key === 'port' && /^\d+$/.test(value)) port = Number(value)
+  }
+  return { hostname, port }
+}
+
 /** GitHub 官方支持的 443 端口 SSH 接入（绕开被 QoS/封禁的 22 端口） */
 export function renderSsh443Block(): string {
   return [
@@ -367,6 +440,26 @@ export function hasSshBlock(existing: string): boolean {
 }
 
 // ─── 系统 hosts 托管块（优选 IP 增强模式，M3） ───
+
+/**
+ * hosts 文件按字节解码：Windows 上常用 ANSI/GBK 注释，按 UTF-8 解码会把非 ASCII
+ * 字节替换成 U+FFFD 再写回，块外内容被永久改写。latin1 是逐字节映射，配合只增删
+ * ASCII 托管块的改写方式，可保证块外字节原样往返。
+ */
+export function decodeHostsBytes(bytes: Uint8Array): string {
+  let out = ''
+  const chunk = 0x8000
+  for (let i = 0; i < bytes.length; i += chunk) {
+    out += String.fromCharCode(...bytes.subarray(i, i + chunk))
+  }
+  return out
+}
+
+export function encodeHostsBytes(text: string): Uint8Array {
+  const out = new Uint8Array(text.length)
+  for (let i = 0; i < text.length; i++) out[i] = text.charCodeAt(i) & 0xff
+  return out
+}
 
 export const HOSTS_BLOCK_BEGIN = '# >>> cKunAgentSSH github-accel >>>'
 export const HOSTS_BLOCK_END = '# <<< cKunAgentSSH github-accel <<<'
@@ -421,29 +514,58 @@ export function renderHostsBlock(entries: { domain: string; ip: string }[], gene
   return [HOSTS_BLOCK_BEGIN, ...stamp, ...lines, HOSTS_BLOCK_END].join('\n')
 }
 
+export type HostsBlockState = 'none' | 'ok' | 'broken'
+
+export const HOSTS_BLOCK_BROKEN_MESSAGE =
+  'hosts 中的 cKunAgentSSH 托管标记不完整或顺序异常，已停止操作以免损坏文件；请手动检查 hosts 后重试'
+
+/**
+ * 托管块三态。broken 包括：只有 BEGIN、只有 END、END 在 BEGIN 前、重复标记。
+ * 这些状态下按 indexOf 找"第一对标记"会跨过用户内容，写入/移除都可能误删用户的
+ * hosts 行，所以宁可停手并明确报错，也不猜。
+ */
+export function hostsBlockState(existing: string): HostsBlockState {
+  const begin = existing.indexOf(HOSTS_BLOCK_BEGIN)
+  const end = existing.indexOf(HOSTS_BLOCK_END)
+  if (begin === -1 && end === -1) return 'none'
+  if (begin === -1 || end === -1 || end <= begin) return 'broken'
+  const extraBegin = existing.indexOf(HOSTS_BLOCK_BEGIN, begin + HOSTS_BLOCK_BEGIN.length)
+  const extraEnd = existing.indexOf(HOSTS_BLOCK_END, end + HOSTS_BLOCK_END.length)
+  return extraBegin === -1 && extraEnd === -1 ? 'ok' : 'broken'
+}
+
 /** 写入/更新 hosts 托管块（已有标记块原位替换，否则文件尾追加） */
 export function applyHostsBlock(
   existing: string,
   entries: { domain: string; ip: string }[],
   generatedAt: Date = new Date(),
 ): string {
+  if (hostsBlockState(existing) === 'broken') throw new Error(HOSTS_BLOCK_BROKEN_MESSAGE)
   const block = renderHostsBlock(entries, generatedAt)
   const begin = existing.indexOf(HOSTS_BLOCK_BEGIN)
   const end = existing.indexOf(HOSTS_BLOCK_END)
   if (begin !== -1 && end !== -1 && end > begin) {
     return existing.slice(0, begin) + block + existing.slice(end + HOSTS_BLOCK_END.length)
   }
-  const sep = existing.length === 0 || existing.endsWith('\n') ? '' : '\n'
-  return existing + sep + (existing.length === 0 ? '' : '\n') + block + '\n'
+  // 追加时恒在块前加一个 LF、块后留一个 LF：与 removeHostsBlock 的"各消费一个"
+  // 对应，才能做到空文件 / LF / CRLF / 无尾换行四种文件的精确往返。
+  if (existing.length === 0) return block + '\n'
+  return existing + '\n' + block + '\n'
 }
 
-/** 移除 hosts 托管块；无块原样返回 */
+/** 移除 hosts 托管块；无块原样返回，标记损坏时拒绝（否则会跨过用户内容误删） */
 export function removeHostsBlock(existing: string): string {
+  const state = hostsBlockState(existing)
+  if (state === 'broken') throw new Error(HOSTS_BLOCK_BROKEN_MESSAGE)
+  if (state === 'none') return existing
   const begin = existing.indexOf(HOSTS_BLOCK_BEGIN)
   const end = existing.indexOf(HOSTS_BLOCK_END)
-  if (begin === -1 || end === -1 || end <= begin) return existing
+  // 与 applyHostsBlock 的"块前一个 LF、块后一个 LF"严格对应：BEGIN 前只消费一个
+  // LF（不碰 CRLF 的 \r，保证 CRLF 文件移除后仍是 CRLF），END 后消费一个换行序列。
+  // 旧版本写入的"无尾换行文件 + 两个 LF"会多留一个换行——这是唯一的非精确项，
+  // 有意的：多一个空行无害，而猜错会吞用户行。
   let start = begin
-  while (start > 0 && (existing[start - 1] === '\n' || existing[start - 1] === '\r') && begin - start < 2) start--
+  if (start > 0 && existing[start - 1] === '\n') start--
   let stop = end + HOSTS_BLOCK_END.length
   if (existing[stop] === '\r') stop++
   if (existing[stop] === '\n') stop++
@@ -451,9 +573,7 @@ export function removeHostsBlock(existing: string): string {
 }
 
 export function hasHostsBlock(existing: string): boolean {
-  const begin = existing.indexOf(HOSTS_BLOCK_BEGIN)
-  const end = existing.indexOf(HOSTS_BLOCK_END)
-  return begin !== -1 && end !== -1 && end > begin
+  return hostsBlockState(existing) === 'ok'
 }
 
 /**
@@ -466,9 +586,9 @@ export function hasHostsBlock(existing: string): boolean {
  * 任何异常——只有 hosts 文件里多了一段三年前写的注释都算不上的记录。
  */
 export function hostsBlockGeneratedAt(existing: string): string | null {
+  if (hostsBlockState(existing) !== 'ok') return null
   const begin = existing.indexOf(HOSTS_BLOCK_BEGIN)
   const end = existing.indexOf(HOSTS_BLOCK_END)
-  if (begin === -1 || end === -1 || end <= begin) return null
   const body = existing.slice(begin + HOSTS_BLOCK_BEGIN.length, end)
   const firstLine = body.replace(/^\r?\n/, '').split(/\r?\n/)[0] ?? ''
   if (!firstLine.startsWith(HOSTS_GENERATED_PREFIX)) return null

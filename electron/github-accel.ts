@@ -11,8 +11,11 @@ import { readFile, writeFile, rename, mkdir, unlink, copyFile } from 'fs/promise
 import { existsSync } from 'fs'
 import { homedir } from 'os'
 import { execFile } from 'child_process'
+import { lookup } from 'dns/promises'
 import https from 'https'
 import type { ClientRequest } from 'http'
+import { tcpLatency } from './utils/tcp-latency'
+import type { GhHostsService } from './gh-hosts'
 import {
   applySshBlock,
   buildGitReadArgs,
@@ -20,6 +23,8 @@ import {
   buildGitSetArgs,
   buildGitUnsetSubsectionArgs,
   buildProbeUrl,
+  isProxyProbeOk,
+  parseSshG,
   PROBE_TARGET,
   defaultGithubAccelConfig,
   findGithubInsteadOf,
@@ -47,6 +52,32 @@ export interface ProbeResult {
   error?: string
 }
 
+export type SelfCheckKey = 'git' | 'proxy' | 'ssh443' | 'hosts'
+
+export interface SelfCheckRow {
+  key: SelfCheckKey
+  /** skip = 该措施未开启 / 环境不具备（灰显，不算失败） */
+  state: 'ok' | 'fail' | 'skip'
+  message: string
+  latencyMs?: number
+}
+
+export interface HealthStatus {
+  state: 'unknown' | 'off' | 'ok' | 'degraded'
+  /** 当前生效的加速前缀（git insteadOf 子节反推） */
+  activePrefix?: string
+  activeName?: string
+  /** 当前前缀的 RAW 探测首字节延迟 */
+  latencyMs?: number
+  /** 当前镜像失效原因（仅镜像；hosts 的问题见 hosts.message） */
+  error?: string
+  /** 当前镜像失效时，探测到的最快备用镜像（只提示，不自动切换） */
+  fallback?: { prefix: string; name: string; latencyMs: number }
+  /** hosts 托管块生效时的实时有效性；未写入不返回 */
+  hosts?: { ok: boolean; message: string }
+  checkedAt: number
+}
+
 export interface GitInsteadOfStatus {
   /** git 可执行文件是否可用 */
   available: boolean
@@ -72,6 +103,13 @@ export interface Ssh443Status {
 
 const GIT_TIMEOUT_MS = 8000
 const PROBE_TIMEOUT_MS = 6000
+const SELF_CHECK_GIT_TIMEOUT_MS = 15000
+const SSH_G_TIMEOUT_MS = 8000
+
+/** 巡检节奏：启动 15s 首检（避开启动高峰），之后 30 分钟一次；配置变更后 2s 复检 */
+const HEALTH_FIRST_DELAY_MS = 15_000
+const HEALTH_INTERVAL_MS = 30 * 60_000
+const HEALTH_RECHECK_DELAY_MS = 2_000
 
 function getStorePath(): string {
   return join(app.getPath('userData'), 'github-accel.json')
@@ -81,18 +119,51 @@ function getSshConfigPath(): string {
   return join(homedir(), '.ssh', 'config')
 }
 
-function execGit(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+function execGit(
+  args: string[],
+  opts: { timeoutMs?: number; env?: NodeJS.ProcessEnv } = {},
+): Promise<{ code: number; stdout: string; stderr: string; timedOut?: boolean }> {
   return new Promise((resolvePromise) => {
-    execFile('git', args, { timeout: GIT_TIMEOUT_MS, windowsHide: true }, (err, stdout, stderr) => {
+    execFile(
+      'git',
+      args,
+      {
+        timeout: opts.timeoutMs ?? GIT_TIMEOUT_MS,
+        windowsHide: true,
+        env: opts.env ? { ...process.env, ...opts.env } : process.env,
+      },
+      (err, stdout, stderr) => {
+        if (err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+          resolvePromise({ code: -1, stdout: '', stderr: 'git-not-found' })
+          return
+        }
+        // execFile 的 err.code 对非零退出是数字退出码；超时被杀时 code 为 null
+        const code = err ? (typeof (err as any).code === 'number' ? (err as any).code : 1) : 0
+        resolvePromise({ code, stdout: String(stdout ?? ''), stderr: String(stderr ?? ''), timedOut: !!(err as any)?.killed })
+      },
+    )
+  })
+}
+
+/** 运行 ssh -G，仅取 stdout/stderr；未安装时 code=-1（与 execGit 同口径） */
+function execSsh(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolvePromise) => {
+    execFile('ssh', args, { timeout: SSH_G_TIMEOUT_MS, windowsHide: true }, (err, stdout, stderr) => {
       if (err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
-        resolvePromise({ code: -1, stdout: '', stderr: 'git-not-found' })
+        resolvePromise({ code: -1, stdout: '', stderr: 'ssh-not-found' })
         return
       }
-      // execFile 的 err.code 对非零退出是数字退出码
       const code = err ? (typeof (err as any).code === 'number' ? (err as any).code : 1) : 0
       resolvePromise({ code, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') })
     })
   })
+}
+
+/** 探测目标类别：代理前缀必须 2xx；网页镜像只验“站点可达”（根地址对爬虫常回 403） */
+export type ProbeKind = 'proxy' | 'web'
+
+function probeOk(kind: ProbeKind, status: number): boolean {
+  return kind === 'proxy' ? isProxyProbeOk(status) : status < 500
 }
 
 // ─── 持久化 ───
@@ -209,7 +280,7 @@ async function writeConfigToDisk(config: GithubAccelConfig): Promise<void> {
 // ─── 测速 ───
 
 /** 单次 HTTPS 探测：GET 全地址，计首字节时间，跟一次重定向。 */
-function probeOnce(url: string, redirectsLeft: number): Promise<ProbeResult> {
+function probeOnce(url: string, redirectsLeft: number, kind: ProbeKind): Promise<ProbeResult> {
   return new Promise((resolvePromise) => {
     const started = Date.now()
     let settled = false
@@ -236,18 +307,18 @@ function probeOnce(url: string, redirectsLeft: number): Promise<ProbeResult> {
           } catch (e: any) {
             return done({ target: url, ok: false, latencyMs: null, error: e?.message ?? '重定向地址非法' })
           }
-          probeOnce(next, redirectsLeft - 1).then(r => done({ ...r, target: url }))
+          probeOnce(next, redirectsLeft - 1, kind).then(r => done({ ...r, target: url }))
           return
         }
         res.once('data', () => {
           const latencyMs = Date.now() - started
           res.resume()
-          done({ target: url, ok: status < 500, latencyMs, status })
+          done({ target: url, ok: probeOk(kind, status), latencyMs, status })
         })
         res.once('end', () => {
           // 空响应体也算到达
           const latencyMs = Date.now() - started
-          done({ target: url, ok: status < 500, latencyMs, status })
+          done({ target: url, ok: probeOk(kind, status), latencyMs, status })
         })
         res.once('error', (e) => done({ target: url, ok: false, latencyMs: null, error: e.message }))
       })
@@ -268,6 +339,267 @@ function probeOnce(url: string, redirectsLeft: number): Promise<ProbeResult> {
 export class GithubAccelService {
   /** 读-改-写串行化（同 tunnel-store：防并发写互相覆写丢更新） */
   private writeQueue: Promise<unknown> = Promise.resolve()
+
+  /** hosts 服务（自检/巡检读取托管块与其条目；不参与写入） */
+  constructor(private readonly hosts?: Pick<GhHostsService, 'status'>) {}
+
+  // ─── 巡检内存态（不持久化：重启后由首检恢复） ───
+  private lastHealth: HealthStatus | null = null
+  private healthInFlight: Promise<HealthStatus> | null = null
+  private healthSender: ((status: HealthStatus) => void) | null = null
+  private healthTimer: NodeJS.Timeout | null = null
+  private healthFirstTimer: NodeJS.Timeout | null = null
+  private healthRecheckTimer: NodeJS.Timeout | null = null
+
+  /** 启动后台巡检：15s 后首检，之后每 30 分钟。重复调用只更新推送通道。 */
+  startHealthWatch(send: (status: HealthStatus) => void): void {
+    this.healthSender = send
+    if (this.healthTimer) return
+    this.healthFirstTimer = setTimeout(() => {
+      this.healthFirstTimer = null
+      void this.refreshHealth()
+    }, HEALTH_FIRST_DELAY_MS)
+    this.healthFirstTimer.unref?.()
+    this.healthTimer = setInterval(() => { void this.refreshHealth() }, HEALTH_INTERVAL_MS)
+    this.healthTimer.unref?.()
+  }
+
+  stopHealthWatch(): void {
+    if (this.healthFirstTimer) clearTimeout(this.healthFirstTimer)
+    if (this.healthTimer) clearInterval(this.healthTimer)
+    if (this.healthRecheckTimer) clearTimeout(this.healthRecheckTimer)
+    this.healthFirstTimer = null
+    this.healthTimer = null
+    this.healthRecheckTimer = null
+  }
+
+  /** 配置变动后的去抖复检：同一时刻只保留最后一次安排 */
+  refreshHealthSoon(): void {
+    if (!this.healthTimer) return
+    if (this.healthRecheckTimer) clearTimeout(this.healthRecheckTimer)
+    this.healthRecheckTimer = setTimeout(() => {
+      this.healthRecheckTimer = null
+      void this.refreshHealth()
+    }, HEALTH_RECHECK_DELAY_MS)
+    this.healthRecheckTimer.unref?.()
+  }
+
+  /** 最近一次巡检结果；从未巡检过返回 unknown */
+  async healthStatus(): Promise<HealthStatus> {
+    return this.lastHealth ?? { state: 'unknown', checkedAt: 0 }
+  }
+
+  /** 立即跑一轮巡检（并发调用共享同一轮），结果写内存并推送 */
+  async refreshHealth(): Promise<HealthStatus> {
+    if (this.healthInFlight) return this.healthInFlight
+    this.healthInFlight = this.computeHealth().then((status) => {
+      this.lastHealth = status
+      this.healthSender?.(status)
+      return status
+    }).finally(() => {
+      this.healthInFlight = null
+    })
+    return this.healthInFlight
+  }
+
+  private async computeHealth(): Promise<HealthStatus> {
+    // 没有 git 就不谈 git 加速；hosts 未写入也不在巡检范围内
+    const git = await this.gitStatus()
+    const config = await this.getConfig()
+    const hostsStatus = this.hosts ? await this.hosts.status().catch(() => null) : null
+    const hostsApplied = !!hostsStatus?.applied
+    const gitActive = git.available && git.active
+
+    if (!gitActive && !hostsApplied) {
+      return { state: 'off', checkedAt: Date.now() }
+    }
+
+    let degraded = false
+    let error: string | undefined
+    let activePrefix: string | undefined
+    let activeName: string | undefined
+    let latencyMs: number | undefined
+    let fallback: HealthStatus['fallback']
+
+    if (gitActive && git.activeSubsection) {
+      const active = this.resolveActiveProxy(git.activeSubsection, config)
+      activePrefix = active.prefix
+      activeName = active.name
+      const probe = await probeOnce(buildProbeUrl(active.prefix), 1, 'proxy')
+      if (probe.ok && probe.latencyMs !== null) latencyMs = probe.latencyMs
+      if (!probe.ok) {
+        degraded = true
+        error = probe.error ?? `HTTP ${probe.status ?? '无响应'}`
+        // 失效才探测其余镜像：取最快可用者作“切换建议”，绝不自动改配置
+        const others = config.proxies.filter(p => p.enabled && p.prefix !== active.prefix)
+        if (others.length) {
+          const results = await this.probe(others.map(p => ({ id: p.id, url: buildProbeUrl(p.prefix), kind: 'proxy' as const })))
+          const best = results
+            .filter(r => r.ok && typeof r.latencyMs === 'number')
+            .sort((a, b) => (a.latencyMs ?? 0) - (b.latencyMs ?? 0))[0]
+          const bestProxy = best ? others.find(p => p.id === best.id) : undefined
+          if (best && bestProxy) {
+            fallback = { prefix: bestProxy.prefix, name: bestProxy.name, latencyMs: best.latencyMs ?? 0 }
+          }
+        }
+      }
+    }
+
+    let hosts: HealthStatus['hosts']
+    if (hostsApplied && hostsStatus) {
+      const check = await this.checkHostsEntries(hostsStatus.entries)
+      hosts = { ok: check.ok, message: check.message }
+      // hosts 失败只置 degraded、不写 error —— error 专指镜像失效（UI 依据它区分两种红灯）
+      if (!check.ok) degraded = true
+    }
+
+    return {
+      state: degraded ? 'degraded' : 'ok',
+      activePrefix,
+      activeName,
+      latencyMs,
+      error,
+      fallback,
+      hosts,
+      checkedAt: Date.now(),
+    }
+  }
+
+  /** 生效子节（`<prefix>https://github.com/`）反推前缀与显示名 */
+  private resolveActiveProxy(subsection: string, config: GithubAccelConfig): { prefix: string; name: string } {
+    const hit = config.proxies.find(p => `${p.prefix}${GITHUB_BASE}` === subsection)
+    if (hit) return { prefix: hit.prefix, name: hit.name }
+    const prefix = subsection.endsWith(GITHUB_BASE) ? subsection.slice(0, -GITHUB_BASE.length) : subsection
+    return { prefix, name: prefix }
+  }
+
+  /**
+   * hosts 托管块实时有效性：最多取 3 个域名（github.com 优先），系统解析必须命中
+   * 托管块里的 IP 且该 IP 的 443 可达（至少一条）。
+   */
+  private async checkHostsEntries(entries: { domain: string; ip: string }[]): Promise<{ ok: boolean; message: string }> {
+    const ordered = entries.filter(e => e.domain === 'github.com')
+      .concat(entries.filter(e => e.domain !== 'github.com'))
+      .slice(0, 3)
+    if (!ordered.length) return { ok: false, message: '托管块内没有可用条目' }
+
+    let firstFailure = ''
+    for (const entry of ordered) {
+      let addresses: string[]
+      try {
+        addresses = (await lookup(entry.domain, { all: true })).map(a => a.address)
+      } catch (e) {
+        firstFailure ||= `${entry.domain} 系统解析失败`
+        continue
+      }
+      if (!addresses.includes(entry.ip)) {
+        firstFailure ||= `系统把 ${entry.domain} 解析为 ${addresses[0] ?? '无结果'}（托管块为 ${entry.ip}）`
+        continue
+      }
+      const ms = await tcpLatency(entry.ip, 443)
+      if (ms === null) {
+        firstFailure ||= `${entry.domain} 解析命中但 ${entry.ip} 的 443 不可达`
+        continue
+      }
+      return { ok: true, message: `${entry.domain} → ${entry.ip}（${ms}ms）` }
+    }
+    return {
+      ok: false,
+      message: `${firstFailure}，可能被 DNS 缓存或其他软件覆盖`,
+    }
+  }
+
+  /**
+   * 端到端自检：只读，不写配置、不弹 UAC。
+   * 措施未开启或环境不具备的项返回 skip（UI 灰显，不算失败）。
+   */
+  async selfCheck(): Promise<SelfCheckRow[]> {
+    const [git, ssh, hostsStatus] = await Promise.all([
+      this.gitStatus(),
+      this.ssh443Status(),
+      this.hosts ? this.hosts.status().catch(() => null) : Promise.resolve(null),
+    ])
+    const config = await this.getConfig()
+    const rows: SelfCheckRow[] = []
+
+    // git：ls-remote 真实走一遍 insteadOf 改写后的地址（15s 超时，禁止凭据提示挂住）
+    if (!git.available) {
+      rows.push({ key: 'git', state: 'skip', message: git.message || '未检测到 git' })
+    } else if (!git.active) {
+      rows.push({ key: 'git', state: 'skip', message: 'git 加速未生效' })
+    } else {
+      const started = Date.now()
+      const r = await execGit(
+        ['ls-remote', `${GITHUB_BASE}git/git`, 'HEAD'],
+        { timeoutMs: SELF_CHECK_GIT_TIMEOUT_MS, env: { GIT_TERMINAL_PROMPT: '0' } },
+      )
+      const latencyMs = Date.now() - started
+      if (r.code === 0 && r.stdout.trim()) {
+        const name = git.activeSubsection ? this.resolveActiveProxy(git.activeSubsection, config).name : '当前镜像'
+        rows.push({ key: 'git', state: 'ok', message: `经 ${name} 读取成功`, latencyMs })
+      } else {
+        const firstLine = r.timedOut
+          ? `超时（>${SELF_CHECK_GIT_TIMEOUT_MS / 1000}s 无响应）`
+          : ((r.stderr.trim() || r.stdout.trim()).split(/\r?\n/)[0] || `退出码 ${r.code}`)
+        rows.push({ key: 'git', state: 'fail', message: `git 读取失败：${firstLine}`, latencyMs })
+      }
+    }
+
+    // proxy：与巡检同一判据（2xx）再探一次原始前缀，用于把“git 失败”归因到镜像
+    if (git.available && git.active && git.activeSubsection) {
+      const active = this.resolveActiveProxy(git.activeSubsection, config)
+      const probe = await probeOnce(buildProbeUrl(active.prefix), 1, 'proxy')
+      if (probe.ok) {
+        rows.push({ key: 'proxy', state: 'ok', message: `镜像 ${active.name} 返回 ${probe.status}`, latencyMs: probe.latencyMs ?? undefined })
+      } else {
+        rows.push({
+          key: 'proxy',
+          state: 'fail',
+          message: probe.error ? `镜像 ${active.name} 不可用：${probe.error}` : `镜像 ${active.name} 返回 HTTP ${probe.status}`,
+        })
+      }
+    } else {
+      rows.push({ key: 'proxy', state: 'skip', message: 'git 加速未生效' })
+    }
+
+    // ssh443：托管块生效才验；Windows 无 OpenSSH 时 skip 而不是 fail
+    if (!ssh.applied) {
+      rows.push({ key: 'ssh443', state: 'skip', message: 'SSH 443 未开启' })
+    } else {
+      const r = await execSsh(['-G', 'github.com'])
+      if (r.code === -1) {
+        rows.push({ key: 'ssh443', state: 'skip', message: '未检测到 OpenSSH 客户端（ssh 命令不可用）' })
+      } else if (r.code !== 0) {
+        rows.push({ key: 'ssh443', state: 'fail', message: `ssh -G 失败：${(r.stderr.trim().split(/\r?\n/)[0]) || `退出码 ${r.code}`}` })
+      } else {
+        const parsed = parseSshG(r.stdout)
+        if (parsed.hostname !== 'ssh.github.com' || parsed.port !== 443) {
+          rows.push({
+            key: 'ssh443',
+            state: 'fail',
+            message: `github.com 当前解析为 ${parsed.hostname ?? '?'}:${parsed.port ?? '?'}，未命中 443 托管块`,
+          })
+        } else {
+          const ms = await tcpLatency('ssh.github.com', 443)
+          if (ms === null) {
+            rows.push({ key: 'ssh443', state: 'fail', message: 'ssh.github.com:443 不可达' })
+          } else {
+            rows.push({ key: 'ssh443', state: 'ok', message: 'github.com → ssh.github.com:443', latencyMs: ms })
+          }
+        }
+      }
+    }
+
+    // hosts：托管块生效才验系统解析是否真的用上了优选 IP
+    if (!hostsStatus?.applied) {
+      rows.push({ key: 'hosts', state: 'skip', message: 'hosts 加速未开启' })
+    } else {
+      const check = await this.checkHostsEntries(hostsStatus.entries)
+      rows.push({ key: 'hosts', state: check.ok ? 'ok' : 'fail', message: check.message })
+    }
+
+    return rows
+  }
 
   private enqueue<T>(op: () => Promise<T>): Promise<T> {
     const run = this.writeQueue.then(op, op)
@@ -323,19 +655,21 @@ export class GithubAccelService {
       const current = await readConfigFromDisk()
       const next: GithubAccelConfig = { ...current, proxies: nextProxies, webMirrors: nextWeb }
       await writeConfigToDisk(next)
+      // 镜像清单可能停用了当前生效前缀或恢复了它：去抖复检一次，红灯状态要跟着变
+      this.refreshHealthSoon()
       return next
     })
   }
 
   /** 对传入的地址列表逐个探测（并发），UI 用结果给镜像排序/标死活 */
-  async probe(targets: { id: string; url: string }[]): Promise<(ProbeResult & { id: string })[]> {
+  async probe(targets: { id: string; url: string; kind?: ProbeKind }[]): Promise<(ProbeResult & { id: string })[]> {
     if (!Array.isArray(targets)) return []
     const jobs = targets.slice(0, 16).map(async t => {
       // 只探测 http(s)，防 file:// 等协议注入
       if (typeof t.url !== 'string' || !/^https:\/\//i.test(t.url)) {
         return { id: String(t.id), target: String(t.url ?? ''), ok: false, latencyMs: null, error: '仅支持 https 探测目标' }
       }
-      const r = await probeOnce(t.url, 1)
+      const r = await probeOnce(t.url, 1, t.kind ?? 'proxy')
       return { ...r, id: t.id }
     })
     return Promise.all(jobs)
@@ -344,10 +678,11 @@ export class GithubAccelService {
   /** 组装全部启用镜像的探测地址（含一个直连 raw 文件对照组，与代理同口径） */
   async probeAll(): Promise<(ProbeResult & { id: string; name: string })[]> {
     const config = await this.getConfig()
-    const targets = [
-      { id: '__direct__', name: '直连对照', url: PROBE_TARGET },
-      ...config.proxies.filter(p => p.enabled).map(p => ({ id: p.id, name: p.name, url: buildProbeUrl(p.prefix) })),
-      ...config.webMirrors.filter(w => w.enabled).map(w => ({ id: w.id, name: w.name, url: `https://${w.host}/` })),
+    const targets: { id: string; name: string; url: string; kind: ProbeKind }[] = [
+      { id: '__direct__', name: '直连对照', url: PROBE_TARGET, kind: 'proxy' },
+      ...config.proxies.filter(p => p.enabled).map(p => ({ id: p.id, name: p.name, url: buildProbeUrl(p.prefix), kind: 'proxy' as const })),
+      // 网页镜像只验站点可达（根地址对爬虫回 403 不代表浏览器不可用）
+      ...config.webMirrors.filter(w => w.enabled).map(w => ({ id: w.id, name: w.name, url: `https://${w.host}/`, kind: 'web' as const })),
     ]
     const results = await this.probe(targets)
     return results.map(r => ({ ...r, name: targets.find(t => t.id === r.id)?.name ?? r.id }))
@@ -423,6 +758,7 @@ export class GithubAccelService {
 
       const set = await execGit(buildGitSetArgs(prefix))
       if (set.code !== 0) throw new Error(`写入 git 配置失败: ${set.stderr.trim() || `退出码 ${set.code}`}`)
+      this.refreshHealthSoon()
       return this.gitStatus()
     })
   }
@@ -455,6 +791,7 @@ export class GithubAccelService {
       }
       config.gitBackup = null
       await writeConfigToDisk(config)
+      this.refreshHealthSoon()
       return this.gitStatus()
     })
   }

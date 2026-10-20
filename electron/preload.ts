@@ -193,6 +193,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ghaccelGitStatus: () => ipcRenderer.invoke('ghaccel:gitStatus'),
   ghaccelGitEnable: (prefix: string) => ipcRenderer.invoke('ghaccel:gitEnable', prefix),
   ghaccelGitDisable: () => ipcRenderer.invoke('ghaccel:gitDisable'),
+  ghaccelSelfCheck: () => ipcRenderer.invoke('ghaccel:selfCheck'),
+  ghaccelHealthStatus: () => ipcRenderer.invoke('ghaccel:healthStatus'),
   ghaccelSsh443Status: () => ipcRenderer.invoke('ghaccel:ssh443Status'),
   ghaccelSsh443Apply: () => ipcRenderer.invoke('ghaccel:ssh443Apply'),
   ghaccelSsh443Remove: () => ipcRenderer.invoke('ghaccel:ssh443Remove'),
@@ -214,6 +216,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_event: any, data: any) => callback(data)
     ipcRenderer.on('ghaccel:download', handler)
     return () => ipcRenderer.removeListener('ghaccel:download', handler)
+  },
+  /** 镜像巡检结果（主进程每 30 分钟/配置变更后推送）；返回取消监听函数 */
+  onGhaccelHealth: (callback: (data: any) => void) => {
+    const handler = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('ghaccel:health', handler)
+    return () => ipcRenderer.removeListener('ghaccel:health', handler)
   },
   /**
    * 监听隧道状态变化（主进程推送，每次状态迁移一条）

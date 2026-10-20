@@ -136,6 +136,29 @@ interface GhDownloadStatus {
   error?: string
 }
 
+/** 加速自检的一行（主进程定义见 electron/github-accel.ts；skip = 未开启/环境不具备） */
+interface GhaccelSelfCheckRow {
+  key: 'git' | 'proxy' | 'ssh443' | 'hosts'
+  state: 'ok' | 'fail' | 'skip'
+  message: string
+  latencyMs?: number
+}
+
+/** 镜像巡检状态（主进程 → 渲染层推送，channel: ghaccel:health；不持久化） */
+interface GhaccelHealthStatus {
+  state: 'unknown' | 'off' | 'ok' | 'degraded'
+  activePrefix?: string
+  activeName?: string
+  latencyMs?: number
+  /** 当前镜像失效原因（仅镜像；hosts 的问题见 hosts.message） */
+  error?: string
+  /** 当前镜像失效时探测到的最快备用（只提示，绝不自动切换） */
+  fallback?: { prefix: string; name: string; latencyMs: number }
+  /** hosts 托管块生效时的实时有效性；未写入不返回 */
+  hosts?: { ok: boolean; message: string }
+  checkedAt: number
+}
+
 /** TLS 接入网关记录（主进程定义见 electron/gateway-store.ts；口令不出主进程） */
 interface GatewayRecord {
   id: string
@@ -312,6 +335,10 @@ interface ElectronAPI {
   }>
   ghaccelGitEnable: (prefix: string) => Promise<ReturnType<ElectronAPI['ghaccelGitStatus']>>
   ghaccelGitDisable: () => Promise<ReturnType<ElectronAPI['ghaccelGitStatus']>>
+  /** 端到端自检（只读）：git / 代理 / SSH 443 / hosts 四项 */
+  ghaccelSelfCheck: () => Promise<GhaccelSelfCheckRow[]>
+  /** 最近一次巡检结果（标题栏挂载时拉取，不必等下一次推送） */
+  ghaccelHealthStatus: () => Promise<GhaccelHealthStatus>
   ghaccelSsh443Status: () => Promise<{ applied: boolean; path: string; exists: boolean; message?: string }>
   ghaccelSsh443Apply: () => Promise<{ applied: boolean; path: string; exists: boolean }>
   ghaccelSsh443Remove: () => Promise<{ applied: boolean; path: string; exists: boolean }>
@@ -322,6 +349,7 @@ interface ElectronAPI {
   ghaccelDownloadList: () => Promise<GhDownloadStatus[]>
   ghaccelShowItemInFolder: (id: string) => Promise<void>
   onGhaccelDownload: (callback: (data: GhDownloadStatus) => void) => () => void
+  onGhaccelHealth: (callback: (data: GhaccelHealthStatus) => void) => () => void
   // hosts 优选 IP（主进程实现见 electron/gh-hosts.ts）
   ghaccelHostsStatus: () => Promise<{
     applied: boolean

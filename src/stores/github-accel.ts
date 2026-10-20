@@ -6,6 +6,7 @@ import { computed, ref } from 'vue'
 import {
   buildAccelLinks,
   parseGithubUrl,
+  GITHUB_BASE,
   type AccelLinkSet,
   type AccelProxy,
   type AccelWebMirror,
@@ -19,6 +20,8 @@ type Ssh443 = Awaited<ReturnType<NonNullable<typeof window.electronAPI>['ghaccel
 type DownloadStatus = Awaited<ReturnType<NonNullable<typeof window.electronAPI>['ghaccelDownloadList']>>[number]
 type HostsStatus = Awaited<ReturnType<NonNullable<typeof window.electronAPI>['ghaccelHostsStatus']>>
 type HostsPickRow = Awaited<ReturnType<NonNullable<typeof window.electronAPI>['ghaccelHostsPick']>>[number]
+type SelfCheckRow = Awaited<ReturnType<NonNullable<typeof window.electronAPI>['ghaccelSelfCheck']>>[number]
+type HealthStatus = Awaited<ReturnType<NonNullable<typeof window.electronAPI>['ghaccelHealthStatus']>>
 
 /** 一键加速单项结果：UI 总控卡逐项显示成败。
  *  总控对称管辖全部三项（git / ssh443 / hosts）：启动 = 逐项开启（hosts 自动
@@ -54,7 +57,46 @@ export const useGithubAccelStore = defineStore('github-accel', () => {
   const hostsPicking = ref(false)
   const hostsBusy = ref(false)
 
+  const health = ref<HealthStatus | null>(null)
+  const selfCheckRows = ref<SelfCheckRow[]>([])
+  const selfChecking = ref(false)
+  let healthUnsub: (() => void) | null = null
+
   const enabledProxies = computed(() => proxies.value.filter(p => p.enabled))
+
+  /** 当前 git 生效前缀（从 insteadOf 子节反推）；未生效为空串 */
+  const activeGitPrefix = computed(() => {
+    const sub = git.value?.activeSubsection
+    if (!sub) return ''
+    return sub.endsWith(GITHUB_BASE) ? sub.slice(0, -GITHUB_BASE.length) : sub
+  })
+
+  /**
+   * 巡检订阅（轻量：只拉状态 + 订阅，不加载整份配置）。
+   * 标题栏用它挂红点，页面 init 也会调用 —— 两者共用同一份订阅，不重复注册。
+   */
+  async function initHealth(): Promise<void> {
+    const api = window.electronAPI
+    if (!api) return
+    if (!healthUnsub) {
+      healthUnsub = api.onGhaccelHealth(status => { health.value = status })
+    }
+    try {
+      health.value = await api.ghaccelHealthStatus()
+    } catch { /* 主进程不支持时忽略（如纯 web 预览） */ }
+  }
+
+  /** 端到端自检（只读）：结果按行展示，失败不阻断页面 */
+  async function runSelfCheck(): Promise<void> {
+    const api = window.electronAPI
+    if (!api || selfChecking.value) return
+    selfChecking.value = true
+    try {
+      selfCheckRows.value = await api.ghaccelSelfCheck()
+    } finally {
+      selfChecking.value = false
+    }
+  }
 
   async function init(): Promise<void> {
     const api = window.electronAPI
@@ -66,6 +108,7 @@ export const useGithubAccelStore = defineStore('github-accel', () => {
     void refreshGitStatus().catch(() => undefined)
     void refreshSsh443().catch(() => undefined)
     void refreshHosts().catch(() => undefined)
+    void initHealth()
     // 下载任务：恢复内存中仍在跑的任务 + 订阅推送（页面重开不丢下载进度）
     if (!downloadUnsub) {
       downloadUnsub = api.onGhaccelDownload(status => {
@@ -194,6 +237,23 @@ export const useGithubAccelStore = defineStore('github-accel', () => {
       // 关闭后同步一次接管凭证（应为 null）
       const config = await api.ghaccelGetConfig()
       gitBackup.value = config.gitBackup
+    } finally {
+      gitBusy.value = false
+    }
+  }
+
+  /**
+   * 切换生效镜像：手动下拉与巡检红灯按钮共用同一入口。
+   * 只改 git insteadOf 与上次选择（不碰用户仓库 remote）；主进程 2s 后会自动复检并推送新状态。
+   */
+  async function switchActiveMirror(prefix: string): Promise<void> {
+    const api = window.electronAPI
+    if (!api) throw new Error('electronAPI 不可用')
+    if (gitBusy.value) return
+    gitBusy.value = true
+    try {
+      git.value = await api.ghaccelGitEnable(prefix)
+      applyConfig(await api.ghaccelSaveOptions({ lastProxyPrefix: prefix }))
     } finally {
       gitBusy.value = false
     }
@@ -401,11 +461,13 @@ export const useGithubAccelStore = defineStore('github-accel', () => {
     probeResults, probing, probedAt,
     git, gitBusy, ssh443, sshBusy, downloads,
     hosts, hostsPicks, hostsPicking, hostsBusy, hostsReadyCount,
-    enabledProxies, bestProxyId, activeMeasureCount,
-    init, convert,
+    health, selfCheckRows, selfChecking,
+    enabledProxies, bestProxyId, activeMeasureCount, activeGitPrefix,
+    init, initHealth, runSelfCheck,
+    convert,
     toggleProxy, toggleWebMirror, addProxy, addWebMirror, removeProxy, removeWebMirror,
     probeAll, probeOf,
-    refreshGitStatus, gitEnable, gitDisable,
+    refreshGitStatus, gitEnable, gitDisable, switchActiveMirror,
     refreshSsh443, ssh443Apply, ssh443Remove,
     downloadStart, downloadCancel, showInFolder,
     refreshHosts, hostsPick, hostsApply, hostsRemove,

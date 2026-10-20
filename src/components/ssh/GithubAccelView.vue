@@ -8,15 +8,18 @@
     </div>
 
     <div class="gh-body">
-      <!-- ── 加速总控：一键启动 / 关闭（只管辖 git + SSH 443 两项；hosts 始终手动） ── -->
+      <!-- ── 加速总控：一键启动 / 关闭 + 自检 + 巡检红灯 ── -->
       <section class="panel master">
         <div class="master-row">
           <span class="dot" :class="masterOn ? 'on' : 'off'"></span>
           <span class="master-title">加速{{ masterStateText }}</span>
-          <span class="measure-chips">
-            <span v-for="m in measureChips" :key="m.key" class="m-chip" :class="m.on ? 'on' : 'off'" :title="m.tip">{{ m.label }}</span>
-          </span>
           <span class="head-spacer"></span>
+          <button
+            class="btn btn-sm"
+            :disabled="masterBusy || accel.selfChecking || accel.activeMeasureCount === 0"
+            :title="accel.activeMeasureCount === 0 ? '先开启至少一项加速措施' : '端到端自检：git 读取 / 镜像 / SSH 443 / hosts'"
+            @click="onSelfCheck"
+          >{{ accel.selfChecking ? '自检中…' : '自检' }}</button>
           <button
             class="btn"
             :class="masterOn ? 'btn-danger' : 'btn-primary'"
@@ -24,13 +27,44 @@
             @click="masterOn ? onMasterDisable() : onMasterEnable()"
           >{{ masterButtonLabel }}</button>
         </div>
-        <div class="hint">总控管理 <b>git 全局加速</b>、<b>SSH 443</b> 与 <b>hosts 优选</b>三项：启动后 git / SSH 推拉自动走加速，无需再做任何操作；hosts 写入与移除会各弹一次系统提权（UAC）确认。</div>
+        <div class="hint">
+          管理 <b>git 全局加速</b>、<b>SSH 443</b> 与 <b>hosts 优选</b>；hosts 写入与移除各弹一次 UAC。
+          git 加速只代理读取（clone / fetch / 下载），HTTPS push 不走镜像，请用 SSH 443。
+        </div>
         <div v-if="masterNote" class="hint" :class="{ warn: masterNoteWarn }">{{ masterNote }}</div>
+
+        <!-- 巡检红灯：镜像失效与 hosts 失效分开归因，各自给修复入口（绝不自动改配置） -->
+        <div v-if="accel.health?.state === 'degraded'" class="health-alert">
+          <template v-if="mirrorFailureText">
+            <span class="health-alert-text">{{ mirrorFailureText }}</span>
+            <button
+              v-if="accel.health.fallback"
+              class="btn btn-sm btn-primary"
+              :disabled="accel.gitBusy"
+              @click="switchMirror(accel.health.fallback.prefix)"
+            >切换到 {{ accel.health.fallback.name }}</button>
+          </template>
+          <template v-if="accel.health.hosts && !accel.health.hosts.ok">
+            <span class="health-alert-text">hosts 未生效：{{ accel.health.hosts.message }}</span>
+            <button class="btn btn-sm" :disabled="accel.hostsPicking || accel.hostsBusy" @click="refreshStaleHosts">重新优选并写入</button>
+          </template>
+        </div>
+
         <!-- hosts 时效被动提醒：优选 IP 是快照，GitHub 轮换接入 IP 后会从加速器变阻断器；
              在总控卡上直接给出「更新」入口，用户不需要记住 hosts 还要维护 -->
         <div v-if="hostsStaleNote" class="hint warn">
           {{ hostsStaleNote }}
           <button class="btn btn-sm" :disabled="accel.hostsPicking || accel.hostsBusy" @click="refreshStaleHosts">更新 hosts</button>
+        </div>
+
+        <!-- 自检结果：只读端到端验证，skip 灰显表示该措施未开启 -->
+        <div v-if="accel.selfCheckRows.length" class="selfcheck">
+          <div v-for="row in accel.selfCheckRows" :key="row.key" class="selfcheck-row">
+            <span class="dot" :class="row.state === 'ok' ? 'on' : row.state === 'fail' ? 'fail' : 'off'"></span>
+            <span class="selfcheck-name">{{ SELF_CHECK_LABELS[row.key] }}</span>
+            <span class="selfcheck-msg" :class="{ warn: row.state === 'fail' }">{{ row.message }}</span>
+            <span class="selfcheck-ms">{{ row.latencyMs != null ? formatLatency(row.latencyMs) : '' }}</span>
+          </div>
         </div>
       </section>
 
@@ -92,60 +126,81 @@
         </div>
       </section>
 
-      <!-- ── 措施一：clone 加速 ── -->
+      <!-- ── 加速措施：三行一表（详情只在相关状态出现） ── -->
       <section class="panel">
-        <div class="panel-title">
-          git 全局加速
-          <span v-if="accel.git?.active" class="title-chip on">已开启</span>
-          <span v-else class="title-chip off">未开启</span>
-        </div>
-        <div class="hint">开启后 <code>git clone https://github.com/…</code> 原样敲即自动走镜像；关闭时自动还原。</div>
-        <div v-if="accel.git" class="status-block">
-          <div v-if="!accel.git.available" class="hint warn">{{ accel.git.message || '未检测到 git' }}</div>
-          <template v-else>
-            <div v-if="accel.git.active" class="status-line">
-              <code class="link-url">{{ accel.git.activeSubsection }}</code>
-              <span v-if="!accel.git.managed" class="hint warn">（非本应用写入）</span>
-            </div>
-            <div v-if="accel.git.backup" class="hint">已备份接管前规则，关闭时还原。</div>
-            <div class="action-row">
-              <template v-if="!accel.git.active">
-                <select v-model="gitPrefix" class="text-input select">
-                  <option v-for="p in accel.enabledProxies" :key="p.id" :value="p.prefix">{{ p.name }}</option>
-                </select>
-                <button class="btn btn-primary" :disabled="accel.gitBusy || !gitPrefix" @click="enableGit">开启</button>
-              </template>
-              <button v-else class="btn btn-danger" :disabled="accel.gitBusy" @click="disableGit">关闭并还原</button>
-            </div>
+        <div class="panel-title">加速措施</div>
+
+        <!-- git 全局加速 -->
+        <div class="measure-row">
+          <span class="measure-name" title="开启后 git clone / fetch / 下载按原地址自动走镜像；改写的是全局 git 配置，关闭时还原">git 全局加速</span>
+          <span class="title-chip" :class="accel.git?.active ? 'on' : 'off'">{{ accel.git?.active ? '已开启' : '未开启' }}</span>
+          <span v-if="accel.git?.active && !accel.git.managed" class="hint warn">非本应用写入</span>
+          <span class="head-spacer"></span>
+          <template v-if="accel.git?.available">
+            <template v-if="accel.git.active">
+              <select
+                class="text-input select"
+                :value="accel.activeGitPrefix"
+                :disabled="accel.gitBusy"
+                title="切换生效镜像（只改 git 全局 insteadOf，不碰仓库 remote）"
+                @change="switchMirror(($event.target as HTMLSelectElement).value)"
+              >
+                <option v-for="p in proxyOptions" :key="p.id" :value="p.prefix">{{ p.name }}</option>
+              </select>
+              <button class="btn btn-danger btn-sm" :disabled="accel.gitBusy" @click="disableGit">关闭并还原</button>
+            </template>
+            <template v-else>
+              <select v-model="gitPrefix" class="text-input select" :disabled="accel.gitBusy">
+                <option v-for="p in accel.enabledProxies" :key="p.id" :value="p.prefix">{{ p.name }}</option>
+              </select>
+              <button class="btn btn-primary btn-sm" :disabled="accel.gitBusy || !gitPrefix" @click="enableGit">开启</button>
+            </template>
           </template>
         </div>
-      </section>
-
-      <!-- ── 措施二：SSH 推拉加速 ── -->
-      <section class="panel">
-        <div class="panel-title">
-          SSH 走 443 端口
-          <span v-if="accel.ssh443?.applied" class="title-chip on">已写入</span>
-          <span v-else class="title-chip off">未写入</span>
+        <div class="measure-hint">
+          <template v-if="!accel.git">正在读取 git 状态…</template>
+          <template v-else-if="!accel.git.available">{{ accel.git.message || '未检测到 git' }}</template>
+          <template v-else>只代理读取（clone / fetch / 下载），HTTPS push 不走镜像。</template>
         </div>
-        <div class="hint">用 <code>git@github.com:…</code> 推拉时绕开被限速的 22 端口（GitHub 官方支持，写入 <code>~/.ssh/config</code> 托管块，可一键移除）。</div>
-        <div v-if="accel.ssh443" class="status-block">
-          <div class="action-row">
-            <button v-if="!accel.ssh443.applied" class="btn btn-primary" :disabled="accel.sshBusy" @click="applySsh">写入</button>
-            <button v-else class="btn btn-danger" :disabled="accel.sshBusy" @click="removeSsh">移除</button>
-          </div>
+        <div v-if="accel.git?.active" class="measure-detail">
+          <code class="link-url">{{ accel.git.activeSubsection }}</code>
+          <span v-if="accel.git.backup" class="hint">已备份接管前规则，关闭时还原。</span>
         </div>
-      </section>
 
-      <!-- ── 措施三：hosts 优选（登录态网页） ── -->
-      <section class="panel">
-        <div class="panel-title">
-          hosts 优选 IP
+        <div class="measure-sep"></div>
+
+        <!-- SSH 443 -->
+        <div class="measure-row">
+          <span class="measure-name" title="写入 ~/.ssh/config 托管块：Host github.com → ssh.github.com:443（GitHub 官方支持），可一键移除">SSH 走 443 端口</span>
+          <span class="title-chip" :class="accel.ssh443?.applied ? 'on' : 'off'">{{ accel.ssh443?.applied ? '已写入' : '未写入' }}</span>
+          <span class="head-spacer"></span>
+          <button v-if="accel.ssh443 && !accel.ssh443.applied" class="btn btn-primary btn-sm" :disabled="accel.sshBusy" @click="applySsh">写入</button>
+          <button v-else-if="accel.ssh443" class="btn btn-danger btn-sm" :disabled="accel.sshBusy" @click="removeSsh">移除</button>
+        </div>
+        <div class="measure-hint">用 <code>git@github.com:…</code> 推拉时绕开被限速的 22 端口。</div>
+
+        <div class="measure-sep"></div>
+
+        <!-- hosts 优选 IP -->
+        <div class="measure-row">
+          <span class="measure-name" title="解析 GitHub 系域名的优选 IP 写入系统 hosts，解决镜像覆盖不了的登录态网页与 API">hosts 优选 IP</span>
           <span v-if="hostsAgeChip" class="title-chip" :class="hostsAgeChip.cls">{{ hostsAgeChip.text }}</span>
           <span v-else class="title-chip off">未写入</span>
+          <span class="head-spacer"></span>
+          <button class="btn btn-sm" :disabled="accel.hostsPicking" @click="pickHosts">
+            {{ accel.hostsPicking ? '优选中…' : (accel.hostsPicks.length ? '重新优选' : '优选 IP') }}
+          </button>
+          <button
+            v-if="accel.hosts && !accel.hosts.applied"
+            class="btn btn-primary btn-sm"
+            :disabled="accel.hostsBusy || accel.hostsPicking || accel.hostsReadyCount === 0"
+            @click="applyHosts"
+          >写入 hosts</button>
+          <button v-else-if="accel.hosts" class="btn btn-danger btn-sm" :disabled="accel.hostsBusy" @click="removeHosts">移除托管块</button>
         </div>
-        <div class="hint">解决镜像覆盖不了的登录态网页与 API：解析 GitHub 官方最优 IP 写入系统 hosts（写入时弹 UAC 提权框）。已纳入总控：启动加速时自动优选并写入，「关闭加速」时一并移除；也可在下方单独操作。</div>
-        <div v-if="accel.hosts" class="status-block">
+        <div class="measure-hint">解决镜像覆盖不了的登录态网页与 API；写入与移除各弹一次 UAC。</div>
+        <div v-if="accel.hosts?.message" class="measure-hint warn">{{ accel.hosts.message }}</div>
+        <div v-if="accel.hosts" class="measure-detail">
           <div v-if="accel.hosts.applied && accel.hosts.entries.length" class="hosts-table">
             <div v-for="e in accel.hosts.entries" :key="e.domain" class="hosts-row">
               <code class="link-url">{{ e.domain }}</code>
@@ -160,18 +215,6 @@
                 {{ r.latencyMs !== null ? `${r.latencyMs}ms` : '' }}
               </span>
             </div>
-          </div>
-          <div class="action-row">
-            <button class="btn" :disabled="accel.hostsPicking" @click="pickHosts">
-              {{ accel.hostsPicking ? '优选中…' : (accel.hostsPicks.length ? '重新优选' : '优选 IP') }}
-            </button>
-            <button
-              v-if="!accel.hosts.applied"
-              class="btn btn-primary"
-              :disabled="accel.hostsBusy || accel.hostsPicking || accel.hostsReadyCount === 0"
-              @click="applyHosts"
-            >写入 hosts</button>
-            <button v-else class="btn btn-danger" :disabled="accel.hostsBusy" @click="removeHosts">移除托管块</button>
           </div>
         </div>
       </section>
@@ -266,11 +309,63 @@ const KIND_TITLES: Record<AccelLink['kind'], string> = {
   web: '网页浏览（镜像站，不能登录）',
 }
 
-const measureChips = computed(() => [
-  { key: 'git', label: 'git', tip: 'git 全局加速（总控管辖）', on: !!accel.git?.active },
-  { key: 'ssh443', label: 'SSH 443', tip: 'SSH 走 443 端口（总控管辖）', on: !!accel.ssh443?.applied },
-  { key: 'hosts', label: 'hosts', tip: 'hosts 优选（启动加速时自动优选并写入，需一次 UAC 确认）', on: !!accel.hosts?.applied },
-])
+const SELF_CHECK_LABELS: Record<'git' | 'proxy' | 'ssh443' | 'hosts', string> = {
+  git: 'git 读取',
+  proxy: '镜像探测',
+  ssh443: 'SSH 443',
+  hosts: 'hosts 解析',
+}
+
+function formatLatency(ms: number): string {
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`
+}
+
+/** 巡检红灯的镜像归因：error 只由镜像失效写入（hosts 问题走 health.hosts.message） */
+const mirrorFailureText = computed(() => {
+  const h = accel.health
+  if (!h || h.state !== 'degraded' || !h.error || !h.activePrefix) return ''
+  return `当前镜像 ${h.activeName || h.activePrefix} 不可用（${h.error}）`
+})
+
+/** 生效中的镜像可能已被停用：下拉里补一条，避免 select 显示空白 */
+const proxyOptions = computed(() => {
+  const list = [...accel.enabledProxies]
+  const active = accel.activeGitPrefix
+  if (active && !list.some(p => p.prefix === active)) {
+    list.unshift({
+      id: `active:${active}`,
+      name: `${accel.health?.activeName || active}（已停用）`,
+      prefix: active,
+      builtin: false,
+      enabled: false,
+    })
+  }
+  return list
+})
+
+function proxyName(prefix: string): string {
+  return accel.proxies.find(p => p.prefix === prefix)?.name || accel.health?.activeName || prefix
+}
+
+async function switchMirror(prefix: string): Promise<void> {
+  if (!prefix || prefix === accel.activeGitPrefix) return
+  try {
+    await accel.switchActiveMirror(prefix)
+    toast.success(`已切换到 ${proxyName(prefix)}`)
+  } catch (e: any) {
+    toast.error(e?.message || '切换失败')
+    // 主进程先卸旧规则再写新规则：失败时可能已无生效项，回读真实状态而非停在旧子节
+    await accel.refreshGitStatus().catch(() => undefined)
+  }
+}
+
+async function onSelfCheck(): Promise<void> {
+  try {
+    await accel.runSelfCheck()
+  } catch (e: any) {
+    toast.error(e?.message || '自检失败')
+  }
+}
 
 interface LinkGroup {
   kind: AccelLink['kind']
@@ -549,6 +644,8 @@ async function onMasterEnable(): Promise<void> {
       masterNoteWarn.value = true
       masterNote.value = `部分未生效：${failed.map(s => `${STEP_LABEL[s.key]}（${s.message || '失败'}）`).join('；')}`
     }
+    // 有任一项生效就异步自检一次，不阻塞总控按钮状态
+    if (steps.some(s => s.ok)) void accel.runSelfCheck()
   } catch (e: any) {
     masterNoteWarn.value = true
     masterNote.value = e?.message || '启动失败'
@@ -688,18 +785,63 @@ async function onMasterDisable(): Promise<void> {
   color: var(--text-primary);
 }
 
-.measure-chips { display: flex; gap: 6px; }
+/* ── 巡检红灯（总控卡内） ── */
+.health-alert {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 8px;
+  border-left: 2px solid var(--danger-text);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--danger-text) 8%, transparent);
+}
 
-.m-chip {
+.health-alert-text {
   font-size: 11px;
-  padding: 1px 8px;
-  border-radius: 10px;
-  border: 1px solid var(--border-subtle);
+  color: var(--danger-text);
+  line-height: 1.5;
+}
+
+/* ── 自检结果（总控卡内，只读） ── */
+.selfcheck {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 2px;
+  border-top: 1px dashed var(--border-subtle);
+}
+
+.selfcheck-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 20px;
+}
+
+.selfcheck-name {
+  flex: 0 0 64px;
+  font-size: 11px;
   color: var(--text-secondary);
 }
-.m-chip.on {
-  color: var(--status-success-text);
-  border-color: color-mix(in srgb, var(--status-success-text) 40%, transparent);
+
+.selfcheck-msg {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.selfcheck-msg.warn { color: var(--danger-text); }
+
+.selfcheck-ms {
+  flex: 0 0 52px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  text-align: right;
 }
 
 /* ── 链接转换 ── */
@@ -743,16 +885,39 @@ async function onMasterDisable(): Promise<void> {
   min-width: 0;
 }
 
-/* ── 状态与操作 ── */
-.status-block { display: flex; flex-direction: column; gap: 8px; }
-
-.status-line {
+/* ── 加速措施：三行一表 ── */
+.measure-row {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-height: 28px;
+}
+
+.measure-name {
   font-size: 12px;
+  font-weight: 500;
   color: var(--text-primary);
-  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.measure-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-top: -4px;
+}
+.measure-hint.warn { color: var(--danger-text); }
+
+.measure-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 0 2px;
+}
+
+.measure-sep {
+  border-top: 1px dashed var(--border-subtle);
+  margin: 2px 0;
 }
 
 .dot {
@@ -763,8 +928,7 @@ async function onMasterDisable(): Promise<void> {
 }
 .dot.on { background: var(--status-success-text); }
 .dot.off { background: var(--text-secondary); opacity: .5; }
-
-.action-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.dot.fail { background: var(--danger-text); }
 
 .text-input {
   flex: 1;

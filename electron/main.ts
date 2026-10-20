@@ -1116,13 +1116,19 @@ function setupSSHIPC(): void {
   // 隧道：复用 sshStore 取凭据 + sshManager.openRawClient 建 TOFU 一致的裸连接
   tunnelStore = new TunnelStore()
   tunnelManager = new TunnelManager()
-  githubAccel = new GithubAccelService()
-  ghDownload = new GhDownloadManager()
   ghHosts = new GhHostsService()
+  githubAccel = new GithubAccelService(ghHosts)
+  ghDownload = new GhDownloadManager()
   ghDownload.setSender((data) => {
     // 窗口销毁后 webContents.send 会抛，加守卫（与 gateway:status 同一口径）
     if (mainWindow && !mainWindow.isDestroyed()) {
       try { mainWindow.webContents.send('ghaccel:download', data) } catch { /* 窗口已销毁 */ }
+    }
+  })
+  // 镜像巡检：主进程持有定时器与网络探测，渲染层只订阅结果（标题栏红点不依赖页面挂载）
+  githubAccel.startHealthWatch((status) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try { mainWindow.webContents.send('ghaccel:health', status) } catch { /* 窗口已销毁 */ }
     }
   })
   gatewayStore = new GatewayStore()
@@ -1326,6 +1332,15 @@ function setupSSHIPC(): void {
     return githubAccel!.gitStatus()
   })
 
+  // 自检（只读：不写 git/ssh/hosts 配置，不弹 UAC）与巡检状态拉取（标题栏挂载时用）
+  handleTrusted('ghaccel:selfCheck', () => {
+    return githubAccel!.selfCheck()
+  })
+
+  handleTrusted('ghaccel:healthStatus', () => {
+    return githubAccel!.healthStatus()
+  })
+
   handleTrusted('ghaccel:gitEnable', (_event, prefix: string) => {
     return githubAccel!.gitEnable(prefix)
   })
@@ -1381,12 +1396,17 @@ function setupSSHIPC(): void {
     return ghHosts!.pick()
   })
 
-  handleTrusted('ghaccel:hostsApply', (_event, entries?: { domain: string; ip: string }[]) => {
-    return ghHosts!.apply(entries)
+  handleTrusted('ghaccel:hostsApply', async (_event, entries?: { domain: string; ip: string }[]) => {
+    const status = await ghHosts!.apply(entries)
+    // hosts 托管块参与巡检：写入/移除后让红点与 hosts 结论跟上，而不是等下一个 30 分钟周期
+    githubAccel!.refreshHealthSoon()
+    return status
   })
 
-  handleTrusted('ghaccel:hostsRemove', () => {
-    return ghHosts!.remove()
+  handleTrusted('ghaccel:hostsRemove', async () => {
+    const status = await ghHosts!.remove()
+    githubAccel!.refreshHealthSoon()
+    return status
   })
 
   // 总控选项：记住一键加速使用的镜像
@@ -1774,6 +1794,7 @@ app.on('before-quit', () => {
   sshManager?.disconnectAll()
   tunnelManager?.stopAll()
   gatewayManager?.stopAll()
+  githubAccel?.stopHealthWatch()
   backendManager?.stop()
   bridgeWsClient?.stop()
   electronBridge?.stop()

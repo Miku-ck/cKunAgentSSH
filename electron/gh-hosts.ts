@@ -15,11 +15,14 @@ import { readFile, writeFile, copyFile, mkdir, unlink } from 'fs/promises'
 import { existsSync } from 'fs'
 import { execFile } from 'child_process'
 import https from 'https'
-import net from 'net'
+import { tcpLatency } from './utils/tcp-latency'
 import {
   applyHostsBlock,
+  decodeHostsBytes,
+  encodeHostsBytes,
   githubHostsDomains,
-  hasHostsBlock,
+  HOSTS_BLOCK_BROKEN_MESSAGE,
+  hostsBlockState,
   hostsBlockAgeDays,
   hostsBlockGeneratedAt,
   isHostsBlockStale,
@@ -58,8 +61,6 @@ export interface HostsStatus {
   stale: boolean
   message?: string
 }
-
-const TCP_TEST_TIMEOUT_MS = 4000
 
 function hostsPath(): string {
   return join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'drivers', 'etc', 'hosts')
@@ -158,20 +159,6 @@ async function resolveViaDoh(domain: string): Promise<string[]> {
   return [...slow]
 }
 
-/** TCP connect:443 测速；失败返回 null */
-function tcpLatency(ip: string, port = 443): Promise<number | null> {
-  return new Promise((resolvePromise) => {
-    const started = Date.now()
-    const sock = net.connect(port, ip)
-    let settled = false
-    const done = (v: number | null) => { if (!settled) { settled = true; sock.destroy(); resolvePromise(v) } }
-    sock.once('connect', () => done(Date.now() - started))
-    sock.once('error', () => done(null))
-    sock.once('timeout', () => done(null))
-    sock.setTimeout(TCP_TEST_TIMEOUT_MS)
-  })
-}
-
 export class GhHostsService {
   /** 域名 → 上次优选结果（内存缓存，重启后从 hosts 块里读） */
   private lastPicks: HostsPickRow[] = []
@@ -213,16 +200,18 @@ export class GhHostsService {
   async status(): Promise<HostsStatus> {
     const path = hostsPath()
     try {
-      const content = await readFile(path, 'utf-8')
-      const entries = parseBlockEntries(content)
+      const content = decodeHostsBytes(await readFile(path))
+      const state = hostsBlockState(content)
+      const applied = state === 'ok'
       return {
-        applied: hasHostsBlock(content),
+        applied,
         path,
         writable: true,
-        entries,
-        generatedAt: hostsBlockGeneratedAt(content),
-        staleDays: hostsBlockAgeDays(content),
-        stale: isHostsBlockStale(content),
+        entries: applied ? parseBlockEntries(content) : [],
+        generatedAt: applied ? hostsBlockGeneratedAt(content) : null,
+        staleDays: applied ? hostsBlockAgeDays(content) : null,
+        stale: applied ? isHostsBlockStale(content) : false,
+        message: state === 'broken' ? HOSTS_BLOCK_BROKEN_MESSAGE : undefined,
       }
     } catch (e: any) {
       // 读不到 hosts 就没有"托管块现状"可报，时效一律 null + 不提示过期
@@ -249,18 +238,19 @@ export class GhHostsService {
     const path = hostsPath()
     let existing: string
     try {
-      existing = existsSync(path) ? await readFile(path, 'utf-8') : ''
+      existing = existsSync(path) ? decodeHostsBytes(await readFile(path)) : ''
     } catch (e: any) {
       if (e?.code === 'EACCES' || e?.code === 'EPERM') throw new Error('无权限读取 hosts（需要管理员权限运行应用）')
       throw e
     }
-    const hadBlock = hasHostsBlock(existing)
-    if (!hadBlock) {
+    const state = hostsBlockState(existing)
+    if (state === 'broken') throw new Error(HOSTS_BLOCK_BROKEN_MESSAGE)
+    if (state === 'none') {
       await this.backupHosts(path)
     }
     const next = applyHostsBlock(existing, use)
     try {
-      await writeFile(path, next, 'utf-8')
+      await writeFile(path, encodeHostsBytes(next))
     } catch (e: any) {
       if (e?.code === 'EACCES' || e?.code === 'EPERM') {
         // 方案 A：按需提权写入（弹 UAC，用户确认后由提权子进程落盘）
@@ -277,7 +267,7 @@ export class GhHostsService {
     const path = hostsPath()
     let existing: string
     try {
-      existing = await readFile(path, 'utf-8')
+      existing = decodeHostsBytes(await readFile(path))
     } catch (e: any) {
       if (e?.code === 'EACCES' || e?.code === 'EPERM') {
         throw new Error('无权限读取 hosts（需要以管理员权限运行应用）')
@@ -285,10 +275,13 @@ export class GhHostsService {
       if (e?.code === 'ENOENT') return { applied: false, path, writable: true, entries: [], generatedAt: null, staleDays: null, stale: false }
       throw e
     }
+    const state = hostsBlockState(existing)
+    if (state === 'broken') throw new Error(HOSTS_BLOCK_BROKEN_MESSAGE)
+    if (state === 'none') return this.status()
     const next = removeHostsBlock(existing)
     if (next !== existing) {
       try {
-        await writeFile(path, next, 'utf-8')
+        await writeFile(path, encodeHostsBytes(next))
       } catch (e: any) {
         if (e?.code === 'EACCES' || e?.code === 'EPERM') {
           await this.elevatedWrite(next, 'no-block')
@@ -312,7 +305,10 @@ export class GhHostsService {
     await mkdir(tmpDir, { recursive: true })
     const stamp = Date.now()
     const payloadPath = join(tmpDir, `ghaccel-hosts-${stamp}.json`)
-    await writeFile(payloadPath, JSON.stringify({ path, content }), 'utf-8')
+    // 内容按 latin1 的原始字节转 base64：hosts 可能是 ANSI/GBK，若以 UTF-8 字符串
+    // 传给提权进程，高位字节会被重新编码，块外内容又回到"UTF-8 解码再写回"的破坏路径。
+    const contentBase64 = Buffer.from(encodeHostsBytes(content)).toString('base64')
+    await writeFile(payloadPath, JSON.stringify({ path, contentBase64 }), 'utf-8')
     // SEC-002：脚本不再落盘。原实现把 .ps1 写到当前用户可写的 userData/tmp，
     // 再让提权后的 PowerShell -File 执行它 —— 同一用户的低权限进程可在写入
     // 与执行之间替换脚本内容（TOCTOU），让 UAC 弹窗后的管理员进程执行任意
@@ -321,7 +317,7 @@ export class GhHostsService {
     // SEC-002b：但 payload 仍是用户可写目录里的**数据**，管理员进程读它之前可能被改。
     // 早先的实现把写入目标也交给 payload.path，于是"被篡改最多改写 hosts 内容"并不
     // 成立——改掉 path 就是拿着管理员权限往任意路径写任意字节，仍是提权。现在目标
-    // 路径钉在 -EncodedCommand 里（命令一旦拼好就不再变），payload 只携带 content；
+    // 路径钉在 -EncodedCommand 里（命令一旦拼好就不再变），payload 只携带 base64 内容；
     // 自述的 path 与钉死值不一致即判定被改，直接失败，不落盘。
     const script = [
       "$ErrorActionPreference = 'Stop'",
@@ -331,7 +327,7 @@ export class GhHostsService {
       // stderr 匹配它们来识别"用户在 UAC 弹窗上按了取消"，而路径不符是被篡改，
       // 撞上同一组词就会被报成"已取消管理员授权"，把一次攻击提示说成用户自己放弃了。
       "if ($payload.path -cne $target) { throw 'payload 目标路径与命令内钉死的路径不符，写入已中止' }",
-      '$bytes = [System.Text.Encoding]::UTF8.GetBytes($payload.content)',
+      '$bytes = [Convert]::FromBase64String($payload.contentBase64)',
       '[System.IO.File]::WriteAllBytes($target, $bytes)',
     ].join('\r\n')
     const encoded = Buffer.from(script, 'utf-16le').toString('base64')

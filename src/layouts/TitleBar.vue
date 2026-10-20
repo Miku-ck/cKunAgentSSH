@@ -45,8 +45,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M6 9.5h3v3H6zM11 9.5h3v3h-3zM11 6h3v3h-3z"/><path d="M3.5 12.5h13c1.6 0 3-.7 3.8-2 .7 2.3-.4 5-3.2 5H7a3.5 3.5 0 0 1-3.5-3z"/><path d="M3.5 12.5 2 10"/></svg>
         <span class="tb-label">Docker</span>
       </button>
-      <button class="titlebar-action-btn" :class="{ active: activePage === 'github' }" :title="'GitHub 加速' + pageHint('github')" aria-label="GitHub 加速" @click="emit('action-github')">
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'github' }" :title="'GitHub 加速' + pageHint('github') + ghHealthTitle" aria-label="GitHub 加速" @click="emit('action-github')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+        <!-- 巡检异常红点：只在 degraded 亮，不做绿点（ok 不打扰） -->
+        <span v-if="ghDegraded" class="gh-badge" aria-hidden="true"></span>
         <span class="tb-label">GitHub</span>
       </button>
       <button class="titlebar-action-btn" :class="{ active: activePage === 'sftp' }" :title="'SFTP' + pageHint('sftp')" aria-label="SFTP 文件传输" @click="emit('action-sftp')">
@@ -80,8 +82,10 @@
 </template>
 
 <script setup lang="ts">
+import { computed, onMounted } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import { useSshAiStore } from '@/stores/ssh-ai'
+import { useGithubAccelStore } from '@/stores/github-accel'
 import { pageShortcutHint as pageHint } from '@/composables/useGlobalShortcuts'
 import type { TitlebarPage } from '@/composables/useSshNavigation'
 
@@ -89,6 +93,20 @@ const api = window.electronAPI
 
 const agent = useAgentStore()
 const sshAi = useSshAiStore()
+const ghAccel = useGithubAccelStore()
+
+/** 红点只看巡检结论；标题补充具体是哪一项异常（镜像优先） */
+const ghDegraded = computed(() => ghAccel.health?.state === 'degraded')
+const ghHealthTitle = computed(() => {
+  const h = ghAccel.health
+  if (h?.state !== 'degraded') return ''
+  if (h.error) return '（当前镜像不可用）'
+  if (h.hosts && !h.hosts.ok) return '（hosts 未生效）'
+  return '（巡检异常）'
+})
+
+// 轻量初始化：只拉巡检状态 + 订阅推送，不加载整份加速配置（页面未打开也要能亮红点）
+onMounted(() => { void ghAccel.initHealth() })
 
 defineProps<{
   /** 当前激活的功能页，对应图标高亮（'ai' 是面板开关态，不在独立页清单里） */
@@ -225,7 +243,7 @@ async function close() { await api?.windowClose() }
 .titlebar-action-btn {
   position: relative;
 }
-.ai-badge {
+.ai-badge, .gh-badge {
   position: absolute;
   top: 9px;
   right: 9px;
@@ -240,6 +258,9 @@ async function close() { await api?.windowClose() }
 }
 .ai-badge.unread {
   background: var(--accent-primary);
+}
+.gh-badge {
+  background: var(--danger-text);
 }
 @keyframes ai-badge-pulse {
   0%, 100% { opacity: 0.3; transform: scale(0.85); }

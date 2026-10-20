@@ -14,10 +14,13 @@ import {
   buildGitUnsetArgs,
   buildGitUnsetSubsectionArgs,
   buildProbeUrl,
+  decodeHostsBytes,
   defaultGithubAccelConfig,
+  encodeHostsBytes,
   findGithubInsteadOf,
   githubHostsDomains,
   hasHostsBlock,
+  hostsBlockState,
   hasSshBlock,
   isValidIPv4,
   parseGithubUrl,
@@ -34,6 +37,8 @@ import {
   hostsBlockAgeDays,
   hostsBlockGeneratedAt,
   isHostsBlockStale,
+  isProxyProbeOk,
+  parseSshG,
   PROBE_TARGET,
   SSH_BLOCK_BEGIN,
   SSH_BLOCK_END,
@@ -69,6 +74,22 @@ describe('parseGithubUrl', () => {
     expect(p.type).toBe('release-asset')
     expect(p.assetPath).toBe('v1.2.3/app-win.zip')
     expect(p.normalized).toBe('https://github.com/o/r/releases/download/v1.2.3/app-win.zip')
+  })
+
+  it('「最新版本资产」链接与带 tag 的同归 release-asset', () => {
+    const p = parseGithubUrl('https://github.com/o/r/releases/latest/download/app-win.zip')
+    expect(p.type).toBe('release-asset')
+    expect(p.assetPath).toBe('app-win.zip')
+    expect(p.normalized).toBe('https://github.com/o/r/releases/latest/download/app-win.zip')
+  })
+
+  it('完整 clone 命令与 owner/repo 简写', () => {
+    expect(parseGithubUrl('git clone https://github.com/o/r.git')).toMatchObject({ type: 'repo', owner: 'o', repo: 'r' })
+    expect(parseGithubUrl('git clone --depth 1 https://github.com/o/r.git mydir')).toMatchObject({ type: 'repo', owner: 'o', repo: 'r' })
+    expect(parseGithubUrl('gh repo clone o/r')).toMatchObject({ type: 'repo', owner: 'o', repo: 'r' })
+    expect(parseGithubUrl('“https://github.com/o/r”')).toMatchObject({ type: 'repo', owner: 'o', repo: 'r' })
+    expect(parseGithubUrl('o/r')).toMatchObject({ type: 'repo', owner: 'o', repo: 'r', normalized: 'https://github.com/o/r' })
+    expect(parseGithubUrl('o/r.git')).toMatchObject({ type: 'repo', owner: 'o', repo: 'r' })
   })
 
   it('releases 页面（非 download）按页面处理', () => {
@@ -231,7 +252,50 @@ describe('ssh 443 托管块', () => {
   })
 })
 
+describe('自检判据', () => {
+  it('代理探测只认 2xx（403/404/429 都是没取到内容）', () => {
+    expect(isProxyProbeOk(200)).toBe(true)
+    expect(isProxyProbeOk(204)).toBe(true)
+    expect(isProxyProbeOk(301)).toBe(false)
+    expect(isProxyProbeOk(403)).toBe(false)
+    expect(isProxyProbeOk(404)).toBe(false)
+    expect(isProxyProbeOk(429)).toBe(false)
+    expect(isProxyProbeOk(500)).toBe(false)
+    expect(isProxyProbeOk(Number.NaN)).toBe(false)
+  })
+
+  it('ssh -G 输出解析：取 hostname/port，缺字段不猜默认值', () => {
+    const out = [
+      'host github.com',
+      'user git',
+      'hostname ssh.github.com',
+      'port 443',
+      'addressfamily any',
+    ].join('\n')
+    expect(parseSshG(out)).toEqual({ hostname: 'ssh.github.com', port: 443 })
+    expect(parseSshG('host github.com\nhostname github.com\n')).toEqual({ hostname: 'github.com', port: null })
+    expect(parseSshG('')).toEqual({ hostname: null, port: null })
+    expect(parseSshG('port not-a-number\n')).toEqual({ hostname: null, port: null })
+  })
+})
+
 describe('hosts 托管块（M3）', () => {
+  it('非 UTF-8 的 hosts 内容按字节往返（GBK 注释不被 UTF-8 解码破坏）', () => {
+    // "# 中文注释" 的 GBK 字节 + CRLF：Windows hosts 常见的 ANSI 编码
+    const gbkComment = Buffer.from([0x23, 0x20, 0xd6, 0xd0, 0xce, 0xc4, 0xd7, 0xa2, 0xca, 0xcd, 0x0d, 0x0a])
+    const localhost = Buffer.from('127.0.0.1 localhost\r\n', 'latin1')
+    const original = Buffer.concat([gbkComment, localhost])
+
+    const text = decodeHostsBytes(original)
+    expect(text).not.toContain('\uFFFD')
+
+    const applied = applyHostsBlock(text, [{ domain: 'github.com', ip: '140.82.112.4' }])
+    const out = Buffer.from(encodeHostsBytes(applied))
+    // 块外原始字节（GBK 注释 + CRLF）必须逐字节保留
+    expect(out.subarray(0, original.length)).toEqual(original)
+    expect(decodeHostsBytes(out)).not.toContain('\uFFFD')
+  })
+
   it('块内容只含合法 IPv4，非法 IP 被丢弃', () => {
     const block = renderHostsBlock([
       { domain: 'github.com', ip: '20.205.243.166' },
@@ -279,14 +343,31 @@ describe('hosts 托管块（M3）', () => {
     expect(block.split('\n').every(l => l.length > 0)).toBe(true)
   })
 
-  it('apply → remove 往返恒等，且不碰块外内容', () => {
+  it('apply → remove 精确往返（LF / CRLF / 无尾换行 / 空文件），且不碰块外内容', () => {
     const entries = githubHostsDomains().map((d, i) => ({ domain: d, ip: `140.82.112.${i + 1}` }))
-    for (const raw of ['', '# my hosts\n127.0.0.1 localhost\n', '127.0.0.1 localhost\n\n# note\n']) {
+    const originals = [
+      '',
+      '# my hosts\n127.0.0.1 localhost\n',
+      '127.0.0.1 localhost\n\n# note\n',
+      '127.0.0.1 localhost',
+      '# note\r\n127.0.0.1 localhost\r\n',
+      '127.0.0.1 localhost\r\n',
+    ]
+    for (const raw of originals) {
       const applied = applyHostsBlock(raw, entries)
       expect(hasHostsBlock(applied)).toBe(true)
       // 块外内容原样保留（空文件用例没有块外内容）
       if (raw.includes('127.0.0.1 localhost')) expect(applied).toContain('127.0.0.1 localhost')
-      expect(removeHostsBlock(applied).trim()).toBe(raw.trim())
+      expect(removeHostsBlock(applied)).toBe(raw)
+    }
+  })
+
+  it('重复 apply 原位替换后仍能精确还原', () => {
+    const entries = [{ domain: 'github.com', ip: '140.82.112.4' }]
+    for (const raw of ['127.0.0.1 localhost\n', '127.0.0.1 localhost\r\n', '127.0.0.1 localhost']) {
+      const twice = applyHostsBlock(applyHostsBlock(raw, entries), entries)
+      expect(twice.split(HOSTS_BLOCK_BEGIN)).toHaveLength(2)
+      expect(removeHostsBlock(twice)).toBe(raw)
     }
   })
 
@@ -296,6 +377,31 @@ describe('hosts 托管块（M3）', () => {
     const twice = applyHostsBlock(once, entries)
     expect(twice.split(HOSTS_BLOCK_BEGIN)).toHaveLength(2)
     expect(hasHostsBlock(twice)).toBe(true)
+  })
+
+  it('标记不配对时拒绝改写：BEGIN-only 不会被追加成双块，也不会连带删用户行', () => {
+    const entries = [{ domain: 'github.com', ip: '140.82.112.4' }]
+    const beginOnly = `${HOSTS_BLOCK_BEGIN}\n127.0.0.1 myhost.local\n`
+    expect(hostsBlockState(beginOnly)).toBe('broken')
+    expect(() => applyHostsBlock(beginOnly, entries)).toThrow(/托管标记不完整/)
+    expect(() => removeHostsBlock(beginOnly)).toThrow(/托管标记不完整/)
+  })
+
+  it('END-only / 标记顺序颠倒 / 重复块都判 broken', () => {
+    const entries = [{ domain: 'github.com', ip: '140.82.112.4' }]
+    const endOnly = `127.0.0.1 localhost\n${HOSTS_BLOCK_END}\n`
+    const reversed = `${HOSTS_BLOCK_END}\n# note\n${HOSTS_BLOCK_BEGIN}\n`
+    const twoBlocks = `${applyHostsBlock('', entries)}\n${renderHostsBlock(entries)}\n`
+    for (const raw of [endOnly, reversed, twoBlocks]) {
+      expect(hostsBlockState(raw)).toBe('broken')
+      expect(() => removeHostsBlock(raw)).toThrow(/托管标记不完整/)
+    }
+  })
+
+  it('无标记 = none；成对且唯一 = ok', () => {
+    const entries = [{ domain: 'github.com', ip: '140.82.112.4' }]
+    expect(hostsBlockState('127.0.0.1 localhost\n')).toBe('none')
+    expect(hostsBlockState(applyHostsBlock('127.0.0.1 localhost\n', entries))).toBe('ok')
   })
 
   it('域名清单覆盖 GitHub 关键面', () => {
