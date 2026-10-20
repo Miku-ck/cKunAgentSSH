@@ -3,11 +3,12 @@
  * 首页常驻输入区（任务台 Composer）
  *
  * 发送只有 useHomeCommand → ssh-ai.sendMessage 一条通路，审批档与姿态读 store，
- * 保证首页与侧栏选的东西互相算数。
+ * 与发送装配同源 —— 界面宣称的选择必须真的随这一次下达出去。
  *
- * 底栏顺序：＋ → 目标主机 chip → 分隔线 → 审批档 → chips → 模型 → 发送/停止。
- * 目标主机只改 ssh store 的 activeSessionId（useHomeTarget），不切走首页、不聚焦
- * 终端 —— 用户正在输入框里打字。
+ * 底栏顺序：＋ → 分隔线 → 审批档 → chips → 模型 → 发送/停止。
+ * 目标主机不再占底栏：＋ 菜单第一项 SSH 进面板切换目标或连接远程服务器
+ * （openRemoteManager → SshView 开远程管理页）。目标主机只改 ssh store 的
+ * activeSessionId（useHomeTarget），不切走首页、不聚焦终端 —— 用户正在输入框里打字。
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { ChatAttachment } from '@/api/client'
@@ -25,7 +26,7 @@ import { useSSHStore } from '@/stores/ssh'
 import HomeRemoteFilePicker from './HomeRemoteFilePicker.vue'
 import { APPROVAL_OPTIONS, PERMISSION_LABELS, PERM_MARKS, PERM_SHIELD, resolveRunModes, type ApprovalKey } from '@/utils/run-modes'
 
-const emit = defineEmits<{ bulk: [] }>()
+const emit = defineEmits<{ bulk: [], 'remote-mgr': [] }>()
 
 const agent = useAgentStore()
 const sshAi = useSshAiStore()
@@ -38,22 +39,26 @@ const { openSettings } = useSettings()
 const { draft, canSend, submit, attachFiles, removeAttachment, uploading } = useHomeCommand()
 const { targetLabel, options: targetOptions, pick: pickTarget, remoteCount, canBulkDispatch } = useHomeTarget()
 
-// ── 目标主机 chip ──
-const showTargetMenu = ref(false)
-const targetRef = ref<HTMLElement | null>(null)
-
+// ── 目标主机（＋ 菜单 SSH 面板）──
 function chooseTarget(sessionId: string) {
   pickTarget(sessionId)
-  showTargetMenu.value = false
+  closePlusMenu()
 }
 
 function toBulk() {
   emit('bulk')
-  showTargetMenu.value = false
+  closePlusMenu()
 }
 
-/** 本地文件选择：input 藏在卡片里，＋ 菜单只负责唤起 —— 与侧栏那个回形针按钮
- *  走的是同一个 store.uploadFiles 通路，不是第二条上传实现。 */
+/** 「连接远程服务器」：去远程管理页选主机连接。只开不关 —— 复用 toggle 会在
+ *  页面已开时把它关掉，与「去连接」的语义相反。 */
+function openRemoteManager() {
+  emit('remote-mgr')
+  closePlusMenu()
+}
+
+/** 本地文件选择：input 藏在卡片里，＋ 菜单只负责唤起 —— 走 store.uploadFiles
+ *  这条唯一通路，不另开第二份上传实现。 */
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
 function pickFiles() {
@@ -69,9 +74,14 @@ async function onFilesPicked(e: Event) {
   await attachFiles(files)
 }
 
-/** ＋ 菜单的两个面：默认那几项，与远端文件的目录列表。每次重开都回默认面 ——
- *  停在某个目录里重开，用户会以为自己点错了地方。 */
-const plusPane = ref<'root' | 'remote'>('root')
+/** ＋ 菜单的三个面：默认那几项 / SSH 目标面板 / 远端文件的目录列表。
+ *  每次重开都回默认面 —— 停在某个目录里重开，用户会以为自己点错了地方。 */
+const plusPane = ref<'root' | 'remote' | 'target'>('root')
+
+function closePlusMenu() {
+  showPlusMenu.value = false
+  plusPane.value = 'root'
+}
 
 function togglePlusMenu() {
   showPlusMenu.value = !showPlusMenu.value
@@ -98,7 +108,6 @@ function onDocClick(e: MouseEvent) {
   const t = e.target as Node
   if (permRef.value && !permRef.value.contains(t)) showPermMenu.value = false
   if (plusRef.value && !plusRef.value.contains(t)) showPlusMenu.value = false
-  if (targetRef.value && !targetRef.value.contains(t)) showTargetMenu.value = false
 }
 
 onMounted(() => document.addEventListener('click', onDocClick))
@@ -110,8 +119,8 @@ function pickPerm(key: ApprovalKey) {
 }
 
 /** 「计划」与「目标」都是开关不是单选：点亮即表态，再点退出回到**未表态**，
- *  而不是替用户选另一个姿态（与侧栏 togglePlanMode 同语义）。两者共用 posture
- *  这一个槽位（run-modes.ts 的 PostureKey = 'goal' | 'plan'），所以点一个会顶掉
+ *  而不是替用户选另一个姿态。两者共用 posture 这一个槽位
+ *  （run-modes.ts 的 PostureKey = 'goal' | 'plan'），所以点一个会顶掉
  *  另一个，而不是叠出第三种状态。 */
 function togglePlan() {
   sshAi.setPosture(sshAi.posture === 'plan' ? null : 'plan')
@@ -134,7 +143,7 @@ const permMode = computed(() =>
  *  界面不能宣称一个不会生效的选择。禁用是**展示**层，用户的 approvalMode 没被改写。 */
 const permLabel = computed(() => PERMISSION_LABELS[permMode.value])
 
-/** 图标与侧栏审批钮共用一份（run-modes 的 PERM_SHIELD / PERM_MARKS），档位记号
+/** 图标与审批档共用一份（run-modes 的 PERM_SHIELD / PERM_MARKS），档位记号
  *  按上面的 permMode 派生 —— 标签与图标永远说的是同一个档。 */
 const permMark = computed(() => PERM_MARKS[permMode.value])
 
@@ -168,8 +177,9 @@ function attachmentTitle(f: ChatAttachment): string {
 }
 
 function toggleSkill(id: string) {
-  const cur = sshAi.selectedSkillIds
-  sshAi.setSelectedSkillIds(cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id])
+  // 去重与摘除的算法在 store（add/removeSelectedSkill），这里只组合"点一下是加上还是摘掉"
+  if (sshAi.selectedSkillIds.includes(id)) sshAi.removeSelectedSkill(id)
+  else sshAi.addSelectedSkill(id)
 }
 
 /** 终端现场开关，缺省开着（关掉＝走纯文本入口那条空快照分支，默认行为一字不变）。
@@ -221,15 +231,24 @@ async function send() {
   grow()
 }
 
-// 草稿是共享态（store 的 sharedDraft）：侧栏那边打字/清空也会落到这份 textarea，
-// 高度与行线要跟着重算 —— 否则切回首页时内容被 overflow-y:hidden 裁掉半截。
-// 与 SideChatPanel 的 autoResize 同一条口径带 immediate：本组件虽是 v-show 常驻，
-// 但「问 AI」预填若发生在挂载之前，只守变化的 watch 就永远不补这一次高度。
+// 草稿是 store 级共享态（sharedDraft）：预填与打字都落到这份 textarea，
+// 高度与行线要跟着重算 —— 否则内容被 overflow-y:hidden 裁掉半截。
+// 带 immediate：预填若发生在挂载之前，只守变化的 watch 就永远不补这一次高度。
 watch(draft, () => nextTick(grow), { immediate: true })
+
+// 「问 AI」预填（终端选区 / 批量下发结果 / 监控指标诊断）统一落进这份草稿。
+// SshView 的 sync watch 先把用户带回任务台，这里只负责消费一次：置 null 后
+// 再进首页不会把同一段问题重放一遍，用户改过的草稿也不会被覆盖。
+watch(() => sshAi.pendingPrefill, (req) => {
+  if (!req) return
+  sshAi.pendingPrefill = null
+  sshAi.setSharedDraft(req.text)
+  void nextTick(() => ta.value?.focus())
+}, { immediate: true })
 
 function onKeydown(e: KeyboardEvent) {
   if (e.key !== 'Enter') return
-  // 与侧栏同一口径：发送快捷键可在设置里换档，硬编码 Enter 会让两处行为不一致
+  // 发送快捷键可在设置里换档：硬编码 Enter 会让首页输入框与设置说的不是一回事
   const wantShift = settings.settings.chat.sendShortcut === 'shiftEnter'
   if (e.shiftKey !== wantShift) return
   e.preventDefault()
@@ -241,8 +260,8 @@ onMounted(() => {
   // 消除首屏"fetchModels failed：后端服务未就绪"的抢跑 warn。闸门只在真正就绪时 resolve，
   // 后端不起则不开、不发抢跑请求（模型选择器置空，不谎报）。
   void app.readyPromise.then(() => sshAi.fetchDefaultModel()).catch(() => { /* 防御位：readyPromise 设认不 reject */ })
-  // 技能清单原先只在 SideChatPanel 的 setup 里装载（那边的 `void skillStore.loadBuiltinSkills()`），
-  // 而右侧 AI 面板没开时那个组件根本不挂载 —— 首页的 ＋ 菜单就会永远空着。空表才装，不重复扫盘。
+  // 技能清单只在首页装载（右侧 AI 面板退役后 ＋ 菜单是唯一入口）：那边曾经挂在
+  // 面板的 setup 里，面板不开就永远空着。空表才装，不重复扫盘。
   // 这条走本地 electronAPI 扫盘、不碰后端 HTTP，无需 gate 就绪。
   if (!skillsStore.skills.length) void skillsStore.loadBuiltinSkills()
 })
@@ -285,9 +304,36 @@ onMounted(() => {
             @back="plusPane = 'root'"
             @picked="onRemotePicked"
           />
+          <!-- SSH 目标面板：已打开的会话列表 + 批量下发 + 连接远程服务器（去远程管理页） -->
+          <template v-else-if="plusPane === 'target'">
+            <button
+              v-for="o in targetOptions"
+              :key="o.sessionId"
+              type="button"
+              class="hcc-opt"
+              :class="{ on: o.active }"
+              @click="chooseTarget(o.sessionId)"
+            >
+              <span class="ol">{{ o.label }}<span v-if="o.active" class="ot">✓</span></span>
+              <span class="od">{{ o.hint }}</span>
+            </button>
+            <div v-if="!targetOptions.length" class="hcc-sep">还没有打开的会话</div>
+            <button v-if="canBulkDispatch" type="button" class="hcc-opt" @click="toBulk">
+              <span class="ol">全部 {{ remoteCount }} 台</span>
+              <span class="od">批量下发 · 不改 AI 目标</span>
+            </button>
+            <button type="button" class="hcc-opt" @click="openRemoteManager">
+              <span class="ol">连接远程服务器</span>
+              <span class="od">到远程管理页选择主机连接</span>
+            </button>
+          </template>
           <template v-else>
-          <!-- 五项：目标 / 计划 / 终端现场 / 本地文件 / 远端文件（技能在下面）。对勾紧跟字后面（原来钉在网格
+          <!-- 六项：SSH / 目标 / 计划 / 终端现场 / 本地文件 / 远端文件（技能在下面）。对勾紧跟字后面（原来钉在网格
                第二列，隔着整行的宽度，读起来不像"这条被选了"而像另一列数据）。 -->
+          <button type="button" class="hcc-opt" @click="plusPane = 'target'">
+            <span class="ol">SSH</span>
+            <span class="od">目标 · {{ targetLabel }}</span>
+          </button>
           <button type="button" class="hcc-opt" :class="{ on: isGoal }" @click="toggleGoal">
             <span class="ol">目标<span v-if="isGoal" class="ot">✓</span></span>
             <span class="od">聚焦要达成什么、怎么算成功</span>
@@ -353,44 +399,6 @@ onMounted(() => {
         </div>
       </div>
 
-      <div ref="targetRef" class="hcc-sel">
-        <button
-          type="button"
-          class="hcc-btn hcc-target"
-          :aria-expanded="showTargetMenu"
-          aria-haspopup="menu"
-          title="目标主机 · 点击切换"
-          @click.stop="showTargetMenu = !showTargetMenu"
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" aria-hidden="true">
-            <rect x="3" y="4" width="18" height="6" rx="1"/>
-            <rect x="3" y="14" width="18" height="6" rx="1"/>
-            <line x1="7" y1="7" x2="7.01" y2="7"/>
-            <line x1="7" y1="17" x2="7.01" y2="17"/>
-          </svg>
-          <span class="host">{{ targetLabel }}</span>
-          <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" width="9" height="9" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
-        </button>
-        <div v-if="showTargetMenu" class="hcc-menu target-menu" @click.stop>
-          <button
-            v-for="o in targetOptions"
-            :key="o.sessionId"
-            type="button"
-            class="hcc-opt"
-            :class="{ on: o.active }"
-            @click="chooseTarget(o.sessionId)"
-          >
-            <span class="ol">{{ o.label }}<span v-if="o.active" class="ot">✓</span></span>
-            <span class="od">{{ o.hint }}</span>
-          </button>
-          <div v-if="!targetOptions.length" class="hcc-sep">还没有打开的会话 请新建终端</div>
-          <button v-if="canBulkDispatch" type="button" class="hcc-opt" @click="toBulk">
-            <span class="ol">全部 {{ remoteCount }} 台</span>
-            <span class="od">批量下发 · 不改 AI 目标</span>
-          </button>
-        </div>
-      </div>
-
       <span class="hcc-divider" aria-hidden="true"></span>
 
       <div ref="permRef" class="hcc-sel">
@@ -427,7 +435,7 @@ onMounted(() => {
       </div>
 
       <!-- 故事 6：加进来的每一项都在底栏留一枚可移除的 chip。姿态这枚必须连目标态
-           一起显形 —— 侧栏也能点亮它，首页若只显计划就是从中间截走的故事。 -->
+           一起显形 —— ＋ 菜单里两个都能点亮，只显计划就是从中间截走的故事。 -->
       <span
         v-if="sshAi.posture"
         class="hcc-chip"
@@ -484,9 +492,8 @@ onMounted(() => {
 
       <span v-if="running" class="hcc-note">AI 正在运行中</span>
 
-      <!-- 模型选择器坐行尾（与侧栏 toolbar-right 的 [模型][发送] 同一座位）：
-           margin-left:auto 把它带着执行钮一起推到右边；下拉改从右缘向左展开，
-           面板按 left:0 开会伸出卡外。 -->
+      <!-- 模型选择器坐行尾：margin-left:auto 把它带着执行钮一起推到右边；
+           下拉改从右缘向左展开，面板按 left:0 开会伸出卡外。 -->
       <div ref="modelSelectorRef" class="hcc-sel model-sel">
         <button
           v-if="!noModel"
@@ -638,23 +645,6 @@ onMounted(() => {
 .hcc-btn.empty b { color: var(--accent-orange) }
 /* ＋ 是底栏唯一的上下文入口（故事 5），做成方角小方块让它一眼是"加"而不是一个词 */
 .hcc-btn.plus { width: 26px; padding: 0; justify-content: center; font-size: 15px }
-/* 目标主机 chip：底栏里唯一带描边的控件 —— 它改的是「这条指令落到哪台机器」，
-   比其余开关重一档。远程会话名可能很长，max-width + ellipsis 保住行尾。 */
-.hcc-target {
-  max-width: 240px;
-  border: 1px solid var(--border-input);
-  background: var(--bg-input);
-  box-sizing: border-box;
-}
-.hcc-target svg { flex-shrink: 0; color: var(--text-tertiary) }
-.hcc-target .host {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-primary);
-}
-.hcc-target .chev { width: 9px; height: 9px }
 .hcc-divider {
   width: 1px;
   height: 14px;
@@ -663,7 +653,7 @@ onMounted(() => {
   flex-shrink: 0;
 }
 /* 文件选择器不进底栏（故事 5：＋ 之外不常驻"添加"按钮），只借程序化 click 唤起。
-   display:none 的 input 在 Chromium 里照样能被 .click() 打开，侧栏用的是同一招。 */
+   display:none 的 input 在 Chromium 里照样能被 .click() 打开。 */
 .hcc-file { display: none }
 /* 可移除的 chip（故事 6）：底是"主题自己的墨按的一道渍"—— text-primary 7% 压在
    卡面上，卡面是什么它就跟着是什么（手记的卡脚还有那道次级纸面渐变，chip 叠上去
@@ -711,7 +701,6 @@ onMounted(() => {
   z-index: 30;
 }
 .hcc-menu.wide { width: 220px; max-height: 260px; overflow-y: auto }
-.hcc-menu.target-menu { width: 260px; max-height: 260px; overflow-y: auto }
 /* 菜单里的小节标题（技能区）。刻意不是分隔线：手记那套语言靠字重与留白分组，
    再加一条线会和输入卡的行线抢注意力。 */
 .hcc-sep {
@@ -762,15 +751,13 @@ onMounted(() => {
   color: var(--accent-green);
 }
 .hcc-note { font-size: 11px; color: var(--text-tertiary) }
-/* 模型选择器坐底栏行尾：margin-left:auto 把它和执行钮一起推到右边（与侧栏
-   toolbar-right 的 [模型][发送] 同一座位）。下拉从右缘向左展开 —— 220px 的
-   面板按 left:0 开会伸出卡外。 */
+/* 模型选择器坐底栏行尾：margin-left:auto 把它和执行钮一起推到右边。
+   下拉从右缘向左展开 —— 220px 的面板按 left:0 开会伸出卡外。 */
 .hcc-sel.model-sel { margin-left: auto }
 .hcc-sel.model-sel .hcc-menu { left: auto; right: 0 }
-/* 与 AI 运维助手侧栏的提交件同一枚（SideChatPanel 的 .send-btn）：24×24 方块
-   箭头钮，底走主题的 hover 层、字走主题的主文字色，强调色彻底不参与。它先前是
-   28px 高的宽体文字钮 —— 皮早已一致，这回连身形与语义（上行箭头=发出）也统一。
-   圆角与 .send-btn 同为 4px 字面值：手记主题的 --radius-sm 是 2px，两处会对不上。 */
+/* 提交件：24×24 方块箭头钮，底走主题的 hover 层、字走主题的主文字色，强调色彻底
+   不参与。它先前是 28px 高的宽体文字钮 —— 身形与语义（上行箭头=发出）都收成一枚。
+   圆角写 4px 字面值：手记主题的 --radius-sm 是 2px，与相邻控件会对不上。 */
 .hcc-send {
   width: 24px;
   height: 24px;

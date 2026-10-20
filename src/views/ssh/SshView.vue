@@ -2,28 +2,11 @@
   <div class="ssh-view">
     <!-- 主终端区域 -->
     <div class="ssh-main">
-      <!-- 标签栏 -->
-      <div class="term-tabs">
+      <!-- 标签栏：终端会话标签条，只在存在终端会话（本地/远程都算）时显示。
+           无会话时整条隐藏，首页任务台独占全屏——新建终端走远程管理页
+           （＋ 菜单只在有会话后可用）。 -->
+      <div v-show="store.sessions.length > 0" class="term-tabs">
         <div class="tabs-scroll" @wheel.prevent="onTabsWheel">
-          <!-- 首页标签：恒在、不可关闭，是打开应用时的第一个屏。
-               AI 星芒取代房子：这里的主人是助手，不是一个"启动器"。 -->
-          <div
-            class="term-tab home-tab"
-            :class="{ active: homeTabActive }"
-            role="tab"
-            :aria-selected="homeTabActive"
-            :title="homeTabLabel"
-            :aria-label="homeTabLabel"
-            tabindex="0"
-            @click="goHome"
-            @keydown.enter.prevent="goHome"
-            @keydown.space.prevent="goHome"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M12 3l1.8 4.9L18.7 9.7l-4.9 1.8L12 16.4l-1.8-4.9L5.3 9.7l4.9-1.8z"/><path d="M18.6 15.4l.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9-1.9-.7 1.9-.7z"/></svg>
-            <span class="tab-label">首页</span>
-            <span v-if="presence !== 'idle'" class="home-tab-dot" :class="presence" aria-hidden="true"></span>
-          </div>
-
           <!-- 终端标签：中键关闭 / 拖拽排序 / title 全名（截断后可看全） -->
           <div
             v-for="s in store.sessions"
@@ -55,34 +38,6 @@
 
           <!-- 新建终端（本地 shell / 已配好的远程连接） -->
           <NewTerminalMenu @open-local="openLocalShell" @open-remote="connectRemote" />
-        </div>
-
-        <!-- 会话入口固定在滚动区之外：终端标签再多也不会把这两枚挤走。
-             历史抽屉在 S2 挂载，这里先落按钮与状态。 -->
-        <div class="tab-actions">
-          <button
-            ref="homeHistoryBtnRef"
-            type="button"
-            class="tab-act"
-            title="历史记录"
-            aria-label="历史记录"
-            aria-controls="home-history-drawer"
-            :aria-expanded="homeHistoryOpen"
-            @click="toggleHomeHistory"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><polyline points="3 3 3 8 8 8"/><polyline points="12 7 12 12 15 14"/></svg>
-          </button>
-          <button
-            type="button"
-            class="tab-act"
-            :disabled="agentStore.isRunning"
-            :aria-disabled="agentStore.isRunning"
-            :title="agentStore.isRunning ? '运行中不可新建会话' : '新建会话'"
-            aria-label="新建会话"
-            @click="startNewTask"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M11 4H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-6"/><path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4z"/></svg>
-          </button>
         </div>
       </div>
 
@@ -165,20 +120,13 @@ v-show="s.id === store.activeSessionId"
           :history-open="homeHistoryOpen"
           @close-history="closeHomeHistory"
           @bulk="showBulk = true"
+          @remote-mgr="openRemoteManager"
         />
       </div>
 
       <!-- 快捷命令条 -->
       <QuickCommandBar v-if="showCommandBar" />
     </div>
-
-    <!-- AI 运维助手面板 -->
-    <SshAiPanel
-      v-if="sshAiStore.showAiPanel"
-      ref="aiPanelRef"
-      @close="sshAiStore.closeAiPanel()"
-      @open-home="onOpenHome"
-    />
 
     <!-- 多节点批量下发（首页目标主机的「全部 N 台」入口；远程管理页同一组件） -->
     <BulkCommandModal v-if="showBulk" @close="showBulk = false" />
@@ -238,7 +186,7 @@ v-show="s.id === store.activeSessionId"
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, computed, nextTick, watch, defineAsyncComponent } from 'vue'
+import { onMounted, ref, watch, defineAsyncComponent } from 'vue'
 import LocalTerminal from '@/components/ssh/LocalTerminal.vue'
 import RemoteTerminal from '@/components/ssh/RemoteTerminal.vue'
 import IconMonitor from '@/components/icons/IconMonitor.vue'
@@ -256,7 +204,6 @@ const BulkCommandModal = defineAsyncComponent(() => import('@/components/ssh/Bul
 const SftpView = defineAsyncComponent(() => import('@/components/ssh/SftpView.vue'))
 const RemoteManager = defineAsyncComponent(() => import('@/components/ssh/RemoteManager.vue'))
 const QuickCommandBar = defineAsyncComponent(() => import('@/components/ssh/QuickCommandBar.vue'))
-const SshAiPanel = defineAsyncComponent(() => import('@/components/ssh/SshAiPanel.vue'))
 const AuditView = defineAsyncComponent(() => import('@/views/ssh/AuditView.vue'))
 const SchedulesView = defineAsyncComponent(() => import('@/views/ssh/SchedulesView.vue'))
 const DashboardView = defineAsyncComponent(() => import('@/views/ssh/DashboardView.vue'))
@@ -266,25 +213,18 @@ const GithubAccelView = defineAsyncComponent(() => import('@/components/ssh/Gith
 const CommandPalette = defineAsyncComponent(() => import('@/components/common/CommandPalette.vue'))
 import { useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
-import { useAgentStore } from '@/stores/agent'
 import { useTunnelStore } from '@/stores/tunnel'
 import { useAccessStore } from '@/stores/access'
 import { useSettings } from '@/composables/useSettings'
 import { useCommandDelivery } from '@/composables/useCommandDelivery'
 import { useSshNavigation } from '@/composables/useSshNavigation'
 import { useGlobalShortcuts } from '@/composables/useGlobalShortcuts'
-import { useAgentPresence } from '@/composables/useAgentPresence'
-import { useToastStore } from '@/stores/toast'
 import type { NavPage } from '@/composables/useSshNavigation'
 import { useTabContextMenu } from '@/composables/useTabContextMenu'
-import { qcHeightForAlign } from '@/utils/qc-align'
 
 const store = useSSHStore()
 const sshAiStore = useSshAiStore()
-const agentStore = useAgentStore()
 const { openSettings } = useSettings()
-const toast = useToastStore()
-const { presence, pendingCount } = useAgentPresence()
 
 // 终端组件引用映射（key: sessionId, value: 组件实例）
 const terminalRefs: Record<string, any> = {}
@@ -327,14 +267,12 @@ const {
   activateTerminal,
   toggleRemoteManager,
   toggleSftp,
-  toggleAiPanel,
   toggleAudit,
   toggleSchedules,
   toggleDashboard,
   toggleTunnels,
   toggleDocker,
   toggleGithub,
-  showAiPanel,
   openLocalShell,
   handleLocalExit,
   connectRemote,
@@ -350,56 +288,30 @@ const {
 /** 首页目标菜单里「全部 N 台」拉起的批量下发弹窗 */
 const showBulk = ref(false)
 
-/** 历史抽屉的开合。放在宿主而不是 useSshNavigation：那里每次调用都会新建一份状态。 */
-const homeHistoryOpen = ref(false)
-const homeHistoryBtnRef = ref<HTMLButtonElement | null>(null)
+/** 「问 AI」预填：终端选区、批量下发结果、监控指标都汇到任务台。
+ *  HomeComposer 消费 pendingPrefill 并置 null —— 本 watch 必须在它之前同步
+ *  完成导航，否则预填被消费掉时还停在上一页/弹窗后面（sync 与前缀顺序双保险）。 */
+watch(() => sshAiStore.pendingPrefill, (req) => {
+  if (!req) return
+  showBulk.value = false
+  goHome()
+}, { flush: 'sync' })
 
-/** 抽屉关闭（Esc / 遮罩 / 关闭钮 / 选中会话）后焦点回到历史按钮：
- *  否则焦点落在被卸载的抽屉里，键盘用户会瞬移回文档开头。 */
+/** 历史抽屉的开合。放在宿主而不是 useSshNavigation：那里每次调用都会新建一份状态。
+ *  标签栏上的历史按钮已删（历史走右侧 AI 侧栏），抽屉保留给 HomeWorkspace 的
+ *  @close-history 收尾链路 —— 目前没有打开入口，只可能处于关闭态。 */
+const homeHistoryOpen = ref(false)
+
 function closeHomeHistory() {
   if (!homeHistoryOpen.value) return
   homeHistoryOpen.value = false
-  void nextTick(() => homeHistoryBtnRef.value?.focus())
 }
-
-/** 状态点的文案与颜色同源（useAgentPresence）：颜色不是唯一信道，title/aria 说清是什么。 */
-const homeTabLabel = computed(() => {
-  if (presence.value === 'pending') return `首页 · ${pendingCount.value} 条待审批`
-  if (presence.value === 'running') return '首页 · 运行中'
-  if (presence.value === 'unread') return '首页 · 有新回复'
-  return '首页'
-})
 
 /** 任务台可见即「看见」：清未读，离开时关掉历史抽屉（它属于首页）。 */
 watch(homeTabActive, (active) => {
   sshAiStore.setHomeVisible(active)
   if (!active) homeHistoryOpen.value = false
 }, { immediate: true })
-
-function toggleHomeHistory() {
-  goHome()
-  homeHistoryOpen.value = !homeHistoryOpen.value
-}
-
-/** 「新建会话」：进入空白任务，不提前产生历史条目（首条消息发出才入历史）。 */
-function startNewTask() {
-  if (agentStore.isRunning) {
-    toast.info('AI 正在运行中，请等待完成')
-    return
-  }
-  if (!sshAiStore.beginNewTask()) {
-    toast.info('AI 正在运行中，请等待完成')
-    return
-  }
-  goHome()
-  homeHistoryOpen.value = false
-}
-
-/** 侧栏的「去任务台」：关掉侧栏再回首页，审批卡只在内联过程里结算 */
-function onOpenHome() {
-  sshAiStore.closeAiPanel()
-  goHome()
-}
 
 // ── 全局快捷键 + 命令面板（M1-P0）──
 // 独立页统一开关表：快捷键与命令面板共用，避免八个 toggle 各写一遍分发
@@ -414,6 +326,12 @@ const PAGE_TOGGLES: Record<Exclude<NavPage, 'home'>, () => void> = {
   github: toggleGithub,
 }
 
+/** 首页 ＋ 菜单 SSH 面板的「连接远程服务器」：只开不关 —— toggle 语义在页面
+ *  已开时会把远程管理页关掉，与「去连接」的意图相反。 */
+function openRemoteManager() {
+  if (activeNavPage.value !== 'remote-mgr') toggleRemoteManager()
+}
+
 const paletteOpen = ref(false)
 
 function closeActiveSession(): void {
@@ -423,7 +341,7 @@ function closeActiveSession(): void {
 useGlobalShortcuts({
   activateTerminal,
   closeActiveSession,
-  toggleAiPanel,
+  goAiHome: goHome,
   toggleNavPage: (page) => PAGE_TOGGLES[page](),
   togglePalette: () => { paletteOpen.value = !paletteOpen.value },
   isPaletteOpen: () => paletteOpen.value,
@@ -498,56 +416,10 @@ onMounted(() => {
   void useAccessStore().init()
 })
 
-// ── QuickCommandBar 顶线对齐 ──
-// QC 在 .ssh-main（左栏）底部，它在 y 上要对齐的不是右栏的分区顶线，而是
-// .input-container 的 border-bottom —— 也就是输入框底下那条 1px 分隔线。
-// 两栏同为 .ssh-view 的 stretch 子项、底边同 y，所以面板底边可直接当基线用。
-// 算式抽到 @/utils/qc-align（含"两条线必须同像素行"的不变量单测）。
-const aiPanelRef = ref<InstanceType<typeof SshAiPanel> | null>(null)
-let syncObs: ResizeObserver | null = null
-
-function setupQcSync() {
-  syncObs?.disconnect()
-  syncObs = null
-
-  const panelEl = aiPanelRef.value?.$el as HTMLElement | undefined
-  if (!panelEl) return
-
-  const container = panelEl.querySelector('.input-container') as HTMLElement | null
-  if (!container) return
-
-  const apply = () => {
-    const baseBottom = panelEl.getBoundingClientRect().bottom
-    const h = qcHeightForAlign(baseBottom, container.getBoundingClientRect().bottom)
-    if (h <= 0) return
-    const root = panelEl.closest('.ssh-view') as HTMLElement | null
-    if (!root) return
-    if (root.style.getPropertyValue('--qc-h') === `${h}px`) return
-    root.style.setProperty('--qc-h', `${h}px`)
-  }
-
-  apply()
-  syncObs = new ResizeObserver(apply)
-  // 面板被拖窄时工具条换行 → 它自身变高、分隔线上移，必须重算
-  const toolbar = panelEl.querySelector('.input-toolbar') as HTMLElement | null
-  if (toolbar) syncObs.observe(toolbar)
-  // textarea 输入多行会把工具条顶上去 → 容器高度变、分隔线跟着移动
-  syncObs.observe(container)
-}
-
-onMounted(() => nextTick(setupQcSync))
-// QC bar 从隐藏切到显示时重新测量（此前若在窄面板下量过，值已经不准）
-watch(showCommandBar, (v) => { if (v) nextTick(setupQcSync) })
-// 监听面板实例而非 showAiPanel：SshAiPanel 是 defineAsyncComponent，首次打开
-// 时 chunk 尚未 resolve，showAiPanel 翻转后的 nextTick 里 ref 还是 null，
-// 观察器永远装不上、QC 停在兜底 38px。ref 在内部实例真正挂载后才置位，
-// 关闭→重开（含缓存秒挂）也都会再次触发重测。
-watch(aiPanelRef, (el) => { if (el) nextTick(setupQcSync) })
-onUnmounted(() => syncObs?.disconnect())
-
 // 暴露方法给父组件（TitleBar 事件）
 defineExpose({
-  toggleAiPanel,
+  goHome,
+  homeTabActive,
   toggleRemoteManager,
   toggleSftp,
   toggleAudit,
@@ -558,7 +430,6 @@ defineExpose({
   toggleGithub,
   openSettings,
   activeNavPage,
-  showAiPanel,
 })
 </script>
 
@@ -619,67 +490,6 @@ defineExpose({
 
 .tabs-scroll::-webkit-scrollbar {
   display: none;
-}
-
-/* 会话入口：固定在滚动区右侧，标签再多也不被挤走 */
-.tab-actions {
-  flex: 0 0 auto;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 0 6px;
-  border-left: 1px solid var(--border-subtle);
-}
-
-.tab-act {
-  width: 28px;
-  height: 26px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: background var(--transition-fast), color var(--transition-fast);
-}
-
-.tab-act:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.tab-act:disabled {
-  opacity: 0.38;
-  cursor: not-allowed;
-}
-
-/* 首页状态点：待审批（警示黄）> 运行中（呼吸蓝）> 未读（强调色）。
-   颜色只是辅助信道 —— 标签的 title/aria-label 同时说明状态。 */
-.home-tab-dot {
-  width: 5px;
-  height: 5px;
-  margin-left: -1px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.home-tab-dot.pending { background: var(--status-warn-text); }
-.home-tab-dot.running {
-  background: var(--status-info-text);
-  animation: home-dot-pulse 1.6s ease-in-out infinite;
-}
-.home-tab-dot.unread { background: var(--accent-primary); }
-
-@keyframes home-dot-pulse {
-  0%, 100% { opacity: 0.3; transform: scale(0.85); }
-  50% { opacity: 1; transform: scale(1); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .home-tab-dot.running { animation: none; }
 }
 
 .term-tab {

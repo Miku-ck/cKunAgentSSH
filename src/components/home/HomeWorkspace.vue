@@ -18,6 +18,14 @@
               />
             </div>
           </template>
+          <!-- 运行通知（任务规划 / 警告 / 人工介入 / 待确认命令 / 错误）长在消息流末尾，
+               紧跟这一轮回答。两个决定别拆开看：
+               ① 宿主不写挂载条件 —— hasRunNotice 是数据侧的唯一判定，面板加区块而这里
+                  忘记同步，就是「需要决策时面板根本没挂载、用户只看到一条 toast」；
+               ② 它不在 isEmpty 的 v-else 分支里 —— 消息为空时整块（含澄清向导）曾经
+                  跟着一起不挂载，那是这份面板最早踩过的挂载洞，洞的形状由位置决定，
+                  不由「今天有没有空态下的 run」决定。 -->
+          <AgentRunPanel />
         </div>
       </div>
       <HomeHistoryDrawer
@@ -32,7 +40,7 @@
       />
     </div>
     <div class="composer-wrap">
-      <HomeComposer @bulk="emit('bulk')" />
+      <HomeComposer @bulk="emit('bulk')" @remote-mgr="emit('remote-mgr')" />
     </div>
   </div>
 </template>
@@ -57,11 +65,13 @@ import type { BaseMessage } from '@/types/chat'
 const MessageItem = defineAsyncComponent(() => import('@/components/chat/MessageItem.vue'))
 import HomeComposer from '@/components/home/HomeComposer.vue'
 import HomeHistoryDrawer from '@/components/home/HomeHistoryDrawer.vue'
+import AgentRunPanel from '@/components/agent/AgentRunPanel.vue'
 
 defineProps<{ historyOpen: boolean }>()
 const emit = defineEmits<{
   'close-history': []
   bulk: []
+  'remote-mgr': []
 }>()
 
 const sshAi = useSshAiStore()
@@ -79,7 +89,7 @@ const conversationTitle = computed(() =>
   sshAi.conversations.find(c => c.id === sshAi.currentConvId)?.title || '新会话',
 )
 
-/** live 合并与侧栏同一份纯函数；非运行中直接返回 store 的原数组，保持消息引用稳定 */
+/** live 合并走 utils/display-messages 的纯函数；非运行中直接返回 store 的原数组，保持消息引用稳定 */
 const displayMessages = computed(() => {
   if (!agentStore.isRunning) return sshAi.messages
   return buildDisplayMessages(sshAi.messages, {
@@ -133,6 +143,9 @@ watch(() => sshAi.currentConvId, () => { void scrollToBottom() })
 watch(() => agentStore.content, () => { if (agentStore.isRunning) void scrollToBottom() })
 watch(() => agentStore.reasoning, () => { if (agentStore.isRunning) void scrollToBottom() })
 watch(() => agentStore.pendingPermissions.length, () => { void scrollToBottom() })
+// 运行通知区块（任务规划/警告/待确认命令/错误）是消息流之外的另一段高度变化，
+// 出现时同样要跟到底 —— 否则"命令待确认"停在视野下方，用户看不见要决策的东西。
+watch(() => agentStore.hasRunNotice, () => { void scrollToBottom() })
 
 function switchConversation(id: string) {
   if (agentStore.isRunning) {
@@ -221,6 +234,11 @@ async function deleteConversation(id: string) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 运行通知紧跟消息流：与最后一条回答之间留一道呼吸，不粘连 */
+.agent-run-panel {
+  margin-top: 12px;
 }
 
 .composer-wrap {

@@ -4,7 +4,8 @@
  * spec 2026-09-29-home-command-panel · 接缝 S3。刻意只做"下达"：
  * 发送一律走 useSshAiStore().sendMessage（唯一通路，内含模型有效性校验、会话
  * 创建、终端上下文采集与 resolveRunModes 装配），审批档与姿态都读 store 而不是
- * 自己存一份 —— 首页与侧栏必须是同一档，否则用户在一处选了什么，另一处不算。
+ * 自己存一份 —— 界面显示的档位与实际发出去的档位必须是同一档，否则用户点了什么
+ * 不算什么。
  */
 import { computed } from 'vue'
 import { useSshAiStore } from '@/stores/ssh-ai'
@@ -16,22 +17,22 @@ export function useHomeCommand() {
   const agent = useAgentStore()
   const toast = useToastStore()
 
-  /** 与侧栏同一份共享草稿（store 的 sharedDraft）：首页打一半切到侧栏接着写，
-   *  反向亦然。computed 双向绑定让 v-model 与 `draft.value = ''` 照常工作。 */
+  /** 草稿住 store（sharedDraft）：「问 AI」预填与打字都落在这份，
+   *  computed 双向绑定让 v-model 与 `draft.value = ''` 照常工作。 */
   const draft = computed({
     get: () => sshAi.sharedDraft,
     set: (v: string) => sshAi.setSharedDraft(v),
   })
-  /** 与侧栏同一口径：只挂文件不打字也算"可以下达"（SideChatPanel :1300 允许空文本
-   *  带附件发送）。首页若把文本当硬条件，用户会得到"文件挂上了但『交给它』是灰的"。 */
+  /** 只挂文件不打字也算"可以下达"：把文本当硬条件，用户会得到
+   *  "文件挂上了但『交给它』是灰的"（store 会把附件内容拼进 task）。 */
   const canSend = computed(() =>
     !agent.isRunning && (draft.value.trim().length > 0 || sshAi.pendingAttachments.length > 0),
   )
-  /** 上传锁住在 store（全仓一把）：首页与侧栏挂的是同一份 pendingAttachments，
-   *  各自一把锁时后完成的那个会拿陈旧副本 spread，抹掉前一个刚挂上的文件。 */
+  /** 上传锁住在 store（全仓一把）：上传若能并发，后完成的那个会拿陈旧副本
+   *  spread，抹掉前一个刚挂上的文件。 */
   const uploading = computed(() => sshAi.uploadingAttachments)
 
-  /** 本地附件：上传 + 追加 + 锁都在 store（与侧栏同一条通路，不是第二条）。
+  /** 本地附件：上传 + 追加 + 锁都在 store（唯一通路，/chat/upload 是后端真读的那条）。
    *  单文件失败由 store 内部逐个 toast；整体抛出交给调用侧的 toast。 */
   async function attachFiles(files: File[]): Promise<void> {
     if (!files.length || uploading.value) return
@@ -51,13 +52,13 @@ export function useHomeCommand() {
     const text = draft.value.trim()
     // 空文本 + 空附件才拦；只有附件时照发（store 会把附件内容拼进 task）
     if (!text && !sshAi.pendingAttachments.length) return false
-    // 与侧栏同一口径：运行中给出明确反馈，不静默吞掉用户刚打的字
+    // 运行中给出明确反馈，不静默吞掉用户刚打的字
     if (agent.isRunning) {
       toast.info('AI 正在运行中，请等待完成')
       return false
     }
     // 审批档、姿态、技能都取自 store：＋ 菜单点亮的东西必须真的随这次下达出去，
-    // 否则它只是首页的装饰（侧栏那条通路 SshAiPanel.vue:116 早就是这么传的）。
+    // 否则它只是首页的装饰。
     if (!await sshAi.sendMessage(text, {
       approval: sshAi.approvalMode,
       mode: sshAi.posture ?? undefined,
@@ -65,8 +66,7 @@ export function useHomeCommand() {
       attachments: [...sshAi.pendingAttachments],
     })) return false
     // 技能与附件是"这一条消息带什么"，不是常驻档：发完即清，否则下一条静默复用
-    // 同一份技能目录 / 再把整份文件重注入一遍（侧栏在 emit 时清、被拒时由
-    // restoreDraft 放回，这里是同一语义）。
+    // 同一份技能目录 / 再把整份文件重注入一遍。发送被拒时草稿原样留着。
     sshAi.setSelectedSkillIds([])
     sshAi.setPendingAttachments([])
     draft.value = ''

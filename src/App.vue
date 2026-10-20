@@ -13,7 +13,7 @@
     ></div>
     <TitleBar
       :active-page="activePage"
-      @action-ai="sshViewRef?.toggleAiPanel()"
+      @action-ai="sshViewRef?.goHome()"
       @action-schedules="sshViewRef?.toggleSchedules()"
       @action-remote="sshViewRef?.toggleRemoteManager()"
       @action-audit="sshViewRef?.toggleAudit()"
@@ -56,7 +56,9 @@ const sshViewRef = ref<InstanceType<typeof SshView> | null>(null)
 const activePage = computed<TitlebarPage>(() => {
   const nav = sshViewRef.value?.activeNavPage
   if (nav && nav !== 'home') return nav
-  if (sshViewRef.value?.showAiPanel) return 'ai'
+  // AI 入口就是首页任务台：任务台在前台时点亮，终端/独立页盖上来时熄灭。
+  // 不用 activeNavPage 单独判：终端态下它也是 'home'，会把 AI 图标误点亮。
+  if (sshViewRef.value?.homeTabActive) return 'ai'
   return 'home'
 })
 

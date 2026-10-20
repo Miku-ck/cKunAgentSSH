@@ -85,7 +85,7 @@ export function useTerminalContext(opts: UseTerminalContextOptions) {
     askAiBtn.value = { visible: true, x, y }
   }
 
-  /** 点击悬浮按钮：把选中内容送进 AI 面板（问题草稿预填，上下文随发送自动注入） */
+  /** 点击悬浮按钮：把选中内容送进首页任务台（问题草稿预填，上下文随发送自动注入） */
   function askAi(): void {
     askAiBtn.value.visible = false
     sshAiStore.askAiAboutSelection()

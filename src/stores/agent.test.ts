@@ -211,13 +211,14 @@ describe('权限卡片决策在途互斥', () => {
     expect(store.lastRunId).toBe('')
   })
 
-  it('只剩待放行卡片时决策面板也挂载 —— 侧栏靠它给出「去任务台」入口', () => {
+  it('只剩待放行卡片时不挂运行通知区 —— 决策位只有消息流里的内联审批卡', () => {
     const { store, push } = startRun()
     addCard(store, push)
     expect(store.permissionRequests).toHaveLength(1)
-    // 侧栏不结算审批，但必须让人看见有东西在等。计数窄条是这块面板唯一的挂载
-    // 理由；把它从条件里撤掉，运行停住时侧栏看起来会一切正常。
-    expect(store.hasRunNotice).toBe(true)
+    // 审批卡内联在那一轮回答的消息气泡里，首页任务台本身就把消息流摊在眼前；
+    // 通知区再为它挂一块容器等于同一件事说两遍。顶栏徽章与首页状态点才是
+    // 「有东西在等」的告警信道（useAgentPresence 读 pendingPermissions）。
+    expect(store.hasRunNotice).toBe(false)
   })
 
   it('拒绝请求在途期间卡片置为 settling', async () => {

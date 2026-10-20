@@ -1,7 +1,6 @@
 // useSshNavigation.ts — 页面导航 + 终端生命周期 + 首页标签态 + 模态框 + 远程连接
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { useSSHStore, type SSHConnection } from '@/stores/ssh'
-import { useSshAiStore } from '@/stores/ssh-ai'
 import { useServerMonitorStore } from '@/stores/server-monitor'
 import { useSftpStore } from '@/stores/sftp'
 import { useToastStore } from '@/stores/toast'
@@ -20,8 +19,8 @@ export type NavPage =
   'home' | 'remote-mgr' | 'sftp' | 'audit' | 'schedules' | 'dashboard' | 'tunnels' | 'docker' | 'github'
 
 /**
- * 标题条可高亮的页键（ARCH-008 收口）：独立页 + AI 面板开关态。
- * 'home' 表示当前无标题条高亮项（首页态由标签条自己点亮）。
+ * 标题条可高亮的页键（ARCH-008 收口）：独立页 + 首页任务台。
+ * 'home' 表示当前无标题条高亮项（首页态由标签条自己点亮，任务台未在前台）。
  * App.vue 与 TitleBar.vue 必须共用这一份 —— 此前 App 内联手抄第二份联合，
  * 加一页两处都要改，漏一处的表现是图标永远不亮。
  */
@@ -35,7 +34,6 @@ export function useSshNavigation(
   terminalRefs: Record<string, any>,
 ) {
   const store = useSSHStore()
-  const sshAiStore = useSshAiStore()
   const sftpStore = useSftpStore()
   const monitorStore = useServerMonitorStore()
   const toast = useToastStore()
@@ -81,7 +79,7 @@ export function useSshNavigation(
 
   /**
    * 独立页的统一开合。此前 remote-mgr / audit / schedules / dashboard / tunnels /
-   * docker 各抄一份完全相同的九行，只差页名 —— 于是「切到独立页要收起 AI 面板」
+   * docker 各抄一份完全相同的九行，只差页名 —— 于是「切到独立页要收起什么」
    * 这类口径一旦改动就得同时改六处，漏一处就是页面之间行为不一致（新增第 7 页时
    * 照着第 6 份抄，抄的是它的偏差）。判据只留这一处。
    */
@@ -92,8 +90,6 @@ export function useSshNavigation(
     }
     showHome.value = true
     activeNavPage.value = page
-    // 切到独立页面时自动收起 AI 助手面板（点 AI 图标可重新展开）
-    sshAiStore.closeAiPanel()
   }
 
   function activateTerminal(sessionId: string) {
@@ -137,10 +133,6 @@ export function useSshNavigation(
     } catch (err: any) {
       toast.error(toFriendlyMessage(err, 'SFTP 连接失败，请手动连接'))
     }
-  }
-
-  function toggleAiPanel() {
-    sshAiStore.toggleAiPanel()
   }
 
   const toggleAudit = (): void => togglePage('audit')
@@ -364,7 +356,6 @@ export function useSshNavigation(
     homeTabActive,
     terminalVisible,
     activeNavPage,
-    showAiPanel: sshAiStore.showAiPanel,
     showModal,
     editingConnection,
     showCommandBar,
@@ -372,7 +363,6 @@ export function useSshNavigation(
     activateTerminal,
     toggleRemoteManager,
     toggleSftp,
-    toggleAiPanel,
     toggleAudit,
     toggleSchedules,
     toggleDashboard,

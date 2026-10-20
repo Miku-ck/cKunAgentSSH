@@ -138,8 +138,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
 
   // ── 审批档（纯审批轴） ──
 
-  /** 原先是 SideChatPanel 的组件局部 ref，首页输入卡读不到；两处各持一档就是
-   *  第二条通路。刻意不持久化 —— 与提升前一致：重启回到手动审批。 */
+  /** 审批档只此一份：首页输入卡与发送装配共同读它。刻意不持久化 —— 重启回到手动审批。 */
   const approvalMode = ref<ApprovalKey>('normal')
 
   function setApprovalMode(mode: ApprovalKey) {
@@ -149,9 +148,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   // ── 对话姿态（纵向轴，与审批档互不覆写） ──
 
   /**
-   * 原先是 SideChatPanel.vue:649 的组件私有 ref。首页 ＋ 菜单要点「计划」，它与
-   * 审批档就是同一条理由：两处各存一份＝用户在首页点了计划、侧栏仍按未表态发送。
-   *
+   * 对话姿态（goal / plan）只此一份：首页 ＋ 菜单点亮它，发送装配读它。
    * 缺省是 null 而不是 'goal'：'goal' 起步配上 chip 的 × 写回 'goal'，chip 消失了
    * 但后端一字未变（能关、关的是摆设）。未表态时 workflow_mode 省略、后端不注入
    * 任何姿态段，与"用户没选"一致。刻意不持久化 —— 本次会话的意图，重启回默认。
@@ -164,19 +161,17 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
 
   // ── 附到下一条消息的技能 ──
 
-  /** 原先是 SideChatPanel.vue:976 的组件私有 ref。只给"覆写整份"这一个动作：
-   *  侧栏标签的 ×、首页 chip 的 ×、发送后清空若各配一个 add/remove，去重逻辑就会被
-   *  抄成三份。技能本身在后端有真消费者（按 id 装进技能目录），不是前端装饰。 */
+  /** 附到下一条消息的技能。只给"覆写整份"这一个动作：chip 的 ×、发送后清空若各配
+   *  一个 add/remove，去重逻辑就会被抄成三份。技能本身在后端有真消费者
+   *  （按 id 装进技能目录），不是前端装饰。 */
   const selectedSkillIds = ref<string[]>([])
 
   function setSelectedSkillIds(ids: string[]) {
     selectedSkillIds.value = ids
   }
 
-  /** 技能的两个动作，去重/移除的算法只在这里有一份：原先首页和侧栏各算一遍
-   *  `includes ? filter : [...spread]`，而"只给整份覆写"这个 API 的立身理由正是不让
-   *  人抄两份。语义**不**是 toggle —— 侧栏斜杠菜单点已选中的技能是"不加"，把它改成
-   *  取消就是顺手改掉既有行为。要不要取消是各界面的事，组合留在调用方，算法在这。 */
+  /** 技能的两个动作，去重/移除的算法只在这里有一份：首页技能菜单点一下是
+   *  "加上或摘掉"，组合留在调用方，算法在这。 */
   function addSelectedSkill(id: string) {
     if (!selectedSkillIds.value.includes(id)) selectedSkillIds.value = [...selectedSkillIds.value, id]
   }
@@ -184,9 +179,8 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   function removeSelectedSkill(id: string) {
     selectedSkillIds.value = selectedSkillIds.value.filter(x => x !== id)
   }
-  /** 已上传、待随下一条消息注入的本地附件。原先是 SideChatPanel.vue:587 的组件私有
-   *  ref —— 首页 ＋ 菜单选的文件挂不到侧栏，反之也一样。上传通路不在这片：
-   *  uploadFiles 早就存在，/chat/upload 也是后端真读真返的那条。 */
+  /** 已上传、待随下一条消息注入的本地附件。上传通路不在这片：
+   *  uploadFiles 早已存在，/chat/upload 也是后端真读真返的那条。 */
   const pendingAttachments = ref<ChatAttachment[]>([])
 
   function setPendingAttachments(list: ChatAttachment[]) {
@@ -194,13 +188,13 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   }
 
   /** 摘掉一个附件。与技能同一理由：移除的算法（按 file_id 过滤）只该有一份，
-   *  首页 chip 的 × 与侧栏标签的 × 各写一遍就会漂。 */
+   *  首页 chip 的 × 与上传失败回滚各写一遍就会漂。 */
   function removePendingAttachment(fileId: string) {
     pendingAttachments.value = pendingAttachments.value.filter(f => f.file_id !== fileId)
   }
 
-  /** 上传中锁只有这一把。首页与侧栏挂的是同一份 pendingAttachments，各自一把时
-   *  后完成的那个会拿陈旧副本覆盖，把前一个刚挂上的文件抹掉。 */
+  /** 上传中锁只有这一把。首页挂的是 pendingAttachments，上传若能并发，后完成的那个
+   *  会拿陈旧副本覆盖，把前一个刚挂上的文件抹掉。 */
   const uploadingAttachments = ref(false)
 
   /** 远端文件选择器当前浏览的目录。放 store 而不是组件 ref：＋菜单是 v-if 挂载，
@@ -245,10 +239,9 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   }
 
   /** 换会话（切/建/删后落到另一条）时必须清掉的暂存输入。
-   *  这份状态是 store 级的 —— 首页 Composer 与侧栏 SideChatPanel 挂同一份，
-   *  留着就等于把上一会话挑的技能与文件发进当前会话。附件更硬一层：/chat/upload 按
-   *  backendConvId 归档（见 uploadFiles 的注释），A 会话上传的文件挂在 B 会话头上既
-   *  落不进 B 的目录，也不会随 B 的删除被清理。 */
+   *  这份状态是 store 级的，留着就等于把上一会话挑的技能与文件发进当前会话。
+   *  附件更硬一层：/chat/upload 按 backendConvId 归档（见 uploadFiles 的注释），
+   *  A 会话上传的文件挂在 B 会话头上既落不进 B 的目录，也不会随 B 的删除被清理。 */
   function _clearStagedInput() {
     selectedSkillIds.value = []
     pendingAttachments.value = []
@@ -365,35 +358,30 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       // 结构上满足 AgentMessage 最小接口，显式断言（与固化函数签名对齐）
       finalizeAgentMessage(conv as unknown as { messages: AgentMessage[] }, agentStore)
       notifyConversationsChanged()
-      // 固化完成即"有回复可看"：面板关着、任务台也不在眼前时点亮顶栏未读点，
-      // 用户不必自己记得开侧栏。正看着任务台时不写 —— 回复已经显示在他眼前，
+      // 固化完成即"有回复可看"：任务台不在眼前时点亮顶栏未读点，用户不必自己
+      // 记得切回首页。正看着任务台时不写 —— 回复已经显示在他眼前，
       // 再亮一颗「有新回复」等于把看见的东西报成没看见。
-      if (!showAiPanel.value && !homeVisible.value) unreadReply.value = true
+      if (!homeVisible.value) unreadReply.value = true
     }
   })
 
   // ── 2. SSH 特有 State ──
-  const showAiPanel = ref(false)
 
-  /** 终端上下文「问 AI」预填请求：终端组件选中后调用，面板打开并预填问题草稿。
-   *  预填只发生一次（SshAiPanel watch 消费后置 null），用户可修改后再发送 */
+  /** 终端上下文「问 AI」预填请求：终端组件选中后调用，SshView 切回任务台，
+   *  HomeComposer 消费后置 null 并填进共享草稿，用户可修改后再发送。 */
   const pendingPrefill = ref<{ text: string } | null>(null)
 
-  /** 共享输入草稿：首页指令卡与侧栏输入框绑同一份 —— 切屏不丢字。原先两处
-   *  各自存本地 ref，首页打一半切到侧栏要重打。发送成功后由调用方清空
-   *  （useHomeCommand.submit / SideChatPanel.handleSend，语义与原先一致）。 */
+  /** 共享输入草稿：任务台唯一一份输入态。发送成功后由调用方清空
+   *  （useHomeCommand.submit，语义与原先一致）。 */
   const sharedDraft = ref('')
   function setSharedDraft(text: string) {
     sharedDraft.value = text
   }
 
-  /** 未读回复徽章：Agent 跑完（含中止/失败的固化）且面板关着时点亮，面板一开
-   *  即清。TitleBar 的 AI 按钮读它画圆点 —— 让首页与侧栏这两个入口在视觉上
-   *  可感知是"同一个助手的两扇门"，而不是两个不相干的功能。 */
+  /** 未读回复徽章：Agent 跑完（含中止/失败的固化）且任务台不在眼前时点亮，
+   *  回到任务台即清。TitleBar 的 AI 按钮读它画圆点 —— 让"有回复可看"这件事
+   *  在首页不可见时仍可感知。 */
   const unreadReply = ref(false)
-  watch(showAiPanel, (open) => {
-    if (open) unreadReply.value = false
-  })
 
   /** 任务台（首页）是否正被用户看着。由 SshView watch `homeTabActive` 同步。
    *  与未读点配合：正看着任务台时回复已经显示在眼前，不该再亮未读。 */
@@ -424,22 +412,6 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     return pending
   }
   watch(() => appStore.backendStatus, ensureModelLoaded, { immediate: true })
-
-  function toggleAiPanel() {
-    if (showAiPanel.value) {
-      closeAiPanel()
-    } else {
-      showAiPanel.value = true
-    }
-  }
-
-  /**
-   * 关闭 AI 面板：隐藏面板。
-   * Agent 运行设计为可跨面板存活（store 层 watch 固化结果），关闭面板不中止 Agent。
-   */
-  function closeAiPanel() {
-    showAiPanel.value = false
-  }
 
   // ── 3. SSH 上下文构建：从当前活动 SSH 会话获取信息 ──
   // 选中片段/最近命令等"现场上下文"按需采集（问 AI 入口），避免每次 buildContext 发 IPC
@@ -506,13 +478,14 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     attachTerminalContext.value = on
   }
 
-  /** 这条消息**将**带上的现场（不消费暂存）。首页 chip 与侧栏同源读这一份，
+  /** 这条消息**将**带上的现场（不消费暂存）。首页 chip 与发送装配同源读这一份，
    *  免得两处各自算一遍三态 —— 那正是这套折叠要防的东西。 */
   const terminalContext = computed(() =>
     pickTerminalSnapshot(stagedSnapshot.value, attachTerminalContext.value, getTerminalSnapshot),
   )
 
-  /** 终端「问 AI」入口：选中内容 → 预填 AI 面板问题草稿（上下文随消息自动注入） */
+  /** 终端「问 AI」入口：选中内容 → 预填任务台问题草稿（上下文随消息自动注入）。
+   *  SshView 监听 pendingPrefill 切回首页，HomeComposer 负责落进输入框。 */
   function askAiAboutSelection(question?: string) {
     const snap = getTerminalSnapshot()
     const q = (question || '').trim()
@@ -522,17 +495,15 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     // 调用方自带问题文本（监控指标「问 AI」）时不暂存现场：问题所指主机与活动
     // 终端未必同一台，拼进无关终端的选区/历史只会误导模型。
     stagedSnapshot.value = q ? null : snap
-    if (!showAiPanel.value) showAiPanel.value = true
   }
 
   /** 纯文本「问 AI」入口（不采集终端上下文）：供 Schedules 等非终端页面使用，
-   *  避免混入无关终端的选区/命令历史 */
+   *  避免混入无关终端的选区与命令历史 */
   function askAi(text: string) {
     const q = (text || '').trim()
     if (!q) return
     pendingPrefill.value = { text: q }
     stagedSnapshot.value = null
-    if (!showAiPanel.value) showAiPanel.value = true
   }
 
   // ── 4. System Prompt 构建：运维专家 + SSH 环境信息 + 终端现场上下文 ──
@@ -872,14 +843,10 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     switchConversation,
     deleteConversation,
     beginNewTask,
-    // ── SSH 特有 API ──
-    showAiPanel,
-    toggleAiPanel,
-    closeAiPanel,
     // ── 首页可见性与未读 ──
     homeVisible,
     setHomeVisible,
-    // ── 共享输入草稿（首页指令卡 ↔ 侧栏输入框同一份）──
+    // ── 共享输入草稿（任务台唯一一份输入态）──
     sharedDraft,
     setSharedDraft,
     // ── 顶栏未读徽章 ──

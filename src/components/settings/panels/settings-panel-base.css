@@ -2,8 +2,8 @@
  * 设置面板共享样式 —— 由 src/components/settings/panels/*.vue 以
  * <style scoped src="./settings-panel-base.css"> 各自引入。
  *
- * 刻意不放 global.css：这些类名在别处另有含义（SideChatPanel.vue 的 .panel-header
- * 是另一套值、多处有 .btn），全局规则会按属性并集漏染到那些元素上；scoped src
+ * 刻意不放 global.css：这些类名在别处另有含义（AgentMemoryView / AccessModal /
+ * AgentRunsTable 等多处有 .btn），全局规则会按属性并集漏染到那些元素上；scoped src
  * 让每个面板各自持有一份带自己 data-v 的规则，作用域与原来逐字节一致。
  *
  * 收敛前四份/七份副本已漂移，以下取值按「带 :hover 反馈的完整版」统一：

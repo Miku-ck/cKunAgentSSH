@@ -34,7 +34,7 @@ export function useChatPersistence(options: {
       const raw = localStorage.getItem(storageKey)
       const parsed = raw ? JSON.parse(raw) : []
       // 审查R2修复：JSON.parse 成功不等于形态合法——非数组值（如被写进 `{}`/字符串）
-      // 或条目缺 messages 会让 messages computed / .find / 分组渲染整个 AI 面板抛错白屏。
+      // 或条目缺 messages 会让 messages computed / .find / 分组渲染整个任务台抛错白屏。
       // 按条目形状过滤，坏数据降级为空列表。
       if (!Array.isArray(parsed)) {
         console.warn(`[useChatPersistence] ${storageKey} 内容不是数组，重置为空列表`)
@@ -156,7 +156,7 @@ export function useChatPersistence(options: {
 
   const conversations = shallowRef<ModeConversation[]>(loadConversations())
   // 审查修复：重启后恢复上次会话（localStorage 含完整消息，仅恢复选中态）。
-  // 原实现恒为 null，每次重启 AI 面板都显示空态，用户需手动从历史记录点回。
+  // 原实现恒为 null，每次重启任务台都显示空态，用户需手动从历史记录点回。
   const currentConvId = ref<string | null>(conversations.value[0]?.id ?? null)
   const selectedModelId = ref<string>(loadSelectedModelId())
   const currentConversation = computed(() =>

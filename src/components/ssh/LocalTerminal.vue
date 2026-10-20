@@ -382,7 +382,7 @@ defineExpose({
   position: relative;
 }
 
-/* 「问 AI」悬浮按钮：选区上方，点击把选中内容送进 AI 面板 */
+/* 「问 AI」悬浮按钮：选区上方，点击把选中内容送进首页任务台 */
 .ask-ai-float-btn {
   /* indigo 档在深色/浅色/手记三套主题里都是深值（#818cf8/#4f46e5/#3b4f7a），
      hover 铺满它时前景恒为白 —— 与用户选的强调色无关，所以不读 --accent-on */

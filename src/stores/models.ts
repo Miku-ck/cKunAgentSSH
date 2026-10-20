@@ -1,6 +1,6 @@
 /**
  * 模型列表 Store — 全局共享的模型配置列表
- * 供 ssh-ai store 与 AI 面板的模型选择器使用。
+ * 供 ssh-ai store 与任务台输入卡的模型选择器使用。
  * 独立成 store 是为了避免"ssh-ai ↔ models"的循环导入。
  */
 import { ref } from 'vue'

@@ -218,21 +218,19 @@ export const useAgentStore = defineStore('agent', () => {
   const isRunning = computed(() => status.value === 'running')
   const hasHumanHelpRequest = computed(() => humanHelpRequests.value.length > 0)
 
-  // 「运行面板有东西要显示」的唯一判定：逐项对齐 AgentRunPanel 实际渲染的区块
-  // （任务规划 / 警告 / 人工介入 / 待放行提示 / 可见终端待确认命令 / 错误）。
+  // 「运行通知区有东西要显示」的唯一判定：逐项对齐 AgentRunPanel 实际渲染的区块
+  // （任务规划 / 警告 / 人工介入 / 可见终端待确认命令 / 错误）。
   // 交付面板区块已删（在途交付不再进本面板），所以这里用 pendingDeliveries 而不是
   // 全量 deliveries——终态交付若还留在判定里，面板会挂着一块什么都不渲染的容器。
-  // 原先这份条件是抄在宿主 SshAiPanel.vue 的 v-if 里的，而那份漏了任务规划、待确认
+  // 原先这份条件是抄在侧栏宿主 SshAiPanel.vue 的 v-if 里的，而那份漏了任务规划、待确认
   // 交付与澄清向导：后端发 clarification_needed 时面板压根没挂载，向导渲染不出来，
   // 用户只看到一条 toast，运行干等到后端 TTL 超时。面板加区块而宿主忘记同步必然复发，
-  // 所以条件搬回数据侧，宿主只负责无条件挂载。
-  // pendingPermissions 这一项对应侧栏顶部的「N 条待你放行 · 去任务台」：侧栏不结算，
-  // 但必须让人在这里就知道有东西在等，否则运行停住而侧栏看起来一切正常。
+  // 所以条件搬回数据侧，宿主（首页任务台）只负责无条件挂载。
+  // 待放行卡片不在这份判定里：审批卡内联在消息流的那一轮回答里，不靠本面板给入口。
   const hasRunNotice = computed(() =>
     !!intentionInfo.value
     || warnings.value.length > 0
     || hasHumanHelpRequest.value
-    || pendingPermissions.value.length > 0
     || pendingDeliveries.value.length > 0
     || !!errorMessage.value
   )

@@ -647,7 +647,7 @@ defineExpose({
   height: 100%;
 }
 
-/* 「问 AI」悬浮按钮：选区上方，点击把选中内容送进 AI 面板 */
+/* 「问 AI」悬浮按钮：选区上方，点击把选中内容送进首页任务台 */
 .ask-ai-float-btn {
   /* 同 LocalTerminal：hover 底是 --accent-indigo（主题固定的靛档，三套主题都是深值），
      不是用户强调色，所以前景不能读 --accent-on —— 那个是 applyAccent 按 --accent-primary

@@ -1,6 +1,11 @@
 <script setup lang="ts">
 /**
- * AgentRunPanel — Agent 运行过程通知面板（异常/需要用户决策时显示）
+ * AgentRunPanel — Agent 运行过程通知区（异常/需要用户决策时显示）
+ *
+ * 宿主是首页任务台：挂在消息流末尾（HomeWorkspace），自身按 agentStore.hasRunNotice
+ * 决定内容块挂不挂载。宿主不要再抄一份条件：曾经抄过，那份漏了澄清向导/任务规划/
+ * 待确认交付，结果是需要用户决策时面板根本没挂载，用户只看到一条 toast，
+ * 运行等到后端 TTL 超时。
  *
  * 实际包含的区块（均为条件渲染，无内容时整块隐藏）:
  * - 澄清向导（ClarifyingWizard：自带 visible 门控 + Teleport，不受下方整块开关影响）
@@ -10,12 +15,8 @@
  * - 可见终端执行：待确认命令（确认/拒绝）
  * - 错误（errorMessage）
  *
- * 工具授权请求原先也在这里（审批托盘：单一焦点卡 + 批量 + 追溯），R1 起整块撤走 ——
- * 唯一逐条决策位是过程区的内联卡；侧栏顶部只留一条「N 条待你放行 · 去任务台」的
- * 导航窄条，不渲染批准/拒绝。结算仍走 store 的 approvePermission / denyPermission。
- *
- * 整块的显隐由 agentStore.hasRunNotice 决定（数据侧单一判定，逐区块对齐）——
- * 宿主组件不要再抄一份条件：漏掉一项就等于那块内容永远不挂载。
+ * 工具授权请求不在这里：唯一逐条决策位是消息流里的内联审批卡（MessageItem 的
+ * inline-approvals），结算走 store 的 approvePermission / denyPermission。
  *
  * 注：常规运行状态（thinking/acting、迭代计数、工具调用流）不在本面板展示 —
  * 工具调用明细见消息气泡内联轨迹（AgentTraceInline）与运行交付面板。
@@ -25,7 +26,6 @@ import { useAgentStore } from '@/stores/agent'
 import ClarifyingWizard from './ClarifyingWizard.vue'
 
 const agentStore = useAgentStore()
-const emit = defineEmits<{ 'open-home': [] }>()
 
 function levelLabel(level: string): string {
   const map: Record<string, string> = {
@@ -61,18 +61,6 @@ const latestHelp = computed(() =>
 <template>
   <ClarifyingWizard />
   <div v-if="agentStore.hasRunNotice" class="agent-run-panel">
-    <!-- 侧栏不结算审批，只把人带回任务台：逐条决策位只有过程区内联卡一处 -->
-    <button
-      v-if="agentStore.pendingPermissions.length"
-      class="ap-card ap-pending"
-      type="button"
-      @click="emit('open-home')"
-    >
-      <svg class="ap-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M12 8v4"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-      <span>{{ agentStore.pendingPermissions.length }} 条待你放行 · 去任务台</span>
-      <svg class="ap-pending-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
-    </button>
-
     <!-- 规划/意图信息 -->
     <div class="intention-section" v-if="agentStore.intentionInfo">
       <div class="ap-card ap-intention">
@@ -117,9 +105,8 @@ const latestHelp = computed(() =>
       </button>
     </div>
 
-    <!-- 审批卡不在这里渲染（spec 2026-09-30-retire-ai-side-panel R1）：逐条决策位只剩
-         过程区里的内联卡；本面板顶部那条窄条只报数并把人带回任务台。批量/追溯同属
-         内联卡一侧，结算仍走 store 的 approve/deny。 -->
+    <!-- 审批卡不在这里渲染：逐条决策位只剩消息流里的内联卡（inline-approvals）。
+         批量与追溯同属内联卡一侧，结算走 store 的 approve/deny。 -->
 
     <!-- 可见终端执行：待确认命令 -->
     <div class="delivery-section" v-if="agentStore.pendingDeliveries.length > 0">
@@ -163,35 +150,6 @@ const latestHelp = computed(() =>
 /* ── 通用卡片骨架 / key-value 行 / 徽章 / 按钮：见 @/styles/approval-card.css ──
  * 那一份现在由 ApprovalCard 与本面板共同消费，抄回 scoped 就是两处漂移的开始。
  * 这里只留下面板自己的布局与覆盖规则。 */
-
-/* ── 待放行提示（只导航，不在此结算） ── */
-.ap-pending {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 9px 12px;
-  font-family: inherit;
-  font-size: 12.5px;
-  text-align: left;
-  color: var(--status-warn-text);
-  background: var(--status-warn-bg);
-  border-color: var(--card-warn-border);
-  cursor: pointer;
-  transition: background var(--transition-fast);
-}
-.ap-pending:hover { background: var(--bg-hover); }
-.ap-pending:focus-visible {
-  outline: 2px solid var(--accent-primary);
-  outline-offset: 1px;
-}
-.ap-pending .ap-ic { color: var(--status-warn-text); }
-.ap-pending-go {
-  width: 14px;
-  height: 14px;
-  flex: none;
-  margin-left: auto;
-}
 
 /* ── 规划/意图卡片 ── */
 .ap-intention { background: var(--bg-elevated); border-color: var(--status-info-border); }

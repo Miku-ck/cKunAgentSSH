@@ -75,7 +75,7 @@ const readsVar = (src: string, token: string) =>
 
 /** 找出「给 :root 令牌写回落值」的位置。按 :root 令牌表迭代，而不是手抄一枚枚清单：
  *  抄的那份只覆盖今天点名的几枚，第 N+1 枚加进 :root 时没有任何东西逼人登记。
- *  运行时注入的属性（--theme-gradient / --gradient-alpha / --chat-font-size / --qc-h /
+ *  运行时注入的属性（--theme-gradient / --gradient-alpha / --chat-font-size /
  *  --rm-grid-cols / --app-bg-*）不在 :root 定义，它们行上的回落是**活**的（setProperty
  *  之前的那一次绘制要读得出东西），按 :root 迭代的写法天然放过。 */
 function fallbackOffenders(sheets: Record<string, string>): string[] {
@@ -399,7 +399,7 @@ describe('atelier（手记）主题的令牌覆盖', () => {
 
   it('审批图标按档位换记号，chip 的底是主题墨而不是固定深色档', () => {
     // 三档共用一张盾时，切到「自动审批」界面上什么都没变 —— 图标必须跟着档位走。
-    // 记号表已上收到 run-modes（首页卡与侧栏审批钮共用一份，改一处不漏另一处），
+    // 记号表已上收到 run-modes（输入卡与运行通知区共用一份，改一处不漏另一处），
     // 按 PermissionModeKey 穷举（漏一档 = 编译错误），消费方必须真的读这张表而非自写图标。
     expect(runModes).toMatch(/PERM_MARKS: Record<PermissionModeKey,\s*string \| null>/)
     expect(homeComposer).toMatch(/PERM_MARKS\[permMode\.value\]/)

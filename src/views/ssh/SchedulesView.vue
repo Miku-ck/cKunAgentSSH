@@ -685,7 +685,7 @@ watch([hasCountdownTarget, () => props.active], ([on, active]) => {
   else stopCountdownTick()
 }, { immediate: true })
 
-/** 失败 run → 预填 AI 面板诊断（复用 A 的 pendingPrefill 通路） */
+/** 失败 run → 预填任务台诊断草稿（复用 A 的 pendingPrefill 通路） */
 function askAiDiagnose(s: ScheduleRecord, r: ScheduleRun) {
   const lines = [
     `定时任务「${s.name}」在 ${formatBackendTs(r.started_at)} 的执行失败了，帮我分析原因并给出修复建议。`,

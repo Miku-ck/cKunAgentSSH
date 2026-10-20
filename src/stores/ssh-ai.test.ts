@@ -1,9 +1,9 @@
 /**
  * 审批档归属（spec 2026-09-29-home-command-panel · 接缝 S3 前置）
  *
- * approvalMode 原先是 SideChatPanel.vue:739 的组件局部 ref：首页输入卡要放一个
+ * approvalMode 原先是已退役的 AI 侧栏组件的局部 ref：首页输入卡要放一个
  * 审批下拉就只能自己再存一份，两处各持一档 = 第二条通路（用户在首页选「自动」，
- * 侧栏仍按「手动」发送）。提到 store 后两处读同一档。
+ * 另一处仍按「手动」发送）。提到 store 后只有这一档。
  *
  * 刻意**不持久化** —— 与提升前一致：审批档是本次会话的意图，重启回到手动。
  */
@@ -74,8 +74,8 @@ describe('ssh-ai 审批档', () => {
 
 /**
  * 对话姿态（目标/计划）—— 故事 5 的 ＋ 菜单项要落在首页，而它原先是
- * SideChatPanel.vue:649 的组件私有 ref。与审批档同一条理由：两处各存一份
- * 就是第二条通路，用户在首页点「计划」、侧栏仍按未表态发送。
+ * 已退役的 AI 侧栏组件的私有 ref。与审批档同一条理由：两处各存一份
+ * 就是第二条通路，用户在首页点「计划」、另一处仍按未表态发送。
  */
 describe('ssh-ai 姿态轴', () => {
   beforeEach(() => {
@@ -113,9 +113,9 @@ describe('ssh-ai 姿态轴', () => {
 })
 
 /**
- * 技能选择（故事 5/6 第二项）。原先是 SideChatPanel.vue:976 的组件私有 ref，
+ * 技能选择（故事 5/6 第二项）。原先是已退役的 AI 侧栏组件的私有 ref，
  * 首页 ＋ 菜单要点它，就同审批档/姿态一样得提进 store。
- * API 只给"覆写整份"：侧栏标签的 ×、首页 chip 的 ×、发送后清空，若各配一个
+ * API 只给"覆写整份"：chip 的 ×、发送后清空，若各配一个
  * add/remove 动作，去重逻辑就会被抄成三份。
  */
 describe('ssh-ai 技能选择', () => {
@@ -144,7 +144,7 @@ describe('ssh-ai 技能选择', () => {
   it('addSelectedSkill 幂等、removeSelectedSkill 摘掉（去重只有这一份实现）', () => {
     const store = useSshAiStore()
     store.addSelectedSkill('a')
-    // 侧栏斜杠菜单点已选中的技能是"不加"而不是"取消" —— 这不是 toggle，别改
+    // add 的语义是"加上，已有就不重复"，不是 toggle —— 摘掉走 remove
     store.addSelectedSkill('a')
     expect(store.selectedSkillIds).toEqual(['a'])
     store.addSelectedSkill('b')
@@ -195,9 +195,9 @@ describe('终端现场折叠', () => {
 })
 
 /**
- * 待发送的本地附件（故事 5/6 第四项）。原先是 SideChatPanel.vue:587 的组件私有 ref，
- * 首页 ＋ 菜单要选文件就得同技能一样提进 store —— 两处各存一份的话，首页挂的文件
- * 侧栏发不出去，反之亦然。上传本身不在这一片：store.uploadFiles 早就存在。
+ * 待发送的本地附件（故事 5/6 第四项）。原先是已退役的 AI 侧栏组件的私有 ref，
+ * 首页 ＋ 菜单要选文件就得同技能一样提进 store —— 两处各存一份的话，一边挂的文件
+ * 另一边发不出去。上传本身不在这一片：store.uploadFiles 早就存在。
  */
 describe('ssh-ai 待发送附件', () => {
   const att = (id: string) => ({ file_id: id, filename: `${id}.log`, content: 'x', truncated: false })
@@ -213,8 +213,8 @@ describe('ssh-ai 待发送附件', () => {
   })
 
   it('uploadAttachments 追加而不是覆盖，并发第二次被同一把锁挡住', async () => {
-    // 首页与侧栏挂的是同一份 pendingAttachments。各自一把锁时，后完成的那个会拿
-    // 陈旧副本 spread，把前一个刚挂上的文件抹掉 —— 用户看到的是"文件没挂上"。
+    // pendingAttachments 只有一份，但上传锁也必须只有一把：各自一把时，后完成的那个
+    // 会拿陈旧副本 spread，把前一个刚挂上的文件抹掉 —— 用户看到的是"文件没挂上"。
     const store = useSshAiStore()
     store.setPendingAttachments([att('keep')])
     const [n1, n2] = await Promise.all([
@@ -314,7 +314,7 @@ describe('ssh-ai 远端文件附件', () => {
 /**
  * 换会话必须带走暂存输入（技能 chip + 待发送附件）。
  *
- * 这两份是 store 级共享状态（首页 Composer 与侧栏 SideChatPanel 挂同一份），
+ * 这两份是 store 级共享状态（任务台 Composer 挂的就是这一份），
  * 而 switch/create/delete 三条切会话路径原先只清 workflowSnapshot —— 同一处注释里
  * 已经写清理由（「否则界面会显示上一个会话的 Spec/Plan/Goal，而它们并没有被注入本轮
  * 上下文」），暂存的技能与附件是同一个症状的另一半：chip 还亮着，用户按发送就把上一
@@ -469,7 +469,7 @@ describe('ssh-ai homeVisible 与未读', () => {
     expect(store.unreadReply).toBe(false)
   })
 
-  it('固化一轮回复时，面板关着且不在首页才点亮未读', async () => {
+  it('固化一轮回复时，任务台不在眼前才点亮未读', async () => {
     const store = useSshAiStore()
     const agent = useAgentStore()
     const conv = await store.createConversation('A')

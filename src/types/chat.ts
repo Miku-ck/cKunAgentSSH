@@ -32,7 +32,7 @@ export interface ModeMessage extends BaseMessage {
 
 export type ModeConversation = BaseConversation<ModeMessage>
 
-/** 历史会话分组（今天/昨天/更早 展示契约，HistoryPanel 与 SideChatPanel 共用） */
+/** 历史会话分组（今天/昨天/更早 展示契约，任务台历史抽屉与历史列表行共用） */
 export interface ConvGroup {
   label: string
   items: Array<{ id: string; title: string; updated_at: string }>

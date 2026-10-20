@@ -2,7 +2,7 @@
 //
 // 设计约束：只劫持带 Ctrl/Cmd 修饰的组合，且必须避开 shell 控制字符冲突 ——
 //   ^W 是 readline 删词、^B 是光标后退、^K 是删到行尾，终端里按下去必须原样
-//   进 shell。所以关闭/AI 面板/命令面板统一用 Shift 档（Ctrl+Shift+W/B/P），
+//   进 shell。所以关闭/AI 首页/命令面板统一用 Shift 档（Ctrl+Shift+W/B/P），
 //   这与 Windows Terminal 的既定习惯（Ctrl+Shift+W 关标签、Ctrl+Shift+P 面板）一致。
 // 事件走 window 冒泡相监听：xterm 的隐藏 textarea 不 stopPropagation 这些组合键。
 import { onMounted, onUnmounted } from 'vue'
@@ -36,7 +36,8 @@ export interface ShortcutDeps {
   activateTerminal: (id: string) => void
   /** 关闭当前活动会话（Ctrl+Shift+W） */
   closeActiveSession: () => void
-  toggleAiPanel: () => void
+  /** 回到 AI 首页任务台（Ctrl+Shift+B） */
+  goAiHome: () => void
   toggleNavPage: (page: Exclude<NavPage, 'home'>) => void
   togglePalette: () => void
   isPaletteOpen: () => boolean
@@ -105,7 +106,7 @@ export function useGlobalShortcuts(deps: ShortcutDeps): void {
     }
     if (e.shiftKey && (e.key === 'B' || e.key === 'b')) {
       e.preventDefault()
-      deps.toggleAiPanel()
+      deps.goAiHome()
       return
     }
     if (e.shiftKey && (e.key === 'P' || e.key === 'p')) {

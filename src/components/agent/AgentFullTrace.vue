@@ -125,7 +125,7 @@ const stateChain = computed(() => {
 .ft-caret { transition: transform .15s; font-size: 10px; }
 .ft-caret.open { transform: rotate(90deg); }
 /* 下拉浮层：锚定宿主消息块（.message-block 提供 relative），
-   左右钉满对话区宽度 —— 与 AI 面板整体同幅，拖拽调宽时实时自适应 */
+   左右钉满对话区宽度 —— 与所在消息气泡同幅，窗口变窄时实时自适应 */
 .ft-body {
   position: absolute;
   top: calc(100% + 6px);

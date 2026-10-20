@@ -25,8 +25,8 @@
       </div>
     </div>
 
-    <!-- 加号描边固定 1.8，与 AI 面板工具栏同尺寸图标（.plus-btn 加号 / 上传 / 权限芯片）同档：
-         同为 viewBox 24 缩到 14px，写 2.5 会渲染成 ~1.46px，比那组的 ~1.05px 明显更粗、看起来也更亮。 -->
+    <!-- 加号描边固定 1.8，与首页输入卡 ＋ 菜单那组图标同档（同为 viewBox 24 缩到
+         14px，写 2.5 会渲染成 ~1.46px，比那组的 ~1.05px 明显更粗、看起来也更亮）。 -->
     <button class="qc-add-btn" title="添加快捷命令" @click="openAdd">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14">
         <line x1="12" y1="5" x2="12" y2="19"/>
@@ -210,9 +210,10 @@ function handleDragEnd() {
 
 <style scoped>
 .quick-command-bar {
-  /* 默认 38px，SshView 用 ResizeObserver 动态推 --qc-h 使本组件 border-top
-     与侧边 AI 面板 .input-section 顶线（.input-section border-top）水平对齐 */
-  height: var(--qc-h, 38px);
+  /* 38px 是这一条的固有高度（内容 26px + 上下呼吸 + 1px 上边框）。
+     此前它读 --qc-h 由 SshView 用 ResizeObserver 反推，为的是与右侧 AI 面板的
+     输入区分隔线对齐；面板退役后那条基线不存在了，高度回到自己的值。 */
+  height: 38px;
   flex-shrink: 0;
   display: flex;
   align-items: center;

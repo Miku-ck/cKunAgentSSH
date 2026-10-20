@@ -15,12 +15,11 @@
          ≥1024px 时按钮常显 2 字标签（可发现性优先），以下收纳为纯图标；
          title 里的快捷键提示来自 useGlobalShortcuts.PAGE_SHORTCUTS，单一来源。 -->
     <div class="titlebar-actions" @dblclick.stop>
-      <!-- 常用工具：AI 助手 + Docker / GitHub / SFTP -->
-      <button class="titlebar-action-btn" :class="{ active: activePage === 'ai' }" :title="aiTitle" aria-label="AI 运维助手" @click="emit('action-ai')">
+      <!-- 常用工具：AI 首页 + Docker / GitHub / SFTP -->
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'ai' }" :title="aiTitle" aria-label="AI 首页" @click="emit('action-ai')">
         <span class="ai-text">AI</span>
-        <!-- 两个入口在视觉上是同一个助手的两扇门：徽章与首页状态点同源
-             （useAgentPresence），优先级待审批 > 运行中 > 未读；文案同步说明状态，
-             不单靠颜色传义。 -->
+        <!-- AI 入口即首页任务台：徽章与首页状态点同源（useAgentPresence），
+             优先级待审批 > 运行中 > 未读；文案同步说明状态，不单靠颜色传义。 -->
         <span v-if="presence === 'pending'" class="ai-badge pending" aria-hidden="true"></span>
         <span v-else-if="presence === 'running'" class="ai-badge run" aria-hidden="true"></span>
         <span v-else-if="presence === 'unread'" class="ai-badge unread" aria-hidden="true"></span>
@@ -98,10 +97,10 @@ const ghAccel = useGithubAccelStore()
 
 const AI_SHORTCUT = 'Ctrl+Shift+B'
 const aiTitle = computed(() => {
-  if (presence.value === 'pending') return `AI 运维助手（${pendingCount.value} 条待审批，${AI_SHORTCUT}）`
-  if (presence.value === 'running') return `AI 运维助手（运行中，${AI_SHORTCUT}）`
-  if (presence.value === 'unread') return `AI 运维助手（有新回复，${AI_SHORTCUT}）`
-  return `AI 运维助手 (${AI_SHORTCUT})`
+  if (presence.value === 'pending') return `AI 首页（${pendingCount.value} 条待审批，${AI_SHORTCUT}）`
+  if (presence.value === 'running') return `AI 首页（运行中，${AI_SHORTCUT}）`
+  if (presence.value === 'unread') return `AI 首页（有新回复，${AI_SHORTCUT}）`
+  return `AI 首页 (${AI_SHORTCUT})`
 })
 
 /** 红点只看巡检结论；标题补充具体是哪一项异常（镜像优先） */
@@ -118,7 +117,7 @@ const ghHealthTitle = computed(() => {
 onMounted(() => { void ghAccel.initHealth() })
 
 defineProps<{
-  /** 当前激活的功能页，对应图标高亮（'ai' 是面板开关态，不在独立页清单里） */
+  /** 当前激活的功能页，对应图标高亮（'ai' = 首页任务台在前台） */
   activePage: TitlebarPage
 }>()
 

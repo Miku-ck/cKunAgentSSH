@@ -5,10 +5,12 @@
 // 第三套的注释自己写着「兼容 ModeMessage 和 MessageItem 的 ChatMessage」——
 // 它是为了弥合前两套已经漂开的分歧而存在的，而分歧的根源正是没人 import 规范定义：
 // 给 BaseMessage 加字段不会传到渲染路径，改了三处也只对一处生效。
+// 2026-10-20：SideChatPanel 随 AI 侧栏退役删除，渲染路径的第二个消费点换成首页
+// 任务台的消息流（HomeWorkspace）—— 守卫跟着换目标，条件一项不放宽。
 import { describe, expect, it } from 'vitest'
 
 import MessageItemSource from './MessageItem.vue?raw'
-import SideChatPanelSource from './SideChatPanel.vue?raw'
+import HomeWorkspaceSource from '../home/HomeWorkspace.vue?raw'
 import chatTypesSource from '../../types/chat.ts?raw'
 import displayMessagesSource from '../../utils/display-messages.ts?raw'
 
@@ -18,7 +20,7 @@ const LOCAL_MESSAGE_INTERFACE = /^[ \t]*(?:export[ \t]+)?interface[ \t]+\w*(?:Me
 describe('消息形态只有一个定义来源（S9-22）', () => {
   const files: Array<[string, string]> = [
     ['MessageItem.vue', MessageItemSource],
-    ['SideChatPanel.vue', SideChatPanelSource],
+    ['HomeWorkspace.vue', HomeWorkspaceSource],
   ]
 
   it.each(files)('%s 不再本地手抄消息接口', (_name, src) => {
@@ -29,17 +31,17 @@ describe('消息形态只有一个定义来源（S9-22）', () => {
     expect(src).toMatch(/import\s+type\s*\{[^}]*\bBaseMessage\b[^}]*\}\s*from\s*'@\/types\/chat'/)
   })
 
-  it('两个消费点的 prop 声明都落在规范类型上', () => {
+  it('两个消费点的 prop 声明与 live 判定都落在规范类型 / 单一实现上', () => {
     expect(MessageItemSource).toContain('message: BaseMessage')
-    expect(SideChatPanelSource).toContain('messages: BaseMessage[]')
-    // live 判定已收归 utils/display-messages：两处都 import 同一份，
-    // 不再各自声明一个签名相同的本地函数（那正是第二套口径的入口）
+    // 任务台不再自己声明消息数组类型：列表直接来自 ssh-ai store，
+    // live 合并与逐条判定都走 utils/display-messages 那一份纯函数
+    expect(HomeWorkspaceSource).toMatch(/buildDisplayMessages\(\s*sshAi\.messages/)
+    expect(HomeWorkspaceSource).toMatch(/import\s*\{[^}]*\bisLiveAgentRun\b[^}]*\}\s*from\s*'@\/utils\/display-messages'/)
     expect(displayMessagesSource).toMatch(/messages: readonly BaseMessage\[\],\s*idx: number,\s*running: boolean,\s*\): boolean/)
-    expect(SideChatPanelSource).toMatch(/import\s*\{[^}]*\bisLiveAgentRun\b[^}]*\}\s*from\s*'@\/utils\/display-messages'/)
   })
 
   it('规范定义覆盖渲染路径真正读的那几个键', () => {
-    // 合并的前提是 BaseMessage 够用：面板读 content/role/id/streamingContent，
+    // 合并的前提是 BaseMessage 够用：消息流读 content/role/id/streamingContent，
     // 气泡还读 reasoning 与 agentTrace。后两个必须是可选的 —— 运行中的消息确实可能
     // 只有 streamingContent，reasoning 只在思考型输出上存在；写成必填就是类型上做假。
     expect(chatTypesSource).toMatch(/interface\s+BaseMessage\s*\{[\s\S]*?\n\}/)

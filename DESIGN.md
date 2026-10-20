@@ -74,11 +74,12 @@ App.vue (flex column, 100vh)
 └── SshView           .main (flex:1, relative, z-index:1)
     ├── 标签栏 .term-tabs  高度 --tabbar-h (34px)
     ├── .content-area  多页面 v-show 切换 + pageMounted() 惰性挂载
-    ├── QuickCommandBar (可选)   └── SshAiPanel (可选，右侧可拖宽)
+    └── QuickCommandBar (可选，终端态才占这 30px)
 ```
 
 - 首页恒在、不可关闭，不占标签；运行过程长在首页下方（勿做成标签页）。
-- 侧边可调面板统一用 [useResizablePanel.ts](src/composables/useResizablePanel.ts)（280 / 460 / 800px），拖拽结束或卸载必须清理监听与 body 样式。
+- AI 只有一个界面：首页任务台。顶栏「AI」入口与 `Ctrl+Shift+B` 都是回到任务台，
+  不再另有一块右侧面板（2026-10-20 退役，见 `docs/superpowers/specs/2026-09-30-retire-ai-side-panel-design.md`）。
 - 设置弹窗：`overlay` `rgba(0,0,0,.6)` + `blur(2px)` `z-index:2000`；`dialog` `clamp(960px,90vw,1280px) × clamp(640px,88vh,860px)`，左导航 200px。确认框：宽 380px，`z-index:3000`。过渡 `opacity .15s` + 内容 `scale(.96~.97)`。
 
 ---

@@ -3,8 +3,12 @@
 - 日期：2026-10-20
 - 规格：`docs/superpowers/specs/2026-10-20-home-agent-workbench-design.md`
 - 预览：`.workbuddy/design/home-agent-workbench.html`
-- 术语：`CONTEXT.md` 的「任务台 / 会话 / 执行过程 / 目标主机 / 历史抽屉 / 侧边快捷面板」
+- 术语：`CONTEXT.md` 的「任务台 / 会话 / 执行过程 / 目标主机 / 历史抽屉」
 - 分片：S1 外壳 → S2 会话状态与历史抽屉 → S3 Composer → S4 任务台主流程 → S5 收尾
+- **执行后追加（同日）**：本计划「不删除 `HistoryPanel` 覆盖层：侧栏仍使用它（spec 故事 40）」
+  那条已被后续裁决推翻 —— 侧栏（`SshAiPanel` / `SideChatPanel` / `HistoryPanel`）整体退役，
+  历史只剩任务台的 `HomeHistoryDrawer`；`HistoryConversationList` 作为共用列表行保留。
+  见 spec 2026-10-20 的修订段与 spec 2026-09-30-retire-ai-side-panel 的终态段。
 
 ## 0. 执行前约定
 
