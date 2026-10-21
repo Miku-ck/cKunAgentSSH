@@ -26,6 +26,7 @@
 // 快捷键约定：Ctrl+Shift+F 唤起（^F 是 shell 前进字符，必须避开），Enter/Shift+Enter
 // 逐个导航，Esc 关闭并把焦点还给终端 —— 与 useGlobalShortcuts 的「Shift 档」原则一致。
 import { onMounted, ref } from 'vue'
+import { accentSearchColors } from '@/composables/useTerminalConfig'
 
 /**
  * 搜索 addon 的最小结构契约（不直接 import @xterm/addon-search 的类型进
@@ -47,10 +48,8 @@ const emit = defineEmits<{ close: [] }>()
 
 // 概览标尺三色：SearchAddon 的 decorations 直接画在 overview ruler 上，吃不到
 // CSS 主题令牌 —— 与 GpuNvtopPanel 的组件局部调色板同一豁免形状：一处声明、
-// 有名字、可核对。固定深底取值（终端区恒为 --bg-terminal 暗底，不随 8 主题反转）。
-const OVERVIEW_RULER_MATCH = '#8b949e'
-const OVERVIEW_RULER_ACTIVE = '#58a6ff'
-const OVERVIEW_RULER_BORDER = '#58a6ff'
+// 有名字、可核对。取值改由 accentSearchColors() 按当前强调色派生，
+// 终端区恒为 --bg-terminal 暗底，accent 在暗底上均有足够对比（令牌表保证）。
 
 const query = ref('')
 const caseSensitive = ref(false)
@@ -69,13 +68,14 @@ onMounted(() => {
 })
 
 function searchOptions() {
+  const colors = accentSearchColors()
   return {
     caseSensitive: caseSensitive.value,
     regex: regex.value,
     decorations: {
-      matchOverviewRuler: OVERVIEW_RULER_MATCH,
-      activeMatchColorOverviewRuler: OVERVIEW_RULER_ACTIVE,
-      activeMatchBorder: OVERVIEW_RULER_BORDER,
+      matchOverviewRuler: colors.match,
+      activeMatchColorOverviewRuler: colors.active,
+      activeMatchBorder: colors.border,
     } as const,
   }
 }
@@ -177,7 +177,7 @@ function close(): void {
 /* 开关型按钮（Aa / .*）激活态：强调色描边 + 强调色文字 */
 .ts-btn.on {
   border-color: var(--accent-primary);
-  color: var(--accent-primary);
+  color: var(--accent-text);
 }
 
 .ts-close:hover {
