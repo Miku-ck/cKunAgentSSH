@@ -2,7 +2,7 @@ import { watch, onScopeDispose, getCurrentScope } from 'vue'
 import type { Terminal, ITerminalOptions, ITheme } from '@xterm/xterm'
 import type { FitAddon } from '@xterm/addon-fit'
 import { useSettingsStore } from '@/stores/settings'
-import { isHexColor } from '@/utils/appearance-tokens'
+import { ACCENT_MAP, isHexColor, type Theme } from '@/utils/appearance-tokens'
 
 /** 终端字号允许范围（与设置面板滑块一致），防御 localStorage 越界值 */
 const MIN_FONT_SIZE = 12
@@ -35,8 +35,8 @@ function getTerminalFontFamily(key: string): string {
  */
 export const TERMINAL_FOREGROUND = '#e6edf3'
 
-/** 统一的终端暗色主题：背景透明以跟随全局背景，只控制文字/光标/ANSI 颜色 */
-const TERMINAL_DARK_THEME: ITheme = {
+/** 基线终端暗色主题：背景透明以跟随全局背景，只控制文字/光标/ANSI 颜色 */
+const TERMINAL_BASE: ITheme = {
   background: 'transparent',
   foreground: TERMINAL_FOREGROUND,
   cursor: '#58a6ff',
@@ -60,6 +60,64 @@ const TERMINAL_DARK_THEME: ITheme = {
   brightWhite: '#f0f6fc',
 }
 
+export type ResolvedTheme = Exclude<Theme, 'system'>
+
+/** system 主题的运行时解析：浏览器读媒体查询，node（测试环境无 matchMedia）回落 dark */
+export function resolveThemeName(theme: Theme): ResolvedTheme {
+  if (theme !== 'system') return theme
+  if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches) return 'dark'
+  return 'dark'
+}
+
+/**
+ * 每主题一套 ANSI 16 色：终端底恒深（--bg-terminal 契约不动），只调色相温度。
+ * dark/light 共用基线（中性界面不配色偏）；未列的键继承基线。
+ * 守卫：terminal-palettes.test.ts 钉住键完整性、对比度与 dark/light 基线。
+ */
+export const TERMINAL_THEMES: Record<ResolvedTheme, ITheme> = {
+  dark: TERMINAL_BASE,
+  light: TERMINAL_BASE,
+  'blue-screen': {
+    ...TERMINAL_BASE,
+    blue: '#6cb6ff', brightBlue: '#8ecbff',
+    cyan: '#4fd8e0', brightCyan: '#76e4ea',
+    magenta: '#c8a1ff', green: '#56d364',
+  },
+  forest: {
+    ...TERMINAL_BASE,
+    red: '#ff6a55', green: '#7ed491', brightGreen: '#97e3a8',
+    yellow: '#e0c060', blue: '#82aaff', cyan: '#4fd6be',
+  },
+  mint: {
+    ...TERMINAL_BASE,
+    red: '#fb7185', green: '#6ee7b7', brightGreen: '#8ff0c8',
+    yellow: '#f0c674', blue: '#7dd3fc', magenta: '#c4b5fd',
+    cyan: '#5eead4', brightCyan: '#86f0e0',
+  },
+  bee: {
+    ...TERMINAL_BASE,
+    red: '#ff7a66', green: '#9ece6a', brightGreen: '#b5e085',
+    yellow: '#ffc777', brightYellow: '#ffd892',
+    blue: '#82aaff', cyan: '#7dcfff',
+  },
+  coral: {
+    ...TERMINAL_BASE,
+    red: '#ff8a7a', brightRed: '#ffa496', magenta: '#f0a6c0',
+    yellow: '#f0b866', green: '#a6d189', blue: '#8caaee', cyan: '#81c8be',
+  },
+  atelier: {
+    ...TERMINAL_BASE,
+    foreground: '#e8e2d5', white: '#e8e2d5', brightWhite: '#f5efe2',
+    red: '#d67a76', brightRed: '#e3928e',
+    green: '#9db384', brightGreen: '#b3c79b',
+    yellow: '#d8b26a', brightYellow: '#e6c684',
+    blue: '#7e9cc4', brightBlue: '#98b3d6',
+    magenta: '#b594b6', brightMagenta: '#caadcc',
+    cyan: '#7fb5ac', brightCyan: '#99c9c0',
+    brightBlack: '#6e6a60',
+  },
+}
+
 /**
  * hex 色 + 透明度百分比 → rgba 字符串。
  * 非法输入回落 'transparent'（= auto 模式的现状行为），不抛错——
@@ -76,14 +134,21 @@ export function hexToRgba(hex: string, opacityPct: number): string {
 }
 
 /**
- * 按设置解析当前终端主题：auto 返回原暗色主题（背景透明，跟随主题底色/全局背景图），
- * solid 把用户色转 rgba 写进 background。build 与 watch 共用，避免两处口径漂。
+ * 按设置解析当前终端主题：主题色板定 16 个 ANSI 色，accent 覆盖 cursor/selection
+ * （用户显式选的强调色优先；ACCENT_MAP 查不到时回落色板自带值）。
+ * solid 背景模式再把用户色转 rgba 写进 background。
  */
 export function resolveTerminalTheme(): ITheme {
   const store = useSettingsStore()
-  const t = store.settings.appearance.terminal
-  if (t.backgroundMode !== 'solid') return TERMINAL_DARK_THEME
-  return { ...TERMINAL_DARK_THEME, background: hexToRgba(t.backgroundColor, t.backgroundOpacity) }
+  const a = store.settings.appearance
+  const palette = TERMINAL_THEMES[resolveThemeName(a.theme)]
+  const accentHex = ACCENT_MAP[a.accent]?.hex
+  const themed: ITheme = accentHex
+    ? { ...palette, cursor: accentHex, selectionBackground: hexToRgba(accentHex, 35) }
+    : palette
+  const t = a.terminal
+  if (t.backgroundMode !== 'solid') return themed
+  return { ...themed, background: hexToRgba(t.backgroundColor, t.backgroundOpacity) }
 }
 
 /**
@@ -144,6 +209,8 @@ export function watchTerminalConfig(
       () => store.settings.appearance.terminal.backgroundMode,
       () => store.settings.appearance.terminal.backgroundColor,
       () => store.settings.appearance.terminal.backgroundOpacity,
+      () => store.settings.appearance.theme,
+      () => store.settings.appearance.accent,
     ],
     () => {
       // 整体替换 theme 对象引用，xterm 才会重新解析颜色并触发重绘
@@ -157,9 +224,19 @@ export function watchTerminalConfig(
   return stop
 }
 
+/**
+ * 终端内搜索的三枚装饰色：从当前 accent 派生（SearchAddon 的装饰直接画在
+ * canvas/overview ruler 上，吃不到 CSS 令牌，只能 JS 侧给值）。
+ * match 用 40% 透明弱化普通命中，active/border 用实色标当前命中。
+ */
+export function accentSearchColors(): { match: string; active: string; border: string } {
+  const accentHex = ACCENT_MAP[useSettingsStore().settings.appearance.accent]?.hex
+  if (!accentHex) return { match: 'rgba(88, 166, 255, 0.4)', active: '#58a6ff', border: '#58a6ff' }
+  return { match: hexToRgba(accentHex, 40), active: accentHex, border: accentHex }
+}
+
 /** 设置面板可用的终端字体选项 */
-export const TERMINAL_FONT_OPTIONS: { value: string; label: string }[] = [
-  { value: 'jetbrains', label: 'JetBrains Mono' },
+export const TERMINAL_FONT_OPTIONS: { value: string; label: string }[] = [  { value: 'jetbrains', label: 'JetBrains Mono' },
   { value: 'fira', label: 'Fira Code' },
   { value: 'cascadia', label: 'Cascadia Code' },
   { value: 'cascadiaMono', label: 'Cascadia Mono' },
