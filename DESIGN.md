@@ -25,7 +25,7 @@ cKunAgentSSH 前端（`src/`）的视觉 / 布局 / 交互 / 组件约定。**�
 - 手写 accent→前景色表（用 `--accent-on`）；手写强调色 hex（用 `ACCENT_MAP`）。
 - 在 `[data-theme]` 里写 `--accent-primary`（内联样式压过主题块，永不生效）。
 - 在主题块里改尺寸令牌（`--titlebar-h` 等属版面）。
-- 抽屉式交互（本项目偏好居中弹窗）。**唯一例外**：任务台的「历史记录」会话抽屉 —— 入口在标签条右侧、内容只切换会话，抽屉不替换任务流也不遮挡输入区；其他场景仍禁用。
+- 抽屉式交互（本项目偏好居中弹窗）。历史记录已改为居中弹窗（`HomeHistoryDialog`），不再保留任何抽屉例外。
 - 空状态里重复头部已有的主操作按钮；列表容器与空状态拆成两个同级空壳 div（会平分 `flex:1` 把居中顶偏）。
 - 新建/连接类主操作按钮配装饰图标（`+` / 箭头）——按钮只留文字。
 - 独立写 scoped `.btn`、或给共享令牌写回落值。
@@ -81,6 +81,7 @@ App.vue (flex column, 100vh)
 - AI 只有一个界面：首页任务台。顶栏「AI」入口与 `Ctrl+Shift+B` 都是回到任务台，
   不再另有一块右侧面板（2026-10-20 退役，见 `docs/superpowers/specs/2026-09-30-retire-ai-side-panel-design.md`）。
 - 设置弹窗：`overlay` `rgba(0,0,0,.6)` + `blur(2px)` `z-index:2000`；`dialog` `clamp(960px,90vw,1280px) × clamp(640px,88vh,860px)`，左导航 200px。确认框：宽 380px，`z-index:3000`。过渡 `opacity .15s` + 内容 `scale(.96~.97)`。
+- 历史记录弹窗：`width: min(560px, 100vw - 48px)`、`max-height: min(640px, 100vh - 96px)`，居中；overlay 读 `--scrim`（随主题染色）+ `blur(2px)`，`z-index:2000`。
 
 ---
 
@@ -96,6 +97,8 @@ App.vue (flex column, 100vh)
 **审批/权限卡** [approval-card.css](src/styles/approval-card.css)（`.ap-*`）：`.ap-card`(`--bg-elevated` + `--card-warn-border` + 10px) · `.ap-perm` 权限变体 · `.ap-code`(mono + `--accent-cyan`) · `.ap-risk.*` / `.ap-env.*` 徽章 · `.ap-actions` + `.ap-btn-{grant,always,session,deny}`（语义色是卡片独立的绿/青/灰，不随强调色）。宿主布局留 scoped，覆盖用「宿主类 + .ap-ic」复合选择器。
 
 **图标**：内联 SVG，`stroke="currentColor"` + `fill="none"`（自动适配主题）。尺寸：标题栏/标签 14 · 设置导航 16 · 卡内 15 · 按钮内 14。复用图标放 `src/components/icons/`。Docker 入口与页面空态统一鲸鱼图形。
+
+**标签状态点**：6px 圆点，活动 `--accent-primary` / 重连中 `--status-warn-text` 脉冲 / 断连放弃 `--accent-red`；判据单一来源 `src/utils/tabStatus.ts`（标签栏、溢出菜单、MRU 切换器三处共用）。
 
 **目录**：`components/` 按域分 `common|ssh|agent|chat|home|settings|icons`；逻辑 `composables/`；状态 `stores/`（Pinia）。
 

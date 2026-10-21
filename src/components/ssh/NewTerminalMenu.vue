@@ -93,6 +93,7 @@ function pickRemote(conn: SSHConnection) {
       type="button"
       class="ntm-btn"
       title="新建终端"
+      aria-label="新建终端"
       :aria-expanded="open"
       @click.stop="toggle"
     >

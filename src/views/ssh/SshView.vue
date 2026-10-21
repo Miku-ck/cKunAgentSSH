@@ -921,7 +921,7 @@ defineExpose({
   padding: 4px 0;
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
 }
 
@@ -933,7 +933,7 @@ defineExpose({
   font-size: 12px;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background 0.1s;
+  transition: background var(--transition-fast);
 }
 
 .tab-ctx-item:hover {
