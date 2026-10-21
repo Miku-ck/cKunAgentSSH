@@ -26,6 +26,12 @@ export interface TerminalSession {
   shell: string           // 本地: shell名, 远程: username@host
   connectionId?: string   // 远程连接的 ID
   createdAt?: number      // 会话创建时间戳（用于判断本地终端是否“启动即退出”）
+  /** 后台会话有新输出（切走时置位，激活时清零） */
+  hasActivity?: boolean
+  /** 重连进行中（主进程 ssh:reconnect 事件驱动）；null = 无重连 */
+  reconnect?: { attempt: number; maxAttempts: number } | null
+  /** 自动重连已放弃（等待用户手动重连） */
+  reconnectGaveUp?: boolean
 }
 
 interface CommandHistoryEntry {
@@ -57,6 +63,16 @@ export const useSSHStore = defineStore('ssh', () => {
   const sessions = ref<TerminalSession[]>([])
   const activeSessionId = ref('')
   const loaded = ref(false)
+
+  /** MRU 栈：栈顶是最近激活的会话（Ctrl+Tab 切换器与「回到上次会话」的数据源） */
+  const mruIds = ref<string[]>([])
+
+  /** 后台活动标记：终端数据到达且会话非活跃时由终端组件置位 */
+  function markActivity(id: string): void {
+    if (id === activeSessionId.value) return
+    const s = sessions.value.find(x => x.id === id)
+    if (s) s.hasActivity = true
+  }
 
   /** 按终端会话维度的命令历史（内存版） */
   const commandHistory = ref<CommandHistoryEntry[]>([])
@@ -106,6 +122,8 @@ export const useSSHStore = defineStore('ssh', () => {
     loaded.value = true
     // s1 修复：主机密钥验证事件监听（TOFU 通知 + 中间人攻击警告）
     _setupHostKeyNotifications()
+    // s-标签状态：重连事件的全局跟踪（状态条与标签状态点共用这份状态）
+    _setupReconnectTracking()
   }
 
   /** s1 修复：监听并提示主机密钥验证事件 */
@@ -144,6 +162,28 @@ export const useSSHStore = defineStore('ssh', () => {
       if (typeof offUnpinned === 'function') offUnpinned()
     }
     if (_setupScope) _setupScope.run(() => onScopeDispose(removeHostKeyListener))
+  }
+
+  /** s-标签状态：重连事件的全局跟踪（RemoteTerminal 的状态条与标签状态点共用这份状态） */
+  function _setupReconnectTracking(): void {
+    const api = window.electronAPI
+    if (!api?.onSshReconnect) return
+    const off = api.onSshReconnect((data) => {
+      const s = sessions.value.find(x => x.id === data.id)
+      if (!s) return // 重连完成前用户已关标签：静默丢弃
+      if (data.phase === 'reconnecting' || data.phase === 'retry') {
+        s.reconnect = { attempt: data.attempt, maxAttempts: data.maxAttempts }
+        s.reconnectGaveUp = false
+      } else if (data.phase === 'success') {
+        s.reconnect = null
+        s.reconnectGaveUp = false
+      } else if (data.phase === 'gave-up') {
+        s.reconnect = null
+        // cancelled/config-missing 是「收摊」不是「失败」：清状态，不亮红点
+        s.reconnectGaveUp = data.reason === 'exhausted' || data.reason === 'not-retryable'
+      }
+    })
+    if (_setupScope) _setupScope.run(() => onScopeDispose(() => off()))
   }
 
   async function migrateLegacyIfNeeded(): Promise<void> {
@@ -352,10 +392,16 @@ export const useSSHStore = defineStore('ssh', () => {
     // 清理终端现场上下文缓存（选中片段 / cwd）
     delete selectionBySession.value[id]
     delete cwdBySession.value[id]
+    mruIds.value = mruIds.value.filter(x => x !== id)
   }
 
   function switchSession(id: string) {
     activeSessionId.value = id
+    // MRU touch：任何激活路径（标签/快捷键/命令面板）都汇到这一个出口
+    mruIds.value = [id, ...mruIds.value.filter(x => x !== id)]
+    // 看见即清：激活的会话不再有「未读输出」
+    const s = sessions.value.find(x => x.id === id)
+    if (s) s.hasActivity = false
   }
 
   /** 标签拖拽排序：把 dragId 移到 targetId 当前位置（其余相对顺序不变） */
@@ -655,6 +701,7 @@ export const useSSHStore = defineStore('ssh', () => {
     sessions,
     activeSessionId,
     activeSession,
+    mruIds,
     // methods
     isOnline,
     init,
@@ -664,6 +711,7 @@ export const useSSHStore = defineStore('ssh', () => {
     closeSession,
     removeSession,
     switchSession,
+    markActivity,
     reorderSessions,
     handleTabContextAction,
     addConnection,
