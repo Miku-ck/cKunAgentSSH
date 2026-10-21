@@ -5,7 +5,7 @@
 //   进 shell。所以关闭/AI 首页/命令面板统一用 Shift 档（Ctrl+Shift+W/B/P），
 //   这与 Windows Terminal 的既定习惯（Ctrl+Shift+W 关标签、Ctrl+Shift+P 面板）一致。
 // 事件走 window 冒泡相监听：xterm 的隐藏 textarea 不 stopPropagation 这些组合键。
-import { onMounted, onUnmounted } from 'vue'
+import { onMounted, onUnmounted, reactive } from 'vue'
 import { useSSHStore } from '@/stores/ssh'
 import type { NavPage } from './useSshNavigation'
 
@@ -37,6 +37,19 @@ export function pageShortcutHint(page: Exclude<NavPage, 'home'>): string {
   return hit ? ` (Ctrl+Shift+${hit.num})` : ''
 }
 
+/** MRU 浮层的共享状态（快捷键侧写、MruSwitcher.vue 读） */
+export const mruSwitcher = reactive({ open: false, index: 0 })
+
+/** 打开浮层时的初始高亮：恒为「上一个会话」（栈顶下一位） */
+export function mruInitialIndex(len: number): number {
+  return len > 1 ? 1 : 0
+}
+
+/** 按住 Ctrl 连点 Tab：在 MRU 栈内循环移动 */
+export function mruStep(len: number, index: number, dir: 1 | -1): number {
+  return (index + dir + len) % len
+}
+
 export interface ShortcutDeps {
   /** 切到指定终端会话（含焦点处理，来自 useSshNavigation.activateTerminal） */
   activateTerminal: (id: string) => void
@@ -50,18 +63,44 @@ export interface ShortcutDeps {
   openSettings: () => void
 }
 
-export function useGlobalShortcuts(deps: ShortcutDeps): void {
+export function useGlobalShortcuts(deps: ShortcutDeps): { mruSwitcher: typeof mruSwitcher } {
   const store = useSSHStore()
 
-  function cycleSession(dir: 1 | -1): void {
-    const sessions = store.sessions
-    if (sessions.length < 2) return
-    const idx = sessions.findIndex(s => s.id === store.activeSessionId)
-    const next = sessions[(idx + dir + sessions.length) % sessions.length]
-    deps.activateTerminal(next.id)
+  /** 当前参与切换的 MRU 会话序列（剔除已关闭残留） */
+  function mruSessionIds(): string[] {
+    const alive = new Set(store.sessions.map(s => s.id))
+    return store.mruIds.filter(id => alive.has(id))
+  }
+
+  function mruCommit(): void {
+    const ids = mruSessionIds()
+    const target = ids[mruSwitcher.index]
+    mruSwitcher.open = false
+    mruSwitcher.index = 0
+    if (target) deps.activateTerminal(target)
+  }
+
+  function mruCancel(): void {
+    mruSwitcher.open = false
+    mruSwitcher.index = 0
+  }
+
+  function onKeyup(e: KeyboardEvent): void {
+    // 松开 Ctrl = 落定：切到高亮会话
+    if ((e.key === 'Control' || e.key === 'Meta') && mruSwitcher.open) mruCommit()
+  }
+
+  function onBlur(): void {
+    // 窗口失焦时 Ctrl 的 keyup 可能丢失：直接落定，别留一个关不掉的浮层
+    if (mruSwitcher.open) mruCommit()
   }
 
   function handler(e: KeyboardEvent): void {
+    if (e.key === 'Escape' && mruSwitcher.open) {
+      e.preventDefault()
+      mruCancel()
+      return
+    }
     if (!(e.ctrlKey || e.metaKey)) return
 
     // 命令面板打开期间只放行自己的开关键，其余快捷键交给面板内部处理
@@ -83,7 +122,19 @@ export function useGlobalShortcuts(deps: ShortcutDeps): void {
     // ── 终端会话 ──
     if (e.key === 'Tab') {
       e.preventDefault()
-      cycleSession(e.shiftKey ? -1 : 1)
+      const dir = e.shiftKey ? -1 : 1
+      if (!mruSwitcher.open) {
+        // 单会话保持旧行为：直接切过去（首页没有标签条，这是唯一可见入口）
+        if (store.sessions.length <= 1) {
+          const only = store.sessions[0]
+          if (only) deps.activateTerminal(only.id)
+          return
+        }
+        mruSwitcher.open = true
+        mruSwitcher.index = mruInitialIndex(mruSessionIds().length)
+        return
+      }
+      mruSwitcher.index = mruStep(mruSessionIds().length, mruSwitcher.index, dir)
       return
     }
     // 数字键一律认 e.code：Shift+数字的 e.key 是标点（Shift+1='!'），按 e.key 匹配必漏
@@ -122,6 +173,17 @@ export function useGlobalShortcuts(deps: ShortcutDeps): void {
     }
   }
 
-  onMounted(() => window.addEventListener('keydown', handler))
-  onUnmounted(() => window.removeEventListener('keydown', handler))
+  onMounted(() => {
+    window.addEventListener('keydown', handler)
+    window.addEventListener('keyup', onKeyup)
+    window.addEventListener('blur', onBlur)
+  })
+  onUnmounted(() => {
+    window.removeEventListener('keydown', handler)
+    window.removeEventListener('keyup', onKeyup)
+    window.removeEventListener('blur', onBlur)
+    mruCancel()
+  })
+
+  return { mruSwitcher }
 }

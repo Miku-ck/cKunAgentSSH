@@ -161,6 +161,9 @@ v-show="s.id === store.activeSessionId"
 
       <!-- 快捷命令条 -->
       <QuickCommandBar v-if="showCommandBar" />
+
+      <!-- MRU 切换浮层（Ctrl+Tab 按住期间） -->
+      <MruSwitcher v-if="mruSwitcher.open" />
     </div>
 
     <!-- 多节点批量下发（首页目标主机的「全部 N 台」入口；远程管理页同一组件） -->
@@ -229,6 +232,7 @@ import IconTerminal from '@/components/icons/IconTerminal.vue'
 // 首页是首屏要看到的东西，静态引入不走异步 chunk
 import HomeWorkspace from '@/components/home/HomeWorkspace.vue'
 import NewTerminalMenu from '@/components/ssh/NewTerminalMenu.vue'
+import MruSwitcher from '@/components/ssh/MruSwitcher.vue'
 // 启动性能优化：非首屏功能整体移出启动关键路径 —
 // 原实现全部静态 import + v-show（组件启动即全部挂载），每加一条功能线主包
 // 就长大一截（index.js 一度 10MB，Monaco 文件编辑器占大头）。现在：
@@ -365,7 +369,7 @@ function closeActiveSession(): void {
   if (store.activeSessionId) void store.closeSession(store.activeSessionId)
 }
 
-useGlobalShortcuts({
+const { mruSwitcher } = useGlobalShortcuts({
   activateTerminal,
   closeActiveSession,
   goAiHome: goHome,
