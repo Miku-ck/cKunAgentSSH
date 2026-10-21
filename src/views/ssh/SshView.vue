@@ -9,7 +9,7 @@
         v-show="terminalVisible && activeNavPage === 'home' && store.sessions.length > 0"
         class="term-tabs"
       >
-        <div class="tabs-scroll" @wheel.prevent="onTabsWheel">
+        <div class="tabs-scroll" ref="tabsScrollRef" @wheel.prevent="onTabsWheel">
           <!-- role=tablist 只包会话标签；＋ 菜单不是 tab，留在外面 -->
           <div class="tabs-list" role="tablist" aria-label="终端会话" @keydown="onTabsKeydown">
             <!-- 终端标签：中键关闭 / 拖拽排序 / title 全名（截断后可看全） -->
@@ -53,6 +53,23 @@
           <!-- 新建终端（本地 shell / 已配好的远程连接） -->
           <NewTerminalMenu @open-local="openLocalShell" @open-remote="connectRemote" />
         </div>
+
+        <!-- 溢出入口：tabs-scroll 装不下时钉在标签条右缘（不跟内容滚动） -->
+        <button
+          v-if="tabsOverflow"
+          ref="overflowBtnRef"
+          type="button"
+          class="tof-btn"
+          :title="`全部终端（${store.sessions.length}）`"
+          :aria-label="`全部终端（${store.sessions.length}）`"
+          @click.stop="overflowMenuOpen = !overflowMenuOpen"
+        >▾</button>
+        <TabOverflowMenu
+          v-if="overflowMenuOpen && tabsOverflow"
+          :anchor="overflowBtnRef"
+          @activate="activateTerminal"
+          @close="overflowMenuOpen = false"
+        />
       </div>
 
       <!-- 内容区包装器: flex:1 + position:relative 为内部绝对定位提供参照 -->
@@ -224,7 +241,7 @@ v-show="s.id === store.activeSessionId"
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch, nextTick, defineAsyncComponent } from 'vue'
+import { onMounted, onUnmounted, ref, watch, nextTick, defineAsyncComponent } from 'vue'
 import LocalTerminal from '@/components/ssh/LocalTerminal.vue'
 import RemoteTerminal from '@/components/ssh/RemoteTerminal.vue'
 import IconMonitor from '@/components/icons/IconMonitor.vue'
@@ -233,6 +250,7 @@ import IconTerminal from '@/components/icons/IconTerminal.vue'
 import HomeWorkspace from '@/components/home/HomeWorkspace.vue'
 import NewTerminalMenu from '@/components/ssh/NewTerminalMenu.vue'
 import MruSwitcher from '@/components/ssh/MruSwitcher.vue'
+import TabOverflowMenu from '@/components/ssh/TabOverflowMenu.vue'
 // 启动性能优化：非首屏功能整体移出启动关键路径 —
 // 原实现全部静态 import + v-show（组件启动即全部挂载），每加一条功能线主包
 // 就长大一截（index.js 一度 10MB，Monaco 文件编辑器占大头）。现在：
@@ -378,6 +396,33 @@ const { mruSwitcher } = useGlobalShortcuts({
   isPaletteOpen: () => paletteOpen.value,
   openSettings,
 })
+
+// 标签溢出：tabs-scroll 装不下时在标签条右侧给「▾」入口
+const tabsScrollRef = ref<HTMLElement | null>(null)
+const overflowBtnRef = ref<HTMLElement | null>(null)
+const tabsOverflow = ref(false)
+const overflowMenuOpen = ref(false)
+let tabsObserver: ResizeObserver | null = null
+
+function measureTabsOverflow(): void {
+  const el = tabsScrollRef.value
+  tabsOverflow.value = !!el && el.scrollWidth > el.clientWidth + 1
+}
+
+onMounted(() => {
+  const el = tabsScrollRef.value
+  if (el) {
+    tabsObserver = new ResizeObserver(measureTabsOverflow)
+    tabsObserver.observe(el)
+  }
+})
+
+onUnmounted(() => {
+  tabsObserver?.disconnect()
+  tabsObserver = null
+})
+
+watch(() => store.sessions.length, () => nextTick(measureTabsOverflow))
 
 // 命令面板动作：先收面板再执行，避免面板遮挡后续页面的转场反馈
 function onPaletteNavigate(page: Exclude<NavPage, 'home'>) {
@@ -552,6 +597,24 @@ defineExpose({
 .tabs-scroll::-webkit-scrollbar {
   display: none;
 }
+
+/* 溢出菜单入口（▾）：钉在标签条右缘，视觉对齐 NewTerminalMenu 的 .ntm-btn */
+.tof-btn {
+  height: calc(var(--tabbar-h) - 4px);
+  width: calc(var(--tabbar-h) - 4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+.tof-btn:hover { color: var(--text-secondary); background: var(--bg-hover); }
 
 .term-tab {
   position: relative;
