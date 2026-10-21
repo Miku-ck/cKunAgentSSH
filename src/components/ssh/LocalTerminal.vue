@@ -235,6 +235,7 @@ onMounted(() => {
   unsubData = api.onPtyData(({ id: ptyId, data }) => {
     if (ptyId === id) {
       terminal?.write(stripAnsiBackground(data))
+      sshStore.markActivity(id)
       // 可见终端执行的哨兵捕获已集中到 useAgentDeliver 的全局订阅，组件只管显示
     }
   })
@@ -380,6 +381,8 @@ defineExpose({
   width: 100%;
   height: 100%;
   position: relative;
+  /* FitAddon 会从父容器尺寸里扣掉 padding，行列不会因此溢出 */
+  padding: 8px 10px;
 }
 
 /* 「问 AI」悬浮按钮：选区上方，点击把选中内容送进首页任务台 */

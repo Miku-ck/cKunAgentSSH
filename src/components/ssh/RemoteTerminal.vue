@@ -45,7 +45,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, shallowRef, onMounted, onUnmounted, watch } from 'vue'
+import { ref, shallowRef, computed, onMounted, onUnmounted, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -56,6 +56,7 @@ import TermSearchBar from './TermSearchBar.vue'
 import { releaseCompletionSession } from '@/composables/useCompletion'
 import { useCompletionPopup } from '@/composables/useCompletionPopup'
 import { useToastStore } from '@/stores/toast'
+import { useSSHStore } from '@/stores/ssh'
 import { buildTerminalOptions, watchTerminalConfig } from '@/composables/useTerminalConfig'
 import { stripAnsiBackground } from '@/utils/terminal-colors'
 import { toFriendlyMessage } from '@/api/client'
@@ -108,10 +109,11 @@ const {
 })
 
 // ─── 重连状态（重连修复）──────────────────
-/** 重连进行中：状态条显示 spinner + 「重连中 (n/3)」（主进程 ssh:reconnect 事件驱动） */
-const reconnectState = ref<{ attempt: number; maxAttempts: number } | null>(null)
-/** 自动重连已放弃（3 次失败）且未手动重连：状态条显示「重连」按钮 */
-const reconnectGaveUp = ref(false)
+const sshStore = useSSHStore()
+// 重连状态条改读 store（标签状态点的单一事实源）；系统行写入仍由本地事件处理器负责
+const sessionSelf = computed(() => sshStore.sessions.find(s => s.id === props.sshId))
+const reconnectState = computed(() => sessionSelf.value?.reconnect ?? null)
+const reconnectGaveUp = computed(() => sessionSelf.value?.reconnectGaveUp ?? false)
 /** 手动重连 IPC 在途（防重复点击） */
 const reconnectBusy = ref(false)
 let unsubReconnect: (() => void) | null = null
@@ -136,13 +138,13 @@ async function manualReconnect(): Promise<void> {
   const api = window.electronAPI
   if (!api || !terminal || reconnectBusy.value) return
   reconnectBusy.value = true
-  // 乐观隐藏按钮；后续状态由主进程 ssh:reconnect 事件驱动
-  reconnectGaveUp.value = false
+  // 乐观隐藏按钮；后续状态由主进程 ssh:reconnect 事件驱动（store 单一事实源）
+  if (sessionSelf.value) sessionSelf.value.reconnectGaveUp = false
   try {
     await api.sshReconnect(props.sshId, terminal.cols, terminal.rows)
   } catch (err) {
     // 无重连上下文（如连接配置已删除）：恢复按钮并提示
-    reconnectGaveUp.value = true
+    if (sessionSelf.value) sessionSelf.value.reconnectGaveUp = true
     appendReconnectLine('[重连失败：连接配置不存在或已删除]', '\x1b[31m')
     toast.error(toFriendlyMessage(err, '重连失败'), 5000)
   } finally {
@@ -366,6 +368,7 @@ onMounted(() => {
     if (id === props.sshId) {
       dataBuffer += data
       flushBuffer(false)
+      sshStore.markActivity(id)
       // 可见终端执行的哨兵捕获已集中到 useAgentDeliver 的全局订阅，组件只管显示
     }
   })
@@ -393,35 +396,28 @@ onMounted(() => {
     }
   })
 
-  // 重连修复：监听重连状态变化（主进程推送）— 驱动终端系统行 + 状态条
+  // 重连修复：监听重连状态变化（主进程推送）— 状态本体在 store
+  // （_setupReconnectTracking，状态条与标签状态点共用），这里只负责终端内系统行
   unsubReconnect = api.onSshReconnect((data) => {
     if (data.id !== props.sshId) return
     const { phase, attempt, maxAttempts } = data
     if (phase === 'reconnecting') {
       // 首轮排程（断开后自动 / 点击「重连」后）
-      reconnectGaveUp.value = false
-      reconnectState.value = { attempt, maxAttempts }
       appendReconnectLine(`[连接已断开] 正在自动重连 (${attempt}/${maxAttempts})...`, '\x1b[33m')
     } else if (phase === 'retry') {
-      // 上一次尝试失败、下一次退避已排程：追加倒计时提示，状态条更新序号
-      reconnectState.value = { attempt, maxAttempts }
+      // 上一次尝试失败、下一次退避已排程：追加倒计时提示
       const secs = Math.max(1, Math.round((data.delayMs ?? 1000) / 1000))
       appendReconnectLine(`[重连第 ${attempt - 1}/${maxAttempts} 次失败，${secs} 秒后重试]`, '\x1b[33m')
     } else if (phase === 'success') {
       // 重连成功：新 shell 以同一 id 流式接管，scrollback 无缝衔接
-      reconnectState.value = null
-      reconnectGaveUp.value = false
       appendReconnectLine('[已重新连接]', '\x1b[32m')
     } else if (phase === 'gave-up') {
-      reconnectState.value = null
       if (data.reason === 'cancelled') {
-        // 重连被取消（如断开后连接配置被删除）：静默清除状态，隐藏状态条
-        reconnectGaveUp.value = false
+        // 重连被取消（如断开后连接配置被删除）：静默，不写系统行
         return
       }
       if (data.reason === 'config-missing') {
         // 连接配置已被删除：重连失去意义，关闭 tab（等同用户主动断开）
-        reconnectGaveUp.value = false
         appendReconnectLine('[连接配置已删除，无法重连]', '\x1b[31m')
         emit('close')
         return
@@ -429,7 +425,6 @@ onMounted(() => {
       // 耗尽（exhausted）或确定性失败（not-retryable，如口令错/主机密钥变更）：
       // 状态条显示「重连」按钮。S0-18：带上主进程已分类的失败原因，
       // 否则屏幕上无论什么原因都是同一句话，用户不知道要改配置还是等网络恢复。
-      reconnectGaveUp.value = true
       const detail = data.errorMessage ? `：${data.errorMessage}` : ''
       appendReconnectLine(
         data.reason === 'not-retryable'
@@ -586,6 +581,8 @@ defineExpose({
   width: 100%;
   min-height: 0;
   position: relative;
+  /* FitAddon 会从父容器尺寸里扣掉 padding，行列不会因此溢出 */
+  padding: 8px 10px;
 }
 
 /* ─── 重连状态条 ─── */
@@ -627,7 +624,7 @@ defineExpose({
   border: 1px solid var(--accent-primary);
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--accent-primary);
+  color: var(--accent-text);
   font-size: 12px;
   cursor: pointer;
   transition: all var(--transition-fast);

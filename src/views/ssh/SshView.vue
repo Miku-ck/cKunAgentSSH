@@ -2,34 +2,48 @@
   <div class="ssh-view">
     <!-- 主终端区域 -->
     <div class="ssh-main">
-      <!-- 标签栏：终端会话标签条，只在存在终端会话（本地/远程都算）时显示。
-           无会话时整条隐藏，首页任务台独占全屏——新建终端走远程管理页
-           （＋ 菜单只在有会话后可用）。 -->
-      <div v-show="store.sessions.length > 0" class="term-tabs">
+      <!-- 标签栏：终端会话标签条，只在真正进入终端视图（点了终端标签或连接后
+           落进终端）时显示——首页与独立页（SFTP/监控等）一律不显示。
+           顶栏「终端」是回到终端 / 新建终端的常驻入口；零会话时由下方启动器兜底。 -->
+      <div
+        v-show="terminalVisible && activeNavPage === 'home' && store.sessions.length > 0"
+        class="term-tabs"
+      >
         <div class="tabs-scroll" @wheel.prevent="onTabsWheel">
-          <!-- 终端标签：中键关闭 / 拖拽排序 / title 全名（截断后可看全） -->
-          <div
-            v-for="s in store.sessions"
-            :key="s.id"
-            class="term-tab"
-            :class="{ active: s.id === store.activeSessionId && terminalVisible }"
-            role="tab"
-            :aria-selected="s.id === store.activeSessionId && terminalVisible"
-            :title="s.name"
-            draggable="true"
-            @click="activateTerminal(s.id)"
-            @auxclick.middle.prevent="store.closeSession(s.id)"
-            @contextmenu.prevent="showTabContextMenu($event, s.id)"
-            @dragstart="onTabDragStart(s.id, $event)"
-            @dragover.prevent
-            @drop="onTabDrop(s.id, $event)"
-            @dragend="dragTabId = ''"
-          >
-            <IconMonitor v-if="s.type === 'remote'" :width="12" :height="12" :stroke-width="2" />
-            <span class="tab-label">{{ s.name }}</span>
-            <button class="tab-close" aria-label="关闭终端" @click.stop="store.closeSession(s.id)">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            </button>
+          <!-- role=tablist 只包会话标签；＋ 菜单不是 tab，留在外面 -->
+          <div class="tabs-list" role="tablist" aria-label="终端会话" @keydown="onTabsKeydown">
+            <!-- 终端标签：中键关闭 / 拖拽排序 / title 全名（截断后可看全） -->
+            <div
+              v-for="s in store.sessions"
+              :key="s.id"
+              class="term-tab"
+              :class="{ active: s.id === store.activeSessionId && terminalVisible }"
+              role="tab"
+              :aria-selected="s.id === store.activeSessionId && terminalVisible"
+              :tabindex="s.id === store.activeSessionId && terminalVisible ? 0 : -1"
+              :title="s.name"
+              draggable="true"
+              @click="activateTerminal(s.id)"
+              @auxclick.middle.prevent="store.closeSession(s.id)"
+              @contextmenu.prevent="showTabContextMenu($event, s.id)"
+              @dragstart="onTabDragStart(s.id, $event)"
+              @dragover.prevent
+              @drop="onTabDrop(s.id, $event)"
+              @dragend="dragTabId = ''"
+            >
+              <span
+                v-if="tabStatusKind(s, store.activeSessionId)"
+                class="tab-dot"
+                :class="tabStatusKind(s, store.activeSessionId)"
+                aria-hidden="true"
+              />
+              <IconMonitor v-if="s.type === 'remote'" :width="12" :height="12" :stroke-width="2" />
+              <IconTerminal v-else :width="12" :height="12" :stroke-width="2" />
+              <span class="tab-label">{{ s.name }}</span>
+              <button class="tab-close" aria-label="关闭终端" @click.stop="store.closeSession(s.id)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
           </div>
 
           <!-- 运行过程不再有标签：它直接长在首页下面（指令卡与待放行队列之后）。
@@ -64,6 +78,29 @@ v-show="s.id === store.activeSessionId"
 @close="handleRemoteClose(s.id)"
 />
           </template>
+        </div>
+
+        <!-- 终端启动器：零会话时标签条没有可列的东西，这里必须自成入口，
+             否则从首页/顶栏进终端是一条死路。 -->
+        <div
+          v-if="terminalVisible && activeNavPage === 'home' && !store.sessions.length"
+          class="term-empty"
+        >
+          <div class="term-empty-panel">
+            <IconTerminal class="term-empty-icon" :width="26" :height="26" :stroke-width="1.6" />
+            <p class="term-empty-title">新建终端</p>
+            <div class="term-empty-grid">
+              <button
+                v-for="shell in LOCAL_SHELLS"
+                :key="shell"
+                type="button"
+                class="term-shell-btn"
+                @click="openLocalShell(shell)"
+              >{{ shell }}</button>
+            </div>
+            <div class="term-empty-divider" aria-hidden="true"></div>
+            <button type="button" class="btn btn-primary term-empty-remote" @click="openRemoteManager()">连接远程服务器</button>
+          </div>
         </div>
 
         <!-- RemoteManager 页面 -->
@@ -117,8 +154,6 @@ v-show="s.id === store.activeSessionId"
         <!-- 首页：智能体任务台（消息区 + 常驻输入区，历史走右侧抽屉） -->
         <HomeWorkspace
           v-show="homeTabActive"
-          :history-open="homeHistoryOpen"
-          @close-history="closeHomeHistory"
           @bulk="showBulk = true"
           @remote-mgr="openRemoteManager"
         />
@@ -186,10 +221,11 @@ v-show="s.id === store.activeSessionId"
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch, defineAsyncComponent } from 'vue'
+import { onMounted, ref, watch, nextTick, defineAsyncComponent } from 'vue'
 import LocalTerminal from '@/components/ssh/LocalTerminal.vue'
 import RemoteTerminal from '@/components/ssh/RemoteTerminal.vue'
 import IconMonitor from '@/components/icons/IconMonitor.vue'
+import IconTerminal from '@/components/icons/IconTerminal.vue'
 // 首页是首屏要看到的东西，静态引入不走异步 chunk
 import HomeWorkspace from '@/components/home/HomeWorkspace.vue'
 import NewTerminalMenu from '@/components/ssh/NewTerminalMenu.vue'
@@ -217,10 +253,11 @@ import { useTunnelStore } from '@/stores/tunnel'
 import { useAccessStore } from '@/stores/access'
 import { useSettings } from '@/composables/useSettings'
 import { useCommandDelivery } from '@/composables/useCommandDelivery'
-import { useSshNavigation } from '@/composables/useSshNavigation'
+import { useSshNavigation, LOCAL_SHELLS } from '@/composables/useSshNavigation'
 import { useGlobalShortcuts } from '@/composables/useGlobalShortcuts'
 import type { NavPage } from '@/composables/useSshNavigation'
 import { useTabContextMenu } from '@/composables/useTabContextMenu'
+import { tabStatusKind } from '@/utils/tabStatus'
 
 const store = useSSHStore()
 const sshAiStore = useSshAiStore()
@@ -265,6 +302,7 @@ const {
   showCommandBar,
   goHome,
   activateTerminal,
+  showTerminal,
   toggleRemoteManager,
   toggleSftp,
   toggleAudit,
@@ -297,20 +335,9 @@ watch(() => sshAiStore.pendingPrefill, (req) => {
   goHome()
 }, { flush: 'sync' })
 
-/** 历史抽屉的开合。放在宿主而不是 useSshNavigation：那里每次调用都会新建一份状态。
- *  标签栏上的历史按钮已删（历史走右侧 AI 侧栏），抽屉保留给 HomeWorkspace 的
- *  @close-history 收尾链路 —— 目前没有打开入口，只可能处于关闭态。 */
-const homeHistoryOpen = ref(false)
-
-function closeHomeHistory() {
-  if (!homeHistoryOpen.value) return
-  homeHistoryOpen.value = false
-}
-
-/** 任务台可见即「看见」：清未读，离开时关掉历史抽屉（它属于首页）。 */
+/** 任务台可见即「看见」：清未读。历史抽屉的开合由 HomeWorkspace 自持。 */
 watch(homeTabActive, (active) => {
   sshAiStore.setHomeVisible(active)
-  if (!active) homeHistoryOpen.value = false
 }, { immediate: true })
 
 // ── 全局快捷键 + 命令面板（M1-P0）──
@@ -389,6 +416,26 @@ function onTabDrop(id: string, e: DragEvent): void {
   dragTabId.value = ''
 }
 
+/** ARIA tabs 的键盘约定：左右箭头在标签间移动并激活，Home/End 跳首尾 */
+function onTabsKeydown(e: KeyboardEvent): void {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return
+  const tabs = Array.from(
+    (e.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('[role="tab"]'),
+  )
+  const current = tabs.indexOf(document.activeElement as HTMLElement)
+  if (current === -1) return
+  let next = current
+  if (e.key === 'ArrowLeft') next = (current - 1 + tabs.length) % tabs.length
+  else if (e.key === 'ArrowRight') next = (current + 1) % tabs.length
+  else if (e.key === 'Home') next = 0
+  else next = tabs.length - 1
+  e.preventDefault()
+  const target = tabs[next]
+  nextTick(() => { target.focus() })
+  const id = store.sessions[next]?.id
+  if (id) activateTerminal(id)
+}
+
 // ── sticky-visited 页面挂载闸门（配合上方 defineAsyncComponent）──
 type PageKey = typeof activeNavPage.value
 const visitedPages = ref<Partial<Record<PageKey, boolean>>>({})
@@ -420,6 +467,8 @@ onMounted(() => {
 defineExpose({
   goHome,
   homeTabActive,
+  terminalVisible,
+  showTerminal,
   toggleRemoteManager,
   toggleSftp,
   toggleAudit,
@@ -488,13 +537,22 @@ defineExpose({
   height: 100%;
 }
 
+.tabs-list {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 100%;
+  flex-shrink: 0;
+}
+
 .tabs-scroll::-webkit-scrollbar {
   display: none;
 }
 
 .term-tab {
+  position: relative;
   height: calc(var(--tabbar-h) - 4px);
-  padding: 0 10px;
+  padding: 0 12px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -508,7 +566,54 @@ defineExpose({
   font-family: var(--font-sans);
   white-space: nowrap;
   flex-shrink: 0;
-  transition: all var(--transition-fast);
+  transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast);
+}
+
+/* 当前会话的强调色顶线：标签条底色与深色终端拉开后，仅靠字色区分太弱 */
+.term-tab::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 10px;
+  right: 10px;
+  height: 2px;
+  border-radius: 0 0 2px 2px;
+  background: transparent;
+  transition: background var(--transition-fast);
+}
+
+.term-tab.active::before {
+  background: var(--accent-primary);
+}
+
+/* 状态点：后台活动=强调色 / 重连中=警示色脉冲 / 断连放弃=红 */
+.tab-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.tab-dot.activity { background: var(--accent-primary); }
+.tab-dot.gave-up { background: var(--accent-red); }
+
+.tab-dot.reconnecting {
+  background: var(--status-warn-text);
+  animation: tab-dot-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes tab-dot-pulse {
+  50% { opacity: 0.25; }
+}
+
+.term-tab svg {
+  flex-shrink: 0;
+  opacity: 0.75;
+  transition: opacity var(--transition-fast);
+}
+
+.term-tab.active svg {
+  opacity: 1;
 }
 
 .term-tab:hover {
@@ -522,7 +627,8 @@ defineExpose({
 
 .term-tab.active {
   color: var(--text-primary);
-  border-color: var(--border-default);
+  background: var(--bg-elevated);
+  border-color: var(--border-subtle);
   margin-bottom: -1px;
   padding-bottom: 1px;
 }
@@ -531,7 +637,7 @@ defineExpose({
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 120px;
+  max-width: 150px;
 }
 
 .tab-close {
@@ -574,6 +680,77 @@ defineExpose({
   /* 终端 ANSI 主题固定暗色，必须给独立深底：浅色主题下若透出浅色底层会不可读。
      背景图模式下由文件末尾的 has-background 规则置为透明（用户主动选择）。 */
   background: var(--bg-terminal);
+}
+
+/* ─── Terminal Launcher (zero sessions) ─── */
+.term-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.term-empty-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(420px, 100%);
+  gap: 16px;
+  padding: 28px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-sm);
+}
+
+.term-empty-icon {
+  color: var(--text-tertiary);
+}
+
+.term-empty-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--text-primary);
+}
+
+.term-empty-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+}
+
+.term-shell-btn {
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.term-shell-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-default);
+}
+
+.term-empty-divider {
+  width: 100%;
+  height: 1px;
+  background: var(--border-subtle);
+}
+
+.term-empty-remote {
+  width: 100%;
+  height: 30px;
 }
 
 /* ─── Directory Panel ─── */
