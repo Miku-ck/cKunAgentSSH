@@ -1,0 +1,61 @@
+/**
+ * Docker 页的共享视觉原子
+ *
+ * 页面拆成四个页签子组件后，`.icon-btn` / `.mono` / `.list` / `.ptable` 修饰类
+ * 这些「四个页签都要、但别处不该要」的类名失去了 scoped 归属：留在任一页签里，
+ * 另外三个就得抄一份，改一处另三处悄悄漂移。
+ *
+ * 与 docker-modal.css 同一套约束：本文件不裸写通用类名，全部收在 `.docker-view`
+ * 之下 —— 那是 DockerView 的根类，全仓只此一处使用，不会串到别的页面。
+ * 弹窗都 Teleport 到 body（不在 .docker-view 内），它们的骨架与 `.badge`/`.kv`/
+ * `.mono` 版本仍由 docker-modal.css 的 `.dt-dialog` 作用域提供。
+ *
+ * 由 main.ts 引入。
+ */
+
+/* ── 列表骨架（四个页签共用） ── */
+.docker-view .list { flex: 1; overflow-y: auto; }
+.docker-view .list-empty { padding: 24px 16px; color: var(--text-tertiary); font-size: 12px; text-align: center; }
+/* 子列表取数失败：不走空态，如实标红上浮（用随主题 status token） */
+.docker-view .list-empty.err-hint { color: var(--status-error-text); }
+
+/* ── 图标按钮 ── */
+.docker-view .icon-btn {
+  width: 24px; height: 24px; border: none; background: transparent; border-radius: var(--radius-sm); color: var(--text-secondary);
+  display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.docker-view .icon-btn svg { width: 14px; height: 14px; }
+.docker-view .icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.docker-view .icon-btn.start:hover { color: var(--status-success-text); }
+.docker-view .icon-btn.stop:hover { color: var(--status-warn-text); }
+.docker-view .icon-btn.act-save:hover { color: var(--accent-text); }
+.docker-view .icon-btn:disabled { opacity: .4; cursor: default; }
+.docker-view .icon-btn:disabled:hover { background: transparent; color: var(--text-secondary); }
+.docker-view .icon-btn.start:disabled:hover { color: var(--text-secondary); }
+.docker-view .icon-btn.stop:disabled:hover { color: var(--text-secondary); }
+
+/* 行内操作图标 hover 语义色：全部走随主题 token（启停=success/warn，删除=error，exec/restart=accent） */
+.docker-view .c-acts { display: flex; align-items: center; gap: 2px; }
+.docker-view .c-acts .act-exec:hover { color: var(--accent-text); }
+.docker-view .c-acts .act-restart:hover { color: var(--accent-cyan); }
+.docker-view .c-acts .act-del:hover { color: var(--status-error-text); }
+
+.docker-view .spin { animation: dk-rot .8s linear infinite; }
+@keyframes dk-rot { to { transform: rotate(360deg); } }
+
+/* 等宽：与其余视图同口径，.mono 非全局工具类，须本页自带 */
+.docker-view .mono { font-family: var(--font-mono); }
+
+/* 卷/网络行可点击：整行 hover + 选中态。表格布局下 td 的 inset shadow 会沿列区断裂，选中条放在首单元格的左边框 */
+.docker-view .ptable.clickable tbody tr { cursor: pointer; transition: background var(--transition-fast); }
+.docker-view .ptable.clickable tbody tr:hover { background: var(--bg-hover); }
+.docker-view .ptable.clickable tbody tr.selected { background: var(--bg-elevated); }
+.docker-view .ptable.clickable tbody tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--accent-primary); }
+
+/* 引用列三元态（在用/未使用/未知）走 status token，不写颜色字面量 */
+.docker-view .use-hint.ok { color: var(--status-success-text); }
+.docker-view .use-hint.warn { color: var(--status-warn-text); }
+.docker-view .use-hint.muted { color: var(--text-tertiary); }
+/* 标签列：mono 风格，ellipsis + 原生 title 提示完整列表 */
+.docker-view .label-hint { color: var(--text-secondary); font-size: 11px; }

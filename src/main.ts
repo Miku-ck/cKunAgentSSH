@@ -9,6 +9,9 @@ import './styles/approval-card.css'
 // Docker 详情弹窗的共享视觉词汇：卷/网络详情在 DockerView，容器详情已拆成
 // DockerContainerDetail —— 两份弹窗骨架只留一处定义。
 import './styles/docker-modal.css'
+// Docker 页的共享视觉原子：页面拆成四个页签子组件后，.icon-btn / .mono / .list
+// 这些「四个页签都要、别处不该要」的类名失去了 scoped 归属，统一收在 .docker-view 之下。
+import './styles/docker-page.css'
 // 启动性能优化：原 `import './monaco-setup'` 静态链入 Monaco 全家桶（~10MB），
 // 现 monaco-setup 已是零重量的 shim，由其消费方（useAppearance/SftpFileEditor）
 // 在首开编辑器时动态加载，无需启动期登记。

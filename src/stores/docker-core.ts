@@ -647,6 +647,14 @@ export function countPrunedLines(out: string): number {
     .length
 }
 
+/**
+ * 异常容器判据：非 0 退出的行左侧打警示带，并在排序里顶到最前。
+ * healthcheck 失败优先于 running —— 容器还在跑，但已经在报错。
+ */
+export function isAbnormal(c: Pick<ContainerRow, 'state' | 'health'>): boolean {
+  return c.state === 'exited' || c.health === 'unhealthy'
+}
+
 /** Docker 预置且拒绝删除的三张网络；自定义网络不能与它们重名，故按名称判定即可 */
 export function isBuiltinNetwork(name: string): boolean {
   return name === 'bridge' || name === 'host' || name === 'none'

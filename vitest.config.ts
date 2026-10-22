@@ -29,6 +29,8 @@ export default defineConfig({
         /settings-groups\.css/,
         /settings-panel-base\.css/,
         /button\.css/,
+        // Docker 页的样式守卫（DockerView.guards.test.ts 断言「共享原子全收在 .docker-view 下」）
+        /docker-page\.css/,
       ],
     },
   },

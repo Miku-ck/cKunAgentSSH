@@ -8,17 +8,26 @@
  * 纯函数与请求体构造由 src/composables/remoteAudit.test.ts 覆盖。
  */
 import bulkRaw from './BulkCommandModal.vue?raw'
-import dockerRaw from './DockerView.vue?raw'
+import ctxRaw from './docker/context.ts?raw'
 import { describe, expect, it } from 'vitest'
 
 const bulkSrc = bulkRaw.replace(/\r\n/g, '\n')
-const dockerSrc = dockerRaw.replace(/\r\n/g, '\n')
+const dockerSrc = ctxRaw.replace(/\r\n/g, '\n')
 
 function sliceFunction(src: string, header: string): string {
   const start = src.indexOf(header)
   expect(start, `找不到 ${header}`).toBeGreaterThanOrEqual(0)
   const end = src.indexOf('\n}\n', start)
   expect(end).toBeGreaterThan(start)
+  return src.slice(start, end)
+}
+
+/** 底座里的执行函数嵌在 provideDockerHost 内，收尾缩进不为 0，用下一个函数头当界 */
+function sliceUntil(src: string, header: string, until: string): string {
+  const start = src.indexOf(header)
+  expect(start, `找不到 ${header}`).toBeGreaterThanOrEqual(0)
+  const end = src.indexOf(until, start + header.length)
+  expect(end, `找不到 ${header} 之后的 ${until}`).toBeGreaterThan(start)
   return src.slice(start, end)
 }
 
@@ -52,8 +61,9 @@ describe('批量下发', () => {
 })
 
 describe('Docker 变更动作', () => {
-  const dockerExec = sliceFunction(dockerSrc, 'async function dockerExec(')
-  const actionExec = sliceFunction(dockerSrc, 'function actionExec(')
+  // 执行/审计面已从页面壳移到 ./docker/context.ts（页面只剩编排），守卫跟着搬过去
+  const dockerExec = sliceUntil(dockerSrc, 'async function dockerExec(', '\n  function actionExec(')
+  const actionExec = sliceUntil(dockerSrc, 'function actionExec(', '\n  function toastErr(')
 
   it('只有动作入口带审计，读路径（PS/IMAGES/VOLUMES…）不带', () => {
     expect(actionExec).toContain('AUDIT_ACTION_DOCKER')
@@ -62,6 +72,8 @@ describe('Docker 变更动作', () => {
 
   it('审计目标在调用时解析，跨宿主切换后不串到新目标', () => {
     expect(dockerExec).toContain('dockerAuditTarget(id)')
+    // 目标定格在发起时：飞行途中切宿主，仍记实际执行的那台
+    expect(dockerExec.indexOf('dockerAuditTarget(id)')).toBeLessThan(dockerExec.indexOf('api.sshExec'))
   })
 
   it('sshExec 回包就记 executed（docker 非零也执行过）；抛错按超时/失败分类', () => {
