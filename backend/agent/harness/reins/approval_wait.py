@@ -31,7 +31,7 @@ ABORTED = "aborted"
 
 
 @dataclass
-class _Waiter:
+class Waiter:
     """一个正在等用户点击的调用。
 
     tool 单独留着：授权端点只知道 tool + command，算出的键偶尔会与实际登记的
@@ -46,26 +46,32 @@ class _Waiter:
 
 # (run_id, 授权键) → 等待项。同一 run 同一时刻只有一个调用在等（Driver 串行
 # 执行工具调用），这里保留字典形态是为了并发 run 之间互不覆盖。
-_WAITERS: dict[tuple[str, str], _Waiter] = {}
+_WAITERS: dict[tuple[str, str], Waiter] = {}
 
 
-async def wait(run_id: str, key: str, tool: str, timeout: float) -> str:
-    """登记并等待一次审批裁决。
+def register(run_id: str, key: str, tool: str) -> Waiter | None:
+    """只登记、不等待：把「等待」劈成两半，好让调用方先发卡再等。
 
-    timeout > 0 时到期返回 TIMEOUT（调用方落回「审批过期」的老路径）；timeout <= 0
-    表示永久等待 —— 与 approval_fallback_seconds 的 0 语义一致，此时只有用户点击
-    或 run 被取消（客户端断连 / release-run）才会返回。
+    顺序只能是 register → 发 permission_needed → wait_registered。反过来先发卡
+    后登记，用户在卡片刚出现那一瞬间点「允许」，唤醒落空，run 一直挂到兜底超时；
+    先登记后发卡，则最早的一次点击也一定落在等待表里。
 
-    Returns: ALLOWED / DENIED / TIMEOUT / ABORTED
+    没有事件循环（同步测试直调）时返回 None，调用方应落回原有拦截路径。
     """
-    loop_key = (run_id, key)
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
-        # 没有事件循环（同步测试直调）→ 不阻塞，交回原有拦截路径
-        return ABORTED
+        return None
     fut: asyncio.Future = loop.create_future()
-    _WAITERS[loop_key] = _Waiter(run_id=run_id, tool=tool, key=key, future=fut)
+    waiter = Waiter(run_id=run_id, tool=tool, key=key, future=fut)
+    _WAITERS[(run_id, key)] = waiter
+    return waiter
+
+
+async def wait_registered(waiter: Waiter, timeout: float) -> str:
+    """等待已登记好的等待项（卡片此时应已发出）。"""
+    loop_key = (waiter.run_id, waiter.key)
+    fut = waiter.future
     try:
         if timeout and timeout > 0:
             try:
@@ -76,16 +82,30 @@ async def wait(run_id: str, key: str, tool: str, timeout: float) -> str:
                 fut.cancel()
                 return TIMEOUT
         return await asyncio.shield(fut)
-    except asyncio.CancelledError:
-        # run 被取消：finally 会摘掉等待项，这里不再吞掉 CancelledError
-        raise
     finally:
         current = _WAITERS.get(loop_key)
-        if current is not None and current.future is fut:
+        if current is waiter:
             _WAITERS.pop(loop_key, None)
 
 
-def _wake(waiter: _Waiter, verdict: str) -> None:
+def discard(waiter: Waiter) -> None:
+    """登记后、等待前被打断时的回收（幂等）。
+
+    register 与 wait_registered 之间夹着「发卡」：telemetry.emit 抛错、客户端断连
+    导致生成器在 yield 处被关闭 —— 这两条路径都绕过了 wait_registered 的 finally，
+    等待项会永久留在表里，还会让 resolve_for_call 的同工具兜底先命中这个死项。
+
+    必须是同步函数：它在 async generator 的 finally 里调用，那里不能再 await。
+    正常路径下是 no-op（wait_registered 已摘除、future 已 done）。
+    """
+    loop_key = (waiter.run_id, waiter.key)
+    if _WAITERS.get(loop_key) is waiter:
+        _WAITERS.pop(loop_key, None)
+    if not waiter.future.done():
+        waiter.future.cancel()
+
+
+def _wake(waiter: Waiter, verdict: str) -> None:
     if not waiter.future.done():
         waiter.future.set_result(verdict)
 
@@ -153,14 +173,16 @@ def reset() -> None:
 
 
 __all__ = [
+    "ABORTED",
     "ALLOWED",
     "DENIED",
     "TIMEOUT",
-    "ABORTED",
-    "wait",
-    "resolve",
-    "resolve_for_call",
+    "Waiter",
     "abort_run",
+    "discard",
     "pending_keys",
     "reset",
+    "resolve",
+    "resolve_for_call",
+    "wait_registered",
 ]

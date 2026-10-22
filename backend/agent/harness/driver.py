@@ -47,7 +47,13 @@ from .contracts import (
     TraceEvent,
 )
 from .command_explain import explain_for_reason, maybe_explain_via_llm
-from .reins.core import AWAIT_APPROVAL_KEY, _audit_environment
+from .reins import approval_wait
+from .reins.core import (
+    AWAIT_APPROVAL_KEY,
+    _audit_environment,
+    approval_fallback_seconds,
+    tool_call_signature,
+)
 from .safety import classify_command
 from .telemetry import TelemetryBus
 
@@ -647,22 +653,33 @@ class Driver:
 
         # ── pre_tool_call（Reins 检查）──
         pre_tool_decision = await harness.reins.check(ReinPoint.PRE_TOOL_CALL, ctx)
-        # 审批阻塞（交互式 run）：拦截器发完卡片在这里真的停住，等 grant/deny
-        # 唤醒后重判一次 —— 授权状态是权威，gate/守卫自己给出放行或拒绝结论，
-        # Driver 不复制第二套判定。未启用等待（定时任务）时原样透传。
-        pre_tool_decision, approval_events = await self._await_approval(
-            ctx, harness, pre_tool_decision)
-        if approval_events:
-            # 醒来重判产生的事件在这里发出；清空后下方分支不会二次发同一批
-            for ev in approval_events:
-                await telemetry.emit(ev)
-                yield ev
-            pre_tool_decision.events = []
+        # 审批等待闸（一）：先登记等待项，再把卡片事件发出去。顺序反了就是死锁 ——
+        # permission_needed 挂在决策返回值上，不发出去用户根本看不到卡，
+        # 而「等一个看不见的卡片」只能等到兜底超时（默认 10 分钟）。
+        approval_handle = self._register_approval(ctx, pre_tool_decision)
+        try:
+            if pre_tool_decision.intercepted:
+                # 拦截
+                for ev in pre_tool_decision.events:
+                    await telemetry.emit(ev)
+                    yield ev
+                # 已发出，清空避免下方分支二次发同一批
+                pre_tool_decision.events = []
+            # 审批等待闸（二）：卡片已到用户眼前，这里真的停住，等 grant / deny 唤醒
+            # 后重判一次 —— 授权状态是权威，gate/守卫自己给出放行或拒绝结论，
+            # Driver 不复制第二套判定。未启用等待（定时任务）时原样透传。
+            if approval_handle is not None:
+                pre_tool_decision, approval_events = await self._finish_approval(
+                    ctx, harness, pre_tool_decision, approval_handle)
+                for ev in approval_events:
+                    await telemetry.emit(ev)
+                    yield ev
+        finally:
+            # 发卡期间抛异常，或客户端断连导致生成器在 yield 处被关闭，都会绕开
+            # wait_registered 的清理 —— 这里兜一层（正常路径是 no-op）。
+            if approval_handle is not None:
+                approval_wait.discard(approval_handle[0])
         if pre_tool_decision.intercepted:
-            # 拦截
-            for ev in pre_tool_decision.events:
-                await telemetry.emit(ev)
-                yield ev
             result_text = f"工具调用被拦截: {pre_tool_decision.intercept_reason}"
             entry["success"] = False
             # 被拦截说明是危险命令，priority 标记为 high 供 compress_messages 优先保留
@@ -863,21 +880,29 @@ class Driver:
             ctx.current_tool_call = entry
 
             pre_tool_decision = await harness.reins.check(ReinPoint.PRE_TOOL_CALL, ctx)
-            # 审批阻塞：与串行路径同口径 —— 该成员需要审批时真的停住等裁决，
-            # 醒来重判；阻塞发生在 A 阶段，其后成员的 PRE 检查顺延到裁决之后
-            # （与串行「审批卡住后面全部」的时序一致）。
-            pre_tool_decision, approval_events = await self._await_approval(
-                ctx, harness, pre_tool_decision)
-            if approval_events:
-                for ev in approval_events:
-                    await telemetry.emit(ev)
-                    yield ev
-                pre_tool_decision.events = []
+            # 审批等待闸（一）：先登记等待项、再发卡片（与串行路径同口径）。
+            approval_handle = self._register_approval(ctx, pre_tool_decision)
+            try:
+                if pre_tool_decision.intercepted:
+                    for ev in pre_tool_decision.events:
+                        await telemetry.emit(ev)
+                        yield ev
+                    pre_tool_decision.events = []
+                # 审批等待闸（二）：该成员需要审批时真的停住等裁决，醒来重判；
+                # 阻塞发生在 A 阶段，其后成员的 PRE 检查顺延到裁决之后
+                # （与串行「审批卡住后面全部」的时序一致）。
+                if approval_handle is not None:
+                    pre_tool_decision, approval_events = await self._finish_approval(
+                        ctx, harness, pre_tool_decision, approval_handle)
+                    for ev in approval_events:
+                        await telemetry.emit(ev)
+                        yield ev
+            finally:
+                # 同串行路径：发卡期间异常/断连绕开 wait_registered 的清理
+                if approval_handle is not None:
+                    approval_wait.discard(approval_handle[0])
             m = _Member(tc=tc, entry=entry)
             if pre_tool_decision.intercepted:
-                for ev in pre_tool_decision.events:
-                    await telemetry.emit(ev)
-                    yield ev
                 m.intercepted = True
                 m.intercept_text = f"工具调用被拦截: {pre_tool_decision.intercept_reason}"
                 entry["success"] = False
@@ -1158,41 +1183,38 @@ class Driver:
         if not pending:
             return
         try:
-            from .reins import tool_call_signature
             pending.pop(tool_call_signature({"tool": tc.name, "args": tc.args}), None)
         except Exception:
             pass
 
-    async def _await_approval(
+    def _register_approval(
         self,
         ctx: RunContext,
-        harness: "Harness",
         decision: ReinDecision,
-    ) -> tuple[ReinDecision, list[TraceEvent]]:
-        """在审批点真的停住：等 grant / deny 唤醒后重判一次。
+    ) -> tuple[approval_wait.Waiter, str] | None:
+        """审批等待闸（一）：为「即将弹卡」的调用登记等待项。
 
-        为什么必须停：拦截器发完 permission_needed 只 return intercepted，Driver 把
-        「工具调用被拦截」当结果回给模型就 continue —— 用户还在看卡片，run 已经把
-        同一轮剩下的工具、后面几轮全跑完了。审批在物理上存在，在时序上不起作用。
-
-        为什么醒来要重判而不是另写一套：授权状态（permanent / session / once /
-        拒绝标记）此刻已是权威，让 gate 和守卫自己给出「放行」或「曾被用户拒绝」，
-        Driver 不复制第二套判定 —— 两套判定必然漂移。
+        为什么必须与发卡分开：permission_needed 躺在 ReinDecision.events 里，由
+        调用方 yield 出去用户才看得见。若先阻塞再发卡，等的是用户看不见的卡片
+        —— 只能等到兜底超时（默认 600s）；若先发卡再登记，用户在卡片刚出现那一
+        瞬间点「允许」会唤醒落空，run 同样挂死。唯一正确的顺序是：登记 → 发卡 →
+        等待，所以这里只登记，等待交给 _finish_approval。
 
         只在交互式 run 启用（AWAIT_APPROVAL_KEY，routes 层置位）：定时任务没有
         可点卡片的人，等下去就是挂死。
 
-        Returns: (生效的决策, 需要在调用方发出的追加事件)。未发生等待时原样返回。
+        Returns: (等待项, 本次调用的签名)；不需要等待时 None。
         """
         if not ctx.metadata.get(AWAIT_APPROVAL_KEY):
-            return decision, []
+            return None
+        if not decision.intercepted:
+            # 没人被拦就没人要等（approval_key 只由发卡分支填写；将来若真有
+            # 拦截器「只给键不拦截」，也不能把 run 白挂一次到兜底超时）
+            return None
         key = decision.approval_key
         if not key:
-            return decision, []
-
-        from .reins.approval_wait import ALLOWED, DENIED
-        from .reins.approval_wait import wait as wait_verdict
-        from .reins.core import approval_fallback_seconds, tool_call_signature
+            # hardline / 曾被拒绝 / prod 未预登记……那些是「直接否掉」，没有人要等
+            return None
 
         # 并行段内 [-1] 已不是当前条目 → 走 active_tool_call（调用方已指向本条目）
         last = ctx.active_tool_call or {}
@@ -1202,21 +1224,50 @@ class Driver:
         # 再等就是永久挂起 —— 把决策交回模型，让它看到「被拦截」并换方案。
         waited = ctx.metadata.setdefault("approval_waited", set())
         if sig in waited:
-            return decision, []
+            return None
+        waiter = approval_wait.register(ctx.run_id, key, tool)
+        if waiter is None:
+            # 没有事件循环（同步调用方）→ 不阻塞，交回原有拦截路径
+            return None
         waited.add(sig)
+        return waiter, sig
 
-        verdict = await wait_verdict(ctx.run_id, key, tool, approval_fallback_seconds())
-        if verdict not in (ALLOWED, DENIED):
+    async def _finish_approval(
+        self,
+        ctx: RunContext,
+        harness: "Harness",
+        decision: ReinDecision,
+        handle: tuple[approval_wait.Waiter, str],
+    ) -> tuple[ReinDecision, list[TraceEvent]]:
+        """审批等待闸（二）：停住等裁决，醒来重判一次 PRE_TOOL_CALL。
+
+        为什么停下：拦截器发完 permission_needed 只 return intercepted，Driver 把
+        「工具调用被拦截」当结果回给模型就 continue —— 用户还在看卡片，run 已经把
+        同一轮剩下的工具、后面几轮全跑完了。审批在物理上存在，在时序上不起作用。
+
+        为什么醒来要重判而不是另写一套：授权状态（permanent / session / once /
+        拒绝标记）此刻已是权威，让 gate 和守卫自己给出「放行」或「曾被用户拒绝」，
+        Driver 不复制第二套判定 —— 两套判定必然漂移。
+
+        Returns: (生效的决策, 需要在调用方发出的追加事件)。
+        """
+        waiter, sig = handle
+        verdict = await approval_wait.wait_registered(
+            waiter, approval_fallback_seconds())
+        if verdict not in (approval_wait.ALLOWED, approval_wait.DENIED):
             # 兜底超时 / 等待项被回收 → 落回原有拦截路径（卡片保留待办，
             # 模型重发时由守卫发 permission_expired）
             return decision, []
 
         logger.info(
             "审批裁决到达 run=%s key=%s verdict=%s，重判一次 PRE_TOOL_CALL",
-            ctx.run_id, key, verdict,
+            ctx.run_id, waiter.key, verdict,
         )
         redone = await harness.reins.check(ReinPoint.PRE_TOOL_CALL, ctx)
-        if verdict == ALLOWED and redone.intercepted:
+        # 重判产生的事件交给调用方发；这里清空避免拦截分支二次发同一批
+        events = list(redone.events)
+        redone.events = []
+        if verdict == approval_wait.ALLOWED and redone.intercepted:
             # 批了却仍拦：批的键和这次调用的键不是一把（command 归一化差异、
             # 主机作用域不匹配……）。不能把模型晾在「已请求授权」上反复重试 ——
             # 把签名移出审批豁免，循环检测才能接管。
@@ -1225,7 +1276,18 @@ class Driver:
                 pending.pop(sig, None)
             redone.intercept_reason = (
                 f"{redone.intercept_reason}（用户已授权，但授权范围未覆盖本次调用）")
-        return redone, list(redone.events)
+        elif verdict == approval_wait.DENIED and not redone.intercepted:
+            # 拒绝标记没盖住本次调用（键漂移时兜底按工具唤醒，落到了同工具的
+            # 另一个命令上）：不能因为「有人点了拒绝」就当没事发生放行。
+            # 拒绝一律 fail-closed —— 宁可拦下让模型换方案，不可静默执行
+            # 用户从未批准的命令。
+            redone.intercepted = True
+            redone.intercept_reason = "用户拒绝了本次审批请求"
+            # 与 ALLOWED 分支同口径：出集后不再假定有卡可点，让循环检测接管
+            pending = ctx.metadata.get("permission_pending")
+            if isinstance(pending, dict):
+                pending.pop(sig, None)
+        return redone, events
 
     async def _completion_guard(
         self,
