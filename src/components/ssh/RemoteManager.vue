@@ -11,37 +11,28 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
           批量下发（{{ remoteSessionCount }} 台）
         </button>
-        <button class="btn btn-primary" @click="handleCreate" :title="seg === 'gateway' ? '新建 TLS 网关连接' : '新建连接'">
-          {{ seg === 'gateway' ? '新建网关' : '新建连接' }}
-        </button>
+        <button class="btn btn-primary" @click="showNewDialog = true">新建连接</button>
       </div>
     </div>
 
-    <!-- 工具栏 -->
+    <!-- 工具栏：两类连接共用一条搜索，类型由行内徽标区分 -->
     <div class="rm-toolbar">
-      <!-- 分段：SSH 连接 / TLS 网关。原「安全接入」独立页并入远程管理 ——
-           两类连接此前是两个几乎同构的卡片页，用户分不清为什么要建两种连接；
-           网关当前也开不了终端，只服务隧道转发，作为远程管理的一个分段更诚实。 -->
-      <div class="rm-seg" role="tablist" aria-label="连接类型">
-        <button class="rm-seg-btn" :class="{ on: seg === 'ssh' }" role="tab" :aria-selected="seg === 'ssh'" @click="seg = 'ssh'">SSH 连接</button>
-        <button class="rm-seg-btn" :class="{ on: seg === 'gateway' }" role="tab" :aria-selected="seg === 'gateway'" @click="seg = 'gateway'">TLS 网关</button>
-      </div>
       <div class="rm-search">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         <input v-model="searchText" placeholder="搜索名称/主机/用户名/备注..." />
       </div>
     </div>
 
-    <!-- 列表 -->
-    <div class="rm-list" v-show="seg === 'ssh'">
+    <!-- 列表：SSH 连接与 TLS 网关混排成一张表，类型由行内徽标区分 -->
+    <div class="rm-list">
       <!-- 表头 (列名可点击排序) -->
       <div
         class="rm-row-header"
         :class="{ 'has-selection': selectedIds.size > 0 }"
-        v-if="filteredConnections.length > 0"
+        v-if="filteredRows.length > 0"
       >
         <div class="cell-check">
-          <input type="checkbox" :checked="allSelected" :indeterminate.prop="someSelected" @change="toggleSelectAll" />
+          <input type="checkbox" :checked="allSelected" :indeterminate.prop="someSelected" title="全选 SSH 连接" aria-label="全选 SSH 连接" @change="toggleSelectAll" />
         </div>
         <div class="cell-status"></div>
         <div class="cell-name sortable" @click="setSort('name')">
@@ -62,34 +53,40 @@
         <div class="cell-actions"></div>
       </div>
 
-      <!-- 行 -->
-      <ConnectionRow
-        v-for="conn in filteredConnections"
-        :key="conn.id"
-        :connection="conn"
-        :selected="selectedIds.has(conn.id)"
-        :online="store.isOnline(conn.id)"
-        :connecting="props.connecting"
-        :pending-conn-id="props.pendingConnId"
-        :now="nowTick"
-        @connect="handleConnect"
-        @toggle-select="handleToggleSelect"
-        @menu="showMenu"
-      />
+      <!-- 行：SSH 行可多选批量删除；TLS 网关行不参与批量选择 -->
+      <template v-for="row in filteredRows" :key="row.key">
+        <ConnectionRow
+          v-if="row.kind === 'ssh'"
+          :connection="row.conn"
+          :selected="selectedIds.has(row.conn.id)"
+          :online="store.isOnline(row.conn.id)"
+          :connecting="props.connecting"
+          :pending-conn-id="props.pendingConnId"
+          :now="nowTick"
+          @connect="handleConnect"
+          @toggle-select="handleToggleSelect"
+          @menu="showSshMenu"
+        />
+        <GatewayRow
+          v-else
+          :gateway="row.gw"
+          :status="accessStore.statusOf(row.gw.id)"
+          :busy="gatewayBusyId === row.gw.id"
+          :now="nowTick"
+          @toggle="handleGatewayToggle(row.gw)"
+          @menu="showGatewayMenu($event, row.gw)"
+        />
+      </template>
 
       <!-- 空状态：一句话双向居中（对齐 Docker 页 .empty 的做法）。新建连接在头部一直有，
            这里不放重复按钮；标题/说明拆两个 div 属冗余，压平成单行。 -->
-      <div v-if="filteredConnections.length === 0" class="rm-empty">
-        {{ hasFilter ? '没有匹配的连接' : '还没有远程连接' }}
+      <div v-if="filteredRows.length === 0" class="rm-empty">
+        {{ emptyText }}
       </div>
     </div>
 
-    <!-- TLS 接入网关（原「安全接入」页并入此分段）：连接卡片 + TOFU 指纹确认。
-         chunk 仍按需加载 —— 网关是小众路径，不进 SSH 连接列表的首次渲染。 -->
-    <AccessView v-if="seg === 'gateway'" ref="gatewayPane" :search="debouncedSearch" />
-
-    <!-- 批量操作栏 -->
-    <div v-if="seg === 'ssh' && selectedIds.size > 0" class="rm-batch-bar">
+    <!-- 批量操作栏：选中项只可能是 SSH 连接 -->
+    <div v-if="selectedIds.size > 0" class="rm-batch-bar">
       <span class="batch-info">已选 {{ selectedIds.size }} 项</span>
       <button class="btn btn-danger" @click="handleDeleteBatch">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
@@ -98,7 +95,7 @@
       <button class="btn" @click="clearSelection">取消选择</button>
     </div>
 
-    <!-- 右键菜单 -->
+    <!-- 右键菜单：按行类型给出不同动作（SSH 开终端；TLS 接入/断开） -->
     <Teleport to="body">
       <div
         v-if="menu.visible"
@@ -106,48 +103,87 @@
         :style="menuStyle"
         @contextmenu.prevent
       >
-        <div class="ctx-item" @click="handleMenuAction('connect')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-          连接
-        </div>
-        <div class="ctx-item" @click="handleMenuAction('edit')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-          编辑
-        </div>
-        <div class="ctx-item" @click="handleMenuAction('duplicate')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-          复制配置
-        </div>
-        <div class="ctx-sep"></div>
-        <div class="ctx-item danger" @click="handleMenuAction('delete')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-          删除
-        </div>
+        <template v-if="menu.target?.kind === 'ssh'">
+          <div class="ctx-item" @click="handleMenuAction('connect')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            打开终端
+          </div>
+          <div class="ctx-item" @click="handleMenuAction('edit')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            编辑
+          </div>
+          <div class="ctx-item" @click="handleMenuAction('duplicate')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            复制配置
+          </div>
+          <div class="ctx-sep"></div>
+          <div class="ctx-item danger" @click="handleMenuAction('delete')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            删除
+          </div>
+        </template>
+
+        <template v-else-if="menu.target?.kind === 'gateway'">
+          <div class="ctx-item" @click="handleMenuAction('toggle')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M12 3v9"/><path d="M6.6 6.6a8 8 0 1 0 10.8 0"/></svg>
+            {{ gatewayToggleLabel(menu.target.gw.id) }}
+          </div>
+          <div class="ctx-item" @click="handleMenuAction('edit')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            编辑
+          </div>
+          <div class="ctx-sep"></div>
+          <div class="ctx-item danger" @click="handleMenuAction('delete')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            删除
+          </div>
+        </template>
       </div>
     </Teleport>
 
     <!-- 多节点批量下发（F 阶段） -->
     <BulkCommandModal v-if="showBulkModal" @close="showBulkModal = false" />
+
+    <!-- 新建连接：SSH / TLS 两套表单在同一弹窗内用页签切换 -->
+    <NewConnectionDialog
+      v-if="showNewDialog"
+      @close="showNewDialog = false"
+      @saved-ssh="onNewSshSaved"
+      @saved-tls="onNewTlsSaved"
+    />
+
+    <!-- 网关编辑与 TOFU 指纹确认（无可见输出，只有弹窗） -->
+    <GatewayDialogs ref="gatewayDialogsRef" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onUnmounted, triggerRef, defineAsyncComponent } from 'vue'
+import { ref, computed, watch, onUnmounted, triggerRef } from 'vue'
 import ConnectionRow from './ConnectionRow.vue'
+import GatewayRow from './GatewayRow.vue'
+import NewConnectionDialog from './NewConnectionDialog.vue'
+import GatewayDialogs from './GatewayDialogs.vue'
 import BulkCommandModal from './BulkCommandModal.vue'
 import { connNote, useSSHStore } from '@/stores/ssh'
 import type { SSHConnection } from '@/stores/ssh'
+import { useAccessStore } from '@/stores/access'
+import { useTunnelStore } from '@/stores/tunnel'
 import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
 import { toFriendlyMessage } from '@/api/client'
 
-// TLS 接入网关段：整块按需加载（含 AccessModal / TOFU 弹窗的子 chunk）
-const AccessView = defineAsyncComponent(() => import('./AccessView.vue'))
+/** 统一列表的一行：两类连接各保留自己的记录与动作，只在表格里混排 */
+type ConnectionRowItem =
+  | { kind: 'ssh'; key: string; name: string; recent: number; created: number; conn: SSHConnection }
+  | { kind: 'gateway'; key: string; name: string; recent: number; created: number; gw: GatewayRecord }
+
+type MenuTarget =
+  | { kind: 'ssh'; conn: SSHConnection }
+  | { kind: 'gateway'; gw: GatewayRecord }
 
 const emit = defineEmits<{
   connect: [id: string]
   edit: [conn: SSHConnection]
-  'new-connection': []
 }>()
 
 // 新增：连接 loading 状态（从父组件传入）
@@ -156,13 +192,22 @@ const props = defineProps<{
   pendingConnId: string
 }>()
 
-const seg = ref<'ssh' | 'gateway'>('ssh')
-const gatewayPane = ref<{ openCreate(): void } | null>(null)
+const accessStore = useAccessStore()
+const tunnelStore = useTunnelStore()
+const gatewayDialogsRef = ref<{ openEdit(gw: GatewayRecord): void } | null>(null)
+const gatewayBusyId = ref('')
 
-/** 头部「新建」按钮分流：SSH 段沿用父组件的连接弹窗，网关段走 AccessView 的弹窗 */
-function handleCreate() {
-  if (seg.value === 'gateway') gatewayPane.value?.openCreate()
-  else emit('new-connection')
+const showNewDialog = ref(false)
+
+function onNewSshSaved({ savedId, connectNow }: { savedId: string; connectNow: boolean }): void {
+  if (connectNow) emit('connect', savedId)
+}
+
+function onNewTlsSaved({ rec, submittedPassword }: { rec: GatewayRecord; submittedPassword: boolean }): void {
+  if (!submittedPassword) return
+  void accessStore.connect(rec.id).catch(err => {
+    toast.error(toFriendlyMessage(err, '网关连接失败'))
+  })
 }
 
 const store = useSSHStore()
@@ -198,33 +243,78 @@ watch(searchText, () => {
 
 const hasFilter = computed(() => debouncedSearch.value.trim() !== '')
 
-const filteredConnections = computed(() => {
-  const q = debouncedSearch.value.toLowerCase().trim()
-  let list = store.connections.slice()
+/** 搜索命中的 SSH 记录：与网关共用一条搜索词，但批量选择只认 SSH */
+function sshMatches(c: SSHConnection, q: string): boolean {
+  if (!q) return true
+  const note = connNote(c)
+  return c.name.toLowerCase().includes(q) ||
+    c.host.toLowerCase().includes(q) ||
+    c.username.toLowerCase().includes(q) ||
+    note.toLowerCase().includes(q)
+}
 
-  if (q) {
-    list = list.filter(c => {
-      const note = connNote(c)
-      return c.name.toLowerCase().includes(q) ||
-        c.host.toLowerCase().includes(q) ||
-        c.username.toLowerCase().includes(q) ||
-        note.toLowerCase().includes(q)
+function gatewayMatches(gw: GatewayRecord, q: string): boolean {
+  if (!q) return true
+  return gw.name.toLowerCase().includes(q) ||
+    gw.host.toLowerCase().includes(q) ||
+    gw.user.toLowerCase().includes(q)
+}
+
+const filteredRows = computed<ConnectionRowItem[]>(() => {
+  const q = debouncedSearch.value.toLowerCase().trim()
+  const rows: ConnectionRowItem[] = []
+
+  for (const c of store.connections) {
+    if (!sshMatches(c, q)) continue
+    rows.push({
+      kind: 'ssh',
+      key: `ssh-${c.id}`,
+      name: c.name,
+      recent: c.lastConnectedAt || 0,
+      created: c.createdAt,
+      conn: c,
+    })
+  }
+
+  for (const gw of accessStore.gateways) {
+    if (!gatewayMatches(gw, q)) continue
+    rows.push({
+      kind: 'gateway',
+      key: `gw-${gw.id}`,
+      name: gw.name,
+      // 网关无持久化的最后连接；接入成功时主进程打 sinceAt（断开不清），
+      // 运行期内可当「最近接入」参与排序，重启进程后回落到底部
+      recent: accessStore.statusOf(gw.id)?.sinceAt ?? 0,
+      created: gw.createdAt,
+      gw,
     })
   }
 
   switch (sortKey.value) {
     case 'recent':
-      list.sort((a, b) => (b.lastConnectedAt || 0) - (a.lastConnectedAt || 0))
+      rows.sort((a, b) => b.recent - a.recent)
       break
     case 'name':
-      list.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+      rows.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
       break
     case 'created':
-      list.sort((a, b) => b.createdAt - a.createdAt)
+      rows.sort((a, b) => b.created - a.created)
       break
   }
 
-  return list
+  return rows
+})
+
+/** 批量选择只作用于当前可见的 SSH 连接 */
+const filteredConnections = computed<SSHConnection[]>(() =>
+  filteredRows.value.flatMap(r => r.kind === 'ssh' ? [r.conn] : [])
+)
+
+const emptyText = computed(() => {
+  if (hasFilter.value) return '没有匹配的连接'
+  // 列表空但网关没读到：说破，别把「没读到」洗成「还没有」
+  if (!accessStore.loaded) return '没读到网关列表'
+  return '还没有远程连接'
 })
 
 // 列表收窄后剪掉看不见的选中项：搜索/排序变化会让 selectedIds 残留已不在列表里的
@@ -343,8 +433,53 @@ async function handleDeleteBatch() {
   }
 }
 
+// ─── TLS 网关动作 ─────────────────────────
+function gatewayToggleLabel(id: string): string {
+  const s = accessStore.stateOf(id)
+  if (s === 'online') return '断开'
+  if (s === 'reconnecting') return '停止重连'
+  return '接入'
+}
+
+async function handleGatewayToggle(gw: GatewayRecord): Promise<void> {
+  if (gatewayBusyId.value === gw.id) return
+  gatewayBusyId.value = gw.id
+  try {
+    const s = accessStore.stateOf(gw.id)
+    if (s === 'online' || s === 'reconnecting') await accessStore.disconnect(gw.id)
+    else await accessStore.connect(gw.id)
+  } catch (err) {
+    toast.error(toFriendlyMessage(err, '网关操作失败'))
+  } finally {
+    gatewayBusyId.value = ''
+  }
+}
+
+function openGatewayEdit(gw: GatewayRecord): void {
+  gatewayDialogsRef.value?.openEdit(gw)
+}
+
+async function handleGatewayDelete(gw: GatewayRecord): Promise<void> {
+  const ok = await confirm({
+    title: '删除连接',
+    message: `确定删除连接「${gw.name}」？引用它的隧道规则将变为「网关未连接」。`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
+  try {
+    await accessStore.remove(gw.id)
+    // 删除已经成功，刷新失败不能再报成「删除失败」
+    await tunnelStore.refreshRules().catch(() => {
+      toast.error('隧道规则刷新失败，切到隧道页会重新加载')
+    })
+  } catch (err) {
+    toast.error(toFriendlyMessage(err, '删除失败'))
+  }
+}
+
 // ─── 右键菜单 ─────────────────────────────
-const menu = ref({ visible: false, x: 0, y: 0, conn: null as SSHConnection | null })
+const menu = ref({ visible: false, x: 0, y: 0, target: null as MenuTarget | null })
 const MENU_MIN_WIDTH = 160
 const MENU_MAX_HEIGHT = 280
 
@@ -365,17 +500,25 @@ const menuStyle = computed(() => {
 
 let dismissBound = false
 
-function showMenu(e: MouseEvent, conn: SSHConnection) {
+function showMenu(e: MouseEvent, target: MenuTarget) {
   e.stopPropagation()
   e.preventDefault()
   // 坐标只存原始光标位置：越界校正是 menuStyle 的职责（两个方向都按 MENU_MAX_HEIGHT
   // 与 margin 收过，这里再翻一次等于对同一维度做两次钳制）
-  menu.value = { visible: true, x: e.clientX, y: e.clientY, conn }
+  menu.value = { visible: true, x: e.clientX, y: e.clientY, target }
   // 在菜单显示后才注册 document mousedown 监听(bubble 阶段,普通事件流)
   if (!dismissBound) {
     document.addEventListener('mousedown', handleDocMouseDown)
     dismissBound = true
   }
+}
+
+function showSshMenu(e: MouseEvent, conn: SSHConnection) {
+  showMenu(e, { kind: 'ssh', conn })
+}
+
+function showGatewayMenu(e: MouseEvent, gw: GatewayRecord) {
+  showMenu(e, { kind: 'gateway', gw })
 }
 
 function handleDocMouseDown(e: MouseEvent) {
@@ -389,14 +532,22 @@ function handleDocMouseDown(e: MouseEvent) {
 }
 
 function handleMenuAction(action: string) {
-  const conn = menu.value.conn
+  const target = menu.value.target
   menu.value.visible = false
-  if (!conn) return
+  if (!target) return
+  if (target.kind === 'ssh') {
+    switch (action) {
+      case 'connect': handleConnect(target.conn.id); break
+      case 'edit': handleEdit(target.conn); break
+      case 'duplicate': handleDuplicate(target.conn.id); break
+      case 'delete': handleDelete(target.conn.id); break
+    }
+    return
+  }
   switch (action) {
-    case 'connect': handleConnect(conn.id); break
-    case 'edit': handleEdit(conn); break
-    case 'duplicate': handleDuplicate(conn.id); break
-    case 'delete': handleDelete(conn.id); break
+    case 'toggle': void handleGatewayToggle(target.gw); break
+    case 'edit': openGatewayEdit(target.gw); break
+    case 'delete': void handleGatewayDelete(target.gw); break
   }
 }
 
@@ -461,36 +612,6 @@ onUnmounted(() => {
   flex-wrap: wrap;
 }
 
-/* 分段切换：SSH 连接 / TLS 网关（原「安全接入」页并入后的入口） */
-.rm-seg {
-  display: flex;
-  height: 30px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-}
-
-.rm-seg-btn {
-  padding: 0 14px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 12.5px;
-  font-family: var(--font-sans);
-  cursor: pointer;
-  transition: background var(--transition-fast), color var(--transition-fast);
-}
-
-.rm-seg-btn + .rm-seg-btn { border-left: 1px solid var(--border-subtle); }
-
-.rm-seg-btn:hover { color: var(--text-primary); }
-
-.rm-seg-btn.on {
-  background: var(--bg-active);
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
 .rm-search {
   display: flex;
   align-items: center;
@@ -529,7 +650,7 @@ onUnmounted(() => {
   overflow-y: auto;
   min-height: 0;
   /* Grid 模板: 9 列布局,行和表头严格对齐 */
-  --rm-grid-cols: 22px 12px minmax(110px, 1.1fr) minmax(160px, 1.4fr) 60px minmax(80px, 0.9fr) 84px 84px 96px;
+  --rm-grid-cols: 22px 12px minmax(110px, 1.1fr) minmax(160px, 1.4fr) 60px minmax(80px, 0.9fr) 84px 84px 112px;
 }
 
 .rm-row-header {

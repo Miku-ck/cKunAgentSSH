@@ -6,7 +6,7 @@
  * 另一个就得抄一份（改一处、另一处悄悄漂移）。与 approval-card.css 同构，
  * 由 main.ts 引入。
  *
- * .badge / .kv / .logs / .flag 这类类名在 SftpPane、TunnelView、AccessView 等
+ * .badge / .kv / .logs / .flag 这类类名在 SftpPane、TunnelView、GatewayDialogs 等
  * 组件里都有各自版本：本文件不裸写它们，统一收在 .dt-dialog 下，避免提升为
  * 全局后串色。.dt-overlay / .dt-dialog / .ptable 全仓只此一处使用，可以裸写。
  */

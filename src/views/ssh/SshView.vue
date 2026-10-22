@@ -21,10 +21,10 @@
           :aria-selected="activeNavPage === 'remote-mgr'"
           :tabindex="activeNavPage === 'remote-mgr' ? 0 : -1"
           title="远程管理（固定页签）"
+          aria-label="远程管理"
           @click="openRemoteManager()"
         >
           <IconMonitor :width="12" :height="12" :stroke-width="2" />
-          <span class="tab-label">远程管理</span>
         </button>
 
         <div class="tabs-scroll" ref="tabsScrollRef" @wheel.prevent="onTabsWheel">
@@ -120,7 +120,6 @@ v-show="s.id === store.activeSessionId"
           <RemoteManager v-if="pageMounted('remote-mgr')"
             @connect="handleRmConnect"
             @edit="editConnection"
-            @new-connection="editConnection(null)"
             :connecting="connecting"
             :pending-conn-id="pendingConnId"
           />
@@ -569,6 +568,8 @@ defineExpose({
   height: var(--tabbar-h);
   display: flex;
   align-items: center;
+  /* 固定页签贴着窗口左缘时，:focus-visible 的外扩描边会被 overflow 裁掉左侧 */
+  padding-left: 3px;
   background: var(--canvas-bg);
   background-attachment: fixed;
   border-bottom: 1px solid var(--border-subtle);
@@ -617,8 +618,8 @@ defineExpose({
 }
 .tof-btn:hover { color: var(--text-secondary); background: var(--bg-hover); }
 
-/* 远程管理固定页签与右侧会话标签留 4px 间距 */
-.term-tab-mgr { margin-right: 4px; }
+/* 远程管理固定页签与右侧会话标签留 4px 间距；只显示图标，按图标尺寸收窄 */
+.term-tab.term-tab-mgr { margin-right: 4px; padding: 0 9px; }
 
 .term-tab {
   position: relative;
@@ -688,6 +689,10 @@ defineExpose({
   margin-bottom: -1px;
   padding-bottom: 1px;
 }
+
+/* 固定页签只有一枚图标：不描边，焦点改用底色示意，避免看起来像选中框 */
+.term-tab-mgr.active { border-color: transparent; }
+.term-tab-mgr:focus-visible { outline: none; background: var(--bg-hover); }
 
 .tab-label {
   overflow: hidden;

@@ -323,8 +323,8 @@ export function useSshNavigation(
   }
 
   // ─── 连接管理模态框 ───
-  function editConnection(conn: SSHConnection | null) {
-    editingConnection.value = conn ? { ...conn } : undefined
+  function editConnection(conn: SSHConnection) {
+    editingConnection.value = { ...conn }
     showModal.value = true
   }
 

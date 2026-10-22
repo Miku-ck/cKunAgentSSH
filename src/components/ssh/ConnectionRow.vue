@@ -13,6 +13,7 @@
     </div>
 
     <div class="cell-name" :title="connection.name">
+      <span class="type-badge">SSH</span>
       <span class="name-text">{{ connection.name }}</span>
     </div>
 
@@ -37,10 +38,10 @@
     </div>
 
     <div class="cell-actions" @click.stop>
-      <button class="row-btn connect" :class="{ loading: isConnecting }" :title="isConnecting ? '连接中...' : '连接'" @click="$emit('connect', connection.id)">
+      <button class="row-btn connect" :class="{ loading: isConnecting }" :title="isConnecting ? '连接中...' : '打开终端'" @click="$emit('connect', connection.id)">
         <svg v-if="!isConnecting" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
         <svg v-else class="spinner" viewBox="0 0 24 24" fill="none" width="14" height="14"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.25"/><path d="M22 12a10 10 0 0 0-10-10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
-        <span v-if="!isConnecting">连接</span>
+        <span v-if="!isConnecting">打开终端</span>
         <span v-else class="loading-text">连接中...</span>
       </button>
       <button class="row-btn more" title="更多操作" @click.stop="$emit('menu', $event, connection)">
@@ -53,6 +54,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { connNote, type SSHConnection } from '@/stores/ssh'
+import { formatRelativeTime } from '@/utils/format'
 
 const props = defineProps<{
   connection: SSHConnection
@@ -90,10 +92,9 @@ const authLabel = computed(() => {
 // 备注显示文本：note 优先、tags[0] 兜底，读法收归 connNote 单一来源
 const noteText = computed(() => connNote(props.connection))
 
-// 相对时间的基准由父级 tick 传入：Date.now() 不是响应式来源，写在 computed 里
-// 等于「挂载那一刻定稿」——刚连上时显示"刚刚"，之后几小时（甚至重开面板前）都不会
-// 变成"3 分钟前"，除非该行的 lastConnectedAt 恰好又变一次。
-const relativeTime = computed(() => formatRelative(props.connection.lastConnectedAt, props.now))
+const relativeTime = computed(() =>
+  formatRelativeTime(props.connection.lastConnectedAt, props.now, '从未连接')
+)
 const fullTime = computed(() => {
   const t = props.connection.lastConnectedAt
   if (!t) return '从未连接'
@@ -103,16 +104,6 @@ const fullTime = computed(() => {
 // 创建时间显示为 YYYY-MM-DD(本地时区)
 const createdDateText = computed(() => formatDate(props.connection.createdAt))
 const fullCreatedTime = computed(() => new Date(props.connection.createdAt).toLocaleString())
-
-function formatRelative(ts: number | undefined, now: number): string {
-  if (!ts) return '从未连接'
-  const diff = now - ts
-  if (diff < 60_000) return '刚刚'
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`
-  if (diff < 30 * 86_400_000) return `${Math.floor(diff / 86_400_000)} 天前`
-  return new Date(ts).toLocaleDateString()
-}
 
 function formatDate(ts: number): string {
   if (!ts) return '-'
@@ -127,7 +118,7 @@ function formatDate(ts: number): string {
 <style scoped>
 .conn-row {
   display: grid;
-  grid-template-columns: var(--rm-grid-cols, 22px 12px minmax(110px, 1.1fr) minmax(160px, 1.4fr) 60px minmax(80px, 0.9fr) 84px 84px 96px);
+  grid-template-columns: var(--rm-grid-cols, 22px 12px minmax(110px, 1.1fr) minmax(160px, 1.4fr) 60px minmax(80px, 0.9fr) 84px 84px 112px);
   align-items: center;
   gap: 10px;
   height: 44px;
@@ -203,14 +194,29 @@ function formatDate(ts: number): string {
 
 /* ── 名称 ── */
 .cell-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 13px;
   color: var(--text-primary);
   font-weight: 500;
   text-align: left;
 }
 
+.type-badge {
+  flex-shrink: 0;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--text-tertiary);
+  background: var(--bg-active);
+}
+
 .name-text {
-  display: block;
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -295,6 +301,7 @@ function formatDate(ts: number): string {
 }
 
 .conn-row:hover .cell-actions,
+.conn-row:focus-within .cell-actions,
 .conn-row.selected .cell-actions {
   opacity: 1;
 }

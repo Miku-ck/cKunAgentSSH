@@ -1,8 +1,13 @@
 <template>
-  <Teleport to="body">
-  <div class="modal-overlay">
-    <div class="modal-dialog" role="dialog" aria-modal="true">
-      <div class="modal-header">
+  <Teleport to="body" :disabled="embedded">
+  <div :class="embedded ? 'embed-root' : 'modal-overlay'">
+    <div
+      class="modal-dialog"
+      :class="{ embedded }"
+      :role="embedded ? undefined : 'dialog'"
+      :aria-modal="embedded ? undefined : 'true'"
+    >
+      <div v-if="!embedded" class="modal-header">
         <h3>{{ isEdit ? '编辑连接' : '添加远程连接' }}</h3>
         <button class="modal-close" @click="handleOverlayClose">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -122,29 +127,17 @@
             <div class="env-hint" v-if="form.environment === 'prod'">
               [注意] 生产环境:危险命令仅接受预授权 allowlist 放行,不再临时弹窗审批。
             </div>
-            <div class="env-hint" v-else-if="!isEdit">
-              新建连接的默认环境取自「设置 → Agent 治理 → 运维策略」,此处仍可按单机实际情况改。
-            </div>
           </div>
         </div>
 
-        <!-- 高级选项 -->
-        <div class="advanced-section">
-          <button class="advanced-toggle" @click="showAdvanced = !showAdvanced">
-            <svg class="toggle-arrow" :class="{ expanded: showAdvanced }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="9 18 15 12 9 6"/></svg>
-            高级选项
-          </button>
-          <div v-if="showAdvanced" class="advanced-body">
-            <div class="form-row two-col">
-              <div class="form-group flex-1">
-                <label>连接超时 (秒)</label>
-                <input v-model.number="form.readyTimeout" type="number" min="1" max="120" placeholder="15" />
-              </div>
-              <div class="form-group flex-1">
-                <label>心跳间隔 (秒)</label>
-                <input v-model.number="form.keepaliveInterval" type="number" min="0" max="120" placeholder="10" />
-              </div>
-            </div>
+        <div class="form-row two-col">
+          <div class="form-group flex-1">
+            <label>连接超时 (秒)</label>
+            <input v-model.number="form.readyTimeout" type="number" min="1" max="120" placeholder="15" />
+          </div>
+          <div class="form-group flex-1">
+            <label>心跳间隔 (秒)</label>
+            <input v-model.number="form.keepaliveInterval" type="number" min="0" max="120" placeholder="10" />
           </div>
         </div>
 
@@ -197,6 +190,8 @@ import { isPort, PORT_MAX } from '../../../shared/port-core'
 
 const props = defineProps<{
   editData?: SSHConnection
+  /** 嵌入统一新建弹窗：不渲染遮罩/标题栏，Esc 交给宿主 */
+  embedded?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -214,7 +209,6 @@ const testing = ref(false)
 const errorMsg = ref('')
 const showPassword = ref(false)
 const showPassphrase = ref(false)
-const showAdvanced = ref(false)
 const testResult = ref<SSHTestResult | null>(null)
 
 const form = reactive({
@@ -277,8 +271,13 @@ function handleKeydown(e: KeyboardEvent) {
   // 请求仍在后台继续并落库，用户看不到结果且可能重复提交
   if (e.key === 'Escape') handleOverlayClose()
 }
-onMounted(() => window.addEventListener('keydown', handleKeydown))
+onMounted(() => {
+  if (!props.embedded) window.addEventListener('keydown', handleKeydown)
+})
 onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
+
+// 嵌入式宿主用自己的关闭按钮/Esc 时仍走这道闸门（saving/testing 期间不关）
+defineExpose({ requestClose: handleOverlayClose })
 
 // ARCH-011：端口判据收归 shared/port-core（与 TunnelModal/AccessModal 同源），
 // 夹取的交互形态保留：合法整数直通，非有限/小于下限回落默认 22，超上界钳 65535。
@@ -443,6 +442,30 @@ async function handleSave() {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/* 嵌入统一新建弹窗：骨架由宿主提供，这里只留可滚动正文与页脚 */
+.embed-root {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.modal-dialog.embedded {
+  flex: 1;
+  width: 100%;
+  max-height: none;
+  min-height: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.modal-dialog.embedded .modal-body {
+  flex: 1;
+  min-height: 0;
 }
 
 .modal-header {
@@ -666,41 +689,6 @@ async function handleSave() {
 .form-info svg {
   flex-shrink: 0;
   color: var(--accent-text);
-}
-
-/* 高级选项 */
-.advanced-section {
-  border-top: 1px solid var(--border-subtle);
-  padding-top: 8px;
-}
-
-.advanced-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 12px;
-  font-family: var(--font-sans);
-  padding: 4px 0;
-}
-
-.advanced-toggle:hover {
-  color: var(--text-primary);
-}
-
-.toggle-arrow {
-  transition: transform var(--transition-fast);
-}
-
-.toggle-arrow.expanded {
-  transform: rotate(90deg);
-}
-
-.advanced-body {
-  margin-top: 8px;
 }
 
 .checkbox-row {

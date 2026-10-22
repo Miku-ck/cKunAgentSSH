@@ -33,6 +33,25 @@ export function formatBytesCompact(v: unknown): string | undefined {
 }
 
 /**
+ * 时间戳 → 相对时间（连接列表「最后连接」列）。
+ * now 必须由调用方传入（父级定时 tick）；Date.now() 写在 computed 里不会随
+ * 时间流逝重算，会一直停在渲染那一刻。
+ */
+export function formatRelativeTime(
+  ts: number | null | undefined,
+  now: number,
+  fallback = '从未连接',
+): string {
+  if (!ts) return fallback
+  const diff = now - ts
+  if (diff < 60_000) return '刚刚'
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`
+  if (diff < 30 * 86_400_000) return `${Math.floor(diff / 86_400_000)} 天前`
+  return new Date(ts).toLocaleDateString()
+}
+
+/**
  * 后端时间戳 → Date。
  * 后端统一存 UTC naive 字符串（database._now / compute_next_run 都是 "YYYY-MM-DD HH:MM:SS"），
  * 而 new Date("2026-09-21T07:00:00") 没有时区标记时按【本地时区】解释 —— UTC+8 下
