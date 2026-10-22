@@ -14,7 +14,10 @@ ReAct 决策循环的执行者 — THINK → ACT → OBSERVE → THINK → ... �
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
+from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Optional
 
 from agent.remote_protocol import EXIT_CODE_PREFIX
@@ -34,6 +37,7 @@ from agent.intention import (
 from .contracts import (
     FILE_MUTATION_TOOLS,
     LLMOutput,
+    READONLY_TOOLS,
     ReinDecision,
     ReinPoint,
     RunContext,
@@ -42,6 +46,7 @@ from .contracts import (
     ToolResult,
     TraceEvent,
 )
+from .reins.core import AWAIT_APPROVAL_KEY
 from .telemetry import TelemetryBus
 
 logger = logging.getLogger(__name__)
@@ -135,6 +140,9 @@ class Driver:
         full_reasoning = ""
         iteration = -1  # 默认值，防止 max_iterations=0 时未定义
         max_reached = False
+        # 墙钟打点：WallClockRein（POST_ITERATION）按此计算 run 累计时长。
+        # monotonic 不受系统时钟跳变影响；setdefault 防御续跑场景已带值。
+        ctx.metadata.setdefault("run_started_mono", time.monotonic())
 
         # while 循环（而非 for range）以支持运行时动态调整 max_iterations
         while iteration + 1 < ctx.config.max_iterations:
@@ -197,6 +205,35 @@ class Driver:
                     ),
                 })
 
+            # ── 强制收敛轮（机制式）：最后一轮物理禁工具 ──
+            # 软预警只是劝导，模型仍可能把最后一轮耗在工具调用上。收敛轮把劝导
+            # 升级为机制：call_llm 不传 tools（下方调用点），模型物理上无法调工具，
+            # 输出必然是文本 → 走收尾分支，终态 COMPLETED（而非 loop-else 的
+            # MAX_REACHED）。DynamicBudgetRein 若在 POST_ITERATION 追加了预算，
+            # 下一轮 remaining 重算 > 0，收敛自然顺延到新最后一轮；收敛轮无工具
+            # 调用，工作密度分不再增长，不会再触发追加。
+            forced_convergence = (
+                ctx.config.forced_convergence_enabled and remaining == 0
+            )
+            if forced_convergence:
+                # user 角色（末尾注入的 400 约束，口径见 bridle._build）
+                ctx.messages.append({"role": "user", "content": (
+                    "[系统提示] 本轮是最后一轮，禁止调用任何工具。"
+                    "请只输出：1) 已完成事项与关键结果；2) 未完成部分与原因；"
+                    "3) 风险与建议的下一步。"
+                )})
+                # 复用 state kind（不新增事件类型，避开 harness kind 字面量守卫）
+                # TelemetryBus.emit 不会把事件带回调用方，必须 yield 才进入 run trace
+                converge_ev = TraceEvent(
+                    kind="state",
+                    source="driver",
+                    run_id=ctx.run_id,
+                    iteration=iteration,
+                    payload={"state": "converging"},
+                )
+                await telemetry.emit(converge_ev)
+                yield converge_ev
+
             # ── pre_iteration ──
             pre_decision = await harness.reins.check(ReinPoint.PRE_ITERATION, ctx)
             if pre_decision.intercepted:
@@ -208,8 +245,8 @@ class Driver:
                 await harness.reins.check(ReinPoint.AGENT_FAILED, ctx)
                 break
 
-            # ── Bridle 组装输入 ──
-            messages = harness.bridle.assemble(ctx)
+            # ── Bridle 组装输入（P1 起 async：溢出压缩时生成式摘要需 await）──
+            messages = await harness.bridle.assemble(ctx)
             # 注入 Reins 纠偏消息
             if pre_decision.inject_messages:
                 messages.extend(pre_decision.inject_messages)
@@ -241,7 +278,9 @@ class Driver:
 
             # ── THINK: Stirrups 调 LLM ──
             try:
-                llm_out = await harness.stirrups.call_llm(ctx, messages, tools_schema)
+                # 收敛轮传空工具表：物理禁用工具调用（模型侧无法选择 function）
+                llm_out = await harness.stirrups.call_llm(
+                    ctx, messages, [] if forced_convergence else tools_schema)
             except Exception as e:
                 logger.exception("LLM 调用最终失败 (iteration=%d)", iteration)
                 await ctx.transition(State.FAILED, event="llm_failed")
@@ -262,6 +301,15 @@ class Driver:
 
             # ── post_llm_call ──
             await harness.reins.check(ReinPoint.POST_LLM_CALL, ctx)
+
+            if forced_convergence and llm_out.tool_calls:
+                # 收敛轮幻觉防御：tools=[] 下模型仍可能凭惯性输出 tool_calls，
+                # 物理丢弃按纯文本收尾（空输出由下方 _build_run_summary 兜底）
+                logger.warning(
+                    "收敛轮丢弃幻觉 tool_calls: %d 个 (run=%s, iteration=%d)",
+                    len(llm_out.tool_calls), ctx.run_id, iteration,
+                )
+                llm_out.tool_calls = []
 
             full_content += llm_out.content
             full_reasoning += llm_out.reasoning
@@ -334,6 +382,35 @@ class Driver:
                         ctx.metadata["_goal_self_checked"] = True
                         ctx.messages.append({"role": "user", "content": self_check})
                         continue
+
+                # ── 假完成强校验（CompletionGuard）──
+                # goal 锚只覆盖有 workflow goal 的 run；无 goal 时「宣告完成」的
+                # 唯一凭据是模型自己不调工具了。这里用一次轻量 LLM 裁决把钉扎任务
+                # 原文与最终答案对表（详见 _completion_guard docstring）。
+                guard_bounce, guard_events = await self._completion_guard(
+                    ctx, harness, llm_out.content, iteration,
+                    next_round_budget=iteration + 1 < ctx.config.max_iterations,
+                    intention_level=getattr(getattr(intention, "level", None), "value", ""),
+                )
+                for ev in guard_events:
+                    await telemetry.emit(ev)
+                    yield ev
+                if guard_bounce:
+                    continue
+
+                # 收敛轮兜底：收敛输出为空时，用工具调用日志生成确定性摘要，
+                # 避免用户拿到空结果（口径同 max_reached 分支的 _build_run_summary）
+                if forced_convergence and not full_content.strip():
+                    summary = _build_run_summary(ctx)
+                    if summary:
+                        full_content = summary
+                        yield TraceEvent(
+                            kind="content",
+                            source="driver",
+                            run_id=ctx.run_id,
+                            iteration=max(0, iteration),
+                            payload={"content": summary},
+                        )
                 await ctx.transition(State.COMPLETED, event="done")
                 break
 
@@ -473,174 +550,53 @@ class Driver:
 
         包含 pre_tool_call 拦截、Saddle 执行、post_tool_call 拦截/回滚、
         span 追踪、once 权限清理。
+
+        只读工具并行化（2026-10）：
+        连续 ≥2 个只读观测调用（contracts.READONLY_TOOLS）构成一个并行段 ——
+        段内先串行逐个跑 PRE_TOOL_CALL（append 紧跟检查，ctx.active_tool_call
+        的取值与串行语义逐字一致），再 asyncio.gather 并发执行 Saddle，最后
+        按原始顺序串行做 POST_TOOL_CALL + 审计 + 消息追加。审计链写入顺序与
+        OpenAI「role=tool 紧随 assistant.tool_calls 按序配对」（vLLM 400 红线，
+        见 bridle._split_segments）两条约束都不被破坏。
+        段与段之间严格串行：副作用工具（shell_exec/file_write/...）是天然
+        屏障，[read, write, read] 中 write 前后的 read 不会被交换进同一批。
+        并发安全性依据：ssh2 每次 exec() 开独立 channel（同会话可并发）、
+        bridge_relay 以 req_id→Future 支持并发请求、本地文件读走
+        asyncio.to_thread、JobManager 由 threading.Lock + 逐 job asyncio.Lock
+        保护、Saddle 只读路径不触碰 tool_calls_log。
         """
         # ── ACT: 执行工具 ──
         await ctx.transition(State.ACTING, event="need_tool")
 
-        for tc in llm_out.tool_calls:
-            # 记录到 ctx.tool_calls_log（供 Reins 检查）
-            ctx.tool_calls_log.append({
-                "tool": tc.name,
-                "args": tc.args,
-                "iteration": iteration,
-                "success": None,  # 待执行
-            })
+        calls = llm_out.tool_calls
+        i = 0
+        n = len(calls)
+        while i < n:
+            # 连续只读段划分：≥2 才走并行路径；单条只读与全部副作用工具
+            # 走原串行路径（行为与并行化之前逐字等价）
+            if calls[i].name in READONLY_TOOLS:
+                j = i
+                while j + 1 < n and calls[j + 1].name in READONLY_TOOLS:
+                    j += 1
+                if j > i:
+                    async for ev in self._execute_readonly_segment(
+                        calls[i:j + 1], ctx, harness, telemetry, iteration,
+                    ):
+                        yield ev
+                    i = j + 1
+                    if ctx.metadata.get("force_terminated"):
+                        break
+                    continue
+            async for ev in self._execute_serial_call(
+                calls[i], ctx, harness, telemetry, iteration,
+            ):
+                yield ev
+            i += 1
+            if ctx.metadata.get("force_terminated"):
+                break
 
-            # ── pre_tool_call（Reins 检查）──
-            pre_tool_decision = await harness.reins.check(ReinPoint.PRE_TOOL_CALL, ctx)
-            if pre_tool_decision.intercepted:
-                # 拦截
-                for ev in pre_tool_decision.events:
-                    await telemetry.emit(ev)
-                    yield ev
-                result_text = f"工具调用被拦截: {pre_tool_decision.intercept_reason}"
-                ctx.tool_calls_log[-1]["success"] = False
-                # 被拦截说明是危险命令，priority 标记为 high 供 compress_messages 优先保留
-                ctx.messages.append(harness.bridle.build_tool_result_message(tc.id, result_text, priority="high"))
-                yield TraceEvent(
-                    kind="tool_call_result",
-                    source="reins",
-                    run_id=ctx.run_id,
-                    iteration=iteration,
-                    payload={
-                        "tool": tc.name,
-                        "result": result_text,
-                        "success": False,
-                        "duration_ms": 0,
-                    },
-                )
-                if pre_tool_decision.terminate:
-                    # C-review M6：拦截器要求终止整个 run（如 LoopDetector 第 3
-                    # 次触发）。原实现 continue 继续下一工具调用/迭代，"强制终止"
-                    # 文案与行为不符。这里 transition(FAILED) + 通知主循环 break。
-                    await ctx.transition(State.FAILED, event="force_terminated")
-                    await harness.reins.check(ReinPoint.AGENT_FAILED, ctx)
-                    ctx.metadata["force_terminated"] = True
-                    break
-                continue
-
-            # 审查R2修复：非拦截分支原先整体丢弃 Reins.check 聚合的 events/
-            # inject_messages（core.check 的未拦截透传没人消费）— 澄清答案的
-            # [用户澄清结果] 注入与 clarification_done 事件、LoopDetector 第 1 级
-            # 纠偏全部静默蒸发，用户答完向导后模型仍看不到答案。与
-            # POST_TOOL_CALL 非拦截分支同口径消费。
-            if pre_tool_decision.events or pre_tool_decision.inject_messages:
-                for ev in pre_tool_decision.events:
-                    await telemetry.emit(ev)
-                    yield ev
-                if pre_tool_decision.inject_messages:
-                    ctx.messages.extend(pre_tool_decision.inject_messages)
-
-            # ── 发 tool_call_start ──
-            # H13 修复 A3：push span_id 到栈，供嵌套工具调用的 parent_span_id 追踪
-            ctx.span_stack.append(tc.id)
-            parent_span = ctx.span_stack[-2] if len(ctx.span_stack) >= 2 else ""
-            yield TraceEvent(
-                kind="tool_call_start",
-                source="driver",
-                run_id=ctx.run_id,
-                iteration=iteration,
-                payload={"tool": tc.name, "args": tc.args, "tool_call_id": tc.id},
-                parent_span_id=parent_span,
-            )
-
-            # ── Saddle 执行工具 ──
-            result, undo = await harness.saddle.execute(
-                tc, ctx,
-                auto_rollback=ctx.config.auto_rollback_on_tool_failure,
-            )
-            # 可见终端模式：工具要求把命令交付到可见终端（前端 PTY/SSH）而非
-            # headless 执行。发出 tool_deliver 事件挂起等待前端回传结果，
-            # 跳过正常 post_tool_call / tool_call_result / 消息追加路径。
-            if getattr(result, "pending_delivery", None):
-                async for ev in self._emit_and_await_visible(
-                    ctx, harness, telemetry, result, tc, iteration,
-                ):
-                    yield ev
-                continue
-            ctx.tool_calls_log[-1]["success"] = result.success
-            # ConfidenceMonitor 用输出尾部的 [exit_code=N] 哨兵区分"探针非零
-            # 退出"与"调用真实失败"，只需尾部片段（哨兵在末行，stderr 在前）
-            if not result.success and result.output:
-                ctx.tool_calls_log[-1]["output_tail"] = result.output[-512:]
-            # C-review M7：命令执行完成（审批已放行）→ 移出「等待审批」集合。
-            # 审查R2修复：原实现只在 success=True 时 pop — once 授权在
-            # check_permission 放行时已被消费清零，若随后工具执行失败，旧 sig
-            # 滞留 pending：同命令重试走 is_first=False 分支不再建卡（用户无卡
-            # 可点），注入文案却称"已在界面上请求授权"，空转至 600s 兜底；
-            # 且 pending 内签名永久豁免循环检测。授权既已消费，成败都应出集。
-            self._pop_permission_pending(ctx, tc)
-
-            # ── post_tool_call ──
-            post_tool_decision = await harness.reins.check(ReinPoint.POST_TOOL_CALL, ctx)
-            # H13 修复 B2：补全 intercepted + undo_actions 处理
-            # 原实现只处理 events + inject_messages，未处理 intercepted 和 undo_actions 字段
-            if post_tool_decision.intercepted:
-                # 拦截器要求终止本次工具调用 → 用拦截结果替代 saddle 的 result
-                # 审查修复（P2 E7）：拦截分支漏 await telemetry.emit — 原实现
-                # 只 yield 事件给 Harness 合并流，未写入 TelemetryBus，
-                # 导致 TraceViewer / audit 记录中 POST_TOOL_CALL 拦截事件丢失
-                for ev in post_tool_decision.events:
-                    await telemetry.emit(ev)
-                    yield ev
-                # 执行拦截器声明的 undo_actions（如严重错误时回滚已写入文件）
-                if post_tool_decision.undo_actions:
-                    for action in post_tool_decision.undo_actions:
-                        try:
-                            await action.apply_reverse()
-                        except Exception as e:
-                            logger.warning("POST_TOOL_CALL undo 失败: %s", e)
-                # 构建拦截结果（high 优先级，确保压缩时保留）
-                result = ToolResult(
-                    success=False,
-                    error=post_tool_decision.intercept_reason or "POST_TOOL_CALL 拦截",
-                    priority="high",
-                )
-                ctx.tool_calls_log[-1]["success"] = False
-                if post_tool_decision.inject_messages:
-                    ctx.messages.extend(post_tool_decision.inject_messages)
-            elif post_tool_decision.events or post_tool_decision.inject_messages:
-                # 原有逻辑：发出 events + 注入 messages（不拦截）
-                # 审查修复（P2 E7）：非拦截分支同样漏 await telemetry.emit
-                for ev in post_tool_decision.events:
-                    await telemetry.emit(ev)
-                    yield ev
-                if post_tool_decision.inject_messages:
-                    ctx.messages.extend(post_tool_decision.inject_messages)
-
-            # ── 发 tool_call_result ──
-            if result.success:
-                result_text = result.output
-            else:
-                # H13 修复 C6：使用 Stirrups.build_error_feedback 构建差异化反馈
-                # 按错误类型给 LLM 不同的修复指引（参数错误/权限拦截/瞬时故障/致命错误）
-                from .stirrups import ErrorClassifier, build_error_feedback
-                error_type = ErrorClassifier.classify_tool_error(result.error or "", tc.name)
-                result_text = build_error_feedback(result.error or "", tc.name, error_type)
-                # 工具失败时带回的 output（远程 stderr / 已产生的部分输出）一并回传，
-                # 否则 Agent 只看得到一行 error，只能原样重试
-                if result.output:
-                    result_text += f"\n--- 失败时的部分输出（末尾 2000 字）---\n{result.output[-2000:]}"
-            yield TraceEvent(
-                kind="tool_call_result",
-                source="saddle",
-                run_id=ctx.run_id,
-                iteration=iteration,
-                payload={
-                    "tool": tc.name,
-                    "result": result_text,
-                    "success": result.success,
-                    "duration_ms": result.duration_ms,
-                    "tool_call_id": tc.id,
-                },
-            )
-
-            # 工具结果加入消息历史，透传 priority 供 compress_messages 读取
-            ctx.messages.append(harness.bridle.build_tool_result_message(tc.id, result_text, priority=result.priority))
-
-            # H13 修复 A3：pop span_id（与 tool_call_start 的 push 配对）
-            if ctx.span_stack:
-                ctx.span_stack.pop()
+        # 收尾：清掉「当前调用」指针，避免陈旧值泄漏到本轮之后的检查点
+        ctx.current_tool_call = None
 
         # 注：once 授权不再于每轮迭代末清空（C-review M8：改为 run 开始时
         # 清空 + 消费时移除，消除与审批的时序竞态，见 drive() 开头）
@@ -661,6 +617,416 @@ class Driver:
             payload={"state": "thinking"},
         )
 
+    async def _execute_serial_call(
+        self,
+        tc: ToolCall,
+        ctx: RunContext,
+        harness: "Harness",
+        telemetry: TelemetryBus,
+        iteration: int,
+    ) -> AsyncIterator[TraceEvent]:
+        """串行执行单个工具调用 —— 原 _execute_tool_calls 循环体的逐字搬移。
+
+        副作用工具与单条只读调用走这里：append → PRE → 执行 → POST → 消息
+        全部在本次调用的位置完成，行为与并行化之前逐字等价。
+        唯一结构差异：日志条目改为持有 entry 引用直接写入（不再经
+        tool_calls_log[-1] 间接寻址），取值完全相同、且不再依赖「当前条目
+        恰好是列表末尾」这一位置巧合。
+        """
+        # 记录到 ctx.tool_calls_log（供 Reins 检查）
+        entry: dict[str, Any] = {
+            "tool": tc.name,
+            "args": tc.args,
+            "iteration": iteration,
+            "success": None,  # 待执行
+        }
+        ctx.tool_calls_log.append(entry)
+        ctx.current_tool_call = entry
+
+        # ── pre_tool_call（Reins 检查）──
+        pre_tool_decision = await harness.reins.check(ReinPoint.PRE_TOOL_CALL, ctx)
+        # 审批阻塞（交互式 run）：拦截器发完卡片在这里真的停住，等 grant/deny
+        # 唤醒后重判一次 —— 授权状态是权威，gate/守卫自己给出放行或拒绝结论，
+        # Driver 不复制第二套判定。未启用等待（定时任务）时原样透传。
+        pre_tool_decision, approval_events = await self._await_approval(
+            ctx, harness, pre_tool_decision)
+        if approval_events:
+            # 醒来重判产生的事件在这里发出；清空后下方分支不会二次发同一批
+            for ev in approval_events:
+                await telemetry.emit(ev)
+                yield ev
+            pre_tool_decision.events = []
+        if pre_tool_decision.intercepted:
+            # 拦截
+            for ev in pre_tool_decision.events:
+                await telemetry.emit(ev)
+                yield ev
+            result_text = f"工具调用被拦截: {pre_tool_decision.intercept_reason}"
+            entry["success"] = False
+            # 被拦截说明是危险命令，priority 标记为 high 供 compress_messages 优先保留
+            ctx.messages.append(harness.bridle.build_tool_result_message(tc.id, result_text, priority="high"))
+            yield TraceEvent(
+                kind="tool_call_result",
+                source="reins",
+                run_id=ctx.run_id,
+                iteration=iteration,
+                payload={
+                    "tool": tc.name,
+                    "result": result_text,
+                    "success": False,
+                    "duration_ms": 0,
+                },
+            )
+            if pre_tool_decision.terminate:
+                # C-review M6：拦截器要求终止整个 run（如 LoopDetector 第 3
+                # 次触发）。原实现 continue 继续下一工具调用/迭代，"强制终止"
+                # 文案与行为不符。这里 transition(FAILED) + 通知主循环 break。
+                await ctx.transition(State.FAILED, event="force_terminated")
+                await harness.reins.check(ReinPoint.AGENT_FAILED, ctx)
+                ctx.metadata["force_terminated"] = True
+                return
+            return
+
+        # 审查R2修复：非拦截分支原先整体丢弃 Reins.check 聚合的 events/
+        # inject_messages（core.check 的未拦截透传没人消费）— 澄清答案的
+        # [用户澄清结果] 注入与 clarification_done 事件、LoopDetector 第 1 级
+        # 纠偏全部静默蒸发，用户答完向导后模型仍看不到答案。与
+        # POST_TOOL_CALL 非拦截分支同口径消费。
+        if pre_tool_decision.events or pre_tool_decision.inject_messages:
+            for ev in pre_tool_decision.events:
+                await telemetry.emit(ev)
+                yield ev
+            if pre_tool_decision.inject_messages:
+                ctx.messages.extend(pre_tool_decision.inject_messages)
+
+        # ── 发 tool_call_start ──
+        # H13 修复 A3：push span_id 到栈，供嵌套工具调用的 parent_span_id 追踪
+        ctx.span_stack.append(tc.id)
+        parent_span = ctx.span_stack[-2] if len(ctx.span_stack) >= 2 else ""
+        yield TraceEvent(
+            kind="tool_call_start",
+            source="driver",
+            run_id=ctx.run_id,
+            iteration=iteration,
+            payload={"tool": tc.name, "args": tc.args, "tool_call_id": tc.id},
+            parent_span_id=parent_span,
+        )
+
+        # ── Saddle 执行工具 ──
+        result, undo = await harness.saddle.execute(
+            tc, ctx,
+            auto_rollback=ctx.config.auto_rollback_on_tool_failure,
+        )
+        # 可见终端模式：工具要求把命令交付到可见终端（前端 PTY/SSH）而非
+        # headless 执行。发出 tool_deliver 事件挂起等待前端回传结果，
+        # 跳过正常 post_tool_call / tool_call_result / 消息追加路径。
+        if getattr(result, "pending_delivery", None):
+            async for ev in self._emit_and_await_visible(
+                ctx, harness, telemetry, result, tc, iteration,
+            ):
+                yield ev
+            return
+        entry["success"] = result.success
+        # ConfidenceMonitor 用输出尾部的 [exit_code=N] 哨兵区分"探针非零
+        # 退出"与"调用真实失败"，只需尾部片段（哨兵在末行，stderr 在前）
+        if not result.success and result.output:
+            entry["output_tail"] = result.output[-512:]
+        # C-review M7：命令执行完成（审批已放行）→ 移出「等待审批」集合。
+        # 审查R2修复：原实现只在 success=True 时 pop — once 授权在
+        # check_permission 放行时已被消费清零，若随后工具执行失败，旧 sig
+        # 滞留 pending：同命令重试走 is_first=False 分支不再建卡（用户无卡
+        # 可点），注入文案却称"已在界面上请求授权"，空转至 600s 兜底；
+        # 且 pending 内签名永久豁免循环检测。授权既已消费，成败都应出集。
+        self._pop_permission_pending(ctx, tc)
+
+        # ── post_tool_call ──
+        post_tool_decision = await harness.reins.check(ReinPoint.POST_TOOL_CALL, ctx)
+        # H13 修复 B2：补全 intercepted + undo_actions 处理
+        # 原实现只处理 events + inject_messages，未处理 intercepted 和 undo_actions 字段
+        if post_tool_decision.intercepted:
+            # 拦截器要求终止本次工具调用 → 用拦截结果替代 saddle 的 result
+            # 审查修复（P2 E7）：拦截分支漏 await telemetry.emit — 原实现
+            # 只 yield 事件给 Harness 合并流，未写入 TelemetryBus，
+            # 导致 TraceViewer / audit 记录中 POST_TOOL_CALL 拦截事件丢失
+            for ev in post_tool_decision.events:
+                await telemetry.emit(ev)
+                yield ev
+            # 执行拦截器声明的 undo_actions（如严重错误时回滚已写入文件）
+            if post_tool_decision.undo_actions:
+                for action in post_tool_decision.undo_actions:
+                    try:
+                        await action.apply_reverse()
+                    except Exception as e:
+                        logger.warning("POST_TOOL_CALL undo 失败: %s", e)
+            # 构建拦截结果（high 优先级，确保压缩时保留）
+            result = ToolResult(
+                success=False,
+                error=post_tool_decision.intercept_reason or "POST_TOOL_CALL 拦截",
+                priority="high",
+            )
+            entry["success"] = False
+            if post_tool_decision.inject_messages:
+                ctx.messages.extend(post_tool_decision.inject_messages)
+        elif post_tool_decision.events or post_tool_decision.inject_messages:
+            # 原有逻辑：发出 events + 注入 messages（不拦截）
+            # 审查修复（P2 E7）：非拦截分支同样漏 await telemetry.emit
+            for ev in post_tool_decision.events:
+                await telemetry.emit(ev)
+                yield ev
+            if post_tool_decision.inject_messages:
+                ctx.messages.extend(post_tool_decision.inject_messages)
+
+        # ── 发 tool_call_result ──
+        if result.success:
+            result_text = result.output
+        else:
+            # H13 修复 C6：使用 Stirrups.build_error_feedback 构建差异化反馈
+            # 按错误类型给 LLM 不同的修复指引（参数错误/权限拦截/瞬时故障/致命错误）
+            from .stirrups import ErrorClassifier, build_error_feedback
+            error_type = ErrorClassifier.classify_tool_error(result.error or "", tc.name)
+            result_text = build_error_feedback(result.error or "", tc.name, error_type)
+            # 工具失败时带回的 output（远程 stderr / 已产生的部分输出）一并回传，
+            # 否则 Agent 只看得到一行 error，只能原样重试
+            if result.output:
+                result_text += f"\n--- 失败时的部分输出（末尾 2000 字）---\n{result.output[-2000:]}"
+        yield TraceEvent(
+            kind="tool_call_result",
+            source="saddle",
+            run_id=ctx.run_id,
+            iteration=iteration,
+            payload={
+                "tool": tc.name,
+                "result": result_text,
+                "success": result.success,
+                "duration_ms": result.duration_ms,
+                "tool_call_id": tc.id,
+            },
+        )
+
+        # 工具结果加入消息历史，透传 priority 供 compress_messages 读取
+        ctx.messages.append(harness.bridle.build_tool_result_message(tc.id, result_text, priority=result.priority))
+
+        # H13 修复 A3：pop span_id（与 tool_call_start 的 push 配对）
+        if ctx.span_stack:
+            ctx.span_stack.pop()
+
+    async def _execute_readonly_segment(
+        self,
+        seg: list[ToolCall],
+        ctx: RunContext,
+        harness: "Harness",
+        telemetry: TelemetryBus,
+        iteration: int,
+    ) -> AsyncIterator[TraceEvent]:
+        """并行执行一段连续的只读观测调用（len ≥ 2，成员均属 READONLY_TOOLS）。
+
+        三阶段流水线：
+        A. 串行逐个 append + PRE_TOOL_CALL —— append 紧跟检查，
+           ctx.active_tool_call 的取值与串行路径逐字一致；被拦截的成员
+           不进执行批（其消息顺延到 C 阶段按序落位），terminate 成员截断
+           其后所有成员（与串行 break 语义一致）。
+        B. asyncio.gather 并发执行 Saddle —— 逐调用隔离异常：失败转成带
+           异常文本的 ToolResult 诚实上报，不放大为整段失败。
+        C. 按原始顺序串行提交：PRE 注入落位 → POST_TOOL_CALL（审计链按
+           调用顺序写入）→ tool_call_result → 消息追加（role=tool 与
+           assistant.tool_calls 按序配对）。
+        段内 PRE 注入顺延到 C 阶段才进 ctx.messages：串行路径下注入与本调用
+        的工具结果之间没有其他调用的消息，顺延后相对顺序逐字不变；若在
+        A 阶段立即落位，注入会插到前一个成员的结果之前，破坏消息顺序。
+        """
+        @dataclass
+        class _Member:
+            tc: ToolCall
+            entry: dict[str, Any]
+            intercepted: bool = False
+            intercept_text: str = ""
+            terminate: bool = False
+            pre_injects: list[dict[str, str]] = field(default_factory=list)
+
+        members: list[_Member] = []
+        # H13 span 语义保持：串行路径下每个调用 push 时栈深恒为 1（前一个已
+        # 配对 pop），parent_span 恒等于「本批入栈前的栈顶」。段内一次性 push
+        # 全部通过成员、C 阶段配对 pop，parent_span 取值与串行逐字一致。
+        seg_parent = ctx.span_stack[-1] if ctx.span_stack else ""
+
+        # ── A. 串行 PRE 检查（append 紧跟检查）──
+        for tc in seg:
+            entry: dict[str, Any] = {
+                "tool": tc.name,
+                "args": tc.args,
+                "iteration": iteration,
+                "success": None,
+            }
+            ctx.tool_calls_log.append(entry)
+            ctx.current_tool_call = entry
+
+            pre_tool_decision = await harness.reins.check(ReinPoint.PRE_TOOL_CALL, ctx)
+            # 审批阻塞：与串行路径同口径 —— 该成员需要审批时真的停住等裁决，
+            # 醒来重判；阻塞发生在 A 阶段，其后成员的 PRE 检查顺延到裁决之后
+            # （与串行「审批卡住后面全部」的时序一致）。
+            pre_tool_decision, approval_events = await self._await_approval(
+                ctx, harness, pre_tool_decision)
+            if approval_events:
+                for ev in approval_events:
+                    await telemetry.emit(ev)
+                    yield ev
+                pre_tool_decision.events = []
+            m = _Member(tc=tc, entry=entry)
+            if pre_tool_decision.intercepted:
+                for ev in pre_tool_decision.events:
+                    await telemetry.emit(ev)
+                    yield ev
+                m.intercepted = True
+                m.intercept_text = f"工具调用被拦截: {pre_tool_decision.intercept_reason}"
+                entry["success"] = False
+                members.append(m)
+                if pre_tool_decision.terminate:
+                    # 与串行 break 语义一致：其后成员不再登记、不再执行、
+                    # 不产生任何消息（LLM 只看到已提交成员与终止提示）
+                    m.terminate = True
+                    break
+                continue
+
+            if pre_tool_decision.events:
+                for ev in pre_tool_decision.events:
+                    await telemetry.emit(ev)
+                    yield ev
+            m.pre_injects = list(pre_tool_decision.inject_messages or [])
+
+            ctx.span_stack.append(tc.id)
+            yield TraceEvent(
+                kind="tool_call_start",
+                source="driver",
+                run_id=ctx.run_id,
+                iteration=iteration,
+                payload={"tool": tc.name, "args": tc.args, "tool_call_id": tc.id},
+                parent_span_id=seg_parent,
+            )
+            members.append(m)
+
+        # ── B. 并发执行（仅通过 PRE 的成员）──
+        results: dict[int, ToolResult] = {}
+        executing = [(idx, m) for idx, m in enumerate(members) if not m.intercepted]
+        if executing:
+            async def _run_one(idx: int, m: "_Member") -> None:
+                try:
+                    result, _undo = await harness.saddle.execute(
+                        m.tc, ctx,
+                        auto_rollback=ctx.config.auto_rollback_on_tool_failure,
+                    )
+                except Exception as e:
+                    # 逐调用隔离：并行段内一个调用的异常不放大为整段失败；
+                    # 异常文本诚实上报（LLM 看得到真实原因并自行重试/换路）
+                    logger.exception("并行只读调用 %s 执行异常", m.tc.name)
+                    result = ToolResult(success=False, error=str(e), priority="high")
+                results[idx] = result
+
+            await asyncio.gather(*[_run_one(idx, m) for idx, m in executing])
+
+        # ── C. 按原始顺序串行提交 ──
+        for idx, m in enumerate(members):
+            ctx.current_tool_call = m.entry
+            if m.intercepted:
+                # 与串行拦截分支同口径：拦截决策的 inject_messages 不消费
+                # （串行路径同样丢弃），只落拦截结果消息 + tool_call_result
+                ctx.messages.append(harness.bridle.build_tool_result_message(
+                    m.tc.id, m.intercept_text, priority="high"))
+                yield TraceEvent(
+                    kind="tool_call_result",
+                    source="reins",
+                    run_id=ctx.run_id,
+                    iteration=iteration,
+                    payload={
+                        "tool": m.tc.name,
+                        "result": m.intercept_text,
+                        "success": False,
+                        "duration_ms": 0,
+                    },
+                )
+                if m.terminate:
+                    await ctx.transition(State.FAILED, event="force_terminated")
+                    await harness.reins.check(ReinPoint.AGENT_FAILED, ctx)
+                    ctx.metadata["force_terminated"] = True
+                    break
+                continue
+
+            result = results.get(idx)
+            if result is None:  # 防御：B 阶段未产出（理论不可达）
+                result = ToolResult(success=False, error="并行执行未返回结果", priority="high")
+            # 只读观测工具不产生 pending_delivery（唯一产生点 shell_exec 不在
+            # READONLY_TOOLS）；若未来有工具违反该契约，在这里显式失败而不是
+            # 静默丢交付 —— 可见终端挂起等待必须走串行路径。
+            if getattr(result, "pending_delivery", None):
+                logger.error(
+                    "只读工具 %s 返回 pending_delivery（契约违规），按失败处理", m.tc.name)
+                result = ToolResult(
+                    success=False,
+                    error="只读工具不允许交付可见终端（并行段不支持 pending_delivery）",
+                    priority="high",
+                )
+            m.entry["success"] = result.success
+            if not result.success and result.output:
+                m.entry["output_tail"] = result.output[-512:]
+            self._pop_permission_pending(ctx, m.tc)
+
+            # PRE 注入按原顺序落位（先于本调用的工具结果，与串行一致）
+            if m.pre_injects:
+                ctx.messages.extend(m.pre_injects)
+
+            post_tool_decision = await harness.reins.check(ReinPoint.POST_TOOL_CALL, ctx)
+            if post_tool_decision.intercepted:
+                for ev in post_tool_decision.events:
+                    await telemetry.emit(ev)
+                    yield ev
+                if post_tool_decision.undo_actions:
+                    for action in post_tool_decision.undo_actions:
+                        try:
+                            await action.apply_reverse()
+                        except Exception as e:
+                            logger.warning("POST_TOOL_CALL undo 失败: %s", e)
+                result = ToolResult(
+                    success=False,
+                    error=post_tool_decision.intercept_reason or "POST_TOOL_CALL 拦截",
+                    priority="high",
+                )
+                m.entry["success"] = False
+                if post_tool_decision.inject_messages:
+                    ctx.messages.extend(post_tool_decision.inject_messages)
+            elif post_tool_decision.events or post_tool_decision.inject_messages:
+                for ev in post_tool_decision.events:
+                    await telemetry.emit(ev)
+                    yield ev
+                if post_tool_decision.inject_messages:
+                    ctx.messages.extend(post_tool_decision.inject_messages)
+
+            if result.success:
+                result_text = result.output
+            else:
+                from .stirrups import ErrorClassifier, build_error_feedback
+                error_type = ErrorClassifier.classify_tool_error(result.error or "", m.tc.name)
+                result_text = build_error_feedback(result.error or "", m.tc.name, error_type)
+                if result.output:
+                    result_text += f"\n--- 失败时的部分输出（末尾 2000 字）---\n{result.output[-2000:]}"
+            yield TraceEvent(
+                kind="tool_call_result",
+                source="saddle",
+                run_id=ctx.run_id,
+                iteration=iteration,
+                payload={
+                    "tool": m.tc.name,
+                    "result": result_text,
+                    "success": result.success,
+                    "duration_ms": result.duration_ms,
+                    "tool_call_id": m.tc.id,
+                },
+            )
+            ctx.messages.append(harness.bridle.build_tool_result_message(
+                m.tc.id, result_text, priority=result.priority))
+            # 配对 pop（A 阶段为通过成员 push 的 span）
+            if ctx.span_stack:
+                ctx.span_stack.pop()
+
+        ctx.current_tool_call = None
     async def _emit_and_await_visible(
         self,
         ctx: RunContext,
@@ -773,6 +1139,189 @@ class Driver:
         except Exception:
             pass
 
+    async def _await_approval(
+        self,
+        ctx: RunContext,
+        harness: "Harness",
+        decision: ReinDecision,
+    ) -> tuple[ReinDecision, list[TraceEvent]]:
+        """在审批点真的停住：等 grant / deny 唤醒后重判一次。
+
+        为什么必须停：拦截器发完 permission_needed 只 return intercepted，Driver 把
+        「工具调用被拦截」当结果回给模型就 continue —— 用户还在看卡片，run 已经把
+        同一轮剩下的工具、后面几轮全跑完了。审批在物理上存在，在时序上不起作用。
+
+        为什么醒来要重判而不是另写一套：授权状态（permanent / session / once /
+        拒绝标记）此刻已是权威，让 gate 和守卫自己给出「放行」或「曾被用户拒绝」，
+        Driver 不复制第二套判定 —— 两套判定必然漂移。
+
+        只在交互式 run 启用（AWAIT_APPROVAL_KEY，routes 层置位）：定时任务没有
+        可点卡片的人，等下去就是挂死。
+
+        Returns: (生效的决策, 需要在调用方发出的追加事件)。未发生等待时原样返回。
+        """
+        if not ctx.metadata.get(AWAIT_APPROVAL_KEY):
+            return decision, []
+        key = decision.approval_key
+        if not key:
+            return decision, []
+
+        from .reins.approval_wait import ALLOWED, DENIED
+        from .reins.approval_wait import wait as wait_verdict
+        from .reins.core import approval_fallback_seconds, tool_call_signature
+
+        # 并行段内 [-1] 已不是当前条目 → 走 active_tool_call（调用方已指向本条目）
+        last = ctx.active_tool_call or {}
+        tool = str(last.get("tool") or "")
+        sig = tool_call_signature({"tool": tool, "args": last.get("args") or {}})
+        # 同一签名只等一次：醒来重判若仍未放行（授权键对不上、批的是另一台主机），
+        # 再等就是永久挂起 —— 把决策交回模型，让它看到「被拦截」并换方案。
+        waited = ctx.metadata.setdefault("approval_waited", set())
+        if sig in waited:
+            return decision, []
+        waited.add(sig)
+
+        verdict = await wait_verdict(ctx.run_id, key, tool, approval_fallback_seconds())
+        if verdict not in (ALLOWED, DENIED):
+            # 兜底超时 / 等待项被回收 → 落回原有拦截路径（卡片保留待办，
+            # 模型重发时由守卫发 permission_expired）
+            return decision, []
+
+        logger.info(
+            "审批裁决到达 run=%s key=%s verdict=%s，重判一次 PRE_TOOL_CALL",
+            ctx.run_id, key, verdict,
+        )
+        redone = await harness.reins.check(ReinPoint.PRE_TOOL_CALL, ctx)
+        if verdict == ALLOWED and redone.intercepted:
+            # 批了却仍拦：批的键和这次调用的键不是一把（command 归一化差异、
+            # 主机作用域不匹配……）。不能把模型晾在「已请求授权」上反复重试 ——
+            # 把签名移出审批豁免，循环检测才能接管。
+            pending = ctx.metadata.get("permission_pending")
+            if isinstance(pending, dict):
+                pending.pop(sig, None)
+            redone.intercept_reason = (
+                f"{redone.intercept_reason}（用户已授权，但授权范围未覆盖本次调用）")
+        return redone, list(redone.events)
+
+    async def _completion_guard(
+        self,
+        ctx: RunContext,
+        harness: "Harness",
+        final_text: str,
+        iteration: int,
+        next_round_budget: bool,
+        intention_level: str,
+    ) -> tuple[bool, list[TraceEvent]]:
+        """
+        假完成强校验 — 只覆盖无 workflow goal 的 run。
+
+        有 goal 的 run 走上方 goal 自检锚（_goal_self_checked）。无 goal 时，
+        模型宣告完成的唯一凭据是「它自己不调工具了」——答非所问也会被放行。
+        这里用一次轻量 LLM 裁决把钉扎任务原文与最终答案对表：
+
+        - FAIL → 注入纠偏 user 消息 + return True（调用方 continue 续跑）；
+          每 run 至多一次（metadata 标记），第二次放行防死循环，且续跑天然受
+          max_iterations / 成本熔断 / 墙钟三重兜底
+        - PASS / 超时 / 异常 / 解析失败 → fail-open 放行（绝不阻断收尾，
+          口径同生成式摘要静默降级）
+
+        触发门槛：任务非空、意图等级 ≥ moderate（trivial/simple 不值得多花
+        一次调用）、还有下一轮预算（最后一轮 continue 会落 loop-else 误判
+        MAX_REACHED，同 goal 自检锚的教训）、最终答案非空。
+        裁决期间临时摘掉 chunk 回调：PASS/FAIL 片段不得流进用户对话。
+        """
+        if not ctx.config.completion_guard_enabled:
+            return False, []
+        if not next_round_budget:
+            return False, []
+        if not final_text or not final_text.strip():
+            return False, []
+        if ctx.metadata.get("_completion_guarded"):
+            return False, []
+        task_text = (ctx.task or "").strip()
+        if not task_text:
+            return False, []
+        if intention_level not in ("moderate", "complex"):
+            return False, []
+        try:
+            # 置位在裁决前：异常/重入下宁可少校验一次，不可双发注入
+            ctx.metadata["_completion_guarded"] = True
+            return await self._completion_guard_judge(
+                ctx, harness, task_text, final_text, iteration)
+        except Exception as e:  # noqa: BLE001 — fail-open 铁律
+            logger.warning("CompletionGuard 异常，fail-open 放行: %s", e)
+            return False, []
+
+    async def _completion_guard_judge(
+        self,
+        ctx: RunContext,
+        harness: "Harness",
+        task_text: str,
+        final_text: str,
+        iteration: int,
+    ) -> tuple[bool, list[TraceEvent]]:
+        """执行裁决调用并解析结果（PASS 放行 / FAIL 纠偏续跑 / 异常向上抛）"""
+        client = harness.stirrups.llm_client
+        prompt = (
+            "你是任务完成度裁决器。判断下面的「最终答案」是否实质覆盖了「原始任务」"
+            "的全部核心要求。宁可保守：只答了一部分、答非所问、把计划当结果交付，"
+            "都算未完成。输出格式：第一行只写 PASS 或 FAIL；若 FAIL，"
+            "第二行用一句话说明缺了什么。\n\n"
+            f"[原始任务]\n{task_text[:2000]}\n\n"
+            f"[最终答案]\n{final_text[:4000]}"
+        )
+        prev_cb = getattr(client, "_on_chunk", None)
+        setattr(client, "_on_chunk", None)  # 裁决片段不得流入用户对话
+        try:
+            out = await asyncio.wait_for(
+                client.call(
+                    messages=[{"role": "user", "content": prompt}],
+                    tools=[],
+                    model=ctx.llm_model,
+                    temperature=0.1,
+                    max_tokens=64,
+                    enable_thinking=False,
+                ),
+                timeout=ctx.config.completion_guard_timeout_s,
+            )
+        finally:
+            setattr(client, "_on_chunk", prev_cb)
+        raw = (getattr(out, "content", "") or "").strip()
+        if not raw:
+            return False, []
+        lines = raw.splitlines()
+        verdict = lines[0].strip().upper()
+        if verdict.startswith("PASS"):
+            return False, []
+        if not verdict.startswith("FAIL"):
+            # 输出不合约定 → fail-open（口径同 auto_approve 的 _parse_verdict）
+            logger.warning("CompletionGuard 输出不合约定，fail-open 放行: %r", verdict)
+            return False, []
+        gap = lines[1].strip() if len(lines) > 1 else ""
+        reason = gap or "最终答案未完整覆盖任务要求"
+        ctx.messages.append({
+            "role": "user",
+            "content": (
+                f"[系统拦截] 完成度校验未通过：{reason}。"
+                "请补充缺失部分后重新给出完整结果；若确有客观限制无法完成，"
+                "请在结果中明确说明已完成与未完成的边界。"
+            ),
+        })
+        events = [TraceEvent(
+            kind="warning",
+            source="driver.completion_guard",
+            run_id=ctx.run_id,
+            iteration=max(0, iteration),
+            payload={
+                "message": f"完成度校验未通过，已要求 Agent 补充：{reason[:200]}",
+            },
+        )]
+        logger.info(
+            "CompletionGuard FAIL，注入纠偏续跑 run=%s iteration=%d",
+            ctx.run_id, iteration,
+        )
+        return True, events
+
     async def _finish_visible(
         self,
         ctx: RunContext,
@@ -785,7 +1334,11 @@ class Driver:
         success: bool,
     ) -> TraceEvent:
         """可见终端恢复后收尾：更新日志、追加消息历史、pop span、发 tool_call_result。"""
-        ctx.tool_calls_log[-1]["success"] = success
+        # 走 active_tool_call 而非 [-1]：串行路径下二者等价（调用方已把
+        # current_tool_call 指向本条目），统一后不再依赖位置巧合
+        call_entry = ctx.active_tool_call
+        if call_entry is not None:
+            call_entry["success"] = success
         # S2-02：交付路径与 headless 路径同口径 —— 超时/被拒/注册项丢失/成功
         # 四种收尾都必须把签名移出「等待审批」集。
         self._pop_permission_pending(ctx, tc)

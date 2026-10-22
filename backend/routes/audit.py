@@ -26,6 +26,7 @@ from agent.audit import (
     archive_and_clear,
     count,
     export_rows,
+    health,
     query,
     verify,
 )
@@ -160,6 +161,18 @@ async def audit_verify():
         # 的注释：那是把一次读故障指控成篡改证据，比报空更糟。
         logger.warning("审计链校验失败: %s", e)
         raise HTTPException(status_code=500, detail="审计链校验失败，请稍后重试") from e
+
+
+@router.get("/audit/health")
+async def audit_health():
+    """审计写入健康度（最近一次写入是否失败、累计失败数）。
+
+    为什么需要这个端点：审计写入失败一直是「一行 logger.warning」，而审计页
+    拿不到任何信号 —— 一次磁盘满/锁冲突之后，页面照旧渲染出干净的一条链，
+    用户会以为「确实没发生什么」，而不是「这几小时的证据没写进去」。
+    ok=false 时前端应提示证据链当前不完整。
+    """
+    return health()
 
 
 @router.get("/audit/export")

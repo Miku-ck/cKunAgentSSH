@@ -12,6 +12,12 @@ from . import mstore
 
 logger = logging.getLogger(__name__)
 
+# kind 加权（方案 Phase 1.2）：runbook / 巡检异常报告是操作指南与异常实录，
+# 对排障的价值高于零散事实 —— 同量级融合分下优先注入。boost 取 RRF 相邻名次差
+# （k=60 时约 3e-4）的数倍：足以把同为关键词命中的 runbook 提前若干位，
+# 又不至于压过显著更相关的普通记忆。
+_KIND_BOOST: dict = {"runbook": 0.002, "inspection_report": 0.0015}
+
 
 @dataclass
 class Hit:
@@ -76,6 +82,20 @@ async def search(
         order = [(m, s) for m, s in order if rel.get(m) is None or rel[m] >= min_cosine]
     order = [(m, s) for m, s in order if m not in exclude]
 
+    # 候选行一次取回：kind 加权与最终 Hit 构建共用，避免二次往返
+    rows = await asyncio.to_thread(mstore.get_many, [m for m, _ in order])
+    by_id = {r["id"]: r for r in rows}
+
+    # kind 加权：无 runbook 类候选时分数不变、稳定排序保序，等价于原次序
+    weighted: "list[tuple[str, float]]" = []
+    for m, s in order:
+        row = by_id.get(m)
+        if row is not None:
+            s += _KIND_BOOST.get(row["kind"], 0.0)
+        weighted.append((m, s))
+    weighted.sort(key=lambda kv: kv[1], reverse=True)
+    order = weighted
+
     # 断层截尾：相邻 RRF 相对头部差距 >0.15 处截断，防凑数注入
     cut: "list[str]" = []
     if order:
@@ -87,8 +107,6 @@ async def search(
             if len(cut) >= top_k:
                 break
 
-    rows = await asyncio.to_thread(mstore.get_many, cut)
-    by_id = {r["id"]: r for r in rows}
     hits = []
     for mid in cut:
         r = by_id.get(mid)

@@ -380,7 +380,11 @@ class Saddle:
         if not result.success and not result.pending_delivery and auto_rollback:
             try:
                 await undo.apply_reverse()
-                ctx.undo_stack.pop()  # 已执行，从栈中移除
+                # 按身份移除自己的 undo，而不是 pop 栈顶 —— 只读工具并行段内，
+                # 别的调用可能在自己之后 push，弹栈顶会误删别人的条目
+                # （尤其 file_write/file_edit 的 FileContentUndo 被误删后，
+                # 那个文件就失去了失败回滚能力）。
+                ctx.remove_undo(undo)
             except Exception as e:
                 logger.warning("自动回滚失败: %s", e)
 
@@ -389,8 +393,9 @@ class Saddle:
         # 会 undo_all — 等于在从未执行过的命令上于同一 SSH 会话真实执行反向
         # 命令（mv b a / touch→rm），绕过审批门制造副作用。交付挂起即出栈；
         # 可见终端命令本就不做事后回滚，方向 fail-safe。
-        if result.pending_delivery and ctx.undo_stack and ctx.undo_stack[-1] is undo:
-            ctx.undo_stack.pop()
+        # 同样按身份移除：并行段内 [-1] 未必是自己的 undo。
+        if result.pending_delivery:
+            ctx.remove_undo(undo)
 
         return result, undo
 

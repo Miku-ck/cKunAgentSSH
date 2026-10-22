@@ -3,6 +3,7 @@
 覆盖三层：
   FilesystemGuard 的 permission_needed payload 带 explain/environment/task/
   ssh_session_id/command（卡片可读性）
+  PermissionGate 的工具级卡片同源补 explain（此前是同族里唯一只有英文 message 的那一个）
   SSEAdapter.to_sse_dict 透传这些字段 + permission_explain 事件映射
   message / 审计 result 仍保持原英文 reason（历史审计数据一致性）
 
@@ -14,11 +15,13 @@ import time
 import pytest
 
 import agent.harness.command_explain as explain_mod
+import agent.harness.reins.gate as _gate_mod
 import agent.harness.reins.guards as _guards_mod
 from agent.harness.command_explain import sanitize_llm_explanation
 from agent.harness.contracts import AgentConfig, RunContext
 from agent.harness.reins import FilesystemGuard, PermissionGate
 from agent.harness.telemetry import SSEAdapter, TraceEvent
+from agent.tools.builtin.ops_service import ServiceManageTool
 
 UNKNOWN_CMD = "mycohortool --deploy"  # 未收录命令 → needs_llm，走解释兜底
 CMD = "rm -rf ~/build/out"  # 主目录下递归删除 → dangerous（走审批路径）
@@ -107,6 +110,64 @@ def test_unknown_command_explain_marks_llm_path():
     payload = _card_payload(ctx)
     assert payload["explain_source"] == "static"
     assert "mycohortool" in payload["explain"]
+
+
+# ── 工具级卡片（PermissionGate）────────────────────────────────────────────────
+class _FakeRegistry:
+    def __init__(self, *tools):
+        self._by_name = {t.name: t for t in tools}
+
+    def get(self, name):
+        return self._by_name.get(name)
+
+
+class _FakeSaddle:
+    def __init__(self, registry):
+        self.registry = registry
+
+
+def _tool_gate() -> PermissionGate:
+    gate = PermissionGate(saddle=_FakeSaddle(_FakeRegistry(ServiceManageTool)))
+    gate._confirmed_permanent = set()
+    return gate
+
+
+def _tool_ctx(tool: str, args: dict, environment: str = "test") -> RunContext:
+    ctx = RunContext.new(task="看下 nginx 现在的状态", config=AgentConfig(),
+                         environment=environment)
+    ctx.metadata["saddle"] = _FakeSaddle(_FakeRegistry(ServiceManageTool))
+    ctx.tool_calls_log.append({"tool": tool, "args": args, "iteration": 0, "success": None})
+    return ctx
+
+
+def test_tool_level_card_carries_chinese_explanation(monkeypatch):
+    """工具级审批卡此前只有英文 message「需要用户授权: service_manage (风险: moderate)」——
+    同族卡片里唯一没有中文后果说明的那一个。现在取工具自己声明的 description。"""
+    async def _noop_audit(**kw):
+        return None
+    monkeypatch.setattr(_gate_mod, "append_record_async", _noop_audit)
+    payload = asyncio.run(_tool_gate().check(
+        _tool_ctx("service_manage", {"action": "restart", "name": "nginx"}))).events[0].payload
+    assert payload["explain"] == ServiceManageTool.description
+    assert payload["explain_source"] == "tool"
+    # 英文原文仍在：审计与排查习惯依赖它（与命令级卡片同一条口径）
+    assert "需要用户授权" in payload["message"]
+
+
+def test_tool_description_degrades_quietly(monkeypatch):
+    """注册表缺失/查不到工具：explain 取空串，绝不为展示层把审批链抛断（卡片宁可少一行）"""
+    async def _noop_audit(**kw):
+        return None
+    monkeypatch.setattr(_gate_mod, "append_record_async", _noop_audit)
+    ctx = _tool_ctx("service_manage", {"action": "restart", "name": "nginx"})
+    gate = _tool_gate()
+    assert gate._tool_description("service_manage", ctx) == ServiceManageTool.description
+    # per-run 注册表里查不到该工具 → 空串，不抛
+    ctx.metadata["saddle"] = _FakeSaddle(_FakeRegistry())
+    assert gate._tool_description("service_manage", ctx) == ""
+    # 连 saddle 都没有（未注入的单测环境）→ 同样空串
+    assert PermissionGate()._tool_description("service_manage", ctx) == ""
+    assert PermissionGate()._tool_description("service_manage", None) == ""
 
 
 # ── SSE 透传 ─────────────────────────────────────────────────────────────────

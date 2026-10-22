@@ -83,6 +83,15 @@ _IMPLEMENT_MARKERS = [
 _DEBUG_MARKERS = [
     "修复", "解决", "bug", "报错", "错误", "异常", "不工作", "失败", "为什么",
     "排查", "诊断", "定位", "无法", "不能", "卡住", "卡死",
+    # 事故口语词：CONVERSATION 快速路径曾漏掉「在吗，服务器挂了」——
+    # 「挂了」不在任何词典、无路径无数字 → 判成纯对话 → 工具被物理清空，
+    # 智能体只能对生产故障幻觉应答。宁滥勿缺：多收的代价只是把一条闲聊
+    # 推去调工具，漏收的代价是对着事故说「你好呀」。
+    # down 走词边界匹配（"download"/"shutdown" 不误命中）；500 不收（数字
+    # 太通用，"等 500ms" 会误命中），错误码只收 502/503/504 这类身份强的。
+    "挂了", "宕机", "崩了", "崩溃", "爆了", "连不上", "连接不上",
+    "拒绝连接", "访问被拒绝", "被拒绝", "connection refused",
+    "down", "502", "503", "504",
     "fix", "debug", "error", "exception", "broken", "why ",
 ]
 _RESEARCH_MARKERS = [
@@ -161,9 +170,14 @@ _MULTI_STEP_MARKERS = [
 # 复杂度提升信号：暗示需要全局思考
 # 同上，中文按子串匹配 —— 「系统/所有/全部」在运维提问里是日常词
 # （"查看系统负载""列出所有进程"），命中它们会把只读查询抬成 complex，
-# 白付一轮「只规划不调工具」的开销，故此处只留真正指向全局改造的短语
+# 白付一轮「只规划不调工具」的开销，故此处只留真正指向全局改造的短语。
+# 「整个」「全量」同理已删：「查看整个 /var/log 目录」「统计全量容器」
+# 都是只读批量查询，命中只会把 trivial 抬成 moderate（256→2048 预算）
+# 还附带「每次最多一个工具」纪律 —— 对批量统计是逆优化（渐进收集引导
+# 反而鼓励先概览后批量）。「模块」「架构」「性能优化」保留：指代码结构
+# 时确实是全局改造信号。
 _COMPLEXITY_MARKERS = [
-    "整个", "模块", "架构", "性能优化", "全量",
+    "模块", "架构", "性能优化",
     "整个项目", "整个目录",
 ]
 
@@ -301,6 +315,11 @@ def classify(task: str, max_budget: Optional[int] = None) -> IntentionResult:
         # 纯寒暄仍然留在 CONVERSATION：它既没有查询动词也没有路径。
         or _any_match_wordbounded(_COMPILED_QUERY, text, text_zh)
         or bool(_PATH_PATTERN.search(task))
+        # 数字启发：纯寒暄几乎不含数字，而运维信号（504/100%/端口/大小/时间）
+        # 高频含数字。宁滥勿缺 —— 误伤一条含数字的闲聊只是多走一次普通判定，
+        # 放进一条「在吗 服务器 504 了」则会让 CONVERSATION 快速路径物理清空
+        # 工具表。这是词典之外的第二道兜底：词典永远列不全事故的表述方式。
+        or any(ch.isdigit() for ch in task)
     )
     if (
         task_len < 60
@@ -321,29 +340,38 @@ def classify(task: str, max_budget: Optional[int] = None) -> IntentionResult:
             is_change=False,  # 纯对话不产生副作用
         )
 
-    # ── 1. 任务类型识别（按优先级，先匹配先返回）──
-    # 优先级：refactor > debug > research > implement > modify > query
+    # ── 1. 任务类型识别（命中计分 + 首现位置仲裁）──
+    # 原实现是 elif 优先级链（refactor > debug > ... 先到先得），两组词典各命中
+    # 一次时完全由固定优先级裁决：「评估这次重构的收益」（评估→research、
+    # 重构→refactor）被判成 REFACTOR → complex + 首轮禁工具规划 + is_change
+    # 三重误导。改为统计各组命中条目数，命中多者胜；同分按「在句中先出现的
+    # 优先」—— 运维指令多为动词开头，首动词即主导意图（「评估这次重构的收益」
+    # 评估在前 → research；「重构这个模块并分析影响」重构在前 → refactor）。
+    # 仍同分（同位置几乎不可能）才回落到原优先级序（_TYPE_CANDIDATES 列表序）。
     task_type = TaskType.QUERY
     type_confidence = 0.5
+    best_key = (0, 0)      # (命中数, 负首现位置)，元组取 max
+    best_hits = 0
+    contended = 0          # 有命中的类型数（>1 说明信号暧昧）
+    for candidate_type, compiled in _TYPE_CANDIDATES:
+        hits, first = _match_stats(compiled, text_zh)
+        if hits == 0:
+            continue
+        contended += 1
+        key = (hits, -first)
+        if key > best_key:
+            task_type = candidate_type
+            type_confidence = _TYPE_BASE_CONF[candidate_type]
+            best_key = key
+            best_hits = hits
 
-    if _any_match_wordbounded(_COMPILED_REFACTOR, text, text_zh):
-        task_type = TaskType.REFACTOR
-        type_confidence = 0.9
-    elif _any_match_wordbounded(_COMPILED_DEBUG, text, text_zh):
-        task_type = TaskType.DEBUG
-        type_confidence = 0.85
-    elif _any_match_wordbounded(_COMPILED_RESEARCH, text, text_zh):
-        task_type = TaskType.RESEARCH
-        type_confidence = 0.75
-    elif _any_match_wordbounded(_COMPILED_IMPLEMENT, text, text_zh):
-        task_type = TaskType.IMPLEMENT
-        type_confidence = 0.8
-    elif _any_match_wordbounded(_COMPILED_MODIFY, text, text_zh):
-        task_type = TaskType.MODIFY
-        type_confidence = 0.75
-    elif _any_match_wordbounded(_COMPILED_QUERY, text, text_zh):
-        task_type = TaskType.QUERY
-        type_confidence = 0.8
+    # confidence 真实化：原实现是按分支拍死的静态值，不反映匹配强度。
+    # 命中越多越自信（cap +0.1）；多类型同时命中按冲突数折减，但不低于
+    # 无命中时的默认 0.5 —— 暧昧信号不应表现为高置信。
+    if best_hits > 0:
+        type_confidence = min(0.95, type_confidence + min(0.1, 0.05 * (best_hits - 1)))
+        if contended > 1:
+            type_confidence = max(0.5, type_confidence - 0.05 * (contended - 1))
 
     # ── 2. 复杂度等级识别 ──
     # 起始等级由 task_type 决定，再由其他信号调整
@@ -534,6 +562,29 @@ _COMPILED_SIMPLIFY = _precompile_markers(_SIMPLIFY_MARKERS)
 _COMPILED_MULTI_STEP = _precompile_markers(_MULTI_STEP_MARKERS)
 _COMPILED_COMPLEXITY = _precompile_markers(_COMPLEXITY_MARKERS)
 
+# 任务类型候选表：命中计分制使用。列表顺序即「同分且同首现位置」时的
+# 回落优先级（与改造前的 elif 链一致：refactor > debug > research >
+# implement > modify > query）。
+_TYPE_CANDIDATES: tuple[tuple[TaskType, tuple[_PreCompiled, ...]], ...] = (
+    (TaskType.REFACTOR, _COMPILED_REFACTOR),
+    (TaskType.DEBUG, _COMPILED_DEBUG),
+    (TaskType.RESEARCH, _COMPILED_RESEARCH),
+    (TaskType.IMPLEMENT, _COMPILED_IMPLEMENT),
+    (TaskType.MODIFY, _COMPILED_MODIFY),
+    (TaskType.QUERY, _COMPILED_QUERY),
+)
+
+# 各类型的基础置信度（沿用原 elif 链拍定的档位；classify 会再按命中数
+# 加成、按类型冲突数折减，见 classify 第 1 步）
+_TYPE_BASE_CONF: dict[TaskType, float] = {
+    TaskType.REFACTOR: 0.9,
+    TaskType.DEBUG: 0.85,
+    TaskType.RESEARCH: 0.75,
+    TaskType.IMPLEMENT: 0.8,
+    TaskType.MODIFY: 0.75,
+    TaskType.QUERY: 0.8,
+}
+
 
 def _any_match_wordbounded(
     precompiled: tuple[_PreCompiled, ...],
@@ -562,6 +613,44 @@ def _any_match_wordbounded(
             if compiled.search(text):
                 return True
     return False
+
+
+def _match_stats(
+    precompiled: tuple[_PreCompiled, ...],
+    search_text: str,
+) -> tuple[int, int]:
+    """命中计分版的 _any_match_wordbounded（类型判定用）。
+
+    返回 (命中条目数, 最早命中位置)。无命中返回 (0, -1)。
+
+    只在原文（search_text）上匹配：word 条目的 pattern 编译时已带
+    re.IGNORECASE，lower() 预处理是冗余的；而 lower 对个别 Unicode 字符
+    会改变长度（'İ'.lower() 长 +1），若 word 条目在 lower 文本、中文条目
+    在原文上各测位置，偏移可能错位 —— 首现位置仲裁会拿错赢家。统一原文
+    让位置严格同源。bool 语义的 _any_match_wordbounded 无位置比较需求，
+    保持既有实现不动。
+
+    与 _any_match 的分工：后者是 bool 语义且短路（change/对话门控等
+    只要一个命中即成立），前者必须全量遍历拿计数与首现位置。
+    """
+    if not search_text:
+        return 0, -1
+    count = 0
+    first = -1
+    for is_word, compiled, is_substr in precompiled:
+        # 与 _any_match_wordbounded 同构：子串条目的 compiled 是转义字符串
+        # （可带 flags），word 条目是已编译 Pattern（不能再传 flags）
+        if is_substr:
+            m = re.search(compiled, search_text, re.IGNORECASE)
+        else:
+            m = compiled.search(search_text)
+        if m:
+            count += 1
+            if first < 0 or m.start() < first:
+                first = m.start()
+    if count == 0:
+        return 0, -1
+    return count, first
 
 
 def _decrease_level(level: IntentionLevel) -> IntentionLevel:
@@ -689,7 +778,15 @@ def reclassify(
     # ── 升级信号 ──
     # 连续失败 ≥ 3 次：任务比预期复杂
     if recent_failures >= 3 and level in (IntentionLevel.TRIVIAL, IntentionLevel.SIMPLE):
-        level = IntentionLevel.MODERATE
+        # 初始类型是 QUERY（静态文本判成只读查询）却连续失败，大概率实际在
+        # 排障 —— 直接升 DEBUG 档（假设-验证引导 + 1024 预算），而非 moderate
+        # 的「多步骤实现」引导：那是给有明确步骤的实现任务的，对排障是误导。
+        # 非 QUERY（写/重构类）保持升 MODERATE 的既有语义。task_type 两种情况
+        # 都保持透传 —— 工具结果不改变任务性质（is_change 口径与既有注释一致）。
+        if original.task_type == TaskType.QUERY:
+            level = IntentionLevel.DEBUG
+        else:
+            level = IntentionLevel.MODERATE
         budget = effective_budget[level]
         guide = _LEVEL_GUIDE[level]
         confidence = max(confidence - 0.1, 0.5)

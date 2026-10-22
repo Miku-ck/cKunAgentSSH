@@ -18,6 +18,7 @@ from .core import (
     _audit_target_id,
     _audit_target_type,
     _perm_pending,
+    _target_host,
     approval_fallback_seconds,
     command_from_args,
     extract_bound_command,
@@ -48,8 +49,10 @@ class FilesystemGuard:
         if not ctx.tool_calls_log:
             return ReinDecision()
 
-        # 取最近一次工具调用（Driver 在 PRE_TOOL_CALL 时已记录）
-        last = ctx.tool_calls_log[-1] if ctx.tool_calls_log else None
+        # 取最近一次工具调用（Driver 在 PRE_TOOL_CALL 时已记录）。
+        # 并行段内 [-1] 已不是当前条目 → 统一走 ctx.active_tool_call
+        # （未显式设置时回退 [-1]，串行语义逐字不变）。
+        last = ctx.active_tool_call
         if not last:
             return ReinDecision()
 
@@ -134,7 +137,7 @@ class FilesystemGuard:
                 env = _audit_environment(ctx)
                 if env == "prod":
                     if not self.permission_gate.is_permanently_allowed(
-                            tool, args, bound_command=bound):
+                            tool, args, bound_command=bound, host=_target_host(ctx)):
                         await append_record_async(
                             action=tool, conclusion="denied",
                             run_id=ctx.run_id, iteration=ctx.iteration,
@@ -173,7 +176,8 @@ class FilesystemGuard:
                     # 问题 1 改进：同时传入 run_id 以支持 once 作用域隔离
                     allowed = self.permission_gate.check_permission(
                         tool, args, risk="dangerous", conversation_id=ctx.conversation_id,
-                        run_id=ctx.run_id, bound_command=bound)
+                        run_id=ctx.run_id, bound_command=bound,
+                        host=_target_host(ctx))
                     if not allowed:
                         # 自动审批（permission_mode="auto"）：弹卡前先让模型裁决一次，
                         # ALLOW 放行 / 其余照旧弹卡（fail-closed，见 auto_approve 模块）。
@@ -340,6 +344,12 @@ class FilesystemGuard:
                                     "请重新发起完全相同的命令（授权后会被放行），或改用更安全的替代方案。"
                                 ),
                             }],
+                            # 卡片已弹出 → 本次调用要等人。Driver 拿这把键登记等待项，
+                            # grant / deny 端点算出同一把键（都是 _grant_key）把它唤醒。
+                            # 重发（is_first=False，无新卡片）同样带上：同一张卡片的
+                            # 等待项就是同一把键，重复唤醒无害。
+                            approval_key=self.permission_gate.approval_key_for_call(
+                                tool, args, bound),
                         )
             # safe → 放行
 
@@ -358,9 +368,9 @@ class AuditLogger:
     priority: int = field(default=10, init=False)
 
     async def check(self, ctx: RunContext) -> ReinDecision:
-        if not ctx.tool_calls_log:
+        last = ctx.active_tool_call
+        if last is None:
             return ReinDecision()
-        last = ctx.tool_calls_log[-1]
         logger.info(
             "AUDIT [%s] iter=%d tool=%s success=%s",
             ctx.run_id, ctx.iteration, last.get("tool", ""), last.get("success"),

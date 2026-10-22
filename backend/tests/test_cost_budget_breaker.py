@@ -121,7 +121,7 @@ class _NoopTelemetry:
 
 
 class _StubBridle:
-    def assemble(self, ctx):
+    async def assemble(self, ctx):
         return list(ctx.messages)
 
     def build_tool_result_message(self, tc_id, text, priority="normal"):
@@ -197,11 +197,15 @@ def test_driver_cost_breaker_terminates_run():
 
 
 def test_driver_within_budget_runs_to_completion():
-    """预算内 run 不受影响（跑满 max_iterations 正常终止）"""
+    """预算内 run 不受影响（跑满 max_iterations 正常终止）
+
+    强制收敛轮（Phase 2）后，最后一轮物理禁工具：stub 每轮都返回 tool_calls，
+    最后一轮的幻觉调用会被丢弃并走收尾分支 → 终态 COMPLETED（不再是 MAX_REACHED）。
+    """
     ctx = _ctx(AgentConfig(max_iterations=3, enable_intention_guide=False),
                _FakeTracker(tokens=1000, cost=0.001))
     harness = _StubHarness(ctx.metadata["cost_tracker"], CostBudgetRein())
     events = asyncio.run(_collect(harness, ctx))
-    assert ctx.state == State.MAX_REACHED, f"预算内应跑满步数，实际 {ctx.state}"
+    assert ctx.state == State.COMPLETED, f"预算内应跑满步数，实际 {ctx.state}"
     done = [e for e in events if e.kind == "done"]
     assert done and done[-1].payload.get("iterations") == 3

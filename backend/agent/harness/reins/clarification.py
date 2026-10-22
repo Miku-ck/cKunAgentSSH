@@ -28,9 +28,10 @@ logger = logging.getLogger(__name__)
 
 def _mark_pending_sig(ctx: RunContext) -> None:
     """审查R2修复：把等待中的工具调用签名登记给 LoopDetector 豁免。"""
-    if ctx.tool_calls_log:
+    tc = ctx.active_tool_call
+    if tc is not None:
         ctx.metadata.setdefault("clarification_pending", set()).add(
-            tool_call_signature(ctx.tool_calls_log[-1]))
+            tool_call_signature(tc))
 
 # 澄清向导 — 全局 pending 存储（供 routes 层写入用户回答）
 # ──────────────────────────────────────────────────────────────────────────────
@@ -431,13 +432,13 @@ class ClarificationInterceptor:
     priority: int = 7
 
     async def check(self, ctx: RunContext) -> ReinDecision:
-        if not ctx.tool_calls_log:
+        tc = ctx.active_tool_call
+        if tc is None:
             return ReinDecision()
 
         # P1-6: 每轮先回收过期澄清（O(n) 小字典，n≤128）
         _purge_expired_clarifications()
 
-        tc = ctx.tool_calls_log[-1]
         run_id = ctx.run_id
         tool = tc.get("tool", "")
 

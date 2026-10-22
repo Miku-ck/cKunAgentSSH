@@ -11,7 +11,10 @@ AuditEngine — 追加式、链式签名防篡改的运维审计
 - 追加写（append-only）：本模块不提供 UPDATE/DELETE 审计记录的接口；
   即使直接操纵 SQLite 也会破坏 hash 链而被 verify() 检出。
 - 单条写入使用事务 + BEGIN IMMEDIATE 串行化，避免并发下链式 hash 竞态。
-- 审计失败不阻塞 Agent：append 内部 try/except，写库异常仅记 warning。
+- 审计失败默认不阻塞 Agent：append 内部 try/except，写库异常仅记 warning，
+  并把失败计入 health() 快照（原实现只写一行日志，丢失是静默的）。
+- 但「授权类」决策必须 write-ahead：调用方传 critical=True 时写失败会抛
+  AuditWriteError，让授权/放行**不落地**。理由见 AuditWriteError 的注释。
 """
 from __future__ import annotations
 
@@ -29,6 +32,70 @@ logger = logging.getLogger(__name__)
 
 AUDIT_TABLE = "audit_log"
 _DEFAULT_ENV = "test"
+# 公开别名：跨模块（routes/agent.py 的审批记录）需要「环境缺失时回落到什么」，
+# 不该各自内联一份字面量 "test" 而与本模块漂移。
+DEFAULT_ENVIRONMENT = _DEFAULT_ENV
+
+
+class AuditWriteError(RuntimeError):
+    """关键审计记录写不进去 —— 调用方必须让对应动作**不生效**。
+
+    审计链的价值前提是「发生过的事都有记录」。当一条记录写失败而动作照样执行，
+    事后取证看到的是一个干净但**不完整**的链 —— 比空链更危险，因为它看起来可信。
+    故授权/放行这类「记录本身就是凭证」的写入使用 critical=True：写不进去就不授权
+    （授权端点回 503、授权状态回滚），而不是带着一条缺口继续跑。
+
+    反过来，blocked/denied 这类**收紧**动作不依赖写入成功 —— 拒绝已经生效，
+    记录缺失只是少一条证据，不构成放行风险，故仍走静默路径。
+    """
+
+
+# 审计写入失败的可观测快照。原实现失败只留一行 logger.warning，审计页与设置页
+# 无从得知「证据链最近漏过记录」。这里累计计数，由 GET /api/audit/health 暴露。
+_FAILURE_STATE: dict[str, Any] = {
+    "consecutive": 0,
+    "total": 0,
+    "last_action": "",
+    "last_error": "",
+    "last_error_at": "",
+}
+
+
+def _note_write_failure(action: str, err: BaseException) -> None:
+    _FAILURE_STATE["consecutive"] = int(_FAILURE_STATE["consecutive"]) + 1
+    _FAILURE_STATE["total"] = int(_FAILURE_STATE["total"]) + 1
+    _FAILURE_STATE["last_action"] = str(action or "")
+    _FAILURE_STATE["last_error"] = f"{type(err).__name__}: {err}"[:300]
+    _FAILURE_STATE["last_error_at"] = _now()
+
+
+def _note_write_success() -> None:
+    _FAILURE_STATE["consecutive"] = 0
+
+
+def health() -> dict[str, Any]:
+    """审计写入健康度快照（只读）。
+
+    ok=False 表示**最近一次**写入失败过（consecutive>0），审计页应据此提示
+    「证据链当前不完整」，而不是显示一个空表当作「没有操作」。
+    """
+    consecutive = int(_FAILURE_STATE["consecutive"])
+    return {
+        "ok": consecutive == 0,
+        "consecutive_failures": consecutive,
+        "total_failures": int(_FAILURE_STATE["total"]),
+        "last_failed_action": _FAILURE_STATE["last_action"],
+        "last_error": _FAILURE_STATE["last_error"],
+        "last_error_at": _FAILURE_STATE["last_error_at"],
+    }
+
+
+def reset_health() -> None:
+    """清空失败计数（测试与「已人工排查完」的运维动作用）。"""
+    _FAILURE_STATE.update({
+        "consecutive": 0, "total": 0, "last_action": "",
+        "last_error": "", "last_error_at": "",
+    })
 
 
 def _seal_environment(rows: list[dict[str, Any]]) -> str:
@@ -171,8 +238,18 @@ def append_record(
     command_raw: str = "",
     result: str = "",
     operator: Optional[str] = None,
+    critical: bool = False,
 ) -> Optional[dict[str, Any]]:
-    """追加一条审计记录（审计失败静默，返回 None 不阻塞 Agent）"""
+    """追加一条审计记录。
+
+    critical=False（默认）：写失败静默，返回 None 不阻塞 Agent，但失败计入
+    health()。用于 blocked/denied/executed 这类「动作已经发生（或被拦住）
+    之后补记」的记录。
+
+    critical=True：写失败抛 AuditWriteError。用于「记录本身就是授权凭证」的
+    路径（grant / allow）。调用方必须先拿到它成功再让授权生效 —— 否则一次
+    磁盘/锁故障就会静默产出一条「没有证据的授权」，事后无法证明谁批了什么。
+    """
     if conclusion not in LEGAL_CONCLUSIONS:
         # 白名单保证枚举列有界，但"静默改成 executed"会让这条链式签名记录声称
         # 「这条命令执行过了」—— 历史上 answered/skipped 就是这样被改名的。不阻塞
@@ -221,11 +298,16 @@ def append_record(
         except Exception:
             conn.execute("ROLLBACK")
             raise
+        _note_write_success()
         return record
     except Exception as e:
         # 带上 action：调用方不再各自包 try/except（本函数已承诺"失败静默返回 None"），
         # 这条日志是唯一的失败线索，缺了 action 就不知道该记录丢的是哪个决策
         logger.warning("审计写入失败: action=%s err=%s", action, e)
+        _note_write_failure(action, e)
+        if critical:
+            raise AuditWriteError(
+                f"关键审计记录写入失败（action={action}）: {e}") from e
         return None
 
 

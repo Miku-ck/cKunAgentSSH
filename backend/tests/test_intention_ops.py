@@ -199,9 +199,11 @@ def test_reclassify_preserves_is_change_on_change():
     original = classify("重启 nginx")
     assert original.is_change is True
     # 本例只关心「重分类换了对象时 is_change 是否透传」，触发信号用**仍在的**升级
-    # 分支（连续失败 ≥3 ⇒ TRIVIAL→MODERATE）。原实现用的是 remaining≤3 的紧急度
-    # 提升分支，那条已在 aca7427 作为死码删除（driver 每 reclassify_interval=5 轮
-    # 才调本函数，max_iterations=100 时永不命中），测试当时没跟着改 ⇒ master 红。
+    # 分支（连续失败 ≥3 ⇒ 升档）。原实现用的是 remaining≤3 的紧急度提升分支，
+    # 那条已在 aca7427 作为死码删除（driver 每 reclassify_interval=5 轮才调本函数，
+    # max_iterations=100 时永不命中），测试当时没跟着改 ⇒ master 红。
+    # 「重启 nginx」初始 task_type=QUERY（变更词只进 is_change 不进类型词典），
+    # P4 后该升级路径 QUERY → DEBUG。
     log = [{"success": False} for _ in range(5)]
     new = reclassify(
         original, iteration=5, tool_calls_log=log, errors=["boom"] * 5, max_iterations=20,
@@ -267,7 +269,7 @@ def test_change_discipline_not_duplicated():
 # 初始路径（driver classify 后 min(budget, model_max)）已防住，重分类路径必须对称。
 
 def _upgrade_log(n_fail: int = 3) -> list[dict]:
-    """构造触发 TRIVIAL→MODERATE 升级的工具日志（最近 N 次调用全部失败）"""
+    """构造触发连败升级的工具日志（最近 N 次调用全部失败；QUERY 任务升 DEBUG）"""
     return [{"tool": "ops_exec", "args": {}, "success": False} for _ in range(n_fail)]
 
 
@@ -281,7 +283,8 @@ def test_reclassify_upgrade_budget_capped_at_model_max(max_budget):
         errors=["x"] * 3, max_iterations=10, max_budget=max_budget,
     )
     assert new is not original
-    assert new.level is IntentionLevel.MODERATE  # 升级确实发生了
+    # 「读取 /etc/hosts」是 QUERY 任务，P4 后连败升级走 DEBUG 档
+    assert new.level is IntentionLevel.DEBUG
     assert new.reasoning_budget is None or new.reasoning_budget <= max_budget
 
 
@@ -292,8 +295,9 @@ def test_reclassify_budget_unchanged_when_under_cap():
         original, iteration=3, tool_calls_log=_upgrade_log(),
         errors=["x"] * 3, max_iterations=10, max_budget=262144,
     )
-    assert new.level is IntentionLevel.MODERATE
-    # 大上限走比例分配（5%*262144=13107 → 仍应 <= 上限），此处只验证钳制不误伤
+    # QUERY 任务连败升级走 DEBUG 档（P4）
+    assert new.level is IntentionLevel.DEBUG
+    # 大上限走比例分配（10%*262144=26214 → 仍应 <= 上限），此处只验证钳制不误伤
     assert new.reasoning_budget is None or new.reasoning_budget <= 262144
 
 
@@ -305,3 +309,141 @@ def test_reclassify_no_change_returns_original_object():
         max_budget=1024,
     )
     assert same is original
+
+
+# ── 5. 事故词盲区 + 命中计分制（P1/P2 修复回归）───────────────────────────
+# P1：CONVERSATION 快速路径要求「所有动作词汇都在词典里」—— 无界要求。
+# 「在吗，服务器挂了」曾因「挂了」不在词典被判成纯对话，driver 对
+# CONVERSATION 物理清空工具表 → 智能体对生产故障只能幻觉应答。
+
+@pytest.mark.parametrize("task", [
+    "在吗，服务器挂了",
+    "在吗，服务宕机了",
+    "数据库崩了，在吗",
+    "服务崩溃了",
+    "内存爆了帮我看看",
+    "hi server is down",
+    "hi 连接被拒绝了",
+])
+def test_incident_slang_is_not_conversation(task):
+    """事故口语词必须进入动作信号，不得落入 CONVERSATION（工具被清空）"""
+    r = classify(task)
+    assert r.task_type is not TaskType.CONVERSATION
+
+
+def test_incident_slang_lands_on_debug():
+    """事故词同时应把任务引导到 debug 档（假设-验证循环），而非普通查询"""
+    r = classify("在吗，服务器挂了")
+    assert r.task_type is TaskType.DEBUG
+    assert r.is_change is False  # 「挂了」是故障描述，不是变更动作
+
+
+def test_digit_heuristic_blocks_chat_fast_path():
+    """数字启发：纯寒暄几乎不含数字 —— 含数字即离开 CONVERSATION 快速路径。
+
+    这是词典之外的第二道兜底（词典永远列不全事故的表述方式），用不含任何
+    动作词典词的例句独立验证启发式生效。
+    """
+    assert classify("在吗，5 点开会").task_type is not TaskType.CONVERSATION
+    # 反向：无数字的纯寒暄不受启发式影响
+    assert classify("在吗，晚上一起吃饭吗").task_type is TaskType.CONVERSATION
+
+
+# P2：原 elif 优先级链在两组词典各命中一次时完全由固定优先级裁决 ——
+# 「评估这次重构的收益」被判成 REFACTOR → complex + 首轮禁工具规划 +
+# is_change（每轮注入变更纪律）三重误导。改为命中计分 + 首现位置仲裁。
+
+def test_analysis_context_beats_refactor_priority():
+    """「评估这次重构的收益」是只读分析：评估在前 → RESEARCH，非 REFACTOR"""
+    r = classify("评估这次重构的收益")
+    assert r.task_type is TaskType.RESEARCH
+    assert r.is_change is False          # 「重构」是分析对象，不是变更动作
+    assert r.allow_planning_phase is False
+
+
+def test_first_verb_wins_on_tie():
+    """同分仲裁：运维指令多为动词开头，首动词即主导意图"""
+    # 分析在前 → research（原 elif 链 debug 优先级高于 research，曾判 DEBUG）
+    assert classify("分析下 nginx 的错误日志").task_type is TaskType.RESEARCH
+    # 重构在前 → refactor 保持（执行主导）
+    r = classify("重构这个模块并分析影响")
+    assert r.task_type is TaskType.REFACTOR
+    assert r.is_change is True
+
+
+def test_multi_marker_hit_beats_priority_head():
+    """命中更多词典条目的类型胜出（原 elif 链完全无视命中数）"""
+    # 重构(1 hit) vs 修复+报错(2 hits) → DEBUG；原 elif 链 REFACTOR 先到先得
+    assert classify("重构模块修复报错").task_type is TaskType.DEBUG
+
+
+def test_confidence_reflects_match_strength():
+    """confidence 不再是分支静态值：命中越多越高，类型冲突折减，无命中 0.5"""
+    solo = classify("重构模块修复报错")        # DEBUG 双命中、无类型冲突
+    mixed = classify("评估这次重构的收益")      # research/refactor 各 1，冲突
+    assert solo.confidence > mixed.confidence
+    assert classify("执行 df -h").confidence == 0.5  # 无任何词典命中
+
+
+def test_pure_refactor_task_unchanged():
+    """防回归：纯重构任务仍走 REFACTOR/complex/规划阶段，计分制不误伤"""
+    r = classify("重构整个项目的部署脚本")
+    assert r.task_type is TaskType.REFACTOR
+    assert r.level is IntentionLevel.COMPLEX
+    assert r.allow_planning_phase is True
+    assert r.is_change is True
+
+
+# ── 6. P3/P4 修复回归 ──────────────────────────────────────────────────────
+
+# P3：「整个」「全量」是运维只读查询的日常词（"查看整个 /var/log 目录"
+# "统计全量容器"），命中会把 trivial 抬成 moderate（256→2048 预算）还附带
+# 「每次最多一个工具」纪律 —— 对批量统计是逆优化。长短语「整个项目」
+# 「整个目录」保留（指全局改造时足够特异）。
+
+def test_everyday_whole_quantity_keeps_readonly_level():
+    """P3：只读批量查询不再被「整个/全量」抬档，保持 trivial 只读预算"""
+    for task in ("查看整个 /var/log 目录的日志", "统计全量容器的内存占用"):
+        r = classify(task)
+        assert r.task_type is TaskType.QUERY
+        assert r.level is IntentionLevel.TRIVIAL
+        assert r.reasoning_budget == 256
+
+
+def test_long_whole_phrases_still_boost():
+    """P3 防回归：长短语「整个项目」保留抬档能力，全局改造信号不受影响"""
+    # 「优化」不命中任何类型词典 → QUERY/TRIVIAL，靠「整个项目」抬到 moderate
+    # （2.2 防呆：只读查询最多抬到 moderate，不给 complex 的禁工具规划轮）
+    r = classify("优化整个项目的构建流程")
+    assert r.level is IntentionLevel.MODERATE
+    assert r.reasoning_budget == 2048
+
+
+# P4：QUERY 任务（静态判成只读查询）连续失败，大概率实际在排障 ——
+# 升级走 DEBUG 档（假设-验证引导），而非 moderate 的「多步骤实现」引导。
+
+def test_reclassify_failed_query_goes_debug():
+    """P4：QUERY 任务 3 连败升 DEBUG 档，task_type 保持透传"""
+    original = classify("读取 /etc/hosts")
+    assert original.task_type is TaskType.QUERY
+    new = reclassify(
+        original, iteration=3, tool_calls_log=_upgrade_log(),
+        errors=["x"] * 3, max_iterations=10,
+    )
+    assert new.level is IntentionLevel.DEBUG
+    assert new.reasoning_budget == 1024
+    assert new.task_type is TaskType.QUERY       # 透传：工具结果不改变任务性质
+    assert new.is_change is False
+    assert "假设" in new.guide_prompt             # 引导语是 debug 的假设-验证版
+
+
+def test_reclassify_failed_write_task_keeps_moderate():
+    """P4 防回归：非 QUERY（写类）连败仍升 MODERATE，既有语义不变"""
+    original = classify("改一下 nginx 配置")   # MODIFY → SIMPLE
+    assert original.task_type is TaskType.MODIFY
+    new = reclassify(
+        original, iteration=3, tool_calls_log=_upgrade_log(),
+        errors=["x"] * 3, max_iterations=10,
+    )
+    assert new.level is IntentionLevel.MODERATE
+    assert "多步骤实现" in new.guide_prompt

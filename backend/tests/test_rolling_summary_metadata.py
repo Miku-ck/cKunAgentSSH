@@ -9,12 +9,19 @@ _build 的 [上下文摘要] 注入永远为空。
 
 运行: python -m pytest backend/tests/test_rolling_summary_metadata.py -v
 """
+import asyncio
+
 from agent.harness.bridle import (
     Bridle,
     _PRIOR_SUMMARY_SENTINEL,
     _SUMMARY_PREFIX,
 )
 from agent.harness.contracts import AgentConfig, RunContext
+
+
+def _run(coro):
+    """P1 起 _compress_run_into / assemble 为 async（生成式摘要需 await），测试统一驱动"""
+    return asyncio.run(coro)
 
 
 def _bridle() -> Bridle:
@@ -35,7 +42,7 @@ def test_summary_written_to_metadata_not_messages():
     """压缩后摘要必须写入 metadata，且摘要消息不得滞留 ctx.messages"""
     b = _bridle()
     ctx = _make_ctx()
-    b._compress_run_into(ctx, force=True)
+    _run(b._compress_run_into(ctx, force=True))
     assert ctx.metadata.get("context_summary"), (
         "压缩后必须写入 ctx.metadata['context_summary']"
     )
@@ -52,7 +59,7 @@ def test_rolling_resummary_keeps_full_prior():
     """滚动再摘要：新一代摘要包含完整的上一代摘要（cap 内），而非 200 字符切片"""
     b = _bridle()
     ctx = _make_ctx()
-    b._compress_run_into(ctx, force=True)
+    _run(b._compress_run_into(ctx, force=True))
     first_summary = ctx.metadata["context_summary"]
     assert first_summary and len(first_summary) > 200, "前置：第一代表征性摘要应 >200 字符"
 
@@ -62,7 +69,7 @@ def test_rolling_resummary_keeps_full_prior():
         ctx.messages.append({"role": "assistant", "content": f"二期回答 {i} " + "y" * 50})
     ctx.messages.append({"role": "user", "content": "近期问题2"})
     ctx.messages.append({"role": "assistant", "content": "近期回答2"})
-    b._compress_run_into(ctx, force=True)
+    _run(b._compress_run_into(ctx, force=True))
     second_summary = ctx.metadata["context_summary"]
     assert second_summary
 
@@ -99,7 +106,7 @@ def test_no_summary_when_nothing_old():
     ctx.messages.append({"role": "user", "content": "唯一问题"})
     ctx.messages.append({"role": "assistant", "content": "唯一回答"})
     ctx.metadata["context_summary"] = "保留的既有摘要"
-    b._compress_run_into(ctx, force=True)
+    _run(b._compress_run_into(ctx, force=True))
     assert ctx.metadata["context_summary"] == "保留的既有摘要"
     assert not any(
         isinstance(m.get("content"), str) and m["content"].startswith(_SUMMARY_PREFIX)
@@ -128,7 +135,7 @@ def test_压缩后内存里的tool消息仍带着priority():
     ctx = _make_ctx(n_old=20)
     for m in _tool_msgs():
         ctx.messages.append(dict(m))
-    b._compress_run_into(ctx, force=True)
+    _run(b._compress_run_into(ctx, force=True))
 
     kept = [m for m in ctx.messages if m.get("role") == "tool"]
     assert kept, "近期 tool 结果应被保留在 ctx.messages"
@@ -144,7 +151,7 @@ def test_第二次压缩仍按priority差异化处理():
     ctx = _make_ctx(n_old=20)
     for m in _tool_msgs():
         ctx.messages.append(dict(m))
-    b._compress_run_into(ctx, force=True)
+    _run(b._compress_run_into(ctx, force=True))
 
     kept = [m for m in ctx.messages if m.get("role") == "tool"]
     out = b.compress_messages(kept, force=True)
@@ -160,7 +167,7 @@ def test_assemble_发给llm的载荷仍然剥离priority():
     ctx = _make_ctx(n_old=2)
     for m in _tool_msgs():
         ctx.messages.append(dict(m))
-    payload = b.assemble(ctx)
+    payload = _run(b.assemble(ctx))
     assert all("priority" not in m for m in payload), [
         m for m in payload if "priority" in m]
 

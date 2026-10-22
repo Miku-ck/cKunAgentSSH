@@ -377,6 +377,7 @@ def init_db(db_path: str) -> None:
                 last_run_at     TEXT,
                 last_status     TEXT DEFAULT 'idle',
                 last_run_id     TEXT,
+                last_abnormal_at TEXT,
                 created_at      TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
             );
@@ -448,6 +449,12 @@ def init_db(db_path: str) -> None:
 
 def _migrate_db(conn: sqlite3.Connection) -> None:
     """数据库迁移：为旧表添加新字段"""
+    # schedules.last_abnormal_at：巡检异常沉淀时间（方案 Phase 3），正常巡检不动它。
+    # 新库建表已含该列，这里只为旧库补齐；PRAGMA 探测避免重复 ALTER 报错。
+    cursor = conn.execute("PRAGMA table_info(schedules)")
+    schedule_cols = {row[1] for row in cursor.fetchall()}
+    if "last_abnormal_at" not in schedule_cols:
+        conn.execute("ALTER TABLE schedules ADD COLUMN last_abnormal_at TEXT")
     cursor = conn.execute("PRAGMA table_info(messages)")
     columns = {row[1] for row in cursor.fetchall()}
     if 'reasoning' not in columns:
@@ -2462,7 +2469,7 @@ def delete_agent_strategy(strategy_id: str) -> bool:
 _SCHEDULE_COLS = (
     "id, name, schedule_type, interval_minutes, time_hour, time_minute, "
     "weekday, day_of_month, target_host, task_prompt, enabled, next_run_at, "
-    "last_run_at, last_status, last_run_id, created_at, updated_at"
+    "last_run_at, last_status, last_run_id, last_abnormal_at, created_at, updated_at"
 )
 
 
@@ -2602,6 +2609,19 @@ def mark_schedule_run(
         # 拼进 SQL 的只有上面这几个字面量，值一律走占位符
         conn.execute(
             f"UPDATE schedules SET {', '.join(sets)} WHERE id = ?", params
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_schedule_last_abnormal(schedule_id: str, ts: str) -> None:
+    """记录巡检异常沉淀时间（方案 Phase 3）。只在判读为异常时调用，正常巡检零痕迹。"""
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "UPDATE schedules SET last_abnormal_at = ?, updated_at = ? WHERE id = ?",
+            (ts, _now(), schedule_id),
         )
         conn.commit()
     finally:

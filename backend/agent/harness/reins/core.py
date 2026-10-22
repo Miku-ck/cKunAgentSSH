@@ -7,6 +7,7 @@ import os
 from typing import Any
 
 from ..contracts import Interceptor, ReinDecision, ReinPoint, RunContext
+from ...environment_policy import SOURCE_LABELS
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,12 @@ _COMMAND_EXEC_TOOLS = {"shell_exec", "job_run"}
 # （harness 用 plan_mode 的引用写入，auto_approve 用自己的引用读取，历史上是两份
 # 各自定义的 "permission_mode"，值一旦不一致 auto_approve 将永远匹配不上）。
 MODE_KEY = "permission_mode"
+
+# 交互式 run 标记（ctx.metadata）：为 True 时 Driver 在审批点**真的停住**
+# 等用户点击（见 reins.approval_wait），而不是发完卡片就继续往下跑。
+# 由 routes/agent.py 的 /agent/run 置位：定时任务是唯一不置位的 harness 入口，
+# 它没有可点卡片的人，等下去就是挂死。默认 False ⇒ 既有调用方零行为变化。
+AWAIT_APPROVAL_KEY = "await_approval"
 
 # 审批窗口兜底时长（秒）。重构后审批不再设 120s 短超时 —— 未授权签名保持等待至
 # grant/deny/会话结束。这里仅保留一个生产可配置的**兜底**（默认 600s），到期时
@@ -88,15 +95,34 @@ def _audit_environment(ctx: "RunContext") -> str:
     return getattr(ctx, "environment", "") or "test"
 
 
+def _target_host(ctx: "RunContext") -> str:
+    """本次 run 的目标主机（服务端从连接配置反查，见 agent.environment_policy）。
+
+    只用于「主机限域授权」匹配与展示，空串表示未核实：此时授权键按全局条目
+    匹配 —— 写入端同样会落成全局条目，两边对称，不会出现「授权了但永远不命中」。
+    不走 ssh_session_id：会话 id 是每次运行现建的（ssh-N），拿它当主机维度
+    等于每条会话都要重新授权，与「为这台机器预登记」的语义相反。
+    """
+    return str((getattr(ctx, "metadata", {}) or {}).get("target_host", "") or "")
+
+
 def permission_display_fields(ctx: "RunContext", command: str = "") -> dict[str, Any]:
     """审批卡片的「用户在看什么」上下文：环境 / 用户原任务 / 目标会话 / 命令原文。
 
     纯展示字段，不参与任何授权判定（grant_key 仍按 工具+命令哈希 绑定）。
     给 FilesystemGuard 与 PermissionGate 两条审批路径共用，保证两侧卡片信息一致。
     task 截断 200 字符：卡片引用块显示得下即可，同时避免超长任务撑大事件 payload。
+
+    environment_source 是「这个环境标签是谁定的」：服务端按主机连接配置判定，
+    还是客户端自报未经核实。审批人看得到这一行，才能分辨「生产主机被标成 test」
+    这种降级尝试；它不改变任何判定，只影响展示。
     """
+    source = str((getattr(ctx, "metadata", {}) or {}).get("environment_source", "") or "")
     return {
         "environment": _audit_environment(ctx),
+        "environment_source": source,
+        "environment_source_label": SOURCE_LABELS.get(source, "") if source else "",
+        "host": _target_host(ctx),
         "task": str(getattr(ctx, "task", "") or "")[:200],
         "ssh_session_id": getattr(ctx, "ssh_session_id", "") or "",
         "command": command,

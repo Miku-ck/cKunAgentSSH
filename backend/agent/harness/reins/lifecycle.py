@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass, field
 from typing import Optional
@@ -161,3 +162,141 @@ class ReflectionRein:
                 payload=payload,
             )],
         )
+
+
+# ── 事后复盘（方案 Phase 2：认知层闭环飞轮）──────────────────────────────────
+# 复盘材料全部取自 ctx（task / state_history / tool_calls_log / errors / warnings /
+# 最终答复），零额外采集；产物写入 memories 表 kind='postmortem'，不建独立页面。
+
+# 复盘记忆的 kind 值。刻意用常量传参：harness 下的 kind="…" 字面量会被
+# test_trace_projection_keys_s106 当成 Wire 事件类型扫描（记忆 kind 不是事件）。
+POSTMORTEM_MEMORY_KIND = "postmortem"
+
+_POSTMORTEM_TIMEOUT_S = 15.0   # 与 bridle 生成式摘要同一超时口径
+_POSTMORTEM_MAX_TOKENS = 700
+_POSTMORTEM_TASKS: set = set()  # 后台任务强引用：asyncio 对无引用任务的 GC 不可预期
+
+_POSTMORTEM_PROMPT = (
+    "以下是一次 AI 运维智能体执行任务的完整记录。请生成一份简明的中文事后复盘，"
+    "按以下结构输出：\n"
+    "任务：一句话概括做了什么\n"
+    "执行过程：关键步骤与观测发现\n"
+    "关键决策：为什么这样做\n"
+    "结果：最终状态与遗留问题\n"
+    "经验教训：可复用的经验或下次要避免的坑\n"
+    "只输出复盘正文，不要任何开场白或解释。\n\n"
+    "[执行记录]\n{material}"
+)
+
+
+def _postmortem_material(ctx: RunContext) -> str:
+    """拼装复盘材料。长 run 的工具序列/答复/错误各段截断，防 prompt 失控。"""
+    calls = []
+    for tc in (ctx.tool_calls_log or [])[:60]:
+        try:
+            args_str = json.dumps(tc.get("args") or {}, ensure_ascii=False)[:120]
+        except Exception:
+            args_str = str(tc.get("args"))[:120]
+        succ = tc.get("success")
+        verdict = "成功" if succ else ("失败" if succ is False else "未记录")
+        calls.append(f"- {tc.get('tool', '?')} {args_str} -> {verdict}")
+    states = " → ".join(
+        str(h.get("state", "?")) for h in (ctx.state_history or [])[-20:]
+    )
+    final_content = ""
+    for msg in reversed(ctx.messages or []):
+        if (msg.get("role") == "assistant"
+                and isinstance(msg.get("content"), str)
+                and msg["content"].strip()):
+            final_content = msg["content"][:800]
+            break
+    parts = [f"[任务]\n{ctx.task[:500]}"]
+    if states:
+        parts.append(f"[状态时间线]\n{states}")
+    if calls:
+        parts.append("[工具调用序列]\n" + "\n".join(calls))
+    if final_content:
+        parts.append(f"[最终答复]\n{final_content}")
+    if ctx.errors:
+        parts.append("[错误]\n" + "\n".join(str(e)[:200] for e in ctx.errors[-10:]))
+    if ctx.warnings:
+        parts.append("[警告]\n" + "\n".join(str(w)[:200] for w in ctx.warnings[-10:]))
+    return "\n\n".join(parts)
+
+
+async def _generate_postmortem(ctx: RunContext) -> None:
+    """后台生成复盘并写入 memories（kind='postmortem'）。
+
+    降级铁律（与 bridle._generate_summary 同款）：整体 try/except 全包，LLM 失败/
+    超时/DB 异常一律 warning 后返回 —— run 已经结束，复盘失败不能向任何存活
+    调用方抛出异常。
+    """
+    try:
+        from agent.harness.llm_client import StreamLLMClient
+
+        llm = StreamLLMClient(base_url=ctx.llm_base_url, api_key=ctx.llm_api_key)
+        out = await asyncio.wait_for(
+            llm.call(
+                messages=[{
+                    "role": "user",
+                    "content": _POSTMORTEM_PROMPT.format(material=_postmortem_material(ctx)),
+                }],
+                tools=[],
+                model=ctx.llm_model,
+                temperature=0.3,
+                max_tokens=_POSTMORTEM_MAX_TOKENS,
+                enable_thinking=False,
+            ),
+            timeout=_POSTMORTEM_TIMEOUT_S,
+        )
+        text = (getattr(out, "content", "") or "").strip()
+        if not text:
+            return
+        # 作用域固定 global：会话 ID（ssh-N）跨进程回收且复用，host:{sid} 对持久
+        # 知识不可达、跨重启会串机；复盘正文里本就带任务与命令细节
+        from agent.memory import mstore
+
+        await asyncio.to_thread(
+            mstore.add_memory,
+            kind=POSTMORTEM_MEMORY_KIND,
+            content=text,
+            scope="global",
+            title=f"复盘：{ctx.task[:50]}",
+            source="agent",
+            importance=0.6,
+            agent_run_id=ctx.run_id,
+        )
+        logger.info("事后复盘已沉淀: run=%s", ctx.run_id)
+    except Exception as e:  # noqa: BLE001 — 降级铁律，见 docstring
+        logger.warning("事后复盘生成失败（静默跳过）: %s", e)
+
+
+@dataclass
+class PostmortemRein:
+    """
+    事后复盘拦截器 — AGENT_COMPLETE / AGENT_FAILED 时后台生成复盘写入记忆库
+
+    触发条件（三者同时满足）：
+    - ctx.config.postmortem_enabled（AgentConfig 默认 False：复盘是额外 LLM 调用，
+      成本敏感，用户显式开启）
+    - ctx.tool_calls_log 非空（纯聊天 run 没有可复盘的执行过程）
+    - ctx 带 LLM 配置（base_url / model，Bridle 组装期注入）
+
+    生成走 asyncio.create_task 后台执行：本拦截器若同步 await 15s LLM 调用，
+    AGENT_COMPLETE / AGENT_FAILED 注入点会把 run 终态与 SSE 收尾整体卡住 15 秒。
+    任务以模块级集合持有强引用，防止被事件循环提前 GC。
+    """
+    point: ReinPoint = field(default=ReinPoint.AGENT_COMPLETE)
+    priority: int = field(default=20, init=False)
+
+    async def check(self, ctx: RunContext) -> ReinDecision:
+        if not getattr(ctx.config, "postmortem_enabled", False):
+            return ReinDecision()
+        if not (ctx.tool_calls_log or []):
+            return ReinDecision()
+        if not (ctx.llm_base_url and ctx.llm_model):
+            return ReinDecision()
+        t = asyncio.create_task(_generate_postmortem(ctx))
+        _POSTMORTEM_TASKS.add(t)
+        t.add_done_callback(_POSTMORTEM_TASKS.discard)
+        return ReinDecision()

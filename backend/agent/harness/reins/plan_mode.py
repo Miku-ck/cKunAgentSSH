@@ -465,10 +465,10 @@ class PlanModeGuard:
         if not plan_mode_active(ctx):
             # 未启用计划模式：逐字段零差异的默认决策，行为与引入本模块之前一致
             return ReinDecision()
-        if not ctx.tool_calls_log:
-            return ReinDecision()
 
-        last = ctx.tool_calls_log[-1]
+        last = ctx.active_tool_call
+        if last is None:
+            return ReinDecision()
         tool = str(last.get("tool") or "")
         args = last.get("args") or {}
         registry = resolve_registry(ctx, self.saddle)

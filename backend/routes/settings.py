@@ -514,6 +514,32 @@ def update_web_tools_settings(req: WebToolsSettingsRequest):
     return get_web_tools_settings()
 
 
+# ── 通知 webhook（方案 Phase 4：巡检异常 IM 推送）──
+
+
+@router.get("/settings/notify")
+def get_notify_settings():
+    """获取通知配置。webhook URL 内含机器人 key，只回传脱敏形态，不回明文。"""
+    raw = (db.get_app_setting("notify.webhook_url") or "").strip()
+    return {
+        "webhook_url_set": bool(raw),
+        "webhook_url_masked": _mask_secret(raw),
+    }
+
+
+class NotifySettingsRequest(BaseModel):
+    webhook_url: str = Field("", max_length=512,
+                             description="企微/钉钉群机器人 webhook 地址；"
+                                         "空字符串 = 关闭推送")
+
+
+@router.put("/settings/notify")
+def update_notify_settings(req: NotifySettingsRequest):
+    """保存/清除通知 webhook（存 app_settings，空串即关闭）"""
+    db.set_app_setting("notify.webhook_url", req.webhook_url.strip())
+    return get_notify_settings()
+
+
 # ── 出站 HTTP 策略（G4 代理 / G5 超时与重试）──
 
 

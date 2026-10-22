@@ -207,6 +207,25 @@ class ElectronBridge:
 
         return await self._send("ssh_connect", {"connectionId": connection_id}, timeout)
 
+    async def session_info(self, session_id: str, timeout: float = 3.0) -> dict:
+        """按 sshSessionId 反查它背后那条连接配置（host / environment 等）。
+
+        存在的理由：运行环境（test/prod）不能由渲染层自报 —— 一次请求把 prod 主机的
+        危险命令声明成 test，生产强化的“仅预登记 allowlist”就整条失效。连接配置里的
+        environment 是用户在主进程侧持久化、面板可见的设置，比逐请求声称可信一阶。
+
+        会话不存在 → 主进程回 404 → 本方法抛 BridgeError(HTTP_ERROR)，由调用方
+        （agent.environment_policy）降级为“未核实”而不是把整次 run 打掉。
+        返回 {connectionId, name, host, port, username, environment}（已剥凭据）。
+        """
+        if not self.is_available():
+            self._raise_unavailable()
+        if not session_id:
+            raise BridgeError(BridgeErrorCode.HTTP_ERROR, "session_id 为空")
+
+        result = await self._send("ssh_session_info", {"sshSessionId": session_id}, timeout)
+        return result if isinstance(result, dict) else {}
+
     async def list_connections(self, timeout: float = 15.0) -> list[dict]:
         """列出主进程保存的 SSH 连接配置（S7-09：定时任务需要目标主机 id）。
 

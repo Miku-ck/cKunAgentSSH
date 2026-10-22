@@ -11,13 +11,14 @@ Bridle — 笼头
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import json
 import logging
 from dataclasses import dataclass, field
 
 from agent.truncation_limits import TRUNC_THRESHOLD, TRUNC_HEAD, TRUNC_TAIL
-from typing import Optional
+from typing import Any, Optional
 
 from ..memory import budget as memory_budget
 from .contracts import RunContext
@@ -59,6 +60,13 @@ class CompressionConfig:
     tool_result_max_chars: int = TRUNC_THRESHOLD  # 单条工具结果最大字符数
     head_chars: int = TRUNC_HEAD                 # 智能截断时保留的头部字符数
     tail_chars: int = TRUNC_TAIL                 # 智能截断时保留的尾部字符数
+    # P1 生成式滚动摘要：LLM 浓缩早期上下文，失败/超时静默降级抽取式
+    llm_summarize: bool = True
+    llm_summarize_timeout: float = 15.0      # 摘要 LLM 调用单次总超时（秒）
+    # P3 渐进式工具结果清理（组装期非破坏性）：保留最近 K 段原样，更早段归档
+    stale_tool_kept_segments: int = 3        # 原样保留的最近含 tool 段数
+    stale_tool_grace: int = 2                # 宽限段数（含 tool 段 ≤ kept+grace 时不触发）
+    stale_tool_high_keep_chars: int = 200    # high 优先级结果归档时的短截断长度
 
 
 @dataclass
@@ -74,6 +82,8 @@ class Bridle:
 
     max_context_tokens: int = 16384
     config: CompressionConfig = field(default_factory=CompressionConfig)
+    # P1：摘要 LLM 客户端（Harness.assemble 注入，实现 LLMClient 协议）
+    _summarizer: Any = field(default=None, repr=False, compare=False)
 
     @property
     def compress_threshold_tokens(self) -> int:
@@ -108,7 +118,11 @@ class Bridle:
                 result.append(msg)
         return result
 
-    def assemble(self, ctx: RunContext) -> list[dict[str, str]]:
+    def set_summarizer(self, llm_client: Any) -> None:
+        """Harness 注入摘要 LLM 客户端（P1 生成式滚动摘要，None 时走抽取式）"""
+        self._summarizer = llm_client
+
+    async def assemble(self, ctx: RunContext) -> list[dict[str, str]]:
         """
         组装 LLM 输入 messages
 
@@ -118,15 +132,21 @@ class Bridle:
         消息（摘要存入 ctx.metadata["context_summary"]，history 始终保留、不参与
         压缩，避免重复丢弃摘要与近期消息）。因此本方法在溢出时会产生副作用，
         调用方不应假定它是纯只读的。
+
+        本方法为 async：溢出压缩时生成式摘要需在组装前 await LLM 调用完成
+        （P1，失败静默降级抽取式，见 _generate_summary）。
         """
         if ctx.config.compress_on_context_overflow:
             built = self._build(ctx)
             if self.should_compress(built):
                 before = len(ctx.messages)
-                self._compress_run_into(ctx, force=False)
+                await self._compress_run_into(ctx, force=False)
                 # 若压缩未减少 run 消息（如 history 本身过大），不再重复压缩，避免死循环
                 if len(ctx.messages) == before:
-                    return self._strip_tool_priority(built)
+                    return self._strip_tool_priority(self._clean_stale_tool_results(built))
+            built = self._build(ctx)
+            # P3 渐进式工具结果清理：组装期非破坏性（不改 ctx.messages，每次重算）
+            return self._strip_tool_priority(self._clean_stale_tool_results(built))
         return self._strip_tool_priority(self._build(ctx))
 
     def _build(self, ctx: RunContext) -> list[dict[str, str]]:
@@ -179,12 +199,15 @@ class Bridle:
 
         return system_msgs + other_msgs
 
-    def _compress_run_into(self, ctx: RunContext, force: bool) -> None:
+    async def _compress_run_into(self, ctx: RunContext, force: bool) -> None:
         """
         压缩本次 run 累积消息（ctx.messages），原地更新 ctx：
 
-        - 早期 run 消息（user/assistant/tool）压缩为摘要（_SUMMARY_PREFIX 显式标记），
-          存入 ctx.metadata["context_summary"]（滚动再摘要直接替换，尺寸有界）
+        - 原始任务消息钉扎（P2）：conv[0] 与 ctx.task 全等时摘出，压缩后原样
+          放回 ctx.messages[0] — 长任务后模型始终能看到原始目标，杜绝目标漂移
+        - 早期 run 消息（user/assistant/tool）压缩为摘要（生成式优先，P1；
+          降级抽取式），摘要显式标记（_SUMMARY_PREFIX）存入
+          ctx.metadata["context_summary"]（滚动再摘要直接替换，尺寸有界）
         - ctx.messages 仅保留近期 run 消息（摘要消息不入 ctx.messages，
           由 assemble/_build 从 metadata 重新注入）
         - run 中的 system 消息（如拦截器 inject_messages 的纠偏提示）属于对话流，
@@ -199,6 +222,17 @@ class Bridle:
         conv = [m for m in ctx.messages if m.get("role") != "system"]
         if not conv:
             return
+        # P2 原始任务钉扎：判据要求 role=user 且内容与 ctx.task 全等（防御 ctx
+        # 重建场景，条件不满足则不钉）。摘除须先于哨兵合成消息拼接，互不干扰。
+        task_msg: Optional[dict] = None
+        if (conv[0].get("role") == "user"
+                and isinstance(conv[0].get("content"), str)
+                and conv[0]["content"] == ctx.task):
+            task_msg = conv[0]
+            conv = conv[1:]
+            if not conv:
+                ctx.messages = [task_msg] + run_system
+                return
         # 滚动再摘要：将既有摘要作为合成 user 消息前置参与本次压缩，使摘要随 run
         # 推进持续浓缩，而非逐轮无界追加（避免长 run 多轮压缩后反超上下文窗口）。
         prior = ctx.metadata.get("context_summary")
@@ -208,7 +242,9 @@ class Bridle:
             if prior_text.startswith(_SUMMARY_PREFIX):
                 prior_text = prior_text[len(_SUMMARY_PREFIX):]
             conv = [{"role": "user", "content": _PRIOR_SUMMARY_SENTINEL + prior_text}] + conv
-        compressed = self.compress_messages(conv, force=force)
+        # P1 生成式滚动摘要：预生成失败/超时返回 None，compress_messages 内降级抽取式
+        generated = await self._generate_summary(conv, force=force, model=ctx.llm_model)
+        compressed = self.compress_messages(conv, force=force, generated_summary=generated)
         # C-review M12：从压缩结果中取出"显式标记的摘要消息"（_SUMMARY_PREFIX 前缀，
         # compress_messages 生成的摘要消息 role=user），写入
         # ctx.metadata["context_summary"] — assemble 时经 _build 重新注入。
@@ -236,6 +272,9 @@ class Bridle:
             # 不再用 chars/token 反推字符数（旧 cap ≈ 整个窗口，一条摘要就能再撑爆）。
             ctx.metadata["context_summary"] = memory_budget.cap_text_tokens(
                 summary_text, self.budget.summary)
+        # P2：钉扎的任务消息原样放回最前（早于近期 run 消息），随后纠偏 system 置末尾
+        if task_msg is not None:
+            recent = [task_msg] + recent
         # 保留纠偏 system 消息（置于末尾），其余为近期 run 消息
         ctx.messages = recent + run_system
 
@@ -246,13 +285,22 @@ class Bridle:
         直接压缩本次 run 累积消息（history 由 assemble 重新前置，不参与压缩），
         避免旧实现中摘要被丢弃、近期消息被多截断的上下文丢失问题。
         """
-        self._compress_run_into(ctx, force=force)
+        await self._compress_run_into(ctx, force=force)
 
-    def compress_messages(self, messages: list[dict], force: bool = False) -> list[dict]:
+    def compress_messages(
+        self,
+        messages: list[dict],
+        force: bool = False,
+        generated_summary: Optional[str] = None,
+    ) -> list[dict]:
         """
         滑动窗口压缩 — 迁移自原 ContextManager.compress_if_needed
 
         保留 system + 最近 N 轮，早期消息替换为摘要
+
+        generated_summary：P1 生成式摘要正文（_compress_run_into 预生成，失败为
+        None）。有值时直接采用，跳过抽取式拼接；仍按 _SUMMARY_PREFIX 哨兵包装，
+        M12 摘出/回喂语义不变。
 
         这里**不得**剥 priority：本函数的返回值会被 `_compress_run_into` 赋回
         `ctx.messages`（内存态），而差异化截断/摘要正要读这个字段。剥字段的职责属于
@@ -319,7 +367,21 @@ class Bridle:
             return system_msgs + conv_msgs
         old_msgs = conv_msgs[:old_count]
 
-        # 早期消息压缩为一条摘要
+        # 早期消息压缩为一条摘要（材料行构建抽取为 _summary_parts，供 P1 生成式共用）
+        summary_parts = self._summary_parts(old_msgs)
+
+        # P1：生成式摘要优先（_compress_run_into 预生成，失败为 None）；
+        # 无值时降级抽取式拼接。统一按 _SUMMARY_PREFIX 哨兵包装，M12 语义不变。
+        if generated_summary:
+            summary_text = _SUMMARY_PREFIX + generated_summary
+        else:
+            summary_text = _SUMMARY_PREFIX + "\n".join(summary_parts)
+        summary_msg = {"role": "user", "content": summary_text}
+
+        return system_msgs + [summary_msg] + recent_msgs
+
+    def _summary_parts(self, old_msgs: list[dict]) -> list[str]:
+        """早期消息 → per-priority 差异化截断的材料行（抽取式与 P1 生成式共用）"""
         summary_parts = []
         prior_part: Optional[str] = None
         for msg in old_msgs:
@@ -358,12 +420,119 @@ class Bridle:
         # （及最近的旧消息），被裁掉的是最旧的 200 字符切片（相关性最低）
         if prior_part is not None:
             summary_parts.append(prior_part)
+        return summary_parts
 
-        # 摘要作为注入内容置于近期消息之前，但角色仍取 user（400 约束见 _build 顶部）
-        summary_text = "以下是之前对话的摘要:\n" + "\n".join(summary_parts)
-        summary_msg = {"role": "user", "content": summary_text}
+    async def _generate_summary(
+        self,
+        conv: list[dict],
+        force: bool,
+        model: str,
+    ) -> Optional[str]:
+        """
+        P1 生成式滚动摘要 — LLM 浓缩早期上下文，失败静默降级抽取式
 
-        return system_msgs + [summary_msg] + recent_msgs
+        降级铁律：本方法整体 try/except 全包，任何异常（含摘要 LLM 自身上下文
+        超限/超时）都返回 None 走抽取式路径，绝不向调用方抛异常 — 压缩发生在
+        Stirrups 的上下文超限重试路径内，摘要调用再抛 400 会触发重试死循环。
+
+        材料：与抽取式同口径（_summary_parts 的 per-priority 截断 + 既有摘要
+        完整回喂）；输出按 token cap 到 summary 预算（MemoryBudget.summary 账户）。
+        """
+        if (self._summarizer is None
+                or not self.config.llm_summarize
+                or not model):
+            return None
+        try:
+            # 与 compress_messages 的摘要路径对齐：非 force 且未超阈值时不压缩，
+            # 也就无需生成摘要（避免白调一次 LLM）
+            if not force and not self.should_compress(conv):
+                return None
+            keep_count = self.config.keep_recent_turns * 3
+            segments = self._split_segments(conv)
+            recent: list[dict] = []
+            for seg in reversed(segments):
+                recent = seg + recent
+                if len(recent) >= keep_count:
+                    break
+            old_count = len(conv) - len(recent)
+            if old_count <= 0:
+                return None
+            material = "\n".join(self._summary_parts(conv[:old_count]))
+            prompt = (
+                "以下是一个长时间运行任务的对话历史（含此前生成的摘要）。\n"
+                "请将其浓缩为一份连贯的滚动摘要，必须保留：\n"
+                "1. 原始任务目标与用户的明确要求；\n"
+                "2. 已完成的关键步骤及其结论（含重要工具结果中的关键数据）；\n"
+                "3. 尚未完成的事项与下一步计划；\n"
+                "4. 已遇到的错误及规避方式。\n"
+                "只输出摘要正文，不要任何开场白或解释。\n\n"
+                f"[对话历史]\n{material}"
+            )
+            out = await asyncio.wait_for(
+                self._summarizer.call(
+                    messages=[{"role": "user", "content": prompt}],
+                    tools=[],
+                    model=model,
+                    temperature=0.2,
+                    max_tokens=self.budget.summary,
+                    enable_thinking=False,
+                ),
+                timeout=self.config.llm_summarize_timeout,
+            )
+            text = (getattr(out, "content", "") or "").strip()
+            if not text:
+                return None
+            return memory_budget.cap_text_tokens(text, self.budget.summary)
+        except Exception as e:  # noqa: BLE001 — 降级铁律，见 docstring
+            logger.warning("生成式摘要失败，降级抽取式: %s", e)
+            return None
+
+    def _clean_stale_tool_results(self, built: list[dict]) -> list[dict]:
+        """
+        P3 渐进式工具结果清理（对标 Anthropic context editing）
+
+        长任务 run 中，早期工具结果在撞到压缩阈值前一直以全文参与每轮请求，
+        请求体积持续膨胀、频繁触发压缩+重试。这里在组装期对「足够早」的 tool
+        结果做占位归档：保留最近 kept 段原样，更早段替换 content 为占位符
+        （high 优先级改为头尾短截断，保住关键数据）。
+
+        非破坏性：只改本次组装产物（built 的浅拷贝），不动 ctx.messages，
+        每次 assemble 重算；tool_call_id 与 assistant(tool_calls) 的配对结构
+        原样保留（vLLM 400 红线）；priority 仍由出网边界的 _strip_tool_priority 剥离。
+        """
+        kept = self.config.stale_tool_kept_segments + self.config.stale_tool_grace
+        segments = self._split_segments(built)
+        tool_seg_idx = [
+            i for i, seg in enumerate(segments)
+            if any(m.get("role") == "tool" for m in seg)
+        ]
+        # 含 tool 段不足（短 run）时不触发，保持原样
+        if len(tool_seg_idx) <= kept:
+            return built
+        stale = set(tool_seg_idx[:-kept])
+        out: list[dict] = []
+        for i, seg in enumerate(segments):
+            if i not in stale:
+                out.extend(seg)
+                continue
+            for msg in seg:
+                if msg.get("role") != "tool":
+                    out.append(msg)
+                    continue
+                content = msg.get("content", "")
+                if not isinstance(content, str) or not content:
+                    out.append(msg)
+                    continue
+                if msg.get("priority", "normal") == "high":
+                    # high：头尾短截断保留关键数据（_truncate_head_tail 自身收口到上限）
+                    new_content = self._truncate_head_tail(
+                        content, self.config.stale_tool_high_keep_chars)
+                else:
+                    new_content = f"[工具结果已归档: 原 {len(content)} 字符]"
+                m = dict(msg)
+                m["content"] = new_content
+                out.append(m)
+        return out
 
     def _split_segments(self, conv: list[dict]) -> list[list[dict]]:
         """

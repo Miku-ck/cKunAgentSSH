@@ -7,10 +7,10 @@ from typing import Any, Optional
 from ..contracts import Interceptor, ReinPoint
 from .clarification import ClarificationInterceptor
 from .core import Reins
-from .flow import ConfidenceMonitor, CostBudgetRein, DynamicBudgetRein, LoopDetector
+from .flow import ConfidenceMonitor, CostBudgetRein, DynamicBudgetRein, LoopDetector, WallClockRein
 from .gate import _get_global_permission_gate_sync
 from .guards import AuditLogger, FilesystemGuard
-from .lifecycle import ReflectionRein, SkillRein
+from .lifecycle import PostmortemRein, ReflectionRein, SkillRein
 from .plan_mode import PlanDisciplineRein, PlanModeGuard
 
 def create_default_reins(
@@ -59,6 +59,10 @@ def create_default_reins(
     # 触发后短路终止 — 最坏 1000 次 LLM 调用无人切断的问题由此兜底）
     interceptors.append(CostBudgetRein())
 
+    # 任务级墙钟 deadline（POST_ITERATION，priority=2）：时间维度的最后防线。
+    # 内部按 ctx.config.max_wall_clock_s（0=禁用）自门控，注册零成本。
+    interceptors.append(WallClockRein())
+
     interceptors.append(ConfidenceMonitor())
 
     # 反思触发（AGENT_COMPLETE + AGENT_FAILED）
@@ -69,6 +73,13 @@ def create_default_reins(
     interceptors.append(reflection_complete)  # AGENT_COMPLETE
     reflection_failed = ReflectionRein(point=ReinPoint.AGENT_FAILED, permission_gate=permission_gate)
     interceptors.append(reflection_failed)
+
+    # ── 事后复盘（AGENT_COMPLETE + AGENT_FAILED，方案 Phase 2）──
+    # 拦截器内部按 ctx.config.postmortem_enabled 门控（AgentConfig 默认 False），
+    # 注册本身零成本：关闭时 check() 直接返回全默认决策。
+    # priority=20 在反思事件（5）之后：复盘是 run 收尾的最后一步。
+    interceptors.append(PostmortemRein())  # AGENT_COMPLETE
+    interceptors.append(PostmortemRein(point=ReinPoint.AGENT_FAILED))
 
     # ── 澄清向导（PRE_TOOL_CALL）──
     interceptors.append(ClarificationInterceptor())

@@ -23,6 +23,7 @@ from .core import (
     _audit_target_id,
     _audit_target_type,
     _perm_pending,
+    _target_host,
     approval_fallback_seconds,
     command_from_args,
     extract_bound_command,
@@ -42,10 +43,80 @@ logger = logging.getLogger(__name__)
 _ALLOWLIST_TOOL_NAME_RE = re.compile(r'^[A-Za-z0-9_.-]+\Z')
 _ALLOWLIST_GRANT_KEY_RE = re.compile(r'^[A-Za-z0-9_.-]+:[0-9a-f]{16}\Z')
 
+# ── 主机限域条目 ──────────────────────────────────────────────────────────
+# 授权键本身只有「工具 + 命令哈希」两个维度，是**全局**的：在测试机上批准过
+# `systemctl restart nginx`，生产机上同一条命令同样免审 —— 而 prod 强化的说辞
+# 是「危险命令必须预登记」，「在任意一台机器上登记过」并不等于「为这台机器
+# 登记过」。所以 allowlist 的行格式增加主机段：
+#
+#   @prod-db-01|shell_exec:a1b2c3d4e5f67890   # 只对该主机生效
+#   shell_exec:a1b2c3d4e5f67890               # 旧条目 = 全局（行为不变）
+#
+# 分隔符选 `|` 与 `@`：`|` 不在工具名/哈希/host 的任何合法字符集里，解析不会
+# 歧义；`@` 前缀让「全局」和「主机限域」一眼可分，手工编辑时不会误读。
+# 主机段允许 `:`（IPv6）与 `.`/`-`/`_`（域名），但不允许空白与换行 —— 一行一条
+# 的格式前提比 host 字符集完整性更重要。
+_SCOPED_PREFIX = "@"
+_SCOPED_SEP = "|"
+_ALLOWLIST_HOST_RE = re.compile(r'^[A-Za-z0-9_.:-]{1,255}\Z')
+
+
+def normalize_host(host: str) -> str:
+    """主机标识归一化：去空白 + 小写。空串 = 未指定主机（全局）。
+
+    只做大小写与首尾空白，不做端口剥离或 IPv6 缩写展开：`db-01` 与 `DB-01`
+    是同一台，而 `db-01:2222` 与 `db-01:22` 在本项目里由连接配置区分，合并
+    它们反而会让「给 2222 端口那台登记」变成给整台机器登记。
+    """
+    return (host or "").strip().lower()
+
+
+def scoped_key(host: str, key: str) -> str:
+    """把裸授权键包成主机限域形式；host 为空时原样返回（全局条目）。"""
+    h = normalize_host(host)
+    return f"{_SCOPED_PREFIX}{h}{_SCOPED_SEP}{key}" if h else key
+
+
+def split_scoped_key(entry: str) -> tuple[str, str]:
+    """拆出 (host, 裸键)。host 为空串表示全局条目。
+
+    只认开头的 `@host|`；不带前缀的一律原样当裸键（旧文件无需迁移）。
+    格式非法（如只有 `@|`）时不在这里报错：校验属于 _validate_entry，
+    解析层只负责「拆得开就拆」。
+    """
+    if entry.startswith(_SCOPED_PREFIX):
+        host, sep, rest = entry[1:].partition(_SCOPED_SEP)
+        if sep:
+            return normalize_host(host), rest
+    return "", entry
+
+
+def _validate_entry(line: str, lineno: int) -> tuple[bool, str]:
+    """单条目格式校验（读侧与写侧的唯一判据）。"""
+    host, key = split_scoped_key(line)
+    if line.startswith(_SCOPED_PREFIX):
+        if not host:
+            return False, (
+                f"allowlist 第 {lineno} 行主机段为空: {line!r}"
+                "（主机限域条目格式为 @主机|工具名[:16位hex哈希]）")
+        if not _ALLOWLIST_HOST_RE.match(host):
+            return False, (
+                f"allowlist 第 {lineno} 行主机段格式无效: {host!r}"
+                "（expect [A-Za-z0-9_.:-]，不接受空白、换行或斜杠）")
+    if _ALLOWLIST_GRANT_KEY_RE.match(key):
+        return True, ""
+    if _ALLOWLIST_TOOL_NAME_RE.match(key):
+        return True, ""
+    return False, (
+        f"allowlist 第 {lineno} 行格式无效: {line!r}（"
+        f"期望工具名如 'my_tool' 或 工具:16位hex哈希 如 'shell_exec:a1b2c3d4e5f67890'，"
+        f"可加主机前缀如 '@db-01|shell_exec:a1b2c3d4e5f67890'）"
+    )
+
 
 def is_valid_allowlist_entry(line: str) -> bool:
     """单条目是否落在允许格式内（写侧入口用，与 _validate_allowlist_entry 同口径）"""
-    return bool(_ALLOWLIST_GRANT_KEY_RE.match(line) or _ALLOWLIST_TOOL_NAME_RE.match(line))
+    return _validate_entry(line, 1)[0]
 
 # E3：永久授权保留时长（小时）。0 = 永不过期，即 allowlist 引入 TTL 之前的行为。
 # 上限与 routes/settings.py 的 Field(le=) 同口径，读取侧脏值不至于是无限大。
@@ -132,22 +203,16 @@ class PermissionGate:
 
     @staticmethod
     def _validate_allowlist_entry(line: str, lineno: int) -> tuple[bool, str]:
-        """校验单条 allowlist 条目格式。
+        """校验单条 allowlist 条目格式（委托模块级 _validate_entry，读写同源）。
 
         合法格式：
           1. 纯工具名：^[A-Za-z0-9_.-]+$
           2. 工具名 + 命令哈希：^[A-Za-z0-9_.-]+:[0-9a-f]{16}$
+          以上两种均可加主机前缀 `@主机|`，限定该条只对这台主机生效。
 
         Returns: (valid, reason_if_invalid)
         """
-        if _ALLOWLIST_GRANT_KEY_RE.match(line):
-            return True, ""
-        if _ALLOWLIST_TOOL_NAME_RE.match(line):
-            return True, ""
-        return False, (
-            f"allowlist 第 {lineno} 行格式无效: {line!r}（"
-            f"期望工具名如 'my_tool' 或 工具:16位hex哈希 如 'shell_exec:a1b2c3d4e5f67890'）"
-        )
+        return _validate_entry(line, lineno)
 
     def _load_permanent_allowlist(self) -> set[str]:
         """从 config 加载永久 allowlist（~/.ckunagentic/allowlist.txt）。
@@ -224,21 +289,31 @@ class PermissionGate:
         granted = self._permanent_granted_at.get(key)
         return granted is not None and granted < int(time.time()) - ttl
 
-    def _permanent_active(self, key: str) -> bool:
+    def _permanent_active(self, key: str, host: str = "") -> bool:
         """永久授权命中判定，顺带就地失效到期条目。
+
+        只查两个候选：`@host|key`（主机限域）与 `key`（全局）。全局条目是有意的
+        显式授权（旧文件里的条目全部是全局，行为不变），主机条目只对那台机器
+        生效 —— 这正是「测试机上批准不等于生产机免审」的落点。
 
         清理不止发生在加载和 TTL 变更时：进程可以长期不重启，期间把 TTL 调小
         也不该让旧键继续免审 —— 查表时兜一次，代价是一次 dict 读。
         """
-        if key not in self._confirmed_permanent:
-            return False
-        if self._is_expired_permanent(key):
-            logger.info("永久授权已过期（TTL %dh），撤销: %s",
-                        max(0, int(self.allowlist_ttl_hours)), key)
-            self._confirmed_permanent.discard(key)
-            self._permanent_granted_at.pop(key, None)
-            return False
-        return True
+        candidates = [key]
+        h = normalize_host(host)
+        if h:
+            candidates.insert(0, scoped_key(h, key))
+        for cand in candidates:
+            if cand not in self._confirmed_permanent:
+                continue
+            if self._is_expired_permanent(cand):
+                logger.info("永久授权已过期（TTL %dh），撤销: %s",
+                            max(0, int(self.allowlist_ttl_hours)), cand)
+                self._confirmed_permanent.discard(cand)
+                self._permanent_granted_at.pop(cand, None)
+                continue
+            return True
+        return False
 
     def prune_expired_allowlist(self) -> int:
         """撤销全部已过期的永久授权并落盘，返回清理条数。
@@ -259,24 +334,38 @@ class PermissionGate:
         return len(expired)
 
     def permanent_entries(self) -> list[dict]:
-        """已生效的永久授权条目（含授予/到期时间），供管理接口展示。
+        """已生效的永久授权条目（含主机、授予/到期时间），供管理接口展示。
 
+        key 是裸授权键（不带 `@host|` 前缀），host 单独给 —— 前端要按主机分组、
+        也要能显示「全部主机」，把主机段埋在 key 里让两边各自拆字符串迟早错位。
         expires_at 为 None = 永不过期（TTL=0，或该键没有可信的授予时间）。
         """
         ttl = self._ttl_seconds()
         out: list[dict] = []
-        for key in sorted(self._confirmed_permanent):
-            granted = self._permanent_granted_at.get(key)
+        for entry in sorted(self._confirmed_permanent):
+            host, key = split_scoped_key(entry)
+            granted = self._permanent_granted_at.get(entry)
             out.append({
                 "key": key,
+                "host": host,
+                "entry": entry,
                 "granted_at": granted,
                 "expires_at": granted + ttl if (ttl and granted is not None) else None,
             })
         return out
 
     def _save_permanent_allowlist(self) -> None:
-        """保存永久 allowlist（键文件 + 同目录时间戳 sidecar）"""
+        """保存永久 allowlist（键文件 + 同目录时间戳 sidecar）
+
+        写前逐条校验、全部合法才打开文件：任何一条不合法都抛错且不落半截文件
+        —— 这个 set 的成员通常来自 grant（已校验），但主机段是新增维度，
+        多一道「写进去的必须读得回来」的守卫比依赖上游每个入口都自觉更可靠。
+        """
         path = ALLOWLIST_PATH
+        for entry in self._confirmed_permanent:
+            valid, reason = _validate_entry(entry, 1)
+            if not valid:
+                raise RuntimeError(reason)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         now = int(time.time())
         for key in self._confirmed_permanent:
@@ -326,7 +415,8 @@ class PermissionGate:
                          risk: Optional[str] = None,
                          conversation_id: str = "",
                          run_id: str = "",
-                         bound_command: Optional[str] = None) -> bool:
+                         bound_command: Optional[str] = None,
+                         host: str = "") -> bool:
         """检查权限，返回是否放行
 
         risk: 调用方已判定的风险等级；risk == "dangerous" 时忽略 session 级缓存
@@ -335,6 +425,10 @@ class PermissionGate:
         bound_command: 调用方（FilesystemGuard）已算出的"本次真实执行命令"。非命令
               入口工具（file_write 等）靠它把授权键从裸工具名收紧到目标粒度 —
               否则一次"始终允许 file_write"等于允许写任意路径。
+
+        host: 目标主机（服务端从连接配置反查）。永久授权命中时先查
+              `@host|key` 再查全局 `key` —— 在测试机上登记过的命令不会自动
+              在生产机上免审，除非那条登记本身就是全局的（旧条目语义）。
 
         检查顺序：permanent allowlist → session（非 dangerous，按会话键控）
         → once 计数器（优先 run_id 作用域，fallback 全局池）。原 scope 参数已移除
@@ -356,7 +450,7 @@ class PermissionGate:
         if self.is_denied(tool_name, command, run_id):
             return False
         # 检查 permanent allowlist（E3：到期即失效，不再永久免审）
-        if self._permanent_active(key):
+        if self._permanent_active(key, host):
             return True
         # 检查 session allowlist
         # B-6 修复：dangerous 需每次授权 — 忽略 session 级缓存
@@ -364,8 +458,14 @@ class PermissionGate:
         #   同命令后续执行全部免审批，与 check() 中 L748 注释契约矛盾）
         # C-review M11：只查本会话（conversation_id）的 session 授权，
         # 跨会话不再免审（原全局 set 会把会话 A 的授权泄漏到会话 B）
-        if risk != "dangerous" and key in self._confirmed_session.get(conversation_id, frozenset()):
-            return True
+        # 主机维度与永久池同构：`@host|key` 只对该主机命中，裸键（无主机授权）
+        # 对所有主机命中 —— 否则在测试机上点「本会话允许」，同一个对话切到
+        # 生产机后同一条命令直接免审（会话是跨主机的，主机不是）。
+        if risk != "dangerous":
+            session_keys = self._confirmed_session.get(conversation_id, frozenset())
+            h = normalize_host(host)
+            if key in session_keys or (h and scoped_key(h, key) in session_keys):
+                return True
         # once 授权只认当前 run_id 作用域池（空 run_id 全局池 fallback 已删除）
         run_pool = self._confirmed_once.get(run_id)
         if run_pool and run_pool.get(key, 0) > 0:
@@ -377,7 +477,8 @@ class PermissionGate:
         return False
 
     def is_permanently_allowed(self, tool_name: str, args: dict,
-                               bound_command: Optional[str] = None) -> bool:
+                               bound_command: Optional[str] = None,
+                               host: str = "") -> bool:
         """是否已被永久授权（生产环境危险命令的预授权 allowlist 判断）。
 
         仅认 `_confirmed_permanent`（持久化 allowlist），忽略 once/session 一次性授权，
@@ -385,6 +486,7 @@ class PermissionGate:
         有命令可绑定时按"工具+命令哈希"键匹配（审查 M-3），否则按工具名匹配。
         E3：过了 TTL 的预登记条目同样不算预授权 —— 到期后 prod 危险命令会重新
         走"未预授权"拒绝路径，而不是悄悄按放行处理。
+        host：主机限域条目只对该主机算预授权；`@other|key` 不会放行本机命令。
 
         bound_command 由 FilesystemGuard 传入（它已算过一遍，不在此重算）：
         prod 下 file_write 写敏感路径预登记的键是 `file_write:<该路径模板哈希>`，
@@ -392,16 +494,43 @@ class PermissionGate:
         """
         command = self.command_for_call(tool_name, args, bound_command)
         key = self._grant_key(tool_name, command)
-        return self._permanent_active(key)
+        return self._permanent_active(key, host)
+
+    def grant_key_for(self, tool_name: str, command: Optional[str] = None,
+                      scope: str = 'once', run_id: str = "") -> str:
+        """只算授权键 + 校验入参，**不改任何授权状态**。
+
+        为什么需要它：授权端点的写前审计（audit.append_record(critical=True)）
+        要先把 target_id 写进审计链、再让授权生效 —— 顺序反过来就会留下
+        「授权已生效但没记录」的缺口，而那正是审计链最怕的形态。
+        校验与 grant 共用同一套规则，否则会出现「审计已经写了、grant 才抛
+        ValueError」的半条记录。
+        """
+        self._validate_grant_args(tool_name, scope=scope, run_id=run_id)
+        return self._grant_key(tool_name, command)
+
+    @staticmethod
+    def _validate_grant_args(tool_name: str, *, scope: str, run_id: str) -> None:
+        if not _ALLOWLIST_TOOL_NAME_RE.match(tool_name or ""):
+            raise ValueError(
+                f"工具名 {tool_name!r} 不在授权清单允许的格式内"
+                "（期望 ^[A-Za-z0-9_.-]+$，不接受空白、换行或斜杠）")
+        if scope == 'once' and not run_id:
+            # once 授权必须绑定 run_id：无归属的授权无法被 check 消费、
+            # 也无法被 run 终态清理，直接拒绝而非落入无人认领的池
+            raise ValueError("scope='once' 授权必须提供 run_id")
 
     def grant(self, tool_name: str, scope: str = 'once', command: Optional[str] = None,
-              conversation_id: str = "", run_id: str = "") -> str:
-        """授予权限，返回实际写入的授权键
+              conversation_id: str = "", run_id: str = "", host: str = "") -> str:
+        """授予权限，返回实际写入的授权键（裸键，不含主机前缀）
 
         scope: 'once' | 'session' | 'always'
         command: 命令执行工具时传入被批准的具体命令（审查 M-3 命令级绑定）
         conversation_id: C-review M11 — session 授权绑定到发起授权的会话
         run_id: 问题 1 改进 — once 授权绑定到发起授权的 run_id（消除跨 run 竞态）
+        host: scope='always' 时限定到该主机（`@host|key`）；空串 = 全局条目。
+              服务端能反查到目标主机时一律传，否则用户在测试机上点的
+              「始终允许」会变成生产机上的免审通行证。
 
         tool_name 必须在 allowlist 的条目格式内：scope=always 的授权要落
         `allowlist.txt` 一行一条，一个含空白/换行/非 ASCII 的工具名照样写得进去，
@@ -415,6 +544,10 @@ class PermissionGate:
             raise ValueError(
                 f"工具名 {tool_name!r} 不在授权清单允许的格式内"
                 "（期望 ^[A-Za-z0-9_.-]+$，不接受空白、换行或斜杠）")
+        if host and not _ALLOWLIST_HOST_RE.match(normalize_host(host)):
+            raise ValueError(
+                f"主机标识 {host!r} 不在授权清单允许的格式内"
+                "（期望 [A-Za-z0-9_.:-]，不接受空白、换行或斜杠）")
         key = self._grant_key(tool_name, command)
         if scope == 'once':
             # once 授权必须绑定 run_id：无归属的授权无法被 check 消费、
@@ -429,29 +562,53 @@ class PermissionGate:
             self._denied_commands.get(run_id, set()).discard(key)
             self._confirmed_once[run_id][key] += 1
         elif scope == 'session':
-            self._confirmed_session.setdefault(conversation_id, set()).add(key)
+            # 与永久池同构：能反查到目标主机时写 `@host|键`（host 为空 = 裸键，
+            # 对所有主机的旧语义），留着裸键是因为本地无 SSH 的 run 没有主机维度。
+            self._confirmed_session.setdefault(conversation_id, set()).add(
+                scoped_key(host, key))
         elif scope == 'always':
-            self._confirmed_permanent.add(key)
+            # 主机限域：host 为空时 scoped_key 原样返回裸键（全局，旧行为）
+            self._confirmed_permanent.add(scoped_key(host, key))
             self._save_permanent_allowlist()
         return key
 
-    def _revoke_key(self, key: str, conversation_id: Optional[str] = None) -> None:
+    def _revoke_key(self, key: str, conversation_id: Optional[str] = None,
+                    host: Optional[str] = None) -> None:
+        """撤掉一个裸授权键（host 同时决定永久池与 session 池的作用域）。
+
+        host=None（旧调用）：全局条目 + 所有 `@*|key` 一并撤 —— 兼容原来的
+        「删一行就断」语义，也符合撤销总是收紧的方向；host="" 只撤全局；
+        host="h" 只撤该主机。session 池与永久池同一口径：`@h|key` 只对那台
+        机器免审，点一下别的机器的撤销不该挟带它。
+        """
+        def _matches(entry: str) -> bool:
+            if split_scoped_key(entry)[1] != key:
+                return False
+            if host is None:
+                return True
+            if host == "":
+                return not entry.startswith(_SCOPED_PREFIX)
+            return entry == scoped_key(host, key)
+
         # 问题 1 改进：遍历所有 run_id 的 once 池，移除该 key
         for run_pool in list(self._confirmed_once.values()):
             run_pool.pop(key, None)
         # C-review M11：conversation_id 指定 → 只撤该会话；None → 撤所有会话
+        # 先按 host 过滤再删除：scoped 条目的前缀与裸键不同，不能直接 discard(key)
         if conversation_id is not None:
             s = self._confirmed_session.get(conversation_id)
             if s is not None:
-                s.discard(key)
+                s.difference_update([e for e in s if _matches(e)])
                 if not s:
                     self._confirmed_session.pop(conversation_id, None)
         else:
             for s in self._confirmed_session.values():
-                s.discard(key)
+                s.difference_update([e for e in s if _matches(e)])
             for cid in [c for c, s in self._confirmed_session.items() if not s]:
                 self._confirmed_session.pop(cid, None)
-        self._confirmed_permanent.discard(key)
+        for entry in [e for e in self._confirmed_permanent if _matches(e)]:
+            self._confirmed_permanent.discard(entry)
+            self._permanent_granted_at.pop(entry, None)
 
     def deny_command(self, tool_name: str, command: Optional[str], run_id: str) -> str:
         """记录某 run 下某命令被用户拒绝（visible_terminal 拒绝时调用）。
@@ -509,6 +666,17 @@ class PermissionGate:
         return self.is_denied(
             tool_name, self.command_for_call(tool_name, args, bound_command), run_id)
 
+    def approval_key_for_call(self, tool_name: str, args: dict,
+                              bound_command: Optional[str] = None) -> str:
+        """审批等待闸的钥匙：本次调用实际绑定的授权键（裸键，与 grant 端点同源）。
+
+        Driver 拿它登记等待项，grant / deny 端点用 grant_key_for 算出同一把键
+        唤醒。两边必须是同一份推导：键一旦漂移，用户点了允许、卡片也消失，run 却
+        一直挂着等下去 —— 这种「授权了但没生效」比直接报错难查得多。
+        """
+        return self._grant_key(
+            tool_name, self.command_for_call(tool_name, args, bound_command))
+
     def cleanup_run_once(self, run_id: str) -> int:
         """释放指定 run_id 的全部 once 授权。
 
@@ -538,33 +706,44 @@ class PermissionGate:
         return len(denied_set)
 
     def revoke(self, tool_name: str, command: Optional[str] = None,
-               conversation_id: Optional[str] = None) -> None:
+               conversation_id: Optional[str] = None,
+               host: Optional[str] = None) -> None:
         """撤销权限
 
         - 提供 command：只撤销该条命令的绑定授权
         - 不提供 command：撤销该工具的全部授权（工具级 + 所有命令级绑定键）
         - conversation_id：C-review M11 — 只撤指定会话的 session 授权；
           None（默认）保持旧语义：撤所有会话
+        - host：None（默认）= 全局与所有主机限域条目全撤；"" = 只撤全局；
+          具体主机 = 只撤该主机的条目
 
         command 不限 _COMMAND_EXEC_TOOLS：bound_command 类工具（file_write 等）的
         授权键同样按命令哈希绑定，撤销口径必须与 grant 对称，否则撤销会要么过宽
         （抹掉该工具所有路径）要么失效（撤不掉那一条键）。
         """
         if command:
-            self._revoke_key(self._grant_key(tool_name, command), conversation_id)
+            self._revoke_key(self._grant_key(tool_name, command), conversation_id, host)
         else:
-            self._revoke_key(tool_name, conversation_id)
+            self._revoke_key(tool_name, conversation_id, host)
             prefix = tool_name + ":"
-            for k in [k for k in self._confirmed_permanent if k.startswith(prefix)]:
-                self._revoke_key(k, conversation_id)
+            # 主机限域条目在集合里是 `@host|tool:hash`，直接 startswith(prefix)
+            # 永远匹配不到 —— 必须按拆出的裸键比。漏了这一层的后果是「点了全部
+            # 撤销，文件里的 @host|tool:hash 原封不动」。
+            for k in [k for k in self._confirmed_permanent
+                      if split_scoped_key(k)[1].startswith(prefix)]:
+                # 传裸键：_revoke_key 的 host 参数负责决定撤哪个作用域，
+                # 直接把 `@host|...` 当键传进去会撤一条不存在的条目。
+                self._revoke_key(split_scoped_key(k)[1], conversation_id, host)
             cids = [conversation_id] if conversation_id is not None \
                 else list(self._confirmed_session.keys())
             for cid in cids:
                 s = self._confirmed_session.get(cid)
                 if not s:
                     continue
-                for k in [k for k in s if k.startswith(prefix)]:
-                    self._revoke_key(k, cid)
+                # 与永久池同一坑：scoped 条目是 `@host|tool:hash`，
+                # startswith(prefix) 永远匹配不上 —— 必须按拆出的裸键比。
+                for k in [k for k in s if split_scoped_key(k)[1].startswith(prefix)]:
+                    self._revoke_key(split_scoped_key(k)[1], cid, host)
             # once 池按 run_id 分桶（_confirmed_once[run_id][grant_key]），顶层键是
             # run_id 而非授权键，直接 for k in self._confirmed_once 永远匹配不到 prefix。
             # 需下钻各 run 池收集匹配该工具的授权键，再逐个撤销（与 _revoke_key 同构）。
@@ -573,7 +752,7 @@ class PermissionGate:
                 if k.startswith(prefix)
             }
             for k in once_keys:
-                self._revoke_key(k, conversation_id)
+                self._revoke_key(k, conversation_id, host)
         self._save_permanent_allowlist()
 
     def _get_effective_risk(self, tool_name: str, meta: Any, args: dict,
@@ -628,11 +807,25 @@ class PermissionGate:
         except Exception:
             return None
 
-    async def check(self, ctx: RunContext) -> ReinDecision:
-        if not ctx.tool_calls_log:
-            return ReinDecision()
+    def _tool_description(self, tool_name: str, ctx: Optional[RunContext] = None) -> str:
+        """工具级审批卡的中文说明 —— 直接取 BaseTool.description（模型看到的同一份文案）。
 
-        last = ctx.tool_calls_log[-1]
+        与 _lookup_meta 分开查，是因为这里要的是工具对象、不是 ToolMeta。
+        注册表取不到时回空串：卡片宁可少一行说明，也不能为展示层把审批链炸掉。
+        """
+        registry = resolve_registry(ctx, self.saddle)
+        if not registry:
+            return ""
+        try:
+            tool = registry.get(tool_name)
+            return str(getattr(tool, "description", "") or "") if tool else ""
+        except Exception:
+            return ""
+
+    async def check(self, ctx: RunContext) -> ReinDecision:
+        last = ctx.active_tool_call
+        if last is None:
+            return ReinDecision()
         tool = last.get("tool", "")
         args = last.get("args", {})
 
@@ -705,7 +898,7 @@ class PermissionGate:
             # 走临时审批，用户点"始终允许"即写入永久 allowlist 后免审，
             # 与 shell 命令"prod 必须预登记"的合规姿态不一致（第 8 轮审查修复）。
             if environment == "prod" and not self.is_permanently_allowed(
-                    tool, args, bound_command=bound):
+                    tool, args, bound_command=bound, host=_target_host(ctx)):
                 await append_record_async(
                     action=tool, conclusion="denied",
                     run_id=ctx.run_id, iteration=ctx.iteration,
@@ -745,14 +938,16 @@ class PermissionGate:
             if self.check_permission(tool, args, risk='dangerous',
                                       conversation_id=ctx.conversation_id,
                                       run_id=ctx.run_id,
-                                      bound_command=bound):
+                                      bound_command=bound,
+                                      host=_target_host(ctx)):
                 return ReinDecision()
         else:
             # moderate 不可逆 → session 级授权可接受（风险有限）
             if self.check_permission(tool, args,
                                      conversation_id=ctx.conversation_id,
                                      run_id=ctx.run_id,
-                                     bound_command=bound):
+                                     bound_command=bound,
+                                     host=_target_host(ctx)):
                 return ReinDecision()
 
         # 自动审批（permission_mode="auto"）：工具级 dangerous / moderate 不可逆
@@ -845,8 +1040,10 @@ class PermissionGate:
                 # （纯工具级授权，如 service_manage 无命令参数 → 前端 isCommandTool
                 # 判断下「授权命令」行自然隐藏）。展示的是授权键实际绑定的那条命令，
                 # 用户批准什么就看到什么。
-                # 工具名 → 中文说明的后果表尚未收录（工具级风险等级已由
-                # ToolMeta 声明），本期只补上下文不补 explain。
+                # explain 取工具自己声明的 description：工具级卡片此前只有英文
+                # message，同一张卡族里它是唯一没有中文后果说明的那一个。
+                "explain": self._tool_description(tool, ctx),
+                "explain_source": "tool",
                 **permission_display_fields(ctx, str(bound or "")),
             },
         )] if is_first else []
@@ -858,6 +1055,9 @@ class PermissionGate:
                 "role": "user",
                 "content": f"[系统拦截] 工具 {tool} 风险等级为 {risk}，需要用户授权才能执行。请换用更安全的工具，或在弹出的授权卡片中允许此工具。",
             }],
+            # 卡片已弹出 → 本次调用要等人。Driver 拿这把键登记等待项，
+            # grant / deny 端点算出同一把键（都是 _grant_key）把它唤醒。
+            approval_key=self.approval_key_for_call(tool, args, bound),
         )
 
 

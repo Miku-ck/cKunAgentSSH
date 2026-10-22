@@ -7,7 +7,7 @@
                    （_perm_pending / _audit_target_* / tool_call_signature）
 - guards.py        FilesystemGuard（命令分类阻断 + dangerous 审批闭环）、AuditLogger
 - gate.py          PermissionGate（三态授权 + prod 预授权 allowlist）与进程级单例
-- flow.py          LoopDetector / ConfidenceMonitor / DynamicBudgetRein / CostBudgetRein
+- flow.py          LoopDetector / ConfidenceMonitor / DynamicBudgetRein / CostBudgetRein / WallClockRein
 - lifecycle.py     SkillRein（AGENT_START 技能注入）、ReflectionRein（终态反思/回收）
 - clarification.py 澄清向导（pending 存储 + 检测器/题集注册表 + 拦截器）
 - defaults.py      create_default_reins 装配
@@ -44,7 +44,7 @@ from .core import (
     tool_call_signature,
 )
 from .defaults import create_default_reins
-from .flow import CostBudgetRein, LoopDetector
+from .flow import CostBudgetRein, LoopDetector, WallClockRein
 from .gate import (
     PermissionGate,
     _get_global_permission_gate_sync,
@@ -63,6 +63,7 @@ __all__ = [
     "PermissionGate",
     "AuditLogger",
     "CostBudgetRein",
+    "WallClockRein",
     "SkillRein",
     "ClarificationInterceptor",
     "record_clarification_answers",

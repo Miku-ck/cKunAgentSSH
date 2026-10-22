@@ -59,6 +59,29 @@ TERMINAL_RUN_STATES: frozenset[str] = frozenset(
 FILE_MUTATION_TOOLS: frozenset[str] = frozenset({"file_write", "file_edit"})
 
 
+# 无副作用的只读观测工具 —— 单一事实源。
+# 两个消费方，同一个判定（「纯观测、重复调用无副作用」）：
+#   1. driver 只读工具并行化：同一轮 LLM 产出的连续只读调用可并发执行
+#      （段间以副作用工具为屏障，保证 read→write→read 的顺序语义不被破坏）；
+#   2. LoopDetector 循环检测放宽：读取大文件、目录遍历、观测轮询是合理的
+#      高频重复调用，长窗口阈值放宽到 7。
+# ⚠️ 语义边界（勿混淆，两套口径合并必然漂移）：
+#   - plan_mode.PLAN_READ_ONLY_TOOLS 是「计划模式下允许的工具」，含
+#     todo_write/plan_write/spec_write/goal_write 这类【写工件】工具 ——
+#     它们 safe+reversible+idempotent 三判据全满足但有写副作用，绝不能进本集合；
+#   - DynamicBudgetRein 的读文件统计判据是「带 path 参数的读工具」（子集，
+#     见 flow._FILE_READ_TOOLS），与本集合的「无副作用」不是同一件事。
+# 注意：web_search/web_fetch/memory_search/load_skill 虽也无副作用，但不入本集合
+# —— 并行扇出的目标场景是「同一 SSH 会话的远程观测」（sys_overview+process_inspect+
+# network_probe+log_read 一次采集全机状态），外部网络请求与全局状态读取保持串行，
+# 避免并发放大对外部服务的压力。
+READONLY_TOOLS: frozenset[str] = frozenset({
+    "file_read", "file_glob", "file_grep", "read_image",
+    "log_read", "sys_overview", "process_inspect", "network_probe",
+    "job_list", "job_output",
+})
+
+
 class ErrorType(str, Enum):
     """错误分类 — Stirrups 用于决定恢复策略"""
     TRANSIENT = "transient"        # 瞬时（网络/超时/503）— 重试
@@ -229,6 +252,11 @@ class ReinDecision:
     undo_actions: list[UndoAction] = field(default_factory=list)
     inject_messages: list[dict[str, str]] = field(default_factory=list)  # 注入到下一轮 LLM 的纠偏消息
     terminate: bool = False  # 终止整个 run（FAILED）；仅 PRE_TOOL_CALL 的拦截器会设置
+    # 等待用户审批时，本次调用实际绑定的授权键（裸键，不含 `@host|` 前缀）。
+    # 只有发 permission_needed 的拦截器会填：Driver 拿它向 reins.approval_wait
+    # 登记等待项，grant / deny 端点算出同一把键把它唤醒。空串 = 本次拦截不需要
+    # 等人（hardline 阻断、prod 未预授权、计划模式拒绝……那些是「直接否掉」）。
+    approval_key: str = ""
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -295,6 +323,21 @@ class AgentConfig:
     # None → CostBudgetRein 内置默认（$2.0 / 3M tokens）；0 → 显式禁用；>0 → 自定义上限
     max_cost_usd: Optional[float] = None
     max_total_tokens: Optional[int] = None
+    # 任务级墙钟 deadline（POST_ITERATION 的 WallClockRein 每轮检查）。
+    # 单命令 60s 超时只兜住一条命令挂死，兜不住"每条命令都合法但整体跑不完"
+    # 的慢性失控；时间维度的最后防线。0 → 显式禁用。
+    max_wall_clock_s: int = 1800
+    # ── 强制收敛轮（机制式）──
+    # 软预警只是劝导，模型仍可能把最后一轮耗在工具调用上。开启后最后一轮
+    # call_llm 不传 tools：模型物理上无法调工具，输出必然是文本 → 走收尾分支，
+    # 终态 COMPLETED 而非 MAX_REACHED。False 回退旧行为。
+    forced_convergence_enabled: bool = True
+    # ── 假完成强校验（CompletionGuard）──
+    # 有 workflow goal 的 run 已有 goal 自检锚；这里补无 goal 的 run：
+    # 收尾时用轻量 LLM 裁决「最终答案是否覆盖钉扎任务」，FAIL 注入纠偏续跑
+    # （每 run 一次），超时/异常/解析失败 fail-open 放行。trivial/simple 不触发。
+    completion_guard_enabled: bool = True
+    completion_guard_timeout_s: float = 15.0
     # ── 意图识别 + 思考预算（避免无脑长思考拖垮上下文/可观测性）──
     # max_reasoning_tokens: thinking 阶段的 token 上限，None 表示不限制
     # 由 IntentionClassifier 在 run 启动时根据 task 文本推断；
@@ -315,6 +358,10 @@ class AgentConfig:
     enable_progressive_gathering: bool = True
     # reclassify_interval: 每隔 N 轮迭代重新评估意图等级
     reclassify_interval: int = 5
+    # ── 事后复盘（方案 Phase 2）──
+    # 复盘是 run 结束后的额外 LLM 调用（15s 超时、失败静默降级），成本敏感：
+    # 默认关闭，由用户显式开启。生成走后台任务，不阻塞 run 终态。
+    postmortem_enabled: bool = False
 
     def __post_init__(self) -> None:
         """温度/核采样在唯一入口校界，而不是各调用点各夹一次。
@@ -364,6 +411,15 @@ class RunContext:
     # PRE_TOOL_CALL 时 push tool_call_id，POST_TOOL_CALL 时 pop
     # tool_call_start 事件取 span_stack[-2] 作为 parent_span_id
     span_stack: list[str] = field(default_factory=list)
+    # 只读工具并行化（2026-10）：driver 正在检查/收尾的那条 tool_calls_log 条目。
+    # 6 处 Reins 读取点原先统一读 tool_calls_log[-1]，把「列表最后一条」当作
+    # 「当前正在检查的那条」—— 串行执行时二者等价；并行段内 POST 阶段处理
+    # 第 i 条时 [-1] 已是第 N 条，语义被打破。因此：
+    #   - driver 在每次 PRE/POST 检查前显式写入本字段，检查点统一走
+    #     ctx.active_tool_call（见下方 property）；
+    #   - 未显式写入时（直接构造 ctx 跑单测 / 串行路径未设置）回退
+    #     tool_calls_log[-1]，保持全部既有测试与调用方语义逐字不变。
+    current_tool_call: dict[str, Any] | None = None
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -408,6 +464,31 @@ class RunContext:
 
     def push_undo(self, action: UndoAction) -> None:
         self.undo_stack.append(action)
+
+    def remove_undo(self, action: UndoAction) -> None:
+        """按【身份】移除自己的 undo 条目。
+
+        saddle.execute 失败回滚后原先用 undo_stack.pop() 弹【栈顶】—— 串行时
+        刚 push 的就是自己的，二者等价；并行段内别的调用可能在自己之后 push，
+        弹栈顶会误删别人的条目（尤其 file_write/file_edit 的 FileContentUndo
+        被误删后，那个文件就失去了回滚能力）。必须按 is 身份定位。
+        """
+        for i in range(len(self.undo_stack) - 1, -1, -1):
+            if self.undo_stack[i] is action:
+                self.undo_stack.pop(i)
+                return
+
+    @property
+    def active_tool_call(self) -> dict[str, Any] | None:
+        """当前正在被 Reins 检查的那条 tool_calls_log 条目（单一事实源）。
+
+        全部 PRE/POST_TOOL_CALL 拦截器一律经此读取「当前调用」，不再直接
+        读 tool_calls_log[-1]（并行段内 [-1] 已不是当前条目，见
+        current_tool_call 字段注释）。未显式设置时回退 [-1]。
+        """
+        if self.current_tool_call is not None:
+            return self.current_tool_call
+        return self.tool_calls_log[-1] if self.tool_calls_log else None
 
 
 # ──────────────────────────────────────────────────────────────────────────────

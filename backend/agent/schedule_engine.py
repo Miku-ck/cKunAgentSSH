@@ -14,9 +14,12 @@
 import asyncio
 import calendar
 import logging
+import re
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+
+import httpx
 
 import database as db
 from prompts import SSH_MODE
@@ -25,6 +28,8 @@ from agent.harness.contracts import AgentConfig as HarnessAgentConfig
 from agent.harness.llm_client import StreamLLMClient
 from agent.cost_tracker import CostTracker
 from agent.electron_bridge import ElectronBridge
+from agent.environment_policy import EnvironmentResolution, resolve_run_environment
+from agent.memory import mstore
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +47,84 @@ _RUNS_PRUNE_INTERVAL_S = 6 * 3600
 _DEFAULT_TEMPERATURE = 0.7
 # 与 AgentConfig.top_p 的默认值同口径（contracts.py）
 _DEFAULT_TOP_P = 0.9
+
+# ── 巡检判读（方案 Phase 3：感知层推模式闭环）────────────────────────────────
+# 巡检类任务要求模型在报告末尾输出固定标记行，run 完成后由后处理正则提取：
+#   [巡检结论] 正常           → 零痕迹（不打扰，走既有状态回写路径）
+#   [巡检结论] 异常: <摘要>   → 报告写入 memories(kind='inspection_report')，
+#                               并置 schedules.last_abnormal_at
+# 判读零新增 LLM 调用（复用 run 本身的输出解析）；缺标记按正常处理
+# （fail-open）：旧任务格式与未要求标记的任务都不报错。
+_INSPECT_VERDICT_RE = re.compile(
+    r"^\s*\[巡检结论\]\s*(异常|正常)\s*[:：]?\s*(.*)$", re.MULTILINE
+)
+# 巡检类任务识别：空 prompt 即默认「例行检查」；否则按关键词启发式
+_INSPECT_TASK_KEYWORDS = ("巡检", "检查", "健康", "监控", "体检")
+_INSPECT_VERDICT_HINT = (
+    "巡检结论标记：请在报告的最末尾单独一行输出固定标记，供系统自动判读：\n"
+    "全部正常时输出：[巡检结论] 正常\n"
+    "存在异常时输出：[巡检结论] 异常: <一句话摘要，说明最严重的问题>\n"
+    "标记行必须严格按上述格式，单独成行，不要加任何前后缀。"
+)
+# 沉淀进记忆库的报告正文上限（与 runbook 同量级，防超长报告撑爆注入预算）
+_INSPECT_REPORT_MAX_CHARS = 4000
+# 巡检异常摘要独立截断：标记行冒号后的 (.* ) 可能被模型塞进长文本
+_INSPECT_SUMMARY_MAX_CHARS = 200
+# webhook 推送超时（方案 Phase 4）
+_WEBHOOK_TIMEOUT_S = 10.0
+
+
+def _is_inspection_task(sched: dict) -> bool:
+    """巡检类任务识别：空 prompt 即默认「例行检查」，否则按关键词启发式。"""
+    prompt = (sched.get("task_prompt") or "").strip()
+    if not prompt:
+        return True
+    return any(k in prompt for k in _INSPECT_TASK_KEYWORDS)
+
+
+def _extract_inspect_verdict(report: str):
+    """提取最后一个 [巡检结论] 标记行 → (结论, 摘要)；无标记返回 None（fail-open）。"""
+    last = None
+    for m in _INSPECT_VERDICT_RE.finditer(report or ""):
+        last = m
+    if not last:
+        return None
+    return last.group(1), (last.group(2) or "").strip()
+
+
+def _redact_webhook_err(e: Exception) -> str:
+    """webhook 异常消息去密：httpx 的 HTTPStatusError/连接错误会把完整请求 URL
+    （企微/钉钉机器人 key 就在 query 串里）塞进消息，直接落日志泄漏群机器人凭证。"""
+    msg = f"{type(e).__name__}: {e}"
+    return re.sub(r"(?i)(key|token|access_token)=([^&\s]+)", r"\1=***", msg)
+
+
+async def _notify_webhook(content: str) -> None:
+    """巡检异常 webhook 推送（方案 Phase 4）。
+
+    企微/钉钉群机器人兼容格式（msgtype:text）。降级铁律：全程自吞异常，
+    失败重试 1 次后放弃，绝不向巡检主流程抛任何东西；未配置（空串）= 关闭。
+    """
+    try:
+        url = (await asyncio.to_thread(db.get_app_setting, "notify.webhook_url") or "").strip()
+        if not url:
+            return
+        payload = {"msgtype": "text", "text": {"content": content}}
+        last_err: Exception | None = None
+        for attempt in range(2):  # 首次 + 失败重试 1 次
+            try:
+                async with httpx.AsyncClient(timeout=_WEBHOOK_TIMEOUT_S) as client:
+                    resp = await client.post(url, json=payload)
+                    resp.raise_for_status()
+                    return
+            except Exception as e:
+                last_err = e
+                logger.warning("巡检 webhook 推送失败（第 %d 次）: %s",
+                               attempt + 1, _redact_webhook_err(e))
+        logger.warning("巡检 webhook 推送重试后仍失败，已放弃: %s",
+                       _redact_webhook_err(last_err) if last_err else "unknown")
+    except Exception as e:  # noqa: BLE001 — 降级铁律
+        logger.warning("巡检 webhook 推送异常（静默跳过）: %s", e)
 
 
 def _num_param(value, default: float) -> float:
@@ -305,7 +388,7 @@ class ScheduleEngine:
                 db.mark_schedule_run, sid, "running", last_run_at=started, last_run_id=run_id
             )
             run_in_db = True
-            content, err, state = await self._run_agent_once(sched, run_id)
+            content, err, state, target_host = await self._run_agent_once(sched, run_id)
             snippet = (content or "").strip()
             # S7-01 修复：终态由 done.state 决定，不再「正文非空就算 completed」。
             # driver 的四条终止路径（成本熔断 / MAX_REACHED / 循环检测 force_terminate /
@@ -323,6 +406,14 @@ class ScheduleEngine:
             )
             await asyncio.to_thread(db.mark_schedule_run, sid, status)
             logger.info("schedule=%s run=%s %s", sid, run_id, status)
+            # 巡检判读后处理（方案 Phase 3）：正常零痕迹；异常沉淀巡检报告。
+            # 后处理只增不改，任何失败都不影响已写回的任务状态。
+            if status == "completed" and snippet:
+                try:
+                    await self._handle_inspection_verdict(sched, snippet, target_host)
+                except Exception as pe:
+                    logger.warning("schedule=%s run=%s 巡检判读后处理失败（不影响任务状态）: %s",
+                                   sid, run_id, pe)
         except asyncio.CancelledError:
             # 审查修复（P2）：关停取消 — 把 run 标记为中断后重新抛出，
             # 否则 schedule_runs 永久滞留 'running'
@@ -359,12 +450,15 @@ class ScheduleEngine:
             except Exception:
                 pass
 
-    async def _run_agent_once(self, sched: dict, run_id: str) -> tuple[str, str, str]:
-        """组装 Harness 无头运行一次，返回 (最终 report 文本, 内部错误信息, 终态)。
+    async def _run_agent_once(self, sched: dict, run_id: str) -> tuple[str, str, str, str]:
+        """组装 Harness 无头运行一次，返回 (最终 report 文本, 内部错误信息, 终态, 目标主机名)。
 
         终态来自 driver 的 done 事件 payload（completed / failed / max_reached /
         human_help…），它是「这次到底收敛了没有」的唯一权威 —— S7-01：定时任务
         的成败判据必须吃它，不能吃正文是否非空。
+
+        目标主机名来自连接配置的反查（不是 sched['target_host']：那一列存的是
+        连接 ID，前端下拉选的是连接）—— 巡检报告要写人能认、能检索的主机名。
         """
         model_cfg = await asyncio.to_thread(self._resolve_model)
         if not model_cfg:
@@ -451,6 +545,19 @@ class ScheduleEngine:
                 )
                 raise BridgeError(code, str(e), original=e if isinstance(e, Exception) else None)
 
+        # ── 环境与目标主机：与交互式 /agent/run 同源（服务端按连接配置判定）──
+        # 原先两处都缺：environment 硬编码 "prod"（test 主机上的巡检也被当成
+        # 生产强化、审计环境列还记成 prod），且没传 target_host —— prod 主机上
+        # 预登记的 `@prod-db|...` 条目在定时任务里永远不命中，主机限域授权对
+        # 这条路径等于失效。
+        resolution = await resolve_run_environment("test", ssh_session_id)
+        schedule_environment = _schedule_environment(resolution)
+        logger.info(
+            "schedule=%s 环境判定: %s（source=%s, host=%s）",
+            sched["id"], schedule_environment, resolution.source,
+            resolution.host or "-",
+        )
+
         # 输出 token 上限不能设得等于/接近上下文上限，否则一旦带入输入就必然
         # 超过模型上下文窗口 → vLLM 返回 400，任务瞬时失败且无输出。
         # 此处钳制为上下文上限的一半，保留足够输出空间又不会触发 400。
@@ -486,7 +593,9 @@ class ScheduleEngine:
                 task=prompt,
                 conversation_id=conversation_id,
                 ssh_session_id=ssh_session_id,
-                environment="prod",
+                environment=schedule_environment,
+                # 主机限域授权的匹配维度：必须是连接配置里的 host，不是连接 ID
+                target_host=resolution.host,
                 system_prompt=system_prompt,
                 history=[],
                 memories=[],
@@ -514,7 +623,50 @@ class ScheduleEngine:
                         "schedule=%s 关闭会话 %s 失败: %s",
                         sched["id"], ssh_session_id, e,
                     )
-        return done_content, error_msg, done_state
+        return done_content, error_msg, done_state, resolution.host
+
+    @staticmethod
+    async def _handle_inspection_verdict(sched: dict, report: str,
+                                         resolved_host: str = "") -> None:
+        """巡检判读后处理：解析 [巡检结论] 标记行，异常时沉淀巡检报告（方案 Phase 3）。
+
+        降噪语义：只有异常才产生持久化痕迹 —— 正常巡检零噪音（不写记忆、不动
+        last_abnormal_at），这是告警降噪的最小可行实现。缺标记按正常处理。
+        报告落 global 作用域：会话 ID（ssh-N）跨进程回收且复用，host:{sid} 作用域
+        对持久知识不可达、跨重启还会串机；主机标识写在标题与正文首行，检索可见。
+        """
+        verdict = _extract_inspect_verdict(report)
+        if verdict is None or verdict[0] != "异常":
+            return
+        # 摘要独立截断：模型可能把长文本接在标记行冒号后（(.*)$ 全吞），
+        # 不截断会绕过报告正文 4000 上限把结论行撑到数千字
+        summary = (verdict[1] or "见报告正文")[:_INSPECT_SUMMARY_MAX_CHARS]
+        # sched['target_host'] 是连接 ID（用户在下拉里选的是连接），直接当主机名写进
+        # 长期记忆，标题就变成「巡检异常 conn-3f2a」—— 除了那个人，谁都看不懂，
+        # 按主机检索也搜不到。优先用本次 run 反查到的真实主机名。
+        host = ((resolved_host or "").strip()
+                or (sched.get("target_host") or "").strip() or "未指定主机")
+        name = (sched.get("name") or "").strip()
+        ts = db._now()
+        title = f"巡检异常 {host} {ts}" if not name or name == host else f"巡检异常 {name}({host}) {ts}"
+        content = (
+            f"[主机] {host}\n[任务] {name}\n[结论] {summary}\n[时间] {ts}\n\n"
+            f"{report[:_INSPECT_REPORT_MAX_CHARS]}"
+        )
+        await asyncio.to_thread(
+            mstore.add_memory,
+            kind="inspection_report",
+            content=content,
+            scope="global",
+            title=title[:80],
+            source="schedule",
+            importance=0.7,
+        )
+        await asyncio.to_thread(db.set_schedule_last_abnormal, sched["id"], ts)
+        logger.warning("schedule=%s 巡检异常已沉淀: %s", sched["id"], title)
+        # webhook 推送（方案 Phase 4）：沉淀之后独立执行，_notify_webhook 全程
+        # 自吞异常，推送失败不影响已完成的沉淀与状态回写
+        await _notify_webhook(f"[cKunAgentSSH 巡检异常] {title}\n{summary}")
 
     @staticmethod
     def _resolve_model() -> dict | None:
@@ -634,6 +786,19 @@ def compute_next_run(sched: dict, now: datetime | None = None) -> str:
     return _fmt(now + timedelta(hours=1))
 
 
+def _schedule_environment(resolution: EnvironmentResolution) -> str:
+    """定时任务本次运行的环境标签。
+
+    主机连接配置说了算（与交互式 /agent/run 同源）；查不到主机配置时按 prod
+    保守执行 —— 定时任务无人值守，没有「用户在场兜底」这一层，而「客户端声明的
+    test」在这里没有任何可信度（调用方传的 requested 只是查询基线，不代表声称）。
+    这条兜底与原先硬编码 prod 同姿态，不会放宽任何判定。
+    """
+    if resolution.source == "connection":
+        return resolution.effective
+    return "prod"
+
+
 def _build_schedule_system_prompt(sched: dict) -> str:
     parts = []
     # S7-02 的守卫段先落：它只读 sched，不碰 import 与时钟，所以不该被下面那段
@@ -660,5 +825,9 @@ def _build_schedule_system_prompt(sched: dict) -> str:
         "并输出结构化中文报告：先给总体结论，再用 ## 二级标题分节说明发现的问题、"
         "已执行的操作与后续建议。"
     )
+    if _is_inspection_task(sched):
+        # 巡检判读约定（方案 Phase 3）：模型只在报告末尾多输出一行标记，
+        # 后处理正则提取，判读零新增 LLM 调用
+        parts.append(_INSPECT_VERDICT_HINT)
     parts.append("请以只读、安全的操作为主，涉及破坏性操作时先说明计划再执行。")
     return "\n\n".join(parts)

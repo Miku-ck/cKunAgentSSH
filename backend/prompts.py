@@ -18,6 +18,14 @@ SSH_MODE_PROMPT = (
     "file_read / file_edit / file_grep / file_glob 工具；需要更复杂的处理"
     "（sed 管道、批量重命名等）再通过 shell_exec 执行。"
     "不要调用工具列表中不存在的工具。"
+    # 诊断循环引导（方案 Phase 1.3）：对标主流 SRE Copilot 的假设驱动方法论，
+    # 纯提示词改动、零新代码路径。与运维方法注入段互补：那边讲「怎么变更」，
+    # 这里讲「怎么想」。
+    "诊断方法论：排障遵循假设驱动循环——先基于观测提出假设，再用只读工具"
+    "（sys_overview / process_inspect / network_probe / log_read / file_read）验证，"
+    "收敛出结论后再行动，不要在没有证据时直接下发变更命令；动手修复前先用 "
+    "runbook_search 检索是否有历史处理经验，命中则优先参考；成功解决一个非平凡"
+    "问题后，用 runbook_save 把症状、定位过程、修复命令与验证方式沉淀下来。"
 )
 
 

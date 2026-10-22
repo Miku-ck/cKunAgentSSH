@@ -32,6 +32,7 @@ from .driver import Driver
 from .bridle import Bridle, CompressionConfig
 from .reins import create_default_reins
 from .reins.plan_mode import MODE_KEY as PERMISSION_MODE_KEY
+from .reins.core import AWAIT_APPROVAL_KEY
 from .saddle import Saddle, Sandbox, UndoBuilder
 from .stirrups import Stirrups
 
@@ -109,6 +110,8 @@ class Harness:
         self._stirrups = Stirrups(llm_client=llm_client)
         # 注入压缩回调
         self._stirrups.set_compress_callback(self.bridle.compress)
+        # P1 生成式滚动摘要：同一 LLMClient 兼任摘要器（失败静默降级抽取式）
+        self.bridle.set_summarizer(llm_client)
         # 审查修复：压缩后按 ctx 重建消息 — 压缩只更新 ctx，Stirrups.call_llm
         # 持有的 messages 快照不随之缩小，不重建则上下文超限重试必然再次 400
         self._stirrups.set_messages_rebuilder(self.bridle.assemble)
@@ -161,6 +164,8 @@ class Harness:
         conversation_id: str = "",
         ssh_session_id: Optional[str] = None,
         environment: str = "test",
+        environment_source: str = "",
+        target_host: str = "",
         enable_visible_terminal: bool = False,
         system_prompt: str = "",
         history: Optional[list[dict[str, str]]] = None,
@@ -170,6 +175,7 @@ class Harness:
         skill_ids: Optional[list[str]] = None,
         auto_skill_match: bool = True,
         permission_mode: str = "normal",
+        await_approval: bool = False,
     ) -> AsyncIterator[TraceEvent]:
         """
         主入口 — yield TraceEvent
@@ -183,6 +189,17 @@ class Harness:
                 reins.plan_mode 的只读强制（写工具与写命令一律拒绝）；"auto" 会激活
                 reins.auto_approve —— 弹审批卡前先让模型裁决一次，裁不过照旧弹卡。
                 默认 "normal"，既有调用方不传时行为与本参数引入前完全一致。
+            environment_source: 环境标签的判定来源（agent.environment_policy 的
+                source 值）。只用于展示与取证：审批卡上多一行「这个环境是谁判的」，
+                不参与任何授权判定。不传时卡片不显示该行。
+            target_host: 本次 run 的目标主机（服务端从连接配置反查）。主机限域
+                授权（allowlist 里的 `@host|key`）按它匹配 —— 不传时空串，
+                只命中全局条目，与写入端「host 为空则落全局条目」对称。
+            await_approval: 交互式 run 标志。True 时 Driver 在弹出审批卡后**真的
+                停住**等用户点击（见 reins.approval_wait），醒来重判一次 —— 批准
+                则直接执行本次调用，不再依赖模型重发；拒绝则走「曾被用户拒绝」。
+                默认 False（定时任务等无人值守入口不传）：没人可点卡片时等下去
+                就是挂死，因此保持与引入之前完全一致的「拦截即返回」行为。
         """
         if not self._assembled:
             raise RuntimeError("Harness 未 assemble，请先调用 assemble()")
@@ -242,6 +259,20 @@ class Harness:
         # 其 saddle 字段会被后启动的并发 run 覆盖；拦截器改从 ctx.metadata 读取
         # 当前 run 的 Saddle，避免查错 ToolRegistry 误判"工具未注册"。
         ctx.metadata["saddle"] = self._saddle
+        # 环境标签的判定来源（服务端按连接配置判定 / 客户端声明未核实）。
+        # 与 saddle 同属 per-run 元数据：审批卡片的展示字段据此如实标注，
+        # 让审批人看得见「这个 test 是不是服务端核实过的」。
+        if environment_source:
+            ctx.metadata["environment_source"] = environment_source
+        # 目标主机：主机限域授权的匹配维度（见 reins.gate 的 @host| 条目）。
+        # 与 environment_source 同属「服务端反查结果」，不信任客户端字段。
+        if target_host:
+            ctx.metadata["target_host"] = target_host
+        # 交互式 run：审批卡片弹出后 Driver 阻塞等用户点击（见 reins.approval_wait）。
+        # 只有 routes/agent.py 的 /agent/run 会置位；定时任务、测试等无人值守入口
+        # 不传 ⇒ 不阻塞，行为与引入之前一致。
+        if await_approval:
+            ctx.metadata[AWAIT_APPROVAL_KEY] = True
         # 权限模式（per-run，与 saddle / emit_event 同属 ctx.metadata）。
         # reins.plan_mode 的两个拦截器读它决定是否启用只读强制；reins.auto_approve
         # 读它决定是否让 LLM 代审；这里是**唯一**的写入点 —— 默认 "normal" 保证

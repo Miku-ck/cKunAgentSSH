@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections import deque
 from dataclasses import dataclass, field
 
 from agent.audit import append_record_async
 from agent.remote_protocol import has_exit_sentinel
 
-from ..contracts import FILE_MUTATION_TOOLS, ReinDecision, ReinPoint, RunContext, TraceEvent
+from ..contracts import (
+    FILE_MUTATION_TOOLS,
+    READONLY_TOOLS,
+    ReinDecision,
+    ReinPoint,
+    RunContext,
+    TraceEvent,
+)
 from .core import _audit_environment, tool_call_signature
 
 logger = logging.getLogger(__name__)
@@ -37,12 +45,10 @@ class LoopDetector:
 
     # 只读/低风险工具：读取大文件、目录遍历、观测轮询是合理的高频重复调用，
     # 放宽长窗口阈值。注意：必须与 builtin 注册名一致（曾残留 work 模式旧名
-    # read_file/list_dir 导致该放宽永不命中 — 2026-09 清理修复）
-    _READONLY_TOOLS: frozenset = field(default_factory=lambda: frozenset({
-        "file_read", "file_glob", "file_grep", "read_image", "log_read",
-        "sys_overview", "process_inspect", "network_probe",
-        "job_list", "job_output",
-    }), init=False, repr=False)
+    # read_file/list_dir 导致该放宽永不命中 — 2026-09 清理修复）。
+    # 收敛到 contracts.READONLY_TOOLS 单一事实源（与并行化共用同一判定）。
+    _READONLY_TOOLS: frozenset = field(
+        default_factory=lambda: READONLY_TOOLS, init=False, repr=False)
 
     async def check(self, ctx: RunContext) -> ReinDecision:
         if not ctx.tool_calls_log:
@@ -54,7 +60,7 @@ class LoopDetector:
         )
         loop_count: int = ctx.metadata.setdefault("loop_count", 0)
 
-        last = ctx.tool_calls_log[-1]
+        last = ctx.active_tool_call
         sig = tool_call_signature(last)
         # C-review M7：「等待审批」窗口内的签名豁免循环检测 — 审批期间的重发是
         # 合理等待，不是循环。旧实现连续 3 次重发即触发循环检测（本拦截器
@@ -308,8 +314,12 @@ class DynamicBudgetRein:
     # 文件变更工具集取自 contracts.FILE_MUTATION_TOOLS（唯一源，与 run 摘要共用）
     _FILE_MUTATION_TOOLS: frozenset = field(
         default_factory=lambda: FILE_MUTATION_TOOLS, init=False, repr=False)
-    # 只读工具集：多次读取不同文件是合理的工作密度，应给予预算（旧名残留修复）
-    _READONLY_TOOLS: frozenset = field(default_factory=lambda: frozenset({
+    # 读文件工具集（判据：带 path 类参数、读取行为计入「不同文件读取数」）。
+    # ⚠️ 与 contracts.READONLY_TOOLS（无副作用只读观测，含无路径参数的观测工具）
+    # 不是同一判定：本集合的成员必须能从 args 提取出 path 才有计数意义，故意是
+    # READONLY_TOOLS 的子集 —— 命名区分开，避免两份 _READONLY_TOOLS 字面量漂移
+    # （2026-10 收敛前的真实状态：一处 10 个、一处 5 个，语义各异）。
+    _FILE_READ_TOOLS: frozenset = field(default_factory=lambda: frozenset({
         "file_read", "file_glob", "file_grep", "read_image", "log_read",
     }), init=False, repr=False)
     # 每编辑 N 个不同文件追加预算
@@ -349,7 +359,7 @@ class DynamicBudgetRein:
                 norm = str(path)
             if tool in self._FILE_MUTATION_TOOLS:
                 touched_files.add(norm)
-            elif tool in self._READONLY_TOOLS:
+            elif tool in self._FILE_READ_TOOLS:
                 read_files.add(norm)
 
         file_count = len(touched_files)
@@ -494,3 +504,95 @@ class CostBudgetRein:
                 },
             )],
         )
+
+
+@dataclass
+class WallClockRein:
+    """
+    任务级墙钟 deadline — POST_ITERATION
+
+    背景：单命令 60s 超时只兜住一条命令挂死；步数上限 + DynamicBudgetRein
+    对"多轮短步数、每步都合法"的慢性失控也可能过宽。时间维度的最后防线：
+    run 从启动到当前的墙钟时长超上限即熔断终止。
+
+    机制（复刻 CostBudgetRein 口径）：
+    - 打点：driver 主循环入口 ctx.metadata["run_started_mono"]（time.monotonic，
+      不受系统时钟跳变影响）
+    - 软阈值（elapsed ≥ 上限 80%）：一次性注入收尾劝导（metadata 标记防重发），
+      走 POST_ITERATION 的 inject_messages 通道
+    - 硬阈值（elapsed ≥ 上限）：intercepted + terminate + 落审计链
+      （action="wall_clock_breaker"，conclusion="blocked"）
+    - 上限取 ctx.config.max_wall_clock_s（0 → 显式禁用）；getattr 兜底：
+      旧测试的 stub config 缺该属性时视为禁用，不引入回归
+    - 拦截器内部异常 fail-open（跳过本次检查）——熔断自身故障不阻断主流程
+    """
+    point: ReinPoint = field(default=ReinPoint.POST_ITERATION, init=False)
+    # priority=2：先于 DynamicBudgetRein(3)（熔断后不应再追加步数），
+    # 后于 CostBudgetRein(1)（资源维度先判，短路语义下成本/token 优先熔断）
+    priority: int = field(default=2, init=False)
+    # 软阈值比例：elapsed 达上限 80% 时注入预警
+    soft_ratio: float = 0.8
+
+    async def check(self, ctx: RunContext) -> ReinDecision:
+        max_seconds = getattr(ctx.config, "max_wall_clock_s", 0) or 0
+        if max_seconds <= 0:
+            return ReinDecision()
+        started = (ctx.metadata or {}).get("run_started_mono")
+        if started is None:
+            return ReinDecision()
+        try:
+            elapsed = time.monotonic() - float(started)
+        except (TypeError, ValueError):
+            logger.warning("WallClockRein 读取打点失败，跳过本次检查")
+            return ReinDecision()
+
+        if elapsed >= max_seconds:
+            reason = f"墙钟超限: elapsed={elapsed:.0f}s (上限 {max_seconds}s)"
+            logger.warning("WallClockRein 熔断: %s (run_id=%s)", reason, ctx.run_id)
+            # 落审计链（熔断也是可审计动作）；conclusion 取值受 audit 校验，用 blocked
+            try:
+                await append_record_async(
+                    action="wall_clock_breaker",
+                    conclusion="blocked",
+                    run_id=ctx.run_id,
+                    iteration=ctx.iteration,
+                    target_type="run",
+                    target_id=ctx.run_id,
+                    environment=_audit_environment(ctx),
+                    result=reason,
+                )
+            except Exception:
+                logger.warning("WallClockRein 审计写入失败（不阻塞）")
+            return ReinDecision(
+                intercepted=True,
+                terminate=True,
+                intercept_reason=reason,
+                events=[TraceEvent(
+                    kind="warning",
+                    source="reins.wall_clock",
+                    run_id=ctx.run_id,
+                    iteration=ctx.iteration,
+                    payload={
+                        "message": f"墙钟超限：运行时长超预算，运行终止（{reason}）",
+                        "elapsed_s": round(elapsed, 1),
+                        "max_wall_clock_s": max_seconds,
+                    },
+                )],
+            )
+
+        # 软阈值预警（一次性）：elapsed 达上限 80% 时注入收尾劝导
+        if not (ctx.metadata or {}).get("wall_clock_warned") \
+                and elapsed >= max_seconds * self.soft_ratio:
+            ctx.metadata["wall_clock_warned"] = True
+            return ReinDecision(
+                inject_messages=[{
+                    "role": "user",
+                    "content": (
+                        f"[系统提示] 任务已运行 {elapsed:.0f}s"
+                        f"（达到墙钟上限 {max_seconds}s 的 80%）。"
+                        "请尽快收尾：完成当前关键步骤后直接输出结果总结，"
+                        "不要再开启新的大任务。"
+                    ),
+                }],
+            )
+        return ReinDecision()

@@ -26,6 +26,7 @@ from routes.audit import router as audit_router
 from routes.schedules import router as schedules_router
 from routes.workflow import router as workflow_router
 from agent.consciousness_tick import get_global_tick
+from agent.audit import AuditWriteError
 from agent.bridge_relay import bridge_ws_endpoint
 import win_asyncio_teardown
 
@@ -231,6 +232,19 @@ async def health():
     唯一免 token 端点，不回显版本号：本机其他进程探测到开放端口后可借此
     指纹识别应用；版本细节由需认证的 /settings/diagnostics 提供。"""
     return {"status": "ok"}
+
+
+# 审计链不可写 → 关键决策（授权生效）必须失败。原实现里 append_record 静默吞掉
+# 写失败，授权照样落地：事后取证看到一条没有「谁批准了什么」的干净链。
+# 统一转 503 而不是 500 —— 这是依赖面（磁盘/锁）不可用，不是请求写错了。
+@app.exception_handler(AuditWriteError)
+async def _audit_write_error_handler(request: Request, exc: AuditWriteError):
+    logger.error("关键审计写入失败，已拒绝该动作: %s %s err=%s",
+                 request.method, request.url.path, exc)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "审计链不可写，该操作已拒绝生效（请检查磁盘与数据库锁）"},
+    )
 
 
 # 注册路由

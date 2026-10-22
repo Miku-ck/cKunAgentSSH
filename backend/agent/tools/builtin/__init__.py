@@ -50,6 +50,8 @@ from agent.tools.builtin.memory_tools import (
     MemoryInvalidateTool,
     BlockUpdateTool,
 )
+# Runbook 知识库（排障经验沉淀 / 检索，复用 memories 表 kind='runbook'）
+from agent.tools.builtin.runbook_tools import RunbookSaveTool, RunbookSearchTool
 # Spec/Plan/Goal 三阶段工作流（文档落盘，非 runbook）
 from agent.tools.builtin.workflow_tools import (
     SpecWriteTool,
@@ -87,6 +89,9 @@ _ALL_TOOL_CLASSES: list[type[BaseTool]] = [
     MemoryAddTool,
     MemoryInvalidateTool,
     BlockUpdateTool,
+    # Runbook 知识库（经验沉淀 / 检索）
+    RunbookSaveTool,
+    RunbookSearchTool,
     # Spec/Plan/Goal 三阶段工作流
     SpecWriteTool,
     PlanWriteTool,

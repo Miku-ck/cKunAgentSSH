@@ -34,6 +34,8 @@ import database as db
 from routes.terminal import _get_model_config
 from sse_utils import sse_event
 from agent.audit import append_record_async
+from agent import audit
+from agent.environment_policy import EnvironmentResolution, resolve_run_environment
 from agent.tools import create_registry, ToolRegistry
 from agent.memory import mstore
 from agent.memory import budget as memory_budget
@@ -52,6 +54,7 @@ from agent.harness import Harness, HarnessConfig
 from agent.harness.contracts import AgentConfig as HarnessAgentConfig
 from agent.harness.contracts import TERMINAL_RUN_STATES
 from agent.harness.llm_client import StreamLLMClient
+from agent.harness.reins import approval_wait
 from agent.harness.telemetry import SSEAdapter
 
 logger = logging.getLogger(__name__)
@@ -541,6 +544,62 @@ async def _release_run_slot(conversation_id: str, run_id: str) -> None:
     _release_run_slot_sync(conversation_id, run_id)
 
 
+# ── run 级环境判定登记 ──────────────────────────────────────────────
+# 审批端点（grant / deny-command）只有 run_id，没有 environment 字段 —— 原先它们
+# 写审计时 environment 取默认值 "test"，于是对 prod 主机的授权在审计页的 prod
+# 视图里**根本不存在**，而且 approve 记录一律显示成测试环境的审批。
+# 这里把服务端判定结果（agent.environment_policy）按 run_id 登记，授权端点据此
+# 写对的环境列与主机作用域；run 终态时移入有界墓碑（见下方 _RUN_ENV_GRAVE）。
+_RUN_ENV: dict[str, EnvironmentResolution] = {}
+# 已结束 run 的判定结果墓碑：审批卡不随 run 结束消失（用户可以在 run 终态后补点
+# 「始终允许」），而 _RUN_ENV 在 event_stream 的 finally 里就被清掉了。不留墓碑的话，
+# 晚点批准会拿不到 host → 落成全局条目 —— 在 prod 主机上批准的授权，只要多点几分钟
+# 就变成对所有主机生效，主机维度被静默绕过。
+# 有界（最近若干次 run）：只存判定小对象，超出按插入顺序淘汰。
+_RUN_ENV_GRAVE: dict[str, EnvironmentResolution] = {}
+_RUN_ENV_GRAVE_MAX = 256
+
+
+def _remember_run_environment(run_id: str, resolution: "EnvironmentResolution") -> None:
+    _RUN_ENV[run_id] = resolution
+
+
+def _forget_run_environment(run_id: str) -> None:
+    resolution = _RUN_ENV.pop(run_id, None)
+    # host 为空（本地 run / 桥接不可用）没有保留价值：补批准的授权本来就落全局，
+    # 与登记时的匹配口径一致。
+    if resolution is None or not resolution.host:
+        return
+    _RUN_ENV_GRAVE[run_id] = resolution
+    while len(_RUN_ENV_GRAVE) > _RUN_ENV_GRAVE_MAX:
+        _RUN_ENV_GRAVE.pop(next(iter(_RUN_ENV_GRAVE)))
+
+
+def _run_resolution(run_id: str) -> Optional["EnvironmentResolution"]:
+    """该 run 的环境判定：进行中的登记优先，其次已结束 run 的墓碑。"""
+    key = run_id or ""
+    return _RUN_ENV.get(key) or _RUN_ENV_GRAVE.get(key)
+
+
+def _run_environment(run_id: str) -> str:
+    """该 run 的权威环境标签；未登记（旧 run / 测试直调）时回落默认值。"""
+    resolution = _run_resolution(run_id)
+    return resolution.effective if resolution else audit.DEFAULT_ENVIRONMENT
+
+
+def _run_host(run_id: str) -> str:
+    """该 run 的目标主机（服务端从连接配置反查）；未登记时返回空串。
+
+    空串不是错误：它意味着「没核实过目标主机」，写入端据此落全局条目，
+    与匹配端「host 为空只查全局」对称 —— 否则会出现「授权已生效但永不命中」
+    的静默故障（用户反复弹卡而面板显示已授权）。
+
+    查墓碑：run 终态后补点「始终允许」的卡片仍需落回原主机（见 _RUN_ENV_GRAVE）。
+    """
+    resolution = _run_resolution(run_id)
+    return resolution.host if resolution else ""
+
+
 _AGENT_RUNS_PRUNE_INTERVAL_S = 6 * 3600  # agent_runs/tool_calls 保留清理节流（每 6h）
 _last_agent_runs_prune_at = 0.0
 
@@ -853,6 +912,14 @@ async def agent_run(req: AgentRunRequest, request: Request):
             status_code=409,
             detail=f"该会话已有运行中的 Agent 任务（run_id={_conflict}），请等待其结束或终止后再试",
         )
+
+    # P0-1：环境标签由服务端判定（见 agent.environment_policy）。
+    # req.environment 只算一个「上限请求」：主机连接配置标了 prod 就不允许降级成
+    # test —— 否则一次请求就能把生产强化的「危险命令仅预登记 allowlist」整条绕开。
+    # 拿不到主机信息时不拦 run，但 source 会一路带到审批卡与审计记录（未核实）。
+    env_resolution = await resolve_run_environment(
+        req.environment, req.ssh_session_id or "")
+    _remember_run_environment(run_id, env_resolution)
     try:
         # 持久化 agent_run 记录（审查 M-13：放线程池）
         await asyncio.to_thread(
@@ -879,6 +946,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
     except Exception:
         # 占位已得但落库失败 → 释放占位，避免该会话被永久锁死
         await _release_run_slot(req.conversation_id, run_id)
+        _forget_run_environment(run_id)
         raise
 
     # 收集运行轨迹（用于结束后生成情景记忆）
@@ -926,7 +994,9 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     task=req.task,
                     conversation_id=req.conversation_id,
                     ssh_session_id=req.ssh_session_id,
-                    environment=req.environment,
+                    environment=env_resolution.effective,
+                    environment_source=env_resolution.source,
+                    target_host=env_resolution.host,
                     enable_visible_terminal=req.visible_terminal,
                     system_prompt=final_system_prompt,
                     history=history,
@@ -936,6 +1006,9 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     skill_ids=req.skill_ids,
                     auto_skill_match=req.auto_skill_match,
                     permission_mode=permission_mode,
+                    # 交互式 run：审批卡弹出后 Driver 真的停住等用户点击。
+                    # 不传的入口（定时任务）没人可点卡片，保持「拦截即返回」。
+                    await_approval=True,
                 ):
                     # M2 修复：检测客户端断连后立即停止 producer，避免空转浪费算力
                     if await request.is_disconnected():
@@ -1271,6 +1344,9 @@ async def agent_run(req: AgentRunRequest, request: Request):
             #      2) 其余清理全部 except BaseException；
             #      3) 关键异步清理用 shield（外层被取消时内层任务继续跑完）。
             _release_run_slot_sync(req.conversation_id, run_id)
+            # 环境判定登记与 once 授权池同生命周期：run 结束后不再被授权端点读到，
+            # 不清理就会随每次 run 无界增长（与环境无关的旧 run 永远查不到）
+            _forget_run_environment(run_id)
             try:
                 heartbeat_task.cancel()
                 engine_task.cancel()
@@ -1516,6 +1592,7 @@ async def grant_tool_permission(req: PermissionGrantRequest):
       （命令工具写入的是 `tool:cmdhash` 键，不覆盖其他命令 — 审查 M-3）
     """
     from agent.harness.reins import _get_global_permission_gate_sync
+    from agent.harness.reins.gate import normalize_host, scoped_key
     if req.scope not in ("once", "session", "always"):
         raise HTTPException(status_code=400, detail="scope 必须是 once、session 或 always")
     # once 授权的两道前置守卫（都只在 scope==once 时触发，合并到一个条件块）：
@@ -1547,34 +1624,59 @@ async def grant_tool_permission(req: PermissionGrantRequest):
 
     # H13 修复 A5：session scope 改用进程级单例（原 501 限制移除）
     pg = _get_global_permission_gate_sync()
+    # 写前审计：先把「这条授权发生了」落进链，再让授权生效。顺序反过来（先 grant
+    # 再审计）时，一次写失败就会留下「授权已生效、没有记录」的缺口 —— 而审计链里
+    # 最危险的形态不是空链，是看起来完整、实际漏了一条的链。
+    # grant_key_for 只校验 + 算键、不改任何授权状态，保证审计记录不会先于一条
+    # 最终被 ValueError 拒绝的授权落地。
     try:
-        grant_key = pg.grant(req.tool, scope=req.scope, command=req.command,
-                             conversation_id=req.conversation_id, run_id=req.run_id)
+        grant_key = pg.grant_key_for(
+            req.tool, req.command, scope=req.scope, run_id=req.run_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     # C-review C2 修复：批准动作落审计链（原实现只写内存/allowlist，
     # 事后无法证明"谁批准了什么"，等保审计目标落空）。
-    # append_record_async 自带"线程池执行 + 失败静默"（阻塞副作用不冻结事件循环、
-    # 审计写失败不阻塞授权），调用方不必再包 try
+    # S2-04：审批决策必须带 run_id。已退役的 docs/security-boundary.md §6 声明每条审批
+    # 记录可追到它服务的 run，而原实现八处 append_record 全都没传 run_id ——
+    # grant 这一处连 req.run_id 都攥在手里（scope=once 还强制它非空，否则 400）。
+    # 事后只能证明「有人批过 foo」，证不了「批的是哪次运行」，等保审计目标落空。
+    # critical=True：写不进去就不授权（全局 handler 转 503），详见 audit.append_record。
+    # 主机限域：always 与 session 都用 —— once 本来就随 run 结束而失效，run 只跑
+    # 一台主机，不需要再限定作用域。session 不限定就会漏成「测试机上点本会话允许，
+    # 同一对话切到生产机后同一条命令直接免审」（会话跨主机，而主机是具体的）。
+    # host 来自服务端反查（与 environment 同源），拿不到时为空 → 落全局条目，
+    # 与匹配端「host 为空只查全局」对称，不会出现「授权了但永不命中」。
+    grant_host = _run_host(req.run_id) if req.scope in ("always", "session") else ""
     await append_record_async(
         action=f"permission_grant:{req.tool}",
         conclusion="approved",
-        # S2-04：审批决策必须带 run_id。已退役的 docs/security-boundary.md §6 声明每条审批
-        # 记录可追到它服务的 run，而原实现八处 append_record 全都没传 run_id ——
-        # grant 这一处连 req.run_id 都攥在手里（scope=once 还强制它非空，否则 400）。
-        # 事后只能证明「有人批过 foo」，证不了「批的是哪次运行」，等保审计目标落空。
         run_id=req.run_id,
         target_type="tool",
-        target_id=grant_key,
+        target_id=scoped_key(grant_host, grant_key),
+        # 环境列原先恒为默认值 "test"：对 prod 主机的授权在审计页的 prod 视图里
+        # 直接不存在，等于把生产审批藏起来了。取本次 run 的服务端判定结果。
+        environment=_run_environment(req.run_id),
         command_raw=req.command or "",
-        result=f"scope={req.scope},conversation={req.conversation_id or '-'}",
+        result=(f"scope={req.scope},conversation={req.conversation_id or '-'}"
+                f",host={grant_host or '全局'}"),
+        critical=True,
     )
-    return {"tool": req.tool, "scope": req.scope, "grant_key": grant_key, "granted": True}
+    # 审计已落地，此刻才让授权生效。
+    pg.grant(req.tool, scope=req.scope, command=req.command,
+             conversation_id=req.conversation_id, run_id=req.run_id,
+             host=grant_host)
+    # 唤醒正在等这张卡的 run：Driver 在审批点阻塞（见 reins.approval_wait），
+    # 不叫醒它就得一直挂到兜底超时。授权已落库，醒来重判自然放行。
+    approval_wait.resolve_for_call(
+        req.run_id, req.tool, grant_key, approval_wait.ALLOWED)
+    return {"tool": req.tool, "scope": req.scope, "grant_key": grant_key,
+            "host": normalize_host(grant_host), "granted": True}
 
 
 @router.post("/agent/permission/revoke")
 async def revoke_tool_permission(tool: str, command: Optional[str] = None,
-                                 conversation_id: Optional[str] = None):
+                                 conversation_id: Optional[str] = None,
+                                 host: Optional[str] = None):
     """撤销工具授权（从永久 allowlist 和 session scope 移除）
 
     审查R2修复：改 async def 回到事件循环单线程操作 PermissionGate 状态，
@@ -1583,10 +1685,12 @@ async def revoke_tool_permission(tool: str, command: Optional[str] = None,
     提供 command 时只撤销该命令的绑定授权；否则撤销该工具全部授权。
     C-review M11：提供 conversation_id 时只撤该会话的 session 授权，
     否则（默认）撤所有会话。
+    host：不传 = 全局与所有主机限域条目全撤（「全部撤销」按钮的语义）；
+          host="" = 只撤全局条目；host="h" = 只撤该主机的条目。
     """
     from agent.harness.reins import _get_global_permission_gate_sync
     pg = _get_global_permission_gate_sync()
-    pg.revoke(tool, command=command, conversation_id=conversation_id)
+    pg.revoke(tool, command=command, conversation_id=conversation_id, host=host)
     # C-review C2 修复：撤销动作同样落审计链
     await append_record_async(
         action=f"permission_revoke:{tool}",
@@ -1594,10 +1698,13 @@ async def revoke_tool_permission(tool: str, command: Optional[str] = None,
         # S2-04：这两处（撤销 / 手动登记永久授权）按设计不属于任何 run —— 它们改的是
         # 跨 run 的 allowlist 与会话级状态，run_id 留空是正确取值，不是漏传。
         target_type="tool",
-        target_id=command or tool,
+        # 撤销标的带主机前缀（与 allowlist 行同形），事后能分辨「撤掉了某台
+        # 机器的预授权」还是「撤掉了全局条目」。host=None = 全撤，不加前缀。
+        target_id=(f"@{host}|{command or tool}" if host else (command or tool)),
         command_raw=command or "",
+        result=f"host={host if host is not None else '所有作用域'}",
     )
-    return {"tool": tool, "granted": False}
+    return {"tool": tool, "granted": False, "host": host}
 
 
 @router.get("/agent/permission/list")
@@ -1626,6 +1733,9 @@ class AllowPermissionRequest(BaseModel):
     tool: str = Field(..., min_length=1, max_length=64, description="工具名")
     command: Optional[str] = Field(None, max_length=4096,
                                    description="命令执行工具的绑定命令；省略 = 工具级授权")
+    host: Optional[str] = Field(
+        None, max_length=255,
+        description="限定到该主机（allowlist 写成 @host|键）；省略 = 全局条目")
 
 
 @router.post("/agent/permission/allow")
@@ -1638,28 +1748,49 @@ async def allow_tool_permission(req: AllowPermissionRequest):
     安全边界：仅登记，不放宽任何判定 — 命令工具写入的是 `tool:cmdhash`
     命令级绑定键（审查 M-3 语义），hardline 底线命令在 FilesystemGuard
     层无条件阻断，allowlist 无法放行。
+
+    主机维度：提供 host 时写成 `@host|键`（只对该主机生效）；省略 = 全局
+    （对所有主机生效）。默认值刻意不用「当前连接主机」—— 这个端点没有
+    run 上下文，猜测目标主机会把「全局登记」静默变成「只对某台生效」。
     """
     from agent.harness.reins import _get_global_permission_gate_sync
+    from agent.harness.reins.gate import (
+        is_valid_allowlist_entry, normalize_host, scoped_key)
     pg = _get_global_permission_gate_sync()
-    # 与 grant 路由同一姿态：gate 的入参校验按 ValueError 报，翻译成 400。
-    # 少了这一层，一条带空格/换行的工具名会变成 500 —— 而这条路径的输入是
-    # 设置面板里的自由文本框，用户手抖粘个尾空格是常态。
+    host = (req.host or "").strip()
     try:
-        grant_key = pg.grant(req.tool, scope="always", command=req.command)
+        grant_key = pg.grant_key_for(req.tool, req.command, scope="always")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    # 主机段与键拼成一行再校验：复用读侧同一判据，避免「面板允许输入
+    # `a|b`，写进文件后读侧判非法丢弃」这种写得进读不回的形态。
+    entry = scoped_key(host, grant_key)
+    if not is_valid_allowlist_entry(entry):
+        raise HTTPException(
+            status_code=400,
+            detail=("主机标识不在授权清单允许的格式内"
+                    "（期望 [A-Za-z0-9_.:-]，不接受空白、换行或斜杠）"),
+        )
     await append_record_async(
         action=f"permission_allow_manual:{req.tool}",
         # S2-04：手动登记永久授权不属于任何 run（它写的是跨 run 的 allowlist），
         # run_id 留空是正确取值，不是漏传 —— 与 permission_revoke 同一条口径。
+        # environment 同样留空：登记本身不针对某一次运行；作用范围改由
+        # host 维度表达（全局 or 某台主机），写进 result 供审计页辨认。
         # "granted" 不在 audit.append_record 的结论枚举里，会被静默改写为 "executed"
         # —— 手动登记永久授权就伪装成了"执行过一条命令"。用同义且在枚举内的值。
         conclusion="approved",
         target_type="tool",
-        target_id=req.command or req.tool,
+        target_id=(f"@{normalize_host(host)}|{req.command or req.tool}"
+                   if host else (req.command or req.tool)),
         command_raw=req.command or "",
+        result=f"host={normalize_host(host) or '全局'},entry={entry}",
+        # 与 grant 同一姿态：登记生效前必须已有记录，写不进去则不登记
+        critical=True,
     )
-    return {"tool": req.tool, "grant_key": grant_key, "granted": True}
+    pg.grant(req.tool, scope="always", command=req.command, host=host)
+    return {"tool": req.tool, "grant_key": grant_key,
+            "host": normalize_host(host), "granted": True}
 
 
 class SafetyClassifyRequest(BaseModel):
@@ -1734,6 +1865,10 @@ async def deny_command(req: DenyCommandRequest):
         denied_key = pg.deny_command(req.tool, req.command, req.run_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    # 先把拒绝标记落了再唤醒：醒来时重判会走「命令曾被用户拒绝」分支，
+    # 顺序反过来就是「用户拒了、run 却拿到一句放行」。
+    approval_wait.resolve_for_call(
+        req.run_id, req.tool, denied_key, approval_wait.DENIED)
     # 审计记录
     await append_record_async(
         action=f"permission_deny_command:{req.tool}",
@@ -1741,6 +1876,9 @@ async def deny_command(req: DenyCommandRequest):
         run_id=req.run_id,
         target_type="tool",
         target_id=denied_key,
+        # 拒绝同样是「对某台主机的处置决定」：环境列取 run 的服务端判定，
+        # 否则一次 prod 上的拒绝在 prod 审计视图里查不到
+        environment=_run_environment(req.run_id),
         command_raw=req.command,
     )
     return {"tool": req.tool, "command": req.command,
@@ -1748,7 +1886,7 @@ async def deny_command(req: DenyCommandRequest):
 
 
 def _release_run_interaction_state(run_id: str) -> tuple[int, int]:
-    """回收 run 级交互状态：once 授权池 + 拒绝记录 + 澄清向导上下文。
+    """回收 run 级交互状态：once 授权池 + 拒绝记录 + 澄清向导上下文 + 审批等待项。
 
     ReflectionRein 只在 AGENT_COMPLETE / AGENT_FAILED 正常终态触发。用户点"停止"
     或客户端断连时 driver 直接被 cancel，它不会跑 —— 三个池子便随每次中止的 run
@@ -1762,6 +1900,13 @@ def _release_run_interaction_state(run_id: str) -> tuple[int, int]:
         _get_global_permission_gate_sync, release_clarification_run)
     pg = _get_global_permission_gate_sync()
     released = pg.cleanup_run_once(run_id)
+    try:
+        # 先把还在等用户点击的调用叫醒（裁决=aborted → 不重判，走原有拦截路径）。
+        # 漏这一步的话，release-run 后等待项还挂着，下一次 grant 会去 set_result
+        # 一个没人在等的 future：日志里只剩一句「已授权」，run 早已不在。
+        approval_wait.abort_run(run_id)
+    except Exception:
+        logger.warning("release_run: 审批等待项回收异常 run=%s", run_id, exc_info=True)
     try:
         denied = pg.cleanup_run_denied(run_id)
     except Exception:
@@ -1793,6 +1938,8 @@ async def release_run_permissions(run_id: str):
         run_id=run_id,
         target_type="run",
         target_id=run_id,
+        # 释放动作也属于这次 run 的环境（与 grant / deny 同口径）
+        environment=_run_environment(run_id),
         result=f"released={released} denied={denied_count}",
     )
     return {"run_id": run_id, "released": released, "denied": denied_count}

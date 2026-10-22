@@ -182,7 +182,7 @@ def test_run_task_按_done_终态定成败_而非正文是否非空(monkeypatch)
     marks: list[tuple[str, str]] = []
 
     async def fake_agent_once(_sched, _run_id):
-        return "## 巡检报告（被迭代上限截断）", "", "max_reached"
+        return "## 巡检报告（被迭代上限截断）", "", "max_reached", ""
 
     monkeypatch.setattr(engine, "_run_agent_once", fake_agent_once)
     monkeypatch.setattr(db, "create_schedule_run", lambda *a, **k: None)
@@ -282,7 +282,7 @@ def test_first_tick_fanout_is_capped_globally(monkeypatch):
         peak = max(peak, live)
         await asyncio.sleep(0.02)
         live -= 1
-        return "ok", "", "completed"
+        return "ok", "", "completed", ""
 
     monkeypatch.setattr(engine, "_run_agent_once", fake_run_agent_once)
     for fn in ("create_schedule_run", "mark_schedule_run", "update_schedule_run"):
@@ -313,7 +313,7 @@ def test_task_cancelled_while_waiting_its_slot_is_not_stuck(monkeypatch):
     async def fake_run_agent_once(sched, run_id):
         if str(sched["id"]).startswith("holder"):
             await hold.wait()
-        return "ok", "", "completed"
+        return "ok", "", "completed", ""
 
     monkeypatch.setattr(engine, "_run_agent_once", fake_run_agent_once)
     for fn in ("create_schedule_run", "mark_schedule_run", "update_schedule_run"):
