@@ -68,20 +68,20 @@ export type TerminalSnapshot = { sessionId: string | null; selection: string; cw
 const NO_TERMINAL_CONTEXT: TerminalSnapshot = { sessionId: null, selection: '', cwd: '', recent: [] }
 
 /**
- * 「这条消息到底带不带终端现场」的唯一折叠 —— 三态暂存 × 用户开关 × 现场采集。
+ * 「这条消息到底带不带终端现场」的唯一折叠 —— 三态暂存 × 现场采集。
  *
- * 抽成纯函数是因为它原先长在 setup 的闭包变量里：首页既读不到、也关不掉
- * （spec 故事 5/6 第三项，2026-09-30 裁决：提进 store + 开关 + chip）。
- * liveSnapshot 用惰性函数而不是值：关着开关时不该去读终端（读操作会挂上响应式依赖）。
+ *   undefined — 未表态（首页直接输入）→ 发送时现场采集
+ *   null      — 纯文本入口刻意不要（问题文本已自带上下文）
+ *   对象      — 点击「问 AI」时暂存的现场（选区登记随即被清空，只能此刻采集）
+ *
+ * 抽成纯函数是因为它原先长在 setup 的闭包变量里，四条分支只有入口能走到，
+ * 改错一条也没有测试拦得住。
  */
 export function pickTerminalSnapshot(
   staged: TerminalSnapshot | null | undefined,
-  attach: boolean,
   liveSnapshot: () => TerminalSnapshot,
 ): TerminalSnapshot {
-  // 开关先判：它覆盖已暂存的现场 —— 用户此刻明确说了不要，比之前点过的「问 AI」更新。
-  // sessionId 为 null 也让 sendMessage 里的防串主机复查自然跳过（没什么可防的）。
-  if (!attach) return NO_TERMINAL_CONTEXT
+  // null 连 sessionId 都是 null，sendMessage 里的防串主机复查自然跳过（没什么可防的）。
   if (staged === null) return NO_TERMINAL_CONTEXT
   return staged ?? liveSnapshot()
 }
@@ -301,6 +301,8 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
 
   async function switchConversation(id: string) {
     persistence.switchConversation(id)
+    // 上一轮 run 的通知（含黄色告警）属于被切走的那条会话，不能跟到新会话上
+    agentStore.clearRunNotice()
     _clearStagedInput()
     // 工作流随会话切换重新加载：工件按会话落盘，界面必须与之一致
     void loadWorkflow()
@@ -321,6 +323,8 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     // 不该顺手抹掉用户正在输入的技能与附件。
     if (persistence.currentConversation.value?.id !== before) {
       _clearStagedInput()
+      // 删掉的正是当前会话 —— 它的运行通知跟着一起走
+      agentStore.clearRunNotice()
       void loadWorkflow()
     }
   }
@@ -495,22 +499,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   //               问题文本已自带上下文；活动终端与问题所指主机未必同一台）
   //   对象      — 点击「问 AI」时暂存的现场（选区登记随即被清空，只能此刻采集）；
   //               发送时来源终端已切走/关闭则丢弃改现场采集，防"主机 B 身份 + 主机 A 现场"
-  // 原先是 setup 闭包里的 let —— 首页读不到也关不掉，故提为响应式状态。
   const stagedSnapshot = ref<TerminalSnapshot | null | undefined>(undefined)
-
-  /** 底栏「终端现场」开关。缺省 **开**，与提升前的无条件采集逐分支一致：
-   *  把一个隐式行为显式化不等于顺手改掉它。关掉 = 走纯文本入口那条空快照分支。 */
-  const attachTerminalContext = ref(true)
-
-  function setAttachTerminalContext(on: boolean) {
-    attachTerminalContext.value = on
-  }
-
-  /** 这条消息**将**带上的现场（不消费暂存）。首页 chip 与发送装配同源读这一份，
-   *  免得两处各自算一遍三态 —— 那正是这套折叠要防的东西。 */
-  const terminalContext = computed(() =>
-    pickTerminalSnapshot(stagedSnapshot.value, attachTerminalContext.value, getTerminalSnapshot),
-  )
 
   /** 终端「问 AI」入口：选中内容 → 预填任务台问题草稿（上下文随消息自动注入）。
    *  SshView 监听 pendingPrefill 切回首页，HomeComposer 负责落进输入框。 */
@@ -621,11 +610,14 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
    * - 只把当前会话指针置空，**不**提前建会话 —— 首条消息发出时才由懒建路径产生
    *   历史条目；
    * - 清掉属于上一轮会话的暂存输入与工作流缓存；
-   * - 保留审批档 / 模型 / 终端现场开关 —— 它们是「怎么跑」的偏好，不是哪条会话的输入；
+   * - 保留审批档 / 模型 —— 它们是「怎么跑」的偏好，不是哪条会话的输入；
    * - 运行中直接拒绝：单 run 是全局状态，切走会让正在等待的审批与过程失去落点。
    */
   function beginNewTask(): boolean {
     if (agentStore.isRunning) return false
+    // 空白任务不是上一轮 run 的延续：告警/错误/规划一并清掉，否则首页
+    // 「今天想让助手替你做什么？」下面还挂着上一轮的黄色告警
+    agentStore.clearRunNotice()
     persistence.beginNewTask()
     sharedDraft.value = ''
     _clearStagedInput()
@@ -732,7 +724,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     // 又破掉了：批量下发/AI 诊断发问时会混入此刻活跃的无关终端选区与命令历史。
     const staged = stagedSnapshot.value
     stagedSnapshot.value = undefined
-    let snapshot: TerminalSnapshot = pickTerminalSnapshot(staged, attachTerminalContext.value, getTerminalSnapshot)
+    let snapshot: TerminalSnapshot = pickTerminalSnapshot(staged, getTerminalSnapshot)
     // 防串主机：暂存快照来源终端已切走（或原会话已关闭）→ 改现场采集
     if (snapshot.sessionId && snapshot.sessionId !== useSSHStore().activeSessionId) {
       snapshot = getTerminalSnapshot()
@@ -863,10 +855,6 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     uploadingAttachments,
     remotePickerCwd,
     uploadAttachments,
-    // ── 终端现场（故事 5/6 第三项）──
-    attachTerminalContext,
-    setAttachTerminalContext,
-    terminalContext,
     createConversation,
     switchConversation,
     deleteConversation,

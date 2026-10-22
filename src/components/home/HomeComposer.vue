@@ -5,11 +5,11 @@
  * 发送只有 useHomeCommand → ssh-ai.sendMessage 一条通路，审批档与姿态读 store，
  * 与发送装配同源 —— 界面宣称的选择必须真的随这一次下达出去。
  *
- * 底栏顺序：＋ → 分隔线 → 审批档 → 目标地址 → chips → 模型 → 发送/停止。
+ * 底栏顺序：＋ → 分隔线 → 审批档 → 目标标记 → chips → 模型 → 发送/停止。
  * 换目标仍走＋ 菜单第一项 SSH 面板（openRemoteManager → SshView 开远程管理页），
  * 面板切换只改 ssh store 的 activeSessionId（useHomeTarget），不切走首页、不聚焦
- * 终端 —— 用户正在输入框里打字。审批档右边常驻的是这台目标的地址：命令落到哪台
- * 机器，得在放行之前就读得到，而不是等审批卡里那一行「目标主机」。
+ * 终端 —— 用户正在输入框里打字。审批档右边常驻的是这台目标的落点（远程地址 /
+ * 本地 shell 名）：命令落到哪，得在放行之前就读得到，而不是等审批卡里那一行「目标主机」。
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { ChatAttachment } from '@/api/client'
@@ -38,7 +38,7 @@ const skillsStore = useSkillStore()
 const settings = useSettingsStore()
 const { openSettings } = useSettings()
 const { draft, canSend, submit, attachFiles, removeAttachment, uploading } = useHomeCommand()
-const { targetLabel, targetIp, targetHint, options: targetOptions, pick: pickTarget, remoteCount, canBulkDispatch } = useHomeTarget()
+const { targetChip, targetHint, options: targetOptions, pick: pickTarget, remoteCount, canBulkDispatch } = useHomeTarget()
 
 // ── 目标主机（＋ 菜单 SSH 面板）──
 function chooseTarget(sessionId: string) {
@@ -193,24 +193,6 @@ function toggleSkill(id: string) {
   else sshAi.addSelectedSkill(id)
 }
 
-/** 终端现场开关，缺省开着（关掉＝走纯文本入口那条空快照分支，默认行为一字不变）。
- *  这枚开关必须在：底栏 chip 的 × 写的是同一个 attachTerminalContext，只有 × 就是
- *  单向门 —— 手滑摘一次，这一整个会话都带不上终端现场，除非刷新页面。 */
-function toggleTerminalContext() {
-  sshAi.setAttachTerminalContext(!sshAi.attachTerminalContext)
-  showPlusMenu.value = false
-}
-
-/** 这枚 chip 只在**真会带东西**时出现：开关开着但既没选区也没最近命令时，
- *  写着「终端现场」就是谎 —— 而故事 6 要 chip 的初衷正是"看得见带了什么"。 */
-const terminalCtxLabel = computed(() => {
-  if (!sshAi.attachTerminalContext) return ''
-  const c = sshAi.terminalContext
-  if (c.selection) return `终端选区 · ${c.selection.split('\n').filter(l => l.trim()).length} 行`
-  if (c.recent.length) return `终端现场 · 最近 ${c.recent.length} 条`
-  return ''
-})
-
 const { showModelDropdown, modelSelectorRef, currentModelName, selectModel } = useModelSelector({
   getSelectedId: () => sshAi.selectedModelId,
   setSelectedId: (id) => sshAi.setSelectedModel(id),
@@ -335,32 +317,19 @@ onMounted(() => {
             </button>
             <button type="button" class="hcc-opt" @click="openRemoteManager">
               <span class="ol">连接远程服务器</span>
-              <span class="od">到远程管理页选择主机连接</span>
             </button>
           </template>
           <template v-else>
-          <!-- 六项：SSH / 目标 / 计划 / 终端现场 / 本地文件 / 远端文件（技能在下面）。对勾紧跟字后面（原来钉在网格
+          <!-- 五项：SSH / 目标 / 计划 / 本地文件 / 远端文件（技能在下面）。对勾紧跟字后面（原来钉在网格
                第二列，隔着整行的宽度，读起来不像"这条被选了"而像另一列数据）。 -->
           <button type="button" class="hcc-opt" @click="plusPane = 'target'">
             <span class="ol">SSH</span>
-            <span class="od">目标 · {{ targetLabel }}</span>
           </button>
           <button type="button" class="hcc-opt" :class="{ on: isGoal }" @click="toggleGoal">
             <span class="ol">目标<span v-if="isGoal" class="ot">✓</span></span>
-            <span class="od">聚焦要达成什么、怎么算成功</span>
           </button>
           <button type="button" class="hcc-opt" :class="{ on: isPlan }" @click="togglePlan">
             <span class="ol">计划<span v-if="isPlan" class="ot">✓</span></span>
-            <span class="od">只读调研，写操作直接拒绝</span>
-          </button>
-          <button
-            type="button"
-            class="hcc-opt"
-            :class="{ on: sshAi.attachTerminalContext }"
-            @click="toggleTerminalContext"
-          >
-            <span class="ol">终端现场<span v-if="sshAi.attachTerminalContext" class="ot">✓</span></span>
-            <span class="od">选区与最近命令随消息带上</span>
           </button>
           <button
             type="button"
@@ -369,7 +338,6 @@ onMounted(() => {
             @click="pickFiles"
           >
             <span class="ol">{{ uploading ? '上传中…' : '本地文件' }}</span>
-            <span class="od">内容随指令注入，不是发给模型的路径</span>
           </button>
           <button
             type="button"
@@ -378,7 +346,6 @@ onMounted(() => {
             @click="plusPane = 'remote'"
           >
             <span class="ol">远端文件</span>
-            <span class="od">{{ remoteSession ? `从 ${remoteSession} 取一个文件的内容` : '需要先连上一台服务器' }}</span>
           </button>
           <!-- 技能有 N 条时折起来：这枚菜单是定高滚动区（.wide 260px），技能一多
                前五项就被挤出视野，而那五项才是每次下达都要碰的。折叠标题带条数；
@@ -445,14 +412,14 @@ onMounted(() => {
         </div>
       </div>
 
-      <span v-if="targetIp" class="hcc-target" :title="targetHint">
-        {{ targetIp }}
+      <span v-if="targetChip" class="hcc-target" :title="targetHint">
+        {{ targetChip }}
         <button
           type="button"
           class="hcc-chip-x"
-          aria-label="断开这台远程连接"
+          aria-label="关闭这个终端会话"
           :disabled="running"
-          :title="running ? '运行中不能断开当前目标，请先停止本轮' : '断开这台（与终端页标签 × 同一个出口）'"
+          :title="running ? '运行中不能关闭当前目标，请先停止本轮' : '关闭这台终端（与终端页标签 × 同一个出口）'"
           @click="disconnectTarget"
         >×</button>
       </span>
@@ -485,16 +452,6 @@ onMounted(() => {
           class="hcc-chip-x"
           :aria-label="`移除技能 ${s.name}`"
           @click="toggleSkill(s.id)"
-        >×</button>
-      </span>
-
-      <span v-if="terminalCtxLabel" class="hcc-chip" title="这枚 chip 的 × 会关掉终端现场开关，＋ 菜单里可以开回来">
-        {{ terminalCtxLabel }}
-        <button
-          type="button"
-          class="hcc-chip-x"
-          aria-label="关掉终端现场（＋ 菜单里可以重新打开）"
-          @click="sshAi.setAttachTerminalContext(false)"
         >×</button>
       </span>
 
@@ -533,10 +490,10 @@ onMounted(() => {
           v-else
           type="button"
           class="hcc-btn empty"
-          title="尚未配置模型，点击去设置"
+          title="去设置里选择模型"
           @click="openSettings('models')"
         >
-          尚未配置模型 · <b>去设置</b>
+          <b>请选择模型</b>
         </button>
         <div v-if="showModelDropdown && !noModel" class="hcc-menu wide" @click.stop>
           <button
@@ -708,7 +665,7 @@ onMounted(() => {
   line-height: 1;
 }
 .hcc-chip-x:hover { background: var(--bg-hover); color: var(--text-primary) }
-/* 审批档右边的目标地址。等宽字是「这是一台机器不是一个词」最快的信号；不铺底：
+/* 审批档右边的目标标记（远程地址 / 本地 shell 名）。等宽字是「这是一个落点不是一个词」最快的信号；不铺底：
    有了底就会被读成旁边那排 chip 里的一员，而那些 chip 的 × 摘掉的是附加上下文，
    这枚 × 断开的是连接 —— 两者代价不同，不能共用一个外观语言。 */
 .hcc-target {

@@ -159,40 +159,23 @@ describe('ssh-ai 技能选择', () => {
 })
 
 /**
- * 终端现场该不该跟着这条消息走 —— 三态折叠抽成纯函数（pickTerminalSnapshot），
- * 因为它原先长在 setup 闭包变量里：首页读不到、也关不掉（故事 5/6 第三项）。
- * 这四条就是把原先只有 askAi* 入口能走到的分支逐个钉住。
+ * 终端现场该不该跟着这条消息走 —— 三态折叠抽成纯函数（pickTerminalSnapshot）。
+ * 这三条把只有 askAi* 入口能走到的分支逐个钉住。
  */
 describe('终端现场折叠', () => {
   const snap = (who: string) => ({ sessionId: who, selection: `sel-${who}`, cwd: `/c/${who}`, recent: [who] })
   const NONE = { sessionId: null, selection: '', cwd: '', recent: [] }
 
-  it('未表态且开关开着 → 现场采集（今天的默认行为，一字不变）', () => {
-    expect(pickTerminalSnapshot(undefined, true, () => snap('live'))).toEqual(snap('live'))
+  it('未表态 → 现场采集（直接输入时的默认行为）', () => {
+    expect(pickTerminalSnapshot(undefined, () => snap('live'))).toEqual(snap('live'))
   })
 
   it('有暂存现场 → 用暂存的，不重采（选区登记随即被清空，只有那一刻拿得到）', () => {
-    expect(pickTerminalSnapshot(snap('staged'), true, () => snap('live'))).toEqual(snap('staged'))
+    expect(pickTerminalSnapshot(snap('staged'), () => snap('live'))).toEqual(snap('staged'))
   })
 
   it('纯文本入口标了不带 → 空快照，连 cwd 与最近命令也不带', () => {
-    expect(pickTerminalSnapshot(null, true, () => snap('live'))).toEqual(NONE)
-  })
-
-  it('开关关掉 → 空快照，且覆盖掉已暂存的现场（用户此刻明确说了不要）', () => {
-    expect(pickTerminalSnapshot(snap('staged'), false, () => snap('live'))).toEqual(NONE)
-    expect(pickTerminalSnapshot(undefined, false, () => snap('live'))).toEqual(NONE)
-  })
-
-  it('默认开关是开的 —— 提升为设置项这件事本身不改变任何既有行为', () => {
-    expect(useSshAiStore().attachTerminalContext).toBe(true)
-  })
-
-  it('开关不落 localStorage（与审批档/姿态同一约定）', () => {
-    const store = useSshAiStore()
-    store.setAttachTerminalContext(false)
-    expect(store.attachTerminalContext).toBe(false)
-    expect([...lsMap.keys()].filter(k => /terminal|context|snapshot/i.test(k))).toHaveLength(0)
+    expect(pickTerminalSnapshot(null, () => snap('live'))).toEqual(NONE)
   })
 })
 
@@ -408,7 +391,7 @@ describe('ssh-ai beginNewTask', () => {
     lsMap.clear()
   })
 
-  it('清掉草稿/技能/附件/姿态/工作流/未读，保留审批档、模型、终端现场开关', async () => {
+  it('清掉草稿/技能/附件/姿态/工作流/未读，保留审批档、模型', async () => {
     const store = useSshAiStore()
     await store.createConversation('A')
     store.setSharedDraft('打了一半的指令')
@@ -419,7 +402,6 @@ describe('ssh-ai beginNewTask', () => {
     store.unreadReply = true
     store.setApprovalMode('auto')
     store.setSelectedModel('m9')
-    store.setAttachTerminalContext(false)
 
     expect(store.beginNewTask()).toBe(true)
 
@@ -432,7 +414,6 @@ describe('ssh-ai beginNewTask', () => {
     expect(store.unreadReply).toBe(false)
     expect(store.approvalMode).toBe('auto')
     expect(store.selectedModelId).toBe('m9')
-    expect(store.attachTerminalContext).toBe(false)
     // 不提前造条目：会话数仍是创建的那一条
     expect(store.conversations).toHaveLength(1)
   })
@@ -447,6 +428,61 @@ describe('ssh-ai beginNewTask', () => {
 
     expect(store.currentConvId).toBe(conv.id)
     await nextTick()
+  })
+
+  it('清掉上一轮运行通知：空白任务上不再残留黄色告警', async () => {
+    const store = useSshAiStore()
+    const agent = useAgentStore()
+    await store.createConversation('A')
+    agent.status = 'completed'
+    agent.warnings.push('[生产强化] 危险命令在 prod 环境仅接受预授权 allowlist 放行。拒绝执行: sudo command')
+    agent.errorMessage = 'boom'
+
+    expect(store.beginNewTask()).toBe(true)
+
+    expect(agent.warnings).toEqual([])
+    expect(agent.errorMessage).toBe('')
+  })
+})
+
+/**
+ * 运行通知归属那条发起 run 的会话：切走/删掉它时一并清掉，
+ * 否则通知会“跟到”另一条会话或空白任务上。
+ */
+describe('ssh-ai 换会话清运行通知', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    lsMap.clear()
+  })
+
+  it('切换会话清掉上一轮的告警与错误', async () => {
+    const store = useSshAiStore()
+    const agent = useAgentStore()
+    await store.createConversation('A')
+    const b = await store.createConversation('B')
+    agent.status = 'completed'
+    agent.warnings.push('上一轮的黄色告警')
+    agent.errorMessage = 'boom'
+
+    await store.switchConversation(b.id)
+
+    expect(agent.warnings).toEqual([])
+    expect(agent.errorMessage).toBe('')
+  })
+
+  it('删掉当前会话同样清 —— 会话不在了，它的通知也不该留着', async () => {
+    const store = useSshAiStore()
+    const agent = useAgentStore()
+    const a = await store.createConversation('A')
+    await store.createConversation('B')
+    // createConversation 会把指针挪到新建那条，先回到 A 再删它
+    await store.switchConversation(a.id)
+    agent.status = 'completed'
+    agent.warnings.push('上一轮的黄色告警')
+
+    await store.deleteConversation(a.id)
+
+    expect(agent.warnings).toEqual([])
   })
 })
 

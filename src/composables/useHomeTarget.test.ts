@@ -97,22 +97,22 @@ describe('useHomeTarget', () => {
     expect(ssh.activeSessionId).toBe('s1')
   })
 
-  it('远程目标给出地址段，本地目标不给', () => {
+  it('远程目标给出地址段，本地目标给出 shell 名（WSL 也要有落点）', () => {
     const { ssh, t } = mount()
     ssh.sessions.push({ id: 's1', name: 'web-03', type: 'remote', shell: 'root@10.20.1.7', connectionId: 'c1' })
     ssh.activeSessionId = 's1'
-    expect(t.targetIp.value).toBe('10.20.1.7')
-    ssh.sessions.push({ id: 's2', name: 'pwsh', type: 'local', shell: 'PowerShell' })
+    expect(t.targetChip.value).toBe('10.20.1.7')
+    ssh.sessions.push({ id: 's2', name: 'WSL', type: 'local', shell: 'WSL' })
     ssh.activeSessionId = 's2'
-    // 本地 shell 没有"落到哪台机器"这回事，印一枚地址就是谎
-    expect(t.targetIp.value).toBe('')
+    // 本地不印地址（没有"落到哪台机器"），但必须给出 shell 名 —— 否则审批档右边空一格
+    expect(t.targetChip.value).toBe('WSL')
   })
 
-  it('地址拆不出来时宁可不显示，不把会话名冒充 IP', () => {
+  it('远程地址拆不出来时宁可不显示，不把会话名冒充 IP', () => {
     const { ssh, t } = mount()
     ssh.sessions.push({ id: 's1', name: 'web-03', type: 'remote', shell: '', connectionId: 'c1' })
     ssh.activeSessionId = 's1'
-    expect(t.targetIp.value).toBe('')
+    expect(t.targetChip.value).toBe('')
   })
 
   it('悬停带出连接名，认得的是名字不是地址', () => {

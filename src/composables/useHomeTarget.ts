@@ -39,12 +39,14 @@ export function useHomeTarget() {
     ssh.activeSessionId ? labelOf(ssh.activeSessionId) : NO_TARGET,
   )
 
-  /** 底栏审批档右边那枚地址：只在活动目标是远程会话时给出，取 shell 中 '@' 之后的地址段。
-   *  拆不出地址（旧数据没有 shell、会话名里也没有 '@'）就返回空 —— 宁可少显示一枚，
-   *  也不能把会话名印成像是 IP 的东西。 */
-  const targetIp = computed(() => {
+  /** 底栏审批档右边那枚目标标记：远程给 shell 中 '@' 之后的地址段（落到哪台），
+   *  本地给 shell 名（落到哪个 shell，如 WSL）—— 本地留空时用户就看不到本轮落在哪。
+   *  远程拆不出地址（旧数据没有 shell、会话名里也没有 '@'）仍返回空：
+   *  不能把会话名印成像是 IP 的东西。 */
+  const targetChip = computed(() => {
     const s = ssh.sessions.find(x => x.id === ssh.activeSessionId)
-    if (!s || s.type !== 'remote') return ''
+    if (!s) return ''
+    if (s.type === 'local') return s.shell || s.name
     const addr = s.shell || s.name
     const at = addr.lastIndexOf('@')
     return at >= 0 ? addr.slice(at + 1) : ''
@@ -78,5 +80,5 @@ export function useHomeTarget() {
   /** 一台谈不上批量 —— 那就是一条命令，和批量下发弹窗的语义不符 */
   const canBulkDispatch = computed(() => remoteCount.value > 1)
 
-  return { targetLabel, targetIp, targetHint, options, pick, remoteCount, canBulkDispatch }
+  return { targetLabel, targetChip, targetHint, options, pick, remoteCount, canBulkDispatch }
 }
