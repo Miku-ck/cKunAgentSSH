@@ -13,6 +13,9 @@ import auditView from '@/views/ssh/AuditView.vue?raw'
 import sshView from '@/views/ssh/SshView.vue?raw'
 import runsTable from '@/components/ssh/AgentRunsTable.vue?raw'
 import fullTrace from '@/components/agent/AgentFullTrace.vue?raw'
+import agentRunPanel from '@/components/agent/AgentRunPanel.vue?raw'
+import approvalDock from '@/components/agent/ApprovalDock.vue?raw'
+import deliveryCard from '@/components/agent/DeliveryCard.vue?raw'
 import navSource from '@/composables/useSshNavigation.ts?raw'
 
 describe('AI 界面不再渲染执行过程', () => {
@@ -30,6 +33,19 @@ describe('AI 界面不再渲染执行过程', () => {
   it('任务台把跳转接到导航，并把审批面挂在输入区上方', () => {
     expect(homeWorkspace).toContain('@open-trace="emit(\'open-trace\', $event)"')
     expect(homeWorkspace).toMatch(/<ApprovalDock\s*\/>/)
+  })
+})
+
+describe('终端交付确认也在决策面', () => {
+  it('待确认交付只挂在输入区上方的 ApprovalDock，不回到消息流末尾', () => {
+    expect(approvalDock).toContain('<DeliveryCard')
+    expect(agentRunPanel).not.toContain('pendingDeliveries')
+    expect(agentRunPanel).not.toContain('delivery-section')
+  })
+
+  it('交付卡只有确认/拒绝两条结算路径', () => {
+    expect(deliveryCard).toContain('confirmDeliver')
+    expect(deliveryCard).toContain('rejectDeliver')
   })
 })
 

@@ -219,19 +219,17 @@ export const useAgentStore = defineStore('agent', () => {
   const hasHumanHelpRequest = computed(() => humanHelpRequests.value.length > 0)
 
   // 「运行通知区有东西要显示」的唯一判定：逐项对齐 AgentRunPanel 实际渲染的区块
-  // （任务规划 / 警告 / 人工介入 / 可见终端待确认命令 / 错误）。
-  // 交付面板区块已删（在途交付不再进本面板），所以这里用 pendingDeliveries 而不是
-  // 全量 deliveries——终态交付若还留在判定里，面板会挂着一块什么都不渲染的容器。
-  // 原先这份条件是抄在侧栏宿主 SshAiPanel.vue 的 v-if 里的，而那份漏了任务规划、待确认
-  // 交付与澄清向导：后端发 clarification_needed 时面板压根没挂载，向导渲染不出来，
+  // （任务规划 / 警告 / 人工介入 / 错误）。
+  // 权限审批与终端交付不在这份判定里：两者都是阻塞决策，归输入区上方的
+  // ApprovalDock（常驻），不靠消息流末尾的面板给入口，也不会跟着历史滚走。
+  // 原先这份条件是抄在侧栏宿主 SshAiPanel.vue 的 v-if 里的，而那份漏了任务规划与
+  // 澄清向导：后端发 clarification_needed 时面板压根没挂载，向导渲染不出来，
   // 用户只看到一条 toast，运行干等到后端 TTL 超时。面板加区块而宿主忘记同步必然复发，
   // 所以条件搬回数据侧，宿主（首页任务台）只负责无条件挂载。
-  // 待放行卡片不在这份判定里：审批 dock 在输入区上方常驻，不靠本面板给入口。
   const hasRunNotice = computed(() =>
     !!intentionInfo.value
     || warnings.value.length > 0
     || hasHumanHelpRequest.value
-    || pendingDeliveries.value.length > 0
     || !!errorMessage.value
   )
 
@@ -418,6 +416,24 @@ export const useAgentStore = defineStore('agent', () => {
     pendingWizardTimers.clear()
     _helpRequestedThisRun = false
     aborted.value = false
+  }
+
+  /**
+   * 离开当前 run（新建空白任务 / 切换或删除当前会话）时清掉上一轮的运行通知。
+   * 警告、错误、规划都只属于那一次 run —— 不清的话，回到首页空白任务后仍挂着
+   * 上一轮的黄色告警（例：「[生产强化] …拒绝执行: sudo command」），看起来像
+   * 这一轮刚发生的事，而它引用的那条会话已经不在屏上。
+   * 运行中不清：单 run 是全局状态，切走由调用方先拦住（beginNewTask 直接拒绝）。
+   */
+  function clearRunNotice() {
+    if (isRunning.value) return
+    warnings.value = []
+    errorMessage.value = ''
+    intentionInfo.value = null
+    humanHelpRequests.value = []
+    permissionRequests.value = []
+    clarificationWizard.value = null
+    _helpRequestedThisRun = false
   }
 
   /** 用户确认/忽略某次求助请求 */
@@ -895,6 +911,7 @@ export const useAgentStore = defineStore('agent', () => {
     runAgent,
     abort,
     snapshot,
+    clearRunNotice,
     dismissHelp,
     approvePermission,
     denyPermission,

@@ -692,3 +692,60 @@ describe('run 终态的四处清理必须一致（S1-02）', () => {
     expect(releaseMock).not.toHaveBeenCalled()
   })
 })
+
+/**
+ * 上一轮 run 的黄色告警不能跟到空白任务上：离开会话（新建/切换/删除）时
+ * 必须整块清掉运行通知，否则首页「今天想让助手替你做什么？」下面还挂着
+ * 「[生产强化] …拒绝执行: sudo command」，看起来像这一轮刚发生的事。
+ */
+describe('clearRunNotice', () => {
+  beforeEach(() => {
+    runs.length = 0
+    setActivePinia(createPinia())
+  })
+
+  /** 铺好一堆运行通知，再把 run 收尾成非运行态 */
+  function endedRunWithNotice() {
+    const h = startRun()
+    h.push({ type: 'warning', message: '[生产强化] 危险命令在 prod 环境仅接受预授权 allowlist 放行。拒绝执行: sudo command' })
+    h.push({
+      type: 'intention',
+      intention: {
+        level: 'simple', task_type: 'query', reasoning_budget: null,
+        allow_planning_phase: false, confidence: 0.9,
+      },
+    })
+    h.push({ type: 'human_help_needed', reason: '请人工确认目标机' })
+    h.store.status = 'completed'
+    return h.store
+  }
+
+  it('清空警告/错误/规划/求助/审批卡/向导', () => {
+    const store = endedRunWithNotice()
+    store.errorMessage = 'boom'
+    store.permissionRequests.push({
+      id: 'p1', tool: 'shell_exec', args: {}, risk: 'dangerous',
+      reversible: false, message: '需要授权', timestamp: 1,
+    })
+    expect(store.hasRunNotice).toBe(true)
+
+    store.clearRunNotice()
+
+    expect(store.warnings).toEqual([])
+    expect(store.errorMessage).toBe('')
+    expect(store.intentionInfo).toBeNull()
+    expect(store.humanHelpRequests).toEqual([])
+    expect(store.permissionRequests).toEqual([])
+    expect(store.clarificationWizard).toBeNull()
+    expect(store.hasRunNotice).toBe(false)
+  })
+
+  it('运行中不清 —— 那是正在跑的这一轮要看的通知', () => {
+    const h = startRun()
+    h.push({ type: 'warning', message: '正在进行中的告警' })
+
+    h.store.clearRunNotice()
+
+    expect(h.store.warnings).toEqual(['正在进行中的告警'])
+  })
+})

@@ -3,7 +3,7 @@
  *
  * 原先整份住在 AgentRunPanel 的 scoped style 里，所以只有侧栏托盘用得上这套卡。
  * 侧栏已整体退役（spec 2026-09-30-retire-ai-side-panel，R1–R4 于 2026-10-20 执行），
- * 现在这份卡由首页过程区的 ApprovalCard 与 AgentRunPanel 的共同视觉词汇渲染 ——
+ * 现在这份卡由输入区上方 ApprovalDock 的 ApprovalCard / DeliveryCard 共同消费 ——
  * 把 CSS 再抄一份进组件，就是第二处开始漂移的地方（改了一处、另一处的按钮配色
  * 悄悄变掉）。
  *
@@ -70,6 +70,7 @@
   padding: 1px 6px;
   border-radius: 4px;
   color: var(--accent-cyan);
+  font-family: var(--font-mono);
   font-size: 11.5px;
 }
 .ap-code-normal { color: var(--accent-cyan); font-style: italic; }
@@ -187,8 +188,8 @@
 .ap-icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 .ap-icon-btn svg { width: 14px; height: 14px; }
 
-/* 卡内等宽字体由宿主给（AgentRunPanel 的 .agent-run-panel 上就有）——
-   这里不重复声明：全局再钉一份字体会盖掉宿主的选择。 */
+/* 卡内等宽字体只钉在代码元素上（.ap-code）；整体字体仍由宿主决定 ——
+   给整张卡钉一份会盖掉宿主的选择。 */
 @media (prefers-reduced-motion: reduce) {
   .ap-btn, .ap-icon-btn { transition: none; }
 }

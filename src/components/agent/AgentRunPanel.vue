@@ -3,8 +3,8 @@
  * AgentRunPanel — Agent 运行过程通知区（异常/需要用户决策时显示）
  *
  * 宿主是首页任务台：挂在消息流末尾（HomeWorkspace），自身按 agentStore.hasRunNotice
- * 决定内容块挂不挂载。宿主不要再抄一份条件：曾经抄过，那份漏了澄清向导/任务规划/
- * 待确认交付，结果是需要用户决策时面板根本没挂载，用户只看到一条 toast，
+ * 决定内容块挂不挂载。宿主不要再抄一份条件：曾经抄过，那份漏了澄清向导/任务规划，
+ * 结果是需要用户决策时面板根本没挂载，用户只看到一条 toast，
  * 运行等到后端 TTL 超时。
  *
  * 实际包含的区块（均为条件渲染，无内容时整块隐藏）:
@@ -12,11 +12,10 @@
  * - 任务规划（意图分类：级别/任务类型/思考预算）
  * - 警告（warnings）
  * - 人工介入求助卡片（AI 请求帮助，可忽略）
- * - 可见终端执行：待确认命令（确认/拒绝）
  * - 错误（errorMessage）
  *
- * 工具授权请求不在这里：唯一逐条决策位是输入区上方的审批 dock（ApprovalDock），
- * 结算走 store 的 approvePermission / denyPermission。
+ * 工具授权与终端交付都不在这里：唯一逐条决策位是输入区上方的 ApprovalDock
+ * （ApprovalCard / DeliveryCard），批量结算只作用于权限请求。
  *
  * 注：常规运行状态（thinking/acting、迭代计数、工具调用流）不在本面板展示 —
  * 执行过程与工具调用明细归运维轨迹页，按 run_id 回放。
@@ -105,26 +104,7 @@ const latestHelp = computed(() =>
       </button>
     </div>
 
-    <!-- 审批卡不在这里渲染：唯一决策位是输入区上方的 ApprovalDock，
-         批量只是同一侧的快捷结算。 -->
-
-    <!-- 可见终端执行：待确认命令 -->
-    <div class="delivery-section" v-if="agentStore.pendingDeliveries.length > 0">
-      <div v-for="d in agentStore.pendingDeliveries" :key="d.tool_id" class="ap-card ap-deliver">
-        <div class="ap-head">
-          <svg class="ap-ic ap-deliver-accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-          <span class="ap-ttl">命令待确认</span>
-          <span class="ap-risk-pill">将在当前终端执行</span>
-        </div>
-        <div class="ap-body">
-          <pre class="ap-deliver-code">{{ d.command }}</pre>
-          <div class="ap-actions">
-            <button class="ap-btn ap-btn-grant" @click="agentStore.confirmDeliver(d.tool_id)">确认执行</button>
-            <button class="ap-btn ap-btn-deny" @click="agentStore.rejectDeliver(d.tool_id)">拒绝执行</button>
-          </div>
-        </div>
-      </div>
-    </div>
+    <!-- 权限审批与终端交付都不在这里渲染：唯一决策位是输入区上方的 ApprovalDock。 -->
 
     <!-- 错误 -->
     <div class="error-section" v-if="agentStore.errorMessage">
@@ -216,23 +196,6 @@ const latestHelp = computed(() =>
 
 /* 审批托盘 / 折叠队列 / 追溯区的样式随托盘一起删（R1）：它们的唯一消费方在模板里
    已经没有了。批量与追溯不是丢了，是搬进首页「待你放行」队列。 */
-
-/* ── 命令待确认 ── */
-.ap-deliver { background: var(--bg-elevated); border-color: var(--card-warn-border); }
-.ap-deliver-accent { color: var(--status-warn-text); }
-.ap-deliver-code {
-  margin: 0 0 11px;
-  background: var(--bg-input);
-  border: 1px solid var(--border-default);
-  border-radius: 6px;
-  padding: 9px 11px;
-  font-size: 11.5px;
-  color: var(--accent-orange);
-  overflow-x: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
-  font-family: inherit;
-}
 
 /* ── 错误 ── */
 .ap-error {

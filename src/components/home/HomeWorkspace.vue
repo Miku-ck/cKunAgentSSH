@@ -45,7 +45,7 @@
               />
             </div>
           </template>
-          <!-- 运行通知（任务规划 / 警告 / 人工介入 / 待确认命令 / 错误）长在消息流末尾，
+          <!-- 运行通知（任务规划 / 警告 / 人工介入 / 错误）长在消息流末尾，
                紧跟这一轮回答。两个决定别拆开看：
                ① 宿主不写挂载条件 —— hasRunNotice 是数据侧的唯一判定，面板加区块而这里
                   忘记同步，就是「需要决策时面板根本没挂载、用户只看到一条 toast」；
@@ -167,8 +167,8 @@ watch(() => displayMessages.value.length, () => { void scrollToBottom() }, { imm
 watch(() => sshAi.currentConvId, () => { void scrollToBottom() })
 watch(() => agentStore.content, () => { if (agentStore.isRunning) void scrollToBottom() })
 watch(() => agentStore.reasoning, () => { if (agentStore.isRunning) void scrollToBottom() })
-// 运行通知区块（任务规划/警告/待确认命令/错误）是消息流之外的另一段高度变化，
-// 出现时同样要跟到底 —— 否则"命令待确认"停在视野下方，用户看不见要决策的东西。
+// 运行通知区块（任务规划/警告/人工介入/错误）是消息流之外的另一段高度变化，
+// 出现时同样要跟到底 —— 否则提示停在视野下方。
 watch(() => agentStore.hasRunNotice, () => { void scrollToBottom() })
 
 function switchConversation(id: string) {

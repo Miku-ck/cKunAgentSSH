@@ -7,18 +7,21 @@
  * 滚动 —— 用户往上翻历史时，待决的那条仍要停在输入框上方。
  *
  * 执行过程本身归运维轨迹（DB 权威记录），那里按 run_id 回放；本组件只负责
- * 「现在要你拍板」这一件事，逐条决策仍复用 ApprovalCard，批量只结算权限请求。
+ * 「现在要你拍板」这一件事：权限审批逐条复用 ApprovalCard，终端交付逐条复用
+ * DeliveryCard，批量只结算权限请求。
  */
 import { computed, ref } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import { useApprovalActions } from '@/composables/useApprovalActions'
 import { onceGrantBlocked } from '@/utils/approval-scopes'
 import ApprovalCard from './ApprovalCard.vue'
+import DeliveryCard from './DeliveryCard.vue'
 
 const agent = useAgentStore()
 const { settleAll } = useApprovalActions()
 
 const pending = computed(() => agent.pendingPermissions)
+const deliveries = computed(() => agent.pendingDeliveries)
 const batching = ref(false)
 const onceBlocked = computed(() => onceGrantBlocked(agent.isRunning))
 
@@ -34,26 +37,32 @@ async function batch(kind: 'approve' | 'deny') {
 </script>
 
 <template>
-  <section v-if="pending.length" class="approval-dock" aria-label="待放行的操作">
-    <div class="ad-head">
-      <span class="ad-dot" aria-hidden="true"></span>
-      <span class="ad-title">{{ pending.length }} 条操作待你放行</span>
-      <span class="ad-sp"></span>
-      <template v-if="pending.length > 1">
-        <button type="button" class="ad-b" :disabled="batching" @click="batch('deny')">
-          全部拒绝
-        </button>
-        <button
-          type="button"
-          class="ad-b"
-          :disabled="batching || onceBlocked"
-          :title="onceBlocked ? '本轮运行已结束，once 授权无处生效' : ''"
-          @click="batch('approve')"
-        >{{ batching ? '处理中…' : '全部批准本次' }}</button>
-      </template>
-    </div>
-    <div class="ad-body">
-      <ApprovalCard v-for="req in pending" :key="req.id" :req="req" />
+  <section v-if="pending.length || deliveries.length" class="approval-dock" aria-label="待放行的操作">
+    <template v-if="pending.length">
+      <div class="ad-head">
+        <span class="ad-dot" aria-hidden="true"></span>
+        <span class="ad-title">{{ pending.length }} 条操作待你放行</span>
+        <span class="ad-sp"></span>
+        <template v-if="pending.length > 1">
+          <button type="button" class="ad-b" :disabled="batching" @click="batch('deny')">
+            全部拒绝
+          </button>
+          <button
+            type="button"
+            class="ad-b"
+            :disabled="batching || onceBlocked"
+            :title="onceBlocked ? '本轮运行已结束，once 授权无处生效' : ''"
+            @click="batch('approve')"
+          >{{ batching ? '处理中…' : '全部批准本次' }}</button>
+        </template>
+      </div>
+      <div class="ad-body">
+        <ApprovalCard v-for="req in pending" :key="req.id" :req="req" />
+      </div>
+    </template>
+    <!-- 交付确认没有「批量」：每条命令写进终端都会立刻执行，不能合并成一次放行 -->
+    <div v-if="deliveries.length" class="ad-body ad-deliveries">
+      <DeliveryCard v-for="d in deliveries" :key="d.tool_id" :delivery="d" />
     </div>
   </section>
 </template>
@@ -117,5 +126,10 @@ async function batch(kind: 'approve' | 'deny') {
   max-height: min(38vh, 340px);
   overflow-y: auto;
   min-height: 0;
+}
+
+/* 交付卡通常只有一条；多条时独立限高，避免权限区 + 交付区把输入区顶出视口 */
+.ad-deliveries {
+  max-height: min(30vh, 240px);
 }
 </style>
