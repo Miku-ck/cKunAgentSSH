@@ -288,6 +288,64 @@ describe('新 run 清空上一轮可见终端交付', () => {
     startRun()
     expect(store.deliveries).toHaveLength(0)
   })
+
+  it('交付事件携带的后果说明透传到交付条目，LLM 补发按 tool_id 回填', () => {
+    const { store, push } = startRun()
+    push({
+      type: 'tool_deliver',
+      tool_id: 'td-2',
+      command: 'rm /etc/nginx/nginx.conf',
+      session_id: 's1',
+      requires_confirm: true,
+      run_id: 'r1',
+      explain: '删除系统关键路径下的文件，可能造成软件损坏。',
+      explain_source: 'static',
+    })
+    expect(store.deliveries[0].explain).toContain('删除系统关键路径')
+
+    // 未知命令族：LLM 解释后补，前端按 tool_id 精确找回交付条目
+    push({
+      type: 'permission_explain',
+      tool: 'shell_exec',
+      command: 'mycohortool --run',
+      explanation: '运行 mycohortool 工具并输出结果。',
+      tool_id: 'td-2',
+    })
+    expect(store.deliveries[0].explain).toBe('运行 mycohortool 工具并输出结果。')
+    expect(store.deliveries[0].explain_source).toBe('llm')
+  })
+
+  it('permission_explain 不带 tool_id 时走审批卡回填，不误伤交付条目', () => {
+    const { store, push } = startRun()
+    push({
+      type: 'tool_deliver',
+      tool_id: 'td-3',
+      command: 'systemctl restart nginx',
+      session_id: 's1',
+      requires_confirm: true,
+      run_id: 'r1',
+      explain: '重启 nginx 服务。',
+      explain_source: 'static',
+    })
+    push({
+      type: 'permission_needed',
+      tool: 'shell_exec',
+      command: 'systemctl restart nginx',
+      risk: 'dangerous',
+      scopes: [{ id: 'once', label: '仅本次' }],
+      run_id: 'r1',
+    })
+    push({
+      type: 'permission_explain',
+      tool: 'shell_exec',
+      command: 'systemctl restart nginx',
+      explanation: '重启 nginx 进程，Web 服务会短暂中断。',
+    })
+    // 审批卡拿到回填，交付条目保留 tool_deliver 自带的静态说明
+    expect(store.permissionRequests[0].explain).toBe('重启 nginx 进程，Web 服务会短暂中断。')
+    expect(store.deliveries[0].explain).toBe('重启 nginx 服务。')
+    expect(store.deliveries[0].explain_source).toBe('static')
+  })
 })
 
 describe('运行结束时的快照读数', () => {

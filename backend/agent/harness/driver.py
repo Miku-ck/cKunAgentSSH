@@ -46,7 +46,9 @@ from .contracts import (
     ToolResult,
     TraceEvent,
 )
-from .reins.core import AWAIT_APPROVAL_KEY
+from .command_explain import explain_for_reason, maybe_explain_via_llm
+from .reins.core import AWAIT_APPROVAL_KEY, _audit_environment
+from .safety import classify_command
 from .telemetry import TelemetryBus
 
 logger = logging.getLogger(__name__)
@@ -1052,7 +1054,18 @@ class Driver:
         tool_id = pd["tool_id"]
         command = pd.get("command", "")
 
-        # 1. tool_deliver 事件
+        # 1. tool_deliver 事件 —— 解释层与审批卡同款（纯展示，不参与放行判定）：
+        #    交付卡也要回答「这条命令会做什么」，否则用户面对一行裸命令无从拍板。
+        #    safe 命令 reason 为 None，用只读白名单的确定文案兜底，不落「无法预知」
+        #    的 fallback（那句话对 ls/cat 是误导）。
+        level, reason = classify_command(command)
+        if level == "safe":
+            explain_text, explain_source, needs_llm = (
+                "这是一条只读命令，不会改动系统配置或数据。", "static", False)
+        else:
+            expl = explain_for_reason(reason or "")
+            explain_text, explain_source, needs_llm = (
+                expl.text, expl.source, expl.needs_llm)
         deliver_ev = TraceEvent(
             kind="tool_deliver",
             source="saddle",
@@ -1063,10 +1076,21 @@ class Driver:
                 "command": command,
                 "session_id": pd.get("session_id", ""),
                 "requires_confirm": pd.get("requires_confirm", False),
+                "explain": explain_text,
+                "explain_source": explain_source,
             },
         )
         await telemetry.emit(deliver_ev)
         yield deliver_ev
+
+        # 「未知命令」族的静态文案信息量不足 —— 与审批卡同款：后台异步补一条
+        # LLM 生成的一句话解释（带 tool_id 让前端精确回填交付卡）。不等待模型，
+        # 失败/超时只是没有回填事件，卡片保留静态文案。
+        if needs_llm:
+            await maybe_explain_via_llm(
+                ctx, tc.name, command, command, _audit_environment(ctx),
+                target_tool_id=tool_id,
+            )
 
         try:
             timeout = PendingDeliveries.timeout_of(tool_id)

@@ -205,6 +205,38 @@ def test_prod_preauthorized_path_passes(audits):
     assert not asyncio.run(_chain(ctx, gate, guard)).intercepted
 
 
+def test_prod_deny_warning_message_is_humanized(audits):
+    """prod 拒绝警告的用户文案走解释层：英文 reason（黑话）只进审计与模型注入，
+    用户看到的是后果表翻译后的中文 + 白名单政策说明（图二 4 连刷不可读事故回归）"""
+    gate, ctx = _gate(), _ctx(environment="prod")
+    guard = _guard(gate)
+    _log(ctx, "file_write", _write("file_write", NGINX))
+    d = asyncio.run(_chain(ctx, gate, guard))
+    assert d.intercepted
+    warnings = [e for e in d.events if e.kind == "warning"]
+    assert warnings, "prod 拒绝必须有 warning 事件"
+    msg = warnings[-1].payload["message"]
+    denied = [r for r in audits if r.get("conclusion") == "denied"]
+    assert denied, "拒绝必须落审计"
+    # 审计保留英文 reason（历史口径），用户消息绝不出现这段黑话
+    reason = denied[-1]["result"].split(": ", 1)[1]
+    assert reason not in msg
+    assert msg.startswith("[生产环境]")
+    assert "白名单" in msg and "已被拒绝" in msg
+
+
+def test_prod_deny_message_translates_consequence_reasons():
+    """后果表命中的 reason 翻译成中文说明；未命中（表漂移）退通用句且不引用英文"""
+    from agent.harness.reins.guards import _prod_deny_message
+    msg = _prod_deny_message(
+        "find -delete/-exec on sensitive system path (/home/admin-pl/.trae-cn-server)")
+    assert "批量删除" in msg
+    assert "find -delete/-exec" not in msg
+    assert "白名单" in msg
+    fallback = _prod_deny_message("some never-seen reason xyz")
+    assert "xyz" not in fallback and "白名单" in fallback
+
+
 # ── 5. 审批三态与拒绝记忆对内容工具同样生效 ──
 
 def test_approval_fallback_marks_card_expired_but_keeps_pending(audits):

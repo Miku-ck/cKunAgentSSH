@@ -162,12 +162,19 @@ class ToolCall:
         }
 
     def parsed_args(self) -> dict:
-        """解析 arguments JSON，失败时返回空 dict"""
+        """解析 arguments JSON，失败时返回空 dict
+
+        arguments 为 "null"/"3"/'"str"' 等合法 JSON 但非对象时同样按缺失处理：
+        json.loads 会成功返回非 dict，下游 args.get 直接 AttributeError。
+        （实测事故：模型发出 arguments="null"，classify 报
+        unknown command, default approval (null)，四连刷 prod 拒绝警告。）
+        """
         try:
-            return json.loads(self.arguments) if self.arguments else {}
+            data = json.loads(self.arguments) if self.arguments else {}
         except json.JSONDecodeError:
             logger.warning("tool_call arguments JSON 解析失败: %s", self.arguments[:200])
             return {}
+        return data if isinstance(data, dict) else {}
 
 
 @dataclass

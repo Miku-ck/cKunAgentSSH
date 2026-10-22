@@ -634,6 +634,9 @@ export const useAgentStore = defineStore('agent', () => {
           requires_confirm: !!event.requires_confirm,
           // 问题 4：透传 run_id — 拒绝时用于标记 deny_command
           runId: event.run_id || undefined,
+          // 命令后果说明（后端解释层，交付卡渲染「这条命令会做什么」行）
+          explain: event.explain || undefined,
+          explain_source: event.explain_source || undefined,
         })
         break
       }
@@ -722,10 +725,21 @@ export const useAgentStore = defineStore('agent', () => {
 
       case 'permission_explain': {
         // 后果解释由后端在卡片弹出后异步补发（未知命令走 LLM，≤6s）。
-        // 该事件只带顶层 command（不带 args），据此拼出与卡片一致的标识键。
-        // 找不到未处理卡片 = 用户已授权/已拒绝/审批超时/run 已结束 → 直接丢弃。
+        // 带 tool_id = 交付卡（tool_deliver）回填，按 tool_id 精确找回；
+        // 否则按 tool+command 拼出与审批卡一致的标识键回填。
+        // 找不到目标 = 已确认/已拒绝/超时/run 已结束 → 直接丢弃。
         const text = typeof event.explanation === 'string' ? event.explanation.trim() : ''
         if (!text) break
+        if (event.tool_id) {
+          for (const d of agentDeliver.deliveries.value) {
+            if (d.tool_id === event.tool_id) {
+              d.explain = text
+              d.explain_source = 'llm'
+              break
+            }
+          }
+          break
+        }
         const key = permCardKey(event.tool || '', event.command)
         for (const r of permissionRequests.value) {
           if (!r.resolved && permCardKey(r.tool, r.command) === key) {

@@ -38,6 +38,15 @@ class ShellExecTool(BaseTool):
     meta = ToolMeta(risk_level="moderate", reversible=False, timeout=30.0)
 
     async def execute(self, context, command, timeout=30):
+        # 边界校验：command 缺失/非字符串（模型发出 JSON null 会落成 None 或
+        # 字面量 "null"）不进分类链 —— 否则 classify_command(None) 直接 TypeError，
+        # 或产出「unknown command, default approval (null)」这类用户看不懂的拒绝
+        if not isinstance(command, str) or not command.strip():
+            return ToolResult(
+                False, "",
+                "命令参数缺失或为空（command 未提供有效内容）。"
+                "请重新调用本工具并在 command 参数里给出要执行的具体命令。",
+            )
         # 超时钳制（1-120 秒）；非数字回可读提示而不是裸 ValueError
         parsed, err = parse_int_arg(timeout, "timeout", 30)
         if err:

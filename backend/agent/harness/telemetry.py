@@ -205,11 +205,14 @@ class SSEAdapter:
             if event.run_id:
                 result["run_id"] = event.run_id
         elif kind == "permission_explain":
-            # 卡片已弹出后才生成的解释，按 tool+command 回填到对应卡片
+            # 卡片已弹出后才生成的解释，按 tool+command 回填到对应卡片；
+            # 带 tool_id = 交付卡（tool_deliver）回填，前端按 tool_id 精确找回
             result["tool"] = payload.get("tool", "")
             result["command"] = payload.get("command", "")
             result["normalized_command"] = payload.get("normalized_command", "")
             result["explanation"] = payload.get("explanation", "")
+            if payload.get("tool_id"):
+                result["tool_id"] = payload["tool_id"]
         elif kind == "permission_expired":
             result["tool"] = payload.get("tool", "")
             result["args"] = payload.get("args", {})
@@ -266,6 +269,9 @@ class SSEAdapter:
             result["command"] = payload.get("command", "")
             result["session_id"] = payload.get("session_id", "")
             result["requires_confirm"] = payload.get("requires_confirm", False)
+            # 命令后果说明（与审批卡同款解释层）：交付卡的「这条命令会做什么」行
+            result["explain"] = payload.get("explain", "")
+            result["explain_source"] = payload.get("explain_source", "")
         elif kind == "clarification_needed":
             result["tool"] = payload.get("tool", "")
             result["tool_call_id"] = payload.get("tool_call_id", "")

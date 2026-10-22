@@ -21,6 +21,9 @@ const props = defineProps<{
 const agentStore = useAgentStore()
 const sshStore = useSSHStore()
 
+/** 说明来源标签：LLM 生成的解释必须标注「仅供参考」，静态后果表不必 */
+const explainIsLlm = computed(() => props.delivery.explain_source === 'llm')
+
 const targetLabel = computed(() =>
   approvalTargetLabel(
     { sshSessionId: props.delivery.session_id },
@@ -49,6 +52,13 @@ const isProd = computed(() => {
       <span class="ap-sp"></span>
     </div>
     <div class="ap-body">
+      <!-- 阅读顺序与审批卡一致：这条命令会做什么 → 命令原文。解释由后端解释层
+           随 tool_deliver 下发（纯展示，不参与任何放行判定），失败/未携带时不渲染 -->
+      <div v-if="delivery.explain" class="ap-keyval">
+        <span class="ap-k">这条命令会做什么</span>
+        <span class="ap-v">{{ delivery.explain }}</span>
+        <span v-if="explainIsLlm" class="ap-tag-inline">AI 生成，仅供参考</span>
+      </div>
       <pre class="delivery-code">{{ delivery.command }}</pre>
     </div>
     <div class="ap-actions">

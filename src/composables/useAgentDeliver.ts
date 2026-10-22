@@ -71,6 +71,10 @@ export interface ToolDelivery {
    * 声明过确认的闭合，未经确认的失败上报不该冒充「用户已确认」。
    */
   confirmedByUi?: boolean
+  /** 命令后果的中文说明（后端解释层随 tool_deliver 下发，纯展示不参与判定） */
+  explain?: string
+  /** 说明来源：static=静态后果表 fallback=通用兜底 llm=模型生成（仅供参考） */
+  explain_source?: string
 }
 
 interface ToolDeliverPayload {
@@ -79,6 +83,8 @@ interface ToolDeliverPayload {
   session_id: string
   requires_confirm: boolean
   runId?: string
+  explain?: string
+  explain_source?: string
 }
 
 /** 单次捕获的解析状态（进程内非响应式即可，纯文本解析用） */
@@ -333,6 +339,8 @@ function handleDeliver(payload: ToolDeliverPayload): void {
     output: '',
     exit_code: null,
     runId: payload.runId,
+    explain: payload.explain,
+    explain_source: payload.explain_source,
   }
   deliveries.value.push(delivery)
   // requires_confirm 的命令停在 pending_confirm 等卡片确认；其余直接写入终端

@@ -29,6 +29,22 @@ from .core import (
 
 logger = logging.getLogger(__name__)
 
+
+def _prod_deny_message(reason: str) -> str:
+    """prod 拒绝警告的展示文案 —— 解释层翻译后果，拒绝原因说清政策。
+
+    英文 reason 只进审计 result 与模型注入消息；这条 message 会直接呈给用户，
+    必须回答两件事：这条命令会做什么（后果表中文）、为什么被拒（prod 白名单政策）。
+    后果表未命中（表漂移）时退通用句，不引用英文 reason。
+    """
+    expl = explain_for_reason(reason or "")
+    effect = expl.text if expl.source == "static" else "系统判定这条命令有风险，但无法进一步判断其具体后果"
+    return (
+        f"[生产环境] {effect}"
+        "生产环境仅允许执行预先登记在权限白名单里的命令，本次执行已被拒绝、未写入终端。"
+    )
+
+
 @dataclass
 class FilesystemGuard:
     """
@@ -156,10 +172,10 @@ class FilesystemGuard:
                                 run_id=ctx.run_id,
                                 iteration=ctx.iteration,
                                 payload={
-                                    "message": (
-                                        f"[生产强化] 危险命令在 prod 环境仅接受预授权 allowlist 放行。"
-                                        f"拒绝执行: {reason}"
-                                    ),
+                                    # 展示层说人话：英文 reason（find -delete/-exec on
+                                    # sensitive system path 一类黑话）只进审计与模型注入，
+                                    # 用户看到的是后果表翻译后的中文说明
+                                    "message": _prod_deny_message(reason),
                                 },
                             )],
                             inject_messages=[{

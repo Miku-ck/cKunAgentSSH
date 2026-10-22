@@ -376,11 +376,14 @@ async def maybe_explain_via_llm(
     command: str,
     display_cmd: str,
     env: str,
+    target_tool_id: Optional[str] = None,
 ) -> None:
     """为未知命令补一条中文解释；命中缓存则延后投递，否则后台生成。
 
-    调用方（FilesystemGuard）已弹出卡片，本函数不等待模型：
+    调用方（FilesystemGuard / Driver 可见终端交付）已弹出卡片，本函数不等待模型：
     生成失败/超时只是没有回填事件，卡片保留静态文案。
+    target_tool_id：交付卡（tool_deliver）专用 —— 事件带 tool_id 让前端按交付
+    精确回填；审批卡回填仍按 tool+command 匹配，不传该参数保持原行为。
     任何异常都在内部吞掉 —— 解释链路绝不向外抛，否则会撞上 Reins 对
     safety_critical 拦截器的 fail-closed 处理（异常 = 拦截）。
     """
@@ -403,7 +406,8 @@ async def maybe_explain_via_llm(
         # 拦截器返回、driver 走 _emit_decision_events 才入队。同步 await emit
         # 会让 explain 先于卡片到达前端，被「找不到未处理卡片即丢弃」的逻辑吞掉。
         # create_task 让本协程排到 driver 下一次让出事件循环之后，FIFO 保证卡片在前。
-        task = asyncio.create_task(_emit(emit, ctx, tool, command, display_cmd, cached))
+        task = asyncio.create_task(_emit(emit, ctx, tool, command, display_cmd, cached,
+                                         target_tool_id))
         _bg_tasks.add(task)
         task.add_done_callback(_bg_tasks.discard)
         return
@@ -416,7 +420,7 @@ async def maybe_explain_via_llm(
             text = sanitize_llm_explanation(raw or "")
             _cache_put(key, text)
             if text:
-                await _emit(emit, ctx, tool, command, display_cmd, text)
+                await _emit(emit, ctx, tool, command, display_cmd, text, target_tool_id)
         except Exception as e:
             _cache_put(key, None)
             logger.warning("命令解释生成失败（保留静态文案，不影响审批）: %s", e)
@@ -433,19 +437,24 @@ async def maybe_explain_via_llm(
 
 
 async def _emit(emit: Any, ctx: "RunContext", tool: str, command: str,
-                display_cmd: str, text: str) -> None:
+                display_cmd: str, text: str,
+                target_tool_id: Optional[str] = None) -> None:
     from .contracts import TraceEvent
 
+    payload: dict[str, Any] = {
+        "tool": tool,
+        # command 必须是卡片 args.command 的原值：前端按 tool::command 找回卡片
+        "command": command,
+        "normalized_command": display_cmd,
+        "explanation": text,
+    }
+    if target_tool_id:
+        # 交付卡回填专用：前端按 tool_id 找回交付条目，比命令匹配更精确
+        payload["tool_id"] = target_tool_id
     await emit(TraceEvent(
         kind="permission_explain",
         source="harness.command_explain",
         run_id=ctx.run_id,
         iteration=ctx.iteration,
-        payload={
-            "tool": tool,
-            # command 必须是卡片 args.command 的原值：前端按 tool::command 找回卡片
-            "command": command,
-            "normalized_command": display_cmd,
-            "explanation": text,
-        },
+        payload=payload,
     ))
