@@ -16,11 +16,13 @@
          title 里的快捷键提示来自 useGlobalShortcuts.PAGE_SHORTCUTS，单一来源。 -->
     <div class="titlebar-actions" @dblclick.stop>
       <!-- 常用工具：AI 首页 / Docker / GitHub / SFTP / 终端（含远程管理） -->
-      <button class="titlebar-action-btn" :class="{ active: activePage === 'ai' }" :title="aiTitle" aria-label="AI 首页" @click="emit('action-ai')">
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'ai' }" :title="aiTitle" :aria-label="aiAriaLabel" @click="emit('action-ai')">
         <span class="ai-text">AI</span>
         <!-- AI 入口即首页任务台：徽章与首页状态点同源（useAgentPresence），
-             优先级待审批 > 运行中 > 未读；文案同步说明状态，不单靠颜色传义。 -->
-        <span v-if="presence === 'pending'" class="ai-badge pending" aria-hidden="true"></span>
+             优先级待审批 > 运行中 > 未读；文案同步说明状态，不单靠颜色传义。
+             待审批是唯一要人行动的状態，所以它报数而不只是亮一个点 ——
+             数到几条决定的是「要不要现在回首页」，光点看不出轻重。 -->
+        <span v-if="presence === 'pending'" class="ai-badge pending count">{{ pendingCountText }}</span>
         <span v-else-if="presence === 'running'" class="ai-badge run" aria-hidden="true"></span>
         <span v-else-if="presence === 'unread'" class="ai-badge unread" aria-hidden="true"></span>
       </button>
@@ -107,6 +109,10 @@ const aiTitle = computed(() => {
   if (presence.value === 'unread') return `AI 首页（有新回复，${AI_SHORTCUT}）`
   return `AI 首页 (${AI_SHORTCUT})`
 })
+/** 徽章里只放得下两位；再多用 9+ 表示「不止这些」，不能画成 12 位的长条把 AI 文字压掉 */
+const pendingCountText = computed(() => (pendingCount.value > 9 ? '9+' : String(pendingCount.value)))
+const aiAriaLabel = computed(() =>
+  presence.value === 'pending' ? `AI 首页，${pendingCount.value} 条操作待放行` : 'AI 首页')
 
 /** 红点只看巡检结论；标题补充具体是哪一项异常（镜像优先） */
 const ghDegraded = computed(() => ghAccel.health?.state === 'degraded')
@@ -268,6 +274,26 @@ async function close() { await api?.windowClose() }
 }
 .ai-badge.pending {
   background: var(--status-warn-text);
+}
+/* 计数形态：同一个位置从「一个点」换成「一个数」—— 点只说"有事"，数才说"有多急"，
+   而待审批恰恰是唯一要人立刻回首页的状态。数字用顶栏画布色挖空，
+   跟着底色走，不需要为每个主题再配一对前景色。 */
+.ai-badge.count {
+  width: auto;
+  min-width: 13px;
+  height: 13px;
+  top: 7px;
+  right: 5px;
+  padding: 0 3px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  background: var(--status-warn-text);
+  color: var(--canvas-bg);
 }
 .ai-badge.run {
   background: var(--status-info-text);

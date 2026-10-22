@@ -82,6 +82,25 @@ READONLY_TOOLS: frozenset[str] = frozenset({
 })
 
 
+# prod 强化的「未预授权」拒绝标记 —— 拦截原因子串的单一事实源。
+# 两个生产方（guards.py shell 路径 / gate.py 工具级路径）拼 intercept_reason
+# 时都必须引用本常量；消费方 ConfidenceMonitor 用它把「策略拒绝」从工具失败
+# 里豁免出去（政策堵路 ≠ 模型困惑，见 flow.py）。字符串字面量散落三处必然
+# 漂移——一旦措辞改动，豁免与求助卡静默失效，run 又会烧到「低置信度」误诊。
+POLICY_DENY_MARKER: str = "未预授权"
+
+
+def is_policy_denial(entry: dict) -> bool:
+    """判定一条 tool_calls_log 条目是否为 prod 策略拒绝（未预授权）。
+
+    依赖 driver 在拦截分支写入 entry["intercept_reason"]；普通失败
+    （命令真跑了但非零退出/异常）不含该标记，照常计入置信度扣分。
+    """
+    if entry.get("success") is not False:
+        return False
+    return POLICY_DENY_MARKER in (entry.get("intercept_reason") or "")
+
+
 class ErrorType(str, Enum):
     """错误分类 — Stirrups 用于决定恢复策略"""
     TRANSIENT = "transient"        # 瞬时（网络/超时/503）— 重试

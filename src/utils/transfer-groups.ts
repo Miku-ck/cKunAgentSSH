@@ -8,7 +8,7 @@
  * 分组只是**展示归并**：调度、取消、续传仍逐条按 id 走 store 的既有方法，
  * 这里不产生任何新语义。
  */
-import type { TransferKind, TransferStatus } from './transfer-format'
+import { isActiveTransferStatus, type TransferKind, type TransferStatus } from './transfer-format'
 
 /** TransferItem 结构上满足它；刻意不 import store，避免 util 拖进 Pinia 实例化时序 */
 export interface GroupableTransfer {
@@ -65,7 +65,7 @@ const STATUS_RANK: Record<TransferStatus, number> = {
 
 function inTab(t: GroupableTransfer, tab: TransferTabKey): boolean {
   if (tab === 'all') return true
-  if (tab === 'active') return t.status === 'running' || t.status === 'paused'
+  if (tab === 'active') return isActiveTransferStatus(t.status)
   if (tab === 'queued') return t.status === 'pending'
   if (tab === 'done') return t.status === 'done' || t.status === 'cancelled'
   return t.status === 'error'

@@ -41,6 +41,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   fsReadFile: (filePath: string) => ipcRenderer.invoke('fs:readFile', filePath),
   fsWriteFile: (filePath: string, content: string) => ipcRenderer.invoke('fs:writeFile', filePath, content),
   fsReadFileForEditor: (filePath: string) => ipcRenderer.invoke('fs:readFileForEditor', filePath),
+  fsReadBinary: (filePath: string): Promise<{ base64: string; size: number }> =>
+    ipcRenderer.invoke('fs:readBinary', filePath),
   fsGetHomePath: () => ipcRenderer.invoke('fs:getHomePath'),
   fsGetDrives: () => ipcRenderer.invoke('fs:getDrives'),
   fsMkdir: (dirPath: string) => ipcRenderer.invoke('fs:mkdir', dirPath),
@@ -285,6 +287,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sftpCancel: (transferId: string) => ipcRenderer.invoke('sftp:cancel', transferId),
   sftpReadFile: (sshSessionId: string, remotePath: string) =>
     ipcRenderer.invoke('sftp:readFile', sshSessionId, remotePath),
+  sftpReadBinary: (sshSessionId: string, remotePath: string): Promise<{ base64: string; size: number }> =>
+    ipcRenderer.invoke('sftp:readBinary', sshSessionId, remotePath),
   sftpWriteFile: (sshSessionId: string, remotePath: string, content: string) =>
     ipcRenderer.invoke('sftp:writeFile', sshSessionId, remotePath, content),
   // 远程 ZIP 打包/解压（通过 SSH exec 执行）

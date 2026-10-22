@@ -427,7 +427,11 @@ function setupFSIPC(): void {
             return {
               name: entry.name,
               path: fullPath,
-              isDirectory: entry.isDirectory(),
+              // 用 stat 而不是 Dirent：readdir 的 Dirent 不跟随链接，Windows 上
+              // junction / reparse point 指向的目录（用户目录里的「开始」菜单、
+              // Application Data、Cookies 等）会被判成文件，图标、进入、大小三处
+              // 跟着错。stat 已经为取 size 调了，它跟随链接，判据就是对的。
+              isDirectory: s.isDirectory(),
               size: s.size,
               modified: s.mtimeMs,
             }
@@ -485,6 +489,26 @@ function setupFSIPC(): void {
       throw new Error(err?.message && err.message.includes('内容过大')
         ? err.message
         : '写入文件失败，请检查路径是否存在或是否有写入权限')
+    }
+  })
+
+  // 本地图片预览的二进制读取（读前 stat 挡 >5MB 再转 base64；与 sftp:readBinary 对称）
+  handleTrusted('fs:readBinary', async (_event, filePath: string) => {
+    try {
+      await assertSafePath(filePath)
+      const s = await stat(filePath)
+      if (s.size > 5 * 1024 * 1024) {
+        throw new Error('图片过大（超过 5MB），无法预览')
+      }
+      const buf = await readFile(filePath) as Buffer
+      return { base64: buf.toString('base64'), size: s.size }
+    } catch (err: any) {
+      rethrowIfSensitivePath(err)
+      const msg = err?.message
+      // 尺寸超限类友好文案原样透出；其余归并为通用读取失败
+      throw new Error(msg && msg.includes('图片过大')
+        ? msg
+        : '读取文件失败，请检查文件是否存在或是否有访问权限')
     }
   })
 
@@ -1597,6 +1621,10 @@ function setupSftpIPC(): void {
   })
   handleTrusted('sftp:readFile', (_event, sshSessionId: string, remotePath: string) => {
     return sshManager!.sftpReadFile(sshSessionId, remotePath)
+  })
+  // 远程图片预览的二进制读取（base64 + 5MB 上限在主进程侧拦截）
+  handleTrusted('sftp:readBinary', (_event, sshSessionId: string, remotePath: string) => {
+    return sshManager!.sftpReadBinary(sshSessionId, remotePath)
   })
   handleTrusted('sftp:writeFile', (_event, sshSessionId: string, remotePath: string, content: string) => {
     return sshManager!.sftpWriteFile(sshSessionId, remotePath, content)

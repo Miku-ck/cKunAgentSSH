@@ -26,7 +26,19 @@ def _tool() -> sub.SpawnSubagentTool:
 
 
 def _ctx() -> SimpleNamespace:
-    return SimpleNamespace(cost_tracker=None)
+    # 2026-10 升级后 execute 强制要求治理通道（缺失即拒绝启动）——
+    # 本文件钉的是「失败诚实上报」语义，给一个最小治理替身即可走到 LLM。
+    # ssh_session_id/environment/conversation_id 供子 RunContext 继承。
+    return SimpleNamespace(
+        cost_tracker=None,
+        ssh_session_id="",
+        environment="test",
+        conversation_id="",
+        governance=SimpleNamespace(
+            reins=SimpleNamespace(check=None),
+            saddle=SimpleNamespace(schemas=lambda: []),
+        ),
+    )
 
 
 def _run_with_content(content: str):
@@ -35,7 +47,8 @@ def _run_with_content(content: str):
             pass
 
         async def call(self, **_kw):
-            return SimpleNamespace(content=content, prompt_tokens=1, completion_tokens=1)
+            return SimpleNamespace(content=content, tool_calls=[],
+                                   prompt_tokens=1, completion_tokens=1)
 
     t = _tool()
     t._get_model_config = lambda: {
@@ -46,6 +59,7 @@ def _run_with_content(content: str):
     try:
         return asyncio.run(t._run_subagent(
             task="查一下", system_prompt="你是运维", extra_context="", tool_ctx=_ctx(),
+            reins=_ctx().governance.reins, saddle=_ctx().governance.saddle,
         ))
     finally:
         llm_client.StreamLLMClient = real

@@ -235,3 +235,79 @@ def test_empty_reason_falls_back():
 def test_target_from_reason_without_parens():
     assert target_from_reason("system shutdown") == ""
     assert target_from_reason("init 0 (halt)") == "halt"
+
+
+# ── 复合命令拆解层（explain_compound）────────────────────────────────────────
+from agent.harness.command_explain import (  # noqa: E402
+    explain_compound,
+    intent_for_segment,
+    split_compound_command,
+)
+
+
+def test_split_respects_quotes():
+    """引号内的 ; / && 不是链的边界 —— 拆错会把一条链画成多条独立命令"""
+    segs = split_compound_command('echo "a; b"; du -sh /x')
+    assert segs == ['echo "a; b"', "du -sh /x"]
+    segs2 = split_compound_command("echo 'x && y' && ls")
+    assert segs2 == ["echo 'x && y'", "ls"]
+
+
+def test_split_aborts_on_substitution_and_heredoc():
+    """含 $() / 反引号 / heredoc 的命令保守不拆：命令替换内部的 ; 不是边界"""
+    for cmd in ('echo $(a; b); ls', 'echo `a; b`; ls', 'cat <<EOF\nx\nEOF; ls'):
+        assert len(split_compound_command(cmd)) == 1
+
+
+def test_split_drops_empty_segments():
+    assert split_compound_command("ls;; ; true") == ["ls", "true"]
+
+
+def test_intent_matches_high_freq_reads():
+    assert intent_for_segment("du -sh /home/x/* 2>/dev/null | sort -rh | head") == \
+        "统计磁盘占用，按大小从大到小排序，取前几行，忽略报错输出"
+    assert intent_for_segment('echo "== trae-cn-server 内部 =="') == "输出小节标题"
+    assert intent_for_segment("true") == "空操作占位，保证整体退出码为 0"
+    assert intent_for_segment("find /var/log -name '*.log' -mtime +7").startswith("在 /var/log 下查找文件")
+    assert intent_for_segment("df -h /") == "查看磁盘分区使用情况"
+
+
+def test_intent_unknown_verb_falls_back():
+    assert intent_for_segment("mycohortool --run") == "执行系统命令"
+
+
+def test_single_command_is_not_compound():
+    res = explain_compound("ls -la")
+    assert res.compound is False
+    assert res.segments == []
+
+
+def test_compound_all_safe_gets_readonly_verdict():
+    """截图场景：echo + du | sort | head + find + true 全只读 → 聚合 safe"""
+    cmd = ('echo "== a =="; du -sh /home/x/* 2>/dev/null | sort -rh | head; '
+           'find /home/x -name "*.log" | head; true')
+    res = explain_compound(cmd)
+    assert res.compound is True
+    assert res.level == "safe"
+    assert "只读" in res.text
+    assert len(res.segments) == 4
+    assert res.needs_llm is False
+    # 逐段意图不为空
+    assert all(s.intent for s in res.segments)
+
+
+def test_compound_mixed_risk_flags_segment_index():
+    """混入非只读段：聚合升级，text 点名段号，该段带后果 note"""
+    cmd = "ls /tmp; rm /etc/nginx/nginx.conf; true"
+    res = explain_compound(cmd)
+    assert res.compound is True
+    assert res.level in ("dangerous", "hardline")
+    assert "第 2 步" in res.text
+    seg2 = res.segments[1]
+    assert seg2.level != "safe"
+    assert seg2.note, "危险段必须带后果说明"
+
+
+def test_compound_empty_command_returns_not_compound():
+    assert explain_compound("").compound is False
+    assert explain_compound("   ").compound is False

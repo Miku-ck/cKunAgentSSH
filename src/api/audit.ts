@@ -56,6 +56,16 @@ export interface AuditAppendResult {
   hash: string
 }
 
+/** 审计写入健康度：ok=false 表示最近一次写入失败，证据链当前不完整 */
+export interface AuditHealth {
+  ok: boolean
+  consecutive_failures: number
+  total_failures: number
+  last_failed_action: string
+  last_error: string
+  last_error_at: string
+}
+
 export const auditApi = {
   /** 按条件查询审计记录 */
   query: (params: {
@@ -81,6 +91,10 @@ export const auditApi = {
   /** 全链完整性校验 */
   verify: () =>
     request<AuditVerifyResult>('/audit/verify'),
+
+  /** 审计写入健康度（最近一次写入是否失败）——「链完整」不等于「没漏记录」 */
+  health: () =>
+    request<AuditHealth>('/audit/health'),
 
   /** 渲染层人工通道追加审计（批量下发 / Docker 变更动作）；写失败抛错，由调用方降级提示 */
   append: (input: AuditAppendInput) =>

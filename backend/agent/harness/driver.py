@@ -46,7 +46,7 @@ from .contracts import (
     ToolResult,
     TraceEvent,
 )
-from .command_explain import explain_for_reason, maybe_explain_via_llm
+from .command_explain import explain_compound, explain_for_reason, maybe_explain_via_llm
 from .reins import approval_wait
 from .reins.core import (
     AWAIT_APPROVAL_KEY,
@@ -682,6 +682,9 @@ class Driver:
         if pre_tool_decision.intercepted:
             result_text = f"工具调用被拦截: {pre_tool_decision.intercept_reason}"
             entry["success"] = False
+            # 拦截原因落到条目上：ConfidenceMonitor 靠它区分「策略拒绝」
+            # （prod 未预授权，豁免置信度扣分）与「真实失败」
+            entry["intercept_reason"] = pre_tool_decision.intercept_reason
             # 被拦截说明是危险命令，priority 标记为 high 供 compress_messages 优先保留
             ctx.messages.append(harness.bridle.build_tool_result_message(tc.id, result_text, priority="high"))
             yield TraceEvent(
@@ -906,6 +909,8 @@ class Driver:
                 m.intercepted = True
                 m.intercept_text = f"工具调用被拦截: {pre_tool_decision.intercept_reason}"
                 entry["success"] = False
+                # 与串行拦截分支同口径：落拦截原因供置信度豁免识别
+                entry["intercept_reason"] = pre_tool_decision.intercept_reason
                 members.append(m)
                 if pre_tool_decision.terminate:
                     # 与串行 break 语义一致：其后成员不再登记、不再执行、
@@ -1083,14 +1088,28 @@ class Driver:
         #    交付卡也要回答「这条命令会做什么」，否则用户面对一行裸命令无从拍板。
         #    safe 命令 reason 为 None，用只读白名单的确定文案兜底，不落「无法预知」
         #    的 fallback（那句话对 ls/cat 是误导）。
+        #    复合命令（; / && 多段）走拆解层：逐段意图 + 聚合结论，单句 explain
+        #    只承载聚合文案。展示用的 risk 取段级聚合；权威判定仍是上面对整条
+        #    命令跑的 classify_command —— 拆解层绝不参与放行。
         level, reason = classify_command(command)
-        if level == "safe":
+        comp = explain_compound(command)
+        segments_payload: list[dict[str, Any]] = []
+        if comp.compound:
+            explain_text, explain_source, needs_llm = comp.text, "static", comp.needs_llm
+            display_level = comp.level
+            segments_payload = [
+                {"command": s.command, "intent": s.intent, "level": s.level, "note": s.note}
+                for s in comp.segments
+            ]
+        elif level == "safe":
             explain_text, explain_source, needs_llm = (
                 "这是一条只读命令，不会改动系统配置或数据。", "static", False)
+            display_level = level
         else:
             expl = explain_for_reason(reason or "")
             explain_text, explain_source, needs_llm = (
                 expl.text, expl.source, expl.needs_llm)
+            display_level = level
         deliver_ev = TraceEvent(
             kind="tool_deliver",
             source="saddle",
@@ -1103,6 +1122,9 @@ class Driver:
                 "requires_confirm": pd.get("requires_confirm", False),
                 "explain": explain_text,
                 "explain_source": explain_source,
+                "risk": display_level,
+                "task": ctx.task,
+                "segments": segments_payload,
             },
         )
         await telemetry.emit(deliver_ev)

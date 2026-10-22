@@ -211,6 +211,24 @@
       @close="fileEditor.visible = false"
       @saved="onFileSaved"
     />
+
+    <!-- 传输冲突处理弹窗 -->
+    <SftpConflictDialog
+      :visible="conflict.visible"
+      :items="conflict.items"
+      @resolve="resolveConflicts"
+      @cancel="cancelConflicts"
+    />
+
+    <!-- 图片预览浮层（本地/远程共用，按 side 分流二进制通道） -->
+    <SftpImagePreview
+      :visible="imagePreview.visible"
+      :side="imagePreview.side"
+      :path="imagePreview.path"
+      :name="imagePreview.name"
+      :ssh-session-id="store.sshSessionId"
+      @close="imagePreview.visible = false"
+    />
   </div>
 </template>
 
@@ -220,12 +238,15 @@ import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from
 import SftpPane from './SftpPane.vue'
 import SftpFileEditor from './SftpFileEditor.vue'
 import SftpTransferDialog from './SftpTransferDialog.vue'
+import SftpConflictDialog from './SftpConflictDialog.vue'
+import SftpImagePreview from './SftpImagePreview.vue'
 import { useSftpStore } from '@/stores/sftp'
 import { useSSHStore } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
-import { isPreviewable } from '@/utils/language'
+import { isPreviewable, isImagePreviewable } from '@/utils/language'
 import { toFriendlyMessage } from '@/api/client'
+import { buildTransferPlan, type ConflictDecision, type ConflictItem, type ConflictMeta } from '@/utils/transfer-conflict'
 
 const store = useSftpStore()
 const sshStore = useSSHStore()
@@ -358,48 +379,82 @@ function onTransfer(payload: { side: 'local' | 'remote'; paths: string[] }): Pro
   return run
 }
 
+// ─── 冲突处理弹窗（覆盖 / 跳过 / 重命名，逐行 + 应用到全部） ───
+const conflict = reactive({
+  visible: false,
+  items: [] as ConflictItem[],
+})
+// 弹窗与 doTransfer 之间用 promise 握手：transferQueue 已保证同一时刻只有一个
+// 拖拽意图在跑，这里的 resolver 单值不会被并发覆盖。
+let conflictResolve: ((d: ConflictDecision[] | null) => void) | null = null
+function askConflicts(items: ConflictItem[]): Promise<ConflictDecision[] | null> {
+  conflict.items = items
+  conflict.visible = true
+  return new Promise(res => { conflictResolve = res })
+}
+function resolveConflicts(decisions: ConflictDecision[]): void {
+  conflict.visible = false
+  conflictResolve?.(decisions)
+  conflictResolve = null
+}
+function cancelConflicts(): void {
+  conflict.visible = false
+  conflictResolve?.(null)
+  conflictResolve = null
+}
+
+function baseName(p: string): string {
+  return p.split(/[\\/]/).pop() || p
+}
+/** 源侧元信息：优先命中已加载目录条目缓存，未命中再 stat 一次（OS 拖拽时不在缓存） */
+async function sourceMeta(lpOrRp: string, isRemote: boolean): Promise<ConflictMeta> {
+  const cache = isRemote ? store.remoteEntries : store.localEntries
+  const hit = cache.find(e => e.path === lpOrRp)
+  if (hit) return { size: hit.size || 0, modified: hit.modified || 0 }
+  const st = isRemote ? await store.statRemote(lpOrRp) : await store.statLocal(lpOrRp)
+  return { size: st?.size || 0, modified: st?.modified || 0 }
+}
+
 async function doTransfer(payload: { side: 'local' | 'remote'; paths: string[] }): Promise<void> {
-  // 覆盖确认：检查目标路径是否已存在同名文件
-  const existingFiles: string[] = []
+  // 逐顶层项检查目标是否已存在；命中则连同源/目标元信息组成一条冲突项，
+  // 交给弹窗逐项决策。目标不存在（stat 返回 null）即无冲突，不进列表。
+  const items: ConflictItem[] = []
   if (payload.side === 'local') {
-    // 上传：检查远程目标
+    // 上传：源=本地项，目标=远程 cwd 下同名
     for (const lp of payload.paths) {
-      const name = lp.split('/').pop()?.split('\\').pop() ?? lp
-      const remotePath = store.remoteCwd === '/' ? '/' + name : store.remoteCwd + '/' + name
-      const exists = await store.remotePathExists(remotePath)
-      if (exists) existingFiles.push(name)
+      const name = baseName(lp)
+      const targetPath = store.joinRemotePath(name)
+      const target = await store.statRemote(targetPath)
+      if (!target) continue
+      items.push({ id: targetPath, path: lp, name, targetPath, source: await sourceMeta(lp, false), target })
     }
   } else {
-    // 下载：检查本地目标
+    // 下载：源=远程项，目标=本地 cwd 下同名
     for (const rp of payload.paths) {
-      const name = rp.split('/').pop() ?? rp
-      // P3 修复：用 store.joinLocalPath（内部走 fsPathJoin）替代硬拼 '/' —
-      // 硬拼在本地 cwd 已含分隔符或跨盘符时会产生错误路径，与 :625 下载展开逻辑不一致
-      const localPath = await store.joinLocalPath(name)
-      const exists = await store.localPathExists(localPath)
-      if (exists) existingFiles.push(name)
+      const name = baseName(rp)
+      const targetPath = await store.joinLocalPath(name)
+      const target = await store.statLocal(targetPath)
+      if (!target) continue
+      items.push({ id: targetPath, path: rp, name, targetPath, source: await sourceMeta(rp, true), target })
     }
   }
 
-  // 如果有文件已存在，弹出覆盖确认
-  if (existingFiles.length > 0) {
-    const fileList = existingFiles.slice(0, 3).join('、')
-    const more = existingFiles.length > 3 ? ` 等 ${existingFiles.length} 个文件` : ''
-    const ok = await confirm({
-      title: '文件已存在',
-      message: `目标位置已存在同名文件「${fileList}${more}」，是否覆盖？`,
-      confirmText: '覆盖',
-      danger: true,
-    })
-    if (!ok) return
+  let paths = payload.paths
+  let renameMap: Record<string, string> | undefined
+  if (items.length > 0) {
+    const decisions = await askConflicts(items)
+    if (!decisions) return // 用户取消，整批不传
+    // taken 初值给所有已占用目标名，保证自动重命名不撞车
+    const plan = buildTransferPlan(payload.paths, decisions, new Set(items.map(i => i.name)))
+    paths = plan.paths
+    renameMap = Object.keys(plan.renameMap).length ? plan.renameMap : undefined
+    if (paths.length === 0) { toast.info('已全部跳过，没有需要传输的文件'); return }
   }
 
   if (payload.side === 'local') {
-    // 本地 → 远程: 上传
-    store.uploadFiles(payload.paths)
+    store.uploadFiles(paths, undefined, renameMap)
   } else {
-    // 远程 → 本地: 下载
-    store.downloadFiles(payload.paths)
+    store.downloadFiles(paths, undefined, renameMap)
   }
 }
 
@@ -437,6 +492,8 @@ async function handleCtxAction(action: string): Promise<void> {
     if (entry?.isDirectory) {
       if (side === 'local') await store.loadLocal(entry.path)
       else await store.loadRemote(entry.path)
+    } else if (entry && isImagePreviewable(entry.name)) {
+      openImagePreview(side, entry)
     } else if (entry && isPreviewable(entry.name)) {
       openFileEditor(side, entry)
     }
@@ -673,6 +730,15 @@ const fileEditor = reactive({
   name: '',
 })
 
+// ─── 远程图片预览浮层 ──────────────────
+// 双栏图片预览：本地走 fs:readBinary、远程走 sftp:readBinary（两侧二进制通道对称）。
+const imagePreview = reactive({
+  visible: false,
+  side: 'remote' as 'local' | 'remote',
+  path: '',
+  name: '',
+})
+
 function openFileEditor(side: 'local' | 'remote', entry: AnyEntry): void {
   fileEditor.side = side
   fileEditor.path = entry.path
@@ -680,7 +746,19 @@ function openFileEditor(side: 'local' | 'remote', entry: AnyEntry): void {
   fileEditor.visible = true
 }
 
+function openImagePreview(side: 'local' | 'remote', entry: AnyEntry): void {
+  imagePreview.side = side
+  imagePreview.path = entry.path
+  imagePreview.name = entry.name
+  imagePreview.visible = true
+}
+
 function onOpenFile(payload: { side: 'local' | 'remote'; entry: AnyEntry }): void {
+  // 白名单图片（png/jpg/jpeg/gif/webp）优先走图片预览；其余保持原样进编辑器
+  if (isImagePreviewable(payload.entry.name)) {
+    openImagePreview(payload.side, payload.entry)
+    return
+  }
   openFileEditor(payload.side, payload.entry)
 }
 

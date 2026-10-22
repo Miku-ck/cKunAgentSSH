@@ -26,6 +26,8 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
+from .safety import classify_command
+
 if TYPE_CHECKING:  # 仅类型标注，避免运行时把 contracts 拉进 safety 依赖链
     from .contracts import RunContext
 
@@ -458,3 +460,213 @@ async def _emit(emit: Any, ctx: "RunContext", tool: str, command: str,
         iteration=ctx.iteration,
         payload=payload,
     ))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 复合命令拆解 —— 交付卡的「逐段意图」层
+#
+# 动机：AI 排查命令常用 ; / && 串起 5-10 段只读操作（echo 标题 + du 统计 +
+# find 查找…），单句 explain 要么概括失真要么缺失，用户面对一坨裸命令仍然
+# 无从拍板。本层把命令拆成段，每段给一句中文意图 + 独立风险级别，整体给
+# 聚合结论，交付卡据此渲染逐段列表。
+#
+# 边界（与 explain_for_reason 同一条铁律）：产出是展示层，绝不参与放行/拦截
+# 判定 —— driver 对整条命令的 classify_command 结果仍是权威；段级 classify
+# 只为「哪几步需要重点看」的展示聚合服务。
+# 拆解遵循 fail-closed：含 $() / 反引号 / heredoc 的命令一律不拆 —— 拆错
+# 引号或命令替换边界，会把「一条链」画成「多条独立命令」，用户据此拍板就失真了
+# （与 DeliveryCard「命令块不做语法拆行」是同一条设计约束）。
+# ──────────────────────────────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class SegmentExplain:
+    """一段子命令的展示信息"""
+    command: str   # 该段原文（strip 后）
+    intent: str    # 中文意图（一句短语）
+    level: str     # 段级 classify_command 结果：safe / dangerous / hardline
+    note: str = ""  # 危险段的后果说明（explain_for_reason 命中时）
+
+
+@dataclass(frozen=True)
+class CompoundExplain:
+    """一条命令的逐段拆解结果
+
+    compound=False 表示没有拆出多段（单段命令 / 保守放弃拆解），
+    调用方应回退到原有的单句 explain 路径。
+    """
+    text: str                       # 整体聚合结论（一句话，进 explain 字段）
+    segments: list[SegmentExplain]
+    level: str                      # 段级最高风险（展示聚合，非权威判定）
+    compound: bool = False
+    needs_llm: bool = False
+
+
+_NO_COMPOUND = CompoundExplain(text="", segments=[], level="", compound=False)
+
+
+def split_compound_command(command: str) -> list[str]:
+    """引号感知拆段：引号外的 ; / && / || 为分隔符，单管道 | 留在段内。
+
+    含 $( / 反引号 / heredoc 时放弃拆解，返回原串单段 —— 命令替换内部的
+    分隔符不是链的边界，保守不拆好过拆错。
+    """
+    if "$(" in command or "`" in command or "<<" in command:
+        return [command.strip()]
+    segments: list[str] = []
+    buf: list[str] = []
+    quote = ""
+    i, n = 0, len(command)
+    while i < n:
+        ch = command[i]
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = ""
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            buf.append(ch)
+            i += 1
+            continue
+        if ch == ";":
+            segments.append("".join(buf))
+            buf = []
+            i += 1
+            continue
+        if command.startswith("&&", i) or command.startswith("||", i):
+            segments.append("".join(buf))
+            buf = []
+            i += 2
+            continue
+        buf.append(ch)
+        i += 1
+    segments.append("".join(buf))
+    return [s.strip() for s in segments if s.strip()]
+
+
+# 段级意图表：键为段首命令（正则，match 语义，顺序敏感——具体的在前）。
+# 覆盖 AI 排查高频只读命令族；未命中一律回退「执行系统命令」，
+# 风险以段级 classify_command 为准，意图文案不承担安全语义。
+SEGMENT_INTENTS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"^(?:true|:)\s*$"), "空操作占位，保证整体退出码为 0"),
+    (re.compile(r"^(?:echo|printf)\b"), "输出小节标题"),
+    (re.compile(r"^du\b"), "统计磁盘占用"),
+    (re.compile(r"^df\b"), "查看磁盘分区使用情况"),
+    (re.compile(r"^free\b"), "查看内存使用"),
+    (re.compile(r"^uptime\b"), "查看运行时长与负载"),
+    (re.compile(r"^uname\b"), "查看系统版本信息"),
+    (re.compile(r"^hostname\b"), "查看主机名"),
+    (re.compile(r"^date\b"), "查看系统时间"),
+    (re.compile(r"^(?:whoami|id)\b"), "查看当前用户身份"),
+    (re.compile(r"^(?:ps|top)\b"), "查看进程与资源占用"),
+    (re.compile(r"^(?:vmstat|iostat|mpstat)\b"), "查看系统资源统计"),
+    (re.compile(r"^lsof\b"), "查看打开的文件与端口占用"),
+    (re.compile(r"^(?:netstat|ss)\b"), "查看网络连接与端口"),
+    (re.compile(r"^docker\s+ps\b"), "查看容器列表"),
+    (re.compile(r"^docker\s+images\b"), "查看镜像列表"),
+    (re.compile(r"^docker\s+logs\b"), "查看容器日志"),
+    (re.compile(r"^docker\s+stats\b"), "查看容器资源占用"),
+    (re.compile(r"^kubectl\s+get\b"), "查看 k8s 资源列表"),
+    (re.compile(r"^systemctl\s+(?:status|is-active|is-enabled|show|list-units|list-unit-files)\b"),
+     "查看服务状态"),
+    (re.compile(r"^journalctl\b"), "查看系统日志"),
+    (re.compile(r"^dmesg\b"), "查看内核日志"),
+    (re.compile(r"^find\s+(?P<target>\S+)"), "在 {target} 下查找文件"),
+    (re.compile(r"^(?:ls|ll|dir)\b"), "列出目录内容"),
+    (re.compile(r"^(?:cat|head|tail|less|more|zcat|tac)\b"), "查看文件内容"),
+    (re.compile(r"^stat\b"), "查看文件属性"),
+    (re.compile(r"^file\b"), "识别文件类型"),
+    (re.compile(r"^(?:which|whereis|type|command)\b"), "查找命令的可执行位置"),
+    (re.compile(r"^(?:env|printenv)\b"), "查看环境变量"),
+    (re.compile(r"^crontab\s+-l\b"), "查看计划任务列表"),
+    (re.compile(r"^wc\b"), "统计行数"),
+    (re.compile(r"^(?:grep|egrep|rg|ack)\b"), "搜索文本内容"),
+    (re.compile(r"^(?:sort|uniq|cut|tr|column|awk|sed|join|paste)\b"), "文本处理"),
+    (re.compile(r"^(?:md5sum|sha1sum|sha256sum)\b"), "计算文件校验值"),
+    (re.compile(r"^(?:tar|zip|unzip|gzip|gunzip)\s+(?:-t|-ztf|-tf|-l)\b"), "查看压缩包内容清单"),
+]
+
+# 管道/重定向修饰语：对整段检测，附加在意图之后。
+# 第三元是互斥组键：具体条目（sort -rh / head -N）命中后，同组通用条目
+# （sort / head）不再叠加 —— 否则「按大小排序，排序后输出」这种复读会出现。
+SEGMENT_MODIFIERS: list[tuple[re.Pattern, str, str]] = [
+    (re.compile(r"\|\s*sort\s+-rh?\b"), "按大小从大到小排序", "sort"),
+    (re.compile(r"\|\s*sort\b"), "排序后输出", "sort"),
+    (re.compile(r"\|\s*head\s+(?:-n\s*)?-?(?P<n>\d+)\b"), "取前 {n} 行", "head"),
+    (re.compile(r"\|\s*head\b"), "取前几行", "head"),
+    (re.compile(r"\|\s*tail\b"), "取末尾几行", "tail"),
+    (re.compile(r"\|\s*wc\s+-l\b"), "统计行数", "wc"),
+    (re.compile(r"\|\s*grep\b"), "筛选匹配行", "grep"),
+    (re.compile(r"\|\s*uniq\s+-c\b"), "去重计数", "uniq"),
+    (re.compile(r"2>\s*/dev/null|&>\s*/dev/null|>/dev/null\s*2>&1"), "忽略报错输出", "null"),
+]
+
+_MODIFIER_CAP = 3   # 单段修饰语上限：全挂上可读性反而崩塌
+
+
+def intent_for_segment(segment: str) -> str:
+    """一段子命令 → 中文意图短语（未命中回退「执行系统命令」）"""
+    seg = segment.strip()
+    for pattern, template in SEGMENT_INTENTS:
+        m = pattern.match(seg)
+        if not m:
+            continue
+        target = m.groupdict().get("target")
+        if target and "{target}" in template:
+            # find -name 这类把 flag 当了首参的写法，退回不带目标的通用文案
+            base = template.replace("{target}", _clip(target)) if not target.startswith("-") \
+                else "查找文件"
+        else:
+            base = template
+        mods: list[str] = []
+        seen_groups: set[str] = set()
+        for mod_pattern, mod_template, group in SEGMENT_MODIFIERS:
+            if group in seen_groups:
+                continue
+            mm = mod_pattern.search(seg)
+            if mm:
+                seen_groups.add(group)
+                mods.append(mod_template.replace("{n}", mm.groupdict().get("n") or ""))
+        if mods:
+            return base + "，" + "，".join(mods[:_MODIFIER_CAP])
+        return base
+    return "执行系统命令"
+
+
+_COMPOUND_SEVERITY = {"safe": 0, "dangerous": 1, "hardline": 2}
+
+
+def explain_compound(command: str) -> CompoundExplain:
+    """复合命令 → 逐段意图 + 聚合结论。
+
+    单段命令（或保守放弃拆解）返回 compound=False，调用方走原单句路径。
+    本结果只用于展示：放行判定以调用方对整条命令的 classify_command 为准。
+    """
+    if not command or not str(command).strip():
+        return _NO_COMPOUND
+    parts = split_compound_command(str(command))
+    if len(parts) < 2:
+        return _NO_COMPOUND
+    segments: list[SegmentExplain] = []
+    worst = "safe"
+    needs_llm = False
+    for seg in parts:
+        level, reason = classify_command(seg)
+        note = ""
+        if level != "safe" and reason:
+            expl = explain_for_reason(reason)
+            note = expl.text
+            needs_llm = needs_llm or expl.needs_llm
+        if _COMPOUND_SEVERITY.get(level, 2) > _COMPOUND_SEVERITY.get(worst, 2):
+            worst = level
+        segments.append(SegmentExplain(
+            command=seg, intent=intent_for_segment(seg), level=level, note=note))
+    n = len(segments)
+    if worst == "safe":
+        text = f"共 {n} 步操作，均为只读查看，不会改动这台机器。"
+    else:
+        risky = "、".join(str(i) for i, s in enumerate(segments, 1) if s.level != "safe")
+        text = f"共 {n} 步操作，其中第 {risky} 步不在只读范围，需重点核对。"
+    return CompoundExplain(
+        text=text, segments=segments, level=worst, compound=True, needs_llm=needs_llm)

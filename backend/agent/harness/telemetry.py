@@ -272,6 +272,10 @@ class SSEAdapter:
             # 命令后果说明（与审批卡同款解释层）：交付卡的「这条命令会做什么」行
             result["explain"] = payload.get("explain", "")
             result["explain_source"] = payload.get("explain_source", "")
+            # 拆解层：复合命令逐段意图（单段为空数组）、聚合风险展示、发起任务上下文
+            result["segments"] = payload.get("segments", [])
+            result["risk"] = payload.get("risk", "")
+            result["task"] = payload.get("task", "")
         elif kind == "clarification_needed":
             result["tool"] = payload.get("tool", "")
             result["tool_call_id"] = payload.get("tool_call_id", "")

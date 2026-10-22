@@ -40,6 +40,20 @@ const isProd = computed(() => {
     : undefined
   return conn?.environment === 'prod'
 })
+
+/** 卡头风险徽章：聚合级别由后端拆解层给出（展示用，权威判定在授权链）。
+ *  旧后端不带 risk 字段时不渲染 —— 宁缺毋滥，别让徽章说没根据的话。 */
+const riskBadge = computed(() => {
+  const level = props.delivery.risk
+  if (level === 'safe') return { text: '只读 · 不改动任何文件', cls: 'dc-risk-safe' }
+  if (level === 'dangerous') return { text: '含非只读操作 · 需谨慎核对', cls: 'dc-risk-bad' }
+  if (level === 'hardline') return { text: '高危操作', cls: 'dc-risk-bad' }
+  return null
+})
+
+/** 复合命令逐段拆解（后端拆解层，单段命令不带 segments） */
+const segments = computed(() =>
+  (props.delivery.segments ?? []).length > 1 ? props.delivery.segments! : [])
 </script>
 
 <template>
@@ -49,17 +63,44 @@ const isProd = computed(() => {
       <span class="ap-ttl">命令待确认</span>
       <span class="delivery-target" :title="targetLabel || '当前终端'">{{ targetLabel || '当前终端' }}</span>
       <span v-if="isProd" class="ap-env env-prod">生产环境</span>
+      <span v-if="riskBadge" class="dc-risk" :class="riskBadge.cls">{{ riskBadge.text }}</span>
       <span class="ap-sp"></span>
     </div>
     <div class="ap-body">
-      <!-- 阅读顺序与审批卡一致：这条命令会做什么 → 命令原文。解释由后端解释层
-           随 tool_deliver 下发（纯展示，不参与任何放行判定），失败/未携带时不渲染 -->
+      <!-- 阅读顺序与审批卡一致：你的请求 → 这条命令会做什么 → 逐段拆解 → 原文。
+           解释由后端解释层随 tool_deliver 下发（纯展示，不参与任何放行判定），
+           失败/未携带时不渲染 -->
+      <div v-if="delivery.task" class="ap-keyval" :title="delivery.task">
+        <span class="ap-k">你的请求</span>
+        <span class="ap-v ap-2line">{{ delivery.task }}</span>
+      </div>
       <div v-if="delivery.explain" class="ap-keyval">
         <span class="ap-k">这条命令会做什么</span>
         <span class="ap-v">{{ delivery.explain }}</span>
         <span v-if="explainIsLlm" class="ap-tag-inline">AI 生成，仅供参考</span>
       </div>
-      <pre class="delivery-code">{{ delivery.command }}</pre>
+      <!-- 复合命令：逐段「意图 + 命令片段」列表，完整原文收进折叠区 ——
+           用户先读人话结论，需要核对原文再展开；非只读段标红并显示后果说明 -->
+      <div v-if="segments.length" class="seg-list">
+        <div
+          v-for="(seg, i) in segments"
+          :key="i"
+          class="seg-row"
+          :class="{ 'seg-row-risky': seg.level !== 'safe' }"
+        >
+          <span class="seg-idx" :class="{ 'seg-idx-bad': seg.level !== 'safe' }">{{ i + 1 }}</span>
+          <div class="seg-main">
+            <span class="seg-intent">{{ seg.intent }}</span>
+            <code class="seg-cmd" :title="seg.command">{{ seg.command }}</code>
+            <span v-if="seg.note" class="seg-note">{{ seg.note }}</span>
+          </div>
+        </div>
+      </div>
+      <details v-if="segments.length" class="seg-raw">
+        <summary>完整命令原文（{{ segments.length }} 段，点击展开核对）</summary>
+        <pre class="delivery-code">{{ delivery.command }}</pre>
+      </details>
+      <pre v-if="!segments.length" class="delivery-code">{{ delivery.command }}</pre>
     </div>
     <div class="ap-actions">
       <button class="ap-btn ap-btn-grant" @click="agentStore.confirmDeliver(delivery.tool_id)">确认执行</button>
@@ -103,4 +144,66 @@ const isProd = computed(() => {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* 卡头风险徽章：聚合级别展示（safe 只读绿 / 非 safe 警示红）。
+   底色用文字令牌自身 12% 混入，与 col-badge 同一套派生法，不吃死色值。 */
+.dc-risk {
+  font-size: 10.5px;
+  padding: 1px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.dc-risk-safe { color: var(--accent-green); background: color-mix(in srgb, var(--accent-green) 12%, transparent); }
+.dc-risk-bad { color: var(--accent-red); background: color-mix(in srgb, var(--accent-red) 12%, transparent); }
+
+/* 逐段拆解列表：序号 + 意图 + 命令片段。行背景斑马纹与终端表同思路。 */
+.seg-list {
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.seg-row {
+  display: flex;
+  gap: 8px;
+  padding: 6px 10px;
+  align-items: flex-start;
+}
+.seg-row + .seg-row { border-top: 1px solid var(--border-subtle); }
+.seg-row-risky { background: color-mix(in srgb, var(--accent-red) 6%, transparent); }
+.seg-idx {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--bg-hover);
+  color: var(--text-tertiary);
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+.seg-idx-bad { color: var(--accent-red); }
+.seg-main { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.seg-intent { font-size: 12px; color: var(--text-primary); line-height: 1.45; }
+.seg-cmd {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.seg-note { font-size: 11px; color: var(--accent-red); line-height: 1.45; }
+
+/* 完整原文折叠区：summary 用次要色调，展开后的 pre 复用 delivery-code */
+.seg-raw { margin-top: 8px; }
+.seg-raw summary {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  user-select: none;
+  margin-bottom: 6px;
+}
+.seg-raw summary:hover { color: var(--text-secondary); }
 </style>

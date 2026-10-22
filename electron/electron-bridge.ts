@@ -33,7 +33,7 @@ interface BridgeEnv {
 }
 
 /** 桥接业务操作：与 WS req 帧（bridge-ws-client）共用同一实现（dispatch） */
-export type BridgeOp = 'ssh_exec' | 'ssh_connect' | 'ssh_disconnect' | 'ssh_list_connections'
+export type BridgeOp = 'ssh_exec' | 'ssh_connect' | 'ssh_disconnect' | 'ssh_list_connections' | 'ssh_session_info'
 /** dispatch 结果：status 为 HTTP 风格状态码，body 与后端预期的响应体同构 */
 export interface DispatchResult {
   status: number
@@ -154,6 +154,41 @@ export class ElectronBridge {
                 authType: c.authType,
                 environment: c.environment ?? 'test',
               })),
+            },
+          }
+        }
+
+        case 'ssh_session_info': {
+          const sessionId = data.sshSessionId
+          if (typeof sessionId !== 'string' || !sessionId) {
+            return { status: 400, body: { success: false, error: 'Missing sshSessionId' } }
+          }
+          if (!this.sshStore) {
+            return { status: 500, body: { success: false, error: 'SSH store 未配置' } }
+          }
+          // 会话→连接配置的映射只能由主进程给：后端据此把「这次 run 到底在哪台主机上」
+          // 和服务端持久化的 environment 标记对上（渲染层自报的 environment 不可信）。
+          // 会话不在池里（已断开/旧 id）→ 404，后端会降级为「未核实」而不是打掉 run。
+          const connectionId = this.sshManager.getSessionConnectionId(sessionId)
+          if (!connectionId) {
+            return { status: 404, body: { success: false, error: 'SSH 会话不存在或已断开' } }
+          }
+          const all = await this.sshStore.list()
+          const conn = all.find((c) => c.id === connectionId)
+          if (!conn) {
+            return { status: 404, body: { success: false, error: '连接配置已删除' } }
+          }
+          // 与 ssh_list_connections 同一投影口径：只回定位字段，绝不带凭据
+          return {
+            status: 200,
+            body: {
+              success: true,
+              connectionId: conn.id,
+              name: conn.name,
+              host: conn.host,
+              port: conn.port,
+              username: conn.username,
+              environment: conn.environment ?? 'test',
             },
           }
         }

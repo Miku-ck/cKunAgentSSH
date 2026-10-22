@@ -264,23 +264,30 @@
               <option v-for="t in tools" :key="t.name" :value="t.name" />
             </datalist>
             <input v-model.trim="allowCommand" class="text-input wide" placeholder="绑定命令（可选；省略 = 工具级授权）" />
+            <input v-model.trim="allowHost" class="text-input host-input" placeholder="限定主机（可选；省略 = 全局）" list="perm-host-names" />
+            <datalist id="perm-host-names">
+              <option v-for="h in hostChoices" :key="h.host" :value="h.host">{{ h.env }}</option>
+            </datalist>
             <button class="btn btn-primary" :disabled="!allowTool || allowing" @click="onAllow">
               {{ allowing ? '登记中…' : '手动授权' }}
             </button>
           </div>
-          <p class="hint muted">命令工具建议填绑定命令：授权键是命令哈希绑定（改命令即失效）；hardline 底线命令不受白名单放行。</p>
+          <p class="hint muted">命令工具建议填绑定命令：授权键是命令哈希绑定（改命令即失效）；hardline 底线命令不受白名单放行。填了<b>限定主机</b>的授权只对那台机器生效 —— 在测试机上点的「始终允许」不会带到生产机。</p>
           <p v-if="permError" class="hint err">
             {{ permError }}：下面这份清单不代表库里有什么。
             <button class="link-btn" @click="loadPermissions({ notify: true })">重试</button>
           </p>
-          <p v-else-if="!permTools.length" class="hint muted">暂无永久授权</p>
-          <div v-for="p in permTools" :key="p.tool" class="perm-row">
+          <p v-else-if="!permGroups.length" class="hint muted">暂无永久授权</p>
+          <div v-for="p in permGroups" :key="p.id" class="perm-row">
             <div class="tool-info">
               <span class="tool-name">{{ p.tool }}</span>
-              <span class="tool-desc">{{ p.keys.length }} 条授权键（{{ p.keys.map(k => k.split(':')[1] || '工具级').slice(0, 3).join('、') }}{{ p.keys.length > 3 ? ' …' : '' }}）</span>
+              <span class="tool-desc">
+                <span class="perm-host" :class="{ scoped: p.host }">{{ p.host ? `@${p.host}` : '全局' }}</span>
+                {{ p.keys.length }} 条授权键（{{ p.keys.map(k => k.split(':')[1] || '工具级').slice(0, 3).join('、') }}{{ p.keys.length > 3 ? ' …' : '' }}）
+              </span>
             </div>
-            <button class="btn btn-danger" :disabled="revoking === p.tool" @click="onRevoke(p.tool, p.keys.length)">
-              {{ revoking === p.tool ? '撤销中…' : '全部撤销' }}
+            <button class="btn btn-danger" :disabled="revoking === p.id" @click="onRevoke(p)">
+              {{ revoking === p.id ? '撤销中…' : '撤销' }}
             </button>
           </div>
         </div>
@@ -395,6 +402,7 @@ import {
   type TickStatusResponse,
 } from '@/api/client'
 import { useToastStore } from '@/stores/toast'
+import { useSSHStore } from '@/stores/ssh'
 import { parseBackendTs } from '@/utils/format'
 import { useSettingsStore, BUDGET_LIMITS } from '@/stores/settings'
 import { useConfirm } from '@/composables/useConfirm'
@@ -654,28 +662,57 @@ async function onToggleTool(t: AgentToolInfo, next: boolean) {
 }
 
 // ── 审批白名单 ──
-const permKeys = ref<string[]>([])
+/** 与后端 split_scoped_key 同形：`@host|key`；无前缀 = 全局条目。 */
+function splitPermEntry(entry: string): { host: string; key: string } {
+  if (entry.startsWith('@')) {
+    const i = entry.indexOf('|')
+    if (i > 1) return { host: entry.slice(1, i).toLowerCase(), key: entry.slice(i + 1) }
+  }
+  return { host: '', key: entry }
+}
+
+interface PermEntry {
+  key: string
+  host: string
+  entry: string
+  granted_at: number | null
+  expires_at: number | null
+}
+const permEntries = ref<PermEntry[]>([])
 const revoking = ref('')
-// 与 policyLoaded 同一件事的另一半：读失败时 permKeys 是空数组，而空数组既可能是
+// 与 policyLoaded 同一件事的另一半：读失败时 permEntries 是空数组，而空数组既可能是
 // "库里确实没有永久授权"，也可能是"根本没读到"。先前只有后者会发生的 toast（一条会
 // 消失的提示），头栏徽标却照旧写着「0 个工具已永久授权」。
 const permLoaded = ref(false)
 const permError = ref('')
-const permTools = computed(() => {
-  const map = new Map<string, string[]>()
-  for (const key of permKeys.value) {
-    const tool = key.split(':')[0]
-    if (!map.has(tool)) map.set(tool, [])
-    map.get(tool)!.push(key)
+/** 按 (主机, 工具) 分组：主机是授权的作用域。把 db-01 的键和全局的键并成一行，
+ *  撤销时传给后端的就是 `@db-01|tool` 这种非键串 —— 点下去什么都不会发生。 */
+const permGroups = computed(() => {
+  const map = new Map<string, { id: string; host: string; tool: string; keys: string[] }>()
+  for (const e of permEntries.value) {
+    const tool = e.key.split(':')[0]
+    const id = `${e.host}\u0000${tool}`
+    if (!map.has(id)) map.set(id, { id, host: e.host, tool, keys: [] })
+    map.get(id)!.keys.push(e.key)
   }
-  return [...map.entries()].map(([tool, keys]) => ({ tool, keys }))
+  return [...map.values()]
 })
+const permToolCount = computed(
+  () => new Set(permEntries.value.map((e) => e.key.split(':')[0])).size,
+)
 
 async function loadPermissions(opts: { notify?: boolean } = {}): Promise<boolean> {
   permError.value = ''
   try {
     const data = await agentAdminApi.listPermissions()
-    permKeys.value = data.tools
+    // entries 是权威来源（主机段已拆开）；旧后端没有 entries 时按 tools 的原始行合成，
+    // 免得面板把 `@db-01|shell_exec` 整体当成工具名。
+    permEntries.value = data.entries?.length
+      ? data.entries
+      : (data.tools ?? []).map((entry) => {
+          const { host, key } = splitPermEntry(entry)
+          return { key, host, entry, granted_at: null, expires_at: null }
+        })
     permLoaded.value = true
     return true
   } catch (e) {
@@ -687,23 +724,26 @@ async function loadPermissions(opts: { notify?: boolean } = {}): Promise<boolean
 }
 
 const permSummary = computed(() => [
-  permLoaded.value ? `${permTools.value.length} 个工具已永久授权` : '授权列表未读取',
+  permLoaded.value ? `${permToolCount.value} 个工具已永久授权` : '授权列表未读取',
   policyLoaded.value ? ttlText(allowlistTtl.value) : '授权时长未读取',
 ].join(' · '))
 
-async function onRevoke(tool: string, keyCount: number) {
+async function onRevoke(group: { id: string; host: string; tool: string; keys: string[] }) {
+  const scope = group.host ? `主机 ${group.host}` : '所有主机'
   const ok = await confirm({
     title: '撤销永久授权',
-    message: `撤销「${tool}」的全部 ${keyCount} 条永久授权键？此后该工具每条命令都需重新审批。`,
-    confirmText: '全部撤销',
+    message: `撤销「${group.tool}」对${scope}的 ${group.keys.length} 条永久授权键？该范围内每条命令都需重新审批。`,
+    confirmText: '撤销',
     danger: true,
   })
   if (!ok) return
-  revoking.value = tool
+  revoking.value = group.id
   try {
-    await agentAdminApi.revokePermission(tool)
+    // host 三态：主机组传主机名，全局组传空串 —— 空串是「只撤全局条目」，
+    // 不传才是「连各主机的一起撤」，别在这里用 undefined。
+    await agentAdminApi.revokePermission(group.tool, undefined, group.host)
     await loadPermissions()
-    toast.success(`已撤销「${tool}」的全部永久授权`)
+    toast.success(`已撤销「${group.tool}」对${scope}的永久授权`)
   } catch (e) {
     toast.error(`撤销失败：${toFriendlyMessage(e)}`)
   } finally {
@@ -713,7 +753,25 @@ async function onRevoke(tool: string, keyCount: number) {
 
 const allowTool = ref('')
 const allowCommand = ref('')
+const allowHost = ref('')
 const allowing = ref(false)
+// 与后端 _ALLOWLIST_HOST_RE 同口径：空白/换行/斜杠写进 allowlist 后，重载时
+// 读侧按非法行直接丢弃 —— 面板显示过「已授权」，实际早就没了。
+const ALLOW_HOST_RE = /^[A-Za-z0-9_.:-]{1,255}$/
+// 主机候选来自连接配置（去重）。带环境标注：「给哪台登记」是这条授权的关键，
+// 而同一台机器可能既有 test 连接又有 prod 连接，只看主机名分不出来。
+const sshStore = useSSHStore()
+const hostChoices = computed(() => {
+  const seen = new Map<string, string>()
+  for (const c of sshStore.connections) {
+    const host = (c.host || '').trim().toLowerCase()
+    if (!host || seen.has(host)) continue
+    seen.set(host, c.environment === 'prod' ? 'prod' : 'test')
+  }
+  return [...seen.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([host, env]) => ({ host, env }))
+})
 
 async function onAllow() {
   // 与后端 AllowPermissionRequest 的 Field 区间同口径（tool 1..64 / command ≤4096）。
@@ -732,12 +790,21 @@ async function onAllow() {
     toast.error('绑定命令不能超过 4096 字符')
     return
   }
+  const host = allowHost.value.trim()
+  if (host && !ALLOW_HOST_RE.test(host)) {
+    toast.error('主机标识只能包含字母、数字、点、下划线、冒号或连字符（不接受空白与斜杠）')
+    return
+  }
   allowing.value = true
   try {
-    await agentAdminApi.allowPermission(allowTool.value, allowCommand.value || undefined)
-    toast.success(`已登记「${allowTool.value}」永久授权`)
+    const out = await agentAdminApi.allowPermission(
+      allowTool.value, allowCommand.value || undefined, host || undefined)
+    toast.success(out.host
+      ? `已登记「${out.tool}」永久授权（仅主机 ${out.host}）`
+      : `已登记「${out.tool}」永久授权（对所有主机生效）`)
     allowTool.value = ''
     allowCommand.value = ''
+    allowHost.value = ''
     await loadPermissions()
   } catch (e) {
     toast.error(`授权登记失败：${toFriendlyMessage(e)}`)
@@ -887,6 +954,10 @@ const MOUNT_LOADS: { label: string; run: () => Promise<boolean> }[] = [
 ]
 
 onMounted(async () => {
+  // 主机下拉的候选来自连接配置：没打开过 SSH 页时列表还是空的，datalist 会静默没有选项。
+  // init() 自身幂等（loaded 拦住重复调用），失败只记 console（这里再吞一道，避免
+  // fire-and-forget 的 unhandled rejection 爬到全局）。
+  void sshStore.init().catch(() => {})
   const results = await Promise.all(
     MOUNT_LOADS.map(async (l) => ({ label: l.label, ok: await l.run() })),
   )
@@ -925,6 +996,16 @@ onMounted(async () => {
   font-size: 11px; color: var(--text-secondary);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+/* 授权作用域徽标：主机限域用 warn 色，扫一眼就能分清哪条是收紧过的授权 */
+.perm-host {
+  margin-right: 5px; padding: 1px 5px; border-radius: 7px;
+  font-family: var(--font-mono);
+  border: 1px solid var(--border-default); color: var(--text-tertiary);
+}
+.perm-host.scoped {
+  color: var(--status-warn-text);
+  border-color: color-mix(in srgb, var(--status-warn-text) 35%, transparent);
+}
 .tool-flags { display: flex; gap: 4px; flex-shrink: 0; }
 .flag.info { color: var(--status-info-text); border-color: color-mix(in srgb, var(--status-info-text) 35%, transparent); }
 .strat-meta { display: flex; gap: 5px; margin-top: 3px; }
@@ -961,4 +1042,6 @@ onMounted(async () => {
 .allow-row { display: flex; gap: 8px; align-items: center; margin: 8px 0 4px; }
 .text-input { flex: 1; min-width: 0; }
 .text-input.wide { flex: 2; }
+/* 主机框不从命令框抢宽度：三个都 flex 时命令框会被压到看不清 */
+.allow-row .host-input { flex: 0 1 176px; min-width: 104px; }
 </style>

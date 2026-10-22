@@ -228,7 +228,10 @@ HARDLINE_PATTERNS: list[tuple[re.Pattern, str]] = [
 # ──────────────────────────────────────────────────────────────────────────────
 
 DANGEROUS_PATTERNS: list[tuple[re.Pattern, str]] = [
-    (re.compile(r"\brm\s+(-[^\s]*\s+)*-r[^\s]*\s+/", re.IGNORECASE), "recursive delete from root"),
+    # 只咬根目录本身（/ 后必须是串尾或空白）——原实现 `\s+/` 不设边界，
+    # `rm -rf /home/u/tmp` 这类深层路径全被误中 dangerous；深层目标由
+    # token 级递归删除分析按路径精确判档（2026-10-22 收紧）
+    (re.compile(r"\brm\s+(-[^\s]*\s+)*-r[^\s]*\s+/(?:\s|$)", re.IGNORECASE), "recursive delete from root"),
     (re.compile(r"\brm\s+(-[^\s]*\s+)*-r[^\s]*\s+\*", re.IGNORECASE), "recursive delete with wildcard"),
     (re.compile(r"\bchmod\s+(-R\s+)?777\b", re.IGNORECASE), "chmod 777 (world writable)"),
     (re.compile(r"\bchown\s+-R\b", re.IGNORECASE), "recursive chown"),
@@ -568,6 +571,32 @@ def _is_ssh_path(target: str) -> bool:
     return _SSH_DIR_RE.search(_normalize_target(target)) is not None
 
 
+# ── agent 托管日志目录豁免（2026-10-22）──
+# 工具自身的远端日志目录不属于用户数据保护范围：_SENSITIVE_DIRS 的 /home 前缀与
+# _is_home_relative 的家目录语义本意是防误删用户数据，但部署在 /home/<user> 下的
+# server 日志目录被连坐后，「清理日志」这一最典型的合法运维任务在 test 反复弹卡、
+# 在 prod 全堵（rm / find -delete / 重定向三条路全被拒，见 2026-10-22 事故截图）。
+# 按子树前缀声明，部署侧可按需追加；边界匹配不吃兄弟名字（manager-logs-backup
+# 不命中，命中 marker 后要求恰好结尾或紧跟 /）。.ssh 等凭据路径不含这些前缀，
+# 持久化判定（/etc/shadow、sudoers…）在本豁免之前生效，均不受影响。
+_AGENT_MANAGED_LOG_DIRS: tuple[str, ...] = (
+    "/.trae-cn-server/manager-logs",  # Trae CN 远端 server 日志（实际事故路径）
+)
+
+
+def _is_agent_log_path(target: str) -> bool:
+    """目标是否落在 agent 托管日志目录子树内（目录本身或其下任意层级）"""
+    t = _normalize_target(target)
+    for d in _AGENT_MANAGED_LOG_DIRS:
+        idx = t.find(d)
+        while idx != -1:
+            end = idx + len(d)
+            if end == len(t) or t[end] == "/":
+                return True
+            idx = t.find(d, idx + 1)
+    return False
+
+
 def _is_persistence_target(target: str) -> bool:
     """写入目标是否命中持久化/植入类路径（重定向或 tee）"""
     t = _normalize_target(target)
@@ -647,6 +676,10 @@ def _token_rm_find_analysis(segment: str) -> tuple[str, str | None]:
                 continue
             for target in targets:
                 norm = _normalize_target(target)
+                # agent 托管日志目录豁免：日志轮转/清理日常放行（递归与非递归同权），
+                # 默认审批对 rm/rmdir 本就特判 safe，落地后整段收口为 safe
+                if _is_agent_log_path(norm):
+                    continue
                 # 家目录整体删除（~ / $HOME / ~/* 等）视同根目录
                 home_root_globs = {"~", "~/", "~/*", "$HOME", "$HOME/", "$HOME/*",
                                    "${HOME}", "${HOME}/", "${HOME}/*"}
@@ -676,7 +709,7 @@ def _token_rm_find_analysis(segment: str) -> tuple[str, str | None]:
                     target = t
             if target is not None:
                 norm = _normalize_target(target)
-                if destructive:
+                if destructive and not _is_agent_log_path(norm):
                     if norm == "/":
                         _upd("hardline", "find -delete/-exec on root filesystem")
                     elif _is_sensitive_path(norm) or _is_home_relative(norm):
@@ -697,7 +730,10 @@ def _token_rm_find_analysis(segment: str) -> tuple[str, str | None]:
                     continue
                 target = t
                 break
-            if target is not None and (_is_sensitive_path(target) or _is_home_relative(target)):
+            if target is not None and (
+                (_is_sensitive_path(target) or _is_home_relative(target))
+                and not _is_agent_log_path(target)
+            ):
                 _upd("dangerous", f"{verb} on sensitive system path ({target})")
         elif verb == "chmod":
             # C-review C1：符号模式 chmod（u+x / a+w）不命中八进制正则表 →
@@ -1107,6 +1143,10 @@ def _classify_write_targets(text: str) -> tuple[str, str | None]:
         if _is_persistence_target(t):
             if best[0] != "hardline":
                 best = ("hardline", f"write to persistence/credential target ({t})")
+        elif _is_agent_log_path(t):
+            # agent 托管日志目录豁免：写自家日志（stdout 重定向、日志落盘）日常放行；
+            # 持久化判定已先行，.ssh/凭据类落点不受影响
+            return
         elif (
             _is_sensitive_path(t)
             or _is_home_relative(t)
@@ -1313,6 +1353,10 @@ _SAFE_VERBS: frozenset[str] = frozenset({
     # 注意：ssh 不入白名单 — 可建立交互会话/在远端执行任意命令，需审批
     "curl", "wget",
     "tee",
+    # 目录导航：cd 只改工作目录、无任何数据访问（2026-10-22 补，此前
+    # `unknown command, default approval (cd)` 是白名单唯一缺口）；复合命令
+    # 中后续段的动作（cat /etc/shadow 等）由各段独立分类，不因 cd 放行
+    "cd",
 })
 
 # 动词 + 受限子命令：仅子命令在集合内才视为只读
@@ -1440,6 +1484,42 @@ def git_form_writes(tokens: list[str]) -> str | None:
     if i < len(rest):
         return f"git {tokens[1]} {' '.join(rest[i:])}"
     return None
+
+
+# 托管日志清理涉及的已知文件操作动词 —— _agent_log_cleanup_exempt 用。
+# 仅认这份清单：未知动词即使目标全在日志目录也不豁免（命令本体动作不明）；
+# rm/rmdir 在默认审批里本就特判 safe，列入只为语义完整。
+_LOG_CLEANUP_VERBS: frozenset[str] = frozenset({
+    "rm", "rmdir", "touch", "mkdir", "mv", "cp", "tee",
+    "truncate", "shred", "rsync", "install", "ln", "find",
+})
+
+
+def _agent_log_cleanup_exempt(segment: str) -> bool:
+    """段是否为「agent 托管日志目录清理」——首动词是已知文件操作动词，且段内
+    所有路径形态 token 都落在托管日志目录子树内。
+
+    仅用于跳过默认审批（C-review C1）：删/写规则点已按目标豁免，但默认审批按
+    动词兜底，touch/cp/mv/find 等不在 rm 特判清单里的动词会把已豁免的清理命令
+    拉回 dangerous —— 豁免只做一半等于没做。相对路径不算路径 token（无法判定
+    是否落在日志子树，保守不放行）；无路径 token 的纯 flag 调用同样不放行。
+    """
+    try:
+        tokens = shlex.split(segment, posix=True)
+    except ValueError:
+        return False
+    tokens = _strip_prefix_wrappers(tokens)
+    if not tokens:
+        return False
+    if tokens[0].rsplit("/", 1)[-1].lower() not in _LOG_CLEANUP_VERBS:
+        return False
+    path_tokens = [
+        t for t in tokens[1:]
+        if "/" in t or t.startswith("~") or "$HOME" in t or "${HOME}" in t
+    ]
+    if not path_tokens:
+        return False
+    return all(_is_agent_log_path(t) for t in path_tokens)
 
 
 def _classify_unknown_default(segment: str) -> tuple[str, str | None]:
@@ -1602,9 +1682,12 @@ def _classify_segment(segment: str, apply_default_approval: bool = True) -> tupl
     #    客户端自造模板（classify_constructed_command）关闭本条：模板动词不在
     #    只读白名单里，套用会把写 /tmp/x.txt 这类普通操作也判 dangerous。
     if apply_default_approval and best[0] == "safe":
-        level, reason = _classify_unknown_default(segment)
-        if _SEVERITY[level] > _SEVERITY[best[0]]:
-            best = (level, reason)
+        # 托管日志目录清理豁免（2026-10-22）：删/写规则点已按目标放行，
+        # touch/cp/mv/find 等动词不能在默认审批这最后一环被拉回 dangerous
+        if not _agent_log_cleanup_exempt(segment):
+            level, reason = _classify_unknown_default(segment)
+            if _SEVERITY[level] > _SEVERITY[best[0]]:
+                best = (level, reason)
 
     return best
 

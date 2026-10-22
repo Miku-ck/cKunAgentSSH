@@ -13,7 +13,7 @@
 import { computed, ref } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import { useApprovalActions } from '@/composables/useApprovalActions'
-import { onceGrantBlocked } from '@/utils/approval-scopes'
+import { batchApproveBlocked, onceGrantBlocked } from '@/utils/approval-scopes'
 import ApprovalCard from './ApprovalCard.vue'
 import DeliveryCard from './DeliveryCard.vue'
 
@@ -24,9 +24,18 @@ const pending = computed(() => agent.pendingPermissions)
 const deliveries = computed(() => agent.pendingDeliveries)
 const batching = ref(false)
 const onceBlocked = computed(() => onceGrantBlocked(agent.isRunning))
+/** 这批里有一条不能一键放行，整批都不给「全部批准」 */
+const batchBlocked = computed(() => batchApproveBlocked(pending.value))
+const batchBlockedReason = computed(() => {
+  if (onceBlocked.value) return '本轮运行已结束，once 授权无处生效'
+  if (batchBlocked.value) return '队列里有高危、生产环境或风险未知的操作，只能逐条确认'
+  return ''
+})
 
 async function batch(kind: 'approve' | 'deny') {
   if (batching.value) return
+  // 按钮 disabled 挡的是点击，这里挡的是状态在渲染后又变脏（新卡到达/环境被改写）
+  if (kind === 'approve' && (batchBlocked.value || onceBlocked.value)) return
   batching.value = true
   try {
     await settleAll(kind)
@@ -41,7 +50,11 @@ async function batch(kind: 'approve' | 'deny') {
     <template v-if="pending.length">
       <div class="ad-head">
         <span class="ad-dot" aria-hidden="true"></span>
-        <span class="ad-title">{{ pending.length }} 条操作待你放行</span>
+        <!-- 审批面是弹出式打断：卡片出现在输入区上方，读屏用户不会正好盯着那里。
+             role=status + polite 让计数自己播报一次，polite 不打断正在读的内容 -->
+        <span class="ad-title" role="status" aria-live="polite" aria-atomic="true">
+          {{ pending.length }} 条操作待你放行
+        </span>
         <span class="ad-sp"></span>
         <template v-if="pending.length > 1">
           <button type="button" class="ad-b" :disabled="batching" @click="batch('deny')">
@@ -50,8 +63,8 @@ async function batch(kind: 'approve' | 'deny') {
           <button
             type="button"
             class="ad-b"
-            :disabled="batching || onceBlocked"
-            :title="onceBlocked ? '本轮运行已结束，once 授权无处生效' : ''"
+            :disabled="batching || onceBlocked || batchBlocked"
+            :title="batchBlockedReason"
             @click="batch('approve')"
           >{{ batching ? '处理中…' : '全部批准本次' }}</button>
         </template>

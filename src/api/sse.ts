@@ -40,14 +40,22 @@ export interface AgentSSEEvent {
   normalized_command?: string
   /** 命令后果的中文说明（审批卡片给非专业用户看，不参与任何授权判定） */
   explain?: string
-  /** 后果说明来源：static=静态后果表 fallback=通用兜底 llm=模型生成（仅供参考） */
-  explain_source?: 'static' | 'fallback' | 'llm'
+  /** 后果说明来源：static=静态后果表 fallback=通用兜底 llm=模型生成（仅供参考）
+   *  tool=工具级审批，文案取工具自己声明的 description（没有命令可言） */
+  explain_source?: 'static' | 'fallback' | 'llm' | 'tool'
   /** 目标环境（test/prod），prod 卡片需额外警示 */
   environment?: string
+  /** 环境标签的判定来源（服务端按主机连接配置判定 / 客户端声明未核实） */
+  environment_source?: string
+  /** 上者的中文说明，直接展示给审批人 */
+  environment_source_label?: string
   /** 用户本次任务原话（后端截断 200 字符），供用户核对"这是否我要做的事" */
   task?: string
   /** 目标 SSH 会话 id（前端据此反查连接名/主机展示） */
   ssh_session_id?: string
+  /** 本次 run 的目标主机（服务端从连接配置反查）。审批卡的「始终允许」只写入
+   *  `@host|键` 一行；空/缺失 = 未核实，授权落全局条目。 */
+  host?: string
   /** permission_explain 事件专用字段：后到的命令后果解释 */
   explanation?: string
   // P7: done 事件携带的成本快照 + run_id
@@ -60,6 +68,8 @@ export interface AgentSSEEvent {
   command?: string
   session_id?: string
   requires_confirm?: boolean
+  /** tool_deliver 专用：复合命令逐段拆解（意图 + 段级风险），单段命令为空数组 */
+  segments?: Array<{ command: string; intent: string; level: string; note?: string }>
   // clarification_needed 事件专用字段
   tool_call_id?: string
   current_step?: number

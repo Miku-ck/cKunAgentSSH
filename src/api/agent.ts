@@ -194,9 +194,18 @@ export interface AgentToolsResponse { mode: string; tools: AgentToolInfo[] }
 
 /** GET /agent/permission/list 永久授权键集合（"tool" 或 "tool:cmdhash"） */
 export interface PermissionListResponse {
+  /** 落盘的原始条目串：主机限域条目形如 `@host|tool:cmdhash`，无前缀 = 全局。
+   *  保留给只认裸键的旧消费方；新代码用 entries（主机段已拆开）。 */
   tools: string[]
-  /** E3：逐条授予/到期时间（epoch 秒）。expires_at=null = 该条永不过期 */
-  entries?: { key: string; granted_at: number | null; expires_at: number | null }[]
+  /** E3：逐条授予/到期时间（epoch 秒）。expires_at=null = 该条永不过期。
+   *  host 为空串 = 全局条目；entry 是落盘的原始行。 */
+  entries?: {
+    key: string
+    host: string
+    entry: string
+    granted_at: number | null
+    expires_at: number | null
+  }[]
   /** 当前生效的保留时长（小时）；0 = 永久 */
   ttl_hours?: number
 }
@@ -390,18 +399,28 @@ export const agentAdminApi = {
   /** 永久授权清单 */
   listPermissions: () => request<PermissionListResponse>('/agent/permission/list'),
 
-  /** 手动登记永久授权（与审批弹窗「始终允许」同源：落 allowlist 文件 + 审计） */
-  allowPermission: (tool: string, command?: string) =>
-    request<{ tool: string; grant_key: string; granted: boolean }>(
+  /** 手动登记永久授权（与审批弹窗「始终允许」同源：落 allowlist 文件 + 审计）。
+   *  host：限定到该主机（落成 `@host|键`）；省略/空 = 全局条目（对所有主机生效）。 */
+  allowPermission: (tool: string, command?: string, host?: string) =>
+    request<{ tool: string; grant_key: string; host: string; granted: boolean }>(
       '/agent/permission/allow',
-      { method: 'POST', body: JSON.stringify({ tool, ...(command ? { command } : {}) }) },
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          tool,
+          ...(command ? { command } : {}),
+          ...(host ? { host } : {}),
+        }),
+      },
     ),
 
-  /** 撤销授权：省略 command = 撤该工具全部授权；带 command = 只撤单条命令绑定 */
-  revokePermission: (tool: string, command?: string) =>
-    request<unknown>(
+  /** 撤销授权：省略 command = 撤该工具全部授权；带 command = 只撤单条命令绑定。
+   *  host 三态：不传 = 全局与所有主机全撤；'' = 只撤全局条目；'h' = 只撤该主机。 */
+  revokePermission: (tool: string, command?: string, host?: string) =>
+    request<{ tool: string; granted: boolean; host: string | null }>(
       `/agent/permission/revoke?tool=${encodeURIComponent(tool)}` +
-      (command ? `&command=${encodeURIComponent(command)}` : ''),
+      (command ? `&command=${encodeURIComponent(command)}` : '') +
+      (host !== undefined ? `&host=${encodeURIComponent(host)}` : ''),
       { method: 'POST' },
     ),
 

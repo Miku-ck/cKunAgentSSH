@@ -166,6 +166,42 @@ def test_tool_deliver_projection_passes_explain():
     assert d["tool_id"] == "t1"
 
 
+def test_tool_deliver_projection_passes_segments_risk_task():
+    """拆解层三键（segments / risk / task）随投影透传，前端逐段列表才读得到"""
+    seg = {"command": "ls", "intent": "列出目录内容", "level": "safe", "note": ""}
+    ev = TraceEvent(
+        kind="tool_deliver", source="saddle", run_id="r1", iteration=0,
+        payload={"tool_id": "t1", "command": "ls", "session_id": "s1",
+                 "requires_confirm": True,
+                 "explain": "共 1 步操作。", "explain_source": "static",
+                 "risk": "safe", "task": "看看目录",
+                 "segments": [seg]},
+    )
+    d = SSEAdapter.to_sse_dict(ev)
+    assert d["risk"] == "safe"
+    assert d["task"] == "看看目录"
+    assert d["segments"] == [seg]
+
+
+def test_compound_delivery_carries_segments_risk_task(monkeypatch):
+    """截图场景回归：多段只读排查命令 → payload 带逐段拆解 + 聚合 safe + 任务原话"""
+    compound = ('echo "== a =="; du -sh /home/x/* 2>/dev/null | sort -rh | head; '
+                'find /home/x -name "*.log" | head; true')
+    events, _tel, llm_calls = _drive(monkeypatch, compound)
+    ev = _deliver_event(events)
+    assert ev.payload["explain_source"] == "static"
+    assert "只读" in ev.payload["explain"], "聚合结论必须是只读人话"
+    segs = ev.payload["segments"]
+    assert len(segs) == 4
+    assert segs[0]["intent"] == "输出小节标题"
+    assert "统计磁盘占用" in segs[1]["intent"]
+    assert all(s["level"] == "safe" for s in segs)
+    assert ev.payload["risk"] == "safe"
+    assert ev.payload["task"] == "测试"
+    # 全只读不需要 LLM 兜底
+    assert llm_calls == []
+
+
 def test_permission_explain_projection_carries_tool_id_only_when_present():
     """交付回填的 permission_explain 带 tool_id；审批卡回填（无 tool_id）不出现该键"""
     delivery_ev = TraceEvent(

@@ -413,6 +413,10 @@ class Saddle:
             # spawn_subagent 调用时需要上报 token 用量。
             # cost_tracker 在 harness.run() 中被写入 ctx.metadata["cost_tracker"]
             cost_tracker=ctx.metadata.get("cost_tracker"),
+            # 侦察子 Agent 的治理通道（harness.run 注入 ctx.metadata["governance"]）：
+            # spawn_subagent 用它跑自己的轻量 ReAct 循环，工具调用过同一套
+            # Reins/Saddle。未注入时为 None —— spawn_subagent 拒绝启动。
+            governance=ctx.metadata.get("governance"),
         )
 
     def schemas(self) -> list[dict[str, Any]]:

@@ -240,6 +240,7 @@ interface ElectronAPI {
   fsReadFile: (filePath: string) => Promise<string>
   fsWriteFile: (filePath: string, content: string) => Promise<void>
   fsReadFileForEditor: (filePath: string) => Promise<EditorFileContent>
+  fsReadBinary: (filePath: string) => Promise<{ base64: string; size: number }>
   fsSelectFile: () => Promise<string | null>
   fsSelectImage: () => Promise<{ fileName: string; mime: string; name: string } | null>
   fsLoadBackgroundImage: (fileName: string) => Promise<string>
@@ -402,6 +403,7 @@ interface ElectronAPI {
   sftpDownload: (transferId: string, sshSessionId: string, remotePath: string, localPath: string) => Promise<void>
   sftpCancel: (transferId: string) => Promise<void>
   sftpReadFile: (sshSessionId: string, remotePath: string) => Promise<EditorFileContent>
+  sftpReadBinary: (sshSessionId: string, remotePath: string) => Promise<{ base64: string; size: number }>
   sftpWriteFile: (sshSessionId: string, remotePath: string, content: string) => Promise<void>
   sftpZipRemote: (sshSessionId: string, sources: string[], remoteZipPath: string, cwd: string) => Promise<{ stdout: string; stderr: string; exitCode: number | null }>
   sftpUnzipRemote: (sshSessionId: string, remoteZipPath: string, remoteDestDir: string) => Promise<{ stdout: string; stderr: string; exitCode: number | null }>

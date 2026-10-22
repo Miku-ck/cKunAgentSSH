@@ -39,6 +39,14 @@
     </div>
 
     <template v-if="segment === 'events'">
+    <!-- 写入健康度：「链完整」只说明已写入的那段没被篡改，不说明没漏记录。
+         审计写入失败历史上只留一行后端日志，页面照样渲染成一条干净的链 ——
+         用户会当成「确实没发生什么」。 -->
+    <div v-if="healthState && !healthState.ok" class="audit-health-warn">
+      审计链最近有写入失败（连续 {{ healthState.consecutive_failures }} 次，
+      最后失败动作：{{ healthState.last_failed_action || '—' }}）：
+      这段时间内的操作可能没被记录，链完整不等于没漏，请先排查磁盘与数据库锁。
+    </div>
     <!-- 过滤器 -->
     <div class="audit-filters">
       <select v-model="filters.environment" @change="loadFirst">
@@ -139,7 +147,7 @@
 
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onMounted, reactive, ref, watch } from 'vue'
-import { auditApi, toFriendlyMessage, type AuditRecord, type AuditVerifyResult } from '@/api/client'
+import { auditApi, toFriendlyMessage, type AuditHealth, type AuditRecord, type AuditVerifyResult } from '@/api/client'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToastStore } from '@/stores/toast'
 import { formatBackendTs } from '@/utils/format'
@@ -171,6 +179,9 @@ const error = ref('')
 // load() 的请求序号（过期响应丢弃）
 let loadSeq = 0
 const verifyState = ref<AuditVerifyResult | null>(null)
+// 审计写入健康度（后端 /audit/health）：与链校验是两件事 —— 校验查「写进去的有没有被改」，
+// 健康度查「该写的有没有写进去」。后者失败时页面必须自己说出来。
+const healthState = ref<AuditHealth | null>(null)
 // P3 修复：offset 分页（后端 /audit/records 已支持 offset，limit/offset 均带边界）。
 // 页大小保持 200，记录倒序（id DESC）——"下一页"取更旧的记录（offset 增大）。
 const pageSize = 200
@@ -239,7 +250,16 @@ function nextPage(): void {
 }
 
 async function refresh() {
-  await Promise.all([loadFirst(), verify()])
+  await Promise.all([loadFirst(), verify(), refreshHealth()])
+}
+
+/** 健康度拉取失败不污染表格的 error 条：它只是一条附加提示，拿不到就不提。 */
+async function refreshHealth() {
+  try {
+    healthState.value = await auditApi.health()
+  } catch {
+    healthState.value = null
+  }
 }
 
 async function onVerify() {
@@ -481,4 +501,18 @@ onMounted(refresh)
 .audit-pager-info { font-size: 12px; color: var(--text-tertiary); }
 .audit-loading { color: var(--text-tertiary); font-size: 12px; padding: 0 16px 12px; }
 .audit-error { color: var(--accent-red); font-size: 12px; padding: 0 16px 12px; }
+/* 写入失败提示：用警示色描边而非满屏红底 —— 它是「证据可能不全」的告知，
+   不是页面错误本身（表格数据仍然可读）。 */
+.audit-health-warn {
+  margin: 12px 16px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--accent-yellow);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent-yellow) 10%, transparent);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.6;
+  flex-shrink: 0;
+}
 </style>

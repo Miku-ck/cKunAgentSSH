@@ -121,10 +121,15 @@ def test_subagent_model_lookup_failure_raises_instead_of_success_text(monkeypatc
     # _get_model_config(self) 不带 ctx 形参（模型来自默认档解析，不是按 run 上下文取）；
     # 替身多一个 ctx 会让本用例在 TypeError 上红，永远跑不到它要验的 RuntimeError。
     monkeypatch.setattr(tool, "_get_model_config", lambda: None)
+    # 2026-10 升级后 _run_subagent 增加治理通道形参（reins/saddle）——
+    # 本用例验的是「模型配置取不到必须上抛」，治理替身给最小桩即可走到那一步。
+    from types import SimpleNamespace as _NS
+    gov = _NS(reins=_NS(check=None), saddle=_NS(schemas=lambda: []))
     with pytest.raises(RuntimeError):
         asyncio.run(
             tool._run_subagent(
-                task="t", system_prompt="p", extra_context="", tool_ctx=object()
+                task="t", system_prompt="p", extra_context="", tool_ctx=object(),
+                reins=gov.reins, saddle=gov.saddle,
             )
         )
 

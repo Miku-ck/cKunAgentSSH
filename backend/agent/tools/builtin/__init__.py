@@ -26,6 +26,7 @@ from agent.tools.builtin.ops_obs import (
     NetworkProbeTool,
     LogReadTool,
 )
+from agent.tools.builtin.ops_fleet import FleetSessionsTool, FleetOverviewTool
 from agent.tools.builtin.ops_service import ServiceManageTool
 from agent.tools.builtin.ops_schedule import ScheduleOpTool
 # 运维文件操作（远程/本地双模式）、图片查看、后台任务
@@ -71,6 +72,9 @@ _ALL_TOOL_CLASSES: list[type[BaseTool]] = [
     ProcessInspectTool,
     NetworkProbeTool,
     LogReadTool,
+    # 多会话只读扇出（fleet 巡检）
+    FleetSessionsTool,
+    FleetOverviewTool,
     ServiceManageTool,
     ScheduleOpTool,
     # 运维文件操作 / 图片查看 / 后台任务

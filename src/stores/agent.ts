@@ -85,14 +85,21 @@ export interface PermissionRequest {
   normalizedCommand?: string
   /** 命令后果的中文说明（纯展示，授权键仍绑定命令原文） */
   explain?: string
-  /** 后果说明来源：static/fallback/llm */
-  explainSource?: 'static' | 'fallback' | 'llm'
+  /** 后果说明来源：static/fallback/llm=命令级；tool=工具级审批，文案取工具自身声明 */
+  explainSource?: 'static' | 'fallback' | 'llm' | 'tool'
+  /** 环境标签的判定来源：connection=服务端按主机连接配置判定；其余=客户端声明、未核实 */
+  environmentSource?: string
+  /** 上者的中文说明（后端给，前端不自己拼文案） */
+  environmentSourceLabel?: string
   /** 目标环境（test/prod） */
   environment?: string
   /** 用户本次任务原话 — 让用户核对命令是否服务于他要做的事 */
   task?: string
   /** 目标 SSH 会话 id（反查连接名/主机展示） */
   sshSessionId?: string
+  /** 本次 run 的目标主机（服务端从连接配置反查）。有值时「始终允许」只对该主机
+   *  生效（fallback 成 `@host|键`）；空/undefined = 未核实，授权落全局条目。 */
+  host?: string
   /** 发起审批的 run_id（once 授权按 run 键控，防跨 run 消费） */
   runId?: string
   /** 发起审批的会话 ID（session 授权按会话键控，C-review M11） */
@@ -637,6 +644,10 @@ export const useAgentStore = defineStore('agent', () => {
           // 命令后果说明（后端解释层，交付卡渲染「这条命令会做什么」行）
           explain: event.explain || undefined,
           explain_source: event.explain_source || undefined,
+          // 拆解层：复合命令逐段意图 + 聚合风险 + 发起任务上下文
+          segments: event.segments || undefined,
+          risk: event.risk || undefined,
+          task: event.task || undefined,
         })
         break
       }
@@ -678,10 +689,11 @@ export const useAgentStore = defineStore('agent', () => {
         const alreadyPending = permissionRequests.value.some(
           r => !r.resolved && permCardKey(r.tool, r.command) === dupKey,
         )
-        // B11 修复的现行版：卡片现在只画在首页过程区（C2 裁决），所以在终端/审计/远程管理
-        // 这些页面上它是不可见的 —— 从非 pending → pending 转换时 toast 提醒一句把人叫回
-        // 首页（重复请求不重复弹）。原先这句写的是「请打开 AI 面板」，那是托盘还在时的
-        // 地图，R1 之后照做也批不了东西。
+        // B11 修复的现行版：卡片只画在首页输入区上方的 ApprovalDock（审批=决策面），
+        // 所以在终端/审计/远程管理这些页面上它是不可见的 —— 从非 pending → pending
+        // 转换时 toast 提醒一句把人叫回首页放行（重复请求不重复弹）。原先这句写的是
+        // 「回首页在过程里就地放行」，那是卡片还跟在消息流里的地图；过程区现在只剩轨迹，
+        // 照着做的人会翻到消息底去找一张早就不在那儿的卡。
         // expired 卡按裁决A仍是可操作 pending：队列里已有待办时不重复弹 toast
         const hadPending = permissionRequests.value.some(r => !r.resolved)
         if (!alreadyPending) {
@@ -703,8 +715,13 @@ export const useAgentStore = defineStore('agent', () => {
             explain: event.explain || undefined,
             explainSource: event.explain_source || undefined,
             environment: event.environment || undefined,
+            // 环境标签是谁定的：prod 降级尝试在卡片上就能看见（未核实时如实标注）
+            environmentSource: event.environment_source || undefined,
+            environmentSourceLabel: event.environment_source_label || undefined,
             task: event.task || undefined,
             sshSessionId: event.ssh_session_id || undefined,
+            // 主机限域：卡片要能说清「始终允许」到底对哪台机器生效
+            host: event.host || undefined,
             // once 授权按 run 键控 / session 按会话键控：创建时捕获上下文，
             // 授权时回传后端（后端 PermissionGate 据此键控）
             runId: event.run_id || lastRunId.value || undefined,
@@ -717,7 +734,7 @@ export const useAgentStore = defineStore('agent', () => {
             else permissionRequests.value.shift()
           }
           if (!hadPending) {
-            useToastStore().warning('AI 需要权限确认，回首页在过程里就地放行')
+            useToastStore().warning('AI 请求执行确认，回首页在输入框上方放行')
           }
         }
         break

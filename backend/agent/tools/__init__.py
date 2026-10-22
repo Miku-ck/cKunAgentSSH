@@ -103,6 +103,13 @@ class ToolContext:
     visible_terminal: bool = False
     # 目标环境标记（test/prod）— 生产高风险命令需确认
     environment: str = "test"
+    # 侦察子 Agent 的治理通道（spawn_subagent 专用，harness.run 注入）：
+    # 携带主 run 的 (reins, saddle) 引用，让子 Agent 自己 ReAct 循环里的每次工具
+    # 调用过【同一套】PRE/POST 拦截器与 Saddle 沙箱 —— 权限/内容级判定/审计链
+    # 全部复用主链路实例，不复制第二套判定（两套判定必然漂移）。
+    # None = 无治理（老调用方 / 单测直连工具）：spawn_subagent 据此拒绝启动，
+    # 绝不降级成免审路径。
+    governance: object | None = None
 
 
 class ToolRegistry:

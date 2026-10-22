@@ -33,3 +33,28 @@ export function isPreviewable(fileName: string): boolean {
   const ext = lower.split('.').pop() || ''
   return ext in extToLang
 }
+
+/**
+ * 可预览图片扩展名 → MIME 映射（SFTP 图片预览白名单，唯一来源）。
+ *
+ * 刻意保守：只放浏览器 `<img>` 通用可渲染、且常见于工作场景的四类。svg 虽是 XML
+ * 文本，但走 img 标签加载等同于渲染远端内容，与 CSP/审计口径有耦合，本轮不开。
+ */
+const imageExtToMime: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+}
+
+/** 取图片 MIME；非白名单返回 null（调用方按 null 走文本编辑器分支）。 */
+export function imageMime(fileName: string): string | null {
+  const ext = (fileName.toLowerCase().split('.').pop() || '')
+  return imageExtToMime[ext] ?? null
+}
+
+/** 判定文件名是否落在图片预览白名单（扩展名大小写不敏感）。 */
+export function isImagePreviewable(fileName: string): boolean {
+  return imageMime(fileName) !== null
+}

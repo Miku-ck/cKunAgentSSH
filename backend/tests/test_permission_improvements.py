@@ -15,7 +15,11 @@ import pytest
 
 import agent.harness.reins.gate as _gate_mod
 import agent.harness.reins.guards as _guards_mod
-from agent.harness.contracts import AgentConfig, RunContext
+from agent.harness.contracts import (
+    POLICY_DENY_MARKER,
+    AgentConfig,
+    RunContext,
+)
 from agent.harness.reins import FilesystemGuard, PermissionGate
 from agent.tools import ToolMeta
 from agent.tools.builtin.ops_service import ServiceManageTool
@@ -278,6 +282,43 @@ def test_effective_risk_no_upgrade_cases():
     # 无 destructive 声明的工具 → base
     plain = _mk_meta()
     assert g._get_effective_risk("any_tool", plain, {"action": "stop"}, "prod") == "moderate"
+
+
+# ── 2026-10-22：prod 拒绝标记单一源 + 停止变体指引 ──
+
+def test_prod_deny_reason_carries_policy_marker_and_stop_guidance():
+    """prod 拒绝的 intercept_reason 必须含 POLICY_DENY_MARKER —— ConfidenceMonitor
+    的扣分豁免与专用求助卡都靠这个子串识别，措辞漂移 = 豁免静默失效。
+    注入文案必须掐断变体循环：禁止构造替代写法 + 指向 allowlist 预登记。
+    """
+    ctx = _ctx("prod")
+    ctx.tool_calls_log.append({
+        "tool": "shell_exec",
+        "args": {"command": CMD},
+        "iteration": 0,
+        "success": None,
+    })
+    d = asyncio.run(_guard().check(ctx))
+    assert d.intercepted, "prod 未预授权危险命令必须拦截"
+    assert POLICY_DENY_MARKER in d.intercept_reason
+    inject = "\n".join(m.get("content", "") for m in d.inject_messages)
+    assert "allowlist" in inject, "文案必须指向 allowlist 预登记这条真正出路"
+    assert "不要再构造替代写法" in inject, "文案必须明确禁止变体循环"
+
+
+def test_hardline_inject_disallows_evasive_variants():
+    """hardline 注入文案：无条件阻断 + 禁止规避性变体（不再只说"换替代方案"）"""
+    ctx = _ctx("test")
+    ctx.tool_calls_log.append({
+        "tool": "shell_exec",
+        "args": {"command": "dd if=/dev/zero of=/dev/sda"},
+        "iteration": 0,
+        "success": None,
+    })
+    d = asyncio.run(_guard().check(ctx))
+    assert d.intercepted
+    assert "无条件阻断" in "\n".join(m.get("content", "") for m in d.inject_messages)
+    assert "变体" in "\n".join(m.get("content", "") for m in d.inject_messages)
 
 
 def test_effective_risk_dangerous_ignores_session_in_check_permission():

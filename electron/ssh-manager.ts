@@ -468,6 +468,8 @@ export class SSHManager {
   // 独立传输连接池：key = 连接配置 id（connectionId，"主机"粒度），
   // value = 该主机的一批传输连接（每条同时服务一个传输）
   private transferConns = new Map<string, TransferConn[]>()
+  /** 在途传输的取消闭包（key = transferId）。删除走身份守卫：续传可能复用同一 id，
+   *  只清理本传输自己登记的条目（C10）。 */
   private transfers = new Map<string, () => void>()
   private nextId = 1
   /**
@@ -832,6 +834,15 @@ export class SSHManager {
 
   isBridgeSession(id: string): boolean {
     return this.bridgeSessionIds.has(id)
+  }
+
+  /**
+   * 会话 → 连接配置 id。供应桥接的 ssh_session_info（后端据此反查目标主机与
+   * environment 标记）：会话池是主进程私有状态，渲染层无法伪造这条映射。
+   * 会话不存在/已断开返回 null。
+   */
+  getSessionConnectionId(id: string): string | null {
+    return this.sessions.get(id)?.connectionId ?? null
   }
 
   /**
@@ -1922,6 +1933,7 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       cancelled = true
       heartbeat.stop()
     }
+    // 登记取消闭包，供 sftpCancel 按 id 找回（不改传输控制流）
     this.transfers.set(transferId, cancelFn)
 
     heartbeat.start(5000, 30000, () => lastProgress, () => {
@@ -2165,7 +2177,7 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       // 传输通常已在本 release 之前 acquire 到了另一条连接，天然隔离）
       release()
       // C10 配套：渲染层按 STALLED 重试时可能已用同一 transferId 启动新传输，
-      // 只清理本传输自己注册的取消函数，避免误删新传输的条目
+      // 只清理本传输自己登记的记录，避免误删新传输的条目
       if (this.transfers.get(transferId) === cancelFn) {
         this.transfers.delete(transferId)
       }
@@ -2232,6 +2244,7 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       cancelled = true
       heartbeat.stop()
     }
+    // 登记取消闭包，供 sftpCancel 按 id 找回（不改传输控制流）
     this.transfers.set(transferId, cancelFn)
 
     heartbeat.start(5000, 30000, () => lastProgress, () => {
@@ -2482,7 +2495,7 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       // 延后到 runBody 退出，续传新传输天然拿到另一条连接，隔离旧在途写）
       release()
       // C10 配套：渲染层按 STALLED 重试时可能已用同一 transferId 启动新传输，
-      // 只清理本传输自己注册的取消函数，避免误删新传输的条目
+      // 只清理本传输自己登记的记录，避免误删新传输的条目
       if (this.transfers.get(transferId) === cancelFn) {
         this.transfers.delete(transferId)
       }
@@ -2537,6 +2550,37 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
   }
 
   /**
+   * 二进制读取（远程图片预览通道）。与 sftpReadFile 的关键差异：不做「null 字节即二进制」
+   * 拒绝、不按 utf-8 解码，而是整体转 base64 交给渲染层拼 data URL。
+   *
+   * 5MB 上限在 read 之前用 stat 拦截：避免把超限大图读进主进程内存再跨 IPC 序列化。
+   * 走 requireSftp（终端子系统）与 sftpReadFile 同一形态，只是只读用途。
+   */
+  async sftpReadBinary(
+    sshSessionId: string,
+    remotePath: string,
+  ): Promise<{ base64: string; size: number }> {
+    const sftp = this.requireSftp(sshSessionId)
+    const stat: any = await new Promise((resolve, reject) => {
+      sftp.stat(remotePath, (err, res) => {
+        if (err) reject(new Error('获取远程文件信息失败，请检查路径是否存在'))
+        else resolve(res)
+      })
+    })
+    const size = stat.size || 0
+    if (size > 5 * 1024 * 1024) {
+      throw new Error('图片过大（超过 5MB），无法预览')
+    }
+    const buf: Buffer = await new Promise((resolve, reject) => {
+      sftp.readFile(remotePath, (err, data) => {
+        if (err) reject(new Error('读取远程文件失败，请检查是否有访问权限'))
+        else resolve(data as Buffer)
+      })
+    })
+    return { base64: buf.toString('base64'), size }
+  }
+
+  /**
    * 将字符串内容写回远程文件。
    *
    * S5-10 修复：先写 `<path>.part` 再 rename 覆盖，不再原地 O_TRUNC。
@@ -2586,8 +2630,7 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
 
   /** 取消进行中的传输 */
   sftpCancel(transferId: string): void {
-    const cancel = this.transfers.get(transferId)
-    if (cancel) cancel()
+    this.transfers.get(transferId)?.()
   }
 
   // ════════════════════════════════════════════════

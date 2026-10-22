@@ -24,6 +24,12 @@ export type TransferStatus = 'pending' | 'running' | 'paused' | 'done' | 'error'
  *  复制类任务在两侧都要被认出来（不受并发门约束、图标走 copy 分支）。 */
 export type TransferKind = 'upload' | 'download' | 'copy-local' | 'copy-remote'
 
+/** 「活跃」= 正在传 + 暂停待续。store.activeTransfers 与传输中心 active tab
+ *  共用这一判据，徽标数与列表数才不会分叉；pending 属「排队」，不计入。 */
+export function isActiveTransferStatus(status: TransferStatus): boolean {
+  return status === 'running' || status === 'paused'
+}
+
 /** 格式化只依赖这几个字段；让 store 的 TransferItem 结构上满足它即可，
  *  反过来 import store 会把 util 拖进 Pinia 实例化时序里。 */
 export interface TransferProgress {

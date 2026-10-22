@@ -22,3 +22,19 @@ export function grantScopesForRisk(risk: string): GrantScope[] {
 export function onceGrantBlocked(runRunning: boolean): boolean {
   return !runRunning
 }
+
+/**
+ * 「全部批准」必须禁用的情形：这批里只要有一条不可批量放行，整批都不给一键。
+ *
+ * 一次点击批掉多条命令，用户根本来不及逐条读后果，而卡片区是可滚动的 ——
+ * 滚出视口的那条同样被批掉。因此只有低风险（safe/moderate）且目标不是生产
+ * 环境的批次才允许批量；dangerous、空/脏风险值（与 grantScopesForRisk 同一条
+ * fail-closed 口径）与 prod 一律要求逐条确认。
+ */
+const BATCH_APPROVABLE_RISKS = ['safe', 'moderate']
+
+export function batchApproveBlocked(
+  requests: ReadonlyArray<{ risk: string; environment?: string }>,
+): boolean {
+  return requests.some(r => r.environment === 'prod' || !BATCH_APPROVABLE_RISKS.includes(r.risk))
+}

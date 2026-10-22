@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any, AsyncIterator, Optional
 
 from .contracts import (
@@ -259,6 +260,11 @@ class Harness:
         # 其 saddle 字段会被后启动的并发 run 覆盖；拦截器改从 ctx.metadata 读取
         # 当前 run 的 Saddle，避免查错 ToolRegistry 误判"工具未注册"。
         ctx.metadata["saddle"] = self._saddle
+        # 侦察子 Agent 的治理通道：spawn_subagent 在自己的轻量 ReAct 循环里执行
+        # 只读观测工具，PRE/POST 检查与 Saddle 执行必须复用主 run 的同一套拦截器
+        # 实例（PermissionGate 进程单例 + FilesystemGuard 内容级判定 + AuditLogger
+        # 审计链）—— 经 ToolContext.governance 透传给工具，不复制第二套判定。
+        ctx.metadata["governance"] = SimpleNamespace(reins=self.reins, saddle=self._saddle)
         # 环境标签的判定来源（服务端按连接配置判定 / 客户端声明未核实）。
         # 与 saddle 同属 per-run 元数据：审批卡片的展示字段据此如实标注，
         # 让审批人看得见「这个 test 是不是服务端核实过的」。

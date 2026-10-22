@@ -47,7 +47,7 @@ function makeApi(overrides: Record<string, unknown> = {}): FakeApi {
 }
 
 function pushTransfer(store: ReturnType<typeof useSftpStore>, over: Record<string, unknown>): void {
-  store.transfers.push({
+  store.addTransfer({
     id: 't1', direction: 'down', kind: 'copy-local', name: 'n',
     from: '/a', to: '/b', transferred: 0, total: 0,
     status: 'running', startTime: 1, ...over,
@@ -55,6 +55,55 @@ function pushTransfer(store: ReturnType<typeof useSftpStore>, over: Record<strin
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0))
+
+describe('sftp store — 传输索引不变量（阶段2/B4）', () => {
+  let api: FakeApi
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    api = makeApi()
+    ;(globalThis as unknown as { window: unknown }).window = { electronAPI: api }
+  })
+
+  function mk(id: string, status = 'running') {
+    return {
+      id, direction: 'up', kind: 'upload', name: id, from: '/a', to: '/b',
+      transferred: 0, total: 100, status, startTime: 1,
+    } as never
+  }
+
+  it('addTransfer 登记后 applyProgress 命中数组里的同一对象', () => {
+    const store = useSftpStore()
+    store.addTransfer(mk('tA'))
+    store.applyProgress({ id: 'tA', transferred: 42, total: 100 })
+    expect(store.transfers[0].transferred).toBe(42)
+  })
+
+  it('removeTransfer 后对同一 id 的 applyProgress 静默无副作用（索引已删）', () => {
+    const store = useSftpStore()
+    store.addTransfer(mk('tA'))
+    store.addTransfer(mk('tB'))
+    store.removeTransfer('tA')
+    // 迟到/误投的进度不得命中已删记录，也不得误改到 tB
+    store.applyProgress({ id: 'tA', transferred: 999, total: 100 })
+    expect(store.transfers.map(t => t.id)).toEqual(['tB'])
+    expect(store.transfers[0].transferred).toBe(0)
+    store.applyProgress({ id: 'tB', transferred: 7, total: 100 })
+    expect(store.transfers[0].transferred).toBe(7)
+  })
+
+  it('clearCompleted 重建索引：完成项移出后不可再被 applyProgress 命中', () => {
+    const store = useSftpStore()
+    store.addTransfer(mk('done', 'done'))
+    store.addTransfer(mk('run', 'running'))
+    store.clearCompleted()
+    expect(store.transfers.map(t => t.id)).toEqual(['run'])
+    // done 已从数组与索引双双移除：给它的进度既不报错也不复活
+    store.applyProgress({ id: 'done', transferred: 100, total: 100 })
+    expect(store.transfers.find(t => t.id === 'done')).toBeUndefined()
+    expect(store.transfers[0].transferred).toBe(0)
+  })
+})
 
 describe('sftp store — 复制的取消语义（S5-11）', () => {
   let api: FakeApi

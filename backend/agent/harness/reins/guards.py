@@ -10,7 +10,13 @@ from typing import Any, Optional
 from agent.audit import append_record_async
 
 from ..command_explain import explain_for_reason, maybe_explain_via_llm
-from ..contracts import ReinDecision, ReinPoint, RunContext, TraceEvent
+from ..contracts import (
+    POLICY_DENY_MARKER,
+    ReinDecision,
+    ReinPoint,
+    RunContext,
+    TraceEvent,
+)
 from ..safety import classify_command, classify_constructed_command
 from .auto_approve import try_auto_approve
 from .core import (
@@ -113,7 +119,12 @@ class FilesystemGuard:
                     )],
                     inject_messages=[{
                         "role": "user",
-                        "content": f"[系统拦截] 已拦截敏感命令: {reason}。请使用更安全的替代方案。",
+                        "content": (
+                            f"[系统拦截] 已拦截敏感命令: {reason}。该类命令被无条件阻断，"
+                            "无法通过授权或 allowlist 放行，也不要构造变体命令规避检测"
+                            "（同样会被拦截）。请改用明确安全的替代方案；"
+                            "如任务确需此类操作，向用户说明原因并等待人工处理。"
+                        ),
                     }],
                 )
             elif level == "dangerous":
@@ -165,7 +176,8 @@ class FilesystemGuard:
                         )
                         return ReinDecision(
                             intercepted=True,
-                            intercept_reason=f"生产环境危险命令未预授权: {reason}",
+                            intercept_reason=(
+                                f"生产环境危险命令{POLICY_DENY_MARKER}: {reason}"),
                             events=[TraceEvent(
                                 kind="warning",
                                 source="reins.filesystem_guard",
@@ -182,7 +194,10 @@ class FilesystemGuard:
                                 "role": "user",
                                 "content": (
                                     f"[系统拦截] 当前目标为生产环境，危险命令（{reason}）需预先在"
-                                    "权限 allowlist 中登记后方可执行，此处拒绝临时授权。请改用更安全的操作。"
+                                    "权限 allowlist 中登记后方可执行，此处拒绝临时授权。"
+                                    "注意：换用其他变体命令（find -delete、脚本封装等）同样会被拒绝，"
+                                    "不要再构造替代写法。请停止尝试，直接告知用户："
+                                    "需在权限 allowlist 中预先登记该命令后重试。"
                                 ),
                             }],
                         )

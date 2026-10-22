@@ -15,7 +15,13 @@ from typing import Any, Optional
 from agent.audit import append_record_async
 from config import ALLOWLIST_PATH
 
-from ..contracts import ReinDecision, ReinPoint, RunContext, TraceEvent
+from ..contracts import (
+    POLICY_DENY_MARKER,
+    ReinDecision,
+    ReinPoint,
+    RunContext,
+    TraceEvent,
+)
 from ..safety import classify_command, classify_constructed_command
 from .auto_approve import try_auto_approve
 from .core import (
@@ -910,7 +916,8 @@ class PermissionGate:
                 )
                 return ReinDecision(
                     intercepted=True,
-                    intercept_reason=f"生产环境危险工具未预授权: {tool}",
+                    intercept_reason=(
+                        f"生产环境危险工具{POLICY_DENY_MARKER}: {tool}"),
                     events=[TraceEvent(
                         kind="warning",
                         source="reins.permission_gate",
@@ -929,7 +936,8 @@ class PermissionGate:
                         "content": (
                             f"[系统拦截] 当前目标为生产环境，危险工具 {tool} 需预先在"
                             "权限 allowlist 中登记后方可执行，此处拒绝临时授权。"
-                            "请改用更安全的操作，或提示用户预先登记 allowlist。"
+                            "换用其他工具或参数变体同样会被拒绝，不要再尝试替代写法。"
+                            "请停止尝试，直接告知用户：需在权限 allowlist 中预先登记后重试。"
                         ),
                     }],
                 )

@@ -12,11 +12,13 @@ from agent.remote_protocol import has_exit_sentinel
 
 from ..contracts import (
     FILE_MUTATION_TOOLS,
+    POLICY_DENY_MARKER,
     READONLY_TOOLS,
     ReinDecision,
     ReinPoint,
     RunContext,
     TraceEvent,
+    is_policy_denial,
 )
 from .core import _audit_environment, tool_call_signature
 
@@ -177,6 +179,14 @@ class ConfidenceMonitor:
       带"不确定"的话会在连续多次 post_iteration 里重复扣分；
     - 求助阈值从"连续 3 次"提到"连续 5 次"，并始终累积 history
       （原实现纠偏注入会提前 return，help 分支永远看不到注入后迭代的分数）。
+
+    策略拒绝豁免（2026-10-22）：
+    - prod 未预授权（intercept_reason 含 POLICY_DENY_MARKER）的拦截条目
+      不计入置信度扣分 —— 政策堵路 ≠ 模型困惑，连续拒绝不该把置信度打到
+      触底再发一张「低置信度」误诊卡；
+    - 兜底替代：连续 POLICY_HELP_CONSECUTIVE 次策略拒绝（模型无视纠偏文案
+      持续构造变体）→ 直接发 human_help_needed 终止 run，卡片说真话
+      （需要预登记 allowlist），driver 按 HUMAN_HELP 终态收尾。每 run 一次。
     """
     point: ReinPoint = field(default=ReinPoint.POST_ITERATION, init=False)
     priority: int = field(default=10, init=False)
@@ -184,6 +194,9 @@ class ConfidenceMonitor:
     # 低置信度阈值 / 连续低分求助次数
     LOW_THRESHOLD: float = field(default=0.4, init=False)
     HELP_CONSECUTIVE: int = field(default=5, init=False)
+    # 连续策略拒绝求助阈值：纠偏文案已要求首次拒绝即停，连续 3 次意味着
+    # 模型在无视指令刷变体，早于低置信度兜底（5）收口
+    POLICY_HELP_CONSECUTIVE: int = field(default=3, init=False)
 
     async def check(self, ctx: RunContext) -> ReinDecision:
         # per-run 隔离状态：从 ctx.metadata 取/初始化
@@ -202,6 +215,42 @@ class ConfidenceMonitor:
 
         # H14 修复：同一 run 只触发一次 human_help_needed，避免连续发多个相同求助卡片
         help_requested: bool = ctx.metadata.get("confidence_help_requested", False)
+
+        # ── 策略拒绝死锁兜底 ──
+        # prod 未预授权的连续拒绝是「政策堵路」不是「模型困惑」：扣分已豁免，
+        # 低置信度兜底不会误发卡；但模型若无视纠偏文案持续构造变体，这里在
+        # POLICY_HELP_CONSECUTIVE 次连续拒绝后直接发 human_help_needed，
+        # driver 收到该事件按 HUMAN_HELP 终态 break（与低置信度求助同一条
+        # 终止路径），卡片文案指向真正的解法：预登记 allowlist。
+        if not ctx.metadata.get("policy_help_requested", False):
+            trailing_denials = 0
+            for tc in reversed(ctx.tool_calls_log):
+                if is_policy_denial(tc):
+                    trailing_denials += 1
+                else:
+                    break
+            if trailing_denials >= self.POLICY_HELP_CONSECUTIVE:
+                ctx.metadata["policy_help_requested"] = True
+                return ReinDecision(
+                    intercepted=True,
+                    intercept_reason=(
+                        f"连续 {trailing_denials} 次生产环境策略拒绝"
+                        f"（{POLICY_DENY_MARKER}），停止重试，等待用户预登记 allowlist"
+                    ),
+                    events=[TraceEvent(
+                        kind="human_help_needed",
+                        source="reins.confidence_monitor",
+                        run_id=ctx.run_id,
+                        iteration=ctx.iteration,
+                        payload={
+                            "reason": (
+                                "生产环境危险命令需预先登记权限 allowlist，"
+                                "Agent 已停止重试，请人工登记后重试"
+                            ),
+                            "confidence": round(confidence, 3),
+                        },
+                    )],
+                )
 
         decision = ReinDecision()
 
@@ -257,17 +306,19 @@ class ConfidenceMonitor:
         - 真实失败（无 exit 哨兵）每个 -0.25，窗口内封顶 4 个；单个失败不触底；
         - 不确定标记词（"可能/不确定"等，含高频中文词）只在窗口内已有真实
           失败时才 -0.15 —— 自信陈述里出现"可能是配置问题"不再单独降权；
-        - 已执行非零退出（探针答案，如 grep 无匹配）每个仅 -0.05。
+        - 已执行非零退出（探针答案，如 grep 无匹配）每个仅 -0.05；
+        - prod 策略拒绝（未预授权）不计分 —— 政策堵路不是模型失败信号。
         """
         base = 0.8
         # 取最近一条 assistant 消息
         recent_msgs = [m for m in ctx.messages if m.get("role") == "assistant"]
         last = recent_msgs[-1].get("content", "") if recent_msgs else ""
 
-        # 工具失败 — 只看最近 5 次调用（窗口化），并区分两类：
+        # 工具失败 — 只看最近 5 次调用（窗口化），并区分三类：
         # - 真实失败：调用/命令未产出可判读结果
         # - 已执行非零退出（output 含 [exit_code=N] 哨兵）：grep 无匹配、
         #   test 为假等探针结果是有效诊断答案，不是失败信号
+        # - 策略拒绝（prod 未预授权拦截）：环境政策堵路，豁免
         recent_calls = ctx.tool_calls_log[-5:] if ctx.tool_calls_log else []
 
         def _exited(tc: dict) -> bool:
@@ -276,7 +327,9 @@ class ConfidenceMonitor:
 
         failed_tools = sum(
             1 for tc in recent_calls
-            if tc.get("success") is False and not _exited(tc)
+            if tc.get("success") is False
+            and not _exited(tc)
+            and not is_policy_denial(tc)
         )
         exited_tools = sum(
             1 for tc in recent_calls

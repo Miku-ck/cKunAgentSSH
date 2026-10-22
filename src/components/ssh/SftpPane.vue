@@ -117,12 +117,7 @@
         @contextmenu.prevent.stop="onRowContextMenu($event, entry)"
       >
         <div class="file-name">
-          <svg class="file-icon" :class="iconClass(entry)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path v-if="entry.isDirectory" d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-            <template v-else>
-              <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/>
-            </template>
-          </svg>
+          <FileTypeIcon :name="entry.name" :is-directory="entry.isDirectory" />
           <span>{{ entry.name }}</span>
         </div>
         <div class="file-size">{{ entry.isDirectory ? '—' : formatBytes(entry.size) }}</div>
@@ -167,6 +162,7 @@ import { useSftpStore } from '@/stores/sftp'
 import { useToastStore } from '@/stores/toast'
 import { toFriendlyMessage } from '@/api/client'
 import SftpBookmarkMenu from './SftpBookmarkMenu.vue'
+import FileTypeIcon from '@/components/icons/FileTypeIcon.vue'
 
 const props = defineProps<{ side: 'local' | 'remote' }>()
 const store = useSftpStore()
@@ -271,14 +267,6 @@ function isSelected(path: string): boolean {
   return props.side === 'local'
     ? store.selectedLocal.has(path)
     : store.selectedRemote.has(path)
-}
-
-function iconClass(entry: any): string {
-  if (entry.isDirectory) return 'folder'
-  const ext = entry.name.split('.').pop()?.toLowerCase() || ''
-  if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)) return 'image'
-  if (['zip', 'gz', 'tar', 'rar', '7z'].includes(ext)) return 'archive'
-  return 'text'
 }
 
 function permText(entry: any): string {
@@ -705,11 +693,6 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
 
 .file-name { display: flex; align-items: center; gap: 8px; overflow: hidden; }
 .file-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.file-icon { width: 14px; height: 14px; flex-shrink: 0; }
-.file-icon.folder { color: var(--accent-orange); }
-.file-icon.text { color: var(--accent-cyan); }
-.file-icon.image { color: var(--accent-purple); }
-.file-icon.archive { color: var(--accent-red); }
 .file-size, .file-time, .file-perm {
   color: var(--text-tertiary); font-family: var(--font-mono); font-size: 11px;
 }

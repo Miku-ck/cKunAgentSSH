@@ -54,6 +54,14 @@ async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise
 }
 const POST_RESULT_TIMEOUT_MS = 15000
 
+/** 拆解层单段：意图 + 段级风险 + 危险段后果（复合命令才有，单段命令缺省） */
+export interface DeliverySegment {
+  command: string
+  intent: string
+  level: string
+  note?: string
+}
+
 export interface ToolDelivery {
   tool_id: string
   command: string
@@ -75,6 +83,12 @@ export interface ToolDelivery {
   explain?: string
   /** 说明来源：static=静态后果表 fallback=通用兜底 llm=模型生成（仅供参考） */
   explain_source?: string
+  /** 复合命令逐段拆解（后端拆解层，纯展示；单段命令缺省） */
+  segments?: DeliverySegment[]
+  /** 展示用聚合风险（safe/dangerous/hardline）；权威判定在后端授权链 */
+  risk?: string
+  /** 发起本次命令的任务原话（卡片上下文行，让用户核对命令服务于他的请求） */
+  task?: string
 }
 
 interface ToolDeliverPayload {
@@ -85,6 +99,9 @@ interface ToolDeliverPayload {
   runId?: string
   explain?: string
   explain_source?: string
+  segments?: DeliverySegment[]
+  risk?: string
+  task?: string
 }
 
 /** 单次捕获的解析状态（进程内非响应式即可，纯文本解析用） */
@@ -341,6 +358,9 @@ function handleDeliver(payload: ToolDeliverPayload): void {
     runId: payload.runId,
     explain: payload.explain,
     explain_source: payload.explain_source,
+    segments: payload.segments,
+    risk: payload.risk,
+    task: payload.task,
   }
   deliveries.value.push(delivery)
   // requires_confirm 的命令停在 pending_confirm 等卡片确认；其余直接写入终端

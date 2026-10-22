@@ -75,7 +75,30 @@
 }
 .ap-code-normal { color: var(--accent-cyan); font-style: italic; }
 .ap-tag-inline { font-size: 10.5px; color: var(--text-tertiary); margin-left: 2px; }
-.ap-msg { color: var(--text-primary); font-size: 12.5px; line-height: 1.5; margin-bottom: 7px; }
+
+/* ── 写入/编辑预览：授权绑路径，不绑内容 ── */
+.ap-write { margin-bottom: 8px; }
+.ap-diff-block { margin-bottom: 7px; }
+.ap-diff-block .ap-k { display: block; font-size: 11px; margin-bottom: 3px; }
+.ap-diff {
+  max-height: 150px;
+  overflow: auto;
+  margin: 0;
+  padding: 7px 9px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.ap-diff-old { border-left: 2px solid var(--danger-text); }
+.ap-diff-new { border-left: 2px solid var(--status-success-text); }
+.ap-preview-note { font-size: 10.5px; color: var(--text-tertiary); margin-bottom: 4px; }
+.ap-write-note { font-size: 11px; color: var(--status-warn-text); line-height: 1.5; }
 
 /* ── 参数折叠块 ── */
 .ap-args {
@@ -97,6 +120,17 @@
 .ap-args summary::-webkit-details-marker { display: none; }
 .ap-args summary::before { content: "+"; }
 .ap-args[open] summary::before { content: "−"; }
+/* 折叠区里的英文判定原文：它是排查线索，字号和颜色都比正文低一档，
+   但与 .ap-args pre 同宽（12px）—— 同一块内容左边缘必须对齐 */
+.ap-tech-line {
+  padding: 0 12px 8px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
 .ap-args pre {
   padding: 0 12px 9px;
   color: var(--text-secondary);
@@ -112,6 +146,9 @@
 .ap-risk { font-size: 10.5px; font-weight: 700; padding: 2px 9px; border-radius: 999px; }
 .ap-risk.risk-moderate { background: var(--card-perm-border); color: var(--card-perm-text); }
 .ap-risk.risk-dangerous { background: var(--danger-bg); color: var(--danger-text); }
+/* 后端没说风险（缺字段/脏值）：授权档位已按 dangerous 收口，配色也必须跟着走 ——
+   没有这一条时它落进无样式的 .ap-risk，画成一枚没皮的空徽章，看上去像"没有风险" */
+.ap-risk.risk-unknown { background: var(--danger-bg); color: var(--danger-text); }
 .ap-env { font-size: 10.5px; font-weight: 600; padding: 2px 9px; border-radius: 999px; }
 .ap-env.env-prod { background: var(--danger-bg); color: var(--danger-text); }
 .ap-env.env-test { background: var(--card-perm-border); color: var(--text-secondary); }
@@ -139,7 +176,9 @@
 
 /* ── 动作区与按钮 ──
    尺寸/字重与全局 button.css 统一：24px 高、4px 圆角、400 字重。
-   语义色保留审批卡的绿/青/灰 —— 它在警示卡里是独立语义层，不随主题强调色走。
+   层级靠语义色分担：绿=本次放行（唯一推荐动作），青=会话内免问，
+   中性=永久（写清单是不可逆的，不给它绿）；拒绝靠右单独占位，
+   不再用「最灰的那一枚」表达它是次要动作 —— 它是用户行使否决权的出口。
    所有变体一律文本色 + alpha 描边，去掉实心填充（与全局按钮语言一致）。 */
 .ap-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding: 0 13px 11px; }
 .ap-btn {
@@ -158,15 +197,15 @@
 .ap-btn:disabled { opacity: 0.45; cursor: default; }
 .ap-btn-grant { color: var(--status-success-text); border-color: color-mix(in srgb, var(--status-success-text) 50%, transparent); }
 .ap-btn-grant:hover:not(:disabled) { background: color-mix(in srgb, var(--status-success-text) 8%, transparent); }
-.ap-btn-always { color: var(--status-success-text); border-color: color-mix(in srgb, var(--status-success-text) 40%, transparent); }
-.ap-btn-always:hover:not(:disabled) { background: color-mix(in srgb, var(--status-success-text) 8%, transparent); }
+.ap-btn-always { color: var(--text-secondary); border-color: var(--border-default); }
+.ap-btn-always:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
 .ap-btn-session { color: var(--accent-cyan); border-color: color-mix(in srgb, var(--accent-cyan) 50%, transparent); }
 .ap-btn-session:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-cyan) 12%, transparent); }
-.ap-btn-deny { color: var(--text-secondary); border-color: var(--border-default); }
+.ap-btn-deny { margin-left: auto; color: var(--text-primary); border-color: var(--border-default); }
 .ap-btn-deny:hover:not(:disabled) { border-color: var(--danger-text); color: var(--danger-text); background: color-mix(in srgb, var(--danger-text) 8%, transparent); }
 .ap-hint {
-  font-size: 10.5px;
-  color: var(--text-tertiary);
+  font-size: 11.5px;
+  color: var(--text-secondary);
   border-top: 1px dashed var(--border-default);
   padding: 8px 13px 10px;
   line-height: 1.6;
