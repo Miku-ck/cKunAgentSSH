@@ -155,9 +155,11 @@ export function useChatPersistence(options: {
   }
 
   const conversations = shallowRef<ModeConversation[]>(loadConversations())
-  // 审查修复：重启后恢复上次会话（localStorage 含完整消息，仅恢复选中态）。
-  // 原实现恒为 null，每次重启任务台都显示空态，用户需手动从历史记录点回。
-  const currentConvId = ref<string | null>(conversations.value[0]?.id ?? null)
+  // 启动落点 = 空白任务：历史留在抽屉里，由用户自己决定接着哪条聊。
+  // 这里曾经恢复 conversations[0]（最近一条），理由是「重启接着上次聊」——但默认
+  // 摊开的是用户上一次留下的半截对话（甚至是被读侧过滤吞过回复的旧会话），每开一次
+  // 都要先点「新建会话」才能开始新任务。恢复某条会话改成显式动作（历史抽屉）。
+  const currentConvId = ref<string | null>(null)
   const selectedModelId = ref<string>(loadSelectedModelId())
   const currentConversation = computed(() =>
     conversations.value.find((c) => c.id === currentConvId.value) ?? null

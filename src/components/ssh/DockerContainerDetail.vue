@@ -472,7 +472,7 @@ onUnmounted(() => {
   transition: color var(--transition-fast), border-color var(--transition-fast);
 }
 .dt-tab:hover { color: var(--text-primary); }
-.dt-tab.on { color: var(--accent-primary); border-bottom-color: var(--accent-primary); }
+.dt-tab.on { color: var(--accent-text); border-bottom-color: var(--accent-primary); }
 
 .st-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--text-tertiary); }
 .st-dot.running { background: var(--status-success-text); }

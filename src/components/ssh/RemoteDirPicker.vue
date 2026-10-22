@@ -194,10 +194,10 @@ watch(() => props.sessionId, () => {
 }
 .rdp-row:hover:not(:disabled) { background: var(--bg-hover); }
 .rdp-row.on { background: color-mix(in srgb, var(--accent-primary) 12%, transparent); }
-.rdp-row.dir .rdp-nm { color: var(--accent-primary); }
+.rdp-row.dir .rdp-nm { color: var(--accent-text); }
 .rdp-row:disabled { opacity: .5; cursor: default; }
 .rdp-file { width: 12px; height: 12px; flex-shrink: 0; color: var(--text-tertiary); }
-.rdp-row.dir .rdp-file { color: var(--accent-primary); }
+.rdp-row.dir .rdp-file { color: var(--accent-text); }
 .rdp-nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rdp-sz { flex-shrink: 0; font-size: 10px; color: var(--text-tertiary); }
 .rdp-msg { padding: 10px 8px; font-size: 11px; color: var(--text-tertiary); text-align: center; }

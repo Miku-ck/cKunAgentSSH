@@ -2,7 +2,7 @@
   <Teleport to="body">
     <Transition name="confirm-fade">
       <div v-if="visible" class="confirm-overlay" @click.self="handleCancel">
-        <div class="confirm-dialog" :class="{ danger }" role="alertdialog" aria-modal="true">
+        <div class="confirm-dialog" :class="{ danger }" role="alertdialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
           <div class="confirm-header">
             <div class="confirm-icon" :class="{ danger }">
               <svg v-if="danger" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
@@ -16,7 +16,7 @@
                 <line x1="12" y1="17" x2="12.01" y2="17"/>
               </svg>
             </div>
-            <h3 class="confirm-title">{{ title }}</h3>
+            <h3 id="confirm-dialog-title" class="confirm-title">{{ title }}</h3>
           </div>
 
           <div class="confirm-body">
@@ -164,7 +164,7 @@ defineExpose({ open, close })
   height: 32px;
   border-radius: 50%;
   background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
-  color: var(--accent-primary);
+  color: var(--accent-text);
   display: flex;
   align-items: center;
   justify-content: center;

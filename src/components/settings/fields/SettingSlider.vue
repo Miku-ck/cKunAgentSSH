@@ -72,6 +72,13 @@ function onInput(e: Event) {
   cursor: pointer;
   box-shadow: 0 1px 3px rgba(0,0,0,0.4);
 }
+.setting-range:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.setting-range:disabled::-webkit-slider-thumb {
+  cursor: default;
+}
 .slider-value {
   font-size: 12px;
   color: var(--text-secondary);

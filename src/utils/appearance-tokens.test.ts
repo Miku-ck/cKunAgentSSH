@@ -10,7 +10,9 @@
  */
 import { describe, expect, it } from 'vitest'
 import tokens from './appearance-tokens.ts?raw'
-import { ACCENT_MAP, contrastOnAccent, relativeLuminance, type Accent } from './appearance-tokens'
+import {
+  ACCENT_MAP, accentTextOn, contrastOnAccent, isHexColor, relativeLuminance, type Accent,
+} from './appearance-tokens'
 
 /** 白字/深字与底色之间的 WCAG 对比度 */
 function ratio(hex: string, on: string): number {
@@ -47,6 +49,47 @@ describe('contrastOnAccent：压在强调色上的字', () => {
       expect(contrastOnAccent(ACCENT_MAP[value].hex), `${value} 应保持白字`).toBe('#ffffff')
     }
     expect(ratio(ACCENT_MAP.blue.hex, '#ffffff')).toBeGreaterThanOrEqual(4.5)
+  })
+})
+
+describe('accentTextOn：强调色当文字时的可读变体', () => {
+  // 三张实际底：结构底 / 浮起层 / 控件凹陷底。文字可能落在任意一张上。
+  const DARK_SURFACES = ['#000000', '#1a1a1e', '#101013']
+  const LIGHT_SURFACES = ['#f3f4f6', '#ffffff', '#eef0f3']
+  const accents = Object.keys(ACCENT_MAP) as Accent[]
+
+  it.each(accents)('%s：深色主题三张底全部 ≥4.5:1', (value) => {
+    const color = accentTextOn(ACCENT_MAP[value].hex, DARK_SURFACES)
+    expect(isHexColor(color)).toBe(true)
+    for (const bg of DARK_SURFACES) {
+      expect(ratio(color, bg), `${value} 落在 ${bg} 上`).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+
+  it.each(accents)('%s：浅色主题三张底全部 ≥4.5:1', (value) => {
+    const color = accentTextOn(ACCENT_MAP[value].hex, LIGHT_SURFACES)
+    expect(isHexColor(color)).toBe(true)
+    for (const bg of LIGHT_SURFACES) {
+      expect(ratio(color, bg), `${value} 落在 ${bg} 上`).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+
+  it('已经达标的强调色原样保留，不无谓改色', () => {
+    expect(accentTextOn('#ffffff', ['#000000', '#1a1a1e'])).toBe('#ffffff')
+  })
+
+  it('深色底上把暗色强调色提亮；浅色底上把它压深', () => {
+    const base = ACCENT_MAP.blue.hex
+    const dark = accentTextOn(base, DARK_SURFACES)
+    const light = accentTextOn(base, LIGHT_SURFACES)
+    expect(relativeLuminance(dark)).toBeGreaterThan(relativeLuminance(base))
+    expect(relativeLuminance(light)).toBeLessThan(relativeLuminance(base))
+  })
+
+  it('没有可用底色 / 非法输入时原样返回，不抛错', () => {
+    expect(accentTextOn('#0078d4', [])).toBe('#0078d4')
+    expect(accentTextOn('not-a-color', ['#000000'])).toBe('not-a-color')
+    expect(accentTextOn('#0078d4', ['not-a-color'])).toBe('#0078d4')
   })
 })
 

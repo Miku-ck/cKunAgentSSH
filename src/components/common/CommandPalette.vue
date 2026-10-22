@@ -82,7 +82,7 @@ const PAGE_ITEMS: Array<{ page: Exclude<NavPage, 'home'>; label: string }> = [
   { page: 'tunnels', label: '打开：SSH 隧道' },
   { page: 'docker', label: '打开：Docker 管理' },
   { page: 'github', label: '打开：GitHub 加速' },
-  { page: 'audit', label: '打开：运维审计' },
+  { page: 'audit', label: '打开：运维轨迹' },
 ]
 
 function buildItems(): PaletteItem[] {

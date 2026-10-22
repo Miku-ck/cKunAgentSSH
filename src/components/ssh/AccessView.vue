@@ -302,7 +302,7 @@ defineExpose({ openCreate })
   bottom: 6px;
   width: 300px;
   height: 300px;
-  color: var(--accent-primary);
+  color: var(--accent-text);
   opacity: 0.07;
   pointer-events: none;
 }
@@ -329,7 +329,7 @@ defineExpose({ openCreate })
   align-items: center;
   justify-content: center;
   background: color-mix(in srgb, var(--accent-primary) 13%, transparent);
-  color: var(--accent-primary);
+  color: var(--accent-text);
 }
 .conn-ico svg { width: 17px; height: 17px; }
 .conn-title {
@@ -357,7 +357,7 @@ defineExpose({ openCreate })
   padding: 5px 8px;
 }
 .st { font-size: 13px; }
-.st.on { color: var(--accent-primary); }
+.st.on { color: var(--accent-text); }
 .st.off { color: var(--text-tertiary); }
 .st.err { color: var(--danger-text); }
 .st.warn { color: var(--status-warn-text); }

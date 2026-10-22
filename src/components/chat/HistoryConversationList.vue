@@ -12,11 +12,12 @@
           :class="{ active: conv.id === currentConvId }"
           :disabled="busy"
           :aria-label="'切换到对话：' + conv.title"
+          :aria-current="conv.id === currentConvId ? 'true' : undefined"
           :title="busy ? '运行中不可切换会话' : undefined"
           @click="$emit('switch', conv.id)"
         >
-          <span class="history-item-dot" :class="{ active: conv.id === currentConvId }"></span>
           <span class="history-item-title">{{ conv.title }}</span>
+          <span class="history-item-time">{{ timeOf(conv.updated_at) }}</span>
         </button>
         <button
           class="history-item-delete"
@@ -29,12 +30,19 @@
         </button>
       </div>
     </div>
-    <div v-if="isEmpty" class="history-empty">还没有会话</div>
+    <div v-if="isEmpty" class="history-empty">
+      <svg class="history-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><polyline points="3 3 3 8 8 8"/><polyline points="12 7 12 12 15 14"/>
+      </svg>
+      <div class="history-empty-title">还没有会话</div>
+      <div class="history-empty-hint">发出第一条消息后，这里会留下记录</div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import type { ConvGroup } from '@/types/chat'
+import { parseBackendTs } from '@/utils/format'
 
 withDefaults(defineProps<{
   groups: ConvGroup[]
@@ -47,41 +55,56 @@ defineEmits<{
   switch: [id: string]
   delete: [id: string]
 }>()
+
+/** 行尾时分：同名会话（多条「你好」）靠它区分先后。
+ *  时间戳必须走 parseBackendTs —— 后端条目是 UTC-naive 串，裸 new Date() 会早 8 小时。 */
+const timeFmt = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
+function timeOf(ts: string): string {
+  const d = parseBackendTs(ts)
+  return Number.isNaN(d.getTime()) ? '' : timeFmt.format(d)
+}
 </script>
 
 <style scoped>
 .history-list {
-  padding: 8px 0;
+  padding: 2px 0 8px;
 }
 
 .history-group {
-  margin-bottom: 4px;
+  margin-bottom: 8px;
 }
 
+/* 分组标签吸顶：列表变长后，「今天/昨天」要一直说明眼前这段属于哪天 */
 .history-group-label {
-  padding: 6px 12px 4px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 8px 10px 5px;
   font-size: 11px;
   font-weight: 600;
   color: var(--text-tertiary);
   text-transform: uppercase;
-  letter-spacing: 0.3px;
+  letter-spacing: 0.4px;
+  background: var(--bg-elevated);
 }
 
 .history-item {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 0 12px;
+  gap: 2px;
+  padding: 0;
 }
 
-/* 对话主体：真实按钮，可键盘聚焦 */
+/* 对话主体：真实按钮，可键盘聚焦。
+   选中态靠左缘一道 accent 竖条 + 淡底，不再用灰色小圆点 —— 那枚点
+   在列表里会被读成原生 <ul> 的项目符号，像没做完样式。 */
 .history-item-main {
+  position: relative;
   flex: 1;
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 4px;
+  padding: 7px 10px;
   border: none;
   background: transparent;
   color: inherit;
@@ -89,7 +112,7 @@ defineEmits<{
   font-size: 12px;
   text-align: left;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   transition: background 0.1s;
 }
 
@@ -98,24 +121,24 @@ defineEmits<{
 }
 
 .history-item-main.active {
-  background: var(--bg-active);
+  background: var(--accent-indigo-bg);
+}
+
+.history-item-main.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 2px;
+  height: 14px;
+  border-radius: 1px;
+  background: var(--accent-indigo);
+  transform: translateY(-50%);
 }
 
 .history-item-main:disabled {
   cursor: default;
   opacity: 0.5;
-}
-
-.history-item-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-tertiary);
-  flex-shrink: 0;
-}
-
-.history-item-dot.active {
-  background: var(--accent-indigo);
 }
 
 .history-item-title {
@@ -128,17 +151,25 @@ defineEmits<{
   white-space: nowrap;
 }
 
+.history-item-time {
+  flex-shrink: 0;
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
 .history-item-delete {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   border: none;
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   flex-shrink: 0;
   opacity: 0;
   transition: all 0.1s;
@@ -160,9 +191,30 @@ defineEmits<{
 }
 
 .history-empty {
-  padding: 24px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 48px 16px;
   text-align: center;
+}
+
+.history-empty-icon {
+  width: 22px;
+  height: 22px;
+  margin-bottom: 2px;
+  color: var(--text-tertiary);
+  opacity: 0.7;
+}
+
+.history-empty-title {
   font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.history-empty-hint {
+  font-size: 11px;
+  line-height: 1.5;
   color: var(--text-tertiary);
 }
 </style>

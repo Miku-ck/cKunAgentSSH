@@ -30,7 +30,7 @@
 .hint.muted { color: var(--text-tertiary); }
 .hint code { font-family: var(--font-mono); font-size: 11px; }
 .link-btn {
-  background: none; border: none; color: var(--accent-primary);
+  background: none; border: none; color: var(--accent-text);
   cursor: pointer; font-size: 11.5px; font-family: inherit; padding: 0; text-decoration: underline;
 }
 

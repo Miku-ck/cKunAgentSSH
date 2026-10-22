@@ -229,7 +229,7 @@ onMounted(() => { load(cwd.value || '/') })
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.hrp-row.dir .nm { color: var(--accent-primary) }
+.hrp-row.dir .nm { color: var(--accent-text) }
 .hrp-row .sz { font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary) }
 .hrp-row.up { color: var(--text-secondary) }
 .hrp-hint { padding: 6px; font-size: 11px; color: var(--text-tertiary) }

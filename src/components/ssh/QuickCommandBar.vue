@@ -1,5 +1,9 @@
 <template>
   <div class="quick-command-bar">
+    <div class="qc-label">
+      <IconTerminal :width="12" :height="12" :stroke-width="2" />
+      <span>快捷命令</span>
+    </div>
     <div class="qc-list">
       <template v-if="store.sortedCommands.length > 0">
         <button
@@ -7,7 +11,6 @@
           :key="cmd.id"
           class="qc-item"
           :class="{ dragging: dragState.id === cmd.id, 'drag-over': dragState.overId === cmd.id }"
-          :style="{ borderColor: cmd.color }"
           :title="cmd.command"
           draggable="true"
           @click="sendCommand($event, cmd)"
@@ -17,17 +20,22 @@
           @drop="handleDrop($event, cmd.id)"
           @dragend="handleDragEnd"
         >
+          <span class="qc-dot" :style="{ background: cmd.color }" aria-hidden="true"></span>
           {{ cmd.name }}
         </button>
       </template>
-      <div v-else class="qc-empty">
-        暂无快捷命令
-      </div>
+      <button v-else type="button" class="qc-empty-action" @click="openAdd">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+        </svg>
+        添加快捷命令
+      </button>
     </div>
 
     <!-- 加号描边固定 1.8，与首页输入卡 ＋ 菜单那组图标同档（同为 viewBox 24 缩到
-         14px，写 2.5 会渲染成 ~1.46px，比那组的 ~1.05px 明显更粗、看起来也更亮）。 -->
-    <button class="qc-add-btn" title="添加快捷命令" @click="openAdd">
+         14px，写 2.5 会渲染成 ~1.46px，比那组的 ~1.05px 明显更粗、看起来也更亮）。
+         空态已有「添加快捷命令」动作，不重复摆第二枚加号。 -->
+    <button v-if="store.sortedCommands.length > 0" class="qc-add-btn" title="添加快捷命令" @click="openAdd">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14">
         <line x1="12" y1="5" x2="12" y2="19"/>
         <line x1="5" y1="12" x2="19" y2="12"/>
@@ -77,6 +85,7 @@ import { useConfirm } from '@/composables/useConfirm'
 import { useToastStore } from '@/stores/toast'
 import { menuLeft, menuTop } from '@/utils/menu'
 import QuickCommandEditor from './QuickCommandEditor.vue'
+import IconTerminal from '@/components/icons/IconTerminal.vue'
 
 const sshStore = useSSHStore()
 const store = useQuickCommandsStore()
@@ -228,6 +237,19 @@ function handleDragEnd() {
   z-index: 15;
 }
 
+.qc-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 16px;
+  padding-right: 10px;
+  border-right: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+  font-size: 11px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
 .qc-list {
   flex: 1;
   display: flex;
@@ -249,7 +271,7 @@ function handleDragEnd() {
   display: flex;
   align-items: center;
   gap: 6px;
-  /* 不画自己的皮（同首页 .hcc-btn）：底色透画布，识别靠 borderColor=cmd.color 那条内联边框 */
+  /* 底色透画布；命令色收在 6px 圆点上，不再整圈描边 */
   background: transparent;
   border: 1px solid var(--border-subtle);
   border-radius: 4px;
@@ -265,7 +287,15 @@ function handleDragEnd() {
 
 .qc-item:hover {
   background: var(--bg-hover);
+  border-color: var(--border-default);
   color: var(--text-primary);
+}
+
+.qc-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
 .qc-item:active {
@@ -283,11 +313,27 @@ function handleDragEnd() {
 
 
 
-.qc-empty {
-  color: var(--text-tertiary);
+.qc-empty-action {
+  height: 24px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px dashed var(--border-default);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
   font-size: 12px;
-  user-select: none;
-  padding: 0 4px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.qc-empty-action:hover {
+  background: var(--bg-hover);
+  border-color: var(--text-tertiary);
+  color: var(--text-primary);
 }
 
 .qc-add-btn {

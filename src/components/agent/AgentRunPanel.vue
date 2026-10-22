@@ -15,11 +15,11 @@
  * - 可见终端执行：待确认命令（确认/拒绝）
  * - 错误（errorMessage）
  *
- * 工具授权请求不在这里：唯一逐条决策位是消息流里的内联审批卡（MessageItem 的
- * inline-approvals），结算走 store 的 approvePermission / denyPermission。
+ * 工具授权请求不在这里：唯一逐条决策位是输入区上方的审批 dock（ApprovalDock），
+ * 结算走 store 的 approvePermission / denyPermission。
  *
  * 注：常规运行状态（thinking/acting、迭代计数、工具调用流）不在本面板展示 —
- * 工具调用明细见消息气泡内联轨迹（AgentTraceInline）与运行交付面板。
+ * 执行过程与工具调用明细归运维轨迹页，按 run_id 回放。
  */
 import { computed } from 'vue'
 import { useAgentStore } from '@/stores/agent'
@@ -105,8 +105,8 @@ const latestHelp = computed(() =>
       </button>
     </div>
 
-    <!-- 审批卡不在这里渲染：逐条决策位只剩消息流里的内联卡（inline-approvals）。
-         批量与追溯同属内联卡一侧，结算走 store 的 approve/deny。 -->
+    <!-- 审批卡不在这里渲染：唯一决策位是输入区上方的 ApprovalDock，
+         批量只是同一侧的快捷结算。 -->
 
     <!-- 可见终端执行：待确认命令 -->
     <div class="delivery-section" v-if="agentStore.pendingDeliveries.length > 0">

@@ -2,13 +2,31 @@
   <div class="ssh-view">
     <!-- 主终端区域 -->
     <div class="ssh-main">
-      <!-- 标签栏：终端会话标签条，只在真正进入终端视图（点了终端标签或连接后
-           落进终端）时显示——首页与独立页（SFTP/监控等）一律不显示。
-           顶栏「终端」是回到终端 / 新建终端的常驻入口；零会话时由下方启动器兜底。 -->
+      <!-- 标签栏：终端会话标签条 + 固定的「远程管理」页签（合并方案 A：顶栏
+           「终端 / 远程」两个入口并为一个「终端」，远程管理降级为标签条内
+           钉住页签）。显示条件：终端视图有会话，或正停在远程管理页
+           （零会话时页签也要能点开管理页）。其余独立页（SFTP/监控等）照旧不显示。 -->
       <div
-        v-show="terminalVisible && activeNavPage === 'home' && store.sessions.length > 0"
+        v-show="(terminalVisible && activeNavPage === 'home' && store.sessions.length > 0) || activeNavPage === 'remote-mgr'"
         class="term-tabs"
       >
+        <!-- 远程管理固定页签：钉在会话标签左侧，不进滚动区、不可关、不参与
+             拖拽排序；点击只开不关（openRemoteManager 幂等），离开走会话
+             标签或顶栏「终端」 -->
+        <button
+          type="button"
+          class="term-tab term-tab-mgr"
+          :class="{ active: activeNavPage === 'remote-mgr' }"
+          role="tab"
+          :aria-selected="activeNavPage === 'remote-mgr'"
+          :tabindex="activeNavPage === 'remote-mgr' ? 0 : -1"
+          title="远程管理（固定页签）"
+          @click="openRemoteManager()"
+        >
+          <IconMonitor :width="12" :height="12" :stroke-width="2" />
+          <span class="tab-label">远程管理</span>
+        </button>
+
         <div class="tabs-scroll" ref="tabsScrollRef" @wheel.prevent="onTabsWheel">
           <!-- role=tablist 只包会话标签；＋ 菜单不是 tab，留在外面 -->
           <div class="tabs-list" role="tablist" aria-label="终端会话" @keydown="onTabsKeydown">
@@ -97,29 +115,6 @@ v-show="s.id === store.activeSessionId"
           </template>
         </div>
 
-        <!-- 终端启动器：零会话时标签条没有可列的东西，这里必须自成入口，
-             否则从首页/顶栏进终端是一条死路。 -->
-        <div
-          v-if="terminalVisible && activeNavPage === 'home' && !store.sessions.length"
-          class="term-empty"
-        >
-          <div class="term-empty-panel">
-            <IconTerminal class="term-empty-icon" :width="26" :height="26" :stroke-width="1.6" />
-            <p class="term-empty-title">新建终端</p>
-            <div class="term-empty-grid">
-              <button
-                v-for="shell in LOCAL_SHELLS"
-                :key="shell"
-                type="button"
-                class="term-shell-btn"
-                @click="openLocalShell(shell)"
-              >{{ shell }}</button>
-            </div>
-            <div class="term-empty-divider" aria-hidden="true"></div>
-            <button type="button" class="btn btn-primary term-empty-remote" @click="openRemoteManager()">连接远程服务器</button>
-          </div>
-        </div>
-
         <!-- RemoteManager 页面 -->
         <div v-show="activeNavPage === 'remote-mgr'" class="rm-page">
           <RemoteManager v-if="pageMounted('remote-mgr')"
@@ -136,9 +131,13 @@ v-show="s.id === store.activeSessionId"
           <SftpView v-if="pageMounted('sftp')" />
         </div>
 
-        <!-- 运维审计页面 -->
+        <!-- 运维轨迹页面 -->
         <div v-show="activeNavPage === 'audit'" class="audit-page">
-          <AuditView v-if="pageMounted('audit')" />
+          <AuditView
+            v-if="pageMounted('audit')"
+            :focus-run-id="auditEntry?.runId"
+            :focus-seq="auditEntry?.seq"
+          />
         </div>
 
         <!-- 定时任务页面 -->
@@ -173,6 +172,7 @@ v-show="s.id === store.activeSessionId"
           v-show="homeTabActive"
           @bulk="showBulk = true"
           @remote-mgr="openRemoteManager"
+          @open-trace="openTrace"
         />
       </div>
 
@@ -275,7 +275,7 @@ import { useTunnelStore } from '@/stores/tunnel'
 import { useAccessStore } from '@/stores/access'
 import { useSettings } from '@/composables/useSettings'
 import { useCommandDelivery } from '@/composables/useCommandDelivery'
-import { useSshNavigation, LOCAL_SHELLS } from '@/composables/useSshNavigation'
+import { useSshNavigation } from '@/composables/useSshNavigation'
 import { useGlobalShortcuts } from '@/composables/useGlobalShortcuts'
 import type { NavPage } from '@/composables/useSshNavigation'
 import { useTabContextMenu } from '@/composables/useTabContextMenu'
@@ -319,6 +319,8 @@ const {
   homeTabActive,
   terminalVisible,
   activeNavPage,
+  auditEntry,
+  openTrace,
   showModal,
   editingConnection,
   showCommandBar,
@@ -518,7 +520,6 @@ defineExpose({
   homeTabActive,
   terminalVisible,
   showTerminal,
-  toggleRemoteManager,
   toggleSftp,
   toggleAudit,
   toggleSchedules,
@@ -616,6 +617,9 @@ defineExpose({
 }
 .tof-btn:hover { color: var(--text-secondary); background: var(--bg-hover); }
 
+/* 远程管理固定页签与右侧会话标签留 4px 间距 */
+.term-tab-mgr { margin-right: 4px; }
+
 .term-tab {
   position: relative;
   height: calc(var(--tabbar-h) - 4px);
@@ -634,23 +638,6 @@ defineExpose({
   white-space: nowrap;
   flex-shrink: 0;
   transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast);
-}
-
-/* 当前会话的强调色顶线：标签条底色与深色终端拉开后，仅靠字色区分太弱 */
-.term-tab::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 10px;
-  right: 10px;
-  height: 2px;
-  border-radius: 0 0 2px 2px;
-  background: transparent;
-  transition: background var(--transition-fast);
-}
-
-.term-tab.active::before {
-  background: var(--accent-primary);
 }
 
 /* 状态点：后台活动=强调色 / 重连中=警示色脉冲 / 断连放弃=红 */
@@ -692,10 +679,12 @@ defineExpose({
   background: var(--bg-active);
 }
 
+/* 当前标签用设置里的强调色描边：标签条底色与深色终端拉开后，
+   仅靠字色区分太弱 */
 .term-tab.active {
   color: var(--text-primary);
   background: var(--bg-elevated);
-  border-color: var(--border-subtle);
+  border-color: var(--accent-primary);
   margin-bottom: -1px;
   padding-bottom: 1px;
 }
@@ -747,77 +736,6 @@ defineExpose({
   /* 终端 ANSI 主题固定暗色，必须给独立深底：浅色主题下若透出浅色底层会不可读。
      背景图模式下由文件末尾的 has-background 规则置为透明（用户主动选择）。 */
   background: var(--bg-terminal);
-}
-
-/* ─── Terminal Launcher (zero sessions) ─── */
-.term-empty {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-}
-
-.term-empty-panel {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  width: min(420px, 100%);
-  gap: 16px;
-  padding: 28px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-lg);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-sm);
-}
-
-.term-empty-icon {
-  color: var(--text-tertiary);
-}
-
-.term-empty-title {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 1.2;
-  color: var(--text-primary);
-}
-
-.term-empty-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  width: 100%;
-}
-
-.term-shell-btn {
-  height: 34px;
-  padding: 0 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  background: var(--bg-input);
-  color: var(--text-primary);
-  font-size: 12px;
-  font-family: inherit;
-  cursor: pointer;
-  transition: background var(--transition-fast), border-color var(--transition-fast);
-}
-
-.term-shell-btn:hover {
-  background: var(--bg-hover);
-  border-color: var(--border-default);
-}
-
-.term-empty-divider {
-  width: 100%;
-  height: 1px;
-  background: var(--border-subtle);
-}
-
-.term-empty-remote {
-  width: 100%;
-  height: 30px;
 }
 
 /* ─── Directory Panel ─── */

@@ -80,6 +80,52 @@ export function contrastOnAccent(hex: string): string {
   return contrastRatio('#ffffff', hex) < 3 ? ON_LIGHT : ON_DARK
 }
 
+/**
+ * 强调色当文字时的可读变体：向白或向黑逐级混合，取**改动最小**且压在所有
+ * 实际底色上都 ≥4.5:1 的那一档。
+ *
+ * 为什么不能直接用 --accent-primary：#0078d4 压在深色 --bg-elevated #1a1a1e 上
+ * 只有 3.8:1，浅色白卡上 3.8:1、纸灰底 4.1:1 —— 小字号按钮与链接读不出来。
+ * 填充与描边仍用原色，只有文字换这一档。
+ *
+ * 不按主题写 if：底色由调用方传入当前计算值，主题切到哪一档都成立。
+ */
+export function accentTextOn(
+  hex: string,
+  backgrounds: readonly string[],
+  minContrast = 4.5,
+): string {
+  if (!isHexColor(hex)) return hex
+  const surfaces = backgrounds.filter(isHexColor)
+  if (!surfaces.length) return hex
+  const meets = (color: string) =>
+    surfaces.every(bg => contrastRatio(color, bg) >= minContrast)
+  if (meets(hex)) return hex
+
+  let best: { color: string; steps: number } | null = null
+  for (const toward of [ON_DARK, ON_LIGHT]) {
+    for (let step = 1; step <= 100; step++) {
+      const mixed = mixHex(hex, toward, step / 100)
+      if (!meets(mixed)) continue
+      if (!best || step < best.steps) best = { color: mixed, steps: step }
+      break
+    }
+  }
+  return best?.color ?? hex
+}
+
+/** 两个 6 位 hex 按 ratio（0 = a，1 = b）逐通道插值 */
+function mixHex(a: string, b: string, ratio: number): string {
+  const ia = parseInt(a.slice(1), 16)
+  const ib = parseInt(b.slice(1), 16)
+  const out = [16, 8, 0].map(shift => {
+    const av = (ia >> shift) & 255
+    const bv = (ib >> shift) & 255
+    return Math.round(av + (bv - av) * ratio).toString(16).padStart(2, '0')
+  })
+  return `#${out.join('')}`
+}
+
 /** sRGB 相对亮度（WCAG 定义） */
 export function relativeLuminance(hex: string): number {
   const int = parseInt(hex.slice(1), 16)

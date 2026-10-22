@@ -1,7 +1,7 @@
 /**
  * 审批结算的用户可见层
  *
- * 结算本身在 stores/agent.ts（approvePermission / denyPermission）—— 内联审批卡的
+ * 结算本身在 stores/agent.ts（approvePermission / denyPermission）—— 审批 dock 的
  * 逐条与批量入口走的是同一条。这里只包一层"后端失败才提示、重复点击静默"，
  * 两个入口各写一遍的话，迟早变成一边弹错一边不弹。
  */

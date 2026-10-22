@@ -1,94 +1,114 @@
 <template>
-  <div class="full-trace" :class="{ inline }">
-    <button v-if="!inline" class="ft-toggle" title="DB 权威记录：每步耗时 / 成本 / 状态流转" @click="onToggle">
-      <span class="ft-caret" :class="{ open: expanded }">▸</span>
-      轨迹
-    </button>
+  <div class="full-trace">
+    <p v-if="loading" class="ft-hint">加载轨迹…</p>
+    <p v-else-if="error" class="ft-hint err">{{ error }}
+      <button class="ft-retry" @click="fetchTrace">重试</button>
+    </p>
 
-    <div v-if="expanded" class="ft-body">
-      <p v-if="loading" class="ft-hint">加载轨迹…</p>
-      <p v-else-if="error" class="ft-hint err">{{ error }}
-        <button class="ft-retry" @click="fetchTrace">重试</button>
-      </p>
+    <template v-else-if="trace">
+      <!-- 元信息条：整表都是「这一条 run 跑成了什么样」的汇总 -->
+      <div class="ft-meta">
+        <!-- S9-13：run.status 是后端原始终态（completed/failed/human_help/
+             max_reached），二元 `=== 'completed' ? '完成' : '失败'` 会把
+             「迭代耗尽」和「需要人工介入」都念成「失败」——这三种结局用户
+             下一步该做的事完全不同。标签与配色走共享判定。 -->
+        <span class="ft-chip" :class="runStatusChip(trace.run.status)">
+          {{ runStatusLabel(trace.run.status) }}
+        </span>
+        <span class="ft-chip">迭代 {{ trace.run.iteration ?? '-' }}/{{ trace.run.max_iterations ?? '-' }}</span>
+        <span class="ft-chip">{{ (trace.cost.duration_ms / 1000).toFixed(1) }}s</span>
+        <span class="ft-chip">{{ trace.cost.total_tokens }} tok</span>
+        <span class="ft-chip">${{ trace.cost.cost_usd.toFixed(4) }}</span>
+        <span class="ft-chip">{{ trace.cost.tool_call_count }} 次调用</span>
+        <span v-if="trace.run.model_used" class="ft-chip muted">{{ trace.run.model_used }}</span>
+      </div>
 
-      <template v-else-if="trace">
-        <!-- 元信息条：整表都是「这一条 run 跑成了什么样」的汇总 -->
-        <div v-if="!inline" class="ft-meta">
-          <!-- S9-13：run.status 是后端原始终态（completed/failed/human_help/
-               max_reached），二元 `=== 'completed' ? '完成' : '失败'` 会把
-               「迭代耗尽」和「需要人工介入」都念成「失败」——这三种结局用户
-               下一步该做的事完全不同。标签与配色走共享判定。 -->
-          <span class="ft-chip" :class="runStatusChip(trace.run.status)">
-            {{ runStatusLabel(trace.run.status) }}
-          </span>
-          <span class="ft-chip">迭代 {{ trace.run.iteration ?? '-' }}/{{ trace.run.max_iterations ?? '-' }}</span>
-          <span class="ft-chip">{{ (trace.cost.duration_ms / 1000).toFixed(1) }}s</span>
-          <span class="ft-chip">{{ trace.cost.total_tokens }} tok</span>
-          <span class="ft-chip">${{ trace.cost.cost_usd.toFixed(4) }}</span>
-          <span class="ft-chip">{{ trace.cost.tool_call_count }} 次调用</span>
-          <span v-if="trace.run.model_used" class="ft-chip muted">{{ trace.run.model_used }}</span>
-        </div>
+      <!-- 状态流转链：压缩连续重复，只保留迁移节点（init→thinking→acting→…→completed） -->
+      <div v-if="stateChain.length" class="ft-states">
+        <span class="ft-states-label">状态</span>
+        <span class="ft-state-chain">
+          <template v-for="(s, i) in stateChain" :key="i">
+            <span v-if="i > 0" class="ft-arrow">→</span>
+            <span class="ft-state">{{ s }}</span>
+          </template>
+        </span>
+      </div>
 
-        <!-- 状态流转链 -->
-        <div v-if="trace.state_history.length" class="ft-states">
-          <span class="ft-states-label">状态</span>
-          <span class="ft-state-chain">
-            <template v-for="(s, i) in stateChain" :key="i">
-              <span v-if="i > 0" class="ft-arrow">→</span>
-              <span class="ft-state">{{ s }}</span>
+      <!-- 执行过程：DB 里的 tool_calls，按 iteration 归步。这是记录面，
+           审批不在其中 —— 待决请求只活在运行期，从不写入轨迹。 -->
+      <div v-if="process.events.length" class="ft-tools">
+        <template v-for="(entry, i) in process.events" :key="entry.id">
+          <div
+            v-if="i === 0 || process.events[i - 1].stepIndex !== entry.stepIndex"
+            class="ft-step"
+          >
+            <span class="ft-step-no">{{ stepNo(stepOf(entry)) }}</span>
+            <span v-if="stepDuration(stepOf(entry))" class="ft-step-dur">{{ stepDuration(stepOf(entry)) }}</span>
+            <span v-if="stepPartial(stepOf(entry))" class="ft-step-note">部分计时</span>
+            <span class="ft-step-line" aria-hidden="true"></span>
+          </div>
+
+          <div class="ft-tool">
+            <div class="ft-tool-head">
+              <span class="ft-tool-state" :class="toolTone(entry)">{{ toolStatus(entry) }}</span>
+              <span class="ft-tool-name mono">{{ entry.tool }}</span>
+              <code class="ft-cmd mono" :title="headline(entry)">{{ headline(entry) }}</code>
+              <span v-if="itemDuration(entry)" class="ft-item-dur mono">{{ itemDuration(entry) }}</span>
+            </div>
+            <template v-if="outputLines(entry).length">
+              <pre class="ft-out mono">{{
+                openOutputs.has(entry.id) ? outputOf(entry) : outputPreview(entry)
+              }}</pre>
+              <button
+                v-if="outputLines(entry).length > 3"
+                type="button"
+                class="ft-out-toggle"
+                :aria-expanded="openOutputs.has(entry.id)"
+                @click="toggleOutput(entry.id)"
+              >{{ openOutputs.has(entry.id) ? '收起输出' : `展开输出（${outputLines(entry).length} 行）` }}</button>
             </template>
-          </span>
-        </div>
-        <!-- inline 时状态链是这一行的全部内容，缺了它展开就是片空白，得说一句 -->
-        <p v-else-if="inline" class="ft-hint muted">这条 run 没有状态流转记录</p>
+          </div>
+        </template>
+      </div>
+      <p v-else class="ft-hint muted">这次运行没有产生工具调用</p>
 
-        <!-- 工具调用清单不在前端显示 -->
-
-        <p v-if="!inline" class="ft-hint muted">工具调用明细已隐藏</p>
-        <!-- inline 时行上已经印着 trace 号、发起时间和各档汇总，这里只补行里没有的结束时刻。
-             两端都必须过 formatBackendTs：后端存的是 UTC naive 串（database._now），
-             原样印 = 比本地钟面早 8 小时，而同一张表的行上印的是本地时间（AgentRunsTable），
-             同一条 run 上下两个时刻互相矛盾 —— 这是本仓记过的「时区接缝」家族。 -->
-        <p v-if="!inline" class="ft-time muted">run {{ runId.slice(0, 8) }}… · 始于 {{ formatBackendTs(trace.run.started_at) || '-' }}</p>
-        <p v-else-if="trace.run.completed_at" class="ft-time muted">结束 {{ formatBackendTs(trace.run.completed_at) }}</p>
-      </template>
-    </div>
+      <!-- 行上已印着 trace 号、发起时间和各档汇总，这里只补行里没有的结束时刻。
+           两端都必须过 formatBackendTs：后端存的是 UTC naive 串（database._now），
+           原样印 = 比本地钟面早 8 小时，而同一张表的行上印的是本地时间（AgentRunsTable），
+           同一条 run 上下两个时刻互相矛盾 —— 这是本仓记过的「时区接缝」家族。 -->
+      <p v-if="trace.run.completed_at" class="ft-time muted">
+        结束 {{ formatBackendTs(trace.run.completed_at) }}
+      </p>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
 /**
- * AgentFullTrace — 会话内回放：从 /agent/runs/{id}/trace 拉 DB 权威轨迹
+ * AgentFullTrace — 单条 run 的权威记录（运维轨迹 → 运行列表展开行）
  *
- * 与消息内联快照（AgentTraceSnapshot，SSE 期间累积）互补：
- * 快照是运行视图，这里是落库视图 —— 每步 duration_ms、成本与状态历史
- * 以 DB 为准（回放审计口径）。清单行只展示动作与目标，不展开结果正文。
+ * 数据只有一个来源：GET /agent/runs/{id}/trace（agent_runs + tool_calls）。
+ * 会话气泡不再内联执行过程：AI 界面是对话，执行过程是记录 —— 两个投影分开，
+ * 消息上的「轨迹」只是带 run_id 跳到这里。
  *
- * inline=true 供「运行记录」表用：展开由宿主行控制，本体在文档流里（宿主的浮层
- * 定位是绝对定位，塞进 <tr> 会飘出单元格），并且行上已印过的数字不再重印一遍。
+ * tool_calls 的 success 是三态：NULL = 调用发起了、结果从未回写（崩溃/中止），
+ * 不能折成成功或失败，按「未回写」渲染。
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { agentAdminApi, toFriendlyMessage, type AgentRunTrace } from '@/api/client'
 import { formatBackendTs } from '@/utils/format'
 import { runStatusChip, runStatusLabel } from '@/utils/agent-run-status'
-const props = defineProps<{ runId: string; inline?: boolean }>()
-const emit = defineEmits<{ 'expand-change': [boolean] }>()
+import { headline } from '@/utils/process-status'
+import { buildTraceModel } from '@/utils/run-trace'
+import type { TraceEventView, TraceInputEntry, TraceStepView } from '@/utils/run-trace'
 
-const expanded = ref(!!props.inline)
+const props = defineProps<{ runId: string }>()
+
 const loading = ref(false)
 const error = ref('')
 const trace = ref<AgentRunTrace | null>(null)
 
-watch(expanded, (v) => emit('expand-change', v))
-
-onMounted(() => {
-  if (props.inline) void fetchTrace()
-})
-
-async function onToggle() {
-  expanded.value = !expanded.value
-  if (expanded.value && !trace.value && !loading.value) void fetchTrace()
-}
+onMounted(() => { void fetchTrace() })
 
 async function fetchTrace() {
   loading.value = true
@@ -112,48 +132,100 @@ const stateChain = computed(() => {
   return out.slice(0, 24)
 })
 
+function parseArgs(raw: Record<string, unknown> | string): Record<string, unknown> {
+  if (raw && typeof raw === 'object') return raw
+  if (typeof raw !== 'string') return {}
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {}
+  } catch {
+    return {}
+  }
+}
+
+/** DB 行 → 过程视图的输入：NULL result 映射成 undefined（未回填），
+ *  与 run-trace 里「undefined = 在途」的口径对齐。 */
+const processEntries = computed<TraceInputEntry[]>(() =>
+  (trace.value?.tool_calls || []).map(tc => ({
+    id: tc.id,
+    tool: tc.tool_name,
+    args: parseArgs(tc.arguments),
+    result: tc.result ?? undefined,
+    success: tc.success ?? undefined,
+    timestamp: Date.parse(tc.created_at) || 0,
+    iteration: tc.iteration,
+    durationMs: tc.duration_ms ?? undefined,
+  })),
+)
+const process = computed(() => buildTraceModel(processEntries.value))
+
+function stepOf(entry: TraceEventView): TraceStepView {
+  return process.value.steps[entry.stepIndex]
+}
+function stepNo(step: TraceStepView): string {
+  return step.iteration === null ? '未编号' : `第 ${step.iteration + 1} 步`
+}
+function stepDuration(step: TraceStepView): string {
+  if (step.durationMs !== undefined) return `${(step.durationMs / 1000).toFixed(1)}s`
+  return ''
+}
+/** 只有部分调用量到耗时：求和值偏小，必须标出来，不能当整批耗时读 */
+function stepPartial(step: TraceStepView): boolean {
+  return step.durationMs !== undefined && step.measuredCount < step.eventIndexes.length
+}
+
+function toolStatus(entry: TraceEventView): string {
+  if (entry.success === undefined) return '未回写'
+  return entry.success ? '成功' : '失败'
+}
+function toolTone(entry: TraceEventView): 'ok' | 'bad' | 'muted' {
+  if (entry.success === undefined) return 'muted'
+  return entry.success ? 'ok' : 'bad'
+}
+function itemDuration(entry: TraceEventView): string {
+  return entry.durationMs !== undefined ? `${(entry.durationMs / 1000).toFixed(1)}s` : ''
+}
+function outputOf(entry: TraceEventView): string {
+  return entry.result || ''
+}
+function outputLines(entry: TraceEventView): string[] {
+  const text = outputOf(entry)
+  return text ? text.split('\n') : []
+}
+function outputPreview(entry: TraceEventView): string {
+  return outputLines(entry).slice(0, 3).join('\n')
+}
+
+/** 输出展开状态按工具调用 id 记；收起/展开不随 rerender 丢 */
+const openOutputs = ref<Set<string>>(new Set())
+function toggleOutput(id: string) {
+  const next = new Set(openOutputs.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  openOutputs.value = next
+}
 </script>
 
 <style scoped>
-.full-trace { display: inline-flex; }
-.ft-toggle {
-  display: inline-flex; align-items: center; gap: 5px;
-  background: none; border: none; padding: 2px 0; cursor: pointer;
-  color: var(--text-secondary); font-size: 11.5px; font-family: inherit;
-}
-.ft-toggle:hover { color: var(--accent-primary); }
-.ft-caret { transition: transform .15s; font-size: 10px; }
-.ft-caret.open { transform: rotate(90deg); }
-/* 下拉浮层：锚定宿主消息块（.message-block 提供 relative），
-   左右钉满对话区宽度 —— 与所在消息气泡同幅，窗口变窄时实时自适应 */
-.ft-body {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 2px;
-  right: 2px;
-  z-index: 40;
-  max-height: 60vh;
-  overflow-y: auto;
+.full-trace {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 10px 12px;
-  background: var(--bg-elevated-solid);
-  border: 1px solid var(--border-default);
-  border-radius: 8px;
+  width: 100%;
+  min-width: 0;
 }
 .ft-hint { margin: 0; font-size: 11.5px; color: var(--text-secondary); }
 .ft-hint.err { color: var(--status-error-text); }
 .ft-hint.muted { color: var(--text-tertiary); }
 .ft-retry {
-  background: none; border: none; color: var(--accent-primary);
+  background: none; border: none; color: var(--accent-text);
   cursor: pointer; font-size: 11.5px; font-family: inherit; padding: 0 0 0 4px; text-decoration: underline;
 }
 .ft-meta { display: flex; flex-wrap: wrap; gap: 5px; }
 .ft-chip {
   font-size: 10.5px; padding: 1px 7px; border-radius: 8px;
   border: 1px solid var(--border-default); color: var(--text-secondary);
-  font-family: ui-monospace, Consolas, monospace;
+  font-family: var(--font-mono);
 }
 .ft-chip.ok { color: var(--status-success-text); border-color: color-mix(in srgb, var(--status-success-text) 35%, transparent); }
 .ft-chip.err { color: var(--status-error-text); border-color: color-mix(in srgb, var(--status-error-text) 35%, transparent); }
@@ -162,27 +234,92 @@ const stateChain = computed(() => {
 .ft-states-label { color: var(--text-tertiary); }
 .ft-state-chain { display: inline-flex; align-items: center; gap: 3px; flex-wrap: wrap; }
 .ft-state {
-  color: var(--text-secondary); font-family: ui-monospace, Consolas, monospace;
+  color: var(--text-secondary); font-family: var(--font-mono);
   background: var(--bg-input); border-radius: 4px; padding: 0 5px;
 }
 .ft-arrow { color: var(--text-tertiary); }
-.ft-time { margin: 0; font-size: 10.5px; }
-.muted { color: var(--text-tertiary); }
-/* inline（运行记录表）：展开由宿主那一行控制，本体落回文档流。
-   外壳一并拆掉 —— 宿主单元格已经给了底色和留白，再描一圈就是双层卡片。 */
-.full-trace.inline { display: block; width: 100%; }
-.inline .ft-body {
-  position: static;
-  top: auto;
-  left: auto;
-  right: auto;
-  z-index: auto;
-  max-height: none;
-  overflow: visible;
-  padding: 0;
-  background: none;
-  border: none;
-  border-radius: 0;
-  gap: 6px;
+
+/* ── 执行过程 ── */
+.ft-tools { min-width: 0; }
+.ft-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 3px;
+  font-size: 11px;
+  color: var(--text-tertiary);
 }
+.ft-step:first-child { margin-top: 0 }
+.ft-step-no { color: var(--text-secondary); font-weight: 600; white-space: nowrap }
+.ft-step-dur { font-family: var(--font-mono); white-space: nowrap }
+.ft-step-note { font-size: 10.5px; white-space: nowrap }
+.ft-step-line {
+  flex: 1;
+  height: 1px;
+  background: var(--border-subtle);
+}
+.ft-tool {
+  padding: 3px 0 3px 10px;
+  min-width: 0;
+}
+.ft-tool-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.ft-tool-state {
+  flex: none;
+  width: 36px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.ft-tool-state.ok { color: var(--status-success-text) }
+.ft-tool-state.bad { color: var(--danger-text) }
+.ft-tool-state.muted { color: var(--text-tertiary) }
+.ft-tool-name {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+.ft-cmd {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+.ft-item-dur {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+}
+.ft-out {
+  margin: 4px 0 2px;
+  padding: 6px 9px;
+  max-height: 180px;
+  overflow: auto;
+  background: var(--bg-input);
+  border-left: 2px solid var(--border-default);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ft-out-toggle {
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.ft-out-toggle:hover { color: var(--text-secondary) }
+
+.ft-time { margin: 0; font-size: 10.5px; }
+.mono { font-family: var(--font-mono) }
 </style>

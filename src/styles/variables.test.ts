@@ -13,7 +13,7 @@ import rawGlobal from './global.css?raw'
 import rawSshView from '../views/ssh/SshView.vue?raw'
 import rawQuickCommandBar from '../components/ssh/QuickCommandBar.vue?raw'
 import rawTitleBar from '../layouts/TitleBar.vue?raw'
-import rawAgentTraceInline from '../components/agent/AgentTraceInline.vue?raw'
+import rawApprovalDock from '../components/agent/ApprovalDock.vue?raw'
 import rawHomeComposer from '../components/home/HomeComposer.vue?raw'
 import rawRunModes from '../utils/run-modes?raw'
 import rawApprovalCard from './approval-card.css?raw'
@@ -35,7 +35,7 @@ const globalCss = strip(rawGlobal)
 const sshView = strip(rawSshView)
 const quickCommandBar = strip(rawQuickCommandBar)
 const titleBar = strip(rawTitleBar)
-const agentTraceInline = strip(rawAgentTraceInline)
+const approvalDock = strip(rawApprovalDock)
 const homeComposer = strip(rawHomeComposer)
 const runModes = strip(rawRunModes)
 
@@ -115,7 +115,7 @@ const ALL_SOURCES = Object.values(SOURCE_FILES).join('\n')
 const ORPHAN_TOKENS_ALLOWLIST: string[] = []
 
 /** 上色的结构画布：纸纹必须落在这里，而不是 body（见 structural-canvas 用例）。
-    首页里的消息流与内联过程不在列 —— 它们长在首页这块浮层里，纸从首页透上来。 */
+    首页里的消息流与审批面不在列 —— 它们长在首页这块浮层里，纸从首页透上来。 */
 const STRUCTURAL_CANVASES: Record<string, string> = {
   '.ssh-view / .term-tabs': sshView,
   '.titlebar': titleBar,
@@ -190,14 +190,16 @@ describe('atelier（手记）主题的令牌覆盖', () => {
     expect(valueOf(atelier, '--font-display')?.endsWith('serif')).toBe(true)
   })
 
-  it('手记不写 --accent-primary / --accent-on：那两个令牌归 JS 管', () => {
+  it('手记不写 --accent-primary / --accent-on / --accent-text：这几枚归 JS 管', () => {
     // applyAccent 在 documentElement 上 setProperty，内联样式压过 [data-theme] 块
     // —— 在主题里写强调色是一条永远不生效的声明（"亮的空开关"的同族）。
     // 朱砂因此做成一条强调色（Accent: verm），不是塞进主题令牌。
-    // --accent-on（压在强调色底上的前景色）同属这一族：它必须由 ACCENT_MAP 算出来。
+    // --accent-on（压在强调色底上的前景色）与 --accent-text（强调色当文字时的可读变体）
+    // 同属这一族：它们必须由 ACCENT_MAP 与当前主题底色算出来。
     expect(atelierTokens).not.toContain('--accent-primary')
     expect(atelierTokens).not.toContain('--accent-primary-rgb')
     expect(atelierTokens).not.toContain('--accent-on')
+    expect(atelierTokens).not.toContain('--accent-text')
   })
 
   it('新令牌在 :root 的默认值 = 补它们之前的行为（其余主题逐像素不变）', () => {
@@ -208,6 +210,10 @@ describe('atelier（手记）主题的令牌覆盖', () => {
     expect(rootValueOf('--card-foot-rule')).toBe('1px solid var(--divider-primary)')
     expect(rootValueOf('--font-display')).toBe('var(--font-sans)')
     expect(rootValueOf('--accent-on')).toBe('#ffffff')
+    expect(rootValueOf('--accent-text')).toBe('var(--accent-primary)')
+    // 遮罩默认值 = 旧行为的纯黑 34%（= 原 --bg-terminal #000 的 34% 混合），
+    // 其余主题因此只改自己的那一条，深色主题逐像素不变
+    expect(rootValueOf('--scrim')).toBe('rgba(0, 0, 0, 0.34)')
     // ::selection 今天就是「强调色 35% 透明」，改读令牌时这个表达式一个字都不能动
     expect(rootValueOf('--wash')).toBe('color-mix(in srgb, var(--accent-primary) 35%, transparent)')
     expect(globalCss).toMatch(/::selection\s*\{[^}]*background:\s*var\(--wash\)/)
@@ -225,7 +231,7 @@ describe('atelier（手记）主题的令牌覆盖', () => {
 
   it('新令牌一律裸引用：`var(--x, 回落)` 是 :root 那条声明的第二份副本', () => {
     // 令牌与消费方同批落地，回落就永远不会被读到；它只在 :root 被改时留在后面。
-    for (const token of ['--canvas-bg', '--wash', '--card-foot-bg', '--card-foot-rule', '--font-display', '--accent-on']) {
+    for (const token of ['--canvas-bg', '--wash', '--card-foot-bg', '--card-foot-rule', '--font-display', '--accent-on', '--accent-text', '--scrim']) {
       expect(ALL_SOURCES, `${token} 有消费方写了回落值`).not.toMatch(new RegExp(`var\\(${token},`))
     }
   })
@@ -321,6 +327,27 @@ describe('atelier（手记）主题的令牌覆盖', () => {
     expect(hit('const TERMINAL_UNDERLAY = \'#17181c\'')).toBe(false)
   })
 
+  it('强调色只做填充/描边：文字一律读 --accent-text', () => {
+    // --accent-primary 是交互底色（#0078d4 在白卡上只有 3.8:1），直接当文字会
+    // 在 GitHub/浅色主题的小字号按钮上掉到 3.8–4.1:1。--accent-text 由
+    // accentTextOn 按当前主题底算出 ≥4.5:1 的变体，填充与描边继续用原色。
+    // 这条按全仓扫；`border-color` / `background-color` / `accent-color` 不算文字色。
+    const TEXT_ACCENT = /(?<![-\w])color:\s*var\(--accent-primary\)/
+    const offenders: string[] = []
+    for (const [file, src] of Object.entries(SOURCE_FILES)) {
+      for (const m of src.matchAll(/([^{}]*)\{([^{}]*)\}/g)) {
+        const [, sel, body] = m
+        if (TEXT_ACCENT.test(body)) offenders.push(`${file} ${sel.trim().split('\n').pop()!.trim()}`)
+      }
+    }
+    expect(offenders).toEqual([])
+
+    // 变异自检：解析器绿着骗人比没有更糟
+    expect(TEXT_ACCENT.test('.a { color: var(--accent-primary); }')).toBe(true)
+    expect(TEXT_ACCENT.test('.a { border-color: var(--accent-primary); }')).toBe(false)
+    expect(TEXT_ACCENT.test('.a { background-color: var(--accent-primary); }')).toBe(false)
+  })
+
   it('已经存在的 --shadow-lg 不许再被抄成字面量', () => {
     // --shadow-lg 三套主题各有各的值（深色 0.4 纯黑 / 浅色 0.15 / 手记 0.18 且带纸色底），
     // 而组件里抄的那几处 `0 8px 24px rgba(0,0,0,0.4)` 与深色那一档逐字相同 —— 抄的就是深色，
@@ -368,6 +395,24 @@ describe('atelier（手记）主题的令牌覆盖', () => {
     expect(/^(?:inherit|var\(--font-[a-z0-9-]+\))$/.test('monospace')).toBe(false)
   })
 
+  it('历史弹窗遮罩读 --scrim：各主题自持色温，不许再借终端深底', () => {
+    // 诊断现场：--bg-terminal 在浅色/手记里是 #17181c（终端专用深底），34% 叠在
+    // 米纸 #f2ece1 上算出来是 rgb(168,164,158) 的冷灰 —— 打开历史记录就把整块
+    // 任务台压成一块「蒙尘的灰板」。遮罩是浮层层的独立语义，色温必须由主题
+    // 自己回答（手记是暖墨影，浅色是冷墨轻纱）。
+    const dialog = SOURCE_FILES['src/components/home/HomeHistoryDialog.vue']
+    expect(dialog, '没读到 HomeHistoryDialog.vue').toBeTruthy()
+    expect(readsVar(dialog, '--scrim')).toBe(true)
+    expect(dialog).not.toMatch(/var\(--bg-terminal\)/)
+
+    for (const theme of ['light', 'forest', 'blue-screen', 'mint', 'bee', 'coral', 'atelier']) {
+      expect(valueOf(blockOf(theme), '--scrim'), `${theme} 缺 --scrim`).toBeTruthy()
+    }
+    // 浅色与手记不许落回深色主题的纯黑重遮罩：纸上要的是墨影，不是压灰
+    expect(valueOf(blockOf('light'), '--scrim')).toContain('0.16')
+    expect(valueOf(blockOf('atelier'), '--scrim')).toContain('43, 39, 35')
+  })
+
   it('纸纹落在上色的结构画布上，不是 body', () => {
     // body 的纸纹会被 .ssh-view{background:var(--bg-base)} 整片盖住（首页任务台是
     // 透明的，它背后正是 .ssh-view）。所以令牌必须由**真正上色的那一层**
@@ -378,8 +423,8 @@ describe('atelier（手记）主题的令牌覆盖', () => {
     }
     // 终端内容区必须仍是 --bg-terminal：ANSI 主题固定暗色，米纸上开终端前景不可读
     expect(sshView).toMatch(/background:\s*var\(--bg-terminal\)/)
-    // 内联过程反过来：它长在首页消息流里，自己不能再画一层画布底（纸从首页透上来）
-    expect(agentTraceInline).not.toMatch(/background:\s*var\(--canvas-bg/)
+    // 审批面反过来：它长在首页输入区上方，自己不能再画一层画布底（纸从首页透上来）
+    expect(approvalDock).not.toMatch(/background:\s*var\(--canvas-bg/)
   })
 
   it('稿纸横线随 textarea 内部滚动（app 封顶 4 行，预览稿不封顶）', () => {
@@ -429,15 +474,16 @@ describe('atelier（手记）主题的令牌覆盖', () => {
     expect(ruleBlock(homeComposer, '.hcc-menu')).not.toMatch(/border:\s*1px solid/)
   })
 
-  it('逐条放行只有一个决策位：卡只在内联过程里，不再有第二条队列', () => {
-    // 同一条待决请求画两遍就是两把锁，而两张卡的能力可能不一样。旧的首页审批队列
-    // 已删除，逐条决策归 ApprovalCard，批量（作用于「这一批」）只是快捷结算。
-    expect(agentTraceInline).toMatch(/import ApprovalCard from '\.\/ApprovalCard\.vue'/)
-    expect(agentTraceInline).toMatch(/<ApprovalCard\b/)
-    expect(agentTraceInline).toMatch(/settleAll/)
-    // 内联过程里出现 approve/deny 的逐条调用 = 绕过 useApprovalActions 的第二条通路
-    expect(agentTraceInline).not.toMatch(/\bapprove\(/)
-    expect(agentTraceInline).not.toMatch(/\bdeny\(/)
+  it('逐条放行只有一个决策位：卡只在输入区审批面里，不再有第二条队列', () => {
+    // 同一条待决请求画两遍就是两把锁，而两张卡的能力可能不一样。
+    // 审批面钉在输入区上方（ApprovalDock），逐条决策归 ApprovalCard，
+    // 批量（作用于「这一批」）只是同侧的快捷结算。
+    expect(approvalDock).toMatch(/import ApprovalCard from '\.\/ApprovalCard\.vue'/)
+    expect(approvalDock).toMatch(/<ApprovalCard\b/)
+    expect(approvalDock).toMatch(/settleAll/)
+    // 审批面里出现 approve/deny 的逐条调用 = 绕过 useApprovalActions 的第二条通路
+    expect(approvalDock).not.toMatch(/\bapprove\(/)
+    expect(approvalDock).not.toMatch(/\bdeny\(/)
   })
 })
 

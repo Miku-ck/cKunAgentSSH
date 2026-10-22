@@ -293,7 +293,7 @@ onMounted(() => {
   font-size: 11px;
   border: 1px solid var(--border-subtle);
 }
-.badge-ok { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); }
+.badge-ok { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); }
 .badge-warn { color: var(--status-warn-text); border-color: color-mix(in srgb, var(--status-warn-text) 40%, transparent); }
 .inline-form { display: flex; align-items: center; gap: 8px; margin: 4px 0 6px; }
 .grow { flex: 1; min-width: 0; }

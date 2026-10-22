@@ -4,8 +4,8 @@
     <div class="audit-header">
       <div class="audit-head-left">
         <div class="audit-title">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M9 12l2 2 4-4"/><path d="M20 12a8 8 0 1 1-2.34-5.66"/></svg>
-          <span>运维审计</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><circle cx="4.5" cy="18.5" r="2"/><circle cx="19.5" cy="5.5" r="2"/><path d="M6.5 18.5h3a4 4 0 0 0 4-4v-5a4 4 0 0 1 4-4"/></svg>
+          <span>运维轨迹</span>
         </div>
         <!-- 分段：事件流 / 运行列表。两者是同一条追溯链的两个视图 —— 前者按
              命令逐条记（含手动敲的），后者按 run 汇总（步数/耗时/成本）。
@@ -68,7 +68,7 @@
       <input
         v-model="filters.run_id"
         class="trace-input"
-        placeholder="trace 号（整串）"
+        placeholder="trace  "
         title="按 trace 号找回某一条 run 的全部记录。运行列表分段的 trace 列/待放行队列头部点 № 可复制整串号"
         @keyup.enter="loadFirst"
       />
@@ -129,12 +129,16 @@
     </template>
 
     <!-- 运行列表分段：agent_runs 按 run 汇总，点开一行读 DB 权威轨迹 -->
-    <AgentRunsTable v-else />
+    <AgentRunsTable
+      v-else
+      :focus-run-id="focusRunId"
+      :focus-seq="focusSeq"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onMounted, reactive, ref } from 'vue'
+import { computed, defineAsyncComponent, onMounted, reactive, ref, watch } from 'vue'
 import { auditApi, toFriendlyMessage, type AuditRecord, type AuditVerifyResult } from '@/api/client'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToastStore } from '@/stores/toast'
@@ -143,7 +147,18 @@ import { formatBackendTs } from '@/utils/format'
 // 运行列表只在切到那一段时才挂载（同时才发第一次请求），审计表这一段不背它
 const AgentRunsTable = defineAsyncComponent(() => import('@/components/ssh/AgentRunsTable.vue'))
 
+const props = defineProps<{
+  /** 消息气泡「轨迹」直达：给定 run 号即切到运行列表并定位该行 */
+  focusRunId?: string
+  focusSeq?: number
+}>()
+
 const segment = ref<'events' | 'runs'>('events')
+// 直达入口优先于默认分段：先切段再让 AgentRunsTable 挂载，
+// 它拿到的 focusRunId 会预填筛选并展开该 run。
+watch(() => props.focusSeq, () => {
+  if (props.focusRunId) segment.value = 'runs'
+}, { immediate: true })
 
 const { confirm } = useConfirm()
 const toast = useToastStore()
@@ -178,7 +193,7 @@ const tableIsEmpty = computed(() =>
 
 async function load() {
   // 序号守卫：连续切筛选/翻页会并发多个请求，慢的那个后到 —— 没有守卫时
-  // 它会把已匹配当前筛选的结果覆盖成旧筛选的记录（审计页误读风险）
+  // 它会把已匹配当前筛选的结果覆盖成旧筛选的记录（轨迹页误读风险）
   const seq = ++loadSeq
   loading.value = true
   error.value = ''

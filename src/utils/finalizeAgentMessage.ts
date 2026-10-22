@@ -1,8 +1,10 @@
 /**
- * 固化 Agent 运行结果到会话的最后一条占位消息（id 以 'temp-agent-' 开头）。
+ * 固化 Agent 运行结果到会话的最后一条占位消息（id 以 'temp-agent-' 开头），
+ * 并把占位 id 换成真消息 id。
  * 设计为在 store 层 watch 中调用，不依赖组件生命周期。
  */
 import type { useAgentStore } from '@/stores/agent'
+import { genId } from '@/utils/id'
 
 /** Agent 消息的最小接口定义（导出供 store 层泛型边界断言使用，审查 M-19） */
 export interface AgentMessage {
@@ -59,6 +61,10 @@ export function finalizeAgentMessage(
       msgs[i].agentTrace = trace
       msgs[i].streamingContent = undefined
       msgs[i].streamingReasoning = undefined
+      // `temp-agent-` 前缀的语义是「结果还没回填的占位」：`useChatPersistence` 靠它
+      // 在启动时丢弃永远等不到回填的残骸。固化即回填完成 ⇒ 换真 id，否则真回复
+      // 会带着占位前缀落盘，重启后被读侧当成占位吞掉（任务台只剩用户气泡）。
+      msgs[i].id = genId()
       break
     }
   }

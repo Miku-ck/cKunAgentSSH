@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
- * 「运行列表」—— 运维审计页的分段之一，一条指令跑完之后从哪里找回它
- * （原 spec 2026-09-30-retire-ai-side-panel R2 的独立页；2026-10-19 并入审计页，
+ * 「运行列表」—— 运维轨迹页的分段之一，一条指令跑完之后从哪里找回它
+ * （原 spec 2026-09-30-retire-ai-side-panel R2 的独立页；2026-10-19 并入轨迹页，
  *  不再单占顶栏一栏：追溯这一族在同一页里看，事件流与按 run 汇总的列表是两个视图而不是两个入口）
  *
  * 接的是 `agent_runs` 表：按发起时间倒序，可按状态与 trace 号筛，点开一行读 DB 权威轨迹
@@ -11,7 +11,7 @@
  * client.ts 的 AgentRunRow），凭空画就等于拿"当前设置里的选择"去标历史 ——
  * 运行中改设置会改写过去的外观，那是 run 归因那一轮已经踩过并修掉的串台。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import {
   agentAdminApi,
   toFriendlyMessage,
@@ -22,6 +22,13 @@ import { RUN_STATE_LABELS, runStatusLabel } from '@/utils/agent-run-status'
 import { formatBackendTs } from '@/utils/format'
 
 const PAGE = 50
+
+const props = defineProps<{
+  /** 消息气泡「轨迹」直达的 run 号；挂载时预填筛选并展开该行 */
+  focusRunId?: string
+  /** 同一个 run 被重复点击时也要重新定位 —— 递增序号驱动 watch */
+  focusSeq?: number
+}>()
 
 const rows = ref<AgentRunRow[]>([])
 const total = ref(0)
@@ -64,7 +71,7 @@ async function load() {
   }
 }
 
-/** 请求序号：连着点筛选/翻页会并发多个请求，慢的那个后到会覆盖新结果（审计页同法） */
+/** 请求序号：连着点筛选/翻页会并发多个请求，慢的那个后到会覆盖新结果（轨迹页同法） */
 let loadSeq = 0
 
 function reloadFirst() {
@@ -99,12 +106,27 @@ function fmtDuration(ms: number): string {
   return s < 60 ? `${s.toFixed(1)}s` : `${Math.floor(s / 60)}m${Math.round(s % 60)}s`
 }
 
-onMounted(load)
+// 直达：首次挂载没有 focus 时也走这里完成首屏加载。
+// seq 变化即重新定位，状态筛选一并清掉 —— 否则旧筛选会把目标 run 挡在结果外。
+// 从轨迹 tab 进入（seq 变化但没有 run 号）则反向清空：上一次直达留下的 trace
+// 筛选不能把列表一直钉在旧记录上。
+watch(() => props.focusSeq, () => {
+  if (props.focusRunId) {
+    statusFilter.value = ''
+    traceFilter.value = props.focusRunId
+    expanded.value = props.focusRunId
+  } else {
+    traceFilter.value = ''
+    expanded.value = ''
+  }
+  offset.value = 0
+  void load()
+}, { immediate: true })
 </script>
 
 <template>
   <div class="art">
-    <!-- 筛选条与表格卡沿用审计页那一套外壳：同一个页面里两段不能有两种密度 -->
+    <!-- 筛选条与表格卡沿用轨迹页那一套外壳：同一个页面里两段不能有两种密度 -->
     <div class="art-filters">
       <select v-model="statusFilter" @change="reloadFirst">
         <option value="">全部状态</option>
@@ -113,7 +135,7 @@ onMounted(load)
       <input
         v-model="traceFilter"
         class="trace-input"
-        placeholder="trace 号（整串）"
+        placeholder="trace  "
         title="按 trace 号精确找回一条 run。号是 12 位 hex，粘半个筛不出东西"
         @keyup.enter="reloadFirst"
       />
@@ -170,10 +192,9 @@ onMounted(load)
             </tr>
             <tr v-if="expanded === r.id" class="detail">
               <td colspan="9">
-                <!-- DB 权威回放：状态流转链。与消息气泡里那枚 ▸轨迹是同一个组件、
-                     同一个端点；inline 让它待在单元格流内（浮层定位会飘出<tr>），
-                     并只补这一行没印过的字段。 -->
-                <AgentFullTrace inline :run-id="r.id" />
+                <!-- DB 权威回放：状态流转 + 工具调用时间线（含输出）。
+                     消息气泡的「轨迹」就是带 run_id 跳到这里。 -->
+                <AgentFullTrace :run-id="r.id" />
               </td>
             </tr>
           </template>
@@ -192,7 +213,7 @@ onMounted(load)
 </template>
 
 <style scoped>
-/* 只用各主题都已有的令牌，且与审计页同一份外壳：卡片边距、表头字号、分页条照抄 AuditView */
+/* 只用各主题都已有的令牌，且与轨迹页同一份外壳：卡片边距、表头字号、分页条照抄 AuditView */
 .art {
   display: flex;
   flex-direction: column;

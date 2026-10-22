@@ -24,7 +24,7 @@ export type NavPage =
  * App.vue 与 TitleBar.vue 必须共用这一份 —— 此前 App 内联手抄第二份联合，
  * 加一页两处都要改，漏一处的表现是图标永远不亮。
  */
-export type TitlebarPage = Exclude<NavPage, 'home'> | 'ai' | 'home'
+export type TitlebarPage = Exclude<NavPage, 'home'> | 'ai' | 'terminal' | 'home'
 
 /** 远程连接防抖间隔 */
 const CONNECT_DEBOUNCE_MS = 2000
@@ -53,15 +53,24 @@ export function useSshNavigation(
   /** 首页标签的点亮判定：独立页面（远程管理/SFTP/…）盖在上面时不该亮 */
   const homeTabActive = computed(() => showHome.value && activeNavPage.value === 'home')
 
-  // ─── 运行过程（2026-10：过程内联在每条助手消息里，不再是独立一屏） ───
+  // ─── 运行记录（2026-10：执行过程归运维轨迹，AI 界面只留对话与审批） ───
   /**
    * 运行视图曾短暂作为第三态（首页 / 运行 / 终端）：打开时把 showHome 关掉、整屏
-   * 换成运行过程。现在过程属于对应的助手回合，跟着消息流走，所以这里**没有 run
-   * 这一屏**：首页在不在，就只看 showHome。
+   * 换成运行过程。现在执行记录在运维轨迹页按 run 回放，消息上只留一个带 run_id
+   * 的跳转，所以这里**没有 run 这一屏**：首页在不在，就只看 showHome。
    * 终端实例照样不能卸载 —— 任务台仍是盖在 term-content 之上的浮层，
    * "看不见"只能靠 showHome 表达。
    */
   const terminalVisible = computed(() => !showHome.value)
+
+  /** 轨迹页的一次进入：带 run 号 = 消息直达；空 run 号 = 从 tab 正常进入（清掉直达筛选） */
+  const auditEntry = ref<{ runId: string; seq: number } | null>(null)
+
+  function openTrace(runId: string): void {
+    auditEntry.value = { runId, seq: (auditEntry.value?.seq ?? 0) + 1 }
+    showHome.value = true
+    activeNavPage.value = 'audit'
+  }
 
   // 快捷命令条只在终端态出现（故事 23）：首页与独立页面都不占那 30px
   const showCommandBar = computed(() =>
@@ -106,6 +115,20 @@ export function useSshNavigation(
     focusTimers.push(tid)
   }
 
+  /**
+   * 顶栏「终端」入口：有会话则回到活动会话 / 第一个会话；
+   * 零会话时落到远程管理页（没有可恢复的终端，连接列表就是终端的默认页）。
+   */
+  function showTerminal() {
+    const target = store.activeSessionId || store.sessions[0]?.id
+    if (!target) {
+      showHome.value = true
+      activeNavPage.value = 'remote-mgr'
+      return
+    }
+    activateTerminal(target)
+  }
+
   const toggleRemoteManager = (): void => togglePage('remote-mgr')
 
   /** SFTP 页的开合同 togglePage，之后再多做一步「复用活动远程会话把 SFTP 拉起来」 */
@@ -135,7 +158,13 @@ export function useSshNavigation(
     }
   }
 
-  const toggleAudit = (): void => togglePage('audit')
+  /** 轨迹 tab：进入时视为全新浏览，把上一次直达留下的 run 号清掉 */
+  function toggleAudit(): void {
+    if (activeNavPage.value !== 'audit') {
+      auditEntry.value = { runId: '', seq: (auditEntry.value?.seq ?? 0) + 1 }
+    }
+    togglePage('audit')
+  }
   const toggleSchedules = (): void => togglePage('schedules')
   const toggleDashboard = (): void => togglePage('dashboard')
   const toggleTunnels = (): void => togglePage('tunnels')
@@ -148,6 +177,9 @@ export function useSshNavigation(
   async function openLocalShell(shellName: string) {
     try {
       await store.createLocalTerminal(shellName)
+      // 与 connectRemote 同口径：远程管理是盖在 term-content 上的绝对定位页，
+      // 只收 showHome 不够，从管理页新建的终端会被管理页自己挡住。
+      activeNavPage.value = 'home'
       showHome.value = false
     } catch (err: any) {
       console.error('[openLocalShell] Failed:', shellName, err)
@@ -356,11 +388,14 @@ export function useSshNavigation(
     homeTabActive,
     terminalVisible,
     activeNavPage,
+    auditEntry,
+    openTrace,
     showModal,
     editingConnection,
     showCommandBar,
     goHome,
     activateTerminal,
+    showTerminal,
     toggleRemoteManager,
     toggleSftp,
     toggleAudit,

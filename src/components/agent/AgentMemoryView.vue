@@ -667,7 +667,7 @@ onMounted(() => { loadStats(); loadMemories() })
   background: none; border: none; cursor: pointer; padding: 0;
   color: var(--text-secondary); font-size: 11px; font-family: inherit;
 }
-.mem-lnk:hover { color: var(--accent-primary); }
+.mem-lnk:hover { color: var(--accent-text); }
 .mem-lnk.danger:hover { color: var(--danger-text); }
 .mem-lnk:disabled { opacity: .5; cursor: default; }
 .mem-drawer {

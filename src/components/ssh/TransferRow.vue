@@ -270,7 +270,7 @@ const statusText = computed(() => {
 .tl-icon svg { width: 12px; height: 12px; }
 .tl-icon.up { background: color-mix(in srgb, var(--accent-green) 12%, transparent); color: var(--accent-green); }
 .tl-icon.down { background: color-mix(in srgb, var(--accent-cyan) 12%, transparent); color: var(--accent-cyan); }
-.tl-icon.copy { background: color-mix(in srgb, var(--accent-primary) 14%, transparent); color: var(--accent-primary); }
+.tl-icon.copy { background: color-mix(in srgb, var(--accent-primary) 14%, transparent); color: var(--accent-text); }
 
 .td-name { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .nm { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
@@ -331,14 +331,14 @@ const statusText = computed(() => {
 .pnum.ind { color: var(--text-secondary); font-weight: 400; }
 
 .cell-num { font-family: var(--font-mono); font-size: 11px; line-height: 1; color: var(--text-secondary); text-align: right; white-space: nowrap; }
-.cell-num.live { color: var(--accent-primary); }
+.cell-num.live { color: var(--accent-text); }
 .cell-num.zero { color: var(--text-tertiary); }
 .cell-num.eta { color: var(--text-secondary); }
 
 .st { display: flex; align-items: center; gap: 5px; font-size: 11px; white-space: nowrap; color: var(--text-tertiary); }
 .st i { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; background: var(--text-tertiary); }
 .st-pending .st { color: var(--text-tertiary); }
-.st-running .st { color: var(--accent-primary); }
+.st-running .st { color: var(--accent-text); }
 .st-running .st i { background: var(--accent-primary); animation: tr-blink 1.2s ease-in-out infinite; }
 .st-paused .st { color: var(--accent-orange); } .st-paused .st i { background: var(--accent-orange); }
 .st-done .st { color: var(--accent-green); } .st-done .st i { background: var(--accent-green); }

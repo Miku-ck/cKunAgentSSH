@@ -250,7 +250,7 @@ function formatDate(ts: number): string {
 
 .auth-badge.password {
   background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
-  color: var(--accent-primary);
+  color: var(--accent-text);
 }
 
 .auth-badge.privateKey {
@@ -316,7 +316,7 @@ function formatDate(ts: number): string {
 }
 
 .row-btn.connect {
-  color: var(--accent-primary);
+  color: var(--accent-text);
   border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent);
 }
 
@@ -344,10 +344,10 @@ function formatDate(ts: number): string {
 }
 .row-btn.connect .spinner {
   animation: spin 0.8s linear infinite;
-  color: var(--accent-primary);
+  color: var(--accent-text);
 }
 .row-btn.connect .loading-text {
-  color: var(--accent-primary);
+  color: var(--accent-text);
   font-weight: 500;
 }
 @keyframes spin {

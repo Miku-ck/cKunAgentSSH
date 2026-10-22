@@ -5,10 +5,11 @@
  * 发送只有 useHomeCommand → ssh-ai.sendMessage 一条通路，审批档与姿态读 store，
  * 与发送装配同源 —— 界面宣称的选择必须真的随这一次下达出去。
  *
- * 底栏顺序：＋ → 分隔线 → 审批档 → chips → 模型 → 发送/停止。
- * 目标主机不再占底栏：＋ 菜单第一项 SSH 进面板切换目标或连接远程服务器
- * （openRemoteManager → SshView 开远程管理页）。目标主机只改 ssh store 的
- * activeSessionId（useHomeTarget），不切走首页、不聚焦终端 —— 用户正在输入框里打字。
+ * 底栏顺序：＋ → 分隔线 → 审批档 → 目标地址 → chips → 模型 → 发送/停止。
+ * 换目标仍走＋ 菜单第一项 SSH 面板（openRemoteManager → SshView 开远程管理页），
+ * 面板切换只改 ssh store 的 activeSessionId（useHomeTarget），不切走首页、不聚焦
+ * 终端 —— 用户正在输入框里打字。审批档右边常驻的是这台目标的地址：命令落到哪台
+ * 机器，得在放行之前就读得到，而不是等审批卡里那一行「目标主机」。
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { ChatAttachment } from '@/api/client'
@@ -37,7 +38,7 @@ const skillsStore = useSkillStore()
 const settings = useSettingsStore()
 const { openSettings } = useSettings()
 const { draft, canSend, submit, attachFiles, removeAttachment, uploading } = useHomeCommand()
-const { targetLabel, options: targetOptions, pick: pickTarget, remoteCount, canBulkDispatch } = useHomeTarget()
+const { targetLabel, targetIp, targetHint, options: targetOptions, pick: pickTarget, remoteCount, canBulkDispatch } = useHomeTarget()
 
 // ── 目标主机（＋ 菜单 SSH 面板）──
 function chooseTarget(sessionId: string) {
@@ -55,6 +56,16 @@ function toBulk() {
 function openRemoteManager() {
   emit('remote-mgr')
   closePlusMenu()
+}
+
+/** 断开当前目标这台：走终端页标签 × 的同一个出口（store.closeSession →
+ *  sshDisconnect），所以首页不另定一套断开语义，也不弹确认 —— 那两个决策位
+ *  若行为不同，用户按哪一处学到的经验都会有一半是错的。
+ *  剩下的会话由 removeSession 决定落点：还剩别的就切到相邻那台，一台不剩才回「服务器」。 */
+function disconnectTarget() {
+  const id = ssh.activeSessionId
+  if (!id || running.value) return
+  void ssh.closeSession(id)
 }
 
 /** 本地文件选择：input 藏在卡片里，＋ 菜单只负责唤起 —— 走 store.uploadFiles
@@ -434,6 +445,18 @@ onMounted(() => {
         </div>
       </div>
 
+      <span v-if="targetIp" class="hcc-target" :title="targetHint">
+        {{ targetIp }}
+        <button
+          type="button"
+          class="hcc-chip-x"
+          aria-label="断开这台远程连接"
+          :disabled="running"
+          :title="running ? '运行中不能断开当前目标，请先停止本轮' : '断开这台（与终端页标签 × 同一个出口）'"
+          @click="disconnectTarget"
+        >×</button>
+      </span>
+
       <!-- 故事 6：加进来的每一项都在底栏留一枚可移除的 chip。姿态这枚必须连目标态
            一起显形 —— ＋ 菜单里两个都能点亮，只显计划就是从中间截走的故事。 -->
       <span
@@ -685,6 +708,19 @@ onMounted(() => {
   line-height: 1;
 }
 .hcc-chip-x:hover { background: var(--bg-hover); color: var(--text-primary) }
+/* 审批档右边的目标地址。等宽字是「这是一台机器不是一个词」最快的信号；不铺底：
+   有了底就会被读成旁边那排 chip 里的一员，而那些 chip 的 × 摘掉的是附加上下文，
+   这枚 × 断开的是连接 —— 两者代价不同，不能共用一个外观语言。 */
+.hcc-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.hcc-target .hcc-chip-x:disabled { opacity: .5; cursor: default }
 .hcc-menu {
   position: absolute;
   left: 0;

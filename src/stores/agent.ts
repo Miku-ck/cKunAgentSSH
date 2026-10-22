@@ -226,7 +226,7 @@ export const useAgentStore = defineStore('agent', () => {
   // 交付与澄清向导：后端发 clarification_needed 时面板压根没挂载，向导渲染不出来，
   // 用户只看到一条 toast，运行干等到后端 TTL 超时。面板加区块而宿主忘记同步必然复发，
   // 所以条件搬回数据侧，宿主（首页任务台）只负责无条件挂载。
-  // 待放行卡片不在这份判定里：审批卡内联在消息流的那一轮回答里，不靠本面板给入口。
+  // 待放行卡片不在这份判定里：审批 dock 在输入区上方常驻，不靠本面板给入口。
   const hasRunNotice = computed(() =>
     !!intentionInfo.value
     || warnings.value.length > 0

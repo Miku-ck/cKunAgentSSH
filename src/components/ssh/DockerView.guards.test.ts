@@ -7,11 +7,15 @@
  */
 import dockerViewRaw from './DockerView.vue?raw'
 import sshViewRaw from '../../views/ssh/SshView.vue?raw'
+import titleBarRaw from '../../layouts/TitleBar.vue?raw'
+import iconDockerRaw from '../icons/IconDocker.vue?raw'
 import { describe, expect, it } from 'vitest'
 
 // 工作区是 CRLF 检出：统一成 LF 再切片，否则 '\n}\n' 找不到函数结尾
 const src = dockerViewRaw.replace(/\r\n/g, '\n')
 const sshViewSrc = sshViewRaw.replace(/\r\n/g, '\n')
+const titleBarSrc = titleBarRaw.replace(/\r\n/g, '\n')
+const iconDockerSrc = iconDockerRaw.replace(/\r\n/g, '\n')
 
 function sliceFunction(header: string): string {
   const start = src.indexOf(header)
@@ -66,6 +70,25 @@ describe('跨宿主、弹窗与轮询的陈旧写入', () => {
     expect(src).toContain('<DockerContainerDetail')
     expect(src).not.toContain('async function loadLogs(')
     expect(src).not.toContain('followTimer')
+  })
+})
+
+describe('Docker 空态与入口共用鲸鱼图形', () => {
+  it('无远程会话的空态画鲸鱼，而不是只有一行字', () => {
+    const start = src.indexOf('v-if="!remoteSessions.length"')
+    expect(start, '找不到无远程会话的空态分支').toBeGreaterThanOrEqual(0)
+    const block = src.slice(start, src.indexOf('<!-- 有目标主机', start))
+    expect(block).toContain('<IconDocker')
+    expect(block).toContain('尚未连接远程主机')
+  })
+
+  it('顶栏与空态读同一枚 IconDocker，不各画一份', () => {
+    // 合并方案 A 定稿：Docker 顶栏按钮与页头/空态同源共用 IconDocker
+    //（实心鲸鱼剪影，DeepSeek 风）。
+    expect(titleBarSrc).toContain('<IconDocker')
+    expect(titleBarSrc).toContain('IconDocker.vue')
+    expect(src).toContain("import IconDocker from '@/components/icons/IconDocker.vue'")
+    expect(iconDockerSrc).toContain('M2.6 12.9C2.6 9.4 5.5 7 9.1 7')
   })
 })
 

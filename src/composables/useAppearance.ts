@@ -7,7 +7,7 @@ import { applyMonacoTheme } from '@/monaco-setup'
 // 它们原本就在本文件里，但 store 要取 ACCENT_MAP 当白名单、本文件要取 store，
 // 于是成了真运行时环（环的形状与锁法见那个文件的头注）。
 import {
-  ACCENT_MAP, contrastOnAccent,
+  ACCENT_MAP, contrastOnAccent, accentTextOn,
   type Accent, type GradientDirection, type Theme,
 } from '@/utils/appearance-tokens'
 
@@ -46,6 +46,7 @@ export function useAppearance() {
     root.setAttribute('data-theme', darkMq.matches ? 'dark' : 'light')
     // H13 修复：系统主题变化时同步 Monaco 主题
     applyMonacoTheme('system')
+    refreshAccentText()
   }
 
   const systemHandler = () => applySystemTheme()
@@ -69,6 +70,21 @@ export function useAppearance() {
       // H13 修复：同步切换 Monaco 主题（light / blue-screen）
       applyMonacoTheme(theme)
     }
+    refreshAccentText()
+  }
+
+  /**
+   * 强调色当文字时的可读变体：同一枚蓝压在纯黑、白卡、纸灰上是三个不同的可读值，
+   * 主题或强调色一变就得重算。底色取当前计算值，不按主题名写 if。
+   * 阈值 4.6 给 hover/active 叠色留一点余量（.btn-primary:hover 会垫 8% 强调色）。
+   */
+  function refreshAccentText() {
+    const v = ACCENT_MAP[store.settings.appearance.accent]
+    if (!v) return
+    const cs = getComputedStyle(root)
+    const surfaces = ['--bg-base', '--bg-elevated', '--bg-input']
+      .map(name => cs.getPropertyValue(name).trim())
+    root.style.setProperty('--accent-text', accentTextOn(v.hex, surfaces, 4.6))
   }
 
   // ── 强调色 ──
@@ -81,6 +97,7 @@ export function useAppearance() {
     root.style.setProperty('--accent-primary-rgb', v.rgb)
     // 按钮/徽章把字压在 --accent-primary 上，前景必须跟着底色走（见 contrastOnAccent）
     root.style.setProperty('--accent-on', contrastOnAccent(v.hex))
+    refreshAccentText()
   }
 
   // ── 字号：界面基础字号（根元素）与消息正文字号是两套，分别应用 ──

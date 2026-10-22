@@ -11,7 +11,7 @@
  * 重渲染重置（只有 isLive 的 true→false 那一次会自动收起）。
  *
  * 审批卡只对当前 run 可见：approvals 由宿主只在 live 消息上传入。审批请求不写入
- * agentTrace（持久化需要后端契约），历史回看没有审批卡，追溯去运维审计/轨迹回放。
+ * agentTrace（持久化需要后端契约），历史回看没有审批卡，追溯去运维轨迹页/轨迹回放。
  */
 import { computed, onUnmounted, ref, watch } from 'vue'
 import type { AgentTraceSnapshot } from '@/api/client'
@@ -53,6 +53,15 @@ watch(() => props.isLive, (live) => {
 })
 
 const status = computed(() => processStatusLabel(props.trace, props.isLive))
+
+/** 纯文字回答不渲染过程块：答案本身就是全部输出，「已完成 3.3s / 这次运行
+ *  没有产生工具调用」的空卡只是噪音。失败与中止的运行保留卡片 —— 那时的
+ *  状态行是错误信号；有工具调用的运行不受影响。 */
+const hideEmpty = computed(() =>
+  !props.isLive
+  && props.trace.toolCalls.length === 0
+  && status.value.tone === 'ok',
+)
 const headText = computed(() => {
   if (props.isLive) {
     return model.value.activeStepIndex >= 0
@@ -190,14 +199,14 @@ async function batch(kind: 'approve' | 'deny') {
 function copyTrace() {
   if (!traceId.value) return
   navigator.clipboard.writeText(traceId.value).then(
-    () => toast.success(`trace ${traceId.value} 已复制，粘到运维审计的 trace 框即可找回这一轮`),
+    () => toast.success(`trace ${traceId.value} 已复制，粘到运维轨迹的 trace 框即可找回这一轮`),
     () => toast.error('复制失败，请手动选中 trace 号'),
   )
 }
 </script>
 
 <template>
-  <section class="trace-inline" :class="{ collapsed: !expanded }" aria-label="执行过程">
+  <section v-if="!hideEmpty" class="trace-inline" :class="{ collapsed: !expanded }" aria-label="执行过程">
     <header class="tr-head">
       <button
         type="button"
@@ -217,7 +226,7 @@ function copyTrace() {
         v-if="traceId"
         type="button"
         class="tr-trace"
-        title="点击复制完整 trace 号，运维审计页按它筛这一轮的全部记录"
+        title="点击复制完整 trace 号，运维轨迹页按它筛这一轮的全部记录"
         @click="copyTrace"
       >№{{ traceId }}</button>
     </header>
@@ -328,12 +337,12 @@ function copyTrace() {
   border-radius: 50%;
   background: currentColor;
 }
-.tr-dot.run { color: var(--accent-primary); animation: tr-blink 1.1s steps(2, start) infinite }
+.tr-dot.run { color: var(--accent-text); animation: tr-blink 1.1s steps(2, start) infinite }
 .tr-dot.ok { color: var(--text-tertiary) }
 .tr-dot.bad { color: var(--danger-text) }
 
 .tr-status { font-weight: 600; white-space: nowrap }
-.tr-status.run { color: var(--accent-primary) }
+.tr-status.run { color: var(--accent-text) }
 .tr-status.ok { color: var(--text-secondary) }
 .tr-status.bad { color: var(--danger-text) }
 
@@ -411,7 +420,7 @@ function copyTrace() {
   font-size: 11px;
   font-weight: 600;
 }
-.tr-tool-state.running { color: var(--accent-primary) }
+.tr-tool-state.running { color: var(--accent-text) }
 .tr-tool-state.ok { color: var(--status-success-text) }
 .tr-tool-state.bad { color: var(--danger-text) }
 .tr-tool-state.muted { color: var(--text-tertiary) }
@@ -491,7 +500,7 @@ function copyTrace() {
   gap: 6px;
   padding: 6px 0;
   font-size: 13px;
-  color: var(--accent-primary);
+  color: var(--accent-text);
 }
 .tr-dots { display: inline-flex; gap: 3px }
 .tr-dots span {

@@ -1,11 +1,39 @@
 <template>
   <div class="home-workspace">
+    <!-- 左上角会话入口：钉在视口角落的页面级操作（不随消息流滚动）。
+         历史开居中弹窗，新建会话就地开始空白任务 —— 按钮只在首页可见，无需跳转。 -->
+    <div class="home-corner">
+      <button
+        ref="historyBtn"
+        type="button"
+        class="corner-btn"
+        title="历史记录"
+        aria-label="历史记录"
+        aria-controls="home-history-dialog"
+        :aria-expanded="historyOpen"
+        @click="historyOpen = !historyOpen"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><polyline points="3 3 3 8 8 8"/><polyline points="12 7 12 12 15 14"/></svg>
+      </button>
+      <button
+        type="button"
+        class="corner-btn"
+        :disabled="agentStore.isRunning"
+        :title="agentStore.isRunning ? '运行中不可新建会话' : '新建会话'"
+        aria-label="新建会话"
+        @click="startNewTask"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="M11 4H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-6"/><path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4z"/></svg>
+      </button>
+    </div>
     <div class="home-main">
       <div ref="scrollRef" class="home-scroll">
         <div class="home-column" :class="{ 'is-empty': isEmpty }">
           <h1 v-if="isEmpty" class="home-ask">今天想让助手替你做什么？</h1>
           <template v-else>
-            <div class="home-title" :title="conversationTitle">{{ conversationTitle }}</div>
+            <!-- 标题与首条气泡同文时不画：标题行随消息流滚动、就贴在首条消息上方，
+                 同文时读起来是「两条一模一样的用户消息」（首页"两个用户气泡"）。 -->
+            <div v-if="showTitle" class="home-title" :title="conversationTitle">{{ conversationTitle }}</div>
             <div class="home-messages" role="log" aria-live="polite">
               <MessageItem
                 v-for="(msg, idx) in displayMessages"
@@ -13,8 +41,7 @@
                 :message="msg"
                 :is-last="idx === displayMessages.length - 1"
                 :is-streaming="isLiveAt(idx)"
-                :inline-approvals="isLiveAt(idx) ? agentStore.pendingPermissions : undefined"
-                :process-meta="metaFor(msg, isLiveAt(idx))"
+                @open-trace="emit('open-trace', $event)"
               />
             </div>
           </template>
@@ -28,18 +55,20 @@
           <AgentRunPanel />
         </div>
       </div>
-      <HomeHistoryDrawer
+      <HomeHistoryDialog
         v-if="historyOpen"
         :groups="sshAi.groupedConversations"
         :current-conv-id="sshAi.currentConvId"
         :is-empty="sshAi.conversations.length === 0"
         :busy="agentStore.isRunning"
-        @close="emit('close-history')"
+        @close="closeHistory"
         @switch="switchConversation"
         @delete="deleteConversation"
       />
     </div>
     <div class="composer-wrap">
+      <!-- 审批面钉在输入区上方：待决请求不属于消息流，不能跟着历史滚走 -->
+      <ApprovalDock />
       <HomeComposer @bulk="emit('bulk')" @remote-mgr="emit('remote-mgr')" />
     </div>
   </div>
@@ -49,48 +78,69 @@
 import { computed, defineAsyncComponent, nextTick, ref, watch } from 'vue'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useAgentStore } from '@/stores/agent'
-import { useModelsStore } from '@/stores/models'
-import { useSSHStore } from '@/stores/ssh'
 import { useSettingsStore } from '@/stores/settings'
 import { useToastStore } from '@/stores/toast'
-import { useConfirm } from '@/composables/useConfirm'
-import { approvalTargetLabel } from '@/utils/approval-display'
 import { buildDisplayMessages, isLiveAgentRun } from '@/utils/display-messages'
-import type { ProcessMeta } from '@/utils/process-status'
-import { PERMISSION_LABELS } from '@/utils/run-modes'
+import { isTitleEcho } from '@/utils/conversation-title'
 import type { BaseMessage } from '@/types/chat'
 // MessageItem 的依赖链带着 marked/highlight.js/DOMPurify。它是首页里的常驻组件，
 // 静态引入会把整条 Markdown 栈钉进入口包；异步化后空态首屏不下载，第一条消息
 // 出现时才按需加载（与 SshView 拆页同一手法）。
 const MessageItem = defineAsyncComponent(() => import('@/components/chat/MessageItem.vue'))
 import HomeComposer from '@/components/home/HomeComposer.vue'
-import HomeHistoryDrawer from '@/components/home/HomeHistoryDrawer.vue'
+import HomeHistoryDialog from '@/components/home/HomeHistoryDialog.vue'
 import AgentRunPanel from '@/components/agent/AgentRunPanel.vue'
+import ApprovalDock from '@/components/agent/ApprovalDock.vue'
 
-defineProps<{ historyOpen: boolean }>()
 const emit = defineEmits<{
-  'close-history': []
   bulk: []
   'remote-mgr': []
+  'open-trace': [runId: string]
 }>()
 
 const sshAi = useSshAiStore()
 const agentStore = useAgentStore()
-const modelsStore = useModelsStore()
-const ssh = useSSHStore()
 const settingsStore = useSettingsStore()
 const toast = useToastStore()
-const { confirm } = useConfirm()
 
 const scrollRef = ref<HTMLElement | null>(null)
+
+// ── 历史弹窗与新建会话（左上角入口的状态自留地）──
+const historyOpen = ref(false)
+const historyBtn = ref<HTMLButtonElement | null>(null)
+
+/** 关闭后把焦点还给触发按钮：Teleport 弹窗卸载时焦点会掉到 body，
+ *  键盘用户再按 Tab 就得从头摸一遍。 */
+function closeHistory() {
+  historyOpen.value = false
+  void nextTick(() => historyBtn.value?.focus())
+}
+
+/** 「新建会话」：就地开始空白任务，不提前产生历史条目（首条消息发出才入历史）。
+ *  beginNewTask 在运行中返回 false —— 按钮禁用之外再挡一道。 */
+function startNewTask() {
+  if (!sshAi.beginNewTask()) {
+    toast.info('AI 正在运行中，请等待完成')
+    return
+  }
+  historyOpen.value = false
+}
 
 const isEmpty = computed(() => sshAi.messages.length === 0)
 const conversationTitle = computed(() =>
   sshAi.conversations.find(c => c.id === sshAi.currentConvId)?.title || '新会话',
 )
 
+/** 标题行是否值得画：本地标题就是首条消息的 30 字摘要（S9-05），同文时不画，
+ *  否则用户看到的是两个「你好」—— 一个是标题、一个是气泡。 */
+const showTitle = computed(() => {
+  if (isEmpty.value) return false
+  const firstUser = sshAi.messages.find(m => m.role === 'user')?.content ?? ''
+  return !isTitleEcho(conversationTitle.value, firstUser)
+})
+
 /** live 合并走 utils/display-messages 的纯函数；非运行中直接返回 store 的原数组，保持消息引用稳定 */
-const displayMessages = computed(() => {
+const displayMessages = computed<readonly BaseMessage[]>(() => {
   if (!agentStore.isRunning) return sshAi.messages
   return buildDisplayMessages(sshAi.messages, {
     running: true,
@@ -104,32 +154,7 @@ function isLiveAt(idx: number): boolean {
   return isLiveAgentRun(displayMessages.value, idx, agentStore.isRunning)
 }
 
-/**
- * 归因只在「这条 trace 属于最近一次 run」时给出：模型/审批档/目标都是发起时
- * 记在 agent store 的当前值，套到历史旧 run 上等于伪造当时的选择。
- * 运行中的快照清空了 lastRunId，所以 live 单独放行。
- */
-function metaFor(msg: BaseMessage, live: boolean): ProcessMeta | undefined {
-  const trace = msg.agentTrace
-  if (!trace) return undefined
-  const matchesCurrentRun = live || (!!agentStore.lastRunId && trace.lastRunId === agentStore.lastRunId)
-  if (!matchesCurrentRun) return undefined
-  const modelName = modelsStore.models.find(m => m.id === agentStore.lastModelId)?.name || ''
-  return {
-    modelName: modelName || undefined,
-    permissionLabel: PERMISSION_LABELS[agentStore.lastPermissionMode],
-    targetLabel: approvalTargetLabel(
-      { sshSessionId: agentStore.lastSshSessionId },
-      ssh.sessions,
-      ssh.connections,
-    ) || undefined,
-    runId: agentStore.lastRunId || undefined,
-    // 运行中由过程头部的本地 ticker 计时；收尾后这里补上整程耗时
-    durationMs: live ? undefined : (trace.duration ? Math.round(trace.duration * 1000) : undefined),
-  }
-}
-
-// ── 自动滚动：新消息、流式正文/思考、审批卡出现都跟到底 ──
+// ── 自动滚动：新消息、流式正文/思考都跟到底 ──
 async function scrollToBottom() {
   if (!settingsStore.settings.chat.autoScroll) return
   await nextTick()
@@ -142,7 +167,6 @@ watch(() => displayMessages.value.length, () => { void scrollToBottom() }, { imm
 watch(() => sshAi.currentConvId, () => { void scrollToBottom() })
 watch(() => agentStore.content, () => { if (agentStore.isRunning) void scrollToBottom() })
 watch(() => agentStore.reasoning, () => { if (agentStore.isRunning) void scrollToBottom() })
-watch(() => agentStore.pendingPermissions.length, () => { void scrollToBottom() })
 // 运行通知区块（任务规划/警告/待确认命令/错误）是消息流之外的另一段高度变化，
 // 出现时同样要跟到底 —— 否则"命令待确认"停在视野下方，用户看不见要决策的东西。
 watch(() => agentStore.hasRunNotice, () => { void scrollToBottom() })
@@ -153,23 +177,17 @@ function switchConversation(id: string) {
     return
   }
   void sshAi.switchConversation(id)
-  emit('close-history')
+  closeHistory()
 }
 
-async function deleteConversation(id: string) {
+/** 历史条目点垃圾桶即删，不再弹二次确认：入口按钮本身已带 aria-label 与
+ *  运行中禁用，删除后再多问一遍只是把「已经做出的决定」重问一次。 */
+function deleteConversation(id: string) {
   if (agentStore.isRunning) {
     toast.info('AI 正在运行中，请等待完成')
     return
   }
-  const conv = sshAi.conversations.find(c => c.id === id)
-  const ok = await confirm({
-    title: '删除对话',
-    message: `确认删除对话「${conv?.title || '未命名'}」及其全部消息与附件？此操作不可恢复。`,
-    confirmText: '删除',
-    danger: true,
-  })
-  if (!ok) return
-  await sshAi.deleteConversation(id)
+  void sshAi.deleteConversation(id)
 }
 </script>
 
@@ -180,6 +198,38 @@ async function deleteConversation(id: string) {
   z-index: 10;
   display: flex;
   flex-direction: column;
+}
+
+/* 左上角会话入口：ghost 图标钮，页面级操作钉在视口角落 */
+.home-corner {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  z-index: 5;
+  display: flex;
+  gap: 2px;
+}
+
+.corner-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.corner-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.corner-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
 }
 
 .home-main {
@@ -245,6 +295,8 @@ async function deleteConversation(id: string) {
   flex: 0 0 auto;
   padding: 8px 24px 18px;
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
 }
 </style>

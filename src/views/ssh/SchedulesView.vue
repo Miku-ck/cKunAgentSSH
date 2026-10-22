@@ -771,7 +771,7 @@ onUnmounted(() => {
 .schedule-card-body .k { color: var(--text-tertiary); margin-bottom: 4px; text-align: left; }
 .prompt { color: var(--text-secondary); white-space: pre-wrap; text-align: left; }
 
-.status.running { color: var(--accent-primary); border-color: var(--accent-primary); }
+.status.running { color: var(--accent-text); border-color: var(--accent-primary); }
 .status.completed { color: var(--accent-green); border-color: var(--accent-green); }
 .status.failed { color: var(--accent-red); border-color: var(--accent-red); }
 .status.waiting_permission { color: var(--accent-orange); border-color: var(--accent-orange); }
@@ -806,7 +806,7 @@ onUnmounted(() => {
   border: 1px solid var(--border-subtle); background: transparent; color: var(--text-secondary);
 }
 .sched-option:hover { color: var(--text-primary); background: var(--bg-hover); }
-.sched-option.active { color: var(--accent-primary); border-color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
+.sched-option.active { color: var(--accent-text); border-color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
 .sched-subrow { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
 .sched-subrow .num { width: 56px; }
 .sched-subrow .sel { width: 92px; }
@@ -822,6 +822,6 @@ onUnmounted(() => {
 .history-summary { font-size: 12px; color: var(--text-secondary); margin-top: 6px; white-space: pre-wrap; max-height: 150px; overflow: auto; }
 .history-error { font-size: 12px; color: var(--accent-red); margin-top: 4px; }
 .empty-small { color: var(--text-tertiary); font-size: 12px; padding: 20px 0; text-align: center; }
-.countdown { color: var(--accent-primary); font-weight: 600; }
+.countdown { color: var(--accent-text); font-weight: 600; }
 .history-actions { margin-top: 6px; }
 </style>

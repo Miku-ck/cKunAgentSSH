@@ -665,7 +665,7 @@ async function handleSave() {
 
 .form-info svg {
   flex-shrink: 0;
-  color: var(--accent-primary);
+  color: var(--accent-text);
 }
 
 /* 高级选项 */

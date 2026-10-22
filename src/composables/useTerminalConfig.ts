@@ -35,9 +35,17 @@ function getTerminalFontFamily(key: string): string {
  */
 export const TERMINAL_FOREGROUND = '#e6edf3'
 
+/**
+ * xterm 6 把主题背景写到 .xterm-scrollable-element 的 inline style 上，
+ * 但它不认 CSS 的 `transparent` 关键字 —— 解析失败会回落纯黑，把
+ * --bg-terminal 整个盖掉（浅色主题下终端四周就显出一圈色差边框）。
+ * 透明必须写成 rgba 形式。
+ */
+const TRANSPARENT_BACKGROUND = 'rgba(0, 0, 0, 0)'
+
 /** 基线终端暗色主题：背景透明以跟随全局背景，只控制文字/光标/ANSI 颜色 */
 const TERMINAL_BASE: ITheme = {
-  background: 'transparent',
+  background: TRANSPARENT_BACKGROUND,
   foreground: TERMINAL_FOREGROUND,
   cursor: '#58a6ff',
   cursorAccent: '#111111',
@@ -120,11 +128,11 @@ export const TERMINAL_THEMES: Record<ResolvedTheme, ITheme> = {
 
 /**
  * hex 色 + 透明度百分比 → rgba 字符串。
- * 非法输入回落 'transparent'（= auto 模式的现状行为），不抛错——
+ * 非法输入回落透明（与 auto 模式同值），不抛错——
  * 设置值可能被历史脏 localStorage 污染，渲染层只该降级不该炸。
  */
 export function hexToRgba(hex: string, opacityPct: number): string {
-  if (!isHexColor(hex)) return 'transparent'
+  if (!isHexColor(hex)) return TRANSPARENT_BACKGROUND
   const int = parseInt(hex.slice(1), 16)
   const r = (int >> 16) & 255
   const g = (int >> 8) & 255

@@ -12,34 +12,38 @@
         <button class="reconnect-btn" :disabled="reconnectBusy" @click="manualReconnect">重连</button>
       </template>
     </div>
-    <div class="remote-terminal" ref="containerRef">
-      <CompletionPopup
-        ref="popupRef"
-        :visible="completionState.visible"
-        :candidates="completionState.candidates"
-        :x="completionState.x"
-        :y="completionState.y"
-        @select="applyCompletion"
-        @cancel="hideCompletion"
-      />
-      <!-- 终端内搜索条（Ctrl+Shift+F）：addon 父组件持有，条只管 UI -->
-      <TermSearchBar
-        v-if="searchOpen && searchAddonRef"
-        :addon="searchAddonRef"
-        @close="closeSearch"
-      />
-      <!-- 「问 AI」悬浮按钮：选中终端内容后在选区上方出现 -->
-      <button
-        v-if="askAiBtn.visible && visible"
-        class="ask-ai-float-btn"
-        :style="{ left: askAiBtn.x + 'px', top: askAiBtn.y + 'px' }"
-        title="把选中的终端内容发给 AI 分析"
-        @mousedown.prevent
-        @click="askAi"
-      >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="12" height="12" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-        问 AI
-      </button>
+    <div class="remote-terminal">
+      <!-- 挂载点不能带 padding：FitAddon 量的是 .xterm 的父级，且只扣 .xterm
+           自己的 padding。padding 留在外层，挂载点尺寸才是真实可绘制区。 -->
+      <div class="remote-terminal-mount" ref="containerRef">
+        <CompletionPopup
+          ref="popupRef"
+          :visible="completionState.visible"
+          :candidates="completionState.candidates"
+          :x="completionState.x"
+          :y="completionState.y"
+          @select="applyCompletion"
+          @cancel="hideCompletion"
+        />
+        <!-- 终端内搜索条（Ctrl+Shift+F）：addon 父组件持有，条只管 UI -->
+        <TermSearchBar
+          v-if="searchOpen && searchAddonRef"
+          :addon="searchAddonRef"
+          @close="closeSearch"
+        />
+        <!-- 「问 AI」悬浮按钮：选中终端内容后在选区上方出现 -->
+        <button
+          v-if="askAiBtn.visible && visible"
+          class="ask-ai-float-btn"
+          :style="{ left: askAiBtn.x + 'px', top: askAiBtn.y + 'px' }"
+          title="把选中的终端内容发给 AI 分析"
+          @mousedown.prevent
+          @click="askAi"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="12" height="12" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          问 AI
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -581,8 +585,15 @@ defineExpose({
   width: 100%;
   min-height: 0;
   position: relative;
-  /* FitAddon 会从父容器尺寸里扣掉 padding，行列不会因此溢出 */
+  /* 只负责呼吸边距；xterm 挂在内层 mount 上，FitAddon 才不会把这段 padding
+     算进可绘制高度（否则多算一行、最后一行被终端区底边裁掉半截）。 */
   padding: 8px 10px;
+}
+
+.remote-terminal-mount {
+  position: relative;
+  width: 100%;
+  height: 100%;
 }
 
 /* ─── 重连状态条 ─── */
@@ -673,5 +684,10 @@ defineExpose({
 
 .remote-terminal :deep(.xterm-viewport) {
   overflow-y: auto;
+  /* xterm 6 的屏幕底叠了两层：scrollable element 用 theme.background
+     （auto 模式已是 rgba 透明），下面这层 viewport 仍被 xterm.css 铺了 #000。
+     一起置空，padding 区和屏幕才同色（否则浅色主题下露出一圈「边框」，
+     背景图也透不进来）。 */
+  background-color: transparent;
 }
 </style>

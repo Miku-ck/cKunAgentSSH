@@ -60,7 +60,7 @@ button {
   border: 0;
   background: transparent;
 }
-a { color: var(--accent-primary); text-decoration: none; }
+a { color: var(--accent-text); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
 /* ── 文本选中：跟随强调色，替换浏览器默认蓝 ──

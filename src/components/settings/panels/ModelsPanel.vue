@@ -9,7 +9,6 @@
       <!-- 工具栏 -->
       <div class="toolbar">
         <button class="btn btn-primary btn-sm" @click="openCreateDialog">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           添加模型
         </button>
         <button class="btn btn-ghost btn-sm" @click="store.fetchModelConfigs()" :disabled="store.modelsLoading">
@@ -138,7 +137,6 @@
         <div v-if="store.modelConfigs.length === 0" class="model-empty">
           <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
           <p>暂无模型配置</p>
-          <p class="hint">点击「添加模型」配置第一个 LLM 端点</p>
         </div>
       </div>
     </div>
@@ -147,10 +145,10 @@
     <Teleport to="body">
       <Transition name="modal-fade">
         <div v-if="showDialog" class="modal-overlay">
-          <div class="modal-container" role="dialog" aria-modal="true">
+          <div class="modal-container" role="dialog" aria-modal="true" aria-labelledby="model-dialog-title">
             <!-- Header -->
             <div class="modal-header">
-              <h4>{{ isEditing ? '编辑模型' : '添加模型' }}</h4>
+              <h4 id="model-dialog-title">{{ isEditing ? '编辑模型' : '添加模型' }}</h4>
               <button class="modal-close" @click="closeDialog">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
@@ -941,7 +939,6 @@ function formatTokenCount(n: number): string {
   gap: 8px;
 }
 .model-empty p { margin: 0; font-size: 13px; }
-.model-empty .hint { font-size: 12px; color: var(--text-tertiary); }
 
 /* 按钮 */
 
@@ -1068,7 +1065,7 @@ function formatTokenCount(n: number): string {
   cursor: pointer;
   transition: all 0.15s;
 }
-.btn-eye:hover { color: var(--accent-primary); background: var(--bg-hover); }
+.btn-eye:hover { color: var(--accent-text); background: var(--bg-hover); }
 
 /* ── 提供商选择器 ── */
 .provider-select {
@@ -1121,7 +1118,7 @@ function formatTokenCount(n: number): string {
   transition: all 0.1s;
 }
 .provider-option:hover { background: var(--bg-hover); }
-.provider-option.active { background: color-mix(in srgb, var(--accent-primary) 8%, transparent); color: var(--accent-primary); }
+.provider-option.active { background: color-mix(in srgb, var(--accent-primary) 8%, transparent); color: var(--accent-text); }
 
 /* Dropdown animation */
 .dropdown-enter-active, .dropdown-leave-active {
@@ -1261,7 +1258,7 @@ function formatTokenCount(n: number): string {
 .token-chip.active {
   background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
   border-color: color-mix(in srgb, var(--accent-primary) 33%, transparent);
-  color: var(--accent-primary);
+  color: var(--accent-text);
   font-weight: 500;
 }
 

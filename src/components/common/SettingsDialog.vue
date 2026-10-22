@@ -2,10 +2,17 @@
   <Teleport to="body">
     <Transition name="settings-fade">
       <div v-if="visible" class="settings-overlay" @click.self="close">
-        <div class="settings-dialog" role="dialog" aria-modal="true">
+        <div
+          ref="dialogRef"
+          class="settings-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="settings-dialog-title"
+          tabindex="-1"
+        >
           <!-- Header -->
           <header class="settings-header">
-            <h2>设置</h2>
+            <h2 id="settings-dialog-title">设置</h2>
             <button class="close-btn" @click="close" aria-label="关闭">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
                 <line x1="18" y1="6" x2="6" y2="18"/>
@@ -42,9 +49,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, markRaw, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, markRaw, onBeforeUnmount, nextTick } from 'vue'
 import type { Component } from 'vue'
 import type { SettingCategory } from '@/stores/settings'
+import { FOCUSABLE_SELECTOR, nextFocusIndex } from '@/utils/focus-trap'
 
 // 面板组件
 import ModelsPanel from '@/components/settings/panels/ModelsPanel.vue'
@@ -62,6 +70,9 @@ import {
 
 const visible = ref(false)
 const activeCategory = ref<SettingCategory>('models')
+const dialogRef = ref<HTMLElement | null>(null)
+/** 打开前的焦点来源：关闭后还回去（顶栏按钮 / 命令面板都可能打开设置） */
+let restoreFocus: HTMLElement | null = null
 
 /**
  * 分类清单的唯一一份。
@@ -99,8 +110,66 @@ function close() {
 // Esc 关闭（bubble 阶段，让内层弹窗优先处理 Esc；
 // 内层若调 e.stopPropagation() 可阻止外层 SettingsDialog 关闭）
 let keyHandler: ((e: KeyboardEvent) => void) | null = null
+let tabHandler: ((e: KeyboardEvent) => void) | null = null
+
+const MODAL_SELECTOR =
+  '[role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"]'
+
+function focusablesIn(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+    .filter(el => !el.hasAttribute('disabled') && el.getClientRects().length > 0)
+}
+
+/** 同时开着多个模态时，Tab 只该在最上层那个里循环。
+ *  设置内的编辑框/确认框都挂在设置之后或内部，DOM 顺序取最后一个。 */
+function topmostModal(): HTMLElement | null {
+  const modals = Array.from(document.querySelectorAll<HTMLElement>(MODAL_SELECTOR))
+    .filter(el => el.getClientRects().length > 0)
+  return modals[modals.length - 1] || null
+}
+
+/** 焦点在容器上（刚打开）或已漏到模态外时，Tab 先送进最上层模态；
+ *  首/尾端的循环交给 nextFocusIndex，中间移动仍由浏览器处理。 */
+function onTabKeydown(e: KeyboardEvent) {
+  if (e.key !== 'Tab') return
+  const modal = topmostModal()
+  if (!modal) return
+  const items = focusablesIn(modal)
+  if (!items.length) {
+    e.preventDefault()
+    modal.focus()
+    return
+  }
+  const current = items.indexOf(document.activeElement as HTMLElement)
+  if (current === -1) {
+    e.preventDefault()
+    items[e.shiftKey ? items.length - 1 : 0].focus()
+    return
+  }
+  const dir = e.shiftKey ? -1 : 1
+  const next = nextFocusIndex(items.length, current, dir)
+  if (next === current + dir) return
+  e.preventDefault()
+  items[next].focus()
+}
+
+/** 打开期间背景整块 inert：Tab 与读屏都到不了背后的标题条和主区。
+ *  设置层 Teleport 到 body，不在 .app 里，不受影响。 */
+function setAppInert(on: boolean) {
+  const app = document.querySelector<HTMLElement>('.app')
+  if (!app) return
+  if (on) {
+    app.setAttribute('inert', '')
+    app.setAttribute('aria-hidden', 'true')
+  } else {
+    app.removeAttribute('inert')
+    app.removeAttribute('aria-hidden')
+  }
+}
+
 watch(visible, (v) => {
   if (v) {
+    restoreFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
     keyHandler = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       // 内层弹窗（如 ModelsPanel 的编辑对话框）先吃掉这次 Esc：它在 window 的**捕获**
@@ -111,10 +180,26 @@ watch(visible, (v) => {
       e.preventDefault()
       close()
     }
+    tabHandler = onTabKeydown
     window.addEventListener('keydown', keyHandler)
-  } else if (keyHandler) {
-    window.removeEventListener('keydown', keyHandler)
-    keyHandler = null
+    window.addEventListener('keydown', tabHandler, true)
+    void nextTick(() => {
+      if (!visible.value) return
+      dialogRef.value?.focus()
+      setAppInert(true)
+    })
+  } else {
+    if (keyHandler) {
+      window.removeEventListener('keydown', keyHandler)
+      keyHandler = null
+    }
+    if (tabHandler) {
+      window.removeEventListener('keydown', tabHandler, true)
+      tabHandler = null
+    }
+    setAppInert(false)
+    restoreFocus?.focus()
+    restoreFocus = null
   }
 })
 
@@ -122,6 +207,12 @@ onBeforeUnmount(() => {
   if (keyHandler) {
     window.removeEventListener('keydown', keyHandler)
   }
+  if (tabHandler) {
+    window.removeEventListener('keydown', tabHandler, true)
+  }
+  setAppInert(false)
+  restoreFocus?.focus()
+  restoreFocus = null
 })
 
 defineExpose({ open, close })
@@ -140,8 +231,7 @@ defineExpose({ open, close })
 }
 
 .settings-dialog {
-  /* 自适应尺寸：随窗口缩放，范围 960~1280px 宽，640~860px 高 */
-  width: clamp(960px, 90vw, 1280px);
+  /* 自适应尺寸：随窗口缩放，范围 960~1280px 宽，640~860px 高 */  width: clamp(960px, 90vw, 1280px);
   height: clamp(640px, 88vh, 860px);
   max-width: 96vw;
   max-height: 94vh;
@@ -160,6 +250,11 @@ defineExpose({ open, close })
   color: var(--text-primary);
   font-family: var(--font-sans);
   -webkit-app-region: drag;
+}
+
+/* 容器只为接住初始焦点（tabindex=-1），不是可操作控件，不画焦点框 */
+.settings-dialog:focus {
+  outline: none;
 }
 
 .settings-header {

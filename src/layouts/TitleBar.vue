@@ -10,12 +10,12 @@
     </div>
     <div class="titlebar-drag" @dblclick="toggleMaximize"></div>
     <!-- 功能按钮：按语义分组（常用工具 / 会话与网络 / 追溯），组间分隔线。
-         常用工具组（AI + Docker / GitHub / SFTP）紧贴左侧品牌区——这四枚是最高频入口；
-         会话与网络组（监控 / 定时 / 远程 / 隧道）随后，审计与设置靠近窗口控制。
+         常用工具组（AI + 终端 / Docker / GitHub / SFTP）紧贴左侧品牌区——这四枚是最高频入口；
+         会话与网络组（监控 / 定时 / 隧道）随后，审计与设置靠近窗口控制。
          ≥1024px 时按钮常显 2 字标签（可发现性优先），以下收纳为纯图标；
          title 里的快捷键提示来自 useGlobalShortcuts.PAGE_SHORTCUTS，单一来源。 -->
     <div class="titlebar-actions" @dblclick.stop>
-      <!-- 常用工具：AI 首页 + Docker / GitHub / SFTP -->
+      <!-- 常用工具：AI 首页 / Docker / GitHub / SFTP / 终端（含远程管理） -->
       <button class="titlebar-action-btn" :class="{ active: activePage === 'ai' }" :title="aiTitle" aria-label="AI 首页" @click="emit('action-ai')">
         <span class="ai-text">AI</span>
         <!-- AI 入口即首页任务台：徽章与首页状态点同源（useAgentPresence），
@@ -25,7 +25,7 @@
         <span v-else-if="presence === 'unread'" class="ai-badge unread" aria-hidden="true"></span>
       </button>
       <button class="titlebar-action-btn" :class="{ active: activePage === 'docker' }" :title="'Docker 管理' + pageHint('docker')" aria-label="Docker 管理" @click="emit('action-docker')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M6 9.5h3v3H6zM11 9.5h3v3h-3zM11 6h3v3h-3z"/><path d="M3.5 12.5h13c1.6 0 3-.7 3.8-2 .7 2.3-.4 5-3.2 5H7a3.5 3.5 0 0 1-3.5-3z"/><path d="M3.5 12.5 2 10"/></svg>
+        <IconDocker :width="14" :height="14" />
         <span class="tb-label">Docker</span>
       </button>
       <button class="titlebar-action-btn" :class="{ active: activePage === 'github' }" :title="'GitHub 加速' + pageHint('github') + ghHealthTitle" aria-label="GitHub 加速" @click="emit('action-github')">
@@ -38,7 +38,14 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
         <span class="tb-label">SFTP</span>
       </button>
-      <!-- 会话与网络：监控 / 定时 / 远程终端 / 隧道 -->
+      <!-- 终端（含远程管理）：工作区本体。零会话时落到远程管理页（终端的默认页），
+           有会话则回到活动终端。合并后沿用原远程管理的显示器图标；远程管理页
+           盖上来时同样点亮（页签在标签条内）。 -->
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'terminal' || activePage === 'remote-mgr' }" title="终端（含远程管理）" aria-label="终端（含远程管理）" @click="emit('action-terminal')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg>
+        <span class="tb-label">终端</span>
+      </button>
+      <!-- 会话与网络：监控 / 定时 / 隧道 -->
       <span class="titlebar-sep" aria-hidden="true"></span>
       <button class="titlebar-action-btn" :class="{ active: activePage === 'dashboard' }" :title="'监控仪表盘' + pageHint('dashboard')" aria-label="监控仪表盘" @click="emit('action-dashboard')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
@@ -48,10 +55,6 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 16 14"/></svg>
         <span class="tb-label">定时</span>
       </button>
-      <button class="titlebar-action-btn" :class="{ active: activePage === 'remote-mgr' }" :title="'远程终端' + pageHint('remote-mgr')" aria-label="远程终端" @click="emit('action-remote')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg>
-        <span class="tb-label">远程</span>
-      </button>
       <button class="titlebar-action-btn" :class="{ active: activePage === 'tunnels' }" :title="'隧道' + pageHint('tunnels')" aria-label="SSH 隧道" @click="emit('action-tunnels')">
         <!-- 隧道图标：拱形洞口 + 地面 + 通道中线，与 TunnelView 页头同一枚 -->
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M4 20v-7a8 8 0 0 1 16 0v7"/><path d="M12 20v-7"/><path d="M2 20h20"/></svg>
@@ -59,9 +62,10 @@
       </button>
       <!-- 追溯类 -->
       <span class="titlebar-sep" aria-hidden="true"></span>
-      <button class="titlebar-action-btn" :class="{ active: activePage === 'audit' }" :title="'运维审计' + pageHint('audit')" aria-label="运维审计" @click="emit('action-audit')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M9 12l2 2 4-4"/><path d="M20 12a8 8 0 1 1-2.34-5.66"/></svg>
-        <span class="tb-label">审计</span>
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'audit' }" :title="'运维轨迹' + pageHint('audit')" aria-label="运维轨迹" @click="emit('action-audit')">
+        <!-- 路线图形：起止节点 + 折线路径，呼应「轨迹」语义 -->
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><circle cx="4.5" cy="18.5" r="2"/><circle cx="19.5" cy="5.5" r="2"/><path d="M6.5 18.5h3a4 4 0 0 0 4-4v-5a4 4 0 0 1 4-4"/></svg>
+        <span class="tb-label">轨迹</span>
       </button>
       <span class="titlebar-sep" aria-hidden="true"></span>
       <button class="titlebar-action-btn" title="设置 (Ctrl+,)" aria-label="设置" @click="emit('action-settings')">
@@ -89,6 +93,7 @@ import { useAgentPresence } from '@/composables/useAgentPresence'
 import { useGithubAccelStore } from '@/stores/github-accel'
 import { pageShortcutHint as pageHint } from '@/composables/useGlobalShortcuts'
 import type { TitlebarPage } from '@/composables/useSshNavigation'
+import IconDocker from '@/components/icons/IconDocker.vue'
 
 const api = window.electronAPI
 
@@ -123,8 +128,8 @@ defineProps<{
 
 const emit = defineEmits<{
   'action-ai': []
+  'action-terminal': []
   'action-schedules': []
-  'action-remote': []
   'action-audit': []
   'action-sftp': []
   'action-dashboard': []
@@ -316,9 +321,9 @@ async function close() { await api?.windowClose() }
 }
 
 /* ── 宽度收纳（三级）──
-   ≥1024px：图标 + 2 字标签（估算：10 枚按钮约 640px + 品牌 + 窗控 ≈ 900px）；
+   ≥1024px：图标 + 2 字标签（估算：11 枚按钮约 710px + 品牌 + 窗控 ≈ 990px）；
    <1024px：标签收纳，回到纯图标（36px/枚），全部入口保留；
-   <760px：进一步收紧按钮与品牌区，保证 10+3 枚按钮全可点。 */
+   <760px：进一步收紧按钮与品牌区，保证 11+3 枚按钮全可点。 */
 @media (max-width: 1024px) {
   .tb-label { display: none; }
   .titlebar-action-btn { min-width: 36px; padding: 0; gap: 0; }

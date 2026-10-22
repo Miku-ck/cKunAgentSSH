@@ -234,7 +234,7 @@ const imgText = computed(() => {
 
 <style scoped>
 .imgx { width: min(420px, 100vw - 48px) }
-.imgx-hd { width: 14px; height: 14px; flex-shrink: 0; color: var(--accent-primary) }
+.imgx-hd { width: 14px; height: 14px; flex-shrink: 0; color: var(--accent-text) }
 .imgx-body { display: flex; flex-direction: column; gap: 9px; padding: 14px 18px; overflow-y: auto }
 
 .imgx-img {
@@ -243,7 +243,7 @@ const imgText = computed(() => {
   background: var(--bg-input); border: 1px solid var(--border-subtle);
 }
 .imgx-ref { font-size: 12px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
-.imgx-tag { flex-shrink: 0; font-size: 12px; color: var(--accent-primary) }
+.imgx-tag { flex-shrink: 0; font-size: 12px; color: var(--accent-text) }
 .imgx-size { margin-left: auto; flex-shrink: 0; font-size: 11px; color: var(--text-tertiary) }
 
 .imgx-field { display: flex; align-items: center; gap: 8px }
@@ -267,7 +267,7 @@ const imgText = computed(() => {
   transition: background var(--transition-fast), color var(--transition-fast);
 }
 .imgx-fmt button:hover:not(:disabled):not(.on) { color: var(--text-primary) }
-.imgx-fmt button.on { background: color-mix(in srgb, var(--accent-primary) 12%, transparent); color: var(--accent-primary) }
+.imgx-fmt button.on { background: color-mix(in srgb, var(--accent-primary) 12%, transparent); color: var(--accent-text) }
 .imgx-fmt button:disabled { opacity: .45; cursor: default }
 
 /* 完整路径一行小字：不占面板高度，又让用户随时能核对最终落盘位置 */

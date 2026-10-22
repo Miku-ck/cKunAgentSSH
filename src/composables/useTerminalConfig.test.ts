@@ -95,19 +95,20 @@ describe('终端背景（hexToRgba / resolveTerminalTheme / 动态生效）', ()
     lsMap.clear()
   })
 
-  it('hexToRgba：正常转换、透明度越界夹紧、非法 hex 回落 transparent', () => {
+  it('hexToRgba：正常转换、透明度越界夹紧、非法 hex 回落透明', () => {
     expect(hexToRgba('#0d1117', 50)).toBe('rgba(13, 17, 23, 0.5)')
     expect(hexToRgba('#0d1117', 100)).toBe('rgba(13, 17, 23, 1)')
     // 闸门在 store 层，渲染层再夹一道防御：越界不变成负 alpha 也不报错
     expect(hexToRgba('#0d1117', 200)).toBe('rgba(13, 17, 23, 1)')
-    expect(hexToRgba('red', 50)).toBe('transparent')
-    expect(hexToRgba('#fff', 50)).toBe('transparent')  // 三位缩写不支持
+    expect(hexToRgba('red', 50)).toBe('rgba(0, 0, 0, 0)')
+    expect(hexToRgba('#fff', 50)).toBe('rgba(0, 0, 0, 0)')  // 三位缩写不支持
   })
 
   it('resolveTerminalTheme：auto 背景透明，solid 写 rgba 且保留 ANSI 色字段', () => {
     const settings = useSettingsStore()
-    // 默认 auto：与历史行为一致（背景透明跟随主题底色/全局背景图）
-    expect(resolveTerminalTheme().background).toBe('transparent')
+    // 默认 auto：背景透明跟随主题底色/全局背景图。
+    // xterm 6 不认 transparent 关键字（会回落纯黑），所以透明用 rgba 形式表达。
+    expect(resolveTerminalTheme().background).toBe('rgba(0, 0, 0, 0)')
 
     settings.settings.appearance.terminal.backgroundMode = 'solid'
     settings.settings.appearance.terminal.backgroundColor = '#1b3a26'

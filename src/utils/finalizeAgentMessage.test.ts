@@ -76,4 +76,14 @@ describe('finalizeAgentMessage', () => {
     expect(traceOf(conv).status).toBe('completed')
     expect(conv.messages[1].runId).toBe('run-1')
   })
+
+  it('固化后换掉 temp 前缀的 id：占位语义只在跑的过程中成立', () => {
+    const conv = makeConv()
+    finalizeAgentMessage(conv, makeStore())
+    // `useChatPersistence.loadConversations` 把「assistant + temp-agent- 前缀」判成
+    // 永远等不到回填的占位并在启动时丢弃。固化后的真回复若继续带着这个前缀，
+    // 下一次启动就会被当成占位吞掉 —— 任务台上只剩用户气泡。
+    expect(String(conv.messages[1].id)).not.toMatch(/^temp-agent-/)
+    expect(conv.messages[1].id).not.toBe(conv.messages[0].id)
+  })
 })

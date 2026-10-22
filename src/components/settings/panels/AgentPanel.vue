@@ -367,7 +367,7 @@
         <div class="grp-body">
           <p class="hint">
             每次 Agent 运行的完整轨迹（每步命令、耗时、成本、状态流转）已内联在对话气泡的执行卡中，
-            点卡片上的「轨迹」即可就地回放。全局任务列表页将随「运维审计」后续版本提供。
+            点卡片上的「轨迹」即可就地回放。全局任务列表页将随「运维轨迹」后续版本提供。
           </p>
         </div>
       </section>
@@ -904,7 +904,7 @@ onMounted(async () => {
 <style scoped src="./settings-panel-base.css"></style>
 <style scoped src="./settings-groups.css"></style>
 <style scoped>
-.grp-badge.live { color: var(--accent-primary); }
+.grp-badge.live { color: var(--accent-text); }
 
 .risk-group { margin-bottom: 10px; }
 .risk-label {

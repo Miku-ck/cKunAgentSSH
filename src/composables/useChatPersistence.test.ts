@@ -9,6 +9,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useChatPersistence } from './useChatPersistence'
+import { finalizeAgentMessage } from '@/utils/finalizeAgentMessage'
 
 const KEY = 'ckun-test-chat-conversations'
 
@@ -33,6 +34,24 @@ function boot() {
 
 const msg = (id: string, role: string, content = 'x') => ({ id, role, content })
 
+/** finalizeAgentMessage 只读这几个字段，剩下的按最小桩补齐 */
+function fakeAgentStore(over: Record<string, unknown> = {}) {
+  return {
+    content: '你好！',
+    reasoning: '',
+    lastRunId: 'run-1',
+    costInfo: null,
+    warnings: [] as string[],
+    errorMessage: '',
+    aborted: false,
+    snapshot: () => ({
+      status: 'completed', currentState: 'completed', iterations: 1, duration: 2,
+      toolCalls: [], reasoning: '', lastRunId: 'run-1',
+    }),
+    ...over,
+  } as never
+}
+
 beforeEach(() => {
   setActivePinia(createPinia())
   vi.unstubAllGlobals()
@@ -44,14 +63,15 @@ beforeEach(() => {
  * 消息发出后才由懒建路径产生，否则每点一次「新建」就多一条永远空着的记录。
  */
 describe('beginNewTask 的空白任务语义', () => {
-  it('有恢复会话时把当前指针置空，会话列表不动', () => {
+  it('从某条会话回到空白任务：只挪指针，会话列表不动', () => {
     stubStorage({
       [KEY]: JSON.stringify([
         { id: 'c1', title: 'A', updated_at: 1, messages: [msg('u1', 'user')] },
         { id: 'c2', title: 'B', updated_at: 2, messages: [msg('u2', 'user')] },
       ]),
     })
-    const { currentConvId, conversations, beginNewTask } = boot()
+    const { currentConvId, conversations, beginNewTask, switchConversation } = boot()
+    switchConversation('c1')
     expect(currentConvId.value).toBe('c1')
 
     beginNewTask()
@@ -78,6 +98,27 @@ describe('beginNewTask 的空白任务语义', () => {
 
     expect(currentConvId.value).toBeNull()
     expect(conversations.value).toEqual([])
+  })
+})
+
+/**
+ * 启动落点（2026-10-21 裁决，覆盖 spec §5.1 原来「恢复第一条」的写法）：
+ * 打开应用先给一张空白任务，历史留在抽屉里由用户自己选 —— 默认把最近一条
+ * 摊开，等于把半截对话（甚至被读侧过滤吞过回复的旧会话）当成默认上下文。
+ */
+describe('启动落点', () => {
+  it('有历史也不自动打开某条会话：当前指针为空，列表原样保留', () => {
+    stubStorage({
+      [KEY]: JSON.stringify([
+        { id: 'c1', title: 'A', updated_at: 1, messages: [msg('u1', 'user')] },
+        { id: 'c2', title: 'B', updated_at: 2, messages: [msg('u2', 'user')] },
+      ]),
+    })
+    const { currentConvId, conversations, messages } = boot()
+
+    expect(currentConvId.value).toBeNull()
+    expect(messages.value).toEqual([])
+    expect(conversations.value.map((c: any) => c.id)).toEqual(['c1', 'c2'])
   })
 })
 
@@ -121,5 +162,30 @@ describe('loadConversations 的占位清扫', () => {
     stubStorage({ [KEY]: JSON.stringify({ not: 'an array' }) })
     const { conversations } = boot()
     expect(conversations.value).toEqual([])
+  })
+})
+
+/**
+ * S9-18 的过滤条件是「assistant + temp-agent- 前缀」，它假设这个前缀只属于
+ * 没回填完的占位。固化函数若不给真回复换 id，重启就会把已完成的一轮回复
+ * 整段吞掉 —— 界面上只剩用户气泡（连续两个「你好」）。
+ */
+describe('固化后的助手回复跨重启', () => {
+  it('run 结束固化过的回复，重载后必须还在', () => {
+    const conv = {
+      id: 'c1', title: 'T', updated_at: 1,
+      messages: [
+        { id: 'u1', role: 'user', content: '你好', created_at: '' },
+        { id: 'temp-agent-p1', role: 'assistant', content: '', created_at: '' },
+      ],
+    }
+    finalizeAgentMessage(conv as never, fakeAgentStore())
+
+    stubStorage({ [KEY]: JSON.stringify([conv]) })
+    const { conversations } = boot()
+    const msgs = conversations.value[0].messages
+
+    expect(msgs.map((m: any) => m.role)).toEqual(['user', 'assistant'])
+    expect(msgs[1].content).toBe('你好！')
   })
 })

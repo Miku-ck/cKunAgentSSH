@@ -737,12 +737,12 @@ async function onFileSaved(): Promise<void> {
 }
 .live-transfer:hover { background: var(--bg-hover); border-color: var(--accent-primary); }
 .live-transfer.active { border-color: var(--accent-primary); }
-.live-transfer .lt-ico { display: flex; color: var(--accent-primary); }
+.live-transfer .lt-ico { display: flex; color: var(--accent-text); }
 .live-transfer .lt-ico svg { width: 13px; height: 13px; }
 .live-transfer .lt-num { font-family: var(--font-mono); font-size: 11px; font-weight: 600; color: var(--text-primary); }
 .live-transfer .lt-sep { width: 1px; height: 12px; background: var(--border-default); }
 .live-transfer .lt-line { font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary); white-space: nowrap; }
-.live-transfer .lt-line b { color: var(--accent-primary); font-weight: 600; }
+.live-transfer .lt-line b { color: var(--accent-text); font-weight: 600; }
 .live-transfer .lt-bar {
   position: absolute; left: 0; bottom: 0; height: 2px;
   background: var(--accent-primary); transition: width var(--transition-fast);

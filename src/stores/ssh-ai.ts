@@ -86,6 +86,14 @@ export function pickTerminalSnapshot(
   return staged ?? liveSnapshot()
 }
 
+/**
+ * 本地会话「一条助手回复都没有」—— 回复被误当占位吞掉的指纹。
+ * 空会话不算：那是从未回填（启动合并进来的后端条目），不是回复丢了。
+ */
+export function missingReplies(messages: readonly { role: string }[]): boolean {
+  return messages.length > 0 && !messages.some((m) => m.role === 'assistant')
+}
+
 export const useSshAiStore = defineStore('ssh-ai', () => {
   // ── 1. 通用对话能力（单一 ssh 模式，直接组合 useChatPersistence） ──
 
@@ -259,31 +267,51 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     return conv
   }
 
+  /**
+   * 从后端转录回填本地会话（切到空会话 / 修复被吞掉的回复共用）。
+   *
+   * `requireReply`：只有后端真的带回助手回复才覆盖 —— 「run 跑到一半就断了」的
+   * 会话本地也只有用户消息，用后端那份（同样没回复、还可能更短）覆盖，等于把
+   * 本地仅存的现场抹掉。
+   */
+  async function hydrateFromBackend(
+    conv: ModeConversation,
+    opts: { requireReply: boolean },
+  ): Promise<boolean> {
+    if (!conv.backendConvId) return false
+    try {
+      // Message[] → ModeMessage[]：后端行是 snake_case 的 agent_trace，UI 读的是
+      // camelCase 的 agentTrace —— 原实现直接断言，重载后的历史消息既没有执行过程
+      // 卡片也没有轨迹回放入口（数据在库里，只是没接到渲染层）
+      const rows = (await api.getMessages(conv.backendConvId)) as unknown as Array<
+        ModeMessage & { agent_trace?: ModeMessage['agentTrace'] }
+      >
+      if (opts.requireReply && !rows.some((r) => r.role === 'assistant')) return false
+      conv.messages = rows.map(({ agent_trace, ...rest }) =>
+        agent_trace ? { ...rest, agentTrace: agent_trace } : rest,
+      )
+      persistence.save()
+      notifyConversationsChanged()
+      return true
+    } catch (e) {
+      console.warn(`[ssh] 拉取会话消息失败（保留本地消息）:`, e)
+      return false
+    }
+  }
+
   async function switchConversation(id: string) {
     persistence.switchConversation(id)
     _clearStagedInput()
     // 工作流随会话切换重新加载：工件按会话落盘，界面必须与之一致
     void loadWorkflow()
     // P2 修复：启动合并进来的后端会话本地无消息缓存（messages:[]），
-    // 切到时按需从后端拉取一次并固化到本地，避免"选中了却是空对话"
+    // 切到时按需从后端拉取一次并固化到本地，避免"选中了却是空对话"。
+    // 同一入口也接「回复被吞」的旧账：本地有消息却一条助手回复都没有时回填，
+    // 但要求后端确实带回回复（S9-18 之前固化不换 id，回复全被当占位丢了）。
     const conv = persistence.currentConversation.value
-    if (conv && conv.messages.length === 0 && conv.backendConvId) {
-      try {
-        // Message[] → ModeMessage[]：后端行是 snake_case 的 agent_trace，UI 读的是
-        // camelCase 的 agentTrace —— 原实现直接断言，重载后的历史消息既没有执行过程
-        // 卡片也没有轨迹回放入口（数据在库里，只是没接到渲染层）
-        const rows = (await api.getMessages(conv.backendConvId)) as unknown as Array<
-          ModeMessage & { agent_trace?: ModeMessage['agentTrace'] }
-        >
-        conv.messages = rows.map(({ agent_trace, ...rest }) =>
-          agent_trace ? { ...rest, agentTrace: agent_trace } : rest,
-        )
-        persistence.save()
-        notifyConversationsChanged()
-      } catch (e) {
-        console.warn(`[ssh] 拉取会话消息失败（保留空列表）:`, e)
-      }
-    }
+    if (!conv) return
+    if (conv.messages.length === 0) await hydrateFromBackend(conv, { requireReply: false })
+    else if (missingReplies(conv.messages)) await hydrateFromBackend(conv, { requireReply: true })
   }
 
   async function deleteConversation(id: string) {

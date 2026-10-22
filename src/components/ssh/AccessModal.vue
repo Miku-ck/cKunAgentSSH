@@ -149,7 +149,7 @@ async function save(): Promise<void> {
   margin-bottom: -1px;
   font-family: inherit;
 }
-.dlg-tab.on { color: var(--accent-primary); border-bottom-color: var(--accent-primary); font-weight: 600; }
+.dlg-tab.on { color: var(--accent-text); border-bottom-color: var(--accent-primary); font-weight: 600; }
 .dlg-body { padding: 20px 18px 4px; }
 .frow { display: grid; grid-template-columns: 104px 1fr; align-items: center; gap: 14px; margin-bottom: 16px; }
 .frow > label { text-align: right; font-size: 13px; color: var(--text-secondary); }
@@ -175,7 +175,7 @@ async function save(): Promise<void> {
   align-items: center;
   gap: 6px;
   font-size: 13px;
-  color: var(--accent-primary);
+  color: var(--accent-text);
   cursor: pointer;
   border: none;
   background: none;

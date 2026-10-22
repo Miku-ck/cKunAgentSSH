@@ -97,6 +97,35 @@ describe('useHomeTarget', () => {
     expect(ssh.activeSessionId).toBe('s1')
   })
 
+  it('远程目标给出地址段，本地目标不给', () => {
+    const { ssh, t } = mount()
+    ssh.sessions.push({ id: 's1', name: 'web-03', type: 'remote', shell: 'root@10.20.1.7', connectionId: 'c1' })
+    ssh.activeSessionId = 's1'
+    expect(t.targetIp.value).toBe('10.20.1.7')
+    ssh.sessions.push({ id: 's2', name: 'pwsh', type: 'local', shell: 'PowerShell' })
+    ssh.activeSessionId = 's2'
+    // 本地 shell 没有"落到哪台机器"这回事，印一枚地址就是谎
+    expect(t.targetIp.value).toBe('')
+  })
+
+  it('地址拆不出来时宁可不显示，不把会话名冒充 IP', () => {
+    const { ssh, t } = mount()
+    ssh.sessions.push({ id: 's1', name: 'web-03', type: 'remote', shell: '', connectionId: 'c1' })
+    ssh.activeSessionId = 's1'
+    expect(t.targetIp.value).toBe('')
+  })
+
+  it('悬停带出连接名，认得的是名字不是地址', () => {
+    const { ssh, t } = mount()
+    ssh.sessions.push({ id: 's1', name: 'web-03', type: 'remote', shell: 'root@10.20.1.7', connectionId: 'c1' })
+    ssh.connections.push({ id: 'c1', name: '电商-web-03', host: '10.20.1.7', username: 'root' } as never)
+    ssh.activeSessionId = 's1'
+    expect(t.targetHint.value).toBe('电商-web-03 · root@10.20.1.7')
+    // 连接记录被删掉：退回身份串，不留空白
+    ssh.connections.length = 0
+    expect(t.targetHint.value).toBe('root@10.20.1.7')
+  })
+
   it('两台以上远程会话才谈「全部 N 台」', () => {
     const { ssh, t } = mount()
     ssh.sessions.push({ id: 's1', name: 'web-03', type: 'remote', shell: 'root@10.20.1.7', connectionId: 'c1' })

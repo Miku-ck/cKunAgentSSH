@@ -107,12 +107,17 @@
 
         <SettingRow label="背景图片" desc="选择本地图片作为背景">
           <div class="bg-control">
-            <button class="bg-btn" @click="selectBackgroundImage">
+            <button
+              class="bg-btn"
+              :disabled="!settings.appearance.backgroundEnabled"
+              @click="selectBackgroundImage"
+            >
               {{ settings.appearance.backgroundImage ? '更换图片' : '选择图片' }}
             </button>
             <button
               v-if="settings.appearance.backgroundImage"
               class="bg-btn danger"
+              :disabled="!settings.appearance.backgroundEnabled"
               @click="clearBackgroundImage"
             >
               清除
@@ -125,11 +130,17 @@
         </div>
 
         <SettingRow label="背景透明度" desc="图片不透明度（0% = 完全隐藏）">
-          <SettingSlider v-model="settings.appearance.backgroundOpacity" />
+          <SettingSlider
+            v-model="settings.appearance.backgroundOpacity"
+            :disabled="!settings.appearance.backgroundEnabled"
+          />
         </SettingRow>
 
         <SettingRow label="暗色遮罩" desc="保证文字和代码可读性">
-          <SettingSlider v-model="settings.appearance.backgroundOverlay" />
+          <SettingSlider
+            v-model="settings.appearance.backgroundOverlay"
+            :disabled="!settings.appearance.backgroundEnabled"
+          />
         </SettingRow>
       </div>
 
@@ -507,6 +518,15 @@ const terminalBgModeLabels: Record<TerminalBgMode, string> = {
 .bg-btn.danger:hover {
   border-color: var(--status-error-text);
   background: color-mix(in srgb, var(--status-error-text) 10%, transparent);
+}
+
+/* 总开关关闭时，图片相关控件一并失效（含悬停态，避免看起来还能点） */
+.bg-btn:disabled,
+.bg-btn:disabled:hover {
+  opacity: 0.45;
+  cursor: default;
+  border-color: var(--border-input);
+  background: var(--bg-input);
 }
 
 .bg-preview-row {

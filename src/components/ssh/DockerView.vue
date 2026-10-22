@@ -20,8 +20,11 @@
       </div>
     </div>
 
-    <!-- 无远程会话：Docker 依附远程主机，就地一句话引导（连接动作头部一直有） -->
-    <div v-if="!remoteSessions.length" class="empty">尚未连接远程主机</div>
+    <!-- 无远程会话：Docker 依附远程主机，空态画与顶栏同一枚鲸鱼（连接动作头部一直有） -->
+    <div v-if="!remoteSessions.length" class="empty">
+      <IconDocker :width="36" :height="36" :stroke-width="1.5" />
+      <span>尚未连接远程主机</span>
+    </div>
 
     <!-- 有目标主机：工具条 + 正文 -->
     <template v-else>
@@ -503,6 +506,7 @@ import { toFriendlyMessage } from '@/api/client'
 import { formatBytes } from '@/utils/format'
 import DockerContainerDetail from './DockerContainerDetail.vue'
 import DockerImageTransferModal from './DockerImageTransferModal.vue'
+import IconDocker from '@/components/icons/IconDocker.vue'
 import { connNote, useSSHStore, type SSHConnection } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
@@ -1562,7 +1566,7 @@ onUnmounted(() => {
   transition: background var(--transition-fast), color var(--transition-fast);
 }
 .seg-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
-.seg-btn.on { background: var(--bg-elevated); color: var(--accent-primary); }
+.seg-btn.on { background: var(--bg-elevated); color: var(--accent-text); }
 .search {
   display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 10px; width: 210px;
   background: var(--bg-input); border: 1px solid var(--border-input); border-radius: var(--radius-md); color: var(--text-tertiary);
@@ -1638,7 +1642,7 @@ onUnmounted(() => {
 .icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 .icon-btn.start:hover { color: var(--status-success-text); }
 .icon-btn.stop:hover { color: var(--status-warn-text); }
-.icon-btn.act-save:hover { color: var(--accent-primary); }
+.icon-btn.act-save:hover { color: var(--accent-text); }
 .icon-btn:disabled { opacity: .4; cursor: default; }
 .icon-btn:disabled:hover { background: transparent; color: var(--text-secondary); }
 .icon-btn.start:disabled:hover { color: var(--text-secondary); }
@@ -1685,7 +1689,7 @@ onUnmounted(() => {
   color: var(--text-tertiary); font-size: 12px;
 }
 /* 行内操作图标 hover 语义色：全部走随主题 token（启停=success/warn，删除=error，exec/restart=accent） */
-.c-acts .act-exec:hover { color: var(--accent-primary); }
+.c-acts .act-exec:hover { color: var(--accent-text); }
 .c-acts .act-restart:hover { color: var(--accent-cyan); }
 .c-acts .act-del:hover { color: var(--status-error-text); }
 
@@ -1707,8 +1711,8 @@ onUnmounted(() => {
 
 /* 空态 */
 .empty {
-  flex: 1; display: flex; align-items: center; justify-content: center;
-  color: var(--text-tertiary); font-size: 13px;
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; color: var(--text-tertiary); font-size: 13px;
 }
 </style>
 

@@ -57,7 +57,7 @@
    强调色就只挂在这一档：基础 .btn 一律不吃强调色，面板想改按钮外观只需换变体，
    不需要在自己作用域里再抄一份 color/border-color。 */
 .btn-primary {
-  color: var(--accent-primary);
+  color: var(--accent-text);
   border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent);
 }
 .btn-primary:hover:not(:disabled) {

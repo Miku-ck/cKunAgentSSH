@@ -37,6 +37,7 @@ vi.mock('@/api/client', () => ({
   api: {
     listConversations: vi.fn(async () => []),
     getDefaultModel: vi.fn(async () => undefined),
+    getMessages: vi.fn(async () => []),
     uploadChatFile: (...args: unknown[]) => uploadChatFile(...(args as [string, File])),
   },
   // 契约是「无工件返回空字符串字段，不是 null / 404」（client.ts:396），桩照此写
@@ -45,8 +46,9 @@ vi.mock('@/api/client', () => ({
   streamAgentRun: vi.fn(() => () => {}),
 }))
 
-const { useSshAiStore, pickTerminalSnapshot, ATTACHMENT_CHAR_LIMIT } = await import('@/stores/ssh-ai')
+const { useSshAiStore, pickTerminalSnapshot, missingReplies, ATTACHMENT_CHAR_LIMIT } = await import('@/stores/ssh-ai')
 const { useAgentStore } = await import('@/stores/agent')
+const { api } = await import('@/api/client')
 
 describe('ssh-ai 审批档', () => {
   beforeEach(() => {
@@ -498,5 +500,66 @@ describe('ssh-ai homeVisible 与未读', () => {
     await nextTick()
 
     expect(store.unreadReply).toBe(false)
+  })
+})
+
+/**
+ * S9-18 旧账：固化不换 id 的版本把已完成的回复当成占位，重启时整段丢弃 ——
+ * 本地只剩用户消息（首页连出两个用户气泡）。后端转录是完整的，切到这类
+ * 会话时要按需回填。
+ */
+describe('回复被吞会话的回填', () => {
+  const STORAGE_KEY = 'ckun-ssh-ai-conversations'
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    lsMap.clear()
+    vi.mocked(api.getMessages).mockReset()
+  })
+
+  it('missingReplies 只认「有消息但没回复」，空会话不算', () => {
+    expect(missingReplies([])).toBe(false)
+    expect(missingReplies([{ role: 'user' }])).toBe(true)
+    expect(missingReplies([{ role: 'user' }, { role: 'assistant' }])).toBe(false)
+  })
+
+  it('切到只剩用户气泡的会话：后端带回回复就回填', async () => {
+    lsMap.set(STORAGE_KEY, JSON.stringify([{
+      id: 'c1', title: 'T', updated_at: 1, backendConvId: 'b1',
+      messages: [
+        { id: 'u1', role: 'user', content: '你好' },
+        { id: 'u2', role: 'user', content: '你好' },
+      ],
+    }]))
+    vi.mocked(api.getMessages).mockResolvedValueOnce([
+      { id: 'bu1', role: 'user', content: '你好', created_at: '' },
+      { id: 'ba1', role: 'assistant', content: '回复一', created_at: '', agent_trace: { status: 'completed' } },
+      { id: 'bu2', role: 'user', content: '你好', created_at: '' },
+      { id: 'ba2', role: 'assistant', content: '回复二', created_at: '' },
+    ] as never)
+    const store = useSshAiStore()
+
+    await store.switchConversation('c1')
+
+    const conv = store.conversations.find((c: any) => c.id === 'c1') as any
+    expect(conv.messages.map((m: any) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant'])
+    // 后端是 snake_case 的 agent_trace，UI 读 camelCase 的 agentTrace
+    expect(conv.messages[1].agentTrace).toEqual({ status: 'completed' })
+  })
+
+  it('后端也没有回复（run 跑到一半断了）→ 不动本地那份', async () => {
+    lsMap.set(STORAGE_KEY, JSON.stringify([{
+      id: 'c1', title: 'T', updated_at: 1, backendConvId: 'b1',
+      messages: [{ id: 'u1', role: 'user', content: '你好' }],
+    }]))
+    vi.mocked(api.getMessages).mockResolvedValueOnce([
+      { id: 'bu1', role: 'user', content: '你好', created_at: '' },
+    ] as never)
+    const store = useSshAiStore()
+
+    await store.switchConversation('c1')
+
+    const conv = store.conversations.find((c: any) => c.id === 'c1') as any
+    expect(conv.messages.map((m: any) => m.id)).toEqual(['u1'])
   })
 })

@@ -13,6 +13,9 @@
  *   --bg-slider    滑块轨道
  *   --bg-terminal  终端内容区专用底。终端 ANSI 主题固定为暗色，
  *                  故浅色主题下必须给深底，否则前景色不可读。
+ *   --scrim        浮层遮罩（历史抽屉等半模态）：各主题自持色温。
+ *                  不许借 --bg-terminal —— 那是终端专用深底，浅色/手记
+ *                  主题拿它当遮罩会在纸上压出一层冷灰脏影。
  *
  * 约定：--bg-xxx 与 --bg-xxx-solid 必须同值。
  *       global.css 的 [data-gradient="on"] 会用 -solid 派生半透明版本。
@@ -35,6 +38,7 @@
   --text-secondary: #969696;
   --text-tertiary: #878787;      /* ≥4.5:1（对比最亮的 --bg-elevated #1a1a1e） */
   --bg-terminal: #000000;        /* 终端内容区底（与 bg-base 一致） */
+  --scrim: rgba(0, 0, 0, 0.34);  /* 浮层遮罩：等于旧行为的纯黑 34% */
 
   /* 扩展背景/边框变量 */
   --bg-input: #101013;
@@ -147,6 +151,10 @@
      （内联样式压过本块，主题里写它不生效 —— 同 --accent-primary 一条道理）。 */
   --accent-on: #ffffff;
 
+  /* 强调色当文字时的可读变体：applyAccent / 主题切换后由 accentTextOn 按当前
+     主题底色算 ≥4.5:1 的一档写进内联样式。首帧（JS 尚未跑）退回原色。 */
+  --accent-text: var(--accent-primary);
+
   /* 字体 */
   --font-sans: system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, "Courier New", monospace;
@@ -176,6 +184,7 @@
   --text-tertiary: #626a74;      /* 5.5:1（白卡）/ 5.0:1（纸灰底） */
   /* 终端 ANSI 主题固定暗色：浅色界面下必须给深底，否则前景 #e6edf3 不可读 */
   --bg-terminal: #17181c;
+  --scrim: rgba(16, 24, 40, 0.16); /* 冷墨轻纱：浅色主题靠抽屉投影分层，不靠压暗 */
   --bg-input: #eef0f3;           /* 白卡上的"凹陷"：比卡面暗一档 */
   --bg-input-solid: #eef0f3;
   --bg-slider: #d3d8df;
@@ -258,6 +267,7 @@
   --text-secondary: #a3aec0;
   --text-tertiary: #8e9aac;      /* 6.4:1（对 base）/ 5.5:1（对 elevated） */
   --bg-terminal: #080d16;
+  --scrim: rgba(3, 7, 16, 0.50);
   --bg-input: #111826;
   --bg-input-solid: #111826;
   --bg-slider: #283349;
@@ -344,6 +354,7 @@
   --text-secondary: #a3b5a8;
   --text-tertiary: #8fa294;      /* 6.8:1（对比 --bg-base）/ 5.8:1（对比 --bg-elevated） */
   --bg-terminal: #0a120d;
+  --scrim: rgba(3, 12, 7, 0.50);
   --bg-input: #121e16;
   --bg-input-solid: #121e16;
   --bg-slider: #26372b;
@@ -425,6 +436,7 @@
   --text-secondary: #a1b6b8;
   --text-tertiary: #8ba1a3;      /* 6.7:1（对 base）/ 5.8:1（对 elevated） */
   --bg-terminal: #071113;
+  --scrim: rgba(3, 12, 13, 0.50);
   --bg-input: #0f1e21;
   --bg-input-solid: #0f1e21;
   --bg-slider: #24383c;
@@ -501,6 +513,7 @@
   --text-secondary: #bdb3a2;
   --text-tertiary: #a89d89;      /* 6.8:1（对 base）/ 5.9:1（对 elevated） */
   --bg-terminal: #0f0b05;
+  --scrim: rgba(12, 8, 2, 0.50);
   --bg-input: #1f1910;
   --bg-input-solid: #1f1910;
   --bg-slider: #3a3020;
@@ -577,6 +590,7 @@
   --text-secondary: #c2a9a4;
   --text-tertiary: #ad938e;      /* 6.4:1（对 base）/ 5.5:1（对 elevated） */
   --bg-terminal: #100908;
+  --scrim: rgba(14, 5, 4, 0.50);
   --bg-input: #201514;
   --bg-input-solid: #201514;
   --bg-slider: #3b2a27;
@@ -674,6 +688,7 @@
   --bg-slider: #d3c8b6;
   --border-input: #c9bca6;
   --bg-terminal: #17181c;
+  --scrim: rgba(43, 39, 35, 0.14); /* 暖墨影：纸面上要的是晕开的墨，不是压灰 */
 
   /* 手记：隧道徽标（L/R/D）*/
   --tint-l: #2f5b74;

@@ -359,7 +359,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
 .tc-tab:hover { background: var(--bg-hover); color: var(--text-secondary); }
 .tc-tab.on { color: var(--text-primary); background: var(--bg-hover); border-bottom-color: var(--accent-primary); }
 .tc-tab .n { font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary); }
-.tc-tab.on .n { color: var(--accent-primary); }
+.tc-tab.on .n { color: var(--accent-text); }
 .tc-tab .n.bad { color: var(--accent-red); }
 .tc-tabs-spacer { flex: 1; }
 .tc-search {
@@ -387,7 +387,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
 }
 .th { cursor: pointer; display: flex; align-items: center; gap: 3px; user-select: none; }
 .th:hover { color: var(--text-secondary); }
-.th.sorted { color: var(--accent-primary); }
+.th.sorted { color: var(--accent-text); }
 .th.r { justify-content: flex-end; }
 .th.c { justify-content: center; }
 .th-arrow { width: 10px; height: 10px; }
@@ -423,7 +423,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
   color: var(--text-secondary); border-radius: var(--radius-sm);
   cursor: pointer; font-size: 11px; font-family: inherit;
 }
-.conc-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--accent-primary); border-color: var(--accent-primary); }
+.conc-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--accent-text); border-color: var(--accent-primary); }
 .conc-btn:disabled { opacity: .45; cursor: not-allowed; }
 .conc-val { color: var(--text-primary); min-width: 10px; text-align: center; }
 
