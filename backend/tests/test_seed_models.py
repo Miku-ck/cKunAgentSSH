@@ -1,6 +1,6 @@
 """首启模型种子逻辑测试（seed_models_async / _probe_first_model）
 
-设计契约见 docs/superpowers/specs/2026-09-02-model-seed-env-driven-design.md：
+设计契约（原设计文档已退役，口径即下面这几条）：
 - 未显式设置 VLLM_BASE_URL → 不种子
 - 显式设置 + /models 探测成功 → 种子 data[0].id 为默认模型
 - 另设 VLLM_THINKING_URL → 再种子一条思考模型

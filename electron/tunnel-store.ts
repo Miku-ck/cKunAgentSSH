@@ -1,7 +1,7 @@
 /**
  * Tunnel Store — SSH 隧道规则持久化（tunnels.json，与 ssh-connections.json 同级）
  *
- * 设计要点（spec: docs/superpowers/specs/2026-10-08-ssh-tunnel-design.md）：
+ * 设计要点（历史设计文档已退役，口径以本文件为准）：
  * - 规则独立于 SSHConnectionRecord 持久化，以 connectionId 弱引用连接配置，
  *   连接被删时启动报 config-missing（TunnelManager.start 兜底），零迁移。
  * - 无凭据字段，无需 safeStorage 加密。

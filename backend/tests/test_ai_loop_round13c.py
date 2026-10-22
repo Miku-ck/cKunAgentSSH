@@ -245,21 +245,22 @@ def test_clarification_conclusion_preserved(monkeypatch, conclusion):
     assert row["conclusion"] == conclusion
 
 
-def test_audit_conclusion_四处清单同源():
-    """后端枚举、前端结论下拉、前端请求体类型、契约文档必须同源。
+def test_audit_conclusion_三处清单同源():
+    """后端枚举、前端结论下拉、前端请求体类型必须同源。
 
     前端可筛而后端写不进的项 = 永远为空的筛选，后端能写而前端筛不出的项 = 审计页里
     看不见的记录；而"人工交互通道不加事前阻断"这条设计辩护的前提就是「事后审计可追」
     —— 口径写窄等于把替代防线写薄。实测这份守卫加入时文档就少两个值（answered/skipped）。
 
-    口径载体原在 `docs/security-boundary.md §6`，该文档退役后搬到
-    `docs/contracts/audit-conclusions.md`（取舍见 docs/adr/0004）。
+    口径载体原为 `docs/security-boundary.md §6`，后搬到 `docs/contracts/audit-conclusions.md`；
+    随 docs/ 整体退役，契约文档这一份副本已不存在，口径只收敛到下面三处代码，
+    机器可校验的守卫也只剩这三条等式。
     """
     import re
     from pathlib import Path
 
     written = set(audit.LEGAL_CONCLUSIONS)
-    assert len(written) == 10, f"枚举成员数变了（{sorted(written)}）：先确认四处是否同步"
+    assert len(written) == 10, f"枚举成员数变了（{sorted(written)}）：先确认三处是否同步"
 
     root = Path(audit.__file__).parents[2]
     vue = root / "src" / "views" / "ssh" / "AuditView.vue"
@@ -267,7 +268,7 @@ def test_audit_conclusion_四处清单同源():
                       vue.read_text(encoding="utf-8"), re.S).group(0)
     shown = {v for v in re.findall(r'<option value="([a-z_]+)"', block) if v}
 
-    # 第四份清单：渲染层追加审计的请求体类型（S4-07 的 POST /audit/append）。
+    # 第三份清单：渲染层追加审计的请求体类型（S4-07 的 POST /audit/append）。
     # 后端能接受而这里没写 = 渲染层拿不到类型；这里写了后端不认 = 运行时 422。
     api_ts = root / "src" / "api" / "audit.ts"
     api_src = api_ts.read_text(encoding="utf-8")
@@ -275,14 +276,8 @@ def test_audit_conclusion_四处清单同源():
     assert m_type, "src/api/audit.ts 里找不到 AuditConclusion 联合类型（类型载体被改写）"
     typed = set(re.findall(r"'([a-z_]+)'", m_type.group(1)))
 
-    doc = root / "docs" / "contracts" / "audit-conclusions.md"
-    m = re.search(r"conclusion ∈ \{([^}]*)\}", doc.read_text(encoding="utf-8"))
-    assert m, "契约文档没有 `conclusion ∈ {…}` 这行（口径被改写，守卫该红在这里）"
-    documented = {x.strip() for x in m.group(1).split(",") if x.strip()}
-
     assert shown == written, f"仅下拉有 {shown - written}，仅枚举有 {written - shown}"
     assert typed == written, f"仅前端类型有 {typed - written}，仅枚举有 {written - typed}"
-    assert documented == written, f"仅文档有 {documented - written}，仅枚举有 {written - documented}"
     assert {"answered", "skipped", "released", "revoked"} <= written
 
 

@@ -1,6 +1,6 @@
 """Electron Bridge — Python 后端调用 Electron 主进程能力的客户端
 
-传输层（阶段 2 收尾，见 docs/superpowers/specs/2026-09-14-bridge-ws-channel-design.md）：
+传输层（阶段 2 收尾，历史设计文档已退役，口径以本文件为准）：
 - WS-only：主进程反向连接本进程 /ws/bridge（bridge_relay 持有），命令经 WS 下发
 - HTTP 端口桥已移除（出站拨号不受防火墙入站规则影响，无需兜底）
 - 公开 API（is_available/probe/ping/exec_ssh_command/connect_ssh/disconnect_ssh）不变，

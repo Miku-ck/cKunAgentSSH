@@ -56,7 +56,7 @@ cKunAgentSSH 前端（`src/`）的视觉 / 布局 / 交互 / 组件约定。**�
 枚举 `Theme`（[appearance-tokens.ts](src/utils/appearance-tokens.ts)）：`dark`（默认，移除 `data-theme`）· `light` · `system`（运行时解析 dark/light）· `blue-screen` · `forest` · `mint` · `bee` · `coral` · `atelier`（手记）。
 强调色 `Accent`：`blue/purple/green/orange/white/forest/mint/bee/coral/verm`，hex 表 = `ACCENT_MAP`。
 
-- 2026-10 删除了「玻璃/晶白」（glass / glass-light）两档材质主题：持久化的旧键值由 `asEnum` 闸门回落 `dark`（由 settings.test.ts 钉住），折射层与主题块已从 global.css / variables.css 移除；历史设计文档（docs/superpowers/specs）按约定保留不动。
+- 2026-10 删除了「玻璃/晶白」（glass / glass-light）两档材质主题：持久化的旧键值由 `asEnum` 闸门回落 `dark`（由 settings.test.ts 钉住），折射层与主题块已从 global.css / variables.css 移除；历史设计文档已随 docs/ 退役。
 
 - 应用：根元素 `data-theme="<theme>"`；强调色由 `applyAccent()` 内联写 `--accent-primary/-rgb/--accent-on`。
 - `--accent-on` 由 `contrastOnAccent()` 按 WCAG 相对亮度算（<3:1 换深字）。
@@ -79,7 +79,7 @@ App.vue (flex column, 100vh)
 
 - 首页恒在、不可关闭，不占标签；运行过程长在首页下方（勿做成标签页）。
 - AI 只有一个界面：首页任务台。顶栏「AI」入口与 `Ctrl+Shift+B` 都是回到任务台，
-  不再另有一块右侧面板（2026-10-20 退役，见 `docs/superpowers/specs/2026-09-30-retire-ai-side-panel-design.md`）。
+  不再另有一块右侧面板（2026-10-20 退役）。
 - 设置弹窗：`overlay` `rgba(0,0,0,.6)` + `blur(2px)` `z-index:2000`；`dialog` `clamp(960px,90vw,1280px) × clamp(640px,88vh,860px)`，左导航 200px。确认框：宽 380px，`z-index:3000`。过渡 `opacity .15s` + 内容 `scale(.96~.97)`。
 - 历史记录弹窗：`width: min(560px, 100vw - 48px)`、`max-height: min(640px, 100vh - 96px)`，居中；overlay 读 `--scrim`（随主题染色）+ `blur(2px)`，`z-index:2000`。
 

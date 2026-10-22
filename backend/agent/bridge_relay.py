@@ -5,8 +5,6 @@
     防火墙规则影响）→ hello token 握手 → 后端经该连接下发命令帧 req 并等待
     主进程响应帧 res。旧 HTTP 端口桥保留为兜底通道。
 
-设计文档：docs/superpowers/specs/2026-09-14-bridge-ws-channel-design.md
-
 关键约束：
 - send_request 必须与 /ws/bridge 端点在同一事件循环调用。生产上成立：
   schedule_engine / ops_common 与 WS 端点同进程、同在 uvicorn 循环。

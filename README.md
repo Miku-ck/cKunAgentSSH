@@ -186,11 +186,6 @@ cKunAgentSSH/
 ├── gateway/                           # 自营 TLS 接入网关（hillgw.mjs，零依赖单文件，独立部署）
 ├── runtime/                           # 打包用的嵌入式 Python 运行时（仅 README 入库，发行物由脚本组装）
 ├── scripts/                           # CI / 打包 / 部署脚本
-├── docs/
-│   ├── adr/                           # 架构决策记录（编号递增，含否决过的备选方案）
-│   ├── contracts/                     # 跨语言契约（审计结论载体等）
-│   ├── reviews/                       # 审查战役档案（历史快照，含当时的 anchor 行号，不随代码更新）
-│   └── superpowers/                   # 设计与计划：specs/ 按日期命名，plans/ 为拆分后的工单
 └── package.json
 ```
 

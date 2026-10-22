@@ -120,7 +120,7 @@ def test_persist_helper_has_no_post_process():
     """后处理（标题/记忆/技能）在断连路径**刻意**不跑 —— 半截答案不该喂给记忆库。
 
     这条不是给实现开脱，是把取舍写成一等公民：将来谁要加 submit()，必须连带
-    更新 docs/reviews 里的裁决口径，而不是顺手补上。
+    更新本测试与断连路径的口径，而不是顺手补上。
     """
     src = inspect.getsource(ra.persist_interrupted_run)
     assert "get_post_process_manager" not in src

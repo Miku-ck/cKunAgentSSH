@@ -57,9 +57,9 @@ def _table_absent(exc: BaseException) -> bool:
     )
 
 # 合法结论枚举 —— 单一事实来源。审计页的筛选下拉（src/views/ssh/AuditView.vue 的
-# filters.conclusion）、渲染层追加审计的请求体类型（src/api/audit.ts 的 AuditConclusion）
-# 与 docs/contracts/audit-conclusions.md 的口径清单必须与这里逐字相等，钉在
-# backend/tests/test_ai_loop_round13c.py::test_audit_conclusion_四处清单同源；
+# filters.conclusion）与渲染层追加审计的请求体类型（src/api/audit.ts 的 AuditConclusion）
+# 必须与这里逐字相等，钉在
+# backend/tests/test_ai_loop_round13c.py::test_audit_conclusion_三处清单同源；
 # 增删值改那几处，别只改这里。
 # "released"：once 授权按 run 释放（release-run 兜底端点写入此结论）
 # "answered"/"skipped"：澄清向导的两个终态（routes/agent.py clarification 端点）

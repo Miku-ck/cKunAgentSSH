@@ -1,7 +1,7 @@
 /**
  * TunnelTransport — 隧道数据面的抽象接缝
  *
- * 设计（spec: docs/superpowers/specs/2026-10-08-tls-dataplane-design.md §3.1）：
+ * 设计要点（历史设计文档已退役，帧格式见 shared/gateway-mux.ts）：
  * TunnelManager 原先直接绑 ssh2（forwardOut / forwardIn / 'tcp connection' / unforwardIn），
  * 于是「数据面怎么来」和「转发怎么编排」长在一起。抽这一层后两条数据面并列：
  *   - SshTransport：借用户已有的 SSH 服务器，零部署（electron/transports/ssh-transport.ts）

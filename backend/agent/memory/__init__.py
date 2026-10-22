@@ -1,4 +1,4 @@
-"""v2 记忆子系统包（spec: docs/superpowers/specs/2026-09-22-agent-memory-redesign-design.md）
+"""v2 记忆子系统包（历史设计文档已退役，口径以本包各模块注释为准）
 
 模块：
   mstore      数据访问（memories/jobs/audit/blocks + FTS/vec 侧表同步）

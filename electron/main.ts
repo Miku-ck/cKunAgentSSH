@@ -1277,7 +1277,7 @@ function setupSSHIPC(): void {
   })
 
   // ── SSH 隧道（端口转发）──
-  // 设计见 docs/superpowers/specs/2026-10-08-ssh-tunnel-design.md：
+  // 设计要点（历史设计文档已退役，口径以 tunnel-manager.ts 为准）：
   // 规则持久化走 TunnelStore，运行态走 TunnelManager（独立 ssh2 client，与终端
   // 会话解耦）；凭据经 configProvider 主进程自取，渲染层全程无明文。
   handleTrusted('tunnel:list', async () => {
@@ -1415,7 +1415,7 @@ function setupSSHIPC(): void {
   })
 
   // ── TLS 接入网关（安全接入）──
-  // 设计见 docs/superpowers/specs/2026-10-08-tls-dataplane-design.md：
+  // 设计要点（历史设计文档已退役，帧格式见 shared/gateway-mux.ts）：
   // 一条网关 = 一条共享会话（gateway-manager），隧道规则经 transportFactory 搭车；
   // 口令只在主进程解出，渲染层拿到的 list 里没有该字段。
   handleTrusted('gateway:list', async () => {

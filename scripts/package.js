@@ -70,7 +70,7 @@ if (runtimeReady) {
 } else if (!allowMissingRuntime) {
   // 硬失败而不是 warning：AI 侧要跑后端，后端要一个装了 fastapi/uvicorn 的 Python。
   // 以前这里打一行警告照常出包，于是"能出一个装到别人机器上 AI 全灭的包"，
-  // 而且从产物上看不出任何异常。理由与取舍见 docs/adr/0002。
+  // 而且从产物上看不出任何异常。取舍理由记在 git history 的 ADR-0002。
   console.error(
     '[package] 缺少内嵌 Python 运行时：' + runtimeProbe + ' 不存在。\n' +
       '  发布包必须自带 Python，否则装到目标机上 AI 侧直接不可用。\n' +

@@ -5,8 +5,8 @@
 （解析逻辑：`electron/backend-manager.ts` → `resolvePythonCommand()`）。
 
 **本目录只有 README.md 时，`npm run package` 直接失败退出**（exit 1），不再"打一行警告照常出包"：
-没有内嵌运行时的包装到用户机器上，AI 侧必挂而产物表面看不出异常。理由与取舍见
-`docs/adr/0002-embed-python-runtime-and-hard-gate.md`。确实要出无运行时的包（排障、试流水线）
+没有内嵌运行时的包装到用户机器上，AI 侧必挂而产物表面看不出异常。取舍理由记在 git history 的
+ADR-0002。确实要出无运行时的包（排障、试流水线）
 加 `--allow-missing-runtime`。
 
 CI 的 Windows job 里「Prepare embedded Python runtime」一步会自动准备它，本地打包才需要手动做。

@@ -110,7 +110,7 @@ jobs:
 
       # 发布包必须自带 Python：AI 侧要跑后端，后端要一个装了 fastapi/uvicorn 的解释器，
       # 否则装到用户机器上就是"能开但全灭"。scripts/package.js 在没有 runtime/ 时会
-      # 直接 exit 1（理由与取舍见 docs/adr/0002-embed-python-runtime-and-hard-gate.md），
+      # 直接 exit 1（取舍：宁可不发版，也不发一个 AI 全灭的包），
       # 所以这一步是硬前置，不是优化。
       # 用 astral-sh/python-build-standalone 的 install_only_stripped：自带可重定位的
       # python.exe + Lib/，不需要像 Windows embeddable 那样手改 ._pth 再塞 pip。

@@ -2,7 +2,6 @@
 /**
  * hillgw.mjs — cKunAgentSSH 的 TLS 接入网关（单文件 · 零依赖 · 只用 node 内置模块）
  *
- * 设计：docs/superpowers/specs/2026-10-08-tls-dataplane-design.md §4
  * 定位：交付到内网自己跑的运维侧进程（`node hillgw.mjs --config gw.json` + systemd），
  *      刻意不进 Electron 打包链 —— 客户端已有签名/更新链路，拖上网关只会互相拖累。
  *

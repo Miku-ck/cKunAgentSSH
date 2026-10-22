@@ -10,7 +10,7 @@
  *
  * 钉的是代码形状而不是行为：跑真行为要同时伪造 ssh2 的 SFTPWrapper、fs/promises 的
  * FileHandle 与 renameOverwrite 的 EXDEV 分支，任何一处与生产线形不同源都会假绿
- * （见 docs/reviews 里 _wire_s 那条教训）。所以最后一条是变异自检。
+ * （历史审查档案里 _wire_s 那条教训已随 docs 退役，结论保留在下面断言里）。所以最后一条是变异自检。
  */
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'

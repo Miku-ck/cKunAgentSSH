@@ -1,7 +1,7 @@
 /**
  * Gateway Store — TLS 接入网关记录持久化（gateways.json，与 tunnels.json 同级）
  *
- * 设计（spec: docs/superpowers/specs/2026-10-08-tls-dataplane-design.md §3.2）：
+ * 设计要点（历史设计文档已退役，帧格式见 shared/gateway-mux.ts）：
  * - 骨架照抄 tunnel-store.ts：写队列串行化 / tmp+rename 原子写 / 损坏文件隔离。
  * - 与 tunnel-store 的**唯一区别**是这里有口令：照 ssh-store.ts 的口径走 safeStorage，
  *   加密不可用时宁可不落盘也不写明文（ssh-store:271 同一处理由）。

@@ -4,7 +4,7 @@
  * 为什么在 shared/：electron 主进程与前端分属两个 tsconfig 程序，而 vitest 的
  * include 只扫 src/**，纯逻辑放 electron/ 就测不到（与 ssh-error-core.ts 同一个理由）。
  *
- * 帧格式（spec: docs/superpowers/specs/2026-10-08-tls-dataplane-design.md §1）：
+ * 帧格式：
  *
  *   byte  0      1      2 3 4 5    6 7      8 …
  *        +------+------+----------+------+-----------+

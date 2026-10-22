@@ -18,7 +18,7 @@ directories:
 #                    （现在只剩 node-pty/ssh2 及其传递依赖），渲染端那 10 个包已被
 #                    vite 打进 out/renderer，不需要在 node_modules 里再存一份
 # backend/ 与 runtime/ 走 extraResources（下面），源码目录 src/electron/shared/scripts
-# docs/gateway/designs/测试与构建配置一律不进包。
+# gateway/designs/测试与构建配置一律不进包。
 files:
   - 'out/**'
   - 'package.json'

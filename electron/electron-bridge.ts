@@ -50,8 +50,7 @@ const MAX_TIMEOUT = 300
  * 原阶段 1 为"HTTP 端口桥（30000-30100 入站）+ WS 反向通道"双通道并存；
  * WS 反向通道（主进程出站拨号后端 /ws/bridge）稳定后，HTTP 端口桥按设计移除：
  * 出站长连接不受 Windows 防火墙对 electron.exe 的入站规则影响，
- * "端口假监听 / 防火墙拦截回环入站"这一整类故障随之根除
- * （见 docs/superpowers/specs/2026-09-14-bridge-ws-channel-design.md 阶段 2）。
+ * "端口假监听 / 防火墙拦截回环入站"这一整类故障随之根除。
  *
  * 本类现仅承载两件事：
  * 1. 生成桥接 token（注入后端 env + WS hello 握手共用，单一事实来源）

@@ -1,8 +1,7 @@
 /**
  * Tunnel Manager — 隧道（端口转发）编排
  *
- * 设计（spec: docs/superpowers/specs/2026-10-08-ssh-tunnel-design.md，
- *      数据面抽象见 docs/superpowers/specs/2026-10-08-tls-dataplane-design.md §3.1）：
+ * 设计要点（历史设计文档已退役，口径以本文件与 tunnel-transport.ts 为准）：
  * - 每条隧道持有独立数据面（TunnelTransport：SSH 通道 或 自家 TLS 网关），不进 sessions
  *   池、不走终端的自动重连 —— 终端 tab 关闭/重连生命周期与隧道解耦。
  * - 本文件只管**编排**：本机 listener、SOCKS5 解析、通道记账、状态机。数据面怎么来的
