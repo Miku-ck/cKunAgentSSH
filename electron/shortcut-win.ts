@@ -72,7 +72,7 @@ public static class CKunLnkAumid {
     void GetValue(ref PropertyKey k, out PropVariant v); void GetCaps(out uint c);
     void SetValue(ref PropertyKey k, ref PropVariant v); void Commit();
   }
-  [StructLayout(LayoutKind.Sequential)]
+  [StructLayout(LayoutKind.Sequential, Pack = 4)]
   public struct PropertyKey { public Guid fmtid; public uint pid; }
   [StructLayout(LayoutKind.Explicit)]
   struct PropVariant {
