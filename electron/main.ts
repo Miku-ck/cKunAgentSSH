@@ -30,6 +30,10 @@ import {
 } from './desktop-prefs'
 import { assertSafePath, allowDialogKeyPath, isCopyTargetSelfNested, rejectSymlinkTarget } from './utils/path-guard'
 import { beginCopy, endCopy, requestCopyCancel } from './utils/copy-cancel'
+import { perfMark } from './utils/perf-mark'
+import { ensureShellShortcuts } from './shortcut-win'
+
+perfMark('main module loaded')
 
 let mainWindow: BrowserWindow | null = null
 // 开发态判定：原 `is.dev`（@electron-toolkit/utils）语义就是 `!app.isPackaged`，
@@ -151,8 +155,11 @@ function createWindow(): void {
   tunnelManager?.setWindow(mainWindow)
 
   mainWindow.on('ready-to-show', () => {
+    perfMark('window ready-to-show')
     mainWindow?.show()
   })
+
+  mainWindow.webContents.once('did-finish-load', () => perfMark('renderer did-finish-load'))
 
   // G8：关窗隐藏到托盘。preventDefault 后窗口不销毁，'closed' 不触发，
   // window-all-closed 也就不会误判成"用户退出了"而拆掉后端/PTY。
@@ -1736,6 +1743,7 @@ app.whenReady().then(async () => {
   // 双保险：非主实例（且非权限降级模式）不启动任何服务，quit 与 ready 的时序竞态下仍然安全。
   // 判据必须与上面 mayStart 同源，否则「打印了继续启动却什么都不做」的僵尸分支会回来。
   if (!mayStart) return
+  perfMark('whenReady resolved')
   installCsp()
   setupWindowIPC()
   setupFSIPC()
@@ -1743,10 +1751,16 @@ app.whenReady().then(async () => {
   setupSSHIPC()
   setupSkillsIPC()
   setupSftpIPC()
+  perfMark('ipc setup done')
   // 启动性能优化：initDesktopPrefs 读盘不阻塞首屏；关窗隐藏按默认值（不隐藏）走，
   // prefs 就绪后 shouldHideOnClose / tray 的后续状态由模块内内存更新生效。
   initDesktopPrefs(() => mainWindow).catch(e => console.warn('[main] initDesktopPrefs 失败:', e))
   createWindow()
+  perfMark('createWindow returned')
+
+  // tar 形态没有安装器：首启自建桌面/开始菜单快捷方式（含 AUMID，Toast 归属
+  // 注册依赖开始菜单项）。fire-and-forget，失败仅 warn，绝不占用启动关键路径。
+  ensureShellShortcuts().catch((e) => console.warn('[main] ensureShellShortcuts:', e))
 
   // Start Electron bridge for backend → main process remote execution
   if (sshManager) {
@@ -1788,6 +1802,7 @@ app.whenReady().then(async () => {
       extraEnv.ELECTRON_BRIDGE_TOKEN = bridgeEnv.token
     }
     const port = await backendManager.start(extraEnv)
+    perfMark(`backend start resolved port=${port}`)
 
     // WS 反向通道：主进程出站拨号后端，定时任务命令的唯一链路（阶段 2 已移除 HTTP 端口桥）
     ensureBridgeWsClient(port)
