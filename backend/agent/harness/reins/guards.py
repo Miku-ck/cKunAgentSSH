@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 
 from agent.audit import append_record_async
 
@@ -18,6 +18,9 @@ from ..contracts import (
     TraceEvent,
 )
 from ..safety import classify_command, classify_constructed_command
+
+if TYPE_CHECKING:
+    from .gate import PermissionGate
 from .auto_approve import try_auto_approve
 from .core import (
     _audit_environment,

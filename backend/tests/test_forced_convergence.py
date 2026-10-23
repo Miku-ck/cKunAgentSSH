@@ -12,8 +12,6 @@ remaining 重算 > 0，收敛自然顺延到新最后一轮。
 import asyncio
 from typing import Optional
 
-import pytest
-
 from agent.harness.contracts import (
     AgentConfig,
     LLMOutput,

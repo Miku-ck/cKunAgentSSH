@@ -266,7 +266,8 @@ async def _run_task_clarification(
             steps, 0, len(steps), tool_call_id,
             reason=_TASK_CLARIFICATION_REASON,
         ))
-        answers = await _wait_task_answers(ctx.run_id)
+        # 阻塞等待任务级澄清答案（结果由下方 pop_task_clarification 取回）
+        await _wait_task_answers(ctx.run_id)
     except asyncio.CancelledError:
         # run 被取消：清掉 pending 再上抛，别让孤儿题等 TTL
         pop_task_clarification(ctx.run_id)

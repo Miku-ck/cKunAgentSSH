@@ -91,9 +91,12 @@ pytest-cache-files-*/
 backend/tests/_tmp/
 backend/_tmp/
 
-# 内嵌 Python 运行时内容（体积大，本地准备，勿提交；README 占位保留）
-runtime/*
-!runtime/README.md
+# 内嵌 Python 运行时内容（体积大，本地准备，勿提交）
+runtime/
+
+# pytest / ruff 缓存目录
+.pytest_cache/
+.ruff_cache/
 
 # scripts/package.js 生成的临时构建配置
 .electron-builder.runtime.yml

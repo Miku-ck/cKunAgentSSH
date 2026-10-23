@@ -192,7 +192,7 @@ def test_trivial_level_skips():
 
     async def _fake_resolve(ctx, telemetry=None, max_budget=None):
         return _FakeIntention(monkeypatch_level)
-    driver_mod.resolve_intention = _fake_resolve  # noqa: 覆盖 autouse fixture 的 moderate
+    driver_mod.resolve_intention = _fake_resolve  # 覆盖 autouse fixture 的 moderate
     try:
         ctx, harness, judge, events = _run(["FAIL\n whatever"])
     finally:
@@ -213,7 +213,7 @@ def test_timeout_fail_open():
         config=AgentConfig(max_iterations=3, enable_intention_guide=True,
                            completion_guard_timeout_s=0.05))
     harness = _StubHarness(_GuardStirrups(judge))
-    events = asyncio.run(_drive(harness, ctx))
+    asyncio.run(_drive(harness, ctx))
     assert ctx.state == State.COMPLETED
     assert len(judge.calls) == 1
     assert not _injected_messages(ctx)
@@ -235,7 +235,7 @@ def test_judge_exception_fail_open():
         task="排查生产服务器 502 并恢复服务",
         config=AgentConfig(max_iterations=3, enable_intention_guide=True))
     harness = _StubHarness(_GuardStirrups(judge))
-    events = asyncio.run(_drive(harness, ctx))
+    asyncio.run(_drive(harness, ctx))
     assert ctx.state == State.COMPLETED
     assert len(judge.calls) == 1
     assert not _injected_messages(ctx)
@@ -257,7 +257,6 @@ def test_chunk_callback_restored():
 def test_goal_anchor_exclusive():
     """有 workflow goal 的 run 走 goal 自检锚，guard 不重复裁决"""
     import agent.workflow as wf_mod
-    monkeypatch_target = wf_mod
     orig = wf_mod.goal_self_check_prompt
     wf_mod.goal_self_check_prompt = lambda goal: "请对照目标自检"
     try:

@@ -14,8 +14,11 @@ from __future__ import annotations
 import logging
 import os
 import re
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from urllib.parse import urlsplit
+
+if TYPE_CHECKING:
+    import httpx
 
 logger = logging.getLogger(__name__)
 

@@ -12,7 +12,10 @@ import json
 import logging
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import AsyncGenerator
+from typing import AsyncGenerator, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import openai
 
 import netconfig
 

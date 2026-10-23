@@ -18,7 +18,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Optional, TYPE_CHECKING
 
 from agent.remote_protocol import EXIT_CODE_PREFIX
 # 审查修复：热路径 import 提到模块级——原实现每轮迭代 from...import 跑 4 次
@@ -58,6 +58,9 @@ from .reins.core import (
 )
 from .safety import classify_command
 from .telemetry import TelemetryBus
+
+if TYPE_CHECKING:
+    from .harness import Harness
 
 logger = logging.getLogger(__name__)
 

@@ -1,0 +1,7 @@
+# ruff 配置 — 与既有代码风格对齐的最小约束
+# （后端为渐进式整改：E402 的模块级惰性导入等既有范式暂不强制）
+
+[lint.per-file-ignores]
+# reins/__init__.py 刻意保持与原单文件 reins.py 一致的导入面（再导出给
+# `from agent.harness.reins import X` 使用），未在本文件引用属预期
+"agent/harness/reins/__init__.py" = ["F401"]

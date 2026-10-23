@@ -136,8 +136,8 @@ LOG_DIR = "/home/admin-pl/.trae-cn-server/manager-logs"
     f"rm {LOG_DIR}/1785826628398_429088/Modular/ai-agent_0_1785826666562_stdout.log",
     f"rm -f {LOG_DIR}/stdout.log",
     f"rm -rf {LOG_DIR}/1785826628398_429088",          # 递归删日期子目录（日志轮转）
-    f"rm -rf ~/.trae-cn-server/manager-logs",          # 递归删日志根（~ 形态）
-    f"rm -rf $HOME/.trae-cn-server/manager-logs/*",    # $HOME 形态 + glob
+    "rm -rf ~/.trae-cn-server/manager-logs",           # 递归删日志根（~ 形态）
+    "rm -rf $HOME/.trae-cn-server/manager-logs/*",     # $HOME 形态 + glob
     f"find {LOG_DIR} -name '*.log' -mtime +7 -delete", # find -delete 日常清理
     f"touch {LOG_DIR}/rotate.lock",                    # 截图 touch 场景
     f"mkdir -p {LOG_DIR}/20261022",

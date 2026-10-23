@@ -6,10 +6,13 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from ..contracts import ReinDecision, ReinPoint, RunContext, TraceEvent
 from .clarification import release_clarification_run
+
+if TYPE_CHECKING:
+    from .gate import PermissionGate
 from prompts import SSH_MODE
 
 logger = logging.getLogger(__name__)

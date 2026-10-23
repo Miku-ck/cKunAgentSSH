@@ -134,7 +134,6 @@ def test_concurrent_same_title_saves_keep_one_active(memdb):
     superseded = [x for x in all_rows if x["status"] == "superseded"]
     assert len(superseded) == 7
     # 顶替链无环：被顶替的行的 superseded_by 必须指向最终 active 行之外不至于自指
-    final_id = rows[0]["id"]
     assert all(x["superseded_by"] and x["superseded_by"] != x["id"] for x in superseded)
     assert "磁盘满处理" == rows[0]["title"]
 
