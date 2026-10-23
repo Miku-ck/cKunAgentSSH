@@ -1,6 +1,6 @@
 // 一键打包入口：自动注入 electron-builder 在中国网络/本机环境所需的配置，
 // 再调用 electron-builder，避免每次手动设置环境变量。
-const { spawn } = require('child_process')
+const { spawn, spawnSync } = require('child_process')
 const path = require('path')
 
 const root = path.resolve(__dirname, '..')
@@ -86,7 +86,26 @@ if (runtimeReady) {
   )
 }
 const child = spawn(builder, [...builderConfigArgs, ...builderPassThroughArgs], { stdio: 'inherit', shell: isWin })
-child.on('exit', (code) => process.exit(code === null ? 1 : code))
+const version = require(path.join(root, 'package.json')).version
+child.on('exit', (code) => {
+  if (code !== 0) process.exit(code === null ? 1 : code)
+  // tar-only 出件：解包目录直发。Windows 10+ 自带 tar.exe（bsdtar），
+  // POSIX 用系统 tar；找不到即失败退出——绝不出"没有发布物"的绿色流水线。
+  const tarBin = process.platform === 'win32' ? 'tar.exe' : 'tar'
+  const unpacked = path.join(root, 'dist', process.platform === 'win32' ? 'win-unpacked' : `${process.platform}-unpacked`)
+  const artifact = path.join(root, 'dist', `ckunagentssh-${version}-${process.platform}-x64.tar.gz`)
+  if (!fs.existsSync(unpacked)) {
+    console.error(`[package] 未找到 dir 产物目录：${unpacked}`)
+    process.exit(1)
+  }
+  const r = spawnSync(tarBin, ['-czf', artifact, '-C', unpacked, '.'], { stdio: 'inherit', shell: isWin })
+  if (r.error || r.status !== 0) {
+    console.error('[package] tar 出件失败：', r.error ? r.error.message : `exit=${r.status}`)
+    process.exit(1)
+  }
+  console.log(`[package] tar 产物：${artifact}`)
+  process.exit(0)
+})
 child.on('error', (err) => {
   console.error('无法启动 electron-builder：', err.message)
   process.exit(1)

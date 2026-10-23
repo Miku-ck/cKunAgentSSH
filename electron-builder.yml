@@ -27,7 +27,8 @@ files:
   # 原生模块（node-pty / cpu-features）在打包机上编译留下的中间产物与外部平台预编译：
   # pdb/iobj/ipdb 是 MSVC 调试与增量链接产物，obj/ 与 build/deps/ 是编译中间目录，
   # 运行时一个都不读；非 win32-x64 的 prebuilds 也用不到。实测这些占 161.6 MB
-  # （node-pty 一个包 152 MB，其中 90 MB 是 build/），剔掉后包体近乎减半。
+  # （node-pty 一个包 152 MB，其中 90 MB 是 build/），剔掉后包体近乎减半
+  # （tar 形态下白名单同样决定 tar 体积）。
   # ⚠️ 只出 x64：若将来加 arm64 目标，win32-arm64 那行必须按 arch 分支，不能全排。
   - '!node_modules/**/*.pdb'
   - '!node_modules/**/*.iobj'
@@ -77,16 +78,11 @@ win:
   executableName: cKunAgentSSH
   # resources/icon.png（buildResources）— electron-builder 自动生成多尺寸 .ico
   icon: resources/icon.png
+  # tar-only（2026-10-23 决策）：发布形态为解包目录直发，dir 产物即 win-unpacked/，
+  # 由 scripts/package.js 压成 tar.gz。nsis/portable 已随发布策略收敛移除 ——
+  # 桌面快捷方式与 AUMID 注册改由 electron/shortcut-win.ts 首启自建（见 spec §4）。
   target:
-    - nsis
-    - portable
-portable:
-  artifactName: ${name}-${version}-portable.${ext}
-nsis:
-  artifactName: ${name}-${version}-setup.${ext}
-  shortcutName: ${productName}
-  uninstallDisplayName: ${productName}
-  createDesktopShortcut: always
+    - dir
 mac:
   extendInfo:
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
