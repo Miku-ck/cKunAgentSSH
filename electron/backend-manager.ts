@@ -326,8 +326,9 @@ export class BackendManager {
 
       // 审查R2修复：上面的 findFreePort 是 await 间隙 — 若期间 before-quit→stop()
       // 已执行（当时 process 未 spawn、杀不到任何东西），此处必须放弃启动，
-      // 否则 spawn 照常 → 应用退出后遗留孤儿 python。检查放在 spawn 之前的
-      // 最后一个 await 恢复点；start() 入口不重置该标志（自动重启同须放弃）。
+      // 否则 spawn 照常 → 应用退出后遗留孤儿 python。A1 后孤儿枚举汇合已后移
+      // 到 spawn 之后，本检查仍是 spawn 前的 appQuitting 拦截点；start() 入口
+      // 不重置该标志（自动重启同须放弃）。
       if (this.appQuitting) {
         this.killCurrentProcess() // 防御性清理（此刻通常无进程，幂等）
         throw new Error('应用正在退出，已取消后端启动')
@@ -378,12 +379,12 @@ export class BackendManager {
       // A1：枚举汇合与杀灭整体后移到 spawn 之后，fire-and-forget，不阻塞健康轮询。
       // exclude 双保险——当前主进程 pid 与刚 spawn 的后端 pid 绝不下手；
       // 枚举失败（PowerShell 不可用等）只告警，不影响本次启动。
-      const spawnedChild = child
+      // 闭包只捕获上方 const child 常量快照，不引用可变的 this.process。
       void (async () => {
         try {
           const orphans = await orphansPromise
           perfMark('backend: orphan enumeration done')
-          BackendManager.killPids(orphans, [spawnedChild.pid ?? -1, process.pid])
+          BackendManager.killPids(orphans, [child.pid ?? -1, process.pid])
         } catch (e) {
           console.warn('[BackendManager] 孤儿枚举/杀灭失败（不影响本次启动）:', e)
         }
