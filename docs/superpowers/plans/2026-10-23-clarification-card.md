@@ -183,9 +183,9 @@ Expected: 新增 describe 内 3 条 FAIL（`approvalDock` 尚不含 ClarifyingWi
  *   4. "跳过" → POST /agent/clarification/skip 并关闭
  *
  * 呈现：与审批卡同风格的非模态决策卡（骨架走全局 approval-card.css 的 .ap-*）。
- * 曾是 Teleport 居中弹窗，2026-10-23 并入 ApprovalDock —— 澄清与审批都是"要你
+ * 曾是全屏遮罩的居中弹窗，2026-10-23 并入 ApprovalDock —— 澄清与审批都是"要你
  * 拍板"，位置与风格应一致，且都常驻输入区上方、不随消息流滚走。裁决只走按钮，
- * 不再挂全局 Esc 监听（非模态卡下全局按键会误伤输入框/终端）。
+ * 不再挂全局键盘监听（非模态卡下全局按键会误伤输入框/终端）。
  *
  * 关闭时机：提交/跳过成功后 clearClarification() 立即置 null（不等 SSE 回执，
  * P0-2）；run 终态四条出口也会清空，卡随 dock v-if 自然消失。
@@ -504,6 +504,8 @@ async function handleSkip() {
 }
 </style>
 ```
+
+注：组件内的任何注释不能写 `Teleport` / `aria-modal` / `clarify-overlay` / `Escape` 这些字面量（哪怕只是历史说明）—— Step 1 的 `clarifyCard).not.toContain(...)` 守卫会因此扑空；要描述旧形态用“全屏遮罩的居中弹窗”“全局键盘监听”这类中文。
 
 - [ ] **Step 4: 挂进 ApprovalDock.vue**
 
