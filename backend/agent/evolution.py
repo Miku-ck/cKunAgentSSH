@@ -266,7 +266,9 @@ class EvolutionEngine:
             return db.add_agent_strategy(
                 mode=mode,
                 strategy_type="evolved_config",
-                name=f"evolved-{mode}-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                # 口径与上一行 evolved_at 对齐（同为 UTC）：用本地 naive 时间会让
+                # 跨时区部署下策略名的排序与记录里的 evolved_at 对不上
+                name=f"evolved-{mode}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
                 content=content,
                 config=config_data,
                 score=cfg.avg_score,

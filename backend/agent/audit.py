@@ -527,7 +527,9 @@ def archive_and_clear(archive_dir: Optional[str] = None) -> dict[str, Any]:
 
         base = archive_dir or os.path.dirname(os.path.abspath(database._db_path or ".")) or os.getcwd()
         os.makedirs(base, exist_ok=True)
-        fname = f"audit_archive_{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.csv"
+        # 归档文件名走 UTC：同文件 _now()（审计记录 ts / 封印 ts）就是 UTC，
+        # 用本地时间命名会让归档文件的字典序与链上时间顺序在跨时区部署下错位
+        fname = f"audit_archive_{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S-%f')}.csv"
         archive_path = os.path.join(base, fname)
         buf = _io.StringIO()
         writer = _csv.DictWriter(buf, fieldnames=cols)

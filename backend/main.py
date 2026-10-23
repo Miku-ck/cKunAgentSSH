@@ -204,7 +204,7 @@ async def cors_null_origin_security(request, call_next):
 
 # ── API Token 认证中间件 ─────────────────────────────────────────────────────
 # 受保护范围：所有 /api/* 路由（含 SSE：POST /api/agent/run）
-# 例外：GET /api/health（及 /health）不认证；OPTIONS（CORS 预检）放行
+# 例外：GET /api/health 不认证；OPTIONS（CORS 预检）放行
 # 校验：X-API-Token 头与 API_TOKEN 恒定时间比较（hmac.compare_digest）
 # 注意：本中间件经 @app.middleware 注册后被置于中间件栈最外层（先于 CORS 执行），
 #       未授权请求直接返回 401，不经 CORS 处理——对未授权请求这是期望行为。
@@ -215,7 +215,9 @@ async def api_token_auth(request: Request, call_next):
         return await call_next(request)
     if request.method == "OPTIONS":
         return await call_next(request)
-    if request.method == "GET" and path in ("/api/health", "/health"):
+    # 只放行 /api/health：上一行已对非 /api 前缀直接放行，/health 从未注册过，
+    # 写在这里是永不命中的死分支（会让人误以为存在第二个免鉴权端点）。
+    if request.method == "GET" and path == "/api/health":
         return await call_next(request)
     token = request.headers.get("X-API-Token", "")
     # 审查 MINOR 修复：compare_digest 的 str 版本要求纯 ASCII，畸形/非 ASCII 头

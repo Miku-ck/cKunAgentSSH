@@ -53,8 +53,10 @@ class _PooledConnection:
             if self._conn.in_transaction:
                 logger.debug("回滚未提交的事务（连接保持复用）")
             self._conn.rollback()
-        except Exception:
-            pass  # 连接可能已损坏，下次 _get_conn() 会重建
+        except Exception as e:
+            # 连接可能已损坏，下次 _get_conn() 会重建。此处不能静默吞掉：
+            # 这是"有事务没能回滚"的唯一可见信号，pass 会让数据丢失无从排查。
+            logger.warning("回滚未提交事务失败（连接将重建）: %s", e)
 
 
 def _create_connection() -> sqlite3.Connection:
@@ -97,8 +99,10 @@ def _get_conn() -> _PooledConnection:
                         _all_connections.remove(conn)
                     try:
                         conn.close()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        # 探活失败已经证明这条连接坏掉了，close 再失败只是同一故障的
+                        # 第二次回响；但泄漏的文件句柄只有这里能看到，留一条 warning
+                        logger.warning("关闭失效连接失败（句柄可能泄漏）: %s", e)
                 conn = None
                 _thread_local.conn = None
         _thread_local.conn_last_used = now
@@ -897,7 +901,10 @@ async def seed_models_async(db_path: str) -> None:
             base_url = (settings.vllm_base_url or "").strip()
             thinking_url = (settings.vllm_thinking_url or "").strip()
             api_key = settings.vllm_api_key or "EMPTY"
-        except Exception:
+        except Exception as e:
+            # 静默 return 会让"首启没有预填模型"变成一个没有答案的问题：
+            # 用户只看到空模型列表，而真正的失败原因（配置导入炸了）无处可查。
+            logger.warning("首启自动探测：读取 config.settings 失败，跳过种子模型: %s", e)
             return
         if not base_url:
             return
