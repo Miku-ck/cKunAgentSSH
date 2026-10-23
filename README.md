@@ -68,7 +68,7 @@ SSH 智能运维终端 —— 一个窗口收口远程运维全链路：SSH 连�
 - **键盘优先**：命令面板（`Ctrl+Shift+P`）、页面直达（`Ctrl+Shift+1..8`）、终端与标签快捷键（关闭 / AI 首页走 Shift 档，避开 shell 控制字符占用）
 - **外观体系**：9 档主题（深色 / 浅色 / 跟随系统 / 蓝屏 / 森林 / 薄荷 / 蜜蜂 / 珊瑚 / 手记）× 10 套强调色，渐变模式与方向可配；旧键值经 `asEnum` 白名单闸门回落，不设兼容分支
 - **内置运维技能**：`linux-ops-triage` / `nginx-service-diagnose` / `ops-change-safety`
-- **CI 门禁**：`npm run ci` = 后端 pytest + 前端 typecheck + vitest + electron-vite 构建 + 网关字节漂移自检；`.github/workflows/ci.yml` 是同口径的 GitHub Actions 配置（仓库托管 Gitee，推到 GitHub 即生效；Windows job 额外做内嵌 Python 准备与 nsis/portable 打包）
+- **CI 门禁**：`npm run ci` = 后端 pytest + 前端 typecheck + vitest + electron-vite 构建 + 网关字节漂移自检；`.github/workflows/ci.yml` 是同口径的 GitHub Actions 配置（仓库托管 Gitee，推到 GitHub 即生效；Windows job 额外做内嵌 Python 准备与 dir 产物 + tar.gz 出件）
 
 ## 技术栈
 
@@ -83,7 +83,7 @@ SSH 智能运维终端 —— 一个窗口收口远程运维全链路：SSH 连�
 | 终端模拟 | xterm.js + node-pty | 本地终端 |
 | 远程终端 | ssh2 | SSH 连接、远程 shell、SFTP |
 | 构建工具 | electron-vite | Vite + Electron 集成 |
-| 打包 | electron-builder | 跨平台安装包 |
+| 打包 | electron-builder | dir 产物 + tar.gz 直发（Windows）|
 
 ### 后端
 
@@ -267,6 +267,9 @@ npm run preview        # 预览构建结果
   （含 `CKUN_PYTHON` 口径、Windows/POSIX 平台路径映射、python-build-standalone 具体步骤）
 - **图标**：`resources/icon.png`
 - **代码签名**：未配置证书
+- **发布形态（tar-only， 2026-10-23 决策）**：不再出 nsis/portable 安装器；`npm run package` 由 electron-builder 出 `dist/win-unpacked/`，
+  再由 `scripts/package.js` 压成 `dist/ckunagentssh-<version>-win32-x64.tar.gz`（解包目录直发）。dir 产物没有安装器职责，
+  桌面/开始菜单快捷方式与 AUMID 通知归属由 `electron/shortcut-win.ts` 首启自建（见 `docs/superpowers/specs/2026-10-23-startup-speed-tar-packaging-design.md`）。
 
 ## License
 

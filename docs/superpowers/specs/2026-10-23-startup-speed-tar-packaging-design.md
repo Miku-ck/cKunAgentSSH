@@ -111,3 +111,37 @@
 2. `npm run dev` 两轮，按 `[perf]` 打点核对 1.2 验收口径；
 3. `npm run package -- --allow-missing-runtime`（本机快速验证 tar 出件与内容布局），确认 tar 内 `resources/icon.png`、`resources/backend/` 在位；
 4. 解压 tar → 启动 `cKunAgentSSH.exe`：验证托盘图标、桌面/开始菜单快捷方式图标、开关"桌面通知"后 Toast 归属显示为 cKunAgentSSH。
+
+## 7. 实施回填（2026-10-23）
+
+实施计划：`docs/superpowers/plans/2026-10-23-startup-speed-tar-packaging.md`（7 任务，subagent-driven 逐任务评审闭环）。
+
+### 7.1 落地产物（提交链）
+
+| 任务 | 提交 | 内容 |
+|---|---|---|
+| T1 A1 | 54d1929 + 8823678（修复轮）| `start()` spawn 前不再 await 孤儿枚举，改 spawn 后 fire-and-forget 汇合；防误杀靠 `killPids(orphans,[child.pid,process.pid])` exclude |
+| T2 A2 | 3628a3b | 新增 `backend-python-cache.ts`（乐观缓存，就绪为唯一可信锚点）+ `resolvePythonCommand` 缓存层 + 失败 clear |
+| T3 | 8de77b3 | PowerShell 路径解析提取 `utils/powershell-path.ts`，backend-manager 委托 |
+| T4 | 4d5c935 + aed9065（修复轮）| 新增 `shortcut-win.ts`（.lnk + AUMID via IPropertyStore）+ main.ts 接线 |
+| T5 | e1fe8d3 | electron-builder.yml `win.target=[dir]`（删 nsis/portable）+ package.js tar 出件 |
+| T6 | ac1c93b | CI 上传物 `dist/*.exe` → `dist/*.tar.gz` |
+
+### 7.2 已验证项（证据）
+
+- 全量前端闸门：`npx vitest run` → **108 files / 1272 tests 全绿**；`npx vitest run electron/` → 36 files / 248 tests；`npm run typecheck`（web+node 双配置）exit 0。
+- tar 出件基元：`tar.exe -czf <artifact> -C win-unpacked .` 命令形态与命名 `ckunagentssh-<version>-win32-x64.tar.gz` 逐字符合 §1.2；合成目录实测清单含 `resources/icon.png`、`resources/backend/`、`cKunAgentSSH.exe` 三类。
+- `.lnk`/AUMID 契约：`shortcut-win.test.ts` 10 用例（真值表/转义/脚本内容/跳过/幂等/失败仅warn/写标记）+ `app-user-model-id.test.ts` 锁 appId↔AUMID 同源（=`com.ckun.agent-ssh`）全绿。
+
+### 7.3 待现场核验项（本机不可确定性完成，非代码缺陷）
+
+- **§1.2 定时验收**（`backend: spawned ≤0.7s` / `backend start resolved ≤1.6s`，缓存预热后第二轮）：A1 已消除 spawn 前枚举 await 串行段、A2 已消除探测段，结构上对应基线 §1.1 的 ~2.6s→目标；但实测需一个干净的 `npm run dev` 会话——当前环境已有一实例占用单实例锁（`requestSingleInstanceLock`），并行定时跑会立即退场。由用户侧干净重跑采集 `[perf]` 两轮。
+- **§6.3 本机 `npm run package` 端到端**：electron-builder 完成 native rebuild 与 dir 解包后，在 `rename win-unpacked.tmp → win-unpacked` 遇系统级文件锁 EPERM（Restart Manager 归因 PID=0，Windows 实时扫描对全新大体积解包的瞬态持锁，与本改动无因果）。端到端出件的权威验证落在 CI 干净 Windows runner（T6）。
+- **§6.4 tar 解包冒烟**（托盘图标、快捷方式图标、Toast 归属）：需实机解压启动，属发布后人工验收。
+
+### 7.4 与设计的差异
+
+- 解释器缓存命中存在性判定为 `!isAbsolute(cached.cmd) || existsSync(cached.cmd)`——裸命令名走 PATH，无法 `existsSync` 验证，故仅对绝对路径做存在性校验（设计 §2.2 未区分此情形）。
+- 常驻 `[perf]` 打点实为 7 处（§5 只定案“保留为常驻”、未锁定条数）。
+- 测试等待异步落盘由计划原文的“同步 spin”改为 `await` 轮询——spin 阻塞事件循环会使 fire-and-forget 写链永不完成（计划缺陷，实施中修正）。
+- README 发布形态描述同步改为 tar-only（§ 本身无安装器相关文本，无需回改）。
