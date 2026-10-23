@@ -1,11 +1,12 @@
 import { spawn, ChildProcess, execFile, execSync } from 'child_process'
-import { join, basename } from 'path'
+import { join, basename, isAbsolute } from 'path'
 import { app } from 'electron'
 import http from 'http'
 import { mkdirSync, existsSync, renameSync, copyFileSync, unlinkSync } from 'fs'
 import { homedir } from 'os'
 import { randomBytes } from 'crypto'
 import { perfMark } from './utils/perf-mark'
+import { clearPythonCache, loadPythonCache, savePythonCache } from './backend-python-cache'
 
 /** whenReady 的等待者：就绪/失败/超时三选一，各自只能被唤醒一次 */
 type ReadyWaiter = {
@@ -194,7 +195,8 @@ export class BackendManager {
    * 时序契约（防误杀，A1 改造后）：枚举与杀灭均晚于 spawn 异步完成，不再要求
    * spawn 前汇合 —— 新后端的命令行同样命中 "python.exe + main.py" 特征，但它
    * 的 pid 在 killPids 的 exclude 列表里，天然不会被自己误杀；taskkill 晚到
-   * 一两秒对孤儿旧进程无实质影响。start() 在 spawn 后 await 本 Promise 再杀灭。
+   * 一两秒对孤儿旧进程无实质影响。start() 在 spawn 后的 fire-and-forget 闭包里
+   * await 本 Promise 再杀灭（start() 主链不等它，健康轮询不被拖慢）。
    *
    * @param backendDir 本应用 backend 目录，用于精确识别"自己的"后端，
    *                   避免误伤用户机器上其他以 main.py 为入口的 Python 服务
@@ -477,12 +479,18 @@ export class BackendManager {
         // 修复 2b：启动失败（spawn 错误或超时）时清理已 spawn 的子进程，
         // 避免留下孤儿进程占用端口；随后按原有失败语义向上抛出。
         this.killCurrentProcess()
+        // A2：健康就绪前失败 = 本次解释器（含缓存命中值）失真，作废缓存，
+        // 下一次 start 回到全量探测，不会反复信一个已经坏掉的缓存值。
+        clearPythonCache(app.getPath('userData'))
         // 唤醒 whenReady 等待者：本次启动已确定失败，让它们立即拿到错误，
         // 而不是挂到自己的超时才动
         this.markReady(err instanceof Error ? err : new Error(String(err)))
         throw err
       }
       this.markReady()
+      // A2：就绪是唯一可信锚点——本次实际用于 spawn 并通过健康检查的解释器
+      // 才写入缓存（探测成功不提前写，避免把"能导入依赖但跑不起服务"的值污染缓存）
+      savePythonCache(app.getPath('userData'), python)
       perfMark('backend: health ready')
       return this.port
     } catch (err) {
@@ -490,6 +498,9 @@ export class BackendManager {
       // 唤醒 whenReady 的等待者：它们 otherwise 只能干等自己那 15s 超时，还拿不到
       // 真实原因。markReady 幂等（等待者取空后才生效），spawn 之后那条失败路径
       // 已在 Promise.race 的 catch 里唤醒过，这里重复调用无副作用。
+      // A2：启动在就绪前以任何理由中断都作废缓存（含 appQuitting 取消——幂等删除，
+      // 最坏代价是下一次多跑一轮探测，不会把失真值留给下一次）。
+      clearPythonCache(app.getPath('userData'))
       this.markReady(err instanceof Error ? err : new Error(String(err)))
       throw err
     } finally {
@@ -731,7 +742,12 @@ export class BackendManager {
    * 1. CKUN_PYTHON 环境变量（开发/排障显式指定，不做探测直接信任）
    * 2. 打包后的内嵌运行时 resources/python-runtime/（构建时由 scripts/package.js
    *    把仓库根 runtime/ 拷入 extraResources；Portable Python 解压到此目录）
-   * 3. 逐个探测系统候选（Windows: python / python3 / py -3；POSIX: python3 / python）
+   * 3. 乐观缓存（上次健康就绪过的解释器，见 backend-python-cache 模块）
+   * 4. 并行探测系统候选（Windows: python / python3 / py -3；POSIX: python3 / python）
+   *
+   * 缓存失效口径：健康就绪前任何失败（spawn ENOENT/9009、健康超时、启动被取消）
+   * 都视为缓存失真，start() 统一 clearPythonCache；只有 markReady 成功才回写——
+   * 探测通过≠后端真能用，就绪才是唯一可信锚点。
    *
    * 探测的必要性：Windows 上裸名 'python' 可能解析到 Microsoft Store 的
    * App Execution Alias 存根 —— spawn 成功、立即 exit 9009、无有效输出，
@@ -752,6 +768,17 @@ export class BackendManager {
           ? join(process.resourcesPath, 'python-runtime', 'python.exe')
           : join(process.resourcesPath, 'python-runtime', 'bin', 'python3')
       if (existsSync(bundled)) return { cmd: bundled, prefixArgs: [] }
+    }
+
+    // A2 乐观缓存层（上次健康就绪过的解释器）：命中即跳过并行探测（实测 ~0.5s）。
+    // 存在性判定分两口径：绝对路径 cmd 必须在盘上（卸载/移动即回退探测）；
+    // 裸名（python/py）由 spawn 按 PATH 解析，existsSync 判不了也不算失真——
+    // 失真兜底在消费端：健康就绪前任何失败都会 clearPythonCache 作废本次缓存。
+    const cached = loadPythonCache(app.getPath('userData'))
+    if (cached && (!isAbsolute(cached.cmd) || existsSync(cached.cmd))) {
+      perfMark('backend: python cache hit')
+      console.log(`[BackendManager] 解释器缓存命中: ${[cached.cmd, ...cached.prefixArgs].join(' ')}`)
+      return cached
     }
 
     const candidates = process.platform === 'win32'
