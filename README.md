@@ -169,7 +169,7 @@ cKunAgentSSH/
 │       └── intention.py host_profile.py bridge_relay.py schedule_engine.py
 │
 ├── gateway/hillgw.mjs                 # 自营 TLS 接入网关（零依赖单文件，独立部署）
-├── runtime/                           # 打包用的嵌入式 Python 运行时（仅 README 入库，发行物由脚本组装）
+├── runtime/                           # 打包用的嵌入式 Python 运行时（本地准备，不入库：.gitignore 整目录忽略）
 ├── scripts/                           # dev / package / clean / ci-check / deploy
 └── package.json
 ```
@@ -263,13 +263,16 @@ npm run preview        # 预览构建结果
 
 ### 打包与分发
 
-- **解释器解析顺序、内嵌 Python 运行时准备**：唯一来源是 [`runtime/README.md`](runtime/README.md)
-  （含 `CKUN_PYTHON` 口径、Windows/POSIX 平台路径映射、python-build-standalone 具体步骤）
+- **解释器解析顺序、内嵌 Python 运行时准备**：唯一来源是
+  [`scripts/package.js`](scripts/package.js)（构建期探活口径：`CKUN_PYTHON`、
+  Windows `runtime/python.exe`、POSIX `runtime/bin/python3`）与
+  [`electron/backend-manager.ts`](electron/backend-manager.ts)（运行期解析顺序与打包后的
+  `resources/python-runtime/`）。`runtime/` 目录按 `.gitignore` 整体忽略，需本地准备。
 - **图标**：`resources/icon.png`
 - **代码签名**：未配置证书
 - **发布形态（tar-only， 2026-10-23 决策）**：不再出 nsis/portable 安装器；`npm run package` 由 electron-builder 出 `dist/win-unpacked/`，
   再由 `scripts/package.js` 压成 `dist/ckunagentssh-<version>-win32-x64.tar.gz`（解包目录直发）。dir 产物没有安装器职责，
-  桌面/开始菜单快捷方式与 AUMID 通知归属由 `electron/shortcut-win.ts` 首启自建（见 `docs/superpowers/specs/2026-10-23-startup-speed-tar-packaging-design.md`）。
+  桌面/开始菜单快捷方式与 AUMID 通知归属由 `electron/shortcut-win.ts` 首启自建。
 
 ## License
 
