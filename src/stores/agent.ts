@@ -42,6 +42,8 @@ interface ToolCallEntry {
 interface HumanHelpRequest {
   id: string
   reason: string
+  // 2026-10-23：后端按失败模式诊断给出的可执行建议（无诊断时为空串，UI 不渲染）
+  suggestion?: string
   // S1-06：原先还带 tool?/args?，但后端那条事件的 payload 只有 reason + confidence，
   // 于是这两个字段在 Wire 上恒为空、面板也从不渲染 —— 删掉幽灵字段。
   timestamp: number
@@ -639,6 +641,9 @@ export const useAgentStore = defineStore('agent', () => {
           command: event.command || '',
           session_id: event.session_id || '',
           requires_confirm: !!event.requires_confirm,
+          // P1b：整串只读证明（后端判定；旧白名单证明 rule_id 为空）
+          readonly: event.readonly === true,
+          readonly_rule: event.readonly_rule || undefined,
           // 问题 4：透传 run_id — 拒绝时用于标记 deny_command
           runId: event.run_id || undefined,
           // 命令后果说明（后端解释层，交付卡渲染「这条命令会做什么」行）
@@ -670,6 +675,7 @@ export const useAgentStore = defineStore('agent', () => {
           humanHelpRequests.value.push({
             id: `help_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
             reason: event.reason || 'AI 请求人类介入',
+            suggestion: event.suggestion || '',
             timestamp: Date.now(),
           })
         }
@@ -845,7 +851,7 @@ export const useAgentStore = defineStore('agent', () => {
           answers: {},
           submitted: false,
         }
-        useToastStore().warning('AI 需要对不明确的操作进行确认')
+        useToastStore().warning('AI 需要你澄清意图，回首页在输入框上方作答')
         break
       }
 

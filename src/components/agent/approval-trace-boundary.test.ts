@@ -19,6 +19,7 @@ import approvalCard from '@/components/agent/ApprovalCard.vue?raw'
 import deliveryCard from '@/components/agent/DeliveryCard.vue?raw'
 import approvalCardCss from '@/styles/approval-card.css?raw'
 import clarifyCard from '@/components/agent/ClarifyingWizard.vue?raw'
+import agentStoreSource from '@/stores/agent.ts?raw'
 import navSource from '@/composables/useSshNavigation.ts?raw'
 
 /** 取某个类选择器的声明体（这几个选择器在文件里都只定义一次） */
@@ -123,5 +124,10 @@ describe('意图澄清并入决策面（不再是弹窗）', () => {
 
   it('澄清卡与审批卡同限高，头/动作常驻、正文内滚', () => {
     expect(cssBody(clarifyCard, '.ap-clarify')).toMatch(/max-height:\s*min\(38vh,\s*340px\)/)
+  })
+
+  it('澄清提醒 toast 文案对齐审批句式（回首页在输入框上方作答）', () => {
+    expect(agentStoreSource).toContain('AI 需要你澄清意图，回首页在输入框上方作答')
+    expect(agentStoreSource).not.toContain('需要对不明确的操作进行确认')
   })
 })
