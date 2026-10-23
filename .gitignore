@@ -131,3 +131,7 @@ start-dev.cmd
 # 重启后可物理删除，在此之前先忽略，防止探针产物混进提交）
 aclprobe/
 tmpedist/
+
+# SDD 执行工作区与启动审计临时脚本（spec 2026-10-23 审计打点阶段自产，不入库）
+.superpowers/
+_perf/

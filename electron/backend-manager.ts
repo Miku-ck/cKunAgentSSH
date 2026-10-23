@@ -5,6 +5,7 @@ import http from 'http'
 import { mkdirSync, existsSync, renameSync, copyFileSync, unlinkSync } from 'fs'
 import { homedir } from 'os'
 import { randomBytes } from 'crypto'
+import { perfMark } from './utils/perf-mark'
 
 /** whenReady 的等待者：就绪/失败/超时三选一，各自只能被唤醒一次 */
 type ReadyWaiter = {
@@ -190,11 +191,10 @@ export class BackendManager {
    * CIM 枚举 ~0.5s），且发生在 whenReady 里 createWindow 之前 —— 窗口出现
    * 时间被整段同步查询垫高。现在枚举与 findFreePort 并行，主进程不冻结。
    *
-   * 时序契约（防误杀）：必须在 spawn 新后端【之前】完成枚举 —— 新进程的
-   * 命令行同样命中 "python.exe + main.py" 特征，spawn 后再枚举会把刚拉起
-   * 的后端当孤儿杀掉。killOrphanBackends 只启动枚举不 await，start() 在
-   * spawn 前 await 该 Promise，语义与原「先杀后起」一致；杀（taskkill/SIGTERM）
-   * 延后到 spawn 之后进行，不再占用启动关键路径。
+   * 时序契约（防误杀，A1 改造后）：枚举与杀灭均晚于 spawn 异步完成，不再要求
+   * spawn 前汇合 —— 新后端的命令行同样命中 "python.exe + main.py" 特征，但它
+   * 的 pid 在 killPids 的 exclude 列表里，天然不会被自己误杀；taskkill 晚到
+   * 一两秒对孤儿旧进程无实质影响。start() 在 spawn 后 await 本 Promise 再杀灭。
    *
    * @param backendDir 本应用 backend 目录，用于精确识别"自己的"后端，
    *                   避免误伤用户机器上其他以 main.py 为入口的 Python 服务
@@ -306,8 +306,10 @@ export class BackendManager {
     }
     // 杀掉上次异常退出残留的孤儿 python 主进程（持有过期的 bridge 端口/token，
     // 定时任务执行时 bridge 会连接失败）。枚举异步启动、与下面的 findFreePort
-    // 并行，但必须在 spawn 前 await（见 killOrphanBackends 的时序契约：spawn 后
-    // 再枚举会把新后端自己当孤儿误杀）；taskkill 延后到 spawn 之后、与就绪轮询并行。
+    // 并行；A1 提速改造：spawn 前不再 await 枚举汇合（CIM 枚举实测 0.9–1.3s，
+    // 是启动关键路径上最大的一段串行阻塞），改为 spawn 后异步汇合再杀灭。
+    // 防误杀语义不变：killPids 的 exclude 兜住新 spawn 的后端 pid 与主进程 pid
+    // ——即便枚举快照（spawn 后才完成）把新后端捞进结果也不会被 taskkill 下手。
     const orphansPromise = BackendManager.killOrphanBackends(this.getBackendDir())
     // 记录本次注入的环境变量，供崩溃自动重启时复用（见 tryAutoRestart）
     if (extraEnv) {
@@ -320,7 +322,6 @@ export class BackendManager {
       this.onStatusChange?.({ status: 'starting' })
 
       const portProbe = this.findFreePort(BackendManager.BACKEND_PORT_MIN, BackendManager.BACKEND_PORT_MAX)
-      const orphans = await orphansPromise
       this.port = await portProbe
 
       // 审查R2修复：上面的 findFreePort 是 await 间隙 — 若期间 before-quit→stop()
@@ -347,6 +348,7 @@ export class BackendManager {
         )
       }
       const python = await this.resolvePythonCommand()
+      perfMark('backend: python interpreter resolved')
       const dbPath = this.ensureDbPath(backendDir)
 
       // M2 修复：默认绑定 127.0.0.1，防止局域网内其他设备访问后端（含 API Key、SSH 凭据等敏感数据）
@@ -372,9 +374,20 @@ export class BackendManager {
       })
 
       const child = this.process
-      // 枚举在 spawn 前已汇合，这里只执行杀灭：异步、不阻塞健康轮询。
-      // exclude 双保险——当前主进程 pid 与刚 spawn 的后端 pid 绝不下手。
-      BackendManager.killPids(orphans, [child.pid ?? -1, process.pid])
+      perfMark(`backend: spawned pid=${child.pid}`)
+      // A1：枚举汇合与杀灭整体后移到 spawn 之后，fire-and-forget，不阻塞健康轮询。
+      // exclude 双保险——当前主进程 pid 与刚 spawn 的后端 pid 绝不下手；
+      // 枚举失败（PowerShell 不可用等）只告警，不影响本次启动。
+      const spawnedChild = child
+      void (async () => {
+        try {
+          const orphans = await orphansPromise
+          perfMark('backend: orphan enumeration done')
+          BackendManager.killPids(orphans, [spawnedChild.pid ?? -1, process.pid])
+        } catch (e) {
+          console.warn('[BackendManager] 孤儿枚举/杀灭失败（不影响本次启动）:', e)
+        }
+      })()
 
       // 修复 2a：spawn 失败（如 python 不存在 ENOENT）时若无 error 监听，
       // 会触发未捕获异常直接崩掉整个 Electron 主进程；此处记录日志并拒绝 start()。
@@ -469,6 +482,7 @@ export class BackendManager {
         throw err
       }
       this.markReady()
+      perfMark('backend: health ready')
       return this.port
     } catch (err) {
       // spawn 之前的失败（后端目录缺失 / 没有可用解释器 / 应用正在退出）也必须
