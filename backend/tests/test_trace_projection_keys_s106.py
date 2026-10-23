@@ -108,6 +108,21 @@ def test_human_help_needed_carries_confidence():
     assert "tool" not in out and "args" not in out
 
 
+def test_human_help_needed_suggestion_passthrough_and_absent_default():
+    """suggestion（失败模式诊断给出的可执行建议）原样上 Wire；payload 没有时
+    不产出空键（前端靠 v-if 判断渲染，空串/缺省都不该出现）。"""
+    base = {"reason": "r", "confidence": 0.2}
+    with_sug = dict(base, suggestion="检查 SSH 会话后重试")
+    out = SSEAdapter.to_sse_dict(
+        TraceEvent(kind="human_help_needed", source="reins.confidence_monitor",
+                   run_id="run-4", iteration=1, payload=with_sug))
+    assert out["suggestion"] == "检查 SSH 会话后重试"
+    out = SSEAdapter.to_sse_dict(
+        TraceEvent(kind="human_help_needed", source="reins.confidence_monitor",
+                   run_id="run-5", iteration=1, payload=dict(base)))
+    assert "suggestion" not in out
+
+
 def test_budget_extended_carries_the_why_fields_that_do_exist():
     """加预算的「为什么」是 added/files_edited/cap —— 现在真的搬到 Wire 上了。"""
     payload = {

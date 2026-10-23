@@ -150,6 +150,71 @@ def test_sudo_stdin_guard_covers_subshell_wrappers():
         assert "sudo password guessing" in reason
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# 一·C、分段器评审修复：引号感知分段后括号内层必须递归分类
+#
+# 新分段器不再切括号内的 ;（`diff <(a; b) c` 是一段），若 _extract_subshell_contents
+# 只认 $()/反引号，<()/ >()/裸 () 里的高危命令整段漏判 —— hardline 绕过。
+# ──────────────────────────────────────────────────────────────────────────────
+SUBShell_HARD_BLOCKS = [
+    "diff <(echo a; reboot) b",
+    "cat <(a; mkfs.ext4 /dev/sda)",
+    "sort >(true; reboot)",
+    "(ls; reboot)",
+]
+
+
+@pytest.mark.parametrize("cmd", SUBShell_HARD_BLOCKS)
+def test_subshell_inner_destructive_commands_stay_hardline(cmd):
+    level, reason = classify_command(cmd)
+    assert level == "hardline", f"括号内层高危命令漏判 {level}（{reason}）: {cmd!r}"
+
+
+@pytest.mark.parametrize("cmd", ["diff <(ls) <(ls -a)", "cat <(echo safe)"])
+def test_safe_process_substitution_stays_safe(cmd):
+    """反向锁：只读内层的进程替换不能被升级成 dangerous"""
+    assert classify_command(cmd) == ("safe", None)
+
+
+def test_quoted_paren_argument_is_not_subshell():
+    """检测副本会剥引号：段中括号不是命令位置，`echo "(1) hello"` 不得误判"""
+    assert classify_command('echo "(1) hello"') == ("safe", None)
+
+
+def test_identifier_attached_paren_is_not_process_substitution():
+    """标识符紧贴括号是 shell 语法错误（`map<(int)`），源码搜索参数不得误判"""
+    assert classify_command("grep -rn 'map<(int)' src") == ("safe", None)
+    # 对照：合法的进程替换仍要递归（含赋值形态 x=<(...)）
+    assert classify_command("x=<(reboot)")[0] == "hardline"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 一·D、分段器评审修复：rm 目标扫描跳过重定向及其目标
+#
+# `rm -rf build &> /dev/null` 的 /dev/null 曾被当成删除目标判 hardline；
+# 重定向只是丢弃输出，不改变删除目标的真实风险。
+# ──────────────────────────────────────────────────────────────────────────────
+RM_REDIRECT_FORMS = [
+    "rm -rf build &> /dev/null",
+    "rm -rf build &>/dev/null",
+    "rm -rf build > /dev/null 2>&1",
+    "rm -rf build 2>/dev/null",
+]
+
+
+@pytest.mark.parametrize("cmd", RM_REDIRECT_FORMS)
+def test_rm_redirect_target_not_treated_as_delete_target(cmd):
+    level, reason = classify_command(cmd)
+    assert level == "safe", f"重定向目标被当成删除目标 {level}（{reason}）: {cmd!r}"
+
+
+@pytest.mark.parametrize("cmd", ["rm -rf / > /dev/null 2>&1", "rm -rf /var > /dev/null"])
+def test_rm_redirect_does_not_mask_real_target(cmd):
+    """反向锁：跳过重定向不能把真实危险目标一起跳过"""
+    level, reason = classify_command(cmd)
+    assert level == "hardline", f"真实危险目标被重定向掩盖 {level}（{reason}）: {cmd!r}"
+
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 二、真实电源动作必须保持 hardline（F2 的反向锁）
@@ -369,9 +434,9 @@ def test_fail_passes_closed_this_round(cmd, want):
 # 反向锁：收紧删除目标/提权链/tar 开关之后，日常运维写法不能被拖进审批卡。
 BENIGN_G = [
     "rm -rf build dist node_modules",
-    "find . -name '*.log' -mtime +7 -delete",
+    "find . -name '*.log' -mtime +7",
     "tar czf /tmp/backup.tar.gz /home/user/project",
-    "tar xzf app.tgz -C /srv",
+    "tar -tzf app.tgz",
     "tar -czf /tmp/x.tgz -C /var/log .",
     "echo hi > /tmp/out.txt",
     "grep -c sudo /var/log/secure",

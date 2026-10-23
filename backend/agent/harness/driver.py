@@ -24,15 +24,16 @@ from agent.remote_protocol import EXIT_CODE_PREFIX
 # 审查修复：热路径 import 提到模块级——原实现每轮迭代 from...import 跑 4 次
 # （classify / reclassify / get_guide_for_iteration / detect_batch_reading），
 # Python 缓存模块但 attribute lookup 仍每轮跑一次。循环外提一次即可。
+# Phase 1 起 classify 不再被 driver 直连（走 intent_resolver.resolve_intention 级联）。
 from agent.intention import (
     TaskType,
-    classify as classify_intention,
     detect_batch_reading,
     get_guide_for_iteration,
     get_progressive_gathering_guide,
     get_reasoning_budget_for_iteration,
     reclassify,
 )
+from agent.intent_resolver import resolve_intention
 
 from .contracts import (
     FILE_MUTATION_TOOLS,
@@ -47,6 +48,7 @@ from .contracts import (
     TraceEvent,
 )
 from .command_explain import explain_compound, explain_for_reason, maybe_explain_via_llm
+from .readonly_policy import is_provably_readonly
 from .reins import approval_wait
 from .reins.core import (
     AWAIT_APPROVAL_KEY,
@@ -105,7 +107,12 @@ class Driver:
         model_max_reasoning = ctx.config.max_reasoning_tokens  # 保存模型配置的上限
         if ctx.config.enable_intention_guide:
             try:
-                intention = classify_intention(ctx.task, max_budget=model_max_reasoning)
+                # Phase 1 意图级联：规则分类 → 低置信 LLM 校准 → 任务级澄清。
+                # 高置信路径（绝大多数 run）内部直接返回规则结果，零额外开销；
+                # 校准/澄清的任何失败都由 resolve_intention 内部降级回规则结果。
+                # 外层 try 保留为最后防线（预算钳制等后续步骤的意外）。
+                intention = await resolve_intention(
+                    ctx, telemetry=telemetry, max_budget=model_max_reasoning)
                 # 意图识别的预算不能超过模型配置的上限
                 if intention.reasoning_budget is not None and model_max_reasoning is not None:
                     ctx.config.max_reasoning_tokens = min(intention.reasoning_budget, model_max_reasoning)
@@ -1093,10 +1100,12 @@ class Driver:
         #    命令跑的 classify_command —— 拆解层绝不参与放行。
         level, reason = classify_command(command)
         comp = explain_compound(command)
+        ro = is_provably_readonly(command) if level == "safe" else None
         segments_payload: list[dict[str, Any]] = []
         if comp.compound:
             explain_text, explain_source, needs_llm = comp.text, "static", comp.needs_llm
-            display_level = comp.level
+            # 展示风险不得低于权威判定：整串写目标可能让 comp 段级聚合偏轻
+            display_level = level if level != "safe" else comp.level
             segments_payload = [
                 {"command": s.command, "intent": s.intent, "level": s.level, "note": s.note}
                 for s in comp.segments
@@ -1110,6 +1119,14 @@ class Driver:
             explain_text, explain_source, needs_llm = (
                 expl.text, expl.source, expl.needs_llm)
             display_level = level
+        # safe ≠ readonly：tee/curl -o 等免审批但可能写盘，不能说成只读
+        if level == "safe" and ro is not None and not ro.safe:
+            explain_text, explain_source, needs_llm = (
+                "这条命令本身无需审批，但未能证明只读：可能写入磁盘或改变目标机状态，"
+                "执行前请核对。",
+                "static",
+                False,
+            )
         deliver_ev = TraceEvent(
             kind="tool_deliver",
             source="saddle",
@@ -1120,6 +1137,8 @@ class Driver:
                 "command": command,
                 "session_id": pd.get("session_id", ""),
                 "requires_confirm": pd.get("requires_confirm", False),
+                "readonly": bool(ro and ro.safe),
+                "readonly_rule": ro.rule_id if ro else "",
                 "explain": explain_text,
                 "explain_source": explain_source,
                 "risk": display_level,

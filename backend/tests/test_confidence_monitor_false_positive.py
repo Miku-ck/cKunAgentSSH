@@ -231,3 +231,93 @@ def test_is_policy_denial_contract():
     assert not is_policy_denial({"success": False})
     assert not is_policy_denial({"success": None, "intercept_reason": POLICY_DENY_MARKER})
     assert not is_policy_denial({"success": True, "intercept_reason": POLICY_DENY_MARKER})
+
+
+# ── 2026-10-23：求助卡带失败模式诊断（拒绝「低置信度」空话） ──
+# 真实事故：shell 连续超时，求助卡只说「Agent 连续多次低置信度，建议人工介入」，
+# 用户接手后还得从轨迹里重新排查卡点。卡片必须说清「卡在哪 + 怎么办」。
+
+@pytest.mark.asyncio
+async def test_help_card_diagnoses_channel_timeout():
+    """shell 连续超时 → 卡片点名通道问题并给出建议，不再出现空泛文案"""
+    ctx = _make_ctx()
+    mon = ConfidenceMonitor()
+    decision = None
+    for i in range(6):
+        _add_assistant(ctx, f"换短命令再试{i}")
+        _log_call(ctx, tool="shell_exec", success=False,
+                  output="等待可见终端执行超时（或会话已结束）",
+                  args={"command": f"echo probe-{i}"})
+        decision = await mon.check(ctx)
+    assert decision is not None and _is_help(decision)
+    card = next(e for e in decision.events if e.kind == "human_help_needed")
+    assert "shell_exec" in card.payload["reason"]
+    assert "超时" in card.payload["reason"] or "执行通道" in card.payload["reason"]
+    # 建议行：可执行的恢复路径，不是「建议人工介入」的同义反复
+    assert card.payload.get("suggestion")
+    assert "Agent 连续多次低置信度" not in card.payload["reason"]
+
+
+@pytest.mark.asyncio
+async def test_help_card_diagnoses_repeated_same_operation():
+    """同一操作（同签名）反复失败 → 卡片点名「反复失败」"""
+    ctx = _make_ctx()
+    mon = ConfidenceMonitor()
+    decision = None
+    for _ in range(6):
+        _add_assistant(ctx, "重试同一命令")
+        _log_call(ctx, tool="file_edit", success=False,
+                  output="patch 不适用：目标行不存在",
+                  args={"path": "/etc/app.conf", "patch": "x"})
+        decision = await mon.check(ctx)
+    assert decision is not None and _is_help(decision)
+    card = next(e for e in decision.events if e.kind == "human_help_needed")
+    assert "反复失败" in card.payload["reason"]
+    assert card.payload.get("suggestion")
+
+
+@pytest.mark.asyncio
+async def test_help_card_without_failure_evidence_keeps_generic_reason():
+    """无真实失败证据（纯不确定表述致低分）→ 退回通用文案但注明成因缺失"""
+    ctx = _make_ctx()
+    mon = ConfidenceMonitor()
+    decision = None
+    for i in range(6):
+        # 有失败证据才扣不确定词分；这里走「真实失败 → 低分」路径，
+        # 但失败条目全带探针哨兵（豁免）⇒ 诊断无归因 ⇒ 通用文案
+        _add_assistant(ctx, f"也许大概可能行{i}")
+        _log_call(ctx, tool="shell_exec", success=False,
+                  output="探测无果\n[exit_code=1]")
+        decision = await mon.check(ctx)
+    # 探针非零退出不计失败 → 置信度不触底 → 本场景根本不该求助（既有语义）
+    assert decision is not None and not _is_help(decision)
+
+
+def test_diagnose_blocker_skips_probe_and_policy_entries():
+    """诊断窗口与扣分口径对齐：探针非零退出与策略拒绝都不是失败证据"""
+    ctx = _make_ctx()
+    _log_call(ctx, tool="shell_exec", success=False, output="[exit_code=1]")
+    _log_policy_denial(ctx)
+    assert ConfidenceMonitor._diagnose_blocker(ctx) is None
+
+
+def test_diagnose_blocker_carries_last_error_line():
+    """诊断携带最后一条错误的可读行；单条失败不足以定性通道类（多数票防噪声）"""
+    ctx = _make_ctx()
+    _log_call(ctx, tool="file_read", success=False, output="Bridge 连接失败")
+    diag = ConfidenceMonitor._diagnose_blocker(ctx)
+    assert diag is not None
+    assert diag["last_error"] == "Bridge 连接失败"
+    assert diag["pattern"] == "generic"  # n=1 不满足多数票，落通用档
+
+
+def test_diagnose_blocker_classifies_channel_down():
+    """多条超时/连接类失败 → channel_down 定性"""
+    ctx = _make_ctx()
+    for i in range(3):
+        _log_call(ctx, tool="shell_exec", success=False,
+                  output=f"command timed out after 60s ({i})",
+                  args={"command": f"df -h /data{i}"})
+    diag = ConfidenceMonitor._diagnose_blocker(ctx)
+    assert diag is not None and diag["pattern"] == "channel_down"
+    assert "shell_exec" in diag["summary"]

@@ -194,6 +194,12 @@ DENIED_COMMANDS = [
     # 不在白名单的只读之外动词
     "awk '{print $1}' /etc/hosts",
     "top -b -n1",
+    # 2026-10-23 新增只读规则不自动继承计划模式（白名单保持严格子集）
+    "jq '.a' app.json",
+    "getent passwd",
+    "docker compose ps",
+    "tar -tzf app.tgz",
+    "git ls-remote origin",
     "",
 ]
 
@@ -203,6 +209,23 @@ def test_非只读命令被拒(cmd):
     allowed, reason = pm.classify_plan_command(cmd)
     assert allowed is False, f"`{cmd}` 应被拒，却放行了"
     assert reason, "拒绝必须带原因（原因会作为纠偏文案回灌给模型）"
+
+
+NEW_READONLY_NOT_IN_PLAN_MODE = [
+    "jq '.a' app.json",
+    "getent passwd",
+    "docker compose ps",
+    "tar -tzf app.tgz",
+    "git ls-remote origin",
+    "openssl x509 -in c.pem -noout -text",
+]
+
+
+@pytest.mark.parametrize("cmd", NEW_READONLY_NOT_IN_PLAN_MODE)
+def test_本轮新增只读规则不继承计划模式(cmd):
+    """safety 已证明只读 ≠ 计划模式放行：计划模式白名单必须逐条显式登记。"""
+    allowed, _ = pm.classify_plan_command(cmd)
+    assert allowed is False, f"新只读规则意外泄漏进计划模式: {cmd!r}"
 
 
 def test_重定向识别_引号与fd复制与devnull都不算写():

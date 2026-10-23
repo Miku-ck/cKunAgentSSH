@@ -121,6 +121,55 @@ def _enforce_clarification_cap():
             break
 
 
+# ── 任务级澄清（Phase 1 意图级联，intent_resolver 消费）──
+# 与工具级共用 pending 存储 / TTL / 容量治理，但生命周期完全不同：
+# 登记发生在 driver 主循环启动之前（意图识别点），消费/回收也全部在那
+# 一处完成 —— ClarificationInterceptor 永远不会见到未消费的任务级题
+# （PRE_TOOL_CALL 首次触发时 pending 早已 pop），故无需改动拦截器。
+
+# 任务级澄清的展示名：前端向导头部的命令标签行（tool 字段直出）。
+# 不用 "__task__" 之类的内部记号 —— 用户看得见。
+TASK_CLARIFICATION_TOOL = "任务意图"
+
+
+def register_task_clarification(
+    run_id: str,
+    steps: list,
+    reason: str,
+    task_preview: str,
+) -> str:
+    """登记任务级澄清题，返回 tool_call_id（uuid 防并发碰撞）。
+
+    args 塞 {"command": task_preview}：前端向导的命令预览行读 args.command。
+    """
+    tool_call_id = f"clarify_{_uuid.uuid4().hex[:12]}"
+    _CLARIFICATION_CONTEXT[run_id] = {
+        "tool": TASK_CLARIFICATION_TOOL,
+        "args": {"command": task_preview},
+        "tool_call_id": tool_call_id,
+        "steps": steps,
+        "current_step": 0,
+        "total": len(steps),
+        "reason": reason,
+        "_done": False,
+        "ts": time.time(),
+    }
+    _enforce_clarification_cap()
+    return tool_call_id
+
+
+def pop_task_clarification(run_id: str) -> tuple:
+    """一次性消费任务级澄清状态，返回 (题元, 答案)；都可能是 None。
+
+    与工具级的关键差异：任务级在注册后到消费前**没有**任何人会来读这两
+    个字典（driver 主循环未启动），所以必须自己负责弹出 —— 残留的
+    context 会被 TTL 清扫回收，残留的 done 则会污染拦截器的答案归属判断。
+    """
+    ctx_info = _CLARIFICATION_CONTEXT.pop(run_id, None)
+    answers = _CLARIFICATION_DONE.pop(run_id, None)
+    return ctx_info, answers
+
+
 def _shell_detect_vague(args: dict) -> Optional[str]:
     """shell_exec 意图模糊判定：命令含破坏性动词 + 通配符/递归且未指定明确目标。
 

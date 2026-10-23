@@ -127,10 +127,16 @@ class _StubHarness:
 
 @pytest.fixture(autouse=True)
 def _moderate_intention(monkeypatch):
-    """把意图分类替换为 moderate 替身（真实 classify 对短任务会判 trivial）"""
-    monkeypatch.setattr(
-        driver_mod, "classify_intention",
-        lambda task, max_budget=None: _FakeIntention("moderate"))
+    """把意图级联替换为 moderate 替身（真实 classify 对短任务会判 trivial）。
+
+    Phase 1 起 driver 的意图扩展点是 resolve_intention（级联：
+    规则 → LLM 校准 → 澄清），不再直连 classify —— 补丁必须跟着走，
+    否则替身不生效、真 classify 把任务判成 DEBUG，guard 门槛
+    （仅 moderate/complex）就再也触发不了。
+    """
+    async def _fake_resolve(ctx, telemetry=None, max_budget=None):
+        return _FakeIntention("moderate")
+    monkeypatch.setattr(driver_mod, "resolve_intention", _fake_resolve)
 
 
 async def _drive(harness: _StubHarness, ctx: RunContext):
@@ -183,13 +189,16 @@ def test_pass_completes_without_injection():
 def test_trivial_level_skips():
     """trivial/simple 不触发裁决（不值得多花一次调用）"""
     monkeypatch_level = "trivial"
-    driver_mod.classify_intention = (  # noqa: 覆盖 autouse fixture 的 moderate
-        lambda task, max_budget=None: _FakeIntention(monkeypatch_level))
+
+    async def _fake_resolve(ctx, telemetry=None, max_budget=None):
+        return _FakeIntention(monkeypatch_level)
+    driver_mod.resolve_intention = _fake_resolve  # noqa: 覆盖 autouse fixture 的 moderate
     try:
         ctx, harness, judge, events = _run(["FAIL\n whatever"])
     finally:
-        driver_mod.classify_intention = (
-            lambda task, max_budget=None: _FakeIntention("moderate"))
+        async def _restore(ctx, telemetry=None, max_budget=None):
+            return _FakeIntention("moderate")
+        driver_mod.resolve_intention = _restore
     assert ctx.state == State.COMPLETED
     assert len(judge.calls) == 0
     assert not _injected_messages(ctx)

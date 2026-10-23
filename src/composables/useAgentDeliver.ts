@@ -67,6 +67,10 @@ export interface ToolDelivery {
   command: string
   session_id: string
   requires_confirm: boolean
+  /** 整串命令是否被证明只读（prod 是否自动下发的依据） */
+  readonly?: boolean
+  /** 只读证明命中的新规则 ID；旧白名单证明为空 */
+  readonly_rule?: string
   status: DeliveryStatus
   output: string
   exit_code: number | null
@@ -96,6 +100,8 @@ interface ToolDeliverPayload {
   command: string
   session_id: string
   requires_confirm: boolean
+  readonly?: boolean
+  readonly_rule?: string
   runId?: string
   explain?: string
   explain_source?: string
@@ -352,6 +358,8 @@ function handleDeliver(payload: ToolDeliverPayload): void {
     command: payload.command,
     session_id: payload.session_id,
     requires_confirm: payload.requires_confirm,
+    readonly: payload.readonly,
+    readonly_rule: payload.readonly_rule,
     status: 'pending_confirm',
     output: '',
     exit_code: null,

@@ -102,6 +102,21 @@ DYNAMIC_SAMPLES = [
     "dmesg ring buffer cleared (--clear)",
     "ifconfig interface state change (eth0 down)",
     "hostname change (web-99)",
+    # 2026-10-23 只读证明 / 破坏性写 / 执行注入
+    "date sets system clock (-s)",
+    "date sets system clock (202001010000)",
+    "find performs a destructive action (-delete)",
+    "tar extracts or updates archive (writes files)",
+    "tar list mode (readonly candidate)",
+    "yq in-place edit writes files",
+    "git executes configured helper (-c)",
+    "git transport helper injection (--upload-pack)",
+    "git remote helper URL (ext::sh)",
+    "openssl loads external engine/provider (-engine)",
+    "awk executes shell commands (system/getline)",
+    "tar runs an external program (checkpoint/--to-command)",
+    "tar pipes the archive through an external program",
+    "unparseable command chain (unclosed quote '; conservative)",
 ]
 
 
@@ -172,6 +187,15 @@ CORPUS_COMMANDS = [
     "mv important.log /dev/null",
     "mycohortool --deploy",
     "foo --bar",
+    "date -s '2020-01-01'",
+    "find /tmp -name '*.log' -delete",
+    "tar -xzf app.tgz -C /srv",
+    "tar -t --index-file=/tmp/idx -f a.tar",
+    "yq -i '.a=1' deploy.yaml",
+    "git -c core.pager=sh status",
+    "awk '{system(\"id\")}' /tmp/x",
+    "tar -I 'sh -c' -cf /tmp/x.tar /tmp/data",
+    "openssl x509 -engine dynamic -in c.pem -noout",
 ]
 
 

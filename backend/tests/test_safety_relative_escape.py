@@ -110,8 +110,15 @@ def test_相对与绝对凭据读取同一答案() -> None:
     "rm -rf build dist node_modules",
     "rm -rf ./dist",
     "rm -rf .",
-    "find . -name '*.log' -mtime +7 -delete",
+    "find . -name '*.log' -mtime +7",
     "rm -f ./tmp.out",
 ])
 def test_目录内清理保持安全(cmd: str) -> None:
     assert classify_command(cmd) == ("safe", None), f"{cmd!r} 被误拦：{classify_command(cmd)}"
+
+
+def test_目录内_find_delete_升级为审批() -> None:
+    """find -delete 是删除动作，不再因为目标在 cwd 内就免审。"""
+    level, reason = classify_command("find . -name '*.log' -mtime +7 -delete")
+    assert level == "dangerous"
+    assert "destructive" in (reason or "")

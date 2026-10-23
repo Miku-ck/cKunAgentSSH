@@ -131,6 +131,10 @@ function fsErrorWith(err: unknown, fallback: string): Error {
 }
 
 function createWindow(): void {
+  // dev 态窗口/任务栏用的是 node_modules 里 electron.exe 的默认图标，不显式设 icon
+  // 就永远不随 resources/icon.png 更换；打包态 exe 虽已内嵌 .ico，这里同样显式设置，
+  // 两条链路统一口径。读不到（空图）时不传 icon，回退各平台默认而不是用坏图标覆盖。
+  const appIcon = nativeImage.createFromPath(join(app.getAppPath(), 'resources', 'icon.png'))
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -140,6 +144,7 @@ function createWindow(): void {
     frame: false,
     titleBarStyle: 'hidden',
     backgroundColor: '#0d1117',
+    icon: appIcon.isEmpty() ? undefined : appIcon,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,

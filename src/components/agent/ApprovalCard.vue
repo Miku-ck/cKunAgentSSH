@@ -228,3 +228,8 @@ const expiredTitle = computed(() => onceBlocked.value
     </div>
   </div>
 </template>
+
+<style scoped>
+/* 与 ApprovalDock 的 .ad-body 同高：长写入预览在正文里滚动，动作栏与说明条常驻 */
+.ap-perm { max-height: min(38vh, 340px); }
+</style>

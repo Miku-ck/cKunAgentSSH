@@ -55,6 +55,12 @@ class IntentionResult:
     # is_change 描述"是否产生副作用"）。由 routes/agent.py 选用
     # OPS_METHOD_CHANGE / OPS_METHOD_READONLY 消费。
     is_change: bool = False
+    # Phase 1 意图级联标记：多类型同分对峙 / 零信号长文本。True 时 driver 侧
+    # intent_resolver 会先做一次 LLM 校准（必要时弹任务级澄清）；这是置信度
+    # 第一次参与决策而非只进日志。高置信路径（绝大多数 run）恒为 False，零开销。
+    ambiguous: bool = False
+    # 结果来源："rules"（本地词典规则）| "llm"（低置信升级的结构化 LLM 校准）
+    source: str = "rules"
 
     def to_dict(self) -> dict:
         return {
@@ -64,6 +70,8 @@ class IntentionResult:
             "allow_planning_phase": self.allow_planning_phase,
             "confidence": self.confidence,
             "is_change": self.is_change,
+            "ambiguous": self.ambiguous,
+            "source": self.source,
         }
 
 
@@ -351,6 +359,7 @@ def classify(task: str, max_budget: Optional[int] = None) -> IntentionResult:
     task_type = TaskType.QUERY
     type_confidence = 0.5
     best_key = (0, 0)      # (命中数, 负首现位置)，元组取 max
+    second_key = (0, 0)    # 次高分（暧昧判定用：与 best 同分 = 两类型对峙）
     best_hits = 0
     contended = 0          # 有命中的类型数（>1 说明信号暧昧）
     for candidate_type, compiled in _TYPE_CANDIDATES:
@@ -360,10 +369,13 @@ def classify(task: str, max_budget: Optional[int] = None) -> IntentionResult:
         contended += 1
         key = (hits, -first)
         if key > best_key:
+            second_key = best_key
             task_type = candidate_type
             type_confidence = _TYPE_BASE_CONF[candidate_type]
             best_key = key
             best_hits = hits
+        elif key > second_key:
+            second_key = key
 
     # confidence 真实化：原实现是按分支拍死的静态值，不反映匹配强度。
     # 命中越多越自信（cap +0.1）；多类型同时命中按冲突数折减，但不低于
@@ -372,6 +384,17 @@ def classify(task: str, max_budget: Optional[int] = None) -> IntentionResult:
         type_confidence = min(0.95, type_confidence + min(0.1, 0.05 * (best_hits - 1)))
         if contended > 1:
             type_confidence = max(0.5, type_confidence - 0.05 * (contended - 1))
+
+    # ── 1.5 意图暧昧标记（Phase 1 级联开关）──
+    # 两类信号同分对峙（"评估这次重构的收益"：评估→research、重构→refactor 各 1 分）
+    # 或零信号长文本（词典列不全所有表述，这在事故注释里已被证明是常态）→ 交给
+    # driver 侧 LLM 校准裁决。命中分出高下（2:1 等）视为 decisive，不升级。
+    # 注意 task_len 在前文 CONVERSATION 判定处已计算。
+    second_hits = second_key[0]
+    ambiguous = (
+        (best_hits > 0 and contended >= 2 and best_hits == second_hits)
+        or (best_hits == 0 and task_len >= 12)
+    )
 
     # ── 2. 复杂度等级识别 ──
     # 起始等级由 task_type 决定，再由其他信号调整
@@ -469,14 +492,50 @@ def classify(task: str, max_budget: Optional[int] = None) -> IntentionResult:
         level = IntentionLevel.SIMPLE
         level_confidence = max(level_confidence, 0.75)
 
-    # ── 3. 允许规划阶段？ ──
-    # 仅 complex 等级且非 debug 允许首轮纯规划
+    # ── 3-5. 组装预算 / 引导语 / 规划开关 ──
+    # 抽出为 compose_intention_result()：LLM 校准路径（intent_resolver）合并
+    # 校准字段后必须走完全相同的引导语拼装，两处各写一份必然漂移。
+    return compose_intention_result(
+        level=level,
+        task_type=task_type,
+        is_change=is_change,
+        confidence=level_confidence,
+        max_budget=max_budget,
+        source="rules",
+        ambiguous=ambiguous,
+    )
+
+
+def compose_intention_result(
+    level: IntentionLevel,
+    task_type: TaskType,
+    is_change: bool,
+    confidence: float,
+    max_budget: Optional[int] = None,
+    source: str = "rules",
+    ambiguous: bool = False,
+) -> IntentionResult:
+    """按等级/类型组装最终 IntentionResult（预算钳制 + 引导语拼装）。
+
+    classify 的规则路径与 intent_resolver 的 LLM 校准路径共用本函数，
+    保证两条路径产出的引导语、预算口径完全一致。
+
+    Args:
+        max_budget: 模型配置的 reasoning_tokens 上限（同时用于比例放大与钳制）
+        source: "rules" | "llm"
+        ambiguous: 是否暧昧（LLM 校准成功后应置 False——歧义已裁决）
+    """
+    effective_budget = _compute_effective_budgets(max_budget)
+
+    # 允许规划阶段？仅 complex 等级且非 debug 允许首轮纯规划
     allow_planning = (level == IntentionLevel.COMPLEX and task_type != TaskType.DEBUG)
 
-    # ── 4. 取预算 ──
     budget = effective_budget.get(level)
+    # 预算钳制：固定档位值可能超过小预算模型的上限（本地 vLLM 常见 ≤4096），
+    # 超限值会让下一轮 LLM 调用带超限 reasoning_max_tokens → 400 → run 失败
+    if budget is not None and max_budget is not None:
+        budget = min(budget, max_budget)
 
-    # ── 5. 拼装引导语 ──
     guide = _LEVEL_GUIDE[level]
 
     # 复杂任务额外追加"单 tool_call"约束
@@ -510,8 +569,10 @@ def classify(task: str, max_budget: Optional[int] = None) -> IntentionResult:
         reasoning_budget=budget,
         allow_planning_phase=allow_planning,
         guide_prompt=guide,
-        confidence=level_confidence,
+        confidence=confidence,
         is_change=is_change,
+        ambiguous=ambiguous,
+        source=source,
     )
 
 

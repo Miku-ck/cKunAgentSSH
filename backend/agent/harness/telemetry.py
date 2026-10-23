@@ -183,6 +183,10 @@ class SSEAdapter:
             # confidence 反倒没被搬走。UI 只渲染 reason，故删幽灵字段、补真实那一个。
             result["reason"] = payload.get("reason", "")
             result["confidence"] = payload.get("confidence", 0.0)
+            # 2026-10-23：求助卡带可执行建议（ConfidenceMonitor._diagnose_blocker
+            # 产出），前端在 reason 下方渲染「建议：…」行
+            if payload.get("suggestion"):
+                result["suggestion"] = payload["suggestion"]
         elif kind == "permission_needed":
             result["tool"] = payload.get("tool", "")
             result["args"] = payload.get("args", {})
@@ -269,6 +273,9 @@ class SSEAdapter:
             result["command"] = payload.get("command", "")
             result["session_id"] = payload.get("session_id", "")
             result["requires_confirm"] = payload.get("requires_confirm", False)
+            # P1b：整串只读证明（prod 自动下发依据 + 卡片徽章文案）
+            result["readonly"] = payload.get("readonly", False)
+            result["readonly_rule"] = payload.get("readonly_rule", "")
             # 命令后果说明（与审批卡同款解释层）：交付卡的「这条命令会做什么」行
             result["explain"] = payload.get("explain", "")
             result["explain_source"] = payload.get("explain_source", "")

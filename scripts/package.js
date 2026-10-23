@@ -35,6 +35,28 @@ const builder = path.join(root, 'node_modules', '.bin', isWin ? 'electron-builde
 //    mac/linux 目标等于从来没有内嵌运行时。
 const fs = require('fs')
 const runtimeDir = path.join(root, 'runtime')
+// dir 目标下 electron-builder 先把 Electron 运行时解到暂存目录 `${output}/${platform}-unpacked.tmp`，
+// 全部成功后才改名成正式产物目录。中途失败（实测 2026-10-23：electron 下载/解包阶段 EBUSY）
+// 会把一个近乎空的 .tmp 壳留在 dist/ 里，而下一轮构建开机就要 unlink 它——只要残骸里任何一个
+// 文件被外部句柄锁住，后续每一轮打包都会在同一处失败（失败会无限传染，直到手动清理）。
+// 所以非零退出时顺手清掉暂存残骸；删不动（仍被锁）就显式警告，把根因摆在明处而不是留给下轮猜。
+const unpackedStaging = () => {
+  const dir = process.platform === 'win32' ? 'win-unpacked' : `${process.platform}-unpacked`
+  return path.join(root, 'dist', dir + '.tmp')
+}
+const cleanupStaging = () => {
+  const dir = unpackedStaging()
+  if (!fs.existsSync(dir)) return
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 300 })
+    console.log(`[package] 已清理失败构建残骸：${dir}`)
+  } catch (e) {
+    console.warn(
+      `[package] 残骸清理失败（${e.message}）：${dir} 仍被其它进程占用，` +
+        '下一轮打包会因 EBUSY 在同一处失败，请重启相关占用进程/机器后手动删除该目录',
+    )
+  }
+}
 const runtimeProbe = isWin
   ? path.join(runtimeDir, 'python.exe')
   : path.join(runtimeDir, 'bin', 'python3')
@@ -88,7 +110,10 @@ if (runtimeReady) {
 const child = spawn(builder, [...builderConfigArgs, ...builderPassThroughArgs], { stdio: 'inherit', shell: isWin })
 const version = require(path.join(root, 'package.json')).version
 child.on('exit', (code) => {
-  if (code !== 0) process.exit(code === null ? 1 : code)
+  if (code !== 0) {
+    cleanupStaging()
+    process.exit(code === null ? 1 : code)
+  }
   // tar-only 出件：解包目录直发。Windows 10+ 自带 tar.exe（bsdtar），
   // POSIX 用系统 tar；找不到即失败退出——绝不出"没有发布物"的绿色流水线。
   const tarBin = process.platform === 'win32' ? 'tar.exe' : 'tar'

@@ -45,7 +45,12 @@ const isProd = computed(() => {
  *  旧后端不带 risk 字段时不渲染 —— 宁缺毋滥，别让徽章说没根据的话。 */
 const riskBadge = computed(() => {
   const level = props.delivery.risk
-  if (level === 'safe') return { text: '只读 · 不改动任何文件', cls: 'dc-risk-safe' }
+  if (level === 'safe') {
+    // P1b：safe 只代表免审批；证明只读时才敢说「不改动任何文件」
+    return props.delivery.readonly
+      ? { text: '只读 · 不改动任何文件', cls: 'dc-risk-safe' }
+      : { text: '免审批 · 可能写入磁盘', cls: 'dc-risk-warn' }
+  }
   if (level === 'dangerous') return { text: '含非只读操作 · 需谨慎核对', cls: 'dc-risk-bad' }
   if (level === 'hardline') return { text: '高危操作', cls: 'dc-risk-bad' }
   return null
@@ -110,7 +115,11 @@ const segments = computed(() =>
 </template>
 
 <style scoped>
-.delivery-card { border-color: var(--card-warn-border); }
+/* 与审批停靠区的 .ad-body 同高：整卡有界后正文自己滚，确认/拒绝不会落到可视区外 */
+.delivery-card {
+  border-color: var(--card-warn-border);
+  max-height: min(38vh, 340px);
+}
 .delivery-accent { color: var(--status-warn-text); }
 
 /* 多会话时这是卡头唯一的位置信息：写进哪台机器。过长时截断，完整值留在 title。 */
@@ -155,6 +164,7 @@ const segments = computed(() =>
 }
 .dc-risk-safe { color: var(--accent-green); background: color-mix(in srgb, var(--accent-green) 12%, transparent); }
 .dc-risk-bad { color: var(--accent-red); background: color-mix(in srgb, var(--accent-red) 12%, transparent); }
+.dc-risk-warn { color: var(--status-warn-text); background: color-mix(in srgb, var(--status-warn-text) 12%, transparent); }
 
 /* 逐段拆解列表：序号 + 意图 + 命令片段。行背景斑马纹与终端表同思路。 */
 .seg-list {

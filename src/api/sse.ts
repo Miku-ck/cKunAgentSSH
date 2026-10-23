@@ -33,6 +33,9 @@ export interface AgentSSEEvent {
   iterations?: number
   // human_help_needed 事件专用字段
   reason?: string
+  /** 后端按失败模式诊断给出的可执行建议（ConfidenceMonitor._diagnose_blocker），
+   *  面板在 reason 下方渲染「建议：…」行；无诊断时后端不下发该字段 */
+  suggestion?: string
   // permission_needed 事件专用字段
   risk?: string
   reversible?: boolean
@@ -68,6 +71,10 @@ export interface AgentSSEEvent {
   command?: string
   session_id?: string
   requires_confirm?: boolean
+  /** tool_deliver 专用：整串命令是否被证明只读（prod 自动下发依据） */
+  readonly?: boolean
+  /** 只读证明命中的新规则 ID；旧白名单证明为空（不冒领） */
+  readonly_rule?: string
   /** tool_deliver 专用：复合命令逐段拆解（意图 + 段级风险），单段命令为空数组 */
   segments?: Array<{ command: string; intent: string; level: string; note?: string }>
   // clarification_needed 事件专用字段

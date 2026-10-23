@@ -180,7 +180,7 @@ CONSEQUENCE_RULES: list[tuple[re.Pattern, str, bool]] = [
     (re.compile(r"^sed in-place edit"),
      "原地改写文件内容（-i），原内容不保留，改错后难以恢复。", False),
     (re.compile(r"^journalctl log deletion"),
-     "清理系统日志（--vacuum），排查故障所需的历史证据会被永久删除。", False),
+     "清理或轮转系统日志（{target}），排查故障所需的历史证据可能不再完整，且不会自动恢复。", False),
 
     # ── 凭据读写 ──
     (re.compile(r"^read of credential file"),
@@ -247,6 +247,34 @@ CONSEQUENCE_RULES: list[tuple[re.Pattern, str, bool]] = [
      "命令语法无法解析、形态异常，系统按最保守的方式判定，请人工核对原文再决定是否授权。", False),
     (re.compile(r"^unknown command, default approval"),
      "这条命令不在已知安全操作清单里（{target}），系统无法预知它的后果，请确认这确实是你要求做的事。", True),
+
+    # ── 2026-10-23 只读证明 / 破坏性写 / 执行注入 ──
+    (re.compile(r"^date sets system clock"),
+     "修改系统时间（{target}），会影响日志时间线、证书校验与定时任务，生产环境可能导致数据错乱。", False),
+    (re.compile(r"^find performs a destructive action"),
+     "find 在遍历过程中执行删除或外部命令（{target}），实际影响范围由匹配结果决定，删除后无法恢复。", False),
+    (re.compile(r"^tar extracts or updates archive"),
+     "解压或更新归档会把文件写入磁盘，同名文件可能被覆盖，恶意条目还可能写到目标目录之外。", False),
+    (re.compile(r"^tar list mode"),
+     "命令看着像在列出压缩包内容，但它带了未被只读规则证明的开关，可能顺带把内容写进指定文件，请核对原文。", False),
+    (re.compile(r"^yq in-place edit writes files"),
+     "原地修改 YAML 文件，原内容被覆盖；配置写错会直接影响服务启动。", False),
+    (re.compile(r"^git executes configured helper"),
+     "通过 git 配置让外部程序参与执行（{target}），实际运行的命令可能不是你以为的那条。", False),
+    (re.compile(r"^git transport helper injection"),
+     "让 git 调用外部传输助手（{target}），可在拉取或推送时执行任意程序。", False),
+    (re.compile(r"^git remote helper URL"),
+     "使用可执行的外部传输协议访问远端（{target}），可能触发任意命令。", False),
+    (re.compile(r"^openssl loads external engine/provider"),
+     "让 openssl 加载外部引擎或 provider（{target}），等于把执行权交给第三方动态库。", False),
+    (re.compile(r"^awk executes shell commands"),
+     "awk 脚本里调用 system()/getline 执行外部命令，真实行为取决于脚本内容。", False),
+    (re.compile(r"^tar runs an external program"),
+     "tar 被配置为调用外部程序处理数据流（{target}），等于执行任意命令。", False),
+    (re.compile(r"^tar pipes the archive through an external program"),
+     "tar 通过外部程序压缩或解压数据，等于执行任意命令。", False),
+    (re.compile(r"^unparseable command chain"),
+     "命令结构无法安全解析（引号或括号未闭合），无法判断它实际会执行什么，按最保守口径拦截。", False),
 ]
 
 

@@ -22,6 +22,7 @@ from .clarification import (
     _CLARIFICATION_CONTEXT,
     _CLARIFICATION_DONE,
     ClarificationInterceptor,
+    TASK_CLARIFICATION_TOOL,
     _build_clarification_needed,
     _enforce_clarification_cap,
     _file_write_build_steps,
@@ -33,7 +34,9 @@ from .clarification import (
     _shell_build_steps,
     _shell_detect_vague,
     _step_to_dict,
+    pop_task_clarification,
     record_clarification_answers,
+    register_task_clarification,
     release_clarification_run,
 )
 from ..contracts import ClarificationOption, ClarificationStep
@@ -66,7 +69,10 @@ __all__ = [
     "WallClockRein",
     "SkillRein",
     "ClarificationInterceptor",
+    "TASK_CLARIFICATION_TOOL",
     "record_clarification_answers",
+    "register_task_clarification",
+    "pop_task_clarification",
     "release_clarification_run",
     "_get_global_permission_gate_sync",
     "tool_call_signature",

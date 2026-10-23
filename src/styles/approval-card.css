@@ -17,12 +17,16 @@
  */
 
 /* ── 卡骨架 ── */
+/* 卡是有界外壳：头部、动作栏、说明条常驻，只有 .ap-body 滚动。
+   复合命令的逐段拆解曾把整卡撑出审批区限高，确认/拒绝被裁到可视区外。 */
 .ap-card {
   background: var(--bg-elevated);
   border: 1px solid var(--card-warn-border);
   border-radius: 10px;
   overflow: hidden;
   box-shadow: 0 3px 12px -4px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
 }
 .ap-head {
   display: flex;
@@ -30,6 +34,7 @@
   gap: 8px;
   padding: 10px 13px;
   border-bottom: 1px solid var(--border-default);
+  flex: none;
 }
 .ap-ic {
   width: 15px;
@@ -44,7 +49,12 @@
   color: var(--text-primary);
 }
 .ap-sp { flex: 1; }
-.ap-body { padding: 12px 13px; }
+.ap-body {
+  padding: 12px 13px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
 
 /* ── key/value 行与正文 ── */
 .ap-keyval {
@@ -180,7 +190,7 @@
    中性=永久（写清单是不可逆的，不给它绿）；拒绝靠右单独占位，
    不再用「最灰的那一枚」表达它是次要动作 —— 它是用户行使否决权的出口。
    所有变体一律文本色 + alpha 描边，去掉实心填充（与全局按钮语言一致）。 */
-.ap-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding: 0 13px 11px; }
+.ap-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding: 0 13px 11px; flex: none; }
 .ap-btn {
   display: inline-flex; align-items: center; gap: 4px;
   font-family: inherit;
@@ -209,6 +219,7 @@
   border-top: 1px dashed var(--border-default);
   padding: 8px 13px 10px;
   line-height: 1.6;
+  flex: none;
 }
 
 /* ── 图标按钮（忽略 / 上一项 / 下一项） ── */

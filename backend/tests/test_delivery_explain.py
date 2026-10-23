@@ -258,3 +258,32 @@ def test_readonly_find_stays_safe():
     level, reason = classify_command(
         'find /home/admin-pl/.trae-cn-server -name "*.log.*" -delete')
     assert level == "dangerous" and "-delete/-exec" in reason
+
+
+def test_delivery_payload_carries_readonly_for_readonly_safe(monkeypatch):
+    """safe 且整串可证明只读：payload 带 readonly=True（prod 自动下发依据）"""
+    events, _tel, _llm = _drive(monkeypatch, "ls -la")
+    ev = _deliver_event(events)
+    assert ev.payload["readonly"] is True
+
+
+def test_safe_but_not_readonly_delivery_is_marked_and_reworded(monkeypatch):
+    """tee 免审批但会写盘：readonly=False，文案不得再说「只读命令」"""
+    events, _tel, _llm = _drive(monkeypatch, "tee /tmp/x")
+    ev = _deliver_event(events)
+    assert ev.payload["readonly"] is False
+    assert ev.payload["explain_source"] == "static"
+    assert "未能证明只读" in ev.payload["explain"]
+
+
+def test_tool_deliver_projection_passes_readonly():
+    """SSE 投影透传 readonly / readonly_rule，前端交付卡才读得到"""
+    ev = TraceEvent(
+        kind="tool_deliver", source="saddle", run_id="r1", iteration=0,
+        payload={"tool_id": "t1", "command": "ls", "session_id": "s1",
+                 "requires_confirm": True, "readonly": True,
+                 "readonly_rule": "ro.verb.jq.v1"},
+    )
+    d = SSEAdapter.to_sse_dict(ev)
+    assert d["readonly"] is True
+    assert d["readonly_rule"] == "ro.verb.jq.v1"

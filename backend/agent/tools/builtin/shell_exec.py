@@ -11,11 +11,18 @@ from agent.pending_delivery import PendingDeliveries
 def _compute_requires_confirm(command: str, environment: str) -> bool:
     """计算可见终端模式下该命令是否需要用户确认。
 
-    规则：非 safe 命令（dangerous/hardline）或生产环境（prod）都需要确认。
+    非 safe（dangerous/hardline）一律确认；test 环境 safe 即免确认；
+    prod 下 safe 还必须是「整串可证明只读」才免确认（tee/curl -o 等仍弹卡）。
     """
+    from agent.harness.readonly_policy import is_provably_readonly
     from agent.harness.safety import classify_command
+
     level, _reason = classify_command(command)
-    return (level != "safe") or (environment == "prod")
+    if level != "safe":
+        return True
+    if environment != "prod":
+        return False
+    return not is_provably_readonly(command).safe
 
 
 class ShellExecTool(BaseTool):

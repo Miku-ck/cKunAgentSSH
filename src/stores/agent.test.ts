@@ -381,6 +381,15 @@ describe('运行结束时的快照读数', () => {
     expect(store.snapshot().status).toBe('human_help')
   })
 
+  it('human_help_needed 的 suggestion（失败诊断建议）透传到求助卡，缺省存空串', () => {
+    const { store, push } = startRun()
+    push({ type: 'human_help_needed', reason: '执行通道不可用', suggestion: '检查 SSH 会话后重试' })
+    expect(store.humanHelpRequests[0].suggestion).toBe('检查 SSH 会话后重试')
+    const h2 = startRun()
+    h2.push({ type: 'human_help_needed', reason: '仅低置信度，无诊断' })
+    expect(h2.store.humanHelpRequests[0].suggestion).toBe('')
+  })
+
   it('正常完成仍记 completed', () => {
     const { store, push } = startRun()
     push({ type: 'done', state: 'completed', iterations: 2, run_id: 'r1' })

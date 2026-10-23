@@ -161,6 +161,22 @@ class LoopDetector:
             )
 
 
+# 求助卡诊断关键词（2026-10-23）：求助触发时从失败文本归纳真实成因。
+# 口径与 stirrups.ErrorClassifier 同向（transient/forbidden 标记），但这里
+# 区分的是「执行通道不可用 vs 审批/策略拦截 vs 同一操作反复失败」，不是
+# 重试语义，故不复用 ErrorType 枚举。模块级常量而非类属性：带注解的类属性
+# 会被 @dataclass 吸收成字段。
+_CHANNEL_DOWN_MARKERS = (
+    "timeout", "timed out", "超时",
+    "connection", "refused", "reset", "eof", "disconnect", "closed",
+    "连接", "重置", "断开",
+)
+_BLOCKED_MARKERS = (
+    "拦截", "权限", "禁止", "未授权", "审批", "拒绝",
+    "permission", "forbidden", "intercepted", "denied",
+)
+
+
 @dataclass
 class ConfidenceMonitor:
     """
@@ -248,6 +264,12 @@ class ConfidenceMonitor:
                                 "Agent 已停止重试，请人工登记后重试"
                             ),
                             "confidence": round(confidence, 3),
+                            # 与低置信度求助卡同构：前端在 reason 下渲染建议行。
+                            # SSE 守卫按 human_help_needed 的首个 payload 块钉
+                            # 投影键集，两个生产者必须同构（都有 suggestion）。
+                            "suggestion": (
+                                "把所需命令预登记进生产环境 allowlist 后重新发起任务"
+                            ),
                         },
                     )],
                 )
@@ -259,19 +281,36 @@ class ConfidenceMonitor:
             recent = history[-self.HELP_CONSECUTIVE:]
             if all(c < self.LOW_THRESHOLD for c in recent):
                 ctx.metadata["confidence_help_requested"] = True
+                # 求助卡必须说清「卡在哪」：只发一句「低置信度」时，人工接手
+                # 后还得从轨迹里重新排查（真实事故：shell 连续超时被笼统念成
+                # 「Agent 连续多次低置信度，建议人工介入」）。诊断失败时退回
+                # 通用文案（如纯不确定表述导致的低分，本就无失败证据可归因）。
+                diag = self._diagnose_blocker(ctx)
+                if diag:
+                    reason = (
+                        f"{diag['summary']}；置信度连续 {self.HELP_CONSECUTIVE} 轮"
+                        f"低于 {self.LOW_THRESHOLD:.2f}（当前 {round(recent[-1], 2)}），"
+                        f"已停止重试，转人工处理"
+                    )
+                    suggestion = diag["suggestion"]
+                else:
+                    reason = (
+                        f"Agent 连续 {self.HELP_CONSECUTIVE} 次低置信度"
+                        f"（无工具失败证据，可能为方案层面困惑），建议人工介入"
+                    )
+                    suggestion = "查看运行轨迹确认模型卡点，或补充任务约束后重试"
                 decision = ReinDecision(
                     intercepted=True,
-                    intercept_reason=(
-                        f"连续 {self.HELP_CONSECUTIVE} 次低置信度（{recent}），请求人工介入"
-                    ),
+                    intercept_reason=reason,
                     events=[TraceEvent(
                         kind="human_help_needed",
                         source="reins.confidence_monitor",
                         run_id=ctx.run_id,
                         iteration=ctx.iteration,
                         payload={
-                            "reason": "Agent 连续多次低置信度，建议人工介入",
+                            "reason": reason,
                             "confidence": round(recent[-1], 3),
+                            "suggestion": suggestion,
                         },
                     )],
                 )
@@ -280,12 +319,20 @@ class ConfidenceMonitor:
         inject_count: int = ctx.metadata.get("confidence_inject_count", 0)
         if confidence < self.LOW_THRESHOLD and inject_count < 2:
             ctx.metadata["confidence_inject_count"] = inject_count + 1
-            inject = [{
-                "role": "user",
-                "content": "[系统提示] 请重新审视任务，你当前的方案可能存在问题，尝试换一种思路。",
-            }]
+            # 纠偏带成因：模型收到的若是空泛的「换一种思路」，在通道/审批受阻
+            # 时只会继续刷变体直到求助兜底——把真因提前告诉它才能早收敛。
+            diag = self._diagnose_blocker(ctx)
+            if diag:
+                content = (
+                    f"[系统提示] 当前置信度 {confidence:.2f}，执行受阻：{diag['summary']}。"
+                    "若失败源于执行通道或审批策略，反复换写法无法解决——"
+                    "请改用替代方式（如可见终端交付）或直接向用户说明并请求帮助。"
+                )
+            else:
+                content = "[系统提示] 请重新审视任务，你当前的方案可能存在问题，尝试换一种思路。"
             decision.inject_messages = list(
-                (decision.inject_messages or []) + inject
+                (decision.inject_messages or [])
+                + [{"role": "user", "content": content}]
             )
 
         return decision
@@ -345,6 +392,98 @@ class ConfidenceMonitor:
                 base -= 0.15
 
         return max(0.1, base)
+
+    @staticmethod
+    def _diagnose_blocker(ctx: RunContext) -> dict | None:
+        """从 tool_calls_log 归纳低置信度的真实成因（None = 无失败证据可归因）。
+
+        失败口径与 _estimate_confidence 完全对齐：策略拒绝（政策堵路）与
+        探针非零退出（grep 无匹配等有效诊断答案）都不算真实失败，不进诊断
+        窗口。只看最近 5 条真实失败（与置信度扣分窗口同宽），多数票定性，
+        避免单条噪声带偏诊断。
+        """
+        failures = [
+            tc for tc in ctx.tool_calls_log
+            if tc.get("success") is False
+            and not is_policy_denial(tc)
+            and not has_exit_sentinel(
+                tc.get("output_tail") or tc.get("output") or "")
+        ]
+        if not failures:
+            return None
+        recent = failures[-5:]
+        tool = recent[-1].get("tool") or "工具"
+        n = len(recent)
+
+        def _text(tc: dict) -> str:
+            # output_tail 是 driver 仅在失败时写入的输出尾部；拦截分支只有
+            # intercept_reason；两者皆空说明无判读文本（如静默失败）
+            return (tc.get("output_tail") or tc.get("output")
+                    or tc.get("intercept_reason") or "")
+
+        texts = [_text(tc).lower() for tc in recent]
+        channel_hits = sum(
+            1 for t in texts
+            if any(m in t for m in _CHANNEL_DOWN_MARKERS))
+        blocked_hits = sum(
+            1 for t in texts
+            if any(m in t for m in _BLOCKED_MARKERS))
+
+        err_lines = [
+            ln for ln in _text(recent[-1]).strip().splitlines() if ln.strip()]
+        last_error = (err_lines[-1] if err_lines else "").strip()[:160]
+
+        majority = max(2, (n + 1) // 2)
+        if channel_hits >= majority:
+            return {
+                "pattern": "channel_down",
+                "summary": (
+                    f"{tool} 最近 {n} 次真实失败中 {channel_hits} 次为"
+                    f"超时/连接类错误，疑似执行通道（SSH 会话/网络）不可用"
+                ),
+                "suggestion": (
+                    "先检查目标主机连接与会话状态，恢复后重试；"
+                    "清理类任务也可改在可见终端直接执行"
+                ),
+                "last_error": last_error,
+            }
+        if blocked_hits >= majority:
+            return {
+                "pattern": "blocked",
+                "summary": (
+                    f"{tool} 最近 {n} 次真实失败中 {blocked_hits} 次为"
+                    f"审批/策略拦截，命令未获执行"
+                ),
+                "suggestion": (
+                    "在审批卡片放行所需命令，或调整权限模式/预登记 allowlist 后重试"
+                ),
+                "last_error": last_error,
+            }
+        # 同一操作反复失败（签名口径与 LoopDetector 一致：规范化后的 tool+args）
+        sig = tool_call_signature(recent[-1])
+        same_sig = sum(
+            1 for tc in recent if tool_call_signature(tc) == sig)
+        if same_sig >= 3:
+            return {
+                "pattern": "repeated_failure",
+                "summary": (
+                    f"同一操作 {tool} 反复失败 {same_sig} 次"
+                    + (f"，最后错误：{last_error}" if last_error else "")
+                ),
+                "suggestion": (
+                    "查看运行轨迹中该操作的错误输出，修正参数或换一种方法后重试"
+                ),
+                "last_error": last_error,
+            }
+        return {
+            "pattern": "generic",
+            "summary": (
+                f"{tool} 最近 {n} 次调用真实失败"
+                + (f"，最后错误：{last_error}" if last_error else "")
+            ),
+            "suggestion": "查看运行轨迹中的失败详情，定位后再重试",
+            "last_error": last_error,
+        }
 
 
 @dataclass

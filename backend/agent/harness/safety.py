@@ -6,11 +6,13 @@ Safety — 命令安全检测层
 - HARDLINE_PATTERNS：无条件阻断
 - DANGEROUS_PATTERNS：需审批
 - 只读命令白名单 + 默认审批（C-review C1：未入表命令不再默认放行）
+- readonly_policy 三条 token 感知守卫：执行注入 / 破坏性写 / 只读证明
+  （旧白名单证明不了的那部分命令由只读证明放行，命中的 rule_id 随结论一起给出）
 - sudo -S stdin 密码猜测守卫
 
 判定精度（误判审查后的四条口径，原登记在已退役的 docs/security-boundary.md §3.1，取值以本文件为准）：
-- 电源动词与 sudo/su 按**执行位置**命中（_classify_exec_position），
-  `journalctl -b | grep -i reboot` 这类只读排查不再被判 hardline
+- 电源动词、sudo/su 与 passwd 按**执行位置**命中（_classify_exec_position），
+  `journalctl -b | grep -i reboot`、`getent passwd` 这类只读查询不再被判 hardline/改口令
 - /dev/null 一类安全设备不算敏感读写目标（_is_safe_device）
 - 凭据读取按**路径**命中（_classify_secret_read），不限动词
 - 只读白名单动词的写开关（sort -o / dmesg -C / ifconfig down / hostname x）
@@ -27,7 +29,29 @@ import os
 import posixpath
 import re
 import shlex
-import unicodedata
+from dataclasses import dataclass
+
+from .command_parser import (
+    ChainSegment,
+    CommandParseError,
+    first_exec_verb,
+    get_normalized_for_display,
+    normalize_command_for_detection,
+    split_command_chain,
+    strip_prefix_wrappers,
+    strip_quotes,
+    verb_of,
+)
+from .readonly_policy import (
+    classify_destructive_write,
+    classify_exec_injection,
+    classify_readonly,
+    tar_list_mode,
+)
+
+_verb_of = verb_of
+_first_exec_verb = first_exec_verb
+_strip_prefix_wrappers = strip_prefix_wrappers
 
 __all__ = [
     "normalize_command_for_detection",
@@ -36,145 +60,10 @@ __all__ = [
     "DANGEROUS_PATTERNS",
     "check_sudo_stdin_guard",
     "classify_command",
+    "classify_command_detailed",
+    "CommandAssessment",
     "classify_shell_args",
 ]
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 命令归一化
-# ──────────────────────────────────────────────────────────────────────────────
-
-# ANSI 转义序列：ESC [ 参数... 字母
-_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
-# null 字节
-_NULL_BYTE_RE = re.compile(r"\x00")
-# 反斜杠转义：把 `r\m` 还原为 `rm`
-_BACKSLASH_ESCAPE_RE = re.compile(r"\\([^\n])")
-# 空字符串：把 `r''m` 还原为 `rm`
-_EMPTY_STRING_RE = re.compile(r"''|\"\"")
-# ANSI-C 引用：$'\x2f' / $'\n' 等（bash）— C-review C1 实测绕过
-_ANSI_C_RE = re.compile(r"\$'((?:[^'\\]|\\.)*)'")
-# Windows 路径形态（盘符 `C:\…` 或 home 折叠后的 `~\…`）：其中的反斜杠是**分隔符**，
-# 不是转义。必须在 _BACKSLASH_ESCAPE_RE 归约之前先折成 /，详见
-# normalize_command_for_detection 第 5.5 步。
-_WIN_PATH_FOLD_RE = re.compile(r"(?:[A-Za-z]:|~)\\[^\s]*")
-
-_ANSI_C_ESCAPES = {
-    "n": "\n", "t": "\t", "r": "\r", "a": "\a", "b": "\b",
-    "f": "\f", "v": "\v", "\\": "\\", "'": "'", '"': '"', "?": "?",
-}
-
-
-def _decode_ansi_c(match: re.Match) -> str:
-    """解码 $'...' 内的转义序列（\\xHH / \\ooo / \\n 等）"""
-    s = match.group(1)
-    out: list[str] = []
-    i = 0
-    while i < len(s):
-        ch = s[i]
-        if ch == "\\" and i + 1 < len(s):
-            n = s[i + 1]
-            if n in _ANSI_C_ESCAPES:
-                out.append(_ANSI_C_ESCAPES[n])
-                i += 2
-                continue
-            if n == "x" and i + 3 < len(s):
-                try:
-                    out.append(chr(int(s[i + 2:i + 4], 16)))
-                    i += 4
-                    continue
-                except ValueError:
-                    pass
-            if n in "01234567" and i + 3 < len(s):
-                try:
-                    out.append(chr(int(s[i + 1:i + 4], 8)))
-                    i += 4
-                    continue
-                except ValueError:
-                    pass
-        out.append(ch)
-        i += 1
-    return "".join(out)
-
-
-def get_normalized_for_display(command: str) -> str:
-    """返回命令的归一化可读形态，用于 UI 授权卡片展示。
-
-    与 normalize_command_for_detection 的检测归一化不同，本函数额外执行
-    shlex.split + 重组，消除空白差异，让用户看到"实际会被授权键绑定的命令形态"。
-
-    示例：
-      `rm  -rf   /tmp/foo ` → `rm -rf /tmp/foo`
-      `rm$'/tmp/foo'` → `rm /tmp/foo`
-
-    仅用于 UI 展示，不影响安全检测流程（检测归一化由 normalize_command_for_detection 完成）。
-    """
-    normalized = normalize_command_for_detection(command)
-    try:
-        tokens = shlex.split(normalized, posix=True)
-        return " ".join(tokens)
-    except ValueError:
-        # 解析失败时退回 strip 后的归一化版本
-        return normalized.strip()
-
-
-def normalize_command_for_detection(command: str) -> str:
-    """命令归一化 — 抵御常见混淆攻击
-
-    处理顺序：
-    1. strip ANSI 转义序列
-    2. 剥 null 字节
-    3. Unicode NFKC 归一化（全角 → 半角）
-    4. 折叠 home 路径（绝对路径折叠回 ~）
-    5. 解码 ANSI-C 引用（$'\\x2f' → /）— 必须在剥反斜杠之前，
-       否则旧的第 5 步会把 $'\\x2f' 里的 \\x 剥成 x 主动破坏匹配
-    5.5 Windows 路径折算（C:\\Users\\… 与 ~\\.ssh\\… → 斜杠形态）— 同样必须在剥
-       反斜杠之前，否则私钥路径会被折成 C:Usersalice.sshid_rsa 这种谁也判不出的形态
-    6. 剥反斜杠转义
-    7. 剥空字符串
-    """
-    # 1. strip ANSI 转义序列
-    command = _ANSI_ESCAPE_RE.sub("", command)
-
-    # 2. 剥 null 字节
-    command = _NULL_BYTE_RE.sub("", command)
-
-    # 3. Unicode NFKC 归一化（全角 → 半角）
-    command = unicodedata.normalize("NFKC", command)
-
-    # 4. 折叠 home 路径（绝对路径折叠回 ~）
-    home = os.path.expanduser("~")
-    if home and command.startswith(home):
-        command = "~" + command[len(home):]
-
-    # 5. 解码 ANSI-C 引用（C-review C1：rm$'\x2f' -rf $'\x2f' → rm/ -rf /）
-    command = _ANSI_C_RE.sub(_decode_ansi_c, command)
-
-    # 5.5 Windows 路径折算（实测绕过，本仓凭据判据的主要缺口）：
-    #     `cat C:\Users\alice\.ssh\id_rsa` 里每个反斜杠都被第 6 步当转义吃掉，
-    #     归一化结果是 `cat C:Usersalice.sshid_rsa` —— 下游**每一条**路径判据
-    #     （_SECRET_FILE_RE / 持久化前缀 / 敏感目录 / rm 目标 / 正则表）全部失配，
-    #     而同一条路径写成 `C:/Users/alice/.ssh/id_rsa` 判 dangerous。Windows 本机
-    #     降级读取分支（file_read/file_grep/file_glob 无 SSH 会话时走 Python open()）
-    #     拿到的是真机路径，家目录形态还会先被第 4 步折成 `~\…`。
-    #     折算只作用于「盘符或 ~ 之后到下一个空白」这一段：命令位照旧
-    #     （`r\m` 混淆仍被第 6 步还原），POSIX 上以 `\` 开头的 UNC 与文件名里的裸
-    #     反斜杠不动 —— 前者登记在已退役的 docs/security-boundary.md §7，后者按 POSIX 语义
-    #     本就是转义，折成 / 会把 `\etc\passwd` 这种字面文件名当成 /etc/passwd 误拦。
-    command = _WIN_PATH_FOLD_RE.sub(lambda m: m.group(0).replace("\\", "/"), command)
-
-    # 6. 剥反斜杠转义：把 `r\m` 还原为 `rm`
-    #    连续多个反斜杠（如 `r\\m`）需循环归约直至稳定
-    while True:
-        new_command = _BACKSLASH_ESCAPE_RE.sub(r"\1", command)
-        if new_command == command:
-            break
-        command = new_command
-
-    # 6. 剥空字符串：把 `r''m` 还原为 `rm`
-    command = _EMPTY_STRING_RE.sub("", command)
-
-    return command
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -321,14 +210,23 @@ def check_sudo_stdin_guard(command: str) -> tuple[bool, str | None]:
 # 严重度排序
 _SEVERITY = {"safe": 0, "dangerous": 1, "hardline": 2}
 
-# 检测副本：额外剥掉所有单双引号字符（仅用于模式匹配）
-_QUOTE_STRIP_RE = re.compile(r"['\"]")
 
-# 命令链切分：;  &&  ||  |  &  换行（在剥引号后的副本上切分，引号无法隐藏分隔符）
-# 审查修复：原切分符不含单独 &，`ls & rm -rf /` 中后台分隔后的第二段逃过逐段分类。
-# 新增 (?<!>)& 覆盖单独 &，同时保护 `2>&1` / `&>` 形式的文件描述符重定向不被误切
-# （& 前紧跟 > 视为重定向运算符的一部分）。&& 须保持在前，作为整体匹配优先于单独 &
-_COMMAND_CHAIN_SPLIT_RE = re.compile(r"\s*(?:&&|\|\||;|\||(?<!>)&|\n)\s*")
+@dataclass(frozen=True)
+class CommandAssessment:
+    """一次命令判定的完整结论：级别 + 原因 + 证据来源 + 规则编号。
+
+    source 是审计“为什么放行/拦截”的唯一依据；rule_id 只在新只读规则命中时有值。
+    normalized 仅供展示与审计，不参与任何授权。
+    """
+    level: str
+    reason: str | None
+    source: str
+    rule_id: str = ""
+    normalized: str = ""
+
+    def as_pair(self) -> tuple[str, str | None]:
+        return (self.level, self.reason)
+
 
 # 间接展开标记：$( ... ) / 反引号 / ${ ... }
 _INDIRECT_EXPANSION_RE = re.compile(r"\$\(|`|\$\{")
@@ -449,10 +347,7 @@ _INTERPRETERS = {
 # 带版本号的 python3.x 形式在首 token 判断时按前缀匹配
 _INTERPRETER_PREFIXES = ("python3.", "python2.", "perl5.")
 
-# 可剥离的命令包装器/环境赋值前缀（检测真实首 token 用）
-_WRAPPERS = {"env", "nohup", "time", "sudo", "doas", "nice", "stdbuf", "xargs", "command"}
-
-# 提权程序。它们同时也在 _WRAPPERS 里（不剥掉就看不见真正执行的那条命令），
+# 提权程序。它们同时也在包装器集合里（不剥掉就看不见真正执行的那条命令），
 # 所以「这次执行是提权的」这个事实只能在剥离前的前缀链里查 —— 见
 # _privilege_verb_in_chain。
 _PRIVILEGE_VERBS = {"sudo": "sudo command", "doas": "sudo command",
@@ -482,17 +377,19 @@ def _is_safe_device(path: str) -> bool:
 
 
 def _detection_copy(command: str) -> str:
-    """生成「检测副本」：归一化后额外剥掉所有单双引号字符（仅用于模式匹配）
+    return strip_quotes(normalize_command_for_detection(command))
 
-    `normalize_command_for_detection` 的返回值语义保持不变；
-    本副本只在 classify 内部使用，用于识破 `rm -rf "/"` 等引号包裹绕过。
-    """
-    return _QUOTE_STRIP_RE.sub("", normalize_command_for_detection(command))
+
+_FALLBACK_CHAIN_SPLIT_RE = re.compile(r"\s*(?:&&|\|\||;|\||(?<!>)&|\n)\s*")
 
 
 def _split_command_chain(text: str) -> list[str]:
-    """按 ; / && / || / | / 换行 切分命令链，返回非空段列表"""
-    return [seg.strip() for seg in _COMMAND_CHAIN_SPLIT_RE.split(text) if seg.strip()]
+    """兼容旧调用：返回 detection 串。解析失败时退回旧正则，仅用于写目标/
+    下载执行的辅助扫描；主分类路径必须直接调用 split_command_chain() 并 fail-closed。"""
+    try:
+        return [seg.detection for seg in split_command_chain(text)]
+    except CommandParseError:
+        return [s.strip() for s in _FALLBACK_CHAIN_SPLIT_RE.split(text) if s.strip()]
 
 
 def _normalize_target(path: str) -> str:
@@ -610,6 +507,25 @@ def _is_persistence_target(target: str) -> bool:
     return _is_ssh_path(t)
 
 
+_BARE_REDIRECT_RE = re.compile(r"^\d*(?:&>>?|>>?|<<<?|>&|<&)$")
+_INLINE_REDIRECT_RE = re.compile(r"^(?:&>>?|\d*(?:>>?|<<?|<>))")
+
+
+def _redirect_token_span(tokens: list[str], idx: int) -> int:
+    """tokens[idx] 是重定向 token 时返回其占用 token 数（1 或 2），否则 0。
+
+    `rm -rf build > /dev/null 2>&1` 经 shlex 拆成 ['rm','-rf','build','>',
+    '/dev/null','2>&1']；不跳过重定向及其目标，/dev/null 会被当成删除目标
+    误判 hardline。
+    """
+    t = tokens[idx]
+    if _BARE_REDIRECT_RE.fullmatch(t):
+        return 2 if idx + 1 < len(tokens) else 1
+    if _INLINE_REDIRECT_RE.match(t):
+        return 1
+    return 0
+
+
 def _token_rm_find_analysis(segment: str) -> tuple[str, str | None]:
     """token 级 rm/rmdir/find/shred/truncate 分析
 
@@ -651,6 +567,10 @@ def _token_rm_find_analysis(segment: str) -> tuple[str, str | None]:
             j = idx + 1
             while j < len(tokens):
                 t = tokens[j]
+                span = _redirect_token_span(tokens, j)
+                if span:
+                    j += span
+                    continue
                 if t.startswith("--"):
                     j += 1
                     continue
@@ -748,34 +668,61 @@ def _token_rm_find_analysis(segment: str) -> tuple[str, str | None]:
     return best
 
 
+def _match_paren(text: str, start: int) -> int:
+    """返回与 start 处 '(' 配对的 ')' 下标；未闭合返回 -1"""
+    depth = 1
+    j = start
+    while j < len(text):
+        if text[j] == "(":
+            depth += 1
+        elif text[j] == ")":
+            depth -= 1
+            if depth == 0:
+                return j
+        j += 1
+    return -1
+
+
 def _extract_subshell_contents(text: str) -> list[str]:
-    """提取 $() 与反引号内层内容（$() 支持嵌套）"""
+    """提取 $()、反引号、<()/ >() 与裸 () 的内层内容（括号支持嵌套）
+
+    引号感知分段器把括号内的 ; 视为非分隔符（`diff <(a; b) c` 是一段），
+    内层必须在这里递归分类，否则 `<(...)`/`(...)` 里的高危命令整段漏判。
+    裸 () 只在段首（命令位置）提取：检测副本已剥引号，`echo (1) hi` 的
+    参数括号不是子 shell，不能误伤。
+    """
     inners: list[str] = []
     i, n = 0, len(text)
+    lead = len(text) - len(text.lstrip())
     while i < n:
         ch = text[i]
-        if ch == "$" and i + 1 < n and text[i + 1] == "(":
-            depth = 1
-            j = i + 2
-            start = j
-            while j < n and depth > 0:
-                if text[j] == "(":
-                    depth += 1
-                elif text[j] == ")":
-                    depth -= 1
-                    if depth == 0:
-                        break
-                j += 1
-            inners.append(text[start:j])
-            i = j + 1
-        elif ch == "`":
+        nxt = text[i + 1] if i + 1 < n else ""
+        if ch == "`":
             j = text.find("`", i + 1)
             if j == -1:
                 break
             inners.append(text[i + 1:j])
             i = j + 1
+            continue
+        if (ch == "$" and nxt == "(") or (ch in "<>" and nxt == "("):
+            prev = text[i - 1] if i else ""
+            # 标识符紧贴括号（`map<(int)`）是 shell 语法错误，不可能是进程替换；
+            # 检测副本已剥引号，不排除会把源码搜索参数误判成子 shell。
+            # `x=<(...)` 仍是合法进程替换，照常提取。
+            if ch in "<>" and prev and (prev.isalnum() or prev == "_"):
+                i += 1
+                continue
+            paren_at = i + 1
+        elif ch == "(" and i == lead:
+            paren_at = i
         else:
             i += 1
+            continue
+        j = _match_paren(text, paren_at + 1)
+        if j == -1:
+            break
+        inners.append(text[paren_at + 1:j])
+        i = j + 1
     return inners
 
 
@@ -787,59 +734,6 @@ def _classify_subshells(segment: str) -> tuple[str, str | None]:
         if _SEVERITY[level] > _SEVERITY[best[0]]:
             best = (level, reason)
     return best
-
-
-# C-review C1：包装器的已知 flag 及是否吞下一个参数（flag → consumes_arg）。
-# 未列出的 flag 一律不跳过（保守策略：flag 留在序列里，首 token 变成未知
-# 形式 → 被"默认审批"规则判 dangerous，方向安全）。
-_WRAPPER_FLAGS: dict[str, dict[str, bool]] = {
-    "env": {"-i": False, "--ignore-environment": False, "-0": False,
-            "-u": True, "--unset": True, "-C": True, "-S": True, "-c": True},
-    "nice": {"-n": True},
-    "stdbuf": {"-o": True, "-e": True, "-i": True},
-    "doas": {"-u": True, "-g": True, "-C": False},
-    "setsid": {"-f": False, "-w": False, "-c": True},
-    "command": {"-v": False, "-p": False, "-V": False},
-    "xargs": {"-I": True, "--replace": True, "-i": False, "-n": True,
-              "--max-args": True, "-L": True, "-P": True, "--max-procs": True,
-              "-d": True, "-E": True, "-a": True, "-e": True, "-0": False,
-              "-r": False, "--arg-file": True},
-}
-
-
-def _strip_prefix_wrappers(tokens: list[str]) -> list[str]:
-    """剥离命令前的包装器（env/nohup/sudo/...）与环境赋值（FOO=bar），返回真实 token 序列
-
-    C-review C1：包装器带 flag 时同样剥离（`env -i /bin/bash x`、`nice -n 10 bash x`、
-    `timeout 5 /tmp/x`）——原实现遇到 flag 立即停剥，首 token 判定被击穿。
-    遇到未知 flag 停剥（保守，方向安全）。
-    """
-    out: list[str] = list(tokens)
-    changed = True
-    while changed and out:
-        changed = False
-        t = out[0]
-        base = t.rsplit("/", 1)[-1]
-        if t in _WRAPPERS or base in _WRAPPERS:
-            out = out[1:]
-            changed = True
-            # timeout 的第一个非 flag 参数是时长（timeout 5 /tmp/x）
-            if base == "timeout" and out and not out[0].startswith("-"):
-                out = out[1:]
-                continue
-            flags = _WRAPPER_FLAGS.get(base, {})
-            while out:
-                f = out[0]
-                if f not in flags:
-                    break
-                out = out[1:]
-                changed = True
-                if flags[f] and out:  # 吞掉 flag 的参数
-                    out = out[1:]
-        elif t and t[0].isalpha() and "=" in t and not t.startswith("-"):
-            out = out[1:]
-            changed = True
-    return out
 
 
 def _classify_interpreter(segment: str) -> tuple[str, str | None]:
@@ -895,12 +789,8 @@ _EXEC_POSITION_REASONS: frozenset[str] = frozenset(_POWER_VERB_REASONS.values())
     "sudo command", "switch user",
     # 审查R2修复：mkfs/dd 写裸设备改位置判定（整串匹配会无条件阻断只读排查）
     "format filesystem (mkfs)", "dd to raw block device",
-})
-
-# shell 结构词：出现在它们后面的 token 才是真正执行的命令
-_SHELL_CONTROL_KEYWORDS = frozenset({
-    "do", "then", "if", "while", "until", "for", "else", "elif", "fi", "done",
-    "esac", "in", "case", "select", "function", "time", "!",
+    # getent passwd 是只读查询；只有执行位置上的 passwd 才是改密
+    "password change (passwd)",
 })
 
 # 参数即代码、需退回整段匹配的动词：解释器已在 _INTERPRETERS，awk/sed 靠代码标记
@@ -909,36 +799,10 @@ _CODE_IN_ARG_RE = re.compile(r"\b(?:system|exec|popen|syscall|call)\s*\(")
 _POWER_WORD_RE = re.compile(r"\b(shutdown|reboot|halt|poweroff)\b", re.IGNORECASE)
 _POWER_PHRASE_RE = re.compile(r"\b(init|telinit)\s+(0|6)\b")
 
-# token 首尾的 shell 标点（`$(reboot)` / `(reboot)` / `${X}`）剥掉后才看得出动词
-_TOKEN_PUNCT_RE = re.compile(r"^[^A-Za-z0-9_.\-/]+|[^A-Za-z0-9_.\-/]+$")
-_ASSIGNMENT_RE = re.compile(r"[a-z_][a-z0-9_]*=\S*")
-
-
-def _verb_of(token: str) -> str:
-    """token → 可比较的动词名（剥标点、去尾部分隔符、取 basename、小写）
-
-    尾部 `/` 必须先于 basename 剥掉：ANSI-C 绕过形态 `rm$'\\x2f' -rf $'\\x2f'`
-    解码后是 `rm/`，若先取 basename 会得到空串，rm 的全部目标判定就此失效
-    （实测退化成 dangerous 的「认不出命令」兜底，而 rm -rf / 应是 hardline）。
-    """
-    stripped = _TOKEN_PUNCT_RE.sub("", token).strip("/.").lower()
-    return stripped.rsplit("/", 1)[-1]
-
-
-def _first_exec_verb(tokens: list[str]) -> tuple[str, list[str]]:
-    """执行位置上的动词及其参数：跳过 shell 结构词与环境赋值前缀"""
-    for i, t in enumerate(tokens):
-        base = _verb_of(t)
-        if not base or base in _SHELL_CONTROL_KEYWORDS or _ASSIGNMENT_RE.fullmatch(base):
-            continue
-        return base, tokens[i + 1:]
-    return "", []
-
-
 def _privilege_verb_in_chain(tokens: list[str], stripped: list[str]) -> str | None:
     """真实动词之前被剥掉的那段前缀里出现的提权程序（sudo/doas/runuser/pkexec/su）。
 
-    sudo 与 doas 既登记在 _WRAPPERS（必须剥掉才能对真正执行的命令做位置判定），
+    sudo 与 doas 既登记在包装器集合（必须剥掉才能对真正执行的命令做位置判定），
     于是剥离之后没有任何一处还知道「这条命令是提权跑的」：实测
     `nohup sudo id`、`env sudo ls`、`nice -n 5 sudo id`、`xargs -a /tmp/f sudo id`、
     `command sudo id` 五种写法全部判 safe、审批卡一张都不出，而 §3.1 写的恰恰是
@@ -955,6 +819,22 @@ def _privilege_verb_in_chain(tokens: list[str], stripped: list[str]) -> str | No
         if base in _PRIVILEGE_VERBS:
             return _PRIVILEGE_VERBS[base]
     return None
+
+
+def _is_executable_path(token: str) -> bool:
+    """带 `/` 的首 token 是在调用程序还是在引用数据文件。
+
+    `passwd`、`./passwd`、`/usr/bin/passwd`、`/sbin/passwd` 都是调用；
+    `/etc/passwd` 是数据文件（父目录不是 bin/sbin），拿它当动词会给出
+    错误的成因。
+    """
+    t = _normalize_target(token)
+    if "/" not in t:
+        return True
+    parent = t.rsplit("/", 1)[0]
+    if not parent or parent == ".":
+        return True
+    return parent.rsplit("/", 1)[-1] in ("bin", "sbin")
 
 
 def _classify_exec_position(segment: str) -> tuple[str, str | None]:
@@ -991,6 +871,14 @@ def _classify_exec_position(segment: str) -> tuple[str, str | None]:
         return ("hardline", "format filesystem (mkfs)")
     if real == "dd" and _DD_OF_RAW_RE.search(" ".join(real_args)):
         return ("hardline", "dd to raw block device")
+    # 改口令只在执行位置上成立：`getent passwd` 的 passwd 是查询键、`cat /etc/passwd`
+    # 的是读取目标，两者都不该拿到"修改账户口令"这个成因。
+    if real == "passwd":
+        # 首 token 是数据文件路径（`/etc/passwd` 直接当命令敲）时成因应回到凭据读取；
+        # `/usr/bin/passwd root`、`/sbin/passwd` 仍是真实的改口令调用。
+        passwd_token = next((t for t in stripped if _verb_of(t) == "passwd"), "")
+        if _is_executable_path(passwd_token):
+            return ("dangerous", "password change (passwd)")
     if real in ("init", "telinit"):
         # 只有切到 0/6 才是电源动作；`init 5` 这类换运行级原本也只是 dangerous
         # （默认审批），不能因为动词化就升级成无条件阻断
@@ -1526,7 +1414,7 @@ def _classify_unknown_default(segment: str) -> tuple[str, str | None]:
     """C-review C1：默认审批 — 首 token 不在只读白名单 → dangerous（需审批）
 
     仅当所有既有规则（正则表/token 分析/子 shell/解释器/敏感读取/写目标）
-    都未命中时由 _classify_segment 调用。
+    都未命中时由 _assess_segment 调用。
     """
     try:
         tokens = shlex.split(segment, posix=True)
@@ -1547,8 +1435,11 @@ def _classify_unknown_default(segment: str) -> tuple[str, str | None]:
         # 认，见 _token_rm_find_analysis），目标非敏感/非递归未知才落到这里
         return ("safe", None)
     if base == "tar":
-        # 敏感目录作源已由 _token_rm_find_analysis / _classify_write_targets 判定，
-        # 「把外部程序接进数据流」那几个开关也在那里判 —— 一条规则只写一处。
+        # 敏感源 / 外部程序钩子已由 _classify_write_targets 判过。
+        # 列表模式不是旧白名单能证明的只读形态：先降为 dangerous fallback，
+        # 交给 readonly_policy 证明并带 rule_id；创建/无模式保持旧 safe 口径。
+        if tar_list_mode(tokens):
+            return ("dangerous", "tar list mode (readonly candidate)")
         return ("safe", None)
     if base == "sed":
         if any(t == "--in-place" or t.startswith("-i") for t in tokens[1:]):
@@ -1613,91 +1504,236 @@ def _classify_unknown_default(segment: str) -> tuple[str, str | None]:
     return ("dangerous", f"unknown command, default approval ({base})")
 
 
-def _classify_segment(segment: str, apply_default_approval: bool = True) -> tuple[str, str | None]:
-    """对单个命令段做完整检测，取最高严重度（hardline > dangerous > safe）
+def _assess_segment(segment: ChainSegment, apply_default_approval: bool = True) -> CommandAssessment:
+    """单段完整检测：既有规则 → 执行注入/破坏性写守卫 → 默认审批 → 只读证明。
 
     规则（按序累积，reason 说明命中的规则）：
-    1. 现有 HARDLINE/DANGEROUS 正则表（电源动词与 sudo/su 除外，见 F2）
+    1. 现有 HARDLINE/DANGEROUS 正则表（电源动词与 sudo/su/passwd 除外，见 F2）
        + 执行位置判定 _classify_exec_position
     2. 间接展开规则：破坏性动词 + $( )/反引号/${ } → 至少 dangerous
-    3. token 级 rm/rmdir/find/shred/truncate 分析
-    4. $()/反引号 内层递归
-    5. 解释器/间接执行：首 token 为解释器 → 至少 dangerous
-    6. 上传/POST 侧外传：curl/wget 把凭据或敏感系统路径送出去 → dangerous
-    7. 敏感文件读取（路径驱动，不限动词）→ dangerous
-    8. 默认审批（可由 apply_default_approval 关闭，见 classify_constructed_command）
+    3. token 级 rm/rmdir/find/shred/truncate 分析 + $()/反引号 内层递归
+       + 解释器/间接执行 + 上传侧外传 + 敏感文件读取（路径驱动，不限动词）
+    4. 执行注入守卫、5. 破坏性写守卫（readonly_policy，token 感知）
+    6. 默认审批（可由 apply_default_approval 关闭，见 classify_constructed_command）
+       与托管日志目录豁免
+    7. 旧白名单 → 未证明为 safe 时跑只读证明，失败保留默认审批结论
     """
-    best: tuple[str, str | None] = ("safe", None)
+    detection = segment.detection
+    raw = segment.raw
+    best = CommandAssessment("safe", None, "default")
 
-    def _upd(level: str, reason: str) -> None:
+    def _upd(level: str, reason: str | None, source: str, rule_id: str = "") -> None:
         nonlocal best
-        if _SEVERITY[level] > _SEVERITY[best[0]]:
-            best = (level, reason)
+        if reason and _SEVERITY[level] > _SEVERITY[best.level]:
+            best = CommandAssessment(level, reason, source, rule_id)
 
-    # 1. 现有正则表（F2：电源动词/sudo/su 交位置级判定，通用匹配跳过这些项）
+    def _upd_guard(level: str, reason: str | None, source: str, rule_id: str = "") -> None:
+        """两条新守卫专用：更严重照常升级，同级时**带 rule_id** 的守卫让结论落地。
+
+        正则表与新守卫是同一件事的两种精度（`awk/sed inline code execution` 整串文案
+        vs `ex.inject.awk_system.v1` 点名本段的执行面），保留先命中者会让审计里的
+        source 永远停在正则表上、rule_id 全程为空。结构性规则（token 分析/凭据读取/
+        子 shell/解释器/外传）点名的是具体目标或内层命令，比守卫更贴后果，不被覆盖。
+        """
+        nonlocal best
+        if not reason:
+            return
+        if _SEVERITY[level] > _SEVERITY[best.level] or (
+            rule_id and level == best.level and best.source == "dangerous_pattern"
+        ):
+            best = CommandAssessment(level, reason, source, rule_id)
+
+    # 1. 既有正则表（F2：电源动词/sudo/su/passwd 交位置级判定，通用匹配跳过这些项）
     for pattern, reason in HARDLINE_PATTERNS:
         if reason in _EXEC_POSITION_REASONS:
             continue
-        if pattern.search(segment):
-            _upd("hardline", reason)
+        if pattern.search(detection):
+            return CommandAssessment("hardline", reason, "hardline_pattern")
     for pattern, reason in DANGEROUS_PATTERNS:
         if reason in _EXEC_POSITION_REASONS:
             continue
-        if pattern.search(segment):
-            _upd("dangerous", reason)
-    _upd(*_classify_exec_position(segment))
+        if pattern.search(detection):
+            _upd("dangerous", reason, "dangerous_pattern")
+    _upd(*_classify_exec_position(detection), "exec_position")
 
-    # 2. 间接展开规则
-    if _DESTRUCTIVE_VERB_RE.search(segment) and _INDIRECT_EXPANSION_RE.search(segment):
-        _upd("dangerous", "destructive command with indirect expansion")
+    # 2. 间接展开
+    if _DESTRUCTIVE_VERB_RE.search(detection) and _INDIRECT_EXPANSION_RE.search(detection):
+        _upd("dangerous", "destructive command with indirect expansion", "indirect_expansion")
 
-    # 3. token 级分析
-    level, reason = _token_rm_find_analysis(segment)
+    # 3. token 级 / 子 shell / 解释器 / 外传 / 凭据读取
+    #    （F4 外传先于 F3 凭据读取：`curl -F file=@/etc/shadow` 报"外传"而不是"读取"，
+    #     卡片文案更贴近后果）
+    level, reason = _token_rm_find_analysis(detection)
     if level != "safe":
-        _upd(level, reason)
-
-    # 4. 子 shell 递归
-    level, reason = _classify_subshells(segment)
+        _upd(level, reason, "token_analysis")
+    level, reason = _classify_subshells(detection)
     if level != "safe":
-        _upd(level, reason)
-
-    # 5. 解释器/间接执行
-    level, reason = _classify_interpreter(segment)
+        _upd(level, reason, "subshell")
+    level, reason = _classify_interpreter(detection)
     if level != "safe":
-        _upd(level, reason)
-
-    # 6. F4：curl/wget 上传/POST 侧的凭据与敏感路径外传（先于凭据读取，
-    #    让 `curl -F file=@/etc/shadow` 报"外传"而不是"读取"，卡片文案更贴近后果）
-    level, reason = _classify_exfiltration(segment)
+        _upd(level, reason, "interpreter")
+    level, reason = _classify_exfiltration(detection)
     if level != "safe":
-        _upd(level, reason)
-
-    # 7. 敏感文件读取（F3：路径驱动，不再要求首 token 是读取动词）
-    level, reason = _classify_secret_read(segment)
+        _upd(level, reason, "exfiltration")
+    level, reason = _classify_secret_read(detection)
     if level != "safe":
-        _upd(level, reason)
+        _upd(level, reason, "secret_read")
 
-    # 8. C-review C1：默认审批 — 所有规则未命中且首 token 不在只读白名单
-    #    → dangerous（需审批）。旧实现此处直接返回 safe（默认放行）。
-    #    客户端自造模板（classify_constructed_command）关闭本条：模板动词不在
-    #    只读白名单里，套用会把写 /tmp/x.txt 这类普通操作也判 dangerous。
-    if apply_default_approval and best[0] == "safe":
-        # 托管日志目录清理豁免（2026-10-22）：删/写规则点已按目标放行，
-        # touch/cp/mv/find 等动词不能在默认审批这最后一环被拉回 dangerous
-        if not _agent_log_cleanup_exempt(segment):
-            level, reason = _classify_unknown_default(segment)
-            if _SEVERITY[level] > _SEVERITY[best[0]]:
-                best = (level, reason)
+    # 4. 执行注入守卫（token 感知，先于旧白名单：awk system/git -c 等旧白名单漏洞）
+    injection = classify_exec_injection(raw)
+    if not injection.safe:
+        _upd_guard("dangerous", injection.reason, "exec_injection", injection.rule_id)
 
-    return best
+    # 5. 破坏性写守卫（date/find/tar/journalctl/yq）
+    exempt = _agent_log_cleanup_exempt(detection)
+    destructive = classify_destructive_write(raw, find_actions_allowed=exempt)
+    if not destructive.safe:
+        _upd_guard("dangerous", destructive.reason, "destructive_write", destructive.rule_id)
+
+    if best.level != "safe":
+        return best
+
+    # 6. 构造模板口径：不套默认审批，也不尝试只读证明
+    if not apply_default_approval:
+        return CommandAssessment("safe", None, "constructed_no_default")
+
+    # 7. 托管日志目录豁免：写规则点已按目标放行，默认审批必须在最后一环同样放行
+    if exempt:
+        return CommandAssessment("safe", None, "agent_log_exemption")
+
+    # 8. 旧白名单（legacy）优先；命中 safe 时不进入证明，避免 legacy 动词冒领 rule_id
+    level, reason = _classify_unknown_default(detection)
+    if level == "safe":
+        return CommandAssessment("safe", None, "legacy_safe_verb")
+
+    # 9. 旧表没证明为 safe → 只读证明；失败则保留默认审批结论
+    proof = classify_readonly(raw)
+    if proof.safe:
+        return CommandAssessment("safe", None, "readonly_rule", proof.rule_id)
+    return CommandAssessment(level, reason, "default_approval")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 主检测函数
 # ──────────────────────────────────────────────────────────────────────────────
 
+def classify_command_detailed(
+    command: str,
+    apply_default_approval: bool = True,
+) -> CommandAssessment:
+    """带证据来源的命令判定。classify_command() 是它的二元组视图。
+
+    加固流程（保留 normalize + 正则表作为第一层）：
+    1. sudo stdin guard（先于其他检查）
+    2. 生成检测副本（归一化 + 剥掉所有单双引号）
+    3. 全串正则表检测（修复管道类模式：`|` 是分段符，curl|sh 等模式 per-segment
+       永远匹配不到；fork bomb 完整形态同理）。电源动词、sudo/su 与 passwd 不在此列，
+       它们只在第 6 步按执行位置判定（F2）
+    4. 全串写目标扫描（> / >> / tee / cp·mv / sort -o → 持久化/敏感路径；
+       /dev/null 这类安全设备除外，见 _is_safe_device）
+    5. 引号感知分段：结构不可解析（未闭合引号/括号）整串 fail-closed 判 dangerous，
+       不退回「整串当一段」继续放行
+    6. 对每段跑 _assess_segment（既有规则 → 执行注入/破坏性写守卫 → 默认审批 →
+       只读证明），取所有检测的最高严重度
+    7. 跨段下载执行启发式（curl/wget -o && 执行）
+    """
+    # 1. sudo stdin guard（基于原始命令）
+    blocked, reason = check_sudo_stdin_guard(command)
+    if blocked:
+        return CommandAssessment("hardline", reason, "hardline_pattern",
+                                 normalized=normalize_command_for_detection(command))
+
+    detection = _detection_copy(command)
+    normalized = normalize_command_for_detection(command)
+    best = CommandAssessment("safe", None, "default", normalized=normalized)
+
+    def _upd(level: str, reason: str | None, source: str, rule_id: str = "") -> None:
+        nonlocal best
+        if reason and _SEVERITY[level] > _SEVERITY[best.level]:
+            best = CommandAssessment(level, reason, source, rule_id, normalized)
+
+    # 2/3. 全串正则表（与 per-segment 取并集：全串覆盖跨段模式，segment 覆盖段内 $ 边界）
+    #      F2：电源动词/sudo/su/passwd 只在分段后的执行位置上判定，整串匹配会误伤
+    #      `journalctl -b | grep -i reboot` 这类只读排查，故此处跳过。
+    for pattern, hreason in HARDLINE_PATTERNS:
+        if hreason in _EXEC_POSITION_REASONS:
+            continue
+        if pattern.search(detection):
+            return CommandAssessment("hardline", hreason, "hardline_pattern",
+                                     normalized=normalized)
+    for pattern, dreason in DANGEROUS_PATTERNS:
+        if dreason in _EXEC_POSITION_REASONS:
+            continue
+        if pattern.search(detection):
+            _upd("dangerous", dreason, "dangerous_pattern")
+
+    # 4. 全串写目标扫描（重定向 / tee）
+    level, reason = _classify_write_targets(detection)
+    if level != "safe":
+        _upd(level, reason, "write_target")
+    if best.level == "hardline":
+        return best
+
+    # 5. 引号感知分段：结构不可解析 → fail-closed
+    try:
+        segments = split_command_chain(command)
+    except CommandParseError as exc:
+        return CommandAssessment(
+            "dangerous",
+            f"unparseable command chain ({exc}; conservative)",
+            "unparseable",
+            normalized=normalized,
+        )
+    if not segments and detection.strip():
+        segments = [ChainSegment(raw=command, detection=detection)]
+
+    # 6. 分段检测
+    safe_segments: list[CommandAssessment] = []
+    for segment in segments:
+        assessment = _assess_segment(segment, apply_default_approval)
+        if assessment.level == "safe":
+            safe_segments.append(assessment)
+            continue
+        # 取更严重者；同级时让带 rule_id 的新守卫结论落地 —— 整串表与段内表命中
+        # 同一条文案，`ex.inject.awk_system.v1` 才是本段真正的执行面（口径与
+        # _assess_segment 的 _upd_guard 一致，两处不同步就是漂移）。
+        if _SEVERITY[assessment.level] > _SEVERITY[best.level] or (
+            assessment.rule_id
+            and assessment.level == best.level
+            and best.source == "dangerous_pattern"
+        ):
+            best = CommandAssessment(
+                assessment.level, assessment.reason, assessment.source,
+                assessment.rule_id, normalized,
+            )
+        if best.level == "hardline":
+            return best
+
+    # 全串 safe 时补回证据来源：起始值就是 safe，若只按「更严重才覆盖」，
+    # 单段 jq 的 readonly_rule / 单段 ls 的 legacy_safe_verb 都会被丢成 "default"。
+    # 多段命令只有**每一段**都由只读规则证明才允许整串标 readonly_rule；混合来源
+    # 标 mixed_safe —— 审计里 source=readonly_rule 是「没有改状态」的证据，不能拿
+    # 部分证明冒领，也不能把它降级成 legacy 后反过来吞掉真实规则。
+    if best.level == "safe" and safe_segments:
+        if len(safe_segments) == 1:
+            seg = safe_segments[0]
+            best = CommandAssessment(
+                seg.level, seg.reason, seg.source, seg.rule_id, normalized)
+        elif all(a.source == "readonly_rule" for a in safe_segments):
+            best = CommandAssessment(
+                "safe", None, "readonly_rule", safe_segments[0].rule_id, normalized)
+        else:
+            best = CommandAssessment("safe", None, "mixed_safe", "", normalized)
+
+    # 7. 跨段下载执行
+    level, reason = _classify_download_exec([s.raw for s in segments])
+    if level != "safe":
+        _upd(level, reason, "download_exec")
+    return best
+
+
 def classify_command(command: str, apply_default_approval: bool = True) -> tuple[str, str | None]:
-    """分类命令风险等级
+    """分类命令风险等级（签名与返回口径保持不变）。
 
     Args:
         command: 待判定命令
@@ -1710,66 +1746,12 @@ def classify_command(command: str, apply_default_approval: bool = True) -> tuple
         level: "hardline" (无条件阻断) | "dangerous" (需审批) | "safe" (放行)
         reason: 阻断/需审批的原因（level=safe 时为 None）
 
-    加固流程（保留 normalize + 正则表作为第一层）：
-    1. sudo stdin guard（先于其他检查）
-    2. 生成检测副本（归一化 + 剥掉所有单双引号）
-    3. 全串正则表检测（修复管道类模式：`|` 是分段符，curl|sh 等模式 per-segment
-       永远匹配不到；fork bomb 完整形态同理）。电源动词与 sudo/su 不在此列，
-       它们只在第 5 步按执行位置判定（F2）
-    4. 全串写目标扫描（> / >> / tee / cp·mv / sort -o → 持久化/敏感路径；
-       /dev/null 这类安全设备除外，见 _is_safe_device）
-    5. 命令链分段（; / && / || / | / 换行），对每段跑完整检测
-       （含解释器/家目录/敏感读取/位置级电源动词/**默认审批**）
-    6. 跨段下载执行启发式（curl/wget -o && 执行）
-    7. 取所有检测的最高严重度（hardline > dangerous > safe）
-
     C-review C1 默认策略：**默认审批** — 未命中任何规则且首 token 不在
-    只读白名单（_SAFE_VERBS/_SAFE_VERB_SUBCOMMANDS）的命令判 dangerous。
+    只读白名单（_SAFE_VERBS/_SAFE_VERB_SUBCOMMANDS）、也未被 readonly_policy 证明
+    只读的命令判 dangerous。需要「为什么放行/拦截」的证据来源时读
+    classify_command_detailed()。
     """
-    # 1. sudo stdin guard（基于原始命令）
-    blocked, reason = check_sudo_stdin_guard(command)
-    if blocked:
-        return ("hardline", reason)
-
-    # 2. 检测副本：归一化 + 剥引号（仅用于模式匹配）
-    detection = _detection_copy(command)
-
-    # 3. 全串正则表（与 per-segment 取并集：全串覆盖跨段模式，segment 覆盖段内 $ 边界）
-    #    F2：电源动词/sudo/su 只在分段后的执行位置上判定，整串匹配会误伤
-    #    `journalctl -b | grep -i reboot` 这类只读排查，故此处跳过。
-    best: tuple[str, str | None] = ("safe", None)
-    for pattern, hreason in HARDLINE_PATTERNS:
-        if hreason in _EXEC_POSITION_REASONS:
-            continue
-        if pattern.search(detection):
-            return ("hardline", hreason)
-    for pattern, dreason in DANGEROUS_PATTERNS:
-        if dreason in _EXEC_POSITION_REASONS:
-            continue
-        if pattern.search(detection):
-            best = ("dangerous", dreason)
-
-    # 4. 全串写目标扫描（重定向 / tee）
-    level, reason = _classify_write_targets(detection)
-    if _SEVERITY[level] > _SEVERITY[best[0]]:
-        best = (level, reason)
-    if best[0] == "hardline":
-        return best
-
-    # 5. 命令链分段检测
-    segments = _split_command_chain(detection)
-    for segment in segments:
-        level, reason = _classify_segment(segment, apply_default_approval)
-        if _SEVERITY[level] > _SEVERITY[best[0]]:
-            best = (level, reason)
-        if best[0] == "hardline":
-            break  # 已到最高严重度，提前结束
-
-    # 6. 跨段下载执行启发式
-    level, reason = _classify_download_exec(segments)
-    if _SEVERITY[level] > _SEVERITY[best[0]]:
-        best = (level, reason)
-    return best
+    return classify_command_detailed(command, apply_default_approval).as_pair()
 
 
 def classify_constructed_command(command: str) -> tuple[str, str | None]:

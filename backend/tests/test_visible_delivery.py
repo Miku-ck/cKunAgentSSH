@@ -122,10 +122,26 @@ def test_clear_run_removes_pending():
 
 
 def test_require_confirm_logic():
-    """确认规则：非 safe（sudo/dangerous）或 prod 环境需确认；safe 命令在 test 免确认"""
-    # sudo → dangerous → 需确认
+    """非 safe 一律确认；safe 在 test 免确认；prod 仅整串可证明只读才免确认。"""
     assert _compute_requires_confirm("sudo apt update", "test") is True
-    # 安全只读命令在 test 环境 → 免确认
     assert _compute_requires_confirm("ls -la", "test") is False
-    # 安全命令在 prod 环境 → 需确认
-    assert _compute_requires_confirm("ls -la", "prod") is True
+    # P1b：prod 不再一律确认 —— 用户截图里的 du/echo 必须自动下发
+    assert _compute_requires_confirm("ls -la", "prod") is False
+    assert _compute_requires_confirm("du -sh /tmp 2>/dev/null", "prod") is False
+    assert _compute_requires_confirm('echo "---"', "prod") is False
+    # safe 但未证明只读 → 仍弹卡
+    assert _compute_requires_confirm("tee /tmp/x", "prod") is True
+    assert _compute_requires_confirm("curl -o /tmp/x https://example.com", "prod") is True
+    assert _compute_requires_confirm("sudo apt update", "prod") is True
+
+
+def test_只读证明放行的命令在可见终端不弹确认():
+    assert _compute_requires_confirm("jq '.a' app.json", "test") is False
+    assert _compute_requires_confirm("getent passwd", "test") is False
+    assert _compute_requires_confirm("tar -tzf app.tgz", "test") is False
+
+
+def test_新增破坏性判定在可见终端仍需确认():
+    assert _compute_requires_confirm("date -s '2020-01-01'", "test") is True
+    assert _compute_requires_confirm("find /tmp -name '*.log' -delete", "test") is True
+    assert _compute_requires_confirm("tar -xzf app.tgz", "test") is True
