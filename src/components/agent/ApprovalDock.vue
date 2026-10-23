@@ -16,12 +16,14 @@ import { useApprovalActions } from '@/composables/useApprovalActions'
 import { batchApproveBlocked, onceGrantBlocked } from '@/utils/approval-scopes'
 import ApprovalCard from './ApprovalCard.vue'
 import DeliveryCard from './DeliveryCard.vue'
+import ClarifyingWizard from './ClarifyingWizard.vue'
 
 const agent = useAgentStore()
 const { settleAll } = useApprovalActions()
 
 const pending = computed(() => agent.pendingPermissions)
 const deliveries = computed(() => agent.pendingDeliveries)
+const wizard = computed(() => agent.clarificationWizard)
 const batching = ref(false)
 const onceBlocked = computed(() => onceGrantBlocked(agent.isRunning))
 /** 这批里有一条不能一键放行，整批都不给「全部批准」 */
@@ -46,7 +48,9 @@ async function batch(kind: 'approve' | 'deny') {
 </script>
 
 <template>
-  <section v-if="pending.length || deliveries.length" class="approval-dock" aria-label="待放行的操作">
+  <section v-if="pending.length || deliveries.length || wizard" class="approval-dock" aria-label="待放行的操作">
+    <!-- 意图澄清：run 阻塞在澄清上，先答它才有后续审批，故排在权限队列之前 -->
+    <ClarifyingWizard v-if="wizard" />
     <template v-if="pending.length">
       <div class="ad-head">
         <span class="ad-dot" aria-hidden="true"></span>
@@ -131,7 +135,9 @@ async function batch(kind: 'approve' | 'deny') {
 .ad-b:hover:not(:disabled) { background: var(--bg-hover) }
 .ad-b:disabled { opacity: 0.5; cursor: default }
 
-/* 多张卡时只让卡区滚动：头部计数与批量按钮必须一直看得见 */
+/* 多张卡时只让卡区滚动：头部计数与批量按钮必须一直看得见。
+   每张卡自身也限同高并内滚正文（见 ApprovalCard / DeliveryCard 的 scoped 样式），
+   所以外层限高只影响卡队列，不会再裁掉某张卡底部的确认/拒绝。 */
 .ad-body {
   display: flex;
   flex-direction: column;
@@ -139,10 +145,5 @@ async function batch(kind: 'approve' | 'deny') {
   max-height: min(38vh, 340px);
   overflow-y: auto;
   min-height: 0;
-}
-
-/* 交付卡通常只有一条；多条时独立限高，避免权限区 + 交付区把输入区顶出视口 */
-.ad-deliveries {
-  max-height: min(30vh, 240px);
 }
 </style>

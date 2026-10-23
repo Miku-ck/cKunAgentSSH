@@ -8,7 +8,7 @@
  * 运行等到后端 TTL 超时。
  *
  * 实际包含的区块（均为条件渲染，无内容时整块隐藏）:
- * - 澄清向导（ClarifyingWizard：自带 visible 门控 + Teleport，不受下方整块开关影响）
+ * - （意图澄清已并入输入区上方 ApprovalDock 的澄清卡，不在此面板）
  * - 任务规划（意图分类：级别/任务类型/思考预算）
  * - 警告（warnings）
  * - 人工介入求助卡片（AI 请求帮助，可忽略）
@@ -22,7 +22,6 @@
  */
 import { computed } from 'vue'
 import { useAgentStore } from '@/stores/agent'
-import ClarifyingWizard from './ClarifyingWizard.vue'
 
 const agentStore = useAgentStore()
 
@@ -58,7 +57,6 @@ const latestHelp = computed(() =>
 </script>
 
 <template>
-  <ClarifyingWizard />
   <div v-if="agentStore.hasRunNotice" class="agent-run-panel">
     <!-- 规划/意图信息 -->
     <div class="intention-section" v-if="agentStore.intentionInfo">
@@ -86,12 +84,19 @@ const latestHelp = computed(() =>
       </div>
     </div>
 
-    <!-- 人工介入提示（Task 3：降级为顶部细条通知，非阻塞、不占审批焦点） -->
+    <!-- 人工介入提示（Task 3：降级为顶部细条通知，非阻塞、不占审批焦点）
+         2026-10-23：reason 携带失败模式诊断（卡在哪），suggestion 为可执行的
+         恢复建议（怎么办）——两者都来自后端 ConfidenceMonitor，无则不渲染 -->
     <div class="ap-help-msgbar" v-if="latestHelp">
       <svg class="ap-ic ap-help-accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8.5"/><path d="M14.8 9.2a3 3 0 1 0-5.2 2c.9.9 1.4 1.3 1.4 2.3"/><line x1="12" y1="17.2" x2="12.01" y2="17.2"/></svg>
-      <span class="ap-help-msg" :title="latestHelp.reason">
-        AI 请求人工介入<template v-if="agentStore.humanHelpRequests.length > 1">（{{ agentStore.humanHelpRequests.length }} 次）</template>：{{ latestHelp.reason }}
-      </span>
+      <div class="ap-help-body">
+        <span class="ap-help-msg" :title="latestHelp.reason">
+          AI 请求人工介入<template v-if="agentStore.humanHelpRequests.length > 1">（{{ agentStore.humanHelpRequests.length }} 次）</template>：{{ latestHelp.reason }}
+        </span>
+        <span v-if="latestHelp.suggestion" class="ap-help-suggestion" :title="latestHelp.suggestion">
+          建议：{{ latestHelp.suggestion }}
+        </span>
+      </div>
       <span class="ap-sp"></span>
       <button
         v-if="!agentStore.isRunning"
@@ -185,9 +190,23 @@ const latestHelp = computed(() =>
   padding: 6px 10px;
 }
 .ap-help-msgbar .ap-ic { flex: none; color: var(--status-warn-text); }
-.ap-help-msg {
+/* 主体两行：主行 reason + 可选建议行（后端诊断产出，无则不渲染） */
+.ap-help-body {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ap-help-msg {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ap-help-suggestion {
+  font-size: 11px;
+  opacity: 0.85;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

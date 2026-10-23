@@ -91,14 +91,8 @@
 
   /* 人工介入/权限卡片 */
   --card-warn-border: #4a4533;
-  --card-perm-bg: #2d221a;
   --card-perm-border: #4a3a23;
   --card-perm-text: #e6c07b;
-  --card-perm-btn-bg: #3a5a3a;
-  --card-perm-btn-border: #4a8a4a;
-  --card-perm-btn-text: #b0e0b0;
-  --card-perm-btn-hover: #4a6a4a;
-  --card-perm-resolved: #4a8a4a;
   --danger-bg: #4a1a1a;
   --danger-border: #6a2d2d;
   --danger-text: #ff6b6b;
@@ -238,14 +232,8 @@
 
   /* 浅色主题：人工介入/权限卡片 */
   --card-warn-border: #e5d5a8;
-  --card-perm-bg: #fdf6e3;
   --card-perm-border: #e0c68a;
   --card-perm-text: #7a5c00;
-  --card-perm-btn-bg: #e6f4ea;
-  --card-perm-btn-border: #34a853;
-  --card-perm-btn-text: #1e7e34;
-  --card-perm-btn-hover: #d4ecd9;
-  --card-perm-resolved: #34a853;
   --danger-bg: #fdecea;
   --danger-border: #f3c2bd;
   --danger-text: #c62828;
@@ -304,14 +292,8 @@
   --status-tag-text: #a9b8af;
 
   --card-warn-border: #4a4330;
-  --card-perm-bg: #2a2214;
   --card-perm-border: #55441f;
   --card-perm-text: #e3c481;
-  --card-perm-btn-bg: #26371f;
-  --card-perm-btn-border: #5d8449;
-  --card-perm-btn-text: #cfe3b5;
-  --card-perm-btn-hover: #31452a;
-  --card-perm-resolved: #7fae66;
   --danger-bg: #3a1f1a;
   --danger-border: #673027;
   --danger-text: #f19a8a;
@@ -393,14 +375,8 @@
 
   /* 审批卡：苔绿按钮 + 暖黄警示，压住绿底上的黄绿互染 */
   --card-warn-border: #4a4330;
-  --card-perm-bg: #2a2214;
   --card-perm-border: #55441f;
   --card-perm-text: #e3c481;
-  --card-perm-btn-bg: #26371f;
-  --card-perm-btn-border: #5d8449;
-  --card-perm-btn-text: #cfe3b5;
-  --card-perm-btn-hover: #31452a;
-  --card-perm-resolved: #7fae66;
   --danger-bg: #3a1f1a;
   --danger-border: #673027;
   --danger-text: #f19a8a;
@@ -473,14 +449,8 @@
   --status-tag-text: #a9b8af;
 
   --card-warn-border: #4a4330;
-  --card-perm-bg: #2a2214;
   --card-perm-border: #55441f;
   --card-perm-text: #e3c481;
-  --card-perm-btn-bg: #26371f;
-  --card-perm-btn-border: #5d8449;
-  --card-perm-btn-text: #cfe3b5;
-  --card-perm-btn-hover: #31452a;
-  --card-perm-resolved: #7fae66;
   --danger-bg: #3a1f1a;
   --danger-border: #673027;
   --danger-text: #f19a8a;
@@ -550,14 +520,8 @@
   --status-tag-text: #a9b8af;
 
   --card-warn-border: #4a4330;
-  --card-perm-bg: #2a2214;
   --card-perm-border: #55441f;
   --card-perm-text: #e3c481;
-  --card-perm-btn-bg: #26371f;
-  --card-perm-btn-border: #5d8449;
-  --card-perm-btn-text: #cfe3b5;
-  --card-perm-btn-hover: #31452a;
-  --card-perm-resolved: #7fae66;
   --danger-bg: #3a1f1a;
   --danger-border: #673027;
   --danger-text: #f19a8a;
@@ -627,14 +591,8 @@
   --status-tag-text: #a9b8af;
 
   --card-warn-border: #4a4330;
-  --card-perm-bg: #2a2214;
   --card-perm-border: #55441f;
   --card-perm-text: #e3c481;
-  --card-perm-btn-bg: #26371f;
-  --card-perm-btn-border: #5d8449;
-  --card-perm-btn-text: #cfe3b5;
-  --card-perm-btn-hover: #31452a;
-  --card-perm-resolved: #7fae66;
   --danger-bg: #3a1f1a;
   --danger-border: #673027;
   --danger-text: #f19a8a;
@@ -724,14 +682,8 @@
 
   /* 审批卡：纸黄 + 朱砂，"盖一个章"的观感靠这组值出来，不改卡的结构 */
   --card-warn-border: #e2d3ad;
-  --card-perm-bg: #f8ecd7;
   --card-perm-border: #d9b877;
   --card-perm-text: #6b4d09;
-  --card-perm-btn-bg: #e9eedd;
-  --card-perm-btn-border: #4a6b3c;
-  --card-perm-btn-text: #3f5a2a;
-  --card-perm-btn-hover: #dbe4cb;
-  --card-perm-resolved: #4a6b3c;
   --danger-bg: #f7e2dd;
   --danger-border: #e0b3a4;
   --danger-text: #a03018;
