@@ -71,10 +71,10 @@ jobs:
       - name: Build
         run: npm run build
 
-  # 交付目标是 Windows-only（nsis / portable），可此前所有缺陷与修复都发生在
+  # 交付目标是 Windows-only（tar 解包直发），可此前所有缺陷与修复都发生在
   # Windows，CI 却没有一条 Windows job：node_modules/ 被 .gitignore 忽略，锁文件是
   # 在 Linux 上解析出来的，而 node-pty / ssh2 的 .node 到了 Windows 要走 MSVC 重编，
-  # asarUnpack 规则与 portable 首启解包也只有 Windows runner 验得了。
+  # asarUnpack 规则与 dir 产物 + tar 出件也只有 Windows runner 验得了。
   # 这里先求「跑起来」：装依赖 + 三条前端闸门 + 构建 + 打包，不追求产物细节。
   check-windows:
     name: Gates + package (windows)
@@ -138,13 +138,13 @@ jobs:
           runtime\python.exe -c "import fastapi, uvicorn; print('backend deps ok')"
 
       # 打包真跑一次：files/asarUnpack 规则能不能把 node-pty/ssh2 的 .node 放对位置、
-      # nsis 与 portable 两个产物能否出件，都只在 Windows runner 上成立。
-      - name: Package (nsis + portable)
+      # dir 产物 + tar 出件能否成立，都只在 Windows runner 上验得了。
+      - name: Package (tar.gz)
         run: npm run package
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: cKunAgentSSH-windows
-          path: dist/*.exe
+          name: cKunAgentSSH-windows-tar
+          path: dist/*.tar.gz
           if-no-files-found: error
