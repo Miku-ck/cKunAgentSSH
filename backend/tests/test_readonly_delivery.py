@@ -188,3 +188,61 @@ def test_跟随与无限运行形态不自动交付(cmd: str):
 ])
 def test_有界读取仍可自动交付(cmd: str):
     assert is_provably_readonly(cmd).safe is True, cmd
+
+
+HANG_OR_WRITE_CASES = [
+    # 等 stdin：PTY 里没人送输入，交付只能挂到超时
+    "cat", "sort", "grep error", "wc", "tr a-z A-Z", "uniq", "xxd",
+    "echo hi; cat",
+    # 跟随型（-f 只在特定子命令下才是跟随）
+    "kubectl logs -f web",
+    "kubectl logs --follow web",
+    "docker logs -f web",
+    "journalctl -F",
+    # 无限重复 / 无限源 / 过长等待
+    "netstat -c", "netstat --continuous", "lsof -r", "lsof -r 5",
+    "sleep 3600", "sleep 10m", "cat /dev/zero", "strings /dev/zero",
+    "vmstat 1 999999", "ping -c 4 -i 3600 10.0.0.1",
+    # 真正写盘的漏网开关
+    "file -C /etc/magic", "file --compile /etc/magic",
+    "dmesg -k", "dmesg --klogd",
+    "journalctl --update-catalog", "journalctl --setup-keys",
+]
+
+
+@pytest.mark.parametrize("cmd", HANG_OR_WRITE_CASES)
+def test_挂等与漏网写盘形态必须确认(cmd: str):
+    assert is_provably_readonly(cmd).safe is False, cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    "du -sh /tmp | sort -h | head -5",
+    "cat /etc/hosts | sort",
+    "grep error /var/log/syslog | wc -l",
+    "kubectl logs --since 10m web",
+    "docker logs --tail 50 web",
+    "file /etc/hosts",
+    "sleep 2",
+    "ping -c 3 10.0.0.1",
+    "grep x /dev/null",
+])
+def test_管道下游与有界读取不被误杀(cmd: str):
+    assert is_provably_readonly(cmd).safe is True, cmd
+
+
+def test_kubectl_watch_形态不自动交付():
+    for cmd in ("kubectl get pods -w", "kubectl get pods --watch",
+                "kubectl top pods --watch", "kubectl get pods -o watch",
+                "kubectl get pods -w -o json"):
+        assert is_provably_readonly(cmd).safe is False, cmd
+    assert is_provably_readonly("kubectl get pods -o wide").safe is True
+
+
+def test_等待时长按整链求和():
+    assert is_provably_readonly("sleep 280 && sleep 280 && sleep 280 && sleep 280").safe is False
+    assert is_provably_readonly("sleep 2 && sleep 2").safe is True
+
+
+def test_换行接在管道后仍是管道段():
+    assert is_provably_readonly("ls |\ncat").safe is True
+    assert is_provably_readonly("du -sh /tmp |\nsort -h |\nhead -5").safe is True

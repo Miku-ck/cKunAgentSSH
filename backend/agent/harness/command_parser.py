@@ -124,10 +124,15 @@ class CommandParseError(ValueError):
 
 @dataclass(frozen=True)
 class ChainSegment:
-    """raw = 归一化后原文（保留引号）；detection = 剥引号检测副本。"""
+    """raw = 归一化后原文（保留引号）；detection = 剥引号检测副本。
+
+    stdin_from_pipe: 本段的上一个分隔符是 `|`。没有这个信息就无法区分
+    `sort -h`（管道里读上游）和 `echo hi; sort -h`（读 PTY stdin 挂死）。
+    """
 
     raw: str
     detection: str
+    stdin_from_pipe: bool = False
 
 
 def split_command_chain(command: str) -> list[ChainSegment]:
@@ -137,7 +142,8 @@ def split_command_chain(command: str) -> list[ChainSegment]:
     解析失败必须由调用方升级为 dangerous，不能退回“整串当一段”继续放行。
     """
     text = normalize_command_for_detection(command)
-    spans: list[tuple[int, int]] = []
+    spans: list[tuple[int, int, str]] = []
+    pending_sep = ""
     start = 0
     quote = ""
     escaped = False
@@ -200,7 +206,11 @@ def split_command_chain(command: str) -> list[ChainSegment]:
                     continue
                 sep = ch
             if sep:
-                spans.append((start, i))
+                # 跳过纯空白段（`ls |\n cat`）时不能覆盖 pending_sep：那一段真正的
+                # 上游分隔符还是 `|`，改写后管道下游会被误判成等 PTY stdin。
+                if text[start:i].strip():
+                    spans.append((start, i, pending_sep))
+                    pending_sep = sep
                 i += len(sep)
                 start = i
                 continue
@@ -209,16 +219,19 @@ def split_command_chain(command: str) -> list[ChainSegment]:
         raise CommandParseError(f"unclosed quote {quote}")
     if depth:
         raise CommandParseError("unclosed '('")
-    spans.append((start, len(text)))
+    spans.append((start, len(text), pending_sep))
 
     segments: list[ChainSegment] = []
-    for a, b in spans:
+    for a, b, sep_before in spans:
         raw = text[a:b].strip()
         if not raw:
             continue
         detection = strip_quotes(raw).strip()
         if detection:
-            segments.append(ChainSegment(raw=raw, detection=detection))
+            segments.append(
+                ChainSegment(raw=raw, detection=detection,
+                             stdin_from_pipe=sep_before == "|")
+            )
     return segments
 
 

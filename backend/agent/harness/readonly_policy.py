@@ -13,6 +13,7 @@ import re
 from dataclasses import dataclass
 
 from .command_parser import (
+    ChainSegment,
     CommandParseError,
     split_command_chain,
     strip_prefix_wrappers,
@@ -684,13 +685,20 @@ _LEGACY_WRITE_FLAGS: dict[str, frozenset[str]] = {
     "diff": frozenset({"-o", "--output"}),
     "journalctl": frozenset({"--rotate", "--flush", "--sync"}),
     # -c 读后清空环形缓冲；-D/-E/-n 改控制台输出行为 —— 都不是只读
-    "dmesg": frozenset({"-C", "-c", "-D", "-E", "-n",
-                        "--clear", "--read-clear",
+    "dmesg": frozenset({"-C", "-c", "-D", "-E", "-n", "-k",
+                        "--clear", "--read-clear", "--klogd",
                         "--console-level", "--console-off", "--console-on"}),
     "iostat": frozenset({"-o"}),
     # rg 的 --pre/--hostname-bin 直接执行外部程序，--index 写索引
     "rg": frozenset({"--pre", "--pre-glob", "--hostname-bin", "--index"}),
+    # -C/--compile 把 magic 数据库编译写到 .mgc 文件
+    "file": frozenset({"-C", "--compile", "--recompile"}),
 }
+
+# journalctl 的写动作不止轮转：catalog 更新与 FSK 密钥生成都会落盘
+_JOURNALCTL_EXTRA_WRITE = frozenset({
+    "--update-catalog", "--setup-keys", "--rebuild-catalog",
+})
 
 
 def _legacy_write_flag_hit(args: list[str], flags: frozenset[str]) -> bool:
@@ -791,7 +799,10 @@ def classify_legacy_readonly(segment: str) -> ReadonlyVerdict:
     if base in _LEGACY_READONLY_VERBS:
         if _legacy_write_flag_hit(args, _LEGACY_WRITE_FLAGS.get(base, frozenset())):
             return ReadonlyVerdict(False)
-        if base == "journalctl" and any(t.startswith("--vacuum") for t in args):
+        if base == "journalctl" and (
+            any(t.startswith("--vacuum") for t in args)
+            or _legacy_write_flag_hit(args, _JOURNALCTL_EXTRA_WRITE)
+        ):
             return ReadonlyVerdict(False)
         limit = _LEGACY_WRITE_POSITIONALS.get(base)
         if limit is not None:
@@ -842,36 +853,166 @@ def classify_legacy_readonly(segment: str) -> ReadonlyVerdict:
 
 _FOLLOW_FORMS: dict[str, frozenset[str]] = {
     "tail": frozenset({"-f", "-F", "--follow"}),
-    "journalctl": frozenset({"-f", "--follow"}),
+    "journalctl": frozenset({"-f", "-F", "--follow"}),
     "dmesg": frozenset({"-w", "--follow"}),
 }
+# `-f` 在这些动词里只在某个子命令下才是跟随（`kubectl get -f file`、`docker ps -f` 是读）
+_FOLLOW_SUBCOMMANDS = {"kubectl": "logs", "docker": "logs"}
+_REPEAT_FORMS: dict[str, frozenset[str]] = {
+    "netstat": frozenset({"-c", "--continuous"}),
+    "lsof": frozenset({"-r", "--repeat"}),
+}
+# 不给文件名就退化成等 stdin：PTY 里永远不会送来输入，交付只能等到超时
+_STDIN_WAITING_VERBS = frozenset({
+    "cat", "tail", "head", "wc", "sort", "grep", "egrep", "fgrep", "rg",
+    "uniq", "cut", "tr", "column", "xxd", "od", "strings",
+    "md5sum", "sha1sum", "sha256sum", "cksum",
+})
+# 除 /dev/null 外的字符设备是无限源：`cat /dev/zero` 会淹没终端
+_QUIET_DEVICES = frozenset({"null"})
+# 模式+文件两个操作数才不构成等 stdin；只有一个参数时它是模式（grep 从 stdin 读）
+_GREP_LIKE_VERBS = frozenset({"grep", "egrep", "fgrep", "rg"})
+# tr 没有文件操作数，只能从 stdin 读
+_TR_VERBS = frozenset({"tr"})
+# kubectl 的 watch 形态在所有只读子命令下都是无限流
+_KUBECTL_WATCH_FLAGS = frozenset({"-w", "--watch", "--watch-only"})
+_GREP_PATTERN_FLAGS = frozenset({"-e", "--regexp", "-f", "--file"})
+# 超过这个时长的等待/循环不自动交付：可见终端交付本身就要在 300s 超时收口
+_MAX_AUTO_WAIT_SECONDS = 280.0
 
 
-def _blocks_terminal(segment: str) -> bool:
+def _looks_like_file_operand(token: str) -> bool:
+    """把 `cut -b 1` 的 1 这种「选项取值」从文件操作数里剔出去。
+
+    只用于「要不要等 stdin」这一判断，方向保守：认不出文件就多开一张确认卡。
+    """
+    return not token.isdigit()
+
+
+def _sleep_seconds(tokens: list[str]) -> float | None:
+    total = 0.0
+    for t in tokens:
+        unit = t[-1:]
+        multiplier = {"s": 1, "m": 60, "h": 3600, "d": 86400}.get(unit)
+        number = t[:-1] if multiplier and unit in "smhd" else t
+        if multiplier is None:
+            multiplier = 1
+        try:
+            total += float(number) * multiplier
+        except ValueError:
+            return None
+    return total
+
+
+def _option_value(args: list[str], names: tuple[str, ...]) -> str | None:
+    for i, t in enumerate(args):
+        if t in names and i + 1 < len(args):
+            return args[i + 1]
+        for name in names:
+            if t.startswith(name + "="):
+                return t.split("=", 1)[1]
+    return None
+
+
+def _blocks_terminal(seg: ChainSegment) -> bool:
     """跟随/无限运行形态：不改磁盘状态，但会把可见终端占死。
 
     交付等待靠超时收口，`tail -f` 自动写进 prod 终端后这一条 run 就挂在捕获上，
     用户看不到「已执行完」也拿不到输出摘要；证明阶段直接不认，让它走确认卡。
     """
     try:
-        tokens = strip_prefix_wrappers(tokenize_segment(segment))
+        tokens = strip_prefix_wrappers(tokenize_segment(seg.raw))
     except CommandParseError:
         return True
     if not tokens:
         return False
     base = tokens[0].rsplit("/", 1)[-1]
     args = tokens[1:]
+    positional = [t for t in args if not t.startswith("-")]
+
     if _legacy_write_flag_hit(args, _FOLLOW_FORMS.get(base, frozenset())):
         return True
-    if base == "ping" and not any(
-        t in ("-c", "--count") or t.startswith("--count=") for t in args
+    if base in _FOLLOW_SUBCOMMANDS \
+            and _FOLLOW_SUBCOMMANDS[base] in positional \
+            and _legacy_write_flag_hit(args, frozenset({"-f", "-F", "--follow"})):
+        return True
+    if _legacy_write_flag_hit(args, _REPEAT_FORMS.get(base, frozenset())):
+        return True
+    if base == "kubectl" and (
+        _legacy_write_flag_hit(args, _KUBECTL_WATCH_FLAGS)
+        or (_option_value(args, ("-o", "--output")) or "").split("+")[0]
+        in {"watch", "json-watch", "yaml-watch"}
     ):
         return True
+    # 管道段的上游就是它的 stdin，不算挂等；只有链首/分号后的段才会等 PTY 输入
+    if not seg.stdin_from_pipe:
+        files = [t for t in positional if _looks_like_file_operand(t)]
+        if base in _TR_VERBS:
+            return True
+        if base in _GREP_LIKE_VERBS and len(files) < 2 \
+                and not any(t.split("=", 1)[0] in _GREP_PATTERN_FLAGS for t in args):
+            return True
+        if base in _STDIN_WAITING_VERBS and not files:
+            return True
+    if any(t.startswith("/dev/") and t[len("/dev/"):] not in _QUIET_DEVICES
+           for t in positional):
+        return True
+    if base == "sleep":
+        seconds = _sleep_seconds(positional)
+        if seconds is None or seconds > _MAX_AUTO_WAIT_SECONDS:
+            return True
+    if base == "ping":
+        count = _option_value(args, ("-c", "--count"))
+        interval = _option_value(args, ("-i", "--interval"))
+        if count is None:
+            return True
+        try:
+            total = float(count) * float(interval if interval is not None else 1)
+        except ValueError:
+            return True
+        if total > _MAX_AUTO_WAIT_SECONDS:
+            return True
     if base in ("vmstat", "iostat"):
-        numbers = [t for t in args if not t.startswith("-") and t.isdigit()]
+        numbers = [t for t in positional if t.isdigit()]
         if len(numbers) == 1:
             return True
+        if len(numbers) >= 2 and float(numbers[0]) * float(numbers[1]) > _MAX_AUTO_WAIT_SECONDS:
+            return True
     return False
+
+
+def _segment_wait_seconds(seg: ChainSegment) -> float:
+    """本段的有意等待时长（sleep/ping/vmstat/iostat），用于整链求和。
+
+    单段各自 280s 合规、四段串起来 1120s 就会越过交付超时；只看每段是漏的。
+    """
+    try:
+        tokens = strip_prefix_wrappers(tokenize_segment(seg.raw))
+    except CommandParseError:
+        return 0.0
+    if not tokens:
+        return 0.0
+    base = tokens[0].rsplit("/", 1)[-1]
+    args = tokens[1:]
+    positional = [t for t in args if not t.startswith("-")]
+    if base == "sleep":
+        seconds = _sleep_seconds(positional)
+        return seconds if seconds is not None else 0.0
+    if base == "ping":
+        count = _option_value(args, ("-c", "--count"))
+        interval = _option_value(args, ("-i", "--interval"))
+        try:
+            return float(count) * float(interval if interval is not None else 1)
+        except (TypeError, ValueError):
+            return 0.0
+    if base in ("vmstat", "iostat"):
+        numbers = [t for t in positional if t.isdigit()]
+        if len(numbers) >= 2:
+            try:
+                return float(numbers[0]) * float(numbers[1])
+            except ValueError:
+                return 0.0
+    return 0.0
 
 
 def is_provably_readonly(command: str) -> ReadonlyVerdict:
@@ -889,12 +1030,16 @@ def is_provably_readonly(command: str) -> ReadonlyVerdict:
         return ReadonlyVerdict(False)
 
     rule_id = ""
+    wait_seconds = 0.0
     for seg in segments:
         if not classify_destructive_write(seg.raw).safe:
             return ReadonlyVerdict(False)
         if not classify_exec_injection(seg.raw).safe:
             return ReadonlyVerdict(False)
-        if _blocks_terminal(seg.raw):
+        if _blocks_terminal(seg):
+            return ReadonlyVerdict(False)
+        wait_seconds += _segment_wait_seconds(seg)
+        if wait_seconds > _MAX_AUTO_WAIT_SECONDS:
             return ReadonlyVerdict(False)
         verdict = classify_readonly(seg.raw)
         if not verdict.safe:
@@ -963,7 +1108,8 @@ def classify_destructive_write(
                     "tar extracts or updates archive (writes files)")
     if base == "journalctl":
         for t in tokens[1:]:
-            if t.startswith("--vacuum") or t in {"--rotate", "--flush", "--sync"}:
+            if (t.startswith("--vacuum") or t in {"--rotate", "--flush", "--sync"}
+                    or t.split("=", 1)[0] in _JOURNALCTL_EXTRA_WRITE):
                 return _bad("rw.destructive.journalctl_write.v1",
                             f"journalctl log deletion/rotation ({t})")
     if base == "yq" and _yq_write_flags(tokens[1:]):
