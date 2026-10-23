@@ -35,13 +35,12 @@ const props = defineProps<{
 
 const settingsStore = useSettingsStore()
 const markdownEnabled = computed(() => settingsStore.settings.chat.markdown)
-// 优先级：显式 defaultOpen > 用户设置 thinkingExpanded > false
-// 流式中调用方一般会传 defaultOpen=true，非流式时回退到用户设置
-const initialOpen = computed(() => props.defaultOpen ?? settingsStore.settings.chat.thinkingExpanded)
+// 展开优先级：显式 defaultOpen > 用户设置 thinkingKeepExpanded（默认 false）
+// 流式中调用方传 defaultOpen=true（思考过程始终展开），完毕后回落到用户设置 → 默认折叠
+const initialOpen = computed(() => props.defaultOpen ?? settingsStore.settings.chat.thinkingKeepExpanded)
 const open = ref(initialOpen.value)
-// initialOpen 只取一次的话，流式期间调用方传的 defaultOpen=true 会永久留在展开态：
-// thinkingExpanded=false 的用户在流式结束后仍看到全展开的思考过程。
-// 流式结束 → defaultOpen 撤掉 → 这里回落到用户设置；用户手动折叠不会触发（两个来源都没变）。
+// initialOpen 不只取一次：流式结束 → defaultOpen 撤掉 → open 回落到用户设置（默认折叠），
+// 这正是"思考完毕后默认折叠"的落点；用户手动展开/折叠不会被打断（两个来源都没变）。
 watch(initialOpen, (v) => { open.value = v })
 </script>
 

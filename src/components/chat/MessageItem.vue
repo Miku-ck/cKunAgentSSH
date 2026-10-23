@@ -57,7 +57,7 @@ const emit = defineEmits<{ 'open-trace': [runId: string] }>()
 const content = computed(() => props.message.streamingContent || props.message.content || '')
 const reasoning = computed(() => props.message.streamingReasoning || props.message.reasoning || '')
 const duration = computed(() => props.message.duration)
-// 非流式时不传 defaultOpen，让 ThinkingBlock 回退到 settings.chat.thinkingExpanded
+// 非流式时不传 defaultOpen，让 ThinkingBlock 回退到 settings.chat.thinkingKeepExpanded（默认折叠）
 const thinkingDefaultOpen = computed(() => {
   if (props.isStreaming && props.isLast) return true
   return undefined

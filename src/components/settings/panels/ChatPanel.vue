@@ -12,8 +12,8 @@
         </select>
       </SettingRow>
 
-      <SettingRow label="思考链默认" desc="推理模型的思考过程默认展开">
-        <select v-model="settings.chat.thinkingExpanded" class="setting-select">
+      <SettingRow label="思考链默认" desc="思考过程中始终展开；此开关控制思考完毕后是否保持展开（默认折叠）">
+        <select v-model="settings.chat.thinkingKeepExpanded" class="setting-select">
           <option :value="false">折叠</option>
           <option :value="true">展开</option>
         </select>

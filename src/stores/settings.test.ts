@@ -439,7 +439,7 @@ describe('settings 脏 localStorage 校验（全键）', () => {
 
   it('布尔键：字符串/数字/对象都不算开，默认 false 的键不会被 truthy 脏值打开', async () => {
     const s = await storeWithSaved({
-      chat: { markdown: 'false', autoScroll: 0, thinkingExpanded: {}, autoSkillMatch: 'no' },
+      chat: { markdown: 'false', autoScroll: 0, thinkingKeepExpanded: {}, autoSkillMatch: 'no' },
       agent: { dynamicBudget: 'yes', enableIntentionGuide: 1 },
       postProcess: { enabled: 'no' },
       memory: { enabled: 0, reconcileLlmEnabled: 'true' },
@@ -455,6 +455,12 @@ describe('settings 脏 localStorage 校验（全键）', () => {
     expect(s.settings.appearance.themeGradientEnabled).toBe(false)
     expect(s.settings.chat.autoScroll).toBe(true)
     expect(s.settings.appearance.animation).toBe(true)
+  })
+
+  it('thinkingExpanded 旧键弃读：语义改为"完毕后是否保持展开"，旧默认 true 不再生效', async () => {
+    // 重命名即迁移：全量序列化分不清"旧默认被捎带落盘"与"显式选择展开"，一律弃读旧键
+    const s = await storeWithSaved({ chat: { thinkingExpanded: true } })
+    expect(s.settings.chat.thinkingKeepExpanded).toBe(false)
   })
 
   it('数值键：非有限数与越界回默认（不钳边界），区间内合法值保留', async () => {

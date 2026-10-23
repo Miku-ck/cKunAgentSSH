@@ -38,7 +38,13 @@ export type SettingCategory =
 interface AppSettings {
   chat: {
     sendShortcut: 'enter' | 'shiftEnter'
-    thinkingExpanded: boolean
+    /**
+     * 思考完毕后（非流式渲染）是否保持展开；流式过程中始终展开。
+     * 曾用名 thinkingExpanded（默认 true，语义"思考过程默认展开"）——产品语义
+     * 改为"完毕后默认折叠"时弃读旧键：全量序列化分不清"旧默认被捎带落盘"与
+     * "用户显式选了展开"，重命名即一次性迁移，旧键随下次全量持久化自然消失。
+     */
+    thinkingKeepExpanded: boolean
     autoScroll: boolean
     messageFontSize: 12 | 13 | 14 | 15
     markdown: boolean
@@ -215,7 +221,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const settings = ref<AppSettings>({
     chat: {
       sendShortcut: asEnum(saved?.chat?.sendShortcut, ['enter', 'shiftEnter'] as const, 'enter'),
-      thinkingExpanded: asBool(saved?.chat?.thinkingExpanded, true),
+      thinkingKeepExpanded: asBool(saved?.chat?.thinkingKeepExpanded, false),
       autoScroll: asBool(saved?.chat?.autoScroll, true),
       messageFontSize: asEnum(saved?.chat?.messageFontSize, [12, 13, 14, 15] as const, 13),
       markdown: asBool(saved?.chat?.markdown, true),
