@@ -169,6 +169,20 @@ export class BackendManager {
   }
 
   /**
+   * 命令行是否服务于“本次启动”的端口：`--port <port>` 作为独立数字 token 命中即真。
+   * 本次端口由 findFreePort 保证选定当时空闲——若某个旧孤儿仍活着占着该端口，
+   * findFreePort 会因 bind 失败改选别的端口，所以此刻命令行写着本次端口的存活
+   * 进程只可能是本次 spawn 的后端进程树（python.cmd 包装器与其拉起的真实 python.exe
+   * 孙进程 pid 不同、无法靠 child.pid 排除，但都带同一 --port）。据此豁免它们，
+   * 杜绝 A1 延迟枚举把自家后端误杀进重启风暴。
+   */
+  private static usesOurPort(cmdline: string, port: number): boolean {
+    if (!cmdline || !Number.isInteger(port)) return false
+    const m = /--port\s+(\d+)/.exec(cmdline.toLowerCase())
+    return !!m && Number(m[1]) === port
+  }
+
+  /**
    * 杀掉前一次应用异常退出后遗留的孤儿 Python backend 进程。
    * 这些进程持有过期的 Electron bridge 端口/token，会导致定时任务执行时
    * bridge 连接全部失败（日志中即 "Electron bridge 连接失败 port=30000"）。
@@ -179,23 +193,27 @@ export class BackendManager {
    * 时间被整段同步查询垫高。现在枚举与 findFreePort 并行，主进程不冻结。
    *
    * 时序契约（防误杀，A1 改造后）：枚举与杀灭均晚于 spawn 异步完成，不再要求
-   * spawn 前汇合 —— 新后端的命令行同样命中 "python.exe + main.py" 特征，但它
-   * 的 pid 在 killPids 的 exclude 列表里，天然不会被自己误杀；taskkill 晚到
-   * 一两秒对孤儿旧进程无实质影响。start() 在 spawn 后的 fire-and-forget 闭包里
-   * await 本 Promise 再杀灭（start() 主链不等它，健康轮询不被拖慢）。
+   * spawn 前汇合 —— 新后端的命令行同样命中 "python.exe + main.py" 特征，且因
+   * python.cmd 包装器拉起真实 python.exe 孙进程，其 pid ≠ child.pid，靠 killPids 的
+   * pid exclude 护不住；因此杀灭前先按“本次端口”签名（usesOurPort）把自家后端
+   * 进程树整批剔除，taskkill 晚到一两秒对孤儿旧进程无实质影响。start() 在 spawn
+   * 后的 fire-and-forget 闭包里 await 本 Promise、过滤后再杀灭（start() 主链不等
+   * 它，健康轮询不被拖慢）。
    *
    * @param backendDir 本应用 backend 目录，用于精确识别"自己的"后端，
    *                   避免误伤用户机器上其他以 main.py 为入口的 Python 服务
    */
-  private static killOrphanBackends(backendDir: string): Promise<number[]> {
+  private static killOrphanBackends(backendDir: string): Promise<Array<{ pid: number; cmdline: string }>> {
     if (process.platform === 'win32') {
       return this.listOrphanPidsWin().then((rows) =>
-        rows
-          // 二次甄别不可省：WQL 只按 python.exe + '%main.py%' 粗筛，用户机器上
-          // 其他以 main.py 为入口的 Python 服务同样命中（与 POSIX 分支对称）
-          .filter((r) => BackendManager.isOurBackendProcess(r.cmdline, backendDir))
-          .map((r) => r.pid)
-          .filter((pid): pid is number => Number.isInteger(pid) && pid > 0)
+        rows.filter(
+          (r) =>
+            // 二次甄别不可省：WQL 只按 python.exe + '%main.py%' 粗筛，用户机器上
+            // 其他以 main.py 为入口的 Python 服务同样命中（与 POSIX 分支对称）
+            BackendManager.isOurBackendProcess(r.cmdline, backendDir) &&
+            Number.isInteger(r.pid) &&
+            r.pid > 0,
+        ),
       )
     }
     return this.listOrphanPidsPosix(backendDir)
@@ -247,7 +265,7 @@ export class BackendManager {
    * 与 Windows 分支对称的二次甄别：本机可能有多个 FastAPI 项目都用
    * main.py 入口（如其他工作区的后端服务），只杀本应用自己的。
    */
-  private static async listOrphanPidsPosix(backendDir: string): Promise<number[]> {
+  private static async listOrphanPidsPosix(backendDir: string): Promise<Array<{ pid: number; cmdline: string }>> {
     const run = (cmd: string, timeoutMs: number): Promise<string> =>
       new Promise((resolve) => {
         execFile('/bin/sh', ['-c', cmd], { encoding: 'utf-8', timeout: timeoutMs }, (err, stdout) => {
@@ -259,11 +277,11 @@ export class BackendManager {
       .split(/\s+/)
       .map((s) => parseInt(s.trim(), 10))
       .filter((n) => !isNaN(n) && n > 0)
-    const orphans: number[] = []
+    const orphans: Array<{ pid: number; cmdline: string }> = []
     for (const pid of pids) {
       const cmdline = (await run(`ps -p ${pid} -o command=`, 3000)).trim()
       // 进程刚退出时取不到命令行：跳过（幂等，下次启动还会尝试）
-      if (cmdline && BackendManager.isOurBackendProcess(cmdline, backendDir)) orphans.push(pid)
+      if (cmdline && BackendManager.isOurBackendProcess(cmdline, backendDir)) orphans.push({ pid, cmdline })
     }
     return orphans
   }
@@ -363,15 +381,20 @@ export class BackendManager {
       })
 
       const child = this.process
+      // 快照本次端口：闭包异步执行时 this.port 可能已被后续重启改写，必须钉死本次值。
+      const currentPort = this.port
       perfMark(`backend: spawned pid=${child.pid}`)
       // A1：枚举汇合与杀灭整体后移到 spawn 之后，fire-and-forget，不阻塞健康轮询。
-      // exclude 双保险——当前主进程 pid 与刚 spawn 的后端 pid 绝不下手；
-      // 枚举失败（PowerShell 不可用等）只告警，不影响本次启动。
-      // 闭包只捕获上方 const child 常量快照，不引用可变的 this.process。
+      // 杀灭前先按“本次端口”签名剔除自家后端进程树（包装器 + 孙进程，pid 各异但同端口），
+      // 再交给 killPids；exclude 双保险（新 spawn 的直接 pid 与主进程 pid）仍保留。
+      // 闭包只捕获上方 const child / currentPort 常量快照，不引用可变的 this.process。
       void (async () => {
         try {
-          const orphans = await orphansPromise
+          const rows = await orphansPromise
           perfMark('backend: orphan enumeration done')
+          const orphans = rows
+            .filter((r) => !BackendManager.usesOurPort(r.cmdline, currentPort))
+            .map((r) => r.pid)
           BackendManager.killPids(orphans, [child.pid ?? -1, process.pid])
         } catch (e) {
           console.warn('[BackendManager] 孤儿枚举/杀灭失败（不影响本次启动）:', e)

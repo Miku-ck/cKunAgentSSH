@@ -56,11 +56,18 @@ function stubEnumeration() {
     }
   })
   return {
-    /** 放行枚举，rows 里带上 newPid（模拟"枚举快照晚于 spawn 仍会捞到新进程"）；
-     * 命令行必须带 --host 127.0.0.1 + \backend\main.py，否则会被 isOurBackendProcess 的
-     * 宽口径谓词过滤掉，taskkill 断言就变成对空列表的恒真断言 */
-    resolve(newPid: number) {
-      cimCb!(null, `9999|D:\\app\\backend\\main.py --port 8011 --host 127.0.0.1\r\n${newPid}|D:\\app\\backend\\main.py --port 8010 --host 127.0.0.1`)
+    /** 放行枚举，三行模拟真机形态：
+     *  - 9999  --port 8011：上一次会话残留的旧孤儿（不同端口）→ 必须被杀
+     *  - 4321  --port 8010：本次 spawn 的直接子进程（== child.pid）→ 端口+pid 双重豁免
+     *  - 5678  --port 8010：本次后端的孙进程（python.cmd 包装器拉起的真实 python.exe，
+     *    pid ≠ child.pid，但服务同一个本次端口）→ 只能靠端口签名豁免（回归用例：
+     *    旧实现按 child.pid 排除护不住它 → 被 taskkill 误杀 → 重启风暴）
+     *  命令行带 --host 127.0.0.1 + \backend\main.py 才能过 isOurBackendProcess 宽口径 */
+    resolve() {
+      cimCb!(null,
+        '9999|D:\\app\\backend\\main.py --port 8011 --host 127.0.0.1\r\n'
+        + '4321|D:\\app\\backend\\main.py --port 8010 --host 127.0.0.1\r\n'
+        + '5678|D:\\app\\backend\\main.py --port 8010 --host 127.0.0.1')
     },
   }
 }
@@ -83,13 +90,16 @@ describe('A1 孤儿枚举汇合时机', () => {
     const p = bm.start()
     await new Promise((r) => setImmediate(r))
     expect(spawnMock).toHaveBeenCalledTimes(1) // 枚举回调还没放行
-    enumStub.resolve(child.pid)
+    enumStub.resolve()
     await p
-    // taskkill 只许对旧孤儿 9999 下手；新后端 pid 出现在枚举结果里也必须被 exclude 拦下
+    // taskkill 只许对旧孤儿 9999（不同端口 8011）下手；本次启动的后端进程——
+    // 无论 pid 是否等于 child.pid——只要服务的就是本次端口，一律豁免。
     const killed = execFileMock.mock.calls
       .filter((c) => c[0] === 'taskkill' || String(c[0]).endsWith('taskkill.exe'))
       .map((c) => (c[1] as string[]).join(' '))
     expect(killed.some((a) => a.includes('/PID 9999'))).toBe(true)
     expect(killed.some((a) => a.includes('/PID 4321'))).toBe(false)
+    // 回归断言：孙进程 5678（pid≠child.pid、同端口 8010）绝不能再被误杀
+    expect(killed.some((a) => a.includes('/PID 5678'))).toBe(false)
   })
 })
