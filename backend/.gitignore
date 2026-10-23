@@ -1,0 +1,27 @@
+# backend 本地产物 —— 与仓库根 .gitignore 同源口径，此处只补 backend 专属的那几项。
+# 存在理由：根 .gitignore 已经覆盖了 *.db / __pycache__ / .pytest_cache 等通用条目，
+# 但 backend 的测试与 lint 会在本目录自产一批固定路径的垃圾，单独钉一份可以让
+# 「backend 目录内 git status 恒干净」这件事在本目录自解释，不必去翻根配置。
+
+# pytest 落在本目录的运行缓存（含 lastfailed / nodeids，与机器强相关）
+.pytest_cache/
+
+# ruff 的增量缓存（换 ruff 版本后即失效，属可重建产物）
+.ruff_cache/
+
+# 一次性性能基准的落盘目录（数值随机器波动，不适合入库对比）
+.benchmarks/
+
+# 测试用例的临时工作区：conftest 的 session 级 autouse fixture 会整目录清扫这里，
+# 任何测试都不该依赖它持久化（见 backend/tests/conftest.py）
+tests/_tmp/
+
+# 单测跑出来的 SQLite 库与 WAL 影子文件（根 .gitignore 的 *.db 已覆盖，此处显式重申）
+*.db
+*.db-wal
+*.db-shm
+
+# 本地环境变量与密钥（backend/.env 承载 LLM 端点与 API Key，绝不能入库）
+.env
+.env.*
+!.env.example

@@ -16,8 +16,11 @@ var/
 sdist/
 develop-eggs/
 .installed.cfg
-lib/
-lib64/
+# lib/ 与 lib64/ 锚定到仓库根：不带前导斜杠会忽略任意层级任何叫 lib 的目录，
+# 将来 backend/ 下真要建一个 lib 包会被静默吞掉且 git 不报错（最难查的一类丢失）。
+# 这两条只为拦 virtualenv 的顶层产物，根级限定即可。
+/lib/
+/lib64/
 __pypackages__/
 .venv/
 env/
