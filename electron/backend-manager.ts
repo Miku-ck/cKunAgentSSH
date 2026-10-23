@@ -6,6 +6,7 @@ import { mkdirSync, existsSync, renameSync, copyFileSync, unlinkSync } from 'fs'
 import { homedir } from 'os'
 import { randomBytes } from 'crypto'
 import { perfMark } from './utils/perf-mark'
+import { resolvePowerShell } from './utils/powershell-path'
 import { clearPythonCache, loadPythonCache, savePythonCache } from './backend-python-cache'
 
 /** whenReady 的等待者：就绪/失败/超时三选一，各自只能被唤醒一次 */
@@ -126,27 +127,12 @@ export class BackendManager {
   }
 
   /**
-   * 解析 PowerShell 可执行文件路径。
-   *
-   * 必须优先用绝对路径：本应用经常从 PATH 被裁剪的环境启动（实测 `npm run dev`
-   * 的父 shell 连 ls / dirname 都找不到），此时 spawn 裸名 'powershell' 会直接
-   * ENOENT，孤儿检测静默失效。返回值回退为裸名，以兼容 PATH 正常的场景。
+   * 解析 PowerShell 可执行文件路径：实现已提取为共享 util
+   * （electron/utils/powershell-path.ts，与 shortcut-win 同源使用，候选表与
+   * 回退口径见那里）；这里只留一层薄委托供本类静态调用点使用。
    */
   private static resolvePowerShell(): string {
-    const root = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows'
-    const candidates = [
-      join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
-      // 32 位宿主进程访问 64 位 System32 时的别名路径
-      join(root, 'Sysnative', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
-    ]
-    for (const c of candidates) {
-      try {
-        if (existsSync(c)) return c
-      } catch {
-        /* 忽略，继续尝试下一个候选 */
-      }
-    }
-    return 'powershell'
+    return resolvePowerShell()
   }
 
   /**
