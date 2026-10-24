@@ -7,7 +7,8 @@
 2. 写动作新颖性收敛：write + (inferred|completed) → added + requires_confirm，
    has_added_write_steps 随之为真（前端据此把 auto 审批回落 normal）。
 3. plan 姿态剔除所有写步骤（对齐 resolveRunModes 的 plan=只读）。
-4. 外机字面量扫描：步骤/字段出现允许集合外的主机 → 写步骤升 added 逼确认。
+4. 外机字面量扫描：写步骤文本 / 补全字段出现允许集合外的主机 → 升 added 逼确认；
+   只读步骤不升级（观测别处不等于要在别处动手）。
 
 另钉两条跨层契约：raw_text 上限 == AgentRunRequest.task 上限；结构化端点
 必须 tools=[]（纯推理，不可能执行任何东西）。
@@ -97,6 +98,17 @@ def test_allowed_host_token_not_flagged():
     out = coerce_structure_payload(payload, active_host="web-01", environment="test",
                                    posture=None, allowed_hosts=["web-01"])
     assert out["steps"][0]["requires_confirm"] is False
+
+
+def test_foreign_host_in_read_step_keeps_provenance():
+    """只读步骤提到外机不升级：用户原话就是去看另一台，逼确认只会制造噪音。"""
+    payload = {"steps": [_step("查看 10.9.9.9 上的 nginx 状态",
+                               op_kind="read", provenance="verbatim")]}
+    out = coerce_structure_payload(payload, active_host="web-01", environment="test",
+                                   posture=None, allowed_hosts=["web-01"])
+    s = out["steps"][0]
+    assert s["provenance"] == "verbatim"
+    assert s["requires_confirm"] is False
 
 
 def test_unknown_op_kind_defaults_to_write_fail_closed():
