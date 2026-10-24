@@ -78,7 +78,7 @@
               <td class="r-branch">{{ branchText(r) }}</td>
               <td>
                 <span v-if="r.error" class="pill k-err" :title="r.error">取数失败</span>
-                <span v-else class="pill" :class="'k-' + kindOf(r)">{{ kindText(r) }}</span>
+                <span v-else class="pill" :class="'k-' + repoRowKind(r)">{{ kindText(r) }}</span>
               </td>
               <td>
                 <template v-if="r.originHost">
@@ -346,7 +346,6 @@ const filteredRows = computed(() => {
   return rows.value.filter(r => (r.name + ' ' + r.path).toLowerCase().includes(q))
 })
 
-function kindOf(r: RepoRow): string { return repoRowKind(r) }
 function kindText(r: RepoRow): string {
   const k = repoRowKind(r)
   if (k === 'dirty') return `脏区 ${r.dirtyFiles} 处`

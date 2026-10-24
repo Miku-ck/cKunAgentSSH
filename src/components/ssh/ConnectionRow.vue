@@ -73,9 +73,6 @@ const isConnecting = computed(() => props.connecting && props.pendingConnId === 
 
 defineEmits<{
   connect: [id: string]
-  edit: [conn: SSHConnection]
-  duplicate: [id: string]
-  delete: [id: string]
   'toggle-select': [id: string]
   menu: [e: MouseEvent, conn: SSHConnection]
 }>()

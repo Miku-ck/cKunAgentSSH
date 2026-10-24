@@ -84,7 +84,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   select: [candidate: CompletionCandidate]
-  cancel: []
 }>()
 
 const selectedIndex = ref(0)

@@ -23,7 +23,6 @@
           :x="completionState.x"
           :y="completionState.y"
           @select="applyCompletion"
-          @cancel="hideCompletion"
         />
         <!-- 终端内搜索条（Ctrl+Shift+F）：addon 父组件持有，条只管 UI -->
         <TermSearchBar

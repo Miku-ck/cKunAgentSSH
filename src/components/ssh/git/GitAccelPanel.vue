@@ -752,7 +752,7 @@ async function onMasterDisable(): Promise<void> {
 
 .hint.warn { color: var(--danger-text); }
 
-.hint code, .status-line code {
+.hint code {
   font-family: var(--font-mono);
   font-size: 11px;
 }

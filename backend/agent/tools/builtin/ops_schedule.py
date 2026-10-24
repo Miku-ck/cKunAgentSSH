@@ -28,8 +28,6 @@ meta = ToolMeta(risk_level="moderate", reversible=False, timeout=10.0,
 _NAME_MAX_LEN = 100
 _TASK_PROMPT_MAX_LEN = 50_000
 
-# cron 字段位置：min hour dom month dow
-_CRON_MIN, _CRON_HOUR, _CRON_DOM, _CRON_MONTH, _CRON_DOW = range(5)
 # 引擎 weekday 编码：0=周一 … 6=周日
 _CRON_DOW_TO_WEEKDAY = {
     1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5,

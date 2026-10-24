@@ -389,11 +389,6 @@ onMounted(refresh)
   color: var(--text-primary);
   font-weight: 600;
 }
-.audit-sub {
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--text-tertiary);
-}
 .audit-actions {
   display: flex;
   align-items: center;

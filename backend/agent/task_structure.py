@@ -32,10 +32,6 @@ OpKind = Literal["read", "write"]
 _VALID_PROVENANCE = ("verbatim", "inferred", "completed", "added")
 _VALID_OP_KIND = ("read", "write")
 
-# 与 AgentRunRequest.task 的 max_length 同值（routes/agent.py）：改这里必须同步
-# 那条与前端 TASK_CHAR_LIMIT，否则要么结构化收不下、要么采用后发送 422。
-RAW_TEXT_CHAR_LIMIT = 50000
-
 # 结构化端点单轮输出上限：拆解一段需求不需要大输出，收紧防被灌长文拖慢首屏。
 _MAX_STRUCTURE_TOKENS = 2048
 
@@ -87,12 +83,6 @@ def _norm_provenance(value: Any, default: Provenance) -> Provenance:
     return v if v in _VALID_PROVENANCE else default  # type: ignore[return-value]
 
 
-def _norm_op_kind(value: Any) -> OpKind:
-    # 未知一律按 write 处理（fail-closed：宁可多弹确认也不把写操作当只读放过）
-    v = (value or "").strip().lower() if isinstance(value, str) else ""
-    return v if v in _VALID_OP_KIND else "write"  # type: ignore[return-value]
-
-
 def _infer_op_kind(text: str, declared: Any) -> OpKind:
     """LLM 没给 / 给了非法 op_kind 时，按动词线索兜底判定；仍偏保守。"""
     v = (declared or "").strip().lower() if isinstance(declared, str) else ""
@@ -100,8 +90,6 @@ def _infer_op_kind(text: str, declared: Any) -> OpKind:
         return v  # type: ignore[return-value]
     low = (text or "").lower()
     if any(k in low for k in _STEP_OP_HINTS["write"]):
-        return "write"
-    if any(k in (text or "") for k in _STEP_OP_HINTS["write"]):
         return "write"
     if any(k in (text or "") for k in _STEP_OP_HINTS["read"]):
         return "read"

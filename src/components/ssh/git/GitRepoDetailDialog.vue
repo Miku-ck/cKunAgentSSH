@@ -301,7 +301,6 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
 .k-clean { background: var(--status-success-bg); color: var(--status-success-text); }
 .k-none { background: var(--bg-hover); color: var(--text-tertiary); }
 .k-err { background: var(--status-error-bg); color: var(--status-error-text); }
-.k-error { background: var(--status-error-bg); color: var(--status-error-text); }
 
 .grd-icon-btn {
   margin-left: auto;
