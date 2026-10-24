@@ -1476,9 +1476,10 @@ function setupSSHIPC(): void {
     return gitRepos!.setRemotePaths(connectionId, paths)
   })
 
-  // 目录选择器（本机仓库登记入口；服务内不持有窗口引用）
+  // 目录选择器（本机仓库登记入口；服务内不持有窗口引用，窗口销毁/不存在时直接返回 null）
   handleTrusted('gitrepos:pickDirectory', async () => {
-    const res = await dialog.showOpenDialog(mainWindow!, { properties: ['openDirectory'] })
+    if (!mainWindow || mainWindow.isDestroyed()) return null
+    const res = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] })
     return res.canceled || !res.filePaths.length ? null : res.filePaths[0]
   })
 

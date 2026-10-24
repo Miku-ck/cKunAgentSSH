@@ -69,6 +69,13 @@ function isAbsolutePath(p: string): boolean {
   return /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith('\\\\') || p.startsWith('/')
 }
 
+/** 执行入口复检：与登记入口同一口径，不给被劫持的渲染层任意目录执行 git 的机会 */
+function assertAbsolutePath(p: string): string {
+  const v = String(p ?? '').trim()
+  if (!isAbsolutePath(v)) throw new Error(`非法路径（须为绝对路径）: ${v || '(空)'}`)
+  return v
+}
+
 async function quarantineCorruptFile(path: string, raw: string): Promise<void> {
   try {
     const bak = `${path}.corrupt-${Date.now()}.bak`
@@ -268,9 +275,9 @@ export class GitReposService {
     }
   }
 
-  /** 逐仓取数（并发上限分批）；单仓失败不拖垮整批，按行上浮 */
+  /** 逐仓取数（并发上限分批）；单仓失败不拖垮整批，按行上浮；非法路径条目直接丢弃 */
   async statusAll(paths: string[]): Promise<LocalRepoStatusResult[]> {
-    const list = [...new Set(Array.isArray(paths) ? paths : [])]
+    const list = [...new Set(Array.isArray(paths) ? paths.filter(p => isAbsolutePath(String(p ?? ''))) : [])]
     const results: LocalRepoStatusResult[] = []
     for (let i = 0; i < list.length; i += STATUS_CONCURRENCY) {
       const batch = await Promise.all(list.slice(i, i + STATUS_CONCURRENCY).map(p => this.statusOne(p)))
@@ -280,19 +287,20 @@ export class GitReposService {
   }
 
   async fetchOne(path: string): Promise<GitRawResult> {
-    return execGit(['-C', path, 'fetch', '--all', '--prune'], FETCH_TIMEOUT_MS)
+    return execGit(['-C', assertAbsolutePath(path), 'fetch', '--all', '--prune'], FETCH_TIMEOUT_MS)
   }
 
   async pullOne(path: string): Promise<GitRawResult> {
-    return execGit(['-C', path, 'pull', '--ff-only'], PULL_TIMEOUT_MS)
+    return execGit(['-C', assertAbsolutePath(path), 'pull', '--ff-only'], PULL_TIMEOUT_MS)
   }
 
   /** 详情三段原始输出（解析在渲染层 parseRepoDetailSections，单测共用同一份） */
   async detail(path: string): Promise<{ ok: boolean; error?: string; statusRaw?: string; branchRaw?: string; logRaw?: string }> {
+    const repoPath = assertAbsolutePath(path)
     const [st, br, lg] = await Promise.all([
-      execGit(['-C', path, 'status', '--porcelain=v1', '--ignore-submodules=dirty']),
-      execGit(['-C', path, 'branch', '-vv']),
-      execGit(['-C', path, 'log', '-20', `--format=${GIT_LOG_FORMAT}`]),
+      execGit(['-C', repoPath, 'status', '--porcelain=v1', '--ignore-submodules=dirty']),
+      execGit(['-C', repoPath, 'branch', '-vv']),
+      execGit(['-C', repoPath, 'log', '-20', `--format=${GIT_LOG_FORMAT}`]),
     ])
     if (st.code !== 0) {
       return { ok: false, error: firstLine(st.stderr) || '取数失败' }
