@@ -1,18 +1,12 @@
 <template>
   <div class="gh-view">
     <div class="gh-body">
-      <!-- ── 加速总控：一键启动 / 关闭 + 自检 + 巡检红灯 ── -->
+      <!-- ── 加速总控：一键开关 + 巡检红灯（自检与措施状态在下方「加速措施」面板） ── -->
       <section class="panel master">
         <div class="master-row">
           <span class="dot" :class="masterOn ? 'on' : 'off'"></span>
           <span class="master-title">加速{{ masterStateText }}</span>
           <span class="head-spacer"></span>
-          <button
-            class="btn btn-sm"
-            :disabled="masterBusy || accel.selfChecking || accel.activeMeasureCount === 0"
-            :title="accel.activeMeasureCount === 0 ? '先开启至少一项加速措施' : '端到端自检：git 读取 / 镜像 / SSH 443 / hosts'"
-            @click="onSelfCheck"
-          >{{ accel.selfChecking ? '自检中…' : '自检' }}</button>
           <button
             class="btn"
             :class="masterOn ? 'btn-danger' : 'btn-primary'"
@@ -21,7 +15,7 @@
           >{{ masterButtonLabel }}</button>
         </div>
         <div class="hint">
-          管理 <b>git 全局加速</b>、<b>SSH 443</b> 与 <b>hosts 优选</b>；hosts 写入与移除各弹一次 UAC。
+          一键开关三项措施；hosts 写入与移除各弹一次 UAC。
           git 加速只代理读取（clone / fetch / 下载），HTTPS push 不走镜像，请用 SSH 443。
         </div>
         <div v-if="masterNote" class="hint" :class="{ warn: masterNoteWarn }">{{ masterNote }}</div>
@@ -41,23 +35,6 @@
             <span class="health-alert-text">hosts 未生效：{{ accel.health.hosts.message }}</span>
             <button class="btn btn-sm" :disabled="accel.hostsPicking || accel.hostsBusy" @click="refreshStaleHosts">重新优选并写入</button>
           </template>
-        </div>
-
-        <!-- hosts 时效被动提醒：优选 IP 是快照，GitHub 轮换接入 IP 后会从加速器变阻断器；
-             在总控卡上直接给出「更新」入口，用户不需要记住 hosts 还要维护 -->
-        <div v-if="hostsStaleNote" class="hint warn">
-          {{ hostsStaleNote }}
-          <button class="btn btn-sm" :disabled="accel.hostsPicking || accel.hostsBusy" @click="refreshStaleHosts">更新 hosts</button>
-        </div>
-
-        <!-- 自检结果：只读端到端验证，skip 灰显表示该措施未开启 -->
-        <div v-if="accel.selfCheckRows.length" class="selfcheck">
-          <div v-for="row in accel.selfCheckRows" :key="row.key" class="selfcheck-row">
-            <span class="dot" :class="row.state === 'ok' ? 'on' : row.state === 'fail' ? 'fail' : 'off'"></span>
-            <span class="selfcheck-name">{{ SELF_CHECK_LABELS[row.key] }}</span>
-            <span class="selfcheck-msg" :class="{ warn: row.state === 'fail' }">{{ row.message }}</span>
-            <span class="selfcheck-ms">{{ row.latencyMs != null ? formatLatency(row.latencyMs) : '' }}</span>
-          </div>
         </div>
       </section>
 
@@ -119,15 +96,29 @@
         </div>
       </section>
 
-      <!-- ── 加速措施：三行一表（详情只在相关状态出现） ── -->
+      <!-- ── 加速措施：三行一表（原型稿形态：图标 + 状态章 + 详情 + 行内动作；
+           说明收进 title 提示，正文只留状态与详情）── -->
       <section class="panel">
-        <div class="panel-title">加速措施</div>
+        <div class="panel-title">
+          加速措施
+          <span class="head-spacer"></span>
+          <!-- 自检是「怀疑措施失效时」的按需诊断（被动措施不会自己报错），
+               跟着措施走而不是占总控的一级按钮位 -->
+          <button
+            class="btn btn-sm"
+            :disabled="accel.selfChecking || accel.activeMeasureCount === 0"
+            :title="accel.activeMeasureCount === 0 ? '先开启至少一项加速措施' : '端到端诊断：git 读取 / 镜像 / SSH 443 / hosts'"
+            @click="onSelfCheck"
+          >{{ accel.selfChecking ? '自检中…' : '自检' }}</button>
+        </div>
 
         <!-- git 全局加速 -->
         <div class="measure-row">
-          <span class="measure-name" title="开启后 git clone / fetch / 下载按原地址自动走镜像；改写的是全局 git 配置，关闭时还原">git 全局加速</span>
-          <span class="title-chip" :class="accel.git?.active ? 'on' : 'off'">{{ accel.git?.active ? '已开启' : '未开启' }}</span>
-          <span v-if="accel.git?.active && !accel.git.managed" class="hint warn">非本应用写入</span>
+          <svg class="m-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+          <span class="measure-name" title="开启后 git clone / fetch / 下载按原地址自动走镜像；改写的是全局 git 配置，关闭时还原。只代理读取，HTTPS push 不走镜像">git 全局加速</span>
+          <span class="title-chip" :class="gitChip.cls">{{ gitChip.text }}</span>
+          <span v-if="accel.git?.active && !accel.git.managed" class="title-chip warn" title="当前 insteadOf 规则不是本应用写入的，关闭加速不会移除它">非本应用写入</span>
+          <span class="m-detail mono">{{ gitDetailText }}</span>
           <span class="head-spacer"></span>
           <template v-if="accel.git?.available">
             <template v-if="accel.git.active">
@@ -150,36 +141,38 @@
             </template>
           </template>
         </div>
-        <div class="measure-hint">
-          <template v-if="!accel.git">正在读取 git 状态…</template>
-          <template v-else-if="!accel.git.available">{{ accel.git.message || '未检测到 git' }}</template>
-          <template v-else>只代理读取（clone / fetch / 下载），HTTPS push 不走镜像。</template>
-        </div>
-        <div v-if="accel.git?.active" class="measure-detail">
-          <code class="link-url">{{ accel.git.activeSubsection }}</code>
-          <span v-if="accel.git.backup" class="hint">已备份接管前规则，关闭时还原。</span>
-        </div>
+        <div v-if="accel.git && !accel.git.available" class="m-detail">{{ accel.git.message || '未检测到 git' }}</div>
+        <div v-else-if="accel.git?.active && accel.git.backup" class="m-detail">已备份接管前规则，关闭时还原。</div>
 
         <div class="measure-sep"></div>
 
         <!-- SSH 443 -->
         <div class="measure-row">
-          <span class="measure-name" title="写入 ~/.ssh/config 托管块：Host github.com → ssh.github.com:443（GitHub 官方支持），可一键移除">SSH 走 443 端口</span>
+          <svg class="m-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          <span class="measure-name" title="写入 ~/.ssh/config 托管块：Host github.com → ssh.github.com:443（GitHub 官方支持），用 git@github.com 推拉时绕开被限速的 22 端口">SSH 443</span>
           <span class="title-chip" :class="accel.ssh443?.applied ? 'on' : 'off'">{{ accel.ssh443?.applied ? '已写入' : '未写入' }}</span>
+          <span class="m-detail mono">ssh.github.com:443 · ~/.ssh/config</span>
           <span class="head-spacer"></span>
           <button v-if="accel.ssh443 && !accel.ssh443.applied" class="btn btn-primary btn-sm" :disabled="accel.sshBusy" @click="applySsh">写入</button>
           <button v-else-if="accel.ssh443" class="btn btn-danger btn-sm" :disabled="accel.sshBusy" @click="removeSsh">移除</button>
         </div>
-        <div class="measure-hint">用 <code>git@github.com:…</code> 推拉时绕开被限速的 22 端口。</div>
 
         <div class="measure-sep"></div>
 
         <!-- hosts 优选 IP -->
         <div class="measure-row">
-          <span class="measure-name" title="解析 GitHub 系域名的优选 IP 写入系统 hosts，解决镜像覆盖不了的登录态网页与 API">hosts 优选 IP</span>
-          <span v-if="hostsAgeChip" class="title-chip" :class="hostsAgeChip.cls">{{ hostsAgeChip.text }}</span>
-          <span v-else class="title-chip off">未写入</span>
+          <svg class="m-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+          <span class="measure-name" title="解析 GitHub 系域名的优选 IP 写入系统 hosts，解决镜像覆盖不了的登录态网页与 API；写入与移除各弹一次 UAC">hosts 优选 IP</span>
+          <span class="title-chip" :class="hostsAgeChip?.cls || 'off'">{{ hostsAgeChip?.text || '未写入' }}</span>
+          <span class="m-detail mono">{{ hostsDetailText }}</span>
           <span class="head-spacer"></span>
+          <!-- 时效告警时的一键更新：重新优选 + 写入（一次 UAC），不用记「hosts 要维护」 -->
+          <button
+            v-if="hostsAgeChip?.cls === 'warn'"
+            class="btn btn-sm"
+            :disabled="accel.hostsPicking || accel.hostsBusy"
+            @click="refreshStaleHosts"
+          >{{ accel.hostsPicking ? '优选中…' : '更新' }}</button>
           <button class="btn btn-sm" :disabled="accel.hostsPicking" @click="pickHosts">
             {{ accel.hostsPicking ? '优选中…' : (accel.hostsPicks.length ? '重新优选' : '优选 IP') }}
           </button>
@@ -191,23 +184,25 @@
           >写入 hosts</button>
           <button v-else-if="accel.hosts" class="btn btn-danger btn-sm" :disabled="accel.hostsBusy" @click="removeHosts">移除托管块</button>
         </div>
-        <div class="measure-hint">解决镜像覆盖不了的登录态网页与 API；写入与移除各弹一次 UAC。</div>
-        <div v-if="accel.hosts?.message" class="measure-hint warn">{{ accel.hosts.message }}</div>
-        <div v-if="accel.hosts" class="measure-detail">
-          <div v-if="accel.hosts.applied && accel.hosts.entries.length" class="hosts-table">
-            <div v-for="e in accel.hosts.entries" :key="e.domain" class="hosts-row">
-              <code class="link-url">{{ e.domain }}</code>
-              <span class="hosts-ip">{{ e.ip }}</span>
-            </div>
+        <div v-if="accel.hosts?.message" class="m-detail warn">{{ accel.hosts.message }}</div>
+        <!-- 优选候选：带实测延迟，仅在测出候选时出现（写入前的比选依据） -->
+        <div v-if="accel.hostsPicks.length" class="hosts-table">
+          <div v-for="r in accel.hostsPicks" :key="r.domain" class="hosts-row">
+            <code class="link-url">{{ r.domain }}</code>
+            <span class="hosts-ip" :class="{ none: !r.ip }">{{ r.ip ?? (r.error || '无可用 IP') }}</span>
+            <span class="latency" :class="r.latencyMs !== null && r.latencyMs < 300 ? 'good' : r.ip ? 'mid' : 'bad'">
+              {{ r.latencyMs !== null ? `${r.latencyMs}ms` : '' }}
+            </span>
           </div>
-          <div v-if="accel.hostsPicks.length" class="hosts-table">
-            <div v-for="r in accel.hostsPicks" :key="r.domain" class="hosts-row">
-              <code class="link-url">{{ r.domain }}</code>
-              <span class="hosts-ip" :class="{ none: !r.ip }">{{ r.ip ?? (r.error || '无可用 IP') }}</span>
-              <span class="latency" :class="r.latencyMs !== null && r.latencyMs < 300 ? 'good' : r.ip ? 'mid' : 'bad'">
-                {{ r.latencyMs !== null ? `${r.latencyMs}ms` : '' }}
-              </span>
-            </div>
+        </div>
+
+        <!-- 自检结果：只读端到端验证，skip 灰显表示该措施未开启 -->
+        <div v-if="accel.selfCheckRows.length" class="selfcheck">
+          <div v-for="row in accel.selfCheckRows" :key="row.key" class="selfcheck-row">
+            <span class="dot" :class="row.state === 'ok' ? 'on' : row.state === 'fail' ? 'fail' : 'off'"></span>
+            <span class="selfcheck-name">{{ SELF_CHECK_LABELS[row.key] }}</span>
+            <span class="selfcheck-msg" :class="{ warn: row.state === 'fail' }">{{ row.message }}</span>
+            <span class="selfcheck-ms">{{ row.latencyMs != null ? formatLatency(row.latencyMs) : '' }}</span>
           </div>
         </div>
       </section>
@@ -433,6 +428,28 @@ const hostsAgeChip = computed(() => {
   return { cls: 'warn', text: h.staleDays === null ? '时效未知' : `${h.staleDays} 天未更新` }
 })
 
+/** git 措施的状态章：读取中 / 不可用 / 未开启 / 已接管 */
+const gitChip = computed(() => {
+  if (!accel.git) return { cls: 'off', text: '读取中…' }
+  if (!accel.git.available) return { cls: 'off', text: '不可用' }
+  return accel.git.active ? { cls: 'on', text: '已接管' } : { cls: 'off', text: '未开启' }
+})
+
+const gitDetailText = computed(() => {
+  if (!accel.git?.available) return ''
+  return accel.git.active ? `insteadOf → ${accel.git.activeSubsection}` : 'clone / fetch 直连 GitHub'
+})
+
+/** hosts 详情行：已写入的映射概览 / 待写入候选 / 未接管 */
+const hostsDetailText = computed(() => {
+  if (accel.hosts?.applied) {
+    const n = accel.hosts.entries.length
+    const first = accel.hosts.entries[0]?.ip
+    return n ? `${first} 等 ${n} 条映射` : '已写入托管块（无映射条目）'
+  }
+  return accel.hostsPicks.length ? '已测出候选，待写入' : 'GitHub 域名走系统 DNS 直连'
+})
+
 /** 界面只回看最近 8 个任务（主进程 5 分钟后从内存清终态） */
 const visibleDownloads = computed(() => accel.downloads.slice(-8))
 
@@ -604,18 +621,8 @@ async function removeHosts(): Promise<void> {
 // ─── 总控 ───
 const STEP_LABEL: Record<string, string> = { git: 'git', ssh443: 'SSH 443', hosts: 'hosts' }
 
-/** hosts 时效提醒（总控卡上）：applied 且 stale 时提示可能失效。
- *  staleDays 为 null（旧版本或手改块、无时间戳）同样按待更新处理 —— 判「未知=新鲜」才是风险。 */
-const hostsStaleNote = computed(() => {
-  const h = accel.hosts
-  if (!h?.applied || !h.stale) return ''
-  return h.staleDays === null
-    ? 'hosts 优选时效未知，可能已失效'
-    : `hosts 优选已 ${h.staleDays} 天未更新，可能失效`
-})
-
-/** 总控卡上的一键更新：重新优选 + 写入（一次 UAC）。被动加速的最后一块：
- *  用户不需要记住「hosts 要维护」，看到提醒点一下即可。 */
+/** hosts 行的一键更新：重新优选 + 写入（一次 UAC）。时效告警（chip warn）与
+ *  巡检 hosts 未生效两条路径都走这里，用户不需要记住「hosts 要维护」。 */
 async function refreshStaleHosts(): Promise<void> {
   try {
     await accel.hostsPick()
@@ -864,12 +871,13 @@ async function onMasterDisable(): Promise<void> {
   min-width: 0;
 }
 
-/* ── 加速措施：三行一表 ── */
+/* ── 加速措施：三行一表（原型稿形态）── */
 .measure-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 28px;
+  min-height: 30px;
+  flex-wrap: wrap;
 }
 
 .measure-name {
@@ -877,22 +885,21 @@ async function onMasterDisable(): Promise<void> {
   font-weight: 500;
   color: var(--text-primary);
   flex-shrink: 0;
+  cursor: help;
 }
 
-.measure-hint {
+.m-ic { color: var(--text-secondary); flex-shrink: 0; }
+
+/* 行内详情：等宽、次级色，与状态章互补（章说状态，详情说事实） */
+.m-detail {
   font-size: 11px;
-  color: var(--text-secondary);
-  line-height: 1.5;
-  margin-top: -4px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
-.measure-hint.warn { color: var(--danger-text); }
-
-.measure-detail {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 4px 0 2px;
-}
+.m-detail.warn { color: var(--danger-text); }
 
 .measure-sep {
   border-top: 1px dashed var(--border-subtle);
@@ -961,8 +968,8 @@ async function onMasterDisable(): Promise<void> {
   transition: width 0.25s ease;
 }
 
-/* ── hosts 优选 ── */
-.hosts-table { display: flex; flex-direction: column; gap: 2px; }
+/* ── hosts 优选候选表（优选中出现，写入前的比选依据）── */
+.hosts-table { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
 
 .hosts-row {
   display: flex;
