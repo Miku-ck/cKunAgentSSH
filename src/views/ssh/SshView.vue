@@ -161,9 +161,9 @@ v-show="s.id === store.activeSessionId"
           <DockerView v-if="pageMounted('docker')" :active="activeNavPage === 'docker'" @exec-terminal="activateTerminal($event)" />
         </div>
 
-        <!-- GitHub 加速页面（镜像套件，纯本地功能） -->
-        <div v-show="activeNavPage === 'github'" class="gh-page">
-          <GithubAccelView v-if="pageMounted('github')" />
+        <!-- Git 工具页面（GitHub 加速 + 仓库管理，C 方案双子页） -->
+        <div v-show="activeNavPage === 'git'" class="git-page">
+          <GitView v-if="pageMounted('git')" :active="activeNavPage === 'git'" @exec-terminal="activateTerminal($event)" />
         </div>
 
         <!-- 首页：智能体任务台（消息区 + 常驻输入区，历史走右侧抽屉） -->
@@ -266,7 +266,7 @@ const SchedulesView = defineAsyncComponent(() => import('@/views/ssh/SchedulesVi
 const DashboardView = defineAsyncComponent(() => import('@/views/ssh/DashboardView.vue'))
 const TunnelView = defineAsyncComponent(() => import('@/components/ssh/TunnelView.vue'))
 const DockerView = defineAsyncComponent(() => import('@/components/ssh/DockerView.vue'))
-const GithubAccelView = defineAsyncComponent(() => import('@/components/ssh/GithubAccelView.vue'))
+const GitView = defineAsyncComponent(() => import('@/components/ssh/git/GitView.vue'))
 const CommandPalette = defineAsyncComponent(() => import('@/components/common/CommandPalette.vue'))
 import { useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
@@ -333,7 +333,7 @@ const {
   toggleDashboard,
   toggleTunnels,
   toggleDocker,
-  toggleGithub,
+  toggleGit,
   openLocalShell,
   handleLocalExit,
   connectRemote,
@@ -373,7 +373,7 @@ const PAGE_TOGGLES: Record<Exclude<NavPage, 'home'>, () => void> = {
   dashboard: toggleDashboard,
   tunnels: toggleTunnels,
   docker: toggleDocker,
-  github: toggleGithub,
+  git: toggleGit,
 }
 
 /** 首页 ＋ 菜单 SSH 面板的「连接远程服务器」：只开不关 —— toggle 语义在页面
@@ -525,7 +525,7 @@ defineExpose({
   toggleDashboard,
   toggleTunnels,
   toggleDocker,
-  toggleGithub,
+  toggleGit,
   openSettings,
   activeNavPage,
 })
@@ -823,8 +823,8 @@ defineExpose({
   overflow: hidden;
 }
 
-/* ─── GitHub 加速 Page ─── */
-.gh-page {
+/* ─── Git 工具 Page ─── */
+.git-page {
   position: absolute;
   top: 0;
   left: 0;

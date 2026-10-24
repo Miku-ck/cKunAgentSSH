@@ -142,3 +142,8 @@ tmpedist/
 # SDD 执行工作区与启动审计临时脚本（spec 2026-10-23 审计打点阶段自产，不入库）
 .superpowers/
 _perf/
+
+# 代理工具运行产物（hook 状态、发现台账、会话配置，均本地生成勿入库）
+.mimosa/
+.zcode/
+.review_diff*.txt

@@ -1,12 +1,5 @@
 <template>
   <div class="gh-view">
-    <div class="page-head">
-      <div class="page-title">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
-        <span>GitHub 加速</span>
-      </div>
-    </div>
-
     <div class="gh-body">
       <!-- ── 加速总控：一键启动 / 关闭 + 自检 + 巡检红灯 ── -->
       <section class="panel master">
@@ -266,11 +259,14 @@
 </template>
 
 <script setup lang="ts">
+// GitAccelPanel.vue — Git 工具页的「加速」子页。
+// 由原 GithubAccelView.vue 主体原样搬入（页面标题上移到 GitView 壳），
+// store（github-accel.ts）/ IPC（ghaccel:*）/ 主进程（electron/github-accel.ts）零改动。
 import { computed, onMounted, ref, watch } from 'vue'
 import { useGithubAccelStore } from '@/stores/github-accel'
 import { useToastStore } from '@/stores/toast'
 import { formatBytes } from '@/utils/format'
-import { type AccelLink } from '../../../shared/github-accel-core'
+import { type AccelLink } from '../../../../shared/github-accel-core'
 
 const accel = useGithubAccelStore()
 const toast = useToastStore()
@@ -684,25 +680,8 @@ async function onMasterDisable(): Promise<void> {
   flex: 1;
   overflow: hidden;
   min-height: 0;
+  min-width: 0;
   font-family: var(--font-sans);
-}
-
-.page-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border-subtle);
-  flex-shrink: 0;
-}
-
-.page-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-primary);
 }
 
 .head-spacer { flex: 1; }

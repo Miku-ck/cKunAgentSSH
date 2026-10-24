@@ -13,6 +13,7 @@ import { SSHStore, type SSHConnectionRecord } from './ssh-store'
 import { TunnelStore, type TunnelRule } from './tunnel-store'
 import { TunnelManager } from './tunnel-manager'
 import { GithubAccelService } from './github-accel'
+import { GitReposService } from './git-repos'
 import { GhDownloadManager } from './gh-download'
 import { GhHostsService } from './gh-hosts'
 import { SshTransport } from './transports/ssh-transport'
@@ -51,6 +52,7 @@ let gatewayManager: GatewayManager | null = null
 let githubAccel: GithubAccelService | null = null
 let ghDownload: GhDownloadManager | null = null
 let ghHosts: GhHostsService | null = null
+let gitRepos: GitReposService | null = null
 let electronBridge: ElectronBridge | null = null
 let bridgeWsClient: BridgeWsClient | null = null
 
@@ -1155,6 +1157,7 @@ function setupSSHIPC(): void {
   ghHosts = new GhHostsService()
   githubAccel = new GithubAccelService(ghHosts)
   ghDownload = new GhDownloadManager()
+  gitRepos = new GitReposService()
   ghDownload.setSender((data) => {
     // 窗口销毁后 webContents.send 会抛，加守卫（与 gateway:status 同一口径）
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1448,6 +1451,55 @@ function setupSSHIPC(): void {
   // 总控选项：记住一键加速使用的镜像
   handleTrusted('ghaccel:saveOptions', (_event, patch: { lastProxyPrefix?: string }) => {
     return githubAccel!.saveOptions(patch)
+  })
+
+  // ── Git 仓库管理（本地注册表 + 本地 git 执行；远端路径表也在这里持久化，
+  //    但远端命令由渲染层经 sshExec 下发，主进程不碰远端）──
+  handleTrusted('gitrepos:getRegistry', () => {
+    return gitRepos!.getRegistry()
+  })
+
+  handleTrusted('gitrepos:addLocal', (_event, path: string) => {
+    return gitRepos!.addLocal(path)
+  })
+
+  handleTrusted('gitrepos:addLocalMany', (_event, paths: string[]) => {
+    return gitRepos!.addLocalMany(paths)
+  })
+
+  // 仅从注册表移除，绝不触碰磁盘文件
+  handleTrusted('gitrepos:removeLocal', (_event, path: string) => {
+    return gitRepos!.removeLocal(path)
+  })
+
+  handleTrusted('gitrepos:setRemotePaths', (_event, connectionId: string, paths: string[]) => {
+    return gitRepos!.setRemotePaths(connectionId, paths)
+  })
+
+  // 目录选择器（本机仓库登记入口；服务内不持有窗口引用）
+  handleTrusted('gitrepos:pickDirectory', async () => {
+    const res = await dialog.showOpenDialog(mainWindow!, { properties: ['openDirectory'] })
+    return res.canceled || !res.filePaths.length ? null : res.filePaths[0]
+  })
+
+  handleTrusted('gitrepos:scanRoot', (_event, root: string) => {
+    return gitRepos!.scanRoot(root)
+  })
+
+  handleTrusted('gitrepos:statusAll', (_event, paths: string[]) => {
+    return gitRepos!.statusAll(paths)
+  })
+
+  handleTrusted('gitrepos:fetchOne', (_event, path: string) => {
+    return gitRepos!.fetchOne(path)
+  })
+
+  handleTrusted('gitrepos:pullOne', (_event, path: string) => {
+    return gitRepos!.pullOne(path)
+  })
+
+  handleTrusted('gitrepos:detail', (_event, path: string) => {
+    return gitRepos!.detail(path)
   })
 
   // ── TLS 接入网关（安全接入）──

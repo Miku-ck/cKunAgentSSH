@@ -81,7 +81,7 @@ const PAGE_ITEMS: Array<{ page: Exclude<NavPage, 'home'>; label: string }> = [
   { page: 'schedules', label: '打开：定时任务' },
   { page: 'tunnels', label: '打开：SSH 隧道' },
   { page: 'docker', label: '打开：Docker 管理' },
-  { page: 'github', label: '打开：GitHub 加速' },
+  { page: 'git', label: '打开：Git 工具' },
   { page: 'audit', label: '打开：运维轨迹' },
 ]
 

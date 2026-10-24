@@ -16,7 +16,7 @@ export const LOCAL_SHELLS = ['PowerShell', 'CMD', 'Git Bash', 'WSL']
  * 类型检查却过得去（多出来的字面量只是没人传）。现在两处共用这一个源头。
  */
 export type NavPage =
-  'home' | 'remote-mgr' | 'sftp' | 'audit' | 'schedules' | 'dashboard' | 'tunnels' | 'docker' | 'github'
+  'home' | 'remote-mgr' | 'sftp' | 'audit' | 'schedules' | 'dashboard' | 'tunnels' | 'docker' | 'git'
 
 /**
  * 标题条可高亮的页键（ARCH-008 收口）：独立页 + 首页任务台。
@@ -169,7 +169,7 @@ export function useSshNavigation(
   const toggleDashboard = (): void => togglePage('dashboard')
   const toggleTunnels = (): void => togglePage('tunnels')
   const toggleDocker = (): void => togglePage('docker')
-  const toggleGithub = (): void => togglePage('github')
+  const toggleGit = (): void => togglePage('git')
 
   // 「安全接入」已并入远程管理页（RemoteManager 的 TLS 网关分段），不再有独立导航页
 
@@ -403,7 +403,7 @@ export function useSshNavigation(
     toggleDashboard,
     toggleTunnels,
     toggleDocker,
-    toggleGithub,
+    toggleGit,
     openLocalShell,
     handleLocalExit,
     connectRemote,

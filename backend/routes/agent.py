@@ -1913,9 +1913,9 @@ async def structure_task(req: StructureRequest):
     触达 shell/SSH/写文件 —— 它是发送前的可选旁路，不是发送前置条件（失败前端降级，
     原稿照发）。"""
     from agent.task_structure import (
+        _MAX_STRUCTURE_TOKENS,
         build_structure_system_prompt,
         coerce_structure_payload,
-        _MAX_STRUCTURE_TOKENS,
     )
 
     # 模型解析与 run 同一口径：显式 model_id 优先，否则 SSH 档默认再全局默认。
@@ -1959,7 +1959,7 @@ async def structure_task(req: StructureRequest):
         )
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="结构化超时，请直接发送原文")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("结构化 LLM 调用失败: %s", e)
         raise HTTPException(status_code=502, detail="结构化失败，原文可照常发送") from e
 

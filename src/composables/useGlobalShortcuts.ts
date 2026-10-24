@@ -27,7 +27,7 @@ export const PAGE_SHORTCUTS: ReadonlyArray<{
   { page: 'schedules', num: 4 },
   { page: 'tunnels', num: 5 },
   { page: 'docker', num: 6 },
-  { page: 'github', num: 7 },
+  { page: 'git', num: 7 },
   { page: 'audit', num: 8 },
 ]
 

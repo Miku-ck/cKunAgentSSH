@@ -135,6 +135,7 @@ def test_structure_endpoint_is_pure_no_tools():
     """源码守卫：/agent/structure 调用必须是纯推理（tools=[] 且关思考），
     否则这个"预览"端点就长出了执行能力，与『不可能触达 shell/SSH』的立论相违。"""
     import inspect
+
     from routes import agent as agent_routes
     src = inspect.getsource(agent_routes.structure_task)
     assert "tools=[]" in src, "结构化工具面必须恒空"

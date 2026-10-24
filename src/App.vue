@@ -21,7 +21,7 @@
       @action-sftp="sshViewRef?.toggleSftp()"
       @action-tunnels="sshViewRef?.toggleTunnels()"
       @action-docker="sshViewRef?.toggleDocker()"
-      @action-github="sshViewRef?.toggleGithub()"
+      @action-git="sshViewRef?.toggleGit()"
       @action-settings="sshViewRef?.openSettings()"
     />
     <div class="main">

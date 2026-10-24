@@ -283,7 +283,7 @@ export const useSSHStore = defineStore('ssh', () => {
     }
   }
 
-  async function createLocalTerminal(shell: string): Promise<string> {
+  async function createLocalTerminal(shell: string, cwd?: string): Promise<string> {
     // s4 修复：会话数量上限保护
     if (sessions.value.length >= MAX_SESSIONS) {
       throw new Error(`终端会话数量已达上限（${MAX_SESSIONS}），请先关闭部分会话`)
@@ -293,7 +293,8 @@ export const useSSHStore = defineStore('ssh', () => {
 
     const shellPath = await resolveShellPath(shell)
     const args = getShellArgs(shell)
-    const result = await api.ptyCreate({ shell: shellPath, args })
+    // cwd：Git 仓库管理「打开终端」要直落在仓库目录（pty:create 原生支持）
+    const result = await api.ptyCreate(cwd ? { shell: shellPath, args, cwd } : { shell: shellPath, args })
 
     sessions.value.push({
       id: result.id,

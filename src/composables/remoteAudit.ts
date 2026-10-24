@@ -10,6 +10,8 @@ import { extractSSHError } from '@/ssh-error-types'
 
 export const AUDIT_ACTION_BULK = 'bulk_ssh_exec'
 export const AUDIT_ACTION_DOCKER = 'docker_action'
+/** Git 仓库管理的远程变更动作（pull 即部署语义，fetch 属读路径不写审计） */
+export const AUDIT_ACTION_GIT = 'git_repo_action'
 
 // 与后端 AuditAppendRequest 的字段上限逐字相等
 export const AUDIT_COMMAND_MAX = 8192

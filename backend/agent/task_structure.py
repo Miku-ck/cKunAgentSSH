@@ -143,10 +143,9 @@ def coerce_structure_payload(
         if op == "write" and prov in ("inferred", "completed"):
             prov = "added"
 
-        # 护栏 4：出现外机字面量 → 无论声明如何都升级为需确认
-        if _find_foreign_host_tokens(text, allowed):
-            if op == "write":
-                prov = "added"
+        # 护栏 4：出现外机字面量 → 无论声明如何都升级为需确认（仅写步骤）
+        if op == "write" and _find_foreign_host_tokens(text, allowed):
+            prov = "added"
 
         requires_confirm = op == "write" and prov == "added"
 
