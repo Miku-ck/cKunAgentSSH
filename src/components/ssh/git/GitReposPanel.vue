@@ -54,12 +54,16 @@
     <div v-else class="body">
       <div class="tbl-wrap">
         <table class="tbl">
+          <!-- table-layout: fixed + 显式列宽：列宽不随内容/刷新漂移，表头与数据严格对齐 -->
+          <colgroup>
+            <col /><col class="col-branch" /><col class="col-status" /><col class="col-remote" /><col class="col-when" /><col class="col-act" />
+          </colgroup>
           <thead>
             <tr>
               <th>仓库</th>
               <th>分支</th>
               <th>状态</th>
-              <th>远端</th>
+              <th>远程</th>
               <th>最近提交</th>
               <th></th>
             </tr>
@@ -81,11 +85,11 @@
                 <span v-else class="pill" :class="'k-' + repoRowKind(r)">{{ kindText(r) }}</span>
               </td>
               <td>
-                <template v-if="r.originHost">
+                <span v-if="r.originHost">
                   <span class="r-host">{{ r.originHost }}</span>
                   <span class="r-slug">{{ r.originSlug }}</span>
                   <span v-if="accelTag(r)" class="r-acc" title="git 读取已走全局镜像加速（insteadOf）">已加速</span>
-                </template>
+                </span>
                 <span v-else class="r-slug">—</span>
               </td>
               <td class="r-when" :title="r.lastCommit?.subject">
@@ -143,6 +147,9 @@
         @pull="detailRepo && onPull(detailRepo)"
         @term="detailRepo && onTerm(detailRepo)"
         @remove="detailRepo && onRemove(detailRepo)"
+        @switch="onSwitchCurrent"
+        @commit="onCommitCurrent"
+        @push="detailRepo && onPush(detailRepo)"
       />
     </Teleport>
 
@@ -204,12 +211,17 @@ import {
   type RemoteAuditConclusion,
 } from '@/composables/remoteAudit'
 import {
+  buildRemoteCommitCmd,
   buildRemoteGitActionCmd,
+  buildRemotePushCmd,
   buildRemoteRepoStatusCmd,
   buildRemoteRepoVerifyCmd,
+  buildRemoteSwitchCmd,
   firstLine,
   friendlyGitStderr,
+  interpretCommit,
   interpretPull,
+  interpretPush,
   isValidRemoteRepoPath,
   repoNameOf,
   repoRowKind,
@@ -218,6 +230,8 @@ import {
   toLocalRepoRow,
   toRemoteRepoRow,
   repoRowId,
+  type CommitOutcome,
+  type PushOutcome,
   type RepoRow,
 } from '../../../../shared/git-repos-core'
 
@@ -233,6 +247,8 @@ const accelStore = useGithubAccelStore()
 const REMOTE_READ_SEC = 20
 const REMOTE_FETCH_SEC = 60
 const REMOTE_PULL_SEC = 120
+/** 远程 switch / commit 是服务器本地盘操作；push 走网络给 pull 同预算 */
+const REMOTE_ACTION_SEC = 60
 /** 远程取数并发上限：一条 SSH 连接上的 exec channel 有上限，Docker 取数同款每批 4 条 */
 const REMOTE_CONCURRENCY = 4
 
@@ -288,7 +304,7 @@ function remoteErrorRow(sessionId: string, path: string, msg: string): RepoRow {
     id: repoRowId('remote', sessionId, path),
     scope: 'remote', sessionId, name: repoNameOf(path), path,
     branch: '', detached: false, upstream: null, ahead: 0, behind: 0, dirtyFiles: 0,
-    originUrl: null, originHost: null, originSlug: null, lastCommit: null, error: msg,
+    originUrl: null, remoteName: null, originHost: null, originSlug: null, lastCommit: null, error: msg,
   }
 }
 
@@ -302,7 +318,9 @@ async function refresh(): Promise<void> {
   try {
     if (isLocal.value) {
       if (!localPaths.value.length) { rows.value = []; markSynced(); return }
-      const results = await api.gitreposStatusAll(localPaths.value)
+      // ref 深层 reactive 后是 Proxy，过不了 contextBridge 的结构化克隆
+      // （"An object could not be cloned"）——IPC 传参一律先拷成普通数组
+      const results = await api.gitreposStatusAll([...localPaths.value])
       if (pin !== epoch) return
       rows.value = sortRepoRows(results.map(toLocalRepoRow))
     } else {
@@ -331,7 +349,7 @@ async function refresh(): Promise<void> {
     if (detailRepo.value) detailRepo.value = rows.value.find(r => r.id === detailRepo.value?.id) ?? null
   } catch (e) {
     if (pin !== epoch) return
-    loadError.value = errMsg(e, '仓库取数失败')
+    loadError.value = errMsg(e, '仓库读取失败')
     rows.value = []
   } finally {
     if (pin === epoch) loading.value = false
@@ -348,15 +366,17 @@ const filteredRows = computed(() => {
 
 function kindText(r: RepoRow): string {
   const k = repoRowKind(r)
-  if (k === 'dirty') return `脏区 ${r.dirtyFiles} 处`
-  if (k === 'diverge') return `分歧 ↑${r.ahead}↓${r.behind}`
+  if (k === 'dirty') return `未提交变更 ${r.dirtyFiles}`
+  if (k === 'diverge') return `已分叉 ↑${r.ahead}↓${r.behind}`
   if (k === 'behind') return `落后 ↓${r.behind}`
   if (k === 'ahead') return `领先 ↑${r.ahead}`
-  if (k === 'none') return '无远端'
+  if (k === 'none') return '无远程'
   return '干净'
 }
 function branchText(r: RepoRow): string {
   if (r.error) return '—'
+  // detached HEAD：没有分支名可显示，用 git 术语标注游离状态
+  if (r.detached) return '(HEAD 游离)'
   let t = r.branch || '—'
   if (r.ahead) t += ` ↑${r.ahead}`
   if (r.behind) t += ` ↓${r.behind}`
@@ -484,6 +504,167 @@ async function onPull(row: RepoRow): Promise<void> {
       await refresh()
     } catch (e) {
       toast.error(errMsg(e, '拉取失败'))
+    }
+  })
+}
+
+// ── 详情弹窗动作的桥接：弹窗只回抛，行对象从 detailRepo 取（模板内不写 TS 标注） ──
+function onSwitchCurrent(branch: string): void {
+  if (detailRepo.value) void onSwitch(detailRepo.value, branch)
+}
+function onCommitCurrent(payload: { files: string[]; msg: string }): void {
+  if (detailRepo.value) void onCommit(detailRepo.value, payload)
+}
+
+/**
+ * V2 写动作：切换分支 / 提交所选 / 推送。远程执行 = 部署语义（确认框 danger +
+ * 计入审计），本地执行只由 git 自身的安全边界把关（冲突拒绝、不 stash 不丢弃）。
+ */
+async function onSwitch(row: RepoRow, branch: string): Promise<void> {
+  const isRemote = row.scope === 'remote'
+  const ok = await confirm({
+    title: '切换分支（git switch）',
+    message: isRemote
+      ? `将在远程主机上把 ${row.path} 切换到分支 ${branch}（git switch）。服务器工作区将切换到该分支，直接影响部署内容，计入审计。`
+      : `将把 ${row.name} 切换到分支 ${branch}（git switch）。未提交变更与目标分支冲突时 git 会拒绝，不会丢弃任何改动。`,
+    confirmText: '切换',
+    danger: isRemote,
+  })
+  if (!ok) return
+  await withBusy(`switch:${row.id}`, async () => {
+    const api = window.electronAPI
+    if (!api) return
+    try {
+      if (row.scope === 'local') {
+        const r = await api.gitreposSwitchBranch(row.path, branch)
+        if (r.code !== 0) throw new Error(firstLine(friendlyGitStderr(r.stderr)) || `switch 退出码 ${r.code}`)
+      } else {
+        if (!row.sessionId) throw new Error('远端会话不可用')
+        const remoteCmd = buildRemoteSwitchCmd(row.path, branch)
+        const started = Date.now()
+        let stderr = ''
+        let exitCode: number | null = null
+        try {
+          const r = await api.sshExec(row.sessionId, remoteCmd, REMOTE_ACTION_SEC)
+          stderr = r.stderr
+          exitCode = r.exitCode
+          writeGitAudit(row, remoteCmd, 'executed', auditResultForExit(r.exitCode, Date.now() - started))
+        } catch (e) {
+          const outcome = auditOutcomeForDispatchError(e, errMsg(e, '切换分支失败'), REMOTE_ACTION_SEC)
+          writeGitAudit(row, remoteCmd, outcome.conclusion, outcome.result)
+          throw e
+        }
+        if (exitCode !== 0) throw new Error(firstLine(stderr) || `switch 退出码 ${exitCode}`)
+      }
+      toast.success(`${row.name}：已切换到 ${branch}`)
+      await refresh()
+    } catch (e) {
+      toast.error(errMsg(e, '切换分支失败'))
+    }
+  })
+}
+
+async function onCommit(row: RepoRow, payload: { files: string[]; msg: string }): Promise<void> {
+  const isRemote = row.scope === 'remote'
+  if (isRemote) {
+    const ok = await confirm({
+      title: '提交远程变更（git commit）',
+      message: `将在远程主机上以「${payload.msg}」提交 ${payload.files.length} 个文件（git add + commit -- pathspec）。服务器工作区将产生新提交，计入审计。`,
+      confirmText: '提交',
+      danger: true,
+    })
+    if (!ok) return
+  }
+  await withBusy(`commit:${row.id}`, async () => {
+    const api = window.electronAPI
+    if (!api) return
+    try {
+      let out: CommitOutcome
+      if (row.scope === 'local') {
+        const r = await api.gitreposCommit(row.path, payload.files, payload.msg)
+        out = interpretCommit(r.stdout, r.stderr, r.code)
+      } else {
+        if (!row.sessionId) throw new Error('远端会话不可用')
+        const remoteCmd = buildRemoteCommitCmd(row.path, payload.files, payload.msg)
+        const started = Date.now()
+        let stdout = '', stderr = '', exitCode: number | null = null
+        try {
+          const r = await api.sshExec(row.sessionId, remoteCmd, REMOTE_ACTION_SEC)
+          stdout = r.stdout
+          stderr = r.stderr
+          exitCode = r.exitCode
+          writeGitAudit(row, remoteCmd, 'executed', auditResultForExit(r.exitCode, Date.now() - started))
+        } catch (e) {
+          const outcome = auditOutcomeForDispatchError(e, errMsg(e, '提交失败'), REMOTE_ACTION_SEC)
+          writeGitAudit(row, remoteCmd, outcome.conclusion, outcome.result)
+          throw e
+        }
+        out = interpretCommit(stdout, stderr, exitCode)
+      }
+      if (out.kind === 'committed') {
+        toast.success(`${row.name}：${out.message}`)
+        await refresh()
+      } else {
+        toast.error(`${row.name}：${out.message}`, 6000)
+      }
+    } catch (e) {
+      toast.error(errMsg(e, '提交失败'))
+    }
+  })
+}
+
+async function onPush(row: RepoRow): Promise<void> {
+  const isRemote = row.scope === 'remote'
+  if (!row.upstream && !(row.remoteName && row.branch && !row.detached)) {
+    toast.error('当前分支没有上游且无法确定远程仓库，无法推送（可先在终端 git push -u 设置）')
+    return
+  }
+  const target = row.upstream || `${row.remoteName}/${row.branch}`
+  const ok = await confirm({
+    title: '推送到远程（git push）',
+    message: `将把分支 ${row.branch} 推送到 ${target}${row.upstream ? '' : '（push -u 建立上游跟踪）'}。推送到共享或受保护分支会影响其他人，请确认。${isRemote ? '操作在远程主机上执行，计入审计。' : ''}`,
+    confirmText: '推送',
+    danger: isRemote,
+  })
+  if (!ok) return
+  await withBusy(`push:${row.id}`, async () => {
+    const api = window.electronAPI
+    if (!api) return
+    try {
+      let out: PushOutcome
+      if (row.scope === 'local') {
+        const r = await api.gitreposPush(row.path)
+        out = interpretPush(r.stdout, r.stderr, r.code)
+      } else {
+        if (!row.sessionId || !row.remoteName || !row.branch) throw new Error('远端缺少远程名或分支信息，无法构造推送命令')
+        const remoteCmd = row.upstream
+          ? `git -C ${shSingleQuote(row.path)} push`
+          : buildRemotePushCmd(row.path, { remoteName: row.remoteName, branch: row.branch })
+        const started = Date.now()
+        let stdout = '', stderr = '', exitCode: number | null = null
+        try {
+          const r = await api.sshExec(row.sessionId, remoteCmd, REMOTE_PULL_SEC)
+          stdout = r.stdout
+          stderr = r.stderr
+          exitCode = r.exitCode
+          writeGitAudit(row, remoteCmd, 'executed', auditResultForExit(r.exitCode, Date.now() - started))
+        } catch (e) {
+          const outcome = auditOutcomeForDispatchError(e, errMsg(e, '推送失败'), REMOTE_PULL_SEC)
+          writeGitAudit(row, remoteCmd, outcome.conclusion, outcome.result)
+          throw e
+        }
+        out = interpretPush(stdout, stderr, exitCode)
+      }
+      if (out.kind === 'pushed') {
+        toast.success(`${row.name}：${out.message}`)
+        await refresh()
+      } else if (out.kind === 'rejected') {
+        toast.warning(`${row.name}：${out.message}`, 8000)
+      } else {
+        toast.error(`${row.name}：${out.message}`, 6000)
+      }
+    } catch (e) {
+      toast.error(errMsg(e, '推送失败'))
     }
   })
 }
@@ -752,10 +933,15 @@ watch(scopeKey, () => {
 }
 .empty-actions { display: flex; gap: 8px; }
 
-/* ── 表格 ── */
+/* ── 表格（table-layout: fixed + colgroup 定宽：列不随内容/刷新漂移） ── */
 .body { flex: 1; min-height: 0; display: flex; }
 .tbl-wrap { flex: 1; overflow: auto; }
-.tbl { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 780px; }
+.tbl { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; min-width: 780px; }
+.col-branch { width: 120px; }
+.col-status { width: 104px; }
+.col-remote { width: 200px; }
+.col-when { width: 150px; }
+.col-act { width: 64px; }
 .tbl th {
   text-align: left;
   font-weight: 400;
@@ -764,11 +950,12 @@ watch(scopeKey, () => {
   border-bottom: 1px solid var(--border-subtle);
   font-size: 11px;
   white-space: nowrap;
+  overflow: hidden;
 }
-.tbl td { padding: 7px 12px; border-bottom: 1px solid var(--divider-primary); vertical-align: middle; }
+.tbl td { padding: 7px 12px; border-bottom: 1px solid var(--divider-primary); vertical-align: middle; overflow: hidden; white-space: nowrap; }
 .tbl tbody tr.row { cursor: pointer; }
 .tbl tbody tr.row:hover td { background: var(--bg-hover); }
-.tbl-empty { color: var(--text-tertiary); text-align: center; padding: 28px 12px !important; }
+.tbl-empty { color: var(--text-tertiary); text-align: center; padding: 28px 12px !important; white-space: normal !important; }
 
 .r-name { color: var(--text-primary); font-weight: 500; line-height: 1.4; }
 .r-path {
@@ -780,7 +967,13 @@ watch(scopeKey, () => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.r-branch { font-family: var(--font-mono); color: var(--accent-cyan); white-space: nowrap; }
+.r-branch {
+  font-family: var(--font-mono);
+  color: var(--accent-cyan);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .pill {
   display: inline-flex;

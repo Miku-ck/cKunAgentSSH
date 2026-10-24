@@ -16,9 +16,14 @@ import {
   GIT_LOG_FORMAT,
   buildGraphLogArgs,
   firstLine,
+  isValidBranchName,
+  isValidCommitFiles,
+  isValidCommitMsg,
   isValidRemoteRepoPath,
   parseGitLog,
   parseGitStatusPorcelain,
+  parseRemoteConfig,
+  pickRemote,
   type GitRawResult,
   type GitReposRegistry,
   type LocalRepoStatusResult,
@@ -30,6 +35,10 @@ const GIT_TIMEOUT_MS = 8_000
 const FETCH_TIMEOUT_MS = 60_000
 /** pull 含 fetch + 合并，慢网络下给足预算 */
 const PULL_TIMEOUT_MS = 120_000
+/** switch / add / commit 是本地操作，常规预算 */
+const ACTION_TIMEOUT_MS = 30_000
+/** push 走网络（可能带新上传包），给足预算 */
+const PUSH_TIMEOUT_MS = 120_000
 /** statusAll 并发上限：几十个仓库时不对进程池倾泻 */
 const STATUS_CONCURRENCY = 6
 /** 单条命令输出上限：仓库多 / 长提交主题时 1MB 默认缓冲容易被顶爆 */
@@ -254,12 +263,13 @@ export class GitReposService {
     })
   }
 
-  /** 单仓一次取数：status / 最近提交 / origin 三条 execFile 并行 */
+  /** 单仓一次取数：status / 最近提交 / remote 配置三条 execFile 并行 */
   private async statusOne(path: string): Promise<LocalRepoStatusResult> {
     const [st, lg, og] = await Promise.all([
       execGit(['-C', path, '-c', 'core.quotePath=false', 'status', '--porcelain=v1', '-b', '--ignore-submodules=dirty']),
       execGit(['-C', path, 'log', '-1', `--format=${GIT_LOG_FORMAT}`]),
-      execGit(['-C', path, 'config', '--get', 'remote.origin.url']),
+      // get-regexp 取全部远端：远端不叫 origin（gitee / upstream / 自定义名）同样能展示
+      execGit(['-C', path, 'config', '--get-regexp', '^remote\\..*\\.url$']),
     ])
     if (st.code !== 0) {
       return {
@@ -268,12 +278,15 @@ export class GitReposService {
         error: st.code === -1 ? '未检测到 git（请安装 git 或加入 PATH）' : (firstLine(st.stderr) || `git status 退出码 ${st.code}`),
       }
     }
+    const status = parseGitStatusPorcelain(st.stdout)
+    const pick = pickRemote(parseRemoteConfig(og.stdout), status.upstream)
     return {
       path,
       ok: true,
-      status: parseGitStatusPorcelain(st.stdout),
+      status,
       lastCommit: lg.code === 0 ? (parseGitLog(lg.stdout)[0] ?? null) : null,
-      originUrl: og.code === 0 ? (og.stdout.trim() || null) : null,
+      originUrl: pick?.url ?? null,
+      remoteName: pick?.name ?? null,
     }
   }
 
@@ -294,6 +307,48 @@ export class GitReposService {
 
   async pullOne(path: string): Promise<GitRawResult> {
     return execGit(['-C', assertRepoPath(path), 'pull', '--ff-only'], PULL_TIMEOUT_MS)
+  }
+
+  /** 切换分支：git 自身的安全边界（未提交变更冲突时拒绝）就是这里的安全策略，不 stash 不丢弃 */
+  async switchBranch(path: string, branch: string): Promise<GitRawResult> {
+    const repoPath = assertRepoPath(path)
+    const name = String(branch ?? '').trim()
+    if (!isValidBranchName(name)) throw new Error(`非法分支名: ${name || '(空)'}`)
+    return execGit(['-C', repoPath, 'switch', name], ACTION_TIMEOUT_MS)
+  }
+
+  /** 提交所选文件：add（覆盖未跟踪）→ commit -- pathspec（只提交所选，忽略其余已暂存） */
+  async commitOne(path: string, files: string[], msg: string): Promise<GitRawResult> {
+    const repoPath = assertRepoPath(path)
+    if (!isValidCommitFiles(files)) throw new Error('未选择要提交的文件，或文件路径非法')
+    if (!isValidCommitMsg(msg)) throw new Error('提交信息为空、超长（>200 字符）或含控制字符')
+    const paths = files.map(f => f.trim())
+    const added = await execGit(['-C', repoPath, 'add', '--', ...paths], ACTION_TIMEOUT_MS)
+    if (added.code !== 0) return added
+    return execGit(['-C', repoPath, 'commit', '-m', msg.trim(), '--', ...paths], ACTION_TIMEOUT_MS)
+  }
+
+  /** 推送：有上游直接 push；无上游按 branch.<name>.remote 或展示远端用 -u 建立跟踪 */
+  async pushOne(path: string): Promise<GitRawResult> {
+    const repoPath = assertRepoPath(path)
+    const head = await execGit(['-C', repoPath, 'rev-parse', '--abbrev-ref', 'HEAD'])
+    const branch = head.stdout.trim()
+    if (!branch || branch === 'HEAD') {
+      return { code: 1, stdout: '', stderr: 'HEAD 游离（detached HEAD），没有可推送的分支' }
+    }
+    const upstream = await execGit(['-C', repoPath, 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'])
+    if (upstream.code === 0 && upstream.stdout.trim()) {
+      return execGit(['-C', repoPath, 'push'], PUSH_TIMEOUT_MS)
+    }
+    const cfgRemote = await execGit(['-C', repoPath, 'config', '--get', `branch.${branch}.remote`])
+    const remotes = await execGit(['-C', repoPath, 'config', '--get-regexp', '^remote\\..*\\.url$'])
+    const pick = cfgRemote.code === 0 && cfgRemote.stdout.trim()
+      ? { name: cfgRemote.stdout.trim() }
+      : pickRemote(parseRemoteConfig(remotes.stdout), null)
+    if (!pick?.name) {
+      return { code: 1, stdout: '', stderr: '没有配置远程仓库，无法推送' }
+    }
+    return execGit(['-C', repoPath, 'push', '-u', pick.name, branch], PUSH_TIMEOUT_MS)
   }
 
   /** 详情三段原始输出（解析在渲染层 parseRepoDetailSections，单测共用同一份） */

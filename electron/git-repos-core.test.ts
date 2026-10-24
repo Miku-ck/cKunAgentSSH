@@ -6,6 +6,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   parseGitStatusPorcelain, parseBranchVv, parseGitLog, parseOriginUrl,
+  parseRemoteConfig, pickRemote,
+  isValidBranchName, isValidCommitMsg, isValidCommitFiles,
+  buildRemoteSwitchCmd, buildRemoteCommitCmd, buildRemotePushCmd,
+  interpretCommit, interpretPush,
   repoNameOf, repoRowId, repoRowKind, sortRepoRows, toLocalRepoRow,
   isValidRemoteRepoPath, shSingleQuote, REMOTE_SEP,
   buildRemoteRepoStatusCmd, buildRemoteRepoDetailCmd, buildRemoteRepoVerifyCmd,
@@ -114,6 +118,104 @@ describe('parseOriginUrl', () => {
   })
 })
 
+describe('parseRemoteConfig / pickRemoteUrl（远端不再写死 origin）', () => {
+  it('parseRemoteConfig：remote.名字.url 行 → 名字映射，同名多值取第一条', () => {
+    const remotes = parseRemoteConfig([
+      'remote.gitee.url https://gitee.com/t/a.git',
+      'remote.origin.url git@github.com:ckun/a.git',
+      'remote.origin.url https://mirror.example.com/a.git',
+      'branch.master.remote gitee',
+      'garbage line without sep',
+    ].join('\n'))
+    expect(remotes).toEqual({
+      gitee: 'https://gitee.com/t/a.git',
+      origin: 'git@github.com:ckun/a.git',
+    })
+  })
+  it('pickRemote：upstream 指向的远端（最长名匹配）> origin > 字典序，返回名字与 URL', () => {
+    // upstream gitee/master → 认 gitee，哪怕 origin 也在
+    expect(pickRemote({ gitee: 'u1', origin: 'u2' }, 'gitee/master')).toEqual({ name: 'gitee', url: 'u1' })
+    // remote 名含 / 的极端情况：最长名优先，不误配到 a
+    expect(pickRemote({ a: 'u1', 'a/b': 'u2' }, 'a/b/main')).toEqual({ name: 'a/b', url: 'u2' })
+    // upstream 指向已删除的远端 → 回落 origin
+    expect(pickRemote({ origin: 'u2', zeta: 'u3' }, 'gone/master')).toEqual({ name: 'origin', url: 'u2' })
+    // 无 upstream、无 origin → 字典序第一个（稳定）
+    expect(pickRemote({ zeta: 'u3', alpha: 'u4' }, null)).toEqual({ name: 'alpha', url: 'u4' })
+    expect(pickRemote({}, null)).toBeNull()
+  })
+  it('toRemoteRepoRow：非 origin 名字的远端同样落到 host 徽章', () => {
+    const stdout = [
+      '## main...gitee/main',
+      `d3c4b5a\x1ffix: a\x1fckun\x1f2 hours ago`,
+      'remote.gitee.url https://gitee.com/team/data-api.git',
+    ].join(REMOTE_SEP)
+    const row = toRemoteRepoRow('s1', '/srv/data-api', stdout, '')
+    expect(row.originUrl).toBe('https://gitee.com/team/data-api.git')
+    expect(row.remoteName).toBe('gitee')
+    expect(row.originHost).toBe('gitee.com')
+    expect(row.originSlug).toBe('team/data-api')
+  })
+})
+
+describe('V2 写操作：校验 / 命令构造 / 结果解释', () => {
+  it('isValidBranchName：常规名可过，选项注入 / 空白 / 引号 / 非法字符 / .. / .lock 拒绝', () => {
+    expect(isValidBranchName('main')).toBe(true)
+    expect(isValidBranchName('feat/oauth-login')).toBe(true)
+    expect(isValidBranchName('release-1.2.3')).toBe(true)
+    expect(isValidBranchName('')).toBe(false)
+    expect(isValidBranchName('-oProxyCommand=calc')).toBe(false)
+    expect(isValidBranchName('a b')).toBe(false)
+    expect(isValidBranchName("a'b")).toBe(false)
+    expect(isValidBranchName('a~b')).toBe(false)
+    expect(isValidBranchName('a..b')).toBe(false)
+    expect(isValidBranchName('a@{b}')).toBe(false)
+    expect(isValidBranchName('v1.lock')).toBe(false)
+    expect(isValidBranchName('feat/')).toBe(false)
+  })
+
+  it('isValidCommitMsg / isValidCommitFiles：空 / 超长 / 控制字符 / .. 段拒绝', () => {
+    expect(isValidCommitMsg('fix: 登录超时')).toBe(true)
+    expect(isValidCommitMsg('   ')).toBe(false)
+    expect(isValidCommitMsg('a'.repeat(201))).toBe(false)
+    expect(isValidCommitMsg('bad\x00msg')).toBe(false)
+    expect(isValidCommitFiles(['src/a.py', '新建 目录/b.txt'])).toBe(true)
+    expect(isValidCommitFiles([])).toBe(false)
+    expect(isValidCommitFiles(['../escape'])).toBe(false)
+    expect(isValidCommitFiles(['/abs/path'])).toBe(false)
+    expect(isValidCommitFiles(['C:\\win\\path'])).toBe(false)
+    expect(isValidCommitFiles(['ok.txt', ''])).toBe(false)
+  })
+
+  it('远程 switch / commit / push 命令：路径、分支名、提交信息、文件路径全部单引号包裹', () => {
+    expect(buildRemoteSwitchCmd('/srv/app', 'release/1.2')).toBe("git -C '/srv/app' switch 'release/1.2'")
+    expect(buildRemoteCommitCmd('/srv/app', ['a.py', '新 目录/b.txt'], "fix: it's ok")).toBe(
+      "git -C '/srv/app' add -- 'a.py' '新 目录/b.txt' ; git -C '/srv/app' commit -m 'fix: it'\\''s ok' -- 'a.py' '新 目录/b.txt'",
+    )
+    expect(buildRemotePushCmd('/srv/app', { remoteName: 'gitee', branch: 'main' })).toBe(
+      "git -C '/srv/app' push -u 'gitee' 'main'",
+    )
+  })
+
+  it('interpretCommit：成功提取分支与短哈希；失败取 stderr 首行', () => {
+    expect(interpretCommit('[main 8991dab] feat: x\n 1 file changed', '', 0)).toEqual({
+      kind: 'committed', message: '已提交到 main 8991dab', hash: '8991dab',
+    })
+    // 首次提交形态：[main (root-commit) abc1234]
+    expect(interpretCommit('[main (root-commit) abc12345] init\n 1 file changed', '', 0).message).toBe('已提交到 main abc1234')
+    expect(interpretCommit('', 'On branch main\nnothing to commit, working tree clean', 1).kind).toBe('failed')
+    expect(interpretCommit('', 'fatal: unable to auto-detect email address', 128).message).toBe('fatal: unable to auto-detect email address')
+  })
+
+  it('interpretPush：成功 / 非快进拒绝（提示先拉取）/ 其他失败', () => {
+    expect(interpretPush('To gitee.com:t/a.git\n   main -> main', '', 0).kind).toBe('pushed')
+    expect(interpretPush('branch \'main\' set up to track \'gitee/main\'.', '', 0).message).toContain('上游')
+    expect(interpretPush('', "! [rejected]        main -> main (fetch first)", 1).kind).toBe('rejected')
+    expect(interpretPush('', 'fatal: 没有配置远程仓库', 128).kind).toBe('failed')
+    // git-not-found 哨兵转友好文案
+    expect(interpretPush('', 'git-not-found', -1).message).toBe('未检测到 git（请安装 git 或加入 PATH 后重试）')
+  })
+})
+
 describe('行组装与排序', () => {
   it('repoNameOf 认两种分隔符', () => {
     expect(repoNameOf('D:\\workspace\\cKunAgentSSH')).toBe('cKunAgentSSH')
@@ -179,7 +281,7 @@ describe('远程路径校验与命令构造', () => {
     expect(cmd).toContain("git -C '/var/www/app' -c core.quotePath=false status --porcelain=v1 -b --ignore-submodules=dirty")
     expect(cmd).toContain(`printf '\\x1e'`)
     expect(cmd).toContain("git -C '/var/www/app' log -1 --format=")
-    expect(cmd).toContain("git -C '/var/www/app' config --get remote.origin.url")
+    expect(cmd).toContain("git -C '/var/www/app' config --get-regexp '^remote\\..*\\.url$'")
     expect(cmd.split(' ; ')).toHaveLength(5)
   })
   it('detail / verify / fetch / pull 命令', () => {
@@ -198,7 +300,7 @@ describe('远程回包解析', () => {
     const stdout = [
       '## main...origin/main [ahead 1, behind 2]',
       `d3c4b5a\x1ffeats: 指标导出\x1flin\x1fyesterday`,
-      'git@github.com:team/data-api.git',
+      'remote.origin.url git@github.com:team/data-api.git',
     ].join(sep)
     const row = toRemoteRepoRow('s1', '/srv/data-api', stdout, '')
     expect(row.scope).toBe('remote')

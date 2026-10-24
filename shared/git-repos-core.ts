@@ -6,7 +6,7 @@
  * 本地执行（execFile + `-C`，不经 shell）在 electron/git-repos.ts；
  * 远程执行由 GitReposPanel 构造本文件的命令后经 sshExec 下发。
  *
- * 取数口径：一仓一条命令拿全列表所需信息（status / 最近提交 / origin），
+ * 取数口径：一仓一条命令拿全列表所需信息（status / 最近提交 / remote 配置），
  * 远程用 \x1e（RS）分段的复合命令，一次 sshExec 取回三段。
  *
  * 命令安全：SSH exec 通道没有 argv 形态，远程命令只能是字符串 —— 路径一律经
@@ -66,6 +66,8 @@ export interface RepoRow {
   behind: number
   dirtyFiles: number
   originUrl: string | null
+  /** 展示用远端的名字（pickRemote 挑选；push -u 用它兜底无上游场景） */
+  remoteName?: string | null
   originHost: string | null
   originSlug: string | null
   lastCommit: GitCommitInfo | null
@@ -86,7 +88,10 @@ export interface LocalRepoStatusResult {
   error?: string
   status?: RepoStatus
   lastCommit?: GitCommitInfo | null
+  /** 展示用远端 URL（pickRemote 挑选：upstream 的远端 > origin > 字典序第一个） */
   originUrl?: string | null
+  /** 同口径挑出的远端名字（push -u 兜底用） */
+  remoteName?: string | null
 }
 
 /** 注册表结构（userData/git-repos.json；类型两端共用，实现在 electron/git-repos.ts） */
@@ -294,6 +299,41 @@ export function parseOriginUrl(url: string): { host: string; slug: string } | nu
   return null
 }
 
+// ─── remote 配置解析与展示挑选 ───
+
+/**
+ * 解析 `git config --get-regexp '^remote\..*\.url$'` 输出（remote 名 → fetch URL）。
+ * 远端不叫 origin（gitee / upstream / 自定义名）同样取得到；同名多值取第一条
+ * （git fetch 即用第一条 url）。
+ */
+export function parseRemoteConfig(raw: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const line of raw.split('\n')) {
+    const sep = line.indexOf(' ')
+    if (sep <= 0) continue
+    const m = line.slice(0, sep).match(/^remote\.(.+)\.url$/)
+    if (m?.[1] && !(m[1] in out)) out[m[1]] = line.slice(sep + 1).trim()
+  }
+  return out
+}
+
+/**
+ * 展示用远端挑选：当前分支 upstream 指向的远端（最长名匹配，容忍 remote 名含 `/`）
+ * > origin（惯例默认）> 字典序第一个。fetch/pull/push 一律 --all / --ff-only /
+ * 显式 remote 名，不依赖这里的取舍（这里只决定列表展示哪一列）。
+ */
+export function pickRemote(remotes: Record<string, string>, upstream: string | null): { name: string; url: string } | null {
+  const names = Object.keys(remotes)
+  if (!names.length) return null
+  if (upstream) {
+    const hit = names.filter(n => upstream.startsWith(`${n}/`)).sort((a, b) => b.length - a.length)[0]
+    if (hit) return { name: hit, url: remotes[hit] }
+  }
+  if (remotes.origin) return { name: 'origin', url: remotes.origin }
+  const name = [...names].sort()[0]
+  return { name, url: remotes[name] }
+}
+
 // ─── 行组装与排序 ───
 
 /** 仓库名 = 路径最后一段（Windows / POSIX 分隔符都认） */
@@ -349,6 +389,7 @@ export function toLocalRepoRow(r: LocalRepoStatusResult): RepoRow {
     behind: r.status?.behind ?? 0,
     dirtyFiles: r.status?.files.length ?? 0,
     originUrl: r.originUrl ?? null,
+    remoteName: r.remoteName ?? null,
     originHost: origin?.host ?? null,
     originSlug: origin?.slug ?? null,
     lastCommit: r.lastCommit ?? null,
@@ -381,10 +422,12 @@ export const REMOTE_SEP = '\x1e'
 export const GIT_LOG_FORMAT = '%H%x1f%s%x1f%an%x1f%cr'
 
 /**
- * 远程一仓取数：status / 最近提交 / origin URL 三段，一次 sshExec 拿全。
+ * 远程一仓取数：status / 最近提交 / 全部 remote URL 三段，一次 sshExec 拿全。
  * 段间用 `;` 而非 `&&`——单段失败（比如空仓库 log 无输出）不该拖死其余段。
  * status 带 core.quotePath=false：否则 porcelain 把中文文件名输出成
  * "\344\270\255" 八进制转义，列表里没法看；只影响读展示，fetch/pull 不掺。
+ * remote 段用 get-regexp 取全部远端：远端不叫 origin 的仓库也能落到 host 徽章
+ * （挑选规则见 pickRemoteUrl）。
  */
 export function buildRemoteRepoStatusCmd(path: string): string {
   const p = shSingleQuote(path)
@@ -393,7 +436,7 @@ export function buildRemoteRepoStatusCmd(path: string): string {
     `printf '\\x1e'`,
     `git -C ${p} log -1 --format='${GIT_LOG_FORMAT}'`,
     `printf '\\x1e'`,
-    `git -C ${p} config --get remote.origin.url`,
+    `git -C ${p} config --get-regexp '^remote\\..*\\.url$'`,
   ].join(' ; ')
 }
 
@@ -414,6 +457,46 @@ export function buildRemoteRepoVerifyCmd(path: string): string {
   return `git -C ${shSingleQuote(path)} rev-parse --is-inside-work-tree`
 }
 
+// ─── 分支切换 / 提交 / 推送：校验、命令构造与结果解释 ───
+
+/**
+ * 本地分支名的登记门槛（switch 命令的参数面）：拒绝空 / 前导 `-`（防选项注入）/
+ * 空白 / 引号 / 控制字符 / git 引用非法字符 `~^:?*[\` / `..` / `@{` / `.lock` 与
+ * `/` 结尾，长度 ≤ 256。分支名来自 parseBranchVv 的本地分支列表，不经用户手输。
+ */
+export function isValidBranchName(name: string): boolean {
+  return typeof name === 'string'
+    && name.length > 0
+    && name.length <= 256
+    && !name.startsWith('-')
+    && !/[\s'"`\\~^:?*[\]]/.test(name)
+    && !name.includes('..')
+    && !name.includes('@{')
+    && !name.endsWith('.lock')
+    && !name.endsWith('/')
+}
+
+/** 提交信息门槛：单行（由输入框保证），去空白后非空，≤ 200 字符，无控制字符 */
+export function isValidCommitMsg(msg: string): boolean {
+  const v = String(msg ?? '').trim()
+  return v.length > 0 && v.length <= 200 && !/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(v)
+}
+
+/**
+ * 工作区文件路径门槛（commit 的 pathspec 面）：porcelain 输出的仓库相对路径，
+ * 拒绝空 / 绝对路径 / `..` 段 / 控制字符，单条 ≤ 1024，一次 ≤ 500 条。
+ */
+export function isValidCommitFiles(files: unknown): files is string[] {
+  if (!Array.isArray(files) || !files.length || files.length > 500) return false
+  return files.every(f => {
+    if (typeof f !== 'string') return false
+    const v = f.trim()
+    if (!v || v.length > 1024 || v.startsWith('/') || /^[a-zA-Z]:/.test(v)) return false
+    if (v.split('/').includes('..')) return false
+    return !/[\x00-\x1f]/.test(v)
+  })
+}
+
 export type RemoteGitAction = 'fetch' | 'pull'
 
 export function buildRemoteGitActionCmd(path: string, action: RemoteGitAction): string {
@@ -422,6 +505,59 @@ export function buildRemoteGitActionCmd(path: string, action: RemoteGitAction): 
     ? `git -C ${p} fetch --all --prune`
     : `git -C ${p} pull --ff-only`
 }
+
+/** 远程切换分支：DWIM（仅有远程跟踪引用的分支自动建本地分支） */
+export function buildRemoteSwitchCmd(path: string, branch: string): string {
+  return `git -C ${shSingleQuote(path)} switch ${shSingleQuote(branch)}`
+}
+
+/** 远程提交所选文件：add（覆盖未跟踪）+ commit -- pathspec（只提交所选） */
+export function buildRemoteCommitCmd(path: string, files: string[], msg: string): string {
+  const p = shSingleQuote(path)
+  const paths = files.map(f => shSingleQuote(f.trim())).join(' ')
+  return `git -C ${p} add -- ${paths} ; git -C ${p} commit -m ${shSingleQuote(msg.trim())} -- ${paths}`
+}
+
+/** 远程推送：有上游直接 push，无上游用 -u 建立跟踪 */
+export function buildRemotePushCmd(path: string, opts: { remoteName: string; branch: string }): string {
+  const p = shSingleQuote(path)
+  return `git -C ${p} push -u ${shSingleQuote(opts.remoteName)} ${shSingleQuote(opts.branch)}`
+}
+
+export type CommitOutcome =
+  | { kind: 'committed'; message: string; hash: string | null }
+  | { kind: 'failed'; message: string }
+
+/** 解释 `git commit` 回包：退出 0 → 从 `[branch abc1234]` 提取分支与短哈希；失败 → stderr 首行 */
+export function interpretCommit(stdout: string, stderr: string, exitCode: number | null): CommitOutcome {
+  if (exitCode === 0) {
+    const all = `${stdout}\n${stderr}`
+    const hash = all.match(/[ (]([0-9a-f]{7,40})\]/)?.[1] ?? null
+    const branch = all.match(/\[([^\s[\]]+)[^\]]*[0-9a-f]{7,40}\]/)?.[1] ?? null
+    const where = branch ? `${branch}${hash ? ` ${hash.slice(0, 7)}` : ''}` : (hash ? hash.slice(0, 7) : '')
+    return { kind: 'committed', message: where ? `已提交到 ${where}` : '已提交', hash }
+  }
+  return { kind: 'failed', message: firstLine(stderr) || firstLine(stdout) || `退出码 ${exitCode ?? 'null'}` }
+}
+
+export type PushOutcome =
+  | { kind: 'pushed'; message: string }
+  | { kind: 'rejected'; message: string }
+  | { kind: 'failed'; message: string }
+
+/** 解释 `git push` 回包：拒绝（非快进等）单独归类提示先拉取，不笼统报失败 */
+export function interpretPush(stdout: string, stderr: string, exitCode: number | null): PushOutcome {
+  const all = `${stdout}\n${stderr}`
+  if (exitCode === 0) {
+    if (/new branch|set.?up|upstream/i.test(all)) return { kind: 'pushed', message: '已推送并建立上游跟踪' }
+    return { kind: 'pushed', message: '已推送，远程分支已更新' }
+  }
+  if (/rejected|fetch first|non-fast-forward/i.test(all)) {
+    return { kind: 'rejected', message: '远端有你没有的提交：先拉取（pull）合并后再推送' }
+  }
+  return { kind: 'failed', message: firstLine(friendlyGitStderr(stderr)) || firstLine(stdout) || `退出码 ${exitCode ?? 'null'}` }
+}
+
 
 // ─── 远程回包解析 ───
 
@@ -447,18 +583,19 @@ export function toRemoteRepoRow(sessionId: string, path: string, stdout: string,
     name: repoNameOf(path),
     path,
     branch: '', detached: false, upstream: null, ahead: 0, behind: 0, dirtyFiles: 0,
-    originUrl: null, originHost: null, originSlug: null, lastCommit: null,
+    originUrl: null, remoteName: null, originHost: null, originSlug: null, lastCommit: null,
   }
   const sections = splitBySep(stdout)
   if (sections.length < 3) {
     return { ...base, error: firstLine(stderr) || '远端取数失败（回包分段缺失）' }
   }
-  const [statusRaw, logRaw, originRaw] = sections
+  const [statusRaw, logRaw, remotesRaw] = sections
   const status = parseGitStatusPorcelain(statusRaw)
   if (!status.branch && !status.files.length && stderr.trim()) {
     return { ...base, error: firstLine(stderr) }
   }
-  const originUrl = originRaw.trim() || null
+  const pick = pickRemote(parseRemoteConfig(remotesRaw), status.upstream)
+  const originUrl = pick?.url ?? null
   const origin = originUrl ? parseOriginUrl(originUrl) : null
   const commits = parseGitLog(logRaw)
   return {
@@ -470,6 +607,7 @@ export function toRemoteRepoRow(sessionId: string, path: string, stdout: string,
     behind: status.behind,
     dirtyFiles: status.files.length,
     originUrl,
+    remoteName: pick?.name ?? null,
     originHost: origin?.host ?? null,
     originSlug: origin?.slug ?? null,
     lastCommit: commits[0] ?? null,

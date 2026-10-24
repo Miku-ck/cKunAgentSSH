@@ -1491,6 +1491,20 @@ function setupSSHIPC(): void {
     return gitRepos!.pullOne(path)
   })
 
+  // ── V2 写操作（详情弹窗动作）：switch / commit / push。远程侧不走这里，
+  //    由渲染层经 sshExec 下发并计入审计，与远程 pull 同口径 ──
+  handleTrusted('gitrepos:switchBranch', (_event, path: string, branch: string) => {
+    return gitRepos!.switchBranch(path, branch)
+  })
+
+  handleTrusted('gitrepos:commit', (_event, path: string, files: string[], msg: string) => {
+    return gitRepos!.commitOne(path, files, msg)
+  })
+
+  handleTrusted('gitrepos:push', (_event, path: string) => {
+    return gitRepos!.pushOne(path)
+  })
+
   handleTrusted('gitrepos:detail', (_event, path: string) => {
     return gitRepos!.detail(path)
   })

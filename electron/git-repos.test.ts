@@ -103,6 +103,16 @@ describe('GitReposService 真实取数（statusAll / detail / fetch）', () => {
     expect(r.originUrl).toBeNull() // 未配 remote
   })
 
+  it('statusAll：远端不叫 origin 也能展示（upstream 指向的远端优先）', async () => {
+    const g = (args: string[]) => execFileSync('git', ['-C', repoA, ...args], { stdio: 'pipe' })
+    g(['remote', 'add', 'gitee', 'https://gitee.com/t/repo-a.git'])
+    g(['config', 'branch.main.remote', 'gitee'])
+    g(['config', 'branch.main.merge', 'refs/heads/master'])
+    const r = (await svc.statusAll([repoA]))[0]
+    expect(r.ok).toBe(true)
+    expect(r.originUrl).toBe('https://gitee.com/t/repo-a.git')
+  })
+
   it('statusAll：目录被删的仓库按行上浮错误，不拖垮整批', async () => {
     const ghost = join(workDir, 'ghost')
     makeRepo(ghost, 'g.txt')
@@ -150,5 +160,56 @@ describe('GitReposService 真实取数（statusAll / detail / fetch）', () => {
   it('fetchOne：无 remote 的仓库静默成功（git 对 --all 无远端不报错）', async () => {
     const r = await svc.fetchOne(repoB)
     expect(r.code).toBe(0)
+  })
+})
+
+describe('GitReposService 写操作（switch / commit / push）', () => {
+  const g = (args: string[]) => execFileSync('git', ['-C', repoB, ...args], { stdio: 'pipe' })
+
+  it('switchBranch：非法分支名被拒（不触达 git）', async () => {
+    await expect(svc.switchBranch(repoB, '-oProxyCommand=calc')).rejects.toThrow('非法分支名')
+    await expect(svc.switchBranch(repoB, 'a..b')).rejects.toThrow('非法分支名')
+  })
+
+  it('switchBranch：切换后 status 反映新分支，再切回', async () => {
+    g(['branch', 'feat-x'])
+    const r = await svc.switchBranch(repoB, 'feat-x')
+    expect(r.code).toBe(0)
+    const st = (await svc.statusAll([repoB]))[0]
+    expect(st.status?.branch).toBe('feat-x')
+    await svc.switchBranch(repoB, 'main')
+    const back = (await svc.statusAll([repoB]))[0]
+    expect(back.status?.branch).toBe('main')
+    g(['branch', '-d', 'feat-x'])
+  })
+
+  it('switchBranch：不存在的分支按 git 语义失败，stderr 上浮', async () => {
+    const r = await svc.switchBranch(repoB, 'no-such-branch')
+    expect(r.code).not.toBe(0)
+    expect(r.stderr).toContain('no-such-branch')
+  })
+
+  it('commitOne：只提交所选文件，未勾选的保持未提交', async () => {
+    writeFileSync(join(repoB, 'b.txt'), 'changed\n')
+    writeFileSync(join(repoB, 'c.txt'), 'new\n')
+    const r = await svc.commitOne(repoB, ['c.txt'], 'add c only')
+    expect(r.code).toBe(0)
+    const st = (await svc.statusAll([repoB]))[0]
+    expect(st.ok).toBe(true)
+    // c.txt 已提交（不在未提交清单），b.txt 仍是未提交变更
+    expect(st.status?.files.map(f => f.path)).toEqual(['b.txt'])
+    expect(st.lastCommit?.subject).toBe('add c only')
+  })
+
+  it('commitOne：空信息 / 空文件列表 / 越权路径被拒', async () => {
+    await expect(svc.commitOne(repoB, [], 'x')).rejects.toThrow('未选择要提交的文件')
+    await expect(svc.commitOne(repoB, ['b.txt'], '   ')).rejects.toThrow('提交信息')
+    await expect(svc.commitOne(repoB, ['../escape'], 'x')).rejects.toThrow('未选择要提交的文件')
+  })
+
+  it('pushOne：无远程仓库的仓库友好失败（不抛异常，按行上浮）', async () => {
+    const r = await svc.pushOne(repoB)
+    expect(r.code).not.toBe(0)
+    expect(r.stderr).toContain('没有配置远程仓库')
   })
 })

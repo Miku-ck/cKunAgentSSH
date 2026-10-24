@@ -58,7 +58,8 @@ CommandPalette），`command-palette-pages.test.ts` 守卫对账。
     SSH 会话 + 写入 `cd <path>`（复用 Docker doExec 模式），完成后 emit
     `exec-terminal` 激活终端；
   - 刷新：逐仓库取数汇总。
-- **与加速联动**：origin 为 github.com 且 git insteadOf 生效（`health.activePrefix`）
+- **与加速联动**：展示远端（upstream 指向的远端 > origin > 字典序，`pickRemoteUrl`）
+  host 为 github.com 且 git insteadOf 生效（`health.activePrefix`）
   → 行内「已加速」标记；本地 fetch/pull 自动受益于全局 insteadOf；远程主机不受益
   （V2 可做远端 git 代理配置）。
 
@@ -67,12 +68,14 @@ CommandPalette），`command-palette-pages.test.ts` 守卫对账。
 | 侧 | 通道 | 说明 |
 |---|---|---|
 | 本地仓库 | Electron IPC `gitrepos:*` → `electron/git-repos.ts` | execFile + `-C`，不经 shell |
-| 远程仓库 | 渲染层构造命令（git-repos-core 纯函数）经 `sshExec` | 一仓一条复合命令（status/log/origin 以 `\x1e` 分段），读 20s / 动作 60-120s 预算 |
+| 远程仓库 | 渲染层构造命令（git-repos-core 纯函数）经 `sshExec` | 一仓一条复合命令（status/log/remote 配置以 `\x1e` 分段），读 20s / 动作 60-120s 预算 |
 | 纯逻辑 | `shared/git-repos-core.ts` | 命令构造 / 输出解析 / 排序 / 拉取结果解释，单测覆盖；对照 docker-core.ts 定位 |
 
 ## 安全边界
 
 - V1 无任何强制覆盖类操作（无 push/reset/clean/checkout）；pull 固定 `--ff-only`。
+  V2 已补受控的写操作（switch / commit 所选 / push），口径见
+  `2026-10-25-git-tab-actions-design.md`。
 - 远程仓库删除仅从注册表移除，绝不触碰远端文件。
 - 远程命令路径一律单引号转义（`shSingleQuote`）。
 - FastAPI 后端不参与（与 Docker / 加速同路线）。

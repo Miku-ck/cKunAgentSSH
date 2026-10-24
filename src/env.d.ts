@@ -380,6 +380,10 @@ interface ElectronAPI {
   gitreposStatusAll: (paths: string[]) => Promise<import('../shared/git-repos-core').LocalRepoStatusResult[]>
   gitreposFetchOne: (path: string) => Promise<import('../shared/git-repos-core').GitRawResult>
   gitreposPullOne: (path: string) => Promise<import('../shared/git-repos-core').GitRawResult>
+  /** V2 写操作：切分支 / 提交所选 / 推送（远程侧由渲染层 sshExec 下发并计入审计） */
+  gitreposSwitchBranch: (path: string, branch: string) => Promise<import('../shared/git-repos-core').GitRawResult>
+  gitreposCommit: (path: string, files: string[], msg: string) => Promise<import('../shared/git-repos-core').GitRawResult>
+  gitreposPush: (path: string) => Promise<import('../shared/git-repos-core').GitRawResult>
   /** 详情三段原始输出（status / branch -vv / log -20），解析在渲染层 */
   gitreposDetail: (path: string) => Promise<{ ok: boolean; error?: string; statusRaw?: string; branchRaw?: string; logRaw?: string }>
   /** 提交图谱原始输出（--graph --all + \x01 分列格式），解析在渲染层 parseGraphLog */
