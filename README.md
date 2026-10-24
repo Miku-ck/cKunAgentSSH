@@ -21,7 +21,7 @@ SSH 智能运维终端 —— 一个窗口收口远程运维全链路：SSH 连�
 
 布局与交互约束：
 
-- 三组语义分区，组间以分隔线切分：**常用工具**（AI / Docker / GitHub / SFTP / 终端）紧贴品牌区，**会话与网络**（监控 / 定时 / 隧道）居中，**追溯 + 设置**（轨迹 / ⚙）靠近窗口控制。
+- 三组语义分区，组间以分隔线切分：**常用工具**（AI / Docker / Git / SFTP / 终端）紧贴品牌区，**会话与网络**（监控 / 定时 / 隧道）居中，**追溯 + 设置**（轨迹 / ⚙）靠近窗口控制。
 - 宽度 ≥1024px 时常显 2 字标签（可发现性优先），以下收纳为纯图标；`title` 里的快捷键提示与 `PAGE_SHORTCUTS` 同源。
 - 独立页与首页任务台互斥：任务台是盖在终端之上的浮层，切换只改 `showHome` / `activeNavPage` 两个标志。终端实例永不卸载 —— xterm 一卸载 buffer 就没了，所以「看不见」只能靠标志表达。
 - 远程管理页已并入「终端」入口，仍可用 `Ctrl+Shift+1` 或命令面板「打开：远程管理」直达，只是标题栏不再单列按钮。
@@ -165,7 +165,7 @@ cKunAgentSSH/
 │   ├── post_processor.py skill_registry.py builtin_skills.py skills_builtin/
 │   ├── logconfig.py model_probe.py netconfig.py safe_tokens.py sse_utils.py win_asyncio_teardown.py
 │   ├── routes/                        # chat / agent / schedules / audit / settings / skills / terminal / workflow
-│   ├── tests/                         # 172 个测试文件；命名规范与旧名映射见 tests/README.md
+│   ├── tests/                         # pytest 测试文件；命名规范与旧名映射见 tests/README.md
 │   └── agent/                         # Agent 智能体框架
 │       ├── harness/                   # Harness 核心
 │       ├── memory/                    # 记忆子系统
@@ -209,7 +209,7 @@ cKunAgentSSH/
 采用马术装备隐喻设计：
 
 - **Driver** — ReAct 决策循环主驱动
-- **Reins** — 13 个拦截器实例（默认装配；关 `enable_dynamic_budget` 则 12，定时任务走的就是这条。清单以 `backend/agent/harness/reins/defaults.py` 的 `create_default_reins` 为准）：技能注入、循环检测、权限审批、文件系统守护、澄清向导、计划模式等
+- **Reins** — 16 个拦截器实例（默认装配；关 `enable_dynamic_budget` 则 15，定时任务走的就是这条。清单以 `backend/agent/harness/reins/defaults.py` 的 `create_default_reins` 为准）：技能注入、循环检测、权限审批、文件系统守护、澄清向导、墙钟熔断、成本熔断、事后复盘、计划模式等
 - **Bridle** — 上下文组装 + 压缩
 - **Saddle** — 工具执行 + 沙箱（34 个内置工具）
 - **Stirrups** — LLM 调用 + 重试

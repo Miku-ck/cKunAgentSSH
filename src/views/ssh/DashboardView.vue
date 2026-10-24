@@ -141,7 +141,7 @@
                 </div>
               </td>
               <td class="mono">{{ p.user }}</td>
-              <td :class="{ hot: p.cpu > 80 }">{{ p.cpu.toFixed(1) }}</td>
+              <td :class="{ hot: p.cpu > PCT_HOT }">{{ p.cpu.toFixed(1) }}</td>
               <td>{{ formatRss(p.rss) }}</td>
               <td class="proc-etime">{{ p.etime }}</td>
               <td><span class="proc-stat" :title="statFull(p.stat)">{{ p.stat }}</span></td>
@@ -297,7 +297,7 @@ import { useServerMonitorStore } from '@/stores/server-monitor'
 import { connNote, useSSHStore } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
 import { toFriendlyMessage } from '@/api/client'
-import { loadChartMax } from '@/utils/nvtop-scale'
+import { LOAD_HOT, LOAD_WARM, PCT_HOT, PCT_WARM, loadChartMax } from '@/utils/nvtop-scale'
 import GpuNvtopPanel from '@/components/ssh/GpuNvtopPanel.vue'
 import type { SSHConnection } from '@/stores/ssh'
 import type { ProcessTopEntry, PortEntry, GpuProcessEntry } from '@/stores/server-monitor-core'
@@ -454,19 +454,20 @@ function statFull(stat: string): string {
   return MAP[base] || stat
 }
 
+/** 百分比取色：阈值与 nvtop-scale 的 bandCls 同源（PCT_HOT/PCT_WARM），类名是本页 CSS 的一套 */
 function toneCls(v?: number): string {
   if (v == null) return ''
-  if (v > 80) return 'tone-danger'
-  if (v >= 60) return 'tone-warn'
+  if (v > PCT_HOT) return 'tone-danger'
+  if (v >= PCT_WARM) return 'tone-warn'
   return 'tone-cool'
 }
 
-/** 负载卡片配色：按 1min 负载值（4 告警 / 8 危险，单机经验阈值）。正常档也归入 tone-cool（绿），与百分比口径一致 */
+/** 负载卡片配色：按 1min 负载值（LOAD_WARM 告警 / LOAD_HOT 危险，单机经验阈值，与 nvtop-scale.loadBandCls 同源）。正常档也归入 tone-cool（绿），与百分比口径一致 */
 function loadToneCls(): string {
   const l = monitor.current?.load[0]
   if (l == null) return ''
-  if (l >= 8) return 'tone-danger'
-  if (l >= 4) return 'tone-warn'
+  if (l >= LOAD_HOT) return 'tone-danger'
+  if (l >= LOAD_WARM) return 'tone-warn'
   return 'tone-cool'
 }
 

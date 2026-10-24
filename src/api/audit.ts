@@ -14,7 +14,9 @@ export interface AuditRecord {
   command_hash: string
   command_raw: string
   result: string
-  conclusion: string // executed | auto_allowed | approved | blocked | denied
+  /** 取值域即下方 AuditConclusion（与后端 LEGAL_CONCLUSIONS 同源）；
+   *  原注释只列 5 个旧值，与联合类型漂移过一轮，类型即文档不再手抄 */
+  conclusion: AuditConclusion
   run_id: string
   iteration: number
   prev_hash: string

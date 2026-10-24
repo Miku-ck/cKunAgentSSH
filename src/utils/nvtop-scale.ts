@@ -6,18 +6,30 @@
  */
 
 /**
+ * 百分比三档阈值。**单一来源**：本文件的 bandCls 与 DashboardView 的
+ * 顶部指标卡/磁盘条/进程表 toneCls 都读这四个数（曾各写一遍字面量，
+ * 改一处漏一处就让两块面板同值不同色）。
+ */
+export const PCT_HOT = 80
+export const PCT_WARM = 60
+
+/** 负载单机经验阈值。同上：loadBandCls 与 DashboardView 负载卡同源。 */
+export const LOAD_HOT = 8
+export const LOAD_WARM = 4
+
+/**
  * 百分比三档：>80 危险 / ≥60 警戒 / 其余正常。
  * 统一阈值（与 DashboardView 顶部指标卡/磁盘条一致）：正常 <60 绿 / ≥60 黄 / >80 红。 */
 export function bandCls(v: number): string {
-  if (v > 80) return 'nv-hot'
-  if (v >= 60) return 'nv-warm'
+  if (v > PCT_HOT) return 'nv-hot'
+  if (v >= PCT_WARM) return 'nv-warm'
   return 'nv-cool'
 }
 
 /** 负载不是百分比，用单机经验阈值：≥8 危险 / ≥4 警戒 */
 export function loadBandCls(v: number): string {
-  if (v >= 8) return 'nv-hot'
-  if (v >= 4) return 'nv-warm'
+  if (v >= LOAD_HOT) return 'nv-hot'
+  if (v >= LOAD_WARM) return 'nv-warm'
   return 'nv-cool'
 }
 
