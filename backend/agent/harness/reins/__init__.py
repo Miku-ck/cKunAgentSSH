@@ -38,6 +38,7 @@ from .clarification import (
     record_clarification_answers,
     register_task_clarification,
     release_clarification_run,
+    wait_for_clarification_answer,
 )
 from ..contracts import ClarificationOption, ClarificationStep
 from .core import (
@@ -74,6 +75,7 @@ __all__ = [
     "register_task_clarification",
     "pop_task_clarification",
     "release_clarification_run",
+    "wait_for_clarification_answer",
     "_get_global_permission_gate_sync",
     "tool_call_signature",
 ]

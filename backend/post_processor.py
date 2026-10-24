@@ -12,7 +12,7 @@
 
 设计原则：
 - 失败隔离：任一子任务失败不影响其他
-- 单次 LLM 调用/子任务：每个子任务独立调用 LLM
+- 单次 LLM 调用/子任务：每个子任务独立调用 LLM（记忆解析失败允许一次更高预算重试）
 - 异步执行：通过 PostProcessManager.submit 启动，不阻塞 SSE 响应
 """
 import asyncio
@@ -401,6 +401,9 @@ async def _call_llm_with_timeout(
     超时/异常后显式 aclose() generator，避免 httpx stream 连接泄漏。
     """
     full_text = ""
+    finish_reason = ""
+    completion_tokens = 0
+    reasoning_len = 0
     chunk_iter = chat_stream(
         base_url=model_cfg["base_url"],
         api_key=model_cfg["api_key"],
@@ -425,6 +428,11 @@ async def _call_llm_with_timeout(
             try:
                 chunk = await asyncio.wait_for(chunk_iter.__anext__(), timeout=chunk_wait)
                 full_text += chunk.content
+                reasoning_len += len(chunk.reasoning)
+                if chunk.finish_reason:
+                    finish_reason = chunk.finish_reason
+                if chunk.completion_tokens:
+                    completion_tokens = chunk.completion_tokens
             except StopAsyncIteration:
                 done = True
             except asyncio.TimeoutError:
@@ -440,8 +448,20 @@ async def _call_llm_with_timeout(
         except Exception:
             pass
 
+    # 输出预算触顶是最常见的 JSON 截断根因；有 content 也必须单独告警，
+    # 否则上层只能看到解析失败，无法区分 stop 与 length。
+    if finish_reason == "length":
+        logger.warning(
+            "[post_process:%s] 输出达到 max_tokens=%s，可能截断 "
+            "(finish_reason=length, completion_tokens=%s)",
+            task_name, max_tokens, completion_tokens,
+        )
     if not full_text or not full_text.strip():
-        logger.warning("[post_process:%s] LLM 返回空内容", task_name)
+        logger.warning(
+            "[post_process:%s] LLM 返回空内容 "
+            "(finish_reason=%s, completion_tokens=%s, reasoning_len=%d)",
+            task_name, finish_reason or "unknown", completion_tokens, reasoning_len,
+        )
         return None
     return full_text
 
@@ -548,7 +568,9 @@ async def _generate_title(ctx: TurnContext, config: PostProcessConfig) -> None:
         model_cfg=model_cfg,
         model_id=title_model,
         temperature=0.3,
-        max_tokens=50,   # 标题只需 50 token
+        # 50 会被推理模型的思考阶段耗尽（enable_thinking=False 未必被服务端执行），
+        # 提高到 128 换取标题稳定产出；标题仍很短，成本可接受。
+        max_tokens=128,
         chunk_timeout=config.chunk_timeout,
         total_timeout=config.title_total_timeout,
         task_name="title",
@@ -609,6 +631,28 @@ _MEMORY_PROMPT_TEMPLATE = """\
 """
 
 
+def _parse_memories_payload(full_text: str) -> Optional[list[dict]]:
+    """解析记忆响应：成功返回列表（可为空），解析失败返回 None。
+
+    解析失败时先钝化抢救已完整闭合的记忆对象；抢救失败才返回 None，
+    让调用方有机会做一次更高预算重试，而不是直接整批丢弃。
+    """
+    try:
+        raw = _extract_json(full_text)
+        result = json.loads(raw)
+    except json.JSONDecodeError as e:
+        rescued = _parse_memories_lenient(full_text)
+        if rescued:
+            logger.warning(
+                "[post_process:memory] 输出疑似被截断（%s），钝化解析救回 %d 条",
+                e, len(rescued),
+            )
+            return rescued
+        logger.warning("[post_process:memory] JSON 解析失败: %s, raw=%s", e, full_text[:200])
+        return None
+    return _llm_list(result, "memories")
+
+
 async def _extract_memories(ctx: TurnContext, config: PostProcessConfig) -> None:
     """提取记忆 + 相似度去重"""
     if not config.extract_memory:
@@ -661,26 +705,26 @@ async def _extract_memories(ctx: TurnContext, config: PostProcessConfig) -> None
     if not full_text:
         return
 
-    # 解析 JSON：正常路径之外，LLM 输出常因 max_tokens 不足被切在字符串中途
-    # （与技能路径同一问题），此时钝化抢救已完整闭合的记忆对象，不整批丢弃。
-    try:
-        raw = _extract_json(full_text)
-        result = json.loads(raw)
-    except json.JSONDecodeError as e:
-        rescued = _parse_memories_lenient(full_text)
-        if rescued:
-            logger.warning(
-                "[post_process:memory] 输出疑似被截断（%s），钝化解析救回 %d 条",
-                e, len(rescued),
-            )
-            result = {"memories": rescued}
-        else:
-            logger.warning("[post_process:memory] JSON 解析失败: %s, raw=%s", e, full_text[:200])
-            return
-
-    memories = _llm_list(result, "memories")[:config.max_memories_per_turn]
+    # 解析失败（未被钝化抢救救回）时只做一次更高预算重试。
+    # 有限重试：不做无限循环；重试后仍失败则放弃本轮，等待下一轮自然触发。
+    memories = _parse_memories_payload(full_text)
+    if memories is None:
+        logger.info("[post_process:memory] 首次解析失败，使用 max_tokens=2048 重试一次")
+        retry_text = await _call_llm_with_timeout(
+            messages=messages,
+            model_cfg=model_cfg,
+            model_id=memory_model,
+            temperature=0.3,
+            max_tokens=2048,
+            chunk_timeout=config.chunk_timeout,
+            total_timeout=config.memory_total_timeout,
+            task_name="memory_retry",
+        )
+        if retry_text:
+            memories = _parse_memories_payload(retry_text)
     if not memories:
         return
+    memories = memories[:config.max_memories_per_turn]
 
     # v2：本地不再做相似度去重，提取产物整批投 candidate_fact job，
     # 是否入库/合并/作废由 Reconciler 在后台统一裁决（spec §5：唯一写入口）。

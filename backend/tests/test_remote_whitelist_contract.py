@@ -149,6 +149,16 @@ class TestClientTemplatesAccepted:
         assert _allow(job_reconcile_alive_cmd([111, 222, 333]))
         assert _allow(job_reconcile_rcs_cmd([f"{_JOB}/1", f"{_JOB}/2"]))
 
+    def test_log_cleanup(self):
+        from agent.tools.builtin.ops_log_cleanup import log_cleanup_cmd
+        # 试运行与真实删除两种形态都必须精确命中
+        assert _allow(log_cleanup_cmd("/var/log/app", "*.log", 30, False))
+        assert _allow(log_cleanup_cmd("/var/log/app", "*.log", 30, True))
+        assert _allow(log_cleanup_cmd("/tmp", "app-*.log", 7, True))
+        assert _allow(log_cleanup_cmd("/var/tmp", "*.tmp", 1, False))
+        assert _allow(log_cleanup_cmd(
+            "/.trae-cn-server/manager-logs", "*.log", 30, True))
+
 
 # ══════════════════════════════════════════════════════════════
 #   拒绝侧：越权 / 注入 / 变形命令必须拒绝（默认拒绝）
@@ -254,6 +264,34 @@ class TestAdversarialRejected:
         # 形态像模板但动词未知 → 默认拒绝
         assert _deny("cat -n /srv/ckun-agent/f.txt")
         assert _deny("sed -n '1,10p' /srv/ckun-agent/f.txt")
+
+    def test_log_cleanup_root_out_of_scope_rejected(self):
+        from agent.tools.builtin.ops_log_cleanup import log_cleanup_cmd
+        # /var/log 本体、系统/审计日志、越界路径、通配符根 → 一律拒绝
+        for root in (
+            "/var/log", "/var/log/audit", "/var/log/journal",
+            "/var/log/private", "/var/log/sssd",
+            "/var/log/auth.log", "/var/log/secure", "/var/log/syslog",
+            "/var/log/messages", "/var/log/kern.log", "/var/log/wtmp",
+            "/etc", "/home/app/logs", "/tmp/../etc", "/var/log/*",
+            "/var/log/app/", "/var/log/app/nested/../../audit",
+        ):
+            assert _deny(log_cleanup_cmd(root, "*.log", 30, True)), root
+
+    def test_log_cleanup_bad_shape_rejected(self):
+        from agent.tools.builtin.ops_log_cleanup import log_cleanup_cmd
+        base = log_cleanup_cmd("/var/log/app", "*.log", 30, True)
+        assert _deny(base + "; rm -rf /")
+        assert _deny(base + " && id")
+        assert _deny(base.replace("-mtime +30", "-mtime +0"))
+        assert _deny(base.replace("-mtime +30", "-mtime +99999"))
+        assert _deny(base.replace("-maxdepth 1", "-maxdepth 5"))
+        assert _deny(base.replace("-type f", "-type d"))
+        assert _deny(base.replace("-delete -print", "-exec rm -rf {} +"))
+        assert _deny(base.replace("-print", "-printx"))
+        assert _deny(log_cleanup_cmd("/var/log/app", "a/b", 30, True))
+        assert _deny(log_cleanup_cmd("/var/log/app", "-delete", 30, True))
+        assert _deny(log_cleanup_cmd("/var/log/app", "*.log; id", 30, True))
 
 
 # ══════════════════════════════════════════════════════════════

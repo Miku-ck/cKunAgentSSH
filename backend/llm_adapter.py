@@ -189,6 +189,8 @@ class StreamChunk:
     # token 用量（仅最后一个 chunk 通常携带，来自 stream_options include_usage）
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # 结束原因（stop/length/tool_calls/...；仅最后一个 choices chunk 携带）
+    finish_reason: str = ""
 
 
 async def chat_stream(
@@ -376,9 +378,13 @@ async def _chat_stream_impl(
                 or ""
             )
             content = delta.content or ""
+            finish_reason = getattr(chunk.choices[0], "finish_reason", None) or ""
 
-            if content or reasoning:
-                yield StreamChunk(content=content, reasoning=reasoning)
+            if content or reasoning or finish_reason:
+                yield StreamChunk(
+                    content=content, reasoning=reasoning,
+                    finish_reason=finish_reason,
+                )
     finally:
         try:
             await stream.aclose()

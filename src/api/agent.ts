@@ -1,6 +1,7 @@
 /** Agent 域：agentApi / scheduleApi / agentAdminApi 及各自类型（原 client.ts 1067-1589 行，ARCH-008 拆分） */
 
 import { request } from './base'
+import type { StructureResponse } from '@/utils/task-structure-core'
 
 // ── Agent API ──
 
@@ -73,6 +74,27 @@ export const agentApi = {
     request<{ results: SafetyClassifyResult[] }>('/agent/safety/classify', {
       method: 'POST',
       body: JSON.stringify({ commands }),
+    }),
+
+  /**
+   * 长任务结构化（spec 2026-10-24-task-structuring）：把一段较长的模糊运维需求
+   * 交给后端纯推理拆成结构。这是发送前的**可选旁路**，非发送前置：调用失败由调用方
+   * 降级、原文照发，绝不因为结构化挂了就把用户卡住发不出消息。
+   *
+   * active_target.host 是当前选定的落点主机，后端据此硬锁主机字段（模型不得臆测）；
+   * allowed_hosts 传已连接主机白名单，出现集合外主机字面量会被标为需确认。
+   */
+  structureTask: (payload: {
+    raw_text: string
+    active_target: { host: string; session_type: 'local' | 'remote' }
+    environment: 'test' | 'prod'
+    posture?: 'goal' | 'plan' | null
+    allowed_hosts?: string[]
+    model_id?: string
+  }) =>
+    request<StructureResponse>('/agent/structure', {
+      method: 'POST',
+      body: JSON.stringify(payload),
     }),
 
   // ── 澄清向导 ──

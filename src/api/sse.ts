@@ -190,6 +190,15 @@ export interface StreamAgentOptions {
    * 不越过 hardline / prod 预授权 / 用户拒绝记忆任何一条边界。缺省 normal。
    */
   permissionMode?: PermissionModeKey
+  /**
+   * 长任务结构化（spec 2026-10-24-task-structuring）：本次下达是否为已采用的结构稿。
+   * 不传 = 未增强（老行为不变）；enhanced 为真时后端把原文留进审计 agent_trace 供对照。
+   */
+  enhanced?: boolean
+  /** 结构化前的原文（仅 enhanced 为真时有意义），后端落进用户消息 agent_trace。 */
+  sourceRawText?: string
+  /** 结构稿含"新增写步骤"：后端据此把 auto 审批 fail-closed 回落 normal。 */
+  enhancedHasAddedWriteSteps?: boolean
   onEvent: (event: AgentSSEEvent) => void
   onError: (error: string) => void
   onDone: () => void
@@ -238,6 +247,12 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
             ? {}
             : { workflow_mode: options.workflowMode }),
           permission_mode: options.permissionMode ?? PERMISSION_MODE_DEFAULT,
+          // 结构化增强：仅在有意义时发（未增强不污染既有请求体）。raw 只在 enhanced 时带。
+          ...(options.enhanced ? { enhanced: true } : {}),
+          ...(options.enhanced && options.sourceRawText
+            ? { source_raw_text: options.sourceRawText } : {}),
+          ...(options.enhancedHasAddedWriteSteps
+            ? { enhanced_has_added_write_steps: true } : {}),
         }),
         signal: abortController.signal,
       })

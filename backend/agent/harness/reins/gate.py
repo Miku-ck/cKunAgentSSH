@@ -66,6 +66,16 @@ _SCOPED_PREFIX = "@"
 _SCOPED_SEP = "|"
 _ALLOWLIST_HOST_RE = re.compile(r'^[A-Za-z0-9_.:-]{1,255}\Z')
 
+# ── 能力级授权工具 ─────────────────────────────────────────────────────────
+# 这些工具的授权键只取工具名，命令槽位仍用于内容判定与审计，但**不参与键派生**。
+#
+# 前提：工具本身对参数做服务端有界校验，安全边界在参数校验里而不是在命令字面量里。
+# log_cleanup 只允许固定根目录、maxdepth 1、-type f，且拒绝系统/审计日志 ——
+# 如果键继续按命令哈希，用户批准过一次"清理 /var/log/app 的 *.log"后，换一个
+# 应用目录、换一个保留天数就要重新登记一次：授权语义从"允许清理日志"退化成
+# "允许这一条字节完全相同的命令"，而这并没有带来额外的安全收益。
+CAPABILITY_ALLOWLIST_TOOLS = frozenset({"log_cleanup"})
+
 
 def normalize_host(host: str) -> str:
     """主机标识归一化：去空白 + 小写。空串 = 未指定主机（全局）。
@@ -409,6 +419,10 @@ class PermissionGate:
         兼容性：旧 allowlist.txt 中裸 `shell_exec` 条目对新逻辑不再放行命令级审批
         （fail-safe 方向收紧），用户需重新针对具体命令授权。
         """
+        # 能力级授权（见 CAPABILITY_ALLOWLIST_TOOLS）：命令只做内容判定与审计，
+        # 不参与键派生 —— 边界在工具的参数校验里，不在命令字面量里。
+        if tool_name in CAPABILITY_ALLOWLIST_TOOLS:
+            return tool_name
         if command and str(command).strip():
             from ..safety import normalize_command_for_detection
             digest = hashlib.sha256(

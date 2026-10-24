@@ -180,7 +180,7 @@ class TestClarificationInterceptor:
         decision = await interceptor.check(ctx)
 
         assert decision.intercepted is True
-        assert decision.intercept_reason == "clarification_needed"
+        assert decision.intercept_reason.startswith("clarification_needed")
         assert len(decision.events) == 1
         ev = decision.events[0]
         assert ev.kind == "clarification_needed"
@@ -465,7 +465,7 @@ def test_interceptor_releases_after_ttl(monkeypatch):
     rctx.run_id = "run-exp"
     decision = asyncio.run(d.check(rctx))
     assert decision.intercepted is True
-    assert decision.intercept_reason == "clarification_needed"  # 重建新题而非 pending 重发
+    assert decision.intercept_reason.startswith("clarification_needed")  # 重建新题而非 pending 重发
     new_ci = ctx["run-exp"]
     assert new_ci["ts"] > _t.time() - 5  # 新时间戳
     reins_mod.release_clarification_run("run-exp")

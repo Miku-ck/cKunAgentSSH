@@ -10,6 +10,9 @@ AuditEngine — 追加式、链式签名防篡改的运维审计
 设计取舍：
 - 追加写（append-only）：本模块不提供 UPDATE/DELETE 审计记录的接口；
   即使直接操纵 SQLite 也会破坏 hash 链而被 verify() 检出。
+- 落库前脱敏：command_raw/result 过 secret_redact（高置信凭据形态 → ***），
+  哈希与链基于脱敏后文本，发生脱敏时 result 带 secret_masked 标记。审计要的
+  是「这个动作发生过、谁批的」，不是口令本身 —— 口令原文留在用户自己的终端里。
 - 单条写入使用事务 + BEGIN IMMEDIATE 串行化，避免并发下链式 hash 竞态。
 - 审计失败默认不阻塞 Agent：append 内部 try/except，写库异常仅记 warning，
   并把失败计入 health() 快照（原实现只写一行日志，丢失是静默的）。
@@ -27,6 +30,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 import database
+from secret_redact import redact_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -262,6 +266,17 @@ def append_record(
         result = f"{result}｜{marker}" if result else marker
         conclusion = "executed"
     environment = environment or _DEFAULT_ENV
+    # 落库前脱敏：内联口令（mysql -p*** / password=*** 等）不进审计库 —— 审计
+    # 库被拖走不该连凭据一起送走。command_hash 与链式哈希都基于**脱敏后**文本：
+    # 导出侧「按存储的 command_raw 重算 hash 对账」保持自洽；PermissionGate 的
+    # 授权键在源头按原始命令自行计算，与本表无交叉比对（改前已核实）。
+    # 发生脱敏时在 result 追加 secret_masked 标记（同上方 conclusion_raw 标记
+    # 先例）—— 掩码是诚实的：能看见被抹掉，而不是假装原文如此。
+    masked_command = redact_secrets(command_raw)
+    masked_result = redact_secrets(result)
+    if masked_command != command_raw or masked_result != result:
+        marker = "secret_masked=1"
+        masked_result = f"{masked_result}｜{marker}" if masked_result else marker
     record = {
         "ts": _now(),
         "operator": operator or _operator(),
@@ -269,9 +284,9 @@ def append_record(
         "target_id": target_id or "",
         "environment": environment,
         "action": action,
-        "command_hash": command_hash(command_raw),
-        "command_raw": command_raw,
-        "result": result,
+        "command_hash": command_hash(masked_command),
+        "command_raw": masked_command,
+        "result": masked_result,
         "conclusion": conclusion,
         "run_id": run_id,
         "iteration": int(iteration or 0),

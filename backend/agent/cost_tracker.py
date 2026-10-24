@@ -42,12 +42,92 @@ _MODEL_PRICING: list[tuple[str, float, float]] = [
     ("qwen-max",          2.50, 10.00),
     ("qwen-plus",         0.40,  1.20),
     ("qwen-turbo",        0.05,  0.20),
+    # 补录一批发布快照漏掉的主力型号（USD per 1M，与各自官方价目对齐）。
+    # keyword 匹配要求更具体的在前：gpt-4.1-mini/-nano 必须排在裸 gpt-4.1 前
+    # （边界字符 "-" 允许命中）。deepseek 系维持家族级粗粒度（dash 边界归属
+    # 家族行是有意取舍，见 test_pricing_dash_still_counts_as_boundary），不散列变体。
+    ("claude-3-7-sonnet",  3.00, 15.00),
+    ("claude-sonnet-4",    3.00, 15.00),
+    ("claude-opus-4",     15.00, 75.00),
+    ("gpt-4.1-mini",       0.40,  1.60),
+    ("gpt-4.1-nano",       0.10,  0.40),
+    ("gpt-4.1",            2.00,  8.00),
     # DeepSeek
-    ("deepseek",          0.14,  0.28),
+    ("deepseek",           0.14,  0.28),
 ]
 
 # 未知模型 fallback
 _DEFAULT_PRICING: tuple[float, float] = (0.50, 1.50)
+
+# ── 用户定价覆盖（app_settings: cost.pricing_overrides）──
+# 内置表是发布时刻的静态快照，新模型一律落 fallback 定价 —— 成本熔断的精度
+# 随时间衰减。覆盖表按模型 ID 精确匹配（小写归一），优先于内置关键词表；
+# 本地部署（Ollama / vLLM 自有硬件）记 [0, 0] 即零成本，不再被 fallback
+# 定价虚增出的成本提前触发熔断。
+# JSON 形态: {"<模型ID小写>": [input_per_1m, output_per_1m], ...}
+_PRICING_OVERRIDES_KEY = "cost.pricing_overrides"
+# 单价上限（USD/1M）：拦住把小数点敲错一个量级的脏值
+_PRICING_MAX = 100000.0
+_pricing_overrides_cache: dict[str, tuple[float, float]] | None = None
+
+
+def _sanitize_pricing_overrides(raw: object) -> dict[str, tuple[float, float]]:
+    """校验并归一化覆盖表；任一条不合法抛 ValueError（带原因）—— 要么整表合法要么不落库。"""
+    if not isinstance(raw, dict):
+        raise ValueError("覆盖表必须是 {模型ID: [输入价, 输出价]} 形态的对象")  # noqa: TRY004 — 写侧单一 ValueError 契约
+    cleaned: dict[str, tuple[float, float]] = {}
+    for key, prices in raw.items():
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError(f"模型 ID 非法: {key!r}")
+        if not isinstance(prices, (list, tuple)) or len(prices) != 2:
+            raise ValueError(f"{key}: 价格必须是 [输入价, 输出价] 两个数字")
+        pair: list[float] = []
+        for v in prices:
+            # bool 是 int 子类，显式排除 —— true/false 落进来是配置错误不是 1/0。
+            # 类型错误并入 ValueError：写侧契约单一异常（端点 422 映射只认它）
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                raise ValueError(f"{key}: 价格必须是数字，得到 {v!r}")  # noqa: TRY004 — 并入单一 ValueError 契约
+            fv = float(v)
+            if not 0 <= fv <= _PRICING_MAX:
+                raise ValueError(f"{key}: 价格 {fv} 超出 [0, {_PRICING_MAX}]")
+            pair.append(fv)
+        cleaned[key.strip().lower()] = (pair[0], pair[1])
+    return cleaned
+
+
+def get_pricing_overrides() -> dict[str, tuple[float, float]]:
+    """读取定价覆盖（懒加载一次并缓存；读库失败/脏值按空表处理，内置表仍可用）。"""
+    global _pricing_overrides_cache
+    if _pricing_overrides_cache is None:
+        _pricing_overrides_cache = {}
+        try:
+            import json
+
+            import database
+            raw = database.get_app_setting(_PRICING_OVERRIDES_KEY)
+            if raw:
+                _pricing_overrides_cache = _sanitize_pricing_overrides(json.loads(raw))
+        except Exception as e:  # noqa: BLE001 — 读侧 fail-safe 铁律
+            # 读侧吞掉脏值（库里被手改坏不该让所有 run 的成本统计挂掉），
+            # 吵一句让设置页能从日志发现
+            logger.warning("定价覆盖读取失败/脏值，按空表处理: %s", e)
+            _pricing_overrides_cache = {}
+    return dict(_pricing_overrides_cache)
+
+
+def set_pricing_overrides(raw: object) -> dict[str, tuple[float, float]]:
+    """整体替换覆盖表：校验 → 落库 → 更新缓存，返回生效的表。任一条非法抛 ValueError。"""
+    global _pricing_overrides_cache
+    cleaned = _sanitize_pricing_overrides(raw)
+    import json
+
+    import database
+    database.set_app_setting(
+        _PRICING_OVERRIDES_KEY,
+        json.dumps(cleaned, ensure_ascii=False, separators=(",", ":")),
+    )
+    _pricing_overrides_cache = cleaned
+    return dict(cleaned)
 
 
 def get_model_pricing(model_id: str) -> tuple[float, float]:
@@ -57,12 +137,17 @@ def get_model_pricing(model_id: str) -> tuple[float, float]:
     Args:
         model_id: 模型标识符（如 "gpt-4o-mini", "Qwen/Qwen3-VL-8B-Instruct"）
     Returns:
-        (input_price, output_price) USD per 1M tokens
+        (input_price, output_price) USD per 1M
     """
     if not model_id:
         return _DEFAULT_PRICING
 
     model_lower = model_id.lower()
+    # 用户覆盖优先：精确匹配（小写归一），先于内置关键词表 —— 关键词表挡不住
+    # 的自定义/本地型号在这里校准
+    override = get_pricing_overrides().get(model_lower)
+    if override is not None:
+        return override
     for keyword, in_price, out_price in _MODEL_PRICING:
         start = model_lower.find(keyword)
         while start != -1:

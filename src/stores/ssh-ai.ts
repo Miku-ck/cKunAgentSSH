@@ -416,6 +416,40 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     sharedDraft.value = text
   }
 
+  // ── 长任务结构化：draft 双态（spec 2026-10-24-task-structuring · 接缝 S4）──
+  // sharedDraft 是「当前显示/发送」的那份；draftBaseline 存结构化前的**原文**，
+  // 是一键回退的基准，也是审计对照的证据。铁律：采用前 sharedDraft 绝不被动过，
+  // 只有用户显式点【采用】才把结构稿写进 sharedDraft、把原文留进 draftBaseline。
+  /** 结构化前的原文基准（未增强时为空串）。 */
+  const draftBaseline = ref('')
+  /** 本轮 sharedDraft 是否为「已采用」的结构化稿（供输入卡显示「已增强·可回退」徽标）。 */
+  const enhancedActive = ref(false)
+  /** 已采用结构稿是否含"新增写步骤"：发送时透传后端做 auto→normal 回落。 */
+  const enhancedAddedWrite = ref(false)
+
+  /** 进入结构化：把当前原文固化成回退基准（幂等：重复进入不覆盖已存的基准）。 */
+  function beginStructuring() {
+    if (!enhancedActive.value) draftBaseline.value = sharedDraft.value
+  }
+  /** 采用结构稿：原文已在 baseline，把结构文本写进显示态并点亮增强标记。
+   *  hasAddedWrite 来自后端响应的 has_added_write_steps（含需确认写步骤）。 */
+  function acceptStructuredDraft(structuredText: string, hasAddedWrite = false) {
+    if (!draftBaseline.value) draftBaseline.value = sharedDraft.value
+    sharedDraft.value = structuredText
+    enhancedActive.value = true
+    enhancedAddedWrite.value = hasAddedWrite
+  }
+  /** 一键回退：回到原文基准，撤掉增强标记。 */
+  function revertToOriginal() {
+    if (enhancedActive.value) sharedDraft.value = draftBaseline.value
+    clearStructuringState()
+  }
+  function clearStructuringState() {
+    draftBaseline.value = ''
+    enhancedActive.value = false
+    enhancedAddedWrite.value = false
+  }
+
   /** 未读回复徽章：Agent 跑完（含中止/失败的固化）且任务台不在眼前时点亮，
    *  回到任务台即清。TitleBar 的 AI 按钮读它画圆点 —— 让"有回复可看"这件事
    *  在首页不可见时仍可感知。 */
@@ -626,6 +660,9 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     agentStore.clearRunNotice()
     persistence.beginNewTask()
     sharedDraft.value = ''
+    // 结构化回退态属于上一轮草稿：新空白任务必须清干净，否则下一条草稿旁
+    // 挂着一枚「已增强·可回退」徽标，点下去回退到的是上一轮的原文。
+    clearStructuringState()
     _clearStagedInput()
     posture.value = null
     workflowSnapshot.value = { phase: '', spec: '', plan: '', goal: '' }
@@ -812,6 +849,15 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       // 姿态=plan 时 permissionMode 恒为 'plan'（审批档休眠）；否则取审批轴
       // （'auto' 模型代判 / 其余手动）。
       ...resolveRunModes(agentMode, approval),
+      // 长任务结构化（spec 2026-10-24）：本轮草稿若是"已采用的结构稿"，把原文与
+      // "含新增写步骤"透传后端 —— 原文落审计双文本，added 写步骤触发 auto→normal 回落。
+      ...(enhancedActive.value
+        ? {
+            enhanced: true,
+            sourceRawText: draftBaseline.value || undefined,
+            enhancedHasAddedWriteSteps: enhancedAddedWrite.value,
+          }
+        : {}),
       // 成本/token 熔断预算（设置 → Agent 治理 → 运行预算）。
       // 数字框里的 0 = 不发这个字段（走后端默认）；「关闭熔断」才发显式 0，
       // 后端把显式 0 解释为不设上限。两种 0 语义相反，所以由独立布尔区分，
@@ -829,7 +875,10 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       autoSkillMatch: useSettingsStore().settings.chat.autoSkillMatch,
       contextWindow: useSettingsStore().settings.chat.contextWindow,
     })
-    // 消息已入会话且 Agent 已启动 — 草稿可清空
+    // 消息已入会话且 Agent 已启动 — 草稿可清空。
+    // 结构化态必须随手清掉：上面已把 enhanced/raw 读进本次请求体，若不清，
+    // 下一条新敲的草稿会错误携带 enhanced:true + 上一轮原文（回退徽标也会一直挂着）。
+    clearStructuringState()
     return true
   }
 
@@ -871,6 +920,14 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     // ── 共享输入草稿（任务台唯一一份输入态）──
     sharedDraft,
     setSharedDraft,
+    // ── 长任务结构化：draft 双态与回退 ──
+    draftBaseline,
+    enhancedActive,
+    enhancedAddedWrite,
+    beginStructuring,
+    acceptStructuredDraft,
+    revertToOriginal,
+    clearStructuringState,
     // ── 顶栏未读徽章 ──
     unreadReply,
     pendingPrefill,

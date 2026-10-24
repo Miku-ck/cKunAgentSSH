@@ -794,3 +794,32 @@ async def get_diagnostics():
         "permissions": allowlist,
         "app_settings": {k: _mask_value(k, v or "") for k, v in snapshot.items()},
     }
+
+
+# ── 成本定价覆盖（内置定价表静态快照的结构性补丁）──
+
+
+class CostPricingOverridesRequest(BaseModel):
+    # 整体替换语义（与 memory/permission-policy 的「未出现不改」契约不同）：
+    # 覆盖表本身就是被反复编辑的字典，整体替换 + 后端全量校验最直观，
+    # 半更新语义反而要求前端先 GET 再拼差量。
+    # 本地部署（Ollama/vLLM 自有硬件）记 [0, 0] 表示零成本。
+    overrides: dict[str, list[float]] = Field(default_factory=dict)
+
+
+@router.get("/settings/cost-pricing")
+def get_cost_pricing():
+    """当前生效的用户定价覆盖（模型 ID 小写 → [输入价, 输出价] USD/1M）。"""
+    from agent.cost_tracker import get_pricing_overrides
+    return {"overrides": {k: list(v) for k, v in get_pricing_overrides().items()}}
+
+
+@router.put("/settings/cost-pricing")
+def update_cost_pricing(req: CostPricingOverridesRequest):
+    """整体替换定价覆盖表；任一条非法 422 且不落库（要么整表合法要么不改）。"""
+    from agent.cost_tracker import set_pricing_overrides
+    try:
+        effective = set_pricing_overrides(req.overrides)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return {"overrides": {k: list(v) for k, v in effective.items()}}

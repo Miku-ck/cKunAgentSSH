@@ -55,7 +55,7 @@ SSH 智能运维终端 —— 一个窗口收口远程运维全链路：SSH 连�
 - **终端「问 AI」**：选中终端内容 → 选区旁悬浮按钮 → 预填任务台草稿（一次性 `pendingPrefill`，消费即清空），随消息自动注入 cwd / 最近命令 / 选区上下文
 - **对话与模型**：流式对话 + 思考链、多模型切换、Agent 智能体（工具调用）
 - **Harness 框架**：ReAct 决策循环、Reins 拦截器链、动态步数预算、循环检测、成本熔断
-- **工具集**：29 个内置工具 —— shell 执行 / 联网 / 待办 / 技能按需加载 / 子 Agent / 运维观测与服务 / 远程文件读写检索 / 图片查看 / 后台任务 / 记忆自编辑 / Spec-Plan-Goal 落盘
+- **工具集**：34 个内置工具 —— shell 执行 / 联网 / 待办 / 技能按需加载 / 子 Agent / 运维观测与服务 / 远程文件读写检索 / 图片查看 / 后台任务 / 记忆自编辑 / Spec-Plan-Goal 落盘
 - **记忆 v2**：单一写入方对账（去重 / 消解矛盾 / 失效）、混合检索（FTS5 + 向量）、常驻画像块、注入 token 预算；设置 → 记忆 可浏览、检索、置顶、编辑、失效，并查看对账队列与块历史
 - **计划模式**：前端 mode chip 成对下发 `workflow_mode=plan` + `permission_mode=plan`，后者由 `PlanModeGuard` 在审批卡之前就把写操作硬拦成只读
 - **澄清向导**：工具调用意图不明时拦截并弹出多步澄清卡片（A/B/C + 自定义），答完注入上下文放行、可跳过；精准调用零打扰
@@ -163,11 +163,11 @@ cKunAgentSSH/
 │   ├── post_processor.py skill_registry.py builtin_skills.py skills_builtin/
 │   ├── logconfig.py model_probe.py netconfig.py safe_tokens.py sse_utils.py win_asyncio_teardown.py
 │   ├── routes/                        # chat / agent / schedules / audit / settings / skills / terminal / workflow
-│   ├── tests/                         # 162 个测试；命名规范与旧名映射见 tests/README.md
+│   ├── tests/                         # 168 个测试文件；命名规范与旧名映射见 tests/README.md
 │   └── agent/                         # Agent 智能体框架
 │       ├── harness/                   # Harness 核心
 │       ├── memory/                    # 记忆子系统
-│       ├── tools/builtin/             # 29 个内置工具
+│       ├── tools/builtin/             # 34 个内置工具
 │       └── intention.py host_profile.py bridge_relay.py schedule_engine.py
 │
 ├── gateway/hillgw.mjs                 # 自营 TLS 接入网关（零依赖单文件，独立部署）
@@ -208,7 +208,7 @@ cKunAgentSSH/
 - **Driver** — ReAct 决策循环主驱动
 - **Reins** — 13 个拦截器实例（默认装配；关 `enable_dynamic_budget` 则 12，定时任务走的就是这条。清单以 `backend/agent/harness/reins/defaults.py` 的 `create_default_reins` 为准）：技能注入、循环检测、权限审批、文件系统守护、澄清向导、计划模式等
 - **Bridle** — 上下文组装 + 压缩
-- **Saddle** — 工具执行 + 沙箱（29 个内置工具）
+- **Saddle** — 工具执行 + 沙箱（34 个内置工具）
 - **Stirrups** — LLM 调用 + 重试
 
 ## 开发

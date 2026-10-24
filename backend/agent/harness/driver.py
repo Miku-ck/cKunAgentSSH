@@ -49,7 +49,7 @@ from .contracts import (
 )
 from .command_explain import explain_compound, explain_for_reason, maybe_explain_via_llm
 from .readonly_policy import is_provably_readonly
-from .reins import approval_wait
+from .reins import approval_wait, wait_for_clarification_answer
 from .reins.core import (
     AWAIT_APPROVAL_KEY,
     _audit_environment,
@@ -667,6 +667,10 @@ class Driver:
         # permission_needed 挂在决策返回值上，不发出去用户根本看不到卡，
         # 而「等一个看不见的卡片」只能等到兜底超时（默认 10 分钟）。
         approval_handle = self._register_approval(ctx, pre_tool_decision)
+        # 澄清等待闸（一）：与审批同姿态 —— 向导发出后 run 必须真的停住。
+        # 此前只拦当次调用，run 直接进入下一轮：用户还在作答，AI 继续输出、
+        # 继续跑只读工具，甚至先收尾，答案最终落到已终止的 run 上被丢弃。
+        clar_sig = self._register_clarification_wait(ctx, pre_tool_decision)
         try:
             if pre_tool_decision.intercepted:
                 # 拦截
@@ -684,6 +688,24 @@ class Driver:
                 for ev in approval_events:
                     await telemetry.emit(ev)
                     yield ev
+            # 澄清等待闸（二）：等答案 → 重判 PRE_TOOL_CALL。
+            # 重判可能落到权限门（澄清放行后才发现命令 dangerous）：必须先登记
+            # 审批等待项、再发卡、再等，否则新弹出的审批卡又只是「物理存在」。
+            if clar_sig is not None:
+                pre_tool_decision = await self._finish_clarification(
+                    ctx, harness, pre_tool_decision, clar_sig)
+                approval_handle = self._register_approval(ctx, pre_tool_decision)
+                if pre_tool_decision.intercepted:
+                    for ev in pre_tool_decision.events:
+                        await telemetry.emit(ev)
+                        yield ev
+                    pre_tool_decision.events = []
+                if approval_handle is not None:
+                    pre_tool_decision, approval_events = await self._finish_approval(
+                        ctx, harness, pre_tool_decision, approval_handle)
+                    for ev in approval_events:
+                        await telemetry.emit(ev)
+                        yield ev
         finally:
             # 发卡期间抛异常，或客户端断连导致生成器在 yield 处被关闭，都会绕开
             # wait_registered 的清理 —— 这里兜一层（正常路径是 no-op）。
@@ -1230,6 +1252,64 @@ class Driver:
             pending.pop(tool_call_signature({"tool": tc.name, "args": tc.args}), None)
         except Exception:
             pass
+
+    def _register_clarification_wait(
+        self,
+        ctx: RunContext,
+        decision: ReinDecision,
+    ) -> str | None:
+        """澄清等待闸（一）：识别「向导已发出」的拦截决策并登记本次调用。
+
+        只在交互式 run 启用（与审批闸同一开关 AWAIT_APPROVAL_KEY）：定时任务
+        没有人能答题，等下去就是挂死。同一调用签名只等一次 —— 超时后模型若
+        重试同一条命令，再等就是再挂一个完整 TTL。
+        """
+        if not ctx.metadata.get(AWAIT_APPROVAL_KEY):
+            return None
+        if not decision.intercepted:
+            return None
+        if not any(ev.kind == "clarification_needed" for ev in decision.events):
+            return None
+        last = ctx.active_tool_call or {}
+        sig = tool_call_signature({
+            "tool": str(last.get("tool") or ""),
+            "args": last.get("args") or {},
+        })
+        waited = ctx.metadata.setdefault("clarification_waited", set())
+        if sig in waited:
+            return None
+        waited.add(sig)
+        return sig
+
+    async def _finish_clarification(
+        self,
+        ctx: RunContext,
+        harness: "Harness",
+        decision: ReinDecision,
+        sig: str,
+    ) -> ReinDecision:
+        """澄清等待闸（二）：停住等用户作答，醒来重判一次 PRE_TOOL_CALL。
+
+        答案就绪时给当前调用打 `clarification_answered` 标：重判消费答案后，
+        若继续落到权限门、授权后还会再重判一次 —— 没有这道标，澄清拦截器
+        会在同一调用上重建向导（用户答完又弹一张，工具永远执行不到）。
+
+        同时把签名移出 `clarification_waited`：本次已经等到答案，模型之后
+        若重发同一条模糊命令，那是一次新的调用，应当重新询问并重新等待。
+        超时 / pending 被回收则保留签名，落回旧路径（模型看到「工具调用被
+        拦截」并自行换路），避免同一条没人答的命令反复挂满 TTL。
+        """
+        answers = await wait_for_clarification_answer(ctx.run_id)
+        if answers is None:
+            return decision
+        entry = ctx.active_tool_call
+        if entry is not None:
+            entry["clarification_answered"] = True
+        waited = ctx.metadata.get("clarification_waited")
+        if isinstance(waited, set):
+            waited.discard(sig)
+        logger.info("澄清答案到达 run=%s，重判一次 PRE_TOOL_CALL", ctx.run_id)
+        return await harness.reins.check(ReinPoint.PRE_TOOL_CALL, ctx)
 
     def _register_approval(
         self,

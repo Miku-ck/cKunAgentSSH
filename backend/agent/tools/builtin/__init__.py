@@ -29,6 +29,7 @@ from agent.tools.builtin.ops_obs import (
 from agent.tools.builtin.ops_fleet import FleetSessionsTool, FleetOverviewTool
 from agent.tools.builtin.ops_service import ServiceManageTool
 from agent.tools.builtin.ops_schedule import ScheduleOpTool
+from agent.tools.builtin.ops_log_cleanup import LogCleanupTool
 # 运维文件操作（远程/本地双模式）、图片查看、后台任务
 from agent.tools.builtin.ops_file import (
     FileReadTool,
@@ -77,6 +78,7 @@ _ALL_TOOL_CLASSES: list[type[BaseTool]] = [
     FleetOverviewTool,
     ServiceManageTool,
     ScheduleOpTool,
+    LogCleanupTool,
     # 运维文件操作 / 图片查看 / 后台任务
     FileReadTool,
     FileWriteTool,

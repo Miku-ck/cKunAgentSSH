@@ -10,11 +10,33 @@ import logging
 import sys
 from typing import Optional
 
+from secret_redact import redact_secrets
+
 LEVELS: tuple[str, ...] = ("debug", "info", "warning", "error", "critical")
 DEFAULT_LEVEL = "warning"
 
 _current = DEFAULT_LEVEL
 _handler: Optional[logging.StreamHandler] = None
+
+
+class SecretRedactionFilter(logging.Filter):
+    """出口脱敏：所有经 root handler 的日志文本先过 secret_redact。
+
+    只改写 message 文本（含 %s 参数格式化后的结果）；exc_info 回溯栈不经
+    这里 —— 回溯里几乎不嵌口令，且改写回溯会破坏排障，不做。脱敏自身异常
+    不得让日志丢失，吞掉按原文放行。
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            msg = record.getMessage()
+            masked = redact_secrets(msg)
+            if masked != msg:
+                record.msg = masked
+                record.args = ()
+        except Exception:  # noqa: BLE001, S110 — 脱敏失败不得让日志本身丢失
+            pass
+        return True
 
 
 def normalize_level(raw, default: str = DEFAULT_LEVEL) -> str:
@@ -38,6 +60,10 @@ def apply_level(level, *, persist_note: bool = True) -> str:
             datefmt="%H:%M:%S",
         ))
         root.addHandler(_handler)
+    # 出口脱敏挂在 handler 上（幂等）：uvicorn 自有 handler 不经此过滤器，
+    # 那是访问日志，不含业务凭据。
+    if not any(isinstance(f, SecretRedactionFilter) for f in _handler.filters):
+        _handler.addFilter(SecretRedactionFilter())
     root.setLevel(getattr(logging, resolved.upper(), logging.WARNING))
     _current = resolved
     if persist_note:

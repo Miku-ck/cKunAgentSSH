@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import base64
 import os
+import posixpath
 import re
 import shlex
 import subprocess
@@ -219,6 +220,19 @@ _PTOK = r"(?:'[^']*'|[^\s]+)"
 _SVC = r"(?:'[^']*'|[A-Za-z0-9_.-]+)"
 _B64 = r"[A-Za-z0-9+/]+={0,2}"
 
+# ── 日志清理根目录 / 模式约束（与后端 ops_log_cleanup 同源）──
+_LOG_TMP_ROOTS = ("/tmp", "/var/tmp")
+_LOG_MANAGED_ROOT = "/.trae-cn-server/manager-logs"
+_LOG_ROOT = "/var/log"
+_LOG_PROTECTED_ENTRIES = frozenset({
+    "audit", "journal", "private", "sssd",
+    "auth.log", "secure", "syslog", "messages",
+    "kern.log", "daemon.log", "user.log",
+    "cron", "cron.log", "wtmp", "btmp", "lastlog", "faillog",
+})
+_LOG_PATTERN_RE = re.compile(r"^[A-Za-z0-9*?._-]{1,128}$")
+_LOG_ROOT_FORBIDDEN = frozenset("*?[]{};|&<>$`\"'\\")
+
 
 # ══════════════════════════════════════════════════════════════
 #   逐模板正则 + 参数约束校验
@@ -330,6 +344,61 @@ def v_log_grep(cmd: str) -> bool:
     m = _match(RE_LOG_GREP, cmd)
     if not _ws(m.group(2)):
         raise TemplateMismatch("path out of workspace")
+    return True
+
+
+# 有界日志清理：固定根目录 + 第一层普通文件 + 受限文件名模式 + 保留天数。
+# 客户端模板见 backend/agent/tools/builtin/ops_log_cleanup.log_cleanup_cmd，
+# 两端由 backend/tests/test_remote_whitelist_contract.py 跨端校验。
+RE_LOG_CLEANUP = re.compile(
+    rf"^find ({_PTOK}) -maxdepth 1 -type f -name ({_PTOK}) "
+    rf"-mtime \+(\d+)( -delete)? -print$"
+)
+
+
+def _posix_real(path: str) -> str:
+    """realpath 后统一成 / 分隔（远端是 Linux；测试在 Windows 上也能跑）。"""
+    return os.path.realpath(path).replace(os.sep, "/")
+
+
+def _log_cleanup_root_ok(root: str) -> bool:
+    """根目录必须落在临时目录 / 应用日志子目录 / agent 托管日志目录内。
+
+    用 realpath 判定：`/var/log/app` 是指向 /etc 的 symlink 时，realpath
+    会落到 /etc，从而被拒绝 —— 纯字符串前缀匹配挡不住这种形态。
+    """
+    if not root.startswith("/"):
+        return False
+    if any(c in _LOG_ROOT_FORBIDDEN for c in root):
+        return False
+    if any(ord(c) < 32 for c in root):
+        return False
+    # 只接受规范形态：尾斜杠（find 可能跟随 symlink）、`..`、`//`、`.` 一律拒绝
+    if posixpath.normpath(root) != root:
+        return False
+    real = _posix_real(root)
+    for allowed in _LOG_TMP_ROOTS + (_LOG_MANAGED_ROOT,):
+        base = _posix_real(allowed)
+        if real == base or real.startswith(base + "/"):
+            return True
+    log_root = _posix_real(_LOG_ROOT)
+    if not real.startswith(log_root + "/"):
+        return False
+    first = real[len(log_root) + 1:].split("/", 1)[0]
+    return first not in _LOG_PROTECTED_ENTRIES
+
+
+def v_log_cleanup(cmd: str) -> bool:
+    m = _match(RE_LOG_CLEANUP, cmd)
+    root = _unquote(m.group(1))
+    pattern = _unquote(m.group(2))
+    days = int(m.group(3))
+    if not 1 <= days <= 3650:
+        raise TemplateMismatch("log cleanup days out of range")
+    if not _log_cleanup_root_ok(root):
+        raise TemplateMismatch("log cleanup root out of scope")
+    if pattern.startswith("-") or not _LOG_PATTERN_RE.fullmatch(pattern):
+        raise TemplateMismatch("bad log cleanup pattern")
     return True
 
 
@@ -526,6 +595,7 @@ TEMPLATES: list[tuple[str, callable]] = [
     ("file_grep", v_file_grep),
     ("tail", v_tail),
     ("log_grep", v_log_grep),
+    ("log_cleanup", v_log_cleanup),
     ("systemctl", v_systemctl),
     ("sys_overview", v_sys_overview),
     ("host_profile", v_host_profile),

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re as _re
 import time
@@ -103,6 +104,26 @@ def release_clarification_run(run_id: str) -> bool:
     had = _CLARIFICATION_CONTEXT.pop(run_id, None) is not None
     had = _CLARIFICATION_DONE.pop(run_id, None) is not None or had
     return had
+
+
+async def wait_for_clarification_answer(run_id: str) -> Optional[dict]:
+    """阻塞等待工具级澄清答案（Driver 澄清等待闸使用）。
+
+    返回答案 dict（可能为空 = 用户点击跳过）；返回 None 表示 TTL 到期或
+    pending 被回收（run 终止 / 断连 / release）—— 调用方应落回原拦截路径。
+    取消（CancelledError）原样上抛，由 Driver 的取消链收尾。
+
+    与 intent_resolver 的任务级等待同源：答案由路由层写入 _CLARIFICATION_DONE，
+    这里只轮询这一个事实，不额外维护唤醒通道（跨线程/跨请求写入，轮询最稳）。
+    """
+    deadline = time.monotonic() + _CLARIFICATION_TTL_SEC
+    while time.monotonic() < deadline:
+        if run_id in _CLARIFICATION_DONE:
+            return _CLARIFICATION_DONE[run_id]
+        if run_id not in _CLARIFICATION_CONTEXT:
+            return None
+        await asyncio.sleep(0.2)
+    return None
 
 
 def _enforce_clarification_cap():
@@ -555,7 +576,9 @@ class ClarificationInterceptor:
             _mark_pending_sig(ctx)
             return ReinDecision(
                 intercepted=True,
-                intercept_reason="clarification_pending",
+                # 拦截分支不消费 inject_messages（见 driver），等待/重试指令
+                # 必须写进 intercept_reason 才能到达模型。
+                intercept_reason="clarification_pending：请等待用户回答，不要重试调用同一工具",
                 events=[ev],
                 inject_messages=[{
                     "role": "user",
@@ -568,6 +591,11 @@ class ClarificationInterceptor:
         # 再叠一张会覆盖 _CLARIFICATION_CONTEXT，用户已经答过的东西就此无主。
         # 宁可这一次不澄清（审批层照旧挡危险命令），也不能丢答案。
         if run_id in _CLARIFICATION_DONE:
+            return ReinDecision()
+        # Driver 澄清等待闸在重判前打的标：本次调用已答过澄清。答案消费后，
+        # 权限门若再重判一次 PRE_TOOL_CALL，没有这道标记就会在同一调用上
+        # 重建向导 —— 用户答完又弹一张，永远执行不到工具。
+        if tc.get("clarification_answered"):
             return ReinDecision()
         entry = _CLARIFIABLE_TOOLS.get(tool)
         if not entry:
@@ -599,7 +627,11 @@ class ClarificationInterceptor:
         _mark_pending_sig(ctx)
         return ReinDecision(
             intercepted=True,
-            intercept_reason="clarification_needed",
+            # 同 pending 分支：拦截决策的 inject_messages 不被 Driver 消费，
+            # 兜底指令（等待闸超时/非交互 run 走到这里时）必须落在 reason 上。
+            intercept_reason=(
+                f"clarification_needed：工具 {tool} 意图不明，已向用户发起澄清；"
+                "请等待回答，不要重试调用"),
             events=[ev],
             inject_messages=[{
                 "role": "user",

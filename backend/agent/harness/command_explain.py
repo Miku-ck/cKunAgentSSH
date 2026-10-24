@@ -77,6 +77,9 @@ CONSEQUENCE_RULES: list[tuple[re.Pattern, str, bool]] = [
      "递归删除用户主目录或 SSH 密钥目录（{target}），登录凭据会一并丢失，通常无法恢复。", False),
     (re.compile(r"^recursive delete of \.ssh under home"),
      "递归删除主目录下的 SSH 密钥目录（{target}），可能导致此后无法登录其他服务器。", False),
+    (re.compile(r"^recursive delete under log directory"),
+     "递归删除应用日志目录（{target}）中的全部内容，历史日志会被删除且一般无法恢复；"
+     "系统审计与服务日志不在可清理范围内。", False),
     (re.compile(r"^recursive delete of sensitive system path"),
      "递归删除系统关键目录下的内容（{target}），会破坏已安装的软件，甚至导致系统无法启动。", False),
     (re.compile(r"^recursive delete under home directory"),

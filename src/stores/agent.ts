@@ -282,6 +282,10 @@ export const useAgentStore = defineStore('agent', () => {
     workflowMode?: 'goal' | 'plan'
     /** 权限模式（normal=手动审批 / auto=模型代判 / plan=只读强制）—— 缺省 normal */
     permissionMode?: PermissionModeKey
+    /** 长任务结构化（spec 2026-10-24）：透传后端落审计双文本与 auto 回落，见 StreamAgentOptions */
+    enhanced?: boolean
+    sourceRawText?: string
+    enhancedHasAddedWriteSteps?: boolean
   }) {
     // C10 修复：并发保护 — 如果有正在运行的流，先中止它，避免多个流并行导致状态混乱
     if (abortFn) {

@@ -494,6 +494,40 @@ def _is_agent_log_path(target: str) -> bool:
     return False
 
 
+# ── /var/log 应用子目录降级（2026-10-24）──
+# `/var` 在 _SENSITIVE_DIRS 里，`rm -rf /var/log/app` 因此被判 hardline：
+# 没有审批出口、allowlist 也放不进去 —— "清理应用日志"这个常见且用户会主动
+# 要求的任务被一刀切堵死（与 2026-10-22 托管日志事故同源，见 _AGENT_MANAGED_LOG_DIRS）。
+#
+# 降级只认**字面量的应用日志子目录**：
+#   - 必须是 /var/log 的严格子目录（/var/log 本体仍是 hardline）；
+#   - 顶层段不得是系统/审计/认证/内核日志（下面这张表）；
+#   - 不得含通配符/变量/`..`/尾斜杠/重复斜杠 —— 这些形态的展开结果或 symlink
+#     语义在静态检查里看不到，保留 hardline。
+# 降级后仍是 dangerous：每次需审批，prod 需预登记 —— 是"可批准"，不是"免审"。
+_PROTECTED_LOG_ENTRIES = frozenset({
+    "audit", "journal", "private", "sssd",
+    "auth.log", "secure", "syslog", "messages",
+    "kern.log", "daemon.log", "user.log",
+    "cron", "cron.log", "wtmp", "btmp", "lastlog", "faillog",
+})
+_LOG_TARGET_FORBIDDEN = frozenset("*?[]{};|&<>$`\"'\\")
+
+
+def _is_cleanable_log_subdir(target: str, norm: str) -> bool:
+    """目标是否为可降级的 /var/log 应用子目录字面路径。"""
+    if not norm.startswith("/var/log/"):
+        return False
+    raw = target.strip().replace("\\", "/")
+    # 只降级规范形态：尾斜杠（rm 会跟随 symlink）、`..`、`//`、`.` 一律不降。
+    if raw != norm:
+        return False
+    if any(c in _LOG_TARGET_FORBIDDEN for c in raw):
+        return False
+    first = norm[len("/var/log/"):].split("/", 1)[0]
+    return first not in _PROTECTED_LOG_ENTRIES
+
+
 def _is_persistence_target(target: str) -> bool:
     """写入目标是否命中持久化/植入类路径（重定向或 tee）"""
     t = _normalize_target(target)
@@ -613,7 +647,9 @@ def _token_rm_find_analysis(segment: str) -> tuple[str, str | None]:
                     elif _is_home_relative(norm):
                         _upd("dangerous", f"recursive delete under home directory ({verb} {target})")
                     elif norm.startswith("/"):
-                        if _is_sensitive_path(norm):
+                        if _is_cleanable_log_subdir(target, norm):
+                            _upd("dangerous", f"recursive delete under log directory ({verb} {target})")
+                        elif _is_sensitive_path(norm):
                             _upd("hardline", f"recursive delete of sensitive system path ({verb} {target})")
                         else:
                             _upd("dangerous", f"recursive delete of absolute path ({verb} {target})")

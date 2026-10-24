@@ -25,6 +25,8 @@ import { REMOTE_ID_PREFIX, useSshAiStore } from '@/stores/ssh-ai'
 import { useSkillStore } from '@/stores/skills'
 import { useSSHStore } from '@/stores/ssh'
 import HomeRemoteFilePicker from './HomeRemoteFilePicker.vue'
+import TaskStructureDialog from './TaskStructureDialog.vue'
+import { useTaskStructuring } from '@/composables/useTaskStructuring'
 import { APPROVAL_OPTIONS, PERMISSION_LABELS, PERM_MARKS, PERM_SHIELD, resolveRunModes, type ApprovalKey } from '@/utils/run-modes'
 
 const emit = defineEmits<{ bulk: [], 'remote-mgr': [] }>()
@@ -39,6 +41,22 @@ const settings = useSettingsStore()
 const { openSettings } = useSettings()
 const { draft, canSend, submit, attachFiles, removeAttachment, uploading } = useHomeCommand()
 const { targetChip, targetHint, options: targetOptions, pick: pickTarget, remoteCount, canBulkDispatch } = useHomeTarget()
+
+// ── 长任务结构化（spec 2026-10-24-task-structuring）──
+// 解构进 setup 作用域，模板才能拿到自动 unwrap 的 ref（structure 对象里的 ref
+// 不解构直接用会是个永远 truthy 的 Ref，触发条件形同虚设）。
+const {
+  loading: structLoading,
+  structure: structResp,
+  confirmedAdded: structConfirmed,
+  allAddedConfirmed: structAllConfirmed,
+  canTrigger: structCanTrigger,
+  open: openStruct,
+  accept: acceptStruct,
+  revert: revertStruct,
+  close: closeStruct,
+  toggleConfirm: toggleStructConfirm,
+} = useTaskStructuring()
 
 // ── 目标主机（＋ 菜单 SSH 面板）──
 function chooseTarget(sessionId: string) {
@@ -412,6 +430,34 @@ onMounted(() => {
         </div>
       </div>
 
+      <!-- 长任务结构化（spec 2026-10-24-task-structuring）：草稿够长够模糊时浮现的
+           旁路入口。点击只开对照弹窗、绝不动输入框；采用/回退都在弹窗里显式裁决。
+           已增强后收起入口、换成「已增强」徽标 + 一键回到原文。 -->
+      <button
+        v-if="structCanTrigger && !sshAi.enhancedActive"
+        type="button"
+        class="hcc-btn"
+        :disabled="structLoading || running"
+        title="把这条长指令拆解为明确步骤并补全运维字段 · 原文可对照、可回退"
+        @click="openStruct"
+      >
+        <b>{{ structLoading ? '结构化中…' : '结构化' }}</b>
+      </button>
+      <span
+        v-if="sshAi.enhancedActive"
+        class="hcc-chip"
+        title="已采用结构化草稿 · 可一键回到原文"
+      >
+        已增强
+        <button
+          type="button"
+          class="hcc-chip-x"
+          aria-label="恢复原文"
+          title="恢复原文"
+          @click="revertStruct"
+        >×</button>
+      </span>
+
       <span v-if="targetChip" class="hcc-target" :title="targetHint">
         {{ targetChip }}
         <button
@@ -539,6 +585,20 @@ onMounted(() => {
       </button>
     </div>
   </div>
+
+  <!-- 对照弹窗：居中模态（DESIGN.md 禁抽屉）。只呈现事实与回抛意图，store 由
+       useTaskStructuring 裁决；v-if=structResp 保证只在拿到结构稿后才挂载。 -->
+  <TaskStructureDialog
+    v-if="structResp"
+    :structure="structResp"
+    :original="sshAi.draftBaseline"
+    :confirmed-added="structConfirmed"
+    :all-added-confirmed="structAllConfirmed"
+    @close="closeStruct"
+    @accept="acceptStruct"
+    @revert="revertStruct"
+    @toggle-confirm="toggleStructConfirm"
+  />
 </template>
 
 <style scoped>

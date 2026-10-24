@@ -143,11 +143,13 @@ def test_pricing_hits_expected_row(model_id, expected):
 
 
 @pytest.mark.parametrize("model_id", [
-    "gpt-4.1", "gpt-4.1-mini", "gpt-45",
+    "gpt-4.5", "gpt-45",
     "Qwen/Qwen3-VL-8B-Instruct", "",
 ])
 def test_pricing_unknown_families_fall_back_to_default(model_id):
-    """裸 "gpt-4" 曾子串命中 gpt-4.1/gpt-45 → $30/$60（约 15 倍）→ $2 熔断误杀 run。"""
+    """裸 "gpt-4" 曾子串命中 gpt-4.1/gpt-45 → $30/$60（约 15 倍）→ $2 熔断误杀 run。
+    gpt-4.1 家族 2026-10 已收录进内置表，未知样例换 gpt-4.5 —— 守卫不变：
+    未收录型号必须回默认价，绝不落进旧家族价。"""
     assert get_model_pricing(model_id) == _DEFAULT_PRICING
 
 
@@ -160,9 +162,12 @@ def test_pricing_dash_still_counts_as_boundary():
 
 
 def test_calc_cost_does_not_inflate_newer_models():
-    """1M 输入 token 的 gpt-4.1 按默认价 ≈ $0.5，而非旧 GPT-4 的 $30。"""
-    assert calc_cost(1_000_000, 0, "gpt-4.1") == pytest.approx(0.5)
-    assert calc_cost(0, 1_000_000, "gpt-4.1") == pytest.approx(1.5)
+    """反膨胀守卫：未收录型号按默认价（gpt-4.5 ≈ $0.5/1M 输入），已收录的
+    gpt-4.1 按自家价目 $2/1M —— 两者都绝不能落进旧 GPT-4 的 $30。"""
+    assert calc_cost(1_000_000, 0, "gpt-4.5") == pytest.approx(0.5)
+    assert calc_cost(0, 1_000_000, "gpt-4.5") == pytest.approx(1.5)
+    assert calc_cost(1_000_000, 0, "gpt-4.1") == pytest.approx(2.0)
+    assert calc_cost(0, 1_000_000, "gpt-4.1") == pytest.approx(8.0)
 
 
 # ── 触发词正则：中文相邻的 ASCII 词要能命中，同时不误伤长词 ────────────────
