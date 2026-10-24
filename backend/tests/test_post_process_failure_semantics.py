@@ -6,7 +6,7 @@
 3. PostProcessManager.submit：常驻单例持有的 config 是构造时快照，
    设置面板 PUT 只换模块级 _config → 关掉后处理仍会放行任务
 
-运行: python -m pytest backend/tests/test_post_process_round13b.py -v
+运行: python -m pytest backend/tests/test_post_process_failure_semantics.py -v
 """
 import asyncio
 

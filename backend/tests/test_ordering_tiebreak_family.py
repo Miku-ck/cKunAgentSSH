@@ -4,7 +4,7 @@
 真实形状，不是边角：一次会话连发几条 run、一轮 run 里连调几个工具、用户消息和
 回复落在同一秒，都会撞出并列键。`get_agent_runs`（本文件外的
 test_run_history_list.py::test_offset_翻页取更旧的）和 `get_recent_messages`
-（test_minor_round3.py::test_get_recent_messages_rowid_tiebreak）都为此补过兜底键，
+（test_review_minor_fixes.py::test_get_recent_messages_rowid_tiebreak）都为此补过兜底键，
 这里是同一族里还没补的兄弟：
 
 - `list_conversations` 外层翻页：并列时两次独立请求给 SQLite 自己决定次序 →

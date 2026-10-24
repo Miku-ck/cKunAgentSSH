@@ -5,7 +5,7 @@
   MINOR — release-run 审计结论 "released" 不再被静默改写为 executed
   MINOR — agent_runs/tool_calls 保留清理 prune_agent_runs（级联删 tool_calls）
 
-运行: python -m pytest backend/tests/test_round8_fixes.py -v
+运行: python -m pytest backend/tests/test_sse_permission_and_run_lifecycle.py -v
 """
 import asyncio
 import sqlite3

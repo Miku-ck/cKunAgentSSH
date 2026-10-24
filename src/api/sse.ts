@@ -15,7 +15,7 @@ export interface AgentClarificationStep {
 
 export interface AgentSSEEvent {
   // 全集由后端 SSEAdapter._KIND_MAP 决定，两侧一致性由
-  // backend/tests/test_trace_projection_keys_s106.py 钉住（新增事件先补后端清单）
+  // backend/tests/test_trace_projection_keys.py 钉住（新增事件先补后端清单）
   type: 'state' | 'content' | 'reasoning' | 'tool_call_start' | 'tool_call_result' | 'warning' | 'error' | 'human_help_needed' | 'permission_needed' | 'permission_expired' | 'permission_explain' | 'intention' | 'tool_deliver' | 'budget_extended' | 'reflection_request' | 'plan_mode_block' | 'clarification_needed' | 'clarification_done' | 'done'
   state?: string
   iteration?: number

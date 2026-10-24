@@ -10,7 +10,7 @@
 #   3. 前端 vitest 单测
 #   4. electron-vite 构建（验证 main/preload/renderer 三方编译）
 #
-# 本文件的形状由 backend/tests/test_ci_matrix_round22.py 钉住：改这里必须同步改那里。
+# 本文件的形状由 backend/tests/test_ci_matrix_contract.py 钉住：改这里必须同步改那里。
 # 拆两条单 OS job 而不是 runs-on 矩阵：矩阵逼着每个 step 挂 if: matrix.os，
 # 三处平台差异（pip 装法、pytest 只在 Linux 跑、Windows 多一步打包）会把 yml
 # 淹在守卫里，而漏挂一次正好是最难查的静默绿。

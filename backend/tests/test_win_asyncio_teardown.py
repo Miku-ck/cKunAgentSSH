@@ -1,7 +1,7 @@
 """Windows proactor 拆除修复（win_asyncio_teardown）单元测试。
 
 全部用鸭子类型的假 transport：本文件必须在非 win32 上也能跑（后端 pytest 只在
-ubuntu 跑，由 test_ci_matrix_round22 钉住），所以测试里绝不 import
+ubuntu 跑，由 test_ci_matrix_contract 钉住），所以测试里绝不 import
 asyncio.proactor_events —— 那在 Linux 上直接 ImportError。
 
 被测契约：stdlib 的

@@ -10,7 +10,7 @@ typecheck / vitest / 后端 pytest / 构建。yml 用正则抽（CI 配置文件
 为一个断言引入 pyyaml 不值得），所以形状一变（矩阵改名、job 拆并）本测试会红，
 这正是想要的：改 ci.yml 的人必须顺手改这里，等于强制 review。
 
-运行: python -m pytest backend/tests/test_ci_matrix_round22.py -v
+运行: python -m pytest backend/tests/test_ci_matrix_contract.py -v
 """
 import re
 from pathlib import Path

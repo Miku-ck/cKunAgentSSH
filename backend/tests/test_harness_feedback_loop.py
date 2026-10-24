@@ -10,7 +10,7 @@
     → 用户离席不答、模型每轮重发同一命令，3 次检测即 terminate 把 run 打成
       FAILED，之后的答案 POST 成孤儿。
 
-运行: python -m pytest backend/tests/test_harness_round2.py -v
+运行: python -m pytest backend/tests/test_harness_feedback_loop.py -v
 """
 import asyncio
 

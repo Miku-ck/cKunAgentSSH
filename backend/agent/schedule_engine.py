@@ -153,6 +153,8 @@ class ScheduleEngine:
         # 裸 create_task 的结果可能在执行前被 GC 回收（CPython 文档明确警告），
         # 与上方 _running_tasks 同一纪律，靠 done-callback 自动摘除。
         self._bg_tasks: set[asyncio.Task] = set()
+        # 未配置默认模型的一次性提醒标志：无头 run 前置拦截后，每进程只 warning 一次
+        self._no_model_warned = False
         # 删除任务时被打断的 schedule_id：区分 CancelledError 文案
         # （"任务已删除" vs "服务停止"），避免 cancel 与 finally 的竞态误写
         self._deleted_sids: set[str] = set()
@@ -433,7 +435,18 @@ class ScheduleEngine:
                     pass
             raise
         except Exception as e:
-            logger.exception("schedule=%s run=%s 执行失败", sid, run_id)
+            # 未配置默认模型属纯配置缺失（非代码缺陷）：不打完整异常栈，
+            # warning 每进程只提醒一次，run 行仍落带指引的 failed 记录。
+            # 设置页补上默认模型后下轮 tick 自然恢复。
+            if isinstance(e, RuntimeError) and "未配置默认模型" in str(e):
+                if not self._no_model_warned:
+                    self._no_model_warned = True
+                    logger.warning(
+                        "schedule=%s run=%s 未配置默认模型，定时任务暂不执行"
+                        "（在设置页将某个模型设为默认后自动恢复；本提醒仅出现一次）",
+                        sid, run_id)
+            else:
+                logger.exception("schedule=%s run=%s 执行失败", sid, run_id)
             await asyncio.to_thread(
                 db.update_schedule_run, run_id, status="failed", error=f"{type(e).__name__}: {e}"
             )

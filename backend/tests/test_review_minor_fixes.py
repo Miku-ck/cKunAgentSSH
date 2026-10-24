@@ -7,7 +7,7 @@
 - MINOR-10 web_fetch max_chars 上限钳制
 - MINOR-12 同会话并发占位（冲突/误删保护）+ 启动对账标记滞留 run
 
-运行: python -m pytest backend/tests/test_minor_round3.py -v
+运行: python -m pytest backend/tests/test_review_minor_fixes.py -v
 """
 import asyncio
 import sqlite3

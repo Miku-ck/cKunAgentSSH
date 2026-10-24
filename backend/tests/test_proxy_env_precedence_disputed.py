@@ -11,7 +11,7 @@
     口径 B，需要产品裁决，不该由一次重构顺手带进来。
 
 所以下面三条分别钉住：判据没偷偷长回来、timeout/retry 仍按行存在判、两者不同不是遗漏。
-现状口径本身的测试在 test_proxy_clear_persistence_s001.py 与 round 22。
+现状口径本身的测试在 test_proxy_clear_persistence.py 与 round 22。
 """
 import os
 
@@ -38,7 +38,7 @@ def test_get_http_policy_exposes_no_proxy_set_flag(clean_db):
     p = clean_db.get_http_policy()
     assert "proxy_set" not in p, (
         "proxy_set 又出现了：口径 B（行存在即权威，空串=清除）需要产品裁决，"
-        "不要在裁决前单侧实现。见 test_proxy_clear_persistence_s001.py 顶部的来龙去脉")
+        "不要在裁决前单侧实现。见 test_proxy_clear_persistence.py 顶部的来龙去脉")
     assert set(p) == {"proxy_url", "timeout_seconds", "retry_count",
                       "timeout_set", "retry_set"}
 

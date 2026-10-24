@@ -106,7 +106,7 @@ def test_no_clip_helper_reintroduces_a_magic_number(field: str):
     """裁剪只走 clipAuditText(value, AUDIT_*_MAX)；调用点抄数字就绕开了本守卫。
 
     守卫认得常量，认不出某个新写的 `slice(0, 4096)`。按仓内既有做法把这种漂移
-    挡在源码层（见 test_settings_key_contract_round22 的同类读法）。
+    挡在源码层（见 test_settings_key_contract 的同类读法）。
     """
     const_name = next(k for k, v in _PAIRS.items() if v == field)
     src = FRONTEND.read_text(encoding="utf-8")

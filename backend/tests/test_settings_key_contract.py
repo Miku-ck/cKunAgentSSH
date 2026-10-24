@@ -14,7 +14,7 @@ pydantic 默认**静默丢弃**未声明字段，于是漂移不报错、不 422
 2) 后端的必填键必须都在前端里 —— 否则请求恒 422（真事故）。
 后端多出来的可选键不算错：那是「前端这一版没暴露」，不是失配。
 
-运行: python -m pytest backend/tests/test_settings_key_contract_round22.py -v
+运行: python -m pytest backend/tests/test_settings_key_contract.py -v
 """
 import re
 import sys

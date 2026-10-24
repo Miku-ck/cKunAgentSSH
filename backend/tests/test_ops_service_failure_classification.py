@@ -5,7 +5,7 @@
   - systemctl 好好的、只是 unit 不存在 → 被告知「这台机器没有 systemd」（误报，方向被带偏）
   - 真·非 systemd 主机（容器/无 dbus）→ 什么提示都没有（漏报）
 
-运行: python -m pytest backend/tests/test_ops_service_round13d.py -v
+运行: python -m pytest backend/tests/test_ops_service_failure_classification.py -v
 """
 import asyncio
 

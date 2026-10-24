@@ -22,7 +22,7 @@ import pytest
 # 它模块顶层就是 `import database as db`，第一次导入发生在冒牌库还在位的时候，
 # 那个 SingleNamespace 就会被永久绑进注册表（sys.modules 里的 skill_registry 只此
 # 一份）。builtin_skills 同步到至少一条技能时会 `from skill_registry import ...`，
-# 于是后面任何按真库断言的用例（test_ai_loop_round13c 的禁用清单两条）都在跟一个
+# 于是后面任何按真库断言的用例（test_ai_loop_core_regression 的禁用清单两条）都在跟一个
 # 陈旧冒牌库比，报"'types.SimpleNamespace' object has no attribute
 # 'list_disabled_skills_for_mode'"。这里先导入，让它绑定到真库。
 import skill_registry  # noqa: F401

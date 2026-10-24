@@ -12,7 +12,7 @@
 netconfig 读它、_proxy_source 跟着改），撞掉 round 22 的两条测试后全部回退。
 本仓另一会话在同一轮里看过 S0-01 并明确保留 A（原代码注释写着「代理口径本轮未变」）。
 所以裁决前：不要按 B 单侧改判据，也不要把 A 当成「timeout/retry 同族防护漏了一处」
-顺手补齐 —— 见 test_proxy_env_precedence_s001_disputed.py 里的不对称性说明。
+顺手补齐 —— 见 test_proxy_env_precedence_disputed.py 里的不对称性说明。
 """
 import os
 

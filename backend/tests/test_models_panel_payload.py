@@ -12,7 +12,7 @@ round 22 的键契约比的是「前端的类型」与「后端 pydantic 模型�
 
 与 round 22 同一套告诫：抽取器是代码，会静默返回空集。每条规则都带变异自检。
 
-运行: python -m pytest backend/tests/test_models_panel_payload_round23.py -v
+运行: python -m pytest backend/tests/test_models_panel_payload.py -v
 """
 import re
 import sys
@@ -22,7 +22,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from api_source import SOURCE_LABEL, frontend_api_source  # noqa: E402
-from test_settings_key_contract_round22 import _balanced, _keys_of_object  # noqa: E402
+from test_settings_key_contract import _balanced, _keys_of_object  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PANEL_VUE = ROOT / "src" / "components" / "settings" / "panels" / "ModelsPanel.vue"

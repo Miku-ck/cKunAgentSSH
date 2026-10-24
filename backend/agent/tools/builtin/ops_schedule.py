@@ -24,7 +24,7 @@ meta = ToolMeta(risk_level="moderate", reversible=False, timeout=10.0,
 
 # S7-11：与 routes/schedules.py 的 ScheduleIn/SchedulePatch 同一组入库上限 —— 那边由
 # pydantic 挡（422），这条入口是工具直接写库、不经 pydantic，故在此各判一次。
-# 数字两边不一致时 test_schedule_entry_bounds_s711.py 会红（同一口径靠守卫钉住，不靠记性）。
+# 数字两边不一致时 test_schedule_entry_bounds.py 会红（同一口径靠守卫钉住，不靠记性）。
 _NAME_MAX_LEN = 100
 _TASK_PROMPT_MAX_LEN = 50_000
 

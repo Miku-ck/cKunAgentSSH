@@ -24,7 +24,7 @@ def memdb():
     """与 test_memory_v2 同构：共享单库 + 每测试清表（线程本地连接不能换路径）。"""
     base = Path(__file__).resolve().parent / "_tmp"
     base.mkdir(exist_ok=True)
-    # 与 test_memory_v2 / test_memory_max_items_round11 共用同一个库文件：
+    # 与 test_memory_v2 / test_memory_max_items 共用同一个库文件：
     # database.py 连接是线程本地的，同进程内多个测试模块各开各的库会让
     # 主线程连到旧文件（Windows 下幽灵数据）。
     path = base / "memv2-test.db"

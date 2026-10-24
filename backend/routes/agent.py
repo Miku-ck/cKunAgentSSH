@@ -1715,7 +1715,7 @@ async def list_tool_permissions():
     迭代快照，此前在 anyio 线程池执行时与循环内 grant/revoke/check 的并发
     add/discard 相撞可直接抛 RuntimeError（迭代中集合被改）。
 
-    `tools` 保持原来的字符串数组语义（前端与 test_admin_api_round4 都按此消费）。
+    `tools` 保持原来的字符串数组语义（前端与 test_admin_permission_and_webkeys 都按此消费）。
     `entries`/`ttl_hours`（E3）是附加信息：授权何时写入、何时到期，面板要能诚实
     回答"这条预登记还会有效多久"，而不是只报"已授权"。
     """

@@ -1,6 +1,6 @@
 """`/agent/run` 的实发键 ⇄ `AgentRunRequest` 字段（跨层键漂移防线，续 round 22 的思路）。
 
-round 22 的 `test_settings_key_contract_round22.py` 只覆盖设置面的 8 个方法；
+round 22 的 `test_settings_key_contract.py` 只覆盖设置面的 8 个方法；
 **运行请求**这条链上一次都没被钉过，而它恰恰是本仓最容易说谎的接缝：
 `src/api/sse.ts` 里 payload 是一个手写的内联对象（camelCase 选项 → snake_case
  wire 键一个个手抄），pydantic 默认**静默丢弃**未声明字段 —— 前端多发一个键、

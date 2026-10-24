@@ -61,7 +61,7 @@ class BridgeError(RuntimeError):
         # 恰好是最需要指引的那几种，用户只看到一段技术串。
         # 两段都要：detail 是给排查者的根因，suggestion 是给用户的下一步。
         # 不会干扰反向推断 —— classify_bridge_error 对 BridgeError 实例直接取 code，
-        # 不去嗅探文本（这条由测试钉住，见 test_bridge_error_suggestion_s714.py）。
+        # 不去嗅探文本（这条由测试钉住，见 test_bridge_error_suggestion.py）。
         message = f"[{code.value}] {self.suggestion}"
         if detail:
             message = f"[{code.value}] {detail}｜{self.suggestion}"

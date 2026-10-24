@@ -108,6 +108,6 @@ def test_memory_and_retention_reads_survive_dirty_rows(monkeypatch):
         "conv_retention.enabled": "true",
     })
     # max_items 越界回默认而非原样读出：0 会让记忆清理删空整个 mode
-    # （见 test_memory_max_items_round11.py）
+    # （见 test_memory_max_items.py）
     assert db.get_memory_settings()["max_items"] == 100
     assert db.get_conv_retention() == {"enabled": True, "keep_count": 1000}

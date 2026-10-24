@@ -120,7 +120,7 @@ def test_permission_entries_report_expiry(isolated_allowlist):
 
 @pytest.fixture
 def base_db(tmp_workspace):
-    """真实 DB（app_settings 读写要落库）。base_db 只在 test_admin_api_round4 里定义，
+    """真实 DB（app_settings 读写要落库）。base_db 只在 test_admin_permission_and_webkeys 里定义，
     不是 conftest 公共 fixture，这里自带一份。"""
     db_path = os.path.join(tmp_workspace, "policy.db")
     db._close_all_connections()

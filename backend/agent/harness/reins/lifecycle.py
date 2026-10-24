@@ -172,7 +172,7 @@ class ReflectionRein:
 # 最终答复），零额外采集；产物写入 memories 表 kind='postmortem'，不建独立页面。
 
 # 复盘记忆的 kind 值。刻意用常量传参：harness 下的 kind="…" 字面量会被
-# test_trace_projection_keys_s106 当成 Wire 事件类型扫描（记忆 kind 不是事件）。
+# test_trace_projection_keys 当成 Wire 事件类型扫描（记忆 kind 不是事件）。
 POSTMORTEM_MEMORY_KIND = "postmortem"
 
 _POSTMORTEM_TIMEOUT_S = 15.0   # 与 bridle 生成式摘要同一超时口径

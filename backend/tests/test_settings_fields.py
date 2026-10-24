@@ -124,7 +124,7 @@ def test_post_process_partial_payload_keeps_other_switches(client, clean_pp_conf
     这里原本钉的是"四字段都有默认值 True，只发一项会把其余三项静默打开并落库"，
     并以此警告别改成增量提交。改成 Optional 才是安全方向：前端本来就整包提交，
     增量语义只会影响 API 调用方，而"少传即打开"对调用方是不可见的枪。
-    现契约由 tests/test_settings_contract_round22.py 整体钉住。
+    现契约由 tests/test_settings_contract.py 整体钉住。
     """
     client.put("/api/settings/post-process", json={
         "enabled": True, "generate_title": False, "extract_memory": False, "generate_skill": False})

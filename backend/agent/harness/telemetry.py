@@ -123,7 +123,7 @@ class SSEAdapter:
         # 可见终端模式：通知前端把命令写入真实 PTY/SSH 会话并等待回传
         "tool_deliver": "tool_deliver",
         # 下列三种原先只靠 to_sse_dict 的 `get(kind, kind)` 恒等兜底上 Wire ——
-        # 行为一样，但清单不再是全集，跨层守卫（test_trace_projection_keys_s106）
+        # 行为一样，但清单不再是全集，跨层守卫（test_trace_projection_keys）
         # 就无从判断"某个事件从来没被前端声明过"是漏写还是有意。
         # 澄清向导：题元与进度（前端唯一可读来源）
         "clarification_needed": "clarification_needed",

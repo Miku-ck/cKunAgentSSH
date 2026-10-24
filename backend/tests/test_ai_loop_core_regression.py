@@ -9,7 +9,7 @@
 - 「按分数过滤的视图喂给了要看失败样本的读者」：演化输入复用高分反思视图
 - 「计数器按端点键控却被当成按对象键控」：LRU 淘汰清零在途计数 → 掐断新客户端的流
 
-运行: python -m pytest backend/tests/test_ai_loop_round13c.py -v
+运行: python -m pytest backend/tests/test_ai_loop_core_regression.py -v
 """
 import asyncio
 import sqlite3

@@ -32,7 +32,7 @@ export interface AuditVerifyResult {
   // 后端不再发这个键，留着就是一条幽灵字段（S1-06 同族）。
 }
 
-/** 与 backend/agent/audit.py::LEGAL_CONCLUSIONS 逐字相等（三处同源守卫见 backend/tests/test_ai_loop_round13c.py） */
+/** 与 backend/agent/audit.py::LEGAL_CONCLUSIONS 逐字相等（三处同源守卫见 backend/tests/test_ai_loop_core_regression.py） */
 export type AuditConclusion =
   | 'executed' | 'failed' | 'blocked' | 'denied' | 'auto_allowed'
   | 'approved' | 'released' | 'revoked' | 'answered' | 'skipped'
