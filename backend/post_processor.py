@@ -364,6 +364,25 @@ def _parse_skills_lenient(full_text: str) -> list[dict]:
     return skills
 
 
+def _parse_memories_lenient(full_text: str) -> list[dict]:
+    """钝化解析记忆 JSON：LLM 输出被 max_tokens 切在字符串中途时仍尽量抢救。
+
+    与技能路径的 _parse_skills_lenient 同一思路：整段 json.loads 失败
+    （Unterminated string）时，逐个摘出已完整闭合的 {...} 对象，
+    至少救回其中已完整的记忆条目，而不是整批丢弃。
+    """
+    candidate = _extract_json(full_text)
+    memories: list[dict] = []
+    for frag in _collect_closed_json_objects(candidate):
+        try:
+            obj = json.loads(frag)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(obj, dict) and isinstance(obj.get("content"), str) and obj["content"].strip():
+            memories.append(obj)
+    return memories
+
+
 async def _call_llm_with_timeout(
     messages: list[dict],
     model_cfg: dict,
@@ -632,7 +651,9 @@ async def _extract_memories(ctx: TurnContext, config: PostProcessConfig) -> None
         model_cfg=model_cfg,
         model_id=memory_model,
         temperature=0.3,
-        max_tokens=512,
+        # 512 会把多条记忆（标题+正文均中文）切在字符串中途导致整批解析失败，
+        # 1024 与技能路径的 2048 同一教训：宁多花一点输出，不做整批丢弃。
+        max_tokens=1024,
         chunk_timeout=config.chunk_timeout,
         total_timeout=config.memory_total_timeout,
         task_name="memory",
@@ -640,13 +661,22 @@ async def _extract_memories(ctx: TurnContext, config: PostProcessConfig) -> None
     if not full_text:
         return
 
-    # 解析 JSON
+    # 解析 JSON：正常路径之外，LLM 输出常因 max_tokens 不足被切在字符串中途
+    # （与技能路径同一问题），此时钝化抢救已完整闭合的记忆对象，不整批丢弃。
     try:
         raw = _extract_json(full_text)
         result = json.loads(raw)
     except json.JSONDecodeError as e:
-        logger.warning("[post_process:memory] JSON 解析失败: %s, raw=%s", e, full_text[:200])
-        return
+        rescued = _parse_memories_lenient(full_text)
+        if rescued:
+            logger.warning(
+                "[post_process:memory] 输出疑似被截断（%s），钝化解析救回 %d 条",
+                e, len(rescued),
+            )
+            result = {"memories": rescued}
+        else:
+            logger.warning("[post_process:memory] JSON 解析失败: %s, raw=%s", e, full_text[:200])
+            return
 
     memories = _llm_list(result, "memories")[:config.max_memories_per_turn]
     if not memories:
