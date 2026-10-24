@@ -13,6 +13,7 @@
         :content="content"
         :streaming="isStreaming"
         :is-last="isLast"
+        :awaiting-user="awaitingUser"
       />
     </div>
 
@@ -50,6 +51,8 @@ const props = defineProps<{
   message: BaseMessage
   isStreaming?: boolean
   isLast?: boolean
+  /** run 停在澄清闸口等用户作答：AI 没有在输出，画等待提示而非呼吸点 */
+  awaitingUser?: boolean
 }>()
 
 const emit = defineEmits<{ 'open-trace': [runId: string] }>()

@@ -12,7 +12,12 @@ export function isLiveAgentRun(
   messages: readonly BaseMessage[],
   idx: number,
   running: boolean,
+  blockedOnUser = false,
 ): boolean {
+  // run 停在澄清闸口等用户作答时，后端 driver 已挂住、没有任何 token 在产出
+  // （backend/agent/harness/driver.py 澄清等待闸）—— 继续把这条消息画成
+  // "正在输出"（呼吸点 / 「正在思考」）就是用户报的"确认期间 AI 还在输出"。
+  if (blockedOnUser) return false
   const msg = messages[idx]
   return running &&
     idx === messages.length - 1 &&

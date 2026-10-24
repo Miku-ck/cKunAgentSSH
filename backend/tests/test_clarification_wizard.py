@@ -241,17 +241,22 @@ class TestClarificationInterceptor:
 
     @pytest.mark.asyncio
     async def test_pending_only_freezes_mutating_tools(self):
-        """澄清挂起期间只冻结注册表内的改写类工具，只读探查放行。
+        """澄清挂起期间只放行只读观测工具，其余（含非注册表写工具）一律冻结。
 
-        回归点：曾拦下一切工具调用 —— 用户离席几十秒、模型只想 file_read /
-        sys_overview 也逐次吃 clarification_pending，直到 600s TTL 才结束，
-        整个 run 被一张没人答的向导拖死。
+        回归点两条：
+        1. 曾拦下一切工具调用 —— 用户离席几十秒、模型只想 file_read /
+           sys_overview 也逐次吃 clarification_pending，直到 600s TTL 才结束，
+           整个 run 被一张没人答的向导拖死。
+        2. 修掉 1 之后又放得太宽 —— 判据曾是「不在 _CLARIFIABLE_TOOLS 即放行」，
+           于是 file_edit / schedule_op / docker 类写工具在待答期间照常执行：
+           用户还在确认「要不要删」，AI 已经把别的东西改了。现按
+           contracts.READONLY_TOOLS（无副作用观测白名单）放行，其余冻结。
         """
         interceptor = ClarificationInterceptor()
         ctx = _make_ctx(args={"command": "rm -rf *"})
         assert (await interceptor.check(ctx)).intercepted
 
-        # 只读工具（不在 _CLARIFIABLE_TOOLS）→ 放行，且不得新建第二张向导
+        # 只读工具（READONLY_TOOLS）→ 放行，且不得新建第二张向导
         ctx.tool_calls_log[-1] = {
             "tool": "file_read", "args": {"path": "/etc/hosts"},
             "iteration": 1, "success": None,
@@ -269,7 +274,59 @@ class TestClarificationInterceptor:
         d_write = await interceptor.check(ctx)
         assert d_write.intercepted is True
         assert d_write.events[0].payload["tool"] == "shell_exec"
+
+        # 非注册表但会写盘的工具（file_edit）→ 同样冻结
+        ctx.tool_calls_log[-1] = {
+            "tool": "file_edit", "args": {"path": "/etc/hosts", "old": "a", "new": "b"},
+            "iteration": 3, "success": None,
+        }
+        d_edit = await interceptor.check(ctx)
+        assert d_edit.intercepted is True
+        assert d_edit.events[0].payload["tool"] == "shell_exec"
+        assert "写操作已冻结" in d_edit.intercept_reason
         _CLARIFICATION_CONTEXT.pop(ctx.run_id, None)
+
+    @pytest.mark.asyncio
+    async def test_late_answer_without_pending_is_dropped(self):
+        """题目被回收后迟到的答案没有归属工具：不得注入给下一条无关调用。
+
+        record_clarification_answers 在无 pending 时会补一个 tool="" 的桩
+        （保证 TTL 清扫能回收孤儿答案）。原实现把「归属工具为空」当成
+        「随便谁都可以消费」，于是超时后用户补交的答案会被紧接着的下一次
+        工具调用吃掉，并把一段与它无关的澄清结论注入上下文。
+        """
+        interceptor = ClarificationInterceptor()
+        ctx = _make_ctx(tool="file_read", args={"path": "/etc/hosts"})
+        record_clarification_answers(ctx.run_id, {"0": {"choice": "A"}})
+
+        decision = await interceptor.check(ctx)
+
+        assert decision.intercepted is False
+        assert not decision.events
+        assert not decision.inject_messages
+        assert ctx.run_id not in _CLARIFICATION_DONE
+        assert ctx.run_id not in _CLARIFICATION_CONTEXT
+
+    @pytest.mark.asyncio
+    async def test_timed_out_signature_does_not_reopen_wizard(self):
+        """等满 TTL 的同一条命令被重试：不再弹新向导，直接拦截并说明超时。
+
+        超时后 Driver 保留签名（clarification_waited），不会再登记等待。
+        若拦截器照常建题，前端会重新弹一张没人等答案的向导 —— run 已经
+        往下跑了，用户迟到的作答无处可去。
+        """
+        from agent.harness.reins.core import tool_call_signature
+
+        interceptor = ClarificationInterceptor()
+        ctx = _make_ctx(args={"command": "rm -rf *"})
+        ctx.metadata["clarification_waited"] = {tool_call_signature(ctx.active_tool_call)}
+
+        decision = await interceptor.check(ctx)
+
+        assert decision.intercepted is True
+        assert decision.intercept_reason.startswith("clarification_timeout")
+        assert not decision.events, "超时签名重试不得重开向导"
+        assert ctx.run_id not in _CLARIFICATION_CONTEXT
 
     @pytest.mark.asyncio
     async def test_done_answers_inject_context_and_release(self):

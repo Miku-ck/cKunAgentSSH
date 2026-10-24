@@ -86,6 +86,9 @@ export interface AgentSSEEvent {
   allow_custom?: boolean
   /** 全量步骤（后端一次推送）：前端本地逐步推进时按索引取题 */
   steps?: AgentClarificationStep[]
+  /** clarification_done 专用：true = 等待超时 / 题目被回收后关闭向导（不是用户作答），
+   *  run 已按未答继续，用户若仍想按原意图操作需要重新发起 */
+  expired?: boolean
 }
 
 export interface AgentCostSnapshot {

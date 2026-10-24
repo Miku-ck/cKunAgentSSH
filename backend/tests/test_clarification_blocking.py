@@ -219,18 +219,29 @@ async def test_unattended_run_does_not_wait():
 
 @pytest.mark.asyncio
 async def test_wait_times_out_without_hanging(monkeypatch):
-    """无人作答：TTL 到点落回原拦截路径，run 继续但不重复挂起。"""
+    """无人作答：TTL 到点落回原拦截路径，run 继续但不重复挂起。
+
+    超时同时要收干净：后端待答状态必须回收（否则用户迟到的答案会写进一张
+    已无人等待的题，被后面的无关调用消费），前端要收到 expired 的
+    clarification_done（否则向导关闭看起来和「答案已生效」一模一样）。
+    """
     monkeypatch.setattr(clarification_mod, "_CLARIFICATION_TTL_SEC", 0.3)
     ctx = _ctx(interactive=True, max_iterations=2)
     harness = _Harness()
 
     started = time.monotonic()
-    await asyncio.wait_for(_collect(harness, ctx), 3)
+    events = await asyncio.wait_for(_collect(harness, ctx), 3)
     elapsed = time.monotonic() - started
 
     assert elapsed < 2, "澄清等待必须受 TTL 约束"
     assert harness.stirrups.rounds == 2
-    assert harness.saddle.executed == []
+    assert harness.saddle.executed == [], "超时未答的命令不得执行"
+    done_events = [ev for ev in events if ev.kind == "clarification_done"]
+    assert len(done_events) == 1
+    assert done_events[0].payload.get("expired") is True
+    assert done_events[0].payload.get("tool") == "shell_exec"
+    assert ctx.run_id not in _CLARIFICATION_CONTEXT, "超时须回收待答状态"
+    assert ctx.run_id not in _CLARIFICATION_DONE
     _cleanup(ctx.run_id)
 
 

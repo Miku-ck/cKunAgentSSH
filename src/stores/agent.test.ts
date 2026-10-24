@@ -43,6 +43,7 @@ vi.mock('@/stores/ssh', () => ({
 
 const { useAgentStore } = await import('@/stores/agent')
 const { agentApi } = await import('@/api/client')
+const { useToastStore } = await import('@/stores/toast')
 // 档位表是纯函数（无 store 依赖），可以直接静态导入
 import { grantScopesForRisk } from '@/utils/approval-scopes'
 
@@ -155,6 +156,32 @@ describe('clarification_done 延时清理', () => {
     expect(store.clarificationWizard).toBeNull()
   })
 
+  it('超时关闭（expired）必须提示答案未送达', () => {
+    const { store, push } = startRun()
+    const toast = useToastStore()
+    push(wizard('r1'))
+    const before = toast.items.length
+
+    // 后端等满 TTL 后按未答继续：向导同样关闭，但用户的作答没有被采用
+    push({ type: 'clarification_done', run_id: 'r1', expired: true })
+
+    expect(store.clarificationWizard?.submitted).toBe(true)
+    const added = toast.items.slice(before)
+    expect(added.some(t => t.type === 'warning' && t.message.includes('超时'))).toBe(true)
+  })
+
+  it('正常作答的 done 不弹超时提示', () => {
+    const { store, push } = startRun()
+    const toast = useToastStore()
+    push(wizard('r1'))
+    const before = toast.items.length
+
+    push({ type: 'clarification_done', run_id: 'r1' })
+
+    expect(store.clarificationWizard?.submitted).toBe(true)
+    expect(toast.items.slice(before).some(t => t.message.includes('超时'))).toBe(false)
+  })
+
   it('run 收尾（done）时未作答的向导一起关掉', () => {
     const { store, push } = startRun()
     push(wizard('r1'))
@@ -174,6 +201,66 @@ describe('clarification_done 延时清理', () => {
     // 的题——答完 POST 到已中止的 run_id 永远等不到 clarification_done。
     store.abort()
     expect(store.clarificationWizard).toBeNull()
+  })
+})
+
+/**
+ * 澄清待答期间 UI 必须知道"AI 没有在输出"。
+ *
+ * 用户报的现象：意图模糊、用户在向导上确认时，AI 看起来还在继续输出。后端
+ * driver 的澄清等待闸早已把 run 真正挂住（见 backend/tests/test_clarification_blocking.py
+ * 钉的五件事），剩下的一半在前端：run 状态仍是 running，消息流照旧把最后一条
+ * temp 消息画成"正在输出"（呼吸点 / 「正在思考」）。awaitingClarification 就是
+ * 给 UI 的那句实话 —— 向导开着且未提交，就是"在等人，不在生成"。
+ */
+describe('澄清待答状态 awaitingClarification', () => {
+  beforeEach(() => {
+    runs.length = 0
+    setActivePinia(createPinia())
+  })
+
+  function wizardEvent(runId: string) {
+    return {
+      type: 'clarification_needed',
+      run_id: runId,
+      tool: 'shell_exec',
+      tool_call_id: `tc-${runId}`,
+      args: { command: 'rm -rf *' },
+      reason: '命令含通配符',
+      question: '确认目标文件？',
+      options: [{ id: 'a', label: 'A' }],
+      current_step: 0,
+      total_steps: 1,
+    }
+  }
+
+  it('向导弹出后为真；提交关闭后回落为假', () => {
+    const { store, push } = startRun()
+    expect(store.awaitingClarification).toBe(false)
+
+    push(wizardEvent('r1'))
+    expect(store.awaitingClarification).toBe(true)
+
+    // ClarifyingWizard 提交成功后立即 clearClarification（不等 SSE 回执）
+    store.clearClarification()
+    expect(store.awaitingClarification).toBe(false)
+  })
+
+  it('run 收尾（done）后不再算等待 —— 终态出口已清向导', () => {
+    const { store, push } = startRun()
+    push(wizardEvent('r1'))
+    expect(store.awaitingClarification).toBe(true)
+
+    push({ type: 'done', state: 'completed', iterations: 2, run_id: 'r1' })
+    expect(store.awaitingClarification).toBe(false)
+  })
+
+  it('答案已提交（submitted）的那一瞬不算等待 —— run 随即恢复', () => {
+    const { store, push } = startRun()
+    push(wizardEvent('r1'))
+    push({ type: 'clarification_done', run_id: 'r1' })
+    expect(store.clarificationWizard?.submitted).toBe(true)
+    expect(store.awaitingClarification).toBe(false)
   })
 })
 

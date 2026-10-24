@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from ..contracts import (
+    READONLY_TOOLS,
     ClarificationOption,
     ClarificationStep,
     ReinDecision,
@@ -530,7 +531,14 @@ class ClarificationInterceptor:
             # 操作"），② 向导上下文被 pop，真正触发澄清的那次调用再进来时无据可依。
             pending_ctx = _CLARIFICATION_CONTEXT.get(run_id)
             owner = str((pending_ctx or {}).get("tool") or "")
-            if owner and owner != tool:
+            if not owner:
+                # 迟到答案：题目已被 TTL 清扫 / release_clarification_run 回收，
+                # 路由层补的桩没有归属工具。它不属于任何一次在途调用，若照旧消费
+                # 就会把一段无关的澄清结论注入给当前调用，并把答案吃掉。
+                _CLARIFICATION_DONE.pop(run_id, None)
+                _CLARIFICATION_CONTEXT.pop(run_id, None)
+                return ReinDecision()
+            if owner != tool:
                 return ReinDecision()
             answers = _CLARIFICATION_DONE.pop(run_id)
             ctx.metadata.pop("clarification_pending", None)
@@ -557,14 +565,23 @@ class ClarificationInterceptor:
         # ── 整治中（未完成）── ─ 重发当前步事件 + 拦截 ──
         ctx_info = _CLARIFICATION_CONTEXT.get(run_id)
         if ctx_info and not ctx_info.get("_done"):
-            # 只冻结「会改写系统」的调用（注册表内 4 个工具，含触发澄清的那个）。
-            # 原实现拦下一切工具：用户离席几十秒、模型只想 file_read / sys_overview
-            # 也要逐次吃 "clarification_pending"，直到 600s TTL 才结束，整个 run
-            # 被一张没人答的向导拖死。只读工具直接放行。
+            # 只放行「无副作用」的观测工具（contracts.READONLY_TOOLS，与并行化/
+            # 循环检测共用同一判定），其余一律冻结 —— 包括 file_edit、schedule_op、
+            # docker 这类不在 _CLARIFIABLE_TOOLS 里的改写工具。原实现只冻结注册表
+            # 内 4 个工具，于是待答期间模型仍可 file_edit / 建定时任务：用户在
+            # 确认「要不要删」的时候，AI 已经把别的东西改了。
             # 注意不能落到下面的「新建题」分支：同一 run 只允许一张向导，
             # 否则 _CLARIFICATION_CONTEXT 被第二张题覆盖，用户的答案无处可回。
-            if tool != ctx_info.get("tool") and tool not in _CLARIFIABLE_TOOLS:
+            if tool in READONLY_TOOLS and tool != ctx_info.get("tool"):
                 return ReinDecision()
+            if tool == ctx_info.get("tool"):
+                # 拦截分支不消费 inject_messages（见 driver），等待/重试指令
+                # 必须写进 intercept_reason 才能到达模型。
+                reason_text = "clarification_pending：请等待用户回答，不要重试调用同一工具"
+            else:
+                reason_text = (
+                    "clarification_pending：澄清未答，写操作已冻结；"
+                    "请等待用户回答后再继续")
             step = ctx_info.get("current_step", 0)
             steps = ctx_info.get("steps", [])
             ev = _build_clarification_needed(
@@ -576,9 +593,7 @@ class ClarificationInterceptor:
             _mark_pending_sig(ctx)
             return ReinDecision(
                 intercepted=True,
-                # 拦截分支不消费 inject_messages（见 driver），等待/重试指令
-                # 必须写进 intercept_reason 才能到达模型。
-                intercept_reason="clarification_pending：请等待用户回答，不要重试调用同一工具",
+                intercept_reason=reason_text,
                 events=[ev],
                 inject_messages=[{
                     "role": "user",
@@ -609,6 +624,19 @@ class ClarificationInterceptor:
         steps = build_steps_fn(args)
         if not steps:
             return ReinDecision()   # 未配置题目：直达执行
+
+        # 已等满 TTL 又被模型重试的同一条命令：不再弹第二张没人等答案的向导。
+        # Driver 超时后把签名留在 clarification_waited（见 _finish_clarification），
+        # 这里若照常建题：前端重新弹向导，run 却不会再停 —— 用户迟到的作答会落到
+        # 一个已经往下跑的 run 上。改为直接拦截并要求换一条明确的命令。
+        waited = ctx.metadata.get("clarification_waited")
+        if isinstance(waited, set) and tool_call_signature(tc) in waited:
+            return ReinDecision(
+                intercepted=True,
+                intercept_reason=(
+                    "clarification_timeout：该命令已等待用户澄清超时，"
+                    "请勿重试同一命令；请改用目标明确的命令，或先向用户说明再继续"),
+            )
 
         # 创建 Pending 题元 + 发首步事件 + 拦截
         # P1-3: 使用 uuid 防止 tool_call_id 在多个工具调用时碰撞

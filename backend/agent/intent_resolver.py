@@ -285,6 +285,9 @@ async def _run_task_clarification(
                 "tool": TASK_CLARIFICATION_TOOL,
                 "answers": ans or {},
                 "summary": "",
+                # ans is None = 等满 TTL / 题目被回收，而不是用户点了跳过（{}）。
+                # 前端据此区分「答案已生效」与「超时后按规则继续」。
+                "expired": ans is None,
             },
         ))
     except Exception as e:

@@ -302,6 +302,11 @@ class SSEAdapter:
             result["options"] = cur.get("options", []) or []
             result["allow_custom"] = cur.get("allow_custom", True)
             result["reason"] = payload.get("reason", "")
-        # clarification_done 无需投影字段：前端只按事件类型关闭向导，
-        # answers/summary 只进生产端 payload 与注入消息，不上 SSE 线
+        elif kind == "clarification_done":
+            # 答案 / summary 只进注入消息，不上 SSE 线；但 expired 必须透传：
+            # 超时关闭的向导与「答案已生效」在线上长得一样，前端若无从区分，
+            # 用户会以为自己的答案已送达（实际 run 已按未答继续）。
+            result["tool"] = payload.get("tool", "")
+            if payload.get("expired"):
+                result["expired"] = True
         return result

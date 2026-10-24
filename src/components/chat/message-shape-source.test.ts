@@ -37,7 +37,9 @@ describe('消息形态只有一个定义来源（S9-22）', () => {
     // live 合并与逐条判定都走 utils/display-messages 那一份纯函数
     expect(HomeWorkspaceSource).toMatch(/buildDisplayMessages\(\s*sshAi\.messages/)
     expect(HomeWorkspaceSource).toMatch(/import\s*\{[^}]*\bisLiveAgentRun\b[^}]*\}\s*from\s*'@\/utils\/display-messages'/)
-    expect(displayMessagesSource).toMatch(/messages: readonly BaseMessage\[\],\s*idx: number,\s*running: boolean,\s*\): boolean/)
+    // blockedOnUser：run 停在澄清闸口等用户作答时不算"正在输出"（用户报的
+    // "确认期间 AI 还在输出"）。仍是同一个函数、同一处判定，没有第二份口径。
+    expect(displayMessagesSource).toMatch(/messages: readonly BaseMessage\[\],\s*idx: number,\s*running: boolean,\s*blockedOnUser = false,\s*\): boolean/)
   })
 
   it('规范定义覆盖渲染路径真正读的那几个键', () => {

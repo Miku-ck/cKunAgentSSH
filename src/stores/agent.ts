@@ -536,6 +536,24 @@ export const useAgentStore = defineStore('agent', () => {
     agentDeliver.deliveries.value.filter(d => d.status === 'pending_confirm'),
   )
 
+  /**
+   * run 停在澄清闸口上等用户作答 —— 此刻后端 driver 已被澄清等待闸真正挂住
+   * （backend/agent/harness/driver.py 的 _finish_clarification：不跑下一轮
+   * LLM、不执行工具、run 不结束），屏幕上没有任何新 token 在产出。
+   *
+   * UI 侧据此闭嘴"AI 正在输出"一族 affordance（呼吸点 / 「正在思考」标签），
+   * 改说"在等你确认"：否则用户对着一个假装还在生成的界面答题 —— 那就是
+   * 用户报的"意图模糊、确认期间 AI 还在输出"。
+   *
+   * submitted 之后不算：答案已交付出去了，run 随即恢复，恢复前的瞬间不该
+   * 继续画成等待态（答案由 ClarifyingWizard 提交成功后立即清向导兜底）。
+   */
+  const awaitingClarification = computed(() =>
+    status.value === 'running'
+    && clarificationWizard.value !== null
+    && !clarificationWizard.value.submitted,
+  )
+
   /** 用户确认：把命令写入可见终端（状态由 agentDeliver 的 deliveries 播报） */
   function confirmDeliver(toolId: string) {
     agentDeliver.confirmDeliver(toolId)
@@ -871,6 +889,11 @@ export const useAgentStore = defineStore('agent', () => {
         if (wiz) {
           wiz.submitted = true
         }
+        // 超时关闭 ≠ 答案生效：后端等满 TTL 后已按未答继续，必须告诉用户
+        // 他的作答没有送到，否则会误以为之前的澄清范围已经生效。
+        if (event.expired) {
+          useToastStore().warning('澄清等待超时，AI 已按未答继续执行；如需限定范围请重新发起')
+        }
         // 短暂延迟后清除（让组件播放一个完成动画/提示）
         const timerId = setTimeout(() => {
           if (clarificationWizard.value === wiz) {
@@ -944,6 +967,7 @@ export const useAgentStore = defineStore('agent', () => {
     currentConversationId,
     intentionInfo,
     clarificationWizard,
+    awaitingClarification,
     aborted,
     scheduleRev,
     // computed

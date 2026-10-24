@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import messageItem from '@/components/chat/MessageItem.vue?raw'
+import messageContentRenderer from '@/components/chat/MessageContentRenderer.vue?raw'
 import homeWorkspace from '@/components/home/HomeWorkspace.vue?raw'
 import auditView from '@/views/ssh/AuditView.vue?raw'
 import sshView from '@/views/ssh/SshView.vue?raw'
@@ -129,5 +130,35 @@ describe('意图澄清并入决策面（不再是弹窗）', () => {
   it('澄清提醒 toast 文案对齐审批句式（回首页在输入框上方作答）', () => {
     expect(agentStoreSource).toContain('AI 需要你澄清意图，回首页在输入框上方作答')
     expect(agentStoreSource).not.toContain('需要对不明确的操作进行确认')
+  })
+})
+
+/**
+ * 澄清待答期间，消息流不许再画"AI 正在输出"。
+ *
+ * 用户报的现象：意图模糊、用户在确认时 AI 看起来还在输出。后端 driver 的澄清
+ * 等待闸已把 run 真正挂住（test_clarification_blocking.py 钉的五件事），前端
+ * 这半边的形状是：store 出 awaitingClarification → 任务台透传给消息项 →
+ * 渲染器把呼吸点换成等待提示。三处接线各自抄一遍就会漂移，故用源码守卫钉住。
+ */
+describe('澄清待答期间不画“AI 正在输出”', () => {
+  it('store 提供 awaitingClarification，任务台把它透传到消息项', () => {
+    expect(agentStoreSource).toContain('awaitingClarification')
+    expect(homeWorkspace).toContain('agentStore.awaitingClarification')
+    expect(homeWorkspace).toContain(':awaiting-user="agentStore.awaitingClarification"')
+  })
+
+  it('live 判定接入等待态（blockedOnUser），消息项透传给渲染器', () => {
+    expect(homeWorkspace).toContain('isLiveAgentRun(')
+    expect(messageItem).toContain('awaitingUser')
+    expect(messageItem).toContain(':awaiting-user="awaitingUser"')
+  })
+
+  it('渲染器在等待态换掉呼吸点，改画一句话等待提示', () => {
+    expect(messageContentRenderer).toContain('awaitingUser')
+    expect(messageContentRenderer).toContain('showAwaitingHint')
+    expect(messageContentRenderer).toContain('awaiting-hint')
+    // 呼吸点的条件里必须排除等待态 —— 两个动画同时画就是"说着等待、动着输出"
+    expect(messageContentRenderer).toMatch(/showThinkingDots[\s\S]*!props\.awaitingUser/)
   })
 })

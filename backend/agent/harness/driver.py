@@ -49,7 +49,7 @@ from .contracts import (
 )
 from .command_explain import explain_compound, explain_for_reason, maybe_explain_via_llm
 from .readonly_policy import is_provably_readonly
-from .reins import approval_wait, wait_for_clarification_answer
+from .reins import approval_wait, release_clarification_run, wait_for_clarification_answer
 from .reins.core import (
     AWAIT_APPROVAL_KEY,
     _audit_environment,
@@ -1301,6 +1301,29 @@ class Driver:
         """
         answers = await wait_for_clarification_answer(ctx.run_id)
         if answers is None:
+            # 等满 TTL / pending 被回收：run 不再等这张向导。先收掉后端状态 ——
+            # 否则用户迟到的作答会写进一张已无人等待的题，再被下一条无关调用
+            # 当成自己的澄清结论消费掉（注入上下文 + 吃掉答案）。前端同时收到
+            # expired 事件，知道向导是被超时关闭的，而不是答案已生效。
+            release_clarification_run(ctx.run_id)
+            owner = str((ctx.active_tool_call or {}).get("tool") or "")
+            decision.events = list(decision.events or []) + [TraceEvent(
+                kind="clarification_done",
+                source="reins.clarification",
+                run_id=ctx.run_id,
+                iteration=ctx.iteration,
+                payload={
+                    "run_id": ctx.run_id,
+                    "tool": owner,
+                    "answers": {},
+                    "summary": "",
+                    "expired": True,
+                },
+            )]
+            decision.intercept_reason = (
+                "clarification_timeout：等待用户澄清超时（或题目已被回收），"
+                "本次调用未执行；请勿重试同一命令，改用目标明确的命令或先向用户说明")
+            logger.info("澄清等待超时 run=%s，已回收待答状态并记录 expired 事件", ctx.run_id)
             return decision
         entry = ctx.active_tool_call
         if entry is not None:

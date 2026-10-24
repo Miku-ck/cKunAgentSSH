@@ -41,6 +41,7 @@
                 :message="msg"
                 :is-last="idx === displayMessages.length - 1"
                 :is-streaming="isLiveAt(idx)"
+                :awaiting-user="agentStore.awaitingClarification"
                 @open-trace="emit('open-trace', $event)"
               />
             </div>
@@ -151,7 +152,10 @@ const displayMessages = computed<readonly BaseMessage[]>(() => {
 })
 
 function isLiveAt(idx: number): boolean {
-  return isLiveAgentRun(displayMessages.value, idx, agentStore.isRunning)
+  // 第四个参数：run 停在澄清闸口等用户作答时不算"正在输出"—— 后端已挂住，
+  // 没有 token 在产出，界面不能再画呼吸点/「正在思考」（用户报的问题）。
+  return isLiveAgentRun(
+    displayMessages.value, idx, agentStore.isRunning, agentStore.awaitingClarification)
 }
 
 // ── 自动滚动：新消息、流式正文/思考都跟到底 ──

@@ -44,6 +44,14 @@ describe('isLiveAgentRun', () => {
     expect(isLiveAgentRun([msg({ id: 'a1', role: 'assistant' })], 0, true)).toBe(false)
     expect(isLiveAgentRun([msg({ id: undefined as unknown as string, role: 'assistant' })], 0, true)).toBe(false)
   })
+
+  it('run 停在澄清闸口（blockedOnUser）时不算 live —— 确认期间不画"正在输出"', () => {
+    // 用户报的现象：意图模糊、向导待答时 AI 看起来还在输出。后端 driver 的
+    // 澄清等待闸已挂住 run，前端不能再把这条消息判成 live（呼吸点/正在思考）。
+    expect(isLiveAgentRun(messages, 1, true, true)).toBe(false)
+    expect(isLiveAgentRun(messages, 1, true, false)).toBe(true)
+    expect(isLiveAgentRun(messages, 1, true)).toBe(true)
+  })
 })
 
 describe('buildDisplayMessages', () => {

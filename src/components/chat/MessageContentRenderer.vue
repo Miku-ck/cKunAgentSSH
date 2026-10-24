@@ -1,7 +1,13 @@
 <template>
   <div class="message-content">
+    <!-- 澄清待答：后端已停在闸口、没有 token 在产出。说"在等你"，
+         不画呼吸点——那三个跳动的点在说"AI 正在输出"（用户报的问题）。 -->
+    <div v-if="showAwaitingHint" class="awaiting-hint">
+      <span class="awaiting-dot" aria-hidden="true"></span>
+      <span>等待你确认意图，AI 已暂停…</span>
+    </div>
     <div
-      v-if="showThinkingDots"
+      v-else-if="showThinkingDots"
       class="thinking-dots"
     >
       <span></span><span></span><span></span>
@@ -21,6 +27,8 @@ const props = defineProps<{
   content?: string
   streaming?: boolean
   isLast?: boolean
+  /** run 停在澄清闸口等用户作答：AI 没有在输出，画等待提示而非呼吸点 */
+  awaitingUser?: boolean
 }>()
 
 const settingsStore = useSettingsStore()
@@ -28,7 +36,14 @@ const markdownEnabled = computed(() => settingsStore.settings.chat.markdown)
 const effectiveContent = computed(() => props.content || '')
 
 const showThinkingDots = computed(() => {
-  return props.streaming && props.isLast && props.role === 'assistant' && !effectiveContent.value
+  return props.streaming && props.isLast && props.role === 'assistant'
+    && !effectiveContent.value && !props.awaitingUser
+})
+
+/** 澄清待答且本轮还没有正文：一句话讲清"在等谁"，别让气泡空着 */
+const showAwaitingHint = computed(() => {
+  return props.awaitingUser && props.isLast && props.role === 'assistant'
+    && !effectiveContent.value
 })
 </script>
 
@@ -79,5 +94,31 @@ const showThinkingDots = computed(() => {
 }
 @media (prefers-reduced-motion: reduce) {
   .thinking-dots span { animation: none; opacity: 0.7; }
+}
+
+/* 澄清待答提示：静态一句话 + 慢呼吸的点（与呼吸点同色系但更慢、更静） */
+.awaiting-hint {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 0;
+  font-size: 12.5px;
+  color: var(--text-tertiary);
+}
+.awaiting-dot {
+  flex: none;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--status-warn-text);
+  animation: clarify-pulse 1.8s ease-in-out infinite;
+}
+/* 名字不能以 await 开头（如 await-pulse）：vue-tsc 生成的虚拟代码里
+   await-pulse 会被 TS 当成 await 关键字，解析器直接 Debug Failure 崩溃 */
+@keyframes clarify-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .awaiting-dot { animation: none; opacity: 0.75; }
 }
 </style>
