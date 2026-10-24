@@ -4,15 +4,15 @@
       <div class="grd-head">
         <span class="grd-name">{{ repo.name }}</span>
         <span class="grd-pill" :class="kindClass">{{ kindText }}</span>
-        <span v-if="repo.scope === 'remote'" class="grd-scope">远程 · web 会话</span>
+        <span v-if="repo.scope === 'remote'" class="grd-scope">远程 · SSH 会话</span>
         <button class="grd-icon-btn" title="关闭" aria-label="关闭" @click="emit('close')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       </div>
       <div class="grd-path mono" :title="repo.path">{{ repo.path }}</div>
 
-      <!-- 概要条：分支 / 上游 / 工作区 / 远端 -->
-      <div class="grd-sum">
+      <!-- 概要条：分支 / 上游 / 工作区 / 远端（行级取数失败时这些字段无意义，不展示） -->
+      <div v-if="!repo.error" class="grd-sum">
         <span>分支 <b class="mono">{{ repo.branch || '—' }}</b></span>
         <span>上游 <span class="mono">{{ repo.upstream || '未设置' }}<template v-if="repo.ahead || repo.behind"> ↑{{ repo.ahead }} ↓{{ repo.behind }}</template></span></span>
         <span>工作区 <b>{{ repo.dirtyFiles }}</b> 处变更</span>
@@ -61,8 +61,8 @@
       <div class="grd-foot">
         <button class="btn grd-remove" type="button" @click="emit('remove')">移出列表</button>
         <span class="grd-foot-spacer"></span>
-        <button class="btn" type="button" @click="emit('fetch')">fetch</button>
-        <button class="btn btn-primary" type="button" @click="emit('pull')">
+        <button class="btn" type="button" :disabled="!!repo.error" @click="emit('fetch')">fetch</button>
+        <button class="btn btn-primary" type="button" :disabled="!!repo.error" @click="emit('pull')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
           拉取
         </button>
@@ -108,6 +108,7 @@ const kindClass = computed(() => `k-${repoRowKind(props.repo)}`)
 const kindText = computed(() => {
   const k = repoRowKind(props.repo)
   const map: Record<string, string> = {
+    error: '取数失败',
     dirty: `脏区 ${props.repo.dirtyFiles} 处`,
     diverge: `分歧 ↑${props.repo.ahead}↓${props.repo.behind}`,
     behind: `落后 ↓${props.repo.behind}`,
@@ -217,6 +218,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
 .k-ahead { background: color-mix(in srgb, var(--accent-purple) 12%, transparent); color: var(--accent-purple); }
 .k-clean { background: var(--status-success-bg); color: var(--status-success-text); }
 .k-none { background: var(--bg-hover); color: var(--text-tertiary); }
+.k-error { background: var(--status-error-bg); color: var(--status-error-text); }
 
 .grd-icon-btn {
   margin-left: auto;

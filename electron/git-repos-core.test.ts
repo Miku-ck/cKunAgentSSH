@@ -55,6 +55,11 @@ describe('parseGitStatusPorcelain', () => {
     expect(s.branch).toBe('HEAD')
   })
 
+  it('core.quotePath=false：中文路径原样保留（不做八进制转义）', () => {
+    const s = parseGitStatusPorcelain('## main\n?? 中文目录/说明.txt\nR  旧名.md -> 新名.md')
+    expect(s.files.map(f => f.path)).toEqual(['中文目录/说明.txt', '新名.md'])
+  })
+
   it('初始仓库（No commits yet）', () => {
     const s = parseGitStatusPorcelain('## No commits yet on main\n?? a.txt')
     expect(s.branch).toBe('main')
@@ -116,7 +121,8 @@ describe('行组装与排序', () => {
     expect(repoRowId('local', undefined, 'D:\\x')).toBe('local:D:\\x')
     expect(repoRowId('remote', 's1', '/var/www/app')).toBe('remote:s1:/var/www/app')
   })
-  it('repoRowKind 优先级：脏区 > 分歧 > 落后 > 领先 > 无远端 > 干净', () => {
+  it('repoRowKind 优先级：取数失败 > 脏区 > 分歧 > 落后 > 领先 > 无远端 > 干净', () => {
+    expect(repoRowKind({ error: 'fatal: not a git repository', dirtyFiles: 2, ahead: 1, behind: 1, originUrl: 'x' })).toBe('error')
     expect(repoRowKind({ dirtyFiles: 2, ahead: 0, behind: 0, originUrl: 'x' })).toBe('dirty')
     expect(repoRowKind({ dirtyFiles: 0, ahead: 1, behind: 2, originUrl: 'x' })).toBe('diverge')
     expect(repoRowKind({ dirtyFiles: 0, ahead: 0, behind: 3, originUrl: 'x' })).toBe('behind')
@@ -130,8 +136,9 @@ describe('行组装与排序', () => {
       upstream: null, ahead: a, behind: b, dirtyFiles: d, originUrl: 'u',
       originHost: 'h', originSlug: 's', lastCommit: null,
     })
-    const sorted = sortRepoRows([mk('zeta', 0, 0, 0), mk('beta', 1, 0, 0), mk('alpha', 0, 0, 2), mk('gamma', 0, 0, 0)])
-    expect(sorted.map(r => r.name)).toEqual(['beta', 'alpha', 'gamma', 'zeta'])
+    const broken: RepoRow = { ...mk('broken', 0, 0, 0), error: 'fatal: not a git repository' }
+    const sorted = sortRepoRows([mk('zeta', 0, 0, 0), mk('beta', 1, 0, 0), mk('alpha', 0, 0, 2), mk('gamma', 0, 0, 0), broken])
+    expect(sorted.map(r => r.name)).toEqual(['broken', 'beta', 'alpha', 'gamma', 'zeta'])
   })
   it('toLocalRepoRow 组装本地行', () => {
     const row = toLocalRepoRow({
@@ -165,15 +172,16 @@ describe('远程路径校验与命令构造', () => {
     // x'y → 'x'\''y'：三段拼接后仍是字面量，无法闭引号注入
     expect(shSingleQuote("x'$(rm -rf /)y")).toBe("'x'\\''$(rm -rf /)y'")
   })
-  it('status 命令三段以 printf 分隔符衔接', () => {
+  it('status 命令三段以 printf 分隔符衔接，并关闭 quotePath', () => {
     const cmd = buildRemoteRepoStatusCmd('/var/www/app')
-    expect(cmd).toContain("git -C '/var/www/app' status --porcelain=v1 -b --ignore-submodules=dirty")
+    expect(cmd).toContain("git -C '/var/www/app' -c core.quotePath=false status --porcelain=v1 -b --ignore-submodules=dirty")
     expect(cmd).toContain(`printf '\\x1e'`)
     expect(cmd).toContain("git -C '/var/www/app' log -1 --format=")
     expect(cmd).toContain("git -C '/var/www/app' config --get remote.origin.url")
     expect(cmd.split(' ; ')).toHaveLength(5)
   })
   it('detail / verify / fetch / pull 命令', () => {
+    expect(buildRemoteRepoDetailCmd('/srv/api')).toContain("-c core.quotePath=false status")
     expect(buildRemoteRepoDetailCmd('/srv/api')).toContain('branch -vv')
     expect(buildRemoteRepoDetailCmd('/srv/api')).toContain('log -20')
     expect(buildRemoteRepoVerifyCmd('/srv/api')).toBe("git -C '/srv/api' rev-parse --is-inside-work-tree")

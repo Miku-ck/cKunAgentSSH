@@ -139,6 +139,7 @@
         :key="detailRepo.id"
         :repo="detailRepo"
         :accel-active="accelActive"
+        :busy="busy"
         @close="detailRepo = null"
         @fetch="detailRepo && onFetch(detailRepo)"
         @pull="detailRepo && onPull(detailRepo)"
@@ -209,6 +210,7 @@ import {
   buildRemoteRepoStatusCmd,
   buildRemoteRepoVerifyCmd,
   firstLine,
+  friendlyGitStderr,
   interpretPull,
   isValidRemoteRepoPath,
   repoNameOf,
@@ -233,6 +235,8 @@ const accelStore = useGithubAccelStore()
 const REMOTE_READ_SEC = 20
 const REMOTE_FETCH_SEC = 60
 const REMOTE_PULL_SEC = 120
+/** 远程取数并发上限：一条 SSH 连接上的 exec channel 有上限，Docker 取数同款每批 4 条 */
+const REMOTE_CONCURRENCY = 4
 
 // ── 范围：'local' 或某个远程会话 id ──
 const scopeKey = ref<'local' | string>('local')
@@ -284,21 +288,27 @@ async function refresh(): Promise<void> {
   const pin = ++epoch
   loading.value = true
   loadError.value = null
+  const markSynced = (): void => { lastSync.value = new Date().toLocaleTimeString() }
   try {
     if (isLocal.value) {
-      if (!localPaths.value.length) { rows.value = []; return }
+      if (!localPaths.value.length) { rows.value = []; markSynced(); return }
       const results = await api.gitreposStatusAll(localPaths.value)
       if (pin !== epoch) return
       rows.value = sortRepoRows(results.map(toLocalRepoRow))
     } else {
       const session = scopeSession.value
-      if (!session) { rows.value = []; return }
+      if (!session) { rows.value = []; markSynced(); return }
       const paths = (session.connectionId && remotePaths.value[session.connectionId]) || []
-      if (!paths.length) { rows.value = []; return }
-      const settled = await Promise.allSettled(
-        paths.map(p => api.sshExec(session.id, buildRemoteRepoStatusCmd(p), REMOTE_READ_SEC)),
-      )
-      if (pin !== epoch) return
+      if (!paths.length) { rows.value = []; markSynced(); return }
+      // 分批限流：整页仓库一次性全发会挤爆单条 SSH 连接的 exec channel 预算
+      const settled: Array<PromiseSettledResult<{ stdout: string; stderr: string; exitCode: number | null }>> = []
+      for (let i = 0; i < paths.length; i += REMOTE_CONCURRENCY) {
+        const batch = await Promise.allSettled(
+          paths.slice(i, i + REMOTE_CONCURRENCY).map(p => api.sshExec(session.id, buildRemoteRepoStatusCmd(p), REMOTE_READ_SEC)),
+        )
+        if (pin !== epoch) return
+        settled.push(...batch)
+      }
       rows.value = sortRepoRows(paths.map((p, i) => {
         const r = settled[i]
         return r.status === 'fulfilled'
@@ -306,7 +316,7 @@ async function refresh(): Promise<void> {
           : remoteErrorRow(session.id, p, errMsg(r.reason, '远端取数失败'))
       }))
     }
-    lastSync.value = new Date().toLocaleTimeString()
+    markSynced()
     // 详情弹窗开着时让概要行跟上新数据（弹窗自身取的文件/分支/提交不重取）
     if (detailRepo.value) detailRepo.value = rows.value.find(r => r.id === detailRepo.value?.id) ?? null
   } catch (e) {
@@ -344,15 +354,17 @@ function branchText(r: RepoRow): string {
   return t
 }
 
+// 失败行不走 repoRowKind（error 是行字段不是状态档），这里单独数
 const statusParts = computed(() => {
   const counts = { dirty: 0, diverge: 0, behind: 0 } as Record<string, number>
+  let failed = 0
   for (const r of rows.value) {
+    if (r.error) { failed++; continue }
     const k = repoRowKind(r)
-    if (k === 'dirty') counts.dirty++
-    else if (k === 'diverge') counts.diverge++
-    else if (k === 'behind') counts.behind++
+    if (k in counts) counts[k]++
   }
   const parts: string[] = []
+  if (failed) parts.push(`${failed} 失败`)
   if (counts.dirty) parts.push(`${counts.dirty} 脏区`)
   if (counts.diverge) parts.push(`${counts.diverge} 分歧`)
   if (counts.behind) parts.push(`${counts.behind} 落后`)
@@ -361,11 +373,12 @@ const statusParts = computed(() => {
 
 const hostSummary = computed(() => {
   const hosts = new Map<string, number>()
+  let none = 0
   for (const r of rows.value) {
-    if (!r.originHost) continue
+    if (r.error) continue
+    if (!r.originHost) { none++; continue }
     hosts.set(r.originHost, (hosts.get(r.originHost) || 0) + 1)
   }
-  const none = rows.value.filter(r => !r.originUrl).length
   const parts = [...hosts.entries()].map(([h, n]) => `${h} ×${n}`)
   if (none) parts.push(`无远端 ×${none}`)
   return parts.join(' · ')
@@ -408,7 +421,7 @@ async function onFetch(row: RepoRow): Promise<void> {
     try {
       if (row.scope === 'local') {
         const r = await api.gitreposFetchOne(row.path)
-        if (r.code !== 0) throw new Error(firstLine(r.stderr) || `fetch 退出码 ${r.code}`)
+        if (r.code !== 0) throw new Error(firstLine(friendlyGitStderr(r.stderr)) || `fetch 退出码 ${r.code}`)
       } else {
         if (!row.sessionId) throw new Error('远端会话不可用')
         const r = await api.sshExec(row.sessionId, buildRemoteGitActionCmd(row.path, 'fetch'), REMOTE_FETCH_SEC)
@@ -564,7 +577,8 @@ async function onScan(): Promise<void> {
 const showAddRemote = ref(false)
 const addRemotePath = ref('')
 async function onAddRemote(): Promise<void> {
-  const p = addRemotePath.value.trim()
+  // 尾部斜杠归一：/var/www/app/ 与 /var/www/app 不该登记成两条
+  const p = addRemotePath.value.trim().replace(/\/+$/, '') || '/'
   if (!isValidRemoteRepoPath(p)) {
     toast.error('路径须为服务器上的绝对路径（/ 开头），且不含引号或控制字符')
     return
@@ -615,8 +629,15 @@ async function handleConnect(conn: SSHConnection): Promise<void> {
 
 // ── 详情弹窗 ──
 const detailRepo = ref<RepoRow | null>(null)
-// 页面被 v-show 隐藏时收起弹窗（Teleport 到 body 的浮层会盖到别的页面上，Docker 同款处理）
-watch(() => props.active, (active) => { if (active === false) detailRepo.value = null })
+// 页面可见性：被 v-show 隐藏时收起弹窗（Teleport 到 body 的浮层会盖到别的页面上，
+// Docker 同款处理）；回到前台时刷新一次 —— 状态是快照不是实时，离开期间远端可能已变
+watch(() => props.active, (active) => {
+  if (active === false) {
+    detailRepo.value = null
+    return
+  }
+  void refresh()
+})
 
 // ── 生命周期 ──
 onMounted(() => {
@@ -625,7 +646,11 @@ onMounted(() => {
     loadError.value = errMsg(e, '注册表读取失败')
   })
 })
-watch(scopeKey, () => { void refresh() })
+// 切范围即重取；范围变了，登记表单对着旧主机就没有意义了
+watch(scopeKey, () => {
+  showAddRemote.value = false
+  void refresh()
+})
 </script>
 
 <style scoped>

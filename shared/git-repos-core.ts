@@ -50,7 +50,7 @@ export interface RepoStatus {
   files: GitFileEntry[]
 }
 
-export type RepoRowKind = 'dirty' | 'diverge' | 'behind' | 'ahead' | 'none' | 'clean'
+export type RepoRowKind = 'error' | 'dirty' | 'diverge' | 'behind' | 'ahead' | 'none' | 'clean'
 
 export interface RepoRow {
   id: string
@@ -219,7 +219,11 @@ export function repoRowId(scope: 'local' | 'remote', sessionId: string | undefin
   return scope === 'local' ? `local:${path}` : `remote:${sessionId ?? ''}:${path}`
 }
 
-export function repoRowKind(r: Pick<RepoRow, 'dirtyFiles' | 'ahead' | 'behind' | 'originUrl'>): RepoRowKind {
+/** 状态判定输入：error 可缺省（纯状态对象也能判档） */
+type RepoKindInput = Pick<RepoRow, 'dirtyFiles' | 'ahead' | 'behind' | 'originUrl'> & { error?: string }
+
+export function repoRowKind(r: RepoKindInput): RepoRowKind {
+  if (r.error) return 'error'
   if (r.dirtyFiles > 0) return 'dirty'
   if (r.ahead > 0 && r.behind > 0) return 'diverge'
   if (r.behind > 0) return 'behind'
@@ -228,10 +232,12 @@ export function repoRowKind(r: Pick<RepoRow, 'dirtyFiles' | 'ahead' | 'behind' |
   return 'clean'
 }
 
-/** 异常优先：脏区 > 分歧 > 落后 > 领先 > 无远端 > 干净；同档按名称 */
-export const REPO_KIND_RANK: Record<RepoRowKind, number> = { dirty: 0, diverge: 1, behind: 2, ahead: 3, none: 4, clean: 5 }
+/** 异常优先：取数失败 > 脏区 > 分歧 > 落后 > 领先 > 无远端 > 干净；同档按名称 */
+export const REPO_KIND_RANK: Record<RepoRowKind, number> = {
+  error: 0, dirty: 1, diverge: 2, behind: 3, ahead: 4, none: 5, clean: 6,
+}
 
-export function sortRepoRows<T extends Pick<RepoRow, 'name' | 'dirtyFiles' | 'ahead' | 'behind' | 'originUrl'>>(rows: T[]): T[] {
+export function sortRepoRows<T extends Pick<RepoRow, 'name' | 'dirtyFiles' | 'ahead' | 'behind' | 'originUrl'> & { error?: string }>(rows: T[]): T[] {
   return [...rows].sort((a, b) => {
     const ra = REPO_KIND_RANK[repoRowKind(a)]
     const rb = REPO_KIND_RANK[repoRowKind(b)]
@@ -289,11 +295,13 @@ export const GIT_LOG_FORMAT = '%H%x1f%s%x1f%an%x1f%cr'
 /**
  * 远程一仓取数：status / 最近提交 / origin URL 三段，一次 sshExec 拿全。
  * 段间用 `;` 而非 `&&`——单段失败（比如空仓库 log 无输出）不该拖死其余段。
+ * status 带 core.quotePath=false：否则 porcelain 把中文文件名输出成
+ * "\344\270\255" 八进制转义，列表里没法看；只影响读展示，fetch/pull 不掺。
  */
 export function buildRemoteRepoStatusCmd(path: string): string {
   const p = shSingleQuote(path)
   return [
-    `git -C ${p} status --porcelain=v1 -b --ignore-submodules=dirty`,
+    `git -C ${p} -c core.quotePath=false status --porcelain=v1 -b --ignore-submodules=dirty`,
     `printf '\\x1e'`,
     `git -C ${p} log -1 --format='${GIT_LOG_FORMAT}'`,
     `printf '\\x1e'`,
@@ -305,7 +313,7 @@ export function buildRemoteRepoStatusCmd(path: string): string {
 export function buildRemoteRepoDetailCmd(path: string): string {
   const p = shSingleQuote(path)
   return [
-    `git -C ${p} status --porcelain=v1`,
+    `git -C ${p} -c core.quotePath=false status --porcelain=v1`,
     `printf '\\x1e'`,
     `git -C ${p} branch -vv`,
     `printf '\\x1e'`,
@@ -335,6 +343,11 @@ export function splitBySep(raw: string): string[] {
 
 export function firstLine(s: string): string {
   return (s || '').split('\n').map(l => l.trim()).find(Boolean) || ''
+}
+
+/** 本地 execFile 的 stderr 黑话 → 用户能懂的话（'git-not-found' 是 electron/git-repos.ts 的约定哨兵） */
+export function friendlyGitStderr(stderr: string): string {
+  return stderr === 'git-not-found' ? '未检测到 git（请安装 git 或加入 PATH 后重试）' : stderr
 }
 
 /** 远程 status 回包 → 行（stdout 三段 + stderr；整体失败时置 error） */
@@ -406,5 +419,5 @@ export function interpretPull(stdout: string, stderr: string, exitCode: number |
   if (/not possible to fast-forward|divergent branches|Not possible to fast-forward/i.test(all)) {
     return { kind: 'diverged', message: '本地与远端已分叉：本工具不做自动合并（--ff-only），请手动处理后再拉取' }
   }
-  return { kind: 'failed', message: firstLine(stderr) || firstLine(stdout) || `退出码 ${exitCode ?? 'null'}` }
+  return { kind: 'failed', message: firstLine(friendlyGitStderr(stderr)) || firstLine(stdout) || `退出码 ${exitCode ?? 'null'}` }
 }

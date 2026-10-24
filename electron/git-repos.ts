@@ -15,6 +15,7 @@ import { execFile } from 'child_process'
 import {
   GIT_LOG_FORMAT,
   firstLine,
+  isValidRemoteRepoPath,
   parseGitLog,
   parseGitStatusPorcelain,
   type GitRawResult,
@@ -33,6 +34,10 @@ const STATUS_CONCURRENCY = 6
 /** 扫描深度与结果上限：防误选根目录后遍历整块盘 */
 const SCAN_MAX_DEPTH = 3
 const SCAN_MAX_RESULTS = 200
+/** 单条命令输出上限：仓库多 / 长提交主题时 1MB 默认缓冲容易被顶爆 */
+const GIT_MAX_BUFFER = 4 * 1024 * 1024
+/** 超时被杀沿用 coreutils timeout 的退出码约定 */
+const TIMEOUT_EXIT_CODE = 124
 
 function getStorePath(): string {
   return join(app.getPath('userData'), 'git-repos.json')
@@ -44,12 +49,28 @@ function defaultRegistry(): GitReposRegistry {
 
 function execGit(args: string[], timeoutMs = GIT_TIMEOUT_MS): Promise<GitRawResult> {
   return new Promise((resolvePromise) => {
-    execFile('git', args, { timeout: timeoutMs, windowsHide: true }, (err, stdout, stderr) => {
+    execFile('git', args, { timeout: timeoutMs, windowsHide: true, maxBuffer: GIT_MAX_BUFFER }, (err, stdout, stderr) => {
       if (err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
         resolvePromise({ code: -1, stdout: '', stderr: 'git-not-found' })
         return
       }
-      // execFile 的 err.code 对非零退出是数字退出码；超时被杀时为 null
+      if (err) {
+        const e = err as NodeJS.ErrnoException & { killed?: boolean }
+        if (e.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+          resolvePromise({ code: 1, stdout: '', stderr: `git 输出超过 ${GIT_MAX_BUFFER} 字节上限` })
+          return
+        }
+        // 超时被杀时 err.code 为 null，只有 killed 能认出来；不折成普通失败
+        if (e.killed) {
+          resolvePromise({
+            code: TIMEOUT_EXIT_CODE,
+            stdout: String(stdout ?? ''),
+            stderr: String(stderr ?? '') || `git 执行超时（${timeoutMs}ms）`,
+          })
+          return
+        }
+      }
+      // execFile 的 err.code 对非零退出是数字退出码
       const code = err ? (typeof (err as unknown as { code?: number | string }).code === 'number' ? (err as unknown as { code: number }).code : 1) : 0
       resolvePromise({ code, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') })
     })
@@ -76,6 +97,13 @@ function assertAbsolutePath(p: string): string {
   return v
 }
 
+/** 读写动作入口：除了绝对路径，还要确认当下仍是 git 工作区（注册后目录可能已被删/换） */
+function assertRepoPath(p: string): string {
+  const v = assertAbsolutePath(p)
+  if (!isGitRepoPath(v)) throw new Error(`不是 git 仓库（目录下没有 .git）: ${v}`)
+  return v
+}
+
 async function quarantineCorruptFile(path: string, raw: string): Promise<void> {
   try {
     const bak = `${path}.corrupt-${Date.now()}.bak`
@@ -88,6 +116,26 @@ async function quarantineCorruptFile(path: string, raw: string): Promise<void> {
   } catch (e) {
     console.warn('[GitRepos] 备份损坏文件失败:', e)
   }
+}
+
+/** 注册表来自磁盘（外部可改）：本地路径只留绝对路径，去重 */
+function sanitizeLocalPaths(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const out = new Set<string>()
+  for (const p of value) {
+    if (typeof p === 'string' && isAbsolutePath(p)) out.add(p)
+  }
+  return [...out]
+}
+
+/** 远端路径同理只留可安全拼进远程命令的 POSIX 绝对路径，去重 */
+function sanitizeRemotePaths(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const out = new Set<string>()
+  for (const p of value) {
+    if (typeof p === 'string' && isValidRemoteRepoPath(p)) out.add(p)
+  }
+  return [...out]
 }
 
 async function readRegistryFromDisk(): Promise<GitReposRegistry> {
@@ -108,11 +156,10 @@ async function readRegistryFromDisk(): Promise<GitReposRegistry> {
     }
     return {
       version: 1,
-      local: Array.isArray(obj.local) ? obj.local.filter((p: unknown): p is string => typeof p === 'string') : [],
+      local: sanitizeLocalPaths(obj.local),
       remote: obj.remote && typeof obj.remote === 'object'
         ? Object.fromEntries(
-            Object.entries(obj.remote)
-              .map(([k, v]) => [k, Array.isArray(v) ? v.filter((p: unknown): p is string => typeof p === 'string') : []]),
+            Object.entries(obj.remote).map(([k, v]) => [k, sanitizeRemotePaths(v)]),
           )
         : {},
     }
@@ -209,9 +256,13 @@ export class GitReposService {
     return this.enqueue(async () => {
       const key = String(connectionId || '').trim()
       if (!key) throw new Error('缺少连接标识，无法记忆远端仓库')
-      const list = (Array.isArray(paths) ? paths : [])
-        .map(p => String(p || '').trim())
-        .filter(Boolean)
+      const list = [...new Set(
+        (Array.isArray(paths) ? paths : [])
+          .map(p => String(p || '').trim())
+          .filter(Boolean),
+      )]
+      const invalid = list.find(p => !isValidRemoteRepoPath(p))
+      if (invalid) throw new Error(`非法远端仓库路径（须为无引号/控制字符的绝对 POSIX 路径）: ${invalid}`)
       const reg = await readRegistryFromDisk()
       if (list.length) reg.remote[key] = list
       else delete reg.remote[key]
@@ -246,7 +297,7 @@ export class GitReposService {
           found.push(child)
           continue
         }
-        if (depth < SCAN_MAX_DEPTH) queue.push({ dir: child, depth: depth + 1 })
+        if (depth + 1 < SCAN_MAX_DEPTH) queue.push({ dir: child, depth: depth + 1 })
       }
     }
     return found
@@ -255,7 +306,7 @@ export class GitReposService {
   /** 单仓一次取数：status / 最近提交 / origin 三条 execFile 并行 */
   private async statusOne(path: string): Promise<LocalRepoStatusResult> {
     const [st, lg, og] = await Promise.all([
-      execGit(['-C', path, 'status', '--porcelain=v1', '-b', '--ignore-submodules=dirty']),
+      execGit(['-C', path, '-c', 'core.quotePath=false', 'status', '--porcelain=v1', '-b', '--ignore-submodules=dirty']),
       execGit(['-C', path, 'log', '-1', `--format=${GIT_LOG_FORMAT}`]),
       execGit(['-C', path, 'config', '--get', 'remote.origin.url']),
     ])
@@ -287,18 +338,18 @@ export class GitReposService {
   }
 
   async fetchOne(path: string): Promise<GitRawResult> {
-    return execGit(['-C', assertAbsolutePath(path), 'fetch', '--all', '--prune'], FETCH_TIMEOUT_MS)
+    return execGit(['-C', assertRepoPath(path), 'fetch', '--all', '--prune'], FETCH_TIMEOUT_MS)
   }
 
   async pullOne(path: string): Promise<GitRawResult> {
-    return execGit(['-C', assertAbsolutePath(path), 'pull', '--ff-only'], PULL_TIMEOUT_MS)
+    return execGit(['-C', assertRepoPath(path), 'pull', '--ff-only'], PULL_TIMEOUT_MS)
   }
 
   /** 详情三段原始输出（解析在渲染层 parseRepoDetailSections，单测共用同一份） */
   async detail(path: string): Promise<{ ok: boolean; error?: string; statusRaw?: string; branchRaw?: string; logRaw?: string }> {
-    const repoPath = assertAbsolutePath(path)
+    const repoPath = assertRepoPath(path)
     const [st, br, lg] = await Promise.all([
-      execGit(['-C', repoPath, 'status', '--porcelain=v1', '--ignore-submodules=dirty']),
+      execGit(['-C', repoPath, '-c', 'core.quotePath=false', 'status', '--porcelain=v1', '--ignore-submodules=dirty']),
       execGit(['-C', repoPath, 'branch', '-vv']),
       execGit(['-C', repoPath, 'log', '-20', `--format=${GIT_LOG_FORMAT}`]),
     ])
