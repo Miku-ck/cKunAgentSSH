@@ -272,7 +272,7 @@ def _session_ctx(ssh_session_id: str):
 
 def _parse_remote_pid(output: str) -> Optional[int]:
     """从启动命令输出解析 PID（忽略 run_headless 追加的 [exit_code=..] 行）。"""
-    for line in reversed([l.strip() for l in output.splitlines() if l.strip()]):
+    for line in reversed([ln.strip() for ln in output.splitlines() if ln.strip()]):
         if is_exit_code_line(line):
             continue
         if line.isdigit():
@@ -806,8 +806,8 @@ async def _reconcile_remote(mgr: JobManager, entries: List[JobEntry]) -> None:
             # return 会让排在后面的会话整轮不被检查，而那些会话完全正常。
             continue
         alive = {
-            int(l.split()[0]) for l in out.splitlines()
-            if l.strip().endswith("ALIVE") and l.split()[0].isdigit()
+            int(ln.split()[0]) for ln in out.splitlines()
+            if ln.strip().endswith("ALIVE") and ln.split()[0].isdigit()
         }
         dead = [e for e in group if e.pid not in alive]
         if not dead:
@@ -821,7 +821,7 @@ async def _reconcile_remote(mgr: JobManager, entries: List[JobEntry]) -> None:
         # 只跳真正的哨兵行（含 `=`）：少一个 `=` 的宽松写法会把恰好以
         # "[exit_code" 开头的 rc 数据行一起删掉，后续 rcs[i] 与 dead_dirs 的
         # 下标对齐就错了 —— 把 A 任务的退出码记到 B 任务头上。
-        rcs = [l for l in rcs if not is_exit_code_line(l)]
+        rcs = [ln for ln in rcs if not is_exit_code_line(ln)]
         for i, e in enumerate(dead):
             rc_raw = rcs[i].strip() if i < len(rcs) else ""
             if rc_raw.lstrip("-").isdigit():

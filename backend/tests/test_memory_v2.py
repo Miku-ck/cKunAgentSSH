@@ -926,8 +926,9 @@ def test_retire_returns_false_when_row_already_inactive(memdb):
                             scope="global", source="chat_extract", importance=0.6)
     assert mstore.retire(mid, reason="第一次作废") is True
     conn = db._get_conn()
-    audit_cnt = lambda: conn.execute(
-        "SELECT COUNT(*) FROM memory_audit WHERE memory_id=?", (mid,)).fetchone()[0]
+    def audit_cnt():
+        return conn.execute(
+            "SELECT COUNT(*) FROM memory_audit WHERE memory_id=?", (mid,)).fetchone()[0]
     first_cnt = audit_cnt()
     # 第二次：行已是 invalidated，守卫 UPDATE 命中 0 行
     assert mstore.retire(mid, reason="重复作废") is False

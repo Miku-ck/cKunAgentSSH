@@ -429,7 +429,8 @@ def test_record_clarification_answers_creates_stub_context():
 
 def test_purge_expired_clarifications_removes_old_entries(monkeypatch):
     done, ctx = reins_mod._CLARIFICATION_DONE, reins_mod._CLARIFICATION_CONTEXT
-    done.pop("run-ttl", None); ctx.pop("run-ttl", None)
+    done.pop("run-ttl", None)
+    ctx.pop("run-ttl", None)
     ctx["run-ttl"] = {"tool": "shell_exec", "steps": [], "_done": False,
                       "ts": 0.0}  # 远早于 TTL
     done["run-ttl"] = {"0": {"choice": "B"}}
@@ -441,7 +442,8 @@ def test_purge_expired_clarifications_removes_old_entries(monkeypatch):
 def test_purge_keeps_fresh_entries():
     import time as _t
     done, ctx = reins_mod._CLARIFICATION_DONE, reins_mod._CLARIFICATION_CONTEXT
-    done.pop("run-fresh", None); ctx.pop("run-fresh", None)
+    done.pop("run-fresh", None)
+    ctx.pop("run-fresh", None)
     ctx["run-fresh"] = {"tool": "shell_exec", "steps": [], "_done": False,
                         "ts": _t.time()}
     reins_mod._purge_expired_clarifications()
@@ -453,7 +455,8 @@ def test_interceptor_releases_after_ttl(monkeypatch):
     """过期未答题不再无限拦截：TTL 后同 run 的模糊命令应重建新题而非重发旧题"""
     import time as _t
     done, ctx = reins_mod._CLARIFICATION_DONE, reins_mod._CLARIFICATION_CONTEXT
-    done.pop("run-exp", None); ctx.pop("run-exp", None)
+    done.pop("run-exp", None)
+    ctx.pop("run-exp", None)
     ctx["run-exp"] = {"tool": "shell_exec", "args": {"command": "rm -rf /var/log/*"},
                       "tool_call_id": "x", "steps": [], "current_step": 0,
                       "total": 0, "reason": "r", "_done": False, "ts": 0.0}

@@ -858,8 +858,9 @@ def _fix_model_name_and_id(conn: sqlite3.Connection) -> None:
         if not n or not mid:
             continue
         # 仅当 name 看起来像 model_id（含 / 或匹配 Qwen/ 前缀），且 model_id 看起来像显示名时才互换
-        looks_like_id = lambda s: bool(s) and ("/" in s or s.startswith("Qwen/") or s.startswith("qwen/"))
-        if looks_like_id(n) and not looks_like_id(mid):
+        def _looks_like_id(s: str) -> bool:
+            return bool(s) and ("/" in s or s.startswith("Qwen/") or s.startswith("qwen/"))
+        if _looks_like_id(n) and not _looks_like_id(mid):
             conn.execute(
                 "UPDATE models_config SET name = ?, model_id = ?, updated_at = ? WHERE id = ?",
                 (mid, n, _now(), r["id"])
