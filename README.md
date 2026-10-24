@@ -145,7 +145,7 @@ cKunAgentSSH/
 │   ├── tunnel-manager.ts / tunnel-store.ts / tunnel-transport.ts   # SSH 隧道
 │   ├── gateway-manager.ts / gateway-store.ts                       # TLS 网关接入
 │   ├── github-accel.ts / gh-hosts.ts / gh-download.ts              # GitHub 加速
-│   └── desktop-prefs.ts / transports/ / utils/                   # 偏好持久化、传输抽象、工具
+│   └── desktop-prefs.ts shortcut-win.ts / transports/ / utils/     # 偏好持久化、Windows 快捷方式自建、传输抽象、工具
 │
 ├── src/                               # Vue 3 渲染进程
 │   ├── App.vue                        # 根组件：顶栏 + 页面切换
@@ -156,12 +156,14 @@ cKunAgentSSH/
 │   ├── stores/                        # Pinia 状态管理
 │   └── api/ / styles/ / utils/ / types/
 │
-├── shared/                            # 主进程 / 渲染进程 / 网关共享模块（错误分类、网关帧协议）
+├── shared/                            # 主进程 / 渲染进程 / 网关共享模块（端口校验、SSH 错误分类、传输错误码、exec 三态判据、桌面偏好契约、网关帧协议、GitHub 加速纯逻辑）
 │
 ├── backend/                           # Python FastAPI 后端
 │   ├── main.py config.py database.py llm_adapter.py prompts.py
 │   ├── post_processor.py skill_registry.py builtin_skills.py skills_builtin/
+│   ├── logconfig.py model_probe.py netconfig.py safe_tokens.py sse_utils.py win_asyncio_teardown.py
 │   ├── routes/                        # chat / agent / schedules / audit / settings / skills / terminal / workflow
+│   ├── tests/                         # 162 个测试；命名规范与旧名映射见 tests/README.md
 │   └── agent/                         # Agent 智能体框架
 │       ├── harness/                   # Harness 核心
 │       ├── memory/                    # 记忆子系统
@@ -170,7 +172,7 @@ cKunAgentSSH/
 │
 ├── gateway/hillgw.mjs                 # 自营 TLS 接入网关（零依赖单文件，独立部署）
 ├── runtime/                           # 打包用的嵌入式 Python 运行时（本地准备，不入库：.gitignore 整目录忽略）
-├── scripts/                           # dev / package / clean / ci-check / deploy
+├── scripts/                           # dev / package / clean / ci-check / deploy（deploy/ = 目标机一键部署脚本）
 └── package.json
 ```
 

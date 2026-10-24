@@ -18,3 +18,6 @@
 | **目标主机**（target host） | 下一次执行实际落到的 SSH 会话，由输入区目标 chip 切换，后端按 `activeSessionId` 落地 | 目标可以逐条消息变化，放在会话头部会谎称整段会话只有一个目标 |
 | **历史抽屉** | 从标签条右侧“历史记录”按钮滑出的会话列表抽屉 | `DESIGN.md` 禁止抽屉式交互的明确例外；理由与范围见该文件 |
 | **问 AI 预填**（pendingPrefill） | 终端选区 / 批量下发结果 / 定时任务失败诊断送进任务台草稿的那一次请求，消费一次即清空 | AI 只有任务台一个界面，所以预填 = 切回首页 + 填输入框；留着它当第二个入口就会又长出一块面板 |
+| **任务台双 store** | `stores/ssh-ai.ts` 管会话与消息（唯一对话面），`stores/agent.ts` 管单次 run 的执行态（SSE 事件流 / 工具调用 / 中止 / 成本） | 两个 store 名字都像"agent 相关"，混过一次就会把消息组装写进执行态 store，回放与持久化两边漂移 |
+| **Bridge 双模块** | `agent/bridge_relay.py` 是 `/ws/bridge` 通道服务端（持连接 / 令牌握手 / 帧路由），`agent/electron_bridge.py` 是调用方客户端（拼请求 / 分类错误 / fail-closed） | 业务代码只 import 客户端；直接碰 relay 会绕过错误分类与"在途请求绝不重发"的保证 |
+| **测试文件名** | `backend/tests/` 文件名只写守什么（`test_<域>_<守卫什么>.py`），不写轮次 / 工单号；出处历史在文件 docstring 与 git log，旧名对映见 `backend/tests/README.md` | 带 `_round13c` / `_s407` 后缀的名字看文件名猜不出守什么，只能靠 docstring——2026-10-24 已统一改名 |

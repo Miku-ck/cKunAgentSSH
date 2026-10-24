@@ -11,6 +11,10 @@
 - 断线时的在途请求立即失败，**绝不重发** —— 远程命令非幂等，重发即双执行。
 - 同一时刻最多一条主进程连接；新连接完成 hello 后替换旧连接（新者胜，
   覆盖主进程重连竞态），旧连接 pending 请求全部失败。
+
+与 electron_bridge.py 的分工：本文件是通道服务端（上述约束的持有者），
+electron_bridge.py 是调用方客户端（拼请求 / 分类错误 / fail-closed）。
+业务代码只 import 客户端，不直接 import 本文件。
 """
 from __future__ import annotations
 

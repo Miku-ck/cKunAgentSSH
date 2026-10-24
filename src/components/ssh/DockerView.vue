@@ -237,11 +237,11 @@
 // DockerView.vue — 远程 Docker 管理页
 // 定位：依附已连接的 SSH 会话，经 sshExec 在其远程主机上真执行 docker 命令。
 // 分工：命令构造/解析/错误归类 → docker-core.ts；执行/审计/动作锁/陈旧回包守卫 → ./docker/context.ts；
-//       四个页签的列表与三个弹窗 → ./docker/*；本文件只做 sshExec 编排与页面级状态。
+//       四个页签的列表与全部弹窗 → ./docker/*；本文件只做 sshExec 编排与页面级状态。
 import { computed, ref, watch, onUnmounted } from 'vue'
 import { formatBytes } from '@/utils/format'
-import DockerContainerDetail from './DockerContainerDetail.vue'
-import DockerImageTransferModal from './DockerImageTransferModal.vue'
+import DockerContainerDetail from './docker/DockerContainerDetail.vue'
+import DockerImageTransferModal from './docker/DockerImageTransferModal.vue'
 import IconDocker from '@/components/icons/IconDocker.vue'
 import { useSSHStore } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'

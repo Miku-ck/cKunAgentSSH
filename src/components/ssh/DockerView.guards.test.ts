@@ -217,7 +217,7 @@ describe('镜像拉取与悬空清理', () => {
   it('容器详情使用拆出的子组件并回传关闭', () => {
     expect(src).toContain(':session-id="targetId"')
     expect(src).toContain('@close="selected = null"')
-    expect(src).toContain("from './DockerContainerDetail.vue'")
+    expect(src).toContain("from './docker/DockerContainerDetail.vue'")
     expect(src).not.toContain('class="logs-section"')
   })
   it('拉取走 600s 预算 + 审计，成功后由父级重拉镜像列表', () => {
@@ -284,7 +284,7 @@ describe('未使用镜像清理', () => {
 
 describe('镜像导出 / 加载（纯远端）', () => {
   it('弹窗拆成子组件，不往页面里再堆一套表单', () => {
-    expect(src).toContain("from './DockerImageTransferModal.vue'")
+    expect(src).toContain("from './docker/DockerImageTransferModal.vue'")
     expect(src).toContain('<DockerImageTransferModal')
     expect(src).toContain(':initial-dir="lastTransferDir"')
   })

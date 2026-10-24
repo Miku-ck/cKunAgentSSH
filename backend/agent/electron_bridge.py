@@ -6,6 +6,11 @@
 - 公开 API（is_available/probe/ping/exec_ssh_command/connect_ssh/disconnect_ssh）不变，
   4 个调用方（schedule_engine / ops_common / shell_exec / saddle）零改动
 - 断线时在途请求 fail-closed：抛 WS_LOST，绝不重发（远程命令非幂等）
+
+与 bridge_relay.py 的分工：relay 是通道服务端（持连接 / 令牌握手 / 帧路由），
+本文件是调用方客户端（拼请求 / 发命令 / 分类错误 / fail-closed）。业务代码
+（schedule_engine / ops_common / shell_exec / saddle）只 import 本文件，
+不直接碰 relay —— 绕过客户端就丢了错误分类与"在途绝不重发"的保证。
 """
 from __future__ import annotations
 

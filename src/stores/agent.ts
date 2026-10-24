@@ -1,10 +1,14 @@
 /**
- * Agent Store — 管理 Agent 运行状态
+ * Agent Store — 单次 Agent run 的执行态
  *
  * 职责:
  * - 管理 Agent 运行事件流（state / content / reasoning / tool_call / done）
  * - 提供 runAgent / abort 方法
  * - 持久化运行历史到后端 agent_runs 表
+ *
+ * 边界（与 stores/ssh-ai.ts 互斥）：本 store 只管"这一轮 run 正在发生什么"，
+ * 不管"会话与消息"——消息组装、持久化、历史列表都在 ssh-ai.ts。run 的产出
+ * 经这里流回后，由 ssh-ai.ts 写进对应消息。
  */
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'

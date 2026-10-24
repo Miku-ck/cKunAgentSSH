@@ -1,9 +1,15 @@
 /**
- * SSH 模式 AI 运维助手 Store
+ * 任务台会话 Store（stores/ssh-ai.ts）
  *
- * 会话/模型持久化来自 useChatPersistence（单一 ssh 模式、固定 dual 策略）。
- * 原 createModeChatStore 通用工厂仅剩本文件一个调用方，已收敛内联至此
- * （固定 Agent 模式重构的收尾清理）。
+ * 唯一对话面「首页任务台」的会话 / 消息 / 交付状态；消息最终形态由
+ * utils/finalizeAgentMessage 归一，持久化走 composables/useChatPersistence。
+ * 文件名 ssh-ai 是聊天模式系统退役前的遗留（当年按模式各建一个 store），
+ * 现在全应用只有这一个对话 store —— 不要再按"模式"造第二个。
+ *
+ * 与 stores/agent.ts 的分工（唯一边界，别混）：
+ * - 本 store：会话与消息 —— 有哪些会话、每条消息长什么样、发什么、交付去哪；
+ * - agent.ts：单次 run 的执行态 —— SSE 事件流、工具调用、中止、成本、trace。
+ * 一次 run 的产出经 agent.ts 流回来后，由本 store 写进对应消息。
  */
 import { computed, ref, triggerRef, watch } from 'vue'
 import { defineStore } from 'pinia'

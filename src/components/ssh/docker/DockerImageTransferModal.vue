@@ -12,7 +12,7 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { imageLabel, suggestTarName, validateSaveName, ensureTarSuffix, validateRemoteDir, joinRemotePath, dockerLoadCmd } from '@/stores/docker-core'
 import type { ImageRow } from '@/stores/docker-core'
-import RemoteDirPicker from './RemoteDirPicker.vue'
+import RemoteDirPicker from '../RemoteDirPicker.vue'
 
 const props = defineProps<{
   mode: 'export' | 'import'

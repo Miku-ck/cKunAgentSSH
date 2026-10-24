@@ -1,4 +1,4 @@
-/** 会话/模型/设置域：REST 客户端 api 对象与各资源类型（原 client.ts 265-644 行，ARCH-008 拆分） */
+/** 会话/模型/设置域：REST 客户端 api 对象与各资源类型（ARCH-008 从 client.ts 拆出） */
 
 import { request } from './base'
 import { AgentTraceSnapshot } from './sse'
