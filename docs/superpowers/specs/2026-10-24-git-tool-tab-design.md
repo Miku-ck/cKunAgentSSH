@@ -46,7 +46,7 @@ CommandPalette），`command-palette-pages.test.ts` 守卫对账。
 - **操作（只读优先）**：
   - fetch：`git fetch --all --prune`（网络读，不写审计——与 Docker 读路径同口径）；
   - 拉取：`git pull --ff-only`——**分叉时失败而不自动合并**；本地确认框说明；
-    远程仓库 pull = 部署语义，红字提示 + confirm + 审计（`git_repo` 动作走
+    远程仓库 pull = 部署语义，红字提示 + confirm + 审计（`git_repo_action` 动作走
     remoteAudit 通道）；
   - 打开终端：本地 → 新本地终端（`createLocalTerminal` 扩展 cwd）；远程 → 新
     SSH 会话 + 写入 `cd <path>`（复用 Docker doExec 模式），完成后 emit
@@ -62,7 +62,7 @@ CommandPalette），`command-palette-pages.test.ts` 守卫对账。
 |---|---|---|
 | 本地仓库 | Electron IPC `gitrepos:*` → `electron/git-repos.ts` | execFile + `-C`，不经 shell |
 | 远程仓库 | 渲染层构造命令（git-repos-core 纯函数）经 `sshExec` | 一仓一条复合命令（status/log/origin 以 `\x1e` 分段），读 20s / 动作 60-120s 预算 |
-| 纯逻辑 | `src/stores/git-repos-core.ts` | 命令构造 / 输出解析 / 排序 / 拉取结果解释，单测覆盖；对照 docker-core.ts 定位 |
+| 纯逻辑 | `shared/git-repos-core.ts` | 命令构造 / 输出解析 / 排序 / 拉取结果解释，单测覆盖；对照 docker-core.ts 定位 |
 
 ## 安全边界
 
