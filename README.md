@@ -165,13 +165,14 @@ cKunAgentSSH/
 │   ├── post_processor.py skill_registry.py builtin_skills.py skills_builtin/
 │   ├── logconfig.py model_probe.py netconfig.py safe_tokens.py sse_utils.py win_asyncio_teardown.py
 │   ├── routes/                        # chat / agent / schedules / audit / settings / skills / terminal / workflow
-│   ├── tests/                         # 168 个测试文件；命名规范与旧名映射见 tests/README.md
+│   ├── tests/                         # 172 个测试文件；命名规范与旧名映射见 tests/README.md
 │   └── agent/                         # Agent 智能体框架
 │       ├── harness/                   # Harness 核心
 │       ├── memory/                    # 记忆子系统
 │       ├── tools/builtin/             # 34 个内置工具
 │       └── intention.py host_profile.py bridge_relay.py schedule_engine.py
 │
+├── docs/superpowers/specs/            # 设计与实施 spec（Git 工具页、长任务结构化等）
 ├── gateway/hillgw.mjs                 # 自营 TLS 接入网关（零依赖单文件，独立部署）
 ├── runtime/                           # 打包用的嵌入式 Python 运行时（本地准备，不入库：.gitignore 整目录忽略）
 ├── scripts/                           # dev / package / clean / ci-check / deploy（deploy/ = 目标机一键部署脚本）
