@@ -46,6 +46,7 @@ import { useSSHStore } from '@/stores/ssh'
 import { useQuickCommandsStore, type QuickCommand } from '@/stores/quickCommands'
 import { useToastStore } from '@/stores/toast'
 import type { NavPage } from '@/composables/useSshNavigation'
+import { setGitSubTab } from '@/components/ssh/git/subTab'
 
 interface PaletteItem {
   key: string
@@ -74,23 +75,29 @@ const listRef = ref<HTMLElement | null>(null)
 qcStore.load()
 
 // ── 页面条目（顺序与 PAGE_SHORTCUTS 一致，标题条分组也按这个语义族） ──
-const PAGE_ITEMS: Array<{ page: Exclude<NavPage, 'home'>; label: string }> = [
+// Git 工具页拆两条深链（sub 经 subTab.ts 预置，页面挂载前也能指定目标子页）；
+// 两条目的 page 都是 'git'，页面清单守卫按集合对账不受影响。
+const PAGE_ITEMS: Array<{ page: Exclude<NavPage, 'home'>; label: string; sub?: 'accel' | 'repos' }> = [
   { page: 'remote-mgr', label: '打开：远程管理' },
   { page: 'sftp', label: '打开：SFTP 文件传输' },
   { page: 'dashboard', label: '打开：监控仪表盘' },
   { page: 'schedules', label: '打开：定时任务' },
   { page: 'tunnels', label: '打开：SSH 隧道' },
   { page: 'docker', label: '打开：Docker 管理' },
-  { page: 'git', label: '打开：Git 工具' },
+  { page: 'git', sub: 'accel', label: '打开：Git 加速' },
+  { page: 'git', sub: 'repos', label: '打开：Git 仓库管理' },
   { page: 'audit', label: '打开：运维轨迹' },
 ]
 
 function buildItems(): PaletteItem[] {
-  const items: PaletteItem[] = PAGE_ITEMS.map(({ page, label }) => ({
-    key: `page:${page}`,
+  const items: PaletteItem[] = PAGE_ITEMS.map(({ page, label, sub }) => ({
+    key: `page:${page}${sub ? ':' + sub : ''}`,
     group: '页面',
     label,
-    run: () => emit('navigate', page),
+    run: () => {
+      if (sub) setGitSubTab(sub)
+      emit('navigate', page)
+    },
   }))
   items.push({ key: 'page:home', group: '页面', label: '返回首页', run: () => emit('goHome') })
 
