@@ -146,4 +146,5 @@ _perf/
 # 代理工具运行产物（hook 状态、发现台账、会话配置，均本地生成勿入库）
 .mimosa/
 .zcode/
+.atomcode/
 .review_diff*.txt
