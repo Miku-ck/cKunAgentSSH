@@ -63,7 +63,7 @@ const sub = computed<GitSubTab>({
 })
 
 // 首访惰性挂载：默认子页 accel 首帧即挂；repos 只有被选中过才挂载
-// （避免只为看加速的用户一进 Git 页就触发本地仓库扫描）
+// （避免只为看加速的用户一进 Git 页就触发本地仓库取数）
 const visited = ref<Record<GitSubTab, boolean>>({ accel: sub.value === 'accel', repos: sub.value === 'repos' })
 watch(sub, (s) => { visited.value[s] = true }, { immediate: true })
 </script>

@@ -106,7 +106,7 @@
                跟着措施走而不是占总控的一级按钮位 -->
           <button
             class="btn btn-sm"
-            :disabled="accel.selfChecking || accel.activeMeasureCount === 0"
+            :disabled="masterBusy || accel.selfChecking || accel.activeMeasureCount === 0"
             :title="accel.activeMeasureCount === 0 ? '先开启至少一项加速措施' : '端到端诊断：git 读取 / 镜像 / SSH 443 / hosts'"
             @click="onSelfCheck"
           >{{ accel.selfChecking ? '自检中…' : '自检' }}</button>

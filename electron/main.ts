@@ -1463,10 +1463,6 @@ function setupSSHIPC(): void {
     return gitRepos!.addLocal(path)
   })
 
-  handleTrusted('gitrepos:addLocalMany', (_event, paths: string[]) => {
-    return gitRepos!.addLocalMany(paths)
-  })
-
   // 仅从注册表移除，绝不触碰磁盘文件
   handleTrusted('gitrepos:removeLocal', (_event, path: string) => {
     return gitRepos!.removeLocal(path)
@@ -1483,10 +1479,6 @@ function setupSSHIPC(): void {
     return res.canceled || !res.filePaths.length ? null : res.filePaths[0]
   })
 
-  handleTrusted('gitrepos:scanRoot', (_event, root: string) => {
-    return gitRepos!.scanRoot(root)
-  })
-
   handleTrusted('gitrepos:statusAll', (_event, paths: string[]) => {
     return gitRepos!.statusAll(paths)
   })
@@ -1501,6 +1493,11 @@ function setupSSHIPC(): void {
 
   handleTrusted('gitrepos:detail', (_event, path: string) => {
     return gitRepos!.detail(path)
+  })
+
+  // 提交图谱（--graph --all 原始输出，解析在渲染层）
+  handleTrusted('gitrepos:graphLog', (_event, path: string, limit: number) => {
+    return gitRepos!.graphLog(path, limit)
   })
 
   // ── TLS 接入网关（安全接入）──

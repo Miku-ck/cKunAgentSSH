@@ -1,5 +1,5 @@
 /**
- * Git 仓库管理 —— 主进程服务（本地仓库注册表 git-repos.json + 目录扫描 + 本地 git 执行）。
+ * Git 仓库管理 —— 主进程服务（本地仓库注册表 git-repos.json + 本地 git 执行）。
  *
  * 持久化骨架照抄 github-accel.ts（读-改-写经 enqueue 串行化 / tmp+rename 原子写 /
  * 损坏隔离备份）。git 一律 execFile + `-C <path>` 参数数组（不经 shell，无注入面）；
@@ -9,11 +9,12 @@
  */
 import { app } from 'electron'
 import { join, dirname } from 'path'
-import { readFile, writeFile, rename, mkdir, unlink, readdir } from 'fs/promises'
+import { readFile, writeFile, rename, mkdir, unlink } from 'fs/promises'
 import { existsSync } from 'fs'
 import { execFile } from 'child_process'
 import {
   GIT_LOG_FORMAT,
+  buildGraphLogArgs,
   firstLine,
   isValidRemoteRepoPath,
   parseGitLog,
@@ -31,9 +32,6 @@ const FETCH_TIMEOUT_MS = 60_000
 const PULL_TIMEOUT_MS = 120_000
 /** statusAll 并发上限：几十个仓库时不对进程池倾泻 */
 const STATUS_CONCURRENCY = 6
-/** 扫描深度与结果上限：防误选根目录后遍历整块盘 */
-const SCAN_MAX_DEPTH = 3
-const SCAN_MAX_RESULTS = 200
 /** 单条命令输出上限：仓库多 / 长提交主题时 1MB 默认缓冲容易被顶爆 */
 const GIT_MAX_BUFFER = 4 * 1024 * 1024
 /** 超时被杀沿用 coreutils timeout 的退出码约定 */
@@ -226,21 +224,6 @@ export class GitReposService {
     })
   }
 
-  async addLocalMany(paths: string[]): Promise<GitReposRegistry> {
-    return this.enqueue(async () => {
-      const list = Array.isArray(paths) ? paths.map(p => String(p || '').trim()).filter(Boolean) : []
-      const added: string[] = []
-      for (const p of list) {
-        if (isAbsolutePath(p) && isGitRepoPath(p)) added.push(p)
-      }
-      if (!added.length) throw new Error('没有可登记的仓库（路径须为绝对路径且含 .git）')
-      const reg = await readRegistryFromDisk()
-      for (const p of added) if (!reg.local.includes(p)) reg.local.push(p)
-      await writeRegistryToDisk(reg)
-      return reg
-    })
-  }
-
   /** 仅从注册表移除，绝不触碰磁盘文件 */
   async removeLocal(path: string): Promise<GitReposRegistry> {
     return this.enqueue(async () => {
@@ -269,38 +252,6 @@ export class GitReposService {
       await writeRegistryToDisk(reg)
       return reg
     })
-  }
-
-  /**
-   * 扫描根目录发现 .git 仓库：BFS、深度 ≤3、命中仓库即止（不下钻其子目录）、
-   * 跳过点开头目录与 node_modules，结果 ≤200。返回候选路径，登记与否由调用方决定。
-   */
-  async scanRoot(root: string): Promise<string[]> {
-    const rootPath = String(root || '').trim()
-    if (!isAbsolutePath(rootPath)) throw new Error('请提供扫描根目录的绝对路径')
-    const found: string[] = []
-    if (isGitRepoPath(rootPath)) return [rootPath]
-    const queue: Array<{ dir: string; depth: number }> = [{ dir: rootPath, depth: 0 }]
-    while (queue.length && found.length < SCAN_MAX_RESULTS) {
-      const { dir, depth } = queue.shift()!
-      let entries
-      try {
-        entries = await readdir(dir, { withFileTypes: true })
-      } catch {
-        continue // 无权限/已删除：跳过该目录，不中断整个扫描
-      }
-      for (const e of entries) {
-        if (found.length >= SCAN_MAX_RESULTS) break
-        if (!e.isDirectory() || e.name.startsWith('.') || e.name === 'node_modules') continue
-        const child = join(dir, e.name)
-        if (isGitRepoPath(child)) {
-          found.push(child)
-          continue
-        }
-        if (depth + 1 < SCAN_MAX_DEPTH) queue.push({ dir: child, depth: depth + 1 })
-      }
-    }
-    return found
   }
 
   /** 单仓一次取数：status / 最近提交 / origin 三条 execFile 并行 */
@@ -357,5 +308,10 @@ export class GitReposService {
       return { ok: false, error: firstLine(st.stderr) || '取数失败' }
     }
     return { ok: true, statusRaw: st.stdout, branchRaw: br.stdout, logRaw: lg.stdout }
+  }
+
+  /** 提交图谱原始输出（解析在渲染层 parseGraphLog，单测共用同一份）；limit 上限在 core 收口 */
+  async graphLog(path: string, limit: number): Promise<GitRawResult> {
+    return execGit(['-C', assertRepoPath(path), ...buildGraphLogArgs(limit)])
   }
 }

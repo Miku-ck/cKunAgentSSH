@@ -1,6 +1,6 @@
 <template>
   <div class="git-repos">
-    <!-- 工具条：过滤 / 位置切换 / 连接 / 登记 / 扫描 / 刷新（全部只属于仓库子页） -->
+    <!-- 工具条：过滤 / 位置切换 / 连接 / 登记 / 刷新（全部只属于仓库子页） -->
     <div class="toolbar">
       <label class="search">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -16,7 +16,6 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
         添加仓库
       </button>
-      <button v-if="isLocal" class="btn" type="button" :disabled="!!busy" title="选择根目录，扫描发现其下的 .git 仓库（深度 ≤3）" @click="onScan">扫描</button>
       <button class="btn icon" type="button" :disabled="loading || !!busy" title="刷新：重新读取各仓库状态" aria-label="刷新" @click="refresh()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
       </button>
@@ -42,7 +41,6 @@
         <span>尚未登记本地仓库</span>
         <div class="empty-actions">
           <button class="btn btn-primary" type="button" @click="onAdd">选择目录登记</button>
-          <button class="btn" type="button" @click="onScan">扫描目录发现</button>
         </div>
       </template>
       <template v-else>
@@ -192,7 +190,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useSSHStore, type SSHConnection, type TerminalSession } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
-import { toFriendlyMessage } from '@/api/client'
+import { toFriendlyMessage, unwrapIpcErrorEnvelope } from '@/api/client'
 import { useGithubAccelStore } from '@/stores/github-accel'
 import DockerConnectionPicker from '../docker/DockerConnectionPicker.vue'
 import GitRepoDetailDialog from './GitRepoDetailDialog.vue'
@@ -271,7 +269,19 @@ const loadError = ref<string | null>(null)
 const lastSync = ref('')
 let epoch = 0
 
-const errMsg = (e: unknown, fallback: string): string => e instanceof Error ? e.message : (String(e) || fallback)
+/**
+ * 错误 → toast 文案：剥掉 IPC 信封（主进程 reject 到渲染端会裹一层
+ * "Error invoking remote method …"）；「No handler registered」意味着运行中的
+ * 主进程还是旧构建 —— 提示重启而不是让用户对着信封原文猜。
+ */
+const errMsg = (e: unknown, fallback: string): string => {
+  const raw = e instanceof Error ? e.message : (String(e) || fallback)
+  const msg = unwrapIpcErrorEnvelope(raw) || fallback
+  if (/No handler registered/i.test(msg)) {
+    return `${msg}（运行中的应用还是旧构建：请完全退出后重启应用或 npm run dev）`
+  }
+  return msg
+}
 
 function remoteErrorRow(sessionId: string, path: string, msg: string): RepoRow {
   return {
@@ -532,7 +542,7 @@ async function onRemove(row: RepoRow): Promise<void> {
   })
 }
 
-// ── 登记：本地（目录选择器 / 扫描）与远程（路径表单） ──
+// ── 登记：本地（目录选择器）与远程（路径表单） ──
 async function onAdd(): Promise<void> {
   if (!isLocal.value) { addRemotePath.value = ''; showAddRemote.value = true; return }
   await withBusy('add', async () => {
@@ -547,29 +557,6 @@ async function onAdd(): Promise<void> {
       toast.success(`已登记 ${repoNameOf(dir)}`)
     } catch (e) {
       toast.error(errMsg(e, '登记失败'))
-    }
-  })
-}
-
-async function onScan(): Promise<void> {
-  await withBusy('scan', async () => {
-    const api = window.electronAPI
-    if (!api) return
-    try {
-      const root = await api.gitreposPickDirectory()
-      if (!root) return
-      const found = await api.gitreposScanRoot(root)
-      const fresh = found.filter(p => !localPaths.value.includes(p))
-      if (!fresh.length) {
-        toast.info(found.length ? '发现的仓库都已登记过' : '该目录下（深度 ≤3）没有发现 .git 仓库')
-        return
-      }
-      await api.gitreposAddLocalMany(fresh)
-      await loadRegistry()
-      await refresh()
-      toast.success(`扫描完成：新登记 ${fresh.length} 个仓库`)
-    } catch (e) {
-      toast.error(errMsg(e, '扫描失败'))
     }
   })
 }

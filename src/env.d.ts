@@ -373,18 +373,17 @@ interface ElectronAPI {
   // Git 仓库管理（主进程实现见 electron/git-repos.ts；命令/解析纯逻辑在 shared/git-repos-core.ts）
   gitreposGetRegistry: () => Promise<import('../shared/git-repos-core').GitReposRegistry>
   gitreposAddLocal: (path: string) => Promise<import('../shared/git-repos-core').GitReposRegistry>
-  gitreposAddLocalMany: (paths: string[]) => Promise<import('../shared/git-repos-core').GitReposRegistry>
   gitreposRemoveLocal: (path: string) => Promise<import('../shared/git-repos-core').GitReposRegistry>
   gitreposSetRemotePaths: (connectionId: string, paths: string[]) => Promise<import('../shared/git-repos-core').GitReposRegistry>
   /** 本机目录选择器（登记本地仓库入口）；取消返回 null */
   gitreposPickDirectory: () => Promise<string | null>
-  /** 扫描根目录发现 .git 仓库（深度≤3、≤200 条），返回候选路径 */
-  gitreposScanRoot: (root: string) => Promise<string[]>
   gitreposStatusAll: (paths: string[]) => Promise<import('../shared/git-repos-core').LocalRepoStatusResult[]>
   gitreposFetchOne: (path: string) => Promise<import('../shared/git-repos-core').GitRawResult>
   gitreposPullOne: (path: string) => Promise<import('../shared/git-repos-core').GitRawResult>
   /** 详情三段原始输出（status / branch -vv / log -20），解析在渲染层 */
   gitreposDetail: (path: string) => Promise<{ ok: boolean; error?: string; statusRaw?: string; branchRaw?: string; logRaw?: string }>
+  /** 提交图谱原始输出（--graph --all + \x01 分列格式），解析在渲染层 parseGraphLog */
+  gitreposGraphLog: (path: string, limit: number) => Promise<import('../shared/git-repos-core').GitRawResult>
   // TLS 接入网关（安全接入）
   gatewayList: () => Promise<GatewayRecord[]>
   gatewaySave: (rec: GatewayRecord) => Promise<GatewayRecord>

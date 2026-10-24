@@ -45,28 +45,57 @@
               <span v-if="b.current" class="grd-bcur">✓ 当前</span>
             </div>
           </section>
+          <!-- 提交图谱：文字档（--graph --all）；图谱取数失败时回退 detail 的平铺提交列表 -->
           <section>
-            <h4>最近提交 <span v-if="detail.commits.length" class="grd-count">{{ detail.commits.length }}</span></h4>
-            <div v-if="!detail.commits.length" class="grd-empty">空仓库，尚无提交</div>
-            <div v-for="c in detail.commits" :key="c.hash" class="grd-commit">
-              <span class="grd-chash mono">{{ c.hash.slice(0, 7) }}</span>
-              <span class="grd-cmsg" :title="c.subject">{{ c.subject }}</span>
-              <span class="grd-cmeta">{{ c.author }} · {{ c.relTime }}</span>
-            </div>
+            <h4>提交图谱 <span v-if="graphCommitCount" class="grd-count">{{ graphCommitCount }}</span></h4>
+            <template v-if="graphRows.length">
+              <div v-for="(row, i) in graphRows" :key="i" class="grd-grow">
+                <!-- white-space:pre 保留对齐空格，固定行高保证 │ 跨行连续 -->
+                <span class="grd-gcol mono">{{ row.graph }}</span>
+                <template v-if="row.commit">
+                  <span class="grd-chash mono">{{ row.commit.hash.slice(0, 7) }}</span>
+                  <span
+                    v-for="ref in row.refs"
+                    :key="ref"
+                    class="grd-ref"
+                    :class="'r-' + graphRefKind(ref)"
+                  >{{ ref.replace('tag: ', '') }}</span>
+                  <span class="grd-cmsg" :title="row.commit.subject">{{ row.commit.subject }}</span>
+                  <span class="grd-cmeta">{{ row.commit.author }} · {{ row.commit.relTime }}</span>
+                </template>
+              </div>
+              <div class="grd-gfoot">
+                <button v-if="canLoadMore" class="btn btn-sm" type="button" :disabled="graphLoading" @click="loadMore">
+                  {{ graphLoading ? '加载中…' : '加载更多 30 条' }}
+                </button>
+                <span v-else-if="graphLimit >= GRAPH_MAX_LIMIT" class="grd-gend">已达 {{ GRAPH_MAX_LIMIT }} 条上限</span>
+                <span v-else class="grd-gend">已到最早提交</span>
+              </div>
+            </template>
+            <div v-else-if="graphLoading" class="grd-empty">正在读取提交图谱…</div>
+            <template v-else-if="graphError">
+              <div class="grd-err" role="alert">{{ graphError }}（回退为平铺列表）</div>
+              <div v-for="c in detail?.commits || []" :key="c.hash" class="grd-commit">
+                <span class="grd-chash mono">{{ c.hash.slice(0, 7) }}</span>
+                <span class="grd-cmsg" :title="c.subject">{{ c.subject }}</span>
+                <span class="grd-cmeta">{{ c.author }} · {{ c.relTime }}</span>
+              </div>
+            </template>
+            <div v-else class="grd-empty">空仓库，尚无提交</div>
           </section>
         </template>
       </div>
 
       <!-- 动作统一回抛父级：确认框 / 审计 / 动作锁都收在 GitReposPanel -->
       <div class="grd-foot">
-        <button class="btn grd-remove" type="button" @click="emit('remove')">移出列表</button>
+        <button class="btn grd-remove" type="button" :disabled="!!busy" @click="emit('remove')">移出列表</button>
         <span class="grd-foot-spacer"></span>
-        <button class="btn" type="button" :disabled="!!repo.error" @click="emit('fetch')">fetch</button>
-        <button class="btn btn-primary" type="button" :disabled="!!repo.error" @click="emit('pull')">
+        <button class="btn" type="button" :disabled="!!busy || !!repo.error" @click="emit('fetch')">fetch</button>
+        <button class="btn btn-primary" type="button" :disabled="!!busy || !!repo.error" @click="emit('pull')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
           拉取
         </button>
-        <button class="btn" type="button" @click="emit('term')">
+        <button class="btn" type="button" :disabled="!!busy" @click="emit('term')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg>
           打开终端
         </button>
@@ -81,12 +110,19 @@
 // 的三段复合命令。解析共用 shared/git-repos-core.parseRepoDetailSections（单测同源）。
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
+  GRAPH_MAX_LIMIT,
+  buildRemoteGraphCmd,
   buildRemoteRepoDetailCmd,
+  firstLine,
+  friendlyGitStderr,
+  graphHasMore,
+  graphRefKind,
+  parseGraphLog,
   parseRepoDetailSections,
   splitBySep,
-  firstLine,
   repoRowKind,
   type GitBranchInfo,
+  type GraphCommitRow,
   type RepoDetail,
   type RepoRow,
 } from '../../../../shared/git-repos-core'
@@ -95,6 +131,8 @@ const props = defineProps<{
   repo: RepoRow
   /** git insteadOf 是否生效（加速联动标记，来自加速 store 的健康状态） */
   accelActive: boolean
+  /** 父级动作锁（fetch/pull 在途时禁用按钮，与列表行内按钮同一把锁） */
+  busy?: string
 }>()
 const emit = defineEmits<{ close: []; fetch: []; pull: []; term: []; remove: [] }>()
 
@@ -104,11 +142,12 @@ const detail = ref<RepoDetail | null>(null)
 
 const DETAIL_TIMEOUT_SEC = 20
 
-const kindClass = computed(() => `k-${repoRowKind(props.repo)}`)
+// 取数失败的行不走 repoRowKind（error 是行字段不是状态档），先于状态档判定
+const kindClass = computed(() => props.repo.error ? 'k-err' : `k-${repoRowKind(props.repo)}`)
 const kindText = computed(() => {
+  if (props.repo.error) return '取数失败'
   const k = repoRowKind(props.repo)
   const map: Record<string, string> = {
-    error: '取数失败',
     dirty: `脏区 ${props.repo.dirtyFiles} 处`,
     diverge: `分歧 ↑${props.repo.ahead}↓${props.repo.behind}`,
     behind: `落后 ↓${props.repo.behind}`,
@@ -162,9 +201,52 @@ function onKey(e: KeyboardEvent): void {
   if (e.key === 'Escape') emit('close')
 }
 
+// ── 提交图谱：独立于 detail 取数（有自己的分页状态）──
+const GRAPH_PAGE = 30
+const graphRows = ref<GraphCommitRow[]>([])
+const graphLimit = ref(GRAPH_PAGE)
+const graphLoading = ref(false)
+const graphError = ref('')
+
+const graphCommitCount = computed(() => graphRows.value.filter(r => r.commit).length)
+const canLoadMore = computed(() => graphHasMore(graphRows.value, graphLimit.value))
+
+async function loadGraph(): Promise<void> {
+  const api = window.electronAPI
+  if (!api) return
+  graphLoading.value = true
+  try {
+    let raw = ''
+    if (props.repo.scope === 'local') {
+      const r = await api.gitreposGraphLog(props.repo.path, graphLimit.value)
+      if (r.code !== 0) throw new Error(firstLine(friendlyGitStderr(r.stderr)) || `图谱取数退出码 ${r.code}`)
+      raw = r.stdout
+    } else {
+      const sid = props.repo.sessionId
+      if (!sid) throw new Error('远端会话不可用')
+      const r = await api.sshExec(sid, buildRemoteGraphCmd(props.repo.path, graphLimit.value), DETAIL_TIMEOUT_SEC)
+      // 空仓库 log 也退出 0；只在既无输出又非零时才算失败
+      if (r.exitCode !== 0 && !r.stdout.trim()) throw new Error(firstLine(r.stderr) || '远端图谱取数失败')
+      raw = r.stdout
+    }
+    graphRows.value = parseGraphLog(raw)
+    graphError.value = ''
+  } catch (e) {
+    graphError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    graphLoading.value = false
+  }
+}
+
+function loadMore(): void {
+  graphLimit.value += GRAPH_PAGE
+  void loadGraph()
+}
+
 onMounted(() => {
   document.addEventListener('keydown', onKey)
   void load()
+  void loadGraph()
 })
 onUnmounted(() => document.removeEventListener('keydown', onKey))
 </script>
@@ -218,6 +300,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
 .k-ahead { background: color-mix(in srgb, var(--accent-purple) 12%, transparent); color: var(--accent-purple); }
 .k-clean { background: var(--status-success-bg); color: var(--status-success-text); }
 .k-none { background: var(--bg-hover); color: var(--text-tertiary); }
+.k-err { background: var(--status-error-bg); color: var(--status-error-text); }
 .k-error { background: var(--status-error-bg); color: var(--status-error-text); }
 
 .grd-icon-btn {
@@ -362,6 +445,45 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
   padding: 3px 0;
   min-width: 0;
 }
+
+/* ── 提交图谱行：图谱列 pre 保留空格、行高固定，│ 才能跨行连成线 ── */
+.grd-grow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 20px;
+  line-height: 20px;
+  font-size: 11px;
+  min-width: 0;
+}
+.grd-gcol {
+  white-space: pre;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+/* 引用徽章：HEAD 实底强调，本地/远端/标签描边色分（不单靠颜色：文字本身可辨） */
+.grd-ref {
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 14px;
+  padding: 0 5px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.r-head { background: var(--accent-primary); border-color: var(--accent-primary); color: var(--accent-on); }
+.r-local { color: var(--accent-purple); border-color: color-mix(in srgb, var(--accent-purple) 45%, transparent); }
+.r-remote { color: var(--accent-cyan); border-color: color-mix(in srgb, var(--accent-cyan) 45%, transparent); }
+.r-tag { color: var(--accent-yellow); border-color: color-mix(in srgb, var(--accent-yellow) 45%, transparent); }
+
+.grd-gfoot {
+  display: flex;
+  justify-content: center;
+  padding-top: 6px;
+}
+.grd-gend { font-size: 11px; color: var(--text-tertiary); }
 .grd-chash { font-size: 11px; color: var(--accent-orange); flex-shrink: 0; }
 .grd-cmsg {
   flex: 1;

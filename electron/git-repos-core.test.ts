@@ -10,7 +10,9 @@ import {
   isValidRemoteRepoPath, shSingleQuote, REMOTE_SEP,
   buildRemoteRepoStatusCmd, buildRemoteRepoDetailCmd, buildRemoteRepoVerifyCmd,
   buildRemoteGitActionCmd, splitBySep, toRemoteRepoRow, parseRepoDetailSections,
-  interpretPull, firstLine,
+  interpretPull, firstLine, friendlyGitStderr,
+  GRAPH_MAX_LIMIT, buildGraphLogArgs, buildRemoteGraphCmd,
+  parseGraphLog, graphRefKind, graphHasMore,
   type RepoRow,
 } from '../shared/git-repos-core'
 
@@ -247,8 +249,70 @@ describe('interpretPull（--ff-only 安全边界）', () => {
     expect(out.kind).toBe('failed')
     expect(out.message).toBe('fatal: Authentication failed')
   })
+  it('git-not-found 哨兵 → 友好文案而不是黑话', () => {
+    const out = interpretPull('', 'git-not-found', -1)
+    expect(out.kind).toBe('failed')
+    expect(out.message).toBe('未检测到 git（请安装 git 或加入 PATH 后重试）')
+    expect(friendlyGitStderr('fatal: x')).toBe('fatal: x')
+  })
   it('firstLine 取首个非空行', () => {
     expect(firstLine('  \n\nfatal: x\nnext')).toBe('fatal: x')
     expect(firstLine('')).toBe('')
+  })
+})
+
+describe('提交图谱（--graph --all 解析与命令构造）', () => {
+  /** 逐字对照 `git log --graph --all --format=%x01%H%x1f…` 的真实输出形态 */
+  const raw = [
+    `* \x01e511be5aaa\x1ffix: a\x1fckun\x1f2 hours ago\x1fHEAD -> main, origin/main, tag: v1.0`,
+    `|\\`,
+    `| * \x01a1b2c3ddd\x1ffeat: b\x1flin\x1fyesterday\x1forigin/dev`,
+    `* | \x019fabfa2eee\x1fdocs: c\x1fckun\x1f3 days ago\x1f`,
+    `|/`,
+    `* \x01d4e5f6accc\x1finit\x1fckun\x1f1 month ago\x1f`,
+  ].join('\n')
+
+  it('parseGraphLog：提交行切出图谱列/字段/引用，连接线行保留拓扑', () => {
+    const rows = parseGraphLog(raw)
+    expect(rows).toHaveLength(6)
+    expect(rows[0]).toEqual({
+      graph: '* ',
+      commit: { hash: 'e511be5aaa', subject: 'fix: a', author: 'ckun', relTime: '2 hours ago' },
+      refs: ['HEAD -> main', 'origin/main', 'tag: v1.0'],
+    })
+    // 连接线行（合叉的竖线/斜线段）：commit 为 null 但图谱列保留
+    expect(rows[1]).toEqual({ graph: '|\\', commit: null, refs: [] })
+    expect(rows[2].graph).toBe('| * ')
+    expect(rows[2].refs).toEqual(['origin/dev'])
+    expect(rows[3].graph).toBe('* | ')
+    expect(rows[3].refs).toEqual([])
+    expect(rows[4].commit).toBeNull()
+    expect(rows[5].commit?.subject).toBe('init')
+  })
+
+  it('graphRefKind：HEAD / 本地 / 远端 / 标签四档', () => {
+    expect(graphRefKind('HEAD -> main')).toBe('head')
+    expect(graphRefKind('main')).toBe('local')
+    expect(graphRefKind('origin/main')).toBe('remote')
+    expect(graphRefKind('tag: v1.0')).toBe('tag')
+  })
+
+  it('graphHasMore：打满 limit 且未触顶才有更多', () => {
+    const rows = parseGraphLog(raw) // 4 条提交
+    expect(graphHasMore(rows, 4)).toBe(true)
+    expect(graphHasMore(rows, 10)).toBe(false)
+    // limit 触到 500 上限：即便打满也不再提供加载更多
+    expect(graphHasMore(rows, 500)).toBe(false)
+  })
+
+  it('buildGraphLogArgs：参数形态与 limit 收口（默认 30，上限 500）', () => {
+    expect(buildGraphLogArgs(30)).toEqual(['log', '-n', '30', '--graph', '--all', '--format=%x01%H%x1f%s%x1f%an%x1f%cr%x1f%D'])
+    expect(buildGraphLogArgs(0)[2]).toBe('30')
+    expect(buildGraphLogArgs(9999)[2]).toBe(String(GRAPH_MAX_LIMIT))
+  })
+
+  it('buildRemoteGraphCmd：路径单引号包裹 + 同一套参数', () => {
+    const cmd = buildRemoteGraphCmd('/srv/api', 50)
+    expect(cmd).toBe("git -C '/srv/api' log -n 50 --graph --all --format='%x01%H%x1f%s%x1f%an%x1f%cr%x1f%D'")
   })
 })

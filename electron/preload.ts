@@ -216,16 +216,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Git 仓库管理（本地注册表 + 本地 git 执行；远端命令由渲染层经 sshExec 下发）
   gitreposGetRegistry: () => ipcRenderer.invoke('gitrepos:getRegistry'),
   gitreposAddLocal: (path: string) => ipcRenderer.invoke('gitrepos:addLocal', path),
-  gitreposAddLocalMany: (paths: string[]) => ipcRenderer.invoke('gitrepos:addLocalMany', paths),
   gitreposRemoveLocal: (path: string) => ipcRenderer.invoke('gitrepos:removeLocal', path),
   gitreposSetRemotePaths: (connectionId: string, paths: string[]) =>
     ipcRenderer.invoke('gitrepos:setRemotePaths', connectionId, paths),
   gitreposPickDirectory: () => ipcRenderer.invoke('gitrepos:pickDirectory'),
-  gitreposScanRoot: (root: string) => ipcRenderer.invoke('gitrepos:scanRoot', root),
   gitreposStatusAll: (paths: string[]) => ipcRenderer.invoke('gitrepos:statusAll', paths),
   gitreposFetchOne: (path: string) => ipcRenderer.invoke('gitrepos:fetchOne', path),
   gitreposPullOne: (path: string) => ipcRenderer.invoke('gitrepos:pullOne', path),
   gitreposDetail: (path: string) => ipcRenderer.invoke('gitrepos:detail', path),
+  /** 提交图谱原始输出（--graph --all + \x01 分列格式），解析在渲染层 parseGraphLog */
+  gitreposGraphLog: (path: string, limit: number) => ipcRenderer.invoke('gitrepos:graphLog', path, limit),
   /** 下载进度与状态迁移（一条通道，state 区分）；返回取消监听函数 */
   onGhaccelDownload: (callback: (data: any) => void) => {
     const handler = (_event: any, data: any) => callback(data)

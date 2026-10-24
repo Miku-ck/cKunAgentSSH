@@ -193,6 +193,94 @@ export function parseGitLog(raw: string): GitCommitInfo[] {
   return out
 }
 
+// ─── 提交图谱（文字档：git log --graph --all 的输出解析） ───
+
+/** 图谱行：graph 列原样字符（含对齐空格，等宽渲染保证 │ 连续）；commit 为 null = 纯连接线行 */
+export interface GraphCommitRow {
+  graph: string
+  commit: GitCommitInfo | null
+  /** %D 的引用名（HEAD -> main / origin/main / tag: v1.2），空数组 = 无装饰 */
+  refs: string[]
+}
+
+/**
+ * 图谱格式串：\x01 领起提交字段（与前面的图谱字符列切分），\x1f 分字段，
+ * 尾部 %D 内联引用名——一条命令拿全拓扑 + 提交 + 分支指针，不需要 for-each-ref。
+ * --graph 自带 topological order（git 约定），无需再指定排序。
+ */
+export const GIT_GRAPH_FORMAT = '%x01%H%x1f%s%x1f%an%x1f%cr%x1f%D'
+
+/** 图谱条数上限：防御巨型仓库把输出顶爆（本地 4MB maxBuffer / 远程 1MB ssh 截断） */
+export const GRAPH_MAX_LIMIT = 500
+
+function clampGraphLimit(limit: number): number {
+  const n = Math.floor(Number(limit))
+  if (!Number.isFinite(n) || n < 1) return 30
+  return Math.min(n, GRAPH_MAX_LIMIT)
+}
+
+/** 本地图谱取数参数（electron/git-repos.ts 经 execFile 数组下发，不经 shell） */
+export function buildGraphLogArgs(limit: number): string[] {
+  return ['log', '-n', String(clampGraphLimit(limit)), '--graph', '--all', `--format=${GIT_GRAPH_FORMAT}`]
+}
+
+/** 远程一仓图谱：单命令取回（复用现有 sshExec 通道） */
+export function buildRemoteGraphCmd(path: string, limit: number): string {
+  return `git -C ${shSingleQuote(path)} log -n ${clampGraphLimit(limit)} --graph --all --format='${GIT_GRAPH_FORMAT}'`
+}
+
+/** 图谱字符集（用于识别纯连接线行；含 git 历史上用过的 ASCII 画线字符） */
+const GRAPH_CHARS = /[\s│├└┤┬┴┼╭╮╯╰\\\/|*_\-.,'`]/g
+
+function isGraphOnlyLine(line: string): boolean {
+  if (!line.trim()) return false
+  const stripped = line.replace(GRAPH_CHARS, '')
+  return stripped.length === 0
+}
+
+/**
+ * 解析 `git log --graph --all --format=<GIT_GRAPH_FORMAT>` 输出。
+ * 提交行 = `<图谱字符>\x01<hash>\x1f<subject>\x1f<author>\x1f<relTime>\x1f<refs>`；
+ * 连接线行 = 只有图谱字符（合叉的竖线/斜线段），保留渲染才不丢拓扑。
+ */
+export function parseGraphLog(raw: string): GraphCommitRow[] {
+  const rows: GraphCommitRow[] = []
+  for (const line of raw.split('\n')) {
+    if (!line) continue
+    const sep = line.indexOf('\x01')
+    if (sep < 0) {
+      if (isGraphOnlyLine(line)) rows.push({ graph: line, commit: null, refs: [] })
+      continue
+    }
+    const fields = line.slice(sep + 1).split('\x1f')
+    if (fields.length < 4) continue
+    const refs = (fields[4] || '').split(',').map(s => s.trim()).filter(Boolean)
+    rows.push({
+      graph: line.slice(0, sep),
+      commit: { hash: fields[0], subject: fields[1], author: fields[2], relTime: fields[3] },
+      refs,
+    })
+  }
+  return rows
+}
+
+/** 引用徽章的着色档：HEAD/当前分支、本地分支、远端引用、标签 */
+export type GraphRefKind = 'head' | 'local' | 'remote' | 'tag'
+
+export function graphRefKind(ref: string): GraphRefKind {
+  if (ref.startsWith('HEAD')) return 'head'
+  if (ref.startsWith('tag:')) return 'tag'
+  if (ref.includes('/')) return 'remote'
+  return 'local'
+}
+
+/** 这次取回的提交数是否打满了 limit（「加载更多」的可见性判据；触到 500 上限则不再给） */
+export function graphHasMore(rows: GraphCommitRow[], limit: number): boolean {
+  const capped = clampGraphLimit(limit)
+  const commits = rows.filter(r => r.commit).length
+  return capped < GRAPH_MAX_LIMIT && commits === capped
+}
+
 // ─── origin URL → host / slug ───
 
 /** https / scp / ssh 带端口三种写法都归一到 { host, slug }；识别不了返回 null */
