@@ -264,27 +264,48 @@ _PERSISTENCE_PREFIXES = (
 # 还有内容，`grep -r . ~/.ssh`、`ls ~/.ssh`、`tar czf x.tgz ~/.ssh` 这类一次性
 # 倒出整个私钥目录的命令实测判 safe —— 覆盖面比 `~/.ssh/id_rsa` 单文件更广。
 # 前导边界 (^|[/~]) + 行尾锚点避免 `app.ssh`、`.sshconfig` 这类兄弟名字误命中。
+# 审查2026-10-25补全：各生态的**默认凭据落点**（此前 cat 它们全部免审直读）——
+# .aws/credentials（AK/SK）、.kube/config（内嵌客户端证书与 token）、.netrc、
+# .git-credentials（明文凭证 store）、.docker/config.json（registry authbase64）、
+# .npmrc/.pypirc（CI 发布 token）。.npmrc 对**项目级**文件也命中：仓库内 .npmrc
+# 常含发布 token，误拦代价一张卡（同 F6 的取舍）；`.aws/config` 只是 profile
+# 配置不含密钥，刻意不收整个 .aws 目录 —— 误拦锁见 test_safety_credential_file_families.py。
 _SECRET_FILE_RE = re.compile(
     r"(/etc/(?:passwd|shadow|sudoers|gshadow|master\.passwd)|"
     r"(?:/root|~|\$HOME)/?\.ssh/"
     r"|/\.ssh/(?:id_|authorized_keys)"
     r"|/id_(?:rsa|dsa|ecdsa|ed25519)\b"
-    r"|(?:^|[/~])\.ssh/?$)"
+    r"|(?:^|[/~])\.ssh/?$"
+    r"|(?:^|[/~])\.aws/credentials\b"
+    r"|(?:^|[/~])\.kube/config\b"
+    r"|(?:^|[/~])\.netrc\b"
+    r"|(?:^|[/~])\.git-credentials\b"
+    r"|(?:^|[/~])\.docker/config\.json\b"
+    r"|(?:^|[/~])\.npmrc\b"
+    r"|(?:^|[/~])\.pypirc\b"
+    r"|(?:^|[/~])\.config/gcloud/(?:legacy_credentials|credentials\.db|access_tokens\.db|application_default_credentials)"
+    r")"
 )
 
 # Windows 形态的同一族凭据路径。为什么必须有：`file_read`/`file_grep`/`file_glob` 在无
 # SSH 会话时降级读**本机**文件（原 docs/security-boundary.md §7 的"不对称"条目，该文档已退役），本机就是
 # Windows —— 实测同一条私钥写成 `C:/Users/a/.ssh/id_rsa` 判 dangerous、写成
 # `C:\Users\a\.ssh\id_rsa` 判 safe，而 Windows 文件系统既不分大小写也用反斜杠分隔，
-# 两者是同一个文件。覆盖面与 _SECRET_FILE_RE 严格对齐（.ssh 目录 + id_* 私钥），
-# 不额外加宽 —— 主机私钥另有缺口，同一份退役文档 §7 登记过，仍未补。
+# 两者是同一个文件。覆盖面与 _SECRET_FILE_RE 严格对齐（.ssh 目录 + id_* 私钥 +
+# 2026-10-25 的凭据落点家族），不额外加宽 —— 主机私钥另有缺口，同一份退役文档 §7
+# 登记过，仍未补。
 # IGNORECASE 只作用于带盘符的形态：Linux 上 `/etc/PASSWD` 不是 `/etc/passwd`，
 # 把大小写不敏感推广到 POSIX 等于凭空造出一批不存在的命中。
 _WIN_SECRET_PATH_RE = re.compile(
     r"[a-z]:/(?:[^/]*/)*\.ssh(?:/?$|/(?:id_|authorized_keys))"
     r"|[a-z]:/(?:[^/]*/)*id_(?:rsa|dsa|ecdsa|ed25519)\b"
     r"|[a-z]:/(?:[^/]*/)?"
-    r"(?:users|home)/[^/]+/\.ssh/?$",
+    r"(?:users|home)/[^/]+/\.ssh/?$"
+    r"|[a-z]:/(?:[^/]*/)*\.aws/credentials\b"
+    r"|[a-z]:/(?:[^/]*/)*\.kube/config\b"
+    r"|[a-z]:/(?:[^/]*/)*\.(?:netrc|git-credentials|npmrc|pypirc)\b"
+    r"|[a-z]:/(?:[^/]*/)*\.docker/config\.json\b"
+    r"|[a-z]:/(?:[^/]*/)*\.config/gcloud/(?:legacy_credentials|credentials\.db|access_tokens\.db|application_default_credentials)",
     re.IGNORECASE,
 )
 

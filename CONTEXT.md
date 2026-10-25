@@ -8,7 +8,7 @@
 | **真就绪**（`whenReady()` / `ready`） | 后端已通过 `/health` 健康检查、可以接请求的状态 | 渲染层的状态机只能由真就绪驱动；端口号至多当 URL 提示用 |
 | **降级模式**（degraded single-instance） | 拿不到单实例锁、但已证实是 userData 不可写（而非真有第二个实例）时继续启动，此时**单实例保证失效** | 与"已有实例→退出"是两种语义；两者的判据必须同源，否则会退回"打印继续启动却什么都不做"的僵尸分支 |
 | **内嵌运行时**（bundled runtime） | 构建期把 Python 解释器随包放进 `resources/python-runtime/`；Windows 认 `runtime/python.exe`，POSIX 认 `runtime/bin/python3` | 两侧路径口径不一致过 —— 探到却读不到，mac/linux 等于从来没有内嵌运行时 |
-| **孤儿后端**（orphan backend） | 上次应用异常退出后残留的 Python 后端进程，持有过期的 bridge 端口/token | 它的清理判据有宽/严之争，取舍记在 ADR 0003 |
+| **孤儿后端**（orphan backend） | 上次应用异常退出后残留的 Python 后端进程，持有过期的 bridge 端口/token | 它的清理判据有宽/严之争，取舍记在 `electron/backend-manager.ts` 的 `killOrphanBackends` 注释（粗筛 + 二次甄别 + 按端口签名剔除自家）与 git history |
 | **半写损坏**（torn write） | 进程被杀在写文件中间，留下半个 JSON | 项目内所有落盘必须 tmp+rename/os.replace 原子写，就是为了不产生这个词 |
 | **隔离**（quarantine，`.corrupt-<ts>.bak`） | 读不出可信内容的文件被改名留证，而不是被静默当空集用 | "静默当空集"会让下一次写盘用子集覆盖真实基准；读不出必须诚实上报"不知道" |
 | **审计结论口径**（`conclusion ∈ {…}`） | 后端枚举、前端筛选下拉、请求体类型三处必须同一份结论取值 | 三处同源的守卫钉在 backend/tests/test_ai_loop_core_regression.py |
