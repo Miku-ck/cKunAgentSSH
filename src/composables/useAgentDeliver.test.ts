@@ -14,7 +14,9 @@
  * - 哨兵行匹配对 ANSI 转义 / 提示符粘连 / \r\n / 跨 chunk 撕裂容错，
  *   回显的原始命令行不误触发 BEGIN；
  * - 终态细化：done（exit 0）/ failed（exit 非零）/ timeout（60s 兜底）；
- * - 超时结构化诊断（receivedAny / sawBegin / 订阅是否建立）。
+ * - 超时结构化诊断（receivedAny / sawBegin / 订阅是否建立）；
+ * - 捕获输出超限截断：达到 256KB 上限即停止累加、标记只追加一次，
+ *   END 哨兵仍能正常收尾，回传内容同步受限。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -357,6 +359,80 @@ describe('哨兵行匹配与捕获终态', () => {
       })
     } finally {
       warnSpy.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('捕获输出超限截断', () => {
+  beforeEach(() => {
+    useAgentDeliver().resetDeliveries()
+    postMock.mockClear()
+    installElectronApi()
+  })
+
+  /** 生成 n 行 1KB 的回显（\r\n 行尾，贴合真实终端流；n 行约 n KB） */
+  function burstLines(n: number): string {
+    const line = 'x'.repeat(1000)
+    return Array.from({ length: n }, () => line).join('\r\n') + '\r\n'
+  }
+
+  it('输出达到 256KB 上限即停止累加：超限期间不收尾，END 到来才闭合且回传受限', async () => {
+    const marker = await deliverAuto('t-cap-trunc')
+    ingestOutput('sess-1', `__AGENT_BEGIN__ ${marker}\r\n`)
+    ingestOutput('sess-1', burstLines(300)) // ~300KB，越过 256KB 上限
+    // 超限不等于收尾：还没看到 END 哨兵，不回传、不落终态
+    expect(deliveryOf('t-cap-trunc')?.status).toBe('capturing')
+    expect(postMock).not.toHaveBeenCalled()
+
+    // 截断后 END 哨兵仍能正常收尾
+    ingestOutput('sess-1', `__AGENT_END__ ${marker}:0\r\n`)
+    await flushAsync()
+
+    const d = deliveryOf('t-cap-trunc')
+    expect(d?.status).toBe('done')
+    expect(d?.exit_code).toBe(0)
+    // 采集在 256KB 上限处截断，尾部是固定的截断标记
+    expect(d?.output?.endsWith('[输出已截断，超过 256KB 上限]')).toBe(true)
+    // 采集内容受限：不再随注入量继续增长
+    expect(d?.output?.length).toBeLessThan(256 * 1024)
+    // 回传与卡片展示是同一份受限内容：轨迹里不会出现全量输出
+    expect(postMock).toHaveBeenCalledTimes(1)
+    expect(postMock.mock.calls[0][1]).toBe(d?.output)
+  })
+
+  it('截断标记只追加一次：之后持续回显（tail -f 式突发）不再累加', async () => {
+    const marker = await deliverAuto('t-cap-once')
+    ingestOutput('sess-1', `__AGENT_BEGIN__ ${marker}\r\n`)
+    ingestOutput('sess-1', burstLines(300))
+    ingestOutput('sess-1', burstLines(300))
+    ingestOutput('sess-1', burstLines(300))
+    ingestOutput('sess-1', `__AGENT_END__ ${marker}:0\r\n`)
+    await flushAsync()
+
+    const out = deliveryOf('t-cap-once')?.output ?? ''
+    // 恰好出现 1 次：split 出 2 段
+    expect(out.split('[输出已截断，超过 256KB 上限]')).toHaveLength(2)
+    // 三波共 ~900KB 注入，回传仍停在截断时那一份
+    expect(out.length).toBeLessThan(256 * 1024)
+  })
+
+  it('截断后 60s 超时兜底：回传的仍是受限内容而非全量输出', async () => {
+    vi.useFakeTimers()
+    try {
+      const marker = await deliverAuto('t-cap-timeout')
+      ingestOutput('sess-1', `__AGENT_BEGIN__ ${marker}\r\n`)
+      ingestOutput('sess-1', burstLines(600))
+      await vi.advanceTimersByTimeAsync(60_000)
+
+      const d = deliveryOf('t-cap-timeout')
+      expect(d?.status).toBe('timeout')
+      expect(d?.output).toContain('[输出已截断，超过 256KB 上限]')
+      expect(d?.output).toContain('执行超时')
+      const last = postMock.mock.calls[postMock.mock.calls.length - 1]
+      expect(last?.[0]).toBe('t-cap-timeout')
+      expect((last?.[1] as string).length).toBeLessThan(256 * 1024 + 64)
+    } finally {
       vi.useRealTimers()
     }
   })

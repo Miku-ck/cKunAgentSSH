@@ -122,8 +122,10 @@ interface CaptureState {
   sawBegin: boolean
   /** 当前不完整的一行（缓存跨 chunk 撕裂的片段） */
   partialLine: string
-  /** 已采集的输出（首行起，基于整行） */
+  /** 已采集的输出（首行起，基于整行；受 CAPTURE_OUTPUT_LIMIT 约束） */
   output: string
+  /** 输出是否已达上限停止累加（截断标记只追加一次；超限后只等 END 哨兵收尾） */
+  truncated: boolean
   finished: boolean
   timer: ReturnType<typeof setTimeout> | null
 }
@@ -137,6 +139,12 @@ const captures = new Map<string, CaptureState>()
 
 const CAPTURE_TIMEOUT_MS = 60_000
 const REJECT_OUTPUT = '[用户拒绝执行]'
+/** 捕获输出上限（字符数，近似 256KB）：cat 大文件 / yes / tail -f 的回显会在
+ *  60s 捕获窗口内逐行无界累加到几十 MB，既撑渲染层内存，又把全量内容
+ *  postToolResult 回传进轨迹 —— 达到上限即停止累加，只保留一条截断标记。 */
+const CAPTURE_OUTPUT_LIMIT = 256 * 1024
+// 措辞与 docker-core 的 EXEC_TRUNCATED_NOTE 同款：让用户/模型一眼看出结果不完整
+const CAPTURE_TRUNCATED_NOTE = '[输出已截断，超过 256KB 上限]'
 
 // ── 全局捕获订阅（集中化）──
 // 捕获链路原先依赖终端组件实例的 onSshData/onPtyData 订阅回喂数据：组件未挂载/
@@ -290,6 +298,7 @@ async function deliverCommand(toolId: string): Promise<void> {
     sawBegin: false,
     partialLine: '',
     output: '',
+    truncated: false,
     finished: false,
     timer: null,
   }
@@ -446,6 +455,16 @@ function parseCaptureChunk(toolId: string, data: string): void {
     // 跳过哨兵起始行以外的杂项行（如提示符/空行）
     if (line === `__AGENT_BEGIN__ ${cap.marker}`) {
       cap.output = ''
+      cap.truncated = false
+      continue
+    }
+    // 超限即停：哨兵匹配在上面已完成，END 仍能正常收尾（或走超时兜底），
+    // 之后到来的回显行不再累加，截断标记也只追加这一次
+    if (cap.truncated) continue
+    if (cap.output.length + line.length > CAPTURE_OUTPUT_LIMIT) {
+      cap.truncated = true
+      if (cap.output) cap.output += '\n'
+      cap.output += CAPTURE_TRUNCATED_NOTE
       continue
     }
     if (cap.output) cap.output += '\n'
