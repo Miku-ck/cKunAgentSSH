@@ -207,6 +207,14 @@ export interface StreamAgentOptions {
   onDone: () => void
 }
 
+/** 连接停滞看门狗超时：后端每 15s 推一行 ': heartbeat' 注释（backend/routes/agent.py
+ *  HEARTBEAT_INTERVAL=15），连续 6 个心跳周期（90s）收不到任何字节即判为黑洞连接
+ *  （休眠唤醒 / NAT 静默丢流 / 无 RST）—— read 永不返回，run 会永远停在 running、
+ *  审批卡挂着、计时无限涨。到点主动 cancel 并报错，把决定权交还给用户（可重试）。 */
+const STALL_TIMEOUT_MS = 90_000
+/** 看门狗巡检步长：停滞判定粒度 = 90s + 至多一个巡检周期，约 95s 内必报 */
+const STALL_CHECK_INTERVAL_MS = 5_000
+
 export function streamAgentRun(options: StreamAgentOptions): () => void {
   const abortController = new AbortController()
 
@@ -281,11 +289,36 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
       const decoder = new TextDecoder()
       let buffer = ''
 
+      // 连接停滞看门狗：黑洞连接（休眠唤醒 / NAT 静默丢流 / 无 RST）上挂起的 read
+      // 永不返回，纯靠循环内判定无法自救 —— 只能由独立定时器巡检 lastActivityAt，
+      // 停滞到点后 cancel 把挂起的 read 以 done 解开（WHATWG 流语义），循环才能退出。
+      let lastActivityAt = Date.now()
+      let stalled = false
+      const watchdog = setInterval(() => {
+        if (Date.now() - lastActivityAt < STALL_TIMEOUT_MS) return
+        clearInterval(watchdog)
+        stalled = true
+        reader.cancel().catch(() => { /* already closed */ })
+      }, STALL_CHECK_INTERVAL_MS)
+
       try {
         while (true) {
           const { done, value } = await reader.read()
+          // 看门狗 cancel 会把挂起的 read 以 done 解开：必须先于 done 判定识别停滞，
+          // 否则会落进下方「响应中断」分支，专属报错文案被吞
+          if (stalled) {
+            try {
+              options.onError('连接停滞，请检查网络后重试')
+            } catch (cbErr) {
+              console.error('[streamAgentRun] onError callback threw:', cbErr)
+            }
+            return
+          }
           if (done) break
 
+          // 任何字节到达都算活动 —— ': heartbeat' 注释行同样走这里刷新，
+          // 它是后端唯一保证的存活信号（backend/routes/agent.py 的 event_stream）
+          lastActivityAt = Date.now()
           buffer += decoder.decode(value, { stream: true })
           const lines = buffer.split('\n')
           buffer = lines.pop() || ''
@@ -330,6 +363,8 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
       } finally {
         // M5 修复：显式释放 reader，避免 abort 后底层流仍被占用导致资源泄漏
         try { reader.releaseLock() } catch { /* already released */ }
+        // 看门狗只在读取循环存活期间有意义（[DONE] return / done / 停滞 return 都经过这里）
+        clearInterval(watchdog)
       }
     } catch (e: unknown) {
       if (e instanceof Error && e.name !== 'AbortError') {
