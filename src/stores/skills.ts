@@ -7,16 +7,18 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { load as yamlLoad } from 'js-yaml'
+import type { SkillBase } from '@/api/core'
 
 type SkillSource = 'builtin' | 'upload' | 'custom' | 'manual' | 'auto'
 
-interface Skill {
-  id: string
-  name: string
-  slug: string
+/**
+ * UI 形态技能条目：公共字段（id/name/slug/description/category/created_at/
+ * updated_at）与 api/core 的后端 wire 形态（Skill）同源于 SkillBase ——
+ * 两侧字段集不再各抄一份。差异字段（version/content/triggerWords/icon 等）
+ * 是 UI 侧 own 的投影：system_prompt→content、trigger_words→triggerWords。
+ */
+interface Skill extends SkillBase {
   version: string
-  description: string
-  category: string
   content: string
   triggerWords: string[]
   icon: string
@@ -27,8 +29,6 @@ interface Skill {
   localPath?: string
   /** 本地资源文件相对路径列表（不含 SKILL.md） */
   assets?: string[]
-  created_at: string
-  updated_at: string
 }
 
 /** SKILL.md frontmatter 解析结果 */

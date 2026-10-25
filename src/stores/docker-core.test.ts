@@ -344,6 +344,11 @@ describe('isOutputTruncated', () => {
     expect(isOutputTruncated('rows\n[输出已截断，超过 1MB 上限]')).toBe(true)
     expect(isOutputTruncated('', 'err\n[输出已截断，超过 1MB 上限]')).toBe(true)
   })
+  it('主进程现行文案（1M 字符口径，electron/ssh-manager.ts TRUNCATED_NOTE）也命中', () => {
+    // 全等 includes 曾因主进程改文案（1MB → 1M 字符）永久失配，Docker 页签的
+    // 「输出已截断」提示条随之消失；识别改为固定前缀后两种口径都必须命中
+    expect(isOutputTruncated('rows\n[输出已截断，超过 1M 字符上限]')).toBe(true)
+  })
   it('正常输出不算', () => {
     expect(isOutputTruncated('sha256:abc\tnginx\tlatest')).toBe(false)
     expect(isOutputTruncated('')).toBe(false)

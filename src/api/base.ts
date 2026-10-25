@@ -77,21 +77,31 @@ function isTechnicalErrorMessage(msg: string): boolean {
 }
 
 /**
- * 剥掉 Electron IPC 的投递信封。
+ * Electron IPC 投递信封的匹配式（单一事实源）。
  *
  * S0-13：主进程 reject 到达渲染端时恒为
- * `Error invoking remote method '<channel>': Error: <原始 message>`，
- * 而 TECHNICAL_ERROR_PATTERNS 里有一条 `/Error:\s/i` —— 信封本身就带 `Error: `，
- * 于是**任何**非 SSHError 的主进程抛错都被改写成「服务暂时不可用，请稍后重试」，
- * 具体根因（会话不存在 / 参数校验失败 / 目标目录不合法…）永远看不到。
- * 同仓既有口径：src/stores/server-monitor-core.ts 的 describeMonitorError
- * 也是先剥信封再判文案。
+ * `Error invoking remote method '<channel>': Error: <原始 message>`。
+ * unwrapIpcErrorEnvelope 与 server-monitor-core 的 describeMonitorError
+ * 共用这一份式子 —— 同式 replace 抄两份迟早漂移。
+ */
+const IPC_ENVELOPE_RE = /^Error invoking remote method '[^']+'\s*:\s*/
+
+/** 只剥 IPC 信封，不动内层 `Error: ` 前缀（describeMonitorError 需保留内层原文）。 */
+export function stripIpcEnvelope(msg: string): string {
+  return msg ? msg.replace(IPC_ENVELOPE_RE, '') : msg
+}
+
+/**
+ * 剥掉 Electron IPC 的投递信封。
+ *
+ * S0-13：信封本身就带 `Error: `，而 TECHNICAL_ERROR_PATTERNS 里有一条
+ * `/Error:\s/i` —— 不剥的话**任何**非 SSHError 的主进程抛错都会被改写成
+ * 「服务暂时不可用，请稍后重试」，具体根因（会话不存在 / 参数校验失败 /
+ * 目标目录不合法…）永远看不到。信封式见 stripIpcEnvelope。
  */
 export function unwrapIpcErrorEnvelope(msg: string): string {
   if (!msg) return msg
-  const root = msg
-    .replace(/^Error invoking remote method '[^']+'\s*:\s*/, '')
-    .replace(/^Error:\s*/i, '')
+  const root = stripIpcEnvelope(msg).replace(/^Error:\s*/i, '')
   return root || msg
 }
 

@@ -25,9 +25,17 @@ export interface ConfirmOptions {
 // ─── 模块级状态(单例) ─────────────────────────
 const dialogInstance = ref<{ open: (opts: ConfirmOptions) => Promise<boolean> } | null>(null)
 
-/** 由 ConfirmDialogHolder 调用以注册实例 */
-export function registerConfirmDialog(instance: { open: (opts: ConfirmOptions) => Promise<boolean> }) {
+/**
+ * 由 ConfirmDialogHolder 调用以注册实例，返回注销函数 —— Holder 卸载时必须
+ * 调用它。原实现只注册不注销：旧 Holder 卸载后 module 单例里挂着的是已销毁
+ * 组件的引用，confirm() 会调用到死对象上。
+ */
+export function registerConfirmDialog(instance: { open: (opts: ConfirmOptions) => Promise<boolean> }): () => void {
   dialogInstance.value = instance
+  return () => {
+    // 只注销仍属于自己的注册：极端时序下新 Holder 可能已接管，不能抹掉别人的
+    if (dialogInstance.value === instance) dialogInstance.value = null
+  }
 }
 
 /**

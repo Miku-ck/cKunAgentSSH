@@ -8,7 +8,7 @@ vi.mock('@/stores/ssh', () => ({ useSSHStore: vi.fn() }))
 vi.mock('@/api/client', () => ({ api: {} }))
 vi.mock('@/stores/settings', () => ({ useSettingsStore: vi.fn() }))
 
-import { fuzzyMatchCommand, readCurrentLine, stripPrompt } from './useCompletion'
+import { fuzzyMatchCommand, parseInput, readCurrentLine, stripPrompt } from './useCompletion'
 
 const CMDS = [
   'ls -lat',
@@ -138,5 +138,45 @@ describe('stripPrompt（S6-15 删死通道后的唯一判据）', () => {
   it('空 prompt 与无分隔符的行也不抛（回退支各管一段）', () => {
     expect(stripPrompt('')).toEqual({ input: '', startCol: 0 })
     expect(stripPrompt('   git status').input).toBe('git status')
+  })
+})
+
+/**
+ * Q-F3：补全落地前缀与输入解析同源 —— applyCompletion 现在直接取 parseInput 的
+ * prefix（按空白运行 /\s+/ 切分）。判据钉在这里：多空格/Tab 间隔下，旧的
+ * lastIndexOf(' ') 取错边界（Tab 输入里没有空格 → 整段被当 prefix → 补全整串
+ * 重发产生重复字符），parseInput 必须给出最后一段。
+ */
+describe('parseInput 空白运行切分（applyCompletion 落地前缀同源判据）', () => {
+  it('Tab 间隔：`ls\\t-a` 光标在末尾 → prefix 是 -a（lastIndexOf(" ") 会取整段）', () => {
+    const parsed = parseInput('ls\t-a', 5)
+    expect(parsed?.prefix).toBe('-a')
+    expect(parsed?.cmd).toBe('ls')
+    expect(parsed?.isCommand).toBe(false)
+  })
+
+  it('多 Tab 间隔：`ls\\t\\t-a` 光标在末尾 → prefix 是 -a', () => {
+    expect(parseInput('ls\t\t-a', 6)?.prefix).toBe('-a')
+  })
+
+  it('多空格间隔：`ls  -la` 光标在末尾 → prefix 是 -la', () => {
+    const parsed = parseInput('ls  -la', 7)
+    expect(parsed?.prefix).toBe('-la')
+    expect(parsed?.cmd).toBe('ls')
+  })
+
+  it('光标停在多空格中间 → prefix 为空串（新 token 尚未输入）', () => {
+    expect(parseInput('ls  -la', 4)?.prefix).toBe('')
+    // 命令段 `ls` 已经完整，光标停在参数位 —— 空前缀但不再是命令补全
+    expect(parseInput('ls  -la', 4)?.isCommand).toBe(false)
+    expect(parseInput('ls  -la', 4)?.cmd).toBe('ls')
+  })
+
+  it('混合空白（空格 + Tab）：`ls \t-x` 光标在末尾 → prefix 是 -x', () => {
+    expect(parseInput('ls \t-x', 6)?.prefix).toBe('-x')
+  })
+
+  it('单空格的既有行为不变：`ls -la` → prefix 是 -la', () => {
+    expect(parseInput('ls -la', 6)?.prefix).toBe('-la')
   })
 })

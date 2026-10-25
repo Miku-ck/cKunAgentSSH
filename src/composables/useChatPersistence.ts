@@ -19,6 +19,16 @@ import { useToastStore } from '@/stores/toast'
 /** 后端 API 的会话模式标识（固定 Agent 模式后仅 ssh 一种） */
 const API_MODE = 'ssh'
 
+/** 启动合并的翻页拉取参数：单页 50（后端 listConversations 的既有页大小），
+ *  总量上限 500 —— 再多的历史不再往本地列表塞，防止大会话量把首屏启动
+ *  拖慢成 10 次串行请求以上。绝大多数用户第一页就取完（返回不足一页即停），
+ *  请求数与旧的硬编码 50 条完全一致。 */
+const SYNC_PAGE_SIZE = 50
+const SYNC_MAX_CONVERSATIONS = 500
+
+/** 后端会话列表条目的合并所需字段（listConversations 返回的投影） */
+type RemoteConversation = { id: string; title: string; created_at: string; updated_at: string }
+
 // 审查R2修复：localStorage 写入失败（QuotaExceeded）的告警去重标志（模块级，全会话只 toast 一次防刷屏）
 let quotaWarned = false
 
@@ -108,50 +118,63 @@ export function useChatPersistence(options: {
    *
    * 原缺口：历史仅靠 localStorage 恢复 — 换设备/清本地后，后端已同步的
    * 会话在列表里凭空消失。
+   * Q-F4 补缺口：原先只拉第一页 50 条，第 51 条起永远进不了本地列表 ——
+   * 改为按 offset 翻页拉全（上限 SYNC_MAX_CONVERSATIONS），每页到手即合并
+   * （渐进：某页失败时前面的页已经并进列表），返回不足一页即停。
    * 合并语义：
    *   - 后端有、本地无（按 id 或 backendConvId 双键匹配）→ 追加（消息空，切换时按需拉取）
    *   - 两边都有 → 仅更新 title/updated_at（本地消息是权威，不动）
    *   - 本地有、后端无 → 保留（本地新建未同步的会话不能丢）
-   * 失败时不动本地列表（后端不可达 ≠ 历史丢失），仅记警告。
+   * 失败时保留已合并的页（后端不可达 ≠ 历史丢失），仅记警告。
    */
   async function syncBackendConversations() {
     try {
-      const remote = await api.listConversations(50, 0, API_MODE)
-      // 这三个集必须在 await **之后**取。原实现在 await 之前就快照了
-      // `conversations.value`，然后把那份旧快照赋回去并落盘 —— 这一句
-      // 「本地新建未同步的会话不能丢」的注释因此正好说了反话：往返期间
-      // 新建/发过消息的会话既从列表里消失，也被从 localStorage 里抹掉。
-      const live = conversations.value
-      const byLocalId = new Map(live.map((c) => [c.id, c]))
-      const byBackendId = new Map(
-        live.filter((c) => c.backendConvId).map((c) => [c.backendConvId as string, c]),
-      )
-      const merged = [...live]
-      for (const r of remote as Array<{ id: string; title: string; created_at: string; updated_at: string }>) {
-        const match = byBackendId.get(r.id) ?? byLocalId.get(r.id)
-        if (match) {
-          if (r.title) match.title = r.title
-          if (r.updated_at) match.updated_at = r.updated_at
-          // 只按本地 id 命中时 backendConvId 还是空的（早期版本沿用后端 id 建过条目）：
-          // 补上，否则切到它会因缺 backendConvId 拉不到消息、删除时也不会同步删后端
-          if (!match.backendConvId) match.backendConvId = r.id
-        } else {
-          merged.push({
-            id: r.id,
-            title: r.title,
-            messages: [] as ModeMessage[],
-            backendConvId: r.id,
-            created_at: r.created_at,
-            updated_at: r.updated_at,
-          } as ModeConversation)
-        }
+      for (let offset = 0; offset < SYNC_MAX_CONVERSATIONS; offset += SYNC_PAGE_SIZE) {
+        const page = await api.listConversations(SYNC_PAGE_SIZE, offset, API_MODE) as Array<RemoteConversation>
+        if (!Array.isArray(page)) break
+        mergeRemotePage(page)
+        if (page.length < SYNC_PAGE_SIZE) break
       }
-      // 浅引用新数组触发 groupedConversations 等下游重算（原地改 title 也一并生效）
-      conversations.value = merged
-      saveConversations(merged)
+      // 全部页合并完统一落盘一次（会话列表含全部消息体，逐页落盘会把 MB 级
+      // JSON 写十遍；渐进合并已把每一页写进内存列表，中途失败保留已并页）
+      saveConversations(conversations.value)
     } catch (e) {
       console.warn(`[${API_MODE}] syncBackendConversations failed（保留本地列表）:`, e)
     }
+  }
+
+  /** 把一页远端会话并进当前列表（浅引用新数组触发 groupedConversations 等下游重算）。 */
+  function mergeRemotePage(remote: Array<RemoteConversation>): void {
+    // 这三个集必须在调用点 await **之后**取。原实现在 await 之前就快照了
+    // `conversations.value`，然后把那份旧快照赋回去并落盘 —— 这一句
+    // 「本地新建未同步的会话不能丢」的注释因此正好说了反话：往返期间
+    // 新建/发过消息的会话既从列表里消失，也被从 localStorage 里抹掉。
+    const live = conversations.value
+    const byLocalId = new Map(live.map((c) => [c.id, c]))
+    const byBackendId = new Map(
+      live.filter((c) => c.backendConvId).map((c) => [c.backendConvId as string, c]),
+    )
+    const merged = [...live]
+    for (const r of remote) {
+      const match = byBackendId.get(r.id) ?? byLocalId.get(r.id)
+      if (match) {
+        if (r.title) match.title = r.title
+        if (r.updated_at) match.updated_at = r.updated_at
+        // 只按本地 id 命中时 backendConvId 还是空的（早期版本沿用后端 id 建过条目）：
+        // 补上，否则切到它会因缺 backendConvId 拉不到消息、删除时也不会同步删后端
+        if (!match.backendConvId) match.backendConvId = r.id
+      } else {
+        merged.push({
+          id: r.id,
+          title: r.title,
+          messages: [] as ModeMessage[],
+          backendConvId: r.id,
+          created_at: r.created_at,
+          updated_at: r.updated_at,
+        } as ModeConversation)
+      }
+    }
+    conversations.value = merged
   }
 
   const conversations = shallowRef<ModeConversation[]>(loadConversations())

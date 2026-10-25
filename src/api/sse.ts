@@ -289,6 +289,39 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
       const decoder = new TextDecoder()
       let buffer = ''
 
+      /** 处理一条 'data: ' 行。返回 true = 命中 [DONE]，调用方应立即收尾返回。
+       *  读循环与流末尾的 leftover 路径共用同一份解析（两处各抄一份迟早漂移）。 */
+      const handleDataLine = (line: string): boolean => {
+        if (!line.startsWith('data: ')) return false
+        const data = line.slice(6)
+        if (data === '[DONE]') {
+          // 与 onError/onEvent 同一口径：回调自己抛异常不许冒到外层 catch ——
+          // 那样会在一个流已经正常收尾之后再去调 onError，把终态改写成"失败"。
+          try {
+            options.onDone()
+          } catch (cbErr) {
+            console.error('[streamAgentRun] onDone 回调异常:', cbErr)
+          }
+          // 审查修复：显式取消底层读取，避免 [DONE] 后流仍占用连接直到服务端关闭
+          reader.cancel().catch(() => { /* already closed */ })
+          return true
+        }
+        try {
+          const parsed = JSON.parse(data) as AgentSSEEvent
+          // H3 修复：onEvent 异常单独捕获，避免被当作 heartbeat 解析错误吞掉
+          try {
+            options.onEvent(parsed)
+          } catch (e) {
+            // 事件对象可能很大（content 片段）：日志按 backend-python-cache 的截断
+            // 口径只留前 200 字符，别把整条流倒进控制台
+            console.error('[streamAgentRun] onEvent 处理异常:', e, 'event:', JSON.stringify(parsed).slice(0, 200))
+          }
+        } catch {
+          // JSON.parse 失败：心跳或非 JSON 数据，忽略
+        }
+        return false
+      }
+
       // 连接停滞看门狗：黑洞连接（休眠唤醒 / NAT 静默丢流 / 无 RST）上挂起的 read
       // 永不返回，纯靠循环内判定无法自救 —— 只能由独立定时器巡检 lastActivityAt，
       // 停滞到点后 cancel 把挂起的 read 以 done 解开（WHATWG 流语义），循环才能退出。
@@ -324,34 +357,20 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
           buffer = lines.pop() || ''
 
           for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              const data = line.slice(6)
-              if (data === '[DONE]') {
-                // 与 onError/onEvent 同一口径：回调自己抛异常不许冒到外层 catch ——
-                // 那样会在一个流已经正常收尾之后再去调 onError，把终态改写成"失败"。
-                try {
-                  options.onDone()
-                } catch (cbErr) {
-                  console.error('[streamAgentRun] onDone 回调异常:', cbErr)
-                }
-                // 审查修复：显式取消底层读取，避免 [DONE] 后流仍占用连接直到服务端关闭
-                reader.cancel().catch(() => { /* already closed */ })
-                return
-              }
-              try {
-                const parsed = JSON.parse(data) as AgentSSEEvent
-                // H3 修复：onEvent 异常单独捕获，避免被当作 heartbeat 解析错误吞掉
-                try {
-                  options.onEvent(parsed)
-                } catch (e) {
-                  console.error('[streamAgentRun] onEvent 处理异常:', e, 'event:', parsed)
-                }
-              } catch {
-                // JSON.parse 失败：心跳或非 JSON 数据，忽略
-              }
-            }
+            if (handleDataLine(line)) return
           }
         }
+
+        // Q-F1 修复：done 退出后残留 buffer 里的末尾事件不再整体丢弃 ——
+        // 按行再解析一次：完整到达的末尾事件（含 data: [DONE]）照常派发，
+        // [DONE] 命中即正常收尾返回；真正不完整的半行（JSON 解不开）不派发。
+        // 未见 [DONE] 的收尾（哪怕残留事件全部完整）仍走下方 B22 的「响应中断」：
+        // 后端正常结束必发 [DONE]，缺它就是半截流 —— 但残留事件已先派发，
+        // run 的终态先落定，迟到的 onError 由 store 的终态守卫吸收（Q-F2）。
+        for (const line of buffer.split('\n')) {
+          if (handleDataLine(line)) return
+        }
+        buffer = ''
 
         // B22 修复：正常结束但没有 [DONE] = 半截 Agent 流，不能走 onDone —
         // 原实现会把未完成状态当完成，导致结果固化/状态错乱

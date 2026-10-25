@@ -189,14 +189,27 @@ async function manualReconnect(): Promise<void> {
   }
 }
 
+/**
+ * 启动注入命令（electron/ssh-manager.ts initCmd）回显段的匹配：
+ * 起点 = 注入命令的开头 `stty -echo 2>/dev/null; __ckun_host=`，
+ * 终点 = 它的收尾 `stty echo 2>/dev/null`（中间非贪婪 + 长度上限）。
+ *
+ * Q-F9：原实现「行内含 __ckun_osc7/__ckun_host 哨兵即整行删除」——慢主机下
+ * 命令回显与 MOTD/首条输出粘连在同一行时，粘连的真实输出会随整行一起被吞。
+ * 改为仅剥哨兵段：段前的提示符片段与段后粘连的输出原样保留。
+ * 长度上限（1024，实际回显 ~300 字符）防误伤：含相似文本且段长超限的
+ * 真实输出不会被匹配删除。
+ */
+const INJECT_ECHO_RE =
+  /stty -echo 2>\/dev\/null; __ckun_host=[\s\S]{0,1024}?stty echo 2>\/dev\/null(?:\r?\n)?/g
+
 /** 过滤/清洗 shell 输出（ANSI 背景色、OSC 7、启动注入命令回显） */
 function processBufferedData(raw: string): string {
   let cleaned = stripAnsiBackground(raw)
   // 过滤 OSC 7 序列，支持 BEL (\x07) 和 ST (ESC \) 两种结束符
   cleaned = cleaned.replace(/\x1b\]7;[^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
-  // 过滤启动注入命令的回显（整行含 __ckun_ 标识则丢弃）
-  cleaned = cleaned.replace(/[^\r\n]*__ckun_(?:osc7|host)[^\r\n]*[\r\n]*/g, '')
-  cleaned = cleaned.replace(/[^\r\n]*stty (?:-)?echo 2>\/dev\/null[^\r\n]*[\r\n]*/g, '')
+  // 剥启动注入命令的回显段（仅哨兵起止范围，见 INJECT_ECHO_RE 注释）
+  cleaned = cleaned.replace(INJECT_ECHO_RE, '')
   return cleaned
 }
 

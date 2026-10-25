@@ -470,9 +470,14 @@ async function localRefresh(): Promise<void> {
     await localRefresh()
   }
 
-  async function localDelete(path: string): Promise<void> {
+  /**
+   * 删除本地条目。Q-F7：批量删除逐项调用时会触发 N 次全量刷新 ——
+   * 传 skipRefresh 抑制内部刷新，由调用方在循环结束后统一刷新一次。
+   * 默认不传时行为不变（删完即刷新）。
+   */
+  async function localDelete(path: string, opts?: { skipRefresh?: boolean }): Promise<void> {
     await getApi().fsTrash(path)
-    await localRefresh()
+    if (!opts?.skipRefresh) await localRefresh()
   }
 
   // ─── 远程侧操作 ───────────────────────────────
@@ -533,9 +538,10 @@ async function remoteRefresh(): Promise<void> {
     await remoteRefresh()
   }
 
-  async function remoteDelete(path: string): Promise<void> {
+  /** 删除远程条目。skipRefresh 语义与 localDelete 相同（批量删除合批刷新用）。 */
+  async function remoteDelete(path: string, opts?: { skipRefresh?: boolean }): Promise<void> {
     await getApi().sftpDelete(sshSessionId.value, path)
-    await remoteRefresh()
+    if (!opts?.skipRefresh) await remoteRefresh()
   }
 
   // ─── 同侧复制粘贴 ─────────────────────────────
@@ -649,8 +655,9 @@ async function remoteRefresh(): Promise<void> {
       toast.success(`复制成功: ${t.name}`)
       scheduleRemoveTransfer(id)
     } catch (err: any) {
-      // 与 runRemoteCopy 的 S5-11 口径一致：取消或断开让 fs:copy 抛出时静默返回，
-      // 别再用「复制失败」盖掉「已取消」，也不给已被摘掉的记录改状态
+      // 与 runLocalCopy 的 S5-11 口径一致（原注释误指向 runRemoteCopy 自己）：
+      // 取消或断开让传输通道抛出时静默返回，别再用「复制失败」盖掉「已取消」，
+      // 也不给已被摘掉的记录改状态
       const statusNow: string = t.status
       if (statusNow === 'cancelled' || !transferById.has(id)) return
       t.status = 'error'

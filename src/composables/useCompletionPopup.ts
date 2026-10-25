@@ -128,12 +128,18 @@ export function useCompletionPopup(deps: CompletionPopupDeps) {
     if (!terminal || !window.electronAPI) return
     const isUnique = completionState.value.candidates.length <= 1
 
-    // 直接从终端读当前前缀，避免状态不同步导致重复字符
+    // 落地前缀与输入解析同源：直接调 parseInput 取 parsed.prefix（它按空白运行
+    // /\s+/ 切分，多空格/Tab 都认）。原实现自算 lastIndexOf(' ')，与 parseInput
+    // 不同源 —— `ls\t-a` 这类无空格输入会取不到边界，把整段当 prefix，补全时
+    // 整串重发产生重复字符。parseInput 返回值 {line,cursorPos,prefix,isCommand,
+    // cmd,prevSegments} 不含起始下标，替换起点由 at.cursorIdx - prefix.length
+    // 推导；写入侧只补 candidate 相对 prefix 的差量，prefix 取对即等价于
+    // 「只替换光标前最后一段」。
     let prefix = completionState.value.prefix
     const at = cursorIndexInInput(terminal)
     if (at) {
-      const lastSpace = at.input.lastIndexOf(' ', at.cursorIdx - 1)
-      prefix = at.input.slice(lastSpace + 1, at.cursorIdx)
+      const parsed = parseInput(at.input, at.cursorIdx)
+      if (parsed) prefix = parsed.prefix
     }
 
     const text = buildCompletionText(candidate.text, prefix, isUnique)

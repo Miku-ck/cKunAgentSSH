@@ -10,7 +10,7 @@
  * 会话全部关闭时由 useSshNavigation 的 watch 停止。
  * 纯解析/差分逻辑在 server-monitor-core.ts（无 vue 依赖，独立单测）。
  */
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { useSSHStore } from './ssh'
 import {
@@ -134,6 +134,21 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
     lastError.value = saved.lastError
     prevStat = saved.prevStat
   }
+
+  // Q-F5 ①：retained 快照随会话从列表移除而清理（只删已消失的会话 id，
+  // 活跃会话与仍在列表的后台保留快照不动）。
+  // 严禁把这段清进 stop()：start() 的切会话流程是 retainActive() → stop() →
+  // restoreFrom(retained[sshId])（见 start 注释），stop() 清 retained 会把刚
+  // 归档的快照连同其他会话快照一并抹掉，直接回退「切 tab 保留 sparkline 历史」。
+  watch(
+    () => sshStore.sessions.map(s => s.id),
+    (ids) => {
+      const live = new Set(ids)
+      for (const key of Object.keys(retained)) {
+        if (!live.has(key)) delete retained[key]
+      }
+    },
+  )
 
   function pushHistory(arr: number[], v: number) {
     arr.push(v)
@@ -260,6 +275,10 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
    *  重试本身是有限成本（15s 一次只读探测），会话从列表消失或 stop() 时即终止。 */
   function enterRetryMode() {
     if (timer) { clearTimeout(timer); timer = null }
+    // Q-F5 ②：retry 模式（polling=false）里 sampleProcs 开头早退，60s 的
+    // procsTimer 却还在空转自排直到 stop() —— 进入重试时一并停排，
+    // 采样成功恢复轮询时重挂（见下方恢复路径）。
+    if (procsTimer) { clearTimeout(procsTimer); procsTimer = null }
     polling.value = false
     if (retryTimer) return // 已在重试中
     retryTimer = setTimeout(async () => {
@@ -273,6 +292,10 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
         // 采样成功但 5s 轮询尚未恢复（start/scheduleNext 未重挂）→ 恢复轮询
         polling.value = true
         scheduleNext()
+        // 进程 TOP 恢复排程：立即补采一次（retry 期间表停在了旧数据上），
+        // 之后回到 60s 节奏 —— 与 start() 的「先采再排」同一口径
+        void sampleProcs()
+        scheduleProcs()
       }
     }, RETRY_INTERVAL_MS)
   }
@@ -343,6 +366,9 @@ export const useServerMonitorStore = defineStore('server-monitor', () => {
     gpuHist,
     polling,
     lastError,
+    // 切会话保留的历史快照（普通对象，非响应式）。导出仅供测试与诊断观察
+    // 「retained 只清已消失会话」的清理契约 —— 写入仍只走 retainActive()
+    retained,
     start,
     stop,
   }

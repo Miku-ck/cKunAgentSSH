@@ -152,6 +152,17 @@ export function useXtermInstance(opts: UseXtermInstanceOptions): XtermInstance {
         return
       }
       if (e.ctrlKey && e.shiftKey && (e.key === 'F' || e.key === 'f')) {
+        // Q-F8：焦点判据 —— 焦点落在输入落点（聊天草稿、设置弹窗输入框等）
+        // 时不劫持 Ctrl+Shift+F，让输入框正常收字、浏览器/应用搜索各归其位。
+        // xterm 用容器内隐藏的 .xterm-helper-textarea 承接键入：焦点在终端时
+        // activeElement 正是它（TEXTAREA）—— 按标签名一刀切会误伤终端输入，
+        // 必须排除这个特例；终端容器内的其他输入（如终端内搜索条）同样放行。
+        const ae = document.activeElement as HTMLElement | null
+        const isXtermHelper = !!ae?.classList?.contains('xterm-helper-textarea')
+        const editable = !!ae
+          && !isXtermHelper
+          && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)
+        if (editable) return
         e.preventDefault()
         e.stopImmediatePropagation()
         e.stopPropagation()

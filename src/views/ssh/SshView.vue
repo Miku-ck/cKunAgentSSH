@@ -497,7 +497,10 @@ const pageMounted = (p: PageKey): boolean => !!visitedPages.value[p]
 const { tabCtxMenu, showTabContextMenu } = useTabContextMenu()
 
 // 标签菜单动作桥接：连接菜单状态 → store 方法
-function handleTabCtxAction(action: string) {
+/** 标签右键菜单动作 —— 与 stores/ssh.ts handleTabContextAction 认同一组字面量，
+ *  裸 string 会让模板里的拼写错误静默落入 store 的 switch 之外（什么都不发生）。 */
+type TabCtxAction = 'duplicate' | 'closeCurrent' | 'closeLeft' | 'closeRight' | 'closeAll'
+function handleTabCtxAction(action: TabCtxAction) {
   const targetId = tabCtxMenu.value.targetId
   tabCtxMenu.value.visible = false
   store.handleTabContextAction(action, targetId)

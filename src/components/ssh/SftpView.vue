@@ -333,6 +333,10 @@ onUnmounted(() => {
   showConnPicker.value = false
   ctxMenu.visible = false
   renameDialog.visible = false
+  // Q-F7：卸载时冲突对话框的 Promise 若未决（transferQueue 里的 doTransfer 还
+  // 卡在 askConflicts 等用户裁决），组件没了就永远等不到 resolve —— 以 null
+  // 放行（等价用户取消），让在途传输意图正常收尾，transferQueue 不永久 pending。
+  cancelConflicts()
 })
 
 // ─── 连接管理 ─────────────────────────
@@ -592,14 +596,29 @@ async function handleCtxAction(action: string): Promise<void> {
       danger: true,
     })
     if (!ok) return
-    try {
-      for (const p of paths) {
-        if (side === 'local') await store.localDelete(p)
-        else await store.remoteDelete(p)
+    // Q-F7：逐项容错 —— 原实现整批 try/catch，第 1 项失败即中断，剩余项被
+    // 静默跳过（用户以为全删了）。单项失败记录首个原因并继续删剩余项，
+    // 结束按成功/失败数汇总。循环期间抑制每项内部的全量刷新
+    // （localDelete/remoteDelete 的 skipRefresh），结束统一刷新一次。
+    let succeeded = 0
+    let firstError: string | null = null
+    for (const p of paths) {
+      try {
+        if (side === 'local') await store.localDelete(p, { skipRefresh: true })
+        else await store.remoteDelete(p, { skipRefresh: true })
+        succeeded++
+      } catch (err: any) {
+        firstError ??= toFriendlyMessage(err, '删除失败')
       }
-      toast.success('已删除')
-    } catch (err: any) {
-      toast.error(toFriendlyMessage(err, '删除失败'))
+    }
+    if (side === 'local') await store.localRefresh()
+    else await store.remoteRefresh()
+    if (succeeded === paths.length) {
+      toast.success(paths.length === 1 ? '已删除' : `已删除 ${succeeded} 项`)
+    } else if (succeeded === 0) {
+      toast.error(`删除失败：${firstError ?? '未知错误'}`)
+    } else {
+      toast.warning(`删除完成：成功 ${succeeded} 项 / 失败 ${paths.length - succeeded} 项（${firstError ?? '未知错误'}）`)
     }
   }
 }

@@ -8,8 +8,9 @@
  * 命令块只做换行、不做 shell 语法拆行：拆错引号/heredoc 会把「一条链」画成
  * 「多条独立命令」，用户据此拍板就失真了。原样展示，靠空格与分隔符自然折行。
  */
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import type { ToolDelivery } from '@/composables/useAgentDeliver'
+import { useAgentDeliver } from '@/composables/useAgentDeliver'
 import { useAgentStore } from '@/stores/agent'
 import { useSSHStore } from '@/stores/ssh'
 import { approvalTargetLabel } from '@/utils/approval-display'
@@ -20,6 +21,7 @@ const props = defineProps<{
 
 const agentStore = useAgentStore()
 const sshStore = useSSHStore()
+const deliverApi = useAgentDeliver()
 
 /** 说明来源标签：LLM 生成的解释必须标注「仅供参考」，静态后果表不必 */
 const explainIsLlm = computed(() => props.delivery.explain_source === 'llm')
@@ -59,13 +61,33 @@ const riskBadge = computed(() => {
 /** 复合命令逐段拆解（后端拆解层，单段命令不带 segments） */
 const segments = computed(() =>
   (props.delivery.segments ?? []).length > 1 ? props.delivery.segments! : [])
+
+/**
+ * Q-F6 恢复入口：结果回传自动重试耗尽（postFailed）的交付在这里给出
+ * 「重发结果」按钮（调 useAgentDeliver.retryPostResult）。没有它，回传彻底
+ * 失败就是仅 console.error 的死路终态 —— 后端挂起的循环只能干等 TTL。
+ * 这类交付已是终态：确认/拒绝按钮换下，卡头文案也不再是「待确认」。
+ */
+const isPostFailed = computed(() => props.delivery.postFailed === true)
+const cardTitle = computed(() => (isPostFailed.value ? '结果回传失败' : '命令待确认'))
+const resending = ref(false)
+
+async function resendResult(): Promise<void> {
+  if (resending.value) return
+  resending.value = true
+  try {
+    await deliverApi.retryPostResult(props.delivery.tool_id)
+  } finally {
+    resending.value = false
+  }
+}
 </script>
 
 <template>
   <div class="ap-card delivery-card">
     <div class="ap-head">
       <svg class="ap-ic delivery-accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-      <span class="ap-ttl">命令待确认</span>
+      <span class="ap-ttl">{{ cardTitle }}</span>
       <span class="delivery-target" :title="targetLabel || '当前终端'">{{ targetLabel || '当前终端' }}</span>
       <span v-if="isProd" class="ap-env env-prod">生产环境</span>
       <span v-if="riskBadge" class="dc-risk" :class="riskBadge.cls">{{ riskBadge.text }}</span>
@@ -78,6 +100,12 @@ const segments = computed(() =>
       <div v-if="delivery.task" class="ap-keyval" :title="delivery.task">
         <span class="ap-k">你的请求</span>
         <span class="ap-v ap-2line">{{ delivery.task }}</span>
+      </div>
+      <!-- 回传诊断（回传失败/写入失败等原因，useAgentDeliver 落在 delivery.error）：
+           此前卡片不渲染它，回传彻底失败时用户只能看到一张沉默的卡 -->
+      <div v-if="delivery.error" class="ap-keyval">
+        <span class="ap-k">回传诊断</span>
+        <span class="ap-v dc-err">{{ delivery.error }}</span>
       </div>
       <div v-if="delivery.explain" class="ap-keyval">
         <span class="ap-k">这条命令会做什么</span>
@@ -108,8 +136,15 @@ const segments = computed(() =>
       <pre v-if="!segments.length" class="delivery-code">{{ delivery.command }}</pre>
     </div>
     <div class="ap-actions">
-      <button class="ap-btn ap-btn-grant" @click="agentStore.confirmDeliver(delivery.tool_id)">确认执行</button>
-      <button class="ap-btn ap-btn-deny" @click="agentStore.rejectDeliver(delivery.tool_id)">拒绝执行</button>
+      <template v-if="isPostFailed">
+        <button class="ap-btn ap-btn-grant" :disabled="resending" @click="resendResult">
+          {{ resending ? '重发中…' : '重发结果' }}
+        </button>
+      </template>
+      <template v-else>
+        <button class="ap-btn ap-btn-grant" @click="agentStore.confirmDeliver(delivery.tool_id)">确认执行</button>
+        <button class="ap-btn ap-btn-deny" @click="agentStore.rejectDeliver(delivery.tool_id)">拒绝执行</button>
+      </template>
     </div>
   </div>
 </template>
@@ -121,6 +156,9 @@ const segments = computed(() =>
   max-height: min(38vh, 340px);
 }
 .delivery-accent { color: var(--status-warn-text); }
+
+/* 回传诊断行：失败原因用告警红，与风险徽章同色系 */
+.dc-err { color: var(--accent-red); }
 
 /* 多会话时这是卡头唯一的位置信息：写进哪台机器。过长时截断，完整值留在 title。 */
 .delivery-target {

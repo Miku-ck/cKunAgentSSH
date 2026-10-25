@@ -693,3 +693,120 @@ describe('GPU 进程表 60s 换快照（采集仍是 5s）', () => {
     delete g.localStorage
   })
 })
+
+/**
+ * Q-F5 ①：retained 快照随会话从列表移除而清理。
+ *
+ * 生命线判据：stop() 不得清 retained —— start() 的切会话流程是
+ * retainActive() → stop() → restoreFrom(retained[sshId])，stop() 清了它
+ * 就回退「切 tab 保留 sparkline 历史」。清理只由「会话 id 从列表消失」触发。
+ */
+describe('retained 快照随会话移除清理（Q-F5）', () => {
+  it('已消失会话的条目被删；在列会话与 stop() 都不动', async () => {
+    const { createPinia, setActivePinia } = await import('pinia')
+    setActivePinia(createPinia())
+    const { nextTick } = await import('vue')
+    const g = globalThis as unknown as Record<string, unknown>
+    g.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} }
+
+    const { useSSHStore } = await import('./ssh')
+    const ssh = useSSHStore()
+    ssh.connections.push({ id: 'c-1', host: 'h1' } as never)
+    ssh.sessions.push({ id: 's-1', type: 'remote', connectionId: 'c-1' } as never)
+    ssh.sessions.push({ id: 's-2', type: 'remote', connectionId: 'c-1' } as never)
+    ssh.sessions.push({ id: 's-3', type: 'remote', connectionId: 'c-1' } as never)
+
+    const { useServerMonitorStore } = await import('./server-monitor')
+    const mon = useServerMonitorStore()
+
+    // 切两次会话：s-1、s-2 各自被 retainActive 归档；s-3 活跃
+    mon.start('s-1')
+    mon.start('s-2')
+    mon.start('s-3')
+    expect(mon.retained['s-1']).toBeTruthy()
+    expect(mon.retained['s-2']).toBeTruthy()
+
+    // 移除已归档的 s-1 → 只清它的条目，在列的 s-2 不动
+    ssh.sessions.splice(ssh.sessions.findIndex(s => s.id === 's-1'), 1)
+    await nextTick()
+    expect(mon.retained['s-1']).toBeUndefined()
+    expect(mon.retained['s-2']).toBeTruthy()
+
+    // stop() 是快照机制生命线：不得清 retained（否则切 tab 历史（s-2）被抹）
+    mon.stop()
+    expect(mon.retained['s-2']).toBeTruthy()
+
+    // 活跃会话也会被移除：重新监控 s-3 再切走（retainActive 归档它），
+    // 移除后只清 s-3 自己的条目，活跃的 s-2 不误清
+    mon.start('s-3')
+    mon.start('s-2')
+    expect(mon.retained['s-3']).toBeTruthy()
+    ssh.sessions.splice(ssh.sessions.findIndex(s => s.id === 's-3'), 1)
+    await nextTick()
+    expect(mon.retained['s-3']).toBeUndefined()
+    expect(mon.retained['s-2']).toBeTruthy()
+
+    mon.stop()
+    delete g.localStorage
+  })
+})
+
+/**
+ * Q-F5 ②：retry 模式（polling=false，sampleProcs 早退）期间 60s 的 procsTimer
+ * 不再空转自排；采样成功恢复轮询时必然重挂（手动重连走同一条恢复路径）。
+ */
+describe('retry 模式进程采样停排与恢复（Q-F5）', () => {
+  it('进入重试后 60s 无进程采样；探针成功恢复轮询即补采并重挂 60s', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    const g = globalThis as unknown as Record<string, unknown>
+    const METRICS = '===CKUN_MON===\nSTAT=1|2|3\nMEM_TOTAL=100\n===END==='
+    let fail = true
+    const exec = vi.fn(async (_id: string, cmd: string) => {
+      if (fail) throw new Error('connection down')
+      return { stdout: cmd.includes('CKUN_PROCS') ? '===CKUN_PROCS===\n===END===' : METRICS, stderr: '', exitCode: 0 }
+    })
+    g.window = { electronAPI: { sshExec: exec } }
+    g.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} }
+
+    const { createPinia, setActivePinia } = await import('pinia')
+    setActivePinia(createPinia())
+    const { useSSHStore } = await import('./ssh')
+    const ssh = useSSHStore()
+    ssh.connections.push({ id: 'c-1', host: 'h1' } as never)
+    ssh.sessions.push({ id: 's-1', type: 'remote', connectionId: 'c-1' } as never)
+
+    const { useServerMonitorStore } = await import('./server-monitor')
+    const mon = useServerMonitorStore()
+
+    const procsCalls = () => exec.mock.calls.filter((c: Array<unknown>) => String(c[1]).includes('CKUN_PROCS')).length
+
+    mon.start('s-1')
+    // 连续三次采样失败（t0/t5/t10）→ 转入后台重试模式
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(5_000)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(mon.polling).toBe(false)
+
+    const procsAtRetry = procsCalls()
+    // retry 期间 60s 到点也不再有进程采样（procsTimer 已停排，不再空转自排）
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(procsCalls()).toBe(procsAtRetry)
+
+    // 目标会话恢复：下一次 15s 重试探针成功 → 恢复轮询 + 进程采样立即补采
+    fail = false
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(mon.polling).toBe(true)
+    const procsAtRestore = procsCalls()
+    expect(procsAtRestore).toBeGreaterThan(procsAtRetry)
+
+    // 恢复路径必然重挂 60s 定时器：再过一个周期有新的进程采样
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(procsCalls()).toBeGreaterThan(procsAtRestore)
+
+    mon.stop()
+    vi.useRealTimers()
+    delete g.window
+    delete g.localStorage
+  })
+})

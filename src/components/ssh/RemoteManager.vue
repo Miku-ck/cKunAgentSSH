@@ -165,6 +165,7 @@ import NewConnectionDialog from './NewConnectionDialog.vue'
 import GatewayDialogs from './GatewayDialogs.vue'
 import BulkCommandModal from './BulkCommandModal.vue'
 import { connNote, useSSHStore } from '@/stores/ssh'
+import { menuLeft, menuTop } from '@/utils/menu'
 import type { SSHConnection } from '@/stores/ssh'
 import { useAccessStore } from '@/stores/access'
 import { useTunnelStore } from '@/stores/tunnel'
@@ -483,28 +484,20 @@ const menu = ref({ visible: false, x: 0, y: 0, target: null as MenuTarget | null
 const MENU_MIN_WIDTH = 160
 const MENU_MAX_HEIGHT = 280
 
-const menuStyle = computed(() => {
-  const margin = 8
-  const vw = window.innerWidth
-  const vh = window.innerHeight
-  // 横向: 右侧空间不足时改为向左展开
-  const left = menu.value.x + MENU_MIN_WIDTH + margin > vw
-    ? Math.max(margin, menu.value.x - MENU_MIN_WIDTH)
-    : menu.value.x
-  // 纵向: 下方空间不足时向上收缩
-  const top = menu.value.y + MENU_MAX_HEIGHT + margin > vh
-    ? Math.max(margin, vh - MENU_MAX_HEIGHT - margin)
-    : menu.value.y
-  return { left: left + 'px', top: top + 'px' }
-})
+// R-F1：越界校正收口到 utils/menu 的 menuTop/menuLeft（与 useTabContextMenu /
+// QuickCommandBar / SftpView 同一套），不再各抄一份手算钳制
+const menuStyle = computed(() => ({
+  left: menuLeft(menu.value.x, MENU_MIN_WIDTH) + 'px',
+  top: menuTop(menu.value.y, MENU_MAX_HEIGHT) + 'px',
+}))
 
 let dismissBound = false
 
 function showMenu(e: MouseEvent, target: MenuTarget) {
   e.stopPropagation()
   e.preventDefault()
-  // 坐标只存原始光标位置：越界校正是 menuStyle 的职责（两个方向都按 MENU_MAX_HEIGHT
-  // 与 margin 收过，这里再翻一次等于对同一维度做两次钳制）
+  // 坐标只存原始光标位置：越界校正是 menuStyle 的职责（两个方向都按估算尺寸
+  // 经 menuTop/menuLeft 收过，这里再翻一次等于对同一维度做两次钳制）
   menu.value = { visible: true, x: e.clientX, y: e.clientY, target }
   // 在菜单显示后才注册 document mousedown 监听(bubble 阶段,普通事件流)
   if (!dismissBound) {

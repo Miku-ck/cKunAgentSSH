@@ -24,6 +24,13 @@ const { settleAll } = useApprovalActions()
 const pending = computed(() => agent.pendingPermissions)
 const deliveries = computed(() => agent.pendingDeliveries)
 const wizard = computed(() => agent.clarificationWizard)
+// Q-F6 恢复入口：结果回传自动重试耗尽（postFailed）的交付已是终态，不在
+// pendingDeliveries 里 —— 不在这里给它们一席之地，用户界面上就没有任何
+// 可操作的恢复入口（后端挂起的循环只能干等 TTL）。卡内由 DeliveryCard
+// 渲染「重发结果」按钮，调 useAgentDeliver.retryPostResult。
+const failedPostDeliveries = computed(() =>
+  agent.deliveries.filter(d => d.postFailed === true),
+)
 const batching = ref(false)
 const onceBlocked = computed(() => onceGrantBlocked(agent.isRunning))
 /** 这批里有一条不能一键放行，整批都不给「全部批准」 */
@@ -48,7 +55,7 @@ async function batch(kind: 'approve' | 'deny') {
 </script>
 
 <template>
-  <section v-if="pending.length || deliveries.length || wizard" class="approval-dock" aria-label="待放行的操作">
+  <section v-if="pending.length || deliveries.length || failedPostDeliveries.length || wizard" class="approval-dock" aria-label="待放行的操作">
     <!-- 意图澄清：run 阻塞在澄清上，先答它才有后续审批，故排在权限队列之前 -->
     <ClarifyingWizard v-if="wizard" />
     <template v-if="pending.length">
@@ -77,9 +84,11 @@ async function batch(kind: 'approve' | 'deny') {
         <ApprovalCard v-for="req in pending" :key="req.id" :req="req" />
       </div>
     </template>
-    <!-- 交付确认没有「批量」：每条命令写进终端都会立刻执行，不能合并成一次放行 -->
-    <div v-if="deliveries.length" class="ad-body ad-deliveries">
+    <!-- 交付确认没有「批量」：每条命令写进终端都会立刻执行，不能合并成一次放行。
+         postFailed 的交付（回传耗尽重试）与待确认集合互斥，key 不冲突 -->
+    <div v-if="deliveries.length || failedPostDeliveries.length" class="ad-body ad-deliveries">
       <DeliveryCard v-for="d in deliveries" :key="d.tool_id" :delivery="d" />
+      <DeliveryCard v-for="d in failedPostDeliveries" :key="d.tool_id" :delivery="d" />
     </div>
   </section>
 </template>

@@ -93,6 +93,10 @@ export interface ToolDelivery {
   risk?: string
   /** 发起本次命令的任务原话（卡片上下文行，让用户核对命令服务于他的请求） */
   task?: string
+  /** 最近一次回传的载荷：自动重试耗尽后供「重发结果」复用（捕获态已清，只存这里） */
+  lastPost?: PostPayload
+  /** 回传最终失败（自动重试耗尽）：调用方据此呈现「重发结果」入口，不再死路 */
+  postFailed?: boolean
 }
 
 interface ToolDeliverPayload {
@@ -145,6 +149,23 @@ const REJECT_OUTPUT = '[用户拒绝执行]'
 const CAPTURE_OUTPUT_LIMIT = 256 * 1024
 // 措辞与 docker-core 的 EXEC_TRUNCATED_NOTE 同款：让用户/模型一眼看出结果不完整
 const CAPTURE_TRUNCATED_NOTE = '[输出已截断，超过 256KB 上限]'
+/** partialLine（跨 chunk 的不完整行）的硬上限：与完整行同量级（256KB 口径）。
+ *  base64/二进制回显整段无换行时，partialLine 在 60s 捕获窗口内无界累积到
+ *  几十 MB —— 超限即截断，已过 BEGIN 的内容属于交付物，须显式打截断标记。 */
+const PARTIAL_LINE_LIMIT = 256 * 1024
+
+/** 回传自动重试：初始尝试外最多再补 POST_RETRY_MAX 次，按 1s/2s 退避。
+ *  有限次 —— 后端对同一 tool_id 的待交付在 TTL 后清理，无限重试只会刷日志。 */
+const POST_RETRY_MAX = 2
+const POST_RETRY_BASE_MS = 1000
+
+/** 一次回传的完整载荷（自动重试与手动重发共用同一份） */
+interface PostPayload {
+  output: string
+  success: boolean
+  exitCode: number | null
+  rejected: boolean
+}
 
 // ── 全局捕获订阅（集中化）──
 // 捕获链路原先依赖终端组件实例的 onSshData/onPtyData 订阅回喂数据：组件未挂载/
@@ -191,6 +212,74 @@ function clearCapture(toolId: string): void {
   }
 }
 
+/** 404 形态的失败：后端已没有这个待交付（本次回传其实已闭合，或 TTL 已清）
+ *  —— 重试必然同样 404，不再耗退避次数。 */
+function isPostGone(err: unknown): boolean {
+  const msg = String((err as Error)?.message || err || '')
+  return /tool_id 未知|404|Not Found/i.test(msg)
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+/**
+ * 回传一次结果，失败按有限次退避自动重试（Q-F6）。全部失败时把交付置为
+ * postFailed（可见的「可手动重发」状态），不再停留在仅 console.error 的死路
+ * —— 否则后端挂起的循环只能干等 TTL。
+ * 返回 true = 后端确认收到。
+ */
+async function postResultWithRetry(toolId: string, payload: PostPayload): Promise<boolean> {
+  const delivery = findDelivery(toolId)
+  if (delivery) delivery.lastPost = { ...payload }
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await withTimeout(
+        postToolResult(
+          toolId,
+          payload.output,
+          payload.success,
+          payload.exitCode,
+          payload.rejected,
+          delivery?.runId,
+          delivery?.confirmedByUi === true,
+        ),
+        POST_RESULT_TIMEOUT_MS,
+        'postToolResult',
+      )
+      const d = findDelivery(toolId)
+      if (d) {
+        d.postFailed = false
+        d.error = undefined
+      }
+      return true
+    } catch (err) {
+      const gone = isPostGone(err)
+      console.error(`[useAgentDeliver] 回传 tool-result 失败（第 ${attempt + 1} 次${gone ? '，后端已无此待交付' : ''}）:`, err)
+      const d = findDelivery(toolId)
+      // 重试间隙新一轮 run 可能已 resetDeliveries —— 找不到记录就别再折腾
+      if (gone || !d || attempt >= POST_RETRY_MAX) {
+        if (d) {
+          d.postFailed = true
+          d.error = gone
+            ? '结果回传失败：后端已没有这个待交付命令（可能已恢复或超时清除），无需重发'
+            : `结果回传失败（已自动重试 ${POST_RETRY_MAX} 次）：${String((err as Error)?.message || err)}。后端循环可能仍在等待本条结果，可点击「重发结果」`
+        }
+        return false
+      }
+      await sleep(POST_RETRY_BASE_MS * (attempt + 1))
+    }
+  }
+}
+
+/** 手动重发：自动重试耗尽后的恢复入口（Q-F6）。只对 postFailed 的交付生效。 */
+async function retryPostResult(toolId: string): Promise<boolean> {
+  const d = findDelivery(toolId)
+  if (!d || !d.postFailed || !d.lastPost) return false
+  d.postFailed = false
+  return postResultWithRetry(toolId, d.lastPost)
+}
+
 async function finishAndPost(toolId: string, output: string, success: boolean, exitCode: number | null, rejected = false, timeout = false): Promise<void> {
   const delivery = findDelivery(toolId)
   if (delivery) {
@@ -212,25 +301,7 @@ async function finishAndPost(toolId: string, output: string, success: boolean, e
   }
   // 通知父层状态机，完成即不再参与后续捕获
   clearCapture(toolId)
-  try {
-    await withTimeout(
-      postToolResult(
-        toolId,
-        output,
-        success,
-        exitCode,
-        rejected,
-        delivery?.runId,
-        delivery?.confirmedByUi === true,
-      ),
-      POST_RESULT_TIMEOUT_MS,
-      'postToolResult',
-    )
-  } catch (err) {
-    console.error('[useAgentDeliver] 回传 tool-result 失败:', err)
-    const d = findDelivery(toolId)
-    if (d) d.error = String((err as Error)?.message || err)
-  }
+  await postResultWithRetry(toolId, { output, success, exitCode, rejected })
 }
 
 /** 超时兜底：交互/挂起命令不阻塞后端，把已采集内容按失败回传 */
@@ -470,6 +541,20 @@ function parseCaptureChunk(toolId: string, data: string): void {
     if (cap.output) cap.output += '\n'
     cap.output += line
   }
+  // Q-F6：partialLine 硬上限（与完整行 256KB 同口径），挂在排空循环之后 ——
+  // 只对「真正没有换行收尾的残留」生效（base64/二进制回显整段无换行时，
+  // 残留会在 60s 捕获窗口内无界累积到几十 MB）；带换行的整块数据在这里早已
+  // 排空，不会误触发。已过 BEGIN 的行内容属于交付物：截断必须显式打标记
+  // （复用输出侧的 CAPTURE_TRUNCATED_NOTE，只加一次）；未过 BEGIN 的行不进
+  // 交付（BEGIN 处 output 归零），静默丢弃即可，免得标记被 BEGIN 清掉。
+  if (cap.partialLine.length > PARTIAL_LINE_LIMIT) {
+    cap.partialLine = cap.partialLine.slice(0, PARTIAL_LINE_LIMIT)
+    if (cap.started && !cap.truncated) {
+      cap.truncated = true
+      if (cap.output) cap.output += '\n'
+      cap.output += CAPTURE_TRUNCATED_NOTE
+    }
+  }
 }
 
 /**
@@ -523,6 +608,8 @@ export function useAgentDeliver() {
     ingestOutput,
     abortRun,
     resetDeliveries,
+    // Q-F6：回传失败的恢复入口（面板对 postFailed 的交付提供「重发结果」）
+    retryPostResult,
   }
 }
 

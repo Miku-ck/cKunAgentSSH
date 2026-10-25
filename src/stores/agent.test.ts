@@ -903,3 +903,84 @@ describe('clearRunNotice', () => {
     expect(h.store.warnings).toEqual(['正在进行中的告警'])
   })
 })
+
+/**
+ * 迟到事件守卫（Q-F2）：四条终态路径（SSE error 事件 / SSE done 事件 /
+ * onError 回调 / abort）对称 —— run 已终局（completed/failed，或 abort 后的
+ * idle+aborted）时，流尾迟到的 error/done 不得把终态翻转。
+ */
+describe('迟到事件守卫', () => {
+  beforeEach(() => {
+    runs.length = 0
+    setActivePinia(createPinia())
+  })
+
+  it('done → 迟到 error：状态保持 completed，错误不落 errorMessage', () => {
+    const { store, push } = startRun()
+    push({ type: 'done', state: 'completed', iterations: 1, run_id: 'r1' })
+    expect(store.status).toBe('completed')
+
+    push({ type: 'error', message: 'late boom' })
+
+    expect(store.status).toBe('completed')
+    expect(store.errorMessage).toBe('')
+  })
+
+  it('abort → 迟到 error：idle+aborted 不得被翻成 failed', () => {
+    const { store, push } = startRun()
+    store.abort()
+    expect(store.status).toBe('idle')
+    expect(store.aborted).toBe(true)
+
+    push({ type: 'error', message: 'late boom' })
+
+    // 中止判据（idle && aborted）不补的话，这里会翻成 failed 并留下假错误
+    expect(store.status).toBe('idle')
+    expect(store.aborted).toBe(true)
+    expect(store.errorMessage).toBe('')
+  })
+
+  it('abort → 迟到 done：idle 不得被翻成 completed', () => {
+    const { store, push } = startRun()
+    store.abort()
+
+    push({ type: 'done', state: 'completed', iterations: 9, run_id: 'r1' })
+
+    expect(store.status).toBe('idle')
+    expect(store.aborted).toBe(true)
+  })
+
+  it('completed → 迟到 onError 回调：被守卫吸收', () => {
+    const { store, push } = startRun()
+    push({ type: 'done', state: 'completed', iterations: 1, run_id: 'r1' })
+
+    runs[runs.length - 1]!.onError('late network')
+
+    expect(store.status).toBe('completed')
+    expect(store.errorMessage).toBe('')
+  })
+
+  it('aborted → 迟到 onError 回调：中止判据补齐后同样被吸收', () => {
+    const { store } = startRun()
+    store.abort()
+    expect(store.status).toBe('idle')
+
+    runs[runs.length - 1]!.onError('late network')
+
+    expect(store.status).toBe('idle')
+    expect(store.errorMessage).toBe('')
+  })
+
+  it('运行中的 error 事件照常生效 —— 守卫不误伤正常失败路径', () => {
+    const { store, push } = startRun()
+    push({ type: 'error', message: 'boom' })
+    expect(store.status).toBe('failed')
+    expect(store.errorMessage).toBe('boom')
+  })
+
+  it('运行中的 done 事件照常生效 —— 守卫不误伤正常收尾路径', () => {
+    const { store, push } = startRun()
+    push({ type: 'done', state: 'completed', iterations: 2, run_id: 'r1' })
+    expect(store.status).toBe('completed')
+  })
+})

@@ -44,8 +44,15 @@ function scheduledReader(chunks: Chunk[]) {
   }
 }
 
+/** 假流的最小结构面（scheduledReader / completingReader 共用） */
+interface FakeReader {
+  read: () => Promise<ReadResult>
+  cancel: () => Promise<void>
+  releaseLock: () => void
+}
+
 function runStream(
-  reader: ReturnType<typeof scheduledReader>,
+  reader: FakeReader,
   hooks: { onEvent?: (e: unknown) => void; onError?: (e: string) => void; onDone?: () => void },
 ) {
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, body: { getReader: () => reader } })))
@@ -68,6 +75,93 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
+})
+
+/** 按时刻表投喂 chunk 后正常收尾（read → done）的假流：leftover 路径专用 */
+function completingReader(chunks: Chunk[]): FakeReader {
+  const encoder = new TextEncoder()
+  let i = 0
+  return {
+    read: vi.fn(async () => {
+      if (i < chunks.length) {
+        const chunk = chunks[i++]!
+        return { done: false, value: encoder.encode(chunk.text) }
+      }
+      return { done: true }
+    }),
+    cancel: vi.fn(async () => {}),
+    releaseLock: () => {},
+  }
+}
+
+/**
+ * Q-F1：流末尾残留 buffer 不再整体丢弃。
+ *
+ * 读取循环 split('\n') 后 pop 出的最后一段（末行没有换行收尾）此前在 done 退出时
+ * 被直接丢掉：后端把 `data: [DONE]` 作为最后一个不带换行的 chunk 发来、或末尾事件
+ * 与流关闭挤在同一个读块里时，正常收尾被误报成「响应中断」。
+ */
+describe('流末尾 leftover buffer', () => {
+  it('末尾 data: [DONE]（无换行收尾）：照常 onDone，不误报「响应中断」', async () => {
+    const reader = completingReader([
+      { afterMs: 0, text: 'data: {"type":"state","state":"thinking"}\n\n' },
+      // 最后一行没有 \n：旧实现把它留在 buffer 里丢弃并报「响应中断」
+      { afterMs: 0, text: 'data: [DONE]' },
+    ])
+    const events: Array<{ type: string }> = []
+    const errors: string[] = []
+    let doneCount = 0
+    runStream(reader, {
+      onEvent: e => events.push(e as { type: string }),
+      onError: e => errors.push(e),
+      onDone: () => { doneCount++ },
+    })
+
+    await vi.advanceTimersByTimeAsync(1)
+
+    expect(doneCount).toBe(1)
+    expect(errors).toEqual([])
+    expect(events.map(e => e.type)).toEqual(['state'])
+  })
+
+  it('末尾完整事件（无 [DONE]）先派发，再按 B22 报响应中断 —— 真中断不被吞成收尾', async () => {
+    // 第二行 JSON 完整但没有换行收尾：必须照常派发；没有 [DONE] 就不是正常结束
+    const reader = completingReader([
+      { afterMs: 0, text: 'data: {"type":"content","content":"partial"}\ndata: {"type":"state","state":"observing"}' },
+    ])
+    const events: Array<{ type: string }> = []
+    const errors: string[] = []
+    let doneCount = 0
+    runStream(reader, {
+      onEvent: e => events.push(e as { type: string }),
+      onError: e => errors.push(e),
+      onDone: () => { doneCount++ },
+    })
+
+    await vi.advanceTimersByTimeAsync(1)
+
+    expect(events.map(e => e.type)).toEqual(['content', 'state'])
+    expect(errors).toEqual(['响应中断'])
+    expect(doneCount).toBe(0)
+  })
+
+  it('末尾半行（截断 JSON）不派发、报「响应中断」', async () => {
+    const reader = completingReader([
+      { afterMs: 0, text: 'data: {"type":"content","conte' },
+    ])
+    const events: Array<{ type: string }> = []
+    const errors: string[] = []
+    runStream(reader, {
+      onEvent: e => events.push(e as { type: string }),
+      onError: e => errors.push(e),
+      onDone: () => {},
+    })
+
+    await vi.advanceTimersByTimeAsync(1)
+
+    expect(events).toEqual([])
+    expect(errors).toEqual(['响应中断'])
+  })
 })
 
 describe('streamAgentRun 连接停滞看门狗', () => {

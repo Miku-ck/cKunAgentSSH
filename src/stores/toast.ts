@@ -33,6 +33,10 @@ export interface ToastItem {
 
 let seq = 0
 
+/** 同屏 toast 上限：异常循环（轮询失败每几秒弹一条）不得把 items 无界堆高，
+ *  超限摘最老的一条（定时器一并清）。 */
+const MAX_ITEMS = 50
+
 export const useToastStore = defineStore('toast', () => {
   const items = ref<ToastItem[]>([])
   // 跟踪所有活跃的定时器，用于清理
@@ -49,8 +53,33 @@ export const useToastStore = defineStore('toast', () => {
   }
 
   function push(type: ToastType, message: string, duration = 3000, opts: { details?: string; actions?: ToastAction[] } = {}): number {
+    // 同键去重（R-F1）：同类型同文案只保留一条，后到的顶到最新并按新时长重挂
+    // 自动关闭 —— duration=0 的错误 toast（如 ssh.ts 的主机密钥变更警告）随
+    // 重连反复触发时不再永驻叠加，屏幕被同一条刷满。
+    const dup = items.value.find(t => t.type === type && t.message === message)
+    if (dup) {
+      dup.duration = duration
+      if (opts.details !== undefined) dup.details = opts.details
+      if (opts.actions !== undefined) dup.actions = opts.actions
+      items.value = [...items.value.filter(t => t.id !== dup.id), dup]
+      if (duration > 0) {
+        armDismiss(dup.id, duration)
+      } else {
+        // duration=0 = 永驻：换掉了旧的自动关闭档位，撤掉在途定时器
+        const timer = timers.get(dup.id)
+        if (timer) {
+          clearTimeout(timer)
+          timers.delete(dup.id)
+        }
+      }
+      return dup.id
+    }
     const id = ++seq
     items.value.push({ id, type, message, duration, details: opts.details, actions: opts.actions })
+    if (items.value.length > MAX_ITEMS) {
+      const oldest = items.value[0]
+      if (oldest) dismiss(oldest.id)
+    }
     if (duration > 0) armDismiss(id, duration)
     return id
   }

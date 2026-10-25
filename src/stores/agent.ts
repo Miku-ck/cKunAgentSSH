@@ -257,6 +257,30 @@ export const useAgentStore = defineStore('agent', () => {
 
   // ── Actions ──
 
+  /**
+   * run 是否已终局（含用户中止）—— 迟到事件守卫的唯一判据，四条终态路径共用
+   * （SSE error 事件 / SSE done 事件 / onError 回调 / abort()）。
+   * abort() 把 status 置回 idle（:356）再置 aborted（:358），所以「已中止」
+   * 在这里表现为 status==='idle' && aborted —— 只判 completed/failed 会漏掉它。
+   */
+  function runSettled(): boolean {
+    return status.value === 'completed'
+      || status.value === 'failed'
+      || (status.value === 'idle' && aborted.value)
+  }
+
+  /**
+   * 终态收尾：flush 流式擦洗器，输出残留 buf（仍在 think 块内则丢弃，防泄露
+   * partial CoT）。原先只有 done 分支与 _reset 会 flush —— error 事件 / onError
+   * 回调 / abort() 三条非正常终态路径把残留 buf 留在了擦洗器里。
+   */
+  function flushScrubbers(): void {
+    const contentTail = _contentScrubber.flush()
+    if (contentTail) content.value += contentTail
+    const reasoningTail = _reasoningScrubber.flush()
+    if (reasoningTail) reasoning.value += reasoningTail
+  }
+
   function runAgent(options: {
     task: string
     conversationId: string
@@ -312,11 +336,11 @@ export const useAgentStore = defineStore('agent', () => {
       sshSessionId: options.sshSessionId,
       onEvent: (event: AgentSSEEvent) => _handleEvent(event),
       onError: (err: string) => {
-        // 审查修复（P2）：与 onDone 的 guard 对称 — 原实现无条件置 failed，
-        // 窄窗口竞态（服务端先发 done 再发 error / 中止后迟到的 error）
-        // 会把已完成/已中止的 run 状态翻回 failed
-        if (status.value === 'completed') {
-          console.warn('[Agent] 运行已完成，忽略迟到 onError:', err)
+        // 审查修复（P2）+ Q-F2：与 onDone 的 guard 对称并补齐中止判据 —— 原实现
+        // 只判 completed，中止后的迟到 error（abort 已置 idle+aborted）会把
+        // 已中止的 run 状态翻回 failed
+        if (runSettled()) {
+          console.warn('[Agent] 运行已终局，忽略迟到 onError:', err)
           return
         }
         errorMessage.value = err?.trim()
@@ -324,6 +348,8 @@ export const useAgentStore = defineStore('agent', () => {
           : 'AI 运行失败，后端未返回具体错误，请查看后端日志'
         status.value = 'failed'
         currentState.value = 'failed'
+        // Q-F2：非正常终态同样 flush 擦洗器（残留 buf 不留到下一轮）
+        flushScrubbers()
         // B11 修复：run 结束清理权限请求状态，防止面板里残留过期授权按钮
         permissionRequests.value = []
         // S1-02 修复：这是第四个「run 终态」清理点（另外三处是 SSE error 事件、
@@ -356,6 +382,8 @@ export const useAgentStore = defineStore('agent', () => {
     status.value = 'idle'
     // M17：标记用户中止，供固化 watch 生成"(已中止)"文案
     aborted.value = true
+    // Q-F2：非正常终态同样 flush 擦洗器（残留 buf 不留到下一轮）
+    flushScrubbers()
     // B11 修复：中止即 run 结束 — 清理权限请求状态，防止残留过期授权按钮
     permissionRequests.value = []
     // 同 done/error 分支：run 已终止，继续挂着向导会让用户答一张没人收的题——
@@ -487,7 +515,7 @@ export const useAgentStore = defineStore('agent', () => {
       return 'granted'
     } catch (e) {
       req.settling = false
-      console.error('授权失败:', e)
+      console.error('[Agent] 授权失败:', e)
       return 'failed'
     }
   }
@@ -512,7 +540,7 @@ export const useAgentStore = defineStore('agent', () => {
     try {
       await agentApi.denyCommand(req.tool, command, req.runId)
     } catch (e) {
-      console.error('拒绝登记失败:', e)
+      console.error('[Agent] 拒绝登记失败:', e)
       req.settling = false
       return false  // 卡片保留，用户可重试；否则后端仍会等待审批
     }
@@ -640,7 +668,9 @@ export const useAgentStore = defineStore('agent', () => {
               scheduleRev.value++
             }
             // P2 修复：回填后从索引中摘除 —— 索引只保留「未回填」条目，避免后续事件误匹配
-            toolCallByCallId.delete(tc.callId ?? '')
+            // Q-F2：空 callId 加守卫 —— delete('') 是无害空转，但会掩盖
+            // 「这条结果根本没有 callId」的事实，别让空键混进索引操作
+            if (tc.callId) toolCallByCallId.delete(tc.callId)
             if (tc.tool === 'shell_exec') {
               const si = pendingShellExec.indexOf(tc)
               if (si >= 0) pendingShellExec.splice(si, 1)
@@ -816,11 +846,20 @@ export const useAgentStore = defineStore('agent', () => {
       }
 
       case 'error':
+        // Q-F2：迟到事件守卫 —— run 已终局（completed/failed，或 abort 后的
+        // idle+aborted）时，流尾迟到的 error 事件不得把终态翻回失败。
+        // 与 onError 回调（runSettled）、done 分支同一判据，四条终态路径对称。
+        if (runSettled()) {
+          console.warn('[Agent] 运行已终局，忽略迟到 error 事件:', event.message)
+          break
+        }
         errorMessage.value = event.message?.trim() || 'AI 运行失败，后端未返回具体错误'
         status.value = 'failed'
         // H13 修复：同步更新 currentState，避免 UI 仍显示"思考中"
         currentState.value = 'failed'
-        // B11 修复：run 结束清理权限请求状态，防止残留过期授权按钮
+        // Q-F2：非正常终态同样 flush 擦洗器（残留 buf 不留到下一轮）
+        flushScrubbers()
+        // B11 修复：run 结束清理权限请求状态，防止面板里残留过期授权按钮
         permissionRequests.value = []
         // run 已终止：澄清向导继续挂着的话，用户答题只会 POST 到一个
         // 后端不再等待的 run_id（clarification_done 永不回来，卡片永不消失）
@@ -906,13 +945,14 @@ export const useAgentStore = defineStore('agent', () => {
       }
 
       case 'done':
-        // 流结束：flush 擦洗器，输出残留 buf（仍在 think 块内则丢弃，防泄露 partial CoT）
-        {
-          const contentTail = _contentScrubber.flush()
-          if (contentTail) content.value += contentTail
-          const reasoningTail = _reasoningScrubber.flush()
-          if (reasoningTail) reasoning.value += reasoningTail
+        // Q-F2：迟到事件守卫 —— 同 error 分支，abort 后（idle+aborted）或已
+        // completed/failed 的 run 不再接受迟到的 done 事件翻转状态
+        if (runSettled()) {
+          console.warn('[Agent] 运行已终局，忽略迟到 done 事件')
+          break
         }
+        // 流结束：flush 擦洗器，输出残留 buf（仍在 think 块内则丢弃，防泄露 partial CoT）
+        flushScrubbers()
         if (event.iterations !== undefined) totalIterations.value = event.iterations
         // P7: 捕获成本快照 + run_id
         if (event.cost) costInfo.value = event.cost

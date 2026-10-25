@@ -119,12 +119,24 @@ export interface DiagnosticsSnapshot {
   app_settings: Record<string, string>
 }
 
-export interface Skill {
+/**
+ * 技能条目的公共字段基座（单一事实源）。
+ *
+ * api/core 的后端 wire 形态（Skill，system_prompt/source）与 stores/skills 的
+ * UI 形态（version/content/triggerWords）共用这一份字段集 —— 两处各抄一份
+ * 同名异形接口，字段一漂移就是静默的 undefined。
+ */
+export interface SkillBase {
   id: string
   name: string
   slug: string
   description: string
   category: string
+  created_at: string
+  updated_at: string
+}
+
+export interface Skill extends SkillBase {
   system_prompt: string
   source: 'builtin' | 'manual' | 'auto'
   is_builtin: number
@@ -132,8 +144,6 @@ export interface Skill {
   priority: number
   trigger_words: string
   mode_enabled?: boolean
-  created_at: string
-  updated_at: string
 }
 
 // ── 会话工作流（Spec/Plan/Goal）──

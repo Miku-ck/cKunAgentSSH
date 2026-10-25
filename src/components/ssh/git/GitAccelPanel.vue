@@ -469,13 +469,17 @@ function doConvert(): void {
   converted.value = accel.convert(inputUrl.value)
 }
 
-// 镜像清单（启停/增删/测速后）变化时，已转换的结果自动重算——否则新加的镜像不出现在结果里
+// 镜像清单（启停/增删/改名后）变化时，已转换的结果自动重算——否则新加的镜像不出现在结果里
+// R-F1：deep watch → 精确字段 watch —— buildAccelLinks 只消费每个代理/镜像的
+// id/name/prefix|host/enabled，deep 遍历整棵数组树是白付的代价
 watch(
-  () => [accel.proxies, accel.webMirrors] as const,
+  () => [
+    accel.proxies.map(p => `${p.id}:${p.name}:${p.prefix}:${p.enabled}`).join('|'),
+    accel.webMirrors.map(w => `${w.id}:${w.name}:${w.host}:${w.enabled}`).join('|'),
+  ],
   () => {
     if (inputUrl.value.trim() && converted.value) doConvert()
   },
-  { deep: true },
 )
 
 /** clone 类链接展示为完整命令，下载/网页展示裸地址 */

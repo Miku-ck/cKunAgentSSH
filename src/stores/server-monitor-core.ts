@@ -1,11 +1,14 @@
 /**
- * 服务器监控 — 纯核心（无 vue/pinia 依赖，可独立单测）
+ * 服务器监控 — 纯核心（无 vue 依赖，可独立单测）
  *
  * 远端聚合采集命令 + /proc 输出解析 + CPU 跨轮次差分。
  * Pinia store（server-monitor.ts）在此之上做轮询编排与状态管理。
+ * 唯一的非纯依赖是 api/base 的 stripIpcEnvelope（IPC 信封剥离，与
+ * unwrapIpcErrorEnvelope 同源）；它自身只在被调用时才触碰 pinia。
  */
 
 import { extractSSHError } from '../ssh-error-types'
+import { stripIpcEnvelope } from '../api/base'
 
 // ── 数据类型 ──
 
@@ -191,7 +194,8 @@ export function describeMonitorError(e: unknown): MonitorErrorInfo {
   }
   // 兜底：剥掉 Electron IPC 的 "Error invoking remote method 'xxx':" 外壳，
   // 仅保留根因消息，避免把内部 IPC 细节暴露给用户
-  const root = msg.replace(/^Error invoking remote method '[^']+'\s*:\s*/, '')
+  // （信封式与 api/base 的 unwrapIpcErrorEnvelope 同源：stripIpcEnvelope）
+  const root = stripIpcEnvelope(msg)
   return {
     code: 'UNKNOWN',
     message: root || '指标采集失败，请检查连接后重试',
