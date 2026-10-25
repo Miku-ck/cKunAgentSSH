@@ -24,8 +24,11 @@
   传参会多一张审批卡 —— F6 先例（--env-file=.env）已接受这种取舍：覆盖面优先，
   卡片代价由 once / 本会话允许消化。
 
-登记未补的缺口：`/etc/ssl/private` 服务端私钥、任意路径的 `.pem/.key/.ppk`
-主机私钥（退役文档 §7 的主机私钥条目）仍未收 —— 本文件不假装覆盖它们。
+缺口收口（审查 2026-10-25 第二批）：退役文档 §7 的主机私钥条目 —— `/etc/ssl/private`
+服务端私钥、任意路径的 `.pem/.key/.ppk/.p12/.pfx` 主机私钥 —— 已补上，本文件不再
+登记它们为缺口。`.pem` 同时是公开证书的通用后缀，内容上无法与私钥区分，按
+"pem 一律审批"的 fail-closed 处理（`openssl x509 -in cert.pem` 这类读公钥证书会
+多一张审批卡），取舍登记在 `_SECRET_FILE_RE` 的注释里。
 """
 import pytest
 
@@ -70,6 +73,8 @@ def test_凭据落点读取要审批(cmd):
     "/home/deploy/.git-credentials",
     "/root/.docker/config.json",
     "/home/deploy/.pypirc",
+    "/etc/ssl/private/x.key",     # 主机私钥缺口收口：约定目录
+    "C:/keys/server.key",         # 主机私钥缺口收口：任意路径后缀（file_read 本地腿的真实写法）
 ])
 def test_file_read_代理模板同样命中(path):
     """`file_read` 的分类代理是 `base64 <path>`（constructed 通路），与自由文本同判。"""
@@ -128,6 +133,47 @@ def test_windows_形态与_posix_同罪():
         level, reason = classify_command(f"cat {path}")
         assert _LEVEL[level] >= _LEVEL["dangerous"], f"读取 {path!r} 判 {level}"
         assert explain_for_reason(reason)
+
+
+# ── 主机私钥缺口收口（审查 2026-10-25 第二批）─────────────────────────────────
+# 文件名任意、按**后缀**/约定目录命中的私钥 —— 与 id_* 那族的区别是名字不固定：
+# nginx/openssl/PuTTY/PKCS#12 的私钥落盘惯例是看扩展名不看文件名。
+PRIVATE_KEY_READS = [
+    "cat C:/keys/server.key",            # 审查发现的原样本：任意路径 + .key
+    r"cat C:\data\deploy\host.pem",      # 反斜杠形态同判（Windows 本地腿的真实写法）
+    "cat C:/Data/Deploy/HOST.PEM",       # 大小写变体走 _WIN_SECRET_PATH_RE（POSIX 侧大小写敏感）
+    "cat /etc/ssl/private/x.key",        # 发行版约定的服务端私钥目录（Debian/Ubuntu 默认落点）
+    "cat /etc/ssl/private",              # 目录本体同罪（与 `.ssh` 目录本体口径一致）
+    "cat /srv/app/certs/host.pem",       # 任意路径 + .pem（pem 一律审批的登记取舍）
+    "cat /home/deploy/host.ppk",         # PuTTY 私钥
+    "cat /srv/app/keystore.p12",         # PKCS#12 keystore 内含私钥
+]
+
+
+@pytest.mark.parametrize("cmd", PRIVATE_KEY_READS)
+def test_主机私钥读取要审批(cmd):
+    level, reason = classify_command(cmd)
+    assert _LEVEL[level] >= _LEVEL["dangerous"], f"{cmd!r} 判 {level}：任意路径的私钥不该免审直读"
+    assert reason, f"{cmd!r} 非 safe 必须带 reason"
+    assert explain_for_reason(reason), f"reason {reason!r} 没有中文后果说明"
+
+
+# 误拦锁：后缀规则只认"结尾是 .pem/.key/…"，公钥与普通配置/证书不得被牵连。
+NOT_PRIVATE_KEYS = [
+    "cat /etc/ssh/ssh_host_rsa_key.pub",  # 公钥不是秘密（既有锁，此处防后缀规则牵连）
+    "cat /srv/certs/server.key.pub",      # ssh-keygen -f server.key 的公钥约定名
+    "cat C:/keys/server.key.pub",         # 同上，Windows 形态
+    "cat /srv/app/server.keys",           # 兄弟名字：词边界不吃
+    "cat /etc/ssl/certs/ca.crt",          # 公开证书不是私钥
+    "cat /etc/nginx/nginx.conf",          # 普通配置
+    "cat C:/Data/app.conf",               # 普通配置，Windows 形态
+]
+
+
+@pytest.mark.parametrize("cmd", NOT_PRIVATE_KEYS)
+def test_非私钥路径不得被牵连(cmd):
+    level, _reason = classify_command(cmd)
+    assert level == "safe", f"{cmd!r} 被判 {level}：正常排查被误拦"
 
 
 def test_敏感tar源同口径():

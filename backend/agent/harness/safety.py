@@ -270,6 +270,16 @@ _PERSISTENCE_PREFIXES = (
 # .npmrc/.pypirc（CI 发布 token）。.npmrc 对**项目级**文件也命中：仓库内 .npmrc
 # 常含发布 token，误拦代价一张卡（同 F6 的取舍）；`.aws/config` 只是 profile
 # 配置不含密钥，刻意不收整个 .aws 目录 —— 误拦锁见 test_safety_credential_file_families.py。
+# 审查2026-10-25补全（关闭 _WIN_SECRET_PATH_RE 登记的"主机私钥缺口"）：任意路径的
+# 私钥按**后缀**与**约定目录**命中 —— .pem/.key/.ppk/.p12/.pfx 是 nginx/openssl/
+# PuTTY/PKCS#12 keystore 的私钥落盘惯例，文件名任意（C:/keys/server.key、
+# /srv/deploy/host.pem 都不叫 id_*）。词边界 + 结尾锚：`server.keys`、`host.key.pub`
+# （ssh-keygen -f server.key 的公钥约定名）这类"后缀后还有内容"的名字不命中。
+# .pem 同时是公开证书的通用后缀，内容上无法与私钥区分 —— 接受"pem 一律审批"的
+# fail-closed（`openssl x509 -in cert.pem` 这类读公钥证书多一张卡，同 F6 取舍）。
+# /etc/ssl/private 是发行版约定的服务端私钥目录（Debian/Ubuntu 的 apache/nginx
+# 默认落点），目录本体与其子树命中；边界与 _PERSISTENCE_PREFIXES 同口径，
+# /etc/ssl/private_keys 这类兄弟名字不连坐。
 _SECRET_FILE_RE = re.compile(
     r"(/etc/(?:passwd|shadow|sudoers|gshadow|master\.passwd)|"
     r"(?:/root|~|\$HOME)/?\.ssh/"
@@ -284,6 +294,8 @@ _SECRET_FILE_RE = re.compile(
     r"|(?:^|[/~])\.npmrc\b"
     r"|(?:^|[/~])\.pypirc\b"
     r"|(?:^|[/~])\.config/gcloud/(?:legacy_credentials|credentials\.db|access_tokens\.db|application_default_credentials)"
+    r"|/etc/ssl/private(?:/|$)"
+    r"|\.(?:pem|key|ppk|p12|pfx)\b$"
     r")"
 )
 
@@ -292,8 +304,9 @@ _SECRET_FILE_RE = re.compile(
 # Windows —— 实测同一条私钥写成 `C:/Users/a/.ssh/id_rsa` 判 dangerous、写成
 # `C:\Users\a\.ssh\id_rsa` 判 safe，而 Windows 文件系统既不分大小写也用反斜杠分隔，
 # 两者是同一个文件。覆盖面与 _SECRET_FILE_RE 严格对齐（.ssh 目录 + id_* 私钥 +
-# 2026-10-25 的凭据落点家族），不额外加宽 —— 主机私钥另有缺口，同一份退役文档 §7
-# 登记过，仍未补。
+# 凭据落点家族 + 2026-10-25 补上的任意路径私钥后缀），不额外加宽 —— 原先登记的
+# "主机私钥另有缺口、仍未补"随 _SECRET_FILE_RE 的补全一并关闭。/etc/ssl/private
+# 是固定 POSIX 路径，同 /etc/shadow 一样没有 Windows 形态可镜像。
 # IGNORECASE 只作用于带盘符的形态：Linux 上 `/etc/PASSWD` 不是 `/etc/passwd`，
 # 把大小写不敏感推广到 POSIX 等于凭空造出一批不存在的命中。
 _WIN_SECRET_PATH_RE = re.compile(
@@ -305,7 +318,8 @@ _WIN_SECRET_PATH_RE = re.compile(
     r"|[a-z]:/(?:[^/]*/)*\.kube/config\b"
     r"|[a-z]:/(?:[^/]*/)*\.(?:netrc|git-credentials|npmrc|pypirc)\b"
     r"|[a-z]:/(?:[^/]*/)*\.docker/config\.json\b"
-    r"|[a-z]:/(?:[^/]*/)*\.config/gcloud/(?:legacy_credentials|credentials\.db|access_tokens\.db|application_default_credentials)",
+    r"|[a-z]:/(?:[^/]*/)*\.config/gcloud/(?:legacy_credentials|credentials\.db|access_tokens\.db|application_default_credentials)"
+    r"|[a-z]:/(?:[^/]*/)*[^/]*\.(?:pem|key|ppk|p12|pfx)\b$",
     re.IGNORECASE,
 )
 
