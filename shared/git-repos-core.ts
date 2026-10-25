@@ -647,7 +647,7 @@ export type CommitOutcome =
   | { kind: 'committed'; message: string; hash: string | null }
   | { kind: 'failed'; message: string }
 
-/** 解释 `git commit` 回包：退出 0 → 从 `[branch abc1234]` 提取分支与短哈希；失败 → stderr 首行 */
+/** 解释 `git commit` 回包：退出 0 → 从 `[branch abc1234]` 提取分支与短哈希；失败 → stderr 友好化 */
 export function interpretCommit(stdout: string, stderr: string, exitCode: number | null): CommitOutcome {
   if (exitCode === 0) {
     const all = `${stdout}\n${stderr}`
@@ -656,7 +656,7 @@ export function interpretCommit(stdout: string, stderr: string, exitCode: number
     const where = branch ? `${branch}${hash ? ` ${hash.slice(0, 7)}` : ''}` : (hash ? hash.slice(0, 7) : '')
     return { kind: 'committed', message: where ? `已提交到 ${where}` : '已提交', hash }
   }
-  return { kind: 'failed', message: firstLine(stderr) || firstLine(stdout) || `退出码 ${exitCode ?? 'null'}` }
+  return { kind: 'failed', message: friendlyGitError(stderr) || firstLine(stdout) || `退出码 ${exitCode ?? 'null'}` }
 }
 
 export type PushOutcome =
@@ -674,7 +674,7 @@ export function interpretPush(stdout: string, stderr: string, exitCode: number |
   if (/rejected|fetch first|non-fast-forward/i.test(all)) {
     return { kind: 'rejected', message: '远端有你没有的提交：先拉取（pull）合并后再推送' }
   }
-  return { kind: 'failed', message: firstLine(friendlyGitStderr(stderr)) || firstLine(stdout) || `退出码 ${exitCode ?? 'null'}` }
+  return { kind: 'failed', message: friendlyGitError(stderr) || firstLine(stdout) || `退出码 ${exitCode ?? 'null'}` }
 }
 
 
@@ -688,9 +688,48 @@ export function firstLine(s: string): string {
   return (s || '').split('\n').map(l => l.trim()).find(Boolean) || ''
 }
 
-/** 本地 execFile 的 stderr 黑话 → 用户能懂的话（'git-not-found' 是 electron/git-repos.ts 的约定哨兵） */
-export function friendlyGitStderr(stderr: string): string {
-  return stderr === 'git-not-found' ? '未检测到 git（请安装 git 或加入 PATH 后重试）' : stderr
+/** 剥掉 ANSI 转义序列：托管端（Gitee 等）的 remote: 消息自带颜色码，原样进 toast 是乱码 */
+export function stripAnsi(s: string): string {
+  return s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
+}
+
+/**
+ * 常见 git 失败 stderr → 中文指引（按特异性排序，首条命中即用）。对整段
+ * stderr 匹配：认证失败常出现在 remote: 行之后的 fatal: 行。认不出的
+ * 不硬翻——stderr 首行原文仍是最有诊断价值的信息。
+ */
+const GIT_ERROR_PATTERNS: ReadonlyArray<{ re: RegExp; msg: string }> = [
+  { re: /access token is expired/i, msg: '远端访问令牌已过期：请在仓库所在机器重新生成令牌并更新 git 凭证后重试' },
+  { re: /permission denied \(publickey\)|no supported authentication methods/i, msg: 'SSH 密钥认证被拒：请在仓库所在机器配置可用密钥，或改用 HTTPS 远程地址' },
+  { re: /host key verification failed/i, msg: 'SSH 主机指纹校验失败：请在仓库所在机器手动 git 连接一次并确认指纹后重试' },
+  { re: /authentication failed|authentication required|invalid username or password|http basic: access denied|\b401\b|unauthorized/i, msg: '远端认证失败：凭证（令牌 / 账号密码）无效或已过期，请更新 git 凭证后重试' },
+  { re: /\b403\b|forbidden|access denied|not allowed/i, msg: '远端拒绝访问：当前账号缺少该仓库的权限，请检查账号授权' },
+  { re: /repository not found|\b404\b/i, msg: '远端仓库不存在或无权访问：请检查 remote 地址与账号权限' },
+  { re: /could not resolve host|failed to connect|connection timed out|connection refused|network is unreachable/i, msg: '无法连接远端：请检查网络、代理或 VPN 后重试' },
+  { re: /ssl certificate problem|certificate verify failed/i, msg: 'TLS 证书校验失败：远端证书过期或不受本机信任，请更新证书 / CA 配置' },
+  { re: /not a git repository/i, msg: '该路径不是 git 仓库（.git 缺失或已损坏）' },
+  { re: /would be overwritten|please commit your changes or stash/i, msg: '本地有未提交变更会被覆盖：请先提交或 stash 后重试' },
+]
+
+/**
+ * git stderr → 用户能直接懂的话（本地 execFile 与远程 sshExec 的失败回包共用）：
+ * 剥 ANSI 色码 → 模式表给中文指引 → 认不出的保留首行原文。
+ * 'git-not-found' 是 electron/git-repos.ts 的约定哨兵，同样转友好文案。
+ */
+export function friendlyGitError(stderr: string, fallback = ''): string {
+  const clean = stripAnsi(String(stderr ?? ''))
+  if (clean === 'git-not-found') return '未检测到 git（请安装 git 或加入 PATH 后重试）'
+  const line = firstLine(clean)
+  if (!line) return fallback
+  const hit = GIT_ERROR_PATTERNS.find(p => p.re.test(clean))
+  return hit ? hit.msg : line
+}
+
+/** fetch-all 汇总的失败明细：按仓库列出，最多 3 条防 toast 顶爆，余量收口成计数 */
+export function formatFetchFailures(fails: string[]): string {
+  if (!fails.length) return ''
+  const shown = fails.slice(0, 3).join('；')
+  return fails.length > 3 ? `${shown}（另有 ${fails.length - 3} 项）` : shown
 }
 
 /** 远程 status 回包 → 行（stdout 三段 + stderr；整体失败时置 error） */
@@ -706,12 +745,12 @@ export function toRemoteRepoRow(sessionId: string, path: string, stdout: string,
   }
   const sections = splitBySep(stdout)
   if (sections.length < 3) {
-    return { ...base, error: firstLine(stderr) || '远端取数失败（回包分段缺失）' }
+    return { ...base, error: friendlyGitError(stderr, '远端取数失败（回包分段缺失）') }
   }
   const [statusRaw, logRaw, remotesRaw] = sections
   const status = parseGitStatusPorcelain(statusRaw)
   if (!status.branch && !status.files.length && stderr.trim()) {
-    return { ...base, error: firstLine(stderr) }
+    return { ...base, error: friendlyGitError(stderr, '远端取数失败') }
   }
   const pick = pickRemote(parseRemoteConfig(remotesRaw), status.upstream)
   const originUrl = pick?.url ?? null
@@ -764,5 +803,5 @@ export function interpretPull(stdout: string, stderr: string, exitCode: number |
   if (/not possible to fast-forward|divergent branches|Not possible to fast-forward/i.test(all)) {
     return { kind: 'diverged', message: '本地与远端已分叉：本工具不做自动合并（--ff-only），请手动处理后再拉取' }
   }
-  return { kind: 'failed', message: firstLine(friendlyGitStderr(stderr)) || firstLine(stdout) || `退出码 ${exitCode ?? 'null'}` }
+  return { kind: 'failed', message: friendlyGitError(stderr) || firstLine(stdout) || `退出码 ${exitCode ?? 'null'}` }
 }

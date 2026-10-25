@@ -14,7 +14,7 @@ import {
   isValidRemoteRepoPath, shSingleQuote, REMOTE_SEP,
   buildRemoteRepoStatusCmd, buildRemoteRepoDetailCmd, buildRemoteRepoVerifyCmd,
   buildRemoteGitActionCmd, splitBySep, toRemoteRepoRow, parseRepoDetailSections,
-  interpretPull, firstLine, friendlyGitStderr,
+  interpretPull, firstLine, friendlyGitError, stripAnsi, formatFetchFailures,
   GRAPH_MAX_LIMIT, buildGraphLogArgs, buildRemoteGraphCmd,
   parseGraphLog, graphRefKind, graphHasMore, layoutGraphLanes,
   draftCommitMessage, looksLikeNoiseFile, clampDiffText, buildRemoteDiffCmd,
@@ -311,9 +311,9 @@ describe('远程回包解析', () => {
     expect(row.lastCommit?.subject).toBe('feats: 指标导出')
     expect(row.error).toBeUndefined()
   })
-  it('回包分段缺失（命令整体失败）→ 行级 error', () => {
+  it('回包分段缺失（命令整体失败）→ 行级 error（友好化翻译）', () => {
     const row = toRemoteRepoRow('s1', '/no/such/repo', 'fatal: not a git repository', "fatal: not a git repository (or any of the parent directories): .git")
-    expect(row.error).toContain('not a git repository')
+    expect(row.error).toContain('不是 git 仓库')
   })
   it('空仓库：status 段有头行无文件，log 段为空 → lastCommit 为 null 而非报错', () => {
     const stdout = ['## No commits yet on main', '', ''].join(sep)
@@ -347,20 +347,57 @@ describe('interpretPull（--ff-only 安全边界）', () => {
     expect(out.kind).toBe('diverged')
     expect(out.message).toContain('--ff-only')
   })
-  it('其他失败 → failed，取 stderr 首行', () => {
+  it('其他失败 → failed，stderr 友好化（认证失败给中文指引）', () => {
     const out = interpretPull('', 'fatal: Authentication failed\nsecond line', 128)
     expect(out.kind).toBe('failed')
-    expect(out.message).toBe('fatal: Authentication failed')
+    expect(out.message).toContain('认证失败')
   })
   it('git-not-found 哨兵 → 友好文案而不是黑话', () => {
     const out = interpretPull('', 'git-not-found', -1)
     expect(out.kind).toBe('failed')
     expect(out.message).toBe('未检测到 git（请安装 git 或加入 PATH 后重试）')
-    expect(friendlyGitStderr('fatal: x')).toBe('fatal: x')
+    expect(friendlyGitError('fatal: x')).toBe('fatal: x')
   })
   it('firstLine 取首个非空行', () => {
     expect(firstLine('  \n\nfatal: x\nnext')).toBe('fatal: x')
     expect(firstLine('')).toBe('')
+  })
+})
+
+describe('用户友好报错（stripAnsi / friendlyGitError / formatFetchFailures）', () => {
+  it('stripAnsi 剥掉 SGR 颜色码，正文原样保留', () => {
+    expect(stripAnsi('\x1b[31m[session-7a48] Oauth: Access token is expired\x1b[0m'))
+      .toBe('[session-7a48] Oauth: Access token is expired')
+    expect(stripAnsi('\x1b[1;32mok\x1b[0m plain')).toBe('ok plain')
+    expect(stripAnsi('无色码 stderr')).toBe('无色码 stderr')
+  })
+  it('friendlyGitError：令牌过期（remote: 行带 ANSI）→ 中文指引（实测 Gitee 报错形态）', () => {
+    const stderr = '\x1b[31m[session-7a484f87] Oauth: Access token is expired\x1b[0m\nfatal: 无法访问'
+    expect(friendlyGitError(stderr)).toContain('令牌已过期')
+  })
+  it('friendlyGitError：认证 / SSH 密钥 / 主机指纹 / 网络 / 权限各自命中对应指引', () => {
+    expect(friendlyGitError('remote: HTTP Basic: Access denied\nfatal: Authentication failed')).toContain('认证失败')
+    expect(friendlyGitError("fatal: unable to access 'https://x/': The requested URL returned error: 401")).toContain('认证失败')
+    expect(friendlyGitError('git@github.com: Permission denied (publickey).')).toContain('SSH 密钥')
+    expect(friendlyGitError('Host key verification failed.')).toContain('指纹')
+    expect(friendlyGitError('fatal: unable to access ...: Could not resolve host: gitee.com')).toContain('连接远端')
+    expect(friendlyGitError('remote: You are not allowed to push code to this branch.')).toContain('权限')
+  })
+  it('friendlyGitError：不是仓库 / 本地变更被覆盖也翻译；认不出的保留原文', () => {
+    expect(friendlyGitError('fatal: not a git repository (or any of the parent directories): .git')).toContain('不是 git 仓库')
+    expect(friendlyGitError('error: Your local changes to the following files would be overwritten by checkout')).toContain('stash')
+    expect(friendlyGitError('fatal: unable to auto-detect email address')).toBe('fatal: unable to auto-detect email address')
+  })
+  it('friendlyGitError：空 stderr 用 fallback；git-not-found 哨兵转友好文案', () => {
+    expect(friendlyGitError('', 'fetch 退出码 128')).toBe('fetch 退出码 128')
+    expect(friendlyGitError('git-not-found')).toBe('未检测到 git（请安装 git 或加入 PATH 后重试）')
+  })
+  it('formatFetchFailures：按仓库列出，最多 3 条，余量收口成计数', () => {
+    expect(formatFetchFailures([])).toBe('')
+    expect(formatFetchFailures(['app：令牌已过期'])).toBe('app：令牌已过期')
+    const three = ['a：x', 'b：y', 'c：z']
+    expect(formatFetchFailures(three)).toBe('a：x；b：y；c：z')
+    expect(formatFetchFailures([...three, 'd：w', 'e：v'])).toBe('a：x；b：y；c：z（另有 2 项）')
   })
 })
 

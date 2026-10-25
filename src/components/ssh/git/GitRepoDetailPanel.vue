@@ -221,8 +221,7 @@ import {
   buildRemoteRepoDetailCmd,
   clampDiffText,
   draftCommitMessage,
-  firstLine,
-  friendlyGitStderr,
+  friendlyGitError,
   graphHasMore,
   looksLikeNoiseFile,
   parseGraphLog,
@@ -322,7 +321,7 @@ async function load(): Promise<void> {
       if (!sid || !api) throw new Error('远端会话不可用')
       const r = await api.sshExec(sid, buildRemoteRepoDetailCmd(props.repo.path), DETAIL_TIMEOUT_SEC)
       const parts = splitBySep(r.stdout)
-      if (parts.length < 3) throw new Error(firstLine(r.stderr) || '远端取数失败（回包分段缺失）')
+      if (parts.length < 3) throw new Error(friendlyGitError(r.stderr, '远端取数失败（回包分段缺失）'))
       detail.value = parseRepoDetailSections(parts[0], parts[1], parts[2])
     }
   } catch (e) {
@@ -409,7 +408,8 @@ async function aiGenerateDraft(): Promise<void> {
     void nextTick(() => commitInput.value?.focus())
   } catch (e) {
     commitMsg.value = draftCommitMessage(checkedPaths.value)
-    toast.warning(`AI 生成失败（${toFriendlyMessage(e, '服务不可用')}），已填入规则草稿`)
+    // 后端 detail 自带去处（设置 → AI 模型 / 重试或手写），给足阅读时长
+    toast.warning(`AI 生成失败：${toFriendlyMessage(e, '服务不可用')}。已填入规则草稿`, 8000)
   } finally {
     aiDrafting.value = false
   }
@@ -473,14 +473,14 @@ async function loadGraph(): Promise<void> {
     let raw = ''
     if (props.repo.scope === 'local') {
       const r = await api.gitreposGraphLog(props.repo.path, graphLimit.value)
-      if (r.code !== 0) throw new Error(firstLine(friendlyGitStderr(r.stderr)) || `图谱取数退出码 ${r.code}`)
+      if (r.code !== 0) throw new Error(friendlyGitError(r.stderr, `图谱取数退出码 ${r.code}`))
       raw = r.stdout
     } else {
       const sid = props.repo.sessionId
       if (!sid) throw new Error('远端会话不可用')
       const r = await api.sshExec(sid, buildRemoteGraphCmd(props.repo.path, graphLimit.value), DETAIL_TIMEOUT_SEC)
       // 空仓库 log 也退出 0；只在既无输出又非零时才算失败
-      if (r.exitCode !== 0 && !r.stdout.trim()) throw new Error(firstLine(r.stderr) || '远端图谱取数失败')
+      if (r.exitCode !== 0 && !r.stdout.trim()) throw new Error(friendlyGitError(r.stderr, '远端图谱取数失败'))
       raw = r.stdout
     }
     graphRows.value = parseGraphLog(raw)

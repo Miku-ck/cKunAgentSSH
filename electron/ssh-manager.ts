@@ -179,8 +179,9 @@ function sftpWrite(sftp: SFTPWrapper, handle: Buffer, buffer: Buffer, position: 
 
 // ════════════════════════════════════════════════
 //   传输级心跳：检测卡住（30s 无进度）
+//   （导出供回归测试直接驱动行为，同文件内 loadSsh2/SSHManager 亦为测试可达而导出）
 // ════════════════════════════════════════════════
-class TransferHeartbeat {
+export class TransferHeartbeat {
   private timer: NodeJS.Timeout | null = null
   private stalled = false
 
@@ -1711,6 +1712,11 @@ if (err) return reject(new SSHError('SFTP_INIT_FAIL', { original: err }))
   private dropAllTransferConns(cfgId: string): void {
     const conns = this.transferConns.get(cfgId)
     if (!conns) return
+    // 定时器已触发 = 本轮排程结束：先把全部条目上的引用清空再谈回收。
+    // 早退分支若留着陈旧引用，归还路径的 scheduleTransferConnCleanup 会把它们
+    // 当成"已有排程"而永不重排 —— 空闲回收自此失效，整批连接（含 keepalive）
+    // 常驻到 disconnect 为止。
+    for (const c of conns) { if (c.cleanupTimer) { clearTimeout(c.cleanupTimer); c.cleanupTimer = null } }
     if (conns.some(c => c.leased)) return
     this.transferConns.delete(cfgId)
     for (const c of conns) this.destroyTransferConn(c)

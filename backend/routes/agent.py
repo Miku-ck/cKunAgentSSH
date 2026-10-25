@@ -2026,14 +2026,18 @@ async def generate_commit_message(req: CommitMessageRequest):
     if not effective_model_id:
         models = await asyncio.to_thread(db.list_models_config)
         if not models:
-            raise HTTPException(status_code=400, detail="未配置任何模型，无法生成提交信息（请先在设置中添加模型）")
+            raise HTTPException(
+                status_code=400,
+                detail="还没有可用的 AI 模型：请到 设置 → AI 模型 添加并保存，然后重试",
+            )
         effective_model_id = models[0].get("id") or models[0].get("model_id")
-    if not effective_model_id:
-        raise HTTPException(status_code=400, detail="未配置任何模型，无法生成提交信息（请先在设置中添加模型）")
 
     model_cfg = await asyncio.to_thread(_get_model_config, effective_model_id)
     if not model_cfg:
-        raise HTTPException(status_code=404, detail=f"模型不存在: {effective_model_id}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"模型配置已失效（{effective_model_id}）：请到 设置 → AI 模型 检查后重试",
+        )
 
     listing = "\n".join(f[:200] for f in req.files)
     system_prompt = (
@@ -2066,14 +2070,17 @@ async def generate_commit_message(req: CommitMessageRequest):
             timeout=30.0,
         )
     except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="生成提交信息超时，可重试或手写")
+        raise HTTPException(status_code=504, detail="模型服务 30 秒未响应：可重试，或直接手写提交信息")
     except Exception as e:
         logger.warning("提交信息 LLM 调用失败: %s", e)
-        raise HTTPException(status_code=502, detail="生成提交信息失败，可重试或手写") from e
+        raise HTTPException(
+            status_code=502,
+            detail=f"模型调用失败（{str(e)[:120] or '服务异常'}）：可重试，或直接手写提交信息",
+        ) from e
 
     message = _sanitize_commit_message(out.content)
     if not message:
-        raise HTTPException(status_code=502, detail="生成结果为空，可重试或手写")
+        raise HTTPException(status_code=502, detail="模型返回了空结果：可重试，或直接手写提交信息")
     return {"message": message}
 
 

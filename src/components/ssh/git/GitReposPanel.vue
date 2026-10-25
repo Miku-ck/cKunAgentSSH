@@ -161,8 +161,8 @@ import {
   buildRemoteRepoStatusCmd,
   buildRemoteRepoVerifyCmd,
   buildRemoteSwitchCmd,
-  firstLine,
-  friendlyGitStderr,
+  formatFetchFailures,
+  friendlyGitError,
   interpretCommit,
   interpretPull,
   interpretPush,
@@ -415,11 +415,11 @@ async function onFetch(row: RepoRow): Promise<void> {
     try {
       if (row.scope === 'local') {
         const r = await api.gitreposFetchOne(row.path)
-        if (r.code !== 0) throw new Error(firstLine(friendlyGitStderr(r.stderr)) || `fetch 退出码 ${r.code}`)
+        if (r.code !== 0) throw new Error(friendlyGitError(r.stderr, `fetch 退出码 ${r.code}`))
       } else {
         if (!row.sessionId) throw new Error('远端会话不可用')
         const r = await api.sshExec(row.sessionId, buildRemoteGitActionCmd(row.path, 'fetch'), REMOTE_FETCH_SEC)
-        if (r.exitCode !== 0) throw new Error(firstLine(r.stderr) || `fetch 退出码 ${r.exitCode}`)
+        if (r.exitCode !== 0) throw new Error(friendlyGitError(r.stderr, `fetch 退出码 ${r.exitCode}`))
       }
       toast.success(`已 fetch ${row.name}：远端状态已更新`)
       await refresh()
@@ -432,7 +432,8 @@ async function onFetch(row: RepoRow): Promise<void> {
 /**
  * 获取全部：对当前范围全部仓库 fetch --all --prune。fetch 属读路径（只更新
  * 远端跟踪引用，不动工作区），无需确认也不写审计；本地并发发 IPC，远程沿用
- * 分批限流（同 refresh 口径）。完成一条汇总 toast，再刷新列表。
+ * 分批限流（同 refresh 口径）。失败按仓库名收进明细（stderr 经友好化翻译），
+ * 完成一条汇总 toast，再刷新列表。
  */
 async function onFetchAll(): Promise<void> {
   const targets = rows.value.filter(r => !r.error)
@@ -441,32 +442,33 @@ async function onFetchAll(): Promise<void> {
     const api = window.electronAPI
     if (!api) return
     let ok = 0
-    let fail = 0
-    let firstErr = ''
-    const count = (good: boolean, err: string): void => {
+    const fails: string[] = []
+    const record = (name: string, good: boolean, err: string): void => {
       if (good) { ok++; return }
-      fail++
-      if (!firstErr && err) firstErr = err
+      fails.push(`${name}：${err || '失败原因未知'}`)
     }
     try {
       if (isLocal.value) {
         const settled = await Promise.allSettled(targets.map(r => api.gitreposFetchOne(r.path)))
-        settled.forEach(s => count(
+        settled.forEach((s, i) => record(
+          targets[i].name,
           s.status === 'fulfilled' && s.value.code === 0,
-          s.status === 'rejected' ? errMsg(s.reason, 'fetch 失败') : firstLine(friendlyGitStderr(s.value.stderr)),
+          s.status === 'rejected' ? errMsg(s.reason, 'fetch 失败') : friendlyGitError(s.value.stderr),
         ))
       } else {
         const session = scopeSession.value
         if (!session) return
         for (let i = 0; i < targets.length; i += REMOTE_CONCURRENCY) {
+          const slice = targets.slice(i, i + REMOTE_CONCURRENCY)
           const batch = await Promise.allSettled(
-            targets.slice(i, i + REMOTE_CONCURRENCY).map(r => r.sessionId
+            slice.map(r => r.sessionId
               ? api.sshExec(r.sessionId, buildRemoteGitActionCmd(r.path, 'fetch'), REMOTE_FETCH_SEC)
               : Promise.reject(new Error('远端会话不可用'))),
           )
-          batch.forEach(s => count(
+          batch.forEach((s, bi) => record(
+            slice[bi].name,
             s.status === 'fulfilled' && s.value.exitCode === 0,
-            s.status === 'rejected' ? errMsg(s.reason, 'fetch 失败') : firstLine(s.value.stderr),
+            s.status === 'rejected' ? errMsg(s.reason, 'fetch 失败') : friendlyGitError(s.value.stderr),
           ))
         }
       }
@@ -474,9 +476,9 @@ async function onFetchAll(): Promise<void> {
       toast.error(errMsg(e, '获取失败'))
       return
     }
-    if (ok && !fail) toast.success(`已获取 ${ok} 个仓库：远端引用已更新`)
-    else if (ok) toast.warning(`获取完成：成功 ${ok}，失败 ${fail}（${firstErr}）`, 6000)
-    else toast.error(`获取失败：${fail} 个仓库（${firstErr || '无详细错误'}）`, 6000)
+    if (ok && !fails.length) toast.success(`已获取 ${ok} 个仓库：远端引用已更新`)
+    else if (ok) toast.warning(`获取完成：成功 ${ok}，失败 ${fails.length} · ${formatFetchFailures(fails)}`, 8000)
+    else toast.error(`获取失败：${fails.length} 个仓库 · ${formatFetchFailures(fails)}`, 8000)
     await refresh()
   })
 }
@@ -557,7 +559,7 @@ async function onSwitch(row: RepoRow, branch: string): Promise<void> {
     try {
       if (row.scope === 'local') {
         const r = await api.gitreposSwitchBranch(row.path, branch)
-        if (r.code !== 0) throw new Error(firstLine(friendlyGitStderr(r.stderr)) || `switch 退出码 ${r.code}`)
+        if (r.code !== 0) throw new Error(friendlyGitError(r.stderr, `switch 退出码 ${r.code}`))
       } else {
         if (!row.sessionId) throw new Error('远端会话不可用')
         const remoteCmd = buildRemoteSwitchCmd(row.path, branch)
@@ -574,7 +576,7 @@ async function onSwitch(row: RepoRow, branch: string): Promise<void> {
           writeGitAudit(row, remoteCmd, outcome.conclusion, outcome.result)
           throw e
         }
-        if (exitCode !== 0) throw new Error(firstLine(stderr) || `switch 退出码 ${exitCode}`)
+        if (exitCode !== 0) throw new Error(friendlyGitError(stderr, `switch 退出码 ${exitCode}`))
       }
       toast.success(`${row.name}：已切换到 ${branch}`)
       await refresh()
@@ -821,7 +823,7 @@ async function onAddRemote(): Promise<void> {
       if (!session.connectionId) throw new Error('当前会话缺少连接配置，无法记忆仓库路径')
       const r = await api.sshExec(session.id, buildRemoteRepoVerifyCmd(p), REMOTE_READ_SEC)
       if (r.exitCode !== 0 || r.stdout.trim() !== 'true') {
-        throw new Error(firstLine(r.stderr) || '该路径不是 git 工作区')
+        throw new Error(friendlyGitError(r.stderr, '该路径不是 git 工作区'))
       }
       const next = [...new Set([...(remotePaths.value[session.connectionId] || []), p])]
       await api.gitreposSetRemotePaths(session.connectionId, next)
