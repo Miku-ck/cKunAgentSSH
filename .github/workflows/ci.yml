@@ -9,6 +9,7 @@
 #   2. 前端 vue-tsc 类型检查
 #   3. 前端 vitest 单测
 #   4. electron-vite 构建（验证 main/preload/renderer 三方编译）
+#   5. 网关 mux 字节漂移自检（hillgw.mjs 与 shared/gateway-mux.ts 双实现金样对拍）
 #
 # 本文件的形状由 backend/tests/test_ci_matrix_contract.py 钉住：改这里必须同步改那里。
 # 拆两条单 OS job 而不是 runs-on 矩阵：矩阵逼着每个 step 挂 if: matrix.os，
