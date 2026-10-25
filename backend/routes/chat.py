@@ -145,6 +145,16 @@ def delete_conversation(cid: str):
     deleted = db.delete_conversation(cid)
     if not deleted:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    # session 授权池随会话终结回收：PermissionGate 的 session 池按 conversation_id
+    # 键控且进程长驻，once/denied 池都有 run 终态清理；会话终结有两条路径 ——
+    # 这里的用户删除与保留清理（prune_conversations），两处都得回收，否则已消失
+    # 会话的授权键在后端进程内逐会话累积（与 uploads 级联清理同一动机）。
+    # 失败不阻塞删除（session 授权进程重启即清零）。
+    try:
+        from agent.harness.reins import _get_global_permission_gate_sync
+        _get_global_permission_gate_sync().cleanup_conversation_session(cid)
+    except Exception:
+        pass
     # B-MINOR 修复：级联清理 <db_dir>/uploads/<conv>/ 目录，
     # 避免会话删除后上传文件无限堆积（消毒走 _sanitize_conv，与上传接口同一实现；
     # 空会话 id 落入共享的 "general" 目录，不删除）

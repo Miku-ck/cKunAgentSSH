@@ -645,7 +645,18 @@ async def _maybe_prune_agent_runs() -> None:
     try:
         retention = await asyncio.shield(asyncio.to_thread(db.get_conv_retention))
         if retention.get("enabled"):
-            await asyncio.shield(asyncio.to_thread(db.prune_conversations, retention.get("keep_count", 1000)))
+            pruned_ids = await asyncio.shield(
+                asyncio.to_thread(db.prune_conversations, retention.get("keep_count", 1000)))
+            # 被回收会话的 session 授权键随会话作废：这是与用户删除
+            # （DELETE /chat/conversations/{cid}）并列的第二条会话终结路径，
+            # 漏了它，保留清理删掉的会话照样把授权键留在进程内逐会话累积。
+            # gate 状态操作留在事件循环线程（与 grant/deny 端点同一姿态），
+            # DB 删除已在线程池完成。
+            if pruned_ids:
+                from agent.harness.reins import _get_global_permission_gate_sync
+                gate = _get_global_permission_gate_sync()
+                for cid in pruned_ids:
+                    gate.cleanup_conversation_session(cid)
     except Exception:
         logger.warning("会话保留清理失败（best-effort，不阻塞）", exc_info=True)
 

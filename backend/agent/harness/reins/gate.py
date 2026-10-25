@@ -725,6 +725,26 @@ class PermissionGate:
             return 0
         return len(denied_set)
 
+    def cleanup_conversation_session(self, conversation_id: str) -> int:
+        """释放指定 conversation_id 的全部 session 授权。
+
+        在会话终结的两条路径上调用：用户删除会话（DELETE /chat/conversations/{cid}）
+        与保留清理批量回收（prune_conversations，conv_retention 显式开启时）。
+        session 授权的生命周期锚在会话上（跨 run 共享），once/denied 池都有 run
+        终态回收（cleanup_run_once / cleanup_run_denied），本池此前唯一的删除点
+        是 revoke —— 后端长驻进程，已消失的会话把授权键逐会话留在内存里。
+        会话终结即随会话作废，与 once 池随 run 终结回收同一口径；run 终态不能
+        做这件事 —— 会话存活期跨多个 run，run 结束就清会话授权等于废掉
+        「本会话允许」语义。
+
+        Returns:
+            释放的授权键数量
+        """
+        session_keys = self._confirmed_session.pop(conversation_id, None)
+        if not session_keys:
+            return 0
+        return len(session_keys)
+
     def revoke(self, tool_name: str, command: Optional[str] = None,
                conversation_id: Optional[str] = None,
                host: Optional[str] = None) -> None:

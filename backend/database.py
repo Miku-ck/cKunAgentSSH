@@ -2791,8 +2791,8 @@ def prune_agent_runs(max_count: int = 5000) -> int:
         conn.close()
 
 
-def prune_conversations(keep_count: int = 1000) -> int:
-    """删除最旧的活动已结束的 conversations，保留最近 keep_count 个，返回删除数。
+def prune_conversations(keep_count: int = 1000) -> list[str]:
+    """删除最旧的活动已结束的 conversations，保留最近 keep_count 个，返回被删会话 id。
 
     设计（第 8 轮审查 #2）：conversations 是用户聊天记录，默认**不**自动清理
     （用户数据，删除=数据丢失）。本函数仅当用户在设置里【显式开启】会话保留
@@ -2803,16 +2803,22 @@ def prune_conversations(keep_count: int = 1000) -> int:
     updated_at / created_at。注意不能用 conversations.updated_at 单字段：它只在
     agent 启动/状态/改标题时更新，普通聊天消息不更新，按它排序会误删近期活跃的会话。
 
+    返回 id 而非删除数：调用方要用它回收 PermissionGate 的 session 授权池
+    （这里是会话终结的第二条路径），拿不到 id 就只能看着被回收会话的授权键
+    在进程内逐会话累积。先查 id 再按显式 id 删除（不用 IN (子查询)）：
+    窗口查询与删除之间若有并发写入，两次求值会漂移，授权池就会清到没删的
+    会话 / 漏掉已删的会话；显式 id 保证「删的 == 报的」。
+
     删除经外键级联回收 messages + agent_runs（再级联 tool_calls），故只删
     conversations 即可。keep_count<=0 视为不限制（不删）。
     """
     if keep_count is None or keep_count <= 0:
-        return 0
+        return []
     conn = _get_conn()
     try:
-        cur = conn.execute(
-            """DELETE FROM conversations WHERE id IN (
-                   SELECT id FROM (
+        ids = [
+            row[0] for row in conn.execute(
+                """SELECT id FROM (
                        SELECT c.id,
                               ROW_NUMBER() OVER (
                                   ORDER BY COALESCE(
@@ -2824,12 +2830,17 @@ def prune_conversations(keep_count: int = 1000) -> int:
                               ) AS rn
                        FROM conversations c
                        WHERE c.status = 'completed'
-                   ) WHERE rn > ?
-               )""",
-            (keep_count,),
-        )
+                   ) WHERE rn > ?""",
+                (keep_count,),
+            ).fetchall()
+        ]
+        if not ids:
+            return []
+        # 占位符个数随 id 数量拼装，id 本身仍走参数绑定（外部输入不进 SQL 文本）
+        placeholders = ",".join("?" * len(ids))
+        conn.execute(f"DELETE FROM conversations WHERE id IN ({placeholders})", ids)
         conn.commit()
-        return cur.rowcount
+        return ids
     finally:
         conn.close()
 

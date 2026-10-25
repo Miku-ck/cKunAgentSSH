@@ -268,8 +268,9 @@ def test_prune_conversations_keeps_recent_completed(tmp_path):
 
         deleted = db.prune_conversations(keep_count=3)
         # completed 会话 5 个（c1..c5），保留最近 3 个（c3/c4/c5），删 c1/c2
-        # c0 是 in_progress，即便最旧也不删
-        assert deleted == 2, deleted
+        # c0 是 in_progress，即便最旧也不删；返回值是被删会话 id（调用方
+        # 靠它回收 PermissionGate 的 session 授权池）
+        assert set(deleted) == {cids[1], cids[2]}, deleted
         kept = {r[0] for r in conn.execute("SELECT id FROM conversations").fetchall()}
         # c0(in_progress 保留) + c3/c4/c5(最近 completed 保留)
         assert kept == {cids[0], cids[3], cids[4], cids[5]}, kept
@@ -295,7 +296,7 @@ def test_prune_conversations_no_message_falls_back_updated_at(tmp_path):
             )
         conn.commit()
         deleted = db.prune_conversations(keep_count=2)
-        assert deleted == 2, deleted
+        assert set(deleted) == {cids[0], cids[1]}, deleted
         kept = {r[0] for r in conn.execute("SELECT id FROM conversations").fetchall()}
         assert kept == {cids[2], cids[3]}, kept
     finally:
@@ -311,8 +312,8 @@ def test_prune_conversations_disabled_by_default_and_noop(tmp_path):
         for i in range(5):
             db.create_conversation(title=f"c{i}")
         conn.commit()
-        assert db.prune_conversations(keep_count=0) == 0
-        assert db.prune_conversations(keep_count=None) == 0
+        assert db.prune_conversations(keep_count=0) == []
+        assert db.prune_conversations(keep_count=None) == []
         remaining = conn.execute("SELECT COUNT(*) FROM conversations").fetchone()[0]
         assert remaining == 5
     finally:

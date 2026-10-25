@@ -127,7 +127,7 @@ def test_keep_count_zero_does_not_delete(base_db):
     """0 = 一条都不删（面板文案口径已按此改）。曾经写着 0 = 清空全部会话。"""
     for i in range(3):
         base_db.create_conversation(f"会话{i}")
-    assert base_db.prune_conversations(keep_count=0) == 0
+    assert base_db.prune_conversations(keep_count=0) == []
     assert len(base_db.list_conversations(limit=50)) == 3
 
 
