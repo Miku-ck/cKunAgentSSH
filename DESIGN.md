@@ -98,7 +98,7 @@ App.vue (flex column, 100vh)
 
 **图标**：内联 SVG，`stroke="currentColor"` + `fill="none"`（自动适配主题）。尺寸：标题栏/标签 14 · 设置导航 16 · 卡内 15 · 按钮内 14。复用图标放 `src/components/icons/`。Docker 入口与页面空态统一鲸鱼图形。
 
-**文件类型图标**（上一条的唯一例外）[FileTypeIcon.vue](src/components/icons/FileTypeIcon.vue)：通用类型仍按描边画、颜色读 `--accent-*`；品牌类型（34 枚，simple-icons CC0 vendor 成常量）按填充画、颜色取公布品牌色且**刻意不随主题变**，靠一层 `color-mix(--text-primary 55%)` 的 `paint-order: stroke` 底衬在浅底/米纸上兜轮廓。判据单一来源 `src/components/icons/file-type-icons.ts`，扩展名与文件名只登记一次，别再往组件里抄清单。
+**文件类型图标**（上一条的唯一例外）[FileTypeIcon.vue](src/components/icons/FileTypeIcon.vue)：通用类型仍按描边画、颜色读 `--accent-*`；品牌类型（41 枚，simple-icons CC0 vendor 成常量）按填充画、颜色取公布品牌色且**刻意不随主题变**，靠一层 `color-mix(--text-primary 55%)` 的 `paint-order: stroke` 底衬在浅底/米纸上兜轮廓。判据单一来源 `src/components/icons/file-type-icons.ts`，扩展名与文件名只登记一次，别再往组件里抄清单。
 
 **标签状态点**：6px 圆点，活动 `--accent-primary` / 重连中 `--status-warn-text` 脉冲 / 断连放弃 `--accent-red`；判据单一来源 `src/utils/tabStatus.ts`（标签栏、溢出菜单、MRU 切换器三处共用）。
 

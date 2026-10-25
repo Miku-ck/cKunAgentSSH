@@ -4,7 +4,7 @@ SSH 智能运维终端 —— 一个窗口收口远程运维全链路：SSH 连�
 
 ## 功能地图（顶部导航 = 唯一入口）
 
-标题栏右侧的九枚功能页入口 + 一枚设置，覆盖应用全部能力。它们是同一份页面清单 `useSshNavigation.NavPage` 的渲染结果：图标高亮、`Ctrl+Shift+数字` 快捷键、命令面板条目共用这一个来源，不存在手抄的第二份清单（加一页只改一处）。
+标题栏右侧的九枚功能页入口 + 一枚设置，覆盖应用全部能力。图标高亮由同一份页面清单 `useSshNavigation.NavPage` 渲染；`Ctrl+Shift+数字` 快捷键表与命令面板条目是两份各自手抄的数组，靠守卫测试对账 —— 加一页要同时改多处，漏改会被 `command-palette-pages.test.ts` 判红。
 
 | 入口 | 页面 | 快捷键 | 一句话职责 |
 |---|---|---|---|
@@ -37,7 +37,7 @@ SSH 智能运维终端 —— 一个窗口收口远程运维全链路：SSH 连�
 - **远程文件编辑**：Monaco Editor 在线编辑远端文件
 - **命令补全与快捷命令**：Tab 经 SSH exec 远程查候选；历史命令 fuzzy 联想（字符子序列 + 词首/连续加分）+ 执行次数徽标；自定义快捷命令栏
 - **多节点批量下发**：对多台活动远程会话并行下发一条命令，结果并排对比 + 逐行差异高亮，可一键送 AI 分析；生产环境标记 / 危险命令命中时执行前强制二次确认，逐台写入审计链
-- **安全接入**：直连之外可经自营网关 `gateway/hillgw.mjs` 中转（TLS + SPKI pinning + 口令认证 + 帧复用），网关零依赖单文件，`node gateway/hillgw.mjs --selftest` 自校验帧编解码与策略匹配
+- **安全接入**：直连之外可经自营网关 `gateway/hillgw.mjs` 中转（TLS + SPKI pinning + 口令认证 + 口令连错限速锁定 + 帧复用），网关零依赖单文件，`node gateway/hillgw.mjs --selftest` 自校验帧编解码与策略匹配
 
 ### 观测与自动化
 
@@ -172,10 +172,10 @@ cKunAgentSSH/
 │       ├── tools/builtin/             # 34 个内置工具
 │       └── intention.py host_profile.py bridge_relay.py schedule_engine.py
 │
-├── docs/superpowers/specs/            # 设计与实施 spec（Git 页、长任务结构化等）
+├── docs/superpowers/specs/            # 设计与实施 spec（Git 页 / Git 仓库工作台等）
 ├── gateway/hillgw.mjs                 # 自营 TLS 接入网关（零依赖单文件，独立部署）
 ├── runtime/                           # 打包用的嵌入式 Python 运行时（本地准备，不入库：.gitignore 整目录忽略）
-├── scripts/                           # dev / package / clean / ci-check / deploy（deploy/ = 目标机一键部署脚本）
+├── scripts/                           # dev / package / clean / ci-check / rebuild-native / deploy（deploy/ = 目标机一键部署脚本）
 └── package.json
 ```
 
@@ -265,6 +265,13 @@ npm run package        # electron-builder 打包
 npm run clean          # 清理 electron-builder 产物（dist / dist-*）与中间配置
 npm run preview        # 预览构建结果
 ```
+
+### 日志口径
+
+- **格式**：主进程与 dev 侧控制台统一 `[HH:MM:SS.mmm] [域] 消息`，时间为 UTC（`toISOString()` 派生，与网关 `gateway/hillgw.mjs` 的现行口径一致）；Python 后端维持 logconfig 的 `%(asctime)s %(levelname)-7s %(name)s` 格式。
+- **域前缀与物理文件一致**：`[main]` / `[BackendManager]` / `[ssh]` / `[fs]` / `[perf]` / `[Python]`；渲染层统一 `[域]` 前缀（如 agent store 的 `[Agent]`）。
+- **级别**：`console.error` 只用于错误 / 异常，info 性提示走 stdout；uvicorn INFO 与访问日志不经 error 通道 —— 后端已关闭 uvicorn access log（`access_log=False`），避免 `/api/health` 健康轮询逐条刷屏。
+- **落盘**：`electron-bridge.log` 文件内保持全 ISO 时间戳，超 1MB 轮转为 `.old`（保尾：最近内容永远在主文件可见）。
 
 ### 打包与分发
 
