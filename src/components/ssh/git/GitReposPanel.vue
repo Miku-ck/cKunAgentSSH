@@ -1,17 +1,11 @@
 <template>
   <div class="git-repos">
-    <!-- 工具条：过滤 / 位置切换 / 连接 / 登记 / 刷新（全部只属于仓库子页） -->
+    <!-- 工具条：过滤 / 登记 / 刷新（全部只属于仓库子页），内容整体居左 -->
     <div class="toolbar">
       <label class="search">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input v-model="query" placeholder="按名称或路径过滤…" aria-label="过滤仓库" />
+        <input v-model="query" placeholder="过滤仓库…" aria-label="过滤仓库" />
       </label>
-      <span class="tb-spacer"></span>
-      <select v-model="scopeKey" class="host-sel" aria-label="仓库位置">
-        <option value="local">本地</option>
-        <option v-for="s in remoteSessions" :key="s.id" :value="s.id">{{ s.name }}</option>
-      </select>
-      <button class="btn" type="button" @click="showConnPicker = true">连接远程</button>
       <button
         class="btn"
         type="button"
@@ -20,9 +14,7 @@
         @click="onFetchAll"
       >获取全部</button>
       <button class="btn btn-primary" type="button" :disabled="!!busy" @click="onAdd">添加仓库</button>
-      <button class="btn icon" type="button" :disabled="loading || !!busy" title="刷新：重新读取各仓库状态" aria-label="刷新" @click="refresh()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
-      </button>
+      <button class="btn" type="button" :disabled="loading || !!busy" title="刷新：重新读取各仓库状态" @click="refresh()">刷新</button>
     </div>
 
     <!-- 取数错误带（对齐 Docker 错误态） -->
@@ -43,9 +35,6 @@
     <div v-else-if="!rows.length && !registeredCount" class="empty">
       <template v-if="isLocal">
         <span>尚未登记本地仓库</span>
-        <div class="empty-actions">
-          <button class="btn btn-primary" type="button" @click="onAdd">选择目录登记</button>
-        </div>
       </template>
       <template v-else>
         <span>{{ scopeSession?.name || '该主机' }} 尚未登记仓库路径</span>
@@ -119,18 +108,6 @@
       <span class="sb-right mono">{{ lastSync ? `已同步 ${lastSync}` : '' }}</span>
     </div>
 
-    <!-- 连接选择器：复用 Docker 页的同款组件（连接列表是通用形态） -->
-    <Teleport to="body">
-      <DockerConnectionPicker
-        v-if="showConnPicker"
-        :connections="sshStore.connections"
-        :connecting="connecting"
-        :pending-id="pendingConnId"
-        @close="showConnPicker = false"
-        @pick="handleConnect"
-      />
-    </Teleport>
-
     <!-- 登记远程仓库路径 -->
     <Teleport to="body">
       <div v-if="showAddRemote" class="arm-overlay" @click.self="showAddRemote = false">
@@ -162,12 +139,11 @@
 // 远程构造 shared/git-repos-core 的命令经 sshExec 下发（同 Docker 路线）。
 // 动作锁 / pull 确认 / 远程审计收在本组件；详情面板只取数不执行。
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { useSSHStore, type SSHConnection, type TerminalSession } from '@/stores/ssh'
+import { useSSHStore, type TerminalSession } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
-import { toFriendlyMessage, unwrapIpcErrorEnvelope } from '@/api/client'
+import { unwrapIpcErrorEnvelope } from '@/api/client'
 import { useGithubAccelStore } from '@/stores/github-accel'
-import DockerConnectionPicker from '../docker/DockerConnectionPicker.vue'
 import GitRepoDetailPanel from './GitRepoDetailPanel.vue'
 import {
   AUDIT_ACTION_GIT,
@@ -860,27 +836,6 @@ async function onAddRemote(): Promise<void> {
   })
 }
 
-// ── 连接远程（复用 Docker 页的连接选择器） ──
-const showConnPicker = ref(false)
-const connecting = ref(false)
-const pendingConnId = ref('')
-async function handleConnect(conn: SSHConnection): Promise<void> {
-  if (connecting.value) return
-  connecting.value = true
-  pendingConnId.value = conn.id
-  try {
-    // 用 connectRemote 返回的会话 id 直接落为范围（同 Docker：不按 connectionId 回查最早会话）
-    scopeKey.value = await sshStore.connectRemote(conn.id, 80, 24)
-    showConnPicker.value = false
-    toast.success(`已连接 ${conn.name}`)
-  } catch (e) {
-    toast.error(toFriendlyMessage(e, 'SSH 连接失败'))
-  } finally {
-    connecting.value = false
-    pendingConnId.value = ''
-  }
-}
-
 // ── 详情面板 ──
 // 页面可见性：面板是页内布局（不 Teleport），切走不会盖到别的页面；
 // 回到前台时刷新一次 —— 状态是快照不是实时，离开期间远端可能已变
@@ -923,36 +878,25 @@ watch(scopeKey, () => {
   flex-shrink: 0;
   flex-wrap: wrap;
 }
-.tb-spacer { flex: 1; }
 .search {
   display: inline-flex;
   align-items: center;
   gap: 7px;
   height: 26px;
   padding: 0 10px;
-  width: 210px;
+  width: 100px;
   max-width: 40vw;
   background: var(--bg-input);
   border: 1px solid var(--border-input);
   border-radius: var(--radius-md);
   color: var(--text-tertiary);
   cursor: text;
+  transition: width var(--transition-fast);
 }
+/* 静置省地、聚焦展开：输入时回到全宽，长过滤词不用挤着看 */
+.search:focus-within { width: 210px; }
 .search input { background: transparent; border: none; color: var(--text-primary); font-size: 12px; font-family: var(--font-sans); flex: 1; min-width: 0; outline: none; }
 .search input::placeholder { color: var(--text-tertiary); }
-.host-sel {
-  height: 26px;
-  padding: 0 8px;
-  max-width: 220px;
-  background: var(--bg-input);
-  border: 1px solid var(--border-input);
-  border-radius: var(--radius-md);
-  color: var(--text-primary);
-  font-size: 12px;
-  font-family: var(--font-sans);
-  cursor: pointer;
-}
-.host-sel option { background: var(--bg-elevated); color: var(--text-primary); }
 
 .btn {
   display: inline-flex;
@@ -973,7 +917,6 @@ watch(scopeKey, () => {
 .btn:disabled { opacity: .45; cursor: default; }
 .btn.btn-primary { background: var(--accent-primary); border-color: var(--accent-primary); color: var(--accent-on); }
 .btn.btn-primary:hover:not(:disabled) { filter: brightness(1.15); }
-.btn.icon { width: 26px; padding: 0; justify-content: center; }
 .btn.btn-sm { height: 22px; padding: 0 8px; font-size: 11px; }
 
 /* ── 错误带 / 加载带 / 空态（对齐 Docker） ── */

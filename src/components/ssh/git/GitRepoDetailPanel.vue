@@ -8,34 +8,26 @@
       <span class="grdp-path mono" :title="repo.path">{{ repo.path }}</span>
       <span class="grdp-head-spacer"></span>
       <button class="btn" type="button" :disabled="!!busy || !!repo.error" title="fetch：更新远程跟踪引用（--all --prune，不改动工作区）" @click="emit('fetch')">获取</button>
-      <button class="btn btn-primary" type="button" :disabled="!!busy || !!repo.error" @click="emit('pull')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
-        拉取
-      </button>
+      <button class="btn btn-primary" type="button" :disabled="!!busy || !!repo.error" title="pull：快进合并远端提交（--ff-only，分叉时不自动合并）" @click="emit('pull')">拉取</button>
+      <!-- 提交/推送合一：有未提交变更 → 提交（弹窗内默认提交并推送）；
+           工作区干净但有待推提交 → 直接推送。任一时刻只有一个相关动作 -->
       <button
+        v-if="repo.dirtyFiles"
         class="btn"
         type="button"
-        :disabled="!!busy || !!repo.error || !repo.dirtyFiles"
-        title="提交变更：弹窗内勾选文件并填写信息（git add + commit -- pathspec）"
+        :disabled="!!busy || !!repo.error || loading || !!error"
+        title="提交变更：弹窗内勾选文件并填写信息，留空信息将自动生成"
         @click="openCommit"
-      >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
-        提交<span v-if="repo.dirtyFiles" class="grdp-actct">{{ repo.dirtyFiles }}</span>
-      </button>
+      >提交</button>
       <button
+        v-else-if="canPush"
         class="btn"
         type="button"
-        :disabled="!!busy || !!repo.error || !canPush"
-        title="push：推送当前分支到远程（无上游时 git push -u 建立跟踪；无上游或 HEAD 游离时不可推）"
+        :disabled="!!busy || !!repo.error || !repo.ahead"
+        title="push：推送当前分支到远程（无上游时 git push -u 建立跟踪）"
         @click="emit('push')"
-      >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M5 3h14"/></svg>
-        推送
-      </button>
-      <button class="btn" type="button" :disabled="!!busy" title="在终端中打开（本地终端 / 新 SSH 会话）" @click="emit('term')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg>
-        终端
-      </button>
+      >推送<span class="grdp-actct grdp-pushct">↑{{ repo.ahead }}</span></button>
+      <button class="btn" type="button" :disabled="!!busy" title="在终端中打开（本地终端 / 新 SSH 会话）" @click="emit('term')">终端</button>
       <button class="btn grdp-remove" type="button" :disabled="!!busy" title="仅从列表移除，不删除任何文件" @click="emit('remove')">移出</button>
     </div>
 
@@ -81,7 +73,6 @@
         <div v-if="loading" class="grdp-load">正在读取仓库详情…</div>
         <div v-else-if="error" class="grdp-err" role="alert">{{ error }}</div>
         <template v-else-if="detail">
-          <!-- 变更：勾选 = pathspec；提交信息单行；动作回抛父级 -->
           <!-- 变更：只读概览（勾选与提交动作在头部「提交」弹窗里，一处完成） -->
           <section v-if="tab === 'changes'">
             <div v-if="!detail.files.length" class="grdp-empty">工作区干净（clean），无未提交变更</div>
@@ -133,13 +124,51 @@
       </div>
     </template>
 
-    <!-- 提交弹窗（点击弹窗执行）：勾选文件 + 全选/清空 + 提交信息 + 动作，自含完整提交流 -->
+    <!-- 提交弹窗（点击弹窗执行）：信息在上、文件清单在下、主按钮带分支名；
+         分支徽标 / 字数计数 / 推送目标预览为本仓自己的增补 -->
     <Teleport to="body">
       <div v-if="showCommit" class="grdc-overlay" @click.self="closeCommit">
         <div class="grdc-dialog" role="dialog" aria-modal="true" aria-label="提交变更">
-          <div class="grdc-title">提交变更 · {{ repo.name }}</div>
+          <div class="grdc-head">
+            <span class="grdc-title">提交变更</span>
+            <span class="grdc-repo">{{ repo.name }}</span>
+            <span v-if="!repo.detached && repo.branch" class="grdc-branch mono">{{ repo.branch }}</span>
+            <span class="grdc-head-sp"></span>
+            <button class="grdc-x" type="button" aria-label="关闭" title="关闭（Esc）" @click="closeCommit">✕</button>
+          </div>
           <div v-if="repo.scope === 'remote'" class="grdc-warn">
             远程仓库：提交将写入服务器工作区（部署语义），执行前会再次确认并计入审计。
+          </div>
+
+          <div class="grdc-fieldlabel">
+            <span>提交信息</span>
+            <span class="grdc-head-sp"></span>
+            <button
+              class="grdc-spark"
+              type="button"
+              title="按已勾选文件生成提交信息（规则草稿，生成后可编辑）"
+              aria-label="自动生成提交信息"
+              @click="generateDraft"
+            >✦</button>
+            <button class="grdc-linkbtn" type="button" :disabled="!checkedPaths.length" title="把变更清单发给 AI 任务台生成提交信息" @click="askAiDraft">AI 写</button>
+            <span class="grdc-counter mono">{{ commitMsg.length }}/200</span>
+          </div>
+          <textarea
+            ref="commitInput"
+            v-model="commitMsg"
+            class="grdc-textarea"
+            rows="2"
+            maxlength="200"
+            spellcheck="false"
+            placeholder="留空将自动生成（Enter 提交）…"
+            @keydown.enter.prevent="submitCommit"
+          />
+
+          <div class="grdc-secbar">
+            <span class="grdc-seclabel">变更文件 <b>{{ checkedPaths.length }}</b> / {{ (detail?.files || []).length }}</span>
+            <span class="grdc-head-sp"></span>
+            <button class="grdc-linkbtn" type="button" :disabled="checkedPaths.length === (detail?.files || []).length" @click="checkAll(true)">全选</button>
+            <button class="grdc-linkbtn" type="button" :disabled="!checkedPaths.length" @click="checkAll(false)">清空</button>
           </div>
           <div class="grdc-list">
             <label v-for="f in detail?.files || []" :key="f.path" class="grdc-file mono">
@@ -148,34 +177,28 @@
               <span class="grdc-fpath" :title="`${f.path} · ${statusTitle(f.status)}`">{{ f.path }}</span>
             </label>
           </div>
-          <div class="grdc-fbar">
-            <span class="grdc-fcount">已选 {{ checkedPaths.length }} / {{ (detail?.files || []).length }} 个文件（未勾选的改动保留在工作区）</span>
-            <span class="grdc-sp"></span>
-            <button class="grdc-linkbtn" type="button" :disabled="checkedPaths.length === (detail?.files || []).length" @click="checkAll(true)">全选</button>
-            <button class="grdc-linkbtn" type="button" :disabled="!checkedPaths.length" @click="checkAll(false)">清空</button>
+          <div v-if="noiseSkipped" class="grdc-noisehint">
+            已默认不勾选 {{ noiseSkipped }} 个疑似临时产物（日志 / 备份 / 系统文件），可勾回；长期忽略请写入 .gitignore
           </div>
-          <input
-            ref="commitInput"
-            v-model="commitMsg"
-            class="grdc-input"
-            placeholder="提交信息（必填，Enter 提交）…"
-            maxlength="200"
-            spellcheck="false"
-            @keyup.enter="submitCommit"
-          />
+
+          <div v-if="canPush" class="grdc-pushprev mono">
+            推送目标 {{ repo.branch }} → {{ repo.upstream || `${repo.remoteName}/${repo.branch}` }}<template v-if="repo.ahead">（本地已领先 ↑{{ repo.ahead }}，将一并上送）</template>
+          </div>
+
           <div class="grdc-foot">
             <button class="btn" type="button" @click="closeCommit">取消</button>
             <span class="grdc-sp"></span>
-            <button
-              v-if="canPush"
-              class="btn"
-              type="button"
-              :disabled="!canCommit"
-              title="提交所选后立即推送当前分支（提交成功才推送）"
-              @click="submitCommitPush"
-            >提交并推送</button>
-            <button class="btn btn-primary" type="button" :disabled="!canCommit" @click="submitCommit">
-              提交所选 {{ checkedPaths.length }}
+            <!-- 主按钮 = 提交并推送（提交后必推是主流用法）；仅提交保留为次按钮 -->
+            <template v-if="canPush">
+              <button class="btn" type="button" :disabled="!canCommit" title="只提交，不推送（Enter 同此）" @click="submitCommit">
+                仅提交（{{ checkedPaths.length }}）
+              </button>
+              <button class="btn btn-primary" type="button" :disabled="!canCommit" title="提交所选后立即推送当前分支（提交成功才推送）" @click="submitCommitPush">
+                提交并推送
+              </button>
+            </template>
+            <button v-else class="btn btn-primary" type="button" :disabled="!canCommit" @click="submitCommit">
+              提交所选（{{ checkedPaths.length }}）
             </button>
           </div>
         </div>
@@ -194,13 +217,16 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import GitLaneGraph from './GitLaneGraph.vue'
 import FileTypeIcon from '@/components/icons/FileTypeIcon.vue'
+import { useSshAiStore } from '@/stores/ssh-ai'
 import {
   GRAPH_MAX_LIMIT,
   buildRemoteGraphCmd,
   buildRemoteRepoDetailCmd,
+  draftCommitMessage,
   firstLine,
   friendlyGitStderr,
   graphHasMore,
+  looksLikeNoiseFile,
   parseGraphLog,
   parseRepoDetailSections,
   splitBySep,
@@ -316,20 +342,42 @@ const checkedPaths = ref<string[]>([])
 const commitMsg = ref('')
 
 const canCommit = computed(() =>
-  checkedPaths.value.length > 0 && !!commitMsg.value.trim() && !props.busy && !loading.value,
+  checkedPaths.value.length > 0 && !props.busy && !loading.value,
 )
 
-// 提交弹窗（点击弹窗执行）：面板只留入口按钮，信息填写与动作选择都在弹窗里完成
+// 提交弹窗（点击弹窗执行）：信息填写与动作选择都在弹窗里完成
 const showCommit = ref(false)
-const commitInput = ref<HTMLInputElement | null>(null)
+const commitInput = ref<HTMLTextAreaElement | null>(null)
+/** 打开弹窗时被「疑似临时产物」规则默认跳过的文件数（0 = 无，不显示提示行） */
+const noiseSkipped = ref(0)
+const sshAi = useSshAiStore()
 
 function openCommit(): void {
   const files = detail.value?.files ?? []
   if (!files.length) return
-  // 打开即默认全选（= 提交所选的惯例初值）；已有勾选（上次未提交的残留）则沿用
-  if (!checkedPaths.value.length) checkedPaths.value = files.map(f => f.path)
+  // 默认勾选 = 全部变更，排除疑似临时产物（日志/备份/系统文件——.gitignore 漏掉的兜底）
+  const keep = files.filter(f => !looksLikeNoiseFile(f.path))
+  checkedPaths.value = (keep.length ? keep : files).map(f => f.path)
+  noiseSkipped.value = files.length - keep.length
   showCommit.value = true
   void nextTick(() => commitInput.value?.focus())
+}
+
+/** ✦ 按已勾选文件生成规则草稿（可编辑）；空清单静默 */
+function generateDraft(): void {
+  if (!checkedPaths.value.length) return
+  commitMsg.value = draftCommitMessage(checkedPaths.value)
+  void nextTick(() => commitInput.value?.focus())
+}
+
+/** 「让 AI 写」：预填任务台生成提交信息（应用内 AI 通路，与终端问 AI 同源） */
+function askAiDraft(): void {
+  if (!checkedPaths.value.length) return
+  const files = checkedPaths.value.map(p => `- ${p}`).join('\n')
+  sshAi.askAi(
+    `请为一次 git 提交写提交信息：conventional commits 风格、单行、不超过 72 字符，只输出信息本身。\n`
+    + `仓库 ${props.repo.name}（分支 ${props.repo.branch || 'HEAD'}）本次变更文件：\n${files}`,
+  )
 }
 function closeCommit(): void {
   showCommit.value = false
@@ -346,13 +394,16 @@ onUnmounted(() => document.removeEventListener('keydown', onCommitDialogKey))
 function submitCommit(): void {
   if (!canCommit.value) return
   closeCommit()
-  emit('commit', { files: [...checkedPaths.value], msg: commitMsg.value.trim() })
+  // 留空自动生成：规则草稿由已勾选文件推出（确定性，主进程 isValidCommitMsg 仍会复核）
+  const msg = commitMsg.value.trim() || draftCommitMessage(checkedPaths.value)
+  emit('commit', { files: [...checkedPaths.value], msg })
 }
 
 function submitCommitPush(): void {
   if (!canCommit.value || !canPush.value) return
   closeCommit()
-  emit('commit-push', { files: [...checkedPaths.value], msg: commitMsg.value.trim() })
+  const msg = commitMsg.value.trim() || draftCommitMessage(checkedPaths.value)
+  emit('commit-push', { files: [...checkedPaths.value], msg })
 }
 
 /** 全选 / 清空勾选（= 提交所选 pathspec 的初值控制） */
@@ -594,7 +645,7 @@ onMounted(() => { void load() })
   color: var(--text-secondary);
   min-width: 0;
 }
-/* 头部「提交」按钮上的未提交计数（与页签徽标同款观感） */
+/* 头部自适应动作按钮上的计数徽标：提交 = 未提交数（黄），推送 = 待推数（紫，同 ahead 档色） */
 .grdp-actct {
   min-width: 16px;
   height: 15px;
@@ -607,6 +658,10 @@ onMounted(() => { void load() })
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+.grdp-actct.grdp-pushct {
+  background: color-mix(in srgb, var(--accent-purple) 16%, transparent);
+  color: var(--accent-purple);
 }
 
 /* ── 提交弹窗（DESIGN.md 居中弹窗口径：--bg-elevated-solid + --scrim + Esc 关闭） ── */
@@ -634,6 +689,102 @@ onMounted(() => { void load() })
   padding: 16px 18px;
 }
 .grdc-title { font-size: 14px; font-weight: 600; color: var(--text-primary); flex-shrink: 0; }
+.grdc-head { display: flex; align-items: center; gap: 8px; flex-shrink: 0; min-width: 0; }
+.grdc-head-sp { flex: 1; }
+.grdc-repo { font-size: 12px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.grdc-branch {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--accent-cyan);
+  background: color-mix(in srgb, var(--accent-cyan) 10%, transparent);
+  border-radius: 9px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+.grdc-x {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 12px;
+}
+.grdc-x:hover { background: var(--bg-hover); color: var(--text-primary); }
+.grdc-fieldlabel {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.grdc-counter { color: var(--text-tertiary); }
+.grdc-spark {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+.grdc-spark:hover { background: var(--bg-hover); color: var(--accent-text); }
+.grdc-noisehint {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--status-warn-text);
+  line-height: 1.5;
+}
+.grdc-textarea {
+  flex-shrink: 0;
+  min-height: 52px;
+  padding: 7px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-input);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: var(--font-sans);
+  line-height: 1.5;
+  resize: none;
+  outline: none;
+}
+.grdc-textarea:focus { border-color: var(--accent-primary); }
+.grdc-textarea::placeholder { color: var(--text-tertiary); }
+.grdc-secbar { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.grdc-seclabel { font-size: 11px; color: var(--text-tertiary); }
+.grdc-seclabel b { font-weight: 500; color: var(--text-secondary); }
+.grdc-linkbtn {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: 11px;
+  font-family: var(--font-sans);
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.grdc-pushprev {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  border-left: 2px solid var(--border-default);
+  padding: 2px 0 2px 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .grdc-warn {
   flex-shrink: 0;
   font-size: 11px;
@@ -669,32 +820,8 @@ onMounted(() => { void load() })
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.grdc-fbar { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.grdc-fcount { font-size: 11px; color: var(--text-tertiary); }
-.grdc-linkbtn {
-  border: none;
-  background: transparent;
-  padding: 0;
-  font-size: 11px;
-  font-family: var(--font-sans);
-  color: var(--text-tertiary);
-  cursor: pointer;
-}
 .grdc-linkbtn:hover:not(:disabled) { color: var(--text-primary); text-decoration: underline; }
 .grdc-linkbtn:disabled { opacity: .45; cursor: default; }
-.grdc-input {
-  height: 28px;
-  padding: 0 10px;
-  flex-shrink: 0;
-  background: var(--bg-input);
-  border: 1px solid var(--border-input);
-  border-radius: var(--radius-md);
-  color: var(--text-primary);
-  font-size: 12px;
-  font-family: var(--font-sans);
-  outline: none;
-}
-.grdc-input:focus { border-color: var(--accent-primary); }
 .grdc-foot { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
 .grdc-sp { flex: 1; }
 .grdp-fpath {

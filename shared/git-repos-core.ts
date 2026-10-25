@@ -545,6 +545,60 @@ export function isValidCommitFiles(files: unknown): files is string[] {
 
 export type RemoteGitAction = 'fetch' | 'pull'
 
+// ─── 变更文件的自动识别：疑似临时产物 与 提交信息规则草稿 ───
+
+/**
+ * 疑似临时产物：untracked（??）文件命中这些模式时，提交弹窗默认不勾选
+ * （可勾回）。.gitignore 覆盖的文件根本不会出现在 status 里，这里兜的是
+ * 忘了写 .gitignore 的那部分——编辑器备份、系统缩略图、运行日志等。
+ */
+const NOISE_FILE_RE = /(^|[/\\])(?:\.DS_Store|Thumbs\.db)$|(?:(?:\.log|\.tmp|\.bak|\.swp|\.orig|\.rej)$)/i
+
+export function looksLikeNoiseFile(path: string): boolean {
+  return NOISE_FILE_RE.test(path)
+}
+
+/**
+ * 由变更文件清单推一份 conventional-commits 风格的**规则草稿**（非 AI，
+ * 确定性可复算）：全部是测试 → test，全部是文档 → docs，全部是配置/依赖
+ * → chore，路径含 fix/bug/hotfix 信号 → fix，其余 → feat；单一顶层目录
+ * 作 scope。给「留空自动生成」与 ✦ 按钮用，产出可编辑。
+ */
+export function draftCommitMessage(files: string[]): string {
+  if (!files.length) return ''
+  const isTest = (p: string): boolean => /(^|[/\\])(tests?|__tests__)[/\\]/.test(p) || /\.(test|spec)\.[a-z]+$/i.test(p)
+  const isDoc = (p: string): boolean => /(^|[/\\])docs?[/\\]/.test(p) || /\.md$/i.test(p)
+  const isConfig = (p: string): boolean =>
+    /(^|[/\\])(?:\.gitignore|Dockerfile[^/\\]*|docker-compose[^/\\]*)$/.test(p)
+    || /\.(?:ya?ml|toml|ini|cfg|json|lock)$/i.test(p)
+    || /(^|[/\\])\.github[/\\]/.test(p)
+  let type = 'feat'
+  if (files.every(isTest)) type = 'test'
+  else if (files.every(isDoc)) type = 'docs'
+  else if (files.every(isConfig)) type = 'chore'
+  else if (files.some(p => /fix|bug|hotfix|patch|crash/i.test(p))) type = 'fix'
+  // scope = 全部文件的最深公共目录的最后一段（src/git/… → git）；无公共目录不带 scope
+  const dirs = files.map(p => {
+    const segs = p.split(/[\\/]/)
+    segs.pop()
+    return segs.filter(s => s && !s.startsWith('.'))
+  })
+  const common: string[] = []
+  for (let i = 0; ; i++) {
+    const seg = dirs[0]?.[i]
+    if (!seg || !dirs.every(d => d[i] === seg)) break
+    common.push(seg)
+  }
+  const scope = common.length ? common[common.length - 1] : ''
+  const head = scope ? `${type}(${scope})` : type
+  if (files.length === 1) {
+    const base = files[0].split(/[\\/]/).pop() || files[0]
+    return `${head}: 更新 ${base}`
+  }
+  return `${head}: 调整 ${files.length} 个文件`
+}
+
+
 export function buildRemoteGitActionCmd(path: string, action: RemoteGitAction): string {
   const p = shSingleQuote(path)
   return action === 'fetch'

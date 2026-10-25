@@ -45,7 +45,6 @@
           <input
             v-model="inputUrl"
             class="text-input"
-            placeholder="粘贴 GitHub 地址：仓库 / Release 附件 / raw / git@github.com:…"
             spellcheck="false"
             @keyup.enter="doConvert"
           />
@@ -247,8 +246,6 @@
           <button class="btn btn-sm" :disabled="!newWebHost.trim()" @click="addWeb">添加</button>
         </div>
       </section>
-
-      <div class="risk-note">公共镜像属于不可信中继：经其 clone / 下载的代码理论上可被篡改，敏感项目请核对 commit hash。</div>
     </div>
   </div>
 </template>
@@ -1034,10 +1031,4 @@ async function onMasterDisable(): Promise<void> {
   margin-top: 2px;
 }
 
-.risk-note {
-  font-size: 11px;
-  color: var(--text-secondary);
-  line-height: 1.6;
-  padding: 0 2px;
-}
 </style>

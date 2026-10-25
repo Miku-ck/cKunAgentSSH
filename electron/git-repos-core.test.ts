@@ -17,6 +17,7 @@ import {
   interpretPull, firstLine, friendlyGitStderr,
   GRAPH_MAX_LIMIT, buildGraphLogArgs, buildRemoteGraphCmd,
   parseGraphLog, graphRefKind, graphHasMore, layoutGraphLanes,
+  draftCommitMessage, looksLikeNoiseFile,
   type RepoRow,
 } from '../shared/git-repos-core'
 
@@ -360,6 +361,31 @@ describe('interpretPull（--ff-only 安全边界）', () => {
   it('firstLine 取首个非空行', () => {
     expect(firstLine('  \n\nfatal: x\nnext')).toBe('fatal: x')
     expect(firstLine('')).toBe('')
+  })
+})
+
+describe('提交信息规则草稿与临时产物识别', () => {
+  it('looksLikeNoiseFile：日志/临时/备份/系统文件命中，普通源码不命中', () => {
+    expect(looksLikeNoiseFile('deploy.log')).toBe(true)
+    expect(looksLikeNoiseFile('src/app/tmp.tmp')).toBe(true)
+    expect(looksLikeNoiseFile('a/b/config.cfg.bak')).toBe(true)
+    expect(looksLikeNoiseFile('.DS_Store')).toBe(true)
+    expect(looksLikeNoiseFile('C:\\Users\\x\\Thumbs.db')).toBe(true)
+    expect(looksLikeNoiseFile('src/components/ssh/git/GitReposPanel.vue')).toBe(false)
+    expect(looksLikeNoiseFile('logger.ts')).toBe(false) // 名字含 log 但不是 .log 后缀
+  })
+
+  it('draftCommitMessage：按构成选 type，scope 取最深公共目录', () => {
+    expect(draftCommitMessage(['src/git/GitPanel.vue'])).toBe('feat(git): 更新 GitPanel.vue')
+    expect(draftCommitMessage(['tests/api/a.test.ts', 'tests/api/b.test.ts'])).toBe('test(api): 调整 2 个文件')
+    expect(draftCommitMessage(['README.md', 'docs/spec.md'])).toBe('docs: 调整 2 个文件')
+    expect(draftCommitMessage(['package.json', 'tsconfig.json'])).toBe('chore: 调整 2 个文件')
+    expect(draftCommitMessage(['src/utils/timeout-fix.ts', 'src/utils/x.ts'])).toBe('fix(utils): 调整 2 个文件')
+    // 多个顶层目录：不带 scope
+    expect(draftCommitMessage(['src/a.ts', 'docs/b.md'])).toBe('feat: 调整 2 个文件')
+    // 单文件且无目录：不带 scope
+    expect(draftCommitMessage(['hotfix.patch'])).toBe('fix: 更新 hotfix.patch')
+    expect(draftCommitMessage([])).toBe('')
   })
 })
 

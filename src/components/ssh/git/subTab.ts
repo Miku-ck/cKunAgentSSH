@@ -9,8 +9,8 @@ import { ref } from 'vue'
 
 export type GitSubTab = 'accel' | 'repos'
 
-/** 默认加速：贴链接转链接是最高频用法，进页即用（设计稿 2026-10-24） */
-export const gitSubTab = ref<GitSubTab>('accel')
+/** 默认仓库：仓库管理是 Git 页的工作台主入口（2026-10-25 起；此前默认加速） */
+export const gitSubTab = ref<GitSubTab>('repos')
 
 export function setGitSubTab(sub: GitSubTab): void {
   gitSubTab.value = sub
