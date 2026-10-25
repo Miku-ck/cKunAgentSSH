@@ -76,13 +76,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useAgentStore } from '@/stores/agent'
 import { useSettingsStore } from '@/stores/settings'
 import { useToastStore } from '@/stores/toast'
 import { buildDisplayMessages, isLiveAgentRun } from '@/utils/display-messages'
 import { isTitleEcho } from '@/utils/conversation-title'
+import { shouldFollowScroll } from '@/utils/scroll-follow'
 import type { BaseMessage } from '@/types/chat'
 // MessageItem 的依赖链带着 marked/highlight.js/DOMPurify。它是首页里的常驻组件，
 // 静态引入会把整条 Markdown 栈钉进入口包；异步化后空态首屏不下载，第一条消息
@@ -158,22 +159,56 @@ function isLiveAt(idx: number): boolean {
     displayMessages.value, idx, agentStore.isRunning, agentStore.awaitingClarification)
 }
 
-// ── 自动滚动：新消息、流式正文/思考都跟到底 ──
-async function scrollToBottom() {
+// ── 自动滚动：一次性事件（新消息/切会话/运行通知）无条件跟到底；流式正文/思考
+//    走「贴底跟随」—— 用户上翻查看历史时不抢滚动条 ──
+// rAF 合帧：流式期间 content/reasoning 每秒触发数十次请求，若每次都 nextTick 后
+// 读 scrollHeight，等于每秒几十次强制 layout。同一帧内的触发只排一次队，
+// scrollTop 写入（连带那次必然的布局读取）每帧最多一次。
+let scrollRafId = 0
+function scheduleScrollToBottom() {
   if (!settingsStore.settings.chat.autoScroll) return
-  await nextTick()
-  const el = scrollRef.value
-  if (el) el.scrollTop = el.scrollHeight
+  if (scrollRafId) return
+  scrollRafId = requestAnimationFrame(() => {
+    scrollRafId = 0
+    const el = scrollRef.value
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+    // 写入后我们就在底部，标志直接回真、不等下一次 scroll 事件：切到内容不足
+    // 一屏的会话时 scrollTop 写入可能是 no-op、不派发 scroll 事件，不回真的话
+    // 下一段流式会错判「用户上翻了」而从此不再跟随。
+    stickyFollow = true
+  })
 }
 
-watch(() => displayMessages.value.length, () => { void scrollToBottom() }, { immediate: true })
+// 贴不贴底只在 scroll 事件里读数：浏览器派发该事件时布局已就绪，读取不触发
+// 强制 reflow。流式热路径（token 到达）只查这个标志，不做任何布局读取；
+// 内容增长本身不派发 scroll 事件 —— 贴底时标志保持 true，跟随不断线。
+let stickyFollow = true
+function onScroll() {
+  const el = scrollRef.value
+  if (el) stickyFollow = shouldFollowScroll(el.scrollTop, el.clientHeight, el.scrollHeight)
+}
+onMounted(() => scrollRef.value?.addEventListener('scroll', onScroll, { passive: true }))
+onUnmounted(() => {
+  scrollRef.value?.removeEventListener('scroll', onScroll)
+  if (scrollRafId) cancelAnimationFrame(scrollRafId)
+})
+
+/** 流式跟随（content/reasoning 的高频触发）：只在本就贴底时才跟着滚；
+ *  一次性事件（新消息/切会话/通知）不问贴底，直接走 scheduleScrollToBottom。 */
+function requestFollow() {
+  if (!stickyFollow) return
+  scheduleScrollToBottom()
+}
+
+watch(() => displayMessages.value.length, () => { scheduleScrollToBottom() }, { immediate: true })
 // 切会话时消息条数可能恰好相同，length watch 不会动 —— 单独跟一次，避免停在上一段的位置
-watch(() => sshAi.currentConvId, () => { void scrollToBottom() })
-watch(() => agentStore.content, () => { if (agentStore.isRunning) void scrollToBottom() })
-watch(() => agentStore.reasoning, () => { if (agentStore.isRunning) void scrollToBottom() })
+watch(() => sshAi.currentConvId, () => { scheduleScrollToBottom() })
+watch(() => agentStore.content, () => { if (agentStore.isRunning) requestFollow() })
+watch(() => agentStore.reasoning, () => { if (agentStore.isRunning) requestFollow() })
 // 运行通知区块（任务规划/警告/人工介入/错误）是消息流之外的另一段高度变化，
 // 出现时同样要跟到底 —— 否则提示停在视野下方。
-watch(() => agentStore.hasRunNotice, () => { void scrollToBottom() })
+watch(() => agentStore.hasRunNotice, () => { scheduleScrollToBottom() })
 
 function switchConversation(id: string) {
   if (agentStore.isRunning) {
