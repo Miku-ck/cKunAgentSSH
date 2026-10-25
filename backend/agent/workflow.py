@@ -24,6 +24,7 @@ Spec、Plan、Goal 不是 runbook 步骤自动机，而是 agent 的三个工作
   调用方据此跳过注入。
 """
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -75,16 +76,29 @@ def _read_artifact(path: Path) -> str:
 
 
 def _write_artifact(path: Path, content: str) -> str:
-    """写工件文件；父目录自动建。返回写入内容（去首尾空白）或空串失败。"""
+    """写工件文件；父目录自动建。返回写入内容（去首尾空白）或空串失败。
+
+    原子写（tmp+os.replace，CONTEXT.md「半写损坏」口径）：撕裂的 spec/plan/goal
+    会被 get_phase 当成有效阶段文件读回，阶段状态就静默漂移了。tmp 名带 pid，
+    与 builtin_skills._persist_managed_slugs 同一写法。
+    """
     content = (content or "").strip()
     if not content:
         return ""
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
+        tmp.write_text(content, encoding="utf-8")
+        os.replace(tmp, path)
     except OSError as e:
         logger.warning("[workflow] 写入失败 %s: %s", path, e)
         return ""
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
     return content
 
 

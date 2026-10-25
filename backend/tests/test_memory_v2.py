@@ -606,6 +606,51 @@ def test_blocks_replace_and_limits(memdb):
     assert not memory_blocks.allowed_key("evil-key")
 
 
+def test_blocks_concurrent_updates_no_lost_update_no_dup_version(memdb):
+    """Q-B5 并发守卫：两个并发 run 同时更新同一块，两次更新都必须生效。
+
+    原实现的读-改-写跨连接两步：两个 replace 都基于同一旧基准合并，双双写
+    N+1 —— memory_block_history 留两条同版本记录，先提交者的更新被静默丢弃。
+    块更新经 asyncio.to_thread 并发执行（memory_tools.py），这里是同构复现：
+    真线程池并发跑 replace，CAS 保证后提交者基于最新基准重合并。
+    """
+    import concurrent.futures
+
+    mstore.put_block("user-preferences", "行A\n行B\n行C", "test")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        f1 = pool.submit(mstore.replace_in_block,
+                         "user-preferences", "行A", "行A-改1", "run-1")
+        f2 = pool.submit(mstore.replace_in_block,
+                         "user-preferences", "行C", "行C-改2", "run-2")
+        v1, v2 = f1.result(), f2.result()
+
+    value = mstore.get_block("user-preferences")["value"]
+    # 两个更新都不能丢：CAS 冲突方必须基于最新基准重读重合
+    assert "行A-改1" in value, f"run-1 的更新被并发丢弃: {value!r}"
+    assert "行C-改2" in value, f"run-2 的更新被并发丢弃: {value!r}"
+    assert "行B" in value, "未参与合并的行不得受并发影响"
+    # 版本严格递增且不重复：历史里不再出现两条同版本记录
+    versions = sorted(h["version"] for h in mstore.list_block_history("user-preferences"))
+    assert versions == [1, 2, 3], f"版本号应恰好 1/2/3 各一条，实得 {versions}"
+    assert {v1, v2} == {2, 3}, f"两次调用应返回两个不同的新版本号，实得 {v1},{v2}"
+
+
+def test_blocks_concurrent_appends_both_survive(memdb):
+    """并发「old_string 传空=末尾追加」同受 CAS 保护：两条追加都落块。"""
+    import concurrent.futures
+
+    mstore.put_block("agent-rules", "基础规则", "test")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        f1 = pool.submit(mstore.replace_in_block, "agent-rules", "", "追加一", "run-1")
+        f2 = pool.submit(mstore.replace_in_block, "agent-rules", "", "追加二", "run-2")
+        f1.result(), f2.result()
+
+    value = mstore.get_block("agent-rules")["value"]
+    assert "追加一" in value and "追加二" in value
+    versions = sorted(h["version"] for h in mstore.list_block_history("agent-rules"))
+    assert versions == [1, 2, 3], f"版本号应恰好 1/2/3 各一条，实得 {versions}"
+
+
 def test_episodic_job_written_without_llm(memdb):
     mstore.enqueue_job(reconcile.JOB_EPISODIC, {"content": "任务: ls | 结果: ok"})
     _run(reconcile.process_jobs(embed_client=FakeEmbed(), model_cfg={}))

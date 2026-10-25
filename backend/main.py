@@ -14,6 +14,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+import logconfig
 from config import settings
 from database import init_db
 from database import seed_models_async
@@ -31,6 +32,15 @@ from agent.bridge_relay import bridge_ws_endpoint
 import win_asyncio_teardown
 
 logger = logging.getLogger(__name__)
+
+# ── S-B1①：入口最早安装 root handler ─────────────────────────────────────────
+# 必须先于下方模块级 token 警告与 __main__ 里的启动横幅执行：此前前者经
+# lastResort 裸打（无时间戳无级别）、后者是 root 默认 WARNING 丢 INFO 的死日志。
+# 安装后二者按统一 `%(asctime)s %(levelname)-7s %(name)s` 格式落地，且出口
+# 脱敏（SecretRedactionFilter）随 handler 同步生效 —— 早期日志没有脱敏真空期。
+# 启动窗口用 info 级（横幅与初始化进度必须落地）；用户配置级别由 lifespan
+# 的 logconfig.load_from_db 回填接管，运行期默认仍是 warning。
+logconfig.install_early()
 
 # ── API Token 认证 ────────────────────────────────────────────────────────────
 # 契约：Electron spawn 时注入环境变量 CKUN_API_TOKEN；
@@ -283,6 +293,11 @@ if __name__ == "__main__":
         port=args.port,
         reload=False,
         log_level="info",
+        # S-B1②：关访问日志 —— BackendManager 以 150-500ms 轮询 /api/health，
+        # 每次轮询一条 access 行把启动日志刷成健康检查流水账（与 Electron 侧
+        # [Python] 行缓冲 relay 配套的统一口径）。业务可观测性走 root handler，
+        # uvicorn.error（启动/停止事件）仍保留在 info。
+        access_log=False,
         # Bridge WS 单帧上限（显式化默认值）：远程命令输出可能较大
         ws_max_size=16 * 1024 * 1024,
     )

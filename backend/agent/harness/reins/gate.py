@@ -10,6 +10,7 @@ import re
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional
 
 from agent.audit import append_record_async
@@ -233,13 +234,18 @@ class PermissionGate:
     def _load_permanent_allowlist(self) -> set[str]:
         """从 config 加载永久 allowlist（~/.ckunagentic/allowlist.txt）。
 
-        逐行校验格式，不合法行记录 warning 日志后跳过。
-        空行和 '#' 注释行被忽略。
+        逐行校验格式；出现非法行或整份读不出来时，按 CONTEXT.md「隔离」口径
+        把文件改名 `.corrupt-<ts>.bak` 留证并如实上报，**绝不静默跳过非法行
+        继续用子集** —— 半写（撕裂）文件的可读部分只是真实基准的子集，拿着
+        子集继续跑，下一次 grant 的 _save_permanent_allowlist 就会把子集写回
+        定稿，丢掉的预授权就真的没了。隔离后内存集按空集起算，用户需重新
+        授权一次（属预期行为），证据保留在 .bak 里可人工恢复。
         """
         path = ALLOWLIST_PATH
         if not os.path.exists(path):
             return set()
         result: set[str] = set()
+        bad_reasons: list[str] = []
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 for lineno, raw_line in enumerate(f, start=1):
@@ -248,12 +254,42 @@ class PermissionGate:
                         continue
                     valid, reason = self._validate_allowlist_entry(line, lineno)
                     if not valid:
-                        logger.warning(reason)
+                        bad_reasons.append(f"第 {lineno} 行: {reason}")
                         continue
                     result.add(line)
         except Exception as e:
-            logger.warning("读取 allowlist 失败: %s: %s", path, e)
+            self._quarantine_allowlist_file(path, f"读取失败: {e}")
+            return set()
+        if bad_reasons:
+            self._quarantine_allowlist_file(
+                path, f"{len(bad_reasons)} 条非法行（{'; '.join(bad_reasons[:3])}）")
+            return set()
         return result
+
+    @staticmethod
+    def _quarantine_allowlist_file(path: str, reason: str) -> str:
+        """把读不出可信内容的 allowlist 文件改名 `.corrupt-<ts>.bak` 留证。
+
+        与 builtin_skills._quarantine_state_file 同一策略：rename 优先（原子），
+        失败退化为复制；两者都失败时原文件保留并如实上报失败。
+        返回隔离产物路径（或失败说明）。
+        """
+        bak = f"{path}.corrupt-{int(time.time())}.bak"
+        try:
+            os.replace(path, bak)
+        except OSError:
+            try:
+                with open(path, 'rb') as src, open(bak, 'wb') as dst:
+                    dst.write(src.read())
+            except OSError as e:
+                logger.error("allowlist 隔离失败（原文件原样保留）: %s: %s", path, e)
+                return f"（隔离失败: {e}）"
+        logger.error(
+            "allowlist 文件读不出可信内容，已隔离留证: %s -> %s（原因: %s）。"
+            "为杜绝半写内容被子集写回定稿，已有预授权不参与本次加载，"
+            "需用户重新授权一次；如需恢复请从 .bak 人工核对后登记。",
+            path, bak, reason)
+        return bak
 
     @staticmethod
     def _allowlist_meta_path() -> str:
@@ -370,12 +406,41 @@ class PermissionGate:
             })
         return out
 
+    @staticmethod
+    def _atomic_replace_in_dir(target: str, payload: str) -> None:
+        """在 target 所在目录内做 tmp+os.replace 原子写（CONTEXT.md「半写损坏」口径）。
+
+        路径防穿越守卫：target 先 normalize（resolve），final 的父目录必须仍是
+        target 原目录、tmp 由 with_name 派生（天然与 final 同目录）—— 允许目录
+        = allowlist 文件自身所在目录，本模块所有 target 都由 ALLOWLIST_PATH /
+        _allowlist_meta_path() 派生，不接受任何外部输入的路径成分。tmp 名带
+        pid：dev 实例与已安装实例共用 ~/.ckunagentic 时互不截走临时文件
+        （写法与 builtin_skills._persist_managed_slugs 同源）。
+        """
+        final = Path(target).resolve()
+        if final.parent != Path(target).parent.resolve():
+            raise RuntimeError(f"写入目标越出 allowlist 目录，拒绝: {target}")
+        tmp = final.with_name(f"{final.name}.{os.getpid()}.tmp")
+        try:
+            tmp.write_text(payload, encoding="utf-8")
+            os.replace(str(tmp), str(final))
+        finally:
+            # 写失败/replace 失败时清理 .pid.tmp 残留（成功路径 tmp 已不存在，
+            # unlink 跳过）—— 与 workflow._write_artifact 的收尾同口径
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except OSError:
+                pass
+
     def _save_permanent_allowlist(self) -> None:
-        """保存永久 allowlist（键文件 + 同目录时间戳 sidecar）
+        """保存永久 allowlist（键文件 + 同目录时间戳 sidecar），tmp+os.replace 原子写
 
         写前逐条校验、全部合法才打开文件：任何一条不合法都抛错且不落半截文件
         —— 这个 set 的成员通常来自 grant（已校验），但主机段是新增维度，
         多一道「写进去的必须读得回来」的守卫比依赖上游每个入口都自觉更可靠。
+        原子写走 _atomic_replace_in_dir：进程被杀在 write 中间不能留下半个
+        allowlist —— 那正是 _load_permanent_allowlist 隔离逻辑要防的形态。
         """
         path = ALLOWLIST_PATH
         for entry in self._confirmed_permanent:
@@ -390,12 +455,13 @@ class PermissionGate:
         self._permanent_granted_at = {
             k: v for k, v in self._permanent_granted_at.items() if k in self._confirmed_permanent
         }
-        with open(path, 'w', encoding='utf-8') as f:
-            for name in sorted(self._confirmed_permanent):
-                f.write(name + '\n')
+        self._atomic_replace_in_dir(
+            path, "".join(name + '\n' for name in sorted(self._confirmed_permanent)))
         try:
-            with open(self._allowlist_meta_path(), 'w', encoding='utf-8') as f:
-                json.dump(self._permanent_granted_at, f, sort_keys=True)
+            self._atomic_replace_in_dir(
+                self._allowlist_meta_path(),
+                json.dumps(self._permanent_granted_at, sort_keys=True),
+            )
         except Exception as e:
             # 时间戳写失败不能阻塞授权本身：缺记录的键之后按 allowlist.txt 的 mtime
             # 兜底，方向是"少过期一点"，不是把已登记的预授权判死。

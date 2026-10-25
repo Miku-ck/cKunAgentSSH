@@ -753,8 +753,23 @@ async def agent_run(req: AgentRunRequest, request: Request):
     # 避免纯聊天用户产生空 DB 查询开销
     get_global_tick().ensure_started()
 
-    # ── 按模式过滤显式 skill_ids ──
-    if req.skill_ids:
+    # ── setup 并行段一（Q-B4④）：互不依赖的读操作一次拉起，压首字节时延 ──
+    # 依赖链钉死：记忆检索与画像（并行段二）依赖 mem_settings / embed_client /
+    # is_conversation_task；本组内 history / skill 过滤 / 意图预识别 / 记忆设置 /
+    # 会话目标 / 演化配置互不依赖（演化配置原在 prompt 构建后才读，但它只被
+    # thinking/max_tokens 消费，提前无语义变化）。失败语义与串行一致：不可吞的
+    # 异常按原串行顺序 re-raise（skills → history → mem_settings → goal →
+    # evolved；skill 过滤失败尤其不得静默吞掉 —— 那会让被禁用的技能照常注入
+    # prompt，原串行实现是 fail-fast）；只有 intention 保持内部降级不抛。
+    async def _setup_history():
+        # 获取历史消息（条数来自前端"上下文窗口"设置）
+        return await asyncio.to_thread(
+            db.get_recent_messages, req.conversation_id, limit=req.context_window)
+
+    async def _setup_skills():
+        # ── 按模式过滤显式 skill_ids ──
+        if not req.skill_ids:
+            return
         disabled_skill_ids = set(await asyncio.to_thread(db.list_disabled_skills_for_mode, SSH_MODE))
         original_skill_ids = req.skill_ids
         req.skill_ids = [sid for sid in req.skill_ids if sid not in disabled_skill_ids]
@@ -764,23 +779,60 @@ async def agent_run(req: AgentRunRequest, request: Request):
                 SSH_MODE, len(original_skill_ids), len(req.skill_ids),
             )
 
-    # 获取历史消息（条数来自前端"上下文窗口"设置）
-    history = await asyncio.to_thread(db.get_recent_messages, req.conversation_id, limit=req.context_window)
+    _intention: dict = {"pre": None, "is_conv": False}
 
-    # ── 意图预识别：用于决定是否跳过记忆检索、是否禁用工具 schema ──
-    # 对话型任务（问候/身份询问/能力询问）不需要记忆、不需要工具
-    # 避免用户问"你是什么模型"时被无关记忆污染、被引导去调工具
-    pre_intention = None
-    is_conversation_task = False
-    if req.enable_intention_guide:
+    async def _setup_intention():
+        # ── 意图预识别：用于决定是否跳过记忆检索、是否禁用工具 schema ──
+        # 对话型任务（问候/身份询问/能力询问）不需要记忆、不需要工具
+        # 避免用户问"你是什么模型"时被无关记忆污染、被引导去调工具
+        if not req.enable_intention_guide:
+            return
         try:
             from agent.intention import classify as _classify_intention
-            pre_intention = _classify_intention(req.task)
-            is_conversation_task = (
-                pre_intention.task_type.value == "conversation"
+            _intention["pre"] = _classify_intention(req.task)
+            _intention["is_conv"] = (
+                _intention["pre"].task_type.value == "conversation"
             )
         except Exception as e:
             logger.warning("意图预识别失败（降级为常规流程）: %s", e)
+
+    async def _setup_mem_settings():
+        # 读取记忆设置 — 关闭时跳过检索与保存
+        ms = await asyncio.to_thread(db.get_memory_settings)
+        # spec §8 统一预算：设置值只代表"想要多少"，窗口才代表"能给多少"，取小者。
+        # 不夹住的话 8k 窗口的模型也会按 8000 token 注入记忆，压掉 history 与输出空间。
+        _mem_budget = memory_budget.current(model_cfg.get("max_tokens"))
+        ms["inject_budget_tokens"] = _mem_budget.injection
+        ms["blocks_budget_tokens"] = _mem_budget.blocks
+        return ms
+
+    async def _setup_goal():
+        # 会话目标：用户声明的结构化目标随每轮 run 复现（防漂移的主手段）。查询走
+        # to_thread（与其它 db 访问一致），失败/无目标降级为空串，不影响 run。
+        return await asyncio.to_thread(_load_active_goal_text, req.conversation_id or "")
+
+    evolution_mgr = EvolutionEngine()
+
+    async def _setup_evolved():
+        return await asyncio.to_thread(_load_evolved_config, evolution_mgr)
+
+    _setup_results = await asyncio.gather(
+        _setup_history(), _setup_skills(), _setup_intention(),
+        _setup_mem_settings(), _setup_goal(), _setup_evolved(),
+        return_exceptions=True,
+    )
+    # skills(1) 同样不可吞：过滤失败却继续跑 = 被禁用技能照常注入（fail-fast，
+    # 与原串行一致）。按原串行顺序 re-raise：skills 先于 history。
+    for _idx in (1, 0, 3, 4, 5):
+        if isinstance(_setup_results[_idx], BaseException):
+            raise _setup_results[_idx]
+    history = _setup_results[0]
+    pre_intention = _intention["pre"]
+    is_conversation_task = _intention["is_conv"]
+    mem_settings = _setup_results[3]
+    memory_enabled = mem_settings["enabled"]
+    goal_text = _setup_results[4]
+    _evolved_cfg = _setup_results[5]
 
     # embedding 客户端（与 run 模型同源，LRU 缓存单例；失败仅无向量，不造伪向量）
     embed_client = get_embedding_client(
@@ -789,39 +841,30 @@ async def agent_run(req: AgentRunRequest, request: Request):
         model_cfg.get("model_id") or model_cfg.get("name", ""),
     )
 
-    # 读取记忆设置 — 关闭时跳过检索与保存
-    mem_settings = await asyncio.to_thread(db.get_memory_settings)
-    memory_enabled = mem_settings["enabled"]
-    # spec §8 统一预算：设置值只代表"想要多少"，窗口才代表"能给多少"，取小者。
-    # 不夹住的话 8k 窗口的模型也会按 8000 token 注入记忆，压掉 history 与输出空间。
-    _mem_budget = memory_budget.current(model_cfg.get("max_tokens"))
-    mem_settings["inject_budget_tokens"] = _mem_budget.injection
-    mem_settings["blocks_budget_tokens"] = _mem_budget.blocks
-
-    # v2 混合检索：episodic/semantic/procedural 统一记忆，scope 硬过滤
-    # 对话型任务跳过记忆检索（避免无关记忆污染简单对话）
-    memory_contents: list[str] = []
-    if memory_enabled and not is_conversation_task:
-        memory_contents = await _retrieve_memory_contents(
+    # ── setup 并行段二（Q-B4④）：依赖 mem_settings/is_conversation_task 的两项 ──
+    # 记忆检索（embedding + 混合检索）与目标机画像探测（SSH 往返，超时上限 10s）
+    # 互不依赖，是 setup 里最贵的两段，并行拿回。
+    async def _setup_memory_contents():
+        # v2 混合检索：episodic/semantic/procedural 统一记忆，scope 硬过滤
+        # 对话型任务跳过记忆检索（避免无关记忆污染简单对话）
+        if not (memory_enabled and not is_conversation_task):
+            return []
+        return await _retrieve_memory_contents(
             embed_client, query=req.task,
             scopes=memory_retriever.context_scopes(req.ssh_session_id or ""),
             settings=mem_settings,
         )
 
-    # ── 演化配置 ──
-    evolution_mgr = EvolutionEngine()
-
-    # ── 画像（常驻上下文）：目标机探测 → host-profile 块 → [画像] 段 ──
-    # 探测是一条只读、免审命令（ops_obs.host_profile_cmd ↔ 远端 host_profile 模板），
-    # 失败/超时/目标机未部署该模板一律降级为"环境未知"文案，绝不影响 run
-    # （见 agent/host_profile.py 硬约束）。
-    # 只有真实环境事实才写进画像块；降级文案是"本轮没探到"的说明而非机器事实，
-    # 写进块会让一次失败常驻到下次成功，读起来像确凿结论 —— 故只在当轮直接注入。
-    # 对话型任务跳过：纯寒暄不需要一次远程往返，也不需要环境事实。
-    # 代价：setup 期多一次 await（超时上限 10s，实际为亚秒级只读命令）；setup 本身
-    # 已含记忆检索（上限 8s）等阻塞项，故不额外改变首字节时序。
-    profile_text = ""
-    if not is_conversation_task:
+    async def _setup_profile():
+        # ── 画像（常驻上下文）：目标机探测 → host-profile 块 → [画像] 段 ──
+        # 探测是一条只读、免审命令（ops_obs.host_profile_cmd ↔ 远端 host_profile 模板），
+        # 失败/超时/目标机未部署该模板一律降级为"环境未知"文案，绝不影响 run
+        # （见 agent/host_profile.py 硬约束）。
+        # 只有真实环境事实才写进画像块；降级文案是"本轮没探到"的说明而非机器事实，
+        # 写进块会让一次失败常驻到下次成功，读起来像确凿结论 —— 故只在当轮直接注入。
+        # 对话型任务跳过：纯寒暄不需要一次远程往返，也不需要环境事实。
+        if is_conversation_task:
+            return ""
         from agent.harness.contracts import RunContext as _RunContext
         from agent.host_profile import ensure_host_profile, is_known_profile
         from agent.memory import blocks as memory_blocks
@@ -832,6 +875,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
         )
         host_profile_text = await ensure_host_profile(_host_ctx)
 
+        _profile_text = ""
         if memory_enabled:
             if req.ssh_session_id and is_known_profile(host_profile_text):
                 try:
@@ -848,18 +892,22 @@ async def agent_run(req: AgentRunRequest, request: Request):
                 except Exception as e:
                     logger.warning("主机画像块裁剪失败（不影响 run）: %s", e)
             try:
-                profile_text = await memory_blocks.render_for_context(
+                _profile_text = await memory_blocks.render_for_context(
                     req.ssh_session_id or "", mem_settings["blocks_budget_tokens"],
                 )
             except Exception as e:
                 logger.warning("画像块渲染失败，降级为本轮探测文案: %s", e)
         # 记忆关闭时退回本轮探测文案；本轮未探到环境事实而块也为空时同样兜底，
         # 否则"工具不在本机执行""先探测再假设"这两条安全提示会整体消失。
-        profile_text = profile_text or host_profile_text
+        return _profile_text or host_profile_text
 
-    # 会话目标：用户声明的结构化目标随每轮 run 复现（防漂移的主手段）。查询走
-    # to_thread（与其它 db 访问一致），失败/无目标降级为空串，不影响 run。
-    goal_text = await asyncio.to_thread(_load_active_goal_text, req.conversation_id or "")
+    _profile_results = await asyncio.gather(
+        _setup_memory_contents(), _setup_profile(), return_exceptions=True)
+    for _r in _profile_results:
+        if isinstance(_r, BaseException):
+            raise _r
+    memory_contents: list[str] = _profile_results[0] or []
+    profile_text = _profile_results[1] or ""
 
     # P1 修复（审批审查 2026-10-11）：plan 姿态配对强制（理由见
     # _paired_permission_mode docstring）；此局部变量是 harness.run 的唯一来源。
@@ -888,7 +936,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
         + [m for m in memory_contents if isinstance(m, str)]
     )
     # 演化配置可能把 thinking 打开，所以 thinking 必须先于 safe_max_tokens 定稿
-    _evolved_cfg = await asyncio.to_thread(_load_evolved_config, evolution_mgr)
+    # （Q-B4④：_evolved_cfg 已在 setup 并行段一提前取回，此处直接消费）
     thinking_on = _resolve_thinking(req, _evolved_cfg)
     _safe_max = safe_max_tokens(
         model_cfg.get("max_tokens"),
@@ -1091,6 +1139,29 @@ async def agent_run(req: AgentRunRequest, request: Request):
         # S1-01 兜底段的 iterations 来源：done 事件带不到断连路径，取最后观测到的迭代号
         last_iteration = 0
 
+        # ── Q-B4③：tool_call 落库挪到单写者后台任务 ──
+        # SSE 消费循环每次 yield 前不再被逐条 sqlite 写阻塞（add/update 各一次
+        # 连接开关，几十个工具调用的 run 光轨迹落库就吃掉数百毫秒吞吐）。
+        # 单写者按入队顺序消费，start 先于 result 落库；配对键用内存序号 seq，
+        # db 行 id 由写者在 add 完成后回填进 tc_db_ids（result 的 UPDATE 取用）。
+        tc_write_q: asyncio.Queue = asyncio.Queue()
+        tc_seq_counter = 0
+        tc_db_ids: dict[int, str] = {}
+
+        async def _tc_writer():
+            while True:
+                job = await tc_write_q.get()
+                try:
+                    if job is None:
+                        return
+                    await job()
+                except Exception as e:
+                    logger.warning("tool_call 后台落库失败: %s", e)
+                finally:
+                    tc_write_q.task_done()
+
+        tc_writer_task = asyncio.create_task(_tc_writer())
+
         # H14 修复：立即发送 state=thinking 事件，让前端马上显示"思考中..."提示
         # 原问题：从 fetch 发起到 driver 发出第一个 state 事件之间可能等 2-5 秒
         # （后端预处理：意图识别 + 记忆检索 embedding + 反思加载 + LLM 首 token）
@@ -1116,46 +1187,74 @@ async def agent_run(req: AgentRunRequest, request: Request):
                 elif event.get("type") == "tool_call_start":
                     # S1-01：兜底段的进度证据只有这个迭代号可累积
                     last_iteration = max(last_iteration, int(event.get("iteration", 0) or 0))
-                    # 记录工具调用开始（审查 M-13：db 放线程池）
-                    tc_id = await asyncio.to_thread(
-                        db.add_tool_call,
-                        agent_run_id=run_id,
-                        iteration=event.get("iteration", 0),
-                        tool_name=event["tool"],
-                        arguments=json.dumps(event.get("args", {}), ensure_ascii=False),
-                    )
-                    # H10 修复：保存 id 以便 tool_call_result 时回写结果
-                    pending_tool_call_ids.append(tc_id)
+                    # 记录工具调用开始（Q-B4③：落库入队后台单写者，不阻塞 yield）
+                    tc_seq_counter += 1
+                    _seq = tc_seq_counter
+                    _it = event.get("iteration", 0)
+                    _tool_name = event["tool"]
+                    _args_json = json.dumps(event.get("args", {}), ensure_ascii=False)
+
+                    async def _add_tc(_s=_seq, _it=_it, _t=_tool_name, _aj=_args_json):
+                        tc_db_ids[_s] = await asyncio.to_thread(
+                            db.add_tool_call,
+                            agent_run_id=run_id,
+                            iteration=_it,
+                            tool_name=_t,
+                            arguments=_aj,
+                        )
+
+                    await tc_write_q.put(_add_tc)
+                    # H10 修复：保存序号以便 tool_call_result 时回写结果
+                    pending_tool_call_ids.append(_seq)
                     run_trace_tool_calls.append({
                         # 前端 AgentTraceSnapshot.toolCalls[].id 是列表 :key 与结果
                         # 配对用的身份键，缺失时重载会话后每条记录的 key 都是 undefined
-                        "id": str(tc_id),
-                        "tool": event["tool"],
+                        # （Q-B4③：键改用 run 内序号，同 run 内唯一即满足配对语义）
+                        "id": str(_seq),
+                        "tool": _tool_name,
                         "args": event.get("args", {}),
-                        "iteration": event.get("iteration", 0),
+                        "iteration": _it,
                         # C-review NIT：trace 回填按 tc_id 精确匹配（原 (tool, iteration)
                         # 反向匹配在同轮同工具多次调用时张冠李戴）
-                        "tc_id": tc_id,
+                        "tc_id": _seq,
                     })
                 elif event.get("type") == "tool_call_result":
                     # H10 修复：将工具结果回写到 tool_calls 表
+                    # （Q-B4③：回写入队后台单写者；start→result 的 FIFO 配对键
+                    # 由 db 行 id 改为内存序号，db id 由写者从 tc_db_ids 取）
                     if pending_tool_call_ids:
-                        tc_id = pending_tool_call_ids.pop(0)
+                        _seq = pending_tool_call_ids.pop(0)
+                        _result_text: Optional[str] = None
                         try:
                             result_str = event.get("result", "")
                             if not isinstance(result_str, str):
                                 result_str = json.dumps(result_str, ensure_ascii=False)
                             # m1 修复：截断时标记，避免 Agent 拿到不完整数据做出错误决策
                             truncated = len(result_str) > 5000
-                            await asyncio.to_thread(
-                                db.update_tool_call,
-                                tool_call_id=tc_id,
-                                result=result_str[:5000] + ("\n...[truncated]" if truncated else ""),
-                                success=event.get("success", True),
-                                duration_ms=event.get("duration_ms", 0),
-                            )
+                            _result_text = result_str[:5000] + (
+                                "\n...[truncated]" if truncated else "")
                         except Exception as e:
-                            logger.warning("更新 tool_call 结果失败: %s", e)
+                            logger.warning("tool_call 结果序列化失败: %s", e)
+                        if _result_text is not None:
+                            _ok = event.get("success", True)
+                            _dur = event.get("duration_ms", 0)
+
+                            async def _upd_tc(_s=_seq, _rt=_result_text,
+                                              _ok=_ok, _du=_dur):
+                                _db_id = tc_db_ids.pop(_s, None)
+                                if _db_id is None:
+                                    # start 落库失败时无从回写（快照轨迹不受影响）
+                                    logger.warning("tool_call seq=%s 回写跳过：start 未落库", _s)
+                                    return
+                                await asyncio.to_thread(
+                                    db.update_tool_call,
+                                    tool_call_id=_db_id,
+                                    result=_rt,
+                                    success=_ok,
+                                    duration_ms=_du,
+                                )
+
+                            await tc_write_q.put(_upd_tc)
                         # 回写 run_trace_tool_calls（用于 agent_trace_snapshot 持久化）
                         # C-review NIT：按 tc_id 精确匹配 — 原 (tool, iteration) 反向
                         # 匹配在同轮同工具多次调用时张冠李戴
@@ -1165,11 +1264,18 @@ async def agent_run(req: AgentRunRequest, request: Request):
                         if not isinstance(trace_result, str):
                             trace_result = str(trace_result)
                         for tc_entry in reversed(run_trace_tool_calls):
-                            if tc_entry.get("tc_id") == tc_id and "result" not in tc_entry:
+                            if tc_entry.get("tc_id") == _seq and "result" not in tc_entry:
                                 tc_entry["result"] = trace_result
                                 tc_entry["success"] = event.get("success", True)
                                 break
                 elif event.get("type") == "done":
+                    # Q-B4③：先等后台写者清空 tool_call 落库队列，再写 run 终态与
+                    # 轨迹快照 —— 原实现逐条 await 天然有序，这里显式补齐该序。
+                    # 30s 兜底：写者按设计不会死（逐任务吞异常），超时放行快照。
+                    try:
+                        await asyncio.wait_for(tc_write_q.join(), timeout=30)
+                    except Exception as e:
+                        logger.warning("tool_call 落库队列清空超时/失败: %s", e)
                     # 更新 agent_run 状态
                     final_state = event.get("state", "completed")
                     # P7: 提取成本快照
@@ -1400,6 +1506,16 @@ async def agent_run(req: AgentRunRequest, request: Request):
                 engine_task.cancel()
             except BaseException:
                 pass
+            # Q-B4③：收尾后台写者 —— 先投 sentinel（排在剩余任务之后，顺序保住），
+            # 尽量让断连路径的轨迹也落完库；10s 兜底后放弃（与旧行为"写一半"同向）。
+            try:
+                tc_write_q.put_nowait(None)
+                await asyncio.shield(asyncio.wait_for(tc_writer_task, timeout=10))
+            except BaseException:
+                try:
+                    tc_writer_task.cancel()
+                except BaseException:
+                    pass
             # 清理 TelemetryBus 事件缓存（防止内存泄漏）
             try:
                 harness.telemetry.clear()
@@ -1610,7 +1726,10 @@ class PermissionGrantRequest(BaseModel):
     tool: str = Field(..., min_length=1, max_length=64, description="工具名")
     # 审查 M-3：默认 scope 从 "always" 收紧为 "once"（仅放行下一次调用）。
     # 原默认 always 会在用户点一次后永久免审批。
-    scope: str = Field("once", description="授权范围：once（仅本次）/ session（会话）/ always（永久）")
+    # Q-B4：裸 str 改枚举 —— 非法 scope 在请求模型层就被 422 拒掉，
+    # 不再需要路由函数里的手工 if 白名单。
+    scope: Literal["once", "session", "always"] = Field(
+        "once", description="授权范围：once（仅本次）/ session（会话）/ always（永久）")
     # 命令执行工具（shell_exec）时传入被批准的具体命令，
     # 授权绑定到命令哈希（同命令免审批，其他 dangerous 命令仍需审批）
     command: Optional[str] = Field(None, description="命令执行工具的具体命令（用于命令级绑定）")
@@ -1641,8 +1760,21 @@ async def grant_tool_permission(req: PermissionGrantRequest):
     """
     from agent.harness.reins import _get_global_permission_gate_sync
     from agent.harness.reins.gate import normalize_host, scoped_key
-    if req.scope not in ("once", "session", "always"):
-        raise HTTPException(status_code=400, detail="scope 必须是 once、session 或 always")
+    # hardline 预检（Q-B4①）：底线命令在 FilesystemGuard 层无条件阻断
+    # （reins.guards 的 hardline 分支不问 PermissionGate、不看 allowlist），
+    # 把它写进 allowlist 的预授权必然落空 —— 与其 200 登记「已授权」的死键
+    # （审计里还留下一条 approved），不如 400 把不可放行原因摆到面上。
+    # 只拦 hardline：dangerous 是审批机制要处理的正常输入，不在此收窄。
+    if req.command and str(req.command).strip():
+        from agent.harness.safety import classify_command
+        _level, _reason = classify_command(str(req.command))
+        if _level == "hardline":
+            raise HTTPException(
+                status_code=400,
+                detail=(f"命令不可放行：{_reason or '命中 hardline 底线'}。"
+                        "hardline 命令被无条件阻断，allowlist 无法放行，"
+                        "登记预授权不会生效；请改用安全的替代方案。"),
+            )
     # once 授权的两道前置守卫（都只在 scope==once 时触发，合并到一个条件块）：
     #   1) 缺 run_id：无法被任何 run 消费，直接 400（原实现落空 run_id 全局池，有跨 run 竞态）
     #   2) run 已终态（P2 修复，审批审查 2026-10-11）：cleanup_run_once 已清空该 run 的池，
@@ -1794,8 +1926,10 @@ async def allow_tool_permission(req: AllowPermissionRequest):
     与 grant 端点同一姿态（详见 grant 路由 docstring）。
 
     安全边界：仅登记，不放宽任何判定 — 命令工具写入的是 `tool:cmdhash`
-    命令级绑定键（审查 M-3 语义），hardline 底线命令在 FilesystemGuard
-    层无条件阻断，allowlist 无法放行。
+    命令级绑定键（审查 M-3 语义）。hardline 底线命令在 FilesystemGuard 层
+    无条件阻断，allowlist 无法放行 —— 因此本端点对 hardline 命令直接 400
+    拒绝（Q-B4①）：原实现照单登记，返回 200 的「已授权」是一条 FilesystemGuard
+    必然拦下的死预授权，面板显示与真实判定自相矛盾。
 
     主机维度：提供 host 时写成 `@host|键`（只对该主机生效）；省略 = 全局
     （对所有主机生效）。默认值刻意不用「当前连接主机」—— 这个端点没有
@@ -1804,6 +1938,18 @@ async def allow_tool_permission(req: AllowPermissionRequest):
     from agent.harness.reins import _get_global_permission_gate_sync
     from agent.harness.reins.gate import (
         is_valid_allowlist_entry, normalize_host, scoped_key)
+    # hardline 预检：与 grant 端点同一判据（classify_command，只拦 hardline）。
+    # 手动登记入口是自由文本框，恰恰是最需要这道闸的地方。
+    if req.command and str(req.command).strip():
+        from agent.harness.safety import classify_command
+        _level, _reason = classify_command(str(req.command))
+        if _level == "hardline":
+            raise HTTPException(
+                status_code=400,
+                detail=(f"命令不可放行：{_reason or '命中 hardline 底线'}。"
+                        "hardline 命令被无条件阻断，allowlist 无法放行，"
+                        "登记预授权不会生效；请改用安全的替代方案。"),
+            )
     pg = _get_global_permission_gate_sync()
     host = (req.host or "").strip()
     try:

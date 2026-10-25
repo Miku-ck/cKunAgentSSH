@@ -649,22 +649,36 @@ def list_blocks() -> list:
         conn.close()
 
 
-def put_block(key: str, value: str, updated_by: str) -> int:
-    """整块写入（用户 UI 用）；agent 走 replace_in_block。超限抛 ValueError。"""
+def _cas_write_block(key: str, value: str, updated_by: str,
+                     expect_version, limit_chars: int):
+    """单连接原子写块 + 历史追加 + 历史裁剪（Q-B5 并发守卫的核心）。
+
+    expect_version=None → 新建 INSERT；expect_version=N →
+    `UPDATE ... WHERE key=? AND version=N`，rowcount=0 = 期望版本已被并发写入者
+    推进 → 返回 None 由上层重读重试。UPDATE/INSERT 与 history INSERT 在同一
+    隐式事务里 commit，SQLite 单写者锁保证对其他连接原子可见 —— 并发更新
+    串行化在「读到的版本」上，memory_block_history 不会再出现两条同版本记录，
+    也不会丢掉先提交者的更新。调用方负责超限校验与 old_string 唯一性判定。
+    """
     conn = _conn()
     try:
-        row = conn.execute(
-            "SELECT value, version, limit_chars FROM memory_blocks WHERE key=?", (key,)
-        ).fetchone()
-        limit_chars = row["limit_chars"] if row else 2000
-        if len(value) > limit_chars:
-            raise ValueError(f"块内容超限：{len(value)} > {limit_chars} 字符")
-        new_version = (row["version"] + 1) if row else 1
-        conn.execute(
-            "INSERT OR REPLACE INTO memory_blocks (key, value, limit_chars, version, "
-            "updated_by, updated_at) VALUES (?,?,?,?,?,?)",
-            (key, value, limit_chars, new_version, updated_by, db._now()),
-        )
+        if expect_version is None:
+            new_version = 1
+            conn.execute(
+                "INSERT INTO memory_blocks (key, value, limit_chars, version, "
+                "updated_by, updated_at) VALUES (?,?,?,?,?,?)",
+                (key, value, limit_chars, new_version, updated_by, db._now()),
+            )
+        else:
+            cur = conn.execute(
+                "UPDATE memory_blocks SET value=?, version=?, updated_by=?, updated_at=? "
+                "WHERE key=? AND version=?",
+                (value, expect_version + 1, updated_by, db._now(),
+                 key, expect_version),
+            )
+            if not cur.rowcount:
+                return None
+            new_version = expect_version + 1
         conn.execute(
             "INSERT INTO memory_block_history (key, version, value, updated_by) "
             "VALUES (?,?,?,?)",
@@ -678,27 +692,84 @@ def put_block(key: str, value: str, updated_by: str) -> int:
         )
         conn.commit()
         return new_version
+    except sqlite3.IntegrityError:
+        # 新建路径的并发抢先（UNIQUE 主键冲突）：视作版本冲突，上层重读重试
+        conn.rollback()
+        return None
+    except Exception:
+        try:
+            conn.rollback()
+        except sqlite3.Error:
+            pass
+        raise
     finally:
         conn.close()
 
 
-def replace_in_block(key: str, old: str, new: str, updated_by: str) -> int:
-    """Letta 式精确替换：old 必须恰好出现一次；拒绝整块清空。"""
-    row = get_block(key)
-    base = row["value"] if row else ""
-    if not old and not base:
-        return put_block(key, new, updated_by)
-    if not old:
-        # 审查R2修复：block_update 工具描述承诺「old_string 传空=末尾追加」，
-        # 原实现在非空块上直接抛"不能为空"，承诺与实现背离；补齐追加语义。
-        return put_block(key, base + "\n" + new, updated_by)
-    n = base.count(old)
-    if n != 1:
-        raise ValueError(f"old_string 出现 {n} 次，需恰好 1 次")
-    merged = base.replace(old, new)
-    if not merged.strip():
-        raise ValueError("拒绝清空画像块")
-    return put_block(key, merged, updated_by)
+def put_block(key: str, value: str, updated_by: str) -> int:
+    """整块写入（用户 UI 用）；agent 走 replace_in_block。超限抛 ValueError。
+
+    Q-B5：写路径收编到 _cas_write_block —— 先读 version 再带版本写，与
+    replace_in_block 同一并发守卫（原实现读和写在两个语句窗口里，两个并发
+    put 也可能双双落 N+1）。
+    """
+    for _attempt in range(2):
+        row = get_block(key)
+        limit_chars = row["limit_chars"] if row else 2000
+        if len(value) > limit_chars:
+            raise ValueError(f"块内容超限：{len(value)} > {limit_chars} 字符")
+        new_version = _cas_write_block(
+            key, value, updated_by,
+            row["version"] if row else None, limit_chars)
+        if new_version is not None:
+            return new_version
+        # 并发窗口内被抢先：整块写语义是 last-write-wins，按最新基准重试一次
+        # （写的是调用方给的完整内容，重试不丢字，只是排队到最新版本之后）
+    raise RuntimeError(f"块 {key} 并发写入冲突，重试未成功")
+
+
+def replace_in_block(key: str, old: str, new: str, updated_by: str,
+                     _max_attempts: int = 5) -> int:
+    """Letta 式精确替换：old 必须恰好出现一次；拒绝整块清空。
+
+    Q-B5：读-改-写原先是跨连接两步（get_block 连接 A 读、put_block 连接 B 写），
+    而 block_update 是 safe 级免审工具且经 asyncio.to_thread 并发执行 —— 两个
+    并发 run 同时更新 user-preferences 会都基于同一旧值合并、双双写 N+1，
+    memory_block_history 留两条同版本记录且先提交者的更新被静默丢弃。现改为
+    带版本 CAS：version 匹配才写，冲突（期望版本已被推进）重读重试，更新按
+    「后提交者基于更新后的基准」串行化。
+    """
+    conflicted = False
+    for _attempt in range(max(1, _max_attempts)):
+        row = get_block(key)
+        base = row["value"] if row else ""
+        base_version = row["version"] if row else None
+        limit_chars = row["limit_chars"] if row else 2000
+        if not old and not base:
+            merged = new
+        elif not old:
+            # 审查R2修复：block_update 工具描述承诺「old_string 传空=末尾追加」，
+            # 原实现在非空块上直接抛"不能为空"，承诺与实现背离；补齐追加语义。
+            merged = base + "\n" + new
+        else:
+            n = base.count(old)
+            if n != 1:
+                raise ValueError(f"old_string 出现 {n} 次，需恰好 1 次")
+            merged = base.replace(old, new)
+            if not merged.strip():
+                raise ValueError("拒绝清空画像块")
+        if len(merged) > limit_chars:
+            raise ValueError(f"块内容超限：{len(merged)} > {limit_chars} 字符")
+        new_version = _cas_write_block(
+            key, merged, updated_by, base_version, limit_chars)
+        if new_version is not None:
+            return new_version
+        conflicted = True  # 期望版本被并发推进 → 重读最新基准再合并
+    if conflicted:
+        raise RuntimeError(
+            f"块 {key} 并发更新冲突：重试 {_max_attempts} 次均被并发写入抢先，"
+            "请稍后重试")
+    raise RuntimeError("unreachable: replace_in_block 循环至少执行一次")
 
 
 def list_block_history(key: str, limit: int = 20) -> list:

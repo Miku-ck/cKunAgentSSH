@@ -719,6 +719,19 @@ class Driver:
             entry["intercept_reason"] = pre_tool_decision.intercept_reason
             # 被拦截说明是危险命令，priority 标记为 high 供 compress_messages 优先保留
             ctx.messages.append(harness.bridle.build_tool_result_message(tc.id, result_text, priority="high"))
+            # Q-B4②：拦截同样要有 start 语义。SSE 消费端只在 tool_call_start 建
+            # tool_calls 行、result 只回写既有行 —— 只发 result 的拦截轨迹会被
+            # 静默跳过，会话重载后「尝试了什么、被什么拦下」仅在审计链可见。
+            # start（带 args）+ result（带拦截原因）成对补齐，轨迹即完整。
+            # 不 push span：调用没有执行，也没有嵌套子调用需要 parent。
+            yield TraceEvent(
+                kind="tool_call_start",
+                source="driver",
+                run_id=ctx.run_id,
+                iteration=iteration,
+                payload={"tool": tc.name, "args": tc.args, "tool_call_id": tc.id},
+                parent_span_id=(ctx.span_stack[-1] if ctx.span_stack else ""),
+            )
             yield TraceEvent(
                 kind="tool_call_result",
                 source="reins",
@@ -995,6 +1008,17 @@ class Driver:
                 # （串行路径同样丢弃），只落拦截结果消息 + tool_call_result
                 ctx.messages.append(harness.bridle.build_tool_result_message(
                     m.tc.id, m.intercept_text, priority="high"))
+                # Q-B4②：拦截成员同样补 start——SSE 消费端只在 tool_call_start 建
+                # tool_calls 行，只发 result 的拦截轨迹会被静默跳过（会话重载后
+                # 「尝试了什么、被什么拦下」仅在审计链可见）。start+result 成对补齐。
+                yield TraceEvent(
+                    kind="tool_call_start",
+                    source="driver",
+                    run_id=ctx.run_id,
+                    iteration=iteration,
+                    payload={"tool": m.tc.name, "args": m.tc.args, "tool_call_id": m.tc.id},
+                    parent_span_id=seg_parent,
+                )
                 yield TraceEvent(
                     kind="tool_call_result",
                     source="reins",

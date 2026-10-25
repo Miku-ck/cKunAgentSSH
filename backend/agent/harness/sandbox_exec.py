@@ -24,6 +24,13 @@
 ------------
     require_sandbox=True（默认）→ fail-closed 拒绝本地执行，返回 SandboxUnavailable。
     开发环境可设 CKUN_AGENT_ALLOW_UNSANDBOXED_LOCAL=1 放行（不安全，仅调试用）。
+
+workdir 白名单
+------------
+    docker/podman/bwrap 对 workdir 的可写挂载（-v wd:wd / --bind wd wd）只接受
+    「白名单根（CKUN_SANDBOX_WORKDIR_ROOTS，缺省 = 后端进程 cwd）内且真实存在」
+    的目录，拒绝 / 、越界路径与不存在的源路径（容器运行时会以 root 新建它）。
+    校验入口 validate_workdir / workdir_roots；拒绝时抛 SandboxWorkdirRejected。
 """
 from __future__ import annotations
 
@@ -33,6 +40,7 @@ import os
 import shlex
 import shutil
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
@@ -44,6 +52,57 @@ ALLOW_UNSANDBOXED_LOCAL = os.environ.get("CKUN_AGENT_ALLOW_UNSANDBOXED_LOCAL") =
 
 class SandboxUnavailable(Exception):
     """无可用沙箱后端且策略要求沙箱时抛出（fail-closed 信号）。"""
+
+
+class SandboxWorkdirRejected(Exception):
+    """模型可控 workdir 未通过白名单校验（拒绝 bind / 执行，fail-closed 信号）。"""
+
+
+def workdir_roots() -> List[Path]:
+    """workdir 白名单根（显式工作区目录）。
+
+    环境变量 CKUN_SANDBOX_WORKDIR_ROOTS（os.pathsep 分隔，Windows ';' / POSIX ':'）
+    优先；未设置时缺省 = 后端进程当前目录 —— 即应用自身的「工作区」。白名单
+    只在本地沙箱执行的语境里生效（远程 SSH 任务不受影响），放宽即设 env。
+    """
+    raw = os.environ.get("CKUN_SANDBOX_WORKDIR_ROOTS", "")
+    if raw.strip():
+        return [Path(p).expanduser() for p in raw.split(os.pathsep) if p.strip()]
+    return [Path.cwd()]
+
+
+def validate_workdir(workdir: str) -> Path:
+    """把模型可控 workdir 收敛为「白名单根内 + 真实存在」的目录，返回 resolve 后路径。
+
+    两条硬条件缺一不可：
+    - containment：越出白名单根的路径一律拒绝 —— docker/podman 的 `-v src:src`
+      是读写 bind，等于把宿主任意目录交给容器（降权 uid 1000 也可能可读敏感文件）；
+    - 真实存在：docker 对不存在的 -v 源路径会**以 root 自动新建目录**，
+      模型用一个不存在的路径就能让宿主凭空长出 root 目录。
+    文件系统根（/ 或盘符根）与 symlink 解析后越界的路径同样拒绝。
+    """
+    if not workdir or not str(workdir).strip():
+        raise SandboxWorkdirRejected("workdir 为空")
+    try:
+        resolved = Path(str(workdir)).expanduser().resolve()
+    except (OSError, ValueError) as e:
+        raise SandboxWorkdirRejected(f"workdir 无法解析: {workdir}") from e
+    if resolved == Path(resolved.anchor):
+        raise SandboxWorkdirRejected(f"拒绝把文件系统根 bind 进容器: {workdir}")
+    if not resolved.is_dir():
+        raise SandboxWorkdirRejected(
+            f"workdir 不存在或不是目录（容器运行时会以 root 自动新建，拒绝）: {workdir}"
+        )
+    for root in workdir_roots():
+        try:
+            root_resolved = root.resolve()
+        except (OSError, ValueError):
+            continue
+        if resolved.is_relative_to(root_resolved):
+            return resolved
+    raise SandboxWorkdirRejected(
+        f"workdir 越出白名单根（{', '.join(str(r) for r in workdir_roots())}）: {workdir}"
+    )
 
 
 @dataclass
@@ -70,7 +129,10 @@ def _docker_argv(bin_name: str, argv: List[str], workdir: Optional[str],
     if L.read_only_root:
         cmd += ["--read-only"]
         if workdir:
-            cmd += ["-v", f"{workdir}:{workdir}"]
+            # workdir 是模型可控输入：不校验就 `-v wd:wd` 等于把宿主任意目录
+            # 读写 bind 进容器（cwd='/' → -v /:/）。白名单根内且真实存在才挂。
+            safe = validate_workdir(workdir)
+            cmd += ["-v", f"{safe}:{safe}"]
     cmd += ["--cap-drop", "ALL", "--security-opt", "no-new-privileges"]
     cmd += ["--user", "0" if L.as_root else "1000"]
     cmd += [L.image]
@@ -84,7 +146,9 @@ def _bwrap_argv(argv: List[str], workdir: Optional[str],
     if L.read_only_root:
         cmd += ["--ro-bind", "/", "/"]
         if workdir:
-            cmd += ["--bind", workdir, workdir]
+            # 与 docker 同一约束：--bind 是读写挂载，先过白名单（bind 语义相同）
+            safe = validate_workdir(workdir)
+            cmd += ["--bind", str(safe), str(safe)]
     else:
         cmd += ["--bind", "/", "/"]
     cmd += ["--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"]
@@ -137,7 +201,11 @@ def detect_backend() -> Optional[str]:
 
 def build_isolated_argv(backend: str, argv: List[str], workdir: Optional[str],
                         L: SandboxLimits) -> List[str]:
-    """为给定后端构造隔离执行命令行（argv 列表）。"""
+    """为给定后端构造隔离执行命令行（argv 列表）。
+
+    docker/podman/bwrap 会把 workdir 读写挂进容器：workdir 非 None 时先过
+    validate_workdir 白名单，未过则抛 SandboxWorkdirRejected（不做无约束 bind）。
+    """
     if backend in ("docker", "podman"):
         return _docker_argv(backend, argv, workdir, L)
     if backend == "bwrap":
@@ -161,8 +229,12 @@ async def run_sandboxed(
     - 无后端：
         require_sandbox=True 且未开逃生开关 → 抛 SandboxUnavailable（fail-closed）。
         require_sandbox=False 或已开逃生开关 → 裸跑 argv 并记警告（不安全）。
+    - workdir 非 None 时一律先过白名单校验（含裸跑分支：进程 cwd 本身也是
+      特权，模型不该借逃生开关把命令落进宿主任意目录）。
     """
     L = limits or SandboxLimits()
+    if workdir is not None:
+        workdir = str(validate_workdir(workdir))
     backend = detect_backend()
     if backend is None:
         if require_sandbox and not ALLOW_UNSANDBOXED_LOCAL:

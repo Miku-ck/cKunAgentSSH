@@ -635,7 +635,7 @@ class JobRunTool(BaseTool):
                 "enum": ["local", "remote"],
                 "description": "local=后端主机本地子进程（默认）；remote=远程 SSH 会话",
             },
-            "cwd": {"type": "string", "description": "可选工作目录（仅 local），缺省用后端进程当前目录"},
+            "cwd": {"type": "string", "description": "可选工作目录（仅 local），必须位于工作区白名单根内且真实存在，缺省用后端进程当前目录"},
         },
         "required": ["cmd"],
     }
@@ -705,8 +705,22 @@ class JobRunTool(BaseTool):
         args = _split_cmd(cmd)
         if not args:
             return ToolResult(success=False, output="", error="cmd 无法解析为参数列表")
-        # cwd 未显式指定时保持 None → 沙箱在进程当前目录下执行
+        # cwd 未显式指定时保持 None → 沙箱在进程当前目录下执行。
+        # 显式 cwd 是模型可控输入：先过沙箱白名单（工作区根内且真实存在），
+        # 否则 docker 的 `-v wd:wd` 会把宿主任意目录读写 bind 进容器。
         cwd = kwargs.get("cwd") or None
+        if cwd:
+            from agent.harness.sandbox_exec import (
+                validate_workdir,
+                SandboxWorkdirRejected,
+            )
+            try:
+                cwd = str(validate_workdir(cwd))
+            except SandboxWorkdirRejected as e:
+                return ToolResult(
+                    success=False, output="",
+                    error=f"本地任务启动被拒绝（workdir 越出白名单根）：{e}",
+                )
         try:
             from agent.harness.sandbox_exec import (
                 run_sandboxed,

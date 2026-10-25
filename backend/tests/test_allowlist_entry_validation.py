@@ -15,6 +15,7 @@ import pytest
 
 import agent.harness.reins.gate as gate_mod
 from agent.harness.reins.gate import PermissionGate, is_valid_allowlist_entry
+from pathlib import Path
 
 
 async def _noop_async(*_a, **_k):
@@ -131,3 +132,149 @@ async def test_allow_endpoint_still_accepts_valid_name(gate, monkeypatch):
     monkeypatch.setattr(agent_mod, "append_record_async", _noop_async, raising=True)
     out = await agent_mod.allow_tool_permission(agent_mod.AllowPermissionRequest(tool="shell_exec"))
     assert out["granted"] is True and out["grant_key"] == "shell_exec"
+
+
+# ── 半写损坏与隔离（CONTEXT.md「半写损坏」「隔离」两条口径）──────────────────
+
+
+def test_persist_leaves_no_tmp_and_is_atomic(gate):
+    """落盘必须 tmp+os.replace 原子写：授权后目录里不得残留 .tmp 半成品。"""
+    gate.grant("shell_exec", scope="always", command="systemctl restart nginx")
+    allowlist = Path(gate_mod.ALLOWLIST_PATH)
+    leftovers = [p for p in allowlist.parent.iterdir() if p.name.endswith(".tmp")]
+    assert leftovers == []
+    # 正常路径走通：文件内容读得回来（原子 replace 不破坏可读性）
+    assert "shell_exec:" in allowlist.read_text(encoding="utf-8")
+
+
+def test_atomic_replace_cleans_tmp_on_failure(gate):
+    """写失败路径（复核 nit）：os.replace 抛错时 finally 不得残留 .pid.tmp ——
+    与 workflow._write_artifact 的收尾同口径，否则残留随 pid 积累。"""
+    allowlist = Path(gate_mod.ALLOWLIST_PATH)
+    blocker = allowlist.parent / "blocked-dir"
+    blocker.mkdir()
+    try:
+        # 用目录占住目标路径：tmp 写成功、os.replace(file → dir) 抛 OSError
+        with pytest.raises(OSError):
+            gate_mod.PermissionGate._atomic_replace_in_dir(str(blocker), "payload")
+        assert not [p for p in allowlist.parent.iterdir() if p.name.endswith(".tmp")], \
+            "replace 失败后 tmp 必须被 finally 清掉"
+    finally:
+        blocker.rmdir()
+
+
+def test_torn_write_quarantines_whole_file_not_subset(gate, caplog):
+    """半写文件（合法行 + 截断的最后一行）必须整体隔离，不得按子集继续用。
+
+    旧行为：跳过非法行、用可读子集起跑 —— 下一次 grant 会把子集写回定稿，
+    真实基准里的其他预授权就静默蒸发了。新行为：整文件改名
+    .corrupt-<ts>.bak 留证，内存集按空集起算并如实上报。
+    """
+    allowlist = Path(gate_mod.ALLOWLIST_PATH)
+    real_key = "shell_exec:a1b2c3d4e5f67890"
+    allowlist.write_text(real_key + "\nops_file:deadbeefdeadbe\n", encoding="utf-8")
+    reloaded = PermissionGate()
+    # 内存集不携带半写文件的可读子集
+    assert reloaded._confirmed_permanent == set()
+    # 原文件被隔离留证，证据完整保留
+    assert not allowlist.exists()
+    baks = [p for p in allowlist.parent.iterdir() if ".corrupt-" in p.name]
+    assert len(baks) == 1
+    assert real_key in baks[0].read_text(encoding="utf-8")
+    # 隔离被如实上报（error 级日志，不是静默）
+    assert any("隔离留证" in r.message for r in caplog.records)
+
+
+def test_quarantined_baseline_not_resurrected_by_next_grant(gate):
+    """隔离后下一次 grant 写出的是全新基准，不会把半写文件的内容混回去。"""
+    allowlist = Path(gate_mod.ALLOWLIST_PATH)
+    allowlist.write_text(
+        "shell_exec:a1b2c3d4e5f67890\nops_file:deadbeef\n", encoding="utf-8")
+    fresh = PermissionGate()
+    fresh.grant("my_tool", scope="always")
+    content = allowlist.read_text(encoding="utf-8")
+    assert content == "my_tool\n", f"只应落新授权，实得 {content!r}"
+    assert "shell_exec:a1b2" not in content
+    assert "deadbeef" not in content
+
+
+def test_clean_allowlist_still_loads_without_quarantine(gate):
+    """反向锁：合法文件（含注释与空行）照旧整读，隔离不得误伤正常路径。"""
+    allowlist = Path(gate_mod.ALLOWLIST_PATH)
+    allowlist.write_text(
+        "# 手工登记\n\nshell_exec:a1b2c3d4e5f67890\n@db-01|my_tool\n",
+        encoding="utf-8")
+    reloaded = PermissionGate()
+    assert reloaded._confirmed_permanent == {
+        "shell_exec:a1b2c3d4e5f67890", "@db-01|my_tool"}
+    assert allowlist.exists(), "合法文件不得被隔离改名"
+    assert not [p for p in allowlist.parent.iterdir() if ".corrupt-" in p.name]
+
+
+def test_workflow_artifact_write_is_atomic(tmp_workspace):
+    """workflow 工件落盘同口径：写入成功 + 不残留 .tmp（撕裂的 spec.md 会被
+    get_phase 当有效阶段读回）。"""
+    from agent import workflow
+    target = Path(tmp_workspace) / "conv1" / "spec.md"
+    out = workflow._write_artifact(target, "# spec\n内容")
+    assert out == "# spec\n内容"
+    assert target.read_text(encoding="utf-8") == "# spec\n内容"
+    assert [p for p in target.parent.iterdir() if p.name.endswith(".tmp")] == []
+
+
+# ── hardline 预检（Q-B4①：allowlist 放不走的命令不再登记死预授权）────────────
+
+HARDLINE_CMD = "rm -rf /"
+
+
+@pytest.mark.asyncio
+async def test_allow_endpoint_rejects_hardline_command(gate, monkeypatch):
+    """hardline 命令在 FilesystemGuard 无条件阻断，allowlist 写了必落空 ——
+    端点必须 400 带不可放行原因，而不是 200 登记「已授权」的死预授权。"""
+    import fastapi
+    import routes.agent as agent_mod
+    monkeypatch.setattr("agent.harness.reins._get_global_permission_gate_sync", lambda: gate)
+    monkeypatch.setattr(agent_mod, "append_record_async", _noop_async, raising=True)
+    req = agent_mod.AllowPermissionRequest(tool="shell_exec", command=HARDLINE_CMD)
+    with pytest.raises(fastapi.HTTPException) as ei:
+        await agent_mod.allow_tool_permission(req)
+    assert ei.value.status_code == 400
+    assert "不可放行" in str(ei.value.detail)
+    # 拒绝之外什么都没落盘
+    allowlist = Path(gate_mod.ALLOWLIST_PATH)
+    assert not allowlist.exists() or allowlist.read_text(encoding="utf-8").strip() == ""
+
+
+@pytest.mark.asyncio
+async def test_grant_endpoint_rejects_hardline_command(gate, monkeypatch):
+    """grant 与 allow 同判据：hardline 直接 400，不落审计 approved 死键"""
+    import fastapi
+    import routes.agent as agent_mod
+    monkeypatch.setattr("agent.harness.reins._get_global_permission_gate_sync", lambda: gate)
+    monkeypatch.setattr(agent_mod, "append_record_async", _noop_async, raising=True)
+    req = agent_mod.PermissionGrantRequest(
+        tool="shell_exec", scope="once", command=HARDLINE_CMD, run_id="run-h")
+    with pytest.raises(fastapi.HTTPException) as ei:
+        await agent_mod.grant_tool_permission(req)
+    assert ei.value.status_code == 400
+    assert "不可放行" in str(ei.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_allow_endpoint_still_accepts_dangerous_command(gate, monkeypatch):
+    """反向锁：dangerous（需审批）是审批机制要处理的正常输入，不得被预检误伤"""
+    import routes.agent as agent_mod
+    monkeypatch.setattr("agent.harness.reins._get_global_permission_gate_sync", lambda: gate)
+    monkeypatch.setattr(agent_mod, "append_record_async", _noop_async, raising=True)
+    out = await agent_mod.allow_tool_permission(agent_mod.AllowPermissionRequest(
+        tool="shell_exec", command="systemctl restart nginx"))
+    assert out["granted"] is True
+
+
+def test_grant_scope_is_literal_enum():
+    """scope 由裸 str 改 Literal 枚举（Q-B4①）：非法值在请求模型层就被拒"""
+    import pydantic
+    from routes.agent import PermissionGrantRequest
+    with pytest.raises(pydantic.ValidationError):
+        PermissionGrantRequest(tool="shell_exec", scope="forever")
+    assert PermissionGrantRequest(tool="shell_exec").scope == "once"

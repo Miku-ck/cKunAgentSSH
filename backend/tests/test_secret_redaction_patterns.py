@@ -61,6 +61,74 @@ def test_sshpass_inline_password_masked():
     assert "sshpass -p***" in out
 
 
+def test_basic_auth_encoded_masked():
+    out = redact_secrets("Authorization: Basic dXNlcjpwYXNzMTIz")
+    assert out == "Authorization: Basic ***"
+
+
+def test_basic_auth_proxy_header_masked():
+    out = redact_secrets("Proxy-Authorization: Basic dXNlcjpwYXNzMTIz")
+    assert out == "Proxy-Authorization: Basic ***"
+
+
+def test_basic_auth_decoded_user_pass_masked():
+    # 解码形态：Basic 后直接跟 user:pass 明文
+    out = redact_secrets("Authorization: Basic admin:p@ss1234")
+    assert out == "Authorization: Basic ***"
+    assert "p@ss1234" not in out
+
+
+def test_basic_auth_full_user_no_partial_mask():
+    # base64 分支不得把 user:pass 明文吃成半截（留出 ":pass" 尾巴）
+    out = redact_secrets("Authorization: Basic administrator:plainPw9")
+    assert "plainPw9" not in out
+
+
+def test_redis_cli_inline_password_masked():
+    assert redact_secrets("redis-cli -a s3cretPass GET foo") == \
+        "redis-cli -a *** GET foo"
+
+
+def test_redis_cli_glued_and_long_flags_masked():
+    assert redact_secrets("redis-cli -as3cretPass GET foo") == \
+        "redis-cli -a*** GET foo"
+    assert redact_secrets("redis-cli --pass s3cretPass GET foo") == \
+        "redis-cli --pass *** GET foo"
+    assert redact_secrets("redis-cli --password s3cretPass GET foo") == \
+        "redis-cli --password *** GET foo"
+
+
+def test_curl_user_flag_masked():
+    out = redact_secrets("curl -u admin:p@ss1234 https://example.com")
+    assert out == "curl -u *** https://example.com"
+    assert "admin:p@ss1234" not in out
+
+
+def test_curl_user_glued_quoted_combined_masked():
+    assert redact_secrets("curl -uadmin:p@ss1234 https://example.com") == \
+        "curl -u*** https://example.com"
+    assert redact_secrets("curl --user 'admin:p@ss1234' https://x") == \
+        "curl --user *** https://x"
+    assert redact_secrets("curl -su admin:pass https://x") == \
+        "curl -su *** https://x"
+
+
+def test_generic_password_long_flag_masked():
+    # mysql 家族之外的 --password 变体：mongosh / wget / kubectl 等
+    assert redact_secrets("mongosh --password s3cret123") == \
+        "mongosh --password ***"
+    assert redact_secrets("wget --http-password=s3cret https://x") == \
+        "wget --http-password=*** https://x"
+    assert redact_secrets(
+        "kubectl create secret generic db --docker-password=s3cret"
+    ).endswith("--docker-password=***")
+
+
+def test_docker_login_inline_password_masked():
+    out = redact_secrets("docker login -u user -p pass123 registry")
+    assert out == "docker login -u user -p *** registry"
+
+
 # ── 2. 误报防御：无凭据语义的文本必须原样通过 ──
 
 
@@ -71,6 +139,38 @@ def test_underscore_compound_words_untouched():
 
 def test_tar_p_flag_without_credential_context_untouched():
     assert redact_secrets("tar -pxzf foo.tar.gz") == "tar -pxzf foo.tar.gz"
+
+
+def test_grep_a_flag_without_redis_context_untouched():
+    assert redact_secrets("grep -a pattern file.txt") == \
+        "grep -a pattern file.txt"
+
+
+def test_redis_cli_other_flags_untouched():
+    # -n 5 / --json / --scan 是 redis-cli 的无凭据 flag，不得当口令吃
+    assert redact_secrets("redis-cli -n 5 GET foo") == \
+        "redis-cli -n 5 GET foo"
+    assert redact_secrets("redis-cli --json GET foo") == \
+        "redis-cli --json GET foo"
+
+
+def test_docker_run_port_mapping_untouched():
+    # docker run 的 -p 是端口映射，不是口令
+    assert redact_secrets("docker run -p 8080:80 nginx:latest") == \
+        "docker run -p 8080:80 nginx:latest"
+
+
+def test_prompt_style_password_flags_not_eating_options():
+    # 提示型 flag 后面跟的是下一个选项/URL，不得当口令吃掉
+    assert redact_secrets('psql --password -c "select 1"') == \
+        'psql --password -c "select 1"'
+    assert redact_secrets("wget --ask-password https://example.com/f.zip") == \
+        "wget --ask-password https://example.com/f.zip"
+
+
+def test_curl_without_user_flag_untouched():
+    assert redact_secrets("curl -s https://api.example.com/v1/data") == \
+        "curl -s https://api.example.com/v1/data"
 
 
 def test_plain_text_untouched():
