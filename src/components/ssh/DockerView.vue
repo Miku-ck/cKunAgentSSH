@@ -240,6 +240,7 @@
 //       四个页签的列表与全部弹窗 → ./docker/*；本文件只做 sshExec 编排与页面级状态。
 import { computed, ref, watch, onUnmounted } from 'vue'
 import { formatBytes } from '@/utils/format'
+import { sshSessionIo, writeAfterShellReady } from '@/utils/ssh-handshake'
 import DockerContainerDetail from './docker/DockerContainerDetail.vue'
 import DockerImageTransferModal from './docker/DockerImageTransferModal.vue'
 import IconDocker from '@/components/icons/IconDocker.vue'
@@ -828,10 +829,16 @@ async function doExec(c: ContainerRow) {
       // shell —— 那会盖掉他正敲的上下文。connectRemote 会 push 会话并置为 active。
       const newId = await sshStore.connectRemote(connId, 80, 24)
       emit('exec-terminal', newId)
-      // 留一点时间让新标签的 RemoteTerminal 挂载、远端登录 shell 打出提示符，再写命令：
-      // 早于组件订阅的 PTY 输出会丢帧，早于 shell 就绪则命令可能被登录流程吞掉。
-      await new Promise<void>(r => setTimeout(r, 500))
-      await api.sshWrite(newId, execCmd(c.name) + '\r')
+      // GitReposPanel.onTerm 同款确认式握手（utils/ssh-handshake）：先写带一次性
+      // 标记的探针，等回显里出现标记（登录 shell 真正执行了探针）再写 docker exec
+      // —— 固定延时在慢主机（横幅/profile 超 500ms）上纯靠猜，命令会与横幅交错、
+      // 结果静默不可辨。握手内保留 500ms 地板等新标签挂载订阅（组件只收实时流，
+      // 早到的输出丢帧）；探针超时回落为固定延时照常写入，并如实提示用户。
+      const io = sshSessionIo(newId)
+      // api 已在上文校验，判空只为类型收窄
+      if (!io) throw new Error('Electron API 未就绪，无法写入终端')
+      const { confirmed } = await writeAfterShellReady(io, execCmd(c.name) + '\r')
+      if (!confirmed) toast.warning('远程主机登录较慢，命令已按固定延时写入；若终端未见执行请重试')
     } catch (err) {
       toast.error(describeThrownDockerError(err).message)
     }

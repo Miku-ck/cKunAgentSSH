@@ -9,6 +9,8 @@ import {
   applySshBlock,
   buildAccelLinks,
   buildGitReadArgs,
+  buildGitPushKeepArgs,
+  buildGitPushKeepUnsetArgs,
   buildGitRestoreArgs,
   buildGitSetArgs,
   buildGitUnsetArgs,
@@ -18,6 +20,7 @@ import {
   defaultGithubAccelConfig,
   encodeHostsBytes,
   findGithubInsteadOf,
+  findGithubPushInsteadOf,
   githubHostsDomains,
   hasHostsBlock,
   hostsBlockState,
@@ -38,6 +41,7 @@ import {
   hostsBlockGeneratedAt,
   isHostsBlockStale,
   isProxyProbeOk,
+  isProxyProbeOkWithContentType,
   parseSshG,
   PROBE_TARGET,
   SSH_BLOCK_BEGIN,
@@ -184,7 +188,9 @@ describe('git insteadOf', () => {
     expect(buildGitRestoreArgs('https://old.example/https://github.com/')).toEqual([
       'config', '--global', 'url.https://old.example/https://github.com/.insteadOf', GITHUB_BASE,
     ])
-    expect(buildGitReadArgs()[3]).toBe('^url\\..*\\.insteadof$')
+    expect(buildGitReadArgs()[3]).toBe('^url\\..*\\.(push)?insteadof$')
+    expect(buildGitPushKeepArgs()).toEqual(['config', '--global', `url.${GITHUB_BASE}.pushInsteadOf`, GITHUB_BASE])
+    expect(buildGitPushKeepUnsetArgs()).toEqual(['config', '--global', '--unset', `url.${GITHUB_BASE}.pushInsteadOf`])
   })
 
   it('解析 git 输出（含无关行与空行）', () => {
@@ -205,6 +211,30 @@ describe('git insteadOf', () => {
     const miss = parseGitInsteadOf('url.https://x/.insteadof https://gitlab.com/\n')
     expect(findGithubInsteadOf(miss)).toBeNull()
     expect(findGithubInsteadOf([])).toBeNull()
+  })
+
+  it('解析 pushinsteadof 条目（push 标记与子节提取），与 insteadof 混排互不误判', () => {
+    const entries = parseGitInsteadOf([
+      `url.${prefix}${GITHUB_BASE}.insteadof ${GITHUB_BASE}`,
+      `url.${GITHUB_BASE}.pushinsteadof ${GITHUB_BASE}`,
+      'url.ssh://git@github.com/.pushinsteadof https://github.com/',
+    ].join('\n'))
+    expect(entries).toHaveLength(3)
+    expect(entries[0].push).toBeUndefined()
+    expect(entries[1]).toMatchObject({ subsection: GITHUB_BASE, value: GITHUB_BASE, push: true })
+    expect(entries[2]).toMatchObject({ subsection: 'ssh://git@github.com/', value: GITHUB_BASE, push: true })
+  })
+
+  it('findGithubInsteadOf 忽略 push 条目；findGithubPushInsteadOf 只认 push 条目', () => {
+    const mixed = parseGitInsteadOf(
+      `url.${prefix}${GITHUB_BASE}.insteadof ${GITHUB_BASE}\nurl.${GITHUB_BASE}.pushinsteadof ${GITHUB_BASE}\n`,
+    )
+    expect(findGithubInsteadOf(mixed)?.subsection).toBe(`${prefix}${GITHUB_BASE}`)
+    expect(findGithubPushInsteadOf(mixed)?.subsection).toBe(GITHUB_BASE)
+    // 用户自建的 push 重定向（如到 ssh）也算已有 push 规则：启用时不得叠加自指规则
+    const userPush = parseGitInsteadOf('url.ssh://git@github.com/.pushinsteadof https://github.com/\n')
+    expect(findGithubPushInsteadOf(userPush)?.subsection).toBe('ssh://git@github.com/')
+    expect(findGithubInsteadOf(userPush)).toBeNull()
   })
 })
 
@@ -262,6 +292,16 @@ describe('自检判据', () => {
     expect(isProxyProbeOk(429)).toBe(false)
     expect(isProxyProbeOk(500)).toBe(false)
     expect(isProxyProbeOk(Number.NaN)).toBe(false)
+  })
+
+  it('代理探测拒绝 2xx 的 HTML 响应（死而不僵镜像的广告/错误页）', () => {
+    expect(isProxyProbeOkWithContentType(200, 'text/plain; charset=utf-8')).toBe(true)
+    expect(isProxyProbeOkWithContentType(200, 'application/octet-stream')).toBe(true)
+    expect(isProxyProbeOkWithContentType(200, undefined)).toBe(true)
+    expect(isProxyProbeOkWithContentType(200, 'text/html; charset=utf-8')).toBe(false)
+    expect(isProxyProbeOkWithContentType(200, 'TEXT/HTML')).toBe(false)
+    // 非 2xx 仍按不可用处理，HTML 判据只额外收紧
+    expect(isProxyProbeOkWithContentType(403, 'text/plain')).toBe(false)
   })
 
   it('ssh -G 输出解析：取 hostname/port，缺字段不猜默认值', () => {

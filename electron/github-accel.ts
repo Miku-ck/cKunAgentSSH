@@ -19,15 +19,21 @@ import type { GhHostsService } from './gh-hosts'
 import {
   applySshBlock,
   buildGitReadArgs,
+  buildGitPushKeepArgs,
+  buildGitPushKeepUnsetArgs,
   buildGitRestoreArgs,
   buildGitSetArgs,
   buildGitUnsetSubsectionArgs,
   buildProbeUrl,
+  decodeHostsBytes,
+  encodeHostsBytes,
   isProxyProbeOk,
+  isProxyProbeOkWithContentType,
   parseSshG,
   PROBE_TARGET,
   defaultGithubAccelConfig,
   findGithubInsteadOf,
+  findGithubPushInsteadOf,
   hasSshBlock,
   removeSshBlock,
   validateProxyPrefix,
@@ -227,7 +233,11 @@ function normalizeConfig(obj: any): GithubAccelConfig {
   }
 
   const gitBackup = obj.gitBackup && typeof obj.gitBackup === 'object' && typeof obj.gitBackup.prefix === 'string'
-    ? { prefix: obj.gitBackup.prefix, previousValue: typeof obj.gitBackup.previousValue === 'string' ? obj.gitBackup.previousValue : null }
+    ? {
+        prefix: obj.gitBackup.prefix,
+        previousValue: typeof obj.gitBackup.previousValue === 'string' ? obj.gitBackup.previousValue : null,
+        pushInsteadOfAdded: obj.gitBackup.pushInsteadOfAdded === true,
+      }
     : null
 
   return {
@@ -310,15 +320,23 @@ function probeOnce(url: string, redirectsLeft: number, kind: ProbeKind): Promise
           probeOnce(next, redirectsLeft - 1, kind).then(r => done({ ...r, target: url }))
           return
         }
+        // 2xx 但响应体是 HTML 的镜像按失效处理（详见核心层判据），错误归到镜像头上
+        const contentType = res.headers['content-type']
+        const ok = kind === 'proxy'
+          ? isProxyProbeOkWithContentType(status, contentType)
+          : probeOk(kind, status)
+        const htmlError = kind === 'proxy' && isProxyProbeOk(status) && !ok
+          ? '返回 HTML 页面而非文件内容（镜像可能已失效或被劫持）'
+          : undefined
         res.once('data', () => {
           const latencyMs = Date.now() - started
           res.resume()
-          done({ target: url, ok: probeOk(kind, status), latencyMs, status })
+          done({ target: url, ok, latencyMs, status, error: htmlError })
         })
         res.once('end', () => {
           // 空响应体也算到达
           const latencyMs = Date.now() - started
-          done({ target: url, ok: probeOk(kind, status), latencyMs, status })
+          done({ target: url, ok, latencyMs, status, error: htmlError })
         })
         res.once('error', (e) => done({ target: url, ok: false, latencyMs: null, error: e.message }))
       })
@@ -729,6 +747,9 @@ export class GithubAccelService {
   /**
    * 开启 insteadOf 接管：git clone https://github.com/... 一律改写为 <prefix>https://github.com/...
    * 若用户已有其它 github.com 改写规则，先备份原值（关闭时还原；保留最早一份备份）。
+   * 同时写自指 pushInsteadOf（github.com → github.com）抵消 insteadOf 对 push 的改写：
+   * insteadOf 对 push 同样生效（git 实测确认），只读镜像会让 HTTPS push 必然失败。
+   * 用户已有自己的 github.com pushInsteadOf（如 push 重定向到 ssh）时不叠加。
    */
   async gitEnable(prefix: string): Promise<GitInsteadOfStatus> {
     const err = validateProxyPrefix(prefix)
@@ -750,12 +771,21 @@ export class GithubAccelService {
         config.gitBackup = { prefix, previousValue: null }
       }
       config.gitBackup = { previousValue: config.gitBackup.previousValue, prefix }
+      if (findGithubPushInsteadOf(before.entries)) {
+        config.gitBackup.pushInsteadOfAdded = false
+      } else {
+        config.gitBackup.pushInsteadOfAdded = true
+      }
 
       // 备份先落盘再写新规则：上面已经 unset 掉用户的旧规则，若 set 抛错
       // （.gitconfig.lock 被并发 git 占住、8s 超时、home 只读）就直接退出，
       // 备份只存在于内存，用户的原规则从此无从还原（谁设置谁还原落空）。
       await writeConfigToDisk(config)
 
+      if (config.gitBackup.pushInsteadOfAdded) {
+        const setPush = await execGit(buildGitPushKeepArgs())
+        if (setPush.code !== 0) throw new Error(`写入 push 直连规则失败: ${setPush.stderr.trim() || `退出码 ${setPush.code}`}`)
+      }
       const set = await execGit(buildGitSetArgs(prefix))
       if (set.code !== 0) throw new Error(`写入 git 配置失败: ${set.stderr.trim() || `退出码 ${set.code}`}`)
       this.refreshHealthSoon()
@@ -789,6 +819,13 @@ export class GithubAccelService {
         const restore = await execGit(buildGitRestoreArgs(config.gitBackup.previousValue))
         if (restore.code !== 0) throw new Error(`还原原有规则失败: ${restore.stderr.trim() || `退出码 ${restore.code}`}`)
       }
+      if (config.gitBackup?.pushInsteadOfAdded) {
+        // 我们加的自指 pushInsteadOf 一并卸载（规则已不存在时退出码 5，视为成功）
+        const unsetPush = await execGit(buildGitPushKeepUnsetArgs())
+        if (unsetPush.code !== 0 && unsetPush.code !== 5) {
+          throw new Error(`移除 push 直连规则失败: ${unsetPush.stderr.trim() || `退出码 ${unsetPush.code}`}`)
+        }
+      }
       config.gitBackup = null
       await writeConfigToDisk(config)
       this.refreshHealthSoon()
@@ -797,12 +834,17 @@ export class GithubAccelService {
   }
 
   // ─── ~/.ssh/config 443 托管块 ───
+  //
+  // 读写按字节（latin1）往返，与 hosts 文件同一套方案：Windows 用户的 ssh config
+  // 常有 GBK/ANSI 编码的注释（记事本产物），按 UTF-8 解码会把高位字节变成 U+FFFD
+  // 再原样写回，块外的用户配置被永久改写。托管块本身是纯 ASCII，latin1 往返
+  // 对它无感，hasSshBlock / applySshBlock / removeSshBlock 的判据不受影响。
 
   async ssh443Status(): Promise<Ssh443Status> {
     const path = getSshConfigPath()
     if (!existsSync(path)) return { applied: false, path, exists: false }
     try {
-      const content = await readFile(path, 'utf-8')
+      const content = decodeHostsBytes(await readFile(path))
       return { applied: hasSshBlock(content), path, exists: true }
     } catch (e) {
       return { applied: false, path, exists: true, message: e instanceof Error ? e.message : String(e) }
@@ -810,33 +852,38 @@ export class GithubAccelService {
   }
 
   async ssh443Apply(): Promise<Ssh443Status> {
-    const path = getSshConfigPath()
-    let existing = ''
-    if (existsSync(path)) {
-      existing = await readFile(path, 'utf-8')
-    }
-    // 首次写入前备份 ~/.ssh/config（与 hosts/git 同款"改前留底"语义；托管块可精确移除，备份仅防意外）
-    if (existing && !hasSshBlock(existing)) {
-      try {
-        const dir = join(app.getPath('userData'), 'backups')
-        await mkdir(dir, { recursive: true })
-        await copyFile(path, join(dir, `ssh-config-backup-${Date.now()}`))
-      } catch (e) {
-        console.warn('[GithubAccel] ~/.ssh/config 备份失败（继续写入）:', e)
+    // 与 git insteadOf 共用写队列：apply/remove/enable/disable 并发时读-改-写不互相覆写
+    return this.enqueue(async () => {
+      const path = getSshConfigPath()
+      let existing = ''
+      if (existsSync(path)) {
+        existing = decodeHostsBytes(await readFile(path))
       }
-    }
-    const next = applySshBlock(existing)
-    await mkdir(dirname(path), { recursive: true })
-    await writeFile(path, next, 'utf-8')
-    return { applied: true, path, exists: true }
+      // 首次写入前备份 ~/.ssh/config（与 hosts/git 同款"改前留底"语义；托管块可精确移除，备份仅防意外）
+      if (existing && !hasSshBlock(existing)) {
+        try {
+          const dir = join(app.getPath('userData'), 'backups')
+          await mkdir(dir, { recursive: true })
+          await copyFile(path, join(dir, `ssh-config-backup-${Date.now()}`))
+        } catch (e) {
+          console.warn('[GithubAccel] ~/.ssh/config 备份失败（继续写入）:', e)
+        }
+      }
+      const next = applySshBlock(existing)
+      await mkdir(dirname(path), { recursive: true })
+      await writeFile(path, encodeHostsBytes(next))
+      return { applied: true, path, exists: true }
+    })
   }
 
   async ssh443Remove(): Promise<Ssh443Status> {
-    const path = getSshConfigPath()
-    if (!existsSync(path)) return { applied: false, path, exists: false }
-    const existing = await readFile(path, 'utf-8')
-    const next = removeSshBlock(existing)
-    if (next !== existing) await writeFile(path, next, 'utf-8')
-    return { applied: false, path, exists: true }
+    return this.enqueue(async () => {
+      const path = getSshConfigPath()
+      if (!existsSync(path)) return { applied: false, path, exists: false }
+      const existing = decodeHostsBytes(await readFile(path))
+      const next = removeSshBlock(existing)
+      if (next !== existing) await writeFile(path, encodeHostsBytes(next))
+      return { applied: false, path, exists: true }
+    })
   }
 }

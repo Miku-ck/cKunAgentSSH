@@ -1,0 +1,1616 @@
+
+[1m[30m[46m RUN [49m[39m[22m [36mv5.0.1 [39m[90mD:/workspace/cKunAgentSSH[39m
+
+ [31m❯[39m electron/desktop-prefs-init-fault-tolerance.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/backend-python-cache.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/bridge-ws-client.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/hosts-status-shape.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/main-gpu-switches.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/exec-outcome-core.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/port-core.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/app-user-model-id.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/github-accel-core.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/git-repos.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/git-repos-core.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/gh-download-resume.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/pty-manager-cap-race.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/backend-manager-python-cache.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/backend-manager-missing-entry.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/backend-manager-orphan-timing.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/backend-manager-python-resolve.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/backend-manager-db-migration.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/electron-bridge.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/pty-manager.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/ssh-error.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/ssh-manager-download-total-zero.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/shortcut-win.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/ssh-manager-transfer-idle-reclaim.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/ssh-manager-session-id-s006.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/ssh-manager-known-hosts-atomic.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/ssh-manager-heartbeat-stall-reset.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/ssh-manager-transfer-pool-race.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/ssh-manager-stale-shell.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/ssh-manager-exit-outcome-s519.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/ssh-manager-reconnect.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/ssh-manager-connect-throw.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/ssh-manager-upload-rename-resume.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/composables/bulkCommandDiff.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/tunnel-manager-dynamic-bind.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/composables/useCompletion.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/api/sse-stall-watchdog.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/composables/useApprovalActions.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/composables/useAgentDeliver.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/composables/remoteAudit.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/composables/useDesktopPrefs.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/composables/useHomeCommand.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/composables/useOpsSettings.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/api/permission-mode.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/api/friendly-error.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/api/run-list-query.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/composables/terminal-palettes.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/composables/useGlobalShortcuts.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/composables/useHomeTarget.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/composables/useChatPersistence.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/composables/useTerminalConfig.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/stores/app.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/stores/server-monitor.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/stores/docker-core.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/stores/agent.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/stores/quickCommands.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/stores/settings.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/composables/useAgentPresence.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/stores/ssh-ai.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/stores/sftpBookmarks.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/stores/ssh-hostkey-scope.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/stores/ssh-session-status.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/utils/agent-run-status.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/utils/approval-scopes.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/utils/approval-display.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/composables/useSshNavigation.showTerminal.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/composables/useSshNavigation.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/stores/sftp.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/stores/sftp-open-race.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/composables/useSshNavigation.trace-link.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/utils/appearance-tokens.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/utils/finalizeAgentMessage.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/utils/conversation-title.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/utils/display-messages.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/utils/format.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/utils/focus-trap.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/utils/remote-name.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/utils/language.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/utils/gateway-mux.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/utils/think-scrubber.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/utils/process-status.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/utils/nvtop-scale.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/utils/run-trace.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/utils/schedule-notify.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/utils/transfer-conflict.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/utils/task-structure-core.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/utils/tabStatus.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/utils/transfer-format.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/utils/transfer-error.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/utils/path-guard.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/utils/powershell-path.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/utils/copy-cancel.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/utils/resume-policy.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/transports/gateway-transport.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/utils/json-file-store.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/utils/transfer-groups.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m electron/utils/tcp-latency.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/components/icons/file-type-icons.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/components/home/HomeWorkspace.layout.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/components/ssh/TermSearchBar.accent.guards.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/components/chat/message-shape-source.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/components/ssh/SftpFileEditor.save-target.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/components/ssh/NvGauge.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/components/ssh/RemoteAudit.guards.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/components/common/SettingsDialog.focus.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/views/ssh/SshView.terminal-entry.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/views/ssh/tab-overflow.guards.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/components/common/command-palette-pages.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/components/common/settings-nav-icons.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/components/agent/approval-trace-boundary.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/components/settings/panels/panels-audit-fixes.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/views/ssh/terminal-page-polish.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/components/ssh/docker/DockerContainerDetail.guards.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/components/ssh/DockerView.guards.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/styles/variables.test.ts [2m([22m[2m0 test[22m[2m)[22m
+
+[31m⎯⎯⎯⎯⎯[39m[1m[41m Failed Suites 115 [49m[22m[31m⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m electron/app-user-model-id.test.ts[2m [ electron/app-user-model-id.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/app-user-model-id.test.ts:[2m29:1[22m[39m
+    [90m 27|[39m ).replace(/\r\n/g, '\n')
+    [90m 28|[39m
+    [90m 29|[39m describe('桌面通知身份与打包 appId 同源', () => {
+    [90m   |[39m [31m^[39m
+    [90m 30|[39m   it('electron-builder.yml 的 appId 等于 APP_USER_MODEL_ID', () => {
+    [90m 31|[39m     const declared = /^appId:\s*(\S+)\s*$/m.exec(builderYml)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/backend-manager-db-migration.test.ts[2m [ electron/backend-manager-db-migration.test.ts ][22m
+[31m[1mError[22m: Vitest failed to find the runner. One of the following is possible:
+- "vitest" is imported directly without running "vitest" command
+- "vitest" is imported inside "globalSetup" (to fix this, use "setupFiles" instead, because "globalSetup" runs in a different context)
+- "vitest" is imported inside Vite / Vitest config file
+- Otherwise, it might be a Vitest bug. Please report it to https://github.com/vitest-dev/vitest/issues
+[39m
+[36m [2m❯[22m electron/backend-manager-db-migration.test.ts:[2m23:1[22m[39m
+    [90m 21|[39m
+    [90m 22|[39m let root = ''
+    [90m 23|[39m beforeEach(() => {
+    [90m   |[39m [31m^[39m
+    [90m 24|[39m   root = mkdtempSync(join(tmpdir(), 'ckun-db-mig-'))
+    [90m 25|[39m })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/backend-manager-missing-entry.test.ts[2m [ electron/backend-manager-missing-entry.test.ts ][22m
+[31m[1mError[22m: Vitest failed to find the runner. One of the following is possible:
+- "vitest" is imported directly without running "vitest" command
+- "vitest" is imported inside "globalSetup" (to fix this, use "setupFiles" instead, because "globalSetup" runs in a different context)
+- "vitest" is imported inside Vite / Vitest config file
+- Otherwise, it might be a Vitest bug. Please report it to https://github.com/vitest-dev/vitest/issues
+[39m
+[36m [2m❯[22m electron/backend-manager-missing-entry.test.ts:[2m50:1[22m[39m
+    [90m 48|[39m }
+    [90m 49|[39m
+    [90m 50|[39m beforeEach(() => {
+    [90m   |[39m [31m^[39m
+    [90m 51|[39m   appDir = mkdtempSync(join(tmpdir(), 'ckun-bm-entry-'))
+    [90m 52|[39m   backendDir = join(appDir, 'backend')
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/backend-manager-orphan-timing.test.ts[2m [ electron/backend-manager-orphan-timing.test.ts ][22m
+[31m[1mError[22m: Vitest failed to find the runner. One of the following is possible:
+- "vitest" is imported directly without running "vitest" command
+- "vitest" is imported inside "globalSetup" (to fix this, use "setupFiles" instead, because "globalSetup" runs in a different context)
+- "vitest" is imported inside Vite / Vitest config file
+- Otherwise, it might be a Vitest bug. Please report it to https://github.com/vitest-dev/vitest/issues
+[39m
+[36m [2m❯[22m electron/backend-manager-orphan-timing.test.ts:[2m31:1[22m[39m
+    [90m 29|[39m const saved: Record<string, unknown> = {}
+    [90m 30|[39m
+    [90m 31|[39m beforeEach(() => {
+    [90m   |[39m [31m^[39m
+    [90m 32|[39m   for (const k of ['findFreePort', 'resolvePythonCommand', 'ensureDbPa…
+    [90m 33|[39m     saved[k] = proto[k]
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/backend-manager-python-cache.test.ts[2m [ electron/backend-manager-python-cache.test.ts ][22m
+[31m[1mError[22m: Vitest failed to find the runner. One of the following is possible:
+- "vitest" is imported directly without running "vitest" command
+- "vitest" is imported inside "globalSetup" (to fix this, use "setupFiles" instead, because "globalSetup" runs in a different context)
+- "vitest" is imported inside Vite / Vitest config file
+- Otherwise, it might be a Vitest bug. Please report it to https://github.com/vitest-dev/vitest/issues
+[39m
+[36m [2m❯[22m electron/backend-manager-python-cache.test.ts:[2m41:1[22m[39m
+    [90m 39|[39m let ud = ''
+    [90m 40|[39m
+    [90m 41|[39m beforeEach(() => {
+    [90m   |[39m [31m^[39m
+    [90m 42|[39m   for (const k of ['findFreePort', 'ensureDbPath', 'getBackendDir', 'w…
+    [90m 43|[39m     saved[k] = proto[k]
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/backend-manager-python-resolve.test.ts[2m [ electron/backend-manager-python-resolve.test.ts ][22m
+[31m[1mError[22m: Vitest failed to find the runner. One of the following is possible:
+- "vitest" is imported directly without running "vitest" command
+- "vitest" is imported inside "globalSetup" (to fix this, use "setupFiles" instead, because "globalSetup" runs in a different context)
+- "vitest" is imported inside Vite / Vitest config file
+- Otherwise, it might be a Vitest bug. Please report it to https://github.com/vitest-dev/vitest/issues
+[39m
+[36m [2m❯[22m electron/backend-manager-python-resolve.test.ts:[2m52:1[22m[39m
+    [90m 50|[39m let tmpDir = ''
+    [90m 51|[39m
+    [90m 52|[39m beforeEach(() => {
+    [90m   |[39m [31m^[39m
+    [90m 53|[39m   savedPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    [90m 54|[39m   savedCkunPython = process.env.CKUN_PYTHON
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/backend-python-cache.test.ts[2m [ electron/backend-python-cache.test.ts ][22m
+[31m[1mError[22m: Vitest failed to find the runner. One of the following is possible:
+- "vitest" is imported directly without running "vitest" command
+- "vitest" is imported inside "globalSetup" (to fix this, use "setupFiles" instead, because "globalSetup" runs in a different context)
+- "vitest" is imported inside Vite / Vitest config file
+- Otherwise, it might be a Vitest bug. Please report it to https://github.com/vitest-dev/vitest/issues
+[39m
+[36m [2m❯[22m electron/backend-python-cache.test.ts:[2m18:1[22m[39m
+    [90m 16|[39m
+    [90m 17|[39m let dir = ''
+    [90m 18|[39m beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'ckun-py-cache-'))…
+    [90m   |[39m [31m^[39m
+    [90m 19|[39m afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
+    [90m 20|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/bridge-ws-client.test.ts[2m [ electron/bridge-ws-client.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/bridge-ws-client.test.ts:[2m24:1[22m[39m
+    [90m 22|[39m }
+    [90m 23|[39m
+    [90m 24|[39m describe('res 投递失败的补偿（S0-05）', () => {
+    [90m   |[39m [31m^[39m
+    [90m 25|[39m   it('socket 已死 ⇒ ssh_connect 的会话被立即 disconnect 回收', async () => {
+    [90m 26|[39m     const dispatch = vi.fn().mockResolvedValue({ status: 200, body: un…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/desktop-prefs-init-fault-tolerance.test.ts[2m [ electron/desktop-prefs-init-fault-tolerance.test.ts ][22m
+[31m[1mError[22m: Vitest failed to find the runner. One of the following is possible:
+- "vitest" is imported directly without running "vitest" command
+- "vitest" is imported inside "globalSetup" (to fix this, use "setupFiles" instead, because "globalSetup" runs in a different context)
+- "vitest" is imported inside Vite / Vitest config file
+- Otherwise, it might be a Vitest bug. Please report it to https://github.com/vitest-dev/vitest/issues
+[39m
+[36m [2m❯[22m electron/desktop-prefs-init-fault-tolerance.test.ts:[2m75:1[22m[39m
+    [90m 73|[39m }
+    [90m 74|[39m
+    [90m 75|[39m beforeEach(() => {
+    [90m   |[39m [31m^[39m
+    [90m 76|[39m   env.platform = 'linux'
+    [90m 77|[39m   env.prefsFile = STORED
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/electron-bridge.test.ts[2m [ electron/electron-bridge.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/electron-bridge.test.ts:[2m38:1[22m[39m
+    [90m 36|[39m }
+    [90m 37|[39m
+    [90m 38|[39m describe('dispatch 的失败保真度（S0-09）', () => {
+    [90m   |[39m [31m^[39m
+    [90m 39|[39m   it('已分类的 SSHError 带回 code 与共享文案表的中文串', async () => {
+    [90m 40|[39m     const exec = vi.fn().mockRejectedValue(new SSHError('SESSION_NOT_F…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/exec-outcome-core.test.ts[2m [ electron/exec-outcome-core.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/exec-outcome-core.test.ts:[2m9:1[22m[39m
+    [90m  7|[39m import { classifyExit } from '../shared/exec-outcome-core'
+    [90m  8|[39m
+    [90m  9|[39m describe('classifyExit', () => {
+    [90m   |[39m [31m^[39m
+    [90m 10|[39m   it('0 是 ok；null 是不知道；其余非零才是失败', () => {
+    [90m 11|[39m     expect(classifyExit(0)).toBe('ok')
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/gh-download-resume.test.ts[2m [ electron/gh-download-resume.test.ts ][22m
+[31m[1mError[22m: Vitest failed to find the runner. One of the following is possible:
+- "vitest" is imported directly without running "vitest" command
+- "vitest" is imported inside "globalSetup" (to fix this, use "setupFiles" instead, because "globalSetup" runs in a different context)
+- "vitest" is imported inside Vite / Vitest config file
+- Otherwise, it might be a Vitest bug. Please report it to https://github.com/vitest-dev/vitest/issues
+[39m
+[36m [2m❯[22m electron/gh-download-resume.test.ts:[2m39:1[22m[39m
+    [90m 37|[39m }
+    [90m 38|[39m
+    [90m 39|[39m beforeEach(() => {
+    [90m   |[39m [31m^[39m
+    [90m 40|[39m   DownloadsRoot = mkdtempSync(join(tmpdir(), 'ckun-ghdl-'))
+    [90m 41|[39m   dir = mkdtempSync(join(DownloadsRoot, 'github-accel'))
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[12/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/git-repos-core.test.ts[2m [ electron/git-repos-core.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/git-repos-core.test.ts:[2m24:1[22m[39m
+    [90m 22|[39m } from '../shared/git-repos-core'
+    [90m 23|[39m
+    [90m 24|[39m describe('parseGitStatusPorcelain', () => {
+    [90m   |[39m [31m^[39m
+    [90m 25|[39m   it('正常头行：分支 + 上游 + ahead/behind + 文件行', () => {
+    [90m 26|[39m     const raw = [
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[13/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/git-repos.test.ts[2m [ electron/git-repos.test.ts ][22m
+[31m[1mError[22m: Vitest failed to find the runner. One of the following is possible:
+- "vitest" is imported directly without running "vitest" command
+- "vitest" is imported inside "globalSetup" (to fix this, use "setupFiles" instead, because "globalSetup" runs in a different context)
+- "vitest" is imported inside Vite / Vitest config file
+- Otherwise, it might be a Vitest bug. Please report it to https://github.com/vitest-dev/vitest/issues
+[39m
+[36m [2m❯[22m electron/git-repos.test.ts:[2m38:1[22m[39m
+    [90m 36|[39m }
+    [90m 37|[39m
+    [90m 38|[39m beforeAll(() => {
+    [90m   |[39m [31m^[39m
+    [90m 39|[39m   userDataDir = mkdtempSync(join(tmpdir(), 'gitrepos-userdata-'))
+    [90m 40|[39m   workDir = mkdtempSync(join(tmpdir(), 'gitrepos-work-'))
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[14/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/github-accel-core.test.ts[2m [ electron/github-accel-core.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/github-accel-core.test.ts:[2m56:1[22m[39m
+    [90m 54|[39m ]
+    [90m 55|[39m
+    [90m 56|[39m describe('parseGithubUrl', () => {
+    [90m   |[39m [31m^[39m
+    [90m 57|[39m   it('仓库主页（带/不带 .git、带尾斜杠）', () => {
+    [90m 58|[39m     for (const raw of ['https://github.com/o/r', 'https://github.com/o…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[15/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/hosts-status-shape.test.ts[2m [ electron/hosts-status-shape.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/hosts-status-shape.test.ts:[2m41:1[22m[39m
+    [90m 39|[39m const envSrc = readFileSync(new URL('../src/env.d.ts', import.meta.url…
+    [90m 40|[39m
+    [90m 41|[39m describe('HostsStatus 主进程与渲染层抄本同源', () => {
+    [90m   |[39m [31m^[39m
+    [90m 42|[39m   it('两端字段集合逐字相等', () => {
+    [90m 43|[39m     const impl = topLevelFieldNames(hostsSrc, /^export interface Hosts…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[16/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/main-gpu-switches.test.ts[2m [ electron/main-gpu-switches.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/main-gpu-switches.test.ts:[2m25:1[22m[39m
+    [90m 23|[39m const appendedSwitches = [...mainSrc.matchAll(/appendSwitch\('([^']+)'…
+    [90m 24|[39m
+    [90m 25|[39m describe('主进程必须无条件禁用 GPU 渲染（本机驱动与 Electron v35 不兼容）', () => {
+    [90m   |[39m [31m^[39m
+    [90m 26|[39m   it('三个渲染开关必须在源码里，缺任何一个本机启动即崩', () => {
+    [90m 27|[39m     const required = ['disable-gpu', 'disable-gpu-compositing', 'disab…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[17/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/port-core.test.ts[2m [ electron/port-core.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/port-core.test.ts:[2m8:1[22m[39m
+    [90m  6|[39m import { isPort, portRangeError } from '../shared/port-core'
+    [90m  7|[39m
+    [90m  8|[39m describe('isPort', () => {
+    [90m   |[39m [31m^[39m
+    [90m  9|[39m   it('接受 1 与 65535 两个边界', () => {
+    [90m 10|[39m     expect(isPort(1)).toBe(true)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[18/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/pty-manager-cap-race.test.ts[2m [ electron/pty-manager-cap-race.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/pty-manager-cap-race.test.ts:[2m49:1[22m[39m
+    [90m 47|[39m const MAX_PTY_SESSIONS = 32
+    [90m 48|[39m
+    [90m 49|[39m describe('pty 会话上限（E-4）', () => {
+    [90m   |[39m [31m^[39m
+    [90m 50|[39m   let mgr: PtyManager
+    [90m 51|[39m   beforeEach(() => {
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[19/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/pty-manager.test.ts[2m [ electron/pty-manager.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/pty-manager.test.ts:[2m21:1[22m[39m
+    [90m 19|[39m }
+    [90m 20|[39m
+    [90m 21|[39m describe('isAllowedShell', () => {
+    [90m   |[39m [31m^[39m
+    [90m 22|[39m   it('bare 名与标准绝对路径照常放行', () => {
+    [90m 23|[39m     expect(isAllowedShell('cmd.exe', WIN_SHELLS, winCtx)).toBe(true)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[20/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/shortcut-win.test.ts[2m [ electron/shortcut-win.test.ts ][22m
+[31m[1mError[22m: Vitest failed to find the runner. One of the following is possible:
+- "vitest" is imported directly without running "vitest" command
+- "vitest" is imported inside "globalSetup" (to fix this, use "setupFiles" instead, because "globalSetup" runs in a different context)
+- "vitest" is imported inside Vite / Vitest config file
+- Otherwise, it might be a Vitest bug. Please report it to https://github.com/vitest-dev/vitest/issues
+[39m
+[36m [2m❯[22m electron/shortcut-win.test.ts:[2m59:1[22m[39m
+    [90m 57|[39m
+    [90m 58|[39m let warnSpy: ReturnType<typeof vi.spyOn>
+    [90m 59|[39m beforeEach(() => {
+    [90m   |[39m [31m^[39m
+    [90m 60|[39m   warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    [90m 61|[39m   vi.spyOn(console, 'log').mockImplementation(() => {})
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[21/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/ssh-error.test.ts[2m [ electron/ssh-error.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/ssh-error.test.ts:[2m21:1[22m[39m
+    [90m 19|[39m const SSH2_BAD_PASSPHRASE = 'OpenSSH key integrity check failed -- bad…
+    [90m 20|[39m
+    [90m 21|[39m describe('classifyRawError — 私钥 passphrase（S0-16）', () => {
+    [90m   |[39m [31m^[39m
+    [90m 22|[39m   it('识别 ssh2 的「没给 passphrase」真实措辞', () => {
+    [90m 23|[39m     expect(classifyRawError(new Error(SSH2_ENCRYPTED_KEY))).toBe('AUTH…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[22/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/ssh-manager-connect-throw.test.ts[2m [ electron/ssh-manager-connect-throw.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/ssh-manager-connect-throw.test.ts:[2m63:1[22m[39m
+    [90m 61|[39m }
+    [90m 62|[39m
+    [90m 63|[39m describe('connect() 同步抛出的分类（S0-12）', () => {
+    [90m   |[39m [31m^[39m
+    [90m 64|[39m   beforeEach(() => { vi.clearAllMocks() })
+    [90m 65|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[23/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/ssh-manager-download-total-zero.test.ts[2m [ electron/ssh-manager-download-total-zero.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/ssh-manager-download-total-zero.test.ts:[2m33:1[22m[39m
+    [90m 31|[39m const GUARD = /total\s*>\s*0\s*&&\s*partStat\.size\s*===\s*total/
+    [90m 32|[39m
+    [90m 33|[39m describe('sftpDownload 的未知长度捷径（2026-10-12 审查轮）', () => {
+    [90m   |[39m [31m^[39m
+    [90m 34|[39m   const dl = downloadBody()
+    [90m 35|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[24/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/ssh-manager-exit-outcome-s519.test.ts[2m [ electron/ssh-manager-exit-outcome-s519.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/ssh-manager-exit-outcome-s519.test.ts:[2m20:1[22m[39m
+    [90m 18|[39m type ExecResult = { stdout: string; stderr: string; exitCode: number |…
+    [90m 19|[39m
+    [90m 20|[39m describe('sftpZipRemote 不再销毁结果未知的产物', () => {
+    [90m   |[39m [31m^[39m
+    [90m 21|[39m   let mgr: SSHManager
+    [90m 22|[39m   let deleted: string[]
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[25/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/ssh-manager-heartbeat-stall-reset.test.ts[2m [ electron/ssh-manager-heartbeat-stall-reset.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/ssh-manager-heartbeat-stall-reset.test.ts:[2m49:1[22m[39m
+    [90m 47|[39m }
+    [90m 48|[39m
+    [90m 49|[39m describe('TransferHeartbeat 停滞粘滞复位', () => {
+    [90m   |[39m [31m^[39m
+    [90m 50|[39m   it('进度停摆超过阈值 → 判定停滞一次', () => {
+    [90m 51|[39m     vi.useFakeTimers()
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[26/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/ssh-manager-known-hosts-atomic.test.ts[2m [ electron/ssh-manager-known-hosts-atomic.test.ts ][22m
+[31m[1mError[22m: Vitest failed to find the runner. One of the following is possible:
+- "vitest" is imported directly without running "vitest" command
+- "vitest" is imported inside "globalSetup" (to fix this, use "setupFiles" instead, because "globalSetup" runs in a different context)
+- "vitest" is imported inside Vite / Vitest config file
+- Otherwise, it might be a Vitest bug. Please report it to https://github.com/vitest-dev/vitest/issues
+[39m
+[36m [2m❯[22m electron/ssh-manager-known-hosts-atomic.test.ts:[2m44:1[22m[39m
+    [90m 42|[39m let hostsPath = ''
+    [90m 43|[39m
+    [90m 44|[39m beforeEach(() => {
+    [90m   |[39m [31m^[39m
+    [90m 45|[39m   rmSync(TEST_DIR, { recursive: true, force: true })
+    [90m 46|[39m   mkdirSync(TEST_DIR, { recursive: true })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[27/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/ssh-manager-reconnect.test.ts[2m [ electron/ssh-manager-reconnect.test.ts ][22m
+[31m[1mError[22m: Vitest failed to find the runner. One of the following is possible:
+- "vitest" is imported directly without running "vitest" command
+- "vitest" is imported inside "globalSetup" (to fix this, use "setupFiles" instead, because "globalSetup" runs in a different context)
+- "vitest" is imported inside Vite / Vitest config file
+- Otherwise, it might be a Vitest bug. Please report it to https://github.com/vitest-dev/vitest/issues
+[39m
+[36m [2m❯[22m electron/ssh-manager-reconnect.test.ts:[2m92:1[22m[39m
+    [90m 90|[39m }
+    [90m 91|[39m
+    [90m 92|[39m beforeEach(() => {
+    [90m   |[39m [31m^[39m
+    [90m 93|[39m   vi.spyOn(console, 'warn').mockImplementation(() => {})
+    [90m 94|[39m })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[28/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/ssh-manager-session-id-s006.test.ts[2m [ electron/ssh-manager-session-id-s006.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/ssh-manager-session-id-s006.test.ts:[2m22:1[22m[39m
+    [90m 20|[39m import { SSHManager } from './ssh-manager'
+    [90m 21|[39m
+    [90m 22|[39m describe('newSessionId 的跨进程不重叠（S0-06）', () => {
+    [90m   |[39m [31m^[39m
+    [90m 23|[39m   it('两次启动各自发的 id 集合没有交集', () => {
+    [90m 24|[39m     // 两个实例 = 主进程重启前后。旧形状在这里必然撞车（都是 ssh-1…ssh-20）
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[29/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/ssh-manager-stale-shell.test.ts[2m [ electron/ssh-manager-stale-shell.test.ts ][22m
+[31m[1mError[22m: Vitest failed to find the runner. One of the following is possible:
+- "vitest" is imported directly without running "vitest" command
+- "vitest" is imported inside "globalSetup" (to fix this, use "setupFiles" instead, because "globalSetup" runs in a different context)
+- "vitest" is imported inside Vite / Vitest config file
+- Otherwise, it might be a Vitest bug. Please report it to https://github.com/vitest-dev/vitest/issues
+[39m
+[36m [2m❯[22m electron/ssh-manager-stale-shell.test.ts:[2m125:1[22m[39m
+    [90m123|[39m }
+    [90m124|[39m
+    [90m125|[39m beforeEach(() => {
+    [90m   |[39m [31m^[39m
+    [90m126|[39m   fake.clients.length = 0
+    [90m127|[39m   vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[30/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/ssh-manager-transfer-idle-reclaim.test.ts[2m [ electron/ssh-manager-transfer-idle-reclaim.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/ssh-manager-transfer-idle-reclaim.test.ts:[2m36:1[22m[39m
+    [90m 34|[39m }
+    [90m 35|[39m
+    [90m 36|[39m describe('空闲回收：定时器到点仍有租约后必须能重新排程', () => {
+    [90m   |[39m [31m^[39m
+    [90m 37|[39m   it('早退分支清空陈旧 cleanupTimer，归还后可重新排程（修复前：永不重排）', () => {
+    [90m 38|[39m     const mgr: any = new SSHManager()
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[31/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/ssh-manager-transfer-pool-race.test.ts[2m [ electron/ssh-manager-transfer-pool-race.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/ssh-manager-transfer-pool-race.test.ts:[2m55:1[22m[39m
+    [90m 53|[39m }
+    [90m 54|[39m
+    [90m 55|[39m describe('并发传输各占一条池内连接，互不覆盖', () => {
+    [90m   |[39m [31m^[39m
+    [90m 56|[39m   it('两条并发 acquire 都在池里（旧形状：后 set 的覆盖前一条，池长 1）', async () => {
+    [90m 57|[39m     const { mgr, created } = await raceTwoAcquires()
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[32/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/ssh-manager-upload-rename-resume.test.ts[2m [ electron/ssh-manager-upload-rename-resume.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/ssh-manager-upload-rename-resume.test.ts:[2m60:1[22m[39m
+    [90m 58|[39m const dl = methodBody('  async sftpDownload(')
+    [90m 59|[39m
+    [90m 60|[39m describe('rename 阶段错误分类（P2，上传/下载对称双腿）', () => {
+    [90m   |[39m [31m^[39m
+    [90m 61|[39m   it.each([
+    [90m 62|[39m     ['sftpUpload', up, 'uploadComplete', 'await sftpRename(sftp, partP…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[33/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/tunnel-manager-dynamic-bind.test.ts[2m [ electron/tunnel-manager-dynamic-bind.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/tunnel-manager-dynamic-bind.test.ts:[2m59:1[22m[39m
+    [90m 57|[39m }
+    [90m 58|[39m
+    [90m 59|[39m describe('-D 监听地址边界', () => {
+    [90m   |[39m [31m^[39m
+    [90m 60|[39m   let mgr: TunnelManager
+    [90m 61|[39m   beforeEach(() => {
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[34/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/api/friendly-error.test.ts[2m [ src/api/friendly-error.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/api/friendly-error.test.ts:[2m18:1[22m[39m
+    [90m 16|[39m const env = (msg: string) => `Error invoking remote method 'ssh:write'…
+    [90m 17|[39m
+    [90m 18|[39m describe('unwrapIpcErrorEnvelope（S0-13）', () => {
+    [90m   |[39m [31m^[39m
+    [90m 19|[39m   it('剥掉 Electron 的 invoke 信封与前导 Error:', () => {
+    [90m 20|[39m     expect(unwrapIpcErrorEnvelope(env('SSH 会话不存在或已断开'))).toBe('SSH 会话不…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[35/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/api/permission-mode.test.ts[2m [ src/api/permission-mode.test.ts ][22m
+[31m[1mError[22m: Vitest failed to find the runner. One of the following is possible:
+- "vitest" is imported directly without running "vitest" command
+- "vitest" is imported inside "globalSetup" (to fix this, use "setupFiles" instead, because "globalSetup" runs in a different context)
+- "vitest" is imported inside Vite / Vitest config file
+- Otherwise, it might be a Vitest bug. Please report it to https://github.com/vitest-dev/vitest/issues
+[39m
+[36m [2m❯[22m src/api/permission-mode.test.ts:[2m64:1[22m[39m
+    [90m 62|[39m }
+    [90m 63|[39m
+    [90m 64|[39m beforeEach(() => {
+    [90m   |[39m [31m^[39m
+    [90m 65|[39m   captured = []
+    [90m 66|[39m   vi.stubGlobal('fetch', vi.fn(async (url: unknown, init?: RequestInit…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[36/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/api/run-list-query.test.ts[2m [ src/api/run-list-query.test.ts ][22m
+[31m[1mError[22m: Vitest failed to find the runner. One of the following is possible:
+- "vitest" is imported directly without running "vitest" command
+- "vitest" is imported inside "globalSetup" (to fix this, use "setupFiles" instead, because "globalSetup" runs in a different context)
+- "vitest" is imported inside Vite / Vitest config file
+- Otherwise, it might be a Vitest bug. Please report it to https://github.com/vitest-dev/vitest/issues
+[39m
+[36m [2m❯[22m src/api/run-list-query.test.ts:[2m13:1[22m[39m
+    [90m 11|[39m let urls: string[] = []
+    [90m 12|[39m
+    [90m 13|[39m beforeEach(() => {
+    [90m   |[39m [31m^[39m
+    [90m 14|[39m   urls = []
+    [90m 15|[39m   vi.stubGlobal('fetch', vi.fn(async (url: unknown) => {
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[37/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/api/sse-stall-watchdog.test.ts[2m [ src/api/sse-stall-watchdog.test.ts ][22m
+[31m[1mError[22m: Vitest failed to find the runner. One of the following is possible:
+- "vitest" is imported directly without running "vitest" command
+- "vitest" is imported inside "globalSetup" (to fix this, use "setupFiles" instead, because "globalSetup" runs in a different context)
+- "vitest" is imported inside Vite / Vitest config file
+- Otherwise, it might be a Vitest bug. Please report it to https://github.com/vitest-dev/vitest/issues
+[39m
+[36m [2m❯[22m src/api/sse-stall-watchdog.test.ts:[2m63:1[22m[39m
+    [90m 61|[39m }
+    [90m 62|[39m
+    [90m 63|[39m beforeEach(() => {
+    [90m   |[39m [31m^[39m
+    [90m 64|[39m   // Date 必须一起假掉：lastActivityAt 与看门狗都读 Date.now()
+    [90m 65|[39m   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterv…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[38/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/composables/bulkCommandDiff.test.ts[2m [ src/composables/bulkCommandDiff.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/composables/bulkCommandDiff.test.ts:[2m17:1[22m[39m
+    [90m 15|[39m }
+    [90m 16|[39m
+    [90m 17|[39m describe('diffResults', () => {
+    [90m   |[39m [31m^[39m
+    [90m 18|[39m   it('全部一致时没有差异行', () => {
+    [90m 19|[39m     const d = diffResults([
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[39/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/composables/remoteAudit.test.ts[2m [ src/composables/remoteAudit.test.ts ][22m
+[31m[1mError[22m: Vitest failed to find the current suite. One of the following is possible:
+- "vitest" is imported directly without running "vitest" command
+- "vitest" is imported inside "globalSetup" (to fix this, use "setupFiles" instead, because "globalSetup" runs in a different context)
+- "vitest" is imported inside Vite / Vitest config file
+- Otherwise, it might be a Vitest bug. Please report it to https://github.com/vitest-dev/vitest/issues
+[39m
+[36m [2m❯[22m src/composables/remoteAudit.test.ts:[2m31:1[22m[39m
+    [90m 29|[39m })
+    [90m 30|[39m
+    [90m 31|[39m afterEach(() => {
+    [90m   |[39m [31m^[39m
+    [90m 32|[39m   vi.restoreAllMocks()
+    [90m 33|[39m })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[40/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/composables/terminal-palettes.test.ts[2m [ src/composables/terminal-palettes.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/composables/terminal-palettes.test.ts:[2m27:1[22m[39m
+    [90m 25|[39m ] as const
+    [90m 26|[39m
+    [90m 27|[39m describe('终端 ANSI 色板', () => {
+    [90m   |[39m [31m^[39m
+    [90m 28|[39m   it('8 个主题齐全', () => {
+    [90m 29|[39m     expect(Object.keys(TERMINAL_THEMES).sort()).toEqual(Object.keys(TE…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[41/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/composables/useAgentDeliver.test.ts[2m [ src/composables/useAgentDeliver.test.ts ][22m
+[31m[1mError[22m: Vitest failed to find the runner. One of the following is possible:
+- "vitest" is imported directly without running "vitest" command
+- "vitest" is imported inside "globalSetup" (to fix this, use "setupFiles" instead, because "globalSetup" runs in a different context)
+- "vitest" is imported inside Vite / Vitest config file
+- Otherwise, it might be a Vitest bug. Please report it to https://github.com/vitest-dev/vitest/issues
+[39m
+[36m [2m❯[22m src/composables/useAgentDeliver.test.ts:[2m108:1[22m[39m
+    [90m106|[39m
+    [90m107|[39m // node 环境无 window：占位让模块内 window.electronAPI 访问安全；会话供 deliverCommand 写入
+    [90m108|[39m beforeEach(() => {
+    [90m   |[39m [31m^[39m
+    [90m109|[39m   ;(globalThis as any).window = {}
+    [90m110|[39m   sshState.sessions = [{ id: 'sess-1', type: 'remote' }]
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[42/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/composables/useAgentPresence.test.ts[2m [ src/composables/useAgentPresence.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/composables/useAgentPresence.test.ts:[2m18:1[22m[39m
+    [90m 16|[39m })
+    [90m 17|[39m
+    [90m 18|[39m describe('resolveAgentPresence', () => {
+    [90m   |[39m [31m^[39m
+    [90m 19|[39m   it('空闲：无待批、未运行、无未读', () => {
+    [90m 20|[39m     expect(resolveAgentPresence(input())).toBe('idle')
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[43/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/composables/useApprovalActions.test.ts[2m [ src/composables/useApprovalActions.test.ts ][22m
+[31m[1mError[22m: Vitest failed to find the runner. One of the following is possible:
+- "vitest" is imported directly without running "vitest" command
+- "vitest" is imported inside "globalSetup" (to fix this, use "setupFiles" instead, because "globalSetup" runs in a different context)
+- "vitest" is imported inside Vite / Vitest config file
+- Otherwise, it might be a Vitest bug. Please report it to https://github.com/vitest-dev/vitest/issues
+[39m
+[36m [2m❯[22m src/composables/useApprovalActions.test.ts:[2m46:1[22m[39m
+    [90m 44|[39m const { useApprovalActions } = await import('@/composables/useApproval…
+    [90m 45|[39m
+    [90m 46|[39m beforeEach(() => {
+    [90m   |[39m [31m^[39m
+    [90m 47|[39m   permissionRequests.value = []
+    [90m 48|[39m   approvePermission.mockClear()
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[44/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/composables/useChatPersistence.test.ts[2m [ src/composables/useChatPersistence.test.ts ][22m
+[31m[1mError[22m: Vitest failed to find the runner. One of the following is possible:
+- "vitest" is imported directly without running "vitest" command
+- "vitest" is imported inside "globalSetup" (to fix this, use "setupFiles" instead, because "globalSetup" runs in a different context)
+- "vitest" is imported inside Vite / Vitest config file
+- Otherwise, it might be a Vitest bug. Please report it to https://github.com/vitest-dev/vitest/issues
+[39m
+[36m [2m❯[22m src/composables/useChatPersistence.test.ts:[2m55:1[22m[39m
+    [90m 53|[39m }
+    [90m 54|[39m
+    [90m 55|[39m beforeEach(() => {
+    [90m   |[39m [31m^[39m
+    [90m 56|[39m   setActivePinia(createPinia())
+    [90m 57|[39m   vi.unstubAllGlobals()
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[45/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/composables/useCompletion.test.ts[2m [ src/composables/useCompletion.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/composables/useCompletion.test.ts:[2m23:1[22m[39m
+    [90m 21|[39m ]
+    [90m 22|[39m
+    [90m 23|[39m describe('fuzzyMatchCommand', () => {
+    [90m   |[39m [31m^[39m
+    [90m 24|[39m   it('前缀命中优先于 fuzzy 命中', () => {
+    [90m 25|[39m     // "ls" 前缀命中 ls / ls -lat；"ls -lat" 不是 "ls" 的前缀命中，ls 应排前
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[46/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/composables/useDesktopPrefs.test.ts[2m [ src/composables/useDesktopPrefs.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/composables/useDesktopPrefs.test.ts:[2m25:1[22m[39m
+    [90m 23|[39m const allOn = { autoLaunch: true, minimizeToTray: true, desktopNotific…
+    [90m 24|[39m
+    [90m 25|[39m describe('useDesktopPrefs', () => {
+    [90m   |[39m [31m^[39m
+    [90m 26|[39m   beforeEach(() => {
+    [90m 27|[39m     setActivePinia(createPinia())
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[47/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/composables/useGlobalShortcuts.test.ts[2m [ src/composables/useGlobalShortcuts.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/composables/useGlobalShortcuts.test.ts:[2m4:1[22m[39m
+    [90m  2|[39m import { mruInitialIndex, mruStep } from './useGlobalShortcuts'
+    [90m  3|[39m
+    [90m  4|[39m describe('MRU 切换器的纯函数', () => {
+    [90m   |[39m [31m^[39m
+    [90m  5|[39m   it('打开时高亮落在「上一个会话」（栈顶下一位）', () => {
+    [90m  6|[39m     expect(mruInitialIndex(2)).toBe(1)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[48/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/composables/useHomeCommand.test.ts[2m [ src/composables/useHomeCommand.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/composables/useHomeCommand.test.ts:[2m68:1[22m[39m
+    [90m 66|[39m const { useHomeCommand } = await import('@/composables/useHomeCommand')
+    [90m 67|[39m
+    [90m 68|[39m describe('useHomeCommand', () => {
+    [90m   |[39m [31m^[39m
+    [90m 69|[39m   beforeEach(() => {
+    [90m 70|[39m     sendMessage.mockClear()
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[49/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/composables/useHomeTarget.test.ts[2m [ src/composables/useHomeTarget.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/composables/useHomeTarget.test.ts:[2m22:1[22m[39m
+    [90m 20|[39m }
+    [90m 21|[39m
+    [90m 22|[39m describe('useHomeTarget', () => {
+    [90m   |[39m [31m^[39m
+    [90m 23|[39m   beforeEach(() => {
+    [90m 24|[39m     setActivePinia(createPinia())
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[50/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/composables/useOpsSettings.test.ts[2m [ src/composables/useOpsSettings.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/composables/useOpsSettings.test.ts:[2m64:1[22m[39m
+    [90m 62|[39m }
+    [90m 63|[39m
+    [90m 64|[39m describe('useOpsSettings', () => {
+    [90m   |[39m [31m^[39m
+    [90m 65|[39m   beforeEach(() => {
+    [90m 66|[39m     setActivePinia(createPinia())
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[51/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/composables/useSshNavigation.showTerminal.test.ts[2m [ src/composables/useSshNavigation.showTerminal.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/composables/useSshNavigation.showTerminal.test.ts:[2m25:1[22m[39m
+    [90m 23|[39m }
+    [90m 24|[39m
+    [90m 25|[39m describe('showTerminal：顶栏终端入口', () => {
+    [90m   |[39m [31m^[39m
+    [90m 26|[39m   beforeEach(() => {
+    [90m 27|[39m     vi.useFakeTimers()
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[52/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/composables/useSshNavigation.test.ts[2m [ src/composables/useSshNavigation.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/composables/useSshNavigation.test.ts:[2m46:1[22m[39m
+    [90m 44|[39m }
+    [90m 45|[39m
+    [90m 46|[39m describe('connectRemote 的在途互斥', () => {
+    [90m   |[39m [31m^[39m
+    [90m 47|[39m   beforeEach(() => {
+    [90m 48|[39m     vi.useFakeTimers()
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[53/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/composables/useSshNavigation.trace-link.test.ts[2m [ src/composables/useSshNavigation.trace-link.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/composables/useSshNavigation.trace-link.test.ts:[2m12:1[22m[39m
+    [90m 10|[39m }
+    [90m 11|[39m
+    [90m 12|[39m describe('openTrace：从消息跳运维轨迹', () => {
+    [90m   |[39m [31m^[39m
+    [90m 13|[39m   it('切到轨迹页并带上 run 号', () => {
+    [90m 14|[39m     const nav = mount()
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[54/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/composables/useTerminalConfig.test.ts[2m [ src/composables/useTerminalConfig.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/composables/useTerminalConfig.test.ts:[2m34:1[22m[39m
+    [90m 32|[39m }
+    [90m 33|[39m
+    [90m 34|[39m describe('watchTerminalConfig', () => {
+    [90m   |[39m [31m^[39m
+    [90m 35|[39m   beforeEach(() => {
+    [90m 36|[39m     setActivePinia(createPinia())
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[55/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/stores/agent.test.ts[2m [ src/stores/agent.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/stores/agent.test.ts:[2m62:1[22m[39m
+    [90m 60|[39m }
+    [90m 61|[39m
+    [90m 62|[39m describe('tool_call_result 回填匹配', () => {
+    [90m   |[39m [31m^[39m
+    [90m 63|[39m   beforeEach(() => {
+    [90m 64|[39m     runs.length = 0
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[56/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/stores/app.test.ts[2m [ src/stores/app.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/stores/app.test.ts:[2m44:1[22m[39m
+    [90m 42|[39m const flush = () => new Promise((r) => setTimeout(r, 0))
+    [90m 43|[39m
+    [90m 44|[39m describe('appStore.readyPromise — 初始加载的就绪闸门', () => {
+    [90m   |[39m [31m^[39m
+    [90m 45|[39m   beforeEach(() => {
+    [90m 46|[39m     setActivePinia(createPinia())
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[57/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/stores/docker-core.test.ts[2m [ src/stores/docker-core.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/stores/docker-core.test.ts:[2m26:1[22m[39m
+    [90m 24|[39m const T = '\t'
+    [90m 25|[39m
+    [90m 26|[39m describe('stateFromStatus', () => {
+    [90m   |[39m [31m^[39m
+    [90m 27|[39m   it('Up → running', () => {
+    [90m 28|[39m     expect(stateFromStatus('Up 7 days')).toBe('running')
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[58/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/stores/quickCommands.test.ts[2m [ src/stores/quickCommands.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/stores/quickCommands.test.ts:[2m27:1[22m[39m
+    [90m 25|[39m }
+    [90m 26|[39m
+    [90m 27|[39m describe('quickCommands store', () => {
+    [90m   |[39m [31m^[39m
+    [90m 28|[39m   beforeEach(() => {
+    [90m 29|[39m     lsMap.clear()
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[59/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/stores/server-monitor.test.ts[2m [ src/stores/server-monitor.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/stores/server-monitor.test.ts:[2m32:1[22m[39m
+    [90m 30|[39m ].join('\n')
+    [90m 31|[39m
+    [90m 32|[39m describe('parseMetricsRaw', () => {
+    [90m   |[39m [31m^[39m
+    [90m 33|[39m   it('解析 CPU 原始计数器', () => {
+    [90m 34|[39m     const m = parseMetricsRaw(FIXTURE)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[60/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/stores/settings.test.ts[2m [ src/stores/settings.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/stores/settings.test.ts:[2m65:1[22m[39m
+    [90m 63|[39m const { useSettingsStore } = await import('@/stores/settings')
+    [90m 64|[39m
+    [90m 65|[39m describe('settings 后端回填', () => {
+    [90m   |[39m [31m^[39m
+    [90m 66|[39m   beforeEach(() => {
+    [90m 67|[39m     setActivePinia(createPinia())
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[61/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/stores/sftp-open-race.test.ts[2m [ src/stores/sftp-open-race.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/stores/sftp-open-race.test.ts:[2m42:1[22m[39m
+    [90m 40|[39m }
+    [90m 41|[39m
+    [90m 42|[39m describe('sftp store — 打开会话的并发代次', () => {
+    [90m   |[39m [31m^[39m
+    [90m 43|[39m   beforeEach(() => {
+    [90m 44|[39m     setActivePinia(createPinia())
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[62/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/stores/sftp.test.ts[2m [ src/stores/sftp.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/stores/sftp.test.ts:[2m59:1[22m[39m
+    [90m 57|[39m const flush = () => new Promise((r) => setTimeout(r, 0))
+    [90m 58|[39m
+    [90m 59|[39m describe('sftp store — 传输索引不变量（阶段2/B4）', () => {
+    [90m   |[39m [31m^[39m
+    [90m 60|[39m   let api: FakeApi
+    [90m 61|[39m   beforeEach(() => {
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[63/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/stores/sftpBookmarks.test.ts[2m [ src/stores/sftpBookmarks.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/stores/sftpBookmarks.test.ts:[2m34:1[22m[39m
+    [90m 32|[39m }
+    [90m 33|[39m
+    [90m 34|[39m describe('labelFromPath', () => {
+    [90m   |[39m [31m^[39m
+    [90m 35|[39m   it('POSIX 路径取末段，尾斜杠不影响', () => {
+    [90m 36|[39m     expect(labelFromPath('/var/log/nginx')).toBe('nginx')
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[64/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/stores/ssh-ai.test.ts[2m [ src/stores/ssh-ai.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/stores/ssh-ai.test.ts:[2m53:1[22m[39m
+    [90m 51|[39m const { api } = await import('@/api/client')
+    [90m 52|[39m
+    [90m 53|[39m describe('ssh-ai 审批档', () => {
+    [90m   |[39m [31m^[39m
+    [90m 54|[39m   beforeEach(() => {
+    [90m 55|[39m     setActivePinia(createPinia())
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[65/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/stores/ssh-hostkey-scope.test.ts[2m [ src/stores/ssh-hostkey-scope.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/stores/ssh-hostkey-scope.test.ts:[2m40:1[22m[39m
+    [90m 38|[39m import { useSSHStore } from './ssh'
+    [90m 39|[39m
+    [90m 40|[39m describe('ssh store 主机密钥监听的 scope 归属', () => {
+    [90m   |[39m [31m^[39m
+    [90m 41|[39m   beforeEach(() => {
+    [90m 42|[39m     setActivePinia(createPinia())
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[66/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/stores/ssh-session-status.test.ts[2m [ src/stores/ssh-session-status.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/stores/ssh-session-status.test.ts:[2m38:1[22m[39m
+    [90m 36|[39m }
+    [90m 37|[39m
+    [90m 38|[39m describe('会话状态层', () => {
+    [90m   |[39m [31m^[39m
+    [90m 39|[39m   beforeEach(async () => {
+    [90m 40|[39m     setActivePinia(createPinia())
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[67/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/styles/variables.test.ts[2m [ src/styles/variables.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/styles/variables.test.ts:[2m149:1[22m[39m
+    [90m147|[39m }
+    [90m148|[39m
+    [90m149|[39m describe('atelier（手记）主题的令牌覆盖', () => {
+    [90m   |[39m [31m^[39m
+    [90m150|[39m   it('浅色主题覆盖的令牌，手记一个都不能少', () => {
+    [90m151|[39m     // 少一条 = 那条在米纸底上仍是深色主题的值。深色底写死的 status-*/danger-*/
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[68/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/utils/agent-run-status.test.ts[2m [ src/utils/agent-run-status.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/utils/agent-run-status.test.ts:[2m21:1[22m[39m
+    [90m 19|[39m } from './agent-run-status'
+    [90m 20|[39m
+    [90m 21|[39m describe('runStatusLabel', () => {
+    [90m   |[39m [31m^[39m
+    [90m 22|[39m   it('四种终态各有各的文案，不合并成「失败」', () => {
+    [90m 23|[39m     expect(runStatusLabel('completed')).toBe('完成')
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[69/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/utils/appearance-tokens.test.ts[2m [ src/utils/appearance-tokens.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/utils/appearance-tokens.test.ts:[2m24:1[22m[39m
+    [90m 22|[39m }
+    [90m 23|[39m
+    [90m 24|[39m describe('contrastOnAccent：压在强调色上的字', () => {
+    [90m   |[39m [31m^[39m
+    [90m 25|[39m   it('十档强调色全部 ≥3:1 —— 白底白字那一类不可能再出现', () => {
+    [90m 26|[39m     const failures = (Object.keys(ACCENT_MAP) as Accent[])
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[70/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/utils/approval-display.test.ts[2m [ src/utils/approval-display.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/utils/approval-display.test.ts:[2m23:1[22m[39m
+    [90m 21|[39m const CONNS = [{ id: 'c-1', name: '生产 web', host: '10.20.1.7', usernam…
+    [90m 22|[39m
+    [90m 23|[39m describe('approvalTargetLabel', () => {
+    [90m   |[39m [31m^[39m
+    [90m 24|[39m   it('有连接记录时显示「连接名（用户@主机）」', () => {
+    [90m 25|[39m     expect(approvalTargetLabel({ sshSessionId: 's-1' }, SESSIONS, CONN…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[71/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/utils/approval-scopes.test.ts[2m [ src/utils/approval-scopes.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/utils/approval-scopes.test.ts:[2m4:1[22m[39m
+    [90m  2|[39m import { batchApproveBlocked, grantScopesForRisk, onceGrantBlocked } f…
+    [90m  3|[39m
+    [90m  4|[39m describe('审批卡可见的授权档位', () => {
+    [90m   |[39m [31m^[39m
+    [90m  5|[39m   it('moderate 卡给 once/session/always 三档', () => {
+    [90m  6|[39m     expect(grantScopesForRisk('moderate')).toEqual(['once', 'session',…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[72/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/utils/conversation-title.test.ts[2m [ src/utils/conversation-title.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/utils/conversation-title.test.ts:[2m11:1[22m[39m
+    [90m  9|[39m import { isTitleEcho } from './conversation-title'
+    [90m 10|[39m
+    [90m 11|[39m describe('isTitleEcho', () => {
+    [90m   |[39m [31m^[39m
+    [90m 12|[39m   it('标题与首条消息同文', () => {
+    [90m 13|[39m     expect(isTitleEcho('你好', '你好')).toBe(true)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[73/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/utils/display-messages.test.ts[2m [ src/utils/display-messages.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/utils/display-messages.test.ts:[2m34:1[22m[39m
+    [90m 32|[39m })
+    [90m 33|[39m
+    [90m 34|[39m describe('isLiveAgentRun', () => {
+    [90m   |[39m [31m^[39m
+    [90m 35|[39m   const messages = [msg({}), msg({ id: 'temp-agent-1', role: 'assistan…
+    [90m 36|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[74/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/utils/finalizeAgentMessage.test.ts[2m [ src/utils/finalizeAgentMessage.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/utils/finalizeAgentMessage.test.ts:[2m54:1[22m[39m
+    [90m 52|[39m }
+    [90m 53|[39m
+    [90m 54|[39m describe('finalizeAgentMessage', () => {
+    [90m   |[39m [31m^[39m
+    [90m 55|[39m   it('把从未回填的工具调用落成明确的未回写状态，空串结果原样保留', () => {
+    [90m 56|[39m     const conv = makeConv()
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[75/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/utils/focus-trap.test.ts[2m [ src/utils/focus-trap.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/utils/focus-trap.test.ts:[2m4:1[22m[39m
+    [90m  2|[39m import { nextFocusIndex } from './focus-trap'
+    [90m  3|[39m
+    [90m  4|[39m describe('nextFocusIndex：模态内的 Tab 循环', () => {
+    [90m   |[39m [31m^[39m
+    [90m  5|[39m   it('正向走到最后一项后回到第一项', () => {
+    [90m  6|[39m     expect(nextFocusIndex(3, 2, 1)).toBe(0)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[76/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/utils/format.test.ts[2m [ src/utils/format.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/utils/format.test.ts:[2m11:1[22m[39m
+    [90m  9|[39m import { formatBytesCompact, formatRelativeTime, parseBackendTs } from…
+    [90m 10|[39m
+    [90m 11|[39m describe('parseBackendTs', () => {
+    [90m   |[39m [31m^[39m
+    [90m 12|[39m   it('UTC naive 串按 UTC 解释（不补 Z 就会被当本地时间）', () => {
+    [90m 13|[39m     expect(parseBackendTs('2026-09-21 07:00:00').getTime()).toBe(Date.…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[77/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/utils/gateway-mux.test.ts[2m [ src/utils/gateway-mux.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/utils/gateway-mux.test.ts:[2m34:1[22m[39m
+    [90m 32|[39m }
+    [90m 33|[39m
+    [90m 34|[39m describe('golden 字节向量（防与 gateway/hillgw.mjs 那份自含实现漂移）', () => {
+    [90m   |[39m [31m^[39m
+    [90m 35|[39m   it('DATA chan=17 "abc"', () => {
+    [90m 36|[39m     expect(hex(encodeFrame({ type: 'data', chan: 17, payload: utf8('ab…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[78/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/utils/language.test.ts[2m [ src/utils/language.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/utils/language.test.ts:[2m4:1[22m[39m
+    [90m  2|[39m import { imageMime, isImagePreviewable, isPreviewable } from '@/utils/…
+    [90m  3|[39m
+    [90m  4|[39m describe('图片预览白名单（png/jpg/jpeg/gif/webp）', () => {
+    [90m   |[39m [31m^[39m
+    [90m  5|[39m   it('命中四类图片，扩展名大小写不敏感', () => {
+    [90m  6|[39m     for (const n of ['a.png', 'b.jpg', 'c.JPEG', 'd.Gif', 'e.webp']) {
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[79/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/utils/nvtop-scale.test.ts[2m [ src/utils/nvtop-scale.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/utils/nvtop-scale.test.ts:[2m28:1[22m[39m
+    [90m 26|[39m } from '@/utils/nvtop-scale'
+    [90m 27|[39m
+    [90m 28|[39m describe('fillPct —— 条带高度归一（本缺陷的修复点）', () => {
+    [90m   |[39m [31m^[39m
+    [90m 29|[39m   it('0% 与 65% 必须得到不同的柱高（原实现两者都是满格）', () => {
+    [90m 30|[39m     expect(fillPct(0)).toBe(0)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[80/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/utils/process-status.test.ts[2m [ src/utils/process-status.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/utils/process-status.test.ts:[2m4:1[22m[39m
+    [90m  2|[39m import { headline } from './process-status'
+    [90m  3|[39m
+    [90m  4|[39m describe('headline', () => {
+    [90m   |[39m [31m^[39m
+    [90m  5|[39m   it('命令执行类直接给 command', () => {
+    [90m  6|[39m     expect(headline({ tool: 'ssh_exec', args: { command: 'tail -n 5 ap…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[81/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/utils/remote-name.test.ts[2m [ src/utils/remote-name.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/utils/remote-name.test.ts:[2m12:1[22m[39m
+    [90m 10|[39m import { isUnsafeRemoteName } from './remote-name'
+    [90m 11|[39m
+    [90m 12|[39m describe('isUnsafeRemoteName', () => {
+    [90m   |[39m [31m^[39m
+    [90m 13|[39m   it('常规文件名放行', () => {
+    [90m 14|[39m     for (const name of ['app.log', 'nginx.conf', '数据-2026.csv', 'a b.t…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[82/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/utils/run-trace.test.ts[2m [ src/utils/run-trace.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/utils/run-trace.test.ts:[2m22:1[22m[39m
+    [90m 20|[39m }
+    [90m 21|[39m
+    [90m 22|[39m describe('buildTraceModel 分批', () => {
+    [90m   |[39m [31m^[39m
+    [90m 23|[39m   it('空流水出空模型，而不是 undefined', () => {
+    [90m 24|[39m     const m = buildTraceModel([])
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[83/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/utils/schedule-notify.test.ts[2m [ src/utils/schedule-notify.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/utils/schedule-notify.test.ts:[2m25:1[22m[39m
+    [90m 23|[39m }
+    [90m 24|[39m
+    [90m 25|[39m describe('pickNotices', () => {
+    [90m   |[39m [31m^[39m
+    [90m 26|[39m   it('每天同一状态的新一次执行照样要通知（旧判据在这里静默）', () => {
+    [90m 27|[39m     const prev = [row({ last_status: 'completed', last_run_id: 'r-1' }…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[84/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/utils/tabStatus.test.ts[2m [ src/utils/tabStatus.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/utils/tabStatus.test.ts:[2m4:1[22m[39m
+    [90m  2|[39m import { tabStatusKind } from './tabStatus'
+    [90m  3|[39m
+    [90m  4|[39m describe('tabStatusKind：标签状态点判据', () => {
+    [90m   |[39m [31m^[39m
+    [90m  5|[39m   const base = { id: 's1' }
+    [90m  6|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[85/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/utils/task-structure-core.test.ts[2m [ src/utils/task-structure-core.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/utils/task-structure-core.test.ts:[2m34:1[22m[39m
+    [90m 32|[39m }
+    [90m 33|[39m
+    [90m 34|[39m describe('shouldOfferStructuring 启发式窄入口', () => {
+    [90m   |[39m [31m^[39m
+    [90m 35|[39m   it('短指令不浮现', () => {
+    [90m 36|[39m     expect(shouldOfferStructuring('重启 nginx')).toBe(false)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[86/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/utils/think-scrubber.test.ts[2m [ src/utils/think-scrubber.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/utils/think-scrubber.test.ts:[2m18:1[22m[39m
+    [90m 16|[39m }
+    [90m 17|[39m
+    [90m 18|[39m describe('StreamingThinkScrubber', () => {
+    [90m   |[39m [31m^[39m
+    [90m 19|[39m   it('擦洗单个完整 think 块，保留块外内容', () => {
+    [90m 20|[39m     expect(run(['A\n<think>\nB\n</think>\nC\nD'])).toBe('A\nC\nD')
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[87/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/utils/transfer-conflict.test.ts[2m [ src/utils/transfer-conflict.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/utils/transfer-conflict.test.ts:[2m14:1[22m[39m
+    [90m 12|[39m import { autoRename, buildTransferPlan } from '@/utils/transfer-confli…
+    [90m 13|[39m
+    [90m 14|[39m describe('autoRename', () => {
+    [90m   |[39m [31m^[39m
+    [90m 15|[39m   it('名字未被占用时原样返回', () => {
+    [90m 16|[39m     expect(autoRename('report.pdf', new Set(['other.pdf']))).toBe('rep…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[88/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/utils/transfer-error.test.ts[2m [ src/utils/transfer-error.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/utils/transfer-error.test.ts:[2m21:1[22m[39m
+    [90m 19|[39m const envelope = (msg: string) => `Error invoking remote method 'sftp:…
+    [90m 20|[39m
+    [90m 21|[39m describe('transfer-error-core 编解码', () => {
+    [90m   |[39m [31m^[39m
+    [90m 22|[39m   it('name 腿可往返，且只认契约内的码', () => {
+    [90m 23|[39m     expect(encodeTransferErrorName('STALLED')).toBe('TransferError:STA…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[89/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/utils/transfer-format.test.ts[2m [ src/utils/transfer-format.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/utils/transfer-format.test.ts:[2m39:1[22m[39m
+    [90m 37|[39m }
+    [90m 38|[39m
+    [90m 39|[39m describe('progressPercent / isIndeterminate', () => {
+    [90m   |[39m [31m^[39m
+    [90m 40|[39m   it('total 未知时百分比为 0，并由 isIndeterminate 决定画滑块而不是 0%', () => {
+    [90m 41|[39m     expect(progressPercent(item({ total: 0 }))).toBe(0)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[90/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/utils/transfer-groups.test.ts[2m [ src/utils/transfer-groups.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/utils/transfer-groups.test.ts:[2m50:1[22m[39m
+    [90m 48|[39m }
+    [90m 49|[39m
+    [90m 50|[39m describe('单行与分组的边界', () => {
+    [90m   |[39m [31m^[39m
+    [90m 51|[39m   it('无 groupId 的任务逐条平铺，不产生组头', () => {
+    [90m 52|[39m     const units = buildRenderUnits({ transfers: [t(), t()], tab: 'all'…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[91/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/transports/gateway-transport.test.ts[2m [ electron/transports/gateway-transport.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/transports/gateway-transport.test.ts:[2m121:1[22m[39m
+    [90m119|[39m   })
+    [90m120|[39m
+    [90m121|[39m describe('会话建立', () => {
+    [90m   |[39m [31m^[39m
+    [90m122|[39m   it('auth → helloOk，ready 拿到网关下发的角色与心跳周期', async () => {
+    [90m123|[39m     const { sess, peer } = pair()
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[92/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/utils/copy-cancel.test.ts[2m [ electron/utils/copy-cancel.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/utils/copy-cancel.test.ts:[2m17:1[22m[39m
+    [90m 15|[39m } from './copy-cancel'
+    [90m 16|[39m
+    [90m 17|[39m describe('copy-cancel（S5-11 本地复制协作式取消）', () => {
+    [90m   |[39m [31m^[39m
+    [90m 18|[39m   beforeEach(() => {
+    [90m 19|[39m     // 表是模块级的（主进程只有一份），逐条用例清干净再跑
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[93/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/utils/json-file-store.test.ts[2m [ electron/utils/json-file-store.test.ts ][22m
+[31m[1mError[22m: Vitest failed to find the runner. One of the following is possible:
+- "vitest" is imported directly without running "vitest" command
+- "vitest" is imported inside "globalSetup" (to fix this, use "setupFiles" instead, because "globalSetup" runs in a different context)
+- "vitest" is imported inside Vite / Vitest config file
+- Otherwise, it might be a Vitest bug. Please report it to https://github.com/vitest-dev/vitest/issues
+[39m
+[36m [2m❯[22m electron/utils/json-file-store.test.ts:[2m20:1[22m[39m
+    [90m 18|[39m let seq = 0
+    [90m 19|[39m
+    [90m 20|[39m beforeAll(() => {
+    [90m   |[39m [31m^[39m
+    [90m 21|[39m   dir = mkdtempSync(join(tmpdir(), 'jfs-test-'))
+    [90m 22|[39m })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[94/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/utils/path-guard.test.ts[2m [ electron/utils/path-guard.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/utils/path-guard.test.ts:[2m21:1[22m[39m
+    [90m 19|[39m const B = join('tree', 'b')
+    [90m 20|[39m
+    [90m 21|[39m describe('isCopyTargetSelfNested', () => {
+    [90m   |[39m [31m^[39m
+    [90m 22|[39m   it('粘贴进自身 = 拒绝', () => {
+    [90m 23|[39m     expect(isCopyTargetSelfNested(A, A)).toBe(true)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[95/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/utils/powershell-path.test.ts[2m [ electron/utils/powershell-path.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/utils/powershell-path.test.ts:[2m9:1[22m[39m
+    [90m  7|[39m import { resolvePowerShell } from './powershell-path'
+    [90m  8|[39m
+    [90m  9|[39m describe('resolvePowerShell', () => {
+    [90m   |[39m [31m^[39m
+    [90m 10|[39m   // 候选路径用与实现同一套 join 拼装：POSIX CI 上分隔符不同，硬编码反斜杠会误报
+    [90m 11|[39m   const root = process.env.SystemRoot || process.env.WINDIR || 'C:\\Wi…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[96/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/utils/resume-policy.test.ts[2m [ electron/utils/resume-policy.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/utils/resume-policy.test.ts:[2m19:1[22m[39m
+    [90m 17|[39m const meta = { etag: 'W/"abc"', lastModified: 'Wed, 01 Oct 2026 00:00:…
+    [90m 18|[39m
+    [90m 19|[39m describe('decideResume：能否把 .ckpart 当可信前缀', () => {
+    [90m   |[39m [31m^[39m
+    [90m 20|[39m   it('没有已下字节 → 就是从头下', () => {
+    [90m 21|[39m     expect(decideResume({ resumeFrom: 0, meta, status: 200, contentLen…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[97/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m electron/utils/tcp-latency.test.ts[2m [ electron/utils/tcp-latency.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m electron/utils/tcp-latency.test.ts:[2m6:1[22m[39m
+    [90m  4|[39m
+    [90m  5|[39m // 本机起一个临时监听端口，避免测试依赖外网：连得上/连不上/超时三条路径都可控。
+    [90m  6|[39m describe('tcpLatency', () => {
+    [90m   |[39m [31m^[39m
+    [90m  7|[39m   let server: net.Server
+    [90m  8|[39m   let port: number
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[98/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/components/agent/approval-trace-boundary.test.ts[2m [ src/components/agent/approval-trace-boundary.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/components/agent/approval-trace-boundary.test.ts:[2m32:1[22m[39m
+    [90m 30|[39m }
+    [90m 31|[39m
+    [90m 32|[39m describe('AI 界面不再渲染执行过程', () => {
+    [90m   |[39m [31m^[39m
+    [90m 33|[39m   it('消息里没有内联过程块，也没有内联审批卡', () => {
+    [90m 34|[39m     expect(messageItem).not.toContain('AgentTraceInline')
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[99/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/components/chat/message-shape-source.test.ts[2m [ src/components/chat/message-shape-source.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/components/chat/message-shape-source.test.ts:[2m20:1[22m[39m
+    [90m 18|[39m const LOCAL_MESSAGE_INTERFACE = /^[ \t]*(?:export[ \t]+)?interface[ \t…
+    [90m 19|[39m
+    [90m 20|[39m describe('消息形态只有一个定义来源（S9-22）', () => {
+    [90m   |[39m [31m^[39m
+    [90m 21|[39m   const files: Array<[string, string]> = [
+    [90m 22|[39m     ['MessageItem.vue', MessageItemSource],
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[100/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/components/home/HomeWorkspace.layout.test.ts[2m [ src/components/home/HomeWorkspace.layout.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/components/home/HomeWorkspace.layout.test.ts:[2m16:1[22m[39m
+    [90m 14|[39m const dialog = rawDialog.replace(/\r\n/g, '\n')
+    [90m 15|[39m
+    [90m 16|[39m describe('历史记录弹窗的版面与模态契约', () => {
+    [90m   |[39m [31m^[39m
+    [90m 17|[39m   it('任务台不再为历史面板预留右栏（抽屉让位规则已退场）', () => {
+    [90m 18|[39m     expect(workspace).not.toContain('is-history-open')
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[101/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/components/icons/file-type-icons.test.ts[2m [ src/components/icons/file-type-icons.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/components/icons/file-type-icons.test.ts:[2m25:1[22m[39m
+    [90m 23|[39m const TOKEN_REF = /^var\(--accent-[a-z0-9-]+\)$/
+    [90m 24|[39m
+    [90m 25|[39m describe('注册表条目本身', () => {
+    [90m   |[39m [31m^[39m
+    [90m 26|[39m   it('每个条目都有可绘制的 path、合法颜色和名字', () => {
+    [90m 27|[39m     for (const [key, icon] of Object.entries(FILE_TYPE_ICONS)) {
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[102/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/components/ssh/DockerView.guards.test.ts[2m [ src/components/ssh/DockerView.guards.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/components/ssh/DockerView.guards.test.ts:[2m65:1[22m[39m
+    [90m 63|[39m }
+    [90m 64|[39m
+    [90m 65|[39m describe('四类资源取数同构', () => {
+    [90m   |[39m [31m^[39m
+    [90m 66|[39m   it('工厂内 pin 住发起时的宿主与序号，只在仍新鲜时写回', () => {
+    [90m 67|[39m     const body = sliceUntil(ctxSrc, 'async function reload(): Promise<…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[103/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/components/ssh/NvGauge.test.ts[2m [ src/components/ssh/NvGauge.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/components/ssh/NvGauge.test.ts:[2m87:1[22m[39m
+    [90m 85|[39m }
+    [90m 86|[39m
+    [90m 87|[39m describe('NvGauge · 回归锁定：填充必须有取色 class', () => {
+    [90m   |[39m [31m^[39m
+    [90m 88|[39m   it('不传 kind 时填充 class 非空（缺陷复现点：曾产出 class=""）', async () => {
+    [90m 89|[39m     expect(fill(await render({ value: 87.4 })).cls).not.toBe('')
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[104/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/components/ssh/RemoteAudit.guards.test.ts[2m [ src/components/ssh/RemoteAudit.guards.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/components/ssh/RemoteAudit.guards.test.ts:[2m34:1[22m[39m
+    [90m 32|[39m }
+    [90m 33|[39m
+    [90m 34|[39m describe('批量下发', () => {
+    [90m   |[39m [31m^[39m
+    [90m 35|[39m   const run = sliceFunction(bulkSrc, 'async function run() {')
+    [90m 36|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[105/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/components/ssh/SftpFileEditor.save-target.test.ts[2m [ src/components/ssh/SftpFileEditor.save-target.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/components/ssh/SftpFileEditor.save-target.test.ts:[2m23:1[22m[39m
+    [90m 21|[39m }
+    [90m 22|[39m
+    [90m 23|[39m describe('SftpFileEditor 保存落点（S5-16）', () => {
+    [90m   |[39m [31m^[39m
+    [90m 24|[39m   const saveBody = sliceFunction('async function save(): Promise<void>…
+    [90m 25|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[106/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/components/ssh/TermSearchBar.accent.guards.test.ts[2m [ src/components/ssh/TermSearchBar.accent.guards.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/components/ssh/TermSearchBar.accent.guards.test.ts:[2m9:1[22m[39m
+    [90m  7|[39m import source from './TermSearchBar.vue?raw'
+    [90m  8|[39m
+    [90m  9|[39m describe('TermSearchBar 搜索高亮跟强调色', () => {
+    [90m   |[39m [31m^[39m
+    [90m 10|[39m   it('装饰色从 accentSearchColors() 派生', () => {
+    [90m 11|[39m     expect(source).toContain('accentSearchColors()')
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[107/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/components/common/command-palette-pages.test.ts[2m [ src/components/common/command-palette-pages.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/components/common/command-palette-pages.test.ts:[2m37:1[22m[39m
+    [90m 35|[39m }
+    [90m 36|[39m
+    [90m 37|[39m describe('页面清单同源', () => {
+    [90m   |[39m [31m^[39m
+    [90m 38|[39m   it('命令面板的页面条目 = 快捷键表的页面集合', () => {
+    [90m 39|[39m     expect(new Set(pageKeysInPalette())).toEqual(new Set(PAGE_SHORTCUT…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[108/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/components/common/settings-nav-icons.test.ts[2m [ src/components/common/settings-nav-icons.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/components/common/settings-nav-icons.test.ts:[2m17:1[22m[39m
+    [90m 15|[39m const entries = Object.entries(icons) as [string, Component][]
+    [90m 16|[39m
+    [90m 17|[39m describe('设置导航图标', () => {
+    [90m   |[39m [31m^[39m
+    [90m 18|[39m   it('七个图标全部是渲染函数组件，不依赖运行时模板编译', () => {
+    [90m 19|[39m     expect(entries).toHaveLength(7)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[109/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/components/common/SettingsDialog.focus.test.ts[2m [ src/components/common/SettingsDialog.focus.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/components/common/SettingsDialog.focus.test.ts:[2m13:1[22m[39m
+    [90m 11|[39m const src = raw.replace(/\r\n/g, '\n')
+    [90m 12|[39m
+    [90m 13|[39m describe('M-2 设置弹窗焦点', () => {
+    [90m   |[39m [31m^[39m
+    [90m 14|[39m   it('弹窗有可访问名称与可聚焦容器', () => {
+    [90m 15|[39m     expect(src).toContain('aria-labelledby="settings-dialog-title"')
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[110/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/views/ssh/SshView.terminal-entry.test.ts[2m [ src/views/ssh/SshView.terminal-entry.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/views/ssh/SshView.terminal-entry.test.ts:[2m22:1[22m[39m
+    [90m 20|[39m const nav = strip(navRaw)
+    [90m 21|[39m
+    [90m 22|[39m describe('B-1 终端入口', () => {
+    [90m   |[39m [31m^[39m
+    [90m 23|[39m   it('零会话默认落在远程管理页，旧启动页已删除', () => {
+    [90m 24|[39m     expect(sshView).not.toContain('class="term-empty"')
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[111/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/views/ssh/tab-overflow.guards.test.ts[2m [ src/views/ssh/tab-overflow.guards.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/views/ssh/tab-overflow.guards.test.ts:[2m6:1[22m[39m
+    [90m  4|[39m import menu from '@/components/ssh/TabOverflowMenu.vue?raw'
+    [90m  5|[39m
+    [90m  6|[39m describe('标签溢出菜单', () => {
+    [90m   |[39m [31m^[39m
+    [90m  7|[39m   it('SshView 以 ResizeObserver 判定溢出并挂载菜单', () => {
+    [90m  8|[39m     expect(sshView).toContain('ResizeObserver')
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[112/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/views/ssh/terminal-page-polish.test.ts[2m [ src/views/ssh/terminal-page-polish.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/views/ssh/terminal-page-polish.test.ts:[2m21:1[22m[39m
+    [90m 19|[39m const remoteTerminal = strip(remoteTerminalRaw)
+    [90m 20|[39m
+    [90m 21|[39m describe('终端页轻量精修', () => {
+    [90m   |[39m [31m^[39m
+    [90m 22|[39m   it('顶栏按 SFTP → 终端（含远程管理）→ 监控 排列', () => {
+    [90m 23|[39m     // 合并方案 A：原「远程」入口已并入「终端」，不再有独立按钮
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[113/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/components/settings/panels/panels-audit-fixes.test.ts[2m [ src/components/settings/panels/panels-audit-fixes.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/components/settings/panels/panels-audit-fixes.test.ts:[2m11:1[22m[39m
+    [90m  9|[39m const appearance = strip(appearanceRaw)
+    [90m 10|[39m
+    [90m 11|[39m describe('Models 空态与主操作', () => {
+    [90m   |[39m [31m^[39m
+    [90m 12|[39m   it('「添加模型」是纯文字按钮，不配 ＋ 装饰图标', () => {
+    [90m 13|[39m     const button = models.match(/<button class="btn btn-primary btn-sm…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[114/115]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/components/ssh/docker/DockerContainerDetail.guards.test.ts[2m [ src/components/ssh/docker/DockerContainerDetail.guards.test.ts ][22m
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading 'config')[39m
+[36m [2m❯[22m src/components/ssh/docker/DockerContainerDetail.guards.test.ts:[2m21:1[22m[39m
+    [90m 19|[39m }
+    [90m 20|[39m
+    [90m 21|[39m describe('三条取数腿的陈旧写入', () => {
+    [90m   |[39m [31m^[39m
+    [90m 22|[39m   it('inspect 用序号校验后才写回', () => {
+    [90m 23|[39m     const body = sliceFunction('async function loadInspect(): Promise<…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[115/115]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m115 failed[39m[22m[90m (115)[39m
+[2m      Tests [22m [2mno tests[22m
+[2m   Start at [22m 22:45:50
+[2m   Duration [22m 3.93s[2m (worker 94%, environment 6%)[22m
+
+[2m    Isolate [22m [33m115 workers spawned[39m[2m · ~163ms startup each (spawn + environment, per file)[22m
+[2m            [22m [2mat least ~825ms faster with [22m[33misolate: false[39m[2m — reuses workers across files instead of one per file[22m
+
+exit=1

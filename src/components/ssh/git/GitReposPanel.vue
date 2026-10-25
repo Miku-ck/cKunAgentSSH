@@ -143,6 +143,7 @@ import { useSSHStore, type TerminalSession } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
 import { unwrapIpcErrorEnvelope } from '@/api/client'
+import { sshSessionIo, writeAfterShellReady } from '@/utils/ssh-handshake'
 import { useGithubAccelStore } from '@/stores/github-accel'
 import GitRepoDetailPanel from './GitRepoDetailPanel.vue'
 import {
@@ -746,12 +747,16 @@ async function onTerm(row: RepoRow): Promise<void> {
     const connId = session?.connectionId
     const api = window.electronAPI
     if (!session || !connId || !api) { toast.error('远端会话不可用'); return }
-    // DockerView.doExec 同款：新开一条会话（不占用用户正在敲的 shell），等登录
-    // shell 就绪再写 cd；早写会被登录流程吞掉
+    // DockerView.doExec 同款：新开一条会话（不占用用户正在敲的 shell），确认式
+    // 握手（utils/ssh-handshake）等登录 shell 真正就绪再写 cd —— 早写会被登录
+    // 流程吞掉，固定延时在慢主机（横幅/profile 超 500ms）上纯靠猜；探针超时
+    // 回落为固定延时照常写入并提示，握手内保留 500ms 地板等新标签挂载订阅
     const newId = await sshStore.connectRemote(connId, 80, 24)
     emit('exec-terminal', newId)
-    await new Promise(r => setTimeout(r, 500))
-    await api.sshWrite(newId, `cd ${shSingleQuote(row.path)}\r`)
+    const io = sshSessionIo(newId)
+    if (!io) throw new Error('Electron API 未就绪，无法写入终端') // api 已在上文校验
+    const { confirmed } = await writeAfterShellReady(io, `cd ${shSingleQuote(row.path)}\r`)
+    if (!confirmed) toast.warning('远程主机登录较慢，命令已按固定延时写入；若终端未见执行请重试')
   } catch (e) {
     toast.error(errMsg(e, '打开终端失败'))
   }

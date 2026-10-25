@@ -42,7 +42,7 @@ export interface GithubAccelConfig {
    * 关闭时还原（previousValue 为 null 表示原本没有规则，关闭即删除）。
    * 「当前是否激活」以 git config 实查为准，这里只存接管凭证。
    */
-  gitBackup: { prefix: string; previousValue: string | null } | null
+  gitBackup: { prefix: string; previousValue: string | null; pushInsteadOfAdded?: boolean } | null
   /** 一键加速使用的镜像前缀（记住上次选择） */
   lastProxyPrefix?: string
 }
@@ -299,6 +299,18 @@ export function isProxyProbeOk(status: number): boolean {
   return Number.isFinite(status) && status >= 200 && status < 300
 }
 
+/**
+ * 代理探测的完整判据：2xx 之外还要求响应体不是 HTML。部分"死而不僵"的镜像对任意
+ * URL 都回 200 广告/错误页（text/html）——只看状态码会把它们误判为可用并推上
+ * 「最快」榜首，下载走过去拿到的却是垃圾页。PROBE_TARGET 是 raw 文本文件，
+ * 合规镜像应透传 text/plain 类型。
+ */
+export function isProxyProbeOkWithContentType(status: number, contentType: string | undefined): boolean {
+  if (!isProxyProbeOk(status)) return false
+  const ct = (contentType || '').toLowerCase()
+  return !ct.includes('text/html')
+}
+
 // ─── git url.insteadOf 全局改写 ───
 
 export const GITHUB_BASE = 'https://github.com/'
@@ -308,9 +320,9 @@ export function insteadOfSubsection(prefix: string): string {
   return `${prefix}${GITHUB_BASE}`
 }
 
-/** 组装 git config --global 读取参数（列出全部 url.*.insteadof） */
+/** 组装 git config --global 读取参数（列出全部 url.*.insteadof 与 pushinsteadof） */
 export function buildGitReadArgs(): string[] {
-  return ['config', '--global', '--get-regexp', '^url\\..*\\.insteadof$']
+  return ['config', '--global', '--get-regexp', '^url\\..*\\.(push)?insteadof$']
 }
 
 export function buildGitSetArgs(prefix: string): string[] {
@@ -326,6 +338,20 @@ export function buildGitUnsetArgs(prefix: string): string[] {
   return buildGitUnsetSubsectionArgs(insteadOfSubsection(prefix))
 }
 
+/**
+ * push 直连保护：insteadOf 对 fetch 与 push 都生效（git 实测确认），HTTPS remote 的
+ * push 会被一并改写到只读镜像而必然失败。自指 pushInsteadOf（github.com → github.com）
+ * 对 push 的优先级高于 insteadOf（git 文档语义），把 push 改写"抵消"为直连原址；
+ * fetch 不受影响，继续走镜像。
+ */
+export function buildGitPushKeepArgs(): string[] {
+  return ['config', '--global', `url.${GITHUB_BASE}.pushInsteadOf`, GITHUB_BASE]
+}
+
+export function buildGitPushKeepUnsetArgs(): string[] {
+  return ['config', '--global', '--unset', `url.${GITHUB_BASE}.pushInsteadOf`]
+}
+
 /** 还原用户原有规则（backup.previousValue 非空时调用）：把子节改回旧前缀 */
 export function buildGitRestoreArgs(previousSubsection: string): string[] {
   return ['config', '--global', `url.${previousSubsection}.insteadOf`, GITHUB_BASE]
@@ -338,9 +364,11 @@ export interface InsteadOfEntry {
   subsection: string
   /** 被替换的地址基（value） */
   value: string
+  /** pushInsteadOf 条目（只改写 push 目的地）；未标记 = insteadOf（fetch 与 push 都改写） */
+  push?: boolean
 }
 
-/** 解析 `git config --global --get-regexp ^url\..*\.insteadof$` 的输出（每行 "key value"） */
+/** 解析 `git config --global --get-regexp ^url\..*\.(push)?insteadof$` 的输出（每行 "key value"） */
 export function parseGitInsteadOf(stdout: string): InsteadOfEntry[] {
   const out: InsteadOfEntry[] = []
   for (const line of (stdout || '').split(/\r?\n/)) {
@@ -350,16 +378,31 @@ export function parseGitInsteadOf(stdout: string): InsteadOfEntry[] {
     if (sp === -1) continue
     const key = t.slice(0, sp)
     const value = t.slice(sp + 1).trim()
-    const m = /^url\.(.+)\.insteadof$/i.exec(key)
+    // pushinsteadof 先判（子节里可能含 "push" 字样，靠 .insteadof$ 后缀区分两者）
+    const pm = key.match(/^url\.(.+)\.pushinsteadof$/i)
+    if (pm) {
+      out.push({ key, subsection: pm[1], value, push: true })
+      continue
+    }
+    const m = key.match(/^url\.(.+)\.insteadof$/i)
     if (!m) continue
     out.push({ key, subsection: m[1], value })
   }
   return out
 }
 
-/** 从条目表里找"对 github.com 生效"的那条（value === GITHUB_BASE），没有返回 null */
+/** 从条目表里找"对 github.com 生效"的 insteadOf 条目（value === GITHUB_BASE），没有返回 null */
 export function findGithubInsteadOf(entries: InsteadOfEntry[]): InsteadOfEntry | null {
-  return entries.find(e => e.value === GITHUB_BASE) ?? null
+  return entries.find(e => !e.push && e.value === GITHUB_BASE) ?? null
+}
+
+/**
+ * 已存在的 github.com push 直连规则（pushInsteadOf value === GITHUB_BASE）。
+ * 用户的自建规则（如把 push 重定向到 ssh）也算 —— 它已经决定了 push 去向，
+ * 我们的自指规则不应叠加（同 value 双匹配的胜者未定义）。
+ */
+export function findGithubPushInsteadOf(entries: InsteadOfEntry[]): InsteadOfEntry | null {
+  return entries.find(e => e.push && e.value === GITHUB_BASE) ?? null
 }
 
 // ─── ~/.ssh/config 托管块（github.com → ssh.github.com:443） ───

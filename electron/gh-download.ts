@@ -34,6 +34,8 @@ export interface DownloadStatus {
 
 export interface DownloadHandle {
   status: DownloadStatus
+  /** 发起时的 URL（同 URL 去重判据） */
+  url: string
   cancel: () => void
 }
 
@@ -146,6 +148,11 @@ export class GhDownloadManager {
   /** 发起下载：返回初始状态（含 id） */
   async start(url: string, opts?: { gunzip?: boolean }): Promise<DownloadStatus> {
     this.assertUrl(url)
+    // 同一 URL 已有在途任务时拒绝：两路并发按 'a' 追加写同一个 .ckpart，字节交错
+    // 必然损坏，进度统计也互相踩。文件名相同但 URL 不同不受影响（partialPath 带指纹）。
+    if ([...this.active.values()].some(h => h.url === url && h.status.state === 'downloading')) {
+      throw new Error('该文件已在下载中，请在「下载任务」里查看进度')
+    }
     const id = genId()
     const status: DownloadStatus = {
       id,
@@ -156,6 +163,7 @@ export class GhDownloadManager {
     }
     const handle: DownloadHandle = {
       status,
+      url,
       cancel: () => this.cancel(id),
     }
     this.active.set(id, handle)

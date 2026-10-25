@@ -16,7 +16,7 @@
         </div>
         <div class="hint">
           一键开关三项措施；hosts 写入与移除各弹一次 UAC。
-          git 加速只代理读取（clone / fetch / 下载），HTTPS push 不走镜像，请用 SSH 443。
+          git 加速只代理读取（clone / fetch / 下载），push 会自动直连 GitHub 不走镜像；git@ 推拉建议同时开启 SSH 443 绕开被限速的 22 端口。
         </div>
         <div v-if="masterNote" class="hint" :class="{ warn: masterNoteWarn }">{{ masterNote }}</div>
 
@@ -114,7 +114,7 @@
         <!-- git 全局加速 -->
         <div class="measure-row">
           <svg class="m-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
-          <span class="measure-name" title="开启后 git clone / fetch / 下载按原地址自动走镜像；改写的是全局 git 配置，关闭时还原。只代理读取，HTTPS push 不走镜像">git 全局加速</span>
+          <span class="measure-name" title="开启后 git clone / fetch / 下载按原地址自动走镜像；改写的是全局 git 配置，关闭时还原。只代理读取：同步写入 pushInsteadOf 保证 push 直连，HTTPS push 不受镜像影响">git 全局加速</span>
           <span class="title-chip" :class="gitChip.cls">{{ gitChip.text }}</span>
           <span v-if="accel.git?.active && !accel.git.managed" class="title-chip warn" title="当前 insteadOf 规则不是本应用写入的，关闭加速不会移除它">非本应用写入</span>
           <span class="m-detail mono">{{ gitDetailText }}</span>
