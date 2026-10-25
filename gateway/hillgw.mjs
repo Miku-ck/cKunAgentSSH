@@ -17,6 +17,13 @@
  * 前置：服务端证书与私钥由运维提供（openssl 或既有 PKI）。Node 的 crypto 只能**解析**
  * X.509、不能签发，所以这里不内置 CA —— 客户端证书（mTLS 第二因子）因此不在本版，
  * V1 的身份面是「TLS 通道内口令」。
+ *
+ * 口令存储取舍（登记在案）：users[].passwordSha256 是**无盐 SHA-256** —— 配置一旦
+ * 泄露可被离线爆破，同口令的账户哈希相同、可被横向比对。仍选它的理由：V1 刻意保持
+ * 单文件零配置依赖，--hash 在运维本机离线生成；而 salt 本身也得明文存进同一份配置，
+ * 防的只是预计算/彩虹表，挡不住定向爆破。缓解靠配置文件的权限纪律（root 属主 0600）
+ * 与强口令；将来若升级 KDF（node:crypto 自带 scrypt），--hash 与 doAuth 的比对两侧
+ * 必须同步改，否则旧配置全部失效。
  */
 import * as tls from 'node:tls'
 import * as net from 'node:net'
@@ -233,7 +240,8 @@ export function ipDenied(ip) {
 const isPort = v => Number.isInteger(v) && v >= 1 && v <= 65535
 
 /** ports: [5432, "8000-8100", "*"] */
-function portAllowed(spec, port) {  if (spec === '*') return true
+function portAllowed(spec, port) {
+  if (spec === '*') return true
   if (typeof spec === 'number') return spec === port
   const m = /^(\d+)-(\d+)$/.exec(String(spec))
   if (m) return port >= Number(m[1]) && port <= Number(m[2])
@@ -254,6 +262,37 @@ function log(sess, level, msg) {
   const tag = `${new Date().toISOString().slice(11, 23)} ${sess?.sid || '-'.padEnd(6)} ${level.padEnd(5)}`
   console.log(`${tag} ${msg}`)
 }
+
+/**
+ * 每账户认证失败限速。失败会话当场被 kill，但攻击者可以海量新建连接逐连接试口令，
+ * 所以计数必须落在会话之外、按账户聚合。连错达阈值锁一小段时间；单次手误远够不着
+ * 阈值，网络抖动后重连的真实用户不受影响；成功登录即清零。
+ */
+const AUTH_FAIL_LOCK_AFTER = 5
+const AUTH_FAIL_LOCK_MS = 30_000
+const AUTH_FAIL_WINDOW_MS = 10 * 60_000 // 计数只在窗口内累计，久远的一次手误不跟随
+const AUTH_FAIL_MAP_MAX = 4096          // 防未认证对端用随机用户名刷爆这张表
+const authFails = new Map()             // user → { n, last, lockedUntil }
+
+function recordAuthFail(user, atMs) {
+  const t = atMs ?? now()
+  if (authFails.size >= AUTH_FAIL_MAP_MAX) {
+    for (const [k, v] of authFails) {
+      if (t - v.last > AUTH_FAIL_WINDOW_MS && v.lockedUntil <= t) authFails.delete(k)
+    }
+    // 过期清理后仍满载（高频喷洒）就丢最老的：限速表只服务「最近」的攻击者
+    while (authFails.size >= AUTH_FAIL_MAP_MAX) authFails.delete(authFails.keys().next().value)
+  }
+  const f = authFails.get(user) || { n: 0, last: 0, lockedUntil: 0 }
+  if (t - f.last > AUTH_FAIL_WINDOW_MS) f.n = 0
+  f.n += 1
+  f.last = t
+  if (f.n >= AUTH_FAIL_LOCK_AFTER) f.lockedUntil = t + AUTH_FAIL_LOCK_MS
+  authFails.set(user, f)
+}
+
+/** 全部存活会话：SIGTERM 停机时 bye() 要逐个打死已建立的连接（见 start 里的 bye） */
+const sessions = new Set()
 
 class Channel {
   constructor(sess, chan) {
@@ -347,6 +386,7 @@ class Session {
     this.decoder = createDecoder('even', c => this.channels.has(c))
     this.slowChannels = new Set() // 正压着会话读的通道
     this.pingTimer = null
+    sessions.add(this)
     sock.on('data', chunk => this.onBytes(chunk))
     sock.on('error', err => this.kill(`socket 错误: ${err.message}`))
     sock.on('close', () => this.kill('客户端已断开'))
@@ -414,14 +454,13 @@ class Session {
     if (!this.user && !PRE_AUTH.has(f.type)) return this.kill(`未认证即发 ${f.type}，会话作废`)
     switch (f.type) {
       case 'hello': {
-        // payload 由对端给，`null` 是合法 JSON（decodePayload 只在空字节时抛）
-        const h = f.payload || {}
+        const h = f.payload
         this.hello = h
         log(this, 'INFO', `HELLO ${h.clientVersion || '?'} dev=${h.deviceName || '?'} 自报=${h.selfReportedUser || '-'}`)
         return
       }
       case 'auth':
-        if (!f.payload) return this.kill('auth 帧 payload 为空')
+        // decodePayload 已把空字节/null/非对象全拒成协议错误，这里的 payload 必是对象
         return this.doAuth(f.payload)
       case 'ping':
         return this.send('pong', GLOBAL_CHAN, { seq: f.payload?.seq })
@@ -463,13 +502,23 @@ class Session {
 
   doAuth(p) {
     if (!this.user) {
+      // 键先归一：payload 由对端给，user 可能不是字符串，Map 的键必须有界
+      const ukey = typeof p.user === 'string' ? p.user : '-'
+      const f = authFails.get(ukey)
+      if (f && f.lockedUntil > now()) {
+        log(this, 'BAD', `AUTH 限速锁定中 user=${ukey}`)
+        this.send('openErr', GLOBAL_CHAN, { code: 'malformed-request', message: '失败次数过多，请稍后再试' })
+        return this.kill('认证限速锁定')
+      }
       const rec = (this.cfg.users || []).find(u => u.user === p.user)
       const ok = rec && timingSafeHex(sha256hex(p.password || ''), rec.passwordSha256 || '')
       if (!ok) {
+        recordAuthFail(ukey)
         log(this, 'BAD', `AUTH 失败 user=${p.user || '-'}`)
         this.send('openErr', GLOBAL_CHAN, { code: 'malformed-request', message: '用户名或口令不正确' })
         return this.kill('认证失败')
       }
+      authFails.delete(ukey)
       this.user = rec.user
       this.role = rec.role
     }
@@ -492,7 +541,8 @@ class Session {
     let seq = 0
     this.pingTimer = setInterval(() => {
       if (this.dead) return
-      // 心跳兼做 NAT 空闲保活；连续 3 次无 PONG 判死（§1.2）
+      // 心跳兼做 NAT 空闲保活；missedPong 在发拍前自增，>3 即已连发 3 拍
+      // PING 无一应答、当前是第 4 拍 —— 此时判死（§1.2）
       if (++this.missedPong > 3) return this.kill('连续 3 次 PING 无 PONG')
       this.send('ping', GLOBAL_CHAN, { seq: ++seq })
     }, sec * 1000)
@@ -587,12 +637,15 @@ class Session {
       sock.on('error', () => ch.close(true))
       sock.on('close', () => ch.close(false))
     })
+    // 登记必须先于 listen：'listening' 在下一个 nextTick 才发，期间客户端一个坏帧/
+    // goaway 就能在同一拍里触发 kill —— 等回调里再登记，kill 就扫不到这个 server，
+    // 端口被占用到进程退出。listen 失败（EADDRINUSE 等）由 error 监听器摘除。
+    this.listeners.set(key, server)
     server.on('error', err => {
       this.listeners.delete(key)
       this.send('openErr', GLOBAL_CHAN, { code: 'target-unreachable', message: `绑定 ${key} 失败：${err.code || err.message}` })
     })
     server.listen(p.bindPort, p.bindHost, () => {
-      this.listeners.set(key, server)
       this.send('bindOk', GLOBAL_CHAN)
       log(this, 'OK', `BIND ${key}`)
     })
@@ -626,8 +679,12 @@ class Session {
   kill(reason) {
     if (this.dead) return
     this.dead = true
+    sessions.delete(this)
     clearInterval(this.pingTimer)
     for (const ch of [...this.channels.values()]) ch.close(true)
+    // 这张表在 listen 发起前就已登记（doBind），所以 close 覆盖 listen 在途的 server：
+    // 没 handle 时 close() 不抛、也不拦后续绑定（Node 在解析完成时检查已关闭），
+    // 有 handle 时直接释放端口。实测 Node ≥20 两种状态都能正确回收。
     for (const s of this.listeners.values()) { try { s.close() } catch { /* 已关 */ } }
     this.listeners.clear()
     try { this.sock.destroy() } catch { /* 已断开 */ }
@@ -678,7 +735,16 @@ function start(cfgPath) {
   })
   const bye = (sig) => {
     console.log(`${sig}：停止接受新连接`)
-    server.close(() => process.exit(0))
+    let done = false
+    const finish = () => { if (!done) { done = true; process.exit(0) } }
+    server.close(() => finish())
+    // server.close 只停监听、等全部已建立连接自己断完：有存活会话时回调永远不来
+    // （实测 3s 不回调），SIGTERM 会挂到 systemd TimeoutStopSec 转 SIGKILL。
+    // 网关是无状态中继、没有落盘可截断，直接打死已建立的会话；
+    // TLS 握手中、尚未成为 Session 的连接拿不到句柄，交给下面的定时强退兜底。
+    for (const s of [...sessions]) s.kill(`${sig} 停机`)
+    const force = setTimeout(finish, 3000)
+    force.unref?.()
   }
   process.on('SIGINT', () => bye('SIGINT'))
   process.on('SIGTERM', () => bye('SIGTERM'))
@@ -739,6 +805,7 @@ async function selftest() {
   fail += await selftestLoopback()
   fail += await selftestUnauth()
   fail += await selftestBadPayload()
+  fail += await selftestBindRace()
   console.log(fail ? `\n${fail} 项不通过` : '\n全部通过')
   process.exit(fail ? 1 : 0)
 }
@@ -895,6 +962,52 @@ async function selftestBadPayload() {
     while (!closed && Date.now() - t0 < 1500) await new Promise(r => setTimeout(r, 10))
     fail += say(closed && sess.dead, 'auth 带 null payload 只作废会话，不打死网关进程')
   } finally {
+    cli.destroy()
+    gwSide.close()
+  }
+  return fail
+}
+
+/**
+ * BIND 与 kill 的同拍竞态：BIND 帧和 GOAWAY 帧塞进同一个 TCP 块，解码器两帧一起交出，
+ * onFrame 先跑 doBind（listen 对数字 host 是同步绑端口，'listening' 要等下一个
+ * nextTick），随后 GOAWAY 在同一拍触发 kill —— 监听登记若晚到一个 tick，kill 就
+ * 扫不到这个 server，端口被占用到进程退出。判据：会话死后端口必须立刻能被复用。
+ */
+async function selftestBindRace() {
+  const cfg = {
+    users: [{ user: 't', passwordSha256: sha256hex('pw'), role: 'r' }],
+    roles: { r: { allow: [] } },
+    heartbeatSec: 3600,
+  }
+  const bindPort = await freePort()
+  let sess = null
+  const gwSide = net.createServer(sock => { sess = new Session(sock, cfg, 'selftest') })
+  await new Promise(r => gwSide.listen(0, '127.0.0.1', r))
+  const cli = net.connect(gwSide.address().port, '127.0.0.1')
+  await new Promise(r => cli.once('connect', r))
+  while (!sess) await new Promise(r => setTimeout(r, 10))
+  const peer = makePeer(cli, 'odd')
+  let fail = 0
+  try {
+    peer.send('auth', GLOBAL_CHAN, { user: 't', password: 'pw' })
+    fail += say(!!(await peer.until(f => f.type === 'helloOk')), 'BIND 竞态 前置 AUTH')
+    cli.write(Buffer.concat([
+      encodeFrame('bind', GLOBAL_CHAN, { bindHost: '127.0.0.1', bindPort, targetHost: 'svc.local', targetPort: 6379 }),
+      encodeFrame('goaway', GLOBAL_CHAN, { reason: 'race' }),
+    ]))
+    const t0 = Date.now()
+    while (!sess.dead && Date.now() - t0 < 1500) await new Promise(r => setTimeout(r, 10))
+    fail += say(sess.dead && sess.listeners.size === 0, 'BIND+GOAWAY 同拍 kill，监听登记表已清空')
+    // 端口必须已释放：能重新绑上去才算数（泄漏在这里表现为 EADDRINUSE）
+    const freed = await new Promise(resolve => {
+      const probe = net.createServer()
+      probe.once('error', () => resolve(false))
+      probe.listen(bindPort, '127.0.0.1', () => probe.close(() => resolve(true)))
+    })
+    fail += say(freed, 'BIND listen 在途被 kill，端口未泄漏（立即复用成功）')
+  } finally {
+    sess?.kill('selftest 收尾')
     cli.destroy()
     gwSide.close()
   }
