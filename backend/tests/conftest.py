@@ -58,6 +58,9 @@ def _harden_socketpair():
                 lsock.listen(1)
                 lsock.settimeout(5)
                 csock = socket.socket(family, type, proto)
+                # connect 同样要超时：本机实测回环 connect 的 SYN 会被静默丢弃，
+                # 阻塞模式死等数分钟（py-spy 栈确认），只给 accept 加超时挡不住。
+                csock.settimeout(5)
                 csock.connect(lsock.getsockname())
                 ssock, _ = lsock.accept()
                 csock.settimeout(None)
