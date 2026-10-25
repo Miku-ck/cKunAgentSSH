@@ -81,7 +81,16 @@ function flushRender(): void {
 render()
 
 watch(() => props.content, (v) => {
-  if (v === '') return
+  if (v === '') {
+    // 消息重置/撤销会把 content 清空：这里若直接早退，renderedHtml 与稳定前缀
+    // 缓存都残留上一条内容，复用组件实例的调用方（未按 msg.id 重挂载）会看到残影。
+    // 同步清空即回到挂载初态（renderMarkdown('') 本就返回 ''，缓存不变量仍成立），
+    // 也无须排渲染 —— 空内容没有可渲染的东西。
+    renderedHtml.value = ''
+    _cachedStable = ''
+    _cachedStableHtml = ''
+    return
+  }
   scheduleRender()
 })
 
