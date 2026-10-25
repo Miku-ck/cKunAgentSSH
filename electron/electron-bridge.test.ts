@@ -9,7 +9,7 @@
  * 同时钉住 S0-11：ping 帧由 bridge_relay 就地应答，dispatch 没有也不该有这一支
  * （原先 docstring 与 BridgeOp 都声明了一个不存在的 ping op）。
  */
-import { describe, it, expect, vi, type Mock } from 'vitest'
+import { beforeEach, describe, it, expect, vi, type Mock } from 'vitest'
 
 vi.mock('electron', () => ({
   BrowserWindow: class {},
@@ -18,10 +18,14 @@ vi.mock('electron', () => ({
     getAppPath: () => '/tmp/ckun-agent-ssh-test',
   },
 }))
-// 桥接日志走 fs.appendFile，测试里不往磁盘写
-vi.mock('fs', () => ({
-  appendFile: (_p: string, _d: string, cb: () => void) => cb && cb(),
+// 桥接日志走 fs 异步 API，测试里不往磁盘写；stat 的返回大小由用例控制（轮转判定）
+const fsMock = vi.hoisted(() => ({
+  appendFile: vi.fn((_p: unknown, _d: unknown, cb?: (e: Error | null) => void) => cb?.(null)),
+  stat: vi.fn((_p: unknown, cb: (e: Error | null, stats?: { size: number }) => void) => cb(null, { size: 0 })),
+  rename: vi.fn((_a: unknown, _b: unknown, cb?: (e: Error | null) => void) => cb?.(null)),
+  writeFile: vi.fn((_p: unknown, _d: unknown, cb?: (e: Error | null) => void) => cb?.(null)),
 }))
+vi.mock('fs', () => fsMock)
 
 import { ElectronBridge } from './electron-bridge'
 import { SSHError } from './ssh-error'
@@ -118,5 +122,60 @@ describe('ssh_disconnect 的所有权（S0-06）', () => {
     const r = await bridge.dispatch('ssh_disconnect', { sessionId: 'sftp-ffff0000-7' })
     expect(r.status).toBe(200)
     expect(disconnect).toHaveBeenCalledWith('sftp-ffff0000-7')
+  })
+})
+
+/**
+ * S-E2 回归：electron-bridge.log 只增不滚。
+ *
+ * bridgeLog 追加前查文件大小，超上限（1MB）轮转为 .old（同名覆盖）再从头写 ——
+ * 保尾策略：最近错误永远在主文件里可见，上一轮内容在 .old 可回看，优于清空。
+ * 轮转整段容错：stat 失败照常追加，不影响 dispatch 主链路。
+ */
+describe('桥接日志轮转（S-E2）', () => {
+  /** 触发一次 bridgeLog：dispatch 里 ssh_exec 抛错走 catch → bridgeLog */
+  async function logOneLine(): Promise<void> {
+    const exec = vi.fn().mockRejectedValue(new Error('rotate-probe'))
+    const bridge = new ElectronBridge({ sshManager: { execCommandWithExitCode: exec } as never, sshStore: undefined })
+    await bridge.dispatch('ssh_exec', { sshSessionId: 'ssh-1', command: 'ls' })
+  }
+
+  beforeEach(() => {
+    fsMock.appendFile.mockClear()
+    fsMock.stat.mockClear()
+    fsMock.rename.mockClear()
+    fsMock.writeFile.mockClear()
+    fsMock.stat.mockImplementation(((_p: unknown, cb: (e: Error | null, stats?: { size: number }) => void) => cb(null, { size: 0 })) as never)
+  })
+
+  it('未超限：照常 appendFile，不触发轮转', async () => {
+    await logOneLine()
+    expect(fsMock.appendFile).toHaveBeenCalledTimes(1)
+    expect(fsMock.appendFile.mock.calls[0]![0]).toContain('electron-bridge.log')
+    expect(String(fsMock.appendFile.mock.calls[0]![1])).toContain('rotate-probe')
+    expect(fsMock.rename).not.toHaveBeenCalled()
+  })
+
+  it('超上限：轮转为 .old（rename）并整行写入新文件，不再 append', async () => {
+    fsMock.stat.mockImplementation(((_p: unknown, cb: (e: Error | null, stats?: { size: number }) => void) =>
+      cb(null, { size: 1024 * 1024 })) as never)
+    await logOneLine()
+    expect(fsMock.rename).toHaveBeenCalledTimes(1)
+    expect(fsMock.rename.mock.calls[0]![0]).toContain('electron-bridge.log')
+    expect(String(fsMock.rename.mock.calls[0]![1])).toContain('electron-bridge.log.old')
+    expect(fsMock.writeFile).toHaveBeenCalledTimes(1)
+    expect(String(fsMock.writeFile.mock.calls[0]![1])).toContain('rotate-probe')
+    expect(fsMock.appendFile).not.toHaveBeenCalled()
+  })
+
+  it('stat 失败（首条日志/权限）：退化为照常追加，不影响 dispatch 返回', async () => {
+    fsMock.stat.mockImplementation(((_p: unknown, cb: (e: Error | null, stats?: { size: number }) => void) =>
+      cb(new Error('EACCES'))) as never)
+    const exec = vi.fn().mockRejectedValue(new Error('probe'))
+    const bridge = new ElectronBridge({ sshManager: { execCommandWithExitCode: exec } as never, sshStore: undefined })
+    const r = await bridge.dispatch('ssh_exec', { sshSessionId: 'ssh-1', command: 'ls' })
+    expect(r.status).toBe(500)
+    expect(fsMock.appendFile).toHaveBeenCalledTimes(1)
+    expect(fsMock.rename).not.toHaveBeenCalled()
   })
 })

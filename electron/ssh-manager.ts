@@ -26,8 +26,11 @@ import { posix, join, dirname } from 'path'
 import { createHash, randomBytes } from 'crypto'
 import { StringDecoder } from 'string_decoder'
 
-/** exec 命令输出累积上限（1MB），超过后截断并在返回结果附提示，防止无界内存增长 */
-const MAX_EXEC_OUTPUT_BYTES = 1024 * 1024
+/** exec 命令输出累积上限（1M 字符，原误名 …_BYTES）。口径：appendCapped 按
+ *  acc.length（UTF-16 code unit 数）累计而非字节数 —— 名字与统计口径曾不一致；
+ *  对多字节文本实际字节量会略超 1MB，作为防无界内存增长的软上限足够，
+ *  改名对齐口径、不改判定逻辑。 */
+const MAX_EXEC_OUTPUT_CHARS = 1024 * 1024
 
 /** 断连修复：会话处于自动/手动重连期间，exec 等待会话重新入池的上限。
  *  等待仅在存在重连条目时触发；覆盖大多数前几秒内恢复的路径级抖动，
@@ -472,6 +475,24 @@ export class SSHManager {
   /** 在途传输的取消闭包（key = transferId）。删除走身份守卫：续传可能复用同一 id，
    *  只清理本传输自己登记的条目（C10）。 */
   private transfers = new Map<string, () => void>()
+
+  /**
+   * 登记取消闭包，供 sftpCancel 按 id 找回（不改传输控制流）。
+   * 设前同 transferId 查重（Q-E2）：已存在且非同一 cancelFn —— 渲染层按 STALLED
+   * 自动续传时会以同一 id 重入新传输（旧传输此刻通常仍挂在停滞态）—— 先调用旧
+   * 闭包取消旧传输（幂等：cancelled 置位、心跳停摆均可重入）再覆盖登记，保证
+   * sftpCancel 永远取消到「当前这一条」，旧 worker 也不会带着旧心跳继续写 .part
+   * 与新传输交错。与删除侧 finally 的身份守卫（transfers.get === cancelFn 才
+   * delete）配套：覆盖后旧收尾不会误删新登记，断点续传重入不受影响。
+   */
+  private registerTransferCancel(transferId: string, cancelFn: () => void): void {
+    const prev = this.transfers.get(transferId)
+    if (prev && prev !== cancelFn) {
+      try { prev() } catch { /* 旧闭包异常不阻断新传输登记 */ }
+    }
+    this.transfers.set(transferId, cancelFn)
+  }
+
   private nextId = 1
   /**
    * S0-06：会话 id 必须带一个每次启动重新随机的段。
@@ -1178,6 +1199,11 @@ export class SSHManager {
       const timer = setTimeout(() => {
         if (!settled) {
           settled = true
+          // ssh2 API 限制（Q-E2）：client.exec 不返回 channel 句柄，句柄只在回调参数里。
+          // 超时时刻若回调尚未到达，streamRef 为 null，这里 close 是空操作 —— 该残余
+          // 窗口在本 API 下无法收紧，由连接级保活兜底（doConnect 的 keepalive 探测到
+          // 连接异常会拆会话，挂在该连接上的残余通道一并回收）；迟到回调在下方按
+          // settled 立即 close，封住泄漏主路径。
           try { streamRef?.close() } catch { /* ignore */ }
           // 结构化错误：超时 → EXEC_TIMEOUT，经 normalizeIpcError 序列化为
           // __sshError transport 透传，前端 extractSSHError 据此还原友好文案
@@ -1196,6 +1222,14 @@ export class SSHManager {
           return
         }
 
+        // 超时已判定后才到达的迟到回调：立即关流、不挂 data/close 监听直接返回。
+        // 原实现无此守卫 —— 超时先触发（此刻 streamRef 还是 null，close 空操作），
+        // 迟到回调照样挂监听，通道要等远端命令自然跑完才收，慢命令下逐次泄漏。
+        // close 需容忍流已自行结束的异常。
+        if (settled) {
+          try { stream.close() } catch { /* 流可能已结束 */ }
+          return
+        }
         streamRef = stream
         let stdout = ''
         let stderr = ''
@@ -1203,10 +1237,11 @@ export class SSHManager {
         let stderrTruncated = false
         let exitCode: number | null = null
 
-        // 修复 3：输出累积上限——达到 1MB 后停止追加，保留已截断内容并标记
+        // 修复 3：输出累积上限——达到上限（按字符计，见 MAX_EXEC_OUTPUT_CHARS）后
+        // 停止追加，保留已截断内容并标记
         const appendCapped = (acc: string, text: string): string => {
-          if (acc.length >= MAX_EXEC_OUTPUT_BYTES) return acc
-          const remain = MAX_EXEC_OUTPUT_BYTES - acc.length
+          if (acc.length >= MAX_EXEC_OUTPUT_CHARS) return acc
+          const remain = MAX_EXEC_OUTPUT_CHARS - acc.length
           return text.length > remain ? acc + text.slice(0, remain) : acc + text
         }
 
@@ -1219,12 +1254,12 @@ export class SSHManager {
 
         stream.on('data', (data: Buffer) => {
           stdout = appendCapped(stdout, stdoutDecoder.write(data))
-          if (stdout.length >= MAX_EXEC_OUTPUT_BYTES) stdoutTruncated = true
+          if (stdout.length >= MAX_EXEC_OUTPUT_CHARS) stdoutTruncated = true
         })
         if (stream.stderr) {
           stream.stderr.on('data', (data: Buffer) => {
             stderr = appendCapped(stderr, stderrDecoder.write(data))
-            if (stderr.length >= MAX_EXEC_OUTPUT_BYTES) stderrTruncated = true
+            if (stderr.length >= MAX_EXEC_OUTPUT_CHARS) stderrTruncated = true
           })
         }
         stream.on('exit', (code: number | null) => {
@@ -1234,7 +1269,7 @@ export class SSHManager {
           clearTimeout(timer)
           if (!settled) {
             settled = true
-            const TRUNCATED_NOTE = '\n[输出已截断，超过 1MB 上限]'
+            const TRUNCATED_NOTE = '\n[输出已截断，超过 1M 字符上限]'
             // 冲掉解码器里可能残留的半个多字节字符（流恰好在字符中间收尾）
             stdout = appendCapped(stdout, stdoutDecoder.end())
             stderr = appendCapped(stderr, stderrDecoder.end())
@@ -1576,20 +1611,20 @@ export class SSHManager {
   //   SFTP
   // ════════════════════════════════════════════════
 
-private requireSftp(sshSessionId: string): SFTPWrapper {
-const sftp = this.sftpSessions.get(sshSessionId)
-if (!sftp) throw new SSHError('SFTP_SESSION_REQUIRED')
-return sftp
-}
+  private requireSftp(sshSessionId: string): SFTPWrapper {
+    const sftp = this.sftpSessions.get(sshSessionId)
+    if (!sftp) throw new SSHError('SFTP_SESSION_REQUIRED')
+    return sftp
+  }
 
   /** 复用已建立的 SSH Client,打开 SFTP 子系统 */
-async openSftp(sshSessionId: string): Promise<void> {
-const session = this.sessions.get(sshSessionId)
-if (!session) throw new SSHError('SESSION_NOT_FOUND')
-if (this.sftpSessions.has(sshSessionId)) return
-await new Promise<void>((resolve, reject) => {
-session.client.sftp((err, sftp) => {
-if (err) return reject(new SSHError('SFTP_INIT_FAIL', { original: err }))
+  async openSftp(sshSessionId: string): Promise<void> {
+    const session = this.sessions.get(sshSessionId)
+    if (!session) throw new SSHError('SESSION_NOT_FOUND')
+    if (this.sftpSessions.has(sshSessionId)) return
+    await new Promise<void>((resolve, reject) => {
+      session.client.sftp((err, sftp) => {
+        if (err) return reject(new SSHError('SFTP_INIT_FAIL', { original: err }))
         sftp.on('close', () => {
           // 陈旧 close 守卫：意外断开→重连复用同 id 后，旧通道迟到的 close 若无条件
           // delete 会误删新 wrapper（面板随即 requireSftp 抛 SESSION_NOT_FOUND）。
@@ -1939,8 +1974,9 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       cancelled = true
       heartbeat.stop()
     }
-    // 登记取消闭包，供 sftpCancel 按 id 找回（不改传输控制流）
-    this.transfers.set(transferId, cancelFn)
+    // 登记取消闭包，供 sftpCancel 按 id 找回（不改传输控制流）；同 id 已有旧条目时
+    // 先取消旧传输再覆盖（Q-E2 查重，见 registerTransferCancel 注释）
+    this.registerTransferCancel(transferId, cancelFn)
 
     heartbeat.start(5000, 30000, () => lastProgress, () => {
       this.safeSend('sftp:stalled', { id: transferId })
@@ -2250,8 +2286,9 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       cancelled = true
       heartbeat.stop()
     }
-    // 登记取消闭包，供 sftpCancel 按 id 找回（不改传输控制流）
-    this.transfers.set(transferId, cancelFn)
+    // 登记取消闭包，供 sftpCancel 按 id 找回（不改传输控制流）；同 id 已有旧条目时
+    // 先取消旧传输再覆盖（Q-E2 查重，见 registerTransferCancel 注释）
+    this.registerTransferCancel(transferId, cancelFn)
 
     heartbeat.start(5000, 30000, () => lastProgress, () => {
       this.safeSend('sftp:stalled', { id: transferId })

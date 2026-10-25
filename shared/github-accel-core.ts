@@ -91,7 +91,13 @@ export function validateProxyPrefix(prefix: string): string | null {
 
 export function validateWebMirrorHost(host: string): string | null {
   if (typeof host !== 'string' || !host.trim()) return '镜像站域名不能为空'
-  if (!HOST_RE.test(host.trim().toLowerCase())) return '镜像站域名格式不正确'
+  const h = host.trim().toLowerCase()
+  if (!HOST_RE.test(h)) return '镜像站域名格式不正确'
+  // 出站请求前的 host 校验：镜像 host 会被拼成 https://<host>/… 直接出站。
+  // 全数字顶级域只出现在 IP 字面量里 —— 127.0.0.1、10.0.0.1 这类点分十进制，
+  // 以及 0x7f.0.0.1 这类十六进制变体；合法域名没有全数字 TLD，一律拒，
+  // 环回/私有/保留地址就没了入口（IPv6 字面量带冒号，HOST_RE 本来就拒）。
+  if (/^\d+$/.test(h.split('.').pop() || '')) return '镜像站必须是域名，不能填 IP（会把请求打到本机或内网）'
   return null
 }
 
@@ -446,8 +452,30 @@ export function renderSsh443Block(): string {
   ].join('\n')
 }
 
-/** 写入/更新托管块：已有标记块则原位替换，否则追加到文件末尾。 */
+export type SshBlockState = 'none' | 'ok' | 'broken'
+
+export const SSH_BLOCK_BROKEN_MESSAGE =
+  '~/.ssh/config 中的 cKunAgentSSH 托管标记不完整或顺序异常，已停止写入以免损坏配置；请手动清理多余的托管标记后重试'
+
+/**
+ * ssh443 托管块三态，判据与 hostsBlockState 相同。broken 包括：只有 BEGIN、只有 END、
+ * END 在 BEGIN 前、重复标记。这些状态下按 indexOf 找「第一对标记」会把 broken 文件
+ * 落进追加分支 —— 旧的手改块胜出、443 加速实际失效而 UI 仍显示已开启，标记还越积
+ * 越多。所以 apply 前停手报错，修复/删除交用户手动确认（对齐 hosts 路径的既定做法）。
+ */
+export function sshBlockState(existing: string): SshBlockState {
+  const begin = existing.indexOf(SSH_BLOCK_BEGIN)
+  const end = existing.indexOf(SSH_BLOCK_END)
+  if (begin === -1 && end === -1) return 'none'
+  if (begin === -1 || end === -1 || end <= begin) return 'broken'
+  const extraBegin = existing.indexOf(SSH_BLOCK_BEGIN, begin + SSH_BLOCK_BEGIN.length)
+  const extraEnd = existing.indexOf(SSH_BLOCK_END, end + SSH_BLOCK_END.length)
+  return extraBegin === -1 && extraEnd === -1 ? 'ok' : 'broken'
+}
+
+/** 写入/更新托管块：已有标记块则原位替换，否则追加到文件末尾；标记损坏时拒绝写入。 */
 export function applySshBlock(existing: string): string {
+  if (sshBlockState(existing) === 'broken') throw new Error(SSH_BLOCK_BROKEN_MESSAGE)
   const block = renderSsh443Block()
   const begin = existing.indexOf(SSH_BLOCK_BEGIN)
   const end = existing.indexOf(SSH_BLOCK_END)

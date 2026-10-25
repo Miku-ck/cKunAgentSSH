@@ -32,9 +32,21 @@ import {
 import { assertSafePath, allowDialogKeyPath, isCopyTargetSelfNested, rejectSymlinkTarget } from './utils/path-guard'
 import { beginCopy, endCopy, requestCopyCancel } from './utils/copy-cancel'
 import { perfMark } from './utils/perf-mark'
+import { resolvePowerShell } from './utils/powershell-path'
 import { ensureShellShortcuts } from './shortcut-win'
 
 perfMark('main module loaded')
+
+// ─── 统一日志口径（startupLogNotes）────────────────
+/** [HH:MM:SS.mmm] 时间戳：启动链路的时序问题（IPC 先于 manager 就位、补全卡壳、
+ *  后端起停交错）只有带毫秒时间戳才排得动。 */
+function tsNow(): string {
+  const d = new Date()
+  const p = (n: number, w = 2): string => String(n).padStart(w, '0')
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`
+}
+function logWarn(domain: string, msg: string): void { console.warn(`[${tsNow()}] [${domain}] ${msg}`) }
+function logError(domain: string, msg: string): void { console.error(`[${tsNow()}] [${domain}] ${msg}`) }
 
 let mainWindow: BrowserWindow | null = null
 // 开发态判定：原 `is.dev`（@electron-toolkit/utils）语义就是 `!app.isPackaged`，
@@ -327,8 +339,21 @@ function setupWindowIPC(): void {
 
 // ─── File System IPC ────────────────────────────────
 
+/** 程序名校验：只接受单段文件名。PATH 目录 + 任意相对段组合起来就是一次任意
+ *  位置的存在性探测（预言机），`..`、`.` 与路径分隔符都在收紧之列；`:` 在
+ *  Windows 上是盘符/ADS 分隔，同样拒绝。渲染层调用方只有 bash / pwsh /
+ *  powershell 裸名解析（src/stores/ssh.ts），无带子目录的合法用法。 */
+function assertProgramName(name: string): void {
+  if (typeof name !== 'string' || name.trim().length === 0) throw new Error('程序名不能为空')
+  if (name === '.' || name === '..') throw new Error('非法程序名')
+  if (name.includes('/') || name.includes('\\') || name.includes(':')) {
+    throw new Error('程序名不能包含路径分隔符')
+  }
+}
+
 /** 在 PATH 环境变量中查找可执行文件 */
 function findProgramInPath(name: string): string | null {
+  assertProgramName(name)
   const isWindows = process.platform === 'win32'
   const paths = (process.env.PATH || '').split(isWindows ? ';' : ':')
   const exts = isWindows ? (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';') : ['']
@@ -422,7 +447,7 @@ function findGitBashFromRegistry(): string | null {
 /** 敏感路径拒绝事件不在 catch 中改写成通用文案（透传 + warn）。 */
 function rethrowIfSensitivePath(err: any): void {
   if (typeof err?.message === 'string' && err.message.startsWith('拒绝访问敏感路径')) {
-    console.warn(`[fs] 敏感路径访问被拒绝: ${err.message}`)
+    logWarn('fs', `敏感路径访问被拒绝: ${err.message}`)
     throw err
   }
 }
@@ -758,12 +783,12 @@ function setupFSIPC(): void {
       const st = isRoot
         ? await stat(src)
         : await lstat(src).catch((e) => {
-            console.warn(`[fs:copy] 跳过无法访问的条目: ${src} (${e?.message || e})`)
+            logWarn('fs:copy', `跳过无法访问的条目: ${src} (${e?.message || e})`)
             return null
           })
       if (!st) return
       if (!isRoot && st.isSymbolicLink()) {
-        console.warn(`[fs:copy] 跳过符号链接（防止泄露链接目标内容）: ${src}`)
+        logWarn('fs:copy', `跳过符号链接（防止泄露链接目标内容）: ${src}`)
         return
       }
       if (st.isFile()) {
@@ -866,6 +891,8 @@ function setupFSIPC(): void {
 
   // 按环境变量 PATH 查找可执行文件；对 bash 额外读取 Git for Windows 注册表
   handleTrusted('fs:resolveProgram', (_event, name: string) => {
+    // 段校验前置：bash 特例分支也过同一道门，防渲染层把本 IPC 当任意路径探测用
+    assertProgramName(name)
     if (name === 'bash') {
       const gitBash = findGitBashFromRegistry()
       if (gitBash) return gitBash
@@ -913,10 +940,13 @@ function setupFSIPC(): void {
       const psSources = sources.map(s => `'${s.replace(/'/g, "''")}'`).join(',')
       const psDest = `'${localZipPath.replace(/'/g, "''")}'`
       const psCmd = `Compress-Archive -Path ${psSources} -DestinationPath ${psDest} -Force`
-      await execFileAsync('powershell', ['-NoProfile', '-Command', psCmd], 300)
+      // 与 backend-manager 孤儿检测同源：PATH 被裁剪的环境 spawn 裸名 'powershell' 会 ENOENT，
+      // 用 resolvePowerShell 解析绝对路径（回退口径见 utils/powershell-path.ts）
+      await execFileAsync(resolvePowerShell(), ['-NoProfile', '-Command', psCmd], 300)
     } else {
-      // Linux/macOS: zip -r -y <zip> <src1> <src2> ...
-      const args = ['-r', '-y', localZipPath, ...sources]
+      // Linux/macOS: zip -r -y -- <zip> <src1> <src2> ...
+      // `--` 结束选项解析：以 `-` 开头的源路径（如 `-out`）否则会被 zip 当作选项吞掉
+      const args = ['-r', '-y', '--', localZipPath, ...sources]
       await execFileAsync('zip', args, 300)
     }
   })
@@ -932,7 +962,8 @@ function setupFSIPC(): void {
       const psZip = `'${localZipPath.replace(/'/g, "''")}'`
       const psDest = `'${localDestDir.replace(/'/g, "''")}'`
       const psCmd = `Expand-Archive -Path ${psZip} -DestinationPath ${psDest} -Force`
-      await execFileAsync('powershell', ['-NoProfile', '-Command', psCmd], 300)
+      // 同 zipLocal：resolvePowerShell 出绝对路径，避免 PATH 裁剪环境下裸名 ENOENT
+      await execFileAsync(resolvePowerShell(), ['-NoProfile', '-Command', psCmd], 300)
     } else {
       // -o 覆盖不询问，-q 安静，-d 指定目录
       await execFileAsync('unzip', ['-o', '-q', localZipPath, '-d', localDestDir], 300)
@@ -988,58 +1019,69 @@ function setupPtyIPC(): void {
   // 本地终端命令补全：在指定 cwd 执行补全
   // Windows PowerShell：使用 [System.Management.Automation.CommandCompletion]::CompleteInput
   // macOS/Linux bash：使用 compgen（识别 function/alias/command/file）
-  handleTrusted('pty:completeCommand', (_event, opts: { ptyId: string; cmd: string; prefix: string; cwd: string; isCommand: boolean; prevSegments: string[]; shell?: string }) => {
+  handleTrusted('pty:completeCommand', async (_event, opts: { ptyId: string; cmd: string; prefix: string; cwd: string; isCommand: boolean; prevSegments: string[]; shell?: string }) => {
+    // 形状校验前置：非法输入直接 throw 让 invoke reject。原实现把全部逻辑塞进
+    // `new Promise(async (resolve) => …)` 的 async executor —— executor 内任何同步
+    // 异常（opts 缺失、prevSegments 非数组时 buildBashCompletionScript 的
+    // shellQuoteArgs 抛 TypeError 等）都无人接住，Promise 永不 settle，渲染层这次
+    // 补全请求就永久挂起。async executor 反模式整体拆除，改普通 async handler。
+    if (!opts || typeof opts !== 'object') throw new Error('pty:completeCommand 缺少参数对象')
+    const { ptyId, cmd, prefix, cwd, isCommand, prevSegments, shell } = opts
+    if (typeof ptyId !== 'string' || !ptyId) throw new Error('pty:completeCommand 缺少 ptyId')
+    if (typeof cmd !== 'string') throw new Error('pty:completeCommand cmd 必须是字符串')
+    if (typeof prefix !== 'string') throw new Error('pty:completeCommand prefix 必须是字符串')
+    if (typeof isCommand !== 'boolean') throw new Error('pty:completeCommand isCommand 必须是布尔值')
+    if (!Array.isArray(prevSegments) || !prevSegments.every((s) => typeof s === 'string')) {
+      throw new Error('pty:completeCommand prevSegments 必须是字符串数组')
+    }
+    if (shell !== undefined && typeof shell !== 'string') throw new Error('pty:completeCommand shell 必须是字符串')
+
+    const isPowerShell = process.platform === 'win32' && (!shell || /powershell|pwsh/i.test(shell))
+    const isCmd = process.platform === 'win32' && !!shell && /cmd/i.test(shell)
+    // 若前端未提供 cwd，回退到 PTY 会话的初始工作目录
+    const actualCwd: string = cwd || ptyManager!.getCwd(ptyId) || process.cwd()
     // cwd 须过 assertSafePath；拒绝时按「无候选」收尾（渲染层空串当无补全）
-    return new Promise<string>(async (resolve) => {
-      const { ptyId, cmd, prefix, cwd, isCommand, prevSegments, shell } = opts
-      const isPowerShell = process.platform === 'win32' && (!shell || /powershell|pwsh/i.test(shell))
-      const isCmd = process.platform === 'win32' && !!shell && /cmd/i.test(shell)
-      // 若前端未提供 cwd，回退到 PTY 会话的初始工作目录
-      const actualCwd: string = cwd || ptyManager!.getCwd(ptyId) || process.cwd()
+    try {
+      await assertSafePath(actualCwd)
+    } catch {
+      return ''
+    }
+
+    if (isCmd) {
+      // CMD 弱补全：命令名在 PATH 中查找，参数仅做路径/文件名补全
+      if (isCommand) {
+        const cmds = await findProgramsInPathByPrefix(prefix)
+        return cmds.map((c) => `cmd:${c}`).join('\n')
+      }
+      const sepIndex = Math.max(prefix.lastIndexOf('\\'), prefix.lastIndexOf('/'))
+      let dir = actualCwd
+      let filePrefix = prefix
+      if (sepIndex >= 0) {
+        dir = pathResolve(dir, prefix.slice(0, sepIndex))
+        filePrefix = prefix.slice(sepIndex + 1)
+      }
       try {
-        await assertSafePath(actualCwd)
+        // prefix 里的 `..` 会把枚举目录解析到已放行的 actualCwd 之外，过同一道门
+        await assertSafePath(dir)
       } catch {
-        resolve('')
-        return
+        return ''
       }
+      const files = await listFilesByPrefix(dir, filePrefix)
+      return files.map((f) => `file:${f}`).join('\n')
+    }
 
-      if (isCmd) {
-        // CMD 弱补全：命令名在 PATH 中查找，参数仅做路径/文件名补全
-        if (isCommand) {
-          const cmds = await findProgramsInPathByPrefix(prefix)
-          resolve(cmds.map((c) => `cmd:${c}`).join('\n'))
-        } else {
-          const sepIndex = Math.max(prefix.lastIndexOf('\\'), prefix.lastIndexOf('/'))
-          let dir = actualCwd
-          let filePrefix = prefix
-          if (sepIndex >= 0) {
-            dir = pathResolve(dir, prefix.slice(0, sepIndex))
-            filePrefix = prefix.slice(sepIndex + 1)
-          }
-          try {
-            // prefix 里的 `..` 会把枚举目录解析到已放行的 actualCwd 之外，过同一道门
-            await assertSafePath(dir)
-          } catch {
-            resolve('')
-            return
-          }
-          const files = await listFilesByPrefix(dir, filePrefix)
-          resolve(files.map((f) => `file:${f}`).join('\n'))
-        }
-        return
-      }
-
-      if (isPowerShell) {
-        // PowerShell 补全：调用内置 CompleteInput API
-        const safePrefix = prefix.replace(/'/g, "''")
-        const line = isCommand
-          ? `${safePrefix}`
-          : `${prevSegments?.join(' ') || ''} ${safePrefix}`.trim()
-        const psScript = `
+    if (isPowerShell) {
+      // PowerShell 补全：调用内置 CompleteInput API
+      const line = isCommand ? prefix : `${prevSegments.join(' ')} ${prefix}`.trim()
+      // here-string 改写修正：原实现把输入行包进单引号 here-string，还把 `@` 改写成
+      // `@{}` —— 单引号 here-string 的内容本就是字面量，`@` 从不需要转义，这个改写只会
+      // 污染用户输入（补全 `user@` 会变成 `user@{`）；而真正要防的是输入行以 `'@` 开头
+      // 提前终止 here-string（后面的内容会变成可执行脚本）。改走 base64：任意输入
+      // （引号、`@`、行首 `'@`、换行）都折叠成纯 ASCII 参数，改写污染与注入一起消灭。
+      const lineB64 = Buffer.from(line, 'utf-8').toString('base64')
+      const psScript = `
 $ErrorActionPreference = 'SilentlyContinue'
-$line = @'
-${line.replace(/@/g, '@' + '{')}}
-'@
+$line = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${lineB64}'))
 $cursor = $line.Length
 $tokens = $null
 $errors = $null
@@ -1056,11 +1098,12 @@ if ($result.CompletionMatches) {
   }
 }
 `
-        const ps = isPowerShell && /pwsh/i.test(shell || '') ? 'pwsh' : 'powershell'
-        // 修复 7：改用 spawn 数组传参（不经 cmd.exe），避免 cmd 与 PowerShell 引号规则冲突
-        // 导致含双引号的输入被错误解析；psScript 内容与超时/错误处理语义保持不变。
-        // pwsh 路径解析沿用 fs:resolveProgram 的 findProgramInPath 逻辑。
-        const psPath = findProgramInPath(ps) || ps
+      const ps = /pwsh/i.test(shell || '') ? 'pwsh' : 'powershell'
+      // 修复 7：改用 spawn 数组传参（不经 cmd.exe），避免 cmd 与 PowerShell 引号规则冲突
+      // 导致含双引号的输入被错误解析；psScript 内容与超时/错误处理语义保持不变。
+      // pwsh 路径解析沿用 fs:resolveProgram 的 findProgramInPath 逻辑。
+      const psPath = findProgramInPath(ps) || ps
+      return await new Promise<string>((resolve) => {
         const child = spawn(psPath, ['-NoProfile', '-NonInteractive', '-NoLogo', '-Command', psScript], {
           cwd: actualCwd,
           windowsHide: true,
@@ -1093,11 +1136,12 @@ if ($result.CompletionMatches) {
           // 保持原语义：退出码非 0（或 spawn 失败）视为失败，返回空串
           finish(code === 0 ? out : '')
         })
-        return
-      }
+      })
+    }
 
-      // macOS / Linux / Git Bash 补全
-      const scriptBody = buildBashCompletionScript({ isCommand, cmd, prefix, prevSegments })
+    // macOS / Linux / Git Bash 补全
+    const scriptBody = buildBashCompletionScript({ isCommand, cmd, prefix, prevSegments })
+    return await new Promise<string>((resolve) => {
       execFile('bash', ['-lic', scriptBody], { cwd: actualCwd, timeout: 5000, encoding: 'utf8', windowsHide: true }, (err, stdout) => {
         if (err) resolve('')
         else resolve(stdout)
@@ -1126,7 +1170,7 @@ async function resolveCredentials(config: any): Promise<any> {
   try {
     stored = await sshStore!.get(config.id)
   } catch (e) {
-    console.warn('[ssh] 读取已保存凭据失败，本次连接仅用渲染层传入值:', e)
+    logWarn('ssh', `读取已保存凭据失败，本次连接仅用渲染层传入值: ${e instanceof Error ? e.message : String(e)}`)
     return config
   }
   if (!stored || stored.authType !== config.authType) return config
@@ -1193,7 +1237,7 @@ function setupSSHIPC(): void {
   })
   // ssh2 懒加载预热：setup 阶段就发起，与随后的 createWindow + 首屏 transform 并行（~1.3s），
   // 用户点连接前已就位；失败不致命——doConnect/testConnection 内还有 await loadSsh2() 兜底路径。
-  void loadSsh2().catch((err) => console.warn('[main] ssh2 预热失败（首次连接时将重试）:', err))
+  void loadSsh2().catch((err) => logWarn('main', `ssh2 预热失败（首次连接时将重试）: ${err instanceof Error ? err.message : String(err)}`))
 
   // 重连修复：重连时主进程自取已保存的连接配置（safeStorage 解密后的凭据），
   // 渲染层无需（也不应）经 IPC 传递凭据
@@ -1766,7 +1810,7 @@ function userDataWritable(): boolean {
     unlinkSync(probe)
     return true
   } catch (e) {
-    console.warn('[main] userData 目录不可写探针失败:', (e as Error).message)
+    logWarn('main', `userData 目录不可写探针失败: ${(e as Error).message}`)
     return false
   }
 }
@@ -1776,9 +1820,9 @@ const gotSingleInstanceLock = app.requestSingleInstanceLock()
 const mayStart = gotSingleInstanceLock || (!userDataWritable() && process.platform === 'win32')
 if (!gotSingleInstanceLock) {
   if (mayStart) {
-    console.warn('[main] 单实例锁创建失败（userData 不可写，非第二实例），以降级模式继续启动：单实例保证失效')
+    logWarn('main', '单实例锁创建失败（userData 不可写，非第二实例），以降级模式继续启动：单实例保证失效')
   } else {
-    console.warn('[main] 已有实例在运行，本实例退出')
+    logWarn('main', '已有实例在运行，本实例退出')
     app.quit()
   }
 }
@@ -1797,20 +1841,20 @@ if (mayStart) {
 const UNCAUGHT_WINDOW_MS = 60_000
 const uncaughtTimes: number[] = []
 process.on('uncaughtException', (err) => {
-  console.error('[main] uncaughtException:', err)
+  logError('main', `uncaughtException: ${err instanceof Error ? (err.stack || err.message) : String(err)}`)
   const now = Date.now()
   while (uncaughtTimes.length > 0 && now - uncaughtTimes[0] > UNCAUGHT_WINDOW_MS) {
     uncaughtTimes.shift()
   }
   uncaughtTimes.push(now)
   if (uncaughtTimes.length >= 3) {
-    console.error(`[main] ${UNCAUGHT_WINDOW_MS / 1000} 秒内 3 次未捕获异常，退出应用`)
+    logError('main', `${UNCAUGHT_WINDOW_MS / 1000} 秒内 3 次未捕获异常，退出应用`)
     uncaughtTimes.length = 0
     app.quit()
   }
 })
 process.on('unhandledRejection', (reason) => {
-  console.error('[main] unhandledRejection:', reason)  // 只记日志不退出
+  logError('main', `unhandledRejection: ${reason instanceof Error ? (reason.stack || reason.message) : String(reason)}`)  // 只记日志不退出
 })
 
 app.whenReady().then(async () => {
@@ -1828,13 +1872,13 @@ app.whenReady().then(async () => {
   perfMark('ipc setup done')
   // 启动性能优化：initDesktopPrefs 读盘不阻塞首屏；关窗隐藏按默认值（不隐藏）走，
   // prefs 就绪后 shouldHideOnClose / tray 的后续状态由模块内内存更新生效。
-  initDesktopPrefs(() => mainWindow).catch(e => console.warn('[main] initDesktopPrefs 失败:', e))
+  initDesktopPrefs(() => mainWindow).catch(e => logWarn('main', `initDesktopPrefs 失败: ${e instanceof Error ? e.message : String(e)}`))
   createWindow()
   perfMark('createWindow returned')
 
   // tar 形态没有安装器：首启自建桌面/开始菜单快捷方式（含 AUMID，Toast 归属
   // 注册依赖开始菜单项）。fire-and-forget，失败仅 warn，绝不占用启动关键路径。
-  ensureShellShortcuts().catch((e) => console.warn('[main] ensureShellShortcuts:', e))
+  ensureShellShortcuts().catch((e) => logWarn('main', `ensureShellShortcuts: ${e instanceof Error ? e.message : String(e)}`))
 
   // Start Electron bridge for backend → main process remote execution
   if (sshManager) {
@@ -1884,7 +1928,8 @@ app.whenReady().then(async () => {
       mainWindow.webContents.send('backend:status', { status: 'ready', port })
     }
   } catch (err) {
-    console.error('[BackendManager] Failed to start Python backend:', err)
+    // 前缀修正：这里在 main.ts 的启动编排里，域是 main，不是 BackendManager（它的内部日志在 backend-manager.ts）
+    logError('main', `Failed to start Python backend: ${err instanceof Error ? (err.stack || err.message) : String(err)}`)
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('backend:status', { status: 'error', error: String(err) })
     }
@@ -1912,7 +1957,9 @@ app.on('before-quit', () => {
   tunnelManager?.stopAll()
   gatewayManager?.stopAll()
   githubAccel?.stopHealthWatch()
-  backendManager?.stop()
+  // S-E1：退出终态走 stopForQuit —— appQuitting 置位后 start() 在 spawn 前放弃启动
+  //（审查R2 的防孤儿语义），与「仅抑制自动重启」的普通 stop() 拆分
+  backendManager?.stopForQuit()
   bridgeWsClient?.stop()
   electronBridge?.stop()
 })

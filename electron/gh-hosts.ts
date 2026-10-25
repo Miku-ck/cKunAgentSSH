@@ -163,6 +163,21 @@ export class GhHostsService {
   /** 域名 → 上次优选结果（内存缓存，重启后从 hosts 块里读） */
   private lastPicks: HostsPickRow[] = []
 
+  /**
+   * 整文件读-改-写串行队列（Q-E3，对齐 github-accel.ts 的 enqueue 纪律）：
+   * apply/remove 的「读 hosts → 改托管块 → 写回」跨多个 await，并发两路会各自
+   * 握着同一份旧内容再写回，后写者整块覆写先写者的托管块。链上每个 op 拿到的
+   * 都是前一个 op 写完后的文件态。队列本身永不 reject（错误只透传给当次调用方），
+   * 失败不阻塞后续操作。
+   */
+  private writeQueue: Promise<unknown> = Promise.resolve()
+
+  private enqueue<T>(op: () => Promise<T>): Promise<T> {
+    const run = this.writeQueue.then(op, op)
+    this.writeQueue = run.then(() => undefined, () => undefined)
+    return run
+  }
+
   /** 优选：DoH 解析 + TCP 测速，返回每个域名的最优 IP */
   async pick(): Promise<HostsPickRow[]> {
     const domains = githubHostsDomains()
@@ -232,65 +247,73 @@ export class GhHostsService {
    * 首次写入前备份原 hosts 到 userData（还原托管块不依赖备份，但防意外）。
    */
   async apply(entries?: { domain: string; ip: string }[]): Promise<HostsStatus> {
-    const use = (entries && entries.length ? entries : this.lastPicks.filter(r => r.ip).map(r => ({ domain: r.domain, ip: r.ip! })))
-    if (use.length === 0) throw new Error('没有可用的优选结果，请先执行「优选 IP」')
+    // 整文件读-改-写进串行队列（Q-E3）：并发 apply/remove 的读-改-写不再互相覆写
+    return this.enqueue(async (): Promise<HostsStatus> => {
+      const use = (entries && entries.length ? entries : this.lastPicks.filter(r => r.ip).map(r => ({ domain: r.domain, ip: r.ip! })))
+      if (use.length === 0) throw new Error('没有可用的优选结果，请先执行「优选 IP」')
 
-    const path = hostsPath()
-    let existing: string
-    try {
-      existing = existsSync(path) ? decodeHostsBytes(await readFile(path)) : ''
-    } catch (e: any) {
-      if (e?.code === 'EACCES' || e?.code === 'EPERM') throw new Error('无权限读取 hosts（需要管理员权限运行应用）')
-      throw e
-    }
-    const state = hostsBlockState(existing)
-    if (state === 'broken') throw new Error(HOSTS_BLOCK_BROKEN_MESSAGE)
-    if (state === 'none') {
-      await this.backupHosts(path)
-    }
-    const next = applyHostsBlock(existing, use)
-    try {
-      await writeFile(path, encodeHostsBytes(next))
-    } catch (e: any) {
-      if (e?.code === 'EACCES' || e?.code === 'EPERM') {
-        // 方案 A：按需提权写入（弹 UAC，用户确认后由提权子进程落盘）
-        await this.elevatedWrite(next)
-      } else {
+      const path = hostsPath()
+      let existing: string
+      try {
+        existing = existsSync(path) ? decodeHostsBytes(await readFile(path)) : ''
+      } catch (e: any) {
+        if (e?.code === 'EACCES' || e?.code === 'EPERM') throw new Error('无权限读取 hosts（需要管理员权限运行应用）')
         throw e
       }
-    }
-    return this.status()
-  }
-
-  /** 移除托管块（还原为写入前状态；首次写入的备份文件仍保留在 userData 供极端情况恢复） */
-  async remove(): Promise<HostsStatus> {
-    const path = hostsPath()
-    let existing: string
-    try {
-      existing = decodeHostsBytes(await readFile(path))
-    } catch (e: any) {
-      if (e?.code === 'EACCES' || e?.code === 'EPERM') {
-        throw new Error('无权限读取 hosts（需要以管理员权限运行应用）')
+      const state = hostsBlockState(existing)
+      if (state === 'broken') throw new Error(HOSTS_BLOCK_BROKEN_MESSAGE)
+      if (state === 'none') {
+        await this.backupHosts(path)
       }
-      if (e?.code === 'ENOENT') return { applied: false, path, writable: true, entries: [], generatedAt: null, staleDays: null, stale: false }
-      throw e
-    }
-    const state = hostsBlockState(existing)
-    if (state === 'broken') throw new Error(HOSTS_BLOCK_BROKEN_MESSAGE)
-    if (state === 'none') return this.status()
-    const next = removeHostsBlock(existing)
-    if (next !== existing) {
+      const next = applyHostsBlock(existing, use)
       try {
         await writeFile(path, encodeHostsBytes(next))
       } catch (e: any) {
         if (e?.code === 'EACCES' || e?.code === 'EPERM') {
-          await this.elevatedWrite(next, 'no-block')
+          // 方案 A：按需提权写入（弹 UAC，用户确认后由提权子进程落盘）
+          await this.elevatedWrite(next)
         } else {
           throw e
         }
       }
-    }
-    return this.status()
+      // 注意：status() 只读不写，不需要也不应占用写队列（提权校验等读操作在
+      // 队列外跑，避免与自己同队列的下一 op 死等）
+      return this.status()
+    })
+  }
+
+  /** 移除托管块（还原为写入前状态；首次写入的备份文件仍保留在 userData 供极端情况恢复） */
+  async remove(): Promise<HostsStatus> {
+    // 整文件读-改-写进串行队列（Q-E3），与 apply 同一条纪律
+    return this.enqueue(async (): Promise<HostsStatus> => {
+      const path = hostsPath()
+      let existing: string
+      try {
+        existing = decodeHostsBytes(await readFile(path))
+      } catch (e: any) {
+        if (e?.code === 'EACCES' || e?.code === 'EPERM') {
+          throw new Error('无权限读取 hosts（需要以管理员权限运行应用）')
+        }
+        if (e?.code === 'ENOENT') return { applied: false, path, writable: true, entries: [], generatedAt: null, staleDays: null, stale: false }
+        throw e
+      }
+      const state = hostsBlockState(existing)
+      if (state === 'broken') throw new Error(HOSTS_BLOCK_BROKEN_MESSAGE)
+      if (state === 'none') return this.status()
+      const next = removeHostsBlock(existing)
+      if (next !== existing) {
+        try {
+          await writeFile(path, encodeHostsBytes(next))
+        } catch (e: any) {
+          if (e?.code === 'EACCES' || e?.code === 'EPERM') {
+            await this.elevatedWrite(next, 'no-block')
+          } else {
+            throw e
+          }
+        }
+      }
+      return this.status()
+    })
   }
 
   /**

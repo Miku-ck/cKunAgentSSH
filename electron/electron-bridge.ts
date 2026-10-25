@@ -1,5 +1,5 @@
 import { randomBytes } from 'crypto'
-import { appendFile } from 'fs'
+import { appendFile, rename, stat, writeFile } from 'fs'
 import { join } from 'path'
 import { app } from 'electron'
 import type { SSHManager } from './ssh-manager'
@@ -11,14 +11,39 @@ import { isSSHErrorCode, toFriendlyZh } from '../shared/ssh-error-core'
 // 写到 userData 目录（与其他持久化数据同处，不污染代码目录）。
 const BRIDGE_LOG = join(app.getPath('userData'), 'electron-bridge.log')
 /**
+ * S-E2：单文件大小上限。原实现只增不滚，长跑环境的错误风暴会把 userData 撑出
+ * 巨型文件。超限轮转为 .old（同名覆盖），新文件从头写 —— 保尾策略：最近的错误
+ * 永远在主文件里可见，上一轮内容在 .old 里仍可回看，优于清空归零。
+ */
+const BRIDGE_LOG_MAX_BYTES = 1024 * 1024
+const BRIDGE_LOG_OLD = `${BRIDGE_LOG}.old`
+
+/**
  * 写桥接日志。
  *
- * 用异步 appendFile 而非 appendFileSync：本函数在请求路径上被调用（ERROR 记录），
- * 同步写盘会阻塞主进程事件循环，诊断日志本身不能成为新的阻塞源。
+ * 用异步 fs 而非同步 API：本函数在请求路径上被调用（ERROR 记录），同步写盘会
+ * 阻塞主进程事件循环，诊断日志本身不能成为新的阻塞源。轮转判定（stat）与动作
+ * （rename + writeFile）同样全异步，且整段容错：stat 探不到大小（首条日志/权限）
+ * 就照常追加，rename 失败（Windows 上句柄未释放等）退化为整文件重写 —— 日志通道
+ * 绝不影响 dispatch 主链路。并发追加同时超限的轮转竞态可接受：第二次 rename 落空
+ * （文件已被改走）→ 退回重写本轮，至多丢一行并发日志。
  */
 function bridgeLog(msg: string): void {
-  appendFile(BRIDGE_LOG, `[${new Date().toISOString()}] ${msg}\n`, () => {
-    /* 日志失败不影响功能 */
+  const line = `[${new Date().toISOString()}] ${msg}\n`
+  stat(BRIDGE_LOG, (statErr, stats) => {
+    if (statErr || stats.size + Buffer.byteLength(line, 'utf-8') <= BRIDGE_LOG_MAX_BYTES) {
+      // 未超限（或大小探不到）：照常追加
+      appendFile(BRIDGE_LOG, line, () => {
+        /* 日志失败不影响功能 */
+      })
+      return
+    }
+    // 超限：当前文件轮转为 .old（同名 .old 直接覆盖），本轮从头写
+    rename(BRIDGE_LOG, BRIDGE_LOG_OLD, () => {
+      writeFile(BRIDGE_LOG, line, () => {
+        /* 日志失败不影响功能 */
+      })
+    })
   })
 }
 

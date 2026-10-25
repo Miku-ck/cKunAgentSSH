@@ -5,9 +5,20 @@ import http from 'http'
 import { mkdirSync, existsSync, renameSync, copyFileSync, unlinkSync } from 'fs'
 import { homedir } from 'os'
 import { randomBytes } from 'crypto'
+import { StringDecoder } from 'string_decoder'
 import { perfMark } from './utils/perf-mark'
 import { resolvePowerShell } from './utils/powershell-path'
 import { clearPythonCache, loadPythonCache, savePythonCache } from './backend-python-cache'
+
+// ─── 统一日志口径（startupLogNotes）────────────────
+/** [HH:MM:SS.mmm] [BackendManager] 消息。启动链路的时序问题（解释器探测、健康轮询、
+ *  重启冷却都以秒计）只有带毫秒时间戳才排得动。 */
+function bmLog(level: 'log' | 'warn' | 'error', msg: string): void {
+  const d = new Date()
+  const p = (n: number, w = 2): string => String(n).padStart(w, '0')
+  const ts = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`
+  console[level](`[${ts}] [BackendManager] ${msg}`)
+}
 
 /** whenReady 的等待者：就绪/失败/超时三选一，各自只能被唤醒一次 */
 type ReadyWaiter = {
@@ -25,11 +36,12 @@ export class BackendManager {
   private port: number = 0
   private intentionalStop = false
   /**
-   * 审查R2修复：应用退出终态标志 — before-quit→stop() 若落在 start() 的
+   * 审查R2修复：应用退出终态标志 — before-quit→stopForQuit() 若落在 start() 的
    * await 间隙（killOrphanBackends/findFreePort），this.process 尚为空，
    * stop() 直接 return，随后 spawn 照常执行 → 应用退出后留下孤儿 python。
-   * stop() 置位后不再复位（崩溃自动重启也走 start()，同样必须放弃），
-   * start() 在 spawn 前检查，置位即终止启动。
+   * stopForQuit() 置位后不再复位（崩溃自动重启也走 start()，同样必须放弃），
+   * start() 在 spawn 前检查，置位即终止启动。（S-E1：置位入口由 stop() 拆分
+   * 到 stopForQuit()，普通 stop() 只表达「主动停止、抑制自动重启」。）
    */
   private appQuitting = false
   private starting = false
@@ -76,6 +88,21 @@ export class BackendManager {
   private readonly readyWaiters = new Set<ReadyWaiter>()
 
   /**
+   * S-E1：最近一次启动尝试的失败原因（粘滞）。markReady(err) 时记录、成功就绪时
+   * 清空 —— whenReady 的后注册等待者据此立即拿到真实原因，而不是干等自己那 15s
+   * 通用超时（失败发生在它注册之前，在场等待者的唤醒帮不到它）。
+   */
+  private lastStartError: Error | null = null
+
+  /**
+   * S-E1：stderr 行缓冲与字节解码器。跨 chunk 的半行在这里拼齐后才转发一条
+   * [Python]，不再一行裂成两条；StringDecoder 兜住被切在 chunk 边界的多字节字符。
+   * 残余半行在进程退出 / 被杀时 flush（见 exit 处理器与 killCurrentProcess）。
+   */
+  private stderrLineBuf = ''
+  private stderrDecoder: StringDecoder | null = null
+
+  /**
    * 本次启动尝试期间后端 stderr 的尾部环形缓存（保留最后 4KB）。
    * 健康检查超时 / 进程提前退出时拼进错误消息 —— 否则“后端服务启动超时”
    * 这种只有一句话的报错，让人无法区分“Python 没装依赖”和“启动就是慢”。
@@ -95,6 +122,10 @@ export class BackendManager {
    */
   whenReady(timeoutMs = 15_000): Promise<number> {
     if (this.ready) return Promise.resolve(this.port)
+    // S-E1：本次启动已确定失败、且没有新的启动尝试在进行 —— 后注册的等待者
+    // 立即拿到真实失败原因，而不是干等自己那 15s 通用超时。starting 期间不拒
+    //（新尝试的就绪/失败会唤醒），崩溃自动重启的空窗同样适用本条。
+    if (this.lastStartError && !this.starting) return Promise.reject(this.lastStartError)
     return new Promise<number>((resolve, reject) => {
       const waiter: ReadyWaiter = {
         timer: setTimeout(
@@ -117,12 +148,49 @@ export class BackendManager {
   }
 
   /**
+   * S-E1：转发一行后端 stderr。行缓冲凑齐一整行才进来；级别按内容归类 ——
+   * uvicorn 的 INFO/访问日志降为 log 级，WARNING 为 warn，Traceback/ERROR/异常
+   * 保持 error，不再整股 stderr 一律 error 呈现。
+   */
+  private relayBackendStderrLine(line: string): void {
+    const t = line.trim()
+    if (!t) return
+    const d = new Date()
+    const p = (n: number, w = 2): string => String(n).padStart(w, '0')
+    const ts = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`
+    if (/traceback|error|critical|exception/i.test(t)) console.error(`[${ts}] [Python] ${t}`)
+    else if (/warning/i.test(t)) console.warn(`[${ts}] [Python] ${t}`)
+    else console.log(`[${ts}] [Python] ${t}`)
+  }
+
+  /**
+   * 冲掉 stderr 行缓冲的残余半行（进程退出 / 被杀时调用，之后缓冲与解码器归零）。
+   * 不 flush 的话，最后一行没换行收尾的输出（如崩溃前的半条 traceback）会永远
+   * 留在缓冲里不可见。
+   */
+  private flushStderrRelay(): void {
+    if (this.stderrDecoder) {
+      try {
+        const residual = this.stderrDecoder.end()
+        if (residual) this.stderrLineBuf += residual
+      } catch { /* 解码器已 end 等场景忽略 */ }
+      this.stderrDecoder = null
+    }
+    if (!this.stderrLineBuf) return
+    const rest = this.stderrLineBuf
+    this.stderrLineBuf = ''
+    this.relayBackendStderrLine(rest)
+  }
+
+  /**
    * 置就绪标志并唤醒全部等待者。
    * err 非空 = 本次启动已失败（spawn 错误 / 健康检查超时），等待者收到错误，
-   * 而不是挂到超时才动。
+   * 而不是挂到超时才动；失败原因同时记入 lastStartError，供之后的 whenReady
+   * 后注册等待者立即 reject（S-E1）。
    */
   private markReady(err?: Error): void {
     this.ready = !err
+    this.lastStartError = err ?? null
     for (const waiter of [...this.readyWaiters]) this.finishReady(waiter, err)
   }
 
@@ -240,7 +308,7 @@ export class BackendManager {
             // 无法区分"没有 PowerShell / 没有 WMI / 权限不足 / 命令语法错"——
             // 实测就是因为 PATH 被裁剪、spawn 裸名 'powershell' 报 ENOENT，
             // 而这一点在日志里完全看不出来。
-            console.warn('[BackendManager] CIM orphan enumeration failed:', err.message)
+            bmLog('warn', `CIM orphan enumeration failed: ${err.message}`)
             resolve([])
             return
           }
@@ -397,7 +465,7 @@ export class BackendManager {
             .map((r) => r.pid)
           BackendManager.killPids(orphans, [child.pid ?? -1, process.pid])
         } catch (e) {
-          console.warn('[BackendManager] 孤儿枚举/杀灭失败（不影响本次启动）:', e)
+          bmLog('warn', `孤儿枚举/杀灭失败（不影响本次启动）: ${e instanceof Error ? e.message : String(e)}`)
         }
       })()
 
@@ -411,7 +479,7 @@ export class BackendManager {
       const spawnErrorPromise = new Promise<never>((_, reject) => {
         child.on('error', (err) => {
           spawnErrorOccurred = true
-          console.error('[BackendManager] Failed to spawn Python backend:', err)
+          bmLog('error', `Failed to spawn Python backend: ${err}`)
           if (this.process === child) this.process = null
           const friendly = (err as NodeJS.ErrnoException)?.code === 'ENOENT'
             // cwd 已在 spawn 前校验过（见上方 mainPyPath），走到这里 ENOENT 就真是
@@ -432,16 +500,26 @@ export class BackendManager {
       this.process.stdout?.on('data', () => {})
 
       this.stderrTail = ''
+      this.stderrLineBuf = ''
+      this.stderrDecoder = new StringDecoder('utf-8')
       this.process.stderr?.on('data', (data: Buffer) => {
         try {
-          const text = data.toString()
           // 环形缓存尾部 4KB：启动失败时拼进错误消息，超时不再是“无头案”
+          const text = this.stderrDecoder!.write(data)
           this.stderrTail = (this.stderrTail + text).slice(-4000)
-          console.error(`[Python] ${text.trim()}`)
+          // S-E1：按行缓冲重组后再转发 —— 跨 chunk 的半行先攒着，凑齐一整行才打
+          // 一条 [Python]；原实现按 chunk 直打，一行 uvicorn 访问日志会被 TCP 分片
+          // 裂成两条，且每条都各自匹配不到级别关键字。残余半行在进程退出/被杀时
+          // flush（见 exit 处理器与 killCurrentProcess）。
+          const lines = this.stderrLineBuf.concat(text).split(/\r?\n/)
+          this.stderrLineBuf = lines.pop() ?? ''
+          for (const line of lines) this.relayBackendStderrLine(line)
         } catch { /* EPIPE on exit */ }
       })
 
       this.process.on('exit', (code) => {
+        // S-E1：进程退出时冲掉行缓冲里残余的半行（崩溃前最后一条没换行收尾的输出）
+        this.flushStderrRelay()
         this.process = null
         // 进程已死，端口上再没有人监听；重启完成前 whenReady 的等待者必须继续等
         this.ready = false
@@ -459,7 +537,7 @@ export class BackendManager {
           // 审查修复：非主动停止却以 code=0 退出（如 uvicorn 应用初始化失败后
           // 正常退出）— 原实现既不重启也不推状态，前端停留在 'ready' 假象，
           // 所有 API 调用才失败且无从排查。通知前端后端已停。
-          console.warn('[BackendManager] Backend exited with code 0 unexpectedly (not intentional stop)')
+          bmLog('warn', 'Backend exited with code 0 unexpectedly (not intentional stop)')
           this.onStatusChange?.({ status: 'error', error: '后端进程异常退出，请重启应用' })
         }
       })
@@ -535,7 +613,7 @@ export class BackendManager {
     this.restartTimestamps = this.restartTimestamps.filter(t => now - t < this.RESTART_COOLDOWN_MS)
 
     if (this.restartTimestamps.length >= this.MAX_RESTART_ATTEMPTS) {
-      console.error(`[BackendManager] Too many restarts (${this.restartTimestamps.length} in ${this.RESTART_COOLDOWN_MS / 1000}s), giving up`)
+      bmLog('error', `Too many restarts (${this.restartTimestamps.length} in ${this.RESTART_COOLDOWN_MS / 1000}s), giving up`)
       this.onStatusChange?.({ status: 'error', error: '后端多次崩溃，请重启应用' })
       return
     }
@@ -557,7 +635,7 @@ export class BackendManager {
       const port = await this.start(this.lastExtraEnv)
       this.onStatusChange?.({ status: 'ready', port })
     } catch (err) {
-      console.error('[BackendManager] Auto-restart failed:', err)
+      bmLog('error', `Auto-restart failed: ${err}`)
       this.onStatusChange?.({ status: 'error', error: String(err) })
     }
   }
@@ -586,6 +664,10 @@ export class BackendManager {
     // 那条路径上的 ready=false 也就不会执行了（stop() 主动停止走这里）
     this.ready = false
 
+    // S-E1：主动停止也冲掉 stderr 行缓冲残余 —— exit 监听随后被摘，
+    // exit 处理器里的 flush 不再有机会执行
+    this.flushStderrRelay()
+
     // Optimization 修复：杀进程前移除所有监听器，防止闭包（含 this）长期持有旧 process 引用
     proc.stdout?.removeAllListeners()
     proc.stderr?.removeAllListeners()
@@ -602,7 +684,7 @@ export class BackendManager {
         // 5s 超时兜底 — 超时后进程多半已在终止过程中，不再等待
         execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore', timeout: 5000 })
       } catch (e) {
-        console.warn(`[BackendManager] taskkill failed (process may have exited or timed out):`, e)
+        bmLog('warn', `taskkill failed (process may have exited or timed out): ${e}`)
       }
       // Windows: taskkill 后清理引用
       this.process = null
@@ -623,17 +705,29 @@ export class BackendManager {
   }
 
   /**
-   * 停止 Python 后端
+   * 停止 Python 后端（语义一：主动停止，抑制崩溃自动重启）。
    * 修复 2c：与 spawn 错误路径共用 killCurrentProcess，均为幂等操作，不会互相竞争。
+   *
+   * S-E1：双语义拆分 —— 本方法只做 intentionalStop（置位后由 start() 在下一次
+   * 启动复位，不阻止后续手动 start()）；「应用退出终态」的语义由 stopForQuit()
+   * 承载，两者判据不再共用一个布尔。
    */
   stop(): void {
     this.intentionalStop = true
-    // 审查R2修复：置应用退出终态标志 — 即使 stop() 落在 start() 的 await 间隙
-    // （this.process 为空、下面直接 return），start() 也会在 spawn 前检查此标志
-    // 并放弃启动，不再遗留退出后的孤儿 python（见 start() 内 appQuitting 守卫）
-    this.appQuitting = true
     if (!this.process) return
     this.killCurrentProcess()
+  }
+
+  /**
+   * 应用退出终态（语义二）：在 stop() 之上再置 appQuitting。
+   * 审查R2修复：置位后即使 stopForQuit() 落在 start() 的 await 间隙
+   * （this.process 为空、杀不到任何东西），start() 也会在 spawn 前检查此标志
+   * 并放弃启动，不再遗留退出后的孤儿 python（见 start() 内 appQuitting 守卫）。
+   * 标志不复位：崩溃自动重启也走 start()，同样必须放弃。
+   */
+  stopForQuit(): void {
+    this.appQuitting = true
+    this.stop()
   }
 
   getPort(): number {
@@ -666,7 +760,7 @@ export class BackendManager {
     try {
       mkdirSync(targetDir, { recursive: true })
     } catch (e) {
-      console.warn('[BackendManager] mkdir db dir failed (will fall back to userData root):', e)
+      bmLog('warn', `mkdir db dir failed (will fall back to userData root): ${e}`)
     }
     const targetPath = join(targetDir, 'ckunagentic.db')
 
@@ -688,7 +782,7 @@ export class BackendManager {
         BackendManager.moveDbFamily(family, targetDir, targetPath)
         return targetPath
       } catch (e) {
-        console.warn(`[BackendManager] Failed to migrate DB from ${legacy}:`, e)
+        bmLog('warn', `Failed to migrate DB from ${legacy}: ${e}`)
       }
     }
     return targetPath
@@ -738,7 +832,7 @@ export class BackendManager {
     // （下次启动走 existsSync(targetPath) 早退，不会再读它）。
     for (const s of staged) {
       try { unlinkSync(s.from) } catch (e) {
-        console.warn(`[BackendManager] legacy DB source left behind: ${s.from}`, e)
+        bmLog('warn', `legacy DB source left behind: ${s.from} ${e}`)
       }
     }
     if (!existsSync(targetPath)) {
@@ -769,7 +863,7 @@ export class BackendManager {
     const envOverride = process.env.CKUN_PYTHON?.trim()
     if (envOverride) {
       if (existsSync(envOverride)) return { cmd: envOverride, prefixArgs: [] }
-      console.warn(`[BackendManager] CKUN_PYTHON 指定的解释器不存在，回退到自动探测: ${envOverride}`)
+      bmLog('warn', `CKUN_PYTHON 指定的解释器不存在，回退到自动探测: ${envOverride}`)
     }
     if (app.isPackaged) {
       const bundled =
@@ -786,7 +880,7 @@ export class BackendManager {
     const cached = loadPythonCache(app.getPath('userData'))
     if (cached && (!isAbsolute(cached.cmd) || existsSync(cached.cmd))) {
       perfMark('backend: python cache hit')
-      console.log(`[BackendManager] 解释器缓存命中: ${[cached.cmd, ...cached.prefixArgs].join(' ')}`)
+      bmLog('log', `解释器缓存命中: ${[cached.cmd, ...cached.prefixArgs].join(' ')}`)
       return cached
     }
 
@@ -812,7 +906,7 @@ export class BackendManager {
     for (const r of results) {
       if (r.ok) {
         const label = [r.c.cmd, ...r.c.prefixArgs].join(' ')
-        console.log(`[BackendManager] Using Python interpreter: ${label}`)
+        bmLog('log', `Using Python interpreter: ${label}`)
         return r.c
       }
     }
