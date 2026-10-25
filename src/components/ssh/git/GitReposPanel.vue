@@ -12,10 +12,14 @@
         <option v-for="s in remoteSessions" :key="s.id" :value="s.id">{{ s.name }}</option>
       </select>
       <button class="btn" type="button" @click="showConnPicker = true">连接远程</button>
-      <button class="btn btn-primary" type="button" :disabled="!!busy" @click="onAdd">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
-        添加仓库
-      </button>
+      <button
+        class="btn"
+        type="button"
+        :disabled="loading || !!busy || !rows.length"
+        title="对当前范围的全部仓库执行 git fetch --all --prune：只更新远端引用，不改动任何工作区"
+        @click="onFetchAll"
+      >获取全部</button>
+      <button class="btn btn-primary" type="button" :disabled="!!busy" @click="onAdd">添加仓库</button>
       <button class="btn icon" type="button" :disabled="loading || !!busy" title="刷新：重新读取各仓库状态" aria-label="刷新" @click="refresh()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
       </button>
@@ -51,78 +55,59 @@
       </template>
     </div>
 
+    <!-- 双栏主体：左 = 状态分组仓库列表；右 = 常驻详情面板（变更 / 分支 / 图谱） -->
     <div v-else class="body">
-      <div class="tbl-wrap">
-        <table class="tbl">
-          <!-- table-layout: fixed + 显式列宽：列宽不随内容/刷新漂移，表头与数据严格对齐 -->
-          <colgroup>
-            <col /><col class="col-branch" /><col class="col-status" /><col class="col-remote" /><col class="col-when" /><col class="col-act" />
-          </colgroup>
-          <thead>
-            <tr>
-              <th>仓库</th>
-              <th>分支</th>
-              <th>状态</th>
-              <th>远程</th>
-              <th>最近提交</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="r in filteredRows"
+      <aside class="vlist" aria-label="仓库列表">
+        <div ref="listEl" class="vlist-scroll" @keydown="onListKeydown">
+          <template v-for="g in groupedRows" :key="g.key">
+            <div class="vgroup" :class="{ 'g-needs': g.key === 'needs' }">
+              <span>{{ g.label }}</span><span class="vgc">{{ g.rows.length }}</span>
+            </div>
+            <button
+              v-for="r in g.rows"
               :key="r.id"
-              class="row"
-              @click="detailRepo = r"
+              type="button"
+              class="vrow"
+              :class="{ sel: r.id === selectedId }"
+              :data-id="r.id"
+              :aria-current="r.id === selectedId ? 'true' : undefined"
+              :title="r.error || r.path"
+              @click="selectedId = r.id"
             >
-              <td>
-                <div class="r-name">{{ r.name }}</div>
-                <div class="r-path" :title="r.path">{{ r.path }}</div>
-              </td>
-              <td class="r-branch">{{ branchText(r) }}</td>
-              <td>
-                <span v-if="r.error" class="pill k-err" :title="r.error">取数失败</span>
-                <span v-else class="pill" :class="'k-' + repoRowKind(r)">{{ kindText(r) }}</span>
-              </td>
-              <td>
-                <span v-if="r.originHost">
-                  <span class="r-host">{{ r.originHost }}</span>
-                  <span class="r-slug">{{ r.originSlug }}</span>
-                  <span v-if="accelTag(r)" class="r-acc" title="git 读取已走全局镜像加速（insteadOf）">已加速</span>
-                </span>
-                <span v-else class="r-slug">—</span>
-              </td>
-              <td class="r-when" :title="r.lastCommit?.subject">
-                <template v-if="r.lastCommit">{{ r.lastCommit.relTime }} · {{ r.lastCommit.author }}</template>
-                <template v-else-if="!r.error">无提交</template>
-              </td>
-              <td @click.stop>
-                <div class="r-act">
-                  <button
-                    class="ibtn"
-                    type="button"
-                    :disabled="!!busy || !!r.error"
-                    title="fetch：仅获取远端状态（--all --prune）"
-                    aria-label="fetch"
-                    @click="onFetch(r)"                  >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
-                  </button>
-                  <button
-                    class="ibtn"
-                    type="button"
-                    :disabled="!!busy"
-                    title="在终端中打开（本地终端 / 新 SSH 会话）"
-                    aria-label="在终端中打开"
-                    @click="onTerm(r)"
-                  >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg>
-                  </button>
-                </div>
-              </td>
-            </tr>
-            <tr v-if="!filteredRows.length"><td colspan="6" class="tbl-empty">没有匹配的仓库</td></tr>
-          </tbody>
-        </table>
+              <span class="vr-l1">
+                <span class="vr-name">{{ r.name }}</span>
+                <span v-if="accelTag(r)" class="vr-acc" title="git 读取已走全局镜像加速（insteadOf）">已加速</span>
+              </span>
+              <span v-if="r.error" class="vr-err" :title="r.error">{{ r.error }}</span>
+              <span v-else class="vr-l2">
+                <span class="vr-branch">{{ branchText(r) }}</span>
+                <span v-if="r.dirtyFiles" class="vr-dirty">● {{ r.dirtyFiles }} 改</span>
+              </span>
+            </button>
+          </template>
+          <div v-if="!groupedRows.length" class="vlist-empty">没有匹配的仓库</div>
+        </div>
+      </aside>
+      <!-- 详情：自取数，动作回抛（确认 / 审计 / 锁都在本组件） -->
+      <GitRepoDetailPanel
+        v-if="detailRepo"
+        :key="detailRepo.id"
+        :repo="detailRepo"
+        :accel-active="accelActive"
+        :busy="busy"
+        @fetch="detailRepo && onFetch(detailRepo)"
+        @pull="detailRepo && onPull(detailRepo)"
+        @push="detailRepo && onPush(detailRepo)"
+        @term="detailRepo && onTerm(detailRepo)"
+        @remove="detailRepo && onRemove(detailRepo)"
+        @refresh="refresh()"
+        @switch="onSwitchCurrent"
+        @commit="onCommitCurrent"
+        @commit-push="onCommitPushCurrent"
+      />
+      <div v-else class="vdetail-empty">
+        <span>在左侧选择一个仓库</span>
+        <span class="vdetail-sub">选中后可在此查看变更、分支与提交图谱，并执行获取 / 拉取 / 推送</span>
       </div>
     </div>
 
@@ -133,25 +118,6 @@
       <span v-if="hostSummary">{{ hostSummary }}</span>
       <span class="sb-right mono">{{ lastSync ? `已同步 ${lastSync}` : '' }}</span>
     </div>
-
-    <!-- 仓库详情：自取数，动作回抛（确认 / 审计 / 锁都在本组件） -->
-    <Teleport to="body">
-      <GitRepoDetailDialog
-        v-if="detailRepo"
-        :key="detailRepo.id"
-        :repo="detailRepo"
-        :accel-active="accelActive"
-        :busy="busy"
-        @close="detailRepo = null"
-        @fetch="detailRepo && onFetch(detailRepo)"
-        @pull="detailRepo && onPull(detailRepo)"
-        @term="detailRepo && onTerm(detailRepo)"
-        @remove="detailRepo && onRemove(detailRepo)"
-        @switch="onSwitchCurrent"
-        @commit="onCommitCurrent"
-        @push="detailRepo && onPush(detailRepo)"
-      />
-    </Teleport>
 
     <!-- 连接选择器：复用 Docker 页的同款组件（连接列表是通用形态） -->
     <Teleport to="body">
@@ -189,18 +155,20 @@
 </template>
 
 <script setup lang="ts">
-// GitReposPanel.vue — Git 工具页的「仓库」子页（设计稿 2026-10-24，变体一：分域列表）。
+// GitReposPanel.vue — Git 页的「仓库」子页（方案 A 双栏工作台，设计稿 2026-10-25）。
+// 左列 = 状态分组仓库列表（需处理 / 待拉取 / 待推送 / 无远程 / 干净），
+// 右列 = 常驻详情面板 GitRepoDetailPanel（变更 / 分支 / 图谱三页签，替代 V2 的弹窗）。
 // 位置 = 本地或某台已连接远程会话；本地经 gitrepos:* IPC（主进程 execFile），
 // 远程构造 shared/git-repos-core 的命令经 sshExec 下发（同 Docker 路线）。
-// 动作锁 / pull 确认 / 远程审计收在本组件；详情弹窗只取数不执行。
-import { computed, onMounted, ref, watch } from 'vue'
+// 动作锁 / pull 确认 / 远程审计收在本组件；详情面板只取数不执行。
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useSSHStore, type SSHConnection, type TerminalSession } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
 import { toFriendlyMessage, unwrapIpcErrorEnvelope } from '@/api/client'
 import { useGithubAccelStore } from '@/stores/github-accel'
 import DockerConnectionPicker from '../docker/DockerConnectionPicker.vue'
-import GitRepoDetailDialog from './GitRepoDetailDialog.vue'
+import GitRepoDetailPanel from './GitRepoDetailPanel.vue'
 import {
   AUDIT_ACTION_GIT,
   auditEnvironmentFor,
@@ -233,6 +201,7 @@ import {
   type CommitOutcome,
   type PushOutcome,
   type RepoRow,
+  type RepoRowKind,
 } from '../../../../shared/git-repos-core'
 
 const props = defineProps<{ active?: boolean }>()
@@ -345,8 +314,6 @@ async function refresh(): Promise<void> {
       }))
     }
     markSynced()
-    // 详情弹窗开着时让概要行跟上新数据（弹窗自身取的文件/分支/提交不重取）
-    if (detailRepo.value) detailRepo.value = rows.value.find(r => r.id === detailRepo.value?.id) ?? null
   } catch (e) {
     if (pin !== epoch) return
     loadError.value = errMsg(e, '仓库读取失败')
@@ -356,7 +323,7 @@ async function refresh(): Promise<void> {
   }
 }
 
-// ── 过滤 / 排序 / 状态栏 ──
+// ── 过滤 / 分组 / 选中 / 状态栏 ──
 const query = ref('')
 const filteredRows = computed(() => {
   const q = query.value.trim().toLowerCase()
@@ -364,15 +331,37 @@ const filteredRows = computed(() => {
   return rows.value.filter(r => (r.name + ' ' + r.path).toLowerCase().includes(q))
 })
 
-function kindText(r: RepoRow): string {
-  const k = repoRowKind(r)
-  if (k === 'dirty') return `未提交变更 ${r.dirtyFiles}`
-  if (k === 'diverge') return `已分叉 ↑${r.ahead}↓${r.behind}`
-  if (k === 'behind') return `落后 ↓${r.behind}`
-  if (k === 'ahead') return `领先 ↑${r.ahead}`
-  if (k === 'none') return '无远程'
-  return '干净'
+/** 左列分组：需处理（失败/脏区/分叉）> 待拉取 > 待推送 > 无远程 > 干净（档序 = REPO_KIND_RANK） */
+const ROW_GROUPS: Array<{ key: string; label: string; kinds: RepoRowKind[] }> = [
+  { key: 'needs', label: '需处理', kinds: ['error', 'dirty', 'diverge'] },
+  { key: 'pull', label: '待拉取', kinds: ['behind'] },
+  { key: 'push', label: '待推送', kinds: ['ahead'] },
+  { key: 'none', label: '无远程', kinds: ['none'] },
+  { key: 'clean', label: '干净', kinds: ['clean'] },
+]
+const groupedRows = computed(() => ROW_GROUPS
+  .map(g => ({ ...g, rows: filteredRows.value.filter(r => g.kinds.includes(r.error ? 'error' : repoRowKind(r))) }))
+  .filter(g => g.rows.length))
+
+// ── 选中与详情：选中态只存 id，行数据跟着 rows 刷新走（refresh 后自动对齐新对象） ──
+const selectedId = ref<string | null>(null)
+const detailRepo = computed(() => rows.value.find(r => r.id === selectedId.value) ?? null)
+
+// 列表键盘导航：↑↓ 在分组列表里移动选中（焦点随选中行走，Enter 即原生按钮激活）
+const listEl = ref<HTMLElement | null>(null)
+function onListKeydown(e: KeyboardEvent): void {
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+  const flat = groupedRows.value.flatMap(g => g.rows)
+  if (!flat.length) return
+  e.preventDefault()
+  const i = flat.findIndex(r => r.id === selectedId.value)
+  const target = i < 0
+    ? (e.key === 'ArrowDown' ? flat[0] : flat[flat.length - 1])
+    : flat[Math.min(flat.length - 1, Math.max(0, i + (e.key === 'ArrowDown' ? 1 : -1)))]
+  selectedId.value = target.id
+  void nextTick(() => listEl.value?.querySelector<HTMLElement>('.vrow.sel')?.focus())
 }
+
 function branchText(r: RepoRow): string {
   if (r.error) return '—'
   // detached HEAD：没有分支名可显示，用 git 术语标注游离状态
@@ -464,6 +453,58 @@ async function onFetch(row: RepoRow): Promise<void> {
   })
 }
 
+/**
+ * 获取全部：对当前范围全部仓库 fetch --all --prune。fetch 属读路径（只更新
+ * 远端跟踪引用，不动工作区），无需确认也不写审计；本地并发发 IPC，远程沿用
+ * 分批限流（同 refresh 口径）。完成一条汇总 toast，再刷新列表。
+ */
+async function onFetchAll(): Promise<void> {
+  const targets = rows.value.filter(r => !r.error)
+  if (!targets.length) return
+  await withBusy('fetch-all', async () => {
+    const api = window.electronAPI
+    if (!api) return
+    let ok = 0
+    let fail = 0
+    let firstErr = ''
+    const count = (good: boolean, err: string): void => {
+      if (good) { ok++; return }
+      fail++
+      if (!firstErr && err) firstErr = err
+    }
+    try {
+      if (isLocal.value) {
+        const settled = await Promise.allSettled(targets.map(r => api.gitreposFetchOne(r.path)))
+        settled.forEach(s => count(
+          s.status === 'fulfilled' && s.value.code === 0,
+          s.status === 'rejected' ? errMsg(s.reason, 'fetch 失败') : firstLine(friendlyGitStderr(s.value.stderr)),
+        ))
+      } else {
+        const session = scopeSession.value
+        if (!session) return
+        for (let i = 0; i < targets.length; i += REMOTE_CONCURRENCY) {
+          const batch = await Promise.allSettled(
+            targets.slice(i, i + REMOTE_CONCURRENCY).map(r => r.sessionId
+              ? api.sshExec(r.sessionId, buildRemoteGitActionCmd(r.path, 'fetch'), REMOTE_FETCH_SEC)
+              : Promise.reject(new Error('远端会话不可用'))),
+          )
+          batch.forEach(s => count(
+            s.status === 'fulfilled' && s.value.exitCode === 0,
+            s.status === 'rejected' ? errMsg(s.reason, 'fetch 失败') : firstLine(s.value.stderr),
+          ))
+        }
+      }
+    } catch (e) {
+      toast.error(errMsg(e, '获取失败'))
+      return
+    }
+    if (ok && !fail) toast.success(`已获取 ${ok} 个仓库：远端引用已更新`)
+    else if (ok) toast.warning(`获取完成：成功 ${ok}，失败 ${fail}（${firstErr}）`, 6000)
+    else toast.error(`获取失败：${fail} 个仓库（${firstErr || '无详细错误'}）`, 6000)
+    await refresh()
+  })
+}
+
 async function onPull(row: RepoRow): Promise<void> {
   const isRemote = row.scope === 'remote'
   const ok = await confirm({
@@ -508,12 +549,15 @@ async function onPull(row: RepoRow): Promise<void> {
   })
 }
 
-// ── 详情弹窗动作的桥接：弹窗只回抛，行对象从 detailRepo 取（模板内不写 TS 标注） ──
+// ── 详情面板动作的桥接：面板只回抛，行对象从 detailRepo 取（模板内不写 TS 标注） ──
 function onSwitchCurrent(branch: string): void {
   if (detailRepo.value) void onSwitch(detailRepo.value, branch)
 }
 function onCommitCurrent(payload: { files: string[]; msg: string }): void {
   if (detailRepo.value) void onCommit(detailRepo.value, payload)
+}
+function onCommitPushCurrent(payload: { files: string[]; msg: string }): void {
+  if (detailRepo.value) void onCommitPush(detailRepo.value, payload)
 }
 
 /**
@@ -576,50 +620,88 @@ async function onCommit(row: RepoRow, payload: { files: string[]; msg: string })
     if (!ok) return
   }
   await withBusy(`commit:${row.id}`, async () => {
-    const api = window.electronAPI
-    if (!api) return
     try {
-      let out: CommitOutcome
-      if (row.scope === 'local') {
-        const r = await api.gitreposCommit(row.path, payload.files, payload.msg)
-        out = interpretCommit(r.stdout, r.stderr, r.code)
-      } else {
-        if (!row.sessionId) throw new Error('远端会话不可用')
-        const remoteCmd = buildRemoteCommitCmd(row.path, payload.files, payload.msg)
-        const started = Date.now()
-        let stdout = '', stderr = '', exitCode: number | null = null
-        try {
-          const r = await api.sshExec(row.sessionId, remoteCmd, REMOTE_ACTION_SEC)
-          stdout = r.stdout
-          stderr = r.stderr
-          exitCode = r.exitCode
-          writeGitAudit(row, remoteCmd, 'executed', auditResultForExit(r.exitCode, Date.now() - started))
-        } catch (e) {
-          const outcome = auditOutcomeForDispatchError(e, errMsg(e, '提交失败'), REMOTE_ACTION_SEC)
-          writeGitAudit(row, remoteCmd, outcome.conclusion, outcome.result)
-          throw e
-        }
-        out = interpretCommit(stdout, stderr, exitCode)
-      }
-      if (out.kind === 'committed') {
-        toast.success(`${row.name}：${out.message}`)
-        await refresh()
-      } else {
-        toast.error(`${row.name}：${out.message}`, 6000)
-      }
+      if (await execCommit(row, payload)) await refresh()
     } catch (e) {
       toast.error(errMsg(e, '提交失败'))
     }
   })
 }
 
+/** 提交执行体（确认 / 动作锁之外的部分）：成功 toast 并返回 true，失败 toast 后返回 false */
+async function execCommit(row: RepoRow, payload: { files: string[]; msg: string }): Promise<boolean> {
+  const api = window.electronAPI
+  if (!api) return false
+  let out: CommitOutcome
+  if (row.scope === 'local') {
+    const r = await api.gitreposCommit(row.path, payload.files, payload.msg)
+    out = interpretCommit(r.stdout, r.stderr, r.code)
+  } else {
+    if (!row.sessionId) throw new Error('远端会话不可用')
+    const remoteCmd = buildRemoteCommitCmd(row.path, payload.files, payload.msg)
+    const started = Date.now()
+    let stdout = '', stderr = '', exitCode: number | null = null
+    try {
+      const r = await api.sshExec(row.sessionId, remoteCmd, REMOTE_ACTION_SEC)
+      stdout = r.stdout
+      stderr = r.stderr
+      exitCode = r.exitCode
+      writeGitAudit(row, remoteCmd, 'executed', auditResultForExit(r.exitCode, Date.now() - started))
+    } catch (e) {
+      const outcome = auditOutcomeForDispatchError(e, errMsg(e, '提交失败'), REMOTE_ACTION_SEC)
+      writeGitAudit(row, remoteCmd, outcome.conclusion, outcome.result)
+      throw e
+    }
+    out = interpretCommit(stdout, stderr, exitCode)
+  }
+  if (out.kind === 'committed') {
+    toast.success(`${row.name}：${out.message}`)
+    return true
+  }
+  toast.error(`${row.name}：${out.message}`, 6000)
+  return false
+}
+
+/** 推送目标：上游 > 远程名/当前分支（push -u 兜底）；无法确定时为 null */
+function pushTarget(row: RepoRow): string | null {
+  if (row.upstream) return row.upstream
+  if (row.remoteName && row.branch && !row.detached) return `${row.remoteName}/${row.branch}`
+  return null
+}
+
+/** 提交并推送：一次确认覆盖两步（提交成功才推送）；远程两步都走审计 */
+async function onCommitPush(row: RepoRow, payload: { files: string[]; msg: string }): Promise<void> {
+  const isRemote = row.scope === 'remote'
+  const target = pushTarget(row)
+  if (!target) {
+    toast.error('当前分支没有上游且无法确定远程仓库，无法「提交并推送」；可先「提交所选」，或在终端 git push -u 设置')
+    return
+  }
+  const ok = await confirm({
+    title: '提交并推送',
+    message: `将以「${payload.msg}」提交 ${payload.files.length} 个文件，随后把分支 ${row.branch} 推送到 ${target}${row.upstream ? '' : '（git push -u 建立上游跟踪）'}。提交成功才会推送。${isRemote ? '两步都在远程主机上执行，计入审计。' : ''}`,
+    confirmText: '提交并推送',
+    danger: isRemote,
+  })
+  if (!ok) return
+  await withBusy(`commit-push:${row.id}`, async () => {
+    try {
+      if (!await execCommit(row, payload)) return
+      await execPush(row)
+      await refresh()
+    } catch (e) {
+      toast.error(errMsg(e, '提交并推送失败'))
+    }
+  })
+}
+
 async function onPush(row: RepoRow): Promise<void> {
   const isRemote = row.scope === 'remote'
-  if (!row.upstream && !(row.remoteName && row.branch && !row.detached)) {
+  const target = pushTarget(row)
+  if (!target) {
     toast.error('当前分支没有上游且无法确定远程仓库，无法推送（可先在终端 git push -u 设置）')
     return
   }
-  const target = row.upstream || `${row.remoteName}/${row.branch}`
   const ok = await confirm({
     title: '推送到远程（git push）',
     message: `将把分支 ${row.branch} 推送到 ${target}${row.upstream ? '' : '（push -u 建立上游跟踪）'}。推送到共享或受保护分支会影响其他人，请确认。${isRemote ? '操作在远程主机上执行，计入审计。' : ''}`,
@@ -628,45 +710,50 @@ async function onPush(row: RepoRow): Promise<void> {
   })
   if (!ok) return
   await withBusy(`push:${row.id}`, async () => {
-    const api = window.electronAPI
-    if (!api) return
     try {
-      let out: PushOutcome
-      if (row.scope === 'local') {
-        const r = await api.gitreposPush(row.path)
-        out = interpretPush(r.stdout, r.stderr, r.code)
-      } else {
-        if (!row.sessionId || !row.remoteName || !row.branch) throw new Error('远端缺少远程名或分支信息，无法构造推送命令')
-        const remoteCmd = row.upstream
-          ? `git -C ${shSingleQuote(row.path)} push`
-          : buildRemotePushCmd(row.path, { remoteName: row.remoteName, branch: row.branch })
-        const started = Date.now()
-        let stdout = '', stderr = '', exitCode: number | null = null
-        try {
-          const r = await api.sshExec(row.sessionId, remoteCmd, REMOTE_PULL_SEC)
-          stdout = r.stdout
-          stderr = r.stderr
-          exitCode = r.exitCode
-          writeGitAudit(row, remoteCmd, 'executed', auditResultForExit(r.exitCode, Date.now() - started))
-        } catch (e) {
-          const outcome = auditOutcomeForDispatchError(e, errMsg(e, '推送失败'), REMOTE_PULL_SEC)
-          writeGitAudit(row, remoteCmd, outcome.conclusion, outcome.result)
-          throw e
-        }
-        out = interpretPush(stdout, stderr, exitCode)
-      }
-      if (out.kind === 'pushed') {
-        toast.success(`${row.name}：${out.message}`)
-        await refresh()
-      } else if (out.kind === 'rejected') {
-        toast.warning(`${row.name}：${out.message}`, 8000)
-      } else {
-        toast.error(`${row.name}：${out.message}`, 6000)
-      }
+      await execPush(row)
+      await refresh()
     } catch (e) {
       toast.error(errMsg(e, '推送失败'))
     }
   })
+}
+
+/** 推送执行体（确认 / 动作锁 / 上游判据之外的部分）：结果分级 toast */
+async function execPush(row: RepoRow): Promise<void> {
+  const api = window.electronAPI
+  if (!api) return
+  let out: PushOutcome
+  if (row.scope === 'local') {
+    const r = await api.gitreposPush(row.path)
+    out = interpretPush(r.stdout, r.stderr, r.code)
+  } else {
+    if (!row.sessionId || !row.remoteName || !row.branch) throw new Error('远端缺少远程名或分支信息，无法构造推送命令')
+    const remoteCmd = row.upstream
+      ? `git -C ${shSingleQuote(row.path)} push`
+      : buildRemotePushCmd(row.path, { remoteName: row.remoteName, branch: row.branch })
+    const started = Date.now()
+    let stdout = '', stderr = '', exitCode: number | null = null
+    try {
+      const r = await api.sshExec(row.sessionId, remoteCmd, REMOTE_PULL_SEC)
+      stdout = r.stdout
+      stderr = r.stderr
+      exitCode = r.exitCode
+      writeGitAudit(row, remoteCmd, 'executed', auditResultForExit(r.exitCode, Date.now() - started))
+    } catch (e) {
+      const outcome = auditOutcomeForDispatchError(e, errMsg(e, '推送失败'), REMOTE_PULL_SEC)
+      writeGitAudit(row, remoteCmd, outcome.conclusion, outcome.result)
+      throw e
+    }
+    out = interpretPush(stdout, stderr, exitCode)
+  }
+  if (out.kind === 'pushed') {
+    toast.success(`${row.name}：${out.message}`)
+  } else if (out.kind === 'rejected') {
+    toast.warning(`${row.name}：${out.message}`, 8000)
+  } else {
+    toast.error(`${row.name}：${out.message}`, 6000)
+  }
 }
 
 async function onTerm(row: RepoRow): Promise<void> {
@@ -712,7 +799,7 @@ async function onRemove(row: RepoRow): Promise<void> {
         const cur = remotePaths.value[session.connectionId] || []
         await api.gitreposSetRemotePaths(session.connectionId, cur.filter(p => p !== row.path))
       }
-      detailRepo.value = null
+      selectedId.value = null
       await loadRegistry()
       await refresh()
       toast.success(`已移出 ${row.name}`)
@@ -794,15 +881,11 @@ async function handleConnect(conn: SSHConnection): Promise<void> {
   }
 }
 
-// ── 详情弹窗 ──
-const detailRepo = ref<RepoRow | null>(null)
-// 页面可见性：被 v-show 隐藏时收起弹窗（Teleport 到 body 的浮层会盖到别的页面上，
-// Docker 同款处理）；回到前台时刷新一次 —— 状态是快照不是实时，离开期间远端可能已变
+// ── 详情面板 ──
+// 页面可见性：面板是页内布局（不 Teleport），切走不会盖到别的页面；
+// 回到前台时刷新一次 —— 状态是快照不是实时，离开期间远端可能已变
 watch(() => props.active, (active) => {
-  if (active === false) {
-    detailRepo.value = null
-    return
-  }
+  if (active === false) return
   void refresh()
 })
 
@@ -933,104 +1016,104 @@ watch(scopeKey, () => {
 }
 .empty-actions { display: flex; gap: 8px; }
 
-/* ── 表格（table-layout: fixed + colgroup 定宽：列不随内容/刷新漂移） ── */
+/* ── 双栏主体：左 = 状态分组列表（粘性组头），右 = 详情面板 ── */
 .body { flex: 1; min-height: 0; display: flex; }
-.tbl-wrap { flex: 1; overflow: auto; }
-.tbl { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; min-width: 780px; }
-.col-branch { width: 120px; }
-.col-status { width: 104px; }
-.col-remote { width: 200px; }
-.col-when { width: 150px; }
-.col-act { width: 64px; }
-.tbl th {
-  text-align: left;
-  font-weight: 400;
-  color: var(--text-tertiary);
-  padding: 7px 12px;
-  border-bottom: 1px solid var(--border-subtle);
-  font-size: 11px;
-  white-space: nowrap;
-  overflow: hidden;
+.vlist {
+  width: 300px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--divider-primary);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
-.tbl td { padding: 7px 12px; border-bottom: 1px solid var(--divider-primary); vertical-align: middle; overflow: hidden; white-space: nowrap; }
-.tbl tbody tr.row { cursor: pointer; }
-.tbl tbody tr.row:hover td { background: var(--bg-hover); }
-.tbl-empty { color: var(--text-tertiary); text-align: center; padding: 28px 12px !important; white-space: normal !important; }
-
-.r-name { color: var(--text-primary); font-weight: 500; line-height: 1.4; }
-.r-path {
-  color: var(--text-tertiary);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  max-width: 260px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.r-branch {
-  font-family: var(--font-mono);
-  color: var(--accent-cyan);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.pill {
-  display: inline-flex;
+.vlist-scroll { flex: 1; overflow-y: auto; padding-bottom: 8px; }
+.vgroup {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
   align-items: center;
-  height: 18px;
-  padding: 0 8px;
-  border-radius: 9px;
+  gap: 6px;
+  padding: 7px 10px 3px 10px;
   font-size: 11px;
-  white-space: nowrap;
+  color: var(--text-tertiary);
+  background: var(--bg-base);
 }
-.k-dirty { background: var(--status-warn-bg); color: var(--status-warn-text); }
-.k-diverge { background: color-mix(in srgb, var(--accent-orange) 12%, transparent); color: var(--accent-orange); }
-.k-behind { background: color-mix(in srgb, var(--status-info-text) 12%, transparent); color: var(--status-info-text); }
-.k-ahead { background: color-mix(in srgb, var(--accent-purple) 12%, transparent); color: var(--accent-purple); }
-.k-clean { background: var(--status-success-bg); color: var(--status-success-text); }
-.k-none { background: var(--bg-hover); color: var(--text-tertiary); }
-.k-err { background: var(--status-error-bg); color: var(--status-error-text); }
-
-.r-host {
-  display: inline-flex;
-  align-items: center;
+.vgroup.g-needs { color: var(--status-warn-text); }
+.vgc {
+  background: var(--bg-hover);
+  border-radius: 8px;
+  padding: 0 6px;
   font-size: 11px;
   color: var(--text-secondary);
-  border: 1px solid var(--border-subtle);
-  border-radius: 4px;
-  padding: 1px 6px;
+}
+.vgroup.g-needs .vgc { background: color-mix(in srgb, var(--status-warn-text) 14%, transparent); }
+
+.vrow {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-left: 2px solid transparent;
+  background: transparent;
+  font-family: var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+}
+.vrow:hover { background: var(--bg-hover); }
+.vrow.sel { background: var(--bg-active); border-left-color: var(--accent-primary); }
+.vr-l1 { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.vr-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
-.r-slug { font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
-.r-acc {
-  display: inline-block;
-  margin-left: 6px;
+.vr-acc {
+  flex-shrink: 0;
   font-size: 10px;
   color: var(--accent-green);
   border: 1px solid color-mix(in srgb, var(--accent-green) 35%, transparent);
   border-radius: 3px;
   padding: 0 4px;
   white-space: nowrap;
-  vertical-align: 1px;
 }
-.r-when { color: var(--text-secondary); font-size: 11px; white-space: nowrap; }
+.vr-l2 { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 11px; }
+.vr-branch {
+  font-family: var(--font-mono);
+  color: var(--accent-cyan);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vr-dirty { color: var(--status-warn-text); white-space: nowrap; }
+.vr-err {
+  font-size: 11px;
+  color: var(--status-error-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vlist-empty { padding: 28px 12px; text-align: center; color: var(--text-tertiary); font-size: 12px; }
 
-.r-act { display: flex; gap: 4px; }
-.ibtn {
-  width: 24px;
-  height: 24px;
-  display: inline-flex;
+/* 详情未选中空态：双向居中（DESIGN.md 空状态规范） */
+.vdetail-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
+  gap: 6px;
+  color: var(--text-tertiary);
+  font-size: 13px;
 }
-.ibtn:hover:not(:disabled) { background: var(--bg-active); color: var(--text-primary); }
-.ibtn:disabled { opacity: .45; cursor: default; }
+.vdetail-sub { font-size: 11px; }
 
 /* ── 状态栏 ── */
 .statusbar {

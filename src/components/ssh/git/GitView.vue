@@ -2,17 +2,18 @@
   <div class="git-view">
     <!-- 页头：只有标题与子页说明。连接类 UI 一律收在仓库子页内 ——
          加速子页不需要连接，壳不能替它做主（设计稿 2026-10-24） -->
+
     <div class="page-head">
       <div class="page-title">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
-        <span>Git 工具</span>
+        <span>Git</span>
       </div>
       <span class="page-sub">GitHub 加速 · 仓库管理</span>
     </div>
 
     <!-- 子页分段：整页只有这一排全局控件，仓库子页自带自己的工具条 -->
     <div class="toolbar">
-      <div class="seg" role="tablist" aria-label="Git 工具子页">
+      <div class="seg" role="tablist" aria-label="Git 子页">
         <button
           v-for="t in SUB_TABS"
           :key="t.key"
@@ -40,7 +41,7 @@
 </template>
 
 <script setup lang="ts">
-// GitView.vue — Git 工具页壳（C 方案：GitHub 加速 + 仓库管理双子页）。
+// GitView.vue — Git 页壳（C 方案：GitHub 加速 + 仓库管理双子页）。
 // 壳只做三件事：页头 / 子页分段 / 子页惰性挂载；子页选择存 subTab.ts 的模块级
 // ref（命令面板深链在页面挂载前就能指定目标子页，会话内记忆上次停留）。
 import { computed, ref, watch } from 'vue'

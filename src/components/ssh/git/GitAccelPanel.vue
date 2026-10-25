@@ -254,7 +254,7 @@
 </template>
 
 <script setup lang="ts">
-// GitAccelPanel.vue — Git 工具页的「加速」子页。
+// GitAccelPanel.vue — Git 页的「加速」子页。
 // 由原 GithubAccelView.vue 主体原样搬入（页面标题上移到 GitView 壳），
 // store（github-accel.ts）/ IPC（ghaccel:*）/ 主进程（electron/github-accel.ts）零改动。
 import { computed, onMounted, ref, watch } from 'vue'

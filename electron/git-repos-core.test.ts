@@ -16,7 +16,7 @@ import {
   buildRemoteGitActionCmd, splitBySep, toRemoteRepoRow, parseRepoDetailSections,
   interpretPull, firstLine, friendlyGitStderr,
   GRAPH_MAX_LIMIT, buildGraphLogArgs, buildRemoteGraphCmd,
-  parseGraphLog, graphRefKind, graphHasMore,
+  parseGraphLog, graphRefKind, graphHasMore, layoutGraphLanes,
   type RepoRow,
 } from '../shared/git-repos-core'
 
@@ -363,33 +363,31 @@ describe('interpretPull（--ff-only 安全边界）', () => {
   })
 })
 
-describe('提交图谱（--graph --all 解析与命令构造）', () => {
-  /** 逐字对照 `git log --graph --all --format=%x01%H%x1f…` 的真实输出形态 */
+describe('提交图谱（--graph --all 解析、命令构造与车道布局）', () => {
+  /** 逐字对照 `git log --graph --all --format=%x01%H%x1f…` 的真实输出形态（含 %P 父哈希；
+   *  连接线行（|\\、|/）在解析时丢弃——拓扑由 parents 承载） */
   const raw = [
-    `* \x01e511be5aaa\x1ffix: a\x1fckun\x1f2 hours ago\x1fHEAD -> main, origin/main, tag: v1.0`,
+    `* \x01e511be5aaa\x1ffix: a\x1fckun\x1f2 hours ago\x1fHEAD -> main, origin/main, tag: v1.0\x1f9fabfa2eee a1b2c3ddd`,
     `|\\`,
-    `| * \x01a1b2c3ddd\x1ffeat: b\x1flin\x1fyesterday\x1forigin/dev`,
-    `* | \x019fabfa2eee\x1fdocs: c\x1fckun\x1f3 days ago\x1f`,
+    `| * \x01a1b2c3ddd\x1ffeat: b\x1flin\x1fyesterday\x1forigin/dev\x1fd4e5f6accc`,
+    `* | \x019fabfa2eee\x1fdocs: c\x1fckun\x1f3 days ago\x1f\x1fd4e5f6accc`,
     `|/`,
-    `* \x01d4e5f6accc\x1finit\x1fckun\x1f1 month ago\x1f`,
+    `* \x01d4e5f6accc\x1finit\x1fckun\x1f1 month ago\x1f\x1f`,
   ].join('\n')
 
-  it('parseGraphLog：提交行切出图谱列/字段/引用，连接线行保留拓扑', () => {
+  it('parseGraphLog：提交行切出字段/引用/父哈希，图谱列与连接线行丢弃', () => {
     const rows = parseGraphLog(raw)
-    expect(rows).toHaveLength(6)
+    expect(rows).toHaveLength(4)
     expect(rows[0]).toEqual({
-      graph: '* ',
       commit: { hash: 'e511be5aaa', subject: 'fix: a', author: 'ckun', relTime: '2 hours ago' },
       refs: ['HEAD -> main', 'origin/main', 'tag: v1.0'],
+      parents: ['9fabfa2eee', 'a1b2c3ddd'],
     })
-    // 连接线行（合叉的竖线/斜线段）：commit 为 null 但图谱列保留
-    expect(rows[1]).toEqual({ graph: '|\\', commit: null, refs: [] })
-    expect(rows[2].graph).toBe('| * ')
-    expect(rows[2].refs).toEqual(['origin/dev'])
-    expect(rows[3].graph).toBe('* | ')
-    expect(rows[3].refs).toEqual([])
-    expect(rows[4].commit).toBeNull()
-    expect(rows[5].commit?.subject).toBe('init')
+    expect(rows[1].refs).toEqual(['origin/dev'])
+    expect(rows[1].parents).toEqual(['d4e5f6accc'])
+    expect(rows[2].refs).toEqual([])
+    expect(rows[3].commit.subject).toBe('init')
+    expect(rows[3].parents).toEqual([])
   })
 
   it('graphRefKind：HEAD / 本地 / 远端 / 标签四档', () => {
@@ -408,13 +406,43 @@ describe('提交图谱（--graph --all 解析与命令构造）', () => {
   })
 
   it('buildGraphLogArgs：参数形态与 limit 收口（默认 30，上限 500）', () => {
-    expect(buildGraphLogArgs(30)).toEqual(['log', '-n', '30', '--graph', '--all', '--format=%x01%H%x1f%s%x1f%an%x1f%cr%x1f%D'])
+    expect(buildGraphLogArgs(30)).toEqual(['log', '-n', '30', '--graph', '--all', '--format=%x01%H%x1f%s%x1f%an%x1f%cr%x1f%D%x1f%P'])
     expect(buildGraphLogArgs(0)[2]).toBe('30')
     expect(buildGraphLogArgs(9999)[2]).toBe(String(GRAPH_MAX_LIMIT))
   })
 
   it('buildRemoteGraphCmd：路径单引号包裹 + 同一套参数', () => {
     const cmd = buildRemoteGraphCmd('/srv/api', 50)
-    expect(cmd).toBe("git -C '/srv/api' log -n 50 --graph --all --format='%x01%H%x1f%s%x1f%an%x1f%cr%x1f%D'")
+    expect(cmd).toBe("git -C '/srv/api' log -n 50 --graph --all --format='%x01%H%x1f%s%x1f%an%x1f%cr%x1f%D%x1f%P'")
+  })
+
+  it('layoutGraphLanes：首父继承车道、次父开新车道、根提交释放车道', () => {
+    const { rows: lanes, laneCount } = layoutGraphLanes(parseGraphLog(raw))
+    expect(laneCount).toBe(2)
+    // e511 在车道 0：首父 9fab（提交序 2）同车道，次父 a1b2（提交序 1）开车道 1
+    expect(lanes[0].lane).toBe(0)
+    expect(lanes[0].edges).toEqual([{ toRow: 2, toLane: 0 }, { toRow: 1, toLane: 1 }])
+    // a1b2 在车道 1，父 d4e5（提交序 3）同车道
+    expect(lanes[1].lane).toBe(1)
+    expect(lanes[1].edges).toEqual([{ toRow: 3, toLane: 1 }])
+    // 9fab 回到车道 0，汇入 d4e5
+    expect(lanes[2].lane).toBe(0)
+    expect(lanes[2].edges).toEqual([{ toRow: 3, toLane: 0 }])
+    // d4e5 是根提交：无连线，车道释放
+    expect(lanes[3].lane).toBe(0)
+    expect(lanes[3].edges).toEqual([])
+  })
+
+  it('layoutGraphLanes：父提交超出加载范围时跳过该边（车道就地释放）', () => {
+    const rows = parseGraphLog(raw).filter(r => r.commit.hash !== 'd4e5f6accc')
+    const { rows: lanes, laneCount } = layoutGraphLanes(rows)
+    // 截掉根提交：e511 的两个父（9fab/a1b2）仍在，车道布局不变；
+    // a1b2 与 9fab 的父 d4e5 不可见 → 无边、车道释放
+    expect(laneCount).toBe(2)
+    expect(lanes[0].edges).toEqual([{ toRow: 2, toLane: 0 }, { toRow: 1, toLane: 1 }])
+    expect(lanes[1].lane).toBe(1)
+    expect(lanes[1].edges).toEqual([])
+    expect(lanes[2].lane).toBe(0)
+    expect(lanes[2].edges).toEqual([])
   })
 })

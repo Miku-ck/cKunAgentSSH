@@ -198,22 +198,24 @@ export function parseGitLog(raw: string): GitCommitInfo[] {
   return out
 }
 
-// ─── 提交图谱（文字档：git log --graph --all 的输出解析） ───
+// ─── 提交图谱（git log --graph --all 的输出解析 + SVG 车道布局） ───
 
-/** 图谱行：graph 列原样字符（含对齐空格，等宽渲染保证 │ 连续）；commit 为 null = 纯连接线行 */
+/** 图谱行：一条提交一行（--graph 的 ASCII 图谱列与连接线行不保留——SVG 车道的拓扑由 parents 推导） */
 export interface GraphCommitRow {
-  graph: string
-  commit: GitCommitInfo | null
+  commit: GitCommitInfo
   /** %D 的引用名（HEAD -> main / origin/main / tag: v1.2），空数组 = 无装饰 */
   refs: string[]
+  /** %P 父提交全哈希（空格分隔；根提交为空数组）——SVG 车道图的连线依据 */
+  parents: string[]
 }
 
 /**
  * 图谱格式串：\x01 领起提交字段（与前面的图谱字符列切分），\x1f 分字段，
- * 尾部 %D 内联引用名——一条命令拿全拓扑 + 提交 + 分支指针，不需要 for-each-ref。
- * --graph 自带 topological order（git 约定），无需再指定排序。
+ * 尾部 %D 内联引用名、%P 内联父哈希——一条命令拿全拓扑 + 提交 + 分支指针 +
+ * 父子关系，不需要 for-each-ref。--graph 自带 topological order（git 约定），
+ * 无需再指定排序。
  */
-export const GIT_GRAPH_FORMAT = '%x01%H%x1f%s%x1f%an%x1f%cr%x1f%D'
+export const GIT_GRAPH_FORMAT = '%x01%H%x1f%s%x1f%an%x1f%cr%x1f%D%x1f%P'
 
 /** 图谱条数上限：防御巨型仓库把输出顶爆（本地 4MB maxBuffer / 远程 1MB ssh 截断） */
 export const GRAPH_MAX_LIMIT = 500
@@ -234,36 +236,26 @@ export function buildRemoteGraphCmd(path: string, limit: number): string {
   return `git -C ${shSingleQuote(path)} log -n ${clampGraphLimit(limit)} --graph --all --format='${GIT_GRAPH_FORMAT}'`
 }
 
-/** 图谱字符集（用于识别纯连接线行；含 git 历史上用过的 ASCII 画线字符） */
-const GRAPH_CHARS = /[\s│├└┤┬┴┼╭╮╯╰\\\/|*_\-.,'`]/g
-
-function isGraphOnlyLine(line: string): boolean {
-  if (!line.trim()) return false
-  const stripped = line.replace(GRAPH_CHARS, '')
-  return stripped.length === 0
-}
-
 /**
- * 解析 `git log --graph --all --format=<GIT_GRAPH_FORMAT>` 输出。
- * 提交行 = `<图谱字符>\x01<hash>\x1f<subject>\x1f<author>\x1f<relTime>\x1f<refs>`；
- * 连接线行 = 只有图谱字符（合叉的竖线/斜线段），保留渲染才不丢拓扑。
+ * 解析 `git log --graph --all --format=<GIT_GRAPH_FORMAT>` 输出，只保留提交行：
+ * `<图谱字符>\x01<hash>\x1f<subject>\x1f<author>\x1f<relTime>\x1f<refs>\x1f<parents>`。
+ * \x01 之前是 --graph 的 ASCII 图谱列（仍要保留 --graph 参数：它带来的
+ * topological order 保证父提交总在子提交之后，是车道布局的前提），解析时丢弃。
+ * 连接线行（只有图谱字符的行）同样丢弃——其拓扑已完整编码在 parent 边里。
  */
 export function parseGraphLog(raw: string): GraphCommitRow[] {
   const rows: GraphCommitRow[] = []
   for (const line of raw.split('\n')) {
     if (!line) continue
     const sep = line.indexOf('\x01')
-    if (sep < 0) {
-      if (isGraphOnlyLine(line)) rows.push({ graph: line, commit: null, refs: [] })
-      continue
-    }
+    if (sep < 0) continue
     const fields = line.slice(sep + 1).split('\x1f')
     if (fields.length < 4) continue
     const refs = (fields[4] || '').split(',').map(s => s.trim()).filter(Boolean)
     rows.push({
-      graph: line.slice(0, sep),
       commit: { hash: fields[0], subject: fields[1], author: fields[2], relTime: fields[3] },
       refs,
+      parents: (fields[5] || '').split(' ').filter(Boolean),
     })
   }
   return rows
@@ -282,8 +274,62 @@ export function graphRefKind(ref: string): GraphRefKind {
 /** 这次取回的提交数是否打满了 limit（「加载更多」的可见性判据；触到 500 上限则不再给） */
 export function graphHasMore(rows: GraphCommitRow[], limit: number): boolean {
   const capped = clampGraphLimit(limit)
-  const commits = rows.filter(r => r.commit).length
-  return capped < GRAPH_MAX_LIMIT && commits === capped
+  return capped < GRAPH_MAX_LIMIT && rows.length === capped
+}
+
+// ─── SVG 车道图布局（由 parents 推车道与连线） ───
+
+/** 车道图的一条提交行：lane = 车道号，edges = 指向各父提交（行号 + 车道）的连线 */
+export interface GraphLaneRow {
+  row: GraphCommitRow
+  lane: number
+  edges: Array<{ toRow: number; toLane: number }>
+}
+
+export interface GraphLaneLayout {
+  rows: GraphLaneRow[]
+  laneCount: number
+}
+
+/**
+ * 由提交行（含 parents）推车道布局，替代 --graph 的 ASCII 文字档：
+ * 从最新到最旧单趟扫描，lanes[i] 记「下一个期望出现在车道 i 的哈希」。
+ * 首父继承当前车道（主干延续），其余父提交占空闲车道或汇入既有车道。
+ * 父提交不在本次加载范围（截断 / -n 上限）时该边跳过，车道在无后续边时释放。
+ */
+export function layoutGraphLanes(rows: GraphCommitRow[]): GraphLaneLayout {
+  const rowIndex = new Map<string, number>()
+  rows.forEach((r, i) => { if (!rowIndex.has(r.commit.hash)) rowIndex.set(r.commit.hash, i) })
+  const lanes: Array<string | null> = []
+  const out: GraphLaneRow[] = []
+  const takeLane = (hash: string): number => {
+    const hit = lanes.indexOf(hash)
+    if (hit >= 0) return hit
+    const free = lanes.indexOf(null)
+    if (free >= 0) { lanes[free] = hash; return free }
+    lanes.push(hash)
+    return lanes.length - 1
+  }
+  for (const r of rows) {
+    const h = r.commit.hash
+    const lane = takeLane(h)
+    const edges: GraphLaneRow['edges'] = []
+    r.parents.forEach((p, pi) => {
+      const toRow = rowIndex.get(p)
+      if (toRow === undefined) return
+      let toLane: number
+      if (pi === 0) {
+        lanes[lane] = p
+        toLane = lane
+      } else {
+        toLane = takeLane(p)
+      }
+      edges.push({ toRow, toLane })
+    })
+    if (!edges.length) lanes[lane] = null
+    out.push({ row: r, lane, edges })
+  }
+  return { rows: out, laneCount: Math.max(1, lanes.length) }
 }
 
 // ─── origin URL → host / slug ───

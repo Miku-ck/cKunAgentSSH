@@ -150,9 +150,10 @@ describe('GitReposService 真实取数（statusAll / detail / fetch）', () => {
     expect(r.code).toBe(0)
     const rows = parseGraphLog(r.stdout)
     expect(rows.length).toBeGreaterThan(2)
-    // 连接线行（合叉）与提交行并存，且带 HEAD -> main 装饰
-    expect(rows.some(row => row.commit === null)).toBe(true)
-    expect(rows.some(row => row.commit?.subject === 'merge: feat-x')).toBe(true)
+    // 只保留提交行（连接线行的拓扑由 parents 承载）：合并提交带两个父哈希，且带 HEAD -> main 装饰
+    expect(rows.every(row => row.commit !== null)).toBe(true)
+    const merge = rows.find(row => row.commit?.subject === 'merge: feat-x')
+    expect(merge?.parents).toHaveLength(2)
     expect(rows.some(row => row.refs.some(x => x.includes('main')))).toBe(true)
     g(['branch', '-d', 'feat-x'])
   })

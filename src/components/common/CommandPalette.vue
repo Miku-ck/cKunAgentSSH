@@ -75,7 +75,7 @@ const listRef = ref<HTMLElement | null>(null)
 qcStore.load()
 
 // ── 页面条目（顺序与 PAGE_SHORTCUTS 一致，标题条分组也按这个语义族） ──
-// Git 工具页拆两条深链（sub 经 subTab.ts 预置，页面挂载前也能指定目标子页）；
+// Git 页拆两条深链（sub 经 subTab.ts 预置，页面挂载前也能指定目标子页）；
 // 两条目的 page 都是 'git'，页面清单守卫按集合对账不受影响。
 const PAGE_ITEMS: Array<{ page: Exclude<NavPage, 'home'>; label: string; sub?: 'accel' | 'repos' }> = [
   { page: 'remote-mgr', label: '打开：远程管理' },

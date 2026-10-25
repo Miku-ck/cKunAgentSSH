@@ -1,6 +1,6 @@
 # cKunAgentSSH
 
-SSH 智能运维终端 —— 一个窗口收口远程运维全链路：SSH 连接管理、多标签终端（远程 + 本地）、SFTP、Docker、Git 工具（加速 + 仓库管理）、实时监控、定时任务、SSH 隧道、运维轨迹，以及贯穿其中的 AI Agent 助手。IDE 风格界面，9 档主题 × 10 套强调色。
+SSH 智能运维终端 —— 一个窗口收口远程运维全链路：SSH 连接管理、多标签终端（远程 + 本地）、SFTP、Docker、Git（加速 + 仓库管理）、实时监控、定时任务、SSH 隧道、运维轨迹，以及贯穿其中的 AI Agent 助手。IDE 风格界面，9 档主题 × 10 套强调色。
 
 ## 功能地图（顶部导航 = 唯一入口）
 
@@ -10,7 +10,7 @@ SSH 智能运维终端 —— 一个窗口收口远程运维全链路：SSH 连�
 |---|---|---|---|
 | **AI** | 首页任务台 | `Ctrl+Shift+B` | 助手唯一界面；徽章按 待审批 > 运行中 > 未读 点亮 |
 | **Docker** | 远程 Docker 管理 | `Ctrl+Shift+6` | 容器 / 镜像 / 卷 / 网络四页签 |
-| **Git** | Git 工具（GitHub 加速 / 仓库管理） | `Ctrl+Shift+7` | 加速：镜像测速收敛 + hosts 精确还原；仓库：本地 + 远程状态总览 |
+| **Git** | Git（GitHub 加速 / 仓库管理） | `Ctrl+Shift+7` | 加速：镜像测速收敛 + hosts 精确还原；仓库：本地 + 远程状态总览 |
 | **SFTP** | SFTP 文件传输 | `Ctrl+Shift+2` | 双栏文件管理 + 断点续传 |
 | **终端** | 终端 / 远程管理 | — | 远程与本地多标签终端；零会话时落到远程管理页 |
 | **监控** | 监控仪表盘 | `Ctrl+Shift+3` | 5s 轮询主机与 GPU 指标 |
@@ -47,7 +47,7 @@ SSH 智能运维终端 —— 一个窗口收口远程运维全链路：SSH 连�
 - **SSH 隧道**：TCP 端口转发 / SOCKS5 代理 / Dynamic 转发，规则持久化 + 状态机 + 端口冲突预检，独立 client 不依赖终端会话
 - **Docker 管理**：依附远程 SSH 会话的容器 / 镜像 / 卷 / 网络四页签，按名称过滤，危险操作（如卷清理）二次确认并写入审计链，兼容老版本 Docker CLI；容器详情三段视图（配置 / 日志 / 实时 stats）、镜像导出 tar 与加载、未用镜像清理、pull
 - **GitHub 加速**：一键被动加速（总控纳入 hosts）、转换结果按测速收敛、自检与失效巡检、hosts 文件字节保真与精确还原
-- **Git 仓库管理**：本地 + 远程（SSH 会话）仓库状态总览（未提交变更 / 已分叉 / 落后，异常优先排序），fetch / pull --ff-only（远程 pull 即部署语义，计入审计），分支切换（git switch）、按文件勾选提交（add + commit -- pathspec）、推送（push，无上游 -u 建跟踪；远程写操作确认 + 审计），打开终端直落仓库目录，GitHub 远程与全局加速联动标记，详情内提交图谱（--graph --all 文字档，默认折叠，引用徽章 + 分页加载）
+- **Git 仓库管理**：双栏工作台——左侧状态分组列表（需处理 / 待拉取 / 待推送 / 干净，↑↓ 键盘导航），右侧常驻详情面板（变更 / 分支 / 图谱三页签）；本地 + 远程（SSH 会话）仓库状态总览（未提交变更 / 已分叉 / 落后，异常优先排序），获取全部（批量 fetch --all --prune）、fetch / pull --ff-only（远程 pull 即部署语义，计入审计），分支切换（git switch）、按文件勾选提交（add + commit -- pathspec，全选 / 清空，文件行带类型图标 + 状态短记）、一键提交并推送（一次确认覆盖两步）、推送（push，无上游 -u 建跟踪；远程写操作确认 + 审计），打开终端直落仓库目录，GitHub 远程与全局加速联动标记，提交图谱为 SVG 车道图（父提交推导车道，引用徽章 + 分页加载，失败回退平铺列表）
 - **运维轨迹**：变更动作与 Agent 运行记录归案（主机 / 命令 / 退出码 / 结论），轮转保留；消息中的 run_id 可直达对应分段
 
 ### AI 助手
@@ -145,7 +145,7 @@ cKunAgentSSH/
 │   ├── ssh-manager.ts / ssh-store.ts  # ssh2 连接池 + SFTP；连接配置 safeStorage 加密
 │   ├── tunnel-manager.ts / tunnel-store.ts / tunnel-transport.ts   # SSH 隧道
 │   ├── gateway-manager.ts / gateway-store.ts                       # TLS 网关接入
-│   ├── github-accel.ts / gh-hosts.ts / gh-download.ts              # GitHub 加速（Git 工具·加速子页）
+│   ├── github-accel.ts / gh-hosts.ts / gh-download.ts              # GitHub 加速（Git·加速子页）
 │   ├── git-repos.ts                   # Git 仓库管理（注册表 + 本地 git 执行）
 │   └── desktop-prefs.ts shortcut-win.ts / transports/ / utils/     # 偏好持久化、Windows 快捷方式自建、传输抽象、工具
 │
@@ -172,7 +172,7 @@ cKunAgentSSH/
 │       ├── tools/builtin/             # 34 个内置工具
 │       └── intention.py host_profile.py bridge_relay.py schedule_engine.py
 │
-├── docs/superpowers/specs/            # 设计与实施 spec（Git 工具页、长任务结构化等）
+├── docs/superpowers/specs/            # 设计与实施 spec（Git 页、长任务结构化等）
 ├── gateway/hillgw.mjs                 # 自营 TLS 接入网关（零依赖单文件，独立部署）
 ├── runtime/                           # 打包用的嵌入式 Python 运行时（本地准备，不入库：.gitignore 整目录忽略）
 ├── scripts/                           # dev / package / clean / ci-check / deploy（deploy/ = 目标机一键部署脚本）

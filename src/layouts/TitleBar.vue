@@ -30,10 +30,10 @@
         <IconDocker :width="14" :height="14" />
         <span class="tb-label">Docker</span>
       </button>
-      <button class="titlebar-action-btn" :class="{ active: activePage === 'git' }" :title="'Git 工具（GitHub 加速 / 仓库管理）' + pageHint('git') + ghHealthTitle" aria-label="Git 工具" @click="emit('action-git')">
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'git' }" :title="'Git（GitHub 加速 / 仓库管理）' + pageHint('git') + ghHealthTitle" aria-label="Git" @click="emit('action-git')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
         <!-- 巡检异常红点：只在 degraded 亮，不做绿点（ok 不打扰）——
-             GitHub 加速并入 Git 工具页后，红点随加速子页挂在 Git 按钮上 -->
+             GitHub 加速并入 Git 页后，红点随加速子页挂在 Git 按钮上 -->
         <span v-if="ghDegraded" class="gh-badge" aria-hidden="true"></span>
         <span class="tb-label">Git</span>
       </button>

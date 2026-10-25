@@ -161,7 +161,7 @@ v-show="s.id === store.activeSessionId"
           <DockerView v-if="pageMounted('docker')" :active="activeNavPage === 'docker'" @exec-terminal="activateTerminal($event)" />
         </div>
 
-        <!-- Git 工具页面（GitHub 加速 + 仓库管理，C 方案双子页） -->
+        <!-- Git 页面（GitHub 加速 + 仓库管理，C 方案双子页） -->
         <div v-show="activeNavPage === 'git'" class="git-page">
           <GitView v-if="pageMounted('git')" :active="activeNavPage === 'git'" @exec-terminal="activateTerminal($event)" />
         </div>
@@ -823,7 +823,7 @@ defineExpose({
   overflow: hidden;
 }
 
-/* ─── Git 工具 Page ─── */
+/* ─── Git Page ─── */
 .git-page {
   position: absolute;
   top: 0;
