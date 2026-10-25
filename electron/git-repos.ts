@@ -328,6 +328,17 @@ export class GitReposService {
     return execGit(['-C', repoPath, 'commit', '-m', msg.trim(), '--', ...paths], ACTION_TIMEOUT_MS)
   }
 
+  /** 选中文件（pathspec）对 HEAD 的 diff：供提交信息 AI 归纳（只读，-U2 收敛上下文，
+   *  pathspec 校验与 commitOne 同口径）。空仓库无 HEAD → 非零退出，调用侧退回清单推断 */
+  async diffFiles(path: string, files: string[]): Promise<GitRawResult> {
+    const repoPath = assertRepoPath(path)
+    if (!isValidCommitFiles(files)) throw new Error('未选择文件，或文件路径非法')
+    return execGit(
+      ['-C', repoPath, '-c', 'core.quotePath=false', 'diff', 'HEAD', '-U2', '--', ...files.map(f => f.trim())],
+      ACTION_TIMEOUT_MS,
+    )
+  }
+
   /** 推送：有上游直接 push；无上游按 branch.<name>.remote 或展示远端用 -u 建立跟踪 */
   async pushOne(path: string): Promise<GitRawResult> {
     const repoPath = assertRepoPath(path)

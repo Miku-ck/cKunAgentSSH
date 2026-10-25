@@ -1501,6 +1501,11 @@ function setupSSHIPC(): void {
     return gitRepos!.commitOne(path, files, msg)
   })
 
+  // 选中文件对 HEAD 的 diff（只读，供提交信息 AI 归纳）
+  handleTrusted('gitrepos:diffFiles', (_event, path: string, files: string[]) => {
+    return gitRepos!.diffFiles(path, files)
+  })
+
   handleTrusted('gitrepos:push', (_event, path: string) => {
     return gitRepos!.pushOne(path)
   })

@@ -81,7 +81,7 @@
                 <FileTypeIcon :name="f.path" />
                 <span class="grdp-fpath" :title="`${f.path} · ${statusTitle(f.status)}`">{{ f.path }}</span>
               </div>
-              <div class="grdp-hint">提交请点上方「提交」：弹窗内勾选文件、填写信息后执行</div>
+              <div class="grdp-hint">   </div>
             </template>
           </section>
 
@@ -130,7 +130,6 @@
       <div v-if="showCommit" class="grdc-overlay" @click.self="closeCommit">
         <div class="grdc-dialog" role="dialog" aria-modal="true" aria-label="提交变更">
           <div class="grdc-head">
-            <span class="grdc-title">提交变更</span>
             <span class="grdc-repo">{{ repo.name }}</span>
             <span v-if="!repo.detached && repo.branch" class="grdc-branch mono">{{ repo.branch }}</span>
             <span class="grdc-head-sp"></span>
@@ -146,11 +145,12 @@
             <button
               class="grdc-spark"
               type="button"
-              title="按已勾选文件生成提交信息（规则草稿，生成后可编辑）"
-              aria-label="自动生成提交信息"
-              @click="generateDraft"
+              :class="{ busy: aiDrafting }"
+              :disabled="aiDrafting || !checkedPaths.length"
+              :title="aiDrafting ? 'AI 生成中…' : 'AI 按已勾选文件的 diff 生成提交信息'"
+              aria-label="AI 生成提交信息"
+              @click="aiGenerateDraft"
             >✦</button>
-            <button class="grdc-linkbtn" type="button" :disabled="!checkedPaths.length" title="把变更清单发给 AI 任务台生成提交信息" @click="askAiDraft">AI 写</button>
             <span class="grdc-counter mono">{{ commitMsg.length }}/200</span>
           </div>
           <textarea
@@ -160,8 +160,8 @@
             rows="2"
             maxlength="200"
             spellcheck="false"
-            placeholder="留空将自动生成（Enter 提交）…"
-            @keydown.enter.prevent="submitCommit"
+            placeholder="留空将自动生成（Enter 确认执行）…"
+            @keydown.enter.prevent="submitPrimary"
           />
 
           <div class="grdc-secbar">
@@ -188,15 +188,10 @@
           <div class="grdc-foot">
             <button class="btn" type="button" @click="closeCommit">取消</button>
             <span class="grdc-sp"></span>
-            <!-- 主按钮 = 提交并推送（提交后必推是主流用法）；仅提交保留为次按钮 -->
-            <template v-if="canPush">
-              <button class="btn" type="button" :disabled="!canCommit" title="只提交，不推送（Enter 同此）" @click="submitCommit">
-                仅提交（{{ checkedPaths.length }}）
-              </button>
-              <button class="btn btn-primary" type="button" :disabled="!canCommit" title="提交所选后立即推送当前分支（提交成功才推送）" @click="submitCommitPush">
-                提交并推送
-              </button>
-            </template>
+            <!-- 主按钮 = 提交并推送（提交后必推是主流用法）；无推送目标的仓库退回仅提交 -->
+            <button v-if="canPush" class="btn btn-primary" type="button" :disabled="!canCommit" title="提交所选后立即推送当前分支（提交成功才推送）" @click="submitCommitPush">
+              提交并推送
+            </button>
             <button v-else class="btn btn-primary" type="button" :disabled="!canCommit" @click="submitCommit">
               提交所选（{{ checkedPaths.length }}）
             </button>
@@ -217,11 +212,14 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import GitLaneGraph from './GitLaneGraph.vue'
 import FileTypeIcon from '@/components/icons/FileTypeIcon.vue'
-import { useSshAiStore } from '@/stores/ssh-ai'
+import { agentApi, toFriendlyMessage } from '@/api/client'
+import { useToastStore } from '@/stores/toast'
 import {
   GRAPH_MAX_LIMIT,
+  buildRemoteDiffCmd,
   buildRemoteGraphCmd,
   buildRemoteRepoDetailCmd,
+  clampDiffText,
   draftCommitMessage,
   firstLine,
   friendlyGitStderr,
@@ -350,7 +348,7 @@ const showCommit = ref(false)
 const commitInput = ref<HTMLTextAreaElement | null>(null)
 /** 打开弹窗时被「疑似临时产物」规则默认跳过的文件数（0 = 无，不显示提示行） */
 const noiseSkipped = ref(0)
-const sshAi = useSshAiStore()
+const toast = useToastStore()
 
 function openCommit(): void {
   const files = detail.value?.files ?? []
@@ -363,21 +361,58 @@ function openCommit(): void {
   void nextTick(() => commitInput.value?.focus())
 }
 
-/** ✦ 按已勾选文件生成规则草稿（可编辑）；空清单静默 */
-function generateDraft(): void {
-  if (!checkedPaths.value.length) return
-  commitMsg.value = draftCommitMessage(checkedPaths.value)
-  void nextTick(() => commitInput.value?.focus())
+/** 选中文件对 HEAD 的 diff 摘要（本地 IPC / 远程 sshExec 同口径）；失败返回空串——
+ *  diff 只是提升描述质量的旁路，取不到就退回清单推断，不阻断 AI 生成 */
+async function fetchCheckedDiff(): Promise<string> {
+  const api = window.electronAPI
+  const paths = checkedPaths.value
+  if (!api || !paths.length) return ''
+  try {
+    if (props.repo.scope === 'local') {
+      const r = await api.gitreposDiffFiles(props.repo.path, paths)
+      return r.code === 0 ? clampDiffText(r.stdout) : ''
+    }
+    const sid = props.repo.sessionId
+    if (!sid) return ''
+    const r = await api.sshExec(sid, buildRemoteDiffCmd(props.repo.path, paths), DETAIL_TIMEOUT_SEC)
+    return r.exitCode === 0 ? clampDiffText(r.stdout) : ''
+  } catch {
+    return ''
+  }
 }
 
-/** 「让 AI 写」：预填任务台生成提交信息（应用内 AI 通路，与终端问 AI 同源） */
-function askAiDraft(): void {
-  if (!checkedPaths.value.length) return
-  const files = checkedPaths.value.map(p => `- ${p}`).join('\n')
-  sshAi.askAi(
-    `请为一次 git 提交写提交信息：conventional commits 风格、单行、不超过 72 字符，只输出信息本身。\n`
-    + `仓库 ${props.repo.name}（分支 ${props.repo.branch || 'HEAD'}）本次变更文件：\n${files}`,
-  )
+/** ✦ AI 生成提交信息：先取选中文件的 diff（有内容看内容），再纯推理归纳；失败/为空降级规则草稿 */
+const aiDrafting = ref(false)
+async function aiGenerateDraft(): Promise<void> {
+  if (aiDrafting.value || !checkedPaths.value.length) return
+  const files = (detail.value?.files ?? [])
+    .filter(f => checkedPaths.value.includes(f.path))
+    .map(f => `${f.status} ${f.path}`)
+  if (!files.length) return
+  aiDrafting.value = true
+  try {
+    // 先取 diff（失败得空串，不阻断），再带着 diff 归纳——描述质量的关键就是这一步
+    const diff = await fetchCheckedDiff()
+    const r = await agentApi.generateCommitMessage({
+      repo: props.repo.name,
+      branch: props.repo.branch || '',
+      files,
+      ...(diff ? { diff } : {}),
+    })
+    const msg = (r.message || '').trim().slice(0, 200)
+    if (msg) {
+      commitMsg.value = msg
+    } else {
+      commitMsg.value = draftCommitMessage(checkedPaths.value)
+      toast.warning('AI 返回为空，已填入规则草稿')
+    }
+    void nextTick(() => commitInput.value?.focus())
+  } catch (e) {
+    commitMsg.value = draftCommitMessage(checkedPaths.value)
+    toast.warning(`AI 生成失败（${toFriendlyMessage(e, '服务不可用')}），已填入规则草稿`)
+  } finally {
+    aiDrafting.value = false
+  }
 }
 function closeCommit(): void {
   showCommit.value = false
@@ -397,6 +432,12 @@ function submitCommit(): void {
   // 留空自动生成：规则草稿由已勾选文件推出（确定性，主进程 isValidCommitMsg 仍会复核）
   const msg = commitMsg.value.trim() || draftCommitMessage(checkedPaths.value)
   emit('commit', { files: [...checkedPaths.value], msg })
+}
+
+/** Enter = 主动作：可推送 → 提交并推送（父级仍有确认框兜底防误触）；否则仅提交 */
+function submitPrimary(): void {
+  if (canPush.value) submitCommitPush()
+  else submitCommit()
 }
 
 function submitCommitPush(): void {
@@ -688,10 +729,9 @@ onMounted(() => { void load() })
   box-shadow: var(--shadow-lg);
   padding: 16px 18px;
 }
-.grdc-title { font-size: 14px; font-weight: 600; color: var(--text-primary); flex-shrink: 0; }
 .grdc-head { display: flex; align-items: center; gap: 8px; flex-shrink: 0; min-width: 0; }
 .grdc-head-sp { flex: 1; }
-.grdc-repo { font-size: 12px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.grdc-repo { font-size: 13px; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .grdc-branch {
   flex-shrink: 0;
   font-size: 11px;
@@ -740,7 +780,13 @@ onMounted(() => { void load() })
   font-size: 13px;
   line-height: 1;
 }
-.grdc-spark:hover { background: var(--bg-hover); color: var(--accent-text); }
+.grdc-spark:hover:not(:disabled) { background: var(--bg-hover); color: var(--accent-text); }
+.grdc-spark:disabled { opacity: .45; cursor: default; }
+.grdc-spark.busy { color: var(--accent-text); animation: grdc-rot 1s linear infinite; }
+@keyframes grdc-rot { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .grdc-spark.busy { animation: none; }
+}
 .grdc-noisehint {
   flex-shrink: 0;
   font-size: 11px;

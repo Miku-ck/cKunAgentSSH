@@ -624,6 +624,25 @@ export function buildRemotePushCmd(path: string, opts: { remoteName: string; bra
   return `git -C ${p} push -u ${shSingleQuote(opts.remoteName)} ${shSingleQuote(opts.branch)}`
 }
 
+// ─── 提交信息 AI 归纳的 diff 取数 ───
+
+/** 远程单仓 diff：选中文件（pathspec）对 HEAD，-U2 收敛上下文（未跟踪文件不在此输出——
+ *  git 语义如此，模型从清单的 ?? 状态知晓其为新增） */
+export function buildRemoteDiffCmd(path: string, files: string[]): string {
+  const p = shSingleQuote(path)
+  const paths = files.map(f => shSingleQuote(f.trim())).join(' ')
+  return `git -C ${p} -c core.quotePath=false diff HEAD -U2 -- ${paths}`
+}
+
+/** diff 文本收敛：超限按行截断并标注（控 LLM 输入；空仓库/无 HEAD 时调用侧拿到的
+ *  非 0 退出码直接不发 diff，模型退回清单推断） */
+export function clampDiffText(diff: string, maxChars = 6000): string {
+  if (diff.length <= maxChars) return diff
+  const cut = diff.slice(0, maxChars)
+  const lastNl = cut.lastIndexOf('\n')
+  return `${lastNl > 0 ? cut.slice(0, lastNl) : cut}\n…（diff 过长已截断）`
+}
+
 export type CommitOutcome =
   | { kind: 'committed'; message: string; hash: string | null }
   | { kind: 'failed'; message: string }

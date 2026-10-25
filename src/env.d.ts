@@ -383,6 +383,8 @@ interface ElectronAPI {
   /** V2 写操作：切分支 / 提交所选 / 推送（远程侧由渲染层 sshExec 下发并计入审计） */
   gitreposSwitchBranch: (path: string, branch: string) => Promise<import('../shared/git-repos-core').GitRawResult>
   gitreposCommit: (path: string, files: string[], msg: string) => Promise<import('../shared/git-repos-core').GitRawResult>
+  /** 选中文件对 HEAD 的 diff 原始输出（只读，供提交信息 AI 归纳） */
+  gitreposDiffFiles: (path: string, files: string[]) => Promise<import('../shared/git-repos-core').GitRawResult>
   gitreposPush: (path: string) => Promise<import('../shared/git-repos-core').GitRawResult>
   /** 详情三段原始输出（status / branch -vv / log -20），解析在渲染层 */
   gitreposDetail: (path: string) => Promise<{ ok: boolean; error?: string; statusRaw?: string; branchRaw?: string; logRaw?: string }>

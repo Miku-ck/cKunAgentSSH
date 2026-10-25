@@ -226,6 +226,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // V2 写操作（详情弹窗动作）：远程侧不经这里，渲染层 sshExec 下发并计入审计
   gitreposSwitchBranch: (path: string, branch: string) => ipcRenderer.invoke('gitrepos:switchBranch', path, branch),
   gitreposCommit: (path: string, files: string[], msg: string) => ipcRenderer.invoke('gitrepos:commit', path, files, msg),
+  /** 选中文件对 HEAD 的 diff 原始输出（只读，供提交信息 AI 归纳），截断在渲染层 clampDiffText */
+  gitreposDiffFiles: (path: string, files: string[]) => ipcRenderer.invoke('gitrepos:diffFiles', path, files),
   gitreposPush: (path: string) => ipcRenderer.invoke('gitrepos:push', path),
   gitreposDetail: (path: string) => ipcRenderer.invoke('gitrepos:detail', path),
   /** 提交图谱原始输出（--graph --all + \x01 分列格式），解析在渲染层 parseGraphLog */

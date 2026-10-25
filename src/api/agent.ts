@@ -97,6 +97,13 @@ export const agentApi = {
       body: JSON.stringify(payload),
     }),
 
+  /** Git 提交信息生成（纯推理，无工具）：仓库 / 分支 / 变更清单（带状态前缀）+ 可选 diff 摘要 → 单行提交信息 */
+  generateCommitMessage: (data: { repo: string; branch: string; files: string[]; diff?: string }) =>
+    request<{ message: string }>('/agent/commit-message', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
   // ── 澄清向导 ──
   /** 提交用户答案（前端澄清向导"完成"按钮调用） */
   submitClarification: (runId: string, answers: Record<string, { choice: string; custom_text?: string }>) =>

@@ -17,7 +17,7 @@ import {
   interpretPull, firstLine, friendlyGitStderr,
   GRAPH_MAX_LIMIT, buildGraphLogArgs, buildRemoteGraphCmd,
   parseGraphLog, graphRefKind, graphHasMore, layoutGraphLanes,
-  draftCommitMessage, looksLikeNoiseFile,
+  draftCommitMessage, looksLikeNoiseFile, clampDiffText, buildRemoteDiffCmd,
   type RepoRow,
 } from '../shared/git-repos-core'
 
@@ -361,6 +361,28 @@ describe('interpretPull（--ff-only 安全边界）', () => {
   it('firstLine 取首个非空行', () => {
     expect(firstLine('  \n\nfatal: x\nnext')).toBe('fatal: x')
     expect(firstLine('')).toBe('')
+  })
+})
+
+describe('提交信息 AI 归纳的 diff 取数', () => {
+  it('buildRemoteDiffCmd：路径单引号包裹 + HEAD + U2 上下文', () => {
+    expect(buildRemoteDiffCmd('/srv/api', ['src/a.py', "b'c.py"]))
+      .toBe("git -C '/srv/api' -c core.quotePath=false diff HEAD -U2 -- 'src/a.py' 'b'\\''c.py'")
+  })
+
+  it('clampDiffText：未超限原样、超限按行截断并标注', () => {
+    const small = 'diff --git a/x b/x\n+line\n'
+    expect(clampDiffText(small)).toBe(small)
+    const big = Array.from({ length: 500 }, (_, i) => `line ${i} some change context here`).join('\n')
+    const out = clampDiffText(big, 2000)
+    expect(out.length).toBeLessThanOrEqual(2000 + '…（diff 过长已截断）'.length)
+    expect(out.endsWith('…（diff 过长已截断）')).toBe(true)
+    expect(out).toContain('line 0') // 从头保留
+  })
+
+  it('clampDiffText：默认上限 6000', () => {
+    const big = 'x'.repeat(7000)
+    expect(clampDiffText(big).length).toBeLessThan(7000)
   })
 })
 

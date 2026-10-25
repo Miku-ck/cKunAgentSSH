@@ -96,7 +96,7 @@
       />
       <div v-else class="vdetail-empty">
         <span>在左侧选择一个仓库</span>
-        <span class="vdetail-sub">选中后可在此查看变更、分支与提交图谱，并执行获取 / 拉取 / 推送</span>
+        <span class="vdetail-sub">   </span>
       </div>
     </div>
 
