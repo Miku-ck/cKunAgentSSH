@@ -6,7 +6,7 @@ import type * as PtyNamespace from 'node-pty'
 import { BrowserWindow } from 'electron'
 import { homedir } from 'os'
 import { promises as fsPromises } from 'fs'
-import { LS_COLORS_NO_BACKGROUND } from './utils/terminal-colors'
+import { LS_COLORS_NO_BACKGROUND } from './utils/ls-colors'
 
 // node-pty 的 require 含原生 .node 二进制加载（实测 ~290ms），静态导入会把
 // 这笔开销挂在主进程模块评估期——窗口 show 之前。挪到首次 spawn 时动态加载，

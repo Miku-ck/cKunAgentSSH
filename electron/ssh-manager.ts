@@ -3,7 +3,7 @@
  * 在 Electron 主进程中运行，管理 SSH 连接和 Shell 通道
  */
 import type { Client, ClientChannel, SFTPWrapper } from 'ssh2'
-import { LS_COLORS_NO_BACKGROUND } from './utils/terminal-colors'
+import { LS_COLORS_NO_BACKGROUND } from './utils/ls-colors'
 
 // ssh2 的 require 实测 ~1.3s（纯 JS+crypto 依赖链），静态导入会串在主进程模块
 // 评估期、窗口 show 之前。挪为懒加载：setupSSHIPC 后台预热（用户点连接前已就位，
