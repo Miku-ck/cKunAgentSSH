@@ -32,8 +32,15 @@ describe('主进程必须无条件禁用 GPU 渲染（本机驱动与 Electron v
     ).toEqual([])
   })
 
-  it('disable-gpu-disk-cache 与 disable-gpu-sandbox 也保留', () => {
+  it('disable-gpu-disk-cache 保留；disable-gpu-sandbox 已裁决移除且不得擅自加回', () => {
+    // disable-gpu-disk-cache：有明确实测依据（GPU 进程写不进缓存目录的权限错误），保留。
     expect(appendedSwitches).toContain('disable-gpu-disk-cache')
-    expect(appendedSwitches).toContain('disable-gpu-sandbox')
+    // disable-gpu-sandbox：2026-10-26 单独裁决后移除（main.ts GPU 开关区注释有完整证据链：
+    // 9ed8b12 捆绑引入无自身依据、守卫头部自证崩溃推断已证伪）。反向钉住——除非补出
+    // 具体崩溃/兼容证据并走单独裁决，不允许把它顺手加回来。
+    expect(
+      appendedSwitches.includes('disable-gpu-sandbox'),
+      `disable-gpu-sandbox 已于 2026-10-26 裁决移除（GPU 子进程沙箱应启用），不要未经裁决加回。实际开关: ${appendedSwitches.join(', ')}`,
+    ).toBe(false)
   })
 })

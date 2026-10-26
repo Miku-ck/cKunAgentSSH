@@ -4,7 +4,7 @@ import { pathToFileURL } from 'url'
 import { readdir, readFile, writeFile, stat, lstat, mkdir, rename, rm, realpath, copyFile } from 'fs/promises'
 import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs'
 import { homedir } from 'os'
-import { execSync, execFile, spawn } from 'child_process'
+import { execFile, execFileSync, spawn } from 'child_process'
 import { BackendManager } from './backend-manager'
 import { PtyManager, clampPtyDimension } from './pty-manager'
 import { loadSsh2, SSHManager } from './ssh-manager'
@@ -30,23 +30,25 @@ import {
   shouldHideOnClose,
 } from './desktop-prefs'
 import { assertSafePath, allowDialogKeyPath, isCopyTargetSelfNested, rejectSymlinkTarget } from './utils/path-guard'
+import { shSingleQuote, shQuoteBody } from '../shared/sh-quote-core'
 import { beginCopy, endCopy, requestCopyCancel } from './utils/copy-cancel'
 import { perfMark } from './utils/perf-mark'
 import { resolvePowerShell } from './utils/powershell-path'
 import { ensureShellShortcuts } from './shortcut-win'
+import { installMainLogger, logRendererConsole } from './main-logger'
+
+// 主进程统一日志：必须在一切业务代码之前安装（打包态无 stdout，console.* 只能靠这里
+// 落盘才能在现场排障时可见）。此后包括下面这行 perfMark 在内的所有 console.* 都进
+// 劫持链路 —— 时间戳/级别前缀统一加、userData/main.log 统一落盘，见 main-logger.ts。
+installMainLogger()
 
 perfMark('main module loaded')
 
 // ─── 统一日志口径（startupLogNotes）────────────────
-/** [HH:MM:SS.mmm] 时间戳：启动链路的时序问题（IPC 先于 manager 就位、补全卡壳、
- *  后端起停交错）只有带毫秒时间戳才排得动。 */
-function tsNow(): string {
-  const d = new Date()
-  const p = (n: number, w = 2): string => String(n).padStart(w, '0')
-  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`
-}
-function logWarn(domain: string, msg: string): void { console.warn(`[${tsNow()}] [${domain}] ${msg}`) }
-function logError(domain: string, msg: string): void { console.error(`[${tsNow()}] [${domain}] ${msg}`) }
+// 时间戳（tsNow）已迁入 main-logger.ts 统一提供：console 劫持层给每行日志加
+// [HH:MM:SS.mmm] 与级别前缀，这里的 logWarn/logError 不再自己加时间戳（否则双份）。
+function logWarn(domain: string, msg: string): void { console.warn(`[${domain}] ${msg}`) }
+function logError(domain: string, msg: string): void { console.error(`[${domain}] ${msg}`) }
 
 let mainWindow: BrowserWindow | null = null
 // 开发态判定：原 `is.dev`（@electron-toolkit/utils）语义就是 `!app.isPackaged`，
@@ -161,10 +163,22 @@ function createWindow(): void {
     icon: appIcon.isEmpty() ? undefined : appIcon,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false,
+      // 沙箱开启（2026-10-26 收口）：preload.ts 已核实只用沙箱白名单能力
+      // （contextBridge / ipcRenderer / webUtils.getPathForFile，PoC 实测白名单
+      // ["contextBridge","crashReporter","ipcRenderer","nativeImage","webFrame",
+      //  "webUtils"]），不再需要为 preload 放开沙箱。渲染层无 Node（nodeIntegration
+      //  本就 false），sandbox:true 把 preload 也收进受限 API 面。
+      sandbox: true,
       contextIsolation: true,
       nodeIntegration: false
     }
+  })
+
+  // 渲染层 console 转发进主进程日志（[renderer] 来源标签）：打包态渲染层的 console
+  // 同样无处可见，devtools 没开时连 dev 态都看不见。Electron 35 新式单参 details
+  // （level 为 'info'|'warning'|'error'|'debug' 字符串），位置参数形式已弃用。
+  mainWindow.webContents.on('console-message', (details) => {
+    logRendererConsole(details.level, details.message, details.sourceId, details.lineNumber)
   })
 
   // manager 的窗口引用只在这一处绑定：setup*IPC 先于本函数执行，那时 mainWindow 还是 null，
@@ -257,19 +271,12 @@ function installCsp(): void {
 }
 
 // ─── Window Control IPC ────────────────────────────
-/** 对单个字符串做单引号 shell 转义 */
-function shellQuote(s: string): string {
-  return `'${s.replace(/'/g, "'\\''")}'`
-}
+// 单引号转义统一走 shared/sh-quote-core（全仓唯一实现；PowerShell 的 '' 翻倍是另一套
+// 规则，见 shortcut-win.ts 的 shellQuotePs，勿混用）。
 
 /** 把字符串数组转成 bash 位置参数列表，用于嵌入单引号 shell 脚本 */
 function shellQuoteArgs(segments: string[]): string {
-  return segments.map(shellQuote).join(' ')
-}
-
-/** 把多行 bash 脚本转义后嵌入单引号参数（如 bash -lic '...'） */
-function escapeBashScript(script: string): string {
-  return script.replace(/'/g, "'\\''")
+  return segments.map(shSingleQuote).join(' ')
 }
 
 /** 构造本地/远程 bash 补全脚本体（不含外层 bash -lic 包装） */
@@ -280,7 +287,7 @@ function buildBashCompletionScript(opts: {
   prevSegments?: string[]
 }): string {
   const { isCommand, cmd, prefix, prevSegments = [] } = opts
-  const qPrefix = shellQuote(prefix)
+  const qPrefix = shSingleQuote(prefix)
   if (isCommand) {
     return [
       'shopt -s expand_aliases 2>/dev/null',
@@ -290,7 +297,7 @@ function buildBashCompletionScript(opts: {
       `compgen -A file -- ${qPrefix} 2>/dev/null | sed 's/^/file:/'`,
     ].join('\n')
   }
-  const qCmd = shellQuote(cmd)
+  const qCmd = shSingleQuote(cmd)
   const qPrevSegments = shellQuoteArgs(prevSegments)
   return [
     'set +e',
@@ -424,13 +431,16 @@ async function listFilesByPrefix(dir: string, prefix: string): Promise<string[]>
 /** 读取 Git for Windows 安装路径（优先 HKLM， fallback HKCU） */
 function findGitBashFromRegistry(): string | null {
   if (process.platform !== 'win32') return null
-  const queries = [
-    'reg query "HKLM\\SOFTWARE\\GitForWindows" /v InstallPath',
-    'reg query "HKCU\\SOFTWARE\\GitForWindows" /v InstallPath',
-  ]
-  for (const query of queries) {
+  // argv 数组形式 spawn（execFileSync）：不再经 cmd.exe 拼接解析，消除 shell 解释面。
+  // 参数与原字符串命令逐段一致（reg query <键名> /v InstallPath），输出与超时口径不变。
+  const regKeys = ['HKLM\\SOFTWARE\\GitForWindows', 'HKCU\\SOFTWARE\\GitForWindows']
+  for (const key of regKeys) {
     try {
-      const output = execSync(query, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'], timeout: 3000 })
+      const output = execFileSync('reg', ['query', key, '/v', 'InstallPath'], {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'ignore'],
+        timeout: 3000,
+      })
       const match = output.match(/InstallPath\s+REG_SZ\s+(.+)/)
       if (match) {
         const installPath = match[1].trim()
@@ -1768,8 +1778,8 @@ function setupSftpIPC(): void {
     const { prefix, isCommand, cmd, prevSegments } = opts
     const scriptBody = buildBashCompletionScript({ isCommand, cmd, prefix, prevSegments })
     const cwd = sshManager!.getCwd(sshSessionId)  // OSC 7 跟踪的交互式 cwd
-    const fullScript = cwd ? `cd ${shellQuote(cwd)} && ${scriptBody}` : scriptBody
-    return sshManager!.execCommand(sshSessionId, `bash -lic '${escapeBashScript(fullScript)}' 2>/dev/null`)
+    const fullScript = cwd ? `cd ${shSingleQuote(cwd)} && ${scriptBody}` : scriptBody
+    return sshManager!.execCommand(sshSessionId, `bash -lic '${shQuoteBody(fullScript)}' 2>/dev/null`)
   })
 }
 
@@ -1786,9 +1796,18 @@ app.commandLine.appendSwitch('disable-gpu-disk-cache')
 app.commandLine.appendSwitch('disable-gpu')
 app.commandLine.appendSwitch('disable-gpu-compositing')
 app.commandLine.appendSwitch('disable-software-rasterizer')
-// ⚠️ 下面这条 disable-gpu-sandbox 不在那次批准的三项渲染开关之内 —— 删它等于放宽 GPU 子进程
-// 的沙箱边界（安全姿态），必须单独裁决，别按 ADR 0001 的口径顺手带走。
-app.commandLine.appendSwitch('disable-gpu-sandbox')
+// disable-gpu-sandbox 已于 2026-10-26 单独裁决后移除（就是 fc83e49 注释要求的"单独裁决"）：
+//   - git 考古：9ed8b12（2026-10-14）把本开关与三项渲染开关捆在一起引入（提交信息
+//     「追加 disable-gpu-compositing/sandbox/rasterizer开关」），没有任何针对
+//     gpu-sandbox 本身的崩溃/兼容证据；fc83e49（2026-10-15）恢复它时也明说它
+//     「不在那次批准的三项渲染开关之内」，只是随已知可用状态一起带回来的。
+//   - 回归守卫（electron/main-gpu-switches.test.ts）头部自证：「删开关导致启动失败」
+//     的推断已被证伪（恢复 9ed8b12 状态后仍同死、裸 electron.exe 同死），即当初加它
+//     的依据不成立。
+//   - 结论：无具体崩溃/兼容依据 → 移除，GPU 子进程沙箱恢复启用，与渲染层
+//     sandbox:true（preload 收口，同批）同方向收紧安全姿态。三项渲染开关的去留仍按
+//     原口径待真实同机对照，本条不构成对它们的裁决。
+// 守卫测试已连带改写为反向钉住：不得未经裁决把本开关加回来。
 
 // 单实例锁。拿不到锁有两种成因，语义完全相反，必须分开处理：
 //   1) 真有别的应用实例在跑 → 本实例退出，由已有实例接收 second-instance 并带到前台；
@@ -1877,7 +1896,8 @@ app.whenReady().then(async () => {
   perfMark('createWindow returned')
 
   // tar 形态没有安装器：首启自建桌面/开始菜单快捷方式（含 AUMID，Toast 归属
-  // 注册依赖开始菜单项）。fire-and-forget，失败仅 warn，绝不占用启动关键路径。
+  // 注册依赖开始菜单项）；解包目录被移动后按 exe 指纹失配自愈重建。
+  // fire-and-forget，失败仅 warn，绝不占用启动关键路径。
   ensureShellShortcuts().catch((e) => logWarn('main', `ensureShellShortcuts: ${e instanceof Error ? e.message : String(e)}`))
 
   // Start Electron bridge for backend → main process remote execution

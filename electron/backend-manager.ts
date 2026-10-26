@@ -1,4 +1,4 @@
-import { spawn, ChildProcess, execFile, execSync } from 'child_process'
+import { spawn, ChildProcess, execFile, execFileSync } from 'child_process'
 import { join, basename, isAbsolute } from 'path'
 import { app } from 'electron'
 import http from 'http'
@@ -11,13 +11,11 @@ import { resolvePowerShell } from './utils/powershell-path'
 import { clearPythonCache, loadPythonCache, savePythonCache } from './backend-python-cache'
 
 // ─── 统一日志口径（startupLogNotes）────────────────
-/** [HH:MM:SS.mmm] [BackendManager] 消息。启动链路的时序问题（解释器探测、健康轮询、
- *  重启冷却都以秒计）只有带毫秒时间戳才排得动。 */
+/** [BackendManager] 消息。启动链路的时序问题（解释器探测、健康轮询、
+ *  重启冷却都以秒计）只有带毫秒时间戳才排得动——时间戳由 main-logger 的 console
+ *  劫持层统一加，这里只带来源标签，避免双份。 */
 function bmLog(level: 'log' | 'warn' | 'error', msg: string): void {
-  const d = new Date()
-  const p = (n: number, w = 2): string => String(n).padStart(w, '0')
-  const ts = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`
-  console[level](`[${ts}] [BackendManager] ${msg}`)
+  console[level](`[BackendManager] ${msg}`)
 }
 
 /** whenReady 的等待者：就绪/失败/超时三选一，各自只能被唤醒一次 */
@@ -155,12 +153,10 @@ export class BackendManager {
   private relayBackendStderrLine(line: string): void {
     const t = line.trim()
     if (!t) return
-    const d = new Date()
-    const p = (n: number, w = 2): string => String(n).padStart(w, '0')
-    const ts = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`
-    if (/traceback|error|critical|exception/i.test(t)) console.error(`[${ts}] [Python] ${t}`)
-    else if (/warning/i.test(t)) console.warn(`[${ts}] [Python] ${t}`)
-    else console.log(`[${ts}] [Python] ${t}`)
+    // 时间戳由 main-logger 的 console 劫持层统一加，这里只做分级与来源标签
+    if (/traceback|error|critical|exception/i.test(t)) console.error(`[Python] ${t}`)
+    else if (/warning/i.test(t)) console.warn(`[Python] ${t}`)
+    else console.log(`[Python] ${t}`)
   }
 
   /**
@@ -682,7 +678,10 @@ export class BackendManager {
       try {
         // 审查 MINOR：taskkill 对挂死的进程树可能长时间不返回（同步阻塞主进程）；
         // 5s 超时兜底 — 超时后进程多半已在终止过程中，不再等待
-        execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore', timeout: 5000 })
+        // argv 数组形式 spawn（execFileSync）：不经 cmd.exe 拼接解析，消除 shell
+        // 解释面；参数与原字符串命令逐段一致（/PID <os 分配的 pid> /T /F），
+        // 非零退出/超时同样抛错进 catch，行为不变。
+        execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', timeout: 5000 })
       } catch (e) {
         bmLog('warn', `taskkill failed (process may have exited or timed out): ${e}`)
       }
