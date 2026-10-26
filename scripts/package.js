@@ -21,7 +21,13 @@ if (!process.env.NODE_OPTIONS || !process.env.NODE_OPTIONS.includes('use-system-
 }
 
 const isWin = process.platform === 'win32'
-const builder = path.join(root, 'node_modules', '.bin', isWin ? 'electron-builder.cmd' : 'electron-builder')
+// 直接以本 node 运行 electron-builder 的 CLI 入口（v26 package.json 的 bin 就是 ./cli.js），
+// 不再走 node_modules/.bin 垫片：Windows 垫片是 .cmd，Node ≥18.20/20.12/21.7 出于
+// CVE-2024-27980 禁止无 shell 地派生 .cmd，逼着开 shell:true —— 而 shell:true 会把全部
+// 参数拼成一行交给 cmd.exe 解释，路径/透传参数里的元字符就是注入面。v26 的 .cmd 垫片
+// 内容也仅是 `node "<…>/electron-builder/cli.js" %*`，改为 process.execPath + argv 数组 +
+// shell:false 语义完全等价，还少一层 cmd.exe。POSIX 垫片同理省掉。
+const builderEntry = path.join(root, 'node_modules', 'electron-builder', 'cli.js')
 
 // 4) 内嵌 Python 运行时探测：按 runtime/README.md 的契约认那枚解释器可执行文件
 //    （Windows runtime/python.exe，POSIX runtime/bin/python3），而不是「除 README.md 外还有
@@ -35,15 +41,24 @@ const builder = path.join(root, 'node_modules', '.bin', isWin ? 'electron-builde
 //    mac/linux 目标等于从来没有内嵌运行时。
 const fs = require('fs')
 const runtimeDir = path.join(root, 'runtime')
-// dir 目标下 electron-builder 先把 Electron 运行时解到暂存目录 `${output}/${platform}-unpacked.tmp`，
+// electron-builder v26 的 dir 产物目录名（本机实装 app-builder-lib/out/platformPackager.js
+// computeAppOutDir）：`${buildConfigurationKey}${getArchSuffix(arch)}${MAC ? '' : '-unpacked'}`，
+// 其中 buildConfigurationKey 是 win/mac/linux，getArchSuffix 默认 arch（x64）为空串、
+// 否则 `-<arch>`。即 win-unpacked / win-arm64-unpacked、linux-unpacked / linux-arm64-unpacked、
+// mac / mac-arm64。此前对非 win 平台一律拼 `${process.platform}-unpacked`，darwin 会得到
+// electron-builder 从不产出的 darwin-unpacked，mac 上清理残骸/定位产物永远扑空。
+// （arch 仅取 process.arch 能出现的 x64/arm64；armv7l/universal 不在此脚本的处理面内。）
+const platformBuildDirName = (platform = process.platform, arch = process.arch) => {
+  const key = platform === 'win32' ? 'win' : platform
+  const archSuffix = arch === 'x64' ? '' : `-${arch}`
+  return platform === 'darwin' ? `mac${archSuffix}` : `${key}${archSuffix}-unpacked`
+}
+// dir 目标下 electron-builder 先把 Electron 运行时解到暂存目录 `${output}/产物目录.tmp`，
 // 全部成功后才改名成正式产物目录。中途失败（实测 2026-10-23：electron 下载/解包阶段 EBUSY）
 // 会把一个近乎空的 .tmp 壳留在 dist/ 里，而下一轮构建开机就要 unlink 它——只要残骸里任何一个
 // 文件被外部句柄锁住，后续每一轮打包都会在同一处失败（失败会无限传染，直到手动清理）。
 // 所以非零退出时顺手清掉暂存残骸；删不动（仍被锁）就显式警告，把根因摆在明处而不是留给下轮猜。
-const unpackedStaging = () => {
-  const dir = process.platform === 'win32' ? 'win-unpacked' : `${process.platform}-unpacked`
-  return path.join(root, 'dist', dir + '.tmp')
-}
+const unpackedStaging = () => path.join(root, 'dist', platformBuildDirName() + '.tmp')
 const cleanupStaging = () => {
   const dir = unpackedStaging()
   if (!fs.existsSync(dir)) return
@@ -107,7 +122,11 @@ if (runtimeReady) {
       '产出的 app 依赖目标机自装 Python（或用 CKUN_PYTHON 指定）。不要把这个包发给用户。',
   )
 }
-const child = spawn(builder, [...builderConfigArgs, ...builderPassThroughArgs], { stdio: 'inherit', shell: isWin })
+// argv 数组 + shell:false：这里的参数都是独立词元（`-c` 与其后的配置文件路径、
+// --allow-missing-runtime、其余透传 argv 原样为单个元素），没有需要 shell 展开的
+// glob/管道/引号内多词；配置里的 files/extraResources glob 由 electron-builder
+// 自身展开，与 shell 无关。透传参数因此不再有任何被 cmd.exe/sh 解释的机会。
+const child = spawn(process.execPath, [builderEntry, ...builderConfigArgs, ...builderPassThroughArgs], { stdio: 'inherit', shell: false })
 const version = require(path.join(root, 'package.json')).version
 child.on('exit', (code) => {
   if (code !== 0) {
@@ -117,7 +136,7 @@ child.on('exit', (code) => {
   // tar-only 出件：解包目录直发。Windows 10+ 自带 tar.exe（bsdtar），
   // POSIX 用系统 tar；找不到即失败退出——绝不出"没有发布物"的绿色流水线。
   const tarBin = process.platform === 'win32' ? 'tar.exe' : 'tar'
-  const unpacked = path.join(root, 'dist', process.platform === 'win32' ? 'win-unpacked' : `${process.platform}-unpacked`)
+  const unpacked = path.join(root, 'dist', platformBuildDirName())
   const artifact = path.join(root, 'dist', `ckunagentssh-${version}-${process.platform}-x64.tar.gz`)
   if (!fs.existsSync(unpacked)) {
     console.error(`[package] 未找到 dir 产物目录：${unpacked}`)

@@ -10,7 +10,7 @@
 // （与 shell 语法无关，绝对生效），electron 即可正常以 GUI 模式启动。
 const _injectedRunAsNode = process.env.ELECTRON_RUN_AS_NODE
 delete process.env.ELECTRON_RUN_AS_NODE
-console.error(`[dev.cjs] wrapper active | ELECTRON_RUN_AS_NODE was=${JSON.stringify(_injectedRunAsNode)} now=${JSON.stringify(process.env.ELECTRON_RUN_AS_NODE)}`)
+console.log(`[dev.cjs] ${new Date().toISOString()} wrapper active | ELECTRON_RUN_AS_NODE was=${JSON.stringify(_injectedRunAsNode)} now=${JSON.stringify(process.env.ELECTRON_RUN_AS_NODE)}`)
 
 const { spawn } = require('node:child_process')
 const path = require('node:path')
