@@ -14,6 +14,9 @@
 import { ref } from 'vue'
 import { postToolResult, agentApi } from '@/api/client'
 import { useSSHStore } from '@/stores/ssh'
+// 哨兵匹配前的 ANSI 剥离（回显常带 CSI 着色/光标序列与 OSC 标题序列）：
+// 强实现（CSI+OSC+Fe）收敛在 shared/ansi-core.ts
+import { stripAnsi } from '../../shared/ansi-core'
 
 type DeliveryStatus =
   | 'pending_confirm'
@@ -181,15 +184,6 @@ function ensureCaptureListeners(): void {
   captureListenersRegistered = true
   api.onSshData(({ id, data }) => ingestOutput(id, data))
   api.onPtyData(({ id, data }) => ingestOutput(id, data))
-}
-
-// ── ANSI 转义剥离（哨兵匹配容错）──
-// 终端回显常带 CSI 着色/光标序列与 OSC 标题序列，整行匹配对它们零容错会误判超时
-const ANSI_CSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g
-const ANSI_OSC_RE = /\x1b\][^\x07]*(?:\x07|\x1b\\)/g
-
-function stripAnsi(line: string): string {
-  return line.replace(ANSI_CSI_RE, '').replace(ANSI_OSC_RE, '')
 }
 
 function randomMarker(): string {

@@ -97,14 +97,20 @@ function isAbsolutePath(p: string): boolean {
   return /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith('\\\\') || p.startsWith('/')
 }
 
-/** 执行入口复检：与登记入口同一口径，不给被劫持的渲染层任意目录执行 git 的机会 */
+/**
+ * 执行入口的形态复检：trim 后必须是绝对路径，拒绝空串与相对路径（相对路径会
+ * 挂在主进程 cwd 上解析，结果不可预期）。注意它不校验「是否登记过」—— 任何
+ * 绝对路径都放行，把执行范围收窄到 git 工作区的是下面这层 assertRepoPath。
+ */
 function assertAbsolutePath(p: string): string {
   const v = String(p ?? '').trim()
   if (!isAbsolutePath(v)) throw new Error(`非法路径（须为绝对路径）: ${v || '(空)'}`)
   return v
 }
 
-/** 读写动作入口：除了绝对路径，还要确认当下仍是 git 工作区（注册后目录可能已被删/换） */
+/** 读写动作入口：绝对路径形态之外，还确认当下 .git 仍在（注册后目录可能被删/换）。
+ *  同样不是登记白名单：注册表只负责 UI 列表，这里拦的是「路径失形」与「目录已不是
+ *  仓库」两类失效态。 */
 function assertRepoPath(p: string): string {
   const v = assertAbsolutePath(p)
   if (!isGitRepoPath(v)) throw new Error(`不是 git 仓库（目录下没有 .git）: ${v}`)

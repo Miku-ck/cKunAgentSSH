@@ -13,6 +13,10 @@
  * 的职责，不能删；它与探针等待并行取较晚者，快主机行为与原实现一致。
  */
 
+// 终端回显常带 CSI 着色/OSC 标题序列，整体匹配对它们零容错会误判超时，
+// 故匹配前剥掉；强实现（CSI+OSC+Fe）收敛在 shared/ansi-core.ts
+import { stripAnsi } from '../../shared/ansi-core'
+
 /** 探针等待上限：超过即视为就绪无法确认（超长横幅/登录挂起），回落固定延时 */
 export const HANDSHAKE_TIMEOUT_MS = 5000
 
@@ -59,15 +63,6 @@ export function makeHandshakeMarker(): string {
 export function buildProbeLine(token: string): string {
   const half = Math.ceil(token.length / 2)
   return `echo ${token.slice(0, half)}"${token.slice(half)}"\r`
-}
-
-// 终端回显常带 CSI 着色/OSC 标题序列（与 useAgentDeliver 的哨兵匹配同款容错），
-// 整体匹配对它们零容错会误判超时，故匹配前剥掉
-const ANSI_CSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g
-const ANSI_OSC_RE = /\x1b\][^\x07]*(?:\x07|\x1b\\)/g
-
-function stripAnsi(s: string): string {
-  return s.replace(ANSI_CSI_RE, '').replace(ANSI_OSC_RE, '')
 }
 
 /** 匹配缓冲上限：握手只需最近几屏输出，滚动窗口防止超长横幅把缓冲无界累加 */

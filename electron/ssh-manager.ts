@@ -21,6 +21,7 @@ import { BrowserWindow, app } from 'electron'
 import { SSHError, classifyRawError, toFriendlyZh } from './ssh-error'
 import { encodeTransferErrorName, isTransferRetryable, type TransferErrorCode } from '../shared/transfer-error-core'
 import { classifyExit } from '../shared/exec-outcome-core'
+import { shSingleQuote } from '../shared/sh-quote-core'
 import { promises as fsPromises } from 'fs'
 import { posix, join, dirname } from 'path'
 import { createHash, randomBytes } from 'crypto'
@@ -998,11 +999,11 @@ export class SSHManager {
             //    但前端会过滤含 __ckun_ 标识的整行回显
             // 3. PROMPT_COMMAND 追加而非覆盖，保留用户 .bashrc 原有设置
             // 4. 同时兼容 bash (PROMPT_COMMAND) 和 zsh (precmd_functions)
-            // 5. host 作为 printf 参数传入，避免 % 冲突和注入
-            const escapedHost = config.host.replace(/'/g, "'\\''")
+            // 5. host 作为 printf 参数传入，避免 % 冲突和注入；经 shSingleQuote
+            //    （shared/sh-quote-core.ts，全仓唯一实现）转义后整体成为单引号字面量
             const initCmd = Buffer.from(
               'stty -echo 2>/dev/null; ' +
-              `__ckun_host='${escapedHost}'; ` +
+              `__ckun_host=${shSingleQuote(config.host)}; ` +
               '__ckun_osc7() { printf \'\\033]7;file://%s%s\\007\' "$__ckun_host" "$PWD"; }; ' +
               'if [ -n "$BASH_VERSION" ]; then PROMPT_COMMAND="__ckun_osc7${PROMPT_COMMAND:+; $PROMPT_COMMAND}"; ' +
               'elif [ -n "$ZSH_VERSION" ]; then precmd_functions+=(__ckun_osc7); fi; ' +
@@ -2743,8 +2744,8 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
           await sftpUnlink(this.requireSftp(sshSessionId), remoteZipPath)
         }
       } catch { /* ignore */ }
-      const quotedSources = sources.map(s => shellQuoteRemote(s)).join(' ')
-      const cmd = `cd ${shellQuoteRemote(cwd)} && zip -r -y ${shellQuoteRemote(remoteZipPath)} ${quotedSources}`
+      const quotedSources = sources.map(s => shSingleQuote(s)).join(' ')
+      const cmd = `cd ${shSingleQuote(cwd)} && zip -r -y ${shSingleQuote(remoteZipPath)} ${quotedSources}`
       const result = await this.execCommandWithExitCode(sshSessionId, cmd, 300)
       await this.finishZipResult(sshSessionId, remoteZipPath, result)
       return result
@@ -2779,7 +2780,7 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
     await this.sftpWriteFile(sshSessionId, tmpScript, pyScript)
     let result: { stdout: string; stderr: string; exitCode: number | null }
     try {
-      result = await this.execCommandWithExitCode(sshSessionId, `python3 ${shellQuoteRemote(tmpScript)}`, 300)
+      result = await this.execCommandWithExitCode(sshSessionId, `python3 ${shSingleQuote(tmpScript)}`, 300)
     } finally {
       // 清理临时脚本（无论成功与否）
       try { await this.sftpDelete(sshSessionId, tmpScript) } catch { /* ignore */ }
@@ -2807,7 +2808,7 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
 
     if (hasUnzip) {
       // -o 覆盖不询问，-q 安静（避免大量输出），-d 指定目录
-      const cmd = `unzip -o -q ${shellQuoteRemote(remoteZipPath)} -d ${shellQuoteRemote(remoteDestDir)}`
+      const cmd = `unzip -o -q ${shSingleQuote(remoteZipPath)} -d ${shSingleQuote(remoteDestDir)}`
       const result = await this.execCommandWithExitCode(sshSessionId, cmd, 300)
       // S5-19：exit-status 缺失只说明「不知道」—— 解压可能已经完成，报「失败」会让人
       // 重复解压并误以为目录是坏的。既不谎报成功也不假装失败。
@@ -2841,7 +2842,7 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
     await this.sftpWriteFile(sshSessionId, tmpScript, pyScript)
     let result: { stdout: string; stderr: string; exitCode: number | null }
     try {
-      result = await this.execCommandWithExitCode(sshSessionId, `python3 ${shellQuoteRemote(tmpScript)}`, 300)
+      result = await this.execCommandWithExitCode(sshSessionId, `python3 ${shSingleQuote(tmpScript)}`, 300)
     } finally {
       // 清理临时脚本（无论成功与否）
       try { await this.sftpDelete(sshSessionId, tmpScript) } catch { /* ignore */ }
@@ -2855,11 +2856,6 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
     }
     return result
   }
-}
-
-/** 远程路径单引号转义（用于 SSH exec 命令拼接） */
-function shellQuoteRemote(s: string): string {
-  return `'${s.replace(/'/g, "'\\''")}'`
 }
 
 /** 将数值 mode(含文件类型位)转为 'drwxr-xr-x' 形式 */

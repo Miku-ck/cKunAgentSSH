@@ -3,7 +3,8 @@
  *
  * WS 反向通道阶段 1 的主链路：定时任务命令经此通道从后端下发到主进程，
  * 不再依赖 electron.exe 的回环入站防火墙规则（出站长连接不受入站规则影响）。
- * HTTP 端口桥保留为兜底通道。
+ * 原并行的 HTTP 端口桥已在阶段 2 按设计移除（electron-bridge.ts 头注，
+ * backend/agent/electron_bridge.py 同口径 WS-only），本通道是唯一链路，没有兜底。
  * 协议与实现详见 backend/agent/bridge_relay.py（服务端中枢，协议双方须一致）。
  *
  * 使用 Node 22 原生 WebSocket（Electron 35 内置，零依赖）。主进程 tsconfig

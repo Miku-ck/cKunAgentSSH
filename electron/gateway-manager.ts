@@ -189,6 +189,10 @@ export class GatewayManager {
       e.state = e.attempt > 0 ? 'reconnecting' : 'connecting'
       e.message = undefined
       this.emit(e)
+      // 指纹判定就发生在本文件的 decideHostKey 里：'mismatch' 的结论这里当场记账，
+      // 不必再从 transport 层那条中文 Error 文案（「…指纹…已硬失败」）里反推 ——
+      // 文案会漂移，自己的判定结果不会。
+      let hostKeyMismatch = false
       const transport = new GatewayTransport(
         {
           host: e.rec.host,
@@ -199,7 +203,11 @@ export class GatewayManager {
           clientVersion: app.getVersion(),
           deviceName: app.name,
         },
-        spki => this.decideHostKey(e, spki),
+        spki => {
+          const decision = this.decideHostKey(e, spki)
+          if (decision === 'mismatch') hostKeyMismatch = true
+          return decision
+        },
         info => this.onReady(e, info),
       )
       transport.onDead(reason => this.onDead(e, reason))
@@ -230,7 +238,7 @@ export class GatewayManager {
         }
         this.emit(e)
         // 口令错 / 指纹不符 / 被策略拒是配置问题，退避重试只会把网关日志刷满（§3.3）
-        if (!isFatalAuthError(err)) this.scheduleRetry(e)
+        if (!hostKeyMismatch && !isFatalAuthError(err)) this.scheduleRetry(e)
       }
     } finally {
       e.dialing = false
@@ -330,11 +338,19 @@ export class GatewayManager {
 
 /**
  * 口令错 / 指纹不符 / 被策略拒 / 等着确认 → 不重连；其余（网络、超时）→ 重连。
- * 优先看错误类型：网关的 OPEN_ERR 自带 code（TunnelDeniedError），文案会变而码不会，
- * 拿中文正则当判据会随措辞调整而误停或漏停。
+ * 判定分层、结构化信号优先：
+ * 1. 错误类型 —— GatewayHostKeyPendingError（首见指纹待用户确认）；
+ * 2. 错误码 —— 网关（gateway/hillgw.mjs）每条 openErr 错误帧都带稳定
+ *    { code, message }，transport 层原样转成 TunnelDeniedError：文案会变而码不会，
+ *    拿中文正则当判据会随措辞调整而误停或漏停；
+ * 3. 文案正则 —— 仅作兼容兜底：指纹不符已由 dial 里的 hostKeyMismatch 按自己的
+ *    判定结果直判（不再依赖 transport 的文案），这里给未来仍以普通 Error 形态
+ *    上抛的历史路径留一条与旧行为一致的退路，别再往它身上新增语义。
  */
+const FATAL_OPEN_ERR_CODES: ReadonlySet<string> = new Set(['malformed-request', 'denied-by-policy'])
+
 function isFatalAuthError(err: unknown): boolean {
   if (err instanceof GatewayHostKeyPendingError) return true
-  if (err instanceof TunnelDeniedError) return err.code === 'malformed-request' || err.code === 'denied-by-policy'
+  if (err instanceof TunnelDeniedError) return FATAL_OPEN_ERR_CODES.has(err.code)
   return /指纹|口令|硬失败/.test(String((err as Error)?.message ?? err))
 }

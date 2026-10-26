@@ -12,6 +12,8 @@ import type { Terminal } from '@xterm/xterm'
 import { useSSHStore } from '@/stores/ssh'
 import { api } from '@/api/client'
 import { useSettingsStore } from '@/stores/settings'
+// 终端回显剥 ANSI（CSI/OSC/Fe）的全仓唯一实现在 shared/ansi-core.ts
+import { stripAnsi } from '../../shared/ansi-core'
 
 export interface CompletionCandidate {
   text: string
@@ -91,14 +93,6 @@ export interface CompletionInput {
 
 // prompt 分隔符正则：匹配常见 prompt 末尾 $ # > %，后可跟空白或位于行尾
 const PROMPT_TAIL_RE = /[#$>%](?:\s+|$)/g
-
-/** 去除 ANSI 转义序列（CSI / OSC / 其他单字节 escape） */
-function stripAnsi(text: string): string {
-  return text
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '') // CSI
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '') // OSC
-    .replace(/\x1b[@-Z\\-_]/g, '') // 其他 escape
-}
 
 /** 估算单个字符在终端中占据的列宽（考虑全角/半角/组合字符） */
 function charWidth(char: string): number {

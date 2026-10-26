@@ -14,6 +14,9 @@
  * isValidRemoteRepoPath 做前置校验（拒绝引号与控制字符），双保险。
  */
 
+import { shSingleQuote } from './sh-quote-core'
+import { stripAnsi } from './ansi-core'
+
 // ─── 类型 ───
 
 export interface GitFileEntry {
@@ -457,10 +460,9 @@ export function isValidRemoteRepoPath(path: string): boolean {
     && !/['"\\\x00-\x1f]/.test(path)
 }
 
-/** POSIX 单引号转义：远程命令里的路径一律经此包裹（与 git sq_quote 同法） */
-export function shSingleQuote(s: string): string {
-  return `'${String(s).replace(/'/g, `'\\''`)}'`
-}
+// POSIX 单引号转义的唯一实现在 shared/sh-quote-core.ts（ssh-manager / main 的补全
+// 脚本同源）；这里 re-export 维持原 import 路径 —— GitReposPanel 与单测都从本文件拿。
+export { shSingleQuote }
 
 /** 远程命令三段之间的记录分隔符（printf '\x1e' 输出） */
 export const REMOTE_SEP = '\x1e'
@@ -473,7 +475,7 @@ export const GIT_LOG_FORMAT = '%H%x1f%s%x1f%an%x1f%cr'
  * status 带 core.quotePath=false：否则 porcelain 把中文文件名输出成
  * "\344\270\255" 八进制转义，列表里没法看；只影响读展示，fetch/pull 不掺。
  * remote 段用 get-regexp 取全部远端：远端不叫 origin 的仓库也能落到 host 徽章
- * （挑选规则见 pickRemoteUrl）。
+ * （挑选规则见 pickRemote）。
  */
 export function buildRemoteRepoStatusCmd(path: string): string {
   const p = shSingleQuote(path)
@@ -688,10 +690,10 @@ export function firstLine(s: string): string {
   return (s || '').split('\n').map(l => l.trim()).find(Boolean) || ''
 }
 
-/** 剥掉 ANSI 转义序列：托管端（Gitee 等）的 remote: 消息自带颜色码，原样进 toast 是乱码 */
-export function stripAnsi(s: string): string {
-  return s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
-}
+// ANSI 剥离的唯一强实现（CSI+OSC+Fe）在 shared/ansi-core.ts，这里 re-export 维持
+// 原 import 路径（单测从本文件拿）。用途：托管端（Gitee 等）的 remote: 消息自带
+// 颜色码，不剥掉原样进 toast 是乱码 —— friendlyGitError 匹配前必经这一步。
+export { stripAnsi }
 
 /**
  * 常见 git 失败 stderr → 中文指引（按特异性排序，首条命中即用）。对整段
