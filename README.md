@@ -280,11 +280,12 @@ npm run preview        # 预览构建结果
   Windows `runtime/python.exe`、POSIX `runtime/bin/python3`）与
   [`electron/backend-manager.ts`](electron/backend-manager.ts)（运行期解析顺序与打包后的
   `resources/python-runtime/`）。`runtime/` 目录按 `.gitignore` 整体忽略，需本地准备。
-- **图标**：`resources/icon.png`
+- **图标**：`resources/icon.png`（托盘另有其 32×32 派生图 `resources/icon-tray.png`，缺失时回退整图）
 - **代码签名**：未配置证书
 - **发布形态（tar-only， 2026-10-23 决策）**：不再出 nsis/portable 安装器；`npm run package` 由 electron-builder 出 `dist/win-unpacked/`，
   再由 `scripts/package.js` 压成 `dist/ckunagentssh-<version>-win32-x64.tar.gz`（解包目录直发）。dir 产物没有安装器职责，
-  桌面/开始菜单快捷方式与 AUMID 通知归属由 `electron/shortcut-win.ts` 首启自建。
+  桌面/开始菜单快捷方式与 AUMID 通知归属由 `electron/shortcut-win.ts` 首启自建；
+  解包目录被移动后按 userData 内的 exe 指纹失配自动重建（健康态零 PowerShell 开销）。
 
 ## License
 

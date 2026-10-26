@@ -1,6 +1,6 @@
 /**
  * tar 形态（解包目录直发）没有安装器：桌面/开始菜单快捷方式与 AUMID 注册
- * 由本模块在打包版每次启动时自建。
+ * 由本模块在打包版启动时按需自建/自愈。
  *
  * 为什么必须存在（spec §4）：
  * - NSIS 的 createDesktopShortcut / AUMID 注入在 dir 产物下不存在了；
@@ -9,13 +9,17 @@
  *   在 Start Menu 找不到匹配快捷方式时丢弃通知；
  * - WScript.Shell 能建 .lnk 但写不了 AUMID 扩展属性，须走 IPropertyStore COM 接口。
  *
- * 行为口径：非 win / 非打包态跳过；开始菜单项每次启动幂等补建（可能被用户
- * 删掉），桌面项仅首启一次（userData 标记文件控制，用户主动删除后不强求重建）；
- * 失败只 warn——快捷方式建不出来绝不能影响应用本体运行。
+ * 行为口径：非 win / 非打包态跳过。健康判定在 TS 侧完成、零 PS 开销：开始菜单
+ * .lnk 在位，且 userData 指纹文件记录的"上次建链 exe"与当前 exe 一致。指纹失配
+ * （典型成因：tar 解包目录被用户移动/改名 —— 这是直发形态的常态操作，只判
+ * 「存在」会让 .lnk 永久指向旧路径且永不自愈）或 .lnk 缺失时唤起 PS 校验：逐处
+ * 读 .lnk 的 TargetPath 与当前 exe 比对，漂移即重建。开始菜单项缺失/漂移都补建；
+ * 桌面项在标记文件缺失时缺失/漂移都补建，标记已在位时只修漂移不凭空新建
+ * （尊重用户删除）。失败只 warn——快捷方式建不出来绝不能影响应用本体运行。
  */
 import { execFile } from 'child_process'
 import { existsSync } from 'fs'
-import { writeFile } from 'fs/promises'
+import { readFile, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { app } from 'electron'
 import { APP_USER_MODEL_ID } from './desktop-prefs'
@@ -26,10 +30,15 @@ import { perfMark } from './utils/perf-mark'
 export const SHORTCUT_NAME = 'cKunAgentSSH'
 /** 桌面项"仅首启建一次"的标记文件（放 userData，不进发布物） */
 export const DESKTOP_MARKER_FILE = '.desktop-shortcut-created'
+/** 上次成功建链时的 exe 路径指纹（userData 内，不进发布物）。与桌面标记分开：
+ *  marker 表达"桌面项建过、用户删了别再建"，指纹表达"所有 .lnk 为哪个 exe 而建"。 */
+export const SHORTCUT_EXE_CACHE_FILE = '.shortcuts-built-for'
 
 export interface ShortcutPlan {
-  createStartMenu: boolean
-  createDesktop: boolean
+  /** 是否需要唤起 PS 校验/重建；false 即健康快路径（本模块整体零开销） */
+  needsPs: boolean
+  /** 桌面段「.lnk 缺失」是否算待建（无 marker → 是；有 marker → repair-only） */
+  desktopCreateIfMissing: boolean
 }
 
 /** PS 单引号字符串转义：内部 ' 翻倍。所有插入脚本的字符串必须过它 */
@@ -42,11 +51,30 @@ export function startMenuLnkPath(appData: string): string {
   return join(appData, 'Microsoft', 'Windows', 'Start Menu', 'Programs', `${SHORTCUT_NAME}.lnk`)
 }
 
-/** 计划：已存在 → 不建。桌面实际路径 TS 不猜（OneDrive 重定向兼容），由 PS 内解析 */
-export function planShortcuts(opts: { startMenuExists: boolean; desktopMarkerExists: boolean }): ShortcutPlan {
+/**
+ * 计划：指纹匹配且开始菜单 .lnk 在位 → 健康快路径（桌面项由同一次成功建链保证，
+ * 见 ensureShellShortcuts 的写入时序）；否则唤起 PS 做逐项漂移校验。
+ * 桌面真实路径 TS 不猜（OneDrive 重定向兼容），由 PS 内解析。
+ */
+export function planShortcuts(opts: {
+  startMenuExists: boolean
+  desktopMarkerExists: boolean
+  exeCacheMatches: boolean
+}): ShortcutPlan {
   return {
-    createStartMenu: !opts.startMenuExists,
-    createDesktop: !opts.desktopMarkerExists,
+    needsPs: !(opts.exeCacheMatches && opts.startMenuExists),
+    desktopCreateIfMissing: !opts.desktopMarkerExists,
+  }
+}
+
+/** 读 exe 指纹；文件缺失/读失败一律按 null 处理（= 视为需要 PS 校验一次） */
+export async function readShortcutExeCache(userData: string): Promise<string | null> {
+  const p = join(userData, SHORTCUT_EXE_CACHE_FILE)
+  if (!existsSync(p)) return null
+  try {
+    return (await readFile(p, 'utf-8')).trim()
+  } catch {
+    return null
   }
 }
 
@@ -94,54 +122,65 @@ public static class CKunLnkAumid {
 `.trim()
 
 /**
- * 生成完整 PS 脚本：按 plan 拼段；每段 = WScript.Shell 建 .lnk（图标即 exe 内嵌
- * 图标，tar 解包后 resources 布局不变）+ CKunLnkAumid::Set 写通知归属。
+ * 生成完整 PS 脚本。结构：先纯读取判定两处 .lnk 是否缺失/漂移（WScript.Shell 读
+ * TargetPath 与当前 exe 比对，PS -ne 对字符串大小写不敏感，与 Windows 路径口径
+ * 一致；对不存在的 .lnk 调 CreateShortcut 得到 TargetPath 为空的待建对象，同样
+ * 落入"漂移"，故开始菜单段无需单独判存在）→ 确有待建项才 Add-Type（健康路径下
+ * 脚本在判定段就空转退出，不付 C# 编译的开销）→ foreach 统一建链 + 写 AUMID。
  * 桌面/开始菜单真实路径在 PS 内用 [Environment]::GetFolderPath 解析（OneDrive
  * 重定向兼容）；$ErrorActionPreference='Stop' 任一步失败整体非零退出，由 TS 捕获。
  */
 export function buildShortcutScript(plan: ShortcutPlan, execPath: string, aumid: string): string {
-  const lines: string[] = ["$ErrorActionPreference = 'Stop'"]
-  const targets: string[] = []
-  if (plan.createStartMenu) {
-    // GetFolderPath('StartMenu') 返回 开始菜单\Programs 的上一级，Programs 需拼上
-    targets.push(`Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs'`)
-  }
-  if (plan.createDesktop) {
-    targets.push(`[Environment]::GetFolderPath('Desktop')`)
-  }
-  if (targets.length === 0) return ''
-  lines.push(`Add-Type -TypeDefinition ${shellQuotePs(AUMID_CSHARP)}`)
-  for (const dirExpr of targets) {
-    lines.push(
-      `$dir = ${dirExpr}`,
-      `New-Item -ItemType Directory -Force -Path $dir | Out-Null`,
-      `$lnk = Join-Path $dir ${shellQuotePs(`${SHORTCUT_NAME}.lnk`)}`,
-      `$ws = New-Object -ComObject WScript.Shell`,
-      `$sc = $ws.CreateShortcut($lnk)`,
-      `$sc.TargetPath = ${shellQuotePs(execPath)}`,
-      `$sc.WorkingDirectory = Split-Path ${shellQuotePs(execPath)}`,
-      `$sc.Description = ${shellQuotePs(SHORTCUT_NAME)}`,
-      `$sc.IconLocation = ${shellQuotePs(`${execPath},0`)}`,
-      `$sc.Save()`,
-      `[CKunLnkAumid]::Set($lnk, ${shellQuotePs(aumid)})`,
-    )
-  }
+  const qLnkName = shellQuotePs(`${SHORTCUT_NAME}.lnk`)
+  const lines: string[] = [
+    "$ErrorActionPreference = 'Stop'",
+    `$exe = ${shellQuotePs(execPath)}`,
+    `$aumid = ${shellQuotePs(aumid)}`,
+    `$dtCreateIfMissing = ${plan.desktopCreateIfMissing ? '$true' : '$false'}`,
+    '$pending = @()',
+    `$smDir = Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs'`,
+    `$smLnk = Join-Path $smDir ${qLnkName}`,
+    `if (-not (Test-Path -LiteralPath $smLnk) -or ((New-Object -ComObject WScript.Shell).CreateShortcut($smLnk).TargetPath -ne $exe)) { $pending += $smDir }`,
+    `$dtDir = [Environment]::GetFolderPath('Desktop')`,
+    `$dtLnk = Join-Path $dtDir ${qLnkName}`,
+    'if (Test-Path -LiteralPath $dtLnk) {',
+    '  if (((New-Object -ComObject WScript.Shell).CreateShortcut($dtLnk).TargetPath -ne $exe)) { $pending += $dtDir }',
+    '} elseif ($dtCreateIfMissing) { $pending += $dtDir }',
+    'if ($pending.Count -gt 0) {',
+    `  Add-Type -TypeDefinition ${shellQuotePs(AUMID_CSHARP)}`,
+    '  foreach ($dir in $pending) {',
+    '    New-Item -ItemType Directory -Force -Path $dir | Out-Null',
+    `    $lnk = Join-Path $dir ${qLnkName}`,
+    '    $ws = New-Object -ComObject WScript.Shell',
+    '    $sc = $ws.CreateShortcut($lnk)',
+    '    $sc.TargetPath = $exe',
+    '    $sc.WorkingDirectory = Split-Path $exe',
+    `    $sc.Description = ${shellQuotePs(SHORTCUT_NAME)}`,
+    // 不用 "$exe,0" 双引号内插：路径里出现 $ 字符会被 PS 当变量展开
+    '    $sc.IconLocation = ($exe + ",0")',
+    '    $sc.Save()',
+    '    [CKunLnkAumid]::Set($lnk, $aumid)',
+    '  }',
+    '}',
+  ]
   return lines.join('\n')
 }
 
 /**
- * 每次启动调用（main.ts fire-and-forget 接线）。全程不抛：跳过条件早退、
- * 幂等零开销、PS 失败仅 warn。成功且本次建过桌面项 → 写标记文件。
+ * 每次启动调用（main.ts fire-and-forget 接线）。健康快路径零 PS 开销；唤起 PS 且
+ * 成功后回写桌面标记与 exe 指纹。全程不抛：跳过条件早退、PS 失败仅 warn。
  */
 export async function ensureShellShortcuts(): Promise<void> {
   if (process.platform !== 'win32' || !app.isPackaged) return
-  const markerPath = join(app.getPath('userData'), DESKTOP_MARKER_FILE)
+  const userData = app.getPath('userData')
+  const exe = app.getPath('exe')
   const plan = planShortcuts({
     startMenuExists: existsSync(startMenuLnkPath(app.getPath('appData'))),
-    desktopMarkerExists: existsSync(markerPath),
+    desktopMarkerExists: existsSync(join(userData, DESKTOP_MARKER_FILE)),
+    exeCacheMatches: (await readShortcutExeCache(userData)) === exe,
   })
-  if (!plan.createStartMenu && !plan.createDesktop) return
-  const script = buildShortcutScript(plan, app.getPath('exe'), APP_USER_MODEL_ID)
+  if (!plan.needsPs) return
+  const script = buildShortcutScript(plan, exe, APP_USER_MODEL_ID)
   try {
     await new Promise<void>((resolve, reject) => {
       execFile(
@@ -158,9 +197,12 @@ export async function ensureShellShortcuts(): Promise<void> {
     return
   }
   perfMark('shortcuts: ensured')
-  if (plan.createDesktop) {
+  if (plan.desktopCreateIfMissing) {
     // 标记异步写、失败仅 warn：下次启动多建一次桌面项而已，无害
-    void writeFile(markerPath, new Date().toISOString(), 'utf-8')
+    void writeFile(join(userData, DESKTOP_MARKER_FILE), new Date().toISOString(), 'utf-8')
       .catch((e) => console.warn('[shortcut] 桌面标记写入失败:', e))
   }
+  // 指纹同样异步写、失败仅 warn：最坏代价是下次启动多做一次 PS 空转校验
+  void writeFile(join(userData, SHORTCUT_EXE_CACHE_FILE), exe, 'utf-8')
+    .catch((e) => console.warn('[shortcut] exe 指纹缓存写入失败:', e))
 }

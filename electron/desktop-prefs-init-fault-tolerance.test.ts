@@ -42,7 +42,14 @@ vi.mock('electron', () => ({
     destroy(): void {}
   },
   nativeImage: {
-    createFromPath: () => ({ isEmpty: () => !env.iconPresent }),
+    createFromPath: () => ({
+      isEmpty: () => !env.iconPresent,
+      // buildTrayImage 走 16@1x + 32@2x 组装时需要这几个方法；测试只关心可用性判定
+      getSize: () => ({ width: 32, height: 32 }),
+      resize: () => ({ toPNG: () => Buffer.alloc(0) }),
+      toPNG: () => Buffer.alloc(0),
+    }),
+    createEmpty: () => ({ addRepresentation: () => {} }),
   },
 }))
 

@@ -83,13 +83,7 @@ win:
   # 桌面快捷方式与 AUMID 注册改由 electron/shortcut-win.ts 首启自建（见 spec §4）。
   target:
     - dir
-mac:
-  extendInfo:
-    - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
-  target:
-    - dmg
-linux:
-  target:
-    - AppImage
-  maintainer: ckun.com
-  category: Utility
+# mac/linux 目标已随 2026-10-26 审查移除：交付口径 Windows-only（CI 只在 windows
+# runner 出包），这两段从未被构建过。留着还有实际危害——mac 缺 icon.icns（electron-
+# builder 只对 win 从 PNG 自动转 ico），真打 dmg 会产出 Electron 默认图标的包。
+# 将来要支持 mac/linux，连图标资源一起补回再开目标。

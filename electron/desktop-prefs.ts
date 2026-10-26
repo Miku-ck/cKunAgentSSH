@@ -34,14 +34,44 @@ function storePath(): string {
   return join(app.getPath('userData'), 'desktop-prefs.json')
 }
 
-/** 托盘图标：dev 与打包后的 app 根目录都有 resources/icon.png（buildResources 未被 files 排除） */
-function trayIconPath(): string {
-  return join(app.getAppPath(), 'resources', 'icon.png')
+/**
+ * 托盘图标：优先 32×32 派生图 icon-tray.png（构建期从 icon.png 高质量缩出），
+ * 缺失/不可解码时回退 1024 整图 —— 1024 直接进托盘会被系统缩到 16~24px 而发糊。
+ * dev 与打包后的 app 根目录都有 resources/（buildResources 未被 files 白名单排除）。
+ */
+function trayIconCandidates(): string[] {
+  const appRoot = app.getAppPath()
+  return [
+    join(appRoot, 'resources', 'icon-tray.png'),
+    join(appRoot, 'resources', 'icon.png'),
+  ]
 }
 
-function trayIconAvailable(): boolean {
-  const p = trayIconPath()
-  return existsSync(p) && !nativeImage.createFromPath(p).isEmpty()
+/** 首个可用图标路径（存在且能解码）；全部不可用返回 null，调用方按"无托盘"处理 */
+function availableTrayIconPath(): string | null {
+  for (const p of trayIconCandidates()) {
+    if (existsSync(p) && !nativeImage.createFromPath(p).isEmpty()) return p
+  }
+  return null
+}
+
+/**
+ * 组装托盘 nativeImage：小尺寸源（≤64px）拆成 16@1x + 32@2x 两个表示位，
+ * 100%/200% DPI 点对点、中间档由系统插值；回退的大整图原样交出 —— 对大图做
+ * addRepresentation 等于把整张 1024 PNG 驻留托盘内存，得不偿失。
+ */
+function buildTrayImage(srcPath: string): Electron.NativeImage {
+  const src = nativeImage.createFromPath(srcPath)
+  if (src.isEmpty() || src.getSize().width > 64) return src
+  const img = nativeImage.createEmpty()
+  img.addRepresentation({
+    scaleFactor: 1,
+    width: 16,
+    height: 16,
+    buffer: src.resize({ width: 16, height: 16 }).toPNG(),
+  })
+  img.addRepresentation({ scaleFactor: 2, width: 16, height: 16, buffer: src.toPNG() })
+  return img
 }
 
 /** 关窗时是否应该隐藏而不是退出（无托盘则绝不隐藏，否则窗口唤不回来） */
@@ -123,8 +153,11 @@ function showMainWindow(): void {
 
 function ensureTray(): void {
   if (tray) return
-  const icon = nativeImage.createFromPath(trayIconPath())
-  tray = new Tray(icon)
+  // 调用方都已预检图标，这里再守一道：图标缺失宁可让设置动作抛错回滚，
+  // 也不能拿空图建托盘（菜单/唤起全废还占着一个系统托盘坑位）
+  const srcPath = availableTrayIconPath()
+  if (!srcPath) throw new Error('托盘图标资源缺失（resources/icon-tray.png 与 icon.png 均不可用）')
+  tray = new Tray(buildTrayImage(srcPath))
   tray.setToolTip('cKunAgentSSH')
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '显示主窗口', click: showMainWindow },
@@ -178,7 +211,7 @@ export async function initDesktopPrefs(
     }
   }
   if (prefs.minimizeToTray) {
-    if (!trayIconAvailable()) {
+    if (!availableTrayIconPath()) {
       // 落盘值与内存值不一致会永久迷惑：这里把该项关掉并写回，UI 也就显示关
       await disablePref('minimizeToTray', '[DesktopPrefs] 托盘图标缺失，已关闭"关窗隐藏到托盘"')
     } else {
@@ -221,8 +254,8 @@ export async function setDesktopPrefs(raw: unknown): Promise<DesktopPrefs> {
   const patch = prefsPatchOrNull(raw)
   if (!patch) throw new Error('没有可更新的桌面偏好字段')
   const next = { ...prefs, ...patch }
-  if (next.minimizeToTray && !trayIconAvailable()) {
-    throw new Error('托盘图标资源缺失（resources/icon.png），无法开启"关窗隐藏到托盘"')
+  if (next.minimizeToTray && !availableTrayIconPath()) {
+    throw new Error('托盘图标资源缺失（resources/icon-tray.png / icon.png），无法开启"关窗隐藏到托盘"')
   }
   const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
   let autoLaunchApplied: boolean | null = null
