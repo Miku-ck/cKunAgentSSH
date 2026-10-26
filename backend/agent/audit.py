@@ -25,6 +25,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -35,6 +36,13 @@ from secret_redact import redact_secrets
 logger = logging.getLogger(__name__)
 
 AUDIT_TABLE = "audit_log"
+# SQL 注入面声明（CWE-89 加固）：本模块全部 f-string SQL（_last_hash 的 SELECT、
+# query/count/verify/export、archive_and_clear 的 SELECT/DELETE、INSERT）拼进的
+# 标识符只有 AUDIT_TABLE 与 _INSERT_COLUMNS 两份模块常量，**数据值一律经 ?
+# 占位符绑定**，不存在值插值。下面的断言把「常量必须是裸标识符」写成显式守卫：
+# 常量手滑改出空格/分号/引号时 import 当场失败，而不是生成被改写的 SQL 继续跑。
+if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", AUDIT_TABLE):
+    raise RuntimeError(f"AUDIT_TABLE 必须是裸 SQL 标识符，拒绝: {AUDIT_TABLE!r}")
 _DEFAULT_ENV = "test"
 # 公开别名：跨模块（routes/agent.py 的审批记录）需要「环境缺失时回落到什么」，
 # 不该各自内联一份字面量 "test" 而与本模块漂移。
@@ -502,6 +510,11 @@ AUDIT_COLUMNS: tuple[str, ...] = (
 )
 # 自增 id 与带默认值的 created_at 由库自己填，其余 14 列是记录本体的字段
 _INSERT_COLUMNS: tuple[str, ...] = AUDIT_COLUMNS[1:-1]
+# 列名与表名共用同一条守卫（见模块顶部 AUDIT_TABLE 处的注入面声明）：
+# INSERT / 导出表头拼接的列名全部来自这两份字面量元组，值经 ? 绑定
+for _col in _INSERT_COLUMNS:
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", _col):
+        raise RuntimeError(f"审计列名必须是裸 SQL 标识符，拒绝: {_col!r}")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -546,6 +559,15 @@ def archive_and_clear(archive_dir: Optional[str] = None) -> dict[str, Any]:
         # 用本地时间命名会让归档文件的字典序与链上时间顺序在跨时区部署下错位
         fname = f"audit_archive_{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S-%f')}.csv"
         archive_path = os.path.join(base, fname)
+        # 路径穿越守卫（fail-closed，最小防线）：归档根与最终写盘路径都 resolve，
+        # 后者必须仍落在前者之内，越界拒绝。fname 由本函数内部时钟生成（不含
+        # 分隔符与 ..），正常恒过；守卫针对的是演化风险 —— base 来自调用方入参
+        # （生产路由不传、测试传 tmp 目录），将来若引入更多外部成分，越界写盘
+        # 在这里被拒，而不是落到预期根目录之外的任意位置。
+        _root = os.path.realpath(base)
+        _real = os.path.realpath(archive_path)
+        if _real != _root and not _real.startswith(_root + os.sep):
+            raise ValueError(f"归档路径越出归档根目录，拒绝写盘: {archive_path}")
         buf = _io.StringIO()
         writer = _csv.DictWriter(buf, fieldnames=cols)
         writer.writeheader()

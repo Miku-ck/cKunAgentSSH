@@ -64,6 +64,12 @@ class EnvironmentResolution:
 
     @property
     def source_label(self) -> str:
+        # 不是死代码：审批卡「环境来源」中文说明的取值入口，被
+        # backend/tests/test_governance_env_and_audit_failclosed.py 钉住
+        # （断言桥不可用时标签非空）。生产侧的卡片拼装在 reins/core.py 的
+        # permission_display_fields 里按同一张 SOURCE_LABELS 表直查（行为等价：
+        # source 取值只会是本模块的四个枚举，两处 fallback 分支都不可达）——
+        # 若要收敛成只走本属性需改 core.py，勿在两侧各删一份。
         return SOURCE_LABELS.get(self.source, SOURCE_LABELS["client"])
 
 

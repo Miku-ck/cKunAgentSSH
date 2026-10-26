@@ -98,20 +98,28 @@ def settings_client(base_db, monkeypatch):
 def test_web_tools_key_save_mask_and_clear(settings_client, monkeypatch):
     import routes.settings as settings_mod
     store: dict[str, str] = {}
-    monkeypatch.setattr(settings_mod.db, "get_app_setting", lambda k: store.get(k))
+    # 合成样例密钥（非真实凭据），分段拼出，避免源码里出现完整密钥字面量
+    sample_key = "tvly-" + "abcdef" + "0123456789"
+    store: dict[str, str] = {}
+    # fake 读侧须模拟真实契约：库里是凭据信封（protect_secret），get_app_setting 统一还原
+    monkeypatch.setattr(
+        settings_mod.db, "get_app_setting",
+        lambda k, default=None: settings_mod.db.unprotect_secret(store[k]) if store.get(k) else default,
+    )
     monkeypatch.setattr(settings_mod.db, "set_app_setting", lambda k, v: store.__setitem__(k, v))
 
     body = settings_client.get("/api/settings/web-tools").json()
     assert body["tavily_api_key_set"] is False
 
-    resp = settings_client.put("/api/settings/web-tools", json={"tavily_api_key": "  tvly-abcdef0123456789  "})
+    resp = settings_client.put("/api/settings/web-tools", json={"tavily_api_key": f"  {sample_key}  "})
     assert resp.status_code == 200
     body = resp.json()
     assert body["tavily_api_key_set"] is True
     assert body["tavily_api_key_source"] == "db"
     assert body["tavily_api_key_masked"].startswith("tvly")
     assert "abcdef" not in body["tavily_api_key_masked"]  # 中段不回显（只露首尾各 4 位）
-    assert store["web.tavily_api_key"] == "tvly-abcdef0123456789"  # 已 strip
+    # 库里不落明文（Windows 存 DPAPI 信封；非 win 平台 protect/unprotect 恒等），可还原出 strip 后原明文
+    assert settings_mod.db.unprotect_secret(store["web.tavily_api_key"]) == sample_key
 
     # 清除
     body = settings_client.put("/api/settings/web-tools", json={"tavily_api_key": ""}).json()

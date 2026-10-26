@@ -172,9 +172,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — 允许 Electron 渲染进程来源 + dev server 来源（浏览器访问，涵盖局域网 IP）
-# file:// renderer 的 Origin 头为 "null"，必须显式列入否则 Chromium 拦响应致前端显示"连接失败"
-# 浏览器从哪台机器进来都带不同 Origin，故用正则匹配（仅 dev 环境，生产用 app://）
+# CORS — 显式来源白名单。调用方来源集合只有两种形态：
+#   dev 态：vite dev server（electron/main.ts loadURL(ELECTRON_RENDERER_URL)），
+#           Origin = http://localhost:5173 / http://127.0.0.1:5173，浏览器经局域网
+#           IP 访问时为 http://<私有IP>:5173；
+#   打包态：loadFile(...) 的 file:// renderer，其跨源请求 Origin 头为字面量 "null"，
+#           必须显式列入否则 Chromium 拦响应致前端显示"连接失败"。
+# （旧正则里的 ^app://\.$ 是未落地的自定义协议计划残留 —— 全仓没有任何
+#   protocol.register/handle 注册 app://，去掉以免未来真出现 app:// 伪装来源时被放行。）
 app.add_middleware(
     CORSMiddleware,
     # 仅放行 dev server 来源：localhost/127.0.0.1 + 局域网私有 IP（10./172.16-31./192.168.）
@@ -184,9 +189,13 @@ app.add_middleware(
         r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}|"
         r"192\.168\.\d{1,3}\.\d{1,3}|"
         r"172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}"
-        r"):5173$|^app://\.$|^null$"
+        r"):5173$|^null$"
     ),
-    allow_credentials=True,
+    # 凭据恒不放开：本后端没有任何 Cookie 会话（鉴权走每次请求显式带的
+    # X-API-Token 头，见下方 api_token_auth），前端 fetch 也从不带 credentials；
+    # 放开等于给沙箱 iframe 的 Origin: null 来源（同样命中上面的 ^null$）回显
+    # Access-Control-Allow-Credentials，纯增攻击面。
+    allow_credentials=False,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     # 审查外热修：渲染进程直连请求都带 X-API-Token 头（client.ts withApiToken），
     # 必须列入允许头 — Starlette ≥0.41 的 CORSMiddleware 对预检中出现未允许头的
@@ -195,21 +204,10 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization", "Accept", "X-API-Token"],
 )
 
-
-# 修复：CORS 安全中间件 — Origin 为 null 时不允许 credentials，防止 CSRF 风险
-@app.middleware("http")
-async def cors_null_origin_security(request, call_next):
-    """当 Origin 为 null 时，移除 Set-Cookie 头，防止跨站凭证泄露"""
-    response = await call_next(request)
-    origin = request.headers.get("origin")
-    if origin == "null":
-        # Origin 为 null 时不应设置 cookies，防止跨站请求伪造
-        # 审查R2修复：Starlette 的 MutableHeaders 没有 pop()（只有 __delitem__），
-        # 原写法在打包态（file:// renderer 的 Origin 恒为 "null"）对每个响应都抛
-        # AttributeError → 全量 API 500；dev 态 Origin 非 null 不触发，故开发期从未暴露
-        if "set-cookie" in response.headers:
-            del response.headers["set-cookie"]
-    return response
+# 历史补偿中间件（Origin 为 null 时剥 Set-Cookie）已随 allow_credentials=False 一并
+# 移除：它的前提是「null 来源 + 凭据放行 + 响应可能带 Cookie」。本后端从不种 Cookie，
+# 且不放开凭据时浏览器对跨站 fetch/XHR 响应里的 Set-Cookie 本就按 SameSite 默认
+# （Lax）丢弃 —— 补偿逻辑成了每请求空转的死代码，留着反而暗示「这里有 Cookie 在飞」。
 
 
 # ── API Token 认证中间件 ─────────────────────────────────────────────────────

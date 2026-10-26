@@ -6,7 +6,10 @@ connect/close 的开销；close() 被包装为 rollback-and-keep-alive，
 现有代码的 `finally: conn.close()` 模式无需任何改动。
 """
 import asyncio
+import base64
+import re
 import sqlite3
+import sys
 import uuid
 import json
 import atexit
@@ -18,6 +21,17 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 _db_path: str = ""
+
+# SQL 标识符守卫（CWE-89 加固）：凡是拼进 f-string SQL 的表名/列名，必须是
+# 裸标识符。这些标识符全部来自本模块的字面量常量（不接受任何外部入参），
+# 校验是防御性的 —— 字面量手滑改出空格/引号/分号时当场抛 RuntimeError，
+# 而不是静默生成一条语义被改写的 SQL。
+_SQL_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _assert_sql_ident(name: str) -> None:
+    if not _SQL_IDENT_RE.fullmatch(name):
+        raise RuntimeError(f"拒绝拼接非法 SQL 标识符: {name!r}")
 
 # ── 线程本地连接池 ──
 _thread_local = threading.local()
@@ -434,6 +448,9 @@ def init_db(db_path: str) -> None:
             ("model_used",        "TEXT"),
         ]:
             if col not in existing_cols:
+                # {col} 拼进 DDL 前过标识符守卫（见 _assert_sql_ident）；
+                # {col_def} 是同一份字面量元组里的 DDL 片段，不含任何外部输入
+                _assert_sql_ident(col)
                 conn.execute(f"ALTER TABLE agent_runs ADD COLUMN {col} {col_def}")
         # agent_jobs 表：旧库补 out_offset（job_output 增量读日志的字节偏移，
         # 重启后恢复注册表时用它避免从头重读已见日志）
@@ -552,6 +569,9 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
             "updated_at": "TEXT NOT NULL DEFAULT (datetime('now'))",
         }.items():
             if col not in cols:
+                # {col} 拼进 DDL 前过标识符守卫（见 _assert_sql_ident）；
+                # {col_def} 是上面同一份字面量字典里的 DDL 片段，不含任何外部输入
+                _assert_sql_ident(col)
                 conn.execute(f"ALTER TABLE models_config ADD COLUMN {col} {col_def}")
                 cols.add(col)
 
@@ -960,6 +980,8 @@ def _insert_seed_model(
     now: str,
 ) -> None:
     """插入一条首启种子模型配置（固定保守默认参数，用户可在 UI 调整）"""
+    # env 注入的种子 api_key 与 UI 写入同口径加信封（见 protect_secret 区块注释）
+    api_key = protect_secret(api_key)
     conn.execute(
         "INSERT INTO models_config "
         "(id, name, model_id, provider, base_url, api_key, supports_thinking, supports_image, supports_tool_calling, "
@@ -1021,6 +1043,9 @@ def list_conversations(limit: int = 50, offset: int = 0, mode: Optional[str] = N
         conditions = []
         params: list = []
         if mode is not None:
+            # 注入面说明：conditions 只可能命中这一条**固定字面量**片段，
+            # 值经 params 走 ? 占位符绑定 —— f-string 里拼进 SQL 的 {where}
+            # 没有任何外部输入通道（CWE-89 加固时的显式声明）。
             conditions.append("c.mode = ?")
             params.append(mode)
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
@@ -1584,6 +1609,104 @@ def upsert_skill_mode_config(skill_id: str, mode: str, enabled: int) -> dict:
 
 # ── 模型配置 CRUD ──
 
+# ── 凭据信封（Windows DPAPI，零第三方依赖）────────────────────────────────────
+# LLM api_key（models_config.api_key）与网络工具密钥（app_settings: web.tavily_api_key）
+# 不再明文落库：Windows 上经 DPAPI（CryptProtectData，当前用户作用域）加密后以
+# `dpapi:v1:<base64>` 信封前缀存储 —— 库文件被拖走时拿到的是只有同一 Windows 用户
+# 才能解开的密文。读取侧（unprotect_secret）见到前缀就解密；无前缀按旧明文原样
+# 返回（历史行兼容，该值下次经写入侧保存时自动升级为信封）。
+# 非 Windows 平台暂保持明文落库（TODO: 接各平台系统凭据库，如 libsecret/Keychain）。
+# 原子性口径：本信封只作用于 SQLite 行值，落库走单条 INSERT/UPDATE 事务 ——
+# 不引入任何设置文件写盘，CONTEXT.md「半写损坏」的 tmp+rename 由 DB 事务天然保证。
+_SECRET_ENVELOPE_PREFIX = "dpapi:v1:"
+# 加密平台开关（测试可改写以模拟非 Windows 路径）；仅 win32 启用 DPAPI。
+_SECRET_PROTECTION_PLATFORM = "win32"
+
+
+def _dpapi_transform(data: bytes, protect: bool) -> bytes:
+    """调 crypt32 的 DPAPI 做当前用户级加解密（仅 Windows）。
+
+    CRYPTPROTECT_UI_FORBIDDEN(0x1)：后端是无人值守的服务进程，绝不允许
+    DPAPI 弹 PIN/确认 UI 卡住请求。两个 ctypes 陷阱（实测 0xc0000374 堆损坏）：
+    - pbData 字段必须是 c_void_p 而不是 c_char_p —— c_char_p 字段读出来的是
+      「按 NUL 截断的副本」，binary 密文被截断不说，拿它调 LocalFree 等于
+      释放一块非堆指针，堆当场损坏；
+    - LocalFree 必须声明 argtypes=[c_void_p] —— 不声明时 Python int（64 位
+      地址）按 c_int 传参，地址被截断成 32 位，同样释放到错误的指针上。
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    class _DATA_BLOB(ctypes.Structure):
+        _fields_ = [
+            ("cbData", wintypes.DWORD),
+            ("pbData", ctypes.c_void_p),
+        ]
+
+    crypt32 = ctypes.windll.crypt32
+    crypt32.CryptProtectData.argtypes = [
+        ctypes.POINTER(_DATA_BLOB), wintypes.LPCWSTR,
+        ctypes.POINTER(_DATA_BLOB), ctypes.c_void_p, ctypes.c_void_p,
+        wintypes.DWORD, ctypes.POINTER(_DATA_BLOB),
+    ]
+    crypt32.CryptProtectData.restype = wintypes.BOOL
+    crypt32.CryptUnprotectData.argtypes = crypt32.CryptProtectData.argtypes
+    crypt32.CryptUnprotectData.restype = wintypes.BOOL
+    kernel32 = ctypes.windll.kernel32
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel32.LocalFree.restype = ctypes.c_void_p
+
+    blob_in = _DATA_BLOB(len(data), ctypes.cast(ctypes.c_char_p(data), ctypes.c_void_p))
+    blob_out = _DATA_BLOB()
+    if protect:
+        ok = crypt32.CryptProtectData(
+            ctypes.byref(blob_in), None, None, None, None, 0x1, ctypes.byref(blob_out))
+    else:
+        ok = crypt32.CryptUnprotectData(
+            ctypes.byref(blob_in), None, None, None, None, 0x1, ctypes.byref(blob_out))
+    if not ok:
+        raise OSError(
+            f"DPAPI {'加密' if protect else '解密'}失败（WinError {ctypes.GetLastError()}）")
+    try:
+        return ctypes.string_at(blob_out.pbData, blob_out.cbData)
+    finally:
+        kernel32.LocalFree(blob_out.pbData)
+
+
+def protect_secret(value: str) -> str:
+    """机密写入侧：明文 → `dpapi:v1:<base64>` 信封（仅 win32）。
+
+    空值原样返回（空串 = 用户清除密钥的语义，不包信封）；已是信封的值不二次
+    包裹（幂等）。DPAPI 调用失败向上抛 OSError：静默降级成明文落盘会把
+    「这次没加密」藏进库，调用方（模型保存/Tavily 保存）应当让这次保存显式失败。
+    """
+    value = value or ""
+    if (not value or value.startswith(_SECRET_ENVELOPE_PREFIX)
+            or sys.platform != _SECRET_PROTECTION_PLATFORM):
+        return value
+    blob = _dpapi_transform(value.encode("utf-8"), protect=True)
+    return _SECRET_ENVELOPE_PREFIX + base64.b64encode(blob).decode("ascii")
+
+
+def unprotect_secret(value: str) -> str:
+    """机密读取侧：见信封前缀就解密还原明文；无前缀按旧明文原样返回。
+
+    解密失败（典型：库文件被拷到别的 Windows 用户/机器）不抛也不回密文，
+    返回空串并留 warning —— 把密文当 key 发给上游只会得到费解的 401，
+    报「未配置」则引导用户重填一次密钥（下次保存即按当前环境重新加封）。
+    """
+    if not value or not value.startswith(_SECRET_ENVELOPE_PREFIX):
+        return value
+    try:
+        blob = base64.b64decode(value[len(_SECRET_ENVELOPE_PREFIX):], validate=True)
+        return _dpapi_transform(blob, protect=False).decode("utf-8")
+    except (ValueError, OSError) as e:
+        # binascii.Error（base64 畸形，ValueError 子类）、UnicodeDecodeError、
+        # DPAPI 的 OSError —— 除此之外的异常不属于"密文读不出"，照抛
+        logger.warning("凭据信封解密失败，按未配置处理（库可能来自其他 Windows 用户/机器）: %s", e)
+        return ""
+
+
 def _mask_api_key(key: str | None) -> str:
     """脱敏 API Key：仅保留前4位 + ****"""
     if not key:
@@ -1640,7 +1763,9 @@ def list_models_config() -> list[dict]:
         ).fetchall()
         result = [dict(r) for r in rows]
         for item in result:
-            item["api_key"] = _mask_api_key(item.get("api_key"))
+            # 信封值先还原再掩码：掩码面向前端的口径是「明文的前 4 位」，不是
+            # 信封密文的前 4 位（密文每次加封都不同，掩出来就是噪声）
+            item["api_key"] = _mask_api_key(unprotect_secret(item.get("api_key") or ""))
         return result
     finally:
         conn.close()
@@ -1669,8 +1794,14 @@ def get_model_config(model_id: str, mask_key: bool = True) -> Optional[dict]:
         if not row:
             return None
         result = dict(row)
+        # 先还原凭据信封（unprotect_secret 对旧明文行是恒等变换），掩码与
+        # mask_key=False 的内部消费方（llm_adapter 等）拿到的都是明文
+        _raw_key = result.get("api_key")
+        if _raw_key is not None:
+            _raw_key = unprotect_secret(_raw_key)
+        result["api_key"] = _raw_key
         if mask_key:
-            result["api_key"] = _mask_api_key(result.get("api_key"))
+            result["api_key"] = _mask_api_key(_raw_key)
         return result
     finally:
         conn.close()
@@ -1699,7 +1830,7 @@ def create_model_config(
     # 去除首尾空格：粘贴时可能带入换行/空白，导致上游 API 校验失败（401）
     name = (name or "").strip()
     base_url = (base_url or "").strip()
-    api_key = (api_key or "").strip()
+    api_key = protect_secret((api_key or "").strip())
     model_id = (model_id or "").strip()
     mid = _new_id()
     now = _now()
@@ -1758,6 +1889,10 @@ def update_model_config(config_id: str, **kwargs) -> Optional[dict]:
             # 原实现会把掩码写回 DB 覆盖真实 api_key，导致模型 401
             if k == "api_key" and "****" in str(v):
                 continue
+            # api_key 落库前加凭据信封（见 protect_secret；历史明文行在下次
+            # 保存时于此处完成信封升级）
+            if k == "api_key":
+                v = protect_secret(str(v))
             sets.append(f"{k} = ?")
             params.append(1 if isinstance(v, bool) else v)
     # 记录是否存在（优先判断，避免 rowcount 0 的误判）
@@ -1866,7 +2001,11 @@ def get_default_model(mode: Optional[str] = None, mask_key: bool = True) -> Opti
         # C1 修复：默认脱敏 api_key，避免明文密钥泄露到前端
         # 审查 M-15：内部需要真实 key 的调用方（embedding/LLM）传 mask_key=False，
         # 否则拿到 "EMPT****" 式脱敏值 → 401 → 静默降级伪 embedding → 记忆维度混存
-        result["api_key"] = result.get("api_key") if not mask_key else _mask_api_key(result.get("api_key"))
+        # 两个分支都先还原凭据信封（get_model_config 同款），再按 mask_key 决定回明文还是掩码
+        _raw_key = result.get("api_key")
+        if _raw_key is not None:
+            _raw_key = unprotect_secret(_raw_key)
+        result["api_key"] = _raw_key if not mask_key else _mask_api_key(_raw_key)
         return result
     finally:
         conn.close()
@@ -2135,13 +2274,19 @@ def get_tool_calls(agent_run_id: str) -> list[dict]:
 
 
 def get_app_setting(key: str, default: Optional[str] = None) -> Optional[str]:
-    """读取单个应用设置"""
+    """读取单个应用设置。
+
+    带凭据信封（`dpapi:v1:` 前缀，见 protect_secret 区块注释）的值在这里统一
+    还原成明文 —— 消费方（web_tools 的 Tavily 调用、诊断面板等）不感知信封，
+    见到的永远是可用的明文或未设置的空值。
+    """
     conn = _get_conn()
     try:
         row = conn.execute(
             "SELECT value FROM app_settings WHERE key = ?", (key,)
         ).fetchone()
-        return row["value"] if row else default
+        value = row["value"] if row else default
+        return unprotect_secret(value) if value else value
     finally:
         conn.close()
 
@@ -2205,7 +2350,9 @@ def get_db_path() -> str:
     return _db_path
 
 
-# 诊断面板的行数统计白名单：拼进 SQL 的表名必须来自这里，不接受任意入参
+# 诊断面板的行数统计白名单：拼进 SQL 的表名必须来自这里，不接受任意入参。
+# 这是 count_rows 里 f-string 的唯一放行守卫（fail-closed）：不在元组内的
+# 表名直接返回 None，标识符不可能带进 SQL —— 数据值本就没有插值位。
 _DIAG_COUNT_TABLES = ("conversations", "messages", "agent_runs", "models_config", "skills")
 
 
@@ -2214,6 +2361,8 @@ def count_rows(table: str) -> Optional[int]:
         return None
     conn = _get_conn()
     try:
+        # {table} 已被上方 _DIAG_COUNT_TABLES 白名单收窄（见其注释），剩余
+        # 风险只剩「白名单值本身写坏」，字面量元组由 review 兜底，无需再断言
         return int(conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"])
     except Exception:
         return None

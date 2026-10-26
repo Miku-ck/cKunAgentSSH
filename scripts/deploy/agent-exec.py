@@ -68,6 +68,11 @@ ALLOW_DANGEROUS_JOB = os.environ.get("CKUN_AGENT_ALLOW_DANGEROUS_JOB", "0") == "
 # ══════════════════════════════════════════════════════════════
 #   job 内部命令安全分类（移植自 backend/agent/harness/safety.py）
 #   用于递归封堵 job base64 洞。保持与后端同源语义。
+#   两张表必须从 safety.py 同名表**逐字**移植（pattern 源串 + flags + reason），
+#   单侧改动由 backend/tests/test_deploy_agent_exec_contract.py 判漂移。
+#   注意移植边界：safety.py 对深层递归删除另有 token 级分析兜底，本副本不含
+#   —— 本执行器只做表级判定（含 run.sh 内容的递归分类），纵深其余环节
+#   （客户端可见命令的后端 classify + 审批流）在发送侧完成。
 # ══════════════════════════════════════════════════════════════
 
 HARDLINE_PATTERNS: list[tuple[re.Pattern, str]] = [
@@ -88,7 +93,9 @@ HARDLINE_PATTERNS: list[tuple[re.Pattern, str]] = [
 ]
 
 DANGEROUS_PATTERNS: list[tuple[re.Pattern, str]] = [
-    (re.compile(r"\brm\s+(-[^\s]*\s+)*-r[^\s]*\s+/", re.IGNORECASE), "recursive delete from root"),
+    # 与 safety.py 同步（2026-10-22 收紧）：只咬根目录本身（/ 后必须是串尾或空白）
+    # —— 深层路径（`rm -rf /home/u/tmp`）不在此表误中，后端由 token 级分析按路径精确判档
+    (re.compile(r"\brm\s+(-[^\s]*\s+)*-r[^\s]*\s+/(?:\s|$)", re.IGNORECASE), "recursive delete from root"),
     (re.compile(r"\brm\s+(-[^\s]*\s+)*-r[^\s]*\s+\*", re.IGNORECASE), "recursive delete with wildcard"),
     (re.compile(r"\bchmod\s+(-R\s+)?777\b", re.IGNORECASE), "chmod 777 (world writable)"),
     (re.compile(r"\bchown\s+-R\b", re.IGNORECASE), "recursive chown"),
@@ -111,9 +118,11 @@ DANGEROUS_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\bbase64\b[^\n|]*\|\s*(?:sh|bash|zsh|dash|ksh|python[0-9.]*|perl|ruby|node)\b"),
      "base64 decode piped to interpreter (encoded remote execution)"),
     (re.compile(r"\b(?:nc|ncat|netcat)\b[^\n]*\s-e\s+"), "netcat -e (reverse shell)"),
-    (re.compile(r"\buser(?:add|mod|del)\b", re.IGNORECASE), "user account management"),
+    (re.compile(r"\buser(?:add|mod|del)\b", re.IGNORECASE), "user account management (useradd/usermod/userdel)"),
     (re.compile(r"\bgroupadd\b", re.IGNORECASE), "group creation (groupadd)"),
-    (re.compile(r"\bpasswd\b", re.IGNORECASE), "password change (passwd)"),
+    # 与 safety.py 同步（C-review C1）：改口令动作要求 passwd 处在命令位
+    #（前面不能是 `/`）—— `cat /etc/passwd` 曾被本条误中成"修改账户口令"
+    (re.compile(r"(?<![/\w])passwd\b", re.IGNORECASE), "password change (passwd)"),
     (re.compile(r"\bvisudo\b|\bvipw\b"), "direct edit of sudoers/pw database"),
     (re.compile(r"\bchmod\s+(?:-[A-Za-z]+\s+)*[0-7]{3,4}\b"), "chmod octal mode"),
     (re.compile(r"\bmknod\b|\bmkfifo\b"), "special file creation (mknod/mkfifo)"),
@@ -125,6 +134,10 @@ DANGEROUS_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\bcrontab\b(?!\s+-[lL])\s+\S", re.IGNORECASE), "install/replace crontab"),
     (re.compile(r"\bapt(?:-get)?\s+(?:remove|purge|autoremove)\b", re.IGNORECASE), "package removal (apt)"),
     (re.compile(r"\b(?:yum|dnf)\s+(?:remove|erase)\b", re.IGNORECASE), "package removal (yum/dnf)"),
+    # 与 safety.py 同步（F3）：awk/sed 的 system()/call 内联代码执行 ——
+    # 两者在只读白名单里，电源动词不再匹配字符串内部后，这类只能由本条命中
+    (re.compile(r"\b(?:awk|sed)\b[^\n]*\b(?:system|exec|popen|syscall|call)\s*\("),
+     "awk/sed inline code execution"),
 ]
 
 
@@ -156,7 +169,19 @@ def _in_root(path: str, root: str) -> bool:
 
 
 def _unquote(tok: str) -> str:
-    """去掉 shlex.quote 产生的单引号包裹（含 \"'\"'\"' 转义形式）。"""
+    """去掉 shlex.quote 产生的单引号包裹（含 \"'\"'\"' 转义形式）。
+
+    两个 replace 分支不是死代码，是 fail-closed 防线的一部分（2026-10-26 复核）：
+    - 合法 shlex.quote 产物（路径含单引号 → `'it'"'"'s'` 形态）永远到不了这里 ——
+      其裸 `"` 会被 _slot_shell_safe 拒在 _match 阶段；
+    - 但裸 token 分支（``[^\\s]+``）放行的**手工拼接**形态可以到达，例如
+      ``'''\\''x'``（引号全平衡、无裸元字符，_slot_shell_safe 放行），此时
+      inner 含 ``'\\''``，replace 会执行（实测探针确认可达）；
+    - replace 的产出仍残留引号字符，而工作区路径不含引号 → _in_root 必然拒绝。
+      即：这两个分支只会把 exotic 输入继续挡在门外，不可能把越界路径洗白成
+      工作区内路径（内层引号数为奇数，无法被 replace 全部消掉），删除它们
+      只会把"语义正确"降级为"碰巧也安全"，故保留。
+    """
     if len(tok) >= 2 and tok.startswith("'") and tok.endswith("'"):
         inner = tok[1:-1]
         return inner.replace("'\"'\"'", "'").replace("'\\''", "'")

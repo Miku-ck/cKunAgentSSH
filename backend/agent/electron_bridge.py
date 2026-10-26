@@ -36,7 +36,8 @@ def classify_bridge_error(err: object) -> BridgeErrorCode:
     """反向推断错误根因（用于日志 + 结构化异常），返回 BridgeErrorCode 枚举值"""
     if isinstance(err, BridgeError):
         return err.code
-    msg = (err.message if hasattr(err, "message") else str(err)).lower()
+    # Python 3 的异常没有 .message 属性（PEP 352，py2 时代写法），统一 str(err)
+    msg = str(err).lower()
 
     if "not configured" in msg or "未配置" in msg:
         return BridgeErrorCode.NOT_CONFIGURED

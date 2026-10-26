@@ -508,9 +508,14 @@ class WebToolsSettingsRequest(BaseModel):
 
 @router.put("/settings/web-tools")
 def update_web_tools_settings(req: WebToolsSettingsRequest):
-    """保存/清除 Tavily API Key（存 app_settings；环境变量优先级更高）"""
+    """保存/清除 Tavily API Key（存 app_settings；环境变量优先级更高）
+
+    密钥经 protect_secret 加凭据信封落库（Windows DPAPI，见 database.py 区块
+    注释）：库里存的是 `dpapi:v1:<base64>`，读取侧（get_app_setting）统一还原；
+    旧明文行不迁移，下次在这里重新保存时自然升级为信封。
+    """
     # 空串即清除，不必分分支写：set_app_setting(key, "") 就是清除态
-    db.set_app_setting("web.tavily_api_key", req.tavily_api_key.strip())
+    db.set_app_setting("web.tavily_api_key", db.protect_secret(req.tavily_api_key.strip()))
     return get_web_tools_settings()
 
 
