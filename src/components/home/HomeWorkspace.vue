@@ -34,13 +34,24 @@
             <!-- 标题与首条气泡同文时不画：标题行随消息流滚动、就贴在首条消息上方，
                  同文时读起来是「两条一模一样的用户消息」（首页"两个用户气泡"）。 -->
             <div v-if="showTitle" class="home-title" :title="conversationTitle">{{ conversationTitle }}</div>
+            <!-- 流顶折叠按钮（纯展示层裁剪）：超长会话只渲染最新窗口，更早的消息仍
+                 完整留在 store 里，点一次多放行一批。挂在 role=log 之外 —— 它是
+                 操作不是日志内容；放行到全量后 hiddenMessageCount 归零自动消失。 -->
+            <button
+              v-if="hiddenMessageCount > 0"
+              type="button"
+              class="older-messages-btn"
+              @click="showOlderMessages"
+            >
+              显示更早的消息（还有 {{ hiddenMessageCount }} 条）
+            </button>
             <div class="home-messages" role="log" aria-live="polite">
               <MessageItem
-                v-for="(msg, idx) in displayMessages"
+                v-for="(msg, idx) in windowedMessages"
                 :key="msg.id"
                 :message="msg"
-                :is-last="idx === displayMessages.length - 1"
-                :is-streaming="isLiveAt(idx)"
+                :is-last="hiddenMessageCount + idx === displayMessages.length - 1"
+                :is-streaming="isLiveAt(hiddenMessageCount + idx)"
                 :awaiting-user="agentStore.awaitingClarification"
                 @open-trace="emit('open-trace', $event)"
               />
@@ -159,6 +170,40 @@ function isLiveAt(idx: number): boolean {
     displayMessages.value, idx, agentStore.isRunning, agentStore.awaitingClarification)
 }
 
+// ── 消息流裁剪（纯展示层）：超长会话把整段历史全量渲染，首屏挂载、滚动与内存
+//    一起受损。这里只改「画多少」，不改「存多少」—— 数据仍完整在 sshAi.messages
+//    （唯一对话面），窗口永远端锚在最新消息上，live 合并出的那条流式消息天然在窗内。
+const INITIAL_VISIBLE_MESSAGES = 80
+const OLDER_MESSAGES_STEP = 200
+const visibleCount = ref(INITIAL_VISIBLE_MESSAGES)
+
+/** 折叠在流顶的旧消息条数：放行到全量后归 0，按钮随之消失 */
+const hiddenMessageCount = computed(() =>
+  Math.max(0, displayMessages.value.length - visibleCount.value))
+
+/** 窗口内的消息：slice 按整条消息切 —— 执行过程（reasoning/agentTrace）长在
+ *  助手消息对象上、随整条进退，折叠边界永远落在消息之间，不会把它与所属回答拆开。
+ *  无折叠时原样返回 store 数组，保持消息引用稳定（MessageItem 不无故重挂）。 */
+const windowedMessages = computed<readonly BaseMessage[]>(() => {
+  const total = displayMessages.value.length
+  if (hiddenMessageCount.value === 0) return displayMessages.value
+  return displayMessages.value.slice(total - visibleCount.value)
+})
+
+/** 「显示更早的消息」：多放行一批旧消息，并把视口锚回新展开内容与原首条消息的
+ *  衔接处 —— 顶部凭空长高后 scrollTop 若不补，浏览器保底归位看起来就像跳到底部。
+ *  Chromium 原生滚动锚定已在 .home-scroll 上关掉（overflow-anchor:none），
+ *  否则两套补偿叠加会把视口推过头。 */
+function showOlderMessages() {
+  const el = scrollRef.value
+  const heightBefore = el?.scrollHeight ?? 0
+  visibleCount.value += OLDER_MESSAGES_STEP
+  void nextTick(() => {
+    if (!el) return
+    el.scrollTop += el.scrollHeight - heightBefore
+  })
+}
+
 // ── 自动滚动：一次性事件（新消息/切会话/运行通知）无条件跟到底；流式正文/思考
 //    走「贴底跟随」—— 用户上翻查看历史时不抢滚动条 ──
 // rAF 合帧：流式期间 content/reasoning 每秒触发数十次请求，若每次都 nextTick 后
@@ -203,7 +248,11 @@ function requestFollow() {
 
 watch(() => displayMessages.value.length, () => { scheduleScrollToBottom() }, { immediate: true })
 // 切会话时消息条数可能恰好相同，length watch 不会动 —— 单独跟一次，避免停在上一段的位置
-watch(() => sshAi.currentConvId, () => { scheduleScrollToBottom() })
+watch(() => sshAi.currentConvId, () => {
+  // 裁剪窗口一并回到初始 80 条：放大过的窗口是上一段历史的临时状态，不该带进新会话
+  visibleCount.value = INITIAL_VISIBLE_MESSAGES
+  scheduleScrollToBottom()
+})
 watch(() => agentStore.content, () => { if (agentStore.isRunning) requestFollow() })
 watch(() => agentStore.reasoning, () => { if (agentStore.isRunning) requestFollow() })
 // 运行通知区块（任务规划/警告/人工介入/错误）是消息流之外的另一段高度变化，
@@ -282,6 +331,9 @@ function deleteConversation(id: string) {
   flex: 1;
   min-width: 0;
   overflow-y: auto;
+  /* 展开折叠旧消息的补滚由 showOlderMessages 自己算：关掉 Chromium 的原生滚动
+     锚定，两套补偿叠加会把视口推过头 */
+  overflow-anchor: none;
 }
 
 .home-column {
@@ -323,6 +375,24 @@ function deleteConversation(id: string) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 流顶折叠按钮：居中细长 ghost 条，次级文字色、hover 提亮（与 corner-btn 同族语言） */
+.older-messages-btn {
+  display: block;
+  margin: 0 auto 12px;
+  padding: 5px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.older-messages-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 /* 运行通知紧跟消息流：与最后一条回答之间留一道呼吸，不粘连 */
