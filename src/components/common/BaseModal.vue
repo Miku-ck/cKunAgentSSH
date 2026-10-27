@@ -18,7 +18,6 @@
         aria-modal="true"
         :aria-labelledby="titleId"
         tabindex="-1"
-        @keydown="onKeydown"
       >
         <div class="bm-head">
           <h2 :id="titleId" class="bm-title"><slot name="title">{{ title }}</slot></h2>
@@ -37,7 +36,8 @@ let _bmUid = 0
 </script>
 
 <script setup lang="ts">
-import { nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
+import { useModalFocusTrap } from '../../composables/useModalFocusTrap'
 
 defineProps<{
   title?: string
@@ -50,32 +50,8 @@ const emit = defineEmits<{ close: [] }>()
 const titleId = `bm-title-${++_bmUid}`
 
 const dialogRef = ref<HTMLElement | null>(null)
-let prevFocus: HTMLElement | null = null
-
-const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-
-function focusables(): HTMLElement[] {
-  return dialogRef.value
-    ? Array.from(dialogRef.value.querySelectorAll<HTMLElement>(FOCUSABLE))
-    : []
-}
-
-/** Tab 在弹窗内循环；初始焦点在容器本身时 Shift+Tab 也回落到最后一个可聚焦元素 */
-function onKeydown(e: KeyboardEvent) {
-  if (e.key !== 'Tab') return
-  const items = focusables()
-  if (!items.length) return
-  const first = items[0]
-  const last = items[items.length - 1]
-  const active = document.activeElement
-  if (e.shiftKey && (active === first || active === dialogRef.value)) {
-    e.preventDefault()
-    last.focus()
-  } else if (!e.shiftKey && active === last) {
-    e.preventDefault()
-    first.focus()
-  }
-}
+// Tab 环形与焦点还原走共享件：自绘 overlay 的老弹窗也用同一份，行为不会两边跑偏
+const { activate, deactivate } = useModalFocusTrap(dialogRef)
 
 function onWindowKeydown(e: KeyboardEvent) {
   if (e.key !== 'Escape') return
@@ -84,15 +60,13 @@ function onWindowKeydown(e: KeyboardEvent) {
 }
 
 onMounted(() => {
-  prevFocus = document.activeElement as HTMLElement | null
-  void nextTick(() => dialogRef.value?.focus())
+  activate()
   window.addEventListener('keydown', onWindowKeydown)
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onWindowKeydown)
-  // 焦点归还原触发器；目标可能已随列表刷新卸载
-  if (prevFocus && prevFocus.isConnected) prevFocus.focus()
+  deactivate()
 })
 </script>
 

@@ -2,7 +2,7 @@
   <Teleport to="body">
     <Transition name="confirm-fade">
       <div v-if="visible" class="confirm-overlay" @click.self="handleCancel">
-        <div class="confirm-dialog" :class="{ danger }" role="alertdialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
+        <div ref="dialogRef" class="confirm-dialog" :class="{ danger }" role="alertdialog" aria-modal="true" aria-labelledby="confirm-dialog-title" tabindex="-1">
           <div class="confirm-header">
             <div class="confirm-icon" :class="{ danger }">
               <svg v-if="danger" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
@@ -27,7 +27,7 @@
             <button class="confirm-btn cancel" @click="handleCancel">
               {{ cancelText }}
             </button>
-            <button ref="confirmBtnRef" class="confirm-btn ok" :class="{ danger }" @click="handleConfirm">
+            <button class="confirm-btn ok" :class="{ danger }" @click="handleConfirm">
               {{ confirmText }}
             </button>
           </div>
@@ -38,7 +38,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick, watch, onUnmounted } from 'vue'
+import { ref, watch, onUnmounted } from 'vue'
+import { useModalFocusTrap } from '../../composables/useModalFocusTrap'
 
 interface ConfirmOptions {
   title?: string
@@ -54,7 +55,9 @@ const message = ref('')
 const confirmText = ref('确定')
 const cancelText = ref('取消')
 const danger = ref(false)
-const confirmBtnRef = ref<HTMLButtonElement | null>(null)
+const dialogRef = ref<HTMLElement | null>(null)
+// 确认框默认把焦点放在主按钮上（回车即确认）；关闭后焦点自动还给触发器
+const { activate, deactivate } = useModalFocusTrap(dialogRef, { initialFocus: '.confirm-btn.ok' })
 
 let resolvePromise: ((value: boolean) => void) | null = null
 
@@ -111,15 +114,17 @@ function handleKeydown(e: KeyboardEvent) {
 watch(visible, (v) => {
   if (v) {
     window.addEventListener('keydown', handleKeydown, true)
-    nextTick(() => confirmBtnRef.value?.focus())
+    activate()
   } else {
     window.removeEventListener('keydown', handleKeydown, true)
+    deactivate()
   }
 })
 
 // 组件卸载时确保 keydown 监听器被清理
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown, true)
+  deactivate()
 })
 
 defineExpose({ open, close })
@@ -149,6 +154,8 @@ defineExpose({ open, close })
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  /* 容器只作为初始焦点落点（tabindex=-1），描边交给里面的按钮 */
+  outline: none;
 }
 
 .confirm-header {

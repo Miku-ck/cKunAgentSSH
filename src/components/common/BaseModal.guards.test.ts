@@ -29,16 +29,16 @@ describe('BaseModal 结构', () => {
     expect(src).toContain("window.addEventListener('keydown', onWindowKeydown)")
     expect(src).toContain("window.removeEventListener('keydown', onWindowKeydown)")
   })
-  it('Tab 焦点陷阱把焦点圈在弹窗内', () => {
-    expect(src).toContain('onKeydown')
-    expect(src).toContain('e.shiftKey')
-    expect(src).toContain('e.preventDefault()')
-    expect(src).toContain('last.focus()')
-    expect(src).toContain('first.focus()')
+  it('Tab 焦点陷阱交给 useModalFocusTrap（一份实现，自绘弹窗也用它）', () => {
+    expect(src).toContain('useModalFocusTrap')
+    expect(src).toContain('activate()')
+    expect(src).toContain('deactivate()')
+    // 环形逻辑与选择器只该有一份；组件里再出现就是两套行为
+    expect(src).not.toContain('const FOCUSABLE')
   })
-  it('挂载即聚焦容器、卸载还原触发器焦点', () => {
-    expect(src).toContain('dialogRef.value?.focus()')
-    expect(src).toContain('prevFocus.focus()')
+  it('挂载即激活焦点管理，卸载时还原并摘监听', () => {
+    expect(src).toMatch(/onMounted\(\(\) => \{\s*activate\(\)/)
+    expect(src).toMatch(/onUnmounted\(\(\) => \{[\s\S]*deactivate\(\)/)
   })
   it('遮罩点击自身关闭，三段式 head/body/actions', () => {
     expect(src).toContain('@click.self="emit(\'close\')"')
