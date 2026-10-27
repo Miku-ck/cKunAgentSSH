@@ -51,7 +51,10 @@ const iconMap: Record<ToastType, string> = {
   top: 60px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 2000;
+  /* 必须压在一切浮层之上：原先 2000，和 BaseModal 同层，于是被确认框（3000）、
+     模型弹窗（2100）、页面右上几个 9999 浮层与命令面板（10000）盖住 —— 那些
+     场景里发错的提示等于没提示，用户会以为操作没生效。 */
+  z-index: 11000;
   display: flex;
   flex-direction: column;
   gap: 8px;

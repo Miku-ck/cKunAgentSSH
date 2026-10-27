@@ -80,7 +80,7 @@ App.vue (flex column, 100vh)
 - 首页恒在、不可关闭，不占标签；运行过程长在首页下方（勿做成标签页）。
 - AI 只有一个界面：首页任务台。顶栏「AI」入口与 `Ctrl+Shift+B` 都是回到任务台，
   不再另有一块右侧面板（2026-10-20 退役）。
-- 浮层遮罩：一律 `var(--scrim)` + `blur(2px)`（随主题染色；浅色/手记主题下不会压出冷黑）。z-index：普通弹窗 1000–1200、`BaseModal`/Docker 弹窗 2000、确认框 3000。
+- 浮层遮罩：一律 `var(--scrim)` + `blur(2px)`（随主题染色；浅色/手记主题下不会压出冷黑）。z-index：普通弹窗 1000–1200、`BaseModal`/Docker 弹窗 2000、确认框 3000、命令面板 10000、提示 toast 11000（toast 必须最顶层：被任何浮层盖住都等于没提示）。
 - 设置弹窗：overlay 同上 `--scrim` + `blur(2px)` `z-index:2000`；`dialog` `clamp(960px,90vw,1280px) × clamp(640px,88vh,860px)`，左导航 200px。确认框：宽 380px，`z-index:3000`。过渡 `opacity .15s` + 内容 `scale(.96~.97)`。
 - 历史记录弹窗：`width: min(560px, 100vw - 48px)`、`max-height: min(640px, 100vh - 96px)`，居中；overlay 读 `--scrim`（随主题染色）+ `blur(2px)`，`z-index:2000`。
 - 浮层投影：一律 `var(--shadow-lg)`；控件级微投影用 `--shadow-sm`，组件里不另写 px 阴影。同一个弹窗家族里投影深浅不一，比“投影略轻”更难解释。
