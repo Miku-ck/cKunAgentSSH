@@ -31,7 +31,7 @@
       </div>
       <div v-else-if="expandableOf(row)" class="history-body">
         <div class="history-error mono" v-if="row.error">{{ row.error }}</div>
-        <div class="history-summary md-body" v-if="row.summary" v-html="renderMarkdown(row.summary)"></div>
+        <div class="history-summary markdown-body" v-if="row.summary" v-html="renderMarkdown(row.summary)" @click="onMarkdownClick"></div>
         <slot name="extra" :row="row"></slot>
         <div class="history-actions" v-if="row.status === 'failed'">
           <slot name="actions" :row="row"></slot>
@@ -44,12 +44,15 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { renderMarkdown } from '@/utils/markdown'
+import { useMarkdownDelegation } from '@/composables/useMarkdownDelegation'
 import { formatBackendTs } from '@/utils/format'
 import {
   durationText, shortId, statusLabel,
   STATUS_LABEL_SCHEDULE,
   type HistoryRow,
 } from '@/utils/history-view'
+
+const { onMarkdownClick } = useMarkdownDelegation()
 
 const props = defineProps<{
   rows: HistoryRow[]
@@ -115,15 +118,6 @@ function toggle(row: HistoryRow) {
 .history-item.is-failed .history-body { border-left-color: var(--accent-red); }
 .history-error { font-size: 12px; color: var(--accent-red); margin-bottom: 4px; white-space: pre-wrap; }
 .history-summary { font-size: 12px; color: var(--text-primary); max-height: 300px; overflow: auto; line-height: 1.6; }
-.history-summary :deep(p) { margin: 0 0 6px; }
-.history-summary :deep(ul), .history-summary :deep(ol) { margin: 0 0 6px; padding-left: 18px; }
-.history-summary :deep(pre) { background: var(--bg-input); padding: 6px 8px; border-radius: 6px; overflow: auto; }
-.history-summary :deep(code) { font-family: var(--font-mono); }
-.history-summary :deep(h1), .history-summary :deep(h2), .history-summary :deep(h3),
-.history-summary :deep(h4), .history-summary :deep(h5), .history-summary :deep(h6) {
-  color: var(--text-primary); margin: 8px 0 4px; font-size: 13px;
-}
-.history-summary :deep(hr) { border: none; border-top: 1px solid var(--border-subtle); margin: 8px 0; }
 .history-actions { margin-top: 6px; }
 .status { font-size: 11px; padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border-subtle); white-space: nowrap; flex: 0 0 auto; }
 .status.running { color: var(--accent-text); border-color: var(--accent-primary); }

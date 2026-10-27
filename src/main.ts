@@ -3,6 +3,9 @@ import { createPinia } from 'pinia'
 import App from './App.vue'
 import { useToastStore } from './stores/toast'
 import './styles/global.css'
+// Markdown 渲染容器的共享视觉词汇：聊天（MarkdownStream）与执行历史（HistoryList）
+// 都经 renderMarkdown 产出 HTML，代码块/表格/标题样式只能有一份。
+import './styles/markdown.css'
 // 审批卡片的共享视觉词汇：同一张卡由首页过程区的内联卡与运行面板共同渲染，
 // 样式必须只有一份 —— 留在任一组件的 scoped 里，另一个消费者就得抄一遍。
 import './styles/approval-card.css'

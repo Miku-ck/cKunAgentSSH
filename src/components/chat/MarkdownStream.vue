@@ -1,17 +1,17 @@
 <template>
-  <div class="markdown-body" v-html="renderedHtml" @click="handleClick"></div>
+  <div class="markdown-body" v-html="renderedHtml" @click="onMarkdownClick"></div>
 </template>
 
 <script setup lang="ts">
 import { ref, watch, onUnmounted } from 'vue'
 import { renderMarkdown } from '@/utils/markdown'
-import { useToastStore } from '@/stores/toast'
+import { useMarkdownDelegation } from '@/composables/useMarkdownDelegation'
 
 const props = defineProps<{
   content: string
 }>()
 
-const toast = useToastStore()
+const { onMarkdownClick } = useMarkdownDelegation()
 
 // C34 + P3 修复：流式场景下原实现每 150ms 对【整条消息】全量 marked+highlight+DOMPurify
 // —— 已确认的段落（稳定前缀）被反复重渲染，随消息变长开销线性增长。
@@ -102,152 +102,17 @@ onUnmounted(() => {
   }
 })
 
-/** 事件委托：点击代码块复制按钮时复制代码到剪贴板 */
-function handleClick(e: MouseEvent) {
-  const target = e.target as HTMLElement
-  // S9-02 修复：markdown 里的链接此前无人拦截。被渲染的内容带着远端主机/agent 书写的
-  // 文本，一条 `[报告](file:///C:/Users/…/x.html)` 就是一次主窗口导航，而窗口带着完整
-  // preload API 面。现一律 preventDefault：http(s) 交系统浏览器（window.open 走主进程
-  // windowOpenHandler 的 openExternal + deny，与外链既有行为一致），其余协议拒绝并提示。
-  const anchor = target.closest?.('a') as HTMLAnchorElement | null
-  if (anchor?.href) {
-    e.preventDefault()
-    let protocol = ''
-    try { protocol = new URL(anchor.href).protocol } catch { protocol = '' }
-    if (protocol === 'http:' || protocol === 'https:') {
-      window.open(anchor.href, '_blank', 'noopener,noreferrer')
-    } else {
-      toast.warning('已在应用内拦截非 http(s) 链接')
-    }
-    return
-  }
-  if (!target.classList.contains('code-copy-btn')) return
-  const wrapper = target.closest('.code-block-wrapper')
-  const codeEl = wrapper?.querySelector('code')
-  if (!codeEl) return
-  const text = codeEl.textContent || ''
-  navigator.clipboard.writeText(text).then(() => {
-    target.textContent = '已复制'
-    setTimeout(() => { target.textContent = '复制' }, 1500)
-  }).catch(() => {
-    toast.error('复制失败，请手动选择文本复制')
-  })
-}
+/** 事件委托（复制 + 外链拦截）已下沉 useMarkdownDelegation，聊天与历史共用 */
 </script>
 
 <style scoped>
+/* 容器排版留在组件内（聊天字号走 --chat-font-size）；正文/代码块/表格等
+   共享视觉词汇在 styles/markdown.css，聊天与历史共用一份。 */
 .markdown-body {
   /* 对话设置里的「消息字号」写进 --chat-font-size（useAppearance）。
      这里此前是裸 13px，控件调了只有 :root 上的变量在变，气泡文字一动不动。 */
   font-size: var(--chat-font-size, 13px);
   line-height: 1.7;
   color: var(--text-primary);
-}
-
-.markdown-body :deep(p) {
-  margin: 0.6em 0;
-}
-
-.markdown-body :deep(.code-block-wrapper) {
-  position: relative;
-  margin: 0.8em 0;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-.markdown-body :deep(.code-block-header) {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 12px;
-  background: var(--bg-base);
-  border-bottom: 1px solid var(--border-subtle);
-  height: 28px;
-}
-
-.markdown-body :deep(.code-lang) {
-  font-size: 11px;
-  color: var(--text-secondary);
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  text-transform: lowercase;
-}
-
-.markdown-body :deep(.code-copy-btn) {
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 11px;
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-family: var(--font-sans);
-  transition: all 0.15s;
-}
-
-.markdown-body :deep(.code-copy-btn:hover) {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.markdown-body :deep(.code-block-wrapper pre) {
-  margin: 0;
-  border: none;
-  border-radius: 0;
-}
-
-.markdown-body :deep(pre) {
-  background: var(--bg-base);
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  padding: 12px;
-  overflow-x: auto;
-  margin: 0.8em 0;
-}
-
-.markdown-body :deep(code) {
-  font-family: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, "Courier New", monospace;
-  font-size: 12px;
-}
-
-.markdown-body :deep(pre code) {
-  background: transparent;
-  padding: 0;
-  border: none;
-  color: var(--text-primary);
-}
-
-.markdown-body :deep(:not(pre) > code) {
-  background: var(--bg-hover);
-  padding: 2px 5px;
-  border-radius: 4px;
-  color: var(--text-primary);
-}
-
-.markdown-body :deep(ul),
-.markdown-body :deep(ol) {
-  padding-left: 1.6em;
-  margin: 0.6em 0;
-}
-
-.markdown-body :deep(li) {
-  margin: 0.25em 0;
-}
-
-.markdown-body :deep(table) {
-  border-collapse: collapse;
-  width: 100%;
-  margin: 0.8em 0;
-}
-
-.markdown-body :deep(th),
-.markdown-body :deep(td) {
-  border: 1px solid var(--border-subtle);
-  padding: 6px 10px;
-  text-align: left;
-}
-
-.markdown-body :deep(th) {
-  background: var(--bg-hover);
 }
 </style>

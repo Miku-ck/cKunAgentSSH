@@ -1,0 +1,166 @@
+/**
+ * markdown.css —— Markdown 渲染容器的共享视觉词汇（全局）
+ *
+ * 唯一消费者：`.markdown-body`。聊天（MarkdownStream）与执行历史（HistoryList）
+ * 都经同一个 `renderMarkdown()` 产出 HTML，样式因此只留这一份 —— 之前它藏在
+ * MarkdownStream 的 scoped 里，HistoryList 复制不到，代码块只剩一个裸的“复制”
+ * 按钮（无布局、无点击处理）。
+ *
+ * 全局文件里不能用 Vue 的 :deep，直接写后代选择器即可：v-html 的产物是
+ * 容器自身的后代节点，天然被命中。
+ */
+
+.markdown-body {
+  color: var(--text-primary);
+}
+
+.markdown-body p {
+  margin: 0.6em 0;
+}
+
+/* ── 代码块：wrapper 承载边框，header 承载语言与复制按钮 ── */
+.markdown-body .code-block-wrapper {
+  position: relative;
+  margin: 0.8em 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.markdown-body .code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 12px;
+  height: 28px;
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.markdown-body .code-lang {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  text-transform: lowercase;
+}
+
+.markdown-body .code-copy-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.markdown-body .code-copy-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.markdown-body .code-block-wrapper pre {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+}
+
+.markdown-body pre {
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  overflow-x: auto;
+  margin: 0.8em 0;
+}
+
+.markdown-body code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.markdown-body pre code {
+  background: transparent;
+  padding: 0;
+  border: none;
+  color: var(--text-primary);
+}
+
+.markdown-body :not(pre) > code {
+  background: var(--bg-hover);
+  padding: 2px 5px;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+}
+
+/* ── 列表 / 表格 / 分隔 / 引用 / 链接 ── */
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.6em;
+  margin: 0.6em 0;
+}
+
+.markdown-body li {
+  margin: 0.25em 0;
+}
+
+.markdown-body table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.8em 0;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid var(--border-subtle);
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.markdown-body th {
+  background: var(--bg-hover);
+}
+
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+  margin: 0.8em 0;
+}
+
+.markdown-body blockquote {
+  margin: 0.8em 0;
+  padding: 0.2em 0 0.2em 12px;
+  border-left: 3px solid var(--border-default);
+  color: var(--text-secondary);
+}
+
+.markdown-body a {
+  color: var(--accent-text);
+}
+
+.markdown-body img {
+  max-width: 100%;
+}
+
+/* ── 标题：收口浏览器默认的 1.5–2em 巨字，两处渲染同一套层级 ── */
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  color: var(--text-primary);
+  margin: 0.8em 0 0.4em;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.markdown-body h1 { font-size: 1.4em; }
+.markdown-body h2 { font-size: 1.25em; }
+.markdown-body h3 { font-size: 1.12em; }
+.markdown-body h4 { font-size: 1.05em; }
+.markdown-body h5,
+.markdown-body h6 { font-size: 1em; }

@@ -44,4 +44,12 @@ describe('HistoryList 展示契约', () => {
       expect(styleBlock, `缺少 .status.${s} 配色`).toContain(`.status.${s}`)
     }
   })
+  it('摘要容器用共享类 .markdown-body（不是死类 md-body）', () => {
+    expect(src).toContain('class="history-summary markdown-body"')
+    expect(src).not.toContain('md-body')
+  })
+  it('摘要区复用 Markdown 事件委托（复制 + 外链拦截）', () => {
+    expect(src).toContain('useMarkdownDelegation')
+    expect(src).toContain('@click="onMarkdownClick"')
+  })
 })
