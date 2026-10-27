@@ -79,6 +79,8 @@
           </HistoryList>
         </div>
         <div class="modal-actions">
+          <button class="btn btn-sm btn-danger" :disabled="historyHasRunning"
+            :title="historyHasRunning ? '该任务正在执行中，请等本次结束后再清空' : ''" @click="clearHistory()">清空历史</button>
           <button class="btn btn-ghost" @click="historyFor = null">关闭</button>
         </div>
       </div>
@@ -453,6 +455,8 @@ const historyRows = computed<HistoryRow[]>(() => historyRuns.value.map(toSchedul
 function rawRunOf(id: string): ScheduleRun {
   return historyRuns.value.find((r) => r.id === id)!
 }
+/** 有进行中的执行行则禁用清空（后端 409 仍是权威兜底） */
+const historyHasRunning = computed(() => historyRuns.value.some((r) => r.status === 'running'))
 
 /** 列表请求序号：runNow 后 3s 轮询、页面激活期 30s 轮询与手动/操作后刷新可并发 */
 let _loadSeq = 0
@@ -690,6 +694,25 @@ async function fetchHistory() {
     if (seq !== _historySeq) return
     historyError.value = toFriendlyMessage(e, '加载历史失败')
     toast.error(historyError.value)
+  }
+}
+
+async function clearHistory() {
+  const s = historyFor.value
+  if (!s) return
+  const ok = await confirm({
+    title: '清空执行历史',
+    message: `确认清空「${s.name}」的全部执行历史？任务本身保留，此操作不可恢复。`,
+    confirmText: '清空历史',
+    danger: true,
+  })
+  if (!ok) return
+  try {
+    await scheduleApi.clearRuns(s.id)
+    toast.success('已清空执行历史')
+    await fetchHistory()
+  } catch (e) {
+    toast.error(toFriendlyMessage(e, '清空历史失败'))
   }
 }
 

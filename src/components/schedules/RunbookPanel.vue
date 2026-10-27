@@ -82,6 +82,8 @@
             </HistoryList>
           </div>
           <div class="modal-actions">
+            <button class="btn btn-sm btn-danger" :disabled="historyHasRunning"
+              :title="historyHasRunning ? '该剧本正在执行中，请等本次结束后再清空' : ''" @click="clearHistory()">清空历史</button>
             <button class="btn btn-ghost" @click="historyFor = null">关闭</button>
           </div>
         </div>
@@ -433,6 +435,8 @@ const historyRows = computed<HistoryRow[]>(() => historyRuns.value.map(toRunbook
 // HistoryRow 是窄契约：步骤/诊断全文按 id 反查原始记录（同 SchedulesView rawRunOf 模式）
 function stepsOf(id: string) { return historyRuns.value.find((r) => r.id === id)?.steps_state }
 function diagnosisOf(id: string) { return historyRuns.value.find((r) => r.id === id)?.diagnosis || '' }
+/** 有进行中的执行行则禁用清空（后端 409 仍是权威兜底） */
+const historyHasRunning = computed(() => historyRuns.value.some((r) => r.status === 'running'))
 
 // 历史请求序号：快速切换剧本时旧响应晚到会挂到新剧本的历史面板上
 let _historySeq = 0
@@ -442,6 +446,25 @@ async function openHistory(r: RunbookRecord) {
   historyRuns.value = []
   historyError.value = ''
   await fetchHistory()
+}
+
+async function clearHistory() {
+  const r = historyFor.value
+  if (!r) return
+  const ok = await confirm({
+    title: '清空执行历史',
+    message: `确认清空剧本「${r.name}」的全部执行历史？剧本本身保留，此操作不可恢复。`,
+    confirmText: '清空历史',
+    danger: true,
+  })
+  if (!ok) return
+  try {
+    await runbookApi.clearRuns(r.id)
+    toast.success('已清空执行历史')
+    await fetchHistory()
+  } catch (e) {
+    toast.error(toFriendlyMessage(e, '清空历史失败'))
+  }
 }
 
 async function fetchHistory() {

@@ -208,6 +208,12 @@ export const scheduleApi = {
   /** 执行历史 */
   runs: (id: string, limit = 50) =>
     request<ScheduleRun[]>(`/schedules/${id}/runs?limit=${limit}`),
+
+  /** 清空执行历史（保留任务本身）；执行中有行则后端 409 拒 */
+  clearRuns: (id: string) =>
+    request<{ ok: boolean; deleted: number }>(`/schedules/${id}/runs`, {
+      method: 'DELETE',
+    }),
 }
 
 // ── Agent 管理端（对接 backend/routes/agent.py 的管理端点）──

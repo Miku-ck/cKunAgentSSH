@@ -30,3 +30,16 @@ describe('历史接线', () => {
     expect(src).toContain('toScheduleRow')
   })
 })
+
+describe('清空历史', () => {
+  it('弹窗底部有清空历史按钮，进行中禁用', () => {
+    expect(src).toContain('clearHistory()')
+    expect(src).toContain(':disabled="historyHasRunning"')
+  })
+  it('清空走危险确认 + clearRuns + 成功后刷新', () => {
+    expect(src).toContain('scheduleApi.clearRuns')
+    expect(src).toContain('danger: true')
+    // 清空后靠 fetchHistory 回到空态
+    expect(src).toMatch(/clearRuns[\s\S]*?await fetchHistory\(\)/)
+  })
+})

@@ -126,6 +126,19 @@ describe('历史接线 HistoryList', () => {
   })
 })
 
+describe('清空历史', () => {
+  it('弹窗底部有清空历史按钮，进行中禁用', () => {
+    expect(src).toContain('clearHistory()')
+    expect(src).toContain(':disabled="historyHasRunning"')
+  })
+  it('清空走危险确认 + clearRuns + 成功后刷新', () => {
+    expect(src).toContain('runbookApi.clearRuns')
+    expect(src).toContain('danger: true')
+    // 清空后靠 fetchHistory 回到空态
+    expect(src).toMatch(/clearRuns[\s\S]*?await fetchHistory\(\)/)
+  })
+})
+
 describe('入口挂载', () => {
   it('SchedulesView 以分段 tab 挂载本面板（C 的唯一既有文件改动）', async () => {
     // 守卫 SchedulesView.vue 的接线：tab 状态、RunbookPanel 只在 runbooks 段挂载

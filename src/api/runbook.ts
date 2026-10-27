@@ -102,4 +102,10 @@ export const runbookApi = {
   /** 执行历史（steps_state 全量返回；limit 夹取到 1-200） */
   runs: (id: string, limit?: number) =>
     request<RunbookRunRecord[]>(`/runbooks/${id}/runs?limit=${clampRunsLimit(limit)}`),
+
+  /** 清空执行历史（保留剧本本身）；执行中有行则后端 409 拒 */
+  clearRuns: (id: string) =>
+    request<{ ok: boolean; deleted: number }>(`/runbooks/${id}/runs`, {
+      method: 'DELETE',
+    }),
 }
