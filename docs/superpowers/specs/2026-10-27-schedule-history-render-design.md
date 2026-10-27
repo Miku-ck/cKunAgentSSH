@@ -138,3 +138,24 @@ RunbookPanel.test.ts 头注已声明），组件层用 `?raw` 源码形状守卫
 - 剧本面板同步与否 → 用户选「同步对齐」。
 - 实现结构三选一 → 方案 1 纯展示层共享组件（方案 2 连数据封装、方案 3 两处复制被否）。
 - 请求失败显示修正 → 随状态图一并呈现，用户确认 ok。
+
+## 10. 实施结果
+
+按 `docs/superpowers/plans/2026-10-27-schedule-history-render.md` 五任务 TDD 落地，全部完成：
+
+| 交付物 | 提交 | 验证 |
+|---|---|---|
+| `src/utils/history-view.ts` 纯函数层 + `history-view.test.ts` | d37dd9f | 12/12 |
+| `src/components/schedules/HistoryList.vue` + `.guards.test.ts` | a422a2d | 7/7 守卫 |
+| `SchedulesView.vue` 接线 + `.history.guards.test.ts` | 68ea3d0 | 5/5 守卫 |
+| `RunbookPanel.vue` 接线（#extra）+ 更新 `RunbookPanel.test.ts` | 2bb2056 | 14/14 |
+
+全量验证（HEAD=2bb2056）：`npm test` **133 files / 1634 tests 全绿**（含 `styles/variables.test.ts` 39/39，无未登记令牌）；`npm run typecheck` web+node **EXIT=0**。
+
+### 与设计的偏差（均已在 SDD 台账留 Ruling）
+
+1. **durationText 显示口径**：原两页用 `Math.round(ms/100)/10` 模板字面量会把 `76.0s` 吃成 `76s`，与「1 位小数」注释矛盾——共享层统一 `toFixed(1)`，显示更诚实，数值语义等价。
+2. **接线层 import 剪枝**：删旧内联 markup 后 `durationText/shortId`（SchedulesView）、`shortId/parseTs/durationText/parseBackendTs`（RunbookPanel）在视图内失去调用点，strict `noUnusedLocals` 要求收窄 import；这些能力已内聚进 HistoryList/history-view，行为不变。
+3. **RunbookPanel 诊断守卫断言**：slot 只回传 `row`，diagnosis 全文经 `diagnosisOf(row.id)` 反查，断言相应从 `{{ run.diagnosis }}` 改为 `diagnosisOf(row.id)`（语义等价）。
+
+后端零改动（§5 达成）。手工真机冒烟（§Step 2）因需 Electron 运行环境，留待用户在本地 `npm run dev` 走查。
