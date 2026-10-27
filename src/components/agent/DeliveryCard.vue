@@ -168,7 +168,7 @@ async function resendResult(): Promise<void> {
   white-space: nowrap;
   padding: 1px 8px;
   border: 1px solid var(--border-default);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--text-secondary);

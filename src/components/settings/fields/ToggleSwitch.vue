@@ -26,7 +26,7 @@ defineEmits<{
 .toggle-switch {
   width: 36px;
   height: 20px;
-  border-radius: 10px;
+  border-radius: var(--radius-xl);
   /* 关闭态的轨道 = --bg-slider（variables.css 里那条"滑块轨道"就是为这种控件底色设的），
      描边 = --border-default：#3d3d3d/#4d4d4d 是深色主题的一档灰，在白卡与米纸卡上
      都是一块不属于任何主题的深色补丁 */

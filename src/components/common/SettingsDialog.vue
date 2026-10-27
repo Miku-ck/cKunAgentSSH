@@ -348,7 +348,7 @@ defineExpose({ open, close })
   bottom: 8px;
   width: 2px;
   background: var(--accent-primary);
-  border-radius: 1px;
+  border-radius: var(--radius-xs);
 }
 
 .nav-icon {

@@ -426,7 +426,7 @@ const terminalBgModeLabels: Record<TerminalBgMode, string> = {
   color: var(--text-secondary);
   background: var(--bg-input);
   border-left: 2px solid var(--accent-primary);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 /* 渐变颜色行 */

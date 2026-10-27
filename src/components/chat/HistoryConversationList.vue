@@ -131,7 +131,7 @@ function timeOf(ts: string): string {
   top: 50%;
   width: 2px;
   height: 14px;
-  border-radius: 1px;
+  border-radius: var(--radius-xs);
   background: var(--accent-indigo);
   transform: translateY(-50%);
 }

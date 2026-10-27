@@ -827,14 +827,14 @@ const Sparkline = defineComponent({
 .disk-bar {
   flex: 1;
   height: 6px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: var(--bg-hover);
   overflow: hidden;
 }
 
 .disk-bar-fill {
   height: 100%;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: var(--metric-cool);
   transition: width 0.4s ease;
 }
@@ -980,7 +980,7 @@ const Sparkline = defineComponent({
 .proc-stat {
   display: inline-block;
   padding: 1px 6px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: var(--bg-hover);
   font-size: 11px;
   font-family: var(--font-mono);
@@ -996,7 +996,7 @@ const Sparkline = defineComponent({
 .proc-kill {
   padding: 2px 8px;
   border: none;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--accent-red);
   font-size: 11px;
@@ -1064,7 +1064,7 @@ const Sparkline = defineComponent({
 .port-proto-tag {
   display: inline-block;
   padding: 1px 6px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: var(--bg-hover);
   font-size: 10px;
   font-family: var(--font-mono);
@@ -1159,7 +1159,7 @@ const Sparkline = defineComponent({
   font-size: 14px;
   line-height: 1;
   padding: 1px 6px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 
@@ -1218,7 +1218,7 @@ const Sparkline = defineComponent({
   flex-direction: column;
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
-  border-radius: 10px;
+  border-radius: var(--radius-xl);
   box-shadow: var(--shadow-lg);
   /* 容器只是初始焦点落点（tabindex=-1），描边交给里面的按钮 */
   outline: none;
@@ -1385,7 +1385,7 @@ const Sparkline = defineComponent({
   gap: 6px;
   padding: 6px 14px;
   border: 1px solid var(--border-default);
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text-secondary);
   font-size: 12px;

@@ -58,7 +58,7 @@ function onInput(e: Event) {
   -webkit-appearance: none;
   appearance: none;
   background: var(--bg-slider);
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   cursor: pointer;
 }
 .setting-range::-webkit-slider-thumb {

@@ -445,7 +445,7 @@ const sysRows = computed<SysRow[]>(() => {
   height: 12px;          /* 全panel统一厚度，GPU 卡行与 System 区一致 */
   flex: 0 0 12px;
   background: var(--nv-track);
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   overflow: hidden;
 }
 
@@ -454,7 +454,7 @@ const sysRows = computed<SysRow[]>(() => {
 :deep(.nv-gauge > .nv-bar > i) {
   display: block;
   height: 100%;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   /* 「动态」就是这里：宽度随采样平滑滑动，颜色跨阈值时渐变而非硬跳。
      注：参考线也会命中本规则，故下面单独把它的 transition 关掉。 */
   transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.5s linear;
@@ -486,7 +486,7 @@ const sysRows = computed<SysRow[]>(() => {
   gap: 1px;
   height: 4px;
   background: var(--nv-track);
-  border-radius: 1px;
+  border-radius: var(--radius-xs);
   overflow: hidden;
 }
 
@@ -592,7 +592,7 @@ const sysRows = computed<SysRow[]>(() => {
   color: var(--nv-ink);
   background: var(--nv-bg-bar);
   border: 1px solid var(--nv-border-soft);
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.65);
   line-height: 1.45;
   opacity: 0;
@@ -624,7 +624,7 @@ const sysRows = computed<SysRow[]>(() => {
   color: var(--nv-bg);
   background: var(--nv-brand);
   padding: 0 6px;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   font-weight: 600;
 }
 

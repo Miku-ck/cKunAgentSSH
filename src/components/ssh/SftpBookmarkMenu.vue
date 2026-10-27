@@ -183,7 +183,7 @@ onUnmounted(() => {
   width: 22px; height: 22px;
   display: flex; align-items: center; justify-content: center;
   background: transparent; border: none; color: var(--text-tertiary);
-  cursor: pointer; border-radius: 3px;
+  cursor: pointer; border-radius: var(--radius-sm);
 }
 .bm-trigger svg { width: 12px; height: 12px; }
 .bm-trigger:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-secondary); }
@@ -249,7 +249,7 @@ onUnmounted(() => {
   width: 18px; height: 18px; flex: none;
   display: none; align-items: center; justify-content: center;
   border: none; background: transparent; color: var(--text-tertiary);
-  border-radius: 3px; cursor: pointer;
+  border-radius: var(--radius-sm); cursor: pointer;
 }
 .bm-del svg { width: 11px; height: 11px; }
 .bm-del:hover { background: color-mix(in srgb, var(--danger-text) 16%, transparent); color: var(--danger-text); }

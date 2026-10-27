@@ -1043,7 +1043,7 @@ watch(scopeKey, () => {
   font-size: 10px;
   color: var(--accent-green);
   border: 1px solid color-mix(in srgb, var(--accent-green) 35%, transparent);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 0 4px;
   white-space: nowrap;
 }

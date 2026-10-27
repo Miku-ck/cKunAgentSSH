@@ -397,7 +397,7 @@ onMounted(refresh)
 .audit-badge {
   font-size: 11px;
   padding: 2px 10px;
-  border-radius: 10px;
+  border-radius: var(--radius-xl);
   border: 1px solid var(--border-default);
 }
 .audit-badge.ok { color: var(--accent-green); border-color: var(--accent-green); }

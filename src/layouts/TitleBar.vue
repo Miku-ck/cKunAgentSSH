@@ -286,7 +286,7 @@ async function close() { await api?.windowClose() }
   top: 7px;
   right: 5px;
   padding: 0 3px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   display: flex;
   align-items: center;
   justify-content: center;

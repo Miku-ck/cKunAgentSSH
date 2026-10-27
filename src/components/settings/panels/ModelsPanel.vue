@@ -922,7 +922,7 @@ function formatTokenCount(n: number): string {
 .badge {
   font-size: 10px;
   padding: 1px 6px;
-  border-radius: 10px;
+  border-radius: var(--radius-xl);
   font-weight: 500;
   white-space: nowrap;
 }
@@ -947,7 +947,7 @@ function formatTokenCount(n: number): string {
   font-size: 11px;
   font-weight: 500;
   padding: 1px 8px;
-  border-radius: 10px;
+  border-radius: var(--radius-xl);
   background: color-mix(in srgb, var(--status-success-text) 13%, transparent);
   color: var(--status-success-text);
   border: 1px solid color-mix(in srgb, var(--status-success-text) 27%, transparent);
@@ -997,7 +997,7 @@ function formatTokenCount(n: number): string {
 .modal-container {
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
-  border-radius: 10px;
+  border-radius: var(--radius-xl);
   box-shadow: var(--shadow-lg);
   /* 容器只是初始焦点落点（tabindex=-1），描边交给里面的控件 */
   outline: none;
@@ -1243,7 +1243,7 @@ function formatTokenCount(n: number): string {
   appearance: none;
   height: 4px;
   background: var(--bg-slider);
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   outline: none;
 }
 .temp-range::-webkit-slider-thumb {

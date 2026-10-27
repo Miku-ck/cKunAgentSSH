@@ -564,7 +564,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   width: 22px; height: 22px;
   display: flex; align-items: center; justify-content: center;
   background: transparent; border: none; color: var(--text-tertiary);
-  cursor: pointer; border-radius: 3px;
+  cursor: pointer; border-radius: var(--radius-sm);
 }
 .pane-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-secondary); }
 .pane-btn:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -635,7 +635,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
 .breadcrumb::-webkit-scrollbar { display: none; }
 .breadcrumb-edit { cursor: default; padding: 0 6px; }
 .crumb-group { display: flex; align-items: center; gap: 2px; }
-.crumb { color: var(--text-tertiary); cursor: pointer; white-space: nowrap; padding: 2px 4px; border-radius: 3px; }
+.crumb { color: var(--text-tertiary); cursor: pointer; white-space: nowrap; padding: 2px 4px; border-radius: var(--radius-sm); }
 .crumb:hover { color: var(--text-secondary); background: var(--bg-hover); }
 .crumb.current { color: var(--accent-cyan); }
 .crumb-sep { color: var(--text-tertiary); opacity: 0.5; }
@@ -645,7 +645,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   padding: 0 6px;
   background: var(--bg-input);
   border: 1px solid var(--accent-primary);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 12px;

@@ -22,7 +22,7 @@
 .ap-card {
   background: var(--bg-elevated);
   border: 1px solid var(--card-warn-border);
-  border-radius: 10px;
+  border-radius: var(--radius-xl);
   overflow: hidden;
   box-shadow: 0 3px 12px -4px rgba(0, 0, 0, 0.35);
   display: flex;
@@ -153,13 +153,13 @@
 .ap-perm { background: var(--bg-elevated); border-color: var(--card-perm-border); }
 .ap-perm-accent { color: var(--danger-text); }
 .ap-perm-ttl { color: var(--card-perm-text); }
-.ap-risk { font-size: 10.5px; font-weight: 700; padding: 2px 9px; border-radius: 999px; }
+.ap-risk { font-size: 10.5px; font-weight: 700; padding: 2px 9px; border-radius: var(--radius-pill); }
 .ap-risk.risk-moderate { background: var(--card-perm-border); color: var(--card-perm-text); }
 .ap-risk.risk-dangerous { background: var(--danger-bg); color: var(--danger-text); }
 /* 后端没说风险（缺字段/脏值）：授权档位已按 dangerous 收口，配色也必须跟着走 ——
    没有这一条时它落进无样式的 .ap-risk，画成一枚没皮的空徽章，看上去像"没有风险" */
 .ap-risk.risk-unknown { background: var(--danger-bg); color: var(--danger-text); }
-.ap-env { font-size: 10.5px; font-weight: 600; padding: 2px 9px; border-radius: 999px; }
+.ap-env { font-size: 10.5px; font-weight: 600; padding: 2px 9px; border-radius: var(--radius-pill); }
 .ap-env.env-prod { background: var(--danger-bg); color: var(--danger-text); }
 .ap-env.env-test { background: var(--card-perm-border); color: var(--text-secondary); }
 /* 顺序承载信息：两条同为单类选择器、后写的赢。原 scoped 版里 .ap-timeout-pill
@@ -171,14 +171,14 @@
   background: var(--danger-bg);
   color: var(--danger-text);
   padding: 2px 9px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
 }
 .ap-prod-warn {
   font-size: 11.5px;
   color: var(--danger-text);
   background: var(--danger-bg);
   border: 1px solid var(--danger-border);
-  border-radius: 7px;
+  border-radius: var(--radius-lg);
   padding: 7px 11px;
   margin-bottom: 9px;
   line-height: 1.5;

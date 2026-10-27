@@ -307,7 +307,7 @@ async function handleSkip() {
   letter-spacing: 0.5px;
   padding: 1px 5px;
   border: 1px solid var(--border-subtle);
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   background: var(--bg-hover);
 }
 .ctx-cmd-text {
@@ -316,7 +316,7 @@ async function handleSkip() {
   font-size: 12px;
   color: var(--status-info-text);
   background: var(--bg-input);
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   padding: 3px 7px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -383,7 +383,7 @@ async function handleSkip() {
   flex-shrink: 0;
   width: 18px;
   height: 18px;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   display: flex;
   align-items: center;
   justify-content: center;

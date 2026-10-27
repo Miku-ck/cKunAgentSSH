@@ -998,7 +998,7 @@ onMounted(async () => {
 }
 /* 授权作用域徽标：主机限域用 warn 色，扫一眼就能分清哪条是收紧过的授权 */
 .perm-host {
-  margin-right: 5px; padding: 1px 5px; border-radius: 7px;
+  margin-right: 5px; padding: 1px 5px; border-radius: var(--radius-lg);
   font-family: var(--font-mono);
   border: 1px solid var(--border-default); color: var(--text-tertiary);
 }

@@ -46,7 +46,7 @@ body {
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: var(--radius-sm); }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
 
 /* 按钮的 UA 默认 chrome 必须在这里断掉：Chromium 给没写 border/background 的

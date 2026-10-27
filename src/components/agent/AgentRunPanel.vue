@@ -141,7 +141,7 @@ const latestHelp = computed(() =>
 .ap-level {
   font-size: 11px;
   padding: 2px 9px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-weight: 600;
 }
 .ap-level.level-trivial,
@@ -158,7 +158,7 @@ const latestHelp = computed(() =>
 .ap-tag {
   font-size: 11px;
   padding: 2px 8px;
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   background: var(--status-tag-bg);
   color: var(--status-tag-text);
   border: 1px solid var(--status-tag-border);

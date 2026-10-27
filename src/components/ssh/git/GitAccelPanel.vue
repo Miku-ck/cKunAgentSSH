@@ -731,7 +731,7 @@ async function onMasterDisable(): Promise<void> {
   font-weight: 400;
   padding: 0 5px;
   line-height: 16px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border-subtle);
   color: var(--text-secondary);
 }
@@ -780,7 +780,7 @@ async function onMasterDisable(): Promise<void> {
   flex-wrap: wrap;
   padding: 6px 8px;
   border-left: 2px solid var(--danger-text);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--danger-text) 8%, transparent);
 }
 
@@ -957,7 +957,7 @@ async function onMasterDisable(): Promise<void> {
 
 .dl-bar {
   height: 4px;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   background: var(--bg-slider);
   overflow: hidden;
 }
@@ -965,7 +965,7 @@ async function onMasterDisable(): Promise<void> {
 .dl-bar-fill {
   height: 100%;
   background: var(--accent-primary);
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   transition: width 0.25s ease;
 }
 
@@ -1024,7 +1024,7 @@ async function onMasterDisable(): Promise<void> {
   font-size: 10px;
   color: var(--status-success-text);
   border: 1px solid color-mix(in srgb, var(--status-success-text) 40%, transparent);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 0 4px;
   line-height: 16px;
 }

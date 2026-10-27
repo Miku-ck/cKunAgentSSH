@@ -203,7 +203,7 @@ function formatDate(ts: number): string {
 .type-badge {
   flex-shrink: 0;
   padding: 1px 4px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.3px;
@@ -244,7 +244,7 @@ function formatDate(ts: number): string {
 .auth-badge {
   display: inline-block;
   padding: 2px 8px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   font-size: 10px;
   font-weight: 500;
   text-align: left;

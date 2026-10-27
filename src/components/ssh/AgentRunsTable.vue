@@ -310,7 +310,7 @@ watch(() => props.focusSeq, () => {
 .st {
   display: inline-block;
   padding: 1px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 11px;
   border: 1px solid var(--border-default);
   color: var(--text-secondary);

@@ -400,7 +400,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
 
 .tc-body { flex: 1; overflow-y: auto; padding: 4px 0 6px; }
 .tc-body::-webkit-scrollbar { width: 6px; }
-.tc-body::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 3px; }
+.tc-body::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: var(--radius-sm); }
 .grp-more {
   padding: 4px 0 6px 44px;
   font-family: var(--font-mono); font-size: 10px; line-height: 1.4; color: var(--text-tertiary);

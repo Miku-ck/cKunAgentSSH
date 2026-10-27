@@ -410,7 +410,7 @@ watch(remoteSessions, (sessions) => {
   flex-direction: column;
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   padding: 16px 18px;
   /* 容器只是初始焦点落点（tabindex=-1），描边交给里面的控件 */
   outline: none;
@@ -458,7 +458,7 @@ watch(remoteSessions, (sessions) => {
   font-size: 11px;
   font-family: var(--font-mono);
   padding: 3px 8px;
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   border: 1px dashed var(--border-subtle);
   background: transparent;
   color: var(--text-secondary);
@@ -488,7 +488,7 @@ watch(remoteSessions, (sessions) => {
 .bulk-progress-bar {
   width: 60%;
   height: 4px;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   background: var(--bg-hover);
   overflow: hidden;
 }

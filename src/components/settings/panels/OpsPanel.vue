@@ -289,7 +289,7 @@ onMounted(() => {
 .mono { font-family: var(--font-mono); font-size: 11.5px; }
 .badge {
   padding: 1px 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 11px;
   border: 1px solid var(--border-subtle);
 }

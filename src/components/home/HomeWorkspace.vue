@@ -383,7 +383,7 @@ function deleteConversation(id: string) {
   margin: 0 auto 12px;
   padding: 5px 14px;
   border: 1px solid var(--border-subtle);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: transparent;
   color: var(--text-secondary);
   font-size: 12px;

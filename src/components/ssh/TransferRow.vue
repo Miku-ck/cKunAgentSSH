@@ -306,7 +306,7 @@ const statusText = computed(() => {
   flex: 1; height: 6px; border-radius: var(--radius-sm); overflow: hidden;
   background: var(--bg-input); border: 1px solid var(--border-subtle); position: relative;
 }
-.pfill { height: 100%; border-radius: 2px; background: var(--accent-primary); transition: width var(--transition-fast); }
+.pfill { height: 100%; border-radius: var(--radius-xs); background: var(--accent-primary); transition: width var(--transition-fast); }
 .pfill.up { background: var(--accent-green); }
 .pfill.down { background: var(--accent-cyan); }
 .pfill.paused { background: var(--accent-orange); }
@@ -322,7 +322,7 @@ const statusText = computed(() => {
 @keyframes tr-sheen { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
 .pind { position: absolute; inset: 0; overflow: hidden; }
 .pind i {
-  position: absolute; top: 0; bottom: 0; width: 38%; border-radius: 2px;
+  position: absolute; top: 0; bottom: 0; width: 38%; border-radius: var(--radius-xs);
   background: var(--accent-primary); animation: tr-slide 1.2s ease-in-out infinite;
 }
 @keyframes tr-slide { 0% { transform: translateX(-105%); } 100% { transform: translateX(270%); } }

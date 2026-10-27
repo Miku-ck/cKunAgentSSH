@@ -610,7 +610,7 @@ onMounted(() => { loadStats(); loadMemories() })
 }
 .mem-tabs button {
   background: none; border: none; cursor: pointer; font-size: 12px; font-family: inherit;
-  padding: 4px 10px; border-radius: 5px; color: var(--text-secondary);
+  padding: 4px 10px; border-radius: var(--radius-md); color: var(--text-secondary);
 }
 .mem-tabs button.on { background: var(--bg-hover); color: var(--text-primary); }
 .mem-filters {
@@ -631,7 +631,7 @@ onMounted(() => { loadStats(); loadMemories() })
 .mem-item:last-child { border-bottom: none; }
 .mem-line { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; flex-wrap: wrap; }
 .mem-badge {
-  font-size: 10px; padding: 0 6px; border-radius: 7px;
+  font-size: 10px; padding: 0 6px; border-radius: var(--radius-lg);
   border: 1px solid var(--border-default); color: var(--text-tertiary);
 }
 .mem-badge.kind.semantic { color: var(--status-success-text); border-color: color-mix(in srgb, var(--status-success-text) 35%, transparent); }

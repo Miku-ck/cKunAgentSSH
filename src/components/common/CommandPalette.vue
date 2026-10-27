@@ -292,7 +292,7 @@ function onKeydown(e: KeyboardEvent): void {
   gap: 8px;
   padding: 7px 10px;
   border: none;
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text-secondary);
   font-size: 12px;
@@ -312,7 +312,7 @@ function onKeydown(e: KeyboardEvent): void {
   font-size: 10px;
   color: var(--text-tertiary);
   border: 1px solid var(--border-subtle);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 1px 4px;
   text-align: center;
 }

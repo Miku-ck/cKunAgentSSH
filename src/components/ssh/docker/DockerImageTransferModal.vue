@@ -272,7 +272,7 @@ const imgText = computed(() => {
   background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
 }
 .imgx-fmt button {
-  height: 18px; padding: 0 9px; border-radius: 3px;
+  height: 18px; padding: 0 9px; border-radius: var(--radius-sm);
   background: transparent; color: var(--text-secondary);
   font-family: var(--font-mono); font-size: 11px; cursor: pointer;
   transition: background var(--transition-fast), color var(--transition-fast);

@@ -41,7 +41,7 @@ cKunAgentSSH 前端（`src/`）的视觉 / 布局 / 交互 / 组件约定。**�
 
 **文字**：`--text-primary` 正文 · `--text-secondary` 次要 · `--text-tertiary` 最弱（≥4.5:1，已按主题加深）
 **边框**：`--border-default` 可见描边 · `--border-subtle` 弱分隔 · `--divider-primary` 分隔线 · `--border-input` 输入框
-**形状**：`--radius-sm/md/lg` = 4/6/8px（手记 2/3/4px） · `--shadow-sm/lg` · `--transition-fast` = 150ms
+**形状**：`--radius-xs/sm/md/lg/xl` = 2/4/6/8/10px（手记 1/2/3/4/5px） · `--radius-pill` = 999px · `--shadow-sm/lg` · `--transition-fast` = 150ms
 **字体**：`--font-sans` 正文 · `--font-mono` 命令/代码 · `--line-height-normal` · `--font-display` 标题 · `--chat-font-size` 消息正文
 **布局**：`--titlebar-h` = 32px · `--tabbar-h` = 34px
 **强调色**：`--accent-primary` / `--accent-primary-rgb` 单一事实源 · `--accent-on` 压强调色底的前景 · `--accent-cyan` 命令行/代码 · `--accent-indigo*` 聊天强调 · `--accent-pink*` 目标 chip
@@ -84,7 +84,7 @@ App.vue (flex column, 100vh)
 - 设置弹窗：overlay 同上 `--scrim` + `blur(2px)` `z-index:2000`；`dialog` `clamp(960px,90vw,1280px) × clamp(640px,88vh,860px)`，左导航 200px。确认框：宽 380px，`z-index:3000`。过渡 `opacity .15s` + 内容 `scale(.96~.97)`。
 - 历史记录弹窗：`width: min(560px, 100vw - 48px)`、`max-height: min(640px, 100vh - 96px)`，居中；overlay 读 `--scrim`（随主题染色）+ `blur(2px)`，`z-index:2000`。
 - 浮层投影：一律 `var(--shadow-lg)`；控件级微投影用 `--shadow-sm`，组件里不另写 px 阴影。同一个弹窗家族里投影深浅不一，比“投影略轻”更难解释。
-- 圆角：一律 `var(--radius-sm/md/lg)`。字面 4/6/8px 与默认主题同值，深色下看不出毛病，切到「手记」（2/3/4）就不跟随主题了；守卫 `styles/radius.guards.test.ts` 专拦这三档。其余字面值（2/3/5/7/9/10/12px、999px 胶囊、50% 圆形）没有对应令牌，要动先加令牌，别在组件里就地发明数值。
+- 圆角：一根刻度走到底 —— `--radius-xs/sm/md/lg/xl` = 2/4/6/8/10px（手记 1/2/3/4/5px），完全圆头用 `--radius-pill`。圆形（头像/指示灯）直接写 `50%`：它表达形状而非档位，不算溢出令牌。档位少一档才叫系统：旧代码里的 1/2/3/5/7/9/10/12px 已按最近一档收口（默认主题下每处变化 ≤1px，唯一例外是 12px 收到 xl）。守卫 `styles/radius.guards.test.ts` 现在拦任何 `border-radius: <n>px`；要新档先加令牌再改，别在组件里就地发明数值。
 - 键盘焦点：全局 `:focus-visible` 给 2px 主色描边。表单控件（`input`/`select`/`textarea`/`role="switch"`）另有一条 `!important` 底线 —— 组件里的 `outline: none` 权重高于全局伪类，那条底线只为保证 Tab 到时看得见焦点（鼠标点击不命中 `:focus-visible`，观感不变）。弹窗的 Tab 环形与「关闭后焦点还给触发器」走 [useModalFocusTrap.ts](src/composables/useModalFocusTrap.ts)（`activate()` / `deactivate()`）：容器带 `tabindex="-1"`，初始焦点位置靠 `initialFocus` 选择器。Esc 不在这份共享件里 —— 各弹窗的 Esc 优先级不同（编辑器要先问「未保存的更改」），自己管。弹窗叠层（编辑器上再压一个确认框）时，下层用 `suspend()` 让位、上层关掉后 `resume()`：两层都挂 window 监听的话，一次 Tab 会被两份环形各拦一次，焦点互相踢。
 
 ---

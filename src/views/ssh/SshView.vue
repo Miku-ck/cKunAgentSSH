@@ -717,7 +717,7 @@ defineExpose({
   justify-content: center;
   border: none;
   background: transparent;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   color: var(--text-tertiary);
   cursor: pointer;
   opacity: 0;

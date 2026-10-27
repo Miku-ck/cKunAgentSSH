@@ -48,7 +48,7 @@
 
 /* ── 徽章 ── */
 .dt-dialog .badge {
-  font-size: 10px; padding: 1px 7px; border-radius: 10px; color: var(--text-tertiary);
+  font-size: 10px; padding: 1px 7px; border-radius: var(--radius-xl); color: var(--text-tertiary);
   background: var(--bg-input); border: 1px solid var(--border-subtle); white-space: nowrap;
 }
 .dt-dialog .badge.running,

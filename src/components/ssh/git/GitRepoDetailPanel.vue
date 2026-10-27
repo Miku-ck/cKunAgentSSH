@@ -561,7 +561,7 @@ onMounted(() => { void load() })
 .grdp-pill {
   font-size: 11px;
   padding: 1px 8px;
-  border-radius: 9px;
+  border-radius: var(--radius-xl);
   white-space: nowrap;
 }
 .k-dirty { background: var(--status-warn-bg); color: var(--status-warn-text); }
@@ -580,7 +580,7 @@ onMounted(() => { void load() })
   line-height: 1.5;
   padding: 5px 8px;
   border-left: 2px solid var(--status-warn-text);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: var(--status-warn-bg);
   flex-shrink: 0;
 }
@@ -612,7 +612,7 @@ onMounted(() => { void load() })
   font-size: 10px;
   color: var(--accent-green);
   border: 1px solid color-mix(in srgb, var(--accent-green) 35%, transparent);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 0 4px;
 }
 
@@ -749,7 +749,7 @@ onMounted(() => { void load() })
   font-size: 11px;
   color: var(--accent-cyan);
   background: color-mix(in srgb, var(--accent-cyan) 10%, transparent);
-  border-radius: 9px;
+  border-radius: var(--radius-xl);
   padding: 1px 8px;
   white-space: nowrap;
 }
@@ -850,7 +850,7 @@ onMounted(() => { void load() })
   line-height: 1.5;
   padding: 5px 8px;
   border-left: 2px solid var(--status-warn-text);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: var(--status-warn-bg);
 }
 .grdc-list {
