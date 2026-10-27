@@ -2,10 +2,12 @@
   <Teleport to="body" :disabled="embedded">
   <div :class="embedded ? 'embed-root' : 'modal-overlay'">
     <div
+      ref="dialogRef"
       class="modal-dialog"
       :class="{ embedded }"
       :role="embedded ? undefined : 'dialog'"
       :aria-modal="embedded ? undefined : 'true'"
+      :tabindex="embedded ? undefined : '-1'"
     >
       <div v-if="!embedded" class="modal-header">
         <h3>{{ isEdit ? '编辑连接' : '添加远程连接' }}</h3>
@@ -186,6 +188,7 @@ import type { SSHConnection } from '@/stores/ssh'
 import { useSettingsStore } from '@/stores/settings'
 import { useConfirm } from '@/composables/useConfirm'
 import { toFriendlyMessage } from '@/api/client'
+import { useModalFocusTrap } from '../../composables/useModalFocusTrap'
 import { isPort, PORT_MAX } from '../../../shared/port-core'
 
 const props = defineProps<{
@@ -264,6 +267,10 @@ function handleOverlayClose() {
   emit('close')
 }
 
+const dialogRef = ref<HTMLElement | null>(null)
+// 嵌入统一新建弹窗时不接管：Tab 环形与 Esc 都归宿主（NewConnectionDialog）
+const { activate, deactivate } = useModalFocusTrap(dialogRef)
+
 // Escape 键关闭弹窗
 function handleKeydown(e: KeyboardEvent) {
   // 审查修复（P2）：saving/testing 期间禁止关闭（Esc/取消/右上角 ×
@@ -272,9 +279,14 @@ function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') handleOverlayClose()
 }
 onMounted(() => {
-  if (!props.embedded) window.addEventListener('keydown', handleKeydown)
+  if (props.embedded) return
+  activate()
+  window.addEventListener('keydown', handleKeydown)
 })
-onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown)
+  deactivate()
+})
 
 // 嵌入式宿主用自己的关闭按钮/Esc 时仍走这道闸门（saving/testing 期间不关）
 defineExpose({ requestClose: handleOverlayClose })
@@ -442,6 +454,8 @@ async function handleSave() {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* 容器只是初始焦点落点（tabindex=-1），描边交给里面的输入框 */
+  outline: none;
 }
 
 /* 嵌入统一新建弹窗：骨架由宿主提供，这里只留可滚动正文与页脚 */

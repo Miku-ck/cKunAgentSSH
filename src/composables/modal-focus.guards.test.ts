@@ -88,6 +88,11 @@ describe('弹窗焦点管理', () => {
       'components/ssh/docker/DockerContainerDetail.vue',
       'components/ssh/docker/DockerImageTransferModal.vue',
       'components/ssh/docker/DockerPullDialog.vue',
+      'components/ssh/NewConnectionDialog.vue',
+      'components/ssh/QuickCommandEditor.vue',
+      'components/ssh/BulkCommandModal.vue',
+      'components/ssh/git/GitRepoDetailPanel.vue',
+      'components/ssh/GatewayDialogs.vue',
     ]
     for (const file of files) {
       const src = read(file)
@@ -157,6 +162,15 @@ describe('弹窗焦点管理', () => {
     expect(models).toContain("from '../../../composables/useModalFocusTrap'")
     // 提供商选择此前是纯 div：键盘既选不到也打不开
     expect(models).toMatch(/class="provider-select"[\s\S]{0,120}?tabindex="0"/)
+  })
+
+  it('嵌入宿主的弹窗把对话框语义与 tabindex 一起让位', () => {
+    // ConnectionModal 既能独立弹（SshView 直开），也能嵌进 NewConnectionDialog 的一页。
+    // 嵌入时如果还给自己挂 role/tabindex，一次 Tab 会被宿主与它各拦一次。
+    const conn = read('components/ssh/ConnectionModal.vue')
+    expect(conn).toMatch(/:tabindex="embedded \? undefined : '-1'"/)
+    expect(conn).toMatch(/if \(props\.embedded\) return\s*\n\s*activate\(\)/)
+    expect(conn).toContain('deactivate()')
   })
 
   it('两处「选择 SSH 连接」列表能用键盘选（SFTP / 终端首页）', () => {

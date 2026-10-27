@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
   <div v-if="visible" class="qc-editor-overlay">
-    <div class="qc-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="qc-editor-title">
+    <div ref="dialogRef" class="qc-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="qc-editor-title" tabindex="-1">
       <div class="qc-editor-header">
         <h3 id="qc-editor-title">{{ isEdit ? '编辑快捷命令' : '新建快捷命令' }}</h3>
         <button class="qc-editor-close" @click="handleClose">&times;</button>
@@ -11,7 +11,6 @@
         <div class="qc-form-row">
           <label>命令名称 <span class="qc-char-count">{{ form.name.length }}/30</span></label>
           <input
-            ref="nameInput"
             v-model="form.name"
             type="text"
             maxlength="30"
@@ -69,9 +68,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import type { QuickCommand } from '@/stores/quickCommands'
 import { PRESET_COLORS } from '@/stores/quickCommands'
+import { useModalFocusTrap } from '../../composables/useModalFocusTrap'
 
 const props = defineProps<{
   visible: boolean
@@ -85,7 +85,10 @@ const emit = defineEmits<{
 
 const presetColors = PRESET_COLORS
 
-const nameInput = ref<HTMLInputElement | null>(null)
+// 弹窗常驻挂载、靠 visible 开关：打开时接管 Tab 环形，关掉后还给触发它的按钮；
+// 初始焦点就是名称输入框（原先靠打开后单独 nextTick 抢焦点，现已并入一处）
+const dialogRef = ref<HTMLElement | null>(null)
+const { activate, deactivate } = useModalFocusTrap(dialogRef, { initialFocus: '.qc-input' })
 
 const form = ref({
   name: '',
@@ -97,17 +100,19 @@ const isEdit = computed(() => props.editData !== null)
 const canSave = computed(() => form.value.name.trim().length > 0 && form.value.command.trim().length > 0)
 
 watch(() => props.visible, (show) => {
-  if (show) {
-    if (props.editData) {
-      form.value = {
-        name: props.editData.name,
-        command: props.editData.command,
-        color: props.editData.color || presetColors[0],
-      }
-    } else {
-      form.value = { name: '', command: '', color: presetColors[0] }
+  if (!show) {
+    deactivate()
+    return
+  }
+  activate()
+  if (props.editData) {
+    form.value = {
+      name: props.editData.name,
+      command: props.editData.command,
+      color: props.editData.color || presetColors[0],
     }
-    nextTick(() => nameInput.value?.focus())
+  } else {
+    form.value = { name: '', command: '', color: presetColors[0] }
   }
 })
 
@@ -120,7 +125,10 @@ function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') emit('close')
 }
 onMounted(() => window.addEventListener('keydown', handleKeydown))
-onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown)
+  deactivate()
+})
 
 function handleSave() {
   if (!canSave.value) return
@@ -153,6 +161,8 @@ function handleSave() {
   box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
+  /* 容器只是初始焦点落点（tabindex=-1），描边交给里面的输入框 */
+  outline: none;
   overflow: hidden;
   font-family: var(--font-sans);
 }

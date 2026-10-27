@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <div class="nc-overlay">
-      <div class="nc-dialog" role="dialog" aria-modal="true" aria-label="新建连接">
+      <div ref="dialogRef" class="nc-dialog" role="dialog" aria-modal="true" aria-label="新建连接" tabindex="-1">
         <div class="nc-head">
           <h2>新建连接</h2>
           <button class="nc-x" aria-label="关闭" @click="requestClose">✕</button>
@@ -43,6 +43,7 @@
 import { onMounted, onUnmounted, ref } from 'vue'
 import ConnectionModal from './ConnectionModal.vue'
 import AccessModal from './AccessModal.vue'
+import { useModalFocusTrap } from '../../composables/useModalFocusTrap'
 
 const emit = defineEmits<{
   close: []
@@ -79,8 +80,17 @@ function onKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape') requestClose()
 }
 
-onMounted(() => window.addEventListener('keydown', onKeydown))
-onUnmounted(() => window.removeEventListener('keydown', onKeydown))
+const dialogRef = ref<HTMLElement | null>(null)
+// 内嵌的两张表单（ConnectionModal / AccessModal）都以 embedded 让位，Tab 环形归本层
+const { activate, deactivate } = useModalFocusTrap(dialogRef)
+onMounted(() => {
+  activate()
+  window.addEventListener('keydown', onKeydown)
+})
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKeydown)
+  deactivate()
+})
 </script>
 
 <style scoped>
@@ -105,6 +115,8 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
+  /* 容器只是初始焦点落点（tabindex=-1），描边交给里面的输入框 */
+  outline: none;
 }
 
 .nc-head {

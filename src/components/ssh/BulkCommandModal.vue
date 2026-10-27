@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
   <div class="bulk-modal-mask" @click.self="requestClose">
-    <div class="bulk-modal" role="dialog" aria-modal="true" aria-label="多节点批量下发">
+    <div ref="dialogRef" class="bulk-modal" role="dialog" aria-modal="true" aria-label="多节点批量下发" tabindex="-1">
       <div class="bulk-title">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
         多节点批量下发
@@ -123,6 +123,7 @@ import { useSshAiStore } from '@/stores/ssh-ai'
 import { useSettingsStore } from '@/stores/settings'
 import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
+import { useModalFocusTrap } from '@/composables/useModalFocusTrap'
 import { agentApi, toFriendlyMessage, type SafetyClassifyResult } from '@/api/client'
 import {
   diffResults, resultsConsistent, decideBulkDispatch, type BulkResult,
@@ -156,12 +157,22 @@ async function requestClose() {
 
 const emit = defineEmits<{ close: [] }>()
 
+const dialogRef = ref<HTMLElement | null>(null)
+// 挂载即打开：Tab 环形与关闭还原走共享件；Esc 仍走 requestClose（执行中会二次确认）
+const { activate, deactivate } = useModalFocusTrap(dialogRef)
+
 // Escape 关闭（执行中走 requestClose 的二次确认）
 function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') void requestClose()
 }
-onMounted(() => window.addEventListener('keydown', handleKeydown))
-onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
+onMounted(() => {
+  activate()
+  window.addEventListener('keydown', handleKeydown)
+})
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown)
+  deactivate()
+})
 
 const sshStore = useSSHStore()
 const sshAiStore = useSshAiStore()
@@ -401,6 +412,8 @@ watch(remoteSessions, (sessions) => {
   border: 1px solid var(--border-subtle);
   border-radius: 12px;
   padding: 16px 18px;
+  /* 容器只是初始焦点落点（tabindex=-1），描边交给里面的控件 */
+  outline: none;
 }
 .bulk-title {
   display: flex;

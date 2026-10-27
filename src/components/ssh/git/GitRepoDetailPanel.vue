@@ -128,7 +128,7 @@
          分支徽标 / 字数计数 / 推送目标预览为本仓自己的增补 -->
     <Teleport to="body">
       <div v-if="showCommit" class="grdc-overlay" @click.self="closeCommit">
-        <div class="grdc-dialog" role="dialog" aria-modal="true" aria-label="提交变更">
+        <div ref="commitDialogRef" class="grdc-dialog" role="dialog" aria-modal="true" aria-label="提交变更" tabindex="-1">
           <div class="grdc-head">
             <span class="grdc-repo">{{ repo.name }}</span>
             <span v-if="!repo.detached && repo.branch" class="grdc-branch mono">{{ repo.branch }}</span>
@@ -214,6 +214,7 @@ import GitLaneGraph from './GitLaneGraph.vue'
 import FileTypeIcon from '@/components/icons/FileTypeIcon.vue'
 import { agentApi, toFriendlyMessage } from '@/api/client'
 import { useToastStore } from '@/stores/toast'
+import { useModalFocusTrap } from '@/composables/useModalFocusTrap'
 import {
   GRAPH_MAX_LIMIT,
   buildRemoteDiffCmd,
@@ -345,6 +346,10 @@ const canCommit = computed(() =>
 // 提交弹窗（点击弹窗执行）：信息填写与动作选择都在弹窗里完成
 const showCommit = ref(false)
 const commitInput = ref<HTMLTextAreaElement | null>(null)
+const commitDialogRef = ref<HTMLElement | null>(null)
+// 打开即落在提交信息框（原先靠 openCommit 里的手工 focus，现在交给共用件统一做）
+const { activate, deactivate } =
+  useModalFocusTrap(commitDialogRef, { initialFocus: '.grdc-textarea' })
 /** 打开弹窗时被「疑似临时产物」规则默认跳过的文件数（0 = 无，不显示提示行） */
 const noiseSkipped = ref(0)
 const toast = useToastStore()
@@ -357,7 +362,6 @@ function openCommit(): void {
   checkedPaths.value = (keep.length ? keep : files).map(f => f.path)
   noiseSkipped.value = files.length - keep.length
   showCommit.value = true
-  void nextTick(() => commitInput.value?.focus())
 }
 
 /** 选中文件对 HEAD 的 diff 摘要（本地 IPC / 远程 sshExec 同口径）；失败返回空串——
@@ -421,8 +425,13 @@ function onCommitDialogKey(e: KeyboardEvent): void {
   if (e.key === 'Escape') closeCommit()
 }
 watch(showCommit, (open) => {
-  if (open) document.addEventListener('keydown', onCommitDialogKey)
-  else document.removeEventListener('keydown', onCommitDialogKey)
+  if (open) {
+    document.addEventListener('keydown', onCommitDialogKey)
+    activate()
+  } else {
+    document.removeEventListener('keydown', onCommitDialogKey)
+    deactivate()
+  }
 })
 onUnmounted(() => document.removeEventListener('keydown', onCommitDialogKey))
 
@@ -729,6 +738,8 @@ onMounted(() => { void load() })
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   padding: 16px 18px;
+  /* 容器只作为初始焦点落点（tabindex=-1），描边交给里面的控件 */
+  outline: none;
 }
 .grdc-head { display: flex; align-items: center; gap: 8px; flex-shrink: 0; min-width: 0; }
 .grdc-head-sp { flex: 1; }

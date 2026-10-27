@@ -6,7 +6,14 @@
        差异是有意的 —— 网关是持凭据的中继，放行一次的爆炸半径比一台目标机大。 -->
   <Teleport to="body">
     <div v-if="pending" class="overlay show">
-      <div class="modal" role="dialog" aria-modal="true" aria-label="确认网关身份">
+      <div
+        ref="tofuRef"
+        class="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="确认网关身份"
+        tabindex="-1"
+      >
         <h2>确认网关身份</h2>
         <p class="lede">{{ pending.host }}:{{ pending.port }} · 本机第一次见到这张证书，确认后才建立会话。</p>
         <div class="spki">
@@ -24,11 +31,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import AccessModal from './AccessModal.vue'
 import { useAccessStore } from '@/stores/access'
 import { useToastStore } from '@/stores/toast'
 import { toFriendlyMessage } from '@/api/client'
+import { useModalFocusTrap } from '@/composables/useModalFocusTrap'
 
 const accessStore = useAccessStore()
 const toast = useToastStore()
@@ -36,6 +44,16 @@ const toast = useToastStore()
 const modalOpen = ref(false)
 const editing = ref<GatewayRecord | undefined>(undefined)
 const pending = computed(() => accessStore.pendingHostKeys[0])
+
+// 阻断式确认要先把焦点拿进来（否则 Tab 会跑到背后页面）；初始焦点给「取消」——
+// 信任是一次性放行，不该被一个回车撞进默认动作。
+const tofuRef = ref<HTMLElement | null>(null)
+const { activate, deactivate } =
+  useModalFocusTrap(tofuRef, { initialFocus: '.modal-foot .btn-ghost' })
+watch(pending, (p) => {
+  if (p) activate()
+  else deactivate()
+}, { immediate: true })
 
 function openEdit(gw: GatewayRecord): void {
   editing.value = { ...gw }
@@ -97,7 +115,10 @@ onMounted(() => {
     if (!ok) toast.error('网关列表读取失败，请稍后重试')
   })
 })
-onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown)
+  deactivate()
+})
 
 defineExpose({ openEdit })
 </script>
@@ -113,6 +134,8 @@ defineExpose({ openEdit })
   border-radius: var(--radius-lg);
   padding: 18px 20px 16px;
   box-shadow: var(--shadow-lg);
+  /* 容器只作为初始焦点落点（tabindex=-1），描边交给里面的控件 */
+  outline: none;
 }
 .modal h2 { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
 .modal .lede { font-size: 12px; color: var(--text-tertiary); margin-bottom: 14px; }
