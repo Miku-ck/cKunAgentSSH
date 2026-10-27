@@ -99,12 +99,13 @@ function toggle(row: HistoryRow) {
 .history-item { border: 1px solid var(--border-subtle); border-radius: 6px; padding: 6px 10px; background: var(--bg-elevated); }
 .history-head {
   display: flex; align-items: center; gap: 12px; width: 100%;
+  flex-wrap: nowrap; min-width: 0;
   background: none; border: none; padding: 2px 0; cursor: pointer; text-align: left;
-  font-size: 12px; color: var(--text-secondary);
+  font-size: 12px; line-height: 1.4; color: var(--text-secondary);
 }
 .history-head:hover:not(.is-static) { background: var(--bg-hover); }
 .history-head.is-static { cursor: default; }
-.mono { font-family: var(--font-mono); }
+.mono { font-family: var(--font-mono); white-space: nowrap; flex: 0 0 auto; }
 .chev { margin-left: auto; color: var(--text-tertiary); }
 .history-preview {
   font-size: 12px; color: var(--text-secondary); margin-top: 4px;
@@ -124,7 +125,7 @@ function toggle(row: HistoryRow) {
 }
 .history-summary :deep(hr) { border: none; border-top: 1px solid var(--border-subtle); margin: 8px 0; }
 .history-actions { margin-top: 6px; }
-.status { font-size: 11px; padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border-subtle); }
+.status { font-size: 11px; padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border-subtle); white-space: nowrap; flex: 0 0 auto; }
 .status.running { color: var(--accent-text); border-color: var(--accent-primary); }
 .status.completed, .status.success { color: var(--accent-green); border-color: var(--accent-green); }
 .status.failed { color: var(--accent-red); border-color: var(--accent-red); }
