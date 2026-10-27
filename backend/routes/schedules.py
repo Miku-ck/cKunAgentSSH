@@ -9,7 +9,7 @@ POST   /api/schedules/{id}/run — 立即执行
 GET    /api/schedules/{id}/runs— 执行历史
 """
 import asyncio
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -31,6 +31,8 @@ class ScheduleIn(BaseModel):
     # 上限的理由：名称与提示词会整份进列表响应与每一次无头 run 的上下文，
     # 无上限等于允许贴一整篇文档进来
     name: str = Field(..., min_length=1, max_length=_NAME_MAX_LEN)
+    # spec 2026-10-27-schedule-task-type：任务分类，仅影响模板与列表分区，不改执行
+    task_type: Literal["ops", "daily"] = "ops"
     schedule_type: str = "interval"
     # 审查修复：加范围校验 — 0/负值入库后 compute_next_run 算出 ≤now 的时间，
     # 每 30s tick 都触发无头 SSH Agent 运行，持续消耗模型调用与 SSH 连接
@@ -50,6 +52,8 @@ class SchedulePatch(BaseModel):
     # 而 _drop_nulls 只丢 None ⇒ {"name": ""} 和超长名都能从 PATCH 进库：POST 挡住的
     # 空名/长名，改个名字就绕过了（models_config 的 PATCH 早就带了同一组 min/max）。
     name: Optional[str] = Field(default=None, min_length=1, max_length=_NAME_MAX_LEN)
+    # spec 2026-10-27-schedule-task-type：类型创建后不可变，此字段仅用于拒绝变更（见 update_schedule）
+    task_type: Optional[Literal["ops", "daily"]] = None
     schedule_type: Optional[str] = None
     # 审查修复：与 ScheduleIn 一致的范围校验
     interval_minutes: Optional[int] = Field(default=None, ge=1, le=525600)
@@ -117,6 +121,12 @@ async def update_schedule(schedule_id: str, req: SchedulePatch):
     if not existing:
         raise HTTPException(status_code=404, detail="任务不存在")
     patch = _drop_nulls(req.model_dump(exclude_unset=True))
+    # spec 2026-10-27-schedule-task-type：类型创建后不可变。显式传入与原值不同 → 422；
+    # 相同值也一律从 patch 剔除（db.update_schedule 的 allowed 本就不含 task_type，此处双保险）。
+    explicit_type = req.model_dump(exclude_unset=True).get("task_type")
+    if explicit_type is not None and explicit_type != existing.get("task_type"):
+        raise HTTPException(status_code=422, detail="任务类型创建后不可修改")
+    patch.pop("task_type", None)
     merged = {**existing, **patch}
     if merged.get("schedule_type") not in _SCHEDULE_TYPES:
         raise HTTPException(status_code=400, detail=f"不支持的周期类型: {merged.get('schedule_type')}")

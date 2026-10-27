@@ -2,12 +2,15 @@
 
 spec 2026-10-27-schedule-task-type
 """
-import asyncio
 import os
 
+import fastapi
 import pytest
+from fastapi.testclient import TestClient
 
 import database as db
+import routes.schedules as sched_mod
+from test_schedule_routes import _FakeEngine, _fake_compute_next_run  # noqa: F401
 
 
 @pytest.fixture
@@ -17,6 +20,18 @@ def base_db(tmp_workspace):
     db.init_db(db_path)
     yield db_path
     db._close_all_connections()
+
+
+@pytest.fixture
+def client(base_db, monkeypatch):
+    engine = _FakeEngine()
+    monkeypatch.setattr("agent.schedule_engine.get_schedule_engine", lambda: engine)
+    monkeypatch.setattr("agent.schedule_engine.compute_next_run", _fake_compute_next_run)
+    app = fastapi.FastAPI()
+    app.include_router(sched_mod.router, prefix="/api")
+    c = TestClient(app)
+    c.engine = engine  # type: ignore[attr-defined]
+    return c
 
 
 def _make(**over):
@@ -47,8 +62,36 @@ def test_update_cannot_change_task_type(base_db):
 
 
 def test_legacy_db_gets_task_type_column(base_db):
-    # 模拟旧库：建库后手动删列再重跑迁移不现实，改为直接查列存在性
+    # 模拟旧库：建库后手动删列不现实，改为直接查列存在性
     cols = {row[1] for row in
             db._get_conn().execute("PRAGMA table_info(schedules)").fetchall()}
     db._close_all_connections()
     assert "task_type" in cols
+
+
+def test_post_invalid_task_type_422(client):
+    r = client.post("/api/schedules", json={"name": "x", "task_type": "weekly"})
+    assert r.status_code == 422
+
+
+def test_post_daily_roundtrip(client):
+    r = client.post("/api/schedules", json={"name": "x", "task_type": "daily"})
+    assert r.status_code == 200 and r.json()["task_type"] == "daily"
+
+
+def test_post_default_type_is_ops(client):
+    r = client.post("/api/schedules", json={"name": "x"})
+    assert r.json()["task_type"] == "ops"
+
+
+def test_patch_change_type_rejected(client):
+    sid = client.post("/api/schedules", json={"name": "x"}).json()["id"]
+    r = client.patch(f"/api/schedules/{sid}", json={"task_type": "daily"})
+    assert r.status_code == 422
+
+
+def test_patch_same_type_allowed(client):
+    # 前端保存时可能带原值回填，相同类型不应报错（也不改库）
+    sid = client.post("/api/schedules", json={"name": "x"}).json()["id"]
+    r = client.patch(f"/api/schedules/{sid}", json={"task_type": "ops", "name": "y"})
+    assert r.status_code == 200 and r.json()["task_type"] == "ops"
