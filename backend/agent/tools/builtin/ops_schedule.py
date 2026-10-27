@@ -217,6 +217,13 @@ class ScheduleOpTool(BaseTool):
                 "enum": ["create", "list", "cancel"],
                 "description": "操作类型：create 创建、list 列出、cancel 取消",
             },
+            "task_type": {
+                "type": "string",
+                "enum": ["ops", "daily"],
+                "default": "ops",
+                "description": "任务分类：ops=运维任务（默认），daily=日常任务。"
+                               "仅影响前端模板集与列表分区，不改变执行与审批。",
+            },
             "mode": {
                 "type": "string",
                 "enum": ["interval", "cron"],
@@ -301,21 +308,25 @@ class ScheduleOpTool(BaseTool):
 
     async def execute(self, context, action, mode="interval", interval_minutes=None,
                       cron=None, task=None, command=None, schedule_id=None, name=None,
-                      target_host=None):
+                      target_host=None, task_type="ops"):
         action = (action or "").strip()
         if action not in ("create", "list", "cancel"):
             return ToolResult(False, "", f"action 必须是 create|list|cancel，收到 {action!r}")
 
         if action == "create":
             return await self._create(mode, interval_minutes, cron, task, command, name,
-                                      target_host)
+                                      target_host, task_type)
         if action == "list":
             return await self._list()
         return await self._cancel(schedule_id)
 
     # ── create ──
     async def _create(self, mode, interval_minutes, cron, task, command, name,
-                      target_host=None):
+                      target_host=None, task_type="ops"):
+        # spec 2026-10-27-schedule-task-type：分类字段非法值直接报错，不静默归一
+        task_type = task_type or "ops"
+        if task_type not in ("ops", "daily"):
+            return ToolResult(False, "", f"非法 task_type: {task_type!r}，仅支持 ops / daily")
         mode = (mode or "interval").strip()
         if mode not in ("interval", "cron"):
             return ToolResult(False, "", f"mode 必须是 interval|cron，收到 {mode!r}")
@@ -371,6 +382,8 @@ class ScheduleOpTool(BaseTool):
 
         data = {
             "name": task_name,
+            # spec 2026-10-27-schedule-task-type：分类透传入库（已在入口校验为 ops/daily）
+            "task_type": task_type,
             "schedule_type": parsed["schedule_type"],
             # cron 派生的行不落 interval_minutes：留 0 的话，用户日后在界面上把类型
             # 改成 interval 会撞上 POST/PATCH 的 ge=1 校验（422），而 UI 建行的默认是 60
@@ -427,7 +440,8 @@ class ScheduleOpTool(BaseTool):
             t = (r.get("task_prompt") or "").strip().splitlines()
             first = t[0][:40] if t else ""
             st = r.get("schedule_type") or "interval"
-            lines.append(f"{r.get('id')} | {r.get('name') or ''} | {st} | {first}")
+            tag = "运维" if (r.get("task_type") or "ops") == "ops" else "日常"
+            lines.append(f"{r.get('id')} | [{tag}] {r.get('name') or ''} | {st} | {first}")
         return ToolResult(True, "\n".join(lines))
 
 
