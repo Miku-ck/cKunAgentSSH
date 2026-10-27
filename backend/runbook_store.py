@@ -356,6 +356,42 @@ def list_runbook_runs(runbook_id: str, limit: int = 50) -> list[dict]:
         conn.close()
 
 
+def clear_runbook_runs(runbook_id: str) -> int:
+    """清空某剧本的全部执行历史（保留剧本本身），返回删除行数。
+
+    与 delete_runbook（删整实体、FK CASCADE 带走历史）区分；本函数只清历史行。
+    不做 running 检查（路由层 has_running_runbook_run 闸）。SQL 静态字面量 + 参数绑定。
+    """
+    ensure_tables()
+    conn = db._get_conn()
+    try:
+        cur = conn.execute(
+            "DELETE FROM runbook_runs WHERE runbook_id = ?",
+            (runbook_id,),
+        )
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
+def has_running_runbook_run(runbook_id: str) -> bool:
+    """该剧本是否有仍处 running 的执行历史（清空前的进行中闸）。
+
+    与 finish/reap 同一非终态口径：running 是唯一非终态（终态见 RUN_TERMINAL_STATUSES）。
+    """
+    ensure_tables()
+    conn = db._get_conn()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM runbook_runs WHERE runbook_id = ? AND status = 'running' LIMIT 1",
+            (runbook_id,),
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
 def reap_stale_runs(exclude_runbook_ids: set[str] | None = None) -> int:
     """启动收尸（先例 schedule_engine._reap_stale_runs，schedule_engine.py:191-214）：
     把上一次进程存活期遗留的 running 行落为 stale_reaped。

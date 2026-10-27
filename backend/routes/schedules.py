@@ -7,6 +7,7 @@ PATCH  /api/schedules/{id}     — 更新任务
 DELETE /api/schedules/{id}     — 删除任务
 POST   /api/schedules/{id}/run — 立即执行
 GET    /api/schedules/{id}/runs— 执行历史
+DELETE /api/schedules/{id}/runs— 清空执行历史（保留任务；执行中 409）
 """
 import asyncio
 from typing import Literal, Optional
@@ -195,3 +196,15 @@ async def list_schedule_runs(schedule_id: str, limit: int = 50):
         raise HTTPException(status_code=404, detail="任务不存在")
     limit = max(1, min(limit, 200))
     return await asyncio.to_thread(db.list_schedule_runs, schedule_id, limit)
+
+
+@router.delete("/schedules/{schedule_id}/runs")
+async def clear_schedule_runs(schedule_id: str):
+    """清空该任务的全部执行历史（保留任务本身）；有进行中的执行则 409 拒。"""
+    if not await asyncio.to_thread(db.get_schedule, schedule_id):
+        raise HTTPException(status_code=404, detail="任务不存在")
+    # 进行中闸：有 running 行时拒清，避免删掉仍在写回的执行记录
+    if await asyncio.to_thread(db.has_running_schedule_run, schedule_id):
+        raise HTTPException(status_code=409, detail="该任务正在执行中，请等本次结束后再清空历史")
+    deleted = await asyncio.to_thread(db.clear_schedule_runs, schedule_id)
+    return {"ok": True, "deleted": deleted}

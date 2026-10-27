@@ -2926,6 +2926,42 @@ def prune_schedule_runs(max_count: int = 2000) -> int:
         conn.close()
 
 
+def clear_schedule_runs(schedule_id: str) -> int:
+    """清空某任务的全部执行历史（保留任务本身），返回删除行数。
+
+    与 delete_schedule 的区分：那条删整实体、由 FK CASCADE 顺带带走历史；本函数
+    只清历史列表行。不做 running 检查（由路由层的 has_running_schedule_run 闸把关，
+    避免删掉仍在写回的执行记录）。SQL 静态字面量 + 参数绑定。
+    """
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            "DELETE FROM schedule_runs WHERE schedule_id = ?",
+            (schedule_id,),
+        )
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
+def has_running_schedule_run(schedule_id: str) -> bool:
+    """该任务是否有仍处 running 的执行历史（清空前的进行中闸）。
+
+    与 fail_running_schedule_runs 同一非终态口径：schedule_runs 只有 running 是非终态
+    （completed/failed 为终态）。
+    """
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM schedule_runs WHERE schedule_id = ? AND status = 'running' LIMIT 1",
+            (schedule_id,),
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
 def prune_agent_runs(max_count: int = 5000) -> int:
     """删除最旧的 agent_runs（连带级联删除其 tool_calls），返回删除的 run 数。
 

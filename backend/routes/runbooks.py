@@ -6,6 +6,7 @@ PATCH  /api/runbooks/{id}      — 更新剧本
 DELETE /api/runbooks/{id}      — 删除剧本（执行中 409）
 POST   /api/runbooks/{id}/run  — 一键执行（探活 503 / 执行中 409）
 GET    /api/runbooks/{id}/runs — 执行历史（limit 夹取）
+DELETE /api/runbooks/{id}/runs — 清空执行历史（保留剧本；执行中 409）
 
 结构完全镜像 routes/schedules.py：Pydantic 上限 + 手工 _validate 式校验（400 而非
 422，错误文案可读）、PATCH 的 exclude_unset + _drop_nulls 防御、桥探活前置
@@ -211,3 +212,15 @@ async def list_runbook_runs(runbook_id: str, limit: int = 50):
         # steps_state 冗余安全化：脏 JSON 已在 store 兜底为数组，这里只滤非 dict
         r["steps_state"] = [s for s in (r.get("steps_state") or []) if isinstance(s, dict)]
     return rows
+
+
+@router.delete("/runbooks/{runbook_id}/runs")
+async def clear_runbook_runs(runbook_id: str):
+    """清空该剧本的全部执行历史（保留剧本本身）；有进行中的执行则 409 拒。"""
+    if not await asyncio.to_thread(rstore.get_runbook, runbook_id):
+        raise HTTPException(status_code=404, detail="剧本不存在")
+    # 进行中闸：有 running 行时拒清，避免删掉仍在写回的执行记录
+    if await asyncio.to_thread(rstore.has_running_runbook_run, runbook_id):
+        raise HTTPException(status_code=409, detail="该剧本正在执行中，请等本次结束后再清空历史")
+    deleted = await asyncio.to_thread(rstore.clear_runbook_runs, runbook_id)
+    return {"ok": True, "deleted": deleted}
