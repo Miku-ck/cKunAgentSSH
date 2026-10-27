@@ -529,12 +529,12 @@ onUnmounted(() => {
 .rb-card {
   border: 1px solid var(--border-subtle);
   border-left: 3px solid var(--accent-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 12px 14px;
 }
 .rb-card-head { display: flex; align-items: center; justify-content: space-between; }
 .rb-name { font-size: 14px; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 8px; }
-.toggle, .status { font-size: 11px; padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border-subtle); }
+.toggle, .status { font-size: 11px; padding: 1px 8px; border-radius: var(--radius-lg); border: 1px solid var(--border-subtle); }
 .toggle.on { color: var(--accent-green); border-color: var(--accent-green); }
 .rb-card-actions { display: flex; gap: 6px; }
 .rb-card-meta { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--text-secondary); margin-top: 8px; }
@@ -558,13 +558,13 @@ onUnmounted(() => {
 /* 弹窗骨架（遮罩/圆角/投影/焦点/滚动）统一由 BaseModal 提供，本文件不再自绘 */
 .field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-tertiary); }
 .field input, .field select, .step-row input {
-  font-size: 12px; padding: 6px 8px; border-radius: 6px;
+  font-size: 12px; padding: 6px 8px; border-radius: var(--radius-md);
   border: 1px solid var(--border-subtle); background: var(--bg-input); color: var(--text-primary);
 }
 .field.check { flex-direction: row; align-items: center; gap: 6px; }
 
 .step-editor { display: flex; flex-direction: column; gap: 8px; }
-.step-row { border: 1px solid var(--border-subtle); border-radius: 6px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.step-row { border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 8px; display: flex; flex-direction: column; gap: 6px; }
 .step-row-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--text-secondary); }
 .step-ops { display: flex; gap: 4px; }
 .btn-xs { padding: 1px 6px; font-size: 11px; }
@@ -574,7 +574,7 @@ onUnmounted(() => {
 .history-load-error {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   font-size: 12px; color: var(--accent-red);
-  border: 1px solid var(--accent-red); border-radius: 6px; padding: 8px 10px;
+  border: 1px solid var(--accent-red); border-radius: var(--radius-md); padding: 8px 10px;
 }
 .empty-small { color: var(--text-tertiary); font-size: 12px; padding: 20px 0; text-align: center; }
 
@@ -582,7 +582,7 @@ onUnmounted(() => {
 .hist-step { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
 .hist-step .hist-cmd { color: var(--text-secondary); white-space: pre-wrap; word-break: break-all; text-align: left; }
 .hist-verdict { color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40%; }
-.step-badge { flex-shrink: 0; font-size: 11px; padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border-subtle); }
+.step-badge { flex-shrink: 0; font-size: 11px; padding: 1px 8px; border-radius: var(--radius-lg); border: 1px solid var(--border-subtle); }
 .step-badge.success { color: var(--accent-green); border-color: var(--accent-green); }
 .step-badge.failed { color: var(--accent-red); border-color: var(--accent-red); }
 .step-badge.blocked { color: var(--accent-orange); border-color: var(--accent-orange); }

@@ -52,4 +52,8 @@ describe('HistoryList 展示契约', () => {
     expect(src).toContain('useMarkdownDelegation')
     expect(src).toContain('@click="onMarkdownClick"')
   })
+  it('圆角走 --radius-* 令牌，不用字面 px（手记主题会改小）', () => {
+    const styleBlock = src.slice(src.indexOf('<style scoped>'))
+    expect(styleBlock).not.toMatch(/border-radius:\s*\d+px/)
+  })
 })

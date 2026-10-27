@@ -822,7 +822,7 @@ onUnmounted(() => {
 /* 入口分段 tab（定时任务 | 运维剧本）：小段控件，选中态走 accent */
 .entry-tabs { display: flex; gap: 4px; padding: 8px 16px 0; flex-shrink: 0; }
 .entry-tabs button {
-  padding: 5px 14px; font-size: 12px; border-radius: 6px 6px 0 0; cursor: pointer;
+  padding: 5px 14px; font-size: 12px; border-radius: var(--radius-md) var(--radius-md) 0 0; cursor: pointer;
   border: 1px solid transparent; border-bottom: none; background: transparent;
   color: var(--text-secondary);
 }
@@ -852,7 +852,7 @@ onUnmounted(() => {
 .schedule-card {
   border: 1px solid var(--border-subtle);
   border-left: 3px solid var(--accent-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 12px 14px;
 }
 /* 日常任务色条：沿用成功/绿语义 token，不硬编码色值（spec §3） */
@@ -865,7 +865,7 @@ onUnmounted(() => {
 .schedule-card-head { display: flex; align-items: center; justify-content: space-between; }
 .schedule-name { font-size: 14px; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 8px; }
 /* 启用标记与执行状态是同一种"小徽章"，形状只写一份；配色各自表述语义 */
-.toggle, .status { font-size: 11px; padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border-subtle); }
+.toggle, .status { font-size: 11px; padding: 1px 8px; border-radius: var(--radius-lg); border: 1px solid var(--border-subtle); }
 .toggle.on { color: var(--accent-green); border-color: var(--accent-green); }
 .schedule-card-actions { display: flex; gap: 6px; }
 .schedule-card-meta { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--text-secondary); margin-top: 8px; }
@@ -893,13 +893,13 @@ onUnmounted(() => {
 .type-switch.disabled { opacity: .55; }
 .type-switch .sched-option:disabled { cursor: not-allowed; }
 .field input, .field textarea, .field select {
-  font-size: 12px; padding: 6px 8px; border-radius: 6px;
+  font-size: 12px; padding: 6px 8px; border-radius: var(--radius-md);
   border: 1px solid var(--border-subtle); background: var(--bg-input); color: var(--text-primary);
 }
 .field.check { flex-direction: row; align-items: center; gap: 6px; }
 .template-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
 .template-chip {
-  text-align: left; padding: 8px; border-radius: 8px; cursor: pointer;
+  text-align: left; padding: 8px; border-radius: var(--radius-lg); cursor: pointer;
   border: 1px solid var(--border-subtle); background: var(--bg-hover);
 }
 .template-chip:hover { border-color: var(--text-tertiary); }
@@ -908,7 +908,7 @@ onUnmounted(() => {
 .template-desc { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
 .sched-options { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .sched-option {
-  padding: 5px 0; font-size: 12px; border-radius: 6px; cursor: pointer;
+  padding: 5px 0; font-size: 12px; border-radius: var(--radius-md); cursor: pointer;
   border: 1px solid var(--border-subtle); background: transparent; color: var(--text-secondary);
 }
 .sched-option:hover { color: var(--text-primary); background: var(--bg-hover); }
@@ -917,14 +917,14 @@ onUnmounted(() => {
 .sched-subrow .num { width: 56px; }
 .sched-subrow .sel { width: 92px; }
 .sched-subrow input.num, .sched-subrow select.sel {
-  font-size: 12px; padding: 4px 6px; border-radius: 6px;
+  font-size: 12px; padding: 4px 6px; border-radius: var(--radius-md);
   border: 1px solid var(--border-subtle); background: var(--bg-input); color: var(--text-primary);
 }
 
 .history-load-error {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   font-size: 12px; color: var(--accent-red);
-  border: 1px solid var(--accent-red); border-radius: 6px; padding: 8px 10px;
+  border: 1px solid var(--accent-red); border-radius: var(--radius-md); padding: 8px 10px;
 }
 .empty-small { color: var(--text-tertiary); font-size: 12px; padding: 20px 0; text-align: center; }
 .countdown { color: var(--accent-text); font-weight: 600; }

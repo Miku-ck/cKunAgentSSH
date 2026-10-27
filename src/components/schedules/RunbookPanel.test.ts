@@ -13,6 +13,7 @@ import panelRaw from './RunbookPanel.vue?raw'
 import { describe, expect, it } from 'vitest'
 
 const src = panelRaw.replace(/\r\n/g, '\n')
+const style = src.slice(src.indexOf('<style scoped>'))
 
 function sliceFunction(header: string): string {
   const start = src.indexOf(header)
@@ -140,6 +141,12 @@ describe('弹窗承载 BaseModal', () => {
   })
   it('Esc 交给 BaseModal，面板不再重复监听', () => {
     expect(src).not.toContain('handleKeydown')
+  })
+})
+
+describe('圆角令牌', () => {
+  it('样式块内不用字面 px 圆角（手记主题会把 8px 改小，字面值破相）', () => {
+    expect(style).not.toMatch(/border-radius:\s*\d+px/)
   })
 })
 

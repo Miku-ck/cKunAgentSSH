@@ -99,7 +99,7 @@ function toggle(row: HistoryRow) {
 
 <style scoped>
 .history-list { display: flex; flex-direction: column; gap: 8px; }
-.history-item { border: 1px solid var(--border-subtle); border-radius: 6px; padding: 6px 10px; background: var(--bg-elevated); }
+.history-item { border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 6px 10px; background: var(--bg-elevated); }
 .history-head {
   display: flex; align-items: center; gap: 12px; width: 100%;
   flex-wrap: nowrap; min-width: 0;
@@ -119,7 +119,7 @@ function toggle(row: HistoryRow) {
 .history-error { font-size: 12px; color: var(--accent-red); margin-bottom: 4px; white-space: pre-wrap; }
 .history-summary { font-size: 12px; color: var(--text-primary); max-height: 300px; overflow: auto; line-height: 1.6; }
 .history-actions { margin-top: 6px; }
-.status { font-size: 11px; padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border-subtle); white-space: nowrap; flex: 0 0 auto; }
+.status { font-size: 11px; padding: 1px 8px; border-radius: var(--radius-lg); border: 1px solid var(--border-subtle); white-space: nowrap; flex: 0 0 auto; }
 .status.running { color: var(--accent-text); border-color: var(--accent-primary); }
 .status.completed, .status.success { color: var(--accent-green); border-color: var(--accent-green); }
 .status.failed { color: var(--accent-red); border-color: var(--accent-red); }

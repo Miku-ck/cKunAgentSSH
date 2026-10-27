@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 import viewRaw from './SchedulesView.vue?raw'
 
 const src = viewRaw.replace(/\r\n/g, '\n')
+const style = src.slice(src.indexOf('<style scoped>'))
 
 describe('历史接线', () => {
   it('列表主体经 HistoryList 渲染，:key 重挂载承担展开态重置', () => {
@@ -44,6 +45,12 @@ describe('弹窗承载', () => {
   })
   it('Esc 交给 BaseModal，视图不再重复监听', () => {
     expect(src).not.toContain('handleKeydown')
+  })
+})
+
+describe('圆角令牌', () => {
+  it('样式块内不用字面 px 圆角（手记主题会把 8px 改小，字面值破相）', () => {
+    expect(style).not.toMatch(/border-radius:\s*\d+px/)
   })
 })
 
