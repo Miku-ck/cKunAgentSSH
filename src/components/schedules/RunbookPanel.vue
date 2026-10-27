@@ -53,101 +53,87 @@
     </div>
 
     <!-- 执行历史 Modal -->
-    <Teleport to="body">
-      <div v-if="historyFor" class="modal-mask" @click.self="historyFor = null">
-        <div class="modal wide" role="dialog" aria-modal="true">
-          <div class="modal-title">{{ historyFor.name }} — 执行历史</div>
-          <div class="modal-body">
-            <div v-if="historyError" class="history-load-error">
-              <span>{{ historyError }}</span>
-              <button class="btn btn-sm" @click="fetchHistory()">重试</button>
-            </div>
-            <div v-else-if="historyRuns.length === 0" class="empty-small">暂无执行记录</div>
-            <HistoryList v-else :key="historyFor?.id" :rows="historyRows" :label-map="STATUS_LABEL_RUNBOOK">
-              <template #extra="{ row }">
-                <!-- 步骤级状态徽章：success/failed/blocked/skipped -->
-                <div class="hist-steps" v-if="(stepsOf(row.id) || []).length">
-                  <div v-for="st in stepsOf(row.id)" :key="st.seq" class="hist-step">
-                    <span class="step-badge" :class="st.status">{{ stepStatusLabel(st.status) }}</span>
-                    <code class="mono hist-cmd">{{ st.command }}</code>
-                    <span class="hist-verdict" v-if="st.error" :title="st.error">{{ st.error }}</span>
-                  </div>
-                </div>
-                <!-- 自动诊断结论（诊断 run 的输出，失败执行才有） -->
-                <div class="history-diagnosis" v-if="diagnosisOf(row.id)">
-                  <div class="k">AI 诊断</div>
-                  <div class="diagnosis-text">{{ diagnosisOf(row.id) }}</div>
-                </div>
-              </template>
-            </HistoryList>
-          </div>
-          <div class="modal-actions">
-            <button class="btn btn-sm btn-danger" :disabled="historyHasRunning"
-              :title="historyHasRunning ? '该剧本正在执行中，请等本次结束后再清空' : ''" @click="clearHistory()">清空历史</button>
-            <button class="btn btn-ghost" @click="historyFor = null">关闭</button>
-          </div>
-        </div>
+    <BaseModal v-if="historyFor" wide :title="historyFor.name + ' — 执行历史'" @close="historyFor = null">
+      <div v-if="historyError" class="history-load-error">
+        <span>{{ historyError }}</span>
+        <button class="btn btn-sm" @click="fetchHistory()">重试</button>
       </div>
-    </Teleport>
+      <div v-else-if="historyRuns.length === 0" class="empty-small">暂无执行记录</div>
+      <HistoryList v-else :key="historyFor?.id" :rows="historyRows" :label-map="STATUS_LABEL_RUNBOOK">
+        <template #extra="{ row }">
+          <!-- 步骤级状态徽章：success/failed/blocked/skipped -->
+          <div class="hist-steps" v-if="(stepsOf(row.id) || []).length">
+            <div v-for="st in stepsOf(row.id)" :key="st.seq" class="hist-step">
+              <span class="step-badge" :class="st.status">{{ stepStatusLabel(st.status) }}</span>
+              <code class="mono hist-cmd">{{ st.command }}</code>
+              <span class="hist-verdict" v-if="st.error" :title="st.error">{{ st.error }}</span>
+            </div>
+          </div>
+          <!-- 自动诊断结论（诊断 run 的输出，失败执行才有） -->
+          <div class="history-diagnosis" v-if="diagnosisOf(row.id)">
+            <div class="k">AI 诊断</div>
+            <div class="diagnosis-text">{{ diagnosisOf(row.id) }}</div>
+          </div>
+        </template>
+      </HistoryList>
+      <template #actions>
+        <button class="btn btn-sm btn-danger" :disabled="historyHasRunning"
+          :title="historyHasRunning ? '该剧本正在执行中，请等本次结束后再清空' : ''" @click="clearHistory()">清空历史</button>
+        <button class="btn btn-ghost" @click="historyFor = null">关闭</button>
+      </template>
+    </BaseModal>
 
     <!-- 新建/编辑 Modal（v1 保留：不提供编辑 modal 就无法定义剧本） -->
-    <Teleport to="body">
-      <div v-if="editing" class="modal-mask" @click.self="editing = null">
-        <div class="modal wide" role="dialog" aria-modal="true">
-          <div class="modal-title">{{ editing.id ? '编辑剧本' : '新建运维剧本' }}</div>
-          <div class="modal-body">
-            <label class="field">
-              <span>剧本名称 *</span>
-              <input v-model="form.name" maxlength="100" placeholder="例如：nginx 502 恢复" />
-            </label>
-            <label class="field">
-              <span>说明（可选）</span>
-              <input v-model="form.description" maxlength="500" placeholder="这个剧本做什么、什么时候用" />
-            </label>
-            <label class="field">
-              <span>目标主机</span>
-              <select v-model="form.target_host">
-                <option value="">未指定（步骤命令将没有 SSH 会话可用）</option>
-                <option v-for="c in connections" :key="c.id" :value="c.id">
-                  {{ connLabel(c) }} — {{ c.username }}@{{ c.host }}
-                </option>
-              </select>
-            </label>
-            <div class="field">
-              <span>步骤（≤ {{ MAX_STEPS }} 步；每步一条命令 + 可选验证命令）</span>
-              <div class="step-editor">
-                <div v-for="(s, i) in form.steps" :key="i" class="step-row">
-                  <div class="step-row-head">
-                    <b>第 {{ i + 1 }} 步</b>
-                    <span class="step-ops">
-                      <button class="btn btn-xs" :disabled="i === 0" @click="moveStep(i, -1)" title="上移">↑</button>
-                      <button class="btn btn-xs" :disabled="i === form.steps.length - 1" @click="moveStep(i, 1)" title="下移">↓</button>
-                      <button class="btn btn-xs btn-danger" @click="removeStep(i)">删除</button>
-                    </span>
-                  </div>
-                  <input v-model="s.command" class="mono" maxlength="2000" placeholder="命令（必填，≤2000 字）" />
-                  <input v-model="s.assertCommand" class="mono" maxlength="2000" placeholder="验证命令（可选，≤2000 字，用于输出 [步骤结论]）" />
-                  <input v-model="s.note" maxlength="500" placeholder="说明（可选，≤500 字）" />
-                </div>
-                <button class="btn btn-sm" @click="addStep" :disabled="form.steps.length >= MAX_STEPS">
-                  + 添加步骤（{{ form.steps.length }}/{{ MAX_STEPS }}）
-                </button>
-              </div>
+    <BaseModal v-if="editing" wide :title="editing.id ? '编辑剧本' : '新建运维剧本'" @close="editing = null">
+      <label class="field">
+        <span>剧本名称 *</span>
+        <input v-model="form.name" maxlength="100" placeholder="例如：nginx 502 恢复" />
+      </label>
+      <label class="field">
+        <span>说明（可选）</span>
+        <input v-model="form.description" maxlength="500" placeholder="这个剧本做什么、什么时候用" />
+      </label>
+      <label class="field">
+        <span>目标主机</span>
+        <select v-model="form.target_host">
+          <option value="">未指定（步骤命令将没有 SSH 会话可用）</option>
+          <option v-for="c in connections" :key="c.id" :value="c.id">
+            {{ connLabel(c) }} — {{ c.username }}@{{ c.host }}
+          </option>
+        </select>
+      </label>
+      <div class="field">
+        <span>步骤（≤ {{ MAX_STEPS }} 步；每步一条命令 + 可选验证命令）</span>
+        <div class="step-editor">
+          <div v-for="(s, i) in form.steps" :key="i" class="step-row">
+            <div class="step-row-head">
+              <b>第 {{ i + 1 }} 步</b>
+              <span class="step-ops">
+                <button class="btn btn-xs" :disabled="i === 0" @click="moveStep(i, -1)" title="上移">↑</button>
+                <button class="btn btn-xs" :disabled="i === form.steps.length - 1" @click="moveStep(i, 1)" title="下移">↓</button>
+                <button class="btn btn-xs btn-danger" @click="removeStep(i)">删除</button>
+              </span>
             </div>
-            <label class="field check">
-              <input v-model="form.enabled" type="checkbox" />
-              <span>启用</span>
-            </label>
-            <!-- 表单级校验错误（command 必填 / 长度 / ≤20 步），非空时禁用保存 -->
-            <div class="form-err" v-if="formError">{{ formError }}</div>
+            <input v-model="s.command" class="mono" maxlength="2000" placeholder="命令（必填，≤2000 字）" />
+            <input v-model="s.assertCommand" class="mono" maxlength="2000" placeholder="验证命令（可选，≤2000 字，用于输出 [步骤结论]）" />
+            <input v-model="s.note" maxlength="500" placeholder="说明（可选，≤500 字）" />
           </div>
-          <div class="modal-actions">
-            <button class="btn btn-ghost" @click="editing = null">取消</button>
-            <button class="btn btn-primary" @click="save" :disabled="saving || !!formError">保存</button>
-          </div>
+          <button class="btn btn-sm" @click="addStep" :disabled="form.steps.length >= MAX_STEPS">
+            + 添加步骤（{{ form.steps.length }}/{{ MAX_STEPS }}）
+          </button>
         </div>
       </div>
-    </Teleport>
+      <label class="field check">
+        <input v-model="form.enabled" type="checkbox" />
+        <span>启用</span>
+      </label>
+      <!-- 表单级校验错误（command 必填 / 长度 / ≤20 步），非空时禁用保存 -->
+      <div class="form-err" v-if="formError">{{ formError }}</div>
+      <template #actions>
+        <button class="btn btn-ghost" @click="editing = null">取消</button>
+        <button class="btn btn-primary" @click="save" :disabled="saving || !!formError">保存</button>
+      </template>
+    </BaseModal>
 
     <div v-if="loading" class="rb-loading">加载中…</div>
     <div v-if="error" class="rb-error">{{ error }}</div>
@@ -168,6 +154,7 @@ import { useConfirm } from '@/composables/useConfirm'
 import { formatBackendTs } from '@/utils/format'
 import { connNote, useSSHStore } from '@/stores/ssh'
 import HistoryList from '@/components/schedules/HistoryList.vue'
+import BaseModal from '@/components/common/BaseModal.vue'
 // shortId/durationText/parseBackendTs 不再引入：历史行渲染已下沉 HistoryList，本面板仅卡片 meta 需 formatBackendTs/statusLabel（strict noUnusedLocals）
 import { toRunbookRow, statusLabel as statusLabelOf, STATUS_LABEL_RUNBOOK, type HistoryRow } from '@/utils/history-view'
 
@@ -502,22 +489,15 @@ function stepStatusLabel(s: string): string {
 
 // shortId/parseTs/durationText 已下沉 history-view（历史列表由组件内部调用）；本面板不再直接用
 
-// Escape 关闭当前打开的弹窗
-function handleKeydown(e: KeyboardEvent) {
-  if (e.key !== 'Escape') return
-  if (historyFor.value) { historyFor.value = null; return }
-  if (editing.value) editing.value = null
-}
+// Escape 关闭由 BaseModal 统一承担（window 级监听，卸载时自移除）
 
 onMounted(() => {
   if (sshStore.connections.length === 0) {
     sshStore.loadConnections()
   }
-  window.addEventListener('keydown', handleKeydown)
 })
 
 onUnmounted(() => {
-  window.removeEventListener('keydown', handleKeydown)
   stopListPoll()
   for (const t of runPollTimers) clearInterval(t)
   runPollTimers.clear()
@@ -575,11 +555,7 @@ onUnmounted(() => {
 .rb-loading { color: var(--text-tertiary); font-size: 12px; padding: 0 16px 12px; }
 .rb-error { color: var(--accent-red); font-size: 12px; padding: 0 16px 12px; }
 
-.modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-.modal { width: 520px; max-width: 90vw; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 16px; max-height: 80vh; overflow: auto; }
-.modal.wide { width: 680px; }
-.modal-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 12px; }
-.modal-body { display: flex; flex-direction: column; gap: 10px; }
+/* 弹窗骨架（遮罩/圆角/投影/焦点/滚动）统一由 BaseModal 提供，本文件不再自绘 */
 .field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-tertiary); }
 .field input, .field select, .step-row input {
   font-size: 12px; padding: 6px 8px; border-radius: 6px;
@@ -616,5 +592,4 @@ onUnmounted(() => {
 .history-diagnosis { margin-top: 8px; }
 .history-diagnosis .k { color: var(--text-tertiary); font-size: 12px; margin-bottom: 4px; text-align: left; }
 .diagnosis-text { font-size: 12px; color: var(--text-secondary); white-space: pre-wrap; max-height: 150px; overflow: auto; text-align: left; }
-.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 </style>

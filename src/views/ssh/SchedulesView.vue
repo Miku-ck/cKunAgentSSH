@@ -62,45 +62,34 @@
     </div>
 
     <!-- 空历史 Modal -->
-    <Teleport to="body">
-    <div v-if="historyFor" class="modal-mask" @click.self="historyFor = null">
-      <div class="modal wide" role="dialog" aria-modal="true">
-        <div class="modal-title">{{ historyTitle }} — 执行历史</div>
-        <div class="modal-body">
-          <div v-if="historyError" class="history-load-error">
-            <span>{{ historyError }}</span>
-            <button class="btn btn-sm" @click="fetchHistory()">重试</button>
-          </div>
-          <div v-else-if="historyRuns.length === 0" class="empty-small">暂无执行记录</div>
-          <HistoryList v-else :key="historyFor?.id" :rows="historyRows">
-            <template #actions="{ row }">
-              <button class="btn btn-sm" @click="askAiDiagnose(historyFor, rawRunOf(row.id))">⚡ AI 诊断此失败</button>
-            </template>
-          </HistoryList>
-        </div>
-        <div class="modal-actions">
-          <button class="btn btn-sm btn-danger" :disabled="historyHasRunning"
-            :title="historyHasRunning ? '该任务正在执行中，请等本次结束后再清空' : ''" @click="clearHistory()">清空历史</button>
-          <button class="btn btn-ghost" @click="historyFor = null">关闭</button>
-        </div>
+    <BaseModal v-if="historyFor" wide :title="historyTitle + ' — 执行历史'" @close="historyFor = null">
+      <div v-if="historyError" class="history-load-error">
+        <span>{{ historyError }}</span>
+        <button class="btn btn-sm" @click="fetchHistory()">重试</button>
       </div>
-    </div>
-    </Teleport>
+      <div v-else-if="historyRuns.length === 0" class="empty-small">暂无执行记录</div>
+      <HistoryList v-else :key="historyFor?.id" :rows="historyRows">
+        <template #actions="{ row }">
+          <button class="btn btn-sm" @click="askAiDiagnose(historyFor, rawRunOf(row.id))">⚡ AI 诊断此失败</button>
+        </template>
+      </HistoryList>
+      <template #actions>
+        <button class="btn btn-sm btn-danger" :disabled="historyHasRunning"
+          :title="historyHasRunning ? '该任务正在执行中，请等本次结束后再清空' : ''" @click="clearHistory()">清空历史</button>
+        <button class="btn btn-ghost" @click="historyFor = null">关闭</button>
+      </template>
+    </BaseModal>
 
     <!-- 新建/编辑 Modal -->
-    <Teleport to="body">
-    <div v-if="editing" class="modal-mask" @click.self="editing = null">
-      <div class="modal" role="dialog" aria-modal="true">
-        <div class="modal-title schedule-modal-title">
-          <span>{{ editing.id ? '编辑任务' : '新建定时任务' }}</span>
-          <div class="type-switch" :class="{ disabled: !!editing.id }" :title="editing.id ? '任务类型创建后不可修改' : '任务类型'">
-            <button class="sched-option" :class="{ active: form.task_type === 'ops' }"
-              :disabled="!!editing.id" @click="switchType('ops')">运维</button>
-            <button class="sched-option" :class="{ active: form.task_type === 'daily' }"
-              :disabled="!!editing.id" @click="switchType('daily')">日常</button>
-          </div>
+    <BaseModal v-if="editing" :title="editing.id ? '编辑任务' : '新建定时任务'" @close="editing = null">
+      <template #head-right>
+        <div class="type-switch" :class="{ disabled: !!editing.id }" :title="editing.id ? '任务类型创建后不可修改' : '任务类型'">
+          <button class="sched-option" :class="{ active: form.task_type === 'ops' }"
+            :disabled="!!editing.id" @click="switchType('ops')">运维</button>
+          <button class="sched-option" :class="{ active: form.task_type === 'daily' }"
+            :disabled="!!editing.id" @click="switchType('daily')">日常</button>
         </div>
-        <div class="modal-body">
+      </template>
           <!-- 模板选择（仅新建时显示） -->
           <div v-if="!editing.id" class="field">
             <span>选择模板</span>
@@ -203,14 +192,11 @@
             <input v-model="form.enabled" type="checkbox" />
             <span>启用定时执行</span>
           </label>
-        </div>
-        <div class="modal-actions">
-          <button class="btn btn-ghost" @click="editing = null">取消</button>
-          <button class="btn btn-primary" @click="save" :disabled="saving || !form.name.trim()">保存</button>
-        </div>
-      </div>
-    </div>
-    </Teleport>
+      <template #actions>
+        <button class="btn btn-ghost" @click="editing = null">取消</button>
+        <button class="btn btn-primary" @click="save" :disabled="saving || !form.name.trim()">保存</button>
+      </template>
+    </BaseModal>
 
     <div v-if="loading" class="sc-loading">加载中…</div>
     <div v-if="error" class="sc-error">{{ error }}</div>
@@ -240,6 +226,7 @@ import { useSshAiStore } from '@/stores/ssh-ai'
 import { useAgentStore } from '@/stores/agent'
 import RunbookPanel from '@/components/schedules/RunbookPanel.vue'
 import HistoryList from '@/components/schedules/HistoryList.vue'
+import BaseModal from '@/components/common/BaseModal.vue'
 // durationText/shortId 不再 import：历史列表已交组件内部调用，本视图仅 statusLabel 卡片位需要（strict noUnusedLocals）
 import { toScheduleRow, statusLabel as statusLabelOf, STATUS_LABEL_SCHEDULE } from '@/utils/history-view'
 import type { HistoryRow } from '@/utils/history-view'
@@ -803,12 +790,7 @@ function askAiDiagnose(s: ScheduleRecord, r: ScheduleRun) {
   sshAiStore.askAi(lines.join('\n'))
 }
 
-// Escape 关闭当前打开的弹窗
-function handleKeydown(e: KeyboardEvent) {
-  if (e.key !== 'Escape') return
-  if (historyFor.value) { historyFor.value = null; return }
-  if (editing.value) editing.value = null
-}
+// Escape 关闭由 BaseModal 统一承担（window 级监听，卸载时自移除）
 
 onMounted(() => {
   // 首屏加载与列表轮询已由上方 watch(active, {immediate}) 承担，此处只补主机列表
@@ -816,11 +798,9 @@ onMounted(() => {
   if (sshStore.connections.length === 0) {
     sshStore.loadConnections()
   }
-  window.addEventListener('keydown', handleKeydown)
 })
 
 onUnmounted(() => {
-  window.removeEventListener('keydown', handleKeydown)
   stopCountdownTick()
   stopListPoll()
   // 卸载前收起「立即执行」轮询：sticky-visited 下本页通常不触发，但 SshView 整体
@@ -905,18 +885,13 @@ onUnmounted(() => {
 .sc-loading { color: var(--text-tertiary); font-size: 12px; padding: 0 16px 12px; }
 .sc-error { color: var(--accent-red); font-size: 12px; padding: 0 16px 12px; }
 
-.modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-.modal { width: 520px; max-width: 90vw; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 16px; max-height: 80vh; overflow: auto; }
-.modal.wide { width: 680px; }
-.modal-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 12px; }
-/* 弹窗标题栏：左侧标题、右侧类型分段开关（方案 B） */
-.schedule-modal-title { display: flex; align-items: center; justify-content: space-between; }
+/* 弹窗骨架（遮罩/圆角/投影/焦点/滚动）统一由 BaseModal 提供，本文件不再自绘 */
+.field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-tertiary); }
+/* 弹窗标题栏右侧的类型分段开关（方案 B） */
 .type-switch { display: inline-flex; gap: 6px; }
 .type-switch .sched-option { padding: 3px 12px; }
 .type-switch.disabled { opacity: .55; }
 .type-switch .sched-option:disabled { cursor: not-allowed; }
-.modal-body { display: flex; flex-direction: column; gap: 10px; }
-.field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-tertiary); }
 .field input, .field textarea, .field select {
   font-size: 12px; padding: 6px 8px; border-radius: 6px;
   border: 1px solid var(--border-subtle); background: var(--bg-input); color: var(--text-primary);
@@ -945,7 +920,6 @@ onUnmounted(() => {
   font-size: 12px; padding: 4px 6px; border-radius: 6px;
   border: 1px solid var(--border-subtle); background: var(--bg-input); color: var(--text-primary);
 }
-.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 
 .history-load-error {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;

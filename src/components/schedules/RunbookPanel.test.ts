@@ -126,6 +126,23 @@ describe('历史接线 HistoryList', () => {
   })
 })
 
+describe('弹窗承载 BaseModal', () => {
+  it('历史/编辑弹窗都走 BaseModal', () => {
+    expect(src.match(/<BaseModal/g)).toHaveLength(2)
+    expect(src).toContain("@close=\"historyFor = null\"")
+    expect(src).toContain("@close=\"editing = null\"")
+  })
+  it('旧自绘遮罩/TELEPORT 已移除', () => {
+    expect(src).not.toContain('.modal-mask')
+    expect(src).not.toContain('<Teleport')
+    expect(src).not.toContain('rgba(0,0,0,0.6)')
+    expect(src).not.toContain('border-radius: 10px')
+  })
+  it('Esc 交给 BaseModal，面板不再重复监听', () => {
+    expect(src).not.toContain('handleKeydown')
+  })
+})
+
 describe('清空历史', () => {
   it('弹窗底部有清空历史按钮，进行中禁用', () => {
     expect(src).toContain('clearHistory()')

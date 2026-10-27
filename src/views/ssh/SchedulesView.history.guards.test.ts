@@ -31,6 +31,22 @@ describe('历史接线', () => {
   })
 })
 
+describe('弹窗承载', () => {
+  it('历史/编辑弹窗都走 BaseModal（Teleport + aria + 焦点陷阱）', () => {
+    expect(src.match(/<BaseModal/g)).toHaveLength(2)
+    expect(src).toContain('historyFor = null"')
+    expect(src).toContain('editing = null"')
+  })
+  it('旧自绘遮罩样式已移除（字面 rgba 遮罩 / 10px 圆角）', () => {
+    expect(src).not.toContain('.modal-mask')
+    expect(src).not.toContain('rgba(0,0,0,0.6)')
+    expect(src).not.toContain('border-radius: 10px')
+  })
+  it('Esc 交给 BaseModal，视图不再重复监听', () => {
+    expect(src).not.toContain('handleKeydown')
+  })
+})
+
 describe('清空历史', () => {
   it('弹窗底部有清空历史按钮，进行中禁用', () => {
     expect(src).toContain('clearHistory()')
