@@ -77,8 +77,9 @@
         </template>
       </HistoryList>
       <template #actions>
-        <button class="btn btn-sm btn-danger" :disabled="historyHasRunning"
-          :title="historyHasRunning ? '该剧本正在执行中，请等本次结束后再清空' : ''" @click="clearHistory()">清空历史</button>
+        <button class="btn btn-sm btn-danger" :disabled="clearHistoryDisabled"
+          :title="historyHasRunning ? '该剧本正在执行中，请等本次结束后再清空' : (historyRuns.length === 0 ? '没有可清空的记录' : '')"
+          @click="clearHistory()">清空历史</button>
         <button class="btn btn-ghost" @click="historyFor = null">关闭</button>
       </template>
     </BaseModal>
@@ -422,8 +423,9 @@ const historyRows = computed<HistoryRow[]>(() => historyRuns.value.map(toRunbook
 // HistoryRow 是窄契约：步骤/诊断全文按 id 反查原始记录（同 SchedulesView rawRunOf 模式）
 function stepsOf(id: string) { return historyRuns.value.find((r) => r.id === id)?.steps_state }
 function diagnosisOf(id: string) { return historyRuns.value.find((r) => r.id === id)?.diagnosis || '' }
-/** 有进行中的执行行则禁用清空（后端 409 仍是权威兜底） */
+/** 有进行中的执行行则禁用清空（后端 409 仍是权威兜底）；无记录/加载失败时也无事可做 */
 const historyHasRunning = computed(() => historyRuns.value.some((r) => r.status === 'running'))
+const clearHistoryDisabled = computed(() => historyHasRunning.value || historyRuns.value.length === 0)
 
 // 历史请求序号：快速切换剧本时旧响应晚到会挂到新剧本的历史面板上
 let _historySeq = 0
@@ -575,9 +577,9 @@ onUnmounted(() => {
 
 .history-load-error {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  font-size: 12px; color: var(--accent-red);
+  font-size: 12px; color: var(--danger-text);
   overflow-wrap: anywhere;
-  border: 1px solid var(--accent-red); border-radius: var(--radius-md); padding: 8px 10px;
+  border: 1px solid var(--danger-text); border-radius: var(--radius-md); padding: 8px 10px;
 }
 .empty-small { color: var(--text-tertiary); font-size: 12px; padding: 20px 0; text-align: center; }
 

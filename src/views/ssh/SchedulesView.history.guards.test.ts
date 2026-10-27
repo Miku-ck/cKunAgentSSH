@@ -33,6 +33,10 @@ describe('历史接线', () => {
 })
 
 describe('弹窗承载', () => {
+  it('切 tab / 离开页面时收起弹窗（Teleport 不受父级 v-show 约束）', () => {
+    expect(src).toContain('watch([entryTab, () => props.active]')
+    expect(src).toMatch(/historyFor\.value = null\s*\n\s*editing\.value = null/)
+  })
   it('历史/编辑弹窗都走 BaseModal（Teleport + aria + 焦点陷阱）', () => {
     expect(src.match(/<BaseModal/g)).toHaveLength(2)
     expect(src).toContain('historyFor = null"')
@@ -72,10 +76,17 @@ describe('圆角令牌', () => {
   })
 })
 
+describe('错误条语义色', () => {
+  it('历史加载失败用 --danger-text，不用饱和 accent-red 描边', () => {
+    expect(style).toMatch(/\.history-load-error\s*\{[^}]*color:\s*var\(--danger-text\)/)
+  })
+})
+
 describe('清空历史', () => {
-  it('弹窗底部有清空历史按钮，进行中禁用', () => {
+  it('弹窗底部有清空历史按钮，进行中或无记录时禁用', () => {
     expect(src).toContain('clearHistory()')
-    expect(src).toContain(':disabled="historyHasRunning"')
+    expect(src).toContain(':disabled="clearHistoryDisabled"')
+    expect(src).toContain('historyRuns.value.length === 0')
   })
   it('清空走危险确认 + clearRuns + 成功后刷新', () => {
     expect(src).toContain('scheduleApi.clearRuns')

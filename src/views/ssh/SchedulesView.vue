@@ -74,8 +74,9 @@
         </template>
       </HistoryList>
       <template #actions>
-        <button class="btn btn-sm btn-danger" :disabled="historyHasRunning"
-          :title="historyHasRunning ? '该任务正在执行中，请等本次结束后再清空' : ''" @click="clearHistory()">清空历史</button>
+        <button class="btn btn-sm btn-danger" :disabled="clearHistoryDisabled"
+          :title="historyHasRunning ? '该任务正在执行中，请等本次结束后再清空' : (historyRuns.length === 0 ? '没有可清空的记录' : '')"
+          @click="clearHistory()">清空历史</button>
         <button class="btn btn-ghost" @click="historyFor = null">关闭</button>
       </template>
     </BaseModal>
@@ -442,8 +443,9 @@ const historyRows = computed<HistoryRow[]>(() => historyRuns.value.map(toSchedul
 function rawRunOf(id: string): ScheduleRun {
   return historyRuns.value.find((r) => r.id === id)!
 }
-/** 有进行中的执行行则禁用清空（后端 409 仍是权威兜底） */
+/** 有进行中的执行行则禁用清空（后端 409 仍是权威兜底）；无记录/加载失败时也无事可做 */
 const historyHasRunning = computed(() => historyRuns.value.some((r) => r.status === 'running'))
+const clearHistoryDisabled = computed(() => historyHasRunning.value || historyRuns.value.length === 0)
 
 /** 列表请求序号：runNow 后 3s 轮询、页面激活期 30s 轮询与手动/操作后刷新可并发 */
 let _loadSeq = 0
@@ -790,6 +792,15 @@ function askAiDiagnose(s: ScheduleRecord, r: ScheduleRun) {
   sshAiStore.askAi(lines.join('\n'))
 }
 
+// BaseModal 走 Teleport，不受父级 v-show 约束：切到「运维剧本」或离开本页时，
+// 必须显式收弹窗，否则弹窗会浮在另一个页面上
+watch([entryTab, () => props.active], ([tab, active]) => {
+  if (tab === 'runbooks' || active === false) {
+    historyFor.value = null
+    editing.value = null
+  }
+})
+
 // Escape 关闭由 BaseModal 统一承担（window 级监听，卸载时自移除）
 
 onMounted(() => {
@@ -924,9 +935,9 @@ onUnmounted(() => {
 
 .history-load-error {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  font-size: 12px; color: var(--accent-red);
+  font-size: 12px; color: var(--danger-text);
   overflow-wrap: anywhere;
-  border: 1px solid var(--accent-red); border-radius: var(--radius-md); padding: 8px 10px;
+  border: 1px solid var(--danger-text); border-radius: var(--radius-md); padding: 8px 10px;
 }
 .empty-small { color: var(--text-tertiary); font-size: 12px; padding: 20px 0; text-align: center; }
 .countdown { color: var(--accent-text); font-weight: 600; }

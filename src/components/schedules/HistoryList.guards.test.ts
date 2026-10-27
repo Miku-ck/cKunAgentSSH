@@ -61,4 +61,14 @@ describe('HistoryList 展示契约', () => {
     expect(styleBlock).toMatch(/\.history-error\s*\{[^}]*overflow-wrap:\s*anywhere/)
     expect(styleBlock).toMatch(/\.history-summary\s*\{[^}]*overflow-wrap:\s*anywhere/)
   })
+  it('等宽字体只给标识符：时间戳/耗时/错误正文不再 .mono', () => {
+    expect(src).not.toContain('class="mono">{{ row.started_at')
+    expect(src).not.toContain('class="mono" v-if="durationText')
+    expect(src).not.toContain('class="history-error mono"')
+    // run id 是标识符，保留等宽
+    expect(src).toContain('class="mono" v-if="row.run_id"')
+  })
+  it('不可展开行渲染 div（不再是无意义的 button）', () => {
+    expect(src).toContain(":is=\"expandableOf(row) ? 'button' : 'div'\"")
+  })
 })

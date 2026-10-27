@@ -14,23 +14,24 @@
       class="history-item"
       :class="{ 'is-failed': row.status === 'failed' }"
     >
-      <button
+      <component
+        :is="expandableOf(row) ? 'button' : 'div'"
         class="history-head"
         :class="{ 'is-static': !expandableOf(row) }"
-        type="button"
+        :type="expandableOf(row) ? 'button' : undefined"
         @click="toggle(row)"
       >
-        <span class="mono">{{ row.started_at ? formatBackendTs(row.started_at) : '—' }}</span>
+        <span>{{ row.started_at ? formatBackendTs(row.started_at) : '—' }}</span>
         <span class="status" :class="row.status">{{ label(row.status) }}</span>
-        <span class="mono" v-if="durationText(row.started_at, row.finished_at)">{{ durationText(row.started_at, row.finished_at) }}</span>
+        <span v-if="durationText(row.started_at, row.finished_at)">{{ durationText(row.started_at, row.finished_at) }}</span>
         <span class="mono" v-if="row.run_id">run {{ shortId(row.run_id) }}</span>
         <span class="chev" v-if="expandableOf(row)">{{ isExpanded(row) ? '▾' : '▸' }}</span>
-      </button>
+      </component>
       <div v-if="!isExpanded(row)" class="history-preview" :title="row.preview">
         {{ row.preview || (row.status === 'running' ? '（尚无摘要）' : '') }}
       </div>
       <div v-else-if="expandableOf(row)" class="history-body">
-        <div class="history-error mono" v-if="row.error">{{ row.error }}</div>
+        <div class="history-error" v-if="row.error">{{ row.error }}</div>
         <div class="history-summary markdown-body" v-if="row.summary" v-html="renderMarkdown(row.summary)" @click="onMarkdownClick"></div>
         <slot name="extra" :row="row"></slot>
         <div class="history-actions" v-if="row.status === 'failed'">

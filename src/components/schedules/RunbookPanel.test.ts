@@ -167,10 +167,17 @@ describe('圆角令牌', () => {
   })
 })
 
+describe('错误条语义色', () => {
+  it('历史加载失败用 --danger-text', () => {
+    expect(style).toMatch(/\.history-load-error\s*\{[^}]*color:\s*var\(--danger-text\)/)
+  })
+})
+
 describe('清空历史', () => {
-  it('弹窗底部有清空历史按钮，进行中禁用', () => {
+  it('弹窗底部有清空历史按钮，进行中或无记录时禁用', () => {
     expect(src).toContain('clearHistory()')
-    expect(src).toContain(':disabled="historyHasRunning"')
+    expect(src).toContain(':disabled="clearHistoryDisabled"')
+    expect(src).toContain('historyRuns.value.length === 0')
   })
   it('清空走危险确认 + clearRuns + 成功后刷新', () => {
     expect(src).toContain('runbookApi.clearRuns')
