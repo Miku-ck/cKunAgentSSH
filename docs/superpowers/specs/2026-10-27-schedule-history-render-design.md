@@ -55,17 +55,27 @@ export interface HistoryRow {
   禁止硬编码色值（主题一致性审查口径）。时间戳两端必须过 `formatBackendTs`
   （「时区接缝」家族教训）。
 
-## 2. 新增：纯函数
+## 2. 新增：纯函数（全部落在 src/utils/history-view.ts）
 
-- `src/utils/markdown.ts` 补导出 `mdPreviewLine(text: string): string`：剥掉 markdown 标记
-  （`**`/`#`/列表符/代码围栏/`---`/图片链接语法留文字）取第一行有效文本；空文本返回空串。
-- 新文件 `src/utils/history-view.ts`：
-  - `statusLabel(status)` / `durationText(started, finished)` / `shortId(run_id)`
+- `mdPreviewLine(text: string): string`：剥掉 markdown 标记（`**`/`#`/列表符/代码围栏/
+  `---`/图片链接语法留文字）取第一行有效文本；空文本返回空串。
+  **不放 src/utils/markdown.ts**：那个模块顶层执行 `DOMPurify.addHook`，node 环境
+  （vitest 无 jsdom）下 import 即报错，纯函数测试跑不进去。
+- `src/utils/history-view.ts` 其余导出：
+  - `statusLabel(status, labelMap, emptyText?)` —— label 表由各域传入（两域取值集合不同：
+    schedules 用 completed/idle，runbooks 用 success/stopped）；空值兜底文案可配：
+    卡片位传「未执行」（剧本现状），历史行位传空串（状态恒非空，出现即原样透出）；
+  - `durationText(started, finished)` / `shortId(run_id)`
     ——现 SchedulesView 与 RunbookPanel 各一份的重复实现合并至此；
   - `scheduleRowPreview(r: ScheduleRun): string` = `mdPreviewLine(summary) || error || ''`；
-  - `runbookRowPreview(r: RunbookRunRecord): string` = `error || steps_state[0]?.command || ''`
-    （剧本无 summary）。
-  全部纯函数，脱离组件可测。
+  - `runbookRowPreview(r: RunbookRunRecord): string` = `steps_state[0]?.command || error || ''`
+    （剧本无 summary；步骤命令在前——若 error 优先，成功执行的剧本行预览会印出无关的
+    错误文本；失败行本就默认展开，不依赖预览辨错）；
+  - 行适配器 `toScheduleRow(r)` / `toRunbookRow(r)` 也在本文件（纯函数可测，
+    `expandable`/`preview` 在适配器内算好，父页面 computed 只负责 map）。
+  - `HistoryRow` 接口定义也放这里（组件与两域适配层共用；对 API 类型的引用用
+    `import type`，编译期擦除，node 测试环境不触运行时）。
+  全部纯函数，脱离组件与 DOM 可测。
 
 ## 3. 修改：SchedulesView.vue
 
@@ -95,21 +105,26 @@ limit 维持前端默认 50（分页属范围外）。
 
 | 场景 | 行为 |
 |---|---|
-| 历史请求失败 | 弹窗内错误条（toFriendlyMessage 文案）+ 重试按钮，不再伪装成空态 |
+| 历史请求失败 | 保留既有 toast + 弹窗内错误条（toFriendlyMessage 文案）与重试按钮，不再伪装成空态 |
 | summary 为空 | 折叠行无预览句；running 行显示「（尚无摘要）」占位 |
 | renderMarkdown 抛错 | 其内部已兜底降级为净化纯文本，不额外处理 |
 | started_at/finished_at 缺失或倒挂 | durationText 返回空串，徽章行不显示耗时 |
 | 未知 status 值 | statusLabel 原样透出（与现状一致） |
 
-## 7. 测试（Vitest）
+## 7. 测试（Vitest，node 环境）
 
-- `markdown.test.ts` 补 `mdPreviewLine`：加粗/标题/列表/代码围栏/分隔线剥离、多行取首行、空文本。
-- `history-view.test.ts`：预览回退链（summary→error→步骤命令）、耗时边界、状态标签映射。
-- `HistoryList.test.ts`：失败默认展开、成功默认折叠、点击 toggle、不可展开行不响应、
-  `#extra`/`#actions` slot 渲染、actions 仅失败行出现。
-- 源码守卫（沿用 RunbookPanel.test.ts 既有模式，挂 spec 标签）：两面板均经 HistoryList 渲染
-  历史、旧内联 `.history-list` markup 已移除、剧本 steps_state/diagnosis 仍在。
-- 命令沿用项目现有前端测试/类型检查口径。
+本仓无组件挂载测试环境（vitest 为 node 环境、未装 @vue/test-utils/jsdom，先例
+RunbookPanel.test.ts 头注已声明），组件层用 `?raw` 源码形状守卫钉契约，行为层由纯函数测试承担：
+
+- `history-view.test.ts`：`mdPreviewLine` 加粗/标题/列表/代码围栏/分隔线剥离、多行取首行、
+  空文本；预览回退链（summary→error→步骤命令）；耗时边界（缺失/倒挂/正常差值）；
+  statusLabel 双域 label 表与空值兜底。import 路径不带 `.ts` 后缀。
+- `HistoryList.guards.test.ts`（?raw）：失败行默认展开判定、可展开判定式、renderMarkdown
+  用于展开区、`#extra`/`#actions` slot 存在、时间戳过 formatBackendTs、无硬编码色值。
+- 接线守卫（?raw，扩入既有 RunbookPanel.test.ts 与新文件）：两面板均经 HistoryList 渲染
+  历史、旧内联 `.history-list` markup 已移除、剧本 steps_state/diagnosis 仍在 #extra 里、
+  历史请求失败渲染错误条 + 重试按钮。
+- 命令沿用项目现有口径：`npm test`、`npm run typecheck`。
 
 ## 8. 范围外（YAGNI）
 
