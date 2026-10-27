@@ -1,9 +1,9 @@
 <template>
   <Teleport to="body">
   <div v-if="visible" class="qc-editor-overlay">
-    <div class="qc-editor-dialog" role="dialog" aria-modal="true">
+    <div class="qc-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="qc-editor-title">
       <div class="qc-editor-header">
-        <h3>{{ isEdit ? '编辑快捷命令' : '新建快捷命令' }}</h3>
+        <h3 id="qc-editor-title">{{ isEdit ? '编辑快捷命令' : '新建快捷命令' }}</h3>
         <button class="qc-editor-close" @click="handleClose">&times;</button>
       </div>
 

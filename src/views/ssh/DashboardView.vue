@@ -232,7 +232,7 @@
     <!-- 连接选择模态 -->
     <Teleport to="body">
       <div v-if="showConnPicker" class="dc-overlay" @click.self="showConnPicker = false">
-        <div class="dc-dialog" role="dialog" aria-modal="true">
+        <div class="dc-dialog" role="dialog" aria-modal="true" aria-label="选择 SSH 连接">
           <div class="dc-header">
             <span>选择 SSH 连接</span>
             <button class="dc-close" @click="showConnPicker = false">×</button>
@@ -263,7 +263,7 @@
     <!-- 终止进程确认模态 -->
     <Teleport to="body">
       <div v-if="killDialog.visible" class="dc-overlay" @click.self="killDialog.visible = false">
-        <div class="dc-dialog dc-dialog-sm" role="dialog" aria-modal="true">
+        <div class="dc-dialog dc-dialog-sm" role="dialog" aria-modal="true" aria-label="确认终止进程">
           <div class="dc-header">
             <span>确认终止进程</span>
             <button class="dc-close" @click="killDialog.visible = false">×</button>

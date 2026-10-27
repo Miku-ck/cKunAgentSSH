@@ -6,7 +6,7 @@
        差异是有意的 —— 网关是持凭据的中继，放行一次的爆炸半径比一台目标机大。 -->
   <Teleport to="body">
     <div v-if="pending" class="overlay show">
-      <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal" role="dialog" aria-modal="true" aria-label="确认网关身份">
         <h2>确认网关身份</h2>
         <p class="lede">{{ pending.host }}:{{ pending.port }} · 本机第一次见到这张证书，确认后才建立会话。</p>
         <div class="spki">

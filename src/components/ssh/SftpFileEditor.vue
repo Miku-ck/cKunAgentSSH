@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
   <div v-if="visible" class="editor-overlay" @click.self="handleClose">
-    <div class="editor-dialog" role="dialog" aria-modal="true">
+    <div class="editor-dialog" role="dialog" aria-modal="true" :aria-label="'编辑文件：' + name">
       <!-- 头部 -->
       <div class="editor-header">
         <div class="header-left">
@@ -76,7 +76,7 @@
 
     <!-- 未保存关闭确认 -->
     <div v-if="unsavedDialog.visible" class="unsaved-overlay" @click.self="dismissUnsavedDialog">
-      <div class="unsaved-dialog" role="dialog" aria-modal="true">
+      <div class="unsaved-dialog" role="dialog" aria-modal="true" aria-label="未保存的更改">
         <div class="unsaved-header">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
             <circle cx="12" cy="12" r="10"/>

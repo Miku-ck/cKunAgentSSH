@@ -77,7 +77,7 @@
     <!-- 连接选择模态 -->
     <Teleport to="body">
     <div v-if="showConnPicker" class="conn-overlay" @click.self="showConnPicker = false">
-      <div class="conn-dialog" role="dialog" aria-modal="true">
+      <div class="conn-dialog" role="dialog" aria-modal="true" aria-label="选择 SSH 连接">
         <div class="conn-dialog-header">
           <span>选择 SSH 连接</span>
           <button class="conn-close" @click="showConnPicker = false">×</button>
@@ -164,8 +164,8 @@
     <!-- 重命名/新建对话框 -->
     <Teleport to="body">
     <div v-if="renameDialog.visible" class="rename-overlay" @click.self="renameDialog.visible = false">
-      <div class="rename-dialog" role="dialog" aria-modal="true">
-        <div class="rename-title">{{ renameDialog.isNew ? '新建文件夹' : '重命名' }}</div>
+      <div class="rename-dialog" role="dialog" aria-modal="true" aria-labelledby="sftp-rename-title">
+        <div id="sftp-rename-title" class="rename-title">{{ renameDialog.isNew ? '新建文件夹' : '重命名' }}</div>
         <input
           ref="renameInput"
           v-model="renameDialog.name"
@@ -184,7 +184,7 @@
     <!-- 压缩包文件名对话框 -->
     <Teleport to="body">
     <div v-if="zipDialog.visible" class="rename-overlay" @click.self="zipDialog.visible = false">
-      <div class="rename-dialog" role="dialog" aria-modal="true">
+      <div class="rename-dialog" role="dialog" aria-modal="true" aria-label="压缩为 zip">
         <div class="rename-title">压缩为 zip</div>
         <input
           ref="zipInput"
