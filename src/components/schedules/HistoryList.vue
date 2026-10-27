@@ -2,8 +2,9 @@
   HistoryList — 执行历史共享展示组件（spec 2026-10-27-schedule-history-render）
   纯展示：不发请求、不知道 API。A 方案单行紧凑：折叠 = 元信息行 + 预览句，
   失败行默认展开，展开区 = error + renderMarkdown(summary) + #extra + #actions(仅失败)。
-  展开态重置靠父页面 :key 重挂载；下方 watch 只做首帧初始化（immediate 一次性
-  建「失败行默认展开」集合），不做 rows 变更重置——重挂载才是重置通道（spec §3）。
+  展开态重置主通道是父页面 :key 重挂载（切目标）；下方 watch 对每次 rows 引用
+  变化重建「失败行默认展开」集合——因为本组件先以空 rows 挂载、fetch 后填充，
+  :key 在该转换中不变，首帧填充只能靠 watch（代价：同目标重试回到默认折叠）。
 -->
 <template>
   <div class="history-list">
@@ -64,14 +65,17 @@ function expandableOf(row: HistoryRow): boolean {
   return !!row.expandable || !!row.summary || !!row.error
 }
 
-// 失败行默认展开（A 方案）。Set 整体替换保证响应式（mutating 代理亦可用，
-// 但替换写法与 toggle 一致，不留两种心智）。
+// 失败行默认展开（A 方案），且仅限可展开行（spec §1：不可展开走折叠预览，不留渲染空洞）。
+// watch 对每次 rows 引用变化重建集合：本组件在父页面先以空 rows 挂载、fetch 后填充，
+// :key（目标 id）在该转换中不变，故首帧填充必须靠 watch 完成——非纯首帧 seed。
+// 代价：同目标内「重试」重取会回到默认折叠态（吞掉手动展开），可接受。
+// Set 整体替换保证响应式。
 const expanded = ref(new Set<string>())
 watch(
   () => props.rows,
   (rows) => {
     const next = new Set<string>()
-    for (const r of rows) if (r.status === 'failed') next.add(r.id)
+    for (const r of rows) if (r.status === 'failed' && expandableOf(r)) next.add(r.id)
     expanded.value = next
   },
   { immediate: true },
@@ -124,5 +128,5 @@ function toggle(row: HistoryRow) {
 .status.running { color: var(--accent-text); border-color: var(--accent-primary); }
 .status.completed, .status.success { color: var(--accent-green); border-color: var(--accent-green); }
 .status.failed { color: var(--accent-red); border-color: var(--accent-red); }
-.status.waiting_permission, .status.blocked { color: var(--accent-orange); border-color: var(--accent-orange); }
+.status.waiting_permission, .status.blocked, .status.stopped, .status.stale_reaped { color: var(--accent-orange); border-color: var(--accent-orange); }
 </style>

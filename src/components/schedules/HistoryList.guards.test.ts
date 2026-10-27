@@ -38,4 +38,10 @@ describe('HistoryList 展示契约', () => {
     expect(styleBlock).not.toMatch(/\brgba?\(/)
     expect(styleBlock).toContain('var(--')
   })
+  it('两域状态键并集全部有专属色（防 stopped/stale_reaped 退化为默认灰）', () => {
+    const styleBlock = src.slice(src.indexOf('<style scoped>'))
+    for (const s of ['running', 'completed', 'success', 'failed', 'waiting_permission', 'blocked', 'stopped', 'stale_reaped']) {
+      expect(styleBlock, `缺少 .status.${s} 配色`).toContain(`.status.${s}`)
+    }
+  })
 })
