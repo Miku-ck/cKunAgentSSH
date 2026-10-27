@@ -84,6 +84,7 @@ App.vue (flex column, 100vh)
 - 设置弹窗：overlay 同上 `--scrim` + `blur(2px)` `z-index:2000`；`dialog` `clamp(960px,90vw,1280px) × clamp(640px,88vh,860px)`，左导航 200px。确认框：宽 380px，`z-index:3000`。过渡 `opacity .15s` + 内容 `scale(.96~.97)`。
 - 历史记录弹窗：`width: min(560px, 100vw - 48px)`、`max-height: min(640px, 100vh - 96px)`，居中；overlay 读 `--scrim`（随主题染色）+ `blur(2px)`，`z-index:2000`。
 - 浮层投影：一律 `var(--shadow-lg)`；控件级微投影用 `--shadow-sm`，组件里不另写 px 阴影。同一个弹窗家族里投影深浅不一，比“投影略轻”更难解释。
+- 键盘焦点：全局 `:focus-visible` 给 2px 主色描边。表单控件（`input`/`select`/`textarea`/`role="switch"`）另有一条 `!important` 底线 —— 组件里的 `outline: none` 权重高于全局伪类，那条底线只为保证 Tab 到时看得见焦点（鼠标点击不命中 `:focus-visible`，观感不变）。
 
 ---
 

@@ -36,7 +36,6 @@ defineEmits<{
   position: relative;
   transition: background 0.15s ease, border-color 0.15s ease;
   padding: 0;
-  outline: none;
 }
 .toggle-switch.on {
   background: var(--accent-primary);

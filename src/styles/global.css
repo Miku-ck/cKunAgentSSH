@@ -77,6 +77,19 @@ a:hover { text-decoration: underline; }
   outline-offset: 1px;
 }
 
+/* ── 表单控件的键盘焦点底线 ──
+   组件里的 `outline: none`（开关、滑块、各设置面板的输入框，全仓 30 余处）权重
+   高于上面那条全局伪类，于是 Tab 到这些控件时根本看不出焦点在哪。这里只圈表单
+   控件，且只对 :focus-visible 生效（鼠标点击不命中，观感不变）。!important 不是
+   偷懒：要压住的正是组件里那句 outline: none。 */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role="switch"]:focus-visible {
+  outline: 2px solid var(--accent-primary) !important;
+  outline-offset: 1px;
+}
+
 #app {
   height: 100%;
   width: 100%;
