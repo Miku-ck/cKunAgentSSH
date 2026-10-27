@@ -58,31 +58,28 @@
         <div class="modal wide" role="dialog" aria-modal="true">
           <div class="modal-title">{{ historyFor.name }} — 执行历史</div>
           <div class="modal-body">
-            <div v-if="historyRuns.length === 0" class="empty-small">暂无执行记录</div>
-            <div v-else class="history-list">
-              <div v-for="run in historyRuns" :key="run.id" class="history-item">
-                <div class="history-head">
-                  <span class="mono">{{ formatBackendTs(run.started_at) }}</span>
-                  <span class="status" :class="run.status">{{ statusLabel(run.status) }}</span>
-                  <span class="mono" v-if="durationText(run)">{{ durationText(run) }}</span>
-                  <span class="mono" v-if="run.run_id">run {{ shortId(run.run_id) }}</span>
-                </div>
+            <div v-if="historyError" class="history-load-error">
+              <span>{{ historyError }}</span>
+              <button class="btn btn-sm" @click="fetchHistory()">重试</button>
+            </div>
+            <div v-else-if="historyRuns.length === 0" class="empty-small">暂无执行记录</div>
+            <HistoryList v-else :key="historyFor?.id" :rows="historyRows" :label-map="STATUS_LABEL_RUNBOOK">
+              <template #extra="{ row }">
                 <!-- 步骤级状态徽章：success/failed/blocked/skipped -->
-                <div class="hist-steps" v-if="(run.steps_state || []).length">
-                  <div v-for="st in run.steps_state" :key="st.seq" class="hist-step">
+                <div class="hist-steps" v-if="(stepsOf(row.id) || []).length">
+                  <div v-for="st in stepsOf(row.id)" :key="st.seq" class="hist-step">
                     <span class="step-badge" :class="st.status">{{ stepStatusLabel(st.status) }}</span>
                     <code class="mono hist-cmd">{{ st.command }}</code>
                     <span class="hist-verdict" v-if="st.error" :title="st.error">{{ st.error }}</span>
                   </div>
                 </div>
                 <!-- 自动诊断结论（诊断 run 的输出，失败执行才有） -->
-                <div class="history-diagnosis" v-if="run.diagnosis">
+                <div class="history-diagnosis" v-if="diagnosisOf(row.id)">
                   <div class="k">AI 诊断</div>
-                  <div class="diagnosis-text">{{ run.diagnosis }}</div>
+                  <div class="diagnosis-text">{{ diagnosisOf(row.id) }}</div>
                 </div>
-                <div class="history-error" v-if="run.error">{{ run.error }}</div>
-              </div>
-            </div>
+              </template>
+            </HistoryList>
           </div>
           <div class="modal-actions">
             <button class="btn btn-ghost" @click="historyFor = null">关闭</button>
@@ -166,8 +163,11 @@ import {
 import { toFriendlyMessage } from '@/api/base'
 import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
-import { formatBackendTs, parseBackendTs } from '@/utils/format'
+import { formatBackendTs } from '@/utils/format'
 import { connNote, useSSHStore } from '@/stores/ssh'
+import HistoryList from '@/components/schedules/HistoryList.vue'
+// shortId/durationText/parseBackendTs 不再引入：历史行渲染已下沉 HistoryList，本面板仅卡片 meta 需 formatBackendTs/statusLabel（strict noUnusedLocals）
+import { toRunbookRow, statusLabel as statusLabelOf, STATUS_LABEL_RUNBOOK, type HistoryRow } from '@/utils/history-view'
 
 // SshView 里本面板随「运维剧本」tab 显示；active 由父级（SchedulesView 的分段 tab）传入
 const props = defineProps<{ active?: boolean }>()
@@ -428,6 +428,11 @@ async function remove(r: RunbookRecord) {
 // ── 历史 modal ───────────────────────────────────────────────────────────────
 const historyFor = ref<RunbookRecord | null>(null)
 const historyRuns = ref<RunbookRunRecord[]>([])
+const historyError = ref('')
+const historyRows = computed<HistoryRow[]>(() => historyRuns.value.map(toRunbookRow))
+// HistoryRow 是窄契约：步骤/诊断全文按 id 反查原始记录（同 SchedulesView rawRunOf 模式）
+function stepsOf(id: string) { return historyRuns.value.find((r) => r.id === id)?.steps_state }
+function diagnosisOf(id: string) { return historyRuns.value.find((r) => r.id === id)?.diagnosis || '' }
 
 // 历史请求序号：快速切换剧本时旧响应晚到会挂到新剧本的历史面板上
 let _historySeq = 0
@@ -435,6 +440,14 @@ let _historySeq = 0
 async function openHistory(r: RunbookRecord) {
   historyFor.value = r
   historyRuns.value = []
+  historyError.value = ''
+  await fetchHistory()
+}
+
+async function fetchHistory() {
+  const r = historyFor.value
+  if (!r) return
+  historyError.value = ''
   const seq = ++_historySeq
   try {
     const runs = await runbookApi.runs(r.id)
@@ -442,21 +455,15 @@ async function openHistory(r: RunbookRecord) {
     historyRuns.value = runs
   } catch (e) {
     if (seq !== _historySeq) return
-    toast.error(toFriendlyMessage(e, '加载历史失败'))
+    historyError.value = toFriendlyMessage(e, '加载历史失败')
+    toast.error(historyError.value)
   }
 }
 
 // ── 展示辅助 ─────────────────────────────────────────────────────────────────
-const STATUS_LABEL: Record<string, string> = {
-  running: '执行中',
-  success: '成功',
-  failed: '失败',
-  stopped: '已停止',
-  stale_reaped: '中断（重启收尸）',
-}
+// 卡片 meta 状态标签（历史列表标签已由 HistoryList 内部处理）；表/逻辑沉到 history-view 共享
 function statusLabel(s?: string | null): string {
-  if (!s) return '未执行'
-  return STATUS_LABEL[s] || s
+  return statusLabelOf(s, STATUS_LABEL_RUNBOOK, '未执行')
 }
 
 const STEP_STATUS_LABEL: Record<string, string> = {
@@ -470,22 +477,7 @@ function stepStatusLabel(s: string): string {
   return STEP_STATUS_LABEL[s] || s
 }
 
-function shortId(id: string): string {
-  return id ? id.slice(0, 8) : ''
-}
-
-function parseTs(ts?: string): number {
-  if (!ts) return NaN
-  return parseBackendTs(ts).getTime()
-}
-
-function durationText(r: RunbookRunRecord): string {
-  if (!r.started_at || !r.finished_at) return ''
-  const a = parseTs(r.started_at)
-  const b = parseTs(r.finished_at)
-  if (isNaN(a) || isNaN(b) || b <= a) return ''
-  return `${Math.round((b - a) / 100) / 10}s`
-}
+// shortId/parseTs/durationText 已下沉 history-view（历史列表由组件内部调用）；本面板不再直接用
 
 // Escape 关闭当前打开的弹窗
 function handleKeydown(e: KeyboardEvent) {
@@ -580,10 +572,11 @@ onUnmounted(() => {
 
 .form-err { color: var(--accent-red); font-size: 12px; }
 
-.history-list { display: flex; flex-direction: column; gap: 8px; }
-.history-item { border: 1px solid var(--border-subtle); border-radius: 6px; padding: 8px 10px; }
-.history-head { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--text-secondary); }
-.history-error { font-size: 12px; color: var(--accent-red); margin-top: 4px; }
+.history-load-error {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  font-size: 12px; color: var(--accent-red);
+  border: 1px solid var(--accent-red); border-radius: 6px; padding: 8px 10px;
+}
 .empty-small { color: var(--text-tertiary); font-size: 12px; padding: 20px 0; text-align: center; }
 
 .hist-steps { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }

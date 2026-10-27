@@ -103,10 +103,26 @@ describe('步骤状态徽章渲染', () => {
 })
 
 describe('历史 modal 挂 diagnosis', () => {
-  it('自动诊断结论在历史里渲染（失败执行的落点）', () => {
-    expect(src).toContain('v-if="run.diagnosis"')
+  it('自动诊断结论经 #extra slot 渲染（失败执行的落点）', () => {
+    expect(src).toContain('#extra="{ row }"')
+    expect(src).toContain('diagnosisOf(row.id)')
     expect(src).toContain('AI 诊断')
-    expect(src).toContain('{{ run.diagnosis }}')
+  })
+})
+
+describe('历史接线 HistoryList', () => {
+  it('列表主体经 HistoryList + toRunbookRow，旧内联列表已移除', () => {
+    expect(src).toContain('<HistoryList')
+    expect(src).toContain('toRunbookRow')
+    expect(src).not.toContain('class="history-list"')
+  })
+  it('步骤徽章仍在 #extra 内渲染（四态不因重构丢失）', () => {
+    expect(src).toContain('hist-steps')
+    expect(src).toContain('stepStatusLabel(st.status)')
+  })
+  it('请求失败渲染错误条 + 重试', () => {
+    expect(src).toContain('historyError')
+    expect(src).toContain('fetchHistory()')
   })
 })
 
