@@ -89,6 +89,83 @@
   color: var(--text-primary);
 }
 
+/**
+ * ── hljs 语法着色 ──
+ * renderMarkdown 用 highlight.js 生成 hljs-* 类，但全仓没有引用任何 hljs 主题文件
+ * （主题文件把颜色写死成 VS Code Dark 的色值，切到浅色/手记主题就一片白底白字）。
+ * 这里按语法类别映射到已有的 accent 令牌：每档主题自己换了明度，代码块跟着走。
+ */
+.markdown-body .hljs-keyword,
+.markdown-body .hljs-selector-tag,
+.markdown-body .hljs-literal,
+.markdown-body .hljs-section,
+.markdown-body .hljs-doctag {
+  color: var(--accent-purple);
+}
+
+.markdown-body .hljs-string,
+.markdown-body .hljs-regexp,
+.markdown-body .hljs-attribute {
+  color: var(--accent-orange);
+}
+
+.markdown-body .hljs-number,
+.markdown-body .hljs-symbol,
+.markdown-body .hljs-bullet,
+.markdown-body .hljs-link {
+  color: var(--accent-green);
+}
+
+/* 函数/类名：命令输出里最想看的就是“调用了什么” */
+.markdown-body .hljs-title,
+.markdown-body .hljs-name,
+.markdown-body .hljs-selector-id,
+.markdown-body .hljs-selector-class {
+  color: var(--accent-yellow);
+}
+
+.markdown-body .hljs-built_in,
+.markdown-body .hljs-type,
+.markdown-body .hljs-class .hljs-title {
+  color: var(--accent-cyan);
+}
+
+/* 变量/属性：与 built_in 区分开，否则整段代码只有两三种颜色 */
+.markdown-body .hljs-variable,
+.markdown-body .hljs-template-variable,
+.markdown-body .hljs-attr,
+.markdown-body .hljs-property,
+.markdown-body .hljs-params {
+  color: var(--accent-indigo-soft);
+}
+
+.markdown-body .hljs-tag,
+.markdown-body .hljs-deletion {
+  color: var(--accent-red);
+}
+
+.markdown-body .hljs-addition {
+  color: var(--accent-green);
+}
+
+.markdown-body .hljs-meta {
+  color: var(--text-secondary);
+}
+
+.markdown-body .hljs-comment,
+.markdown-body .hljs-quote {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+.markdown-body .hljs-emphasis {
+  font-style: italic;
+}
+
+.markdown-body .hljs-strong {
+  font-weight: 600;
+}
+
 .markdown-body :not(pre) > code {
   background: var(--bg-hover);
   padding: 2px 5px;

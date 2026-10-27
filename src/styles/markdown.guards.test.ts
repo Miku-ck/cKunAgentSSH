@@ -34,3 +34,18 @@ describe('markdown.css 共享渲染词汇', () => {
     expect(src).toContain('var(--')
   })
 })
+
+describe('hljs 语法着色', () => {
+  // renderMarkdown 用 highlight.js 产出 hljs-* 类；没有规则这些类就全部无色
+  it('七类常用 token 都有配色', () => {
+    for (const sel of ['.hljs-keyword', '.hljs-string', '.hljs-number', '.hljs-title', '.hljs-variable', '.hljs-built_in', '.hljs-comment']) {
+      expect(src, `缺少 ${sel}`).toContain(sel)
+    }
+  })
+  it('着色挂在 .markdown-body 容器下，不污染全局', () => {
+    expect(src).toContain('.markdown-body .hljs-keyword')
+  })
+  it('注释/强调不是裸色块（保留可读的字体样式）', () => {
+    expect(src).toMatch(/\.hljs-comment[^{]*\{[^}]*font-style:\s*italic/)
+  })
+})
