@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <div class="dt-overlay" @click.self="emit('close')">
-      <div class="dt-dialog" role="dialog" aria-modal="true" :aria-label="'容器详情：' + container.name">
+      <div ref="dialogRef" class="dt-dialog" role="dialog" aria-modal="true" :aria-label="'容器详情：' + container.name" tabindex="-1">
         <div class="dp-head">
           <span class="st-dot" :class="rowState"></span>
           <span class="dp-name mono">{{ container.name }}</span>
@@ -245,6 +245,7 @@ import {
   type ContainerRow, type ContainerInspect, type ContainerStats, type DockerError,
   type HealthState,
 } from '@/stores/docker-core'
+import { useModalFocusTrap } from '../../../composables/useModalFocusTrap'
 
 const props = defineProps<{
   container: ContainerRow
@@ -436,6 +437,13 @@ function setFollow(on: boolean): void {
   }
 }
 
+const dialogRef = ref<HTMLElement | null>(null)
+// 容器详情是全仓唯一连 Esc 都没有的弹窗：只能点 ✕ 或遮罩。Tab 环形与关闭还原一并接上。
+const { activate, deactivate } = useModalFocusTrap(dialogRef)
+function onKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Escape') emit('close')
+}
+
 watch(tab, (next) => {
   if (next === 'logs') {
     void loadLogs()
@@ -449,6 +457,8 @@ watch(tab, (next) => {
 })
 
 onMounted(() => {
+  activate()
+  window.addEventListener('keydown', onKeydown)
   void loadInspect()
   if (isRunning.value) void loadStats()
   syncStatsTimer()
@@ -456,6 +466,8 @@ onMounted(() => {
 
 onUnmounted(() => {
   disposed = true
+  window.removeEventListener('keydown', onKeydown)
+  deactivate()
   stopStatsTimer()
   stopFollowTimer()
 })

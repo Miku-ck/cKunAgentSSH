@@ -1,6 +1,6 @@
 <template>
   <div class="dk-overlay" @click.self="closePull">
-    <div class="dk-dialog" role="dialog" aria-modal="true" aria-label="拉取镜像">
+    <div ref="dialogRef" class="dk-dialog" role="dialog" aria-modal="true" aria-label="拉取镜像" tabindex="-1">
       <div class="dk-header">
         <span>拉取镜像</span>
         <button class="dk-close" :disabled="pulling" aria-label="关闭" @click="closePull">×</button>
@@ -9,7 +9,6 @@
         <label class="pull-label" for="docker-pull-ref">镜像引用</label>
         <input
           id="docker-pull-ref"
-          ref="pullInputEl"
           v-model="pullRef"
           class="pull-input mono"
           placeholder="nginx:1.27 或 harbor.example.com/app:tag"
@@ -39,7 +38,8 @@
 <script setup lang="ts">
 // DockerPullDialog.vue — 拉取镜像：引用先校验，再走 600s 预算的 docker pull（层下载远超读命令）。
 // 在途不可关闭：关掉再开会让两条 pull 的 finally 互相踩状态；页面隐藏由父级整树收起。
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useModalFocusTrap } from '../../../composables/useModalFocusTrap'
 import { useToastStore } from '@/stores/toast'
 import { pullCmd, type DockerError } from '@/stores/docker-core'
 import { AUDIT_ACTION_DOCKER } from '@/utils/remote-audit'
@@ -58,7 +58,6 @@ const toast = useToastStore()
 const PULL_TIMEOUT_SEC = 600
 const IMAGE_REF_RE = /^[a-zA-Z0-9][a-zA-Z0-9._:@/-]*$/
 const pullRef = ref('')
-const pullInputEl = ref<HTMLInputElement | null>(null)
 const pulling = ref(false)
 const pullError = ref<DockerError | null>(null)
 const pullElapsed = ref(0)
@@ -108,12 +107,17 @@ async function doPull(): Promise<void> {
 function onKey(e: KeyboardEvent): void {
   if (e.key === 'Escape') closePull()
 }
+
+const dialogRef = ref<HTMLElement | null>(null)
+// 初始焦点落输入框：拉取镜像这个弹窗就是让人敲一行引用；Tab 环形与关闭还原走共享件
+const { activate, deactivate } = useModalFocusTrap(dialogRef, { initialFocus: '.pull-input' })
 onMounted(() => {
+  activate()
   document.addEventListener('keydown', onKey)
-  void nextTick(() => pullInputEl.value?.focus())
 })
 onUnmounted(() => {
   stopPullClock()
   document.removeEventListener('keydown', onKey)
+  deactivate()
 })
 </script>

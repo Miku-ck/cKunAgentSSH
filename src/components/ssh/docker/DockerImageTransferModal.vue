@@ -9,7 +9,8 @@
  * 执行放在父级（DockerView）：审计、dockerExec 封装、成功后刷新列表都在那边，
  * 组件内自己 exec 会把这一整套复制一遍。
  */
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useModalFocusTrap } from '../../../composables/useModalFocusTrap'
 import { imageLabel, suggestTarName, validateSaveName, ensureTarSuffix, validateRemoteDir, joinRemotePath, dockerLoadCmd } from '@/stores/docker-core'
 import type { ImageRow } from '@/stores/docker-core'
 import RemoteDirPicker from '../RemoteDirPicker.vue'
@@ -123,8 +124,16 @@ function onKey(e: KeyboardEvent): void {
   if (e.key === 'Escape') onClose()
 }
 document.addEventListener('keydown', onKey)
+
+const dialogRef = ref<HTMLElement | null>(null)
+// 导出时初始焦点落文件名（加载模式没有该输入框，activate 会回落到容器）；
+// Tab 环形与「关掉后还给触发的镜像行」走共享件
+const { activate, deactivate } = useModalFocusTrap(dialogRef, { initialFocus: '.imgx-input' })
+onMounted(() => activate())
+
 onUnmounted(() => {
   document.removeEventListener('keydown', onKey)
+  deactivate()
   if (checkTimer) clearTimeout(checkTimer)
 })
 
@@ -143,8 +152,10 @@ const imgText = computed(() => {
 <template>
   <div class="dt-overlay" @click.self="onClose">
     <div
+      ref="dialogRef"
       class="dt-dialog dt-dialog-auto imgx" role="dialog" aria-modal="true"
       :aria-label="isExport ? '导出镜像' : '加载镜像'"
+      tabindex="-1"
     >
       <div class="dp-head">
         <svg class="imgx-hd" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

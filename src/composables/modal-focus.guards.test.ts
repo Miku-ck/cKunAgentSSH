@@ -84,6 +84,10 @@ describe('弹窗焦点管理', () => {
       'components/home/TaskStructureDialog.vue',
       'components/common/CommandPalette.vue',
       'components/settings/panels/ModelsPanel.vue',
+      'components/ssh/docker/DockerConnectionPicker.vue',
+      'components/ssh/docker/DockerContainerDetail.vue',
+      'components/ssh/docker/DockerImageTransferModal.vue',
+      'components/ssh/docker/DockerPullDialog.vue',
     ]
     for (const file of files) {
       const src = read(file)

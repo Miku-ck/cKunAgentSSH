@@ -151,6 +151,8 @@
   display: flex; flex-direction: column;
   background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
+  /* 容器只作为初始焦点落点（tabindex=-1），描边交给里面的控件 */
+  outline: none;
 }
 .dk-header {
   display: flex; align-items: center; justify-content: space-between; padding: 14px 18px;
