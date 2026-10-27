@@ -10,16 +10,14 @@
  * （浅色/手记主题的 scrim 更淡，只有 14%~16%，全靠模糊和投影分开）。
  * 所以每条 `background: var(--scrim)` 都必须在同一声明块附近带 `blur(2px)`。
  *
- * 两处例外，各有用意：
- *  - App.vue：应用背景叠层读 --app-bg-overlay，用户可调，不是弹窗遮罩；
- *  - ConnectionModal.vue：他人未提交改动占着该文件，合并后再统一（见台账）。
+ * 唯一例外：App.vue 的应用背景叠层读 --app-bg-overlay，用户可调，不是弹窗遮罩。
  */
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { SRC, rel, walk } from './fs-walk'
 
-const ALLOWED = ['App.vue', 'ConnectionModal.vue']
+const ALLOWED = ['App.vue']
 
 const maskPattern = /background:\s*rgba\(\s*0\s*,\s*0\s*,\s*0\s*,\s*\.?\d/
 
@@ -41,6 +39,7 @@ describe('浮层遮罩走令牌', () => {
       'components/common/CommandPalette.vue',
       'components/ssh/AccessModal.vue',
       'components/ssh/BulkCommandModal.vue',
+      'components/ssh/ConnectionModal.vue',
       'components/ssh/GatewayDialogs.vue',
       'components/ssh/NewConnectionDialog.vue',
       'components/ssh/SftpConflictDialog.vue',
