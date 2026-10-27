@@ -100,7 +100,7 @@ async function batch(kind: 'approve' | 'deny') {
   max-width: 820px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--spacing-8);
   min-width: 0;
 }
 
@@ -108,8 +108,8 @@ async function batch(kind: 'approve' | 'deny') {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 0 2px;
-  font-size: 11.5px;
+  padding: 0 var(--spacing-2);
+  font-size: 0.8846rem;
 }
 
 .ad-dot {
@@ -131,12 +131,12 @@ async function batch(kind: 'approve' | 'deny') {
 .ad-b {
   flex: none;
   height: 24px;
-  padding: 0 10px;
+  padding: 0 var(--spacing-10);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-primary);
-  font-size: 11.5px;
+  font-size: 0.8846rem;
   white-space: nowrap;
   cursor: pointer;
   transition: background var(--transition-fast);
@@ -150,7 +150,7 @@ async function batch(kind: 'approve' | 'deny') {
 .ad-body {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--spacing-8);
   max-height: min(38vh, 340px);
   overflow-y: auto;
   min-height: 0;

@@ -234,7 +234,7 @@ function waitAndRegister(preRunId: string) {
 
 <style scoped>
 .rb-panel {
-  padding: 6px 10px;
+  padding: var(--spacing-6) var(--spacing-10);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   background: var(--bg-input);
@@ -243,15 +243,15 @@ function waitAndRegister(preRunId: string) {
 .rb-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-8);
   flex-wrap: wrap;
 }
-.rb-title { font-size: 11.5px; font-weight: 600; color: var(--text-secondary); }
-.rb-summary { font-size: 11px; color: var(--text-tertiary); }
+.rb-title { font-size: 0.8846rem; font-weight: 600; color: var(--text-secondary); }
+.rb-summary { font-size: 0.8462rem; color: var(--text-tertiary); }
 .rb-btn {
   margin-left: auto;
-  padding: 2px 10px;
-  font-size: 11.5px;
+  padding: var(--spacing-2) var(--spacing-10);
+  font-size: 0.8846rem;
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   background: var(--bg-hover, transparent);
@@ -260,23 +260,23 @@ function waitAndRegister(preRunId: string) {
 }
 .rb-btn:hover:not(:disabled) { color: var(--accent-text); border-color: var(--accent-text); }
 .rb-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.rb-hint { margin: 4px 0 0; font-size: 11px; }
-.rb-hint.warn { color: var(--status-warning-text, #b58900); }
+.rb-hint { margin: var(--spacing-4) 0 0; font-size: 0.8462rem; }
+.rb-hint.warn { color: var(--status-warn-text); }
 .rb-hint.err { color: var(--status-error-text); }
 .rb-items {
-  margin: 6px 0 0;
+  margin: var(--spacing-6) 0 0;
   padding: 0;
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--spacing-2);
   min-width: 0;
 }
 .rb-item {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  font-size: 11px;
+  gap: var(--spacing-8);
+  font-size: 0.8462rem;
   min-width: 0;
   flex-wrap: wrap;
 }
@@ -284,11 +284,11 @@ function waitAndRegister(preRunId: string) {
 .rb-kind { color: var(--text-secondary); flex: none; }
 .rb-conf {
   flex: none;
-  padding: 0 6px;
+  padding: 0 var(--spacing-6);
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-default);
   color: var(--text-secondary);
-  font-size: 10.5px;
+  font-size: 0.8077rem;
 }
 .rb-conf.ok { color: var(--status-success-text); border-color: color-mix(in srgb, var(--status-success-text) 35%, transparent); }
 .rb-conf.bad { color: var(--status-error-text); border-color: color-mix(in srgb, var(--status-error-text) 35%, transparent); }

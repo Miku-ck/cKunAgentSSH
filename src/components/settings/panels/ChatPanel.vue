@@ -260,17 +260,17 @@ onMounted(async () => {
 .setting-number {
   width: 100px;
   height: 28px;
-  padding: 0 8px;
+  padding: 0 var(--spacing-8);
   background: var(--bg-input);
   border: 1px solid var(--border-input);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-family: inherit;
   outline: none;
 }
 .setting-number:focus { border-color: var(--accent-primary); }
-.hint.saving { margin: 8px 0 0; font-size: 11px; color: var(--text-tertiary); }
+.hint.saving { margin: var(--spacing-8) 0 0; font-size: 0.8462rem; color: var(--text-tertiary); }
 /* .unread 必须单独上色：模板里 class 写了 unread 却没有任何规则接它时，这条
    「尚未读到服务端」的提示会跟普通灰字一个亮度 —— 与它在讲的事（显示的是本地
    值，不是库里的）正好相反。MemoryPanel 的 .foot-hint.unread 是同一条规则。 */
@@ -279,12 +279,12 @@ onMounted(async () => {
 .section-divider {
   height: 1px;
   background: var(--border-subtle);
-  margin: 20px 0 16px;
+  margin: var(--spacing-20) 0 var(--spacing-16);
 }
 
 .section-title {
-  margin: 0 0 12px;
-  font-size: 13px;
+  margin: 0 0 var(--spacing-12);
+  font-size: 1rem;
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -292,25 +292,25 @@ onMounted(async () => {
 .default-model-info {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 0 4px;
+  gap: var(--spacing-4);
+  padding: 0 var(--spacing-4);
 }
 
 .default-model-label {
-  font-size: 10px;
+  font-size: 0.7692rem;
   color: var(--text-tertiary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 
 .default-model-name {
-  font-size: 13px;
+  font-size: 1rem;
   font-weight: 500;
   color: var(--text-primary);
 }
 
 .default-model-id {
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
   font-family: var(--font-mono);
 }

@@ -39,7 +39,6 @@
           @mousedown.prevent
           @click="askAi"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="12" height="12" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
           问 AI
         </button>
       </div>
@@ -374,7 +373,7 @@ defineExpose({
   position: relative;
   /* 只负责呼吸边距；xterm 挂在内层 mount 上，FitAddon 才不会把这段 padding
      算进可绘制高度（否则多算一行、最后一行被终端区底边裁掉半截）。 */
-  padding: 8px 10px;
+  padding: var(--spacing-8) var(--spacing-10);
 }
 
 .remote-terminal-mount {
@@ -388,13 +387,13 @@ defineExpose({
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-8);
   height: 30px;
-  padding: 0 12px;
+  padding: 0 var(--spacing-12);
   background: var(--bg-base);
   border-bottom: 1px solid var(--border-subtle);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   z-index: 5;
 }
 
@@ -418,12 +417,12 @@ defineExpose({
 
 .reconnect-btn {
   margin-left: auto;
-  padding: 2px 14px;
+  padding: var(--spacing-2) var(--spacing-14);
   border: 1px solid var(--accent-primary);
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--accent-text);
-  font-size: 12px;
+  font-size: 0.9231rem;
   cursor: pointer;
   transition: all var(--transition-fast);
 }
@@ -452,13 +451,12 @@ defineExpose({
   z-index: 20;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
+  padding: 3px var(--spacing-8);
   border: 1px solid var(--accent-indigo);
   border-radius: var(--radius-sm);
   background: var(--bg-elevated-solid);
   color: var(--accent-indigo-soft);
-  font-size: 11px;
+  font-size: 0.8462rem;
   cursor: pointer;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
   transition: all var(--transition-fast);

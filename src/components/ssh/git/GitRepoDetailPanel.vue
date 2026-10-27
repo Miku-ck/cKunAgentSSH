@@ -538,16 +538,16 @@ onMounted(() => { void load() })
 .grdp-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
+  gap: var(--spacing-8);
+  padding: var(--spacing-8) var(--spacing-14);
   border-bottom: 1px solid var(--divider-primary);
   flex-shrink: 0;
   flex-wrap: wrap;
 }
-.grdp-name { font-size: 13px; font-weight: 600; color: var(--text-primary); white-space: nowrap; }
-.grdp-scope { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
+.grdp-name { font-size: 1rem; font-weight: 600; color: var(--text-primary); white-space: nowrap; }
+.grdp-scope { font-size: 0.8462rem; color: var(--text-tertiary); white-space: nowrap; }
 .grdp-path {
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
   min-width: 60px;
   flex: 0 1 auto;
@@ -559,8 +559,8 @@ onMounted(() => { void load() })
 
 /* 状态徽标：与左侧列表同一套色（按行状态） */
 .grdp-pill {
-  font-size: 11px;
-  padding: 1px 8px;
+  font-size: 0.8462rem;
+  padding: 1px var(--spacing-8);
   border-radius: var(--radius-xl);
   white-space: nowrap;
 }
@@ -574,11 +574,11 @@ onMounted(() => { void load() })
 
 /* 远程部署警示条 */
 .grdp-warn {
-  margin: 8px 14px 0;
-  font-size: 11px;
+  margin: var(--spacing-8) var(--spacing-14) 0;
+  font-size: 0.8462rem;
   color: var(--status-warn-text);
   line-height: 1.5;
-  padding: 5px 8px;
+  padding: 5px var(--spacing-8);
   border-left: 2px solid var(--status-warn-text);
   border-radius: var(--radius-sm);
   background: var(--status-warn-bg);
@@ -588,13 +588,13 @@ onMounted(() => { void load() })
 /* 概要条 */
 .grdp-sum {
   display: flex;
-  gap: 14px;
+  gap: var(--spacing-14);
   flex-wrap: wrap;
-  margin: 8px 14px 0;
-  padding: 7px 10px;
+  margin: var(--spacing-8) var(--spacing-14) 0;
+  padding: 7px var(--spacing-10);
   background: var(--bg-input);
   border-radius: var(--radius-md);
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-secondary);
   flex-shrink: 0;
 }
@@ -609,32 +609,32 @@ onMounted(() => { void load() })
 }
 .grdp-acc {
   margin-left: 5px;
-  font-size: 10px;
+  font-size: 0.7692rem;
   color: var(--accent-green);
   border: 1px solid color-mix(in srgb, var(--accent-green) 35%, transparent);
   border-radius: var(--radius-sm);
-  padding: 0 4px;
+  padding: 0 var(--spacing-4);
 }
 
 /* ── 页签 ── */
 .grdp-tabs {
   display: flex;
-  padding: 6px 14px 0;
+  padding: var(--spacing-6) var(--spacing-14) 0;
   border-bottom: 1px solid var(--divider-primary);
   flex-shrink: 0;
-  gap: 2px;
+  gap: var(--spacing-2);
 }
 .grdp-tab {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--spacing-6);
   height: 28px;
-  padding: 0 10px;
+  padding: 0 var(--spacing-10);
   border: none;
   border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-family: var(--font-sans);
   cursor: pointer;
 }
@@ -643,11 +643,11 @@ onMounted(() => { void load() })
 .grdp-tabct {
   min-width: 16px;
   height: 15px;
-  padding: 0 4px;
+  padding: 0 var(--spacing-4);
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--status-warn-text) 20%, transparent);
   color: var(--status-warn-text);
-  font-size: 11px;
+  font-size: 0.8462rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -659,39 +659,39 @@ onMounted(() => { void load() })
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 10px 14px;
+  padding: var(--spacing-10) var(--spacing-14);
 }
 .grdp-load, .grdp-empty {
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-tertiary);
-  padding: 8px 0;
+  padding: var(--spacing-8) 0;
 }
 .grdp-err {
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--danger-text);
-  padding: 8px 0;
+  padding: var(--spacing-8) 0;
   line-height: 1.5;
 }
 .grdp-errbox {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--spacing-10);
   justify-content: space-between;
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--danger-text);
   border: 1px solid color-mix(in srgb, var(--danger-text) 30%, transparent);
   border-radius: var(--radius-md);
-  padding: 10px 12px;
+  padding: var(--spacing-10) var(--spacing-12);
   line-height: 1.5;
 }
 
 /* 变更概览行（只读：图标 + 路径；勾选在提交弹窗里） */
 .grdp-frow {
   display: flex;
-  gap: 8px;
+  gap: var(--spacing-8);
   align-items: center;
-  padding: 2px 0;
-  font-size: 11px;
+  padding: var(--spacing-2) 0;
+  font-size: 0.8462rem;
   color: var(--text-secondary);
   min-width: 0;
 }
@@ -699,12 +699,12 @@ onMounted(() => { void load() })
 .grdp-actct {
   min-width: 16px;
   height: 15px;
-  padding: 0 4px;
-  margin-left: 2px;
+  padding: 0 var(--spacing-4);
+  margin-left: var(--spacing-2);
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--status-warn-text) 20%, transparent);
   color: var(--status-warn-text);
-  font-size: 11px;
+  font-size: 0.8462rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -724,7 +724,7 @@ onMounted(() => { void load() })
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: var(--spacing-24);
 }
 .grdc-dialog {
   width: min(520px, 100%);
@@ -732,25 +732,25 @@ onMounted(() => { void load() })
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--spacing-10);
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
-  padding: 16px 18px;
+  padding: var(--spacing-16) 18px;
   /* 容器只作为初始焦点落点（tabindex=-1），描边交给里面的控件 */
   outline: none;
 }
-.grdc-head { display: flex; align-items: center; gap: 8px; flex-shrink: 0; min-width: 0; }
+.grdc-head { display: flex; align-items: center; gap: var(--spacing-8); flex-shrink: 0; min-width: 0; }
 .grdc-head-sp { flex: 1; }
-.grdc-repo { font-size: 13px; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.grdc-repo { font-size: 1rem; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .grdc-branch {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--accent-cyan);
   background: color-mix(in srgb, var(--accent-cyan) 10%, transparent);
   border-radius: var(--radius-xl);
-  padding: 1px 8px;
+  padding: 1px var(--spacing-8);
   white-space: nowrap;
 }
 .grdc-x {
@@ -765,15 +765,15 @@ onMounted(() => { void load() })
   color: var(--text-tertiary);
   border-radius: var(--radius-sm);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 0.9231rem;
 }
 .grdc-x:hover { background: var(--bg-hover); color: var(--text-primary); }
 .grdc-fieldlabel {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--spacing-8);
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
 }
 .grdc-counter { color: var(--text-tertiary); }
@@ -789,7 +789,7 @@ onMounted(() => { void load() })
   color: var(--text-tertiary);
   border-radius: var(--radius-sm);
   cursor: pointer;
-  font-size: 13px;
+  font-size: 1rem;
   line-height: 1;
 }
 .grdc-spark:hover:not(:disabled) { background: var(--bg-hover); color: var(--accent-text); }
@@ -801,19 +801,19 @@ onMounted(() => { void load() })
 }
 .grdc-noisehint {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--status-warn-text);
   line-height: 1.5;
 }
 .grdc-textarea {
   flex-shrink: 0;
   min-height: 52px;
-  padding: 7px 10px;
+  padding: 7px var(--spacing-10);
   background: var(--bg-input);
   border: 1px solid var(--border-input);
   border-radius: var(--radius-md);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-family: var(--font-sans);
   line-height: 1.5;
   resize: none;
@@ -821,34 +821,34 @@ onMounted(() => { void load() })
 }
 .grdc-textarea:focus { border-color: var(--accent-primary); }
 .grdc-textarea::placeholder { color: var(--text-tertiary); }
-.grdc-secbar { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.grdc-seclabel { font-size: 11px; color: var(--text-tertiary); }
+.grdc-secbar { display: flex; align-items: center; gap: var(--spacing-8); flex-shrink: 0; }
+.grdc-seclabel { font-size: 0.8462rem; color: var(--text-tertiary); }
 .grdc-seclabel b { font-weight: 500; color: var(--text-secondary); }
 .grdc-linkbtn {
   border: none;
   background: transparent;
   padding: 0;
-  font-size: 11px;
+  font-size: 0.8462rem;
   font-family: var(--font-sans);
   color: var(--text-tertiary);
   cursor: pointer;
 }
 .grdc-pushprev {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
   border-left: 2px solid var(--border-default);
-  padding: 2px 0 2px 8px;
+  padding: var(--spacing-2) 0 var(--spacing-2) var(--spacing-8);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .grdc-warn {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--status-warn-text);
   line-height: 1.5;
-  padding: 5px 8px;
+  padding: 5px var(--spacing-8);
   border-left: 2px solid var(--status-warn-text);
   border-radius: var(--radius-sm);
   background: var(--status-warn-bg);
@@ -858,13 +858,13 @@ onMounted(() => { void load() })
   overflow-y: auto;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  padding: 4px 8px;
+  padding: var(--spacing-4) var(--spacing-8);
 }
 .grdc-file {
   display: flex;
-  gap: 8px;
-  padding: 2px 0;
-  font-size: 11px;
+  gap: var(--spacing-8);
+  padding: var(--spacing-2) 0;
+  font-size: 0.8462rem;
   color: var(--text-secondary);
   min-width: 0;
   cursor: pointer;
@@ -880,7 +880,7 @@ onMounted(() => { void load() })
 }
 .grdc-linkbtn:hover:not(:disabled) { color: var(--text-primary); text-decoration: underline; }
 .grdc-linkbtn:disabled { opacity: .45; cursor: default; }
-.grdc-foot { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.grdc-foot { display: flex; gap: var(--spacing-8); align-items: center; flex-shrink: 0; }
 .grdc-sp { flex: 1; }
 .grdp-fpath {
   flex: 1;
@@ -890,8 +890,8 @@ onMounted(() => { void load() })
   white-space: nowrap;
 }
 .grdp-hint {
-  margin-top: 6px;
-  font-size: 11px;
+  margin-top: var(--spacing-6);
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
   line-height: 1.5;
 }
@@ -899,17 +899,17 @@ onMounted(() => { void load() })
 /* 分支行 */
 .grdp-branch {
   display: flex;
-  gap: 10px;
+  gap: var(--spacing-10);
   align-items: center;
   padding: 3px 0;
-  font-size: 12px;
+  font-size: 0.9231rem;
   min-width: 0;
 }
 .grdp-bname {
   width: 160px;
   flex-shrink: 0;
   color: var(--accent-cyan);
-  font-size: 11px;
+  font-size: 0.8462rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -917,19 +917,19 @@ onMounted(() => { void load() })
 .grdp-bup {
   flex: 1;
   min-width: 0;
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.grdp-bab { font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
-.grdp-bcur { font-size: 11px; color: var(--status-success-text); white-space: nowrap; }
+.grdp-bab { font-size: 0.8462rem; color: var(--text-secondary); white-space: nowrap; }
+.grdp-bcur { font-size: 0.8462rem; color: var(--status-success-text); white-space: nowrap; }
 
 /* 图谱回退平铺行 */
 .grdp-commit {
   display: flex;
-  gap: 8px;
+  gap: var(--spacing-8);
   align-items: baseline;
   padding: 3px 0;
   min-width: 0;
@@ -937,20 +937,20 @@ onMounted(() => { void load() })
 .grdp-gfoot {
   display: flex;
   justify-content: center;
-  padding-top: 6px;
+  padding-top: var(--spacing-6);
 }
-.grdp-gend { font-size: 11px; color: var(--text-tertiary); }
-.grdp-chash { font-size: 11px; color: var(--accent-orange); flex-shrink: 0; }
+.grdp-gend { font-size: 0.8462rem; color: var(--text-tertiary); }
+.grdp-chash { font-size: 0.8462rem; color: var(--accent-orange); flex-shrink: 0; }
 .grdp-cmsg {
   flex: 1;
   min-width: 0;
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.grdp-cmeta { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; flex-shrink: 0; }
+.grdp-cmeta { font-size: 0.8462rem; color: var(--text-tertiary); white-space: nowrap; flex-shrink: 0; }
 
 /* 移出列表：仅动注册表不动文件，克制地放动作条末位 */
 .grdp-remove { color: var(--status-error-text); border-color: color-mix(in srgb, var(--status-error-text) 35%, transparent); }
@@ -960,13 +960,13 @@ onMounted(() => { void load() })
 .btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--spacing-6);
   height: 26px;
-  padding: 0 10px;
+  padding: 0 var(--spacing-10);
   border: 1px solid var(--border-default);
   background: transparent;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-family: var(--font-sans);
   border-radius: var(--radius-md);
   cursor: pointer;
@@ -976,7 +976,7 @@ onMounted(() => { void load() })
 .btn:disabled { opacity: 0.45; cursor: default; }
 .btn-primary { background: var(--accent-primary); border-color: var(--accent-primary); color: var(--accent-on); }
 .btn-primary:hover:not(:disabled) { filter: brightness(1.15); }
-.btn-sm { height: 22px; padding: 0 8px; font-size: 11px; }
+.btn-sm { height: 22px; padding: 0 var(--spacing-8); font-size: 0.8462rem; }
 
 .mono { font-family: var(--font-mono); }
 </style>

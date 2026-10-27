@@ -113,7 +113,6 @@
 
         <!-- git 全局加速 -->
         <div class="measure-row">
-          <svg class="m-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
           <span class="measure-name" title="开启后 git clone / fetch / 下载按原地址自动走镜像；改写的是全局 git 配置，关闭时还原。只代理读取：同步写入 pushInsteadOf 保证 push 直连，HTTPS push 不受镜像影响">git 全局加速</span>
           <span class="title-chip" :class="gitChip.cls">{{ gitChip.text }}</span>
           <span v-if="accel.git?.active && !accel.git.managed" class="title-chip warn" title="当前 insteadOf 规则不是本应用写入的，关闭加速不会移除它">非本应用写入</span>
@@ -147,7 +146,6 @@
 
         <!-- SSH 443 -->
         <div class="measure-row">
-          <svg class="m-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
           <span class="measure-name" title="写入 ~/.ssh/config 托管块：Host github.com → ssh.github.com:443（GitHub 官方支持），用 git@github.com 推拉时绕开被限速的 22 端口">SSH 443</span>
           <span class="title-chip" :class="accel.ssh443?.applied ? 'on' : 'off'">{{ accel.ssh443?.applied ? '已写入' : '未写入' }}</span>
           <span class="m-detail mono">ssh.github.com:443 · ~/.ssh/config</span>
@@ -160,7 +158,6 @@
 
         <!-- hosts 优选 IP -->
         <div class="measure-row">
-          <svg class="m-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
           <span class="measure-name" title="解析 GitHub 系域名的优选 IP 写入系统 hosts，解决镜像覆盖不了的登录态网页与 API；写入与移除各弹一次 UAC">hosts 优选 IP</span>
           <span class="title-chip" :class="hostsAgeChip?.cls || 'off'">{{ hostsAgeChip?.text || '未写入' }}</span>
           <span class="m-detail mono">{{ hostsDetailText }}</span>
@@ -697,10 +694,10 @@ async function onMasterDisable(): Promise<void> {
 .gh-body {
   flex: 1;
   overflow-y: auto;
-  padding: 12px 16px 24px;
+  padding: var(--spacing-12) var(--spacing-16) var(--spacing-24);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--spacing-10);
   min-height: 0;
 }
 
@@ -709,25 +706,25 @@ async function onMasterDisable(): Promise<void> {
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  padding: 12px 14px;
+  padding: var(--spacing-12) var(--spacing-14);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--spacing-8);
 }
 
 .panel-title {
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-weight: 500;
   color: var(--text-primary);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-8);
   min-height: 22px;
 }
 
 /* 标题右侧状态小签（各措施卡通用） */
 .title-chip {
-  font-size: 10px;
+  font-size: 0.7692rem;
   font-weight: 400;
   padding: 0 5px;
   line-height: 16px;
@@ -746,7 +743,7 @@ async function onMasterDisable(): Promise<void> {
 }
 
 .hint {
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-secondary);
   line-height: 1.6;
 }
@@ -755,19 +752,19 @@ async function onMasterDisable(): Promise<void> {
 
 .hint code {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 0.8462rem;
 }
 
 /* ── 总控卡（单行紧凑） ── */
 .master-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--spacing-10);
   flex-wrap: wrap;
 }
 
 .master-title {
-  font-size: 13px;
+  font-size: 1rem;
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -776,16 +773,16 @@ async function onMasterDisable(): Promise<void> {
 .health-alert {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-8);
   flex-wrap: wrap;
-  padding: 6px 8px;
+  padding: var(--spacing-6) var(--spacing-8);
   border-left: 2px solid var(--danger-text);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--danger-text) 8%, transparent);
 }
 
 .health-alert-text {
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--danger-text);
   line-height: 1.5;
 }
@@ -794,28 +791,28 @@ async function onMasterDisable(): Promise<void> {
 .selfcheck {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding-top: 2px;
+  gap: var(--spacing-2);
+  padding-top: var(--spacing-2);
   border-top: 1px dashed var(--border-subtle);
 }
 
 .selfcheck-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-8);
   min-height: 20px;
 }
 
 .selfcheck-name {
   flex: 0 0 64px;
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-secondary);
 }
 
 .selfcheck-msg {
   flex: 1;
   min-width: 0;
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -825,36 +822,36 @@ async function onMasterDisable(): Promise<void> {
 
 .selfcheck-ms {
   flex: 0 0 52px;
-  font-size: 11px;
+  font-size: 0.8462rem;
   font-family: var(--font-mono);
   color: var(--text-secondary);
   text-align: right;
 }
 
 /* ── 链接转换 ── */
-.convert-row { display: flex; gap: 8px; }
-.convert-result { display: flex; flex-direction: column; gap: 10px; }
+.convert-row { display: flex; gap: var(--spacing-8); }
+.convert-result { display: flex; flex-direction: column; gap: var(--spacing-10); }
 
-.link-group { display: flex; flex-direction: column; gap: 4px; }
-.group-title { font-size: 11px; color: var(--text-secondary); }
+.link-group { display: flex; flex-direction: column; gap: var(--spacing-4); }
+.group-title { font-size: 0.8462rem; color: var(--text-secondary); }
 
 /* 折叠切换：左对齐、小号，视觉上属于组内附注而非独立动作 */
 .fold-toggle {
-  margin-top: 2px;
+  margin-top: var(--spacing-2);
   align-self: flex-start;
-  font-size: 11px;
+  font-size: 0.8462rem;
 }
 
 .link-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-8);
   min-height: 24px;
 }
 
 .link-mirror {
   flex: 0 0 110px;
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -864,7 +861,7 @@ async function onMasterDisable(): Promise<void> {
 .link-url {
   flex: 1;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -876,24 +873,22 @@ async function onMasterDisable(): Promise<void> {
 .measure-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-8);
   min-height: 30px;
   flex-wrap: wrap;
 }
 
 .measure-name {
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-weight: 500;
   color: var(--text-primary);
   flex-shrink: 0;
   cursor: help;
 }
 
-.m-ic { color: var(--text-secondary); flex-shrink: 0; }
-
 /* 行内详情：等宽、次级色，与状态章互补（章说状态，详情说事实） */
 .m-detail {
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -904,7 +899,7 @@ async function onMasterDisable(): Promise<void> {
 
 .measure-sep {
   border-top: 1px dashed var(--border-subtle);
-  margin: 2px 0;
+  margin: var(--spacing-2) 0;
 }
 
 .dot {
@@ -920,12 +915,12 @@ async function onMasterDisable(): Promise<void> {
 .text-input {
   flex: 1;
   height: 26px;
-  padding: 0 8px;
+  padding: 0 var(--spacing-8);
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-subtle);
   background: var(--bg-input);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-family: var(--font-mono);
   outline: none;
   min-width: 0;
@@ -935,13 +930,13 @@ async function onMasterDisable(): Promise<void> {
 .text-input.select { flex: 0 1 auto; font-family: var(--font-sans); }
 
 /* ── 下载任务 ── */
-.dl-row { display: flex; flex-direction: column; gap: 4px; padding: 4px 0; }
+.dl-row { display: flex; flex-direction: column; gap: var(--spacing-4); padding: var(--spacing-4) 0; }
 
-.dl-head { display: flex; align-items: center; gap: 8px; min-height: 22px; }
+.dl-head { display: flex; align-items: center; gap: var(--spacing-8); min-height: 22px; }
 
 .dl-name {
   flex: 1;
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -949,9 +944,9 @@ async function onMasterDisable(): Promise<void> {
   min-width: 0;
 }
 
-.dl-size { font-size: 11px; color: var(--text-secondary); font-family: var(--font-mono); }
+.dl-size { font-size: 0.8462rem; color: var(--text-secondary); font-family: var(--font-mono); }
 
-.dl-state { font-size: 11px; color: var(--text-secondary); flex: 0 0 48px; text-align: right; }
+.dl-state { font-size: 0.8462rem; color: var(--text-secondary); flex: 0 0 48px; text-align: right; }
 .dl-state.done { color: var(--status-success-text); }
 .dl-state.error { color: var(--danger-text); }
 
@@ -970,30 +965,30 @@ async function onMasterDisable(): Promise<void> {
 }
 
 /* ── hosts 优选候选表（优选中出现，写入前的比选依据）── */
-.hosts-table { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+.hosts-table { display: flex; flex-direction: column; gap: var(--spacing-2); margin-top: var(--spacing-4); }
 
 .hosts-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-8);
   min-height: 22px;
 }
 
 .hosts-ip {
   flex: 0 0 120px;
-  font-size: 11px;
+  font-size: 0.8462rem;
   font-family: var(--font-mono);
   color: var(--text-primary);
 }
 .hosts-ip.none { color: var(--danger-text); }
 
 /* ── 镜像源 ── */
-.mirror-sep { border-top: 1px dashed var(--border-subtle); margin: 4px 0; }
+.mirror-sep { border-top: 1px dashed var(--border-subtle); margin: var(--spacing-4) 0; }
 
 .mirror-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-8);
   min-height: 26px;
 }
 
@@ -1002,7 +997,7 @@ async function onMasterDisable(): Promise<void> {
 
 .mirror-name {
   flex: 0 0 110px;
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1011,28 +1006,28 @@ async function onMasterDisable(): Promise<void> {
 
 .latency {
   flex: 0 0 64px;
-  font-size: 11px;
+  font-size: 0.8462rem;
   font-family: var(--font-mono);
   color: var(--text-secondary);
   text-align: right;
 }
 .latency.good { color: var(--status-success-text); }
-.latency.mid { color: var(--status-warning-text, var(--text-secondary)); }
+.latency.mid { color: var(--status-warn-text); }
 .latency.bad { color: var(--danger-text); }
 
 .badge-best {
-  font-size: 10px;
+  font-size: 0.7692rem;
   color: var(--status-success-text);
   border: 1px solid color-mix(in srgb, var(--status-success-text) 40%, transparent);
   border-radius: var(--radius-sm);
-  padding: 0 4px;
+  padding: 0 var(--spacing-4);
   line-height: 16px;
 }
 
 .add-row {
   display: flex;
-  gap: 8px;
-  margin-top: 2px;
+  gap: var(--spacing-8);
+  margin-top: var(--spacing-2);
 }
 
 </style>

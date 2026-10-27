@@ -37,8 +37,8 @@ describe('终端页轻量精修', () => {
   })
 
   it('终端容器内边距由 padding 提供（FitAddon 会扣掉）', () => {
-    expect(localTerminal).toMatch(/\.local-terminal\s*\{[^}]*padding:\s*8px 10px/)
-    expect(remoteTerminal).toMatch(/\.remote-terminal\s*\{[^}]*padding:\s*8px 10px/)
+    expect(localTerminal).toMatch(/\.local-terminal\s*\{[^}]*padding:\s*var\(--spacing-8\) var\(--spacing-10\)/)
+    expect(remoteTerminal).toMatch(/\.remote-terminal\s*\{[^}]*padding:\s*var\(--spacing-8\) var\(--spacing-10\)/)
   })
 
   it('命令坞有标签与色点，空态是可直接添加的动作', () => {

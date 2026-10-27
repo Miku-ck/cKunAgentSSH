@@ -11,9 +11,7 @@
     >
       <div v-if="!embedded" class="modal-header">
         <h3>{{ isEdit ? '编辑连接' : '添加远程连接' }}</h3>
-        <button class="modal-close" @click="handleOverlayClose">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>
+        <button class="modal-close" title="关闭" aria-label="关闭" @click="handleOverlayClose">×</button>
       </div>
 
       <div class="modal-body">
@@ -103,7 +101,6 @@
         <!-- Agent 认证 -->
         <div v-if="form.authType === 'agent'" class="form-row">
           <div class="form-info">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="16" height="16"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
             <span>使用 SSH Agent 进行认证,请确保 ssh-agent 已运行并添加了密钥。</span>
           </div>
         </div>
@@ -152,14 +149,11 @@
 
         <!-- 测试结果 -->
         <div v-if="testResult" class="test-result" :class="testResult.ok ? 'success' : 'fail'">
-          <svg v-if="testResult.ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="20 6 9 17 4 12"/></svg>
-          <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
           <span>{{ testResult.ok ? `连接成功 (${testResult.latencyMs}ms)` : `连接失败: ${testResult.message}` }}</span>
         </div>
 
         <!-- 错误信息 -->
         <div v-if="errorMsg" class="form-error">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
           {{ errorMsg }}
         </div>
       </div>
@@ -168,7 +162,6 @@
         <button class="btn btn-ghost" :disabled="saving || testing" @click="handleOverlayClose">取消</button>
         <button class="btn btn-test" :disabled="testing" @click="handleTest">
           <svg v-if="testing" class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-          <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
           {{ testing ? '测试中...' : '测试连接' }}
         </button>
         <button class="btn btn-primary" :disabled="saving || testing" @click="handleSave">
@@ -487,13 +480,13 @@ async function handleSave() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
+  padding: 0 var(--spacing-16);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
 
 .modal-header h3 {
-  font-size: 13px;
+  font-size: 1rem;
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -507,6 +500,8 @@ async function handleSave() {
   border: none;
   background: transparent;
   color: var(--text-tertiary);
+  font-size: 1.2308rem;
+  line-height: 1;
   cursor: pointer;
   border-radius: var(--radius-sm);
 }
@@ -516,39 +511,34 @@ async function handleSave() {
   color: var(--text-secondary);
 }
 
-.modal-close svg {
-  width: 14px;
-  height: 14px;
-}
-
 .modal-body {
-  padding: 8px 16px 16px;
+  padding: var(--spacing-8) var(--spacing-16) var(--spacing-16);
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--spacing-12);
 }
 
 .form-row {
   display: flex;
-  gap: 12px;
+  gap: var(--spacing-12);
 }
 
 .form-row.two-col {
-  gap: 12px;
+  gap: var(--spacing-12);
 }
 
 .form-group {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--spacing-4);
 }
 
 .form-group.flex-1 { flex: 1; }
 .form-group.flex-2 { flex: 2; }
 
 .form-group label {
-  font-size: 11px;
+  font-size: 0.8462rem;
   font-weight: 600;
   color: var(--text-secondary);
   text-transform: uppercase;
@@ -559,12 +549,12 @@ async function handleSave() {
 .form-group input[type="password"],
 .form-group input[type="number"] {
   height: 32px;
-  padding: 0 10px;
+  padding: 0 var(--spacing-10);
   background: var(--bg-input);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 1rem;
   font-family: var(--font-sans);
   outline: none;
   transition: border-color var(--transition-fast);
@@ -583,12 +573,12 @@ async function handleSave() {
 .env-select select {
   height: 32px;
   width: 100%;
-  padding: 0 10px;
+  padding: 0 var(--spacing-10);
   background: var(--bg-input);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 1rem;
   font-family: var(--font-sans);
   outline: none;
   cursor: pointer;
@@ -598,19 +588,19 @@ async function handleSave() {
   border-color: var(--accent-primary);
 }
 .env-hint {
-  margin-top: 6px;
-  font-size: 11px;
+  margin-top: var(--spacing-6);
+  font-size: 0.8462rem;
   color: var(--accent-red);
   line-height: 1.4;
 }
 
 .auth-tabs {
   display: flex;
-  gap: 2px;
+  gap: var(--spacing-2);
   background: var(--bg-input);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  padding: 2px;
+  padding: var(--spacing-2);
 }
 
 .auth-tab {
@@ -624,7 +614,7 @@ async function handleSave() {
   color: var(--text-tertiary);
   cursor: pointer;
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-weight: 500;
   font-family: var(--font-sans);
   transition: all var(--transition-fast);
@@ -642,18 +632,18 @@ async function handleSave() {
 
 .input-with-btn {
   display: flex;
-  gap: 6px;
+  gap: var(--spacing-6);
 }
 
 .input-with-btn input {
   flex: 1;
   height: 32px;
-  padding: 0 10px;
+  padding: 0 var(--spacing-10);
   background: var(--bg-input);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 1rem;
   font-family: var(--font-mono);
   outline: none;
   transition: border-color var(--transition-fast);
@@ -667,13 +657,13 @@ async function handleSave() {
 .browse-btn,
 .toggle-btn {
   height: 32px;
-  padding: 0 10px;
+  padding: 0 var(--spacing-10);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 0.9231rem;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -690,26 +680,20 @@ async function handleSave() {
 .form-info {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
+  padding: var(--spacing-10) var(--spacing-12);
   background: color-mix(in srgb, var(--accent-primary) 6%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent-primary) 15%, transparent);
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   line-height: 1.4;
-}
-
-.form-info svg {
-  flex-shrink: 0;
-  color: var(--accent-text);
 }
 
 .checkbox-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 12px;
+  gap: var(--spacing-8);
+  font-size: 0.9231rem;
   color: var(--text-secondary);
   cursor: pointer;
 }
@@ -724,10 +708,10 @@ async function handleSave() {
 .test-result {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
+  gap: var(--spacing-6);
+  padding: var(--spacing-8) var(--spacing-12);
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  font-size: 0.9231rem;
 }
 
 .test-result.success {
@@ -745,13 +729,13 @@ async function handleSave() {
 .form-error {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
+  gap: var(--spacing-6);
+  padding: var(--spacing-8) var(--spacing-12);
   background: color-mix(in srgb, var(--accent-red) 8%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent-red) 20%, transparent);
   border-radius: var(--radius-sm);
   color: var(--accent-red);
-  font-size: 12px;
+  font-size: 0.9231rem;
 }
 
 .modal-footer {
@@ -759,8 +743,8 @@ async function handleSave() {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
-  padding: 0 16px;
+  gap: var(--spacing-8);
+  padding: 0 var(--spacing-16);
   border-top: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }

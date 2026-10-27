@@ -5,13 +5,8 @@
     role="group"
     aria-label="AI 需要你澄清意图"
   >
-    <!-- 顶栏：图标 + 标题 + 进度（复用 .ap-head 骨架，与审批卡同视觉密度） -->
+    <!-- 顶栏：标题 + 进度（复用 .ap-head 骨架，与审批卡同视觉密度） -->
     <div class="ap-head">
-      <svg class="ap-ic ap-clarify-accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15">
-        <circle cx="12" cy="12" r="10"/>
-        <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
-        <line x1="12" y1="17" x2="12.01" y2="17"/>
-      </svg>
       <span class="ap-ttl ap-clarify-ttl">AI 需要你澄清意图</span>
       <span class="ap-sp"></span>
       <span class="clarify-progress">{{ displayStep }} / {{ wizard?.totalSteps ?? 0 }}</span>
@@ -24,11 +19,6 @@
         <code class="ctx-cmd-text">{{ commandText }}</code>
       </div>
       <div v-if="wizard?.reason" class="ctx-reason">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13">
-          <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
-          <line x1="12" y1="9" x2="12" y2="13"/>
-          <line x1="12" y1="17" x2="12.01" y2="17"/>
-        </svg>
         <span>{{ wizard.reason }}</span>
       </div>
     </div>
@@ -278,11 +268,10 @@ async function handleSkip() {
 
 /* 与 .ap-perm 同限高：正文（.ap-body）内滚，头部与动作栏常驻可视区 */
 .ap-clarify { max-height: min(38vh, 340px); }
-.ap-clarify-accent { color: var(--card-perm-text); }
 .ap-clarify-ttl { color: var(--card-perm-text); }
 
 .clarify-progress {
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
   font-family: var(--font-mono);
@@ -290,17 +279,17 @@ async function handleSkip() {
 
 /* ── 命令上下文条 ── */
 .clarify-context {
-  padding: 8px 13px;
+  padding: var(--spacing-8) 13px;
   border-bottom: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--spacing-6);
   background: var(--bg-input);
 }
-.ctx-cmd { display: flex; align-items: center; gap: 8px; }
+.ctx-cmd { display: flex; align-items: center; gap: var(--spacing-8); }
 .ctx-cmd-label {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 0.7692rem;
   font-family: var(--font-mono);
   color: var(--text-tertiary);
   text-transform: uppercase;
@@ -313,7 +302,7 @@ async function handleSkip() {
 .ctx-cmd-text {
   flex: 1;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--status-info-text);
   background: var(--bg-input);
   border-radius: var(--radius-xs);
@@ -328,16 +317,15 @@ async function handleSkip() {
   display: flex;
   align-items: flex-start;
   gap: 5px;
-  font-size: 11px;
+  font-size: 0.8462rem;
   line-height: 1.4;
   color: var(--status-warn-text);
 }
-.ctx-reason svg { flex-shrink: 0; margin-top: 1px; opacity: 0.8; }
 
 /* ── 问题正文 ── */
 .clarify-question {
-  margin: 0 0 10px;
-  font-size: 13px;
+  margin: 0 0 var(--spacing-10);
+  font-size: 1rem;
   font-weight: 500;
   line-height: 1.5;
   color: var(--text-primary);
@@ -345,19 +333,19 @@ async function handleSkip() {
 .qnum {
   color: var(--card-perm-text);
   font-weight: 600;
-  margin-right: 6px;
+  margin-right: var(--spacing-6);
   font-family: var(--font-mono);
 }
 
 /* ── 选项列表 ── */
-.clarify-options { display: flex; flex-direction: column; gap: 4px; }
+.clarify-options { display: flex; flex-direction: column; gap: var(--spacing-4); }
 .clarify-option {
   display: flex;
   align-items: flex-start;
   gap: 9px;
   width: 100%;
   min-height: 34px;
-  padding: 6px 10px;
+  padding: var(--spacing-6) var(--spacing-10);
   background: var(--bg-input);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
@@ -365,7 +353,7 @@ async function handleSkip() {
   transition: all 0.1s ease;
   text-align: left;
   font-family: inherit;
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-secondary);
   line-height: 1.45;
 }
@@ -387,14 +375,14 @@ async function handleSkip() {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: 0.7692rem;
   font-weight: 700;
   font-family: var(--font-mono);
   background: var(--bg-hover);
   color: var(--text-tertiary);
   border: 1px solid var(--border-subtle);
   transition: all 0.1s ease;
-  margin-top: 2px;
+  margin-top: var(--spacing-2);
 }
 .badge.selected {
   background: var(--card-perm-text);
@@ -413,9 +401,9 @@ async function handleSkip() {
   border: none;
   outline: none;
   font-family: inherit;
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-primary);
-  padding: 2px 0;
+  padding: var(--spacing-2) 0;
   min-width: 0;
 }
 .custom-input::placeholder { color: var(--text-tertiary); }

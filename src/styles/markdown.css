@@ -31,15 +31,15 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 4px 12px;
+  gap: var(--spacing-8);
+  padding: var(--spacing-4) var(--spacing-12);
   height: 28px;
   background: var(--bg-base);
   border-bottom: 1px solid var(--border-subtle);
 }
 
 .markdown-body .code-lang {
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-secondary);
   font-family: var(--font-mono);
   text-transform: lowercase;
@@ -49,9 +49,9 @@
   border: none;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 0.8462rem;
   cursor: pointer;
-  padding: 2px 6px;
+  padding: var(--spacing-2) var(--spacing-6);
   border-radius: var(--radius-sm);
   font-family: var(--font-sans);
   transition: background var(--transition-fast), color var(--transition-fast);
@@ -72,14 +72,14 @@
   background: var(--bg-base);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  padding: 12px;
+  padding: var(--spacing-12);
   overflow-x: auto;
   margin: 0.8em 0;
 }
 
 .markdown-body code {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 0.9231rem;
 }
 
 .markdown-body pre code {
@@ -168,7 +168,7 @@
 
 .markdown-body :not(pre) > code {
   background: var(--bg-hover);
-  padding: 2px 5px;
+  padding: var(--spacing-2) 5px;
   border-radius: var(--radius-sm);
   color: var(--text-primary);
 }
@@ -193,7 +193,7 @@
 .markdown-body th,
 .markdown-body td {
   border: 1px solid var(--border-subtle);
-  padding: 6px 10px;
+  padding: var(--spacing-6) var(--spacing-10);
   text-align: left;
 }
 
@@ -209,7 +209,7 @@
 
 .markdown-body blockquote {
   margin: 0.8em 0;
-  padding: 0.2em 0 0.2em 12px;
+  padding: 0.2em 0 0.2em var(--spacing-12);
   border-left: 3px solid var(--border-default);
   color: var(--text-secondary);
 }

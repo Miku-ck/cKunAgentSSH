@@ -57,21 +57,21 @@ const iconMap: Record<ToastType, string> = {
   z-index: 11000;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--spacing-8);
   pointer-events: none;
 }
 
 .toast-item {
   min-width: 240px;
   max-width: 480px;
-  padding: 10px 14px;
+  padding: var(--spacing-10) var(--spacing-14);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
   box-shadow: var(--shadow-lg);
   cursor: pointer;
   pointer-events: auto;
-  font-size: 13px;
+  font-size: 1rem;
   color: var(--text-primary);
   font-family: var(--font-sans);
   overflow: hidden;
@@ -85,11 +85,11 @@ const iconMap: Record<ToastType, string> = {
 .toast-main {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--spacing-10);
 }
 
 .toast-icon {
-  font-size: 14px;
+  font-size: 1.0769rem;
   font-weight: 600;
   flex-shrink: 0;
   width: 18px;
@@ -107,27 +107,27 @@ const iconMap: Record<ToastType, string> = {
 }
 
 .toast-expand-hint {
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-secondary);
   flex-shrink: 0;
   opacity: 0.7;
 }
 
 .toast-details {
-  margin-top: 8px;
-  padding-top: 8px;
+  margin-top: var(--spacing-8);
+  padding-top: var(--spacing-8);
   border-top: 1px dashed var(--border-subtle);
 }
 
 .toast-details-text {
   margin: 0;
-  padding: 8px 10px;
+  padding: var(--spacing-8) var(--spacing-10);
   /* 凹陷块走 --bg-input（同 approval-card 的 .ap-code）：rgba(0,0,0,.3) 在深色卡上
      是对的，在浅色主题的白卡上就是一块灰渍，与主题的层级约定无关地变暗 */
   background: var(--bg-input);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 0.8462rem;
   line-height: 1.5;
   color: var(--text-secondary);
   white-space: pre-wrap;
@@ -138,20 +138,20 @@ const iconMap: Record<ToastType, string> = {
 
 .toast-actions {
   display: flex;
-  gap: 8px;
-  margin-top: 8px;
-  padding-top: 8px;
+  gap: var(--spacing-8);
+  margin-top: var(--spacing-8);
+  padding-top: var(--spacing-8);
   border-top: 1px solid var(--border-subtle);
 }
 
 .toast-action-btn {
   flex: 1;
-  padding: 5px 10px;
+  padding: 5px var(--spacing-10);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   cursor: pointer;
   transition: all 0.15s ease;
 }

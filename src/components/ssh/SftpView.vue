@@ -23,16 +23,12 @@
           @keydown.enter.prevent="showTransferList = !showTransferList"
           @keydown.space.prevent="showTransferList = !showTransferList"
         >
-          <span class="lt-ico">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/><polyline points="7 16 12 21 17 16"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
-          </span>
           <span class="lt-num">{{ queueActiveCount }}</span>
           <span class="lt-sep" />
           <span class="lt-line">队列 <b>{{ store.queueStats.percent }}%</b></span>
           <span class="lt-bar" :style="{ width: store.queueStats.percent + '%' }" />
         </div>
         <button v-else class="btn transfer" @click="showTransferList = true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/><polyline points="7 16 12 21 17 16"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
           传输任务
         </button>
         <button v-if="!store.online" class="btn btn-primary" @click="showConnPicker = true">
@@ -40,11 +36,9 @@
         </button>
         <template v-else>
           <button class="btn" @click="showConnPicker = true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
             切换
           </button>
           <button class="btn btn-danger" @click="handleDisconnect">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
             断开
           </button>
         </template>
@@ -80,7 +74,7 @@
       <div ref="connRef" class="conn-dialog" role="dialog" aria-modal="true" aria-label="选择 SSH 连接" tabindex="-1">
         <div class="conn-dialog-header">
           <span>选择 SSH 连接</span>
-          <button class="conn-close" @click="showConnPicker = false">×</button>
+          <button class="conn-close" title="关闭" aria-label="关闭" @click="showConnPicker = false">×</button>
         </div>
         <div class="conn-list">
           <div v-if="sshStore.connections.length === 0" class="conn-empty">
@@ -97,7 +91,6 @@
             @keydown.enter.prevent="handleConnect(conn)"
             @keydown.space.prevent="handleConnect(conn)"
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
             <div class="conn-item-info">
               <div class="conn-item-name">{{ conn.name }}</div>
               <div class="conn-item-host">{{ conn.username }}@{{ conn.host }}:{{ conn.port }}</div>
@@ -118,48 +111,37 @@
       @contextmenu.prevent
     >
       <div v-if="ctxMenu.entry" class="ctx-item" @click="handleCtxAction('open')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
         打开
       </div>
       <div v-if="ctxMenu.entry" class="ctx-item" @click="handleCtxAction('transfer')">
-        <svg v-if="ctxMenu.side === 'local'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-        <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="7 16 12 21 17 16"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
         {{ ctxMenu.side === 'local' ? '上传' : '下载' }}
       </div>
       <div v-if="ctxMenu.entry" class="ctx-item" @click="handleCtxAction('copy')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
         复制
       </div>
       <div v-if="canPaste" class="ctx-item" @click="handleCtxAction('paste')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>
         粘贴
       </div>
       <div class="ctx-sep"></div>
       <div class="ctx-item" @click="handleCtxAction('newFolder')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
         新建文件夹
       </div>
       <template v-if="ctxMenu.entry">
         <div class="ctx-sep"></div>
         <div class="ctx-item" @click="handleCtxAction('zip')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/></svg>
           压缩
         </div>
         <div v-if="isZipFile(ctxMenu.entry)" class="ctx-item" @click="handleCtxAction('unzip')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/><path d="M12 12v5" stroke-dasharray="2 2"/></svg>
           解压
         </div>
         <div class="ctx-sep"></div>
         <div class="ctx-item" @click="handleCtxAction('copyPath')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           复制路径
         </div>
         <div class="ctx-item" @click="handleCtxAction('rename')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
           重命名
         </div>
         <div class="ctx-item danger" @click="handleCtxAction('delete')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
           删除
         </div>
       </template>
@@ -838,41 +820,38 @@ async function onFileSaved(): Promise<void> {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
+  padding: 0 var(--spacing-16);
   /* 结构工具条：走 --canvas-bg 与整页统一 */
   background: var(--canvas-bg);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
-.session-left { display: flex; align-items: center; gap: 8px; }
+.session-left { display: flex; align-items: center; gap: var(--spacing-8); }
 .session-dot {
   width: 8px; height: 8px; border-radius: 50%;
 }
 .session-dot.online { background: var(--accent-green); box-shadow: 0 0 6px color-mix(in srgb, var(--accent-green) 60%, transparent); }
 .session-dot.offline { background: var(--text-tertiary); }
 .session-name { color: var(--text-primary); font-size: var(--page-title-size); font-weight: 600; font-family: var(--font-sans); }
-.session-host { color: var(--text-tertiary); font-family: var(--font-mono); font-size: 11px; }
-.session-right { display: flex; gap: 8px; }
+.session-host { color: var(--text-tertiary); font-family: var(--font-mono); font-size: 0.8462rem; }
+.session-right { display: flex; gap: var(--spacing-8); }
 /* 按钮本体交给全局 .btn / .btn-primary / .btn-danger，这里只补角标锚点与图标尺寸 */
 .session-right .btn { position: relative; }
-.session-right .btn svg { width: 12px; height: 12px; }
 /* 会话栏实时传输徽标：有任务时入口本身就是读数，底边 2px 是队列总进度。
    刻意不铺 accent 底 —— DESIGN.md 禁实心 CTA，语义只走字色与描边。 */
 .live-transfer {
-  display: flex; align-items: center; gap: 8px; position: relative; overflow: hidden;
-  height: 30px; padding: 0 10px; cursor: pointer; user-select: none;
+  display: flex; align-items: center; gap: var(--spacing-8); position: relative; overflow: hidden;
+  height: 30px; padding: 0 var(--spacing-10); cursor: pointer; user-select: none;
   border: 1px solid var(--border-default); border-radius: var(--radius-md);
   background: var(--bg-input); color: var(--text-secondary);
-  font-family: var(--font-mono); font-size: 10px; line-height: 1;
+  font-family: var(--font-mono); font-size: 0.7692rem; line-height: 1;
   transition: background var(--transition-fast), border-color var(--transition-fast);
 }
 .live-transfer:hover { background: var(--bg-hover); border-color: var(--accent-primary); }
 .live-transfer.active { border-color: var(--accent-primary); }
-.live-transfer .lt-ico { display: flex; color: var(--accent-text); }
-.live-transfer .lt-ico svg { width: 13px; height: 13px; }
-.live-transfer .lt-num { font-family: var(--font-mono); font-size: 11px; font-weight: 600; color: var(--text-primary); }
+.live-transfer .lt-num { font-family: var(--font-mono); font-size: 0.8462rem; font-weight: 600; color: var(--text-primary); }
 .live-transfer .lt-sep { width: 1px; height: 12px; background: var(--border-default); }
-.live-transfer .lt-line { font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary); white-space: nowrap; }
+.live-transfer .lt-line { font-family: var(--font-mono); font-size: 0.7692rem; color: var(--text-tertiary); white-space: nowrap; }
 .live-transfer .lt-line b { color: var(--accent-text); font-weight: 600; }
 .live-transfer .lt-bar {
   position: absolute; left: 0; bottom: 0; height: 2px;
@@ -909,30 +888,30 @@ async function onFileSaved(): Promise<void> {
 }
 .conn-dialog-header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 16px;
+  padding: var(--spacing-12) var(--spacing-16);
   border-bottom: 1px solid var(--border-subtle);
-  font-size: 13px; font-weight: 500; color: var(--text-primary);
+  font-size: 1rem; font-weight: 500; color: var(--text-primary);
 }
 .conn-close {
   background: transparent; border: none; color: var(--text-tertiary);
-  font-size: 20px; cursor: pointer; padding: 0; line-height: 1;
+  font-size: 1.5385rem; cursor: pointer; padding: 0; line-height: 1;
 }
 .conn-close:hover { color: var(--text-primary); }
-.conn-list { padding: 6px; overflow-y: auto; }
+.conn-list { padding: var(--spacing-6); overflow-y: auto; }
 .conn-empty {
-  padding: 24px 16px; text-align: center;
-  font-size: 12px; color: var(--text-tertiary);
+  padding: var(--spacing-24) var(--spacing-16); text-align: center;
+  font-size: 0.9231rem; color: var(--text-tertiary);
 }
 .conn-item {
-  display: flex; align-items: center; gap: 10px;
-  padding: 8px 10px; border-radius: var(--radius-sm); cursor: pointer;
+  display: flex; align-items: center; gap: var(--spacing-10);
+  padding: var(--spacing-8) var(--spacing-10); border-radius: var(--radius-sm); cursor: pointer;
   color: var(--text-tertiary);
 }
 .conn-item:hover { background: var(--bg-hover); color: var(--text-secondary); }
 .conn-item.disabled { opacity: 0.5; cursor: not-allowed; }
 .conn-item-info { flex: 1; min-width: 0; }
-.conn-item-name { font-size: 13px; color: var(--text-primary); }
-.conn-item-host { font-size: 11px; color: var(--text-tertiary); font-family: var(--font-mono); }
+.conn-item-name { font-size: 1rem; color: var(--text-primary); }
+.conn-item-host { font-size: 0.8462rem; color: var(--text-tertiary); font-family: var(--font-mono); }
 .conn-item .spinner {
   width: 12px; height: 12px;
   animation: spin 0.8s linear infinite;
@@ -945,20 +924,20 @@ async function onFileSaved(): Promise<void> {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
-  padding: 4px;
+  padding: var(--spacing-4);
   min-width: 160px;
   z-index: 9999;
   background: var(--bg-elevated-solid);
 }
 .ctx-item {
-  display: flex; align-items: center; gap: 8px;
-  padding: 6px 12px;
-  font-size: 12px; color: var(--text-secondary);
+  display: flex; align-items: center; gap: var(--spacing-8);
+  padding: var(--spacing-6) var(--spacing-12);
+  font-size: 0.9231rem; color: var(--text-secondary);
   cursor: pointer; border-radius: var(--radius-sm);
 }
 .ctx-item:hover { background: var(--bg-hover); color: var(--text-primary); }
 .ctx-item.danger:hover { background: color-mix(in srgb, var(--accent-red) 15%, transparent); color: var(--accent-red); }
-.ctx-sep { height: 1px; margin: 4px 0; background: var(--border-subtle); }
+.ctx-sep { height: 1px; margin: var(--spacing-4) 0; background: var(--border-subtle); }
 
 /* 重命名/新建对话框 */
 .rename-overlay {
@@ -972,35 +951,35 @@ async function onFileSaved(): Promise<void> {
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
-  padding: 20px;
+  padding: var(--spacing-20);
   width: 320px;
   box-shadow: var(--shadow-lg);
   /* 容器只是初始焦点落点（tabindex=-1），描边交给里面的输入框 */
   outline: none;
 }
 .rename-title {
-  font-size: 14px; font-weight: 600;
-  color: var(--text-primary); margin-bottom: 12px;
+  font-size: 1.0769rem; font-weight: 600;
+  color: var(--text-primary); margin-bottom: var(--spacing-12);
 }
 .rename-input {
-  width: 100%; height: 32px; padding: 0 10px;
+  width: 100%; height: 32px; padding: 0 var(--spacing-10);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   background: var(--bg-input);
   color: var(--text-primary);
-  font-size: 13px; outline: none;
+  font-size: 1rem; outline: none;
   font-family: var(--font-sans);
 }
 .rename-input:focus { border-color: var(--accent-primary); }
 .rename-actions {
   display: flex; justify-content: flex-end;
-  gap: 8px; margin-top: 16px;
+  gap: var(--spacing-8); margin-top: var(--spacing-16);
 }
 .rename-btn {
-  height: 30px; padding: 0 14px;
+  height: 30px; padding: 0 var(--spacing-14);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  font-size: 12px; cursor: pointer;
+  font-size: 0.9231rem; cursor: pointer;
   font-family: var(--font-sans);
 }
 .rename-btn.cancel { background: transparent; color: var(--text-secondary); }

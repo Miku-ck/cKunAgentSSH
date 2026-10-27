@@ -5,7 +5,6 @@
 
     <div class="page-head">
       <div class="page-title">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
         <span>Git</span>
       </div>
       <span class="page-sub">GitHub 加速 · 仓库管理</span>
@@ -83,8 +82,8 @@ watch(sub, (s) => { visited.value[s] = true }, { immediate: true })
 .page-head {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 0 16px;
+  gap: var(--spacing-10);
+  padding: 0 var(--spacing-16);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
   height: var(--page-head-h);
@@ -93,35 +92,35 @@ watch(sub, (s) => { visited.value[s] = true }, { immediate: true })
 .page-title {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--spacing-6);
   font-size: var(--page-title-size);
   font-weight: 600;
   color: var(--text-primary);
 }
 
 .page-sub {
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-tertiary);
 }
 
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 16px;
+  gap: var(--spacing-10);
+  padding: var(--spacing-10) var(--spacing-16);
   border-bottom: 1px solid var(--divider-primary);
   flex-shrink: 0;
 }
 
 /* 分段控件与 DockerView 同款 */
-.seg { display: inline-flex; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 2px; gap: 2px; }
+.seg { display: inline-flex; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: var(--spacing-2); gap: var(--spacing-2); }
 .seg-btn {
   border: none;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-family: var(--font-sans);
-  padding: 4px 14px;
+  padding: var(--spacing-4) var(--spacing-14);
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: background var(--transition-fast), color var(--transition-fast);

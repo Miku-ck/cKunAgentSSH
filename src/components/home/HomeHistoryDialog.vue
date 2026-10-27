@@ -12,9 +12,7 @@
       >
         <div class="hd-head">
           <h2 id="home-history-title" class="hd-title">历史记录</h2>
-          <button type="button" class="hd-close" title="关闭" aria-label="关闭" @click="$emit('close')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
+          <button type="button" class="hd-close" title="关闭" aria-label="关闭" @click="$emit('close')">×</button>
         </div>
         <div class="hd-list">
           <HistoryConversationList
@@ -84,7 +82,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: var(--spacing-24);
   background: var(--scrim);
   backdrop-filter: blur(2px);
   animation: hd-fade-in 140ms ease-out;
@@ -111,13 +109,13 @@ onUnmounted(() => {
   height: 48px;
   display: flex;
   align-items: center;
-  padding: 0 14px;
+  padding: 0 var(--spacing-14);
   border-bottom: 1px solid var(--border-subtle);
 }
 
 .hd-title {
   margin: 0;
-  font-size: 13px;
+  font-size: 1rem;
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -134,6 +132,8 @@ onUnmounted(() => {
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
+  font-size: 1.3846rem;
+  line-height: 1;
 }
 
 .hd-close:hover {
@@ -141,16 +141,11 @@ onUnmounted(() => {
   color: var(--text-primary);
 }
 
-.hd-close svg {
-  width: 13px;
-  height: 13px;
-}
-
 .hd-list {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 6px 10px 12px;
+  padding: var(--spacing-6) var(--spacing-10) var(--spacing-12);
 }
 
 /* 入场：遮罩淡入、弹窗从 0.96 放大到 1。与设置弹窗同一套过渡语言。 */

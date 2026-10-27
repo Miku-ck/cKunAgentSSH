@@ -23,7 +23,7 @@ defineProps<{
   align-items: center;
   justify-content: space-between;
   min-height: 36px;
-  padding: 8px 0;
+  padding: var(--spacing-8) 0;
   border-bottom: 1px solid var(--border-subtle);
 }
 .setting-row:last-child {
@@ -32,19 +32,19 @@ defineProps<{
 .setting-label {
   flex: 1;
   min-width: 0;
-  margin-right: 16px;
+  margin-right: var(--spacing-16);
 }
 .label-text {
   display: block;
-  font-size: 13px;
+  font-size: 1rem;
   color: var(--text-primary);
   line-height: 1.4;
 }
 .label-desc {
   display: block;
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-secondary);
-  margin-top: 2px;
+  margin-top: var(--spacing-2);
   line-height: 1.4;
 }
 .setting-control {

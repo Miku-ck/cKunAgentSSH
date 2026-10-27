@@ -165,21 +165,21 @@ watch(
   box-shadow: var(--shadow-lg);
   /* 容器只是初始焦点落点（tabindex=-1），描边交给里面的控件 */
   outline: none;
-  padding: 20px;
+  padding: var(--spacing-20);
   width: 640px; max-width: 92vw;
   font-family: var(--font-sans);
   color: var(--text-primary);
 }
-.conflict-head { margin-bottom: 14px; }
-.conflict-title { font-size: 15px; font-weight: 600; }
-.conflict-sub { font-size: 12px; opacity: 0.66; margin-top: 4px; }
+.conflict-head { margin-bottom: var(--spacing-14); }
+.conflict-title { font-size: 1.1538rem; font-weight: 600; }
+.conflict-sub { font-size: 0.9231rem; opacity: 0.66; margin-top: var(--spacing-4); }
 .conflict-bulk {
-  display: flex; align-items: center; gap: 8px;
-  margin-bottom: 10px;
+  display: flex; align-items: center; gap: var(--spacing-8);
+  margin-bottom: var(--spacing-10);
 }
-.conflict-bulk-label { font-size: 12px; opacity: 0.66; }
+.conflict-bulk-label { font-size: 0.9231rem; opacity: 0.66; }
 .conflict-bulk-btn {
-  font-size: 12px; padding: 4px 10px;
+  font-size: 0.9231rem; padding: var(--spacing-4) var(--spacing-10);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   background: var(--bg-input);
@@ -191,14 +191,14 @@ watch(
 .conflict-row {
   display: grid;
   grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.8fr);
-  gap: 10px; align-items: center;
-  padding: 6px 0;
-  font-size: 12px;
+  gap: var(--spacing-10); align-items: center;
+  padding: var(--spacing-6) 0;
+  font-size: 0.9231rem;
 }
 .conflict-row-head {
   opacity: 0.6; font-weight: 600;
   border-bottom: 1px solid var(--border-subtle);
-  padding-bottom: 6px;
+  padding-bottom: var(--spacing-6);
 }
 .conflict-body {
   max-height: 320px; overflow-y: auto;
@@ -210,10 +210,10 @@ watch(
 .cf-meta { font-variant-numeric: tabular-nums; opacity: 0.85; }
 .cf-meta-warn { opacity: 1; }
 
-.cf-action { display: flex; flex-direction: column; gap: 4px; }
+.cf-action { display: flex; flex-direction: column; gap: var(--spacing-4); }
 .cf-seg { display: inline-flex; border: 1px solid var(--border-default); border-radius: var(--radius-sm); overflow: hidden; }
 .cf-seg-btn {
-  font-size: 12px; padding: 3px 9px;
+  font-size: 0.9231rem; padding: 3px 9px;
   background: var(--bg-input); color: var(--text-primary);
   border: none; cursor: pointer;
   border-right: 1px solid var(--border-default);
@@ -221,19 +221,19 @@ watch(
 .cf-seg-btn:last-child { border-right: none; }
 .cf-seg-btn.on { background: var(--accent-primary); color: var(--accent-on); }
 .cf-rename-input {
-  width: 100%; height: 24px; padding: 0 8px;
+  width: 100%; height: 24px; padding: 0 var(--spacing-8);
   border: 1px solid var(--border-default); border-radius: var(--radius-sm);
   background: var(--bg-input); color: var(--text-primary);
-  font-size: 12px; outline: none;
+  font-size: 0.9231rem; outline: none;
 }
 .cf-rename-input:focus { border-color: var(--accent-primary); }
 
 .conflict-actions {
-  display: flex; justify-content: flex-end; gap: 8px;
-  margin-top: 16px;
+  display: flex; justify-content: flex-end; gap: var(--spacing-8);
+  margin-top: var(--spacing-16);
 }
 .conflict-btn {
-  font-size: 13px; padding: 6px 14px;
+  font-size: 1rem; padding: var(--spacing-6) var(--spacing-14);
   border: 1px solid var(--border-default); border-radius: var(--radius-sm);
   background: var(--bg-input); color: var(--text-primary);
   cursor: pointer;

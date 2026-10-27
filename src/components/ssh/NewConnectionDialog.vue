@@ -122,12 +122,12 @@ onUnmounted(() => {
 .nc-head {
   display: flex;
   align-items: center;
-  padding: 16px 18px 0;
+  padding: var(--spacing-16) 18px 0;
   flex-shrink: 0;
 }
 
 .nc-head h2 {
-  font-size: 15px;
+  font-size: 1.1538rem;
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -137,7 +137,7 @@ onUnmounted(() => {
   border: none;
   background: none;
   color: var(--text-secondary);
-  font-size: 17px;
+  font-size: 1.3077rem;
   line-height: 1;
   cursor: pointer;
 }
@@ -149,21 +149,21 @@ onUnmounted(() => {
 .nc-tabs {
   display: flex;
   gap: 34px;
-  margin-top: 12px;
+  margin-top: var(--spacing-12);
   padding: 0 18px;
   border-bottom: 1px solid var(--divider-primary);
   flex-shrink: 0;
 }
 
 .nc-tab {
-  padding: 10px 0 9px;
+  padding: var(--spacing-10) 0 9px;
   margin-bottom: -1px;
   border: none;
   border-bottom: 2px solid transparent;
   background: none;
   color: var(--text-secondary);
   font-family: inherit;
-  font-size: 13.5px;
+  font-size: 1.0385rem;
   cursor: pointer;
 }
 

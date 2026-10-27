@@ -68,9 +68,9 @@ const { busy } = useDockerHost()
 .thead, .crow {
   display: grid;
   grid-template-columns: 12px 84px minmax(0, 1.3fr) minmax(0, 1.1fr) 76px minmax(0, 1fr) minmax(0, 1.1fr) minmax(0, 1fr) 120px;
-  gap: 12px;
+  gap: var(--spacing-12);
   align-items: center;
-  padding: 0 16px;
+  padding: 0 var(--spacing-16);
 }
 /* 表头与数据单元格同轴左对齐（操作列 .c-acts 保持居中） */
 .thead > span,
@@ -79,7 +79,7 @@ const { busy } = useDockerHost()
 }
 .thead {
   height: 30px; flex-shrink: 0; border-bottom: 1px solid var(--border-subtle);
-  font-size: 10px; color: var(--text-tertiary); letter-spacing: .8px; text-transform: uppercase; user-select: none;
+  font-size: 0.7692rem; color: var(--text-tertiary); letter-spacing: .8px; text-transform: uppercase; user-select: none;
 }
 .crow {
   height: 46px; border-bottom: 1px solid var(--divider-primary); cursor: pointer;
@@ -95,23 +95,23 @@ const { busy } = useDockerHost()
 .st-dot.stopped { background: var(--text-tertiary); }
 /* healthcheck 失败优先于 running 绿：容器还在跑，但已经在报错 */
 .st-dot.unhealthy { background: var(--status-error-text); }
-.c-id { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.c-image { min-width: 0; display: flex; align-items: center; gap: 6px; }
-.c-image .repo { font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.c-id { font-size: 0.8462rem; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.c-image { min-width: 0; display: flex; align-items: center; gap: var(--spacing-6); }
+.c-image .repo { font-size: 0.9231rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tag {
-  font-size: 10px; color: var(--accent-indigo); background: color-mix(in srgb, var(--accent-indigo) 12%, transparent);
+  font-size: 0.7692rem; color: var(--accent-indigo); background: color-mix(in srgb, var(--accent-indigo) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent-indigo) 20%, transparent); border-radius: var(--radius-sm); padding: 0 5px; flex: none;
 }
-.c-state { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.c-state { font-size: 0.8462rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .c-state.running { color: var(--status-success-text); }
 .c-state.exited { color: var(--status-error-text); }
 .c-state.stopped { color: var(--text-tertiary); }
 .c-state.unhealthy { color: var(--status-error-text); }
-.c-ports { font-size: 10px; color: var(--accent-cyan); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.c-ports { font-size: 0.7692rem; color: var(--accent-cyan); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .c-ports.none { color: var(--text-tertiary); }
-.c-cmd { font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.c-created { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.c-name { font-size: 12px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.c-cmd { font-size: 0.8462rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.c-created { font-size: 0.8462rem; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.c-name { font-size: 0.9231rem; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* 异常优先：非0退出行左侧警示色带（选中时让位于 accent 选中条，不叠加） */
 .crow.abnormal:not(.selected) { box-shadow: inset 3px 0 0 var(--status-error-text); }
 </style>

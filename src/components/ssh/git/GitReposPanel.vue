@@ -3,7 +3,6 @@
     <!-- 工具条：过滤 / 登记 / 刷新（全部只属于仓库子页），内容整体居左 -->
     <div class="toolbar">
       <label class="search">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         <input v-model="query" placeholder="过滤仓库…" aria-label="过滤仓库" />
       </label>
       <button
@@ -892,8 +891,8 @@ watch(scopeKey, () => {
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 16px;
+  gap: var(--spacing-10);
+  padding: var(--spacing-10) var(--spacing-16);
   border-bottom: 1px solid var(--divider-primary);
   flex-shrink: 0;
   flex-wrap: wrap;
@@ -901,9 +900,8 @@ watch(scopeKey, () => {
 .search {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
   height: 26px;
-  padding: 0 10px;
+  padding: 0 var(--spacing-10);
   width: 100px;
   max-width: 40vw;
   background: var(--bg-input);
@@ -915,19 +913,19 @@ watch(scopeKey, () => {
 }
 /* 静置省地、聚焦展开：输入时回到全宽，长过滤词不用挤着看 */
 .search:focus-within { width: 210px; }
-.search input { background: transparent; border: none; color: var(--text-primary); font-size: 12px; font-family: var(--font-sans); flex: 1; min-width: 0; outline: none; }
+.search input { background: transparent; border: none; color: var(--text-primary); font-size: 0.9231rem; font-family: var(--font-sans); flex: 1; min-width: 0; outline: none; }
 .search input::placeholder { color: var(--text-tertiary); }
 
 .btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--spacing-6);
   height: 26px;
-  padding: 0 10px;
+  padding: 0 var(--spacing-10);
   border: 1px solid var(--border-default);
   background: transparent;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-family: var(--font-sans);
   border-radius: var(--radius-md);
   cursor: pointer;
@@ -937,32 +935,32 @@ watch(scopeKey, () => {
 .btn:disabled { opacity: .45; cursor: default; }
 .btn.btn-primary { background: var(--accent-primary); border-color: var(--accent-primary); color: var(--accent-on); }
 .btn.btn-primary:hover:not(:disabled) { filter: brightness(1.15); }
-.btn.btn-sm { height: 22px; padding: 0 8px; font-size: 11px; }
+.btn.btn-sm { height: 22px; padding: 0 var(--spacing-8); font-size: 0.8462rem; }
 
 /* ── 错误带 / 加载带 / 空态（对齐 Docker） ── */
 .err-band {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  margin: 12px 16px;
-  padding: 12px 14px;
+  gap: var(--spacing-10);
+  margin: var(--spacing-12) var(--spacing-16);
+  padding: var(--spacing-12) var(--spacing-14);
   flex-shrink: 0;
   background: color-mix(in srgb, var(--status-error-text) 8%, var(--bg-elevated));
   border: 1px solid color-mix(in srgb, var(--status-error-text) 28%, transparent);
   border-radius: var(--radius-md);
 }
 .err-band .eb-text { flex: 1; min-width: 0; }
-.err-band .eb-msg { font-size: 13px; color: var(--text-primary); line-height: 1.5; }
-.err-band .eb-hint { font-size: 12px; color: var(--text-secondary); margin-top: 4px; line-height: 1.5; }
+.err-band .eb-msg { font-size: 1rem; color: var(--text-primary); line-height: 1.5; }
+.err-band .eb-hint { font-size: 0.9231rem; color: var(--text-secondary); margin-top: var(--spacing-4); line-height: 1.5; }
 
 .load-band {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: var(--spacing-8);
   flex: 1;
   color: var(--text-tertiary);
-  font-size: 12px;
+  font-size: 0.9231rem;
 }
 .spinner { width: 14px; height: 14px; animation: gi-rot 1s linear infinite; }
 @keyframes gi-rot { to { transform: rotate(360deg); } }
@@ -973,11 +971,11 @@ watch(scopeKey, () => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: var(--spacing-12);
   color: var(--text-tertiary);
-  font-size: 13px;
+  font-size: 1rem;
 }
-.empty-actions { display: flex; gap: 8px; }
+.empty-actions { display: flex; gap: var(--spacing-8); }
 
 /* ── 双栏主体：左 = 状态分组列表（粘性组头），右 = 详情面板 ── */
 .body { flex: 1; min-height: 0; display: flex; }
@@ -989,16 +987,16 @@ watch(scopeKey, () => {
   flex-direction: column;
   min-height: 0;
 }
-.vlist-scroll { flex: 1; overflow-y: auto; padding-bottom: 8px; }
+.vlist-scroll { flex: 1; overflow-y: auto; padding-bottom: var(--spacing-8); }
 .vgroup {
   position: sticky;
   top: 0;
   z-index: 1;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 7px 10px 3px 10px;
-  font-size: 11px;
+  gap: var(--spacing-6);
+  padding: 7px var(--spacing-10) 3px var(--spacing-10);
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
   background: var(--bg-base);
 }
@@ -1006,8 +1004,8 @@ watch(scopeKey, () => {
 .vgc {
   background: var(--bg-hover);
   border-radius: var(--radius-lg);
-  padding: 0 6px;
-  font-size: 11px;
+  padding: 0 var(--spacing-6);
+  font-size: 0.8462rem;
   color: var(--text-secondary);
 }
 .vgroup.g-needs .vgc { background: color-mix(in srgb, var(--status-warn-text) 14%, transparent); }
@@ -1017,7 +1015,7 @@ watch(scopeKey, () => {
   flex-direction: column;
   gap: 3px;
   width: 100%;
-  padding: 7px 10px;
+  padding: 7px var(--spacing-10);
   border: none;
   border-left: 2px solid transparent;
   background: transparent;
@@ -1027,11 +1025,11 @@ watch(scopeKey, () => {
 }
 .vrow:hover { background: var(--bg-hover); }
 .vrow.sel { background: var(--bg-active); border-left-color: var(--accent-primary); }
-.vr-l1 { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.vr-l1 { display: flex; align-items: center; gap: var(--spacing-6); min-width: 0; }
 .vr-name {
   flex: 1;
   min-width: 0;
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-weight: 500;
   color: var(--text-primary);
   overflow: hidden;
@@ -1040,14 +1038,14 @@ watch(scopeKey, () => {
 }
 .vr-acc {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 0.7692rem;
   color: var(--accent-green);
   border: 1px solid color-mix(in srgb, var(--accent-green) 35%, transparent);
   border-radius: var(--radius-sm);
-  padding: 0 4px;
+  padding: 0 var(--spacing-4);
   white-space: nowrap;
 }
-.vr-l2 { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 11px; }
+.vr-l2 { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 0.8462rem; }
 .vr-branch {
   font-family: var(--font-mono);
   color: var(--accent-cyan);
@@ -1057,13 +1055,13 @@ watch(scopeKey, () => {
 }
 .vr-dirty { color: var(--status-warn-text); white-space: nowrap; }
 .vr-err {
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--status-error-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.vlist-empty { padding: 28px 12px; text-align: center; color: var(--text-tertiary); font-size: 12px; }
+.vlist-empty { padding: 28px var(--spacing-12); text-align: center; color: var(--text-tertiary); font-size: 0.9231rem; }
 
 /* 详情未选中空态：双向居中（DESIGN.md 空状态规范） */
 .vdetail-empty {
@@ -1072,11 +1070,11 @@ watch(scopeKey, () => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: var(--spacing-6);
   color: var(--text-tertiary);
-  font-size: 13px;
+  font-size: 1rem;
 }
-.vdetail-sub { font-size: 11px; }
+.vdetail-sub { font-size: 0.8462rem; }
 
 /* ── 状态栏 ── */
 .statusbar {
@@ -1084,10 +1082,10 @@ watch(scopeKey, () => {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 0 16px;
+  gap: var(--spacing-16);
+  padding: 0 var(--spacing-16);
   border-top: 1px solid var(--divider-primary);
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
   user-select: none;
   white-space: nowrap;
@@ -1105,7 +1103,7 @@ watch(scopeKey, () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: var(--spacing-24);
 }
 .arm-dialog {
   width: min(420px, 100%);
@@ -1115,25 +1113,25 @@ watch(scopeKey, () => {
   box-shadow: var(--shadow-lg);
   /* 容器只是初始焦点落点（tabindex=-1），描边交给里面的输入框 */
   outline: none;
-  padding: 16px 18px;
+  padding: var(--spacing-16) 18px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--spacing-10);
 }
-.arm-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
-.arm-sub { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+.arm-title { font-size: 1.0769rem; font-weight: 600; color: var(--text-primary); }
+.arm-sub { font-size: 0.9231rem; color: var(--text-secondary); line-height: 1.5; }
 .arm-input {
   height: 28px;
-  padding: 0 10px;
+  padding: 0 var(--spacing-10);
   background: var(--bg-input);
   border: 1px solid var(--border-input);
   border-radius: var(--radius-md);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   outline: none;
 }
 .arm-input:focus { border-color: var(--accent-primary); }
-.arm-foot { display: flex; gap: 8px; justify-content: flex-end; }
+.arm-foot { display: flex; gap: var(--spacing-8); justify-content: flex-end; }
 
 .mono { font-family: var(--font-mono); }
 </style>

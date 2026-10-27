@@ -1,7 +1,6 @@
 <template>
   <div class="quick-command-bar">
     <div class="qc-label">
-      <IconTerminal :width="12" :height="12" :stroke-width="2" />
       <span>快捷命令</span>
     </div>
     <div class="qc-list">
@@ -25,16 +24,12 @@
         </button>
       </template>
       <button v-else type="button" class="qc-empty-action" @click="openAdd">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
-          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-        </svg>
         添加快捷命令
       </button>
     </div>
 
     <!-- 加号描边固定 1.8，与首页输入卡 ＋ 菜单那组图标同档（同为 viewBox 24 缩到
-         14px，写 2.5 会渲染成 ~1.46px，比那组的 ~1.05px 明显更粗、看起来也更亮）。
-         空态已有「添加快捷命令」动作，不重复摆第二枚加号。 -->
+         14px，写 2.5 会渲染成 ~1.46px，比那组的 ~1.05px 明显更粗、看起来也更亮）。 -->
     <button v-if="store.sortedCommands.length > 0" class="qc-add-btn" title="添加快捷命令" @click="openAdd">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14">
         <line x1="12" y1="5" x2="12" y2="19"/>
@@ -51,18 +46,10 @@
       @contextmenu.prevent
     >
       <div class="qc-ctx-item" @click="handleEdit">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-        </svg>
         编辑
       </div>
       <div class="qc-ctx-sep"></div>
       <div class="qc-ctx-item danger" @click="handleDelete">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-          <polyline points="3 6 5 6 21 6"/>
-          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-        </svg>
         删除
       </div>
     </div>
@@ -85,7 +72,6 @@ import { useConfirm } from '@/composables/useConfirm'
 import { useToastStore } from '@/stores/toast'
 import { menuLeft, menuTop } from '@/utils/menu'
 import QuickCommandEditor from './QuickCommandEditor.vue'
-import IconTerminal from '@/components/icons/IconTerminal.vue'
 
 const sshStore = useSSHStore()
 const store = useQuickCommandsStore()
@@ -226,8 +212,8 @@ function handleDragEnd() {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 10px;
+  gap: var(--spacing-8);
+  padding: 0 var(--spacing-10);
   /* 与 .ssh-view/.term-tabs 同一层画布：手记的纸纹要一路 continuous，命令条画平色
      就是在终端底下横切一条不带纹理的带子（见 variables.css --canvas-bg 注） */
   background: var(--canvas-bg);
@@ -240,12 +226,11 @@ function handleDragEnd() {
 .qc-label {
   display: flex;
   align-items: center;
-  gap: 6px;
   height: 16px;
-  padding-right: 10px;
+  padding-right: var(--spacing-10);
   border-right: 1px solid var(--border-subtle);
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: 0.8462rem;
   flex-shrink: 0;
   user-select: none;
 }
@@ -254,7 +239,7 @@ function handleDragEnd() {
   flex: 1;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--spacing-6);
   min-width: 0;
   overflow-x: auto;
   height: 100%;
@@ -267,16 +252,16 @@ function handleDragEnd() {
 
 .qc-item {
   height: 26px;
-  padding: 0 10px;
+  padding: 0 var(--spacing-10);
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--spacing-6);
   /* 底色透画布；命令色收在 6px 圆点上，不再整圈描边 */
   background: transparent;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-family: var(--font-sans);
   cursor: pointer;
   white-space: nowrap;
@@ -315,15 +300,14 @@ function handleDragEnd() {
 
 .qc-empty-action {
   height: 24px;
-  padding: 0 10px;
+  padding: 0 var(--spacing-10);
   display: inline-flex;
   align-items: center;
-  gap: 6px;
   border: 1px dashed var(--border-default);
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-family: var(--font-sans);
   cursor: pointer;
   flex-shrink: 0;
@@ -368,7 +352,7 @@ function handleDragEnd() {
   position: fixed;
   z-index: 9999;
   min-width: 120px;
-  padding: 4px 0;
+  padding: var(--spacing-4) 0;
   /* 浮起层：菜单归 --bg-elevated（variables.css 头部的两级背景约定），
      与同屏的 .tab-ctx-menu / .ntm-menu 同一张皮 */
   background: var(--bg-elevated-solid);
@@ -380,9 +364,8 @@ function handleDragEnd() {
 .qc-ctx-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  font-size: 12px;
+  padding: var(--spacing-6) var(--spacing-12);
+  font-size: 0.9231rem;
   color: var(--text-secondary);
   cursor: pointer;
   transition: background 0.1s;
@@ -400,7 +383,7 @@ function handleDragEnd() {
 
 .qc-ctx-sep {
   height: 1px;
-  margin: 4px 0;
+  margin: var(--spacing-4) 0;
   background: var(--border-subtle);
 }
 

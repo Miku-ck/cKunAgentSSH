@@ -33,17 +33,14 @@
           <button v-for="t in TABS" :key="t.key" class="seg-btn" role="tab" :aria-selected="tab === t.key" :class="{ on: tab === t.key }" @click="selectTab(t.key)">{{ t.label }}</button>
         </div>
         <div class="search">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <input v-model="query" placeholder="按名称过滤…" aria-label="过滤" />
         </div>
         <div class="tb-right">
           <template v-if="tab === 'images'">
             <button class="btn" title="从仓库拉取镜像（docker pull）" @click="showPull = true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
               拉取镜像
             </button>
             <button class="btn" title="从远端 tar 加载镜像（docker load -i）" @click="openImport">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>
               加载镜像
             </button>
             <button
@@ -53,7 +50,6 @@
               @click="doPruneImages"
             >
               <svg v-if="busy === 'prune:images'" class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="12" r="9" stroke-opacity="0.25"/><path d="M12 3a9 9 0 0 1 9 9" stroke-linecap="round"/></svg>
-              <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
               清理悬空
             </button>
             <button
@@ -63,7 +59,6 @@
               @click="doPruneAllImages"
             >
               <svg v-if="busy === 'prune:images-all'" class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="12" r="9" stroke-opacity="0.25"/><path d="M12 3a9 9 0 0 1 9 9" stroke-linecap="round"/></svg>
-              <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/></svg>
               清理未使用
             </button>
           </template>
@@ -75,7 +70,6 @@
             @click="doPruneVolumes"
           >
             <svg v-if="busy === 'prune:volumes'" class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="12" r="9" stroke-opacity="0.25"/><path d="M12 3a9 9 0 0 1 9 9" stroke-linecap="round"/></svg>
-            <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
             清理未使用
           </button>
           <button
@@ -86,18 +80,15 @@
             @click="doPruneNetworks"
           >
             <svg v-if="busy === 'prune:networks'" class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="12" r="9" stroke-opacity="0.25"/><path d="M12 3a9 9 0 0 1 9 9" stroke-linecap="round"/></svg>
-            <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
             清理未使用
           </button>
           <button class="btn" @click="refresh">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
             刷新
           </button>
         </div>
       </div>
 
       <div v-if="loadError" class="err-band" role="alert">
-        <svg class="eb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
         <div class="eb-text">
           <div class="eb-msg">{{ loadError.message }}</div>
           <div v-if="loadError.hint" class="eb-hint">{{ loadError.hint }}</div>
@@ -887,24 +878,24 @@ onUnmounted(() => {
 .page-head {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--spacing-12);
   flex-shrink: 0;
   height: var(--page-head-h);
-  padding: 0 16px;
+  padding: 0 var(--spacing-16);
   border-bottom: 1px solid var(--border-subtle);
 }
-.conn-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.conn-left { display: flex; align-items: center; gap: var(--spacing-8); min-width: 0; }
 .conn-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--text-tertiary); }
 .conn-dot.online { background: var(--status-success-text); }
 .conn-dot.offline { background: var(--text-tertiary); }
 .conn-name { font-size: var(--page-title-size); font-weight: 600; color: var(--text-primary); }
-.conn-host { font-size: 12px; font-weight: 400; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conn-host { font-size: 0.9231rem; font-weight: 400; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .head-spacer { flex: 1; }
-.conn-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.conn-right { display: flex; align-items: center; gap: var(--spacing-10); flex-shrink: 0; }
 .host-sel {
-  height: 26px; padding: 0 8px; max-width: 200px;
+  height: 26px; padding: 0 var(--spacing-8); max-width: 200px;
   background: var(--bg-input); border: 1px solid var(--border-input); border-radius: var(--radius-md);
-  color: var(--text-primary); font-size: 12px; font-family: inherit; cursor: pointer;
+  color: var(--text-primary); font-size: 0.9231rem; font-family: inherit; cursor: pointer;
 }
 .host-sel option { background: var(--bg-elevated); color: var(--text-primary); }
 
@@ -912,26 +903,26 @@ onUnmounted(() => {
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 16px;
+  gap: var(--spacing-10);
+  padding: var(--spacing-10) var(--spacing-16);
   border-bottom: 1px solid var(--divider-primary);
   flex-shrink: 0;
 }
-.seg { display: inline-flex; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 2px; gap: 2px; }
+.seg { display: inline-flex; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: var(--spacing-2); gap: var(--spacing-2); }
 .seg-btn {
-  border: none; background: transparent; color: var(--text-secondary); font-size: 12px;
-  padding: 4px 14px; border-radius: var(--radius-sm);
+  border: none; background: transparent; color: var(--text-secondary); font-size: 0.9231rem;
+  padding: var(--spacing-4) var(--spacing-14); border-radius: var(--radius-sm);
   transition: background var(--transition-fast), color var(--transition-fast);
 }
 .seg-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
 .seg-btn.on { background: var(--bg-elevated); color: var(--accent-text); }
 .search {
-  display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 10px; width: 210px;
+  display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 var(--spacing-10); width: 210px;
   background: var(--bg-input); border: 1px solid var(--border-input); border-radius: var(--radius-md); color: var(--text-tertiary);
 }
-.search input { background: transparent; border: none; color: var(--text-primary); font-size: 12px; flex: 1; }
+.search input { background: transparent; border: none; color: var(--text-primary); font-size: 0.9231rem; flex: 1; }
 .search input::placeholder { color: var(--text-tertiary); }
-.tb-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.tb-right { margin-left: auto; display: flex; align-items: center; gap: var(--spacing-8); }
 
 /* 正文：列表列独享整幅宽度（详情已改居中弹窗） */
 .body { flex: 1; display: flex; min-height: 0; }
@@ -945,25 +936,24 @@ onUnmounted(() => {
 
 /* 取数错误带：docker 未装 / 无权限 / 会话异常，集中一处如实上浮（对齐仪表盘错误态） */
 .err-band {
-  display: flex; align-items: flex-start; gap: 10px;
-  margin: 12px 16px; padding: 12px 14px; flex-shrink: 0;
+  display: flex; align-items: flex-start; gap: var(--spacing-10);
+  margin: var(--spacing-12) var(--spacing-16); padding: var(--spacing-12) var(--spacing-14); flex-shrink: 0;
   background: color-mix(in srgb, var(--status-error-text) 8%, var(--bg-elevated));
   border: 1px solid color-mix(in srgb, var(--status-error-text) 28%, transparent);
   border-radius: var(--radius-md);
 }
-.err-band .eb-icon { flex-shrink: 0; width: 18px; height: 18px; color: var(--status-error-text); margin-top: 1px; }
 .err-band .eb-text { flex: 1; min-width: 0; }
-.err-band .eb-msg { font-size: 13px; color: var(--text-primary); line-height: 1.5; }
-.err-band .eb-hint { font-size: 12px; color: var(--text-secondary); margin-top: 4px; line-height: 1.5; }
+.err-band .eb-msg { font-size: 1rem; color: var(--text-primary); line-height: 1.5; }
+.err-band .eb-hint { font-size: 0.9231rem; color: var(--text-secondary); margin-top: var(--spacing-4); line-height: 1.5; }
 .load-band {
-  display: flex; align-items: center; justify-content: center; gap: 8px; flex: 1;
-  color: var(--text-tertiary); font-size: 12px;
+  display: flex; align-items: center; justify-content: center; gap: var(--spacing-8); flex: 1;
+  color: var(--text-tertiary); font-size: 0.9231rem;
 }
 
 /* 状态栏 */
 .statusbar {
-  height: 24px; flex-shrink: 0; display: flex; align-items: center; gap: 16px; padding: 0 16px;
-  border-top: 1px solid var(--divider-primary); font-size: 11px; color: var(--text-tertiary); user-select: none;
+  height: 24px; flex-shrink: 0; display: flex; align-items: center; gap: var(--spacing-16); padding: 0 var(--spacing-16);
+  border-top: 1px solid var(--divider-primary); font-size: 0.8462rem; color: var(--text-tertiary); user-select: none;
 }
 .statusbar .mono { color: var(--text-secondary); }
 .statusbar .ok { color: var(--status-success-text); }
@@ -976,6 +966,6 @@ onUnmounted(() => {
 /* 空态 */
 .empty {
   flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 10px; color: var(--text-tertiary); font-size: 13px;
+  gap: var(--spacing-10); color: var(--text-tertiary); font-size: 1rem;
 }
 </style>

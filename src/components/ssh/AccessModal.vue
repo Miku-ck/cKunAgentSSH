@@ -12,9 +12,7 @@
     >
       <div v-if="!embedded" class="dlg-head">
         <h2 id="acc-dialog-title">{{ isNew ? '添加连接' : '修改连接' }}</h2>
-        <button class="dlg-x" aria-label="关闭" :disabled="saving" @click="tryClose">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>
+        <button class="dlg-x" aria-label="关闭" :disabled="saving" @click="tryClose">×</button>
       </div>
       <div class="dlg-body">
         <div class="form-row">
@@ -218,11 +216,11 @@ async function save(): Promise<void> {
   height: 44px;
   display: flex;
   align-items: center;
-  padding: 0 16px;
+  padding: 0 var(--spacing-16);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
-.dlg-head h2 { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.dlg-head h2 { font-size: 1rem; font-weight: 600; color: var(--text-primary); }
 .dlg-x {
   width: 24px;
   height: 24px;
@@ -232,6 +230,8 @@ async function save(): Promise<void> {
   justify-content: center;
   border: none;
   border-radius: var(--radius-sm);
+  font-size: 1.2308rem;
+  line-height: 1;
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
@@ -239,21 +239,21 @@ async function save(): Promise<void> {
 .dlg-x:hover { background: var(--bg-hover); color: var(--text-secondary); }
 
 .dlg-body {
-  padding: 8px 16px 16px;
+  padding: var(--spacing-8) var(--spacing-16) var(--spacing-16);
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--spacing-12);
   min-height: 0;
 }
 
-.form-row { display: flex; gap: 12px; }
-.form-group { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.form-row { display: flex; gap: var(--spacing-12); }
+.form-group { display: flex; flex-direction: column; gap: var(--spacing-4); min-width: 0; }
 .form-group.flex-1 { flex: 1; }
 .form-group.flex-2 { flex: 2; }
 
 .form-group label {
-  font-size: 11px;
+  font-size: 0.8462rem;
   font-weight: 600;
   color: var(--text-secondary);
   text-transform: uppercase;
@@ -268,7 +268,7 @@ async function save(): Promise<void> {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 1rem;
   font-family: var(--font-sans);
   outline: none;
   transition: border-color var(--transition-fast);
@@ -276,11 +276,11 @@ async function save(): Promise<void> {
 
 .form-group input {
   height: 32px;
-  padding: 0 10px;
+  padding: 0 var(--spacing-10);
 }
 
 .form-group textarea {
-  padding: 6px 10px;
+  padding: var(--spacing-6) var(--spacing-10);
   resize: vertical;
 }
 
@@ -291,12 +291,12 @@ async function save(): Promise<void> {
 .form-group textarea::placeholder { color: var(--text-tertiary); }
 
 .mono { font-family: var(--font-mono); }
-.form-value { font-size: 12px; color: var(--text-secondary); word-break: break-all; line-height: 1.5; }
+.form-value { font-size: 0.9231rem; color: var(--text-secondary); word-break: break-all; line-height: 1.5; }
 
 .form-error {
-  padding: 8px 12px;
+  padding: var(--spacing-8) var(--spacing-12);
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--danger-text);
   background: color-mix(in srgb, var(--accent-red) 8%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent-red) 20%, transparent);
@@ -304,32 +304,32 @@ async function save(): Promise<void> {
 
 .advanced-section {
   border-top: 1px solid var(--border-subtle);
-  padding-top: 8px;
+  padding-top: var(--spacing-8);
 }
 .advanced-toggle {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 0;
+  gap: var(--spacing-6);
+  padding: var(--spacing-4) 0;
   border: none;
   background: transparent;
   color: var(--text-secondary);
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: 0.9231rem;
   cursor: pointer;
 }
 .advanced-toggle:hover { color: var(--text-primary); }
 .toggle-arrow { transition: transform var(--transition-fast); }
 .toggle-arrow.expanded { transform: rotate(90deg); }
-.advanced-body { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
+.advanced-body { display: flex; flex-direction: column; gap: var(--spacing-12); margin-top: var(--spacing-8); }
 
 .modal-footer {
   height: 52px;
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
-  padding: 0 16px;
+  gap: var(--spacing-8);
+  padding: 0 var(--spacing-16);
   border-top: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }

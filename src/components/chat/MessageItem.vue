@@ -18,10 +18,7 @@
     </div>
 
     <div v-if="content || hasTraceAction" class="message-actions">
-      <button v-if="content" class="action-btn" @click="copyContent(content)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-        <span>复制</span>
-      </button>
+      <button v-if="content" class="action-btn" @click="copyContent(content)">复制</button>
       <!-- 记录面只此一处：跳到运维轨迹，按 run_id 定位这一轮的完整记录 -->
       <button
         v-if="hasTraceAction"
@@ -29,8 +26,7 @@
         title="在运维轨迹中查看这次运行的完整记录"
         @click="openTrace"
       >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><circle cx="4.5" cy="18.5" r="2"/><circle cx="19.5" cy="5.5" r="2"/><path d="M6.5 18.5h3a4 4 0 0 0 4-4v-5a4 4 0 0 1 4-4"/></svg>
-        <span>轨迹</span>
+        轨迹
       </button>
       <slot v-if="content" name="actions" :content="content" />
       <span v-if="duration && message.role === 'assistant'" class="action-elapsed">耗时 {{ duration }}s</span>
@@ -86,8 +82,8 @@ function openTrace() {
 .message-block {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 12px 0;
+  gap: var(--spacing-6);
+  padding: var(--spacing-12) 0;
 }
 
 .message-block.user {
@@ -97,12 +93,12 @@ function openTrace() {
 .message-block.assistant {
   align-items: flex-start;
   /* 与面板左边框留出间隙（用户消息保持贴边，见下方 .user 注释） */
-  padding-left: 10px;
+  padding-left: var(--spacing-10);
 }
 
 .message-bubble {
   max-width: 92%;
-  padding: 10px 14px;
+  padding: var(--spacing-10) var(--spacing-14);
   border-radius: var(--radius-xl);
   /* 与 MarkdownStream 同一变量：设置里的「消息字号」必须真的落到气泡上。
      回落值取 store 的默认档 13（不是 14）—— 注入前那一帧两套字号会打架。 */
@@ -114,7 +110,7 @@ function openTrace() {
   /* 宽比父容器多 1px：flex-end 对齐下左边缘与面板左边框重叠成单线，右边缘贴面板右缘，左右对称 */
   width: calc(100% + 1px);
   max-width: none;
-  padding: 6px 14px;
+  padding: var(--spacing-6) var(--spacing-14);
   background: transparent;
   color: var(--text-primary);
   border: 1px solid var(--border-subtle);
@@ -132,10 +128,10 @@ function openTrace() {
 .message-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--spacing-6);
   opacity: 0;
   transition: opacity 0.15s;
-  padding-left: 2px;
+  padding-left: var(--spacing-2);
 }
 
 .message-block:hover .message-actions,
@@ -146,13 +142,12 @@ function openTrace() {
 .action-btn {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
+  padding: var(--spacing-4) var(--spacing-8);
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 0.8462rem;
   cursor: pointer;
   transition: all 0.1s;
 }
@@ -164,7 +159,7 @@ function openTrace() {
 
 .action-elapsed {
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: 0.8462rem;
   margin-left: auto;
 }
 </style>

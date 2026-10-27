@@ -149,7 +149,7 @@ defineExpose({
   box-shadow: var(--shadow-lg);
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 4px 0;
+  padding: var(--spacing-4) 0;
 }
 
 .completion-popup::-webkit-scrollbar {
@@ -160,8 +160,8 @@ defineExpose({
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 3px 10px;
-  font-size: 12px;
+  padding: 3px var(--spacing-10);
+  font-size: 0.9231rem;
   font-family: var(--font-mono);
   color: var(--text-primary);
   cursor: pointer;
@@ -193,7 +193,7 @@ defineExpose({
 .item-count {
   margin-left: auto;
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 0.7692rem;
   color: var(--text-tertiary);
   background: var(--bg-hover);
   padding: 0 5px;

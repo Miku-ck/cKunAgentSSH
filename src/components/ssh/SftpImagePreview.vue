@@ -129,19 +129,19 @@ function close(): void {
   overflow: hidden;
 }
 .imgp-head {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 14px;
+  display: flex; align-items: center; gap: var(--spacing-10);
+  padding: var(--spacing-10) var(--spacing-14);
   border-bottom: 1px solid var(--border-subtle);
 }
 .imgp-title {
-  font-size: 13px; font-weight: 600;
+  font-size: 1rem; font-weight: 600;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   flex: 1; min-width: 0;
 }
-.imgp-size { font-size: 12px; opacity: 0.66; font-variant-numeric: tabular-nums; }
+.imgp-size { font-size: 0.9231rem; opacity: 0.66; font-variant-numeric: tabular-nums; }
 .imgp-close {
   border: none; background: transparent; color: var(--text-primary);
-  font-size: 20px; line-height: 1; cursor: pointer;
+  font-size: 1.5385rem; line-height: 1; cursor: pointer;
   width: 26px; height: 26px; border-radius: var(--radius-sm);
 }
 .imgp-close:hover { background: var(--bg-input); }
@@ -151,9 +151,9 @@ function close(): void {
   display: flex; align-items: center; justify-content: center;
   /* 中性底：透明 PNG 的棋盘会喧宾夺主，用输入底色衬托即可 */
   background: var(--bg-input);
-  padding: 16px;
+  padding: var(--spacing-16);
 }
-.imgp-status { font-size: 13px; opacity: 0.8; display: flex; align-items: center; gap: 8px; }
+.imgp-status { font-size: 1rem; opacity: 0.8; display: flex; align-items: center; gap: var(--spacing-8); }
 .imgp-error { color: var(--danger-text); }
 .imgp-spin { animation: imgp-rot 0.9s linear infinite; }
 @keyframes imgp-rot { to { transform: rotate(360deg); } }

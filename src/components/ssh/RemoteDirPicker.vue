@@ -161,8 +161,8 @@ watch(() => props.sessionId, () => {
 </template>
 
 <style scoped>
-.rdp { display: flex; flex-direction: column; gap: 6px; min-width: 0 }
-.rdp-bar { display: flex; align-items: center; gap: 4px }
+.rdp { display: flex; flex-direction: column; gap: var(--spacing-6); min-width: 0 }
+.rdp-bar { display: flex; align-items: center; gap: var(--spacing-4) }
 .rdp-ico {
   width: 24px; height: 24px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
   border: none; background: transparent; border-radius: var(--radius-sm);
@@ -176,21 +176,21 @@ watch(() => props.sessionId, () => {
 @keyframes rdp-spin { to { transform: rotate(360deg) } }
 
 .rdp-path {
-  flex: 1; min-width: 0; height: 24px; padding: 0 8px;
+  flex: 1; min-width: 0; height: 24px; padding: 0 var(--spacing-8);
   background: var(--bg-input); border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm); color: var(--text-primary); font-size: 11px;
+  border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.8462rem;
 }
 .rdp-path:focus { outline: none; border-color: var(--accent-primary); }
 
 .rdp-list {
   max-height: 150px; overflow-y: auto;
   border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
-  padding: 2px; background: var(--bg-input);
+  padding: var(--spacing-2); background: var(--bg-input);
 }
 .rdp-row {
-  display: flex; align-items: center; gap: 6px; width: 100%;
-  padding: 4px 7px; border: none; background: transparent; border-radius: var(--radius-sm);
-  text-align: left; font-size: 12px; color: var(--text-primary); cursor: pointer;
+  display: flex; align-items: center; gap: var(--spacing-6); width: 100%;
+  padding: var(--spacing-4) 7px; border: none; background: transparent; border-radius: var(--radius-sm);
+  text-align: left; font-size: 0.9231rem; color: var(--text-primary); cursor: pointer;
 }
 .rdp-row:hover:not(:disabled) { background: var(--bg-hover); }
 .rdp-row.on { background: color-mix(in srgb, var(--accent-primary) 12%, transparent); }
@@ -199,7 +199,7 @@ watch(() => props.sessionId, () => {
 .rdp-file { width: 12px; height: 12px; flex-shrink: 0; color: var(--text-tertiary); }
 .rdp-row.dir .rdp-file { color: var(--accent-text); }
 .rdp-nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rdp-sz { flex-shrink: 0; font-size: 10px; color: var(--text-tertiary); }
-.rdp-msg { padding: 10px 8px; font-size: 11px; color: var(--text-tertiary); text-align: center; }
+.rdp-sz { flex-shrink: 0; font-size: 0.7692rem; color: var(--text-tertiary); }
+.rdp-msg { padding: var(--spacing-10) var(--spacing-8); font-size: 0.8462rem; color: var(--text-tertiary); text-align: center; }
 .rdp-msg.err { color: var(--status-error-text); }
 </style>

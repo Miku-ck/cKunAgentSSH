@@ -158,14 +158,6 @@ const imgText = computed(() => {
       tabindex="-1"
     >
       <div class="dp-head">
-        <svg class="imgx-hd" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <template v-if="isExport">
-            <path d="M21 8v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8"/><path d="M2 3h20v5H2z"/><path d="M10 12h4"/>
-          </template>
-          <template v-else>
-            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>
-          </template>
-        </svg>
         <span class="dp-name">{{ isExport ? '导出镜像' : '加载镜像' }}</span>
         <button class="dp-close" :disabled="running" aria-label="关闭" @click="onClose">×</button>
       </div>
@@ -245,36 +237,35 @@ const imgText = computed(() => {
 
 <style scoped>
 .imgx { width: min(420px, 100vw - 48px) }
-.imgx-hd { width: 14px; height: 14px; flex-shrink: 0; color: var(--accent-text) }
-.imgx-body { display: flex; flex-direction: column; gap: 9px; padding: 14px 18px; overflow-y: auto }
+.imgx-body { display: flex; flex-direction: column; gap: 9px; padding: var(--spacing-14) 18px; overflow-y: auto }
 
 .imgx-img {
-  display: flex; align-items: baseline; gap: 8px; min-width: 0;
-  padding: 7px 10px; border-radius: var(--radius-md);
+  display: flex; align-items: baseline; gap: var(--spacing-8); min-width: 0;
+  padding: 7px var(--spacing-10); border-radius: var(--radius-md);
   background: var(--bg-input); border: 1px solid var(--border-subtle);
 }
-.imgx-ref { font-size: 12px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
-.imgx-tag { flex-shrink: 0; font-size: 12px; color: var(--accent-text) }
-.imgx-size { margin-left: auto; flex-shrink: 0; font-size: 11px; color: var(--text-tertiary) }
+.imgx-ref { font-size: 0.9231rem; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.imgx-tag { flex-shrink: 0; font-size: 0.9231rem; color: var(--accent-text) }
+.imgx-size { margin-left: auto; flex-shrink: 0; font-size: 0.8462rem; color: var(--text-tertiary) }
 
-.imgx-field { display: flex; align-items: center; gap: 8px }
-.imgx-lbl { flex-shrink: 0; font-size: 11px; color: var(--text-tertiary) }
+.imgx-field { display: flex; align-items: center; gap: var(--spacing-8) }
+.imgx-lbl { flex-shrink: 0; font-size: 0.8462rem; color: var(--text-tertiary) }
 .imgx-input {
-  flex: 1; min-width: 0; height: 24px; padding: 0 8px;
+  flex: 1; min-width: 0; height: 24px; padding: 0 var(--spacing-8);
   background: var(--bg-input); border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm); color: var(--text-primary); font-size: 11px;
+  border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.8462rem;
 }
 .imgx-input:focus { outline: none; border-color: var(--accent-primary) }
 
 /* 格式切换：分段控件而不是下拉 —— 只有两个值，展开菜单是多余的一步 */
 .imgx-fmt {
-  display: inline-flex; gap: 2px; padding: 2px;
+  display: inline-flex; gap: var(--spacing-2); padding: var(--spacing-2);
   background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
 }
 .imgx-fmt button {
   height: 18px; padding: 0 9px; border-radius: var(--radius-sm);
   background: transparent; color: var(--text-secondary);
-  font-family: var(--font-mono); font-size: 11px; cursor: pointer;
+  font-family: var(--font-mono); font-size: 0.8462rem; cursor: pointer;
   transition: background var(--transition-fast), color var(--transition-fast);
 }
 .imgx-fmt button:hover:not(:disabled):not(.on) { color: var(--text-primary) }
@@ -283,28 +274,28 @@ const imgText = computed(() => {
 
 /* 完整路径一行小字：不占面板高度，又让用户随时能核对最终落盘位置 */
 .imgx-path {
-  font-size: 10px; color: var(--text-tertiary);
+  font-size: 0.7692rem; color: var(--text-tertiary);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.imgx-warn { font-size: 11px; color: var(--status-warn-text) }
-.imgx-hint { font-size: 11px; color: var(--text-tertiary) }
+.imgx-warn { font-size: 0.8462rem; color: var(--status-warn-text) }
+.imgx-hint { font-size: 0.8462rem; color: var(--text-tertiary) }
 .imgx-err {
-  padding: 8px 10px; border-radius: var(--radius-md); font-size: 12px; line-height: 1.55;
+  padding: var(--spacing-8) var(--spacing-10); border-radius: var(--radius-md); font-size: 0.9231rem; line-height: 1.55;
   color: var(--status-error-text);
   background: color-mix(in srgb, var(--status-error-text) 8%, transparent);
   border: 1px solid color-mix(in srgb, var(--status-error-text) 25%, transparent);
 }
 .imgx-run {
-  display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-secondary);
+  display: flex; align-items: center; gap: var(--spacing-6); font-size: 0.8462rem; color: var(--text-secondary);
 }
 .imgx-run svg { width: 12px; height: 12px; animation: imgx-spin .8s linear infinite }
 @keyframes imgx-spin { to { transform: rotate(360deg) } }
 
 .imgx-foot {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 18px; border-top: 1px solid var(--divider-primary);
+  display: flex; align-items: center; gap: var(--spacing-8);
+  padding: var(--spacing-10) 18px; border-top: 1px solid var(--divider-primary);
 }
-.imgx-note { font-size: 10px; color: var(--text-tertiary) }
+.imgx-note { font-size: 0.7692rem; color: var(--text-tertiary) }
 .imgx-spacer { flex: 1 }
 /* 执行中关闭键只是看起来可点，点了不会有反应 —— 给个禁用观感 */
 .imgx .dp-close:disabled { opacity: .3; cursor: default; pointer-events: none }

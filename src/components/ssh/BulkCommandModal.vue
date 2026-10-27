@@ -3,7 +3,6 @@
   <div class="bulk-modal-mask" @click.self="requestClose">
     <div ref="dialogRef" class="bulk-modal" role="dialog" aria-modal="true" aria-label="多节点批量下发" tabindex="-1">
       <div class="bulk-title">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
         多节点批量下发
         <span class="bulk-sub" v-if="!running && results.length">
           共 {{ okCount }} 台成功 · {{ failedCount }} 台失败
@@ -411,21 +410,21 @@ watch(remoteSessions, (sessions) => {
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-xl);
-  padding: 16px 18px;
+  padding: var(--spacing-16) 18px;
   /* 容器只是初始焦点落点（tabindex=-1），描边交给里面的控件 */
   outline: none;
 }
 .bulk-title {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 15px;
+  gap: var(--spacing-8);
+  font-size: 1.1538rem;
   font-weight: 600;
   color: var(--text-primary);
-  margin-bottom: 12px;
+  margin-bottom: var(--spacing-12);
 }
 .bulk-sub {
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-weight: 400;
   color: var(--text-tertiary);
 }
@@ -434,30 +433,30 @@ watch(remoteSessions, (sessions) => {
   border: none;
   background: transparent;
   color: var(--text-tertiary);
-  font-size: 20px;
+  font-size: 1.5385rem;
   cursor: pointer;
   line-height: 1;
 }
 .bulk-close:hover { color: var(--text-primary); }
 
-.bulk-config { display: flex; flex-direction: column; gap: 10px; }
-.bulk-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-tertiary); }
-.bulk-field.row { flex-direction: row; align-items: center; gap: 8px; }
+.bulk-config { display: flex; flex-direction: column; gap: var(--spacing-10); }
+.bulk-field { display: flex; flex-direction: column; gap: var(--spacing-4); font-size: 0.9231rem; color: var(--text-tertiary); }
+.bulk-field.row { flex-direction: row; align-items: center; gap: var(--spacing-8); }
 .bulk-field textarea, .bulk-field select {
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-family: var(--font-mono);
-  padding: 6px 8px;
+  padding: var(--spacing-6) var(--spacing-8);
   border-radius: var(--radius-md);
   border: 1px solid var(--border-subtle);
   background: var(--bg-input);
   color: var(--text-primary);
   resize: vertical;
 }
-.bulk-quick { display: flex; gap: 6px; flex-wrap: wrap; }
+.bulk-quick { display: flex; gap: var(--spacing-6); flex-wrap: wrap; }
 .bulk-quick-btn {
-  font-size: 11px;
+  font-size: 0.8462rem;
   font-family: var(--font-mono);
-  padding: 3px 8px;
+  padding: 3px var(--spacing-8);
   border-radius: var(--radius-md);
   border: 1px dashed var(--border-subtle);
   background: transparent;
@@ -466,25 +465,25 @@ watch(remoteSessions, (sessions) => {
 }
 .bulk-quick-btn:hover { color: var(--text-primary); border-color: var(--accent-primary); }
 
-.bulk-targets { font-size: 12px; color: var(--text-tertiary); }
+.bulk-targets { font-size: 0.9231rem; color: var(--text-tertiary); }
 .bulk-target-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-top: 6px;
+  gap: var(--spacing-4);
+  margin-top: var(--spacing-6);
   max-height: 160px;
   overflow: auto;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  padding: 8px;
+  padding: var(--spacing-8);
 }
-.bulk-target { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); cursor: pointer; }
+.bulk-target { display: flex; align-items: center; gap: var(--spacing-8); font-size: 0.9231rem; color: var(--text-secondary); cursor: pointer; }
 .bulk-target:hover { color: var(--text-primary); }
 
-.bulk-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.bulk-footer { display: flex; justify-content: flex-end; gap: var(--spacing-8); margin-top: var(--spacing-14); }
 
 
-.bulk-running { padding: 30px 0; display: flex; flex-direction: column; gap: 10px; align-items: center; }
+.bulk-running { padding: 30px 0; display: flex; flex-direction: column; gap: var(--spacing-10); align-items: center; }
 .bulk-progress-bar {
   width: 60%;
   height: 4px;
@@ -497,14 +496,14 @@ watch(remoteSessions, (sessions) => {
   background: var(--accent-primary);
   transition: width 0.3s ease;
 }
-.bulk-progress-text { font-size: 12px; color: var(--text-tertiary); }
+.bulk-progress-text { font-size: 0.9231rem; color: var(--text-tertiary); }
 
-.bulk-results-toolbar { display: flex; gap: 8px; margin-bottom: 10px; }
+.bulk-results-toolbar { display: flex; gap: var(--spacing-8); margin-bottom: var(--spacing-10); }
 
 .bulk-cols {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 10px;
+  gap: var(--spacing-10);
   overflow: auto;
   max-height: 52vh;
 }
@@ -519,15 +518,15 @@ watch(remoteSessions, (sessions) => {
 .bulk-col-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
+  gap: var(--spacing-8);
+  padding: var(--spacing-6) var(--spacing-10);
   background: var(--bg-hover);
   border-bottom: 1px solid var(--border-subtle);
 }
-.col-name { font-size: 12px; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.col-name { font-size: 0.9231rem; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .col-badge {
-  font-size: 10px;
-  padding: 0 6px;
+  font-size: 0.7692rem;
+  padding: 0 var(--spacing-6);
   border-radius: var(--radius-sm);
   flex-shrink: 0;
 }
@@ -536,11 +535,11 @@ watch(remoteSessions, (sessions) => {
 .col-badge.ok { color: var(--accent-green); background: color-mix(in srgb, var(--accent-green) 12%, transparent); }
 .col-badge.fail { color: var(--accent-red); background: color-mix(in srgb, var(--accent-red) 12%, transparent); }
 .col-badge.err { color: var(--accent-red); background: color-mix(in srgb, var(--accent-red) 12%, transparent); }
-.col-dur { margin-left: auto; font-size: 10px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.col-dur { margin-left: auto; font-size: 0.7692rem; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 .bulk-col-body {
   margin: 0;
-  padding: 8px 10px;
-  font-size: 11px;
+  padding: var(--spacing-8) var(--spacing-10);
+  font-size: 0.8462rem;
   line-height: 1.5;
   color: var(--text-secondary);
   white-space: pre-wrap;
@@ -556,14 +555,14 @@ watch(remoteSessions, (sessions) => {
   border-radius: var(--radius-lg);
   max-height: 52vh;
   overflow: auto;
-  padding: 6px 0;
+  padding: var(--spacing-6) 0;
 }
 .bulk-diff-line {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  padding: 1px 12px;
-  font-size: 12px;
+  gap: var(--spacing-8);
+  padding: 1px var(--spacing-12);
+  font-size: 0.9231rem;
   line-height: 1.6;
 }
 .diff-marker { width: 12px; flex-shrink: 0; color: var(--accent-orange); }
@@ -571,7 +570,7 @@ watch(remoteSessions, (sessions) => {
 .diff-count {
   margin-left: auto;
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 0.7692rem;
   color: var(--accent-orange);
   background: color-mix(in srgb, var(--accent-orange) 10%, transparent);
   padding: 0 5px;
@@ -579,5 +578,5 @@ watch(remoteSessions, (sessions) => {
 }
 .bulk-diff-line.inconsistent { background: color-mix(in srgb, var(--accent-orange) 7%, transparent); }
 .bulk-diff-line.inconsistent .diff-text { color: var(--accent-orange); }
-.bulk-empty { padding: 30px 0; text-align: center; color: var(--text-tertiary); font-size: 12px; }
+.bulk-empty { padding: 30px 0; text-align: center; color: var(--text-tertiary); font-size: 0.9231rem; }
 </style>

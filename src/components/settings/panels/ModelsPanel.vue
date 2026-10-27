@@ -12,7 +12,6 @@
           添加模型
         </button>
         <button class="btn btn-ghost btn-sm" @click="store.fetchModelConfigs()" :disabled="store.modelsLoading">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
           刷新
         </button>
       </div>
@@ -127,15 +126,12 @@
 
           <!-- 测试状态 -->
           <div v-if="testStatus[m.id]" class="test-status" :class="'test-' + testStatus[m.id].status">
-            <svg v-if="testStatus[m.id].status === 'ok'" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-            <svg v-else-if="testStatus[m.id].status === 'error'" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
             <span>{{ testStatus[m.id].message }}</span>
             <span v-if="testStatus[m.id].latencyMs" class="test-latency">{{ testStatus[m.id].latencyMs }}ms</span>
           </div>
         </div>
 
         <div v-if="store.modelConfigs.length === 0" class="model-empty">
-          <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
           <p>暂无模型配置</p>
         </div>
       </div>
@@ -149,9 +145,7 @@
             <!-- Header -->
             <div class="modal-header">
               <h4 id="model-dialog-title">{{ isEditing ? '编辑模型' : '添加模型' }}</h4>
-              <button class="modal-close" @click="closeDialog">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
+              <button class="modal-close" title="关闭" aria-label="关闭" @click="closeDialog">×</button>
             </div>
 
             <!-- Body -->
@@ -828,8 +822,8 @@ function formatTokenCount(n: number): string {
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 16px;
+  gap: var(--spacing-8);
+  margin-bottom: var(--spacing-16);
   flex-shrink: 0;
 }
 
@@ -837,12 +831,12 @@ function formatTokenCount(n: number): string {
 .state-loading, .state-error {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 16px;
-  font-size: 13px;
+  gap: var(--spacing-8);
+  padding: var(--spacing-16);
+  font-size: 1rem;
   color: var(--text-secondary);
 }
-.state-error { color: var(--status-error-text); flex-direction: column; align-items: flex-start; gap: 8px; }
+.state-error { color: var(--status-error-text); flex-direction: column; align-items: flex-start; gap: var(--spacing-8); }
 
 .spinner {
   width: 16px; height: 16px;
@@ -859,14 +853,14 @@ function formatTokenCount(n: number): string {
 .model-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--spacing-12);
 }
 
 .model-card {
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
-  padding: 14px 16px;
+  padding: var(--spacing-14) var(--spacing-16);
   transition: border-color 0.15s;
 }
 .model-card:hover { border-color: var(--border-default); }
@@ -876,52 +870,52 @@ function formatTokenCount(n: number): string {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
+  margin-bottom: var(--spacing-10);
 }
 .model-card-title {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--spacing-6);
   flex-wrap: wrap;
 }
-.model-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.model-name { font-size: 1rem; font-weight: 600; color: var(--text-primary); }
 
-.model-card-actions { display: flex; gap: 4px; }
+.model-card-actions { display: flex; gap: var(--spacing-4); }
 
-.model-card-body { display: flex; flex-direction: column; gap: 6px; }
+.model-card-body { display: flex; flex-direction: column; gap: var(--spacing-6); }
 
 .model-field {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 12px;
+  gap: var(--spacing-8);
+  font-size: 0.9231rem;
 }
 .field-label { color: var(--text-secondary); min-width: 56px; }
 .field-value { color: var(--text-primary); }
-.field-monospace { font-family: var(--font-mono); font-size: 11px; }
+.field-monospace { font-family: var(--font-mono); font-size: 0.8462rem; }
 
 .model-params {
   display: flex;
-  gap: 8px;
-  margin-top: 6px;
+  gap: var(--spacing-8);
+  margin-top: var(--spacing-6);
 }
 .param-chip {
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  padding: 3px 8px;
+  padding: 3px var(--spacing-8);
   display: flex;
   align-items: center;
-  gap: 4px;
-  font-size: 11px;
+  gap: var(--spacing-4);
+  font-size: 0.8462rem;
 }
 .param-label { color: var(--text-secondary); }
 .param-value { color: var(--text-primary); font-weight: 500; }
 
 /* Badge */
 .badge {
-  font-size: 10px;
-  padding: 1px 6px;
+  font-size: 0.7692rem;
+  padding: 1px var(--spacing-6);
   border-radius: var(--radius-xl);
   font-weight: 500;
   white-space: nowrap;
@@ -933,10 +927,10 @@ function formatTokenCount(n: number): string {
 .test-status {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  margin-top: 8px;
-  padding-top: 8px;
+  gap: var(--spacing-6);
+  font-size: 0.9231rem;
+  margin-top: var(--spacing-8);
+  padding-top: var(--spacing-8);
   border-top: 1px solid var(--border-subtle);
 }
 .test-ok { color: var(--status-success-text); }
@@ -944,9 +938,9 @@ function formatTokenCount(n: number): string {
 .test-testing { color: var(--text-secondary); }
 .test-latency {
   margin-left: auto;
-  font-size: 11px;
+  font-size: 0.8462rem;
   font-weight: 500;
-  padding: 1px 8px;
+  padding: 1px var(--spacing-8);
   border-radius: var(--radius-xl);
   background: color-mix(in srgb, var(--status-success-text) 13%, transparent);
   color: var(--status-success-text);
@@ -959,11 +953,11 @@ function formatTokenCount(n: number): string {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 40px 20px;
+  padding: 40px var(--spacing-20);
   color: var(--text-tertiary);
-  gap: 8px;
+  gap: var(--spacing-8);
 }
-.model-empty p { margin: 0; font-size: 13px; }
+.model-empty p { margin: 0; font-size: 1rem; }
 
 /* 按钮 */
 
@@ -1015,42 +1009,43 @@ function formatTokenCount(n: number): string {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 20px;
+  padding: var(--spacing-16) var(--spacing-20);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
-.modal-header h4 { margin: 0; font-size: 14px; font-weight: 600; }
+.modal-header h4 { margin: 0; font-size: 1.0769rem; font-weight: 600; }
 
 .modal-close {
   width: 28px; height: 28px;
   display: flex; align-items: center; justify-content: center;
   background: transparent; border: none; border-radius: var(--radius-sm);
   color: var(--text-secondary); cursor: pointer; transition: all 0.15s;
+  font-size: 1.3846rem; line-height: 1;
 }
 .modal-close:hover { background: var(--bg-hover); color: var(--text-primary); }
 
-.modal-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; }
+.modal-body { padding: var(--spacing-16) var(--spacing-20); display: flex; flex-direction: column; gap: var(--spacing-14); }
 .modal-footer {
-  display: flex; justify-content: flex-end; gap: 8px;
-  padding: 12px 20px;
+  display: flex; justify-content: flex-end; gap: var(--spacing-8);
+  padding: var(--spacing-12) var(--spacing-20);
   border-top: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
 
 /* ── Form ── */
-.form-group { display: flex; flex-direction: column; gap: 4px; }
-.form-label { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
-.form-hint { margin: 0; font-size: 11px; color: var(--text-tertiary); }
+.form-group { display: flex; flex-direction: column; gap: var(--spacing-4); }
+.form-label { font-size: 0.9231rem; color: var(--text-secondary); font-weight: 500; }
+.form-hint { margin: 0; font-size: 0.8462rem; color: var(--text-tertiary); }
 .form-hint.warn { color: var(--status-warn-text); }
 .required { color: var(--status-error-text); }
 .form-input {
   width: 100%;
-  padding: 8px 10px;
+  padding: var(--spacing-8) var(--spacing-10);
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 1rem;
   font-family: inherit;
   outline: none;
   transition: border-color 0.15s, box-shadow 0.15s;
@@ -1065,7 +1060,7 @@ function formatTokenCount(n: number): string {
   justify-content: space-between;
 }
 .local-note {
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--status-success-text);
 }
 
@@ -1103,13 +1098,13 @@ function formatTokenCount(n: number): string {
 .provider-selected {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
+  gap: var(--spacing-8);
+  padding: var(--spacing-8) var(--spacing-10);
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 1rem;
   transition: border-color 0.15s;
 }
 .provider-selected:hover { border-color: var(--border-default); }
@@ -1131,16 +1126,16 @@ function formatTokenCount(n: number): string {
   box-shadow: var(--shadow-lg);
   z-index: 10;
   overflow: hidden;
-  padding: 4px;
+  padding: var(--spacing-4);
 }
 
 .provider-option {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
+  gap: var(--spacing-8);
+  padding: var(--spacing-8) var(--spacing-10);
   border-radius: var(--radius-md);
-  font-size: 13px;
+  font-size: 1rem;
   color: var(--text-primary);
   cursor: pointer;
   transition: all 0.1s;
@@ -1167,8 +1162,8 @@ function formatTokenCount(n: number): string {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
-  font-size: 13px;
+  padding: var(--spacing-10) var(--spacing-12);
+  font-size: 1rem;
   color: var(--text-secondary);
   cursor: pointer;
   background: var(--bg-input);
@@ -1180,10 +1175,10 @@ function formatTokenCount(n: number): string {
 .advanced-toggle svg.open { transform: rotate(180deg); }
 
 .advanced-body {
-  padding: 12px;
+  padding: var(--spacing-12);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--spacing-12);
   /* 不画底：折叠体是内容、不是第二层表面，先前画 --bg-base 等于在 --bg-elevated
      的对话框上挖一个洞（且里面 .form-input / .token-chip 全取 --bg-input，洞比它们
      还深一档）。上面那条 .advanced-toggle 才是控件皮肤，它读 --bg-input 是对的。 */
@@ -1207,16 +1202,16 @@ function formatTokenCount(n: number): string {
 .capability-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 16px;
+  gap: var(--spacing-8) var(--spacing-16);
 }
 .capability-item {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
+  gap: var(--spacing-6);
+  font-size: 0.9231rem;
   color: var(--text-primary);
   cursor: pointer;
-  padding: 4px 0;
+  padding: var(--spacing-4) 0;
 }
 .form-checkbox {
   width: 14px;
@@ -1230,7 +1225,7 @@ function formatTokenCount(n: number): string {
 .temp-slider-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--spacing-10);
 }
 .temp-input {
   width: 60px;
@@ -1268,15 +1263,15 @@ function formatTokenCount(n: number): string {
 /* Token 芯片 */
 .token-chips {
   display: flex;
-  gap: 6px;
+  gap: var(--spacing-6);
   flex-wrap: wrap;
 }
 .token-chip {
-  padding: 5px 12px;
+  padding: 5px var(--spacing-12);
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.15s;

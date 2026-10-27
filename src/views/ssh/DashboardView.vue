@@ -235,7 +235,7 @@
         <div ref="connPickerRef" class="dc-dialog" role="dialog" aria-modal="true" aria-label="选择 SSH 连接" tabindex="-1">
           <div class="dc-header">
             <span>选择 SSH 连接</span>
-            <button class="dc-close" @click="showConnPicker = false">×</button>
+            <button class="dc-close" title="关闭" aria-label="关闭" @click="showConnPicker = false">×</button>
           </div>
           <div class="dc-list">
             <div v-if="sshStore.connections.length === 0" class="dc-empty">
@@ -252,7 +252,6 @@
               @keydown.enter.prevent="handleConnect(conn)"
               @keydown.space.prevent="handleConnect(conn)"
             >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
               <div class="dc-info">
                 <span class="dc-name">{{ conn.name }}</span>
                 <span class="dc-host">{{ conn.username }}@{{ conn.host }}:{{ conn.port }}<span v-if="connNote(conn)" class="dc-note" :title="connNote(conn)">{{ connNote(conn) }}</span></span>
@@ -270,7 +269,7 @@
         <div ref="killDialogRef" class="dc-dialog dc-dialog-sm" role="dialog" aria-modal="true" aria-label="确认终止进程" tabindex="-1">
           <div class="dc-header">
             <span>确认终止进程</span>
-            <button class="dc-close" @click="killDialog.visible = false">×</button>
+            <button class="dc-close" title="关闭" aria-label="关闭" @click="killDialog.visible = false">×</button>
           </div>
           <div class="dc-kill-body">
             <p class="dc-kill-line"><span class="dc-kill-label">PID</span><span class="mono dc-kill-val">{{ killDialog.target?.pid }}</span></p>
@@ -631,15 +630,15 @@ const Sparkline = defineComponent({
   align-items: center;
   justify-content: space-between;
   height: var(--page-head-h);
-  padding: 0 16px;
+  padding: 0 var(--spacing-16);
   border-bottom: 1px solid var(--border-subtle);
-  gap: 12px;
+  gap: var(--spacing-12);
 }
 
 .conn-left {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-8);
   min-width: 0;
 }
 
@@ -664,7 +663,7 @@ const Sparkline = defineComponent({
 }
 
 .conn-host {
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-weight: 400;
   color: var(--text-secondary);
   font-family: var(--font-mono);
@@ -674,12 +673,12 @@ const Sparkline = defineComponent({
 .conn-right {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--spacing-10);
   flex-shrink: 0;
 }
 
 .conn-stopped {
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--accent-red);
   max-width: 480px;
   overflow: hidden;
@@ -698,9 +697,9 @@ const Sparkline = defineComponent({
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: var(--spacing-8);
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 1rem;
 }
 
 .dash-empty-err {
@@ -708,7 +707,7 @@ const Sparkline = defineComponent({
 }
 
 .dash-empty-sub {
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-tertiary);
   max-width: 420px;
   text-align: center;
@@ -722,7 +721,7 @@ const Sparkline = defineComponent({
 .dash-body {
   flex: 1;
   overflow-y: auto;
-  padding: 16px;
+  padding: var(--spacing-16);
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -733,11 +732,11 @@ const Sparkline = defineComponent({
 .dash-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
+  gap: var(--spacing-12);
 }
 
 .card {
-  padding: 12px 14px;
+  padding: var(--spacing-12) var(--spacing-14);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
@@ -747,17 +746,17 @@ const Sparkline = defineComponent({
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  margin-bottom: 6px;
+  margin-bottom: var(--spacing-6);
 }
 
 .card-label {
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
   letter-spacing: 0.4px;
 }
 
 .card-val {
-  font-size: 20px;
+  font-size: 1.5385rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
@@ -767,8 +766,8 @@ const Sparkline = defineComponent({
 .card.tone-danger .card-val { color: var(--metric-hot); }
 
 .card-sub {
-  margin-top: 4px;
-  font-size: 11px;
+  margin-top: var(--spacing-4);
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
 }
 
@@ -783,21 +782,21 @@ const Sparkline = defineComponent({
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
-  padding: 12px 14px;
+  padding: var(--spacing-12) var(--spacing-14);
 }
 
 .section-title {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-weight: 600;
   color: var(--text-secondary);
-  margin-bottom: 10px;
+  margin-bottom: var(--spacing-10);
 }
 
 .section-empty {
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-tertiary);
 }
 
@@ -805,14 +804,14 @@ const Sparkline = defineComponent({
 .disk-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--spacing-8);
 }
 
 .disk-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 12px;
+  gap: var(--spacing-10);
+  font-size: 0.9231rem;
 }
 
 .disk-mount {
@@ -851,10 +850,10 @@ const Sparkline = defineComponent({
 }
 
 .section-sub {
-  font-size: 10px;
+  font-size: 0.7692rem;
   font-weight: 400;
   color: var(--text-tertiary);
-  margin-left: 6px;
+  margin-left: var(--spacing-6);
 }
 
 .disk-pct.tone-cool { color: var(--metric-cool); }
@@ -864,7 +863,7 @@ const Sparkline = defineComponent({
 .disk-size {
   width: 120px;
   text-align: right;
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
 }
@@ -873,15 +872,15 @@ const Sparkline = defineComponent({
 .gpu-embed {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--spacing-6);
 }
 
 .gpu-embed-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 2px;
-  font-size: 12px;
+  padding: 0 var(--spacing-2);
+  font-size: 0.9231rem;
   font-weight: 600;
   color: var(--text-secondary);
 }
@@ -891,22 +890,22 @@ const Sparkline = defineComponent({
   width: 100%;
   border-collapse: collapse;
   table-layout: fixed; /* 钉死列宽：分页切换时浏览器不再按内容重排，防抖动 */
-  font-size: 12px;
+  font-size: 0.9231rem;
 }
 
 .proc-table th {
   /* 字段居中：表头与单元格同轴，数值列视觉对齐（用户指定） */
   text-align: center;
-  padding: 4px 8px;
+  padding: var(--spacing-4) var(--spacing-8);
   color: var(--text-tertiary);
   font-weight: 500;
-  font-size: 11px;
+  font-size: 0.8462rem;
   border-bottom: 1px solid var(--border-subtle);
 }
 
 .proc-table td {
   text-align: center;
-  padding: 5px 8px;
+  padding: 5px var(--spacing-8);
   border-bottom: 1px solid var(--border-subtle);
   font-variant-numeric: tabular-nums;
 }
@@ -958,7 +957,7 @@ const Sparkline = defineComponent({
 
 .proc-cmd {
   max-width: 100%;
-  font-size: 10px;
+  font-size: 0.7692rem;
   line-height: 1.25;
   color: var(--text-tertiary);
   overflow: hidden;
@@ -979,10 +978,10 @@ const Sparkline = defineComponent({
 
 .proc-stat {
   display: inline-block;
-  padding: 1px 6px;
+  padding: 1px var(--spacing-6);
   border-radius: var(--radius-sm);
   background: var(--bg-hover);
-  font-size: 11px;
+  font-size: 0.8462rem;
   font-family: var(--font-mono);
   color: var(--text-secondary);
   cursor: help;
@@ -994,12 +993,12 @@ const Sparkline = defineComponent({
 }
 
 .proc-kill {
-  padding: 2px 8px;
+  padding: var(--spacing-2) var(--spacing-8);
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--accent-red);
-  font-size: 11px;
+  font-size: 0.8462rem;
   cursor: pointer;
   opacity: 0;
   transition: opacity var(--transition-fast), background var(--transition-fast);
@@ -1025,22 +1024,22 @@ const Sparkline = defineComponent({
   width: 100%;
   border-collapse: collapse;
   table-layout: fixed; /* 钉死列宽：数据/分页切换时浏览器不再按内容重排，防抖动 */
-  font-size: 12px;
+  font-size: 0.9231rem;
 }
 
 .port-table th {
   /* 字段居中：与 proc-table 同规则，表头与单元格同轴 */
   text-align: center;
-  padding: 4px 8px;
+  padding: var(--spacing-4) var(--spacing-8);
   color: var(--text-tertiary);
   font-weight: 500;
-  font-size: 11px;
+  font-size: 0.8462rem;
   border-bottom: 1px solid var(--border-subtle);
 }
 
 .port-table td {
   text-align: center;
-  padding: 5px 8px;
+  padding: 5px var(--spacing-8);
   border-bottom: 1px solid var(--border-subtle);
   font-variant-numeric: tabular-nums;
 }
@@ -1063,10 +1062,10 @@ const Sparkline = defineComponent({
 
 .port-proto-tag {
   display: inline-block;
-  padding: 1px 6px;
+  padding: 1px var(--spacing-6);
   border-radius: var(--radius-sm);
   background: var(--bg-hover);
-  font-size: 10px;
+  font-size: 0.7692rem;
   font-family: var(--font-mono);
   color: var(--text-secondary);
 }
@@ -1084,8 +1083,8 @@ const Sparkline = defineComponent({
 }
 
 .port-pid {
-  margin-left: 8px;
-  font-size: 10px;
+  margin-left: var(--spacing-8);
+  font-size: 0.7692rem;
   color: var(--text-tertiary);
 }
 
@@ -1124,16 +1123,16 @@ const Sparkline = defineComponent({
 }
 
 .port-svc {
-  margin-left: 6px;
-  font-size: 10px;
+  margin-left: var(--spacing-6);
+  font-size: 0.7692rem;
   font-family: var(--font-sans);
   color: var(--text-tertiary);
 }
 
 /* ── 端口双栈标记 ⇄：通配地址折叠后提示存在备选地址（IPv4/IPv6） ── */
 .port-alt-hint {
-  margin-left: 4px;
-  font-size: 10px;
+  margin-left: var(--spacing-4);
+  font-size: 0.7692rem;
   color: var(--text-tertiary);
   cursor: help;
   vertical-align: middle;
@@ -1149,16 +1148,16 @@ const Sparkline = defineComponent({
 .port-pager {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--spacing-4);
 }
 
 .port-page-btn {
   border: none;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: 1.0769rem;
   line-height: 1;
-  padding: 1px 6px;
+  padding: 1px var(--spacing-6);
   border-radius: var(--radius-sm);
   cursor: pointer;
 }
@@ -1175,7 +1174,7 @@ const Sparkline = defineComponent({
 
 .port-page-ind {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 0.7692rem;
   color: var(--text-tertiary);
   min-width: 30px;
   text-align: center;
@@ -1183,12 +1182,12 @@ const Sparkline = defineComponent({
 
 /* ── 窄窗口 ── */
 @media (max-width: 760px) {
-  .dash-body { padding: 12px; gap: 14px; }
+  .dash-body { padding: var(--spacing-12); gap: var(--spacing-14); }
   .conn-stopped { max-width: 220px; }
-  .dash-section { padding: 10px 12px; }
-  .disk-row { gap: 6px; }
-  .disk-mount { width: 76px; font-size: 11px; }
-  .disk-size { width: 84px; font-size: 10px; }
+  .dash-section { padding: var(--spacing-10) var(--spacing-12); }
+  .disk-row { gap: var(--spacing-6); }
+  .disk-mount { width: 76px; font-size: 0.8462rem; }
+  .disk-size { width: 84px; font-size: 0.7692rem; }
   /* 原来这里封 .proc-name 110px 防溢出；列宽改按比例后固定布局自己会缩，
      封顶反而白丢名称列的宽度（副行更需要它） */
 }
@@ -1228,9 +1227,9 @@ const Sparkline = defineComponent({
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 18px;
+  padding: var(--spacing-14) 18px;
   border-bottom: 1px solid var(--border-subtle);
-  font-size: 14px;
+  font-size: 1.0769rem;
   font-weight: 600;
   color: var(--text-primary);
   flex-shrink: 0;
@@ -1242,7 +1241,7 @@ const Sparkline = defineComponent({
   border: none;
   background: transparent;
   color: var(--text-tertiary);
-  font-size: 18px;
+  font-size: 1.3846rem;
   cursor: pointer;
   border-radius: var(--radius-sm);
   display: flex;
@@ -1258,21 +1257,21 @@ const Sparkline = defineComponent({
 
 .dc-list {
   overflow-y: auto;
-  padding: 8px;
+  padding: var(--spacing-8);
 }
 
 .dc-empty {
   padding: 28px 18px;
   text-align: center;
   color: var(--text-tertiary);
-  font-size: 13px;
+  font-size: 1rem;
 }
 
 .dc-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
+  gap: var(--spacing-10);
+  padding: var(--spacing-10) var(--spacing-12);
   border-radius: var(--radius-md);
   cursor: pointer;
   transition: background var(--transition-fast);
@@ -1292,11 +1291,11 @@ const Sparkline = defineComponent({
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--spacing-2);
 }
 
 .dc-name {
-  font-size: 13px;
+  font-size: 1rem;
   color: var(--text-primary);
   font-weight: 500;
   overflow: hidden;
@@ -1305,7 +1304,7 @@ const Sparkline = defineComponent({
 }
 
 .dc-host {
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
   font-family: var(--font-mono);
   overflow: hidden;
@@ -1315,7 +1314,7 @@ const Sparkline = defineComponent({
 
 /* 快连卡片上的备注：跟在主机行后，同为次级信息但用正文字族（备注多为中文） */
 .dc-note {
-  margin-left: 6px;
+  margin-left: var(--spacing-6);
   font-family: var(--font-sans);
   color: var(--text-secondary);
 }
@@ -1338,15 +1337,15 @@ const Sparkline = defineComponent({
 }
 
 .dc-kill-body {
-  padding: 16px 18px;
+  padding: var(--spacing-16) 18px;
 }
 
 .dc-kill-line {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin: 0 0 8px;
-  font-size: 13px;
+  gap: var(--spacing-12);
+  margin: 0 0 var(--spacing-8);
+  font-size: 1rem;
 }
 
 .dc-kill-label {
@@ -1354,7 +1353,7 @@ const Sparkline = defineComponent({
   flex-shrink: 0;
   color: var(--text-tertiary);
   text-align: right;
-  font-size: 12px;
+  font-size: 0.9231rem;
 }
 
 .dc-kill-val {
@@ -1363,10 +1362,10 @@ const Sparkline = defineComponent({
 }
 
 .dc-kill-hint {
-  margin: 14px 0 0;
-  padding-top: 12px;
+  margin: var(--spacing-14) 0 0;
+  padding-top: var(--spacing-12);
   border-top: 1px solid var(--border-subtle);
-  font-size: 11px;
+  font-size: 0.8462rem;
   line-height: 1.6;
   color: var(--text-tertiary);
 }
@@ -1374,21 +1373,21 @@ const Sparkline = defineComponent({
 .dc-kill-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  padding: 12px 18px;
+  gap: var(--spacing-8);
+  padding: var(--spacing-12) 18px;
   border-top: 1px solid var(--border-subtle);
 }
 
 .dc-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 14px;
+  gap: var(--spacing-6);
+  padding: var(--spacing-6) var(--spacing-14);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   cursor: pointer;
   transition: all var(--transition-fast);
 }

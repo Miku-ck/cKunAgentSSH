@@ -9,7 +9,6 @@
     <!-- 头部 -->
     <div class="schedules-header">
       <div class="schedules-title">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 16 14"/></svg>
         <span>定时任务</span>
         <span class="schedules-sub" v-if="items.length">共 {{ items.length }} 个任务</span>
       </div>
@@ -831,9 +830,9 @@ onUnmounted(() => {
   background: var(--canvas-bg);
 }
 /* 入口分段 tab（定时任务 | 运维剧本）：小段控件，选中态走 accent */
-.entry-tabs { display: flex; gap: 4px; padding: 8px 16px 0; flex-shrink: 0; }
+.entry-tabs { display: flex; gap: var(--spacing-4); padding: var(--spacing-8) var(--spacing-16) 0; flex-shrink: 0; }
 .entry-tabs button {
-  padding: 5px 14px; font-size: 12px; border-radius: var(--radius-md) var(--radius-md) 0 0; cursor: pointer;
+  padding: 5px var(--spacing-14); font-size: 0.9231rem; border-radius: var(--radius-md) var(--radius-md) 0 0; cursor: pointer;
   border: 1px solid transparent; border-bottom: none; background: transparent;
   color: var(--text-secondary);
 }
@@ -850,42 +849,42 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   height: var(--page-head-h);
-  padding: 0 16px;
+  padding: 0 var(--spacing-16);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
-.schedules-title { display: flex; align-items: center; gap: 8px; font-size: var(--page-title-size); font-weight: 600; color: var(--text-primary); font-family: var(--font-sans); }
-.schedules-sub { font-size: 12px; color: var(--text-tertiary); font-weight: 400; }
-.schedules-actions { display: flex; gap: 8px; }
+.schedules-title { display: flex; align-items: center; gap: var(--spacing-8); font-size: var(--page-title-size); font-weight: 600; color: var(--text-primary); font-family: var(--font-sans); }
+.schedules-sub { font-size: 0.9231rem; color: var(--text-tertiary); font-weight: 400; }
+.schedules-actions { display: flex; gap: var(--spacing-8); }
 
 
-.schedule-list { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 10px; padding: 12px 16px 16px; }
+.schedule-list { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: var(--spacing-10); padding: var(--spacing-12) var(--spacing-16) var(--spacing-16); }
 .schedule-card {
   border: 1px solid var(--border-subtle);
   border-left: 3px solid var(--accent-primary);
   border-radius: var(--radius-lg);
-  padding: 12px 14px;
+  padding: var(--spacing-12) var(--spacing-14);
 }
 /* 日常任务色条：沿用成功/绿语义 token，不硬编码色值（spec §3） */
 .schedule-card.daily { border-left-color: var(--accent-green); }
 .schedule-section-title {
-  display: flex; align-items: baseline; gap: 8px;
-  font-size: 13px; font-weight: 600; color: var(--text-primary); margin-top: 4px;
+  display: flex; align-items: baseline; gap: var(--spacing-8);
+  font-size: 1rem; font-weight: 600; color: var(--text-primary); margin-top: var(--spacing-4);
 }
-.schedule-section-title .cnt { font-size: 11px; font-weight: 400; color: var(--text-tertiary); }
+.schedule-section-title .cnt { font-size: 0.8462rem; font-weight: 400; color: var(--text-tertiary); }
 /* 卡片头：名称单行省略，右侧按钮组不被挤压（5 个按钮在窄宽下是硬需求） */
-.schedule-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
-.schedule-name { font-size: 14px; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 8px; min-width: 0; }
+.schedule-card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-12); min-width: 0; }
+.schedule-name { font-size: 1.0769rem; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: var(--spacing-8); min-width: 0; }
 .name-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.toggle, .status { flex-shrink: 0; font-size: 11px; padding: 1px 8px; border-radius: var(--radius-lg); border: 1px solid var(--border-subtle); }
+.toggle, .status { flex-shrink: 0; font-size: 0.8462rem; padding: 1px var(--spacing-8); border-radius: var(--radius-lg); border: 1px solid var(--border-subtle); }
 .toggle.on { color: var(--accent-green); border-color: var(--accent-green); }
-.schedule-card-actions { display: flex; gap: 6px; flex-shrink: 0; }
-.schedule-card-meta { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--text-secondary); margin-top: 8px; overflow-wrap: anywhere; }
+.schedule-card-actions { display: flex; gap: var(--spacing-6); flex-shrink: 0; }
+.schedule-card-meta { display: flex; flex-wrap: wrap; gap: var(--spacing-14); font-size: 0.9231rem; color: var(--text-secondary); margin-top: var(--spacing-8); overflow-wrap: anywhere; }
 .meta-item { text-align: left; }
 .meta-item b { color: var(--text-primary); font-weight: 600; }
 .mono { font-family: var(--font-mono); }
-.schedule-card-body { margin-top: 8px; font-size: 12px; }
-.schedule-card-body .k { color: var(--text-tertiary); margin-bottom: 4px; text-align: left; }
+.schedule-card-body { margin-top: var(--spacing-8); font-size: 0.9231rem; }
+.schedule-card-body .k { color: var(--text-tertiary); margin-bottom: var(--spacing-4); text-align: left; }
 .prompt { color: var(--text-secondary); white-space: pre-wrap; overflow-wrap: anywhere; text-align: left; }
 
 .status.running { color: var(--accent-text); border-color: var(--accent-primary); }
@@ -893,52 +892,52 @@ onUnmounted(() => {
 .status.failed { color: var(--accent-red); border-color: var(--accent-red); }
 .status.waiting_permission { color: var(--accent-orange); border-color: var(--accent-orange); }
 
-.empty-state { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-tertiary); font-size: 13px; padding: 16px; }
-.sc-loading { color: var(--text-tertiary); font-size: 12px; padding: 0 16px 12px; }
-.sc-error { color: var(--accent-red); font-size: 12px; padding: 0 16px 12px; }
+.empty-state { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-tertiary); font-size: 1rem; padding: var(--spacing-16); }
+.sc-loading { color: var(--text-tertiary); font-size: 0.9231rem; padding: 0 var(--spacing-16) var(--spacing-12); }
+.sc-error { color: var(--accent-red); font-size: 0.9231rem; padding: 0 var(--spacing-16) var(--spacing-12); }
 
 /* 弹窗骨架（遮罩/圆角/投影/焦点/滚动）统一由 BaseModal 提供，本文件不再自绘 */
-.field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-tertiary); }
+.field { display: flex; flex-direction: column; gap: var(--spacing-4); font-size: 0.9231rem; color: var(--text-tertiary); }
 /* 弹窗标题栏右侧的类型分段开关（方案 B） */
-.type-switch { display: inline-flex; gap: 6px; }
-.type-switch .sched-option { padding: 3px 12px; }
+.type-switch { display: inline-flex; gap: var(--spacing-6); }
+.type-switch .sched-option { padding: 3px var(--spacing-12); }
 .type-switch.disabled { opacity: .55; }
 .type-switch .sched-option:disabled { cursor: not-allowed; }
 .field input, .field textarea, .field select {
-  font-size: 12px; padding: 6px 8px; border-radius: var(--radius-md);
+  font-size: 0.9231rem; padding: var(--spacing-6) var(--spacing-8); border-radius: var(--radius-md);
   border: 1px solid var(--border-subtle); background: var(--bg-input); color: var(--text-primary);
 }
-.field.check { flex-direction: row; align-items: center; gap: 6px; }
-.template-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.field.check { flex-direction: row; align-items: center; gap: var(--spacing-6); }
+.template-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--spacing-8); }
 .template-chip {
-  text-align: left; padding: 8px; border-radius: var(--radius-lg); cursor: pointer;
+  text-align: left; padding: var(--spacing-8); border-radius: var(--radius-lg); cursor: pointer;
   border: 1px solid var(--border-subtle); background: var(--bg-hover);
 }
 .template-chip:hover { border-color: var(--text-tertiary); }
 .template-chip.active { border-color: var(--accent-primary); color: var(--text-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
-.template-name { font-size: 12px; font-weight: 600; color: var(--text-primary); }
-.template-desc { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
-.sched-options { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.template-name { font-size: 0.9231rem; font-weight: 600; color: var(--text-primary); }
+.template-desc { font-size: 0.8462rem; color: var(--text-tertiary); margin-top: var(--spacing-2); }
+.sched-options { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--spacing-6); }
 .sched-option {
-  padding: 5px 0; font-size: 12px; border-radius: var(--radius-md); cursor: pointer;
+  padding: 5px 0; font-size: 0.9231rem; border-radius: var(--radius-md); cursor: pointer;
   border: 1px solid var(--border-subtle); background: transparent; color: var(--text-secondary);
 }
 .sched-option:hover { color: var(--text-primary); background: var(--bg-hover); }
 .sched-option.active { color: var(--accent-text); border-color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
-.sched-subrow { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+.sched-subrow { display: flex; align-items: center; gap: var(--spacing-6); font-size: 0.9231rem; color: var(--text-secondary); }
 .sched-subrow .num { width: 56px; }
 .sched-subrow .sel { width: 92px; }
 .sched-subrow input.num, .sched-subrow select.sel {
-  font-size: 12px; padding: 4px 6px; border-radius: var(--radius-md);
+  font-size: 0.9231rem; padding: var(--spacing-4) var(--spacing-6); border-radius: var(--radius-md);
   border: 1px solid var(--border-subtle); background: var(--bg-input); color: var(--text-primary);
 }
 
 .history-load-error {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  font-size: 12px; color: var(--danger-text);
+  display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-10);
+  font-size: 0.9231rem; color: var(--danger-text);
   overflow-wrap: anywhere;
-  border: 1px solid var(--danger-text); border-radius: var(--radius-md); padding: 8px 10px;
+  border: 1px solid var(--danger-text); border-radius: var(--radius-md); padding: var(--spacing-8) var(--spacing-10);
 }
-.empty-small { color: var(--text-tertiary); font-size: 12px; padding: 20px 0; text-align: center; }
+.empty-small { color: var(--text-tertiary); font-size: 0.9231rem; padding: var(--spacing-20) 0; text-align: center; }
 .countdown { color: var(--accent-text); font-weight: 600; }
 </style>

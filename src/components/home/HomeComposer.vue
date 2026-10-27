@@ -622,7 +622,7 @@ onMounted(() => {
   display: block;
   width: 100%;
   box-sizing: border-box;
-  padding: 14px 16px 6px;
+  padding: var(--spacing-14) var(--spacing-16) var(--spacing-6);
   background: transparent;
   /* 横线画在 textarea 自己的内容盒上：折行也跟着行走，不需要数行数。
      --rule-line 只在手记主题有值，其余主题是 transparent（组件不写主题分支）。 */
@@ -644,7 +644,7 @@ onMounted(() => {
   overflow-y: hidden;
   color: var(--text-primary);
   font-family: var(--font-sans);
-  font-size: 15px;
+  font-size: 1.1538rem;
   line-height: var(--hcc-lh);
   caret-color: var(--accent-primary);
 }
@@ -656,8 +656,8 @@ onMounted(() => {
 .hcc-foot {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px 9px 12px;
+  gap: var(--spacing-8);
+  padding: var(--spacing-8) var(--spacing-10) 9px var(--spacing-12);
   /* 底栏那一道折痕与次级纸面都归主题：--card-foot-* 在非手记主题 = 今天的样子
      （透明底 + 实线分隔），组件里不写主题分支（同 --rule-line 的做法） */
   border-top: var(--card-foot-rule);
@@ -676,7 +676,7 @@ onMounted(() => {
   padding: 0 9px;
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   transition: background var(--transition-fast);
 }
 .hcc-btn b { font-weight: 500; color: var(--text-primary) }
@@ -684,11 +684,11 @@ onMounted(() => {
 .hcc-btn:disabled { opacity: .5; cursor: default }
 .hcc-btn.empty b { color: var(--accent-orange) }
 /* ＋ 是底栏唯一的上下文入口（故事 5），做成方角小方块让它一眼是"加"而不是一个词 */
-.hcc-btn.plus { width: 26px; padding: 0; justify-content: center; font-size: 15px }
+.hcc-btn.plus { width: 26px; padding: 0; justify-content: center; font-size: 1.1538rem }
 .hcc-divider {
   width: 1px;
   height: 14px;
-  margin: 0 2px;
+  margin: 0 var(--spacing-2);
   background: var(--border-subtle);
   flex-shrink: 0;
 }
@@ -703,13 +703,13 @@ onMounted(() => {
 .hcc-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--spacing-4);
   height: 22px;
-  padding: 0 4px 0 8px;
+  padding: 0 var(--spacing-4) 0 var(--spacing-8);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--text-primary) 7%, transparent);
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 0.8462rem;
 }
 .hcc-chip-x {
   display: inline-flex;
@@ -721,7 +721,7 @@ onMounted(() => {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-tertiary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   line-height: 1;
 }
 .hcc-chip-x:hover { background: var(--bg-hover); color: var(--text-primary) }
@@ -731,9 +731,9 @@ onMounted(() => {
 .hcc-target {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--spacing-4);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-secondary);
   white-space: nowrap;
 }
@@ -746,7 +746,7 @@ onMounted(() => {
   top: auto;
   bottom: calc(100% + 6px);
   width: 236px;
-  padding: 4px;
+  padding: var(--spacing-4);
   background: var(--bg-elevated);
   /* 不画框：与卡面同色的一层浮起，靠 shadow 与卡分离（边框是"框"这件事本身） */
   border-radius: var(--radius-md);
@@ -757,8 +757,8 @@ onMounted(() => {
 /* 菜单里的小节标题（技能区）。刻意不是分隔线：手记那套语言靠字重与留白分组，
    再加一条线会和输入卡的行线抢注意力。 */
 .hcc-sep {
-  padding: 7px 8px 3px;
-  font-size: 10px;
+  padding: 7px var(--spacing-8) 3px;
+  font-size: 0.7692rem;
   letter-spacing: .08em;
   color: var(--text-tertiary);
 }
@@ -777,7 +777,7 @@ onMounted(() => {
   transition: background var(--transition-fast);
 }
 .hcc-sep.fold:hover { background: var(--bg-hover) }
-.fold-caret { transition: transform .15s; font-size: 11px }
+.fold-caret { transition: transform .15s; font-size: 0.8462rem }
 .fold-caret.open { transform: rotate(90deg) }
 .fold-n { margin-left: auto; letter-spacing: 0; color: var(--text-secondary) }
 .hcc-opt {
@@ -786,24 +786,24 @@ onMounted(() => {
   gap: 1px;
   width: 100%;
   text-align: left;
-  padding: 6px 8px;
+  padding: var(--spacing-6) var(--spacing-8);
   border-radius: var(--radius-sm);
   transition: background var(--transition-fast);
 }
 .hcc-opt:hover:not(:disabled) { background: var(--bg-hover) }
 /* 上传中：菜单项禁用要有可见差别，否则用户以为点了没反应，再点一次 */
 .hcc-opt:disabled { opacity: .55; cursor: default }
-.hcc-opt .ol { font-size: 12px; color: var(--text-primary) }
-.hcc-opt .od { font-size: 11px; color: var(--text-tertiary); line-height: 1.45 }
+.hcc-opt .ol { font-size: 0.9231rem; color: var(--text-primary) }
+.hcc-opt .od { font-size: 0.8462rem; color: var(--text-tertiary); line-height: 1.45 }
 /* 对勾跟在名字后面：它先前独占网格第二列、垂直跨两行，隔着整行宽度钉在最右，
    读起来像另一列数据而不像"这一条被选了" */
 .hcc-opt .ot {
-  margin-left: 6px;
+  margin-left: var(--spacing-6);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--accent-green);
 }
-.hcc-note { font-size: 11px; color: var(--text-tertiary) }
+.hcc-note { font-size: 0.8462rem; color: var(--text-tertiary) }
 /* 模型选择器坐底栏行尾：margin-left:auto 把它和执行钮一起推到右边。
    下拉从右缘向左展开 —— 220px 的面板按 left:0 开会伸出卡外。 */
 .hcc-sel.model-sel { margin-left: auto }

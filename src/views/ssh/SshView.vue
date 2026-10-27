@@ -58,9 +58,7 @@
               <IconMonitor v-if="s.type === 'remote'" :width="12" :height="12" :stroke-width="2" />
               <IconTerminal v-else :width="12" :height="12" :stroke-width="2" />
               <span class="tab-label">{{ s.name }}</span>
-              <button class="tab-close" aria-label="关闭终端" @click.stop="store.closeSession(s.id)">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
+              <button class="tab-close" aria-label="关闭终端" @click.stop="store.closeSession(s.id)">×</button>
             </div>
           </div>
 
@@ -218,25 +216,20 @@ v-show="s.id === store.activeSessionId"
         @contextmenu.prevent
       >
         <div class="tab-ctx-item" @click="handleTabCtxAction('duplicate')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           复制终端
         </div>
         <div class="tab-ctx-sep"></div>
         <div class="tab-ctx-item" @click="handleTabCtxAction('closeCurrent')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           关闭当前
         </div>
         <div class="tab-ctx-item" @click="handleTabCtxAction('closeLeft')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="15 18 9 12 15 6"/></svg>
           关闭左侧
         </div>
         <div class="tab-ctx-item" @click="handleTabCtxAction('closeRight')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="9 18 15 12 9 6"/></svg>
           关闭右侧
         </div>
         <div class="tab-ctx-sep"></div>
         <div class="tab-ctx-item danger" @click="handleTabCtxAction('closeAll')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg>
           关闭全部
         </div>
       </div>
@@ -636,22 +629,22 @@ defineExpose({
 .tof-btn:hover { color: var(--text-secondary); background: var(--bg-hover); }
 
 /* 远程管理固定页签与右侧会话标签留 4px 间距；只显示图标，按图标尺寸收窄 */
-.term-tab.term-tab-mgr { margin-right: 4px; padding: 0 9px; }
+.term-tab.term-tab-mgr { margin-right: var(--spacing-4); padding: 0 9px; }
 
 .term-tab {
   position: relative;
   height: calc(var(--tabbar-h) - 4px);
-  padding: 0 12px;
+  padding: 0 var(--spacing-12);
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--spacing-6);
   border: 1px solid transparent;
   border-bottom: none;
   border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-family: var(--font-sans);
   white-space: nowrap;
   flex-shrink: 0;
@@ -731,6 +724,8 @@ defineExpose({
   cursor: pointer;
   opacity: 0;
   transition: opacity var(--transition-fast);
+  font-size: 1.0769rem;
+  line-height: 1;
 }
 
 .term-tab:hover .tab-close,
@@ -741,11 +736,6 @@ defineExpose({
 .tab-close:hover {
   background: var(--bg-active);
   color: var(--accent-red);
-}
-
-.tab-close svg {
-  width: 10px;
-  height: 10px;
 }
 
 .term-content {
@@ -866,7 +856,7 @@ defineExpose({
   position: fixed;
   z-index: 9999;
   min-width: 140px;
-  padding: 4px 0;
+  padding: var(--spacing-4) 0;
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
@@ -876,9 +866,9 @@ defineExpose({
 .tab-ctx-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  font-size: 12px;
+  gap: var(--spacing-8);
+  padding: var(--spacing-6) var(--spacing-12);
+  font-size: 0.9231rem;
   color: var(--text-secondary);
   cursor: pointer;
   transition: background var(--transition-fast);
@@ -896,7 +886,7 @@ defineExpose({
 
 .tab-ctx-sep {
   height: 1px;
-  margin: 4px 0;
+  margin: var(--spacing-4) 0;
   background: var(--border-subtle);
 }
 

@@ -18,7 +18,6 @@
           @keydown.enter.prevent="emit('pick', conn)"
           @keydown.space.prevent="emit('pick', conn)"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
           <div class="dk-info">
             <span class="dk-name">{{ conn.name }}</span>
             <span class="dk-host">{{ conn.username }}@{{ conn.host }}:{{ conn.port }}<span v-if="connNote(conn)" class="dk-note" :title="connNote(conn)">{{ connNote(conn) }}</span></span>

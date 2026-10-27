@@ -258,12 +258,12 @@ function onKeydown(e: KeyboardEvent): void {
 
 .palette-input {
   height: 40px;
-  padding: 0 14px;
+  padding: 0 var(--spacing-14);
   border: none;
   border-bottom: 1px solid var(--border-subtle);
   background: transparent;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 1rem;
   font-family: var(--font-sans);
   outline: none;
   flex-shrink: 0;
@@ -276,13 +276,13 @@ function onKeydown(e: KeyboardEvent): void {
 .palette-list {
   flex: 1;
   overflow-y: auto;
-  padding: 4px;
+  padding: var(--spacing-4);
 }
 
 .palette-empty {
   padding: 18px 0;
   text-align: center;
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-tertiary);
 }
 
@@ -290,13 +290,13 @@ function onKeydown(e: KeyboardEvent): void {
   width: 100%;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
+  gap: var(--spacing-8);
+  padding: 7px var(--spacing-10);
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-family: var(--font-sans);
   text-align: left;
   cursor: pointer;
@@ -310,11 +310,11 @@ function onKeydown(e: KeyboardEvent): void {
 .pi-group {
   flex-shrink: 0;
   min-width: 48px;
-  font-size: 10px;
+  font-size: 0.7692rem;
   color: var(--text-tertiary);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  padding: 1px 4px;
+  padding: 1px var(--spacing-4);
   text-align: center;
 }
 
@@ -331,16 +331,16 @@ function onKeydown(e: KeyboardEvent): void {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
 }
 
 .palette-hint {
   display: flex;
-  gap: 14px;
-  padding: 6px 12px;
+  gap: var(--spacing-14);
+  padding: var(--spacing-6) var(--spacing-12);
   border-top: 1px solid var(--border-subtle);
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
   flex-shrink: 0;
 }

@@ -8,9 +8,7 @@
           <span class="badge" :class="rowState">{{ headStatusText }}</span>
           <span v-if="health" class="badge" :class="health">{{ healthLabel }}</span>
           <span v-if="inspect?.compose" class="badge">{{ inspect.compose.project }}<template v-if="inspect.compose.service"> / {{ inspect.compose.service }}</template></span>
-          <button class="dp-close" title="关闭" aria-label="关闭" @click="emit('close')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
+          <button class="dp-close" title="关闭" aria-label="关闭" @click="emit('close')">×</button>
         </div>
 
         <div class="dt-tabs" role="tablist" aria-label="容器详情">
@@ -211,11 +209,9 @@
             <h4>
               <span>日志 <span class="logs-sub mono">docker logs --tail 200</span></span>
               <button class="follow-btn" title="刷新" @click="loadLogs()">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
                 刷新
               </button>
               <button class="follow-btn" :class="{ on: follow }" :aria-pressed="follow" title="实时跟随（每 2.5s 轮询）" @click="setFollow(!follow)">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 7v5l3 2"/></svg>
                 跟随
               </button>
             </h4>
@@ -475,12 +471,12 @@ onUnmounted(() => {
 
 <style scoped>
 .dt-tabs {
-  display: flex; gap: 2px; padding: 6px 18px 0;
+  display: flex; gap: var(--spacing-2); padding: var(--spacing-6) 18px 0;
   border-bottom: 1px solid var(--divider-primary); flex-shrink: 0;
 }
 .dt-tab {
   border: none; background: transparent; border-bottom: 2px solid transparent;
-  color: var(--text-secondary); font-size: 12px; padding: 6px 10px 8px; cursor: pointer;
+  color: var(--text-secondary); font-size: 0.9231rem; padding: var(--spacing-6) var(--spacing-10) var(--spacing-8); cursor: pointer;
   transition: color var(--transition-fast), border-color var(--transition-fast);
 }
 .dt-tab:hover { color: var(--text-primary); }
@@ -491,36 +487,36 @@ onUnmounted(() => {
 .st-dot.exited { background: var(--status-error-text); }
 .st-dot.stopped { background: var(--text-tertiary); }
 
-.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px; }
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: var(--spacing-8); }
 .stat {
-  min-width: 0; display: flex; flex-direction: column; gap: 3px; padding: 8px 10px;
+  min-width: 0; display: flex; flex-direction: column; gap: 3px; padding: var(--spacing-8) var(--spacing-10);
   background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
 }
-.stat-k { font-size: 10px; color: var(--text-tertiary); letter-spacing: .5px; text-transform: uppercase; }
-.stat-v { font-size: 13px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.stat-sub { font-size: 10px; color: var(--text-secondary); }
-.stat-err { margin-top: 6px; font-size: 11px; color: var(--status-error-text); }
+.stat-k { font-size: 0.7692rem; color: var(--text-tertiary); letter-spacing: .5px; text-transform: uppercase; }
+.stat-v { font-size: 1rem; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stat-sub { font-size: 0.7692rem; color: var(--text-secondary); }
+.stat-err { margin-top: var(--spacing-6); font-size: 0.8462rem; color: var(--status-error-text); }
 
 .health-alert {
-  display: flex; flex-direction: column; gap: 6px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: var(--spacing-6); padding: var(--spacing-10) var(--spacing-12);
   background: color-mix(in srgb, var(--status-error-text) 8%, var(--bg-elevated));
   border: 1px solid color-mix(in srgb, var(--status-error-text) 28%, transparent);
   border-radius: var(--radius-md);
 }
 .health-head {
-  display: flex; align-items: center; gap: 8px;
-  font-size: 12px; font-weight: 600; color: var(--status-error-text);
+  display: flex; align-items: center; gap: var(--spacing-8);
+  font-size: 0.9231rem; font-weight: 600; color: var(--status-error-text);
 }
-.health-meta { font-size: 11px; color: var(--text-secondary); word-break: break-all; }
+.health-meta { font-size: 0.8462rem; color: var(--text-secondary); word-break: break-all; }
 .health-out {
-  margin: 0; max-height: 96px; overflow-y: auto; padding: 6px 8px;
-  font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary);
+  margin: 0; max-height: 96px; overflow-y: auto; padding: var(--spacing-6) var(--spacing-8);
+  font-family: var(--font-mono); font-size: 0.8462rem; color: var(--text-secondary);
   background: var(--bg-input); border-radius: var(--radius-sm);
   white-space: pre-wrap; word-break: break-all;
 }
-.health-time { font-size: 10px; color: var(--text-tertiary); }
+.health-time { font-size: 0.7692rem; color: var(--text-tertiary); }
 
-.err-hint { margin-top: 4px; color: var(--text-secondary); }
-.logs-err .btn { margin-top: 8px; }
+.err-hint { margin-top: var(--spacing-4); color: var(--text-secondary); }
+.logs-err .btn { margin-top: var(--spacing-8); }
 .wrap-table td.value-wrap { white-space: pre-wrap; word-break: break-all; }
 </style>

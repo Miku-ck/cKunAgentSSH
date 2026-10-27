@@ -132,25 +132,25 @@ defineExpose({ openEdit })
   background: var(--bg-elevated);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
-  padding: 18px 20px 16px;
+  padding: 18px var(--spacing-20) var(--spacing-16);
   box-shadow: var(--shadow-lg);
   /* 容器只作为初始焦点落点（tabindex=-1），描边交给里面的控件 */
   outline: none;
 }
-.modal h2 { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
-.modal .lede { font-size: 12px; color: var(--text-tertiary); margin-bottom: 14px; }
+.modal h2 { font-size: 1.0769rem; font-weight: 600; margin-bottom: var(--spacing-6); }
+.modal .lede { font-size: 0.9231rem; color: var(--text-tertiary); margin-bottom: var(--spacing-14); }
 .spki {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 0.8846rem;
   color: var(--text-primary);
   background: var(--bg-input);
   border: 1px solid var(--border-input);
   border-radius: var(--radius-sm);
-  padding: 9px 10px;
+  padding: 9px var(--spacing-10);
   line-height: 1.6;
   word-break: break-all;
 }
-.spki .lbl { display: block; color: var(--text-tertiary); font-size: 10.5px; margin-bottom: 3px; }
-.copy-spki { margin-top: 8px; }
-.modal-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.spki .lbl { display: block; color: var(--text-tertiary); font-size: 0.8077rem; margin-bottom: 3px; }
+.copy-spki { margin-top: var(--spacing-8); }
+.modal-foot { display: flex; justify-content: flex-end; gap: var(--spacing-8); margin-top: var(--spacing-16); }
 </style>

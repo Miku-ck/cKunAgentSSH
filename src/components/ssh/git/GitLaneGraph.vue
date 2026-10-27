@@ -93,13 +93,13 @@ const viewRows = computed(() => layout.value.rows.map(r => ({
 </script>
 
 <style scoped>
-.glg { position: relative; font-size: 12px; }
+.glg { position: relative; font-size: 0.9231rem; }
 .glg-svg { position: absolute; left: 0; top: 0; }
 
 .glg-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-8);
   height: 24px;
   border-bottom: 1px solid color-mix(in srgb, var(--divider-primary) 70%, transparent);
   padding-left: calc(var(--glg-lanew) + 10px);
@@ -107,12 +107,12 @@ const viewRows = computed(() => layout.value.rows.map(r => ({
 }
 .glg-row:hover { background: var(--bg-hover); }
 
-.glg-refs { display: flex; gap: 4px; flex-shrink: 0; }
+.glg-refs { display: flex; gap: var(--spacing-4); flex-shrink: 0; }
 
 /* 引用徽章：HEAD 实底强调，本地/远端/标签描边色分（不单靠颜色：文字本身可辨） */
 .glg-ref {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 0.7692rem;
   line-height: 14px;
   padding: 0 5px;
   border-radius: var(--radius-lg);
@@ -128,14 +128,14 @@ const viewRows = computed(() => layout.value.rows.map(r => ({
 .glg-subject {
   flex: 1;
   min-width: 0;
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.glg-meta { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; flex-shrink: 0; }
-.glg-hash { font-size: 11px; color: var(--accent-orange); width: 56px; flex-shrink: 0; }
+.glg-meta { font-size: 0.8462rem; color: var(--text-tertiary); white-space: nowrap; flex-shrink: 0; }
+.glg-hash { font-size: 0.8462rem; color: var(--accent-orange); width: 56px; flex-shrink: 0; }
 
 .glg-line { fill: none; stroke: var(--glg-lane); stroke-width: 1.5; opacity: .9; }
 .glg-dot { stroke: var(--bg-base); stroke-width: 2; fill: var(--glg-lane); }

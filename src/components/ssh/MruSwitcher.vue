@@ -46,7 +46,7 @@ const entries = computed(() => {
   z-index: 900;
   min-width: 200px;
   max-width: 320px;
-  padding: 4px;
+  padding: var(--spacing-4);
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
@@ -57,10 +57,10 @@ const entries = computed(() => {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 5px 8px;
+  padding: 5px var(--spacing-8);
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 0.9231rem;
 }
 
 .mru-row.on {

@@ -9,6 +9,8 @@ cKunAgentSSH 前端（`src/`）的视觉 / 布局 / 交互 / 组件约定。**�
 
 **必须做**
 - 颜色一律走令牌 `var(--*)`；透明色用 `color-mix(in srgb, var(--token) N%, transparent)` 派生。
+- 间距一律走 `--spacing-*` 偶数刻度（2/4/6/8/10/12/14/16/20/24）；奇数值（1/3/5/7/9px）是光学微调，照写 px。
+- 界面字号一律用 `rem` 跟随 `html { font-size }`（外观设置通过它缩放整壳）；消息正文仍读 `--chat-font-size`。
 - 结构背景用 `--bg-base`，卡片/弹窗/菜单/浮层用 `--bg-elevated`。**只有这两级**。
 - 按钮用 `styles/button.css` 的 `.btn-*`；面板用 `settings-panel-base.css`；审批卡用 `approval-card.css`。
 - 空状态双向居中（容器 `flex:1` + 双向 flex center），单行文字说清「这里为什么是空的」。
@@ -27,7 +29,11 @@ cKunAgentSSH 前端（`src/`）的视觉 / 布局 / 交互 / 组件约定。**�
 - 在主题块里改尺寸令牌（`--titlebar-h` 等属版面）。
 - 抽屉式交互（本项目偏好居中弹窗）。历史记录已改为居中弹窗（`HomeHistoryDialog`），不再保留任何抽屉例外。
 - 空状态里重复头部已有的主操作按钮；列表容器与空状态拆成两个同级空壳 div（会平分 `flex:1` 把居中顶偏）。
-- 新建/连接类主操作按钮配装饰图标（`+` / 箭头）——按钮只留文字。
+- 装饰性图标：标题、卡片头、空态、菜单项、带文字的按钮都不配图标；**图标只留给三种情况** ——
+  ① 纯图标控件（关闭/刷新/删除/密码可见性等，必须带 `title`/`aria-label`）；② 标签页的功能图标
+  （终端显示器、Docker 鲸鱼、GitHub Octocat、SFTP 文件夹，窄屏隐藏文字时靠它识别）；
+  ③ 状态指示（展开/折叠与下拉的箭头、文件类型、传输方向、命令补全种类）。
+  关闭按钮用文字 `×`，不再画叉。
 - 独立写 scoped `.btn`、或给共享令牌写回落值。
 
 ---
@@ -42,12 +48,14 @@ cKunAgentSSH 前端（`src/`）的视觉 / 布局 / 交互 / 组件约定。**�
 **文字**：`--text-primary` 正文 · `--text-secondary` 次要 · `--text-tertiary` 最弱（≥4.5:1，已按主题加深）
 **边框**：`--border-default` 可见描边 · `--border-subtle` 弱分隔 · `--divider-primary` 分隔线 · `--border-input` 输入框
 **形状**：`--radius-xs/sm/md/lg/xl` = 2/4/6/8/10px（手记 1/2/3/4/5px） · `--radius-pill` = 999px · `--shadow-sm/lg` · `--transition-fast` = 150ms
+**间距**：`--spacing-2/4/6/8/10/12/14/16/20/24`（px 绝对值，不随主题变；padding / margin / gap 专用）
 **字体**：`--font-sans` 正文 · `--font-mono` 命令/代码 · `--line-height-normal` · `--font-display` 标题 · `--chat-font-size` 消息正文
 **布局**：`--titlebar-h` = 32px · `--tabbar-h` = 34px
 **强调色**：`--accent-primary` / `--accent-primary-rgb` 单一事实源 · `--accent-on` 压强调色底的前景 · `--accent-cyan` 命令行/代码 · `--accent-indigo*` 聊天强调 · `--accent-pink*` 目标 chip
 **语义**：`--status-info/success/warn/error/debug-*`、`--status-tag-*` · `--card-perm-*`/`--card-warn-border` 权限卡 · `--danger-bg/-border/-text` 危险 · `--metric-cool/warm/hot` 监控（<60 绿 / 60–80 黄 / >80 红） · `--tint-l/r/d` 隧道徽标
 
-**字号两套，别混**：界面基础字号 = `html { font-size }`（组件用 `rem` 跟随）；消息正文 = `--chat-font-size`。
+**字号两套，别混**：界面基础字号 = `html { font-size }`（组件用 `rem` 跟随；13px 基准下 12px = 0.9231rem）；消息正文 = `--chat-font-size`。
+页面标题另走 `--page-title-size`（同样以 rem 定义，随基准缩放）。
 
 ---
 
@@ -98,9 +106,10 @@ App.vue (flex column, 100vh)
 **设置面板** [settings-panel-base.css](src/components/settings/panels/settings-panel-base.css)（`<style scoped src>` 引入）：`.panel` / `.panel-header`(h3 14/600 + `.panel-desc` 12 次要) / `.panel-body`(右 padding 4px) · `.setting-select`(28px) · `.retry-btn`。
 **折叠分组** [settings-groups.css](src/components/settings/panels/settings-groups.css)：`.grp` / `.grp-head` / `.grp-caret`(展开转 90°) / `.grp-body` · `.hint`(`.err`/`.muted`) · `.link-btn` · `.flag`(`.ok`/`.vio`)。
 
-**审批/权限卡** [approval-card.css](src/styles/approval-card.css)（`.ap-*`）：`.ap-card`(`--bg-elevated` + `--card-warn-border` + 10px) · `.ap-perm` 权限变体 · `.ap-code`(mono + `--accent-cyan`) · `.ap-risk.*` / `.ap-env.*` 徽章 · `.ap-actions` + `.ap-btn-{grant,always,session,deny}`（语义色是卡片独立的绿/青/灰，不随强调色）。宿主布局留 scoped，覆盖用「宿主类 + .ap-ic」复合选择器。
+**审批/权限卡** [approval-card.css](src/styles/approval-card.css)（`.ap-*`）：`.ap-card`(`--bg-elevated` + `--card-warn-border` + 10px) · `.ap-perm` 权限变体 · `.ap-code`(mono + `--accent-cyan`) · `.ap-risk.*` / `.ap-env.*` 徽章 · `.ap-actions` + `.ap-btn-{grant,always,session,deny}`（语义色是卡片独立的绿/青/灰，不随强调色）。宿主布局留 scoped，覆盖用「宿主类 + .ap-*」复合选择器。
 
-**图标**：内联 SVG，`stroke="currentColor"` + `fill="none"`（自动适配主题）。尺寸：标题栏/标签 14 · 设置导航 16 · 卡内 15 · 按钮内 14。复用图标放 `src/components/icons/`。Docker 入口与页面空态统一鲸鱼图形。
+**图标**：内联 SVG，`stroke="currentColor"` + `fill="none"`（自动适配主题）。尺寸：标题栏/标签 14 · 设置导航 16 · 卡内 15 · 按钮内 14。复用图标放 `src/components/icons/`。
+现存图标只有三类：标签页功能图标、纯图标控件、类型/状态指示（文件类型、传输方向、命令补全种类）。Docker 入口与页面空态统一鲸鱼图形 —— 空态图形是本项目唯一的例外。
 
 **文件类型图标**（上一条的唯一例外）[FileTypeIcon.vue](src/components/icons/FileTypeIcon.vue)：通用类型仍按描边画、颜色读 `--accent-*`；品牌类型（41 枚，simple-icons CC0 vendor 成常量）按填充画、颜色取公布品牌色且**刻意不随主题变**，靠一层 `color-mix(--text-primary 55%)` 的 `paint-order: stroke` 底衬在浅底/米纸上兜轮廓。判据单一来源 `src/components/icons/file-type-icons.ts`，扩展名与文件名只登记一次，别再往组件里抄清单。
 

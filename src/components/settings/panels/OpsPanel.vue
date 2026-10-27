@@ -276,37 +276,37 @@ onMounted(() => {
 <style scoped>
 /* 面板骨架与 .setting-select 见 settings-panel-base.css */
 
-.section { margin-bottom: 24px; }
+.section { margin-bottom: var(--spacing-24); }
 .section-title {
-  margin: 0 0 6px;
-  font-size: 12px;
+  margin: 0 0 var(--spacing-6);
+  font-size: 0.9231rem;
   font-weight: 600;
   color: var(--text-secondary);
   letter-spacing: .04em;
 }
-.state-text { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-primary); }
+.state-text { display: flex; align-items: center; gap: var(--spacing-8); font-size: 0.9231rem; color: var(--text-primary); }
 .muted { color: var(--text-tertiary); }
-.mono { font-family: var(--font-mono); font-size: 11.5px; }
+.mono { font-family: var(--font-mono); font-size: 0.8846rem; }
 .badge {
-  padding: 1px 6px;
+  padding: 1px var(--spacing-6);
   border-radius: var(--radius-pill);
-  font-size: 11px;
+  font-size: 0.8462rem;
   border: 1px solid var(--border-subtle);
 }
 .badge-ok { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); }
 .badge-warn { color: var(--status-warn-text); border-color: color-mix(in srgb, var(--status-warn-text) 40%, transparent); }
-.inline-form { display: flex; align-items: center; gap: 8px; margin: 4px 0 6px; }
+.inline-form { display: flex; align-items: center; gap: var(--spacing-8); margin: var(--spacing-4) 0 var(--spacing-6); }
 .grow { flex: 1; min-width: 0; }
-.num-row { display: flex; align-items: center; gap: 6px; }
+.num-row { display: flex; align-items: center; gap: var(--spacing-6); }
 .num-input { width: 88px; }
-.unit { font-size: 12px; color: var(--text-secondary); }
-.row-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
-.hint { margin: 4px 0 0; font-size: 11.5px; color: var(--text-tertiary); line-height: 1.55; }
+.unit { font-size: 0.9231rem; color: var(--text-secondary); }
+.row-actions { display: flex; align-items: center; gap: var(--spacing-10); margin-top: var(--spacing-8); }
+.hint { margin: var(--spacing-4) 0 0; font-size: 0.8846rem; color: var(--text-tertiary); line-height: 1.55; }
 .hint.error { color: var(--status-error-text); }
 .panel-error {
-  margin: 0 0 10px;
-  padding: 6px 10px;
-  font-size: 12px;
+  margin: 0 0 var(--spacing-10);
+  padding: var(--spacing-6) var(--spacing-10);
+  font-size: 0.9231rem;
   color: var(--status-error-text);
   background: color-mix(in srgb, var(--status-error-text) 8%, transparent);
   border: 1px solid color-mix(in srgb, var(--status-error-text) 25%, transparent);
@@ -314,28 +314,28 @@ onMounted(() => {
 }
 .form-input {
   height: 28px;
-  padding: 0 8px;
+  padding: 0 var(--spacing-8);
   background: var(--bg-input);
   border: 1px solid var(--border-input);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-family: inherit;
   outline: none;
 }
 .form-input:focus { border-color: var(--accent-primary); }
 .form-input.input-error { border-color: var(--status-error-text); }
-.diag-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.diag-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--spacing-6); }
 .diag-grid {
   display: grid;
   grid-template-columns: 150px 1fr;
-  gap: 2px 12px;
-  margin: 8px 0 0;
-  font-size: 11.5px;
+  gap: var(--spacing-2) var(--spacing-12);
+  margin: var(--spacing-8) 0 0;
+  font-size: 0.8846rem;
 }
 .diag-group-title {
   grid-column: 1 / -1;
-  margin-top: 8px;
+  margin-top: var(--spacing-8);
   color: var(--text-secondary);
   font-weight: 600;
   text-align: left;

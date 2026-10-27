@@ -4,18 +4,6 @@
       <div v-if="visible" class="confirm-overlay" @click.self="handleCancel">
         <div ref="dialogRef" class="confirm-dialog" :class="{ danger }" role="alertdialog" aria-modal="true" aria-labelledby="confirm-dialog-title" tabindex="-1">
           <div class="confirm-header">
-            <div class="confirm-icon" :class="{ danger }">
-              <svg v-if="danger" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
-                <circle cx="12" cy="12" r="10"/>
-                <line x1="12" y1="8" x2="12" y2="12"/>
-                <line x1="12" y1="16" x2="12.01" y2="16"/>
-              </svg>
-              <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
-                <circle cx="12" cy="12" r="10"/>
-                <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
-                <line x1="12" y1="17" x2="12.01" y2="17"/>
-              </svg>
-            </div>
             <h3 id="confirm-dialog-title" class="confirm-title">{{ title }}</h3>
           </div>
 
@@ -161,42 +149,24 @@ defineExpose({ open, close })
 .confirm-header {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 18px 20px 12px;
-}
-
-.confirm-icon {
-  flex-shrink: 0;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
-  color: var(--accent-text);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.confirm-icon.danger {
-  background: var(--danger-bg);
-  color: var(--danger-text);
+  padding: 18px var(--spacing-20) var(--spacing-12);
 }
 
 .confirm-title {
   margin: 0;
-  font-size: 14px;
+  font-size: 1.0769rem;
   font-weight: 600;
   color: var(--text-primary);
   line-height: 1.4;
 }
 
 .confirm-body {
-  padding: 0 20px 16px;
+  padding: 0 var(--spacing-20) var(--spacing-16);
 }
 
 .confirm-message {
   margin: 0;
-  font-size: 13px;
+  font-size: 1rem;
   line-height: 1.6;
   color: var(--text-secondary);
   word-wrap: break-word;
@@ -206,8 +176,8 @@ defineExpose({ open, close })
 .confirm-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  padding: 12px 20px 16px;
+  gap: var(--spacing-8);
+  padding: var(--spacing-12) var(--spacing-20) var(--spacing-16);
   border-top: 1px solid var(--border-subtle);
   /* 压暗卡脚用画布自己的色，而不是 rgba(0,0,0,.2)：深色主题下两者同值，
      浅/手记主题下黑色 20% 会把白卡脚糊成灰渍 */
@@ -217,10 +187,10 @@ defineExpose({ open, close })
 .confirm-btn {
   height: 30px;
   min-width: 72px;
-  padding: 0 14px;
+  padding: 0 var(--spacing-14);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-family: inherit;
   cursor: pointer;
   transition: all 0.15s ease;

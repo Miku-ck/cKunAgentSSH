@@ -266,14 +266,14 @@ async function save(): Promise<void> {
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
-  padding: 16px 20px;
+  padding: var(--spacing-16) var(--spacing-20);
   box-shadow: var(--shadow-lg);
   position: relative;
 }
 .modal h2 {
-  font-size: 14px;
+  font-size: 1.0769rem;
   font-weight: 600;
-  margin-bottom: 16px;
+  margin-bottom: var(--spacing-16);
 }
 .modal-close {
   position: absolute;
@@ -283,7 +283,7 @@ async function save(): Promise<void> {
   border: none;
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 16px;
+  font-size: 1.2308rem;
   width: 24px;
   height: 24px;
   display: inline-flex;
@@ -294,11 +294,11 @@ async function save(): Promise<void> {
 }
 .modal-close:hover { background: var(--bg-hover); color: var(--text-primary); }
 .field {
-  margin-bottom: 14px;
+  margin-bottom: var(--spacing-14);
 }
 .field > label {
   display: block;
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-secondary);
   margin-bottom: 5px;
 }
@@ -311,7 +311,7 @@ async function save(): Promise<void> {
   border-radius: var(--radius-sm);
   color: var(--text-primary);
   padding: 0 9px;
-  font-size: 12.5px;
+  font-size: 0.9615rem;
   font-family: var(--font-sans);
   outline: none;
 }
@@ -319,15 +319,15 @@ async function save(): Promise<void> {
 .field select:focus { border-color: var(--accent-primary); }
 .field input:disabled { opacity: 0.5; cursor: not-allowed; }
 .field .hint {
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
-  margin-top: 4px;
+  margin-top: var(--spacing-4);
 }
 .field .err {
   display: none;
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--danger-text);
-  margin-top: 4px;
+  margin-top: var(--spacing-4);
 }
 /* 内联校验错误：.bad 才显示（含无输入时兜底文案） */
 .field.bad input { border-color: var(--accent-red); }
@@ -336,7 +336,7 @@ async function save(): Promise<void> {
 .field-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: var(--spacing-10);
 }
 
 .seg {
@@ -351,13 +351,13 @@ async function save(): Promise<void> {
   background: transparent;
   border: none;
   color: var(--text-secondary);
-  font-size: 12.5px;
+  font-size: 0.9615rem;
   font-family: var(--font-sans);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: var(--spacing-6);
   transition: background var(--transition-fast);
 }
 .seg button + button { border-left: 1px solid var(--border-input); }
@@ -367,7 +367,7 @@ async function save(): Promise<void> {
 }
 .mini {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 0.7692rem;
   font-weight: 700;
   padding: 1px 5px;
   border-radius: var(--radius-sm);
@@ -387,20 +387,20 @@ async function save(): Promise<void> {
 
 .confirm-box {
   display: flex;
-  gap: 8px;
+  gap: var(--spacing-8);
   align-items: flex-start;
-  font-size: 11.5px;
+  font-size: 0.8846rem;
   color: var(--danger-text);
   background: var(--danger-bg);
   border: 1px solid var(--danger-border);
   border-radius: var(--radius-sm);
-  padding: 8px 10px;
-  margin-bottom: 14px;
+  padding: var(--spacing-8) var(--spacing-10);
+  margin-bottom: var(--spacing-14);
 }
 .modal-foot {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--spacing-8);
   margin-top: 18px;
 }
 </style>

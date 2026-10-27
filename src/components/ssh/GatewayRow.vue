@@ -41,9 +41,6 @@
         @click="$emit('toggle')"
       >
         <svg v-if="showSpinner" class="spinner" viewBox="0 0 24 24" fill="none" width="14" height="14"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.25"/><path d="M22 12a10 10 0 0 0-10-10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
-        <svg v-else-if="state === 'online'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="14" height="14"><path d="M12 3v9"/><path d="M6.6 6.6a8 8 0 1 0 10.8 0"/></svg>
-        <svg v-else-if="state === 'reconnecting'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
-        <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
         <span>{{ actionLabel }}</span>
       </button>
       <button class="row-btn more" title="更多操作" @click.stop="$emit('menu', $event)">
@@ -158,9 +155,9 @@ function formatDate(ts: number): string {
   display: grid;
   grid-template-columns: var(--rm-grid-cols, 22px 12px minmax(110px, 1.1fr) minmax(160px, 1.4fr) 60px minmax(80px, 0.9fr) 84px 84px 112px);
   align-items: center;
-  gap: 10px;
+  gap: var(--spacing-10);
   height: 44px;
-  padding: 0 12px;
+  padding: 0 var(--spacing-12);
   border-bottom: 1px solid var(--border-subtle);
   cursor: default;
   transition: background var(--transition-fast);
@@ -225,8 +222,8 @@ function formatDate(ts: number): string {
 .cell-name {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 13px;
+  gap: var(--spacing-6);
+  font-size: 1rem;
   color: var(--text-primary);
   font-weight: 500;
 }
@@ -240,9 +237,9 @@ function formatDate(ts: number): string {
 
 .type-badge {
   flex-shrink: 0;
-  padding: 1px 4px;
+  padding: 1px var(--spacing-4);
   border-radius: var(--radius-sm);
-  font-size: 9px;
+  font-size: 0.6923rem;
   font-weight: 600;
   letter-spacing: 0.3px;
   color: var(--accent-text);
@@ -250,7 +247,7 @@ function formatDate(ts: number): string {
 }
 
 .cell-host {
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-secondary);
   font-family: var(--font-mono);
 }
@@ -270,9 +267,9 @@ function formatDate(ts: number): string {
 
 .auth-badge {
   display: inline-block;
-  padding: 2px 8px;
+  padding: var(--spacing-2) var(--spacing-8);
   border-radius: var(--radius-sm);
-  font-size: 10px;
+  font-size: 0.7692rem;
   font-weight: 500;
   white-space: nowrap;
   color: var(--accent-text);
@@ -280,7 +277,7 @@ function formatDate(ts: number): string {
 }
 
 .cell-tags {
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-secondary);
   font-weight: 400;
 }
@@ -290,13 +287,13 @@ function formatDate(ts: number): string {
 
 .cell-time,
 .cell-created {
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
 }
 
 .cell-actions {
   display: flex;
-  gap: 4px;
+  gap: var(--spacing-4);
   justify-content: flex-end;
   align-items: center;
   opacity: 0;
@@ -311,15 +308,15 @@ function formatDate(ts: number): string {
 .row-btn {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--spacing-4);
   height: 26px;
-  padding: 0 8px;
+  padding: 0 var(--spacing-8);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 11px;
+  font-size: 0.8462rem;
   font-family: var(--font-sans);
   transition: all var(--transition-fast);
 }

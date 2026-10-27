@@ -13,12 +13,7 @@
           <!-- Header -->
           <header class="settings-header">
             <h2 id="settings-dialog-title">设置</h2>
-            <button class="close-btn" @click="close" aria-label="关闭">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                <line x1="18" y1="6" x2="6" y2="18"/>
-                <line x1="6" y1="6" x2="18" y2="18"/>
-              </svg>
-            </button>
+            <button class="close-btn" @click="close" aria-label="关闭">×</button>
           </header>
 
           <!-- Body -->
@@ -259,7 +254,7 @@ defineExpose({ open, close })
 
 .settings-header {
   height: 48px;
-  padding: 0 16px;
+  padding: 0 var(--spacing-16);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -270,7 +265,7 @@ defineExpose({ open, close })
 
 .settings-header h2 {
   margin: 0;
-  font-size: 14px;
+  font-size: 1.0769rem;
   font-weight: 600;
   color: var(--text-primary);
   -webkit-app-region: no-drag;
@@ -289,6 +284,8 @@ defineExpose({ open, close })
   align-items: center;
   justify-content: center;
   transition: all 0.15s ease;
+  font-size: 1.3846rem;
+  line-height: 1;
 }
 .close-btn:hover {
   background: var(--bg-hover);
@@ -309,24 +306,24 @@ defineExpose({ open, close })
      两处各画一次 --canvas-bg 在手记里会露馅 —— 纸纹的光斑按元素自己的盒子
      取样，侧栏与内容区就成了两张对不齐的纸。 */
   border-right: 1px solid var(--border-subtle);
-  padding: 12px 8px;
+  padding: var(--spacing-12) var(--spacing-8);
   overflow-y: auto;
 }
 
 .nav-item {
   width: 100%;
   height: 34px;
-  padding: 0 12px;
+  padding: 0 var(--spacing-12);
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--spacing-10);
   background: transparent;
   border: none;
   cursor: pointer;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 1rem;
   border-radius: var(--radius-sm);
-  margin-bottom: 2px;
+  margin-bottom: var(--spacing-2);
   text-align: left;
   position: relative;
   transition: background 0.15s ease, color 0.15s ease;
@@ -360,7 +357,7 @@ defineExpose({ open, close })
 .settings-content {
   flex: 1;
   overflow-y: auto;
-  padding: 24px 28px;
+  padding: var(--spacing-24) 28px;
 }
 
 /* 过渡动画 */

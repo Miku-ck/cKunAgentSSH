@@ -9,7 +9,7 @@
  *
  * 只放"卡"用得上的：卡骨架、key/value 行、徽章、参数折叠、动作按钮、说明条。
  * 各宿主自己的布局（折叠队列 / 意图卡 / 交付卡…）仍留在各自 scoped 里，需要覆盖
- * 全局值时用「宿主类 + .ap-ic」这类复合选择器，不要在本文件里给令牌写回落值
+ * 全局值时用「宿主类 + .ap-*」这类复合选择器，不要在本文件里给令牌写回落值
  * —— 见 variables.test.ts 的裸引用守卫。
  *
  * 类名此前只被 AgentRunPanel 一个组件使用（已核：全仓 `ap-` 无第二个使用者），
@@ -31,26 +31,20 @@
 .ap-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 13px;
+  gap: var(--spacing-8);
+  padding: var(--spacing-10) 13px;
   border-bottom: 1px solid var(--border-default);
   flex: none;
 }
-.ap-ic {
-  width: 15px;
-  height: 15px;
-  flex-shrink: 0;
-  color: var(--text-secondary);
-}
 .ap-ttl {
   font-weight: 600;
-  font-size: 13px;
+  font-size: 1rem;
   letter-spacing: 0.2px;
   color: var(--text-primary);
 }
 .ap-sp { flex: 1; }
 .ap-body {
-  padding: 12px 13px;
+  padding: var(--spacing-12) 13px;
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
@@ -61,12 +55,12 @@
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
-  gap: 6px;
-  font-size: 12px;
+  gap: var(--spacing-6);
+  font-size: 0.9231rem;
   margin-bottom: 7px;
 }
 .ap-k { color: var(--text-tertiary); flex: none; }
-.ap-k-gap { margin-left: 10px; }
+.ap-k-gap { margin-left: var(--spacing-10); }
 .ap-v { color: var(--text-primary); }
 .ap-2line {
   display: -webkit-box;
@@ -77,19 +71,19 @@
 .ap-code {
   background: var(--bg-input);
   border: 1px solid var(--border-default);
-  padding: 1px 6px;
+  padding: 1px var(--spacing-6);
   border-radius: var(--radius-sm);
   color: var(--accent-cyan);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 0.8846rem;
 }
 .ap-code-normal { color: var(--accent-cyan); font-style: italic; }
-.ap-tag-inline { font-size: 10.5px; color: var(--text-tertiary); margin-left: 2px; }
+.ap-tag-inline { font-size: 0.8077rem; color: var(--text-tertiary); margin-left: var(--spacing-2); }
 
 /* ── 写入/编辑预览：授权绑路径，不绑内容 ── */
-.ap-write { margin-bottom: 8px; }
+.ap-write { margin-bottom: var(--spacing-8); }
 .ap-diff-block { margin-bottom: 7px; }
-.ap-diff-block .ap-k { display: block; font-size: 11px; margin-bottom: 3px; }
+.ap-diff-block .ap-k { display: block; font-size: 0.8462rem; margin-bottom: 3px; }
 .ap-diff {
   max-height: 150px;
   overflow: auto;
@@ -100,32 +94,32 @@
   border-radius: var(--radius-md);
   color: var(--text-primary);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 0.8462rem;
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-all;
 }
 .ap-diff-old { border-left: 2px solid var(--danger-text); }
 .ap-diff-new { border-left: 2px solid var(--status-success-text); }
-.ap-preview-note { font-size: 10.5px; color: var(--text-tertiary); margin-bottom: 4px; }
-.ap-write-note { font-size: 11px; color: var(--status-warn-text); line-height: 1.5; }
+.ap-preview-note { font-size: 0.8077rem; color: var(--text-tertiary); margin-bottom: var(--spacing-4); }
+.ap-write-note { font-size: 0.8462rem; color: var(--status-warn-text); line-height: 1.5; }
 
 /* ── 参数折叠块 ── */
 .ap-args {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   background: var(--bg-input);
-  margin: 4px 0 8px;
+  margin: var(--spacing-4) 0 var(--spacing-8);
 }
 .ap-args summary {
   cursor: pointer;
   list-style: none;
-  padding: 5px 10px;
+  padding: 5px var(--spacing-10);
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: 0.8462rem;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--spacing-6);
 }
 .ap-args summary::-webkit-details-marker { display: none; }
 .ap-args summary::before { content: "+"; }
@@ -133,33 +127,32 @@
 /* 折叠区里的英文判定原文：它是排查线索，字号和颜色都比正文低一档，
    但与 .ap-args pre 同宽（12px）—— 同一块内容左边缘必须对齐 */
 .ap-tech-line {
-  padding: 0 12px 8px;
+  padding: 0 var(--spacing-12) var(--spacing-8);
   color: var(--text-secondary);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 0.8462rem;
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-all;
 }
 .ap-args pre {
-  padding: 0 12px 9px;
+  padding: 0 var(--spacing-12) 9px;
   color: var(--text-secondary);
-  font-size: 10.5px;
+  font-size: 0.8077rem;
   white-space: pre-wrap;
   overflow-x: auto;
 }
 
 /* ── 权限卡：配色与徽章 ── */
 .ap-perm { background: var(--bg-elevated); border-color: var(--card-perm-border); }
-.ap-perm-accent { color: var(--danger-text); }
 .ap-perm-ttl { color: var(--card-perm-text); }
-.ap-risk { font-size: 10.5px; font-weight: 700; padding: 2px 9px; border-radius: var(--radius-pill); }
+.ap-risk { font-size: 0.8077rem; font-weight: 700; padding: var(--spacing-2) 9px; border-radius: var(--radius-pill); }
 .ap-risk.risk-moderate { background: var(--card-perm-border); color: var(--card-perm-text); }
 .ap-risk.risk-dangerous { background: var(--danger-bg); color: var(--danger-text); }
 /* 后端没说风险（缺字段/脏值）：授权档位已按 dangerous 收口，配色也必须跟着走 ——
    没有这一条时它落进无样式的 .ap-risk，画成一枚没皮的空徽章，看上去像"没有风险" */
 .ap-risk.risk-unknown { background: var(--danger-bg); color: var(--danger-text); }
-.ap-env { font-size: 10.5px; font-weight: 600; padding: 2px 9px; border-radius: var(--radius-pill); }
+.ap-env { font-size: 0.8077rem; font-weight: 600; padding: var(--spacing-2) 9px; border-radius: var(--radius-pill); }
 .ap-env.env-prod { background: var(--danger-bg); color: var(--danger-text); }
 .ap-env.env-test { background: var(--card-perm-border); color: var(--text-secondary); }
 /* 顺序承载信息：两条同为单类选择器、后写的赢。原 scoped 版里 .ap-timeout-pill
@@ -167,14 +160,14 @@
    看着不像本意，但这是搬移前的既成外观，改它属于另一件事，这里原样保留。 */
 .ap-timeout-pill { background: transparent; border: 1px solid var(--status-warn-text); color: var(--status-warn-text); }
 .ap-risk-pill {
-  font-size: 10px;
+  font-size: 0.7692rem;
   background: var(--danger-bg);
   color: var(--danger-text);
-  padding: 2px 9px;
+  padding: var(--spacing-2) 9px;
   border-radius: var(--radius-pill);
 }
 .ap-prod-warn {
-  font-size: 11.5px;
+  font-size: 0.8846rem;
   color: var(--danger-text);
   background: var(--danger-bg);
   border: 1px solid var(--danger-border);
@@ -190,14 +183,14 @@
    中性=永久（写清单是不可逆的，不给它绿）；拒绝靠右单独占位，
    不再用「最灰的那一枚」表达它是次要动作 —— 它是用户行使否决权的出口。
    所有变体一律文本色 + alpha 描边，去掉实心填充（与全局按钮语言一致）。 */
-.ap-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding: 0 13px 11px; flex: none; }
+.ap-actions { display: flex; gap: var(--spacing-8); flex-wrap: wrap; align-items: center; padding: 0 13px 11px; flex: none; }
 .ap-btn {
-  display: inline-flex; align-items: center; gap: 4px;
+  display: inline-flex; align-items: center; gap: var(--spacing-4);
   font-family: inherit;
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-weight: 400;
   height: 24px;
-  padding: 0 10px;
+  padding: 0 var(--spacing-10);
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   cursor: pointer;
@@ -214,10 +207,10 @@
 .ap-btn-deny { margin-left: auto; color: var(--text-primary); border-color: var(--border-default); }
 .ap-btn-deny:hover:not(:disabled) { border-color: var(--danger-text); color: var(--danger-text); background: color-mix(in srgb, var(--danger-text) 8%, transparent); }
 .ap-hint {
-  font-size: 11.5px;
+  font-size: 0.8846rem;
   color: var(--text-secondary);
   border-top: 1px dashed var(--border-default);
-  padding: 8px 13px 10px;
+  padding: var(--spacing-8) 13px var(--spacing-10);
   line-height: 1.6;
   flex: none;
 }
@@ -231,12 +224,13 @@
   height: 26px;
   border-radius: var(--radius-md);
   cursor: pointer;
+  font-size: 1.2308rem;
+  line-height: 1;
   display: grid;
   place-items: center;
   transition: background 0.18s, color 0.18s;
 }
 .ap-icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
-.ap-icon-btn svg { width: 14px; height: 14px; }
 
 /* 卡内等宽字体只钉在代码元素上（.ap-code）；整体字体仍由宿主决定 ——
    给整张卡钉一份会盖掉宿主的选择。 */

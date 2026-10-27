@@ -75,8 +75,8 @@ const showAwaitingHint = computed(() => {
 /* 加载动画 */
 .thinking-dots {
   display: flex;
-  gap: 4px;
-  padding: 8px 0;
+  gap: var(--spacing-4);
+  padding: var(--spacing-8) 0;
 }
 .thinking-dots span {
   width: 7px; height: 7px;
@@ -101,8 +101,8 @@ const showAwaitingHint = computed(() => {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 8px 0;
-  font-size: 12.5px;
+  padding: var(--spacing-8) 0;
+  font-size: 0.9615rem;
   color: var(--text-tertiary);
 }
 .awaiting-dot {

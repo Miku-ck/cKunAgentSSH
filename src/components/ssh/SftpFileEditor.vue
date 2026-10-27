@@ -5,10 +5,6 @@
       <!-- 头部 -->
       <div class="editor-header">
         <div class="header-left">
-          <svg class="file-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>
-            <polyline points="13 2 13 9 20 9"/>
-          </svg>
           <span class="file-name">{{ name }}</span>
           <span class="file-path">{{ path }}</span>
           <span v-if="dirty" class="dirty-dot" title="未保存">●</span>
@@ -20,11 +16,6 @@
             :disabled="!dirty || readOnly || saving || loading || !!error"
             @click="save"
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13">
-              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-              <polyline points="17 21 17 13 7 13 7 21"/>
-              <polyline points="7 3 7 8 15 8"/>
-            </svg>
             保存
           </button>
           <button class="close-btn" @click="handleClose" title="关闭">×</button>
@@ -41,11 +32,6 @@
       </div>
       <!-- 错误态 -->
       <div v-else-if="error" class="editor-state error">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="32" height="32">
-          <circle cx="12" cy="12" r="10"/>
-          <line x1="12" y1="8" x2="12" y2="12"/>
-          <line x1="12" y1="16" x2="12.01" y2="16"/>
-        </svg>
         <span class="error-msg">{{ error }}</span>
         <button class="error-close" @click="emit('close')">关闭</button>
       </div>
@@ -78,11 +64,6 @@
     <div v-if="unsavedDialog.visible" class="unsaved-overlay" @click.self="dismissUnsavedDialog">
       <div ref="unsavedRef" class="unsaved-dialog" role="dialog" aria-modal="true" aria-label="未保存的更改" tabindex="-1">
         <div class="unsaved-header">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
-            <circle cx="12" cy="12" r="10"/>
-            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
-            <line x1="12" y1="17" x2="12.01" y2="17"/>
-          </svg>
           <span class="unsaved-title">未保存的更改</span>
         </div>
         <div class="unsaved-body">
@@ -429,7 +410,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 12px;
+  padding: 0 var(--spacing-12);
   background: var(--bg-elevated);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
@@ -437,25 +418,19 @@ onUnmounted(() => {
 .header-left {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-8);
   min-width: 0;
   flex: 1;
 }
-.file-icon {
-  width: 15px;
-  height: 15px;
-  color: var(--accent-cyan);
-  flex-shrink: 0;
-}
 .file-name {
-  font-size: 13px;
+  font-size: 1rem;
   font-weight: 500;
   color: var(--text-primary);
   white-space: nowrap;
   flex-shrink: 0;
 }
 .file-path {
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
   font-family: var(--font-mono);
   overflow: hidden;
@@ -465,12 +440,12 @@ onUnmounted(() => {
 }
 .dirty-dot {
   color: var(--accent-yellow);
-  font-size: 10px;
+  font-size: 0.7692rem;
   flex-shrink: 0;
 }
 .readonly-badge {
-  padding: 1px 6px;
-  font-size: 10px;
+  padding: 1px var(--spacing-6);
+  font-size: 0.7692rem;
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--accent-yellow) 12%, transparent);
   color: var(--accent-yellow);
@@ -479,12 +454,12 @@ onUnmounted(() => {
 .header-right {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--spacing-6);
   flex-shrink: 0;
 }
 .save-btn {
   height: 28px;
-  padding: 0 12px;
+  padding: 0 var(--spacing-12);
   display: flex;
   align-items: center;
   gap: 5px;
@@ -493,7 +468,7 @@ onUnmounted(() => {
   color: var(--accent-on);
   border-radius: var(--radius-sm);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-family: var(--font-sans);
   transition: opacity 0.1s;
 }
@@ -504,10 +479,6 @@ onUnmounted(() => {
   opacity: 0.4;
   cursor: not-allowed;
 }
-.save-btn svg {
-  width: 13px;
-  height: 13px;
-}
 .close-btn {
   width: 28px;
   height: 28px;
@@ -517,7 +488,7 @@ onUnmounted(() => {
   background: transparent;
   border: none;
   color: var(--text-tertiary);
-  font-size: 20px;
+  font-size: 1.5385rem;
   cursor: pointer;
   border-radius: var(--radius-sm);
   line-height: 1;
@@ -534,9 +505,9 @@ onUnmounted(() => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: var(--spacing-12);
   color: var(--text-tertiary);
-  font-size: 13px;
+  font-size: 1rem;
 }
 .editor-state.error {
   color: var(--accent-red);
@@ -557,15 +528,15 @@ onUnmounted(() => {
   line-height: 1.6;
 }
 .error-close {
-  margin-top: 8px;
+  margin-top: var(--spacing-8);
   height: 30px;
-  padding: 0 16px;
+  padding: 0 var(--spacing-16);
   background: transparent;
   border: 1px solid var(--border-default);
   color: var(--text-secondary);
   border-radius: var(--radius-sm);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-family: var(--font-sans);
 }
 .error-close:hover {
@@ -593,11 +564,11 @@ onUnmounted(() => {
   height: 26px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 12px;
+  gap: var(--spacing-8);
+  padding: 0 var(--spacing-12);
   background: var(--bg-elevated);
   border-top: 1px solid var(--border-subtle);
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
   font-family: var(--font-mono);
   flex-shrink: 0;
@@ -643,35 +614,31 @@ onUnmounted(() => {
 .unsaved-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 14px 16px;
-  font-size: 13px;
+  gap: var(--spacing-8);
+  padding: var(--spacing-14) var(--spacing-16);
+  font-size: 1rem;
   font-weight: 500;
   color: var(--text-primary);
   border-bottom: 1px solid var(--border-subtle);
 }
-.unsaved-header svg {
-  color: var(--accent-yellow);
-  flex-shrink: 0;
-}
 .unsaved-body {
-  padding: 16px;
-  font-size: 13px;
+  padding: var(--spacing-16);
+  font-size: 1rem;
   color: var(--text-secondary);
   line-height: 1.6;
 }
 .unsaved-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  padding: 12px 16px;
+  gap: var(--spacing-8);
+  padding: var(--spacing-12) var(--spacing-16);
   border-top: 1px solid var(--border-subtle);
 }
 .unsaved-btn {
   height: 30px;
-  padding: 0 14px;
+  padding: 0 var(--spacing-14);
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  font-size: 0.9231rem;
   cursor: pointer;
   font-family: var(--font-sans);
   border: 1px solid var(--border-default);

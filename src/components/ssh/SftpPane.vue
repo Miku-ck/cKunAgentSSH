@@ -14,8 +14,6 @@
     <!-- 标题栏 -->
     <div class="pane-header">
       <div class="pane-title">
-        <svg v-if="side === 'local'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="12" rx="2"/><line x1="2" y1="20" x2="22" y2="20"/></svg>
-        <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
         <span>{{ side === 'local' ? '本地' : '远程' }}</span>
         <span v-if="side === 'remote'" class="badge" :class="store.online ? 'online' : 'offline'">
           {{ store.online ? 'online' : '未连接' }}
@@ -57,7 +55,6 @@
           :class="{ active: isCurrentDrive(drive) }"
           @click="navigateToDrive(drive)"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
           <span>{{drive}}</span>
         </div>
       </div>
@@ -100,7 +97,6 @@
       <!-- 未连接占位移进列表区：列头（名称/大小/修改时间/权限）与面包屑保持可见，
            两侧面板结构逐行对齐；断开时 store 已清空 remoteEntries，不会有残行 -->
       <div v-if="side === 'remote' && !store.online" class="pane-empty-overlay">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
         <div class="empty-title">未连接远程服务器</div>
       </div>
       <div v-else-if="loading" class="pane-loading">加载中...</div>
@@ -542,18 +538,17 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 10px;
+  padding: 0 var(--spacing-10);
   background: var(--canvas-bg);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
 .pane-title {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 12px; color: var(--text-secondary); font-weight: 500;
+  display: flex; align-items: center; gap: var(--spacing-6);
+  font-size: 0.9231rem; color: var(--text-secondary); font-weight: 500;
 }
-.pane-title svg { width: 13px; height: 13px; }
 .badge {
-  padding: 1px 6px; font-size: 10px; border-radius: var(--radius-lg);
+  padding: 1px var(--spacing-6); font-size: 0.7692rem; border-radius: var(--radius-lg);
   background: var(--bg-active); color: var(--text-tertiary);
 }
 .badge.online { color: var(--accent-green); background: color-mix(in srgb, var(--accent-green) 12%, transparent); }
@@ -599,61 +594,60 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
-  padding: 4px;
+  padding: var(--spacing-4);
   min-width: 120px;
   z-index: 100;
   animation: ctx-fade-in 0.1s ease-out;
 }
 .drive-dropdown-title {
-  font-size: 10px;
+  font-size: 0.7692rem;
   color: var(--text-tertiary);
-  padding: 4px 8px;
+  padding: var(--spacing-4) var(--spacing-8);
   font-weight: 600;
 }
 .drive-option {
-  display: flex; align-items: center; gap: 8px;
-  padding: 6px 8px;
-  font-size: 12px;
+  display: flex; align-items: center;
+  padding: var(--spacing-6) var(--spacing-8);
+  font-size: 0.9231rem;
   color: var(--text-secondary);
   cursor: pointer;
   border-radius: var(--radius-sm);
 }
 .drive-option:hover { background: var(--bg-hover); color: var(--text-primary); }
 .drive-option.active { color: var(--accent-cyan); background: color-mix(in srgb, var(--accent-primary) 10%, transparent); }
-.drive-option svg { flex-shrink: 0; }
 
 .breadcrumb {
   height: 28px;
   display: flex;
   align-items: center;
-  padding: 0 10px; gap: 2px;
+  padding: 0 var(--spacing-10); gap: var(--spacing-2);
   background: var(--canvas-bg);
   overflow-x: auto; flex: 1;
-  font-family: var(--font-mono); font-size: 11px;
+  font-family: var(--font-mono); font-size: 0.8462rem;
   cursor: text;
 }
 .breadcrumb::-webkit-scrollbar { display: none; }
-.breadcrumb-edit { cursor: default; padding: 0 6px; }
-.crumb-group { display: flex; align-items: center; gap: 2px; }
-.crumb { color: var(--text-tertiary); cursor: pointer; white-space: nowrap; padding: 2px 4px; border-radius: var(--radius-sm); }
+.breadcrumb-edit { cursor: default; padding: 0 var(--spacing-6); }
+.crumb-group { display: flex; align-items: center; gap: var(--spacing-2); }
+.crumb { color: var(--text-tertiary); cursor: pointer; white-space: nowrap; padding: var(--spacing-2) var(--spacing-4); border-radius: var(--radius-sm); }
 .crumb:hover { color: var(--text-secondary); background: var(--bg-hover); }
 .crumb.current { color: var(--accent-cyan); }
 .crumb-sep { color: var(--text-tertiary); opacity: 0.5; }
 .path-input {
   width: 100%;
   height: 22px;
-  padding: 0 6px;
+  padding: 0 var(--spacing-6);
   background: var(--bg-input);
   border: 1px solid var(--accent-primary);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 0.9231rem;
   outline: none;
 }
 
 .file-list {
-  flex: 1; overflow-x: hidden; overflow-y: auto; font-size: 12px;
+  flex: 1; overflow-x: hidden; overflow-y: auto; font-size: 0.9231rem;
   /* 两侧栏的滚动条只在各自内容溢出时出现，会吃掉 6px 让 1fr 名称列变窄，
      固定列（大小/修改时间/权限）就跟着左右错位 —— 恒定预留滚动条槽位 */
   scrollbar-gutter: stable;
@@ -669,14 +663,14 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   display: grid;
   grid-template-columns: 1fr 80px 130px 90px;
   align-items: center;
-  padding: 0 10px;
+  padding: 0 var(--spacing-10);
 }
 .file-list-head {
   height: 26px;
   background: var(--bg-base);
   border-bottom: 1px solid var(--border-subtle);
   color: var(--text-tertiary);
-  font-size: 11px; font-weight: 500;
+  font-size: 0.8462rem; font-weight: 500;
   position: sticky; top: 0; z-index: 1;
   /* 槽位在 padding box 之内，列头不铺过去右上角就会缺一块底色和分隔线；
      多铺的宽度用 padding-right 补回，保证列位置仍与 .file-row 逐列相同 */
@@ -691,17 +685,17 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
 .file-row:hover { background: var(--bg-hover); }
 .file-row.selected { background: color-mix(in srgb, var(--accent-primary) 15%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent); }
 
-.file-name { display: flex; align-items: center; gap: 8px; overflow: hidden; }
+.file-name { display: flex; align-items: center; gap: var(--spacing-8); overflow: hidden; }
 .file-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-size, .file-time, .file-perm {
-  color: var(--text-tertiary); font-family: var(--font-mono); font-size: 11px;
+  color: var(--text-tertiary); font-family: var(--font-mono); font-size: 0.8462rem;
 }
 
 .pane-loading, .pane-error {
   flex: 1;
   display: flex; align-items: center; justify-content: center;
-  padding: 16px; text-align: center;
-  font-size: 12px; color: var(--text-tertiary);
+  padding: var(--spacing-16); text-align: center;
+  font-size: 0.9231rem; color: var(--text-tertiary);
 }
 .pane-error { color: var(--accent-red); }
 
@@ -711,16 +705,15 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   flex: 1;
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
-  padding: 24px; text-align: center;
-  color: var(--text-tertiary); gap: 10px;
+  padding: var(--spacing-24); text-align: center;
+  color: var(--text-tertiary); gap: var(--spacing-10);
 }
-.pane-empty-overlay svg { width: 36px; height: 36px; opacity: 0.4; }
-.pane-empty-overlay .empty-title { font-size: 13px; color: var(--text-secondary); }
+.pane-empty-overlay .empty-title { font-size: 1rem; color: var(--text-secondary); }
 
 /* 文件列表渲染上限提示 */
 .pane-list-limit {
-  padding: 10px 12px;
-  font-size: 11px;
+  padding: var(--spacing-10) var(--spacing-12);
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
   text-align: center;
   border-top: 1px dashed var(--border-subtle);
@@ -738,33 +731,33 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
-  padding: 20px;
+  padding: var(--spacing-20);
   width: 320px;
   box-shadow: var(--shadow-lg);
 }
 .mkdir-title {
-  font-size: 14px; font-weight: 600;
-  color: var(--text-primary); margin-bottom: 12px;
+  font-size: 1.0769rem; font-weight: 600;
+  color: var(--text-primary); margin-bottom: var(--spacing-12);
 }
 .mkdir-input {
-  width: 100%; height: 32px; padding: 0 10px;
+  width: 100%; height: 32px; padding: 0 var(--spacing-10);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   background: var(--bg-input);
   color: var(--text-primary);
-  font-size: 13px; outline: none;
+  font-size: 1rem; outline: none;
   font-family: var(--font-sans);
 }
 .mkdir-input:focus { border-color: var(--accent-primary); }
 .mkdir-actions {
   display: flex; justify-content: flex-end;
-  gap: 8px; margin-top: 16px;
+  gap: var(--spacing-8); margin-top: var(--spacing-16);
 }
 .mkdir-btn {
-  height: 30px; padding: 0 14px;
+  height: 30px; padding: 0 var(--spacing-14);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  font-size: 12px; cursor: pointer;
+  font-size: 0.9231rem; cursor: pointer;
   font-family: var(--font-sans);
 }
 .mkdir-btn:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -787,8 +780,8 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   background: var(--bg-active);
   border: 1px solid var(--accent-green);
   color: var(--accent-green);
-  padding: 8px 14px; border-radius: var(--radius-md);
-  font-size: 12px; font-weight: 500;
+  padding: var(--spacing-8) var(--spacing-14); border-radius: var(--radius-md);
+  font-size: 0.9231rem; font-weight: 500;
   z-index: 6; pointer-events: none;
   box-shadow: var(--shadow-lg);
 }

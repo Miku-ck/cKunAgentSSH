@@ -66,7 +66,7 @@ function pick(id: string) {
   width: 280px;
   max-height: 340px;
   overflow-y: auto;
-  padding: 4px;
+  padding: var(--spacing-4);
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
@@ -79,12 +79,12 @@ function pick(id: string) {
   align-items: center;
   gap: 7px;
   width: 100%;
-  padding: 5px 8px;
+  padding: 5px var(--spacing-8);
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-family: var(--font-sans);
   text-align: left;
   cursor: pointer;

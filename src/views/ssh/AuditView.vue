@@ -4,7 +4,6 @@
     <div class="audit-header">
       <div class="audit-head-left">
         <div class="audit-title">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><circle cx="4.5" cy="18.5" r="2"/><circle cx="19.5" cy="5.5" r="2"/><path d="M6.5 18.5h3a4 4 0 0 0 4-4v-5a4 4 0 0 1 4-4"/></svg>
           <span>运维轨迹</span>
         </div>
         <!-- 分段：事件流 / 运行列表。两者是同一条追溯链的两个视图 —— 前者按
@@ -346,14 +345,14 @@ onMounted(refresh)
   align-items: center;
   justify-content: space-between;
   height: var(--page-head-h);
-  padding: 0 16px;
+  padding: 0 var(--spacing-16);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
 .audit-title {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-8);
   font-size: var(--page-title-size);
   font-weight: 600;
   color: var(--text-primary);
@@ -362,7 +361,7 @@ onMounted(refresh)
 .audit-head-left {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--spacing-12);
 }
 /* 分段切换：与远程管理页的「SSH 连接 / TLS 网关」同一形态（同一族约束，不另画一份） */
 .audit-seg {
@@ -373,11 +372,11 @@ onMounted(refresh)
   overflow: hidden;
 }
 .audit-seg-btn {
-  padding: 0 12px;
+  padding: 0 var(--spacing-12);
   border: none;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-family: var(--font-sans);
   cursor: pointer;
   transition: background var(--transition-fast), color var(--transition-fast);
@@ -392,11 +391,11 @@ onMounted(refresh)
 .audit-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-8);
 }
 .audit-badge {
-  font-size: 11px;
-  padding: 2px 10px;
+  font-size: 0.8462rem;
+  padding: var(--spacing-2) var(--spacing-10);
   border-radius: var(--radius-xl);
   border: 1px solid var(--border-default);
 }
@@ -405,11 +404,11 @@ onMounted(refresh)
 .audit-badge.idle { color: var(--text-tertiary); }
 .audit-filters {
   display: flex;
-  gap: 8px;
+  gap: var(--spacing-8);
   flex-shrink: 0;
   /* 筛选条同样卡片化，与下方表格卡同边距对齐 */
-  margin: 12px 16px 0;
-  padding: 10px 12px;
+  margin: var(--spacing-12) var(--spacing-16) 0;
+  padding: var(--spacing-10) var(--spacing-12);
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
@@ -420,8 +419,8 @@ onMounted(refresh)
   border: 1px solid var(--border-default);
   color: var(--text-primary);
   border-radius: var(--radius-sm);
-  padding: 4px 8px;
-  font-size: 12px;
+  padding: var(--spacing-4) var(--spacing-8);
+  font-size: 0.9231rem;
 }
 .audit-filters input { flex: 1; max-width: 240px; }
 .audit-table-wrap {
@@ -429,14 +428,14 @@ onMounted(refresh)
   overflow: auto;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  margin: 12px 16px 0;
+  margin: var(--spacing-12) var(--spacing-16) 0;
   background: var(--bg-elevated);
 }
 .audit-table {
   width: 100%;
   border-collapse: collapse;
   table-layout: fixed; /* 钉死列宽：翻页时浏览器不再按内容重排，防抖动 */
-  font-size: 12px;
+  font-size: 0.9231rem;
 }
 .audit-table th {
   position: sticky;
@@ -445,8 +444,8 @@ onMounted(refresh)
      渐变模式下卡面半透明，滚动行也不会从表头底下透出来） */
   background: var(--bg-elevated-solid);
   text-align: left;
-  padding: 8px 10px;
-  font-size: 11px;
+  padding: var(--spacing-8) var(--spacing-10);
+  font-size: 0.8462rem;
   text-transform: uppercase;
   letter-spacing: 0.4px;
   color: var(--text-tertiary);
@@ -454,7 +453,7 @@ onMounted(refresh)
   z-index: 1;
 }
 .audit-table td {
-  padding: 6px 10px;
+  padding: var(--spacing-6) var(--spacing-10);
   border-bottom: 1px solid var(--border-subtle);
   vertical-align: top;
   text-align: left;
@@ -463,16 +462,16 @@ onMounted(refresh)
 .audit-table tr.prod td { background: color-mix(in srgb, var(--accent-red) 5%, transparent); }
 .mono { font-family: var(--font-mono); }
 .env {
-  font-size: 11px;
-  padding: 1px 8px;
+  font-size: 0.8462rem;
+  padding: 1px var(--spacing-8);
   border-radius: var(--radius-lg);
   font-weight: 600;
 }
 .env.test { color: var(--accent-green); background: color-mix(in srgb, var(--accent-green) 12%, transparent); }
 .env.prod { color: var(--accent-red); background: color-mix(in srgb, var(--accent-red) 12%, transparent); }
 .concl {
-  font-size: 11px;
-  padding: 1px 8px;
+  font-size: 0.8462rem;
+  padding: 1px var(--spacing-8);
   border-radius: var(--radius-lg);
 }
 /* 底色由文字那枚令牌自己派生：原先压的是终端 ANSI 档（rgba(63,185,80/.229,165,75/…)），
@@ -484,29 +483,29 @@ onMounted(refresh)
 .concl.released, .concl.revoked, .concl.answered, .concl.skipped { color: var(--text-tertiary); background: color-mix(in srgb, var(--text-tertiary) 12%, transparent); }
 .cmd { max-width: 40ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .result { max-width: 30ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-tertiary); }
-.empty { text-align: center; color: var(--text-tertiary); padding: 24px; }
+.empty { text-align: center; color: var(--text-tertiary); padding: var(--spacing-24); }
 .audit-pager {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: var(--spacing-12);
   flex-shrink: 0;
-  padding: 12px 16px;
+  padding: var(--spacing-12) var(--spacing-16);
 }
-.audit-pager-info { font-size: 12px; color: var(--text-tertiary); }
-.audit-loading { color: var(--text-tertiary); font-size: 12px; padding: 0 16px 12px; }
-.audit-error { color: var(--accent-red); font-size: 12px; padding: 0 16px 12px; }
+.audit-pager-info { font-size: 0.9231rem; color: var(--text-tertiary); }
+.audit-loading { color: var(--text-tertiary); font-size: 0.9231rem; padding: 0 var(--spacing-16) var(--spacing-12); }
+.audit-error { color: var(--accent-red); font-size: 0.9231rem; padding: 0 var(--spacing-16) var(--spacing-12); }
 /* 写入失败提示：用警示色描边而非满屏红底 —— 它是「证据可能不全」的告知，
    不是页面错误本身（表格数据仍然可读）。 */
 .audit-health-warn {
-  margin: 12px 16px 0;
-  padding: 8px 12px;
+  margin: var(--spacing-12) var(--spacing-16) 0;
+  padding: var(--spacing-8) var(--spacing-12);
   border: 1px solid var(--accent-yellow);
   border-left-width: 3px;
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--accent-yellow) 10%, transparent);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   line-height: 1.6;
   flex-shrink: 0;
 }

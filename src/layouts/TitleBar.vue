@@ -1,11 +1,6 @@
 <template>
   <div class="titlebar">
     <div class="titlebar-brand">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
-        <rect x="2" y="4" width="20" height="16" rx="2"/>
-        <path d="m6 8 4 4-4 4"/>
-        <line x1="12" y1="16" x2="18" y2="16"/>
-      </svg>
       <span class="brand-text">cKunAgentSSH</span>
     </div>
     <div class="titlebar-drag" @dblclick="toggleMaximize"></div>
@@ -46,8 +41,7 @@
         <span class="tb-label">SFTP</span>
       </button>
       <!-- 终端（含远程管理）：工作区本体。零会话时落到远程管理页（终端的默认页），
-           有会话则回到活动终端。合并后沿用原远程管理的显示器图标；远程管理页
-           盖上来时同样点亮（页签在标签条内）。 -->
+           有会话则回到活动终端；远程管理页盖上来时同样点亮（页签在标签条内）。 -->
       <button class="titlebar-action-btn" :class="{ active: activePage === 'terminal' || activePage === 'remote-mgr' }" title="终端（含远程管理）" aria-label="终端（含远程管理）" @click="emit('action-terminal')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg>
         <span class="tb-label">终端</span>
@@ -63,7 +57,7 @@
         <span class="tb-label">定时</span>
       </button>
       <button class="titlebar-action-btn" :class="{ active: activePage === 'tunnels' }" :title="'隧道' + pageHint('tunnels')" aria-label="SSH 隧道" @click="emit('action-tunnels')">
-        <!-- 隧道图标：拱形洞口 + 地面 + 通道中线，与 TunnelView 页头同一枚 -->
+        <!-- 隧道图标：拱形洞口 + 地面 + 通道中线 -->
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M4 20v-7a8 8 0 0 1 16 0v7"/><path d="M12 20v-7"/><path d="M2 20h20"/></svg>
         <span class="tb-label">隧道</span>
       </button>
@@ -175,10 +169,10 @@ async function close() { await api?.windowClose() }
 .titlebar-brand {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 12px;
+  gap: var(--spacing-6);
+  padding: 0 var(--spacing-12);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-weight: 500;
   -webkit-app-region: no-drag;
 }
@@ -203,7 +197,7 @@ async function close() { await api?.windowClose() }
 .titlebar-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--spacing-2);
   height: 100%;
   -webkit-app-region: no-drag;
 }
@@ -221,7 +215,7 @@ async function close() { await api?.windowClose() }
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: var(--spacing-4);
   min-width: 36px;
   height: 100%;
   padding: 0 7px;
@@ -249,7 +243,7 @@ async function close() { await api?.windowClose() }
 }
 
 .titlebar-action-btn .ai-text {
-  font-size: 11px;
+  font-size: 0.8462rem;
   font-weight: 600;
   letter-spacing: 0.5px;
 }
@@ -257,7 +251,7 @@ async function close() { await api?.windowClose() }
 /* 常显 2 字标签：≥1024px 展开（可发现性优先），以下由断点收纳为纯图标。
    取 --text-tertiary：标签是图标的辅助信道，视觉权重必须低于图标本身 */
 .tb-label {
-  font-size: 11px;
+  font-size: 0.8462rem;
   line-height: 1;
   color: inherit;
   white-space: nowrap;
@@ -295,7 +289,7 @@ async function close() { await api?.windowClose() }
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 9px;
+  font-size: 0.6923rem;
   font-weight: 700;
   line-height: 1;
   background: var(--status-warn-text);
@@ -363,7 +357,7 @@ async function close() { await api?.windowClose() }
 }
 
 @media (max-width: 760px) {
-  .titlebar-brand { padding: 0 8px; }
+  .titlebar-brand { padding: 0 var(--spacing-8); }
   .brand-text { display: none; }
   .titlebar-action-btn { min-width: 30px; }
   .win-btn { width: 38px; }

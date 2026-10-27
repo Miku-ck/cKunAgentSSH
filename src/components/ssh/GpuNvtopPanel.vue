@@ -332,7 +332,7 @@ const sysRows = computed<SysRow[]>(() => {
   --nv-grid: rgba(255, 255, 255, 0.09);
 
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 0.8462rem;
   /* 原实现用 var(--text-primary)：浅色主题下为 #000000，落在 #050505 底上不可读。
      本面板底色固定为深色，故正文色也必须固定。 */
   color: var(--nv-ink);
@@ -342,7 +342,7 @@ const sysRows = computed<SysRow[]>(() => {
      内部仍保持 nvtop 终端复刻的黑底双线风格，但外壳融合到卡片层级体系中 */
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
-  padding: 6px 8px;
+  padding: var(--spacing-6) var(--spacing-8);
   display: flex;
   flex-direction: column;
 }
@@ -350,21 +350,21 @@ const sysRows = computed<SysRow[]>(() => {
 .nv-bar {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 2px 6px;
+  gap: var(--spacing-16);
+  padding: var(--spacing-2) var(--spacing-6);
   border: 1px solid var(--nv-border-soft);
   background: var(--nv-bg-bar);
 }
 
-.nv-head { margin-bottom: 4px; }
+.nv-head { margin-bottom: var(--spacing-4); }
 .nv-grow { flex: 1; }
 .nv-dim { color: var(--nv-dim); }
 
 .nv-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 3px 6px;
+  gap: var(--spacing-10);
+  padding: 3px var(--spacing-6);
   border-bottom: 1px solid var(--nv-border-row);
 }
 
@@ -372,13 +372,13 @@ const sysRows = computed<SysRow[]>(() => {
   color: var(--nv-mute);
   border-top: 1px solid var(--nv-border-soft);
   border-bottom: 1px solid var(--nv-border-soft);
-  font-size: 10px;
+  font-size: 0.7692rem;
 }
 
 .nv-cells {
   display: grid;
   grid-template-columns: 26px 148px 36px 40px 34px 96px 66px 122px 48px 44px 62px;
-  gap: 8px;
+  gap: var(--spacing-8);
   align-items: center;
   flex-shrink: 0;
 }
@@ -400,7 +400,7 @@ const sysRows = computed<SysRow[]>(() => {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--spacing-2);
 }
 
 .nv-hists-head {
@@ -412,7 +412,7 @@ const sysRows = computed<SysRow[]>(() => {
 .nv-hist {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--spacing-6);
   min-width: 0;
 }
 
@@ -428,7 +428,7 @@ const sysRows = computed<SysRow[]>(() => {
 .nv-gauge {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--spacing-2);
   flex: 1;
   min-width: 0;
 }
@@ -509,20 +509,20 @@ const sysRows = computed<SysRow[]>(() => {
 .nv-warm { color: var(--nv-warm); }
 .nv-hot { color: var(--nv-hot); }
 
-.nv-sysbar { margin: 6px 0 4px; }
+.nv-sysbar { margin: var(--spacing-6) 0 var(--spacing-4); }
 
 /* ── 系统区：一行一指标；时间轴只保留一条 ── */
 .nv-sys {
   display: flex;
   flex-direction: column;
-  padding: 4px 6px;
+  padding: var(--spacing-4) var(--spacing-6);
   border-bottom: 1px solid var(--nv-border-soft);
 }
 
 .nv-sys-item {
   display: grid;
   grid-template-columns: 84px 118px 1fr 58px;
-  gap: 8px;
+  gap: var(--spacing-8);
   align-items: center;
   padding: 3px 0;
 }
@@ -542,7 +542,7 @@ const sysRows = computed<SysRow[]>(() => {
 
 .nv-sys-sub {
   display: block;
-  font-size: 10px;
+  font-size: 0.7692rem;
   color: var(--nv-dim);
 }
 
@@ -588,7 +588,7 @@ const sysRows = computed<SysRow[]>(() => {
   z-index: 6;
   /* 上限取 340px 与「图区列宽」的较小者：窄窗口下自动收窄成多行，不需要 media query */
   max-width: min(340px, 100%);
-  padding: 3px 6px;
+  padding: 3px var(--spacing-6);
   color: var(--nv-ink);
   background: var(--nv-bg-bar);
   border: 1px solid var(--nv-border-soft);
@@ -618,12 +618,12 @@ const sysRows = computed<SysRow[]>(() => {
   border-top: 1px solid var(--nv-border-row);
 }
 
-.nv-procbar { margin: 6px 0 2px; }
+.nv-procbar { margin: var(--spacing-6) 0 var(--spacing-2); }
 
 .nv-host-chip {
   color: var(--nv-bg);
   background: var(--nv-brand);
-  padding: 0 6px;
+  padding: 0 var(--spacing-6);
   border-radius: var(--radius-xs);
   font-weight: 600;
 }
@@ -631,19 +631,19 @@ const sysRows = computed<SysRow[]>(() => {
 .nv-proc-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 11px;
+  font-size: 0.8462rem;
 }
 
 .nv-proc-table th {
   text-align: left;
-  padding: 2px 8px 2px 6px;
+  padding: var(--spacing-2) var(--spacing-8) var(--spacing-2) var(--spacing-6);
   color: var(--nv-mute);
   font-weight: 500;
 }
 
 .nv-proc-table td {
   text-align: left;
-  padding: 2px 8px 2px 6px;
+  padding: var(--spacing-2) var(--spacing-8) var(--spacing-2) var(--spacing-6);
   border-top: 1px solid var(--nv-border-row);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -657,12 +657,12 @@ const sysRows = computed<SysRow[]>(() => {
 
 .nv-noproc {
   color: var(--nv-dim);
-  padding: 4px 6px;
+  padding: var(--spacing-4) var(--spacing-6);
 }
 
 /* ── 窄窗口：系统区固定列收窄，图区优先保留 ── */
 @media (max-width: 860px) {
-  .nv-sys-item { grid-template-columns: 66px 92px 1fr 50px; gap: 6px; }
+  .nv-sys-item { grid-template-columns: 66px 92px 1fr 50px; gap: var(--spacing-6); }
   .nv-cells { grid-template-columns: 26px 110px 36px 40px 34px 88px 60px 104px 44px 40px 56px; }
 }
 </style>

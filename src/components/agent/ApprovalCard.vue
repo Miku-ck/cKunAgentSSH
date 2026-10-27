@@ -99,7 +99,6 @@ const expiredTitle = computed(() => onceBlocked.value
 <template>
   <div class="ap-card ap-perm">
     <div class="ap-head">
-      <svg class="ap-ic ap-perm-accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
       <span class="ap-ttl ap-perm-ttl">AI 请求执行确认</span>
       <span class="ap-risk" :class="riskClass">{{ approvalRiskLabel(req.risk) }}</span>
       <span v-if="req.expired" class="ap-risk-pill ap-timeout-pill" :title="expiredTitle">

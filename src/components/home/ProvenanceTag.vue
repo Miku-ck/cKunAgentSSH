@@ -23,9 +23,9 @@ const label = computed(() => PROVENANCE_LABELS[props.provenance])
   display: inline-flex;
   align-items: center;
   height: 16px;
-  padding: 0 6px;
+  padding: 0 var(--spacing-6);
   border-radius: var(--radius-sm);
-  font-size: 11px;
+  font-size: 0.8462rem;
   line-height: 1;
   border: 1px solid transparent;
   white-space: nowrap;

@@ -3,7 +3,6 @@
     <!-- 头部（结构对齐 SchedulesView .schedules-header） -->
     <div class="rb-header">
       <div class="rb-title">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></svg>
         <span>运维剧本</span>
         <span class="rb-sub" v-if="items.length">共 {{ items.length }} 个剧本</span>
       </div>
@@ -519,35 +518,35 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   height: var(--page-head-h);
-  padding: 0 16px;
+  padding: 0 var(--spacing-16);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
-.rb-title { display: flex; align-items: center; gap: 8px; font-size: var(--page-title-size); font-weight: 600; color: var(--text-primary); font-family: var(--font-sans); }
-.rb-sub { font-size: 12px; color: var(--text-tertiary); font-weight: 400; }
-.rb-actions { display: flex; gap: 8px; }
+.rb-title { display: flex; align-items: center; gap: var(--spacing-8); font-size: var(--page-title-size); font-weight: 600; color: var(--text-primary); font-family: var(--font-sans); }
+.rb-sub { font-size: 0.9231rem; color: var(--text-tertiary); font-weight: 400; }
+.rb-actions { display: flex; gap: var(--spacing-8); }
 
-.rb-list { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 10px; padding: 12px 16px 16px; }
+.rb-list { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: var(--spacing-10); padding: var(--spacing-12) var(--spacing-16) var(--spacing-16); }
 .rb-card {
   border: 1px solid var(--border-subtle);
   border-left: 3px solid var(--accent-primary);
   border-radius: var(--radius-lg);
-  padding: 12px 14px;
+  padding: var(--spacing-12) var(--spacing-14);
 }
 /* 卡片头：名称单行省略，右侧按钮组不被挤压（5 个按钮在窄宽下是硬需求） */
-.rb-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
-.rb-name { font-size: 14px; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 8px; min-width: 0; }
+.rb-card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-12); min-width: 0; }
+.rb-name { font-size: 1.0769rem; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: var(--spacing-8); min-width: 0; }
 .name-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.toggle, .status { flex-shrink: 0; font-size: 11px; padding: 1px 8px; border-radius: var(--radius-lg); border: 1px solid var(--border-subtle); }
+.toggle, .status { flex-shrink: 0; font-size: 0.8462rem; padding: 1px var(--spacing-8); border-radius: var(--radius-lg); border: 1px solid var(--border-subtle); }
 .toggle.on { color: var(--accent-green); border-color: var(--accent-green); }
-.rb-card-actions { display: flex; gap: 6px; flex-shrink: 0; }
-.rb-card-meta { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--text-secondary); margin-top: 8px; overflow-wrap: anywhere; }
+.rb-card-actions { display: flex; gap: var(--spacing-6); flex-shrink: 0; }
+.rb-card-meta { display: flex; flex-wrap: wrap; gap: var(--spacing-14); font-size: 0.9231rem; color: var(--text-secondary); margin-top: var(--spacing-8); overflow-wrap: anywhere; }
 .meta-item { text-align: left; }
 .meta-item b { color: var(--text-primary); font-weight: 600; }
 .mono { font-family: var(--font-mono); }
-.rb-card-body { margin-top: 8px; font-size: 12px; }
-.rb-card-body .k { color: var(--text-tertiary); margin-bottom: 4px; text-align: left; }
-.step-preview { margin: 0; padding-left: 20px; color: var(--text-secondary); }
+.rb-card-body { margin-top: var(--spacing-8); font-size: 0.9231rem; }
+.rb-card-body .k { color: var(--text-tertiary); margin-bottom: var(--spacing-4); text-align: left; }
+.step-preview { margin: 0; padding-left: var(--spacing-20); color: var(--text-secondary); }
 .step-preview li { text-align: left; white-space: pre-wrap; word-break: break-all; }
 
 .status.running { color: var(--accent-text); border-color: var(--accent-primary); }
@@ -555,46 +554,46 @@ onUnmounted(() => {
 .status.failed { color: var(--accent-red); border-color: var(--accent-red); }
 .status.stopped, .status.stale_reaped { color: var(--accent-orange); border-color: var(--accent-orange); }
 
-.empty-state { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-tertiary); font-size: 13px; padding: 16px; }
-.rb-loading { color: var(--text-tertiary); font-size: 12px; padding: 0 16px 12px; }
-.rb-error { color: var(--accent-red); font-size: 12px; padding: 0 16px 12px; }
+.empty-state { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-tertiary); font-size: 1rem; padding: var(--spacing-16); }
+.rb-loading { color: var(--text-tertiary); font-size: 0.9231rem; padding: 0 var(--spacing-16) var(--spacing-12); }
+.rb-error { color: var(--accent-red); font-size: 0.9231rem; padding: 0 var(--spacing-16) var(--spacing-12); }
 
 /* 弹窗骨架（遮罩/圆角/投影/焦点/滚动）统一由 BaseModal 提供，本文件不再自绘 */
-.field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-tertiary); }
+.field { display: flex; flex-direction: column; gap: var(--spacing-4); font-size: 0.9231rem; color: var(--text-tertiary); }
 .field input, .field select, .step-row input {
-  font-size: 12px; padding: 6px 8px; border-radius: var(--radius-md);
+  font-size: 0.9231rem; padding: var(--spacing-6) var(--spacing-8); border-radius: var(--radius-md);
   border: 1px solid var(--border-subtle); background: var(--bg-input); color: var(--text-primary);
 }
-.field.check { flex-direction: row; align-items: center; gap: 6px; }
+.field.check { flex-direction: row; align-items: center; gap: var(--spacing-6); }
 
-.step-editor { display: flex; flex-direction: column; gap: 8px; }
-.step-row { border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 8px; display: flex; flex-direction: column; gap: 6px; }
-.step-row-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--text-secondary); }
-.step-ops { display: flex; gap: 4px; }
-.btn-xs { padding: 1px 6px; font-size: 11px; }
+.step-editor { display: flex; flex-direction: column; gap: var(--spacing-8); }
+.step-row { border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: var(--spacing-8); display: flex; flex-direction: column; gap: var(--spacing-6); }
+.step-row-head { display: flex; align-items: center; justify-content: space-between; font-size: 0.9231rem; color: var(--text-secondary); }
+.step-ops { display: flex; gap: var(--spacing-4); }
+.btn-xs { padding: 1px var(--spacing-6); font-size: 0.8462rem; }
 
-.form-err { color: var(--accent-red); font-size: 12px; }
+.form-err { color: var(--accent-red); font-size: 0.9231rem; }
 
 .history-load-error {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  font-size: 12px; color: var(--danger-text);
+  display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-10);
+  font-size: 0.9231rem; color: var(--danger-text);
   overflow-wrap: anywhere;
-  border: 1px solid var(--danger-text); border-radius: var(--radius-md); padding: 8px 10px;
+  border: 1px solid var(--danger-text); border-radius: var(--radius-md); padding: var(--spacing-8) var(--spacing-10);
 }
-.empty-small { color: var(--text-tertiary); font-size: 12px; padding: 20px 0; text-align: center; }
+.empty-small { color: var(--text-tertiary); font-size: 0.9231rem; padding: var(--spacing-20) 0; text-align: center; }
 
-.hist-steps { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
-.hist-step { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
+.hist-steps { display: flex; flex-direction: column; gap: var(--spacing-4); margin-top: var(--spacing-8); }
+.hist-step { display: flex; align-items: baseline; gap: var(--spacing-8); font-size: 0.9231rem; }
 .hist-step .hist-cmd { color: var(--text-secondary); white-space: pre-wrap; word-break: break-all; text-align: left; }
 .hist-verdict { color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40%; }
-.step-badge { flex-shrink: 0; font-size: 11px; padding: 1px 8px; border-radius: var(--radius-lg); border: 1px solid var(--border-subtle); }
+.step-badge { flex-shrink: 0; font-size: 0.8462rem; padding: 1px var(--spacing-8); border-radius: var(--radius-lg); border: 1px solid var(--border-subtle); }
 .step-badge.success { color: var(--accent-green); border-color: var(--accent-green); }
 .step-badge.failed { color: var(--accent-red); border-color: var(--accent-red); }
 .step-badge.blocked { color: var(--accent-orange); border-color: var(--accent-orange); }
 .step-badge.skipped { color: var(--text-tertiary); }
 .step-badge.pending { color: var(--text-secondary); }
 
-.history-diagnosis { margin-top: 8px; }
-.history-diagnosis .k { color: var(--text-tertiary); font-size: 12px; margin-bottom: 4px; text-align: left; }
-.diagnosis-text { font-size: 12px; color: var(--text-secondary); white-space: pre-wrap; max-height: 150px; overflow: auto; text-align: left; }
+.history-diagnosis { margin-top: var(--spacing-8); }
+.history-diagnosis .k { color: var(--text-tertiary); font-size: 0.9231rem; margin-bottom: var(--spacing-4); text-align: left; }
+.diagnosis-text { font-size: 0.9231rem; color: var(--text-secondary); white-space: pre-wrap; max-height: 150px; overflow: auto; text-align: left; }
 </style>

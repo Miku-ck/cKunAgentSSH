@@ -178,12 +178,12 @@ onMounted(() => { load(cwd.value || '/') })
 /* 这套样式跟着 .hcc-menu.wide 的盒子走（220px 宽、260px 高、可滚）。
    只用各主题都已有的令牌 —— 手记主题下它就是米纸上一份紧凑列表，别的主题下
    也不该出现"这块没跟着换肤"的洞。 */
-.hrp { display: flex; flex-direction: column; gap: 2px }
+.hrp { display: flex; flex-direction: column; gap: var(--spacing-2) }
 .hrp-bar {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 2px 5px;
+  gap: var(--spacing-4);
+  padding: var(--spacing-2) var(--spacing-2) 5px;
   border-bottom: 1px solid var(--divider-primary);
 }
 .hrp-back,
@@ -200,7 +200,7 @@ onMounted(() => { load(cwd.value || '/') })
 .hrp-path {
   flex: 1;
   min-width: 0;
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -212,12 +212,12 @@ onMounted(() => { load(cwd.value || '/') })
 .hrp-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--spacing-6);
   width: 100%;
   text-align: left;
-  padding: 4px 6px;
+  padding: var(--spacing-4) var(--spacing-6);
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-primary);
 }
 .hrp-row:hover:not(:disabled) { background: var(--bg-hover) }
@@ -230,8 +230,8 @@ onMounted(() => { load(cwd.value || '/') })
   white-space: nowrap;
 }
 .hrp-row.dir .nm { color: var(--accent-text) }
-.hrp-row .sz { font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary) }
+.hrp-row .sz { font-family: var(--font-mono); font-size: 0.7692rem; color: var(--text-tertiary) }
 .hrp-row.up { color: var(--text-secondary) }
-.hrp-hint { padding: 6px; font-size: 11px; color: var(--text-tertiary) }
+.hrp-hint { padding: var(--spacing-6); font-size: 0.8462rem; color: var(--text-tertiary) }
 .hrp-hint.err { color: var(--danger-text) }
 </style>

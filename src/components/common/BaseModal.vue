@@ -78,7 +78,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: var(--spacing-24);
   background: var(--scrim);
   backdrop-filter: blur(2px);
   animation: bm-fade-in 140ms ease-out;
@@ -108,16 +108,16 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--spacing-10);
   min-height: 44px;
-  padding: 10px 16px;
+  padding: var(--spacing-10) var(--spacing-16);
   border-bottom: 1px solid var(--border-subtle);
 }
 
 .bm-title {
   margin: 0;
   min-width: 0;
-  font-size: 14px;
+  font-size: 1.0769rem;
   font-weight: 600;
   color: var(--text-primary);
   overflow: hidden;
@@ -129,18 +129,18 @@ onUnmounted(() => {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 16px;
+  padding: var(--spacing-16);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--spacing-10);
 }
 
 .bm-actions {
   flex: 0 0 auto;
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  padding: 12px 16px;
+  gap: var(--spacing-8);
+  padding: var(--spacing-12) var(--spacing-16);
   border-top: 1px solid var(--border-subtle);
 }
 

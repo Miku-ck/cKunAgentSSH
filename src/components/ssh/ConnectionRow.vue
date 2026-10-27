@@ -39,8 +39,7 @@
 
     <div class="cell-actions" @click.stop>
       <button class="row-btn connect" :class="{ loading: isConnecting }" :title="isConnecting ? '连接中...' : '打开终端'" @click="$emit('connect', connection.id)">
-        <svg v-if="!isConnecting" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        <svg v-else class="spinner" viewBox="0 0 24 24" fill="none" width="14" height="14"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.25"/><path d="M22 12a10 10 0 0 0-10-10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+        <svg v-if="isConnecting" class="spinner" viewBox="0 0 24 24" fill="none" width="14" height="14"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.25"/><path d="M22 12a10 10 0 0 0-10-10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
         <span v-if="!isConnecting">打开终端</span>
         <span v-else class="loading-text">连接中...</span>
       </button>
@@ -117,9 +116,9 @@ function formatDate(ts: number): string {
   display: grid;
   grid-template-columns: var(--rm-grid-cols, 22px 12px minmax(110px, 1.1fr) minmax(160px, 1.4fr) 60px minmax(80px, 0.9fr) 84px 84px 112px);
   align-items: center;
-  gap: 10px;
+  gap: var(--spacing-10);
   height: 44px;
-  padding: 0 12px;
+  padding: 0 var(--spacing-12);
   border-bottom: 1px solid var(--border-subtle);
   cursor: default;
   transition: background var(--transition-fast);
@@ -193,8 +192,8 @@ function formatDate(ts: number): string {
 .cell-name {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 13px;
+  gap: var(--spacing-6);
+  font-size: 1rem;
   color: var(--text-primary);
   font-weight: 500;
   text-align: left;
@@ -202,9 +201,9 @@ function formatDate(ts: number): string {
 
 .type-badge {
   flex-shrink: 0;
-  padding: 1px 4px;
+  padding: 1px var(--spacing-4);
   border-radius: var(--radius-sm);
-  font-size: 9px;
+  font-size: 0.6923rem;
   font-weight: 600;
   letter-spacing: 0.3px;
   color: var(--text-tertiary);
@@ -221,7 +220,7 @@ function formatDate(ts: number): string {
 
 /* ── 主机 ── */
 .cell-host {
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-secondary);
   font-family: var(--font-mono);
   text-align: left;
@@ -243,9 +242,9 @@ function formatDate(ts: number): string {
 
 .auth-badge {
   display: inline-block;
-  padding: 2px 8px;
+  padding: var(--spacing-2) var(--spacing-8);
   border-radius: var(--radius-sm);
-  font-size: 10px;
+  font-size: 0.7692rem;
   font-weight: 500;
   text-align: left;
   white-space: nowrap;
@@ -268,7 +267,7 @@ function formatDate(ts: number): string {
 
 /* ── 备注 ── */
 .cell-tags {
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-secondary);
   font-weight: 400;
 }
@@ -276,21 +275,21 @@ function formatDate(ts: number): string {
 /* ── 最后连接时间 ── */
 .cell-time {
   text-align: left;
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
 }
 
 /* ── 创建时间 ── */
 .cell-created {
   text-align: left;
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
 }
 
 /* ── 操作 (默认隐藏,hover 时显示) ── */
 .cell-actions {
   display: flex;
-  gap: 4px;
+  gap: var(--spacing-4);
   justify-content: flex-end;
   align-items: center;
   opacity: 0;
@@ -306,15 +305,15 @@ function formatDate(ts: number): string {
 .row-btn {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--spacing-4);
   height: 26px;
-  padding: 0 8px;
+  padding: 0 var(--spacing-8);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 11px;
+  font-size: 0.8462rem;
   font-family: var(--font-sans);
   transition: all var(--transition-fast);
 }

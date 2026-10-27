@@ -3,12 +3,10 @@
     <!-- 头部 -->
     <div class="rm-header">
       <div class="rm-title">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
         <span>远程管理</span>
       </div>
       <div class="rm-header-actions">
         <button v-if="remoteSessionCount > 1" class="btn" @click="showBulkModal = true" title="对当前活动远程会话批量下发命令并对比结果">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
           批量下发（{{ remoteSessionCount }} 台）
         </button>
         <button class="btn btn-primary" @click="showNewDialog = true">新建连接</button>
@@ -18,7 +16,6 @@
     <!-- 工具栏：两类连接共用一条搜索，类型由行内徽标区分 -->
     <div class="rm-toolbar">
       <div class="rm-search">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         <input v-model="searchText" placeholder="搜索名称/主机/用户名/备注..." />
       </div>
     </div>
@@ -89,7 +86,6 @@
     <div v-if="selectedIds.size > 0" class="rm-batch-bar">
       <span class="batch-info">已选 {{ selectedIds.size }} 项</span>
       <button class="btn btn-danger" @click="handleDeleteBatch">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
         删除
       </button>
       <button class="btn" @click="clearSelection">取消选择</button>
@@ -105,36 +101,29 @@
       >
         <template v-if="menu.target?.kind === 'ssh'">
           <div class="ctx-item" @click="handleMenuAction('connect')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
             打开终端
           </div>
           <div class="ctx-item" @click="handleMenuAction('edit')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
             编辑
           </div>
           <div class="ctx-item" @click="handleMenuAction('duplicate')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
             复制配置
           </div>
           <div class="ctx-sep"></div>
           <div class="ctx-item danger" @click="handleMenuAction('delete')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
             删除
           </div>
         </template>
 
         <template v-else-if="menu.target?.kind === 'gateway'">
           <div class="ctx-item" @click="handleMenuAction('toggle')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M12 3v9"/><path d="M6.6 6.6a8 8 0 1 0 10.8 0"/></svg>
             {{ gatewayToggleLabel(menu.target.gw.id) }}
           </div>
           <div class="ctx-item" @click="handleMenuAction('edit')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
             编辑
           </div>
           <div class="ctx-sep"></div>
           <div class="ctx-item danger" @click="handleMenuAction('delete')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
             删除
           </div>
         </template>
@@ -574,7 +563,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   height: var(--page-head-h);
-  padding: 0 16px;
+  padding: 0 var(--spacing-16);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
@@ -582,7 +571,7 @@ onUnmounted(() => {
 .rm-title {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-8);
   font-size: var(--page-title-size);
   font-weight: 600;
   color: var(--text-primary);
@@ -591,15 +580,15 @@ onUnmounted(() => {
 
 .rm-header-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--spacing-8);
 }
 
 /* 工具栏 */
 .rm-toolbar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
+  gap: var(--spacing-12);
+  padding: var(--spacing-10) var(--spacing-16);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
   flex-wrap: wrap;
@@ -608,13 +597,12 @@ onUnmounted(() => {
 .rm-search {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-8);
   width: 240px;
   height: 30px;
-  padding: 0 10px;
+  padding: 0 var(--spacing-10);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  color: var(--text-tertiary);
   transition: border-color var(--transition-fast);
 }
 
@@ -627,7 +615,7 @@ onUnmounted(() => {
   border: none;
   background: transparent;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-family: var(--font-sans);
   outline: none;
   min-width: 0;
@@ -650,11 +638,11 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: var(--rm-grid-cols);
   align-items: center;
-  gap: 10px;
+  gap: var(--spacing-10);
   height: 36px;
-  padding: 0 12px;
+  padding: 0 var(--spacing-12);
   border-bottom: 1px solid var(--border-default);
-  font-size: 11px;
+  font-size: 0.8462rem;
   font-weight: 600;
   color: var(--text-tertiary);
   text-transform: uppercase;
@@ -703,7 +691,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 4px;
+  gap: var(--spacing-4);
   transition: color var(--transition-fast);
 }
 
@@ -713,7 +701,7 @@ onUnmounted(() => {
 
 /* 当前排序列只靠 ▾ 箭头表意：原先再上一道强调色，表头里就那一列与其他列不同色 */
 .sort-arrow {
-  font-size: 10px;
+  font-size: 0.7692rem;
   display: inline-block;
 }
 
@@ -723,8 +711,8 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0 20px;
-  font-size: 14px;
+  padding: 0 var(--spacing-20);
+  font-size: 1.0769rem;
   font-weight: 500;
   color: var(--text-secondary);
   text-align: center;
@@ -735,9 +723,9 @@ onUnmounted(() => {
 .rm-batch-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-8);
   height: 40px;
-  padding: 0 16px;
+  padding: 0 var(--spacing-16);
   border-top: 1px solid var(--border-default);
   /* 底部批量操作栏：结构面走 --canvas-bg 与整页统一 */
   background: var(--canvas-bg);
@@ -745,7 +733,7 @@ onUnmounted(() => {
 }
 
 .batch-info {
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-secondary);
   margin-right: auto;
 }
@@ -755,7 +743,7 @@ onUnmounted(() => {
   position: fixed;
   z-index: 9999;
   min-width: 160px;
-  padding: 4px;
+  padding: var(--spacing-4);
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
@@ -765,9 +753,9 @@ onUnmounted(() => {
 .ctx-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  font-size: 12px;
+  gap: var(--spacing-8);
+  padding: var(--spacing-6) var(--spacing-10);
+  font-size: 0.9231rem;
   color: var(--text-secondary);
   cursor: pointer;
   border-radius: var(--radius-sm);
@@ -791,7 +779,7 @@ onUnmounted(() => {
 
 .ctx-sep {
   height: 1px;
-  margin: 4px 0;
+  margin: var(--spacing-4) 0;
   background: var(--border-subtle);
 }
 </style>

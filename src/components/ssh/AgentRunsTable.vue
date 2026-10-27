@@ -226,10 +226,10 @@ watch(() => props.focusSeq, () => {
 .art-filters {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-8);
   flex-shrink: 0;
-  margin: 12px 16px 0;
-  padding: 10px 12px;
+  margin: var(--spacing-12) var(--spacing-16) 0;
+  padding: var(--spacing-10) var(--spacing-12);
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
@@ -240,27 +240,27 @@ watch(() => props.focusSeq, () => {
   border: 1px solid var(--border-default);
   color: var(--text-primary);
   border-radius: var(--radius-sm);
-  padding: 4px 8px;
-  font-size: 12px;
+  padding: var(--spacing-4) var(--spacing-8);
+  font-size: 0.9231rem;
 }
 .art-filters input { flex: 1; max-width: 240px; }
 .art-filters input.trace-input { font-family: var(--font-mono); }
-.art-count { margin-left: auto; font-size: 11px; color: var(--text-tertiary) }
-.art-error { font-size: 12px; color: var(--danger-text); padding: 10px 16px }
-.art-hint { font-size: 12px; color: var(--text-tertiary); padding: 14px 16px }
+.art-count { margin-left: auto; font-size: 0.8462rem; color: var(--text-tertiary) }
+.art-error { font-size: 0.9231rem; color: var(--danger-text); padding: var(--spacing-10) var(--spacing-16) }
+.art-hint { font-size: 0.9231rem; color: var(--text-tertiary); padding: var(--spacing-14) var(--spacing-16) }
 .art-table-wrap {
   flex: 1;
   min-height: 0;
   overflow: auto;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  margin: 12px 16px 0;
+  margin: var(--spacing-12) var(--spacing-16) 0;
   background: var(--bg-elevated);
 }
 .art-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: 0.9231rem;
 }
 .art-table th {
   position: sticky;
@@ -269,15 +269,15 @@ watch(() => props.focusSeq, () => {
   /* 表头浮在滚动行之上须不透明：实体主题与卡面同值，渐变模式下滚动行不会从表头底下透出 */
   background: var(--bg-elevated-solid);
   text-align: left;
-  padding: 8px 10px;
-  font-size: 11px;
+  padding: var(--spacing-8) var(--spacing-10);
+  font-size: 0.8462rem;
   text-transform: uppercase;
   letter-spacing: 0.4px;
   color: var(--text-tertiary);
   border-bottom: 1px solid var(--border-subtle);
 }
 .art-table td {
-  padding: 6px 10px;
+  padding: var(--spacing-6) var(--spacing-10);
   border-bottom: 1px solid var(--border-subtle);
   color: var(--text-secondary);
   vertical-align: top;
@@ -309,9 +309,9 @@ watch(() => props.focusSeq, () => {
 .num { text-align: left; font-family: var(--font-mono); white-space: nowrap }
 .st {
   display: inline-block;
-  padding: 1px 8px;
+  padding: 1px var(--spacing-8);
   border-radius: var(--radius-pill);
-  font-size: 11px;
+  font-size: 0.8462rem;
   border: 1px solid var(--border-default);
   color: var(--text-secondary);
 }
@@ -320,14 +320,14 @@ watch(() => props.focusSeq, () => {
 .st-max_reached { color: var(--danger-text); border-color: var(--danger-border) }
 .st-running,
 .st-human_help { color: var(--status-warn-text); background: var(--status-warn-bg) }
-.detail td { background: var(--bg-elevated); padding: 4px 10px 10px }
+.detail td { background: var(--bg-elevated); padding: var(--spacing-4) var(--spacing-10) var(--spacing-10) }
 .art-pager {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: var(--spacing-12);
   flex-shrink: 0;
-  padding: 12px 16px;
+  padding: var(--spacing-12) var(--spacing-16);
 }
-.art-pager-info { font-size: 12px; color: var(--text-tertiary) }
+.art-pager-info { font-size: 0.9231rem; color: var(--text-tertiary) }
 </style>

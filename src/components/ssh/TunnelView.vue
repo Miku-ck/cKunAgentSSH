@@ -2,7 +2,6 @@
   <div class="tunnel-view">
     <div class="page-head">
       <div class="page-title">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M4 20v-7a8 8 0 0 1 16 0v7"/><path d="M12 20v-7"/><path d="M2 20h20"/></svg>
         <span>隧道</span>
       </div>
       <span class="head-spacer"></span>
@@ -225,13 +224,13 @@ onUnmounted(() => {
   align-items: center;
   flex-shrink: 0;
   height: var(--page-head-h);
-  padding: 0 16px;
+  padding: 0 var(--spacing-16);
   border-bottom: 1px solid var(--border-subtle);
 }
 .page-title {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-8);
   font-size: var(--page-title-size);
   font-weight: 600;
   color: var(--text-primary);
@@ -243,7 +242,7 @@ onUnmounted(() => {
 .tunnel-body {
   flex: 1;
   overflow-y: auto;
-  padding: 12px 16px 24px;
+  padding: var(--spacing-12) var(--spacing-16) var(--spacing-24);
   /* flex 纵向布局：列表区撑满剩余空间，空态在其中双向居中 */
   display: flex;
   flex-direction: column;
@@ -259,7 +258,7 @@ onUnmounted(() => {
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 0.9231rem;
   transition: background var(--transition-fast), color var(--transition-fast);
 }
 .icon-btn svg { width: 14px; height: 14px; }
@@ -278,19 +277,19 @@ onUnmounted(() => {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--spacing-8);
 }
 .tunnel-row {
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
-  padding: 11px 14px;
+  padding: 11px var(--spacing-14);
   display: grid;
   grid-template-columns: 10px 1fr auto;
   /* err 单独第三行：与 meta 同格会叠放，错误横幅盖住连接名那行 */
   grid-template-areas: 'dot main act' '. meta act' '. err err';
-  gap: 3px 12px;
+  gap: 3px var(--spacing-12);
   align-items: start;
   transition: border-color var(--transition-fast);
 }
@@ -321,14 +320,14 @@ onUnmounted(() => {
   grid-area: main;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-8);
   flex-wrap: wrap;
 }
 .badge {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 0.8077rem;
   font-weight: 700;
-  padding: 1px 6px;
+  padding: 1px var(--spacing-6);
   border-radius: var(--radius-sm);
   flex: none;
 }
@@ -352,21 +351,21 @@ onUnmounted(() => {
 
 .rule-path {
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: 0.9615rem;
 }
 
 .row-meta {
   grid-area: meta;
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 11.5px;
+  gap: var(--spacing-10);
+  font-size: 0.8846rem;
   color: var(--text-tertiary);
 }
 .row-meta .conn-name { color: var(--text-secondary); }
 .cnt {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 0.8077rem;
   color: var(--accent-green);
   background: color-mix(in srgb, var(--accent-green) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent-green) 25%, transparent);
@@ -380,19 +379,19 @@ onUnmounted(() => {
   grid-area: act;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--spacing-4);
 }
 .copy-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--tint-l, var(--accent-cyan));
   background: var(--bg-input);
   border: 1px solid var(--border-input);
   border-radius: var(--radius-sm);
-  padding: 2px 8px;
+  padding: var(--spacing-2) var(--spacing-8);
   cursor: pointer;
   transition: border-color var(--transition-fast);
 }
@@ -405,7 +404,7 @@ onUnmounted(() => {
 .row-err {
   grid-area: err;
   margin-top: 5px;
-  font-size: 11.5px;
+  font-size: 0.8846rem;
   color: var(--danger-text);
   background: var(--danger-bg);
   border: 1px solid var(--danger-border);
@@ -413,7 +412,7 @@ onUnmounted(() => {
   padding: 5px 9px;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--spacing-10);
 }
 .row-err .btn { margin-left: auto; }
 
@@ -426,6 +425,6 @@ onUnmounted(() => {
   text-align: center;
   padding: 50px 0;
   color: var(--text-tertiary);
-  font-size: 13px;
+  font-size: 1rem;
 }
 </style>

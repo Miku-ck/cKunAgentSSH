@@ -86,7 +86,6 @@ async function resendResult(): Promise<void> {
 <template>
   <div class="ap-card delivery-card">
     <div class="ap-head">
-      <svg class="ap-ic delivery-accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
       <span class="ap-ttl">{{ cardTitle }}</span>
       <span class="delivery-target" :title="targetLabel || '当前终端'">{{ targetLabel || '当前终端' }}</span>
       <span v-if="isProd" class="ap-env env-prod">生产环境</span>
@@ -155,7 +154,6 @@ async function resendResult(): Promise<void> {
   border-color: var(--card-warn-border);
   max-height: min(38vh, 340px);
 }
-.delivery-accent { color: var(--status-warn-text); }
 
 /* 回传诊断行：失败原因用告警红，与风险徽章同色系 */
 .dc-err { color: var(--accent-red); }
@@ -166,11 +164,11 @@ async function resendResult(): Promise<void> {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding: 1px 8px;
+  padding: 1px var(--spacing-8);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-pill);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 0.8077rem;
   color: var(--text-secondary);
 }
 
@@ -185,7 +183,7 @@ async function resendResult(): Promise<void> {
   border-radius: var(--radius-md);
   padding: 9px 11px;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 0.8846rem;
   line-height: 1.55;
   color: var(--text-primary);
   white-space: pre-wrap;
@@ -195,8 +193,8 @@ async function resendResult(): Promise<void> {
 /* 卡头风险徽章：聚合级别展示（safe 只读绿 / 非 safe 警示红）。
    底色用文字令牌自身 12% 混入，与 col-badge 同一套派生法，不吃死色值。 */
 .dc-risk {
-  font-size: 10.5px;
-  padding: 1px 8px;
+  font-size: 0.8077rem;
+  padding: 1px var(--spacing-8);
   border-radius: var(--radius-sm);
   white-space: nowrap;
 }
@@ -212,8 +210,8 @@ async function resendResult(): Promise<void> {
 }
 .seg-row {
   display: flex;
-  gap: 8px;
-  padding: 6px 10px;
+  gap: var(--spacing-8);
+  padding: var(--spacing-6) var(--spacing-10);
   align-items: flex-start;
 }
 .seg-row + .seg-row { border-top: 1px solid var(--border-subtle); }
@@ -225,7 +223,7 @@ async function resendResult(): Promise<void> {
   border-radius: 50%;
   background: var(--bg-hover);
   color: var(--text-tertiary);
-  font-size: 10px;
+  font-size: 0.7692rem;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -233,25 +231,25 @@ async function resendResult(): Promise<void> {
 }
 .seg-idx-bad { color: var(--accent-red); }
 .seg-main { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.seg-intent { font-size: 12px; color: var(--text-primary); line-height: 1.45; }
+.seg-intent { font-size: 0.9231rem; color: var(--text-primary); line-height: 1.45; }
 .seg-cmd {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 0.8077rem;
   color: var(--text-tertiary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.seg-note { font-size: 11px; color: var(--accent-red); line-height: 1.45; }
+.seg-note { font-size: 0.8462rem; color: var(--accent-red); line-height: 1.45; }
 
 /* 完整原文折叠区：summary 用次要色调，展开后的 pre 复用 delivery-code */
-.seg-raw { margin-top: 8px; }
+.seg-raw { margin-top: var(--spacing-8); }
 .seg-raw summary {
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
   cursor: pointer;
   user-select: none;
-  margin-bottom: 6px;
+  margin-bottom: var(--spacing-6);
 }
 .seg-raw summary:hover { color: var(--text-secondary); }
 </style>

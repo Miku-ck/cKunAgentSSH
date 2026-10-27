@@ -102,26 +102,26 @@ onMounted(() => {
 
 .section-divider {
   height: 1px; background: var(--border-subtle);
-  margin: 20px 0;
+  margin: var(--spacing-20) 0;
 }
 .memory-stats {
-  display: flex; align-items: center; gap: 8px;
-  padding: 8px 12px;
+  display: flex; align-items: center; gap: var(--spacing-8);
+  padding: var(--spacing-8) var(--spacing-12);
   background: var(--bg-input);
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  font-size: 0.9231rem;
 }
 .stats-label { color: var(--text-secondary); }
 .stats-value { color: var(--text-primary); font-weight: 500; }
 .foot-hint {
-  margin: 8px 0 0;
-  font-size: 11.5px;
+  margin: var(--spacing-8) 0 0;
+  font-size: 0.8846rem;
   color: var(--text-tertiary);
   line-height: 1.5;
 }
 .manage-btn {
-  padding: 4px 10px;
-  font-size: 12px;
+  padding: var(--spacing-4) var(--spacing-10);
+  font-size: 0.9231rem;
   color: var(--text-primary);
   background: var(--bg-input);
   border: 1px solid var(--border-default);

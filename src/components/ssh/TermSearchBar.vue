@@ -119,8 +119,8 @@ function close(): void {
   z-index: 30;
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 6px;
+  gap: var(--spacing-4);
+  padding: var(--spacing-4) var(--spacing-6);
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
@@ -130,12 +130,12 @@ function close(): void {
 .ts-input {
   width: 160px;
   height: 24px;
-  padding: 0 8px;
+  padding: 0 var(--spacing-8);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   background: var(--bg-input-solid);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-family: var(--font-sans);
   outline: none;
 }
@@ -145,7 +145,7 @@ function close(): void {
 }
 
 .ts-count {
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
   white-space: nowrap;
   min-width: 30px;
@@ -155,7 +155,7 @@ function close(): void {
 .ts-btn {
   min-width: 22px;
   height: 22px;
-  padding: 0 4px;
+  padding: 0 var(--spacing-4);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -163,7 +163,7 @@ function close(): void {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: 0.8462rem;
   font-family: var(--font-sans);
   cursor: pointer;
   transition: background var(--transition-fast), color var(--transition-fast);

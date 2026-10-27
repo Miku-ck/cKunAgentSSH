@@ -977,23 +977,23 @@ onMounted(async () => {
 <style scoped>
 .grp-badge.live { color: var(--accent-text); }
 
-.risk-group { margin-bottom: 10px; }
+.risk-group { margin-bottom: var(--spacing-10); }
 .risk-label {
-  font-size: 11px; color: var(--text-tertiary); margin: 6px 0 4px;
+  font-size: 0.8462rem; color: var(--text-tertiary); margin: var(--spacing-6) 0 var(--spacing-4);
   text-transform: none; font-weight: 600;
 }
 .risk-label.dangerous { color: var(--status-error-text); }
 .risk-label.moderate { color: var(--status-warn-text); }
 
 .tool-row, .perm-row, .strat-row {
-  display: flex; align-items: center; gap: 10px;
-  padding: 7px 4px; border-top: 1px solid var(--border-subtle);
+  display: flex; align-items: center; gap: var(--spacing-10);
+  padding: 7px var(--spacing-4); border-top: 1px solid var(--border-subtle);
 }
 .strat-row.off { opacity: .55; }
-.tool-name { font-size: 12.5px; font-family: var(--font-mono); color: var(--text-primary); }
-.strat-name { font-size: 12.5px; font-weight: 600; color: var(--text-primary); }
+.tool-name { font-size: 0.9615rem; font-family: var(--font-mono); color: var(--text-primary); }
+.strat-name { font-size: 0.9615rem; font-weight: 600; color: var(--text-primary); }
 .tool-desc {
-  font-size: 11px; color: var(--text-secondary);
+  font-size: 0.8462rem; color: var(--text-secondary);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 /* 授权作用域徽标：主机限域用 warn 色，扫一眼就能分清哪条是收紧过的授权 */
@@ -1006,40 +1006,40 @@ onMounted(async () => {
   color: var(--status-warn-text);
   border-color: color-mix(in srgb, var(--status-warn-text) 35%, transparent);
 }
-.tool-flags { display: flex; gap: 4px; flex-shrink: 0; }
+.tool-flags { display: flex; gap: var(--spacing-4); flex-shrink: 0; }
 .flag.info { color: var(--status-info-text); border-color: color-mix(in srgb, var(--status-info-text) 35%, transparent); }
 .strat-meta { display: flex; gap: 5px; margin-top: 3px; }
 
-.budget-row { display: flex; gap: 16px; margin: 8px 0 4px; }
-.budget-field { display: flex; flex-direction: column; gap: 4px; }
-.budget-label { font-size: 11.5px; color: var(--text-secondary); }
+.budget-row { display: flex; gap: var(--spacing-16); margin: var(--spacing-8) 0 var(--spacing-4); }
+.budget-field { display: flex; flex-direction: column; gap: var(--spacing-4); }
+.budget-label { font-size: 0.8846rem; color: var(--text-secondary); }
 .num-input, .text-input {
-  height: 26px; padding: 0 8px; border-radius: var(--radius-sm);
+  height: 26px; padding: 0 var(--spacing-8); border-radius: var(--radius-sm);
   background: var(--bg-input); border: 1px solid var(--border-default);
-  color: var(--text-primary); font-size: 12px; font-family: inherit;
+  color: var(--text-primary); font-size: 0.9231rem; font-family: inherit;
 }
 .num-input { width: 120px; }
 .num-input.input-error { border-color: var(--status-error-text); }
-.runtime-row { margin: 8px 0; }
+.runtime-row { margin: var(--spacing-8) 0; }
 .runtime-field { display: block; }
-.runtime-label { font-size: 12px; color: var(--text-primary); font-weight: 500; }
-.runtime-desc { display: block; font-size: 11.5px; color: var(--text-secondary); margin-top: 2px; }
+.runtime-label { font-size: 0.9231rem; color: var(--text-primary); font-weight: 500; }
+.runtime-desc { display: block; font-size: 0.8846rem; color: var(--text-secondary); margin-top: var(--spacing-2); }
 .runtime-toggle-row {
   display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; padding: 8px 0; border-top: 1px solid var(--border-subtle); margin-top: 8px;
+  gap: var(--spacing-12); padding: var(--spacing-8) 0; border-top: 1px solid var(--border-subtle); margin-top: var(--spacing-8);
 }
-.runtime-toggle-info { display: flex; flex-direction: column; gap: 2px; }
+.runtime-toggle-info { display: flex; flex-direction: column; gap: var(--spacing-2); }
 .ops-toggle-row {
   display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; padding: 8px 0; border-top: 1px solid var(--border-subtle);
+  gap: var(--spacing-12); padding: var(--spacing-8) 0; border-top: 1px solid var(--border-subtle);
 }
 .ops-toggle-row:first-of-type { border-top: none; }
-.ops-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ops-info { display: flex; flex-direction: column; gap: var(--spacing-2); min-width: 0; }
 .setting-select { flex-shrink: 0; }
 .setting-select:disabled { opacity: .5; cursor: default; }
-.slider-inline { margin-top: 6px; }
+.slider-inline { margin-top: var(--spacing-6); }
 .slider-inline :deep(.setting-range) { flex: 1; max-width: 320px; }
-.allow-row { display: flex; gap: 8px; align-items: center; margin: 8px 0 4px; }
+.allow-row { display: flex; gap: var(--spacing-8); align-items: center; margin: var(--spacing-8) 0 var(--spacing-4); }
 .text-input { flex: 1; min-width: 0; }
 .text-input.wide { flex: 2; }
 /* 主机框不从命令框抢宽度：三个都 flex 时命令框会被压到看不清 */

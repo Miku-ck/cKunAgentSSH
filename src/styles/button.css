@@ -29,14 +29,14 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: var(--spacing-6);
   height: 24px;
-  padding: 0 10px;
+  padding: 0 var(--spacing-10);
   border-radius: var(--radius-sm);
   background: transparent;
   border: 1px solid transparent;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-weight: 400;
   font-family: inherit;
   line-height: 1;
@@ -86,7 +86,7 @@
 /* ── 紧凑尺寸：表格行、折叠条、记忆抽屉 ── */
 .btn-sm {
   height: 20px;
-  padding: 0 8px;
-  font-size: 11px;
+  padding: 0 var(--spacing-8);
+  font-size: 0.8462rem;
   border-radius: var(--radius-sm);
 }

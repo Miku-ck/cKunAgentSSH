@@ -397,7 +397,7 @@ const terminalBgModeLabels: Record<TerminalBgMode, string> = {
 .color-swatches {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--spacing-8);
 }
 .swatch-btn {
   width: 24px;
@@ -419,9 +419,9 @@ const terminalBgModeLabels: Record<TerminalBgMode, string> = {
 
 /* 状态说破条（渐变强度为 0 / 终端纯色底过浅共用）：不改用户的设置，只讲清现在实际是什么效果 */
 .field-hint {
-  margin: -4px 0 8px;
-  padding: 6px 10px;
-  font-size: 12px;
+  margin: -4px 0 var(--spacing-8);
+  padding: var(--spacing-6) var(--spacing-10);
+  font-size: 0.9231rem;
   line-height: 1.5;
   color: var(--text-secondary);
   background: var(--bg-input);
@@ -433,7 +433,7 @@ const terminalBgModeLabels: Record<TerminalBgMode, string> = {
 .gradient-color-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-8);
 }
 .gradient-color-row input[type="color"] {
   width: 28px;
@@ -450,15 +450,15 @@ const terminalBgModeLabels: Record<TerminalBgMode, string> = {
 }
 /* 终端背景色当前值文本（色板取色器的回报） */
 .bg-color-text {
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-secondary);
   font-family: var(--font-mono);
 }
 .gradient-follow {
   display: flex;
   align-items: center;
-  gap: 4px;
-  font-size: 11px;
+  gap: var(--spacing-4);
+  font-size: 0.8462rem;
   color: var(--text-secondary);
   cursor: pointer;
   user-select: none;
@@ -472,32 +472,32 @@ const terminalBgModeLabels: Record<TerminalBgMode, string> = {
 
 /* 背景图设置区域 */
 .bg-section {
-  margin-top: 8px;
-  padding-top: 8px;
+  margin-top: var(--spacing-8);
+  padding-top: var(--spacing-8);
   border-top: 1px solid var(--border-subtle);
 }
 
 /* 终端设置区域 */
 .terminal-section {
-  margin-top: 8px;
-  padding-top: 8px;
+  margin-top: var(--spacing-8);
+  padding-top: var(--spacing-8);
   border-top: 1px solid var(--border-subtle);
 }
 
 .bg-control {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-8);
 }
 
 .bg-btn {
   height: 28px;
-  padding: 0 12px;
+  padding: 0 var(--spacing-12);
   background: var(--bg-input);
   border: 1px solid var(--border-input);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-family: inherit;
   cursor: pointer;
   transition: border-color 0.15s ease, background 0.15s ease;
@@ -530,7 +530,7 @@ const terminalBgModeLabels: Record<TerminalBgMode, string> = {
 }
 
 .bg-preview-row {
-  padding: 8px 0 8px 0;
+  padding: var(--spacing-8) 0 var(--spacing-8) 0;
   display: flex;
   justify-content: flex-end;
 }

@@ -112,7 +112,6 @@ function pickRemote(conn: SSHConnection) {
         @click.stop
       >
       <div class="ntm-search">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         <input v-model="search" placeholder="搜索终端或连接..." class="ntm-input" />
       </div>
 
@@ -126,7 +125,6 @@ function pickRemote(conn: SSHConnection) {
             class="ntm-item"
             @click="pickLocal(shell)"
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
             <span class="lbl">{{ shell }}</span>
           </button>
         </div>
@@ -182,7 +180,7 @@ function pickRemote(conn: SSHConnection) {
   width: 288px;
   max-height: 340px;
   overflow-y: auto;
-  padding: 8px;
+  padding: var(--spacing-8);
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
@@ -192,13 +190,11 @@ function pickRemote(conn: SSHConnection) {
 .ntm-search {
   display: flex;
   align-items: center;
-  gap: 6px;
   height: 26px;
-  padding: 0 8px;
+  padding: 0 var(--spacing-8);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  color: var(--text-tertiary);
-  margin-bottom: 8px;
+  margin-bottom: var(--spacing-8);
 }
 .ntm-search:focus-within { border-color: var(--accent-primary) }
 .ntm-input {
@@ -207,27 +203,27 @@ function pickRemote(conn: SSHConnection) {
   border: none;
   background: transparent;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-family: var(--font-sans);
   outline: none;
 }
-.ntm-group + .ntm-group { margin-top: 8px }
+.ntm-group + .ntm-group { margin-top: var(--spacing-8) }
 .ntm-title {
-  font-size: 10px;
+  font-size: 0.7692rem;
   letter-spacing: .5px;
   text-transform: uppercase;
   color: var(--text-tertiary);
-  padding: 4px 6px;
+  padding: var(--spacing-4) var(--spacing-6);
 }
 .ntm-item {
   display: flex;
   align-items: center;
   gap: 7px;
   width: 100%;
-  padding: 5px 6px;
+  padding: 5px var(--spacing-6);
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   text-align: left;
   transition: background var(--transition-fast), color var(--transition-fast);
 }
@@ -240,7 +236,7 @@ function pickRemote(conn: SSHConnection) {
 .ntm-item .meta {
   margin-left: auto;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 0.7692rem;
   color: var(--text-tertiary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -248,7 +244,7 @@ function pickRemote(conn: SSHConnection) {
   max-width: 130px;
 }
 .ntm-item .note {
-  font-size: 10px;
+  font-size: 0.7692rem;
   color: var(--text-tertiary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -267,8 +263,8 @@ function pickRemote(conn: SSHConnection) {
 }
 .dot.live { background: var(--accent-green); opacity: 1 }
 .ntm-empty {
-  padding: 10px 6px;
-  font-size: 12px;
+  padding: var(--spacing-10) var(--spacing-6);
+  font-size: 0.9231rem;
   color: var(--text-tertiary);
   text-align: center;
 }

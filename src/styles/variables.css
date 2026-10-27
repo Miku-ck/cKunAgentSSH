@@ -109,6 +109,19 @@
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.2);
   --shadow-lg: 0 8px 24px rgba(0,0,0,0.4);
 
+  /* 间距：2px 起的偶数刻度，覆盖 padding / margin / gap 的常用档。
+     奇数值（1/3/5/7/9px）是光学微调，不占档位，组件里照写 px。 */
+  --spacing-2: 2px;
+  --spacing-4: 4px;
+  --spacing-6: 6px;
+  --spacing-8: 8px;
+  --spacing-10: 10px;
+  --spacing-12: 12px;
+  --spacing-14: 14px;
+  --spacing-16: 16px;
+  --spacing-20: 20px;
+  --spacing-24: 24px;
+
   /* 过渡 */
   --transition-fast: 150ms ease;
 
@@ -118,7 +131,7 @@
      13/14/15/16 四种字号，顶部行只有两页显式写了高度。左右内缩（16/20/24 三种）
      与标题下那条分隔线（三页有两页无）还没收进来 —— 那两项会挪动整页内容，另议。 */
   --page-head-h: 44px;
-  --page-title-size: 16px;
+  --page-title-size: 1.2308rem;
 
   /* 输入卡行线的颜色：默认透明 = 不画线。只有手记（米纸 + 墨线）给了实值，
      这样组件里那条 background-image 在所有主题共用，不需要主题分支。 */

@@ -215,27 +215,27 @@ function toggleOutput(id: string) {
 .full-trace {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--spacing-8);
   width: 100%;
   min-width: 0;
 }
-.ft-hint { margin: 0; font-size: 11.5px; color: var(--text-secondary); }
+.ft-hint { margin: 0; font-size: 0.8846rem; color: var(--text-secondary); }
 .ft-hint.err { color: var(--status-error-text); }
 .ft-hint.muted { color: var(--text-tertiary); }
 .ft-retry {
   background: none; border: none; color: var(--accent-text);
-  cursor: pointer; font-size: 11.5px; font-family: inherit; padding: 0 0 0 4px; text-decoration: underline;
+  cursor: pointer; font-size: 0.8846rem; font-family: inherit; padding: 0 0 0 var(--spacing-4); text-decoration: underline;
 }
 .ft-meta { display: flex; flex-wrap: wrap; gap: 5px; }
 .ft-chip {
-  font-size: 10.5px; padding: 1px 7px; border-radius: var(--radius-lg);
+  font-size: 0.8077rem; padding: 1px 7px; border-radius: var(--radius-lg);
   border: 1px solid var(--border-default); color: var(--text-secondary);
   font-family: var(--font-mono);
 }
 .ft-chip.ok { color: var(--status-success-text); border-color: color-mix(in srgb, var(--status-success-text) 35%, transparent); }
 .ft-chip.err { color: var(--status-error-text); border-color: color-mix(in srgb, var(--status-error-text) 35%, transparent); }
 .ft-chip.muted { color: var(--text-tertiary); }
-.ft-states { display: flex; align-items: center; gap: 6px; font-size: 11px; flex-wrap: wrap; }
+.ft-states { display: flex; align-items: center; gap: var(--spacing-6); font-size: 0.8462rem; flex-wrap: wrap; }
 .ft-states-label { color: var(--text-tertiary); }
 .ft-state-chain { display: inline-flex; align-items: center; gap: 3px; flex-wrap: wrap; }
 .ft-state {
@@ -249,34 +249,34 @@ function toggleOutput(id: string) {
 .ft-step {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 10px 0 3px;
-  font-size: 11px;
+  gap: var(--spacing-8);
+  margin: var(--spacing-10) 0 3px;
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
 }
 .ft-step:first-child { margin-top: 0 }
 .ft-step-no { color: var(--text-secondary); font-weight: 600; white-space: nowrap }
 .ft-step-dur { font-family: var(--font-mono); white-space: nowrap }
-.ft-step-note { font-size: 10.5px; white-space: nowrap }
+.ft-step-note { font-size: 0.8077rem; white-space: nowrap }
 .ft-step-line {
   flex: 1;
   height: 1px;
   background: var(--border-subtle);
 }
 .ft-tool {
-  padding: 3px 0 3px 10px;
+  padding: 3px 0 3px var(--spacing-10);
   min-width: 0;
 }
 .ft-tool-head {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--spacing-8);
   min-width: 0;
 }
 .ft-tool-state {
   flex: none;
   width: 36px;
-  font-size: 11px;
+  font-size: 0.8462rem;
   font-weight: 600;
 }
 .ft-tool-state.ok { color: var(--status-success-text) }
@@ -284,7 +284,7 @@ function toggleOutput(id: string) {
 .ft-tool-state.muted { color: var(--text-tertiary) }
 .ft-tool-name {
   flex: none;
-  font-size: 11.5px;
+  font-size: 0.8846rem;
   color: var(--text-secondary);
 }
 .ft-cmd {
@@ -293,38 +293,38 @@ function toggleOutput(id: string) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11.5px;
+  font-size: 0.8846rem;
   color: var(--text-secondary);
 }
 .ft-item-dur {
   flex: none;
-  font-size: 10.5px;
+  font-size: 0.8077rem;
   color: var(--text-tertiary);
 }
 .ft-out {
-  margin: 4px 0 2px;
-  padding: 6px 9px;
+  margin: var(--spacing-4) 0 var(--spacing-2);
+  padding: var(--spacing-6) 9px;
   max-height: 180px;
   overflow: auto;
   background: var(--bg-input);
   border-left: 2px solid var(--border-default);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  font-size: 11.5px;
+  font-size: 0.8846rem;
   line-height: 1.55;
   color: var(--text-secondary);
   white-space: pre-wrap;
   word-break: break-word;
 }
 .ft-out-toggle {
-  padding: 2px 0;
+  padding: var(--spacing-2) 0;
   border: 0;
   background: none;
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
   cursor: pointer;
 }
 .ft-out-toggle:hover { color: var(--text-secondary) }
 
-.ft-time { margin: 0; font-size: 10.5px; }
+.ft-time { margin: 0; font-size: 0.8077rem; }
 .mono { font-family: var(--font-mono) }
 </style>

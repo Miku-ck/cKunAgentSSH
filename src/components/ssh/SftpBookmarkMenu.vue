@@ -23,9 +23,6 @@
         :aria-disabled="!cwd || disabled"
         @click="toggleCurrent"
       >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
-        </svg>
         <span class="bm-label">{{ isCurrentBookmarked ? '取消收藏当前路径' : '收藏当前路径' }}</span>
         <span v-if="items.length" class="bm-count">{{ items.length }}</span>
       </div>
@@ -41,9 +38,6 @@
           :title="item.path"
           @click="goto(item)"
         >
-          <svg class="bm-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-          </svg>
           <div class="bm-text">
             <div class="bm-label">{{ item.label }}</div>
             <div class="bm-path">{{ item.path }}</div>
@@ -55,9 +49,7 @@
             :aria-label="`删除收藏 ${item.label}`"
             @click.stop="removeItem(item)"
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
+            ×
           </button>
         </div>
       </div>
@@ -196,7 +188,7 @@ onUnmounted(() => {
   top: 26px;
   right: -6px;
   width: 272px;
-  padding: 4px 0;
+  padding: var(--spacing-4) 0;
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
@@ -207,55 +199,52 @@ onUnmounted(() => {
 
 .bm-count {
   margin-left: auto;
-  font-size: 10px; font-family: var(--font-mono);
+  font-size: 0.7692rem; font-family: var(--font-mono);
   color: var(--text-tertiary);
 }
 
 .bm-action {
-  display: flex; align-items: center; gap: 8px;
-  margin: 0 6px; padding: 6px 8px;
+  display: flex; align-items: center; gap: var(--spacing-8);
+  margin: 0 var(--spacing-6); padding: var(--spacing-6) var(--spacing-8);
   border-radius: var(--radius-sm);
   color: var(--text-secondary); cursor: pointer;
 }
 .bm-action:hover:not(.disabled) { background: var(--bg-hover); color: var(--text-primary); }
 .bm-action.disabled { opacity: 0.5; cursor: not-allowed; }
 .bm-action.on { color: var(--accent-cyan); }
-.bm-action.on svg { fill: color-mix(in srgb, var(--accent-cyan) 22%, transparent); }
-.bm-action svg { width: 13px; height: 13px; flex: none; }
 
 .bm-text { min-width: 0; flex: 1; line-height: 1.3; }
 .bm-label {
-  font-size: 12px;
+  font-size: 0.9231rem;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .bm-path {
   margin-top: 1px;
-  font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary);
+  font-family: var(--font-mono); font-size: 0.7692rem; color: var(--text-tertiary);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
-.bm-sep { height: 1px; margin: 4px 0; background: var(--border-subtle); }
+.bm-sep { height: 1px; margin: var(--spacing-4) 0; background: var(--border-subtle); }
 
-.bm-list { max-height: 216px; overflow-y: auto; padding: 0 6px; }
+.bm-list { max-height: 216px; overflow-y: auto; padding: 0 var(--spacing-6); }
 .bm-item {
-  display: flex; align-items: center; gap: 8px;
-  padding: 6px 8px; border-radius: var(--radius-sm);
+  display: flex; align-items: center; gap: var(--spacing-8);
+  padding: var(--spacing-6) var(--spacing-8); border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .bm-item:hover { background: var(--bg-hover); }
-.bm-folder { width: 13px; height: 13px; flex: none; color: var(--accent-orange); }
 
 .bm-del {
   width: 18px; height: 18px; flex: none;
   display: none; align-items: center; justify-content: center;
   border: none; background: transparent; color: var(--text-tertiary);
   border-radius: var(--radius-sm); cursor: pointer;
+  font-size: 1rem; line-height: 1;
 }
-.bm-del svg { width: 11px; height: 11px; }
 .bm-del:hover { background: color-mix(in srgb, var(--danger-text) 16%, transparent); color: var(--danger-text); }
 .bm-item:hover .bm-del { display: flex; }
 
-.bm-empty { padding: 14px 12px 16px; text-align: center; font-size: 12px; color: var(--text-tertiary); }
+.bm-empty { padding: var(--spacing-14) var(--spacing-12) var(--spacing-16); text-align: center; font-size: 0.9231rem; color: var(--text-tertiary); }
 
 @keyframes bm-fade-in {
   from { opacity: 0; transform: scale(0.96); }

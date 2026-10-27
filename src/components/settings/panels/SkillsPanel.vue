@@ -208,16 +208,16 @@ onMounted(load)
 <style scoped src="./settings-groups.css"></style>
 <style scoped>
 .skill-row {
-  display: flex; align-items: center; gap: 10px; padding: 7px 4px;
+  display: flex; align-items: center; gap: var(--spacing-10); padding: 7px var(--spacing-4);
   border-top: 1px solid var(--border-subtle);
 }
 .skill-row.off { opacity: .55; }
-.skill-name { font-size: 12.5px; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 6px; }
-.skill-desc { font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.skill-triggers { font-size: 10.5px; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.skill-name { font-size: 0.9615rem; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: var(--spacing-6); }
+.skill-desc { font-size: 0.8462rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.skill-triggers { font-size: 0.8077rem; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .skill-content {
-  border: 1px dashed var(--border-default); border-radius: var(--radius-sm); padding: 8px; margin: 2px 4px 8px;
+  border: 1px dashed var(--border-default); border-radius: var(--radius-sm); padding: var(--spacing-8); margin: var(--spacing-2) var(--spacing-4) var(--spacing-8);
   max-height: 240px; overflow-y: auto;
 }
-.skill-content pre { margin: 0; font-size: 11px; font-family: var(--font-mono); color: var(--text-secondary); white-space: pre-wrap; word-break: break-word; }
+.skill-content pre { margin: 0; font-size: 0.8462rem; font-family: var(--font-mono); color: var(--text-secondary); white-space: pre-wrap; word-break: break-word; }
 </style>

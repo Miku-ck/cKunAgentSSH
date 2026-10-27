@@ -15,7 +15,7 @@
 
 /* ── 列表骨架（四个页签共用） ── */
 .docker-view .list { flex: 1; overflow-y: auto; }
-.docker-view .list-empty { padding: 24px 16px; color: var(--text-tertiary); font-size: 12px; text-align: center; }
+.docker-view .list-empty { padding: var(--spacing-24) var(--spacing-16); color: var(--text-tertiary); font-size: 0.9231rem; text-align: center; }
 /* 子列表取数失败：不走空态，如实标红上浮（用随主题 status token） */
 .docker-view .list-empty.err-hint { color: var(--status-error-text); }
 
@@ -36,7 +36,7 @@
 .docker-view .icon-btn.stop:disabled:hover { color: var(--text-secondary); }
 
 /* 行内操作图标 hover 语义色：全部走随主题 token（启停=success/warn，删除=error，exec/restart=accent） */
-.docker-view .c-acts { display: flex; align-items: center; gap: 2px; }
+.docker-view .c-acts { display: flex; align-items: center; gap: var(--spacing-2); }
 .docker-view .c-acts .act-exec:hover { color: var(--accent-text); }
 .docker-view .c-acts .act-restart:hover { color: var(--accent-cyan); }
 .docker-view .c-acts .act-del:hover { color: var(--status-error-text); }
@@ -58,4 +58,4 @@
 .docker-view .use-hint.warn { color: var(--status-warn-text); }
 .docker-view .use-hint.muted { color: var(--text-tertiary); }
 /* 标签列：mono 风格，ellipsis + 原生 title 提示完整列表 */
-.docker-view .label-hint { color: var(--text-secondary); font-size: 11px; }
+.docker-view .label-hint { color: var(--text-secondary); font-size: 0.8462rem; }

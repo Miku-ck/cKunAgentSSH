@@ -345,7 +345,6 @@ export const api = {
       )
       return body
     } catch (e) {
-      console.error('[TEST-CONN] request threw:', e)
       return { status: 'error', detail: e instanceof Error ? e.message : String(e) }
     }
   },

@@ -7,19 +7,15 @@
           <span class="tc-title">传输任务</span>
           <div class="tc-head-spacer" />
           <button v-if="pausableCount > 0" class="btn" @click="pauseAll">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
             全部暂停
           </button>
           <button v-if="resumableCount > 0" class="btn" @click="resumeAll">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
             全部继续
           </button>
           <button v-if="stats.error > 0" class="btn" @click="retryAllErrors">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
             重试失败 {{ stats.error }}
           </button>
           <button v-if="clearableCount > 0" class="btn" @click="clearCompleted">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
             清除已结束
           </button>
           <button class="tc-close" aria-label="关闭" @click="emit('close')">×</button>
@@ -108,14 +104,6 @@
       @contextmenu.prevent
     >
       <div v-for="a in ctxActions" :key="a.label" class="ctx-item" @click="a.run()">
-        <!-- 图标按 key 就地内联渲染：菜单项是固定枚举，不做字符串拼接式注入 -->
-        <svg v-if="a.icon === 'pause'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-        <svg v-else-if="a.icon === 'resume'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-        <svg v-else-if="a.icon === 'cancel'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        <svg v-else-if="a.icon === 'remove'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"/></svg>
-        <svg v-else-if="a.icon === 'del'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"/><path d="M5 6v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6"/><line x1="9" y1="6" x2="9" y2="20"/><line x1="15" y1="6" x2="15" y2="20"/></svg>
-        <svg v-else-if="a.icon === 'retry'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-        <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
         {{ a.label }}
       </div>
     </div>
@@ -258,32 +246,30 @@ const ctx = ref<{ visible: boolean; x: number; y: number; unit: TransferRowView 
   visible: false, x: 0, y: 0, unit: null,
 })
 
-type CtxIcon = 'pause' | 'resume' | 'cancel' | 'remove' | 'del' | 'copy' | 'retry'
-
 function writeClip(text: string, label: string): void {
   navigator.clipboard.writeText(text)
     .then(() => toast.success(`已复制${label}`))
     .catch(() => toast.error('复制失败'))
 }
 
-const ctxActions = computed<Array<{ label: string; icon: CtxIcon; run: () => void }>>(() => {
+const ctxActions = computed<Array<{ label: string; run: () => void }>>(() => {
   const u = ctx.value.unit
   if (!u) return []
   const act = (fn: (id: string) => void) => () => { eachId(u, fn); ctx.value.visible = false }
-  const out: Array<{ label: string; icon: CtxIcon; run: () => void }> = []
+  const out: Array<{ label: string; run: () => void }> = []
   const pausable = u.kind === 'upload' || u.kind === 'download'
-  if (u.status === 'running' && pausable) out.push({ label: '暂停传输', icon: 'pause', run: act(id => store.pauseTransfer(id)) })
-  if (u.status === 'paused') out.push({ label: '继续传输', icon: 'resume', run: act(id => store.resumeTransfer(id)) })
-  if (u.status === 'running') out.push({ label: '取消传输', icon: 'cancel', run: act(id => store.cancelTransfer(id)) })
-  if (u.status === 'pending') out.push({ label: '取消排队', icon: 'cancel', run: act(id => store.cancelTransfer(id)) })
+  if (u.status === 'running' && pausable) out.push({ label: '暂停传输', run: act(id => store.pauseTransfer(id)) })
+  if (u.status === 'paused') out.push({ label: '继续传输', run: act(id => store.resumeTransfer(id)) })
+  if (u.status === 'running') out.push({ label: '取消传输', run: act(id => store.cancelTransfer(id)) })
+  if (u.status === 'pending') out.push({ label: '取消排队', run: act(id => store.cancelTransfer(id)) })
   if (u.status === 'done' || u.status === 'error' || u.status === 'cancelled') {
-    out.push({ label: '移除记录', icon: 'remove', run: act(id => store.removeTransfer(id)) })
+    out.push({ label: '移除记录', run: act(id => store.removeTransfer(id)) })
   } else {
-    out.push({ label: '删除任务', icon: 'del', run: act(id => store.deleteTransfer(id)) })
+    out.push({ label: '删除任务', run: act(id => store.deleteTransfer(id)) })
   }
-  out.push({ label: '复制源路径', icon: 'copy', run: () => { writeClip(u.from, '源路径'); ctx.value.visible = false } })
-  out.push({ label: '复制目标路径', icon: 'copy', run: () => { writeClip(u.to, '目标路径'); ctx.value.visible = false } })
-  if (u.status === 'error') out.push({ label: '重试', icon: 'retry', run: act(id => store.retryTransfer(id)) })
+  out.push({ label: '复制源路径', run: () => { writeClip(u.from, '源路径'); ctx.value.visible = false } })
+  out.push({ label: '复制目标路径', run: () => { writeClip(u.to, '目标路径'); ctx.value.visible = false } })
+  if (u.status === 'error') out.push({ label: '重试', run: act(id => store.retryTransfer(id)) })
   return out
 })
 
@@ -336,43 +322,42 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
 }
 
 .tc-head {
-  display: flex; align-items: center; gap: 8px;
-  padding: 0 12px 0 16px; height: 46px; flex-shrink: 0;
+  display: flex; align-items: center; gap: var(--spacing-8);
+  padding: 0 var(--spacing-12) 0 var(--spacing-16); height: 46px; flex-shrink: 0;
   border-bottom: 1px solid var(--border-subtle);
 }
-.tc-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.tc-title { font-size: 1rem; font-weight: 600; color: var(--text-primary); }
 .tc-head-spacer { flex: 1; }
-.tc-head .btn svg { width: 12px; height: 12px; }
 .tc-close {
   width: 24px; height: 24px; padding: 0; line-height: 1;
   background: transparent; border: none; color: var(--text-tertiary);
-  font-size: 18px; cursor: pointer; border-radius: var(--radius-sm);
+  font-size: 1.3846rem; cursor: pointer; border-radius: var(--radius-sm);
 }
 .tc-close:hover { background: var(--bg-hover); color: var(--text-primary); }
 
 /* 筛选 */
 .tc-tabs {
-  display: flex; align-items: center; gap: 2px; padding: 0 12px;
+  display: flex; align-items: center; gap: var(--spacing-2); padding: 0 var(--spacing-12);
   height: 34px; flex-shrink: 0; border-bottom: 1px solid var(--border-subtle);
 }
 .tc-tab {
   display: flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px;
   border: none; background: transparent; color: var(--text-tertiary);
-  font-size: 11px; cursor: pointer; border-radius: var(--radius-sm);
+  font-size: 0.8462rem; cursor: pointer; border-radius: var(--radius-sm);
   border-bottom: 2px solid transparent; transition: all var(--transition-fast);
   font-family: inherit;
 }
 .tc-tab:hover { background: var(--bg-hover); color: var(--text-secondary); }
 .tc-tab.on { color: var(--text-primary); background: var(--bg-hover); border-bottom-color: var(--accent-primary); }
-.tc-tab .n { font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary); }
+.tc-tab .n { font-family: var(--font-mono); font-size: 0.7692rem; color: var(--text-tertiary); }
 .tc-tab.on .n { color: var(--accent-text); }
 .tc-tab .n.bad { color: var(--accent-red); }
 .tc-tabs-spacer { flex: 1; }
 .tc-search {
-  height: 22px; width: 160px; padding: 0 8px;
+  height: 22px; width: 160px; padding: 0 var(--spacing-8);
   background: var(--bg-input); border: 1px solid var(--border-input);
   border-radius: var(--radius-sm); color: var(--text-primary);
-  font-size: 11px; outline: none; font-family: inherit;
+  font-size: 0.8462rem; outline: none; font-family: inherit;
 }
 .tc-search:focus { border-color: var(--accent-primary); }
 .tc-search::placeholder { color: var(--text-tertiary); }
@@ -381,14 +366,14 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
 .tc-thead {
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr) 260px 120px 80px 124px 56px 76px 66px;
-  gap: 8px; align-items: center; height: 26px; padding: 0 12px 0 10px;
+  gap: var(--spacing-8); align-items: center; height: 26px; padding: 0 var(--spacing-12) 0 var(--spacing-10);
   /* 画卡片自己那一层，不是 --bg-base：这枚是 sticky 表头，行会从它底下滚过，
      透明（继承弹窗底）就等于让行文字压在表头文字上。先前取 --bg-base 是在
      --bg-elevated 的对话框上挖洞。与页面里的 .file-list-head 同一读法 ——
      表头永远与它所在的那一层同色，靠 border-bottom 认边界。 */
   flex-shrink: 0; background: var(--bg-elevated);
   border-bottom: 1px solid var(--border-subtle);
-  font-size: 11px; color: var(--text-tertiary);
+  font-size: 0.8462rem; color: var(--text-tertiary);
   position: sticky; top: 0; z-index: 2;
 }
 .th { cursor: pointer; display: flex; align-items: center; gap: 3px; user-select: none; }
@@ -398,12 +383,12 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
 .th.c { justify-content: center; }
 .th-arrow { width: 10px; height: 10px; }
 
-.tc-body { flex: 1; overflow-y: auto; padding: 4px 0 6px; }
+.tc-body { flex: 1; overflow-y: auto; padding: var(--spacing-4) 0 var(--spacing-6); }
 .tc-body::-webkit-scrollbar { width: 6px; }
 .tc-body::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: var(--radius-sm); }
 .grp-more {
-  padding: 4px 0 6px 44px;
-  font-family: var(--font-mono); font-size: 10px; line-height: 1.4; color: var(--text-tertiary);
+  padding: var(--spacing-4) 0 var(--spacing-6) 44px;
+  font-family: var(--font-mono); font-size: 0.7692rem; line-height: 1.4; color: var(--text-tertiary);
 }
 
 /* tc-body 是滚动块不是 flex 容器，flex:1 撑不起来 —— 用固定高度做双向居中 */
@@ -411,23 +396,23 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
   min-height: 240px;
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
-  padding: 24px; text-align: center;
-  font-size: 12px; color: var(--text-tertiary);
+  padding: var(--spacing-24); text-align: center;
+  font-size: 0.9231rem; color: var(--text-tertiary);
 }
 
 .tc-foot {
-  flex-shrink: 0; display: flex; align-items: center; gap: 14px;
-  padding: 0 14px; height: 38px;
+  flex-shrink: 0; display: flex; align-items: center; gap: var(--spacing-14);
+  padding: 0 var(--spacing-14); height: 38px;
   border-top: 1px solid var(--border-subtle); background: var(--bg-elevated);
-  font-family: var(--font-mono); font-size: 11px; line-height: 1; color: var(--text-tertiary);
+  font-family: var(--font-mono); font-size: 0.8462rem; line-height: 1; color: var(--text-tertiary);
 }
 .tc-foot b { color: var(--text-secondary); font-weight: 600; }
-.conc { display: flex; align-items: center; gap: 6px; }
+.conc { display: flex; align-items: center; gap: var(--spacing-6); }
 .conc-btn {
   width: 18px; height: 18px; padding: 0; line-height: 1;
   border: 1px solid var(--border-default); background: transparent;
   color: var(--text-secondary); border-radius: var(--radius-sm);
-  cursor: pointer; font-size: 11px; font-family: inherit;
+  cursor: pointer; font-size: 0.8462rem; font-family: inherit;
 }
 .conc-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--accent-text); border-color: var(--accent-primary); }
 .conc-btn:disabled { opacity: .45; cursor: not-allowed; }
@@ -435,15 +420,14 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
 
 /* 右键菜单 */
 .ctx-menu {
-  position: fixed; z-index: 1100; min-width: 160px; padding: 4px;
+  position: fixed; z-index: 1100; min-width: 160px; padding: var(--spacing-4);
   background: var(--bg-elevated); border: 1px solid var(--border-default);
   border-radius: var(--radius-md); box-shadow: var(--shadow-lg);
 }
 .ctx-item {
-  display: flex; align-items: center; gap: 8px; padding: 6px 12px;
-  font-size: 12px; color: var(--text-secondary); cursor: pointer;
+  display: flex; align-items: center; gap: var(--spacing-8); padding: var(--spacing-6) var(--spacing-12);
+  font-size: 0.9231rem; color: var(--text-secondary); cursor: pointer;
   border-radius: var(--radius-sm);
 }
 .ctx-item:hover { background: var(--bg-hover); color: var(--text-primary); }
-.ctx-item :deep(svg) { flex-shrink: 0; }
 </style>

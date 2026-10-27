@@ -171,13 +171,13 @@ function handleSave() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 16px;
+  padding: var(--spacing-14) var(--spacing-16);
   border-bottom: 1px solid var(--border-subtle);
 }
 
 .qc-editor-header h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: 1.0769rem;
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -191,7 +191,7 @@ function handleSave() {
   background: transparent;
   border: none;
   color: var(--text-secondary);
-  font-size: 20px;
+  font-size: 1.5385rem;
   cursor: pointer;
   border-radius: var(--radius-sm);
 }
@@ -202,20 +202,20 @@ function handleSave() {
 }
 
 .qc-editor-body {
-  padding: 16px;
+  padding: var(--spacing-16);
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--spacing-16);
 }
 
 .qc-form-row {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--spacing-6);
 }
 
 .qc-form-row label {
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-secondary);
   display: flex;
   align-items: center;
@@ -224,7 +224,7 @@ function handleSave() {
 
 .qc-char-count {
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: 0.8462rem;
 }
 
 .qc-input,
@@ -232,9 +232,9 @@ function handleSave() {
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  padding: 8px 10px;
+  padding: var(--spacing-8) var(--spacing-10);
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 1rem;
   font-family: var(--font-mono);
   outline: none;
   resize: vertical;
@@ -254,7 +254,7 @@ function handleSave() {
 .qc-color-grid {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-8);
   flex-wrap: wrap;
 }
 
@@ -299,15 +299,15 @@ function handleSave() {
 .qc-editor-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 10px;
-  padding: 12px 16px;
+  gap: var(--spacing-10);
+  padding: var(--spacing-12) var(--spacing-16);
   border-top: 1px solid var(--border-subtle);
 }
 
 .qc-btn {
-  padding: 6px 14px;
+  padding: var(--spacing-6) var(--spacing-14);
   border-radius: var(--radius-md);
-  font-size: 13px;
+  font-size: 1rem;
   font-family: var(--font-sans);
   cursor: pointer;
   border: none;

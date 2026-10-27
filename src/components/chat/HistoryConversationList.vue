@@ -31,9 +31,6 @@
       </div>
     </div>
     <div v-if="isEmpty" class="history-empty">
-      <svg class="history-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><polyline points="3 3 3 8 8 8"/><polyline points="12 7 12 12 15 14"/>
-      </svg>
       <div class="history-empty-title">还没有会话</div>
       <div class="history-empty-hint">发出第一条消息后，这里会留下记录</div>
     </div>
@@ -67,11 +64,11 @@ function timeOf(ts: string): string {
 
 <style scoped>
 .history-list {
-  padding: 2px 0 8px;
+  padding: var(--spacing-2) 0 var(--spacing-8);
 }
 
 .history-group {
-  margin-bottom: 8px;
+  margin-bottom: var(--spacing-8);
 }
 
 /* 分组标签吸顶：列表变长后，「今天/昨天」要一直说明眼前这段属于哪天 */
@@ -79,8 +76,8 @@ function timeOf(ts: string): string {
   position: sticky;
   top: 0;
   z-index: 1;
-  padding: 8px 10px 5px;
-  font-size: 11px;
+  padding: var(--spacing-8) var(--spacing-10) 5px;
+  font-size: 0.8462rem;
   font-weight: 600;
   color: var(--text-tertiary);
   text-transform: uppercase;
@@ -91,7 +88,7 @@ function timeOf(ts: string): string {
 .history-item {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--spacing-2);
   padding: 0;
 }
 
@@ -104,12 +101,12 @@ function timeOf(ts: string): string {
   min-width: 0;
   display: flex;
   align-items: center;
-  padding: 7px 10px;
+  padding: 7px var(--spacing-10);
   border: none;
   background: transparent;
   color: inherit;
   font-family: inherit;
-  font-size: 12px;
+  font-size: 0.9231rem;
   text-align: left;
   cursor: pointer;
   border-radius: var(--radius-sm);
@@ -144,7 +141,7 @@ function timeOf(ts: string): string {
 .history-item-title {
   flex: 1;
   min-width: 0;
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -153,8 +150,8 @@ function timeOf(ts: string): string {
 
 .history-item-time {
   flex-shrink: 0;
-  margin-left: 8px;
-  font-size: 11px;
+  margin-left: var(--spacing-8);
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
 }
@@ -194,26 +191,18 @@ function timeOf(ts: string): string {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 48px 16px;
+  gap: var(--spacing-6);
+  padding: 48px var(--spacing-16);
   text-align: center;
 }
 
-.history-empty-icon {
-  width: 22px;
-  height: 22px;
-  margin-bottom: 2px;
-  color: var(--text-tertiary);
-  opacity: 0.7;
-}
-
 .history-empty-title {
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-secondary);
 }
 
 .history-empty-hint {
-  font-size: 11px;
+  font-size: 0.8462rem;
   line-height: 1.5;
   color: var(--text-tertiary);
 }

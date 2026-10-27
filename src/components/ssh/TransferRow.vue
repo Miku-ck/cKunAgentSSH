@@ -98,7 +98,7 @@
         :title="view.status === 'pending' ? '取消排队' : '取消'"
         @click.stop="emit('cancel')"
       >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        ×
       </button>
       <button
         class="act"
@@ -234,10 +234,10 @@ const statusText = computed(() => {
 .tr {
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr) 260px 120px 80px 124px 56px 76px 66px;
-  gap: 8px;
+  gap: var(--spacing-8);
   align-items: center;
   min-height: 38px;
-  padding: 0 12px 0 10px;
+  padding: 0 var(--spacing-12) 0 var(--spacing-10);
   border-radius: var(--radius-sm);
   position: relative;
   transition: background var(--transition-fast);
@@ -252,7 +252,7 @@ const statusText = computed(() => {
 }
 .tr.is-group:hover { background: color-mix(in srgb, var(--accent-primary) 11%, transparent); }
 
-.td-dir { display: flex; align-items: center; gap: 2px; }
+.td-dir { display: flex; align-items: center; gap: var(--spacing-2); }
 .caret {
   width: 16px; height: 16px; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
@@ -273,12 +273,12 @@ const statusText = computed(() => {
 .tl-icon.copy { background: color-mix(in srgb, var(--accent-primary) 14%, transparent); color: var(--accent-text); }
 
 .td-name { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.nm { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.nm { display: flex; align-items: baseline; gap: var(--spacing-6); min-width: 0; }
 .nm-text {
-  font-size: 12px; font-weight: 500; color: var(--text-primary);
+  font-size: 0.9231rem; font-weight: 500; color: var(--text-primary);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.tag { font-family: var(--font-mono); font-size: 10px; line-height: 1.3; color: var(--text-tertiary); white-space: nowrap; }
+.tag { font-family: var(--font-mono); font-size: 0.7692rem; line-height: 1.3; color: var(--text-tertiary); white-space: nowrap; }
 .tag.warn { color: var(--accent-orange); }
 /* 路径列：源 / 目标各一行，左侧短标签标身份 —— 没有标签就得靠猜谁是谁。
    truncatePath 保留末两段：CSS 省略号砍的是尾巴，那正好是文件名。 */
@@ -286,22 +286,22 @@ const statusText = computed(() => {
 .pth-line { display: flex; align-items: baseline; gap: 5px; min-width: 0; }
 .pth-k {
   flex-shrink: 0; width: 24px;
-  font-family: var(--font-mono); font-size: 10px; line-height: 1.4;
+  font-family: var(--font-mono); font-size: 0.7692rem; line-height: 1.4;
   color: var(--text-tertiary); opacity: .75;
 }
 .pth-v {
   min-width: 0;
-  font-family: var(--font-mono); font-size: 10px; line-height: 1.4;
+  font-family: var(--font-mono); font-size: 0.7692rem; line-height: 1.4;
   color: var(--text-tertiary);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .pth-line:last-child .pth-v { color: var(--text-secondary); }
 .err-line {
-  font-family: var(--font-mono); font-size: 10px; line-height: 1.3; color: var(--accent-red);
+  font-family: var(--font-mono); font-size: 0.7692rem; line-height: 1.3; color: var(--accent-red);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
-.td-prog { display: flex; align-items: center; gap: 8px; }
+.td-prog { display: flex; align-items: center; gap: var(--spacing-8); }
 .pbar {
   flex: 1; height: 6px; border-radius: var(--radius-sm); overflow: hidden;
   background: var(--bg-input); border: 1px solid var(--border-subtle); position: relative;
@@ -326,16 +326,16 @@ const statusText = computed(() => {
   background: var(--accent-primary); animation: tr-slide 1.2s ease-in-out infinite;
 }
 @keyframes tr-slide { 0% { transform: translateX(-105%); } 100% { transform: translateX(270%); } }
-.pnum { font-family: var(--font-mono); font-size: 11px; font-weight: 600; line-height: 1; color: var(--text-primary); min-width: 34px; text-align: right; }
+.pnum { font-family: var(--font-mono); font-size: 0.8462rem; font-weight: 600; line-height: 1; color: var(--text-primary); min-width: 34px; text-align: right; }
 .pnum.dim { color: var(--text-tertiary); font-weight: 400; }
 .pnum.ind { color: var(--text-secondary); font-weight: 400; }
 
-.cell-num { font-family: var(--font-mono); font-size: 11px; line-height: 1; color: var(--text-secondary); text-align: right; white-space: nowrap; }
+.cell-num { font-family: var(--font-mono); font-size: 0.8462rem; line-height: 1; color: var(--text-secondary); text-align: right; white-space: nowrap; }
 .cell-num.live { color: var(--accent-text); }
 .cell-num.zero { color: var(--text-tertiary); }
 .cell-num.eta { color: var(--text-secondary); }
 
-.st { display: flex; align-items: center; gap: 5px; font-size: 11px; white-space: nowrap; color: var(--text-tertiary); }
+.st { display: flex; align-items: center; gap: 5px; font-size: 0.8462rem; white-space: nowrap; color: var(--text-tertiary); }
 .st i { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; background: var(--text-tertiary); }
 .st-pending .st { color: var(--text-tertiary); }
 .st-running .st { color: var(--accent-text); }
@@ -346,7 +346,7 @@ const statusText = computed(() => {
 .st-cancelled .st { color: var(--text-tertiary); }
 @keyframes tr-blink { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
 
-.td-act { display: flex; gap: 2px; justify-content: flex-end; }
+.td-act { display: flex; gap: var(--spacing-2); justify-content: flex-end; }
 .act {
   width: 22px; height: 22px; padding: 0; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
@@ -355,6 +355,7 @@ const statusText = computed(() => {
   transition: all var(--transition-fast);
 }
 .act svg { width: 12px; height: 12px; }
+.act.cancel { font-size: 1rem; line-height: 1; }
 .act:hover { background: var(--bg-active); color: var(--text-primary); }
 .act.pause:hover { color: var(--accent-orange); }
 .act.resume:hover { color: var(--accent-green); }

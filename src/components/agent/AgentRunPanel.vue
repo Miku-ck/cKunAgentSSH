@@ -62,7 +62,6 @@ const latestHelp = computed(() =>
     <div class="intention-section" v-if="agentStore.intentionInfo">
       <div class="ap-card ap-intention">
         <div class="ap-head">
-          <svg class="ap-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
           <span class="ap-ttl">任务规划</span>
           <span class="ap-level" :class="`level-${agentStore.intentionInfo.level}`">
             {{ levelLabel(agentStore.intentionInfo.level) }}
@@ -79,7 +78,6 @@ const latestHelp = computed(() =>
     <!-- 警告 -->
     <div class="warnings-section" v-if="agentStore.warnings.length > 0">
       <div v-for="(w, index) in agentStore.warnings" :key="`warn-${index}`" class="ap-warning">
-        <svg class="ap-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
         {{ w }}
       </div>
     </div>
@@ -88,7 +86,6 @@ const latestHelp = computed(() =>
          2026-10-23：reason 携带失败模式诊断（卡在哪），suggestion 为可执行的
          恢复建议（怎么办）——两者都来自后端 ConfidenceMonitor，无则不渲染 -->
     <div class="ap-help-msgbar" v-if="latestHelp">
-      <svg class="ap-ic ap-help-accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8.5"/><path d="M14.8 9.2a3 3 0 1 0-5.2 2c.9.9 1.4 1.3 1.4 2.3"/><line x1="12" y1="17.2" x2="12.01" y2="17.2"/></svg>
       <div class="ap-help-body">
         <span class="ap-help-msg" :title="latestHelp.reason">
           AI 请求人工介入<template v-if="agentStore.humanHelpRequests.length > 1">（{{ agentStore.humanHelpRequests.length }} 次）</template>：{{ latestHelp.reason }}
@@ -105,7 +102,7 @@ const latestHelp = computed(() =>
         aria-label="忽略该请求"
         @click="agentStore.dismissHelp(latestHelp.id)"
       >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        ×
       </button>
     </div>
 
@@ -114,7 +111,6 @@ const latestHelp = computed(() =>
     <!-- 错误 -->
     <div class="error-section" v-if="agentStore.errorMessage">
       <div class="ap-error">
-        <svg class="ap-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
         {{ agentStore.errorMessage }}
       </div>
     </div>
@@ -128,7 +124,7 @@ const latestHelp = computed(() =>
 .agent-run-panel {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--spacing-10);
   font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
 }
 
@@ -139,8 +135,8 @@ const latestHelp = computed(() =>
 /* ── 规划/意图卡片 ── */
 .ap-intention { background: var(--bg-elevated); border-color: var(--status-info-border); }
 .ap-level {
-  font-size: 11px;
-  padding: 2px 9px;
+  font-size: 0.8462rem;
+  padding: var(--spacing-2) 9px;
   border-radius: var(--radius-pill);
   font-weight: 600;
 }
@@ -152,12 +148,12 @@ const latestHelp = computed(() =>
 .ap-intention-details {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  padding: 8px 13px 10px;
+  gap: var(--spacing-6);
+  padding: var(--spacing-8) 13px var(--spacing-10);
 }
 .ap-tag {
-  font-size: 11px;
-  padding: 2px 8px;
+  font-size: 0.8462rem;
+  padding: var(--spacing-2) var(--spacing-8);
   border-radius: var(--radius-md);
   background: var(--status-tag-bg);
   color: var(--status-tag-text);
@@ -169,34 +165,32 @@ const latestHelp = computed(() =>
   display: flex;
   align-items: flex-start;
   gap: 7px;
-  font-size: 12.5px;
+  font-size: 0.9615rem;
   color: var(--status-warn-text);
   background: var(--status-warn-bg);
-  padding: 8px 12px;
+  padding: var(--spacing-8) var(--spacing-12);
   border-radius: var(--radius-lg);
 }
-.ap-warning .ap-ic { margin-top: 2px; color: var(--status-warn-text); }
 
 /* ── 人工介入提示（Task 3：降级为顶部细条通知，非阻塞） ── */
 .ap-help-msgbar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 12px;
+  gap: var(--spacing-8);
+  font-size: 0.9231rem;
   color: var(--status-warn-text);
   background: var(--status-warn-bg);
   border: 1px solid var(--card-warn-border);
   border-radius: var(--radius-lg);
-  padding: 6px 10px;
+  padding: var(--spacing-6) var(--spacing-10);
 }
-.ap-help-msgbar .ap-ic { flex: none; color: var(--status-warn-text); }
 /* 主体两行：主行 reason + 可选建议行（后端诊断产出，无则不渲染） */
 .ap-help-body {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--spacing-2);
 }
 .ap-help-msg {
   min-width: 0;
@@ -205,13 +199,12 @@ const latestHelp = computed(() =>
   white-space: nowrap;
 }
 .ap-help-suggestion {
-  font-size: 11px;
+  font-size: 0.8462rem;
   opacity: 0.85;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ap-help-accent { color: var(--status-warn-text); }
 
 /* 审批托盘 / 折叠队列 / 追溯区的样式随托盘一起删（R1）：它们的唯一消费方在模板里
    已经没有了。批量与追溯不是丢了，是搬进首页「待你放行」队列。 */
@@ -221,12 +214,11 @@ const latestHelp = computed(() =>
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 12.5px;
+  font-size: 0.9615rem;
   color: var(--status-error-text);
   background: var(--status-error-bg);
-  padding: 9px 12px;
+  padding: 9px var(--spacing-12);
   border-radius: var(--radius-lg);
 }
-.ap-error .ap-ic { color: currentColor; }
 </style>
 

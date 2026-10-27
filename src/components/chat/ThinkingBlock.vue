@@ -46,18 +46,18 @@ watch(initialOpen, (v) => { open.value = v })
 
 <style scoped>
 .reasoning-block {
-  margin-bottom: 4px;
+  margin-bottom: var(--spacing-4);
 }
 
 .reasoning-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 0;
+  gap: var(--spacing-4);
+  padding: var(--spacing-4) 0;
   border: none;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   cursor: pointer;
   text-align: left;
 }
@@ -81,9 +81,9 @@ watch(initialOpen, (v) => { open.value = v })
 }
 
 .reasoning-content {
-  padding: 8px 0 8px 18px;
+  padding: var(--spacing-8) 0 var(--spacing-8) 18px;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   line-height: 1.6;
 }
 
@@ -91,7 +91,7 @@ watch(initialOpen, (v) => { open.value = v })
   margin: 0;
   padding: 0;
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: 0.9231rem;
   line-height: 1.6;
   color: var(--text-secondary);
   white-space: pre-wrap;
@@ -102,7 +102,7 @@ watch(initialOpen, (v) => { open.value = v })
 
 /* Markdown 渲染内容样式适配 */
 .reasoning-content :deep(.markdown-body) {
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-secondary);
 }
 
@@ -112,10 +112,10 @@ watch(initialOpen, (v) => { open.value = v })
 
 .reasoning-content :deep(.markdown-body pre) {
   margin: 0.5em 0;
-  padding: 8px 10px;
+  padding: var(--spacing-8) var(--spacing-10);
 }
 
 .reasoning-content :deep(.markdown-body code) {
-  font-size: 11px;
+  font-size: 0.8462rem;
 }
 </style>

@@ -295,7 +295,7 @@ function deleteConversation(id: string) {
   left: 12px;
   z-index: 5;
   display: flex;
-  gap: 2px;
+  gap: var(--spacing-2);
 }
 
 .corner-btn {
@@ -341,7 +341,7 @@ function deleteConversation(id: string) {
   max-width: 820px;
   min-height: 100%;
   margin: 0 auto;
-  padding: 32px 24px 16px;
+  padding: 32px var(--spacing-24) var(--spacing-16);
   box-sizing: border-box;
 }
 
@@ -358,7 +358,7 @@ function deleteConversation(id: string) {
   margin: 0;
   text-align: center;
   font-family: var(--font-display);
-  font-size: 22px;
+  font-size: 1.6923rem;
   font-weight: 600;
   line-height: 1.5;
   color: var(--text-primary);
@@ -367,9 +367,9 @@ function deleteConversation(id: string) {
 
 /* 会话标题随消息流滚动，不做固定头部 */
 .home-title {
-  margin: 0 0 8px;
+  margin: 0 0 var(--spacing-8);
   font-family: var(--font-display);
-  font-size: 15px;
+  font-size: 1.1538rem;
   font-weight: 600;
   color: var(--text-secondary);
   overflow: hidden;
@@ -380,13 +380,13 @@ function deleteConversation(id: string) {
 /* 流顶折叠按钮：居中细长 ghost 条，次级文字色、hover 提亮（与 corner-btn 同族语言） */
 .older-messages-btn {
   display: block;
-  margin: 0 auto 12px;
-  padding: 5px 14px;
+  margin: 0 auto var(--spacing-12);
+  padding: 5px var(--spacing-14);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-pill);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   cursor: pointer;
   transition: background var(--transition-fast), color var(--transition-fast);
 }
@@ -397,15 +397,15 @@ function deleteConversation(id: string) {
 
 /* 运行通知紧跟消息流：与最后一条回答之间留一道呼吸，不粘连 */
 .agent-run-panel {
-  margin-top: 12px;
+  margin-top: var(--spacing-12);
 }
 
 .composer-wrap {
   flex: 0 0 auto;
-  padding: 8px 24px 18px;
+  padding: var(--spacing-8) var(--spacing-24) 18px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-8);
 }
 </style>

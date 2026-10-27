@@ -80,7 +80,7 @@ defineExpose({ focus })
   border-radius: var(--radius-sm);
   transition: border-color var(--transition-fast);
   height: 32px;
-  padding: 0 8px;
+  padding: 0 var(--spacing-8);
 }
 
 .note-input.focused {
@@ -93,7 +93,7 @@ defineExpose({ focus })
   border: none;
   background: transparent;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-family: var(--font-sans);
   outline: none;
   padding: 0;
@@ -106,10 +106,10 @@ defineExpose({ focus })
 
 .note-counter {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 0.7692rem;
   color: var(--text-tertiary);
   font-family: var(--font-mono);
-  margin-left: 8px;
+  margin-left: var(--spacing-8);
   user-select: none;
 }
 

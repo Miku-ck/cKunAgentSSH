@@ -50,7 +50,7 @@ function onInput(e: Event) {
 .slider-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--spacing-12);
 }
 .setting-range {
   width: 120px;
@@ -79,7 +79,7 @@ function onInput(e: Event) {
   cursor: default;
 }
 .slider-value {
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-secondary);
   min-width: 40px;
   text-align: right;

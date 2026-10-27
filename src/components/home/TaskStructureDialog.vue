@@ -12,9 +12,7 @@
         <div class="ts-head">
           <h2 id="ts-title" class="ts-title">长任务结构化</h2>
           <span class="ts-sub">对照原文 · 未采用不会改动输入框</span>
-          <button type="button" class="ts-close" title="关闭" aria-label="关闭" @click="$emit('close')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
+          <button type="button" class="ts-close" title="关闭" aria-label="关闭" @click="$emit('close')">×</button>
         </div>
 
         <div class="ts-body">
@@ -159,7 +157,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: var(--spacing-24);
   background: var(--scrim);
   backdrop-filter: blur(2px);
   animation: ts-fade-in 140ms ease-out;
@@ -184,20 +182,20 @@ onUnmounted(() => {
   height: 48px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 14px;
+  gap: var(--spacing-8);
+  padding: 0 var(--spacing-14);
   border-bottom: 1px solid var(--border-subtle);
 }
 
 .ts-title {
   margin: 0;
-  font-size: 13px;
+  font-size: 1rem;
   font-weight: 600;
   color: var(--text-primary);
 }
 
 .ts-sub {
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--text-tertiary);
 }
 
@@ -213,11 +211,11 @@ onUnmounted(() => {
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
+  font-size: 1.3846rem;
+  line-height: 1;
 }
 
 .ts-close:hover { background: var(--bg-hover); color: var(--text-primary); }
-.ts-close svg { width: 13px; height: 13px; }
-
 .ts-body {
   flex: 1;
   min-height: 0;
@@ -231,21 +229,21 @@ onUnmounted(() => {
 .ts-col {
   min-height: 0;
   overflow-y: auto;
-  padding: 12px 14px;
+  padding: var(--spacing-12) var(--spacing-14);
   background: var(--bg-elevated);
 }
 
 .ts-col-h {
-  font-size: 11px;
+  font-size: 0.8462rem;
   font-weight: 600;
   color: var(--text-tertiary);
-  margin-bottom: 8px;
+  margin-bottom: var(--spacing-8);
 }
 
 .ts-orig-text {
   margin: 0;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 0.9231rem;
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
@@ -255,9 +253,9 @@ onUnmounted(() => {
 .ts-target {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  margin-bottom: 12px;
+  gap: var(--spacing-8);
+  padding: var(--spacing-8) var(--spacing-10);
+  margin-bottom: var(--spacing-12);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: var(--bg-base);
@@ -265,14 +263,14 @@ onUnmounted(() => {
 
 .ts-host {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-primary);
 }
 
 .ts-env {
   margin-left: auto;
-  font-size: 11px;
-  padding: 1px 6px;
+  font-size: 0.8462rem;
+  padding: 1px var(--spacing-6);
   border-radius: var(--radius-sm);
 }
 
@@ -282,21 +280,21 @@ onUnmounted(() => {
   background: color-mix(in srgb, var(--status-warn-text) 14%, transparent);
 }
 
-.ts-block { margin-bottom: 14px; }
+.ts-block { margin-bottom: var(--spacing-14); }
 .ts-block-h {
-  font-size: 12px;
+  font-size: 0.9231rem;
   font-weight: 600;
   color: var(--text-primary);
-  margin-bottom: 6px;
+  margin-bottom: var(--spacing-6);
 }
 
 .ts-step {
   display: flex;
   align-items: flex-start;
-  gap: 6px;
-  padding: 4px 6px;
+  gap: var(--spacing-6);
+  padding: var(--spacing-4) var(--spacing-6);
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  font-size: 0.9231rem;
   color: var(--text-primary);
 }
 
@@ -305,37 +303,37 @@ onUnmounted(() => {
 }
 
 .ts-step-dot { color: var(--text-tertiary); }
-.ts-check { margin-top: 2px; }
+.ts-check { margin-top: var(--spacing-2); }
 .ts-step-text { flex: 1; line-height: 1.5; }
 
 .ts-field {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-8);
   padding: 3px 0;
-  font-size: 12px;
+  font-size: 0.9231rem;
 }
 
 .ts-field-label { color: var(--text-tertiary); min-width: 60px; }
 .ts-field-value { flex: 1; color: var(--text-primary); }
 
-.ts-amb { padding: 4px 0; }
-.ts-amb-q { font-size: 12px; color: var(--text-primary); }
-.ts-amb-why { font-size: 11px; color: var(--text-tertiary); }
+.ts-amb { padding: var(--spacing-4) 0; }
+.ts-amb-q { font-size: 0.9231rem; color: var(--text-primary); }
+.ts-amb-why { font-size: 0.8462rem; color: var(--text-tertiary); }
 
 .ts-foot {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
-  padding: 10px 14px;
+  gap: var(--spacing-8);
+  padding: var(--spacing-10) var(--spacing-14);
   border-top: 1px solid var(--border-subtle);
 }
 
 .ts-hint {
   margin-right: auto;
-  font-size: 11px;
+  font-size: 0.8462rem;
   color: var(--status-warn-text);
 }
 
