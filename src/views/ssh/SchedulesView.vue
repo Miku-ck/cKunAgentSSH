@@ -67,22 +67,16 @@
       <div class="modal wide" role="dialog" aria-modal="true">
         <div class="modal-title">{{ historyTitle }} — 执行历史</div>
         <div class="modal-body">
-          <div v-if="historyRuns.length === 0" class="empty-small">暂无执行记录</div>
-          <div v-else class="history-list">
-            <div v-for="r in historyRuns" :key="r.id" class="history-item">
-              <div class="history-head">
-                <span class="mono">{{ formatBackendTs(r.started_at) }}</span>
-                <span class="status" :class="r.status">{{ statusLabel(r.status) }}</span>
-                <span class="mono" v-if="durationText(r)">{{ durationText(r) }}</span>
-                <span class="mono" v-if="r.run_id">run {{ shortId(r.run_id) }}</span>
-              </div>
-              <div class="history-summary" v-if="r.summary">{{ r.summary }}</div>
-              <div class="history-error" v-if="r.error">{{ r.error }}</div>
-              <div class="history-actions" v-if="r.status === 'failed' && historyFor">
-                <button class="btn btn-sm" @click="askAiDiagnose(historyFor, r)">⚡ AI 诊断此失败</button>
-              </div>
-            </div>
+          <div v-if="historyError" class="history-load-error">
+            <span>{{ historyError }}</span>
+            <button class="btn btn-sm" @click="fetchHistory()">重试</button>
           </div>
+          <div v-else-if="historyRuns.length === 0" class="empty-small">暂无执行记录</div>
+          <HistoryList v-else :key="historyFor?.id" :rows="historyRows">
+            <template #actions="{ row }">
+              <button class="btn btn-sm" @click="askAiDiagnose(historyFor, rawRunOf(row.id))">⚡ AI 诊断此失败</button>
+            </template>
+          </HistoryList>
         </div>
         <div class="modal-actions">
           <button class="btn btn-ghost" @click="historyFor = null">关闭</button>
@@ -243,6 +237,10 @@ import { connNote, useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useAgentStore } from '@/stores/agent'
 import RunbookPanel from '@/components/schedules/RunbookPanel.vue'
+import HistoryList from '@/components/schedules/HistoryList.vue'
+// durationText/shortId 不再 import：历史列表已交组件内部调用，本视图仅 statusLabel 卡片位需要（strict noUnusedLocals）
+import { toScheduleRow, statusLabel as statusLabelOf, STATUS_LABEL_SCHEDULE } from '@/utils/history-view'
+import type { HistoryRow } from '@/utils/history-view'
 
 // SshView 里本页 sticky-visited（首访挂载、之后保持），active 标记当前是否停留在定时任务页
 const props = defineProps<{ active?: boolean }>()
@@ -448,7 +446,13 @@ function applyTemplate(t: Template) {
 
 const historyFor = ref<ScheduleRecord | null>(null)
 const historyRuns = ref<ScheduleRun[]>([])
+const historyError = ref('')
 const historyTitle = computed(() => historyFor.value?.name || '')
+const historyRows = computed<HistoryRow[]>(() => historyRuns.value.map(toScheduleRow))
+/** 诊断需原始 run（summary/error 全文）：slot 只回传 row.id，按 id 反查 */
+function rawRunOf(id: string): ScheduleRun {
+  return historyRuns.value.find((r) => r.id === id)!
+}
 
 /** 列表请求序号：runNow 后 3s 轮询、页面激活期 30s 轮询与手动/操作后刷新可并发 */
 let _loadSeq = 0
@@ -669,6 +673,14 @@ let _historySeq = 0
 async function openHistory(s: ScheduleRecord) {
   historyFor.value = s
   historyRuns.value = []
+  historyError.value = ''
+  await fetchHistory()
+}
+
+async function fetchHistory() {
+  const s = historyFor.value
+  if (!s) return
+  historyError.value = ''
   const seq = ++_historySeq
   try {
     const runs = await scheduleApi.runs(s.id)
@@ -676,7 +688,8 @@ async function openHistory(s: ScheduleRecord) {
     historyRuns.value = runs
   } catch (e) {
     if (seq !== _historySeq) return
-    toast.error(toFriendlyMessage(e, '加载历史失败'))
+    historyError.value = toFriendlyMessage(e, '加载历史失败')
+    toast.error(historyError.value)
   }
 }
 
@@ -697,20 +710,9 @@ async function remove(s: ScheduleRecord) {
   }
 }
 
-const STATUS_LABEL: Record<string, string> = {
-  idle: '未执行',
-  running: '执行中',
-  completed: '已完成',
-  failed: '失败',
-  waiting_permission: '待审批',
-  pending: '待执行',
-}
+// 卡片 meta 状态标签（历史列表标签已由 HistoryList 内部处理）；表/逻辑沉到 history-view 共享
 function statusLabel(s: string): string {
-  return STATUS_LABEL[s] || s
-}
-
-function shortId(id: string): string {
-  return id ? id.slice(0, 8) : ''
+  return statusLabelOf(s, STATUS_LABEL_SCHEDULE)
 }
 
 // ── 下次执行倒计时（D 阶段）：每秒 tick，仅在有启用任务时运行 ──
@@ -735,14 +737,7 @@ function countdownText(s: ScheduleRecord): string {
   return `${Math.floor(h / 24)} 天 ${h % 24} 小时`
 }
 
-/** 单次执行耗时（秒，保留 1 位小数） */
-function durationText(r: ScheduleRun): string {
-  if (!r.started_at || !r.finished_at) return ''
-  const a = parseSchedTs(r.started_at)
-  const b = parseSchedTs(r.finished_at)
-  if (isNaN(a) || isNaN(b) || b <= a) return ''
-  return `${Math.round((b - a) / 100) / 10}s`
-}
+/** 单次执行耗时已下沉 history-view（历史列表由组件内部调用）；本视图不再直接用 */
 
 function startCountdownTick() {
   if (countdownTimer) return
@@ -929,12 +924,11 @@ onUnmounted(() => {
 }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 
-.history-list { display: flex; flex-direction: column; gap: 8px; }
-.history-item { border: 1px solid var(--border-subtle); border-radius: 6px; padding: 8px 10px; }
-.history-head { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--text-secondary); }
-.history-summary { font-size: 12px; color: var(--text-secondary); margin-top: 6px; white-space: pre-wrap; max-height: 150px; overflow: auto; }
-.history-error { font-size: 12px; color: var(--accent-red); margin-top: 4px; }
+.history-load-error {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  font-size: 12px; color: var(--accent-red);
+  border: 1px solid var(--accent-red); border-radius: 6px; padding: 8px 10px;
+}
 .empty-small { color: var(--text-tertiary); font-size: 12px; padding: 20px 0; text-align: center; }
 .countdown { color: var(--accent-text); font-weight: 600; }
-.history-actions { margin-top: 6px; }
 </style>
