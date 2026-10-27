@@ -157,5 +157,7 @@ RunbookPanel.test.ts 头注已声明），组件层用 `?raw` 源码形状守卫
 1. **durationText 显示口径**：原两页用 `Math.round(ms/100)/10` 模板字面量会把 `76.0s` 吃成 `76s`，与「1 位小数」注释矛盾——共享层统一 `toFixed(1)`，显示更诚实，数值语义等价。
 2. **接线层 import 剪枝**：删旧内联 markup 后 `durationText/shortId`（SchedulesView）、`shortId/parseTs/durationText/parseBackendTs`（RunbookPanel）在视图内失去调用点，strict `noUnusedLocals` 要求收窄 import；这些能力已内聚进 HistoryList/history-view，行为不变。
 3. **RunbookPanel 诊断守卫断言**：slot 只回传 `row`，diagnosis 全文经 `diagnosisOf(row.id)` 反查，断言相应从 `{{ run.diagnosis }}` 改为 `diagnosisOf(row.id)`（语义等价）。
+4. **展开态 watch 与 §3 口径**：§3 原写「组件内不 watch rows」，但组件先以空 rows 挂载、fetch 后填充而 `:key`（目标 id）在该转换中不变，首帧「失败行默认展开」必须靠 watch 重建集合——故保留 watch，代价是同目标内「重试」回到默认折叠（吞掉手动展开）。注释已改至与行为一致。
+5. **终审修正（CodeReview M1）**：徽章色随历史行从 RunbookPanel 迁入 HistoryList 后，剧本域 `stopped`/`stale_reaped` 两终态一度退化为默认灰边（原 scoped 色不再跨组件生效）——已在 HistoryList 补齐两域并集橙色，并新增守卫钉住「两域状态键并集全部有专属色」。同批收紧：失败行默认展开加 `expandableOf` 闸（spec §1 不可展开组合不留渲染空洞）。
 
 后端零改动（§5 达成）。手工真机冒烟（§Step 2）因需 Electron 运行环境，留待用户在本地 `npm run dev` 走查。
