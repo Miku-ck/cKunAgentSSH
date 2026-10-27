@@ -116,8 +116,8 @@ function toggle(row: HistoryRow) {
 }
 .history-body { margin-top: 6px; border-left: 3px solid var(--border-subtle); padding-left: 10px; }
 .history-item.is-failed .history-body { border-left-color: var(--accent-red); }
-.history-error { font-size: 12px; color: var(--accent-red); margin-bottom: 4px; white-space: pre-wrap; }
-.history-summary { font-size: 12px; color: var(--text-primary); max-height: 300px; overflow: auto; line-height: 1.6; }
+.history-error { font-size: 12px; color: var(--accent-red); margin-bottom: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.history-summary { font-size: 12px; color: var(--text-primary); max-height: 300px; overflow: auto; overflow-wrap: anywhere; line-height: 1.6; }
 .history-actions { margin-top: 6px; }
 .status { font-size: 11px; padding: 1px 8px; border-radius: var(--radius-lg); border: 1px solid var(--border-subtle); white-space: nowrap; flex: 0 0 auto; }
 .status.running { color: var(--accent-text); border-color: var(--accent-primary); }

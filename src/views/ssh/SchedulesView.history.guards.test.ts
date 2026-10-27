@@ -48,6 +48,24 @@ describe('弹窗承载', () => {
   })
 })
 
+describe('长串断词', () => {
+  it('任务提示/错误条遇无空格长串不断出卡片', () => {
+    expect(style).toMatch(/\.prompt\s*\{[^}]*overflow-wrap:\s*anywhere/)
+    expect(style).toMatch(/\.history-load-error\s*\{[^}]*overflow-wrap:\s*anywhere/)
+    expect(style).toMatch(/\.schedule-card-meta\s*\{[^}]*overflow-wrap:\s*anywhere/)
+  })
+})
+
+describe('卡片头溢出', () => {
+  it('名称单独成行内块并单行省略，按钮永不被挤掉', () => {
+    expect(src).toContain('class="name-text"')
+    expect(style).toMatch(/\.schedule-name\s*\{[^}]*min-width:\s*0/)
+    expect(style).toMatch(/\.name-text\s*\{[^}]*text-overflow:\s*ellipsis/)
+    expect(style).toMatch(/\.schedule-card-actions\s*\{[^}]*flex-shrink:\s*0/)
+    expect(style).toMatch(/\.schedule-card-head\s*\{[^}]*gap:/)
+  })
+})
+
 describe('圆角令牌', () => {
   it('样式块内不用字面 px 圆角（手记主题会把 8px 改小，字面值破相）', () => {
     expect(style).not.toMatch(/border-radius:\s*\d+px/)

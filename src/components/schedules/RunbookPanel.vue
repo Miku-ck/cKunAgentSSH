@@ -19,7 +19,7 @@
       <div v-for="r in items" :key="r.id" class="rb-card">
         <div class="rb-card-head">
           <div class="rb-name">
-            {{ r.name }}
+            <span class="name-text">{{ r.name }}</span>
             <span class="toggle" :class="{ on: !!r.enabled }">
               {{ r.enabled ? '已启用' : '已停用' }}
             </span>
@@ -532,12 +532,14 @@ onUnmounted(() => {
   border-radius: var(--radius-lg);
   padding: 12px 14px;
 }
-.rb-card-head { display: flex; align-items: center; justify-content: space-between; }
-.rb-name { font-size: 14px; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 8px; }
-.toggle, .status { font-size: 11px; padding: 1px 8px; border-radius: var(--radius-lg); border: 1px solid var(--border-subtle); }
+/* 卡片头：名称单行省略，右侧按钮组不被挤压（5 个按钮在窄宽下是硬需求） */
+.rb-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
+.rb-name { font-size: 14px; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 8px; min-width: 0; }
+.name-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toggle, .status { flex-shrink: 0; font-size: 11px; padding: 1px 8px; border-radius: var(--radius-lg); border: 1px solid var(--border-subtle); }
 .toggle.on { color: var(--accent-green); border-color: var(--accent-green); }
-.rb-card-actions { display: flex; gap: 6px; }
-.rb-card-meta { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--text-secondary); margin-top: 8px; }
+.rb-card-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.rb-card-meta { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--text-secondary); margin-top: 8px; overflow-wrap: anywhere; }
 .meta-item { text-align: left; }
 .meta-item b { color: var(--text-primary); font-weight: 600; }
 .mono { font-family: var(--font-mono); }
@@ -574,6 +576,7 @@ onUnmounted(() => {
 .history-load-error {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   font-size: 12px; color: var(--accent-red);
+  overflow-wrap: anywhere;
   border: 1px solid var(--accent-red); border-radius: var(--radius-md); padding: 8px 10px;
 }
 .empty-small { color: var(--text-tertiary); font-size: 12px; padding: 20px 0; text-align: center; }

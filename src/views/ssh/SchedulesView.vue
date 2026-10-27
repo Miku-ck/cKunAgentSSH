@@ -29,7 +29,7 @@
       <div v-for="s in section.items" :key="s.id" class="schedule-card" :class="{ daily: section.type === 'daily' }">
         <div class="schedule-card-head">
           <div class="schedule-name">
-            {{ s.name }}
+            <span class="name-text">{{ s.name }}</span>
             <span class="toggle" :class="{ on: !!s.enabled }">
               {{ s.enabled ? '已启用' : '已停用' }}
             </span>
@@ -862,19 +862,20 @@ onUnmounted(() => {
   font-size: 13px; font-weight: 600; color: var(--text-primary); margin-top: 4px;
 }
 .schedule-section-title .cnt { font-size: 11px; font-weight: 400; color: var(--text-tertiary); }
-.schedule-card-head { display: flex; align-items: center; justify-content: space-between; }
-.schedule-name { font-size: 14px; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 8px; }
-/* 启用标记与执行状态是同一种"小徽章"，形状只写一份；配色各自表述语义 */
-.toggle, .status { font-size: 11px; padding: 1px 8px; border-radius: var(--radius-lg); border: 1px solid var(--border-subtle); }
+/* 卡片头：名称单行省略，右侧按钮组不被挤压（5 个按钮在窄宽下是硬需求） */
+.schedule-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
+.schedule-name { font-size: 14px; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 8px; min-width: 0; }
+.name-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toggle, .status { flex-shrink: 0; font-size: 11px; padding: 1px 8px; border-radius: var(--radius-lg); border: 1px solid var(--border-subtle); }
 .toggle.on { color: var(--accent-green); border-color: var(--accent-green); }
-.schedule-card-actions { display: flex; gap: 6px; }
-.schedule-card-meta { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--text-secondary); margin-top: 8px; }
+.schedule-card-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.schedule-card-meta { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--text-secondary); margin-top: 8px; overflow-wrap: anywhere; }
 .meta-item { text-align: left; }
 .meta-item b { color: var(--text-primary); font-weight: 600; }
 .mono { font-family: var(--font-mono); }
 .schedule-card-body { margin-top: 8px; font-size: 12px; }
 .schedule-card-body .k { color: var(--text-tertiary); margin-bottom: 4px; text-align: left; }
-.prompt { color: var(--text-secondary); white-space: pre-wrap; text-align: left; }
+.prompt { color: var(--text-secondary); white-space: pre-wrap; overflow-wrap: anywhere; text-align: left; }
 
 .status.running { color: var(--accent-text); border-color: var(--accent-primary); }
 .status.completed { color: var(--accent-green); border-color: var(--accent-green); }
@@ -924,6 +925,7 @@ onUnmounted(() => {
 .history-load-error {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   font-size: 12px; color: var(--accent-red);
+  overflow-wrap: anywhere;
   border: 1px solid var(--accent-red); border-radius: var(--radius-md); padding: 8px 10px;
 }
 .empty-small { color: var(--text-tertiary); font-size: 12px; padding: 20px 0; text-align: center; }

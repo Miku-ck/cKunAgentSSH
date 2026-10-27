@@ -56,4 +56,9 @@ describe('HistoryList 展示契约', () => {
     const styleBlock = src.slice(src.indexOf('<style scoped>'))
     expect(styleBlock).not.toMatch(/border-radius:\s*\d+px/)
   })
+  it('错误串/摘要遇无空格长串不断出卡片', () => {
+    const styleBlock = src.slice(src.indexOf('<style scoped>'))
+    expect(styleBlock).toMatch(/\.history-error\s*\{[^}]*overflow-wrap:\s*anywhere/)
+    expect(styleBlock).toMatch(/\.history-summary\s*\{[^}]*overflow-wrap:\s*anywhere/)
+  })
 })
