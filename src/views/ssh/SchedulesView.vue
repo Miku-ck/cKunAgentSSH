@@ -1,5 +1,11 @@
 <template>
   <div class="schedules-view">
+    <!-- 入口分段 tab：定时任务 | 运维剧本（C v1 收敛为本页内 tab，零共享导航文件改动） -->
+    <div class="entry-tabs">
+      <button :class="{ on: entryTab === 'schedules' }" @click="entryTab = 'schedules'">定时任务</button>
+      <button :class="{ on: entryTab === 'runbooks' }" @click="entryTab = 'runbooks'">运维剧本</button>
+    </div>
+    <div v-show="entryTab !== 'runbooks'" class="schedules-pane">
     <!-- 头部 -->
     <div class="schedules-header">
       <div class="schedules-title">
@@ -199,6 +205,8 @@
 
     <div v-if="loading" class="sc-loading">加载中…</div>
     <div v-if="error" class="sc-error">{{ error }}</div>
+    </div>
+    <RunbookPanel v-if="entryTab === 'runbooks'" :active="entryTab === 'runbooks'" />
   </div>
 </template>
 
@@ -217,9 +225,13 @@ import { pickNotices } from '@/utils/schedule-notify'
 import { connNote, useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useAgentStore } from '@/stores/agent'
+import RunbookPanel from '@/components/schedules/RunbookPanel.vue'
 
 // SshView 里本页 sticky-visited（首访挂载、之后保持），active 标记当前是否停留在定时任务页
 const props = defineProps<{ active?: boolean }>()
+
+// 入口分段：定时任务 | 运维剧本（运维剧本承载在 RunbookPanel，自身带加载/轮询）
+const entryTab = ref<'schedules' | 'runbooks'>('schedules')
 
 const toast = useToastStore()
 const { confirm } = useConfirm()
@@ -735,6 +747,20 @@ onUnmounted(() => {
   /* 整页结构画布：走 --canvas-bg（默认=--bg-base；详见 DashboardView 同注）。 */
   background: var(--canvas-bg);
 }
+/* 入口分段 tab（定时任务 | 运维剧本）：小段控件，选中态走 accent */
+.entry-tabs { display: flex; gap: 4px; padding: 8px 16px 0; flex-shrink: 0; }
+.entry-tabs button {
+  padding: 5px 14px; font-size: 12px; border-radius: 6px 6px 0 0; cursor: pointer;
+  border: 1px solid transparent; border-bottom: none; background: transparent;
+  color: var(--text-secondary);
+}
+.entry-tabs button:hover { color: var(--text-primary); background: var(--bg-hover); }
+.entry-tabs button.on {
+  color: var(--accent-text); background: var(--bg-elevated);
+  border-color: var(--border-subtle);
+}
+/* 分段内容壳：被 v-show 的子树要自己成为 flex 列容器，schedule-list 的 flex:1 才有效 */
+.schedules-pane { display: flex; flex-direction: column; flex: 1; overflow: hidden; min-height: 0; }
 /* 头部统一以 RemoteManager .rm-header 为准：44px 高 + 16px 侧距 + 底部分隔线 */
 .schedules-header {
   display: flex;

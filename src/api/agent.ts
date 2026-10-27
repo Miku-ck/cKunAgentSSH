@@ -407,6 +407,8 @@ export interface AgentRunRow {
   cost_usd: number
   duration_ms: number
   tool_call_count: number
+  /** 1 = 收尾时 undo 快照已落库（record_run_undo 对空栈返回 False，1 即确有可回滚项） */
+  undo_recorded: number
   started_at: string
   completed_at: string | null
 }

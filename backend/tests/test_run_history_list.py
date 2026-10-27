@@ -155,10 +155,10 @@ def test_列表键集合三层逐字段相等(runs_db):
     """投影列 ⇄ 端点实发键 ⇄ 前端声明的 AgentRunRow，三份必须是同一个集合。
 
     本仓反复付学费的「跨层键漂移」：改名只发生在一侧，两侧各自的用例都绿，
-    而表格里那一格静默印空白。只钉"这一份有 14 个键"不够，要钉**两边相等**。
+    而表格里那一格静默印空白。只钉"这一份有 15 个键"不够，要钉**两边相等**。
     """
     cols = _projection_columns()
-    assert len(cols) == 14
+    assert len(cols) == 15
     assert _agent_run_row_keys() == cols
     body = _client().get("/agent/runs?limit=50").json()
     assert set(body["items"][0]) == cols
@@ -171,6 +171,6 @@ def test_键守卫自己会红_变异自检():
     同名别处（round23 抄这段时就踩过：改 top_p 命中的是读取侧 ModelConfig）。
     """
     keys = _agent_run_row_keys()
-    assert len(keys) == 14, "解析到的键数不对，上一条断言就是在比空集"
+    assert len(keys) == 15, "解析到的键数不对，上一条断言就是在比空集"
     mutated = (keys - {"tool_call_count"}) | {"calls"}
     assert mutated ^ _projection_columns() == {"tool_call_count", "calls"}

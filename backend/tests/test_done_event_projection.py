@@ -114,6 +114,54 @@ def test_context_summary_survives_the_projection():
     assert out["context_summary"] == "第一轮排查了 nginx，第二轮改了 systemd 单元"
 
 
+def test_undo_recorded_survives_the_projection():
+    """回归钉（功能 B）：driver 的 done 载荷带 undo_recorded（undo 栈快照是否成功
+    落库，driver.py done 分支写入），白名单投影必须透传 —— 断在中间时 SSE 线上
+    恒缺失，前端无从知晓回滚是否已记录。"""
+    assert "undo_recorded" in _driver_done_keys(), "driver 的 done 载荷没有 undo_recorded"
+    ev = TraceEvent(kind="done", source="driver", run_id="run-1",
+                    payload={"state": "completed", "iterations": 3, "state_history": [],
+                             "cost": None, "run_id": "run-1", "undo_recorded": True})
+    out = SSEAdapter.to_sse_dict(ev)
+    assert out["undo_recorded"] is True
+
+
+def _routes_update_agent_run_kwargs() -> set[str]:
+    """routes 里 update_agent_run 收到的关键字形参集合（全文件并集）。
+
+    覆盖两种调用形态：直接调用 db.update_agent_run(...)，以及本仓惯用的
+    asyncio.to_thread(db.update_agent_run, run_id=..., ...) —— 后者的关键字
+    在 AST 上属于 to_thread 调用，由 to_thread 转发给目标函数。
+    """
+    tree = ast.parse(ROUTES.read_text(encoding="utf-8"))
+    names: set[str] = set()
+
+    def _is_target(fn: ast.expr) -> bool:
+        return isinstance(fn, ast.Attribute) and fn.attr == "update_agent_run"
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if _is_target(node.func):
+            names |= {kw.arg for kw in node.keywords if kw.arg}
+        elif (isinstance(node.func, ast.Attribute) and node.func.attr == "to_thread"
+              and node.args and _is_target(node.args[0])):
+            names |= {kw.arg for kw in node.keywords if kw.arg}
+    return names
+
+
+def test_undo_recorded_reaches_the_runs_table():
+    """消费侧闭环（功能 B 收尾）：done 投影透出的 undo_recorded 必须被 routes
+    落进 agent_runs（update_agent_run 形参 + 列表投影列），否则通道修了一半
+    —— SSE 线上有、库里恒 NULL，运行列表的「回滚」标记无从谈起。"""
+    kwargs = _routes_update_agent_run_kwargs()
+    assert "undo_recorded" in kwargs, "routes 没把 undo_recorded 传给 update_agent_run，落库链仍断"
+    db_text = (BACKEND / "database.py").read_text(encoding="utf-8")
+    assert re.search(r"_RUN_LIST_COLUMNS = \([^)]*undo_recorded", db_text, re.S), (
+        "运行列表投影 _RUN_LIST_COLUMNS 缺 undo_recorded 列，前端标记恒 undefined"
+    )
+
+
 def test_projection_actually_catches_a_dropped_key():
     """变异自检：把键从投影里摘掉，上面的对账必须产出差集（否则守卫是假的）"""
     produced = _adapter_done_keys()

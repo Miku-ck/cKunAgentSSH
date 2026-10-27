@@ -1294,6 +1294,9 @@ async def agent_run(req: AgentRunRequest, request: Request):
                             duration_ms=cost_data.get("duration_ms", 0),
                             tool_call_count=cost_data.get("tool_call_count", 0) or len(run_trace_tool_calls),
                             context_summary=event.get("context_summary") or None,
+                            # 功能 B 消费侧闭环：done 透出的 undo 快照落库标记，
+                            # 运行列表「回滚」列的数据源（投影守卫见 test_done_event_projection）
+                            undo_recorded=1 if event.get("undo_recorded") else 0,
                         )
                         # H14 修复：构造 AgentTraceSnapshot（无论是否有正文都构造）
                         # 原实现只在 total_content 非空时保存消息，导致运行失败且无正文输出时

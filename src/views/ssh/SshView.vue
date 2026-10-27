@@ -278,6 +278,7 @@ import { useSshNavigation } from '@/composables/useSshNavigation'
 import { useGlobalShortcuts } from '@/composables/useGlobalShortcuts'
 import type { NavPage } from '@/composables/useSshNavigation'
 import { useTabContextMenu } from '@/composables/useTabContextMenu'
+import { useAlertTrigger } from '@/composables/useAlertTrigger'
 import { tabStatusKind } from '@/utils/tab-status'
 
 const store = useSSHStore()
@@ -345,6 +346,10 @@ const {
   closeModal,
   handleSaved,
 } = useSshNavigation(focusActiveTerminal, terminalRefs)
+
+// 指标告警触发（功能 A）：只读 server-monitor store 导出的状态，自身不 start/stop
+// 轮询；组件卸载自停（onScopeDispose），无需手动清理
+useAlertTrigger()
 
 /** 首页目标菜单里「全部 N 台」拉起的批量下发弹窗 */
 const showBulk = ref(false)

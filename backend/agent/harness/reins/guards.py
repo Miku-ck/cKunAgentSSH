@@ -49,7 +49,9 @@ def _prod_deny_message(reason: str) -> str:
     expl = explain_for_reason(reason or "")
     effect = expl.text if expl.source == "static" else "系统判定这条命令有风险，但无法进一步判断其具体后果"
     return (
-        f"[生产环境] {effect}"
+        # POLICY_DENY_MARKER 是机器可读的拦截标记（headless 事件流据此判 blocked），
+        # 与展示文案同串但语义独立——改文案别丢它
+        f"[生产环境]（{POLICY_DENY_MARKER}）{effect}"
         "生产环境仅允许执行预先登记在权限白名单里的命令，本次执行已被拒绝、未写入终端。"
     )
 

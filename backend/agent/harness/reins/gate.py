@@ -1026,7 +1026,9 @@ class PermissionGate:
                         payload={
                             "tool": tool,
                             "message": (
-                                f"[生产强化] 生产环境危险工具 {tool} 仅接受预授权 allowlist 放行。"
+                                # POLICY_DENY_MARKER 供 headless 事件流判 blocked（机器可读）
+                                f"[生产强化] 生产环境危险工具{POLICY_DENY_MARKER}: {tool} "
+                                "仅接受预授权 allowlist 放行。"
                                 "拒绝临时审批。请预先在权限 allowlist 中登记后重试。"
                             ),
                         },

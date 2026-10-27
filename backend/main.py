@@ -26,6 +26,8 @@ from routes.terminal import router as terminal_router
 from routes.audit import router as audit_router
 from routes.schedules import router as schedules_router
 from routes.workflow import router as workflow_router
+from routes.rollbacks import router as rollbacks_router
+from routes.runbooks import router as runbooks_router
 from agent.consciousness_tick import get_global_tick
 from agent.audit import AuditWriteError
 from agent.bridge_relay import bridge_ws_endpoint
@@ -266,6 +268,8 @@ app.include_router(terminal_router, prefix="/api")
 app.include_router(audit_router, prefix="/api")
 app.include_router(schedules_router, prefix="/api")
 app.include_router(workflow_router, prefix="/api")
+app.include_router(rollbacks_router, prefix="/api")
+app.include_router(runbooks_router, prefix="/api")
 
 # Bridge WS 端点：刻意不挂 /api 前缀 — X-API-Token 中间件不覆盖，
 # 它有自己的 hello token 鉴权（与主进程注入后端的 ELECTRON_BRIDGE_TOKEN 比对）

@@ -237,6 +237,10 @@ class SSEAdapter:
             # 恒为 NULL，跨 run 的滚动摘要永不复用，轨迹回放也拿不到摘要。
             # 不报错、不告警，只是永远读不到 —— 这一族的典型形态。
             result["context_summary"] = payload.get("context_summary", "")
+            # 功能 B：undo 栈快照是否成功落库（driver done 载荷写入的纯透传布尔）。
+            # 本投影是白名单——不补这行，该键在 SSE 线上恒缺失（与上面 context_summary
+            # 同一族：两头都在、中间断了，不报错不告警）。
+            result["undo_recorded"] = bool(payload.get("undo_recorded", False))
         # H13 修复 B3：补全三种事件类型的字段提取
         elif kind == "intention":
             # H14: 嵌套在 intention 字段下，与前端 AgentIntentionInfo 接口对齐

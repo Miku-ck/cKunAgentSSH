@@ -39,6 +39,8 @@ from agent.tools.builtin.ops_file import (
     FileGrepTool,
 )
 from agent.tools.builtin.ops_image import ReadImageTool
+# 功能 B（run 级一键回滚）：受治理的文件快照还原工具（dangerous → 每次授权弹卡）
+from agent.tools.builtin.undo_restore import UndoRestoreTool
 from agent.tools.builtin.ops_job import (
     JobRunTool,
     JobListTool,
@@ -86,6 +88,7 @@ _ALL_TOOL_CLASSES: list[type[BaseTool]] = [
     FileGlobTool,
     FileGrepTool,
     ReadImageTool,
+    UndoRestoreTool,
     JobRunTool,
     JobListTool,
     JobOutputTool,

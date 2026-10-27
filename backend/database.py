@@ -266,6 +266,7 @@ def init_db(db_path: str) -> None:
                 duration_ms     INTEGER DEFAULT 0,
                 tool_call_count INTEGER DEFAULT 0,
                 context_summary TEXT,
+                undo_recorded   INTEGER DEFAULT 0,
                 mode            TEXT,
                 model_used      TEXT,
                 started_at      TEXT NOT NULL DEFAULT (datetime('now')),
@@ -446,6 +447,7 @@ def init_db(db_path: str) -> None:
             ("tool_call_count",   "INTEGER DEFAULT 0"),
             ("mode",              "TEXT"),
             ("model_used",        "TEXT"),
+            ("undo_recorded",     "INTEGER DEFAULT 0"),
         ]:
             if col not in existing_cols:
                 # {col} 拼进 DDL 前过标识符守卫（见 _assert_sql_ident）；
@@ -2036,7 +2038,8 @@ def update_agent_run(run_id: str, status: str, iteration: Optional[int] = None,
                      prompt_tokens: Optional[int] = None, completion_tokens: Optional[int] = None,
                      cost_usd: Optional[float] = None, duration_ms: Optional[int] = None,
                      tool_call_count: Optional[int] = None,
-                     context_summary: Optional[str] = None) -> None:
+                     context_summary: Optional[str] = None,
+                     undo_recorded: Optional[int] = None) -> None:
     """更新 Agent 运行状态（含 token/成本/耗时统计）
 
     C6 修复：所有可选字段用 `is not None` 判断，避免合法的 0 值被跳过。
@@ -2085,6 +2088,9 @@ def update_agent_run(run_id: str, status: str, iteration: Optional[int] = None,
         if context_summary is not None:
             sets.append("context_summary = ?")
             params.append(context_summary)
+        if undo_recorded is not None:
+            sets.append("undo_recorded = ?")
+            params.append(undo_recorded)
         params.append(run_id)
         conn.execute(
             f"UPDATE agent_runs SET {', '.join(sets)} WHERE id = ?",
@@ -2151,7 +2157,7 @@ def get_agent_run(run_id: str) -> Optional[dict]:
 
 _RUN_LIST_COLUMNS = (
     "id, conversation_id, task, status, mode, model_used, iteration, max_iterations, "
-    "total_tokens, cost_usd, duration_ms, tool_call_count, started_at, completed_at"
+    "total_tokens, cost_usd, duration_ms, tool_call_count, undo_recorded, started_at, completed_at"
 )
 
 

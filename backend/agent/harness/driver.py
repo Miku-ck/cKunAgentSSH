@@ -1680,11 +1680,22 @@ class Driver:
         harness: "Harness",
     ) -> AsyncIterator[TraceEvent]:
         """发 done 事件"""
+        # run 级一键回滚（功能 B）：终态时把 undo 栈快照落库，供轨迹页一键回滚。
+        # 时序硬约束：必须在本函数最开头、FAILED 分支 undo_all 之前 —— FAILED 的
+        # 栈会先被执行再清空（stirrups.undo_all 尾部 clear），之后快照只能拿到
+        # 空栈。持久化是增强：失败仅告警，绝不阻断 run 收尾。
+        undo_recorded = False
+        try:
+            from undo_store import record_run_undo  # 惰性 import：driver 载入不拉 DB
+            undo_recorded = await record_run_undo(ctx, final_state)
+        except Exception as e:  # noqa: BLE001 — undo 持久化是增强，不拖死主流程
+            logger.warning("undo 持久化失败（不阻断 run 收尾）: %s", e)
+
         # 失败时回滚所有文件变更（事务性保证）
         if final_state == State.FAILED and ctx.undo_stack:
             logger.info("Agent 失败，回滚 %d 个文件操作", len(ctx.undo_stack))
             await harness.stirrups.undo_all(ctx)
-        
+
         # 成本快照
         cost_snapshot = harness.cost_tracker.snapshot(iterations=iterations).to_dict() if harness.cost_tracker else {}
 
@@ -1713,6 +1724,11 @@ class Driver:
                     "self_checked": bool(ctx.metadata.get("_goal_self_checked")),
                     "acknowledged": _goal_acknowledged(full_content),
                 },
+                # 功能 B：undo 栈是否成功落库。该键能随 SSE done 事件上行，依赖
+                # telemetry.py done 投影白名单收录本键（漏收录即静默丢弃）；
+                # routes 落 agent_runs.undo_recorded、运行列表「回滚」列消费——已闭环，
+                # 守卫见 test_done_event_projection 与 test_run_history_list。
+                "undo_recorded": undo_recorded,
             },
         )
         await telemetry.emit(done_event)

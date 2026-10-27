@@ -23,6 +23,10 @@
         <span v-if="trace.run.model_used" class="ft-chip muted">{{ trace.run.model_used }}</span>
       </div>
 
+      <!-- 功能 B：run 级一键回滚入口。面板自带可用性闸与无数据自隐藏（404 不渲染），
+           挂在元信息条下、展开行与消息气泡轨迹两处复用同一份。 -->
+      <RollbackPanel :run-id="runId" />
+
       <!-- 状态流转链：压缩连续重复，只保留迁移节点（init→thinking→acting→…→completed） -->
       <div v-if="stateChain.length" class="ft-states">
         <span class="ft-states-label">状态</span>
@@ -100,6 +104,7 @@ import { formatBackendTs } from '@/utils/format'
 import { runStatusChip, runStatusLabel } from '@/utils/agent-run-status'
 import { headline } from '@/utils/process-status'
 import { buildTraceModel } from '@/utils/run-trace'
+import RollbackPanel from '@/components/agent/RollbackPanel.vue'
 import type { TraceEventView, TraceInputEntry, TraceStepView } from '@/utils/run-trace'
 
 const props = defineProps<{ runId: string }>()

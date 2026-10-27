@@ -168,6 +168,7 @@ watch(() => props.focusSeq, () => {
             <th>tokens</th>
             <th>成本</th>
             <th>调用</th>
+            <th title="收尾时留有已落库的回滚快照，展开行内可发起一键回滚">回滚</th>
           </tr>
         </thead>
         <tbody>
@@ -189,9 +190,10 @@ watch(() => props.focusSeq, () => {
               <td class="num">{{ r.total_tokens || '—' }}</td>
               <td class="num">{{ r.cost_usd ? `$${r.cost_usd.toFixed(4)}` : '—' }}</td>
               <td class="num">{{ r.tool_call_count }}</td>
+              <td class="num">{{ r.undo_recorded ? '✓' : '—' }}</td>
             </tr>
             <tr v-if="expanded === r.id" class="detail">
-              <td colspan="9">
+              <td colspan="10">
                 <!-- DB 权威回放：状态流转 + 工具调用时间线（含输出）。
                      消息气泡的「轨迹」就是带 run_id 跳到这里。 -->
                 <AgentFullTrace :run-id="r.id" />
