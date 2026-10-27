@@ -14,6 +14,7 @@
     <TitleBar
       :active-page="activePage"
       @action-ai="sshViewRef?.goHome()"
+      @action-bot="sshViewRef?.toggleBot()"
       @action-terminal="sshViewRef?.showTerminal()"
       @action-schedules="sshViewRef?.toggleSchedules()"
       @action-audit="sshViewRef?.toggleAudit()"

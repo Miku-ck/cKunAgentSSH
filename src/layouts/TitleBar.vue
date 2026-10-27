@@ -26,6 +26,10 @@
         <span v-else-if="presence === 'running'" class="ai-badge run" aria-hidden="true"></span>
         <span v-else-if="presence === 'unread'" class="ai-badge unread" aria-hidden="true"></span>
       </button>
+      <button class="titlebar-action-btn" :class="{ active: activePage === 'bot' }" title="cKunBot 个人机器人" aria-label="cKunBot 个人机器人" @click="emit('action-bot')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><rect x="4" y="7" width="16" height="13" rx="3"/><path d="M12 3v4M8 12h.01M16 12h.01M8 16h8"/></svg>
+        <span class="tb-label">Bot</span>
+      </button>
       <button class="titlebar-action-btn" :class="{ active: activePage === 'docker' }" :title="'Docker 管理' + pageHint('docker')" aria-label="Docker 管理" @click="emit('action-docker')">
         <IconDocker :width="14" :height="14" />
         <span class="tb-label">Docker</span>
@@ -135,6 +139,7 @@ defineProps<{
 
 const emit = defineEmits<{
   'action-ai': []
+  'action-bot': []
   'action-terminal': []
   'action-schedules': []
   'action-audit': []

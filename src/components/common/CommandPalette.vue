@@ -88,6 +88,7 @@ const PAGE_ITEMS: Array<{ page: Exclude<NavPage, 'home'>; label: string; sub?: '
   { page: 'git', sub: 'accel', label: '打开：Git 加速' },
   { page: 'git', sub: 'repos', label: '打开：Git 仓库管理' },
   { page: 'audit', label: '打开：运维轨迹' },
+  { page: 'bot', label: '打开：cKunBot 个人机器人' },
 ]
 
 function buildItems(): PaletteItem[] {

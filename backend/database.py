@@ -198,6 +198,51 @@ def init_db(db_path: str) -> None:
             CREATE INDEX IF NOT EXISTS ix_messages_conv
                 ON messages(conversation_id, created_at);
 
+            CREATE TABLE IF NOT EXISTS bot_personas (
+                id           TEXT PRIMARY KEY,
+                name         TEXT NOT NULL,
+                avatar       TEXT NOT NULL DEFAULT '',
+                personality  TEXT NOT NULL DEFAULT '',
+                background   TEXT NOT NULL DEFAULT '',
+                greeting     TEXT NOT NULL DEFAULT '',
+                model_id     TEXT,
+                is_builtin   INTEGER NOT NULL DEFAULT 0,
+                created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS bot_conversations (
+                id               TEXT PRIMARY KEY,
+                title            TEXT NOT NULL DEFAULT '新会话',
+                persona_id       TEXT REFERENCES bot_personas(id) ON DELETE SET NULL,
+                persona_snapshot TEXT NOT NULL,
+                channel          TEXT NOT NULL DEFAULT 'local',
+                external_id      TEXT,
+                created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS ix_bot_conversations_external
+                ON bot_conversations(channel, external_id)
+                WHERE external_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS ix_bot_conversations_updated
+                ON bot_conversations(channel, updated_at);
+
+            CREATE TABLE IF NOT EXISTS bot_messages (
+                id              TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL REFERENCES bot_conversations(id) ON DELETE CASCADE,
+                role            TEXT NOT NULL,
+                content         TEXT NOT NULL,
+                external_msg_id TEXT,
+                created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_bot_messages_conv
+                ON bot_messages(conversation_id, created_at);
+            CREATE UNIQUE INDEX IF NOT EXISTS ix_bot_messages_external
+                ON bot_messages(conversation_id, external_msg_id)
+                WHERE external_msg_id IS NOT NULL;
+
             CREATE TABLE IF NOT EXISTS skills (
                 id          TEXT PRIMARY KEY,
                 name        TEXT NOT NULL,
@@ -465,6 +510,15 @@ def init_db(db_path: str) -> None:
                 "ALTER TABLE agent_jobs ADD COLUMN out_offset INTEGER NOT NULL DEFAULT 0"
             )
         _migrate_db(conn)
+        conn.execute(
+            "INSERT INTO bot_personas "
+            "(id, name, avatar, personality, background, greeting, is_builtin) "
+            "SELECT ?, 'cKunBot', '🤖', '真诚、温和、自然，有自己的聊天节奏', "
+            "'你是用户的个人机器人伙伴，擅长轻松陪聊和认真倾听', "
+            "'嗨，我是 cKunBot。今天想聊点什么？', 1 "
+            "WHERE NOT EXISTS (SELECT 1 FROM bot_personas WHERE is_builtin = 1)",
+            (_new_id(),),
+        )
         # 审查修复（P2 E9）：_seed_models（含同步 httpx.get）已移至独立异步入口
         # seed_models_async，从 lifespan 调用，避免阻塞事件循环
         conn.commit()
@@ -2016,6 +2070,306 @@ def get_default_model(mode: Optional[str] = None, mask_key: bool = True) -> Opti
             _raw_key = unprotect_secret(_raw_key)
         result["api_key"] = _raw_key if not mask_key else _mask_api_key(_raw_key)
         return result
+    finally:
+        conn.close()
+
+
+# ── cKunBot 人格与会话 ──
+
+
+def _bot_persona_dict(row: sqlite3.Row) -> dict:
+    result = dict(row)
+    result["is_builtin"] = int(result.get("is_builtin") or 0)
+    return result
+
+
+def create_bot_persona(
+    name: str,
+    avatar: str = "",
+    personality: str = "",
+    background: str = "",
+    greeting: str = "",
+    model_id: Optional[str] = None,
+) -> dict:
+    persona_id = _new_id()
+    now = _now()
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO bot_personas "
+            "(id, name, avatar, personality, background, greeting, model_id, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (persona_id, name, avatar, personality, background, greeting, model_id, now, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return get_bot_persona(persona_id)
+
+
+def list_bot_personas() -> list[dict]:
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM bot_personas ORDER BY is_builtin DESC, created_at ASC, id ASC"
+        ).fetchall()
+        return [_bot_persona_dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def get_bot_persona(persona_id: str) -> Optional[dict]:
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM bot_personas WHERE id = ?", (persona_id,)
+        ).fetchone()
+        return _bot_persona_dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def update_bot_persona(persona_id: str, **fields) -> Optional[dict]:
+    allowed = {"name", "avatar", "personality", "background", "greeting", "model_id"}
+    data = {key: value for key, value in fields.items() if key in allowed}
+    if not data:
+        return get_bot_persona(persona_id)
+    assignments = ", ".join(f"{key} = ?" for key in data)
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            f"UPDATE bot_personas SET {assignments}, updated_at = ? WHERE id = ?",
+            (*data.values(), _now(), persona_id),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            return None
+    finally:
+        conn.close()
+    return get_bot_persona(persona_id)
+
+
+def copy_bot_persona(persona_id: str) -> Optional[dict]:
+    persona = get_bot_persona(persona_id)
+    if not persona:
+        return None
+    return create_bot_persona(
+        name=f"{persona['name']} 副本",
+        avatar=persona["avatar"],
+        personality=persona["personality"],
+        background=persona["background"],
+        greeting=persona["greeting"],
+        model_id=persona["model_id"],
+    )
+
+
+def delete_bot_persona(persona_id: str) -> bool:
+    conn = _get_conn()
+    try:
+        cur = conn.execute("DELETE FROM bot_personas WHERE id = ?", (persona_id,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def _bot_conversation_dict(row: sqlite3.Row) -> dict:
+    result = dict(row)
+    result["persona"] = json.loads(result.pop("persona_snapshot"))
+    return result
+
+
+def create_bot_conversation(
+    persona_id: str,
+    channel: str = "local",
+    external_id: Optional[str] = None,
+) -> dict:
+    persona = get_bot_persona(persona_id)
+    if not persona:
+        raise ValueError("Persona not found")
+    conversation_id = _new_id()
+    now = _now()
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO bot_conversations "
+            "(id, title, persona_id, persona_snapshot, channel, external_id, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                conversation_id,
+                persona["name"],
+                persona_id,
+                json.dumps(persona, ensure_ascii=False),
+                channel,
+                external_id,
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return get_bot_conversation(conversation_id)
+
+
+def get_or_create_bot_conversation(
+    persona_id: str,
+    channel: str,
+    external_id: str,
+) -> dict:
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM bot_conversations WHERE channel = ? AND external_id = ?",
+            (channel, external_id),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row:
+        return _bot_conversation_dict(row)
+    try:
+        return create_bot_conversation(persona_id, channel, external_id)
+    except sqlite3.IntegrityError:
+        conn = _get_conn()
+        try:
+            row = conn.execute(
+                "SELECT * FROM bot_conversations WHERE channel = ? AND external_id = ?",
+                (channel, external_id),
+            ).fetchone()
+            return _bot_conversation_dict(row)
+        finally:
+            conn.close()
+
+
+def list_bot_conversations(
+    channel: Optional[str] = None,
+    persona_id: Optional[str] = None,
+    limit: int = 100,
+) -> list[dict]:
+    conditions = []
+    params: list = []
+    if channel is not None:
+        conditions.append("c.channel = ?")
+        params.append(channel)
+    if persona_id is not None:
+        conditions.append("c.persona_id = ?")
+        params.append(persona_id)
+    where = "WHERE " + " AND ".join(conditions) if conditions else ""
+    params.append(limit)
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT c.*, (SELECT m.content FROM bot_messages m "
+            "WHERE m.conversation_id = c.id ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1) "
+            "AS preview FROM bot_conversations c "
+            f"{where} ORDER BY c.updated_at DESC, c.id DESC LIMIT ?",
+            params,
+        ).fetchall()
+        return [_bot_conversation_dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def get_bot_conversation(conversation_id: str) -> Optional[dict]:
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM bot_conversations WHERE id = ?", (conversation_id,)
+        ).fetchone()
+        return _bot_conversation_dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def delete_bot_conversation(conversation_id: str) -> bool:
+    conn = _get_conn()
+    try:
+        cur = conn.execute("DELETE FROM bot_conversations WHERE id = ?", (conversation_id,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def add_bot_message(
+    conversation_id: str,
+    role: str,
+    content: str,
+    external_msg_id: Optional[str] = None,
+) -> dict:
+    message_id = _new_id()
+    now = _now()
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO bot_messages "
+            "(id, conversation_id, role, content, external_msg_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (message_id, conversation_id, role, content, external_msg_id, now),
+        )
+        if cur.rowcount == 0:
+            row = conn.execute(
+                "SELECT * FROM bot_messages WHERE conversation_id = ? AND external_msg_id = ?",
+                (conversation_id, external_msg_id),
+            ).fetchone()
+            return dict(row)
+        conn.execute(
+            "UPDATE bot_conversations SET updated_at = ? WHERE id = ?",
+            (now, conversation_id),
+        )
+        conn.commit()
+        return {
+            "id": message_id,
+            "conversation_id": conversation_id,
+            "role": role,
+            "content": content,
+            "external_msg_id": external_msg_id,
+            "created_at": now,
+        }
+    finally:
+        conn.close()
+
+
+def get_bot_messages(conversation_id: str, limit: int = 100) -> list[dict]:
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM (SELECT rowid AS sort_id, * FROM bot_messages WHERE conversation_id = ? "
+            "ORDER BY created_at DESC, rowid DESC LIMIT ?) "
+            "ORDER BY created_at ASC, sort_id ASC",
+            (conversation_id, limit),
+        ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item.pop("sort_id", None)
+            result.append(item)
+        return result
+    finally:
+        conn.close()
+
+
+def get_bot_message_by_external_id(conversation_id: str, external_msg_id: str) -> Optional[dict]:
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM bot_messages WHERE conversation_id = ? AND external_msg_id = ?",
+            (conversation_id, external_msg_id),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_recent_bot_messages(conversation_id: str, limit: int = 40) -> list[dict]:
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT role, content FROM bot_messages WHERE conversation_id = ? "
+            "ORDER BY created_at DESC, rowid DESC LIMIT ?",
+            (conversation_id, limit),
+        ).fetchall()
+        return [dict(row) for row in reversed(rows)]
     finally:
         conn.close()
 

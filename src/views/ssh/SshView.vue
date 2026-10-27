@@ -166,6 +166,11 @@ v-show="s.id === store.activeSessionId"
           <GitView v-if="pageMounted('git')" :active="activeNavPage === 'git'" @exec-terminal="activateTerminal($event)" />
         </div>
 
+        <!-- cKunBot：人格陪聊与 QQ 机器人 -->
+        <div v-show="activeNavPage === 'bot'" class="bot-page">
+          <CkunBotView v-if="pageMounted('bot')" />
+        </div>
+
         <!-- 首页：智能体任务台（消息区 + 常驻输入区，历史走右侧抽屉） -->
         <HomeWorkspace
           v-show="homeTabActive"
@@ -267,6 +272,7 @@ const DashboardView = defineAsyncComponent(() => import('@/views/ssh/DashboardVi
 const TunnelView = defineAsyncComponent(() => import('@/components/ssh/TunnelView.vue'))
 const DockerView = defineAsyncComponent(() => import('@/components/ssh/DockerView.vue'))
 const GitView = defineAsyncComponent(() => import('@/components/ssh/git/GitView.vue'))
+const CkunBotView = defineAsyncComponent(() => import('@/components/bot/CkunBotView.vue'))
 const CommandPalette = defineAsyncComponent(() => import('@/components/common/CommandPalette.vue'))
 import { useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
@@ -335,6 +341,7 @@ const {
   toggleTunnels,
   toggleDocker,
   toggleGit,
+  toggleBot,
   openLocalShell,
   handleLocalExit,
   connectRemote,
@@ -379,6 +386,7 @@ const PAGE_TOGGLES: Record<Exclude<NavPage, 'home'>, () => void> = {
   tunnels: toggleTunnels,
   docker: toggleDocker,
   git: toggleGit,
+  bot: toggleBot,
 }
 
 /** 首页 ＋ 菜单 SSH 面板的「连接远程服务器」：只开不关 —— toggle 语义在页面
@@ -534,6 +542,7 @@ defineExpose({
   toggleTunnels,
   toggleDocker,
   toggleGit,
+  toggleBot,
   openSettings,
   activeNavPage,
 })
@@ -842,6 +851,14 @@ defineExpose({
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+/* ─── cKunBot Page ─── */
+.bot-page {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  overflow: hidden;
 }
 
 /* ─── Tab Context Menu ─── */
