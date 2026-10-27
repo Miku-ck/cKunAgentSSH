@@ -391,6 +391,8 @@ def init_db(db_path: str) -> None:
                 day_of_month    INTEGER DEFAULT 1,
                 target_host     TEXT DEFAULT '',
                 task_prompt     TEXT DEFAULT '',
+                -- spec 2026-10-27-schedule-task-type：任务分类，'ops' | 'daily'，存量归运维
+                task_type       TEXT NOT NULL DEFAULT 'ops',
                 enabled         INTEGER DEFAULT 1,
                 next_run_at     TEXT,
                 last_run_at     TEXT,
@@ -478,6 +480,11 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
     schedule_cols = {row[1] for row in cursor.fetchall()}
     if "last_abnormal_at" not in schedule_cols:
         conn.execute("ALTER TABLE schedules ADD COLUMN last_abnormal_at TEXT")
+    # spec 2026-10-27-schedule-task-type：旧库补 task_type 列，DEFAULT 'ops' 使存量行自动归运维
+    if "task_type" not in schedule_cols:
+        conn.execute(
+            "ALTER TABLE schedules ADD COLUMN task_type TEXT NOT NULL DEFAULT 'ops'"
+        )
     cursor = conn.execute("PRAGMA table_info(messages)")
     columns = {row[1] for row in cursor.fetchall()}
     if 'reasoning' not in columns:
@@ -2630,7 +2637,7 @@ def delete_agent_strategy(strategy_id: str) -> bool:
 # ── 定时任务（schedules） ───────────────────────────────────────────────────────
 
 _SCHEDULE_COLS = (
-    "id, name, schedule_type, interval_minutes, time_hour, time_minute, "
+    "id, name, task_type, schedule_type, interval_minutes, time_hour, time_minute, "
     "weekday, day_of_month, target_host, task_prompt, enabled, next_run_at, "
     "last_run_at, last_status, last_run_id, last_abnormal_at, created_at, updated_at"
 )
@@ -2677,13 +2684,16 @@ def create_schedule(data: dict) -> dict:
     try:
         conn.execute(
             """INSERT INTO schedules (
-                id, name, schedule_type, interval_minutes, time_hour, time_minute,
+                id, name, task_type, schedule_type, interval_minutes, time_hour, time_minute,
                 weekday, day_of_month, target_host, task_prompt, enabled,
                 next_run_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 sid,
                 (data.get("name") or "").strip(),
+                # spec 2026-10-27-schedule-task-type：分类缺省归运维；update_schedule 的
+                # allowed 集不含 task_type，故类型创建后不可变（即便 patch 带也被丢弃）。
+                data.get("task_type") or "ops",
                 data.get("schedule_type") or "interval",
                 int(data.get("interval_minutes") or 60),
                 # None 判定而非 `or`：0（午夜）是合法 time_hour，`0 or 9` 会把每日/每周/
