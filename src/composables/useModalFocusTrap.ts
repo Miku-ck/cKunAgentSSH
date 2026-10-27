@@ -27,9 +27,16 @@ const FOCUSABLE =
 export interface ModalFocusOptions {
   /** 打开时的初始焦点；不给则聚焦弹窗容器本身（容器要有 tabindex="-1"） */
   initialFocus?: string
+  /**
+   * 是否接管 Tab。默认接管；只有「宿主已经按最上层模态统一路由 Tab」的场合才关掉
+   * （设置页 SettingsDialog 就是这么做的），此时本件只负责初始焦点与关闭后的还原 ——
+   * 两边都拦 Tab 的话，一次按键会被先后拦两次，焦点跳格。
+   */
+  manageTab?: boolean
 }
 
 export function useModalFocusTrap(dialogRef: Ref<HTMLElement | null>, options: ModalFocusOptions = {}) {
+  const managesTab = options.manageTab !== false
   let prevFocus: HTMLElement | null = null
   let active = false
   let suspended = false
@@ -70,7 +77,7 @@ export function useModalFocusTrap(dialogRef: Ref<HTMLElement | null>, options: M
     if (active) return
     active = true
     prevFocus = document.activeElement as HTMLElement | null
-    window.addEventListener('keydown', onKeydown, true)
+    if (managesTab) window.addEventListener('keydown', onKeydown, true)
     void nextTick(() => {
       const preferred = options.initialFocus ? dialogRef.value?.querySelector<HTMLElement>(options.initialFocus) : null
       ;(preferred ?? dialogRef.value)?.focus()
@@ -97,7 +104,7 @@ export function useModalFocusTrap(dialogRef: Ref<HTMLElement | null>, options: M
   function resume() {
     if (!active || !suspended) return
     suspended = false
-    window.addEventListener('keydown', onKeydown, true)
+    if (managesTab) window.addEventListener('keydown', onKeydown, true)
   }
 
   return { activate, deactivate, suspend, resume, isActive: () => active }

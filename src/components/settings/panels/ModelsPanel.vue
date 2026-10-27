@@ -145,7 +145,7 @@
     <Teleport to="body">
       <Transition name="modal-fade">
         <div v-if="showDialog" class="modal-overlay">
-          <div class="modal-container" role="dialog" aria-modal="true" aria-labelledby="model-dialog-title">
+          <div ref="dialogRef" class="modal-container" role="dialog" aria-modal="true" aria-labelledby="model-dialog-title" tabindex="-1">
             <!-- Header -->
             <div class="modal-header">
               <h4 id="model-dialog-title">{{ isEditing ? '编辑模型' : '添加模型' }}</h4>
@@ -159,7 +159,17 @@
               <!-- 提供商选择 -->
               <div class="form-group">
                 <label class="form-label">提供商 <span class="required">*</span></label>
-                <div class="provider-select" @click="showProviderDropdown = !showProviderDropdown" ref="providerRef">
+                <div
+                  ref="providerRef"
+                  class="provider-select"
+                  role="button"
+                  tabindex="0"
+                  aria-haspopup="listbox"
+                  :aria-expanded="showProviderDropdown"
+                  @click="showProviderDropdown = !showProviderDropdown"
+                  @keydown.enter.prevent="showProviderDropdown = !showProviderDropdown"
+                  @keydown.space.prevent="showProviderDropdown = !showProviderDropdown"
+                >
                   <div class="provider-selected">
                     <!-- 未知 provider（库里的历史值，如建表默认 'custom'）显示原值而不是
                          "选择提供商"：那一行是假的空态，实际值好好的，只是不在选项表里 -->
@@ -173,7 +183,12 @@
                         :key="p.id"
                         class="provider-option"
                         :class="{ active: form.provider === p.id }"
+                        role="option"
+                        tabindex="0"
+                        :aria-selected="form.provider === p.id"
                         @click.stop="selectProvider(p)"
+                        @keydown.enter.prevent="selectProvider(p)"
+                        @keydown.space.prevent="selectProvider(p)"
                       >
                         <span>{{ p.label }}</span>
                       </div>
@@ -368,7 +383,8 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { reactive, ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { useModalFocusTrap } from '../../../composables/useModalFocusTrap'
 import { useSettingsStore } from '@/stores/settings'
 import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
@@ -421,6 +437,15 @@ const showProviderDropdown = ref(false)
 const hasExistingKey = ref(false)
 const maskedApiKey = ref('')  // 编辑时后端返回的脱敏 key，用于判断用户是否修改
 const providerRef = ref<HTMLElement | null>(null)
+
+/**
+ * 本对话框开在设置页里面，Tab 路由归宿主：SettingsDialog 会把 Tab 圈在最上层模态
+ * （它自己那套 topmostModal）里。这里 manageTab: false 只拿「初始焦点 + 关掉后还给
+ * 触发按钮」两件，否则两边都拦 Tab，一次按键被先后拦两次、焦点跳格。
+ */
+const dialogRef = ref<HTMLElement | null>(null)
+const { activate, deactivate } = useModalFocusTrap(dialogRef, { initialFocus: '.provider-select', manageTab: false })
+watch(showDialog, (v) => { if (v) activate(); else deactivate() })
 
 // ── 表单 ──
 const form = reactive({
@@ -974,6 +999,8 @@ function formatTokenCount(n: number): string {
   border: 1px solid var(--border-subtle);
   border-radius: 10px;
   box-shadow: var(--shadow-lg);
+  /* 容器只是初始焦点落点（tabindex=-1），描边交给里面的控件 */
+  outline: none;
   width: 90vw;
   max-width: 480px;
   max-height: 85vh;

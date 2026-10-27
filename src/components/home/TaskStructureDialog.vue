@@ -12,7 +12,7 @@
         <div class="ts-head">
           <h2 id="ts-title" class="ts-title">长任务结构化</h2>
           <span class="ts-sub">对照原文 · 未采用不会改动输入框</span>
-          <button ref="closeBtn" type="button" class="ts-close" title="关闭" aria-label="关闭" @click="$emit('close')">
+          <button type="button" class="ts-close" title="关闭" aria-label="关闭" @click="$emit('close')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
@@ -98,7 +98,8 @@
  * 组件本身不碰 store：采用/回退/确认都由宿主（HomeComposer 经 useTaskStructuring）
  * 裁决，这里只呈现事实与回抛意图 —— 纯展示，可被"绝不静默替换"的守卫测试安心信任。
  */
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useModalFocusTrap } from '../../composables/useModalFocusTrap'
 import type { StructureResponse } from '@/utils/task-structure-core'
 import ProvenanceTag from './ProvenanceTag.vue'
 
@@ -129,7 +130,8 @@ const fieldRows = computed(() => {
 })
 
 const dialogRef = ref<HTMLElement | null>(null)
-const closeBtn = ref<HTMLButtonElement | null>(null)
+// 这份弹窗原先只管 Esc：Tab 会跑到背后的输入框，关掉后焦点也留在 body 上。
+const { activate, deactivate } = useModalFocusTrap(dialogRef, { initialFocus: '.ts-close' })
 
 function onWindowKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') {
@@ -140,10 +142,13 @@ function onWindowKeydown(e: KeyboardEvent) {
 }
 
 onMounted(() => {
-  void nextTick(() => closeBtn.value?.focus())
+  activate()
   window.addEventListener('keydown', onWindowKeydown)
 })
-onUnmounted(() => window.removeEventListener('keydown', onWindowKeydown))
+onUnmounted(() => {
+  window.removeEventListener('keydown', onWindowKeydown)
+  deactivate()
+})
 </script>
 
 <style scoped>

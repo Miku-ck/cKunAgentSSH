@@ -80,6 +80,10 @@ describe('弹窗焦点管理', () => {
       'components/ssh/git/GitReposPanel.vue',
       'components/ssh/SftpView.vue',
       'components/ssh/SftpFileEditor.vue',
+      'components/home/HomeHistoryDialog.vue',
+      'components/home/TaskStructureDialog.vue',
+      'components/common/CommandPalette.vue',
+      'components/settings/panels/ModelsPanel.vue',
     ]
     for (const file of files) {
       const src = read(file)
@@ -123,6 +127,32 @@ describe('弹窗焦点管理', () => {
     // 连接条目此前是纯 div + @click：键盘根本选不到
     expect(view).toMatch(/class="conn-item"[\s\S]{0,200}?tabindex="0"/)
     expect(view).toMatch(/@keydown\.enter[^\n]*handleConnect/)
+  })
+
+  it('历史弹窗不再自带一份 Tab 实现，命令行面板的 Esc 不再只绑在输入框上', () => {
+    const history = read('components/home/HomeHistoryDialog.vue')
+    expect(history).toContain("from '../../composables/useModalFocusTrap'")
+    expect(history).not.toContain('const FOCUSABLE')
+    // 原先 @keydown 绑在容器上：焦点一旦漏到背后就收不到
+    expect(history).not.toContain('@keydown="onKeydown"')
+
+    const palette = read('components/common/CommandPalette.vue')
+    expect(palette).toMatch(/initialFocus:\s*'\.palette-input'/)
+    expect(palette).toMatch(/onMounted\(\(\) => \{[\s\S]*?window\.addEventListener\('keydown', onWindowKey\)/)
+  })
+
+  it('设置页里嵌套的对话框只拿「初始焦点 + 还原」，Tab 路由留给宿主', () => {
+    // SettingsDialog 自持 topmostModal + inert：设置页里所有模态的 Tab 都归它
+    const settings = read('components/common/SettingsDialog.vue')
+    expect(settings).toContain('topmostModal')
+    expect(settings).toContain('setAppInert')
+
+    const models = read('components/settings/panels/ModelsPanel.vue')
+    // 两边都拦 Tab 的话一次按键被先后拦两次，焦点跳格
+    expect(models).toMatch(/manageTab:\s*false/)
+    expect(models).toContain("from '../../../composables/useModalFocusTrap'")
+    // 提供商选择此前是纯 div：键盘既选不到也打不开
+    expect(models).toMatch(/class="provider-select"[\s\S]{0,120}?tabindex="0"/)
   })
 
   it('两处「选择 SSH 连接」列表能用键盘选（SFTP / 终端首页）', () => {

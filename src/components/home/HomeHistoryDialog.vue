@@ -9,11 +9,10 @@
         aria-modal="true"
         aria-labelledby="home-history-title"
         tabindex="-1"
-        @keydown="onKeydown"
       >
         <div class="hd-head">
           <h2 id="home-history-title" class="hd-title">历史记录</h2>
-          <button ref="closeBtn" type="button" class="hd-close" title="关闭" aria-label="关闭" @click="$emit('close')">
+          <button type="button" class="hd-close" title="关闭" aria-label="关闭" @click="$emit('close')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
@@ -33,7 +32,8 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
+import { useModalFocusTrap } from '../../composables/useModalFocusTrap'
 import type { ConvGroup } from '@/types/chat'
 import HistoryConversationList from '@/components/chat/HistoryConversationList.vue'
 
@@ -51,31 +51,10 @@ const emit = defineEmits<{
 }>()
 
 const dialogRef = ref<HTMLElement | null>(null)
-const closeBtn = ref<HTMLButtonElement | null>(null)
 
-const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-
-function focusables(): HTMLElement[] {
-  return dialogRef.value
-    ? Array.from(dialogRef.value.querySelectorAll<HTMLElement>(FOCUSABLE))
-    : []
-}
-
-/** Tab 在弹窗内循环：焦点漏到背后的任务台，模态这层语义就丢了。 */
-function onKeydown(e: KeyboardEvent) {
-  if (e.key !== 'Tab') return
-  const items = focusables()
-  if (!items.length) return
-  const first = items[0]
-  const last = items[items.length - 1]
-  if (e.shiftKey && document.activeElement === first) {
-    e.preventDefault()
-    last.focus()
-  } else if (!e.shiftKey && document.activeElement === last) {
-    e.preventDefault()
-    first.focus()
-  }
-}
+// Tab 环形与「关掉后焦点还给打开它的按钮」走共享件。原先这两件写在本组件里，
+// 且 Tab 监听绑在容器上 —— 焦点一旦漏到背后的任务台（点遮罩、点别处）就再也回不来。
+const { activate, deactivate } = useModalFocusTrap(dialogRef, { initialFocus: '.hd-close' })
 
 function onWindowKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') {
@@ -85,12 +64,13 @@ function onWindowKeydown(e: KeyboardEvent) {
 }
 
 onMounted(() => {
-  void nextTick(() => closeBtn.value?.focus())
+  activate()
   window.addEventListener('keydown', onWindowKeydown)
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onWindowKeydown)
+  deactivate()
 })
 </script>
 

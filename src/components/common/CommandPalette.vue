@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <div class="palette-overlay" @mousedown.self="emit('close')">
-      <div class="palette" role="dialog" aria-modal="true" aria-label="命令面板">
+      <div ref="dialogRef" class="palette" role="dialog" aria-modal="true" aria-label="命令面板" tabindex="-1">
         <input
           ref="inputRef"
           v-model="query"
@@ -41,7 +41,8 @@
 // 页面与会话动作经 emit 交回 SshView（导航/焦点逻辑集中在 useSshNavigation），
 // 连接与快捷命令直接走 store —— 与 RemoteManager 行内连接、QuickCommandBar
 // 下发是完全同一通道，不另造执行路径。
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useModalFocusTrap } from '../../composables/useModalFocusTrap'
 import { useSSHStore } from '@/stores/ssh'
 import { useQuickCommandsStore, type QuickCommand } from '@/stores/quickCommands'
 import { useToastStore } from '@/stores/toast'
@@ -189,16 +190,27 @@ function runItem(item: PaletteItem): void {
   item.run()
 }
 
-// 挂载即聚焦输入框：v-if 打开后父组件无需编排焦点
-onMounted(() => inputRef.value?.focus())
+// 挂载即聚焦输入框：v-if 打开后父组件无需编排焦点。
+// Tab 环形与「关闭后还给按 Ctrl+Shift+P 的那个终端」走共享件。
+const dialogRef = ref<HTMLElement | null>(null)
+const { activate, deactivate } = useModalFocusTrap(dialogRef, { initialFocus: '.palette-input' })
+onMounted(() => {
+  activate()
+  window.addEventListener('keydown', onWindowKey)
+})
+onUnmounted(() => {
+  window.removeEventListener('keydown', onWindowKey)
+  deactivate()
+})
+
+/** Esc 收在 window：原先只在输入框上，点过某一项之后焦点已离开输入框就失效。 */
+function onWindowKey(e: KeyboardEvent): void {
+  if (e.key !== 'Escape') return
+  e.preventDefault()
+  emit('close')
+}
 
 function onKeydown(e: KeyboardEvent): void {
-  if (e.key === 'Escape') {
-    e.preventDefault()
-    e.stopPropagation()
-    emit('close')
-    return
-  }
   if (e.key === 'ArrowDown') {
     e.preventDefault()
     activeIndex.value = Math.min(activeIndex.value + 1, filtered.value.length - 1)
