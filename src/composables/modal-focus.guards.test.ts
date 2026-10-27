@@ -12,9 +12,48 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { SRC } from '../styles/fs-walk'
+import { SRC, rel, walk } from '../styles/fs-walk'
 
 const read = (rel: string) => readFileSync(join(SRC, rel), 'utf8')
+
+/** 已接共享件、且容器自己接住初始焦点的弹窗。下面的全仓交叉核对也靠这份清单。 */
+const INTEGRATED = [
+  'components/ssh/SftpImagePreview.vue',
+  'components/ssh/SftpConflictDialog.vue',
+  'components/ssh/SftpTransferDialog.vue',
+  'components/ssh/docker/DockerNetworkDetailDialog.vue',
+  'components/ssh/docker/DockerVolumeDetailDialog.vue',
+  'views/ssh/DashboardView.vue',
+  'components/ssh/git/GitReposPanel.vue',
+  'components/ssh/SftpView.vue',
+  'components/ssh/SftpFileEditor.vue',
+  'components/home/HomeHistoryDialog.vue',
+  'components/home/TaskStructureDialog.vue',
+  'components/common/CommandPalette.vue',
+  'components/settings/panels/ModelsPanel.vue',
+  'components/ssh/docker/DockerConnectionPicker.vue',
+  'components/ssh/docker/DockerContainerDetail.vue',
+  'components/ssh/docker/DockerImageTransferModal.vue',
+  'components/ssh/docker/DockerPullDialog.vue',
+  'components/ssh/NewConnectionDialog.vue',
+  'components/ssh/QuickCommandEditor.vue',
+  'components/ssh/BulkCommandModal.vue',
+  'components/ssh/git/GitRepoDetailPanel.vue',
+  'components/ssh/GatewayDialogs.vue',
+]
+
+/** 单独断言过的几个（初始焦点不是容器，或有嵌入让位逻辑），不参与上面那条批量检查。 */
+const MANUALLY_CHECKED = [
+  'components/common/BaseModal.vue',
+  'components/common/ConfirmDialog.vue',
+  'components/ssh/TunnelModal.vue',
+  'components/ssh/AccessModal.vue',
+  // 独立弹 / 嵌入统一新建弹窗两种形态，role 与 tabindex 都是动态的
+  'components/ssh/ConnectionModal.vue',
+]
+
+/** 唯一豁免：SettingsDialog 自持 topmostModal + setAppInert，设置页里所有模态的 Tab 都归它路由。 */
+const TAB_HOSTED_BY = ['components/common/SettingsDialog.vue']
 
 describe('弹窗焦点管理', () => {
   const trap = read('composables/useModalFocusTrap.ts')
@@ -70,31 +109,7 @@ describe('弹窗焦点管理', () => {
   })
 
   it('已接入的自绘弹窗清单（SFTP / Docker 详情 / 终端首页 / git）', () => {
-    const files = [
-      'components/ssh/SftpImagePreview.vue',
-      'components/ssh/SftpConflictDialog.vue',
-      'components/ssh/SftpTransferDialog.vue',
-      'components/ssh/docker/DockerNetworkDetailDialog.vue',
-      'components/ssh/docker/DockerVolumeDetailDialog.vue',
-      'views/ssh/DashboardView.vue',
-      'components/ssh/git/GitReposPanel.vue',
-      'components/ssh/SftpView.vue',
-      'components/ssh/SftpFileEditor.vue',
-      'components/home/HomeHistoryDialog.vue',
-      'components/home/TaskStructureDialog.vue',
-      'components/common/CommandPalette.vue',
-      'components/settings/panels/ModelsPanel.vue',
-      'components/ssh/docker/DockerConnectionPicker.vue',
-      'components/ssh/docker/DockerContainerDetail.vue',
-      'components/ssh/docker/DockerImageTransferModal.vue',
-      'components/ssh/docker/DockerPullDialog.vue',
-      'components/ssh/NewConnectionDialog.vue',
-      'components/ssh/QuickCommandEditor.vue',
-      'components/ssh/BulkCommandModal.vue',
-      'components/ssh/git/GitRepoDetailPanel.vue',
-      'components/ssh/GatewayDialogs.vue',
-    ]
-    for (const file of files) {
+    for (const file of INTEGRATED) {
       const src = read(file)
       expect(src, `${file} 未接共享件`).toMatch(/composables\/useModalFocusTrap/)
       expect(src, `${file} 打开时未激活`).toContain('activate()')
@@ -182,6 +197,18 @@ describe('弹窗焦点管理', () => {
     const dash = read('views/ssh/DashboardView.vue')
     expect(dash).toMatch(/class="dc-item"[\s\S]{0,200}?tabindex="0"/)
     expect(dash).toMatch(/@keydown\.enter[^\n]*handleConnect/)
+  })
+
+  it('全仓的 role=dialog 都能在清单里找到（新增弹窗不许漏接）', () => {
+    // 上面那份清单是人维护的，会漏；新增一个自绘弹窗时没人会想到回来登记。
+    // 这里反向扫一遍：代码里写了 role=dialog 的文件，要么在上面，要么在豁免里。
+    const declared = new Set([...INTEGRATED, ...MANUALLY_CHECKED, ...TAB_HOSTED_BY])
+    const missing = walk(SRC)
+      .filter(file => file.endsWith('.vue'))
+      .filter(file => /role="(dialog|alertdialog)"|:role="[^"]*'dialog'/.test(readFileSync(file, 'utf8')))
+      .map(rel)
+      .filter(file => !declared.has(file))
+    expect(missing, `这些文件有对话框语义但没接/没登记：${missing.join(', ')}`).toEqual([])
   })
 
   it('DESIGN.md 记着「焦点管理走共享件」', () => {
