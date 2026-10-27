@@ -253,7 +253,7 @@ function waitAndRegister(preRunId: string) {
   padding: 2px 10px;
   font-size: 11.5px;
   border: 1px solid var(--border-default);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-hover, transparent);
   color: var(--text-secondary);
   cursor: pointer;
@@ -285,7 +285,7 @@ function waitAndRegister(preRunId: string) {
 .rb-conf {
   flex: none;
   padding: 0 6px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border-default);
   color: var(--text-secondary);
   font-size: 10.5px;

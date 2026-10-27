@@ -151,7 +151,7 @@ watch(
 .conflict-dialog {
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   padding: 20px;
   width: 640px; max-width: 92vw;
@@ -169,7 +169,7 @@ watch(
 .conflict-bulk-btn {
   font-size: 12px; padding: 4px 10px;
   border: 1px solid var(--border-default);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-input);
   color: var(--text-primary);
   cursor: pointer;
@@ -199,7 +199,7 @@ watch(
 .cf-meta-warn { opacity: 1; }
 
 .cf-action { display: flex; flex-direction: column; gap: 4px; }
-.cf-seg { display: inline-flex; border: 1px solid var(--border-default); border-radius: 4px; overflow: hidden; }
+.cf-seg { display: inline-flex; border: 1px solid var(--border-default); border-radius: var(--radius-sm); overflow: hidden; }
 .cf-seg-btn {
   font-size: 12px; padding: 3px 9px;
   background: var(--bg-input); color: var(--text-primary);
@@ -210,7 +210,7 @@ watch(
 .cf-seg-btn.on { background: var(--accent-primary); color: var(--accent-on); }
 .cf-rename-input {
   width: 100%; height: 24px; padding: 0 8px;
-  border: 1px solid var(--border-default); border-radius: 4px;
+  border: 1px solid var(--border-default); border-radius: var(--radius-sm);
   background: var(--bg-input); color: var(--text-primary);
   font-size: 12px; outline: none;
 }
@@ -222,7 +222,7 @@ watch(
 }
 .conflict-btn {
   font-size: 13px; padding: 6px 14px;
-  border: 1px solid var(--border-default); border-radius: 4px;
+  border: 1px solid var(--border-default); border-radius: var(--radius-sm);
   background: var(--bg-input); color: var(--text-primary);
   cursor: pointer;
 }

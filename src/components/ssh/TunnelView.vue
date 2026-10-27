@@ -370,7 +370,7 @@ onUnmounted(() => {
   color: var(--accent-green);
   background: color-mix(in srgb, var(--accent-green) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent-green) 25%, transparent);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 0 7px;
   line-height: 16px;
 }

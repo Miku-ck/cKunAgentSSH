@@ -8,7 +8,7 @@
 
 .grp {
   border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   margin-bottom: 10px;
   background: var(--bg-input);
 }
@@ -37,7 +37,7 @@
 .tool-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 
 .flag {
-  font-size: 10px; padding: 1px 6px; border-radius: 8px; white-space: nowrap;
+  font-size: 10px; padding: 1px 6px; border-radius: var(--radius-lg); white-space: nowrap;
   border: 1px solid var(--border-default); color: var(--text-tertiary);
 }
 /* 底色/描边由文字那枚令牌自己派生：原先的 #7fbc92/#a98fd0/#cf8a80 是深色主题的

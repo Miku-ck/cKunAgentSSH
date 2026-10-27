@@ -872,7 +872,7 @@ async function onFileSaved(): Promise<void> {
 .conn-dialog {
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   width: 420px;
   max-height: 60vh;
   display: flex;
@@ -897,7 +897,7 @@ async function onFileSaved(): Promise<void> {
 }
 .conn-item {
   display: flex; align-items: center; gap: 10px;
-  padding: 8px 10px; border-radius: 4px; cursor: pointer;
+  padding: 8px 10px; border-radius: var(--radius-sm); cursor: pointer;
   color: var(--text-tertiary);
 }
 .conn-item:hover { background: var(--bg-hover); color: var(--text-secondary); }
@@ -915,7 +915,7 @@ async function onFileSaved(): Promise<void> {
 .ctx-menu {
   position: fixed;
   border: 1px solid var(--border-default);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
   padding: 4px;
   min-width: 160px;
@@ -926,7 +926,7 @@ async function onFileSaved(): Promise<void> {
   display: flex; align-items: center; gap: 8px;
   padding: 6px 12px;
   font-size: 12px; color: var(--text-secondary);
-  cursor: pointer; border-radius: 4px;
+  cursor: pointer; border-radius: var(--radius-sm);
 }
 .ctx-item:hover { background: var(--bg-hover); color: var(--text-primary); }
 .ctx-item.danger:hover { background: color-mix(in srgb, var(--accent-red) 15%, transparent); color: var(--accent-red); }
@@ -943,7 +943,7 @@ async function onFileSaved(): Promise<void> {
 .rename-dialog {
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 20px;
   width: 320px;
   box-shadow: var(--shadow-lg);
@@ -955,7 +955,7 @@ async function onFileSaved(): Promise<void> {
 .rename-input {
   width: 100%; height: 32px; padding: 0 10px;
   border: 1px solid var(--border-default);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-input);
   color: var(--text-primary);
   font-size: 13px; outline: none;
@@ -969,7 +969,7 @@ async function onFileSaved(): Promise<void> {
 .rename-btn {
   height: 30px; padding: 0 14px;
   border: 1px solid var(--border-default);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-size: 12px; cursor: pointer;
   font-family: var(--font-sans);
 }

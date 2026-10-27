@@ -609,7 +609,7 @@ async function handleSave() {
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-size: 12px;
   font-weight: 500;
   font-family: var(--font-sans);

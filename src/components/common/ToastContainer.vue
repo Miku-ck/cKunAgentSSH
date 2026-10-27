@@ -65,7 +65,7 @@ const iconMap: Record<ToastType, string> = {
   min-width: 240px;
   max-width: 480px;
   padding: 10px 14px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
   box-shadow: var(--shadow-lg);
@@ -125,7 +125,7 @@ const iconMap: Record<ToastType, string> = {
   /* 凹陷块走 --bg-input（同 approval-card 的 .ap-code）：rgba(0,0,0,.3) 在深色卡上
      是对的，在浅色主题的白卡上就是一块灰渍，与主题的层级约定无关地变暗 */
   background: var(--bg-input);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.5;
@@ -148,7 +148,7 @@ const iconMap: Record<ToastType, string> = {
   flex: 1;
   padding: 5px 10px;
   border: 1px solid var(--border-default);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-primary);
   font-size: 12px;

@@ -553,7 +553,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
 }
 .pane-title svg { width: 13px; height: 13px; }
 .badge {
-  padding: 1px 6px; font-size: 10px; border-radius: 8px;
+  padding: 1px 6px; font-size: 10px; border-radius: var(--radius-lg);
   background: var(--bg-active); color: var(--text-tertiary);
 }
 .badge.online { color: var(--accent-green); background: color-mix(in srgb, var(--accent-green) 12%, transparent); }
@@ -597,7 +597,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   left: 0;
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
   padding: 4px;
   min-width: 120px;
@@ -616,7 +616,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   font-size: 12px;
   color: var(--text-secondary);
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .drive-option:hover { background: var(--bg-hover); color: var(--text-primary); }
 .drive-option.active { color: var(--accent-cyan); background: color-mix(in srgb, var(--accent-primary) 10%, transparent); }
@@ -737,7 +737,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
 .mkdir-dialog {
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 20px;
   width: 320px;
   box-shadow: var(--shadow-lg);
@@ -749,7 +749,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
 .mkdir-input {
   width: 100%; height: 32px; padding: 0 10px;
   border: 1px solid var(--border-default);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-input);
   color: var(--text-primary);
   font-size: 13px; outline: none;
@@ -763,7 +763,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
 .mkdir-btn {
   height: 30px; padding: 0 14px;
   border: 1px solid var(--border-default);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-size: 12px; cursor: pointer;
   font-family: var(--font-sans);
 }
@@ -787,7 +787,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   background: var(--bg-active);
   border: 1px solid var(--accent-green);
   color: var(--accent-green);
-  padding: 8px 14px; border-radius: 6px;
+  padding: 8px 14px; border-radius: var(--radius-md);
   font-size: 12px; font-weight: 500;
   z-index: 6; pointer-events: none;
   box-shadow: var(--shadow-lg);

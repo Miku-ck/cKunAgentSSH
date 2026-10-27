@@ -592,7 +592,7 @@ onMounted(() => { loadStats(); loadMemories() })
   display: flex; flex-direction: column;
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
-  border-radius: 8px; overflow: hidden;
+  border-radius: var(--radius-lg); overflow: hidden;
 }
 .mem-head {
   display: flex; align-items: center; gap: 8px;
@@ -620,7 +620,7 @@ onMounted(() => { loadStats(); loadMemories() })
 .mem-filters select, .mem-search {
   font-size: 11.5px; font-family: inherit; color: var(--text-primary);
   background: var(--bg-input); border: 1px solid var(--border-default);
-  border-radius: 4px; padding: 3px 6px;
+  border-radius: var(--radius-sm); padding: 3px 6px;
 }
 .mem-search { flex: 1; min-width: 90px; }
 .mem-body { flex: 1; overflow-y: auto; padding: 4px 12px; }
@@ -654,7 +654,7 @@ onMounted(() => { loadStats(); loadMemories() })
 .mem-edit {
   width: 100%; box-sizing: border-box; margin-bottom: 4px; resize: vertical;
   font-size: 12px; font-family: inherit; color: var(--text-primary);
-  background: var(--bg-input); border: 1px solid var(--accent-primary); border-radius: 4px; padding: 4px 6px;
+  background: var(--bg-input); border: 1px solid var(--accent-primary); border-radius: var(--radius-sm); padding: 4px 6px;
 }
 .mem-block-view {
   margin: 0 0 4px; font-size: 11.5px; line-height: 1.5; color: var(--text-primary);
@@ -692,14 +692,14 @@ onMounted(() => { loadStats(); loadMemories() })
 }
 .mem-jobs-bar {
   display: flex; align-items: center; gap: 8px; margin-bottom: 6px; padding: 5px 8px;
-  border: 1px solid var(--border-subtle); border-radius: 4px;
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
 }
 .mem-new-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .mem-new-row.end { justify-content: flex-end; }
 .mem-new-row select, .mem-new-row input {
   font-size: 11.5px; font-family: inherit; color: var(--text-primary);
   background: var(--bg-input); border: 1px solid var(--border-default);
-  border-radius: 4px; padding: 3px 6px;
+  border-radius: var(--radius-sm); padding: 3px 6px;
 }
 .mem-new-scope { width: 110px; }
 .mem-new-row input:not(.mem-new-scope) { flex: 1; min-width: 120px; }
@@ -709,7 +709,7 @@ onMounted(() => { loadStats(); loadMemories() })
 .mem-new .mem-edit { margin-bottom: 0; }
 .mem-diff {
   max-height: 140px; overflow-y: auto; margin-bottom: 4px; padding: 4px 6px;
-  border: 1px solid var(--border-subtle); border-radius: 4px;
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
   background: var(--bg-input);
   font-family: ui-monospace, Consolas, monospace; font-size: 11px; line-height: 1.5;
 }
@@ -718,7 +718,7 @@ onMounted(() => { loadStats(); loadMemories() })
 .diff-line.del { color: var(--status-error-text); background: color-mix(in srgb, var(--status-error-text) 8%, transparent); }
 .diff-mark { width: 8px; flex-shrink: 0; opacity: .8; }
 .mem-history {
-  margin-top: 5px; padding: 5px 8px; border-radius: 4px;
+  margin-top: 5px; padding: 5px 8px; border-radius: var(--radius-sm);
   border: 1px solid var(--border-subtle); background: var(--bg-input);
 }
 .mem-history ul { list-style: none; margin: 0; padding: 0; }

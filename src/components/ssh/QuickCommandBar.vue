@@ -274,7 +274,7 @@ function handleDragEnd() {
   /* 底色透画布；命令色收在 6px 圆点上，不再整圈描边 */
   background: transparent;
   border: 1px solid var(--border-subtle);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--text-primary);
   font-size: 12px;
   font-family: var(--font-sans);
@@ -320,7 +320,7 @@ function handleDragEnd() {
   align-items: center;
   gap: 6px;
   border: 1px dashed var(--border-default);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
   font-size: 12px;
@@ -348,7 +348,7 @@ function handleDragEnd() {
   appearance: none;
   -webkit-appearance: none;
   background: transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--text-secondary);
   cursor: pointer;
   flex-shrink: 0;
@@ -373,7 +373,7 @@ function handleDragEnd() {
      与同屏的 .tab-ctx-menu / .ntm-menu 同一张皮 */
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
 }
 

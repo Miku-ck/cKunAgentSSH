@@ -719,7 +719,7 @@ const Sparkline = defineComponent({
 .card {
   padding: 12px 14px;
   border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--bg-elevated);
 }
 
@@ -761,7 +761,7 @@ const Sparkline = defineComponent({
 
 .dash-section {
   border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--bg-elevated);
   padding: 12px 14px;
 }
@@ -1222,7 +1222,7 @@ const Sparkline = defineComponent({
   color: var(--text-tertiary);
   font-size: 18px;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1251,7 +1251,7 @@ const Sparkline = defineComponent({
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: background var(--transition-fast);
 }

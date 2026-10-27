@@ -465,7 +465,7 @@ onMounted(refresh)
 .env {
   font-size: 11px;
   padding: 1px 8px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   font-weight: 600;
 }
 .env.test { color: var(--accent-green); background: color-mix(in srgb, var(--accent-green) 12%, transparent); }
@@ -473,7 +473,7 @@ onMounted(refresh)
 .concl {
   font-size: 11px;
   padding: 1px 8px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
 }
 /* 底色由文字那枚令牌自己派生：原先压的是终端 ANSI 档（rgba(63,185,80/.229,165,75/…)），
    与 --accent-green/orange/red 不同 hue，墨绿字压 GitHub 绿、朱砂字压 GitHub 红 */

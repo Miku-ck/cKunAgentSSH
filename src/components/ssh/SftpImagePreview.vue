@@ -107,7 +107,7 @@ function close(): void {
 .imgp-dialog {
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   width: min(1100px, 92vw);
   max-height: 90vh;
@@ -130,7 +130,7 @@ function close(): void {
 .imgp-close {
   border: none; background: transparent; color: var(--text-primary);
   font-size: 20px; line-height: 1; cursor: pointer;
-  width: 26px; height: 26px; border-radius: 4px;
+  width: 26px; height: 26px; border-radius: var(--radius-sm);
 }
 .imgp-close:hover { background: var(--bg-input); }
 .imgp-body {
@@ -149,7 +149,7 @@ function close(): void {
   max-width: 100%; max-height: calc(90vh - 64px);
   object-fit: contain;
   cursor: zoom-in;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .imgp-img-native {
   max-width: none; max-height: none;

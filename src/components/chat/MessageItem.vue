@@ -149,7 +149,7 @@ function openTrace() {
   gap: 4px;
   padding: 4px 8px;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
   font-size: 11px;

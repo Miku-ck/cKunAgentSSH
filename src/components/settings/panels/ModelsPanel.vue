@@ -840,7 +840,7 @@ function formatTokenCount(n: number): string {
 .model-card {
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 14px 16px;
   transition: border-color 0.15s;
 }
@@ -883,7 +883,7 @@ function formatTokenCount(n: number): string {
 .param-chip {
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 3px 8px;
   display: flex;
   align-items: center;
@@ -947,7 +947,7 @@ function formatTokenCount(n: number): string {
   display: flex; align-items: center; justify-content: center;
   background: transparent;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.15s;
@@ -997,7 +997,7 @@ function formatTokenCount(n: number): string {
 .modal-close {
   width: 28px; height: 28px;
   display: flex; align-items: center; justify-content: center;
-  background: transparent; border: none; border-radius: 4px;
+  background: transparent; border: none; border-radius: var(--radius-sm);
   color: var(--text-secondary); cursor: pointer; transition: all 0.15s;
 }
 .modal-close:hover { background: var(--bg-hover); color: var(--text-primary); }
@@ -1021,7 +1021,7 @@ function formatTokenCount(n: number): string {
   padding: 8px 10px;
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: var(--text-primary);
   font-size: 13px;
   font-family: inherit;
@@ -1061,7 +1061,7 @@ function formatTokenCount(n: number): string {
   justify-content: center;
   background: transparent;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.15s;
@@ -1080,7 +1080,7 @@ function formatTokenCount(n: number): string {
   padding: 8px 10px;
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: var(--text-primary);
   font-size: 13px;
   transition: border-color 0.15s;
@@ -1100,7 +1100,7 @@ function formatTokenCount(n: number): string {
   right: 0;
   background: var(--bg-input-solid);
   border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   z-index: 10;
   overflow: hidden;
@@ -1112,7 +1112,7 @@ function formatTokenCount(n: number): string {
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   font-size: 13px;
   color: var(--text-primary);
   cursor: pointer;
@@ -1133,7 +1133,7 @@ function formatTokenCount(n: number): string {
 /* ── 高级配置 ── */
 .advanced-section {
   border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
 }
 .advanced-toggle {
@@ -1248,7 +1248,7 @@ function formatTokenCount(n: number): string {
   padding: 5px 12px;
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   font-size: 12px;
   color: var(--text-secondary);
   cursor: pointer;

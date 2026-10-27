@@ -391,7 +391,7 @@ onUnmounted(() => {
   max-width: 1400px;
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -446,7 +446,7 @@ onUnmounted(() => {
 .readonly-badge {
   padding: 1px 6px;
   font-size: 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--accent-yellow) 12%, transparent);
   color: var(--accent-yellow);
   flex-shrink: 0;
@@ -466,7 +466,7 @@ onUnmounted(() => {
   background: var(--accent-primary);
   border: 1px solid var(--accent-primary);
   color: var(--accent-on);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font-size: 12px;
   font-family: var(--font-sans);
@@ -494,7 +494,7 @@ onUnmounted(() => {
   color: var(--text-tertiary);
   font-size: 20px;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   line-height: 1;
 }
 .close-btn:hover {
@@ -538,7 +538,7 @@ onUnmounted(() => {
   background: transparent;
   border: 1px solid var(--border-default);
   color: var(--text-secondary);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font-size: 12px;
   font-family: var(--font-sans);
@@ -609,7 +609,7 @@ onUnmounted(() => {
   max-width: 90vw;
   background: var(--bg-elevated);
   border: 1px solid var(--border-default);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   overflow: hidden;
 }
@@ -643,7 +643,7 @@ onUnmounted(() => {
 .unsaved-btn {
   height: 30px;
   padding: 0 14px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-size: 12px;
   cursor: pointer;
   font-family: var(--font-sans);

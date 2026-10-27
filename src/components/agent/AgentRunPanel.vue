@@ -173,7 +173,7 @@ const latestHelp = computed(() =>
   color: var(--status-warn-text);
   background: var(--status-warn-bg);
   padding: 8px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
 }
 .ap-warning .ap-ic { margin-top: 2px; color: var(--status-warn-text); }
 
@@ -186,7 +186,7 @@ const latestHelp = computed(() =>
   color: var(--status-warn-text);
   background: var(--status-warn-bg);
   border: 1px solid var(--card-warn-border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 6px 10px;
 }
 .ap-help-msgbar .ap-ic { flex: none; color: var(--status-warn-text); }
@@ -225,7 +225,7 @@ const latestHelp = computed(() =>
   color: var(--status-error-text);
   background: var(--status-error-bg);
   padding: 9px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
 }
 .ap-error .ap-ic { color: currentColor; }
 </style>

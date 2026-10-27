@@ -821,7 +821,7 @@ onMounted(() => {
   border: 0;
   outline: none;
   appearance: none;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-hover);
   color: var(--text-primary);
   cursor: pointer;

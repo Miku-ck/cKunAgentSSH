@@ -184,7 +184,7 @@ defineExpose({
   gap: 4px;
   padding: 3px 8px;
   border: 1px solid var(--accent-indigo);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-elevated-solid);
   color: var(--accent-indigo-soft);
   font-size: 11px;

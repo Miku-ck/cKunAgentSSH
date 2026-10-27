@@ -228,7 +228,7 @@ function toggleOutput(id: string) {
 }
 .ft-meta { display: flex; flex-wrap: wrap; gap: 5px; }
 .ft-chip {
-  font-size: 10.5px; padding: 1px 7px; border-radius: 8px;
+  font-size: 10.5px; padding: 1px 7px; border-radius: var(--radius-lg);
   border: 1px solid var(--border-default); color: var(--text-secondary);
   font-family: var(--font-mono);
 }
@@ -240,7 +240,7 @@ function toggleOutput(id: string) {
 .ft-state-chain { display: inline-flex; align-items: center; gap: 3px; flex-wrap: wrap; }
 .ft-state {
   color: var(--text-secondary); font-family: var(--font-mono);
-  background: var(--bg-input); border-radius: 4px; padding: 0 5px;
+  background: var(--bg-input); border-radius: var(--radius-sm); padding: 0 5px;
 }
 .ft-arrow { color: var(--text-tertiary); }
 

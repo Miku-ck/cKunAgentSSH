@@ -440,7 +440,7 @@ const terminalBgModeLabels: Record<TerminalBgMode, string> = {
   height: 28px;
   padding: 0;
   border: 1px solid var(--border-input);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-input);
   cursor: pointer;
 }

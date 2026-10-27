@@ -216,7 +216,7 @@ onMounted(load)
 .skill-desc { font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .skill-triggers { font-size: 10.5px; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .skill-content {
-  border: 1px dashed var(--border-default); border-radius: 4px; padding: 8px; margin: 2px 4px 8px;
+  border: 1px dashed var(--border-default); border-radius: var(--radius-sm); padding: 8px; margin: 2px 4px 8px;
   max-height: 240px; overflow-y: auto;
 }
 .skill-content pre { margin: 0; font-size: 11px; font-family: var(--font-mono); color: var(--text-secondary); white-space: pre-wrap; word-break: break-word; }

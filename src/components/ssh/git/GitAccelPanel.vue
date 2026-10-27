@@ -708,7 +708,7 @@ async function onMasterDisable(): Promise<void> {
 .panel {
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 12px 14px;
   display: flex;
   flex-direction: column;
@@ -921,7 +921,7 @@ async function onMasterDisable(): Promise<void> {
   flex: 1;
   height: 26px;
   padding: 0 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border-subtle);
   background: var(--bg-input);
   color: var(--text-primary);

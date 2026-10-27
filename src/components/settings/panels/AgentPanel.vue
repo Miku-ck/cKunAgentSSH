@@ -1014,7 +1014,7 @@ onMounted(async () => {
 .budget-field { display: flex; flex-direction: column; gap: 4px; }
 .budget-label { font-size: 11.5px; color: var(--text-secondary); }
 .num-input, .text-input {
-  height: 26px; padding: 0 8px; border-radius: 4px;
+  height: 26px; padding: 0 8px; border-radius: var(--radius-sm);
   background: var(--bg-input); border: 1px solid var(--border-default);
   color: var(--text-primary); font-size: 12px; font-family: inherit;
 }

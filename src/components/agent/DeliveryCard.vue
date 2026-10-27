@@ -182,7 +182,7 @@ async function resendResult(): Promise<void> {
   overflow-y: auto;
   background: var(--bg-input);
   border: 1px solid var(--border-default);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 9px 11px;
   font-family: var(--font-mono);
   font-size: 11.5px;
@@ -197,7 +197,7 @@ async function resendResult(): Promise<void> {
 .dc-risk {
   font-size: 10.5px;
   padding: 1px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   white-space: nowrap;
 }
 .dc-risk-safe { color: var(--accent-green); background: color-mix(in srgb, var(--accent-green) 12%, transparent); }
@@ -207,7 +207,7 @@ async function resendResult(): Promise<void> {
 /* 逐段拆解列表：序号 + 意图 + 命令片段。行背景斑马纹与终端表同思路。 */
 .seg-list {
   border: 1px solid var(--border-default);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   overflow: hidden;
 }
 .seg-row {

@@ -123,7 +123,7 @@ function close(): void {
   padding: 4px 6px;
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
 }
 
@@ -132,7 +132,7 @@ function close(): void {
   height: 24px;
   padding: 0 8px;
   border: 1px solid var(--border-default);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-input-solid);
   color: var(--text-primary);
   font-size: 12px;
@@ -160,7 +160,7 @@ function close(): void {
   align-items: center;
   justify-content: center;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-tertiary);
   font-size: 11px;

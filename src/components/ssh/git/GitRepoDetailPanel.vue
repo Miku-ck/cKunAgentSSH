@@ -635,7 +635,7 @@ onMounted(() => { void load() })
   min-width: 16px;
   height: 15px;
   padding: 0 4px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--status-warn-text) 20%, transparent);
   color: var(--status-warn-text);
   font-size: 11px;
@@ -692,7 +692,7 @@ onMounted(() => { void load() })
   height: 15px;
   padding: 0 4px;
   margin-left: 2px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--status-warn-text) 20%, transparent);
   color: var(--status-warn-text);
   font-size: 11px;

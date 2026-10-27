@@ -434,7 +434,7 @@ watch(remoteSessions, (sessions) => {
   font-size: 12px;
   font-family: var(--font-mono);
   padding: 6px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border-subtle);
   background: var(--bg-input);
   color: var(--text-primary);
@@ -462,7 +462,7 @@ watch(remoteSessions, (sessions) => {
   max-height: 160px;
   overflow: auto;
   border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 8px;
 }
 .bulk-target { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); cursor: pointer; }
@@ -497,7 +497,7 @@ watch(remoteSessions, (sessions) => {
 }
 .bulk-col {
   border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -515,7 +515,7 @@ watch(remoteSessions, (sessions) => {
 .col-badge {
   font-size: 10px;
   padding: 0 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   flex-shrink: 0;
 }
 /* 底色用文字那枚令牌自己的色派生：原先的 rgba(63,185,80,.12)/rgba(229,83,75,.12) 是
@@ -540,7 +540,7 @@ watch(remoteSessions, (sessions) => {
 
 .bulk-diff {
   border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   max-height: 52vh;
   overflow: auto;
   padding: 6px 0;
@@ -562,7 +562,7 @@ watch(remoteSessions, (sessions) => {
   color: var(--accent-orange);
   background: color-mix(in srgb, var(--accent-orange) 10%, transparent);
   padding: 0 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .bulk-diff-line.inconsistent { background: color-mix(in srgb, var(--accent-orange) 7%, transparent); }
 .bulk-diff-line.inconsistent .diff-text { color: var(--accent-orange); }

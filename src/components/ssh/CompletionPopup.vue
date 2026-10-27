@@ -145,7 +145,7 @@ defineExpose({
   /* 浮起层归 --bg-elevated（variables.css 两级背景约定：菜单/下拉是浮起不是凹陷） */
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   box-shadow: var(--shadow-lg);
   overflow-y: auto;
   overflow-x: hidden;
@@ -197,7 +197,7 @@ defineExpose({
   color: var(--text-tertiary);
   background: var(--bg-hover);
   padding: 0 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-variant-numeric: tabular-nums;
 }
 </style>

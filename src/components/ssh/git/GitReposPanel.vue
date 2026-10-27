@@ -992,7 +992,7 @@ watch(scopeKey, () => {
 .vgroup.g-needs { color: var(--status-warn-text); }
 .vgc {
   background: var(--bg-hover);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 0 6px;
   font-size: 11px;
   color: var(--text-secondary);

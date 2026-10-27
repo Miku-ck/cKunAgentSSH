@@ -149,7 +149,7 @@ function handleSave() {
   max-width: 90vw;
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
@@ -183,7 +183,7 @@ function handleSave() {
   color: var(--text-secondary);
   font-size: 20px;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .qc-editor-close:hover {
@@ -221,7 +221,7 @@ function handleSave() {
 .qc-textarea {
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 8px 10px;
   color: var(--text-primary);
   font-size: 13px;
@@ -251,7 +251,7 @@ function handleSave() {
 .qc-color-swatch {
   width: 26px;
   height: 26px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 2px solid var(--border-subtle);
   cursor: pointer;
   padding: 0;
@@ -272,7 +272,7 @@ function handleSave() {
   height: 28px;
   padding: 0;
   border: 1px solid var(--border-subtle);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: transparent;
   cursor: pointer;
 }
@@ -283,7 +283,7 @@ function handleSave() {
 
 .qc-color-custom::-webkit-color-swatch {
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .qc-editor-footer {
@@ -296,7 +296,7 @@ function handleSave() {
 
 .qc-btn {
   padding: 6px 14px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   font-size: 13px;
   font-family: var(--font-sans);
   cursor: pointer;

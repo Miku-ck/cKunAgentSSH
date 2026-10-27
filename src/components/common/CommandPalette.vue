@@ -238,7 +238,7 @@ function onKeydown(e: KeyboardEvent): void {
   flex-direction: column;
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   overflow: hidden;
 }

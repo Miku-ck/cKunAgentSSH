@@ -340,7 +340,7 @@ const sysRows = computed<SysRow[]>(() => {
   border: 1px solid var(--nv-frame);
   /* 与仪表盘指标卡 / 磁盘区 / 进程表的 .dash-section 同语言：8px 圆角 + 浅阴影。
      内部仍保持 nvtop 终端复刻的黑底双线风格，但外壳融合到卡片层级体系中 */
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
   padding: 6px 8px;
   display: flex;
