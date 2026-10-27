@@ -52,6 +52,23 @@ describe('弹窗焦点管理', () => {
     expect(dialog).toContain('deactivate()')
   })
 
+  it('自绘 overlay 的弹窗也接上（Tunnel / Access）', () => {
+    const tunnel = read('components/ssh/TunnelModal.vue')
+    expect(tunnel).toContain("from '../../composables/useModalFocusTrap'")
+    expect(tunnel).toContain('activate()')
+    expect(tunnel).toContain('deactivate()')
+    // 顺手补上此前完全没有的对话框语义（无 role/无 Esc）
+    expect(tunnel).toContain('role="dialog"')
+    expect(tunnel).toContain('aria-labelledby="tunnel-modal-title"')
+    expect(tunnel).toContain("e.key === 'Escape'")
+
+    const access = read('components/ssh/AccessModal.vue')
+    expect(access).toContain("from '../../composables/useModalFocusTrap'")
+    // 嵌入宿主时不抢焦点也不拦 Esc（宿主弹窗自己管）
+    expect(access).toMatch(/if \(props\.embedded\) return\s*\n\s*activate\(\)/)
+    expect(access).toContain('tabindex="-1"')
+  })
+
   it('DESIGN.md 记着「焦点管理走共享件」', () => {
     expect(readFileSync(join(SRC, '..', 'DESIGN.md'), 'utf8')).toContain('useModalFocusTrap')
   })

@@ -1,9 +1,9 @@
 <template>
   <Teleport to="body">
     <div class="tunnel-overlay" @click.self="emit('close')">
-      <div class="modal">
+      <div ref="dialogRef" class="modal" role="dialog" aria-modal="true" aria-labelledby="tunnel-modal-title" tabindex="-1">
         <button class="modal-close" @click="emit('close')" aria-label="关闭">✕</button>
-        <h2>{{ isEdit ? '编辑隧道' : '新建隧道' }}</h2>
+        <h2 id="tunnel-modal-title">{{ isEdit ? '编辑隧道' : '新建隧道' }}</h2>
 
         <div class="field">
           <label>类型</label>
@@ -89,7 +89,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { useModalFocusTrap } from '../../composables/useModalFocusTrap'
 import { useTunnelStore } from '@/stores/tunnel'
 import { useSSHStore } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
@@ -130,6 +131,22 @@ const portErr = reactive<Record<'listenPort' | 'bindPort' | 'dstPort', string>>(
 const dstHostErr = ref('')
 const bindWarn = ref(false)
 const saving = ref(false)
+
+const dialogRef = ref<HTMLElement | null>(null)
+const { activate, deactivate } = useModalFocusTrap(dialogRef)
+
+// 自绘遮罩的弹窗自己管 Esc（优先级链不在共享件里），与右上角 ✕ 同一出口
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') emit('close')
+}
+onMounted(() => {
+  activate()
+  window.addEventListener('keydown', onKeydown)
+})
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKeydown)
+  deactivate()
+})
 
 // 编辑弹窗预填时对已合法字段先做一次静默校验，避免打开即红框（新建时留空交给提交前校验）
 function validateSilently(): void {

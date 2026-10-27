@@ -2,13 +2,16 @@
   <Teleport to="body" :disabled="embedded">
   <div :class="embedded ? 'embed-root' : 'overlay show'" @click.self="tryClose">
     <div
+      ref="dialogRef"
       class="dialog"
       :class="{ embedded }"
+      tabindex="-1"
       :role="embedded ? undefined : 'dialog'"
       :aria-modal="embedded ? undefined : 'true'"
+      :aria-labelledby="embedded ? undefined : 'acc-dialog-title'"
     >
       <div v-if="!embedded" class="dlg-head">
-        <h2>{{ isNew ? '添加连接' : '修改连接' }}</h2>
+        <h2 id="acc-dialog-title">{{ isNew ? '添加连接' : '修改连接' }}</h2>
         <button class="dlg-x" aria-label="关闭" :disabled="saving" @click="tryClose">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
@@ -76,6 +79,7 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref, onMounted, onUnmounted } from 'vue'
+import { useModalFocusTrap } from '../../composables/useModalFocusTrap'
 import { useAccessStore } from '@/stores/access'
 import { useToastStore } from '@/stores/toast'
 import { toFriendlyMessage } from '@/api/client'
@@ -107,10 +111,18 @@ function tryClose(): void {
 function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') tryClose()
 }
+// 嵌入宿主时（无遮罩、无标题栏）焦点与 Esc 都归宿主弹窗管
+const dialogRef = ref<HTMLElement | null>(null)
+const { activate, deactivate } = useModalFocusTrap(dialogRef)
 onMounted(() => {
-  if (!props.embedded) window.addEventListener('keydown', handleKeydown)
+  if (props.embedded) return
+  activate()
+  window.addEventListener('keydown', handleKeydown)
 })
-onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown)
+  deactivate()
+})
 
 // 宿主关闭入口仍走 saving 闸门
 defineExpose({ requestClose: tryClose })
