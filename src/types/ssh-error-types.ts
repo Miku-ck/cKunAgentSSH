@@ -9,8 +9,8 @@
  * 此文件在前端全局可用,不依赖 Electron 主进程代码
  */
 
-import type { SSHErrorCode, SSHErrorTransport } from '../shared/ssh-error-core'
-import { isRetryable, isSSHErrorCode, toFriendlyZh } from '../shared/ssh-error-core'
+import type { SSHErrorCode, SSHErrorTransport } from '../../shared/ssh-error-core'
+import { isRetryable, isSSHErrorCode, toFriendlyZh } from '../../shared/ssh-error-core'
 
 export type { SSHErrorCode, SSHErrorTransport }
 export { isRetryable, isSSHErrorCode }

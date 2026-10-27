@@ -251,7 +251,7 @@ import {
   AUDIT_ACTION_DOCKER,
   auditOutcomeForDispatchError,
   auditResultForExit,
-} from '@/composables/remoteAudit'
+} from '@/utils/remote-audit'
 import {
   PS_CMD, IMAGES_CMD, VOLUMES_CMD, VOLUME_USAGE_CMD, NETWORKS_CMD,
   startCmd, stopCmd, restartCmd, rmCmd, rmiCmd, execCmd, imagePruneCmd, imagePruneAllCmd,

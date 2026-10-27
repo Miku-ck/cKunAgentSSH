@@ -42,7 +42,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useToastStore } from '@/stores/toast'
 import { pullCmd, type DockerError } from '@/stores/docker-core'
-import { AUDIT_ACTION_DOCKER } from '@/composables/remoteAudit'
+import { AUDIT_ACTION_DOCKER } from '@/utils/remote-audit'
 import { useDockerHost } from './context'
 
 const emit = defineEmits<{

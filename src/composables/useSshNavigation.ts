@@ -5,7 +5,7 @@ import { useServerMonitorStore } from '@/stores/server-monitor'
 import { useSftpStore } from '@/stores/sftp'
 import { useToastStore } from '@/stores/toast'
 import { toFriendlyMessage, unwrapIpcErrorEnvelope } from '@/api/client'
-import { extractSSHError, isRetryable } from '@/ssh-error-types'
+import { extractSSHError, isRetryable } from '@/types/ssh-error-types'
 
 /** 本地终端列表常量（供标签条 ＋ 菜单渲染，动作仍走本文件的 openLocalShell） */
 export const LOCAL_SHELLS = ['PowerShell', 'CMD', 'Git Bash', 'WSL']

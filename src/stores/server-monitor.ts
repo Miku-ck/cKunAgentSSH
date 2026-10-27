@@ -27,7 +27,7 @@ import {
   type ProcessTopEntry,
   type RawStat,
 } from './server-monitor-core'
-import { isRetryable } from '../ssh-error-types'
+import { isRetryable } from '@/types/ssh-error-types'
 
 const POLL_INTERVAL_MS = 5000
 const PROCS_INTERVAL_MS = 60000 // 进程 TOP 慢轮询：ps 排序开销大，不随 5s 快轮询放大

@@ -3,9 +3,9 @@
  *
  * 三种访问场景：
  * 1. Electron 渲染进程：通过 IPC 拿主进程分配的 backendPort + 127.0.0.1（loopback，最稳）
- * 2. 浏览器本机访问（http://localhost:5173）：用当前页面 host + 8010（与后端 dev 端口一致）
- * 3. 浏览器外部访问（http://[本机IP]:5173）：必须用 window.location.hostname 替代 127.0.0.1，
- *    否则请求会指向用户本机的 8010（不存在）
+ * 2. 浏览器本机访问（http://localhost:5555）：用当前页面 host + 7777（与后端 dev 端口一致）
+ * 3. 浏览器外部访问（http://[本机IP]:5555）：必须用 window.location.hostname 替代 127.0.0.1，
+ *    否则请求会指向用户本机的 7777（不存在）
  *
  * ARCH-008 拆分：本文件退化为 barrel，全部 import 路径（'@/api/client'）零改动。
  * 按 api 对象分域：base（token/URL/request/错误规范化）/ core（会话模型设置）/

@@ -8,7 +8,7 @@ import {
   decideBulkDispatch,
   type BulkResult,
   type BulkSafetyVerdict,
-} from './bulkCommandDiff'
+} from './bulk-command-diff'
 
 function mk(label: string, lines: string[], exitCode = 0, error?: string): BulkResult {
   return { label, lines, exitCode, durationMs: 100, error }

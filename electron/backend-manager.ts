@@ -49,9 +49,11 @@ export class BackendManager {
    * 后端端口分配区间 —— 分配（findFreePort）与孤儿识别（isOurBackendProcess）
    * 必须读同一个区间：两者各写一份字面量时，改了分配区间而忘了谓词，孤儿检测就
    * 再也匹配不上自家进程，退化成宽口径兜底（那条分支会误伤同签名的无关项目）。
+   * 区间还必须避开 Fetch/Chromium 的受限端口（如 6665-6669）：主进程 fetch 会直接
+   * 报 bad port、渲染层报 ERR_UNSAFE_PORT，后端正常监听也调不通。
    */
-  private static readonly BACKEND_PORT_MIN = 8010
-  private static readonly BACKEND_PORT_MAX = 8100
+  private static readonly BACKEND_PORT_MIN = 7777
+  private static readonly BACKEND_PORT_MAX = 7877
   private restartTimestamps: number[] = []
   /**
    * 审查 M-7：首次 start() 尚未返回（starting=true）期间后端崩溃时，

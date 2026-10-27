@@ -126,7 +126,7 @@ import { useConfirm } from '@/composables/useConfirm'
 import { agentApi, toFriendlyMessage, type SafetyClassifyResult } from '@/api/client'
 import {
   diffResults, resultsConsistent, decideBulkDispatch, type BulkResult,
-} from '@/composables/bulkCommandDiff'
+} from '@/utils/bulk-command-diff'
 import {
   AUDIT_ACTION_BULK,
   auditEnvironmentFor,
@@ -135,7 +135,7 @@ import {
   buildRemoteAuditRecord,
   writeRemoteAudit,
   type RemoteAuditConclusion,
-} from '@/composables/remoteAudit'
+} from '@/utils/remote-audit'
 
 /** 统一关闭入口：执行中关闭需确认——sshExec 不随关窗取消，且重开弹窗即"失忆"，
  *  可对同一批节点无感知地重复并发下发同一命令 */

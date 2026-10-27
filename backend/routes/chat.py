@@ -3,6 +3,7 @@
 （普通流式对话已删除：AI 助手固定走 /agent/run，由后端自主意图识别）
 """
 import asyncio
+import logging
 import re
 from typing import Optional, Literal
 import uuid
@@ -14,6 +15,8 @@ from pydantic import BaseModel, Field
 import database as db
 
 router = APIRouter(tags=["chat"])
+
+logger = logging.getLogger(__name__)
 
 
 # ── 文件上传 ──
@@ -154,7 +157,7 @@ def delete_conversation(cid: str):
         from agent.harness.reins import _get_global_permission_gate_sync
         _get_global_permission_gate_sync().cleanup_conversation_session(cid)
     except Exception:
-        pass
+        logger.warning("conversation session 权限池回收失败（不阻塞删除）: %s", cid, exc_info=True)
     # B-MINOR 修复：级联清理 <db_dir>/uploads/<conv>/ 目录，
     # 避免会话删除后上传文件无限堆积（消毒走 _sanitize_conv，与上传接口同一实现；
     # 空会话 id 落入共享的 "general" 目录，不删除）
@@ -168,5 +171,5 @@ def delete_conversation(cid: str):
             if conv_dir.is_dir() and root in conv_dir.parents:
                 _shutil.rmtree(conv_dir, ignore_errors=True)
     except Exception:
-        pass
+        logger.warning("conversation uploads 级联清理失败（不阻塞删除）: %s", cid, exc_info=True)
     return {"deleted": True}

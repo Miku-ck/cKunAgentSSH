@@ -56,10 +56,10 @@ describe('appStore.readyPromise — 初始加载的就绪闸门', () => {
     const store = useAppStore()
 
     expect(store.backendStatus).toBe('starting')
-    resolveReady(8010)
-    await expect(store.readyPromise).resolves.toBe(8010)
+    resolveReady(7777)
+    await expect(store.readyPromise).resolves.toBe(7777)
     expect(store.backendStatus).toBe('ready')
-    expect(store.backendPort).toBe(8010)
+    expect(store.backendPort).toBe(7777)
   })
 
   it('本次启动失败不锁死闸门：reject 后 status=error 且闸门仍待决，自动重启的 ready 事件照样开启', async () => {

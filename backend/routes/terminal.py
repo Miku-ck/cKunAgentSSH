@@ -154,7 +154,7 @@ async def predict_terminal_command(req: TerminalPredictRequest):
         logger.warning("Terminal predict LLM call timed out (%ss)", _LLM_TIMEOUT_S)
         return TerminalPredictResponse(predictions=[], model_used=model_id)
     except Exception as e:
-        logger.warning(f"Terminal predict LLM call failed: {e}")
+        logger.warning("Terminal predict LLM call failed: %s", e)
         return TerminalPredictResponse(predictions=[], model_used=model_id)
 
     # 解析 JSON 响应

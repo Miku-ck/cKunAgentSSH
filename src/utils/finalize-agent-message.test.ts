@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest'
 import type { useAgentStore } from '@/stores/agent'
 import type { AgentTraceSnapshot } from '@/api/client'
-import { finalizeAgentMessage, type AgentMessage } from './finalizeAgentMessage'
+import { finalizeAgentMessage, type AgentMessage } from './finalize-agent-message'
 
 type Store = ReturnType<typeof useAgentStore>
 

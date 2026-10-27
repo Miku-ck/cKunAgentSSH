@@ -11,7 +11,7 @@
  */
 import { formatBytesCompact } from '../utils/format'
 
-import { extractSSHError } from '../ssh-error-types'
+import { extractSSHError } from '@/types/ssh-error-types'
 
 // ── 数据类型 ──
 

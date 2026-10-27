@@ -2,7 +2,7 @@
 /** 标签溢出菜单：tabs-scroll 横向装不下时，标签条右侧「▾」的全部会话列表。 */
 import { onMounted, onUnmounted } from 'vue'
 import { useSSHStore } from '@/stores/ssh'
-import { tabStatusKind } from '@/utils/tabStatus'
+import { tabStatusKind } from '@/utils/tab-status'
 import IconMonitor from '@/components/icons/IconMonitor.vue'
 import IconTerminal from '@/components/icons/IconTerminal.vue'
 

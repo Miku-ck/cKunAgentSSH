@@ -17,7 +17,7 @@ import {
   parityOf,
   splitData,
   type MuxFrame,
-} from '../../shared/gateway-mux'
+} from './gateway-mux'
 
 const hex = (b: Uint8Array) => [...b].map(x => x.toString(16).padStart(2, '0')).join('')
 const utf8 = (s: string) => new TextEncoder().encode(s)

@@ -12,7 +12,7 @@ import {
   buildRemoteAuditRecord,
   clipAuditText,
   writeRemoteAudit,
-} from './remoteAudit'
+} from './remote-audit'
 
 /** 生产形状：IPC 回来的 Error 上挂 __sshError transport（不是裸 transport） */
 function ipcError(transport: Record<string, unknown>): Error {

@@ -92,7 +92,7 @@ SAFE_CONTROLS = [
     'free -m',
     'grep -r foo /var/log',
     'find /tmp -name "*.log"',
-    'curl -s http://127.0.0.1:8010/api/health',
+    'curl -s http://127.0.0.1:7777/api/health',
     'echo hello',
     'apt update',
     # B-4 对照组：of= 目标是安全设备（zero）→ 保持原级（safe），不得误判 hardline

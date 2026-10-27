@@ -14,7 +14,7 @@ import {
   parseTransferErrorCode,
 } from '../../shared/transfer-error-core'
 import { describeTransferError } from './transfer-error'
-import { extractSSHError } from '@/ssh-error-types'
+import { extractSSHError } from '@/types/ssh-error-types'
 
 const envelope = (msg: string) => `Error invoking remote method 'sftp:upload': Error: ${msg}`
 

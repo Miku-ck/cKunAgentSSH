@@ -21,7 +21,7 @@ import { useToastStore } from './toast'
 import { api, workflowApi, type ChatAttachment, type WorkflowSnapshot } from '@/api/client'
 import { useChatPersistence } from '@/composables/useChatPersistence'
 import { useModelsStore } from './models'
-import { finalizeAgentMessage, type AgentMessage } from '@/utils/finalizeAgentMessage'
+import { finalizeAgentMessage, type AgentMessage } from '@/utils/finalize-agent-message'
 import { resolveRunModes, type ApprovalKey, type PostureKey } from '@/utils/run-modes'
 import type { ModeConversation, ModeMessage } from '@/types/chat'
 

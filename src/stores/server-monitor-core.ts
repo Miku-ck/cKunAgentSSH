@@ -7,7 +7,7 @@
  * unwrapIpcErrorEnvelope 同源）；它自身只在被调用时才触碰 pinia。
  */
 
-import { extractSSHError } from '../ssh-error-types'
+import { extractSSHError } from '@/types/ssh-error-types'
 import { stripIpcEnvelope } from '../api/base'
 
 // ── 数据类型 ──

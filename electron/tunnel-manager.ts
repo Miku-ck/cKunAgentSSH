@@ -312,9 +312,13 @@ export class TunnelManager {
 
     let stage: 'greet' | 'request' = 'greet'
     let buf = Buffer.alloc(0)
+    // 握手缓冲上限：合法的 greet+request 帧不足 300 字节，超限只可能是恶意
+    // 客户端以合法 VER/ATYP 逐字节滴灌且永不满足 need——直接断开，防止 buf 无界增长
+    const MAX_SOCKS_BUF = 1024
 
     const onData = (chunk: Buffer): void => {
       buf = Buffer.concat([buf, chunk])
+      if (buf.length > MAX_SOCKS_BUF) { sock.destroy(); return }
 
       if (stage === 'greet') {
         // VER NMETHODS METHODS(1..255)

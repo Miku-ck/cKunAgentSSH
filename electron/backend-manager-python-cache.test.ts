@@ -42,7 +42,7 @@ beforeEach(() => {
   for (const k of ['findFreePort', 'ensureDbPath', 'getBackendDir', 'waitForReady', 'killCurrentProcess']) {
     saved[k] = proto[k]
   }
-  proto.findFreePort = () => Promise.resolve(8010)
+  proto.findFreePort = () => Promise.resolve(7777)
   proto.ensureDbPath = () => '/tmp/ckun-fake.db'
   proto.getBackendDir = () => '/fake/app/backend'
   proto.waitForReady = () => new Promise<void>((r) => { setTimeout(r, 0) })

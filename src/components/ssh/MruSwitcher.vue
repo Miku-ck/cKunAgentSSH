@@ -3,7 +3,7 @@
 import { computed } from 'vue'
 import { useSSHStore } from '@/stores/ssh'
 import { mruSwitcher } from '@/composables/useGlobalShortcuts'
-import { tabStatusKind } from '@/utils/tabStatus'
+import { tabStatusKind } from '@/utils/tab-status'
 import IconMonitor from '@/components/icons/IconMonitor.vue'
 import IconTerminal from '@/components/icons/IconTerminal.vue'
 

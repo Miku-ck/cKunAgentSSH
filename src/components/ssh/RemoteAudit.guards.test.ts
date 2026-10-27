@@ -5,7 +5,7 @@
  * 两条人工通道（批量下发 / Docker 变更动作）必须在动作之后追加审计，
  * 且审计失败只提示、不阻断也不回滚已发生的远端动作。
  *
- * 纯函数与请求体构造由 src/composables/remoteAudit.test.ts 覆盖。
+ * 纯函数与请求体构造由 src/utils/remote-audit.test.ts 覆盖。
  */
 import bulkRaw from './BulkCommandModal.vue?raw'
 import ctxRaw from './docker/context.ts?raw'

@@ -1,6 +1,6 @@
 """S4-07 的跨端字段上限对账：渲染层裁剪值必须等于后端 AuditAppendRequest 的 Field 上限。
 
-`src/composables/remoteAudit.ts` 的头注释写着「与后端 AuditAppendRequest 的字段上限
+`src/utils/remote-audit.ts` 的头注释写着「与后端 AuditAppendRequest 的字段上限
 逐字相等」，而这条相等到本轮之前**没有任何东西钉着** —— 后端把 command_raw 收紧到
 比如 4096 而前端仍裁到 8192 时，超长的批量命令会被 pydantic 折成 422，
 `writeRemoteAudit` 把它吞成一条 console.warn（它刻意不阻塞已下发的远端动作），
@@ -19,7 +19,7 @@ from pydantic.types import MaxLen
 from routes.audit import AuditAppendRequest
 
 ROOT = Path(__file__).resolve().parents[2]
-FRONTEND = ROOT / "src" / "composables" / "remoteAudit.ts"
+FRONTEND = ROOT / "src" / "utils" / "remote-audit.ts"
 
 # 前端常量名 → 后端模型字段名
 _PAIRS = {

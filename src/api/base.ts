@@ -3,14 +3,14 @@
  *
  * 三种访问场景：
  * 1. Electron 渲染进程：通过 IPC 拿主进程分配的 backendPort + 127.0.0.1（loopback，最稳）
- * 2. 浏览器本机访问（http://localhost:5173）：用当前页面 host + 8010（与后端 dev 端口一致）
- * 3. 浏览器外部访问（http://[本机IP]:5173）：必须用 window.location.hostname 替代 127.0.0.1，
- *    否则请求会指向用户本机的 8010（不存在）
+ * 2. 浏览器本机访问（http://localhost:5555）：用当前页面 host + 7777（与后端 dev 端口一致）
+ * 3. 浏览器外部访问（http://[本机IP]:5555）：必须用 window.location.hostname 替代 127.0.0.1，
+ *    否则请求会指向用户本机的 7777（不存在）
  */
 import { useAppStore } from '@/stores/app'
-import { extractSSHError, toFriendlySshMessage } from '@/ssh-error-types'
+import { extractSSHError, toFriendlySshMessage } from '@/types/ssh-error-types'
 
-const FALLBACK_PORT = 8010  // 后端 dev 默认端口（与 backend/main.py --port default 一致）
+const FALLBACK_PORT = 7777  // 后端 dev 默认端口（与 backend/main.py --port default 一致）
 
 // ── 后端鉴权 token 头 ──
 // 跨层契约：Electron 层通过 IPC getBackendToken() 提供后端鉴权 token，
@@ -156,11 +156,11 @@ export function getBaseUrl(): string {
     if (!port) throw new Error('Backend not ready')
     return `http://127.0.0.1:${port}/api`
   }
-  // 浏览器：用当前页面 host（dev 端口 5173 → 后端 8010）
+  // 浏览器：用当前页面 host（dev 端口 5555 → 后端 7777）
   let host = typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1'
   // H13 修复：IPv6 [::1] → IPv4 127.0.0.1
-  // 原因：vite dev server 可能绑定到 [::1]:5173（IPv6 only），导致 window.location.hostname 返回 [::1]；
-  // 但后端监听 0.0.0.0:8010（IPv4 only），用 [::1]:8010 发请求会被拒绝（Failed to fetch）。
+  // 原因：vite dev server 可能绑定到 [::1]:5555（IPv6 only），导致 window.location.hostname 返回 [::1]；
+  // 但后端监听 0.0.0.0:7777（IPv4 only），用 [::1]:7777 发请求会被拒绝（Failed to fetch）。
   // 统一映射到 127.0.0.1，确保 IPv4 可达。
   if (host === '[::1]' || host === '::1' || host === 'localhost') {
     host = '127.0.0.1'
@@ -239,7 +239,8 @@ export async function request<T>(path: string, options?: RequestInit, _retrying 
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }))
-      throw new Error(backendErrorDetail(err) || res.statusText)
+      // 非 JSON 错误体（如反向代理 502 HTML 页）statusText 可能为空，补上状态码前缀保住语义
+      throw new Error(backendErrorDetail(err) || `HTTP ${res.status} ${res.statusText}`.trim())
     }
     if (res.status === 204) return {} as T
     return res.json()

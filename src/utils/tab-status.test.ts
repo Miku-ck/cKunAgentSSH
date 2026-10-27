@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { tabStatusKind } from './tabStatus'
+import { tabStatusKind } from './tab-status'
 
 describe('tabStatusKind：标签状态点判据', () => {
   const base = { id: 's1' }

@@ -167,7 +167,10 @@ class BridgeRelay:
                     fut.set_exception(BridgeWsLostError("bridge connection replaced"))
             await self._safe_close(old, CLOSE_REPLACED)
 
-        await self._safe_send(ws, json.dumps({"type": "hello-ack", "ok": True}))
+        hello_ack = json.dumps({"type": "hello-ack", "ok": True})
+        if not await self._safe_send(ws, hello_ack):
+            # 主进程侧会等 ack 超时重连，这里若静默则故障窗口内无任何留痕可查
+            logger.warning("[BridgeRelay] hello-ack 发送失败，主进程将超时重连")
         logger.info("[BridgeRelay] bridge ws channel ready")
 
         # 3) 读循环：res 完成 Future / ping 回 pong；主进程不应发 req（忽略并告警）
@@ -243,11 +246,12 @@ class BridgeRelay:
         except Exception:
             pass
 
-    async def _safe_send(self, ws: WebSocket, data: str) -> None:
+    async def _safe_send(self, ws: WebSocket, data: str) -> bool:
         try:
             await ws.send_text(data)
+            return True
         except Exception:
-            pass
+            return False
 
 
 # ── 模块级单例注册（lifespan 创建/销毁；端点经此获取，便于测试注入）────────────

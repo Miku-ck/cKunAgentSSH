@@ -278,7 +278,7 @@ import { useSshNavigation } from '@/composables/useSshNavigation'
 import { useGlobalShortcuts } from '@/composables/useGlobalShortcuts'
 import type { NavPage } from '@/composables/useSshNavigation'
 import { useTabContextMenu } from '@/composables/useTabContextMenu'
-import { tabStatusKind } from '@/utils/tabStatus'
+import { tabStatusKind } from '@/utils/tab-status'
 
 const store = useSSHStore()
 const sshAiStore = useSshAiStore()

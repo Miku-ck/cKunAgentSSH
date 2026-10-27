@@ -336,7 +336,8 @@ async function deliverCommand(toolId: string): Promise<void> {
   const ssh = useSSHStore()
   const session = ssh.sessions.find(s => s.id === delivery.session_id)
   if (!session) {
-    delivery.status = 'done'
+    // 失败终态用 failed（done 会让 UI 徽章显示「已完成」）
+    delivery.status = 'failed'
     delivery.output = '无可写终端'
     void withTimeout(
       postToolResult(
@@ -350,8 +351,19 @@ async function deliverCommand(toolId: string): Promise<void> {
   delivery.status = 'writing'
 
   const marker = randomMarker()
-  const sentinel =
-    `echo __AGENT_BEGIN__ ${marker}; ${delivery.command}; echo __AGENT_END__ ${marker}:$?`
+  // 哨兵模板按会话 shell 分派：本地会话可能是 PowerShell / CMD（LOCAL_SHELLS），
+  // 纯 bash 哨兵在 PowerShell 下 $? 求值为 True/False（Number('True')=NaN，
+  // 每条成功命令都被回传为失败），在 CMD 下 `;` 不是分隔符（BEGIN 永不匹配，
+  // 每条命令白等超时）。远程会话与 Git Bash/WSL 均为 POSIX shell，走 bash 模板。
+  const isPosixShell = session.type !== 'local'
+    || session.shell === 'Git Bash'
+    || session.shell === 'WSL'
+    || !session.shell
+  const sentinel = isPosixShell
+    ? `echo __AGENT_BEGIN__ ${marker}; ${delivery.command}; echo __AGENT_END__ ${marker}:$?`
+    : session.shell === 'CMD'
+      ? `echo __AGENT_BEGIN__ ${marker} & ${delivery.command} & echo __AGENT_END__ ${marker}:%ERRORLEVEL%`
+      : `echo __AGENT_BEGIN__ ${marker}; ${delivery.command}; echo __AGENT_END__ ${marker}:$LASTEXITCODE`
 
   // 先登记捕获，避免错过回显
   const cap: CaptureState = {
@@ -378,7 +390,8 @@ async function deliverCommand(toolId: string): Promise<void> {
     const c0 = captures.get(toolId)
     if (c0) c0.finished = true
     clearCapture(toolId)
-    delivery.status = 'done'
+    // 失败终态用 failed（done 会让 UI 徽章显示「已完成」）
+    delivery.status = 'failed'
     delivery.output = 'Electron API 未就绪，无法写入终端'
     void withTimeout(
       postToolResult(
@@ -397,7 +410,8 @@ async function deliverCommand(toolId: string): Promise<void> {
     const c = captures.get(toolId)
     if (c) c.finished = true
     clearCapture(toolId)
-    delivery.status = 'done'
+    // 失败终态用 failed（done 会让 UI 徽章显示「已完成」）
+    delivery.status = 'failed'
     delivery.output = '写入终端失败'
     delivery.error = String((err as Error)?.message || err)
     void withTimeout(

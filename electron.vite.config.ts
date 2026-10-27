@@ -38,7 +38,7 @@ export default defineConfig({
     // dev:web 场景设 VITE_HOST=0.0.0.0 允许局域网访问（electron-vite 不支持 --host CLI 选项）
     server: {
       host: process.env.VITE_HOST || '127.0.0.1',
-      port: Number(process.env.VITE_PORT) || 5173,
+      port: Number(process.env.VITE_PORT) || 5555,
       // 启动性能优化：Electron 拉起 dev server 后立即预热入口与重依赖，
       // transform 与窗口加载并行 —— 否则首屏每个未缓存模块都要现场编译，
       // 白屏时间被 monaco/xterm 等大依赖的按需 transform 串起来。

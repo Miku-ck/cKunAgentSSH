@@ -9,7 +9,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useChatPersistence } from './useChatPersistence'
-import { finalizeAgentMessage } from '@/utils/finalizeAgentMessage'
+import { finalizeAgentMessage } from '@/utils/finalize-agent-message'
 
 const KEY = 'ckun-test-chat-conversations'
 

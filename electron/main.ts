@@ -1135,6 +1135,9 @@ if ($result.CompletionMatches) {
           // 审查修复（P2）：stdout 累积上限 — 原实现无上限，补全命令在异常
           // 环境（如损坏的 PSModulePath 脚本刷屏）下可无限累积撑爆主进程内存
           if (out.length > 256 * 1024) {
+            // 超限即终止子进程：finish 只解决 promise，不清掉刷屏的 powershell，
+            // 它会在无任何超时保护的情况下继续存活（与定时器分支语义对齐）
+            try { child.kill() } catch { /* ignore */ }
             finish('')
             return
           }

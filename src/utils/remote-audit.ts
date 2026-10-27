@@ -6,7 +6,7 @@
  */
 
 import { auditApi, type AuditAppendInput, type AuditConclusion } from '@/api/audit'
-import { extractSSHError } from '@/ssh-error-types'
+import { extractSSHError } from '@/types/ssh-error-types'
 
 export const AUDIT_ACTION_BULK = 'bulk_ssh_exec'
 export const AUDIT_ACTION_DOCKER = 'docker_action'

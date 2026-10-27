@@ -1,6 +1,6 @@
 """
 cKunAgentic Python 后端入口
-启动: python main.py --port 8010
+启动: python main.py --port 7777
 """
 import argparse
 import hmac
@@ -174,8 +174,8 @@ app = FastAPI(
 
 # CORS — 显式来源白名单。调用方来源集合只有两种形态：
 #   dev 态：vite dev server（electron/main.ts loadURL(ELECTRON_RENDERER_URL)），
-#           Origin = http://localhost:5173 / http://127.0.0.1:5173，浏览器经局域网
-#           IP 访问时为 http://<私有IP>:5173；
+#           Origin = http://localhost:5555 / http://127.0.0.1:5555，浏览器经局域网
+#           IP 访问时为 http://<私有IP>:5555；
 #   打包态：loadFile(...) 的 file:// renderer，其跨源请求 Origin 头为字面量 "null"，
 #           必须显式列入否则 Chromium 拦响应致前端显示"连接失败"。
 # （旧正则里的 ^app://\.$ 是未落地的自定义协议计划残留 —— 全仓没有任何
@@ -183,13 +183,13 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     # 仅放行 dev server 来源：localhost/127.0.0.1 + 局域网私有 IP（10./172.16-31./192.168.）
-    # 不用 `.*` 通配，避免任意公网主机:5173 被误放行
+    # 不用 `.*` 通配，避免任意公网主机:5555 被误放行
     allow_origin_regex=(
         r"^https?://(localhost|127\.0\.0\.1|"
         r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}|"
         r"192\.168\.\d{1,3}\.\d{1,3}|"
         r"172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}"
-        r"):5173$|^null$"
+        r"):5555$|^null$"
     ),
     # 凭据恒不放开：本后端没有任何 Cookie 会话（鉴权走每次请求显式带的
     # X-API-Token 头，见下方 api_token_auth），前端 fetch 也从不带 credentials；
@@ -274,7 +274,7 @@ app.add_api_websocket_route("/ws/bridge", bridge_ws_endpoint)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="cKunAgentic Backend")
-    parser.add_argument("--port", type=int, default=8010, help="监听端口")
+    parser.add_argument("--port", type=int, default=7777, help="监听端口")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="监听地址")
     args = parser.parse_args()
 

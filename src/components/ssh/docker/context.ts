@@ -23,7 +23,7 @@ import {
   buildRemoteAuditRecord,
   writeRemoteAudit,
   type RemoteAuditConclusion,
-} from '@/composables/remoteAudit'
+} from '@/utils/remote-audit'
 import {
   describeThrownDockerError,
   dockerErrorFromResult,
