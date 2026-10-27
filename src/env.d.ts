@@ -419,9 +419,15 @@ interface ElectronAPI {
   sftpStat: (sshSessionId: string, remotePath: string) => Promise<{ size: number; isDirectory: boolean; modified: number }>
   sftpRename: (sshSessionId: string, oldPath: string, newPath: string) => Promise<void>
   sftpDelete: (sshSessionId: string, remotePath: string) => Promise<void>
-  sftpUpload: (transferId: string, sshSessionId: string, localPath: string, remotePath: string) => Promise<void>
+  sftpUpload: (transferId: string, sshSessionId: string, localPath: string, remotePath: string, meta?: import('../shared/upload-task-core').UploadTaskMeta) => Promise<void>
   sftpDownload: (transferId: string, sshSessionId: string, remotePath: string, localPath: string) => Promise<void>
   sftpCancel: (transferId: string) => Promise<void>
+  sftpRegisterUploadTasks: (sshSessionId: string, tasks: import('../shared/upload-task-core').RegisteredUploadTask[]) => Promise<void>
+  sftpListUploadTasks: (connectionId: string) => Promise<import('../shared/upload-task-core').UploadTaskRecord[]>
+  sftpRemoveUploadTask: (id: string) => Promise<void>
+  sftpClearUploadTasks: (connectionId: string) => Promise<void>
+  sftpPauseUploadTask: (id: string, interrupted: boolean) => Promise<void>
+  sftpGetSessionConnectionId: (sshSessionId: string) => Promise<string | null>
   sftpReadFile: (sshSessionId: string, remotePath: string) => Promise<EditorFileContent>
   sftpReadBinary: (sshSessionId: string, remotePath: string) => Promise<{ base64: string; size: number }>
   sftpWriteFile: (sshSessionId: string, remotePath: string, content: string) => Promise<void>

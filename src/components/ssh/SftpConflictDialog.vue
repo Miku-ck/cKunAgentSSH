@@ -4,7 +4,10 @@
       <div class="conflict-dialog" role="dialog" aria-modal="true" aria-label="文件冲突处理" @keydown.esc="cancel">
         <div class="conflict-head">
           <div class="conflict-title">目标位置存在同名文件</div>
-          <div class="conflict-sub">共 {{ items.length }} 项冲突，逐项选择处理方式，或用上方「全部」按钮统一处理</div>
+          <div class="conflict-sub">
+            共 {{ items.length }} 项冲突，逐项选择处理方式，或用上方「全部」按钮统一处理。
+            选择覆盖时，同名目录会合并，目录内同名文件将被覆盖。
+          </div>
         </div>
 
         <!-- 应用到全部 -->

@@ -20,7 +20,7 @@
           </button>
           <button v-if="clearableCount > 0" class="btn" @click="clearCompleted">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
-            清除已完成
+            清除已结束
           </button>
           <button class="tc-close" aria-label="关闭" @click="emit('close')">×</button>
         </div>
@@ -61,7 +61,7 @@
         <!-- 行 -->
         <div class="tc-body">
           <div v-if="store.transfers.length === 0" class="tc-empty">
-            <p>本次会话还没有传输记录</p>
+            <p>还没有传输记录</p>
           </div>
           <template v-else>
             <template v-for="unit in renderUnits" :key="unit.key">

@@ -476,6 +476,12 @@ export class SSHManager {
   /** 在途传输的取消闭包（key = transferId）。删除走身份守卫：续传可能复用同一 id，
    *  只清理本传输自己登记的条目（C10）。 */
   private transfers = new Map<string, () => void>()
+  /** 上传进度回调（主进程 UploadTaskStore 消费）。下载不接：记录只服务上传历史。 */
+  private uploadProgressSink: ((id: string, transferred: number, total: number) => void) | null = null
+
+  setUploadProgressSink(fn: ((id: string, transferred: number, total: number) => void) | null): void {
+    this.uploadProgressSink = fn
+  }
 
   /**
    * 登记取消闭包，供 sftpCancel 按 id 找回（不改传输控制流）。
@@ -1927,6 +1933,7 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
     sshSessionId: string,
     localPath: string,
     remotePath: string,
+    opts?: { resume?: boolean },
   ): Promise<void> {
     // 传输提速：从连接池取独占的独立 SSH 连接（每条 2 MB 窗口），
     // 不与终端会话瓜分窗口；release 在 runBody 的 finally 归还（停滞场景
@@ -2001,6 +2008,45 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
     const sendProgress = (data: { transferred: number; total: number }): void => {
       if (stalled) return
       this.safeSend('sftp:progress', { id: transferId, ...data })
+      try { this.uploadProgressSink?.(transferId, data.transferred, data.total) } catch { /* 记录侧异常不影响传输 */ }
+    }
+
+    /**
+     * 「其实已经传完了」短路 —— 仅显式继续时启用。
+     *
+     * 崩溃窗口：rename 已成功、记录还没来得及落盘，磁盘上仍是 running。下次启动
+     * 归一化为可继续，若直接走正常上传会发现 .part 不存在并从 0 开始，整文件
+     * 重传。这里在 .part 缺席时比对远端目标大小与前 4KB，一致即视为完成。
+     * 不做全量哈希：只为兜住这个极窄窗口，4KB 足以识别「是不是同一个源」。
+     */
+    const alreadyComplete = async (): Promise<boolean> => {
+      try {
+        await sftpStat(sftp, partPath)
+        return false
+      } catch { /* .part 不存在才继续检查 */ }
+      try {
+        const st = await sftpStat(sftp, remotePath)
+        if (st.size !== total) return false
+        const verifyLen = Math.min(VERIFY_SIZE, total)
+        if (verifyLen <= 0) return true
+        const localHead = Buffer.alloc(verifyLen)
+        const headFd = await fsPromises.open(localPath, 'r')
+        try {
+          await headFd.read(localHead, 0, verifyLen, 0)
+        } finally {
+          try { await headFd.close() } catch { /* ignore */ }
+        }
+        const targetHandle = await sftpOpen(sftp, remotePath, 'r')
+        let remoteHead: Buffer
+        try {
+          remoteHead = await sftpRead(sftp, targetHandle, 0, verifyLen)
+        } finally {
+          try { await sftpClose(sftp, targetHandle) } catch { /* ignore */ }
+        }
+        return localHead.equals(remoteHead)
+      } catch {
+        return false
+      }
     }
 
     // M7 修复（上传侧补齐）：句柄声明在 try 外，确保 finally 块始终可访问。
@@ -2011,6 +2057,12 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
 
     const runBody = async (): Promise<void> => {
     try {
+      // 显式继续时先兜「rename 已完成但记录未落盘」：重复整传的代价远大于一次探测
+      if (opts?.resume && await alreadyComplete()) {
+        sendProgress({ transferred: total, total })
+        return
+      }
+
       // 1. 确定续传起点
       let startOffset = 0
       let partExists = false

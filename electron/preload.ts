@@ -2,6 +2,11 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { SshReconnectStatus } from './ssh-manager'
 import type { TunnelStatus } from './tunnel-manager'
 import type { GatewayHostKeyEvent, GatewayStatus } from './gateway-manager'
+import type {
+  RegisteredUploadTask,
+  UploadTaskMeta,
+  UploadTaskRecord,
+} from '../shared/upload-task-core'
 
 /**
  * 安全暴露给渲染进程的 API
@@ -299,11 +304,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sftpStat: (sshSessionId: string, remotePath: string) => ipcRenderer.invoke('sftp:stat', sshSessionId, remotePath),
   sftpRename: (sshSessionId: string, oldPath: string, newPath: string) => ipcRenderer.invoke('sftp:rename', sshSessionId, oldPath, newPath),
   sftpDelete: (sshSessionId: string, remotePath: string) => ipcRenderer.invoke('sftp:delete', sshSessionId, remotePath),
-  sftpUpload: (transferId: string, sshSessionId: string, localPath: string, remotePath: string) =>
-    ipcRenderer.invoke('sftp:upload', transferId, sshSessionId, localPath, remotePath),
+  sftpUpload: (transferId: string, sshSessionId: string, localPath: string, remotePath: string, meta?: UploadTaskMeta) =>
+    ipcRenderer.invoke('sftp:upload', transferId, sshSessionId, localPath, remotePath, meta),
   sftpDownload: (transferId: string, sshSessionId: string, remotePath: string, localPath: string) =>
     ipcRenderer.invoke('sftp:download', transferId, sshSessionId, remotePath, localPath),
   sftpCancel: (transferId: string) => ipcRenderer.invoke('sftp:cancel', transferId),
+  // 上传记录（主进程权威写入；渲染层只读展示与显式操作）
+  sftpRegisterUploadTasks: (sshSessionId: string, tasks: RegisteredUploadTask[]) =>
+    ipcRenderer.invoke('sftp:registerUploadTasks', sshSessionId, tasks),
+  sftpListUploadTasks: (connectionId: string): Promise<UploadTaskRecord[]> =>
+    ipcRenderer.invoke('sftp:listUploadTasks', connectionId),
+  sftpRemoveUploadTask: (id: string) => ipcRenderer.invoke('sftp:removeUploadTask', id),
+  sftpClearUploadTasks: (connectionId: string) => ipcRenderer.invoke('sftp:clearUploadTasks', connectionId),
+  sftpPauseUploadTask: (id: string, interrupted: boolean) =>
+    ipcRenderer.invoke('sftp:pauseUploadTask', id, interrupted),
+  sftpGetSessionConnectionId: (sshSessionId: string): Promise<string | null> =>
+    ipcRenderer.invoke('sftp:getSessionConnectionId', sshSessionId),
   sftpReadFile: (sshSessionId: string, remotePath: string) =>
     ipcRenderer.invoke('sftp:readFile', sshSessionId, remotePath),
   sftpReadBinary: (sshSessionId: string, remotePath: string): Promise<{ base64: string; size: number }> =>

@@ -19,6 +19,7 @@ import { GhHostsService } from './gh-hosts'
 import { SshTransport } from './transports/ssh-transport'
 import { GatewayStore, type GatewayRecord } from './gateway-store'
 import { GatewayManager } from './gateway-manager'
+import { UploadTaskStore } from './upload-task-store'
 import { ElectronBridge, BridgeOp } from './electron-bridge'
 import { BridgeWsClient } from './bridge-ws-client'
 import {
@@ -31,6 +32,7 @@ import {
 } from './desktop-prefs'
 import { assertSafePath, allowDialogKeyPath, isCopyTargetSelfNested, rejectSymlinkTarget } from './utils/path-guard'
 import { shSingleQuote, shQuoteBody } from '../shared/sh-quote-core'
+import type { RegisteredUploadTask, UploadTaskMeta } from '../shared/upload-task-core'
 import { beginCopy, endCopy, requestCopyCancel } from './utils/copy-cancel'
 import { perfMark } from './utils/perf-mark'
 import { resolvePowerShell } from './utils/powershell-path'
@@ -63,6 +65,7 @@ let tunnelStore: TunnelStore | null = null
 let tunnelManager: TunnelManager | null = null
 let gatewayStore: GatewayStore | null = null
 let gatewayManager: GatewayManager | null = null
+let uploadTaskStore: UploadTaskStore | null = null
 let githubAccel: GithubAccelService | null = null
 let ghDownload: GhDownloadManager | null = null
 let ghHosts: GhHostsService | null = null
@@ -1745,9 +1748,31 @@ function setupSftpIPC(): void {
     return sshManager!.sftpDelete(sshSessionId, remotePath)
   })
   // 上传/下载：本地路径须过 assertSafePath（防止受控渲染进程读写系统位置）
-  handleTrusted('sftp:upload', async (_event, transferId: string, sshSessionId: string, localPath: string, remotePath: string) => {
+  handleTrusted('sftp:upload', async (
+    _event,
+    transferId: string,
+    sshSessionId: string,
+    localPath: string,
+    remotePath: string,
+    meta?: UploadTaskMeta,
+  ) => {
     await assertSafePath(localPath)
-    return sshManager!.sftpUpload(transferId, sshSessionId, localPath, remotePath)
+    const run = () => sshManager!.sftpUpload(
+      transferId, sshSessionId, localPath, remotePath, { resume: meta?.resume },
+    )
+    // 归属 id 由主进程从会话池解析，不接受渲染层伪造；会话已断时仍照常传，
+    // 不因「记录不了」阻断用户操作
+    const connectionId = sshManager!.getSessionConnectionId(sshSessionId)
+    if (!uploadTaskStore || !connectionId) return run()
+    return uploadTaskStore.trackUpload(
+      connectionId,
+      transferId,
+      localPath,
+      remotePath,
+      meta,
+      run,
+      { discardPart: () => sshManager!.sftpDelete(sshSessionId, remotePath + '.part').catch(() => {}) },
+    )
   })
   handleTrusted('sftp:download', async (_event, transferId: string, sshSessionId: string, remotePath: string, localPath: string) => {
     await assertSafePath(localPath)
@@ -1756,6 +1781,52 @@ function setupSftpIPC(): void {
   handleTrusted('sftp:cancel', (_event, transferId: string) => {
     requestCopyCancel(transferId)  // 同时通知 fs:copy 和 sftp 传输表
     sshManager!.sftpCancel(transferId)
+    // 取消是用户显式终态；markCancelled 自己会保留 paused（暂停优先）
+    void uploadTaskStore?.markCancelled(transferId)
+  })
+
+  // ─── 上传记录（主进程是权威写入方，渲染层只读） ───
+  handleTrusted('sftp:registerUploadTasks', async (
+    _event,
+    sshSessionId: string,
+    tasks: RegisteredUploadTask[],
+  ) => {
+    if (!uploadTaskStore) return
+    const connectionId = sshManager!.getSessionConnectionId(sshSessionId)
+    if (!connectionId) return
+    // 跨进程入参只收已知字段：直接存渲染层对象会把任意字段写进用户磁盘
+    const clean: RegisteredUploadTask[] = (Array.isArray(tasks) ? tasks : [])
+      .filter(t => t && typeof t.id === 'string' && typeof t.localPath === 'string' && typeof t.remotePath === 'string')
+      .map(t => ({
+        id: t.id,
+        localPath: t.localPath,
+        remotePath: t.remotePath,
+        name: typeof t.name === 'string' ? t.name : '',
+        total: Number.isFinite(t.total) ? t.total : 0,
+        groupId: typeof t.groupId === 'string' ? t.groupId : undefined,
+        groupLabel: typeof t.groupLabel === 'string' ? t.groupLabel : undefined,
+      }))
+    return uploadTaskStore.registerBatch(connectionId, clean)
+  })
+  handleTrusted('sftp:listUploadTasks', (_event, connectionId: string) => {
+    if (!uploadTaskStore || typeof connectionId !== 'string' || !connectionId) return []
+    return uploadTaskStore.list(connectionId)
+  })
+  handleTrusted('sftp:removeUploadTask', (_event, id: string) => {
+    if (typeof id !== 'string' || !id) return
+    return uploadTaskStore?.remove(id)
+  })
+  handleTrusted('sftp:clearUploadTasks', (_event, connectionId: string) => {
+    if (typeof connectionId !== 'string' || !connectionId) return
+    return uploadTaskStore?.clearFinished(connectionId)
+  })
+  handleTrusted('sftp:pauseUploadTask', (_event, id: string, interrupted: boolean) => {
+    if (typeof id !== 'string' || !id) return
+    return uploadTaskStore?.markPaused(id, Boolean(interrupted))
+  })
+  handleTrusted('sftp:getSessionConnectionId', (_event, sshSessionId: string) => {
+    if (typeof sshSessionId !== 'string' || !sshSessionId) return null
+    return sshManager!.getSessionConnectionId(sshSessionId)
   })
   handleTrusted('sftp:readFile', (_event, sshSessionId: string, remotePath: string) => {
     return sshManager!.sftpReadFile(sshSessionId, remotePath)
@@ -1889,6 +1960,15 @@ app.whenReady().then(async () => {
   setupFSIPC()
   setupPtyIPC()
   setupSSHIPC()
+  // 上传记录先于 SFTP IPC 就绪：sftp:upload 一进来就要能归属到 connectionId
+  uploadTaskStore = new UploadTaskStore(join(app.getPath('userData'), 'sftp-upload-tasks.json'))
+  sshManager!.setUploadProgressSink((id, transferred, total) => {
+    uploadTaskStore?.noteProgress(id, transferred, total)
+  })
+  // 读盘不阻塞首屏；所有记录类 IPC 内部都会 await init()
+  uploadTaskStore.init().catch((e) => {
+    logWarn('main', `uploadTaskStore.init 失败: ${e instanceof Error ? e.message : String(e)}`)
+  })
   setupSkillsIPC()
   setupSftpIPC()
   perfMark('ipc setup done')
@@ -1975,6 +2055,11 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   markQuitting()  // 防止 close 事件走隐藏分支
+  // 先让运行中的终态回写失效（磁盘保留 running，下次启动归一化为「已中断」），
+  // 再 best-effort 落一次最新进度。before-quit 不等待 Promise，命中了更好，没命中
+  // 也只是丢最后 1s 的展示进度 —— 真实断点始终在远端 .part
+  uploadTaskStore?.beginShutdown()
+  void uploadTaskStore?.flushNow()
   ptyManager?.destroyAll()
   sshManager?.disconnectAll()
   tunnelManager?.stopAll()

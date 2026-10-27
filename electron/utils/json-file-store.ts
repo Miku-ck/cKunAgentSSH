@@ -24,6 +24,9 @@ export interface JsonFileStoreOptions<T> {
   label: string
   /** 记录有效性判据；缺省为「对象且 id 为 string」 */
   isValidRecord?: (r: unknown) => r is T
+  /** 紧凑序列化（无缩进）。默认 2 空格便于人工排查；上传历史这类只由程序
+   *  读写、且按用户决策不做自动裁剪的全量记录开启，体积可省一半以上。 */
+  compact?: boolean
 }
 
 export class JsonFileStore<T extends { id: string }> {
@@ -31,6 +34,7 @@ export class JsonFileStore<T extends { id: string }> {
   private readonly logTag: string
   private readonly label: string
   private readonly isValid: (r: unknown) => r is T
+  private readonly serialize: (records: T[]) => string
   /** 读-改-写串行化队列：所有写操作串在同一 promise 链上，前一个失败不阻断后续 */
   private writeQueue: Promise<unknown> = Promise.resolve()
 
@@ -39,6 +43,9 @@ export class JsonFileStore<T extends { id: string }> {
     this.logTag = opts.logTag
     this.label = opts.label
     this.isValid = opts.isValidRecord ?? defaultIsValid
+    this.serialize = opts.compact
+      ? records => JSON.stringify(records)
+      : records => JSON.stringify(records, null, 2)
   }
 
   /** 把写操作串入队列；前一个操作失败不阻断后续（各自重试语义不变） */
@@ -92,7 +99,7 @@ export class JsonFileStore<T extends { id: string }> {
   async writeAll(records: T[]): Promise<void> {
     await mkdir(dirname(this.path), { recursive: true })
     const tmpPath = this.path + '.tmp'
-    await writeFile(tmpPath, JSON.stringify(records, null, 2), 'utf-8')
+    await writeFile(tmpPath, this.serialize(records), 'utf-8')
     try {
       await rename(tmpPath, this.path)
     } catch (err: any) {
@@ -103,7 +110,7 @@ export class JsonFileStore<T extends { id: string }> {
           return
         } catch {
           console.warn(`${this.logTag} rename 重试仍失败，回退到直接写入`)
-          await writeFile(this.path, JSON.stringify(records, null, 2), 'utf-8')
+          await writeFile(this.path, this.serialize(records), 'utf-8')
           try { await unlink(tmpPath) } catch { /* ignore */ }
         }
       } else {

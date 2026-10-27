@@ -130,3 +130,25 @@ describe('上传续传边界（D12 / S5-01 上传侧）', () => {
     expect(stripComments(dl)).toContain('if (resumeSize > total) {')
   })
 })
+
+describe('上传记录接线（主进程侧）', () => {
+  it('只有上传进度进入记录 sink：下载没有这条腿', () => {
+    expect(stripComments(up)).toContain('this.uploadProgressSink?.(')
+    expect(stripComments(dl), '下载进度不该写进上传记录').not.toContain('uploadProgressSink')
+  })
+
+  it('进度 sink 抛错不得影响传输（记录侧异常隔离）', () => {
+    expect(stripComments(up)).toMatch(/try \{ this\.uploadProgressSink\?\.\([^)]*\) \} catch/)
+  })
+
+  it('resume 短路：仅显式继续时检查，且比对大小 + 前 4KB 头', () => {
+    const bareUp = stripComments(up)
+    expect(bareUp).toContain('if (opts?.resume && await alreadyComplete())')
+    expect(bareUp).toMatch(/st\.size !== total/)
+    expect(bareUp).toContain('localHead.equals(remoteHead)')
+    // .part 在场说明确实没传完，不能直接短路
+    expect(bareUp).toContain('await sftpStat(sftp, partPath)')
+    // 下载侧不接上传的 opts.resume 参数
+    expect(stripComments(dl)).not.toContain('opts?.resume')
+  })
+})

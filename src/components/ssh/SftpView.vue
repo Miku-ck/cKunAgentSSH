@@ -12,7 +12,7 @@
         <!-- 有任务时入口本身就是读数：关掉弹窗也不再是"瞎了"，
              底边那条 2px 是队列总进度，随秒级 tick 走 -->
         <div
-          v-if="store.transfers.length > 0"
+          v-if="queueLiveCount > 0"
           class="live-transfer"
           :class="{ active: showTransferList }"
           role="button"
@@ -268,7 +268,10 @@ const showTransferList = ref(false)
 const now = ref(Date.now())
 let tickTimer: ReturnType<typeof setInterval> | null = null
 function syncTick(): void {
-  const shouldRun = store.activeTransfers.length > 0
+  // 只有「真在跑」才需要秒级时间：暂停行与历史行的 ETA 恒为「—」，让它们驱动
+  // 时钟等于每秒重算一张可能上万行的历史表。上传记录会永久留在列表里，这个差别
+  // 从「偶尔」变成了常态。
+  const shouldRun = store.queueStats.running > 0
   if (shouldRun && !tickTimer) {
     now.value = Date.now()
     tickTimer = setInterval(() => { now.value = Date.now() }, 1000)
@@ -277,12 +280,16 @@ function syncTick(): void {
     tickTimer = null
   }
 }
-watch(() => store.activeTransfers.length, syncTick, { immediate: true })
+watch(() => store.queueStats.running, syncTick, { immediate: true })
 onUnmounted(() => {
   if (tickTimer) { clearInterval(tickTimer); tickTimer = null }
 })
 
 const queueActiveCount = computed(() => store.activeTransfers.length)
+
+/** 会话栏徽标只代表「还有没结束的事」：排队中也算，纯历史记录（done/error）不算，
+ *  否则永远显示「0 个 · 0%」。 */
+const queueLiveCount = computed(() => queueActiveCount.value + store.queueStats.pending)
 
 // ─── 进度订阅 ─────────────────────────
 let unsubProgress: (() => void) | null = null
@@ -506,9 +513,10 @@ async function handleCtxAction(action: string): Promise<void> {
 
   if (action === 'transfer' && entry) {
     // 收集选中项路径（如果当前项在选中集合中，传输所有选中项；否则只传输当前项）
+    // 与拖拽走同一入口：覆盖确认、重命名计划、串行化一个都不能少 —— 原实现
+    // 直调 uploadFiles/downloadFiles，同名文件被静默覆盖。
     const paths = getCtxPaths(side, entry)
-    if (side === 'local') store.uploadFiles(paths)
-    else store.downloadFiles(paths)
+    await onTransfer({ side, paths })
     return
   }
 

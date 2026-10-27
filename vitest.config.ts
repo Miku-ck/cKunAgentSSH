@@ -11,7 +11,9 @@ export default defineConfig({
     // electron/** 也在范围内：数据面会话（gateway-transport）依赖 node:stream/tls，
     // 搬不进 shared/（那边同时被 tsconfig.web 收，而 web 侧没有 node 类型）。
     // 放在代码旁边、由 tsconfig.node 检查，是它唯一能被测到的位置。
-    include: ['src/**/*.{test,spec}.ts', 'electron/**/*.{test,spec}.ts'],
+    // shared/** 必须显式列出：include 是白名单而非「全仓默认」，gateway-mux.test.ts
+    // 从 src/utils 迁到 shared/ 后曾落在白名单外，整组帧层守卫静默脱管。
+    include: ['src/**/*.{test,spec}.ts', 'electron/**/*.{test,spec}.ts', 'shared/**/*.{test,spec}.ts'],
     environment: 'node',
     globals: false,
     // 默认所有 .css 都被替换成空模块 —— variables.test.ts 用 ?raw 读令牌表与

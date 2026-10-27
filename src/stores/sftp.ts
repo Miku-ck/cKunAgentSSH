@@ -11,6 +11,8 @@ import { isUnsafeRemoteName } from '@/utils/remote-name'
 import { basenameLocal } from '@/utils/transfer-conflict'
 import { describeTransferError } from '@/utils/transfer-error'
 import { isActiveTransferStatus, type TransferKind, type TransferStatus } from '@/utils/transfer-format'
+import { sortForRestore, toTransferItem } from '@/utils/upload-task-restore'
+import { nextTransferSeqFrom } from '../../shared/upload-task-core'
 
 /** 并发上限的可调天花板。导出而不是让底栏再抄一份 8 —— 两边一旦分叉，
  *  「+」号会在 store 还在钳的时候先停住，或反过来按下去没反应。 */
@@ -41,6 +43,9 @@ export interface TransferItem {
   groupLabel?: string
   /** 入队时已知的文件字节数（大文件优先排序用；未知为 undefined，视为 0 排末尾） */
   size?: number
+  /** 上次运行被中断（崩溃/断线/应用退出），恢复后为 paused，展示「未完成 · 可继续」。
+   *  与 error 分开：中断不是失败，点继续会接着远端 .part 传。 */
+  interrupted?: boolean
 }
 
 // B20 修复：目录加载请求序号（模块级单调递增）。
@@ -100,6 +105,9 @@ export const useSftpStore = defineStore('sftp', () => {
   const online = ref(false)
   /** 标记当前 SFTP 是否复用终端 SSH 会话（复用时 disconnect 不关闭 SSH 连接） */
   const reusingTerminal = ref(false)
+  /** 当前会话对应的连接配置 id（主进程会话池解析）。断开后保留：离线时也要能
+   *  「清除已结束」本主机的历史记录。空串 = 尚未取得或会话不可归属。 */
+  const activeConnectionId = ref('')
 
   // ─── 双栏目录 ─────────────────────────────────
   const localCwd = ref('')
@@ -213,8 +221,13 @@ export const useSftpStore = defineStore('sftp', () => {
     }
     for (const t of transfers.value) {
       s[t.status]++
-      s.bytesTransferred += t.transferred
-      if (t.total > 0) s.bytesTotal += t.total
+      // 字节只累计未结束的任务：上传记录跨重启保留，完成行永久留在列表里，
+      // 若把它们的字节一起算进分母，新队列的百分比会被历史记录稀释，
+      // 全完成时又钉死在 100%（看起来像还在传）。
+      if (t.status === 'running' || t.status === 'pending' || t.status === 'paused') {
+        s.bytesTransferred += t.transferred
+        if (t.total > 0) s.bytesTotal += t.total
+      }
     }
     return {
       running: s.running,
@@ -230,6 +243,62 @@ export const useSftpStore = defineStore('sftp', () => {
   })
 
   // ─── 绑定 / 解绑 SSH 会话 ────────────────────
+  /** 会话就绪后解析归属 id 并恢复该主机的上传历史。失败只告警不抛：
+   *  记录是附加能力，不能因为它让一条已经连上的会话变成失败。 */
+  async function afterSessionReady(myOpen: number): Promise<void> {
+    try {
+      if (myOpen !== openSeq) return
+      const sid = sshSessionId.value
+      const connId = sid ? await getApi().sftpGetSessionConnectionId(sid) : null
+      if (myOpen !== openSeq) return
+      activeConnectionId.value = connId || ''
+      await restoreUploads()
+    } catch (e) {
+      console.warn('[sftp] 恢复上传记录失败:', e)
+    }
+  }
+
+  /**
+   * 把主进程持有的上传记录并回传输中心（按 id 幂等，不会产生重复行）。
+   * 换主机时先丢掉内存里的上传行：主进程已持久化，属于上一台的行不该和新主机混在一起。
+   */
+  async function restoreUploads(): Promise<void> {
+    const connId = activeConnectionId.value
+    if (!connId) return
+    // 「在跑/在排队」的上传行以内存为准：online 置真到这次列表往返返回之间，
+    // 用户可能已经发起一条新上传，而计数器重启后从 1 重来（bump 在本次循环后才做），
+    // 它的 id 会撞上历史记录。删掉会把在途传输从列表里抹掉，完成后写进一个已脱钩的对象。
+    const isLive = (t: TransferItem): boolean => t.status === 'running' || t.status === 'pending'
+    const kept = transfers.value.filter(t => t.kind !== 'upload' || isLive(t))
+    if (kept.length !== transfers.value.length) {
+      transfers.value = kept
+      reindexTransfers()
+    }
+    const records = await getApi().sftpListUploadTasks(connId)
+    // 列表返回前用户又切了主机：这批属于上一台，丢弃
+    if (activeConnectionId.value !== connId) return
+    if (!Array.isArray(records) || records.length === 0) return
+
+    for (const rec of sortForRestore(records)) {
+      const live = transferById.get(rec.id)
+      if (live && isLive(live)) continue
+      const item = toTransferItem(rec)
+      if (live) Object.assign(live, item)
+      else addTransfer(item)
+      // 主进程仍显示 running/pending：只可能是渲染进程重载而主进程还在传。
+      // 先停住（同 id 重入由主进程的取消闭包查重保证安全），点「继续」再跑。
+      if (rec.status === 'running' || rec.status === 'pending') {
+        const row = live ?? item
+        row.status = 'paused'
+        row.interrupted = true
+        void getApi().sftpPauseUploadTask(rec.id, true).catch(() => {})
+        void getApi().sftpCancel(rec.id).catch(() => {})
+      }
+    }
+    // 历史 id 会撞上重启后从 1 开始的计数器：新上传会覆盖旧记录
+    transferSeq.value = Math.max(transferSeq.value, nextTransferSeqFrom(records))
+  }
+
   /** 直接通过 SSH 连接 + SFTP 子系统打开远程会话(独立于终端会话) */
   async function connect(connection: SSHConnectionRecord): Promise<void> {
     if (online.value) await disconnect()
@@ -256,6 +325,7 @@ export const useSftpStore = defineStore('sftp', () => {
       online.value = true
       remoteCwd.value = '/'
       await loadRemote('/')
+      await afterSessionReady(myOpen)
     } catch (err: any) {
       if (myOpen !== openSeq) {
         try { await getApi().sshDisconnect(id) } catch { }
@@ -307,6 +377,7 @@ export const useSftpStore = defineStore('sftp', () => {
       const target = cwd || '/'
       remoteCwd.value = target
       await loadRemote(target)
+      await afterSessionReady(myOpen)
     } catch (err: any) {
       if (myOpen !== openSeq) {
         // 旧代的失败不改全局在线态、也不弹给用户；自己那条子系统若没被接管就顺手回收
@@ -361,7 +432,19 @@ export const useSftpStore = defineStore('sftp', () => {
     // B10 修复：清空前先对在途（running）任务显式取消并置 cancelled，
     // 避免每个传输 Promise 的 reject 走通用错误路径连弹"上传/下载失败"。
     // 先置状态再发 sftpCancel：CANCELLED 拒绝到达 catch 时看到 cancelled 即静默 return。
+    // 上传例外：断线不等于任务结束 —— 置 paused + interrupted，主进程保留记录与
+    // 远端 .part，重连后可手动继续（下载/复制没有可恢复的远端半成品，仍按取消处理）。
     for (const t of transfers.value) {
+      if (t.kind === 'upload') {
+        if (t.status === 'running' || t.status === 'pending') {
+          t.status = 'paused'
+          t.interrupted = true
+          t.endTime = undefined
+          void getApi().sftpPauseUploadTask(t.id, true).catch(() => { /* 记录侧失败不影响断开 */ })
+          void getApi().sftpCancel(t.id).catch(() => { /* 忽略取消失败 */ })
+        }
+        continue
+      }
       if (t.status === 'running') {
         t.status = 'cancelled'
         t.endTime = Date.now()
@@ -371,15 +454,24 @@ export const useSftpStore = defineStore('sftp', () => {
         void getApi().sftpCancel(t.id).catch(() => { /* 忽略取消失败 */ })
       }
     }
-    // 断开连接时清空传输记录
-    transfers.value = []
+    // 上传行保留（记录在断开后仍可见、可继续）；下载/复制行清空
+    transfers.value = transfers.value.filter(t => t.kind === 'upload')
     reindexTransfers()
   }
 
-  /** 清空已完成的传输记录 */
+  /**
+   * 清空已结束（done/error/cancelled）的传输记录。
+   * 上传的历史在主进程持久化，离线时也能按 activeConnectionId 清掉，否则重连后
+   * 「已清除」的行会原样恢复回来。
+   */
   function clearCompleted(): void {
-    transfers.value = transfers.value.filter(t => t.status === 'running' || t.status === 'paused' || t.status === 'pending')
+    transfers.value = transfers.value.filter(
+      t => t.status === 'running' || t.status === 'paused' || t.status === 'pending',
+    )
     reindexTransfers()
+    if (activeConnectionId.value) {
+      void getApi().sftpClearUploadTasks(activeConnectionId.value).catch(() => { /* 记录侧失败不影响展示 */ })
+    }
   }
 
   // ─── 剪贴板操作 ───────────────────────────────
@@ -805,7 +897,15 @@ async function remoteRefresh(): Promise<void> {
     // 剩余文件上传到另一台主机的同一路径下
     const sid = sshSessionId.value
     const remoteBaseDir = targetDir ?? remoteCwd.value
-    const tasks: Array<{ id: string; localPath: string; remotePath: string; size: number }> = []
+    const tasks: Array<{
+      id: string
+      localPath: string
+      remotePath: string
+      size: number
+      name: string
+      groupId?: string
+      groupLabel?: string
+    }> = []
     // 目录上传涉及的全部远程父目录（去重后并发创建，见循环后）
     const remoteDirs = new Set<string>()
 
@@ -853,7 +953,7 @@ async function remoteRefresh(): Promise<void> {
             groupId, groupLabel,
             size: f.size,
           })
-          tasks.push({ id, localPath: f.localPath, remotePath, size: f.size })
+          tasks.push({ id, localPath: f.localPath, remotePath, size: f.size, name: f.relPath, groupId, groupLabel })
         }
       } else {
         // 文件：直接加入
@@ -865,7 +965,7 @@ async function remoteRefresh(): Promise<void> {
           status: 'pending', startTime: Date.now(),
           size: fileSize,
         })
-        tasks.push({ id, localPath: lp, remotePath: remoteBase, size: fileSize })
+        tasks.push({ id, localPath: lp, remotePath: remoteBase, size: fileSize, name })
       }
     }
 
@@ -880,6 +980,32 @@ async function remoteRefresh(): Promise<void> {
     // 2 MB 窗口），小文件填缝在后，减少"大文件排在一堆小文件后面干等"的
     // 长尾延迟（稳定排序：同大小维持原顺序，目录内相对次序不乱）
     tasks.sort((a, b) => b.size - a.size)
+
+    // 入队即把整批登记为 pending：崩溃后「还没轮到」的文件也在历史里，否则用户
+    // 只看到一条断点，其余文件已被遗忘。登记失败不阻断传输（记录是附加能力）。
+    const registered = tasks.filter(t => transferById.get(t.id)?.status === 'pending')
+    if (registered.length > 0) {
+      try {
+        await getApi().sftpRegisterUploadTasks(sid, registered.map(t => ({
+          id: t.id,
+          localPath: t.localPath,
+          remotePath: t.remotePath,
+          name: t.name,
+          total: t.size,
+          groupId: t.groupId,
+          groupLabel: t.groupLabel,
+        })))
+      } catch (e) {
+        console.warn('[sftp] 上传任务登记失败（不影响传输）:', e)
+      }
+      // 登记往返期间用户已取消/删除的行：取消的补发 sftpCancel 让主进程同步终态，
+      // 删除的移除刚登记进去的记录 —— 否则「删掉后重连又冒出来」
+      for (const t of registered) {
+        const row = transferById.get(t.id)
+        if (!row) void getApi().sftpRemoveUploadTask(t.id).catch(() => { /* ignore */ })
+        else if (row.status === 'cancelled') void getApi().sftpCancel(t.id).catch(() => { /* ignore */ })
+      }
+    }
 
     // F-6 修复：带上 id/kind（runBatch 派发前检查 + 并发门计数）
     runBatch(tasks.map(t => ({ fn: () => runUpload(t.id, sid, t.localPath, t.remotePath), id: t.id, kind: 'upload' as const }))).then(async (results) => {
@@ -1246,18 +1372,34 @@ async function remoteRefresh(): Promise<void> {
     })
   }
 
-  async function runUpload(id: string, sid: string, localPath: string, remotePath: string, attempt = 1): Promise<void> {
+  async function runUpload(
+    id: string,
+    sid: string,
+    localPath: string,
+    remotePath: string,
+    attempt = 1,
+    opts?: { resume?: boolean },
+  ): Promise<void> {
     const t = transferById.get(id)
     if (!t) return
     // F-5 竞态双保险：任务在排队期间被取消则不再启动
     if (t.status === 'cancelled') return
     t.status = 'running'
+    t.interrupted = undefined
+    t.endTime = undefined
     try {
       // 审查 M-18 修复：IPC 契约只有 4 个参数（preload/env.d.ts/main.ts 三处一致）—
       // 原调用多传 resumeOffset + AbortSignal：preload 只透传前 4 参，两者被静默丢弃
       // （AbortSignal 也无法结构化克隆过 IPC）。续传由主进程扫描远端 .part 文件
       // 自动定位断点，暂停/取消走 sftp:cancel（pauseTransfer 已调用）。
-      await getApi().sftpUpload(id, sid, localPath, remotePath)
+      // 第 5 参 meta 只携带展示字段与「是否显式继续」，归属 id 由主进程解析。
+      await getApi().sftpUpload(id, sid, localPath, remotePath, {
+        name: t.name,
+        groupId: t.groupId,
+        groupLabel: t.groupLabel,
+        size: t.size ?? t.total,
+        resume: opts?.resume,
+      })
       t.status = 'done'
       t.endTime = Date.now()
       toast.success(`上传成功: ${t.name}`)
@@ -1285,10 +1427,11 @@ async function remoteRefresh(): Promise<void> {
         // 若用户此刻暂停/取消/删除，醒来后按状态放弃重试
         await sleep(delay)
         if (transferById.get(id)?.status !== 'running') return
-        return runUpload(id, sid, localPath, remotePath, attempt + 1)
+        return runUpload(id, sid, localPath, remotePath, attempt + 1, opts)
       }
       t.status = code === 'CANCELLED' ? 'cancelled' : 'error'
       t.error = message || '上传失败'
+      t.interrupted = undefined
       t.endTime = Date.now()
       // 取消是用户行为，不弹错误 toast
       if (code !== 'CANCELLED') {
@@ -1358,6 +1501,9 @@ async function cancelTransfer(id: string): Promise<void> {
     t.status = 'cancelled'
     t.endTime = Date.now()
     toast.info(`已取消排队任务: ${t.name}`)
+    // 上传已在主进程登记为 pending：补发 sftpCancel 让记录落成 cancelled（保留为
+    // 历史），否则下次启动它会被归一化为「未完成 · 可继续」重新冒出来
+    if (t.kind === 'upload') void getApi().sftpCancel(id).catch(() => { /* ignore */ })
     scheduleRemoveTransfer(id, 10000)
     return
   }
@@ -1400,6 +1546,11 @@ function pauseTransfer(id: string): void {
   }
   // 暂停走主进程 sftp:cancel（AbortSignal 无法跨 IPC，前端不再持控制器）
   t.status = 'paused'
+  // 用户主动暂停不是「中断」：不展示「未完成 · 可继续」的警示语义
+  t.interrupted = undefined
+  // 上传还要让主进程把记录标成 paused，否则崩溃/退出后会被归一化当成中断，
+  // 且「继续」与自动重试的 CANCELLED 谁先到都不会把 paused 覆盖成 cancelled
+  if (t.kind === 'upload') void getApi().sftpPauseUploadTask(id, false).catch(() => { /* ignore */ })
   // 审查修复（P2）：同 disconnect 路径 — 同步 try/catch 捕获不到
   // sftpCancel 返回 Promise 的 reject，改为挂 .catch
   void getApi().sftpCancel(id).catch(() => { /* 忽略取消失败 */ })
@@ -1418,23 +1569,27 @@ function resumeTransfer(id: string): void {
     scheduleRemoveTransfer(id, 10000)
     return
   }
-  t.status = 'running'
+  // 记录可以离线展示，但恢复必须落到一台活着的会话上（sid 已随断开清空）
+  if (!online.value || !sshSessionId.value) {
+    toast.warning('请先连接远程主机再继续传输')
+    return
+  }
+  // 置 pending 交给并发门：恢复一个大目录时会一次性出现几十上百条 paused，
+  // 直接逐条 runUpload 会瞬间开满传输连接（现实现原就有的缺陷）
+  t.status = 'pending'
   t.error = undefined
+  t.interrupted = undefined
+  t.endTime = undefined
   // P3 修复：续传后重置 startTime — 原实现沿用首次传输的 startTime，
   // 速度/剩余时间按总耗时（含暂停间隙）计算而失真。重置后速度/ETA
   // 只反映本段传输。
   t.startTime = Date.now()
-  // 根据方向重新启动传输，从断点处继续
-  // （断点位置由主进程扫描 .part 文件确定，前端无需传递）
-  // 恢复/重试是用户在当前会话上的显式动作 → 用当前活动会话 id
-  if (t.kind === 'upload') {
-    runUpload(id, sshSessionId.value, t.from, t.to)
-  } else {
-    // 审查 M-18 修复：原实现参数写反 runDownload(id, t.to, t.from, ...) —
-    // runDownload 签名是 (id, sid, remotePath, localPath)，而下载记录 from=远程/to=本地，
-    // 写反后断点恢复会把本地路径当远程路径发出去，恢复永远失败
-    runDownload(id, sshSessionId.value, t.from, t.to)
-  }
+  const upload = t.kind === 'upload'
+  // 断点位置由主进程扫描 .part 文件确定，前端只需声明「这是显式继续」
+  const task = upload
+    ? () => runUpload(id, sshSessionId.value, t.from, t.to, 1, { resume: true })
+    : () => runDownload(id, sshSessionId.value, t.from, t.to)
+  void runBatch([{ fn: task, id, kind: t.kind }]).catch(() => { /* 单条失败已由 run* 内部分类 */ })
 }
 
 /**
@@ -1445,7 +1600,7 @@ function resumeTransfer(id: string): void {
 function retryTransfer(id: string): void {
   const t = transferById.get(id)
   if (!t) return
-  const { kind, name, from, to, groupId, groupLabel } = t
+  const { kind, name, from, to, groupId, groupLabel, size } = t
   // direction 由 kind 唯一决定：upload/copy-local→up、download/copy-remote→down
   // （见各 push 点）。原式只判 'upload'，重试同侧本地复制会把方向图标翻成 'down'。
   const direction: 'up' | 'down' = kind === 'upload' || kind === 'copy-local' ? 'up' : 'down'
@@ -1458,6 +1613,8 @@ function retryTransfer(id: string): void {
     status: 'pending', startTime: Date.now(),
     // 分组随原任务一起续命：重试目录里的单个文件不该把它甩出组头变成一条平铺行
     groupId, groupLabel,
+    // 保留入队时的大小，重试记录（主进程侧）才不会把总量写成 0
+    size,
   })
   const task: () => Promise<void> =
     // 手动重试是当前上下文里的显式动作：投递到此刻的活动会话
@@ -1479,6 +1636,11 @@ function removeTransfer(id: string): void {
     }
     const idx = transfers.value.findIndex(t => t.id === id)
     if (idx >= 0) transfers.value.splice(idx, 1)
+    // 上传行有对应的持久记录：删行 = 用户不想再看到它。远端 .part 刻意保留
+    // （清记录是只读展示操作，不替用户删远端数据）
+    if (transferById.get(id)?.kind === 'upload') {
+      void getApi().sftpRemoveUploadTask(id).catch(() => { /* 记录侧失败不影响本地移除 */ })
+    }
     transferById.delete(id)
   }
 
@@ -1500,6 +1662,9 @@ function removeTransfer(id: string): void {
   }
 
   function scheduleRemoveTransfer(id: string, delay = 3000): void {
+    // 上传记录跨重启保留、只有手动清除才删除：成功后 3s / 失败后 10s 自动消失
+    // 会让「记录」这一产品承诺形同虚设。下载/复制保持原有的自动清理。
+    if (transferById.get(id)?.kind === 'upload') return
     // 同一 id 重复调度时先清旧定时器，避免多个定时器重复回调
     const existing = removeTimers.get(id)
     if (existing) clearTimeout(existing)
@@ -1524,14 +1689,14 @@ function removeTransfer(id: string): void {
 
   return {
     // state
-    sshSessionId, connectionName, connectionHost, online,
+    sshSessionId, connectionName, connectionHost, online, activeConnectionId,
     localCwd, remoteCwd, localEntries, remoteEntries,
     loadingLocal, loadingRemote, localError, remoteError,
     selectedLocal, selectedRemote, transfers, clipboard,
     // computed
     activeTransfers, queueStats,
     // session
-    connect, connectFromTerminal, disconnect,
+    connect, connectFromTerminal, disconnect, restoreUploads,
     // clipboard
     copyToClipboard,
     // local

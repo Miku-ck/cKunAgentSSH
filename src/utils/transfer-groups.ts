@@ -26,6 +26,8 @@ export interface GroupableTransfer {
   error?: string
   groupId?: string
   groupLabel?: string
+  /** 上次运行被中断（崩溃/断线）⇒ 行内提示「未完成 · 可继续」 */
+  interrupted?: boolean
 }
 
 /** TransferRow.vue 的 props 形状。定义在逻辑侧，组件与调用方共用一份。 */
@@ -46,6 +48,8 @@ export interface TransferRowView {
   startTime: number
   endTime?: number
   error?: string
+  /** 中断任务：paused 行提示可继续（与普通暂停区分） */
+  interrupted?: boolean
   /** 动作要作用的 transfer id 列表：单行 1 个，组头 = 组内全部 */
   ids: string[]
   /** 组头专用：因渲染上限而未展开的子项数 */
@@ -108,7 +112,7 @@ function buildSingleUnit(t: GroupableTransfer, isChild: boolean): TransferRowVie
     isChild,
     expanded: false,
     label: t.name,
-    meta: '',
+    meta: t.interrupted ? '未完成 · 可继续' : '',
     from: t.from,
     to: t.to,
     direction: t.direction,
@@ -119,6 +123,7 @@ function buildSingleUnit(t: GroupableTransfer, isChild: boolean): TransferRowVie
     startTime: t.startTime,
     endTime: t.endTime,
     error: t.status === 'error' ? `失败：${t.error || '未知原因'}` : undefined,
+    interrupted: t.interrupted,
     ids: [t.id],
   }
 }
@@ -126,13 +131,14 @@ function buildSingleUnit(t: GroupableTransfer, isChild: boolean): TransferRowVie
 function buildGroupUnit(gid: string, items: GroupableTransfer[], expanded: boolean): TransferRowView {
   const ranked = [...items].sort((a, b) => STATUS_RANK[a.status] - STATUS_RANK[b.status])
   const head = ranked[0]
+  const interrupted = items.some(t => t.interrupted)
   return {
     key: `g:${gid}`,
     isGroup: true,
     isChild: false,
     expanded,
     label: head.groupLabel || gid,
-    meta: `${items.filter(t => t.status === 'done').length} / ${items.length} 个文件`,
+    meta: `${items.filter(t => t.status === 'done').length} / ${items.length} 个文件${interrupted ? ' · 可继续' : ''}`,
     from: commonDir(items.map(t => t.from)),
     to: commonDir(items.map(t => t.to)),
     direction: head.direction,
@@ -141,6 +147,7 @@ function buildGroupUnit(gid: string, items: GroupableTransfer[], expanded: boole
     transferred: items.reduce((s, t) => s + t.transferred, 0),
     total: items.reduce((s, t) => s + t.total, 0),
     startTime: earliestStart(items),
+    interrupted,
     ids: items.map(t => t.id),
   }
 }
