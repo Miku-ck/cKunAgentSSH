@@ -143,7 +143,7 @@ defineExpose({ open, close })
   background: var(--bg-elevated);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-lg);
   font-family: var(--font-sans);
   color: var(--text-primary);
   overflow: hidden;

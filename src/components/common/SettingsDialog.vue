@@ -243,7 +243,7 @@ defineExpose({ open, close })
   background: var(--canvas-bg);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
   overflow: hidden;

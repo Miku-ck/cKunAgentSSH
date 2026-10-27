@@ -15,33 +15,18 @@
  *  - ConnectionModal.vue：他人未提交改动占着该文件，合并后再统一（见台账）。
  */
 import { describe, expect, it } from 'vitest'
-import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
-import { join, relative } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { SRC, rel, walk } from './fs-walk'
 
-const SRC = fileURLToPath(new URL('..', import.meta.url))
 const ALLOWED = ['App.vue', 'ConnectionModal.vue']
-
-function walk(dir: string): string[] {
-  const out: string[] = []
-  for (const name of readdirSync(dir)) {
-    const full = join(dir, name)
-    if (statSync(full).isDirectory()) {
-      if (name === 'node_modules') continue
-      out.push(...walk(full))
-    } else if (name.endsWith('.vue') || name.endsWith('.css')) {
-      out.push(full)
-    }
-  }
-  return out
-}
 
 const maskPattern = /background:\s*rgba\(\s*0\s*,\s*0\s*,\s*0\s*,\s*\.?\d/
 
 describe('浮层遮罩走令牌', () => {
   const offenders = walk(SRC)
     .filter((f) => maskPattern.test(readFileSync(f, 'utf8')))
-    .map((f) => relative(SRC, f).replace(/\\/g, '/'))
+    .map((f) => rel(f))
     .filter((f) => !ALLOWED.some((a) => f.endsWith(a)))
 
   it('没有新的字面遮罩漏进来', () => {
@@ -79,7 +64,7 @@ describe('浮层遮罩走令牌', () => {
         // 声明块可能写成一行，也可能换行展开：允许前后 3 行内出现模糊
         const block = lines.slice(Math.max(0, i - 3), i + 4).join('\n')
         if (!block.includes('backdrop-filter: blur(2px)')) {
-          missing.push(`${relative(SRC, file).replace(/\\/g, '/')}:${i + 1}`)
+          missing.push(`${rel(file)}:${i + 1}`)
         }
       })
     }

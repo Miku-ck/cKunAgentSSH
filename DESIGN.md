@@ -83,6 +83,7 @@ App.vue (flex column, 100vh)
 - 浮层遮罩：一律 `var(--scrim)` + `blur(2px)`（随主题染色；浅色/手记主题下不会压出冷黑）。z-index：普通弹窗 1000–1200、`BaseModal`/Docker 弹窗 2000、确认框 3000。
 - 设置弹窗：overlay 同上 `--scrim` + `blur(2px)` `z-index:2000`；`dialog` `clamp(960px,90vw,1280px) × clamp(640px,88vh,860px)`，左导航 200px。确认框：宽 380px，`z-index:3000`。过渡 `opacity .15s` + 内容 `scale(.96~.97)`。
 - 历史记录弹窗：`width: min(560px, 100vw - 48px)`、`max-height: min(640px, 100vh - 96px)`，居中；overlay 读 `--scrim`（随主题染色）+ `blur(2px)`，`z-index:2000`。
+- 浮层投影：一律 `var(--shadow-lg)`；控件级微投影用 `--shadow-sm`，组件里不另写 px 阴影。同一个弹窗家族里投影深浅不一，比“投影略轻”更难解释。
 
 ---
 

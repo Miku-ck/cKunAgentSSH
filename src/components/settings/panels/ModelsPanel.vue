@@ -973,7 +973,7 @@ function formatTokenCount(n: number): string {
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
   border-radius: 10px;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-lg);
   width: 90vw;
   max-width: 480px;
   max-height: 85vh;
