@@ -308,12 +308,12 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
 .transfer-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--scrim);
+  backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1000;
-  backdrop-filter: blur(2px);
 }
 .tc {
   /* 1180 不是随手加的：路径独立成列后，固定列合计 812px + 8 条 8px 间隙 + 内缩与滚动条，

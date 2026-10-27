@@ -143,7 +143,8 @@ watch(
 <style scoped>
 .conflict-overlay {
   position: fixed; inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--scrim);
+  backdrop-filter: blur(2px);
   display: flex; align-items: center; justify-content: center;
   z-index: 1200;
 }

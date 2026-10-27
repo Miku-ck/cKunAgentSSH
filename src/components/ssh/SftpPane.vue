@@ -729,7 +729,8 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
 /* 新建文件夹对话框（风格与 SftpView 的 rename 对话框一致） */
 .mkdir-overlay {
   position: fixed; inset: 0;
-  background: rgba(0,0,0,0.6);
+  background: var(--scrim);
+  backdrop-filter: blur(2px);
   display: flex; align-items: center; justify-content: center;
   z-index: 1001;
 }

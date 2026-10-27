@@ -104,7 +104,7 @@ defineExpose({ openEdit })
 
 <style scoped>
 /* 弹窗与 TOFU 确认；列表行由 GatewayRow 渲染，新建走 NewConnectionDialog，本组件只管编辑与首次信任。 */
-.overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; align-items: center; justify-content: center; z-index: 1000; }
+.overlay { position: fixed; inset: 0; background: var(--scrim); backdrop-filter: blur(2px); display: none; align-items: center; justify-content: center; z-index: 1000; }
 .overlay.show { display: flex; }
 .modal {
   width: 520px;

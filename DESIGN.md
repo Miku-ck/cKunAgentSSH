@@ -80,7 +80,8 @@ App.vue (flex column, 100vh)
 - 首页恒在、不可关闭，不占标签；运行过程长在首页下方（勿做成标签页）。
 - AI 只有一个界面：首页任务台。顶栏「AI」入口与 `Ctrl+Shift+B` 都是回到任务台，
   不再另有一块右侧面板（2026-10-20 退役）。
-- 设置弹窗：`overlay` `rgba(0,0,0,.6)` + `blur(2px)` `z-index:2000`；`dialog` `clamp(960px,90vw,1280px) × clamp(640px,88vh,860px)`，左导航 200px。确认框：宽 380px，`z-index:3000`。过渡 `opacity .15s` + 内容 `scale(.96~.97)`。
+- 浮层遮罩：一律 `var(--scrim)` + `blur(2px)`（随主题染色；浅色/手记主题下不会压出冷黑）。z-index：普通弹窗 1000–1200、`BaseModal`/Docker 弹窗 2000、确认框 3000。
+- 设置弹窗：overlay 同上 `--scrim` + `blur(2px)` `z-index:2000`；`dialog` `clamp(960px,90vw,1280px) × clamp(640px,88vh,860px)`，左导航 200px。确认框：宽 380px，`z-index:3000`。过渡 `opacity .15s` + 内容 `scale(.96~.97)`。
 - 历史记录弹窗：`width: min(560px, 100vw - 48px)`、`max-height: min(640px, 100vh - 96px)`，居中；overlay 读 `--scrim`（随主题染色）+ `blur(2px)`，`z-index:2000`。
 
 ---
@@ -100,7 +101,7 @@ App.vue (flex column, 100vh)
 
 **文件类型图标**（上一条的唯一例外）[FileTypeIcon.vue](src/components/icons/FileTypeIcon.vue)：通用类型仍按描边画、颜色读 `--accent-*`；品牌类型（41 枚，simple-icons CC0 vendor 成常量）按填充画、颜色取公布品牌色且**刻意不随主题变**，靠一层 `color-mix(--text-primary 55%)` 的 `paint-order: stroke` 底衬在浅底/米纸上兜轮廓。判据单一来源 `src/components/icons/file-type-icons.ts`，扩展名与文件名只登记一次，别再往组件里抄清单。
 
-**标签状态点**：6px 圆点，活动 `--accent-primary` / 重连中 `--status-warn-text` 脉冲 / 断连放弃 `--accent-red`；判据单一来源 `src/utils/tabStatus.ts`（标签栏、溢出菜单、MRU 切换器三处共用）。
+**标签状态点**：6px 圆点，活动 `--accent-primary` / 重连中 `--status-warn-text` 脉冲 / 断连放弃 `--accent-red`；判据单一来源 `src/utils/tab-status.ts`（标签栏、溢出菜单、MRU 切换器三处共用）。
 
 **目录**：`components/` 按域分 `common|ssh|agent|chat|home|settings|icons`；逻辑 `composables/`；状态 `stores/`（Pinia）。
 

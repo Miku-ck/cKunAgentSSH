@@ -14,7 +14,7 @@
 /* ── 遮罩与弹窗骨架 ── */
 .dt-overlay {
   position: fixed; inset: 0; z-index: 2000; display: flex; align-items: center; justify-content: center;
-  background: rgba(0, 0, 0, .6); backdrop-filter: blur(2px);
+  background: var(--scrim); backdrop-filter: blur(2px);
 }
 .dt-dialog {
   width: min(820px, 100vw - 48px); height: min(78vh, 100vh - 96px);
@@ -142,7 +142,7 @@
 /* ── 连接选择器与镜像拉取弹窗（类名 dk-* 避让仪表盘 dc-*；全仓只此两处使用，可以裸写） ── */
 .dk-overlay {
   position: fixed; inset: 0; z-index: 2000; display: flex; align-items: center; justify-content: center;
-  background: rgba(0, 0, 0, .6); backdrop-filter: blur(2px);
+  background: var(--scrim); backdrop-filter: blur(2px);
 }
 .dk-dialog {
   width: min(420px, 100vw - 48px); max-height: min(460px, 100vh - 96px);

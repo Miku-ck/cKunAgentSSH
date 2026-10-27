@@ -223,7 +223,8 @@ function onKeydown(e: KeyboardEvent): void {
   position: fixed;
   inset: 0;
   z-index: 10000;
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--scrim);
+  backdrop-filter: blur(2px);
   display: flex;
   justify-content: center;
   align-items: flex-start;

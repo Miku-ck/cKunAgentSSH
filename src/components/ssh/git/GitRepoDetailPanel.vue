@@ -711,6 +711,7 @@ onMounted(() => { void load() })
   inset: 0;
   z-index: 90;
   background: var(--scrim);
+  backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
   justify-content: center;
