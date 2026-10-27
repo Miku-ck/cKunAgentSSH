@@ -15,6 +15,10 @@ import { nextTick, type Ref } from 'vue'
  *
  * Esc 不在这里：各弹窗的 Esc 优先级不同（比如编辑器要先问「未保存的更改」），
  * 交给调用方按自己的链路处理。
+ *
+ * 弹窗叠层（编辑器上面再压一个「未保存的更改」确认框）时用 suspend()/resume()：
+ * 下层停拦 Tab、也不动焦点，但 prevFocus 留着 —— 整叠关完才回到触发器。
+ * 两层都挂 window 监听的话，一次 Tab 被两份环形各拦一次，焦点会互相踢。
  */
 
 const FOCUSABLE =
@@ -28,6 +32,7 @@ export interface ModalFocusOptions {
 export function useModalFocusTrap(dialogRef: Ref<HTMLElement | null>, options: ModalFocusOptions = {}) {
   let prevFocus: HTMLElement | null = null
   let active = false
+  let suspended = false
 
   function focusables(): HTMLElement[] {
     return dialogRef.value ? Array.from(dialogRef.value.querySelectorAll<HTMLElement>(FOCUSABLE)) : []
@@ -75,10 +80,25 @@ export function useModalFocusTrap(dialogRef: Ref<HTMLElement | null>, options: M
   function deactivate() {
     if (!active) return
     active = false
+    suspended = false
     window.removeEventListener('keydown', onKeydown, true)
     if (prevFocus && prevFocus.isConnected) prevFocus.focus()
     prevFocus = null
   }
 
-  return { activate, deactivate, isActive: () => active }
+  /** 上层弹窗接管：停拦 Tab，但既不还原焦点也不丢掉 prevFocus */
+  function suspend() {
+    if (!active || suspended) return
+    suspended = true
+    window.removeEventListener('keydown', onKeydown, true)
+  }
+
+  /** 上层弹窗关掉：恢复拦截，焦点已在原处，不重新聚焦 */
+  function resume() {
+    if (!active || !suspended) return
+    suspended = false
+    window.addEventListener('keydown', onKeydown, true)
+  }
+
+  return { activate, deactivate, suspend, resume, isActive: () => active }
 }

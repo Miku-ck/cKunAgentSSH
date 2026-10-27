@@ -77,7 +77,7 @@
     <!-- 连接选择模态 -->
     <Teleport to="body">
     <div v-if="showConnPicker" class="conn-overlay" @click.self="showConnPicker = false">
-      <div class="conn-dialog" role="dialog" aria-modal="true" aria-label="选择 SSH 连接">
+      <div ref="connRef" class="conn-dialog" role="dialog" aria-modal="true" aria-label="选择 SSH 连接" tabindex="-1">
         <div class="conn-dialog-header">
           <span>选择 SSH 连接</span>
           <button class="conn-close" @click="showConnPicker = false">×</button>
@@ -91,7 +91,11 @@
             :key="conn.id"
             class="conn-item"
             :class="{ disabled: connecting }"
+            role="button"
+            tabindex="0"
             @click="handleConnect(conn)"
+            @keydown.enter.prevent="handleConnect(conn)"
+            @keydown.space.prevent="handleConnect(conn)"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
             <div class="conn-item-info">
@@ -164,14 +168,13 @@
     <!-- 重命名/新建对话框 -->
     <Teleport to="body">
     <div v-if="renameDialog.visible" class="rename-overlay" @click.self="renameDialog.visible = false">
-      <div class="rename-dialog" role="dialog" aria-modal="true" aria-labelledby="sftp-rename-title">
+      <div ref="renameRef" class="rename-dialog" role="dialog" aria-modal="true" aria-labelledby="sftp-rename-title" tabindex="-1">
         <div id="sftp-rename-title" class="rename-title">{{ renameDialog.isNew ? '新建文件夹' : '重命名' }}</div>
         <input
           ref="renameInput"
           v-model="renameDialog.name"
           class="rename-input"
           @keydown.enter="confirmRename"
-          @keydown.escape="renameDialog.visible = false"
         />
         <div class="rename-actions">
           <button class="rename-btn cancel" @click="renameDialog.visible = false">取消</button>
@@ -184,14 +187,13 @@
     <!-- 压缩包文件名对话框 -->
     <Teleport to="body">
     <div v-if="zipDialog.visible" class="rename-overlay" @click.self="zipDialog.visible = false">
-      <div class="rename-dialog" role="dialog" aria-modal="true" aria-label="压缩为 zip">
+      <div ref="zipRef" class="rename-dialog" role="dialog" aria-modal="true" aria-label="压缩为 zip" tabindex="-1">
         <div class="rename-title">压缩为 zip</div>
         <input
           ref="zipInput"
           v-model="zipDialog.name"
           class="rename-input"
           @keydown.enter="confirmZip"
-          @keydown.escape="zipDialog.visible = false"
         />
         <div class="rename-actions">
           <button class="rename-btn cancel" @click="zipDialog.visible = false">取消</button>
@@ -244,6 +246,7 @@ import { useSftpStore } from '@/stores/sftp'
 import { useSSHStore } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
+import { useModalFocusTrap } from '@/composables/useModalFocusTrap'
 import { isPreviewable, isImagePreviewable } from '@/utils/language'
 import { toFriendlyMessage } from '@/api/client'
 import { buildTransferPlan, type ConflictDecision, type ConflictItem, type ConflictMeta } from '@/utils/transfer-conflict'
@@ -668,6 +671,29 @@ const zipDialog = reactive({
 })
 const zipInput = ref<HTMLInputElement | null>(null)
 
+// 三个自绘弹窗的焦点：容器带 tabindex="-1" 接住初始焦点，打开时圈 Tab、
+// 关闭后还给触发的那一行（连接按钮 / 右键菜单所在行）
+const connRef = ref<HTMLElement | null>(null)
+const renameRef = ref<HTMLElement | null>(null)
+const zipRef = ref<HTMLElement | null>(null)
+const connTrap = useModalFocusTrap(connRef)
+// 两个命名单框本来就自己聚焦输入框；这里给 initialFocus 只是为了别让环形从容器起步
+const renameTrap = useModalFocusTrap(renameRef, { initialFocus: '.rename-input' })
+const zipTrap = useModalFocusTrap(zipRef, { initialFocus: '.rename-input' })
+watch(showConnPicker, (v) => { if (v) connTrap.activate(); else connTrap.deactivate() })
+watch(() => renameDialog.visible, (v) => { if (v) renameTrap.activate(); else renameTrap.deactivate() })
+watch(() => zipDialog.visible, (v) => { if (v) zipTrap.activate(); else zipTrap.deactivate() })
+// Esc：原先只写在两个输入框上（@keydown.escape），焦点一旦落到取消按钮就失效；
+// 连接选择则根本没有。统一收到 window，按「后开的先关」排优先级。
+function onDialogKey(e: KeyboardEvent): void {
+  if (e.key !== 'Escape') return
+  if (zipDialog.visible) zipDialog.visible = false
+  else if (renameDialog.visible) renameDialog.visible = false
+  else if (showConnPicker.value) showConnPicker.value = false
+}
+onMounted(() => window.addEventListener('keydown', onDialogKey))
+onUnmounted(() => window.removeEventListener('keydown', onDialogKey))
+
 function openZipDialog(paths: string[], defaultName: string, side: 'local' | 'remote'): void {
   zipDialog.paths = paths
   zipDialog.name = defaultName
@@ -878,6 +904,8 @@ async function onFileSaved(): Promise<void> {
   display: flex;
   flex-direction: column;
   box-shadow: var(--shadow-lg);
+  /* 容器只是初始焦点落点（tabindex=-1），描边交给里面的连接项 */
+  outline: none;
 }
 .conn-dialog-header {
   display: flex; align-items: center; justify-content: space-between;
@@ -947,6 +975,8 @@ async function onFileSaved(): Promise<void> {
   padding: 20px;
   width: 320px;
   box-shadow: var(--shadow-lg);
+  /* 容器只是初始焦点落点（tabindex=-1），描边交给里面的输入框 */
+  outline: none;
 }
 .rename-title {
   font-size: 14px; font-weight: 600;

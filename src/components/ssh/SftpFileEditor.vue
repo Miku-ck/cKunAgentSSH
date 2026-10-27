@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
   <div v-if="visible" class="editor-overlay" @click.self="handleClose">
-    <div class="editor-dialog" role="dialog" aria-modal="true" :aria-label="'编辑文件：' + name">
+    <div ref="editorRef" class="editor-dialog" role="dialog" aria-modal="true" :aria-label="'编辑文件：' + name" tabindex="-1">
       <!-- 头部 -->
       <div class="editor-header">
         <div class="header-left">
@@ -76,7 +76,7 @@
 
     <!-- 未保存关闭确认 -->
     <div v-if="unsavedDialog.visible" class="unsaved-overlay" @click.self="dismissUnsavedDialog">
-      <div class="unsaved-dialog" role="dialog" aria-modal="true" aria-label="未保存的更改">
+      <div ref="unsavedRef" class="unsaved-dialog" role="dialog" aria-modal="true" aria-label="未保存的更改" tabindex="-1">
         <div class="unsaved-header">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
             <circle cx="12" cy="12" r="10"/>
@@ -108,6 +108,7 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick, markRaw } from 
 // 经 monaco-setup.loadMonaco() 在首次打开编辑器时动态加载；此处仅类型引用（编译期擦除）
 import type * as MonacoNs from 'monaco-editor/esm/vs/editor/editor.api.js'
 import { loadMonaco } from '@/monaco-setup'
+import { useModalFocusTrap } from '../../composables/useModalFocusTrap'
 import { getLanguage } from '@/utils/language'
 import { useToastStore } from '@/stores/toast'
 import { toFriendlyMessage } from '@/api/client'
@@ -156,13 +157,34 @@ const unsavedDialog = ref({
   visible: false,
 })
 
+// 两层弹窗：编辑器本体一层，「未保存的更改」压在自己上面又一层。
+// 上层开了就让下层 suspend —— 两份 window 监听同时拦 Tab，焦点会互相踢。
+const editorRef = ref<HTMLElement | null>(null)
+const unsavedRef = ref<HTMLElement | null>(null)
+const editorTrap = useModalFocusTrap(editorRef)
+const unsavedTrap = useModalFocusTrap(unsavedRef, { initialFocus: '.unsaved-btn.save' })
+watch(
+  () => unsavedDialog.value.visible,
+  (v) => {
+    if (v) {
+      editorTrap.suspend()
+      unsavedTrap.activate()
+    } else {
+      unsavedTrap.deactivate()
+      editorTrap.resume()
+    }
+  },
+)
+
 // visible 变 true 时加载文件
 watch(
   () => props.visible,
   async (v) => {
     if (v) {
+      editorTrap.activate()
       await loadFile()
     } else {
+      editorTrap.deactivate()
       disposeEditor()
     }
   },
@@ -367,6 +389,7 @@ async function saveAndClose(): Promise<void> {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown)
+  editorTrap.deactivate()
   // Optimization 修复：清理未触发的布局定时器
   _layoutTimers.forEach(t => clearTimeout(t))
   disposeEditor()
@@ -396,6 +419,8 @@ onUnmounted(() => {
   flex-direction: column;
   overflow: hidden;
   box-shadow: var(--shadow-lg);
+  /* 容器只是初始焦点落点（tabindex=-1），描边交给里面的按钮 */
+  outline: none;
 }
 
 /* 头部 */
@@ -612,6 +637,8 @@ onUnmounted(() => {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   overflow: hidden;
+  /* 容器只是初始焦点落点（tabindex=-1），描边交给里面的按钮 */
+  outline: none;
 }
 .unsaved-header {
   display: flex;

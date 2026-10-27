@@ -85,7 +85,7 @@ App.vue (flex column, 100vh)
 - 历史记录弹窗：`width: min(560px, 100vw - 48px)`、`max-height: min(640px, 100vh - 96px)`，居中；overlay 读 `--scrim`（随主题染色）+ `blur(2px)`，`z-index:2000`。
 - 浮层投影：一律 `var(--shadow-lg)`；控件级微投影用 `--shadow-sm`，组件里不另写 px 阴影。同一个弹窗家族里投影深浅不一，比“投影略轻”更难解释。
 - 圆角：一律 `var(--radius-sm/md/lg)`。字面 4/6/8px 与默认主题同值，深色下看不出毛病，切到「手记」（2/3/4）就不跟随主题了；守卫 `styles/radius.guards.test.ts` 专拦这三档。其余字面值（2/3/5/7/9/10/12px、999px 胶囊、50% 圆形）没有对应令牌，要动先加令牌，别在组件里就地发明数值。
-- 键盘焦点：全局 `:focus-visible` 给 2px 主色描边。表单控件（`input`/`select`/`textarea`/`role="switch"`）另有一条 `!important` 底线 —— 组件里的 `outline: none` 权重高于全局伪类，那条底线只为保证 Tab 到时看得见焦点（鼠标点击不命中 `:focus-visible`，观感不变）。弹窗的 Tab 环形与「关闭后焦点还给触发器」走 [useModalFocusTrap.ts](src/composables/useModalFocusTrap.ts)（`activate()` / `deactivate()`）：容器带 `tabindex="-1"`，初始焦点位置靠 `initialFocus` 选择器。Esc 不在这份共享件里 —— 各弹窗的 Esc 优先级不同（编辑器要先问「未保存的更改」），自己管。
+- 键盘焦点：全局 `:focus-visible` 给 2px 主色描边。表单控件（`input`/`select`/`textarea`/`role="switch"`）另有一条 `!important` 底线 —— 组件里的 `outline: none` 权重高于全局伪类，那条底线只为保证 Tab 到时看得见焦点（鼠标点击不命中 `:focus-visible`，观感不变）。弹窗的 Tab 环形与「关闭后焦点还给触发器」走 [useModalFocusTrap.ts](src/composables/useModalFocusTrap.ts)（`activate()` / `deactivate()`）：容器带 `tabindex="-1"`，初始焦点位置靠 `initialFocus` 选择器。Esc 不在这份共享件里 —— 各弹窗的 Esc 优先级不同（编辑器要先问「未保存的更改」），自己管。弹窗叠层（编辑器上再压一个确认框）时，下层用 `suspend()` 让位、上层关掉后 `resume()`：两层都挂 window 监听的话，一次 Tab 会被两份环形各拦一次，焦点互相踢。
 
 ---
 

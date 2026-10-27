@@ -78,6 +78,8 @@ describe('弹窗焦点管理', () => {
       'components/ssh/docker/DockerVolumeDetailDialog.vue',
       'views/ssh/DashboardView.vue',
       'components/ssh/git/GitReposPanel.vue',
+      'components/ssh/SftpView.vue',
+      'components/ssh/SftpFileEditor.vue',
     ]
     for (const file of files) {
       const src = read(file)
@@ -89,6 +91,49 @@ describe('弹窗焦点管理', () => {
       // 自绘遮罩的弹窗自己管 Esc；上面这批原先四个里一个都没有
       expect(src, `${file} 没有 Esc 退出路径`).toContain('Escape')
     }
+  })
+
+  it('弹窗叠层：上层压上来时下层让位，不抢 Tab 也不还原焦点', () => {
+    // 编辑器的「未保存的更改」确认框就压在自己上面。两层都挂 window 监听的话
+    // 一次 Tab 会被两个 set 各拦一次、焦点互相踢，所以要有暂停/恢复。
+    expect(trap).toContain('function suspend()')
+    expect(trap).toContain('function resume()')
+    expect(trap).toContain('return { activate, deactivate, suspend, resume')
+
+    const editor = read('components/ssh/SftpFileEditor.vue')
+    expect(editor).toContain("from '../../composables/useModalFocusTrap'")
+    // 编辑器本体一层、未保存确认框一层
+    expect(editor).toMatch(/useModalFocusTrap\(\s*editorRef/)
+    expect(editor).toMatch(/useModalFocusTrap\(\s*unsavedRef/)
+    expect(editor).toContain('.suspend()')
+    expect(editor).toContain('.resume()')
+    expect(editor).toMatch(/initialFocus:\s*'\.unsaved-btn\.save'/)
+  })
+
+  it('SFTP 主视图的三个弹窗接上，连接列表可用键盘选中', () => {
+    const view = read('components/ssh/SftpView.vue')
+    // 连接选择 / 重命名·新建 / 压缩包命名
+    expect(view).toMatch(/useModalFocusTrap\(\s*connRef/)
+    expect(view).toMatch(/useModalFocusTrap\(\s*renameRef/)
+    expect(view).toMatch(/useModalFocusTrap\(\s*zipRef/)
+    // three 个弹窗容器都要能接住初始焦点
+    expect(view.match(/tabindex="-1"/g)?.length ?? 0).toBeGreaterThanOrEqual(3)
+    // Esc 从「只绑在输入框上」改为 window 级统一出口
+    expect(view).toContain("e.key !== 'Escape'")
+    // 连接条目此前是纯 div + @click：键盘根本选不到
+    expect(view).toMatch(/class="conn-item"[\s\S]{0,200}?tabindex="0"/)
+    expect(view).toMatch(/@keydown\.enter[^\n]*handleConnect/)
+  })
+
+  it('两处「选择 SSH 连接」列表能用键盘选（SFTP / 终端首页）', () => {
+    // 两处都是 div + @click：弹窗能弹出、也能 Tab 到，但列表项根本进不了 Tab 序。
+    const sftp = read('components/ssh/SftpView.vue')
+    expect(sftp).toMatch(/class="conn-item"[\s\S]{0,200}?tabindex="0"/)
+    expect(sftp).toMatch(/@keydown\.enter[^\n]*handleConnect/)
+
+    const dash = read('views/ssh/DashboardView.vue')
+    expect(dash).toMatch(/class="dc-item"[\s\S]{0,200}?tabindex="0"/)
+    expect(dash).toMatch(/@keydown\.enter[^\n]*handleConnect/)
   })
 
   it('DESIGN.md 记着「焦点管理走共享件」', () => {
