@@ -10,8 +10,6 @@
 """
 import base64
 
-import pytest
-
 from agent.harness.contracts import NoOpUndo, RunContext
 from agent.harness.saddle import FileContentUndo, ShellUndo, UndoBuilder
 from agent.harness.undo_serial import (

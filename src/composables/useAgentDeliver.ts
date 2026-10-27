@@ -325,6 +325,27 @@ function armTimeout(delivery: ToolDelivery): void {
  * 把命令写入可见终端并按 BEGIN/END 哨兵开始捕获。
  * 自动交付与确认通过共用此路径。
  */
+/** 交付哨兵模板：按 shell 家族生成 BEGIN/END 包裹行（导出仅为测试缝）。
+ *
+ * CMD 的退出码必须写 `%%ERRORLEVEL%%` 并经 `call echo` 二次展开：cmd.exe 对
+ * `&` 连接的整行在执行前做一次性的解析期展开，直接写 `%ERRORLEVEL%` 携带的
+ * 是命令执行前的旧值（干净会话恒报成功、有过失败则后续全误报失败）。
+ * PowerShell 的 `$LASTEXITCODE` 对纯 cmdlet 不更新（会话起始为空时 END 行
+ * 渲染成 `m:`，被解析端折成 exit 0）——cmdlet 失败可能报成功，属已知取舍。 */
+export function sentinelFor(
+  shellFamily: 'posix' | 'cmd' | 'powershell',
+  marker: string,
+  command: string,
+): string {
+  if (shellFamily === 'cmd') {
+    return `echo __AGENT_BEGIN__ ${marker} & ${command} & call echo __AGENT_END__ ${marker}:%%ERRORLEVEL%%`
+  }
+  if (shellFamily === 'powershell') {
+    return `echo __AGENT_BEGIN__ ${marker}; ${command}; echo __AGENT_END__ ${marker}:$LASTEXITCODE`
+  }
+  return `echo __AGENT_BEGIN__ ${marker}; ${command}; echo __AGENT_END__ ${marker}:$?`
+}
+
 async function deliverCommand(toolId: string): Promise<void> {
   const delivery = findDelivery(toolId)
   if (!delivery) return
@@ -336,7 +357,7 @@ async function deliverCommand(toolId: string): Promise<void> {
   const ssh = useSSHStore()
   const session = ssh.sessions.find(s => s.id === delivery.session_id)
   if (!session) {
-    // 失败终态用 failed（done 会让 UI 徽章显示「已完成」）
+    // 失败终态置 failed：状态机的失败侧终态就是 failed（done 只属于捕获成功）
     delivery.status = 'failed'
     delivery.output = '无可写终端'
     void withTimeout(
@@ -351,19 +372,20 @@ async function deliverCommand(toolId: string): Promise<void> {
   delivery.status = 'writing'
 
   const marker = randomMarker()
-  // 哨兵模板按会话 shell 分派：本地会话可能是 PowerShell / CMD（LOCAL_SHELLS），
-  // 纯 bash 哨兵在 PowerShell 下 $? 求值为 True/False（Number('True')=NaN，
-  // 每条成功命令都被回传为失败），在 CMD 下 `;` 不是分隔符（BEGIN 永不匹配，
-  // 每条命令白等超时）。远程会话与 Git Bash/WSL 均为 POSIX shell，走 bash 模板。
+  // 哨兵模板按会话 shell 分派（模板见 sentinelFor）：本地会话可能是
+  // PowerShell / CMD（LOCAL_SHELLS），纯 bash 哨兵在 PowerShell 下 $? 求值为
+  // True/False（Number('True')=NaN，每条成功命令都被回传为失败），在 CMD 下
+  // `;` 不是分隔符（BEGIN 永不匹配，每条命令白等超时）。远程会话与
+  // Git Bash/WSL 均为 POSIX shell，走 bash 模板。
   const isPosixShell = session.type !== 'local'
     || session.shell === 'Git Bash'
     || session.shell === 'WSL'
     || !session.shell
-  const sentinel = isPosixShell
-    ? `echo __AGENT_BEGIN__ ${marker}; ${delivery.command}; echo __AGENT_END__ ${marker}:$?`
-    : session.shell === 'CMD'
-      ? `echo __AGENT_BEGIN__ ${marker} & ${delivery.command} & echo __AGENT_END__ ${marker}:%ERRORLEVEL%`
-      : `echo __AGENT_BEGIN__ ${marker}; ${delivery.command}; echo __AGENT_END__ ${marker}:$LASTEXITCODE`
+  const sentinel = sentinelFor(
+    isPosixShell ? 'posix' : session.shell === 'CMD' ? 'cmd' : 'powershell',
+    marker,
+    delivery.command,
+  )
 
   // 先登记捕获，避免错过回显
   const cap: CaptureState = {
@@ -390,7 +412,7 @@ async function deliverCommand(toolId: string): Promise<void> {
     const c0 = captures.get(toolId)
     if (c0) c0.finished = true
     clearCapture(toolId)
-    // 失败终态用 failed（done 会让 UI 徽章显示「已完成」）
+    // 失败终态置 failed：状态机的失败侧终态就是 failed（done 只属于捕获成功）
     delivery.status = 'failed'
     delivery.output = 'Electron API 未就绪，无法写入终端'
     void withTimeout(
@@ -410,7 +432,7 @@ async function deliverCommand(toolId: string): Promise<void> {
     const c = captures.get(toolId)
     if (c) c.finished = true
     clearCapture(toolId)
-    // 失败终态用 failed（done 会让 UI 徽章显示「已完成」）
+    // 失败终态置 failed：状态机的失败侧终态就是 failed（done 只属于捕获成功）
     delivery.status = 'failed'
     delivery.output = '写入终端失败'
     delivery.error = String((err as Error)?.message || err)

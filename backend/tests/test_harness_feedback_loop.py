@@ -35,13 +35,15 @@ from agent.harness.reins import (
     LoopDetector,
     tool_call_signature,
 )
-from agent.harness.reins.core import Reins
+from agent.harness.reins.core import AWAIT_APPROVAL_KEY, Reins
 
 CMD = "rm -rf *"
 
 
 def _ctx() -> RunContext:
-    return RunContext.new(task="测试", config=AgentConfig())
+    ctx = RunContext.new(task="测试", config=AgentConfig())
+    ctx.metadata[AWAIT_APPROVAL_KEY] = True
+    return ctx
 
 
 def _log_call(ctx: RunContext, tool: str = "shell_exec", command: str = CMD) -> None:

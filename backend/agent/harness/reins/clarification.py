@@ -12,7 +12,7 @@ import re as _re
 import time
 import uuid as _uuid
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 from ..contracts import (
     READONLY_TOOLS,
@@ -23,7 +23,14 @@ from ..contracts import (
     RunContext,
     TraceEvent,
 )
-from .core import command_from_args, tool_call_signature
+from ..safety import classify_command, classify_constructed_command
+from .core import (
+    AWAIT_APPROVAL_KEY,
+    command_from_args,
+    extract_bound_command,
+    resolve_registry,
+    tool_call_signature,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -501,6 +508,36 @@ class ClarificationInterceptor:
     point: ReinPoint = field(default=ReinPoint.PRE_TOOL_CALL, init=False)
     # 7 < PermissionGate(8) < FilesystemGuard(10)：先问清意图，再走授权/阻断
     priority: int = 7
+    # 算绑定命令用（saddle.registry）；向导不再判断 allowlist，故不需要权限门。
+    saddle: Optional[Any] = None
+
+    def _skip_clarification(self, ctx: RunContext, tool: str,
+                            args: dict) -> bool:
+        """本次调用是否不该开向导。
+
+        四类跳过：
+        · 非交互 run —— 没人能作答，Driver 本来就不会等，建题只会把模型拖进重试；
+        · prod —— 危险调用由审批卡承载（卡片自带命令与后果说明），safe 调用直接执行；
+        · hardline —— 无条件阻断，答什么都执行不了；
+        · 有效风险 safe —— 不需要授权就会执行，不该先拦下来问 3 个问题。
+        """
+        if not ctx.metadata.get(AWAIT_APPROVAL_KEY):
+            return True
+        if (getattr(ctx, "environment", "") or "") == "prod":
+            return True
+
+        registry = resolve_registry(ctx, self.saddle)
+        bound, is_free_form = extract_bound_command(registry, tool, args)
+        if bound:
+            level, _reason = (classify_command if is_free_form
+                              else classify_constructed_command)(bound)
+            return level in ("hardline", "safe")
+
+        # 无绑定命令：看工具级风险；未知风险不放宽（宁可多问一次）
+        get = getattr(registry, "get", None)
+        impl = get(tool) if callable(get) else None
+        meta = getattr(impl, "meta", None)
+        return getattr(meta, "risk_level", "") == "safe"
 
     async def check(self, ctx: RunContext) -> ReinDecision:
         tc = ctx.active_tool_call
@@ -620,6 +657,10 @@ class ClarificationInterceptor:
         reason = detect_vague(args)
         if not reason:
             return ReinDecision()   # 意图明确：直达执行
+
+        # 向导只在「有人答 + 答完能执行 + 真的需要授权」时才有意义。
+        if self._skip_clarification(ctx, tool, args):
+            return ReinDecision()
 
         steps = build_steps_fn(args)
         if not steps:

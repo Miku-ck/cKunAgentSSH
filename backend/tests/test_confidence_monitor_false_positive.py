@@ -203,6 +203,46 @@ async def test_policy_denial_streak_resets_after_success():
 
 
 @pytest.mark.asyncio
+async def test_policy_streak_survives_interleaved_interceptions():
+    """策略拒绝之间夹 hardline / 澄清拦截：那些调用没执行，不得把计数清零。
+
+    2026-10-27 事故：log_cleanup 被策略拒后，模型连发 rm（hardline）+ 澄清
+    向导；原实现见非策略拦截即 break，连续计数永远攒不到 3，run 一直到第 5 张
+    拒绝卡才停。拦截 ≠ 进展，只有真正执行过的调用才重置计数。
+    """
+    ctx = _make_ctx()
+    mon = ConfidenceMonitor()
+    decisions = []
+    for i in range(3):
+        _add_assistant(ctx, f"换路{i}")
+        _log_policy_denial(ctx)
+        _log_call(ctx, tool="shell_exec", success=False,
+                  args={"command": "rm -rf /home/admin-pl/.cache/pip"},
+                  intercept_reason="敏感命令: recursive delete of sensitive system path")
+        _log_call(ctx, tool="shell_exec", success=False,
+                  args={"command": "rm -r /home/admin-pl/.cache/pip"},
+                  intercept_reason="clarification_pending：请等待用户回答")
+        decisions.append(await mon.check(ctx))
+    assert not _is_help(decisions[0])
+    assert not _is_help(decisions[1])
+    assert _is_help(decisions[2]), "连续 3 次策略拒绝必须收口，夹层拦截不能吃掉计数"
+    assert ctx.metadata.get("policy_help_requested") is True
+
+
+@pytest.mark.asyncio
+async def test_policy_denial_streak_still_resets_after_executed_call():
+    """反方向护栏：真正执行过的调用仍算进展，必须重置连续计数（夹层豁免不放宽）。"""
+    ctx = _make_ctx()
+    mon = ConfidenceMonitor()
+    for i in range(4):
+        _add_assistant(ctx, f"步骤{i}")
+        _log_policy_denial(ctx)
+        _log_call(ctx, tool="shell_exec", success=True, output="ok[exit_code=0]")
+        assert not _is_help(await mon.check(ctx))
+    assert not ctx.metadata.get("policy_help_requested")
+
+
+@pytest.mark.asyncio
 async def test_non_policy_interception_still_counts_as_failure():
     """非策略类拦截（用户拒绝过的命令重发）仍按真实失败扣分，不豁免"""
     ctx = _make_ctx()

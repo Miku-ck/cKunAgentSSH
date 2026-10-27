@@ -35,7 +35,7 @@ function storePath(): string {
 }
 
 /**
- * 托盘图标：优先 32×32 派生图 icon-tray.png（构建期从 icon.png 高质量缩出），
+ * 托盘图标：优先 32×32 派生图 icon-tray.png（随仓库提交的缩小版资产，非构建期生成），
  * 缺失/不可解码时回退 1024 整图 —— 1024 直接进托盘会被系统缩到 16~24px 而发糊。
  * dev 与打包后的 app 根目录都有 resources/（buildResources 未被 files 白名单排除）。
  */

@@ -158,6 +158,9 @@ class TestClientTemplatesAccepted:
         assert _allow(log_cleanup_cmd("/var/tmp", "*.tmp", 1, False))
         assert _allow(log_cleanup_cmd(
             "/.trae-cn-server/manager-logs", "*.log", 30, True))
+        # 家目录下的真实部署路径（~ 展开后）：托管日志标记按边界匹配
+        assert _allow(log_cleanup_cmd(
+            "/home/admin-pl/.trae-cn-server/manager-logs", "*.log", 30, True))
 
 
 # ══════════════════════════════════════════════════════════════

@@ -134,6 +134,21 @@ def test_memory_tool_guidance_present():
     assert "记忆使用" not in conv
 
 
+def test_log_cleanup_guidance_present():
+    """清理日志必须指向 log_cleanup 预览，而不是 find -delete / rm 变体。
+
+    2026-10-27 事故：模型没想起来有 log_cleanup，先 find -exec 再 pip cache
+    再 rm，连环撞 prod 策略拒绝与澄清向导。
+    """
+    prompt = _build_agent_system_prompt(_req(), "", False, is_change=True)
+    assert "log_cleanup" in prompt
+    assert "dry_run" in prompt
+    assert "find -delete" in prompt
+    assert "不要构造删除命令的变体" in prompt
+    conv = _build_agent_system_prompt(_req(task="你好"), "", True)
+    assert "log_cleanup" not in conv
+
+
 # ── 对话姿态（workflow_mode：goal / plan / 未表态）──────────────────────────
 
 def test_goal_posture_injects_goal_prompt():

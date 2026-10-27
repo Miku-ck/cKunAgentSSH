@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from .gate import PermissionGate
 from .auto_approve import try_auto_approve
 from .core import (
+    AWAIT_APPROVAL_KEY,
     _audit_environment,
     _audit_target_id,
     _audit_target_type,
@@ -52,7 +53,9 @@ def _prod_deny_message(reason: str) -> str:
         # POLICY_DENY_MARKER 是机器可读的拦截标记（headless 事件流据此判 blocked），
         # 与展示文案同串但语义独立——改文案别丢它
         f"[生产环境]（{POLICY_DENY_MARKER}）{effect}"
-        "生产环境仅允许执行预先登记在权限白名单里的命令，本次执行已被拒绝、未写入终端。"
+        "本次运行无人值守（定时任务 / 工作流），无法弹卡等待确认：危险命令需预先"
+        "登记在权限白名单中，或在交互会话中重新发起以现场确认。"
+        "本次执行已被拒绝、未写入终端。"
     )
 
 
@@ -165,9 +168,12 @@ class FilesystemGuard:
                             ),
                         }],
                     )
-                # 生产环境强化（合规）：危险命令仅接受预授权 allowlist，禁止临时一次审批
+                # 生产环境强化：只有无人值守时才坚持预授权 allowlist ——
+                # 交互会话里用户就在卡片前，确认本身即授权来源（仅本次/始终允许）；
+                # 定时任务/headless 没人可点卡，只能要求预先登记。
                 env = _audit_environment(ctx)
-                if env == "prod":
+                interactive = bool(ctx.metadata.get(AWAIT_APPROVAL_KEY))
+                if env == "prod" and not interactive:
                     if not self.permission_gate.is_permanently_allowed(
                             tool, args, bound_command=bound, host=_target_host(ctx)):
                         await append_record_async(
@@ -198,11 +204,12 @@ class FilesystemGuard:
                             inject_messages=[{
                                 "role": "user",
                                 "content": (
-                                    f"[系统拦截] 当前目标为生产环境，危险命令（{reason}）需预先在"
-                                    "权限 allowlist 中登记后方可执行，此处拒绝临时授权。"
+                                    f"[系统拦截] 当前目标为生产环境，且本次运行无人值守，"
+                                    f"无法弹卡等待用户确认。危险命令（{reason}）需预先在"
+                                    "权限 allowlist 中登记后方可执行；也可提示用户在交互会话中"
+                                    "重新发起以现场确认。"
                                     "注意：换用其他变体命令（find -delete、脚本封装等）同样会被拒绝，"
-                                    "不要再构造替代写法。请停止尝试，直接告知用户："
-                                    "需在权限 allowlist 中预先登记该命令后重试。"
+                                    "不要再构造替代写法。请停止尝试，直接告知用户上面两条出路。"
                                 ),
                             }],
                         )
@@ -220,7 +227,9 @@ class FilesystemGuard:
                         # 位置约束：① 在 pending 记账之前 —— 放行不该留半张等待签名；
                         # ② 在 is_denied 兜底之前先做同一检查 —— 用户明确拒绝过的命令
                         # 不能被模型翻案，用户否决永远高于裁决。
-                        if not self.permission_gate.denied_for_call(
+                        # prod 不交给模型裁决：生产环境的「谁有权确认」不随审批
+                        # 模式放宽（交互 prod 在这里直接发卡给用户）。
+                        if env != "prod" and not self.permission_gate.denied_for_call(
                                 tool, args, ctx.run_id,
                                 str(cmd) if cmd else None):
                             decision = await try_auto_approve(

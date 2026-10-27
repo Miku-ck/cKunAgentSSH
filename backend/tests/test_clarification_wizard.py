@@ -17,6 +17,7 @@ import pytest
 
 import agent.harness.reins as reins_mod
 from agent.harness.contracts import AgentConfig, RunContext, TraceEvent
+from agent.harness.reins.core import AWAIT_APPROVAL_KEY
 from agent.harness.reins import (
     ClarificationInterceptor,
     ClarificationOption,
@@ -40,9 +41,15 @@ from agent.harness.reins import (
 
 # ── helpers ──
 
-def _make_ctx(tool: str = "shell_exec", args: dict | None = None) -> RunContext:
-    """构造一个最小化的 RunContext 用于拦截器测试"""
+def _make_ctx(tool: str = "shell_exec", args: dict | None = None,
+              interactive: bool = True) -> RunContext:
+    """构造一个最小化的 RunContext 用于拦截器测试。
+
+    默认交互式：向导是交互会话的能力，无人值守运行不会建题（见 _skip_clarification）。
+    """
     ctx = RunContext.new(task="test task", config=AgentConfig())
+    if interactive:
+        ctx.metadata[AWAIT_APPROVAL_KEY] = True
     ctx.tool_calls_log = [{
         "tool": tool,
         "args": args or {"command": "rm -rf *"},
@@ -609,6 +616,65 @@ class TestInterceptorPriority:
         from agent.harness.reins import FilesystemGuard, PermissionGate
         clar = ClarificationInterceptor()
         assert clar.priority < PermissionGate().priority < FilesystemGuard().priority
+
+
+# ── 答完也执行不了的调用不弹向导（2026-10-27 事故）──
+
+class TestBlockedCallsSkipWizard:
+    """四类调用不问向导：无人可答、prod、hardline、有效风险 safe。
+
+    事故现场（2026-10-27）：`rm -rf /home/admin-pl/.trae-cn-server/manager-logs`
+    是 safe 调用（托管日志目录）却连弹 3 步向导；prod 危险命令答完仍被拒。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_store(self):
+        _CLARIFICATION_DONE.clear()
+        _CLARIFICATION_CONTEXT.clear()
+        yield
+        _CLARIFICATION_DONE.clear()
+        _CLARIFICATION_CONTEXT.clear()
+
+    @pytest.mark.asyncio
+    async def test_hardline_command_skips_wizard(self):
+        it = ClarificationInterceptor()
+        ctx = _make_ctx(
+            args={"command": "rm -r /home/admin-pl/.cache/pip && echo \"OK\""})
+        d = await it.check(ctx)
+        assert d.intercepted is False, "hardline 命令答什么都执行不了，不该开向导"
+        assert ctx.run_id not in _CLARIFICATION_CONTEXT
+
+    @pytest.mark.asyncio
+    async def test_unattended_run_skips_wizard(self):
+        """非交互 run 没人能答题：建题只会把模型拖进重试。"""
+        it = ClarificationInterceptor()
+        ctx = _make_ctx(args={"command": "rm -rf /tmp/*"}, interactive=False)
+        assert (await it.check(ctx)).intercepted is False
+        assert ctx.run_id not in _CLARIFICATION_CONTEXT
+
+    @pytest.mark.asyncio
+    async def test_prod_never_asks(self):
+        """prod 由审批卡承载确认，向导不出现（无论是否预登记）。"""
+        it = ClarificationInterceptor()
+        ctx = _make_ctx(args={"command": "rm -rf /tmp/*"})
+        ctx.environment = "prod"
+        assert (await it.check(ctx)).intercepted is False
+        assert ctx.run_id not in _CLARIFICATION_CONTEXT
+
+    @pytest.mark.asyncio
+    async def test_safe_recursive_rm_skips_wizard(self):
+        """事故命令：托管日志目录 → safe，答完也只会直接执行，不该先问 3 步。"""
+        it = ClarificationInterceptor()
+        ctx = _make_ctx(args={
+            "command": "rm -rf /home/admin-pl/.trae-cn-server/manager-logs"})
+        assert (await it.check(ctx)).intercepted is False
+
+    @pytest.mark.asyncio
+    async def test_dangerous_command_still_asks(self):
+        """test 环境 + 交互 + dangerous：向导保留（随后才轮到审批卡）。"""
+        it = ClarificationInterceptor()
+        ctx = _make_ctx(args={"command": "rm -rf /tmp/*"})
+        assert (await it.check(ctx)).intercepted is True
 
 
 class TestInterceptorExtendedTools:

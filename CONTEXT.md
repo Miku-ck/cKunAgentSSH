@@ -21,3 +21,4 @@
 | **任务台双 store** | `stores/ssh-ai.ts` 管会话与消息（唯一对话面），`stores/agent.ts` 管单次 run 的执行态（SSE 事件流 / 工具调用 / 中止 / 成本） | 两个 store 名字都像"agent 相关"，混过一次就会把消息组装写进执行态 store，回放与持久化两边漂移 |
 | **Bridge 双模块** | `agent/bridge_relay.py` 是 `/ws/bridge` 通道服务端（持连接 / 令牌握手 / 帧路由），`agent/electron_bridge.py` 是调用方客户端（拼请求 / 分类错误 / fail-closed） | 业务代码只 import 客户端；直接碰 relay 会绕过错误分类与"在途请求绝不重发"的保证 |
 | **测试文件名** | `backend/tests/` 文件名只写守什么（`test_<域>_<守卫什么>.py`），不写轮次 / 工单号；出处历史在文件 docstring 与 git log，旧名对映见 `backend/tests/README.md` | 带 `_round13c` / `_s407` 后缀的名字看文件名猜不出守什么，只能靠 docstring——2026-10-24 已统一改名 |
+| **剧本**（Runbook，`runbooks` 表） | 结构化的可执行运维剧本：步骤 = 命令 + 说明（≤20 步），经逐步无头 run 执行、标记行确定性判读 | 与 `runbook_save/search` 沉淀在 `memories` 里的「Runbook 经验文本」是两回事——一个可执行、一个可检索；混用会找错存储 |

@@ -312,13 +312,20 @@ export class TunnelManager {
 
     let stage: 'greet' | 'request' = 'greet'
     let buf = Buffer.alloc(0)
-    // 握手缓冲上限：合法的 greet+request 帧不足 300 字节，超限只可能是恶意
-    // 客户端以合法 VER/ATYP 逐字节滴灌且永不满足 need——直接断开，防止 buf 无界增长
+    // 握手缓冲上限：合法的 greet+request 合计上限约 519B（RFC 1928：greeting
+    // ≤2+255=257B、request 域名形态 ≤4+1+255+2=262B；IPv6 仅 22B）。1024 对
+    // 合规客户端（含域名/IPv6 ATYP）不会误杀；把首包 payload 与握手同段流水
+    // 发出（握手未等 reply）的罕见客户端也可能触限，与滴灌型恶意客户端同归于此。
+    // 直接断开，防止 buf 无界增长
     const MAX_SOCKS_BUF = 1024
 
     const onData = (chunk: Buffer): void => {
       buf = Buffer.concat([buf, chunk])
-      if (buf.length > MAX_SOCKS_BUF) { sock.destroy(); return }
+      if (buf.length > MAX_SOCKS_BUF) {
+        console.warn(`[Tunnel] SOCKS5 握手缓冲超限（${buf.length}B），断开 ${sock.remoteAddress ?? 'unknown'}`)
+        sock.destroy()
+        return
+      }
 
       if (stage === 'greet') {
         // VER NMETHODS METHODS(1..255)

@@ -206,15 +206,16 @@ async def test_pending_clarification_blocks_until_answer():
 
 
 @pytest.mark.asyncio
-async def test_unattended_run_does_not_wait():
-    """定时任务无人可答：不得挂起，按原路径继续。"""
+async def test_unattended_run_skips_wizard_and_executes():
+    """定时任务无人可答：不开向导（开了也没人等），直接走原执行/拦截路径。"""
     ctx = _ctx(interactive=False, max_iterations=2)
     harness = _Harness()
 
     events = await asyncio.wait_for(_collect(harness, ctx), 2)
 
+    assert not any(ev.kind == "clarification_needed" for ev in events)
+    assert harness.saddle.executed == ["shell_exec"]
     assert harness.stirrups.rounds == 2
-    assert any(ev.kind == "clarification_needed" for ev in events)
 
 
 @pytest.mark.asyncio

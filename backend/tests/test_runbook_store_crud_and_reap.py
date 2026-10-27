@@ -127,7 +127,7 @@ def test_run_progress_and_terminal_idempotent(base_db):
 
 def test_list_runbooks_last_run_summary(base_db):
     a = _mk_runbook(name="A")
-    b = _mk_runbook(name="B")
+    _mk_runbook(name="B")
     rrb = rstore.create_runbook_run(a["id"])
     rstore.finish_runbook_run(rrb["id"], "success")
     listed = {r["name"]: r for r in rstore.list_runbooks()}

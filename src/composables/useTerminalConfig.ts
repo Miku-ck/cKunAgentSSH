@@ -80,7 +80,7 @@ export function resolveThemeName(theme: Theme): ResolvedTheme {
 /**
  * 每主题一套 ANSI 16 色：终端底恒深（--bg-terminal 契约不动），只调色相温度。
  * dark/light 共用基线（中性界面不配色偏）；未列的键继承基线。
- * 守卫：terminal-palettes.test.ts 钉住键完整性、对比度与 dark/light 基线。
+ * 守卫：use-terminal-config.test.ts 钉住键完整性、对比度与 dark/light 基线。
  */
 export const TERMINAL_THEMES: Record<ResolvedTheme, ITheme> = {
   dark: TERMINAL_BASE,

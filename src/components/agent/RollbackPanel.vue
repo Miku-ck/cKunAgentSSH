@@ -149,14 +149,13 @@ const blockHint = computed(() => {
   return ''
 })
 
-/** prod 强化明示（评审意见 3）：PermissionGate 对 prod+dangerous 工具只认预登记
- *  allowlist（gate.py:1000-1043），不弹审批卡 —— 与非 prod 的「每次弹卡」不同。
- *  本面板无法替用户登记（fail-closed），只能把这条 prod 约束提前说破，
- *  避免「点了回滚→file 项全被拒→不知原因」。是否给 undo_restore 开 prod 弹卡
- *  通道属产品定夺项（gate.py 的合规姿态注释表明这是有意收紧），当前按预登记走。 */
+/** prod 说明（2026-10-27 修订）：交互会话里 dangerous 工具会弹审批卡，
+ *  「始终允许」写入本主机 allowlist；无人值守（定时任务 / 工作流）没人可点卡，
+ *  只能预先登记。本面板无法替用户登记（fail-closed），只能把两条通道说破，
+ *  避免「点了回滚→file 项全被拒→不知原因」。 */
 const prodAllowlistHint = computed(() =>
   environment.value === 'prod'
-    ? '生产环境：危险操作仅接受预授权 allowlist 放行（不弹临时审批卡）。文件类回滚项需为该主机预登记工具 undo_restore；shell 反向命令需逐条预登记。未登记的回滚项将被直接拒绝。'
+    ? '生产环境：危险操作会在审批卡上由你现场确认（允许本次 / 始终允许）。选「始终允许」即把该命令写入本主机 allowlist；定时任务、工作流等无人值守运行无法弹卡，必须预先登记，否则会被拒绝。'
     : '',
 )
 

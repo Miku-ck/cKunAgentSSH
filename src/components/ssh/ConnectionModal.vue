@@ -125,7 +125,7 @@
               </select>
             </div>
             <div class="env-hint" v-if="form.environment === 'prod'">
-              [注意] 生产环境:危险命令仅接受预授权 allowlist 放行,不再临时弹窗审批。
+              [注意] 生产环境：交互会话中危险命令会弹审批卡，由你现场确认；定时任务、工作流等无人值守运行无法弹卡，危险命令必须预先登记 allowlist。
             </div>
           </div>
         </div>

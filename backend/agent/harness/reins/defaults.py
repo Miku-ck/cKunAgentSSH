@@ -82,7 +82,9 @@ def create_default_reins(
     interceptors.append(PostmortemRein(point=ReinPoint.AGENT_FAILED))
 
     # ── 澄清向导（PRE_TOOL_CALL）──
-    interceptors.append(ClarificationInterceptor())
+    # saddle：算绑定命令用。是否建题由拦截器按「交互 / prod / hardline / safe」
+    # 四道闸自行判定（见 _skip_clarification）。
+    interceptors.append(ClarificationInterceptor(saddle=saddle))
 
     # ── 计划模式（Plan Mode）──
     # 制品落盘（spec/plan/goal.md）与 system prompt 注入由 agent/workflow.py 承担；

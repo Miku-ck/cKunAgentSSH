@@ -26,6 +26,7 @@ from ..contracts import (
 from ..safety import classify_command, classify_constructed_command
 from .auto_approve import try_auto_approve
 from .core import (
+    AWAIT_APPROVAL_KEY,
     _COMMAND_EXEC_TOOLS,
     _audit_target_id,
     _audit_target_type,
@@ -34,6 +35,7 @@ from .core import (
     approval_fallback_seconds,
     command_from_args,
     extract_bound_command,
+    is_readonly_preview,
     permission_display_fields,
     resolve_registry,
     tool_call_signature,
@@ -951,9 +953,8 @@ class PermissionGate:
         # 10 在守卫，守卫后跑）。守卫已实现 dangerous 审批三态/超时/拒绝记忆/prod
         # 预授权闸门，此处不复制那五套分支，否则同一判定有两处实现必然漂移。
         # 内容 safe（如写 /tmp）仍走下面的 ToolMeta 流程，但授权键绑定该命令。
-        bound, is_free_form = extract_bound_command(
-            resolve_registry(ctx, self.saddle), tool, args
-        )
+        registry = resolve_registry(ctx, self.saddle)
+        bound, is_free_form = extract_bound_command(registry, tool, args)
         if bound:
             content_level, _reason = (classify_command if is_free_form
                                       else classify_constructed_command)(bound)
@@ -988,6 +989,13 @@ class PermissionGate:
         risk = self._get_effective_risk(tool, meta, args, environment)
         reversible = meta.reversible
 
+        # 只读预览豁免：工具自报本次调用不落地任何变更（log_cleanup 的 dry_run →
+        # find -print）时与只读命令同权放行。否则工具级 dangerous 会把「先预览、
+        # 确认后再删」的主路径在 prod 直接堵死，模型只能退回手敲 find/rm。
+        # 删除形态不走这里：is_preview_call 为 False，照常按 dangerous 审批。
+        if is_readonly_preview(tool, args, registry):
+            return ReinDecision()
+
         # safe → 自主放行
         if risk == "safe":
             return ReinDecision()
@@ -998,12 +1006,11 @@ class PermissionGate:
 
         # dangerous → 需每次授权（不可 session 级缓存，防止首次授权后 Agent 执行任意高危命令）
         if risk == "dangerous":
-            # prod 强化（合规）：与 FilesystemGuard 的 shell 命令对齐 — 生产环境
-            # 危险操作仅接受【预授权 allowlist】，禁止临时一次审批（once/session）。
-            # 原实现 prod 下 non-shell 危险工具（如 service_manage stop/restart）
-            # 走临时审批，用户点"始终允许"即写入永久 allowlist 后免审，
-            # 与 shell 命令"prod 必须预登记"的合规姿态不一致（第 8 轮审查修复）。
-            if environment == "prod" and not self.is_permanently_allowed(
+            # prod 强化：只有无人值守时才要求预登记 —— 交互会话里用户可现场点卡
+            # （仅本次 / 始终允许），「始终允许」写入的正是同一条 allowlist。
+            # 与 FilesystemGuard 的 shell 命令同一矩阵，两处不得漂移。
+            interactive = bool(ctx.metadata.get(AWAIT_APPROVAL_KEY))
+            if environment == "prod" and not interactive and not self.is_permanently_allowed(
                     tool, args, bound_command=bound, host=_target_host(ctx)):
                 await append_record_async(
                     action=tool, conclusion="denied",
@@ -1027,19 +1034,20 @@ class PermissionGate:
                             "tool": tool,
                             "message": (
                                 # POLICY_DENY_MARKER 供 headless 事件流判 blocked（机器可读）
-                                f"[生产强化] 生产环境危险工具{POLICY_DENY_MARKER}: {tool} "
-                                "仅接受预授权 allowlist 放行。"
-                                "拒绝临时审批。请预先在权限 allowlist 中登记后重试。"
+                                f"[生产强化] 生产环境危险工具{POLICY_DENY_MARKER}（无人值守）: {tool} "
+                                "需预先登记 allowlist，或在交互会话中重新发起以现场确认。"
                             ),
                         },
                     )],
                     inject_messages=[{
                         "role": "user",
                         "content": (
-                            f"[系统拦截] 当前目标为生产环境，危险工具 {tool} 需预先在"
-                            "权限 allowlist 中登记后方可执行，此处拒绝临时授权。"
+                            f"[系统拦截] 当前目标为生产环境，且本次运行无人值守，"
+                            f"无法弹卡等待用户确认。危险工具 {tool} 需预先在"
+                            "权限 allowlist 中登记后方可执行；也可提示用户在交互会话中"
+                            "重新发起以现场确认。"
                             "换用其他工具或参数变体同样会被拒绝，不要再尝试替代写法。"
-                            "请停止尝试，直接告知用户：需在权限 allowlist 中预先登记后重试。"
+                            "请停止尝试，直接告知用户上面两条出路。"
                         ),
                     }],
                 )
@@ -1062,13 +1070,14 @@ class PermissionGate:
 
         # 自动审批（permission_mode="auto"）：工具级 dangerous / moderate 不可逆
         # 未授权时，弹卡前先让模型裁决一次（fail-closed，见 auto_approve 模块）。
-        # prod 强化分支已在上方 return —— 合规授权必须出自用户预登记，不问模型。
+        # prod 不走裁决：交互 prod 由用户点卡，无人值守 prod 已在上面拒绝。
         # bound_command 与上方 check_permission 同源：裁决标的必须等于授权键绑定的
         # 那条命令，否则模型批的是文件正文、键却绑在写模板路径上（两处不同物）。
         # S2-01 修复：check_permission 返回 False 无法区分「还没批过」与「用户拒绝
         # 过」，原实现把两者一视同仁送进裁决器 ⇒ 自动审批可推翻用户的显式拒绝
         # （FilesystemGuard 有这道门、这里漏了 —— 同一族防护写一处漏另一处）。
-        if not self.denied_for_call(tool, args, ctx.run_id, bound):
+        if environment != "prod" and not self.denied_for_call(
+                tool, args, ctx.run_id, bound):
             decision = await try_auto_approve(
                 ctx, tool, args, f"工具级风险 {risk} 需授权",
                 bound_command=str(bound or ""))

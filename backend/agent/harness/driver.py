@@ -1384,7 +1384,7 @@ class Driver:
             return None
         key = decision.approval_key
         if not key:
-            # hardline / 曾被拒绝 / prod 未预登记……那些是「直接否掉」，没有人要等
+            # hardline / 曾被拒绝 / 无人值守的 prod 未预登记……那些是「直接否掉」，没有人要等
             return None
 
         # 并行段内 [-1] 已不是当前条目 → 走 active_tool_call（调用方已指向本条目）

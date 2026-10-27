@@ -8,7 +8,7 @@ S4-07 的原缺口是「通道级零审计」：批量下发（bulk SSH）与 Do
 与内部 `append_record` 的关键差别：内部对非法结论做「静默改 executed + 留痕」，
 那是为了不阻塞 Agent；HTTP 边界上客户端 bug 必须当场 422，否则一条拼错的
 "executed " 会被链式签名记录声称「执行过了」。写失败返回 500，但渲染层调用方
-必须降级为提示、不阻塞用户动作（见 src/composables/remoteAudit.ts）。
+必须降级为提示、不阻塞用户动作（见 src/utils/remote-audit.ts）。
 """
 import json
 import sqlite3

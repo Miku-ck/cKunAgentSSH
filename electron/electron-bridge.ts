@@ -242,8 +242,13 @@ export class ElectronBridge {
     } catch (err: any) {
       // 原实现把 err 整个吞掉，500 根因（execCommandWithExitCode 抛错、
       // 会话丢失等）永远查不到；记日志后再回 500。
-      // 只记 message：err 对象可能内嵌用户 exec 命令全文，整体落 main.log 会泄露敏感参数
-      console.error(`[ElectronBridge] ${op} 处理失败:`, err?.message || err)
+      // 只记 message + 去首行的堆栈帧：err（尤其首行）可能内嵌用户 exec 命令
+      // 全文，整体落 main.log 会泄敏；后续帧只有文件/行号，保住出错定位能力
+      console.error(
+        `[ElectronBridge] ${op} 处理失败:`,
+        err?.message || err,
+        typeof err?.stack === 'string' ? err.stack.split('\n').slice(1).join('\n') : '',
+      )
       // S0-09：这条腿原先把任意失败折成同一句「请求处理失败，请稍后重试」，而
       // 渲染层那条腿（main.ts handleTrusted → toIpcTransport）保住了 code ——
       // 同一个错误两种保真度。后端因此分不清「会话没了（可 ssh_connect 救回）」

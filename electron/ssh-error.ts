@@ -2,12 +2,12 @@
  * ssh-error.ts — SSH/SFTP 统一错误分类体系（主进程侧）
  *
  * 错误码契约 / isRetryable / 中文文案统一来自 shared/ssh-error-core.ts
- * （与渲染端 src/ssh-error-types.ts 共享单一实现源，消灭手抄漂移）。
+ * （与渲染端 src/types/ssh-error-types.ts 共享单一实现源，消灭手抄漂移）。
  * 本文件仅保留主进程特有部分：
  *   - classifyRawError(raw) — 原始 ssh2 Error → 错误码分类器
  *   - SSHError — 携带 code/retryable/friendly 的 Error 子类
  *   - toIpcTransport() — 产出的纯 JSON 对象可跨进程安全传输；
- *     前端由 extractSSHError()（src/ssh-error-types.ts）解析 __sshError 哨兵还原结构化错误
+ *     前端由 extractSSHError()（src/types/ssh-error-types.ts）解析 __sshError 哨兵还原结构化错误
  */
 
 import type { SSHErrorCode, SSHErrorTransport } from '../shared/ssh-error-core'

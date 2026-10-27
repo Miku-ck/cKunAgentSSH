@@ -211,7 +211,7 @@ def test_selfbuilt_session_closed_on_success_and_error(base_db, wired, monkeypat
     bridge = FakeBridge(available=True, probe_err=None, session_id="ssh-9")
     monkeypatch.setattr(headless_run, "ElectronBridge", lambda: bridge)
 
-    result = asyncio.run(headless_run.run_headless_once(
+    asyncio.run(headless_run.run_headless_once(
         "任务", run_id="r1", conversation_id="c1", connection_id="conn-1", log_tag="t"))
     assert FakeHarness.last_run_kwargs["ssh_session_id"] == "ssh-9"
     assert bridge.connected == ["conn-1"]

@@ -187,6 +187,22 @@ def extract_bound_command(registry: Any, tool: str, args: Any) -> tuple[str | No
     return bound, bool(getattr(impl, "bound_command_is_free_form", False))
 
 
+def is_readonly_preview(tool: str, args: Any, registry: Any) -> bool:
+    """工具是否自报「本次调用只读、不落地任何变更」（如 log_cleanup 的 dry_run）。
+
+    只读预览参与的是**工具级**风险判定：工具整体声明 dangerous（最坏形态是删除），
+    但这一次实际只执行 `find -print`。生产环境若按工具级一刀切，会把「先预览、
+    确认后再删」这条唯一主路径堵死 —— 模型只能退回手敲 find/rm（2026-10-27 事故）。
+    未声明该钩子、参数非法或注册表缺失时一律返回 False：照常审批，fail-closed。
+    """
+    get = getattr(registry, "get", None)
+    impl = get(tool) if callable(get) else None
+    fn = getattr(impl, "is_preview_call", None)
+    if not callable(fn):
+        return False
+    return bool(fn(args if isinstance(args, dict) else {}))
+
+
 def resolve_registry(ctx: RunContext, saddle: Any) -> Any:
     """取 per-run ToolRegistry（extract_bound_command 的第一个参数来源）。
 

@@ -92,7 +92,7 @@ describe('A1 孤儿枚举汇合时机', () => {
     expect(spawnMock).toHaveBeenCalledTimes(1) // 枚举回调还没放行
     enumStub.resolve()
     await p
-    // taskkill 只许对旧孤儿 9999（不同端口 8011）下手；本次启动的后端进程——
+    // taskkill 只许对旧孤儿 9999（不同端口 7778）下手；本次启动的后端进程——
     // 无论 pid 是否等于 child.pid——只要服务的就是本次端口，一律豁免。
     const killed = execFileMock.mock.calls
       .filter((c) => c[0] === 'taskkill' || String(c[0]).endsWith('taskkill.exe'))

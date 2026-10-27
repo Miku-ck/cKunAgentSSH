@@ -98,12 +98,11 @@ describe('加载失败可见性与 404 静默', () => {
     expect(rollbackPanel).toContain('/(无 undo 记录|run 不存在|HTTP 404)/')
   })
 
-  it('prod 强化明示：不弹临时审批卡、需预登记（undo_restore 与 shell 命令两条通道都说破）', () => {
+  it('prod 说清两条通道：交互现场确认 + 无人值守预登记', () => {
     expect(rollbackPanel).toContain("environment.value === 'prod'")
-    expect(rollbackPanel).toContain('预授权 allowlist')
-    expect(rollbackPanel).toContain('不弹临时审批卡')
-    expect(rollbackPanel).toContain('预登记工具 undo_restore')
-    expect(rollbackPanel).toContain('shell 反向命令需逐条预登记')
+    expect(rollbackPanel).toContain('现场确认')
+    expect(rollbackPanel).toContain('无人值守运行无法弹卡')
+    expect(rollbackPanel).toContain('预先登记')
   })
 })
 

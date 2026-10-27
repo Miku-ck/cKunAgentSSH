@@ -21,6 +21,7 @@ from agent.harness.contracts import (
     RunContext,
 )
 from agent.harness.reins import FilesystemGuard, PermissionGate
+from agent.harness.reins.core import AWAIT_APPROVAL_KEY
 from agent.tools import ToolMeta
 from agent.tools.builtin.ops_service import ServiceManageTool
 
@@ -237,6 +238,84 @@ def test_filesystem_guard_not_denied_still_emits_card():
     d = asyncio.run(_guard().check(ctx))
     assert d.intercepted
     assert any(e.kind == "permission_needed" for e in d.events)
+
+
+# ── 2026-10-27：prod 交互审批恢复（用户确认优先）──
+
+def _interactive(ctx: RunContext) -> RunContext:
+    """交互式 run：routes/agent.py 对用户发起的 run 置位的同一开关。"""
+    ctx.metadata[AWAIT_APPROVAL_KEY] = True
+    return ctx
+
+
+def test_prod_dangerous_command_cards_when_interactive():
+    """交互 prod：人在卡片前，危险命令弹卡（仅本次/始终允许），不再直接拒绝。"""
+    g = _guard()
+    ctx = _interactive(_ctx("prod"))
+    _log(ctx)
+    d = asyncio.run(g.check(ctx))
+    assert d.intercepted is True
+    assert POLICY_DENY_MARKER not in d.intercept_reason
+    assert any(e.kind == "permission_needed" for e in d.events)
+    assert d.approval_key, "发卡必须带等待键，否则 Driver 不会停住等人"
+    assert "无人值守" not in "\n".join(m["content"] for m in d.inject_messages)
+
+
+def test_prod_interactive_once_grant_recheck_allows():
+    """「允许本次」写入 once 池后，重判同一调用即放行。"""
+    g = _guard()
+    ctx = _interactive(_ctx("prod"))
+    _log(ctx)
+    asyncio.run(g.check(ctx))
+    g.permission_gate.grant(
+        "shell_exec", scope="once", command=CMD, run_id=ctx.run_id)
+    assert asyncio.run(g.check(ctx)).intercepted is False
+
+
+def test_prod_interactive_always_grant_persists_to_new_run():
+    """「始终允许」= 预登记：同一主机的新 run 直接免审。"""
+    g = _guard()
+    ctx = _interactive(_ctx("prod"))
+    _log(ctx)
+    asyncio.run(g.check(ctx))
+    g.permission_gate.grant(
+        "shell_exec", scope="always", command=CMD,
+        conversation_id=ctx.conversation_id, run_id=ctx.run_id)
+    assert asyncio.run(g.check(ctx)).intercepted is False
+
+    fresh = _interactive(_ctx("prod"))
+    _log(fresh)
+    assert asyncio.run(g.check(fresh)).intercepted is False
+
+
+def test_prod_interactive_skips_model_auto_approve(monkeypatch):
+    """prod 不交给模型裁决：auto 档也直接弹卡给用户。"""
+    calls = []
+
+    async def _spy(*_a, **_kw):
+        calls.append(1)
+        return None
+
+    monkeypatch.setattr(_guards_mod, "try_auto_approve", _spy)
+    g = _guard()
+    ctx = _interactive(_ctx("prod"))
+    ctx.metadata["permission_mode"] = "auto"
+    _log(ctx)
+    d = asyncio.run(g.check(ctx))
+    assert calls == []
+    assert any(e.kind == "permission_needed" for e in d.events)
+
+
+def test_prod_unattended_deny_says_no_one_can_confirm():
+    """无人值守：仍拒绝，但文案说清「没人能点卡」，而不是「拒绝临时授权」。"""
+    g = _guard()
+    ctx = _ctx("prod")
+    _log(ctx)
+    d = asyncio.run(g.check(ctx))
+    assert d.intercepted is True
+    assert POLICY_DENY_MARKER in d.intercept_reason
+    inject = "\n".join(m["content"] for m in d.inject_messages)
+    assert "无人值守" in inject and "allowlist" in inject
 
 
 # ── 问题 5：prod 环境 destructive action 风险升级 ──

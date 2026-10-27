@@ -2,7 +2,7 @@
  * 任务台会话 Store（stores/ssh-ai.ts）
  *
  * 唯一对话面「首页任务台」的会话 / 消息 / 交付状态；消息最终形态由
- * utils/finalizeAgentMessage 归一，持久化走 composables/useChatPersistence。
+ * utils/finalize-agent-message 归一，持久化走 composables/useChatPersistence。
  * 文件名 ssh-ai 是聊天模式系统退役前的遗留（当年按模式各建一个 store），
  * 现在全应用只有这一个对话 store —— 不要再按"模式"造第二个。
  *

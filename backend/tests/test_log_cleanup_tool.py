@@ -72,6 +72,10 @@ def test_meta_marks_destructive():
     "/var/log/app",
     "/var/log/app/sub",
     "/.trae-cn-server/manager-logs",
+    # Trae CN 的真实部署路径在家目录下：托管日志标记必须按边界匹配，
+    # 不能要求前缀恰好从 / 开始（2026-10-27 事故：dry_run 被目录校验挡回）
+    "/home/admin-pl/.trae-cn-server/manager-logs",
+    "/home/admin-pl/.trae-cn-server/manager-logs/server-2026",
 ])
 def test_allowed_roots(root):
     assert LogCleanupTool.bound_command(
@@ -99,6 +103,8 @@ def test_allowed_roots(root):
     "/var/log/*",
     "/tmp/../etc",
     "/var/log/app\n",
+    # 兄弟目录不享受托管日志豁免（边界匹配，不是子串包含）
+    "/home/admin-pl/.trae-cn-server/manager-logs-backup",
 ])
 def test_rejected_roots(root):
     assert LogCleanupTool.bound_command(
@@ -244,3 +250,79 @@ def test_capability_grant_covers_any_bounded_cleanup():
         bound = LogCleanupTool.bound_command(args)
         assert gate.check_permission(
             "log_cleanup", args, risk="dangerous", bound_command=bound) is True
+
+
+# ── 生产环境闸门：只读预览免预登记，删除仍须预授权 ──────────────────────────
+_MANAGED_ROOT = "/home/admin-pl/.trae-cn-server/manager-logs"
+
+
+class _Saddle:
+    def __init__(self):
+        self.registry = create_registry()
+
+
+def _gate(monkeypatch, allowlist=()):
+    """构造带真实 ToolRegistry 的 PermissionGate（隔离 allowlist/审计 IO）。"""
+    import agent.harness.reins.gate as gate_mod
+    from agent.harness.reins.gate import PermissionGate
+
+    monkeypatch.setattr(PermissionGate, "_load_permanent_allowlist",
+                        lambda self: set(allowlist))
+    monkeypatch.setattr(PermissionGate, "_save_permanent_allowlist",
+                        lambda self, keys: None)
+
+    async def _noop_audit(**kwargs):
+        return None
+
+    monkeypatch.setattr(gate_mod, "append_record_async", _noop_audit)
+    return PermissionGate(saddle=_Saddle())
+
+
+def _run_ctx(environment, args):
+    from agent.harness.contracts import AgentConfig, RunContext
+
+    ctx = RunContext.new(task="t", config=AgentConfig(),
+                         environment=environment)
+    ctx.tool_calls_log.append(
+        {"tool": "log_cleanup", "args": args, "iteration": 1, "success": None})
+    return ctx
+
+
+def _cleanup_args(dry_run):
+    return {"root": _MANAGED_ROOT, "pattern": "*", "days": 30, "dry_run": dry_run}
+
+
+def test_prod_preview_allowed_without_allowlist(monkeypatch):
+    """prod 下 dry_run 只读预览无需预登记 —— 否则「先预览再确认」的主路径被堵死。
+
+    2026-10-27 事故：预览被判「生产环境危险工具未预授权」，模型退回手敲
+    find -exec / rm，连环触发更高危拦截与澄清向导。
+    """
+    decision = asyncio.run(_gate(monkeypatch).check(
+        _run_ctx("prod", _cleanup_args(dry_run=True))))
+    assert decision.intercepted is False
+
+
+def test_prod_delete_still_requires_allowlist(monkeypatch):
+    """预览豁免不能顺带放走删除：无人值守 prod 的删除仍须预登记 allowlist。"""
+    from agent.harness.contracts import POLICY_DENY_MARKER
+
+    decision = asyncio.run(_gate(monkeypatch).check(
+        _run_ctx("prod", _cleanup_args(dry_run=False))))
+    assert decision.intercepted is True
+    assert POLICY_DENY_MARKER in decision.intercept_reason
+
+
+def test_prod_delete_allowed_after_preallocation(monkeypatch):
+    decision = asyncio.run(_gate(monkeypatch, allowlist={"log_cleanup"}).check(
+        _run_ctx("prod", _cleanup_args(dry_run=False))))
+    assert decision.intercepted is False
+
+
+def test_preview_exemption_rejects_invalid_args(monkeypatch):
+    """参数非法的 preview 不享受豁免（fail-closed）：is_preview_call 必须是
+    校验通过 + dry_run 双条件，不能只看 dry_run 字段。"""
+    args = {"root": "/etc", "pattern": "*", "days": 30, "dry_run": True}
+    assert LogCleanupTool.is_preview_call(args) is False
+    decision = asyncio.run(_gate(monkeypatch).check(_run_ctx("prod", args)))
+    assert decision.intercepted is True

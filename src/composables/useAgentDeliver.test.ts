@@ -201,6 +201,24 @@ describe('全局捕获订阅集中化', () => {
   })
 })
 
+describe('哨兵模板按 shell 家族分派', () => {
+  it('CMD 的退出码必须经 call 二次展开（%%ERRORLEVEL%%）——解析期展开取到的是执行前旧值', async () => {
+    const { sentinelFor } = await import('@/composables/useAgentDeliver')
+    const cmd = sentinelFor('cmd', 'm1', 'deploy.exe')
+    expect(cmd).toContain(' & call echo __AGENT_END__ m1:%%ERRORLEVEL%%')
+    // 修复前的错误形态：单 % 的解析期展开（干净会话恒报成功、有过失败则后续全误报）
+    expect(cmd).not.toContain(':%ERRORLEVEL%')
+  })
+
+  it('POSIX 用 $?、PowerShell 用 $LASTEXITCODE，分隔符按家族区分', async () => {
+    const { sentinelFor } = await import('@/composables/useAgentDeliver')
+    expect(sentinelFor('posix', 'm2', 'ls -la')).toContain('; echo __AGENT_END__ m2:$?')
+    expect(sentinelFor('powershell', 'm3', 'Get-Content a.log')).toContain('; echo __AGENT_END__ m3:$LASTEXITCODE')
+    expect(sentinelFor('cmd', 'm4', 'dir')).toContain(' & ')
+    expect(sentinelFor('posix', 'm5', 'du')).not.toContain(' & ')
+  })
+})
+
 describe('哨兵行匹配与捕获终态', () => {
   beforeEach(() => {
     useAgentDeliver().resetDeliveries()

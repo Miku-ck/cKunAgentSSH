@@ -29,6 +29,7 @@ from agent.harness.reins.clarification import (
     _shell_build_steps,
     record_clarification_answers,
 )
+from agent.harness.reins.core import AWAIT_APPROVAL_KEY
 
 
 @pytest.fixture(autouse=True)
@@ -43,6 +44,7 @@ def _clear_store():
 def _ctx(tool: str, args: dict, base: RunContext | None = None) -> RunContext:
     """同一个 run 里换下一次工具调用 —— run_id 必须一致，否则测不到「同 run 不同工具」"""
     ctx = base or RunContext.new(task="t", config=AgentConfig())
+    ctx.metadata[AWAIT_APPROVAL_KEY] = True
     ctx.tool_calls_log = [{"tool": tool, "args": args, "iteration": 0, "success": None}]
     return ctx
 

@@ -18,6 +18,7 @@ from ..contracts import (
     ReinPoint,
     RunContext,
     TraceEvent,
+    is_intercepted_entry,
     is_policy_denial,
 )
 from .core import _audit_environment, tool_call_signature
@@ -243,8 +244,14 @@ class ConfidenceMonitor:
             for tc in reversed(ctx.tool_calls_log):
                 if is_policy_denial(tc):
                     trailing_denials += 1
-                else:
-                    break
+                    continue
+                if is_intercepted_entry(tc):
+                    # 硬拦截 / 澄清等待 / 循环拦截：调用没执行，也不构成进展。
+                    # 原实现见任何非策略拦截就 break —— 事故现场正是「策略拒绝
+                    # 之后模型连发 rm（hardline）+ 澄清向导」，每次都把已累积
+                    # 的连续计数清零，兜底永远攒不到 3（2026-10-27 事故）。
+                    continue
+                break  # 真正执行过的调用 = 有进展，重新计数
             if trailing_denials >= self.POLICY_HELP_CONSECUTIVE:
                 ctx.metadata["policy_help_requested"] = True
                 return ReinDecision(

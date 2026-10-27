@@ -166,6 +166,7 @@ def test_prune_agent_runs_no_op_under_cap(tmp_path):
 import agent.harness.reins.gate as _gate_mod
 from agent.harness.contracts import AgentConfig, RunContext
 from agent.harness.reins import PermissionGate
+from agent.harness.reins.core import AWAIT_APPROVAL_KEY
 from agent.tools.builtin.ops_service import ServiceManageTool
 
 
@@ -195,11 +196,65 @@ def _prod_ctx(tool: str, args: dict, environment: str) -> RunContext:
     return ctx
 
 
-def test_prod_dangerous_tool_requires_preallocation(monkeypatch):
-    """prod 下 service_manage stop（升级为 dangerous）未预授权 → 拦截，临时审批不放行。
+def _interactive(ctx: RunContext) -> RunContext:
+    ctx.metadata[AWAIT_APPROVAL_KEY] = True
+    return ctx
 
-    修复前：prod 下走临时审批，once/session/always 授权即可放行；用户点"始终允许"
-    即写入永久 allowlist 后免审。修复后与 shell 命令一致：prod 仅认预授权 allowlist。
+
+def test_prod_dangerous_tool_cards_when_interactive(monkeypatch):
+    """交互 prod：工具级 dangerous 未预登记 → 弹卡（仅本次/始终允许），不再直接拒绝。"""
+    g = _prod_gate(monkeypatch)
+    ctx = _interactive(_prod_ctx(
+        "service_manage", {"action": "stop", "name": "nginx"}, "prod"))
+    d = asyncio.run(g.check(ctx))
+    assert d.intercepted is True
+    assert "生产环境" not in d.intercept_reason
+    assert any(e.kind == "permission_needed" for e in d.events)
+    assert d.approval_key
+
+
+def test_prod_dangerous_tool_once_grant_recheck_allows(monkeypatch):
+    """「允许本次」后重判：once 池命中，工具放行。"""
+    g = _prod_gate(monkeypatch)
+    ctx = _interactive(_prod_ctx(
+        "service_manage", {"action": "stop", "name": "nginx"}, "prod"))
+    asyncio.run(g.check(ctx))
+    g.grant("service_manage", scope="once", command=None, run_id=ctx.run_id)
+    assert asyncio.run(g.check(ctx)).intercepted is False
+
+
+def test_prod_interactive_skips_auto_judge(monkeypatch):
+    """prod 不走模型裁决（auto 档也一样）。"""
+    calls = []
+
+    async def _spy(*_a, **_kw):
+        calls.append(1)
+        return None
+
+    monkeypatch.setattr(_gate_mod, "try_auto_approve", _spy)
+    g = _prod_gate(monkeypatch)
+    ctx = _interactive(_prod_ctx(
+        "service_manage", {"action": "stop", "name": "nginx"}, "prod"))
+    ctx.metadata["permission_mode"] = "auto"
+    asyncio.run(g.check(ctx))
+    assert calls == []
+
+
+def test_prod_unattended_tool_deny_says_no_one_can_confirm(monkeypatch):
+    """无人值守：仍拒绝，文案说清「没人能点卡」。"""
+    g = _prod_gate(monkeypatch)
+    ctx = _prod_ctx("service_manage", {"action": "stop", "name": "nginx"}, "prod")
+    d = asyncio.run(g.check(ctx))
+    assert d.intercepted is True
+    inject = "\n".join(m["content"] for m in d.inject_messages)
+    assert "无人值守" in inject and "allowlist" in inject
+
+
+def test_prod_dangerous_tool_requires_preallocation(monkeypatch):
+    """无人值守 prod：service_manage stop（升级为 dangerous）未预授权 → 拒绝。
+
+    交互会话（见 test_prod_dangerous_tool_cards_when_interactive）由用户现场确认；
+    这里钉住无人值守仍只认预登记 allowlist。
     """
     g = _prod_gate(monkeypatch)
     # 临时 once 授权（非预授权 allowlist）

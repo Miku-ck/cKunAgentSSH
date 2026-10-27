@@ -281,7 +281,7 @@ def test_runs_returns_parsed_steps_state(client):
 
 def test_hostile_input_stays_bound_and_table_alive(client):
     hostile = "x'; DROP TABLE runbooks;-- %_% ' OR '1'='1"
-    row = _create(client, name=hostile, description="100% 纯_文本")
+    _create(client, name=hostile, description="100% 纯_文本")
     got = client.get("/api/runbooks").json()
     assert any(r["name"] == hostile for r in got)
     assert any(r["description"] == "100% 纯_文本" for r in got)

@@ -51,6 +51,22 @@ _ROOT_FORBIDDEN = frozenset("*?[]{};|&<>$`\"'\\")
 _MAX_DAYS = 3650
 
 
+def _is_managed_log_root(path: str) -> bool:
+    """路径是否落在 agent 托管日志目录子树内（目录本身或其下任意层级）。
+
+    实际部署路径是 /home/<user>/.trae-cn-server/manager-logs，不能要求前缀
+    恰好从 / 开始。边界匹配与 safety._is_agent_log_path 同源：
+    manager-logs-backup 这类兄弟名字不命中。
+    """
+    idx = path.find(_MANAGED_LOG_ROOT)
+    while idx != -1:
+        end = idx + len(_MANAGED_LOG_ROOT)
+        if end == len(path) or path[end] == "/":
+            return True
+        idx = path.find(_MANAGED_LOG_ROOT, idx + 1)
+    return False
+
+
 def log_cleanup_cmd(root: str, pattern: str, days: int, delete: bool) -> str:
     """log_cleanup 远端模板（试运行只 -print，删除时 -delete -print）。
 
@@ -79,9 +95,11 @@ def _root_reject(root) -> str | None:
     if norm != root:
         return "日志目录必须是规范化路径（不能含 . / .. / 重复斜杠 / 尾斜杠）"
 
-    for allowed in _TMP_ROOTS + (_MANAGED_LOG_ROOT,):
+    for allowed in _TMP_ROOTS:
         if norm == allowed or norm.startswith(allowed + "/"):
             return None
+    if _is_managed_log_root(norm):
+        return None
     if norm.startswith(_VAR_LOG_ROOT + "/"):
         first = norm[len(_VAR_LOG_ROOT) + 1:].split("/", 1)[0]
         if first in _PROTECTED_LOG_ENTRIES:
@@ -189,6 +207,17 @@ class LogCleanupTool(BaseTool):
             return None
         return log_cleanup_cmd(
             spec["root"], spec["pattern"], spec["days"], not spec["dry_run"])
+
+    @classmethod
+    def is_preview_call(cls, args: dict) -> bool:
+        """本次调用是否为只读试运行（dry_run=true 且参数通过校验）。
+
+        与 bound_command 共用 _validated：参数口径只此一份，预览判定不会在
+        「模板合法但 dry_run 解析失败」这类边界上和真实执行分叉。参数非法时
+        返回 False —— 按工具级 dangerous 照常审批（fail-closed）。
+        """
+        spec, _err = _validated(args if isinstance(args, dict) else {})
+        return bool(spec and spec["dry_run"])
 
     async def execute(self, context, root="", pattern="*.log", days=30, dry_run=True):
         spec, err = _validated({

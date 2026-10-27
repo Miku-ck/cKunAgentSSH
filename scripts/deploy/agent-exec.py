@@ -386,6 +386,21 @@ def _posix_real(path: str) -> str:
     return os.path.realpath(path).replace(os.sep, "/")
 
 
+def _is_managed_log_subtree(real: str) -> bool:
+    """real 是否落在 agent 托管日志目录子树内（边界匹配）。
+
+    真实部署路径是 /home/<user>/.trae-cn-server/manager-logs，托管日志标记
+    不能要求从根开始；manager-logs-backup 这类兄弟名字不命中。
+    """
+    idx = real.find(_LOG_MANAGED_ROOT)
+    while idx != -1:
+        end = idx + len(_LOG_MANAGED_ROOT)
+        if end == len(real) or real[end] == "/":
+            return True
+        idx = real.find(_LOG_MANAGED_ROOT, idx + 1)
+    return False
+
+
 def _log_cleanup_root_ok(root: str) -> bool:
     """根目录必须落在临时目录 / 应用日志子目录 / agent 托管日志目录内。
 
@@ -402,7 +417,9 @@ def _log_cleanup_root_ok(root: str) -> bool:
     if posixpath.normpath(root) != root:
         return False
     real = _posix_real(root)
-    for allowed in _LOG_TMP_ROOTS + (_LOG_MANAGED_ROOT,):
+    if _is_managed_log_subtree(real):
+        return True
+    for allowed in _LOG_TMP_ROOTS:
         base = _posix_real(allowed)
         if real == base or real.startswith(base + "/"):
             return True

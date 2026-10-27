@@ -1,7 +1,7 @@
 /**
  * ssh-error-core.ts — SSH 错误码契约的单一实现源（主进程与渲染进程共享）
  *
- * 背景：electron/ssh-error.ts 与 src/ssh-error-types.ts 曾各自手抄一份
+ * 背景：electron/ssh-error.ts 与 src/types/ssh-error-types.ts 曾各自手抄一份
  * 错误码联合类型 / isRetryable / 中文文案映射，并已发生漂移
  * （渲染版 CONN_REFUSED 丢失 `(${detail})` 后缀）。此文件收敛三者，
  * 两端只做 re-export 与各自进程特有的组装（SSHError 类 / IPC transport）。

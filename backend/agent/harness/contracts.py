@@ -90,13 +90,22 @@ READONLY_TOOLS: frozenset[str] = frozenset({
 POLICY_DENY_MARKER: str = "未预授权"
 
 
+def is_intercepted_entry(entry: dict) -> bool:
+    """判定一条 tool_calls_log 条目是否被拦截（工具未真正执行）。
+
+    driver 的拦截分支必写 intercept_reason（见 _execute_serial_call），
+    执行过的条目（成功或命令真跑了但非零退出）没有这个键。
+    """
+    return entry.get("success") is False and bool(entry.get("intercept_reason"))
+
+
 def is_policy_denial(entry: dict) -> bool:
     """判定一条 tool_calls_log 条目是否为 prod 策略拒绝（未预授权）。
 
     依赖 driver 在拦截分支写入 entry["intercept_reason"]；普通失败
     （命令真跑了但非零退出/异常）不含该标记，照常计入置信度扣分。
     """
-    if entry.get("success") is not False:
+    if not is_intercepted_entry(entry):
         return False
     return POLICY_DENY_MARKER in (entry.get("intercept_reason") or "")
 

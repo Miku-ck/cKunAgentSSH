@@ -192,7 +192,7 @@ def test_prod_sensitive_write_needs_preauthorization(audits):
     assert d.intercepted and "生产环境" in d.intercept_reason
     denied = [r for r in audits if r.get("conclusion") == "denied"]
     assert denied and denied[-1]["result"].startswith("prod_deny_no_allowlist")
-    # prod 下临时审批通道根本不给（没有 permission_needed 卡片）
+    # 无人值守 prod 下临时审批通道根本不给（没有 permission_needed 卡片）
     assert not any(e.kind == "permission_needed" for e in d.events)
 
 

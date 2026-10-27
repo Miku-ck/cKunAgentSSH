@@ -8,7 +8,6 @@ open_session / close_session / append_record），不触真实 Harness 与 bridg
 import asyncio
 import os
 import threading
-from types import SimpleNamespace
 
 import pytest
 

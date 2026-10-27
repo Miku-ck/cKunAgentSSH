@@ -249,6 +249,12 @@ def _build_agent_system_prompt(
             "查进程用 process_inspect、看资源用 sys_overview、探端口用 network_probe、"
             "管服务用 service_manage。基于返回内容直接推理，避免短时间内重复读取同一内容；"
             "查看大文件的不同位置时优先指定 offset/limit 读取相关片段。"
+            "清理日志用 log_cleanup（默认 dry_run 只列出匹配文件，把清单给用户确认后"
+            "再用 dry_run=false 删除），不要用 find -delete / rm -rf 手工拼删除命令；"
+            "生产环境删除需预先在 allowlist 登记 log_cleanup，但试运行预览无需登记。"
+            "若目标目录不在 log_cleanup 允许范围（/tmp、/var/tmp、/var/log 应用子目录、"
+            "agent 托管日志目录）内，直接告知用户该目录需人工清理并给出命令，"
+            "不要构造删除命令的变体。"
         )
         # 记忆通道引导：预检索注入是"被动想起来"，工具是"主动查/记/纠错"
         parts.append(
@@ -2009,7 +2015,8 @@ def classify_safety_commands(req: SafetyClassifyRequest):
     """命令风险判定的唯一来源（safety.classify_command）对外暴露，只读无状态。
 
     为什么要这个端点：批量下发是「一个人的动作 × N 台机器」的放大点，此前它只在
-    渲染层自带一份词表来弹确认（bulkCommandDiff 的 DANGEROUS_PATTERNS）—— 那是
+    渲染层自带一份词表来弹确认（旧 bulkCommandDiff.ts 的 DANGEROUS_PATTERNS，
+    现已随安全分类端点下线）—— 那是
     第四份规则表，与后端 HARDLINE/DANGEROUS 两套口径各写各的，且 mkfs、rm -rf /
     在那条路上只是"多问一句"，点确认照样打到 N 台上。前端自此不再自带规则。
 
