@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <div v-if="visible" class="imgp-overlay" @click.self="close">
-      <div class="imgp-dialog" role="dialog" aria-modal="true" :aria-label="'图片预览 ' + name">
+      <div ref="dialogRef" class="imgp-dialog" tabindex="-1" role="dialog" aria-modal="true" :aria-label="'图片预览 ' + name">
         <div class="imgp-head">
           <span class="imgp-title" :title="path">{{ name }}</span>
           <span v-if="sizeText" class="imgp-size">{{ sizeText }}</span>
@@ -30,6 +30,7 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { useModalFocusTrap } from '../../composables/useModalFocusTrap'
 import { imageMime } from '@/utils/language'
 import { formatBytes } from '@/utils/format'
 
@@ -50,6 +51,11 @@ const loading = ref(false)
 const error = ref('')
 const zoomed = ref(false)
 const sizeText = ref('')
+
+const dialogRef = ref<HTMLElement | null>(null)
+const { activate, deactivate } = useModalFocusTrap(dialogRef)
+// 纯展示面：打开时焦点落在容器上（Tab 圈在弹窗内），关闭后还给双击的那一行
+watch(() => props.visible, (v) => { if (v) activate(); else deactivate() })
 
 // 竞态守卫：连续切换查看不同图片时，慢的先返回的读取不得覆盖后发起的结果
 // （沿用 SftpFileEditor loadSeq / store openSeq 同一手法）。
@@ -109,6 +115,8 @@ function close(): void {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
+  /* 容器只是初始焦点落点（tabindex=-1），描边交给里面的控件 */
+  outline: none;
   width: min(1100px, 92vw);
   max-height: 90vh;
   display: flex; flex-direction: column;

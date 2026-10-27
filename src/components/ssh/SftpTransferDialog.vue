@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <div v-if="visible" class="transfer-overlay" @click.self="emit('close')" @contextmenu.prevent>
-      <div class="tc" role="dialog" aria-modal="true" aria-label="传输任务">
+      <div ref="dialogRef" class="tc" tabindex="-1" role="dialog" aria-modal="true" aria-label="传输任务">
         <!-- 头 -->
         <div class="tc-head">
           <span class="tc-title">传输任务</span>
@@ -138,6 +138,7 @@
  *     不新增组级 IPC，调度与续传语义完全不变。
  */
 import { computed, onUnmounted, ref, watch } from 'vue'
+import { useModalFocusTrap } from '../../composables/useModalFocusTrap'
 import TransferRow from './TransferRow.vue'
 import { MAX_CONCURRENT_CEIL, useSftpStore } from '@/stores/sftp'
 import { useToastStore } from '@/stores/toast'
@@ -177,6 +178,9 @@ const COLS: Array<{ key: SortKey; label: string; align?: string }> = [
   { key: 'status', label: '状态' },
   { key: 'queue', label: '操作', align: 'c' },
 ]
+
+const dialogRef = ref<HTMLElement | null>(null)
+const { activate, deactivate } = useModalFocusTrap(dialogRef)
 
 const activeTab = ref<TabKey>('active')
 const filter = ref('')
@@ -298,8 +302,8 @@ function onKey(e: KeyboardEvent): void {
   }
 }
 watch(() => props.visible, v => {
-  if (v) document.addEventListener('keydown', onKey)
-  else { document.removeEventListener('keydown', onKey); ctx.value.visible = false }
+  if (v) { document.addEventListener('keydown', onKey); activate() }
+  else { document.removeEventListener('keydown', onKey); ctx.value.visible = false; deactivate() }
 }, { immediate: true })
 onUnmounted(() => document.removeEventListener('keydown', onKey))
 </script>
@@ -327,6 +331,8 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
+  /* 容器只是初始焦点落点（tabindex=-1），描边交给里面的控件 */
+  outline: none;
 }
 
 .tc-head {

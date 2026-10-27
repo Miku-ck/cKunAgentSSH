@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <div v-if="visible" class="conflict-overlay" @click.self="cancel">
-      <div class="conflict-dialog" role="dialog" aria-modal="true" aria-label="文件冲突处理" @keydown.esc="cancel">
+      <div ref="dialogRef" class="conflict-dialog" tabindex="-1" role="dialog" aria-modal="true" aria-label="文件冲突处理" @keydown.esc="cancel">
         <div class="conflict-head">
           <div class="conflict-title">目标位置存在同名文件</div>
           <div class="conflict-sub">
@@ -64,7 +64,8 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, watch } from 'vue'
+import { reactive, ref, watch } from 'vue'
+import { useModalFocusTrap } from '../../composables/useModalFocusTrap'
 import { formatBytes, formatRelativeTime } from '@/utils/format'
 import { autoRename, type ConflictAction, type ConflictDecision, type ConflictItem, type ConflictMeta } from '@/utils/transfer-conflict'
 
@@ -86,6 +87,11 @@ const ACTION_OPTS: Array<{ v: ConflictAction; t: string }> = [
 
 const choices = reactive<Record<string, ConflictAction>>({})
 const names = reactive<Record<string, string>>({})
+
+const dialogRef = ref<HTMLElement | null>(null)
+const { activate, deactivate } = useModalFocusTrap(dialogRef)
+// 必答题：打开即接管焦点 —— @keydown.esc 只有焦点在弹窗内才收得到
+watch(() => props.visible, (v) => { if (v) activate(); else deactivate() })
 
 // 一批冲突的目标名全部已占用，作为重命名自动命名的初始占用集，逐行叠加已生成的新名。
 function suggestName(item: ConflictItem): string {
@@ -153,6 +159,8 @@ watch(
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
+  /* 容器只是初始焦点落点（tabindex=-1），描边交给里面的控件 */
+  outline: none;
   padding: 20px;
   width: 640px; max-width: 92vw;
   font-family: var(--font-sans);

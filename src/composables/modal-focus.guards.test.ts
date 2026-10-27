@@ -69,6 +69,22 @@ describe('弹窗焦点管理', () => {
     expect(access).toContain('tabindex="-1"')
   })
 
+  it('SFTP 三个自绘弹窗也接上（预览 / 冲突 / 传输）', () => {
+    const files = [
+      'components/ssh/SftpImagePreview.vue',
+      'components/ssh/SftpConflictDialog.vue',
+      'components/ssh/SftpTransferDialog.vue',
+    ]
+    for (const file of files) {
+      const src = read(file)
+      expect(src, `${file} 未接共享件`).toContain("from '../../composables/useModalFocusTrap'")
+      expect(src, `${file} 打开时未激活`).toContain('activate()')
+      expect(src, `${file} 关闭时未还原`).toContain('deactivate()')
+      // 容器要能接住初始焦点，否则 activate() 无处可去
+      expect(src, `${file} 容器缺 tabindex="-1"`).toContain('tabindex="-1"')
+    }
+  })
+
   it('DESIGN.md 记着「焦点管理走共享件」', () => {
     expect(readFileSync(join(SRC, '..', 'DESIGN.md'), 'utf8')).toContain('useModalFocusTrap')
   })
