@@ -21,6 +21,8 @@
   display: flex; flex-direction: column; overflow: hidden;
   background: var(--bg-base); border: 1px solid var(--border-default); border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
+  /* 容器只作为初始焦点落点（tabindex=-1），描边交给里面的控件 */
+  outline: none;
 }
 /* 卷/网络详情：元数据展示不需要固定弹性高，自适应高度 + 内部滚动 */
 .dt-dialog-auto { height: auto; max-height: min(78vh, 100vh - 96px); }

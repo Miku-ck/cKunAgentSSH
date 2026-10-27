@@ -69,19 +69,25 @@ describe('弹窗焦点管理', () => {
     expect(access).toContain('tabindex="-1"')
   })
 
-  it('SFTP 三个自绘弹窗也接上（预览 / 冲突 / 传输）', () => {
+  it('已接入的自绘弹窗清单（SFTP / Docker 详情 / 终端首页 / git）', () => {
     const files = [
       'components/ssh/SftpImagePreview.vue',
       'components/ssh/SftpConflictDialog.vue',
       'components/ssh/SftpTransferDialog.vue',
+      'components/ssh/docker/DockerNetworkDetailDialog.vue',
+      'components/ssh/docker/DockerVolumeDetailDialog.vue',
+      'views/ssh/DashboardView.vue',
+      'components/ssh/git/GitReposPanel.vue',
     ]
     for (const file of files) {
       const src = read(file)
-      expect(src, `${file} 未接共享件`).toContain("from '../../composables/useModalFocusTrap'")
+      expect(src, `${file} 未接共享件`).toMatch(/composables\/useModalFocusTrap/)
       expect(src, `${file} 打开时未激活`).toContain('activate()')
       expect(src, `${file} 关闭时未还原`).toContain('deactivate()')
       // 容器要能接住初始焦点，否则 activate() 无处可去
       expect(src, `${file} 容器缺 tabindex="-1"`).toContain('tabindex="-1"')
+      // 自绘遮罩的弹窗自己管 Esc；上面这批原先四个里一个都没有
+      expect(src, `${file} 没有 Esc 退出路径`).toContain('Escape')
     }
   })
 

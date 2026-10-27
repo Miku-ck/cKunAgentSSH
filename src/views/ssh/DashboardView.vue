@@ -232,7 +232,7 @@
     <!-- 连接选择模态 -->
     <Teleport to="body">
       <div v-if="showConnPicker" class="dc-overlay" @click.self="showConnPicker = false">
-        <div class="dc-dialog" role="dialog" aria-modal="true" aria-label="选择 SSH 连接">
+        <div ref="connPickerRef" class="dc-dialog" role="dialog" aria-modal="true" aria-label="选择 SSH 连接" tabindex="-1">
           <div class="dc-header">
             <span>选择 SSH 连接</span>
             <button class="dc-close" @click="showConnPicker = false">×</button>
@@ -263,7 +263,7 @@
     <!-- 终止进程确认模态 -->
     <Teleport to="body">
       <div v-if="killDialog.visible" class="dc-overlay" @click.self="killDialog.visible = false">
-        <div class="dc-dialog dc-dialog-sm" role="dialog" aria-modal="true" aria-label="确认终止进程">
+        <div ref="killDialogRef" class="dc-dialog dc-dialog-sm" role="dialog" aria-modal="true" aria-label="确认终止进程" tabindex="-1">
           <div class="dc-header">
             <span>确认终止进程</span>
             <button class="dc-close" @click="killDialog.visible = false">×</button>
@@ -292,7 +292,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineComponent, h, ref, watch, type Ref } from 'vue'
+import { computed, defineComponent, h, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
+import { useModalFocusTrap } from '../../composables/useModalFocusTrap'
 import { useServerMonitorStore } from '@/stores/server-monitor'
 import { connNote, useSSHStore } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
@@ -362,6 +363,21 @@ function handleDisconnect(): void {
 // ── 终止进程 ──
 const killDialog = ref({ visible: false, target: null as { pid: number; name: string; user?: string } | null, signal: 15 })
 const killing = ref(false)
+
+// 两个弹窗都自绘遮罩：Tab 环形与关闭还原焦点走共享件，Esc 走同一个出口
+const connPickerRef = ref<HTMLElement | null>(null)
+const killDialogRef = ref<HTMLElement | null>(null)
+const connPickerTrap = useModalFocusTrap(connPickerRef)
+const killTrap = useModalFocusTrap(killDialogRef)
+watch(showConnPicker, (v) => { if (v) connPickerTrap.activate(); else connPickerTrap.deactivate() })
+watch(() => killDialog.value.visible, (v) => { if (v) killTrap.activate(); else killTrap.deactivate() })
+function onDialogKey(e: KeyboardEvent): void {
+  if (e.key !== 'Escape') return
+  if (killDialog.value.visible) killDialog.value.visible = false
+  else if (showConnPicker.value) showConnPicker.value = false
+}
+onMounted(() => window.addEventListener('keydown', onDialogKey))
+onUnmounted(() => window.removeEventListener('keydown', onDialogKey))
 
 function confirmKill(proc: ProcessTopEntry): void {
   killDialog.value = { visible: true, target: { pid: proc.pid, name: proc.name, user: proc.user }, signal: 15 }
@@ -1200,6 +1216,8 @@ const Sparkline = defineComponent({
   border: 1px solid var(--border-default);
   border-radius: 10px;
   box-shadow: var(--shadow-lg);
+  /* 容器只是初始焦点落点（tabindex=-1），描边交给里面的按钮 */
+  outline: none;
 }
 
 .dc-header {

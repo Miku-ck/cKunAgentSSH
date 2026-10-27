@@ -29,7 +29,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useModalFocusTrap } from '../../composables/useModalFocusTrap'
 import { imageMime } from '@/utils/language'
 import { formatBytes } from '@/utils/format'
@@ -56,6 +56,10 @@ const dialogRef = ref<HTMLElement | null>(null)
 const { activate, deactivate } = useModalFocusTrap(dialogRef)
 // 纯展示面：打开时焦点落在容器上（Tab 圈在弹窗内），关闭后还给双击的那一行
 watch(() => props.visible, (v) => { if (v) activate(); else deactivate() })
+// Esc 与右上角 ✕ 同一出口
+function onKeydown(e: KeyboardEvent): void { if (e.key === 'Escape') emit('close') }
+onMounted(() => window.addEventListener('keydown', onKeydown))
+onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
 // 竞态守卫：连续切换查看不同图片时，慢的先返回的读取不得覆盖后发起的结果
 // （沿用 SftpFileEditor loadSeq / store openSeq 同一手法）。

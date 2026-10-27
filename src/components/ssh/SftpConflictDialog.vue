@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <div v-if="visible" class="conflict-overlay" @click.self="cancel">
-      <div ref="dialogRef" class="conflict-dialog" tabindex="-1" role="dialog" aria-modal="true" aria-label="文件冲突处理" @keydown.esc="cancel">
+      <div ref="dialogRef" class="conflict-dialog" tabindex="-1" role="dialog" aria-modal="true" aria-label="文件冲突处理">
         <div class="conflict-head">
           <div class="conflict-title">目标位置存在同名文件</div>
           <div class="conflict-sub">
@@ -64,7 +64,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, watch } from 'vue'
+import { onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useModalFocusTrap } from '../../composables/useModalFocusTrap'
 import { formatBytes, formatRelativeTime } from '@/utils/format'
 import { autoRename, type ConflictAction, type ConflictDecision, type ConflictItem, type ConflictMeta } from '@/utils/transfer-conflict'
@@ -90,8 +90,12 @@ const names = reactive<Record<string, string>>({})
 
 const dialogRef = ref<HTMLElement | null>(null)
 const { activate, deactivate } = useModalFocusTrap(dialogRef)
-// 必答题：打开即接管焦点 —— @keydown.esc 只有焦点在弹窗内才收得到
+// 必答题：打开即接管焦点（Tab 圈在弹窗内）
 watch(() => props.visible, (v) => { if (v) activate(); else deactivate() })
+// Esc 走 window：原先写在容器上（@keydown.esc），焦点不在弹窗内就收不到
+function onKeydown(e: KeyboardEvent): void { if (e.key === 'Escape') emit('cancel') }
+onMounted(() => window.addEventListener('keydown', onKeydown))
+onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
 // 一批冲突的目标名全部已占用，作为重命名自动命名的初始占用集，逐行叠加已生成的新名。
 function suggestName(item: ConflictItem): string {

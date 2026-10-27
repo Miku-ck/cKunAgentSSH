@@ -1,6 +1,6 @@
 <template>
   <div class="dt-overlay" @click.self="emit('close')">
-    <div class="dt-dialog dt-dialog-auto" role="dialog" aria-modal="true" :aria-label="'网络详情：' + network.name">
+    <div ref="dialogRef" class="dt-dialog dt-dialog-auto" role="dialog" aria-modal="true" :aria-label="'网络详情：' + network.name" tabindex="-1">
       <div class="dp-head">
         <span class="dp-name mono">{{ network.name }}</span>
         <span class="badge">{{ network.driver }}</span>
@@ -87,6 +87,7 @@
 <script setup lang="ts">
 // DockerNetworkDetailDialog.vue — 网络详情：基础 + IPAM 表 + 连接容器表 + 标签 / 驱动选项，底部快捷删除。
 import { onMounted, onUnmounted, ref } from 'vue'
+import { useModalFocusTrap } from '../../../composables/useModalFocusTrap'
 import { isBuiltinNetwork, networkInspectCmd, parseNetworkInspect, type DockerError, type NetworkInspect, type NetworkRow } from '@/stores/docker-core'
 import { useDockerHost } from './context'
 
@@ -102,9 +103,18 @@ const netInspect = ref<NetworkInspect | null>(null)
 const inspectLoading = ref(false)
 const inspectError = ref<DockerError | null>(null)
 
+const dialogRef = ref<HTMLElement | null>(null)
+const { activate, deactivate } = useModalFocusTrap(dialogRef)
+// 纯阅读面：打开聚焦容器、关掉还给触发器；Esc 与右上角 ✕ 同一出口
+function onKeydown(e: KeyboardEvent): void { if (e.key === 'Escape') emit('close') }
+
 // 回包前必须确认「弹窗还开着、宿主没换」：卸载后的慢回包不该再写这份状态。
 let alive = true
-onUnmounted(() => { alive = false })
+onUnmounted(() => {
+  alive = false
+  window.removeEventListener('keydown', onKeydown)
+  deactivate()
+})
 
 async function openNetworkDetail(n: NetworkRow): Promise<void> {
   const id = targetId.value
@@ -120,5 +130,9 @@ async function openNetworkDetail(n: NetworkRow): Promise<void> {
     if (alive && targetId.value === id) inspectLoading.value = false
   }
 }
-onMounted(() => { void openNetworkDetail(props.network) })
+onMounted(() => {
+  activate()
+  window.addEventListener('keydown', onKeydown)
+  void openNetworkDetail(props.network)
+})
 </script>

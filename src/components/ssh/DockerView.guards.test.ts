@@ -143,8 +143,9 @@ describe('跨宿主、弹窗与轮询的陈旧写入', () => {
       // 卸载守卫：关掉弹窗后慢回包不该再写这份状态
       expect(body, header).toContain('!alive || targetId.value !== id')
     }
-    expect(volumeDetailSrc).toContain('onUnmounted(() => { alive = false })')
-    expect(networkDetailSrc).toContain('onUnmounted(() => { alive = false })')
+    // 卸载守卫：关掉弹窗后慢回包不该再写这份状态（函数体里可能还有焦点/监听清理）
+    expect(volumeDetailSrc).toMatch(/onUnmounted\(\(\) => \{\s*alive = false/)
+    expect(networkDetailSrc).toMatch(/onUnmounted\(\(\) => \{\s*alive = false/)
   })
 
   it('容器详情的三条取数腿已拆到子组件，页面不再自持日志轮询', () => {

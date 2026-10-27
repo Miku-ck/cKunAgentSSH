@@ -111,7 +111,7 @@
     <!-- 登记远程仓库路径 -->
     <Teleport to="body">
       <div v-if="showAddRemote" class="arm-overlay" @click.self="showAddRemote = false">
-        <div class="arm-dialog" role="dialog" aria-modal="true" aria-label="登记远程仓库路径">
+        <div ref="addRemoteRef" class="arm-dialog" role="dialog" aria-modal="true" aria-label="登记远程仓库路径" tabindex="-1">
           <div class="arm-title">登记远程仓库路径</div>
           <div class="arm-sub">在 {{ scopeSession?.name || '当前主机' }} 上登记一个 git 工作区路径，登记前会先校验该路径。</div>
           <input
@@ -138,7 +138,8 @@
 // 位置 = 本地或某台已连接远程会话；本地经 gitrepos:* IPC（主进程 execFile），
 // 远程构造 shared/git-repos-core 的命令经 sshExec 下发（同 Docker 路线）。
 // 动作锁 / pull 确认 / 远程审计收在本组件；详情面板只取数不执行。
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useModalFocusTrap } from '../../../composables/useModalFocusTrap'
 import { useSSHStore, type TerminalSession } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
@@ -813,6 +814,18 @@ async function onAdd(): Promise<void> {
 
 const showAddRemote = ref(false)
 const addRemotePath = ref('')
+
+const addRemoteRef = ref<HTMLElement | null>(null)
+// 打开即聚焦输入框：这个弹窗存在的意义就是敲一行路径
+const addRemoteTrap = useModalFocusTrap(addRemoteRef, { initialFocus: '.arm-input' })
+watch(showAddRemote, (v) => { if (v) addRemoteTrap.activate(); else addRemoteTrap.deactivate() })
+// Esc 与「取消」同一出口（此前这个弹窗没有任何键盘退出路径）
+function onAddRemoteKey(e: KeyboardEvent): void {
+  if (e.key === 'Escape' && showAddRemote.value) showAddRemote.value = false
+}
+onMounted(() => window.addEventListener('keydown', onAddRemoteKey))
+onUnmounted(() => window.removeEventListener('keydown', onAddRemoteKey))
+
 async function onAddRemote(): Promise<void> {
   // 尾部斜杠归一：/var/www/app/ 与 /var/www/app 不该登记成两条
   const p = addRemotePath.value.trim().replace(/\/+$/, '') || '/'
@@ -1100,6 +1113,8 @@ watch(scopeKey, () => {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
+  /* 容器只是初始焦点落点（tabindex=-1），描边交给里面的输入框 */
+  outline: none;
   padding: 16px 18px;
   display: flex;
   flex-direction: column;

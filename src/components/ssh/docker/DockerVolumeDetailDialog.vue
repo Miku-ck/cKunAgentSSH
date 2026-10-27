@@ -1,6 +1,6 @@
 <template>
   <div class="dt-overlay" @click.self="emit('close')">
-    <div class="dt-dialog dt-dialog-auto" role="dialog" aria-modal="true" :aria-label="'卷详情：' + volume.name">
+    <div ref="dialogRef" class="dt-dialog dt-dialog-auto" role="dialog" aria-modal="true" :aria-label="'卷详情：' + volume.name" tabindex="-1">
       <div class="dp-head">
         <span class="dp-name mono">{{ volume.name }}</span>
         <span class="badge">{{ volume.driver }}</span>
@@ -61,6 +61,7 @@
 // DockerVolumeDetailDialog.vue — 卷详情：inspect 一次拉后展示元数据 + 标签 + 驱动选项，底部快捷删除。
 // 用量优先级：inspect 的 UsageData（新版才给）→ 列表富集的 docker system df -v；都缺则「—」。
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useModalFocusTrap } from '../../../composables/useModalFocusTrap'
 import { parseVolumeInspect, volumeInspectCmd, volumeUsageSummary, type DockerError, type VolumeInspect, type VolumeRow } from '@/stores/docker-core'
 import { useDockerHost } from './context'
 
@@ -76,9 +77,18 @@ const volInspect = ref<VolumeInspect | null>(null)
 const inspectLoading = ref(false)
 const inspectError = ref<DockerError | null>(null)
 
+const dialogRef = ref<HTMLElement | null>(null)
+const { activate, deactivate } = useModalFocusTrap(dialogRef)
+// 纯阅读面：打开聚焦容器、关掉还给触发器；Esc 与右上角 ✕ 同一出口
+function onKeydown(e: KeyboardEvent): void { if (e.key === 'Escape') emit('close') }
+
 // 回包前必须确认「弹窗还开着、宿主没换」：卸载后的慢回包不该再写这份状态。
 let alive = true
-onUnmounted(() => { alive = false })
+onUnmounted(() => {
+  alive = false
+  window.removeEventListener('keydown', onKeydown)
+  deactivate()
+})
 
 async function openVolumeDetail(v: VolumeRow): Promise<void> {
   const id = targetId.value
@@ -94,7 +104,11 @@ async function openVolumeDetail(v: VolumeRow): Promise<void> {
     if (alive && targetId.value === id) inspectLoading.value = false
   }
 }
-onMounted(() => { void openVolumeDetail(props.volume) })
+onMounted(() => {
+  activate()
+  window.addEventListener('keydown', onKeydown)
+  void openVolumeDetail(props.volume)
+})
 
 const volumeUsageInfo = computed(() => volumeUsageSummary(props.volume, volInspect.value))
 </script>
