@@ -22,7 +22,11 @@
     <!-- 任务卡片 -->
     <div v-if="items.length === 0 && !loading" class="empty-state">暂无定时任务</div>
     <div v-if="items.length" class="schedule-list">
-      <div v-for="s in items" :key="s.id" class="schedule-card">
+      <template v-for="section in sections" :key="section.type">
+      <div v-if="section.items.length" class="schedule-section-title">
+        {{ section.title }} <span class="cnt">{{ section.items.length }}</span>
+      </div>
+      <div v-for="s in section.items" :key="s.id" class="schedule-card" :class="{ daily: section.type === 'daily' }">
         <div class="schedule-card-head">
           <div class="schedule-name">
             {{ s.name }}
@@ -54,6 +58,7 @@
           <div class="prompt">{{ s.task_prompt }}</div>
         </div>
       </div>
+      </template>
     </div>
 
     <!-- 空历史 Modal -->
@@ -90,14 +95,22 @@
     <Teleport to="body">
     <div v-if="editing" class="modal-mask" @click.self="editing = null">
       <div class="modal" role="dialog" aria-modal="true">
-        <div class="modal-title">{{ editing.id ? '编辑任务' : '新建定时任务' }}</div>
+        <div class="modal-title schedule-modal-title">
+          <span>{{ editing.id ? '编辑任务' : '新建定时任务' }}</span>
+          <div class="type-switch" :class="{ disabled: !!editing.id }" :title="editing.id ? '任务类型创建后不可修改' : '任务类型'">
+            <button class="sched-option" :class="{ active: form.task_type === 'ops' }"
+              :disabled="!!editing.id" @click="switchType('ops')">运维</button>
+            <button class="sched-option" :class="{ active: form.task_type === 'daily' }"
+              :disabled="!!editing.id" @click="switchType('daily')">日常</button>
+          </div>
+        </div>
         <div class="modal-body">
           <!-- 模板选择（仅新建时显示） -->
           <div v-if="!editing.id" class="field">
             <span>选择模板</span>
             <div class="template-list">
               <button
-                v-for="t in templates"
+                v-for="t in visibleTemplates"
                 :key="t.id"
                 class="template-chip"
                 :class="{ active: selectedTemplate === t.id }"
@@ -222,6 +235,10 @@ import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
 import { formatBackendTs, parseBackendTs } from '@/utils/format'
 import { pickNotices } from '@/utils/schedule-notify'
+import {
+  groupSchedules, templatesForType,
+  type TaskType,
+} from '@/utils/schedule-task-type'
 import { connNote, useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useAgentStore } from '@/stores/agent'
@@ -257,12 +274,23 @@ const loading = ref(false)
 const error = ref('')
 const items = ref<ScheduleRecord[]>([])
 
+// 列表分区（spec 2026-10-27-schedule-task-type）：存量/缺省归运维，空区整块隐藏
+const grouped = computed(() => groupSchedules(items.value))
+const opsItems = computed(() => grouped.value.ops)
+const dailyItems = computed(() => grouped.value.daily)
+// 单一卡片体遍历两个分区（运维上、日常下）；空区在模板层用 v-if 整块隐藏
+const sections = computed(() => [
+  { type: 'ops' as TaskType, title: '运维任务', items: opsItems.value },
+  { type: 'daily' as TaskType, title: '日常任务', items: dailyItems.value },
+])
+
 const editing = ref<ScheduleRecord | null>(null)
 const saving = ref(false)
 const selectedTemplate = ref<string | null>(null)
 type ScheduleType = 'interval' | 'daily' | 'weekly' | 'monthly'
 interface ScheduleForm {
   name: string
+  task_type: TaskType
   schedule_type: ScheduleType
   interval_minutes: number
   time_hour: number
@@ -277,6 +305,7 @@ interface ScheduleForm {
 // 新增字段必然漏掉其中一处（新建表单带着上一个任务的字段值提交）。
 const FORM_DEFAULTS: ScheduleForm = {
   name: '',
+  task_type: 'ops',
   schedule_type: 'interval',
   interval_minutes: 60,
   time_hour: 9,
@@ -291,6 +320,14 @@ const form = reactive<ScheduleForm>({ ...FORM_DEFAULTS })
 
 function resetForm(): void {
   Object.assign(form, FORM_DEFAULTS)
+}
+
+// 新建时切换类型：只换模板集、清模板选中态，不重置已填字段；编辑态锁定不可改
+function switchType(t: TaskType): void {
+  if (editing.value?.id) return
+  if (form.task_type === t) return
+  form.task_type = t
+  selectedTemplate.value = null
 }
 
 const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
@@ -318,6 +355,7 @@ interface Template {
   name: string
   desc: string
   prompt: string
+  task_type?: TaskType
   schedule_type?: ScheduleType
   defaultInterval?: number
   time_hour?: number
@@ -359,7 +397,41 @@ const templates: Template[] = [
     time_hour: 9,
     prompt: '汇总上月的资源使用与账单情况，比对配置与用量，\n生成结构化月度对账报告，标注异常扣费和优化建议。',
   },
+  // ── 日常任务内置模板（spec 2026-10-27-schedule-task-type）──
+  {
+    id: 'daily-brief',
+    name: '天气/资讯摘要提醒',
+    desc: '每天生成当天天气与要点摘要',
+    task_type: 'daily',
+    schedule_type: 'daily',
+    time_hour: 8,
+    prompt: '汇总当天的天气、待办与要点信息，生成一条简洁的每日摘要提醒，面向个人日常使用。',
+  },
+  {
+    id: 'weekly-report',
+    name: '周报素材汇总',
+    desc: '每周五收集本周要点形成周报素材',
+    task_type: 'daily',
+    schedule_type: 'weekly',
+    weekday: 4,
+    time_hour: 16,
+    prompt: '收集本周完成的任务、进行中的事项与风险，整理成结构化周报素材草稿。',
+  },
+  {
+    id: 'file-archive',
+    name: '文件归档整理',
+    desc: '按类型/日期归类整理目录',
+    task_type: 'daily',
+    schedule_type: 'monthly',
+    day_of_month: 1,
+    time_hour: 10,
+    prompt: '对目标目录按文件类型与修改日期归类整理，先给出只读整理预览清单，确认后再执行。',
+  },
 ]
+
+// 模板 chips 按当前表单类型过滤（运维=现有模板，日常=上面 3 条）
+const visibleTemplates = computed<Template[]>(() =>
+  templatesForType(templates, form.task_type))
 
 function applyTemplate(t: Template) {
   selectedTemplate.value = t.id
@@ -476,6 +548,7 @@ let formBaseline: ScheduleForm = { ...FORM_DEFAULTS }
 function openEdit(s: ScheduleRecord) {
   // 缺省值取 FORM_DEFAULTS：原样字面量是第三份默认值副本，改一处就与新建表单分叉
   form.name = s.name
+  form.task_type = s.task_type ?? 'ops'
   form.schedule_type = s.schedule_type
   form.interval_minutes = s.interval_minutes ?? FORM_DEFAULTS.interval_minutes
   form.time_hour = s.time_hour ?? FORM_DEFAULTS.time_hour
@@ -497,6 +570,7 @@ function formPayload() {
     typeof v === 'number' && Number.isFinite(v) ? v : fallback
   return {
     name: form.name.trim(),
+    task_type: form.task_type,
     schedule_type: form.schedule_type,
     interval_minutes: numOr(form.interval_minutes, FORM_DEFAULTS.interval_minutes),
     time_hour: numOr(form.time_hour, FORM_DEFAULTS.time_hour),
@@ -783,6 +857,13 @@ onUnmounted(() => {
   border-radius: 8px;
   padding: 12px 14px;
 }
+/* 日常任务色条：沿用成功/绿语义 token，不硬编码色值（spec §3） */
+.schedule-card.daily { border-left-color: var(--accent-green); }
+.schedule-section-title {
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: 13px; font-weight: 600; color: var(--text-primary); margin-top: 4px;
+}
+.schedule-section-title .cnt { font-size: 11px; font-weight: 400; color: var(--text-tertiary); }
 .schedule-card-head { display: flex; align-items: center; justify-content: space-between; }
 .schedule-name { font-size: 14px; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 8px; }
 /* 启用标记与执行状态是同一种"小徽章"，形状只写一份；配色各自表述语义 */
@@ -810,6 +891,12 @@ onUnmounted(() => {
 .modal { width: 520px; max-width: 90vw; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 16px; max-height: 80vh; overflow: auto; }
 .modal.wide { width: 680px; }
 .modal-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 12px; }
+/* 弹窗标题栏：左侧标题、右侧类型分段开关（方案 B） */
+.schedule-modal-title { display: flex; align-items: center; justify-content: space-between; }
+.type-switch { display: inline-flex; gap: 6px; }
+.type-switch .sched-option { padding: 3px 12px; }
+.type-switch.disabled { opacity: .55; }
+.type-switch .sched-option:disabled { cursor: not-allowed; }
 .modal-body { display: flex; flex-direction: column; gap: 10px; }
 .field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-tertiary); }
 .field input, .field textarea, .field select {

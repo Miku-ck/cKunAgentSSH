@@ -124,6 +124,8 @@ export const agentApi = {
 export interface ScheduleRecord {
   id: string
   name: string
+  // spec 2026-10-27-schedule-task-type：任务分类，后端缺省 'ops'（存量行自动归运维）
+  task_type: 'ops' | 'daily'
   task_prompt: string
   target_host: string
   schedule_type: 'interval' | 'daily' | 'weekly' | 'monthly'
@@ -155,6 +157,8 @@ export interface ScheduleRun {
 
 export interface ScheduleIn {
   name: string
+  // 仅创建时生效；编辑不允许改类型（后端 PATCH 对变更返回 422）
+  task_type?: 'ops' | 'daily'
   task_prompt?: string
   target_host?: string
   schedule_type?: 'interval' | 'daily' | 'weekly' | 'monthly'
