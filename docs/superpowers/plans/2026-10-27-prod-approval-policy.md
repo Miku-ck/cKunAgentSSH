@@ -30,7 +30,7 @@
 - Consumes: `AWAIT_APPROVAL_KEY`（`agent/harness/reins/core.py:33`）、`PermissionGate.check_permission/grant/is_permanently_allowed`。
 - Produces: prod 交互路径返回带 `approval_key` 的 `permission_needed` 决策（Driver 据此登记等待）；无人值守路径的 `intercept_reason` 仍含 `POLICY_DENY_MARKER`。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `backend/tests/test_permission_improvements.py` 顶部 import 区加入：
 
@@ -119,12 +119,12 @@ def test_prod_unattended_deny_says_no_one_can_confirm():
     assert "无人值守" in inject and "allowlist" in inject
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `python -m pytest backend/tests/test_permission_improvements.py -q -k "prod_dangerous_command_cards_when_interactive or interactive_once or always_grant or skips_model or unattended_deny_says"`
 Expected: FAIL —— 前三个测试拿到的仍是 `intercept_reason` 含「未预授权」的拒绝；`skips_model` 的 `calls` 非空（当前 prod 分支直接 return 前不会调用，但新测试的判据是发卡，仍会失败）；`unattended_deny_says` 文案不含「无人值守」。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 在 `backend/agent/harness/reins/guards.py` 的 `.core` import 列表最前面加入：
 
@@ -189,17 +189,17 @@ from .core import (
                             decision = await try_auto_approve(
 ```
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `python -m pytest backend/tests/test_permission_improvements.py -q`
 Expected: PASS（含原 `test_prod_deny_reason_carries_policy_marker_and_stop_guidance`）。
 
-- [ ] **Step 5: 回归同文件相关的 prod 内容闸测试**
+- [x] **Step 5: 回归同文件相关的 prod 内容闸测试**
 
 Run: `python -m pytest backend/tests/test_permission_gate_content_bound_tools.py backend/tests/test_log_cleanup_tool.py -q`
 Expected: PASS（这些 ctx 均未置交互标志，走无人值守拒绝路径）。
 
-- [ ] **Step 6: 校准两处过时注释（不改断言）**
+- [x] **Step 6: 校准两处过时注释（不改断言）**
 
 `backend/tests/test_log_cleanup_tool.py::test_prod_delete_still_requires_allowlist` 的 docstring 改为：
 
@@ -228,7 +228,7 @@ Expected: PASS。
 - Consumes: Task 1 确立的同一判据（`AWAIT_APPROVAL_KEY`）。
 - Produces: 交互 prod 的 `service_manage stop/restart` 等工具级 dangerous 返回 `permission_needed` + `approval_key`；无人值守 prod 仍返回 `prod_deny_no_allowlist`。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `backend/tests/test_sse_permission_and_run_lifecycle.py` 的 gate 测试 import 区（约 166-169 行）加入：
 
@@ -303,12 +303,12 @@ def test_prod_unattended_tool_deny_says_no_one_can_confirm(monkeypatch):
     """
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `python -m pytest backend/tests/test_sse_permission_and_run_lifecycle.py -q -k "prod_dangerous_tool or skips_auto_judge or unattended_tool_deny"`
 Expected: FAIL —— 交互 prod 仍返回拒绝；无人值守注入文案不含「无人值守」。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 在 `backend/agent/harness/reins/gate.py` 的 `.core` import 列表加入 `AWAIT_APPROVAL_KEY`（置于 `_COMMAND_EXEC_TOOLS` 之前）。
 
@@ -364,7 +364,7 @@ Expected: FAIL —— 交互 prod 仍返回拒绝；无人值守注入文案不�
             decision = await try_auto_approve(
 ```
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `python -m pytest backend/tests/test_sse_permission_and_run_lifecycle.py backend/tests/test_service_manage_command_bound.py backend/tests/test_permission_gate_content_bound_tools.py backend/tests/test_permission_policy_ttl.py backend/tests/test_allowlist_host_scope.py -q`
 Expected: PASS。
@@ -382,7 +382,7 @@ Expected: PASS。
 - Consumes: `AWAIT_APPROVAL_KEY`、`resolve_registry`、`extract_bound_command`、`classify_command/classify_constructed_command`、`registry.get(tool).meta.risk_level`。
 - Produces: `ClarificationInterceptor(saddle=...)`（不再接受 `permission_gate`）；`_skip_clarification(ctx, tool, args) -> bool`。
 
-- [ ] **Step 1: 迁移测试上下文（先改测试基础设施）**
+- [x] **Step 1: 迁移测试上下文（先改测试基础设施）**
 
 `backend/tests/test_clarification_wizard.py`：
 - import 区加入 `from agent.harness.reins.core import AWAIT_APPROVAL_KEY`
@@ -426,7 +426,7 @@ def _ctx() -> RunContext:
     return ctx
 ```
 
-- [ ] **Step 2: 写失败测试并改写旧断言**
+- [x] **Step 2: 写失败测试并改写旧断言**
 
 `backend/tests/test_clarification_wizard.py` 中把整个 `TestBlockedCallsSkipWizard` 类（约 616-698 行）替换为：
 
@@ -504,12 +504,12 @@ async def test_unattended_run_skips_wizard_and_executes():
     assert harness.stirrups.rounds == 2
 ```
 
-- [ ] **Step 3: 运行确认失败**
+- [x] **Step 3: 运行确认失败**
 
 Run: `python -m pytest backend/tests/test_clarification_wizard.py backend/tests/test_clarification_blocking.py -q`
 Expected: FAIL —— `test_unattended_run_skips_wizard`、`test_prod_never_asks`、`test_safe_recursive_rm_skips_wizard` 与改写后的 blocking 用例失败（当前仍会建题）。
 
-- [ ] **Step 4: 实现**
+- [x] **Step 4: 实现**
 
 `backend/agent/harness/reins/clarification.py`：
 - `.core` import 加入 `AWAIT_APPROVAL_KEY`，删除 `_target_host`。
@@ -565,12 +565,12 @@ Expected: FAIL —— `test_unattended_run_skips_wizard`、`test_prod_never_asks
     interceptors.append(ClarificationInterceptor(saddle=saddle))
 ```
 
-- [ ] **Step 5: 运行确认通过**
+- [x] **Step 5: 运行确认通过**
 
 Run: `python -m pytest backend/tests/test_clarification_wizard.py backend/tests/test_clarification_blocking.py backend/tests/test_clarification_answer_binding_and_labels.py backend/tests/test_clarification_sse_contract.py backend/tests/test_harness_feedback_loop.py backend/tests/test_plan_mode.py -q`
 Expected: PASS。
 
-- [ ] **Step 6: 检查没有残留的 `permission_gate=` 构造**
+- [x] **Step 6: 检查没有残留的 `permission_gate=` 构造**
 
 Run: `grep -rn "ClarificationInterceptor(.*permission_gate" backend src`
 Expected: 无输出。
@@ -591,7 +591,7 @@ Expected: 无输出。
 - Consumes: Task 1/2 的最终语义。
 - Produces: 用户可见文案不再声称「prod 不弹临时审批卡」。
 
-- [ ] **Step 1: 改前端文案**
+- [x] **Step 1: 改前端文案**
 
 `src/components/ssh/ConnectionModal.vue`：
 
@@ -611,7 +611,7 @@ const prodAllowlistHint = computed(() =>
 )
 ```
 
-- [ ] **Step 2: 更新前端文案断言**
+- [x] **Step 2: 更新前端文案断言**
 
 `src/components/agent/RollbackPanel.test.ts` 中替换该 it：
 
@@ -624,12 +624,12 @@ const prodAllowlistHint = computed(() =>
   })
 ```
 
-- [ ] **Step 3: 运行前端测试**
+- [x] **Step 3: 运行前端测试**
 
 Run: `npx vitest run src/components/agent/RollbackPanel.test.ts`
 Expected: PASS。
 
-- [ ] **Step 4: 改文档与注释**
+- [x] **Step 4: 改文档与注释**
 
 `docs/p0-ops-agent-enhancements.md:390` 的第 5 条整段替换为：
 
@@ -652,7 +652,7 @@ Expected: PASS。
             # hardline / 曾被拒绝 / 无人值守的 prod 未预登记……那些是「直接否掉」，没有人要等
 ```
 
-- [ ] **Step 5: 确认没有残留的旧口径**
+- [x] **Step 5: 确认没有残留的旧口径**
 
 Run: `grep -rn "不弹临时审批卡\|拒绝临时审批\|不再临时弹窗审批" src backend/agent docs`
 Expected: 无输出（`src/*.test.ts` 里模拟旧 warning 的 fixture 不在此列，保留不动）。
@@ -663,17 +663,17 @@ Expected: 无输出（`src/*.test.ts` 里模拟旧 warning 的 fixture 不在此
 
 **Files:** 无新增改动（只跑测试）。
 
-- [ ] **Step 1: 全量后端测试**
+- [x] **Step 1: 全量后端测试**
 
 Run: `python -m pytest backend/tests -q`
 Expected: 全部通过（基线 3375 passed；数量会因新增用例上升）。若有失败，先判断是否属于「旧口径断言」，按 Task 1-3 建立的语义修正测试，不要改实现去迎合过时文案。
 
-- [ ] **Step 2: 前端相关测试**
+- [x] **Step 2: 前端相关测试**
 
 Run: `npx vitest run src/components/agent/RollbackPanel.test.ts src/stores/agent.test.ts`
 Expected: PASS。
 
-- [ ] **Step 3: 事故链路自检（脚本）**
+- [x] **Step 3: 事故链路自检（脚本）**
 
 Run:
 
@@ -733,3 +733,15 @@ Expected:
 - **Placeholder scan**：无 TBD / TODO；所有测试与实现均给出完整代码。
 - **Type consistency**：`AWAIT_APPROVAL_KEY`（不是 `await_approval` 字面量）；`_skip_clarification(ctx, tool, args)`；`ClarificationInterceptor(saddle=...)`；`interactive = bool(ctx.metadata.get(AWAIT_APPROVAL_KEY))` 在 guard/gate 同名同义。
 - **Commit policy**：Global Constraints 已声明不提交；Task 5 以全量测试为收尾。
+
+---
+
+## 验证记录（2026-10-27，ZCode 会话执行）
+
+- 实现（Task 1-3 的 guards/gate/clarification/defaults 改动与 Task 4 文案）随 round-1 修复进入 `558fc3e`，本会话逐文件核对与计划一致，无需补码。
+- Task 5 验证结果：
+  - 计划点名的 14 个测试文件：**400 passed**（含 Task 1/2 新增的 prod 交互发卡、once/always 授权、auto 排除、无人值守文案用例）；
+  - 前端 `RollbackPanel.test.ts` + `agent.test.ts`：**72 passed**；
+  - 事故链路自检脚本：**4/4 预期命中**（向导 prod 不建题 / 交互 safe 直接执行 / 交互危险发卡 `permission_needed` / 无人值守拒绝含「未预授权」）；
+  - 全量 `pytest backend/tests`：3404 passed + 3 failed，失败项为 `test_bot_store`（另一工作流当时实现未保存的中间态），复跑 **4/4 通过**，与本计划无关。
+- T4 Step 5 旧口径残留：仅计划/规格两个元文档引用旧文案作说明，`src`/`backend/agent` 无残留；T3 Step 6 无 `permission_gate=` 构造残留。
