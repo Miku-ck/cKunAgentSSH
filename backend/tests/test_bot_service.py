@@ -172,3 +172,41 @@ def test_system_prompt_style_and_channel():
     assert "禁止表格" in qq and "Markdown 排版" not in qq
     # 向后兼容：不传 channel 默认 local
     assert svc._system_prompt(base) == concise
+
+
+@pytest.mark.asyncio
+async def test_stream_reply_style_output_budget(monkeypatch, tmp_workspace):
+    """回复风格直接决定输出预算上限（spec §4.2）：concise 压到 512、moderate 走模型默认、long 放大到 4 倍。"""
+    from bot.chat_service import BotChatService
+
+    db._close_all_connections()
+    db.init_db(os.path.join(tmp_workspace, "bot-style.db"))
+    model = db.create_model_config(
+        name="m", base_url="http://x/v1", model_id="m", max_output_tokens=1024
+    )
+    captured = {}
+
+    async def fake_stream(**kwargs):
+        captured.update(kwargs)
+        yield SimpleNamespace(content="好", reasoning="")
+
+    monkeypatch.setattr("llm_adapter.chat_stream", fake_stream)
+    try:
+        # moderate（默认）= 模型 max_output_tokens
+        c_mod = db.create_bot_conversation(db.create_bot_persona(name="n", model_id=model["id"])["id"])
+        [x async for x in BotChatService().stream_reply(c_mod["id"], "展开讲讲")]
+        assert captured["max_tokens"] == 1024
+        captured.clear()
+        # long = min(max_tokens or 4096, max_output_tokens*4)
+        p_long = db.create_bot_persona(name="n", model_id=model["id"], reply_style="long")
+        c_long = db.create_bot_conversation(p_long["id"])
+        [x async for x in BotChatService().stream_reply(c_long["id"], "再展开")]
+        assert captured["max_tokens"] == 4096
+        captured.clear()
+        # concise 压到 512
+        p_concise = db.create_bot_persona(name="n", model_id=model["id"], reply_style="concise")
+        c_concise = db.create_bot_conversation(p_concise["id"])
+        [x async for x in BotChatService().stream_reply(c_concise["id"], "简短")]
+        assert captured["max_tokens"] == 512
+    finally:
+        db._close_all_connections()

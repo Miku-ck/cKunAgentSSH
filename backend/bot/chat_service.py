@@ -78,8 +78,17 @@ class BotChatService:
         # 加的模型永远开不了思考）；只有模型真的回 reasoning chunk 时才自然展示。
         enable_thinking = bool(persona.get("enable_thinking"))
         reasoning_budget = model.get("reasoning_tokens") if enable_thinking else None
-        # 简洁风格把输出上限压到 512；其余沿用模型 max_output_tokens（长度主要由提示词控制）。
-        style_cap = 512 if persona.get("reply_style") == "concise" else model.get("max_output_tokens")
+        # 输出预算按风格分档（spec §4.2）：concise 压到 512（人性化简短）；long 放到模型
+        # max_output_tokens 的 4 倍、但不超上下文（可控长文）；moderate 走模型默认。
+        # 长度还由提示词软指令配合；最终仍经 safe_max_tokens 按窗口封顶，防 vLLM 400。
+        style = persona.get("reply_style") or "moderate"
+        model_out = model.get("max_output_tokens")
+        if style == "concise":
+            style_cap = 512
+        elif style == "long":
+            style_cap = min(model.get("max_tokens") or 4096, (model_out or 0) * 4 or 4096)
+        else:
+            style_cap = model_out
         # 输出预算按上下文窗口封顶：max_output_tokens 若被选成接近窗口（如 262144），
         # 原样下发会让 vLLM 判定 prompt 挤不进剩余空间 → 400。陪聊与 QQ 共用此路径，
         # 与 routes/agent 用同一个 safe_max_tokens 口径。
