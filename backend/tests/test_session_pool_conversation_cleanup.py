@@ -14,7 +14,6 @@ cleanup_run_denied + routes 兜底），session 池没有任何回收点；后�
 运行: python -m pytest backend/tests/test_session_pool_conversation_cleanup.py -v
 """
 import asyncio
-import os
 
 import fastapi
 import pytest
@@ -70,15 +69,6 @@ def test_cleanup_conversation_session_covers_host_scoped_keys():
 
 
 # ── 路由层：会话删除即终结路径 ─────────────────────────────────────────────
-
-
-@pytest.fixture
-def base_db(tmp_workspace):
-    db_path = os.path.join(tmp_workspace, "session_pool.db")
-    db._close_all_connections()
-    db.init_db(db_path)
-    yield db_path
-    db._close_all_connections()
 
 
 def _make_client(*routers) -> TestClient:

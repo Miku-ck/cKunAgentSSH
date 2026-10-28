@@ -99,16 +99,33 @@ export interface BotMessage {
   created_at: string
 }
 
-export interface BotQqConfig {
-  app_id: string
-  has_secret: boolean
-  persona_id: string
-  context_id: string
+export type BotChannelState = 'offline' | 'connecting' | 'online' | 'reconnecting' | 'error'
+
+export interface BotChannelStatus {
+  state: BotChannelState
+  detail: string
 }
 
-export interface BotQqStatus {
-  state: 'offline' | 'connecting' | 'online' | 'reconnecting' | 'error'
-  detail: string
+/** 一个机器人账号。一行绑一个人格；人格可改，但同一时刻只有一个。 */
+export interface BotChannel {
+  id: string
+  provider: 'qq'
+  display_name: string
+  persona_id: string
+  app_id: string
+  /** 密钥只写不回显，接口只告诉前端「有没有」。 */
+  has_secret: boolean
+  enabled: boolean
+  /** 连带会被删掉的会话条数，删除确认文案要用。 */
+  conversation_count: number
+  status: BotChannelStatus
+}
+
+export interface BotChannelPayload {
+  display_name: string
+  persona_id: string
+  app_id: string
+  app_secret?: string
 }
 
 export const botApi = {
@@ -124,11 +141,12 @@ export const botApi = {
   createConversation: (personaId: string) => request<BotConversation>('/bot/conversations', { method: 'POST', body: JSON.stringify({ persona_id: personaId, channel: 'local' }) }),
   getMessages: (id: string) => request<BotMessage[]>(`/bot/conversations/${id}/messages?limit=200`),
   deleteConversation: (id: string) => request<{ deleted: boolean }>(`/bot/conversations/${id}`, { method: 'DELETE' }),
-  getQqConfig: () => request<BotQqConfig>('/bot/qq/config'),
-  saveQqConfig: (payload: { app_id: string; app_secret?: string; persona_id: string }) => request<BotQqConfig>('/bot/qq/config', { method: 'PUT', body: JSON.stringify(payload) }),
-  getQqStatus: () => request<BotQqStatus>('/bot/qq/status'),
-  connectQq: () => request<BotQqStatus>('/bot/qq/connect', { method: 'POST' }),
-  disconnectQq: () => request<BotQqStatus>('/bot/qq/disconnect', { method: 'POST' }),
+  listChannels: () => request<BotChannel[]>('/bot/channels'),
+  createChannel: (payload: BotChannelPayload) => request<BotChannel>('/bot/channels', { method: 'POST', body: JSON.stringify(payload) }),
+  updateChannel: (id: string, payload: Partial<BotChannelPayload>) => request<BotChannel>(`/bot/channels/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteChannel: (id: string) => request<{ deleted: boolean; conversation_count: number }>(`/bot/channels/${id}`, { method: 'DELETE' }),
+  connectChannel: (id: string) => request<BotChannelStatus>(`/bot/channels/${id}/connect`, { method: 'POST' }),
+  disconnectChannel: (id: string) => request<BotChannelStatus>(`/bot/channels/${id}/disconnect`, { method: 'POST' }),
 }
 
 interface BotSseEvent {

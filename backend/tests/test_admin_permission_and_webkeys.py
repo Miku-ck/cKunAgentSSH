@@ -16,15 +16,6 @@ from fastapi.testclient import TestClient
 import database as db
 
 
-@pytest.fixture
-def base_db(tmp_workspace):
-    db_path = os.path.join(tmp_workspace, "admin_api.db")
-    db._close_all_connections()
-    db.init_db(db_path)
-    yield db_path
-    db._close_all_connections()
-
-
 def _make_client(*routers) -> TestClient:
     app = fastapi.FastAPI()
     for r in routers:

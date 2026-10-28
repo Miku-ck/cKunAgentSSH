@@ -96,7 +96,8 @@ def test_main_app_registers_bot_routes():
     paths = {route.path for route in app.routes}
     assert "/api/bot/personas" in paths
     assert "/api/bot/chat" in paths
-    assert "/api/bot/qq/config" in paths
+    assert "/api/bot/channels" in paths
+    assert "/api/bot/channels/{channel_id}/connect" in paths
 
 
 def test_chat_route_streams_content_and_done(client, monkeypatch):

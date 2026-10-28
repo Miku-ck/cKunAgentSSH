@@ -1,25 +1,13 @@
 """runbook 路由契约守卫 — steps 形状/上限 400 / 执行中 409 / 桥探活失败 503 /
 历史 limit 夹取 / SQL 全参数绑定（注入串原样存取且表结构不受影响）。"""
-import os
 
 import fastapi
 import pytest
 from fastapi.testclient import TestClient
 
-import database as db
 import runbook_store as rstore
 import routes.runbooks as rb_mod
 from agent.electron_bridge import BridgeErrorCode
-
-
-@pytest.fixture
-def base_db(tmp_workspace):
-    db_path = os.path.join(tmp_workspace, "runbook_routes.db")
-    db._close_all_connections()
-    db.init_db(db_path)
-    rstore._reset_memo_for_tests()
-    yield db_path
-    db._close_all_connections()
 
 
 class _FakeEngine:
@@ -57,7 +45,7 @@ class _FakeEngine:
 
 
 @pytest.fixture
-def client(base_db, monkeypatch):
+def client(runbook_db, monkeypatch):
     engine = _FakeEngine()
     # routes/runbooks.py 在函数内懒导入 runbook_engine.get_runbook_engine：
     # 必须补丁源头模块，否则函数内重新 import 拿回真值（test_schedule_routes 同款手法）

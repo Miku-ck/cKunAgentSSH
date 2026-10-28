@@ -1,4 +1,5 @@
 import { nextTick, type Ref } from 'vue'
+import { FOCUSABLE_SELECTOR } from '@/utils/focus-trap'
 
 /**
  * 弹窗焦点管理 —— Tab 环形 + 关闭后还原焦点
@@ -21,9 +22,6 @@ import { nextTick, type Ref } from 'vue'
  * 两层都挂 window 监听的话，一次 Tab 被两份环形各拦一次，焦点会互相踢。
  */
 
-const FOCUSABLE =
-  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-
 export interface ModalFocusOptions {
   /** 打开时的初始焦点；不给则聚焦弹窗容器本身（容器要有 tabindex="-1"） */
   initialFocus?: string
@@ -42,7 +40,7 @@ export function useModalFocusTrap(dialogRef: Ref<HTMLElement | null>, options: M
   let suspended = false
 
   function focusables(): HTMLElement[] {
-    return dialogRef.value ? Array.from(dialogRef.value.querySelectorAll<HTMLElement>(FOCUSABLE)) : []
+    return dialogRef.value ? Array.from(dialogRef.value.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)) : []
   }
 
   /**

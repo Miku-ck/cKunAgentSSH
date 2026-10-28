@@ -3,7 +3,6 @@
 spec 2026-10-27-schedule-task-type
 """
 import asyncio
-import os
 
 import fastapi
 import pytest
@@ -12,15 +11,6 @@ from fastapi.testclient import TestClient
 import database as db
 import routes.schedules as sched_mod
 from test_schedule_routes import _FakeEngine, _fake_compute_next_run  # noqa: F401
-
-
-@pytest.fixture
-def base_db(tmp_workspace):
-    db_path = os.path.join(tmp_workspace, "schedules.db")
-    db._close_all_connections()
-    db.init_db(db_path)
-    yield db_path
-    db._close_all_connections()
 
 
 @pytest.fixture

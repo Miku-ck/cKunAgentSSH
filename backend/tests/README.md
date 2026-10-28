@@ -13,6 +13,17 @@ python -m pytest tests/test_xxx.py -v   # 单文件
 源码读取助手（`frontend_api_source` / `SOURCE_LABEL`），供契约类测试比对
 前端 `src/` 与后端模型。
 
+### 夹具口径
+
+- `base_db(tmp_workspace)`：建真实 SQLite，`yield` 库文件路径，进出各收一次连接池。
+- `runbook_db(base_db)`：在 `base_db` 之上多一步 `runbook_store._reset_memo_for_tests()`；
+  碰 runbook 表的用例请求它，不要自己再写一份建库夹具。
+- 少数文件**刻意保留本地 `base_db` 覆盖**，因为它们和被测模块有额外耦合：
+  `test_http_log_diagnostics.py`（断言库文件名）、`test_settings_contract.py` 与
+  `test_settings_fields.py`（进夹具前清掉开发机上的 `TAVILY_API_KEY`）、
+  `test_settings_boot_and_runtime.py`（`yield` 的是 `db` 模块本身）。
+  往 conftest 合并它们之前，先确认这些差异有地方承接。
+
 ## 命名规范（2026-10-24 起）
 
 `test_<域>_<守卫什么>.py` —— **文件名要说清守的是什么，不写轮次/工单号**。

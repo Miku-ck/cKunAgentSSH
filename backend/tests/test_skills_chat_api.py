@@ -13,19 +13,9 @@
 import os
 
 import fastapi
-import pytest
 from fastapi.testclient import TestClient
 
 import database as db
-
-
-@pytest.fixture
-def base_db(tmp_workspace):
-    db_path = os.path.join(tmp_workspace, "round5.db")
-    db._close_all_connections()
-    db.init_db(db_path)
-    yield db_path
-    db._close_all_connections()
 
 
 def _make_client(*routers) -> TestClient:

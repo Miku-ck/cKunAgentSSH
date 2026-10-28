@@ -5,19 +5,8 @@
 第一条 UPDATE 把真正的默认清掉 → 第二条匹配 0 行 → 0 个默认模型且响应 200。
 本轮补「全局默认」UI 之前必须先收敛这个口径，否则新控件多一条传名字的路径。
 """
-import os
 
 import pytest
-
-
-@pytest.fixture
-def base_db(tmp_workspace):
-    import database as db
-    db_path = os.path.join(tmp_workspace, "modelpk22.db")
-    db._close_all_connections()
-    db.init_db(db_path)
-    yield db_path
-    db._close_all_connections()
 
 
 @pytest.fixture

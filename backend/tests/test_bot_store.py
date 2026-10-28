@@ -47,10 +47,35 @@ def test_conversation_keeps_persona_snapshot_after_delete(base_db):
     assert stored["persona_id"] is None
     assert stored["persona"]["name"] == "小暖"
     assert stored["persona"]["personality"] == "温和"
+    # 人格没了，实时头像自然为空 —— 前端回退首字母，不该残留一份旧头像副本
+    assert stored["persona"]["avatar"] == ""
     assert [m["content"] for m in db.get_bot_messages(conversation["id"])] == ["你好", "我在呢"]
 
     assert db.delete_bot_conversation(conversation["id"]) is True
     assert db.get_bot_messages(conversation["id"]) == []
+
+
+def test_snapshot_strips_avatar_but_resolves_it_live(base_db):
+    avatar = "data:image/webp;base64," + "A" * 4000
+    persona = db.create_bot_persona(name="小暖", avatar=avatar)
+    conversation = db.create_bot_conversation(persona["id"], channel="local")
+
+    raw = db._get_conn().execute(
+        "SELECT persona_snapshot FROM bot_conversations WHERE id = ?", (conversation["id"],)
+    ).fetchone()["persona_snapshot"]
+    # 快照里不许有头像：否则 100 条会话就是 1MB 级别的列表接口
+    assert "base64" not in raw
+    assert len(raw) < 500
+
+    # 但读出来的 persona 要带实时头像，聊天头部才画得出人脸
+    listed = db.list_bot_conversations()[0]
+    assert listed["persona"]["avatar"] == avatar
+    assert listed["persona"]["name"] == "小暖"
+    assert listed["preview"] is None or isinstance(listed["preview"], str)
+
+    # 改头像立刻反映到旧会话（引用而非副本）
+    db.update_bot_persona(persona["id"], avatar="")
+    assert db.get_bot_conversation(conversation["id"])["persona"]["avatar"] == ""
 
 
 def test_qq_conversation_external_id_is_unique_per_channel(base_db):

@@ -156,6 +156,9 @@ def update_persona(persona_id: str, req: PersonaUpdateRequest):
 
 @router.delete("/bot/personas/{persona_id}")
 def delete_persona(persona_id: str):
+    # 人格被机器人绑定时删不掉（FK RESTRICT）：先给可读的 409，别抛 500。
+    if db.count_bot_channels(persona_id=persona_id):
+        raise HTTPException(status_code=409, detail="这个人格已绑定机器人，请先解绑或删除机器人")
     if not db.delete_bot_persona(persona_id):
         raise HTTPException(status_code=404, detail="人格不存在")
     return {"deleted": True}

@@ -221,19 +221,34 @@ def init_db(db_path: str) -> None:
                 updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            -- 一个机器人账号一行，一行绑一个人格（人格可随时改，见 spec 多渠道机器人）。
+            CREATE TABLE IF NOT EXISTS bot_channels (
+                id           TEXT PRIMARY KEY,
+                provider     TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                persona_id   TEXT NOT NULL REFERENCES bot_personas(id) ON DELETE RESTRICT,
+                app_id       TEXT NOT NULL DEFAULT '',
+                app_secret   TEXT NOT NULL DEFAULT '',
+                enabled      TEXT NOT NULL DEFAULT '0',
+                created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
             CREATE TABLE IF NOT EXISTS bot_conversations (
                 id               TEXT PRIMARY KEY,
                 title            TEXT NOT NULL DEFAULT '新会话',
                 persona_id       TEXT REFERENCES bot_personas(id) ON DELETE SET NULL,
                 persona_snapshot TEXT NOT NULL,
                 channel          TEXT NOT NULL DEFAULT 'local',
+                channel_id       TEXT REFERENCES bot_channels(id) ON DELETE CASCADE,
                 external_id      TEXT,
                 created_at       TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            -- 会话身份 = (哪个机器人, 哪个人格, 平台内会话)。改人格后查不到旧行，
+            -- 同一群自动另起一条，旧行留作可读历史。
             CREATE UNIQUE INDEX IF NOT EXISTS ix_bot_conversations_external
-                ON bot_conversations(channel, external_id)
+                ON bot_conversations(channel_id, persona_id, external_id)
                 WHERE external_id IS NOT NULL;
             CREATE INDEX IF NOT EXISTS ix_bot_conversations_updated
                 ON bot_conversations(channel, updated_at);
@@ -575,6 +590,7 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
     # bot_messages.images：看图回复（Phase 2），用户消息内联 data URL 列表（JSON）。
     if "images" not in bot_message_cols:
         conn.execute("ALTER TABLE bot_messages ADD COLUMN images TEXT")
+    _migrate_bot_channels(conn)
     # bot_personas：chat-experience 两列（旧库补齐，新库建表已含）。
     cursor = conn.execute("PRAGMA table_info(bot_personas)")
     persona_cols = {row[1] for row in cursor.fetchall()}
@@ -749,6 +765,106 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
         # 旧库会在 init_db 里抛 OperationalError，而 init_db 只有 try/finally、
         # main.py 也不接 → 后端直接起不来（不是某个接口 500，是整个服务不启动）。
         _fix_model_name_and_id(conn)
+
+
+def _migrate_bot_channels(conn: sqlite3.Connection) -> None:
+    """单例 QQ 配置 → `bot_channels` 一行（spec 2026-10-28-bot-multi-channel）。
+
+    旧库把凭据散在 `app_settings` 的 `bot.qq.*` 键上，会话身份靠往 `external_id`
+    尾部追加 `context_id` 来区分机器人。两者都由 `channel_id` 列取代。
+    """
+    conv_cols = {row[1] for row in conn.execute("PRAGMA table_info(bot_conversations)")}
+    if "channel_id" not in conv_cols:
+        conn.execute(
+            "ALTER TABLE bot_conversations ADD COLUMN channel_id TEXT "
+            "REFERENCES bot_channels(id) ON DELETE CASCADE"
+        )
+
+    index_cols = [
+        row[2] for row in conn.execute("PRAGMA index_info('ix_bot_conversations_external')")
+    ]
+    if index_cols and index_cols != ["channel_id", "persona_id", "external_id"]:
+        conn.execute("DROP INDEX ix_bot_conversations_external")
+        conn.execute(
+            "CREATE UNIQUE INDEX ix_bot_conversations_external "
+            "ON bot_conversations(channel_id, persona_id, external_id) "
+            "WHERE external_id IS NOT NULL"
+        )
+
+    if conn.execute(
+        "SELECT 1 FROM app_settings WHERE key = 'bot.channels.legacy_migrated'"
+    ).fetchone():
+        return
+
+    def legacy(key: str) -> str:
+        row = conn.execute(
+            "SELECT value FROM app_settings WHERE key = ?", (f"bot.qq.{key}",)
+        ).fetchone()
+        return (row["value"] if row else "") or ""
+
+    # 没有旧凭据就是新库：什么都不做，也不落哨兵（此后代码不再写 bot.qq.* 键）。
+    if not legacy("app_id"):
+        return
+
+    persona_id = legacy("persona_id")
+    persona = conn.execute(
+        "SELECT id, name FROM bot_personas WHERE id = ?", (persona_id,)
+    ).fetchone()
+    if not persona:
+        # 绑过的人格没了就退到内置人格，至少让原来能聊的机器人升级后还能连。
+        persona = conn.execute(
+            "SELECT id, name FROM bot_personas ORDER BY is_builtin DESC, created_at ASC LIMIT 1"
+        ).fetchone()
+    if not persona:
+        return
+
+    channel_id = _new_id()
+    conn.execute(
+        "INSERT INTO bot_channels (id, provider, display_name, persona_id, app_id, "
+        "app_secret, enabled, created_at) VALUES (?, 'qq', ?, ?, ?, ?, ?, ?)",
+        (
+            channel_id,
+            persona["name"] or "QQ 机器人",
+            persona["id"],
+            legacy("app_id"),
+            # 旧值已是 DPAPI 信封（get_app_setting 读时还原），原样搬列即可。
+            legacy("app_secret"),
+            "1" if legacy("enabled") == "1" else "0",
+            _now(),
+        ),
+    )
+    conn.execute(
+        "INSERT INTO app_settings (key, value, updated_at) "
+        "VALUES ('bot.channels.legacy_migrated', '1', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = '1', updated_at = ?",
+        (_now(), _now()),
+    )
+
+    for row in conn.execute(
+        "SELECT id, persona_id, external_id FROM bot_conversations "
+        "WHERE channel = 'qq' AND external_id IS NOT NULL ORDER BY updated_at ASC, rowid ASC"
+    ).fetchall():
+        parts = row["external_id"].split(":")
+        # 旧格式是 "{kind}:{openid}:{context_id}"，openid 不含冒号，取前两段即纯平台身份。
+        external_id = ":".join(parts[:2]) if len(parts) >= 3 else row["external_id"]
+        # 人格改走 A→B→A 时同一群会留下 context_id 不同的多行，剥离后同源：
+        # 把较早的并进较新的那条，否则这一步会撞唯一索引、整个后端起不来。
+        twin = conn.execute(
+            "SELECT id FROM bot_conversations "
+            "WHERE channel_id = ? AND persona_id IS ? AND external_id = ? AND id != ?",
+            (channel_id, row["persona_id"], external_id, row["id"]),
+        ).fetchone()
+        if twin:
+            conn.execute(
+                "UPDATE bot_messages SET conversation_id = ? WHERE conversation_id = ?",
+                (twin["id"], row["id"]),
+            )
+            conn.execute("DELETE FROM bot_conversations WHERE id = ?", (row["id"],))
+            continue
+        conn.execute(
+            "UPDATE bot_conversations SET channel_id = ?, external_id = ? WHERE id = ?",
+            (channel_id, external_id, row["id"]),
+        )
 
 
 def _init_memory_v2(conn: sqlite3.Connection) -> None:
@@ -2323,6 +2439,153 @@ def delete_bot_persona(persona_id: str) -> bool:
         conn.close()
 
 
+# ── 机器人渠道：一行 = 一个机器人账号 = 一个人格 ──
+# spec 2026-10-28-bot-multi-channel。所有读出口都走 _BOT_CHANNEL_SELECT，
+# 里面用 CASE 把 app_secret 折成 has_secret，密文一次都不会进 Python 对象。
+
+_BOT_CHANNEL_SELECT = (
+    "SELECT id, provider, display_name, persona_id, app_id, "
+    "CASE WHEN app_secret = '' THEN 0 ELSE 1 END AS has_secret, "
+    "enabled, created_at, "
+    "(SELECT COUNT(*) FROM bot_conversations c WHERE c.channel_id = bot_channels.id) "
+    "AS conversation_count FROM bot_channels"
+)
+
+
+def _bot_channel_dict(row: sqlite3.Row) -> dict:
+    data = dict(row)
+    data["has_secret"] = bool(data["has_secret"])
+    data["enabled"] = data["enabled"] == "1"
+    return data
+
+
+def create_bot_channel(
+    *, provider: str, display_name: str, persona_id: str, app_id: str, app_secret: str
+) -> dict:
+    channel_id = _new_id()
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO bot_channels (id, provider, display_name, persona_id, app_id, "
+            "app_secret, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, '0', ?)",
+            (channel_id, provider, display_name, persona_id, app_id, app_secret or "", _now()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return get_bot_channel(channel_id)
+
+
+def list_bot_channels() -> list[dict]:
+    conn = _get_conn()
+    try:
+        rows = conn.execute(_BOT_CHANNEL_SELECT + " ORDER BY created_at ASC, id ASC").fetchall()
+        return [_bot_channel_dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def list_enabled_bot_channels() -> list[dict]:
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            _BOT_CHANNEL_SELECT + " WHERE enabled = '1' ORDER BY created_at ASC, id ASC"
+        ).fetchall()
+        return [_bot_channel_dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def get_bot_channel(channel_id: str) -> Optional[dict]:
+    conn = _get_conn()
+    try:
+        row = conn.execute(_BOT_CHANNEL_SELECT + " WHERE id = ?", (channel_id,)).fetchone()
+        return _bot_channel_dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_bot_channel_secret(channel_id: str) -> str:
+    """读凭据明文，只给运行时拨号用；接口层请一律走 get_bot_channel 的 has_secret。"""
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT app_secret FROM bot_channels WHERE id = ?", (channel_id,)
+        ).fetchone()
+        return unprotect_secret(row["app_secret"]) if row else ""
+    finally:
+        conn.close()
+
+
+def set_bot_channel_secret(channel_id: str, app_secret: str) -> None:
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "UPDATE bot_channels SET app_secret = ? WHERE id = ?",
+            (app_secret or "", channel_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_bot_channel(channel_id: str, **fields) -> Optional[dict]:
+    allowed = {"display_name", "persona_id", "app_id", "provider"}
+    data = {key: value for key, value in fields.items() if key in allowed}
+    if not data:
+        return get_bot_channel(channel_id)
+    assignments = ", ".join(f"{key} = ?" for key in data)
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            f"UPDATE bot_channels SET {assignments} WHERE id = ?",
+            (*data.values(), channel_id),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            return None
+    finally:
+        conn.close()
+    return get_bot_channel(channel_id)
+
+
+def set_bot_channel_enabled(channel_id: str, enabled: bool) -> None:
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "UPDATE bot_channels SET enabled = ? WHERE id = ?",
+            ("1" if enabled else "0", channel_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_bot_channel(channel_id: str) -> bool:
+    """删机器人；它的会话与消息由 FK CASCADE 一并清掉（本地陪聊会话不受影响）。"""
+    conn = _get_conn()
+    try:
+        cur = conn.execute("DELETE FROM bot_channels WHERE id = ?", (channel_id,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def count_bot_channels(persona_id: Optional[str] = None) -> int:
+    conn = _get_conn()
+    try:
+        if persona_id is None:
+            row = conn.execute("SELECT COUNT(*) AS n FROM bot_channels").fetchone()
+        else:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM bot_channels WHERE persona_id = ?", (persona_id,)
+            ).fetchone()
+        return int(row["n"])
+    finally:
+        conn.close()
+
+
 def _persona_snapshot_payload(persona: dict) -> str:
     """会话快照：人格全量但剔除头像。
 
@@ -2361,6 +2624,7 @@ def create_bot_conversation(
     persona_id: str,
     channel: str = "local",
     external_id: Optional[str] = None,
+    channel_id: Optional[str] = None,
 ) -> dict:
     persona = get_bot_persona(persona_id)
     if not persona:
@@ -2371,14 +2635,15 @@ def create_bot_conversation(
     try:
         conn.execute(
             "INSERT INTO bot_conversations "
-            "(id, title, persona_id, persona_snapshot, channel, external_id, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(id, title, persona_id, persona_snapshot, channel, channel_id, external_id, "
+            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 conversation_id,
                 persona["name"],
                 persona_id,
                 _persona_snapshot_payload(persona),
                 channel,
+                channel_id,
                 external_id,
                 now,
                 now,
@@ -2394,34 +2659,41 @@ def create_bot_conversation(
     return get_bot_conversation(conversation_id)
 
 
+def _find_bot_conversation_by_external(
+    conn: sqlite3.Connection, channel_id: Optional[str], persona_id: str, external_id: str
+):
+    """会话身份 = (哪个机器人, 哪个人格, 平台内会话)，与唯一索引同形。
+
+    channel_id/persona_id 用 IS 比较：它们可为 NULL（本地会话、人格被删），
+    而 `= NULL` 在 SQL 里永远不成立。
+    """
+    return conn.execute(
+        "SELECT c.*, p.avatar AS persona_live_avatar FROM bot_conversations c "
+        "LEFT JOIN bot_personas p ON p.id = c.persona_id "
+        "WHERE c.channel_id IS ? AND c.persona_id IS ? AND c.external_id = ?",
+        (channel_id, persona_id, external_id),
+    ).fetchone()
+
+
 def get_or_create_bot_conversation(
     persona_id: str,
     channel: str,
     external_id: str,
+    channel_id: Optional[str] = None,
 ) -> dict:
     conn = _get_conn()
     try:
-        row = conn.execute(
-            "SELECT c.*, p.avatar AS persona_live_avatar FROM bot_conversations c "
-            "LEFT JOIN bot_personas p ON p.id = c.persona_id "
-            "WHERE c.channel = ? AND c.external_id = ?",
-            (channel, external_id),
-        ).fetchone()
+        row = _find_bot_conversation_by_external(conn, channel_id, persona_id, external_id)
     finally:
         conn.close()
     if row:
         return _bot_conversation_dict(row)
     try:
-        return create_bot_conversation(persona_id, channel, external_id)
+        return create_bot_conversation(persona_id, channel, external_id, channel_id)
     except sqlite3.IntegrityError:
         conn = _get_conn()
         try:
-            row = conn.execute(
-                "SELECT c.*, p.avatar AS persona_live_avatar FROM bot_conversations c "
-                "LEFT JOIN bot_personas p ON p.id = c.persona_id "
-                "WHERE c.channel = ? AND c.external_id = ?",
-                (channel, external_id),
-            ).fetchone()
+            row = _find_bot_conversation_by_external(conn, channel_id, persona_id, external_id)
             return _bot_conversation_dict(row)
         finally:
             conn.close()
@@ -2431,6 +2703,7 @@ def list_bot_conversations(
     channel: Optional[str] = None,
     persona_id: Optional[str] = None,
     limit: int = 100,
+    channel_id: Optional[str] = None,
 ) -> list[dict]:
     conditions = []
     params: list = []
@@ -2440,6 +2713,9 @@ def list_bot_conversations(
     if persona_id is not None:
         conditions.append("c.persona_id = ?")
         params.append(persona_id)
+    if channel_id is not None:
+        conditions.append("c.channel_id = ?")
+        params.append(channel_id)
     where = "WHERE " + " AND ".join(conditions) if conditions else ""
     params.append(limit)
     conn = _get_conn()

@@ -8,19 +8,8 @@
 `if not proxy: proxy = env`，所以库里空行/缺行时 env 一直有效，非空库行照旧压过
 `CKUN_HTTP_PROXY`（round 19 登记的口径）。这里的三条代理用例是**钉住**而不是修复。
 """
-import os
 
 import pytest
-
-
-@pytest.fixture
-def base_db(tmp_workspace):
-    import database as db
-    db_path = os.path.join(tmp_workspace, "httpenv22.db")
-    db._close_all_connections()
-    db.init_db(db_path)
-    yield db_path
-    db._close_all_connections()
 
 
 @pytest.fixture

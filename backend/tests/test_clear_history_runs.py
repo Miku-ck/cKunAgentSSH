@@ -7,7 +7,6 @@ spec 2026-10-27-clear-history-runs（新增功能，破坏性操作）钉：
 - 有 running 行时 409 拒绝且不删（进行中闸）；
 - 未知 id → 404。
 """
-import os
 
 import fastapi
 import pytest
@@ -20,24 +19,14 @@ import routes.schedules as sched_mod
 
 
 @pytest.fixture
-def base_db(tmp_workspace):
-    db_path = os.path.join(tmp_workspace, "clear-history.db")
-    db._close_all_connections()
-    db.init_db(db_path)
-    rstore._reset_memo_for_tests()
-    yield db_path
-    db._close_all_connections()
-
-
-@pytest.fixture
-def sched_client(base_db):
+def sched_client(runbook_db):
     app = fastapi.FastAPI()
     app.include_router(sched_mod.router, prefix="/api")
     return TestClient(app)
 
 
 @pytest.fixture
-def rb_client(base_db):
+def rb_client(runbook_db):
     app = fastapi.FastAPI()
     app.include_router(rb_mod.router, prefix="/api")
     return TestClient(app)
@@ -49,7 +38,7 @@ def _mk_schedule(name="任务"):
 
 # ── schedule 域 ────────────────────────────────────────────────────────────────
 
-def test_clear_schedule_runs_只删本条并返回计数(base_db):
+def test_clear_schedule_runs_只删本条并返回计数(runbook_db):
     s1 = _mk_schedule("s1")
     s2 = _mk_schedule("s2")
     for _ in range(3):
@@ -66,7 +55,7 @@ def test_clear_schedule_runs_只删本条并返回计数(base_db):
     assert db.get_schedule(s1) is not None                    # 任务本身保留
 
 
-def test_schedule_route_清空成功(sched_client, base_db):
+def test_schedule_route_清空成功(sched_client, runbook_db):
     s = _mk_schedule()
     r = db.create_schedule_run(s, run_id="")
     db.update_schedule_run(r["id"], status="failed")
@@ -77,7 +66,7 @@ def test_schedule_route_清空成功(sched_client, base_db):
     assert db.list_schedule_runs(s, limit=50) == []
 
 
-def test_schedule_route_有进行中则_409_且不删(sched_client, base_db):
+def test_schedule_route_有进行中则_409_且不删(sched_client, runbook_db):
     s = _mk_schedule()
     db.create_schedule_run(s, run_id="")  # 默认 running
 
@@ -86,7 +75,7 @@ def test_schedule_route_有进行中则_409_且不删(sched_client, base_db):
     assert len(db.list_schedule_runs(s, limit=50)) == 1        # 一行没删
 
 
-def test_schedule_route_未知任务_404(sched_client, base_db):
+def test_schedule_route_未知任务_404(sched_client, runbook_db):
     assert sched_client.delete("/api/schedules/no-such/runs").status_code == 404
 
 
@@ -96,7 +85,7 @@ def _mk_runbook(name="剧本"):
     return rstore.create_runbook({"name": name, "steps": [{"command": "uptime"}]})["id"]
 
 
-def test_clear_runbook_runs_只删本条并返回计数(base_db):
+def test_clear_runbook_runs_只删本条并返回计数(runbook_db):
     b1 = _mk_runbook("b1")
     b2 = _mk_runbook("b2")
     for _ in range(2):
@@ -112,7 +101,7 @@ def test_clear_runbook_runs_只删本条并返回计数(base_db):
     assert rstore.get_runbook(b1) is not None
 
 
-def test_runbook_route_清空成功(rb_client, base_db):
+def test_runbook_route_清空成功(rb_client, runbook_db):
     b = _mk_runbook()
     r = rstore.create_runbook_run(b)
     rstore.finish_runbook_run(r["id"], "failed")
@@ -123,7 +112,7 @@ def test_runbook_route_清空成功(rb_client, base_db):
     assert rstore.list_runbook_runs(b, limit=50) == []
 
 
-def test_runbook_route_有进行中则_409_且不删(rb_client, base_db):
+def test_runbook_route_有进行中则_409_且不删(rb_client, runbook_db):
     b = _mk_runbook()
     rstore.create_runbook_run(b)  # 默认 running
 
@@ -132,5 +121,5 @@ def test_runbook_route_有进行中则_409_且不删(rb_client, base_db):
     assert len(rstore.list_runbook_runs(b, limit=50)) == 1
 
 
-def test_runbook_route_未知剧本_404(rb_client, base_db):
+def test_runbook_route_未知剧本_404(rb_client, runbook_db):
     assert rb_client.delete("/api/runbooks/no-such/runs").status_code == 404

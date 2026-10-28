@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { nextFocusIndex } from './focus-trap'
+import { FOCUSABLE_SELECTOR, nextFocusIndex } from './focus-trap'
 
 describe('nextFocusIndex：模态内的 Tab 循环', () => {
   it('正向走到最后一项后回到第一项', () => {
@@ -24,5 +24,18 @@ describe('nextFocusIndex：模态内的 Tab 循环', () => {
 
   it('没有可聚焦项时返回 -1（调用方据此把焦点交还给容器）', () => {
     expect(nextFocusIndex(0, -1, 1)).toBe(-1)
+  })
+})
+
+describe('FOCUSABLE_SELECTOR：SettingsDialog 与 useModalFocusTrap 共用的单一口径', () => {
+  it('链接用 a[href]，不用裸 [href] —— link/area 也带 href，混进 Tab 环会算错格数', () => {
+    expect(FOCUSABLE_SELECTOR).toContain('a[href]')
+    expect(FOCUSABLE_SELECTOR).not.toMatch(/(^|, )\[href\]/)
+  })
+
+  it('按钮与三类表单控件都排除 disabled', () => {
+    for (const tag of ['button', 'input', 'select', 'textarea']) {
+      expect(FOCUSABLE_SELECTOR).toContain(`${tag}:not([disabled])`)
+    }
   })
 })

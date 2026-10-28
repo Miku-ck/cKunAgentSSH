@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatLocalDateTime } from './datetime'
+import { formatLocalDate, formatLocalDateTime } from './datetime'
 
 const pad = (n: number) => String(n).padStart(2, '0')
 
@@ -21,5 +21,15 @@ describe('formatLocalDateTime', () => {
   it('空值或非法值返回空串', () => {
     expect(formatLocalDateTime('')).toBe('')
     expect(formatLocalDateTime('not-a-date')).toBe('')
+  })
+})
+
+describe('formatLocalDate', () => {
+  it('epoch 毫秒按本地时区出 YYYY-MM-DD，月/日补零', () => {
+    expect(formatLocalDate(new Date(2026, 0, 5, 8, 5).getTime())).toBe('2026-01-05')
+  })
+
+  it('无时间戳用短横占位，不显示 1970', () => {
+    expect(formatLocalDate(0)).toBe('-')
   })
 })

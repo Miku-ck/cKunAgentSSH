@@ -118,17 +118,6 @@ def test_permission_entries_report_expiry(isolated_allowlist):
     assert g.permanent_entries()[0]["expires_at"] is None
 
 
-@pytest.fixture
-def base_db(tmp_workspace):
-    """真实 DB（app_settings 读写要落库）。base_db 只在 test_admin_permission_and_webkeys 里定义，
-    不是 conftest 公共 fixture，这里自带一份。"""
-    db_path = os.path.join(tmp_workspace, "policy.db")
-    db._close_all_connections()
-    db.init_db(db_path)
-    yield db_path
-    db._close_all_connections()
-
-
 def test_db_permission_policy_dirty_value_falls_back(base_db):
     assert db.get_permission_policy() == {
         "allowlist_ttl_hours": 0,

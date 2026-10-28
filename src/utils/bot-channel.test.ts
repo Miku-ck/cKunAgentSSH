@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { channelLabel, personaNameFromSnapshot } from './bot-channel'
+import { channelLabel, personaName } from './bot-channel'
 
 describe('QQ 会话渠道标签', () => {
   it('group / c2c 前缀分别显示群聊与私聊', () => {
@@ -14,15 +14,15 @@ describe('QQ 会话渠道标签', () => {
   })
 })
 
-describe('人格快照名', () => {
-  it('从 JSON 快照里取名字，人格删除后仍能显示', () => {
-    expect(personaNameFromSnapshot('{"name":"小暖","personality":"温和"}')).toBe('小暖')
+describe('会话归属人格名', () => {
+  it('取服务端下发的 persona.name，人格删除后仍能显示', () => {
+    expect(personaName({ name: '小暖' })).toBe('小暖')
   })
 
-  it('快照缺失或损坏时返回空串', () => {
-    expect(personaNameFromSnapshot('')).toBe('')
-    expect(personaNameFromSnapshot(null)).toBe('')
-    expect(personaNameFromSnapshot('not json')).toBe('')
-    expect(personaNameFromSnapshot('{"id":"x"}')).toBe('')
+  it('缺失或空名时返回空串，由调用方兜底', () => {
+    expect(personaName(null)).toBe('')
+    expect(personaName(undefined)).toBe('')
+    expect(personaName({})).toBe('')
+    expect(personaName({ name: '   ' })).toBe('')
   })
 })

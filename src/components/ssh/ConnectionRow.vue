@@ -54,6 +54,7 @@
 import { computed } from 'vue'
 import { connNote, type SSHConnection } from '@/stores/ssh'
 import { formatRelativeTime } from '@/utils/format'
+import { formatLocalDate } from '@/utils/datetime'
 
 const props = defineProps<{
   connection: SSHConnection
@@ -98,17 +99,8 @@ const fullTime = computed(() => {
 })
 
 // 创建时间显示为 YYYY-MM-DD(本地时区)
-const createdDateText = computed(() => formatDate(props.connection.createdAt))
+const createdDateText = computed(() => formatLocalDate(props.connection.createdAt))
 const fullCreatedTime = computed(() => new Date(props.connection.createdAt).toLocaleString())
-
-function formatDate(ts: number): string {
-  if (!ts) return '-'
-  const d = new Date(ts)
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
 </script>
 
 <style scoped>

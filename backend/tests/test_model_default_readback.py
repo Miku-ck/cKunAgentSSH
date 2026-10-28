@@ -6,20 +6,9 @@ schedule_engine._resolve_model 回退、consciousness_tick 等直接消费默认
 的调用方拿到 None，思考预算退化为「不限制」，且 UI 无从察觉。
 本测试锁定「同一行经三个访问器读出同一组字段」，防止再次漏列。
 """
-import os
 
-import pytest
 
 import database as db
-
-
-@pytest.fixture
-def base_db(tmp_workspace):
-    db_path = os.path.join(tmp_workspace, "model_default.db")
-    db._close_all_connections()
-    db.init_db(db_path)
-    yield db_path
-    db._close_all_connections()
 
 
 def _create(name: str, **kw):

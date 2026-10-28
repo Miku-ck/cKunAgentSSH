@@ -1,21 +1,9 @@
 """runbook_store 守卫 — 两表 CRUD / FK CASCADE / 重启收尸（滞留 running → stale_reaped）/
 终态幂等 / 全参数绑定（铁律：SQL 不得拼接外部输入）。"""
-import os
 
 import pytest
 
-import database as db
 import runbook_store as rstore
-
-
-@pytest.fixture
-def base_db(tmp_workspace):
-    db_path = os.path.join(tmp_workspace, "runbook_store.db")
-    db._close_all_connections()
-    db.init_db(db_path)
-    rstore._reset_memo_for_tests()
-    yield db_path
-    db._close_all_connections()
 
 
 def _mk_runbook(**over):
@@ -34,7 +22,7 @@ def _mk_runbook(**over):
     return rstore.create_runbook(data)
 
 
-def test_create_get_list_roundtrip(base_db):
+def test_create_get_list_roundtrip(runbook_db):
     row = _mk_runbook()
     assert row["id"]
     got = rstore.get_runbook(row["id"])
@@ -51,7 +39,7 @@ def test_create_get_list_roundtrip(base_db):
     assert listed[0]["last_status"] is None
 
 
-def test_update_partial_keeps_other_fields(base_db):
+def test_update_partial_keeps_other_fields(runbook_db):
     row = _mk_runbook()
     updated = rstore.update_runbook(row["id"], {"name": "改名"})
     assert updated["name"] == "改名"
@@ -74,11 +62,11 @@ def test_update_partial_keeps_other_fields(base_db):
     assert updated2["name"] == "改名"
 
 
-def test_update_missing_returns_none(base_db):
+def test_update_missing_returns_none(runbook_db):
     assert rstore.update_runbook("no-such-id", {"name": "x"}) is None
 
 
-def test_delete_cascades_runs(base_db):
+def test_delete_cascades_runs(runbook_db):
     """FK ON DELETE CASCADE：删剧本必须连带清执行历史（PRAGMA foreign_keys=ON）。"""
     row = _mk_runbook()
     rstore.create_runbook_run(row["id"])
@@ -89,7 +77,7 @@ def test_delete_cascades_runs(base_db):
     assert rstore.list_runbook_runs(row["id"]) == []
 
 
-def test_run_progress_and_terminal_idempotent(base_db):
+def test_run_progress_and_terminal_idempotent(runbook_db):
     """终态单一出口：finish 只允许 running → 终态，重复调用 no-op。"""
     row = _mk_runbook()
     rrb = rstore.create_runbook_run(row["id"], run_id="run-a")
@@ -125,7 +113,7 @@ def test_run_progress_and_terminal_idempotent(base_db):
         rstore.finish_runbook_run(rrb["id"], "running")
 
 
-def test_list_runbooks_last_run_summary(base_db):
+def test_list_runbooks_last_run_summary(runbook_db):
     a = _mk_runbook(name="A")
     _mk_runbook(name="B")
     rrb = rstore.create_runbook_run(a["id"])
@@ -137,7 +125,7 @@ def test_list_runbooks_last_run_summary(base_db):
     assert listed["B"]["last_status"] is None
 
 
-def test_reap_stale_marks_only_running(base_db):
+def test_reap_stale_marks_only_running(runbook_db):
     """重启收尸契约：滞留 running → stale_reaped；终态行不被动。"""
     a = _mk_runbook(name="A")
     b = _mk_runbook(name="B")
@@ -157,7 +145,7 @@ def test_reap_stale_marks_only_running(base_db):
     assert rstore.get_runbook(b["id"])["name"] == "B"
 
 
-def test_reap_stale_respects_exclude_set(base_db):
+def test_reap_stale_respects_exclude_set(runbook_db):
     """排除集保护当前进程在途剧本：其 running 行不被收尸。"""
     a = _mk_runbook(name="A")
     b = _mk_runbook(name="B")
@@ -170,7 +158,7 @@ def test_reap_stale_respects_exclude_set(base_db):
     assert statuses[rb["id"]] == "stale_reaped"
 
 
-def test_external_input_stays_parameter_bound(base_db):
+def test_external_input_stays_parameter_bound(runbook_db):
     """铁律守卫：含引号/分号/%/_ 的外部输入原样存取，表结构不受影响。"""
     hostile = "x'; DROP TABLE runbooks;-- %_% ' OR '1'='1"
     row = _mk_runbook(name=hostile, description="100% 纯文本_下划线")

@@ -13,9 +13,7 @@
 运行: python -m pytest backend/tests/test_post_process_llm_shapes.py -v
 """
 import json
-import os
 
-import pytest
 
 import database as db
 from post_processor import (
@@ -24,15 +22,6 @@ from post_processor import (
     _create_auto_skill_with_quality_gate,
     _llm_list,
 )
-
-
-@pytest.fixture
-def base_db(tmp_workspace):
-    db_path = os.path.join(tmp_workspace, "pp_shapes.db")
-    db._close_all_connections()
-    db.init_db(db_path)
-    yield db_path
-    db._close_all_connections()
 
 
 def _skill_dict(**kw) -> dict:

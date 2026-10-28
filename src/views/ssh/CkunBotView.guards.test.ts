@@ -111,4 +111,14 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).toContain('msg-image')
     expect(view).toContain('store.sendMessage(text, imgs)')
   })
+
+  it('会话只消费服务端下发的 persona 三字段，不在前端解析快照 JSON', () => {
+    const view = read('src/components/bot/CkunBotView.vue')
+    const api = read('src/api/bot.ts')
+    // 服务端已把快照裁成 {id, name, avatar}：快照字段不该再出现在契约或视图里
+    expect(api).toContain('persona: { id: string; name: string; avatar: string }')
+    expect(api).not.toContain('persona_snapshot')
+    expect(view).not.toContain('persona_snapshot')
+    expect(view).toContain('personaName(conversation.persona)')
+  })
 })

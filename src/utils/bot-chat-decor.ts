@@ -77,8 +77,8 @@ export function identiconSvg(seed: string): string {
 
 /**
  * 从会话 external_id 抽出对方 openid 作头像种子。
- * 后端格式：`group:{group_openid}:{context_id}` / `c2c:{user_openid}:{context_id}`；
- * 本地会话（null/空）或无法识别的来源返回空串（交由回退种子处理）。
+ * 后端格式：`group:{group_openid}` / `c2c:{user_openid}`（机器人归属走
+ * channel_id 列，不再拼进 key）；本地会话（null/空）或无法识别的来源返回空串。
  */
 export function peerSeed(externalId?: string | null): string {
   if (!externalId) return ''

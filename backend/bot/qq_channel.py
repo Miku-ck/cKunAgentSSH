@@ -1,8 +1,13 @@
-import asyncio
+"""QQ 渠道的平台侧片段：入站事件转换、出站文本清洗与分段。
+
+连接生命周期在 `qq_manager.py`，消息流程在 `inbound_pipeline.py`。
+"""
+
 import logging
 import re
+from functools import partial
 
-import database as db
+from bot.provider import InboundMessage
 
 logger = logging.getLogger(__name__)
 
@@ -59,86 +64,39 @@ def split_qq_text(
     return [part for part in parts if part]
 
 
-class QQEventProcessor:
-    def __init__(self, chat_service, persona_id: str, context_id: str):
-        self.chat_service = chat_service
-        self.persona_id = persona_id
-        self.context_id = context_id
-        self._locks: dict[str, asyncio.Lock] = {}
+class QQInboundAdapter:
+    """把 botpy 的消息对象转成平台中立的 InboundMessage。
+
+    `conversation_key` 只装平台身份（群/单聊 + openid）；机器人归属由
+    `bot_conversations.channel_id` 列承担，不再像旧版那样往 key 尾巴塞 context_id。
+    """
+
+    def __init__(self, channel_id: str, on_inbound):
+        self.channel_id = channel_id
+        self.on_inbound = on_inbound
 
     async def handle_group(self, message) -> None:
-        await self._handle(message, f"group:{message.group_openid}:{self.context_id}")
+        await self._emit(message, f"group:{message.group_openid}")
 
     async def handle_c2c(self, message) -> None:
-        await self._handle(message, f"c2c:{message.author.user_openid}:{self.context_id}")
+        await self._emit(message, f"c2c:{message.author.user_openid}")
 
-    async def _handle(self, message, external_id: str) -> None:
+    async def _emit(self, message, conversation_key: str) -> None:
         content = (message.content or "").strip()
         event_id = message.event_id or message.id
         if not content or not event_id:
             return
-        lock = self._locks.setdefault(external_id, asyncio.Lock())
-        async with lock:
-            conversation = await asyncio.to_thread(
-                db.get_or_create_bot_conversation,
-                self.persona_id,
-                "qq",
-                external_id,
+        await self.on_inbound(
+            InboundMessage(
+                channel_id=self.channel_id,
+                conversation_key=conversation_key,
+                event_id=event_id,
+                text=content,
+                # 回复能力闭包住这条消息：管线拿不到 message 对象本身。
+                send=partial(self._reply, message),
             )
-            stored = await asyncio.to_thread(
-                db.get_bot_message_by_external_id,
-                conversation["id"],
-                event_id,
-            )
-            # 幂等键是「已送达」而不是「已收到」：上次生成或发送失败的事件，
-            # 平台重投时必须还能再答一次，否则用户永远等不到回复。
-            if stored and stored.get("answered_at"):
-                return
-            # 首回合判定必须在 complete_reply 之前：complete_reply 会写入本轮用户/助手
-            # 消息，之后再查历史就永远非空了。QQ 被动回复不可编辑、不可流式，
-            # 只能把开场白前置拼进第一条回复。
-            first_turn = not await asyncio.to_thread(
-                db.get_recent_bot_messages, conversation["id"], 1
-            )
-            fallback = False
-            try:
-                reply = await asyncio.wait_for(
-                    self.chat_service.complete_reply(
-                        conversation["id"], content, external_msg_id=event_id, channel="qq"
-                    ),
-                    timeout=QQ_REPLY_TIMEOUT,
-                )
-            except asyncio.TimeoutError:
-                logger.warning("QQ 消息生成超时（%ss），改发兜底回复", QQ_REPLY_TIMEOUT)
-                reply = QQ_TIMEOUT_REPLY
-                fallback = True
-            except Exception as exc:
-                logger.warning("QQ 消息回复失败: %s", exc, exc_info=True)
-                reply = QQ_FAILURE_REPLY
-                fallback = True
-            if fallback:
-                await asyncio.to_thread(
-                    db.add_bot_message, conversation["id"], "assistant", reply
-                )
-            else:
-                greeting = (conversation.get("persona") or {}).get("greeting") or ""
-                if first_turn and greeting:
-                    reply = f"{greeting}\n\n{reply}"
-            await self._send_reply(message, conversation["id"], event_id, reply)
+        )
 
-    async def _send_reply(
-        self, message, conversation_id: str, event_id: str, reply: str
-    ) -> None:
-        text = strip_markdown_for_qq(reply).strip() or reply
-        for index, part in enumerate(split_qq_text(text)):
-            try:
-                await message.reply(content=part, msg_type=0)
-            except Exception as exc:
-                logger.warning(
-                    "QQ 回复发送失败（第 %d 段）: %s", index + 1, exc, exc_info=True
-                )
-                return
-            if index == 0:
-                await asyncio.to_thread(
-                    db.mark_bot_message_answered, conversation_id, event_id
-                )
+    @staticmethod
+    async def _reply(message, part: str) -> None:
+        await message.reply(content=part, msg_type=0)

@@ -40,14 +40,26 @@ def clean_policy():
 
 @pytest.fixture
 def clean_loglevel():
+    """事前把 logconfig 的 handler 单例摘干净，事后原样装回。
+
+    _install_handler_locked 只在 _handler is None 时才往 root 挂 handler，而
+    main.py 在导入期就 install_early()。所以只「事后还原」不「事前建立」时，
+    套件里只要有用例先 import 过 main（test_cors_preflight 等），本文件的
+    「apply_level 会装一个 handler」断言就永远少 1 —— 按执行顺序翻车。
+    """
     root = logging.getLogger()
     saved_level = root.level
     saved_handler = logconfig._handler
     saved_current = logconfig._current
+    if saved_handler is not None:
+        root.removeHandler(saved_handler)
+        logconfig._handler = None
     yield logconfig
     if logconfig._handler is not None and logconfig._handler is not saved_handler:
         root.removeHandler(logconfig._handler)
     logconfig._handler = saved_handler
+    if saved_handler is not None and saved_handler not in root.handlers:
+        root.addHandler(saved_handler)
     root.setLevel(saved_level)
     logconfig._current = saved_current
 

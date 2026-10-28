@@ -7,7 +7,6 @@
 - DELETE 返回 `{"ok": true}`（前端 client 曾声明 `{deleted: boolean}`，已对齐）。
 - 此前 /schedules 全部端点零 HTTP 测试覆盖。
 """
-import os
 from datetime import datetime, timedelta, timezone
 
 import fastapi
@@ -44,15 +43,6 @@ class _FakeEngine:
     async def remove_schedule(self, sid):
         self.removed.append(sid)
         return db.delete_schedule(sid)
-
-
-@pytest.fixture
-def base_db(tmp_workspace):
-    db_path = os.path.join(tmp_workspace, "schedules.db")
-    db._close_all_connections()
-    db.init_db(db_path)
-    yield db_path
-    db._close_all_connections()
 
 
 @pytest.fixture

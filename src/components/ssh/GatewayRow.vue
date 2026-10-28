@@ -53,6 +53,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { formatRelativeTime } from '@/utils/format'
+import { formatLocalDate } from '@/utils/datetime'
 
 const props = defineProps<{
   gateway: GatewayRecord
@@ -137,17 +138,8 @@ const fullTime = computed(() => {
   return t ? new Date(t).toLocaleString() : '无接入记录'
 })
 
-const createdDateText = computed(() => formatDate(props.gateway.createdAt))
+const createdDateText = computed(() => formatLocalDate(props.gateway.createdAt))
 const fullCreatedTime = computed(() => new Date(props.gateway.createdAt).toLocaleString())
-
-function formatDate(ts: number): string {
-  if (!ts) return '-'
-  const d = new Date(ts)
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
 </script>
 
 <style scoped>

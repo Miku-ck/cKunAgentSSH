@@ -20,7 +20,7 @@ from database import init_db
 from database import seed_models_async
 from routes.chat import router as chat_router
 from routes.bot import router as bot_router
-from routes.bot_qq import router as bot_qq_router
+from routes.bot_channels import router as bot_channels_router
 from routes.settings import router as settings_router
 from routes.skills import router as skills_router
 from routes.agent import router as agent_router
@@ -150,16 +150,16 @@ async def lifespan(_app: FastAPI):
     from agent.bridge_relay import BridgeRelay, set_bridge_relay
     set_bridge_relay(BridgeRelay())
 
-    from routes.bot_qq import restore_qq_channel
+    from bot.channel_runtime import get_channel_runtime
     try:
-        await restore_qq_channel()
+        await get_channel_runtime().restore()
     except Exception as exc:
-        logger.warning("恢复 cKunBot QQ 通道失败: %s", exc)
+        logger.warning("恢复 cKunBot 机器人渠道失败: %s", exc)
 
     yield
 
-    from bot.qq_manager import get_qq_manager
-    await get_qq_manager().stop()
+    from bot.channel_runtime import get_channel_runtime
+    await get_channel_runtime().stop_all()
 
     # 优雅停止后台 tick（若曾启动）
     await tick.stop()
@@ -276,7 +276,7 @@ async def _audit_write_error_handler(request: Request, exc: AuditWriteError):
 # 注册路由
 app.include_router(chat_router, prefix="/api")
 app.include_router(bot_router, prefix="/api")
-app.include_router(bot_qq_router, prefix="/api")
+app.include_router(bot_channels_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
 app.include_router(skills_router, prefix="/api")
 app.include_router(agent_router, prefix="/api")

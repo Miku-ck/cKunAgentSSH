@@ -23,11 +23,32 @@ describe('cKunBot API', () => {
     })
   })
 
-  it('QQ 配置读取不声称返回 AppSecret', async () => {
-    vi.mocked(request).mockResolvedValue({ app_id: '1', has_secret: true, persona_id: 'p1', context_id: 'c1' })
-    const config = await botApi.getQqConfig()
-    expect(config.has_secret).toBe(true)
-    expect('app_secret' in config).toBe(false)
+  it('机器人列表只报 has_secret，不返回 AppSecret', async () => {
+    vi.mocked(request).mockResolvedValue([
+      {
+        id: 'ch1',
+        provider: 'qq',
+        display_name: '机器人A',
+        persona_id: 'p1',
+        app_id: '1',
+        has_secret: true,
+        enabled: false,
+        conversation_count: 0,
+        status: { state: 'offline', detail: '' },
+      },
+    ])
+    const [channel] = await botApi.listChannels()
+    expect(channel.has_secret).toBe(true)
+    expect('app_secret' in channel).toBe(false)
+  })
+
+  it('上下线走各自渠道的端点，一张卡只管自己', async () => {
+    vi.mocked(request).mockResolvedValue({ state: 'online', detail: '' })
+    await botApi.connectChannel('ch1')
+    expect(request).toHaveBeenCalledWith('/bot/channels/ch1/connect', { method: 'POST' })
+
+    await botApi.disconnectChannel('ch1')
+    expect(request).toHaveBeenCalledWith('/bot/channels/ch1/disconnect', { method: 'POST' })
   })
 
   it('onReasoning 收到 reasoning 片段，onContent 收到正文', async () => {

@@ -1,10 +1,25 @@
 import asyncio
+import logging
 import threading
 
 import netconfig
 
-from bot.chat_service import BotChatService
-from bot.qq_channel import QQEventProcessor
+from bot.provider import (
+    ChannelAlreadyConnectedError,
+    ChannelConnectError,
+    ChannelConfig,
+)
+from bot.qq_channel import (
+    QQ_FAILURE_REPLY,
+    QQ_MAX_PARTS,
+    QQ_REPLY_TIMEOUT,
+    QQ_TIMEOUT_REPLY,
+    QQInboundAdapter,
+    split_qq_text,
+    strip_markdown_for_qq,
+)
+
+logger = logging.getLogger(__name__)
 
 # botpy 在登录阶段映射 401→AuthenticationFailedError、403→ForbiddenError；
 # 这两类重试再多次也不会变好，直接落到 error 状态等用户改配置。
@@ -13,24 +28,21 @@ FRIENDLY_DETAILS = {
     "AuthenticationFailedError": "AppID 或 AppSecret 不正确，请到 QQ 开放平台核对后重试",
     "ForbiddenError": "QQ 机器人无权连接，请确认已在 QQ 开放平台启用并开通消息权限",
 }
+MISSING_DEPENDENCY_DETAIL = (
+    "后端缺少 QQ 机器人依赖 qq-botpy，请在运行后端的 Python 中执行 pip install qq-botpy"
+)
 DEFAULT_RETRY_DELAYS = (5, 10, 30, 60)
 
 
-class QQConnectError(Exception):
-    def __init__(self, detail: str, *, fatal: bool = False):
-        super().__init__(detail)
-        self.detail = detail
-        self.fatal = fatal
+class QQConnection:
+    """一个 QQ 机器人的一条长连接。
 
+    旧版这个类同时是全进程唯一的 manager，所以「已在运行」是全局的；
+    现在它只管自己，多个机器人由 ChannelRuntime 各起一个实例。
+    """
 
-class QQAlreadyRunningError(RuntimeError):
-    pass
-
-
-class QQChannelManager:
-    def __init__(self, client_factory=None, chat_service=None, retry_delays=DEFAULT_RETRY_DELAYS):
+    def __init__(self, client_factory=None, retry_delays=DEFAULT_RETRY_DELAYS):
         self.client_factory = client_factory or self._create_botpy_client
-        self.chat_service = chat_service or BotChatService()
         self.retry_delays = tuple(retry_delays) or DEFAULT_RETRY_DELAYS
         self._thread: threading.Thread | None = None
         self._loop = None
@@ -60,7 +72,12 @@ class QQChannelManager:
         self._connect_ready.set()
 
     def _create_botpy_client(self, processor, on_ready):
-        import botpy
+        try:
+            import botpy
+        except ImportError as exc:
+            # 解释器由 Electron 按 PATH 探测，换一个 Python 启动就可能缺依赖；
+            # 裸 ModuleNotFoundError 文案在界面上没法行动。
+            raise ChannelConnectError(MISSING_DEPENDENCY_DETAIL, fatal=True) from exc
 
         class Client(botpy.Client):
             async def on_ready(self):
@@ -87,31 +104,32 @@ class QQChannelManager:
         return text or type(exc).__name__
 
     @staticmethod
-    def _connect_error(exc: BaseException | None) -> QQConnectError:
+    def _connect_error(exc: BaseException | None) -> ChannelConnectError:
         if exc is None:
-            return QQConnectError("QQ 连接在握手完成前断开，请稍后重试")
-        return QQConnectError(
-            QQChannelManager._detail_for(exc),
-            fatal=QQChannelManager._is_fatal(exc),
+            return ChannelConnectError("QQ 连接在握手完成前断开，请稍后重试")
+        # 工厂内部已经判定过 fatal 的错误原样上抛，别被按类名重新判成可重试。
+        if isinstance(exc, ChannelConnectError):
+            return exc
+        return ChannelConnectError(
+            QQConnection._detail_for(exc),
+            fatal=QQConnection._is_fatal(exc),
         )
 
     async def start(
         self,
-        appid: str,
-        secret: str,
-        persona_id: str,
-        context_id: str,
+        cfg: ChannelConfig,
+        on_inbound,
         *,
         wait_ready: bool = True,
         ready_timeout: float = 20.0,
     ) -> None:
-        """启动通道；默认等 botpy 登录成功后返回，失败时抛 QQConnectError。
+        """启动连接；默认等 botpy 登录成功后返回，失败时抛 ChannelConnectError。
 
-        restore 走 wait_ready=False，避免开机被握手超时拖住。
+        开机恢复走 wait_ready=False，避免握手超时把整个启动流程拖住。
         """
         with self._lifecycle_lock:
             if self._thread and self._thread.is_alive():
-                raise QQAlreadyRunningError("QQ 机器人已在运行")
+                raise ChannelAlreadyConnectedError("QQ 机器人已在运行")
             self._stopping = threading.Event()
             self._connect_ready = threading.Event()
             self._connect_result = (False, "", False)
@@ -120,8 +138,9 @@ class QQChannelManager:
             self._set_status("connecting")
             self._thread = threading.Thread(
                 target=self._run,
-                args=(appid, secret, persona_id, context_id),
-                name="ckunbot-qq",
+                args=(cfg, on_inbound),
+                # 线程名带渠道 id：多个机器人同时挂着时，线程 dump 里要分得出是谁。
+                name=f"ckunbot-qq-{cfg.channel_id[:8]}",
                 daemon=True,
             )
             self._thread.start()
@@ -135,20 +154,18 @@ class QQChannelManager:
             detail = "连接 QQ 服务器超时，请检查网络后重试"
             self._set_status("error", detail)
             await self._stop_worker()
-            raise QQConnectError(detail)
+            raise ChannelConnectError(detail)
         ok, detail, fatal = self._connect_result
         if not ok:
             await self._stop_worker()
-            raise QQConnectError(detail or "QQ 连接失败", fatal=fatal)
+            raise ChannelConnectError(detail or "QQ 连接失败", fatal=fatal)
 
-    def _run(self, appid: str, secret: str, persona_id: str, context_id: str) -> None:
+    def _run(self, cfg: ChannelConfig, on_inbound) -> None:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         self._loop = loop
         try:
-            self._main_task = loop.create_task(
-                self._main(appid, secret, persona_id, context_id)
-            )
+            self._main_task = loop.create_task(self._main(cfg, on_inbound))
             loop.run_until_complete(self._main_task)
         except asyncio.CancelledError:
             pass
@@ -160,29 +177,31 @@ class QQChannelManager:
                 self._set_status("offline")
             loop.close()
 
-    async def _main(self, appid: str, secret: str, persona_id: str, context_id: str) -> None:
+    async def _main(self, cfg: ChannelConfig, on_inbound) -> None:
         try:
-            await self._supervise(appid, secret, persona_id, context_id)
+            await self._supervise(cfg, on_inbound)
         except asyncio.CancelledError:
             raise
-        except QQConnectError as exc:
+        except ChannelConnectError as exc:
+            logger.warning("QQ 通道连接失败: %s", exc.detail)
             self._set_status("error", exc.detail)
             self._finish_connect(False, exc.detail, exc.fatal)
         except Exception as exc:
             detail = self._detail_for(exc)
+            logger.warning("QQ 通道异常退出: %s", detail, exc_info=True)
             self._set_status("error", detail)
             self._finish_connect(False, detail, self._is_fatal(exc))
 
-    async def _supervise(self, appid: str, secret: str, persona_id: str, context_id: str) -> None:
+    async def _supervise(self, cfg: ChannelConfig, on_inbound) -> None:
         while True:
             if self._stopping.is_set():
                 return
             client = None
             error = None
             try:
-                processor = QQEventProcessor(self.chat_service, persona_id, context_id)
-                client = self.client_factory(processor, self._on_client_ready)
-                connection = await client.start(appid, secret, ret_coro=True)
+                adapter = QQInboundAdapter(cfg.channel_id, on_inbound)
+                client = self.client_factory(adapter, self._on_client_ready)
+                connection = await client.start(cfg.app_id, cfg.app_secret, ret_coro=True)
                 if connection:
                     await connection
             except asyncio.CancelledError:
@@ -244,8 +263,35 @@ class QQChannelManager:
             self._set_status("offline")
 
 
-qq_manager = QQChannelManager()
+class QQProvider:
+    """QQ 渠道的 provider 实现（契约见 bot/provider.py）。"""
 
+    name = "qq"
+    reply_window_s = QQ_REPLY_TIMEOUT
 
-def get_qq_manager() -> QQChannelManager:
-    return qq_manager
+    def __init__(self, client_factory=None, retry_delays=DEFAULT_RETRY_DELAYS):
+        self.client_factory = client_factory
+        self.retry_delays = retry_delays
+
+    async def start(
+        self,
+        cfg: ChannelConfig,
+        on_inbound,
+        *,
+        wait_ready: bool = True,
+        ready_timeout: float = 20.0,
+    ) -> QQConnection:
+        connection = QQConnection(
+            client_factory=self.client_factory, retry_delays=self.retry_delays
+        )
+        await connection.start(
+            cfg, on_inbound, wait_ready=wait_ready, ready_timeout=ready_timeout
+        )
+        return connection
+
+    def outbound_parts(self, text: str) -> list[str]:
+        cleaned = strip_markdown_for_qq(text).strip() or text
+        return split_qq_text(cleaned)
+
+    def fallback(self, kind: str) -> str:
+        return QQ_TIMEOUT_REPLY if kind == "timeout" else QQ_FAILURE_REPLY

@@ -7,7 +7,6 @@
 - run_id 传入 harness 供审计贯通；done/error/permission_needed 信号收集。
 """
 import asyncio
-import os
 from types import SimpleNamespace
 
 import pytest
@@ -84,15 +83,6 @@ def wired(monkeypatch):
     import agent.tools as tools_mod
     monkeypatch.setattr(tools_mod, "create_registry", lambda: object())
     return state
-
-
-@pytest.fixture
-def base_db(tmp_workspace):
-    db_path = os.path.join(tmp_workspace, "runbook_headless.db")
-    db._close_all_connections()
-    db.init_db(db_path)
-    yield db_path
-    db._close_all_connections()
 
 
 # ── done / error / run_id / permission 信号收集 ──────────────────────────────

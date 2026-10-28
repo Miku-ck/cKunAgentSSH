@@ -6,26 +6,14 @@
 open_session / close_session / append_record），不触真实 Harness 与 bridge。
 """
 import asyncio
-import os
 import threading
 
 import pytest
 
-import database as db
 import runbook_store as rstore
 from agent import headless_run
 from agent.harness.contracts import POLICY_DENY_MARKER
 from runbook_engine import RunbookEngine, extract_verdict, build_step_prompt
-
-
-@pytest.fixture
-def base_db(tmp_workspace):
-    db_path = os.path.join(tmp_workspace, "runbook_engine.db")
-    db._close_all_connections()
-    db.init_db(db_path)
-    rstore._reset_memo_for_tests()
-    yield db_path
-    db._close_all_connections()
 
 
 @pytest.fixture
@@ -140,19 +128,19 @@ async def _trigger_and_wait(engine, rb):
     return rrb_id
 
 
-def _last_run(base_db, rid):
+def _last_run(runbook_db, rid):
     runs = rstore.list_runbook_runs(rid)
     return runs[0] if runs else None
 
 
-def test_pass_step_marks_success_and_run_success(base_db, engine, sessions, audits, monkeypatch):
+def test_pass_step_marks_success_and_run_success(runbook_db, engine, sessions, audits, monkeypatch):
     rb = _mk_runbook([{"command": "echo ok", "assertCommand": "", "note": ""}])
     fake = FakeRunner([_ok()])
     _patch_runner(monkeypatch, fake)
 
     rrb_id = asyncio.run(_trigger_and_wait(engine, rb))
     assert rrb_id
-    run = _last_run(base_db, rb["id"])
+    run = _last_run(runbook_db, rb["id"])
     assert run["status"] == "success"
     st = run["steps_state"][0]
     assert st["status"] == "success"
@@ -167,37 +155,37 @@ def test_pass_step_marks_success_and_run_success(base_db, engine, sessions, audi
     assert audits[-1]["conclusion"] == "executed"
 
 
-def test_missing_marker_is_fail_closed(base_db, engine, sessions, audits, monkeypatch):
+def test_missing_marker_is_fail_closed(runbook_db, engine, sessions, audits, monkeypatch):
     """缺标记 = 失败（不是成功更不是跳过）。"""
     rb = _mk_runbook([{"command": "echo hi", "assertCommand": "", "note": ""}])
     _patch_runner(monkeypatch, FakeRunner([headless_run.HeadlessRunResult(
         content="命令执行完了，一切看起来正常。", state="completed")]))
     asyncio.run(_trigger_and_wait(engine, rb))
-    run = _last_run(base_db, rb["id"])
+    run = _last_run(runbook_db, rb["id"])
     assert run["status"] == "failed"
     st = run["steps_state"][0]
     assert st["status"] == "failed"
     assert "标记行" in st["error"]
 
 
-def test_non_completed_state_fails_even_with_pass_marker(base_db, engine, sessions, monkeypatch):
+def test_non_completed_state_fails_even_with_pass_marker(runbook_db, engine, sessions, monkeypatch):
     """S7-01 同款：终态非 completed 的 run 不因正文有「通过」就算成功。"""
     rb = _mk_runbook([{"command": "long task", "assertCommand": "", "note": ""}])
     _patch_runner(monkeypatch, FakeRunner([headless_run.HeadlessRunResult(
         content="前文 [步骤结论] 通过", state="max_reached")]))
     asyncio.run(_trigger_and_wait(engine, rb))
-    st = _last_run(base_db, rb["id"])["steps_state"][0]
+    st = _last_run(runbook_db, rb["id"])["steps_state"][0]
     assert st["status"] == "failed"
     assert "max_reached" in st["error"]
 
 
-def test_blocked_is_failure_not_success(base_db, engine, sessions, audits, monkeypatch):
+def test_blocked_is_failure_not_success(runbook_db, engine, sessions, audits, monkeypatch):
     """拦截（headless 下 permission_needed）→ 步骤 blocked，仍是失败，绝不当成功。"""
     rb = _mk_runbook([{"command": "rm -rf /data", "assertCommand": "", "note": ""}])
     _patch_runner(monkeypatch, FakeRunner([headless_run.HeadlessRunResult(
         content="该命令需要授权，已放弃。", state="completed", permission_requested=True)]))
     asyncio.run(_trigger_and_wait(engine, rb))
-    run = _last_run(base_db, rb["id"])
+    run = _last_run(runbook_db, rb["id"])
     assert run["status"] == "failed"
     st = run["steps_state"][0]
     assert st["status"] == "blocked"
@@ -206,7 +194,7 @@ def test_blocked_is_failure_not_success(base_db, engine, sessions, audits, monke
     assert step_audits[0]["conclusion"] == "blocked"
 
 
-def test_blocked_beats_pass_marker(base_db, engine, sessions, audits, monkeypatch):
+def test_blocked_beats_pass_marker(runbook_db, engine, sessions, audits, monkeypatch):
     """评审意见 2 回归：拦截信号优先于模型结论 —— run 出现过 permission_needed
     时，模型末尾的「[步骤结论] 通过」不能把步骤洗成 success（静默假成功）。"""
     rb = _mk_runbook([
@@ -220,7 +208,7 @@ def test_blocked_beats_pass_marker(base_db, engine, sessions, audits, monkeypatc
         _ok("诊断：命令被拦截、实际未执行"),
     ]))
     asyncio.run(_trigger_and_wait(engine, rb))
-    run = _last_run(base_db, rb["id"])
+    run = _last_run(runbook_db, rb["id"])
     assert run["status"] == "failed"
     states = run["steps_state"]
     assert states[0]["status"] == "blocked"
@@ -250,18 +238,18 @@ def test_deny_signal_covers_prod_warning_and_human_help():
     assert not headless_run._is_deny_signal("done", {"state": "completed"})
 
 
-def test_model_reported_failure_marks_failed(base_db, engine, sessions, monkeypatch):
+def test_model_reported_failure_marks_failed(runbook_db, engine, sessions, monkeypatch):
     rb = _mk_runbook([{"command": "curl localhost", "assertCommand": "", "note": ""}])
     _patch_runner(monkeypatch, FakeRunner([_fail()]))
     asyncio.run(_trigger_and_wait(engine, rb))
-    st = _last_run(base_db, rb["id"])["steps_state"][0]
+    st = _last_run(runbook_db, rb["id"])["steps_state"][0]
     assert st["status"] == "failed"
     assert st["verdict"].startswith("失败")
     assert "端口未监听" in st["verdict"]
 
 
 def test_failure_stops_and_marks_rest_skipped_with_diagnosis(
-        base_db, engine, sessions, audits, monkeypatch):
+        runbook_db, engine, sessions, audits, monkeypatch):
     """失败即停：后续步骤置 skipped；自动诊断 run 触发且 prompt 携带失败现场。"""
     rb = _mk_runbook([
         {"command": "echo one", "assertCommand": "", "note": ""},
@@ -274,7 +262,7 @@ def test_failure_stops_and_marks_rest_skipped_with_diagnosis(
     _patch_runner(monkeypatch, fake)
     asyncio.run(_trigger_and_wait(engine, rb))
 
-    run = _last_run(base_db, rb["id"])
+    run = _last_run(runbook_db, rb["id"])
     assert run["status"] == "failed"
     states = run["steps_state"]
     assert [s["status"] for s in states] == ["success", "failed", "skipped"]
@@ -298,18 +286,18 @@ def test_failure_stops_and_marks_rest_skipped_with_diagnosis(
     assert run_audits[0]["conclusion"] == "failed"
 
 
-def test_step_exception_fails_the_step(base_db, engine, sessions, monkeypatch):
+def test_step_exception_fails_the_step(runbook_db, engine, sessions, monkeypatch):
     rb = _mk_runbook([{"command": "boom", "assertCommand": "", "note": ""}])
     _patch_runner(monkeypatch, FakeRunner([RuntimeError("未配置默认模型")]))
     asyncio.run(_trigger_and_wait(engine, rb))
-    run = _last_run(base_db, rb["id"])
+    run = _last_run(runbook_db, rb["id"])
     assert run["status"] == "failed"
     st = run["steps_state"][0]
     assert st["status"] == "failed"
     assert "RuntimeError" in st["error"]
 
 
-def test_duplicate_trigger_rejected(base_db, engine, sessions, monkeypatch):
+def test_duplicate_trigger_rejected(runbook_db, engine, sessions, monkeypatch):
     """并发防重入：同一剧本在执行中，二次触发被丢弃（路由据此 409）。"""
     rb = _mk_runbook([{"command": "sleep", "assertCommand": "", "note": ""}])
     gate = asyncio.Event()
@@ -346,7 +334,7 @@ def test_duplicate_trigger_rejected(base_db, engine, sessions, monkeypatch):
     stop.set()
 
 
-def test_first_trigger_dedupes_across_reap_window(base_db, engine, sessions, monkeypatch):
+def test_first_trigger_dedupes_across_reap_window(runbook_db, engine, sessions, monkeypatch):
     """评审意见 1 回归：进程内首次触发的收尸（ensure_reaped → to_thread 真实挂起）
     期间，去重标记必须已经登记 —— 挂起窗口内的第二个 trigger 不得通过检查。
     修复前 add 落在 await ensure_reaped() 之后，并发双触发双双起跑（2 行历史、
@@ -390,7 +378,7 @@ def test_first_trigger_dedupes_across_reap_window(base_db, engine, sessions, mon
     assert len(rstore.list_runbook_runs(rb["id"])) == 1, "同一剧本只落一行执行历史"
 
 
-def test_begin_delete_blocks_trigger(base_db, engine, sessions, monkeypatch):
+def test_begin_delete_blocks_trigger(runbook_db, engine, sessions, monkeypatch):
     """评审意见 3 回归：删除占位窗口内 trigger 的同步检查段被拒 —— 不会建出
     将被 FK CASCADE 吞掉的 run 行（执行体对着已删剧本跑完、历史凭空消失）。"""
     rb = _mk_runbook([{"command": "echo ok", "assertCommand": "", "note": ""}])
@@ -406,7 +394,7 @@ def test_begin_delete_blocks_trigger(base_db, engine, sessions, monkeypatch):
     assert rrb_id, "释放占位后触发恢复正常"
 
 
-def test_cancel_lands_stopped_terminal_state(base_db, engine, sessions, monkeypatch):
+def test_cancel_lands_stopped_terminal_state(runbook_db, engine, sessions, monkeypatch):
     """取消落终态：CancelledError 后 runbook_runs 落 stopped，不滞留 running。"""
     rb = _mk_runbook([{"command": "hang", "assertCommand": "", "note": ""}])
     release = asyncio.Event()
