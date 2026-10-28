@@ -121,3 +121,11 @@ def test_chat_route_streams_content_and_done(client, monkeypatch):
     assert events[-1]["type"] == "done"
     assert events[-1]["message"]["content"] == "你好呀"
     assert [m["content"] for m in db.get_bot_messages(conversation["id"])] == ["在吗", "你好呀"]
+
+
+def test_persona_chat_experience_columns_migrate_and_default(client):
+    rows = client.get("/api/bot/personas").json()
+    assert rows, "至少内置 cKunBot"
+    p = rows[0]
+    assert p["reply_style"] == "moderate"
+    assert int(p["enable_thinking"]) == 0

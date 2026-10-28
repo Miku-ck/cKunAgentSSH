@@ -206,6 +206,8 @@ def init_db(db_path: str) -> None:
                 background   TEXT NOT NULL DEFAULT '',
                 greeting     TEXT NOT NULL DEFAULT '',
                 model_id     TEXT,
+                reply_style  TEXT NOT NULL DEFAULT 'moderate',
+                enable_thinking INTEGER NOT NULL DEFAULT 0,
                 is_builtin   INTEGER NOT NULL DEFAULT 0,
                 created_at   TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
@@ -235,6 +237,7 @@ def init_db(db_path: str) -> None:
                 content         TEXT NOT NULL,
                 external_msg_id TEXT,
                 answered_at     TEXT,
+                reasoning       TEXT,
                 created_at      TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
@@ -545,6 +548,20 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
         conn.execute(
             "UPDATE bot_messages SET answered_at = created_at "
             "WHERE external_msg_id IS NOT NULL"
+        )
+    # bot_messages.reasoning：本地陪聊开启思考时，随正式回复一并落库回显。
+    if "reasoning" not in bot_message_cols:
+        conn.execute("ALTER TABLE bot_messages ADD COLUMN reasoning TEXT")
+    # bot_personas：chat-experience 两列（旧库补齐，新库建表已含）。
+    cursor = conn.execute("PRAGMA table_info(bot_personas)")
+    persona_cols = {row[1] for row in cursor.fetchall()}
+    if "reply_style" not in persona_cols:
+        conn.execute(
+            "ALTER TABLE bot_personas ADD COLUMN reply_style TEXT NOT NULL DEFAULT 'moderate'"
+        )
+    if "enable_thinking" not in persona_cols:
+        conn.execute(
+            "ALTER TABLE bot_personas ADD COLUMN enable_thinking INTEGER NOT NULL DEFAULT 0"
         )
     # 会话标题：早期会话沿用创建时的人格名，侧栏与 QQ 记录区无法区分。
     # 每个会话取首条用户消息当标题；标题已不是人格名的（迁移过或用户改过）不动。
@@ -2120,6 +2137,8 @@ def get_default_model(mode: Optional[str] = None, mask_key: bool = True) -> Opti
 def _bot_persona_dict(row: sqlite3.Row) -> dict:
     result = dict(row)
     result["is_builtin"] = int(result.get("is_builtin") or 0)
+    result["enable_thinking"] = int(result.get("enable_thinking") or 0)
+    result.setdefault("reply_style", "moderate")
     return result
 
 
