@@ -50,7 +50,7 @@ export interface BotQqConfig {
 }
 
 export interface BotQqStatus {
-  state: 'offline' | 'connecting' | 'online' | 'error'
+  state: 'offline' | 'connecting' | 'online' | 'reconnecting' | 'error'
   detail: string
 }
 
@@ -61,6 +61,7 @@ export const botApi = {
   copyPersona: (id: string) => request<BotPersona>(`/bot/personas/${id}/copy`, { method: 'POST' }),
   deletePersona: (id: string) => request<{ deleted: boolean }>(`/bot/personas/${id}`, { method: 'DELETE' }),
   listConversations: (personaId?: string) => request<BotConversation[]>(`/bot/conversations?channel=local${personaId ? `&persona_id=${encodeURIComponent(personaId)}` : ''}`),
+  listQqConversations: () => request<BotConversation[]>('/bot/conversations?channel=qq'),
   createConversation: (personaId: string) => request<BotConversation>('/bot/conversations', { method: 'POST', body: JSON.stringify({ persona_id: personaId, channel: 'local' }) }),
   getMessages: (id: string) => request<BotMessage[]>(`/bot/conversations/${id}/messages?limit=200`),
   deleteConversation: (id: string) => request<{ deleted: boolean }>(`/bot/conversations/${id}`, { method: 'DELETE' }),

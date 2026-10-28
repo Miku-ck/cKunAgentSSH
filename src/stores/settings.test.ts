@@ -497,7 +497,7 @@ describe('settings 脏 localStorage 校验（全键）', () => {
     // 终端背景三件套同规矩：非法模式/越界透明度/非 hex 颜色全回默认
     expect(s.settings.appearance.terminal.backgroundMode).toBe('auto')
     expect(s.settings.appearance.terminal.backgroundOpacity).toBe(92)
-    expect(s.settings.appearance.terminal.backgroundColor).toBe('#0d1117')
+    expect(s.settings.appearance.terminal.backgroundColor).toBe('#000000')
 
     const ok = await storeWithSaved({
       chat: { messageFontSize: 14, contextWindow: 50 },
@@ -526,7 +526,7 @@ describe('settings 脏 localStorage 校验（全键）', () => {
   it('终端背景三字段：localStorage 缺键时的默认（旧设置只有字号/字体，升级后必须落在 auto）', async () => {
     const s = await storeWithSaved({})
     expect(s.settings.appearance.terminal.backgroundMode).toBe('auto')
-    expect(s.settings.appearance.terminal.backgroundColor).toBe('#0d1117')
+    expect(s.settings.appearance.terminal.backgroundColor).toBe('#000000')
     expect(s.settings.appearance.terminal.backgroundOpacity).toBe(92)
   })
 

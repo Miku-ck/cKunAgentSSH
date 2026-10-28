@@ -1,10 +1,11 @@
 import json
 import logging
+import re
 from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 import database as db
 from bot.chat_service import BotChatService
@@ -14,22 +15,37 @@ logger = logging.getLogger(__name__)
 chat_service = BotChatService()
 
 
+# 头像只收上传图片压缩后的 data URL（256px webp 约 20k 字符，上限留足余量）；
+# 表情/任意文本不再当头像 —— 与前端 isImageAvatar 同口径。
+_AVATAR_DATA_URL = re.compile(r"^data:image/(?:png|jpe?g|webp|gif);base64,", re.IGNORECASE)
+
+
+def _validate_avatar(value: str) -> str:
+    if value and not _AVATAR_DATA_URL.match(value):
+        raise ValueError("头像仅支持上传的图片")
+    return value
+
+
 class PersonaRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=50)
-    avatar: str = Field("", max_length=500)
+    avatar: str = Field("", max_length=400_000)
     personality: str = Field("", max_length=5000)
     background: str = Field("", max_length=10000)
     greeting: str = Field("", max_length=2000)
     model_id: Optional[str] = None
 
+    _check_avatar = field_validator("avatar")(_validate_avatar)
+
 
 class PersonaUpdateRequest(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=50)
-    avatar: Optional[str] = Field(None, max_length=500)
+    avatar: Optional[str] = Field(None, max_length=400_000)
     personality: Optional[str] = Field(None, max_length=5000)
     background: Optional[str] = Field(None, max_length=10000)
     greeting: Optional[str] = Field(None, max_length=2000)
     model_id: Optional[str] = None
+
+    _check_avatar = field_validator("avatar")(_validate_avatar)
 
 
 class CreateBotConversationRequest(BaseModel):

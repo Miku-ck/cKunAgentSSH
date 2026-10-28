@@ -1,9 +1,62 @@
 import asyncio
 import logging
+import re
 
 import database as db
 
 logger = logging.getLogger(__name__)
+
+# QQ 被动回复窗口是 5 分钟：留一半给分段发送与平台延迟
+QQ_REPLY_TIMEOUT = 150
+QQ_TEXT_LIMIT = 800
+QQ_MAX_PARTS = 4
+QQ_TIMEOUT_REPLY = "这条我想得有点久，你稍后再跟我说一次好吗？"
+QQ_FAILURE_REPLY = "我这边刚才没接上话，请稍后再试一次。"
+
+_MARKDOWN_PATTERNS = (
+    (re.compile(r"\*\*([^*\n]+)\*\*"), r"\1"),
+    (re.compile(r"__([^_\n]+)__"), r"\1"),
+    (re.compile(r"`([^`\n]+)`"), r"\1"),
+    (re.compile(r"(?m)^#{1,6}\s*"), ""),
+)
+
+
+def strip_markdown_for_qq(text: str) -> str:
+    """QQ 不渲染 Markdown：提示词是第一道闸，这里是发送前的兜底。"""
+    cleaned = text or ""
+    for pattern, replacement in _MARKDOWN_PATTERNS:
+        cleaned = pattern.sub(replacement, cleaned)
+    return cleaned
+
+
+def _split_point(text: str, limit: int) -> int:
+    floor = limit // 2
+    for separator in ("\n", "。", "！", "？", "，", ". "):
+        cut = text.rfind(separator, 0, limit)
+        if cut >= floor:
+            return cut + len(separator)
+    return limit
+
+
+def split_qq_text(
+    text: str, limit: int = QQ_TEXT_LIMIT, max_parts: int = QQ_MAX_PARTS
+) -> list[str]:
+    """按段落/句读切成多段，每段不超过平台单条上限；超出段数时截断。"""
+    remaining = (text or "").strip()
+    if not remaining:
+        return []
+    parts: list[str] = []
+    while remaining and len(parts) < max_parts:
+        if len(remaining) <= limit:
+            parts.append(remaining)
+            remaining = ""
+            break
+        cut = _split_point(remaining, limit)
+        parts.append(remaining[:cut].rstrip())
+        remaining = remaining[cut:].lstrip()
+    if remaining:
+        parts[-1] = parts[-1][: limit - 2].rstrip() + "……"
+    return [part for part in parts if part]
 
 
 class QQEventProcessor:
@@ -32,18 +85,50 @@ class QQEventProcessor:
                 "qq",
                 external_id,
             )
-            duplicate = await asyncio.to_thread(
+            stored = await asyncio.to_thread(
                 db.get_bot_message_by_external_id,
                 conversation["id"],
                 event_id,
             )
-            if duplicate:
+            # 幂等键是「已送达」而不是「已收到」：上次生成或发送失败的事件，
+            # 平台重投时必须还能再答一次，否则用户永远等不到回复。
+            if stored and stored.get("answered_at"):
                 return
+            fallback = False
             try:
-                reply = await self.chat_service.complete_reply(
-                    conversation["id"], content, external_msg_id=event_id
+                reply = await asyncio.wait_for(
+                    self.chat_service.complete_reply(
+                        conversation["id"], content, external_msg_id=event_id
+                    ),
+                    timeout=QQ_REPLY_TIMEOUT,
                 )
-                await message.reply(content=reply, msg_type=0)
+            except asyncio.TimeoutError:
+                logger.warning("QQ 消息生成超时（%ss），改发兜底回复", QQ_REPLY_TIMEOUT)
+                reply = QQ_TIMEOUT_REPLY
+                fallback = True
             except Exception as exc:
                 logger.warning("QQ 消息回复失败: %s", exc, exc_info=True)
-                await message.reply(content="我这边刚才没接上话，请稍后再试一次。", msg_type=0)
+                reply = QQ_FAILURE_REPLY
+                fallback = True
+            if fallback:
+                await asyncio.to_thread(
+                    db.add_bot_message, conversation["id"], "assistant", reply
+                )
+            await self._send_reply(message, conversation["id"], event_id, reply)
+
+    async def _send_reply(
+        self, message, conversation_id: str, event_id: str, reply: str
+    ) -> None:
+        text = strip_markdown_for_qq(reply).strip() or reply
+        for index, part in enumerate(split_qq_text(text)):
+            try:
+                await message.reply(content=part, msg_type=0)
+            except Exception as exc:
+                logger.warning(
+                    "QQ 回复发送失败（第 %d 段）: %s", index + 1, exc, exc_info=True
+                )
+                return
+            if index == 0:
+                await asyncio.to_thread(
+                    db.mark_bot_message_answered, conversation_id, event_id
+                )

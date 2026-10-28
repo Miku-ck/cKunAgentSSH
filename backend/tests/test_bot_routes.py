@@ -56,6 +56,28 @@ def test_persona_and_conversation_routes(client):
     assert client.get("/api/bot/conversations?channel=local").json() == []
 
 
+def test_persona_avatar_accepts_uploaded_image(client):
+    avatar = "data:image/webp;base64," + "A" * 20000
+    persona = create_persona(client, avatar=avatar)
+    assert persona["avatar"] == avatar
+    assert client.get("/api/bot/personas").json()[-1]["avatar"] == avatar
+
+    patched = client.patch(
+        f"/api/bot/personas/{persona['id']}", json={"avatar": "data:image/webp;base64,BBBB"}
+    )
+    assert patched.json()["avatar"] == "data:image/webp;base64,BBBB"
+
+
+def test_persona_avatar_rejects_emoji(client):
+    # 头像只收上传图片的 data URL：表情/任意文本一律 422，不再当头像存
+    for bad in ["🐟", "data:text/plain;base64,AAAA", "x" * 600]:
+        assert client.post(
+            "/api/bot/personas", json={"name": "小暖", "avatar": bad}
+        ).status_code == 422
+    # 空串 = 尚未上传头像（内置人格的初始态），合法
+    assert create_persona(client, avatar="")["avatar"] == ""
+
+
 def test_routes_validate_references_and_input(client):
     assert client.post(
         "/api/bot/conversations", json={"persona_id": "missing"}

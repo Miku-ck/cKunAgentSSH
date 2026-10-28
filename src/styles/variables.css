@@ -12,7 +12,7 @@
  *   --bg-input     输入框、下拉、标签胶囊、折叠条等控件皮肤（"凹陷"）
  *   --bg-slider    滑块轨道
  *   --bg-terminal  终端内容区专用底。终端 ANSI 主题固定为暗色，
- *                  故浅色主题下必须给深底，否则前景色不可读。
+ *                  全主题统一纯黑 #000000（用户明确要求的纯黑终端底）。
  *   --scrim        浮层遮罩（历史抽屉等半模态）：各主题自持色温。
  *                  不许借 --bg-terminal —— 那是终端专用深底，浅色/手记
  *                  主题拿它当遮罩会在纸上压出一层冷灰脏影。
@@ -194,8 +194,8 @@
   --text-primary: #1a1d21;       /* 墨灰而非纯黑 */
   --text-secondary: #4a5058;
   --text-tertiary: #626a74;      /* 5.5:1（白卡）/ 5.0:1（纸灰底） */
-  /* 终端 ANSI 主题固定暗色：浅色界面下必须给深底，否则前景 #e6edf3 不可读 */
-  --bg-terminal: #17181c;
+  /* 终端底全主题统一纯黑（ANSI 主题固定暗色，纯黑底对比度最高） */
+  --bg-terminal: #000000;
   --scrim: rgba(16, 24, 40, 0.16); /* 冷墨轻纱：浅色主题靠抽屉投影分层，不靠压暗 */
   --bg-input: #eef0f3;           /* 白卡上的"凹陷"：比卡面暗一档 */
   --bg-input-solid: #eef0f3;
@@ -272,7 +272,7 @@
   --text-primary: #d7dee9;
   --text-secondary: #a3aec0;
   --text-tertiary: #8e9aac;      /* 6.4:1（对 base）/ 5.5:1（对 elevated） */
-  --bg-terminal: #080d16;
+  --bg-terminal: #000000;
   --scrim: rgba(3, 7, 16, 0.50);
   --bg-input: #111826;
   --bg-input-solid: #111826;
@@ -353,7 +353,7 @@
   --text-primary: #d6e4da;       /* 墨绿灰，非纯白 */
   --text-secondary: #a3b5a8;
   --text-tertiary: #8fa294;      /* 6.8:1（对比 --bg-base）/ 5.8:1（对比 --bg-elevated） */
-  --bg-terminal: #0a120d;
+  --bg-terminal: #000000;
   --scrim: rgba(3, 12, 7, 0.50);
   --bg-input: #121e16;
   --bg-input-solid: #121e16;
@@ -429,7 +429,7 @@
   --text-primary: #d5e5e6;
   --text-secondary: #a1b6b8;
   --text-tertiary: #8ba1a3;      /* 6.7:1（对 base）/ 5.8:1（对 elevated） */
-  --bg-terminal: #071113;
+  --bg-terminal: #000000;
   --scrim: rgba(3, 12, 13, 0.50);
   --bg-input: #0f1e21;
   --bg-input-solid: #0f1e21;
@@ -500,7 +500,7 @@
   --text-primary: #e8e0d2;
   --text-secondary: #bdb3a2;
   --text-tertiary: #a89d89;      /* 6.8:1（对 base）/ 5.9:1（对 elevated） */
-  --bg-terminal: #0f0b05;
+  --bg-terminal: #000000;
   --scrim: rgba(12, 8, 2, 0.50);
   --bg-input: #1f1910;
   --bg-input-solid: #1f1910;
@@ -571,7 +571,7 @@
   --text-primary: #ecdcd8;
   --text-secondary: #c2a9a4;
   --text-tertiary: #ad938e;      /* 6.4:1（对 base）/ 5.5:1（对 elevated） */
-  --bg-terminal: #100908;
+  --bg-terminal: #000000;
   --scrim: rgba(14, 5, 4, 0.50);
   --bg-input: #201514;
   --bg-input-solid: #201514;
@@ -663,7 +663,7 @@
   --bg-input-solid: #ece4d6;
   --bg-slider: #d3c8b6;
   --border-input: #c9bca6;
-  --bg-terminal: #17181c;
+  --bg-terminal: #000000;
   --scrim: rgba(43, 39, 35, 0.14); /* 暖墨影：纸面上要的是晕开的墨，不是压灰 */
 
   /* 手记：隧道徽标（L/R/D）*/

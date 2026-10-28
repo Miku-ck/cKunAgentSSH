@@ -1,3 +1,4 @@
+import asyncio
 import os
 from types import SimpleNamespace
 
@@ -26,6 +27,13 @@ class FakeMessage:
 
     async def reply(self, content, msg_type=0):
         self.replies.append(content)
+
+
+class FailingSendMessage(FakeMessage):
+    """发送通道故障：生成成功但 reply 抛错，事件必须保持可重试。"""
+
+    async def reply(self, content, msg_type=0):
+        raise RuntimeError("qq send failed")
 
 
 class FakeChatService:
@@ -92,3 +100,63 @@ async def test_model_error_returns_safe_qq_message(qq_db):
     await processor.handle_c2c(message)
 
     assert message.replies == ["我这边刚才没接上话，请稍后再试一次。"]
+
+
+@pytest.mark.asyncio
+async def test_send_failure_keeps_event_retryable(qq_db):
+    from bot.qq_channel import QQEventProcessor
+
+    service = FakeChatService()
+    processor = QQEventProcessor(service, persona_id=qq_db["id"], context_id="ctx-1")
+    failing = FailingSendMessage("event-1", "你好", user_openid="user-1")
+    await processor.handle_c2c(failing)
+
+    conversation = db.list_bot_conversations(channel="qq")[0]
+    stored = db.get_bot_message_by_external_id(conversation["id"], "event-1")
+    assert stored["answered_at"] is None
+
+    retry = FakeMessage("event-1", "你好", user_openid="user-1")
+    await processor.handle_c2c(retry)
+
+    assert retry.replies == ["回复：你好"]
+    assert len(service.calls) == 2
+    assert [m["content"] for m in db.get_bot_messages(conversation["id"])].count("你好") == 1
+    assert db.get_bot_message_by_external_id(conversation["id"], "event-1")["answered_at"]
+
+
+@pytest.mark.asyncio
+async def test_generation_timeout_sends_fallback_and_marks_answered(qq_db, monkeypatch):
+    from bot import qq_channel
+
+    class SlowService:
+        async def complete_reply(self, conversation_id, content, external_msg_id=None):
+            db.add_bot_message(conversation_id, "user", content, external_msg_id)
+            await asyncio.sleep(1)
+
+    monkeypatch.setattr(qq_channel, "QQ_REPLY_TIMEOUT", 0.05)
+    processor = qq_channel.QQEventProcessor(SlowService(), persona_id=qq_db["id"], context_id="ctx-1")
+    message = FakeMessage("event-timeout", "在吗", user_openid="user-1")
+    await processor.handle_c2c(message)
+
+    assert message.replies == [qq_channel.QQ_TIMEOUT_REPLY]
+    conversation = db.list_bot_conversations(channel="qq")[0]
+    assert db.get_bot_message_by_external_id(conversation["id"], "event-timeout")["answered_at"]
+
+
+@pytest.mark.asyncio
+async def test_long_markdown_reply_is_cleaned_and_split(qq_db):
+    from bot import qq_channel
+
+    class LongService:
+        async def complete_reply(self, *_args, **_kwargs):
+            return "# 标题\n" + "**第一段**" + "啊" * 900 + "\n" + "`代码`" + "嗯" * 900
+
+    processor = qq_channel.QQEventProcessor(LongService(), persona_id=qq_db["id"], context_id="ctx-1")
+    message = FakeMessage("event-long", "讲讲", user_openid="user-1")
+    await processor.handle_c2c(message)
+
+    assert 2 <= len(message.replies) <= qq_channel.QQ_MAX_PARTS
+    assert all(len(part) <= qq_channel.QQ_TEXT_LIMIT for part in message.replies)
+    joined = "".join(message.replies)
+    assert "**" not in joined and "`" not in joined and "#" not in joined
+    assert "标题" in joined and "第一段" in joined

@@ -17,7 +17,7 @@ import { botApi, streamBotChat } from '@/api/bot'
 import { useBotStore } from './bot'
 
 const persona: BotPersona = {
-  id: 'p1', name: '小刻', avatar: '🤖', personality: '温和', background: '', greeting: '你好',
+  id: 'p1', name: '小刻', avatar: 'data:image/webp;base64,AAAA', personality: '温和', background: '', greeting: '你好',
   model_id: null, is_builtin: 1, created_at: '', updated_at: '',
 }
 const conversation: BotConversation = {

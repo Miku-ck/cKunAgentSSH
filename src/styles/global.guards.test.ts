@@ -4,8 +4,9 @@
  * 会把按钮/输入框自己的圆角覆盖成 2px（焦点一到，方形按钮变圆角），
  * 手记主题下尤其突兀。
  *
- * 另钉一条底线：全仓 30 余处 `outline: none`里有一部分长在 input/range/switch
- * 上，它们的权重高于全局伪类 —— 没有这条 !important 底线，Tab 过去就是没焦点。
+ * 另钉一条底线：开关与滑块的 `outline: none` 权重高于全局伪类 —— 没有这条
+ * !important 底线，Tab 过去就是没焦点。文本输入框不进这条：`:focus-visible`
+ * 在鼠标点入文本控件时同样命中，描边会把组件自己的淡泛光焦点盖成硬框。
  */
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -30,16 +31,22 @@ describe('global.css 焦点可见', () => {
 })
 
 const controlBlock = src.slice(
-  src.indexOf('input:focus-visible'),
-  src.indexOf('}', src.indexOf('input:focus-visible')),
+  src.indexOf('input[type="range"]:focus-visible'),
+  src.indexOf('}', src.indexOf('input[type="range"]:focus-visible')),
 )
 
-describe('表单控件焦点底线', () => {
-  it('圈住四类控件，且带 !important（要压住组件里的 outline: none）', () => {
-    for (const sel of ['input:focus-visible', 'select:focus-visible', 'textarea:focus-visible', '[role="switch"]:focus-visible']) {
-      expect(src, `缺少 ${sel}`).toContain(sel)
+describe('非文本控件焦点底线', () => {
+  it('圈住滑块与开关，且带 !important（要压住组件里的 outline: none）', () => {
+    for (const sel of ['input[type="range"]:focus-visible', '[role="switch"]:focus-visible']) {
+      expect(controlBlock, `缺少 ${sel}`).toContain(sel)
     }
     expect(controlBlock).toContain('outline: 2px solid var(--accent-primary) !important')
+  })
+
+  it('不圈文本输入框：鼠标点入也命中 focus-visible，会盖掉淡泛光焦点', () => {
+    expect(controlBlock).not.toMatch(/(^|[\s,])input:focus-visible/)
+    expect(controlBlock).not.toContain('textarea')
+    expect(controlBlock).not.toContain('select')
   })
 
   it('开关与滑块不再自己摘掉焦点环', () => {

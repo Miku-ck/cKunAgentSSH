@@ -662,6 +662,9 @@ onMounted(() => {
      （透明底 + 实线分隔），组件里不写主题分支（同 --rule-line 的做法） */
   border-top: var(--card-foot-rule);
   background: var(--card-foot-bg);
+  /* 底栏背景必须跟着卡片内圆角收口：手记主题的次级纸面是矩形，不裁就会把下面
+     两角压成直角，与上沿圆角对不上。减 1px 是卡片自身边框的宽度。 */
+  border-radius: 0 0 calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px);
   flex-wrap: wrap;
 }
 .hcc-sel { position: relative }

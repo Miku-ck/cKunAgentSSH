@@ -1,3 +1,4 @@
+import asyncio
 import os
 
 import fastapi
@@ -11,9 +12,14 @@ class FakeManager:
     def __init__(self):
         self.status = {"state": "offline", "detail": ""}
         self.started = []
+        self.waits = []
         self.stopped = False
+        self.fail_with = None
 
-    async def start(self, appid, secret, persona_id, context_id):
+    async def start(self, appid, secret, persona_id, context_id, *, wait_ready=True):
+        self.waits.append(wait_ready)
+        if self.fail_with is not None:
+            raise self.fail_with
         self.started.append((appid, secret, persona_id, context_id))
         self.status = {"state": "online", "detail": ""}
 
@@ -90,3 +96,58 @@ def test_connect_requires_complete_config(qq_client):
     response = qq_client.post("/api/bot/qq/connect")
     assert response.status_code == 400
     assert qq_client.manager.started == []
+
+
+def test_connect_conflict_returns_409(qq_client):
+    from bot.qq_manager import QQAlreadyRunningError
+
+    save_config(qq_client)
+    qq_client.manager.fail_with = QQAlreadyRunningError("QQ 机器人已在运行")
+
+    response = qq_client.post("/api/bot/qq/connect")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "QQ 机器人已在运行"
+    assert db.get_app_setting("bot.qq.enabled") != "1"
+
+
+def test_connect_auth_failure_returns_400_and_clears_enabled(qq_client):
+    from bot.qq_manager import QQConnectError
+
+    save_config(qq_client)
+    db.set_app_setting("bot.qq.enabled", "1")
+    qq_client.manager.fail_with = QQConnectError(
+        "AppID 或 AppSecret 不正确，请到 QQ 开放平台核对后重试", fatal=True
+    )
+
+    response = qq_client.post("/api/bot/qq/connect")
+
+    assert response.status_code == 400
+    assert "AppID 或 AppSecret 不正确" in response.json()["detail"]
+    assert db.get_app_setting("bot.qq.enabled") == "0"
+
+
+def test_connect_retryable_failure_keeps_enabled_flag(qq_client):
+    from bot.qq_manager import QQConnectError
+
+    save_config(qq_client)
+    db.set_app_setting("bot.qq.enabled", "1")
+    qq_client.manager.fail_with = QQConnectError("连接 QQ 服务器超时，请检查网络后重试")
+
+    response = qq_client.post("/api/bot/qq/connect")
+
+    assert response.status_code == 400
+    assert db.get_app_setting("bot.qq.enabled") == "1"
+
+
+def test_restore_does_not_block_boot_waiting_for_handshake(qq_client):
+    save_config(qq_client)
+    db.set_app_setting("bot.qq.enabled", "1")
+    from routes.bot_qq import restore_qq_channel
+
+    asyncio.run(restore_qq_channel())
+
+    assert qq_client.manager.waits == [False]
+    assert qq_client.manager.started == [
+        ("app-id", "app-secret", "persona-1", db.get_app_setting("bot.qq.context_id"))
+    ]

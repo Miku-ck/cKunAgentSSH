@@ -65,6 +65,44 @@ async def test_stream_reply_uses_persona_history_and_saves_messages(bot_db, monk
 
 
 @pytest.mark.asyncio
+async def test_stream_reply_caps_output_when_budget_reaches_context_window(
+    tmp_workspace, monkeypatch
+):
+    """输出预算选到 262144（= 窗口）时不能原样下发。
+
+    实际故障：窗口 262144 + 输出预算 262144 → vLLM 判定 prompt 无剩余空间，
+    直接 400（"requested 262144 output tokens"）。陪聊与 routes/agent 同口径，
+    由 safe_max_tokens 把贴近窗口的误配降到窗口的 1/4。
+    """
+    from bot.chat_service import BotChatService
+
+    db._close_all_connections()
+    db.init_db(os.path.join(tmp_workspace, "bot-budget.db"))
+    model = db.create_model_config(
+        name="大窗口模型",
+        base_url="http://model.test/v1",
+        model_id="chat-256k",
+        max_tokens=262144,
+        max_output_tokens=262144,
+    )
+    persona = db.create_bot_persona(name="小暖", model_id=model["id"])
+    conversation = db.create_bot_conversation(persona["id"])
+    captured = {}
+
+    async def fake_stream(**kwargs):
+        captured.update(kwargs)
+        yield SimpleNamespace(content="在", reasoning="")
+
+    monkeypatch.setattr("llm_adapter.chat_stream", fake_stream)
+    try:
+        [chunk async for chunk in BotChatService().stream_reply(conversation["id"], "在吗")]
+    finally:
+        db._close_all_connections()
+
+    assert captured["max_tokens"] == 65536
+
+
+@pytest.mark.asyncio
 async def test_complete_reply_returns_full_text_for_qq(bot_db, monkeypatch):
     from bot.chat_service import BotChatService
 
@@ -95,3 +133,28 @@ async def test_model_failure_does_not_save_partial_assistant(bot_db, monkeypatch
     messages = db.get_bot_messages(bot_db["id"])
     assert [m["role"] for m in messages] == ["user"]
     assert messages[0]["content"] == "你好"
+
+
+@pytest.mark.asyncio
+async def test_retry_after_failure_feeds_user_message_once(bot_db, monkeypatch):
+    """QQ 重投同一事件时，库里已存的用户消息不能被再追加一次。"""
+    from bot.chat_service import BotChatService
+
+    captured = {}
+
+    async def failing_stream(**_kwargs):
+        raise RuntimeError("upstream failed")
+        yield
+
+    async def fake_stream(**kwargs):
+        captured["messages"] = kwargs["messages"]
+        yield SimpleNamespace(content="在的", reasoning="")
+
+    monkeypatch.setattr("llm_adapter.chat_stream", failing_stream)
+    with pytest.raises(RuntimeError):
+        await BotChatService().complete_reply(bot_db["id"], "在吗", external_msg_id="event-1")
+
+    monkeypatch.setattr("llm_adapter.chat_stream", fake_stream)
+    await BotChatService().complete_reply(bot_db["id"], "在吗", external_msg_id="event-1")
+
+    assert [m["content"] for m in captured["messages"][1:]] == ["在吗"]

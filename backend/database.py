@@ -234,6 +234,7 @@ def init_db(db_path: str) -> None:
                 role            TEXT NOT NULL,
                 content         TEXT NOT NULL,
                 external_msg_id TEXT,
+                answered_at     TEXT,
                 created_at      TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
@@ -513,7 +514,7 @@ def init_db(db_path: str) -> None:
         conn.execute(
             "INSERT INTO bot_personas "
             "(id, name, avatar, personality, background, greeting, is_builtin) "
-            "SELECT ?, 'cKunBot', '🤖', '真诚、温和、自然，有自己的聊天节奏', "
+            "SELECT ?, 'cKunBot', '', '真诚、温和、自然，有自己的聊天节奏', "
             "'你是用户的个人机器人伙伴，擅长轻松陪聊和认真倾听', "
             "'嗨，我是 cKunBot。今天想聊点什么？', 1 "
             "WHERE NOT EXISTS (SELECT 1 FROM bot_personas WHERE is_builtin = 1)",
@@ -528,6 +529,45 @@ def init_db(db_path: str) -> None:
 
 def _migrate_db(conn: sqlite3.Connection) -> None:
     """数据库迁移：为旧表添加新字段"""
+    # 头像只收上传图片的 data URL：旧库存的表情/文本头像清空，
+    # 展示位回到未上传时的纯色占位圈（不做文字回退）
+    conn.execute(
+        "UPDATE bot_personas SET avatar = '' "
+        "WHERE avatar <> '' AND avatar NOT LIKE 'data:image/%'"
+    )
+    # bot_messages.answered_at：QQ 事件幂等键从「已收到」改成「已送达」。
+    # 旧库补列时，带 external_msg_id 的历史消息一律视为已答复 ——
+    # 否则升级后平台重投旧事件会把历史对话再答一遍。
+    cursor = conn.execute("PRAGMA table_info(bot_messages)")
+    bot_message_cols = {row[1] for row in cursor.fetchall()}
+    if "answered_at" not in bot_message_cols:
+        conn.execute("ALTER TABLE bot_messages ADD COLUMN answered_at TEXT")
+        conn.execute(
+            "UPDATE bot_messages SET answered_at = created_at "
+            "WHERE external_msg_id IS NOT NULL"
+        )
+    # 会话标题：早期会话沿用创建时的人格名，侧栏与 QQ 记录区无法区分。
+    # 每个会话取首条用户消息当标题；标题已不是人格名的（迁移过或用户改过）不动。
+    for row in conn.execute(
+        "SELECT id, title, persona_snapshot FROM bot_conversations"
+    ).fetchall():
+        try:
+            persona_name = json.loads(row["persona_snapshot"] or "{}").get("name", "")
+        except (TypeError, ValueError):
+            persona_name = ""
+        if row["title"] and row["title"] != persona_name:
+            continue
+        first = conn.execute(
+            "SELECT content FROM bot_messages WHERE conversation_id = ? AND role = 'user' "
+            "ORDER BY rowid ASC LIMIT 1",
+            (row["id"],),
+        ).fetchone()
+        title = _bot_conversation_title(first["content"]) if first else ""
+        if title:
+            conn.execute(
+                "UPDATE bot_conversations SET title = ? WHERE id = ?",
+                (title, row["id"]),
+            )
     # schedules.last_abnormal_at：巡检异常沉淀时间（方案 Phase 3），正常巡检不动它。
     # 新库建表已含该列，这里只为旧库补齐；PRAGMA 探测避免重复 ALTER 报错。
     cursor = conn.execute("PRAGMA table_info(schedules)")
@@ -2317,6 +2357,8 @@ def add_bot_message(
             "UPDATE bot_conversations SET updated_at = ? WHERE id = ?",
             (now, conversation_id),
         )
+        if role == "user":
+            _title_bot_conversation_from_first_message(conn, conversation_id, content)
         conn.commit()
         return {
             "id": message_id,
@@ -2324,10 +2366,49 @@ def add_bot_message(
             "role": role,
             "content": content,
             "external_msg_id": external_msg_id,
+            "answered_at": None,
             "created_at": now,
         }
     finally:
         conn.close()
+
+
+_BOT_TITLE_MAX = 24
+
+
+def _bot_conversation_title(content: str) -> str:
+    text = " ".join((content or "").split())
+    return text if len(text) <= _BOT_TITLE_MAX else text[:_BOT_TITLE_MAX] + "…"
+
+
+def _title_bot_conversation_from_first_message(
+    conn: sqlite3.Connection, conversation_id: str, content: str
+) -> None:
+    """首条用户消息替换掉创建时的人格名标题；只改一次，后续消息不覆盖。"""
+    row = conn.execute(
+        "SELECT title, persona_snapshot FROM bot_conversations WHERE id = ?",
+        (conversation_id,),
+    ).fetchone()
+    if not row:
+        return
+    try:
+        persona_name = json.loads(row["persona_snapshot"] or "{}").get("name", "")
+    except (TypeError, ValueError):
+        persona_name = ""
+    if row["title"] and row["title"] != persona_name:
+        return
+    first = conn.execute(
+        "SELECT COUNT(*) FROM bot_messages WHERE conversation_id = ? AND role = 'user'",
+        (conversation_id,),
+    ).fetchone()[0]
+    if first != 1:
+        return
+    title = _bot_conversation_title(content)
+    if title:
+        conn.execute(
+            "UPDATE bot_conversations SET title = ? WHERE id = ?",
+            (title, conversation_id),
+        )
 
 
 def get_bot_messages(conversation_id: str, limit: int = 100) -> list[dict]:
@@ -2357,6 +2438,21 @@ def get_bot_message_by_external_id(conversation_id: str, external_msg_id: str) -
             (conversation_id, external_msg_id),
         ).fetchone()
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def mark_bot_message_answered(conversation_id: str, external_msg_id: str) -> bool:
+    """QQ 回复真正送达后才标记；未标记的事件允许平台重投时再处理一次。"""
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            "UPDATE bot_messages SET answered_at = ? "
+            "WHERE conversation_id = ? AND external_msg_id = ? AND answered_at IS NULL",
+            (_now(), conversation_id, external_msg_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
     finally:
         conn.close()
 

@@ -74,3 +74,40 @@ def test_qq_conversation_external_id_is_unique_per_channel(base_db):
 
     assert second["id"] == first["id"]
     assert len(db.list_bot_conversations(channel="qq")) == 1
+
+
+def test_first_user_message_becomes_conversation_title(base_db):
+    persona = db.create_bot_persona(name="小暖")
+    conversation = db.create_bot_conversation(persona["id"])
+    assert conversation["title"] == "小暖"
+
+    db.add_bot_message(conversation["id"], "user", "  今天  有点累\n后面还有一句  ")
+    assert db.get_bot_conversation(conversation["id"])["title"] == "今天 有点累 后面还有一句"
+
+    db.add_bot_message(conversation["id"], "user", "第二条不该覆盖")
+    assert db.get_bot_conversation(conversation["id"])["title"] == "今天 有点累 后面还有一句"
+
+
+def test_long_first_message_title_is_truncated(base_db):
+    persona = db.create_bot_persona(name="小暖")
+    conversation = db.create_bot_conversation(persona["id"])
+
+    db.add_bot_message(conversation["id"], "user", "字" * 40)
+
+    assert db.get_bot_conversation(conversation["id"])["title"] == "字" * 24 + "…"
+
+
+def test_mark_bot_message_answered_is_idempotent(base_db):
+    persona = db.create_bot_persona(name="QQ 小暖")
+    conversation = db.create_bot_conversation(
+        persona["id"], channel="qq", external_id="c2c:user-1"
+    )
+    db.add_bot_message(conversation["id"], "user", "你好", "event-1")
+
+    stored = db.get_bot_message_by_external_id(conversation["id"], "event-1")
+    assert stored["answered_at"] is None
+
+    assert db.mark_bot_message_answered(conversation["id"], "event-1") is True
+    assert db.get_bot_message_by_external_id(conversation["id"], "event-1")["answered_at"]
+    assert db.mark_bot_message_answered(conversation["id"], "event-1") is False
+    assert db.mark_bot_message_answered(conversation["id"], "event-missing") is False

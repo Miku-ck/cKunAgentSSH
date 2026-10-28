@@ -65,11 +65,19 @@ async def connect():
     secret = db.get_app_setting("bot.qq.app_secret", "") or ""
     if not config["app_id"] or not secret or not config["persona_id"]:
         raise HTTPException(status_code=400, detail="请先完整填写 QQ 配置")
-    from bot.qq_manager import get_qq_manager
+    from bot.qq_manager import QQAlreadyRunningError, QQConnectError, get_qq_manager
 
-    await get_qq_manager().start(
-        config["app_id"], secret, config["persona_id"], config["context_id"]
-    )
+    try:
+        await get_qq_manager().start(
+            config["app_id"], secret, config["persona_id"], config["context_id"]
+        )
+    except QQAlreadyRunningError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except QQConnectError as exc:
+        # 凭据/权限错了就别留着 enabled，否则每次开机都拿旧凭据重试。
+        if exc.fatal:
+            db.set_app_setting("bot.qq.enabled", "0")
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
     db.set_app_setting("bot.qq.enabled", "1")
     return get_qq_manager().status
 
@@ -91,6 +99,11 @@ async def restore_qq_channel():
     if config["app_id"] and secret and config["persona_id"]:
         from bot.qq_manager import get_qq_manager
 
+        # 不阻塞开机：握手成败交给后台线程，状态由 /bot/qq/status 轮询。
         await get_qq_manager().start(
-            config["app_id"], secret, config["persona_id"], config["context_id"]
+            config["app_id"],
+            secret,
+            config["persona_id"],
+            config["context_id"],
+            wait_ready=False,
         )

@@ -8,14 +8,15 @@ import { contrastRatio } from '@/utils/appearance-tokens'
 import { TERMINAL_THEMES, resolveThemeName, type ResolvedTheme } from './useTerminalConfig'
 
 const TERMINAL_BG: Record<ResolvedTheme, string> = {
+  // 全主题统一纯黑（与 variables.css 各主题 --bg-terminal 对账）
   dark: '#000000',
-  light: '#17181c',
-  'blue-screen': '#080d16',
-  forest: '#0a120d',
-  mint: '#071113',
-  bee: '#0f0b05',
-  coral: '#100908',
-  atelier: '#17181c',
+  light: '#000000',
+  'blue-screen': '#000000',
+  forest: '#000000',
+  mint: '#000000',
+  bee: '#000000',
+  coral: '#000000',
+  atelier: '#000000',
 }
 
 const ANSI_KEYS = [

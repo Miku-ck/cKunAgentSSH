@@ -209,7 +209,10 @@ app.add_middleware(
     # 放开等于给沙箱 iframe 的 Origin: null 来源（同样命中上面的 ^null$）回显
     # Access-Control-Allow-Credentials，纯增攻击面。
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    # PUT 必须在列：QQ 接入的 PUT /bot/qq/config 与各 /settings PUT 都靠它。曾漏配
+    # PUT → 预检被 Starlette 判为 Disallowed CORS method 回 400，浏览器拦截实请求，
+    # fetch 抛 Failed to fetch → 前端兜底成误导性的「网络连接失败，请检查服务是否运行」。
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     # 审查外热修：渲染进程直连请求都带 X-API-Token 头（client.ts withApiToken），
     # 必须列入允许头 — Starlette ≥0.41 的 CORSMiddleware 对预检中出现未允许头的
     # OPTIONS 直接回 400 "Disallowed CORS headers"（旧版会放行），导致浏览器

@@ -284,7 +284,7 @@ export const useSettingsStore = defineStore('settings', () => {
         fontFamily: asString(saved?.appearance?.terminal?.fontFamily, 'jetbrains'),
         aiPredictionEnabled: asBool(saved?.appearance?.terminal?.aiPredictionEnabled, false),
         backgroundMode: asEnum(saved?.appearance?.terminal?.backgroundMode, TERMINAL_BG_MODES, 'auto'),
-        backgroundColor: asHexColor(saved?.appearance?.terminal?.backgroundColor, '#0d1117'),
+        backgroundColor: asHexColor(saved?.appearance?.terminal?.backgroundColor, '#000000'),
         backgroundOpacity: asNumber(saved?.appearance?.terminal?.backgroundOpacity, 92, 0, 100),
       },
     },
