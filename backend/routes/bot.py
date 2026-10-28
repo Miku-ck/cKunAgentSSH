@@ -270,3 +270,24 @@ def remove_gallery_item(item_id: str):
     if not db.delete_bot_gallery_item(item_id):
         raise HTTPException(status_code=404, detail="图库条目不存在")
     return {"deleted": True}
+
+
+class BotUserAvatarRequest(BaseModel):
+    # 空串 = 清除（回落淡色占位）；与 persona.avatar 同闸门，走既有 _validate_avatar
+    avatar: str = Field("", max_length=400_000)
+
+    _check_avatar = field_validator("avatar")(_validate_avatar)
+
+
+_USER_AVATAR_KEY = "bot_user_avatar"
+
+
+@router.get("/bot/user-avatar")
+def get_user_avatar():
+    return {"avatar": db.get_app_setting(_USER_AVATAR_KEY, "") or ""}
+
+
+@router.put("/bot/user-avatar")
+def put_user_avatar(req: BotUserAvatarRequest):
+    db.set_app_setting(_USER_AVATAR_KEY, req.avatar)
+    return {"avatar": req.avatar}

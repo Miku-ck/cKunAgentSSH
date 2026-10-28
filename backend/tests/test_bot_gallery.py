@@ -65,3 +65,18 @@ def test_gallery_route_rejects_non_image_and_oversize(client):
         assert client.post("/api/bot/gallery", json={"data_url": bad}).status_code == 422
     # data_url 必填
     assert client.post("/api/bot/gallery", json={"label": "无图"}).status_code == 422
+
+
+def test_user_avatar_roundtrip_and_clear(client):
+    assert client.get("/api/bot/user-avatar").json() == {"avatar": ""}
+    url = "data:image/webp;base64," + "C" * 100
+    assert client.put("/api/bot/user-avatar", json={"avatar": url}).json()["avatar"] == url
+    assert client.get("/api/bot/user-avatar").json()["avatar"] == url
+    assert client.put("/api/bot/user-avatar", json={"avatar": ""}).json()["avatar"] == ""
+
+
+def test_user_avatar_rejects_emoji_and_oversize(client):
+    assert client.put("/api/bot/user-avatar", json={"avatar": "🐟"}).status_code == 422
+    assert client.put(
+        "/api/bot/user-avatar", json={"avatar": "data:image/webp;base64," + "D" * 400_001}
+    ).status_code == 422
