@@ -77,4 +77,26 @@ describe('cKunBot API', () => {
     await expect(streamBotChat('c1', '在吗', { onContent: () => {} })).rejects.toThrow('模型暂时不可用')
     vi.unstubAllGlobals()
   })
+
+  it('请求体带上 images（无图时为空数组）', async () => {
+    const makeResponse = () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(c) {
+            c.enqueue(new TextEncoder().encode('data: {"type":"done","message":{"id":"m1","role":"assistant","content":"好"}}\n\n'))
+            c.close()
+          },
+        }),
+        { status: 200 },
+      )
+    const fetchMock = vi.fn().mockImplementation(makeResponse)
+    vi.stubGlobal('fetch', fetchMock)
+    await streamBotChat('c1', '看这张', { onContent: () => {}, images: ['data:image/webp;base64,AAAA'] })
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)
+    expect(body.images).toEqual(['data:image/webp;base64,AAAA'])
+    await streamBotChat('c1', '你好', { onContent: () => {} })
+    const bare = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string)
+    expect(bare.images).toEqual([])
+    vi.unstubAllGlobals()
+  })
 })

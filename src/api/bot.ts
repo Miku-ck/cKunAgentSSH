@@ -94,6 +94,8 @@ export interface BotMessage {
   content: string
   external_msg_id?: string | null
   reasoning?: string | null
+  /** 本地看图回复：用户消息携带的图片 data URL 列表（助手消息恒为空）。 */
+  images?: string[] | null
   created_at: string
 }
 
@@ -139,7 +141,7 @@ interface BotSseEvent {
 export async function streamBotChat(
   conversationId: string,
   content: string,
-  options: { onContent: (text: string) => void; onReasoning?: (text: string) => void; signal?: AbortSignal },
+  options: { onContent: (text: string) => void; onReasoning?: (text: string) => void; images?: string[]; signal?: AbortSignal },
 ): Promise<BotMessage> {
   await ensureApiToken()
   let response: Response
@@ -147,7 +149,7 @@ export async function streamBotChat(
     response = await fetch(`${getBaseUrl()}/bot/chat`, {
       method: 'POST',
       headers: withApiToken({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ conversation_id: conversationId, content }),
+      body: JSON.stringify({ conversation_id: conversationId, content, images: options.images ?? [] }),
       signal: options.signal,
     })
   } catch (error) {
