@@ -2,6 +2,15 @@ import asyncio
 from typing import AsyncGenerator
 
 import database as db
+from bot import relation as relation_mod
+from bot.character import (
+    REFUSAL_STYLES,
+    SAFETY_CHARTER,
+    detect_situation,
+    reaction_for,
+    stage_guide,
+)
+from bot.voice import compile_dna, strip_ai_smell
 from safe_tokens import safe_max_tokens
 
 
@@ -19,25 +28,66 @@ class BotChatService:
         return model
 
     # 回复长度与语气风格指令：按 persona.reply_style 选一条，moderate 为默认。
-    # 与「可控长文/人性化简洁回复」直接对应——长/中/短三档可控。
     _STYLE_DIRECTIVE = {
-        "concise": "回复风格：一两句话、口语化、点到为止，别铺陈。",
-        "moderate": "回复风格：以简洁自然为主，确有内容再展开。",
-        "long": "回复风格：可分点、有条理地展开细节。",
+        "concise": "回复长度：一两句话、口语化、点到为止，别铺陈。",
+        "moderate": "回复长度：以简洁自然为主，确有内容再展开。",
+        "long": "回复长度：可分点、有条理地展开细节。",
     }
 
-    def _system_prompt(self, persona: dict, channel: str = "local") -> str:
-        sections = [f"你叫{persona['name']}，是用户的个人机器人伙伴。"]
+    def _system_prompt(
+        self,
+        persona: dict,
+        channel: str = "local",
+        *,
+        relation: dict | None = None,
+        situation: str | None = None,
+    ) -> str:
+        """把人格内核编译成分节提示词。
+
+        分节顺序对应模型对 prompt 的注意力分布：身份和说话方式在最前，
+        关系与此刻的分寸居中，硬约束压尾 —— 首尾是模型记得最牢的两处，
+        放最不能被忽略的内容。
+        """
+        name = persona.get("name") or "cKunBot"
+        address = (persona.get("address_user") or "").strip()
+
+        sections: list[str] = []
+
+        who = f"你是{name}，正在和一个你在意的人用文字聊天。"
+        if address:
+            who += f"你叫对方「{address}」。"
+        sections.append(who)
+
         if persona.get("personality"):
-            sections.append(f"性格与说话方式：{persona['personality']}")
+            sections.append(f"你的性格与说话习惯：{persona['personality']}")
         if persona.get("background"):
-            sections.append(f"背景设定：{persona['background']}")
+            sections.append(f"你的背景：{persona['background']}")
+
+        # 表达 DNA：枚举档位编译成可执行约束。personality 负责「是谁」，
+        # 这里负责「怎么开口」—— 只有前者时模型会退化回通用助手腔。
+        sections.extend(compile_dna(persona.get("expression_dna")))
+
         sections.append(
             self._STYLE_DIRECTIVE.get(
                 persona.get("reply_style") or "moderate",
                 self._STYLE_DIRECTIVE["moderate"],
             )
         )
+
+        stage = (relation or {}).get("stage")
+        if stage:
+            sections.append(f"你们的关系（{stage}）：{stage_guide(stage)}")
+
+        reaction = reaction_for(situation, persona.get("reaction_style"))
+        if reaction:
+            sections.append(f"此刻的分寸：{reaction}")
+
+        sections.append(
+            "拒绝的方式：" + REFUSAL_STYLES.get(
+                persona.get("refusal_style") or "soft", REFUSAL_STYLES["soft"]
+            )
+        )
+
         # 排版规则按渠道分：本地会话走 Markdown 渲染，QQ 被动回复是纯文本，
         # **、#、反引号会被原样显示成符号，故禁止 Markdown 标记与表格/链接/代码块。
         if channel == "qq":
@@ -46,8 +96,23 @@ class BotChatService:
             )
         else:
             sections.append("排版规则：可用 Markdown 排版与适量表情。")
-        sections.append("保持以上人格，进行自然、真诚的文字陪聊。不要执行命令或调用工具，不要声称自己是人类。")
+
+        # 宪章永远压尾，且自身声明优先级最高：这是唯一不允许被人格设定覆盖的一节。
+        sections.append(SAFETY_CHARTER)
         return "\n\n".join(sections)
+
+    @staticmethod
+    def _to_llm_message(item: dict) -> dict:
+        """历史条目转 OpenAI message：仅带图的用户消息构造成多模态数组；其余
+        （含助手、无图用户消息）维持纯文本——助手图不回喂（控 token）。"""
+        images = item.get("images") or []
+        if item["role"] == "user" and images:
+            return {
+                "role": "user",
+                "content": [{"type": "text", "text": item["content"]}]
+                + [{"type": "image_url", "image_url": {"url": u}} for u in images],
+            }
+        return {"role": item["role"], "content": item["content"]}
 
     async def stream_reply(
         self,
@@ -56,21 +121,47 @@ class BotChatService:
         external_msg_id: str | None = None,
         *,
         channel: str = "local",
+        images: list | None = None,
     ) -> AsyncGenerator[tuple[str, str], None]:
         conversation = await asyncio.to_thread(db.get_bot_conversation, conversation_id)
         if not conversation:
             raise ValueError("会话不存在")
         persona = conversation["persona"]
         model = await asyncio.to_thread(self._model_for_persona, persona)
+
+        # 关系快照必须在记账之前读：这一轮应按「开口之前的熟悉度」说话，
+        # 而不是先升一档再回头用新阶段的口吻。久别重逢的判定同理。
+        persona_id = conversation.get("persona_id") or ""
+        speed = persona.get("relationship_speed") or "normal"
+        relation = (
+            await asyncio.to_thread(relation_mod.snapshot, persona_id, speed)
+            if persona_id else None
+        )
+        gap_days = (
+            await asyncio.to_thread(relation_mod.gap_days, persona_id)
+            if persona_id else None
+        )
+        situation = detect_situation(content, gap_days)
+
         # 先落库再读历史：QQ 重投同一事件时 INSERT OR IGNORE 不会重复入库，
         # 历史里这条用户消息恰好出现一次；旧顺序是「读历史 → 再 append 原文」，
         # 重试时会把同一条喂给模型两遍。
         await asyncio.to_thread(
-            db.add_bot_message, conversation_id, "user", content, external_msg_id
+            db.add_bot_message, conversation_id, "user", content, external_msg_id,
+            None, images if channel == "local" else None,
         )
+        # 用户说了话就算一次互动，与模型成功与否无关 —— 关系是聊出来的，不是答对才给分。
+        if persona_id:
+            await asyncio.to_thread(relation_mod.record_turn, persona_id, speed)
+
         history = await asyncio.to_thread(db.get_recent_bot_messages, conversation_id, 40)
-        messages = [{"role": "system", "content": self._system_prompt(persona, channel)}]
-        messages.extend({"role": item["role"], "content": item["content"]} for item in history)
+        messages = [{
+            "role": "system",
+            "content": self._system_prompt(
+                persona, channel, relation=relation, situation=situation
+            ),
+        }]
+        messages.extend(self._to_llm_message(item) for item in history)
 
         from llm_adapter import chat_stream
 
@@ -125,6 +216,11 @@ class BotChatService:
         reply = "".join(parts).strip()
         if not reply:
             raise RuntimeError("模型未返回可显示的内容")
+
+        # 去 AI 味只在落库前做一次：流式阶段按块清洗会切断跨块的模板句正则，
+        # 反而把半句套话留在中间。前端在 done 之后用落库消息替换临时气泡，
+        # 所以用户最终看到的就是清洗后的版本。
+        reply = strip_ai_smell(reply)
         await asyncio.to_thread(
             db.add_bot_message, conversation_id, "assistant", reply,
             None, "".join(reasoning_parts) or None,

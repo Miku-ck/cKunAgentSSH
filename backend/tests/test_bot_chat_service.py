@@ -19,7 +19,7 @@ async def test_stream_reply_yields_reasoning_and_content_and_persists(monkeypatc
     monkeypatch.setattr("llm_adapter.chat_stream", fake_stream)
     persisted = {}
 
-    def fake_add(conv, role, content, external_msg_id=None, reasoning=None):
+    def fake_add(conv, role, content, external_msg_id=None, reasoning=None, images=None):
         if role == "assistant":
             persisted["content"], persisted["reasoning"] = content, reasoning
 

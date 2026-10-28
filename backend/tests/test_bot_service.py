@@ -237,3 +237,48 @@ def test_bot_messages_images_column_present(bot_db):
     finally:
         conn.close()
     assert "images" in cols
+
+
+@pytest.mark.asyncio
+async def test_stream_reply_builds_multimodal_for_user_images(bot_db, monkeypatch):
+    from bot.chat_service import BotChatService
+
+    captured = {}
+
+    async def fake_stream(**kwargs):
+        captured["messages"] = kwargs["messages"]
+        yield SimpleNamespace(content="一只猫", reasoning="")
+
+    monkeypatch.setattr("llm_adapter.chat_stream", fake_stream)
+    imgs = ["data:image/webp;base64,AAAA"]
+    [c async for c in BotChatService().stream_reply(bot_db["id"], "这是什么", images=imgs)]
+
+    user_msgs = [m for m in captured["messages"][1:] if m["role"] == "user"]
+    assert user_msgs[-1]["content"] == [
+        {"type": "text", "text": "这是什么"},
+        {"type": "image_url", "image_url": {"url": "data:image/webp;base64,AAAA"}},
+    ]
+    # 落库带图：用户消息取回带 images（助手消息不带）
+    stored = db.get_recent_bot_messages(bot_db["id"], 10)
+    assert [m for m in stored if m["role"] == "user"][-1]["images"] == imgs
+    assert stored[-1]["images"] == []  # 最后一条是助手回复，不回喂图
+
+
+@pytest.mark.asyncio
+async def test_qq_channel_ignores_images(bot_db, monkeypatch):
+    from bot.chat_service import BotChatService
+
+    captured = {}
+
+    async def fake_stream(**kwargs):
+        captured["messages"] = kwargs["messages"]
+        yield SimpleNamespace(content="在", reasoning="")
+
+    monkeypatch.setattr("llm_adapter.chat_stream", fake_stream)
+    imgs = ["data:image/webp;base64,AAAA"]
+    # 即使带图，channel=qq 也必须忽略（回归安全）
+    [c async for c in BotChatService().stream_reply(bot_db["id"], "在吗", channel="qq", images=imgs)]
+
+    for m in captured["messages"][1:]:
+        assert isinstance(m["content"], str)  # QQ 面永不构造数组
+    assert db.get_recent_bot_messages(bot_db["id"], 10)[-1]["images"] == []
