@@ -173,9 +173,17 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).toContain('c.display_avatar')
     expect(view).toContain('updateQqDisplay')
     expect(view).toContain('自定义显示')
-    // 覆盖只挂在 qq 侧本地会话不吃：编辑抽屉必须绑在 QQ 活动会话上
-    expect(view).toMatch(/qq-display-editor[\s\S]*AvatarPicker/)
-    expect(view).toMatch(/v-if="qqDisplayEditorOpen && store\.isQq && store\.qqActiveConversation" class="qq-display-editor"/)
+    // 入口在 QQ 会话行的 ⋯ 上（本地行不吃这个覆盖），弹窗绑点进来的那一行而不是活动会话
+    expect(view).toMatch(/class="icon-button conv-menu"[\s\S]{0,160}?openQqDisplay\(c\)/)
+    expect(view).toContain('<BaseModal v-if="qqDisplayTarget" title="自定义显示"')
+    expect(view).toContain('store.updateQqDisplay(conversation.id')
+    // 标题栏下的展开面板退役：本项目偏好居中弹窗，不做抽屉式交互
+    expect(view).not.toContain('qq-display-editor')
+    expect(view).not.toContain('qq-display-toggle')
+    // ⋯ 默认隐藏，进该行或键盘聚焦才淡入；触屏无 hover 时常显
+    expect(view).toMatch(/\.conv-menu \{[^}]*opacity: 0/)
+    expect(view).toMatch(/\.conversation:hover \.conv-menu, \.conversation:focus-within \.conv-menu \{ opacity: 1/)
+    expect(view).toContain('@media (hover: none) { .conv-menu { opacity: 1; } }')
     const store = read('src/stores/bot.ts')
     expect(store).toContain('updateConversationDisplay')
   })

@@ -57,6 +57,13 @@
                 <span class="qq-title"><i class="conv-peer-avatar"><PersonaAvatar :avatar="c.display_avatar" :seed="peerSeed(c.external_id)" :label="c.display_name || peerLabel(c.external_id)" /></i><span class="qq-title-text">{{ c.display_name || c.title }}</span></span>
                 <small>{{ peerLabel(c.external_id) }} · {{ qqPersonaLabel(c) }} · {{ formatLocalDateTime(c.updated_at) }}</small>
               </button>
+              <button
+                type="button"
+                class="icon-button conv-menu"
+                title="自定义显示"
+                aria-label="自定义该会话的显示名与头像"
+                @click="openQqDisplay(c)"
+              >⋯</button>
             </div>
             <p v-if="store.qqError" class="sidebar-error">{{ store.qqError }}</p>
             <p v-else-if="!store.qqConversations.length" class="sidebar-empty">还没有 QQ 消息；在 QQ 里 @ 一下机器人试试。</p>
@@ -76,24 +83,10 @@
         <div v-else-if="store.isQq && store.qqActiveConversation" class="chat-titlebar">
           <span class="persona-avatar"><PersonaAvatar :avatar="qqActivePersona?.avatar" :label="qqPersonaName" /></span>
           <div><strong>{{ qqPersonaName }}</strong><small>来自 QQ · {{ store.qqActiveConversation.display_name || peerLabel(store.qqActiveConversation.external_id) }} · 只读</small></div>
-          <button type="button" class="btn tiny qq-display-toggle" @click="qqDisplayEditorOpen = !qqDisplayEditorOpen">自定义显示</button>
           <span v-if="qqActiveRelation" class="relation-chip" :title="relationHint(qqActiveRelation)">
             {{ qqActiveRelation.stage }}
             <i class="relation-bar" aria-hidden="true"><b :style="{ width: relationPercent(qqActiveRelation) }"></b></i>
           </span>
-        </div>
-        <!-- QQ 会话显示覆盖（Phase 4 §4.4）：只改本地看到的名字/头像，真实群资料不采集不改写 -->
-        <div v-if="qqDisplayEditorOpen && store.isQq && store.qqActiveConversation" class="qq-display-editor">
-          <label class="field">
-            <span>会话显示名</span>
-            <input v-model.trim="qqDisplayName" maxlength="50" :placeholder="store.qqActiveConversation.title" />
-          </label>
-          <AvatarPicker v-model="qqDisplayAvatar" :seed="peerSeed(store.qqActiveConversation.external_id)" :label="qqDisplayName || store.qqActiveConversation.title" />
-          <div class="qq-display-actions">
-            <button class="btn" @click="resetQqDisplay">恢复默认</button>
-            <button class="btn btn-primary" :disabled="qqDisplaySaving" @click="saveQqDisplay">{{ qqDisplaySaving ? '保存中…' : '保存' }}</button>
-          </div>
-          <p v-if="qqDisplayError" class="form-error">{{ qqDisplayError }}</p>
         </div>
         <div ref="messageListRef" class="bot-messages">
           <div v-if="!store.isQq && !store.activeConversationId" class="chat-empty">
@@ -209,6 +202,24 @@
 
     <ConnectionPage v-else :personas="store.personas" />
 
+    <!-- QQ 会话显示覆盖（Phase 4 §4.4）：只改本地看到的名字/头像，真实群资料不采集不改写。
+         弹窗绑点进来的那一行，不是当前活动会话。 -->
+    <BaseModal v-if="qqDisplayTarget" title="自定义显示" @close="qqDisplayTarget = null">
+      <div class="qq-display-modal">
+        <label class="field">
+          <span>会话显示名</span>
+          <input v-model.trim="qqDisplayName" maxlength="50" :placeholder="qqDisplayTarget.title" />
+        </label>
+        <AvatarPicker v-model="qqDisplayAvatar" :seed="peerSeed(qqDisplayTarget.external_id)" :label="qqDisplayName || qqDisplayTarget.title" />
+        <p v-if="qqDisplayError" class="form-error">{{ qqDisplayError }}</p>
+        <button type="button" class="btn btn-ghost qq-display-reset" @click="resetQqDisplay">恢复默认</button>
+      </div>
+      <template #actions>
+        <button type="button" class="btn" @click="qqDisplayTarget = null">取消</button>
+        <button type="button" class="btn btn-primary" :disabled="qqDisplaySaving" @click="saveQqDisplay">{{ qqDisplaySaving ? '保存中…' : '保存' }}</button>
+      </template>
+    </BaseModal>
+
     <ChatImageLightbox :visible="!!lightboxUrl" :src="lightboxUrl" @close="lightboxUrl = ''" />
   </section>
 </template>
@@ -218,12 +229,13 @@ import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, 
 import PersonaAvatar from './PersonaAvatar.vue'
 import PersonaEditor from './PersonaEditor.vue'
 import ConnectionPage from './ConnectionPage.vue'
+import BaseModal from '@/components/common/BaseModal.vue'
 import { formatLocalDateTime } from '@/utils/datetime'
 import { personaName } from '@/utils/bot-channel'
 import { decorateMessages, peerLabel, peerSeed } from '@/utils/bot-chat-decor'
 import AvatarPicker from './AvatarPicker.vue'
 import ChatImageLightbox from './ChatImageLightbox.vue'
-import { botApi, type BotPersona, type BotPersonaOptions } from '@/api/bot'
+import { botApi, type BotConversation, type BotPersona, type BotPersonaOptions } from '@/api/bot'
 import { toFriendlyMessage } from '@/api/base'
 import { useBotStore } from '@/stores/bot'
 import { useModelsStore } from '@/stores/models'
@@ -335,32 +347,30 @@ const qqActivePersona = computed(() => store.qqActiveConversation?.persona || nu
 const qqPersonaName = computed(() => personaName(qqActivePersona.value) || '机器人')
 
 // ── QQ 会话自定义显示（Phase 4 §4.4）──
-const qqDisplayEditorOpen = ref(false)
+// 弹窗绑「点进来的那一行」而不是当前活动会话：列表每 5 秒轮询刷新，
+// 绑活动会话就可能把 A 会话的草稿写进 B。
+const qqDisplayTarget = ref<BotConversation | null>(null)
 const qqDisplayName = ref('')
 const qqDisplayAvatar = ref('')
 const qqDisplaySaving = ref(false)
 const qqDisplayError = ref('')
 
-// 抽屉钉在活动会话与 QQ 频道上：切会话/切频道先收起，不把 A 会话的草稿写进 B、也不漏进本地陪聊页。
-watch(() => [store.qqActiveId, store.channel], () => { qqDisplayEditorOpen.value = false })
-
-// 打开编辑器时以当前会话值打底；空串 = 显式清除回落默认。
-watch(qqDisplayEditorOpen, (open) => {
-  if (!open) return
-  const c = store.qqActiveConversation
-  qqDisplayName.value = c?.display_name || ''
-  qqDisplayAvatar.value = c?.display_avatar || ''
+// 打开时以该行当前值打底；空串 = 显式清除回落默认。
+function openQqDisplay(conversation: BotConversation) {
+  qqDisplayTarget.value = conversation
+  qqDisplayName.value = conversation.display_name || ''
+  qqDisplayAvatar.value = conversation.display_avatar || ''
   qqDisplayError.value = ''
-})
+}
 
 async function saveQqDisplay() {
-  const c = store.qqActiveConversation
-  if (!c) return
+  const conversation = qqDisplayTarget.value
+  if (!conversation) return
   qqDisplaySaving.value = true
   qqDisplayError.value = ''
   try {
-    await store.updateQqDisplay(c.id, { display_name: qqDisplayName.value, display_avatar: qqDisplayAvatar.value })
-    qqDisplayEditorOpen.value = false
+    await store.updateQqDisplay(conversation.id, { display_name: qqDisplayName.value, display_avatar: qqDisplayAvatar.value })
+    qqDisplayTarget.value = null
   } catch (e) { qqDisplayError.value = toFriendlyMessage(e, '保存失败') }
   finally { qqDisplaySaving.value = false }
 }
@@ -498,14 +508,16 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 .chat-main.qq .bot-message.user .message-content { border-color: var(--border-subtle); border-radius: var(--bubble-radius) var(--bubble-radius) var(--bubble-radius) var(--radius-sm); background: var(--bg-elevated); box-shadow: var(--shadow-sm); }
 .chat-main.qq .bot-message.assistant .message-content { border-color: color-mix(in srgb, var(--accent-primary) 24%, transparent); border-radius: var(--bubble-radius) var(--radius-sm) var(--bubble-radius) var(--bubble-radius); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); box-shadow: none; }
 /* QQ 显示覆盖编辑抽屉：贴在标题栏下方，编辑时不把消息流顶走太多 */
-.qq-display-editor { padding: var(--spacing-12) var(--spacing-24); border-bottom: 1px solid var(--border-subtle); background: var(--bg-elevated); display: flex; flex-direction: column; gap: var(--spacing-10); }
-.qq-display-editor .field { max-width: 760px; width: 100%; margin: 0 auto; display: flex; flex-direction: column; gap: 7px; color: var(--text-secondary); font-size: 0.9231rem; }
-.qq-display-editor .field input { border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-base); color: var(--text-primary); padding: 9px var(--spacing-10); font: inherit; font-size: 0.9231rem; }
-.qq-display-editor .field input:focus { border-color: var(--accent-primary); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 16%, transparent); }
-.qq-display-editor .avatar-picker { max-width: 760px; width: 100%; margin: 0 auto; }
-.qq-display-actions { max-width: 760px; width: 100%; margin: 0 auto; display: flex; gap: var(--spacing-8); }
-.qq-display-editor .form-error { max-width: 760px; width: 100%; margin: 0 auto; color: var(--danger-text); font-size: 0.8462rem; }
-.qq-display-toggle { flex: 0 0 auto; }
+/* 弹窗内容：BaseModal 的 body 已给 padding 与纵向间距，这里只管控件自身 */
+.qq-display-modal .field { display: flex; flex-direction: column; gap: 7px; color: var(--text-secondary); font-size: 0.9231rem; }
+.qq-display-modal .field input { border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-base); color: var(--text-primary); padding: 9px var(--spacing-10); font: inherit; font-size: 0.9231rem; }
+.qq-display-modal .field input:focus { border-color: var(--accent-primary); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 16%, transparent); }
+.qq-display-modal .form-error { color: var(--danger-text); font-size: 0.8462rem; }
+.qq-display-reset { align-self: flex-start; }
+/* 行右侧的 ⋯ 默认藏起来：鼠标进这一行或键盘落到它身上才淡入；触屏没有 hover，常显 */
+.conv-menu { opacity: 0; transition: opacity var(--transition-fast); }
+.conversation:hover .conv-menu, .conversation:focus-within .conv-menu { opacity: 1; }
+@media (hover: none) { .conv-menu { opacity: 1; } }
 .qq-message-body { min-width: 0; display: flex; flex-direction: column; gap: var(--spacing-2); }
 .qq-meta { color: var(--text-tertiary); font-size: 0.7692rem; }
 /* 日期分隔线：居中淡色小字，两侧渐隐细线，不打断阅读节奏。 */
