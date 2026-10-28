@@ -240,3 +240,33 @@ async def chat(req: BotChatRequest):
             yield sse_event({"type": "error", "detail": detail})
 
     return StreamingResponse(events(), media_type="text/event-stream")
+
+
+class GalleryItemRequest(BaseModel):
+    label: str = Field("", max_length=50)
+    data_url: str = Field(..., max_length=400_000)
+
+    @field_validator("data_url")
+    @classmethod
+    def _check_url(cls, value: str) -> str:
+        # 头像口径（256px webp data URL），不是 Phase 2 聊天图的 1.5M 通道
+        if not _AVATAR_DATA_URL.match(value):
+            raise ValueError("头像图库仅支持上传的图片")
+        return value
+
+
+@router.get("/bot/gallery")
+def list_gallery():
+    return db.list_bot_gallery()
+
+
+@router.post("/bot/gallery")
+def add_gallery_item(req: GalleryItemRequest):
+    return db.create_bot_gallery_item(req.data_url, label=req.label)
+
+
+@router.delete("/bot/gallery/{item_id}")
+def remove_gallery_item(item_id: str):
+    if not db.delete_bot_gallery_item(item_id):
+        raise HTTPException(status_code=404, detail="图库条目不存在")
+    return {"deleted": True}
