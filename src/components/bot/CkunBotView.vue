@@ -59,7 +59,7 @@
           </span>
         </div>
         <!-- QQ 会话显示覆盖（Phase 4 §4.4）：只改本地看到的名字/头像，真实群资料不采集不改写 -->
-        <div v-if="qqDisplayEditorOpen && store.qqActiveConversation" class="qq-display-editor">
+        <div v-if="qqDisplayEditorOpen && store.isQq && store.qqActiveConversation" class="qq-display-editor">
           <label class="field">
             <span>会话显示名</span>
             <input v-model.trim="qqDisplayName" maxlength="50" :placeholder="store.qqActiveConversation.title" />
@@ -355,6 +355,9 @@ const qqDisplayName = ref('')
 const qqDisplayAvatar = ref('')
 const qqDisplaySaving = ref(false)
 const qqDisplayError = ref('')
+
+// 抽屉钉在活动会话与 QQ 频道上：切会话/切频道先收起，不把 A 会话的草稿写进 B、也不漏进本地陪聊页。
+watch(() => [store.qqActiveId, store.channel], () => { qqDisplayEditorOpen.value = false })
 
 // 打开编辑器时以当前会话值打底；空串 = 显式清除回落默认。
 watch(qqDisplayEditorOpen, (open) => {

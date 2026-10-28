@@ -48,6 +48,7 @@ import AvatarPicker from '@/components/bot/AvatarPicker.vue'
 import { botApi, type BotGalleryItem } from '@/api/bot'
 import { toFriendlyMessage } from '@/api/base'
 import { readAvatarFile } from '@/utils/persona-avatar'
+import { useBotStore } from '@/stores/bot'
 
 const userAvatar = ref('')
 const saveError = ref('')
@@ -71,8 +72,9 @@ onMounted(async () => {
 // 选中即存（图库项 / 上传结果都会触发 update:modelValue），不做额外保存按钮。
 async function saveUserAvatar(value: string) {
   saveError.value = ''
-  try { await botApi.setUserAvatar(value ?? '') }
-  catch (e) { saveError.value = toFriendlyMessage(e, '头像保存失败') }
+  try { await botApi.setUserAvatar(value ?? '') } catch (e) { saveError.value = toFriendlyMessage(e, '头像保存失败'); return }
+  // 保存成功同步 bot store：陪聊用户气泡立刻换图，不用等重启（SshView 粘性挂载，init 只跑一次）
+  useBotStore().loadUserAvatar()
 }
 
 async function uploadToGallery(event: Event) {

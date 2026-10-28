@@ -21,6 +21,9 @@ describe('设置 Bot 管理分类', () => {
     expect(panel).toContain('AvatarPicker')
     expect(panel).toContain('getUserAvatar')
     expect(panel).toContain('setUserAvatar')
+    // 保存成功要同步 bot store，陪聊气泡不能等重启才换图
+    expect(panel).toContain('useBotStore')
+    expect(panel).toContain('loadUserAvatar')
   })
 
   it('图库管理区：网格展示、上传（可命名）、删除', () => {

@@ -130,9 +130,11 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).toContain('自定义显示')
     // 覆盖只挂在 qq 侧本地会话不吃：编辑抽屉必须绑在 QQ 活动会话上
     expect(view).toMatch(/qq-display-editor[\s\S]*AvatarPicker/)
-    expect(view).toMatch(/v-if="qqDisplayEditorOpen && store\.qqActiveConversation" class="qq-display-editor"/)
+    expect(view).toMatch(/v-if="qqDisplayEditorOpen && store\.isQq && store\.qqActiveConversation" class="qq-display-editor"/)
     const store = read('src/stores/bot.ts')
     expect(store).toContain('updateConversationDisplay')
+    // 抽屉生命周期钉在活动会话与 QQ 频道：切会话/切频道必须收起（防跨会话串写、防漏进本地页）
+    expect(view).toContain('watch(() => [store.qqActiveId, store.channel]')
   })
 
   it('本地会话用户气泡有头像位：你的头像图 > 淡色「你」占位', () => {
