@@ -11,7 +11,6 @@ from bot.provider import (
 )
 from bot.qq_channel import (
     QQ_FAILURE_REPLY,
-    QQ_MAX_PARTS,
     QQ_REPLY_TIMEOUT,
     QQ_TIMEOUT_REPLY,
     QQInboundAdapter,
