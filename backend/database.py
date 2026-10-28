@@ -2149,6 +2149,8 @@ def create_bot_persona(
     background: str = "",
     greeting: str = "",
     model_id: Optional[str] = None,
+    reply_style: str = "moderate",
+    enable_thinking: int = 0,
 ) -> dict:
     persona_id = _new_id()
     now = _now()
@@ -2156,9 +2158,11 @@ def create_bot_persona(
     try:
         conn.execute(
             "INSERT INTO bot_personas "
-            "(id, name, avatar, personality, background, greeting, model_id, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (persona_id, name, avatar, personality, background, greeting, model_id, now, now),
+            "(id, name, avatar, personality, background, greeting, model_id, "
+            "reply_style, enable_thinking, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (persona_id, name, avatar, personality, background, greeting, model_id,
+             reply_style, int(bool(enable_thinking)), now, now),
         )
         conn.commit()
     finally:
@@ -2189,7 +2193,8 @@ def get_bot_persona(persona_id: str) -> Optional[dict]:
 
 
 def update_bot_persona(persona_id: str, **fields) -> Optional[dict]:
-    allowed = {"name", "avatar", "personality", "background", "greeting", "model_id"}
+    allowed = {"name", "avatar", "personality", "background", "greeting", "model_id",
+               "reply_style", "enable_thinking"}
     data = {key: value for key, value in fields.items() if key in allowed}
     if not data:
         return get_bot_persona(persona_id)
@@ -2219,6 +2224,8 @@ def copy_bot_persona(persona_id: str) -> Optional[dict]:
         background=persona["background"],
         greeting=persona["greeting"],
         model_id=persona["model_id"],
+        reply_style=persona.get("reply_style", "moderate"),
+        enable_thinking=persona.get("enable_thinking", 0),
     )
 
 

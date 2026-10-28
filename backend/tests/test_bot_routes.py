@@ -129,3 +129,14 @@ def test_persona_chat_experience_columns_migrate_and_default(client):
     p = rows[0]
     assert p["reply_style"] == "moderate"
     assert int(p["enable_thinking"]) == 0
+
+
+def test_create_copy_update_persona_reply_style(client):
+    p = db.create_bot_persona(name="小测", personality="p", background="b",
+                              greeting="g", reply_style="concise", enable_thinking=1)
+    assert p["reply_style"] == "concise"
+    assert int(p["enable_thinking"]) == 1
+    upd = db.update_bot_persona(p["id"], reply_style="long")
+    assert upd["reply_style"] == "long" and int(upd["enable_thinking"]) == 1
+    cp = db.copy_bot_persona(p["id"])
+    assert cp["reply_style"] == "long" and int(cp["enable_thinking"]) == 1
