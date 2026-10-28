@@ -1,5 +1,19 @@
 import { backendErrorDetail, ensureApiToken, getBaseUrl, request, toFriendlyMessage, withApiToken } from './base'
 
+/** 表达 DNA：说话方式的可执行档位。档位文案在服务端，这里只约束取值。 */
+export interface BotExpressionDna {
+  sentence: 'short' | 'mixed' | 'long'
+  particles: 'none' | 'soft' | 'lively' | 'dry'
+  punctuation: 'plain' | 'ellipsis' | 'tilde' | 'exclaim'
+  emoji: 'none' | 'low' | 'medium'
+  catchphrase: string
+  taboo: string[]
+}
+
+export type BotReactionStyle = 'reserved' | 'warm' | 'playful' | 'blunt'
+export type BotRefusalStyle = 'soft' | 'direct' | 'playful' | 'concise'
+export type BotRelationshipSpeed = 'slow' | 'normal' | 'fast'
+
 export interface BotPersona {
   id: string
   name: string
@@ -10,6 +24,11 @@ export interface BotPersona {
   model_id: string | null
   reply_style: 'concise' | 'moderate' | 'long'
   enable_thinking: number
+  expression_dna: BotExpressionDna
+  reaction_style: BotReactionStyle
+  refusal_style: BotRefusalStyle
+  address_user: string
+  relationship_speed: BotRelationshipSpeed
   is_builtin: number
   created_at: string
   updated_at: string
@@ -24,15 +43,46 @@ export interface BotPersonaPayload {
   model_id: string | null
   reply_style: 'concise' | 'moderate' | 'long'
   enable_thinking: boolean
+  expression_dna: BotExpressionDna
+  reaction_style: BotReactionStyle
+  refusal_style: BotRefusalStyle
+  address_user: string
+  relationship_speed: BotRelationshipSpeed
 }
+
+/** 关系状态：分数只增不减，衰减在服务端读时计算，前端只展示阶段与进度。 */
+export interface BotRelation {
+  persona_id: string
+  stage: '陌生' | '熟悉' | '亲近' | '默契'
+  progress: number
+  next_at: number | null
+  score: number
+  raw_score: number
+  turns: number
+  days_since: number | null
+}
+
+export interface BotOptionGroup {
+  label: string
+  options: { value: string; label: string }[]
+}
+
+/** 人格编辑器的档位字典：label 与可选项都由服务端给出，前端不手抄文案。 */
+export type BotPersonaOptions = Record<
+  'sentence' | 'particles' | 'punctuation' | 'emoji' | 'reaction_style' | 'refusal_style' | 'relationship_speed',
+  BotOptionGroup
+>
 
 export interface BotConversation {
   id: string
   title: string
   persona_id: string | null
-  persona_snapshot: string
+  /** 会话归属人格的展示三字段：人格被删后仍是当时的名字，头像为空则回退首字母。 */
+  persona: { id: string; name: string; avatar: string }
   channel: 'local' | 'qq'
   external_id: string | null
+  /** 最后一条消息的内容，服务端顺带算出，侧栏可直接用作摘要。 */
+  preview: string | null
   created_at: string
   updated_at: string
 }
@@ -61,6 +111,8 @@ export interface BotQqStatus {
 
 export const botApi = {
   listPersonas: () => request<BotPersona[]>('/bot/personas'),
+  getPersonaOptions: () => request<BotPersonaOptions>('/bot/persona-options'),
+  getRelations: () => request<Record<string, BotRelation>>('/bot/relations'),
   createPersona: (payload: BotPersonaPayload) => request<BotPersona>('/bot/personas', { method: 'POST', body: JSON.stringify(payload) }),
   updatePersona: (id: string, payload: Partial<BotPersonaPayload>) => request<BotPersona>(`/bot/personas/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   copyPersona: (id: string) => request<BotPersona>(`/bot/personas/${id}/copy`, { method: 'POST' }),

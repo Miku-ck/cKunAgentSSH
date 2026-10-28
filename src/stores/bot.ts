@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import { botApi, streamBotChat, type BotConversation, type BotMessage, type BotPersona } from '@/api/bot'
+import { botApi, streamBotChat, type BotConversation, type BotMessage, type BotPersona, type BotRelation } from '@/api/bot'
 import { toFriendlyMessage } from '@/api/base'
 
 export const useBotStore = defineStore('bot', () => {
@@ -24,6 +24,9 @@ export const useBotStore = defineStore('bot', () => {
   let qqRefreshing = false
 
   const activePersona = computed(() => personas.value.find(p => p.id === activePersonaId.value) || null)
+  // 关系状态是「人格 × 用户」维度的，不随会话变化：切换会话不该让熟悉度跳变。
+  const relations = ref<Record<string, BotRelation>>({})
+  const activeRelation = computed(() => relations.value[activePersonaId.value] || null)
   const filteredConversations = computed(() => conversations.value.filter(c => c.persona_id === activePersonaId.value))
   const activeConversation = computed(() => conversations.value.find(c => c.id === activeConversationId.value) || null)
   const isQq = computed(() => channel.value === 'qq')
@@ -87,6 +90,15 @@ export const useBotStore = defineStore('bot', () => {
     }
   }
 
+  /** 关系状态读接口：失败不该拖垮整个页面，退化成不显示徽标即可。 */
+  async function refreshRelations() {
+    try {
+      relations.value = await botApi.getRelations()
+    } catch {
+      /* 忽略：关系只是展示层信息，拿不到不影响聊天 */
+    }
+  }
+
   async function init() {
     loading.value = true
     error.value = ''
@@ -94,6 +106,7 @@ export const useBotStore = defineStore('bot', () => {
       const [personaRows, conversationRows] = await Promise.all([
         botApi.listPersonas(),
         botApi.listConversations(),
+        refreshRelations(),
       ])
       personas.value = personaRows
       conversations.value = conversationRows
@@ -142,9 +155,12 @@ export const useBotStore = defineStore('bot', () => {
       id: `local-${Date.now()}`, conversation_id: conversationId, role: 'user', content: text, created_at: new Date().toISOString(),
     })
     abortController = new AbortController()
+    // 本轮自己的 controller 必须独持一份引用：finally 里若直接写 `abortController = null`，
+    // 在「停止 → 立刻再发」的时序里会把下一轮的 controller 清掉，停止按钮随即失效。
+    const controller = abortController
     try {
       const saved = await streamBotChat(conversationId, text, {
-        signal: abortController.signal,
+        signal: controller.signal,
         onContent: chunk => { if (activeConversationId.value === conversationId) streamText.value += chunk },
         onReasoning: chunk => { if (activeConversationId.value === conversationId) streamReasoning.value += chunk },
       })
@@ -160,7 +176,9 @@ export const useBotStore = defineStore('bot', () => {
         streamText.value = ''
         streamReasoning.value = ''
       }
-      abortController = null
+      if (abortController === controller) abortController = null
+      // 后端在生成前就记了这轮互动，这里补一次读：关系阶段可能在刚才那一句之后变了。
+      void refreshRelations()
     }
   }
 
@@ -175,9 +193,11 @@ export const useBotStore = defineStore('bot', () => {
   return {
     personas, conversations, messages, activePersonaId, activeConversationId,
     activePersona, activeConversation, filteredConversations,
+    relations, activeRelation,
     streamText, streamReasoning, streaming, loading, error, lastFailedText,
     channel, isQq, qqConversations, qqMessages, qqActiveId, qqError, qqActiveConversation,
     init, selectPersona, selectConversation, createConversation, deleteConversation,
     sendMessage, stopGenerating, selectChannel, selectQqConversation, refreshQq,
+    refreshRelations,
   }
 })

@@ -9,6 +9,7 @@ vi.mock('@/api/bot', () => ({
     createConversation: vi.fn(),
     getMessages: vi.fn(),
     deleteConversation: vi.fn(),
+    getRelations: vi.fn(),
   },
   streamBotChat: vi.fn(),
 }))
@@ -19,9 +20,14 @@ import { useBotStore } from './bot'
 const persona: BotPersona = {
   id: 'p1', name: '小刻', avatar: 'data:image/webp;base64,AAAA', personality: '温和', background: '', greeting: '你好',
   model_id: null, reply_style: 'moderate', enable_thinking: 0, is_builtin: 1, created_at: '', updated_at: '',
+  expression_dna: {
+    sentence: 'mixed', particles: 'soft', punctuation: 'plain', emoji: 'low', catchphrase: '', taboo: [],
+  },
+  reaction_style: 'warm', refusal_style: 'soft', address_user: '', relationship_speed: 'normal',
 }
 const conversation: BotConversation = {
-  id: 'c1', title: '小刻', persona_id: 'p1', persona_snapshot: JSON.stringify(persona),
+  id: 'c1', title: '小刻', persona_id: 'p1',
+  persona: { id: 'p1', name: '小刻', avatar: '' }, preview: '你好',
   channel: 'local', external_id: null, created_at: '', updated_at: '',
 }
 

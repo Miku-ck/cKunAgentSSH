@@ -23,14 +23,16 @@ describe('cKunBot 页面注册与关键交互', () => {
   })
 
   it('人格头像只能上传图片，不再提供表情入口', () => {
-    const view = read('src/components/bot/CkunBotView.vue')
+    // 编辑表单已拆到 PersonaEditor：头像口径跟着组件走，页面里不该再出现第二份
+    const editor = read('src/components/bot/PersonaEditor.vue')
     for (const needle of ['上传图片', 'PersonaAvatar', 'readAvatarFile']) {
-      expect(view).toContain(needle)
+      expect(editor).toContain(needle)
     }
     // 表情路径已全部移除：既不能留按钮/输入框，也不能留默认表情
-    expect(view).not.toContain('改用表情')
-    expect(view).not.toContain('avatar-emoji')
-    expect(view).not.toContain('🤖')
+    for (const gone of ['改用表情', 'avatar-emoji', '🤖']) {
+      expect(editor).not.toContain(gone)
+      expect(read('src/components/bot/CkunBotView.vue')).not.toContain(gone)
+    }
   })
 
   it('胶囊输入区的焦点环由整条胶囊画，且是淡光晕', () => {
@@ -72,12 +74,28 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).toContain('stopQqPolling')
   })
 
-  it('人格表单含回复风格与思考开关，气泡走 MarkdownStream、思考可折叠', () => {
+  it('人格编辑器覆盖身份/说话方式/反应底线/关系四区', () => {
+    const editor = read('src/components/bot/PersonaEditor.vue')
+    for (const label of ['身份', '性格与背景', '说话方式', '反应与底线', '关系']) {
+      expect(editor).toContain(label)
+    }
+    // 档位控件由服务端字典驱动：前端不许手抄选项文案，抄了必然和提示词漂移
+    expect(editor).toContain('options?.[key].options')
+    expect(editor).not.toContain('短句为主')
+    // 保存必须回传活人感字段，否则后端收到的永远是默认档
+    for (const field of ['expression_dna', 'reaction_style', 'refusal_style', 'address_user', 'relationship_speed']) {
+      expect(editor).toContain(field)
+    }
+    // 底线不可编辑：只做告知，不给输入控件
+    expect(editor).toContain('不可编辑')
+  })
+
+  it('陪聊页展示关系阶段，气泡走 MarkdownStream、思考可折叠', () => {
     const view = read('src/components/bot/CkunBotView.vue')
-    expect(view).toContain('personaForm.reply_style')
-    expect(view).toContain('personaForm.enable_thinking')
-    expect(view).toContain('回复风格')
-    expect(view).toContain('MarkdownStream')
+    expect(view).toContain('store.activeRelation')
+    expect(view).toContain('relation-bar')
+    expect(view).toContain('<PersonaEditor')
+    expect(view).toContain(':options="personaOptions"')
     // 异步引入（Markdown 栈不进首屏包）+ 折叠思考块
     expect(view).toContain('defineAsyncComponent')
     expect(view).toContain('m.reasoning')
