@@ -49,7 +49,9 @@ def test_persona_and_conversation_routes(client):
     assert conversation.status_code == 200
     conversation_id = conversation.json()["id"]
     assert client.get("/api/bot/conversations?channel=local").json()[0]["id"] == conversation_id
-    assert client.get(f"/api/bot/conversations/{conversation_id}/messages").json() == []
+    # 本地新会话自动落开场白为首条 assistant 消息（create_persona 默认 greeting="你好呀"）
+    greeting_msgs = client.get(f"/api/bot/conversations/{conversation_id}/messages").json()
+    assert len(greeting_msgs) == 1 and greeting_msgs[0]["role"] == "assistant" and greeting_msgs[0]["content"] == "你好呀"
 
     assert client.delete(f"/api/bot/conversations/{conversation_id}").json() == {"deleted": True}
     assert client.delete(f"/api/bot/personas/{persona['id']}").json() == {"deleted": True}
@@ -120,7 +122,7 @@ def test_chat_route_streams_content_and_done(client, monkeypatch):
     assert [event["content"] for event in events if event["type"] == "content"] == ["你好", "呀"]
     assert events[-1]["type"] == "done"
     assert events[-1]["message"]["content"] == "你好呀"
-    assert [m["content"] for m in db.get_bot_messages(conversation["id"])] == ["在吗", "你好呀"]
+    assert [m["content"] for m in db.get_bot_messages(conversation["id"])] == ["你好呀", "在吗", "你好呀"]
 
 
 def test_persona_chat_experience_columns_migrate_and_default(client):
@@ -152,3 +154,10 @@ def test_persona_api_persists_style_and_thinking(client):
     assert r.status_code == 200
     p = r.json()
     assert p["reply_style"] == "concise" and int(p["enable_thinking"]) == 1
+
+
+def test_local_conversation_created_with_greeting_message(client):
+    persona = client.post("/api/bot/personas", json={"name": "开场君", "greeting": "初次见面，多多指教"}).json()
+    conv = client.post("/api/bot/conversations", json={"persona_id": persona["id"], "channel": "local"}).json()
+    msgs = client.get(f"/api/bot/conversations/{conv['id']}/messages").json()
+    assert len(msgs) == 1 and msgs[0]["role"] == "assistant" and msgs[0]["content"] == "初次见面，多多指教"

@@ -2275,6 +2275,10 @@ def create_bot_conversation(
         conn.commit()
     finally:
         conn.close()
+    # 本地新会话：开场白作为首条 assistant 消息直接落库（不走 LLM）；
+    # QQ 会话（channel='qq'）不在此插入，其 greeting 由回复时首回合前置（见 qq_channel）。
+    if channel == "local" and persona.get("greeting"):
+        add_bot_message(conversation_id, "assistant", persona["greeting"])
     return get_bot_conversation(conversation_id)
 
 
