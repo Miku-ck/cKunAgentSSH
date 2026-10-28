@@ -140,3 +140,15 @@ def test_create_copy_update_persona_reply_style(client):
     assert upd["reply_style"] == "long" and int(upd["enable_thinking"]) == 1
     cp = db.copy_bot_persona(p["id"])
     assert cp["reply_style"] == "long" and int(cp["enable_thinking"]) == 1
+
+
+def test_persona_invalid_reply_style_rejected(client):
+    r = client.post("/api/bot/personas", json={"name": "x", "reply_style": "verbose"})
+    assert r.status_code == 422
+
+
+def test_persona_api_persists_style_and_thinking(client):
+    r = client.post("/api/bot/personas", json={"name": "y", "reply_style": "concise", "enable_thinking": True})
+    assert r.status_code == 200
+    p = r.json()
+    assert p["reply_style"] == "concise" and int(p["enable_thinking"]) == 1

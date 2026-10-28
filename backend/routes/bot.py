@@ -33,6 +33,8 @@ class PersonaRequest(BaseModel):
     background: str = Field("", max_length=10000)
     greeting: str = Field("", max_length=2000)
     model_id: Optional[str] = None
+    reply_style: Literal["concise", "moderate", "long"] = "moderate"
+    enable_thinking: bool = False
 
     _check_avatar = field_validator("avatar")(_validate_avatar)
 
@@ -44,6 +46,8 @@ class PersonaUpdateRequest(BaseModel):
     background: Optional[str] = Field(None, max_length=10000)
     greeting: Optional[str] = Field(None, max_length=2000)
     model_id: Optional[str] = None
+    reply_style: Optional[Literal["concise", "moderate", "long"]] = None
+    enable_thinking: Optional[bool] = None
 
     _check_avatar = field_validator("avatar")(_validate_avatar)
 
