@@ -74,20 +74,41 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).toContain('stopQqPolling')
   })
 
-  it('人格编辑器覆盖身份/说话方式/反应底线/关系四区', () => {
+  it('人格编辑是整页不是弹窗，覆盖身份到进阶玩法八区', () => {
     const editor = read('src/components/bot/PersonaEditor.vue')
-    for (const label of ['身份', '性格与背景', '说话方式', '反应与底线', '关系']) {
+    for (const label of ['身份', '性格特征', '背景设定', '说话风格', '喜好雷区', '记忆设定', '互动示例', '进阶玩法']) {
       expect(editor).toContain(label)
     }
+    // 整页：没有模态外壳，左目录 + 长卷，取消/保存与 cKunBot 同一行（顶部，不是底部条）
+    expect(editor).not.toContain('BaseModal')
+    expect(editor).toContain('editor-rail')
+    expect(editor).toContain('data-section')
+    expect(editor).not.toContain('editor-foot')
+    const head = editor.match(/<header class="editor-head">[\s\S]*?<\/header>/)?.[0] || ''
+    expect(head).toContain('取消')
+    expect(head).toContain('保存')
+    // 品牌标记由页面下发到这一行，子组件不再自己写一份 cKunBot
+    expect(read('src/components/bot/CkunBotView.vue')).toContain('<template #brand>')
     // 档位控件由服务端字典驱动：前端不许手抄选项文案，抄了必然和提示词漂移
     expect(editor).toContain('options?.[key].options')
     expect(editor).not.toContain('短句为主')
-    // 保存必须回传活人感字段，否则后端收到的永远是默认档
-    for (const field of ['expression_dna', 'reaction_style', 'refusal_style', 'address_user', 'relationship_speed']) {
+    // 单一 textarea 的区不重复挂字段标签：区标题已说明它是什么，
+    // 可访问名字由 aria-labelledby 指回标题，不留无名控件。
+    for (const gone of ['它是个什么样的人', '喜欢什么、什么一踩就炸', '该记住什么、该避讳什么', '几组问答，给它一个说话的样板', '可以玩什么、不玩什么']) {
+      expect(editor).not.toContain(gone)
+    }
+    expect(editor).not.toContain('<span>它住在哪')
+    expect(editor).toContain('aria-labelledby="persona-personality"')
+    expect(editor).toContain('aria-labelledby="persona-background"')
+    // 底线固定生效，只在 placeholder 里说一句，不再单开区或加告知段
+    expect(editor).not.toContain('不可编辑')
+    // 保存必须回传全部字段，否则后端收到的永远是默认档
+    for (const field of [
+      'expression_dna', 'reaction_style', 'refusal_style', 'address_user', 'relationship_speed',
+      'likes_landmines', 'memory_directive', 'dialogue_samples', 'advanced_play',
+    ]) {
       expect(editor).toContain(field)
     }
-    // 底线不可编辑：只做告知，不给输入控件
-    expect(editor).toContain('不可编辑')
   })
 
   it('陪聊页展示关系阶段，气泡走 MarkdownStream、思考可折叠', () => {
@@ -102,14 +123,38 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).toContain('store.streamReasoning')
   })
 
-  it('本地会话支持附图发送与图片气泡（Phase 2）', () => {
+  it('本地会话撤掉上传入口，历史图片气泡仍可看', () => {
     const view = read('src/components/bot/CkunBotView.vue')
-    for (const needle of ['readChatImage', 'MAX_CHAT_IMAGES', 'pendingImages', 'composer-attach', 'pickImages']) {
-      expect(view).toContain(needle)
+    // 「暂时删除」只针对输入区的发图入口：已落库的图还要能显示，
+    // store/后端的 images 能力保留，恢复时只加回前端这一小块。
+    for (const gone of ['readChatImage', 'MAX_CHAT_IMAGES', 'pendingImages', 'composer-attach', 'pickImages', 'store.sendMessage(text, imgs)']) {
+      expect(view).not.toContain(gone)
     }
     expect(view).toContain('m.images')
     expect(view).toContain('msg-image')
-    expect(view).toContain('store.sendMessage(text, imgs)')
+  })
+
+  it('发送按钮在胶囊里上下居中，QQ 只读提示是无框细字贴底', () => {
+    const view = read('src/components/bot/CkunBotView.vue')
+    const composer = view.match(/\.chat-composer \{[^}]*\}/)?.[0] || ''
+    expect(composer).toContain('align-items: center')
+    const bar = view.match(/\.readonly-bar \{[^}]*\}/)?.[0] || ''
+    expect(bar).toContain('text-align: center')
+    expect(bar).toContain('font-size: 0.7692rem')
+    expect(bar).not.toContain('border')
+    expect(bar).not.toContain('background')
+  })
+
+  it('人格卡片尺寸固定：性格截两行、开场白一行且始终占位', () => {
+    const view = read('src/components/bot/CkunBotView.vue')
+    const personality = view.match(/\.personality \{[^}]*\}/)?.[0] || ''
+    expect(personality).toContain('-webkit-line-clamp: 2')
+    expect(personality).toContain('min-height: 3.4em')
+    // 没填开场白也占住那一行，否则卡片高度会随开场白有无而变
+    expect(view).not.toContain('v-if="p.greeting"')
+    const greeting = view.match(/\.persona-greeting \{[^}]*\}/)?.[0] || ''
+    expect(greeting).toContain('min-height: 1.6em')
+    expect(greeting).toContain('text-overflow: ellipsis')
   })
 
   it('会话只消费服务端下发的 persona 三字段，不在前端解析快照 JSON', () => {

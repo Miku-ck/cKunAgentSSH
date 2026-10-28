@@ -1,6 +1,6 @@
 <template>
   <section class="bot-view">
-    <header class="bot-header">
+    <header v-if="!personaEditor" class="bot-header">
       <div class="brand">
         <button
           v-if="tab === 'chat'"
@@ -17,7 +17,20 @@
       </nav>
     </header>
 
-    <div v-if="tab === 'chat'" class="chat-layout" :class="{ 'sidebar-open': sidebarOpen }">
+    <!-- 编辑人格是整页而不是弹窗：排在分支链首位，编辑时接管 header 以下全部区域。
+         品牌标记由这里下发到编辑器顶栏，取消/保存就与 cKunBot 同一行。 -->
+    <PersonaEditor
+      v-if="personaEditor"
+      :persona="editingPersona"
+      :models="models.models"
+      :options="personaOptions"
+      @close="personaEditor = false"
+      @saved="onPersonaSaved"
+    >
+      <template #brand><div class="brand"><h1>cKunBot</h1></div></template>
+    </PersonaEditor>
+
+    <div v-else-if="tab === 'chat'" class="chat-layout" :class="{ 'sidebar-open': sidebarOpen }">
       <div v-if="sidebarOpen" class="sidebar-backdrop" aria-hidden="true" @click="sidebarOpen = false"></div>
       <aside class="chat-sidebar">
         <div class="channel-switch" role="tablist" aria-label="会话渠道">
@@ -142,18 +155,7 @@
           <button v-if="store.lastFailedText" class="btn btn-sm" @click="retry">重试</button>
         </div>
         <p v-if="store.isQq && store.qqActiveId" class="readonly-bar">来自 QQ · 仅供查看，回复请在 QQ 里进行</p>
-        <div v-if="!store.isQq && store.activeConversationId && (pendingImages.length || attachError)" class="composer-attachments">
-          <div v-for="(u, i) in pendingImages" :key="i" class="attach-thumb">
-            <img :src="u" alt="待发图片" />
-            <button type="button" class="attach-remove" aria-label="移除图片" @click="removePendingImage(i)">×</button>
-          </div>
-          <p v-if="attachError" class="attach-error">{{ attachError }}</p>
-        </div>
         <form v-if="!store.isQq && store.activeConversationId" class="chat-composer" @submit.prevent="send">
-          <button type="button" class="composer-attach" :disabled="attachBusy || store.streaming || pendingImages.length >= MAX_CHAT_IMAGES" title="添加图片" aria-label="添加图片" @click="attachInput?.click()">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a5 5 0 01-7.07-7.07l9.19-9.19a3.5 3.5 0 014.95 4.95l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
-          </button>
-          <input ref="attachInput" type="file" class="composer-attach-input" accept="image/*" multiple @change="pickImages" />
           <textarea
             ref="composerRef"
             v-model="draft"
@@ -207,15 +209,6 @@
 
     <ConnectionPage v-else :personas="store.personas" />
 
-    <PersonaEditor
-      v-if="personaEditor"
-      :persona="editingPersona"
-      :models="models.models"
-      :options="personaOptions"
-      @close="personaEditor = false"
-      @saved="onPersonaSaved"
-    />
-
     <ChatImageLightbox :visible="!!lightboxUrl" :src="lightboxUrl" @close="lightboxUrl = ''" />
   </section>
 </template>
@@ -231,7 +224,6 @@ import { decorateMessages, peerLabel, peerSeed } from '@/utils/bot-chat-decor'
 import AvatarPicker from './AvatarPicker.vue'
 import ChatImageLightbox from './ChatImageLightbox.vue'
 import { botApi, type BotPersona, type BotPersonaOptions } from '@/api/bot'
-import { readChatImage, MAX_CHAT_IMAGES } from '@/utils/chat-image'
 import { toFriendlyMessage } from '@/api/base'
 import { useBotStore } from '@/stores/bot'
 import { useModelsStore } from '@/stores/models'
@@ -251,29 +243,6 @@ const messageListRef = ref<HTMLElement | null>(null)
 const composerRef = ref<HTMLTextAreaElement | null>(null)
 const MAX_DRAFT = 20000
 const nearLimit = computed(() => draft.value.length > MAX_DRAFT - 1000)
-
-// 本地看图回复：附件图先落待发区，随下一条正文一起发出（v1 要求带文字，图为附加）。
-const attachInput = ref<HTMLInputElement | null>(null)
-const attachBusy = ref(false)
-const attachError = ref('')
-const pendingImages = ref<string[]>([])
-
-async function pickImages(event: Event) {
-  const input = event.target as HTMLInputElement
-  const files = Array.from(input.files || [])
-  input.value = ''
-  if (!files.length) return
-  attachBusy.value = true
-  attachError.value = ''
-  const room = MAX_CHAT_IMAGES - pendingImages.value.length
-  if (room <= 0) { attachError.value = `最多 ${MAX_CHAT_IMAGES} 张图片`; attachBusy.value = false; return }
-  try {
-    for (const file of files.slice(0, room)) pendingImages.value.push(await readChatImage(file))
-    if (files.length > room) attachError.value = `最多 ${MAX_CHAT_IMAGES} 张图片`
-  } catch (e) { attachError.value = toFriendlyMessage(e, '图片处理失败') }
-  finally { attachBusy.value = false }
-}
-function removePendingImage(index: number) { pendingImages.value.splice(index, 1) }
 
 function growComposer() {
   const el = composerRef.value
@@ -302,11 +271,8 @@ async function createChat() {
 async function send() {
   const text = draft.value
   if (!text.trim() || store.streaming) return
-  const imgs = pendingImages.value
   draft.value = ''
-  pendingImages.value = []
-  attachError.value = ''
-  await store.sendMessage(text, imgs)
+  await store.sendMessage(text)
 }
 async function retry() {
   const text = store.lastFailedText
@@ -332,6 +298,7 @@ function openPersona(p?: BotPersona) {
 async function onPersonaSaved() {
   personaEditor.value = false
   await store.init()
+  toast.success('人格已保存')
 }
 async function loadPersonaOptions() {
   try { personaOptions.value = await botApi.getPersonaOptions() }
@@ -560,8 +527,8 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 @media (prefers-reduced-motion: reduce) { .typing-dots i { animation: none; } }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .chat-error { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-12); margin: 0 max(var(--spacing-24), calc((100% - 760px) / 2)) var(--spacing-8); padding: var(--spacing-10) var(--spacing-12); border: 1px solid var(--danger-border); border-radius: var(--radius-md); background: var(--danger-bg); color: var(--danger-text); font-size: 0.9231rem; line-height: 1.6; } .chat-error span { min-width: 0; overflow-wrap: anywhere; }
-.readonly-bar { margin: 0 max(var(--spacing-24), calc((100% - 760px) / 2)) var(--spacing-20); padding: var(--spacing-10) var(--spacing-16); border: 1px dashed var(--border-subtle); border-radius: var(--radius-pill); background: color-mix(in srgb, var(--bg-elevated) 70%, transparent); color: var(--text-tertiary); font-size: 0.9231rem; text-align: center; }
-.chat-composer { position: relative; display: flex; align-items: flex-end; gap: var(--spacing-8); margin: 0 max(var(--spacing-24), calc((100% - 760px) / 2)) var(--spacing-20); padding: var(--spacing-6) var(--spacing-6) var(--spacing-6) var(--spacing-16); border: 1px solid var(--border-subtle); border-radius: var(--radius-pill); background: var(--bg-elevated); box-shadow: var(--shadow-lg); transition: border-color var(--transition-fast), box-shadow var(--transition-fast); }
+.readonly-bar { margin: 0; padding: var(--spacing-8) var(--spacing-24) var(--spacing-12); color: var(--text-tertiary); font-size: 0.7692rem; text-align: center; }
+.chat-composer { position: relative; display: flex; align-items: center; gap: var(--spacing-8); margin: 0 max(var(--spacing-24), calc((100% - 760px) / 2)) var(--spacing-20); padding: var(--spacing-6) var(--spacing-6) var(--spacing-6) var(--spacing-16); border: 1px solid var(--border-subtle); border-radius: var(--radius-pill); background: var(--bg-elevated); box-shadow: var(--shadow-lg); transition: border-color var(--transition-fast), box-shadow var(--transition-fast); }
 .chat-composer:focus-within { border-color: var(--accent-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 16%, transparent), var(--shadow-lg); }
 .composer-input { flex: 1; min-width: 0; display: block; max-height: 32vh; overflow-y: auto; border: 0; outline: 0; resize: none; background: transparent; color: var(--text-primary); padding: var(--spacing-8) 0; font-family: var(--font-sans); font-size: 1.1538rem; line-height: 1.6; caret-color: var(--accent-primary); }
 .composer-input.with-count { padding-bottom: var(--spacing-20); }
@@ -577,19 +544,6 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 /* 卡片定高：性格截两行、开场白一行占位 —— 长文案不撑爆网格，卡片高度不随内容漂 */
 .personality { flex: 1; margin: 18px 0 var(--spacing-12); color: var(--text-secondary); font-size: 1rem; line-height: 1.7; white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 3.4em; } .persona-greeting { margin-bottom: var(--spacing-16); color: var(--text-tertiary); font-size: 0.9231rem; line-height: 1.6; min-height: 1.6em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .persona-actions { display: flex; flex-wrap: wrap; gap: var(--spacing-6); }
-.composer-attach { width: 32px; height: 32px; flex: 0 0 32px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--text-tertiary); cursor: pointer; }
-.composer-attach:hover:not(:disabled) { color: var(--text-primary); background: var(--bg-hover); }
-.composer-attach:disabled { opacity: .5; cursor: default; }
-.composer-attach svg { width: 18px; height: 18px; }
-.composer-attach-input { display: none; }
-.composer-attachments { display: flex; flex-wrap: wrap; gap: var(--spacing-8); align-items: center; margin: 0 max(var(--spacing-24), calc((100% - 760px) / 2)) var(--spacing-8); }
-.attach-thumb { position: relative; width: 60px; height: 60px; border-radius: var(--radius-md); overflow: hidden; border: 1px solid var(--border-subtle); }
-.attach-thumb img { width: 100%; height: 100%; object-fit: cover; }
-/* 缩略图右上角的移除角标：压在用户照片上，深色底才保证白叉可读，
-   与主题无关（浅色主题压成白底会在浅色照片上看不见）。这不是弹窗遮罩，
-   不要换 --scrim —— 那条令牌在浅色主题只有 14%。 */
-.attach-remove { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border: 0; border-radius: 50%; background: color-mix(in srgb, #000 55%, transparent); color: #fff; cursor: pointer; line-height: 1; }
-.attach-error { color: var(--danger-text); font-size: 0.8462rem; }
 .msg-images { display: flex; flex-wrap: wrap; gap: var(--spacing-6); margin-bottom: var(--spacing-6); }
 .msg-image { max-width: 200px; max-height: 200px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); object-fit: contain; cursor: zoom-in; transition: filter var(--transition-fast), transform var(--transition-fast); }
 .msg-image:hover { filter: brightness(1.06); transform: translateY(-1px); }
