@@ -329,3 +329,55 @@ def test_conversation_shows_snapshot_name_after_persona_deleted(client):
     # 人格删了也要显示当时的名字，QQ 记录区同理（原来是「未知人格」）
     assert row["persona"]["name"] == "小暖"
     assert row["persona"]["avatar"] == ""
+
+
+def test_qq_conversation_display_override(client):
+    persona = create_persona(client)
+    # QQ 会话由通道侧创建，路由只收 local —— 测试直接走库函数造数据
+    qq_conv = db.create_bot_conversation(persona["id"], channel="qq", external_id="group:GG1")
+    local_id = client.post(
+        "/api/bot/conversations", json={"persona_id": persona["id"]}
+    ).json()["id"]
+
+    patched = client.patch(
+        f"/api/bot/conversations/{qq_conv['id']}",
+        json={"display_name": "夜宵群", "display_avatar": "data:image/webp;base64,AAAA"},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["display_name"] == "夜宵群"
+    assert patched.json()["display_avatar"] == "data:image/webp;base64,AAAA"
+
+    # 本地会话不吃显示层覆盖（spec §4.4：仅 qq）
+    assert client.patch(
+        f"/api/bot/conversations/{local_id}", json={"display_name": "x"}
+    ).status_code == 400
+    # 非法头像 422、不存在的会话 404
+    assert client.patch(
+        f"/api/bot/conversations/{qq_conv['id']}", json={"display_avatar": "🐟"}
+    ).status_code == 422
+    assert client.patch(
+        "/api/bot/conversations/nope", json={"display_name": "x"}
+    ).status_code == 404
+
+    # 列表一次带回覆盖列（QQ 记录侧栏与标题栏都要用）
+    row = client.get("/api/bot/conversations?channel=qq").json()[0]
+    assert row["display_name"] == "夜宵群" and row["display_avatar"] == "data:image/webp;base64,AAAA"
+
+
+def test_qq_display_update_does_not_bump_updated_at(client):
+    persona = create_persona(client)
+    qq_conv = db.create_bot_conversation(persona["id"], channel="qq", external_id="group:GG2")
+    patched = client.patch(
+        f"/api/bot/conversations/{qq_conv['id']}", json={"display_name": "改名不改序"}
+    ).json()
+    assert patched["updated_at"] == qq_conv["updated_at"]
+
+
+def test_conversation_display_migration_idempotent(base_db):
+    # conftest 的 base_db 已 init 过一次；再 init 不得 Duplicate column name
+    db._close_all_connections()
+    db.init_db(base_db)
+    persona = db.create_bot_persona(name="小刻")
+    conv = db.create_bot_conversation(persona["id"], channel="qq", external_id="group:GG3")
+    assert conv["display_name"] is None
+    assert db.get_bot_conversation(conv["id"])["display_avatar"] is None

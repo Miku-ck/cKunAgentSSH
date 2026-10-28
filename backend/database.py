@@ -600,6 +600,14 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
     if "images" not in bot_message_cols:
         conn.execute("ALTER TABLE bot_messages ADD COLUMN images TEXT")
     _migrate_bot_channels(conn)
+    # bot_conversations：QQ 会话本地显示覆盖两列（Phase 4 头像体系）。
+    # 仅展示层，QQ 真实群名/群头像不采集不改写；NULL = 未设置，走默认回落。
+    cursor = conn.execute("PRAGMA table_info(bot_conversations)")
+    conversation_cols = {row[1] for row in cursor.fetchall()}
+    if "display_name" not in conversation_cols:
+        conn.execute("ALTER TABLE bot_conversations ADD COLUMN display_name TEXT")
+    if "display_avatar" not in conversation_cols:
+        conn.execute("ALTER TABLE bot_conversations ADD COLUMN display_avatar TEXT")
     # bot_personas：chat-experience 两列（旧库补齐，新库建表已含）。
     cursor = conn.execute("PRAGMA table_info(bot_personas)")
     persona_cols = {row[1] for row in cursor.fetchall()}
@@ -2762,6 +2770,39 @@ def delete_bot_conversation(conversation_id: str) -> bool:
         cur = conn.execute("DELETE FROM bot_conversations WHERE id = ?", (conversation_id,))
         conn.commit()
         return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def update_bot_conversation_display(
+    conversation_id: str,
+    display_name: Optional[str] = None,
+    display_avatar: Optional[str] = None,
+) -> Optional[dict]:
+    """QQ 会话显示层覆盖。None = 不改，空串 = 清除回落默认。
+
+    刻意不动 updated_at：改显示名不该把一条沉睡会话顶到列表最前。
+    """
+    assignments: list[str] = []
+    params: list = []
+    if display_name is not None:
+        assignments.append("display_name = ?")
+        params.append(display_name)
+    if display_avatar is not None:
+        assignments.append("display_avatar = ?")
+        params.append(display_avatar)
+    if not assignments:
+        return get_bot_conversation(conversation_id)
+    params.append(conversation_id)
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            f"UPDATE bot_conversations SET {', '.join(assignments)} WHERE id = ?", params
+        )
+        conn.commit()
+        if not cur.rowcount:
+            return None
+        return get_bot_conversation(conversation_id)
     finally:
         conn.close()
 

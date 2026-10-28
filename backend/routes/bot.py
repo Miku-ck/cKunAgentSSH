@@ -218,6 +218,30 @@ def delete_conversation(conversation_id: str):
     return {"deleted": True}
 
 
+class BotConversationUpdateRequest(BaseModel):
+    # 仅 QQ 会话可用的本地显示覆盖；空串 = 清除回落默认，不设 min_length
+    display_name: Optional[str] = Field(None, max_length=50)
+    display_avatar: Optional[str] = Field(None, max_length=400_000)
+
+    _check_avatar = field_validator("display_avatar")(_validate_avatar)
+
+
+@router.patch("/bot/conversations/{conversation_id}")
+def update_conversation(conversation_id: str, req: BotConversationUpdateRequest):
+    conversation = db.get_bot_conversation(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    # 显示覆盖只服务 QQ 记录页：本地会话标题就是人格名，盖了反而误导
+    if conversation.get("channel") != "qq":
+        raise HTTPException(status_code=400, detail="仅 QQ 会话支持自定义显示名/头像")
+    updated = db.update_bot_conversation_display(
+        conversation_id, **req.model_dump(exclude_unset=True)
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return _conversation_payload(updated)
+
+
 @router.post("/bot/chat")
 async def chat(req: BotChatRequest):
     if not db.get_bot_conversation(req.conversation_id):
