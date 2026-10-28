@@ -271,6 +271,15 @@ def init_db(db_path: str) -> None:
                 ON bot_messages(conversation_id, external_msg_id)
                 WHERE external_msg_id IS NOT NULL;
 
+            -- Phase 4 头像图库：集中存上传并压缩后的头像 data URL，供各处头像复用。
+            -- 条目存自己的副本（非引用），删图库项不影响已设置的头像。
+            CREATE TABLE IF NOT EXISTS avatar_gallery (
+                id         TEXT PRIMARY KEY,
+                label      TEXT NOT NULL DEFAULT '',
+                data_url   TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
             -- 关系账本：人格与用户之间的累计熟悉度。
             -- score 只增不减（历史累计），衰减在读时按 last_at 计算，久别重逢会掉档、
             -- 聊两句回档——所以不能在写时把衰减结果落库，否则关系会单向坍缩。
@@ -2751,6 +2760,42 @@ def delete_bot_conversation(conversation_id: str) -> bool:
     conn = _get_conn()
     try:
         cur = conn.execute("DELETE FROM bot_conversations WHERE id = ?", (conversation_id,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def create_bot_gallery_item(data_url: str, label: str = "") -> dict:
+    gallery_id = _new_id()
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO avatar_gallery (id, label, data_url, created_at) VALUES (?, ?, ?, ?)",
+            (gallery_id, label, data_url, _now()),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM avatar_gallery WHERE id = ?", (gallery_id,)).fetchone()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def list_bot_gallery(limit: int = 200) -> list[dict]:
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM avatar_gallery ORDER BY created_at DESC, id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def delete_bot_gallery_item(gallery_id: str) -> bool:
+    conn = _get_conn()
+    try:
+        cur = conn.execute("DELETE FROM avatar_gallery WHERE id = ?", (gallery_id,))
         conn.commit()
         return cur.rowcount > 0
     finally:
