@@ -1,13 +1,24 @@
 <template>
   <section class="bot-view">
     <header class="bot-header">
-      <div class="brand"><h1>cKunBot</h1></div>
+      <div class="brand">
+        <button
+          v-if="tab === 'chat'"
+          type="button"
+          class="btn sidebar-toggle"
+          :aria-expanded="sidebarOpen"
+          aria-label="会话列表"
+          @click="sidebarOpen = !sidebarOpen"
+        >会话</button>
+        <h1>cKunBot</h1>
+      </div>
       <nav class="bot-tabs" aria-label="cKunBot 功能">
         <button v-for="item in tabs" :key="item.id" :class="{ active: tab === item.id }" @click="tab = item.id">{{ item.label }}</button>
       </nav>
     </header>
 
-    <div v-if="tab === 'chat'" class="chat-layout">
+    <div v-if="tab === 'chat'" class="chat-layout" :class="{ 'sidebar-open': sidebarOpen }">
+      <div v-if="sidebarOpen" class="sidebar-backdrop" aria-hidden="true" @click="sidebarOpen = false"></div>
       <aside class="chat-sidebar">
         <div class="channel-switch" role="tablist" aria-label="会话渠道">
           <button role="tab" :aria-selected="store.channel === 'local'" :class="{ active: store.channel === 'local' }" @click="store.selectChannel('local')">本地</button>
@@ -18,7 +29,7 @@
           <div class="history-label">陪聊记录</div>
           <div class="conversation-list">
             <div v-for="c in store.filteredConversations" :key="c.id" class="conversation" :class="{ active: c.id === store.activeConversationId }">
-              <button class="conversation-main" @click="store.selectConversation(c.id)">
+              <button class="conversation-main" @click="selectLocal(c.id)">
                 <span>{{ c.title }}</span><small>{{ formatLocalDateTime(c.updated_at) }}</small>
               </button>
               <button class="icon-button" title="删除会话" aria-label="删除会话" @click="removeConversation(c.id)">×</button>
@@ -42,7 +53,7 @@
 
       <div class="chat-main" :class="{ qq: store.isQq }">
         <div v-if="!store.isQq && store.activeConversation" class="chat-titlebar">
-          <span class="persona-avatar"><PersonaAvatar :avatar="store.activePersona?.avatar" /></span>
+          <span class="persona-avatar"><PersonaAvatar :avatar="store.activePersona?.avatar" :label="store.activePersona?.name" /></span>
           <div><strong>{{ store.activePersona?.name || 'cKunBot' }}</strong><small>只聊此刻 · 不调用工具</small></div>
           <span v-if="store.activeRelation" class="relation-chip" :title="relationHint(store.activeRelation)">
             {{ store.activeRelation.stage }}
@@ -50,7 +61,7 @@
           </span>
         </div>
         <div v-else-if="store.isQq && store.qqActiveConversation" class="chat-titlebar">
-          <span class="persona-avatar"><PersonaAvatar :avatar="qqActivePersona?.avatar" /></span>
+          <span class="persona-avatar"><PersonaAvatar :avatar="qqActivePersona?.avatar" :label="qqPersonaName" /></span>
           <div><strong>{{ qqPersonaName }}</strong><small>来自 QQ · {{ store.qqActiveConversation.display_name || peerLabel(store.qqActiveConversation.external_id) }} · 只读</small></div>
           <button type="button" class="btn tiny qq-display-toggle" @click="qqDisplayEditorOpen = !qqDisplayEditorOpen">自定义显示</button>
           <span v-if="qqActiveRelation" class="relation-chip" :title="relationHint(qqActiveRelation)">
@@ -87,7 +98,7 @@
             <template v-for="d in localDecorated" :key="d.item.id">
               <div v-if="d.divider" class="day-divider" role="separator">{{ d.divider }}</div>
               <div class="bot-message" :class="[d.item.role, { cont: d.cont }]">
-                <span v-if="d.item.role !== 'user'" class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.activePersona?.avatar" /></span>
+                <span v-if="d.item.role !== 'user'" class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.activePersona?.avatar" :label="store.activePersona?.name" /></span>
                 <span v-else class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.userAvatar" seed="ckun-user" label="你" /></span>
                 <div class="message-content">
                   <span class="sr-only">{{ d.item.role === 'user' ? '你' : (store.activePersona?.name || 'Bot') }}：</span>
@@ -101,7 +112,7 @@
               </div>
             </template>
             <div v-if="store.streaming" class="bot-message assistant">
-              <span class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.activePersona?.avatar" /></span>
+              <span class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.activePersona?.avatar" :label="store.activePersona?.name" /></span>
               <div class="message-content">
                 <details v-if="store.streamReasoning" class="reasoning" open><summary>思考中…</summary><div class="reasoning-body">{{ store.streamReasoning }}</div></details>
                 <MarkdownStream v-if="store.streamText" :content="store.streamText" />
@@ -114,7 +125,7 @@
               <div v-if="d.divider" class="day-divider" role="separator">{{ d.divider }}</div>
               <div class="bot-message" :class="[d.item.role, { cont: d.cont }]">
                 <span class="msg-avatar" aria-hidden="true">
-                  <PersonaAvatar v-if="d.item.role === 'assistant'" :avatar="qqActivePersona?.avatar" />
+                  <PersonaAvatar v-if="d.item.role === 'assistant'" :avatar="qqActivePersona?.avatar" :label="qqPersonaName" />
                   <PersonaAvatar v-else :avatar="store.qqActiveConversation?.display_avatar" :seed="peerSeed(store.qqActiveConversation?.external_id)" :label="store.qqActiveConversation?.display_name || peerLabel(store.qqActiveConversation?.external_id)" />
                 </span>
                 <div class="qq-message-body">
@@ -178,12 +189,12 @@
       <div class="persona-grid">
         <article v-for="p in store.personas" :key="p.id" class="persona-card">
           <div class="persona-card-head">
-            <span class="persona-large-avatar"><PersonaAvatar :avatar="p.avatar" /></span>
+            <span class="persona-large-avatar"><PersonaAvatar :avatar="p.avatar" :label="p.name" /></span>
             <div><h3>{{ p.name }}</h3><span>{{ modelName(p.model_id) }}</span></div>
             <span v-if="store.relations[p.id]" class="relation-chip small" :title="relationHint(store.relations[p.id])">{{ store.relations[p.id].stage }}</span>
           </div>
           <p class="personality">{{ p.personality || '还没有写下性格描述。' }}</p>
-          <p v-if="p.greeting" class="persona-greeting">“{{ p.greeting }}”</p>
+          <p class="persona-greeting">“{{ p.greeting }}”</p>
           <div class="persona-actions">
             <button class="btn btn-sm btn-primary" @click="chatWith(p.id)">用此人格聊天</button>
             <button class="btn btn-sm" @click="openPersona(p)">编辑</button>
@@ -278,7 +289,14 @@ function onComposerKeydown(e: KeyboardEvent) {
 }
 watch(draft, () => { void nextTick(growComposer) })
 
+// 窄屏抽屉：选会话/新建后收起，正文区回到聊天
+const sidebarOpen = ref(false)
+function selectLocal(id: string) {
+  sidebarOpen.value = false
+  void store.selectConversation(id)
+}
 async function createChat() {
+  sidebarOpen.value = false
   try { await store.createConversation() } catch (e) { toast.error(toFriendlyMessage(e, '新建会话失败')) }
 }
 async function send() {
@@ -406,6 +424,7 @@ function qqPersonaLabel(conversation: { persona: { name: string } }) {
 }
 
 async function selectQq(id: string) {
+  sidebarOpen.value = false
   await store.selectQqConversation(id)
   await nextTick()
   if (messageListRef.value) messageListRef.value.scrollTop = messageListRef.value.scrollHeight
@@ -431,6 +450,7 @@ async function refreshQqChat() {
 }
 
 watch([tab, () => store.channel], () => {
+  sidebarOpen.value = false
   stopQqPolling()
   if (tab.value !== 'chat' || store.channel !== 'qq') return
   void refreshQqChat()
@@ -446,7 +466,9 @@ onUnmounted(() => { stopQqPolling(); store.stopGenerating() })
 <style scoped>
 .bot-view { --bubble-radius: calc(var(--radius-lg) * 2); height: 100%; display: flex; flex-direction: column; background: var(--canvas-bg); color: var(--text-primary); overflow: hidden; }
 .bot-header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-16); padding: 20px 28px var(--spacing-12); border-bottom: 1px solid var(--border-subtle); }
-.brand { min-width: 0; }
+.brand { min-width: 0; display: flex; align-items: center; gap: var(--spacing-10); }
+/* 窄屏抽屉开关：默认不渲染（宽屏侧栏常驻），≤700px 才由媒体查询放出 */
+.sidebar-toggle { display: none; }
 h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; } .bot-tabs { display: flex; gap: var(--spacing-2); padding: 3px; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--bg-input); }
 .bot-tabs button { border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text-secondary); padding: 6px 16px; cursor: pointer; transition: color var(--transition-fast), background var(--transition-fast); }
 .bot-tabs button:hover { color: var(--text-primary); }
@@ -493,17 +515,8 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 .greeting { align-self: flex-start; max-width: 82%; margin-bottom: var(--spacing-16); padding: var(--spacing-12) var(--spacing-14); border: 1px solid var(--border-subtle); border-radius: var(--bubble-radius) var(--bubble-radius) var(--bubble-radius) var(--radius-sm); background: var(--bg-elevated); box-shadow: var(--shadow-sm); color: var(--text-secondary); line-height: 1.7; white-space: pre-wrap; }
 .bot-message { display: flex; align-items: flex-start; gap: 9px; max-width: 82%; margin-bottom: var(--spacing-10); }
 .bot-message.assistant { align-self: flex-start; } .bot-message.user { align-self: flex-end; }
-/* 用户气泡头像排在气泡右侧：.bot-message 是 flex，与 QQ assistant 右置同一手法 */
+/* 用户气泡头像排在气泡右侧（.bot-message 是 flex，与 QQ assistant 右置同一手法） */
 .bot-message.user .msg-avatar { order: 2; }
-/* QQ 显示覆盖编辑抽屉：贴在标题栏下方，编辑时不把消息流顶走太远 */
-.qq-display-editor { padding: var(--spacing-12) var(--spacing-24); border-bottom: 1px solid var(--border-subtle); background: var(--bg-elevated); display: flex; flex-direction: column; gap: var(--spacing-10); }
-.qq-display-editor .field { max-width: 760px; width: 100%; margin: 0 auto; display: flex; flex-direction: column; gap: 7px; color: var(--text-secondary); font-size: 0.9231rem; }
-.qq-display-editor .field input { border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-base); color: var(--text-primary); padding: 9px var(--spacing-10); font: inherit; font-size: 0.9231rem; }
-.qq-display-editor .field input:focus { border-color: var(--accent-primary); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 16%, transparent); }
-.qq-display-editor .avatar-picker { max-width: 760px; width: 100%; margin: 0 auto; }
-.qq-display-actions { max-width: 760px; width: 100%; margin: 0 auto; display: flex; gap: var(--spacing-8); }
-.qq-display-editor .form-error { max-width: 760px; width: 100%; margin: 0 auto; color: var(--danger-text); font-size: 0.8462rem; }
-.qq-display-toggle { flex: 0 0 auto; }
 .msg-avatar { width: 26px; height: 26px; flex: 0 0 26px; display: grid; place-items: center; border-radius: 50%; background: color-mix(in srgb, var(--accent-primary) 14%, transparent); font-size: 0.9231rem; }
 .message-content { padding: var(--spacing-10) var(--spacing-14); border: 1px solid var(--border-subtle); border-radius: var(--bubble-radius) var(--bubble-radius) var(--bubble-radius) var(--radius-sm); background: var(--bg-elevated); box-shadow: var(--shadow-sm); line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
 .bot-message.user .message-content { border-color: color-mix(in srgb, var(--accent-primary) 24%, transparent); border-radius: var(--bubble-radius) var(--bubble-radius) var(--radius-sm) var(--bubble-radius); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); box-shadow: none; }
@@ -517,6 +530,15 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 .chat-main.qq .bot-message.assistant .qq-message-body { align-items: flex-end; }
 .chat-main.qq .bot-message.user .message-content { border-color: var(--border-subtle); border-radius: var(--bubble-radius) var(--bubble-radius) var(--bubble-radius) var(--radius-sm); background: var(--bg-elevated); box-shadow: var(--shadow-sm); }
 .chat-main.qq .bot-message.assistant .message-content { border-color: color-mix(in srgb, var(--accent-primary) 24%, transparent); border-radius: var(--bubble-radius) var(--radius-sm) var(--bubble-radius) var(--bubble-radius); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); box-shadow: none; }
+/* QQ 显示覆盖编辑抽屉：贴在标题栏下方，编辑时不把消息流顶走太多 */
+.qq-display-editor { padding: var(--spacing-12) var(--spacing-24); border-bottom: 1px solid var(--border-subtle); background: var(--bg-elevated); display: flex; flex-direction: column; gap: var(--spacing-10); }
+.qq-display-editor .field { max-width: 760px; width: 100%; margin: 0 auto; display: flex; flex-direction: column; gap: 7px; color: var(--text-secondary); font-size: 0.9231rem; }
+.qq-display-editor .field input { border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-base); color: var(--text-primary); padding: 9px var(--spacing-10); font: inherit; font-size: 0.9231rem; }
+.qq-display-editor .field input:focus { border-color: var(--accent-primary); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 16%, transparent); }
+.qq-display-editor .avatar-picker { max-width: 760px; width: 100%; margin: 0 auto; }
+.qq-display-actions { max-width: 760px; width: 100%; margin: 0 auto; display: flex; gap: var(--spacing-8); }
+.qq-display-editor .form-error { max-width: 760px; width: 100%; margin: 0 auto; color: var(--danger-text); font-size: 0.8462rem; }
+.qq-display-toggle { flex: 0 0 auto; }
 .qq-message-body { min-width: 0; display: flex; flex-direction: column; gap: var(--spacing-2); }
 .qq-meta { color: var(--text-tertiary); font-size: 0.7692rem; }
 /* 日期分隔线：居中淡色小字，两侧渐隐细线，不打断阅读节奏。 */
@@ -552,7 +574,8 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 .persona-page { flex: 1; min-height: 0; overflow-y: auto; padding: var(--spacing-24) 28px; } .section-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; } .section-heading h2 { font-size: 1.3846rem; }
 .persona-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--spacing-16); } .persona-card { display: flex; flex-direction: column; padding: 18px; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--bg-elevated); }
 .persona-card-head { display: flex; align-items: center; gap: var(--spacing-12); } .persona-large-avatar { width: 44px; height: 44px; flex: 0 0 44px; display: grid; place-items: center; border-radius: 50%; background: color-mix(in srgb, var(--accent-primary) 14%, transparent); font-size: 2.4615rem; } .persona-card-head h3 { margin-bottom: var(--spacing-4); font-size: 1.2308rem; } .persona-card-head div span { color: var(--text-tertiary); font-size: 0.8462rem; }
-.personality { flex: 1; margin: 18px 0 var(--spacing-12); color: var(--text-secondary); font-size: 1rem; line-height: 1.7; white-space: pre-wrap; } .persona-greeting { margin-bottom: var(--spacing-16); color: var(--text-tertiary); font-size: 0.9231rem; }
+/* 卡片定高：性格截两行、开场白一行占位 —— 长文案不撑爆网格，卡片高度不随内容漂 */
+.personality { flex: 1; margin: 18px 0 var(--spacing-12); color: var(--text-secondary); font-size: 1rem; line-height: 1.7; white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 3.4em; } .persona-greeting { margin-bottom: var(--spacing-16); color: var(--text-tertiary); font-size: 0.9231rem; line-height: 1.6; min-height: 1.6em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .persona-actions { display: flex; flex-wrap: wrap; gap: var(--spacing-6); }
 .composer-attach { width: 32px; height: 32px; flex: 0 0 32px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--text-tertiary); cursor: pointer; }
 .composer-attach:hover:not(:disabled) { color: var(--text-primary); background: var(--bg-hover); }
@@ -571,4 +594,20 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 .msg-image { max-width: 200px; max-height: 200px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); object-fit: contain; cursor: zoom-in; transition: filter var(--transition-fast), transform var(--transition-fast); }
 .msg-image:hover { filter: brightness(1.06); transform: translateY(-1px); }
 @media (max-width: 850px) { .chat-layout { grid-template-columns: 190px minmax(0, 1fr); } .bot-header { padding: var(--spacing-16); } }
+/* 窄屏：侧栏收成抽屉，点「会话」拉出，选完/点遮罩收起，聊天区拿满整行 */
+@media (max-width: 700px) {
+  .chat-layout { position: relative; grid-template-columns: minmax(0, 1fr); }
+  .chat-sidebar {
+    position: absolute; top: 0; bottom: 0; left: 0; z-index: 6;
+    width: min(78vw, 280px);
+    background: var(--canvas-bg);
+    box-shadow: var(--shadow-lg);
+    transform: translateX(-102%);
+    transition: transform var(--transition-fast);
+  }
+  .chat-layout.sidebar-open .chat-sidebar { transform: none; }
+  .sidebar-backdrop { position: absolute; inset: 0; z-index: 5; background: color-mix(in srgb, #000 32%, transparent); }
+  .sidebar-toggle { display: inline-flex; }
+}
+@media (prefers-reduced-motion: reduce) { .chat-sidebar { transition: none; } }
 </style>

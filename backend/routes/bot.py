@@ -7,6 +7,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 import database as db
+from bot import memory as memory_mod
 from bot import relation as relation_mod
 from bot.character import persona_options
 from bot.chat_service import BotChatService
@@ -44,6 +45,11 @@ class PersonaRequest(BaseModel):
     refusal_style: Literal["soft", "direct", "playful", "concise"] = "soft"
     address_user: str = Field("", max_length=20)
     relationship_speed: Literal["slow", "normal", "fast"] = "normal"
+    # 整页编辑的四个自由文本分区：空串即「这一节不进提示词」，不做默认值兜底。
+    likes_landmines: str = Field("", max_length=2000)
+    memory_directive: str = Field("", max_length=2000)
+    dialogue_samples: str = Field("", max_length=4000)
+    advanced_play: str = Field("", max_length=2000)
 
     _check_avatar = field_validator("avatar")(_validate_avatar)
 
@@ -69,6 +75,10 @@ class PersonaUpdateRequest(BaseModel):
     refusal_style: Optional[Literal["soft", "direct", "playful", "concise"]] = None
     address_user: Optional[str] = Field(None, max_length=20)
     relationship_speed: Optional[Literal["slow", "normal", "fast"]] = None
+    likes_landmines: Optional[str] = Field(None, max_length=2000)
+    memory_directive: Optional[str] = Field(None, max_length=2000)
+    dialogue_samples: Optional[str] = Field(None, max_length=4000)
+    advanced_play: Optional[str] = Field(None, max_length=2000)
 
     _check_avatar = field_validator("avatar")(_validate_avatar)
 
@@ -81,6 +91,10 @@ class PersonaUpdateRequest(BaseModel):
 class CreateBotConversationRequest(BaseModel):
     persona_id: str
     channel: Literal["local"] = "local"
+
+
+class MemoryRequest(BaseModel):
+    content: str = Field(..., min_length=1, max_length=200)
 
 
 class BotChatRequest(BaseModel):
@@ -162,6 +176,49 @@ def delete_persona(persona_id: str):
     if not db.delete_bot_persona(persona_id):
         raise HTTPException(status_code=404, detail="人格不存在")
     return {"deleted": True}
+
+
+@router.get("/bot/personas/{persona_id}/memories")
+def list_persona_memories(persona_id: str):
+    """这个人格记住的事：面板上逐条列出，可单条忘记。"""
+    if not db.get_bot_persona(persona_id):
+        raise HTTPException(status_code=404, detail="人格不存在")
+    return [
+        {
+            "id": row["id"],
+            "title": row["title"],
+            "content": row["content"],
+            "created_at": row["created_at"],
+        }
+        for row in memory_mod.list_memories(persona_id)
+    ]
+
+
+@router.post("/bot/personas/{persona_id}/memories")
+def add_persona_memory(persona_id: str, req: MemoryRequest):
+    """手动补一条记忆（「记住这个」）。"""
+    if not db.get_bot_persona(persona_id):
+        raise HTTPException(status_code=404, detail="人格不存在")
+    memory_id = memory_mod.add_manual(persona_id, req.content)
+    if not memory_id:
+        raise HTTPException(status_code=400, detail="记忆内容不能为空")
+    return {"id": memory_id}
+
+
+@router.delete("/bot/memories/{memory_id}")
+def delete_memory(memory_id: str):
+    """单条忘记。已失效的记忆再删一次是 404，不静默成功。"""
+    if not memory_mod.forget_by_id(memory_id):
+        raise HTTPException(status_code=404, detail="记忆不存在")
+    return {"deleted": True}
+
+
+@router.post("/bot/personas/{persona_id}/memories/clear")
+def clear_persona_memories(persona_id: str):
+    """全部忘记。"""
+    if not db.get_bot_persona(persona_id):
+        raise HTTPException(status_code=404, detail="人格不存在")
+    return {"cleared": memory_mod.clear_all(persona_id)}
 
 
 def _conversation_payload(conversation: dict) -> dict:

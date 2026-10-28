@@ -20,6 +20,7 @@
         <legend>性格与背景</legend>
         <label class="field"><span>它是个什么样的人</span><textarea v-model="form.personality" rows="4" maxlength="5000" placeholder="话不多但接得住情绪；被夸会有点不好意思；讨厌被催…" /></label>
         <label class="field"><span>背景设定</span><textarea v-model="form.background" rows="4" maxlength="10000" placeholder="它住在哪、在做什么、你们是怎么认识的…" /></label>
+        <label class="field"><span>喜好雷区</span><textarea v-model="form.likes_landmines" rows="3" maxlength="2000" placeholder="喜欢：夜里散步、老唱片、把一件事讲清楚；雷区：被催、被叫「宝贝」" /></label>
         <p class="hint">这里是「它是谁」。下面那一区是「它怎么开口」——两件事分开调，改一处不会牵动另一处。</p>
       </fieldset>
 
@@ -47,6 +48,10 @@
         <label class="field">
           <span>不想让它说</span>
           <input v-model="form.tabooText" maxlength="200" placeholder="逗号分隔，例如：绝绝子、家人们" />
+        </label>
+        <label class="field">
+          <span>互动示例</span>
+          <textarea v-model="form.dialogue_samples" rows="4" maxlength="4000" placeholder="用户：今天好累啊&#10;晚风：又熬到几点？&#10;&#10;用户：帮我写下周报&#10;晚风：这个我不做，但你念我帮你捋。" />
         </label>
         <p class="hint">「作为一个AI」「希望对你有帮助」这类模型腔已内置屏蔽，不用重复填。</p>
       </fieldset>
@@ -78,6 +83,10 @@
           <input type="checkbox" v-model="form.enable_thinking" />
           <em class="field-hint">需模型支持；模型不回思考则不显示思考块</em>
         </label>
+        <label class="field">
+          <span>记忆设定</span>
+          <textarea v-model="form.memory_directive" rows="3" maxlength="2000" placeholder="记住我在准备面试，偶尔问一句进展；他说「别记」时立刻收手" />
+        </label>
         <p class="hint">底线部分（不编造记忆、不谄媚、不假装有身体、不执行命令）固定生效，不可编辑。</p>
       </fieldset>
 
@@ -97,7 +106,30 @@
             >{{ item.label }}</button>
           </div>
         </div>
+        <label class="field">
+          <span>进阶玩法</span>
+          <textarea v-model="form.advanced_play" rows="3" maxlength="2000" placeholder="可以：树洞模式（只听不建议）、一起推方案、互相打卡。&#10;不可以：扮演别人、替我做决定。" />
+        </label>
         <p class="hint">关系从「陌生」开始，聊得越多越近；久不联系会回落一档，聊两句又回来。</p>
+      </fieldset>
+
+      <!-- 长期记忆：人格编辑器是唯一能看到「它记得你什么」的地方（逐条删 / 手动补 / 全部忘） -->
+      <fieldset v-if="persona" class="editor-section" data-memory>
+        <legend>它记得你什么</legend>
+        <p v-if="memoryError" class="form-error">{{ memoryError }}</p>
+        <ul v-if="memories.length" class="memory-list">
+          <li v-for="item in memories" :key="item.id">
+            <span class="memory-content">{{ item.content }}</span>
+            <small>{{ formatLocalDateTime(item.created_at) }}</small>
+            <button type="button" class="btn btn-ghost" :disabled="memoryBusy" @click="forgetMemory(item.id)">忘记</button>
+          </li>
+        </ul>
+        <p v-else-if="!memoryBusy" class="hint">还没记住什么。</p>
+        <div class="memory-add">
+          <input v-model.trim="memoryDraft" maxlength="200" placeholder="手动告诉它一件事，例如：我不吃香菜" @keydown.enter="onMemoryEnter" />
+          <button type="button" class="btn" :disabled="memoryBusy || !memoryDraft" @click="addMemory">记住</button>
+        </div>
+        <button v-if="memories.length" type="button" class="btn btn-ghost" :disabled="memoryBusy" @click="forgetAll">全部忘记</button>
       </fieldset>
 
       <div v-if="error" class="form-error">{{ error }}</div>
@@ -105,20 +137,23 @@
 
     <template #actions>
       <button class="btn" @click="emit('close')">取消</button>
-      <button class="btn btn-primary" :disabled="saving || !form.name || !isImageAvatar(form.avatar)" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
+      <!-- 只有新建才强制先传头像：内置 cKunBot 等已有人格常为空头像，拦住就一个字段都改不了 -->
+      <button class="btn btn-primary" :disabled="saving || !form.name || (!persona && !isImageAvatar(form.avatar))" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
     </template>
   </BaseModal>
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import BaseModal from '@/components/common/BaseModal.vue'
 import AvatarPicker from './AvatarPicker.vue'
 import { isImageAvatar } from '@/utils/persona-avatar'
+import { formatLocalDateTime } from '@/utils/datetime'
 import { toFriendlyMessage } from '@/api/base'
 import {
   botApi,
   type BotExpressionDna,
+  type BotMemory,
   type BotPersona,
   type BotPersonaOptions,
   type BotPersonaPayload,
@@ -160,6 +195,11 @@ const form = reactive({
   refusal_style: (source?.refusal_style || 'soft') as BotRefusalStyle,
   address_user: source?.address_user || '',
   relationship_speed: (source?.relationship_speed || 'normal') as BotRelationshipSpeed,
+  // 人格内核四件套：旧记录可能没有，缺省读空串
+  likes_landmines: source?.likes_landmines || '',
+  memory_directive: source?.memory_directive || '',
+  dialogue_samples: source?.dialogue_samples || '',
+  advanced_play: source?.advanced_play || '',
   // 禁用词用一行文本编辑，比 tag 编辑省事；保存时拆成数组
   tabooText: (source?.expression_dna?.taboo || []).join('、'),
 })
@@ -194,6 +234,10 @@ function buildPayload(): BotPersonaPayload {
     refusal_style: form.refusal_style,
     address_user: form.address_user,
     relationship_speed: form.relationship_speed,
+    likes_landmines: form.likes_landmines,
+    memory_directive: form.memory_directive,
+    dialogue_samples: form.dialogue_samples,
+    advanced_play: form.advanced_play,
   }
 }
 
@@ -211,6 +255,79 @@ async function save() {
     saving.value = false
   }
 }
+
+// ── 长期记忆 ──
+// 人格编辑器是唯一能看到「它记得你什么」的地方：逐条删、全部忘、手动补。
+const memories = ref<BotMemory[]>([])
+const memoryBusy = ref(false)
+const memoryError = ref('')
+const memoryDraft = ref('')
+
+async function loadMemories() {
+  if (!props.persona) return
+  memoryBusy.value = true
+  memoryError.value = ''
+  try {
+    memories.value = await botApi.listMemories(props.persona.id)
+  } catch (e) {
+    memoryError.value = toFriendlyMessage(e, '读取记忆失败')
+  } finally {
+    memoryBusy.value = false
+  }
+}
+
+async function forgetMemory(id: string) {
+  memoryBusy.value = true
+  memoryError.value = ''
+  try {
+    await botApi.deleteMemory(id)
+    memories.value = memories.value.filter(item => item.id !== id)
+  } catch (e) {
+    memoryError.value = toFriendlyMessage(e, '忘记失败')
+  } finally {
+    memoryBusy.value = false
+  }
+}
+
+async function forgetAll() {
+  if (!props.persona) return
+  memoryBusy.value = true
+  memoryError.value = ''
+  try {
+    await botApi.clearMemories(props.persona.id)
+    memories.value = []
+  } catch (e) {
+    memoryError.value = toFriendlyMessage(e, '清空失败')
+  } finally {
+    memoryBusy.value = false
+  }
+}
+
+async function addMemory() {
+  if (!props.persona || !memoryDraft.value) return
+  memoryBusy.value = true
+  memoryError.value = ''
+  try {
+    await botApi.addMemory(props.persona.id, memoryDraft.value)
+    memoryDraft.value = ''
+    await loadMemories()
+  } catch (e) {
+    memoryError.value = toFriendlyMessage(e, '记住失败')
+  } finally {
+    memoryBusy.value = false
+  }
+}
+
+/** 中文输入法确认候选词也会派发 Enter；不拦 isComposing 会把半句误存成记忆。 */
+function onMemoryEnter(e: KeyboardEvent) {
+  if (e.isComposing) return
+  e.preventDefault()
+  void addMemory()
+}
+
+onMounted(() => {
+  loadMemories()
+})
 </script>
 
 <style scoped>
@@ -269,4 +386,24 @@ async function save() {
 }
 .hint { margin: 0; color: var(--text-tertiary); font-size: 0.8462rem; line-height: 1.6; }
 .form-error { color: var(--danger-text); font-size: 0.9231rem; }
+.memory-list { display: flex; flex-direction: column; gap: var(--spacing-8); margin: 0; padding: 0; list-style: none; }
+.memory-list li { display: flex; align-items: center; gap: var(--spacing-10); }
+.memory-content { flex: 1 1 auto; min-width: 0; color: var(--text-primary); font-size: 0.9231rem; overflow-wrap: anywhere; }
+.memory-list small { flex: 0 0 auto; color: var(--text-tertiary); font-size: 0.7692rem; }
+.memory-add { display: flex; align-items: center; gap: var(--spacing-8); }
+.memory-add input {
+  flex: 1 1 auto; min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  padding: 9px var(--spacing-10);
+  font: inherit;
+}
+.memory-add input:focus {
+  border-color: var(--accent-primary);
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 16%, transparent);
+}
 </style>

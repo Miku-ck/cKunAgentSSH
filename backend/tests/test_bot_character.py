@@ -229,8 +229,40 @@ def test_prompt_channel_switch_keeps_markdown_off_qq():
 
 
 def test_prompt_survives_legacy_persona_without_new_fields():
-    # 旧会话的 persona_snapshot 是升级前的 JSON，缺五个新字段也不能炸
+    # 旧会话的 persona_snapshot 是升级前的 JSON，缺后续新增字段也不能炸
     legacy = {"name": "旧人格", "personality": "", "background": "", "reply_style": "moderate"}
     prompt = BotChatService()._system_prompt(legacy, "local")
     assert "旧人格" in prompt
     assert "说话方式" in prompt
+
+
+def test_prompt_injects_expansion_sections_in_order():
+    filled = _persona(
+        likes_landmines="喜欢夜里散步；雷区是被催",
+        memory_directive="记住我在准备面试，别提前任",
+        dialogue_samples="用户：今天好累\n晚风：又熬到几点？",
+        advanced_play="可以玩树洞模式，只听不建议",
+    )
+    prompt = BotChatService()._system_prompt(filled, "local")
+    assert "喜欢夜里散步" in prompt
+    assert "记住我在准备面试" in prompt
+    assert "又熬到几点" in prompt
+    assert "树洞模式" in prompt
+
+    # 顺序即注意力：喜好紧跟背景（还是「它是谁」），样板排在表达 DNA 之后
+    # （先讲规矩再给例子），玩法与记忆的分寸压在前排版规则之前、宪章之后不再插东西。
+    assert prompt.index("你的背景") < prompt.index("喜好与雷区") < prompt.index("【底线")
+    assert prompt.index("说话样板") > prompt.index("说话方式")
+    assert prompt.index("记忆的分寸") < prompt.index("排版规则")
+    assert prompt.rstrip().endswith(SAFETY_CHARTER.rstrip())
+
+
+def test_prompt_omits_expansion_sections_when_empty():
+    empty = _persona(
+        likes_landmines="", memory_directive="", dialogue_samples="", advanced_play=""
+    )
+    prompt = BotChatService()._system_prompt(empty, "local")
+    for marker in ("喜好与雷区", "说话样板", "进阶玩法", "记忆的分寸"):
+        assert marker not in prompt, marker
+    # 空分区不该留一个只有标题的空节：标题本身也会挤掉一段有效指令
+    assert "你的背景" in prompt

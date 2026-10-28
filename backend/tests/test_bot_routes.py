@@ -331,6 +331,84 @@ def test_conversation_shows_snapshot_name_after_persona_deleted(client):
     assert row["persona"]["avatar"] == ""
 
 
+# ── 长期记忆 ──
+
+
+def test_persona_memories_are_listed_per_persona(client):
+    from bot import memory as mem
+
+    persona = create_persona(client)
+    other = create_persona(client, name="小刻")
+    mem.remember(persona["id"], None, "我叫小林")
+
+    rows = client.get(f"/api/bot/personas/{persona['id']}/memories").json()
+    assert [row["content"] for row in rows] == ["用户叫小林"]
+    assert rows[0]["title"] == "称呼"
+    # 别人格的记忆不串台
+    assert client.get(f"/api/bot/personas/{other['id']}/memories").json() == []
+
+
+def test_persona_memories_404_for_unknown_persona(client):
+    assert client.get("/api/bot/personas/nope/memories").status_code == 404
+    assert client.post("/api/bot/personas/nope/memories", json={"content": "x"}).status_code == 404
+    assert client.post("/api/bot/personas/nope/memories/clear").status_code == 404
+
+
+def test_manual_memory_can_be_added_and_deleted(client):
+    persona = create_persona(client)
+    added = client.post(
+        f"/api/bot/personas/{persona['id']}/memories", json={"content": "用户不吃香菜"}
+    )
+    assert added.status_code == 200
+    memory_id = added.json()["id"]
+
+    rows = client.get(f"/api/bot/personas/{persona['id']}/memories").json()
+    assert [row["content"] for row in rows] == ["用户不吃香菜"]
+
+    assert client.delete(f"/api/bot/memories/{memory_id}").status_code == 200
+    assert client.get(f"/api/bot/personas/{persona['id']}/memories").json() == []
+    # 删不存在的记忆是 404，不是静默成功
+    assert client.delete(f"/api/bot/memories/{memory_id}").status_code == 404
+
+
+def test_manual_memory_rejects_empty_content(client):
+    persona = create_persona(client)
+    assert client.post(
+        f"/api/bot/personas/{persona['id']}/memories", json={"content": ""}
+    ).status_code == 422
+
+
+def test_clear_all_memories(client):
+    from bot import memory as mem
+
+    persona = create_persona(client)
+    mem.remember(persona["id"], None, "我叫小林，我住在杭州")
+    cleared = client.post(f"/api/bot/personas/{persona['id']}/memories/clear")
+    assert cleared.status_code == 200
+    assert cleared.json()["cleared"] == 2
+    assert client.get(f"/api/bot/personas/{persona['id']}/memories").json() == []
+
+
+def test_persona_patch_revises_snapshot_used_for_generation(client):
+    """会话对外只露 {id,name,avatar}，但生成读的是内部全量快照：PATCH 后必须跟着改。"""
+    persona = create_persona(client)
+    conversation = client.post(
+        "/api/bot/conversations", json={"persona_id": persona["id"]}
+    ).json()
+    assert db.get_bot_conversation(conversation["id"])["persona"]["personality"] == "温和"
+
+    client.patch(f"/api/bot/personas/{persona['id']}", json={
+        "personality": "克制", "memory_directive": "记住我在准备面试",
+    })
+    internal = db.get_bot_conversation(conversation["id"])["persona"]
+    assert internal["personality"] == "克制"
+    assert internal["memory_directive"] == "记住我在准备面试"
+
+    # 对外形状不因此变宽
+    row = client.get("/api/bot/conversations").json()[0]
+    assert set(row["persona"]) == {"id", "name", "avatar"}
+
+
 def test_qq_conversation_display_override(client):
     persona = create_persona(client)
     # QQ 会话由通道侧创建，路由只收 local —— 测试直接走库函数造数据
@@ -381,3 +459,32 @@ def test_conversation_display_migration_idempotent(base_db):
     conv = db.create_bot_conversation(persona["id"], channel="qq", external_id="group:GG3")
     assert conv["display_name"] is None
     assert db.get_bot_conversation(conv["id"])["display_avatar"] is None
+
+
+def test_persona_roundtrips_expansion_fields(client):
+    """四个新分区只是长文本：POST/PATCH 原样进出，超长按 422 挡回而不是静默截断。"""
+    persona = create_persona(
+        client,
+        likes_landmines="喜欢夜里散步；雷区是被催",
+        memory_directive="记住我在准备面试，别提前任",
+        dialogue_samples="用户：今天好累\n晚风：又熬到几点？",
+        advanced_play="可以玩树洞模式，只听不建议",
+    )
+    fetched = next(p for p in client.get("/api/bot/personas").json() if p["id"] == persona["id"])
+    assert fetched["likes_landmines"] == "喜欢夜里散步；雷区是被催"
+    assert fetched["dialogue_samples"] == "用户：今天好累\n晚风：又熬到几点？"
+
+    patched = client.patch(
+        f"/api/bot/personas/{persona['id']}", json={"advanced_play": "再加互相打卡"}
+    ).json()
+    assert patched["advanced_play"] == "再加互相打卡"
+    assert patched["likes_landmines"] == "喜欢夜里散步；雷区是被催"
+
+    # 未填写的分区读到空串，前端据此决定这一节不进提示词
+    bare = create_persona(client, name="极简")
+    for field in ("likes_landmines", "memory_directive", "dialogue_samples", "advanced_play"):
+        assert bare[field] == "", field
+
+    assert client.post(
+        "/api/bot/personas", json={"name": "超长", "dialogue_samples": "样" * 4001}
+    ).status_code == 422

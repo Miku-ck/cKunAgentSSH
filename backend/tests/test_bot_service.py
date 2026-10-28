@@ -282,3 +282,103 @@ async def test_qq_channel_ignores_images(bot_db, monkeypatch):
     for m in captured["messages"][1:]:
         assert isinstance(m["content"], str)  # QQ 面永不构造数组
     assert db.get_recent_bot_messages(bot_db["id"], 10)[-1]["images"] == []
+
+
+# ── 长期记忆接入 ──
+
+
+@pytest.mark.asyncio
+async def test_memory_block_is_injected_as_its_own_system_message(bot_db, monkeypatch):
+    """记忆以独立 system 消息插在人格 prompt 之后、历史之前，且是人话不是记忆 id。"""
+    from bot import memory as mem
+    from bot.chat_service import BotChatService
+
+    persona_id = db.get_bot_conversation(bot_db["id"])["persona_id"]
+    mem.remember(persona_id, bot_db["id"], "我叫小林")
+    captured = {}
+
+    async def fake_stream(**kwargs):
+        captured["messages"] = kwargs["messages"]
+        yield SimpleNamespace(content="记得", reasoning="")
+
+    monkeypatch.setattr("llm_adapter.chat_stream", fake_stream)
+    [c async for c in BotChatService().stream_reply(bot_db["id"], "你还记得我叫什么吗")]
+
+    messages = captured["messages"]
+    assert messages[0]["role"] == "system" and "小暖" in messages[0]["content"]
+    assert messages[1]["role"] == "system"
+    assert "用户叫小林" in messages[1]["content"]
+    assert "[mem:" not in messages[1]["content"]
+    # 历史仍然从后面接上
+    assert messages[2]["role"] == "user"
+
+
+@pytest.mark.asyncio
+async def test_no_memory_means_no_extra_system_message(bot_db, monkeypatch):
+    from bot.chat_service import BotChatService
+
+    captured = {}
+
+    async def fake_stream(**kwargs):
+        captured["messages"] = kwargs["messages"]
+        yield SimpleNamespace(content="在", reasoning="")
+
+    monkeypatch.setattr("llm_adapter.chat_stream", fake_stream)
+    [c async for c in BotChatService().stream_reply(bot_db["id"], "在吗")]
+
+    assert [m["role"] for m in captured["messages"]].count("system") == 1
+
+
+@pytest.mark.asyncio
+async def test_memory_block_never_lands_in_visible_history(bot_db, monkeypatch):
+    """记忆块是对模型的补充，不是一次对话：不能出现在 bot_messages 里。"""
+    from bot import memory as mem
+    from bot.chat_service import BotChatService
+
+    persona_id = db.get_bot_conversation(bot_db["id"])["persona_id"]
+    mem.remember(persona_id, bot_db["id"], "我叫小林")
+
+    async def fake_stream(**kwargs):
+        yield SimpleNamespace(content="在的", reasoning="")
+
+    monkeypatch.setattr("llm_adapter.chat_stream", fake_stream)
+    [c async for c in BotChatService().stream_reply(bot_db["id"], "你还记得我叫什么吗")]
+
+    stored = [m["content"] for m in db.get_bot_messages(bot_db["id"])]
+    assert all("用户叫小林" not in text for text in stored)
+
+
+@pytest.mark.asyncio
+async def test_user_message_is_mined_into_memory_after_the_turn(bot_db, monkeypatch):
+    from bot import memory as mem
+    from bot.chat_service import BotChatService
+
+    async def fake_stream(**kwargs):
+        yield SimpleNamespace(content="记住了", reasoning="")
+
+    monkeypatch.setattr("llm_adapter.chat_stream", fake_stream)
+    [c async for c in BotChatService().stream_reply(bot_db["id"], "我住在杭州")]
+
+    persona_id = db.get_bot_conversation(bot_db["id"])["persona_id"]
+    assert [row["content"] for row in mem.list_memories(persona_id)] == ["用户住在杭州"]
+
+
+@pytest.mark.asyncio
+async def test_memory_failure_does_not_break_the_reply(bot_db, monkeypatch):
+    """记忆模块炸了也不能影响陪聊本身。"""
+    from bot import memory as mem
+    from bot.chat_service import BotChatService
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("memory store down")
+
+    monkeypatch.setattr(mem, "recall_sync", boom)
+    monkeypatch.setattr(mem, "remember", boom)
+
+    async def fake_stream(**kwargs):
+        yield SimpleNamespace(content="在的", reasoning="")
+
+    monkeypatch.setattr("llm_adapter.chat_stream", fake_stream)
+    chunks = [c async for c in BotChatService().stream_reply(bot_db["id"], "在吗")]
+
+    assert chunks == [("content", "在的")]

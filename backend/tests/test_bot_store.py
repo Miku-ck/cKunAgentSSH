@@ -36,6 +36,86 @@ def test_persona_crud_and_copy(base_db):
     assert db.delete_bot_persona(persona["id"]) is False
 
 
+EXPANSION_FIELDS = (
+    "likes_landmines", "memory_directive", "dialogue_samples", "advanced_play",
+)
+
+
+def test_expansion_personas_default_to_empty(base_db):
+    """没填的分区不参与生成：空串而不是 None，前端与提示词都按「空即不注入」处理。"""
+    persona = db.create_bot_persona(name="小暖")
+    for field in EXPANSION_FIELDS:
+        assert persona[field] == "", field
+
+
+def test_expansion_persona_roundtrips_update_and_copy(base_db):
+    persona = db.create_bot_persona(
+        name="晚风",
+        likes_landmines="喜欢夜里散步；雷区是被催",
+        memory_directive="记住我在准备面试，别提前任",
+        dialogue_samples="用户：今天好累\n晚风：又熬到几点？",
+        advanced_play="可以玩树洞模式，只听不建议",
+    )
+    assert persona["likes_landmines"] == "喜欢夜里散步；雷区是被催"
+
+    updated = db.update_bot_persona(persona["id"], advanced_play="再加一个互相打卡")
+    assert updated["advanced_play"] == "再加一个互相打卡"
+    # 局部更新不许把其余三个分区冲成空
+    assert updated["likes_landmines"] == "喜欢夜里散步；雷区是被催"
+    assert updated["memory_directive"] == "记住我在准备面试，别提前任"
+    assert updated["dialogue_samples"].startswith("用户：今天好累")
+
+    copied = db.copy_bot_persona(persona["id"])
+    for field in EXPANSION_FIELDS:
+        assert copied[field] == updated[field], field
+
+
+def test_migrate_db_adds_expansion_columns_to_legacy_db(base_db):
+    """旧库缺四个列也不能报错，补完后存量人格取空串（行为与升级前一致）。"""
+    persona = db.create_bot_persona(name="旧人格", personality="温和")
+    conn = db._get_conn()
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(bot_personas)")}
+        for field in EXPANSION_FIELDS:
+            if field in cols:
+                conn.execute(f"ALTER TABLE bot_personas DROP COLUMN {field}")
+        conn.commit()
+    finally:
+        conn.close()
+
+    db._migrate_db(db._get_conn())
+    restored = db.get_bot_persona(persona["id"])
+    for field in EXPANSION_FIELDS:
+        assert restored[field] == "", field
+    # 迁移要能重复跑：init_db 每次都过一遍，第二次再 ALTER 会抛 duplicate column
+    db._migrate_db(db._get_conn())
+    assert db.get_bot_persona(persona["id"])["personality"] == "温和"
+
+
+def test_update_persona_revises_open_conversation_snapshots(base_db):
+    """人格是「当前怎么说话」而不是开会话那一刻的存档：改完正在聊的会话也要跟着变。"""
+    persona = db.create_bot_persona(name="小暖", personality="温和", background="靠海小城")
+    conversation = db.create_bot_conversation(persona["id"], channel="local")
+    assert db.get_bot_conversation(conversation["id"])["persona"]["personality"] == "温和"
+
+    db.update_bot_persona(
+        persona["id"], personality="克制", likes_landmines="雷区是被催", advanced_play="可以玩树洞"
+    )
+    refreshed = db.get_bot_conversation(conversation["id"])["persona"]
+    assert refreshed["personality"] == "克制"
+    assert refreshed["background"] == "靠海小城"
+    assert refreshed["likes_landmines"] == "雷区是被催"
+    assert refreshed["advanced_play"] == "可以玩树洞"
+    # 头像仍走读时关联：快照里不该复制一份 data URL
+    assert refreshed["avatar"] == ""
+
+    # 人格删掉后历史会话照旧可渲染：快照已落盘，删除不回写
+    other = db.create_bot_persona(name="另一位")
+    doomed = db.create_bot_conversation(other["id"], channel="local")
+    db.delete_bot_persona(other["id"])
+    assert db.get_bot_conversation(doomed["id"])["persona"]["name"] == "另一位"
+
+
 def test_conversation_keeps_persona_snapshot_after_delete(base_db):
     persona = db.create_bot_persona(name="小暖", personality="温和")
     conversation = db.create_bot_conversation(persona["id"], channel="local")

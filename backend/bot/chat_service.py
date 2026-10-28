@@ -1,7 +1,10 @@
 import asyncio
+import logging
 from typing import AsyncGenerator
 
 import database as db
+from agent.memory.budget import cap_text_tokens
+from bot import memory as memory_mod
 from bot import relation as relation_mod
 from bot.character import (
     REFUSAL_STYLES,
@@ -12,6 +15,8 @@ from bot.character import (
 )
 from bot.voice import compile_dna, strip_ai_smell
 from safe_tokens import safe_max_tokens
+
+logger = logging.getLogger(__name__)
 
 
 class BotChatService:
@@ -62,10 +67,16 @@ class BotChatService:
             sections.append(f"你的性格与说话习惯：{persona['personality']}")
         if persona.get("background"):
             sections.append(f"你的背景：{persona['background']}")
+        if persona.get("likes_landmines"):
+            sections.append(f"你的喜好与雷区：{persona['likes_landmines']}")
 
         # 表达 DNA：枚举档位编译成可执行约束。personality 负责「是谁」，
         # 这里负责「怎么开口」—— 只有前者时模型会退化回通用助手腔。
         sections.extend(compile_dna(persona.get("expression_dna")))
+
+        # 样板排在档位之后：先讲规矩再给例子，否则模型会把示例内容当事实复述。
+        if persona.get("dialogue_samples"):
+            sections.append(f"说话样板（照着这个口气说，别照抄内容）：\n{persona['dialogue_samples']}")
 
         sections.append(
             self._STYLE_DIRECTIVE.get(
@@ -87,6 +98,13 @@ class BotChatService:
                 persona.get("refusal_style") or "soft", REFUSAL_STYLES["soft"]
             )
         )
+
+        if persona.get("advanced_play"):
+            sections.append(f"进阶玩法：{persona['advanced_play']}")
+        # 记忆的分寸管的是「以后该记什么、该避讳什么」，与当前有没有召回到事实无关，
+        # 所以留在人格 prompt 里，不跟那条动态记忆 system 消息绑在一起。
+        if persona.get("memory_directive"):
+            sections.append(f"记忆的分寸：{persona['memory_directive']}")
 
         # 排版规则按渠道分：本地会话走 Markdown 渲染，QQ 被动回复是纯文本，
         # **、#、反引号会被原样显示成符号，故禁止 Markdown 标记与表格/链接/代码块。
@@ -161,6 +179,11 @@ class BotChatService:
                 persona, channel, relation=relation, situation=situation
             ),
         }]
+        # 长期记忆：独立的一条 system 消息，插在人格 prompt 之后、历史之前。
+        # 它是对模型的补充而不是一次对话，所以不写进 bot_messages（可见记录保持干净）。
+        memory_note = self._memory_note(persona_id, content)
+        if memory_note:
+            messages.append({"role": "system", "content": memory_note})
         messages.extend(self._to_llm_message(item) for item in history)
 
         from llm_adapter import chat_stream
@@ -225,6 +248,42 @@ class BotChatService:
             db.add_bot_message, conversation_id, "assistant", reply,
             None, "".join(reasoning_parts) or None,
         )
+        # 这一轮说完之后才记事实：模型失败的话，用户那句还没被承认过
+        await self._remember_turn(persona_id, conversation_id, content)
+
+    @staticmethod
+    def _memory_note(persona_id: str, query: str) -> str:
+        """这个人格记住的事 → 一条独立 system 消息。
+
+        召回失败一律当作没有记忆：记忆是加分项，不能因为它拖垮陪聊。
+        """
+        if not persona_id:
+            return ""
+        try:
+            contents = memory_mod.recall_sync(persona_id, query)
+        except Exception as exc:  # noqa: BLE001 —— 记忆层任何异常都不该影响回复
+            logger.warning("陪聊记忆召回失败: %s", exc)
+            return ""
+        if not contents:
+            return ""
+        body = cap_text_tokens(
+            "\n".join(f"- {text}" for text in contents), 200
+        )
+        return "关于对方，你记得这些事（当事实用，别主动罗列，也别编造没记住的）：\n" + body
+
+    @staticmethod
+    async def _remember_turn(
+        persona_id: str, conversation_id: str, user_text: str
+    ) -> None:
+        """把用户这句话里可记的事实落库。失败只记日志。"""
+        if not persona_id:
+            return
+        try:
+            await asyncio.to_thread(
+                memory_mod.remember, persona_id, conversation_id, user_text
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("陪聊记忆写入失败: %s", exc)
 
     async def complete_reply(
         self,

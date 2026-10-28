@@ -29,6 +29,11 @@ export interface BotPersona {
   refusal_style: BotRefusalStyle
   address_user: string
   relationship_speed: BotRelationshipSpeed
+  /** 人格内核扩展四件套：可选 —— 旧人格记录里没有这四列，后端也按缺省读。 */
+  likes_landmines?: string
+  memory_directive?: string
+  dialogue_samples?: string
+  advanced_play?: string
   is_builtin: number
   created_at: string
   updated_at: string
@@ -48,6 +53,11 @@ export interface BotPersonaPayload {
   refusal_style: BotRefusalStyle
   address_user: string
   relationship_speed: BotRelationshipSpeed
+  /** 人格内核扩展四件套：可选 —— 局部更新时不必带全。 */
+  likes_landmines?: string
+  memory_directive?: string
+  dialogue_samples?: string
+  advanced_play?: string
 }
 
 /** 关系状态：分数只增不减，衰减在服务端读时计算，前端只展示阶段与进度。 */
@@ -83,7 +93,7 @@ export interface BotConversation {
   external_id: string | null
   /** 最后一条消息的内容，服务端顺带算出，侧栏可直接用作摘要。 */
   preview: string | null
-  /** Phase 4 QQ 会话本地显示覆盖：空/缺省 = 回落 title 与代号占位头像。 */
+  /** Phase 4 QQ 会话本地显示覆盖：空/缺省 = 回落 title 与代号占位头像；本地会话恒空。 */
   display_name?: string | null
   display_avatar?: string | null
   created_at: string
@@ -131,6 +141,15 @@ export interface BotChannelPayload {
   app_secret?: string
 }
 
+/** 人格记住的一条事实。内容是人话（"用户住在杭州"），不是内部 id。 */
+export interface BotMemory {
+  id: string
+  title: string
+  content: string
+  created_at: string
+}
+
+/** 头像图库条目：各处头像存自己的 data URL 副本，删图库项不影响已设头像。 */
 export interface BotGalleryItem {
   id: string
   label: string
@@ -148,12 +167,6 @@ export const botApi = {
   deletePersona: (id: string) => request<{ deleted: boolean }>(`/bot/personas/${id}`, { method: 'DELETE' }),
   listConversations: (personaId?: string) => request<BotConversation[]>(`/bot/conversations?channel=local${personaId ? `&persona_id=${encodeURIComponent(personaId)}` : ''}`),
   listQqConversations: () => request<BotConversation[]>('/bot/conversations?channel=qq'),
-  listGallery: () => request<BotGalleryItem[]>('/bot/gallery'),
-  addGalleryItem: (payload: { label?: string; data_url: string }) => request<BotGalleryItem>('/bot/gallery', { method: 'POST', body: JSON.stringify(payload) }),
-  deleteGalleryItem: (id: string) => request<{ deleted: boolean }>(`/bot/gallery/${id}`, { method: 'DELETE' }),
-  getUserAvatar: () => request<{ avatar: string }>('/bot/user-avatar'),
-  setUserAvatar: (avatar: string) => request<{ avatar: string }>('/bot/user-avatar', { method: 'PUT', body: JSON.stringify({ avatar }) }),
-  updateConversationDisplay: (id: string, payload: { display_name?: string; display_avatar?: string }) => request<BotConversation>(`/bot/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   createConversation: (personaId: string) => request<BotConversation>('/bot/conversations', { method: 'POST', body: JSON.stringify({ persona_id: personaId, channel: 'local' }) }),
   getMessages: (id: string) => request<BotMessage[]>(`/bot/conversations/${id}/messages?limit=200`),
   deleteConversation: (id: string) => request<{ deleted: boolean }>(`/bot/conversations/${id}`, { method: 'DELETE' }),
@@ -163,6 +176,17 @@ export const botApi = {
   deleteChannel: (id: string) => request<{ deleted: boolean; conversation_count: number }>(`/bot/channels/${id}`, { method: 'DELETE' }),
   connectChannel: (id: string) => request<BotChannelStatus>(`/bot/channels/${id}/connect`, { method: 'POST' }),
   disconnectChannel: (id: string) => request<BotChannelStatus>(`/bot/channels/${id}/disconnect`, { method: 'POST' }),
+  listMemories: (personaId: string) => request<BotMemory[]>(`/bot/personas/${personaId}/memories`),
+  addMemory: (personaId: string, content: string) => request<{ id: string }>(`/bot/personas/${personaId}/memories`, { method: 'POST', body: JSON.stringify({ content }) }),
+  deleteMemory: (id: string) => request<{ deleted: boolean }>(`/bot/memories/${id}`, { method: 'DELETE' }),
+  clearMemories: (personaId: string) => request<{ cleared: number }>(`/bot/personas/${personaId}/memories/clear`, { method: 'POST' }),
+  // Phase 4 头像体系：图库 CRUD、「你的头像」、QQ 会话显示覆盖
+  listGallery: () => request<BotGalleryItem[]>('/bot/gallery'),
+  addGalleryItem: (payload: { label?: string; data_url: string }) => request<BotGalleryItem>('/bot/gallery', { method: 'POST', body: JSON.stringify(payload) }),
+  deleteGalleryItem: (id: string) => request<{ deleted: boolean }>(`/bot/gallery/${id}`, { method: 'DELETE' }),
+  getUserAvatar: () => request<{ avatar: string }>('/bot/user-avatar'),
+  setUserAvatar: (avatar: string) => request<{ avatar: string }>('/bot/user-avatar', { method: 'PUT', body: JSON.stringify({ avatar }) }),
+  updateConversationDisplay: (id: string, payload: { display_name?: string; display_avatar?: string }) => request<BotConversation>(`/bot/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
 }
 
 interface BotSseEvent {

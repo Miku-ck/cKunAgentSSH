@@ -216,6 +216,11 @@ def init_db(db_path: str) -> None:
                 refusal_style       TEXT NOT NULL DEFAULT 'soft',
                 address_user        TEXT NOT NULL DEFAULT '',
                 relationship_speed  TEXT NOT NULL DEFAULT 'normal',
+                -- 人格整页编辑的四个自由文本分区（空串 = 该节不进提示词）。
+                likes_landmines     TEXT NOT NULL DEFAULT '',
+                memory_directive    TEXT NOT NULL DEFAULT '',
+                dialogue_samples    TEXT NOT NULL DEFAULT '',
+                advanced_play       TEXT NOT NULL DEFAULT '',
                 is_builtin   INTEGER NOT NULL DEFAULT 0,
                 created_at   TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
@@ -627,6 +632,11 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
         ("refusal_style", "TEXT NOT NULL DEFAULT 'soft'"),
         ("address_user", "TEXT NOT NULL DEFAULT ''"),
         ("relationship_speed", "TEXT NOT NULL DEFAULT 'normal'"),
+        # 整页编辑的四个自由文本分区：默认空串，迁移后老一个字也不会多注入。
+        ("likes_landmines", "TEXT NOT NULL DEFAULT ''"),
+        ("memory_directive", "TEXT NOT NULL DEFAULT ''"),
+        ("dialogue_samples", "TEXT NOT NULL DEFAULT ''"),
+        ("advanced_play", "TEXT NOT NULL DEFAULT ''"),
     ):
         if col not in persona_cols:
             conn.execute(f"ALTER TABLE bot_personas ADD COLUMN {col} {ddl}")
@@ -2315,6 +2325,10 @@ def get_default_model(mode: Optional[str] = None, mask_key: bool = True) -> Opti
 # ── cKunBot 人格与会话 ──
 
 
+# 整页编辑的四个自由文本分区：读写、提示词注入、会话快照刷新都按这一份清单走。
+_PERSONA_TEXT_FIELDS = ("likes_landmines", "memory_directive", "dialogue_samples", "advanced_play")
+
+
 def _bot_persona_dict(row: sqlite3.Row) -> dict:
     result = dict(row)
     result["is_builtin"] = int(result.get("is_builtin") or 0)
@@ -2335,6 +2349,8 @@ def _bot_persona_dict(row: sqlite3.Row) -> dict:
     result.setdefault("refusal_style", "soft")
     result.setdefault("address_user", "")
     result.setdefault("relationship_speed", "normal")
+    for field in _PERSONA_TEXT_FIELDS:
+        result.setdefault(field, "")
     return result
 
 
@@ -2352,6 +2368,10 @@ def create_bot_persona(
     refusal_style: str = "soft",
     address_user: str = "",
     relationship_speed: str = "normal",
+    likes_landmines: str = "",
+    memory_directive: str = "",
+    dialogue_samples: str = "",
+    advanced_play: str = "",
 ) -> dict:
     persona_id = _new_id()
     now = _now()
@@ -2361,12 +2381,15 @@ def create_bot_persona(
             "INSERT INTO bot_personas "
             "(id, name, avatar, personality, background, greeting, model_id, "
             "reply_style, enable_thinking, expression_dna, reaction_style, "
-            "refusal_style, address_user, relationship_speed, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "refusal_style, address_user, relationship_speed, "
+            "likes_landmines, memory_directive, dialogue_samples, advanced_play, "
+            "created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (persona_id, name, avatar, personality, background, greeting, model_id,
              reply_style, int(bool(enable_thinking)),
              json.dumps(expression_dna or {}, ensure_ascii=False),
-             reaction_style, refusal_style, address_user, relationship_speed, now, now),
+             reaction_style, refusal_style, address_user, relationship_speed,
+             likes_landmines, memory_directive, dialogue_samples, advanced_play, now, now),
         )
         conn.commit()
     finally:
@@ -2399,7 +2422,8 @@ def get_bot_persona(persona_id: str) -> Optional[dict]:
 def update_bot_persona(persona_id: str, **fields) -> Optional[dict]:
     allowed = {"name", "avatar", "personality", "background", "greeting", "model_id",
                "reply_style", "enable_thinking", "expression_dna", "reaction_style",
-               "refusal_style", "address_user", "relationship_speed"}
+               "refusal_style", "address_user", "relationship_speed",
+               *_PERSONA_TEXT_FIELDS}
     data = {key: value for key, value in fields.items() if key in allowed}
     # expression_dna 对外是对象、对内是 JSON 文本：入口统一序列化，
     # 调用方（路由/PATCH 局部更新）不必关心存储形态。
@@ -2421,7 +2445,27 @@ def update_bot_persona(persona_id: str, **fields) -> Optional[dict]:
             return None
     finally:
         conn.close()
-    return get_bot_persona(persona_id)
+    persona = get_bot_persona(persona_id)
+    if persona:
+        revise_persona_snapshots(persona)
+    return persona
+
+
+def revise_persona_snapshots(persona: dict) -> None:
+    """把改过的人格重新写回它名下所有会话的快照。
+
+    快照在开会话时冻结，而生成读的就是这份快照：不回填的话「编辑人格」只对新建会话
+    生效，正在聊的那段会一直用旧的性格说话。删除人格不调这里 —— 历史要停在被删那一刻。
+    """
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "UPDATE bot_conversations SET persona_snapshot = ? WHERE persona_id = ?",
+            (_persona_snapshot_payload(persona), persona["id"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def copy_bot_persona(persona_id: str) -> Optional[dict]:
@@ -2443,6 +2487,7 @@ def copy_bot_persona(persona_id: str) -> Optional[dict]:
         refusal_style=persona.get("refusal_style") or "soft",
         address_user=persona.get("address_user") or "",
         relationship_speed=persona.get("relationship_speed") or "normal",
+        **{field: persona.get(field) or "" for field in _PERSONA_TEXT_FIELDS},
     )
 
 
