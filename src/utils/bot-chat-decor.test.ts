@@ -1,31 +1,47 @@
 import { describe, expect, it } from 'vitest'
 import {
+  avatarPlaceholderStyle,
   decorateMessages,
   dayDividerLabel,
-  identiconSvg,
   peerLabel,
   peerSeed,
+  placeholderInitial,
 } from './bot-chat-decor'
 
-describe('生成式匿名头像 identiconSvg', () => {
-  it('同一 seed 恒定产出同一 SVG（可辨识且稳定）', () => {
-    expect(identiconSvg('group-openid-A3F1')).toBe(identiconSvg('group-openid-A3F1'))
+describe('头像淡色首字占位（Phase 4 §4.1，取代马赛克）', () => {
+  it('同一 seed 恒定同色，不同 seed 色相不同', () => {
+    expect(avatarPlaceholderStyle('晚风')).toEqual(avatarPlaceholderStyle('晚风'))
+    expect(avatarPlaceholderStyle('晚风')).not.toEqual(avatarPlaceholderStyle('小刻'))
   })
 
-  it('不同 seed 产出不同 SVG（区分不同联系人）', () => {
-    expect(identiconSvg('user-7B22')).not.toBe(identiconSvg('user-1E99'))
+  it('低饱和高明度淡底 + 同色系深字：明暗主题都可读', () => {
+    const { background, color } = avatarPlaceholderStyle('晚风')
+    expect(background).toMatch(/^hsl\(\d+, 30%, 88%\)$/)
+    expect(color).toMatch(/^hsl\(\d+, 40%, 30%\)$/)
+    // 深字与底同色系（色相一致），只是明度拉开
+    expect(background.replace(/^hsl\((\d+),.*$/, '$1')).toBe(color.replace(/^hsl\((\d+),.*$/, '$1'))
   })
 
-  it('缺失 seed 也返回合法 SVG，不抛错不渲染破图', () => {
-    const svg = identiconSvg('')
-    expect(svg.startsWith('<svg')).toBe(true)
-    expect(svg.endsWith('</svg>')).toBe(true)
+  it('空 seed 回退固定种子，不抛错', () => {
+    expect(avatarPlaceholderStyle('')).toEqual(avatarPlaceholderStyle('  '))
+    expect(avatarPlaceholderStyle('').background).toBeTruthy()
   })
 
-  it('产出的是纯 SVG 标记，不含外部真实头像数据', () => {
-    const svg = identiconSvg('peer-x')
-    expect(svg).not.toContain('http')
-    expect(svg).toContain('</svg>')
+  it('首字优先取名字，名字为空取 seed，全空给空串', () => {
+    expect(placeholderInitial('晚风')).toBe('晚')
+    expect(placeholderInitial('', 'a3f1')).toBe('a')
+    expect(placeholderInitial('', '')).toBe('')
+    expect(placeholderInitial(null, null)).toBe('')
+  })
+
+  it('emoji 名不会被拆成半个代理对', () => {
+    expect(placeholderInitial('🌙晚风')).toBe('🌙')
+  })
+
+  it('QQ 匿名对端用代号首字：群/私 + 每 seed 异色区分', () => {
+    expect(placeholderInitial('群聊 · A3F1')).toBe('群')
+    expect(placeholderInitial('私聊 · 7B22')).toBe('私')
+    expect(avatarPlaceholderStyle('G-openid-AAA')).not.toEqual(avatarPlaceholderStyle('U-openid-BBB'))
   })
 })
 

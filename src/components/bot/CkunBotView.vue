@@ -30,7 +30,7 @@
           <div class="conversation-list">
             <div v-for="c in store.qqConversations" :key="c.id" class="conversation" :class="{ active: c.id === store.qqActiveId }">
               <button class="conversation-main" @click="selectQq(c.id)">
-                <span class="qq-title"><i class="conv-peer-avatar"><GeneratedAvatar :seed="peerSeed(c.external_id)" /></i><span class="qq-title-text">{{ c.title }}</span></span>
+                <span class="qq-title"><i class="conv-peer-avatar"><GeneratedAvatar :seed="peerSeed(c.external_id)" :label="peerLabel(c.external_id)" /></i><span class="qq-title-text">{{ c.title }}</span></span>
                 <small>{{ peerLabel(c.external_id) }} · {{ qqPersonaLabel(c) }} · {{ formatLocalDateTime(c.updated_at) }}</small>
               </button>
             </div>
@@ -100,7 +100,7 @@
               <div class="bot-message" :class="[d.item.role, { cont: d.cont }]">
                 <span class="msg-avatar" aria-hidden="true">
                   <PersonaAvatar v-if="d.item.role === 'assistant'" :avatar="qqActivePersona?.avatar" />
-                  <GeneratedAvatar v-else :seed="peerSeed(store.qqActiveConversation?.external_id)" />
+                  <GeneratedAvatar v-else :seed="peerSeed(store.qqActiveConversation?.external_id)" :label="peerLabel(store.qqActiveConversation?.external_id)" />
                 </span>
                 <div class="qq-message-body">
                   <span class="qq-meta">{{ qqRoleLabel(d.item) }} · {{ formatLocalDateTime(d.item.created_at) }}</span>
@@ -419,7 +419,7 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 .conversation-main span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .conversation-main small { color: var(--text-tertiary); font-size: 0.7692rem; }
 .qq-title { display: flex; align-items: center; gap: var(--spacing-6); min-width: 0; }
 .qq-title-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 侧栏会话的对方头像：openid 派生的匿名 identicon，圆裁、不暴露真实资料。 */
+/* 侧栏会话的对方头像：openid 派生的淡色首字占位（Phase 4 去马赛克），圆裁、不暴露真实资料。 */
 .conv-peer-avatar { flex: 0 0 auto; width: 26px; height: 26px; border-radius: 50%; overflow: hidden; background: color-mix(in srgb, var(--accent-primary) 14%, transparent); }
 .sidebar-empty, .sidebar-error { margin: var(--spacing-4) 0 0; padding: 0 var(--spacing-6); color: var(--text-tertiary); font-size: 0.8462rem; line-height: 1.6; }
 .sidebar-error { color: var(--danger-text); }

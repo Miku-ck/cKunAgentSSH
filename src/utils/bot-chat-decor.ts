@@ -16,63 +16,30 @@ function hashStr(s: string): number {
   return h >>> 0
 }
 
-/** mulberry32：从单一数值种子派生可复现的伪随机序列。 */
-function prng(seed: number): () => number {
-  let a = seed | 0
-  return () => {
-    a = (a + 0x6d2b79f5) | 0
-    let t = Math.imul(a ^ (a >>> 15), 1 | a)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+/**
+ * 淡色首字占位（Phase 4 §4.1，取代 identicon 马赛克）：色相由 seed 确定性派生 ——
+ * 同一个人恒同色，不同人不同色。低饱和（s≈30%）高明度（l≈88%）淡底在明/暗主题
+ * 下都不刺眼，配同色系深字保证可读；上传图永远优先，这里只兜底无图与匿名对端。
+ */
+export function avatarPlaceholderStyle(seed: string): { background: string; color: string } {
+  const effective = (seed && seed.trim()) || '__placeholder__'
+  const hue = hashStr(effective) % 360
+  return {
+    background: `hsl(${hue}, 30%, 88%)`,
+    color: `hsl(${hue}, 40%, 30%)`,
   }
 }
 
-const GRID = 5
-
 /**
- * 由 seed 确定性生成一枚匿名 identicon（对称色块网格）。
- * - 同 seed → 同图（联系人稳定可辨识）
- * - 异 seed → 异图（不同联系人区分开）
- * - 空/脏 seed → 仍返回合法 SVG（用固定回退种子，不渲染破图）
- * 产出为内联 SVG 标记：不带 xmlns（HTML 内联无需，且避免引入外链 http 字样），
- * 不含任何真实用户资料。
+ * 占位首字：优先取名字首字（人格名/对方代号），其次 seed 首字符；
+ * 全空给空串 —— 只剩一枚淡色圆底，仍是合法的占位形态。
+ * 用 Array.from 取首「字」，emoji 名不会被拆成半个代理对。
  */
-export function identiconSvg(seed: string): string {
-  const effective = (seed && seed.trim()) || '__fallback__'
-  const r = prng(hashStr(effective))
-  const hue = Math.floor(r() * 360)
-  const hue2 = (hue + 40 + Math.floor(r() * 80)) % 360
-  const gid = `ic${hashStr(effective).toString(36)}`
-  const half = Math.ceil(GRID / 2)
-  const cells: Array<[number, number]> = []
-  for (let y = 0; y < GRID; y++) {
-    for (let x = 0; x < half; x++) {
-      if (r() > 0.5) {
-        cells.push([x, y])
-        const mirror = GRID - 1 - x
-        if (mirror !== x) cells.push([mirror, y])
-      }
-    }
-  }
-  const size = 100 / GRID
-  let rects = ''
-  for (const [x, y] of cells) {
-    rects += `<rect x="${(x * size).toFixed(2)}" y="${(y * size).toFixed(2)}" width="${size.toFixed(2)}" height="${size.toFixed(2)}"/>`
-  }
-  // 网格全空（极端随机）时兜底放一枚中心方块，保证头像永不为空白。
-  if (!rects) {
-    rects = `<rect x="${((GRID / 2 - 0.5) * size).toFixed(2)}" y="${((GRID / 2 - 0.5) * size).toFixed(2)}" width="${size.toFixed(2)}" height="${size.toFixed(2)}"/>`
-  }
-  return (
-    `<svg viewBox="0 0 100 100" role="img" aria-label="匿名头像">` +
-    `<defs><linearGradient id="${gid}" x1="0" y1="0" x2="1" y2="1">` +
-    `<stop offset="0" stop-color="hsl(${hue},62%,52%)"/>` +
-    `<stop offset="1" stop-color="hsl(${hue2},66%,42%)"/>` +
-    `</linearGradient></defs>` +
-    `<rect width="100" height="100" fill="url(#${gid})"/>` +
-    `<g fill="rgba(255,255,255,0.92)">${rects}</g>` +
-    `</svg>`
-  )
+export function placeholderInitial(label?: string | null, seed?: string | null): string {
+  const name = (label || '').trim()
+  if (name) return Array.from(name)[0] || ''
+  const s = (seed || '').trim()
+  return s ? Array.from(s)[0] || '' : ''
 }
 
 /**
