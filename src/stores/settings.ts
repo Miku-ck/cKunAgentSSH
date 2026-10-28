@@ -34,6 +34,7 @@ export type SettingCategory =
   | 'agent'
   | 'memory'
   | 'ops'
+  | 'bot'
 
 interface AppSettings {
   chat: {

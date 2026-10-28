@@ -57,10 +57,11 @@ import SkillsPanel from '@/components/settings/panels/SkillsPanel.vue'
 import AgentPanel from '@/components/settings/panels/AgentPanel.vue'
 import MemoryPanel from '@/components/settings/panels/MemoryPanel.vue'
 import OpsPanel from '@/components/settings/panels/OpsPanel.vue'
+import BotPanel from '@/components/settings/panels/BotPanel.vue'
 
 // 导航图标（自绘 SVG，渲染函数组件 —— 见 settings-nav-icons.ts 的说明）
 import {
-  IconModels, IconChat, IconAppearance, IconAgent, IconSkills, IconMemory, IconOps,
+  IconModels, IconChat, IconAppearance, IconAgent, IconSkills, IconMemory, IconOps, IconBot,
 } from './settings-nav-icons'
 
 const visible = ref(false)
@@ -86,6 +87,7 @@ const PANELS: Record<SettingCategory, { label: string; icon: Component; panel: C
   agent:      { label: 'Agent', icon: IconAgent,      panel: markRaw(AgentPanel) },
   memory:     { label: '记忆',  icon: IconMemory,     panel: markRaw(MemoryPanel) },
   ops:        { label: '运维',  icon: IconOps,        panel: markRaw(OpsPanel) },
+  bot:        { label: 'Bot 管理', icon: IconBot,     panel: markRaw(BotPanel) },
 }
 
 const categories = (Object.keys(PANELS) as SettingCategory[])
