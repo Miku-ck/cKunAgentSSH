@@ -142,8 +142,9 @@ export const useBotStore = defineStore('bot', () => {
     if (activeConversationId.value === id) await selectConversation(filteredConversations.value[0]?.id || '')
   }
 
-  async function sendMessage(content: string) {
+  async function sendMessage(content: string, images?: string[]) {
     const text = content.trim()
+    const imgs = (images || []).filter(Boolean)
     const conversationId = activeConversationId.value
     if (channel.value !== 'local' || !text || !conversationId || streaming.value) return
     streaming.value = true
@@ -152,7 +153,7 @@ export const useBotStore = defineStore('bot', () => {
     streamText.value = ''
     streamReasoning.value = ''
     messages.value.push({
-      id: `local-${Date.now()}`, conversation_id: conversationId, role: 'user', content: text, created_at: new Date().toISOString(),
+      id: `local-${Date.now()}`, conversation_id: conversationId, role: 'user', content: text, images: imgs, created_at: new Date().toISOString(),
     })
     abortController = new AbortController()
     // 本轮自己的 controller 必须独持一份引用：finally 里若直接写 `abortController = null`，
@@ -161,6 +162,7 @@ export const useBotStore = defineStore('bot', () => {
     try {
       const saved = await streamBotChat(conversationId, text, {
         signal: controller.signal,
+        images: imgs,
         onContent: chunk => { if (activeConversationId.value === conversationId) streamText.value += chunk },
         onReasoning: chunk => { if (activeConversationId.value === conversationId) streamReasoning.value += chunk },
       })

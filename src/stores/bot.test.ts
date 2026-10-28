@@ -92,4 +92,19 @@ describe('cKunBot store', () => {
     expect(store.error).toContain('模型暂时不可用')
     expect(store.streaming).toBe(false)
   })
+
+  it('sendMessage 透传 images 并乐观带图追加用户消息', async () => {
+    const imgs = ['data:image/webp;base64,AAAA']
+    vi.mocked(streamBotChat).mockImplementation(async (_id, _text, options) => {
+      expect(options.images).toEqual(imgs)
+      return { id: 'm2', conversation_id: 'c1', role: 'assistant', content: '看到了', created_at: '' }
+    })
+    const store = useBotStore()
+    store.personas = [persona]
+    store.conversations = [conversation]
+    store.activeConversationId = 'c1'
+    await store.sendMessage('这是什么', imgs)
+    expect(store.messages[0].role).toBe('user')
+    expect(store.messages[0].images).toEqual(imgs)
+  })
 })
