@@ -40,7 +40,7 @@ class FakeChatService:
     def __init__(self):
         self.calls = []
 
-    async def complete_reply(self, conversation_id, content, external_msg_id=None):
+    async def complete_reply(self, conversation_id, content, external_msg_id=None, *, channel="qq"):
         self.calls.append((conversation_id, content, external_msg_id))
         db.add_bot_message(conversation_id, "user", content, external_msg_id)
         reply = f"回复：{content}"
@@ -129,7 +129,7 @@ async def test_generation_timeout_sends_fallback_and_marks_answered(qq_db, monke
     from bot import qq_channel
 
     class SlowService:
-        async def complete_reply(self, conversation_id, content, external_msg_id=None):
+        async def complete_reply(self, conversation_id, content, external_msg_id=None, *, channel="qq"):
             db.add_bot_message(conversation_id, "user", content, external_msg_id)
             await asyncio.sleep(1)
 
