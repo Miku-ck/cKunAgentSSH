@@ -196,6 +196,15 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).toContain('<span v-else class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.userAvatar" /></span>')
   })
 
+  it('本地会话删除直接执行，不二次确认', () => {
+    const view = read('src/components/bot/CkunBotView.vue')
+    const fn = view.match(/async function removeConversation[\s\S]*?\n}/)?.[0] || ''
+    expect(fn).toContain('store.deleteConversation(id)')
+    expect(fn).not.toContain('confirm(')
+    // 人格删除仍留确认：它连带动一批会话与记录，不在这次的口径里
+    expect(view).toContain('删除人格「')
+  })
+
   it('QQ 记录与本地会话同向：人格在左、对方在右，切 tab 不换边', () => {
     const view = read('src/components/bot/CkunBotView.vue')
     expect(view).toMatch(/\.chat-main\.qq \.bot-message\.assistant \{ align-self: flex-start; \}/)

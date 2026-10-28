@@ -293,7 +293,6 @@ async function retry() {
   if (text) await store.sendMessage(text)
 }
 async function removeConversation(id: string) {
-  if (!await confirm({ message: '删除这段陪聊记录？删除后无法恢复。', danger: true })) return
   try { await store.deleteConversation(id) } catch (e) { toast.error(toFriendlyMessage(e, '删除失败')) }
 }
 watch(() => [store.messages.length, store.streamText], async () => {
