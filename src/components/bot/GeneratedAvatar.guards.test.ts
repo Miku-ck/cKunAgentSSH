@@ -6,13 +6,9 @@ const root = resolve(__dirname, '../../..')
 const read = (path: string) => readFileSync(resolve(root, path), 'utf8')
 
 describe('QQ 对端头像 · 去马赛克（Phase 4 §4.1）', () => {
-  it('GeneratedAvatar 不含 identicon，渲染淡色首字占位', () => {
-    const comp = read('src/components/bot/GeneratedAvatar.vue')
-    // 注释里的「取代 identicon 马赛克」不算 —— 钉的是代码引用：不许再 import/渲染 SVG 拼块
-    expect(comp).not.toContain('identiconSvg')
-    expect(comp).not.toContain('v-html')
-    expect(comp).toContain('avatarPlaceholderStyle')
-    expect(comp).toContain('placeholderInitial')
+  it('GeneratedAvatar 已随调用点清零删除（占位逻辑只活在 PersonaAvatar）', () => {
+    expect(() => read('src/components/bot/GeneratedAvatar.vue')).toThrow()
+    expect(read('src/components/bot/CkunBotView.vue')).not.toContain('GeneratedAvatar')
   })
 
   it('bot-chat-decor 不再导出 identiconSvg，prng/GRID 一并退役', () => {
@@ -32,13 +28,11 @@ describe('QQ 对端头像 · 去马赛克（Phase 4 §4.1）', () => {
     expect(persona).not.toContain('v-html')
   })
 
-  it('QQ 调用点都带匿名代号 label，占位首字才有意义', () => {
+  it('QQ 调用点由 PersonaAvatar 两态承接，匿名代号 label 仍在', () => {
     const view = read('src/components/bot/CkunBotView.vue')
-    const tags = view.match(/<GeneratedAvatar[^>]*>/g) || []
+    const tags = view.match(/<PersonaAvatar[^>]*>/g) || []
     expect(tags.length).toBeGreaterThan(0)
-    for (const tag of tags) {
-      expect(tag).toContain(':label=')
-      expect(tag).toContain('peerSeed(')
-    }
+    expect(view).toContain('peerSeed(')
+    expect(view).toContain('peerLabel(')
   })
 })

@@ -20,6 +20,8 @@ export const useBotStore = defineStore('bot', () => {
   const qqMessages = ref<BotMessage[]>([])
   const qqActiveId = ref('')
   const qqError = ref('')
+  /** 「你的头像」（Phase 4）：Bot 管理面板设置，本地会话用户气泡使用；QQ 里你不发言不吃它。 */
+  const userAvatar = ref('')
   let abortController: AbortController | null = null
   let qqRefreshing = false
 
@@ -74,6 +76,20 @@ export const useBotStore = defineStore('bot', () => {
     }
   }
 
+  /** QQ 会话本地显示覆盖（Phase 4）：PATCH 成功后原位替换，列表不重拉——
+   *  服务端保证 display 编辑不动 updated_at，重拉反而会把滚动位置弄丢。 */
+  async function updateQqDisplay(id: string, payload: { display_name?: string; display_avatar?: string }) {
+    const updated = await botApi.updateConversationDisplay(id, payload)
+    qqConversations.value = qqConversations.value.map((c) => (c.id === id ? updated : c))
+    qqError.value = ''
+  }
+
+  /** 「你的头像」读取：失败回落空占位，不阻塞初始化。 */
+  async function loadUserAvatar() {
+    try { userAvatar.value = (await botApi.getUserAvatar()).avatar || '' }
+    catch { userAvatar.value = '' }
+  }
+
   async function selectConversation(id: string) {
     stopGenerating()
     activeConversationId.value = id
@@ -107,6 +123,7 @@ export const useBotStore = defineStore('bot', () => {
         botApi.listPersonas(),
         botApi.listConversations(),
         refreshRelations(),
+        loadUserAvatar(),
       ])
       personas.value = personaRows
       conversations.value = conversationRows
@@ -198,8 +215,9 @@ export const useBotStore = defineStore('bot', () => {
     relations, activeRelation,
     streamText, streamReasoning, streaming, loading, error, lastFailedText,
     channel, isQq, qqConversations, qqMessages, qqActiveId, qqError, qqActiveConversation,
+    userAvatar,
     init, selectPersona, selectConversation, createConversation, deleteConversation,
     sendMessage, stopGenerating, selectChannel, selectQqConversation, refreshQq,
-    refreshRelations,
+    refreshRelations, updateQqDisplay, loadUserAvatar,
   }
 })

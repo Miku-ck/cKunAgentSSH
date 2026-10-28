@@ -10,6 +10,9 @@ vi.mock('@/api/bot', () => ({
     getMessages: vi.fn(),
     deleteConversation: vi.fn(),
     getRelations: vi.fn(),
+    updateConversationDisplay: vi.fn(),
+    getUserAvatar: vi.fn(),
+    setUserAvatar: vi.fn(),
   },
   streamBotChat: vi.fn(),
 }))
@@ -38,6 +41,7 @@ describe('cKunBot store', () => {
     vi.mocked(botApi.listPersonas).mockResolvedValue([persona])
     vi.mocked(botApi.listConversations).mockResolvedValue([conversation])
     vi.mocked(botApi.getMessages).mockResolvedValue([])
+    vi.mocked(botApi.getUserAvatar).mockResolvedValue({ avatar: '' })
   })
 
   it('初始化后选中当前人格会话并读取历史', async () => {
@@ -106,5 +110,26 @@ describe('cKunBot store', () => {
     await store.sendMessage('这是什么', imgs)
     expect(store.messages[0].role).toBe('user')
     expect(store.messages[0].images).toEqual(imgs)
+  })
+
+  it('updateQqDisplay 走 PATCH 并原位替换 QQ 会话', async () => {
+    const qq = { ...conversation, id: 'q1', channel: 'qq' as const }
+    vi.mocked(botApi.updateConversationDisplay).mockResolvedValue({ ...qq, display_name: '夜宵群' })
+    const store = useBotStore()
+    store.qqConversations = [qq]
+    store.qqActiveId = 'q1'
+    await store.updateQqDisplay('q1', { display_name: '夜宵群' })
+    expect(botApi.updateConversationDisplay).toHaveBeenCalledWith('q1', { display_name: '夜宵群' })
+    expect(store.qqConversations[0].display_name).toBe('夜宵群')
+  })
+
+  it('init 读取「你的头像」；读取失败回落空占位不阻塞初始化', async () => {
+    vi.mocked(botApi.getUserAvatar).mockRejectedValueOnce(new Error('boom'))
+    const store = useBotStore()
+    await store.init()
+    expect(store.userAvatar).toBe('')
+    vi.mocked(botApi.getUserAvatar).mockResolvedValueOnce({ avatar: 'data:image/webp;base64,UHJ' })
+    await store.loadUserAvatar()
+    expect(store.userAvatar).toBe('data:image/webp;base64,UHJ')
   })
 })

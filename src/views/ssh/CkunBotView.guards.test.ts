@@ -121,4 +121,25 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).not.toContain('persona_snapshot')
     expect(view).toContain('personaName(conversation.persona)')
   })
+
+  it('QQ 会话显示覆盖：优先 display_name/display_avatar，空则回落默认', () => {
+    const view = read('src/components/bot/CkunBotView.vue')
+    expect(view).toContain('c.display_name || c.title')
+    expect(view).toContain('c.display_avatar')
+    expect(view).toContain('updateQqDisplay')
+    expect(view).toContain('自定义显示')
+    // 覆盖只挂在 qq 侧本地会话不吃：编辑抽屉必须绑在 QQ 活动会话上
+    expect(view).toMatch(/qq-display-editor[\s\S]*AvatarPicker/)
+    expect(view).toMatch(/v-if="qqDisplayEditorOpen && store\.qqActiveConversation" class="qq-display-editor"/)
+    const store = read('src/stores/bot.ts')
+    expect(store).toContain('updateConversationDisplay')
+  })
+
+  it('本地会话用户气泡有头像位：你的头像图 > 淡色「你」占位', () => {
+    const view = read('src/components/bot/CkunBotView.vue')
+    expect(view).toContain('store.userAvatar')
+    expect(view).toMatch(/\.bot-message\.user \.msg-avatar \{[^}]*order: 2/)
+    // QQ 是只读记录，用户侧不发言 → 头像位只出现在 local 分支（v-else 紧邻 assistant 头像）
+    expect(view).toContain('<span v-else class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.userAvatar" seed="ckun-user" label="你" /></span>')
+  })
 })
