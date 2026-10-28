@@ -10,8 +10,10 @@ const src = pageRaw.replace(/\r\n/g, '\n')
 const card = cardRaw.replace(/\r\n/g, '\n')
 
 describe('连接页结构', () => {
-  it('只留标题与分组标题，不挂解释性副文案', () => {
-    expect(src).toContain('<h2>连接</h2>')
+  it('页内不再重复标签页标题，也不挂解释性副文案', () => {
+    // 「连接」已经是顶部标签页的名字，页内再摆一个大标题只是白占一行
+    expect(src).not.toContain('<h2>连接</h2>')
+    expect(src).not.toContain('section-heading')
     expect(src).not.toContain('渠道决定机器人出现在哪里')
     expect(src).not.toContain('机器人随应用启动')
   })
