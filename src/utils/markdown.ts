@@ -3,8 +3,34 @@
  * 所有 v-html 渲染 AI/用户内容的地方都应使用此模块，防止 XSS。
  */
 import { marked } from 'marked'
-import hljs from 'highlight.js'
+import hljs from 'highlight.js/lib/core'
+// 启动性能：只 core + 精选语言，绝不从 highlight.js 根入口全量引入（~190 语言实测
+// 把首屏 useMarkdownDelegation chunk 撑到 1.65MB）。精选集覆盖运维终端高频场景
+// （脚本/配置/IaC/查询/主流语言）；未注册语言仍走 highlightAuto，只是扫描集更小更快。
+import bash from 'highlight.js/lib/languages/bash'
+import shell from 'highlight.js/lib/languages/shell'
+import python from 'highlight.js/lib/languages/python'
+import json from 'highlight.js/lib/languages/json'
+import yaml from 'highlight.js/lib/languages/yaml'
+import ini from 'highlight.js/lib/languages/ini'
+import dockerfile from 'highlight.js/lib/languages/dockerfile'
+import nginx from 'highlight.js/lib/languages/nginx'
+import go from 'highlight.js/lib/languages/go'
+import sql from 'highlight.js/lib/languages/sql'
+import javascript from 'highlight.js/lib/languages/javascript'
+import typescript from 'highlight.js/lib/languages/typescript'
+import diff from 'highlight.js/lib/languages/diff'
+import plaintext from 'highlight.js/lib/languages/plaintext'
 import DOMPurify from 'dompurify'
+
+for (const [id, def] of [
+  ['bash', bash], ['shell', shell], ['python', python], ['json', json],
+  ['yaml', yaml], ['ini', ini], ['dockerfile', dockerfile], ['nginx', nginx],
+  ['go', go], ['sql', sql], ['javascript', javascript], ['typescript', typescript],
+  ['diff', diff], ['plaintext', plaintext],
+] as const) {
+  hljs.registerLanguage(id, def)
+}
 
 marked.setOptions({
   breaks: true,
