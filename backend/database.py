@@ -2366,6 +2366,7 @@ def add_bot_message(
     role: str,
     content: str,
     external_msg_id: Optional[str] = None,
+    reasoning: Optional[str] = None,
 ) -> dict:
     message_id = _new_id()
     now = _now()
@@ -2373,9 +2374,9 @@ def add_bot_message(
     try:
         cur = conn.execute(
             "INSERT OR IGNORE INTO bot_messages "
-            "(id, conversation_id, role, content, external_msg_id, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (message_id, conversation_id, role, content, external_msg_id, now),
+            "(id, conversation_id, role, content, external_msg_id, reasoning, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (message_id, conversation_id, role, content, external_msg_id, reasoning, now),
         )
         if cur.rowcount == 0:
             row = conn.execute(
@@ -2396,6 +2397,7 @@ def add_bot_message(
             "role": role,
             "content": content,
             "external_msg_id": external_msg_id,
+            "reasoning": reasoning,
             "answered_at": None,
             "created_at": now,
         }

@@ -54,11 +54,14 @@ class BotChatService:
         conversation_id: str,
         content: str,
         external_msg_id: str | None = None,
-    ) -> AsyncGenerator[str, None]:
+        *,
+        channel: str = "local",
+    ) -> AsyncGenerator[tuple[str, str], None]:
         conversation = await asyncio.to_thread(db.get_bot_conversation, conversation_id)
         if not conversation:
             raise ValueError("会话不存在")
-        model = await asyncio.to_thread(self._model_for_persona, conversation["persona"])
+        persona = conversation["persona"]
+        model = await asyncio.to_thread(self._model_for_persona, persona)
         # 先落库再读历史：QQ 重投同一事件时 INSERT OR IGNORE 不会重复入库，
         # 历史里这条用户消息恰好出现一次；旧顺序是「读历史 → 再 append 原文」，
         # 重试时会把同一条喂给模型两遍。
@@ -66,23 +69,31 @@ class BotChatService:
             db.add_bot_message, conversation_id, "user", content, external_msg_id
         )
         history = await asyncio.to_thread(db.get_recent_bot_messages, conversation_id, 40)
-        messages = [{"role": "system", "content": self._system_prompt(conversation["persona"])}]
+        messages = [{"role": "system", "content": self._system_prompt(persona, channel)}]
         messages.extend({"role": item["role"], "content": item["content"]} for item in history)
 
         from llm_adapter import chat_stream
 
+        # thinking 只看 persona.enable_thinking（不 gate 模型 supports_*，否则手动
+        # 加的模型永远开不了思考）；只有模型真的回 reasoning chunk 时才自然展示。
+        enable_thinking = bool(persona.get("enable_thinking"))
+        reasoning_budget = model.get("reasoning_tokens") if enable_thinking else None
+        # 简洁风格把输出上限压到 512；其余沿用模型 max_output_tokens（长度主要由提示词控制）。
+        style_cap = 512 if persona.get("reply_style") == "concise" else model.get("max_output_tokens")
         # 输出预算按上下文窗口封顶：max_output_tokens 若被选成接近窗口（如 262144），
         # 原样下发会让 vLLM 判定 prompt 挤不进剩余空间 → 400。陪聊与 QQ 共用此路径，
         # 与 routes/agent 用同一个 safe_max_tokens 口径。
         max_tokens = safe_max_tokens(
             model.get("max_tokens"),
             "\n".join(str(item["content"]) for item in messages),
-            max_output_tokens=model.get("max_output_tokens"),
+            max_output_tokens=style_cap,
+            reasoning_tokens=reasoning_budget,
         )
         if max_tokens is None:
-            max_tokens = model.get("max_output_tokens")
+            max_tokens = style_cap
 
         parts: list[str] = []
+        reasoning_parts: list[str] = []
         async for chunk in chat_stream(
             base_url=model["base_url"],
             api_key=model.get("api_key") or "EMPTY",
@@ -91,23 +102,37 @@ class BotChatService:
             temperature=model.get("temperature", 0.7),
             max_tokens=max_tokens,
             top_p=model.get("top_p", 0.9),
-            enable_thinking=False,
+            enable_thinking=enable_thinking,
             tools=None,
+            reasoning_max_tokens=reasoning_budget,
         ):
+            # reasoning 只在本地面下发：QQ 被动回复是单条纯文本，无思考展示位。
+            if chunk.reasoning and channel == "local":
+                reasoning_parts.append(chunk.reasoning)
+                yield "reasoning", chunk.reasoning
             if chunk.content:
                 parts.append(chunk.content)
-                yield chunk.content
+                yield "content", chunk.content
         reply = "".join(parts).strip()
         if not reply:
             raise RuntimeError("模型未返回可显示的内容")
-        await asyncio.to_thread(db.add_bot_message, conversation_id, "assistant", reply)
+        await asyncio.to_thread(
+            db.add_bot_message, conversation_id, "assistant", reply,
+            None, "".join(reasoning_parts) or None,
+        )
 
     async def complete_reply(
         self,
         conversation_id: str,
         content: str,
         external_msg_id: str | None = None,
+        *,
+        channel: str = "qq",
     ) -> str:
-        return "".join([
-            part async for part in self.stream_reply(conversation_id, content, external_msg_id)
-        ])
+        out: list[str] = []
+        async for kind, text in self.stream_reply(
+            conversation_id, content, external_msg_id, channel=channel
+        ):
+            if kind == "content":
+                out.append(text)
+        return "".join(out).strip()

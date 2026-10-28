@@ -47,7 +47,7 @@ async def test_stream_reply_uses_persona_history_and_saves_messages(bot_db, monk
     service = BotChatService()
     chunks = [chunk async for chunk in service.stream_reply(bot_db["id"], "我今天有点累")]
 
-    assert chunks == ["记得你叫", "小林"]
+    assert chunks == [("content", "记得你叫"), ("content", "小林")]
     assert captured["model"] == "chat-v1"
     assert captured["api_key"] == "secret"
     assert captured["temperature"] == 0.8
