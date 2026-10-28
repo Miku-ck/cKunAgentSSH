@@ -94,11 +94,17 @@ class QQEventProcessor:
             # 平台重投时必须还能再答一次，否则用户永远等不到回复。
             if stored and stored.get("answered_at"):
                 return
+            # 首回合判定必须在 complete_reply 之前：complete_reply 会写入本轮用户/助手
+            # 消息，之后再查历史就永远非空了。QQ 被动回复不可编辑、不可流式，
+            # 只能把开场白前置拼进第一条回复。
+            first_turn = not await asyncio.to_thread(
+                db.get_recent_bot_messages, conversation["id"], 1
+            )
             fallback = False
             try:
                 reply = await asyncio.wait_for(
                     self.chat_service.complete_reply(
-                        conversation["id"], content, external_msg_id=event_id
+                        conversation["id"], content, external_msg_id=event_id, channel="qq"
                     ),
                     timeout=QQ_REPLY_TIMEOUT,
                 )
@@ -114,6 +120,10 @@ class QQEventProcessor:
                 await asyncio.to_thread(
                     db.add_bot_message, conversation["id"], "assistant", reply
                 )
+            else:
+                greeting = (conversation.get("persona") or {}).get("greeting") or ""
+                if first_turn and greeting:
+                    reply = f"{greeting}\n\n{reply}"
             await self._send_reply(message, conversation["id"], event_id, reply)
 
     async def _send_reply(
