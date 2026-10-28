@@ -158,3 +158,17 @@ async def test_retry_after_failure_feeds_user_message_once(bot_db, monkeypatch):
     await BotChatService().complete_reply(bot_db["id"], "在吗", external_msg_id="event-1")
 
     assert [m["content"] for m in captured["messages"][1:]] == ["在吗"]
+
+
+def test_system_prompt_style_and_channel():
+    from bot.chat_service import BotChatService
+    svc = BotChatService()
+    base = {"name": "小暖", "personality": "温和", "background": "b", "reply_style": "concise"}
+    concise = svc._system_prompt(base, "local")
+    assert "一两句话" in concise and "Markdown 排版" in concise
+    longp = svc._system_prompt({**base, "reply_style": "long"}, "local")
+    assert "分点" in longp
+    qq = svc._system_prompt(base, "qq")
+    assert "禁止表格" in qq and "Markdown 排版" not in qq
+    # 向后兼容：不传 channel 默认 local
+    assert svc._system_prompt(base) == concise

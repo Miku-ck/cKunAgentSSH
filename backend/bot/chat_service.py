@@ -18,15 +18,35 @@ class BotChatService:
             raise ValueError("尚未配置可用模型，请先在设置中添加模型")
         return model
 
-    def _system_prompt(self, persona: dict) -> str:
+    # 回复长度与语气风格指令：按 persona.reply_style 选一条，moderate 为默认。
+    # 与「可控长文/人性化简洁回复」直接对应——长/中/短三档可控。
+    _STYLE_DIRECTIVE = {
+        "concise": "回复风格：一两句话、口语化、点到为止，别铺陈。",
+        "moderate": "回复风格：以简洁自然为主，确有内容再展开。",
+        "long": "回复风格：可分点、有条理地展开细节。",
+    }
+
+    def _system_prompt(self, persona: dict, channel: str = "local") -> str:
         sections = [f"你叫{persona['name']}，是用户的个人机器人伙伴。"]
         if persona.get("personality"):
             sections.append(f"性格与说话方式：{persona['personality']}")
         if persona.get("background"):
             sections.append(f"背景设定：{persona['background']}")
+        sections.append(
+            self._STYLE_DIRECTIVE.get(
+                persona.get("reply_style") or "moderate",
+                self._STYLE_DIRECTIVE["moderate"],
+            )
+        )
+        # 排版规则按渠道分：本地会话走 Markdown 渲染，QQ 被动回复是纯文本，
+        # **、#、反引号会被原样显示成符号，故禁止 Markdown 标记与表格/链接/代码块。
+        if channel == "qq":
+            sections.append(
+                "排版规则：只用纯文本与少量表情；禁止表格、链接、代码块和 # 等 Markdown 标记（会被原样显示成符号）。"
+            )
+        else:
+            sections.append("排版规则：可用 Markdown 排版与适量表情。")
         sections.append("保持以上人格，进行自然、真诚的文字陪聊。不要执行命令或调用工具，不要声称自己是人类。")
-        # QQ 是纯文本通道，**、#、反引号会被原样显示成符号
-        sections.append("只输出纯文本，不要使用 Markdown 标记（如 **、#、反引号）。")
         return "\n\n".join(sections)
 
     async def stream_reply(
