@@ -6,7 +6,7 @@
  * chunk 达 1.65MB），而它经 HomeWorkspace→(MessageContentRenderer/ThinkingBlock)→
  * MarkdownStream→markdown.ts 挂在首屏静态图上，dev 现编译与 prod 打包都被拖累。
  * 钉：只能用 highlight.js/lib/core + 精选语言 registerLanguage，行为（代码块高亮
- * + hljs-* 类 + 无语言标注时 highlightAuto 回退）不变。
+ * + hljs-* 类 + ①已注册精确高亮 / ②标注但未注册按 plaintext / ③无标注 highlightAuto）不变。
  */
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -21,6 +21,10 @@ describe('markdown.ts highlight.js 引入口径', () => {
   it('禁止全量引入 highlight.js（from/import()/require 三形态一网打尽，首屏包体红线）', () => {
     // 引号直接紧跟 `highlight.js` 即全量根入口；core/languages 子路径带 `/` 不会命中
     expect(src).not.toMatch(/['"]highlight\.js['"]/)
+    // 白名单：除 /lib/core、/lib/languages/*、/styles/* 外的任何 highlight.js 入口（如
+    // /lib/common 含 36 语言、/lib/index 全量）一律禁止——封死“保留逐个导入再加一句
+    // /lib/common”的混合回归（那种情况语言计数仍 ≤30，靠下界偷不进）
+    expect(src).not.toMatch(/['"]highlight\.js\/(?!lib\/(?:core|languages\/)|styles\/)[^'"]*['"]/)
   })
 
   it('必须走 highlight.js/lib/core', () => {
