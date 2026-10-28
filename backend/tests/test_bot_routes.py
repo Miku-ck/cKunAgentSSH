@@ -167,7 +167,7 @@ def test_bot_chat_sse_emits_reasoning_and_content_events(client, monkeypatch):
     """本地 SSE 面：reasoning chunk 派发 reasoning 事件，正文派发 content 事件，收尾 done。"""
     from bot.chat_service import BotChatService
 
-    async def fake_stream(self, cid, content, external_msg_id=None, *, channel="local"):
+    async def fake_stream(self, cid, content, external_msg_id=None, *, channel="local", images=None):
         assert channel == "local"
         yield "reasoning", "想"
         yield "content", "好"
@@ -286,3 +286,45 @@ def test_patch_sanitizes_expression_dna(client):
     # 局部更新走同一条归一规则：未知档位退回默认，已知档位照收
     assert patched["expression_dna"]["sentence"] == "mixed"
     assert patched["expression_dna"]["particles"] == "lively"
+
+
+def test_bot_chat_rejects_too_many_images(client):
+    r = client.post("/api/bot/chat", json={
+        "conversation_id": "x", "content": "看这些",
+        "images": ["data:image/webp;base64,AAAA"] * 5,
+    })
+    assert r.status_code == 422
+
+
+def test_bot_chat_rejects_non_image_data_url(client):
+    r = client.post("/api/bot/chat", json={
+        "conversation_id": "x", "content": "看",
+        "images": ["data:text/plain;base64,AAAA"],
+    })
+    assert r.status_code == 422
+
+
+def test_conversation_payload_keeps_only_display_fields(client):
+    persona = create_persona(client, personality="温和", background="我们认识十年了")
+    conv = client.post("/api/bot/conversations", json={"persona_id": persona["id"]}).json()
+
+    # 对外形状：persona 只留展示三字段，快照字段本身不再外泄
+    assert conv["persona"] == {"id": persona["id"], "name": "小暖", "avatar": ""}
+    assert "persona_snapshot" not in conv
+    assert "background" not in conv["persona"]
+    assert "personality" not in conv["persona"]
+    # 列表顺带返回最后一条内容，侧栏可直接当摘要用
+    listed = client.get("/api/bot/conversations").json()[0]
+    assert listed["preview"] == "你好呀"
+
+
+def test_conversation_shows_snapshot_name_after_persona_deleted(client):
+    persona = create_persona(client)
+    client.post("/api/bot/conversations", json={"persona_id": persona["id"]})
+    assert client.delete(f"/api/bot/personas/{persona['id']}").status_code == 200
+
+    row = client.get("/api/bot/conversations").json()[0]
+    assert row["persona_id"] is None
+    # 人格删了也要显示当时的名字，QQ 记录区同理（原来是「未知人格」）
+    assert row["persona"]["name"] == "小暖"
+    assert row["persona"]["avatar"] == ""

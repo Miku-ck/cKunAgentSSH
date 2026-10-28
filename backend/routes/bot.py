@@ -86,6 +86,18 @@ class CreateBotConversationRequest(BaseModel):
 class BotChatRequest(BaseModel):
     conversation_id: str
     content: str = Field(..., min_length=1, max_length=20000)
+    images: list[str] = Field(default_factory=list, max_length=4)
+
+    @field_validator("images")
+    @classmethod
+    def _check_images(cls, value: list[str]) -> list[str]:
+        # 与头像同口径：只收上传图片的 data URL；上限对齐前端（≤4 张，单张 base64 约 1.5M 字符）。
+        for url in value:
+            if not _AVATAR_DATA_URL.match(url):
+                raise ValueError("图片仅支持上传的图片")
+            if len(url) > 1_500_000:
+                raise ValueError("单张图片过大，请换一张更小或更简单的")
+        return value
 
 
 @router.get("/bot/persona-options")
@@ -211,7 +223,7 @@ async def chat(req: BotChatRequest):
     async def events():
         try:
             async for kind, text in chat_service.stream_reply(
-                req.conversation_id, req.content, channel="local"
+                req.conversation_id, req.content, channel="local", images=req.images or None
             ):
                 # kind 直接映射事件类型：reasoning 供前端折叠展示，content 是正文。
                 yield sse_event({"type": kind, "content": text})
