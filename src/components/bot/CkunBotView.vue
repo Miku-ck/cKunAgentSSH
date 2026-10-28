@@ -70,6 +70,9 @@
               <span v-if="m.role !== 'user'" class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.activePersona?.avatar" /></span>
               <div class="message-content">
                 <span class="sr-only">{{ m.role === 'user' ? '你' : (store.activePersona?.name || 'Bot') }}：</span>
+                <div v-if="m.images?.length" class="msg-images">
+                  <img v-for="(u, i) in m.images" :key="i" :src="u" class="msg-image" alt="图片" />
+                </div>
                 <details v-if="m.role !== 'user' && m.reasoning" class="reasoning"><summary>思考过程</summary><div class="reasoning-body">{{ m.reasoning }}</div></details>
                 <MarkdownStream v-if="m.role !== 'user'" :content="m.content" />
                 <template v-else>{{ m.content }}</template>
@@ -86,7 +89,7 @@
           </template>
           <template v-else-if="store.isQq && store.qqActiveId">
             <div v-for="m in store.qqMessages" :key="m.id" class="bot-message" :class="m.role">
-              <span v-if="m.role === 'assistant'" class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="qqPersona?.avatar" /></span>
+              <span v-if="m.role === 'assistant'" class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="qqActivePersona?.avatar" /></span>
               <div class="qq-message-body">
                 <span class="qq-meta">{{ qqRoleLabel(m) }} · {{ formatLocalDateTime(m.created_at) }}</span>
                 <div class="message-content">{{ m.content }}</div>
@@ -100,7 +103,18 @@
           <button v-if="store.lastFailedText" class="btn btn-sm" @click="retry">重试</button>
         </div>
         <p v-if="store.isQq && store.qqActiveId" class="readonly-bar">来自 QQ · 仅供查看，回复请在 QQ 里进行</p>
+        <div v-if="!store.isQq && store.activeConversationId && (pendingImages.length || attachError)" class="composer-attachments">
+          <div v-for="(u, i) in pendingImages" :key="i" class="attach-thumb">
+            <img :src="u" alt="待发图片" />
+            <button type="button" class="attach-remove" aria-label="移除图片" @click="removePendingImage(i)">×</button>
+          </div>
+          <p v-if="attachError" class="attach-error">{{ attachError }}</p>
+        </div>
         <form v-if="!store.isQq && store.activeConversationId" class="chat-composer" @submit.prevent="send">
+          <button type="button" class="composer-attach" :disabled="attachBusy || store.streaming || pendingImages.length >= MAX_CHAT_IMAGES" title="添加图片" aria-label="添加图片" @click="attachInput?.click()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a5 5 0 01-7.07-7.07l9.19-9.19a3.5 3.5 0 014.95 4.95l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+          </button>
+          <input ref="attachInput" type="file" class="composer-attach-input" accept="image/*" multiple @change="pickImages" />
           <textarea
             ref="composerRef"
             v-model="draft"
@@ -173,6 +187,7 @@ import ConnectionPage from './ConnectionPage.vue'
 import { formatLocalDateTime } from '@/utils/datetime'
 import { channelLabel, personaName } from '@/utils/bot-channel'
 import { botApi, type BotPersona, type BotPersonaOptions } from '@/api/bot'
+import { readChatImage, MAX_CHAT_IMAGES } from '@/utils/chat-image'
 import { toFriendlyMessage } from '@/api/base'
 import { useBotStore } from '@/stores/bot'
 import { useModelsStore } from '@/stores/models'
@@ -192,6 +207,29 @@ const messageListRef = ref<HTMLElement | null>(null)
 const composerRef = ref<HTMLTextAreaElement | null>(null)
 const MAX_DRAFT = 20000
 const nearLimit = computed(() => draft.value.length > MAX_DRAFT - 1000)
+
+// 本地看图回复：附件图先落待发区，随下一条正文一起发出（v1 要求带文字，图为附加）。
+const attachInput = ref<HTMLInputElement | null>(null)
+const attachBusy = ref(false)
+const attachError = ref('')
+const pendingImages = ref<string[]>([])
+
+async function pickImages(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files || [])
+  input.value = ''
+  if (!files.length) return
+  attachBusy.value = true
+  attachError.value = ''
+  const room = MAX_CHAT_IMAGES - pendingImages.value.length
+  if (room <= 0) { attachError.value = `最多 ${MAX_CHAT_IMAGES} 张图片`; attachBusy.value = false; return }
+  try {
+    for (const file of files.slice(0, room)) pendingImages.value.push(await readChatImage(file))
+    if (files.length > room) attachError.value = `最多 ${MAX_CHAT_IMAGES} 张图片`
+  } catch (e) { attachError.value = toFriendlyMessage(e, '图片处理失败') }
+  finally { attachBusy.value = false }
+}
+function removePendingImage(index: number) { pendingImages.value.splice(index, 1) }
 
 function growComposer() {
   const el = composerRef.value
@@ -213,8 +251,11 @@ async function createChat() {
 async function send() {
   const text = draft.value
   if (!text.trim() || store.streaming) return
+  const imgs = pendingImages.value
   draft.value = ''
-  await store.sendMessage(text)
+  pendingImages.value = []
+  attachError.value = ''
+  await store.sendMessage(text, imgs)
 }
 async function retry() {
   const text = store.lastFailedText
@@ -409,5 +450,17 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 .persona-card-head { display: flex; align-items: center; gap: var(--spacing-12); } .persona-large-avatar { width: 44px; height: 44px; flex: 0 0 44px; display: grid; place-items: center; border-radius: 50%; background: color-mix(in srgb, var(--accent-primary) 14%, transparent); font-size: 2.4615rem; } .persona-card-head h3 { margin-bottom: var(--spacing-4); font-size: 1.2308rem; } .persona-card-head div span { color: var(--text-tertiary); font-size: 0.8462rem; }
 .personality { flex: 1; margin: 18px 0 var(--spacing-12); color: var(--text-secondary); font-size: 1rem; line-height: 1.7; white-space: pre-wrap; } .persona-greeting { margin-bottom: var(--spacing-16); color: var(--text-tertiary); font-size: 0.9231rem; }
 .persona-actions { display: flex; flex-wrap: wrap; gap: var(--spacing-6); }
+.composer-attach { width: 32px; height: 32px; flex: 0 0 32px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--text-tertiary); cursor: pointer; }
+.composer-attach:hover:not(:disabled) { color: var(--text-primary); background: var(--bg-hover); }
+.composer-attach:disabled { opacity: .5; cursor: default; }
+.composer-attach svg { width: 18px; height: 18px; }
+.composer-attach-input { display: none; }
+.composer-attachments { display: flex; flex-wrap: wrap; gap: var(--spacing-8); align-items: center; margin: 0 max(var(--spacing-24), calc((100% - 760px) / 2)) var(--spacing-8); }
+.attach-thumb { position: relative; width: 60px; height: 60px; border-radius: var(--radius-md); overflow: hidden; border: 1px solid var(--border-subtle); }
+.attach-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.attach-remove { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border: 0; border-radius: 50%; background: rgba(0,0,0,.55); color: #fff; cursor: pointer; line-height: 1; }
+.attach-error { color: var(--danger-text); font-size: 0.8462rem; }
+.msg-images { display: flex; flex-wrap: wrap; gap: var(--spacing-6); margin-bottom: var(--spacing-6); }
+.msg-image { max-width: 200px; max-height: 200px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); object-fit: contain; }
 @media (max-width: 850px) { .chat-layout { grid-template-columns: 190px minmax(0, 1fr); } .bot-header { padding: var(--spacing-16); } }
 </style>

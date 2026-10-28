@@ -101,4 +101,14 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).toContain('m.reasoning')
     expect(view).toContain('store.streamReasoning')
   })
+
+  it('本地会话支持附图发送与图片气泡（Phase 2）', () => {
+    const view = read('src/components/bot/CkunBotView.vue')
+    for (const needle of ['readChatImage', 'MAX_CHAT_IMAGES', 'pendingImages', 'composer-attach', 'pickImages']) {
+      expect(view).toContain(needle)
+    }
+    expect(view).toContain('m.images')
+    expect(view).toContain('msg-image')
+    expect(view).toContain('store.sendMessage(text, imgs)')
+  })
 })
