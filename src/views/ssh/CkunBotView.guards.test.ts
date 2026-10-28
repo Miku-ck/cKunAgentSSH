@@ -22,12 +22,12 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).toContain('<ConnectionPage v-else :personas="store.personas" />')
   })
 
-  it('人格头像只能上传图片，不再提供表情入口', () => {
-    // 编辑表单已拆到 PersonaEditor：头像口径跟着组件走，页面里不该再出现第二份
+  it('人格头像走统一选择器，表情路径已全移除', () => {
+    // 编辑表单已拆到 PersonaEditor：头像逻辑收进 AvatarPicker 后，编辑器不再自持压缩/文件输入
     const editor = read('src/components/bot/PersonaEditor.vue')
-    for (const needle of ['上传图片', 'PersonaAvatar', 'readAvatarFile']) {
-      expect(editor).toContain(needle)
-    }
+    expect(editor).toContain('AvatarPicker')
+    expect(editor).not.toContain('readAvatarFile')
+    expect(editor).not.toContain('avatar-file')
     // 表情路径已全部移除：既不能留按钮/输入框，也不能留默认表情
     for (const gone of ['改用表情', 'avatar-emoji', '🤖']) {
       expect(editor).not.toContain(gone)

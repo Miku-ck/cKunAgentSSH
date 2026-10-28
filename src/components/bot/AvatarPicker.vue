@@ -7,7 +7,7 @@ import { toFriendlyMessage } from '@/api/base'
 
 // 统一头像入口（spec §4.6）：预览 + 上传（沿用 readAvatarFile 方形 256 webp 一份口径）
 // + 服务端图库选取。PersonaEditor / Bot 管理「你的头像」/ QQ 会话头像三处复用。
-const props = defineProps<{ modelValue?: string | null; seed?: string | null; label?: string | null }>()
+defineProps<{ modelValue?: string | null; seed?: string | null; label?: string | null }>()
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 
 const busy = ref(false)

@@ -6,17 +6,7 @@
         <label class="field"><span>名称</span><input v-model.trim="form.name" maxlength="50" placeholder="例如：晚风" /></label>
         <div class="field">
           <span>头像</span>
-          <div class="avatar-picker">
-            <span class="avatar-preview"><PersonaAvatar :avatar="form.avatar" /></span>
-            <div class="avatar-picker-body">
-              <div class="avatar-picker-actions">
-                <button type="button" class="btn" :disabled="avatarBusy" @click="avatarInput?.click()">{{ avatarBusy ? '处理中…' : '上传图片' }}</button>
-              </div>
-              <small>PNG / JPG / WebP，自动裁成方形；上传后才能保存</small>
-            </div>
-            <input ref="avatarInput" class="avatar-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" @change="pickAvatar" />
-          </div>
-          <div v-if="avatarError" class="form-error">{{ avatarError }}</div>
+          <AvatarPicker v-model="form.avatar" :seed="form.name" :label="form.name" />
         </div>
         <label class="field">
           <span>它怎么称呼你</span>
@@ -123,8 +113,8 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
 import BaseModal from '@/components/common/BaseModal.vue'
-import PersonaAvatar from './PersonaAvatar.vue'
-import { isImageAvatar, readAvatarFile } from '@/utils/persona-avatar'
+import AvatarPicker from './AvatarPicker.vue'
+import { isImageAvatar } from '@/utils/persona-avatar'
 import { toFriendlyMessage } from '@/api/base'
 import {
   botApi,
@@ -151,9 +141,6 @@ const DNA_DEFAULTS: BotExpressionDna = {
 const dnaKeys = ['sentence', 'particles', 'punctuation', 'emoji'] as const
 const styleKeys = ['reaction_style', 'refusal_style'] as const
 
-const avatarInput = ref<HTMLInputElement | null>(null)
-const avatarBusy = ref(false)
-const avatarError = ref('')
 const saving = ref(false)
 const error = ref('')
 
@@ -184,18 +171,6 @@ function setDna(key: (typeof dnaKeys)[number], value: string) {
 
 function setStyle(key: (typeof styleKeys)[number], value: string) {
   form[key] = value as never
-}
-
-async function pickAvatar(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  input.value = ''
-  if (!file) return
-  avatarBusy.value = true
-  avatarError.value = ''
-  try { form.avatar = await readAvatarFile(file) }
-  catch (e) { avatarError.value = toFriendlyMessage(e, '头像处理失败') }
-  finally { avatarBusy.value = false }
 }
 
 function buildPayload(): BotPersonaPayload {
@@ -292,19 +267,6 @@ async function save() {
   background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
   color: var(--accent-text);
 }
-.avatar-picker { display: flex; align-items: center; gap: var(--spacing-12); }
-.avatar-preview {
-  width: 44px; height: 44px; flex: 0 0 44px;
-  display: grid; place-items: center;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-primary) 8%, transparent);
-  font-size: 1.4615rem;
-}
-.avatar-picker-body { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
-.avatar-picker-actions { display: flex; align-items: center; gap: var(--spacing-8); }
-.avatar-picker-body small { color: var(--text-tertiary); font-size: 0.8462rem; }
-.avatar-file { display: none; }
 .hint { margin: 0; color: var(--text-tertiary); font-size: 0.8462rem; line-height: 1.6; }
 .form-error { color: var(--danger-text); font-size: 0.9231rem; }
 </style>
