@@ -120,4 +120,32 @@ describe('cKunBot API', () => {
     expect(bare.images).toEqual([])
     vi.unstubAllGlobals()
   })
+
+  it('图库与你的头像走 request 同一通道并序列化载荷', async () => {
+    vi.mocked(request).mockResolvedValue({ id: 'g1' })
+    await botApi.addGalleryItem({ label: '小猫', data_url: 'data:image/webp;base64,AAA' })
+    expect(request).toHaveBeenCalledWith('/bot/gallery', {
+      method: 'POST',
+      body: JSON.stringify({ label: '小猫', data_url: 'data:image/webp;base64,AAA' }),
+    })
+
+    await botApi.deleteGalleryItem('g1')
+    expect(request).toHaveBeenCalledWith('/bot/gallery/g1', { method: 'DELETE' })
+
+    vi.mocked(request).mockResolvedValue({ avatar: '' })
+    await botApi.setUserAvatar('data:image/webp;base64,UU')
+    expect(request).toHaveBeenCalledWith('/bot/user-avatar', {
+      method: 'PUT',
+      body: JSON.stringify({ avatar: 'data:image/webp;base64,UU' }),
+    })
+  })
+
+  it('QQ 会话显示覆盖 PATCH 只带给出的字段', async () => {
+    vi.mocked(request).mockResolvedValue({ id: 'q1' })
+    await botApi.updateConversationDisplay('q1', { display_name: '夜宵群' })
+    expect(request).toHaveBeenCalledWith('/bot/conversations/q1', {
+      method: 'PATCH',
+      body: JSON.stringify({ display_name: '夜宵群' }),
+    })
+  })
 })

@@ -83,6 +83,9 @@ export interface BotConversation {
   external_id: string | null
   /** 最后一条消息的内容，服务端顺带算出，侧栏可直接用作摘要。 */
   preview: string | null
+  /** Phase 4 QQ 会话本地显示覆盖：空/缺省 = 回落 title 与代号占位头像。 */
+  display_name?: string | null
+  display_avatar?: string | null
   created_at: string
   updated_at: string
 }
@@ -128,6 +131,13 @@ export interface BotChannelPayload {
   app_secret?: string
 }
 
+export interface BotGalleryItem {
+  id: string
+  label: string
+  data_url: string
+  created_at: string
+}
+
 export const botApi = {
   listPersonas: () => request<BotPersona[]>('/bot/personas'),
   getPersonaOptions: () => request<BotPersonaOptions>('/bot/persona-options'),
@@ -138,6 +148,12 @@ export const botApi = {
   deletePersona: (id: string) => request<{ deleted: boolean }>(`/bot/personas/${id}`, { method: 'DELETE' }),
   listConversations: (personaId?: string) => request<BotConversation[]>(`/bot/conversations?channel=local${personaId ? `&persona_id=${encodeURIComponent(personaId)}` : ''}`),
   listQqConversations: () => request<BotConversation[]>('/bot/conversations?channel=qq'),
+  listGallery: () => request<BotGalleryItem[]>('/bot/gallery'),
+  addGalleryItem: (payload: { label?: string; data_url: string }) => request<BotGalleryItem>('/bot/gallery', { method: 'POST', body: JSON.stringify(payload) }),
+  deleteGalleryItem: (id: string) => request<{ deleted: boolean }>(`/bot/gallery/${id}`, { method: 'DELETE' }),
+  getUserAvatar: () => request<{ avatar: string }>('/bot/user-avatar'),
+  setUserAvatar: (avatar: string) => request<{ avatar: string }>('/bot/user-avatar', { method: 'PUT', body: JSON.stringify({ avatar }) }),
+  updateConversationDisplay: (id: string, payload: { display_name?: string; display_avatar?: string }) => request<BotConversation>(`/bot/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   createConversation: (personaId: string) => request<BotConversation>('/bot/conversations', { method: 'POST', body: JSON.stringify({ persona_id: personaId, channel: 'local' }) }),
   getMessages: (id: string) => request<BotMessage[]>(`/bot/conversations/${id}/messages?limit=200`),
   deleteConversation: (id: string) => request<{ deleted: boolean }>(`/bot/conversations/${id}`, { method: 'DELETE' }),
