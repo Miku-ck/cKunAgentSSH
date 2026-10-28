@@ -98,3 +98,27 @@ def tmp_workspace():
     d.mkdir()
     yield str(d)
     shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.fixture
+def base_db(tmp_workspace):
+    """真实 SQLite，返回库文件路径；进出各收一次连接池。
+
+    每个测试拿独立的 tmp_workspace 目录，所以库文件名不需要再按用例区分。
+    """
+    import os
+
+    import database as db
+    db_path = os.path.join(tmp_workspace, "test.db")
+    db._close_all_connections()
+    db.init_db(db_path)
+    yield db_path
+    db._close_all_connections()
+
+
+@pytest.fixture
+def runbook_db(base_db):
+    """base_db + runbook_store 的建表 memo 复位（切库后必须重走 DDL）。"""
+    import runbook_store as rstore
+    rstore._reset_memo_for_tests()
+    yield base_db

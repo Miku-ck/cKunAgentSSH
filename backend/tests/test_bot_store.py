@@ -1,16 +1,6 @@
-import os
 
-import pytest
 
 import database as db
-
-
-@pytest.fixture
-def base_db(tmp_workspace):
-    db._close_all_connections()
-    db.init_db(os.path.join(tmp_workspace, "bot.db"))
-    yield
-    db._close_all_connections()
 
 
 def test_default_persona_is_seeded(base_db):

@@ -619,6 +619,20 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
                 "UPDATE bot_conversations SET title = ? WHERE id = ?",
                 (title, row["id"]),
             )
+    # 会话快照瘦身（一次性）：旧快照把头像 data URL 整个复制进每个会话，
+    # 100 个会话就是 1-2MB，且每次拉列表都要传。头像改为读时关联实时人格，
+    # 这里把存量快照里的头像清空；已经清过的行不重复写。
+    for row in conn.execute("SELECT id, persona_snapshot FROM bot_conversations").fetchall():
+        try:
+            snapshot = json.loads(row["persona_snapshot"] or "{}")
+        except (TypeError, ValueError):
+            continue
+        if isinstance(snapshot, dict) and snapshot.get("avatar"):
+            snapshot["avatar"] = ""
+            conn.execute(
+                "UPDATE bot_conversations SET persona_snapshot = ? WHERE id = ?",
+                (json.dumps(snapshot, ensure_ascii=False), row["id"]),
+            )
     # schedules.last_abnormal_at：巡检异常沉淀时间（方案 Phase 3），正常巡检不动它。
     # 新库建表已含该列，这里只为旧库补齐；PRAGMA 探测避免重复 ALTER 报错。
     cursor = conn.execute("PRAGMA table_info(schedules)")
@@ -2309,9 +2323,37 @@ def delete_bot_persona(persona_id: str) -> bool:
         conn.close()
 
 
+def _persona_snapshot_payload(persona: dict) -> str:
+    """会话快照：人格全量但剔除头像。
+
+    头像 data URL 单条约 10-20KB，逐会话复制会让会话列表涨到 MB 级；
+    所以快照只留生成需要的字段，展示用头像在读时按 persona_id 关联实时人格。
+    人格被删除时头像为空，前端回退到首字母占位 —— 与气泡渲染一致。
+    """
+    snapshot = dict(persona)
+    snapshot["avatar"] = ""
+    return json.dumps(snapshot, ensure_ascii=False)
+
+
 def _bot_conversation_dict(row: sqlite3.Row) -> dict:
+    """内部形态：persona 是生成用的人格全量（快照 + 实时头像补位）。
+
+    路由输出前会裁成 {id, name, avatar}：性格/背景文本只用于拼提示词，
+    没必要随每个会话重复下发给前端。
+    """
     result = dict(row)
-    result["persona"] = json.loads(result.pop("persona_snapshot"))
+    try:
+        snapshot = json.loads(result.pop("persona_snapshot") or "{}")
+    except (TypeError, ValueError):
+        snapshot = {}
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    keys = row.keys()
+    live_avatar = result.pop("persona_live_avatar", None) if "persona_live_avatar" in keys else None
+    snapshot["avatar"] = live_avatar or snapshot.get("avatar") or ""
+    snapshot["id"] = snapshot.get("id") or result.get("persona_id") or ""
+    snapshot["name"] = snapshot.get("name") or result.get("title") or ""
+    result["persona"] = snapshot
     return result
 
 
@@ -2335,7 +2377,7 @@ def create_bot_conversation(
                 conversation_id,
                 persona["name"],
                 persona_id,
-                json.dumps(persona, ensure_ascii=False),
+                _persona_snapshot_payload(persona),
                 channel,
                 external_id,
                 now,
@@ -2360,7 +2402,9 @@ def get_or_create_bot_conversation(
     conn = _get_conn()
     try:
         row = conn.execute(
-            "SELECT * FROM bot_conversations WHERE channel = ? AND external_id = ?",
+            "SELECT c.*, p.avatar AS persona_live_avatar FROM bot_conversations c "
+            "LEFT JOIN bot_personas p ON p.id = c.persona_id "
+            "WHERE c.channel = ? AND c.external_id = ?",
             (channel, external_id),
         ).fetchone()
     finally:
@@ -2373,7 +2417,9 @@ def get_or_create_bot_conversation(
         conn = _get_conn()
         try:
             row = conn.execute(
-                "SELECT * FROM bot_conversations WHERE channel = ? AND external_id = ?",
+                "SELECT c.*, p.avatar AS persona_live_avatar FROM bot_conversations c "
+                "LEFT JOIN bot_personas p ON p.id = c.persona_id "
+                "WHERE c.channel = ? AND c.external_id = ?",
                 (channel, external_id),
             ).fetchone()
             return _bot_conversation_dict(row)
@@ -2399,9 +2445,11 @@ def list_bot_conversations(
     conn = _get_conn()
     try:
         rows = conn.execute(
-            "SELECT c.*, (SELECT m.content FROM bot_messages m "
+            "SELECT c.*, p.avatar AS persona_live_avatar, "
+            "(SELECT m.content FROM bot_messages m "
             "WHERE m.conversation_id = c.id ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1) "
             "AS preview FROM bot_conversations c "
+            "LEFT JOIN bot_personas p ON p.id = c.persona_id "
             f"{where} ORDER BY c.updated_at DESC, c.id DESC LIMIT ?",
             params,
         ).fetchall()
@@ -2414,7 +2462,9 @@ def get_bot_conversation(conversation_id: str) -> Optional[dict]:
     conn = _get_conn()
     try:
         row = conn.execute(
-            "SELECT * FROM bot_conversations WHERE id = ?", (conversation_id,)
+            "SELECT c.*, p.avatar AS persona_live_avatar FROM bot_conversations c "
+            "LEFT JOIN bot_personas p ON p.id = c.persona_id WHERE c.id = ?",
+            (conversation_id,),
         ).fetchone()
         return _bot_conversation_dict(row) if row else None
     finally:

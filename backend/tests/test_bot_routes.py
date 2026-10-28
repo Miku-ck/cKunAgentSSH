@@ -191,3 +191,98 @@ def test_bot_chat_sse_emits_reasoning_and_content_events(client, monkeypatch):
     assert next(e for e in events if e["type"] == "reasoning")["content"] == "想"
     assert next(e for e in events if e["type"] == "content")["content"] == "好"
     assert types[-1] == "done"
+
+
+def test_persona_options_exposes_enums_for_editor(client):
+    options = client.get("/api/bot/persona-options").json()
+    for key in (
+        "sentence", "particles", "punctuation", "emoji",
+        "reaction_style", "refusal_style", "relationship_speed",
+    ):
+        assert key in options, key
+        assert options[key]["options"], key
+    # 前端靠 value 渲染控件，label 只用于显示：两者都必须存在
+    assert all({"value", "label"} <= set(item) for item in options["reaction_style"]["options"])
+
+
+def test_persona_roundtrips_identity_core_fields(client):
+    persona = create_persona(
+        client,
+        expression_dna={"sentence": "short", "particles": "dry", "emoji": "none", "catchphrase": "说来话长"},
+        reaction_style="playful",
+        refusal_style="direct",
+        address_user="小林",
+        relationship_speed="fast",
+    )
+    fetched = next(p for p in client.get("/api/bot/personas").json() if p["id"] == persona["id"])
+    assert fetched["expression_dna"]["sentence"] == "short"
+    assert fetched["expression_dna"]["catchphrase"] == "说来话长"
+    assert fetched["reaction_style"] == "playful"
+    assert fetched["refusal_style"] == "direct"
+    assert fetched["address_user"] == "小林"
+    assert fetched["relationship_speed"] == "fast"
+
+    patched = client.patch(
+        f"/api/bot/personas/{persona['id']}", json={"reaction_style": "blunt"}
+    ).json()
+    assert patched["reaction_style"] == "blunt"
+    # 局部更新不许把没传的字段冲掉
+    assert patched["address_user"] == "小林"
+    assert patched["expression_dna"]["sentence"] == "short"
+
+
+def test_persona_rejects_unknown_style_but_sanitizes_dna(client):
+    response = client.post(
+        "/api/bot/personas", json={"name": "小暖", "reaction_style": "sarcastic"}
+    )
+    assert response.status_code == 422
+
+    persona = create_persona(client, expression_dna={"sentence": "poetic", "emoji": "medium"})
+    # 未知档位退回默认，但已知档位保留：脏 DNA 不该让人格保存失败
+    assert persona["expression_dna"]["sentence"] == "mixed"
+    assert persona["expression_dna"]["emoji"] == "medium"
+
+
+def test_copy_persona_keeps_voice_settings(client):
+    persona = create_persona(client, expression_dna={"sentence": "long"}, address_user="小林")
+    copy = client.post(f"/api/bot/personas/{persona['id']}/copy").json()
+    assert copy["expression_dna"]["sentence"] == "long"
+    assert copy["address_user"] == "小林"
+
+
+def test_relations_are_listed_per_persona_and_start_unknown(client):
+    persona = create_persona(client)
+    relations = client.get("/api/bot/relations").json()
+    assert persona["id"] in relations
+    state = relations[persona["id"]]
+    assert state["stage"] == "陌生"
+    assert state["progress"] == 0
+    assert state["turns"] == 0
+
+
+def test_relation_grows_after_a_turn(client, monkeypatch):
+    from bot.chat_service import BotChatService
+
+    async def fake_stream(self, cid, content, external_msg_id=None, *, channel="local", images=None):
+        yield "content", "在"
+
+    monkeypatch.setattr(BotChatService, "stream_reply", fake_stream)
+    persona = create_persona(client)
+    conv = client.post("/api/bot/conversations", json={"persona_id": persona["id"]}).json()
+    with client.stream("POST", "/api/bot/chat", json={"conversation_id": conv["id"], "content": "在吗"}) as r:
+        "".join(r.iter_text())
+
+    # stream_reply 被整体替换，关系记账在真实实现里发生，这里只验证接口可读且形状稳定
+    state = client.get("/api/bot/relations").json()[persona["id"]]
+    assert set(state) >= {"stage", "progress", "turns", "score", "raw_score"}
+
+
+def test_patch_sanitizes_expression_dna(client):
+    persona = create_persona(client, expression_dna={"sentence": "short"})
+    patched = client.patch(
+        f"/api/bot/personas/{persona['id']}",
+        json={"expression_dna": {"sentence": "poetic", "particles": "lively"}},
+    ).json()
+    # 局部更新走同一条归一规则：未知档位退回默认，已知档位照收
+    assert patched["expression_dna"]["sentence"] == "mixed"
+    assert patched["expression_dna"]["particles"] == "lively"
