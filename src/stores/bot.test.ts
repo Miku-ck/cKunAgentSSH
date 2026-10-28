@@ -18,7 +18,7 @@ import { useBotStore } from './bot'
 
 const persona: BotPersona = {
   id: 'p1', name: '小刻', avatar: 'data:image/webp;base64,AAAA', personality: '温和', background: '', greeting: '你好',
-  model_id: null, is_builtin: 1, created_at: '', updated_at: '',
+  model_id: null, reply_style: 'moderate', enable_thinking: 0, is_builtin: 1, created_at: '', updated_at: '',
 }
 const conversation: BotConversation = {
   id: 'c1', title: '小刻', persona_id: 'p1', persona_snapshot: JSON.stringify(persona),
@@ -56,6 +56,22 @@ describe('cKunBot store', () => {
     expect(store.messages.map(m => m.content)).toEqual(['你好吗', '我很好'])
     expect(store.streaming).toBe(false)
     expect(store.streamText).toBe('')
+  })
+
+  it('reasoning 流累积到 streamReasoning，完成后落到消息 reasoning', async () => {
+    const saved: BotMessage = { id: 'm2', conversation_id: 'c1', role: 'assistant', content: '好', reasoning: '想', created_at: '' }
+    vi.mocked(streamBotChat).mockImplementation(async (_id, _text, options) => {
+      options.onReasoning?.('想')
+      options.onContent('好')
+      return saved
+    })
+    const store = useBotStore()
+    store.personas = [persona]
+    store.conversations = [conversation]
+    store.activeConversationId = 'c1'
+    await store.sendMessage('在吗')
+    expect(store.messages.at(-1)?.reasoning).toBe('想')
+    expect(store.streamReasoning).toBe('')
   })
 
   it('失败后保留输入可重试，不伪造 assistant 消息', async () => {

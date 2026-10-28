@@ -10,21 +10,73 @@ export const useBotStore = defineStore('bot', () => {
   const activePersonaId = ref('')
   const activeConversationId = ref('')
   const streamText = ref('')
+  const streamReasoning = ref('')
   const streaming = ref(false)
   const loading = ref(false)
   const error = ref('')
   const lastFailedText = ref('')
+  const channel = ref<'local' | 'qq'>('local')
+  const qqConversations = ref<BotConversation[]>([])
+  const qqMessages = ref<BotMessage[]>([])
+  const qqActiveId = ref('')
+  const qqError = ref('')
   let abortController: AbortController | null = null
+  let qqRefreshing = false
 
   const activePersona = computed(() => personas.value.find(p => p.id === activePersonaId.value) || null)
   const filteredConversations = computed(() => conversations.value.filter(c => c.persona_id === activePersonaId.value))
   const activeConversation = computed(() => conversations.value.find(c => c.id === activeConversationId.value) || null)
+  const isQq = computed(() => channel.value === 'qq')
+  const qqActiveConversation = computed(() => qqConversations.value.find(c => c.id === qqActiveId.value) || null)
+
+  function selectChannel(next: 'local' | 'qq') {
+    if (next === channel.value) return
+    stopGenerating()
+    channel.value = next
+  }
+
+  async function selectQqConversation(id: string) {
+    qqActiveId.value = id
+    qqMessages.value = []
+    try {
+      const rows = await botApi.getMessages(id)
+      if (qqActiveId.value === id) qqMessages.value = rows
+      qqError.value = ''
+    } catch (e) {
+      qqError.value = toFriendlyMessage(e, 'QQ 记录读取失败')
+    }
+  }
+
+  async function refreshQq() {
+    if (qqRefreshing) return
+    qqRefreshing = true
+    try {
+      const rows = await botApi.listQqConversations()
+      qqConversations.value = rows
+      if (!rows.length) {
+        qqActiveId.value = ''
+        qqMessages.value = []
+        qqError.value = ''
+        return
+      }
+      if (!rows.some(c => c.id === qqActiveId.value)) qqActiveId.value = rows[0].id
+      const target = qqActiveId.value
+      const history = await botApi.getMessages(target)
+      if (qqActiveId.value === target) qqMessages.value = history
+      qqError.value = ''
+    } catch (e) {
+      qqError.value = toFriendlyMessage(e, 'QQ 记录读取失败')
+    } finally {
+      qqRefreshing = false
+    }
+  }
 
   async function selectConversation(id: string) {
     stopGenerating()
     activeConversationId.value = id
     messages.value = []
     streamText.value = ''
+    streamReasoning.value = ''
     error.value = ''
     lastFailedText.value = ''
     if (!id) return
@@ -63,7 +115,7 @@ export const useBotStore = defineStore('bot', () => {
   }
 
   async function createConversation(personaId = activePersonaId.value) {
-    if (!personaId || streaming.value) return
+    if (channel.value !== 'local' || !personaId || streaming.value) return
     const created = await botApi.createConversation(personaId)
     conversations.value.unshift(created)
     activePersonaId.value = personaId
@@ -80,11 +132,12 @@ export const useBotStore = defineStore('bot', () => {
   async function sendMessage(content: string) {
     const text = content.trim()
     const conversationId = activeConversationId.value
-    if (!text || !conversationId || streaming.value) return
+    if (channel.value !== 'local' || !text || !conversationId || streaming.value) return
     streaming.value = true
     error.value = ''
     lastFailedText.value = ''
     streamText.value = ''
+    streamReasoning.value = ''
     messages.value.push({
       id: `local-${Date.now()}`, conversation_id: conversationId, role: 'user', content: text, created_at: new Date().toISOString(),
     })
@@ -93,6 +146,7 @@ export const useBotStore = defineStore('bot', () => {
       const saved = await streamBotChat(conversationId, text, {
         signal: abortController.signal,
         onContent: chunk => { if (activeConversationId.value === conversationId) streamText.value += chunk },
+        onReasoning: chunk => { if (activeConversationId.value === conversationId) streamReasoning.value += chunk },
       })
       if (activeConversationId.value === conversationId) messages.value.push(saved)
     } catch (e) {
@@ -104,6 +158,7 @@ export const useBotStore = defineStore('bot', () => {
       if (activeConversationId.value === conversationId) {
         streaming.value = false
         streamText.value = ''
+        streamReasoning.value = ''
       }
       abortController = null
     }
@@ -114,13 +169,15 @@ export const useBotStore = defineStore('bot', () => {
     abortController = null
     streaming.value = false
     streamText.value = ''
+    streamReasoning.value = ''
   }
 
   return {
     personas, conversations, messages, activePersonaId, activeConversationId,
     activePersona, activeConversation, filteredConversations,
-    streamText, streaming, loading, error, lastFailedText,
+    streamText, streamReasoning, streaming, loading, error, lastFailedText,
+    channel, isQq, qqConversations, qqMessages, qqActiveId, qqError, qqActiveConversation,
     init, selectPersona, selectConversation, createConversation, deleteConversation,
-    sendMessage, stopGenerating,
+    sendMessage, stopGenerating, selectChannel, selectQqConversation, refreshQq,
   }
 })
