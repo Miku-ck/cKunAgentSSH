@@ -8,6 +8,8 @@ export interface BotPersona {
   background: string
   greeting: string
   model_id: string | null
+  reply_style: 'concise' | 'moderate' | 'long'
+  enable_thinking: number
   is_builtin: number
   created_at: string
   updated_at: string
@@ -20,6 +22,8 @@ export interface BotPersonaPayload {
   background: string
   greeting: string
   model_id: string | null
+  reply_style: 'concise' | 'moderate' | 'long'
+  enable_thinking: boolean
 }
 
 export interface BotConversation {
@@ -39,6 +43,7 @@ export interface BotMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
   external_msg_id?: string | null
+  reasoning?: string | null
   created_at: string
 }
 
@@ -73,7 +78,7 @@ export const botApi = {
 }
 
 interface BotSseEvent {
-  type: 'content' | 'done' | 'error'
+  type: 'content' | 'reasoning' | 'done' | 'error'
   content?: string
   detail?: string
   message?: BotMessage
@@ -82,7 +87,7 @@ interface BotSseEvent {
 export async function streamBotChat(
   conversationId: string,
   content: string,
-  options: { onContent: (text: string) => void; signal?: AbortSignal },
+  options: { onContent: (text: string) => void; onReasoning?: (text: string) => void; signal?: AbortSignal },
 ): Promise<BotMessage> {
   await ensureApiToken()
   let response: Response
@@ -113,6 +118,7 @@ export async function streamBotChat(
     let event: BotSseEvent
     try { event = JSON.parse(line.slice(6)) as BotSseEvent } catch { return }
     if (event.type === 'content') options.onContent(event.content || '')
+    else if (event.type === 'reasoning') options.onReasoning?.(event.content || '')
     else if (event.type === 'error') failure = event.detail || '回复生成失败'
     else if (event.type === 'done' && event.message) result = event.message
   }

@@ -30,6 +30,24 @@ describe('cKunBot API', () => {
     expect('app_secret' in config).toBe(false)
   })
 
+  it('onReasoning 收到 reasoning 片段，onContent 收到正文', async () => {
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"type":"reasoning","content":"想"}\n\ndata: {"type":"content","content":"好"}\n\n'))
+        controller.enqueue(encoder.encode('data: {"type":"done","message":{"id":"m1","role":"assistant","content":"好"}}\n\n'))
+        controller.close()
+      },
+    })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(stream, { status: 200 })))
+    const reasoning: string[] = []
+    const content: string[] = []
+    await streamBotChat('c1', 'hi', { onContent: t => content.push(t), onReasoning: t => reasoning.push(t) })
+    expect(reasoning).toEqual(['想'])
+    expect(content).toEqual(['好'])
+    vi.unstubAllGlobals()
+  })
+
   it('本地聊天按 SSE 片段回调，完成后返回持久化消息', async () => {
     const encoder = new TextEncoder()
     const stream = new ReadableStream<Uint8Array>({
