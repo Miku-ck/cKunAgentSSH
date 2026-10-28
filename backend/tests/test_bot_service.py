@@ -210,3 +210,30 @@ async def test_stream_reply_style_output_budget(monkeypatch, tmp_workspace):
         assert captured["max_tokens"] == 512
     finally:
         db._close_all_connections()
+
+
+def test_add_and_read_bot_message_images(bot_db):
+    imgs = ["data:image/webp;base64,AAAA", "data:image/png;base64,BBBB"]
+    saved = db.add_bot_message(bot_db["id"], "user", "看这张", None, None, imgs)
+    assert saved["images"] == imgs
+    recent = db.get_recent_bot_messages(bot_db["id"], 10)
+    assert recent[-1]["images"] == imgs
+    listed = db.get_bot_messages(bot_db["id"], 10)
+    assert listed[-1]["images"] == imgs
+
+
+def test_bot_message_images_default_empty_list(bot_db):
+    saved = db.add_bot_message(bot_db["id"], "user", "纯文本")
+    assert saved["images"] == []
+    assert db.get_recent_bot_messages(bot_db["id"], 10)[-1]["images"] == []
+    assert db.get_bot_messages(bot_db["id"], 10)[-1]["images"] == []
+
+
+def test_bot_messages_images_column_present(bot_db):
+    # CREATE TABLE + 迁移闸门都应保证列存在（bot_db fixture 已跑 init_db）
+    conn = db._get_conn()
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(bot_messages)").fetchall()}
+    finally:
+        conn.close()
+    assert "images" in cols

@@ -208,6 +208,14 @@ def init_db(db_path: str) -> None:
                 model_id     TEXT,
                 reply_style  TEXT NOT NULL DEFAULT 'moderate',
                 enable_thinking INTEGER NOT NULL DEFAULT 0,
+                -- 活人感内核（spec：人格内核）：
+                -- expression_dna 是表达 DNA 的 JSON（句长/语气词/标点/emoji/口头禅/禁用词），
+                -- 其余三项决定「怎么反应」与「关系升温速度」。
+                expression_dna      TEXT NOT NULL DEFAULT '{}',
+                reaction_style      TEXT NOT NULL DEFAULT 'warm',
+                refusal_style       TEXT NOT NULL DEFAULT 'soft',
+                address_user        TEXT NOT NULL DEFAULT '',
+                relationship_speed  TEXT NOT NULL DEFAULT 'normal',
                 is_builtin   INTEGER NOT NULL DEFAULT 0,
                 created_at   TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
@@ -238,6 +246,7 @@ def init_db(db_path: str) -> None:
                 external_msg_id TEXT,
                 answered_at     TEXT,
                 reasoning       TEXT,
+                images          TEXT,
                 created_at      TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
@@ -246,6 +255,17 @@ def init_db(db_path: str) -> None:
             CREATE UNIQUE INDEX IF NOT EXISTS ix_bot_messages_external
                 ON bot_messages(conversation_id, external_msg_id)
                 WHERE external_msg_id IS NOT NULL;
+
+            -- 关系账本：人格与用户之间的累计熟悉度。
+            -- score 只增不减（历史累计），衰减在读时按 last_at 计算，久别重逢会掉档、
+            -- 聊两句回档——所以不能在写时把衰减结果落库，否则关系会单向坍缩。
+            CREATE TABLE IF NOT EXISTS bot_relations (
+                persona_id TEXT PRIMARY KEY REFERENCES bot_personas(id) ON DELETE CASCADE,
+                score      REAL NOT NULL DEFAULT 0,
+                turns      INTEGER NOT NULL DEFAULT 0,
+                last_at    TEXT,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
 
             CREATE TABLE IF NOT EXISTS skills (
                 id          TEXT PRIMARY KEY,
@@ -552,6 +572,9 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
     # bot_messages.reasoning：本地陪聊开启思考时，随正式回复一并落库回显。
     if "reasoning" not in bot_message_cols:
         conn.execute("ALTER TABLE bot_messages ADD COLUMN reasoning TEXT")
+    # bot_messages.images：看图回复（Phase 2），用户消息内联 data URL 列表（JSON）。
+    if "images" not in bot_message_cols:
+        conn.execute("ALTER TABLE bot_messages ADD COLUMN images TEXT")
     # bot_personas：chat-experience 两列（旧库补齐，新库建表已含）。
     cursor = conn.execute("PRAGMA table_info(bot_personas)")
     persona_cols = {row[1] for row in cursor.fetchall()}
@@ -563,6 +586,17 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE bot_personas ADD COLUMN enable_thinking INTEGER NOT NULL DEFAULT 0"
         )
+    # 活人感内核五列：旧库补齐，新库建表已含。默认值即「不放大也不失真」的中性档，
+    # 存量人格迁移后行为与迁移前一致，不因为升级突然变得话多或自来熟。
+    for col, ddl in (
+        ("expression_dna", "TEXT NOT NULL DEFAULT '{}'"),
+        ("reaction_style", "TEXT NOT NULL DEFAULT 'warm'"),
+        ("refusal_style", "TEXT NOT NULL DEFAULT 'soft'"),
+        ("address_user", "TEXT NOT NULL DEFAULT ''"),
+        ("relationship_speed", "TEXT NOT NULL DEFAULT 'normal'"),
+    ):
+        if col not in persona_cols:
+            conn.execute(f"ALTER TABLE bot_personas ADD COLUMN {col} {ddl}")
     # 会话标题：早期会话沿用创建时的人格名，侧栏与 QQ 记录区无法区分。
     # 每个会话取首条用户消息当标题；标题已不是人格名的（迁移过或用户改过）不动。
     for row in conn.execute(
@@ -2139,6 +2173,21 @@ def _bot_persona_dict(row: sqlite3.Row) -> dict:
     result["is_builtin"] = int(result.get("is_builtin") or 0)
     result["enable_thinking"] = int(result.get("enable_thinking") or 0)
     result.setdefault("reply_style", "moderate")
+    # expression_dna 以对象形态进出：库里是 JSON 文本，读出来就当 dict 用，
+    # 脏数据（手工写坏/半截 JSON）一律退回空对象，宁可少一层约束也不能让陪聊 500。
+    raw_dna = result.get("expression_dna")
+    if isinstance(raw_dna, str):
+        try:
+            parsed = json.loads(raw_dna) if raw_dna.strip() else {}
+        except ValueError:
+            parsed = {}
+        result["expression_dna"] = parsed if isinstance(parsed, dict) else {}
+    elif not isinstance(raw_dna, dict):
+        result["expression_dna"] = {}
+    result.setdefault("reaction_style", "warm")
+    result.setdefault("refusal_style", "soft")
+    result.setdefault("address_user", "")
+    result.setdefault("relationship_speed", "normal")
     return result
 
 
@@ -2151,6 +2200,11 @@ def create_bot_persona(
     model_id: Optional[str] = None,
     reply_style: str = "moderate",
     enable_thinking: int = 0,
+    expression_dna: Optional[dict] = None,
+    reaction_style: str = "warm",
+    refusal_style: str = "soft",
+    address_user: str = "",
+    relationship_speed: str = "normal",
 ) -> dict:
     persona_id = _new_id()
     now = _now()
@@ -2159,10 +2213,13 @@ def create_bot_persona(
         conn.execute(
             "INSERT INTO bot_personas "
             "(id, name, avatar, personality, background, greeting, model_id, "
-            "reply_style, enable_thinking, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "reply_style, enable_thinking, expression_dna, reaction_style, "
+            "refusal_style, address_user, relationship_speed, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (persona_id, name, avatar, personality, background, greeting, model_id,
-             reply_style, int(bool(enable_thinking)), now, now),
+             reply_style, int(bool(enable_thinking)),
+             json.dumps(expression_dna or {}, ensure_ascii=False),
+             reaction_style, refusal_style, address_user, relationship_speed, now, now),
         )
         conn.commit()
     finally:
@@ -2194,8 +2251,15 @@ def get_bot_persona(persona_id: str) -> Optional[dict]:
 
 def update_bot_persona(persona_id: str, **fields) -> Optional[dict]:
     allowed = {"name", "avatar", "personality", "background", "greeting", "model_id",
-               "reply_style", "enable_thinking"}
+               "reply_style", "enable_thinking", "expression_dna", "reaction_style",
+               "refusal_style", "address_user", "relationship_speed"}
     data = {key: value for key, value in fields.items() if key in allowed}
+    # expression_dna 对外是对象、对内是 JSON 文本：入口统一序列化，
+    # 调用方（路由/PATCH 局部更新）不必关心存储形态。
+    if isinstance(data.get("expression_dna"), dict):
+        data["expression_dna"] = json.dumps(data["expression_dna"], ensure_ascii=False)
+    if isinstance(data.get("enable_thinking"), bool):
+        data["enable_thinking"] = int(data["enable_thinking"])
     if not data:
         return get_bot_persona(persona_id)
     assignments = ", ".join(f"{key} = ?" for key in data)
@@ -2226,6 +2290,12 @@ def copy_bot_persona(persona_id: str) -> Optional[dict]:
         model_id=persona["model_id"],
         reply_style=persona.get("reply_style", "moderate"),
         enable_thinking=persona.get("enable_thinking", 0),
+        # 复制人格要连「说话方式」一起复制，否则副本一上来就换了个腔调。
+        expression_dna=persona.get("expression_dna") or {},
+        reaction_style=persona.get("reaction_style") or "warm",
+        refusal_style=persona.get("refusal_style") or "soft",
+        address_user=persona.get("address_user") or "",
+        relationship_speed=persona.get("relationship_speed") or "normal",
     )
 
 
@@ -2361,29 +2431,44 @@ def delete_bot_conversation(conversation_id: str) -> bool:
         conn.close()
 
 
+def _loads_images(value) -> list:
+    """bot_messages.images 列是 JSON 文本或 NULL；读回统一归一成 list，脏值吐 []。"""
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
 def add_bot_message(
     conversation_id: str,
     role: str,
     content: str,
     external_msg_id: Optional[str] = None,
     reasoning: Optional[str] = None,
+    images: Optional[list] = None,
 ) -> dict:
     message_id = _new_id()
     now = _now()
+    images_json = json.dumps(images) if images else None
     conn = _get_conn()
     try:
         cur = conn.execute(
             "INSERT OR IGNORE INTO bot_messages "
-            "(id, conversation_id, role, content, external_msg_id, reasoning, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (message_id, conversation_id, role, content, external_msg_id, reasoning, now),
+            "(id, conversation_id, role, content, external_msg_id, reasoning, images, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (message_id, conversation_id, role, content, external_msg_id, reasoning, images_json, now),
         )
         if cur.rowcount == 0:
             row = conn.execute(
                 "SELECT * FROM bot_messages WHERE conversation_id = ? AND external_msg_id = ?",
                 (conversation_id, external_msg_id),
             ).fetchone()
-            return dict(row)
+            deduped = dict(row)
+            deduped["images"] = _loads_images(deduped.get("images"))
+            return deduped
         conn.execute(
             "UPDATE bot_conversations SET updated_at = ? WHERE id = ?",
             (now, conversation_id),
@@ -2398,6 +2483,7 @@ def add_bot_message(
             "content": content,
             "external_msg_id": external_msg_id,
             "reasoning": reasoning,
+            "images": images or [],
             "answered_at": None,
             "created_at": now,
         }
@@ -2456,6 +2542,7 @@ def get_bot_messages(conversation_id: str, limit: int = 100) -> list[dict]:
         for row in rows:
             item = dict(row)
             item.pop("sort_id", None)
+            item["images"] = _loads_images(item.get("images"))
             result.append(item)
         return result
     finally:
@@ -2493,13 +2580,76 @@ def get_recent_bot_messages(conversation_id: str, limit: int = 40) -> list[dict]
     conn = _get_conn()
     try:
         rows = conn.execute(
-            "SELECT role, content FROM bot_messages WHERE conversation_id = ? "
+            "SELECT role, content, images FROM bot_messages WHERE conversation_id = ? "
             "ORDER BY created_at DESC, rowid DESC LIMIT ?",
             (conversation_id, limit),
         ).fetchall()
-        return [dict(row) for row in reversed(rows)]
+        result = []
+        for row in reversed(rows):
+            item = dict(row)
+            item["images"] = _loads_images(item.get("images"))
+            result.append(item)
+        return result
     finally:
         conn.close()
+
+
+# ── Bot 关系账本 ──
+
+
+def get_bot_relation(persona_id: str) -> dict:
+    """读关系账本。score 是历史累计值，时间衰减由 bot.relation 在读时计算。"""
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM bot_relations WHERE persona_id = ?", (persona_id,)
+        ).fetchone()
+        if not row:
+            return {"persona_id": persona_id, "score": 0.0, "turns": 0, "last_at": None}
+        data = dict(row)
+        data["score"] = float(data.get("score") or 0)
+        data["turns"] = int(data.get("turns") or 0)
+        return data
+    finally:
+        conn.close()
+
+
+def list_bot_relations() -> dict[str, dict]:
+    """一次性取全部人格的关系账本，供列表页避免 N+1 查询。"""
+    conn = _get_conn()
+    try:
+        rows = conn.execute("SELECT * FROM bot_relations").fetchall()
+        return {
+            row["persona_id"]: {
+                "persona_id": row["persona_id"],
+                "score": float(row["score"] or 0),
+                "turns": int(row["turns"] or 0),
+                "last_at": row["last_at"],
+            }
+            for row in rows
+        }
+    finally:
+        conn.close()
+
+
+def bump_bot_relation(persona_id: str, delta: float, turns: int = 1) -> dict:
+    """累加熟悉度。只增不减：衰减在读取侧算，写侧不留痕迹。"""
+    now = _now()
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO bot_relations (persona_id, score, turns, last_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(persona_id) DO UPDATE SET "
+            "score = bot_relations.score + excluded.score, "
+            "turns = bot_relations.turns + excluded.turns, "
+            "last_at = excluded.last_at, updated_at = excluded.updated_at",
+            (persona_id, float(delta), int(turns), now, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return get_bot_relation(persona_id)
 
 
 # ── Agent Runs CRUD ──
