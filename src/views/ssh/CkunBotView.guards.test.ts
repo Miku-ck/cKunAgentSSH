@@ -58,9 +58,9 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).toContain('store.qqActiveId')
     expect(view).toContain('peerTag(c.external_id)')
     expect(view).toContain('来自 QQ · 仅供查看')
-    // 没有选中会话时只能出空态/错误态，不能落进消息列表分支
+    // 没有选中会话时只能出空态/错误态：两个空态分支必须排在共用列表分支之前
     expect(view).toContain('v-else-if="store.isQq && !store.qqActiveId"')
-    expect(view).toContain('v-else-if="store.isQq && store.qqActiveId"')
+    expect(view.indexOf('v-else-if="store.isQq && !store.qqActiveId"')).toBeLessThan(view.indexOf('v-for="d in messageList"'))
     // QQ 态不能出现可输入的胶囊；本地态才挂 composer
     expect(view).toMatch(/v-if="!store\.isQq && store\.activeConversationId" class="chat-composer"/)
     expect(view).not.toContain('QqRecords')
@@ -121,10 +121,14 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).toContain('defineAsyncComponent')
     expect(view).toContain('m.reasoning')
     expect(view).toContain('store.streamReasoning')
-    // 思考块由人格开关裁决：没勾思考的人格，历史块与流式块都不渲染
+    // 思考块由「当前应答人格」的开关裁决：没勾思考的人格，历史块与流式块都不渲染
     // （后端已丢弃 reasoning，这里是不让旧数据/漏网数据漏出来的第二道闸）
-    expect(view).toContain('store.activePersona?.enable_thinking && d.item.reasoning')
-    expect(view).toContain('store.streamReasoning && store.activePersona?.enable_thinking')
+    expect(view).toContain('thinkingOn && d.item.reasoning')
+    expect(view).toContain('store.streamReasoning && thinkingOn')
+    // 开关取的是正在说话的那一侧：QQ 记录没有思考块，也不拿本地选中人格冒充
+    const gate = view.match(/const thinkingOn = computed\([\s\S]*?\)\)/)?.[0] || ''
+    expect(gate).toContain('!store.isQq')
+    expect(gate).toContain('store.activePersona?.enable_thinking')
   })
 
   it('本地会话撤掉上传入口，历史图片气泡仍可看', () => {
@@ -199,9 +203,11 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).toContain('decorateMessages(expandBubbles(store.qqMessages))')
     expect(view).toContain(':content="d.item.bubble"')
     expect(view).toContain('{{ d.item.bubble }}')
-    // 附属信息只挂第一条：名字、图片、思考折叠在一轮里重复三遍就是噪声
-    expect(view).toContain('v-if="!d.item.bubbleIndex"')
+    // 附属信息一轮只挂第一条：图片、思考折叠不随气泡重复
     expect(view).toContain('d.item.images?.length && !d.item.bubbleIndex')
+    expect(view).toContain("!d.item.bubbleIndex && d.item.role !== 'user'")
+    // 可访问名字每条气泡都要有：meta 那行连发时不渲染，读屏不能丢掉说话人
+    expect(view).toContain('<span class="sr-only">{{ speakerLabel(d.item) }}：</span>')
     // 流式阶段同规则分条，收尾换成落库消息时看不到气泡重排
     expect(view).toContain('splitBubbles(store.streamText)')
   })
@@ -210,8 +216,11 @@ describe('cKunBot 页面注册与关键交互', () => {
     const view = read('src/components/bot/CkunBotView.vue')
     expect(view).toContain('store.userAvatar')
     expect(view).toMatch(/\.bot-message\.user \.msg-avatar \{[^}]*order: 2/)
-    // QQ 是只读记录，用户侧不发言 → 头像位只出现在 local 分支（v-else 紧邻 assistant 头像）
-    expect(view).toContain('<span v-else class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.userAvatar" /></span>')
+    // 头像位两边共用一个 span：本地你=store.userAvatar，QQ 对方=会话显示头像，bot=人格头像
+    expect(view).toContain('<span class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="bubbleAvatar(d.item)" /></span>')
+    const resolver = view.match(/function bubbleAvatar[\s\S]*?\n}/)?.[0] || ''
+    expect(resolver).toContain('store.userAvatar')
+    expect(resolver).toContain('display_avatar')
   })
 
   it('本地会话删除直接执行，不二次确认', () => {
@@ -223,15 +232,31 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).toContain('删除人格「')
   })
 
+  it('本地与 QQ 记录共用一套气泡：配色按角色，meta 两边同规则', () => {
+    const view = read('src/components/bot/CkunBotView.vue')
+    // 一份循环、一份气泡模板：两个 tab 不可能再各长回去
+    expect(view).toContain('v-for="d in messageList"')
+    expect((view.match(/class="bot-message"/g) || []).length).toBe(1)
+    // 渠道专属方向/配色覆盖全部退役：左=中性卡片、右=强调色，两边同一条规则
+    expect(view).not.toContain('.chat-main.qq')
+    expect(view).not.toContain('{ qq: store.isQq }')
+    // meta 不再是 QQ 专属：换人说话的第一条显示，连发时整条不渲染（不占空行）
+    expect(view).toContain('<span v-if="!d.cont" class="msg-meta">{{ speakerLabel(d.item) }}')
+    for (const gone of ['qq-message-body', 'qq-meta', 'qqRoleLabel']) {
+      expect(view).not.toContain(gone)
+    }
+    // 对方侧也显示名字而不是「对方」代称：与本地同一口径（QQ 用会话显示名）
+    const speaker = view.match(/function speakerLabel[\s\S]*?\n}/)?.[0] || ''
+    expect(speaker).toContain('display_name')
+  })
+
   it('QQ 记录与本地会话同向：人格在左、对方在右，切 tab 不换边', () => {
     const view = read('src/components/bot/CkunBotView.vue')
-    expect(view).toMatch(/\.chat-main\.qq \.bot-message\.assistant \{ align-self: flex-start; \}/)
-    expect(view).toMatch(/\.chat-main\.qq \.bot-message\.user \{ align-self: flex-end; \}/)
-    // 头像跟着气泡侧走：bot 不再被单独推到右侧
-    expect(view).not.toMatch(/\.chat-main\.qq \.bot-message\.assistant \.msg-avatar/)
-    // meta 与气泡同侧：bot 左对齐、对方右对齐
-    expect(view).toMatch(/\.chat-main\.qq \.bot-message\.assistant \.qq-message-body \{ align-items: flex-start; \}/)
-    expect(view).toMatch(/\.chat-main\.qq \.bot-message\.user \.qq-message-body \{ align-items: flex-end; \}/)
+    // 方向只在通用规则里写一次，QQ 不再有自己的第二套
+    expect(view).toMatch(/\.bot-message\.assistant \{ align-self: flex-start; \}/)
+    expect(view).toMatch(/\.bot-message\.user \{ align-self: flex-end; \}/)
+    expect(view).toMatch(/\.bot-message\.user \.msg-avatar \{[^}]*order: 2/)
+    expect(view).toMatch(/\.bot-message\.user \.msg-body \{ align-items: flex-end; \}/)
   })
 
   it('QQ 会话行收成一行：名字 + 群标，代号与时间进悬浮提示', () => {

@@ -72,7 +72,7 @@
         </template>
       </aside>
 
-      <div class="chat-main" :class="{ qq: store.isQq }">
+      <div class="chat-main">
         <div v-if="!store.isQq && store.activeConversation" class="chat-titlebar">
           <span class="persona-avatar"><PersonaAvatar :avatar="store.activePersona?.avatar" /></span>
           <div><strong>{{ store.activePersona?.name || 'cKunBot' }}</strong><small>只聊此刻 </small></div>
@@ -98,53 +98,44 @@
             <h2>{{ store.qqError ? 'QQ 记录读取失败' : '还没有 QQ 消息' }}</h2>
             <p>{{ store.qqError || '在 QQ 里 @ 一下机器人，这里会同步出现。' }}</p>
           </div>
-          <template v-else-if="!store.isQq">
-            <div v-if="!store.messages.length && !store.streaming" class="greeting">
+          <!-- 本地与 QQ 记录共用这一份气泡：方向、配色、meta、渲染口径都只按角色决定，
+               渠道不再各留一套覆盖，切 tab 就是同一副观感。 -->
+          <template v-else>
+            <div v-if="!store.isQq && !store.messages.length && !store.streaming" class="greeting">
               {{ store.activePersona?.greeting || `你好，我是${store.activePersona?.name || 'cKunBot'}。` }}
             </div>
-            <template v-for="d in localDecorated" :key="`${d.item.id}-${d.item.bubbleIndex}`">
+            <p v-else-if="store.isQq && !store.qqMessages.length" class="qq-empty">这段会话还没有消息。</p>
+            <template v-for="d in messageList" :key="`${d.item.id}-${d.item.bubbleIndex}`">
               <div v-if="d.divider" class="day-divider" role="separator">{{ d.divider }}</div>
               <div class="bot-message" :class="[d.item.role, { cont: d.cont }]">
-                <span v-if="d.item.role !== 'user'" class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.activePersona?.avatar" /></span>
-                <span v-else class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.userAvatar" /></span>
-                <div class="message-content">
-                  <!-- 一轮里的附属信息只挂第一条：头像旁读一遍名字、图和思考各显示一次 -->
-                  <span v-if="!d.item.bubbleIndex" class="sr-only">{{ d.item.role === 'user' ? '你' : (store.activePersona?.name || 'Bot') }}：</span>
-                  <div v-if="d.item.images?.length && !d.item.bubbleIndex" class="msg-images">
-                    <img v-for="(u, i) in d.item.images" :key="i" :src="u" class="msg-image" alt="图片" @click="openLightbox(u)" />
+                <span class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="bubbleAvatar(d.item)" /></span>
+                <div class="msg-body">
+                  <!-- 换人说话的第一条才标是谁说的；连发时整行不渲染，不占空位 -->
+                  <span v-if="!d.cont" class="msg-meta">{{ speakerLabel(d.item) }} · {{ formatLocalDateTime(d.item.created_at) }}</span>
+                  <div class="message-content">
+                    <span class="sr-only">{{ speakerLabel(d.item) }}：</span>
+                    <div v-if="d.item.images?.length && !d.item.bubbleIndex" class="msg-images">
+                      <img v-for="(u, i) in d.item.images" :key="i" :src="u" class="msg-image" alt="图片" @click="openLightbox(u)" />
+                    </div>
+                    <details v-if="!d.item.bubbleIndex && d.item.role !== 'user' && thinkingOn && d.item.reasoning" class="reasoning"><summary>思考过程</summary><div class="reasoning-body">{{ d.item.reasoning }}</div></details>
+                    <MarkdownStream v-if="d.item.role !== 'user'" :content="d.item.bubble" />
+                    <template v-else>{{ d.item.bubble }}</template>
                   </div>
-                  <details v-if="!d.item.bubbleIndex && d.item.role !== 'user' && store.activePersona?.enable_thinking && d.item.reasoning" class="reasoning"><summary>思考过程</summary><div class="reasoning-body">{{ d.item.reasoning }}</div></details>
-                  <MarkdownStream v-if="d.item.role !== 'user'" :content="d.item.bubble" />
-                  <template v-else>{{ d.item.bubble }}</template>
                 </div>
               </div>
             </template>
             <template v-if="store.streaming">
               <div v-for="(b, i) in streamBubbles" :key="`stream-${i}`" class="bot-message assistant" :class="{ cont: i > 0 }">
-                <span class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.activePersona?.avatar" /></span>
-                <div class="message-content">
-                  <details v-if="!i && store.streamReasoning && store.activePersona?.enable_thinking" class="reasoning" open><summary>思考中…</summary><div class="reasoning-body">{{ store.streamReasoning }}</div></details>
-                  <MarkdownStream v-if="b" :content="b" />
-                  <span v-else class="typing-dots" role="img" aria-label="正在输入"><i></i><i></i><i></i></span>
+                <span class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="bubbleAvatar({ role: 'assistant' })" /></span>
+                <div class="msg-body">
+                  <div class="message-content">
+                    <details v-if="!i && store.streamReasoning && thinkingOn" class="reasoning" open><summary>思考中…</summary><div class="reasoning-body">{{ store.streamReasoning }}</div></details>
+                    <MarkdownStream v-if="b" :content="b" />
+                    <span v-else class="typing-dots" role="img" aria-label="正在输入"><i></i><i></i><i></i></span>
+                  </div>
                 </div>
               </div>
             </template>
-          </template>
-          <template v-else-if="store.isQq && store.qqActiveId">
-            <template v-for="d in qqDecorated" :key="`${d.item.id}-${d.item.bubbleIndex}`">
-              <div v-if="d.divider" class="day-divider" role="separator">{{ d.divider }}</div>
-              <div class="bot-message" :class="[d.item.role, { cont: d.cont }]">
-                <span class="msg-avatar" aria-hidden="true">
-                  <PersonaAvatar v-if="d.item.role === 'assistant'" :avatar="qqActivePersona?.avatar" />
-                  <PersonaAvatar v-else :avatar="store.qqActiveConversation?.display_avatar" />
-                </span>
-                <div class="qq-message-body">
-                  <span class="qq-meta">{{ qqRoleLabel(d.item) }} · {{ formatLocalDateTime(d.item.created_at) }}</span>
-                  <div class="message-content">{{ d.item.bubble }}</div>
-                </div>
-              </div>
-            </template>
-            <p v-if="!store.qqMessages.length" class="qq-empty">这段会话还没有消息。</p>
           </template>
         </div>
         <div v-if="!store.isQq && store.error" class="chat-error">
@@ -403,8 +394,24 @@ const streamBubbles = computed(() => {
 const lightboxUrl = ref('')
 function openLightbox(url: string) { lightboxUrl.value = url }
 
-function qqRoleLabel(message: { role: string }) {
-  return message.role === 'user' ? '对方' : qqPersonaName.value
+// 两个渠道一份列表：QQ 读的是只读记录，本地读的是自己的会话，气泡规则只有一套。
+const messageList = computed(() => (store.isQq ? qqDecorated.value : localDecorated.value))
+// 思考开关只裁决本地会话：后端只在 local 通道落 reasoning，QQ 记录没有思考块可显示，
+// 拿本地选中人格的开关去判 QQ 那一侧只会张冠李戴（两边可能不是同一个人格）。
+const thinkingOn = computed(() => !store.isQq && Boolean(store.activePersona?.enable_thinking))
+
+/** 头像按「哪一侧」取：bot = 当前应答人格，人 = 本地是你、QQ 是对方。 */
+function bubbleAvatar(message: { role: string }) {
+  if (message.role !== 'user') return store.isQq ? qqActivePersona.value?.avatar : store.activePersona?.avatar
+  return store.isQq ? store.qqActiveConversation?.display_avatar : store.userAvatar
+}
+
+/** 说话人显示名，同一口径：真人用他自己的显示名（QQ 拿不到真名时用会话标题兜底），bot 用人格名。 */
+function speakerLabel(message: { role: string }) {
+  if (message.role !== 'user') return store.isQq ? qqPersonaName.value : personaName(store.activePersona) || 'Bot'
+  if (!store.isQq) return '你'
+  const conversation = store.qqActiveConversation
+  return conversation?.display_name || conversation?.title || '对方'
 }
 
 function qqRowHint(conversation: BotConversation) {
@@ -515,15 +522,8 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 .reasoning summary { cursor: pointer; padding: 4px var(--spacing-8); color: var(--text-tertiary); list-style: none; }
 .reasoning summary::-webkit-details-marker { display: none; }
 .reasoning-body { padding: 0 var(--spacing-8) var(--spacing-6); color: var(--text-secondary); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
-/* QQ 只读记录沿用本地会话的方向：人格（bot）在左、对方（真人）在右 —— 切 tab 不换边。
-   消息上方的 meta 跟气泡同侧对齐；配色同理：bot 用强调色（我方），对方用中性底。
-   头像侧由 .msg-avatar 的 order 决定（user 通用规则给 order:2 → 头像在气泡右）。 */
-.chat-main.qq .bot-message.assistant { align-self: flex-start; }
-.chat-main.qq .bot-message.user { align-self: flex-end; }
-.chat-main.qq .bot-message.assistant .qq-message-body { align-items: flex-start; }
-.chat-main.qq .bot-message.user .qq-message-body { align-items: flex-end; }
-.chat-main.qq .bot-message.user .message-content { border-color: var(--border-subtle); border-radius: var(--bubble-radius) var(--bubble-radius) var(--radius-sm) var(--bubble-radius); background: var(--bg-elevated); box-shadow: var(--shadow-sm); }
-.chat-main.qq .bot-message.assistant .message-content { border-color: color-mix(in srgb, var(--accent-primary) 24%, transparent); border-radius: var(--bubble-radius) var(--bubble-radius) var(--bubble-radius) var(--radius-sm); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); box-shadow: none; }
+/* 气泡只有一套规则：方向、配色与 meta 对齐都按角色决定（左=bot 中性卡片、右=人 强调色），
+   本地与 QQ 记录同形。头像侧由 .msg-avatar 的 order 决定（user 通用规则给 order:2 → 头像在气泡右）。 */
 /* 弹窗内容：BaseModal 的 body 已给 padding 与纵向间距，这里只管控件自身。
    显示名走 AvatarPicker 的 #fields 插槽，与头像同一栏，不再另起一行。 */
 .qq-field { display: flex; flex-direction: column; gap: 7px; color: var(--text-secondary); font-size: 0.9231rem; }
@@ -536,20 +536,16 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 .conv-menu { opacity: 0; transition: opacity var(--transition-fast); }
 .conversation:hover .conv-menu, .conversation:focus-within .conv-menu { opacity: 1; }
 @media (hover: none) { .conv-menu { opacity: 1; } }
-.qq-message-body { min-width: 0; display: flex; flex-direction: column; gap: var(--spacing-2); }
-.qq-meta { color: var(--text-tertiary); font-size: 0.7692rem; }
+.msg-body { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: var(--spacing-2); }
+.bot-message.user .msg-body { align-items: flex-end; }
+.msg-meta { color: var(--text-tertiary); font-size: 0.7692rem; }
 /* 日期分隔线：居中淡色小字，两侧渐隐细线，不打断阅读节奏。 */
 .day-divider { align-self: center; display: flex; align-items: center; gap: var(--spacing-10); margin: var(--spacing-12) 0 var(--spacing-10); color: var(--text-tertiary); font-size: 0.7692rem; }
 .day-divider::before, .day-divider::after { content: ''; width: 44px; height: 1px; background: linear-gradient(90deg, transparent, var(--border-subtle), transparent); }
-/* 连续消息合并：同角色连发时隐去重复头像与 meta、收紧行间距，只在末条留气泡圆尾。 */
+/* 连续消息合并：同角色连发时隐去重复头像、收紧行间距，只在末条留气泡圆尾（meta 那行此时不渲染）。 */
 .bot-message.cont { margin-top: -4px; margin-bottom: var(--spacing-4); }
 .bot-message.cont .msg-avatar { visibility: hidden; }
-.bot-message.cont .qq-meta { visibility: hidden; }
 .bot-message.cont .message-content { border-radius: var(--radius-sm); }
-/* 续接时收紧靠头像一侧的顶角（bot 在左收左上、对方在右收右上）。当前值与 .cont
-   的统一小角相同 —— 这行是方向声明，避免以后改气泡圆角时空出错误的一侧。 */
-.chat-main.qq .bot-message.cont.assistant .message-content { border-top-left-radius: var(--radius-sm); }
-.chat-main.qq .bot-message.cont.user .message-content { border-top-right-radius: var(--radius-sm); }
 .qq-empty { margin: auto; color: var(--text-secondary); font-size: 0.9231rem; }
 .typing-dots { display: inline-flex; align-items: center; gap: var(--spacing-4); padding: 3px 0; }
 .typing-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--text-tertiary); animation: bot-bob 1.2s ease-in-out infinite; }
