@@ -13,12 +13,13 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(read('src/views/ssh/SshView.vue')).toContain("v-show=\"activeNavPage === 'bot'\"")
   })
 
-  it('陪聊、人格、QQ 三个子页覆盖初版操作', () => {
+  it('陪聊、人格、连接三个子页覆盖初版操作', () => {
     const view = read('src/components/bot/CkunBotView.vue')
-    for (const label of ['陪聊', '人格', 'QQ 接入', '停止生成', '重试', '复制', '保存并连接', '断开']) {
+    for (const label of ['陪聊', '人格', '连接', '停止生成', '重试', '复制']) {
       expect(view).toContain(label)
     }
-    expect(view).not.toContain('app_secret: config.app_secret')
+    expect(view).not.toContain('QQ 接入')
+    expect(view).toContain('<ConnectionPage v-else :personas="store.personas" />')
   })
 
   it('人格头像只能上传图片，不再提供表情入口', () => {
@@ -47,9 +48,39 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).not.toContain('updated_at.slice(')
   })
 
-  it('QQ 页挂载只读记录区', () => {
+  it('陪聊页按渠道切换，QQ 会话只读', () => {
     const view = read('src/components/bot/CkunBotView.vue')
-    expect(view).toContain("import QqRecords from './QqRecords.vue'")
-    expect(view).toContain('<QqRecords :personas="store.personas" />')
+    expect(view).toContain('role="tablist" aria-label="会话渠道"')
+    expect(view).toContain("@click=\"store.selectChannel('qq')\"")
+    expect(view).toContain('store.qqConversations')
+    expect(view).toContain('store.qqActiveId')
+    expect(view).toContain('channelLabel(c.external_id)')
+    expect(view).toContain('来自 QQ · 仅供查看')
+    // 没有选中会话时只能出空态/错误态，不能落进消息列表分支
+    expect(view).toContain('v-else-if="store.isQq && !store.qqActiveId"')
+    expect(view).toContain('v-else-if="store.isQq && store.qqActiveId"')
+    // QQ 态不能出现可输入的胶囊；本地态才挂 composer
+    expect(view).toMatch(/v-if="!store\.isQq && store\.activeConversationId" class="chat-composer"/)
+    expect(view).not.toContain('QqRecords')
+  })
+
+  it('QQ 渠道每 5 秒刷新，贴底才自动滚动', () => {
+    const view = read('src/components/bot/CkunBotView.vue')
+    expect(view).toContain('store.refreshQq()')
+    expect(view).toContain('const stick = !el || el.scrollHeight - el.scrollTop - el.clientHeight < 48')
+    expect(view).toMatch(/setInterval\(\(\) => \{ void refreshQqChat\(\) \}, 5000\)/)
+    expect(view).toContain('stopQqPolling')
+  })
+
+  it('人格表单含回复风格与思考开关，气泡走 MarkdownStream、思考可折叠', () => {
+    const view = read('src/components/bot/CkunBotView.vue')
+    expect(view).toContain('personaForm.reply_style')
+    expect(view).toContain('personaForm.enable_thinking')
+    expect(view).toContain('回复风格')
+    expect(view).toContain('MarkdownStream')
+    // 异步引入（Markdown 栈不进首屏包）+ 折叠思考块
+    expect(view).toContain('defineAsyncComponent')
+    expect(view).toContain('m.reasoning')
+    expect(view).toContain('store.streamReasoning')
   })
 })
