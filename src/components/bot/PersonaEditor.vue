@@ -24,7 +24,7 @@
         <section class="editor-section" data-section="identity">
           <h3>身份</h3>
           <label class="field"><span>名称</span><input v-model.trim="form.name" maxlength="50" placeholder="例如：晚风" /></label>
-          <div class="field"><span>头像</span><AvatarPicker v-model="form.avatar" :seed="form.name" :label="form.name" /></div>
+          <div class="field"><span>头像</span><AvatarPicker v-model="form.avatar" /></div>
           <label class="field">
             <span>它怎么称呼你</span>
             <input v-model.trim="form.address_user" maxlength="20" placeholder="留空就叫「你」；填「小林」就会叫你的名字" />

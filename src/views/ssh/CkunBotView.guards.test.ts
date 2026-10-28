@@ -56,7 +56,7 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).toContain("@click=\"store.selectChannel('qq')\"")
     expect(view).toContain('store.qqConversations')
     expect(view).toContain('store.qqActiveId')
-    expect(view).toContain('peerLabel(c.external_id)')
+    expect(view).toContain('peerTag(c.external_id)')
     expect(view).toContain('来自 QQ · 仅供查看')
     // 没有选中会话时只能出空态/错误态，不能落进消息列表分支
     expect(view).toContain('v-else-if="store.isQq && !store.qqActiveId"')
@@ -164,7 +164,7 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(api).toContain('persona: { id: string; name: string; avatar: string }')
     expect(api).not.toContain('persona_snapshot')
     expect(view).not.toContain('persona_snapshot')
-    expect(view).toContain('personaName(conversation.persona)')
+    expect(view).toContain('personaName(qqActivePersona.value)')
   })
 
   it('QQ 会话显示覆盖：优先 display_name/display_avatar，空则回落默认', () => {
@@ -188,11 +188,50 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(store).toContain('updateConversationDisplay')
   })
 
-  it('本地会话用户气泡有头像位：你的头像图 > 淡色「你」占位', () => {
+  it('本地会话用户气泡有头像位：只认你的头像图，没设就透明空位', () => {
     const view = read('src/components/bot/CkunBotView.vue')
     expect(view).toContain('store.userAvatar')
     expect(view).toMatch(/\.bot-message\.user \.msg-avatar \{[^}]*order: 2/)
     // QQ 是只读记录，用户侧不发言 → 头像位只出现在 local 分支（v-else 紧邻 assistant 头像）
-    expect(view).toContain('<span v-else class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.userAvatar" seed="ckun-user" label="你" /></span>')
+    expect(view).toContain('<span v-else class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.userAvatar" /></span>')
+  })
+
+  it('QQ 记录与本地会话同向：人格在左、对方在右，切 tab 不换边', () => {
+    const view = read('src/components/bot/CkunBotView.vue')
+    expect(view).toMatch(/\.chat-main\.qq \.bot-message\.assistant \{ align-self: flex-start; \}/)
+    expect(view).toMatch(/\.chat-main\.qq \.bot-message\.user \{ align-self: flex-end; \}/)
+    // 头像跟着气泡侧走：bot 不再被单独推到右侧
+    expect(view).not.toMatch(/\.chat-main\.qq \.bot-message\.assistant \.msg-avatar/)
+    // meta 与气泡同侧：bot 左对齐、对方右对齐
+    expect(view).toMatch(/\.chat-main\.qq \.bot-message\.assistant \.qq-message-body \{ align-items: flex-start; \}/)
+    expect(view).toMatch(/\.chat-main\.qq \.bot-message\.user \.qq-message-body \{ align-items: flex-end; \}/)
+  })
+
+  it('QQ 会话行收成一行：名字 + 群标，代号与时间进悬浮提示', () => {
+    const view = read('src/components/bot/CkunBotView.vue')
+    const row = view.match(/<button class="conversation-main qq-single"[\s\S]*?<\/button>/)?.[0] || ''
+    expect(row).toContain(':title="qqRowHint(c)"')
+    expect(row).toContain('c.display_name || c.title')
+    expect(row).toContain('peerTag(c.external_id)')
+    // 第二段说明文字退役：250px 窄栏里必然折行，行高跟着文案长度漂；
+    // 应答人格名右侧标题栏已经写了，代号只有排查价值，都挪进 title。
+    expect(row).not.toContain('<small>')
+    expect(view).not.toContain('qqPersonaLabel')
+    const hint = view.match(/function qqRowHint[\s\S]*?\n}/)?.[0] || ''
+    expect(hint).toContain('peerLabel(conversation.external_id)')
+    expect(hint).toContain('formatLocalDateTime(conversation.updated_at)')
+  })
+
+  it('自定义显示弹窗：显示名并进头像那一栏，重置下沉到底栏', () => {
+    const view = read('src/components/bot/CkunBotView.vue')
+    const modal = view.match(/<BaseModal v-if="qqDisplayTarget"[\s\S]*?<\/BaseModal>/)?.[0] || ''
+    // 字段由 #fields 插槽交给共享选择器排版，弹窗自己不再套一层 div
+    expect(modal).toContain('<template #fields>')
+    expect(modal).toContain(':clearable="false"')
+    expect(modal).not.toContain('qq-display-modal')
+    // 恢复默认 = 名称与头像一起置空，所以选择器自带的「清除」在这个弹窗里多余
+    const actions = modal.match(/<template #actions>([\s\S]*?)<\/template>/)?.[0] || ''
+    expect(actions.indexOf('恢复默认')).toBeLessThan(actions.indexOf('取消'))
+    expect(view).toMatch(/\.qq-display-reset \{[^}]*margin-right: auto/)
   })
 })

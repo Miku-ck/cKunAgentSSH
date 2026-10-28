@@ -8,8 +8,8 @@
     <div class="panel-body">
       <div class="field-group">
         <h4>你的头像</h4>
-        <p class="field-desc">本地会话里你这一侧的头像；留空则显示淡色首字占位「你」。QQ 会话中你不发言，不适用。</p>
-        <AvatarPicker v-model="userAvatar" seed="ckun-user" label="你" @update:model-value="saveUserAvatar" />
+        <p class="field-desc">本地会话里你这一侧的头像；留空则不显示头像。QQ 会话中你不发言，不适用。</p>
+        <AvatarPicker v-model="userAvatar" @update:model-value="saveUserAvatar" />
         <p v-if="saveError" class="form-error">{{ saveError }}</p>
       </div>
 

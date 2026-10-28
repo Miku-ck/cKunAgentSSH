@@ -1,46 +1,11 @@
 /**
  * 陪聊聊天界面的「装饰」纯逻辑 —— 全部只依赖会话 external_id 与消息时间戳/角色，
  * 不采集任何真实昵称/头像/群名（QQ 官方机器人拿不到，也不该拿）。这里做的都是
- * 「合规替身」：用 openid 哈希确定性生成匿名头像与代号、按本地日历分天、合并连发。
+ * 「合规替身」：用 openid 尾号派生匿名代号、按本地日历分天、合并连发。
+ * 头像不再做任何自造图案：没设图就是空位（透明白），见 PersonaAvatar。
  * 决策逻辑集中在此以便单测覆盖（前端单测为纯 TS 无 DOM），Vue 侧只做数据映射。
  */
 import { parseBackendTs } from './format'
-
-/** FNV-1a：32 位稳定哈希，同串恒同值，作为头像与配色的唯一种子来源。 */
-function hashStr(s: string): number {
-  let h = 2166136261
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i)
-    h = Math.imul(h, 16777619)
-  }
-  return h >>> 0
-}
-
-/**
- * 淡色首字占位（Phase 4 §4.1，取代 identicon 马赛克）：色相由 seed 确定性派生 ——
- * 同一个人恒同色，不同人不同色。低饱和（s≈30%）高明度（l≈88%）淡底在明/暗主题
- * 下都不刺眼，配同色系深字保证可读；上传图永远优先，这里只兜底无图与匿名对端。
- */
-export function avatarPlaceholderStyle(seed: string): { background: string; color: string } {
-  const effective = (seed && seed.trim()) || '__placeholder__'
-  const hue = hashStr(effective) % 360
-  return {
-    background: `hsl(${hue}, 30%, 88%)`,
-    color: `hsl(${hue}, 40%, 30%)`,
-  }
-}
-
-/**
- * 占位首字：优先取名字首字（人格名/对方代号），其次 seed 首字符；
- * 全空给空串 —— 只剩一枚淡色圆底，仍是合法的占位形态。
- * 用 Array.from 取首「字」，emoji 名不会被拆成半个代理对。
- */
-export function placeholderInitial(label?: string | null, seed?: string | null): string {
-  const name = (label || '').trim()
-  if (name) return Array.from(name)[0] || ''
-  const s = (seed || '').trim()
-  return s ? Array.from(s)[0] || '' : ''
-}
 
 /**
  * 从会话 external_id 抽出对方 openid 作头像种子。
@@ -62,6 +27,14 @@ export function peerLabel(externalId?: string | null): string {
   const kind = externalId!.startsWith('group:') ? '群聊' : '私聊'
   const tail = seed.slice(-4).toUpperCase()
   return `${kind} · ${tail}`
+}
+
+/**
+ * 列表行的会话类型短标：只有群聊需要标（私聊是默认形态，标了等于噪声）。
+ * 完整代号与时间不进这一行 —— 窄栏折两行比多一段信息更难看，挪进 title 悬浮。
+ */
+export function peerTag(externalId?: string | null): string {
+  return externalId?.startsWith('group:') ? '群' : ''
 }
 
 function localDayKey(d: Date): string {

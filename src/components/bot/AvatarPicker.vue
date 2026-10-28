@@ -5,9 +5,15 @@ import { readAvatarFile } from '@/utils/persona-avatar'
 import { botApi, type BotGalleryItem } from '@/api/bot'
 import { toFriendlyMessage } from '@/api/base'
 
-// 统一头像入口（spec §4.6）：预览 + 上传（沿用 readAvatarFile 方形 256 webp 一份口径）
-// + 服务端图库选取。PersonaEditor / Bot 管理「你的头像」/ QQ 会话头像三处复用。
-defineProps<{ modelValue?: string | null; seed?: string | null; label?: string | null }>()
+// 统一头像入口（spec §4.6）：预览即上传入口 + 服务端图库选取。
+// PersonaEditor / Bot 管理「你的头像」/ QQ 会话头像三处复用。
+// 预览区未设置时只留一枚虚线空位，不生成任何默认图案。
+// clearable=false 给「外层已有整体重置」的调用方（QQ 显示弹窗的恢复默认），
+// 免得同一屏出现两个都把值置空的按钮。
+withDefaults(defineProps<{ modelValue?: string | null; clearable?: boolean }>(), {
+  modelValue: '',
+  clearable: true,
+})
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 
 const busy = ref(false)
@@ -51,15 +57,22 @@ async function pickFile(event: Event) {
 
 <template>
   <div class="avatar-picker">
-    <span class="avatar-preview"><PersonaAvatar :avatar="modelValue" :seed="seed" :label="label" /></span>
+    <button
+      type="button"
+      class="avatar-preview"
+      :class="{ empty: !modelValue }"
+      :title="modelValue ? '点击更换头像' : '点击上传头像'"
+      aria-label="点击上传头像"
+      @click="fileInput?.click()"
+    ><PersonaAvatar :avatar="modelValue" /></button>
     <div class="avatar-picker-body">
+      <slot name="fields" />
       <div class="avatar-picker-actions">
         <button type="button" class="btn" :disabled="busy" @click="fileInput?.click()">{{ busy ? '处理中…' : '上传图片' }}</button>
         <button type="button" class="btn" @click="toggleGallery">{{ showGallery ? '收起图库' : '从图库选' }}</button>
-        <button v-if="modelValue" type="button" class="btn" @click="emit('update:modelValue', '')">清除</button>
+        <button v-if="clearable && modelValue" type="button" class="btn" @click="emit('update:modelValue', '')">清除</button>
+        <label class="keep-gallery"><input type="checkbox" v-model="keepInGallery" /> 存入图库</label>
       </div>
-      <label class="keep-gallery"><input type="checkbox" v-model="keepInGallery" /> 上传后存入图库</label>
-      <small>PNG / JPG / WebP，自动裁成方形 256px</small>
       <div v-if="error" class="form-error">{{ error }}</div>
       <div v-if="showGallery" class="gallery-grid">
         <button
@@ -76,12 +89,19 @@ async function pickFile(event: Event) {
 </template>
 
 <style scoped>
-.avatar-picker { display: flex; gap: var(--spacing-12); align-items: flex-start; }
-.avatar-preview { width: 56px; height: 56px; flex: 0 0 56px; display: grid; place-items: center; border-radius: 50%; overflow: hidden; background: var(--bg-input); font-size: 1.5385rem; }
-.avatar-picker-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--spacing-6); }
-.avatar-picker-actions { display: flex; gap: var(--spacing-8); flex-wrap: wrap; }
-.keep-gallery { display: flex; align-items: center; gap: var(--spacing-4); color: var(--text-secondary); font-size: 0.7692rem; }
-.avatar-picker-body small { color: var(--text-tertiary); font-size: 0.7692rem; }
+.avatar-picker { display: flex; gap: var(--spacing-12); align-items: center; }
+.avatar-preview {
+  width: 64px; height: 64px; flex: 0 0 64px; display: grid; place-items: center;
+  padding: 0; border: 0; border-radius: 50%; overflow: hidden;
+  background: var(--bg-input); font: inherit; font-size: 1.7692rem; color: inherit; cursor: pointer;
+  transition: box-shadow var(--transition-fast);
+}
+.avatar-preview:hover { box-shadow: inset 0 0 0 1px var(--accent-primary); }
+.avatar-preview.empty { background: transparent; box-shadow: inset 0 0 0 1px var(--border-subtle); }
+.avatar-preview.empty:hover { box-shadow: inset 0 0 0 1px var(--accent-primary); }
+.avatar-picker-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--spacing-8); }
+.avatar-picker-actions { display: flex; gap: var(--spacing-8); align-items: center; flex-wrap: wrap; }
+.keep-gallery { display: flex; align-items: center; gap: var(--spacing-4); color: var(--text-tertiary); font-size: 0.7692rem; }
 .avatar-file { display: none; }
 .form-error { color: var(--danger-text); font-size: 0.8462rem; }
 .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(48px, 1fr)); gap: var(--spacing-6); margin-top: var(--spacing-4); }

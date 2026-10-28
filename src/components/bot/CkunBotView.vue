@@ -53,9 +53,10 @@
           <div class="history-label qq-label">来自 QQ</div>
           <div class="conversation-list">
             <div v-for="c in store.qqConversations" :key="c.id" class="conversation" :class="{ active: c.id === store.qqActiveId }">
-              <button class="conversation-main" @click="selectQq(c.id)">
-                <span class="qq-title"><i class="conv-peer-avatar"><PersonaAvatar :avatar="c.display_avatar" :seed="peerSeed(c.external_id)" :label="c.display_name || peerLabel(c.external_id)" /></i><span class="qq-title-text">{{ c.display_name || c.title }}</span></span>
-                <small>{{ peerLabel(c.external_id) }} · {{ qqPersonaLabel(c) }} · {{ formatLocalDateTime(c.updated_at) }}</small>
+              <button class="conversation-main qq-single" :title="qqRowHint(c)" @click="selectQq(c.id)">
+                <i class="conv-peer-avatar"><PersonaAvatar :avatar="c.display_avatar" /></i>
+                <span class="qq-title-text">{{ c.display_name || c.title }}</span>
+                <i v-if="peerTag(c.external_id)" class="conv-tag">{{ peerTag(c.external_id) }}</i>
               </button>
               <button
                 type="button"
@@ -73,7 +74,7 @@
 
       <div class="chat-main" :class="{ qq: store.isQq }">
         <div v-if="!store.isQq && store.activeConversation" class="chat-titlebar">
-          <span class="persona-avatar"><PersonaAvatar :avatar="store.activePersona?.avatar" :label="store.activePersona?.name" /></span>
+          <span class="persona-avatar"><PersonaAvatar :avatar="store.activePersona?.avatar" /></span>
           <div><strong>{{ store.activePersona?.name || 'cKunBot' }}</strong><small>只聊此刻 · 不调用工具</small></div>
           <span v-if="store.activeRelation" class="relation-chip" :title="relationHint(store.activeRelation)">
             {{ store.activeRelation.stage }}
@@ -81,7 +82,7 @@
           </span>
         </div>
         <div v-else-if="store.isQq && store.qqActiveConversation" class="chat-titlebar">
-          <span class="persona-avatar"><PersonaAvatar :avatar="qqActivePersona?.avatar" :label="qqPersonaName" /></span>
+          <span class="persona-avatar"><PersonaAvatar :avatar="qqActivePersona?.avatar" /></span>
           <div><strong>{{ qqPersonaName }}</strong><small>来自 QQ · {{ store.qqActiveConversation.display_name || peerLabel(store.qqActiveConversation.external_id) }} · 只读</small></div>
           <span v-if="qqActiveRelation" class="relation-chip" :title="relationHint(qqActiveRelation)">
             {{ qqActiveRelation.stage }}
@@ -104,8 +105,8 @@
             <template v-for="d in localDecorated" :key="d.item.id">
               <div v-if="d.divider" class="day-divider" role="separator">{{ d.divider }}</div>
               <div class="bot-message" :class="[d.item.role, { cont: d.cont }]">
-                <span v-if="d.item.role !== 'user'" class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.activePersona?.avatar" :label="store.activePersona?.name" /></span>
-                <span v-else class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.userAvatar" seed="ckun-user" label="你" /></span>
+                <span v-if="d.item.role !== 'user'" class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.activePersona?.avatar" /></span>
+                <span v-else class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.userAvatar" /></span>
                 <div class="message-content">
                   <span class="sr-only">{{ d.item.role === 'user' ? '你' : (store.activePersona?.name || 'Bot') }}：</span>
                   <div v-if="d.item.images?.length" class="msg-images">
@@ -118,7 +119,7 @@
               </div>
             </template>
             <div v-if="store.streaming" class="bot-message assistant">
-              <span class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.activePersona?.avatar" :label="store.activePersona?.name" /></span>
+              <span class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.activePersona?.avatar" /></span>
               <div class="message-content">
                 <details v-if="store.streamReasoning" class="reasoning" open><summary>思考中…</summary><div class="reasoning-body">{{ store.streamReasoning }}</div></details>
                 <MarkdownStream v-if="store.streamText" :content="store.streamText" />
@@ -131,8 +132,8 @@
               <div v-if="d.divider" class="day-divider" role="separator">{{ d.divider }}</div>
               <div class="bot-message" :class="[d.item.role, { cont: d.cont }]">
                 <span class="msg-avatar" aria-hidden="true">
-                  <PersonaAvatar v-if="d.item.role === 'assistant'" :avatar="qqActivePersona?.avatar" :label="qqPersonaName" />
-                  <PersonaAvatar v-else :avatar="store.qqActiveConversation?.display_avatar" :seed="peerSeed(store.qqActiveConversation?.external_id)" :label="store.qqActiveConversation?.display_name || peerLabel(store.qqActiveConversation?.external_id)" />
+                  <PersonaAvatar v-if="d.item.role === 'assistant'" :avatar="qqActivePersona?.avatar" />
+                  <PersonaAvatar v-else :avatar="store.qqActiveConversation?.display_avatar" />
                 </span>
                 <div class="qq-message-body">
                   <span class="qq-meta">{{ qqRoleLabel(d.item) }} · {{ formatLocalDateTime(d.item.created_at) }}</span>
@@ -184,7 +185,7 @@
       <div class="persona-grid">
         <article v-for="p in store.personas" :key="p.id" class="persona-card">
           <div class="persona-card-head">
-            <span class="persona-large-avatar"><PersonaAvatar :avatar="p.avatar" :label="p.name" /></span>
+            <span class="persona-large-avatar"><PersonaAvatar :avatar="p.avatar" /></span>
             <div><h3>{{ p.name }}</h3><span>{{ modelName(p.model_id) }}</span></div>
             <span v-if="store.relations[p.id]" class="relation-chip small" :title="relationHint(store.relations[p.id])">{{ store.relations[p.id].stage }}</span>
           </div>
@@ -205,16 +206,17 @@
     <!-- QQ 会话显示覆盖（Phase 4 §4.4）：只改本地看到的名字/头像，真实群资料不采集不改写。
          弹窗绑点进来的那一行，不是当前活动会话。 -->
     <BaseModal v-if="qqDisplayTarget" title="自定义显示" @close="qqDisplayTarget = null">
-      <div class="qq-display-modal">
-        <label class="field">
-          <span>会话显示名</span>
-          <input v-model.trim="qqDisplayName" maxlength="50" :placeholder="qqDisplayTarget.title" />
-        </label>
-        <AvatarPicker v-model="qqDisplayAvatar" :seed="peerSeed(qqDisplayTarget.external_id)" :label="qqDisplayName || qqDisplayTarget.title" />
-        <p v-if="qqDisplayError" class="form-error">{{ qqDisplayError }}</p>
-        <button type="button" class="btn btn-ghost qq-display-reset" @click="resetQqDisplay">恢复默认</button>
-      </div>
+      <AvatarPicker v-model="qqDisplayAvatar" :clearable="false">
+        <template #fields>
+          <label class="qq-field">
+            <span>会话显示名</span>
+            <input v-model.trim="qqDisplayName" maxlength="50" :placeholder="qqDisplayTarget.title" />
+          </label>
+        </template>
+      </AvatarPicker>
+      <p v-if="qqDisplayError" class="form-error">{{ qqDisplayError }}</p>
       <template #actions>
+        <button type="button" class="btn btn-ghost qq-display-reset" @click="resetQqDisplay">恢复默认</button>
         <button type="button" class="btn" @click="qqDisplayTarget = null">取消</button>
         <button type="button" class="btn btn-primary" :disabled="qqDisplaySaving" @click="saveQqDisplay">{{ qqDisplaySaving ? '保存中…' : '保存' }}</button>
       </template>
@@ -232,7 +234,7 @@ import ConnectionPage from './ConnectionPage.vue'
 import BaseModal from '@/components/common/BaseModal.vue'
 import { formatLocalDateTime } from '@/utils/datetime'
 import { personaName } from '@/utils/bot-channel'
-import { decorateMessages, peerLabel, peerSeed } from '@/utils/bot-chat-decor'
+import { decorateMessages, peerLabel, peerTag } from '@/utils/bot-chat-decor'
 import AvatarPicker from './AvatarPicker.vue'
 import ChatImageLightbox from './ChatImageLightbox.vue'
 import { botApi, type BotConversation, type BotPersona, type BotPersonaOptions } from '@/api/bot'
@@ -396,8 +398,8 @@ function qqRoleLabel(message: { role: string }) {
   return message.role === 'user' ? '对方' : qqPersonaName.value
 }
 
-function qqPersonaLabel(conversation: { persona: { name: string } }) {
-  return personaName(conversation.persona) || '未知人格'
+function qqRowHint(conversation: BotConversation) {
+  return `${peerLabel(conversation.external_id)} · 最后消息 ${formatLocalDateTime(conversation.updated_at)}`
 }
 
 async function selectQq(id: string) {
@@ -467,10 +469,13 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 .conversation.active { background: var(--bg-elevated); box-shadow: var(--shadow-sm); }
 .conversation-main { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; border: 0; background: transparent; color: var(--text-primary); padding: 9px var(--spacing-12); cursor: pointer; }
 .conversation-main span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .conversation-main small { color: var(--text-tertiary); font-size: 0.7692rem; }
-.qq-title { display: flex; align-items: center; gap: var(--spacing-6); min-width: 0; }
-.qq-title-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 侧栏会话的对方头像：openid 派生的淡色首字占位（Phase 4 去马赛克），圆裁、不暴露真实资料。 */
-.conv-peer-avatar { flex: 0 0 auto; width: 26px; height: 26px; border-radius: 50%; overflow: hidden; background: color-mix(in srgb, var(--accent-primary) 14%, transparent); }
+.qq-title-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* QQ 行收成一行：名字吃剩余宽度，群聊才贴一枚「群」标（私聊是默认，标了是噪声）。
+   代号与最后消息时间不进正文 —— 250px 窄栏里第二段必然折行，行高忽高忽低，挪进 title。 */
+.conversation-main.qq-single { flex-direction: row; align-items: center; gap: var(--spacing-6); }
+.conv-tag { flex: 0 0 auto; padding: 0 var(--spacing-4); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); color: var(--accent-text); font-size: 0.6923rem; line-height: 1.6; }
+/* 侧栏会话的对方头像：只显示自定义上传图，没设就留空 —— 圆裁、不暴露真实资料、不自造图案。 */
+.conv-peer-avatar { flex: 0 0 auto; width: 26px; height: 26px; border-radius: 50%; overflow: hidden; }
 .sidebar-empty, .sidebar-error { margin: var(--spacing-4) 0 0; padding: 0 var(--spacing-6); color: var(--text-tertiary); font-size: 0.8462rem; line-height: 1.6; }
 .sidebar-error { color: var(--danger-text); }
 .icon-button { flex: 0 0 auto; border: 0; background: transparent; color: var(--text-tertiary); cursor: pointer; padding: 5px var(--spacing-8); font-size: 1.3077rem; opacity: 0; transition: opacity var(--transition-fast), color var(--transition-fast); } .conversation:hover .icon-button, .conversation:focus-within .icon-button { opacity: 1; } .icon-button:hover { color: var(--danger-text); }
@@ -479,7 +484,7 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 .chat-main::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 240px; background: radial-gradient(78% 100% at 50% 0%, color-mix(in srgb, var(--accent-primary) 14%, transparent), transparent 70%); pointer-events: none; }
 .chat-main > * { position: relative; }
 .chat-titlebar { display: flex; align-items: center; gap: var(--spacing-10); padding: var(--spacing-12) var(--spacing-24) var(--spacing-8); }
-.chat-titlebar .persona-avatar { width: 32px; height: 32px; flex: 0 0 32px; display: grid; place-items: center; border-radius: 50%; background: color-mix(in srgb, var(--accent-primary) 14%, transparent); font-size: 1.1538rem; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 8%, transparent); }
+.chat-titlebar .persona-avatar { width: 32px; height: 32px; flex: 0 0 32px; display: grid; place-items: center; border-radius: 50%; font-size: 1.1538rem; }
 .chat-titlebar div { display: flex; flex-direction: column; gap: var(--spacing-2); } .chat-titlebar strong { font-size: 1rem; } .chat-titlebar small { color: var(--text-tertiary); font-size: 0.7692rem; }
 /* 关系徽标：阶段 + 到下一阶段的进度条。它存在的意义是让「越聊越熟」可见，
    所以进度条必须窄而低对比，不能抢走对话本身的注意力。 */
@@ -492,28 +497,32 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 .greeting { align-self: flex-start; max-width: 82%; margin-bottom: var(--spacing-16); padding: var(--spacing-12) var(--spacing-14); border: 1px solid var(--border-subtle); border-radius: var(--bubble-radius) var(--bubble-radius) var(--bubble-radius) var(--radius-sm); background: var(--bg-elevated); box-shadow: var(--shadow-sm); color: var(--text-secondary); line-height: 1.7; white-space: pre-wrap; }
 .bot-message { display: flex; align-items: flex-start; gap: 9px; max-width: 82%; margin-bottom: var(--spacing-10); }
 .bot-message.assistant { align-self: flex-start; } .bot-message.user { align-self: flex-end; }
-/* 用户气泡头像排在气泡右侧（.bot-message 是 flex，与 QQ assistant 右置同一手法） */
+/* 用户/对方气泡靠右，头像跟着排在气泡右侧；bot 在左，头像在气泡左侧。 */
 .bot-message.user .msg-avatar { order: 2; }
-.msg-avatar { width: 26px; height: 26px; flex: 0 0 26px; display: grid; place-items: center; border-radius: 50%; background: color-mix(in srgb, var(--accent-primary) 14%, transparent); font-size: 0.9231rem; }
+.msg-avatar { width: 26px; height: 26px; flex: 0 0 26px; display: grid; place-items: center; border-radius: 50%; font-size: 0.9231rem; }
 .message-content { padding: var(--spacing-10) var(--spacing-14); border: 1px solid var(--border-subtle); border-radius: var(--bubble-radius) var(--bubble-radius) var(--bubble-radius) var(--radius-sm); background: var(--bg-elevated); box-shadow: var(--shadow-sm); line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
 .bot-message.user .message-content { border-color: color-mix(in srgb, var(--accent-primary) 24%, transparent); border-radius: var(--bubble-radius) var(--bubble-radius) var(--radius-sm) var(--bubble-radius); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); box-shadow: none; }
 .reasoning { margin: 0 0 var(--spacing-6); border-radius: var(--radius-sm); background: var(--bg-input); font-size: 0.8462rem; }
 .reasoning summary { cursor: pointer; padding: 4px var(--spacing-8); color: var(--text-tertiary); list-style: none; }
 .reasoning summary::-webkit-details-marker { display: none; }
 .reasoning-body { padding: 0 var(--spacing-8) var(--spacing-6); color: var(--text-secondary); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
-.chat-main.qq .bot-message.user { align-self: flex-start; }
-.chat-main.qq .bot-message.assistant { align-self: flex-end; }
-.chat-main.qq .bot-message.assistant .msg-avatar { order: 2; }
-.chat-main.qq .bot-message.assistant .qq-message-body { align-items: flex-end; }
-.chat-main.qq .bot-message.user .message-content { border-color: var(--border-subtle); border-radius: var(--bubble-radius) var(--bubble-radius) var(--bubble-radius) var(--radius-sm); background: var(--bg-elevated); box-shadow: var(--shadow-sm); }
-.chat-main.qq .bot-message.assistant .message-content { border-color: color-mix(in srgb, var(--accent-primary) 24%, transparent); border-radius: var(--bubble-radius) var(--radius-sm) var(--bubble-radius) var(--bubble-radius); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); box-shadow: none; }
-/* QQ 显示覆盖编辑抽屉：贴在标题栏下方，编辑时不把消息流顶走太多 */
-/* 弹窗内容：BaseModal 的 body 已给 padding 与纵向间距，这里只管控件自身 */
-.qq-display-modal .field { display: flex; flex-direction: column; gap: 7px; color: var(--text-secondary); font-size: 0.9231rem; }
-.qq-display-modal .field input { border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-base); color: var(--text-primary); padding: 9px var(--spacing-10); font: inherit; font-size: 0.9231rem; }
-.qq-display-modal .field input:focus { border-color: var(--accent-primary); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 16%, transparent); }
-.qq-display-modal .form-error { color: var(--danger-text); font-size: 0.8462rem; }
-.qq-display-reset { align-self: flex-start; }
+/* QQ 只读记录沿用本地会话的方向：人格（bot）在左、对方（真人）在右 —— 切 tab 不换边。
+   消息上方的 meta 跟气泡同侧对齐；配色同理：bot 用强调色（我方），对方用中性底。
+   头像侧由 .msg-avatar 的 order 决定（user 通用规则给 order:2 → 头像在气泡右）。 */
+.chat-main.qq .bot-message.assistant { align-self: flex-start; }
+.chat-main.qq .bot-message.user { align-self: flex-end; }
+.chat-main.qq .bot-message.assistant .qq-message-body { align-items: flex-start; }
+.chat-main.qq .bot-message.user .qq-message-body { align-items: flex-end; }
+.chat-main.qq .bot-message.user .message-content { border-color: var(--border-subtle); border-radius: var(--bubble-radius) var(--bubble-radius) var(--radius-sm) var(--bubble-radius); background: var(--bg-elevated); box-shadow: var(--shadow-sm); }
+.chat-main.qq .bot-message.assistant .message-content { border-color: color-mix(in srgb, var(--accent-primary) 24%, transparent); border-radius: var(--bubble-radius) var(--bubble-radius) var(--bubble-radius) var(--radius-sm); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); box-shadow: none; }
+/* 弹窗内容：BaseModal 的 body 已给 padding 与纵向间距，这里只管控件自身。
+   显示名走 AvatarPicker 的 #fields 插槽，与头像同一栏，不再另起一行。 */
+.qq-field { display: flex; flex-direction: column; gap: 7px; color: var(--text-secondary); font-size: 0.9231rem; }
+.qq-field input { border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-base); color: var(--text-primary); padding: 9px var(--spacing-10); font: inherit; font-size: 0.9231rem; }
+.qq-field input:focus { border-color: var(--accent-primary); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 16%, transparent); }
+.form-error { color: var(--danger-text); font-size: 0.8462rem; }
+/* 重置是整表单级的动作，和取消/保存同一层；margin-right:auto 把它推到左端 */
+.qq-display-reset { margin-right: auto; }
 /* 行右侧的 ⋯ 默认藏起来：鼠标进这一行或键盘落到它身上才淡入；触屏没有 hover，常显 */
 .conv-menu { opacity: 0; transition: opacity var(--transition-fast); }
 .conversation:hover .conv-menu, .conversation:focus-within .conv-menu { opacity: 1; }
@@ -528,9 +537,10 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 .bot-message.cont .msg-avatar { visibility: hidden; }
 .bot-message.cont .qq-meta { visibility: hidden; }
 .bot-message.cont .message-content { border-radius: var(--radius-sm); }
-/* QQ 视图 assistant 靠右：续接时气泡右上/右下的圆角随方向镜像。 */
-.chat-main.qq .bot-message.cont.user .message-content { border-top-left-radius: var(--radius-sm); }
-.chat-main.qq .bot-message.cont.assistant .message-content { border-top-right-radius: var(--radius-sm); }
+/* 续接时收紧靠头像一侧的顶角（bot 在左收左上、对方在右收右上）。当前值与 .cont
+   的统一小角相同 —— 这行是方向声明，避免以后改气泡圆角时空出错误的一侧。 */
+.chat-main.qq .bot-message.cont.assistant .message-content { border-top-left-radius: var(--radius-sm); }
+.chat-main.qq .bot-message.cont.user .message-content { border-top-right-radius: var(--radius-sm); }
 .qq-empty { margin: auto; color: var(--text-secondary); font-size: 0.9231rem; }
 .typing-dots { display: inline-flex; align-items: center; gap: var(--spacing-4); padding: 3px 0; }
 .typing-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--text-tertiary); animation: bot-bob 1.2s ease-in-out infinite; }
@@ -552,7 +562,7 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 .composer-send.stop { background: var(--danger-bg); color: var(--danger-text); box-shadow: none; } .composer-send.stop:hover:not(:disabled) { filter: none; background: var(--danger-border); }
 .persona-page { flex: 1; min-height: 0; overflow-y: auto; padding: var(--spacing-24) 28px; } .section-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; } .section-heading h2 { font-size: 1.3846rem; }
 .persona-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--spacing-16); } .persona-card { display: flex; flex-direction: column; padding: 18px; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--bg-elevated); }
-.persona-card-head { display: flex; align-items: center; gap: var(--spacing-12); } .persona-large-avatar { width: 44px; height: 44px; flex: 0 0 44px; display: grid; place-items: center; border-radius: 50%; background: color-mix(in srgb, var(--accent-primary) 14%, transparent); font-size: 2.4615rem; } .persona-card-head h3 { margin-bottom: var(--spacing-4); font-size: 1.2308rem; } .persona-card-head div span { color: var(--text-tertiary); font-size: 0.8462rem; }
+.persona-card-head { display: flex; align-items: center; gap: var(--spacing-12); } .persona-large-avatar { width: 44px; height: 44px; flex: 0 0 44px; display: grid; place-items: center; border-radius: 50%; font-size: 2.4615rem; } .persona-card-head h3 { margin-bottom: var(--spacing-4); font-size: 1.2308rem; } .persona-card-head div span { color: var(--text-tertiary); font-size: 0.8462rem; }
 /* 卡片定高：性格截两行、开场白一行占位 —— 长文案不撑爆网格，卡片高度不随内容漂 */
 .personality { flex: 1; margin: 18px 0 var(--spacing-12); color: var(--text-secondary); font-size: 1rem; line-height: 1.7; white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 3.4em; } .persona-greeting { margin-bottom: var(--spacing-16); color: var(--text-tertiary); font-size: 0.9231rem; line-height: 1.6; min-height: 1.6em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .persona-actions { display: flex; flex-wrap: wrap; gap: var(--spacing-6); }

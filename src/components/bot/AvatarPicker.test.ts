@@ -16,4 +16,13 @@ describe('头像选择器 AvatarPicker', () => {
     expect(src).toContain('addGalleryItem')
     expect(src).toMatch(/catch \{[^}]*\}/)
   })
+
+  it('预览即上传入口，格式说明不占位，重置可交给外层', () => {
+    // 「PNG / JPG / WebP，自动裁成方形 256px」读了解决不了任何事：能选的文件都能用
+    expect(src).not.toContain('自动裁成方形')
+    expect(src).toMatch(/class="avatar-preview"[\s\S]*?fileInput\?\.click\(\)/)
+    // #fields 插槽让外层把相邻字段并进头像那一栏；clearable=false 给已有整体重置的调用方
+    expect(src).toContain('<slot name="fields" />')
+    expect(src).toMatch(/v-if="clearable && modelValue"/)
+  })
 })
