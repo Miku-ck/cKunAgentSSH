@@ -209,6 +209,10 @@ async def chat_stream(
     # None 表示不限制；0 表示「跟随本次 max_tokens」；vLLM/Qwen3 通过
     # chat_template_kwargs.thinking_budget 传递（口径详见 _chat_stream_impl 的 S10-06 注释）
     reasoning_max_tokens: int | None = None,
+    # 显式关闭思考：仅在 enable_thinking=False 时有意义。默认 False = 保持老行为
+    # （不下发 chat_template_kwargs，避免非 vLLM 端点因未知字段 400）；
+    # 调用方明确知道端点是 vLLM/Qwen3 类模板时置 True，才能真正关掉思考。
+    disable_thinking: bool = False,
 ) -> AsyncGenerator[StreamChunk, None]:
     """流式聊天补全（公开入口）
 
@@ -222,7 +226,7 @@ async def chat_stream(
         base_url, api_key, model, messages,
         temperature=temperature, max_tokens=max_tokens, top_p=top_p,
         enable_thinking=enable_thinking, tools=tools, tool_choice=tool_choice,
-        reasoning_max_tokens=reasoning_max_tokens,
+        reasoning_max_tokens=reasoning_max_tokens, disable_thinking=disable_thinking,
     )
     try:
         async for chunk in inner:
@@ -247,6 +251,7 @@ async def _chat_stream_impl(
     tools: list[dict] | None = None,
     tool_choice: str = "auto",
     reasoning_max_tokens: int | None = None,
+    disable_thinking: bool = False,
 ) -> AsyncGenerator[StreamChunk, None]:
     """
     流式聊天补全（实际实现，in-flight 计数由外层 chat_stream 包装维护）
@@ -271,10 +276,11 @@ async def _chat_stream_impl(
     client = await _get_client(base_url, api_key)
 
     extra_body: dict = {}
+    tpl_kwargs: dict = {}
     if enable_thinking:
         # chat_template_kwargs 会被 vLLM 注入到 chat template 渲染上下文
         # Qwen3 系列支持 enable_thinking（布尔）+ thinking_budget（int，思考 token 上限）
-        tpl_kwargs: dict = {"enable_thinking": True}
+        tpl_kwargs["enable_thinking"] = True
         # S10-06：`> 0` 把合法值 0 当成「未设」⇒ 不下发 thinking_budget ⇒ vLLM 按
         # **无上限**出思考，与 settings Field(ge=0) 的说明「0 表示使用
         # max_output_tokens」、与面板表单文案「0 = 跟随输出预算」正好相反。
@@ -287,6 +293,12 @@ async def _chat_stream_impl(
             budget = max_tokens
         if budget:
             tpl_kwargs["thinking_budget"] = budget
+    elif disable_thinking:
+        # 只下发 True 是「关不掉思考」：Qwen3 系 chat template 里 enable_thinking
+        # 未定义时默认走 thinking 分支，于是未勾选思考的人格照样思考、照样回
+        # reasoning_content。调用方要真正关掉时必须显式下发 False。
+        tpl_kwargs["enable_thinking"] = False
+    if tpl_kwargs:
         extra_body["chat_template_kwargs"] = tpl_kwargs
 
     kwargs: dict = {
@@ -331,6 +343,13 @@ async def _chat_stream_impl(
             )
             kwargs.pop("tools", None)
             kwargs.pop("tool_choice", None)
+            stream = await client.chat.completions.create(**kwargs)
+        elif any(k in err_msg for k in ("chat_template_kwargs", "thinking_budget", "enable_thinking")):
+            # 端点不认 chat_template_kwargs（非 vLLM 兼容实现，例如 OpenAI 官方
+            # 会报 "Unrecognized request argument supplied"）：去掉后重试 ——
+            # 宁可让思考开关退化成「模型自己决定」，也不能让整轮对话 400。
+            logger.warning("端点拒绝 chat_template_kwargs，去掉思考模板参数重试: %s", e)
+            kwargs.pop("extra_body", None)
             stream = await client.chat.completions.create(**kwargs)
         else:
             raise

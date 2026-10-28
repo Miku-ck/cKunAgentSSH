@@ -121,6 +121,10 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).toContain('defineAsyncComponent')
     expect(view).toContain('m.reasoning')
     expect(view).toContain('store.streamReasoning')
+    // 思考块由人格开关裁决：没勾思考的人格，历史块与流式块都不渲染
+    // （后端已丢弃 reasoning，这里是不让旧数据/漏网数据漏出来的第二道闸）
+    expect(view).toContain('store.activePersona?.enable_thinking && d.item.reasoning')
+    expect(view).toContain('store.streamReasoning && store.activePersona?.enable_thinking')
   })
 
   it('本地会话撤掉上传入口，历史图片气泡仍可看', () => {
@@ -186,6 +190,20 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).toContain('@media (hover: none) { .conv-menu { opacity: 1; } }')
     const store = read('src/stores/bot.ts')
     expect(store).toContain('updateConversationDisplay')
+  })
+
+  it('助手一轮按空行展开成多条气泡，用户原文不替他拆', () => {
+    const view = read('src/components/bot/CkunBotView.vue')
+    // 先展开再装饰：同轮的后续气泡走既有 cont 规则（隐头像、收间距），不新增样式
+    expect(view).toContain('decorateMessages(expandBubbles(store.messages))')
+    expect(view).toContain('decorateMessages(expandBubbles(store.qqMessages))')
+    expect(view).toContain(':content="d.item.bubble"')
+    expect(view).toContain('{{ d.item.bubble }}')
+    // 附属信息只挂第一条：名字、图片、思考折叠在一轮里重复三遍就是噪声
+    expect(view).toContain('v-if="!d.item.bubbleIndex"')
+    expect(view).toContain('d.item.images?.length && !d.item.bubbleIndex')
+    // 流式阶段同规则分条，收尾换成落库消息时看不到气泡重排
+    expect(view).toContain('splitBubbles(store.streamText)')
   })
 
   it('本地会话用户气泡有头像位：只认你的头像图，没设就透明空位', () => {

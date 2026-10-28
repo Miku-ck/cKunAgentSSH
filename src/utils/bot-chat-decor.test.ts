@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   decorateMessages,
   dayDividerLabel,
+  expandBubbles,
   peerLabel,
   peerSeed,
   peerTag,
+  splitBubbles,
 } from './bot-chat-decor'
 
 describe('会话对方标识 peerSeed / peerLabel', () => {
@@ -88,5 +90,45 @@ describe('连续消息合并 decorateMessages', () => {
       mk('system', '2026-10-28 10:00:30'),
     ])
     expect(out[1].cont).toBe(false)
+  })
+})
+
+describe('分条 splitBubbles / expandBubbles', () => {
+  it('空行就是另发一条：与服务端 split_reply_bubbles 同一规则', () => {
+    expect(splitBubbles('在的\n\n晚上八点开一把')).toEqual(['在的', '晚上八点开一把'])
+    expect(splitBubbles('就一句')).toEqual(['就一句'])
+    expect(splitBubbles('  \n\n  ')).toEqual([])
+    // 一条内部的换行是内容（列表、引文），不算分条
+    expect(splitBubbles('清单：\na\nb')).toEqual(['清单：\na\nb'])
+    // 超出条数不丢字：余下的并回最后一条
+    expect(splitBubbles('一\n\n二\n\n三\n\n四')).toEqual(['一', '二', '三\n\n四'])
+    expect(splitBubbles('一\n\n二', 1)).toEqual(['一\n\n二'])
+    expect(splitBubbles('一\n\n\n二 \n \n 三')).toEqual(['一', '二', '三'])
+  })
+
+  it('只展开助手的一轮，用户自己打的段落不替他拆条', () => {
+    const out = expandBubbles([
+      { id: '1', role: 'user', content: '在吗\n\n晚上打不打', created_at: '2026-10-28 09:00:00' },
+      { id: '2', role: 'assistant', content: '在的\n\n打', created_at: '2026-10-28 09:00:20' },
+    ])
+    expect(out.map(b => [b.id, b.bubble, b.bubbleIndex])).toEqual([
+      ['1', '在吗\n\n晚上打不打', 0],
+      ['2', '在的', 0],
+      ['2', '打', 1],
+    ])
+  })
+
+  it('纯图消息（正文空）仍占一个气泡位，不能整条消失', () => {
+    const out = expandBubbles([{ id: '1', role: 'assistant', content: '', created_at: '2026-10-28 09:00:00' }])
+    expect(out).toHaveLength(1)
+    expect(out[0].bubble).toBe('')
+  })
+
+  it('同一轮的后续气泡按续接处理：头像不重复、分隔线只一条', () => {
+    const out = decorateMessages(expandBubbles([
+      { id: '1', role: 'assistant', content: '一\n\n二\n\n三', created_at: '2026-10-28 09:00:00' },
+    ]))
+    expect(out.map(d => d.cont)).toEqual([false, true, true])
+    expect(out.filter(d => d.divider)).toHaveLength(1)
   })
 })

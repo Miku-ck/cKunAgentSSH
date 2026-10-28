@@ -14,7 +14,7 @@ from bot.qq_channel import (
     QQ_REPLY_TIMEOUT,
     QQ_TIMEOUT_REPLY,
     QQInboundAdapter,
-    split_qq_text,
+    split_qq_parts,
     strip_markdown_for_qq,
 )
 
@@ -290,7 +290,7 @@ class QQProvider:
 
     def outbound_parts(self, text: str) -> list[str]:
         cleaned = strip_markdown_for_qq(text).strip() or text
-        return split_qq_text(cleaned)
+        return split_qq_parts(cleaned)
 
     def fallback(self, kind: str) -> str:
         return QQ_TIMEOUT_REPLY if kind == "timeout" else QQ_FAILURE_REPLY

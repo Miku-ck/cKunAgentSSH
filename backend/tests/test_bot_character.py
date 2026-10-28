@@ -18,7 +18,7 @@ from bot.character import (
     stage_guide,
 )
 from bot.chat_service import BotChatService
-from bot.voice import DEFAULT_DNA, compile_dna, normalize_dna, strip_ai_smell
+from bot.voice import DEFAULT_DNA, compile_dna, normalize_dna, split_reply_bubbles, strip_ai_smell
 
 
 @pytest.fixture
@@ -266,3 +266,38 @@ def test_prompt_omits_expansion_sections_when_empty():
         assert marker not in prompt, marker
     # 空分区不该留一个只有标题的空节：标题本身也会挤掉一段有效指令
     assert "你的背景" in prompt
+
+
+# ── 分条：空行就是另发一条消息 ──
+
+
+def test_prompt_teaches_blank_line_as_message_break():
+    """两个渠道同一句分条口径，只在 Markdown 许可上分岔。
+
+    治的是「简洁一两句却被写成三行」：一条气泡里硬换行既不像真人，也白白占掉
+    一段行高；要分开说就该分开投。
+    """
+    svc = BotChatService()
+    for channel in ("local", "qq"):
+        prompt = svc._system_prompt(_persona(), channel)
+        assert "空一行就是另发一条消息" in prompt
+        assert "一条之内不要换行" in prompt
+        assert "最多 3 条" in prompt
+    # 长文档原来的「可分点」和分条规则自相矛盾：分点就是让模型在一条里换行
+    long_prompt = svc._system_prompt(_persona(reply_style="long"), "local")
+    assert "可分点" not in long_prompt
+
+
+def test_split_reply_bubbles_is_lossless():
+    assert split_reply_bubbles("在的\n\n晚上八点开一把") == ["在的", "晚上八点开一把"]
+    assert split_reply_bubbles("就一句") == ["就一句"]
+    assert split_reply_bubbles("  \n\n  ") == []
+    assert split_reply_bubbles("") == []
+    # 超出条数不丢内容：余下的并回最后一条。切分只改投递形态，绝不删字。
+    assert split_reply_bubbles("一\n\n二\n\n三\n\n四") == ["一", "二", "三\n\n四"]
+    # 一条内部的换行原样留着：那是内容（列表、引文），不是分条
+    assert split_reply_bubbles("清单：\na\nb") == ["清单：\na\nb"]
+    # max_bubbles=1 等于不切，QQ 额度用尽时靠它兜住
+    assert split_reply_bubbles("一\n\n二", max_bubbles=1) == ["一\n\n二"]
+    # 多个空行、空行带空格都算同一条边界
+    assert split_reply_bubbles("一\n\n\n二 \n \n 三") == ["一", "二", "三"]

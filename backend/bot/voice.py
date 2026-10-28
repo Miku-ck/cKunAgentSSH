@@ -182,3 +182,22 @@ def strip_ai_smell(text: str) -> str:
     if len(cleaned) < max(4, len(text.strip()) * 0.3):
         return text.strip()
     return cleaned
+
+
+# ── 分条 ──
+
+MAX_REPLY_BUBBLES = 3
+
+
+def split_reply_bubbles(text: str, max_bubbles: int = MAX_REPLY_BUBBLES) -> list[str]:
+    """按空行把一轮回复切成「几条独立消息」。
+
+    空行是模型自己选的分条位（见 chat_service 的分条规则），这里只负责把它兑现成
+    多条投递。超出条数不丢字：余下的并回最后一条 —— 切分改的是投递形态，不是内容。
+    单条内部的换行原样保留，那是列表或引文，不算分条。
+    """
+    chunks = [c.strip() for c in re.split(r"\n[ \t]*\n", (text or "").strip()) if c.strip()]
+    cap = max(1, max_bubbles)
+    if len(chunks) <= cap:
+        return chunks
+    return [*chunks[: cap - 1], "\n\n".join(chunks[cap - 1 :])]

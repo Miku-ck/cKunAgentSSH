@@ -198,3 +198,38 @@ async def test_relationship_speed_changes_the_stage_spoken_at(effect_db, capture
         prompts.append(_prompt_of(capture))
 
     assert prompts[0] != prompts[1], "relationship_speed 没参与阶段判定"
+
+
+@pytest.mark.asyncio
+async def test_a_turn_stays_one_row_and_one_history_message(effect_db, monkeypatch):
+    """分条是投递形态，不是一轮的身份：库里一行、喂回模型也一条。
+
+    拆成多行会让 get_recent_bot_messages 的 40 行窗口按气泡计数，几轮下来历史
+    轮数直接缩水；且历史里出现连续 assistant 消息时，部分端点判角色不交替就拒。
+    """
+    async def split_stream(**kwargs):
+        yield SimpleNamespace(content="在的\n\n晚上八点开一把，来不来", reasoning="")
+
+    monkeypatch.setattr("llm_adapter.chat_stream", split_stream)
+    persona = db.create_bot_persona(name="晚风", reply_style="concise")
+    conversation = db.create_bot_conversation(persona["id"])
+
+    await _say(conversation["id"])
+    rows = [m for m in db.get_bot_messages(conversation["id"]) if m["role"] == "assistant"]
+    assert rows[-1]["content"] == "在的\n\n晚上八点开一把，来不来"
+    assert len([r for r in rows if "\n\n" in r["content"]]) == 1, "一轮被拆成了多行"
+
+    captured: dict = {}
+
+    async def capture_stream(**kwargs):
+        captured.update(kwargs)
+        yield SimpleNamespace(content="走", reasoning="")
+
+    monkeypatch.setattr("llm_adapter.chat_stream", capture_stream)
+    await _say(conversation["id"], "几点")
+    prior = [
+        m for m in captured["messages"]
+        if m["role"] == "assistant" and "晚上八点" in m["content"]
+    ]
+    assert len(prior) == 1
+    assert "\n\n" in prior[0]["content"], "上一轮的空行被并掉了，模型学不到分条口径"

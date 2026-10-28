@@ -8,6 +8,7 @@ import re
 from functools import partial
 
 from bot.provider import InboundMessage
+from bot.voice import split_reply_bubbles
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,24 @@ def split_qq_text(
     if remaining:
         parts[-1] = parts[-1][: limit - 2].rstrip() + "……"
     return [part for part in parts if part]
+
+
+def split_qq_parts(
+    text: str, limit: int = QQ_TEXT_LIMIT, max_parts: int = QQ_MAX_PARTS
+) -> list[str]:
+    """先按空行分「条」，每条再按平台单条上限切。
+
+    提示词里的空行就是「另发一条消息」，所以模型分开说的话在 QQ 上也该是一条一条
+    连发 —— 真人就是这样。被动回复只有 max_parts 条额度：分条用完后余下的并回末条，
+    宁可某条长一点也不吞字。
+    """
+    parts: list[str] = []
+    for bubble in split_reply_bubbles(text, max_bubbles=max_parts):
+        room = max_parts - len(parts)
+        if room <= 0:
+            break
+        parts.extend(split_qq_text(bubble, limit=limit, max_parts=room))
+    return parts
 
 
 class QQInboundAdapter:

@@ -98,3 +98,51 @@ export function decorateMessages<T extends Decoratable>(
   }
   return out
 }
+
+// ── 分条 ──
+
+/** 一轮回复最多拆几条气泡，与服务端 MAX_REPLY_BUBBLES 同值。 */
+export const MAX_REPLY_BUBBLES = 3
+
+/**
+ * 按空行把一轮回复切成多条气泡。规则与服务端 `bot/voice.py` 的 `split_reply_bubbles`
+ * 一致：超出条数不丢字，余下的并回最后一条；单条内部的换行原样保留（那是列表或引文，
+ * 不算分条）。跨语言没法共享实现，改一边必须同步另一边 —— 不一致时最坏只是收尾瞬间
+ * 气泡重排，不会丢内容。
+ */
+export function splitBubbles(text: string, maxBubbles: number = MAX_REPLY_BUBBLES): string[] {
+  const chunks = (text || '')
+    .trim()
+    .split(/\n[ \t]*\n/)
+    .map(chunk => chunk.trim())
+    .filter(Boolean)
+  const cap = Math.max(1, maxBubbles)
+  if (chunks.length <= cap) return chunks
+  return [...chunks.slice(0, cap - 1), chunks.slice(cap - 1).join('\n\n')]
+}
+
+export interface Bubbly {
+  role: string
+  content: string
+}
+
+/**
+ * 把「一轮一行」的消息展开成「一条气泡一项」，交给 decorateMessages 走既有的
+ * 续接逻辑（同角色相邻 → 隐头像、收间距），所以多条气泡的观感不需要任何新样式。
+ * 只展开助手：用户自己打的段落是他的原文，不该由我们替他拆条。
+ */
+export function expandBubbles<T extends Bubbly>(
+  items: readonly T[],
+): (T & { bubble: string; bubbleIndex: number })[] {
+  const out: (T & { bubble: string; bubbleIndex: number })[] = []
+  for (const item of items) {
+    const bubbles = item.role === 'assistant' ? splitBubbles(item.content) : []
+    // 正文为空（纯图消息）也要留一位，否则整条消息在列表里消失
+    if (!bubbles.length) {
+      out.push({ ...item, bubble: item.content, bubbleIndex: 0 })
+      continue
+    }
+    bubbles.forEach((bubble, bubbleIndex) => out.push({ ...item, bubble, bubbleIndex }))
+  }
+  return out
+}

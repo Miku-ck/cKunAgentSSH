@@ -107,6 +107,27 @@ def test_short_reply_stays_one_part():
     assert split_qq_text("就在") == ["就在"]
 
 
+def test_outbound_parts_sends_one_message_per_blank_line():
+    """模型用空行分开说的，QQ 就一条一条连发 —— 真人在群里就是这样。"""
+    from bot.qq_manager import QQProvider
+
+    assert QQProvider().outbound_parts("在的\n\n晚上八点开一把，来不来") == [
+        "在的",
+        "晚上八点开一把，来不来",
+    ]
+
+
+def test_outbound_parts_respects_platform_quota_without_dropping_words():
+    """被动回复只有 4 条额度：超出的分条并回末条，宁可长也不吞字。"""
+    from bot.qq_manager import QQProvider
+
+    parts = QQProvider().outbound_parts("\n\n".join(["一", "二", "三", "四", "五"]))
+
+    assert len(parts) == 4
+    assert "".join(parts).replace("\n", "") == "一二三四五"
+    assert parts[-1] == "四\n\n五"
+
+
 @pytest.mark.asyncio
 async def test_provider_outbound_parts_cleans_then_splits():
     from bot.qq_manager import QQProvider

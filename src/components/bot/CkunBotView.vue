@@ -75,7 +75,7 @@
       <div class="chat-main" :class="{ qq: store.isQq }">
         <div v-if="!store.isQq && store.activeConversation" class="chat-titlebar">
           <span class="persona-avatar"><PersonaAvatar :avatar="store.activePersona?.avatar" /></span>
-          <div><strong>{{ store.activePersona?.name || 'cKunBot' }}</strong><small>只聊此刻 · 不调用工具</small></div>
+          <div><strong>{{ store.activePersona?.name || 'cKunBot' }}</strong><small>只聊此刻 </small></div>
           <span v-if="store.activeRelation" class="relation-chip" :title="relationHint(store.activeRelation)">
             {{ store.activeRelation.stage }}
             <i class="relation-bar" aria-hidden="true"><b :style="{ width: relationPercent(store.activeRelation) }"></b></i>
@@ -102,33 +102,36 @@
             <div v-if="!store.messages.length && !store.streaming" class="greeting">
               {{ store.activePersona?.greeting || `你好，我是${store.activePersona?.name || 'cKunBot'}。` }}
             </div>
-            <template v-for="d in localDecorated" :key="d.item.id">
+            <template v-for="d in localDecorated" :key="`${d.item.id}-${d.item.bubbleIndex}`">
               <div v-if="d.divider" class="day-divider" role="separator">{{ d.divider }}</div>
               <div class="bot-message" :class="[d.item.role, { cont: d.cont }]">
                 <span v-if="d.item.role !== 'user'" class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.activePersona?.avatar" /></span>
                 <span v-else class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.userAvatar" /></span>
                 <div class="message-content">
-                  <span class="sr-only">{{ d.item.role === 'user' ? '你' : (store.activePersona?.name || 'Bot') }}：</span>
-                  <div v-if="d.item.images?.length" class="msg-images">
+                  <!-- 一轮里的附属信息只挂第一条：头像旁读一遍名字、图和思考各显示一次 -->
+                  <span v-if="!d.item.bubbleIndex" class="sr-only">{{ d.item.role === 'user' ? '你' : (store.activePersona?.name || 'Bot') }}：</span>
+                  <div v-if="d.item.images?.length && !d.item.bubbleIndex" class="msg-images">
                     <img v-for="(u, i) in d.item.images" :key="i" :src="u" class="msg-image" alt="图片" @click="openLightbox(u)" />
                   </div>
-                  <details v-if="d.item.role !== 'user' && d.item.reasoning" class="reasoning"><summary>思考过程</summary><div class="reasoning-body">{{ d.item.reasoning }}</div></details>
-                  <MarkdownStream v-if="d.item.role !== 'user'" :content="d.item.content" />
-                  <template v-else>{{ d.item.content }}</template>
+                  <details v-if="!d.item.bubbleIndex && d.item.role !== 'user' && store.activePersona?.enable_thinking && d.item.reasoning" class="reasoning"><summary>思考过程</summary><div class="reasoning-body">{{ d.item.reasoning }}</div></details>
+                  <MarkdownStream v-if="d.item.role !== 'user'" :content="d.item.bubble" />
+                  <template v-else>{{ d.item.bubble }}</template>
                 </div>
               </div>
             </template>
-            <div v-if="store.streaming" class="bot-message assistant">
-              <span class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.activePersona?.avatar" /></span>
-              <div class="message-content">
-                <details v-if="store.streamReasoning" class="reasoning" open><summary>思考中…</summary><div class="reasoning-body">{{ store.streamReasoning }}</div></details>
-                <MarkdownStream v-if="store.streamText" :content="store.streamText" />
-                <span v-else class="typing-dots" role="img" aria-label="正在输入"><i></i><i></i><i></i></span>
+            <template v-if="store.streaming">
+              <div v-for="(b, i) in streamBubbles" :key="`stream-${i}`" class="bot-message assistant" :class="{ cont: i > 0 }">
+                <span class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.activePersona?.avatar" /></span>
+                <div class="message-content">
+                  <details v-if="!i && store.streamReasoning && store.activePersona?.enable_thinking" class="reasoning" open><summary>思考中…</summary><div class="reasoning-body">{{ store.streamReasoning }}</div></details>
+                  <MarkdownStream v-if="b" :content="b" />
+                  <span v-else class="typing-dots" role="img" aria-label="正在输入"><i></i><i></i><i></i></span>
+                </div>
               </div>
-            </div>
+            </template>
           </template>
           <template v-else-if="store.isQq && store.qqActiveId">
-            <template v-for="d in qqDecorated" :key="d.item.id">
+            <template v-for="d in qqDecorated" :key="`${d.item.id}-${d.item.bubbleIndex}`">
               <div v-if="d.divider" class="day-divider" role="separator">{{ d.divider }}</div>
               <div class="bot-message" :class="[d.item.role, { cont: d.cont }]">
                 <span class="msg-avatar" aria-hidden="true">
@@ -137,7 +140,7 @@
                 </span>
                 <div class="qq-message-body">
                   <span class="qq-meta">{{ qqRoleLabel(d.item) }} · {{ formatLocalDateTime(d.item.created_at) }}</span>
-                  <div class="message-content">{{ d.item.content }}</div>
+                  <div class="message-content">{{ d.item.bubble }}</div>
                 </div>
               </div>
             </template>
@@ -234,7 +237,7 @@ import ConnectionPage from './ConnectionPage.vue'
 import BaseModal from '@/components/common/BaseModal.vue'
 import { formatLocalDateTime } from '@/utils/datetime'
 import { personaName } from '@/utils/bot-channel'
-import { decorateMessages, peerLabel, peerTag } from '@/utils/bot-chat-decor'
+import { decorateMessages, expandBubbles, peerLabel, peerTag, splitBubbles } from '@/utils/bot-chat-decor'
 import AvatarPicker from './AvatarPicker.vue'
 import ChatImageLightbox from './ChatImageLightbox.vue'
 import { botApi, type BotConversation, type BotPersona, type BotPersonaOptions } from '@/api/bot'
@@ -386,8 +389,15 @@ const qqActiveRelation = computed(() => {
   return pid ? store.relations[pid] || null : null
 })
 // 装饰元数据（日期分隔 + 连续合并）交给纯函数算，模板只做映射。
-const localDecorated = computed(() => decorateMessages(store.messages))
-const qqDecorated = computed(() => decorateMessages(store.qqMessages))
+// 先按空行展开成气泡再装饰：同一轮的后续气泡天然算「续接」，隐头像、收间距都复用现成规则。
+const localDecorated = computed(() => decorateMessages(expandBubbles(store.messages)))
+const qqDecorated = computed(() => decorateMessages(expandBubbles(store.qqMessages)))
+// 流式阶段就分条：打字时一条条冒出来，收尾换成落库消息时不会看到气泡重排。
+// 一个字符都还没有时留一条空气泡，「正在输入」的三个点就落在那里面。
+const streamBubbles = computed(() => {
+  const parts = splitBubbles(store.streamText)
+  return parts.length ? parts : ['']
+})
 
 // 图片灯箱：本地/历史消息里的图片点开放大，不跳转、不外发。
 const lightboxUrl = ref('')

@@ -36,7 +36,7 @@ class BotChatService:
     _STYLE_DIRECTIVE = {
         "concise": "回复长度：一两句话、口语化、点到为止，别铺陈。",
         "moderate": "回复长度：以简洁自然为主，确有内容再展开。",
-        "long": "回复长度：可分点、有条理地展开细节。",
+        "long": "回复长度：可有条理地展开细节。",
     }
 
     def _system_prompt(
@@ -114,6 +114,15 @@ class BotChatService:
             )
         else:
             sections.append("排版规则：可用 Markdown 排版与适量表情。")
+
+        # 分条口径两个渠道共用，且排在排版之后压尾（末位指令记得最牢）：治的是
+        # 「明明只说一两句，却被写成三行」—— 一条气泡内硬换行既不像真人也白占行高，
+        # 要分开说就该分开投（本地按空行展开成多气泡，QQ 按空行连发多条消息）。
+        sections.append(
+            "分条规则：空一行就是另发一条消息，最多 3 条；一条之内不要换行、不要分点。"
+            "一句话说完就发出去，别为了显得口语把一句话拆成三行；"
+            "确实要分开说几件事，才用空行分开。"
+        )
 
         # 宪章永远压尾，且自身声明优先级最高：这是唯一不允许被人格设定覆盖的一节。
         sections.append(SAFETY_CHARTER)
@@ -228,9 +237,15 @@ class BotChatService:
             enable_thinking=enable_thinking,
             tools=None,
             reasoning_max_tokens=reasoning_budget,
+            # 人格没勾思考就真的关掉（Qwen3 系模板默认开思考，不下发 False 等于关不掉）：
+            # 只是「不显示」不够，白烧思考 token 会拖慢首字。端点不认该字段时
+            # llm_adapter 会去掉参数降级重试。
+            disable_thinking=not enable_thinking,
         ):
-            # reasoning 只在本地面下发：QQ 被动回复是单条纯文本，无思考展示位。
-            if chunk.reasoning and channel == "local":
+            # reasoning 只在「人格开了思考 + 本地面」下发：QQ 被动回复是单条纯文本，
+            # 无思考展示位；人格没勾思考时，上游即便回了 reasoning chunk 也一律丢掉
+            # （既不显示也不落库），否则人格上的思考开关形同虚设。
+            if enable_thinking and channel == "local" and chunk.reasoning:
                 reasoning_parts.append(chunk.reasoning)
                 yield "reasoning", chunk.reasoning
             if chunk.content:
