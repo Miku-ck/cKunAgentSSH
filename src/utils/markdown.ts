@@ -6,15 +6,19 @@ import { marked } from 'marked'
 import hljs from 'highlight.js/lib/core'
 // 启动性能：只 core + 精选语言，绝不从 highlight.js 根入口全量引入（~190 语言实测
 // 把首屏 useMarkdownDelegation chunk 撑到 1.65MB）。精选集覆盖运维终端高频场景
-// （脚本/配置/IaC/查询/主流语言）；未注册语言仍走 highlightAuto，只是扫描集更小更快。
+// （Windows/Linux 脚本、配置、IaC、查询、主流语言）。
 import bash from 'highlight.js/lib/languages/bash'
 import shell from 'highlight.js/lib/languages/shell'
+import powershell from 'highlight.js/lib/languages/powershell'
 import python from 'highlight.js/lib/languages/python'
 import json from 'highlight.js/lib/languages/json'
 import yaml from 'highlight.js/lib/languages/yaml'
 import ini from 'highlight.js/lib/languages/ini'
 import dockerfile from 'highlight.js/lib/languages/dockerfile'
 import nginx from 'highlight.js/lib/languages/nginx'
+import makefile from 'highlight.js/lib/languages/makefile'
+import xml from 'highlight.js/lib/languages/xml'
+import http from 'highlight.js/lib/languages/http'
 import go from 'highlight.js/lib/languages/go'
 import sql from 'highlight.js/lib/languages/sql'
 import javascript from 'highlight.js/lib/languages/javascript'
@@ -24,8 +28,9 @@ import plaintext from 'highlight.js/lib/languages/plaintext'
 import DOMPurify from 'dompurify'
 
 for (const [id, def] of [
-  ['bash', bash], ['shell', shell], ['python', python], ['json', json],
-  ['yaml', yaml], ['ini', ini], ['dockerfile', dockerfile], ['nginx', nginx],
+  ['bash', bash], ['shell', shell], ['powershell', powershell], ['python', python],
+  ['json', json], ['yaml', yaml], ['ini', ini], ['dockerfile', dockerfile],
+  ['nginx', nginx], ['makefile', makefile], ['xml', xml], ['http', http],
   ['go', go], ['sql', sql], ['javascript', javascript], ['typescript', typescript],
   ['diff', diff], ['plaintext', plaintext],
 ] as const) {
@@ -121,8 +126,12 @@ export function renderMarkdown(text: string): string {
         const decoded = decodeHtml(code)
         let highlightedCode: string
         try {
-          highlightedCode = safeLang && hljs.getLanguage(safeLang)
-            ? hljs.highlight(decoded, { language: safeLang }).value
+          // 分三种：① 已注册语言→精确高亮；② 标了语言名但精选集未含→按 plaintext
+          // 输出（不能让 highlightAuto 在小子集里乱猜一个错配色）；③ 无标注→ highlightAuto。
+          highlightedCode = safeLang
+            ? hljs.highlight(decoded, {
+                language: hljs.getLanguage(safeLang) ? safeLang : 'plaintext',
+              }).value
             : hljs.highlightAuto(decoded).value
         } catch {
           highlightedCode = code
