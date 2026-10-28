@@ -135,8 +135,11 @@ async def chat(req: BotChatRequest):
 
     async def events():
         try:
-            async for content in chat_service.stream_reply(req.conversation_id, req.content):
-                yield f"data: {json.dumps({'type': 'content', 'content': content}, ensure_ascii=False)}\n\n"
+            async for kind, text in chat_service.stream_reply(
+                req.conversation_id, req.content, channel="local"
+            ):
+                # kind 直接映射事件类型：reasoning 供前端折叠展示，content 是正文。
+                yield f"data: {json.dumps({'type': kind, 'content': text}, ensure_ascii=False)}\n\n"
             message = db.get_bot_messages(req.conversation_id, 1)[-1]
             yield f"data: {json.dumps({'type': 'done', 'message': message}, ensure_ascii=False)}\n\n"
         except Exception as exc:

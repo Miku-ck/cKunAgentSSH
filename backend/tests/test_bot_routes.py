@@ -161,3 +161,33 @@ def test_local_conversation_created_with_greeting_message(client):
     conv = client.post("/api/bot/conversations", json={"persona_id": persona["id"], "channel": "local"}).json()
     msgs = client.get(f"/api/bot/conversations/{conv['id']}/messages").json()
     assert len(msgs) == 1 and msgs[0]["role"] == "assistant" and msgs[0]["content"] == "初次见面，多多指教"
+
+
+def test_bot_chat_sse_emits_reasoning_and_content_events(client, monkeypatch):
+    """本地 SSE 面：reasoning chunk 派发 reasoning 事件，正文派发 content 事件，收尾 done。"""
+    from bot.chat_service import BotChatService
+
+    async def fake_stream(self, cid, content, external_msg_id=None, *, channel="local"):
+        assert channel == "local"
+        yield "reasoning", "想"
+        yield "content", "好"
+
+    monkeypatch.setattr(BotChatService, "stream_reply", fake_stream)
+    monkeypatch.setattr(
+        "routes.bot.db.get_bot_messages",
+        lambda cid, n=1: [{"id": "m", "role": "assistant", "content": "好", "created_at": ""}],
+    )
+    conv = client.post(
+        "/api/bot/conversations", json={"persona_id": client.get("/api/bot/personas").json()[0]["id"]}
+    ).json()
+    with client.stream(
+        "POST", "/api/bot/chat",
+        json={"conversation_id": conv["id"], "content": "在吗"},
+    ) as r:
+        body = "".join(r.iter_text())
+    events = [json.loads(line[6:]) for line in body.splitlines() if line.startswith("data: ")]
+    types = [e["type"] for e in events]
+    assert "reasoning" in types and "content" in types
+    assert next(e for e in events if e["type"] == "reasoning")["content"] == "想"
+    assert next(e for e in events if e["type"] == "content")["content"] == "好"
+    assert types[-1] == "done"
