@@ -18,6 +18,7 @@ const read = (rel: string) => readFileSync(join(SRC, rel), 'utf8')
 
 /** 已接共享件、且容器自己接住初始焦点的弹窗。下面的全仓交叉核对也靠这份清单。 */
 const INTEGRATED = [
+  'components/bot/ChatImageLightbox.vue',
   'components/ssh/SftpImagePreview.vue',
   'components/ssh/SftpConflictDialog.vue',
   'components/ssh/SftpTransferDialog.vue',

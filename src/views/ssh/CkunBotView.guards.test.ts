@@ -56,7 +56,7 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).toContain("@click=\"store.selectChannel('qq')\"")
     expect(view).toContain('store.qqConversations')
     expect(view).toContain('store.qqActiveId')
-    expect(view).toContain('channelLabel(c.external_id)')
+    expect(view).toContain('peerLabel(c.external_id)')
     expect(view).toContain('来自 QQ · 仅供查看')
     // 没有选中会话时只能出空态/错误态，不能落进消息列表分支
     expect(view).toContain('v-else-if="store.isQq && !store.qqActiveId"')

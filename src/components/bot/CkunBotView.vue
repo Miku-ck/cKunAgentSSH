@@ -30,8 +30,8 @@
           <div class="conversation-list">
             <div v-for="c in store.qqConversations" :key="c.id" class="conversation" :class="{ active: c.id === store.qqActiveId }">
               <button class="conversation-main" @click="selectQq(c.id)">
-                <span class="qq-title"><i class="channel-chip">{{ channelLabel(c.external_id) }}</i><span class="qq-title-text">{{ c.title }}</span></span>
-                <small>{{ qqPersonaLabel(c) }} · {{ formatLocalDateTime(c.updated_at) }}</small>
+                <span class="qq-title"><i class="conv-peer-avatar"><GeneratedAvatar :seed="peerSeed(c.external_id)" /></i><span class="qq-title-text">{{ c.title }}</span></span>
+                <small>{{ peerLabel(c.external_id) }} · {{ qqPersonaLabel(c) }} · {{ formatLocalDateTime(c.updated_at) }}</small>
               </button>
             </div>
             <p v-if="store.qqError" class="sidebar-error">{{ store.qqError }}</p>
@@ -51,7 +51,11 @@
         </div>
         <div v-else-if="store.isQq && store.qqActiveConversation" class="chat-titlebar">
           <span class="persona-avatar"><PersonaAvatar :avatar="qqActivePersona?.avatar" /></span>
-          <div><strong>{{ qqPersonaName }}</strong><small>来自 QQ · 只读</small></div>
+          <div><strong>{{ qqPersonaName }}</strong><small>来自 QQ · {{ peerLabel(store.qqActiveConversation.external_id) }} · 只读</small></div>
+          <span v-if="qqActiveRelation" class="relation-chip" :title="relationHint(qqActiveRelation)">
+            {{ qqActiveRelation.stage }}
+            <i class="relation-bar" aria-hidden="true"><b :style="{ width: relationPercent(qqActiveRelation) }"></b></i>
+          </span>
         </div>
         <div ref="messageListRef" class="bot-messages">
           <div v-if="!store.isQq && !store.activeConversationId" class="chat-empty">
@@ -66,18 +70,21 @@
             <div v-if="!store.messages.length && !store.streaming" class="greeting">
               {{ store.activePersona?.greeting || `你好，我是${store.activePersona?.name || 'cKunBot'}。` }}
             </div>
-            <div v-for="m in store.messages" :key="m.id" class="bot-message" :class="m.role">
-              <span v-if="m.role !== 'user'" class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.activePersona?.avatar" /></span>
-              <div class="message-content">
-                <span class="sr-only">{{ m.role === 'user' ? '你' : (store.activePersona?.name || 'Bot') }}：</span>
-                <div v-if="m.images?.length" class="msg-images">
-                  <img v-for="(u, i) in m.images" :key="i" :src="u" class="msg-image" alt="图片" />
+            <template v-for="d in localDecorated" :key="d.item.id">
+              <div v-if="d.divider" class="day-divider" role="separator">{{ d.divider }}</div>
+              <div class="bot-message" :class="[d.item.role, { cont: d.cont }]">
+                <span v-if="d.item.role !== 'user'" class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.activePersona?.avatar" /></span>
+                <div class="message-content">
+                  <span class="sr-only">{{ d.item.role === 'user' ? '你' : (store.activePersona?.name || 'Bot') }}：</span>
+                  <div v-if="d.item.images?.length" class="msg-images">
+                    <img v-for="(u, i) in d.item.images" :key="i" :src="u" class="msg-image" alt="图片" @click="openLightbox(u)" />
+                  </div>
+                  <details v-if="d.item.role !== 'user' && d.item.reasoning" class="reasoning"><summary>思考过程</summary><div class="reasoning-body">{{ d.item.reasoning }}</div></details>
+                  <MarkdownStream v-if="d.item.role !== 'user'" :content="d.item.content" />
+                  <template v-else>{{ d.item.content }}</template>
                 </div>
-                <details v-if="m.role !== 'user' && m.reasoning" class="reasoning"><summary>思考过程</summary><div class="reasoning-body">{{ m.reasoning }}</div></details>
-                <MarkdownStream v-if="m.role !== 'user'" :content="m.content" />
-                <template v-else>{{ m.content }}</template>
               </div>
-            </div>
+            </template>
             <div v-if="store.streaming" class="bot-message assistant">
               <span class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="store.activePersona?.avatar" /></span>
               <div class="message-content">
@@ -88,13 +95,19 @@
             </div>
           </template>
           <template v-else-if="store.isQq && store.qqActiveId">
-            <div v-for="m in store.qqMessages" :key="m.id" class="bot-message" :class="m.role">
-              <span v-if="m.role === 'assistant'" class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="qqActivePersona?.avatar" /></span>
-              <div class="qq-message-body">
-                <span class="qq-meta">{{ qqRoleLabel(m) }} · {{ formatLocalDateTime(m.created_at) }}</span>
-                <div class="message-content">{{ m.content }}</div>
+            <template v-for="d in qqDecorated" :key="d.item.id">
+              <div v-if="d.divider" class="day-divider" role="separator">{{ d.divider }}</div>
+              <div class="bot-message" :class="[d.item.role, { cont: d.cont }]">
+                <span class="msg-avatar" aria-hidden="true">
+                  <PersonaAvatar v-if="d.item.role === 'assistant'" :avatar="qqActivePersona?.avatar" />
+                  <GeneratedAvatar v-else :seed="peerSeed(store.qqActiveConversation?.external_id)" />
+                </span>
+                <div class="qq-message-body">
+                  <span class="qq-meta">{{ qqRoleLabel(d.item) }} · {{ formatLocalDateTime(d.item.created_at) }}</span>
+                  <div class="message-content">{{ d.item.content }}</div>
+                </div>
               </div>
-            </div>
+            </template>
             <p v-if="!store.qqMessages.length" class="qq-empty">这段会话还没有消息。</p>
           </template>
         </div>
@@ -176,6 +189,8 @@
       @close="personaEditor = false"
       @saved="onPersonaSaved"
     />
+
+    <ChatImageLightbox :visible="!!lightboxUrl" :src="lightboxUrl" @close="lightboxUrl = ''" />
   </section>
 </template>
 
@@ -185,7 +200,10 @@ import PersonaAvatar from './PersonaAvatar.vue'
 import PersonaEditor from './PersonaEditor.vue'
 import ConnectionPage from './ConnectionPage.vue'
 import { formatLocalDateTime } from '@/utils/datetime'
-import { channelLabel, personaName } from '@/utils/bot-channel'
+import { personaName } from '@/utils/bot-channel'
+import { decorateMessages, peerLabel, peerSeed } from '@/utils/bot-chat-decor'
+import GeneratedAvatar from './GeneratedAvatar.vue'
+import ChatImageLightbox from './ChatImageLightbox.vue'
 import { botApi, type BotPersona, type BotPersonaOptions } from '@/api/bot'
 import { readChatImage, MAX_CHAT_IMAGES } from '@/utils/chat-image'
 import { toFriendlyMessage } from '@/api/base'
@@ -315,6 +333,18 @@ function relationHint(state: { stage: string; turns: number; days_since: number 
 
 const qqActivePersona = computed(() => store.qqActiveConversation?.persona || null)
 const qqPersonaName = computed(() => personaName(qqActivePersona.value) || '机器人')
+// 关系是「人格 × 用户」维度：QQ 会话也归属某人格，取其关系快照补上徽标。
+const qqActiveRelation = computed(() => {
+  const pid = qqActivePersona.value?.id
+  return pid ? store.relations[pid] || null : null
+})
+// 装饰元数据（日期分隔 + 连续合并）交给纯函数算，模板只做映射。
+const localDecorated = computed(() => decorateMessages(store.messages))
+const qqDecorated = computed(() => decorateMessages(store.qqMessages))
+
+// 图片灯箱：本地/历史消息里的图片点开放大，不跳转、不外发。
+const lightboxUrl = ref('')
+function openLightbox(url: string) { lightboxUrl.value = url }
 
 function qqRoleLabel(message: { role: string }) {
   return message.role === 'user' ? '对方' : qqPersonaName.value
@@ -389,7 +419,8 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 .conversation-main span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .conversation-main small { color: var(--text-tertiary); font-size: 0.7692rem; }
 .qq-title { display: flex; align-items: center; gap: var(--spacing-6); min-width: 0; }
 .qq-title-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.channel-chip { flex: 0 0 auto; padding: 0 var(--spacing-4); border-radius: var(--radius-xs); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); color: var(--accent-text); font-size: 0.6923rem; font-style: normal; line-height: 1.6; }
+/* 侧栏会话的对方头像：openid 派生的匿名 identicon，圆裁、不暴露真实资料。 */
+.conv-peer-avatar { flex: 0 0 auto; width: 26px; height: 26px; border-radius: 50%; overflow: hidden; background: color-mix(in srgb, var(--accent-primary) 14%, transparent); }
 .sidebar-empty, .sidebar-error { margin: var(--spacing-4) 0 0; padding: 0 var(--spacing-6); color: var(--text-tertiary); font-size: 0.8462rem; line-height: 1.6; }
 .sidebar-error { color: var(--danger-text); }
 .icon-button { flex: 0 0 auto; border: 0; background: transparent; color: var(--text-tertiary); cursor: pointer; padding: 5px var(--spacing-8); font-size: 1.3077rem; opacity: 0; transition: opacity var(--transition-fast), color var(--transition-fast); } .conversation:hover .icon-button, .conversation:focus-within .icon-button { opacity: 1; } .icon-button:hover { color: var(--danger-text); }
@@ -426,6 +457,17 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 .chat-main.qq .bot-message.assistant .message-content { border-color: color-mix(in srgb, var(--accent-primary) 24%, transparent); border-radius: var(--bubble-radius) var(--radius-sm) var(--bubble-radius) var(--bubble-radius); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); box-shadow: none; }
 .qq-message-body { min-width: 0; display: flex; flex-direction: column; gap: var(--spacing-2); }
 .qq-meta { color: var(--text-tertiary); font-size: 0.7692rem; }
+/* 日期分隔线：居中淡色小字，两侧渐隐细线，不打断阅读节奏。 */
+.day-divider { align-self: center; display: flex; align-items: center; gap: var(--spacing-10); margin: var(--spacing-12) 0 var(--spacing-10); color: var(--text-tertiary); font-size: 0.7692rem; }
+.day-divider::before, .day-divider::after { content: ''; width: 44px; height: 1px; background: linear-gradient(90deg, transparent, var(--border-subtle), transparent); }
+/* 连续消息合并：同角色连发时隐去重复头像与 meta、收紧行间距，只在末条留气泡圆尾。 */
+.bot-message.cont { margin-top: -4px; margin-bottom: var(--spacing-4); }
+.bot-message.cont .msg-avatar { visibility: hidden; }
+.bot-message.cont .qq-meta { visibility: hidden; }
+.bot-message.cont .message-content { border-radius: var(--radius-sm); }
+/* QQ 视图 assistant 靠右：续接时气泡右上/右下的圆角随方向镜像。 */
+.chat-main.qq .bot-message.cont.user .message-content { border-top-left-radius: var(--radius-sm); }
+.chat-main.qq .bot-message.cont.assistant .message-content { border-top-right-radius: var(--radius-sm); }
 .qq-empty { margin: auto; color: var(--text-secondary); font-size: 0.9231rem; }
 .typing-dots { display: inline-flex; align-items: center; gap: var(--spacing-4); padding: 3px 0; }
 .typing-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--text-tertiary); animation: bot-bob 1.2s ease-in-out infinite; }
@@ -458,9 +500,13 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 .composer-attachments { display: flex; flex-wrap: wrap; gap: var(--spacing-8); align-items: center; margin: 0 max(var(--spacing-24), calc((100% - 760px) / 2)) var(--spacing-8); }
 .attach-thumb { position: relative; width: 60px; height: 60px; border-radius: var(--radius-md); overflow: hidden; border: 1px solid var(--border-subtle); }
 .attach-thumb img { width: 100%; height: 100%; object-fit: cover; }
-.attach-remove { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border: 0; border-radius: 50%; background: rgba(0,0,0,.55); color: #fff; cursor: pointer; line-height: 1; }
+/* 缩略图右上角的移除角标：压在用户照片上，深色底才保证白叉可读，
+   与主题无关（浅色主题压成白底会在浅色照片上看不见）。这不是弹窗遮罩，
+   不要换 --scrim —— 那条令牌在浅色主题只有 14%。 */
+.attach-remove { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border: 0; border-radius: 50%; background: color-mix(in srgb, #000 55%, transparent); color: #fff; cursor: pointer; line-height: 1; }
 .attach-error { color: var(--danger-text); font-size: 0.8462rem; }
 .msg-images { display: flex; flex-wrap: wrap; gap: var(--spacing-6); margin-bottom: var(--spacing-6); }
-.msg-image { max-width: 200px; max-height: 200px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); object-fit: contain; }
+.msg-image { max-width: 200px; max-height: 200px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); object-fit: contain; cursor: zoom-in; transition: filter var(--transition-fast), transform var(--transition-fast); }
+.msg-image:hover { filter: brightness(1.06); transform: translateY(-1px); }
 @media (max-width: 850px) { .chat-layout { grid-template-columns: 190px minmax(0, 1fr); } .bot-header { padding: var(--spacing-16); } }
 </style>
