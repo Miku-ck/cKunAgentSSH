@@ -66,7 +66,7 @@
           </label>
           <label class="field">
             <span>不想让它说</span>
-            <input v-model="form.tabooText" maxlength="200" placeholder="逗号分隔，例如：绝绝子、家人们（「作为一个AI」这类模型腔已内置屏蔽）" />
+            <input v-model="form.tabooText" maxlength="200" placeholder="逗号分隔，例如：绝绝子、家人们" />
           </label>
           <div v-for="key in styleKeys" :key="key" class="field">
             <span>{{ options?.[key].label || key }}</span>
@@ -92,6 +92,10 @@
           <label class="field field-inline"><span>思考</span>
             <input type="checkbox" v-model="form.enable_thinking" />
             <em class="field-hint">需模型支持；模型不回思考则不显示思考块</em>
+          </label>
+          <label class="field field-inline"><span>主动找你</span>
+            <input type="checkbox" v-model="form.proactive_enabled" />
+            <em class="field-hint">她会在想找你时主动开口（有静音时段、频率上限和冷场冷却守着分寸）</em>
           </label>
         </section>
 
@@ -123,25 +127,6 @@
           </div>
         </section>
 
-        <!-- 长期记忆：人格编辑器是唯一能看到「它记得你什么」的地方（逐条删 / 手动补 / 全部忘） -->
-        <section v-if="persona" class="editor-section" data-section="memory">
-          <h3>它记得你什么</h3>
-          <p v-if="memoryError" class="form-error">{{ memoryError }}</p>
-          <ul v-if="memories.length" class="memory-list">
-            <li v-for="item in memories" :key="item.id">
-              <span class="memory-content">{{ item.content }}</span>
-              <small>{{ formatLocalDateTime(item.created_at) }}</small>
-              <button type="button" class="btn btn-ghost" :disabled="memoryBusy" @click="forgetMemory(item.id)">忘记</button>
-            </li>
-          </ul>
-          <p v-else-if="!memoryBusy" class="hint">还没记住什么。</p>
-          <div class="memory-add">
-            <input v-model.trim="memoryDraft" maxlength="200" placeholder="手动告诉它一件事，例如：我不吃香菜" @keydown.enter="onMemoryEnter" />
-            <button type="button" class="btn" :disabled="memoryBusy || !memoryDraft" @click="addMemory">记住</button>
-          </div>
-          <button v-if="memories.length" type="button" class="btn btn-ghost" :disabled="memoryBusy" @click="forgetAll">全部忘记</button>
-        </section>
-
         <div v-if="error" class="form-error">{{ error }}</div>
       </div>
     </div>
@@ -152,12 +137,10 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import AvatarPicker from './AvatarPicker.vue'
 import { isImageAvatar } from '@/utils/persona-avatar'
-import { formatLocalDateTime } from '@/utils/datetime'
 import { toFriendlyMessage } from '@/api/base'
 import {
   botApi,
   type BotExpressionDna,
-  type BotMemory,
   type BotPersona,
   type BotPersonaOptions,
   type BotPersonaPayload,
@@ -211,7 +194,6 @@ const textSections = [
   placeholder: string
 }[]
 
-// 新人格还没有记忆可管，目录与正文一起收掉那一项，别留点了跳不到的入口。
 const rail = computed(() => [
   { key: 'identity', title: '身份' },
   { key: 'personality', title: '性格特征' },
@@ -219,7 +201,6 @@ const rail = computed(() => [
   { key: 'voice', title: '说话风格' },
   ...textSections.map(item => ({ key: item.key as string, title: item.title })),
   { key: 'play', title: '进阶玩法' },
-  ...(props.persona ? [{ key: 'memory', title: '它记得你什么' }] : []),
 ])
 
 const saving = ref(false)
@@ -237,6 +218,7 @@ const form = reactive({
   model_id: source?.model_id ?? null,
   reply_style: source?.reply_style || 'moderate',
   enable_thinking: source?.enable_thinking === 1,
+  proactive_enabled: source?.proactive_enabled === 1,
   // 旧数据可能缺新字段：整体兜底，避免 v-model 绑到 undefined 后控件变哑
   expression_dna: { ...DNA_DEFAULTS, ...(source?.expression_dna || {}) } as BotExpressionDna,
   reaction_style: (source?.reaction_style || 'warm') as BotReactionStyle,
@@ -298,6 +280,7 @@ function buildPayload(): BotPersonaPayload {
     model_id: form.model_id,
     reply_style: form.reply_style as BotPersonaPayload['reply_style'],
     enable_thinking: form.enable_thinking,
+    proactive_enabled: form.proactive_enabled,
     expression_dna: { ...form.expression_dna, taboo },
     reaction_style: form.reaction_style,
     refusal_style: form.refusal_style,
@@ -325,77 +308,7 @@ async function save() {
   }
 }
 
-// ── 长期记忆 ──
-// 人格编辑器是唯一能看到「它记得你什么」的地方：逐条删、全部忘、手动补。
-const memories = ref<BotMemory[]>([])
-const memoryBusy = ref(false)
-const memoryError = ref('')
-const memoryDraft = ref('')
-
-async function loadMemories() {
-  if (!props.persona) return
-  memoryBusy.value = true
-  memoryError.value = ''
-  try {
-    memories.value = await botApi.listMemories(props.persona.id)
-  } catch (e) {
-    memoryError.value = toFriendlyMessage(e, '读取记忆失败')
-  } finally {
-    memoryBusy.value = false
-  }
-}
-
-async function forgetMemory(id: string) {
-  memoryBusy.value = true
-  memoryError.value = ''
-  try {
-    await botApi.deleteMemory(id)
-    memories.value = memories.value.filter(item => item.id !== id)
-  } catch (e) {
-    memoryError.value = toFriendlyMessage(e, '忘记失败')
-  } finally {
-    memoryBusy.value = false
-  }
-}
-
-async function forgetAll() {
-  if (!props.persona) return
-  memoryBusy.value = true
-  memoryError.value = ''
-  try {
-    await botApi.clearMemories(props.persona.id)
-    memories.value = []
-  } catch (e) {
-    memoryError.value = toFriendlyMessage(e, '清空失败')
-  } finally {
-    memoryBusy.value = false
-  }
-}
-
-async function addMemory() {
-  if (!props.persona || !memoryDraft.value) return
-  memoryBusy.value = true
-  memoryError.value = ''
-  try {
-    await botApi.addMemory(props.persona.id, memoryDraft.value)
-    memoryDraft.value = ''
-    await loadMemories()
-  } catch (e) {
-    memoryError.value = toFriendlyMessage(e, '记住失败')
-  } finally {
-    memoryBusy.value = false
-  }
-}
-
-/** 中文输入法确认候选词也会派发 Enter；不拦 isComposing 会把半句误存成记忆。 */
-function onMemoryEnter(e: KeyboardEvent) {
-  if (e.isComposing) return
-  e.preventDefault()
-  void addMemory()
-}
-
 onMounted(() => {
-  loadMemories()
   onScroll()
 })
 </script>
@@ -501,27 +414,6 @@ onMounted(() => {
   background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
   color: var(--accent-text);
 }
-.hint { margin: 0; color: var(--text-tertiary); font-size: 0.8462rem; line-height: 1.6; }
 .form-error { color: var(--danger-text); font-size: 0.9231rem; }
-.memory-list { display: flex; flex-direction: column; gap: var(--spacing-8); margin: 0; padding: 0; list-style: none; }
-.memory-list li { display: flex; align-items: center; gap: var(--spacing-10); }
-.memory-content { flex: 1 1 auto; min-width: 0; color: var(--text-primary); font-size: 0.9231rem; overflow-wrap: anywhere; }
-.memory-list small { flex: 0 0 auto; color: var(--text-tertiary); font-size: 0.7692rem; }
-.memory-add { display: flex; align-items: center; gap: var(--spacing-8); }
-.memory-add input {
-  flex: 1 1 auto; min-width: 0;
-  box-sizing: border-box;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  background: var(--bg-base);
-  color: var(--text-primary);
-  padding: 9px var(--spacing-10);
-  font: inherit;
-}
-.memory-add input:focus {
-  border-color: var(--accent-primary);
-  outline: none;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 16%, transparent);
-}
 @media (max-width: 900px) { .editor-rail { display: none; } }
 </style>
