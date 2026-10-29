@@ -104,10 +104,14 @@ export function decorateMessages<T extends Decoratable>(
 /** 一轮回复最多拆几条气泡，与服务端 MAX_REPLY_BUBBLES 同值。 */
 export const MAX_REPLY_BUBBLES = 3
 
+/** 平均每段少于这个字数就是「一句话说完被切三截」，并回一条。与服务端同值。 */
+export const MIN_BUBBLE_CHARS = 24
+
 /**
  * 按空行把一轮回复切成多条气泡。规则与服务端 `bot/voice.py` 的 `split_reply_bubbles`
- * 一致：超出条数不丢字，余下的并回最后一条；单条内部的换行原样保留（那是列表或引文，
- * 不算分条）。跨语言没法共享实现，改一边必须同步另一边 —— 不一致时最坏只是收尾瞬间
+ * 一致：三段以上且每段都薄得只剩半句时先并回一条；超出条数不丢字，余下的并回最后一条；
+ * 单条内部的换行原样保留（那是列表或引文，不算分条）。
+ * 跨语言没法共享实现，改一边必须同步另一边 —— 不一致时最坏只是收尾瞬间
  * 气泡重排，不会丢内容。
  */
 export function splitBubbles(text: string, maxBubbles: number = MAX_REPLY_BUBBLES): string[] {
@@ -116,6 +120,9 @@ export function splitBubbles(text: string, maxBubbles: number = MAX_REPLY_BUBBLE
     .split(/\n[ \t]*\n/)
     .map(chunk => chunk.trim())
     .filter(Boolean)
+  if (chunks.length >= 3 && chunks.reduce((sum, chunk) => sum + chunk.length, 0) < MIN_BUBBLE_CHARS * chunks.length) {
+    return [chunks.join('')]
+  }
   const cap = Math.max(1, maxBubbles)
   if (chunks.length <= cap) return chunks
   return [...chunks.slice(0, cap - 1), chunks.slice(cap - 1).join('\n\n')]

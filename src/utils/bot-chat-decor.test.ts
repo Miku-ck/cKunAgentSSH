@@ -103,9 +103,30 @@ describe('分条 splitBubbles / expandBubbles', () => {
     // 一条内部的换行是内容（列表、引文），不算分条
     expect(splitBubbles('清单：\na\nb')).toEqual(['清单：\na\nb'])
     // 超出条数不丢字：余下的并回最后一条
-    expect(splitBubbles('一\n\n二\n\n三\n\n四')).toEqual(['一', '二', '三\n\n四'])
+    const four = [
+      '今天这局我先出牌，你把防守的那一手留到最后一轮再跟。',
+      '上次你说明天再打，结果拖到周末才上线，我一直惦记着这事。',
+      '这周要是真有事就直说，别到点才冒一句不打了，我看着难受。',
+      '下回提前半小时说一声，我好把饭吃了再来，不用饿着肚子等你。',
+    ]
+    expect(splitBubbles(four.join('\n\n'))).toEqual([...four.slice(0, 2), four.slice(2).join('\n\n')])
     expect(splitBubbles('一\n\n二', 1)).toEqual(['一\n\n二'])
-    expect(splitBubbles('一\n\n\n二 \n \n 三')).toEqual(['一', '二', '三'])
+    // 多个空行、空行带空格都算同一条边界
+    expect(splitBubbles('在的呀\n\n\n晚上八点开一把 \n \n ')).toEqual(['在的呀', '晚上八点开一把'])
+  })
+
+  it('三截薄气泡并回一条：与服务端同一兜底', () => {
+    // 一句话说完被切三截 —— 模型把「最多 N 条」当配额凑满时的最短那种
+    expect(splitBubbles('白饭？\n\n你吃撑了没？\n\n还有吗')).toEqual(['白饭？你吃撑了没？还有吗'])
+    // 两段不并：两拍是活的节奏
+    expect(splitBubbles('在的\n\n你吃了吗')).toEqual(['在的', '你吃了吗'])
+    // 每段都够一句话的三段照旧分开投
+    const three = [
+      '今天这局我先出牌，你把防守的那一手留到最后一轮再跟。',
+      '上次你说明天再打，结果拖到周末才上线，我一直惦记着这事。',
+      '这周要是真有事就直说，别到点才冒一句不打了，我看着难受。',
+    ]
+    expect(splitBubbles(three.join('\n\n'))).toEqual(three)
   })
 
   it('只展开助手的一轮，用户自己打的段落不替他拆条', () => {
@@ -135,8 +156,14 @@ describe('分条 splitBubbles / expandBubbles', () => {
   })
 
   it('同一轮的后续气泡按续接处理：头像不重复、分隔线只一条', () => {
+    // 每段都写够一句话，否则先被上面那条并条规则收走，测不到续接
+    const three = [
+      '今天这局我先出牌，你把防守的那一手留到最后一轮再跟。',
+      '上次你说明天再打，结果拖到周末才上线，我一直惦记着这事。',
+      '这周要是真有事就直说，别到点才冒一句不打了，我看着难受。',
+    ]
     const out = decorateMessages(expandBubbles([
-      { id: '1', role: 'assistant', content: '一\n\n二\n\n三', created_at: '2026-10-28 09:00:00' },
+      { id: '1', role: 'assistant', content: three.join('\n\n'), created_at: '2026-10-28 09:00:00' },
     ]))
     expect(out.map(d => d.cont)).toEqual([false, true, true])
     expect(out.filter(d => d.divider)).toHaveLength(1)

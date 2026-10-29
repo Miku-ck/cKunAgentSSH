@@ -139,14 +139,25 @@ def test_outbound_parts_sends_one_message_per_blank_line():
 
 
 def test_outbound_parts_respects_platform_quota_without_dropping_words():
-    """被动回复只有 4 条额度：超出的分条并回末条，宁可长也不吞字。"""
+    """被动回复只有 4 条额度：超出的分条并回末条，宁可长也不吞字。
+
+    每段都写够一句话，否则先被「三截薄气泡并回一条」那条规则收走，测不到额度。
+    """
     from bot.qq_manager import QQProvider
 
-    parts = QQProvider().outbound_parts("\n\n".join(["一", "二", "三", "四", "五"]))
+    five = [
+        "今天这局我先出牌，你把防守的那一手留到最后一轮再跟。",
+        "上次你说明天再打，结果拖到周末才上线，我一直惦记着这事。",
+        "这周要是真有事就直说，别到点才冒一句不打了，我看着难受。",
+        "下回提前半小时说一声，我好把饭吃了再来，不用饿着肚子等你。",
+        "要是你只是想自己安静打两把，也直接讲一句给我，我不会多想。",
+    ]
+
+    parts = QQProvider().outbound_parts("\n\n".join(five))
 
     assert len(parts) == 4
-    assert "".join(parts).replace("\n", "") == "一二三四五"
-    assert parts[-1] == "四\n\n五"
+    assert "".join(parts).replace("\n", "") == "".join(five)
+    assert parts[-1] == "\n\n".join(five[3:])
 
 
 @pytest.mark.asyncio

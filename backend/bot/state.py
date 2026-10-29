@@ -318,11 +318,26 @@ def describe_state(state: dict, local_hour: float, speed: str | None = None) -> 
 
 # ── 确定性后处理开关 ──
 
-def bubble_cap(state: dict | None) -> int:
-    """分条上限：没耐心时少发几条，别刷屏。"""
-    if state and float(state.get("patience") or 1.0) < 0.3:
+def bubble_cap(state: dict | None, seed: str = "") -> int:
+    """分条额度：默认就一条发完，状态真的想多说才一档一档加。
+
+    恒为 3 的时候模型把上限当配额，每条回复都凑满三条 —— 「一直三句话」就是这么来的。
+    额度改由状态挣：精神头足又开心（话多）、关系熟到一定程度（有默契）、心里有疙瘩
+    （要分开讲）各加一档，封顶 3；没耐心时压回 1，别刷屏。seed 给同一状态按轮次抖
+    一档，不然稳定期就是一条常数曲线。
+    """
+    if not state:
         return 2
-    return 3
+    if float(state.get("patience") or 1.0) < 0.3:
+        return 1
+    cap = 1
+    if float(state.get("energy") or 0.0) >= 0.6 and float(state.get("valence") or 0.0) > 0.0:
+        cap += 1
+    if float(state.get("intimacy") or 0.0) >= 40.0 or float(state.get("tension") or 0.0) >= 30.0:
+        cap += 1
+    if cap < 3 and seed and int(hashlib.md5(f"bubble:{seed}".encode("utf-8")).hexdigest()[:8], 16) < 0xFFFFFFFF // 4:
+        cap += 1
+    return min(3, cap)
 
 
 def downgrade_style(style: str, state: dict | None) -> str:

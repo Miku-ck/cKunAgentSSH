@@ -187,6 +187,8 @@ def strip_ai_smell(text: str) -> str:
 # ── 分条 ──
 
 MAX_REPLY_BUBBLES = 3
+# 平均每段少于这个字数，就不是「分开说几件事」而是「一句话说完被切三截」，并回一条。
+MIN_BUBBLE_CHARS = 24
 
 
 def split_reply_bubbles(text: str, max_bubbles: int = MAX_REPLY_BUBBLES) -> list[str]:
@@ -195,8 +197,13 @@ def split_reply_bubbles(text: str, max_bubbles: int = MAX_REPLY_BUBBLES) -> list
     空行是模型自己选的分条位（见 chat_service 的分条规则），这里只负责把它兑现成
     多条投递。超出条数不丢字：余下的并回最后一条 —— 切分改的是投递形态，不是内容。
     单条内部的换行原样保留，那是列表或引文，不算分条。
+
+    三段以上且每段都薄得只剩半句时，先并回一条：模型会把「最多 N 条」当配额凑满，
+    这层兜底挡住最短的那种凑数。
     """
     chunks = [c.strip() for c in re.split(r"\n[ \t]*\n", (text or "").strip()) if c.strip()]
+    if len(chunks) >= 3 and sum(len(c) for c in chunks) < MIN_BUBBLE_CHARS * len(chunks):
+        return ["".join(chunks)]
     cap = max(1, max_bubbles)
     if len(chunks) <= cap:
         return chunks

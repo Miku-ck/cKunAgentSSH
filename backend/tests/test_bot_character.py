@@ -280,9 +280,11 @@ def test_prompt_teaches_blank_line_as_message_break():
     svc = BotChatService()
     for channel in ("local", "qq"):
         prompt = svc._system_prompt(_persona(), channel)
-        assert "空一行就是另发一条消息" in prompt
+        # 给的是默认值而不是天花板：只说「最多 3 条」时，模型把上限当配额凑满
+        assert "默认一条说完就发出去" in prompt
         assert "一条之内不要换行" in prompt
         assert "最多 3 条" in prompt
+        assert "别把一句话说完的三截当成三条发" in prompt
     # 长文档原来的「可分点」和分条规则自相矛盾：分点就是让模型在一条里换行
     long_prompt = svc._system_prompt(_persona(reply_style="long"), "local")
     assert "可分点" not in long_prompt
@@ -294,10 +296,33 @@ def test_split_reply_bubbles_is_lossless():
     assert split_reply_bubbles("  \n\n  ") == []
     assert split_reply_bubbles("") == []
     # 超出条数不丢内容：余下的并回最后一条。切分只改投递形态，绝不删字。
-    assert split_reply_bubbles("一\n\n二\n\n三\n\n四") == ["一", "二", "三\n\n四"]
+    four = [
+        "今天这局我先出牌，你把防守的那一手留到最后一轮再跟。",
+        "上次你说明天再打，结果拖到周末才上线，我一直惦记着这事。",
+        "这周要是真有事就直说，别到点才冒一句不打了，我看着难受。",
+        "下回提前半小时说一声，我好把饭吃了再来，不用饿着肚子等你。",
+    ]
+    assert split_reply_bubbles("\n\n".join(four)) == [*four[:2], "\n\n".join(four[2:])]
     # 一条内部的换行原样留着：那是内容（列表、引文），不是分条
     assert split_reply_bubbles("清单：\na\nb") == ["清单：\na\nb"]
     # max_bubbles=1 等于不切，QQ 额度用尽时靠它兜住
     assert split_reply_bubbles("一\n\n二", max_bubbles=1) == ["一\n\n二"]
     # 多个空行、空行带空格都算同一条边界
-    assert split_reply_bubbles("一\n\n\n二 \n \n 三") == ["一", "二", "三"]
+    assert split_reply_bubbles("在的呀\n\n\n晚上八点开一把 \n \n ") == ["在的呀", "晚上八点开一把"]
+
+
+def test_thin_three_way_split_merges_back_into_one():
+    """「白饭？／你吃撑了没？／还有吗」—— 一句话说完被切三截，并回一条。
+
+    判据是平均每段的字数，不是总字数：三段各说一件正经事（每段够一句话）照旧
+    分开投，只有每段都薄得像半句时才合。这条是提示词「默认一条」的兜底。
+    """
+    assert split_reply_bubbles("白饭？\n\n你吃撑了没？\n\n还有吗") == ["白饭？你吃撑了没？还有吗"]
+    # 两段不并：两拍是活的节奏，不是呆板
+    assert split_reply_bubbles("在的\n\n你吃了吗") == ["在的", "你吃了吗"]
+    three = [
+        "今天这局我先出牌，你把防守的那一手留到最后一轮再跟。",
+        "上次你说明天再打，结果拖到周末才上线，我一直惦记着这事。",
+        "这周要是真有事就直说，别到点才冒一句不打了，我看着难受。",
+    ]
+    assert split_reply_bubbles("\n\n".join(three)) == three

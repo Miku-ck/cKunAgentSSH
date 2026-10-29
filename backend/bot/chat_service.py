@@ -127,11 +127,12 @@ class BotChatService:
         # 分条口径两个渠道共用，且排在排版之后压尾（末位指令记得最牢）：治的是
         # 「明明只说一两句，却被写成三行」—— 一条气泡内硬换行既不像真人也白占行高，
         # 要分开说就该分开投（本地按空行展开成多气泡，QQ 按空行连发多条消息）。
-        # 上限由状态层决定：没耐心（patience<0.3）时压到 2 条，别刷屏。
+        # 说的是默认值而不是天花板：只给「最多 N 条」时模型把上限当配额，条条凑满。
+        # 额度仍由状态层给：想多说的轮次才拿到 2~3（见 state.bubble_cap）。
         sections.append(
-            f"分条规则：空一行就是另发一条消息，最多 {max_bubbles} 条；一条之内不要换行、不要分点。"
-            "一句话说完就发出去，别为了显得口语把一句话拆成三行；"
-            "确实要分开说几件事，才用空行分开。"
+            f"分条规则：默认一条说完就发出去；一条之内不要换行、不要分点。"
+            f"只有当你确实要分开说几件不相干的事，才用空行分开，这一轮最多 {max_bubbles} 条。"
+            "别把一句话说完的三截当成三条发出去，那合成一条更像人。"
         )
 
         # 宪章永远压尾，且自身声明优先级最高：这是唯一不允许被人格设定覆盖的一节。
@@ -224,7 +225,7 @@ class BotChatService:
             state_mod.describe_state(new_state, local_hour, speed)
             if new_state else ""
         )
-        max_bubbles = state_mod.bubble_cap(new_state)
+        max_bubbles = state_mod.bubble_cap(new_state, seed=f"{conversation_id}:{len(history)}")
         messages = [{
             "role": "system",
             "content": self._system_prompt(

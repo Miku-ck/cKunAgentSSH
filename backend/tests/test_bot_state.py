@@ -234,12 +234,48 @@ def test_update_for_turn_persists_and_decays(core_db):
 
 def test_deterministic_postprocessing():
     assert state_mod.strip_exclaim("好耶！！真的吗！") == "好耶。真的吗。"
-    assert state_mod.bubble_cap({"patience": 0.2}) == 2
-    assert state_mod.bubble_cap({"patience": 0.8}) == 3
     assert state_mod.downgrade_style("long", {"patience": 0.2}) == "moderate"
     assert state_mod.downgrade_style("long", {"patience": 0.8}) == "long"
     assert state_mod.probe_line("c1") == state_mod.probe_line("c1")
     assert state_mod.probe_line("c1") != state_mod.probe_line("c2") or len({state_mod.probe_line(f"c{i}") for i in range(20)}) > 1
+
+
+FLAT = {
+    "trust": 20.0, "intimacy": 10.0, "tension": 0.0, "novelty": 40.0,
+    "valence": 0.0, "energy": 0.6, "patience": 0.8,
+}
+
+
+def test_bubble_cap_defaults_to_one_and_earns_the_extra_rooms():
+    """分条额度不再恒为 3 —— 模型会把上限当配额，每条回复都凑满三条。
+
+    默认一条说完；精神头足又开心、关系熟了、心里有疙瘩，各挣一档；封顶 3。
+    """
+    assert state_mod.bubble_cap(FLAT) == 1
+    # 没耐心：一句话发出去就够，别刷屏
+    assert state_mod.bubble_cap({**FLAT, "patience": 0.2}) == 1
+    # 开心 + 有精神 → 2
+    assert state_mod.bubble_cap({**FLAT, "energy": 0.8, "valence": 0.3}) == 2
+    # 熟了 → 再加一档
+    assert state_mod.bubble_cap({**FLAT, "energy": 0.8, "valence": 0.3, "intimacy": 50.0}) == 3
+    # 有疙瘩要分开讲 → 2
+    assert state_mod.bubble_cap({**FLAT, "tension": 40.0}) == 2
+    # 封顶 3，四样全占也不超
+    assert state_mod.bubble_cap(
+        {**FLAT, "energy": 0.9, "valence": 0.5, "intimacy": 90.0, "tension": 80.0}
+    ) == 3
+    # 状态层缺席：留一档余量，而不是退回「凑满三条」
+    assert state_mod.bubble_cap(None) == 2
+
+
+def test_bubble_cap_jitters_per_turn_under_the_same_state():
+    """同一种状态也不该每轮同一个节奏：按轮次确定性抖一档，且可复现。"""
+    over_60_turns = {state_mod.bubble_cap(FLAT, seed=f"c1:{i}") for i in range(60)}
+    assert over_60_turns == {1, 2}
+    assert state_mod.bubble_cap(FLAT, seed="c1:7") == state_mod.bubble_cap(FLAT, seed="c1:7")
+    # 已经封顶时不再抖
+    assert {state_mod.bubble_cap({**FLAT, "energy": 0.9, "valence": 0.5, "intimacy": 90.0}, seed=f"c1:{i}")
+            for i in range(30)} == {3}
 
 
 # ── ⑥ 主链路回归：chat_stream 仍恰好调用 1 次 ──
