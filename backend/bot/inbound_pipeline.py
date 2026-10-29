@@ -8,13 +8,16 @@ import asyncio
 import logging
 
 import database as db
+from bot.pace import outbound_gaps
 
 logger = logging.getLogger(__name__)
 
 
 class InboundPipeline:
-    def __init__(self, chat_service):
+    def __init__(self, chat_service, *, sleep=asyncio.sleep):
         self.chat_service = chat_service
+        # 段间等待走注入：测试里换成记录器，生产里就是 asyncio.sleep。
+        self._sleep = sleep
         # 锁按 (机器人, 平台内会话) 分：多个机器人同时收到同一个 openid 的消息
         # 不应互相排队，也不该并发写同一条会话。
         self._locks: dict[tuple[str, str], asyncio.Lock] = {}
@@ -90,7 +93,13 @@ class InboundPipeline:
         await self._deliver(inbound, provider, conversation["id"], reply)
 
     async def _deliver(self, inbound, provider, conversation_id: str, reply: str) -> None:
-        for index, part in enumerate(provider.outbound_parts(reply)):
+        parts = provider.outbound_parts(reply)
+        gaps = outbound_gaps(parts)
+        for index, part in enumerate(parts):
+            # 首段零延迟，之后按「像在打字」的间隔发：同一秒弹出三条是广播，
+            # 不是人在说话。段数不变，所以本地记录与平台收到的条数始终一致。
+            if gaps[index]:
+                await self._sleep(gaps[index])
             try:
                 await inbound.send(part)
             except Exception as exc:

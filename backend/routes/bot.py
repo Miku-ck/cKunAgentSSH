@@ -4,12 +4,12 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 import database as db
 from bot import memory as memory_mod
 from bot import relation as relation_mod
-from bot.character import persona_options
+from bot.character import persona_options, persona_text_risk
 from bot.chat_service import BotChatService
 from bot.voice import DNA_OPTIONS, normalize_dna
 from sse_utils import sse_event
@@ -23,6 +23,26 @@ chat_service = BotChatService()
 # 表情/任意文本不再当头像 —— 与前端 isImageAvatar 同口径。
 _AVATAR_DATA_URL = re.compile(r"^data:image/(?:png|jpe?g|webp|gif);base64,", re.IGNORECASE)
 
+# 人格自由文本字段：保存时统一过一遍覆盖类注入检测（口径在 bot/character.py）。
+_PERSONA_TEXT_FIELDS = {
+    "personality": "性格特征",
+    "background": "背景设定",
+    "likes_landmines": "喜好与雷区",
+    "memory_directive": "记忆设定",
+    "dialogue_samples": "互动示例",
+    "advanced_play": "进阶玩法",
+}
+
+
+def _reject_persona_overrides(values: dict) -> None:
+    """人格文本不许携带覆盖类注入：保存时就拒绝，别等它流进 prompt。"""
+    for field, label in _PERSONA_TEXT_FIELDS.items():
+        risk = persona_text_risk(values.get(field) or "")
+        if risk:
+            raise ValueError(
+                f"「{label}」里包含{risk}的内容；人格设定不能覆盖底线，请换种说法"
+            )
+
 
 def _validate_avatar(value: str) -> str:
     if value and not _AVATAR_DATA_URL.match(value):
@@ -30,7 +50,29 @@ def _validate_avatar(value: str) -> str:
     return value
 
 
-class PersonaRequest(BaseModel):
+class _PersonaValidationMixin:
+    """PersonaRequest / PersonaUpdateRequest 共用的校验器。
+
+    用普通类（非 BaseModel）承载：pydantic v2 会收集继承链上的校验器并作用于
+    子类字段；若这里继承 BaseModel 会因基类没有 expression_dna 字段而报
+    decorator-missing-field。_check_dna 用 None 分支同时覆盖「必填 dict」与
+    「可选 dict」两种形态，_check_text_fields 两边完全一致。
+    """
+
+    @field_validator("expression_dna")
+    @classmethod
+    def _check_dna(cls, value):
+        # 统一在这里归一：脏值（未知档位、超长口头禅）只会让说话方式退回默认，
+        # 不该让保存人格失败——用户看不到自己的选项为什么存不进去。
+        return None if value is None else normalize_dna(value)
+
+    @model_validator(mode="after")
+    def _check_text_fields(self):
+        _reject_persona_overrides(self.model_dump())
+        return self
+
+
+class PersonaRequest(_PersonaValidationMixin, BaseModel):
     name: str = Field(..., min_length=1, max_length=50)
     avatar: str = Field("", max_length=400_000)
     personality: str = Field("", max_length=5000)
@@ -53,15 +95,8 @@ class PersonaRequest(BaseModel):
 
     _check_avatar = field_validator("avatar")(_validate_avatar)
 
-    @field_validator("expression_dna")
-    @classmethod
-    def _check_dna(cls, value: dict) -> dict:
-        # 统一在这里归一：脏值（未知档位、超长口头禅）只会让说话方式退回默认，
-        # 不该让保存人格失败——用户看不到自己的选项为什么存不进去。
-        return normalize_dna(value)
 
-
-class PersonaUpdateRequest(BaseModel):
+class PersonaUpdateRequest(_PersonaValidationMixin, BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=50)
     avatar: Optional[str] = Field(None, max_length=400_000)
     personality: Optional[str] = Field(None, max_length=5000)
@@ -83,11 +118,6 @@ class PersonaUpdateRequest(BaseModel):
     proactive_enabled: Optional[bool] = None
 
     _check_avatar = field_validator("avatar")(_validate_avatar)
-
-    @field_validator("expression_dna")
-    @classmethod
-    def _check_dna(cls, value: Optional[dict]) -> Optional[dict]:
-        return None if value is None else normalize_dna(value)
 
 
 class CreateBotConversationRequest(BaseModel):
@@ -238,7 +268,7 @@ def clear_persona_memories(persona_id: str):
     """全部忘记。"""
     if not db.get_bot_persona(persona_id):
         raise HTTPException(status_code=404, detail="人格不存在")
-    return {"cleared": memory_mod.clear_all(persona_id)}
+    return {"cleared": memory_mod.forget(persona_id)}
 
 
 def _conversation_payload(conversation: dict) -> dict:

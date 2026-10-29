@@ -208,3 +208,63 @@ def split_reply_bubbles(text: str, max_bubbles: int = MAX_REPLY_BUBBLES) -> list
     if len(chunks) <= cap:
         return chunks
     return [*chunks[: cap - 1], "\n\n".join(chunks[cap - 1 :])]
+
+
+# ── 投递形态：给模型的是事实，不是额度 ──
+# 「最多 N 条」一旦写进提示词就成了要凑满的配额。这里改成两个事实：
+# 这一轮有谁在旁边看着，以及上一轮你实际是什么节奏。
+
+# 一句话之内的短补刀（「笑死」「行吧」「那就这样」）：真人会单独补这一句。
+SHORT_JAB_CHARS = 12
+# 以这些词开头 = 另起了一件不相干的事，第二条站得住。
+AFTERTHOUGHT_MARKERS = (
+    "对了", "哦对", "还有", "另外", "顺带", "其实", "话说", "差点忘了", "忽然想到", "btw",
+)
+
+
+def delivery_hint(*, prev_parts: int, audience: str) -> str:
+    """把「这一轮该怎么投递」的事实交给模型，由它自己决定一条还是两条。
+
+    audience: group（群里有人看着）/ private / local。本地界面有逐条揭开和打字点，
+    多一拍不影响观感，所以本地不给额外约束。
+    """
+    lines: list[str] = []
+    if audience == "group":
+        lines.append(
+            "现在是在群里说话，旁边还有人看着：能一句话说完就一句说完。"
+            "真要再发一条，那个第二条得自己站得住 —— 一个反问、一件新事、一句短补刀；"
+            "上半句的下半句就并回第一条。"
+        )
+    if prev_parts >= 2:
+        lines.append(
+            "上一轮你已经是连着发两条的节奏了，这一轮没有第二件正经事就一条说完。"
+        )
+    return "".join(lines)
+
+
+def _stands_alone(chunk: str) -> bool:
+    body = chunk.strip()
+    if len(body) <= SHORT_JAB_CHARS:
+        return True
+    if body.endswith(("？", "?")):
+        return True
+    return body.startswith(AFTERTHOUGHT_MARKERS)
+
+
+def shape_group_reply(text: str) -> str:
+    """群聊里把「站不住的第二条」并回第一条。
+
+    判据是这一条自己能不能立住（短补刀 / 反问 / 另起一件事），不是条数。在落库前
+    应用：本地会话记录与 QQ 实际投递就读同一份文本，不会一边三条一边一条。
+    群聊没有流式，所以这里改写不产生气泡跳动。
+    """
+    chunks = [c.strip() for c in re.split(r"\n[ \t]*\n", (text or "").strip()) if c.strip()]
+    if len(chunks) < 2:
+        return (text or "").strip()
+    out = [chunks[0]]
+    for chunk in chunks[1:]:
+        if _stands_alone(chunk):
+            out.append(chunk)
+        else:
+            out[-1] += chunk
+    return "\n\n".join(out)

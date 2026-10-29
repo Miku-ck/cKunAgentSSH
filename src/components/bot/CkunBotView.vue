@@ -132,7 +132,7 @@
                   <div class="message-content">
                     <details v-if="!i && store.streamReasoning && thinkingOn" class="reasoning" open><summary>思考中…</summary><div class="reasoning-body">{{ store.streamReasoning }}</div></details>
                     <MarkdownStream v-if="b" :content="b" />
-                    <span v-else class="typing-dots" role="img" aria-label="正在输入"><i></i><i></i><i></i></span>
+                    <span v-else class="typing-dots" :class="{ eager: store.pacing === 'eager' }" role="img" aria-label="正在输入"><i></i><i></i><i></i></span>
                   </div>
                 </div>
               </div>
@@ -239,8 +239,8 @@ import PersonaEditor from './PersonaEditor.vue'
 import ConnectionPage from './ConnectionPage.vue'
 import BaseModal from '@/components/common/BaseModal.vue'
 import { formatLocalDateTime } from '@/utils/datetime'
-import { personaName } from '@/utils/bot-channel'
-import { bubbleDeliveryPlan, decorateMessages, expandBubbles, peerLabel, peerTag, splitBubbles } from '@/utils/bot-chat-decor'
+import { bubbleDeliveryPlan, decorateMessages, expandBubbles, peerLabel, peerTag, personaName, splitBubbles } from '@/utils/bot-chat-decor'
+import { shouldFollowScroll } from '@/utils/scroll-follow'
 import AvatarPicker from './AvatarPicker.vue'
 import ChatImageLightbox from './ChatImageLightbox.vue'
 import { botApi, type BotConversation, type BotPersona, type BotPersonaOptions } from '@/api/bot'
@@ -301,9 +301,19 @@ async function retry() {
 async function removeConversation(id: string) {
   try { await store.deleteConversation(id) } catch (e) { toast.error(toFriendlyMessage(e, '删除失败')) }
 }
+/** 消息流跟到底：四处触发（新消息/流式、逐条揭开、切会话、QQ 轮询）共用一份。 */
+function scrollToBottom() {
+  const el = messageListRef.value
+  if (el) el.scrollTop = el.scrollHeight
+}
+
 watch(() => [store.messages.length, store.streamText], async () => {
+  // 贴底才跟：streamText 每个 token 变一次，无条件抢滚动条会把页面一段一段往上蹿，
+  // 用户上翻看上一条时还会被一次次拽回底部。判定与 QQ 轮询同一份。
+  const el = messageListRef.value
+  const stick = !el || shouldFollowScroll(el.scrollTop, el.clientHeight, el.scrollHeight, 48)
   await nextTick()
-  if (messageListRef.value) messageListRef.value.scrollTop = messageListRef.value.scrollHeight
+  if (stick) scrollToBottom()
 })
 
 const personaEditor = ref(false)
@@ -436,14 +446,19 @@ watch(() => `${store.messages.length}:${store.messages[store.messages.length - 1
   staged.value = { id: last.id, shown: 1 }
   const delays = bubbleDeliveryPlan(bubbles)
   let acc = 0
+  let quick = false
   if (store.pacing === 'hesitate') {
     // 欲言又止：打字出现 → 停一下 → 再出现，然后才开讲
     stagingTimers.push(setTimeout(() => { stagingPaused.value = true }, 600))
     stagingTimers.push(setTimeout(() => { stagingPaused.value = false }, 1150))
     acc = 1400
+  } else if (store.pacing === 'eager') {
+    // 兴冲冲：不演停顿，气泡间的等待也收短——想快点说出来
+    quick = true
   }
+  // relief（有点别扭但在缓和）与默认共用正常节奏：不演停顿即可
   for (let i = 1; i < bubbles.length; i++) {
-    acc += delays[i]
+    acc += quick ? Math.round(delays[i] * 0.6) : delays[i]
     const target = i + 1
     stagingTimers.push(setTimeout(() => {
       if (staged.value?.id === last.id) staged.value = { id: last.id, shown: target }
@@ -460,8 +475,10 @@ const stagingTyping = computed(() => {
 
 // 逐条揭开时也要跟到底（既有的滚动 watcher 只盯 messages 长度，盯不到揭开）
 watch(() => staged.value?.shown, async () => {
+  const el = messageListRef.value
+  const stick = !el || shouldFollowScroll(el.scrollTop, el.clientHeight, el.scrollHeight, 48)
   await nextTick()
-  if (messageListRef.value) messageListRef.value.scrollTop = messageListRef.value.scrollHeight
+  if (stick) scrollToBottom()
 })
 
 // 图片灯箱：本地/历史消息里的图片点开放大，不跳转、不外发。
@@ -496,7 +513,7 @@ async function selectQq(id: string) {
   sidebarOpen.value = false
   await store.selectQqConversation(id)
   await nextTick()
-  if (messageListRef.value) messageListRef.value.scrollTop = messageListRef.value.scrollHeight
+  scrollToBottom()
 }
 
 let qqTimer: ReturnType<typeof setInterval> | undefined
@@ -509,12 +526,13 @@ function stopQqPolling() {
 }
 
 async function refreshQqChat() {
+  // 贴底判定复用任务台的共享件：用户上翻看记录时，轮询刷新不许抢滚动条
   const el = messageListRef.value
-  const stick = !el || el.scrollHeight - el.scrollTop - el.clientHeight < 48
+  const stick = !el || shouldFollowScroll(el.scrollTop, el.clientHeight, el.scrollHeight, 48)
   await store.refreshQq()
   if (stick) {
     await nextTick()
-    if (messageListRef.value) messageListRef.value.scrollTop = messageListRef.value.scrollHeight
+    scrollToBottom()
   }
 }
 
@@ -608,10 +626,8 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 .form-error { color: var(--danger-text); font-size: 0.8462rem; }
 /* 重置是整表单级的动作，和取消/保存同一层；margin-right:auto 把它推到左端 */
 .qq-display-reset { margin-right: auto; }
-/* 行右侧的 ⋯ 默认藏起来：鼠标进这一行或键盘落到它身上才淡入；触屏没有 hover，常显 */
-.conv-menu { opacity: 0; transition: opacity var(--transition-fast); }
-.conversation:hover .conv-menu, .conversation:focus-within .conv-menu { opacity: 1; }
-@media (hover: none) { .conv-menu { opacity: 1; } }
+/* 行右侧的 ⋯ 默认藏起来：hover 淡入 / 触屏常显的行为由 .icon-button 统一提供
+  （该元素同时挂 icon-button conv-menu 两个类），这里不再重复一份。 */
 .msg-body { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: var(--spacing-2); }
 .bot-message.user .msg-body { align-items: flex-end; }
 .msg-meta { color: var(--text-tertiary); font-size: 0.7692rem; }
@@ -629,9 +645,12 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 .message-content :deep(.markdown-body) > :first-child { margin-top: 0; }
 .message-content :deep(.markdown-body) > :last-child { margin-bottom: 0; }
 .qq-empty { margin: auto; color: var(--text-secondary); font-size: 0.9231rem; }
-.typing-dots { display: inline-flex; align-items: center; gap: var(--spacing-4); padding: 3px 0; }
+.typing-dots { display: inline-flex; align-items: center; gap: var(--spacing-4); padding: 3px 0; min-height: 1.7em; }
 .typing-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--text-tertiary); animation: bot-bob 1.2s ease-in-out infinite; }
 .typing-dots i:nth-child(2) { animation-delay: .15s; } .typing-dots i:nth-child(3) { animation-delay: .3s; }
+/* 兴冲冲（eager）：三个点跳得更快，演出「有话憋不住」的节奏 */
+.typing-dots.eager i { animation-duration: .7s; }
+.typing-dots.eager i:nth-child(2) { animation-delay: .1s; } .typing-dots.eager i:nth-child(3) { animation-delay: .2s; }
 @keyframes bot-bob { 0%, 60%, 100% { transform: translateY(0); opacity: .55; } 30% { transform: translateY(-3px); opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .typing-dots i { animation: none; } }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }

@@ -69,9 +69,35 @@ describe('cKunBot 页面注册与关键交互', () => {
   it('QQ 渠道每 5 秒刷新，贴底才自动滚动', () => {
     const view = read('src/components/bot/CkunBotView.vue')
     expect(view).toContain('store.refreshQq()')
-    expect(view).toContain('const stick = !el || el.scrollHeight - el.scrollTop - el.clientHeight < 48')
+    // 贴底判定复用任务台的共享件（src/utils/scroll-follow.ts），不再手写差值
+    expect(view).toContain('shouldFollowScroll(el.scrollTop, el.clientHeight, el.scrollHeight, 48)')
+    // 四处滚动触发共用一份 scrollToBottom，裸的 scrollTop 赋值只允许在它里面出现一次
+    expect(view.match(/function scrollToBottom\(\)/)?.length).toBe(1)
+    expect((view.match(/scrollTop = \S+\.scrollHeight/g) || []).length).toBe(1)
     expect(view).toMatch(/setInterval\(\(\) => \{ void refreshQqChat\(\) \}, 5000\)/)
     expect(view).toContain('stopQqPolling')
+  })
+
+  it('流式跟到底也要贴底判定：不许每个 token 抢滚动条', () => {
+    const view = read('src/components/bot/CkunBotView.vue')
+    const streamWatch = view.match(
+      /watch\(\(\) => \[store\.messages\.length, store\.streamText\][\s\S]{0,400}?\n\}\)/,
+    )
+    expect(streamWatch, '找不到流式滚动 watcher').not.toBeNull()
+    expect(streamWatch![0]).toContain('shouldFollowScroll')
+    expect(streamWatch![0]).toMatch(/if \(stick\) scrollToBottom\(\)/)
+    // 逐条揭开（P4 排程）同理：揭开一条不该把上翻看记录的人拽回底部
+    const stagedWatch = view.match(
+      /watch\(\(\) => staged\.value\?\.shown[\s\S]{0,400}?\n\}\)/,
+    )
+    expect(stagedWatch, '找不到逐条揭开 watcher').not.toBeNull()
+    expect(stagedWatch![0]).toContain('shouldFollowScroll')
+  })
+
+  it('打字占位与正文行等高：气泡开场不弹一下', () => {
+    const view = read('src/components/bot/CkunBotView.vue')
+    // .message-content 的行高是 1.7，占位点低于它就会在首 token 落地时跳
+    expect(view).toMatch(/\.typing-dots \{[^}]*min-height: 1\.7em/)
   })
 
   it('人格编辑是整页不是弹窗，覆盖身份到进阶玩法八区', () => {
@@ -188,12 +214,23 @@ describe('cKunBot 页面注册与关键交互', () => {
     // 标题栏下的展开面板退役：本项目偏好居中弹窗，不做抽屉式交互
     expect(view).not.toContain('qq-display-editor')
     expect(view).not.toContain('qq-display-toggle')
-    // ⋯ 默认隐藏，进该行或键盘聚焦才淡入；触屏无 hover 时常显
-    expect(view).toMatch(/\.conv-menu \{[^}]*opacity: 0/)
-    expect(view).toMatch(/\.conversation:hover \.conv-menu, \.conversation:focus-within \.conv-menu \{ opacity: 1/)
-    expect(view).toContain('@media (hover: none) { .conv-menu { opacity: 1; } }')
+    // ⋯ 默认隐藏、hover/键盘聚焦淡入、触屏常显：行为由共用的 .icon-button 提供，
+    // conv-menu 自身不再重复一份（重复过一次，删掉的那份回归过）
+    expect(view).toMatch(/\.icon-button \{[^}]*opacity: 0/)
+    expect(view).toMatch(/\.conversation:hover \.icon-button, \.conversation:focus-within \.icon-button \{ opacity: 1/)
+    expect(view).toContain('@media (hover: none) { .icon-button { opacity: 1; } }')
+    expect(view).not.toMatch(/\.conv-menu \{[^}]*opacity/)
     const store = read('src/stores/bot.ts')
     expect(store).toContain('updateConversationDisplay')
+  })
+
+  it('在场感节奏由状态层给：hesitate/relief/eager 三态，前端只认状态不猜', () => {
+    const view = read('src/components/bot/CkunBotView.vue')
+    expect(view).toContain("store.pacing === 'hesitate'")
+    expect(view).toContain("store.pacing === 'eager'")
+    // eager 的可见形态：气泡延迟收短 + 打字点加速
+    expect(view).toContain('delays[i] * 0.6')
+    expect(view).toMatch(/\.typing-dots\.eager i \{ animation-duration/)
   })
 
   it('助手一轮按空行展开成多条气泡，用户原文不替他拆', () => {

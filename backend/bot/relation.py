@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import database as db
+from .timeutil import days_since as _days_since_impl
 
 SPEEDS: dict[str, dict[str, float]] = {
     # half_life_days: 多久不聊会掉一半熟悉度
@@ -36,23 +37,10 @@ TURN_GAIN = 1.0
 SESSION_OPEN_BONUS = 2.0
 SESSION_GAP_HOURS = 6.0
 
-_TIMESTAMP = "%Y-%m-%d %H:%M:%S"
-
-
-def _parse(raw: Any) -> datetime | None:
-    if not isinstance(raw, str) or not raw.strip():
-        return None
-    try:
-        return datetime.strptime(raw.strip()[:19], _TIMESTAMP).replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None
-
 
 def _days_since(raw: Any, now: datetime) -> float | None:
-    stamp = _parse(raw)
-    if not stamp:
-        return None
-    return max(0.0, (now - stamp).total_seconds() / 86400.0)
+    # 关系语境下缺失时间戳 = 「无法判定」，交由调用方降级，与 memory 的 1e9 语义不同
+    return _days_since_impl(raw, now, default=None)
 
 
 def _speed(speed: str | None) -> dict[str, float]:

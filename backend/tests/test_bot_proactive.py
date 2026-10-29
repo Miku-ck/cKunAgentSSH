@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 import database as db
+from bot import memory as mem
 from bot import proactive as pro
 
 
@@ -196,3 +197,64 @@ async def test_tick_no_targets_no_llm(base_db, monkeypatch):
     scheduler = pro.ProactiveScheduler()
     fired = await scheduler.tick()
     assert fired == 0 and called == []
+
+
+# ── ⑥ 选题器：0 次额外模型调用的确定性选题 ──
+
+
+def _backdate_memory(memory_id: str, days_ago: int) -> None:
+    conn = db._get_conn()
+    try:
+        conn.execute(
+            "UPDATE memories SET updated_at = datetime('now', ?) WHERE id = ?",
+            (f"-{days_ago} days", memory_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_pick_topic_cares_about_fatigue_first(base_db):
+    """上一轮停在他喊累：先问缓过来没有，新鲜事也得靠边。"""
+    persona = db.create_bot_persona(name="晚风")
+    mem.remember(persona["id"], "c1", "周末要去看展")
+    topic = pro.pick_topic(persona["id"], {"last_event_kind": "fatigue"})
+    assert topic == ("他上次聊到很累，问问他现在缓过来没有", "fatigue_care")
+
+
+def test_pick_topic_shares_recent_fact(base_db):
+    """近 3 天新记的事实 = 「有新鲜事想分享」，对应 desire 里的 novelty 轴。"""
+    persona = db.create_bot_persona(name="晚风")
+    mem.remember(persona["id"], "c1", "周末要去看展")
+    topic = pro.pick_topic(persona["id"], {})
+    assert topic and topic[1] == "fresh_fact" and "看展" in topic[0]
+
+
+def test_pick_topic_old_memory_is_rare_and_deterministic(base_db, monkeypatch):
+    """旧事钩子：确定性 RNG 触发，同一天重放同一选题，概率不满则闭嘴。"""
+    persona = db.create_bot_persona(name="晚风")
+    mem.remember(persona["id"], "c1", "我喜欢辣")
+    row = mem.list_memories(persona["id"])[0]
+    _backdate_memory(row["id"], 30)
+
+    monkeypatch.setattr(pro, "deterministic_uniform", lambda _key, _now: 0.0)
+    first = pro.pick_topic(persona["id"], {})
+    second = pro.pick_topic(persona["id"], {})
+    assert first and first[1] == "old_memory" and first == second
+
+    monkeypatch.setattr(pro, "deterministic_uniform", lambda _key, _now: 0.99)
+    assert pro.pick_topic(persona["id"], {}) is None
+
+
+def test_pick_topic_recent_fact_is_not_old_news(base_db, monkeypatch):
+    """旧事钩子只翻新鲜窗之外的账：刚记 3 天内的不算旧事。"""
+    persona = db.create_bot_persona(name="晚风")
+    mem.remember(persona["id"], "c1", "我喜欢辣")  # 刚记下，还在新鲜窗内
+    monkeypatch.setattr(pro, "deterministic_uniform", lambda _key, _now: 0.0)
+    topic = pro.pick_topic(persona["id"], {})
+    assert topic and topic[1] == "fresh_fact"
+
+
+def test_pick_topic_nothing_to_say(base_db):
+    persona = db.create_bot_persona(name="晚风")
+    assert pro.pick_topic(persona["id"], {}) is None

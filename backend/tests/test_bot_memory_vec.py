@@ -128,7 +128,7 @@ async def test_g3_blocked_within_7_days_then_allowed(base_db, monkeypatch):
     mem.remember(persona["id"], None, "我喜欢辣")
     now = datetime(2026, 10, 29, 12, 0, 0, tzinfo=timezone.utc)
     # 强制 G3 触发（query 不命中任何事实 → 无 G1/G2）；高 novelty 抵消抑制项
-    monkeypatch.setattr(mem, "_deterministic_uniform", lambda pid, n: 0.0)
+    monkeypatch.setattr(mem, "deterministic_uniform", lambda pid, n: 0.0)
     first = await mem.recall(
         persona["id"], "今天天气怎么样", conversation_id=conv["id"], now=now, novelty=100.0
     )
@@ -153,7 +153,7 @@ async def test_g3_deterministic_same_day(base_db, monkeypatch):
     persona = _persona()
     mem.remember(persona["id"], None, "我喜欢辣")
     # 固定 uniform 值（触发区），同日两次调用 → 决策一致
-    monkeypatch.setattr(mem, "_deterministic_uniform", lambda pid, n: 0.05)
+    monkeypatch.setattr(mem, "deterministic_uniform", lambda pid, n: 0.05)
     day = datetime(2026, 10, 29, 9, 0, 0, tzinfo=timezone.utc)
     a = await mem.recall(persona["id"], "", now=day)
     day_later_hour = datetime(2026, 10, 29, 21, 0, 0, tzinfo=timezone.utc)
@@ -171,7 +171,7 @@ async def test_g3_deterministic_same_day(base_db, monkeypatch):
 async def test_inject_limit_three(base_db, monkeypatch):
     persona = _persona()
     mem.remember(persona["id"], None, "我叫小林，我住在杭州，我喜欢辣，我养了只猫")
-    monkeypatch.setattr(mem, "_deterministic_uniform", lambda pid, n: 0.0)
+    monkeypatch.setattr(mem, "deterministic_uniform", lambda pid, n: 0.0)
     # query 命中多条（小林/辣），加 G3 钩子 → 上限 3
     contents = await mem.recall(
         persona["id"], "小林 辣 猫 看展", now=datetime.now(timezone.utc)

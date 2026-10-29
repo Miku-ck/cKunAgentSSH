@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .relation import SPEEDS
+from .timeutil import fmt_ts as _fmt_ts, parse_ts as _parse_ts
 
 # ── 轴定义 ──
 # (lo, hi, baseline)。valence/energy/patience 是各自区间的绝对量，
@@ -112,22 +113,6 @@ COOLDOWN_S: dict[str, float] = {
     "cold_reply": 0.0,
     "chat": 0.0,
 }
-
-_TIMESTAMP = "%Y-%m-%d %H:%M:%S"
-
-
-def _parse_ts(raw: Any) -> datetime | None:
-    if not isinstance(raw, str) or not raw.strip():
-        return None
-    try:
-        return datetime.strptime(raw.strip()[:19], _TIMESTAMP).replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None
-
-
-def _fmt_ts(dt: datetime) -> str:
-    return dt.strftime(_TIMESTAMP)
-
 
 def _speed_key(speed: str | None) -> str:
     return speed if speed in SPEEDS else "normal"
@@ -241,36 +226,21 @@ def state_from_row(row: dict | None) -> dict:
     return state
 
 
-# ── 阶段（双门） ──
-# 与 relation.stage_for 的单 score 口径并存：UI 进度条继续走 score（历史累计、
-# 只增不减），prompt 里的「关系」走 intimacy + trust 双门——亲近但没信任的人
-# 不该用默契语气。两边量的是不同的东西，允许不一致。
-
-def derive_stage(intimacy: float, trust: float, speed: str | None = None) -> dict:
-    """双门阶段：intimacy 定档，trust 设门槛（默契必须既有亲密度又有信任）。"""
-    factor = SPEEDS[_speed_key(speed)]["threshold_factor"]
-    stage = "陌生"
-    floor, next_at = 0.0, None
-    if intimacy >= 70.0 * factor and trust >= 60.0:
-        stage, floor, next_at = "默契", 70.0 * factor, None
-    elif intimacy >= 28.0 * factor or (intimacy >= 20.0 * factor and trust >= 50.0):
-        stage, floor, next_at = "亲近", 28.0 * factor, 70.0 * factor
-        if intimacy < 28.0 * factor:
-            floor = 20.0 * factor
-    elif intimacy >= 8.0 * factor:
-        stage, floor, next_at = "熟悉", 8.0 * factor, 28.0 * factor
-    if next_at is not None:
-        progress = min(max((intimacy - floor) / max(next_at - floor, 0.001), 0.0), 1.0)
-    else:
-        progress = 1.0
-    return {"stage": stage, "progress": round(progress, 3)}
-
-
 # ── 离散档位注入 ──
 # 只喂档位词，不喂裸数字：数值进 prompt 会被模型复述进台词（「我耐心只剩 0.3 了」）。
 
-def describe_state(state: dict, local_hour: float, speed: str | None = None) -> str:
-    """状态 → 一段中文描述。只提非中性的轴：永远说心情，其余偏离基线才说。"""
+def describe_state(
+    state: dict,
+    local_hour: float,
+    speed: str | None = None,
+    stage: str | None = None,
+) -> str:
+    """状态 → 一段中文描述。只提非中性的轴：永远说心情，其余偏离基线才说。
+
+    stage 由调用方传入（relation 的 score 口径，与 UI 进度条同源）：
+    阶段只允许一个事实源，否则同一份 prompt 会出现两个可能矛盾的阶段。
+    不传 stage 时不提关系，只说此刻的情绪与分寸。
+    """
     segs: list[str] = []
 
     valence = float(state.get("valence") or 0.0)
@@ -295,14 +265,16 @@ def describe_state(state: dict, local_hour: float, speed: str | None = None) -> 
     elif energy > 0.8:
         segs.append("精力：很足")
 
-    relation = derive_stage(float(state.get("intimacy") or 0.0), float(state.get("trust") or 0.0), speed)
     tension = float(state.get("tension") or 0.0)
-    rel_seg = f"关系：{relation['stage']}"
-    if tension >= 60.0:
-        rel_seg += "，但有个小疙瘩没解开"
+    if stage:
+        rel_seg = f"关系：{stage}"
+        if tension >= 60.0:
+            rel_seg += "，但有个小疙瘩没解开"
+        elif tension >= 30.0:
+            rel_seg += "，但有点别扭"
+        segs.append(rel_seg)
     elif tension >= 30.0:
-        rel_seg += "，但有点别扭"
-    segs.append(rel_seg)
+        segs.append("有个小疙瘩没解开" if tension >= 60.0 else "有点别扭")
 
     patience = float(state.get("patience") or 0.8)
     if patience <= 0.3:
@@ -317,28 +289,6 @@ def describe_state(state: dict, local_hour: float, speed: str | None = None) -> 
 
 
 # ── 确定性后处理开关 ──
-
-def bubble_cap(state: dict | None, seed: str = "") -> int:
-    """分条额度：默认就一条发完，状态真的想多说才一档一档加。
-
-    恒为 3 的时候模型把上限当配额，每条回复都凑满三条 —— 「一直三句话」就是这么来的。
-    额度改由状态挣：精神头足又开心（话多）、关系熟到一定程度（有默契）、心里有疙瘩
-    （要分开讲）各加一档，封顶 3；没耐心时压回 1，别刷屏。seed 给同一状态按轮次抖
-    一档，不然稳定期就是一条常数曲线。
-    """
-    if not state:
-        return 2
-    if float(state.get("patience") or 1.0) < 0.3:
-        return 1
-    cap = 1
-    if float(state.get("energy") or 0.0) >= 0.6 and float(state.get("valence") or 0.0) > 0.0:
-        cap += 1
-    if float(state.get("intimacy") or 0.0) >= 40.0 or float(state.get("tension") or 0.0) >= 30.0:
-        cap += 1
-    if cap < 3 and seed and int(hashlib.md5(f"bubble:{seed}".encode("utf-8")).hexdigest()[:8], 16) < 0xFFFFFFFF // 4:
-        cap += 1
-    return min(3, cap)
-
 
 def downgrade_style(style: str, state: dict | None) -> str:
     """没耐心时回复长度档降一档（long→moderate→concise）。"""
@@ -359,6 +309,26 @@ def probe_line(conversation_id: str) -> str:
 def strip_exclaim(text: str) -> str:
     """没精力时禁感叹号：文本级后处理比 prompt 约束可靠。"""
     return text.replace("！！", "。").replace("！", "。").replace("。。", "。")
+
+
+def pacing_hint(state: dict | None) -> str:
+    """在场感节奏提示（纯函数，空串 = 正常打字节奏）。
+
+    - hesitate：有疙瘩（tension 高）或没耐心——出现、停一下、再出现；
+    - relief：有点别扭但在缓和（30≤tension<60）——不演停顿，节奏放平；
+    - eager：新鲜感高且心情好——有话想说、按捺不住，气泡间的等待收短。
+    分寸优先于活泼：hesitate 永远压过 relief/eager。
+    """
+    if not state:
+        return ""
+    tension = float(state.get("tension") or 0.0)
+    if tension >= 60.0 or float(state.get("patience") or 1.0) < 0.3:
+        return "hesitate"
+    if tension >= 30.0:
+        return "relief"
+    if float(state.get("novelty") or 40.0) >= 70.0 and float(state.get("valence") or 0.0) > 0.2:
+        return "eager"
+    return ""
 
 
 # ── 每轮组装与落库（唯一接触 DB 的两个函数，其余全纯函数） ──

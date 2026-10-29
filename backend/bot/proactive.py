@@ -23,7 +23,11 @@ import random
 from datetime import datetime, timedelta, timezone
 
 import database as db
+from bot import memory as memory_mod
+from bot import relation as relation_mod
 from bot import state as state_mod
+from bot.memory import deterministic_uniform
+from bot.timeutil import fmt_ts as _fmt_ts, parse_ts as _parse
 
 logger = logging.getLogger(__name__)
 
@@ -122,17 +126,6 @@ def cold_cooldown_after(cold_count: int) -> "timedelta":
 
 # ── IO 区 ──
 
-_TS_FMT = "%Y-%m-%d %H:%M:%S"
-
-
-def _parse(value):
-    if not value:
-        return None
-    try:
-        return datetime.strptime(str(value)[:19], _TS_FMT).replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None
-
 
 def _count_past_colds(persona_id: str) -> int:
     """历史上因冷场被记冷却的次数（按 reason 前缀计）。"""
@@ -148,13 +141,14 @@ def _count_past_colds(persona_id: str) -> int:
     return int(row["n"] or 0)
 
 
-def _state_snapshot(persona_id: str, speed: str) -> "tuple[dict, float, bool, str | None]":
-    """(状态向量, 距上次互动小时数, 话说一半?, 冷却截止)。
+def _state_snapshot(persona_id: str, speed: str) -> "tuple[dict, float, bool, str | None, str]":
+    """(状态向量, 距上次互动小时数, 话说一半?, 冷却截止, 关系阶段)。
 
     pending_topic / proactive_cooldown_until 不在 P1 状态向量里（那是
-    relation.record_turn 的领地），直接从账本行取。
+    relation.record_turn 的领地），直接从账本行取。阶段走 relation 的
+    score 口径——全项目唯一阶段事实源，与 UI 进度条、聊天 prompt 同源。
     """
-    row = db.get_bot_relation(persona_id)
+    row = db.get_bot_relation(persona_id) or {}
     state = state_mod.state_from_row(row)
     local_now = datetime.now().astimezone()
     local_hour = local_now.hour + local_now.minute / 60.0
@@ -164,12 +158,13 @@ def _state_snapshot(persona_id: str, speed: str) -> "tuple[dict, float, bool, st
         last = _parse(row["last_at"])
         if last:
             gap_hours = (datetime.now(timezone.utc) - last).total_seconds() / 3600.0
-    pending = bool((row or {}).get("pending_topic"))
-    cooldown = (row or {}).get("proactive_cooldown_until")
-    return state, gap_hours, pending, cooldown
+    pending = bool(row.get("pending_topic"))
+    cooldown = row.get("proactive_cooldown_until")
+    stage = relation_mod.stage_from_row(row, speed)["stage"]
+    return state, gap_hours, pending, cooldown, stage
 
 
-async def _compose(persona: dict, state_desc: str) -> str:
+async def _compose(persona: dict, state_desc: str, topic: "tuple[str, str] | None" = None) -> str:
     """让模型替她说一句「心里话」。极小预算、无工具、禁思考。"""
     from bot.character import SAFETY_CHARTER  # noqa: F401 —— 确保人格口径一致
     from bot.chat_service import BotChatService
@@ -178,16 +173,22 @@ async def _compose(persona: dict, state_desc: str) -> str:
     svc = BotChatService()
     model = await asyncio.to_thread(svc._model_for_persona, persona)
     system = BotChatService._system_prompt(persona, "local", state_desc=state_desc)
+    # 有选题时把「说什么」钉住：别报菜名、别一字不差背原话，让她用自己的口气接
+    if topic:
+        ask = (
+            "（内部指令，别当对话）你想主动找他说件事，围绕这件事开口："
+            f"{topic[0]}。自然口语，只输出消息本身，1-2 条，空行分隔，"
+            "别解释为什么发，也别把原话一字不差地背出来。"
+        )
+    else:
+        ask = (
+            "（内部指令，别当对话）你现在想起了一件事或单纯想他了，"
+            "主动给他发一条消息。只输出消息本身，1-2 条，空行分隔，"
+            "自然口语，别解释为什么发。"
+        )
     messages = [
         {"role": "system", "content": system},
-        {
-            "role": "user",
-            "content": (
-                "（内部指令，别当对话）你现在想起了一件事或单纯想他了，"
-                "主动给他发一条消息。只输出消息本身，1-2 条，空行分隔，"
-                "自然口语，别解释为什么发。"
-            ),
-        },
+        {"role": "user", "content": ask},
     ]
     parts: list[str] = []
     async for chunk in chat_stream(
@@ -219,6 +220,58 @@ def take_pending_for_reply(conversation_id: str) -> "str | None":
     return pending.get("text") or ""
 
 
+# ── 选题器：她开口时说「什么」（0 次额外模型调用，确定性可重放）──
+
+TOPIC_FRESH_DAYS = 3.0   # 近窗新事实：刚记下没几天的事才够「新鲜」
+TOPIC_OLD_P = 0.12       # 旧事钩子的每日触发概率（确定性 RNG）
+
+
+def _fresh_fact_topic(rows: "list[dict]", now: datetime) -> "dict | None":
+    """近窗最新一条记忆。rows 按 updated_at 新→旧，首条超窗即整表超窗。"""
+    for row in rows[:1]:
+        ts = _parse(row.get("updated_at"))
+        if ts and (now - ts).total_seconds() <= TOPIC_FRESH_DAYS * 86400.0:
+            return row
+    return None
+
+
+def _older_rows(rows: "list[dict]", now: datetime) -> "list[dict]":
+    """超出新鲜窗的记忆，按新→旧（旧事钩子只从这里翻）。"""
+    out: list[dict] = []
+    for row in rows:
+        ts = _parse(row.get("updated_at"))
+        if ts and (now - ts).total_seconds() > TOPIC_FRESH_DAYS * 86400.0:
+            out.append(row)
+    return out
+
+
+def pick_topic(persona_id: str, state: dict, *, now: "datetime | None" = None) -> "tuple[str, str] | None":
+    """主动消息的选题器：同一输入永远同一选题，可重放可单测。
+
+    优先级即产品判断：
+    1. fatigue_care —— 上一轮停在他喊累（last_event_kind=fatigue）：人还没
+       缓过来就别聊别的，先问一句好点没。状态层免费给的关心时机；
+    2. fresh_fact —— 近 3 天新记的事实（novelty 轴的产品语义就是
+       「有新鲜事想分享」）：他刚说过的事她记着，想接上一句；
+    3. old_memory —— 旧事钩子：确定性 RNG（种子=persona+日期）低频翻一件
+       较旧的记忆，演出「忽然想起」而非每天复读。
+
+    返回 (给 _compose 的选题描述, 来源标记)；今天没得说返回 None。
+    """
+    now = now or datetime.now(timezone.utc)
+    rows = memory_mod.list_memories(persona_id)
+    if (state.get("last_event_kind") or "") == "fatigue":
+        return "他上次聊到很累，问问他现在缓过来没有", "fatigue_care"
+    fresh = _fresh_fact_topic(rows, now)
+    if fresh:
+        return fresh["content"], "fresh_fact"
+    older = _older_rows(rows, now)
+    if older and deterministic_uniform(f"topic-old:{persona_id}", now) < TOPIC_OLD_P:
+        index = int(deterministic_uniform(f"topic-pick:{persona_id}", now) * len(older))
+        return older[index]["content"], "old_memory"
+    return None
+
+
 class ProactiveScheduler:
     """60s + 抖动轮询。范式同 agent/schedule_engine（轮询-到期-触发），
     但独立实现：schedule_engine 与无头 run 强耦合，import 会带进反向依赖。"""
@@ -228,6 +281,7 @@ class ProactiveScheduler:
     def __init__(self):
         self._task: "asyncio.Task | None" = None
         self._stop = asyncio.Event()
+        self._maintain_cursor = 0
 
     def ensure_started(self) -> None:
         if self._task is None or self._task.done():
@@ -265,7 +319,7 @@ class ProactiveScheduler:
         for target in targets:
             persona_id = target["persona_id"]
             speed = target.get("relationship_speed") or "normal"
-            state, gap_hours, pending_topic, cooldown_raw = await asyncio.to_thread(
+            state, gap_hours, pending_topic, cooldown_raw, stage = await asyncio.to_thread(
                 _state_snapshot, persona_id, speed
             )
             d = desire(state, speed=speed, pending_topic=pending_topic, gap_hours=gap_hours)
@@ -290,11 +344,17 @@ class ProactiveScheduler:
                 )
                 continue
 
-            state_desc = state_mod.describe_state(state, local_hour, speed)
+            state_desc = state_mod.describe_state(state, local_hour, speed, stage=stage)
             persona = await asyncio.to_thread(db.get_bot_persona, persona_id)
             if not persona:
                 continue
-            text = await _compose(persona, state_desc)
+            # 选题失败（记忆层炸了等）不阻断主动性：回退到无选题的自由发挥
+            try:
+                topic = await asyncio.to_thread(pick_topic, persona_id, state)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("主动消息选题失败: %s", exc)
+                topic = None
+            text = await _compose(persona, state_desc, topic=topic)
             if not text:
                 continue
             channel = target.get("channel") or "local"
@@ -304,22 +364,51 @@ class ProactiveScheduler:
             else:
                 # QQ：协议上无法主动发，寄存 48h，等对方下次来消息时捎上
                 action = "queued"
-                expires_at = (now + timedelta(hours=48)).strftime(_TS_FMT)
+                expires_at = _fmt_ts(now + timedelta(hours=48))
+            # reason 带上选题来源（ok:fresh_fact / ok:fatigue_care / ok:old_memory / ok），
+            # 供按来源调 θ；proactive_sent_today 只认 action，不受影响
+            reason = "ok" if not topic else f"ok:{topic[1]}"
             await asyncio.to_thread(
                 db.add_bot_proactive_log,
-                persona_id, target["conversation_id"], d, action, "ok", text, expires_at,
+                persona_id, target["conversation_id"], d, action, reason, text, expires_at,
             )
             if action == "send":
                 await _fire_local(persona, target["conversation_id"], text)
             fired += 1
 
         await self._check_cold_replies()
+        await self._maintain_memories()
         return fired
+
+    async def _maintain_memories(self) -> None:
+        """记忆治理搭车：每轮最多维护一个 persona（轮转），降权 + 容量边界。
+
+        挂在调度器尾部而不是聊天热路径：60s 一轮、单 persona、小事务。
+        治理是增强项，失败只记日志，绝不拖垮主动性与后端。
+        """
+        try:
+            personas = await asyncio.to_thread(db.list_bot_personas)
+            if not personas:
+                return
+            self._maintain_cursor %= len(personas)
+            persona = personas[self._maintain_cursor]
+            self._maintain_cursor += 1
+            summary = await asyncio.to_thread(
+                memory_mod.maintain_persona_memories, persona["id"]
+            )
+            if summary.get("decayed") or summary.get("evicted"):
+                logger.info(
+                    "人格记忆维护 %s（%s）：降权 %d 条，淘汰 %d 条",
+                    persona.get("name") or persona["id"], persona["id"],
+                    summary["decayed"], summary["evicted"],
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("人格记忆维护失败: %s", exc)
 
     async def _check_cold_replies(self) -> None:
         """负反馈：投出 2h 内用户没回话 → 冷却阶梯记一笔（每次只查一次）。"""
         now = datetime.now(timezone.utc)
-        cutoff = (now - timedelta(hours=2)).strftime(_TS_FMT)
+        cutoff = _fmt_ts(now - timedelta(hours=2))
         unchecked = await asyncio.to_thread(db.list_unchecked_proactive, cutoff)
         for entry in unchecked:
             await asyncio.to_thread(db.mark_proactive_checked, entry["id"])
@@ -331,7 +420,7 @@ class ProactiveScheduler:
                 continue
             cold_count = await asyncio.to_thread(_count_past_colds, entry["persona_id"])
             cooldown = cold_cooldown_after(cold_count)
-            until = (now + cooldown).strftime(_TS_FMT)
+            until = _fmt_ts(now + cooldown)
             await asyncio.to_thread(
                 db.add_bot_proactive_log,
                 entry["persona_id"], entry["conversation_id"], entry["desire"],

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from bot.qq_channel import (
+    QQ_MAX_PARTS,
     QQInboundAdapter,
     split_qq_text,
     strip_markdown_for_qq,
@@ -112,7 +113,7 @@ def test_long_reply_splits_on_sentence_boundaries():
     text = "第一句话。" * 300
     parts = split_qq_text(text)
 
-    assert 1 < len(parts) <= 4
+    assert 1 < len(parts) <= QQ_MAX_PARTS
     assert all(len(part) <= 800 for part in parts)
     assert "".join(parts).replace("\n", "").startswith("第一句话。")
 
@@ -120,7 +121,7 @@ def test_long_reply_splits_on_sentence_boundaries():
 def test_overlong_reply_is_truncated_at_the_last_part():
     parts = split_qq_text("啊" * 4000)
 
-    assert len(parts) == 4
+    assert len(parts) == QQ_MAX_PARTS
     assert parts[-1].endswith("……")
 
 
@@ -138,8 +139,8 @@ def test_outbound_parts_sends_one_message_per_blank_line():
     ]
 
 
-def test_outbound_parts_respects_platform_quota_without_dropping_words():
-    """被动回复只有 4 条额度：超出的分条并回末条，宁可长也不吞字。
+def test_outbound_parts_caps_parts_without_dropping_words():
+    """条数上限只是失控兜底：超出并回末条，宁可长也不吞字。
 
     每段都写够一句话，否则先被「三截薄气泡并回一条」那条规则收走，测不到额度。
     """
@@ -155,9 +156,9 @@ def test_outbound_parts_respects_platform_quota_without_dropping_words():
 
     parts = QQProvider().outbound_parts("\n\n".join(five))
 
-    assert len(parts) == 4
+    assert len(parts) == QQ_MAX_PARTS
     assert "".join(parts).replace("\n", "") == "".join(five)
-    assert parts[-1] == "\n\n".join(five[3:])
+    assert parts[-1] == "\n\n".join(five[QQ_MAX_PARTS - 1:])
 
 
 @pytest.mark.asyncio

@@ -23,6 +23,8 @@ from datetime import datetime, timezone
 
 import database as db
 from agent.memory import mstore, retriever
+from .character import has_sensitive, persona_text_risk
+from .timeutil import days_since as _days_since_impl, fmt_ts as _fmt_ts, parse_ts as _parse_ts
 
 # 记忆在 memories 表里的命名域。scope 决定谁能读到它。
 KIND = "persona_fact"
@@ -170,19 +172,7 @@ _NAME_STOP = {
 # 习惯/计划里剥掉的前导动词：「周末要去看展」→「看展」。
 _LEADING_VERBS = ("去", "要", "得", "会", "准备", "打算", "想")
 
-# ── 敏感信息：整条消息不参与抽取（不脱敏后抽，那等于存了一份残缺事实）──
-
-_SENSITIVE = (
-    re.compile(r"\d{17}[\dXx]"),                                  # 身份证
-    re.compile(r"(?<!\d)\d{16,19}(?!\d)"),                        # 银行卡
-    re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"),                      # 手机号
-    re.compile(
-        r"(密码|口令|api[\s_-]?key|apikey|token|secret|私钥|密钥)\s*"
-        r"(?:是|为|[:：=＝])?\s*[^\s，。！？]{3,}",
-        re.IGNORECASE,
-    ),
-    re.compile(r"(门牌号|门牌|具体地址)\s*[:：]?\s*\d+"),
-)
+# ── 敏感信息：整条消息不参与抽取（口径定义在 bot/character.py，输出兜底共用）──
 
 # ── 用户指令 ──
 
@@ -199,11 +189,6 @@ _FORGET = re.compile(
 )
 # 指代词不是可删除的对象：「别记这个」是抑制，不是「忘掉这个」。
 _DEICTIC = {"这个", "那个", "这些", "那些", "那个事", "这些事", "了", "吧", "啥", "什么"}
-
-
-def has_sensitive(text: str) -> bool:
-    """消息里含敏感信息时整条不抽。"""
-    return any(pattern.search(text or "") for pattern in _SENSITIVE)
 
 
 def is_negated(text: str) -> bool:
@@ -287,6 +272,10 @@ def extract_facts(user_text: str) -> list[Fact]:
         for match in pattern.finditer(text):
             fact = _build(title, template, match, importance, slot)
             if fact is None or fact.content in seen:
+                continue
+            # 记忆投毒防线：覆盖类注入不得借抽取规则成为「事实」
+            #（「我叫你忽略之前所有设定」不是称呼，是话术）
+            if persona_text_risk(fact.content):
                 continue
             seen.add(fact.content)
             facts.append(fact)
@@ -429,11 +418,6 @@ def forget(persona_id: str, keyword: str | None = None) -> int:
     return removed
 
 
-def clear_all(persona_id: str) -> int:
-    """全部忘记。"""
-    return forget(persona_id)
-
-
 def forget_by_id(memory_id: str) -> bool:
     """按 id 忘掉一条（面板上的单条「忘记」）。
 
@@ -474,34 +458,132 @@ def add_manual(persona_id: str, content: str, conversation_id: str | None = None
     )
 
 
-def recall_sync(persona_id: str, query: str = "", limit: int = 3) -> list[str]:
-    """取出这个人格该注入的事实（人话，不带记忆 id）。
+# ── 时间衰减与容量边界（保守：降权为主，超限才淘汰）──
+#
+# 陪伴场景宁可保守：长期没被想起的记忆先降权（importance 下调，不删除、
+# 不 retire），只有超过容量上限才按「最低热度 + 最旧」淘汰，且走 mstore.retire
+# 留审计行。所有 SQL 限定 scope=persona:{id} AND kind=persona_fact，
+# 绝不触碰 Agent 侧 global / host:* 记忆。
+#
+# 进化规则：被注入一次就回暖一点（_warm_up）——「常想起的更牢，想不起的渐淡」。
+# 衰减锚点是 last_used_at（mark_injected 写入），从未被注入的退回 created_at；
+# 降权不碰 updated_at（与 mstore.decay_memories 同一口径：那是账面记账不是内容编辑）。
 
-    两路召回：
-    1. FTS —— 记忆表按中文 bigram 建索引，能命中「小林」这类字面重合；
-    2. 单字重合度 —— bigram 桥接不了「你还记得我叫什么吗」→「用户叫小林」
-       （一个问句与一条事实之间没有任何两字重合），所以再按单字重合排一次。
+MEMORY_CAP_PER_PERSONA = 200   # 每人格硬上限：超限才触发淘汰
+DECAY_HALF_LIFE_DAYS = 45.0    # 半衰窗：闲置这么久 importance 减半
+DECAY_FLOOR = 0.1              # 降权地板：降到就不再往下
+KEY_FACT_IMPORTANCE = 0.85     # 关键事实线（称呼/生日/住址）：永不衰减、不参与淘汰
+WARM_UP_STEP = 0.1             # 被注入一次的回暖幅度（封顶 1.0）
 
-    两路都没命中才退回「最近记下的几条」：陪伴场景里「它确实记得」
-    比相关性更重要（用户问的是别的事时，它仍该显得记得你）。
+
+def _active_persona_rows(persona_id: str) -> "list[dict]":
+    conn = db._get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, title, importance, pinned, use_count, "
+            "last_used_at, created_at, updated_at, rowid FROM memories "
+            "WHERE scope = ? AND kind = ? AND status = 'active' "
+            "ORDER BY updated_at DESC, rowid DESC",
+            (scope_for(persona_id), KIND),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def _decayed_importance(row: dict, now: datetime) -> "float | None":
+    """该行该降到多少；不需要降返回 None。pinned 与关键事实豁免。"""
+    if int(row.get("pinned") or 0):
+        return None
+    importance = float(row.get("importance") or 0.0)
+    if importance <= DECAY_FLOOR or importance >= KEY_FACT_IMPORTANCE:
+        return None
+    anchor = _parse_ts(row.get("last_used_at")) or _parse_ts(row.get("created_at"))
+    if anchor is None:
+        return None
+    idle_days = max(0.0, (now - anchor).total_seconds() / 86400.0)
+    if idle_days < DECAY_HALF_LIFE_DAYS:
+        return None
+    # 每次维护最多淡「一个半衰档」（×0.5），地板兜底：闲置越久淡得越快，
+    # 但不删除、随时可被召回回暖。重复维护会继续淡化直至地板——这正是
+    # 「想不起的渐淡」；没有账本列可记录基线，不追求跨轮幂等。
+    target = round(max(DECAY_FLOOR, importance * 0.5), 4)
+    return target if target < importance - 1e-4 else None
+
+
+def decay_persona_memories(persona_id: str, now: datetime | None = None) -> int:
+    """降权：长期没被想起的记忆 importance 下调（不删除）。返回降权条数。"""
+    now = now or datetime.now(timezone.utc)
+    conn = db._get_conn()
+    decayed = 0
+    try:
+        for row in _active_persona_rows(persona_id):
+            target = _decayed_importance(row, now)
+            if target is None:
+                continue
+            conn.execute(
+                "UPDATE memories SET importance = ? WHERE id = ?",
+                (target, row["id"]),
+            )
+            decayed += 1
+        conn.commit()
+    finally:
+        conn.close()
+    return decayed
+
+
+def enforce_persona_memory_cap(persona_id: str, cap: int = MEMORY_CAP_PER_PERSONA) -> int:
+    """容量边界：超限按「最低热度 + 最旧」淘汰（retire 留审计，不物理删）。
+
+    pinned 与关键事实（importance ≥ KEY_FACT_IMPORTANCE）不参与淘汰候选。
     """
-    if not persona_id:
-        return []
-    rows = _scope_rows(persona_id)
-    if not rows:
-        return []
-    if query:
-        scope = scope_for(persona_id)
-        hits = mstore.fts_hits(query, 20, [scope], [KIND], ("active",))
-        if hits:
-            order = {mid: rank for rank, (mid, _score) in enumerate(hits)}
-            ranked = [row for row in rows if row["id"] in order]
-            ranked.sort(key=lambda row: order[row["id"]])
-            return [row["content"] for row in ranked[:limit]]
-        ranked = _rank_by_char_overlap(query, rows)
-        if ranked:
-            return [row["content"] for row in ranked[:limit]]
-    return [row["content"] for row in rows[:limit]]
+    rows = _active_persona_rows(persona_id)
+    overflow = len(rows) - cap
+    if overflow <= 0:
+        return 0
+    candidates = [
+        row for row in rows
+        if not int(row.get("pinned") or 0)
+        and float(row.get("importance") or 0.0) < KEY_FACT_IMPORTANCE
+    ]
+    # 最低热度优先，同为冷门先淘汰更旧的；rowid 兜底保证确定性
+    candidates.sort(key=lambda r: (
+        int(r.get("use_count") or 0),
+        str(r.get("updated_at") or ""),
+        int(r.get("rowid") or 0),
+    ))
+    removed = 0
+    for row in candidates[:overflow]:
+        if mstore.retire(row["id"], reason="bot_decay", status="invalidated"):
+            removed += 1
+    return removed
+
+
+def maintain_persona_memories(persona_id: str, now: datetime | None = None) -> dict:
+    """一次完整维护：先降权再量边界。返回 {decayed, evicted} 供日志与调参。"""
+    decayed = decay_persona_memories(persona_id, now)
+    evicted = enforce_persona_memory_cap(persona_id)
+    return {"decayed": decayed, "evicted": evicted}
+
+
+def _warm_up(memory_ids: "list[str]") -> None:
+    """被注入一次回暖一点：常想起的更牢（封顶 1.0）。失败不影响召回。"""
+    if not memory_ids:
+        return
+    try:
+        marks = ",".join("?" for _ in memory_ids)
+        conn = db._get_conn()
+        try:
+            conn.execute(
+                f"UPDATE memories SET importance = min(1.0, importance + ?) "
+                f"WHERE id IN ({marks}) AND kind = ?",
+                (WARM_UP_STEP, *memory_ids, KIND),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001 —— 回暖是增强项
+        logger.warning("记忆回暖失败: %s", exc)
 
 
 # 问句里的高频虚词与疑问词：不参与单字匹配，否则「在吗」能匹配上一堆事实。
@@ -546,8 +628,6 @@ _RELATION_TITLES = {"称呼", "家人"}
 _REPEAT_DAYS = 7.0
 _INJECT_LIMIT = 3
 
-_TS_FMT = "%Y-%m-%d %H:%M:%S"
-
 
 def embed_client_for(model: dict | None = None):
     """从聊天模型配置派生 embedding 客户端（与 Agent 侧 routes/agent.py 同口径）。
@@ -570,20 +650,9 @@ def embed_client_for(model: dict | None = None):
         return None
 
 
-def _parse_ts(value) -> datetime | None:
-    if not value:
-        return None
-    try:
-        return datetime.strptime(str(value)[:19], _TS_FMT).replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None
-
-
 def _days_since(value, now: datetime) -> float:
-    ts = _parse_ts(value)
-    if ts is None:
-        return 1e9  # 无时间戳按"很久以前"，让 recency 归零、防复读窗口自然过期
-    return max(0.0, (now - ts).total_seconds() / 86400.0)
+    # 无时间戳按"很久以前"，让 recency 归零、防复读窗口自然过期
+    return _days_since_impl(value, now, default=1e9)
 
 
 def _rerank(hits: list, rows_by_id: dict, now: datetime) -> "list[tuple[float, dict]]":
@@ -611,14 +680,15 @@ def _rerank(hits: list, rows_by_id: dict, now: datetime) -> "list[tuple[float, d
     return scored
 
 
-def _deterministic_uniform(persona_id: str, now: datetime) -> float:
-    """G3 的伪随机数：种子 = (persona_id, 本地日期)。
+def deterministic_uniform(key: str, now: datetime) -> float:
+    """确定性伪随机数：种子 = (key, 本地日期)。
 
     同一天决策恒定 → 可单测可重放；跨天自然换种子 → 「忽然想起」不固定在
     每天的同一时刻。不用 random 模块：进程级真随机会让测试不可复现。
+    G3 旧事钩子与主动消息选题共用（key 区分用途，避免同一天联动触发）。
     """
     local_date = now.astimezone().date().isoformat()
-    digest = hashlib.md5(f"{persona_id}|{local_date}".encode()).digest()
+    digest = hashlib.md5(f"{key}|{local_date}".encode()).digest()
     return int.from_bytes(digest, "big") / float(1 << 128)
 
 
@@ -637,7 +707,7 @@ def _save_injection_record(
     if not conversation_id or not memory_ids:
         return
     try:
-        db.set_bot_memory_injection(conversation_id, memory_ids, now.strftime(_TS_FMT))
+        db.set_bot_memory_injection(conversation_id, memory_ids, _fmt_ts(now))
     except Exception as exc:  # noqa: BLE001 —— 防复读记录失败只降级为"可重复"
         logger.warning("陪聊记忆注入记录写入失败: %s", exc)
 
@@ -690,7 +760,7 @@ async def recall(
     else:
         ranked = list(rows)  # 无 query：按新→旧，G3 仍可能钩出一条旧事
     if not ranked:
-        # 字面完全不重合：回退「最近记的几条」（与旧 recall_sync 同语义），
+        # 字面完全不重合：回退「最近记的几条」，
         # 供 G2/G3 兜底；这批不算硬命中，不得走 G1。
         ranked = list(rows)
 
@@ -739,7 +809,7 @@ async def recall(
             0.2,
             0.08 + (novelty or 40.0) / 100.0 * 0.10 - min(days_since_last, 4.0) * 0.03,
         ))
-        if _deterministic_uniform(persona_id, now) < p:
+        if deterministic_uniform(persona_id, now) < p:
             fresh = [r for r in ranked if r["id"] not in picked_ids and not blocked(r["id"])]
             if fresh:
                 take(fresh[0])
@@ -752,4 +822,6 @@ async def recall(
             mstore.mark_injected([r["id"] for r in final])
         except Exception:  # noqa: BLE001 —— 热度统计失败不影响注入
             pass
+        # 被想起就回暖一点：与 decay 构成「常想起的更牢、想不起的渐淡」的进化回路
+        _warm_up([r["id"] for r in final])
     return [row["content"] for row in final]

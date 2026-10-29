@@ -22,3 +22,10 @@
 | **Bridge 双模块** | `agent/bridge_relay.py` 是 `/ws/bridge` 通道服务端（持连接 / 令牌握手 / 帧路由），`agent/electron_bridge.py` 是调用方客户端（拼请求 / 分类错误 / fail-closed） | 业务代码只 import 客户端；直接碰 relay 会绕过错误分类与"在途请求绝不重发"的保证 |
 | **测试文件名** | `backend/tests/` 文件名只写守什么（`test_<域>_<守卫什么>.py`），不写轮次 / 工单号；出处历史在文件 docstring 与 git log，旧名对映见 `backend/tests/README.md` | 带 `_round13c` / `_s407` 后缀的名字看文件名猜不出守什么，只能靠 docstring——2026-10-24 已统一改名 |
 | **剧本**（Runbook，`runbooks` 表） | 结构化的可执行运维剧本：步骤 = 命令 + 说明（≤20 步），经逐步无头 run 执行、标记行确定性判读 | 与 `runbook_save/search` 沉淀在 `memories` 里的「Runbook 经验文本」是两回事——一个可执行、一个可检索；混用会找错存储 |
+| **cKunBot**（`bot/` 包，Bot 页） | 虚拟陪伴角色子系统：人格 / 表达 DNA / 关系 / 状态轴 / 记忆 / 主动性 / 多渠道。与运维 Agent 零打通（不调工具、不执行命令），只共用模型配置与 `memories` 表 | 它和首页任务台是两个东西：任务台是运维 Agent 的唯一对话面，cKunBot 是独立人格的陪聊；混用会把「帮我运维」的话术喂给陪聊人格 |
+| **人格记忆**（`scope=persona:{id}`） | cKunBot 落在 `memories` 表里的事实，`kind=persona_fact`；Agent 侧只读 global / host:*，两者互不可见 | 共表不同 scope：衰减 / 淘汰 / 遗忘的 SQL 必须限定 scope+kind，碰宽了会删到 Agent 的记忆 |
+| **关系阶段**（唯一口径 = score） | 陌生/熟悉/亲近/默契，由 relation 的 score（只增 + 读时衰减）按升温档缩放阈值推导；UI 进度条与 prompt 同源 | 曾有第二套 intimacy+trust 双门口径与它打架（同一份 prompt 两个阶段）；已删，阶段只认 relation |
+| **状态轴**（`bot/state.py`） | trust/intimacy/tension/novelty/valence/energy/patience 七轴，「事件→增量」确定性推导，只喂档位词不喂裸数字 | 0 次额外模型调用是它的根基：可重放、可单测；改成让模型自报状态就全丢了 |
+| **pacing**（在场感节奏） | 后端 `state.pacing_hint` 给的 SSE 提示：hesitate / relief / eager（空 = 正常） | 前端只认这三个值演动画，不自己猜状态；新增节奏要后端先给 |
+| **渠道 provider**（`bot/provider.py`） | 一个平台一个实现，5 成员协议（start / outbound_parts / fallback / name / reply_window_s） | 入站管线永远拿不到平台原始对象；接入新平台 = 写 provider + 进注册表，不改管线 |
+| **寄存**（proactive queued） | QQ 被动回复窗口发不出的主动「心里话」，写 `bot_proactive_log(action=queued)` 存 48h，等对方来消息以「对了，」捎上 | 协议上 QQ 无法主动发消息；任何「直接发」的实现都会被平台拒绝 |

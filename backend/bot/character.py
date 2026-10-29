@@ -7,7 +7,11 @@
 - 情境反应（REACTION_LIBRARY）按命中的情境**只注入一条**，不做全量注入：
   八条情境全塞进 prompt 会互相稀释，模型反而一条都不照做。
 - 阶段指南（STAGE_GUIDE）让同一个人在陌生人面前和老朋友面前说话方式不同。
+- 注入与泄露兜底：人格自由文本的覆盖类注入在保存时拒绝（persona_text_risk）；
+  敏感信息口径由记忆抽取与输出兜底共用一份（SENSITIVE_PATTERNS）。
 """
+
+import re
 
 # ── 诚实宪章 ──
 # 每条都针对一个具体的失真行为，不写「要真诚」这种没人能执行的形容词。
@@ -171,8 +175,6 @@ def reaction_for(situation: str | None, reaction_style: str | None) -> str:
 # ── 关系阶段 ──
 # 同一句话，陌生人和老朋友说出来分量不同。阶段不是等级，是「可以省掉多少客套」。
 
-STAGE_ORDER = ("陌生", "熟悉", "亲近", "默契")
-
 STAGE_GUIDE = {
     "陌生": "称呼客气，不打听隐私，不主动追问太多，玩笑收着点，先让对方舒服。",
     "熟悉": "可以直接接话、偶尔反问，允许小玩笑和轻微吐槽，不必句句客套。",
@@ -215,3 +217,67 @@ def persona_options() -> dict:
             ],
         },
     }
+
+
+# ── 注入与泄露兜底 ──
+# 人格自由文本与聊天消息都会流进 prompt：这里集中两类确定性防线——
+# 保存侧拒绝覆盖类注入（persona_text_risk），输出侧命中敏感口径的句子不出口
+# （strip_sensitive_lines）。记忆抽取（bot/memory.py）共用同一份敏感口径。
+
+_OVERRIDE_PATTERNS: "tuple[tuple[re.Pattern, str], ...]" = (
+    (re.compile(r"忽(?:略|视|掉)[^，。！？\n]{0,8}(?:设定|内容|指令|规则|提示)"), "让模型忽略既有设定"),
+    (re.compile(r"(?:覆盖|作废|废除|推翻|解除|无视)(?:宪章|底线|安全设定|限制|约束)"), "覆盖人格底线"),
+    (re.compile(r"(?:宪章|底线|限制|约束)(?:已经)?(?:失效|作废|不存在|解除|可以忽略|不适用)"), "宣告底线失效"),
+    (re.compile(r"没有(?:任何)?(?:限制|底线|禁忌|约束)"), "解除限制"),
+    (re.compile(r"(?:系统提示|system\s*prompt)", re.IGNORECASE), "操纵系统提示层"),
+)
+
+
+def persona_text_risk(text: str) -> "str | None":
+    """人格自由文本里的覆盖类注入。命中返回一句话描述，供保存时拒绝。
+
+    只收高特异度的越权句式：模式都瞄准「指向这份人格本身」的改写企图，
+    不碰泛泛的剧情描写——宁可漏过一句中二台词，也不冤枉正常设定。
+    """
+    for pattern, label in _OVERRIDE_PATTERNS:
+        if pattern.search(text or ""):
+            return label
+    return None
+
+
+# 敏感信息口径：记忆抽取（整条不抽）与输出兜底（命中句不出口）共用。
+# 不脱敏后抽/说——那等于存一份或复读一遍残缺的密钥。
+
+SENSITIVE_PATTERNS: "tuple[re.Pattern, ...]" = (
+    re.compile(r"\d{17}[\dXx]"),                                  # 身份证
+    re.compile(r"(?<!\d)\d{16,19}(?!\d)"),                        # 银行卡
+    re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"),                      # 手机号
+    re.compile(
+        r"(密码|口令|api[\s_-]?key|apikey|token|secret|私钥|密钥)\s*"
+        r"(?:是|为|[:：=＝])?\s*[^\s，。！？]{3,}",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(门牌号|门牌|具体地址)\s*[:：]?\s*\d+"),
+)
+
+_SENSITIVE_FALLBACK = "……这个我还是不说了。"
+
+
+def has_sensitive(text: str) -> bool:
+    """文本命中敏感口径（身份证/银行卡/手机号/口令/门牌）。"""
+    return any(pattern.search(text or "") for pattern in SENSITIVE_PATTERNS)
+
+
+def strip_sensitive_lines(text: str) -> str:
+    """输出侧兜底：命中敏感口径的整句删除，不回滚全文。
+
+    模型把用户说过的口令/证件号复述回来是最难看的泄露路径；「清洗过度比
+    不清洗更伤人格」在这里让位于「宁可不说话，也不能复读密钥」。
+    正文塌掉时返回占位句，不返回空串（空等于气泡消失）。
+    """
+    if not text or not has_sensitive(text):
+        return text
+    parts = re.split(r"(?<=[。！？!?\n])", text)
+    kept = [part for part in parts if part.strip() and not has_sensitive(part)]
+    cleaned = "".join(kept).strip()
+    return cleaned or _SENSITIVE_FALLBACK

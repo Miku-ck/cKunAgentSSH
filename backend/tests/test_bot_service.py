@@ -378,8 +378,7 @@ async def test_memory_failure_does_not_break_the_reply(bot_db, monkeypatch):
     # P2：主链路走 recall/remember_async（融合召回 + 带 embed 写入）
     monkeypatch.setattr(mem, "recall", boom_async)
     monkeypatch.setattr(mem, "remember_async", boom_async)
-    # 旧同步口径一并钉住：任何入口炸都不能外溢
-    monkeypatch.setattr(mem, "recall_sync", boom)
+    # 记住（含定向遗忘的内部路径）炸了同样不能外溢
     monkeypatch.setattr(mem, "remember", boom)
 
     async def fake_stream(**kwargs):

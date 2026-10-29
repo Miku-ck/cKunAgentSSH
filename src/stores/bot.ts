@@ -20,7 +20,6 @@ export const useBotStore = defineStore('bot', () => {
    * 收回去重放一遍，用户看到的就是「同一条回复流式输出两次」。
    */
   const lastStreamedId = ref('')
-  const loading = ref(false)
   const error = ref('')
   const lastFailedText = ref('')
   const channel = ref<'local' | 'qq'>('local')
@@ -124,7 +123,6 @@ export const useBotStore = defineStore('bot', () => {
   }
 
   async function init() {
-    loading.value = true
     error.value = ''
     try {
       const [personaRows, conversationRows] = await Promise.all([
@@ -141,8 +139,6 @@ export const useBotStore = defineStore('bot', () => {
       await selectConversation(selected)
     } catch (e) {
       error.value = toFriendlyMessage(e, 'cKunBot 初始化失败')
-    } finally {
-      loading.value = false
     }
   }
 
@@ -227,11 +223,11 @@ export const useBotStore = defineStore('bot', () => {
     personas, conversations, messages, activePersonaId, activeConversationId,
     activePersona, activeConversation, filteredConversations,
     relations, activeRelation,
-    streamText, streamReasoning, streaming, loading, error, lastFailedText, pacing, lastStreamedId,
+    streamText, streamReasoning, streaming, error, lastFailedText, pacing, lastStreamedId,
     channel, isQq, qqConversations, qqMessages, qqActiveId, qqError, qqActiveConversation,
     userAvatar,
     init, selectPersona, selectConversation, createConversation, deleteConversation,
     sendMessage, stopGenerating, selectChannel, selectQqConversation, refreshQq,
-    refreshRelations, updateQqDisplay, loadUserAvatar,
+    updateQqDisplay, loadUserAvatar,
   }
 })

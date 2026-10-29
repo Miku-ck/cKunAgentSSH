@@ -138,7 +138,7 @@ def test_describe_state_has_no_raw_numbers():
     for valence in (-1.0, -0.5, 0.0, 0.3, 0.9):
         for tension in (0.0, 40.0, 80.0):
             state = _fresh() | {"valence": valence, "tension": tension}
-            out = state_mod.describe_state(state, local_hour=14.0, speed="normal")
+            out = state_mod.describe_state(state, local_hour=14.0, speed="normal", stage="陌生")
             assert "【此刻状态】" in out
             assert not re.search(r"\d", out), f"出现了裸数字: {out}"
 
@@ -146,31 +146,18 @@ def test_describe_state_has_no_raw_numbers():
 def test_describe_state_mentions_abnormal_axes_only():
     """平静+精力正常+无疙瘩时不说精力/疙瘩；偏离时必须点名。"""
     calm = _fresh()
-    out = state_mod.describe_state(calm, local_hour=14.0)
-    assert "心情" in out and "关系" in out
+    out = state_mod.describe_state(calm, local_hour=14.0, stage="熟悉")
+    assert "心情" in out and "关系：熟悉" in out
     assert "精力" not in out and "疙瘩" not in out
 
     tired = _fresh() | {"energy": 0.2}
-    assert "精力" in state_mod.describe_state(tired, local_hour=14.0)
+    assert "精力" in state_mod.describe_state(tired, local_hour=14.0, stage="熟悉")
     torn = _fresh() | {"tension": 70.0}
-    torn_out = state_mod.describe_state(torn, local_hour=14.0)
+    torn_out = state_mod.describe_state(torn, local_hour=14.0, stage="熟悉")
     assert "疙瘩" in torn_out and "别追问" in torn_out
-
-
-# ── 阶段双门 ──
-
-def test_derive_stage_trust_gate():
-    """亲近但没信任，不给默契；intimacy 阈值随升温档缩放（对齐旧口径）。"""
-    assert state_mod.derive_stage(75, 70, "normal")["stage"] == "默契"
-    assert state_mod.derive_stage(75, 40, "normal")["stage"] == "亲近", "信任不够压不住默契门"
-    assert state_mod.derive_stage(30, 20, "normal")["stage"] == "亲近"
-    assert state_mod.derive_stage(22, 55, "normal")["stage"] == "亲近", "i≥20 且 trust≥50 的捷径档"
-    assert state_mod.derive_stage(22, 20, "normal")["stage"] == "熟悉"
-    assert state_mod.derive_stage(10, 30, "normal")["stage"] == "熟悉"
-    assert state_mod.derive_stage(5, 30, "normal")["stage"] == "陌生"
-    # fast 档阈值 ×0.6：同样的 intimacy 更快升档（捷径档仍要 trust≥50）
-    assert state_mod.derive_stage(15, 55, "fast")["stage"] == "亲近"
-    assert state_mod.derive_stage(15, 30, "fast")["stage"] == "熟悉", "捷径档信任不够不生效"
+    # 不传阶段时不说关系，但疙瘩信息不能丢（主动消息等场景的阶段兜底口径）
+    no_stage = state_mod.describe_state(torn, local_hour=14.0)
+    assert "关系" not in no_stage and "疙瘩" in no_stage
 
 
 # ── 事件组装 ──
@@ -235,47 +222,30 @@ def test_update_for_turn_persists_and_decays(core_db):
 def test_deterministic_postprocessing():
     assert state_mod.strip_exclaim("好耶！！真的吗！") == "好耶。真的吗。"
     assert state_mod.downgrade_style("long", {"patience": 0.2}) == "moderate"
+    assert state_mod.downgrade_style("moderate", {"patience": 0.2}) == "concise"
     assert state_mod.downgrade_style("long", {"patience": 0.8}) == "long"
     assert state_mod.probe_line("c1") == state_mod.probe_line("c1")
     assert state_mod.probe_line("c1") != state_mod.probe_line("c2") or len({state_mod.probe_line(f"c{i}") for i in range(20)}) > 1
 
 
-FLAT = {
-    "trust": 20.0, "intimacy": 10.0, "tension": 0.0, "novelty": 40.0,
-    "valence": 0.0, "energy": 0.6, "patience": 0.8,
-}
+# ── 在场感节奏 ──
 
-
-def test_bubble_cap_defaults_to_one_and_earns_the_extra_rooms():
-    """分条额度不再恒为 3 —— 模型会把上限当配额，每条回复都凑满三条。
-
-    默认一条说完；精神头足又开心、关系熟了、心里有疙瘩，各挣一档；封顶 3。
-    """
-    assert state_mod.bubble_cap(FLAT) == 1
-    # 没耐心：一句话发出去就够，别刷屏
-    assert state_mod.bubble_cap({**FLAT, "patience": 0.2}) == 1
-    # 开心 + 有精神 → 2
-    assert state_mod.bubble_cap({**FLAT, "energy": 0.8, "valence": 0.3}) == 2
-    # 熟了 → 再加一档
-    assert state_mod.bubble_cap({**FLAT, "energy": 0.8, "valence": 0.3, "intimacy": 50.0}) == 3
-    # 有疙瘩要分开讲 → 2
-    assert state_mod.bubble_cap({**FLAT, "tension": 40.0}) == 2
-    # 封顶 3，四样全占也不超
-    assert state_mod.bubble_cap(
-        {**FLAT, "energy": 0.9, "valence": 0.5, "intimacy": 90.0, "tension": 80.0}
-    ) == 3
-    # 状态层缺席：留一档余量，而不是退回「凑满三条」
-    assert state_mod.bubble_cap(None) == 2
-
-
-def test_bubble_cap_jitters_per_turn_under_the_same_state():
-    """同一种状态也不该每轮同一个节奏：按轮次确定性抖一档，且可复现。"""
-    over_60_turns = {state_mod.bubble_cap(FLAT, seed=f"c1:{i}") for i in range(60)}
-    assert over_60_turns == {1, 2}
-    assert state_mod.bubble_cap(FLAT, seed="c1:7") == state_mod.bubble_cap(FLAT, seed="c1:7")
-    # 已经封顶时不再抖
-    assert {state_mod.bubble_cap({**FLAT, "energy": 0.9, "valence": 0.5, "intimacy": 90.0}, seed=f"c1:{i}")
-            for i in range(30)} == {3}
+def test_pacing_hint_covers_three_rhythms():
+    """hesitate（欲言又止）/ relief（别扭但在缓和）/ eager（兴冲冲）。"""
+    assert state_mod.pacing_hint(None) == ""
+    # 现有语义不变：有疙瘩或没耐心 → 欲言又止
+    assert state_mod.pacing_hint({"tension": 80.0}) == "hesitate"
+    assert state_mod.pacing_hint({"patience": 0.2}) == "hesitate"
+    # 别扭但在缓和：不演停顿，节奏放平
+    assert state_mod.pacing_hint({"tension": 40.0}) == "relief"
+    # 新鲜感高且心情好：有话憋不住
+    assert state_mod.pacing_hint({"novelty": 80.0, "valence": 0.5}) == "eager"
+    # 新鲜但心情平平：不演兴冲冲
+    assert state_mod.pacing_hint({"novelty": 80.0, "valence": 0.0}) == ""
+    # 分寸优先于活泼：疙瘩压过一切
+    assert state_mod.pacing_hint({"tension": 80.0, "novelty": 90.0, "valence": 1.0}) == "hesitate"
+    # 默认安静
+    assert state_mod.pacing_hint(_fresh()) == ""
 
 
 # ── ⑥ 主链路回归：chat_stream 仍恰好调用 1 次 ──

@@ -8,6 +8,7 @@ import {
   peerLabel,
   peerSeed,
   peerTag,
+  personaName,
   splitBubbles,
 } from './bot-chat-decor'
 
@@ -35,6 +36,19 @@ describe('会话对方标识 peerSeed / peerLabel', () => {
     expect(peerTag('c2c:Uxxxopenid7b22:ctx')).toBe('')
     expect(peerTag(null)).toBe('')
     expect(peerTag('weird-no-colon')).toBe('')
+  })
+})
+
+describe('会话归属人格名 personaName', () => {
+  it('取服务端下发的 persona.name，人格删除后仍能显示', () => {
+    expect(personaName({ name: '小暖' })).toBe('小暖')
+  })
+
+  it('缺失或空名时返回空串，由调用方兜底', () => {
+    expect(personaName(null)).toBe('')
+    expect(personaName(undefined)).toBe('')
+    expect(personaName({})).toBe('')
+    expect(personaName({ name: '   ' })).toBe('')
   })
 })
 

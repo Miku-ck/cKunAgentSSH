@@ -9,14 +9,15 @@ from functools import partial
 from itertools import count
 
 from bot.provider import InboundMessage
-from bot.voice import split_reply_bubbles
+from bot.voice import MAX_REPLY_BUBBLES, split_reply_bubbles
 
 logger = logging.getLogger(__name__)
 
 # QQ 被动回复窗口是 5 分钟：留一半给分段发送与平台延迟
 QQ_REPLY_TIMEOUT = 150
 QQ_TEXT_LIMIT = 800
-QQ_MAX_PARTS = 4
+# 不是额度，是失控兜底：与本地展示用同一个数，否则同一段话本地三条、QQ 四条。
+QQ_MAX_PARTS = MAX_REPLY_BUBBLES
 QQ_TIMEOUT_REPLY = "这条我想得有点久，你稍后再跟我说一次好吗？"
 QQ_FAILURE_REPLY = "我这边刚才没接上话，请稍后再试一次。"
 

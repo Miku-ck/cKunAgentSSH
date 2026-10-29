@@ -30,6 +30,15 @@ export function peerLabel(externalId?: string | null): string {
 }
 
 /**
+ * 会话归属人格的名字。
+ * 服务端已把快照裁成 {id, name, avatar} 直接下发，这里不再解析 JSON；
+ * 人格被删除后 persona_id 为空，名字仍来自快照，所以比查 personas 列表更可靠。
+ */
+export function personaName(persona: { name?: string } | null | undefined): string {
+  return persona?.name?.trim() || ''
+}
+
+/**
  * 列表行的会话类型短标：只有群聊需要标（私聊是默认形态，标了等于噪声）。
  * 完整代号与时间不进这一行 —— 窄栏折两行比多一段信息更难看，挪进 title 悬浮。
  */
@@ -63,7 +72,7 @@ export interface Decoratable {
   created_at: string
 }
 
-export interface Decorated<T> {
+interface Decorated<T> {
   item: T
   /** 非空表示这条应挂一条日期分隔线。 */
   divider: string
@@ -102,10 +111,10 @@ export function decorateMessages<T extends Decoratable>(
 // ── 分条 ──
 
 /** 一轮回复最多拆几条气泡，与服务端 MAX_REPLY_BUBBLES 同值。 */
-export const MAX_REPLY_BUBBLES = 3
+const MAX_REPLY_BUBBLES = 3
 
 /** 平均每段少于这个字数就是「一句话说完被切三截」，并回一条。与服务端同值。 */
-export const MIN_BUBBLE_CHARS = 24
+const MIN_BUBBLE_CHARS = 24
 
 /**
  * 按空行把一轮回复切成多条气泡。规则与服务端 `bot/voice.py` 的 `split_reply_bubbles`
