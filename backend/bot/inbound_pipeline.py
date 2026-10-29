@@ -73,6 +73,20 @@ class InboundPipeline:
             greeting = (conversation.get("persona") or {}).get("greeting") or ""
             if first_turn and greeting:
                 reply = f"{greeting}\n\n{reply}"
+            # P3 意愿寄存：过闸但协议上发不出的「心里话」（QQ 150s 被动窗口），
+            # 见到对方来消息时以「对了，」捎上 —— 协议仍是被动回复，行为上
+            # 等价于「她憋了一句话，见到你终于说了」。
+            try:
+                from bot.proactive import take_pending_for_reply
+
+                pending_text = await asyncio.to_thread(
+                    take_pending_for_reply, conversation["id"]
+                )
+            except Exception as exc:  # noqa: BLE001 —— 寄存失败不影响正常回复
+                logger.warning("主动性寄存读取失败: %s", exc)
+                pending_text = None
+            if pending_text:
+                reply = f"对了，{pending_text}\n\n{reply}"
         await self._deliver(inbound, provider, conversation["id"], reply)
 
     async def _deliver(self, inbound, provider, conversation_id: str, reply: str) -> None:

@@ -24,7 +24,7 @@ import asyncio
 import json
 import logging
 import time
-from typing import Literal, Optional
+from typing import TYPE_CHECKING, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -36,26 +36,25 @@ from sse_utils import sse_event
 from agent.audit import append_record_async
 from agent import audit
 from agent.environment_policy import EnvironmentResolution, resolve_run_environment
-from agent.tools import create_registry, ToolRegistry
 from agent.memory import mstore
 from agent.memory import budget as memory_budget
 from agent.memory import reconcile as memory_reconcile
 from agent.memory import retriever as memory_retriever
 from agent.memory.embedding import get_embedding_client
 from agent.consciousness_tick import get_global_tick
-from agent.reflection import MetaReflection, RunTrace
-from agent.evolution import EvolutionEngine
-from agent.cost_tracker import CostTracker
 from agent.pending_delivery import PendingDeliveries
 from prompts import _current_time_str, SSH_MODE, SSH_MODE_PROMPT
 from safe_tokens import safe_max_tokens
-# Harness 框架（P8：切换到 Harness）
-from agent.harness import Harness, HarnessConfig
-from agent.harness.contracts import AgentConfig as HarnessAgentConfig
-from agent.harness.contracts import TERMINAL_RUN_STATES
-from agent.harness.llm_client import StreamLLMClient
-from agent.harness.reins import approval_wait
-from agent.harness.telemetry import SSEAdapter
+
+if TYPE_CHECKING:
+    from agent.evolution import EvolutionEngine
+
+# 执行栈（Harness 框架 / 工具注册表 / 反思演化 / 成本追踪）一律按需导入。
+# 这条链（agent.harness → driver → reins → safety，外加 agent.tools /
+# agent.reflection / agent.evolution / agent.cost_tracker；后两者又会传递性
+# 拉回 agent.harness.harness）实测占导入期 70ms 以上，只有真正发起一次 run，
+# 或走结构化 / 提交信息生成这类纯推理端点时才需要，不该压在后端启动关键路径上。
+# 与下方大量 `from agent.harness.reins import ...` 的函数内局部导入同一约定。
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +89,10 @@ async def _run_reflection_and_evolution(
     # 审查 M-13：反思/演化全程是同步 DB 读写，整块放线程池执行，
     # 避免后台任务在事件循环线程里阻塞其他请求
     def _work() -> None:
+        # 按需导入执行栈（见文件头说明）；本函数跑在线程池里，导入只发生一次
+        from agent.evolution import EvolutionEngine
+        from agent.reflection import MetaReflection, RunTrace
+
         reflection_mgr = MetaReflection()
         evolution_mgr = EvolutionEngine()
 
@@ -476,6 +479,9 @@ async def _acquire_run_slot(conversation_id: str, run_id: str) -> Optional[str]:
     注意：DB 行缺失不算陈旧（占位先于 create_agent_run，新 run 可能有毫秒级
     窗口还没有行）— 误接管活 run 的代价高于多等一次。
     """
+    # 终态集合按需导入（见文件头说明）
+    from agent.harness.contracts import TERMINAL_RUN_STATES
+
     async with _in_flight_lock:
         existing = _in_flight_runs.get(conversation_id)
         if existing:
@@ -732,6 +738,16 @@ async def _retrieve_memory_contents(
 @router.post("/agent/run")
 async def agent_run(req: AgentRunRequest, request: Request):
     """启动 Agent — SSE 流式返回运行过程"""
+    # 执行栈按需导入（见文件头说明）：走到这里才真的要跑一次 run。
+    # 导入落在函数作用域，下方 engine_producer 等嵌套函数经闭包可见。
+    from agent.cost_tracker import CostTracker
+    from agent.evolution import EvolutionEngine
+    from agent.harness import Harness, HarnessConfig
+    from agent.harness.contracts import AgentConfig as HarnessAgentConfig
+    from agent.harness.llm_client import StreamLLMClient
+    from agent.harness.telemetry import SSEAdapter
+    from agent.tools import ToolRegistry, create_registry
+
     # C-review MINOR-12：进程启动后首次请求做滞留 run 对账
     await _reconcile_stale_runs_once()
     # ── 按 SSH 模式选择默认模型（兜底）──
@@ -1767,7 +1783,8 @@ async def grant_tool_permission(req: PermissionGrantRequest):
     scope=always: 写入 ~/.ckunagentic/allowlist.txt，所有后续 run 放行
       （命令工具写入的是 `tool:cmdhash` 键，不覆盖其他命令 — 审查 M-3）
     """
-    from agent.harness.reins import _get_global_permission_gate_sync
+    from agent.harness.contracts import TERMINAL_RUN_STATES
+    from agent.harness.reins import _get_global_permission_gate_sync, approval_wait
     from agent.harness.reins.gate import normalize_host, scoped_key
     # hardline 预检（Q-B4①）：底线命令在 FilesystemGuard 层无条件阻断
     # （reins.guards 的 hardline 分支不问 PermissionGate、不看 allowlist），
@@ -2103,6 +2120,8 @@ async def structure_task(req: StructureRequest):
         raise HTTPException(status_code=404, detail=f"模型不存在: {effective_model_id}")
 
     system_prompt = build_structure_system_prompt(req.active_target.host, req.environment)
+    from agent.harness.llm_client import StreamLLMClient
+
     llm = StreamLLMClient(
         base_url=model_cfg["base_url"],
         api_key=model_cfg["api_key"],
@@ -2222,6 +2241,8 @@ async def generate_commit_message(req: CommitMessageRequest):
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content},
     ]
+    from agent.harness.llm_client import StreamLLMClient
+
     llm = StreamLLMClient(base_url=model_cfg["base_url"], api_key=model_cfg["api_key"])
     try:
         out = await asyncio.wait_for(
@@ -2290,7 +2311,8 @@ async def deny_command(req: DenyCommandRequest):
     visible_terminal 拒绝时调用：后续该 run 再次请求此命令时 PermissionGate
     check_permission 直接返回 False，不会再次触发 permission_needed 卡片。
     """
-    from agent.harness.reins import _get_global_permission_gate_sync
+    from agent.harness.reins import _get_global_permission_gate_sync, approval_wait
+
     if not req.run_id:
         raise HTTPException(status_code=400, detail="deny_command 必须携带 run_id（拒绝记录按 run 隔离）")
     pg = _get_global_permission_gate_sync()
@@ -2330,7 +2352,7 @@ def _release_run_interaction_state(run_id: str) -> tuple[int, int]:
         (释放的 once 授权条数, 释放的拒绝记录条数)
     """
     from agent.harness.reins import (
-        _get_global_permission_gate_sync, release_clarification_run)
+        _get_global_permission_gate_sync, approval_wait, release_clarification_run)
     pg = _get_global_permission_gate_sync()
     released = pg.cleanup_run_once(run_id)
     try:

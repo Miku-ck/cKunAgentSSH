@@ -73,7 +73,10 @@ class FakeClient:
 def _reset_fake(monkeypatch):
     FakeClient.calls = []
     FakeClient.fail_times = 0
-    monkeypatch.setattr(se.httpx, "AsyncClient", FakeClient)
+    # httpx 在 _notify_webhook 里按需导入（启动路径上不付它的 130ms），所以 patch
+    # 定义处 httpx.AsyncClient —— 函数体内 `import httpx` 拿到的就是同一模块对象。
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
     yield
 
 

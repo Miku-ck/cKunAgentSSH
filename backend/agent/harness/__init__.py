@@ -16,7 +16,10 @@ Harness — 驾驭工程框架
 勿在此虚构对应命名。
 """
 
-from .harness import Harness, HarnessConfig
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # 仅类型检查期直接可见
+    from .harness import Harness, HarnessConfig
 
 # H13 修复 C10：导出策略说明
 # 仅导出对外公开 API（Harness / HarnessConfig）。
@@ -28,4 +31,20 @@ __all__ = [
     "Harness",
     "HarnessConfig",
 ]
+
+
+def __getattr__(name: str):
+    """按需求值导出 Harness / HarnessConfig（PEP 562）。
+
+    本文件原先在末尾直接 `from .harness import Harness, HarnessConfig`，于是任何
+    `import agent.harness.reins.xxx` / `agent.harness.contracts` 都会先跑本包
+    __init__，把 harness.py → driver.py → reins 全套拖进导入链（实测 70ms+）。
+    而后端启动阶段只需要 reins.gate 里的几个 setter（see main._load_permission_policy），
+    并不需要 Harness 本体。改为惰性导出后 `from agent.harness import Harness`
+    写法完全不变，只用到子模块的调用方不再付这份成本。
+    """
+    if name in __all__:
+        from .harness import Harness, HarnessConfig
+        return {"Harness": Harness, "HarnessConfig": HarnessConfig}[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

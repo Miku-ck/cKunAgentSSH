@@ -79,6 +79,8 @@ class PersonaUpdateRequest(BaseModel):
     memory_directive: Optional[str] = Field(None, max_length=2000)
     dialogue_samples: Optional[str] = Field(None, max_length=4000)
     advanced_play: Optional[str] = Field(None, max_length=2000)
+    # P3 主动性开关：她会主动找你说话（调度器 + 四重抑制器守着分寸）
+    proactive_enabled: Optional[bool] = None
 
     _check_avatar = field_validator("avatar")(_validate_avatar)
 
@@ -176,6 +178,24 @@ def delete_persona(persona_id: str):
     if not db.delete_bot_persona(persona_id):
         raise HTTPException(status_code=404, detail="人格不存在")
     return {"deleted": True}
+
+
+@router.get("/bot/personas/{persona_id}/proactive-log")
+def list_proactive_log(persona_id: str, limit: int = 50):
+    """主动性记录（P3）：她什么时候想找你、过没过闸、说了什么。调 θ 用。"""
+    if not db.get_bot_persona(persona_id):
+        raise HTTPException(status_code=404, detail="人格不存在")
+    conn = db._get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, conversation_id, desire, action, reason, text, created_at, "
+            "expires_at, delivered_at FROM bot_proactive_log "
+            "WHERE persona_id = ? ORDER BY created_at DESC LIMIT ?",
+            (persona_id, max(1, min(limit, 200))),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [dict(row) for row in rows]
 
 
 @router.get("/bot/personas/{persona_id}/memories")

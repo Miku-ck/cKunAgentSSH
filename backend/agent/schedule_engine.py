@@ -19,14 +19,8 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
-import httpx
-
 import database as db
 from prompts import SSH_MODE
-from agent.harness import Harness, HarnessConfig
-from agent.harness.contracts import AgentConfig as HarnessAgentConfig
-from agent.harness.llm_client import StreamLLMClient
-from agent.cost_tracker import CostTracker
 from agent.electron_bridge import ElectronBridge
 from agent.environment_policy import EnvironmentResolution, resolve_run_environment
 from agent.memory import mstore
@@ -105,6 +99,11 @@ async def _notify_webhook(content: str) -> None:
     企微/钉钉群机器人兼容格式（msgtype:text）。降级铁律：全程自吞异常，
     失败重试 1 次后放弃，绝不向巡检主流程抛任何东西；未配置（空串）= 关闭。
     """
+    # httpx 按需导入：它自身 + rich/pygments 依赖实测 130ms，而本模块在 lifespan
+    # 里被 import（见 main.py），放到顶层就等于每次启动都付一遍 —— 实际上只有
+    # 配了 webhook 且真的推送失败时才会用到。
+    import httpx
+
     try:
         url = (await asyncio.to_thread(db.get_app_setting, "notify.webhook_url") or "").strip()
         if not url:
@@ -473,6 +472,14 @@ class ScheduleEngine:
         目标主机名来自连接配置的反查（不是 sched['target_host']：那一列存的是
         连接 ID，前端下拉选的是连接）—— 巡检报告要写人能认、能检索的主机名。
         """
+        # 执行栈按需导入：本模块在 lifespan 里被 import（见 main.py），若把
+        # harness → driver → reins 整条链放在模块顶层，就会在启动关键路径上付一次
+        # 实测 70ms+ 的导入成本 —— 而定时任务真正跑起来才会用到它。
+        from agent.cost_tracker import CostTracker
+        from agent.harness import Harness, HarnessConfig
+        from agent.harness.contracts import AgentConfig as HarnessAgentConfig
+        from agent.harness.llm_client import StreamLLMClient
+
         model_cfg = await asyncio.to_thread(self._resolve_model)
         if not model_cfg:
             raise RuntimeError("未配置默认模型，无法执行定时任务")

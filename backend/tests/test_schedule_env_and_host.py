@@ -89,9 +89,11 @@ def _run_once(monkeypatch, resolution: EnvironmentResolution):
         "id": "m1", "model_id": "m1", "base_url": "http://x",
         "api_key": "k", "max_tokens": 8192,
     })
-    monkeypatch.setattr(se, "Harness", _FakeHarness)
-    monkeypatch.setattr(se, "StreamLLMClient", lambda **_kw: object())
-    monkeypatch.setattr(se, "CostTracker", lambda **_kw: object())
+    # 执行栈在 _run_agent_once 内按需导入（启动速度优化），patch 必须打到定义处：
+    # 模块内 `from agent.harness import Harness` 会经包级 __getattr__ 取到这里的桩
+    monkeypatch.setattr("agent.harness.harness.Harness", _FakeHarness)
+    monkeypatch.setattr("agent.harness.llm_client.StreamLLMClient", lambda **_kw: object())
+    monkeypatch.setattr("agent.cost_tracker.CostTracker", lambda **_kw: object())
     monkeypatch.setattr(se, "ElectronBridge", _FakeBridge)
     monkeypatch.setattr(se, "_build_schedule_system_prompt", lambda _s: "sp")
     monkeypatch.setattr(tools_mod, "create_registry", lambda: object())

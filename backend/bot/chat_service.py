@@ -1,11 +1,13 @@
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import AsyncGenerator
 
 import database as db
 from agent.memory.budget import cap_text_tokens
 from bot import memory as memory_mod
 from bot import relation as relation_mod
+from bot import state as state_mod
 from bot.character import (
     REFUSAL_STYLES,
     SAFETY_CHARTER,
@@ -46,6 +48,8 @@ class BotChatService:
         *,
         relation: dict | None = None,
         situation: str | None = None,
+        state_desc: str = "",
+        max_bubbles: int = 3,
     ) -> str:
         """把人格内核编译成分节提示词。
 
@@ -89,6 +93,11 @@ class BotChatService:
         if stage:
             sections.append(f"你们的关系（{stage}）：{stage_guide(stage)}")
 
+        # 此刻状态（P1 状态层）：离散档位描述，只提非中性的轴。排在阶段指南之后、
+        # 分寸指令之前——先知道她现在什么样，再讲此刻该怎么接。
+        if state_desc:
+            sections.append(state_desc)
+
         reaction = reaction_for(situation, persona.get("reaction_style"))
         if reaction:
             sections.append(f"此刻的分寸：{reaction}")
@@ -118,8 +127,9 @@ class BotChatService:
         # 分条口径两个渠道共用，且排在排版之后压尾（末位指令记得最牢）：治的是
         # 「明明只说一两句，却被写成三行」—— 一条气泡内硬换行既不像真人也白占行高，
         # 要分开说就该分开投（本地按空行展开成多气泡，QQ 按空行连发多条消息）。
+        # 上限由状态层决定：没耐心（patience<0.3）时压到 2 条，别刷屏。
         sections.append(
-            "分条规则：空一行就是另发一条消息，最多 3 条；一条之内不要换行、不要分点。"
+            f"分条规则：空一行就是另发一条消息，最多 {max_bubbles} 条；一条之内不要换行、不要分点。"
             "一句话说完就发出去，别为了显得口语把一句话拆成三行；"
             "确实要分开说几件事，才用空行分开。"
         )
@@ -155,6 +165,9 @@ class BotChatService:
             raise ValueError("会话不存在")
         persona = conversation["persona"]
         model = await asyncio.to_thread(self._model_for_persona, persona)
+        # P2：embedding 客户端与聊天模型同端点派生（与 Agent 侧同口径）。
+        # 端点不提供 /v1/embeddings 时客户端自带静默降级 → 全链路退化为 FTS-only。
+        embed_client = await asyncio.to_thread(memory_mod.embed_client_for, model)
 
         # 关系快照必须在记账之前读：这一轮应按「开口之前的熟悉度」说话，
         # 而不是先升一档再回头用新阶段的口吻。久别重逢的判定同理。
@@ -182,20 +195,66 @@ class BotChatService:
             await asyncio.to_thread(relation_mod.record_turn, persona_id, speed)
 
         history = await asyncio.to_thread(db.get_recent_bot_messages, conversation_id, 40)
+
+        # 状态层（P1）：衰减旧状态 → 事件增量 → 写回。与 record_turn 的 score
+        # 是两个口径：score 只增供 UI 进度条，状态轴管 prompt 里的「此刻状态」。
+        # 事件全部确定性推导（0 次额外模型调用），失败不影响回复主链路。
+        new_state: dict | None = None
+        local_hour = 12.0
+        if persona_id:
+            try:
+                local_now = datetime.now().astimezone()
+                local_hour = local_now.hour + local_now.minute / 60.0
+                events = state_mod.turn_events(
+                    situation,
+                    has_media=bool(images) and channel == "local",
+                    user_created_at=[item.get("created_at") for item in history
+                                     if item.get("role") == "user"],
+                    now=datetime.now(timezone.utc),
+                    local_hour=local_hour,
+                )
+                new_state = await asyncio.to_thread(
+                    state_mod.update_for_turn, persona_id, speed, events,
+                    datetime.now(timezone.utc), local_hour,
+                )
+            except Exception as exc:  # noqa: BLE001 —— 状态层是增强项，不拖垮对话
+                logger.warning("陪聊状态更新失败: %s", exc)
+
+        state_desc = (
+            state_mod.describe_state(new_state, local_hour, speed)
+            if new_state else ""
+        )
+        max_bubbles = state_mod.bubble_cap(new_state)
         messages = [{
             "role": "system",
             "content": self._system_prompt(
-                persona, channel, relation=relation, situation=situation
+                persona, channel, relation=relation, situation=situation,
+                state_desc=state_desc, max_bubbles=max_bubbles,
             ),
         }]
         # 长期记忆：独立的一条 system 消息，插在人格 prompt 之后、历史之前。
         # 它是对模型的补充而不是一次对话，所以不写进 bot_messages（可见记录保持干净）。
-        memory_note = self._memory_note(persona_id, content)
+        memory_note = await self._memory_note(
+            persona_id, content,
+            situation=situation,
+            novelty=float(new_state.get("novelty") or 40.0) if new_state else None,
+            conversation_id=conversation_id,
+            embed_client=embed_client,
+        )
         if memory_note:
             messages.append({"role": "system", "content": memory_note})
         messages.extend(self._to_llm_message(item) for item in history)
 
         from llm_adapter import chat_stream
+
+        # P4 在场感：欲言又止的节奏提示。tension 高（有疙瘩没解开）或没耐心时，
+        # 前端会把「正在输入」演出「出现 → 停一下 → 再出现」再开讲。
+        # 在正文之前发事件，complete_reply（QQ）只收集 content，天然忽略它。
+        if new_state and (
+            float(new_state.get("tension") or 0.0) >= 60.0
+            or float(new_state.get("patience") or 1.0) < 0.3
+        ):
+            yield "pacing", "hesitate"
 
         # thinking 只看 persona.enable_thinking（不 gate 模型 supports_*，否则手动
         # 加的模型永远开不了思考）；只有模型真的回 reasoning chunk 时才自然展示。
@@ -204,7 +263,7 @@ class BotChatService:
         # 输出预算按风格分档（spec §4.2）：concise 压到 512（人性化简短）；long 放到模型
         # max_output_tokens 的 4 倍、但不超上下文（可控长文）；moderate 走模型默认。
         # 长度还由提示词软指令配合；最终仍经 safe_max_tokens 按窗口封顶，防 vLLM 400。
-        style = persona.get("reply_style") or "moderate"
+        style = state_mod.downgrade_style(persona.get("reply_style") or "moderate", new_state)
         model_out = model.get("max_output_tokens")
         if style == "concise":
             style_cap = 512
@@ -255,27 +314,52 @@ class BotChatService:
         if not reply:
             raise RuntimeError("模型未返回可显示的内容")
 
+        # 状态层后处理（P1）：规则管骨架，确定性改写比 prompt 约束可靠。
+        # 没精力 → 禁感叹号（放在去 AI 味之前，让清洗看到的是最终标点）。
+        if new_state and float(new_state.get("energy") or 1.0) <= 0.3:
+            reply = state_mod.strip_exclaim(reply)
+
         # 去 AI 味只在落库前做一次：流式阶段按块清洗会切断跨块的模板句正则，
         # 反而把半句套话留在中间。前端在 done 之后用落库消息替换临时气泡，
         # 所以用户最终看到的就是清洗后的版本。
         reply = strip_ai_smell(reply)
+        # 有疙瘩且通篇没有问句 → 补一句试探性收尾（在清洗之后追加，避免被清掉）。
+        if (new_state and float(new_state.get("tension") or 0.0) >= 60.0
+                and "？" not in reply and "?" not in reply):
+            reply = reply + state_mod.probe_line(conversation_id)
         await asyncio.to_thread(
             db.add_bot_message, conversation_id, "assistant", reply,
             None, "".join(reasoning_parts) or None,
         )
         # 这一轮说完之后才记事实：模型失败的话，用户那句还没被承认过
-        await self._remember_turn(persona_id, conversation_id, content)
+        await self._remember_turn(persona_id, conversation_id, content, embed_client)
 
     @staticmethod
-    def _memory_note(persona_id: str, query: str) -> str:
+    async def _memory_note(
+        persona_id: str,
+        query: str,
+        *,
+        situation: str | None = None,
+        novelty: float | None = None,
+        conversation_id: str | None = None,
+        embed_client=None,
+    ) -> str:
         """这个人格记住的事 → 一条独立 system 消息。
 
         召回失败一律当作没有记忆：记忆是加分项，不能因为它拖垮陪聊。
+        P2：融合召回 + 三重门控（G1 硬命中 / G2 情境 / G3 旧事钩子），
+        embed 不可用时 retriever 自动只走 FTS 路，行为不劣化于旧版。
         """
         if not persona_id:
             return ""
         try:
-            contents = memory_mod.recall_sync(persona_id, query)
+            contents = await memory_mod.recall(
+                persona_id, query,
+                embed_client=embed_client,
+                situation=situation,
+                novelty=novelty if novelty is not None else 40.0,
+                conversation_id=conversation_id,
+            )
         except Exception as exc:  # noqa: BLE001 —— 记忆层任何异常都不该影响回复
             logger.warning("陪聊记忆召回失败: %s", exc)
             return ""
@@ -288,14 +372,17 @@ class BotChatService:
 
     @staticmethod
     async def _remember_turn(
-        persona_id: str, conversation_id: str, user_text: str
+        persona_id: str,
+        conversation_id: str,
+        user_text: str,
+        embed_client=None,
     ) -> None:
-        """把用户这句话里可记的事实落库。失败只记日志。"""
+        """把用户这句话里可记的事实落库（P2：能 embed 就带向量写）。失败只记日志。"""
         if not persona_id:
             return
         try:
-            await asyncio.to_thread(
-                memory_mod.remember, persona_id, conversation_id, user_text
+            await memory_mod.remember_async(
+                persona_id, conversation_id, user_text, embed_client=embed_client
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("陪聊记忆写入失败: %s", exc)

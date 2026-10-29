@@ -145,7 +145,9 @@ def test_snapshot_strips_avatar_but_resolves_it_live(base_db):
     ).fetchone()["persona_snapshot"]
     # 快照里不许有头像：否则 100 条会话就是 1MB 级别的列表接口
     assert "base64" not in raw
-    assert len(raw) < 500
+    # 500 → 600：proactive_enabled 字段入库后基础快照 522 字符；这条守卫防的是
+    # 头像级（KB/MB）字段混进快照，不是逐字节钉死，小幅放宽即可
+    assert len(raw) < 600
 
     # 但读出来的 persona 要带实时头像，聊天头部才画得出人脸
     listed = db.list_bot_conversations()[0]

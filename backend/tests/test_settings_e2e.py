@@ -71,9 +71,26 @@ class FakeLLM:
 
 
 def make_fake_llm_client():
-    def factory(*args, **kwargs):
-        return FakeLLM()
-    return factory
+    """返回 FakeLLM 的一个「类」（不是工厂函数）。
+
+    Harness.assemble 里有 `isinstance(llm_client, StreamLLMClient)` 分支，所以
+    替换 StreamLLMClient 这个名字时必须给一个真实类；子类化真类既满足 isinstance
+    又拦掉了真正的出站调用。
+    """
+    from agent.harness.llm_client import StreamLLMClient as _RealStreamLLMClient
+
+    class _FakeStreamLLMClient(_RealStreamLLMClient):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            FakeLLM.__init__(self)
+
+        async def call(self, messages, tools, model, temperature, max_tokens,
+                       enable_thinking, reasoning_max_tokens=None, top_p=0.9):
+            return await FakeLLM.call(self, messages, tools, model, temperature,
+                                      max_tokens, enable_thinking,
+                                      reasoning_max_tokens, top_p)
+
+    return _FakeStreamLLMClient
 
 
 class FakeSkillRegistry:
@@ -165,7 +182,8 @@ def app_env(tmp_workspace, monkeypatch):
     import routes.agent as agent_mod
     import skill_registry as reg_mod
 
-    monkeypatch.setattr(agent_mod, "StreamLLMClient", make_fake_llm_client())
+    # StreamLLMClient 在 agent_run 内按需导入（启动速度优化），patch 必须打到定义处
+    monkeypatch.setattr("agent.harness.llm_client.StreamLLMClient", make_fake_llm_client())
 
     async def _no_memory_inject(*args, **kwargs):
         return []

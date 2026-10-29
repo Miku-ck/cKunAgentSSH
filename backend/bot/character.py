@@ -118,6 +118,18 @@ _SITUATION_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
 # 久未联系单独走时间判定，关键词匹配不到时才会用到。
 NEGLECT_GAP_DAYS = 3.0
 
+# 冲突词：单独出现即足够明确（宁可漏判不误判，所以不收单字「滚」这类有
+# 「滚动/滚筒」误伤面的词）。命中即 conflict 事件，不走问句判定。
+_CONFLICT_WORDS: tuple[str, ...] = (
+    "闭嘴", "绝交", "讨厌你", "你有病", "垃圾", "废物", "蠢",
+    "滚开", "滚吧", "别烦我", "不理你了", "翻脸",
+)
+
+_QUESTION_WORDS: tuple[str, ...] = (
+    "什么", "怎么", "为什么", "为啥", "哪里", "哪个", "谁", "多少",
+    "几", "吗", "呢", "能不能", "是不是", "会不会",
+)
+
 
 def detect_situation(text: str, gap_days: float | None = None) -> str | None:
     """轻量情境判定：纯关键词 + 时间间隔，不调用模型。
@@ -131,6 +143,15 @@ def detect_situation(text: str, gap_days: float | None = None) -> str | None:
             for keyword in keywords:
                 if keyword.lower() in lowered:
                     return situation
+        # conflict / question 排在 8 类之后：只有更明确的情绪类都没命中时才判。
+        # conflict 要求冲突词出现；question 要求问号 + 疑问词双条件（单纯的
+        # 「吗」「呢」不配拿到 novelty 增量，闲聊句尾的「好吗」不该触发）。
+        if any(word in lowered for word in _CONFLICT_WORDS):
+            return "conflict"
+        if ("？" in (text or "") or "?" in lowered) and any(
+            word in lowered for word in _QUESTION_WORDS
+        ):
+            return "question"
     if gap_days is not None and gap_days >= NEGLECT_GAP_DAYS:
         return "neglect"
     return None

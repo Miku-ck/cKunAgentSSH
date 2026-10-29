@@ -89,6 +89,44 @@ def _create_connection() -> sqlite3.Connection:
 # 一次往返；30s 空闲阈值兼顾"长期空闲后校验"与热路径零开销）
 _CONN_IDLE_PROBE_SECONDS = 30.0
 
+# ── 库结构版本（建表脚本短路）───────────────────────────────────────────────
+# init_db 的建表脚本原本每次启动都整段重跑（连同迁移实测 117ms，占后端启动初始化
+# 的三成）。这里用 SQLite 自带的 user_version 标记建表脚本已跑到哪一版：版本命中且
+# 核心表齐全就跳过那 360 行 DDL。迁移与一次性数据修复不在此短路段内（见 init_db）。
+# 铁律：改动下方 init_db 的 DDL 或 _migrate_db 的任何迁移，必须 _SCHEMA_VERSION += 1，
+# 否则老库永远不会执行新结构（backend/tests/test_startup_critical_path.py 有守卫）。
+_SCHEMA_VERSION = 2
+
+# 短路前提的核心表。版本号可能被外部工具清零、或迁移脚本自己写错，仅凭
+# user_version 就认定「结构已就绪」，会把缺表的库永久锁在坏状态 —— 再核一遍实表。
+_SCHEMA_CORE_TABLES = (
+    "conversations",
+    "messages",
+    "agent_runs",
+    "app_settings",
+    "bot_personas",
+)
+
+
+def _schema_is_current(conn) -> bool:
+    """库结构是否已是当前版本（user_version 命中且核心表齐全）。"""
+    try:
+        row = conn.execute("PRAGMA user_version").fetchone()
+        if not row or int(row[0]) != _SCHEMA_VERSION:
+            return False
+        for table in _SCHEMA_CORE_TABLES:
+            _assert_sql_ident(table)
+            hit = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            ).fetchone()
+            if hit is None:
+                return False
+        return True
+    except Exception as e:
+        # 探测失败不能直接当“结构已就绪”：宁可多跑一次全量初始化
+        logger.warning("init_db: 结构版本探测失败，回退全量建表/迁移: %s", e)
+        return False
+
 
 def _get_conn() -> _PooledConnection:
     """获取当前线程的数据库连接（复用线程本地连接）。
@@ -100,6 +138,18 @@ def _get_conn() -> _PooledConnection:
     import time as _time
     now = _time.monotonic()
     conn = getattr(_thread_local, "conn", None)
+    # 切库（init_db 指向另一个路径）必须换连接：池化连接连着上一个 _db_path，
+    # 直接复用会让 init_db 的结构版本探测读到旧库 —— 把新库当成「已是最新」
+    # 短路掉，建表/迁移永远不执行。
+    if conn is not None and getattr(_thread_local, "conn_path", None) != _db_path:
+        with _conn_lock:
+            _all_connections.discard(conn)
+        try:
+            conn.close()
+        except Exception as e:
+            logger.warning("关闭切库前的旧连接失败（句柄可能泄漏）: %s", e)
+        conn = None
+        _thread_local.conn = None
     if conn is not None:
         last_used = getattr(_thread_local, "conn_last_used", 0.0)
         # 仅当连接空闲超过阈值时验证其有效性（热路径零探活开销）
@@ -126,6 +176,7 @@ def _get_conn() -> _PooledConnection:
         with _conn_lock:
             _all_connections.add(conn)
         _thread_local.conn = conn
+        _thread_local.conn_path = _db_path
         _thread_local.conn_last_used = now
 
     return _PooledConnection(conn)
@@ -150,6 +201,14 @@ def _close_all_connections() -> None:
 atexit.register(_close_all_connections)
 
 
+def _skip_script(_script: str) -> None:
+    """占位实现：结构版本已是最新时不执行建表脚本。
+
+    用函数替换 conn.executescript 而不是把 360 行 DDL 包进 if：DDL 文本保持原位，
+    以后对比两份建表脚本时不会被无意义的缩进噪音干扰。
+    """
+
+
 def init_db(db_path: str) -> None:
     """初始化数据库: 建表 + 启用 WAL + 迁移
 
@@ -172,7 +231,18 @@ def init_db(db_path: str) -> None:
     log.info("init_db: opening %s", os.path.abspath(db_path))
     conn = _get_conn()
     try:
-        conn.executescript("""
+        # 建表脚本（数十张表 + 索引）是启动固定成本的大头（实测 ~110ms），结构版本
+        # 命中且核心表齐全时整段跳过；下面的增量补列 / 迁移 / 一次性数据修复
+        # **不跳** —— 它们修的是 user_version 表达不了的缺损（表还在但列被删、
+        # 老数据写反），正是这类库必须能自愈的地方，而它们实测只占 ~8ms。
+        _ddl_applied = _schema_is_current(conn)
+        if _ddl_applied:
+            log.info(
+                "init_db: 结构版本 %s 已是最新，跳过建表脚本（迁移/数据修复照常）",
+                _SCHEMA_VERSION,
+            )
+        _maybe_ddl = _skip_script if _ddl_applied else conn.executescript
+        _maybe_ddl("""
             CREATE TABLE IF NOT EXISTS conversations (
                 id           TEXT PRIMARY KEY,
                 title        TEXT DEFAULT 'New Chat',
@@ -221,6 +291,9 @@ def init_db(db_path: str) -> None:
                 memory_directive    TEXT NOT NULL DEFAULT '',
                 dialogue_samples    TEXT NOT NULL DEFAULT '',
                 advanced_play       TEXT NOT NULL DEFAULT '',
+                -- P3 主动性开关：默认关（0）。这是「她会主动找你」的总闸，
+                -- 打开后由 bot/proactive.py 的意愿函数 + 四重抑制器决定何时开口。
+                proactive_enabled   INTEGER NOT NULL DEFAULT 0,
                 is_builtin   INTEGER NOT NULL DEFAULT 0,
                 created_at   TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
@@ -288,13 +361,50 @@ def init_db(db_path: str) -> None:
             -- 关系账本：人格与用户之间的累计熟悉度。
             -- score 只增不减（历史累计），衰减在读时按 last_at 计算，久别重逢会掉档、
             -- 聊两句回档——所以不能在写时把衰减结果落库，否则关系会单向坍缩。
+            -- 活人感状态轴（P1）：M 层 trust/intimacy/tension/novelty + S 层
+            -- valence/energy/patience，由 bot.state 事件驱动更新；state_at 是
+            -- 状态最后写入时刻（衰减读时惰性计算）。score 仍走原口径供 UI 使用。
             CREATE TABLE IF NOT EXISTS bot_relations (
-                persona_id TEXT PRIMARY KEY REFERENCES bot_personas(id) ON DELETE CASCADE,
-                score      REAL NOT NULL DEFAULT 0,
-                turns      INTEGER NOT NULL DEFAULT 0,
-                last_at    TEXT,
-                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                persona_id  TEXT PRIMARY KEY REFERENCES bot_personas(id) ON DELETE CASCADE,
+                score       REAL NOT NULL DEFAULT 0,
+                turns       INTEGER NOT NULL DEFAULT 0,
+                last_at     TEXT,
+                updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+                trust       REAL NOT NULL DEFAULT 10,
+                intimacy    REAL NOT NULL DEFAULT 5,
+                tension     REAL NOT NULL DEFAULT 0,
+                novelty     REAL NOT NULL DEFAULT 60,
+                valence     REAL NOT NULL DEFAULT 0,
+                energy      REAL NOT NULL DEFAULT 0.6,
+                patience    REAL NOT NULL DEFAULT 0.8,
+                last_event_kind TEXT,
+                last_event_at   TEXT,
+                last_event_count INTEGER NOT NULL DEFAULT 0,
+                state_at    TEXT,
+                pending_topic TEXT,
+                proactive_cooldown_until TEXT
             );
+
+            -- 主动性（P3）：一次「想找你」的完整记录。action:
+            --   send    = 本地渠道已直投（bot_messages 里可见）
+            --   queued  = QQ 寄存（协议只能被动回复，等对方下一条消息时捎上）
+            --   skip    = 过闸失败（reason 记原因，用于调 θ）
+            -- checked_at：负反馈检查完成标记（2h 内没被回应 → 冷却翻倍，只查一次）。
+            CREATE TABLE IF NOT EXISTS bot_proactive_log (
+                id              TEXT PRIMARY KEY,
+                persona_id      TEXT NOT NULL REFERENCES bot_personas(id) ON DELETE CASCADE,
+                conversation_id TEXT NOT NULL,
+                desire          REAL NOT NULL DEFAULT 0,
+                action          TEXT NOT NULL,
+                reason          TEXT,
+                text            TEXT,
+                created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                expires_at      TEXT,
+                delivered_at    TEXT,
+                checked_at      TEXT
+            );
+            CREATE INDEX IF NOT EXISTS ix_bot_proactive_pending
+                ON bot_proactive_log(conversation_id, action, expires_at);
 
             CREATE TABLE IF NOT EXISTS skills (
                 id          TEXT PRIMARY KEY,
@@ -574,6 +684,9 @@ def init_db(db_path: str) -> None:
         )
         # 审查修复（P2 E9）：_seed_models（含同步 httpx.get）已移至独立异步入口
         # seed_models_async，从 lifespan 调用，避免阻塞事件循环
+        # 结构版本最后落盘（与本次 DDL/迁移同一事务）：中途失败则仍为旧版本，
+        # 下次启动重新全量初始化，不会出现「版本已升但列没加上」的半迁移态。
+        conn.execute(f"PRAGMA user_version = {int(_SCHEMA_VERSION)}")
         conn.commit()
     finally:
         conn.close()
@@ -613,6 +726,31 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE bot_conversations ADD COLUMN display_name TEXT")
     if "display_avatar" not in conversation_cols:
         conn.execute("ALTER TABLE bot_conversations ADD COLUMN display_avatar TEXT")
+    # 防复读账本（P2）：该会话最近一次注入的记忆 id 集合 + 注入时间。
+    # JSON {"ids": [...], "at": "YYYY-MM-DD HH:MM:SS"}；7 天窗口外自然解禁。
+    if "last_memory_ids" not in conversation_cols:
+        conn.execute("ALTER TABLE bot_conversations ADD COLUMN last_memory_ids TEXT")
+    # bot_relations：活人感状态轴（P1）旧库补齐。默认值即全新关系的开局档，
+    # 存量人格迁移后从「有点好奇、心态开放」起步，不会突然变冷淡或自来熟。
+    cursor = conn.execute("PRAGMA table_info(bot_relations)")
+    relation_cols = {row[1] for row in cursor.fetchall()}
+    for col, ddl in (
+        ("trust", "REAL NOT NULL DEFAULT 10"),
+        ("intimacy", "REAL NOT NULL DEFAULT 5"),
+        ("tension", "REAL NOT NULL DEFAULT 0"),
+        ("novelty", "REAL NOT NULL DEFAULT 60"),
+        ("valence", "REAL NOT NULL DEFAULT 0"),
+        ("energy", "REAL NOT NULL DEFAULT 0.6"),
+        ("patience", "REAL NOT NULL DEFAULT 0.8"),
+        ("last_event_kind", "TEXT"),
+        ("last_event_at", "TEXT"),
+        ("last_event_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("state_at", "TEXT"),
+        ("pending_topic", "TEXT"),
+        ("proactive_cooldown_until", "TEXT"),
+    ):
+        if col not in relation_cols:
+            conn.execute(f"ALTER TABLE bot_relations ADD COLUMN {col} {ddl}")
     # bot_personas：chat-experience 两列（旧库补齐，新库建表已含）。
     cursor = conn.execute("PRAGMA table_info(bot_personas)")
     persona_cols = {row[1] for row in cursor.fetchall()}
@@ -637,6 +775,7 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
         ("memory_directive", "TEXT NOT NULL DEFAULT ''"),
         ("dialogue_samples", "TEXT NOT NULL DEFAULT ''"),
         ("advanced_play", "TEXT NOT NULL DEFAULT ''"),
+        ("proactive_enabled", "INTEGER NOT NULL DEFAULT 0"),
     ):
         if col not in persona_cols:
             conn.execute(f"ALTER TABLE bot_personas ADD COLUMN {col} {ddl}")
@@ -2333,6 +2472,7 @@ def _bot_persona_dict(row: sqlite3.Row) -> dict:
     result = dict(row)
     result["is_builtin"] = int(result.get("is_builtin") or 0)
     result["enable_thinking"] = int(result.get("enable_thinking") or 0)
+    result["proactive_enabled"] = int(result.get("proactive_enabled") or 0)
     result.setdefault("reply_style", "moderate")
     # expression_dna 以对象形态进出：库里是 JSON 文本，读出来就当 dict 用，
     # 脏数据（手工写坏/半截 JSON）一律退回空对象，宁可少一层约束也不能让陪聊 500。
@@ -2423,6 +2563,7 @@ def update_bot_persona(persona_id: str, **fields) -> Optional[dict]:
     allowed = {"name", "avatar", "personality", "background", "greeting", "model_id",
                "reply_style", "enable_thinking", "expression_dna", "reaction_style",
                "refusal_style", "address_user", "relationship_speed",
+               "proactive_enabled",
                *_PERSONA_TEXT_FIELDS}
     data = {key: value for key, value in fields.items() if key in allowed}
     # expression_dna 对外是对象、对内是 JSON 文本：入口统一序列化，
@@ -2431,6 +2572,8 @@ def update_bot_persona(persona_id: str, **fields) -> Optional[dict]:
         data["expression_dna"] = json.dumps(data["expression_dna"], ensure_ascii=False)
     if isinstance(data.get("enable_thinking"), bool):
         data["enable_thinking"] = int(data["enable_thinking"])
+    if isinstance(data.get("proactive_enabled"), bool):
+        data["proactive_enabled"] = int(data["proactive_enabled"])
     if not data:
         return get_bot_persona(persona_id)
     assignments = ", ".join(f"{key} = ?" for key in data)
@@ -2819,6 +2962,193 @@ def delete_bot_conversation(conversation_id: str) -> bool:
         conn.close()
 
 
+def get_bot_memory_injection(conversation_id: str) -> dict:
+    """读该会话最近一次记忆注入记录（P2 防复读账本）。无记录返回空结构。"""
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT last_memory_ids FROM bot_conversations WHERE id = ?",
+            (conversation_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row or not row["last_memory_ids"]:
+        return {"ids": [], "at": None}
+    try:
+        data = json.loads(row["last_memory_ids"])
+        if isinstance(data, dict):
+            return {"ids": list(data.get("ids") or []), "at": data.get("at")}
+    except (ValueError, TypeError):
+        pass
+    return {"ids": [], "at": None}
+
+
+def set_bot_memory_injection(conversation_id: str, memory_ids: list, at: str) -> None:
+    """写该会话最近一次注入的 {ids, at}。只保留最近一次：7 天窗口按 at 判断。"""
+    payload = json.dumps({"ids": list(memory_ids)[:20], "at": at}, ensure_ascii=False)
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "UPDATE bot_conversations SET last_memory_ids = ? WHERE id = ?",
+            (payload, conversation_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ── P3 主动性：寄存队列与日志 ──
+
+def add_bot_proactive_log(
+    persona_id: str,
+    conversation_id: str,
+    desire: float,
+    action: str,
+    reason: str = "",
+    text: str = "",
+    expires_at: Optional[str] = None,
+) -> str:
+    log_id = _new_id()
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO bot_proactive_log (id, persona_id, conversation_id, desire, "
+            "action, reason, text, expires_at) VALUES (?,?,?,?,?,?,?,?)",
+            (log_id, persona_id, conversation_id, float(desire), action,
+             reason, text, expires_at),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return log_id
+
+
+def get_pending_proactive(conversation_id: str) -> Optional[dict]:
+    """该会话最早一条未过期、未投递的寄存心里话；没有则 None。"""
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM bot_proactive_log WHERE conversation_id = ? AND action = 'queued' "
+            "AND delivered_at IS NULL AND (expires_at IS NULL OR expires_at > ?) "
+            "ORDER BY created_at ASC LIMIT 1",
+            (conversation_id, _now()),
+        ).fetchone()
+    finally:
+        conn.close()
+    return dict(row) if row else None
+
+
+def mark_proactive_delivered(log_id: str) -> None:
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "UPDATE bot_proactive_log SET delivered_at = ?, action = 'send' WHERE id = ?",
+            (_now(), log_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_proactive_targets() -> "list[dict]":
+    """开启主动性的巡检清单：local 会话（可直投）+ 7 天内活跃的 QQ 会话（可寄存）。
+
+    QQ 只列近期活跃会话：给沉寂半年的群寄存心里话毫无意义，且会撑爆队列。
+    """
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT p.id AS persona_id, p.name, p.relationship_speed, "
+            "c.id AS conversation_id, c.channel "
+            "FROM bot_personas p JOIN bot_conversations c ON c.persona_id = p.id "
+            "WHERE p.proactive_enabled = 1 AND ("
+            "  c.channel = 'local'"
+            "  OR (c.channel = 'qq' AND c.updated_at >= datetime('now', '-7 days')))"
+        ).fetchall()
+    finally:
+        conn.close()
+    return [dict(row) for row in rows]
+
+
+def proactive_sent_today(persona_id: str, day_start: str) -> int:
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM bot_proactive_log "
+            "WHERE persona_id = ? AND action = 'send' AND created_at >= ?",
+            (persona_id, day_start),
+        ).fetchone()
+    finally:
+        conn.close()
+    return int(row["n"] or 0)
+
+
+def last_proactive_at(persona_id: str) -> Optional[str]:
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT MAX(created_at) AS last FROM bot_proactive_log "
+            "WHERE persona_id = ? AND action = 'send'",
+            (persona_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    return row["last"] if row else None
+
+
+def list_unchecked_proactive(older_than: str) -> "list[dict]":
+    """已投递超过 older_than、尚未做负反馈检查的主动消息。"""
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM bot_proactive_log WHERE action = 'send' AND delivered_at IS NOT NULL "
+            "AND checked_at IS NULL AND delivered_at <= ?",
+            (older_than,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [dict(row) for row in rows]
+
+
+def mark_proactive_checked(log_id: str) -> None:
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "UPDATE bot_proactive_log SET checked_at = ? WHERE id = ?", (_now(), log_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def bot_conversation_has_user_reply_since(conversation_id: str, since: str) -> bool:
+    """主动消息投递之后，用户有没有说过话（负反馈判定的一半：回了就不算冷场）。"""
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM bot_messages WHERE conversation_id = ? AND role = 'user' "
+            "AND created_at >= ? LIMIT 1",
+            (conversation_id, since),
+        ).fetchone()
+    finally:
+        conn.close()
+    return row is not None
+
+
+def set_bot_proactive_cooldown(persona_id: str, until: str) -> None:
+    """负反馈冷却落库（bot_relations.proactive_cooldown_until）。行不存在时建行。"""
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO bot_relations (persona_id, proactive_cooldown_until) VALUES (?, ?) "
+            "ON CONFLICT(persona_id) DO UPDATE SET proactive_cooldown_until = excluded.proactive_cooldown_until",
+            (persona_id, until),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def update_bot_conversation_display(
     conversation_id: str,
     display_name: Optional[str] = None,
@@ -3107,6 +3437,47 @@ def bump_bot_relation(persona_id: str, delta: float, turns: int = 1) -> dict:
     finally:
         conn.close()
     return get_bot_relation(persona_id)
+
+
+def update_bot_state(
+    persona_id: str,
+    *,
+    trust: float,
+    intimacy: float,
+    tension: float,
+    novelty: float,
+    valence: float,
+    energy: float,
+    patience: float,
+    last_event_kind: str | None,
+    last_event_at: str | None,
+    last_event_count: int,
+    state_at: str,
+) -> None:
+    """写回状态轴（bot.state 事件驱动更新后的落库点）。
+
+    只写状态列，不碰 score/turns/last_at —— 那三列是 relation.record_turn 的
+    领地，两个写入者互不越界。行不存在时补一行（score 从 0 起）。
+    """
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO bot_relations (persona_id, score, turns, trust, intimacy, tension, "
+            "novelty, valence, energy, patience, last_event_kind, last_event_at, "
+            "last_event_count, state_at, updated_at) "
+            "VALUES (?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(persona_id) DO UPDATE SET "
+            "trust = excluded.trust, intimacy = excluded.intimacy, tension = excluded.tension, "
+            "novelty = excluded.novelty, valence = excluded.valence, energy = excluded.energy, "
+            "patience = excluded.patience, last_event_kind = excluded.last_event_kind, "
+            "last_event_at = excluded.last_event_at, last_event_count = excluded.last_event_count, "
+            "state_at = excluded.state_at, updated_at = excluded.updated_at",
+            (persona_id, trust, intimacy, tension, novelty, valence, energy, patience,
+             last_event_kind, last_event_at, int(last_event_count), state_at, state_at),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ── Agent Runs CRUD ──

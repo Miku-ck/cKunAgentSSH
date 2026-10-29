@@ -15,11 +15,14 @@ Agent 侧只读 global / host:*，不会碰到这个命名域。
 
 from __future__ import annotations
 
+import hashlib
+import logging
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import database as db
-from agent.memory import mstore
+from agent.memory import mstore, retriever
 
 # 记忆在 memories 表里的命名域。scope 决定谁能读到它。
 KIND = "persona_fact"
@@ -51,7 +54,7 @@ _RULES: list[tuple[str, re.Pattern, str, float, str]] = [
         "称呼",
         re.compile(r"我(?:叫|名字叫|的名字是)\s*(?P<name>[\u4e00-\u9fa5A-Za-z0-9·]{1,12})"),
         "用户叫{name}",
-        0.9,
+        1.0,
         SINGLE,
     ),
     (
@@ -78,7 +81,7 @@ _RULES: list[tuple[str, re.Pattern, str, float, str]] = [
         "忌口",
         re.compile(r"我(?:不爱吃|不喜欢吃|不吃|不能吃)\s*(?P<x>[\u4e00-\u9fa5A-Za-z0-9]{1,12})"),
         "用户不吃{x}",
-        0.85,
+        0.6,
         MULTI,
     ),
     (
@@ -86,7 +89,7 @@ _RULES: list[tuple[str, re.Pattern, str, float, str]] = [
         # 负向前瞻吃掉「吃」：「我不喜欢吃香菜」归忌口，不该再记一条「不喜欢吃香菜」
         re.compile(r"我(?:不喜欢|讨厌)\s*(?!吃)(?P<x>[\u4e00-\u9fa5A-Za-z0-9]{1,12})"),
         "用户不喜欢{x}",
-        0.85,
+        0.6,
         MULTI,
     ),
     (
@@ -95,7 +98,7 @@ _RULES: list[tuple[str, re.Pattern, str, float, str]] = [
             r"我(?:最喜欢|比较喜欢|喜欢吃|喜欢|爱吃|最爱|爱)\s*(?P<x>[\u4e00-\u9fa5A-Za-z0-9]{1,12})"
         ),
         "用户喜欢{x}",
-        0.8,
+        0.6,
         MULTI,
     ),
     (
@@ -106,7 +109,7 @@ _RULES: list[tuple[str, re.Pattern, str, float, str]] = [
             r"警察|司机|厨师|研究员|编辑|记者|销售|客服|开发|产品|测试|运维))"
         ),
         "用户的职业是{job}",
-        0.8,
+        0.7,
         SINGLE,
     ),
     (
@@ -116,7 +119,7 @@ _RULES: list[tuple[str, re.Pattern, str, float, str]] = [
             r"(?P<pet>猫|狗|仓鼠|鹦鹉|兔子|乌龟|金鱼)"
         ),
         "用户养了{pet}",
-        0.8,
+        0.7,
         MULTI,
     ),
     (
@@ -127,14 +130,14 @@ _RULES: list[tuple[str, re.Pattern, str, float, str]] = [
             r"(?P<name>[\u4e00-\u9fa5A-Za-z]{1,8})"
         ),
         "用户的{rel}是{name}",
-        0.85,
+        0.7,
         MULTI,
     ),
     (
         "习惯",
         re.compile(r"我(?:每天|每周|以后|下次|每次|一般都|通常)\s*(?P<x>[\u4e00-\u9fa5A-Za-z0-9]{2,25})"),
         "用户的长期习惯：{x}",
-        0.8,
+        0.5,
         MULTI,
     ),
     (
@@ -145,7 +148,7 @@ _RULES: list[tuple[str, re.Pattern, str, float, str]] = [
             r"(?:要|想|准备|打算|得去)?\s*(?P<x>[\u4e00-\u9fa5A-Za-z0-9]{2,25})"
         ),
         "用户的计划：{x}",
-        0.8,
+        0.4,
         MULTI,
     ),
 ]
@@ -332,9 +335,9 @@ def list_memories(persona_id: str) -> list[dict]:
 
 
 def remember(persona_id: str, conversation_id: str | None, user_text: str) -> int:
-    """从这句话里抽取事实并落库，返回新写入条数。
+    """从这句话里抽取事实并落库（不 embed），返回新写入条数。
 
-    失败一律不让陪聊受影响：调用方负责兜底，这里只做纯业务。
+    同步口径保留给无事件循环的调用方；聊天主链路走 remember_async（带 embed）。
     """
     if not persona_id:
         return 0
@@ -345,12 +348,50 @@ def remember(persona_id: str, conversation_id: str | None, user_text: str) -> in
     facts = extract_facts(user_text)
     if not facts:
         return 0
+    return _write_facts(persona_id, conversation_id, facts)
 
+
+async def remember_async(
+    persona_id: str,
+    conversation_id: str | None,
+    user_text: str,
+    embed_client=None,
+) -> int:
+    """remember 的异步版：落库前先批量 embed（一次 HTTP，多事实分摊）。
+
+    embed 失败返回 None → 该事实仅 FTS 可检（宁缺毋滥，不造伪向量）。
+    """
+    if not persona_id:
+        return 0
+    keyword = detect_forget(user_text)
+    if keyword:
+        forget(persona_id, keyword)
+    facts = extract_facts(user_text)
+    if not facts:
+        return 0
+    vectors: "list[list[float]] | None" = None
+    if embed_client is not None:
+        try:
+            vecs = await embed_client.embed([f"{f.title}，{f.content}" for f in facts])
+            if vecs and len(vecs) == len(facts):
+                vectors = vecs
+        except Exception:  # noqa: BLE001 —— embed 是增强项，失败不拖垮记忆写入
+            vectors = None
+    return _write_facts(persona_id, conversation_id, facts, vectors)
+
+
+def _write_facts(
+    persona_id: str,
+    conversation_id: str | None,
+    facts: "list[Fact]",
+    vectors: "list[list[float]] | None" = None,
+) -> int:
     existing = {row["content"]: row for row in _scope_rows(persona_id)}
     written = 0
-    for fact in facts:
+    for index, fact in enumerate(facts):
         if fact.content in existing:
             continue
+        vector = vectors[index] if vectors else None
         new_id = mstore.add_memory(
             kind=KIND,
             content=fact.content,
@@ -359,6 +400,8 @@ def remember(persona_id: str, conversation_id: str | None, user_text: str) -> in
             source=SOURCE,
             importance=fact.importance,
             status="active",
+            embedding=vector,
+            embedding_src=f"{fact.title}，{fact.content}" if vector else "",
             source_conv_id=conversation_id,
         )
         written += 1
@@ -484,3 +527,229 @@ def _rank_by_char_overlap(query: str, rows: list[dict]) -> list[dict]:
         return []
     scored.sort(key=lambda pair: -pair[0])
     return [row for _score, row in scored]
+
+
+# ── P2：融合召回 + 注入门控 ──
+#
+# 写侧（P2 前）已有 11 类事实，读侧原来是 FTS(bigram) + 单字重合两路，
+# 字面不重合就退化成「最近几条」。这里接上 Agent 侧现成的向量检索
+# （retriever.search 自带 FTS 路，embed_client=None 时自动只走 FTS，无回归），
+# 并加注入门控：不是"检索到了就塞 prompt"，而是按情境与低频钩子决定说不说。
+
+logger = logging.getLogger(__name__)
+
+# G2 情境门：这些情境下哪怕检索不硬命中，也该带上 1 条关系类事实
+_G2_SITUATIONS = {"doubt", "praise", "fatigue", "farewell", "neglect"}
+# 关系类槽位：称呼/家人最值得在情境门里被想起
+_RELATION_TITLES = {"称呼", "家人"}
+# 同一条事实 7 天内不重复注入（用户主动提起时豁免）
+_REPEAT_DAYS = 7.0
+_INJECT_LIMIT = 3
+
+_TS_FMT = "%Y-%m-%d %H:%M:%S"
+
+
+def embed_client_for(model: dict | None = None):
+    """从聊天模型配置派生 embedding 客户端（与 Agent 侧 routes/agent.py 同口径）。
+
+    返回 None 表示配置不全（调用方走 FTS-only）。端点不提供 /v1/embeddings 时
+    EmbeddingClient 自带 300s 静默降级窗口，不会反复打失败请求。
+    """
+    try:
+        from agent.memory.embedding import get_embedding_client
+
+        cfg = model or db.get_default_model(mode=None, mask_key=False)
+        if not cfg:
+            return None
+        base = (cfg.get("base_url") or "").strip()
+        model_id = (cfg.get("model_id") or cfg.get("name") or "").strip()
+        if not base or not model_id:
+            return None
+        return get_embedding_client(base, cfg.get("api_key") or "", model_id)
+    except Exception:  # noqa: BLE001 —— 配置读取失败不该影响对话
+        return None
+
+
+def _parse_ts(value) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(str(value)[:19], _TS_FMT).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _days_since(value, now: datetime) -> float:
+    ts = _parse_ts(value)
+    if ts is None:
+        return 1e9  # 无时间戳按"很久以前"，让 recency 归零、防复读窗口自然过期
+    return max(0.0, (now - ts).total_seconds() / 86400.0)
+
+
+def _rerank(hits: list, rows_by_id: dict, now: datetime) -> "list[tuple[float, dict]]":
+    """retriever 的 RRF 分 → 按陪伴场景重排：recency + importance + pinned。
+
+    RRF 主导（短事实的判别信息就在字面/语义命中里），importance 让
+    「用户叫小林」压过「用户的计划：看展」，pinned 是用户手动置顶的意志。
+    """
+    top = hits[0].score if hits else 0.0
+    scored: "list[tuple[float, dict]]" = []
+    for hit in hits:
+        row = rows_by_id.get(hit.memory_id)
+        if row is None:
+            continue
+        rrf_norm = (hit.score / top) if top > 0 else 0.0
+        recency = 2 ** (-_days_since(row.get("updated_at"), now) / 14.0)
+        final = (
+            rrf_norm
+            + 0.25 * recency
+            + 0.20 * float(row.get("importance") or 0.5)
+            + 0.9 * float(row.get("pinned") or 0.0)
+        )
+        scored.append((final, row))
+    scored.sort(key=lambda pair: -pair[0])
+    return scored
+
+
+def _deterministic_uniform(persona_id: str, now: datetime) -> float:
+    """G3 的伪随机数：种子 = (persona_id, 本地日期)。
+
+    同一天决策恒定 → 可单测可重放；跨天自然换种子 → 「忽然想起」不固定在
+    每天的同一时刻。不用 random 模块：进程级真随机会让测试不可复现。
+    """
+    local_date = now.astimezone().date().isoformat()
+    digest = hashlib.md5(f"{persona_id}|{local_date}".encode()).digest()
+    return int.from_bytes(digest, "big") / float(1 << 128)
+
+
+def _get_injection_record(conversation_id: str | None) -> dict:
+    if not conversation_id:
+        return {"ids": [], "at": None}
+    try:
+        return db.get_bot_memory_injection(conversation_id)
+    except Exception:  # noqa: BLE001
+        return {"ids": [], "at": None}
+
+
+def _save_injection_record(
+    conversation_id: str | None, memory_ids: "list[str]", now: datetime
+) -> None:
+    if not conversation_id or not memory_ids:
+        return
+    try:
+        db.set_bot_memory_injection(conversation_id, memory_ids, now.strftime(_TS_FMT))
+    except Exception as exc:  # noqa: BLE001 —— 防复读记录失败只降级为"可重复"
+        logger.warning("陪聊记忆注入记录写入失败: %s", exc)
+
+
+async def recall(
+    persona_id: str,
+    query: str = "",
+    *,
+    embed_client=None,
+    situation: str | None = None,
+    novelty: float = 40.0,
+    conversation_id: str | None = None,
+    now: datetime | None = None,
+) -> "list[str]":
+    """取出这个人格该注入的事实（人话，不带记忆 id）。
+
+    三重门控（注入 ≤3 条）：
+    - G1 硬命中：融合召回头部足够强（用户正在问/提起这件事）→ 直接注入，
+      并豁免 7 天防复读（用户主动提起，不算复读）；
+    - G2 情境门：doubt/praise/fatigue/farewell/neglect 情境下带 1 条
+      关系类事实（称呼/家人优先）；
+    - G3 旧事钩子：p = 0.08 + novelty/100·0.10 − 距上次注入天数·0.03，
+      确定性 RNG 触发 → 「忽然想起」低频、受新鲜感调节、可重放。
+    """
+    if not persona_id:
+        return []
+    now = now or datetime.now(timezone.utc)
+    rows = _scope_rows(persona_id)
+    if not rows:
+        return []
+    rows_by_id = {row["id"]: row for row in rows}
+
+    hits: list = []
+    try:
+        hits = await retriever.search(
+            query or "", scopes=[scope_for(persona_id)], kinds=[KIND],
+            top_k=20, embed_client=embed_client,
+        )
+    except Exception as exc:  # noqa: BLE001 —— 检索失败退回字面/最近路径
+        logger.warning("陪聊记忆融合检索失败: %s", exc)
+
+    scored = None
+    char_matched = False
+    if hits:
+        scored = _rerank(hits, rows_by_id, now)
+        ranked = [row for _score, row in scored]
+    elif query:
+        ranked = _rank_by_char_overlap(query, rows)
+        char_matched = bool(ranked)
+    else:
+        ranked = list(rows)  # 无 query：按新→旧，G3 仍可能钩出一条旧事
+    if not ranked:
+        # 字面完全不重合：回退「最近记的几条」（与旧 recall_sync 同语义），
+        # 供 G2/G3 兜底；这批不算硬命中，不得走 G1。
+        ranked = list(rows)
+
+    record = _get_injection_record(conversation_id)
+    seen_ids = set(record.get("ids") or [])
+    last_at = record.get("at")
+
+    def blocked(memory_id: str) -> bool:
+        # 7 天窗口：上次注入已超期则自然解禁；无注入时间按未阻塞
+        if memory_id not in seen_ids or not last_at:
+            return False
+        return _days_since(last_at, now) < _REPEAT_DAYS
+
+    picked: "list[dict]" = []
+    picked_ids: set[str] = set()
+    exempt_ids: set[str] = set()
+
+    def take(row: dict, exempt: bool = False) -> None:
+        if row["id"] in picked_ids:
+            return
+        picked.append(row)
+        picked_ids.add(row["id"])
+        if exempt:
+            exempt_ids.add(row["id"])
+
+    # G1 硬命中。两路都算：融合召回头部够强（embed 可用时的语义命中），
+    # 或单字重合路真实命中（FTS bigram 桥接不了「你还记得我叫什么吗」→
+    # 「用户叫小林」，单字路是这条语义桥的唯一载体，不能丢）。
+    # 回退的「最近几条」不算命中 —— 那是 G2/G3 的候选池，不是硬命中。
+    if scored and ranked and query and scored[0][0] >= 0.6:
+        take(ranked[0], exempt=True)
+    elif char_matched and ranked:
+        take(ranked[0], exempt=True)
+    # G2 情境门
+    if len(picked) < _INJECT_LIMIT and situation in _G2_SITUATIONS:
+        rest = [r for r in ranked if r["id"] not in picked_ids]
+        relation = [r for r in rest if r["title"] in _RELATION_TITLES]
+        pool = relation or rest
+        if pool:
+            take(pool[0])
+    # G3 旧事钩子。抑制项封顶 4 天（0.12）：「最近提过就收着点」，但
+    # 不让隔得越久越永远不提 —— 否则 p 恒 0，钩子失效；无注入历史不抑制。
+    if len(picked) < _INJECT_LIMIT:
+        days_since_last = _days_since(last_at, now) if last_at else 0.0
+        p = max(0.0, min(
+            0.2,
+            0.08 + (novelty or 40.0) / 100.0 * 0.10 - min(days_since_last, 4.0) * 0.03,
+        ))
+        if _deterministic_uniform(persona_id, now) < p:
+            fresh = [r for r in ranked if r["id"] not in picked_ids and not blocked(r["id"])]
+            if fresh:
+                take(fresh[0])
+
+    # 防复读落地：G1 豁免，其余 7 天内注入过的不重复
+    final = [r for r in picked if r["id"] in exempt_ids or not blocked(r["id"])][:_INJECT_LIMIT]
+    if final and conversation_id:
+        _save_injection_record(conversation_id, [r["id"] for r in final], now)
+        try:
+            mstore.mark_injected([r["id"] for r in final])
+        except Exception:  # noqa: BLE001 —— 热度统计失败不影响注入
+            pass
+    return [row["content"] for row in final]
