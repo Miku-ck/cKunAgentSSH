@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  bubbleDeliveryPlan,
+  bubbleDelayMs,
   decorateMessages,
   dayDividerLabel,
   expandBubbles,
@@ -118,10 +120,18 @@ describe('分条 splitBubbles / expandBubbles', () => {
     ])
   })
 
-  it('纯图消息（正文空）仍占一个气泡位，不能整条消失', () => {
-    const out = expandBubbles([{ id: '1', role: 'assistant', content: '', created_at: '2026-10-28 09:00:00' }])
+  it('纯图消息（正文空但有图）仍占一个气泡位', () => {
+    const out = expandBubbles([{ id: '1', role: 'assistant', content: '', images: ['data:image/webp;base64,AA'], created_at: '2026-10-28 09:00:00' }])
     expect(out).toHaveLength(1)
     expect(out[0].bubble).toBe('')
+  })
+
+  it('正文空又没有图的行不占气泡位：空框不该出现在列表里', () => {
+    const out = expandBubbles([
+      { id: '1', role: 'assistant', content: '  \n ', created_at: '2026-10-28 09:00:00' },
+      { id: '2', role: 'assistant', content: '有字', created_at: '2026-10-28 09:00:10' },
+    ])
+    expect(out.map(b => [b.id, b.bubble])).toEqual([['2', '有字']])
   })
 
   it('同一轮的后续气泡按续接处理：头像不重复、分隔线只一条', () => {
@@ -130,5 +140,39 @@ describe('分条 splitBubbles / expandBubbles', () => {
     ]))
     expect(out.map(d => d.cont)).toEqual([false, true, true])
     expect(out.filter(d => d.divider)).toHaveLength(1)
+  })
+})
+
+describe('在场感（P4）：气泡投递排程', () => {
+  it('首气泡零延迟——流式已在渲染它，排程不制造首字延迟', () => {
+    const plan = bubbleDeliveryPlan(['早', '在忙吗', '刚看到消息'])
+    expect(plan[0]).toBe(0)
+    expect(plan.slice(1).every(d => d > 0)).toBe(true)
+  })
+
+  it('短句快、长句慢、感叹句多停一拍', () => {
+    const short = bubbleDelayMs('嗯', 1)
+    const long = bubbleDelayMs('这句话稍微长了一点点，得打一会儿', 1)
+    const excited = bubbleDelayMs('天哪！', 1)
+    expect(short).toBeLessThan(long)
+    expect(excited).toBeGreaterThan(short) // 感叹号 +300
+    // 公式抽检：3 字（含全角！）+ 1 感叹 = 500 + 270 + 300 = 1070
+    expect(excited).toBe(1070)
+  })
+
+  it('上限 4s：再长的气泡也不像「卡了」', () => {
+    expect(bubbleDelayMs('很'.repeat(200), 1)).toBe(4000)
+  })
+
+  it('jitter 只做乘法缩放，不改变相对次序', () => {
+    const a = bubbleDeliveryPlan(['好短', '这一条明显长得多一些'], 1.2)
+    const b = bubbleDeliveryPlan(['好短', '这一条明显长得多一些'], 0.8)
+    expect(a[1]).toBeGreaterThan(b[1])
+    expect(a[0]).toBe(0)
+  })
+
+  it('空串与单气泡：只有一位且零延迟', () => {
+    expect(bubbleDeliveryPlan([''])).toEqual([0])
+    expect(bubbleDeliveryPlan([])).toEqual([])
   })
 })

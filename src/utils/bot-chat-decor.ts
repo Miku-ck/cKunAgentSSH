@@ -124,6 +124,7 @@ export function splitBubbles(text: string, maxBubbles: number = MAX_REPLY_BUBBLE
 export interface Bubbly {
   role: string
   content: string
+  images?: unknown[] | null
 }
 
 /**
@@ -137,12 +138,37 @@ export function expandBubbles<T extends Bubbly>(
   const out: (T & { bubble: string; bubbleIndex: number })[] = []
   for (const item of items) {
     const bubbles = item.role === 'assistant' ? splitBubbles(item.content) : []
-    // 正文为空（纯图消息）也要留一位，否则整条消息在列表里消失
-    if (!bubbles.length) {
-      out.push({ ...item, bubble: item.content, bubbleIndex: 0 })
+    if (bubbles.length) {
+      bubbles.forEach((bubble, bubbleIndex) => out.push({ ...item, bubble, bubbleIndex }))
       continue
     }
-    bubbles.forEach((bubble, bubbleIndex) => out.push({ ...item, bubble, bubbleIndex }))
+    // 正文空又没有图 = 这条没有任何可显示的东西：不占气泡位，也不许它吃掉
+    // 下一轮的说话人标识（空框 + 名字被它领走，看着就像少了个头）
+    if (!item.content.trim() && !item.images?.length) continue
+    out.push({ ...item, bubble: item.content, bubbleIndex: 0 })
   }
   return out
+}
+
+// ── 在场感（P4）：多气泡投递节奏 ──
+
+/**
+ * 单条气泡的拟打字延迟（毫秒）：短句快、长句慢、感叹/疑问句多停一拍。
+ * delay = (500 + 90·字数 + 300·句末标点数) × jitter，上限 4s——再长就不是
+ * 「在打字」而是「卡了」。jitter 由调用方注入（默认 1 便于测试断言）。
+ */
+export function bubbleDelayMs(text: string, jitter = 1): number {
+  const body = text || ''
+  const chars = Array.from(body).length
+  const punct = (body.match(/[！？…?!]/g) || []).length
+  const raw = (500 + 90 * chars + 300 * punct) * jitter
+  return Math.max(0, Math.min(4000, Math.round(raw)))
+}
+
+/**
+ * 一轮回复的投递排程：**首气泡零延迟**——流式阶段它已经在逐字渲染，
+ * 排程只管「已完整收到、尚未展示」的第 2~N 条，所以不影响首字延迟。
+ */
+export function bubbleDeliveryPlan(bubbles: readonly string[], jitter = 1): number[] {
+  return bubbles.map((bubble, index) => (index === 0 ? 0 : bubbleDelayMs(bubble, jitter)))
 }

@@ -146,9 +146,11 @@ export function renderMarkdown(text: string): string {
           `</div>`
       },
     )
-    return DOMPurify.sanitize(highlighted, SANITIZE_OPTIONS)
+    // 末尾 trim 掉 marked 在每个块后补的 \n：气泡容器是 white-space: pre-wrap，
+    // 那一个换行会凭空渲染成一行空白，把每条气泡都撑高一档。
+    return DOMPurify.sanitize(highlighted, SANITIZE_OPTIONS).trim()
   } catch (e) {
     console.warn('[renderMarkdown] failed, falling back to sanitized plain text:', e)
-    return DOMPurify.sanitize(text, SANITIZE_OPTIONS)
+    return DOMPurify.sanitize(text, SANITIZE_OPTIONS).trim()
   }
 }
