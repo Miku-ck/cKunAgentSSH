@@ -248,6 +248,38 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(user).toContain('border-radius: var(--bubble-radius) var(--bubble-radius) var(--radius-sm) var(--bubble-radius)')
   })
 
+  it('气泡密度：段落首尾外边距归零，markdown 输出不带幽灵空行', () => {
+    const view = read('src/components/bot/CkunBotView.vue')
+    // marked 的 <p> 自带 0.6em 上下 margin，落在气泡自己的 padding 里 → 一行字撑出 60px 高的框
+    expect(view).toMatch(/\.message-content :deep\(\.markdown-body\) > :first-child \{ margin-top: 0; \}/)
+    expect(view).toMatch(/\.message-content :deep\(\.markdown-body\) > :last-child \{ margin-bottom: 0; \}/)
+    // marked 在每个块后留一个 \n，而气泡是 pre-wrap ⇒ 每条气泡底部凭空多一行
+    expect(read('src/utils/markdown.ts')).toMatch(/DOMPurify\.sanitize\(highlighted, SANITIZE_OPTIONS\)\.trim\(\)/)
+  })
+
+  it('三档间距：同轮连发最紧、同人另起一轮居中、换人最松', () => {
+    const view = read('src/components/bot/CkunBotView.vue')
+    expect(view).toMatch(/\.bot-message \{[^}]*margin-bottom: var\(--spacing-10\)/)
+    expect(view).toMatch(/\.bot-message\.cont \{ margin-bottom: var\(--spacing-4\); \}/)
+    expect(view).toMatch(/\.bot-message\.cont\.turn-start \{ margin-bottom: var\(--spacing-8\); \}/)
+    // 负 margin 是当年为撑胖的气泡补的，框高正常后必须撤掉，否则两条气泡叠在一起
+    expect(view).not.toMatch(/\.bot-message\.cont \{[^}]*margin-top: -/)
+    // 说话人标识按「轮」给，不按「角色连发」给：几十条的 QQ 记录里不能长时间看不到名字
+    expect(view).toContain('v-if="d.item.bubbleIndex === 0" class="msg-meta"')
+    expect(view).toContain("'turn-start': d.item.bubbleIndex === 0")
+  })
+
+  it('流式演过的一轮不再二次投递：排程只管非流式来源', () => {
+    const view = read('src/components/bot/CkunBotView.vue')
+    const store = read('src/stores/bot.ts')
+    // 真流式已经把第 1~N 条逐字演过了，落库时排程若再从 shown=1 开始，
+    // 就等于把演过的内容收回去重演一遍（用户看到的「输出两次」）。
+    expect(store).toContain('lastStreamedId.value = saved.id')
+    expect(view).toContain('if (last.id === store.lastStreamedId)')
+    // 排程本身留着：QQ 轮询与主动推送没有流式过程，靠它给在场感
+    expect(view).toContain('bubbleDeliveryPlan(bubbles)')
+  })
+
   it('本地与 QQ 记录共用一套气泡：配色按角色，meta 两边同规则', () => {
     const view = read('src/components/bot/CkunBotView.vue')
     // 一份循环、一份气泡模板：两个 tab 不可能再各长回去
@@ -256,8 +288,7 @@ describe('cKunBot 页面注册与关键交互', () => {
     // 渠道专属方向/配色覆盖全部退役：取色只按角色，两个 tab 同一条规则
     expect(view).not.toContain('.chat-main.qq')
     expect(view).not.toContain('{ qq: store.isQq }')
-    // meta 不再是 QQ 专属：换人说话的第一条显示，连发时整条不渲染（不占空行）
-    expect(view).toContain('<span v-if="!d.cont" class="msg-meta">{{ speakerLabel(d.item) }}')
+    // meta 不再是 QQ 专属：按轮标说话人（具体口径见「三档间距」那条）
     for (const gone of ['qq-message-body', 'qq-meta', 'qqRoleLabel']) {
       expect(view).not.toContain(gone)
     }

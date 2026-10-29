@@ -12,6 +12,14 @@ export const useBotStore = defineStore('bot', () => {
   const streamText = ref('')
   const streamReasoning = ref('')
   const streaming = ref(false)
+  /** 在场感（P4）：后端状态层给的节奏提示。'hesitate' = 欲言又止（打字→停→再打）。 */
+  const pacing = ref('')
+  /**
+   * 刚被流式逐字演过的那一轮的落库 id。视图的投递排程靠它认「已经演过的内容」：
+   * 排程只该服务没有流式过程的来源（QQ 轮询、主动推送），否则会把演完的气泡
+   * 收回去重放一遍，用户看到的就是「同一条回复流式输出两次」。
+   */
+  const lastStreamedId = ref('')
   const loading = ref(false)
   const error = ref('')
   const lastFailedText = ref('')
@@ -169,6 +177,7 @@ export const useBotStore = defineStore('bot', () => {
     lastFailedText.value = ''
     streamText.value = ''
     streamReasoning.value = ''
+    pacing.value = ''
     messages.value.push({
       id: `local-${Date.now()}`, conversation_id: conversationId, role: 'user', content: text, images: imgs, created_at: new Date().toISOString(),
     })
@@ -182,8 +191,13 @@ export const useBotStore = defineStore('bot', () => {
         images: imgs,
         onContent: chunk => { if (activeConversationId.value === conversationId) streamText.value += chunk },
         onReasoning: chunk => { if (activeConversationId.value === conversationId) streamReasoning.value += chunk },
+        onPacing: hint => { if (activeConversationId.value === conversationId) pacing.value = hint },
       })
-      if (activeConversationId.value === conversationId) messages.value.push(saved)
+      if (activeConversationId.value === conversationId) {
+        // 先记 id 再 push：视图的排程 watcher 在同一批更新里就要读到它
+        lastStreamedId.value = saved.id
+        messages.value.push(saved)
+      }
     } catch (e) {
       if (!(e instanceof Error && e.name === 'AbortError')) {
         error.value = toFriendlyMessage(e, '回复生成失败')
@@ -213,7 +227,7 @@ export const useBotStore = defineStore('bot', () => {
     personas, conversations, messages, activePersonaId, activeConversationId,
     activePersona, activeConversation, filteredConversations,
     relations, activeRelation,
-    streamText, streamReasoning, streaming, loading, error, lastFailedText,
+    streamText, streamReasoning, streaming, loading, error, lastFailedText, pacing, lastStreamedId,
     channel, isQq, qqConversations, qqMessages, qqActiveId, qqError, qqActiveConversation,
     userAvatar,
     init, selectPersona, selectConversation, createConversation, deleteConversation,

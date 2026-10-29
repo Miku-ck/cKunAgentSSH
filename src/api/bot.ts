@@ -24,6 +24,7 @@ export interface BotPersona {
   model_id: string | null
   reply_style: 'concise' | 'moderate' | 'long'
   enable_thinking: number
+  proactive_enabled: number
   expression_dna: BotExpressionDna
   reaction_style: BotReactionStyle
   refusal_style: BotRefusalStyle
@@ -48,6 +49,7 @@ export interface BotPersonaPayload {
   model_id: string | null
   reply_style: 'concise' | 'moderate' | 'long'
   enable_thinking: boolean
+  proactive_enabled: boolean
   expression_dna: BotExpressionDna
   reaction_style: BotReactionStyle
   refusal_style: BotRefusalStyle
@@ -190,7 +192,7 @@ export const botApi = {
 }
 
 interface BotSseEvent {
-  type: 'content' | 'reasoning' | 'done' | 'error'
+  type: 'content' | 'reasoning' | 'pacing' | 'done' | 'error'
   content?: string
   detail?: string
   message?: BotMessage
@@ -199,7 +201,7 @@ interface BotSseEvent {
 export async function streamBotChat(
   conversationId: string,
   content: string,
-  options: { onContent: (text: string) => void; onReasoning?: (text: string) => void; images?: string[]; signal?: AbortSignal },
+  options: { onContent: (text: string) => void; onReasoning?: (text: string) => void; onPacing?: (hint: string) => void; images?: string[]; signal?: AbortSignal },
 ): Promise<BotMessage> {
   await ensureApiToken()
   let response: Response
@@ -231,6 +233,7 @@ export async function streamBotChat(
     try { event = JSON.parse(line.slice(6)) as BotSseEvent } catch { return }
     if (event.type === 'content') options.onContent(event.content || '')
     else if (event.type === 'reasoning') options.onReasoning?.(event.content || '')
+    else if (event.type === 'pacing') options.onPacing?.(event.content || '')
     else if (event.type === 'error') failure = event.detail || '回复生成失败'
     else if (event.type === 'done' && event.message) result = event.message
   }

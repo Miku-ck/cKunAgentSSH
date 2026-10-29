@@ -108,11 +108,11 @@
             <template v-for="d in messageList" :key="`${d.item.id}-${d.item.bubbleIndex}`">
               <div v-if="d.divider" class="day-divider" role="separator">{{ d.divider }}</div>
               <!-- P4 在场感：还没到投递点的气泡先不渲染（isHiddenBubble），位置由 typing 行占住 -->
-              <div v-if="!isHiddenBubble(d.item)" class="bot-message" :class="[d.item.role, { cont: d.cont }]">
+              <div v-if="!isHiddenBubble(d.item)" class="bot-message" :class="[d.item.role, { cont: d.cont, 'turn-start': d.item.bubbleIndex === 0 }]">
                 <span class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="bubbleAvatar(d.item)" /></span>
                 <div class="msg-body">
-                  <!-- 换人说话的第一条才标是谁说的；连发时整行不渲染，不占空位 -->
-                  <span v-if="!d.cont" class="msg-meta">{{ speakerLabel(d.item) }} · {{ formatLocalDateTime(d.item.created_at) }}</span>
+                  <!-- 说话人按「轮」标一次：一轮连发多条只在第一条标，同一人另起一轮也要标 -->
+                  <span v-if="d.item.bubbleIndex === 0" class="msg-meta">{{ speakerLabel(d.item) }} · {{ formatLocalDateTime(d.item.created_at) }}</span>
                   <div class="message-content">
                     <span class="sr-only">{{ speakerLabel(d.item) }}：</span>
                     <div v-if="d.item.images?.length && !d.item.bubbleIndex" class="msg-images">
@@ -126,7 +126,7 @@
               </div>
             </template>
             <template v-if="store.streaming">
-              <div v-for="(b, i) in streamBubbles" :key="`stream-${i}`" class="bot-message assistant" :class="{ cont: i > 0 }">
+              <div v-for="(b, i) in streamBubbles" :key="`stream-${i}`" class="bot-message assistant" :class="{ cont: i > 0, 'turn-start': i === 0 }">
                 <span class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="bubbleAvatar({ role: 'assistant' })" /></span>
                 <div class="msg-body">
                   <div class="message-content">
@@ -427,6 +427,8 @@ watch(() => `${store.messages.length}:${store.messages[store.messages.length - 1
   const last = store.messages[store.messages.length - 1]
   if (!last || store.streaming) { if (store.streaming) clearStaging(); return }
   if (last.role !== 'assistant') { clearStaging(); return } // 用户插话 = 打断，余下气泡立即放行
+  // 这一轮刚被流式逐字演过：排程若从 shown=1 重来，等于把演完的气泡收回去重放
+  if (last.id === store.lastStreamedId) { clearStaging(); return }
   if (staged.value?.id === last.id) return
   const bubbles = splitBubbles(last.content)
   if (bubbles.length < 2) { clearStaging(); return }
@@ -616,10 +618,16 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 /* 日期分隔线：居中淡色小字，两侧渐隐细线，不打断阅读节奏。 */
 .day-divider { align-self: center; display: flex; align-items: center; gap: var(--spacing-10); margin: var(--spacing-12) 0 var(--spacing-10); color: var(--text-tertiary); font-size: 0.7692rem; }
 .day-divider::before, .day-divider::after { content: ''; width: 44px; height: 1px; background: linear-gradient(90deg, transparent, var(--border-subtle), transparent); }
-/* 连续消息合并：同角色连发时隐去重复头像、收紧行间距，只在末条留气泡圆尾（meta 那行此时不渲染）。 */
-.bot-message.cont { margin-top: -4px; margin-bottom: var(--spacing-4); }
+/* 三档间距：同轮连发 4px（一眼是连着发的）、同一人另起一轮 8px、换人 10px。
+   头像在连发时隐去重复，说话人那行按「轮」标（见模板的 bubbleIndex === 0）。 */
+.bot-message.cont { margin-bottom: var(--spacing-4); }
+.bot-message.cont.turn-start { margin-bottom: var(--spacing-8); }
 .bot-message.cont .msg-avatar { visibility: hidden; }
 .bot-message.cont .message-content { border-radius: var(--radius-sm); }
+/* 段落首尾外边距在气泡里归零：marked 的 <p> 自带 0.6em，落在气泡 padding 里
+   会把一行字撑成 60px 高的框；拆成多条气泡后每条都吃一遍，必须清掉。 */
+.message-content :deep(.markdown-body) > :first-child { margin-top: 0; }
+.message-content :deep(.markdown-body) > :last-child { margin-bottom: 0; }
 .qq-empty { margin: auto; color: var(--text-secondary); font-size: 0.9231rem; }
 .typing-dots { display: inline-flex; align-items: center; gap: var(--spacing-4); padding: 3px 0; }
 .typing-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--text-tertiary); animation: bot-bob 1.2s ease-in-out infinite; }

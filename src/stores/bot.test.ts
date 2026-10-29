@@ -22,7 +22,7 @@ import { useBotStore } from './bot'
 
 const persona: BotPersona = {
   id: 'p1', name: '小刻', avatar: 'data:image/webp;base64,AAAA', personality: '温和', background: '', greeting: '你好',
-  model_id: null, reply_style: 'moderate', enable_thinking: 0, is_builtin: 1, created_at: '', updated_at: '',
+  model_id: null, reply_style: 'moderate', enable_thinking: 0, proactive_enabled: 0, is_builtin: 1, created_at: '', updated_at: '',
   expression_dna: {
     sentence: 'mixed', particles: 'soft', punctuation: 'plain', emoji: 'low', catchphrase: '', taboo: [],
   },
