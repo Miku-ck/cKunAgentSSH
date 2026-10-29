@@ -17,13 +17,16 @@ describe('人格编辑器 · 记忆不进编辑页', () => {
     expect(editor).toContain('memory_directive')
   })
 
-  it('API 层四个记忆端点仍在：只是编辑页不消费它们', () => {
+  it('api 层不再留无人消费的记忆封装：编辑页一走，这四个方法就是死代码', () => {
     const api = read('src/api/bot.ts')
-    expect(api).toContain('listMemories')
-    expect(api).toContain('addMemory')
-    expect(api).toContain('deleteMemory')
-    expect(api).toContain('clearMemories')
-    expect(api).toContain('/memories')
+    for (const gone of ['listMemories', 'addMemory', 'deleteMemory', 'clearMemories', 'BotMemory', '/memories']) {
+      expect(api, gone).not.toContain(gone)
+    }
+  })
+
+  it('记忆只有一个看的地方：Agent 那个面板，不再开第二个', () => {
+    expect(read('src/components/settings/panels/MemoryPanel.vue')).toContain('记忆管理')
+    expect(read('src/components/agent/AgentMemoryView.vue')).toContain('listMemories')
   })
 
   it('聊天界面不暴露记忆控件：记忆是后台事实，不该变成聊天里的功能按钮', () => {

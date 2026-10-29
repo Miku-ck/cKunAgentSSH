@@ -143,14 +143,6 @@ export interface BotChannelPayload {
   app_secret?: string
 }
 
-/** 人格记住的一条事实。内容是人话（"用户住在杭州"），不是内部 id。 */
-export interface BotMemory {
-  id: string
-  title: string
-  content: string
-  created_at: string
-}
-
 /** 头像图库条目：各处头像存自己的 data URL 副本，删图库项不影响已设头像。 */
 export interface BotGalleryItem {
   id: string
@@ -178,10 +170,7 @@ export const botApi = {
   deleteChannel: (id: string) => request<{ deleted: boolean; conversation_count: number }>(`/bot/channels/${id}`, { method: 'DELETE' }),
   connectChannel: (id: string) => request<BotChannelStatus>(`/bot/channels/${id}/connect`, { method: 'POST' }),
   disconnectChannel: (id: string) => request<BotChannelStatus>(`/bot/channels/${id}/disconnect`, { method: 'POST' }),
-  listMemories: (personaId: string) => request<BotMemory[]>(`/bot/personas/${personaId}/memories`),
-  addMemory: (personaId: string, content: string) => request<{ id: string }>(`/bot/personas/${personaId}/memories`, { method: 'POST', body: JSON.stringify({ content }) }),
-  deleteMemory: (id: string) => request<{ deleted: boolean }>(`/bot/memories/${id}`, { method: 'DELETE' }),
-  clearMemories: (personaId: string) => request<{ cleared: number }>(`/bot/personas/${personaId}/memories/clear`, { method: 'POST' }),
+  // 人格记忆的查看与增删只走 Agent 记忆面板（api/agent.ts），bot 端不再单独封装一套。
   // Phase 4 头像体系：图库 CRUD、「你的头像」、QQ 会话显示覆盖
   listGallery: () => request<BotGalleryItem[]>('/bot/gallery'),
   addGalleryItem: (payload: { label?: string; data_url: string }) => request<BotGalleryItem>('/bot/gallery', { method: 'POST', body: JSON.stringify(payload) }),
