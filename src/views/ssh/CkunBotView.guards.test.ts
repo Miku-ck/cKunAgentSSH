@@ -232,12 +232,28 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).toContain('删除人格「')
   })
 
+  it('气泡基准取自 QQ 记录那套：bot 强调色、对方中性卡片，两个 tab 同一副', () => {
+    const view = read('src/components/bot/CkunBotView.vue')
+    // 基准 = 人格说的话用强调色（读的是它），人说的话走中性卡片 —— 两侧都按角色取色
+    const assistant = view.match(/^\.message-content \{[^}]*\}/m)?.[0] || ''
+    expect(assistant).toContain('color-mix(in srgb, var(--accent-primary) 12%, transparent)')
+    expect(assistant).toContain('box-shadow: none')
+    const user = view.match(/\.bot-message\.user \.message-content \{[^}]*\}/)?.[0] || ''
+    expect(user).toContain('background: var(--bg-elevated)')
+    expect(user).toContain('box-shadow: var(--shadow-sm)')
+    // 开场白与 bot 气泡同色：它也是人格说的话
+    expect(view.match(/^\.greeting \{[^}]*\}/m)?.[0]).toContain('color-mix(in srgb, var(--accent-primary) 12%, transparent)')
+    // 尾巴朝自己这侧：bot 在左收左下、人在右收右下
+    expect(assistant).toContain('border-radius: var(--bubble-radius) var(--bubble-radius) var(--bubble-radius) var(--radius-sm)')
+    expect(user).toContain('border-radius: var(--bubble-radius) var(--bubble-radius) var(--radius-sm) var(--bubble-radius)')
+  })
+
   it('本地与 QQ 记录共用一套气泡：配色按角色，meta 两边同规则', () => {
     const view = read('src/components/bot/CkunBotView.vue')
     // 一份循环、一份气泡模板：两个 tab 不可能再各长回去
     expect(view).toContain('v-for="d in messageList"')
     expect((view.match(/class="bot-message"/g) || []).length).toBe(1)
-    // 渠道专属方向/配色覆盖全部退役：左=中性卡片、右=强调色，两边同一条规则
+    // 渠道专属方向/配色覆盖全部退役：取色只按角色，两个 tab 同一条规则
     expect(view).not.toContain('.chat-main.qq')
     expect(view).not.toContain('{ qq: store.isQq }')
     // meta 不再是 QQ 专属：换人说话的第一条显示，连发时整条不渲染（不占空行）

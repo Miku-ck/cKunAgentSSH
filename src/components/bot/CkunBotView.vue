@@ -107,7 +107,8 @@
             <p v-else-if="store.isQq && !store.qqMessages.length" class="qq-empty">这段会话还没有消息。</p>
             <template v-for="d in messageList" :key="`${d.item.id}-${d.item.bubbleIndex}`">
               <div v-if="d.divider" class="day-divider" role="separator">{{ d.divider }}</div>
-              <div class="bot-message" :class="[d.item.role, { cont: d.cont }]">
+              <!-- P4 在场感：还没到投递点的气泡先不渲染（isHiddenBubble），位置由 typing 行占住 -->
+              <div v-if="!isHiddenBubble(d.item)" class="bot-message" :class="[d.item.role, { cont: d.cont }]">
                 <span class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="bubbleAvatar(d.item)" /></span>
                 <div class="msg-body">
                   <!-- 换人说话的第一条才标是谁说的；连发时整行不渲染，不占空位 -->
@@ -132,6 +133,17 @@
                     <details v-if="!i && store.streamReasoning && thinkingOn" class="reasoning" open><summary>思考中…</summary><div class="reasoning-body">{{ store.streamReasoning }}</div></details>
                     <MarkdownStream v-if="b" :content="b" />
                     <span v-else class="typing-dots" role="img" aria-label="正在输入"><i></i><i></i><i></i></span>
+                  </div>
+                </div>
+              </div>
+            </template>
+            <!-- P4 在场感：排程期间的下一条气泡以「正在输入」占位（欲言又止 = 它消失一下再回来） -->
+            <template v-else-if="stagingTyping">
+              <div class="bot-message assistant">
+                <span class="msg-avatar" aria-hidden="true"><PersonaAvatar :avatar="bubbleAvatar({ role: 'assistant' })" /></span>
+                <div class="msg-body">
+                  <div class="message-content">
+                    <span class="typing-dots" role="img" aria-label="正在输入"><i></i><i></i><i></i></span>
                   </div>
                 </div>
               </div>
@@ -228,7 +240,7 @@ import ConnectionPage from './ConnectionPage.vue'
 import BaseModal from '@/components/common/BaseModal.vue'
 import { formatLocalDateTime } from '@/utils/datetime'
 import { personaName } from '@/utils/bot-channel'
-import { decorateMessages, expandBubbles, peerLabel, peerTag, splitBubbles } from '@/utils/bot-chat-decor'
+import { bubbleDeliveryPlan, decorateMessages, expandBubbles, peerLabel, peerTag, splitBubbles } from '@/utils/bot-chat-decor'
 import AvatarPicker from './AvatarPicker.vue'
 import ChatImageLightbox from './ChatImageLightbox.vue'
 import { botApi, type BotConversation, type BotPersona, type BotPersonaOptions } from '@/api/bot'
@@ -390,6 +402,66 @@ const streamBubbles = computed(() => {
   return parts.length ? parts : ['']
 })
 
+// ── 在场感（P4）：多气泡投递节奏 ──
+// done 落库的一轮若是多气泡，第 2~N 条按拟打字延迟逐条揭开：每条揭开前
+// 显示「正在输入」。首气泡零延迟（流式已在渲染），所以不影响首字延迟。
+const staged = ref<{ id: string; shown: number } | null>(null)
+const stagingPaused = ref(false)
+let stagingTimers: ReturnType<typeof setTimeout>[] = []
+
+function clearStaging() {
+  stagingTimers.forEach(t => { clearTimeout(t) })
+  stagingTimers = []
+  staged.value = null
+  stagingPaused.value = false
+}
+
+function isHiddenBubble(item: { id: string; role: string; bubbleIndex: number }) {
+  return !!staged.value
+    && item.id === staged.value.id
+    && item.role === 'assistant'
+    && item.bubbleIndex >= staged.value.shown
+}
+
+watch(() => `${store.messages.length}:${store.messages[store.messages.length - 1]?.id || ''}`, () => {
+  const last = store.messages[store.messages.length - 1]
+  if (!last || store.streaming) { if (store.streaming) clearStaging(); return }
+  if (last.role !== 'assistant') { clearStaging(); return } // 用户插话 = 打断，余下气泡立即放行
+  if (staged.value?.id === last.id) return
+  const bubbles = splitBubbles(last.content)
+  if (bubbles.length < 2) { clearStaging(); return }
+  clearStaging()
+  staged.value = { id: last.id, shown: 1 }
+  const delays = bubbleDeliveryPlan(bubbles)
+  let acc = 0
+  if (store.pacing === 'hesitate') {
+    // 欲言又止：打字出现 → 停一下 → 再出现，然后才开讲
+    stagingTimers.push(setTimeout(() => { stagingPaused.value = true }, 600))
+    stagingTimers.push(setTimeout(() => { stagingPaused.value = false }, 1150))
+    acc = 1400
+  }
+  for (let i = 1; i < bubbles.length; i++) {
+    acc += delays[i]
+    const target = i + 1
+    stagingTimers.push(setTimeout(() => {
+      if (staged.value?.id === last.id) staged.value = { id: last.id, shown: target }
+    }, acc))
+  }
+})
+
+const stagingTyping = computed(() => {
+  if (!staged.value || stagingPaused.value) return false
+  const last = store.messages[store.messages.length - 1]
+  if (!last || last.id !== staged.value.id) return false
+  return splitBubbles(last.content).length > staged.value.shown
+})
+
+// 逐条揭开时也要跟到底（既有的滚动 watcher 只盯 messages 长度，盯不到揭开）
+watch(() => staged.value?.shown, async () => {
+  await nextTick()
+  if (messageListRef.value) messageListRef.value.scrollTop = messageListRef.value.scrollHeight
+})
+
 // 图片灯箱：本地/历史消息里的图片点开放大，不跳转、不外发。
 const lightboxUrl = ref('')
 function openLightbox(url: string) { lightboxUrl.value = url }
@@ -455,7 +527,7 @@ watch([tab, () => store.channel], () => {
 onMounted(async () => {
   await Promise.all([store.init(), models.fetchModels(), loadPersonaOptions()])
 })
-onUnmounted(() => { stopQqPolling(); store.stopGenerating() })
+onUnmounted(() => { stopQqPolling(); store.stopGenerating(); clearStaging() })
 </script>
 
 <style scoped>
@@ -510,19 +582,21 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 .relation-bar b { display: block; height: 100%; background: var(--accent-primary); transition: width .3s ease; }
 .bot-messages { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; padding: var(--spacing-10) max(var(--spacing-24), calc((100% - 760px) / 2)) var(--spacing-8); }
 .chat-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-secondary); } .chat-empty h2 { color: var(--text-primary); font-size: 1.5385rem; } .chat-empty p { margin-top: var(--spacing-8); font-size: 1rem; }
-.greeting { align-self: flex-start; max-width: 82%; margin-bottom: var(--spacing-16); padding: var(--spacing-12) var(--spacing-14); border: 1px solid var(--border-subtle); border-radius: var(--bubble-radius) var(--bubble-radius) var(--bubble-radius) var(--radius-sm); background: var(--bg-elevated); box-shadow: var(--shadow-sm); color: var(--text-secondary); line-height: 1.7; white-space: pre-wrap; }
+/* 基准取自 QQ 记录那套气泡：人格说的话用强调色（那才是你在读的内容），人说的话走中性卡片。
+   尾巴朝自己这侧：bot 在左收左下、人在右收右下。 */
+.greeting { align-self: flex-start; max-width: 82%; margin-bottom: var(--spacing-16); padding: var(--spacing-12) var(--spacing-14); border: 1px solid color-mix(in srgb, var(--accent-primary) 24%, transparent); border-radius: var(--bubble-radius) var(--bubble-radius) var(--bubble-radius) var(--radius-sm); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); box-shadow: none; color: var(--text-secondary); line-height: 1.7; white-space: pre-wrap; }
 .bot-message { display: flex; align-items: flex-start; gap: 9px; max-width: 82%; margin-bottom: var(--spacing-10); }
 .bot-message.assistant { align-self: flex-start; } .bot-message.user { align-self: flex-end; }
 /* 用户/对方气泡靠右，头像跟着排在气泡右侧；bot 在左，头像在气泡左侧。 */
 .bot-message.user .msg-avatar { order: 2; }
 .msg-avatar { width: 26px; height: 26px; flex: 0 0 26px; display: grid; place-items: center; border-radius: 50%; font-size: 0.9231rem; }
-.message-content { padding: var(--spacing-10) var(--spacing-14); border: 1px solid var(--border-subtle); border-radius: var(--bubble-radius) var(--bubble-radius) var(--bubble-radius) var(--radius-sm); background: var(--bg-elevated); box-shadow: var(--shadow-sm); line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
-.bot-message.user .message-content { border-color: color-mix(in srgb, var(--accent-primary) 24%, transparent); border-radius: var(--bubble-radius) var(--bubble-radius) var(--radius-sm) var(--bubble-radius); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); box-shadow: none; }
+.message-content { padding: var(--spacing-10) var(--spacing-14); border: 1px solid color-mix(in srgb, var(--accent-primary) 24%, transparent); border-radius: var(--bubble-radius) var(--bubble-radius) var(--bubble-radius) var(--radius-sm); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); box-shadow: none; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.bot-message.user .message-content { border-color: var(--border-subtle); border-radius: var(--bubble-radius) var(--bubble-radius) var(--radius-sm) var(--bubble-radius); background: var(--bg-elevated); box-shadow: var(--shadow-sm); }
 .reasoning { margin: 0 0 var(--spacing-6); border-radius: var(--radius-sm); background: var(--bg-input); font-size: 0.8462rem; }
 .reasoning summary { cursor: pointer; padding: 4px var(--spacing-8); color: var(--text-tertiary); list-style: none; }
 .reasoning summary::-webkit-details-marker { display: none; }
 .reasoning-body { padding: 0 var(--spacing-8) var(--spacing-6); color: var(--text-secondary); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
-/* 气泡只有一套规则：方向、配色与 meta 对齐都按角色决定（左=bot 中性卡片、右=人 强调色），
+/* 气泡只有一套规则：方向、配色与 meta 对齐都按角色决定（bot 在左、人在右），
    本地与 QQ 记录同形。头像侧由 .msg-avatar 的 order 决定（user 通用规则给 order:2 → 头像在气泡右）。 */
 /* 弹窗内容：BaseModal 的 body 已给 padding 与纵向间距，这里只管控件自身。
    显示名走 AvatarPicker 的 #fields 插槽，与头像同一栏，不再另起一行。 */
