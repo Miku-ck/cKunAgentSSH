@@ -40,14 +40,6 @@ export function personaName(persona: { name?: string } | null | undefined): stri
   return persona?.name?.trim() || ''
 }
 
-/**
- * 列表行的会话类型短标：只有群聊需要标（私聊是默认形态，标了等于噪声）。
- * 完整代号与时间不进这一行 —— 窄栏折两行比多一段信息更难看，挪进 title 悬浮。
- */
-export function peerTag(externalId?: string | null): string {
-  return externalId?.startsWith('group:') ? '群' : ''
-}
-
 function localDayKey(d: Date): string {
   return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
 }

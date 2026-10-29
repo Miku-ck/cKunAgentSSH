@@ -409,10 +409,13 @@ def test_persona_patch_revises_snapshot_used_for_generation(client):
     assert set(row["persona"]) == {"id", "name", "avatar"}
 
 
-def test_qq_conversation_display_override(client):
+def test_remote_conversation_display_override(client):
     persona = create_persona(client)
-    # QQ 会话由通道侧创建，路由只收 local —— 测试直接走库函数造数据
+    # QQ / 微信会话由通道侧创建，路由只收 local —— 测试直接走库函数造数据
     qq_conv = db.create_bot_conversation(persona["id"], channel="qq", external_id="group:GG1")
+    wx_conv = db.create_bot_conversation(
+        persona["id"], channel="wechat", external_id="wx:openid-1"
+    )
     local_id = client.post(
         "/api/bot/conversations", json={"persona_id": persona["id"]}
     ).json()["id"]
@@ -425,7 +428,14 @@ def test_qq_conversation_display_override(client):
     assert patched.json()["display_name"] == "夜宵群"
     assert patched.json()["display_avatar"] == "data:image/webp;base64,AAAA"
 
-    # 本地会话不吃显示层覆盖（spec §4.4：仅 qq）
+    # 微信会话与 QQ 同一口径：只改本地看到的名字/头像
+    wx_patched = client.patch(
+        f"/api/bot/conversations/{wx_conv['id']}", json={"display_name": "微信好友"}
+    )
+    assert wx_patched.status_code == 200, wx_patched.text
+    assert wx_patched.json()["display_name"] == "微信好友"
+
+    # 本地会话不吃显示层覆盖：标题就是人格名，盖了反而误导
     assert client.patch(
         f"/api/bot/conversations/{local_id}", json={"display_name": "x"}
     ).status_code == 400
@@ -452,11 +462,6 @@ def test_wechat_conversations_are_listable(client):
     assert [r["id"] for r in rows] == [conv["id"]]
     assert rows[0]["channel"] == "wechat"
     assert client.get("/api/bot/conversations?channel=wechatx").status_code == 422
-
-    # 显示覆盖仍只服务 QQ 记录页，微信会话不吃
-    assert client.patch(
-        f"/api/bot/conversations/{conv['id']}", json={"display_name": "x"}
-    ).status_code == 400
 
 
 def test_qq_display_update_does_not_bump_updated_at(client):

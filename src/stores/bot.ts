@@ -113,9 +113,9 @@ export const useBotStore = defineStore('bot', () => {
     if (next) await selectRemoteConversation(next)
   }
 
-  /** QQ 会话本地显示覆盖（Phase 4）：PATCH 成功后原位替换，列表不重拉——
+  /** 远端（QQ / 微信）会话本地显示覆盖：PATCH 成功后原位替换，列表不重拉——
    *  服务端保证 display 编辑不动 updated_at，重拉反而会把滚动位置弄丢。 */
-  async function updateQqDisplay(id: string, payload: { display_name?: string; display_avatar?: string }) {
+  async function updateConversationDisplay(id: string, payload: { display_name?: string; display_avatar?: string }) {
     const updated = await botApi.updateConversationDisplay(id, payload)
     remoteConversations.value = remoteConversations.value.map((c) => (c.id === id ? updated : c))
     remoteError.value = ''
@@ -259,6 +259,6 @@ export const useBotStore = defineStore('bot', () => {
     userAvatar,
     init, selectPersona, selectConversation, createConversation, deleteConversation,
     sendMessage, stopGenerating, selectChannel, selectRemoteConversation, refreshRemote,
-    deleteRemoteConversation, updateQqDisplay, loadUserAvatar,
+    deleteRemoteConversation, updateConversationDisplay, loadUserAvatar,
   }
 })

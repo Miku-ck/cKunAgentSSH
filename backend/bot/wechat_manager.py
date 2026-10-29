@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 SENDMSG_URL = "https://chatbot.weixin.qq.com/openapi/sendmsg/{token}"
 KEFUSTATE_CHANGE_URL = "https://chatbot.weixin.qq.com/openapi/kefustate/change/{token}"
+KEFUSTATE_GET_URL = "https://chatbot.weixin.qq.com/openapi/kefustate/get/{token}"
 # 接管后平台机器人不再回答该用户；每半小时补一次，防止后台被人工改成 complete。
 SERVING_TTL_S = 1800
 HTTP_TIMEOUT_S = 10
@@ -55,6 +56,9 @@ class WeChatConnection:
         self._tasks: set[asyncio.Task] = set()
         self._serving: dict[str, float] = {}
         self._serving_inflight: set[str] = set()
+        # 每个用户所属的公众号/小程序 appid：sendmsg 与 kefustate 都只认它，
+        # 开放平台 APPID（cfg.app_id）传进去会被判 appid is not valid。
+        self._appids: dict[str, str] = {}
 
     @property
     def status(self) -> dict:
@@ -97,8 +101,9 @@ class WeChatConnection:
         text = wx.extract_text(inbound.msg)
         if not text:
             return dict(wx.ACK)
-        if inbound.appid and inbound.appid != self.cfg.app_id:
-            raise wx.WeChatPayloadError("回调 appid 与本渠道不一致，请核对该渠道的回调地址")
+        # 入站 XML 的 appid 是公众号/小程序 appid，不是开放平台 APPID：
+        # 渠道归属性已由 AES 密钥 + 明文尾部 appid 校验，这里不再比对 cfg.app_id。
+        self._appids[inbound.userid] = inbound.appid
 
         message = InboundMessage(
             channel_id=self.cfg.channel_id,
@@ -111,7 +116,7 @@ class WeChatConnection:
         # 否则状态会在还没打通时就谎报接通。
         self._set_status("online", f"已接通 · 最近收到消息 {_received_at_text()}")
         # 先接管再生成：接管是 HTTP，生成更慢；两者并行，用户无需等待接管结果。
-        self._spawn(self._take_over(inbound.userid))
+        self._spawn(self._take_over(inbound.userid, inbound.appid))
         self._spawn(self.on_inbound(message))
         return dict(wx.ACK)
 
@@ -123,7 +128,8 @@ class WeChatConnection:
 
     async def _sendmsg(self, inbound: wx.WeChatInbound, text: str) -> None:
         # 渠道 7（H5）不传 appid；其余渠道传入站里的公众号/小程序 appid。
-        appid = "" if inbound.channel == 7 else (inbound.appid or self.cfg.app_id)
+        # 绝不能回落 cfg.app_id —— 那是开放平台 APPID，sendmsg 直接回 1011 appid is not valid。
+        appid = "" if inbound.channel == 7 else (inbound.appid or "")
         xml_text = wx.build_sendmsg_xml(
             appid=appid,
             openid=inbound.userid,
@@ -132,11 +138,15 @@ class WeChatConnection:
         )
         await self._post(self._api_url(SENDMSG_URL), self.crypto.encrypt(xml_text))
 
-    async def _change_kefustate(self, openid: str, state: str) -> None:
-        xml_text = wx.build_kefustate_xml(
-            appid=self.cfg.app_id, openid=openid, state=state
-        )
+    async def _change_kefustate(self, openid: str, state: str, appid: str) -> None:
+        # 平台文档：这里的 appid 是公众号或小程序 appid。传开放平台 APPID 会返回
+        # errcode 0 但状态不动，用户侧表现为「消息发得出、微信里看不到」。
+        xml_text = wx.build_kefustate_xml(appid=appid, openid=openid, state=state)
         await self._post(self._api_url(KEFUSTATE_CHANGE_URL), self.crypto.encrypt(xml_text))
+
+    async def _get_kefustate(self, openid: str, appid: str) -> dict:
+        xml_text = wx.build_kefustate_get_xml(appid=appid, openid=openid)
+        return await self._post(self._api_url(KEFUSTATE_GET_URL), self.crypto.encrypt(xml_text))
 
     def _api_url(self, template: str) -> str:
         return template.format(token=quote(self.cfg.app_secret.strip(), safe=""))
@@ -158,8 +168,8 @@ class WeChatConnection:
             raise RuntimeError(f"微信接口失败 errcode={errcode} {detail}".strip())
         return data
 
-    async def _take_over(self, openid: str) -> None:
-        if self.crypto is None:
+    async def _take_over(self, openid: str, appid: str) -> None:
+        if self.crypto is None or not appid:
             return
         now = time.monotonic()
         if now - self._serving.get(openid, 0.0) < SERVING_TTL_S:
@@ -168,9 +178,21 @@ class WeChatConnection:
             return
         self._serving_inflight.add(openid)
         try:
-            await self._change_kefustate(openid, "personserving")
+            await self._change_kefustate(openid, "personserving", appid)
             self._serving[openid] = time.monotonic()
             logger.info("微信渠道 %s 接管用户 %s", self.cfg.channel_id[:8], _mask(openid))
+            # change 对 appid 不做校验（假的也回 errcode 0、状态原地不动），
+            # 只信回读：读到 off 说明平台机器人还在应答，这条日志就是现场。
+            state = await self._get_kefustate(openid, appid)
+            if str(state.get("kefustate") or "").lower() != "on":
+                logger.warning(
+                    "微信渠道 %s 接管用户 %s 未生效（kefustate=%s status=%s）："
+                    "平台机器人仍在应答，请确认公众号已认证并授权给开放平台",
+                    self.cfg.channel_id[:8],
+                    _mask(openid),
+                    state.get("kefustate"),
+                    state.get("status"),
+                )
         except Exception as exc:  # noqa: BLE001 —— 接管失败也要继续回复
             logger.warning(
                 "微信渠道 %s 接管用户 %s 失败: %s",
@@ -206,8 +228,11 @@ class WeChatConnection:
             return
 
         async def release_one(openid: str) -> None:
+            appid = self._appids.get(openid, "")
+            if not appid:
+                return
             try:
-                await self._change_kefustate(openid, "complete")
+                await self._change_kefustate(openid, "complete", appid)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "微信渠道 %s 释放用户 %s 失败: %s",

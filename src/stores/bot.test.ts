@@ -113,13 +113,13 @@ describe('cKunBot store', () => {
     expect(store.messages[0].images).toEqual(imgs)
   })
 
-  it('updateQqDisplay 走 PATCH 并原位替换 QQ 会话', async () => {
+  it('updateConversationDisplay 走 PATCH 并原位替换远端会话', async () => {
     const qq = { ...conversation, id: 'q1', channel: 'qq' as const }
     vi.mocked(botApi.updateConversationDisplay).mockResolvedValue({ ...qq, display_name: '夜宵群' })
     const store = useBotStore()
     store.remoteConversations = [qq]
     store.remoteActiveId = 'q1'
-    await store.updateQqDisplay('q1', { display_name: '夜宵群' })
+    await store.updateConversationDisplay('q1', { display_name: '夜宵群' })
     expect(botApi.updateConversationDisplay).toHaveBeenCalledWith('q1', { display_name: '夜宵群' })
     expect(store.remoteConversations[0].display_name).toBe('夜宵群')
   })

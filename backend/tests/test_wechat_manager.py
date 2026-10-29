@@ -58,13 +58,21 @@ class FakeResponse:
 
 
 class FakeClient:
-    def __init__(self, data=None):
+    def __init__(self, data=None, serving=None):
         self.data = data if data is not None else {"errcode": 0, "errmsg": "ok"}
+        # 回读状态默认「已接管」；给需要断言未生效场景的用例单独指定。
+        self.serving = serving if serving is not None else {
+            "errcode": 0,
+            "kefustate": "on",
+            "status": "personserving",
+        }
         self.calls: list[tuple[str, dict]] = []
         self.closed = False
 
     async def post(self, url, json=None, headers=None):
         self.calls.append((url, json))
+        if "kefustate/get" in url:
+            return FakeResponse(dict(self.serving))
         return FakeResponse(self.data)
 
     async def aclose(self):
@@ -79,6 +87,10 @@ def _cfg(key, *, app_id="wx-app", token="token-123", channel_id="channel-1"):
         persona_id="persona-1",
         extra_secret=key,
     )
+
+
+async def _noop(_message) -> None:
+    return None
 
 
 async def _drain(connection: WeChatConnection) -> None:
@@ -103,9 +115,9 @@ def _encrypted(key, xml_text, app_id="wx-app") -> str:
     return WeChatCrypto(app_id, key).encrypt(xml_text)
 
 
-def _outbound_xml(key, encrypted):
+def _outbound_xml(key, encrypted, app_id="wx-app"):
     # 出站 XML 没有 userid，不能走 parse_inbound（那只认入站字段）。
-    return ET.fromstring(WeChatCrypto("wx-app", key).decrypt(encrypted))
+    return ET.fromstring(WeChatCrypto(app_id, key).decrypt(encrypted))
 
 
 @pytest.mark.asyncio
@@ -148,13 +160,13 @@ async def test_accept_decrypts_acks_and_hands_off_to_the_pipeline():
     assert message.conversation_key == "wx:o-user-1"
     assert message.text == "今天好累"
     assert message.event_id
-    # 一条入站同时触发接管（kefustate=personserving）
-    assert len(client.calls) == 1
+    # 一条入站同时触发接管（kefustate=personserving），并回读确认已生效
     url, payload = client.calls[0]
     assert url.endswith("/openapi/kefustate/change/token-123")
     state = _outbound_xml(key, payload["encrypt"])
     assert state.findtext("openid") == "o-user-1"
     assert state.findtext("kefustate") == "personserving"
+    assert any("kefustate/get" in u for u, _ in client.calls)
     await connection.stop()
 
 
@@ -195,14 +207,21 @@ async def test_robot_agent_and_event_callbacks_are_ignored():
 
 
 @pytest.mark.asyncio
-async def test_appid_mismatch_is_rejected_as_bad_payload():
+async def test_inbound_appid_is_the_bound_account_not_the_platform_appid():
+    # 入站 XML 的 appid 是公众号 appid（与开放平台 APPID 不同）：
+    # 密文里的平台 appid 已由 AES 校验，这里不能拿它再比对一次把真消息拒掉。
     key = _aes_key()
-    connection, _, _ = _make(key)
+    connection, client, received = _make(key)
     await connection.start()
 
-    xml_text = _inbound_xml(appid="wx-other")
-    with pytest.raises(WeChatPayloadError):
-        await connection.accept({"encrypted": _encrypted(key, xml_text)})
+    ack = await connection.accept(
+        {"encrypted": _encrypted(key, _inbound_xml(appid="wx-official", msg="在吗"))}
+    )
+    await _drain(connection)
+
+    assert ack == {"errcode": 0, "errmsg": "ok"}
+    assert len(received) == 1
+    assert client.calls  # 同时完成接管
     await connection.stop()
 
 
@@ -272,20 +291,62 @@ async def test_kefustate_uses_the_bound_account_appid_not_the_platform_appid():
     key = _aes_key()
     client = FakeClient()
     connection = WeChatConnection(
-        _cfg(key, app_id="platform-app"), lambda _m: None, client=client
+        _cfg(key, app_id="platform-app"), _noop, client=client
     )
     await connection.start()
 
     await connection.accept(
-        {"encrypted": _encrypted(key, _inbound_xml(appid="wx-official", msg="在吗"))}
+        {"encrypted": _encrypted(key, _inbound_xml(appid="wx-official", msg="在吗"), app_id="platform-app")}
     )
     await _drain(connection)
 
     url, payload = client.calls[0]
     assert "kefustate/change" in url
-    state = _outbound_xml(key, payload["encrypt"])
+    state = _outbound_xml(key, payload["encrypt"], app_id="platform-app")
     assert state.findtext("appid") == "wx-official"
     assert state.findtext("kefustate") == "personserving"
+    await connection.stop()
+
+
+@pytest.mark.asyncio
+async def test_takeover_reads_back_state_and_warns_when_it_did_not_stick(caplog):
+    # change 对 appid 不做校验（假的也回 errcode 0），只有回读能看出平台机器人还在应答。
+    key = _aes_key()
+    client = FakeClient(serving={"errcode": 0, "kefustate": "off", "status": "asking"})
+    connection = WeChatConnection(_cfg(key), _noop, client=client)
+    await connection.start()
+
+    with caplog.at_level("WARNING", logger="bot.wechat_manager"):
+        await connection.accept(
+            {"encrypted": _encrypted(key, _inbound_xml(appid="wx-official", msg="在吗"))}
+        )
+        await _drain(connection)
+
+    get_calls = [(u, p) for u, p in client.calls if "kefustate/get" in u]
+    assert len(get_calls) == 1
+    asked = _outbound_xml(key, get_calls[0][1]["encrypt"])
+    assert asked.findtext("appid") == "wx-official"
+    assert asked.findtext("openid") == "o-user-1"
+    assert "未生效" in caplog.text
+    assert "kefustate=off" in caplog.text
+    await connection.stop()
+
+
+@pytest.mark.asyncio
+async def test_sendmsg_never_falls_back_to_the_platform_appid():
+    # 平台对 sendmsg 的 appid 做校验：开放平台 APPID 会回 1011 appid is not valid。
+    key = _aes_key()
+    connection, client, received = _make(key)
+    await connection.start()
+    await connection.accept({"encrypted": _encrypted(key, _inbound_xml(appid="", channel=0))})
+    await _drain(connection)
+    client.calls.clear()
+
+    await received[0].send("在吗")
+
+    sent = _outbound_xml(key, client.calls[0][1]["encrypt"])
+    assert sent.find("appid") is None
+    assert sent.findtext("channel") == "0"
     await connection.stop()
 
 
@@ -309,12 +370,12 @@ async def test_release_reuses_the_appid_seen_on_inbound(base_db):
     client = FakeClient()
     connection = WeChatConnection(
         _cfg(key, app_id="platform-app", channel_id=channel["id"]),
-        lambda _m: None,
+        _noop,
         client=client,
     )
     await connection.start()
     await connection.accept(
-        {"encrypted": _encrypted(key, _inbound_xml(appid="wx-official", msg="在吗"))}
+        {"encrypted": _encrypted(key, _inbound_xml(appid="wx-official", msg="在吗"), app_id="platform-app")}
     )
     await _drain(connection)
     client.calls.clear()
@@ -323,7 +384,7 @@ async def test_release_reuses_the_appid_seen_on_inbound(base_db):
 
     url, payload = client.calls[0]
     assert "kefustate/change" in url
-    released = _outbound_xml(key, payload["encrypt"])
+    released = _outbound_xml(key, payload["encrypt"], app_id="platform-app")
     assert released.findtext("appid") == "wx-official"
     assert released.findtext("kefustate") == "complete"
     await connection.stop()
@@ -364,9 +425,13 @@ async def test_release_returns_recent_users_to_the_platform_bot(base_db):
     key = db.get_bot_channel_extra_secret(channel["id"])
     client = FakeClient()
     connection = WeChatConnection(
-        _cfg(key, channel_id=channel["id"]), lambda _m: None, client=client
+        _cfg(key, channel_id=channel["id"]), _noop, client=client
     )
     await connection.start()
+    # 释放只认得「本进程见过 appid」的用户：先来一条该用户的消息。
+    await connection.accept({"encrypted": _encrypted(key, _inbound_xml(userid="o-gone"))})
+    await _drain(connection)
+    client.calls.clear()
 
     await connection.release()
 

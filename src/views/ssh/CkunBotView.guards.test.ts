@@ -57,7 +57,7 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).toContain("@click=\"store.selectChannel('wechat')\"")
     expect(view).toContain('store.remoteConversations')
     expect(view).toContain('store.remoteActiveId')
-    expect(view).toContain('peerTag(c.external_id)')
+    expect(view).toContain('v-for="g in remoteGroups"')
     expect(view).toContain('来自 {{ store.remoteChannelLabel }}')
     expect(view).toContain('仅供查看，回复请在{{ store.remoteChannelLabel }}里进行')
     // 没有选中会话时只能出空态/错误态：两个空态分支必须排在共用列表分支之前
@@ -70,7 +70,7 @@ describe('cKunBot 页面注册与关键交互', () => {
 
   it('远程会话可直接删除：与本地会话同一口径，不弹确认', () => {
     const view = read('src/components/bot/CkunBotView.vue')
-    const start = view.indexOf('v-for="c in store.remoteConversations"')
+    const start = view.indexOf('v-for="c in g.items"')
     const end = view.indexOf('v-if="store.remoteError"')
     expect(start).toBeGreaterThan(-1)
     expect(end).toBeGreaterThan(start)
@@ -217,16 +217,18 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).toContain('personaName(remoteActivePersona.value)')
   })
 
-  it('QQ 会话显示覆盖：优先 display_name/display_avatar，空则回落默认', () => {
+  it('远端会话显示覆盖：QQ 与微信同一入口，优先 display_name/display_avatar', () => {
     const view = read('src/components/bot/CkunBotView.vue')
     expect(view).toContain('c.display_name || c.title')
     expect(view).toContain('c.display_avatar')
-    expect(view).toContain('updateQqDisplay')
+    expect(view).toContain('updateConversationDisplay')
     expect(view).toContain('自定义显示')
-    // 入口在 QQ 会话行的 ⋯ 上（本地行不吃这个覆盖），弹窗绑点进来的那一行而不是活动会话
-    expect(view).toMatch(/class="icon-button conv-menu"[\s\S]{0,160}?openQqDisplay\(c\)/)
-    expect(view).toContain('<BaseModal v-if="qqDisplayTarget" title="自定义显示"')
-    expect(view).toContain('store.updateQqDisplay(conversation.id')
+    // 入口在远端会话行的 ⋯ 上；渠道不设门槛，本地行没这个按钮
+    const menu = view.match(/class="icon-button conv-menu"([\s\S]{0,200}?)openDisplay\(c\)/)?.[1] || ''
+    expect(menu, '找不到 ⋯ 入口').not.toBe('')
+    expect(menu).not.toContain('store.channel')
+    expect(view).toContain('<BaseModal v-if="displayTarget" title="自定义显示"')
+    expect(view).toContain('store.updateConversationDisplay(conversation.id')
     // 标题栏下的展开面板退役：本项目偏好居中弹窗，不做抽屉式交互
     expect(view).not.toContain('qq-display-editor')
     expect(view).not.toContain('qq-display-toggle')
@@ -238,6 +240,7 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).not.toMatch(/\.conv-menu \{[^}]*opacity/)
     const store = read('src/stores/bot.ts')
     expect(store).toContain('updateConversationDisplay')
+    expect(store).not.toContain('updateQqDisplay')
   })
 
   it('在场感节奏由状态层给：hesitate/relief/eager 三态，前端只认状态不猜', () => {
@@ -359,12 +362,13 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).toMatch(/\.bot-message\.user \.msg-body \{ align-items: flex-end; \}/)
   })
 
-  it('QQ 会话行收成一行：名字 + 群标，代号与时间进悬浮提示', () => {
+  it('远端会话行收成一行，名字居左，代号与时间进悬浮提示', () => {
     const view = read('src/components/bot/CkunBotView.vue')
-    const row = view.match(/<button class="conversation-main qq-single"[\s\S]*?<\/button>/)?.[0] || ''
+    const row = view.match(/<button class="conversation-main conv-single"[\s\S]*?<\/button>/)?.[0] || ''
     expect(row).toContain(':title="remoteRowHint(c)"')
     expect(row).toContain('c.display_name || c.title')
-    expect(row).toContain('peerTag(c.external_id)')
+    // 行内不再挂「群」小标签：群/私聊改由列表分组表达
+    expect(row).not.toContain('conv-tag')
     // 第二段说明文字退役：250px 窄栏里必然折行，行高跟着文案长度漂；
     // 应答人格名右侧标题栏已经写了，代号只有排查价值，都挪进 title。
     expect(row).not.toContain('<small>')
@@ -372,11 +376,29 @@ describe('cKunBot 页面注册与关键交互', () => {
     const hint = view.match(/function remoteRowHint[\s\S]*?\n}/)?.[0] || ''
     expect(hint).toContain('peerLabel(conversation.external_id)')
     expect(hint).toContain('formatLocalDateTime(conversation.updated_at)')
+    // 名字居左：<button> 默认 text-align:center，窄栏名字被居中过
+    expect(view).toMatch(/\.conversation-main \{[^}]*text-align: left/)
+  })
+
+  it('远端列表按 external_id 分群聊/私聊：只有一组时不标标题', () => {
+    const view = read('src/components/bot/CkunBotView.vue')
+    const groups = view.match(/const REMOTE_GROUPS = \[[\s\S]*?\n\]/)?.[0] || ''
+    expect(groups).toContain("label: '群聊'")
+    expect(groups).toContain("label: '私聊'")
+    const computed = view.match(/const remoteGroups = computed\(\(\)[\s\S]*?\n\)/)?.[0] || ''
+    expect(computed).toContain("startsWith('group:')")
+    expect(computed).toContain('filter(g => g.items.length)')
+    expect(view).toContain('v-if="remoteGroups.length > 1" class="conv-group-label"')
+    expect(view).toContain('{{ g.label }}')
+    expect(view).toMatch(/\.conv-group-label \{[^}]*font-size/)
+    // 分组后行内旧标签与纯函数一并退役
+    expect(view).not.toContain('peerTag')
+    expect(read('src/utils/bot-chat-decor.ts')).not.toContain('export function peerTag')
   })
 
   it('自定义显示弹窗：显示名并进头像那一栏，重置下沉到底栏', () => {
     const view = read('src/components/bot/CkunBotView.vue')
-    const modal = view.match(/<BaseModal v-if="qqDisplayTarget"[\s\S]*?<\/BaseModal>/)?.[0] || ''
+    const modal = view.match(/<BaseModal v-if="displayTarget"[\s\S]*?<\/BaseModal>/)?.[0] || ''
     // 字段由 #fields 插槽交给共享选择器排版，弹窗自己不再套一层 div
     expect(modal).toContain('<template #fields>')
     expect(modal).toContain(':clearable="false"')
@@ -384,6 +406,6 @@ describe('cKunBot 页面注册与关键交互', () => {
     // 恢复默认 = 名称与头像一起置空，所以选择器自带的「清除」在这个弹窗里多余
     const actions = modal.match(/<template #actions>([\s\S]*?)<\/template>/)?.[0] || ''
     expect(actions.indexOf('恢复默认')).toBeLessThan(actions.indexOf('取消'))
-    expect(view).toMatch(/\.qq-display-reset \{[^}]*margin-right: auto/)
+    expect(view).toMatch(/\.display-reset \{[^}]*margin-right: auto/)
   })
 })

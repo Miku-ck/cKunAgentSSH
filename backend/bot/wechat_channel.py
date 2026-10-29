@@ -127,6 +127,15 @@ def build_kefustate_xml(*, appid: str, openid: str, state: str) -> str:
     )
 
 
+def build_kefustate_get_xml(*, appid: str, openid: str) -> str:
+    return (
+        "<xml>"
+        f"<appid>{_cdata(appid)}</appid>"
+        f"<openid>{_cdata(openid)}</openid>"
+        "</xml>"
+    )
+
+
 def inbound_event_id(userid: str, createtime: str, msg: str) -> str:
     """平台重投同一条消息时幂等；同一个人同一秒发两条相同内容会合并为一次回复。"""
     return hashlib.sha1(f"{userid}|{createtime}|{msg}".encode()).hexdigest()

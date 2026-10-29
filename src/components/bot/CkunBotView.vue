@@ -53,22 +53,24 @@
         <template v-else>
           <div class="history-label">来自 {{ store.remoteChannelLabel }}</div>
           <div class="conversation-list">
-            <div v-for="c in store.remoteConversations" :key="c.id" class="conversation" :class="{ active: c.id === store.remoteActiveId }">
-              <button class="conversation-main qq-single" :title="remoteRowHint(c)" @click="selectRemote(c.id)">
-                <i class="conv-peer-avatar"><PersonaAvatar :avatar="c.display_avatar" /></i>
-                <span class="qq-title-text">{{ c.display_name || c.title }}</span>
-                <i v-if="peerTag(c.external_id)" class="conv-tag">{{ peerTag(c.external_id) }}</i>
-              </button>
-              <button
-                v-if="store.channel === 'qq'"
-                type="button"
-                class="icon-button conv-menu"
-                title="自定义显示"
-                aria-label="自定义该会话的显示名与头像"
-                @click="openQqDisplay(c)"
-              >⋯</button>
-              <button class="icon-button" title="删除会话" aria-label="删除会话" @click="removeRemote(c.id)">×</button>
-            </div>
+            <!-- 群聊/私聊分组：只有一组时不标（标了等于没分），组内仍是最后消息倒序。 -->
+            <template v-for="g in remoteGroups" :key="g.label">
+              <div v-if="remoteGroups.length > 1" class="conv-group-label">{{ g.label }}</div>
+              <div v-for="c in g.items" :key="c.id" class="conversation" :class="{ active: c.id === store.remoteActiveId }">
+                <button class="conversation-main conv-single" :title="remoteRowHint(c)" @click="selectRemote(c.id)">
+                  <i class="conv-peer-avatar"><PersonaAvatar :avatar="c.display_avatar" /></i>
+                  <span class="conv-title-text">{{ c.display_name || c.title }}</span>
+                </button>
+                <button
+                  type="button"
+                  class="icon-button conv-menu"
+                  title="自定义显示"
+                  aria-label="自定义该会话的显示名与头像"
+                  @click="openDisplay(c)"
+                >⋯</button>
+                <button class="icon-button" title="删除会话" aria-label="删除会话" @click="removeRemote(c.id)">×</button>
+              </div>
+            </template>
             <p v-if="store.remoteError" class="sidebar-error">{{ store.remoteError }}</p>
             <p v-else-if="!store.remoteConversations.length" class="sidebar-empty">{{ remoteEmptyHint }}</p>
           </div>
@@ -212,22 +214,22 @@
 
     <ConnectionPage v-else :personas="store.personas" />
 
-    <!-- QQ 会话显示覆盖（Phase 4 §4.4）：只改本地看到的名字/头像，真实群资料不采集不改写。
+    <!-- 远端（QQ / 微信）会话显示覆盖：只改本地看到的名字/头像，真实群资料不采集不改写。
          弹窗绑点进来的那一行，不是当前活动会话。 -->
-    <BaseModal v-if="qqDisplayTarget" title="自定义显示" @close="qqDisplayTarget = null">
-      <AvatarPicker v-model="qqDisplayAvatar" :clearable="false">
+    <BaseModal v-if="displayTarget" title="自定义显示" @close="displayTarget = null">
+      <AvatarPicker v-model="displayAvatar" :clearable="false">
         <template #fields>
-          <label class="qq-field">
+          <label class="display-field">
             <span>会话显示名</span>
-            <input v-model.trim="qqDisplayName" maxlength="50" :placeholder="qqDisplayTarget.title" />
+            <input v-model.trim="displayName" maxlength="50" :placeholder="displayTarget.title" />
           </label>
         </template>
       </AvatarPicker>
-      <p v-if="qqDisplayError" class="form-error">{{ qqDisplayError }}</p>
+      <p v-if="displayError" class="form-error">{{ displayError }}</p>
       <template #actions>
-        <button type="button" class="btn btn-ghost qq-display-reset" @click="resetQqDisplay">恢复默认</button>
-        <button type="button" class="btn" @click="qqDisplayTarget = null">取消</button>
-        <button type="button" class="btn btn-primary" :disabled="qqDisplaySaving" @click="saveQqDisplay">{{ qqDisplaySaving ? '保存中…' : '保存' }}</button>
+        <button type="button" class="btn btn-ghost display-reset" @click="resetDisplay">恢复默认</button>
+        <button type="button" class="btn" @click="displayTarget = null">取消</button>
+        <button type="button" class="btn btn-primary" :disabled="displaySaving" @click="saveDisplay">{{ displaySaving ? '保存中…' : '保存' }}</button>
       </template>
     </BaseModal>
 
@@ -242,7 +244,7 @@ import PersonaEditor from './PersonaEditor.vue'
 import ConnectionPage from './ConnectionPage.vue'
 import BaseModal from '@/components/common/BaseModal.vue'
 import { formatLocalDateTime } from '@/utils/datetime'
-import { bubbleDeliveryPlan, decorateMessages, expandBubbles, peerLabel, peerTag, personaName, splitBubbles } from '@/utils/bot-chat-decor'
+import { bubbleDeliveryPlan, decorateMessages, expandBubbles, peerLabel, personaName, splitBubbles } from '@/utils/bot-chat-decor'
 import { shouldFollowScroll } from '@/utils/scroll-follow'
 import AvatarPicker from './AvatarPicker.vue'
 import ChatImageLightbox from './ChatImageLightbox.vue'
@@ -374,39 +376,53 @@ const remoteEmptyHint = computed(() => (store.channel === 'wechat'
   ? '还没有微信消息；让微信用户给机器人发一条试试。'
   : '还没有 QQ 消息；在 QQ 里 @ 一下机器人试试。'))
 
-// ── QQ 会话自定义显示（Phase 4 §4.4）──
+// ── 远端会话自定义显示（QQ / 微信）──
 // 弹窗绑「点进来的那一行」而不是当前活动会话：列表每 5 秒轮询刷新，
 // 绑活动会话就可能把 A 会话的草稿写进 B。
-const qqDisplayTarget = ref<BotConversation | null>(null)
-const qqDisplayName = ref('')
-const qqDisplayAvatar = ref('')
-const qqDisplaySaving = ref(false)
-const qqDisplayError = ref('')
+const displayTarget = ref<BotConversation | null>(null)
+const displayName = ref('')
+const displayAvatar = ref('')
+const displaySaving = ref(false)
+const displayError = ref('')
 
 // 打开时以该行当前值打底；空串 = 显式清除回落默认。
-function openQqDisplay(conversation: BotConversation) {
-  qqDisplayTarget.value = conversation
-  qqDisplayName.value = conversation.display_name || ''
-  qqDisplayAvatar.value = conversation.display_avatar || ''
-  qqDisplayError.value = ''
+function openDisplay(conversation: BotConversation) {
+  displayTarget.value = conversation
+  displayName.value = conversation.display_name || ''
+  displayAvatar.value = conversation.display_avatar || ''
+  displayError.value = ''
 }
 
-async function saveQqDisplay() {
-  const conversation = qqDisplayTarget.value
+async function saveDisplay() {
+  const conversation = displayTarget.value
   if (!conversation) return
-  qqDisplaySaving.value = true
-  qqDisplayError.value = ''
+  displaySaving.value = true
+  displayError.value = ''
   try {
-    await store.updateQqDisplay(conversation.id, { display_name: qqDisplayName.value, display_avatar: qqDisplayAvatar.value })
-    qqDisplayTarget.value = null
-  } catch (e) { qqDisplayError.value = toFriendlyMessage(e, '保存失败') }
-  finally { qqDisplaySaving.value = false }
+    await store.updateConversationDisplay(conversation.id, { display_name: displayName.value, display_avatar: displayAvatar.value })
+    displayTarget.value = null
+  } catch (e) { displayError.value = toFriendlyMessage(e, '保存失败') }
+  finally { displaySaving.value = false }
 }
 
-function resetQqDisplay() {
-  qqDisplayName.value = ''
-  qqDisplayAvatar.value = ''
+function resetDisplay() {
+  displayName.value = ''
+  displayAvatar.value = ''
 }
+
+// 群聊/私聊分组在视图侧算：后端只给 external_id，归类口径与 peerLabel 同源。
+const REMOTE_GROUPS = [
+  { label: '群聊', isGroup: true },
+  { label: '私聊', isGroup: false },
+] as const
+const remoteGroups = computed(() =>
+  REMOTE_GROUPS
+    .map(g => ({
+      label: g.label,
+      items: store.remoteConversations.filter(c => Boolean(c.external_id?.startsWith('group:')) === g.isGroup),
+    }))
+    .filter(g => g.items.length),
+)
 // 关系是「人格 × 用户」维度：QQ 会话也归属某人格，取其关系快照补上徽标。
 const remoteActiveRelation = computed(() => {
   const pid = remoteActivePersona.value?.id
@@ -586,13 +602,14 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 .conversation { display: flex; align-items: center; border-radius: var(--radius-xl); transition: background var(--transition-fast), box-shadow var(--transition-fast); }
 .conversation:hover { background: var(--bg-hover); }
 .conversation.active { background: var(--bg-elevated); box-shadow: var(--shadow-sm); }
-.conversation-main { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; border: 0; background: transparent; color: var(--text-primary); padding: 9px var(--spacing-12); cursor: pointer; }
+.conversation-main { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; border: 0; background: transparent; color: var(--text-primary); padding: 9px var(--spacing-12); cursor: pointer; text-align: left; }
 .conversation-main span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .conversation-main small { color: var(--text-tertiary); font-size: 0.7692rem; }
-.qq-title-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* QQ 行收成一行：名字吃剩余宽度，群聊才贴一枚「群」标（私聊是默认，标了是噪声）。
-   代号与最后消息时间不进正文 —— 250px 窄栏里第二段必然折行，行高忽高忽低，挪进 title。 */
-.conversation-main.qq-single { flex-direction: row; align-items: center; gap: var(--spacing-6); }
-.conv-tag { flex: 0 0 auto; padding: 0 var(--spacing-4); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); color: var(--accent-text); font-size: 0.6923rem; line-height: 1.6; }
+.conv-title-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 群聊/私聊分组标题：只在两组都有时才出现，轻到不抢会话名。 */
+.conv-group-label { padding: var(--spacing-6) var(--spacing-6) var(--spacing-2); color: var(--text-tertiary); font-size: 0.7692rem; }
+/* 远端行收成一行：名字吃剩余宽度。代号与最后消息时间不进正文 ——
+   250px 窄栏里第二段必然折行，行高忽高忽低，挪进 title。 */
+.conversation-main.conv-single { flex-direction: row; align-items: center; gap: var(--spacing-6); }
 /* 侧栏会话的对方头像：只显示自定义上传图，没设就留空 —— 圆裁、不暴露真实资料、不自造图案。 */
 .conv-peer-avatar { flex: 0 0 auto; width: 26px; height: 26px; border-radius: 50%; overflow: hidden; }
 .sidebar-empty, .sidebar-error { margin: var(--spacing-4) 0 0; padding: 0 var(--spacing-6); color: var(--text-tertiary); font-size: 0.8462rem; line-height: 1.6; }
@@ -631,12 +648,12 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
    本地与 QQ 记录同形。头像侧由 .msg-avatar 的 order 决定（user 通用规则给 order:2 → 头像在气泡右）。 */
 /* 弹窗内容：BaseModal 的 body 已给 padding 与纵向间距，这里只管控件自身。
    显示名走 AvatarPicker 的 #fields 插槽，与头像同一栏，不再另起一行。 */
-.qq-field { display: flex; flex-direction: column; gap: 7px; color: var(--text-secondary); font-size: 0.9231rem; }
-.qq-field input { border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-base); color: var(--text-primary); padding: 9px var(--spacing-10); font: inherit; font-size: 0.9231rem; }
-.qq-field input:focus { border-color: var(--accent-primary); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 16%, transparent); }
+.display-field { display: flex; flex-direction: column; gap: 7px; color: var(--text-secondary); font-size: 0.9231rem; }
+.display-field input { border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-base); color: var(--text-primary); padding: 9px var(--spacing-10); font: inherit; font-size: 0.9231rem; }
+.display-field input:focus { border-color: var(--accent-primary); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 16%, transparent); }
 .form-error { color: var(--danger-text); font-size: 0.8462rem; }
 /* 重置是整表单级的动作，和取消/保存同一层；margin-right:auto 把它推到左端 */
-.qq-display-reset { margin-right: auto; }
+.display-reset { margin-right: auto; }
 /* 行右侧的 ⋯ 默认藏起来：hover 淡入 / 触屏常显的行为由 .icon-button 统一提供
   （该元素同时挂 icon-button conv-menu 两个类），这里不再重复一份。 */
 .msg-body { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: var(--spacing-2); }

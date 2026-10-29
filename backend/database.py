@@ -3209,7 +3209,7 @@ def update_bot_conversation_display(
     display_name: Optional[str] = None,
     display_avatar: Optional[str] = None,
 ) -> Optional[dict]:
-    """QQ 会话显示层覆盖。None = 不改，空串 = 清除回落默认。
+    """远端（QQ / 微信）会话显示层覆盖。None = 不改，空串 = 清除回落默认。
 
     刻意不动 updated_at：改显示名不该把一条沉睡会话顶到列表最前。
     """

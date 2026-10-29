@@ -7,7 +7,6 @@ import {
   expandBubbles,
   peerLabel,
   peerSeed,
-  peerTag,
   personaName,
   splitBubbles,
 } from './bot-chat-decor'
@@ -26,7 +25,6 @@ describe('会话对方标识 peerSeed / peerLabel', () => {
   it('微信会话用 wx: 前缀，同样只给尾号代号', () => {
     expect(peerSeed('wx:oXxxxopenid9c3e')).toBe('oXxxxopenid9c3e')
     expect(peerLabel('wx:oXxxxopenid9c3e')).toBe('微信 · 9C3E')
-    expect(peerTag('wx:oXxxxopenid9c3e')).toBe('')
   })
 
   it('本地会话或脏值不冒充，回落空串与 QQ', () => {
@@ -35,13 +33,6 @@ describe('会话对方标识 peerSeed / peerLabel', () => {
     expect(peerSeed('weird-no-colon')).toBe('')
     expect(peerLabel(null)).toBe('QQ')
     expect(peerLabel('weird-no-colon')).toBe('QQ')
-  })
-
-  it('列表行只给群聊压一个「群」标：私聊是默认，标出来反而添噪', () => {
-    expect(peerTag('group:Gxxxopenida3f1:ctx')).toBe('群')
-    expect(peerTag('c2c:Uxxxopenid7b22:ctx')).toBe('')
-    expect(peerTag(null)).toBe('')
-    expect(peerTag('weird-no-colon')).toBe('')
   })
 })
 
