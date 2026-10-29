@@ -196,6 +196,7 @@ class LogCleanupTool(BaseTool):
             },
         },
         "required": ["root"],
+        "additionalProperties": False,
     }
     meta = _CLEANUP_META
 

@@ -185,7 +185,13 @@ def test_seed_passes_api_key_to_probe(monkeypatch, tmp_path):
 
     asyncio.run(db.seed_models_async(path))
     try:
-        assert seen == [("http://a.example/v1", "sk-real"), ("http://b.example/v1", "sk-real")]
+        # 两条探测已改为并发（asyncio.gather + to_thread）：谁先 append 由线程
+        # 调度决定，只能比集合；len 断言防“同一个 endpoint 被探两次”。
+        assert len(seen) == 2
+        assert set(seen) == {
+            ("http://a.example/v1", "sk-real"),
+            ("http://b.example/v1", "sk-real"),
+        }
     finally:
         db._close_all_connections()
 

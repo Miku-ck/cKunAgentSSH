@@ -22,15 +22,18 @@ export const useBotStore = defineStore('bot', () => {
   const lastStreamedId = ref('')
   const error = ref('')
   const lastFailedText = ref('')
-  const channel = ref<'local' | 'qq'>('local')
-  const qqConversations = ref<BotConversation[]>([])
-  const qqMessages = ref<BotMessage[]>([])
-  const qqActiveId = ref('')
-  const qqError = ref('')
+  const channel = ref<'local' | 'qq' | 'wechat'>('local')
+  /** 远程渠道（QQ / 微信）的只读列表：两边同一条读取路径，只有渠道名不同。 */
+  const remoteConversations = ref<BotConversation[]>([])
+  const remoteMessages = ref<BotMessage[]>([])
+  const remoteActiveId = ref('')
+  const remoteError = ref('')
   /** 「你的头像」（Phase 4）：Bot 管理面板设置，本地会话用户气泡使用；QQ 里你不发言不吃它。 */
   const userAvatar = ref('')
   let abortController: AbortController | null = null
-  let qqRefreshing = false
+  let remoteRefreshing = false
+  /** 远程列表请求序号：删除会让在途的轮询结果作废，否则刚删的行会被旧快照写回来。 */
+  let remoteQuerySeq = 0
 
   const activePersona = computed(() => personas.value.find(p => p.id === activePersonaId.value) || null)
   // 关系状态是「人格 × 用户」维度的，不随会话变化：切换会话不该让熟悉度跳变。
@@ -38,57 +41,84 @@ export const useBotStore = defineStore('bot', () => {
   const activeRelation = computed(() => relations.value[activePersonaId.value] || null)
   const filteredConversations = computed(() => conversations.value.filter(c => c.persona_id === activePersonaId.value))
   const activeConversation = computed(() => conversations.value.find(c => c.id === activeConversationId.value) || null)
-  const isQq = computed(() => channel.value === 'qq')
-  const qqActiveConversation = computed(() => qqConversations.value.find(c => c.id === qqActiveId.value) || null)
+  const isRemote = computed(() => channel.value !== 'local')
+  /** 只读侧的渠道名：空态、错误提示、标题栏都按它说话，不再写死 QQ。 */
+  const remoteChannelLabel = computed(() => (channel.value === 'wechat' ? '微信' : 'QQ'))
+  const remoteActiveConversation = computed(() => remoteConversations.value.find(c => c.id === remoteActiveId.value) || null)
 
-  function selectChannel(next: 'local' | 'qq') {
+  function selectChannel(next: 'local' | 'qq' | 'wechat') {
     if (next === channel.value) return
     stopGenerating()
     channel.value = next
+    // 切渠道先清空：上一个渠道的会话行不能在新 tab 里闪一下
+    remoteConversations.value = []
+    remoteMessages.value = []
+    remoteActiveId.value = ''
+    remoteError.value = ''
   }
 
-  async function selectQqConversation(id: string) {
-    qqActiveId.value = id
-    qqMessages.value = []
+  async function selectRemoteConversation(id: string) {
+    const provider = channel.value
+    remoteActiveId.value = id
+    remoteMessages.value = []
     try {
       const rows = await botApi.getMessages(id)
-      if (qqActiveId.value === id) qqMessages.value = rows
-      qqError.value = ''
+      if (remoteActiveId.value !== id || channel.value !== provider) return
+      remoteMessages.value = rows
+      remoteError.value = ''
     } catch (e) {
-      qqError.value = toFriendlyMessage(e, 'QQ 记录读取失败')
+      if (channel.value !== provider) return
+      remoteError.value = toFriendlyMessage(e, `${remoteChannelLabel.value}记录读取失败`)
     }
   }
 
-  async function refreshQq() {
-    if (qqRefreshing) return
-    qqRefreshing = true
+  async function refreshRemote() {
+    const provider = channel.value
+    if (provider === 'local' || remoteRefreshing) return
+    const label = remoteChannelLabel.value
+    remoteRefreshing = true
+    const seq = ++remoteQuerySeq
     try {
-      const rows = await botApi.listQqConversations()
-      qqConversations.value = rows
+      const rows = await botApi.listChannelConversations(provider)
+      // 请求在途时切了 tab / 删了行：这批行属于旧快照，不能写进当前列表
+      if (channel.value !== provider || seq !== remoteQuerySeq) return
+      remoteConversations.value = rows
       if (!rows.length) {
-        qqActiveId.value = ''
-        qqMessages.value = []
-        qqError.value = ''
+        remoteActiveId.value = ''
+        remoteMessages.value = []
+        remoteError.value = ''
         return
       }
-      if (!rows.some(c => c.id === qqActiveId.value)) qqActiveId.value = rows[0].id
-      const target = qqActiveId.value
+      if (!rows.some(c => c.id === remoteActiveId.value)) remoteActiveId.value = rows[0].id
+      const target = remoteActiveId.value
       const history = await botApi.getMessages(target)
-      if (qqActiveId.value === target) qqMessages.value = history
-      qqError.value = ''
+      if (remoteActiveId.value === target && channel.value === provider) remoteMessages.value = history
+      remoteError.value = ''
     } catch (e) {
-      qqError.value = toFriendlyMessage(e, 'QQ 记录读取失败')
+      if (channel.value === provider) remoteError.value = toFriendlyMessage(e, `${label}记录读取失败`)
     } finally {
-      qqRefreshing = false
+      remoteRefreshing = false
     }
+  }
+
+  /** 远程会话记录删除：与本地会话同一口径，删掉后自动落到下一条。 */
+  async function deleteRemoteConversation(id: string) {
+    await botApi.deleteConversation(id)
+    remoteQuerySeq++
+    remoteConversations.value = remoteConversations.value.filter(c => c.id !== id)
+    if (remoteActiveId.value !== id) return
+    const next = remoteConversations.value[0]?.id || ''
+    remoteActiveId.value = ''
+    remoteMessages.value = []
+    if (next) await selectRemoteConversation(next)
   }
 
   /** QQ 会话本地显示覆盖（Phase 4）：PATCH 成功后原位替换，列表不重拉——
    *  服务端保证 display 编辑不动 updated_at，重拉反而会把滚动位置弄丢。 */
   async function updateQqDisplay(id: string, payload: { display_name?: string; display_avatar?: string }) {
     const updated = await botApi.updateConversationDisplay(id, payload)
-    qqConversations.value = qqConversations.value.map((c) => (c.id === id ? updated : c))
-    qqError.value = ''
+    remoteConversations.value = remoteConversations.value.map((c) => (c.id === id ? updated : c))
+    remoteError.value = ''
   }
 
   /** 「你的头像」读取：失败回落空占位，不阻塞初始化。 */
@@ -224,10 +254,11 @@ export const useBotStore = defineStore('bot', () => {
     activePersona, activeConversation, filteredConversations,
     relations, activeRelation,
     streamText, streamReasoning, streaming, error, lastFailedText, pacing, lastStreamedId,
-    channel, isQq, qqConversations, qqMessages, qqActiveId, qqError, qqActiveConversation,
+    channel, isRemote, remoteChannelLabel,
+    remoteConversations, remoteMessages, remoteActiveId, remoteError, remoteActiveConversation,
     userAvatar,
     init, selectPersona, selectConversation, createConversation, deleteConversation,
-    sendMessage, stopGenerating, selectChannel, selectQqConversation, refreshQq,
-    updateQqDisplay, loadUserAvatar,
+    sendMessage, stopGenerating, selectChannel, selectRemoteConversation, refreshRemote,
+    deleteRemoteConversation, updateQqDisplay, loadUserAvatar,
   }
 })

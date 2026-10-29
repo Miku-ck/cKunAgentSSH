@@ -144,7 +144,6 @@ def load_policy_from_db() -> dict:
     运维注入的 CKUN_HTTP_RETRIES 实际上永远读不到，等于死代码。
     """
     global _policy, _loaded
-    _loaded = True
     timeout = _env_int("CKUN_HTTP_TIMEOUT", 0, TIMEOUT_MIN, TIMEOUT_MAX)
     retries = _env_int("CKUN_HTTP_RETRIES", 1, RETRY_MIN, RETRY_MAX)
     proxy = os.environ.get("CKUN_HTTP_PROXY", "").strip()
@@ -176,6 +175,10 @@ def load_policy_from_db() -> dict:
         logger.warning("非法的 http.proxy_url，按直连处理")
         proxy = ""
     _policy = {"proxy_url": proxy, "timeout_seconds": timeout, "retry_count": retries}
+    # _loaded 必须最后置位：启动期现在是多线程并发（lifespan 把配置回填与首启模型
+    # 探测同时丢进线程池），若先置 _loaded 再算 _policy，另一个线程的 get_policy()
+    # 会读到「已加载」+ 默认直连策略，于是探测绕过用户设的代理。
+    _loaded = True
     return dict(_policy)
 
 

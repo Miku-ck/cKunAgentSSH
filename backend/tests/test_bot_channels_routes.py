@@ -21,7 +21,12 @@ class FakeRuntime:
         self.fail_with = None
 
     def supports(self, provider_name):
-        return provider_name == "qq"
+        return provider_name in ("qq", "wechat")
+
+    def credential_labels(self, provider_name):
+        if provider_name == "wechat":
+            return {"app_secret": "Token", "extra_secret": "EncodingAESKey"}
+        return {"app_secret": "AppSecret"}
 
     def status(self, channel_id):
         return self.statuses.get(channel_id, dict(OFFLINE))
@@ -37,6 +42,9 @@ class FakeRuntime:
         self.stopped.append(channel_id)
         self.statuses.pop(channel_id, None)
         return dict(OFFLINE)
+
+    async def disconnect(self, channel_id):
+        return await self.stop(channel_id)
 
 
 @pytest.fixture
@@ -258,6 +266,61 @@ def test_missing_channel_is_404(client):
     assert client.post("/api/bot/channels/nope/connect").status_code == 404
     assert client.post("/api/bot/channels/nope/disconnect").status_code == 404
     assert client.delete("/api/bot/channels/nope").status_code == 404
+
+
+def test_wechat_channel_requires_and_masks_its_second_secret(client):
+    response = client.post(
+        "/api/bot/channels",
+        json={
+            "provider": "wechat",
+            "display_name": "微信A",
+            "persona_id": "persona-1",
+            "app_id": "wx-app",
+            "app_secret": "token",
+        },
+    )
+    assert response.status_code == 400
+    assert "EncodingAESKey" in response.json()["detail"]
+
+    channel = create(
+        client,
+        provider="wechat",
+        display_name="微信A",
+        app_id="wx-app",
+        app_secret="token",
+        extra_secret="aes-key",
+    )
+    assert channel["has_secret"] is True
+    assert channel["has_extra_secret"] is True
+    assert "token" not in json.dumps(channel, ensure_ascii=False)
+    assert "aes-key" not in json.dumps(channel, ensure_ascii=False)
+    assert db.get_bot_channel_secret(channel["id"]) == "token"
+    assert db.get_bot_channel_extra_secret(channel["id"]) == "aes-key"
+
+    # 空值 = 保留；非空 = 轮换
+    kept = client.put(
+        f"/api/bot/channels/{channel['id']}", json={"extra_secret": ""}
+    ).json()
+    assert kept["has_extra_secret"] is True
+    assert db.get_bot_channel_extra_secret(channel["id"]) == "aes-key"
+
+    client.put(f"/api/bot/channels/{channel['id']}", json={"extra_secret": "轮换后的"})
+    assert db.get_bot_channel_extra_secret(channel["id"]) == "轮换后的"
+
+
+def test_webhook_base_url_is_read_saved_and_validated(client):
+    assert client.get("/api/bot/webhook").json() == {"base_url": ""}
+
+    saved = client.put(
+        "/api/bot/webhook", json={"base_url": "https://bot.example.com/"}
+    )
+    assert saved.status_code == 200
+    assert saved.json() == {"base_url": "https://bot.example.com"}
+    assert client.get("/api/bot/webhook").json() == {"base_url": "https://bot.example.com"}
+
+    assert client.put("/api/bot/webhook", json={"base_url": "bot.example.com"}).status_code == 400
+
+    assert client.put("/api/bot/webhook", json={"base_url": ""}).json() == {"base_url": ""}
 
 
 def test_channel_count_is_capped(client):

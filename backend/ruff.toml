@@ -5,3 +5,7 @@
 # reins/__init__.py 刻意保持与原单文件 reins.py 一致的导入面（再导出给
 # `from agent.harness.reins import X` 使用），未在本文件引用属预期
 "agent/harness/reins/__init__.py" = ["F401"]
+# main.py 必须在任何 import 之前先取一次时钟基准（_MODULE_T0），否则启动汇总行
+# 里的 imports= 段无从自报；其余模块级导入因此落在赋值语句之后，import 块
+# 在静态分析眼里也就被切成了两截。
+"main.py" = ["E402", "I001"]

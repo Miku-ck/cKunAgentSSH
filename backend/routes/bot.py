@@ -291,7 +291,7 @@ def _conversation_payload(conversation: dict) -> dict:
 
 @router.get("/bot/conversations")
 def list_conversations(
-    channel: Optional[Literal["local", "qq"]] = None,
+    channel: Optional[Literal["local", "qq", "wechat"]] = None,
     persona_id: Optional[str] = None,
     limit: int = Query(100, ge=1, le=500),
 ):

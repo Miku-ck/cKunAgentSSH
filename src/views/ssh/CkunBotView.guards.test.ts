@@ -50,32 +50,48 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).not.toContain('updated_at.slice(')
   })
 
-  it('陪聊页按渠道切换，QQ 会话只读', () => {
+  it('陪聊页按渠道切换：本地、QQ、微信，远程会话只读', () => {
     const view = read('src/components/bot/CkunBotView.vue')
     expect(view).toContain('role="tablist" aria-label="会话渠道"')
     expect(view).toContain("@click=\"store.selectChannel('qq')\"")
-    expect(view).toContain('store.qqConversations')
-    expect(view).toContain('store.qqActiveId')
+    expect(view).toContain("@click=\"store.selectChannel('wechat')\"")
+    expect(view).toContain('store.remoteConversations')
+    expect(view).toContain('store.remoteActiveId')
     expect(view).toContain('peerTag(c.external_id)')
-    expect(view).toContain('来自 QQ · 仅供查看')
+    expect(view).toContain('来自 {{ store.remoteChannelLabel }}')
+    expect(view).toContain('仅供查看，回复请在{{ store.remoteChannelLabel }}里进行')
     // 没有选中会话时只能出空态/错误态：两个空态分支必须排在共用列表分支之前
-    expect(view).toContain('v-else-if="store.isQq && !store.qqActiveId"')
-    expect(view.indexOf('v-else-if="store.isQq && !store.qqActiveId"')).toBeLessThan(view.indexOf('v-for="d in messageList"'))
-    // QQ 态不能出现可输入的胶囊；本地态才挂 composer
-    expect(view).toMatch(/v-if="!store\.isQq && store\.activeConversationId" class="chat-composer"/)
+    expect(view).toContain('v-else-if="store.isRemote && !store.remoteActiveId"')
+    expect(view.indexOf('v-else-if="store.isRemote && !store.remoteActiveId"')).toBeLessThan(view.indexOf('v-for="d in messageList"'))
+    // 远程态不能出现可输入的胶囊；本地态才挂 composer
+    expect(view).toMatch(/v-if="!store\.isRemote && store\.activeConversationId" class="chat-composer"/)
     expect(view).not.toContain('QqRecords')
   })
 
-  it('QQ 渠道每 5 秒刷新，贴底才自动滚动', () => {
+  it('远程会话可直接删除：与本地会话同一口径，不弹确认', () => {
     const view = read('src/components/bot/CkunBotView.vue')
-    expect(view).toContain('store.refreshQq()')
+    const start = view.indexOf('v-for="c in store.remoteConversations"')
+    const end = view.indexOf('v-if="store.remoteError"')
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    const rows = view.slice(start, end)
+    expect(rows).toContain('@click="removeRemote(c.id)"')
+    expect(rows).toContain('title="删除会话"')
+    const fn = view.match(/async function removeRemote[\s\S]*?\n}/)?.[0] || ''
+    expect(fn).toContain('store.deleteRemoteConversation(id)')
+    expect(fn).not.toContain('confirm(')
+  })
+
+  it('QQ 与微信渠道每 5 秒刷新，贴底才自动滚动', () => {
+    const view = read('src/components/bot/CkunBotView.vue')
+    expect(view).toContain('store.refreshRemote()')
     // 贴底判定复用任务台的共享件（src/utils/scroll-follow.ts），不再手写差值
     expect(view).toContain('shouldFollowScroll(el.scrollTop, el.clientHeight, el.scrollHeight, 48)')
     // 四处滚动触发共用一份 scrollToBottom，裸的 scrollTop 赋值只允许在它里面出现一次
     expect(view.match(/function scrollToBottom\(\)/)?.length).toBe(1)
     expect((view.match(/scrollTop = \S+\.scrollHeight/g) || []).length).toBe(1)
-    expect(view).toMatch(/setInterval\(\(\) => \{ void refreshQqChat\(\) \}, 5000\)/)
-    expect(view).toContain('stopQqPolling')
+    expect(view).toMatch(/setInterval\(\(\) => \{ void refreshRemoteChat\(\) \}, 5000\)/)
+    expect(view).toContain('stopRemotePolling')
   })
 
   it('流式跟到底也要贴底判定：不许每个 token 抢滚动条', () => {
@@ -153,7 +169,7 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).toContain('store.streamReasoning && thinkingOn')
     // 开关取的是正在说话的那一侧：QQ 记录没有思考块，也不拿本地选中人格冒充
     const gate = view.match(/const thinkingOn = computed\([\s\S]*?\)\)/)?.[0] || ''
-    expect(gate).toContain('!store.isQq')
+    expect(gate).toContain('!store.isRemote')
     expect(gate).toContain('store.activePersona?.enable_thinking')
   })
 
@@ -198,7 +214,7 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(api).toContain('persona: { id: string; name: string; avatar: string }')
     expect(api).not.toContain('persona_snapshot')
     expect(view).not.toContain('persona_snapshot')
-    expect(view).toContain('personaName(qqActivePersona.value)')
+    expect(view).toContain('personaName(remoteActivePersona.value)')
   })
 
   it('QQ 会话显示覆盖：优先 display_name/display_avatar，空则回落默认', () => {
@@ -237,7 +253,7 @@ describe('cKunBot 页面注册与关键交互', () => {
     const view = read('src/components/bot/CkunBotView.vue')
     // 先展开再装饰：同轮的后续气泡走既有 cont 规则（隐头像、收间距），不新增样式
     expect(view).toContain('decorateMessages(expandBubbles(store.messages))')
-    expect(view).toContain('decorateMessages(expandBubbles(store.qqMessages))')
+    expect(view).toContain('decorateMessages(expandBubbles(store.remoteMessages))')
     expect(view).toContain(':content="d.item.bubble"')
     expect(view).toContain('{{ d.item.bubble }}')
     // 附属信息一轮只挂第一条：图片、思考折叠不随气泡重复
@@ -346,14 +362,14 @@ describe('cKunBot 页面注册与关键交互', () => {
   it('QQ 会话行收成一行：名字 + 群标，代号与时间进悬浮提示', () => {
     const view = read('src/components/bot/CkunBotView.vue')
     const row = view.match(/<button class="conversation-main qq-single"[\s\S]*?<\/button>/)?.[0] || ''
-    expect(row).toContain(':title="qqRowHint(c)"')
+    expect(row).toContain(':title="remoteRowHint(c)"')
     expect(row).toContain('c.display_name || c.title')
     expect(row).toContain('peerTag(c.external_id)')
     // 第二段说明文字退役：250px 窄栏里必然折行，行高跟着文案长度漂；
     // 应答人格名右侧标题栏已经写了，代号只有排查价值，都挪进 title。
     expect(row).not.toContain('<small>')
     expect(view).not.toContain('qqPersonaLabel')
-    const hint = view.match(/function qqRowHint[\s\S]*?\n}/)?.[0] || ''
+    const hint = view.match(/function remoteRowHint[\s\S]*?\n}/)?.[0] || ''
     expect(hint).toContain('peerLabel(conversation.external_id)')
     expect(hint).toContain('formatLocalDateTime(conversation.updated_at)')
   })

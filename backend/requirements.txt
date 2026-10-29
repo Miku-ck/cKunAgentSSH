@@ -5,5 +5,7 @@ openai>=1.30.0,<2.0
 httpx>=0.27.0,<1.0
 python-multipart>=0.0.9
 qq-botpy==1.2.1
+# 微信客服消息回调的报文加解密（AES-256-CBC）；缺了微信渠道连不上，QQ 不受影响
+cryptography>=42.0.0,<52.0
 
 # 可选依赖见 requirements-optional.txt

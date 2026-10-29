@@ -97,6 +97,7 @@ class RunbookSaveTool(BaseTool):
                                       "主机细节写进正文即可"},
         },
         "required": ["title", "content"],
+        "additionalProperties": False,
     }
     meta = ToolMeta(risk_level="safe", timeout=10.0)
 
@@ -174,6 +175,7 @@ class RunbookSearchTool(BaseTool):
                       "description": "返回条数上限（默认 5，最大 10）"},
         },
         "required": ["query"],
+        "additionalProperties": False,
     }
     meta = ToolMeta(risk_level="safe", idempotent=True, timeout=15.0)
 

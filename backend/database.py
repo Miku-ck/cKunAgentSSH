@@ -95,7 +95,7 @@ _CONN_IDLE_PROBE_SECONDS = 30.0
 # 核心表齐全就跳过那 360 行 DDL。迁移与一次性数据修复不在此短路段内（见 init_db）。
 # 铁律：改动下方 init_db 的 DDL 或 _migrate_db 的任何迁移，必须 _SCHEMA_VERSION += 1，
 # 否则老库永远不会执行新结构（backend/tests/test_startup_critical_path.py 有守卫）。
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 # 短路前提的核心表。版本号可能被外部工具清零、或迁移脚本自己写错，仅凭
 # user_version 就认定「结构已就绪」，会把缺表的库永久锁在坏状态 —— 再核一遍实表。
@@ -307,6 +307,8 @@ def init_db(db_path: str) -> None:
                 persona_id   TEXT NOT NULL REFERENCES bot_personas(id) ON DELETE RESTRICT,
                 app_id       TEXT NOT NULL DEFAULT '',
                 app_secret   TEXT NOT NULL DEFAULT '',
+                -- 第三个凭据（微信的 EncodingAESKey）；QQ 留空。同样是 DPAPI 信封。
+                extra_secret TEXT NOT NULL DEFAULT '',
                 enabled      TEXT NOT NULL DEFAULT '0',
                 created_at   TEXT NOT NULL DEFAULT (datetime('now'))
             );
@@ -939,6 +941,13 @@ def _migrate_bot_channels(conn: sqlite3.Connection) -> None:
     旧库把凭据散在 `app_settings` 的 `bot.qq.*` 键上，会话身份靠往 `external_id`
     尾部追加 `context_id` 来区分机器人。两者都由 `channel_id` 列取代。
     """
+    # 微信渠道的第三个凭据（EncodingAESKey）；旧库补列，QQ 行留空。
+    channel_cols = {row[1] for row in conn.execute("PRAGMA table_info(bot_channels)")}
+    if "extra_secret" not in channel_cols:
+        conn.execute(
+            "ALTER TABLE bot_channels ADD COLUMN extra_secret TEXT NOT NULL DEFAULT ''"
+        )
+
     conv_cols = {row[1] for row in conn.execute("PRAGMA table_info(bot_conversations)")}
     if "channel_id" not in conv_cols:
         conn.execute(
@@ -1386,34 +1395,38 @@ async def seed_models_async(db_path: str) -> None:
         # commit，两条种子撞上同名模型（models_config.id 即模型名）抛
         # IntegrityError 时，连接关闭回滚把先一条已成功的种子连坐抹掉。
         # 现在单条冲突只 warning 跳过，不牵连另一条。
-        model_id = await asyncio.to_thread(_probe_first_model, base_url, api_key)
-        if model_id:
+        #
+        # 两条探测彼此独立（不同 endpoint），并发跑：最坏 3s+3s 压到最坏 3s。
+        # return_exceptions=True 与上面「各自独立」同一取舍 —— 一条探测抛异常
+        # 不该连坐另一条；写入仍按主/思考顺序逐条落地，保持 rowid 次序可预期。
+        targets = [(base_url, False, True, 0, "默认")]
+        if thinking_url and thinking_url.rstrip("/") != base_url.rstrip("/"):
+            targets.append((thinking_url, True, False, 1, "思考"))
+        probed = await asyncio.gather(
+            *(asyncio.to_thread(_probe_first_model, url, api_key) for url, *_ in targets),
+            return_exceptions=True,
+        )
+        for (url, supports_thinking, is_default, sort_order, label), model_id in zip(
+            targets, probed
+        ):
+            if isinstance(model_id, BaseException):
+                logger.warning("种子%s模型探测失败（跳过，不影响另一条种子）: %s: %s",
+                               label, url, model_id)
+                continue
+            if not model_id:
+                continue
             try:
                 _insert_seed_model(
-                    conn, model_id=model_id, base_url=base_url, api_key=api_key,
-                    supports_thinking=False, is_default=True, sort_order=0, now=now,
+                    conn, model_id=model_id, base_url=url, api_key=api_key,
+                    supports_thinking=supports_thinking, is_default=is_default,
+                    sort_order=sort_order, now=now,
                 )
                 conn.commit()
-                logger.info("自动探测种子默认模型: %s @ %s", model_id, base_url)
+                logger.info("自动探测种子%s模型: %s @ %s", label, model_id, url)
             except sqlite3.Error as e:
                 conn.rollback()
-                logger.warning("种子默认模型写入失败（跳过，不影响另一条种子）: %s @ %s: %s",
-                               model_id, base_url, e)
-
-        if thinking_url and thinking_url.rstrip("/") != base_url.rstrip("/"):
-            t_model = await asyncio.to_thread(_probe_first_model, thinking_url, api_key)
-            if t_model:
-                try:
-                    _insert_seed_model(
-                        conn, model_id=t_model, base_url=thinking_url, api_key=api_key,
-                        supports_thinking=True, is_default=False, sort_order=1, now=now,
-                    )
-                    conn.commit()
-                    logger.info("自动探测种子思考模型: %s @ %s", t_model, thinking_url)
-                except sqlite3.Error as e:
-                    conn.rollback()
-                    logger.warning("种子思考模型写入失败（跳过，不影响另一条种子）: %s @ %s: %s",
-                                   t_model, thinking_url, e)
+                logger.warning("种子%s模型写入失败（跳过，不影响另一条种子）: %s @ %s: %s",
+                               label, model_id, url, e)
     finally:
         conn.close()
 
@@ -2651,6 +2664,7 @@ def delete_bot_persona(persona_id: str) -> bool:
 _BOT_CHANNEL_SELECT = (
     "SELECT id, provider, display_name, persona_id, app_id, "
     "CASE WHEN app_secret = '' THEN 0 ELSE 1 END AS has_secret, "
+    "CASE WHEN extra_secret = '' THEN 0 ELSE 1 END AS has_extra_secret, "
     "enabled, created_at, "
     "(SELECT COUNT(*) FROM bot_conversations c WHERE c.channel_id = bot_channels.id) "
     "AS conversation_count FROM bot_channels"
@@ -2660,20 +2674,37 @@ _BOT_CHANNEL_SELECT = (
 def _bot_channel_dict(row: sqlite3.Row) -> dict:
     data = dict(row)
     data["has_secret"] = bool(data["has_secret"])
+    data["has_extra_secret"] = bool(data["has_extra_secret"])
     data["enabled"] = data["enabled"] == "1"
     return data
 
 
 def create_bot_channel(
-    *, provider: str, display_name: str, persona_id: str, app_id: str, app_secret: str
+    *,
+    provider: str,
+    display_name: str,
+    persona_id: str,
+    app_id: str,
+    app_secret: str,
+    extra_secret: str = "",
 ) -> dict:
     channel_id = _new_id()
     conn = _get_conn()
     try:
         conn.execute(
             "INSERT INTO bot_channels (id, provider, display_name, persona_id, app_id, "
-            "app_secret, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, '0', ?)",
-            (channel_id, provider, display_name, persona_id, app_id, app_secret or "", _now()),
+            "app_secret, extra_secret, enabled, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, '0', ?)",
+            (
+                channel_id,
+                provider,
+                display_name,
+                persona_id,
+                app_id,
+                app_secret or "",
+                extra_secret or "",
+                _now(),
+            ),
         )
         conn.commit()
     finally:
@@ -2728,6 +2759,30 @@ def set_bot_channel_secret(channel_id: str, app_secret: str) -> None:
         conn.execute(
             "UPDATE bot_channels SET app_secret = ? WHERE id = ?",
             (app_secret or "", channel_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_bot_channel_extra_secret(channel_id: str) -> str:
+    """第三个凭据的明文（微信：EncodingAESKey）。只给运行时用，接口层看 has_extra_secret。"""
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT extra_secret FROM bot_channels WHERE id = ?", (channel_id,)
+        ).fetchone()
+        return unprotect_secret(row["extra_secret"]) if row else ""
+    finally:
+        conn.close()
+
+
+def set_bot_channel_extra_secret(channel_id: str, extra_secret: str) -> None:
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "UPDATE bot_channels SET extra_secret = ? WHERE id = ?",
+            (extra_secret or "", channel_id),
         )
         conn.commit()
     finally:

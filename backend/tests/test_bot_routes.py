@@ -442,6 +442,23 @@ def test_qq_conversation_display_override(client):
     assert row["display_name"] == "夜宵群" and row["display_avatar"] == "data:image/webp;base64,AAAA"
 
 
+def test_wechat_conversations_are_listable(client):
+    """微信会话与 QQ 一样可读：只放开真实存在的渠道，未知渠道仍被 422 挡回。"""
+    persona = create_persona(client)
+    conv = db.create_bot_conversation(
+        persona["id"], channel="wechat", external_id="wx:openid-1"
+    )
+    rows = client.get("/api/bot/conversations?channel=wechat").json()
+    assert [r["id"] for r in rows] == [conv["id"]]
+    assert rows[0]["channel"] == "wechat"
+    assert client.get("/api/bot/conversations?channel=wechatx").status_code == 422
+
+    # 显示覆盖仍只服务 QQ 记录页，微信会话不吃
+    assert client.patch(
+        f"/api/bot/conversations/{conv['id']}", json={"display_name": "x"}
+    ).status_code == 400
+
+
 def test_qq_display_update_does_not_bump_updated_at(client):
     persona = create_persona(client)
     qq_conv = db.create_bot_conversation(persona["id"], channel="qq", external_id="group:GG2")

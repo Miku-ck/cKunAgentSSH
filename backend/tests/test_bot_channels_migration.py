@@ -91,6 +91,17 @@ def test_migrated_channel_is_not_resurrected_after_deletion(base_db):
     assert db.list_bot_channels() == []
 
 
+def test_old_bot_channels_table_gains_the_extra_secret_column(base_db):
+    conn = db._get_conn()
+    conn.execute("ALTER TABLE bot_channels DROP COLUMN extra_secret")
+    conn.commit()
+    assert "extra_secret" not in {row[1] for row in conn.execute("PRAGMA table_info(bot_channels)")}
+
+    db._migrate_bot_channels(conn)
+
+    assert "extra_secret" in {row[1] for row in conn.execute("PRAGMA table_info(bot_channels)")}
+
+
 def test_fresh_database_without_legacy_config_creates_nothing(base_db):
     db._migrate_db(db._get_conn())
     assert db.list_bot_channels() == []

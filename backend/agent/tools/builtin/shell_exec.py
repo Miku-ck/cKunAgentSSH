@@ -41,6 +41,7 @@ class ShellExecTool(BaseTool):
             "timeout": {"type": "integer", "description": "超时秒数（1-120，默认 30）"},
         },
         "required": ["command"],
+        "additionalProperties": False,
     }
     meta = ToolMeta(risk_level="moderate", reversible=False, timeout=30.0)
 

@@ -96,6 +96,7 @@ class UndoRestoreTool(BaseTool):
             },
         },
         "required": ["run_id", "seq"],
+        "additionalProperties": False,
     }
     # dangerous → 每次授权弹卡（gate.py:995-1000：不进 session 级缓存）；
     # 非幂等 → 重试禁用（还原虽幂等成立，但失败重放会放大远端扰动，取安全方向）

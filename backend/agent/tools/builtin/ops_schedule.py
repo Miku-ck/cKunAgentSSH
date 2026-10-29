@@ -265,6 +265,7 @@ class ScheduleOpTool(BaseTool):
             },
         },
         "required": ["action"],
+        "additionalProperties": False,
     }
     meta = meta
 

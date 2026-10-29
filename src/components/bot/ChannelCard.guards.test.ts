@@ -17,11 +17,32 @@ describe('渠道卡配置', () => {
   })
 
   it('Secret 不回显：留空即不修改，明文只在提交时带上', () => {
-    expect(src).toContain("form.app_secret ? { app_secret: form.app_secret } : {}")
+    expect(src).toContain('if (form.app_secret) payload.app_secret = form.app_secret')
     expect(src).toContain("form.app_secret = ''")
     expect(src).toContain("已保存；留空表示不修改")
     expect(src).not.toContain('app_secret: channel.app_secret')
     expect(src).toContain('AppSecret 只写入本地加密存储，配置接口不会回显。')
+  })
+
+  it('微信要三项凭据，并给出可复制的回调地址', () => {
+    for (const needle of ['APPID', 'Token', 'EncodingAESKey', '回调地址', '公网地址']) {
+      expect(src).toContain(needle)
+    }
+    expect(src).toContain('`/bot/wechat/${props.channel.id}`')
+    expect(src).toContain('navigator.clipboard.writeText')
+    expect(src).toContain('botApi.setWebhook')
+  })
+
+  it('没有公网地址时不给复制相对路径：微信只收完整地址', () => {
+    expect(src).toContain('const canCopyCallback = computed(() => !!props.channel && !!baseUrl.value)')
+    expect(src).toContain(':disabled="!canCopyCallback"')
+    expect(src).toContain('请输入正确的接入地址')
+  })
+
+  it('provider 只在新建时可选，已建渠道不可改', () => {
+    expect(src).toContain('v-if="!channel"')
+    expect(src).toContain('<option value="wechat">微信</option>')
+    expect(src).toContain("props.channel?.provider ?? form.provider")
   })
 
   it('密钥存在与否以服务端为准，不拿刚输入的内容冒充', () => {

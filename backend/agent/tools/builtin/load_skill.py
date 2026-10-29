@@ -33,6 +33,7 @@ class LoadSkillTool(BaseTool):
             },
         },
         "required": ["skill_slug"],
+        "additionalProperties": False,
     }
     meta = ToolMeta(
         risk_level="safe",

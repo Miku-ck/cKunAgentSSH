@@ -91,7 +91,7 @@ export interface BotConversation {
   persona_id: string | null
   /** 会话归属人格的展示三字段：人格被删后仍是当时的名字，头像为空则回退首字母。 */
   persona: { id: string; name: string; avatar: string }
-  channel: 'local' | 'qq'
+  channel: 'local' | 'qq' | 'wechat'
   external_id: string | null
   /** 最后一条消息的内容，服务端顺带算出，侧栏可直接用作摘要。 */
   preview: string | null
@@ -121,15 +121,19 @@ export interface BotChannelStatus {
   detail: string
 }
 
+export type BotProvider = 'qq' | 'wechat'
+
 /** 一个机器人账号。一行绑一个人格；人格可改，但同一时刻只有一个。 */
 export interface BotChannel {
   id: string
-  provider: 'qq'
+  provider: BotProvider
   display_name: string
   persona_id: string
   app_id: string
   /** 密钥只写不回显，接口只告诉前端「有没有」。 */
   has_secret: boolean
+  /** 第三个凭据（微信 EncodingAESKey）；QQ 恒 false。 */
+  has_extra_secret: boolean
   enabled: boolean
   /** 连带会被删掉的会话条数，删除确认文案要用。 */
   conversation_count: number
@@ -137,10 +141,16 @@ export interface BotChannel {
 }
 
 export interface BotChannelPayload {
+  provider?: BotProvider
   display_name: string
   persona_id: string
   app_id: string
   app_secret?: string
+  extra_secret?: string
+}
+
+export interface BotWebhook {
+  base_url: string
 }
 
 /** 头像图库条目：各处头像存自己的 data URL 副本，删图库项不影响已设头像。 */
@@ -160,7 +170,8 @@ export const botApi = {
   copyPersona: (id: string) => request<BotPersona>(`/bot/personas/${id}/copy`, { method: 'POST' }),
   deletePersona: (id: string) => request<{ deleted: boolean }>(`/bot/personas/${id}`, { method: 'DELETE' }),
   listConversations: (personaId?: string) => request<BotConversation[]>(`/bot/conversations?channel=local${personaId ? `&persona_id=${encodeURIComponent(personaId)}` : ''}`),
-  listQqConversations: () => request<BotConversation[]>('/bot/conversations?channel=qq'),
+  /** 远程渠道的只读会话：QQ 与微信同一条读取路径，只有渠道名不同。 */
+  listChannelConversations: (channel: 'qq' | 'wechat') => request<BotConversation[]>(`/bot/conversations?channel=${channel}`),
   createConversation: (personaId: string) => request<BotConversation>('/bot/conversations', { method: 'POST', body: JSON.stringify({ persona_id: personaId, channel: 'local' }) }),
   getMessages: (id: string) => request<BotMessage[]>(`/bot/conversations/${id}/messages?limit=200`),
   deleteConversation: (id: string) => request<{ deleted: boolean }>(`/bot/conversations/${id}`, { method: 'DELETE' }),
@@ -170,6 +181,8 @@ export const botApi = {
   deleteChannel: (id: string) => request<{ deleted: boolean; conversation_count: number }>(`/bot/channels/${id}`, { method: 'DELETE' }),
   connectChannel: (id: string) => request<BotChannelStatus>(`/bot/channels/${id}/connect`, { method: 'POST' }),
   disconnectChannel: (id: string) => request<BotChannelStatus>(`/bot/channels/${id}/disconnect`, { method: 'POST' }),
+  getWebhook: () => request<BotWebhook>('/bot/webhook'),
+  setWebhook: (baseUrl: string) => request<BotWebhook>('/bot/webhook', { method: 'PUT', body: JSON.stringify({ base_url: baseUrl }) }),
   // 人格记忆的查看与增删只走 Agent 记忆面板（api/agent.ts），bot 端不再单独封装一套。
   // Phase 4 头像体系：图库 CRUD、「你的头像」、QQ 会话显示覆盖
   listGallery: () => request<BotGalleryItem[]>('/bot/gallery'),

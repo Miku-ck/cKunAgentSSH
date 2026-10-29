@@ -23,6 +23,12 @@ describe('会话对方标识 peerSeed / peerLabel', () => {
     expect(peerLabel('c2c:Uxxxopenid7b22:ctx')).toBe('私聊 · 7B22')
   })
 
+  it('微信会话用 wx: 前缀，同样只给尾号代号', () => {
+    expect(peerSeed('wx:oXxxxopenid9c3e')).toBe('oXxxxopenid9c3e')
+    expect(peerLabel('wx:oXxxxopenid9c3e')).toBe('微信 · 9C3E')
+    expect(peerTag('wx:oXxxxopenid9c3e')).toBe('')
+  })
+
   it('本地会话或脏值不冒充，回落空串与 QQ', () => {
     expect(peerSeed(null)).toBe('')
     expect(peerSeed('')).toBe('')

@@ -130,9 +130,9 @@ class BotChatService:
         if persona.get("memory_directive"):
             sections.append(f"记忆的分寸：{persona['memory_directive']}")
 
-        # 排版规则按渠道分：本地会话走 Markdown 渲染，QQ 被动回复是纯文本，
+        # 排版规则按渠道分：本地会话走 Markdown 渲染，QQ/微信发出去是纯文本，
         # **、#、反引号会被原样显示成符号，故禁止 Markdown 标记与表格/链接/代码块。
-        if channel == "qq":
+        if channel in ("qq", "wechat"):
             sections.append(
                 "排版规则：只用纯文本与少量表情；禁止表格、链接、代码块和 # 等 Markdown 标记（会被原样显示成符号）。"
             )
@@ -255,6 +255,9 @@ class BotChatService:
                 "group" if str(conversation.get("external_id") or "").startswith("group:")
                 else "private"
             )
+        elif channel == "wechat":
+            # 微信客服消息是一对一，没有群聊形态。
+            audience = "private"
         prev_parts = 0
         for item in reversed(history):
             if item.get("role") == "assistant":

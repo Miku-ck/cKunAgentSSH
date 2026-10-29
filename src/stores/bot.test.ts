@@ -6,6 +6,7 @@ vi.mock('@/api/bot', () => ({
   botApi: {
     listPersonas: vi.fn(),
     listConversations: vi.fn(),
+    listChannelConversations: vi.fn(),
     createConversation: vi.fn(),
     getMessages: vi.fn(),
     deleteConversation: vi.fn(),
@@ -116,11 +117,91 @@ describe('cKunBot store', () => {
     const qq = { ...conversation, id: 'q1', channel: 'qq' as const }
     vi.mocked(botApi.updateConversationDisplay).mockResolvedValue({ ...qq, display_name: '夜宵群' })
     const store = useBotStore()
-    store.qqConversations = [qq]
-    store.qqActiveId = 'q1'
+    store.remoteConversations = [qq]
+    store.remoteActiveId = 'q1'
     await store.updateQqDisplay('q1', { display_name: '夜宵群' })
     expect(botApi.updateConversationDisplay).toHaveBeenCalledWith('q1', { display_name: '夜宵群' })
-    expect(store.qqConversations[0].display_name).toBe('夜宵群')
+    expect(store.remoteConversations[0].display_name).toBe('夜宵群')
+  })
+
+  it('远程只读列表按当前渠道拉取：微信 tab 读微信会话', async () => {
+    const wechat = {
+      ...conversation, id: 'w1', channel: 'wechat' as const, external_id: 'wx:openid-1',
+    }
+    vi.mocked(botApi.listChannelConversations).mockResolvedValue([wechat])
+    vi.mocked(botApi.getMessages).mockResolvedValue([])
+    const store = useBotStore()
+    store.selectChannel('wechat')
+    await store.refreshRemote()
+    expect(botApi.listChannelConversations).toHaveBeenCalledWith('wechat')
+    expect(store.remoteConversations.map(c => c.id)).toEqual(['w1'])
+    expect(store.remoteActiveId).toBe('w1')
+    expect(store.remoteChannelLabel).toBe('微信')
+  })
+
+  it('删除微信会话后从列表移除，并自动选中下一条', async () => {
+    const a = { ...conversation, id: 'w1', channel: 'wechat' as const, external_id: 'wx:o1' }
+    const b = { ...conversation, id: 'w2', channel: 'wechat' as const, external_id: 'wx:o2' }
+    vi.mocked(botApi.deleteConversation).mockResolvedValue({ deleted: true })
+    vi.mocked(botApi.getMessages).mockResolvedValue([])
+    const store = useBotStore()
+    store.selectChannel('wechat')
+    store.remoteConversations = [a, b]
+    store.remoteActiveId = 'w1'
+    await store.deleteRemoteConversation('w1')
+    expect(botApi.deleteConversation).toHaveBeenCalledWith('w1')
+    expect(store.remoteConversations.map(c => c.id)).toEqual(['w2'])
+    expect(store.remoteActiveId).toBe('w2')
+  })
+
+  it('删掉最后一条远程会话后回到空态，不留幽灵消息', async () => {
+    const only = { ...conversation, id: 'w1', channel: 'wechat' as const, external_id: 'wx:o1' }
+    vi.mocked(botApi.deleteConversation).mockResolvedValue({ deleted: true })
+    const store = useBotStore()
+    store.selectChannel('wechat')
+    store.remoteConversations = [only]
+    store.remoteActiveId = 'w1'
+    store.remoteMessages = [{ id: 'm1', conversation_id: 'w1', role: 'user', content: 'hi', created_at: '' }]
+    await store.deleteRemoteConversation('w1')
+    expect(store.remoteConversations).toEqual([])
+    expect(store.remoteActiveId).toBe('')
+    expect(store.remoteMessages).toEqual([])
+  })
+
+  it('切走后返回的旧渠道响应不落进新 tab', async () => {
+    const qq = { ...conversation, id: 'q1', channel: 'qq' as const }
+    let resolveList: (rows: BotConversation[]) => void = () => {}
+    vi.mocked(botApi.listChannelConversations).mockReturnValue(
+      new Promise((resolve) => { resolveList = resolve }),
+    )
+    const store = useBotStore()
+    store.selectChannel('qq')
+    const pending = store.refreshRemote()
+    store.selectChannel('wechat')
+    resolveList([qq])
+    await pending
+    expect(store.remoteConversations).toEqual([])
+  })
+
+  it('删除时在途的刷新结果不能把刚删的行写回列表', async () => {
+    const a = { ...conversation, id: 'w1', channel: 'wechat' as const, external_id: 'wx:o1' }
+    const b = { ...conversation, id: 'w2', channel: 'wechat' as const, external_id: 'wx:o2' }
+    let resolveList: (rows: BotConversation[]) => void = () => {}
+    vi.mocked(botApi.listChannelConversations).mockReturnValue(
+      new Promise((resolve) => { resolveList = resolve }),
+    )
+    vi.mocked(botApi.deleteConversation).mockResolvedValue({ deleted: true })
+    vi.mocked(botApi.getMessages).mockResolvedValue([])
+    const store = useBotStore()
+    store.selectChannel('wechat')
+    store.remoteConversations = [a, b]
+    store.remoteActiveId = 'w1'
+    const pending = store.refreshRemote()
+    await store.deleteRemoteConversation('w1')
+    resolveList([a, b])
+    await pending
+    expect(store.remoteConversations.map(c => c.id)).toEqual(['w2'])
+    expect(store.remoteActiveId).toBe('w2')
   })
 
   it('init 读取「你的头像」；读取失败回落空占位不阻塞初始化', async () => {

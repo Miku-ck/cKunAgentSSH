@@ -90,6 +90,7 @@ class SpecWriteTool(WriteWorkflowArtifactTool):
             },
         },
         "required": ["content"],
+        "additionalProperties": False,
     }
     meta = ToolMeta(risk_level="safe", reversible=True, cacheable=False,
                     idempotent=True)
@@ -116,6 +117,7 @@ class PlanWriteTool(WriteWorkflowArtifactTool):
             },
         },
         "required": ["content"],
+        "additionalProperties": False,
     }
     meta = ToolMeta(risk_level="safe", reversible=True, cacheable=False,
                     idempotent=True)
@@ -142,6 +144,7 @@ class GoalWriteTool(WriteWorkflowArtifactTool):
             },
         },
         "required": ["content"],
+        "additionalProperties": False,
     }
     meta = ToolMeta(risk_level="safe", reversible=True, cacheable=False,
                     idempotent=True)

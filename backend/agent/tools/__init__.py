@@ -112,6 +112,157 @@ class ToolContext:
     governance: object | None = None
 
 
+def _schema_type_ok(schema_type: str, value) -> bool:
+    """Return True if *value* matches the JSON Schema *schema_type*.
+
+    Covers the subset actually used by cKunAgent tools: string/integer/number/
+    boolean/array/object. ``integer`` deliberately rejects ``bool`` (``True`` is
+    JSON true, but also Python ``int`` — LLM 偶尔传 ``true`` 当 ``1`` 不应静默通过).
+    """
+    if schema_type == "string":
+        return isinstance(value, str)
+    if schema_type == "boolean":
+        return isinstance(value, bool)
+    if schema_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if schema_type == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if schema_type == "array":
+        return isinstance(value, list)
+    if schema_type == "object":
+        return isinstance(value, dict)
+    return True
+
+
+def _schema_type_name(schema_type: str) -> str:
+    return {
+        "string": "字符串", "integer": "整数", "number": "数字",
+        "boolean": "布尔", "array": "数组", "object": "对象",
+    }.get(schema_type, schema_type)
+
+
+def _actual_type_name(value) -> str:
+    if isinstance(value, bool):
+        return "布尔"
+    if isinstance(value, int):
+        return "整数"
+    if isinstance(value, float):
+        return "数字"
+    if isinstance(value, str):
+        return "字符串"
+    if isinstance(value, list):
+        return "数组"
+    if isinstance(value, dict):
+        return "对象"
+    return type(value).__name__
+
+
+def _validate_value(schema: dict | None, value, path: str) -> list[str]:
+    """Recursively validate *value* against JSON Schema subset *schema*.
+
+    Returns a list of concise Chinese error strings (valid ⇒ empty list).
+    """
+    if not isinstance(schema, dict) or not schema:
+        return []
+
+    errs: list[str] = []
+    schema_type = schema.get("type")
+
+    # 类型检查失败就不下钻（避免一串误导性错误）
+    if schema_type and not _schema_type_ok(schema_type, value):
+        errs.append(
+            f"{path} 类型应为 {_schema_type_name(schema_type)}，"
+            f"实际为 {_actual_type_name(value)}"
+        )
+        return errs
+
+    # enum（string/integer 都可能出现）
+    if "enum" in schema and value not in schema["enum"]:
+        errs.append(f"{path} 取值 {value!r} 不在允许范围 {schema['enum']}")
+
+    # 数值约束
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if "minimum" in schema and value < schema["minimum"]:
+            errs.append(f"{path} 应 ≥ {schema['minimum']}")
+        if "maximum" in schema and value > schema["maximum"]:
+            errs.append(f"{path} 应 ≤ {schema['maximum']}")
+
+    # 字符串长度
+    if isinstance(value, str):
+        if "minLength" in schema and len(value) < schema["minLength"]:
+            errs.append(f"{path} 长度应 ≥ {schema['minLength']}")
+        if "maxLength" in schema and len(value) > schema["maxLength"]:
+            errs.append(f"{path} 长度应 ≤ {schema['maxLength']}")
+
+    # 数组
+    if isinstance(value, list) and schema_type == "array":
+        if "minItems" in schema and len(value) < schema["minItems"]:
+            errs.append(f"{path} 至少 {schema['minItems']} 项")
+        if "maxItems" in schema and len(value) > schema["maxItems"]:
+            errs.append(f"{path} 至多 {schema['maxItems']} 项")
+        items_schema = schema.get("items")
+        if items_schema:
+            for i, item in enumerate(value):
+                errs.extend(_validate_value(items_schema, item, f"{path}[{i}]"))
+
+    # 对象（重点：required / additionalProperties / 递归 properties）
+    if isinstance(value, dict) and schema_type == "object":
+        props = schema.get("properties") or {}
+        required = schema.get("required") or []
+
+        # a) 缺少必填字段（有 properties 声明且含 required 才检查）
+        missing = [k for k in required if k not in value]
+        if missing:
+            errs.append(f"缺少必填字段 {missing}")
+
+        # b) additionalProperties:false → 拦截一切未声明字段。
+        #    显式 false 才收紧；缺省或 true 按 JSON Schema 兜底语义放行（向后兼容
+        #    不声明 additionalProperties 的老工具 / 只声明 {} 的测试桩）。
+        if schema.get("additionalProperties") is False:
+            extra = set(value) - set(props)
+            if extra:
+                errs.append(
+                    f"非法字段 {sorted(extra)}"
+                    f"（工具仅接受字段 {sorted(props) or '（无）'}）"
+                )
+
+        # c) 递归已声明字段
+        for k, sub_schema in props.items():
+            if k in value:
+                errs.extend(_validate_value(sub_schema, value[k], f"{path}.{k}"))
+
+    return errs
+
+
+def validate_args(parameters: dict | None, args: dict, tool_name: str = "") -> list[str]:
+    """Validate tool call *args* against its JSON Schema *parameters*.
+
+    Returns a list of human-readable error strings. Empty ⇒ valid.
+    """
+    if not parameters:
+        return []
+    return _validate_value(parameters, args, "$")
+
+
+def build_correct_usage_example(parameters: dict | None, tool_name: str) -> str:
+    """Build a minimal correct-usage JSON snippet from the schema's required fields."""
+    import json
+    if not parameters or parameters.get("type") != "object":
+        return ""
+    props = parameters.get("properties") or {}
+    required = parameters.get("required") or []
+    sample: dict = {}
+    for k in required[:3]:
+        sub = props.get(k, {})
+        if "enum" in sub:
+            sample[k] = sub["enum"][0]
+        else:
+            sample[k] = {
+                "string": "<文本>", "integer": 1, "boolean": False,
+                "array": [], "number": 0, "object": {},
+            }.get(sub.get("type", ""), "<值>")
+    return json.dumps(sample, ensure_ascii=False) if sample else ""
+
 class ToolRegistry:
     """工具注册中心"""
 
@@ -157,10 +308,27 @@ class ToolRegistry:
         ]
 
     async def execute(self, name: str, args: dict, context: ToolContext) -> ToolResult:
-        """执行工具调用"""
+        """执行工具调用。
+
+        进入工具自身的 execute 之前先用 parameters 对 args 做一次 schema 校验：
+        缺失必填字段 / 多余字段 / 类型不对 / enum 越界 / 数值越界都会被拦截，错误信息里
+        带一个「正确用法」最小示例，模型看到就知道怎么改（few-shot 式错误回返，不进
+        上下文）。校验留在这层而非 BaseTool.execute，是为了不干扰个别工具自定义的参数
+        检查（如 job_run 对 command/shell 关键字段的显式拒绝语义）。
+        """
         tool = self._tools.get(name)
         if not tool:
             return ToolResult(success=False, output="", error=f"未知工具: {name}")
+
+        ve = validate_args(tool.parameters, args or {}, name)
+        if ve:
+            example = build_correct_usage_example(tool.parameters, name)
+            msg = (
+                f"工具 `{name}` 参数校验失败：{'；'.join(ve)}。"
+                + (f"示例：{example}" if example else "")
+            )
+            logger.info("参数校验拒绝 %s: %s", name, ve)
+            return ToolResult(success=False, output="", error=msg)
 
         try:
             result = await tool.execute(context=context, **args)

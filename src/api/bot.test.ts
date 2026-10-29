@@ -32,6 +32,7 @@ describe('cKunBot API', () => {
         persona_id: 'p1',
         app_id: '1',
         has_secret: true,
+        has_extra_secret: false,
         enabled: false,
         conversation_count: 0,
         status: { state: 'offline', detail: '' },
@@ -39,7 +40,20 @@ describe('cKunBot API', () => {
     ])
     const [channel] = await botApi.listChannels()
     expect(channel.has_secret).toBe(true)
+    expect(channel.has_extra_secret).toBe(false)
     expect('app_secret' in channel).toBe(false)
+  })
+
+  it('公网地址走全局 webhook 端点', async () => {
+    vi.mocked(request).mockResolvedValue({ base_url: 'https://bot.example.com' })
+    await botApi.getWebhook()
+    expect(request).toHaveBeenCalledWith('/bot/webhook')
+
+    await botApi.setWebhook('https://bot.example.com')
+    expect(request).toHaveBeenCalledWith('/bot/webhook', {
+      method: 'PUT',
+      body: JSON.stringify({ base_url: 'https://bot.example.com' }),
+    })
   })
 
   it('上下线走各自渠道的端点，一张卡只管自己', async () => {

@@ -74,7 +74,7 @@ class FleetSessionsTool(BaseTool):
         "列出可扇出观测的目标主机（连接配置 id/名称/主机/环境）。"
         "把返回的 id 传给 fleet_overview 即可一次并发采集多台主机的系统概览。"
     )
-    parameters = {"type": "object", "properties": {}, "required": []}
+    parameters = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
     meta = ToolMeta(risk_level="safe", reversible=True, idempotent=True, timeout=20.0)
 
     async def execute(self, context) -> ToolResult:
@@ -121,6 +121,7 @@ class FleetOverviewTool(BaseTool):
             },
         },
         "required": ["targets"],
+        "additionalProperties": False,
     }
     meta = ToolMeta(
         risk_level="safe",

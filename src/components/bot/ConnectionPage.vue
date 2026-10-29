@@ -13,19 +13,23 @@
         :key="channel.id"
         :channel="channel"
         :personas="personas"
+        :webhook-base="webhookBase"
         @refresh="refresh"
+        @webhook="onWebhook"
       />
 
       <ChannelCard
         v-if="draftOpen"
         :channel="null"
         :personas="personas"
+        :webhook-base="webhookBase"
         @created="onCreated"
         @discard="draftOpen = false"
+        @webhook="onWebhook"
       />
 
       <p v-if="!channels.length && !draftOpen && !error" class="empty-hint">
-        还没有机器人：新增一个，填 AppID 与 AppSecret，选一个要绑的人格。
+        还没有机器人：新增一个 QQ 或微信机器人，填好凭据并选一个要绑的人格。
       </p>
       <p v-if="error" class="page-error">{{ error }}</p>
     </section>
@@ -41,6 +45,7 @@ import { toFriendlyMessage } from '@/api/base'
 defineProps<{ personas: BotPersona[] }>()
 
 const channels = ref<BotChannel[]>([])
+const webhookBase = ref('')
 const draftOpen = ref(false)
 const error = ref('')
 let timer: ReturnType<typeof setInterval> | undefined
@@ -51,13 +56,19 @@ async function refresh() {
   if (refreshing) return
   refreshing = true
   try {
-    channels.value = await botApi.listChannels()
+    const [list, webhook] = await Promise.all([botApi.listChannels(), botApi.getWebhook()])
+    channels.value = list
+    webhookBase.value = webhook.base_url
     error.value = ''
   } catch (e) {
     error.value = toFriendlyMessage(e, '机器人状态读取失败')
   } finally {
     refreshing = false
   }
+}
+
+function onWebhook(value: string) {
+  webhookBase.value = value
 }
 
 function onCreated() {

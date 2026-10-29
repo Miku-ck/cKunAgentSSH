@@ -92,6 +92,7 @@ class ServiceManageTool(BaseTool):
             },
         },
         "required": ["action", "name"],
+        "additionalProperties": False,
     }
     meta = ToolMeta(
         risk_level="moderate",

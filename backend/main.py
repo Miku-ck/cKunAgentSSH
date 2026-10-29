@@ -2,13 +2,19 @@
 cKunAgentic Python 后端入口
 启动: python main.py --port 7777
 """
+import time
+
+#: 进程内自报耗时的原点：本模块开始执行（≈解释器 bootstrap 完成）。必须早于其余
+#: import —— 否则「导入花了多少」无从自报。ruff 的 E402 已在 ruff.toml 对 main.py
+#: 放过，与该文件既有的惰性导入范式同一取舍。
+_MODULE_T0 = time.perf_counter()
+
 import argparse
 import asyncio
 import hmac
 import logging
 import os
 import secrets
-import time
 from contextlib import asynccontextmanager, suppress
 
 import uvicorn
@@ -17,12 +23,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 import logconfig
+import netconfig
 from config import settings
-from database import init_db
-from database import seed_models_async
+import database as db
 from routes.chat import router as chat_router
 from routes.bot import router as bot_router
 from routes.bot_channels import router as bot_channels_router
+from routes.wechat_callback import router as wechat_callback_router
 from routes.settings import router as settings_router
 from routes.skills import router as skills_router
 from routes.agent import router as agent_router
@@ -34,26 +41,76 @@ from routes.rollbacks import router as rollbacks_router
 from routes.runbooks import router as runbooks_router
 from agent.consciousness_tick import get_global_tick
 from agent.audit import AuditWriteError
-from agent.bridge_relay import bridge_ws_endpoint
+from agent.bridge_relay import BridgeRelay, bridge_ws_endpoint, set_bridge_relay
 import win_asyncio_teardown
 
 # ── 启动耗时打点 ─────────────────────────────────────────────────────────────
-# 基线 = 依赖 import 完成时刻。本文件能改的正是「import 之后 → 健康就绪」这段
-# 初始化（init_db / 配置回填 / 技能同步 / 模型探测 / 渠道恢复）；解释器启动与依赖
-# 导入成本用 `python -X importtime -c "import main"` 或 Electron 侧 perfMark 观测
-# （导入图不倒退由 tests/test_startup_critical_path.py 守卫）。
+# 两个基准，回答两个不同的问题：
+#   · _MODULE_T0（见文件首行）= 本模块开始执行，≈ 解释器 bootstrap 完成，与 Electron
+#     主进程 `backend: spawned pid=` 同一量级 —— 所有明细行以它为原点；
+#   · _STARTUP_T0 = 依赖 import 完成 —— 「import 之后 → 健康就绪」这段的基线，也
+#     正是本文件真正能动的那一段（init_db / 配置回填 / 技能同步 / 模型探测 /
+#     渠道恢复）。导入成本本身用 `python -X importtime -c "import main"` 观测，
+#     导入图不倒退由 tests/test_startup_critical_path.py 守卫。
 _STARTUP_T0 = time.perf_counter()
 
 logger = logging.getLogger(__name__)
 
 _PERF_VERBOSE = os.environ.get("CKUN_PERF", "") == "1"
 
+#: (label, 相对 _MODULE_T0 的毫秒)。汇总行一次性渲染 —— 并发节点各有各的完成
+#: 时刻，让它们各自打一行既刷屏也拼不出全貌。
+_marks: list[tuple[str, float]] = []
+
 
 def _perf_mark(label: str) -> None:
+    """记录一个启动节点；CKUN_PERF=1 时附带输出明细行。
+
+    明细必须是 WARNING：lifespan 里的 logconfig.load_from_db 会把 root 级别回填成
+    用户配置（默认 warning），INFO 明细会被自己吃掉（实测 batch1/batch2/就绪三条全丢）。
+    常驻信息只留 _log_startup_summary 那一行。
+    """
+    at = (time.perf_counter() - _MODULE_T0) * 1000
+    _marks.append((label, at))
     if _PERF_VERBOSE:
-        # 用 WARNING：lifespan 的 logconfig.load_from_db 会把根级别回填成用户配置
-        # （默认 warning），INFO 打点会被自己吃掉（实测 batch1/batch2/就绪三条全丢）
-        logger.warning("[perf] %s @%.0fms", label, (time.perf_counter() - _STARTUP_T0) * 1000)
+        logger.warning("[perf] %s @%.0fms", label, at)
+
+
+def _log_startup_summary() -> None:
+    """就绪时输出一行常驻汇总（WARNING：此刻 root 级别已被用户配置接管）。
+
+    形制与 Electron 侧 electron/utils/perf-mark.ts 的 `[perf] <name> @<N>ms` 对齐；
+    imports= 与主进程 `backend: spawned pid=` 同一物理起点量级，所以「后端自报
+    total」与「主进程 backend: health ready」可以直接对表。
+
+    原实现用 logger.info 打就绪行，而它跑在 logconfig.load_from_db 把 root 降到
+    warning 之后 —— 默认配置下那行永远是死日志，后端对自己的就绪耗时零输出。
+    """
+    at = dict(_marks)
+    now = (time.perf_counter() - _MODULE_T0) * 1000
+
+    def delta(start: float | None, end: float | None) -> float | None:
+        if start is None or end is None:
+            return None
+        return end - start
+
+    def ms(value: float | None) -> str:
+        return "?" if value is None else f"{value:.0f}ms"
+
+    imports_done = (_STARTUP_T0 - _MODULE_T0) * 1000
+    entered = at.get("lifespan entered")
+    logger.warning(
+        "[perf] startup imports=%s assemble=%s boot=%s lifespan=%s total=%s"
+        " | init_db=%s round1=%s background=%s",
+        ms(imports_done),
+        ms(delta(imports_done, at.get("app assembled"))),
+        ms(delta(at.get("serve start"), entered)),
+        ms(delta(entered, at.get("ready"))),
+        ms(now),
+        ms(delta(entered, at.get("init_db"))),
+        ms(delta(at.get("init_db"), at.get("round1"))),
+        ms(delta(at.get("round1"), at.get("background started"))),
+    )
 
 
 # ── S-B1①：入口最早安装 root handler ─────────────────────────────────────────
@@ -94,86 +151,103 @@ async def _restore_channels_quietly() -> None:
         logger.warning("恢复 cKunBot 机器人渠道失败: %s", exc)
 
 
-@asynccontextmanager
-async def lifespan(_app: FastAPI):
-    """初始化数据库 + 启动后台意识 tick"""
-    _perf_mark("lifespan entered")
+# ── 启动初始化步骤 ───────────────────────────────────────────────────────────
+# 全部抽成模块级函数：lifespan 只负责分派、打点与关停；测试可 monkeypatch 单步
+# （tests/test_startup_timing.py），不必为了验时序去搭真库真渠道。
+# 模块导入一律下沉到各自函数内部：builtin_skills / post_processor / netconfig 首次
+# 导入因此发生在 worker 线程里，与 init_db 及其他任务重叠，而不是在 lifespan 开头
+# 排队付出（实测 post_processor 2.3ms、builtin_skills ~2ms 白花在关键路径上）。
 
-    # 模块顶层导入：原 lifespan 内联 import 每次调用重复解析模块路径查找
-    import logconfig
-    import netconfig
-    import builtin_skills as _bs
-    import database as _db
-    from post_processor import init_post_process_manager, load_post_process_config_from_db
 
-    init_db(settings.db_path)
-    _perf_mark("init_db done")
-    logger.info("[cKunAgentic] Database initialized: %s", settings.db_path)
+def _import_permission_modules():
+    """预导入审批策略模块图（纯 CPU，实测 ~22ms），返回三个设置函数。
 
-    # G4/G5/G9：出站 HTTP 策略与日志级别回填策略 与 内置运维技能同步 三者互不依赖，
-    # 并行执行：logconfig/netconfig 是 DB 读（决定后续 seed_models_async 的 HTTP 出站策略），
-    # 技能同步是文件→DB 写。原实现三者串行，实测共 150-400ms；并行后耗时取决于最慢的那条。
-    # seed_models_async（发 HTTP 探测）必须等 netconfig 完成 —— 放在下一批并行里。
-    _log_cfg_t = asyncio.to_thread(logconfig.load_from_db)
-    _net_cfg_t = asyncio.to_thread(netconfig.load_policy_from_db)
-    _skills_t = asyncio.to_thread(_bs.sync_packaged_skills)
-    for _r in await asyncio.gather(_log_cfg_t, _net_cfg_t, _skills_t, return_exceptions=True):
-        if isinstance(_r, Exception):
-            logger.warning("[cKunAgentic] 启动初始化（log/net 配置 / 技能同步）异常: %s", _r)
-    logger.debug("[cKunAgentic] log/net config + packaged skills sync completed")
-    _perf_mark("batch1 (log/net/skills) done")
+    它不依赖数据库，所以在 init_db 之前就先丢进线程池：sqlite 的 I/O 会释放 GIL，
+    这段纯 Python 导入能与之重叠，把 22ms 从关键路径上藏掉。返回值必须由
+    _apply_permission_policy 在任何 PermissionGate 单例创建前写入模块值。
+    """
+    from agent.harness.reins.auto_approve import set_db_enabled
+    from agent.harness.reins.core import set_approval_fallback_seconds
+    from agent.harness.reins.gate import set_allowlist_ttl_hours
+    return set_allowlist_ttl_hours, set_db_enabled, set_approval_fallback_seconds
 
-    # 上一批完成后：seed_models_async 打 /models 需要 netconfig 出站策略已就绪。
-    # 以下四个任务互不依赖，全部并行：
-    #   - seed_models_async: HTTP 探测可用模型
-    #   - reset_stale_in_progress_conversations: DB 写（崩溃恢复）
-    #   - load_post_process_config_from_db: DB 读
-    #   - permission_policy（allowlist TTL / auto_approve / fallback 回填）：DB 读 + 写模块值
-    async def _seed_models():
-        await seed_models_async(settings.db_path)
 
-    async def _reset_stale():
-        _n = await asyncio.to_thread(_db.reset_stale_in_progress_conversations)
-        if _n:
-            logger.info("[cKunAgentic] Reset %s stale in_progress conversation(s)", _n)
+def _apply_permission_policy(setters) -> None:
+    """E3 + 审批策略两新字段回填（DB 读 + 写模块值）。"""
+    set_allowlist_ttl_hours, set_db_enabled, set_approval_fallback_seconds = setters
+    # allowlist 保留时长必须在任何 PermissionGate 单例创建前写入模块值，否则首次
+    # 加载 allowlist 时按 TTL=0 判定，过期条目要等到下次重启才不会被撤销。
+    # 另两字段同段回填：auto_approve 的 DB 开关（env kill switch 在调用处仍优先）；
+    # 兜底时长只在 DB 有显式行时才推 —— 从未在设置面板改过的用户，
+    # CKUNAGENTIC_PERMISSION_APPROVAL_FALLBACK_S 的 env 覆盖保持有效。
+    policy = db.get_permission_policy()
+    set_allowlist_ttl_hours(policy["allowlist_ttl_hours"])
+    set_db_enabled(policy["auto_approve_enabled"])
+    # 「用户写过」要用带区间的判定，不是「这一行存在」：手工改成 "abc" 或越界
+    # 值的脏行，get_permission_policy 会回默认 600 读数，若仍按"写过"推给运行时，
+    # 就把运维的 CKUNAGENTIC_PERMISSION_APPROVAL_FALLBACK_S 永久锁掉了 —— 与
+    # netconfig 的 retry/timeout env 兜底同一教训（database.get_http_policy 的
+    # *_set 就是为此而存在）。
+    fallback_set = db.is_int_app_setting_set(
+        "permission.approval_fallback_s", 600, low=0, high=86400)[1]
+    if fallback_set:
+        set_approval_fallback_seconds(policy["approval_fallback_s"])
 
-    def _load_post_config():
-        post_config = load_post_process_config_from_db()
-        init_post_process_manager(post_config)
 
-    def _load_permission_policy():
-        # E3：allowlist 保留时长回填。必须在任何 PermissionGate 单例创建前写入模块值，
-        # 否则首次加载 allowlist 时按 TTL=0 判定，过期条目要等到下次重启才不会被撤销。
-        # 审批策略另两字段同段回填：auto_approve 的 DB 开关（env kill switch 在调用处
-        # 仍优先）；兜底时长只在 DB 有显式行时才推 —— 从未在设置面板改过的用户，
-        # CKUNAGENTIC_PERMISSION_APPROVAL_FALLBACK_S 的 env 覆盖保持有效。
-        from agent.harness.reins.auto_approve import set_db_enabled
-        from agent.harness.reins.core import set_approval_fallback_seconds
-        from agent.harness.reins.gate import set_allowlist_ttl_hours
-        _pol = _db.get_permission_policy()
-        set_allowlist_ttl_hours(_pol["allowlist_ttl_hours"])
-        set_db_enabled(_pol["auto_approve_enabled"])
-        # 「用户写过」要用带区间的判定，不是「这一行存在」：手工改成 "abc" 或
-        # 越界值的脏行，get_permission_policy 会回默认 600 读数，若仍按"写给"推给
-        # 运行时，就把运维的 CKUNAGENTIC_PERMISSION_APPROVAL_FALLBACK_S 永久锁掉了
-        # —— 与 netconfig 的 retry/timeout env 兜底同一教训（database.get_http_policy
-        # 的 *_set 就是为此而存在）。
-        _fallback_set = _db.is_int_app_setting_set(
-            "permission.approval_fallback_s", 600, low=0, high=86400)[1]
-        if _fallback_set:
-            set_approval_fallback_seconds(_pol["approval_fallback_s"])
+async def _load_net_policy(net_ready: asyncio.Event) -> None:
+    """出站 HTTP 策略回填；无论成败都放行 _seed_models（读不到走直连默认）。"""
+    try:
+        await asyncio.to_thread(netconfig.load_policy_from_db)
+    finally:
+        net_ready.set()
 
-    for _r in await asyncio.gather(
-        _seed_models(),
-        _reset_stale(),
-        asyncio.to_thread(_load_post_config),
-        asyncio.to_thread(_load_permission_policy),
-        return_exceptions=True,
-    ):
-        if isinstance(_r, Exception):
-            logger.warning("[cKunAgentic] 启动初始化（模型探测 / 会话复位 / 后处理 / 审批策略）异常: %s", _r)
-    _perf_mark("batch2 (seed/reset/post/policy) done")
 
+async def _seed_models(net_ready: asyncio.Event) -> None:
+    """首启模型探测：只等 netconfig（探测要走出站策略），不等整轮。"""
+    await net_ready.wait()
+    await db.seed_models_async(settings.db_path)
+
+
+def _sync_skills() -> None:
+    import builtin_skills
+    builtin_skills.sync_packaged_skills()
+
+
+def _load_post_config() -> None:
+    from post_processor import (
+        init_post_process_manager,
+        load_post_process_config_from_db,
+    )
+    init_post_process_manager(load_post_process_config_from_db())
+
+
+def _reset_stale() -> None:
+    n = db.reset_stale_in_progress_conversations()
+    if n:
+        logger.info("[cKunAgentic] Reset %s stale in_progress conversation(s)", n)
+
+
+#: 与 lifespan 里 gather 的顺序一一对应，只用于把异常日志说到具体哪一步。
+_ROUND1_STEPS = (
+    "日志级别回填", "出站 HTTP 策略", "内置技能同步", "后处理配置",
+    "审批策略回填", "崩溃会话复位", "首启模型探测",
+)
+
+
+class _Background:
+    """就绪后常驻的协作组件句柄：start/stop 共用同一份，避免两处各记一遍。"""
+
+    __slots__ = ("proactive", "restore_task", "schedule_engine", "tick")
+
+    def __init__(self, tick, schedule_engine, proactive, restore_task):
+        self.tick = tick
+        self.schedule_engine = schedule_engine
+        self.proactive = proactive
+        self.restore_task = restore_task
+
+
+def _start_background_tasks() -> _Background:
+    """启动就绪后才需要的后台组件（均不在健康就绪的关键路径上）。"""
     # 意识 tick 延迟启动：仅首次 Agent 运行时触发（ensure_started），
     # 避免纯聊天用户产生空 DB 查询开销
     tick = get_global_tick()
@@ -186,49 +260,94 @@ async def lifespan(_app: FastAPI):
     # 陪聊主动性调度（P3）：60s 轮询，无人格开启时 tick 是一次空查询，
     # 开关在人格上（proactive_enabled，默认关），这里常驻无副作用。
     from bot.proactive import get_scheduler
-    proactive_scheduler = get_scheduler()
-    proactive_scheduler.ensure_started()
+    proactive = get_scheduler()
+    proactive.ensure_started()
 
     # Bridge WS relay（阶段 1）：Electron 主进程反向连接 /ws/bridge 的命令通道。
     # 创建即注册到模块全局（bridge_ws_endpoint 经 get_bridge_relay() 获取）。
-    from agent.bridge_relay import BridgeRelay, set_bridge_relay
     set_bridge_relay(BridgeRelay())
 
     # 机器人渠道恢复（QQ 登录等纯网络动作）移出健康就绪关键路径：实测 172ms，
-    # 网络差时更久，且它失败不影响 Agent/终端主链路。后台任务 + 退出前取消等待，
+    # 网络差时更久，且失败不影响 Agent/终端主链路。后台任务 + 退出前取消等待，
     # 保证 stop_all 不会与仍在进行的 restore 交叉。
     restore_task = asyncio.create_task(_restore_channels_quietly())
+    return _Background(tick, schedule_engine, proactive, restore_task)
 
-    _perf_mark("ready (health 可服务)")
-    _ready_ms = (time.perf_counter() - _STARTUP_T0) * 1000
-    logger.info("[cKunAgentic] 后端就绪，import 后初始化耗时 %.0fms", _ready_ms)
 
-    yield
-
-    if not restore_task.done():
-        restore_task.cancel()
+async def _stop_background_tasks(bg: _Background) -> None:
+    """关停顺序：先掐渠道恢复（防与 stop_all 交叉）→ 停渠道 → 并发停三个
+    后台循环 → 注销 relay → 等后处理把在途任务写完。"""
+    if not bg.restore_task.done():
+        bg.restore_task.cancel()
         with suppress(asyncio.CancelledError):
-            await restore_task
+            await bg.restore_task
+
     from bot.channel_runtime import get_channel_runtime
     await get_channel_runtime().stop_all()
 
-    # 优雅停止后台 tick（若曾启动）
-    await tick.stop()
-
-    # 停止定时任务调度引擎
-    from agent.schedule_engine import get_schedule_engine
-    await get_schedule_engine().stop()
-
-    # 停止陪聊主动性调度（P3）
-    await proactive_scheduler.stop()
+    # 三个循环互不依赖：并发停止；单个失败不拖住其余（失败即泄漏，不许静默）
+    for result in await asyncio.gather(
+        bg.tick.stop(), bg.schedule_engine.stop(), bg.proactive.stop(),
+        return_exceptions=True,
+    ):
+        if isinstance(result, Exception):
+            logger.warning("[cKunAgentic] 后台循环停止异常: %s", result)
 
     # 注销 Bridge WS relay（优雅关闭时新连接将收到 1013）
-    from agent.bridge_relay import set_bridge_relay
     set_bridge_relay(None)
 
     # 等待 PostProcessManager 任务完成（最多 10 秒），避免数据库写入被截断
     from post_processor import get_post_process_manager
     await get_post_process_manager().shutdown(timeout=10.0)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """初始化数据库 + 启动后台组件（耗时节点见 _log_startup_summary）"""
+    _perf_mark("lifespan entered")
+
+    # 审批策略模块图不依赖 DB：先丢线程池，与 init_db 的 sqlite I/O 重叠
+    permission_modules = asyncio.create_task(asyncio.to_thread(_import_permission_modules))
+
+    db.init_db(settings.db_path)
+    _perf_mark("init_db")
+    logger.info("[cKunAgentic] Database initialized: %s", settings.db_path)
+
+    net_ready = asyncio.Event()
+
+    async def _apply_policy() -> None:
+        await asyncio.to_thread(_apply_permission_policy, await permission_modules)
+
+    # 七个步骤互不依赖（首启模型探测只等 netconfig，用事件而非整轮），一次分派：
+    # 原实现把「模型探测 / 会话复位 / 后处理 / 审批策略」排在「log/net 配置 + 技能
+    # 同步」之后白等一轮（实测 9ms），而其中审批策略那 21ms 的模块导入根本不依赖
+    # 上一批，却压在最后一轮才付。
+    results = await asyncio.gather(
+        asyncio.to_thread(logconfig.load_from_db),
+        _load_net_policy(net_ready),
+        asyncio.to_thread(_sync_skills),
+        asyncio.to_thread(_load_post_config),
+        _apply_policy(),
+        asyncio.to_thread(_reset_stale),
+        _seed_models(net_ready),
+        return_exceptions=True,
+    )
+    for step, result in zip(_ROUND1_STEPS, results):
+        if isinstance(result, Exception):
+            logger.warning("[cKunAgentic] 启动初始化（%s）异常: %s", step, result)
+    _perf_mark("round1")
+
+    background = _start_background_tasks()
+    _perf_mark("background started")
+    _perf_mark("ready")
+    _log_startup_summary()
+
+    # try/finally 而不是裸 yield 后收尾：应用体抛异常时生成器在 yield 处被 throw，
+    # 裸收尾不会执行 —— 后台循环与渠道就成了孤儿。
+    try:
+        yield
+    finally:
+        await _stop_background_tasks(background)
 
 
 app = FastAPI(
@@ -274,11 +393,6 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization", "Accept", "X-API-Token"],
 )
 
-# 历史补偿中间件（Origin 为 null 时剥 Set-Cookie）已随 allow_credentials=False 一并
-# 移除：它的前提是「null 来源 + 凭据放行 + 响应可能带 Cookie」。本后端从不种 Cookie，
-# 且不放开凭据时浏览器对跨站 fetch/XHR 响应里的 Set-Cookie 本就按 SameSite 默认
-# （Lax）丢弃 —— 补偿逻辑成了每请求空转的死代码，留着反而暗示「这里有 Cookie 在飞」。
-
 
 # ── API Token 认证中间件 ─────────────────────────────────────────────────────
 # 受保护范围：所有 /api/* 路由（含 SSE：POST /api/agent/run）
@@ -293,8 +407,7 @@ async def api_token_auth(request: Request, call_next):
         return await call_next(request)
     if request.method == "OPTIONS":
         return await call_next(request)
-    # 只放行 /api/health：上一行已对非 /api 前缀直接放行，/health 从未注册过，
-    # 写在这里是永不命中的死分支（会让人误以为存在第二个免鉴权端点）。
+    # 唯一免鉴权端点：GET /api/health（/health 从未注册过，别在这里加第二条）
     if request.method == "GET" and path == "/api/health":
         return await call_next(request)
     token = request.headers.get("X-API-Token", "")
@@ -331,6 +444,8 @@ async def _audit_write_error_handler(request: Request, exc: AuditWriteError):
 app.include_router(chat_router, prefix="/api")
 app.include_router(bot_router, prefix="/api")
 app.include_router(bot_channels_router, prefix="/api")
+# 微信平台回调：不挂 /api —— 平台不会带 X-API-Token，鉴权由 AES 密钥 + appid 承担
+app.include_router(wechat_callback_router)
 app.include_router(settings_router, prefix="/api")
 app.include_router(skills_router, prefix="/api")
 app.include_router(agent_router, prefix="/api")
@@ -345,6 +460,10 @@ app.include_router(runbooks_router, prefix="/api")
 # 它有自己的 hello token 鉴权（与主进程注入后端的 ELECTRON_BRIDGE_TOKEN 比对）
 app.add_api_websocket_route("/ws/bridge", bridge_ws_endpoint)
 
+# 装配到此结束（建 app / 中间件 / 异常处理器 / 全部路由）：与 imports、uvicorn 引导
+# 共同构成 _log_startup_summary 里的三段前缀。
+_perf_mark("app assembled")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="cKunAgentic Backend")
@@ -355,9 +474,10 @@ if __name__ == "__main__":
     logger.info("[cKunAgentic] Starting backend on %s:%s", args.host, args.port)
     # 使用 asyncio.run(Server.serve()) 代替 uvicorn.run()，
     # 避免 PowerShell 后台运行时 WatchFiles reloader 启动缓慢导致健康检查超时
-    import asyncio
 
-    # 必须早于任何 transport 创建（win32 之外自动跳过）
+    # 必须早于任何 transport 创建（win32 之外自动跳过）。新增其他入口（如
+    # `uvicorn main:app`）时同样要在 asyncio.run 之前调用，否则 10054 噪音与
+    # 「孤儿后端」会回来（见模块 docstring）。
     win_asyncio_teardown.install()
     config = uvicorn.Config(
         # 传 app 对象而不是 "main:app" 字符串：本文件是以 __main__ 运行的，字符串入口
@@ -377,4 +497,7 @@ if __name__ == "__main__":
         ws_max_size=16 * 1024 * 1024,
     )
     server = uvicorn.Server(config)
+    # serve start → lifespan entered 就是 uvicorn 引导段：config.load 导入
+    # loop/protocol/lifespan 实现（实测 config.load 单独 ~28ms）+ 事件循环创建。
+    _perf_mark("serve start")
     asyncio.run(server.serve())

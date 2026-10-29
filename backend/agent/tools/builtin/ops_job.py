@@ -638,6 +638,7 @@ class JobRunTool(BaseTool):
             "cwd": {"type": "string", "description": "可选工作目录（仅 local），必须位于工作区白名单根内且真实存在，缺省用后端进程当前目录"},
         },
         "required": ["cmd"],
+        "additionalProperties": False,
     }
     meta = _RUN_META
 
@@ -765,6 +766,7 @@ class JobListTool(BaseTool):
         "type": "object",
         "properties": {},
         "required": [],
+        "additionalProperties": False,
     }
     meta = _READ_META
 
@@ -859,6 +861,7 @@ class JobOutputTool(BaseTool):
             "wait": {"type": "integer", "description": "可选等待秒数（0-60，默认 0）"},
         },
         "required": ["job_id"],
+        "additionalProperties": False,
     }
     meta = _READ_META
 
@@ -936,6 +939,7 @@ class JobKillTool(BaseTool):
             "job_id": {"type": "string", "description": "后台任务 id"},
         },
         "required": ["job_id"],
+        "additionalProperties": False,
     }
     meta = _RUN_META
 

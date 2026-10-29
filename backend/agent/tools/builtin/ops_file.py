@@ -143,6 +143,7 @@ class FileReadTool(BaseTool):
             },
         },
         "required": ["path"],
+        "additionalProperties": False,
     }
     meta = ToolMeta(
         risk_level="safe",
@@ -214,6 +215,7 @@ class FileWriteTool(BaseTool):
             "content": {"type": "string", "description": "要写入的完整文件内容"},
         },
         "required": ["path", "content"],
+        "additionalProperties": False,
     }
     meta = ToolMeta(
         risk_level="moderate",
@@ -256,6 +258,7 @@ class FileEditTool(BaseTool):
             "new_string": {"type": "string", "description": "替换后的新字符串"},
         },
         "required": ["path", "old_string", "new_string"],
+        "additionalProperties": False,
     }
     meta = ToolMeta(
         risk_level="moderate",
@@ -334,6 +337,7 @@ class FileGlobTool(BaseTool):
             },
         },
         "required": ["path", "pattern"],
+        "additionalProperties": False,
     }
     meta = ToolMeta(
         risk_level="safe",
@@ -505,6 +509,7 @@ class FileGrepTool(BaseTool):
             },
         },
         "required": ["path", "pattern"],
+        "additionalProperties": False,
     }
     meta = ToolMeta(
         risk_level="safe",

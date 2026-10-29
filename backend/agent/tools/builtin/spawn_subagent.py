@@ -96,6 +96,7 @@ class SpawnSubagentTool(BaseTool):
             },
         },
         "required": ["task", "system_prompt"],
+        "additionalProperties": False,
     }
     meta = ToolMeta(
         risk_level="safe",

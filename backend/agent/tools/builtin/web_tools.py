@@ -228,6 +228,7 @@ class WebSearchTool(BaseTool):
             "max_results": {"type": "integer", "description": "最大结果数（默认 5）"},
         },
         "required": ["query"],
+        "additionalProperties": False,
     }
     meta = ToolMeta(risk_level="safe", reversible=True, cacheable=True, idempotent=True)
 
@@ -581,6 +582,7 @@ class WebFetchTool(BaseTool):
             "max_chars": {"type": "integer", "description": "最大返回字符数（默认 8000，上限 100000）"},
         },
         "required": ["url"],
+        "additionalProperties": False,
     }
     meta = ToolMeta(risk_level="safe", reversible=True, cacheable=True, idempotent=True)
 

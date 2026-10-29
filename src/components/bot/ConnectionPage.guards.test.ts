@@ -41,6 +41,8 @@ describe('连接页轮询', () => {
   it('整页 5 秒一次拉全部，卸载时清理定时器', () => {
     expect(src).toMatch(/setInterval\(\(\) => \{ void refresh\(\) \}, 5000\)/)
     expect(src).toContain('botApi.listChannels()')
+    expect(src).toContain('botApi.getWebhook()')
+    expect(src).toContain(':webhook-base="webhookBase"')
     expect(src).toContain('clearInterval(timer)')
     expect(src).toContain('onUnmounted')
   })

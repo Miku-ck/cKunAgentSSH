@@ -43,6 +43,8 @@ class ChannelConfig:
     app_id: str
     app_secret: str
     persona_id: str
+    # 部分平台需要第三个凭据（微信的 EncodingAESKey）；QQ 为空串。
+    extra_secret: str = ""
 
 
 @dataclass(frozen=True)

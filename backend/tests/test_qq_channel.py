@@ -12,9 +12,9 @@ import pytest
 from bot.qq_channel import (
     QQ_MAX_PARTS,
     QQInboundAdapter,
-    split_qq_text,
     strip_markdown_for_qq,
 )
+from bot.text_format import split_text
 
 
 class FakeMessage:
@@ -111,7 +111,7 @@ def test_markdown_is_stripped_before_sending():
 
 def test_long_reply_splits_on_sentence_boundaries():
     text = "第一句话。" * 300
-    parts = split_qq_text(text)
+    parts = split_text(text, limit=800, max_parts=QQ_MAX_PARTS)
 
     assert 1 < len(parts) <= QQ_MAX_PARTS
     assert all(len(part) <= 800 for part in parts)
@@ -119,14 +119,14 @@ def test_long_reply_splits_on_sentence_boundaries():
 
 
 def test_overlong_reply_is_truncated_at_the_last_part():
-    parts = split_qq_text("啊" * 4000)
+    parts = split_text("啊" * 4000, limit=800, max_parts=QQ_MAX_PARTS)
 
     assert len(parts) == QQ_MAX_PARTS
     assert parts[-1].endswith("……")
 
 
 def test_short_reply_stays_one_part():
-    assert split_qq_text("就在") == ["就在"]
+    assert split_text("就在", limit=800, max_parts=QQ_MAX_PARTS) == ["就在"]
 
 
 def test_outbound_parts_sends_one_message_per_blank_line():

@@ -36,6 +36,7 @@
         <div class="channel-switch" role="tablist" aria-label="会话渠道">
           <button role="tab" :aria-selected="store.channel === 'local'" :class="{ active: store.channel === 'local' }" @click="store.selectChannel('local')">本地</button>
           <button role="tab" :aria-selected="store.channel === 'qq'" :class="{ active: store.channel === 'qq' }" @click="store.selectChannel('qq')">QQ</button>
+          <button role="tab" :aria-selected="store.channel === 'wechat'" :class="{ active: store.channel === 'wechat' }" @click="store.selectChannel('wechat')">微信</button>
         </div>
         <template v-if="store.channel === 'local'">
           <button class="btn new-chat" :disabled="!store.activePersonaId || store.streaming" @click="createChat">新建会话</button>
@@ -50,30 +51,32 @@
           </div>
         </template>
         <template v-else>
-          <div class="history-label qq-label">来自 QQ</div>
+          <div class="history-label">来自 {{ store.remoteChannelLabel }}</div>
           <div class="conversation-list">
-            <div v-for="c in store.qqConversations" :key="c.id" class="conversation" :class="{ active: c.id === store.qqActiveId }">
-              <button class="conversation-main qq-single" :title="qqRowHint(c)" @click="selectQq(c.id)">
+            <div v-for="c in store.remoteConversations" :key="c.id" class="conversation" :class="{ active: c.id === store.remoteActiveId }">
+              <button class="conversation-main qq-single" :title="remoteRowHint(c)" @click="selectRemote(c.id)">
                 <i class="conv-peer-avatar"><PersonaAvatar :avatar="c.display_avatar" /></i>
                 <span class="qq-title-text">{{ c.display_name || c.title }}</span>
                 <i v-if="peerTag(c.external_id)" class="conv-tag">{{ peerTag(c.external_id) }}</i>
               </button>
               <button
+                v-if="store.channel === 'qq'"
                 type="button"
                 class="icon-button conv-menu"
                 title="自定义显示"
                 aria-label="自定义该会话的显示名与头像"
                 @click="openQqDisplay(c)"
               >⋯</button>
+              <button class="icon-button" title="删除会话" aria-label="删除会话" @click="removeRemote(c.id)">×</button>
             </div>
-            <p v-if="store.qqError" class="sidebar-error">{{ store.qqError }}</p>
-            <p v-else-if="!store.qqConversations.length" class="sidebar-empty">还没有 QQ 消息；在 QQ 里 @ 一下机器人试试。</p>
+            <p v-if="store.remoteError" class="sidebar-error">{{ store.remoteError }}</p>
+            <p v-else-if="!store.remoteConversations.length" class="sidebar-empty">{{ remoteEmptyHint }}</p>
           </div>
         </template>
       </aside>
 
       <div class="chat-main">
-        <div v-if="!store.isQq && store.activeConversation" class="chat-titlebar">
+        <div v-if="!store.isRemote && store.activeConversation" class="chat-titlebar">
           <span class="persona-avatar"><PersonaAvatar :avatar="store.activePersona?.avatar" /></span>
           <div><strong>{{ store.activePersona?.name || 'cKunBot' }}</strong><small>只聊此刻 </small></div>
           <span v-if="store.activeRelation" class="relation-chip" :title="relationHint(store.activeRelation)">
@@ -81,30 +84,30 @@
             <i class="relation-bar" aria-hidden="true"><b :style="{ width: relationPercent(store.activeRelation) }"></b></i>
           </span>
         </div>
-        <div v-else-if="store.isQq && store.qqActiveConversation" class="chat-titlebar">
-          <span class="persona-avatar"><PersonaAvatar :avatar="qqActivePersona?.avatar" /></span>
-          <div><strong>{{ qqPersonaName }}</strong><small>来自 QQ · {{ store.qqActiveConversation.display_name || peerLabel(store.qqActiveConversation.external_id) }} · 只读</small></div>
-          <span v-if="qqActiveRelation" class="relation-chip" :title="relationHint(qqActiveRelation)">
-            {{ qqActiveRelation.stage }}
-            <i class="relation-bar" aria-hidden="true"><b :style="{ width: relationPercent(qqActiveRelation) }"></b></i>
+        <div v-else-if="store.isRemote && store.remoteActiveConversation" class="chat-titlebar">
+          <span class="persona-avatar"><PersonaAvatar :avatar="remoteActivePersona?.avatar" /></span>
+          <div><strong>{{ remotePersonaName }}</strong><small>来自 {{ store.remoteChannelLabel }} · {{ store.remoteActiveConversation.display_name || peerLabel(store.remoteActiveConversation.external_id) }} · 只读</small></div>
+          <span v-if="remoteActiveRelation" class="relation-chip" :title="relationHint(remoteActiveRelation)">
+            {{ remoteActiveRelation.stage }}
+            <i class="relation-bar" aria-hidden="true"><b :style="{ width: relationPercent(remoteActiveRelation) }"></b></i>
           </span>
         </div>
         <div ref="messageListRef" class="bot-messages">
-          <div v-if="!store.isQq && !store.activeConversationId" class="chat-empty">
+          <div v-if="!store.isRemote && !store.activeConversationId" class="chat-empty">
             <h2>今天想聊点什么？</h2>
             <p>到「人格」页挑一位，新建一段只属于你们的会话。</p>
           </div>
-          <div v-else-if="store.isQq && !store.qqActiveId" class="chat-empty">
-            <h2>{{ store.qqError ? 'QQ 记录读取失败' : '还没有 QQ 消息' }}</h2>
-            <p>{{ store.qqError || '在 QQ 里 @ 一下机器人，这里会同步出现。' }}</p>
+          <div v-else-if="store.isRemote && !store.remoteActiveId" class="chat-empty">
+            <h2>{{ store.remoteError ? `${store.remoteChannelLabel} 记录读取失败` : `还没有 ${store.remoteChannelLabel} 消息` }}</h2>
+            <p>{{ store.remoteError || remoteEmptyHint }}</p>
           </div>
           <!-- 本地与 QQ 记录共用这一份气泡：方向、配色、meta、渲染口径都只按角色决定，
                渠道不再各留一套覆盖，切 tab 就是同一副观感。 -->
           <template v-else>
-            <div v-if="!store.isQq && !store.messages.length && !store.streaming" class="greeting">
+            <div v-if="!store.isRemote && !store.messages.length && !store.streaming" class="greeting">
               {{ store.activePersona?.greeting || `你好，我是${store.activePersona?.name || 'cKunBot'}。` }}
             </div>
-            <p v-else-if="store.isQq && !store.qqMessages.length" class="qq-empty">这段会话还没有消息。</p>
+            <p v-else-if="store.isRemote && !store.remoteMessages.length" class="qq-empty">这段会话还没有消息。</p>
             <template v-for="d in messageList" :key="`${d.item.id}-${d.item.bubbleIndex}`">
               <div v-if="d.divider" class="day-divider" role="separator">{{ d.divider }}</div>
               <!-- P4 在场感：还没到投递点的气泡先不渲染（isHiddenBubble），位置由 typing 行占住 -->
@@ -150,12 +153,12 @@
             </template>
           </template>
         </div>
-        <div v-if="!store.isQq && store.error" class="chat-error">
+        <div v-if="!store.isRemote && store.error" class="chat-error">
           <span>{{ store.error }}</span>
           <button v-if="store.lastFailedText" class="btn btn-sm" @click="retry">重试</button>
         </div>
-        <p v-if="store.isQq && store.qqActiveId" class="readonly-bar">来自 QQ · 仅供查看，回复请在 QQ 里进行</p>
-        <form v-if="!store.isQq && store.activeConversationId" class="chat-composer" @submit.prevent="send">
+        <p v-if="store.isRemote && store.remoteActiveId" class="readonly-bar">来自 {{ store.remoteChannelLabel }} · 仅供查看，回复请在{{ store.remoteChannelLabel }}里进行</p>
+        <form v-if="!store.isRemote && store.activeConversationId" class="chat-composer" @submit.prevent="send">
           <textarea
             ref="composerRef"
             v-model="draft"
@@ -301,6 +304,10 @@ async function retry() {
 async function removeConversation(id: string) {
   try { await store.deleteConversation(id) } catch (e) { toast.error(toFriendlyMessage(e, '删除失败')) }
 }
+/** 远程记录删除与本地同一口径：一次点击即执行，不弹确认。 */
+async function removeRemote(id: string) {
+  try { await store.deleteRemoteConversation(id) } catch (e) { toast.error(toFriendlyMessage(e, '删除失败')) }
+}
 /** 消息流跟到底：四处触发（新消息/流式、逐条揭开、切会话、QQ 轮询）共用一份。 */
 function scrollToBottom() {
   const el = messageListRef.value
@@ -360,8 +367,12 @@ function relationHint(state: { stage: string; turns: number; days_since: number 
   return base
 }
 
-const qqActivePersona = computed(() => store.qqActiveConversation?.persona || null)
-const qqPersonaName = computed(() => personaName(qqActivePersona.value) || '机器人')
+const remoteActivePersona = computed(() => store.remoteActiveConversation?.persona || null)
+const remotePersonaName = computed(() => personaName(remoteActivePersona.value) || '机器人')
+/** 只读侧空态：说清「这条渠道要等对方发消息」，而不是让人以为功能坏了。 */
+const remoteEmptyHint = computed(() => (store.channel === 'wechat'
+  ? '还没有微信消息；让微信用户给机器人发一条试试。'
+  : '还没有 QQ 消息；在 QQ 里 @ 一下机器人试试。'))
 
 // ── QQ 会话自定义显示（Phase 4 §4.4）──
 // 弹窗绑「点进来的那一行」而不是当前活动会话：列表每 5 秒轮询刷新，
@@ -397,14 +408,14 @@ function resetQqDisplay() {
   qqDisplayAvatar.value = ''
 }
 // 关系是「人格 × 用户」维度：QQ 会话也归属某人格，取其关系快照补上徽标。
-const qqActiveRelation = computed(() => {
-  const pid = qqActivePersona.value?.id
+const remoteActiveRelation = computed(() => {
+  const pid = remoteActivePersona.value?.id
   return pid ? store.relations[pid] || null : null
 })
 // 装饰元数据（日期分隔 + 连续合并）交给纯函数算，模板只做映射。
 // 先按空行展开成气泡再装饰：同一轮的后续气泡天然算「续接」，隐头像、收间距都复用现成规则。
 const localDecorated = computed(() => decorateMessages(expandBubbles(store.messages)))
-const qqDecorated = computed(() => decorateMessages(expandBubbles(store.qqMessages)))
+const remoteDecorated = computed(() => decorateMessages(expandBubbles(store.remoteMessages)))
 // 流式阶段就分条：打字时一条条冒出来，收尾换成落库消息时不会看到气泡重排。
 // 一个字符都还没有时留一条空气泡，「正在输入」的三个点就落在那里面。
 const streamBubbles = computed(() => {
@@ -485,51 +496,51 @@ watch(() => staged.value?.shown, async () => {
 const lightboxUrl = ref('')
 function openLightbox(url: string) { lightboxUrl.value = url }
 
-// 两个渠道一份列表：QQ 读的是只读记录，本地读的是自己的会话，气泡规则只有一套。
-const messageList = computed(() => (store.isQq ? qqDecorated.value : localDecorated.value))
-// 思考开关只裁决本地会话：后端只在 local 通道落 reasoning，QQ 记录没有思考块可显示，
-// 拿本地选中人格的开关去判 QQ 那一侧只会张冠李戴（两边可能不是同一个人格）。
-const thinkingOn = computed(() => !store.isQq && Boolean(store.activePersona?.enable_thinking))
+// 渠道共一份列表：远程（QQ / 微信）读的是只读记录，本地读的是自己的会话，气泡规则只有一套。
+const messageList = computed(() => (store.isRemote ? remoteDecorated.value : localDecorated.value))
+// 思考开关只裁决本地会话：后端只在 local 通道落 reasoning，远程记录没有思考块可显示，
+// 拿本地选中人格的开关去判远程那一侧只会张冠李戴（两边可能不是同一个人格）。
+const thinkingOn = computed(() => !store.isRemote && Boolean(store.activePersona?.enable_thinking))
 
-/** 头像按「哪一侧」取：bot = 当前应答人格，人 = 本地是你、QQ 是对方。 */
+/** 头像按「哪一侧」取：bot = 当前应答人格，人 = 本地是你、远程是对方。 */
 function bubbleAvatar(message: { role: string }) {
-  if (message.role !== 'user') return store.isQq ? qqActivePersona.value?.avatar : store.activePersona?.avatar
-  return store.isQq ? store.qqActiveConversation?.display_avatar : store.userAvatar
+  if (message.role !== 'user') return store.isRemote ? remoteActivePersona.value?.avatar : store.activePersona?.avatar
+  return store.isRemote ? store.remoteActiveConversation?.display_avatar : store.userAvatar
 }
 
-/** 说话人显示名，同一口径：真人用他自己的显示名（QQ 拿不到真名时用会话标题兜底），bot 用人格名。 */
+/** 说话人显示名，同一口径：真人用他自己的显示名（远程拿不到真名时用会话标题兜底），bot 用人格名。 */
 function speakerLabel(message: { role: string }) {
-  if (message.role !== 'user') return store.isQq ? qqPersonaName.value : personaName(store.activePersona) || 'Bot'
-  if (!store.isQq) return '你'
-  const conversation = store.qqActiveConversation
+  if (message.role !== 'user') return store.isRemote ? remotePersonaName.value : personaName(store.activePersona) || 'Bot'
+  if (!store.isRemote) return '你'
+  const conversation = store.remoteActiveConversation
   return conversation?.display_name || conversation?.title || '对方'
 }
 
-function qqRowHint(conversation: BotConversation) {
+function remoteRowHint(conversation: BotConversation) {
   return `${peerLabel(conversation.external_id)} · 最后消息 ${formatLocalDateTime(conversation.updated_at)}`
 }
 
-async function selectQq(id: string) {
+async function selectRemote(id: string) {
   sidebarOpen.value = false
-  await store.selectQqConversation(id)
+  await store.selectRemoteConversation(id)
   await nextTick()
   scrollToBottom()
 }
 
-let qqTimer: ReturnType<typeof setInterval> | undefined
+let remoteTimer: ReturnType<typeof setInterval> | undefined
 
-function stopQqPolling() {
-  if (qqTimer) {
-    clearInterval(qqTimer)
-    qqTimer = undefined
+function stopRemotePolling() {
+  if (remoteTimer) {
+    clearInterval(remoteTimer)
+    remoteTimer = undefined
   }
 }
 
-async function refreshQqChat() {
+async function refreshRemoteChat() {
   // 贴底判定复用任务台的共享件：用户上翻看记录时，轮询刷新不许抢滚动条
   const el = messageListRef.value
   const stick = !el || shouldFollowScroll(el.scrollTop, el.clientHeight, el.scrollHeight, 48)
-  await store.refreshQq()
+  await store.refreshRemote()
   if (stick) {
     await nextTick()
     scrollToBottom()
@@ -538,16 +549,16 @@ async function refreshQqChat() {
 
 watch([tab, () => store.channel], () => {
   sidebarOpen.value = false
-  stopQqPolling()
-  if (tab.value !== 'chat' || store.channel !== 'qq') return
-  void refreshQqChat()
-  qqTimer = setInterval(() => { void refreshQqChat() }, 5000)
+  stopRemotePolling()
+  if (tab.value !== 'chat' || !store.isRemote) return
+  void refreshRemoteChat()
+  remoteTimer = setInterval(() => { void refreshRemoteChat() }, 5000)
 })
 
 onMounted(async () => {
   await Promise.all([store.init(), models.fetchModels(), loadPersonaOptions()])
 })
-onUnmounted(() => { stopQqPolling(); store.stopGenerating(); clearStaging() })
+onUnmounted(() => { stopRemotePolling(); store.stopGenerating(); clearStaging() })
 </script>
 
 <style scoped>

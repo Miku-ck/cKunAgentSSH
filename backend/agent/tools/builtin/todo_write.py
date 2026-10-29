@@ -99,6 +99,7 @@ class TodoWriteTool(BaseTool):
             },
         },
         "required": ["action"],
+        "additionalProperties": False,
     }
     meta = ToolMeta(
         risk_level="safe",

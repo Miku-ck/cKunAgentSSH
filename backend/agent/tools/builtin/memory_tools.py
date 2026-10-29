@@ -72,6 +72,7 @@ class MemorySearchTool(BaseTool):
                       "description": f"返回条数上限（默认 5，最大 {_MAX_TOP_K}）"},
         },
         "required": ["query"],
+        "additionalProperties": False,
     }
     meta = ToolMeta(risk_level="safe", idempotent=True, timeout=15.0)
 
@@ -129,6 +130,7 @@ class MemoryAddTool(BaseTool):
                            "description": "重要度 0~1，默认 0.6"},
         },
         "required": ["content", "kind"],
+        "additionalProperties": False,
     }
     meta = ToolMeta(risk_level="safe", timeout=10.0)
 
@@ -191,6 +193,7 @@ class MemoryInvalidateTool(BaseTool):
             "reason": {"type": "string", "description": "作废原因（一句话）"},
         },
         "required": ["memory_id", "reason"],
+        "additionalProperties": False,
     }
     meta = ToolMeta(risk_level="safe", timeout=10.0)
 
@@ -232,6 +235,7 @@ class BlockUpdateTool(BaseTool):
             "new_string": {"type": "string", "description": "替换后的文本；空串=删除该行"},
         },
         "required": ["key", "new_string"],
+        "additionalProperties": False,
     }
     meta = ToolMeta(risk_level="safe", timeout=10.0)
 

@@ -24,10 +24,14 @@ class FakeConnection:
         self.channel_id = channel_id
         self.status = {"state": "online", "detail": ""}
         self.stop_calls = 0
+        self.release_calls = 0
 
     async def stop(self):
         self.stop_calls += 1
         self.status = {"state": "offline", "detail": ""}
+
+    async def release(self):
+        self.release_calls += 1
 
 
 class FakeProvider:
@@ -37,6 +41,7 @@ class FakeProvider:
     def __init__(self):
         self.connections = {}
         self.handlers = {}
+        self.cfgs = {}
         self.sent: list[tuple[str, str]] = []
         self.fail_with = ""
 
@@ -47,6 +52,7 @@ class FakeProvider:
         connection = FakeConnection(cfg.channel_id)
         self.connections[cfg.channel_id] = connection
         self.handlers[cfg.channel_id] = on_inbound
+        self.cfgs[cfg.channel_id] = cfg
         return connection
 
     def outbound_parts(self, text):
@@ -311,6 +317,59 @@ async def test_stop_only_stops_that_channel(rig):
     assert provider.connections[second["id"]].stop_calls == 0
     assert runtime.status(first["id"]) == {"state": "offline", "detail": ""}
     assert runtime.status(second["id"])["state"] == "online"
+
+
+def test_default_registry_registers_qq_and_wechat():
+    from bot.channel_runtime import default_providers
+
+    providers = default_providers()
+    assert {"qq", "wechat"} <= set(providers)
+    assert providers["wechat"].credential_labels == {
+        "app_secret": "Token",
+        "extra_secret": "EncodingAESKey",
+    }
+
+
+@pytest.mark.asyncio
+async def test_extra_secret_reaches_the_provider(rig):
+    runtime, provider, _ = rig
+    channel = db.create_bot_channel(
+        provider="fake",
+        display_name="微信A",
+        persona_id=db.create_bot_persona(name="小暖")["id"],
+        app_id="wx-app",
+        app_secret=db.protect_secret("token"),
+        extra_secret=db.protect_secret("aes-key"),
+    )
+
+    await runtime.start(channel)
+
+    assert provider.cfgs[channel["id"]].extra_secret == "aes-key"
+
+
+@pytest.mark.asyncio
+async def test_handle_exposes_only_live_connections(rig):
+    runtime, _, _ = rig
+    channel, _ = _channel("小暖", "机器人A", "100001")
+    assert runtime.handle(channel["id"]) is None
+
+    await runtime.start(channel)
+
+    assert runtime.handle(channel["id"]) is not None
+    assert runtime.handle("missing") is None
+
+
+@pytest.mark.asyncio
+async def test_disconnect_releases_before_stopping(rig):
+    runtime, provider, _ = rig
+    channel, _ = _channel("小暖", "机器人A", "100001")
+    await runtime.start(channel)
+
+    await runtime.disconnect(channel["id"])
+
+    connection = provider.connections[channel["id"]]
+    assert connection.release_calls == 1
+    assert connection.stop_calls == 1
 
 
 @pytest.mark.asyncio

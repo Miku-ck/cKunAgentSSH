@@ -9,22 +9,24 @@ import { parseBackendTs } from './format'
 
 /**
  * 从会话 external_id 抽出对方 openid 作头像种子。
- * 后端格式：`group:{group_openid}` / `c2c:{user_openid}`（机器人归属走
- * channel_id 列，不再拼进 key）；本地会话（null/空）或无法识别的来源返回空串。
+ * 后端格式：QQ `group:{group_openid}` / `c2c:{user_openid}`、微信 `wx:{openid}`
+ * （机器人归属走 channel_id 列，不再拼进 key）；本地会话（null/空）或无法识别的来源返回空串。
  */
 export function peerSeed(externalId?: string | null): string {
   if (!externalId) return ''
   const parts = externalId.split(':')
   if (parts.length < 2) return ''
-  if (parts[0] !== 'group' && parts[0] !== 'c2c') return ''
+  if (parts[0] !== 'group' && parts[0] !== 'c2c' && parts[0] !== 'wx') return ''
   return parts[1] || ''
 }
 
-/** 会话匿名代号：群聊/私聊 + openid 尾 4 位（大写），拿不到类型回落「QQ」。 */
+/** 会话匿名代号：群聊/私聊/微信 + openid 尾 4 位（大写），拿不到类型回落「QQ」。 */
 export function peerLabel(externalId?: string | null): string {
   const seed = peerSeed(externalId)
   if (!seed) return 'QQ'
-  const kind = externalId!.startsWith('group:') ? '群聊' : '私聊'
+  const kind = externalId!.startsWith('group:')
+    ? '群聊'
+    : externalId!.startsWith('wx:') ? '微信' : '私聊'
   const tail = seed.slice(-4).toUpperCase()
   return `${kind} · ${tail}`
 }

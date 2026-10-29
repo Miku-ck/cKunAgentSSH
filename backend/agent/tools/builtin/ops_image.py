@@ -56,6 +56,7 @@ class ReadImageTool(BaseTool):
             "path": {"type": "string", "description": "要读取的图片绝对路径"},
         },
         "required": ["path"],
+        "additionalProperties": False,
     }
     meta = ToolMeta(
         risk_level="safe",

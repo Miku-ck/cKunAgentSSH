@@ -17,6 +17,7 @@ from bot.provider import (
     UnsupportedProviderError,
 )
 from bot.qq_manager import QQProvider
+from bot.wechat_manager import WeChatProvider
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +30,8 @@ _STARTING = object()
 
 
 def default_providers() -> dict:
-    # 接入钉钉就是在这个元组里多一项，其余代码不动。
-    providers = (QQProvider(),)
+    # 接入新平台就是在这个元组里多一项，其余代码不动。
+    providers = (QQProvider(), WeChatProvider())
     return {provider.name: provider for provider in providers}
 
 
@@ -43,6 +44,19 @@ class ChannelRuntime:
 
     def supports(self, provider_name: str) -> bool:
         return provider_name in self._providers
+
+    def credential_labels(self, provider_name: str) -> dict:
+        """该平台需要哪几个凭据字段、界面怎么称呼；路由据此校验而不写 provider 分支。"""
+        provider = self._providers.get(provider_name)
+        return dict(getattr(provider, "credential_labels", {"app_secret": "AppSecret"}))
+
+    def handle(self, channel_id: str):
+        """已就绪的连接句柄（微信回调路由用）；离线/启动中返回 None。"""
+        with self._lock:
+            handle = self._handles.get(channel_id)
+        if handle is None or handle is _STARTING:
+            return None
+        return handle
 
     @staticmethod
     def _status_of(handle) -> dict:
@@ -78,6 +92,7 @@ class ChannelRuntime:
             app_id=channel["app_id"],
             app_secret=db.get_bot_channel_secret(channel_id),
             persona_id=channel["persona_id"],
+            extra_secret=db.get_bot_channel_extra_secret(channel_id),
         )
         try:
             handle = await provider.start(
@@ -98,6 +113,22 @@ class ChannelRuntime:
             return dict(OFFLINE_STATUS)
         await handle.stop()
         return handle.status
+
+    async def disconnect(self, channel_id: str) -> dict:
+        """用户显式断开/删除：先做渠道侧释放（微信把用户还给平台机器人），再停连接。
+
+        释放只在显式断开时发生；`stop_all()` 仍走 `stop()`，避免关机被网络请求拖住。
+        """
+        with self._lock:
+            handle = self._handles.get(channel_id)
+        if handle is not None and handle is not _STARTING:
+            release = getattr(handle, "release", None)
+            if release is not None:
+                try:
+                    await release()
+                except Exception as exc:  # noqa: BLE001 —— 释放失败不能挡住断开
+                    logger.warning("渠道 %s 释放失败: %s", channel_id, exc)
+        return await self.stop(channel_id)
 
     async def stop_all(self) -> None:
         for channel_id in list(self._handles):

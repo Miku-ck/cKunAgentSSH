@@ -267,6 +267,7 @@ class QQProvider:
 
     name = "qq"
     reply_window_s = QQ_REPLY_TIMEOUT
+    credential_labels = {"app_secret": "AppSecret"}
 
     def __init__(self, client_factory=None, retry_delays=DEFAULT_RETRY_DELAYS):
         self.client_factory = client_factory

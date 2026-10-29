@@ -6,9 +6,13 @@ backend/skills_builtin/<slug>/SKILL.md 是包内知识内容（extraResources �
 enabled 选择），并把 slug 集合交给 routes/skills 的孤儿清理作用域 —
 前端 ~/.agents/skills 同步路径不会把这些包内技能当孤儿删掉。
 
+稳态启动不再重复写库：扫描结果的指纹记在状态文件里，内容与库现状都没变时
+跳过 upsert 与注册表全量刷新（三条件见 sync_packaged_skills）。
+
 frontmatter 解析用轻量正则（requirements 无 pyyaml）：只支持
 `key: value` 与 `key: [a, b]` 两种形态，够 SKILL.md 规范使用。
 """
+import hashlib
 import json
 import logging
 import os
@@ -94,8 +98,12 @@ def scan_builtin_skills() -> list[dict]:
 def sync_packaged_skills() -> dict:
     """启动同步：upsert 包内技能 + 首次插入即启用（运维内置技能开箱可用）。
 
-    返回 {upserted, slugs}。数据库不可用时只 warning，不阻塞启动。
+    返回 {upserted, slugs, skipped}。数据库不可用时只 warning，不阻塞启动。
+
+    稳态短路：扫描指纹与状态文件一致 + slug 集合一致 + 库里这些 slug 都还在时，
+    不用再逐条 upsert，也不刷新注册表（原实现每次启动都重写一遍，纯冗余写）。
     """
+    global _current_digest
     import database as db
 
     skills = scan_builtin_skills()
@@ -105,8 +113,21 @@ def sync_packaged_skills() -> dict:
         # 全部内置技能连用户在 skill_mode_config 里的开关一起删干净，且 _persist 之后
         # 这次误删还会被固化。与 routes/skills.py 的 sync-builtin 空上报保护同源。
         logger.warning("[builtin_skills] 包内技能扫描为空，跳过同步与孤儿清理")
-        return {"upserted": 0, "slugs": sorted(_managed_slugs)}
+        return {"upserted": 0, "slugs": sorted(_managed_slugs), "skipped": False}
     _managed_slugs.clear()
+    current_slugs = {s["slug"] for s in skills}
+    digest = _current_digest = _skills_digest(skills)
+
+    # previous 必须先读：它是孤儿清理的唯一基准，同时兼任「状态文件是否可信」的判据
+    # （不可信时返回 None，短路与清理一律不做）。
+    previous = _previous_managed_slugs()
+    if previous is not None and _state_matches(db, previous, digest):
+        _managed_slugs.update(current_slugs)
+        logger.debug(
+            "[builtin_skills] 包内技能未变化，跳过写库与注册表刷新：%d 条", len(current_slugs)
+        )
+        return {"upserted": 0, "slugs": sorted(_managed_slugs), "skipped": True}
+
     upserted = 0
     for s in skills:
         try:
@@ -127,7 +148,6 @@ def sync_packaged_skills() -> dict:
     # 孤儿清理仅限本模块此前管理过的 slug（升级后删除的包内技能）
     baseline_known = True
     try:
-        previous = _previous_managed_slugs()
         if previous is None:
             # 状态文件读不出可信内容 → 无从判断"此前管过哪些"，任何清理都可能
             # 把仍在使用的包内技能当孤儿删掉。这次跳过，下次读到好文件再收敛。
@@ -162,7 +182,62 @@ def sync_packaged_skills() -> dict:
 
 
 _STATE_FILE = Path.home() / ".ckunagentic" / "builtin_skills_state.json"
-_STATE_VERSION = 1
+_STATE_VERSION = 2
+
+#: 本次扫描结果的指纹。_persist_managed_slugs 的零参签名被现有测试钉住
+#: （test_ai_loop_core_regression 用 `lambda: ...` 打桩），指纹只能靠模块级
+#: 状态传递 —— 它总在同一轮 _skills_digest 之后才被调用。
+_current_digest = ""
+
+
+def _skills_digest(skills: list[dict]) -> str:
+    """扫描结果指纹：按 slug 升序逐行拼接关键字段，取 sha256 前 16 位。
+
+    只覆盖真正落库到技能的字段；正文/触发词的任何差异都算变化（宁可多同步
+    一次，也不要漏掉包内技能更新）。
+    """
+    h = hashlib.sha256()
+    for s in sorted(skills, key=lambda x: x["slug"]):
+        h.update(
+            "|".join((
+                s["slug"],
+                s["name"],
+                s["description"],
+                s["category"],
+                ",".join(s["trigger_words"]),
+                s["system_prompt"],
+            )).encode("utf-8")
+        )
+        h.update(b"\n")
+    return h.hexdigest()[:16]
+
+
+def _state_digest() -> str:
+    """状态文件记录的扫描指纹；读不出或 v1 文件（无该字段）返回空串 = 不短路。"""
+    try:
+        data = json.loads(_STATE_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    digest = data.get("digest")
+    return digest if isinstance(digest, str) else ""
+
+
+def _state_matches(db, previous: set[str], digest: str) -> bool:
+    """稳态判据：指纹一致 + 状态里的 slug 都还在库里。
+
+    指纹里逐行含 slug，相等即已隐含「本次扫描集合与上次一致」，无需再单独比
+    集合。多查一次库是为了覆盖「DB 被删/重建而状态文件还在」—— 那种情况下
+    指纹天然一致，只信指纹会让内置技能永远回不来。
+    """
+    if not digest or _state_digest() != digest:
+        return False
+    try:
+        return previous <= set(db.list_builtin_skill_slugs())
+    except Exception as e:
+        logger.warning("[builtin_skills] 校验内置技能表失败，本次全量同步: %s", e)
+        return False
 
 
 def _previous_managed_slugs() -> set[str] | None:
@@ -226,7 +301,11 @@ def _persist_managed_slugs() -> None:
     try:
         _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(
-            {"version": _STATE_VERSION, "slugs": sorted(_managed_slugs)},
+            {
+                "version": _STATE_VERSION,
+                "slugs": sorted(_managed_slugs),
+                "digest": _current_digest,
+            },
             ensure_ascii=False,
         )
         tmp.write_text(payload, encoding="utf-8")

@@ -55,6 +55,28 @@ def test_secret_round_trips_protected_and_readable(base_db):
     assert db.get_bot_channel(channel["id"])["has_secret"] is False
 
 
+def test_extra_secret_round_trips_and_stays_out_of_the_channel_dict(base_db):
+    persona = db.create_bot_persona(name="小暖")
+    channel = db.create_bot_channel(
+        provider="wechat",
+        display_name="微信A",
+        persona_id=persona["id"],
+        app_id="wx-app",
+        app_secret=db.protect_secret("token"),
+        extra_secret=db.protect_secret("aes-key"),
+    )
+
+    assert channel["has_secret"] is True
+    assert channel["has_extra_secret"] is True
+    assert "aes-key" not in str(channel)
+    assert db.get_bot_channel_extra_secret(channel["id"]) == "aes-key"
+
+    db.set_bot_channel_extra_secret(channel["id"], "")
+    assert db.get_bot_channel(channel["id"])["has_extra_secret"] is False
+    # QQ 行没有第三个凭据，行为与老库一致
+    assert db.get_bot_channel_extra_secret(_channel(persona["id"])["id"]) == ""
+
+
 def test_enabled_flag_is_persisted_per_channel(base_db):
     persona = db.create_bot_persona(name="小暖")
     first = _channel(persona["id"])

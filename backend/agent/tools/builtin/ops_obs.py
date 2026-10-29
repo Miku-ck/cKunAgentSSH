@@ -135,6 +135,7 @@ class SysOverviewTool(BaseTool):
             },
         },
         "required": [],
+        "additionalProperties": False,
     }
     meta = _OBS_META
 
@@ -164,6 +165,7 @@ class ProcessInspectTool(BaseTool):
             },
         },
         "required": ["query"],
+        "additionalProperties": False,
     }
     meta = _OBS_META
 
@@ -227,6 +229,7 @@ class NetworkProbeTool(BaseTool):
             "timeout": {"type": "integer", "description": "探测超时秒数（默认 5）"},
         },
         "required": ["host", "port"],
+        "additionalProperties": False,
     }
     meta = _OBS_META
 
@@ -317,6 +320,7 @@ class LogReadTool(BaseTool):
             "pattern": {"type": "string", "description": "可选关键词，过滤日志行（留空读取全部尾部）"},
         },
         "required": ["path"],
+        "additionalProperties": False,
     }
     meta = _OBS_META
 

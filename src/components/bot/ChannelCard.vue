@@ -5,7 +5,7 @@
         <span class="status-dot" :class="state" aria-hidden="true"></span>
         <div class="channel-titles">
           <h3>{{ title }}</h3>
-          <small>{{ personaLabel }} · {{ channel ? transportLabel : '尚未创建' }}</small>
+          <small>{{ personaLabel }} · {{ transportLabel }}</small>
         </div>
       </div>
       <div class="channel-actions">
@@ -37,16 +37,28 @@
     <p v-if="channel && status.detail" class="channel-detail">{{ status.detail }}</p>
 
     <form v-if="expanded" class="channel-form" @submit.prevent="submit">
+      <label v-if="!channel" class="field">
+        <span>平台</span>
+        <select v-model="form.provider">
+          <option value="qq">QQ</option>
+          <option value="wechat">微信</option>
+        </select>
+      </label>
       <label class="field">
         <span>名称</span>
         <input v-model.trim="form.display_name" maxlength="40" autocomplete="off" placeholder="这台机器人在界面上叫什么" />
       </label>
       <label class="field">
-        <span>AppID</span>
-        <input v-model.trim="form.app_id" maxlength="100" autocomplete="off" placeholder="QQ 开放平台的机器人 AppID" />
+        <span>{{ isWechat ? 'APPID' : 'AppID' }}</span>
+        <input
+          v-model.trim="form.app_id"
+          maxlength="100"
+          autocomplete="off"
+          :placeholder="isWechat ? '微信对话开放平台的 APPID' : 'QQ 开放平台的机器人 AppID'"
+        />
       </label>
       <label class="field">
-        <span>AppSecret</span>
+        <span>{{ isWechat ? 'Token' : 'AppSecret' }}</span>
         <input
           v-model="form.app_secret"
           type="password"
@@ -55,6 +67,45 @@
           :placeholder="hasSecret ? '已保存；留空表示不修改' : '首次接入必填'"
         />
       </label>
+      <label v-if="isWechat" class="field">
+        <span>EncodingAESKey</span>
+        <input
+          v-model="form.extra_secret"
+          type="password"
+          maxlength="500"
+          autocomplete="new-password"
+          :placeholder="hasExtraSecret ? '已保存；留空表示不修改' : '开放API 页的 43 位密钥'"
+        />
+      </label>
+      <div v-if="isWechat" class="webhook-block">
+        <label class="field">
+          <span>公网地址</span>
+          <input
+            v-model.trim="form.webhook_base"
+            maxlength="300"
+            autocomplete="off"
+            placeholder="https://xxx.trycloudflare.com"
+            @blur="saveWebhook"
+          />
+        </label>
+        <label class="field">
+          <span>回调地址</span>
+          <div class="copy-row">
+            <input :value="callbackUrl" readonly :placeholder="channel ? '先填公网地址' : '保存并连接后生成'" />
+            <button type="button" class="btn btn-sm" :disabled="!canCopyCallback" @click="copyCallback">
+              {{ copied ? '已复制' : '复制' }}
+            </button>
+          </div>
+          <p v-if="channel && !baseUrl" class="webhook-warning">
+            还没有公网地址，上面只是路径；微信只收完整 https 地址，直接粘贴会提示「请输入正确的接入地址」。
+          </p>
+        </label>
+        <ol class="webhook-steps">
+          <li>用隧道把本机后端映射到公网 HTTPS。</li>
+          <li>把公网地址填到上面。</li>
+          <li>把回调地址粘到「发布管理 → 应用绑定 → 开放API → 回调地址」。</li>
+        </ol>
+      </div>
       <label class="field">
         <span>当前人格</span>
         <select v-model="form.persona_id" :disabled="state !== 'offline'">
@@ -81,7 +132,9 @@
           删除机器人
         </button>
       </div>
-      <p class="privacy-note">AppSecret 只写入本地加密存储，配置接口不会回显。</p>
+      <p class="privacy-note">
+        {{ isWechat ? 'Token 与 EncodingAESKey 只写入本地加密存储，配置接口不会回显。' : 'AppSecret 只写入本地加密存储，配置接口不会回显。' }}
+      </p>
     </form>
   </article>
 </template>
@@ -92,8 +145,12 @@ import { botApi, type BotChannel, type BotChannelStatus, type BotPersona } from 
 import { toFriendlyMessage } from '@/api/base'
 import { useConfirm } from '@/composables/useConfirm'
 
-const props = defineProps<{ channel: BotChannel | null; personas: BotPersona[] }>()
-const emit = defineEmits<{ refresh: []; created: []; discard: [] }>()
+const props = defineProps<{
+  channel: BotChannel | null
+  personas: BotPersona[]
+  webhookBase: string
+}>()
+const emit = defineEmits<{ refresh: []; created: []; discard: []; webhook: [value: string] }>()
 
 const { confirm } = useConfirm()
 
@@ -109,36 +166,77 @@ const STATE_TEXT: Record<BotChannelStatus['state'], string> = {
 const expanded = ref(!props.channel)
 const busy = ref(false)
 const error = ref('')
-const form = reactive({ display_name: '', app_id: '', app_secret: '', persona_id: '' })
+const form = reactive({
+  provider: 'qq' as BotChannel['provider'],
+  display_name: '',
+  app_id: '',
+  app_secret: '',
+  extra_secret: '',
+  persona_id: '',
+  webhook_base: '',
+})
 /** 已保存的密钥是否存在：只跟服务端同步，不拿用户刚输入的内容冒充。 */
 const savedSecret = ref(false)
+const savedExtraSecret = ref(false)
+const copied = ref(false)
 
 const status = computed(() => props.channel?.status ?? OFFLINE)
 const state = computed(() => status.value.state)
 const stateText = computed(() => STATE_TEXT[state.value])
-const transportLabel = 'WebSocket 长连接'
-const title = computed(() => props.channel?.display_name || '新增 QQ 机器人')
+const provider = computed(() => props.channel?.provider ?? form.provider)
+const isWechat = computed(() => provider.value === 'wechat')
+const transportLabel = computed(() => (isWechat.value ? '回调推送 · HTTPS' : 'WebSocket 长连接'))
+const title = computed(() => props.channel?.display_name || '新增机器人')
 const personaLabel = computed(() => {
   const id = props.channel?.persona_id || form.persona_id
   return props.personas.find(p => p.id === id)?.name || '未选择人格'
 })
 const hasSecret = computed(() => props.channel ? savedSecret.value : !!form.app_secret)
-const canSubmit = computed(() => !!form.display_name && !!form.app_id && !!form.persona_id)
+const hasExtraSecret = computed(() =>
+  props.channel ? savedExtraSecret.value : !!form.extra_secret
+)
+const canSubmit = computed(() =>
+  !!form.display_name &&
+  !!form.app_id &&
+  !!form.persona_id &&
+  // 微信首次接入要三项凭据齐全；QQ 的首次校验仍交给服务端报错。
+  (!isWechat.value || !!props.channel || (!!form.app_secret && !!form.extra_secret))
+)
+const baseUrl = computed(() => (form.webhook_base || props.webhookBase).replace(/\/+$/, ''))
+const callbackUrl = computed(() => {
+  if (!props.channel) return ''
+  const path = `/bot/wechat/${props.channel.id}`
+  return baseUrl.value ? `${baseUrl.value}${path}` : path
+})
+/** 没有公网地址时这条只是路径，微信只收完整 http(s) 地址，复制出去必然报错。 */
+const canCopyCallback = computed(() => !!props.channel && !!baseUrl.value)
 
 watch(
   () => props.channel,
   channel => {
     if (!expanded.value) fill(channel)
     savedSecret.value = !!channel?.has_secret
+    savedExtraSecret.value = !!channel?.has_extra_secret
+  },
+  { immediate: true }
+)
+
+watch(
+  () => props.webhookBase,
+  value => {
+    if (!form.webhook_base) form.webhook_base = value
   },
   { immediate: true }
 )
 
 function fill(channel: BotChannel | null) {
+  form.provider = channel?.provider || 'qq'
   form.display_name = channel?.display_name || ''
   form.app_id = channel?.app_id || ''
   form.app_secret = ''
+  form.extra_secret = ''
   form.persona_id = channel?.persona_id || props.personas[0]?.id || ''
+  form.webhook_base = props.webhookBase || ''
 }
 
 function toggleForm() {
@@ -153,13 +251,44 @@ function collapse() {
 }
 
 function secretPayload() {
-  return form.app_secret ? { app_secret: form.app_secret } : {}
+  const payload: { app_secret?: string; extra_secret?: string } = {}
+  if (form.app_secret) payload.app_secret = form.app_secret
+  if (form.extra_secret) payload.extra_secret = form.extra_secret
+  return payload
+}
+
+/** 公网地址是全局设置：失焦即保存，卡片只负责把改后的值报给页面。 */
+async function saveWebhook() {
+  if (!isWechat.value || form.webhook_base === props.webhookBase) return
+  try {
+    const saved = await botApi.setWebhook(form.webhook_base)
+    form.webhook_base = saved.base_url
+    emit('webhook', saved.base_url)
+  } catch (e) {
+    error.value = toFriendlyMessage(e, '公网地址保存失败')
+  }
+}
+
+async function copyCallback() {
+  if (!callbackUrl.value) return
+  try {
+    await navigator.clipboard.writeText(callbackUrl.value)
+    copied.value = true
+    window.setTimeout(() => { copied.value = false }, 1500)
+  } catch {
+    error.value = '复制失败，请手动选中复制'
+  }
 }
 
 async function submit() {
   busy.value = true
   error.value = ''
   try {
+    if (isWechat.value && form.webhook_base !== props.webhookBase) {
+      const saved = await botApi.setWebhook(form.webhook_base)
+      form.webhook_base = saved.base_url
+      emit('webhook', saved.base_url)
+    }
     if (props.channel) {
       await botApi.updateChannel(props.channel.id, {
         display_name: form.display_name,
@@ -168,15 +297,19 @@ async function submit() {
         ...secretPayload(),
       })
       if (form.app_secret) savedSecret.value = true
+      if (form.extra_secret) savedExtraSecret.value = true
       form.app_secret = ''
+      form.extra_secret = ''
       expanded.value = false
       emit('refresh')
     } else {
       const created = await botApi.createChannel({
+        provider: form.provider,
         display_name: form.display_name,
         app_id: form.app_id,
         persona_id: form.persona_id,
         app_secret: form.app_secret,
+        ...(form.provider === 'wechat' ? { extra_secret: form.extra_secret } : {}),
       })
       await botApi.connectChannel(created.id)
       emit('created')
@@ -262,6 +395,11 @@ async function remove() {
 .field input, .field select { width: 100%; box-sizing: border-box; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-base); color: var(--text-primary); padding: 9px var(--spacing-10); font: inherit; }
 .field input:focus, .field select:focus { border-color: var(--accent-primary); outline: none; }
 .field input:disabled, .field select:disabled { opacity: .6; cursor: not-allowed; }
+.webhook-block { display: flex; flex-direction: column; gap: var(--spacing-12); padding: var(--spacing-12); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-base); }
+.copy-row { display: flex; gap: var(--spacing-8); }
+.copy-row input { flex: 1; min-width: 0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.8462rem; }
+.webhook-steps { margin: 0; padding-left: 1.3em; color: var(--text-tertiary); font-size: 0.9231rem; line-height: 1.7; }
+.webhook-warning { margin: 0; color: var(--status-warn-text); font-size: 0.9231rem; line-height: 1.7; }
 .form-note, .privacy-note { margin: 0; color: var(--text-tertiary); font-size: 0.9231rem; line-height: 1.7; }
 .form-error { margin: 0; color: var(--danger-text); font-size: 0.9231rem; }
 .channel-form-actions { display: flex; gap: var(--spacing-8); flex-wrap: wrap; }
