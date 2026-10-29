@@ -24,9 +24,11 @@ class FakeMessage:
         self.group_openid = group_openid
         self.author = SimpleNamespace(member_openid="member-1", user_openid=user_openid)
         self.replies = []
+        self.seqs = []
 
-    async def reply(self, content, msg_type=0):
+    async def reply(self, content, msg_type=0, msg_seq=None):
         self.replies.append(content)
+        self.seqs.append(msg_seq)
 
 
 def collect_adapter(channel_id="channel-1"):
@@ -54,6 +56,25 @@ async def test_group_event_becomes_an_inbound_with_a_platform_only_key():
 
     await inbound.send("在的")
     assert message.replies == ["在的"]
+
+
+@pytest.mark.asyncio
+async def test_parts_of_the_same_event_carry_increasing_msg_seq():
+    """QQ 按 (msg_id, msg_seq) 去重：同一个事件连发多段时序号必须递增。
+
+    不递增的代价是静默丢消息 —— 平台回 40054005「消息被去重，请检查请求msgseq」，
+    于是本地记录三条、QQ 上只到一条。
+    """
+    adapter, received = collect_adapter()
+    message = FakeMessage("event-1", "在吗", user_openid="user-9")
+    await adapter.handle_c2c(message)
+    inbound = received[0]
+
+    for part in ("第一句", "第二句", "第三句"):
+        await inbound.send(part)
+
+    assert message.replies == ["第一句", "第二句", "第三句"]
+    assert message.seqs == [1, 2, 3]
 
 
 @pytest.mark.asyncio

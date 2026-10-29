@@ -6,6 +6,7 @@
 import logging
 import re
 from functools import partial
+from itertools import count
 
 from bot.provider import InboundMessage
 from bot.voice import split_reply_bubbles
@@ -112,10 +113,12 @@ class QQInboundAdapter:
                 event_id=event_id,
                 text=content,
                 # 回复能力闭包住这条消息：管线拿不到 message 对象本身。
-                send=partial(self._reply, message),
+                # 序号按事件独立：QQ 用 (msg_id, msg_seq) 去重，同一条消息的多次回复
+                # 必须各占一个序号，否则第 2 段起被 40054005「消息被去重」静默丢弃。
+                send=partial(self._reply, message, count(1)),
             )
         )
 
     @staticmethod
-    async def _reply(message, part: str) -> None:
-        await message.reply(content=part, msg_type=0)
+    async def _reply(message, seq, part: str) -> None:
+        await message.reply(content=part, msg_type=0, msg_seq=next(seq))
