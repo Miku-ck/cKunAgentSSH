@@ -3,16 +3,20 @@
 三个纯函数 + 一个调度器，0 次额外模型调用用于**决策**（desire 由状态推导），
 只有真正开口那一次才调模型生成「心里话」。
 
-分渠道（协议约束）：
+分渠道（协议约束，spec 2026-10-30-qq-proactive-message）：
 - local：直投 —— 主动消息直接落 bot_messages（assistant），前端进会话即见；
-- QQ：寄存 —— 被动回复窗口只有 150s，协议上无法主动发。过闸的心里话写
-  bot_proactive_log(action=queued, 有效期 48h)，inbound_pipeline 在组回复前
-  取出以「对了，」接入 —— 协议完全合法，行为上等价于「她憋了一句话，
-  见到你终于说了」。
+- QQ 单聊：真主动。先试官方「互动召回」（当天 / 1-3 / 3-7 / 7-30 天各一次，
+  is_wakeup=true），本档用掉走普通主动消息；平台拒绝（无权限/拒收）降级寄存；
+- QQ 群聊：真主动，但频率按群算 —— 每个群各自 12h 一次、每日 2 条上限，
+  不与人设名下的单聊共用额度。群主没开「主动推送消息能力」时平台回
+  40034105，降级为寄存（spec 2026-10-30-qq-group-ambient §3）。
 
-抑制器四重闸（全部可 mock 时钟单测）：最小间隔、静音窗、负反馈指数冷却、
+寄存有效期 48h，inbound_pipeline 在组回复前取出以「对了，」接入。
+
+抑制器四重闸（全部可 mock 时钟单测）：最小间隔 12h、静音窗、负反馈指数冷却、
 每日配额。负反馈 = 主动消息投出 2h 内用户没回话 → 冷却 48h 起步，二次 ×2，
-三次禁 7 天。
+三次禁 7 天。平台直接拒收（skip）不占配额，但另有 30 分钟退避：频控按小时
+恢复，每 60s 重试一次只会反复撞同一堵墙。
 """
 
 from __future__ import annotations
@@ -37,11 +41,19 @@ FIRE_THRESHOLD = 0.55
 # 负反馈冷却阶梯：第 1/2/3 次冷场
 COLD_STEPS_H = (48.0, 96.0, 168.0)
 QUIET_WINDOW = (23.5, 8.5)  # 本地小时；跨午夜
-DAILY_QUOTA = 1
-MIN_INTERVAL_H = {"fast": 12.0, "normal": 20.0, "slow": 36.0}
+# 产品口径：大约每 12 小时最多一次。配额只做天花板，静音窗再削掉半夜。
+DAILY_QUOTA = 2
+MIN_INTERVAL_H = 12.0
+# 关系节奏不再拉开间隔，而是通过「久不见」项影响 desire。
 EXPECTED_GAP_H = {"fast": 24.0, "normal": 60.0, "slow": 120.0}
+# 寄存的有效期：过了这个点就当她没说过（调度器会标 expired）
+QUEUE_TTL_H = 48.0
+# 互动召回分档（官方：用户主动对话后 30 天内 4 个周期各 1 条）
+WAKEUP_PERIODS_H = ((0.0, 24.0), (24.0, 72.0), (72.0, 168.0), (168.0, 720.0))
 COLD_REPLY_THRESHOLD = 0.4  # 寄存消息捎带时对当下 desire 的再门槛
 PROACTIVE_MAX_TOKENS = 256
+# 投递被平台拒了之后的退避：skip 不推进开口闸，不退避就是每 60s 重烧一次模型。
+PUSH_BACKOFF_MIN = 30.0
 
 
 def _sigmoid(x: float) -> float:
@@ -95,7 +107,6 @@ def _in_quiet_window(local_hour: float) -> bool:
 def gate(
     desire_value: float,
     *,
-    speed: str = "normal",
     local_hour: float,
     last_send_at: "datetime | None",
     cooldown_until: "datetime | None",
@@ -106,9 +117,8 @@ def gate(
     now = now or datetime.now(timezone.utc)
     if desire_value < FIRE_THRESHOLD:
         return False, f"desire {desire_value:.2f} < {FIRE_THRESHOLD}"
-    min_interval = MIN_INTERVAL_H.get(speed or "normal", 20.0)
-    if last_send_at is not None and (now - last_send_at) < timedelta(hours=min_interval):
-        return False, f"min_interval {min_interval}h"
+    if last_send_at is not None and (now - last_send_at) < timedelta(hours=MIN_INTERVAL_H):
+        return False, f"min_interval {MIN_INTERVAL_H:g}h"
     if _in_quiet_window(local_hour):
         return False, "quiet_window"
     if cooldown_until is not None and now < cooldown_until:
@@ -124,7 +134,37 @@ def cold_cooldown_after(cold_count: int) -> "timedelta":
     return timedelta(hours=COLD_STEPS_H[idx])
 
 
+def wakeup_period(gap_hours: float) -> "int | None":
+    """距用户上次说话落到哪一档召回（0/1/2/3）；超 30 天或负数 → None。"""
+    gap = max(0.0, float(gap_hours))
+    for index, (start, end) in enumerate(WAKEUP_PERIODS_H):
+        if start <= gap < end:
+            return index
+    return None
+
+
+def should_wakeup(
+    conversation_key: str, gap_hours: float, used_periods: "set[int]"
+) -> "int | None":
+    """该发互动召回吗？返回档位号，不发返回 None。
+
+    只有单聊有召回能力（群聊无 is_wakeup），且同一档只能撩一次 —— 平台会再兜一次
+    （40034122 召回已达区间上限），本地记账是为了不浪费一次模型与 HTTP 往返。
+    """
+    if not (conversation_key or "").startswith("c2c:"):
+        return None
+    period = wakeup_period(gap_hours)
+    if period is None or period in used_periods:
+        return None
+    return period
+
+
 # ── IO 区 ──
+
+
+def _is_group(target: dict) -> bool:
+    """该巡检目标是不是群聊会话。"""
+    return (target.get("external_id") or "").startswith("group:")
 
 
 def _count_past_colds(persona_id: str) -> int:
@@ -139,6 +179,33 @@ def _count_past_colds(persona_id: str) -> int:
     finally:
         conn.close()
     return int(row["n"] or 0)
+
+
+def used_wakeup_periods(conversation_id: str) -> "set[int]":
+    """该会话已经用掉的召回档位（reason 前缀 wakeup{n}:）。"""
+    return {
+        index
+        for index in range(len(WAKEUP_PERIODS_H))
+        if db.has_wakeup_period(conversation_id, index)
+    }
+
+
+def _proactive_sender(channel_id: str):
+    """取该渠道的主动发送能力；未连接或平台不支持返回 None。
+
+    刻意用惰性导入：channel_runtime 拉起 chat_service / qq_manager，proactive 是
+    它们的下游，模块级互相 import 会成环。
+    """
+    if not channel_id:
+        return None
+    try:
+        from bot.channel_runtime import get_channel_runtime
+
+        handle = get_channel_runtime().handle(channel_id)
+    except Exception as exc:  # noqa: BLE001 —— 发送能力缺失只降级，不拖垮调度
+        logger.warning("主动消息渠道不可用: %s", exc)
+        return None
+    return getattr(handle, "send_proactive", None)
 
 
 def _state_snapshot(persona_id: str, speed: str) -> "tuple[dict, float, bool, str | None, str]":
@@ -164,7 +231,10 @@ def _state_snapshot(persona_id: str, speed: str) -> "tuple[dict, float, bool, st
     return state, gap_hours, pending, cooldown, stage
 
 
-async def _compose(persona: dict, state_desc: str, topic: "tuple[str, str] | None" = None) -> str:
+async def _compose(
+    persona: dict, state_desc: str, topic: "tuple[str, str] | None" = None, *,
+    channel: str = "local",
+) -> str:
     """让模型替她说一句「心里话」。极小预算、无工具、禁思考。"""
     from bot.character import SAFETY_CHARTER  # noqa: F401 —— 确保人格口径一致
     from bot.chat_service import BotChatService
@@ -172,7 +242,8 @@ async def _compose(persona: dict, state_desc: str, topic: "tuple[str, str] | Non
 
     svc = BotChatService()
     model = await asyncio.to_thread(svc._model_for_persona, persona)
-    system = BotChatService._system_prompt(persona, "local", state_desc=state_desc)
+    # 渠道要传对：QQ 发出去是纯文本，Markdown 会原样显示成符号
+    system = BotChatService._system_prompt(persona, channel, state_desc=state_desc)
     # 有选题时把「说什么」钉住：别报菜名、别一字不差背原话，让她用自己的口气接
     if topic:
         ask = (
@@ -313,12 +384,34 @@ class ProactiveScheduler:
                 continue
 
     async def tick(self) -> int:
-        """一轮巡检：过闸→生成→分渠道投递 + 负反馈检查。返回触发数。"""
+        """一轮巡检：过期清理→过闸→生成→分渠道投递 + 负反馈检查。返回触发数。"""
+        now = datetime.now(timezone.utc)
+        # 过期寄存每轮收一次：不清的话 48h 前的「心里话」会永远躺在队列里
+        await asyncio.to_thread(db.expire_stale_proactive, _fmt_ts(now))
         targets = await asyncio.to_thread(db.list_proactive_targets)
         fired = 0
         for target in targets:
             persona_id = target["persona_id"]
+            conversation_id = target["conversation_id"]
+            channel = target.get("channel") or "local"
             speed = target.get("relationship_speed") or "normal"
+
+            # 已经憋着一句没等到人：先让她把那一句说出去，别再生成第二句。
+            # 不落 skip 日志：这一步每 60s 会命中一次，写库会把账本淹了。
+            if channel != "local" and await asyncio.to_thread(
+                db.get_pending_proactive, conversation_id
+            ):
+                continue
+
+            # 刚刚投出去被平台拒了（频控/内容/网络）：这一类不推进开口闸，
+            # 不退避就会每 60s 重生成一句、再 skip 一次，模型与账本一起刷爆。
+            # 同样不写 skip 日志：这一步也是每轮都命中。
+            last_fail = _parse(await asyncio.to_thread(
+                db.last_proactive_push_failure_at, conversation_id
+            ))
+            if last_fail and (now - last_fail) < timedelta(minutes=PUSH_BACKOFF_MIN):
+                continue
+
             state, gap_hours, pending_topic, cooldown_raw, stage = await asyncio.to_thread(
                 _state_snapshot, persona_id, speed
             )
@@ -326,21 +419,33 @@ class ProactiveScheduler:
 
             local_now = datetime.now().astimezone()
             local_hour = local_now.hour + local_now.minute / 60.0
-            now = datetime.now(timezone.utc)
             day_start = local_now.strftime("%Y-%m-%d 00:00:00")
-            last_send = _parse(await asyncio.to_thread(db.last_proactive_at, persona_id))
+            # 配额口径分渠道：群里每群独立（一个群热闹不该挤掉另一个群的额度），
+            # 单聊仍按人设算（同一个人不会同时开两个私聊）。
+            if _is_group(target):
+                last_send = _parse(await asyncio.to_thread(
+                    db.last_proactive_at_for_conversation, conversation_id
+                ))
+                sent_today = await asyncio.to_thread(
+                    db.proactive_sent_today_for_conversation, conversation_id, day_start
+                )
+            else:
+                # exclude_groups：群的开口不占单聊的间隔与日配额（每群独立算）
+                last_send = _parse(await asyncio.to_thread(
+                    db.last_proactive_at, persona_id, exclude_groups=True
+                ))
+                sent_today = await asyncio.to_thread(
+                    db.proactive_sent_today, persona_id, day_start, exclude_groups=True
+                )
             cooldown_until = _parse(cooldown_raw)
-            sent_today = await asyncio.to_thread(
-                db.proactive_sent_today, persona_id, day_start
-            )
             ok, reason = gate(
-                d, speed=speed, local_hour=local_hour, last_send_at=last_send,
+                d, local_hour=local_hour, last_send_at=last_send,
                 cooldown_until=cooldown_until, sent_today=sent_today, now=now,
             )
             if not ok:
                 await asyncio.to_thread(
                     db.add_bot_proactive_log,
-                    persona_id, target["conversation_id"], d, "skip", reason,
+                    persona_id, conversation_id, d, "skip", reason,
                 )
                 continue
 
@@ -354,31 +459,108 @@ class ProactiveScheduler:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("主动消息选题失败: %s", exc)
                 topic = None
-            text = await _compose(persona, state_desc, topic=topic)
+            text = await _compose(persona, state_desc, topic=topic, channel=channel)
             if not text:
                 continue
-            channel = target.get("channel") or "local"
-            expires_at = None
-            if channel == "local":
-                action = "send"
-            else:
-                # QQ：协议上无法主动发，寄存 48h，等对方下次来消息时捎上
-                action = "queued"
-                expires_at = _fmt_ts(now + timedelta(hours=48))
-            # reason 带上选题来源（ok:fresh_fact / ok:fatigue_care / ok:old_memory / ok），
-            # 供按来源调 θ；proactive_sent_today 只认 action，不受影响
-            reason = "ok" if not topic else f"ok:{topic[1]}"
-            await asyncio.to_thread(
-                db.add_bot_proactive_log,
-                persona_id, target["conversation_id"], d, action, reason, text, expires_at,
-            )
-            if action == "send":
-                await _fire_local(persona, target["conversation_id"], text)
-            fired += 1
+            if await self._deliver(
+                target, persona, text, desire_value=d, topic=topic, now=now
+            ):
+                fired += 1
 
         await self._check_cold_replies()
         await self._maintain_memories()
         return fired
+
+    async def _deliver(
+        self, target: dict, persona: dict, text: str, *,
+        desire_value: float, topic: "tuple[str, str] | None", now: datetime,
+    ) -> bool:
+        """按渠道投递。返回「这句话是不是真说出去了/憋在手里了」。"""
+        persona_id = target["persona_id"]
+        conversation_id = target["conversation_id"]
+        channel = target.get("channel") or "local"
+        # 选题来源供调 θ（ok:fresh_fact / ok:fatigue_care / ok:old_memory / ok:free）
+        src = topic[1] if topic else "free"
+
+        if channel == "local":
+            await asyncio.to_thread(
+                db.add_bot_proactive_log,
+                persona_id, conversation_id, desire_value, "send", f"ok:{src}", text,
+            )
+            await _fire_local(persona, conversation_id, text)
+            return True
+
+        action, tag, period = await self._push_qq(target, text, now=now)
+        if action == "push":
+            prefix = f"wakeup{period}:" if period is not None else ""
+            await asyncio.to_thread(
+                db.add_bot_proactive_log,
+                persona_id, conversation_id, desire_value, "push",
+                f"{prefix}ok:{src}", text, None, _fmt_ts(now),
+            )
+            return True
+        if action == "skip":
+            await asyncio.to_thread(
+                db.add_bot_proactive_log,
+                persona_id, conversation_id, desire_value, "skip", f"push:{tag}", text,
+            )
+            return False
+
+        # fallback：平台不让主动发（群聊/离线/无权限）→ 存一句，等她下次来
+        expires_at = _fmt_ts(now + timedelta(hours=QUEUE_TTL_H))
+        await asyncio.to_thread(
+            db.add_bot_proactive_log,
+            persona_id, conversation_id, desire_value, "queued",
+            f"queued:{tag}:{src}", text, expires_at,
+        )
+        logger.info("QQ 主动消息降级寄存（%s）：%s", tag, conversation_id)
+        return True
+
+    async def _push_qq(
+        self, target: dict, text: str, *, now: datetime
+    ) -> "tuple[str, str, int | None]":
+        """QQ 两个会话类型都尽量真主动。返回 (动作, 失败标签, 召回档位)。
+
+        动作：push=已发出，skip=平台拒了等下一轮，fallback=改成寄存。
+        群聊发的是不带 msg_id 的主动消息：需要群主开「主动推送消息能力」，
+        否则平台回 40034105（这里表现为 permission）；群聊也没有召回这个东西，
+        召回档位恒为 None。
+        """
+        conversation_id = target["conversation_id"]
+        conversation_key = target.get("external_id") or ""
+        sender = _proactive_sender(target.get("bot_channel_id") or "")
+        if sender is None:
+            return "fallback", "offline", None
+        if not conversation_key.startswith(("c2c:", "group:")):
+            return "fallback", "group", None
+        if _is_group(target):
+            kind, detail = await sender(conversation_key, text, wakeup=False)
+            if kind == "ok":
+                return "push", "", None
+            if kind in ("permission", "invalid", "offline"):
+                return "fallback", kind, None
+            logger.info("QQ 群主动消息未发出（%s）：%s", kind, detail)
+            return "skip", kind, None
+
+        period = None
+        last_user_at = _parse(await asyncio.to_thread(db.last_user_message_at, conversation_id))
+        if last_user_at is not None:
+            gap_user_h = (now - last_user_at).total_seconds() / 3600.0
+            used = await asyncio.to_thread(used_wakeup_periods, conversation_id)
+            period = should_wakeup(conversation_key, gap_user_h, used)
+
+        kind, detail = await sender(conversation_key, text, wakeup=period is not None)
+        if kind == "ok":
+            return "push", "", period
+        if kind == "wakeup_limit" and period is not None:
+            # 平台说这一档召回已经用掉：同一句话退回普通主动消息
+            kind, detail = await sender(conversation_key, text, wakeup=False)
+            if kind == "ok":
+                return "push", "", None
+        if kind in ("permission", "invalid", "offline"):
+            return "fallback", kind, None
+        logger.info("QQ 主动消息未发出（%s）：%s", kind, detail)
+        return "skip", kind, None
 
     async def _maintain_memories(self) -> None:
         """记忆治理搭车：每轮最多维护一个 persona（轮转），降权 + 容量边界。
@@ -412,6 +594,13 @@ class ProactiveScheduler:
         unchecked = await asyncio.to_thread(db.list_unchecked_proactive, cutoff)
         for entry in unchecked:
             await asyncio.to_thread(db.mark_proactive_checked, entry["id"])
+            conversation = await asyncio.to_thread(
+                db.get_bot_conversation, entry["conversation_id"]
+            )
+            # 群里「没人接话」不是冷淡：人一多谁都不回是常态，拿它冷却人设
+            # 会把这个人所有单聊一起冻住。群聊只靠每群 12h 间隔自约束。
+            if ((conversation or {}).get("external_id") or "").startswith("group:"):
+                continue
             replied = await asyncio.to_thread(
                 db.bot_conversation_has_user_reply_since,
                 entry["conversation_id"], entry["delivered_at"],

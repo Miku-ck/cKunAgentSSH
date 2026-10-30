@@ -1,4 +1,7 @@
 import asyncio
+import concurrent.futures
+import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -320,3 +323,200 @@ async def test_thread_name_carries_the_channel_id():
 
     assert connection._thread.name == "ckunbot-qq-deadbeef"
     await connection.stop()
+
+
+# ── 主动消息：没有入站消息时开口 ──
+
+
+class FakeHttp:
+    def __init__(self, result=None, error=None, delay=0.0):
+        self.calls = []
+        self.result = {"id": "msg-1"} if result is None else result
+        self.error = error
+        self.delay = delay
+
+    async def request(self, route, json=None):
+        self.calls.append((route, json))
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+class BotThread:
+    """模拟 ckunbot-qq-* 线程：botpy 的 aiohttp 会话绑在这个 loop 上。"""
+
+    def __init__(self):
+        self.loop = asyncio.new_event_loop()
+        self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self.loop.call_soon_threadsafe(self._shutdown)
+        self.thread.join(5)
+        self.loop.close()
+
+    def _shutdown(self):
+        for task in asyncio.all_tasks(self.loop):
+            task.cancel()
+        self.loop.stop()
+
+
+def online_connection(http):
+    from bot.qq_manager import QQConnection
+
+    bot = BotThread()
+    connection = QQConnection()
+    connection._client = SimpleNamespace(api=SimpleNamespace(_http=http))
+    connection._loop = bot.loop
+    connection._set_status("online")
+    return connection, bot
+
+
+@pytest.mark.asyncio
+async def test_send_proactive_crosses_into_the_botpy_thread():
+    http = FakeHttp()
+    connection, bot = online_connection(http)
+    try:
+        assert await connection.send_proactive("c2c:user-1", "  在忙吗  ") == ("ok", "")
+    finally:
+        bot.stop()
+
+    route, payload = http.calls[0]
+    assert route.path == "/v2/users/{openid}/messages"
+    assert route.parameters == {"openid": "user-1"}
+    assert payload == {"msg_type": 0, "content": "在忙吗"}
+
+
+@pytest.mark.asyncio
+async def test_send_proactive_offline_connection_never_touches_the_network():
+    from bot.qq_manager import QQConnection
+
+    connection = QQConnection()
+    assert await connection.send_proactive("c2c:user-1", "在吗") == (
+        "offline", "QQ 连接不在线",
+    )
+
+
+@pytest.mark.asyncio
+async def test_send_proactive_rejects_dirty_conversation_keys():
+    connection, bot = online_connection(FakeHttp())
+    try:
+        kind, detail = await connection.send_proactive("user-1", "在吗")
+    finally:
+        bot.stop()
+
+    assert kind == "invalid" and "user-1" in detail
+
+
+@pytest.mark.asyncio
+async def test_send_proactive_rejects_empty_content():
+    connection, bot = online_connection(FakeHttp())
+    try:
+        assert await connection.send_proactive("c2c:user-1", "   ") == (
+            "invalid", "主动消息内容为空",
+        )
+    finally:
+        bot.stop()
+
+
+@pytest.mark.asyncio
+async def test_send_proactive_truncates_instead_of_sending_two_messages():
+    """每段都算一条主动消息：超长只能截断，不能像被动回复那样分段重发。"""
+    from bot.qq_channel import QQ_TEXT_LIMIT
+
+    http = FakeHttp()
+    connection, bot = online_connection(http)
+    try:
+        assert await connection.send_proactive("c2c:user-1", "啊" * (QQ_TEXT_LIMIT + 100)) == (
+            "ok", "",
+        )
+    finally:
+        bot.stop()
+
+    content = http.calls[0][1]["content"]
+    assert len(content) == QQ_TEXT_LIMIT
+    assert content.endswith("…")
+
+
+@pytest.mark.asyncio
+async def test_send_proactive_classifies_platform_errors_across_threads():
+    """异常从 botpy 线程回传到主 loop 后仍然要能定性，否则降级决策就失灵了。"""
+    http = FakeHttp(error=RuntimeError("40034100 主动消息超频控"))
+    connection, bot = online_connection(http)
+    try:
+        kind, detail = await connection.send_proactive("c2c:user-1", "在吗")
+    finally:
+        bot.stop()
+
+    assert kind == "quota"
+    assert "40034100" in detail
+
+
+@pytest.mark.asyncio
+async def test_send_proactive_timeout_is_reported_as_network(monkeypatch):
+    from bot import qq_manager
+
+    monkeypatch.setattr(qq_manager, "PROACTIVE_SEND_TIMEOUT_S", 0.05)
+
+    def never_finishes(coro, _loop):
+        coro.close()
+        return concurrent.futures.Future()
+
+    monkeypatch.setattr(qq_manager.asyncio, "run_coroutine_threadsafe", never_finishes)
+    connection, bot = online_connection(FakeHttp())
+    try:
+        assert await connection.send_proactive("c2c:user-1", "在吗") == (
+            "network", "主动消息发送超时",
+        )
+    finally:
+        bot.stop()
+
+
+# ── GROUP_MESSAGE_CREATE：botpy 1.2.1 没有这个解析器，运行期补进分发表 ──
+
+
+def test_group_full_message_parser_is_injected_into_the_botpy_table():
+    """群消息全量模式：往 state.parsers 里补一项就能收到事件，不必改依赖。"""
+    from bot.qq_channel import AmbientGroupMessage
+    from bot.qq_manager import _install_group_message_parser
+
+    dispatched = []
+
+    class Client:
+        api = SimpleNamespace()
+        _connection = SimpleNamespace(
+            state=SimpleNamespace(parsers={"group_at_message_create": lambda p: None})
+        )
+
+        def ws_dispatch(self, event, *args):
+            dispatched.append((event, args))
+
+    client = Client()
+    assert _install_group_message_parser(client) is True
+
+    parsers = client._connection.state.parsers
+    parsers["group_message_create"]({
+        "id": "event-1",
+        "d": {"content": "今晚吃啥", "group_openid": "g1",
+              "author": {"member_openid": "m1", "username": "小明"}},
+    })
+
+    event, args = dispatched[0]
+    assert event == "group_message_create"
+    message = args[0]
+    assert isinstance(message, AmbientGroupMessage)
+    assert (message.content, message.group_openid, message.author.username) == (
+        "今晚吃啥", "g1", "小明",
+    )
+
+
+def test_group_full_message_parser_reports_missing_table():
+    """连接还没就绪时不能默默吞掉：日志要能查为什么群消息没进来。"""
+    from bot.qq_manager import _install_group_message_parser
+
+    class Client:
+        _connection = None
+
+    assert _install_group_message_parser(Client()) is False

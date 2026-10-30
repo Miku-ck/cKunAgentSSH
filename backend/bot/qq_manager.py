@@ -10,10 +10,15 @@ from bot.provider import (
     ChannelConfig,
 )
 from bot.qq_channel import (
+    PROACTIVE_SEND_TIMEOUT_S,
     QQ_FAILURE_REPLY,
     QQ_REPLY_TIMEOUT,
+    QQ_TEXT_LIMIT,
     QQ_TIMEOUT_REPLY,
+    AmbientGroupMessage,
     QQInboundAdapter,
+    classify_proactive_error,
+    parse_conversation_key,
     split_qq_parts,
     strip_markdown_for_qq,
 )
@@ -33,6 +38,27 @@ MISSING_DEPENDENCY_DETAIL = (
 DEFAULT_RETRY_DELAYS = (5, 10, 30, 60)
 
 
+def _install_group_message_parser(client) -> bool:
+    """把全量群消息事件接进 botpy 的分发表（spec 2026-10-30-qq-group-ambient）。
+
+    botpy 1.2.1 只实现了 parse_group_at_message_create；`ConnectionSession.parser`
+    是按 parse_* 方法名扫出来的 dict，运行期补一项即可，不必改依赖。
+    群主没开「接收全量消息」时平台压根不推这个事件，注册了也没副作用。
+    """
+    parsers = getattr(
+        getattr(getattr(client, "_connection", None), "state", None), "parsers", None
+    )
+    if not isinstance(parsers, dict):
+        logger.warning("QQ 全量群消息未注册：botpy 分发表不可用")
+        return False
+
+    def parse(payload: dict) -> None:
+        client.ws_dispatch("group_message_create", AmbientGroupMessage(client.api, payload))
+
+    parsers["group_message_create"] = parse
+    return True
+
+
 class QQConnection:
     """一个 QQ 机器人的一条长连接。
 
@@ -46,6 +72,8 @@ class QQConnection:
         self._thread: threading.Thread | None = None
         self._loop = None
         self._main_task = None
+        # 主动发送要用到当前在线的 client：它的 aiohttp 会话绑在 botpy 线程的 loop 上。
+        self._client = None
         self._status = {"state": "offline", "detail": ""}
         self._status_lock = threading.Lock()
         self._lifecycle_lock = threading.Lock()
@@ -80,10 +108,14 @@ class QQConnection:
 
         class Client(botpy.Client):
             async def on_ready(self):
+                _install_group_message_parser(self)
                 await on_ready()
 
             async def on_group_at_message_create(self, message):
                 await processor.handle_group(message)
+
+            async def on_group_message_create(self, message):
+                await processor.handle_group_message(message)
 
             async def on_c2c_message_create(self, message):
                 await processor.handle_c2c(message)
@@ -200,6 +232,7 @@ class QQConnection:
             try:
                 adapter = QQInboundAdapter(cfg.channel_id, on_inbound)
                 client = self.client_factory(adapter, self._on_client_ready)
+                self._client = client
                 connection = await client.start(cfg.app_id, cfg.app_secret, ret_coro=True)
                 if connection:
                     await connection
@@ -208,6 +241,7 @@ class QQConnection:
             except Exception as exc:
                 error = exc
             finally:
+                self._client = None
                 if client is not None:
                     try:
                         await client.close()
@@ -260,6 +294,73 @@ class QQConnection:
     async def stop(self) -> None:
         if await self._stop_worker():
             self._set_status("offline")
+
+    async def send_proactive(
+        self, conversation_key: str, text: str, *, wakeup: bool = False
+    ) -> "tuple[str, str]":
+        """没有入站消息时主动开口。返回 (kind, detail)，kind=ok 表示平台已收下。
+
+        跨线程：botpy 的 aiohttp 会话绑在 ckunbot-qq-* 线程自己的 loop 上，
+        主后端 loop 只能 run_coroutine_threadsafe 过去再等结果，不能直接 await。
+        """
+        if self._stopping.is_set() or self.status["state"] != "online":
+            return "offline", self.status.get("detail") or "QQ 连接不在线"
+        client = self._client
+        loop = self._loop
+        if client is None or loop is None:
+            return "offline", "QQ 连接尚未就绪"
+        target = parse_conversation_key(conversation_key)
+        if target is None:
+            return "invalid", f"会话标识无法解析：{conversation_key}"
+        content = (text or "").strip()
+        if not content:
+            return "invalid", "主动消息内容为空"
+        # 主动发不等同于被动分段：超长直接截断，不靠多段重发（每段都算一次主动消息）
+        if len(content) > QQ_TEXT_LIMIT:
+            content = content[: QQ_TEXT_LIMIT - 1] + "…"
+        try:
+            future = asyncio.run_coroutine_threadsafe(
+                _post_proactive(client, target, content, wakeup), loop
+            )
+        except RuntimeError as exc:  # loop 已关：与离线同口径
+            return "offline", f"QQ 连接已关闭：{exc}"
+        try:
+            receipt = await asyncio.wait_for(
+                asyncio.wrap_future(future), timeout=PROACTIVE_SEND_TIMEOUT_S
+            )
+        except asyncio.TimeoutError:
+            return "network", "主动消息发送超时"
+        except Exception as exc:  # noqa: BLE001 —— 平台错误统一交分类器定性
+            return classify_proactive_error(exc)
+        # botpy 的 request() 在 aiohttp 超时时只打一行日志、隐式返回 None，
+        # ConnectionResetError 分支重试后也把结果丢掉同样返回 None：没拿到回执
+        # 就等于不确定发出去没有，算 ok 会白占配额并记一条根本不存在的 push。
+        if not isinstance(receipt, dict):
+            return "network", "平台未返回受理回执"
+        return "ok", ""
+
+
+async def _post_proactive(client, target, text: str, wakeup: bool):
+    """最小 payload 直调 v2 发消息接口。
+
+    不用 SDK 的 post_c2c_message / post_group_message：1.2.1 的 `payload = locals()`
+    会把 embed/ark/media/msg_id/event_id 等可选参数以 null 一并塞进 JSON，
+    且没有 is_wakeup（互动召回）。Route 直调与表情包上传同一条路子。
+    """
+    from botpy.api import Route
+
+    partition, openid = target
+    payload = {"msg_type": 0, "content": text}
+    if wakeup:
+        payload["is_wakeup"] = True
+        route = Route("POST", "/v2/users/{openid}/messages", openid=openid)
+    elif partition == "group":
+        route = Route(
+            "POST", "/v2/groups/{group_openid}/messages", group_openid=openid
+        )
+    else:
+        route = Route("POST", "/v2/users/{openid}/messages", openid=openid)
+    return await client.api._http.request(route, json=payload)
 
 
 class QQProvider:

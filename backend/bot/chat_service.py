@@ -462,3 +462,117 @@ class BotChatService:
         if last and last[-1].get("role") == "assistant":
             return (last[-1].get("content") or "").strip()
         return "".join(out).strip()
+
+    async def ambient_reply(
+        self,
+        conversation_id: str,
+        context: "list[tuple[str, str]] | None" = None,
+        *,
+        channel: str = "qq",
+    ) -> str:
+        """群聊里插一句话：@ 的余温还在时，顺着现场接一句。
+
+        spec 2026-10-30-qq-group-ambient §2：这条路只为「接一句话」存在 ——
+        不写用户消息、不记关系、不动状态轴、不召回也不落记忆。群里多人共用
+        一份上下文，任何一条被当成「这个人说的话」记住，日后都会张冠李戴。
+        只有机器人自己这句落 assistant，群聊记录才不至于空着。
+        """
+        conversation = await asyncio.to_thread(db.get_bot_conversation, conversation_id)
+        if not conversation:
+            raise ValueError("会话不存在")
+        persona = conversation["persona"]
+        # 人格关掉表情包时输出侧也要关闸：提示词是软约束，标记是模型生成的。
+        sticker_enabled = normalize_dna(persona.get("expression_dna"))["sticker"] != "none"
+        model = await asyncio.to_thread(self._model_for_persona, persona)
+
+        persona_id = conversation.get("persona_id") or ""
+        speed = persona.get("relationship_speed") or "normal"
+        # 关系与状态都只读：此刻该用什么分寸说话，和「这句要不要记账」是两件事。
+        relation = (
+            await asyncio.to_thread(relation_mod.snapshot, persona_id, speed)
+            if persona_id else None
+        )
+        state_desc = ""
+        if persona_id:
+            try:
+                row = await asyncio.to_thread(db.get_bot_relation, persona_id)
+                local_now = datetime.now().astimezone()
+                local_hour = local_now.hour + local_now.minute / 60.0
+                state = state_mod.decay(
+                    state_mod.state_from_row(row or {}),
+                    datetime.now(timezone.utc), speed, local_hour,
+                )
+                state_desc = state_mod.describe_state(
+                    state, local_hour, speed, stage=(relation or {}).get("stage")
+                )
+            except Exception as exc:  # noqa: BLE001 —— 状态层是增强项，不拖垮接话
+                logger.warning("群聊状态读取失败: %s", exc)
+
+        messages: list[dict] = [{
+            "role": "system",
+            "content": self._system_prompt(
+                persona, channel, relation=relation, state_desc=state_desc,
+                delivery=delivery_hint(prev_parts=1, audience="group"),
+            ),
+        }]
+        # 临时上下文独立成一条 system：它不是「这个人说过的话」，只是此刻的现场。
+        note = self._ambient_context_note(context)
+        if note:
+            messages.append({"role": "system", "content": note})
+        history = await asyncio.to_thread(db.get_recent_bot_messages, conversation_id, 10)
+        messages.extend(self._to_llm_message(item) for item in history)
+        messages.append({"role": "user", "content": _AMBIENT_ASK})
+
+        max_tokens = safe_max_tokens(
+            model.get("max_tokens"),
+            "\n".join(str(item["content"]) for item in messages),
+            max_output_tokens=512,
+        )
+
+        from llm_adapter import chat_stream
+
+        parts: list[str] = []
+        async for chunk in chat_stream(
+            base_url=model["base_url"],
+            api_key=model.get("api_key") or "EMPTY",
+            model=model.get("model_id") or model["id"],
+            messages=messages,
+            temperature=model.get("temperature", 0.7),
+            max_tokens=max_tokens or 512,
+            top_p=model.get("top_p", 0.9),
+            enable_thinking=False,
+            tools=None,
+            disable_thinking=True,
+        ):
+            if chunk.content:
+                parts.append(chunk.content)
+        reply = "".join(parts).strip()
+        if not reply:
+            raise RuntimeError("模型未返回可显示的内容")
+
+        # 清洗链路与正常回复一致，只是省掉记账：发出去的必须是渠道能直接投递的形态。
+        reply = strip_ai_smell(reply)
+        reply = strip_sensitive_lines(reply)
+        reply = stickers_mod.normalize(reply, enabled=sticker_enabled) or "……"
+        reply = shape_group_reply(reply)
+        await asyncio.to_thread(db.add_bot_message, conversation_id, "assistant", reply)
+        return reply
+
+    @staticmethod
+    def _ambient_context_note(context: "list[tuple[str, str]] | None") -> str:
+        """群里的近期发言 → 一条独立 system 消息（超预算按 token 截）。"""
+        lines = [f"{name}：{text}" for name, text in (context or [])]
+        if not lines:
+            return ""
+        body = cap_text_tokens("\n".join(lines), 300)
+        return (
+            "群里刚刚在聊这些（只是现场，不是同一个人说的，也不一定每句都在叫你；"
+            "顺着接一句就好，别复述，也别逐条回应）：\n" + body
+        )
+
+
+_AMBIENT_ASK = (
+    "（内部指令，别当对话）你刚被群里点到，现在他们还在聊。顺口接一句。"
+    "只输出你要发的那句话本身：一句话、口语；别复述别人说了什么，"
+    "别用助手口气做总结，也别自我介绍。"
+)

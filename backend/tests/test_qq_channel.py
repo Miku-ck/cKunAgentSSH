@@ -12,6 +12,8 @@ import pytest
 from bot.qq_channel import (
     QQ_MAX_PARTS,
     QQInboundAdapter,
+    classify_proactive_error,
+    parse_conversation_key,
     strip_markdown_for_qq,
 )
 from bot.text_format import split_text
@@ -229,6 +231,95 @@ async def test_provider_outbound_parts_cleans_then_splits():
     joined = "".join(parts)
     assert "**" not in joined and "`" not in joined and "#" not in joined
     assert "标题" in joined and "第一段" in joined
+
+
+# ── 主动消息：会话键解析、失败分类、最小 payload ──
+
+
+class ForbiddenError(RuntimeError):
+    """与 botpy.errors.ForbiddenError 同名：分类器按类名识别 HTTP 403。"""
+
+
+def test_conversation_key_parses_both_partitions():
+    assert parse_conversation_key("c2c:user-1") == ("c2c", "user-1")
+    assert parse_conversation_key("group:group-1") == ("group", "group-1")
+
+
+def test_dirty_conversation_keys_are_rejected():
+    for key in ("", "user-1", "c2c:", "channel-1:c2c:user-1", "dm:user-1"):
+        assert parse_conversation_key(key) is None, key
+
+
+def test_proactive_error_classification():
+    cases = [
+        (ForbiddenError("403"), "permission"),
+        (RuntimeError("40034105 主动消息无权限"), "permission"),
+        (RuntimeError("40054013 用户拒收消息"), "permission"),
+        (RuntimeError("40054004 无好友关系"), "permission"),
+        (RuntimeError("40034122 互动召回已达区间上限"), "wakeup_limit"),
+        (RuntimeError("40034100 主动消息超频控"), "quota"),
+        (RuntimeError("40034006 内容违规"), "content"),
+        (asyncio.TimeoutError(), "network"),
+    ]
+    for exc, expected in cases:
+        kind, detail = classify_proactive_error(exc)
+        assert kind == expected, (exc, kind)
+        assert detail == str(exc).strip()
+
+
+def test_wakeup_limit_wins_over_the_quota_markers():
+    """召回达上限的文案里带「上限」，必须归到 wakeup_limit（退回普通主动），不能当频控跳过。"""
+    assert classify_proactive_error(RuntimeError("召回已达上限"))[0] == "wakeup_limit"
+
+
+def _post_target(calls):
+    class Http:
+        async def request(self, route, json=None):
+            calls.append((route, json))
+            return {"id": "msg-1"}
+
+    return SimpleNamespace(api=SimpleNamespace(_http=Http()))
+
+
+@pytest.mark.asyncio
+async def test_post_proactive_private_message_has_a_minimal_payload():
+    from bot.qq_manager import _post_proactive
+
+    calls = []
+    await _post_proactive(_post_target(calls), ("c2c", "user-1"), "在忙吗", False)
+
+    route, payload = calls[0]
+    assert route.method == "POST"
+    assert route.path == "/v2/users/{openid}/messages"
+    assert route.parameters == {"openid": "user-1"}
+    # SDK 的 post_c2c_message 会把 embed/ark/media/msg_id 以 null 一并塞进 JSON
+    assert payload == {"msg_type": 0, "content": "在忙吗"}
+
+
+@pytest.mark.asyncio
+async def test_post_proactive_group_message_goes_to_the_group_route():
+    from bot.qq_manager import _post_proactive
+
+    calls = []
+    await _post_proactive(_post_target(calls), ("group", "group-1"), "在吗", False)
+
+    route, payload = calls[0]
+    assert route.path == "/v2/groups/{group_openid}/messages"
+    assert route.parameters == {"group_openid": "group-1"}
+    assert payload == {"msg_type": 0, "content": "在吗"}
+
+
+@pytest.mark.asyncio
+async def test_post_proactive_wakeup_adds_the_is_wakeup_flag():
+    """互动召回只能走单聊路由：群聊没有 is_wakeup 能力。"""
+    from bot.qq_manager import _post_proactive
+
+    calls = []
+    await _post_proactive(_post_target(calls), ("group", "group-1"), "在吗", True)
+
+    route, payload = calls[0]
+    assert route.path == "/v2/users/{openid}/messages"
+    assert payload == {"msg_type": 0, "content": "在吗", "is_wakeup": True}
 
 
 def test_provider_fallback_text_is_per_kind():

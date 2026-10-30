@@ -54,6 +54,9 @@ class InboundMessage:
     event_id: str
     text: str
     send: Callable[[str], Awaitable[None]]
+    # 群聊环境消息：只为接一句话而收进来，不落用户消息、不抽记忆、不记关系
+    # （spec 2026-10-30-qq-group-ambient §2）。
+    ambient: bool = False
 
 
 class ConnectionHandle(Protocol):

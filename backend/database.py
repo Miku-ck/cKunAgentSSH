@@ -389,8 +389,10 @@ def init_db(db_path: str) -> None:
 
             -- 主动性（P3）：一次「想找你」的完整记录。action:
             --   send    = 本地渠道已直投（bot_messages 里可见）
-            --   queued  = QQ 寄存（协议只能被动回复，等对方下一条消息时捎上）
-            --   skip    = 过闸失败（reason 记原因，用于调 θ）
+            --   push    = QQ 主动消息已由平台收下（delivered_at 同时写入）
+            --   queued  = 寄存（主动发被拒或群聊，等对方下一条消息时捎上）
+            --   skip    = 过闸失败或平台拒绝（reason 记原因，用于调 θ）
+            --   expired = 寄存过期（保留审计行，不参与配额与间隔统计）
             -- checked_at：负反馈检查完成标记（2h 内没被回应 → 冷却翻倍，只查一次）。
             CREATE TABLE IF NOT EXISTS bot_proactive_log (
                 id              TEXT PRIMARY KEY,
@@ -3066,15 +3068,16 @@ def add_bot_proactive_log(
     reason: str = "",
     text: str = "",
     expires_at: Optional[str] = None,
+    delivered_at: Optional[str] = None,
 ) -> str:
     log_id = _new_id()
     conn = _get_conn()
     try:
         conn.execute(
             "INSERT INTO bot_proactive_log (id, persona_id, conversation_id, desire, "
-            "action, reason, text, expires_at) VALUES (?,?,?,?,?,?,?,?)",
+            "action, reason, text, expires_at, delivered_at) VALUES (?,?,?,?,?,?,?,?,?)",
             (log_id, persona_id, conversation_id, float(desire), action,
-             reason, text, expires_at),
+             reason, text, expires_at, delivered_at),
         )
         conn.commit()
     finally:
@@ -3109,32 +3112,88 @@ def mark_proactive_delivered(log_id: str) -> None:
         conn.close()
 
 
-def list_proactive_targets() -> "list[dict]":
-    """开启主动性的巡检清单：local 会话（可直投）+ 7 天内活跃的 QQ 会话（可寄存）。
+def last_user_message_at(conversation_id: str) -> Optional[str]:
+    """该会话里用户最后一次说话的时间：召回分档的锚点（会话级，不能用关系级 last_at）。"""
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT MAX(created_at) AS last FROM bot_messages "
+            "WHERE conversation_id = ? AND role = 'user'",
+            (conversation_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    return row["last"] if row else None
 
-    QQ 只列近期活跃会话：给沉寂半年的群寄存心里话毫无意义，且会撑爆队列。
+
+def has_wakeup_period(conversation_id: str, period: int) -> bool:
+    """这一档召回（当天/1-3/3-7/7-30 天）是否已经用掉。"""
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM bot_proactive_log WHERE conversation_id = ? "
+            "AND reason LIKE ? LIMIT 1",
+            (conversation_id, f"wakeup{int(period)}:%"),
+        ).fetchone()
+    finally:
+        conn.close()
+    return row is not None
+
+
+def expire_stale_proactive(now: str) -> int:
+    """过期寄存改记为 expired（保留审计行，不物理删）。返回过期条数。"""
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            "UPDATE bot_proactive_log SET action = 'expired' "
+            "WHERE action = 'queued' AND expires_at IS NOT NULL AND expires_at <= ?",
+            (now,),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+    finally:
+        conn.close()
+
+
+def list_proactive_targets() -> "list[dict]":
+    """开启主动性的巡检清单：local 会话（可直投）+ 30 天内活跃的 QQ 会话。
+
+    窗口按官方召回口径取 30 天：7 天会把「7-30 天」那一档整段砍掉；更久没动静的
+    会话寄存心里话也没意义，还白撑队列。
     """
     conn = _get_conn()
     try:
         rows = conn.execute(
             "SELECT p.id AS persona_id, p.name, p.relationship_speed, "
-            "c.id AS conversation_id, c.channel "
+            "c.id AS conversation_id, c.channel, c.channel_id AS bot_channel_id, "
+            "c.external_id "
             "FROM bot_personas p JOIN bot_conversations c ON c.persona_id = p.id "
             "WHERE p.proactive_enabled = 1 AND ("
             "  c.channel = 'local'"
-            "  OR (c.channel = 'qq' AND c.updated_at >= datetime('now', '-7 days')))"
+            "  OR (c.channel = 'qq' AND c.updated_at >= datetime('now', '-30 days')))"
         ).fetchall()
     finally:
         conn.close()
     return [dict(row) for row in rows]
 
 
-def proactive_sent_today(persona_id: str, day_start: str) -> int:
+def proactive_sent_today(persona_id: str, day_start: str, *, exclude_groups: bool = False) -> int:
+    # 统计口径 = 「已开口」三种动作（send/push/queued）。漏掉后两种的话，
+    # QQ 侧每次 tick 都当没说过话，会每 60 秒重说一遍。
+    # exclude_groups：调度器算单聊配额时要排掉群开口，否则两个群各发一条
+    # 就能把这个人格当天的单聊主动性全饿死（每群独立，spec 2026-10-30-qq-group-ambient §3）。
+    group_filter = (
+        " AND conversation_id NOT IN ("
+        "SELECT id FROM bot_conversations WHERE external_id LIKE 'group:%')"
+        if exclude_groups
+        else ""
+    )
     conn = _get_conn()
     try:
         row = conn.execute(
             "SELECT COUNT(*) AS n FROM bot_proactive_log "
-            "WHERE persona_id = ? AND action = 'send' AND created_at >= ?",
+            "WHERE persona_id = ? AND action IN ('send','push','queued') "
+            "AND created_at >= ?" + group_filter,
             (persona_id, day_start),
         ).fetchone()
     finally:
@@ -3142,12 +3201,19 @@ def proactive_sent_today(persona_id: str, day_start: str) -> int:
     return int(row["n"] or 0)
 
 
-def last_proactive_at(persona_id: str) -> Optional[str]:
+def last_proactive_at(persona_id: str, *, exclude_groups: bool = False) -> Optional[str]:
+    """人设口径的上次开口时间（口径与 exclude_groups 含义见 proactive_sent_today）。"""
+    group_filter = (
+        " AND conversation_id NOT IN ("
+        "SELECT id FROM bot_conversations WHERE external_id LIKE 'group:%')"
+        if exclude_groups
+        else ""
+    )
     conn = _get_conn()
     try:
         row = conn.execute(
             "SELECT MAX(created_at) AS last FROM bot_proactive_log "
-            "WHERE persona_id = ? AND action = 'send'",
+            "WHERE persona_id = ? AND action IN ('send','push','queued')" + group_filter,
             (persona_id,),
         ).fetchone()
     finally:
@@ -3155,12 +3221,60 @@ def last_proactive_at(persona_id: str) -> Optional[str]:
     return row["last"] if row else None
 
 
+def last_proactive_push_failure_at(conversation_id: str) -> Optional[str]:
+    """上次「生成好了但平台没收下」的时间（action=skip 且 reason 以 push: 开头）。
+
+    这类失败不推进任何开口闸，所以调度器拿它做退避：频控的恢复尺度是小时级，
+    按 60s 一轮重试只会反复撞同一墙，还每轮白烧一次模型。
+    """
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT MAX(created_at) AS last FROM bot_proactive_log "
+            "WHERE conversation_id = ? AND action = 'skip' AND reason LIKE 'push:%'",
+            (conversation_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    return row["last"] if row else None
+
+
+def proactive_sent_today_for_conversation(conversation_id: str, day_start: str) -> int:
+    """单会话口径的当日开口数（群聊每群独立配额，不与人设名下的其它会话互占）。"""
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM bot_proactive_log "
+            "WHERE conversation_id = ? AND action IN ('send','push','queued') "
+            "AND created_at >= ?",
+            (conversation_id, day_start),
+        ).fetchone()
+    finally:
+        conn.close()
+    return int(row["n"] or 0)
+
+
+def last_proactive_at_for_conversation(conversation_id: str) -> Optional[str]:
+    """单会话口径的上次开口时间（群聊每群独立 12h 间隔）。"""
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT MAX(created_at) AS last FROM bot_proactive_log "
+            "WHERE conversation_id = ? AND action IN ('send','push','queued')",
+            (conversation_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    return row["last"] if row else None
+
+
 def list_unchecked_proactive(older_than: str) -> "list[dict]":
-    """已投递超过 older_than、尚未做负反馈检查的主动消息。"""
+    """已投递超过 older_than、尚未做负反馈检查的主动消息（主动消息与本地直投）。"""
     conn = _get_conn()
     try:
         rows = conn.execute(
-            "SELECT * FROM bot_proactive_log WHERE action = 'send' AND delivered_at IS NOT NULL "
+            "SELECT * FROM bot_proactive_log WHERE action IN ('send','push') "
+            "AND delivered_at IS NOT NULL "
             "AND checked_at IS NULL AND delivered_at <= ?",
             (older_than,),
         ).fetchall()
