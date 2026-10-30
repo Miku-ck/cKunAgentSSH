@@ -65,15 +65,6 @@
               <span class="vr-l1">
                 <span class="vr-name">{{ r.name }}</span>
                 <span v-if="accelTag(r)" class="vr-acc" title="git 读取已走全局镜像加速（insteadOf）">已加速</span>
-                <span v-if="endpointsOf(r).length" class="dots">
-                  <i
-                    v-for="ep in endpointsOf(r)"
-                    :key="ep.name"
-                    class="dot"
-                    :class="syncDotClass(ep)"
-                    :title="`${ep.name}（${ep.role === 'primary' ? '主仓' : '镜像'}）· ${syncStateText(ep)}`"
-                  ></i>
-                </span>
               </span>
               <span v-if="r.error" class="vr-err" :title="r.error">{{ r.error }}</span>
               <span v-else class="vr-l2">
@@ -97,6 +88,7 @@
         :sync-available="syncAvailable"
         :probing="probing"
         :probe-label="probeLabel"
+        :manual-primary="detailRepo ? (syncConfigs[detailRepo.path]?.primary ?? null) : null"
         @fetch="detailRepo && onFetch(detailRepo)"
         @pull="detailRepo && onPull(detailRepo)"
         @push="detailRepo && onPush(detailRepo)"
@@ -110,6 +102,7 @@
         @fix="(remote: string) => detailRepo && onFix(detailRepo, remote)"
         @merge="(remote: string) => detailRepo && onMerge(detailRepo, remote)"
         @probe="probeEndpoints()"
+        @set-primary="(remote: string | null) => detailRepo && onSetPrimary(detailRepo, remote)"
       />
       <div v-else class="vdetail-empty">
         <span>在左侧选择一个仓库</span>
@@ -258,7 +251,7 @@
 // 右列 = 常驻详情面板 GitRepoDetailPanel（变更 / 远端 / 分支 / 图谱四页签）。
 // 位置 = 本地或某台已连接远程会话；本地经 gitrepos:* IPC（主进程 execFile），
 // 远程构造 shared/git-repos-core 的命令经 sshExec 下发（同 Docker 路线）。
-// 2026-10-30：原「同步」子页并入本页 —— 列表行三点远端状态 + 详情远端条/远端页签，
+// 2026-10-30：原「同步」子页并入本页 —— 列表行远端摘要 + 详情远端条/远端页签，
 // 巡检（gitrepos:syncProbe）与补齐/合并动作收在本组件，与仓库动作共用一把 busy 锁。
 // 动作锁 / pull 确认 / 远程审计收在本组件；详情面板只取数不执行。
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -295,8 +288,6 @@ import {
   repoRowKind,
   shSingleQuote,
   sortRepoRows,
-  syncDotClass,
-  syncStateText,
   toLocalRepoRow,
   toRemoteRepoRow,
   repoRowId,
@@ -304,6 +295,7 @@ import {
   type PushOutcome,
   type RepoRow,
   type RepoRowKind,
+  type RepoSyncConfig,
   type SyncEndpoint,
 } from '../../../../shared/git-repos-core'
 import type { GitPrivateToken } from '../../../../shared/github-accel-core'
@@ -336,9 +328,10 @@ watch(remoteSessions, (list) => {
   if (scopeKey.value !== 'local' && !list.some(s => s.id === scopeKey.value)) scopeKey.value = 'local'
 })
 
-// ── 注册表（本地路径 + 按 connectionId 记忆的远端路径） ──
+// ── 注册表（本地路径 + 按 connectionId 记忆的远端路径 + 各仓手动主仓配置） ──
 const localPaths = ref<string[]>([])
 const remotePaths = ref<Record<string, string[]>>({})
+const syncConfigs = ref<Record<string, RepoSyncConfig>>({})
 const registeredCount = computed(() => isLocal.value
   ? localPaths.value.length
   : ((scopeSession.value?.connectionId && remotePaths.value[scopeSession.value.connectionId]) || []).length)
@@ -349,6 +342,7 @@ async function loadRegistry(): Promise<void> {
   const reg = await api.gitreposGetRegistry()
   localPaths.value = reg.local
   remotePaths.value = reg.remote
+  syncConfigs.value = reg.sync ?? {}
 }
 
 // ── 列表取数（epoch 守卫：切范围即作废在途回包） ──
@@ -395,7 +389,8 @@ async function refresh(): Promise<void> {
       // （"An object could not be cloned"）——IPC 传参一律先拷成普通数组
       const results = await api.gitreposStatusAll([...localPaths.value])
       if (pin !== epoch) return
-      rows.value = sortRepoRows(results.map(toLocalRepoRow))
+      // 行预览的「推送目标」要反映手动主仓：把注册表 sync 配置一并喂给 toLocalRepoRow
+      rows.value = sortRepoRows(results.map(r => toLocalRepoRow(r, syncConfigs.value[r.path] ?? null)))
       // 仓库已从注册表移出时，旧端点快照会变成幽灵（状态栏仍计数）——本地范围即时剪掉
       pruneEndpoints()
     } else {
@@ -563,7 +558,7 @@ async function withBusy(key: string, fn: () => Promise<void>): Promise<void> {
 // ── 远端一致性（2026-10-30 原「同步」子页并入本页） ──
 // 数据 = gitrepos:syncProbe（逐远端 ls-remote + rev-list 分型，只读不动工作区）。
 // 该通道走**本地注册表**，因此只有本地范围有巡检能力 —— 远程范围的远端一致性
-// 以「获取」后的 ↑↓ 为准，列表不画三点、详情远端条改给提示。
+// 以「获取」后的 ↑↓ 为准，列表不给远端摘要、详情远端条改给提示。
 // 纪律（沿用同步子页）：镜像只允许快进；分叉绝不强推；动作共用一把 busy 锁。
 const endpointsByPath = ref<Record<string, SyncEndpoint[]>>({})
 const probedAt = ref(0)
@@ -583,7 +578,7 @@ function endpointsOf(r: RepoRow): SyncEndpoint[] {
 function pendingOf(r: RepoRow): number {
   return endpointsOf(r).filter(e => e.state === 'behind' || e.state === 'diverged').length
 }
-/** 行内一句话概括远端：只列非一致项，一致的路由三点表达，避免每行都挂噪声 */
+/** 行内一句话概括远端：只列非一致项，一致的留给状态栏计数，避免每行都挂噪声 */
 function epNote(r: RepoRow): string {
   const eps = endpointsOf(r)
   if (!eps.length) return ''
@@ -747,6 +742,25 @@ async function onMerge(r: RepoRow, remote: string): Promise<void> {
   })
 }
 
+/** 主仓设置：remote 为远端名 = 设为本仓主仓（手动覆盖自动推导）；null = 恢复自动 */
+async function onSetPrimary(row: RepoRow, remote: string | null): Promise<void> {
+  if (row.scope !== 'local') return // 仅本地仓库可手动设主仓
+  await withBusy(`setprimary:${row.id}`, async () => {
+    const api = window.electronAPI
+    if (!api) return
+    try {
+      const reg = await api.gitreposSyncSetPrimary(row.path, remote)
+      syncConfigs.value = reg.sync ?? {}
+      toast.success(remote ? `已将 ${remote} 设为 ${row.name} 的主仓` : `已恢复 ${row.name} 的自动主仓推导`)
+      // 重读列表（推送目标预览）+ 重探端点（主仓/镜像角色刷新）
+      await refresh()
+      await reprobeOne(row.path)
+    } catch (e) {
+      toast.error(errMsg(e, '设置主仓失败'))
+    }
+  })
+}
+
 // ── 审计（仅远程 pull：fetch 属读路径不写审计，与 Docker 读路径同口径） ──
 function writeGitAudit(row: RepoRow, cmd: string, conclusion: RemoteAuditConclusion, result: string): void {
   const session = row.sessionId ? sshStore.sessions.find(s => s.id === row.sessionId) : null
@@ -882,7 +896,7 @@ async function onSwitch(row: RepoRow, branch: string): Promise<void> {
       }
       toast.success(`${row.name}：已切换到 ${branch}`)
       await refresh()
-      // 端点快照描述的是上一个分支的远端 SHA，换分支后必须重探，否则三点全在说谎
+      // 端点快照描述的是上一个分支的远端 SHA，换分支后必须重探，否则远端摘要全在说谎
       if (row.scope === 'local') await reprobeIfTracked(row.path)
     } catch (e) {
       toast.error(errMsg(e, '切换分支失败'))
@@ -1112,7 +1126,7 @@ async function onAdd(): Promise<void> {
       await api.gitreposAddLocal(dir)
       await loadRegistry()
       await refresh()
-      // 新仓库还没有端点快照：补一次单仓探测，否则它要等到下一轮巡检才有三点。
+      // 新仓库还没有端点快照：补一次单仓探测，否则它要等到下一轮巡检才有远端摘要。
       // 登记的可能是仓库子目录（注册表存原样），所以按「路径前缀最长」反查所属仓库行
       const added = rows.value
         .filter(r => r.path === dir || dir.startsWith(r.path.replace(/\/+$/, '') + '/'))
@@ -1497,13 +1511,6 @@ watch(scopeKey, () => {
   white-space: nowrap;
 }
 
-/* 远端三点：与「同步」子页同一套色（一致/落后/分叉/探测失败），hover 出全名与状态 */
-.dots { display: inline-flex; gap: var(--spacing-4); flex-shrink: 0; }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bg-slider); }
-.dot.ok { background: var(--status-success-text); }
-.dot.behind { background: var(--status-warn-text); }
-.dot.diverged { background: var(--status-error-text); }
-.dot.off { background: var(--bg-slider); box-shadow: inset 0 0 0 1px var(--border-default); }
 .vr-ep { color: var(--status-warn-text); white-space: nowrap; margin-left: auto; }
 
 /* 巡检失败带：比取数失败轻一档（列表照常可用，只是缺远端那一层） */

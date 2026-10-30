@@ -284,6 +284,23 @@ export function deriveSyncConfig(remotes: Record<string, string>, branchRemote: 
   return { primary, mirrors: Object.keys(remotes).filter(n => n !== primary) }
 }
 
+/**
+ * 主仓判定（手动优先 + 可回退自动）：
+ * - saved 存在且 saved.primary 仍是有效远端 → 用它作主仓（用户自由指定的主仓）；
+ * - 否则回退 deriveSyncConfig（GitCode 优先 → branch remote → origin → 首名）。
+ * mirrors 恒由当前远端实时计算，被删远端自动掉出。
+ */
+export function resolveSyncConfig(
+  remotes: Record<string, string>,
+  branchRemote: string | null,
+  saved?: RepoSyncConfig | null,
+): RepoSyncConfig {
+  if (saved && saved.primary && remotes[saved.primary]) {
+    return { primary: saved.primary, mirrors: Object.keys(remotes).filter(n => n !== saved.primary) }
+  }
+  return deriveSyncConfig(remotes, branchRemote)
+}
+
 /** 本地 git 命令的原样回包（fetch/pull 由渲染层 interpretPull 解释） */
 export interface GitRawResult {
   code: number
@@ -601,12 +618,12 @@ export function sortRepoRows<T extends Pick<RepoRow, 'name' | 'dirtyFiles' | 'ah
   })
 }
 
-/** 本地取数结果 → 行（electron/git-repos.ts 的返回直接喂这里） */
-export function toLocalRepoRow(r: LocalRepoStatusResult): RepoRow {
+/** 本地取数结果 → 行（electron/git-repos.ts 的返回直接喂这里）；savedSync 为注册表手动主仓配置（可空） */
+export function toLocalRepoRow(r: LocalRepoStatusResult, savedSync?: RepoSyncConfig | null): RepoRow {
   const origin = r.originUrl ? parseOriginUrl(r.originUrl) : null
   const remotes = r.remotes ?? {}
   const branchRemote = r.status?.upstream ? r.status.upstream.split('/')[0] : null
-  const primaryRemote = primaryRemoteOf(remotes, branchRemote)
+  const primaryRemote = resolveSyncConfig(remotes, branchRemote, savedSync).primary || null
   return {
     id: repoRowId('local', undefined, r.path),
     scope: 'local',

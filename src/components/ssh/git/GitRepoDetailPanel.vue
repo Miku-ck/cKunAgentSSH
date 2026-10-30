@@ -26,7 +26,7 @@
         :disabled="!!busy || !!repo.error || !repo.ahead"
         :title="pushHint"
         @click="emit('push')"
-      >推送<span class="grdp-actct grdp-pushct">↑{{ repo.ahead }}</span></button>
+      >推送</button>
       <button class="btn" type="button" :disabled="!!busy" title="在终端中打开（本地终端 / 新 SSH 会话）" @click="emit('term')">终端</button>
       <button class="btn grdp-remove" type="button" :disabled="!!busy" title="仅从列表移除，不删除任何文件" @click="emit('remove')">移出</button>
     </div>
@@ -45,7 +45,7 @@
         远程仓库：拉取 / 推送将直接更新服务器上的工作区（部署语义），操作计入审计。
       </div>
 
-      <!-- 概要条：分支 / 上游 / 未提交 / 最近提交 / 远程，标签一档、值一档（此前是长长一行，读不出结构） -->
+      <!-- 概要条：分支 / 上游 / 未提交 / 远程，标签一档、值一档 -->
       <div class="grdp-sum">
         <span class="sum-i">
           <span class="sum-k">分支</span>
@@ -62,11 +62,6 @@
         <span class="sum-i">
           <span class="sum-k">未提交</span>
           <span class="sum-v" :class="{ warn: repo.dirtyFiles > 0 }">{{ repo.dirtyFiles }}</span>
-        </span>
-        <span v-if="repo.lastCommit" class="sum-i sum-c">
-          <span class="sum-k">最近提交</span>
-          <span class="sum-v grdp-lastc" :title="`${repo.lastCommit.subject}（${repo.lastCommit.author}）`">{{ repo.lastCommit.subject }}</span>
-          <span class="sum-meta">{{ repo.lastCommit.author }} · {{ repo.lastCommit.relTime }}</span>
         </span>
         <span v-if="repo.originHost" class="sum-i">
           <span class="sum-k">远程</span>
@@ -143,7 +138,17 @@
             <button v-if="repo.originUrl" class="grdp-eplink" type="button" :disabled="probing || !!busy" @click="emit('probe')">巡检</button>
           </div>
           <template v-else>
-            <div v-if="!hasGitcodePrimary" class="grdp-epwarn">未配置 GitCode 主仓：本仓不走平台镜像，推送将回退其它远端</div>
+            <div v-if="!hasGitcodePrimary && !manualPrimary" class="grdp-epwarn">未配置 GitCode 主仓：本仓不走平台镜像，推送将回退其它远端</div>
+            <div v-if="manualPrimary" class="grdp-epmanual">
+              <span>主仓为手动指定（<b class="mono">{{ manualPrimary }}</b>），覆盖自动推导</span>
+              <button
+                class="btn btn-sm"
+                type="button"
+                :disabled="!!busy"
+                title="清除手动设置，恢复 GitCode 优先的自动推导"
+                @click="emit('setPrimary', null)"
+              >恢复自动</button>
+            </div>
             <div v-for="ep in endpoints" :key="ep.name" class="grdp-ep">
               <div class="grdp-ep-row">
                 <span class="grdp-ep-name mono" :title="ep.url">{{ ep.name }}</span>
@@ -152,6 +157,14 @@
                 <span class="grdp-ep-sha mono" :title="`远端 HEAD ${ep.sha ?? ''}`">{{ shortSha(ep.sha) }}</span>
                 <span class="grdp-ep-state" :class="'s-' + ep.state" :title="epStateTitle(ep)">{{ syncStateText(ep) }}</span>
                 <span class="grdp-ep-acts">
+                  <button
+                    v-if="ep.role === 'mirror'"
+                    class="btn btn-sm"
+                    type="button"
+                    :disabled="!!busy"
+                    :title="`将 ${ep.name} 设为本仓主仓（手动覆盖自动推导）`"
+                    @click="emit('setPrimary', ep.name)"
+                  >设为主仓</button>
                   <button
                     v-if="ep.role === 'primary' && ep.state === 'behind'"
                     class="btn btn-sm"
@@ -379,6 +392,8 @@ const props = defineProps<{
   probing?: boolean
   /** 上次巡检的展示文案（父级算好，面板不碰定时器） */
   probeLabel?: string
+  /** 该仓库的手动主仓配置（来自注册表 reg.sync）；为空表示未手动指定、走自动推导 */
+  manualPrimary?: string | null
 }>()
 const emit = defineEmits<{
   fetch: []
@@ -402,6 +417,8 @@ const emit = defineEmits<{
   merge: [remote: string]
   /** 重跑远端巡检 */
   probe: []
+  /** 主仓设置：remote 为远端名 = 设为主仓；null = 恢复自动推导（清除手动配置） */
+  setPrimary: [remote: string | null]
 }>()
 
 const TABS = [
@@ -815,18 +832,6 @@ onMounted(() => { void load() })
 .sum-ab { display: inline-flex; gap: var(--spacing-4); font-size: 0.8462rem; }
 .ab-up { color: var(--accent-purple); }
 .ab-down { color: var(--status-info-text); }
-.sum-meta { font-size: 0.8462rem; color: var(--text-tertiary); }
-/* 最近提交信息最长：排到字段末尾并独占一行，subject 过长时行内省略，不拆散状态字段 */
-.sum-c { order: 1; flex: 1 1 100%; margin-top: var(--spacing-2); }
-.sum-c .grdp-lastc { flex: 0 1 auto; min-width: 0; max-width: 60%; }
-.grdp-lastc {
-  color: var(--text-primary);
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  vertical-align: bottom;
-}
 .grdp-acc {
   margin-left: var(--spacing-2);
   font-size: 0.7692rem;
@@ -923,9 +928,29 @@ onMounted(() => { void load() })
   font-size: 0.8462rem;
   line-height: 1.5;
 }
+.grdp-epmanual {
+  margin-bottom: var(--spacing-8);
+  padding: 5px var(--spacing-10);
+  border-left: 2px solid var(--accent-primary);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+  color: var(--text-primary);
+  font-size: 0.8462rem;
+  line-height: 1.5;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-8);
+}
+.grdp-epmanual .btn { margin-left: auto; flex-shrink: 0; }
 .grdp-ep { padding: var(--spacing-8) 0; border-bottom: 1px solid var(--divider-primary); }
-.grdp-ep-row { display: flex; align-items: center; gap: var(--spacing-10); min-width: 0; }
-.grdp-ep-name { font-size: 0.9231rem; font-weight: 500; color: var(--text-primary); flex-shrink: 0; }
+.grdp-ep-row {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto auto auto;
+  gap: var(--spacing-10);
+  align-items: center;
+  min-width: 0;
+}
+.grdp-ep-name { font-size: 0.9231rem; font-weight: 500; color: var(--text-primary); }
 .grdp-ep-role {
   font-size: 0.7692rem;
   border: 1px solid var(--border-subtle);
@@ -946,13 +971,13 @@ onMounted(() => { void load() })
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.grdp-ep-sha { width: 7ch; text-align: right; font-size: 0.8462rem; color: var(--text-tertiary); flex-shrink: 0; }
-.grdp-ep-state { font-size: 0.9231rem; white-space: nowrap; flex-shrink: 0; }
+.grdp-ep-sha { width: 7ch; text-align: right; font-size: 0.8462rem; color: var(--text-tertiary); }
+.grdp-ep-state { width: 5ch; text-align: left; font-size: 0.9231rem; white-space: nowrap; }
 .grdp-ep-state.s-ok { color: var(--status-success-text); }
 .grdp-ep-state.s-behind { color: var(--status-warn-text); }
 .grdp-ep-state.s-diverged { color: var(--status-error-text); font-weight: 500; }
 .grdp-ep-state.s-unknown { color: var(--text-tertiary); }
-.grdp-ep-acts { display: flex; align-items: center; gap: var(--spacing-6); flex-shrink: 0; }
+.grdp-ep-acts { display: flex; align-items: center; gap: var(--spacing-6); justify-content: flex-end; min-width: 10ch; }
 .grdp-ep-wait { font-size: 0.8462rem; color: var(--text-tertiary); white-space: nowrap; }
 .grdp-ep-note { margin-top: var(--spacing-4); font-size: 0.8462rem; color: var(--text-secondary); line-height: 1.5; }
 .grdp-ep-note.err { color: var(--status-error-text); }
@@ -1053,25 +1078,6 @@ onMounted(() => { void load() })
   color: var(--text-secondary);
   min-width: 0;
 }
-/* 头部自适应动作按钮上的计数徽标：提交 = 未提交数（黄），推送 = 待推数（紫，同 ahead 档色） */
-.grdp-actct {
-  min-width: 16px;
-  height: 15px;
-  padding: 0 var(--spacing-4);
-  margin-left: var(--spacing-2);
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--status-warn-text) 20%, transparent);
-  color: var(--status-warn-text);
-  font-size: 0.8462rem;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.grdp-actct.grdp-pushct {
-  background: color-mix(in srgb, var(--accent-purple) 16%, transparent);
-  color: var(--accent-purple);
-}
-
 /* ── 提交弹窗（DESIGN.md 居中弹窗口径：--bg-elevated-solid + --scrim + Esc 关闭） ── */
 .grdc-overlay {
   position: fixed;

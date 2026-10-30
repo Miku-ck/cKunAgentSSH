@@ -19,7 +19,7 @@ import {
   parseGraphLog, graphRefKind, graphHasMore, layoutGraphLanes,
   draftCommitMessage, looksLikeNoiseFile, clampDiffText, buildRemoteDiffCmd,
   parseLsRemoteSha, parseRevListCount, classifySyncEndpoint,
-  remoteHostOf, primaryRemoteOf, deriveSyncConfig,
+  remoteHostOf, primaryRemoteOf, deriveSyncConfig, resolveSyncConfig,
   type RepoRow,
 } from '../shared/git-repos-core'
 
@@ -593,5 +593,28 @@ describe('三仓同步：端点三态 / ls-remote 与 rev-list 解析 / 默认�
     expect(deriveSyncConfig({ gitee: 'u1', origin: 'u2', github: 'u3' }, null)).toEqual({ primary: 'origin', mirrors: ['gitee', 'github'] })
     expect(deriveSyncConfig({ gitee: 'u1' }, 'not-exist')).toEqual({ primary: 'gitee', mirrors: [] })
     expect(deriveSyncConfig({}, 'origin')).toEqual({ primary: '', mirrors: [] })
+  })
+})
+
+describe('resolveSyncConfig（手动主仓优先 + 可回退自动）', () => {
+  it('手动主仓存在时优先使用，mirrors 取其余远端（按当前远端实时计算）', () => {
+    expect(resolveSyncConfig({ github: 'u1', gitcode: 'u2', gitee: 'u3' }, 'github', { primary: 'gitee', mirrors: ['x'] }))
+      .toEqual({ primary: 'gitee', mirrors: ['github', 'gitcode'] })
+  })
+  it('无手动配置（null）回退自动推导（GitCode 优先）', () => {
+    expect(resolveSyncConfig({ github: 'git@github.com:a/b.git', gitcode: 'git@gitcode.com:a/b.git' }, 'github', null))
+      .toEqual({ primary: 'gitcode', mirrors: ['github'] })
+  })
+  it('saved 未提供/undefined 也走自动推导', () => {
+    expect(resolveSyncConfig({ github: 'git@github.com:a/b.git', origin: 'git@gitee.com:a/b.git' }, null, undefined))
+      .toEqual({ primary: 'origin', mirrors: ['github'] })
+  })
+  it('手动主仓指向的远端已不存在 → 回退自动推导（不残留脏配置）', () => {
+    const r = resolveSyncConfig(
+      { github: 'git@github.com:a/b.git', gitcode: 'git@gitcode.com:a/b.git' },
+      'github',
+      { primary: 'ghost', mirrors: [] },
+    )
+    expect(r).toEqual({ primary: 'gitcode', mirrors: ['github'] })
   })
 })
