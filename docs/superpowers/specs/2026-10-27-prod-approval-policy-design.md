@@ -1,7 +1,7 @@
 # 生产环境审批策略调整：用户确认优先，无人值守才要求预登记
 
 日期：2026-10-27。前置：同日完成的 log_cleanup / 向导误弹修复（工作区未提交）。
-触发事故：会话在 prod 主机 192.168.150.40 清理 `.trae-cn-server/manager-logs`，
+触发事故：会话在 prod 主机清理 `.trae-cn-server/manager-logs`，
 界面连续出现 4 张拒绝卡（pip、`rm .cache/pip/*`、`log_cleanup` 未预授权）与 3 步澄清
 向导，用户结论：「审批策略过于严格，用户确认应该是第一优先级」。
 

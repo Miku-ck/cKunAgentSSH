@@ -260,10 +260,10 @@ pip install -r backend/requirements-dev.txt
 开发者或演示环境可在 `backend/.env` 中开启首启自动探测：
 
 ```bash
-# 必填：首启探测
-VLLM_BASE_URL=http://192.168.150.40:9030/v1
+# 必填：首启探测（替换为你的 LLM 服务地址，勿在此处填写真实内网地址）
+VLLM_BASE_URL=http://your-llm-host:9030/v1
 # 可选：思考模型
-VLLM_THINKING_URL=http://192.168.150.40:9031/v1
+VLLM_THINKING_URL=http://your-llm-host:9031/v1
 # 可选：API Key
 VLLM_API_KEY=EMPTY
 ```

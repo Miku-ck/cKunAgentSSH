@@ -261,10 +261,10 @@ No model is preconfigured on first launch. Add an endpoint and specify the defau
 Developers or demo environments can enable first-launch auto-detection in `backend/.env`:
 
 ```bash
-# Required: first-launch detection
-VLLM_BASE_URL=http://192.168.150.40:9030/v1
+# Required: first-launch detection (replace with your LLM service address; never commit a real internal address here)
+VLLM_BASE_URL=http://your-llm-host:9030/v1
 # Optional: thinking model
-VLLM_THINKING_URL=http://192.168.150.40:9031/v1
+VLLM_THINKING_URL=http://your-llm-host:9031/v1
 # Optional: API key
 VLLM_API_KEY=EMPTY
 ```

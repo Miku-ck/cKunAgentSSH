@@ -194,7 +194,7 @@
               <!-- 接口地址 -->
               <div class="form-group">
                 <label class="form-label">接口地址 <span class="required">*</span></label>
-                <input v-model="form.base_url" class="form-input" placeholder="如：http://192.168.150.40:9030/v1" />
+                <input v-model="form.base_url" class="form-input" placeholder="如：http://your-llm-host:9030/v1" />
               </div>
 
               <!-- API Key —— 本地部署无需配置，隐藏整块 -->

@@ -257,7 +257,7 @@ async def _chat_stream_impl(
     流式聊天补全（实际实现，in-flight 计数由外层 chat_stream 包装维护）
 
     Args:
-        base_url: vLLM 服务地址 (如 http://192.168.150.40:9030/v1)
+        base_url: vLLM 服务地址 (如 http://your-llm-host:9030/v1)
         api_key: API 密钥 (vLLM 通常为 "EMPTY")
         model: 模型名称
         messages: OpenAI 格式消息列表
