@@ -15,6 +15,7 @@ from bot.provider import (
     ChannelAlreadyConnectedError,
     ChannelConnectError,
 )
+from bot.wechat_channel import WEBHOOK_BASE_SETTING
 
 logger = logging.getLogger(__name__)
 
@@ -67,9 +68,6 @@ def _with_status(channel: dict) -> dict:
     return {**channel, "status": _runtime().status(channel["id"])}
 
 
-WEBHOOK_SETTING_KEY = "bot.webhook_base_url"
-
-
 def _missing_credentials(runtime, provider: str, values: dict) -> list[str]:
     """按 provider 声明的凭据字段算缺哪几个，返回界面标签供报错。"""
     labels = runtime.credential_labels(provider)
@@ -82,7 +80,7 @@ def _missing_credentials(runtime, provider: str, values: dict) -> list[str]:
 
 @router.get("/bot/webhook")
 def get_webhook():
-    return {"base_url": db.get_app_setting(WEBHOOK_SETTING_KEY, "") or ""}
+    return {"base_url": db.get_app_setting(WEBHOOK_BASE_SETTING, "") or ""}
 
 
 @router.put("/bot/webhook")
@@ -90,7 +88,7 @@ def set_webhook(req: WebhookRequest):
     value = req.base_url.strip().rstrip("/")
     if value and not value.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="公网地址必须以 http:// 或 https:// 开头")
-    db.set_app_setting(WEBHOOK_SETTING_KEY, value)
+    db.set_app_setting(WEBHOOK_BASE_SETTING, value)
     return {"base_url": value}
 
 

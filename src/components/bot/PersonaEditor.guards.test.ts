@@ -35,3 +35,22 @@ describe('人格编辑器 · 记忆不进编辑页', () => {
     expect(view).not.toContain('clearMemories')
   })
 })
+
+describe('人格编辑器 · 表情包库', () => {
+  it('表情包档位下按包分 tab 平铺，图片走统一直链', () => {
+    const editor = read('src/components/bot/PersonaEditor.vue')
+    expect(editor).toContain("key === 'sticker'")
+    expect(editor).toContain('sticker-library')
+    expect(editor).toContain('pack-tabs')
+    expect(editor).toContain('stickerAssetUrl')
+  })
+
+  it('清单由后端 manifest 给出，编辑器里不手抄包名与表情键', () => {
+    const editor = read('src/components/bot/PersonaEditor.vue')
+    for (const key of ['开心', '害羞', '无语', '加油', '委屈', '困了', '生气', '好耶', '诶嘿', '服了', '冲鸭', '呜呜', '困困', '贴贴', '鲸鱼娘']) {
+      expect(editor, key).not.toContain(key)
+    }
+    expect(read('src/components/bot/CkunBotView.vue')).toContain(':packs="stickerPacks"')
+    expect(read('src/api/bot.ts')).toContain("getStickers: () => request<BotStickerPack[]>('/bot/stickers')")
+  })
+})

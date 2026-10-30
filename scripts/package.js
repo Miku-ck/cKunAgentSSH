@@ -29,9 +29,9 @@ const isWin = process.platform === 'win32'
 // shell:false 语义完全等价，还少一层 cmd.exe。POSIX 垫片同理省掉。
 const builderEntry = path.join(root, 'node_modules', 'electron-builder', 'cli.js')
 
-// 4) 内嵌 Python 运行时探测：按 runtime/README.md 的契约认那枚解释器可执行文件
-//    （Windows runtime/python.exe，POSIX runtime/bin/python3），而不是「除 README.md 外还有
-//    别的文件」—— 一个误落进来的日志/临时文件会让构建谎报「已就绪」，把只装着杂物的
+// 4) 内嵌 Python 运行时探测：按 README.md「打包与发布」一节记录的契约认那枚解释器
+//    可执行文件（Windows runtime/python.exe，POSIX runtime/bin/python3），而不是「目录里
+//    有点东西」—— 一个误落进来的日志/临时文件会让构建谎报「已就绪」，把只装着杂物的
 //    resources/python-runtime/ 打进包。运行时解析侧本来就会 existsSync(python.exe) 兜底，
 //    所以错的只是这条构建日志与这次多余拷贝。
 //    ⚠️ POSIX 的路径必须与运行时解析侧一字不差：electron/backend-manager.ts 读的是
@@ -83,10 +83,10 @@ const allowMissingRuntime = extraArgs.includes('--allow-missing-runtime')
 const builderPassThroughArgs = extraArgs.filter((a) => a !== '--allow-missing-runtime')
 // 只允许传一份配置。两个 `-c` 会被 yargs 收成数组，electron-builder 把数组里的字符串
 // 折叠成 `extends = 最后一项`（builder.js:106-120），packager.js:256-258 再把这个字符串
-// 当成唯一配置文件读 —— 主配置整份被丢弃：files 白名单、asarUnpack、appId、win、nsis、
-// portable 全都不生效，`files: []` 意味着 app.asar 里没有 out/main/index.js，原生 .node
-// 也没被解包。而 directories.output 仍是 dist，CI 的 dist/*.exe 上传照样命中，绿色流水线
-// 可以把一个装上去谁也起不来的包一路抬进发布物。
+// 当成唯一配置文件读 —— 主配置整份被丢弃：files 白名单、asarUnpack、appId、win 目标全都
+// 不生效，`files: []` 意味着 app.asar 里没有 out/main/index.js，原生 .node 也没被解包。
+// 而 directories.output 仍是 dist，CI 的 dist/*.tar.gz 上传照样命中，绿色流水线可以把
+// 一个装上去谁也起不来的包一路抬进发布物。
 // 内嵌运行时改走配置自身的 `extends`（load.js 的 loadParentConfigsRecursively 会把父配置
 // 合回来），合并语义由 electron-builder 负责，不再靠参数顺序赌。
 let builderConfigArgs = ['-c', 'electron-builder.yml'] // 显式主配置，保证与生成片段合并
@@ -112,7 +112,7 @@ if (runtimeReady) {
     '[package] 缺少内嵌 Python 运行时：' + runtimeProbe + ' 不存在。\n' +
       '  发布包必须自带 Python，否则装到目标机上 AI 侧直接不可用。\n' +
       '  · CI 由「Prepare embedded Python runtime」一步自动准备（见 .github/workflows/ci.yml）\n' +
-      '  · 本地准备方式见 runtime/README.md\n' +
+      '  · 本地准备方式见 README.md「打包与发布」一节的内嵌运行时说明\n' +
       '  · 确实要出无运行时的包（排障/试流水线）：加 --allow-missing-runtime',
   )
   process.exit(1)
@@ -122,6 +122,43 @@ if (runtimeReady) {
       '产出的 app 依赖目标机自装 Python（或用 CKUN_PYTHON 指定）。不要把这个包发给用户。',
   )
 }
+// 5) 预编译后端字节码。electron-builder.yml 的 extraResources 现在会把
+//    backend/__pycache__ 打进包，那批 .pyc 就是这里产出的：没有它们，目标机每次
+//    启动都要从头编译全部模块（实测 import main 无 .pyc 5240ms / 有 .pyc 430ms）。
+//    · 用 checked-hash 而不是默认的 mtime 模式：electron-builder 拷贝会重写源文件
+//      mtime，mtime 模式的 .pyc 会因此全部失效；checked-hash 只校验源码内容，
+//      拷贝后依然命中（三种模式热态导入耗时实测持平，没有额外代价）。
+//    · 用内嵌 runtime 编译，保证字节码 ABI 与目标解释器一致；没有 runtime 时退回
+//      当前解释器，并在下面那条警告里点明「只有同为 3.11 才有效」。
+//    · tests/ 与 _tmp/ 不编译：它们本来就被 filter 排除，编译只是白花打包时间。
+const backendDir = path.join(root, 'backend')
+const pyExe = runtimeReady ? runtimeProbe : isWin ? 'python' : 'python3'
+if (!runtimeReady) {
+  console.warn(
+    '[package] 警告：无内嵌 runtime，改用当前解释器编译后端字节码；' +
+      '若它与目标 runtime 的 Python 小版本不同，包里的 .pyc 会被忽略并现场重编译。',
+  )
+}
+const compiled = spawnSync(
+  pyExe,
+  [
+    '-m', 'compileall', '-q', '-f', '-j', '0',
+    '--invalidation-mode', 'checked-hash',
+    '-x', '(^|[\\\\/])(tests|_tmp)([\\\\/]|$)',
+    backendDir,
+  ],
+  { stdio: 'inherit', shell: false },
+)
+if (compiled.error || compiled.status !== 0) {
+  console.error(
+    '[package] 后端字节码预编译失败：' +
+      (compiled.error ? compiled.error.message : `exit=${compiled.status}`) +
+      '\n  没有字节码的包在目标机上每次启动都要重编译（实测 5240ms vs 430ms），故不继续出包。',
+  )
+  process.exit(1)
+}
+console.log('[package] 后端字节码已预编译（checked-hash）')
+
 // argv 数组 + shell:false：这里的参数都是独立词元（`-c` 与其后的配置文件路径、
 // --allow-missing-runtime、其余透传 argv 原样为单个元素），没有需要 shell 展开的
 // glob/管道/引号内多词；配置里的 files/extraResources glob 由 electron-builder

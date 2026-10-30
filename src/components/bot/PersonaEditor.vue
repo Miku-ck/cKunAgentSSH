@@ -27,7 +27,7 @@
           <div class="field"><span>头像</span><AvatarPicker v-model="form.avatar" /></div>
           <label class="field">
             <span>它怎么称呼你</span>
-            <input v-model.trim="form.address_user" maxlength="20" placeholder="留空就叫「你」；填「小林」就会叫你的名字" />
+            <input v-model.trim="form.address_user" maxlength="20" placeholder="" />
           </label>
           <label class="field"><span>开场白</span><textarea v-model="form.greeting" rows="2" maxlength="2000" placeholder="新会话里它对你说的第一句话" /></label>
           <label class="field"><span>聊天模型</span><select v-model="form.model_id"><option :value="null">跟随全局默认模型</option><option v-for="m in models" :key="m.id" :value="m.id">{{ m.name }}{{ m.model_id ? `（${m.model_id}）` : '' }}</option></select></label>
@@ -58,6 +58,27 @@
                 :aria-pressed="form.expression_dna[key] === item.value"
                 @click="setDna(key, item.value)"
               >{{ item.label }}</button>
+            </div>
+            <!-- 档位只管频率，不告诉用户会发哪套图：按包分 tab 平铺，所见即所发。 -->
+            <div v-if="key === 'sticker' && packs.length" class="sticker-library">
+              <div class="pack-tabs" role="tablist" aria-label="表情包分组">
+                <button
+                  v-for="pack in packs"
+                  :key="pack.id"
+                  type="button"
+                  role="tab"
+                  class="pack-tab"
+                  :class="{ active: activePackId === pack.id }"
+                  :aria-selected="activePackId === pack.id"
+                  @click="activePack = pack.id"
+                >{{ pack.name }}</button>
+              </div>
+              <div class="sticker-grid" role="tabpanel">
+                <figure v-for="s in activePackKeys" :key="s" class="sticker-card">
+                  <img :src="stickerAssetUrl(s)" alt="" loading="lazy" />
+                  <figcaption>{{ s }}</figcaption>
+                </figure>
+              </div>
             </div>
           </div>
           <label class="field">
@@ -137,6 +158,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import AvatarPicker from './AvatarPicker.vue'
 import { isImageAvatar } from '@/utils/persona-avatar'
+import { stickerAssetUrl } from '@/utils/bot-stickers'
 import { toFriendlyMessage } from '@/api/base'
 import {
   botApi,
@@ -147,20 +169,24 @@ import {
   type BotReactionStyle,
   type BotRefusalStyle,
   type BotRelationshipSpeed,
+  type BotStickerPack,
 } from '@/api/bot'
 
 const props = defineProps<{
   persona: BotPersona | null
   models: { id: string; name: string; model_id?: string | null }[]
   options: BotPersonaOptions | null
+  /** 内置表情包（后端 manifest 按包分组）：空数组就整块不显示，别渲染一个空壳。 */
+  packs: BotStickerPack[]
 }>()
 const emit = defineEmits<{ close: []; saved: [] }>()
 
 const DNA_DEFAULTS: BotExpressionDna = {
-  sentence: 'mixed', particles: 'soft', punctuation: 'plain', emoji: 'low', catchphrase: '', taboo: [],
+  sentence: 'mixed', particles: 'soft', punctuation: 'plain', emoji: 'low',
+  kaomoji: 'low', sticker: 'low', catchphrase: '', taboo: [],
 }
 
-const dnaKeys = ['sentence', 'particles', 'punctuation', 'emoji'] as const
+const dnaKeys = ['sentence', 'particles', 'punctuation', 'emoji', 'kaomoji', 'sticker'] as const
 const styleKeys = ['reaction_style', 'refusal_style'] as const
 
 // 三个纯文本分区按清单渲染，placeholder 就是唯一的填写指引；目录与长卷共用这份顺序。
@@ -207,6 +233,12 @@ const saving = ref(false)
 const error = ref('')
 const scrollRef = ref<HTMLElement | null>(null)
 const active = ref('identity')
+// tab 只是浏览态：不落库，也不影响保存；未点过就默认第一套。
+const activePack = ref('')
+const activePackId = computed(() => activePack.value || props.packs[0]?.id || '')
+const activePackKeys = computed(
+  () => (props.packs.find(pack => pack.id === activePackId.value) || props.packs[0])?.keys || [],
+)
 
 const source = props.persona
 const form = reactive({
@@ -414,6 +446,36 @@ onMounted(() => {
   background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
   color: var(--accent-text);
 }
+.sticker-library { display: flex; flex-direction: column; gap: var(--spacing-8); }
+.pack-tabs { display: flex; gap: var(--spacing-4); border-bottom: 1px solid var(--border-subtle); }
+.pack-tab {
+  padding: 5px var(--spacing-10);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: 0.8462rem;
+  cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+.pack-tab:hover { color: var(--text-primary); }
+.pack-tab.active { color: var(--accent-text); border-bottom-color: var(--accent-primary); }
+.sticker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: var(--spacing-8);
+  max-width: 640px;
+}
+.sticker-card { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.sticker-card img {
+  width: 100%;
+  aspect-ratio: 1;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+}
+.sticker-card figcaption { color: var(--text-tertiary); font-size: 0.8462rem; line-height: 1.2; }
 .form-error { color: var(--danger-text); font-size: 0.9231rem; }
 @media (max-width: 900px) { .editor-rail { display: none; } }
 </style>

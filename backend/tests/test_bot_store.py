@@ -10,6 +10,14 @@ def test_default_persona_is_seeded(base_db):
     assert personas[0]["is_builtin"] == 1
 
 
+def test_default_persona_cannot_be_deleted(base_db):
+    # 默认人格同时是列表置顶与渠道迁移兜底：删掉就没有「默认」可回落了。
+    seeded = db.list_bot_personas()[0]
+    assert seeded["is_builtin"] == 1
+    assert db.delete_bot_persona(seeded["id"]) is False
+    assert db.get_bot_persona(seeded["id"])["name"] == "cKunBot"
+
+
 def test_persona_crud_and_copy(base_db):
     persona = db.create_bot_persona(
         name="小暖",

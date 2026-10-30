@@ -58,6 +58,18 @@ def test_persona_and_conversation_routes(client):
     assert client.get("/api/bot/conversations?channel=local").json() == []
 
 
+def test_default_persona_cannot_be_deleted(client):
+    builtin = next(p for p in client.get("/api/bot/personas").json() if p["is_builtin"])
+    response = client.delete(f"/api/bot/personas/{builtin['id']}")
+    assert response.status_code == 409
+    assert response.json()["detail"] == "默认人格不可删除"
+    assert any(p["id"] == builtin["id"] for p in client.get("/api/bot/personas").json())
+
+
+def test_deleting_unknown_persona_is_404(client):
+    assert client.delete("/api/bot/personas/not-a-real-id").status_code == 404
+
+
 def test_persona_avatar_accepts_uploaded_image(client):
     avatar = "data:image/webp;base64," + "A" * 20000
     persona = create_persona(client, avatar=avatar)
@@ -204,6 +216,16 @@ def test_persona_options_exposes_enums_for_editor(client):
         assert options[key]["options"], key
     # 前端靠 value 渲染控件，label 只用于显示：两者都必须存在
     assert all({"value", "label"} <= set(item) for item in options["reaction_style"]["options"])
+
+
+def test_sticker_library_lists_manifest_packs(client):
+    from bot import stickers as sticker_mod
+
+    packs = client.get("/api/bot/stickers").json()
+
+    assert [pack["id"] for pack in packs] == [pack.id for pack in sticker_mod.PACKS]
+    assert [pack["name"] for pack in packs] == ["鲸鱼娘", "鲸鱼娘·文字"]
+    assert [key for pack in packs for key in pack["keys"]] == [item.key for item in sticker_mod.STICKERS]
 
 
 def test_persona_roundtrips_identity_core_fields(client):

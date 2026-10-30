@@ -24,6 +24,7 @@
       :persona="editingPersona"
       :models="models.models"
       :options="personaOptions"
+      :packs="stickerPacks"
       @close="personaEditor = false"
       @saved="onPersonaSaved"
     >
@@ -118,13 +119,20 @@
                 <div class="msg-body">
                   <!-- 说话人按「轮」标一次：一轮连发多条只在第一条标，同一人另起一轮也要标 -->
                   <span v-if="d.item.bubbleIndex === 0" class="msg-meta">{{ speakerLabel(d.item) }} · {{ formatLocalDateTime(d.item.created_at) }}</span>
-                  <div class="message-content">
+                  <div class="message-content" :class="{ 'sticker-only': d.item.role !== 'user' && !!stickerKey(d.item.bubble) }">
                     <span class="sr-only">{{ speakerLabel(d.item) }}：</span>
                     <div v-if="d.item.images?.length && !d.item.bubbleIndex" class="msg-images">
                       <img v-for="(u, i) in d.item.images" :key="i" :src="u" class="msg-image" alt="图片" @click="openLightbox(u)" />
                     </div>
                     <details v-if="!d.item.bubbleIndex && d.item.role !== 'user' && thinkingOn && d.item.reasoning" class="reasoning"><summary>思考过程</summary><div class="reasoning-body">{{ d.item.reasoning }}</div></details>
-                    <MarkdownStream v-if="d.item.role !== 'user'" :content="d.item.bubble" />
+                    <img
+                      v-if="d.item.role !== 'user' && stickerKey(d.item.bubble)"
+                      class="msg-sticker"
+                      :src="stickerSrc(d.item.bubble)"
+                      alt="表情包"
+                      @click="openLightbox(stickerSrc(d.item.bubble))"
+                    />
+                    <MarkdownStream v-else-if="d.item.role !== 'user'" :content="d.item.bubble" />
                     <template v-else>{{ d.item.bubble }}</template>
                   </div>
                 </div>
@@ -197,7 +205,10 @@
         <article v-for="p in store.personas" :key="p.id" class="persona-card">
           <div class="persona-card-head">
             <span class="persona-large-avatar"><PersonaAvatar :avatar="p.avatar" /></span>
-            <div><h3>{{ p.name }}</h3><span>{{ modelName(p.model_id) }}</span></div>
+            <div>
+              <h3>{{ p.name }}<span v-if="p.is_builtin" class="default-chip">默认</span></h3>
+              <span>{{ modelName(p.model_id) }}</span>
+            </div>
             <span v-if="store.relations[p.id]" class="relation-chip small" :title="relationHint(store.relations[p.id])">{{ store.relations[p.id].stage }}</span>
           </div>
           <p class="personality">{{ p.personality || '还没有写下性格描述。' }}</p>
@@ -206,7 +217,7 @@
             <button class="btn btn-sm btn-primary" @click="chatWith(p.id)">用此人格聊天</button>
             <button class="btn btn-sm" @click="openPersona(p)">编辑</button>
             <button class="btn btn-sm" @click="copyPersona(p.id)">复制</button>
-            <button class="btn btn-sm btn-danger" @click="removePersona(p)">删除</button>
+            <button v-if="!p.is_builtin" class="btn btn-sm btn-danger" @click="removePersona(p)">删除</button>
           </div>
         </article>
       </div>
@@ -245,10 +256,11 @@ import ConnectionPage from './ConnectionPage.vue'
 import BaseModal from '@/components/common/BaseModal.vue'
 import { formatLocalDateTime } from '@/utils/datetime'
 import { bubbleDeliveryPlan, decorateMessages, expandBubbles, peerLabel, personaName, splitBubbles } from '@/utils/bot-chat-decor'
+import { stickerAssetUrl, stickerKey, stripStickerTokens } from '@/utils/bot-stickers'
 import { shouldFollowScroll } from '@/utils/scroll-follow'
 import AvatarPicker from './AvatarPicker.vue'
 import ChatImageLightbox from './ChatImageLightbox.vue'
-import { botApi, type BotConversation, type BotPersona, type BotPersonaOptions } from '@/api/bot'
+import { botApi, type BotConversation, type BotPersona, type BotPersonaOptions, type BotStickerPack } from '@/api/bot'
 import { toFriendlyMessage } from '@/api/base'
 import { useBotStore } from '@/stores/bot'
 import { useModelsStore } from '@/stores/models'
@@ -329,6 +341,8 @@ const personaEditor = ref(false)
 const editingPersona = ref<BotPersona | null>(null)
 // 档位字典由后端给出：控件的 label 与可选项不在这里手抄，避免和提示词文案漂移。
 const personaOptions = ref<BotPersonaOptions | null>(null)
+// 内置表情包清单同源后端 manifest：编辑器按包分 tab 平铺，不在前端另抄一份键名。
+const stickerPacks = ref<BotStickerPack[]>([])
 function openPersona(p?: BotPersona) {
   editingPersona.value = p || null
   personaEditor.value = true
@@ -339,8 +353,10 @@ async function onPersonaSaved() {
   toast.success('人格已保存')
 }
 async function loadPersonaOptions() {
-  try { personaOptions.value = await botApi.getPersonaOptions() }
-  catch { personaOptions.value = null }
+  // 两者都是编辑器辅助数据：任一失败只让对应控件降级，不挡保存。
+  const [options, stickerKeys] = await Promise.allSettled([botApi.getPersonaOptions(), botApi.getStickers()])
+  personaOptions.value = options.status === 'fulfilled' ? options.value : null
+  stickerPacks.value = stickerKeys.status === 'fulfilled' ? stickerKeys.value : []
 }
 async function copyPersona(id: string) {
   try { await botApi.copyPersona(id); await store.init(); toast.success('已复制人格') } catch (e) { toast.error(toFriendlyMessage(e, '复制失败')) }
@@ -433,11 +449,18 @@ const remoteActiveRelation = computed(() => {
 const localDecorated = computed(() => decorateMessages(expandBubbles(store.messages)))
 const remoteDecorated = computed(() => decorateMessages(expandBubbles(store.remoteMessages)))
 // 流式阶段就分条：打字时一条条冒出来，收尾换成落库消息时不会看到气泡重排。
+// 标记还没变成真图前不露原文（含吐出半截的情况），否则会看到一瞬 `[表情:开心]`。
 // 一个字符都还没有时留一条空气泡，「正在输入」的三个点就落在那里面。
 const streamBubbles = computed(() => {
-  const parts = splitBubbles(store.streamText)
+  const parts = splitBubbles(stripStickerTokens(store.streamText))
   return parts.length ? parts : ['']
 })
+
+/** 表情包图片走公开静态路由（不带 /api 前缀，登录 token 不参与图片加载）。 */
+function stickerSrc(bubble: string): string {
+  const key = stickerKey(bubble)
+  return key ? stickerAssetUrl(key) : ''
+}
 
 // ── 在场感（P4）：多气泡投递节奏 ──
 // done 落库的一轮若是多气泡，第 2~N 条按拟打字延迟逐条揭开：每条揭开前
@@ -697,12 +720,18 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 .persona-page { flex: 1; min-height: 0; overflow-y: auto; padding: var(--spacing-24) 28px; } .section-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; } .section-heading h2 { font-size: 1.3846rem; }
 .persona-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--spacing-16); } .persona-card { display: flex; flex-direction: column; padding: 18px; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--bg-elevated); }
 .persona-card-head { display: flex; align-items: center; gap: var(--spacing-12); } .persona-large-avatar { width: 44px; height: 44px; flex: 0 0 44px; display: grid; place-items: center; border-radius: 50%; font-size: 2.4615rem; } .persona-card-head h3 { margin-bottom: var(--spacing-4); font-size: 1.2308rem; } .persona-card-head div span { color: var(--text-tertiary); font-size: 0.8462rem; }
+/* 默认人格：列表置顶、渠道迁移兜底、不可删除。标记跟名字同一行，不另起一个信息块。 */
+.default-chip { margin-left: 6px; padding: 1px 7px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); color: var(--accent-text); font-size: 0.6923rem; font-weight: 500; vertical-align: 3px; white-space: nowrap; }
 /* 卡片定高：性格截两行、开场白一行占位 —— 长文案不撑爆网格，卡片高度不随内容漂 */
 .personality { flex: 1; margin: 18px 0 var(--spacing-12); color: var(--text-secondary); font-size: 1rem; line-height: 1.7; white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 3.4em; } .persona-greeting { margin-bottom: var(--spacing-16); color: var(--text-tertiary); font-size: 0.9231rem; line-height: 1.6; min-height: 1.6em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .persona-actions { display: flex; flex-wrap: wrap; gap: var(--spacing-6); }
 .msg-images { display: flex; flex-wrap: wrap; gap: var(--spacing-6); margin-bottom: var(--spacing-6); }
 .msg-image { max-width: 200px; max-height: 200px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); object-fit: contain; cursor: zoom-in; transition: filter var(--transition-fast), transform var(--transition-fast); }
 .msg-image:hover { filter: brightness(1.06); transform: translateY(-1px); }
+/* 表情包是一张图而不是一句话：不带气泡底色与内边距，图本身就是这条消息。 */
+.message-content.sticker-only { padding: 0; border: 0; background: transparent; box-shadow: none; }
+.msg-sticker { display: block; width: 128px; height: 128px; border-radius: var(--radius-md); object-fit: contain; cursor: zoom-in; transition: filter var(--transition-fast), transform var(--transition-fast); }
+.msg-sticker:hover { filter: brightness(1.06); transform: translateY(-1px); }
 @media (max-width: 850px) { .chat-layout { grid-template-columns: 190px minmax(0, 1fr); } .bot-header { padding: var(--spacing-16); } }
 /* 窄屏：侧栏收成抽屉，点「会话」拉出，选完/点遮罩收起，聊天区拿满整行 */
 @media (max-width: 700px) {

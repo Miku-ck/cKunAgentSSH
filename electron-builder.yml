@@ -56,9 +56,13 @@ extraResources:
     to: backend
     filter:
       - '**/*'
-      - '!__pycache__/**'
-      - '!**/__pycache__/**'
-      - '!*.pyc'
+      # __pycache__ 必须进包。此前三条排除（__pycache__ / *.pyc / *.pyo）是把
+      # 「开发机的缓存不该发出去」当成了卫生问题，代价却落在目标机上：没有字节码，
+      # 后端每次启动都要从头编译全部模块 —— 实测 import main 无 .pyc 5240ms、
+      # 有 .pyc 430ms；解包到只读目录时连回写 .pyc 都做不到，这份成本会永久保留。
+      # 字节码由 scripts/package.js 打包前用 `--invalidation-mode checked-hash`
+      # 生成：它只校验源码内容、不看源文件 mtime，所以 electron-builder 拷贝时
+      # 重写 mtime 也不会让这批 .pyc 失效（实测三种失效模式热态导入耗时持平）。
       - '!*.pyo'
       # backend/tests 是 pytest 套件（实测 15 MB，占当前 app.asar 的相当比例），
       # 运行时一行都不引用；里面还混着 tests/_tmp 的本机测试库（memv2-test.db 等），
@@ -70,10 +74,13 @@ extraResources:
       - '!*.db-shm'
       - '!*.db-wal'
       - '!*.log'
-  # 内嵌 Python 运行时：把 Portable Python 解压到仓库根 runtime/ 即可随包分发到
-  # resources/python-runtime/（解析逻辑见 electron/backend-manager.ts getPythonCommand）。
-  # 该条目由 scripts/package.js 在 runtime/python.exe（POSIX 为 python3）存在时动态追加
-  # （-c.extraResources）；没准备运行时时打警告并跳过 — 打包机回退系统 Python，不阻断构建。
+# 内嵌 Python 运行时：把可重定位的解释器（CI 用 python-build-standalone 的
+# install_only_stripped）解压到仓库根 runtime/，即随包分发到 resources/python-runtime/
+# （解析逻辑见 electron/backend-manager.ts resolvePythonCommand 的 bundled 分支：
+# Windows 认 runtime/python.exe，POSIX 认 runtime/bin/python3）。
+# 条目不写死在这里：scripts/package.js 探到 runtime/ 就生成 .electron-builder.runtime.yml
+# （extends 本文件 + from: runtime → to: python-runtime）并用 -c 传入；探不到直接 exit 1
+# —— 发布包必须自带解释器，不降级、不跳过（理由见 ADR-0002）。
 win:
   executableName: cKunAgentSSH
   # resources/icon.png（buildResources）— electron-builder 自动生成多尺寸 .ico

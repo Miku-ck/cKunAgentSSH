@@ -265,7 +265,8 @@ describe('cKunBot 页面注册与关键交互', () => {
     // 可访问名字每条气泡都要有：meta 那行连发时不渲染，读屏不能丢掉说话人
     expect(view).toContain('<span class="sr-only">{{ speakerLabel(d.item) }}：</span>')
     // 流式阶段同规则分条，收尾换成落库消息时看不到气泡重排
-    expect(view).toContain('splitBubbles(store.streamText)')
+    // 表情包标记在流式阶段就先藏掉，落库后才由图替上
+    expect(view).toContain('splitBubbles(stripStickerTokens(store.streamText))')
   })
 
   it('本地会话用户气泡有头像位：只认你的头像图，没设就透明空位', () => {
@@ -286,6 +287,12 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(fn).not.toContain('confirm(')
     // 人格删除仍留确认：它连带动一批会话与记录，不在这次的口径里
     expect(view).toContain('删除人格「')
+  })
+
+  it('默认人格不可删除：卡片标「默认」，删除按钮只出现在普通人格上', () => {
+    const view = read('src/components/bot/CkunBotView.vue')
+    expect(view).toContain('<span v-if="p.is_builtin" class="default-chip">默认</span>')
+    expect(view).toContain('v-if="!p.is_builtin" class="btn btn-sm btn-danger" @click="removePersona(p)"')
   })
 
   it('气泡基准取自 QQ 记录那套：bot 强调色、对方中性卡片，两个 tab 同一副', () => {

@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 import database as db
 from bot import memory as memory_mod
 from bot import relation as relation_mod
+from bot import stickers as sticker_mod
 from bot.character import persona_options, persona_text_risk
 from bot.chat_service import BotChatService
 from bot.voice import DNA_OPTIONS, normalize_dna
@@ -156,6 +157,18 @@ def get_persona_options():
     return {**DNA_OPTIONS, **persona_options()}
 
 
+@router.get("/bot/stickers")
+def list_stickers():
+    """内置表情包清单，按包分组：键既是展示名，也是 /assets/stickers/{键} 的路由参数。
+
+    顺序与提示词里的清单同源（manifest），前端照着 tab 平铺预览即可。
+    """
+    return [
+        {"id": pack.id, "name": pack.name, "keys": [item.key for item in pack.stickers]}
+        for pack in sticker_mod.PACKS
+    ]
+
+
 @router.get("/bot/relations")
 def list_relations():
     """全部人格的关系快照。一次查表算完，避免前端按人格逐个请求。"""
@@ -202,6 +215,12 @@ def update_persona(persona_id: str, req: PersonaUpdateRequest):
 
 @router.delete("/bot/personas/{persona_id}")
 def delete_persona(persona_id: str):
+    persona = db.get_bot_persona(persona_id)
+    if not persona:
+        raise HTTPException(status_code=404, detail="人格不存在")
+    # 默认人格（is_builtin）同时是列表置顶与渠道迁移兜底，删掉就没有「默认」了。
+    if persona.get("is_builtin"):
+        raise HTTPException(status_code=409, detail="默认人格不可删除")
     # 人格被机器人绑定时删不掉（FK RESTRICT）：先给可读的 409，别抛 500。
     if db.count_bot_channels(persona_id=persona_id):
         raise HTTPException(status_code=409, detail="这个人格已绑定机器人，请先解绑或删除机器人")

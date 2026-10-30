@@ -27,5 +27,6 @@
 | **关系阶段**（唯一口径 = score） | 陌生/熟悉/亲近/默契，由 relation 的 score（只增 + 读时衰减）按升温档缩放阈值推导；UI 进度条与 prompt 同源 | 曾有第二套 intimacy+trust 双门口径与它打架（同一份 prompt 两个阶段）；已删，阶段只认 relation |
 | **状态轴**（`bot/state.py`） | trust/intimacy/tension/novelty/valence/energy/patience 七轴，「事件→增量」确定性推导，只喂档位词不喂裸数字 | 0 次额外模型调用是它的根基：可重放、可单测；改成让模型自报状态就全丢了 |
 | **pacing**（在场感节奏） | 后端 `state.pacing_hint` 给的 SSE 提示：hesitate / relief / eager（空 = 正常） | 前端只认这三个值演动画，不自己猜状态；新增节奏要后端先给 |
+| **表情包标记**（`[表情:开心]`） | 模型独占一条输出的文本标记；`bot/stickers.py` 校验键并收口为「一轮最多一张」，落库仍是标记 | 本地渲染内置 PNG、QQ 上传富媒体、微信按公网地址发图（失败回落颜文字）；行内出现的标记一律删除，绝不当作图 |
 | **渠道 provider**（`bot/provider.py`） | 一个平台一个实现，5 成员协议（start / outbound_parts / fallback / name / reply_window_s） | 入站管线永远拿不到平台原始对象；接入新平台 = 写 provider + 进注册表，不改管线 |
 | **寄存**（proactive queued） | QQ 被动回复窗口发不出的主动「心里话」，写 `bot_proactive_log(action=queued)` 存 48h，等对方来消息以「对了，」捎上 | 协议上 QQ 无法主动发消息；任何「直接发」的实现都会被平台拒绝 |

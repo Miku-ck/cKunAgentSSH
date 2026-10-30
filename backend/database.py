@@ -2648,9 +2648,13 @@ def copy_bot_persona(persona_id: str) -> Optional[dict]:
 
 
 def delete_bot_persona(persona_id: str) -> bool:
+    # 默认人格（is_builtin）不可删除：它同时承担列表置顶与渠道迁移兜底。
+    # 路由层先给可读的 409；这里再挡一道，任何调用方都删不掉。
     conn = _get_conn()
     try:
-        cur = conn.execute("DELETE FROM bot_personas WHERE id = ?", (persona_id,))
+        cur = conn.execute(
+            "DELETE FROM bot_personas WHERE id = ? AND is_builtin = 0", (persona_id,)
+        )
         conn.commit()
         return cur.rowcount > 0
     finally:

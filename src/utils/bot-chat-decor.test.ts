@@ -140,6 +140,22 @@ describe('分条 splitBubbles / expandBubbles', () => {
     expect(splitBubbles(three.join('\n\n'))).toEqual(three)
   })
 
+  it('表情包自成一条：不因字少并回句子，也不塞进收尾那条', () => {
+    expect(splitBubbles('哈\n\n[表情:开心]\n\n真的假的')).toEqual([
+      '哈',
+      '[表情:开心]',
+      '真的假的',
+    ])
+    const three = [
+      '今天这局我先出牌，你把防守的那一手留到最后一轮再跟。',
+      '上次你说明天再打，结果拖到周末才上线，我一直惦记着这事。',
+      '这周要是真有事就直说，别到点才冒一句不打了，我看着难受。',
+    ]
+    const parts = splitBubbles(`${three.join('\n\n')}\n\n[表情:开心]`)
+    expect(parts).toHaveLength(3)
+    expect(parts[2]).toBe(three[2])
+  })
+
   it('只展开助手的一轮，用户自己打的段落不替他拆条', () => {
     const out = expandBubbles([
       { id: '1', role: 'user', content: '在吗\n\n晚上打不打', created_at: '2026-10-28 09:00:00' },

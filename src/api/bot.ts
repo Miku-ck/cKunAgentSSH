@@ -6,6 +6,8 @@ export interface BotExpressionDna {
   particles: 'none' | 'soft' | 'lively' | 'dry'
   punctuation: 'plain' | 'ellipsis' | 'tilde' | 'exclaim'
   emoji: 'none' | 'low' | 'medium'
+  kaomoji: 'none' | 'low' | 'medium'
+  sticker: 'none' | 'low' | 'medium'
   catchphrase: string
   taboo: string[]
 }
@@ -81,7 +83,8 @@ export interface BotOptionGroup {
 
 /** 人格编辑器的档位字典：label 与可选项都由服务端给出，前端不手抄文案。 */
 export type BotPersonaOptions = Record<
-  'sentence' | 'particles' | 'punctuation' | 'emoji' | 'reaction_style' | 'refusal_style' | 'relationship_speed',
+  | 'sentence' | 'particles' | 'punctuation' | 'emoji' | 'kaomoji' | 'sticker'
+  | 'reaction_style' | 'refusal_style' | 'relationship_speed',
   BotOptionGroup
 >
 
@@ -161,9 +164,18 @@ export interface BotGalleryItem {
   created_at: string
 }
 
+/** 一套内置表情包：id 用于 tab 切换，keys 是 [表情:键] 的键，也是图片路由参数。 */
+export interface BotStickerPack {
+  id: string
+  name: string
+  keys: string[]
+}
+
 export const botApi = {
   listPersonas: () => request<BotPersona[]>('/bot/personas'),
   getPersonaOptions: () => request<BotPersonaOptions>('/bot/persona-options'),
+  /** 内置表情包清单（按包分组）：keys 既是展示名，也是 /assets/stickers/{键} 的路径参数。 */
+  getStickers: () => request<BotStickerPack[]>('/bot/stickers'),
   getRelations: () => request<Record<string, BotRelation>>('/bot/relations'),
   createPersona: (payload: BotPersonaPayload) => request<BotPersona>('/bot/personas', { method: 'POST', body: JSON.stringify(payload) }),
   updatePersona: (id: string, payload: Partial<BotPersonaPayload>) => request<BotPersona>(`/bot/personas/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),

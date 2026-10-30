@@ -6,6 +6,7 @@ HTTP 用假客户端截获，报文用真实 WeChatCrypto 解密断言 —— �
 
 import asyncio
 import base64
+import json
 import os
 import xml.etree.ElementTree as ET
 
@@ -246,6 +247,78 @@ async def test_sendmsg_encrypts_one_bubble_per_call_and_binds_inbound_identity()
     assert sent.findtext("openid") == "o-9"
     assert sent.findtext("msg") == "第一段 ]]> 带符号"
     assert sent.findtext("channel") == "0"
+    await connection.stop()
+
+
+class FirstSendFailsClient(FakeClient):
+    """图片消息被平台拒绝：只让第一次 sendmsg 失败，用来验证回落颜文字。"""
+
+    def __init__(self):
+        super().__init__()
+        self.failed = False
+
+    async def post(self, url, json=None, headers=None):
+        if "sendmsg" in url and not self.failed:
+            self.failed = True
+            self.calls.append((url, json))
+            raise RuntimeError("image url rejected")
+        return await super().post(url, json, headers)
+
+
+@pytest.mark.asyncio
+async def test_sticker_sends_rich_image_url_built_from_public_base(base_db):
+    db.set_app_setting("bot.webhook_base_url", "https://bot.example.com/")
+    key = _aes_key()
+    connection, client, received = _make(key)
+    await connection.start()
+    await connection.accept({"encrypted": _encrypted(key, _inbound_xml(userid="o-9"))})
+    await _drain(connection)
+    client.calls.clear()
+
+    await received[0].send("[表情:开心]")
+
+    assert len(client.calls) == 1
+    sent = _outbound_xml(key, client.calls[0][1]["encrypt"])
+    assert json.loads(sent.findtext("msg")) == {
+        "image": {"url": "https://bot.example.com/assets/stickers/%E5%BC%80%E5%BF%83"}
+    }
+    await connection.stop()
+
+
+@pytest.mark.asyncio
+async def test_sticker_without_public_base_falls_back_to_kaomoji(base_db):
+    from bot import stickers
+
+    key = _aes_key()
+    connection, client, received = _make(key)
+    await connection.start()
+    await connection.accept({"encrypted": _encrypted(key, _inbound_xml(userid="o-9"))})
+    await _drain(connection)
+    client.calls.clear()
+
+    await received[0].send("[表情:困了]")
+
+    sent = _outbound_xml(key, client.calls[0][1]["encrypt"])
+    assert sent.findtext("msg") == stickers.kaomoji_for("困了")
+    await connection.stop()
+
+
+@pytest.mark.asyncio
+async def test_sticker_image_rejection_falls_back_to_kaomoji(base_db):
+    from bot import stickers
+
+    db.set_app_setting("bot.webhook_base_url", "https://bot.example.com")
+    key = _aes_key()
+    client = FirstSendFailsClient()
+    connection = WeChatConnection(_cfg(key), lambda _m: None, client=client)
+    await connection.start()
+    inbound = parse_inbound(_inbound_xml(userid="o-9"))
+
+    await connection._sender(inbound)("[表情:生气]")
+
+    assert len(client.calls) == 2
+    sent = _outbound_xml(key, client.calls[1][1]["encrypt"])
+    assert sent.findtext("msg") == stickers.kaomoji_for("生气")
     await connection.stop()
 
 

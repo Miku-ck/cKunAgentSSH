@@ -10,6 +10,8 @@ personality 自由文本负责上限（具体的世界观与经历）。
 import re
 from typing import Any
 
+from bot.stickers import bubble_key
+
 # ── 档位字典 ──
 # 键即值为合法取值；文案直接进 system prompt，因此必须是一句可执行指令，
 # 不能是形容词（"活泼一点"是形容词，"句尾用呀/啦"是指令）。
@@ -40,6 +42,20 @@ EMOJI = {
     "medium": "常用 emoji，一条最多两个。",
 }
 
+KAOMOJI = {
+    "none": "不用颜文字。",
+    "low": "偶尔用颜文字接一句情绪（约四五条一次），像 (●'◡'●)，别每条都带。",
+    "medium": "常用颜文字收情绪，一条最多一个；正经话题不用。",
+}
+
+# 表情包是「另发一张图」，不是句子里的字符：规则细节（独占一条、可用清单）
+# 由 stickers.prompt_block 单独注入，这里只管频率。
+STICKER = {
+    "none": "不发表情包。",
+    "low": "情绪到位时偶尔发一张表情包（约三四轮一次），别每轮都发。",
+    "medium": "可以多用表情包表达情绪，但一轮最多一张。",
+}
+
 # 内置禁用词：这些是模型腔最集中的标记，用户不必填写，始终生效。
 BUILTIN_TABOO = (
     "作为一个AI",
@@ -58,6 +74,8 @@ DEFAULT_DNA: dict[str, Any] = {
     "particles": "soft",
     "punctuation": "plain",
     "emoji": "low",
+    "kaomoji": "low",
+    "sticker": "low",
     "catchphrase": "",
     "taboo": [],
 }
@@ -91,7 +109,23 @@ DNA_OPTIONS = {
         ],
     },
     "emoji": {
-        "label": "表情密度",
+        "label": "emoji 密度",
+        "options": [
+            {"value": "none", "label": "不用"},
+            {"value": "low", "label": "偶尔"},
+            {"value": "medium", "label": "常用"},
+        ],
+    },
+    "kaomoji": {
+        "label": "颜文字",
+        "options": [
+            {"value": "none", "label": "不用"},
+            {"value": "low", "label": "偶尔"},
+            {"value": "medium", "label": "常用"},
+        ],
+    },
+    "sticker": {
+        "label": "表情包",
         "options": [
             {"value": "none", "label": "不用"},
             {"value": "low", "label": "偶尔"},
@@ -113,6 +147,8 @@ def normalize_dna(raw: Any) -> dict[str, Any]:
         ("particles", PARTICLES),
         ("punctuation", PUNCTUATION),
         ("emoji", EMOJI),
+        ("kaomoji", KAOMOJI),
+        ("sticker", STICKER),
     ):
         value = data.get(key)
         if isinstance(value, str) and value in table:
@@ -134,6 +170,8 @@ def compile_dna(raw: Any) -> list[str]:
         PARTICLES[dna["particles"]].rstrip("。"),
         PUNCTUATION[dna["punctuation"]].rstrip("。"),
         EMOJI[dna["emoji"]].rstrip("。"),
+        KAOMOJI[dna["kaomoji"]].rstrip("。"),
+        STICKER[dna["sticker"]].rstrip("。"),
     ))
     lines = [f"说话方式：{style}。"]
     extras: list[str] = []
@@ -202,12 +240,20 @@ def split_reply_bubbles(text: str, max_bubbles: int = MAX_REPLY_BUBBLES) -> list
     这层兜底挡住最短的那种凑数。
     """
     chunks = [c.strip() for c in re.split(r"\n[ \t]*\n", (text or "").strip()) if c.strip()]
-    if len(chunks) >= 3 and sum(len(c) for c in chunks) < MIN_BUBBLE_CHARS * len(chunks):
+    stickers = [bool(bubble_key(chunk)) for chunk in chunks]
+    # 表情包本身就是「一条」，不能因为字少被并进上一句：并了就变成句子里的标记。
+    if (
+        not any(stickers)
+        and len(chunks) >= 3
+        and sum(len(c) for c in chunks) < MIN_BUBBLE_CHARS * len(chunks)
+    ):
         return ["".join(chunks)]
     cap = max(1, max_bubbles)
     if len(chunks) <= cap:
         return chunks
-    return [*chunks[: cap - 1], "\n\n".join(chunks[cap - 1 :])]
+    merged = [c for c, is_sticker in zip(chunks[cap - 1 :], stickers[cap - 1 :]) if not is_sticker]
+    body = "\n\n".join(merged)
+    return [*chunks[: cap - 1], body] if body else list(chunks[: cap - 1])
 
 
 # ── 投递形态：给模型的是事实，不是额度 ──

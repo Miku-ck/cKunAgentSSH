@@ -29,6 +29,7 @@ import database as db
 from routes.chat import router as chat_router
 from routes.bot import router as bot_router
 from routes.bot_channels import router as bot_channels_router
+from routes.bot_stickers import router as bot_stickers_router
 from routes.wechat_callback import router as wechat_callback_router
 from routes.settings import router as settings_router
 from routes.skills import router as skills_router
@@ -444,6 +445,8 @@ async def _audit_write_error_handler(request: Request, exc: AuditWriteError):
 app.include_router(chat_router, prefix="/api")
 app.include_router(bot_router, prefix="/api")
 app.include_router(bot_channels_router, prefix="/api")
+# 表情包素材：不挂 /api —— <img> 与微信平台都带不了 X-API-Token；只暴露内置 png
+app.include_router(bot_stickers_router)
 # 微信平台回调：不挂 /api —— 平台不会带 X-API-Token，鉴权由 AES 密钥 + appid 承担
 app.include_router(wechat_callback_router)
 app.include_router(settings_router, prefix="/api")

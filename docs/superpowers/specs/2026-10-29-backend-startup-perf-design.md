@@ -253,3 +253,43 @@ venv site 扫描，早于 `_MODULE_T0`，不在本轮范围（方案 B：lifespa
 期望管理：Electron 健康轮询粒度为 150–500ms，后端省下的二十几毫秒在用户感知上大概率
 被轮询粒度吞掉；本轮的真实价值是「后端自报耗时第一次可与 Electron 观测对表」，以及
 对「步骤串行叠加」这类会随任务增加而复发的结构性问题的消除。
+
+## 10. 发布包字节码预编译（补充）
+
+`electron-builder.yml` 的 extraResources 此前把 `__pycache__` / `*.pyc` / `*.pyo`
+全部排除在外。「开发机缓存不该发出去」这个洁癖的代价落在目标机上：
+
+| 场景 | `import main` |
+|---|---|
+| 无 .pyc（首次运行；解包到只读目录后每次启动） | 5240ms |
+| 有 .pyc（三种失效模式热态） | 413–430ms |
+
+解包到只读目录（Program Files 等）时解释器连回写 `__pycache__` 都做不到，这份成本
+会永久保留 —— 不是「第一次慢一点」。
+
+做法：
+
+1. `scripts/package.js` 在 spawn electron-builder 之前，用内嵌 runtime 执行
+   `compileall -q -f -j 0 --invalidation-mode checked-hash`（`-x` 跳过 `tests/`
+   与 `_tmp/`）；预编译失败即不出包。
+2. `electron-builder.yml` 不再排除 `__pycache__`，只保留 `!*.pyo`。
+
+为什么必须是 `checked-hash`：electron-builder 拷贝会重写源文件 mtime，而默认的
+timestamp 失效模式把 `(mtime, size)` 记在 .pyc 头里 —— 拷贝一次，整批字节码全部
+失效，等于白编译。行为验证（只改 mtime、内容一字不动后重新 import）：
+
+| 失效模式 | .pyc 是否被重写（= 失效） |
+|---|---|
+| timestamp | 是 |
+| checked-hash | 否 |
+| unchecked-hash | 否 |
+
+`checked-hash` 每次 import 要读源码算 hash，实测热态与 timestamp 持平
+（413/426ms vs 418ms），没有额外代价；且源码真变了会自动重编译，比
+`unchecked-hash` 安全。
+
+体积：可进包的 `.pyc` 6.79MB / 380 个（`tests/` 与 `_tmp/` 那 56MB 仍被排除）。
+
+验证边界：本地无 `runtime/`（`npm run package` 会直接 exit 1），端到端打包验证落在
+CI 的 `check-windows` job；本地已验的是「编译命令可执行、字节码确实被采纳、功能与
+耗时都不退化」。

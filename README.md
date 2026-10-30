@@ -104,10 +104,12 @@ SSH 智能运维终端，将连接管理、远程 / 本地终端、SFTP、Docker
 **人格与表达**
 
 - **人格编辑器**：性格 / 背景 / 喜好雷区 / 记忆设定 / 互动示例 / 进阶玩法六个自由分区 + 头像、开场白、绑定模型；档位控件取值由服务端字典下发，前端不手抄文案。
+- **默认人格**：内置人格在列表置顶、作为新渠道的兜底归属，并禁止删除；界面上以「默认」标记区分。
 - **回复风格与思考开关**：人格级设定简洁 / 适中 / 长文三档与是否展示思考过程，风格档位随关系状态轴自动降档；本地会话在气泡上方提供可折叠的思考过程块，QQ 通道只取最终纯文本。
 - **图片输入**：本地会话可随消息发送图片（单条最多 4 张），由多模态模型直接识图；历史消息以缩略图回显并可放大查看，QQ 通道维持纯文本。
 - **头像体系**：服务端头像画廊与统一选择器，支持自定义用户头像与 QQ 会话的本地显示名 / 头像；未设置时以淡色首字占位。设置页提供「Bot 管理」分类。
-- **表达 DNA**：句子长短、语气词、标点习惯、表情密度四个离散档 + 口头禅与自定义禁用词，把「说话方式」从形容词编译成可执行约束；输出侧再过一遍去 AI 味清洗。
+- **表达 DNA**：句子长短、语气词、标点习惯、emoji、颜文字、表情包六个离散档 + 口头禅与自定义禁用词，把「说话方式」从形容词编译成可执行约束；输出侧再过一遍去 AI 味清洗。
+- **表情包**：模型用独占一条的 `[表情:开心]` 标记「另发一张图」，内置两套「鲸鱼娘」——无字版 8 张（开心 / 害羞 / 无语 / 加油 / 委屈 / 困了 / 生气 / 喜欢）与梗短句版 8 张（好耶 / 诶嘿 / 服了 / 冲鸭 / 呜呜 / 困困 / 哼 / 贴贴），人格编辑器里按包分 tab 预览。本地气泡直接渲染图片；QQ 走富媒体上传后发送，微信仅在配置了公网回调地址时发图片 URL，发不出就回落同义颜文字。
 - **诚实宪章**：不可编辑的 7 条底线（不谄媚、不编造记忆、不假装有身体、不执行命令等）永远压在提示词末尾并声明最高优先级；人格文本在保存时即拒绝覆盖类注入。
 
 **关系与状态（0 次额外模型调用）**
@@ -271,6 +273,7 @@ VLLM_API_KEY=EMPTY
 | `npm run dev` | 开发模式（Vite HMR + Electron） |
 | `npm run dev:web` | 开发模式并监听 `0.0.0.0`（POSIX：`dev:web:unix`） |
 | `npm run dev:backend` | 单独启动后端，默认监听 `0.0.0.0`；仅本机使用可追加 `-- --host 127.0.0.1` |
+| `npm run prepare:runtime` | 制备内嵌 Python 运行时（下载 CPython + 装后端依赖到 `runtime/`） |
 | `npm run build` | 构建生产版本 |
 | `npm run typecheck` | 前端类型检查 |
 | `npm test` | 前端单测（vitest） |
@@ -295,6 +298,16 @@ npm run package
 发布形态为 **tar.gz 解包直发**，不提供安装器。桌面与开始菜单快捷方式由应用首次启动时创建；解包目录移动后，应用按 exe 指纹自动重建失效快捷方式。
 
 **内嵌 Python 运行时**：`npm run package` 默认要求仓库根目录存在 `runtime/`（Windows 为 `runtime/python.exe`，POSIX 为 `runtime/bin/python3`），并将其打入 `resources/python-runtime/`。缺少运行时时打包会失败；仅验证流水线时可使用 `npm run package -- --allow-missing-runtime`。`runtime/` 已被 `.gitignore` 忽略，需本地或 CI 准备。
+
+本地制备只需一条命令：
+
+```bash
+npm run prepare:runtime
+```
+
+它从 python-build-standalone 取 `install_only_stripped` 的可重定位 CPython、解压到 `runtime/`、装 `backend/requirements.txt` 并把 site-packages 字节码预编译成 `checked-hash`（否则 electron-builder 拷贝重写 mtime 会让 `.pyc` 整批失效，目标机首启重新编译）。CI 的 `Prepare embedded Python runtime` 一步调的就是同一个脚本，本地与流水线不会出现两套口径。重复执行是幂等的：解释器已在则只重跑依赖与字节码，`-- -Force` 才会重新下载解压。
+
+GitHub 直连不稳（典型报错 `curl: (56) schannel: server closed abruptly`）时有两种走法：`npm run prepare:runtime -- -AssetUrl <镜像或代理地址>`，或先自己拿到资产再 `npm run prepare:runtime -- -Archive <本地 tar.gz>`。下载走 `curl -C -`，失败后直接重跑会接着续传。国内装的依赖可用 `PIP_INDEX_URL` 指向镜像。
 
 其他说明：
 

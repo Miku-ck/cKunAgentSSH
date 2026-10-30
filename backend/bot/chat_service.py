@@ -8,6 +8,7 @@ from agent.memory.budget import cap_text_tokens
 from bot import memory as memory_mod
 from bot import relation as relation_mod
 from bot import state as state_mod
+from bot import stickers as stickers_mod
 from bot.character import (
     REFUSAL_STYLES,
     SAFETY_CHARTER,
@@ -19,6 +20,7 @@ from bot.character import (
 from bot.voice import (
     compile_dna,
     delivery_hint,
+    normalize_dna,
     shape_group_reply,
     split_reply_bubbles,
     strip_ai_smell,
@@ -92,6 +94,12 @@ class BotChatService:
         # 表达 DNA：枚举档位编译成可执行约束。personality 负责「是谁」，
         # 这里负责「怎么开口」—— 只有前者时模型会退化回通用助手腔。
         sections.extend(compile_dna(persona.get("expression_dna")))
+        # 表情包要单独给「怎么发、有哪些」：档位只说了频率，模型不知道标记长什么样。
+        sticker_prompt = stickers_mod.prompt_block(
+            normalize_dna(persona.get("expression_dna"))["sticker"]
+        )
+        if sticker_prompt:
+            sections.append(sticker_prompt)
 
         # 样板排在档位之后：先讲规矩再给例子，否则模型会把示例内容当事实复述。
         if persona.get("dialogue_samples"):
@@ -182,6 +190,8 @@ class BotChatService:
         if not conversation:
             raise ValueError("会话不存在")
         persona = conversation["persona"]
+        # 人格关掉表情包时，输出侧也要把这层闸关上：提示词是软约束，标记是模型生成的。
+        sticker_enabled = normalize_dna(persona.get("expression_dna"))["sticker"] != "none"
         model = await asyncio.to_thread(self._model_for_persona, persona)
         # P2：embedding 客户端与聊天模型同端点派生（与 Agent 侧同口径）。
         # 端点不提供 /v1/embeddings 时客户端自带静默降级 → 全链路退化为 FTS-only。
@@ -361,6 +371,9 @@ class BotChatService:
         reply = strip_ai_smell(reply)
         # 输出侧兜底：命中敏感口径的句子不出口（复读密钥比说教难看得多）。
         reply = strip_sensitive_lines(reply)
+        # 表情包收口放在清洗之后：未知键、行内标记、一轮多张都在这里收敛，
+        # 落库的就是渠道能直接投递的形态（本地渲染与 QQ/微信读同一份文本）。
+        reply = stickers_mod.normalize(reply, enabled=sticker_enabled) or "……"
         # 有疙瘩且通篇没有问句 → 补一句试探性收尾（在清洗之后追加，避免被清掉）。
         if (new_state and float(new_state.get("tension") or 0.0) >= 60.0
                 and "？" not in reply and "?" not in reply):

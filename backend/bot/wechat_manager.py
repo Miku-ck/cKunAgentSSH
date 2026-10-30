@@ -6,6 +6,7 @@
 """
 
 import asyncio
+import json
 import logging
 import time
 from datetime import datetime
@@ -14,6 +15,7 @@ from urllib.parse import quote
 import database as db
 import netconfig
 
+from bot import stickers as sticker_mod
 from bot import wechat_channel as wx
 from bot.provider import (
     ChannelConfig,
@@ -122,6 +124,10 @@ class WeChatConnection:
 
     def _sender(self, inbound: wx.WeChatInbound):
         async def send(part: str) -> None:
+            key = sticker_mod.bubble_key(part)
+            if key:
+                await self._send_sticker(inbound, key)
+                return
             await self._sendmsg(inbound, part)
 
         return send
@@ -137,6 +143,29 @@ class WeChatConnection:
             channel=inbound.channel,
         )
         await self._post(self._api_url(SENDMSG_URL), self.crypto.encrypt(xml_text))
+
+    async def _send_sticker(self, inbound: wx.WeChatInbound, key: str) -> None:
+        """图片消息走 `<msg>` 里的 JSON；平台要能拉到图，所以只在配了公网地址时发。
+
+        小程序渠道只认 media_id、本机又没有公众号素材上传凭据，发送失败就回落
+        颜文字 —— 宁可少一张图，也不能让这一条回复直接消失。
+        """
+        base = (await asyncio.to_thread(
+            db.get_app_setting, wx.WEBHOOK_BASE_SETTING, ""
+        ) or "").strip().rstrip("/")
+        if base:
+            url = f"{base}/assets/stickers/{quote(key, safe='')}"
+            rich = json.dumps({"image": {"url": url}}, ensure_ascii=False)
+            try:
+                await self._sendmsg(inbound, rich)
+                return
+            except Exception as exc:  # noqa: BLE001 —— 平台不认 url 是正常分支
+                logger.info(
+                    "微信渠道 %s 图片表情包发送失败，回落颜文字: %s",
+                    self.cfg.channel_id[:8],
+                    exc,
+                )
+        await self._sendmsg(inbound, sticker_mod.kaomoji_for(key) or "……")
 
     async def _change_kefustate(self, openid: str, state: str, appid: str) -> None:
         # 平台文档：这里的 appid 是公众号或小程序 appid。传开放平台 APPID 会返回

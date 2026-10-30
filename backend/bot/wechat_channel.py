@@ -23,6 +23,8 @@ WECHAT_TEXT_LIMIT = 600
 WECHAT_MAX_PARTS = MAX_REPLY_BUBBLES
 # 客服消息走 API，不存在 QQ 的 5 分钟被动回复窗口；生成预算与 QQ 对齐即可。
 WECHAT_REPLY_TIMEOUT = 150
+# 公网回调地址（隧道），图片表情包靠它给出平台能拉取的 url；空串 = 只发文字。
+WEBHOOK_BASE_SETTING = "bot.webhook_base_url"
 WECHAT_TIMEOUT_REPLY = TIMEOUT_REPLY
 WECHAT_FAILURE_REPLY = FAILURE_REPLY
 

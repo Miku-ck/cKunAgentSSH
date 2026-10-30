@@ -20,6 +20,7 @@
     "ci": "bash scripts/ci-check.sh",
     "preview": "node scripts/dev.cjs preview",
     "dev:backend": "cd backend && python main.py --host 0.0.0.0",
+    "prepare:runtime": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-runtime.ps1",
     "clean": "node scripts/clean.mjs",
     "prepackage": "electron-vite build",
     "package": "node scripts/package.js",

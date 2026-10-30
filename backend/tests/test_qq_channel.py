@@ -17,6 +17,18 @@ from bot.qq_channel import (
 from bot.text_format import split_text
 
 
+class FakeHttp:
+    def __init__(self, files=None):
+        self.files = files if files is not None else {"file_info": "media-1"}
+        self.calls = []
+
+    async def request(self, route, json=None):
+        self.calls.append((route, json))
+        if isinstance(self.files, Exception):
+            raise self.files
+        return self.files
+
+
 class FakeMessage:
     def __init__(self, event_id, content, group_openid=None, user_openid=None):
         self.id = event_id
@@ -26,10 +38,16 @@ class FakeMessage:
         self.author = SimpleNamespace(member_openid="member-1", user_openid=user_openid)
         self.replies = []
         self.seqs = []
+        self.media = []
+        self.msg_types = []
+        self.http = FakeHttp()
+        self._api = SimpleNamespace(_http=self.http)
 
-    async def reply(self, content, msg_type=0, msg_seq=None):
+    async def reply(self, content=None, msg_type=0, msg_seq=None, media=None):
         self.replies.append(content)
         self.seqs.append(msg_seq)
+        self.media.append(media)
+        self.msg_types.append(msg_type)
 
 
 def collect_adapter(channel_id="channel-1"):
@@ -159,6 +177,44 @@ def test_outbound_parts_caps_parts_without_dropping_words():
     assert len(parts) == QQ_MAX_PARTS
     assert "".join(parts).replace("\n", "") == "".join(five)
     assert parts[-1] == "\n\n".join(five[QQ_MAX_PARTS - 1:])
+
+
+@pytest.mark.asyncio
+async def test_sticker_bubble_uploads_media_then_sends_msg_type_7():
+    adapter, received = collect_adapter()
+    message = FakeMessage("event-1", "在吗", group_openid="group-1")
+    await adapter.handle_group(message)
+    inbound = received[0]
+
+    await inbound.send("[表情:开心]")
+
+    route, payload = message.http.calls[0]
+    assert route.method == "POST"
+    assert route.path == "/v2/groups/{group_openid}/files"
+    assert route.parameters == {"group_openid": "group-1"}
+    assert payload["srv_send_msg"] is False
+    assert payload["file_data"]
+    assert message.msg_types == [7]
+    assert message.media == [{"file_info": "media-1"}]
+    assert message.replies == [None]
+    assert message.seqs == [1]
+
+
+@pytest.mark.asyncio
+async def test_sticker_upload_failure_falls_back_to_kaomoji():
+    from bot import stickers
+
+    adapter, received = collect_adapter()
+    message = FakeMessage("event-1", "在吗", group_openid="group-1")
+    message.http.files = RuntimeError("upload rejected")
+    await adapter.handle_group(message)
+    inbound = received[0]
+
+    await inbound.send("[表情:害羞]")
+
+    assert message.msg_types == [0]
+    assert message.replies == [stickers.kaomoji_for("害羞")]
+    assert message.seqs == [1]
 
 
 @pytest.mark.asyncio

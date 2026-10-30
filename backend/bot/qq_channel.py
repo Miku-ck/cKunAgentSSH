@@ -3,10 +3,12 @@
 连接生命周期在 `qq_manager.py`，消息流程在 `inbound_pipeline.py`。
 """
 
+import base64
 import logging
 from functools import partial
 from itertools import count
 
+from bot import stickers as sticker_mod
 from bot.provider import InboundMessage
 from bot.replies import FAILURE_REPLY, TIMEOUT_REPLY
 from bot.text_format import (
@@ -75,4 +77,49 @@ class QQInboundAdapter:
 
     @staticmethod
     async def _reply(message, seq, part: str) -> None:
+        key = sticker_mod.bubble_key(part)
+        if key:
+            try:
+                await QQInboundAdapter._reply_sticker(message, key, seq)
+                return
+            except Exception as exc:  # noqa: BLE001 —— 发图失败不能让这一句消失
+                logger.warning("QQ 表情包发送失败，回落颜文字: %s", exc)
+                await message.reply(
+                    content=sticker_mod.kaomoji_for(key) or "……",
+                    msg_type=0,
+                    msg_seq=next(seq),
+                )
+                return
         await message.reply(content=part, msg_type=0, msg_seq=next(seq))
+
+    @staticmethod
+    async def _reply_sticker(message, key: str, seq) -> None:
+        """QQ 富媒体：先上传拿 file_info，再用 msg_type=7 发出去。
+
+        botpy 1.2.1 的 post_group_file 只透传 url，本机没有公网图床，
+        所以直接走 SDK 的 HTTP 通道带 file_data（base64），鉴权头由 SDK 补。
+        """
+        path = sticker_mod.path_for(key)
+        if not path:
+            raise FileNotFoundError(f"表情包素材缺失：{key}")
+        from botpy.api import Route
+
+        payload = {
+            "file_type": 1,
+            "file_data": base64.b64encode(path.read_bytes()).decode("ascii"),
+            "srv_send_msg": False,
+        }
+        if getattr(message, "group_openid", None):
+            route = Route(
+                "POST",
+                "/v2/groups/{group_openid}/files",
+                group_openid=message.group_openid,
+            )
+        else:
+            route = Route(
+                "POST",
+                "/v2/users/{openid}/files",
+                openid=message.author.user_openid,
+            )
+        media = await message._api._http.request(route, json=payload)
+        await message.reply(msg_type=7, media=media, msg_seq=next(seq))
