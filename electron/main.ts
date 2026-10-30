@@ -1626,11 +1626,6 @@ function setupSSHIPC(): void {
     return gitRepos!.syncMerge(path, remote)
   })
 
-  // 主仓设置：primary = 指定远端名设为主仓；null = 恢复自动推导
-  handleTrusted('gitrepos:syncSetPrimary', (_event, path: string, primary: string | null) => {
-    return gitRepos!.syncSetPrimary(path, primary)
-  })
-
   // ── TLS 接入网关（安全接入）──
   // 设计要点（历史设计文档已退役，帧格式见 shared/gateway-mux.ts）：
   // 一条网关 = 一条共享会话（gateway-manager），隧道规则经 transportFactory 搭车；

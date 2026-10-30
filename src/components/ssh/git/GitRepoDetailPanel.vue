@@ -74,41 +74,7 @@
         </span>
       </div>
 
-      <!-- 远端条：常驻一行看清 主仓 / 镜像 的落后与分叉（巡检快照；逐端点动作在「远端」页签）。
-           无 remote 的仓库由概要条的「无远程仓库」表达，这里不再重复一句话。 -->
-      <div v-if="showEpbar" class="grdp-epbar">
-        <template v-if="syncAvailable">
-          <span v-if="!endpoints.length" class="grdp-epnone">
-            {{ probing ? '正在巡检远端…' : '尚未巡检该仓库的远端' }}
-          </span>
-          <span
-            v-for="ep in endpoints"
-            :key="ep.name"
-            class="grdp-chip"
-            :class="'s-' + ep.state"
-            :title="`${ep.url} · ${epStateTitle(ep)}`"
-          >
-            <i class="grdp-cdot" :class="syncDotClass(ep)"></i>
-            <span class="grdp-cname">{{ ep.name }}</span>
-            <span class="grdp-crole" :class="ep.role === 'primary' ? 'pri' : 'mir'">{{ ep.role === 'primary' ? '主仓' : '镜像' }}</span>
-            <span class="grdp-cstate">{{ syncStateText(ep) }}</span>
-            <button
-              v-if="ep.role === 'primary' && ep.state === 'diverged'"
-              class="grdp-cact"
-              type="button"
-              :disabled="!!busy"
-              :title="`git fetch ${ep.name} ${repo.branch} && git merge --ff-only FETCH_HEAD；真分叉时 git 拒绝，需手动处理`"
-              @click="emit('merge', ep.name)"
-            >合并</button>
-          </span>
-          <span class="grdp-epsp"></span>
-          <span v-if="probeLabel" class="grdp-epmeta">{{ probeLabel }}</span>
-          <button v-if="tab !== 'remotes'" class="grdp-eplink" type="button" @click="tab = 'remotes'">详情 ›</button>
-        </template>
-        <span v-else class="grdp-epnone">远端巡检只覆盖本地仓库：远程仓库的远端一致性以「获取」后的 ↑↓ 为准</span>
-      </div>
-
-      <!-- 四页签：变更（默认，日常工作流）/ 远端 / 分支 / 图谱（图谱首次激活才取数） -->
+      <!-- 四页签：变更（默认，日常工作流） / 远端 / 分支 / 图谱（图谱首次激活才取数） -->
       <div class="grdp-tabs" role="tablist" aria-label="仓库详情分区">
         <button
           v-for="t in tabs"
@@ -130,17 +96,6 @@
             <button v-if="repo.originUrl" class="grdp-eplink" type="button" :disabled="probing || !!busy" @click="emit('probe')">巡检</button>
           </div>
           <template v-else>
-            <div v-if="!hasGitcodePrimary && !manualPrimary" class="grdp-epwarn">未配置 GitCode 主仓：本仓不走平台镜像，推送将回退其它远端</div>
-            <div v-if="manualPrimary" class="grdp-epmanual">
-              <span>主仓为手动指定（<b class="mono">{{ manualPrimary }}</b>），覆盖自动推导</span>
-              <button
-                class="btn btn-sm"
-                type="button"
-                :disabled="!!busy"
-                title="清除手动设置，恢复 GitCode 优先的自动推导"
-                @click="emit('setPrimary', null)"
-              >恢复自动</button>
-            </div>
             <div v-for="ep in endpoints" :key="ep.name" class="grdp-ep">
               <div class="grdp-ep-row">
                 <span class="grdp-ep-name mono" :title="ep.url">{{ ep.name }}</span>
@@ -149,14 +104,6 @@
                 <span class="grdp-ep-sha mono" :title="`远端 HEAD ${ep.sha ?? ''}`">{{ shortSha(ep.sha) }}</span>
                 <span class="grdp-ep-state" :class="'s-' + ep.state" :title="epStateTitle(ep)">{{ syncStateText(ep) }}</span>
                 <span class="grdp-ep-acts">
-                  <button
-                    v-if="ep.role === 'mirror'"
-                    class="btn btn-sm grdp-ep-setprimary"
-                    type="button"
-                    :disabled="!!busy"
-                    :title="`将 ${ep.name} 设为本仓主仓（手动覆盖自动推导）`"
-                    @click="emit('setPrimary', ep.name)"
-                  >设为主仓</button>
                   <button
                     v-if="ep.role === 'primary' && ep.state === 'diverged'"
                     class="btn btn-sm"
@@ -350,9 +297,7 @@ import {
   looksLikeNoiseFile,
   parseGraphLog,
   parseRepoDetailSections,
-  remoteHostOf,
   splitBySep,
-  syncDotClass,
   syncStateText,
   repoRowKind,
   type GitBranchInfo,
@@ -376,8 +321,6 @@ const props = defineProps<{
   probing?: boolean
   /** 上次巡检的展示文案（父级算好，面板不碰定时器） */
   probeLabel?: string
-  /** 该仓库的手动主仓配置（来自注册表 reg.sync）；为空表示未手动指定、走自动推导 */
-  manualPrimary?: string | null
 }>()
 const emit = defineEmits<{
   fetch: []
@@ -397,8 +340,6 @@ const emit = defineEmits<{
   merge: [remote: string]
   /** 重跑远端巡检 */
   probe: []
-  /** 主仓设置：remote 为远端名 = 设为主仓；null = 恢复自动推导（清除手动配置） */
-  setPrimary: [remote: string | null]
 }>()
 
 const TABS = [
@@ -441,15 +382,6 @@ const syncAvailable = computed(() => props.syncAvailable !== false)
 /** 远程范围没有巡检能力（syncProbe 走本地注册表）→「远端」页签整条不出现，省掉一句「这里不可用」 */
 const tabs = computed(() => (syncAvailable.value ? TABS : TABS.filter(t => t.key !== 'remotes')))
 watch(syncAvailable, (v) => { if (!v && tab.value === 'remotes') tab.value = 'changes' })
-
-function isGitcodeUrl(url: string): boolean {
-  const h = remoteHostOf(url)
-  return h === 'gitcode.com' || h === 'gitcode.net'
-}
-/** 没有 GitCode 主仓 = 不走平台镜像，推送退回其它远端（远端页签顶部提示） */
-/** 远端条只在对得起一行信息时出现：无 remote 的仓库概要条已写明，不再重复 */
-const showEpbar = computed(() => !syncAvailable.value || !!props.probing || endpoints.value.length > 0)
-const hasGitcodePrimary = computed(() => endpoints.value.some(e => e.role === 'primary' && isGitcodeUrl(e.url)))
 
 function epStateTitle(ep: SyncEndpoint): string {
   if (ep.state === 'unknown') return ep.error || 'ls-remote 失败（网络 / 认证）'
@@ -821,20 +753,7 @@ onMounted(() => { void load() })
   padding: 0 var(--spacing-4);
 }
 
-/* ── 远端条：常驻一行看清 主仓/镜像 的状态，落后可原地补齐（逐端点动作在页签） ── */
-.grdp-epbar {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-8);
-  flex-wrap: wrap;
-  margin: var(--spacing-8) var(--spacing-14) 0;
-  flex-shrink: 0;
-  font-size: 0.8462rem;
-  color: var(--text-tertiary);
-}
-.grdp-epnone { color: var(--text-tertiary); }
-.grdp-epsp { flex: 1; }
-.grdp-epmeta { color: var(--text-tertiary); white-space: nowrap; }
+/* 页签内的文字动作（巡检 / 重新巡检） */
 .grdp-eplink {
   border: none;
   background: transparent;
@@ -850,78 +769,7 @@ onMounted(() => { void load() })
 .grdp-eptail { margin-top: var(--spacing-8); display: flex; }
 .grdp-empty .grdp-eplink { margin-left: var(--spacing-6); }
 
-.grdp-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-6);
-  height: 22px;
-  padding: 0 var(--spacing-8);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-pill);
-  background: var(--bg-elevated);
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-.grdp-chip.s-behind { border-color: color-mix(in srgb, var(--status-warn-text) 38%, transparent); }
-.grdp-chip.s-diverged { border-color: color-mix(in srgb, var(--status-error-text) 42%, transparent); }
-.grdp-chip.s-unknown { border-style: dashed; }
-.grdp-cdot { width: 7px; height: 7px; border-radius: 50%; background: var(--bg-slider); flex-shrink: 0; }
-.grdp-cdot.ok { background: var(--status-success-text); }
-.grdp-cdot.behind { background: var(--status-warn-text); }
-.grdp-cdot.diverged { background: var(--status-error-text); }
-.grdp-cdot.off { box-shadow: inset 0 0 0 1px var(--border-default); }
-.grdp-cname { font-family: var(--font-mono); color: var(--text-primary); }
-.grdp-crole {
-  font-size: 0.7692rem;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  padding: 0 var(--spacing-4);
-  color: var(--text-tertiary);
-}
-.grdp-crole.pri { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); }
-.grdp-crole.mir { color: var(--accent-indigo); border-color: color-mix(in srgb, var(--accent-indigo) 32%, transparent); }
-.grdp-chip.s-ok .grdp-cstate { color: var(--status-success-text); }
-.grdp-chip.s-behind .grdp-cstate { color: var(--status-warn-text); }
-.grdp-chip.s-diverged .grdp-cstate { color: var(--status-error-text); }
-.grdp-cact {
-  border: none;
-  border-left: 1px solid var(--divider-primary);
-  background: transparent;
-  color: var(--accent-text);
-  font: inherit;
-  font-family: var(--font-sans);
-  cursor: pointer;
-  margin-left: var(--spacing-2);
-  padding: 0 0 0 var(--spacing-6);
-}
-.grdp-cact:hover:not(:disabled) { text-decoration: underline; }
-.grdp-cact:disabled { opacity: .45; cursor: default; }
-
 /* ── 远端页签：一远端一行（名称 + 角色 | URL | SHA | 状态 | 动作） ── */
-.grdp-epwarn {
-  margin-bottom: var(--spacing-8);
-  padding: 5px var(--spacing-10);
-  border-left: 2px solid var(--status-warn-text);
-  border-radius: var(--radius-sm);
-  background: var(--status-warn-bg);
-  color: var(--text-primary);
-  font-size: 0.8462rem;
-  line-height: 1.5;
-}
-.grdp-epmanual {
-  margin-bottom: var(--spacing-8);
-  padding: 5px var(--spacing-10);
-  border-left: 2px solid var(--accent-primary);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
-  color: var(--text-primary);
-  font-size: 0.8462rem;
-  line-height: 1.5;
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-8);
-}
-.grdp-epmanual .btn { margin-left: auto; flex-shrink: 0; }
 .grdp-ep { padding: var(--spacing-8) 0; border-bottom: 1px solid var(--divider-primary); }
 .grdp-ep-row {
   display: grid;
@@ -943,7 +791,6 @@ onMounted(() => { void load() })
 .grdp-ep-role.pri { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); }
 .grdp-ep-role.mir { color: var(--accent-indigo); border-color: color-mix(in srgb, var(--accent-indigo) 32%, transparent); }
 .grdp-ep-url {
-  flex: 1;
   min-width: 0;
   font-size: 0.8462rem;
   color: var(--text-tertiary);
@@ -957,10 +804,7 @@ onMounted(() => { void load() })
 .grdp-ep-state.s-behind { color: var(--status-warn-text); }
 .grdp-ep-state.s-diverged { color: var(--status-error-text); font-weight: 500; }
 .grdp-ep-state.s-unknown { color: var(--text-tertiary); }
-.grdp-ep-acts { display: flex; align-items: center; gap: var(--spacing-6); justify-content: flex-end; min-width: 10ch; }
-/* 设为主仓：默认隐藏，悬停整行才显示（其余动作按状态始终可见） */
-.grdp-ep-setprimary { opacity: 0; pointer-events: none; transition: opacity .12s ease; }
-.grdp-ep-row:hover .grdp-ep-setprimary { opacity: 1; pointer-events: auto; }
+.grdp-ep-acts { display: flex; align-items: center; justify-content: flex-end; gap: var(--spacing-6); }
 .grdp-ep-wait { font-size: 0.8462rem; color: var(--text-tertiary); white-space: nowrap; }
 .grdp-ep-note { margin-top: var(--spacing-4); font-size: 0.8462rem; color: var(--text-secondary); line-height: 1.5; }
 .grdp-ep-note.err { color: var(--status-error-text); }

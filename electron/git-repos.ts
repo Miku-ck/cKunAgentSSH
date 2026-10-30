@@ -18,7 +18,6 @@ import {
   classifySyncEndpoint,
   deriveSyncConfig,
   primaryRemoteOf,
-  resolveSyncConfig,
   firstLine,
   friendlyGitError,
   interpretPush,
@@ -389,14 +388,9 @@ export class GitReposService {
       return { code: 1, stdout: '', stderr: 'HEAD 游离（detached HEAD），没有可推送的分支' }
     }
     const upstream = await execGit(['-C', repoPath, 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'])
-    const cfgRemote = await execGit(['-C', repoPath, 'config', '--get', `branch.${branch}.remote`])
     const remotesRaw = await execGit(['-C', repoPath, 'config', '--get-regexp', '^remote\\..*\\.url$'])
     const remotes = parseRemoteConfig(remotesRaw.stdout)
-    const branchRemote = cfgRemote.code === 0 && remotes[cfgRemote.stdout.trim()] ? cfgRemote.stdout.trim() : null
-    // 主仓 = 注册表手动配置优先，否则回退 GitCode 优先的自动推导
-    const reg = await readRegistryFromDisk()
-    const saved = reg.sync?.[repoPath] ?? null
-    const primary = resolveSyncConfig(remotes, branchRemote, saved).primary
+    const primary = deriveSyncConfig(remotes).primary
     if (!primary) {
       return { code: 1, stdout: '', stderr: '没有配置远程仓库，无法推送' }
     }
@@ -427,16 +421,9 @@ export class GitReposService {
   }
   // ── 三仓同步（主仓 + 只读镜像）：探针 / 补齐 / 合并 ──
 
-  /** 读取单仓的同步配置：优先用注册表手动主仓（reg.sync），否则回退 GitCode 优先的自动推导 */
-  private async syncConfigOf(repoPath: string, branch: string, remotes: Record<string, string>): Promise<RepoSyncConfig> {
-    let branchRemote: string | null = null
-    if (branch) {
-      const cfg = await execGit(['-C', repoPath, 'config', '--get', `branch.${branch}.remote`])
-      if (cfg.code === 0 && cfg.stdout.trim() && remotes[cfg.stdout.trim()]) branchRemote = cfg.stdout.trim()
-    }
-    const reg = await readRegistryFromDisk()
-    const saved = reg.sync?.[repoPath] ?? null
-    return resolveSyncConfig(remotes, branchRemote, saved)
+  /** 读取单仓的同步配置：按固定优先级自动推导主仓（gitcode → gitee → github → 其余远端） */
+  private async syncConfigOf(_repoPath: string, _branch: string, remotes: Record<string, string>): Promise<RepoSyncConfig> {
+    return deriveSyncConfig(remotes)
   }
 
 
@@ -550,31 +537,5 @@ export class GitReposService {
     const fetched = await execGit(['-C', repoPath, 'fetch', name, branch], FETCH_TIMEOUT_MS)
     if (fetched.code !== 0) return fetched
     return execGit(['-C', repoPath, 'merge', '--ff-only', 'FETCH_HEAD'], PULL_TIMEOUT_MS)
-  }
-
-  /**
-   * 主仓设置：显式写入/清除注册表 sync 配置（手动优先，覆盖自动推导）。
-   * primary 为有效远端名 → 写 reg.sync[path] = { primary, mirrors }；
-   * primary 为 null/空 → 删除该仓手动配置（恢复「GitCode 优先」自动推导）。
-   * 写入前校验远端真实存在；mirrors 由当前远端实时计算。
-   */
-  async syncSetPrimary(path: string, primary: string | null): Promise<GitReposRegistry> {
-    return this.enqueue(async () => {
-      const repoPath = assertRepoPath(path)
-      const reg = await readRegistryFromDisk()
-      if (!primary) {
-        if (reg.sync) delete reg.sync[repoPath]
-      } else {
-        const name = String(primary).trim()
-        if (!isValidBranchName(name)) throw new Error(`非法远端名: ${name || '(空)'}`)
-        const remotesRaw = await execGit(['-C', repoPath, 'config', '--get-regexp', '^remote\\..*\\.url$'])
-        const remotes = parseRemoteConfig(remotesRaw.stdout)
-        if (!remotes[name]) throw new Error(`远端 ${name} 不存在（现有：${Object.keys(remotes).sort().join('、') || '无'}）`)
-        reg.sync = reg.sync ?? {}
-        reg.sync[repoPath] = { primary: name, mirrors: Object.keys(remotes).filter(n => n !== name) }
-      }
-      await writeRegistryToDisk(reg)
-      return reg
-    })
   }
 }

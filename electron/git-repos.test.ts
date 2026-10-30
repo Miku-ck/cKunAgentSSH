@@ -269,14 +269,6 @@ describe('GitReposService 三仓同步（probe / catchup / merge / 主仓切换�
     expect(r.endpoints.every(e => e.state === 'ok')).toBe(true)
   })
 
-  it('syncSetPrimary：主仓切到 backup 后角色翻转并持久化', async () => {
-    const reg = await svc.syncSetPrimary(repoC, 'backup')
-    expect(reg.sync?.[repoC]).toEqual({ primary: 'backup', mirrors: ['origin'] })
-    const r = await svc.syncProbeOne(repoC)
-    expect(r.endpoints.find(e => e.name === 'backup')?.role).toBe('primary')
-    expect(r.endpoints.find(e => e.name === 'origin')?.role).toBe('mirror')
-  })
-
   it('分叉：远端独有提交 → diverged；catchup 跳过绝不强推；merge --ff-only 被拒', async () => {
     // 在 bare-a（origin）侧制造独有提交：clone → commit → push
     const cloneDir = join(workDir, 'clone-a')
@@ -323,40 +315,4 @@ describe('GitReposService 三仓同步（probe / catchup / merge / 主仓切换�
     expect(r.primary).toBe('')
   })
 
-  it('syncSetPrimary(null) 恢复自动：清掉手动主仓配置并持久化', async () => {
-    const reg1 = await svc.syncSetPrimary(repoC, 'backup')
-    expect(reg1.sync?.[repoC]?.primary).toBe('backup')
-    const reg2 = await svc.syncSetPrimary(repoC, null)
-    expect(reg2.sync?.[repoC]).toBeUndefined()
-  })
-
-  it('pushOne 尊重手动主仓：把 github 设为主仓后只推该远端', async () => {
-    const r = join(workDir, 'repo-push-primary')
-    const ba = join(workDir, 'bare-pa.git')
-    const bb = join(workDir, 'bare-pb.git')
-    makeRepo(r, 'p.txt')
-    execFileSync('git', ['init', '--bare', '-b', 'main', ba], { stdio: 'pipe' })
-    execFileSync('git', ['init', '--bare', '-b', 'main', bb], { stdio: 'pipe' })
-    const rg = (a: string[]) => execFileSync('git', ['-C', r, ...a], { stdio: 'pipe' })
-    rg(['remote', 'add', 'origin', ba])
-    rg(['remote', 'add', 'github', bb])
-    rg(['push', 'origin', 'main'])
-    rg(['push', 'github', 'main'])
-
-    // 手动把主仓设为 github（覆盖默认 origin）
-    const reg = await svc.syncSetPrimary(r, 'github')
-    expect(reg.sync?.[r]?.primary).toBe('github')
-
-    // 本地新提交后推送 → 仅 github 应当被推平
-    writeFileSync(join(r, 'extra.txt'), 'e\n')
-    rg(['add', 'extra.txt'])
-    rg(['commit', '-m', 'extra'])
-    const pr = await svc.pushOne(r)
-    expect(pr.code).toBe(0)
-
-    const probe = await svc.syncProbeOne(r)
-    expect(probe.primary).toBe('github')
-    expect(probe.endpoints.find(e => e.name === 'github')?.state).toBe('ok')
-    expect(probe.endpoints.find(e => e.name === 'origin')?.state).toBe('behind')
-  })
 })

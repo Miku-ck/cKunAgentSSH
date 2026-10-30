@@ -19,7 +19,7 @@ import {
   parseGraphLog, graphRefKind, graphHasMore, layoutGraphLanes,
   draftCommitMessage, looksLikeNoiseFile, clampDiffText, buildRemoteDiffCmd,
   parseLsRemoteSha, parseRevListCount, classifySyncEndpoint,
-  remoteHostOf, primaryRemoteOf, deriveSyncConfig, resolveSyncConfig,
+  remoteHostOf, primaryRemoteOf, deriveSyncConfig,
   type RepoRow,
 } from '../shared/git-repos-core'
 
@@ -587,34 +587,12 @@ describe('三仓同步：端点三态 / ls-remote 与 rev-list 解析 / 默认�
     expect(primaryRemoteOf({}, null)).toBeNull()
   })
 
-  it('deriveSyncConfig：GitCode 主仓优先；其余全为镜像', () => {
-    expect(deriveSyncConfig({ gitee: 'https://gitee.com/a/b.git', gitcode: 'https://gitcode.com/a/b.git' }, 'gitee')).toEqual({ primary: 'gitcode', mirrors: ['gitee'] }) // gitcode host 优先，无视 branch remote
-    expect(deriveSyncConfig({ gitee: 'u1', github: 'u2' }, 'github')).toEqual({ primary: 'github', mirrors: ['gitee'] })
-    expect(deriveSyncConfig({ gitee: 'u1', origin: 'u2', github: 'u3' }, null)).toEqual({ primary: 'origin', mirrors: ['gitee', 'github'] })
-    expect(deriveSyncConfig({ gitee: 'u1' }, 'not-exist')).toEqual({ primary: 'gitee', mirrors: [] })
-    expect(deriveSyncConfig({}, 'origin')).toEqual({ primary: '', mirrors: [] })
-  })
-})
-
-describe('resolveSyncConfig（手动主仓优先 + 可回退自动）', () => {
-  it('手动主仓存在时优先使用，mirrors 取其余远端（按当前远端实时计算）', () => {
-    expect(resolveSyncConfig({ github: 'u1', gitcode: 'u2', gitee: 'u3' }, 'github', { primary: 'gitee', mirrors: ['x'] }))
-      .toEqual({ primary: 'gitee', mirrors: ['github', 'gitcode'] })
-  })
-  it('无手动配置（null）回退自动推导（GitCode 优先）', () => {
-    expect(resolveSyncConfig({ github: 'git@github.com:a/b.git', gitcode: 'git@gitcode.com:a/b.git' }, 'github', null))
-      .toEqual({ primary: 'gitcode', mirrors: ['github'] })
-  })
-  it('saved 未提供/undefined 也走自动推导', () => {
-    expect(resolveSyncConfig({ github: 'git@github.com:a/b.git', origin: 'git@gitee.com:a/b.git' }, null, undefined))
-      .toEqual({ primary: 'origin', mirrors: ['github'] })
-  })
-  it('手动主仓指向的远端已不存在 → 回退自动推导（不残留脏配置）', () => {
-    const r = resolveSyncConfig(
-      { github: 'git@github.com:a/b.git', gitcode: 'git@gitcode.com:a/b.git' },
-      'github',
-      { primary: 'ghost', mirrors: [] },
-    )
-    expect(r).toEqual({ primary: 'gitcode', mirrors: ['github'] })
+  it('deriveSyncConfig：按 gitcode → gitee → github → 其余远端 固定优先级选主仓', () => {
+    expect(deriveSyncConfig({ gitee: 'https://gitee.com/a/b.git', gitcode: 'https://gitcode.com/a/b.git' })).toEqual({ primary: 'gitcode', mirrors: ['gitee'] })
+    expect(deriveSyncConfig({ gitee: 'u1', github: 'u2' })).toEqual({ primary: 'gitee', mirrors: ['github'] })
+    expect(deriveSyncConfig({ origin: 'u1', github: 'u2' })).toEqual({ primary: 'github', mirrors: ['origin'] })
+    expect(deriveSyncConfig({ origin: 'u1', backup: 'u2' })).toEqual({ primary: 'origin', mirrors: ['backup'] }) // 无三主仓名 → 首个其它远端
+    expect(deriveSyncConfig({ gitee: 'u1' })).toEqual({ primary: 'gitee', mirrors: [] })
+    expect(deriveSyncConfig({})).toEqual({ primary: '', mirrors: [] })
   })
 })

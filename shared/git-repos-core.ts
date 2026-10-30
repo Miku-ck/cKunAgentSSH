@@ -275,30 +275,16 @@ export function primaryRemoteOf(remotes: Record<string, string>, branchRemote: s
 }
 
 /**
- * 默认主仓推导（注册表没有显式 sync 配置时）：主仓 = primaryRemoteOf，
- * 其余远端全部是镜像。与 pickRemote 展示口径同源，但这里要的是「全员划分」。
+ * 默认主仓推导（无手动配置时，也是唯一判据）：按固定优先级选主仓，其余远端全部为镜像。
+ * 优先级：gitcode → gitee → github → 其余任意远端（首个）；无远端则为空。
+ * 推送 / 镜像划分都以此为准。
  */
-export function deriveSyncConfig(remotes: Record<string, string>, branchRemote: string | null): RepoSyncConfig {
-  const primary = primaryRemoteOf(remotes, branchRemote)
-  if (!primary) return { primary: '', mirrors: [] }
-  return { primary, mirrors: Object.keys(remotes).filter(n => n !== primary) }
-}
-
-/**
- * 主仓判定（手动优先 + 可回退自动）：
- * - saved 存在且 saved.primary 仍是有效远端 → 用它作主仓（用户自由指定的主仓）；
- * - 否则回退 deriveSyncConfig（GitCode 优先 → branch remote → origin → 首名）。
- * mirrors 恒由当前远端实时计算，被删远端自动掉出。
- */
-export function resolveSyncConfig(
-  remotes: Record<string, string>,
-  branchRemote: string | null,
-  saved?: RepoSyncConfig | null,
-): RepoSyncConfig {
-  if (saved && saved.primary && remotes[saved.primary]) {
-    return { primary: saved.primary, mirrors: Object.keys(remotes).filter(n => n !== saved.primary) }
-  }
-  return deriveSyncConfig(remotes, branchRemote)
+const PRIMARY_PRIORITY = ['gitcode', 'gitee', 'github']
+export function deriveSyncConfig(remotes: Record<string, string>): RepoSyncConfig {
+  const names = Object.keys(remotes)
+  if (!names.length) return { primary: '', mirrors: [] }
+  const primary = PRIMARY_PRIORITY.find(n => names.includes(n)) ?? names.find(n => !PRIMARY_PRIORITY.includes(n)) ?? ''
+  return { primary, mirrors: names.filter(n => n !== primary) }
 }
 
 /** 本地 git 命令的原样回包（fetch/pull 由渲染层 interpretPull 解释） */
@@ -618,12 +604,11 @@ export function sortRepoRows<T extends Pick<RepoRow, 'name' | 'dirtyFiles' | 'ah
   })
 }
 
-/** 本地取数结果 → 行（electron/git-repos.ts 的返回直接喂这里）；savedSync 为注册表手动主仓配置（可空） */
-export function toLocalRepoRow(r: LocalRepoStatusResult, savedSync?: RepoSyncConfig | null): RepoRow {
+/** 本地取数结果 → 行（electron/git-repos.ts 的返回直接喂这里） */
+export function toLocalRepoRow(r: LocalRepoStatusResult): RepoRow {
   const origin = r.originUrl ? parseOriginUrl(r.originUrl) : null
   const remotes = r.remotes ?? {}
-  const branchRemote = r.status?.upstream ? r.status.upstream.split('/')[0] : null
-  const primaryRemote = resolveSyncConfig(remotes, branchRemote, savedSync).primary || null
+  const primaryRemote = deriveSyncConfig(remotes).primary || null
   return {
     id: repoRowId('local', undefined, r.path),
     scope: 'local',

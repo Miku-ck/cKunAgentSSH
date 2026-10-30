@@ -88,7 +88,6 @@
         :sync-available="syncAvailable"
         :probing="probing"
         :probe-label="probeLabel"
-        :manual-primary="detailRepo ? (syncConfigs[detailRepo.path]?.primary ?? null) : null"
         @fetch="detailRepo && onFetch(detailRepo)"
         @pull="detailRepo && onPull(detailRepo)"
         @push="detailRepo && onPush(detailRepo)"
@@ -100,7 +99,6 @@
         @commit-push="onCommitPushCurrent"
         @merge="(remote: string) => detailRepo && onMerge(detailRepo, remote)"
         @probe="probeEndpoints()"
-        @set-primary="(remote: string | null) => detailRepo && onSetPrimary(detailRepo, remote)"
       />
       <div v-else class="vdetail-empty">
         <span>在左侧选择一个仓库</span>
@@ -293,7 +291,6 @@ import {
   type PushOutcome,
   type RepoRow,
   type RepoRowKind,
-  type RepoSyncConfig,
   type SyncEndpoint,
 } from '../../../../shared/git-repos-core'
 import type { GitPrivateToken } from '../../../../shared/github-accel-core'
@@ -326,10 +323,9 @@ watch(remoteSessions, (list) => {
   if (scopeKey.value !== 'local' && !list.some(s => s.id === scopeKey.value)) scopeKey.value = 'local'
 })
 
-// ── 注册表（本地路径 + 按 connectionId 记忆的远端路径 + 各仓手动主仓配置） ──
+// ── 注册表（本地路径 + 按 connectionId 记忆的远端路径） ──
 const localPaths = ref<string[]>([])
 const remotePaths = ref<Record<string, string[]>>({})
-const syncConfigs = ref<Record<string, RepoSyncConfig>>({})
 const registeredCount = computed(() => isLocal.value
   ? localPaths.value.length
   : ((scopeSession.value?.connectionId && remotePaths.value[scopeSession.value.connectionId]) || []).length)
@@ -340,7 +336,6 @@ async function loadRegistry(): Promise<void> {
   const reg = await api.gitreposGetRegistry()
   localPaths.value = reg.local
   remotePaths.value = reg.remote
-  syncConfigs.value = reg.sync ?? {}
 }
 
 // ── 列表取数（epoch 守卫：切范围即作废在途回包） ──
@@ -387,8 +382,7 @@ async function refresh(): Promise<void> {
       // （"An object could not be cloned"）——IPC 传参一律先拷成普通数组
       const results = await api.gitreposStatusAll([...localPaths.value])
       if (pin !== epoch) return
-      // 行预览的「推送目标」要反映手动主仓：把注册表 sync 配置一并喂给 toLocalRepoRow
-      rows.value = sortRepoRows(results.map(r => toLocalRepoRow(r, syncConfigs.value[r.path] ?? null)))
+      rows.value = sortRepoRows(results.map(r => toLocalRepoRow(r)))
       // 仓库已从注册表移出时，旧端点快照会变成幽灵（状态栏仍计数）——本地范围即时剪掉
       pruneEndpoints()
     } else {
@@ -693,25 +687,6 @@ async function onMerge(r: RepoRow, remote: string): Promise<void> {
       await refresh()
     } catch (e) {
       toast.error(errMsg(e, '合并失败'))
-    }
-  })
-}
-
-/** 主仓设置：remote 为远端名 = 设为本仓主仓（手动覆盖自动推导）；null = 恢复自动 */
-async function onSetPrimary(row: RepoRow, remote: string | null): Promise<void> {
-  if (row.scope !== 'local') return // 仅本地仓库可手动设主仓
-  await withBusy(`setprimary:${row.id}`, async () => {
-    const api = window.electronAPI
-    if (!api) return
-    try {
-      const reg = await api.gitreposSyncSetPrimary(row.path, remote)
-      syncConfigs.value = reg.sync ?? {}
-      toast.success(remote ? `已将 ${remote} 设为 ${row.name} 的主仓` : `已恢复 ${row.name} 的自动主仓推导`)
-      // 重读列表（推送目标预览）+ 重探端点（主仓/镜像角色刷新）
-      await refresh()
-      await reprobeOne(row.path)
-    } catch (e) {
-      toast.error(errMsg(e, '设置主仓失败'))
     }
   })
 }

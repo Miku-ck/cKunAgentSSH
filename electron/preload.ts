@@ -265,8 +265,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** remotes 缺省 = 全部落后远端，传单元素 = 单家补齐；逐家回报非原子 */
   gitreposSyncCatchup: (path: string, remotes?: string[]) => ipcRenderer.invoke('gitrepos:syncCatchup', path, remotes),
   gitreposSyncMerge: (path: string, remote: string) => ipcRenderer.invoke('gitrepos:syncMerge', path, remote),
-  /** 主仓设置：primary 为远端名 = 设为该仓主仓；null/空 = 恢复自动推导（清掉手动配置） */
-  gitreposSyncSetPrimary: (path: string, primary?: string | null) => ipcRenderer.invoke('gitrepos:syncSetPrimary', path, primary ?? null),
   /** 下载进度与状态迁移（一条通道，state 区分）；返回取消监听函数 */
   onGhaccelDownload: (callback: (data: any) => void) => {
     const handler = (_event: any, data: any) => callback(data)
