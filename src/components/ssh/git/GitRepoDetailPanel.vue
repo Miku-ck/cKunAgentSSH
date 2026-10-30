@@ -93,15 +93,7 @@
             <span class="grdp-crole" :class="ep.role === 'primary' ? 'pri' : 'mir'">{{ ep.role === 'primary' ? '主仓' : '镜像' }}</span>
             <span class="grdp-cstate">{{ syncStateText(ep) }}</span>
             <button
-              v-if="ep.role === 'primary' && ep.state === 'behind'"
-              class="grdp-cact"
-              type="button"
-              :disabled="!!busy"
-              :title="`git push ${ep.name} ${repo.branch} --follow-tags（快进补齐主仓，非强推）`"
-              @click="emit('catchup')"
-            >补齐</button>
-            <button
-              v-else-if="ep.role === 'primary' && ep.state === 'diverged'"
+              v-if="ep.role === 'primary' && ep.state === 'diverged'"
               class="grdp-cact"
               type="button"
               :disabled="!!busy"
@@ -165,14 +157,6 @@
                     :title="`将 ${ep.name} 设为本仓主仓（手动覆盖自动推导）`"
                     @click="emit('setPrimary', ep.name)"
                   >设为主仓</button>
-                  <button
-                    v-if="ep.role === 'primary' && ep.state === 'behind'"
-                    class="btn btn-sm"
-                    type="button"
-                    :disabled="!!busy"
-                    :title="`git push ${ep.name} ${repo.branch} --follow-tags（快进补齐主仓，非强推）`"
-                    @click="emit('fix', ep.name)"
-                  >补齐</button>
                   <button
                     v-if="ep.role === 'primary' && ep.state === 'diverged'"
                     class="btn btn-sm"
@@ -409,10 +393,6 @@ const emit = defineEmits<{
   commit: [payload: { files: string[]; msg: string }]
   /** 提交并推送：一次确认覆盖两步（父级先提交、成功才推送） */
   'commit-push': [payload: { files: string[]; msg: string }]
-  /** 补齐主仓（本地领先主仓的提交快进推上去） */
-  catchup: []
-  /** 补齐指定远端端点 */
-  fix: [remote: string]
   /** 分叉合并指定端点（--ff-only） */
   merge: [remote: string]
   /** 重跑远端巡检 */
@@ -945,12 +925,12 @@ onMounted(() => { void load() })
 .grdp-ep { padding: var(--spacing-8) 0; border-bottom: 1px solid var(--divider-primary); }
 .grdp-ep-row {
   display: grid;
-  grid-template-columns: auto auto 1fr auto auto auto;
+  grid-template-columns: 7ch 4ch 1fr 7ch 5ch 10ch;
   gap: var(--spacing-10);
   align-items: center;
   min-width: 0;
 }
-.grdp-ep-name { font-size: 0.9231rem; font-weight: 500; color: var(--text-primary); }
+.grdp-ep-name { font-size: 0.9231rem; font-weight: 500; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .grdp-ep-role {
   font-size: 0.7692rem;
   border: 1px solid var(--border-subtle);
@@ -958,7 +938,7 @@ onMounted(() => { void load() })
   padding: 0 var(--spacing-6);
   color: var(--text-tertiary);
   white-space: nowrap;
-  flex-shrink: 0;
+  justify-self: start;
 }
 .grdp-ep-role.pri { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); }
 .grdp-ep-role.mir { color: var(--accent-indigo); border-color: color-mix(in srgb, var(--accent-indigo) 32%, transparent); }

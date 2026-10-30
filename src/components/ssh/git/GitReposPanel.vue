@@ -98,8 +98,6 @@
         @switch="onSwitchCurrent"
         @commit="onCommitCurrent"
         @commit-push="onCommitPushCurrent"
-        @catchup="detailRepo && onCatchup(detailRepo)"
-        @fix="(remote: string) => detailRepo && onFix(detailRepo, remote)"
         @merge="(remote: string) => detailRepo && onMerge(detailRepo, remote)"
         @probe="probeEndpoints()"
         @set-primary="(remote: string | null) => detailRepo && onSetPrimary(detailRepo, remote)"
@@ -680,49 +678,6 @@ function pruneEndpoints(): void {
   endpointsByPath.value = next
 }
 
-function reportItems(items: Array<{ remote: string; outcome: string; message: string }>): void {
-  const pushed = items.filter(i => i.outcome === 'pushed')
-  const skipped = items.filter(i => i.outcome === 'skipped')
-  if (pushed.length) toast.success(`已补齐 ${pushed.map(i => i.remote).join('、')}`)
-  const fail = items.filter(i => i.outcome === 'rejected' || i.outcome === 'failed')
-  if (fail.length) toast.error(`补齐失败：${fail.map(i => `${i.remote}（${i.message}）`).join('；')}`)
-  else if (!pushed.length && skipped.length) toast.info(skipped[0].message)
-}
-
-/** 补齐主仓：本地领先主仓的提交快进推上去（镜像由 GitCode 平台搬运） */
-async function onCatchup(r: RepoRow): Promise<void> {
-  const primary = endpointsOf(r).find(e => e.role === 'primary')
-  if (!primary) { toast.info('该仓库没有主仓端点'); return }
-  await withBusy(`catchup:${r.id}`, async () => {
-    const api = window.electronAPI
-    if (!api) return
-    try {
-      const res = await api.gitreposSyncCatchup(r.path, [primary.name])
-      reportItems(res.items)
-      // 推完 ↑N 与分组都已过期：先重读列表，再重探这一仓
-      await refresh()
-      await reprobeOne(r.path)
-    } catch (e) {
-      toast.error(errMsg(e, '补齐失败'))
-    }
-  })
-}
-
-/** 补齐指定端点（详情的每个远端各有一个「补齐」入口） */
-async function onFix(r: RepoRow, remote: string): Promise<void> {
-  await withBusy(`fix:${r.id}:${remote}`, async () => {
-    const api = window.electronAPI
-    if (!api) return
-    try {
-      const res = await api.gitreposSyncCatchup(r.path, [remote])
-      reportItems(res.items)
-      await refresh()
-      await reprobeOne(r.path)
-    } catch (e) {
-      toast.error(errMsg(e, '补齐失败'))
-    }
-  })
-}
 
 /** 分叉：先 fetch 再 --ff-only 合并；真分叉时 git 拒绝，交给用户手动处理 */
 async function onMerge(r: RepoRow, remote: string): Promise<void> {
