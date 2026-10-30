@@ -159,7 +159,7 @@
                 <span class="grdp-ep-acts">
                   <button
                     v-if="ep.role === 'mirror'"
-                    class="btn btn-sm"
+                    class="btn btn-sm grdp-ep-setprimary"
                     type="button"
                     :disabled="!!busy"
                     :title="`将 ${ep.name} 设为本仓主仓（手动覆盖自动推导）`"
@@ -978,6 +978,9 @@ onMounted(() => { void load() })
 .grdp-ep-state.s-diverged { color: var(--status-error-text); font-weight: 500; }
 .grdp-ep-state.s-unknown { color: var(--text-tertiary); }
 .grdp-ep-acts { display: flex; align-items: center; gap: var(--spacing-6); justify-content: flex-end; min-width: 10ch; }
+/* 设为主仓：默认隐藏，悬停整行才显示（其余动作按状态始终可见） */
+.grdp-ep-setprimary { opacity: 0; pointer-events: none; transition: opacity .12s ease; }
+.grdp-ep-row:hover .grdp-ep-setprimary { opacity: 1; pointer-events: auto; }
 .grdp-ep-wait { font-size: 0.8462rem; color: var(--text-tertiary); white-space: nowrap; }
 .grdp-ep-note { margin-top: var(--spacing-4); font-size: 0.8462rem; color: var(--text-secondary); line-height: 1.5; }
 .grdp-ep-note.err { color: var(--status-error-text); }
