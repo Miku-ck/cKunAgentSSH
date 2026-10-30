@@ -1,5 +1,7 @@
 # cKunAgentSSH
 
+[简体中文](README.md) · [English](README.en.md)
+
 SSH 智能运维终端，将连接管理、远程 / 本地终端、SFTP、Docker、Git、实时监控、定时任务、SSH 隧道、运维审计与 AI Agent 集中在一个 IDE 风格的桌面工作区。AI 可沿同一套主机连接执行运维操作，并受审批与审计约束；内置 cKunBot 个人机器人（人格化陪聊），与运维 Agent 共用模型配置与记忆底座但彼此隔离。
 
 **前端**：Electron + Vue 3 + TypeScript　**AI 后端**：Python FastAPI　**发布目标**：Windows x64
