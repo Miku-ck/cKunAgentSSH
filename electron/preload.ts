@@ -7,6 +7,8 @@ import type {
   UploadTaskMeta,
   UploadTaskRecord,
 } from '../shared/upload-task-core'
+import type { UpdateState as UpdateStatePayload } from '../shared/update-core'
+import type { DiagnosticsResult as DiagnosticsResultPayload } from '../shared/diagnostics-core'
 
 /**
  * 安全暴露给渲染进程的 API
@@ -22,6 +24,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getDesktopPrefs: () => ipcRenderer.invoke('prefs:get'),
   setDesktopPrefs: (patch: Record<string, boolean>) => ipcRenderer.invoke('prefs:set', patch),
   notifyDesktop: (title: string, body: string) => ipcRenderer.invoke('app:notify', title, body),
+
+  // 自动更新（tar 形态）。apply 成功返回后主进程会自行退出，助手接手换包并重启。
+  updateGetState: () => ipcRenderer.invoke('update:getState'),
+  updateCheck: () => ipcRenderer.invoke('update:check'),
+  updateDownload: () => ipcRenderer.invoke('update:download'),
+  updateSetFeed: (url: string) => ipcRenderer.invoke('update:setFeed', url),
+  updateApply: (): Promise<{ ok: boolean; state: UpdateStatePayload | null }> =>
+    ipcRenderer.invoke('update:apply'),
+  /** 每次状态迁移推一条（与 backend:status 同形）；返回取消监听函数 */
+  onUpdateState: (callback: (data: UpdateStatePayload) => void) => {
+    const handler = (_event: any, data: UpdateStatePayload) => callback(data)
+    ipcRenderer.on('update:state', handler)
+    return () => ipcRenderer.removeListener('update:state', handler)
+  },
+
+  // 诊断包（本地落盘，不联网）：导出成功返回包路径，reveal 在系统文件管理器里定位它
+  diagExport: (): Promise<DiagnosticsResultPayload> => ipcRenderer.invoke('diag:export'),
+  diagReveal: () => ipcRenderer.invoke('diag:reveal'),
 
   // 后端状态监听
   /**
@@ -195,17 +215,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // GitHub 加速（镜像套件）
   ghaccelGetConfig: () => ipcRenderer.invoke('ghaccel:getConfig'),
-  ghaccelSaveLists: (proxies: any[], webMirrors: any[]) => ipcRenderer.invoke('ghaccel:saveLists', proxies, webMirrors),
+  ghaccelSaveLists: (proxies: any[]) => ipcRenderer.invoke('ghaccel:saveLists', proxies),
   ghaccelProbeAll: () => ipcRenderer.invoke('ghaccel:probeAll'),
+  ghaccelAutoTune: () => ipcRenderer.invoke('ghaccel:autoTune'),
   ghaccelGitStatus: () => ipcRenderer.invoke('ghaccel:gitStatus'),
-  ghaccelGitEnable: (prefix: string) => ipcRenderer.invoke('ghaccel:gitEnable', prefix),
+  ghaccelGitEnable: (prefix: string, pushMode?: 'direct' | 'ssh') => ipcRenderer.invoke('ghaccel:gitEnable', prefix, pushMode),
   ghaccelGitDisable: () => ipcRenderer.invoke('ghaccel:gitDisable'),
   ghaccelSelfCheck: () => ipcRenderer.invoke('ghaccel:selfCheck'),
   ghaccelHealthStatus: () => ipcRenderer.invoke('ghaccel:healthStatus'),
   ghaccelSsh443Status: () => ipcRenderer.invoke('ghaccel:ssh443Status'),
   ghaccelSsh443Apply: () => ipcRenderer.invoke('ghaccel:ssh443Apply'),
   ghaccelSsh443Remove: () => ipcRenderer.invoke('ghaccel:ssh443Remove'),
-  ghaccelOpenExternal: (url: string) => ipcRenderer.invoke('ghaccel:openExternal', url),
+  // 私人令牌（PAT）配置（读原文 / 写全量；渲染层自身脱敏展示）
+  ghaccelGetTokens: () => ipcRenderer.invoke('ghaccel:getTokens'),
+  ghaccelSaveTokens: (tokens: any[]) => ipcRenderer.invoke('ghaccel:saveTokens', tokens),
   // GitHub 加速下载器
   ghaccelDownloadStart: (url: string, opts?: { gunzip?: boolean }) => ipcRenderer.invoke('ghaccel:downloadStart', url, opts),
   ghaccelDownloadCancel: (id: string) => ipcRenderer.invoke('ghaccel:downloadCancel', id),
@@ -216,7 +239,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ghaccelHostsPick: () => ipcRenderer.invoke('ghaccel:hostsPick'),
   ghaccelHostsApply: (entries?: { domain: string; ip: string }[]) => ipcRenderer.invoke('ghaccel:hostsApply', entries),
   ghaccelHostsRemove: () => ipcRenderer.invoke('ghaccel:hostsRemove'),
-  ghaccelSaveOptions: (patch: { lastProxyPrefix?: string }) =>
+  ghaccelSaveOptions: (patch: { lastProxyPrefix?: string; pushMode?: 'direct' | 'ssh'; hostsAutoRefresh?: boolean }) =>
     ipcRenderer.invoke('ghaccel:saveOptions', patch),
   // Git 仓库管理（本地注册表 + 本地 git 执行；远端命令由渲染层经 sshExec 下发）
   gitreposGetRegistry: () => ipcRenderer.invoke('gitrepos:getRegistry'),
@@ -237,6 +260,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   gitreposDetail: (path: string) => ipcRenderer.invoke('gitrepos:detail', path),
   /** 提交图谱原始输出（--graph --all + \x01 分列格式），解析在渲染层 parseGraphLog */
   gitreposGraphLog: (path: string, limit: number) => ipcRenderer.invoke('gitrepos:graphLog', path, limit),
+  // 三仓同步（主仓 + 只读镜像）：探测 / 补齐 / 分叉合并
+  gitreposSyncProbe: (paths: string[]) => ipcRenderer.invoke('gitrepos:syncProbe', paths),
+  /** remotes 缺省 = 全部落后远端，传单元素 = 单家补齐；逐家回报非原子 */
+  gitreposSyncCatchup: (path: string, remotes?: string[]) => ipcRenderer.invoke('gitrepos:syncCatchup', path, remotes),
+  gitreposSyncMerge: (path: string, remote: string) => ipcRenderer.invoke('gitrepos:syncMerge', path, remote),
   /** 下载进度与状态迁移（一条通道，state 区分）；返回取消监听函数 */
   onGhaccelDownload: (callback: (data: any) => void) => {
     const handler = (_event: any, data: any) => callback(data)

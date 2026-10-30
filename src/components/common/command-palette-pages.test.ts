@@ -44,11 +44,15 @@ describe('页面清单同源', () => {
     expect(missing, `新页 ${missing.join(', ')} 有标题条按钮却没有快捷键`).toEqual([])
   })
 
-  it('序号不重复且从 1 连续排', () => {
+  it('序号不重复：1–9 连续排，0 只作第十页的溢出位', () => {
     const nums = PAGE_SHORTCUTS.map(p => p.num)
     expect(new Set(nums).size, '两页抢了同一个 Ctrl+Shift+数字').toBe(nums.length)
-    expect(nums).toEqual([...nums].sort((a, b) => a - b))
-    expect(nums[0]).toBe(1)
-    expect(nums[nums.length - 1]).toBe(nums.length)
+    // 0 是唯一的溢出位：1–9 被十个导航页里的前九个占满后，第十页只能落 Ctrl+Shift+0。
+    // 除这一位之外仍要求 1..n 连续 —— 空一个号就有一页永远按不到。
+    const nonZero = nums.filter(n => n !== 0)
+    expect(nonZero).toEqual([...nonZero].sort((a, b) => a - b))
+    expect(nonZero[0]).toBe(1)
+    expect(nonZero[nonZero.length - 1]).toBe(nonZero.length)
+    expect(nums.filter(n => n === 0).length).toBeLessThanOrEqual(1)
   })
 })

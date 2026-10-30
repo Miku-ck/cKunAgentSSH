@@ -18,6 +18,8 @@ import {
   GRAPH_MAX_LIMIT, buildGraphLogArgs, buildRemoteGraphCmd,
   parseGraphLog, graphRefKind, graphHasMore, layoutGraphLanes,
   draftCommitMessage, looksLikeNoiseFile, clampDiffText, buildRemoteDiffCmd,
+  parseLsRemoteSha, parseRevListCount, classifySyncEndpoint,
+  remoteHostOf, primaryRemoteOf, deriveSyncConfig,
   type RepoRow,
 } from '../shared/git-repos-core'
 
@@ -529,5 +531,67 @@ describe('提交图谱（--graph --all 解析、命令构造与车道布局）',
     expect(lanes[1].edges).toEqual([])
     expect(lanes[2].lane).toBe(0)
     expect(lanes[2].edges).toEqual([])
+  })
+})
+
+describe('三仓同步：端点三态 / ls-remote 与 rev-list 解析 / 默认配置推导', () => {
+  const SHA = '0123456789abcdef0123456789abcdef01234567'
+
+  it('parseLsRemoteSha：`<sha>\t<ref>` 行取首行 sha；空 / 无匹配返回 null', () => {
+    expect(parseLsRemoteSha(`${SHA}\trefs/heads/main\n`)).toBe(SHA)
+    expect(parseLsRemoteSha(`head\t其它\n${SHA}\trefs/heads/main\n`)).toBe(SHA)
+    expect(parseLsRemoteSha('')).toBeNull()
+    expect(parseLsRemoteSha('no-tab-line\n')).toBeNull()
+    expect(parseLsRemoteSha('short\trefs/heads/main\n')).toBeNull() // 短哈希不算
+  })
+
+  it('parseRevListCount：`<左>\t<右>` 两数；其余形态 null', () => {
+    expect(parseRevListCount('2\t1')).toEqual({ left: 2, right: 1 })
+    expect(parseRevListCount('0\t0')).toEqual({ left: 0, right: 0 })
+    expect(parseRevListCount('2 1')).toBeNull() // 分隔符必须是 tab（git 输出形态）
+    expect(parseRevListCount(' 3 \t 4 ')).toBeNull() // 数字与 tab 间有空格也不是 git 形态
+    expect(parseRevListCount('x\ty')).toBeNull()
+    expect(parseRevListCount('')).toBeNull()
+  })
+
+  it('classifySyncEndpoint：四态判定（ok / behind / diverged / unknown）', () => {
+    expect(classifySyncEndpoint(SHA, SHA, null)).toBe('ok')                      // SHA 一致
+    expect(classifySyncEndpoint(SHA, null, null)).toBe('unknown')                // ls-remote 失败
+    expect(classifySyncEndpoint(SHA, 'f'.repeat(40), null)).toBe('diverged')     // 远端 SHA 本地不认识
+    expect(classifySyncEndpoint(SHA, 'f'.repeat(40), { left: 1, right: 0 })).toBe('behind')
+    expect(classifySyncEndpoint(SHA, 'f'.repeat(40), { left: 3, right: 0 })).toBe('behind')
+    expect(classifySyncEndpoint(SHA, 'f'.repeat(40), { left: 1, right: 1 })).toBe('diverged')
+    expect(classifySyncEndpoint(SHA, 'f'.repeat(40), { left: 0, right: 2 })).toBe('diverged') // 仅远端领先也须合并
+  })
+
+  it('remoteHostOf：https / ssh / git 协议与 scp 形式都能提取 host', () => {
+    expect(remoteHostOf('https://gitcode.com/ckun/repo.git')).toBe('gitcode.com')
+    expect(remoteHostOf('git@gitcode.com:ckun/repo.git')).toBe('gitcode.com')
+    expect(remoteHostOf('ssh://git@gitcode.net/ckun/repo')).toBe('gitcode.net')
+    expect(remoteHostOf('git://github.com/ckun/repo.git')).toBe('github.com')
+    expect(remoteHostOf('')).toBeNull()
+    expect(remoteHostOf('not a url')).toBeNull()
+  })
+
+  it('primaryRemoteOf：GitCode 主仓域名优先于 branch remote / origin / 字典序', () => {
+    // gitcode 存在时，即便 branch remote 指向 github 也认 gitcode
+    expect(primaryRemoteOf({ github: 'git@github.com:a/b.git', gitcode: 'git@gitcode.com:a/b.git' }, 'github'))
+      .toBe('gitcode')
+    // 无 gitcode 时回退 branch remote
+    expect(primaryRemoteOf({ gitee: 'u1', github: 'u2' }, 'github')).toBe('github')
+    // 无 gitcode、无 branch remote 时回退 origin
+    expect(primaryRemoteOf({ gitee: 'u1', origin: 'u2', github: 'u3' }, null)).toBe('origin')
+    // 啥都没有回退字典序第一
+    expect(primaryRemoteOf({ zeta: 'u3', alpha: 'u4' }, null)).toBe('alpha')
+    // 无远端返回 null
+    expect(primaryRemoteOf({}, null)).toBeNull()
+  })
+
+  it('deriveSyncConfig：GitCode 主仓优先；其余全为镜像', () => {
+    expect(deriveSyncConfig({ gitee: 'https://gitee.com/a/b.git', gitcode: 'https://gitcode.com/a/b.git' }, 'gitee')).toEqual({ primary: 'gitcode', mirrors: ['gitee'] }) // gitcode host 优先，无视 branch remote
+    expect(deriveSyncConfig({ gitee: 'u1', github: 'u2' }, 'github')).toEqual({ primary: 'github', mirrors: ['gitee'] })
+    expect(deriveSyncConfig({ gitee: 'u1', origin: 'u2', github: 'u3' }, null)).toEqual({ primary: 'origin', mirrors: ['gitee', 'github'] })
+    expect(deriveSyncConfig({ gitee: 'u1' }, 'not-exist')).toEqual({ primary: 'gitee', mirrors: [] })
+    expect(deriveSyncConfig({}, 'origin')).toEqual({ primary: '', mirrors: [] })
   })
 })

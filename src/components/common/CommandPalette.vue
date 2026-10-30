@@ -78,6 +78,7 @@ qcStore.load()
 // ── 页面条目（顺序与 PAGE_SHORTCUTS 一致，标题条分组也按这个语义族） ──
 // Git 页拆两条深链（sub 经 subTab.ts 预置，页面挂载前也能指定目标子页）；
 // 两条目的 page 都是 'git'，页面清单守卫按集合对账不受影响。
+// 2026-10-30：「同步」并入仓库页，原第三条「三仓同步」深链随子页一起下线。
 const PAGE_ITEMS: Array<{ page: Exclude<NavPage, 'home'>; label: string; sub?: 'accel' | 'repos' }> = [
   { page: 'remote-mgr', label: '打开：远程管理' },
   { page: 'sftp', label: '打开：SFTP 文件传输' },
@@ -85,8 +86,9 @@ const PAGE_ITEMS: Array<{ page: Exclude<NavPage, 'home'>; label: string; sub?: '
   { page: 'schedules', label: '打开：定时任务' },
   { page: 'tunnels', label: '打开：SSH 隧道' },
   { page: 'docker', label: '打开：Docker 管理' },
+  { page: 'k8s', label: '打开：K8s 集群' },
   { page: 'git', sub: 'accel', label: '打开：Git 加速' },
-  { page: 'git', sub: 'repos', label: '打开：Git 仓库管理' },
+  { page: 'git', sub: 'repos', label: '打开：Git 源码管理' },
   { page: 'audit', label: '打开：运维轨迹' },
   { page: 'bot', label: '打开：cKunBot 个人机器人' },
 ]

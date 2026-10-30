@@ -898,16 +898,8 @@ export function parseContainerStats(raw: string): ContainerStats | null {
 // 主进程在单次 exec 输出达到上限后会追加这条说明（electron/ssh-manager.ts 的
 // TRUNCATED_NOTE，当前文案为「[输出已截断，超过 1M 字符上限]」）。
 // 这里只做标记识别，不发命令；列表解析对它天然无感，但要让用户知道结果不完整。
-//
-// 识别按固定前缀匹配而非全等：这份文案与主进程各持一份，主进程侧曾把
-// 「1MB 上限」改成「1M 字符上限」，全等 includes 从此永久失配 —— Docker 页签
-// 的「输出已截断」提示条不再出现（docker-core.test.ts 用自造输入喂
-// isOutputTruncated，测不出这条跨层链路断裂，独立复核发现）。
-const EXEC_TRUNCATED_NOTE_PREFIX = '[输出已截断，超过 '
-
-export function isOutputTruncated(stdout: string, stderr = ''): boolean {
-  return stdout.includes(EXEC_TRUNCATED_NOTE_PREFIX) || stderr.includes(EXEC_TRUNCATED_NOTE_PREFIX)
-}
+// 判据与那句文案现收在 shared/exec-outcome-core.ts（主进程追加、渲染层识别同一份字面量），
+// 页签的 parse 里仍要显式调用它 —— 「列表少了 N 行」不会让解析报错。
 
 /** 日志原文 → 行数组（去 CR、剥尾部单个空行；保留内部空行以贴合真实输出） */
 export function parseLogs(raw: string): string[] {

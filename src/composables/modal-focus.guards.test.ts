@@ -34,6 +34,8 @@ const INTEGRATED = [
   'components/settings/panels/ModelsPanel.vue',
   'components/ssh/docker/DockerConnectionPicker.vue',
   'components/ssh/docker/DockerContainerDetail.vue',
+  'components/ssh/k8s/K8sResourceDetail.vue',
+  'components/ssh/k8s/K8sScaleDialog.vue',
   'components/ssh/docker/DockerImageTransferModal.vue',
   'components/ssh/docker/DockerPullDialog.vue',
   'components/ssh/NewConnectionDialog.vue',

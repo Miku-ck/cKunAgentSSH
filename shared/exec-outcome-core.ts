@@ -23,3 +23,21 @@ export function classifyExit(exitCode: number | null): ExecOutcome {
   if (exitCode === null) return 'unknown'
   return 'failed'
 }
+
+// ── 单次 exec 的 1MB 输出截断 ──
+//
+// 主进程累加到上限就停手并在流尾追加一句标记；渲染层据此告诉用户「这份列表可能缺行」，
+// 而不是把「只看到前 N 条」当成主机/集群的真实状态。
+//
+// 识别按固定前缀匹配而非全等：这份文案两侧各持一份字面量，主进程侧曾把
+// 「1MB 上限」改成「1M 字符上限」，全等 includes 从此永久失配 —— 截断提示条不再出现
+// （原 Docker 页的用例是自造输入喂 isOutputTruncated，测不出这条跨层链路断裂，
+// 靠独立复核发现）。收在这里之后两侧共用一处定义，漂移的根子也一并拔掉。
+const EXEC_TRUNCATED_NOTE_PREFIX = '[输出已截断，超过 '
+
+/** 主进程追加截断标记时用的那句文案（与渲染层的前缀匹配共用同一份字面量） */
+export const EXEC_TRUNCATED_NOTE = `${EXEC_TRUNCATED_NOTE_PREFIX}1M 字符上限]`
+
+export function isOutputTruncated(stdout: string, stderr = ''): boolean {
+  return stdout.includes(EXEC_TRUNCATED_NOTE_PREFIX) || stderr.includes(EXEC_TRUNCATED_NOTE_PREFIX)
+}

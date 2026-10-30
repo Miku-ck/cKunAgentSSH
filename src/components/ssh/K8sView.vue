@@ -1,0 +1,520 @@
+<template>
+  <div class="k8s-view">
+    <!-- 连接状态条：与 Docker 页同一套骨架，只多一枚 context 芯片 -->
+    <div class="page-head">
+      <div class="conn-left">
+        <div class="conn-dot" :class="targetSession ? 'online' : 'offline'"></div>
+        <span class="conn-name">K8s</span>
+        <span v-if="targetHost" class="conn-host mono" :title="targetHost">{{ targetHost }}</span>
+        <span v-if="contextName" class="ctx-chip mono" title="当前 context（本页只展示不切换）">{{ contextName }}</span>
+      </div>
+
+      <select v-if="remoteSessions.length > 1" v-model="targetId" class="host-sel" aria-label="切换目标主机">
+        <option v-for="s in remoteSessions" :key="s.id" :value="s.id">{{ s.name }}</option>
+      </select>
+
+      <span class="head-spacer"></span>
+      <div class="conn-right">
+        <button v-if="targetSession" class="btn" @click="disconnectTarget">断开</button>
+        <button class="btn btn-primary" @click="showConnPicker = true">连接远程</button>
+      </div>
+    </div>
+
+    <div v-if="!remoteSessions.length" class="empty">
+      <IconK8s :width="36" :height="36" :stroke-width="1.5" />
+      <span>尚未连接远程主机</span>
+    </div>
+
+    <template v-else>
+      <div class="toolbar">
+        <div class="seg" role="tablist" aria-label="K8s 资源">
+          <button
+            v-for="t in TABS" :key="t.key" class="seg-btn" role="tab"
+            :aria-selected="tab === t.key" :class="{ on: tab === t.key }" @click="selectTab(t.key)"
+          >{{ t.label }}</button>
+        </div>
+        <div class="search">
+          <input v-model="query" placeholder="按名称 / 命名空间过滤…" aria-label="过滤" />
+        </div>
+        <div class="tb-right">
+          <label v-if="tab === 'events'" class="ck" title="Normal 事件大多是调度器与拉镜像的成功心跳，默认不取">
+            <input v-model="showNormalEvents" type="checkbox" /><span>含 Normal</span>
+          </label>
+          <button class="btn" :disabled="loading" @click="refresh">刷新</button>
+        </div>
+      </div>
+
+      <div v-if="hostError" class="err-band" :class="{ quiet: notDetected }" :role="notDetected ? 'status' : 'alert'">
+        <div class="eb-text">
+          <div class="eb-msg">{{ notDetected ? `未检测到 k8s：${hostError.message}` : hostError.message }}</div>
+          <div v-if="hostError.hint" class="eb-hint">{{ hostError.hint }}</div>
+        </div>
+        <button v-if="hostError.retryable" class="btn btn-sm" @click="refresh">重试</button>
+      </div>
+      <div v-else-if="loading && !currentRows.length" class="load-band">
+        <svg class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/></svg>
+        正在经 SSH 会话执行 {{ activeLabel }} …
+      </div>
+      <div v-else class="body">
+        <div class="list-col">
+          <K8sNodesTab
+            v-if="tab === 'nodes'"
+            :rows="filteredNodes" :error="nodeList.error.value"
+            :selected-name="selected?.name ?? null"
+            :empty-text="emptyText('节点')"
+            @open="openDetail(detailOfNode($event), nodeRowKey($event))"
+          />
+          <K8sWorkloadsTab
+            v-else-if="tab === 'workloads'"
+            :rows="filteredWorkloads" :error="workloadList.error.value"
+            :selected-key="selKey"
+            :empty-text="emptyText('负载')"
+            @open="openWorkload"
+            @restart="doRestart"
+            @scale="openScale"
+            @remove="doDeleteJob"
+          />
+          <K8sPodsTab
+            v-else-if="tab === 'pods'"
+            :rows="filteredPods" :error="podList.error.value"
+            :selected-key="selKey"
+            :empty-text="emptyText('Pod')"
+            @open="openDetail(detailOfPod($event), podRowKey($event))"
+            @remove="doDeletePod"
+          />
+          <K8sServicesTab
+            v-else-if="tab === 'services'"
+            :rows="filteredServices" :error="serviceList.error.value"
+            :selected-key="selKey"
+            :empty-text="emptyText('服务')"
+            @open="openService"
+          />
+          <K8sEventsTab
+            v-else
+            :rows="filteredEvents" :error="eventList.error.value"
+            :empty-text="showNormalEvents ? emptyText('事件') : '这个集群没有 Warning 事件'"
+          />
+        </div>
+      </div>
+
+      <!-- 状态栏：计数跟着当前 tab 走，永远报「这一屏是什么」。
+           取数失败时不许报 0 —— 「0 个负载」和「没读到」是两回事，后者读成前者就是谎报空集。 -->
+      <div class="statusbar">
+        <span>{{ targetName }}</span>
+        <span>远程 · SSH · 全命名空间</span>
+        <span v-if="activeListFailed">{{ tabLabel }} <span class="bad">读取失败</span></span>
+        <template v-else>
+          <span v-if="tab === 'nodes'">节点 <span class="mono">{{ nodes.length }}</span>（<span class="ok">{{ readyNodes }}</span> Ready / <span class="bad">{{ nodes.length - readyNodes }}</span> NotReady）</span>
+          <span v-else-if="tab === 'workloads'">负载 <span class="mono">{{ workloads.length }}</span><template v-if="degradedWorkloads">（<span class="bad">{{ degradedWorkloads }}</span> 未就绪）</template></span>
+          <span v-else-if="tab === 'pods'">Pod <span class="mono">{{ pods.length }}</span>（<span class="ok">{{ runningPods }}</span> 运行 / <span class="bad">{{ abnormalPods }}</span> 异常）</span>
+          <span v-else-if="tab === 'services'">服务 <span class="mono">{{ services.length }}</span><template v-if="ingressCount">（<span class="mono">{{ ingressCount }}</span> Ingress）</template></span>
+          <span v-else>事件 <span class="mono">{{ events.length }}</span><template v-if="showNormalEvents && warningCount">（<span class="bad">{{ warningCount }}</span> Warning）</template></span>
+        </template>
+        <span v-if="truncated" class="sb-warn" title="单次 SSH 命令输出达到 1M 字符上限，列表可能缺行；用搜索框按名称或命名空间收窄">输出已截断</span>
+        <span class="sb-right mono">{{ lastSync }}</span>
+      </div>
+    </template>
+
+    <Teleport to="body">
+      <DockerConnectionPicker
+        v-if="showConnPicker"
+        :connections="sshStore.connections"
+        :connecting="connecting"
+        :pending-id="pendingConnId"
+        @close="showConnPicker = false"
+        @pick="handleConnect"
+      />
+    </Teleport>
+
+    <K8sResourceDetail
+      v-if="selected"
+      :target="selected"
+      :session-id="targetId"
+      @close="closeDetail"
+    />
+
+    <K8sScaleDialog
+      v-if="scaleRow"
+      :row="scaleRow"
+      :submitting="!!busy && busy.startsWith('scale:')"
+      @close="scaleRow = null"
+      @submit="doScale"
+    />
+  </div>
+</template>
+
+<script setup lang="ts">
+// K8sView.vue — K8s 页的编排层：五个分段的取数、四个窄动作的下发、弹窗的开关。
+// 命令拼接与解析一律在 stores/k8s-core.ts，执行底座在 k8s/context.ts，页签只画不跑。
+import { computed, onUnmounted, ref, watch } from 'vue'
+import { useToastStore } from '@/stores/toast'
+import { useConfirm } from '@/composables/useConfirm'
+import {
+  EVENTS_CMD, EVENTS_CMD_WITH_NORMAL, NODES_CMD, TOP_NODES_CMD, PODS_CMD, SERVICES_CMD, WORKLOADS_CMD,
+  ACTION_CONSEQUENCE,
+  deleteJobCmd, deletePodCmd, rolloutRestartCmd, scaleCmd,
+  isAbnormalPod, parseEvents, parseNodes, parsePods, parseServices,
+  parseTopNodes, parseWorkloads, isHostLevelError, mergeNodeUsage, isNotDetectedState,
+  workloadRowKey, podRowKey, serviceRowKey, nodeRowKey,
+  detailOfNode, detailOfPod, detailOfService, detailOfWorkload,
+  type DetailTarget,
+  type EventRow, type K8sError, type NodeRow, type PodRow, type ServiceRow, type WorkloadRow,
+} from '@/stores/k8s-core'
+import { provideK8sHost, readK8sContext, TABS, type ListPin, type TabKey } from './k8s/context'
+import IconK8s from '@/components/icons/IconK8s.vue'
+import DockerConnectionPicker from './docker/DockerConnectionPicker.vue'
+import K8sNodesTab from './k8s/K8sNodesTab.vue'
+import K8sWorkloadsTab from './k8s/K8sWorkloadsTab.vue'
+import K8sPodsTab from './k8s/K8sPodsTab.vue'
+import K8sServicesTab from './k8s/K8sServicesTab.vue'
+import K8sEventsTab from './k8s/K8sEventsTab.vue'
+import K8sResourceDetail from './k8s/K8sResourceDetail.vue'
+import K8sScaleDialog from './k8s/K8sScaleDialog.vue'
+
+// 页面隐藏时收起弹窗：与 Docker 页同一约定（独立页是 v-show 常驻，弹窗不然会跨页留着）
+const props = defineProps<{ active?: boolean }>()
+
+const host = provideK8sHost()
+const toast = useToastStore()
+const { confirm } = useConfirm()
+const {
+  sshStore, remoteSessions, targetId, targetName, targetHost, targetSession,
+  showConnPicker, connecting, pendingConnId, handleConnect, disconnectTarget,
+  busy, tab, showNormalEvents, truncated, lastSync, contextName,
+} = host
+
+const query = ref('')
+const loading = ref(false)
+const selected = ref<DetailTarget | null>(null)
+const selKey = ref<string | null>(null)
+const scaleRow = ref<WorkloadRow | null>(null)
+let loadGen = 0
+onUnmounted(() => { loadGen++ })
+
+// ── 五个分段：一律 -A，命名空间是表里的一列，收窄靠搜索框 ──
+const nodeList = host.createList<NodeRow>({
+  kind: 'nodes',
+  cmd: () => NODES_CMD,
+  parse: parseNodes,
+  label: 'kubectl get nodes',
+  // 实时用量是第二条腿（kubectl top，依赖 metrics-server）：只在节点列表刚写回过时合并，
+  // 失败静默留空 —— 「取不到用量」和「没有用量」是两回事，但都不值得为它红一条带。
+  after: (id, pin) => { void enrichNodeUsage(id, pin) },
+})
+const workloadList = host.createList<WorkloadRow>({
+  kind: 'workloads', cmd: () => WORKLOADS_CMD, parse: parseWorkloads, label: 'kubectl get deploy,sts,ds,job,cj',
+})
+const podList = host.createList<PodRow>({
+  kind: 'pods', cmd: () => PODS_CMD, parse: parsePods, label: 'kubectl get pods',
+})
+const serviceList = host.createList<ServiceRow>({
+  kind: 'services', cmd: () => SERVICES_CMD, parse: parseServices, label: 'kubectl get svc,ing',
+})
+const eventList = host.createList<EventRow>({
+  kind: 'events', cmd: () => (showNormalEvents.value ? EVENTS_CMD_WITH_NORMAL : EVENTS_CMD),
+  parse: parseEvents, label: 'kubectl get events',
+})
+
+const nodes = computed(() => nodeList.rows.value)
+const workloads = computed(() => workloadList.rows.value)
+const pods = computed(() => podList.rows.value)
+const services = computed(() => serviceList.rows.value)
+const events = computed(() => eventList.rows.value)
+
+/** 异常置顶：正在崩溃的 Pod 排第一行，而不是埋在字母序第 14 行 */
+const sortedPods = computed(() => [...pods.value].sort((a, b) =>
+  (isAbnormalPod(b) ? 1 : 0) - (isAbnormalPod(a) ? 1 : 0) || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)))
+const sortedWorkloads = computed(() => [...workloads.value].sort((a, b) =>
+  (b.status === 'Degraded' || b.status === 'Failure' ? 1 : 0) - (a.status === 'Degraded' || a.status === 'Failure' ? 1 : 0)
+  || a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name)))
+
+const q = computed(() => query.value.trim().toLowerCase())
+/** 列表全 -A 取回，命名空间成了表里的一列：过滤也跟着扩成「名称 / 命名空间」两格 */
+function byName<T extends { name: string; namespace?: string }>(rows: T[]): T[] {
+  if (!q.value) return rows
+  return rows.filter(r =>
+    r.name.toLowerCase().includes(q.value) || (r.namespace ?? '').toLowerCase().includes(q.value))
+}
+const filteredNodes = computed(() => byName(nodes.value))
+const filteredWorkloads = computed(() => byName(sortedWorkloads.value))
+const filteredPods = computed(() => byName(sortedPods.value))
+const filteredServices = computed(() => byName(services.value))
+const filteredEvents = computed(() => {
+  // Warning 的收窄交给服务端（--field-selector type=Warning），这里不再本地兜一层：
+  // API server 认这个选择器是保证，重复过滤只会让「到底谁在过滤」变成两说
+  return q.value
+    ? events.value.filter(e =>
+        [e.namespace, e.object, e.reason, e.message].some(t => t.toLowerCase().includes(q.value)))
+    : events.value
+})
+
+const currentRows = computed(() => {
+  if (tab.value === 'nodes') return filteredNodes.value
+  if (tab.value === 'workloads') return filteredWorkloads.value
+  if (tab.value === 'pods') return filteredPods.value
+  if (tab.value === 'services') return filteredServices.value
+  return filteredEvents.value
+})
+
+// 整机级错误（未装 kubectl / kubeconfig 读不到 / 连不上 API server…）只在页顶说一次：
+// 这时五个分段报的是同一句话，逐条列出来只是噪声。
+const LIST_ERRS = computed<(K8sError | undefined)[]>(() => [
+  nodeList.error.value, workloadList.error.value, podList.error.value,
+  serviceList.error.value, eventList.error.value,
+])
+const hostError = computed<K8sError | undefined>(() => LIST_ERRS.value.find(e => isHostLevelError(e?.code)))
+/** 这台主机压根没有 k8s（没装 / 没配 / 说不出 context）：页顶报状态，不报故障 */
+const notDetected = computed(() => isNotDetectedState(hostError.value, contextName.value))
+/** 当前这一屏自己读没读到：读失败时状态栏不许报 0，那会被看成「这里真的没有资源」 */
+const ACTIVE_LISTS = {
+  nodes: nodeList, workloads: workloadList, pods: podList, services: serviceList, events: eventList,
+} as const
+const activeListFailed = computed(() => !!ACTIVE_LISTS[tab.value].error.value)
+const tabLabel = computed(() => TABS.find(t => t.key === tab.value)?.label || '资源')
+const activeLabel = computed(() => {
+  if (tab.value === 'nodes') return 'kubectl get nodes'
+  if (tab.value === 'workloads') return 'kubectl get deployments,statefulsets,…'
+  if (tab.value === 'pods') return 'kubectl get pods'
+  if (tab.value === 'services') return 'kubectl get services,ingresses'
+  return 'kubectl get events'
+})
+
+const readyNodes = computed(() => nodes.value.filter(n => n.ready).length)
+const degradedWorkloads = computed(() => workloads.value.filter(w => w.status === 'Degraded' || w.status === 'Failure').length)
+const runningPods = computed(() => pods.value.filter(p => !isAbnormalPod(p)).length)
+const abnormalPods = computed(() => pods.value.filter(p => isAbnormalPod(p)).length)
+const ingressCount = computed(() => services.value.filter(s => s.kind === 'Ingress').length)
+const warningCount = computed(() => events.value.filter(e => e.type === 'Warning').length)
+
+function emptyText(what: string): string {
+  return q.value ? `没有匹配的${what}` : `集群里没有${what}`
+}
+
+async function enrichNodeUsage(id: string, pin: ListPin): Promise<void> {
+  if (!nodeList.rows.value.length) return
+  try {
+    const usage = parseTopNodes(await host.k8sExec(TOP_NODES_CMD, id))
+    // 回包必须仍然新鲜：中途切了主机时，旧主机的节点名（k1/k2）完全可能在新集群里同名，
+    // 不校验就会把 A 的用量并进 B 的节点行。
+    if (!host.listFresh('nodes', pin)) return
+    nodeList.rows.value = mergeNodeUsage(nodeList.rows.value, usage)
+  } catch { /* metrics-server 缺席：用量列留空，列表照常 */ }
+}
+
+async function loadAll(): Promise<void> {
+  const id = targetId.value
+  if (!id) return
+  const gen = ++loadGen
+  loading.value = true
+  truncated.value = false
+  // context 单独先取：它是本地命令（不碰网络），而页顶那句要靠「说不说得出 context」
+  // 决定报「未检测到 k8s」还是「集群出错」。塞进并行里会出现列表先失败、context 后落定
+  // 的窗口，同一屏换两次措辞。
+  await readK8sContext(host)
+  if (gen !== loadGen || targetId.value !== id) return
+  await Promise.allSettled([
+    workloadList.reload(), podList.reload(), serviceList.reload(), eventList.reload(), nodeList.reload(),
+  ])
+  if (gen !== loadGen || targetId.value !== id) return
+  loading.value = false
+}
+
+function refresh(): void { void loadAll() }
+
+function selectTab(next: TabKey): void {
+  tab.value = next
+  // 分段只切显示；数据在刷新时已全取过一轮，切页不该再发命令（与 Docker 页一致）
+}
+
+// ── 详情 ──
+// selKey 存下来而不是从 target 反推：负载/服务用 Kind 原名做键，Pod 只用 ns/name，
+// 反推一次就要在两处维护同一个字符串形状，错一格表现为「选中的行不再高亮」这种难查的毛病。
+function openDetail(t: DetailTarget, key: string): void {
+  selected.value = t
+  selKey.value = key
+}
+function closeDetail(): void {
+  selected.value = null
+  selKey.value = null
+}
+const openWorkload = (w: WorkloadRow) => openDetail(detailOfWorkload(w), workloadRowKey(w))
+const openService = (s: ServiceRow) => openDetail(detailOfService(s), serviceRowKey(s))
+function openScale(w: WorkloadRow): void { scaleRow.value = w }
+
+// ── 四个窄动作：全部先确认、全部经 actionExec（60s 预算 + 审计）、全部按 kind/ns 定死目标 ──
+async function runAction(key: string, cmd: string, okMsg: string, reloads: (() => Promise<void>)[]): Promise<void> {
+  if (busy.value) return
+  await host.withBusyKey(key, async () => {
+    try {
+      await host.actionExec(cmd)
+      toast.success(okMsg)
+      await Promise.allSettled(reloads.map(fn => fn()))
+    } catch (e) {
+      host.toastErr(e)
+    }
+  })
+}
+
+async function doRestart(w: WorkloadRow): Promise<void> {
+  const ok = await confirm({
+    title: '滚动重启',
+    message: `${w.kind}／${w.name}（${w.namespace}）\n${ACTION_CONSEQUENCE.rolloutRestart}`,
+    danger: true, confirmText: '重启',
+  })
+  if (!ok) return
+  await runAction(
+    workloadRowKey(w),
+    rolloutRestartCmd(w.kind, w.name, w.namespace),
+    `已下发重启：${w.name}`,
+    [workloadList.reload, podList.reload],
+  )
+}
+
+async function doScale(replicas: number): Promise<void> {
+  const w = scaleRow.value
+  if (!w) return
+  scaleRow.value = null
+  await runAction(
+    `scale:${workloadRowKey(w)}`,
+    scaleCmd(w.kind, w.name, w.namespace, replicas),
+    `已把 ${w.name} 缩放到 ${replicas}`,
+    [workloadList.reload, podList.reload],
+  )
+}
+
+async function doDeletePod(p: PodRow): Promise<void> {
+  const ok = await confirm({
+    title: '删除 Pod',
+    message: `${p.namespace}／${p.name}\n${ACTION_CONSEQUENCE.deletePod}`,
+    danger: true, confirmText: '删除',
+  })
+  if (!ok) return
+  await runAction(
+    podRowKey(p),
+    deletePodCmd(p.name, p.namespace),
+    `已删除 ${p.name}`,
+    [podList.reload, workloadList.reload],
+  )
+}
+
+async function doDeleteJob(w: WorkloadRow): Promise<void> {
+  const ok = await confirm({
+    title: '删除 Job',
+    message: `${w.namespace}／${w.name}\n${ACTION_CONSEQUENCE.deleteJob}`,
+    danger: true, confirmText: '删除',
+  })
+  if (!ok) return
+  await runAction(
+    workloadRowKey(w),
+    deleteJobCmd(w.name, w.namespace),
+    `已删除 Job ${w.name}`,
+    [workloadList.reload, podList.reload],
+  )
+}
+
+// 换主机要整轮重取：列表都带 -A，命名空间不再是一根轴，切换它不构成新的取数范围
+watch(targetId, () => { void loadAll() }, { immediate: true })
+// 「含 Normal」是取数范围而不是筛选：改了就得重新问服务端
+watch(showNormalEvents, () => { void eventList.reload() })
+// 页面隐藏：收起弹窗，别让它们盖在别的页面上
+watch(() => props.active, (a) => {
+  if (a === false) { closeDetail(); scaleRow.value = null; showConnPicker.value = false }
+})
+</script>
+
+<style scoped>
+.k8s-view {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--canvas-bg);
+}
+
+/* 连接状态条：与 Docker 页同一尺寸口径（44px / 16px 侧距 / 底部分隔线） */
+.page-head {
+  display: flex; align-items: center; gap: var(--spacing-12);
+  flex-shrink: 0; height: var(--page-head-h); padding: 0 var(--spacing-16);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.conn-left { display: flex; align-items: center; gap: var(--spacing-8); min-width: 0; }
+.conn-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--text-tertiary); }
+.conn-dot.online { background: var(--status-success-text); }
+.conn-dot.offline { background: var(--text-tertiary); }
+.conn-name { font-size: var(--page-title-size); font-weight: 600; color: var(--text-primary); }
+.conn-host { font-size: 0.9231rem; font-weight: 400; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.head-spacer { flex: 1; }
+.conn-right { display: flex; align-items: center; gap: var(--spacing-10); flex-shrink: 0; }
+.host-sel {
+  height: 26px; padding: 0 var(--spacing-8); max-width: 200px;
+  background: var(--bg-input); border: 1px solid var(--border-input); border-radius: var(--radius-md);
+  color: var(--text-primary); font-size: 0.9231rem; font-family: inherit; cursor: pointer;
+}
+.host-sel option { background: var(--bg-elevated); color: var(--text-primary); }
+.ctx-chip {
+  font-size: 0.7692rem; color: var(--text-tertiary); padding: 1px var(--spacing-6);
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-input);
+}
+
+/* 工具条 */
+.toolbar {
+  display: flex; align-items: center; gap: var(--spacing-10);
+  padding: var(--spacing-10) var(--spacing-16);
+  border-bottom: 1px solid var(--divider-primary); flex-shrink: 0;
+}
+.seg { display: inline-flex; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: var(--spacing-2); gap: var(--spacing-2); }
+.seg-btn {
+  border: none; background: transparent; color: var(--text-secondary); font-size: 0.9231rem;
+  padding: var(--spacing-4) var(--spacing-14); border-radius: var(--radius-sm);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.seg-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+.seg-btn.on { background: var(--bg-elevated); color: var(--accent-text); }
+.search {
+  display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 var(--spacing-10); width: 210px;
+  background: var(--bg-input); border: 1px solid var(--border-input); border-radius: var(--radius-md); color: var(--text-tertiary);
+}
+.search input { background: transparent; border: none; color: var(--text-primary); font-size: 0.9231rem; flex: 1; }
+.search input::placeholder { color: var(--text-tertiary); }
+.tb-right { margin-left: auto; display: flex; align-items: center; gap: var(--spacing-8); }
+.ck { display: inline-flex; align-items: center; gap: var(--spacing-6); font-size: 0.8462rem; color: var(--text-secondary); cursor: pointer; user-select: none; }
+
+.body { flex: 1; display: flex; min-height: 0; }
+.list-col { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.btn:disabled { opacity: .45; cursor: default; }
+
+/* 取数错误带 */
+.err-band {
+  display: flex; align-items: flex-start; gap: var(--spacing-10);
+  margin: var(--spacing-12) var(--spacing-16); padding: var(--spacing-12) var(--spacing-14); flex-shrink: 0;
+  background: color-mix(in srgb, var(--status-error-text) 8%, var(--bg-elevated));
+  border: 1px solid color-mix(in srgb, var(--status-error-text) 28%, transparent);
+  border-radius: var(--radius-md);
+}
+.err-band .eb-text { flex: 1; min-width: 0; }
+/* 「未检测到 k8s」是状态不是故障：一台没装 k8s 的机器不该看着像出了事 */
+.err-band.quiet { background: var(--bg-elevated); border-color: var(--divider-primary); }
+.err-band .eb-msg { font-size: 1rem; color: var(--text-primary); line-height: 1.5; }
+.err-band .eb-hint { font-size: 0.9231rem; color: var(--text-secondary); margin-top: var(--spacing-4); line-height: 1.5; }
+.load-band {
+  display: flex; align-items: center; justify-content: center; gap: var(--spacing-8); flex: 1;
+  color: var(--text-tertiary); font-size: 0.9231rem;
+}
+
+/* 状态栏 */
+.statusbar {
+  height: 24px; flex-shrink: 0; display: flex; align-items: center; gap: var(--spacing-16); padding: 0 var(--spacing-16);
+  border-top: 1px solid var(--divider-primary); font-size: 0.8462rem; color: var(--text-tertiary); user-select: none;
+}
+.statusbar .mono { color: var(--text-secondary); }
+.statusbar .ok { color: var(--status-success-text); }
+.statusbar .bad { color: var(--status-error-text); }
+.statusbar .sb-warn { color: var(--status-warn-text); }
+.sb-right { margin-left: auto; }
+
+.empty {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: var(--spacing-10); color: var(--text-tertiary); font-size: 1rem;
+}
+</style>

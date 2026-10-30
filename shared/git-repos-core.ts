@@ -74,6 +74,10 @@ export interface RepoRow {
   originHost: string | null
   originSlug: string | null
   lastCommit: GitCommitInfo | null
+  /** 主仓 remote 名（primaryRemoteOf：GitCode 优先）；本地推送实际快进推到它 */
+  primaryRemote?: string | null
+  /** 全部远端名（字典序）：详情概要条要写清「获取」到底覆盖哪几家 */
+  remoteNames?: string[]
   /** 单仓取数失败（列表尽力而为，按行上浮，不伪装成「没有仓库」） */
   error?: string
 }
@@ -95,15 +99,189 @@ export interface LocalRepoStatusResult {
   originUrl?: string | null
   /** 同口径挑出的远端名字（push -u 兜底用） */
   remoteName?: string | null
+  /** 全部远端（名 → fetch URL）；primaryRemote 由它推导 */
+  remotes?: Record<string, string>
 }
 
 /** 注册表结构（userData/git-repos.json；类型两端共用，实现在 electron/git-repos.ts） */
 export interface GitReposRegistry {
-  version: 1
+  version: 2
   /** 本地仓库绝对路径 */
   local: string[]
   /** 远程仓库路径：connectionId → 服务器上的仓库路径（执行经渲染层 sshExec） */
   remote: Record<string, string[]>
+  /** 三仓同步配置：本地仓库路径 → 主仓/镜像划分（缺省按 deriveSyncConfig 推默认） */
+  sync?: Record<string, RepoSyncConfig>
+}
+
+/** 三仓同步的单仓配置：主仓唯一可写，其余远端一律视为只读镜像 */
+export interface RepoSyncConfig {
+  /** 主仓 remote 名（推送与巡检比对的基准） */
+  primary: string
+  /** 只读镜像 remote 名（补齐 = 快进直推；分叉绝不覆盖） */
+  mirrors: string[]
+}
+
+// ─── 三仓同步：端点三态 / ls-remote 与 rev-list 解析 / 默认配置推导 ───
+
+/**
+ * 远端端点相对本地 HEAD 的四态结论：
+ * ok 一致 / behind 远端可快进（安全补齐）/ diverged 两边各有提交（必须显式合并）/
+ * unknown 探测失败（网络 / 认证，state 与计数都不可信）。
+ */
+export type SyncEndpointState = 'ok' | 'behind' | 'diverged' | 'unknown'
+
+/** 同步视图里的一个远端端点（探针结果行） */
+export interface SyncEndpoint {
+  name: string
+  url: string
+  role: 'primary' | 'mirror'
+  state: SyncEndpointState
+  /** 远端分支当前 SHA（ls-remote；探测失败为 null） */
+  sha: string | null
+  /** behind 态的补齐量（远端落后本地的提交数；其余态为 0） */
+  behind: number
+  /** unknown 态的失败原因（friendlyGitError 已翻好） */
+  error?: string
+}
+
+/** 端点状态 → 圆点色档（返回值直接当样式类名用：ok / behind / diverged / off） */
+export function syncDotClass(ep: SyncEndpoint): 'ok' | 'behind' | 'diverged' | 'off' {
+  if (ep.state === 'ok') return 'ok'
+  if (ep.state === 'behind') return 'behind'
+  if (ep.state === 'diverged') return 'diverged'
+  return 'off'
+}
+
+/** 端点状态文案：列表行、远端条、远端页签共用同一套说法（含 behind 的补齐量） */
+export function syncStateText(ep: SyncEndpoint): string {
+  if (ep.state === 'ok') return '一致'
+  if (ep.state === 'behind') return `落后 ${ep.behind || 1}`
+  if (ep.state === 'diverged') return '分叉'
+  return '探测失败'
+}
+
+/** 单仓一次同步探测的结果（electron/git-repos.ts syncProbe 的行结构） */
+export interface SyncProbeResult {
+  path: string
+  ok: boolean
+  error?: string
+  branch: string
+  headSha: string
+  /** 主仓名（sync 配置或推导默认） */
+  primary: string
+  endpoints: SyncEndpoint[]
+  /** 探测时刻（Date.now()，渲染层算「N 分钟前」用） */
+  probedAt: number
+}
+
+/** 补齐回包里的单远端结论 */
+export interface SyncPushItem {
+  remote: string
+  outcome: 'pushed' | 'rejected' | 'failed' | 'skipped'
+  /** pushed 之外的中文原因（skipped 说明为何跳过） */
+  message: string
+}
+
+/** 一键补齐的回包（逐家回报，非原子） */
+export interface SyncCatchupResult {
+  path: string
+  items: SyncPushItem[]
+}
+
+/** 解析 `git ls-remote <remote> <branch>` 输出：`<sha>\t<ref>` 行取首行 sha */
+export function parseLsRemoteSha(raw: string): string | null {
+  for (const line of raw.split('\n')) {
+    const m = line.match(/^([0-9a-f]{40})\t/)
+    if (m) return m[1]
+  }
+  return null
+}
+
+/**
+ * 解析 `git rev-list --left-right --count HEAD...<sha>`：输出 `<左>\t<右>`，
+ * 左 = 仅本地有的提交数（远端落后量），右 = 仅远端有的提交数。
+ * 形态不符返回 null（当作「远端有本地未见的提交」处理，见 classifySyncEndpoint）。
+ */
+export function parseRevListCount(raw: string): { left: number; right: number } | null {
+  const m = raw.trim().match(/^(\d+)\t(\d+)$/)
+  return m ? { left: Number(m[1]), right: Number(m[2]) } : null
+}
+
+/**
+ * 端点三态判定：
+ * - remoteSha 为 null（ls-remote 失败）→ unknown；
+ * - 与本地一致 → ok；
+ * - counts 为 null（远端 SHA 本地不认识：没 fetch 过的远端独有提交）→ diverged；
+ * - 右为 0 且左 > 0 → behind（快进补齐左个提交）；
+ * - 其余（右 > 0）→ diverged。
+ */
+export function classifySyncEndpoint(
+  localSha: string,
+  remoteSha: string | null,
+  counts: { left: number; right: number } | null,
+): SyncEndpointState {
+  if (!remoteSha) return 'unknown'
+  if (remoteSha === localSha) return 'ok'
+  if (!counts) return 'diverged'
+  if (counts.right === 0 && counts.left > 0) return 'behind'
+  return 'diverged'
+}
+
+/** GitCode 主仓域名（host 命中即视为平台主仓，其余远端按只读镜像处理） */
+const GITCODE_HOSTS = ['gitcode.com', 'gitcode.net']
+
+/**
+ * 从远端 URL 提取 host（小写）：兼容 https / ssh / git 协议与 scp 形式
+ * `git@gitcode.com:owner/repo.git`。无法识别返回 null。
+ */
+export function remoteHostOf(url: string): string | null {
+  const u = (url || '').trim()
+  if (!u) return null
+  // 协议形式：直接用 URL 解析
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(u)) {
+    try {
+      const host = new URL(u).hostname
+      return host ? host.toLowerCase() : null
+    } catch {
+      return null
+    }
+  }
+  // scp 形式：[user@]host:path（host 不含 / 与 :，path 可有 /）
+  const scp = u.match(/^(?:[^@\s]+@)?([^:/@\s]+):/)
+  if (scp) return scp[1].toLowerCase()
+  return null
+}
+
+/**
+ * 主仓 remote 名推导（仓库 / 同步两模块共用，唯一判据）：
+ * 1) host 命中 GitCode 的远端优先（应用只推主仓，GitHub/Gitee 走平台镜像）；
+ * 2) 回退 branch.<name>.remote 指向的远端；
+ * 3) 回退 origin；
+ * 4) 回退字典序第一个。
+ * 无远端返回 null。
+ */
+export function primaryRemoteOf(remotes: Record<string, string>, branchRemote: string | null): string | null {
+  const names = Object.keys(remotes)
+  if (!names.length) return null
+  const sorted = names.slice().sort()
+  for (const host of GITCODE_HOSTS) {
+    const hit = sorted.find(n => remoteHostOf(remotes[n]) === host)
+    if (hit) return hit
+  }
+  if (branchRemote && names.includes(branchRemote)) return branchRemote
+  if (remotes.origin) return 'origin'
+  return sorted[0]
+}
+
+/**
+ * 默认主仓推导（注册表没有显式 sync 配置时）：主仓 = primaryRemoteOf，
+ * 其余远端全部是镜像。与 pickRemote 展示口径同源，但这里要的是「全员划分」。
+ */
+export function deriveSyncConfig(remotes: Record<string, string>, branchRemote: string | null): RepoSyncConfig {
+  const primary = primaryRemoteOf(remotes, branchRemote)
+  if (!primary) return { primary: '', mirrors: [] }
+  return { primary, mirrors: Object.keys(remotes).filter(n => n !== primary) }
 }
 
 /** 本地 git 命令的原样回包（fetch/pull 由渲染层 interpretPull 解释） */
@@ -426,6 +604,9 @@ export function sortRepoRows<T extends Pick<RepoRow, 'name' | 'dirtyFiles' | 'ah
 /** 本地取数结果 → 行（electron/git-repos.ts 的返回直接喂这里） */
 export function toLocalRepoRow(r: LocalRepoStatusResult): RepoRow {
   const origin = r.originUrl ? parseOriginUrl(r.originUrl) : null
+  const remotes = r.remotes ?? {}
+  const branchRemote = r.status?.upstream ? r.status.upstream.split('/')[0] : null
+  const primaryRemote = primaryRemoteOf(remotes, branchRemote)
   return {
     id: repoRowId('local', undefined, r.path),
     scope: 'local',
@@ -442,6 +623,8 @@ export function toLocalRepoRow(r: LocalRepoStatusResult): RepoRow {
     originHost: origin?.host ?? null,
     originSlug: origin?.slug ?? null,
     lastCommit: r.lastCommit ?? null,
+    primaryRemote: primaryRemote || null,
+    remoteNames: Object.keys(remotes).sort(),
     error: r.error,
   }
 }
@@ -754,7 +937,8 @@ export function toRemoteRepoRow(sessionId: string, path: string, stdout: string,
   if (!status.branch && !status.files.length && stderr.trim()) {
     return { ...base, error: friendlyGitError(stderr, '远端取数失败') }
   }
-  const pick = pickRemote(parseRemoteConfig(remotesRaw), status.upstream)
+  const remotes = parseRemoteConfig(remotesRaw)
+  const pick = pickRemote(remotes, status.upstream)
   const originUrl = pick?.url ?? null
   const origin = originUrl ? parseOriginUrl(originUrl) : null
   const commits = parseGitLog(logRaw)
@@ -768,6 +952,7 @@ export function toRemoteRepoRow(sessionId: string, path: string, stdout: string,
     dirtyFiles: status.files.length,
     originUrl,
     remoteName: pick?.name ?? null,
+    remoteNames: Object.keys(remotes).sort(),
     originHost: origin?.host ?? null,
     originSlug: origin?.slug ?? null,
     lastCommit: commits[0] ?? null,

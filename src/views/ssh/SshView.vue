@@ -159,6 +159,11 @@ v-show="s.id === store.activeSessionId"
           <DockerView v-if="pageMounted('docker')" :active="activeNavPage === 'docker'" @exec-terminal="activateTerminal($event)" />
         </div>
 
+        <!-- K8s 集群页（同样依附远程 SSH 会话，经 kubectl 读数） -->
+        <div v-show="activeNavPage === 'k8s'" class="k8s-page">
+          <K8sView v-if="pageMounted('k8s')" :active="activeNavPage === 'k8s'" />
+        </div>
+
         <!-- Git 页面（GitHub 加速 + 仓库管理，C 方案双子页） -->
         <div v-show="activeNavPage === 'git'" class="git-page">
           <GitView v-if="pageMounted('git')" :active="activeNavPage === 'git'" @exec-terminal="activateTerminal($event)" />
@@ -264,6 +269,7 @@ const SchedulesView = defineAsyncComponent(() => import('@/views/ssh/SchedulesVi
 const DashboardView = defineAsyncComponent(() => import('@/views/ssh/DashboardView.vue'))
 const TunnelView = defineAsyncComponent(() => import('@/components/ssh/TunnelView.vue'))
 const DockerView = defineAsyncComponent(() => import('@/components/ssh/DockerView.vue'))
+const K8sView = defineAsyncComponent(() => import('@/components/ssh/K8sView.vue'))
 const GitView = defineAsyncComponent(() => import('@/components/ssh/git/GitView.vue'))
 const CkunBotView = defineAsyncComponent(() => import('@/components/bot/CkunBotView.vue'))
 const CommandPalette = defineAsyncComponent(() => import('@/components/common/CommandPalette.vue'))
@@ -333,6 +339,7 @@ const {
   toggleDashboard,
   toggleTunnels,
   toggleDocker,
+  toggleK8s,
   toggleGit,
   toggleBot,
   openLocalShell,
@@ -378,6 +385,7 @@ const PAGE_TOGGLES: Record<Exclude<NavPage, 'home'>, () => void> = {
   dashboard: toggleDashboard,
   tunnels: toggleTunnels,
   docker: toggleDocker,
+  k8s: toggleK8s,
   git: toggleGit,
   bot: toggleBot,
 }
@@ -534,6 +542,7 @@ defineExpose({
   toggleDashboard,
   toggleTunnels,
   toggleDocker,
+  toggleK8s,
   toggleGit,
   toggleBot,
   openSettings,
@@ -819,8 +828,9 @@ defineExpose({
   overflow: hidden;
 }
 
-/* ─── Docker Page ─── */
-.docker-page {
+/* ─── Docker / K8s Page（同一套整屏浮层口径，共用一条规则） ─── */
+.docker-page,
+.k8s-page {
   position: absolute;
   top: 0;
   left: 0;

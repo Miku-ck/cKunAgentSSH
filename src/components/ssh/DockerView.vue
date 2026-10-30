@@ -249,13 +249,14 @@ import {
   dockerSaveCmd, dockerLoadCmd, saveTempPath,
   volumeRmCmd, networkRmCmd, volumePruneCmd, networkPruneCmd,
   parsePs, parseImages, parseVolumes, parseNetworks, imageLabel, imageHaystack, imageUsageCount,
-  parseVolumeUsage, mergeVolumeUsage, isOutputTruncated,
+  parseVolumeUsage, mergeVolumeUsage,
   countPrunedLines, isAbnormal, isBuiltinNetwork,
   describeThrownDockerError,
   type ContainerRow, type ImageRow, type VolumeRow, type NetworkRow, type DockerError,
 } from '@/stores/docker-core'
-// exec 三态判据与主进程 ssh-manager 同源（判据源 shared/exec-outcome-core.ts）
-import { classifyExit } from '../../../shared/exec-outcome-core'
+// exec 三态判据与主进程 ssh-manager 同源（判据源 shared/exec-outcome-core.ts）；
+// 截断标记的判据同理，两侧字面量一份。
+import { classifyExit, isOutputTruncated } from '../../../shared/exec-outcome-core'
 import { provideDockerHost, TABS, ACTION_TIMEOUT_SEC, errText, type TabKey, type ListPin } from './docker/context'
 import DockerContainersTab from './docker/DockerContainersTab.vue'
 import DockerImagesTab from './docker/DockerImagesTab.vue'

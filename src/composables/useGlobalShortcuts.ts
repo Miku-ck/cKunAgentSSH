@@ -30,6 +30,9 @@ export const PAGE_SHORTCUTS: ReadonlyArray<{
   { page: 'git', num: 7 },
   { page: 'audit', num: 8 },
   { page: 'bot', num: 9 },
+  // 0 是溢出位：1–9 已被十个导航页里的前九个占满（命令面板的守卫钉着「不许空号」）。
+  // 非 Shift 分支里 sessions[0-1] 取到 undefined，行为仍是「什么都不做」，无副作用。
+  { page: 'k8s', num: 0 },
 ]
 
 /** 「监控仪表盘 (Ctrl+Shift+3)」形式的 title 提示，供 TitleBar 引用 */
@@ -139,7 +142,8 @@ export function useGlobalShortcuts(deps: ShortcutDeps): { mruSwitcher: typeof mr
       return
     }
     // 数字键一律认 e.code：Shift+数字的 e.key 是标点（Shift+1='!'），按 e.key 匹配必漏
-    const digit = /^Digit([1-9])$/.exec(e.code)
+    // 含 0：PAGE_SHORTCUTS 的 1–9 已占满，K8s 用 Ctrl+Shift+0
+    const digit = /^Digit([0-9])$/.exec(e.code)
     if (digit) {
       const n = Number(digit[1])
       if (!e.shiftKey) {

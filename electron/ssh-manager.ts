@@ -20,7 +20,7 @@ import { assertKeyFileSafe } from './utils/path-guard'
 import { BrowserWindow, app } from 'electron'
 import { SSHError, classifyRawError, toFriendlyZh } from './ssh-error'
 import { encodeTransferErrorName, isTransferRetryable, type TransferErrorCode } from '../shared/transfer-error-core'
-import { classifyExit } from '../shared/exec-outcome-core'
+import { classifyExit, EXEC_TRUNCATED_NOTE } from '../shared/exec-outcome-core'
 import { shSingleQuote } from '../shared/sh-quote-core'
 import { promises as fsPromises } from 'fs'
 import { posix, join, dirname } from 'path'
@@ -1276,7 +1276,8 @@ export class SSHManager {
           clearTimeout(timer)
           if (!settled) {
             settled = true
-            const TRUNCATED_NOTE = '\n[输出已截断，超过 1M 字符上限]'
+            // 文案与渲染层的截断判据同源（shared/exec-outcome-core），不再各持一份字面量
+            const TRUNCATED_NOTE = `\n${EXEC_TRUNCATED_NOTE}`
             // 冲掉解码器里可能残留的半个多字节字符（流恰好在字符中间收尾）
             stdout = appendCapped(stdout, stdoutDecoder.end())
             stderr = appendCapped(stderr, stderrDecoder.end())

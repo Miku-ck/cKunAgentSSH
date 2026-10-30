@@ -15,8 +15,8 @@ import * as icons from './settings-nav-icons'
 const entries = Object.entries(icons) as [string, Component][]
 
 describe('设置导航图标', () => {
-  it('八个图标全部是渲染函数组件，不依赖运行时模板编译', () => {
-    expect(entries).toHaveLength(8)
+  it('九个图标全部是渲染函数组件，不依赖运行时模板编译', () => {
+    expect(entries).toHaveLength(9)
     for (const [name, icon] of entries) {
       expect(name).toMatch(/^Icon/)
       const options = icon as { template?: unknown; render?: unknown }

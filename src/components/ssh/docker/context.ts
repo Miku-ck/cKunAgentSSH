@@ -10,11 +10,13 @@
  *
  * 组件树里只 provide 一次（DockerView），页签与弹窗用 useDockerHost() 取同一份实例。
  * 「切宿主后旧回包不许写回」因此只有一处实现，不必各页签各抄一遍。
+ *
+ * 第 1、3 件（目标主机选择与动作锁）与 docker 无关，已收在 ../remote-target.ts；
+ * 本文件只剩 docker 特有的取数、审计与陈旧回包守卫，DockerHost 靠 extends 继承那半边。
  */
-import { computed, inject, provide, ref, watch, type ComputedRef, type InjectionKey, type Ref } from 'vue'
-import { toFriendlyMessage } from '@/api/client'
-import { useSSHStore, type SSHConnection, type TerminalSession } from '@/stores/ssh'
+import { computed, inject, provide, ref, type ComputedRef, type InjectionKey, type Ref } from 'vue'
 import { useToastStore } from '@/stores/toast'
+import { useRemoteTarget, type RemoteTarget } from '../remote-target'
 import {
   AUDIT_ACTION_DOCKER,
   auditEnvironmentFor,
@@ -27,9 +29,9 @@ import {
 import {
   describeThrownDockerError,
   dockerErrorFromResult,
-  isOutputTruncated,
   type DockerError,
 } from '@/stores/docker-core'
+import { isOutputTruncated } from '../../../../shared/exec-outcome-core'
 
 export const TABS = [
   { key: 'containers', label: '容器' },
@@ -59,23 +61,7 @@ export interface DockerList<T> {
 
 export type DockerAuditTarget = { targetId: string; environment: 'test' | 'prod' }
 
-export interface DockerHost {
-  sshStore: ReturnType<typeof useSSHStore>
-  /** 已连接的远程会话（Docker 依附远程主机，本地终端不参与） */
-  remoteSessions: ComputedRef<TerminalSession[]>
-  targetId: Ref<string>
-  targetName: ComputedRef<string>
-  /** 目标主机串：优先用 connectionId 回查连接记录，回落到会话 shell（username@host） */
-  targetHost: ComputedRef<string>
-  targetSession: ComputedRef<TerminalSession | null>
-  showConnPicker: Ref<boolean>
-  connecting: Ref<boolean>
-  pendingConnId: Ref<string>
-  handleConnect: (conn: SSHConnection) => Promise<void>
-  disconnectTarget: () => void
-  busy: Ref<string>
-  withBusyKey: (key: string, fn: () => Promise<void>) => Promise<void>
-  withBusy: (target: { id: string }, fn: () => Promise<void>) => Promise<void>
+export interface DockerHost extends RemoteTarget {
   /** 任一取数命中 1MB 截断（列表可能缺行，状态栏必须明示） */
   truncated: Ref<boolean>
   /** 其中的 docker ps 单独记账：镜像「引用」列只取决于容器列表是否完整 */
@@ -120,71 +106,9 @@ const DOCKER_HOST_KEY: InjectionKey<DockerHost> = Symbol('dockerHost')
  * 必须在 DockerView 的 setup 同步段调用 —— 目标主机切换要立即触发首轮取数。
  */
 export function provideDockerHost(): DockerHost {
-  const sshStore = useSSHStore()
+  const remoteTarget = useRemoteTarget()
   const toast = useToastStore()
-
-  const remoteSessions = computed(() => sshStore.sessions.filter(s => s.type === 'remote'))
-  const targetId = ref('')
-  // 默认落在活动远程会话；活动会话切换或远程列表变化时校正目标
-  watch(remoteSessions, (list) => {
-    if (!list.some(s => s.id === targetId.value)) {
-      const active = list.find(s => s.id === sshStore.activeSessionId)
-      targetId.value = (active || list[0])?.id || ''
-    }
-  }, { immediate: true })
-  const targetName = computed(() => remoteSessions.value.find(s => s.id === targetId.value)?.name || '')
-  const targetSession = computed(() => remoteSessions.value.find(s => s.id === targetId.value) || null)
-  const targetHost = computed(() => {
-    const s = targetSession.value
-    if (!s) return ''
-    const conn = sshStore.connections.find(c => c.id === s.connectionId)
-    return conn ? `${conn.username}@${conn.host}` : s.shell
-  })
-
-  // ── 手动连接（仿监控仪表盘：不预设必须有会话，可从已保存连接直接连） ──
-  const showConnPicker = ref(false)
-  const connecting = ref(false)
-  const pendingConnId = ref('')
-
-  async function handleConnect(conn: SSHConnection): Promise<void> {
-    if (connecting.value) return
-    connecting.value = true
-    pendingConnId.value = conn.id
-    try {
-      // 用 connectRemote 返回的那条会话 id，不按 connectionId 回查：同一主机已有会话时
-      // find 命中的是**最早那条**，目标会指回旧会话，而新开这条没人认领（多占一个远端
-      // PTY，还挂在终端标签列表里）。
-      targetId.value = await sshStore.connectRemote(conn.id, 80, 24)
-      showConnPicker.value = false
-      toast.success(`已连接 ${conn.name}`)
-    } catch (err) {
-      // S0-24 口径：握手/认证失败抛出的是 SSHError transport（或 Electron 信封），
-      // 原样 err.message 进 toast 等于把 getaddrinfo、Cannot parse privateKey 端给用户。
-      toast.error(toFriendlyMessage(err, 'SSH 连接失败'))
-    } finally {
-      connecting.value = false
-      pendingConnId.value = ''
-    }
-  }
-
-  function disconnectTarget(): void {
-    const s = targetSession.value
-    if (!s) return
-    void sshStore.closeSession(s.id)
-    toast.info(`已断开 ${s.name}`)
-  }
-
-  const busy = ref('')
-  // 动作统一执行器：in-flight 期间锁定按钮（docker stop 有 10s 宽限期），防连点重复下发
-  // 容器/镜像传 id；卷传 'v:'+name；网络传 'n:'+name；prune 传 'prune:volumes' 等。只要唯一即可。
-  async function withBusyKey(key: string, fn: () => Promise<void>): Promise<void> {
-    if (busy.value) return
-    busy.value = key
-    try { await fn() } finally { busy.value = '' }
-  }
-  async function withBusy(target: { id: string }, fn: () => Promise<void>): Promise<void> {
-    return withBusyKey(target.id, fn)
-  }
+  const { sshStore, remoteSessions, targetId } = remoteTarget
 
   // 单次 exec 输出上限 1MB：命中标记时列表可能缺行，状态栏必须明示，别让用户
   // 把「只看到前 N 个容器」当成主机真实状态。
@@ -322,20 +246,7 @@ export function provideDockerHost(): DockerHost {
   }
 
   const host: DockerHost = {
-    sshStore,
-    remoteSessions,
-    targetId,
-    targetName,
-    targetHost,
-    targetSession,
-    showConnPicker,
-    connecting,
-    pendingConnId,
-    handleConnect,
-    disconnectTarget,
-    busy,
-    withBusyKey,
-    withBusy,
+    ...remoteTarget,
     truncated,
     psTruncated,
     tab,

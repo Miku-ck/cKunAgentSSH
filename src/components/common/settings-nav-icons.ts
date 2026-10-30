@@ -84,3 +84,10 @@ export const IconBot = svgIcon('IconBot', () => [
   circle(14.5, 13, 1),
   path('M2 13v3M22 13v3'),
 ])
+
+/** 「关于与更新」：圆圈里一个 i（信息＋可点击的更新入口） */
+export const IconAbout = svgIcon('IconAbout', () => [
+  circle(12, 12, 9),
+  line(12, 11, 12, 16),
+  circle(12, 8, 0.6),
+])

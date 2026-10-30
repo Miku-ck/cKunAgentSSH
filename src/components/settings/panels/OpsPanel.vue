@@ -140,6 +140,30 @@
           </template>
         </dl>
       </section>
+
+      <!-- 诊断包：与上面的"诊断快照"分工不同 —— 快照问的是后端（走 HTTP），
+           这里收的是主进程自己的现场（userData 下的日志与崩溃转储），出问题时
+           用户和我们都得有一份能直接看的文件。 -->
+      <section class="section">
+        <h4 class="section-title">诊断包</h4>
+        <p class="hint">
+          把主进程日志（各留尾部 4MB、凭据已抹）、最近的崩溃转储与 system.json 打成一个 tar.gz，
+          落在应用数据目录的 diagnostics/ 里。只为现场排障生成，不会上传到任何地方。
+        </p>
+        <div class="row-actions">
+          <button class="btn" :disabled="!bundleSupported || bundleExporting" @click="exportBundle()">
+            {{ bundleExporting ? '导出中…' : '导出诊断包' }}
+          </button>
+          <button class="btn btn-ghost" :disabled="!bundleSupported" @click="revealBundle()">在文件夹中显示</button>
+        </div>
+        <p v-if="!bundleSupported" class="hint">浏览器模式下没有主进程日志与崩溃转储，诊断包只能在桌面应用内导出。</p>
+        <p v-if="bundleError" class="panel-error">{{ bundleError }}</p>
+        <p v-else-if="bundleResult?.ok" class="hint">
+          已导出 <code class="mono">{{ bundleResult.path }}</code>
+          （{{ formatBytes(bundleResult.bytes) }}，{{ bundleResult.logs.length }} 份日志，
+          {{ bundleResult.crashDumps }} 份崩溃转储）
+        </p>
+      </section>
     </div>
   </div>
 </template>
@@ -159,6 +183,7 @@ import {
   useOpsSettings,
 } from '@/composables/useOpsSettings'
 import { useDesktopPrefs } from '@/composables/useDesktopPrefs'
+import { useDiagnosticsBundle } from '@/composables/useDiagnosticsBundle'
 import type { LogLevel } from '@/api/client'
 import { formatBytes } from '@/utils/format'
 
@@ -197,6 +222,16 @@ const {
   load: loadPrefs,
   toggle: togglePref,
 } = useDesktopPrefs()
+
+// 命名用 bundle* 与上面的后端诊断快照（diagnostics / diagError）区分开：两者数据源不同
+const {
+  supported: bundleSupported,
+  exporting: bundleExporting,
+  result: bundleResult,
+  error: bundleError,
+  exportBundle,
+  reveal: revealBundle,
+} = useDiagnosticsBundle()
 
 const retryOptions = Array.from({ length: RETRY_MAX + 1 }, (_, i) => i)
 

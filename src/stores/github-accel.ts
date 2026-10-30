@@ -1,16 +1,14 @@
 // stores/github-accel.ts — GitHub 加速（镜像套件）
-// 纯逻辑（URL 解析/链接生成）在 shared/github-accel-core.ts，与主进程共用；
 // 配置/测速/git/ssh 状态全部经 ghaccel:* IPC 落主进程，本 store 只做缓存与动作编排。
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import {
-  buildAccelLinks,
-  parseGithubUrl,
   GITHUB_BASE,
-  type AccelLinkSet,
+  compareProbe,
+  maskToken,
   type AccelProxy,
-  type AccelWebMirror,
-  type ParsedGhUrl,
+  type GitPrivateToken,
+  type GitPushMode,
 } from '../../shared/github-accel-core'
 
 type GhConfig = Awaited<ReturnType<NonNullable<typeof window.electronAPI>['ghaccelGetConfig']>>
@@ -22,6 +20,7 @@ type HostsStatus = Awaited<ReturnType<NonNullable<typeof window.electronAPI>['gh
 type HostsPickRow = Awaited<ReturnType<NonNullable<typeof window.electronAPI>['ghaccelHostsPick']>>[number]
 type SelfCheckRow = Awaited<ReturnType<NonNullable<typeof window.electronAPI>['ghaccelSelfCheck']>>[number]
 type HealthStatus = Awaited<ReturnType<NonNullable<typeof window.electronAPI>['ghaccelHealthStatus']>>
+type TuneResult = Awaited<ReturnType<NonNullable<typeof window.electronAPI>['ghaccelAutoTune']>>
 
 /** 一键加速单项结果：UI 总控卡逐项显示成败。
  *  总控对称管辖全部三项（git / ssh443 / hosts）：启动 = 逐项开启（hosts 自动
@@ -29,17 +28,24 @@ type HealthStatus = Awaited<ReturnType<NonNullable<typeof window.electronAPI>['g
  *  又删 hosts 的不对称语义已废弃 —— 用户预期是「启动加速后完全被动，不再手动」。 */
 export interface MasterStep { key: 'git' | 'ssh443' | 'hosts'; ok: boolean; message?: string }
 
-function genId(): string {
-  return `ux-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-}
-
 export const useGithubAccelStore = defineStore('github-accel', () => {
   const proxies = ref<AccelProxy[]>([])
-  const webMirrors = ref<AccelWebMirror[]>([])
   const gitBackup = ref<GhConfig['gitBackup']>(null)
   const lastProxyPrefix = ref<string | undefined>(undefined)
+  /** push 目的地策略（direct = 直连 GitHub，ssh = 改写成 git@github.com:） */
+  const pushMode = ref<GitPushMode>('direct')
+  /** hosts 失效时自动重选（默认关闭：后台写 hosts 不弹 UAC） */
+  const hostsAutoRefresh = ref(false)
   const loaded = ref(false)
 
+  const privateTokens = ref<GitPrivateToken[]>([])
+  /** 有真实令牌（非空）的条目——业务入口据此判断是否注入鉴权 */
+  const activePrivateTokens = computed(() => privateTokens.value.filter(t => t.token.trim().length > 0))
+  const tokensByHost = computed(() => {
+    const map = new Map<string, GitPrivateToken>()
+    for (const t of activePrivateTokens.value) map.set(t.host.toLowerCase(), t)
+    return map
+  })
   const probeResults = ref<Record<string, ProbeRow>>({})
   const probing = ref(false)
   const probedAt = ref(0)
@@ -103,6 +109,10 @@ export const useGithubAccelStore = defineStore('github-accel', () => {
     if (!api || loaded.value) return
     const config = await api.ghaccelGetConfig()
     applyConfig(config)
+    // 令牌独立读取（getConfig 合并后已有，但独立 getTokens 保证「仅配置过 token 未动镜像」也能拿到）
+    try {
+      privateTokens.value = await api.ghaccelGetTokens()
+    } catch { /* 主进程不支持时忽略（如纯 web 预览） */ }
     loaded.value = true
     // git / ssh 状态并行拉取（失败不阻塞页面，状态区显示提示文案）
     void refreshGitStatus().catch(() => undefined)
@@ -124,22 +134,50 @@ export const useGithubAccelStore = defineStore('github-accel', () => {
 
   function applyConfig(config: GhConfig): void {
     proxies.value = config.proxies
-    webMirrors.value = config.webMirrors
     gitBackup.value = config.gitBackup
     lastProxyPrefix.value = config.lastProxyPrefix
+    pushMode.value = config.pushMode === 'ssh' ? 'ssh' : 'direct'
+    hostsAutoRefresh.value = config.hostsAutoRefresh === true
+    if (Array.isArray(config.privateTokens)) privateTokens.value = config.privateTokens
   }
 
-  // ─── 链接转换（纯前端，同步） ───
-  function convert(input: string): { parsed: ParsedGhUrl; result: AccelLinkSet } {
-    const parsed = parseGithubUrl(input)
-    return { parsed, result: buildAccelLinks(parsed, proxies.value, webMirrors.value) }
-  }
-
-  // ─── 镜像清单管理 ───
+  // ─── 镜像清单管理（仅停用/恢复；清单本身由一键启动自动维护） ───
   async function persist(): Promise<void> {
     const api = window.electronAPI
     if (!api) return
-    applyConfig(await api.ghaccelSaveLists(proxies.value, webMirrors.value))
+    applyConfig(await api.ghaccelSaveLists(proxies.value))
+  }
+
+  // ─── 私人令牌（PAT） ───
+  /** 按 host 取已启用的令牌（用于后续 clone/push 注入 https://token@host）；未配置返回 null */
+  function tokenForHost(host: string): GitPrivateToken | null {
+    if (!host) return null
+    return tokensByHost.value.get(host.toLowerCase()) ?? null
+  }
+
+  /**
+   * 提交令牌全量清单（渲染层改完本地 ref 后整表提交）。
+   * 主进程 saveTokens 失败时回滚本次提交前的完整列表（含空模板），避免 UI 与磁盘不一致。
+   *
+   * 注意：service.saveTokens 会过滤空 token 模板（只存有效条目）。为避免本地「未配置槽位」
+   * 在 save 后被丢，这里用 payload 副本作 base，saved 有效条目按 id 覆盖，空模板原样保留。
+   */
+  async function saveTokens(next?: GitPrivateToken[]): Promise<void> {
+    const api = window.electronAPI
+    if (!api) return
+    // IPC 走 Structured Clone，Vue reactive Proxy / getter 会抛 "An object could not be cloned"。
+    // 落闸前用 JSON 序列化剥一层，保证 payload 是纯数据快照。
+    const raw = next ?? privateTokens.value
+    const payload: GitPrivateToken[] = JSON.parse(JSON.stringify(raw)) as GitPrivateToken[]
+    const snapshot = payload.slice()
+    try {
+      const saved: GitPrivateToken[] = await api.ghaccelSaveTokens(payload)
+      const byId = new Map(saved.map(t => [t.id, t]))
+      privateTokens.value = snapshot.map(t => byId.get(t.id) ?? t)
+    } catch (e) {
+      privateTokens.value = snapshot
+      throw e
+    }
   }
 
   async function toggleProxy(id: string, enabled: boolean): Promise<void> {
@@ -149,30 +187,8 @@ export const useGithubAccelStore = defineStore('github-accel', () => {
     await persist()
   }
 
-  async function toggleWebMirror(id: string, enabled: boolean): Promise<void> {
-    const w = webMirrors.value.find(x => x.id === id)
-    if (!w) return
-    w.enabled = enabled
-    await persist()
-  }
-
-  async function addProxy(name: string, prefix: string): Promise<void> {
-    proxies.value = [...proxies.value, { id: genId(), name: name.trim() || prefix.trim(), prefix: prefix.trim(), builtin: false, enabled: true }]
-    await persist()
-  }
-
-  async function addWebMirror(name: string, host: string): Promise<void> {
-    webMirrors.value = [...webMirrors.value, { id: genId(), name: name.trim() || host.trim(), host: host.trim().toLowerCase(), builtin: false, enabled: true }]
-    await persist()
-  }
-
   async function removeProxy(id: string): Promise<void> {
     proxies.value = proxies.value.filter(p => p.id !== id)
-    await persist()
-  }
-
-  async function removeWebMirror(id: string): Promise<void> {
-    webMirrors.value = webMirrors.value.filter(w => w.id !== id)
     await persist()
   }
 
@@ -196,18 +212,14 @@ export const useGithubAccelStore = defineStore('github-accel', () => {
     return probeResults.value[id] ?? null
   }
 
-  /** 当前最快可用代理（测速结果 ok 且延迟最低）；未测速时为 null */
+  /** 当前最快可用代理（按 compareProbe：速度优先、延迟破平）；未测速时为 null */
   const bestProxyId = computed<string | null>(() => {
-    let best: string | null = null
-    let bestMs = Infinity
-    for (const p of enabledProxies.value) {
-      const r = probeResults.value[p.id]
-      if (r?.ok && r.latencyMs !== null && r.latencyMs < bestMs) {
-        best = p.id
-        bestMs = r.latencyMs
-      }
-    }
-    return best
+    const rows = enabledProxies.value
+      .map(p => ({ id: p.id, r: probeResults.value[p.id] }))
+      .filter((x): x is { id: string; r: ProbeRow } => !!x.r?.ok)
+    if (!rows.length) return null
+    rows.sort((a, b) => compareProbe(a.r, b.r))
+    return rows[0].id
   })
 
   // ─── git insteadOf ───
@@ -217,12 +229,12 @@ export const useGithubAccelStore = defineStore('github-accel', () => {
     git.value = await api.ghaccelGitStatus()
   }
 
-  async function gitEnable(prefix: string): Promise<void> {
+  async function gitEnable(prefix: string, mode?: GitPushMode): Promise<void> {
     const api = window.electronAPI
     if (!api || gitBusy.value) return
     gitBusy.value = true
     try {
-      git.value = await api.ghaccelGitEnable(prefix)
+      git.value = await api.ghaccelGitEnable(prefix, mode ?? pushMode.value)
     } finally {
       gitBusy.value = false
     }
@@ -252,7 +264,7 @@ export const useGithubAccelStore = defineStore('github-accel', () => {
     if (gitBusy.value) return
     gitBusy.value = true
     try {
-      git.value = await api.ghaccelGitEnable(prefix)
+      git.value = await api.ghaccelGitEnable(prefix, pushMode.value)
       applyConfig(await api.ghaccelSaveOptions({ lastProxyPrefix: prefix }))
     } finally {
       gitBusy.value = false
@@ -352,9 +364,29 @@ export const useGithubAccelStore = defineStore('github-accel', () => {
   // ─── 一键加速 / 关闭加速（总控） ───
 
   /**
-   * 启动加速：编排全部三项 —— git insteadOf（全局 git 配置，可一键还原）、
+   * 自动调优文案：只站用户视角说「这次替你做了什么」（换了谁、补了谁、删了谁），
+   * 不暴露探测维度等实现细节。
+   *
+   * discovered 是「本次新拉到、不在清单里的候选数」——每次启动都拉，所以
+   * 没补入也会报一句，让用户知道镜像池确实在跟新（而不是靠内置那几条吃老本）。
+   */
+  function tuneSummary(t: TuneResult): string | undefined {
+    const bits: string[] = []
+    if (t.best) bits.push(`已选 ${t.best.name}`)
+    if (t.adopted.length) bits.push(`自动加入 ${t.adopted.map(a => a.name).join('、')}`)
+    else if (t.discovered > 0) bits.push(`新候选 ${t.discovered} 个（可用镜像已够用，未补充）`)
+    if (t.retired.length) bits.push(`淘汰 ${t.retired.length} 个连续失效镜像`)
+    return bits.length ? `自动调优：${bits.join('，')}` : undefined
+  }
+
+  /**
+   * 启动加速（总控）：先自动调优 —— git insteadOf（全局 git 配置，可一键还原）、
    * SSH 443（~/.ssh/config 托管块，可一键移除）、hosts（自动优选 + 写入，
    * 弹一次 UAC 提权）。单项失败不中断其余项。
+   *
+   * 「懒人版」的关键在第一步：以前沿用 lastProxyPrefix（上次选的那个可能早死了），
+   * 现在每次实测重选最快；连续失效的自动淘汰；一个可用的都没有时自动从聚合接口
+   * 发现 → 实测 → 采纳。用户只需要点这一个按钮，测速/发现/加入/删除都不用手动。
    *
    * hosts 纳入总控是产品决策（2026-10-19）：用户预期「启动加速后完全被动」，
    * 手动两步优选/写入的心智负担高于一次 UAC 确认。优选 0 个可用 IP 时该项记失败，
@@ -365,21 +397,46 @@ export const useGithubAccelStore = defineStore('github-accel', () => {
     if (!api) throw new Error('electronAPI 不可用')
     const steps: MasterStep[] = []
 
-    const prefix = lastProxyPrefix.value && proxies.value.some(p => p.enabled && p.prefix === lastProxyPrefix.value)
+    let tune: TuneResult | null = null
+    let tuneError: string | undefined
+    try {
+      tune = await api.ghaccelAutoTune()
+      applyConfig(await api.ghaccelGetConfig())
+      // 调优结果就是一轮完整测速：把表格一起刷新，省得用户再点「全部测速」
+      const map: Record<string, ProbeRow> = {}
+      for (const r of tune.probed) map[r.id] = r
+      probeResults.value = map
+      probedAt.value = Date.now()
+    } catch (e: any) {
+      tuneError = e?.message
+    }
+
+    // 有实测结果就严格信它；只有调优本身失败（拿不到任何探测数据）才回退到旧口径 ——
+    // 都实测失败了还硬选一个，等于把 clone 锁死在死镜像上（insteadOf 会把
+    // github.com 改写到死前缀，比不加速更糟）。
+    const remembered = lastProxyPrefix.value && proxies.value.some(p => p.enabled && p.prefix === lastProxyPrefix.value)
       ? lastProxyPrefix.value
-      : enabledProxies.value[0]?.prefix
+      : undefined
+    const prefix = tune ? tune.best?.prefix : (remembered ?? enabledProxies.value[0]?.prefix)
     if (prefix) {
       try {
-        await api.ghaccelGitEnable(prefix)
+        await api.ghaccelGitEnable(prefix, pushMode.value)
         await api.ghaccelSaveOptions({ lastProxyPrefix: prefix })
         applyConfig(await api.ghaccelGetConfig())
         await refreshGitStatus()
-        steps.push({ key: 'git', ok: true })
+        steps.push({ key: 'git', ok: true, message: tune ? tuneSummary(tune) : undefined })
       } catch (e: any) {
         steps.push({ key: 'git', ok: false, message: e?.message })
       }
     } else {
-      steps.push({ key: 'git', ok: false, message: '没有可用的代理镜像' })
+      const message = tuneError
+        ? `自动选镜像失败：${tuneError}`
+        : tune && tune.adopted.length > 0
+          ? '自动发现的新镜像实测均不可用'
+          : tune && tune.discovered > 0
+            ? `发现 ${tune.discovered} 个新候选但没有可用的镜像`
+            : '镜像全部失效（含自动发现的候选）；如 git 已指向失效镜像，请先关闭加速恢复直连'
+      steps.push({ key: 'git', ok: false, message })
     }
 
     try {
@@ -449,28 +506,59 @@ export const useGithubAccelStore = defineStore('github-accel', () => {
     return n
   })
 
-  async function saveOptions(patch: { lastProxyPrefix?: string }): Promise<void> {
+  async function saveOptions(patch: { lastProxyPrefix?: string; pushMode?: GitPushMode; hostsAutoRefresh?: boolean }): Promise<void> {
     const api = window.electronAPI
     if (!api) return
     applyConfig(await api.ghaccelSaveOptions(patch))
   }
 
+  /**
+   * 切 push 策略：已接管时立即重写 push 规则（fetch 不受影响，不用重开加速）。
+   * 国内直连 https push 经常卡死，改走 SSH 443 与 ssh443 托管块天然配对。
+   */
+  async function setPushMode(mode: GitPushMode): Promise<void> {
+    const api = window.electronAPI
+    if (!api || gitBusy.value) return
+    if (mode === pushMode.value && activeGitPrefix.value) return
+    pushMode.value = mode
+    const active = activeGitPrefix.value
+    if (active) {
+      gitBusy.value = true
+      try {
+        git.value = await api.ghaccelGitEnable(active, mode)
+      } finally {
+        gitBusy.value = false
+      }
+    }
+    applyConfig(await api.ghaccelSaveOptions({ pushMode: mode }))
+  }
+
+  /** hosts 失效时自动重选开关（默认关；开启后只在无需提权时静默生效） */
+  async function setHostsAutoRefresh(on: boolean): Promise<void> {
+    const api = window.electronAPI
+    if (!api) return
+    hostsAutoRefresh.value = on
+    applyConfig(await api.ghaccelSaveOptions({ hostsAutoRefresh: on }))
+  }
+
   return {
-    proxies, webMirrors, gitBackup, loaded,
-    lastProxyPrefix,
+    proxies, gitBackup, loaded,
+    lastProxyPrefix, pushMode, hostsAutoRefresh,
+    privateTokens, activePrivateTokens, tokensByHost,
     probeResults, probing, probedAt,
     git, gitBusy, ssh443, sshBusy, downloads,
     hosts, hostsPicks, hostsPicking, hostsBusy, hostsReadyCount,
     health, selfCheckRows, selfChecking,
     enabledProxies, bestProxyId, activeMeasureCount, activeGitPrefix,
     init, initHealth, runSelfCheck,
-    convert,
-    toggleProxy, toggleWebMirror, addProxy, addWebMirror, removeProxy, removeWebMirror,
+    toggleProxy, removeProxy,
     probeAll, probeOf,
     refreshGitStatus, gitEnable, gitDisable, switchActiveMirror,
     refreshSsh443, ssh443Apply, ssh443Remove,
     downloadStart, downloadCancel, showInFolder,
     refreshHosts, hostsPick, hostsApply, hostsRemove,
-    masterEnable, masterDisable, saveOptions,
+    masterEnable, masterDisable, saveOptions, setPushMode, setHostsAutoRefresh,
+    tokenForHost, saveTokens,
+    maskToken,
   }
 })

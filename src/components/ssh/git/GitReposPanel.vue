@@ -1,19 +1,19 @@
 <template>
   <div class="git-repos">
-    <!-- 工具条：过滤 / 登记 / 刷新（全部只属于仓库子页），内容整体居左 -->
+    <!-- 工具条：过滤 / 添加 / 刷新 / 私人令牌（全部只属于仓库子页），内容整体居左 -->
     <div class="toolbar">
       <label class="search">
         <input v-model="query" placeholder="过滤仓库…" aria-label="过滤仓库" />
       </label>
-      <button
-        class="btn"
-        type="button"
-        :disabled="loading || !!busy || !rows.length"
-        title="对当前范围的全部仓库执行 git fetch --all --prune：只更新远端引用，不改动任何工作区"
-        @click="onFetchAll"
-      >获取全部</button>
       <button class="btn btn-primary" type="button" :disabled="!!busy" @click="onAdd">添加仓库</button>
       <button class="btn" type="button" :disabled="loading || !!busy" title="刷新：重新读取各仓库状态" @click="refresh()">刷新</button>
+      <button class="btn" type="button" title="私人令牌（PAT）：HTTPS 推拉私有仓库的鉴权凭据，按平台/域名保存" @click="openTokens">私人令牌</button>
+    </div>
+
+    <!-- 巡检失败（不遮住列表：仓库状态本身读得到，只是远端一致性这一层缺数据） -->
+    <div v-if="probeError" class="probe-band" role="alert">
+      <span class="pb-text">{{ probeError }}</span>
+      <button class="btn btn-sm" type="button" :disabled="probing" @click="probeEndpoints()">重试巡检</button>
     </div>
 
     <!-- 取数错误带（对齐 Docker 错误态） -->
@@ -43,12 +43,12 @@
       </template>
     </div>
 
-    <!-- 双栏主体：左 = 状态分组仓库列表；右 = 常驻详情面板（变更 / 分支 / 图谱） -->
+    <!-- 双栏主体：左 = 状态分组仓库列表；右 = 常驻详情面板（变更 / 远端 / 分支 / 图谱） -->
     <div v-else class="body">
       <aside class="vlist" aria-label="仓库列表">
         <div ref="listEl" class="vlist-scroll" @keydown="onListKeydown">
           <template v-for="g in groupedRows" :key="g.key">
-            <div class="vgroup" :class="{ 'g-needs': g.key === 'needs' }">
+            <div class="vgroup" :class="{ 'g-needs': g.key === 'needs' || g.key === 'sync' }">
               <span>{{ g.label }}</span><span class="vgc">{{ g.rows.length }}</span>
             </div>
             <button
@@ -65,24 +65,38 @@
               <span class="vr-l1">
                 <span class="vr-name">{{ r.name }}</span>
                 <span v-if="accelTag(r)" class="vr-acc" title="git 读取已走全局镜像加速（insteadOf）">已加速</span>
+                <span v-if="endpointsOf(r).length" class="dots">
+                  <i
+                    v-for="ep in endpointsOf(r)"
+                    :key="ep.name"
+                    class="dot"
+                    :class="syncDotClass(ep)"
+                    :title="`${ep.name}（${ep.role === 'primary' ? '主仓' : '镜像'}）· ${syncStateText(ep)}`"
+                  ></i>
+                </span>
               </span>
               <span v-if="r.error" class="vr-err" :title="r.error">{{ r.error }}</span>
               <span v-else class="vr-l2">
                 <span class="vr-branch">{{ branchText(r) }}</span>
                 <span v-if="r.dirtyFiles" class="vr-dirty">● {{ r.dirtyFiles }} 改</span>
+                <span v-if="epNote(r)" class="vr-ep">{{ epNote(r) }}</span>
               </span>
             </button>
           </template>
           <div v-if="!groupedRows.length" class="vlist-empty">没有匹配的仓库</div>
         </div>
       </aside>
-      <!-- 详情：自取数，动作回抛（确认 / 审计 / 锁都在本组件） -->
+      <!-- 详情：自取数，动作回抛（确认 / 审计 / 锁都在本组件）；端点快照也由本组件巡检持有 -->
       <GitRepoDetailPanel
         v-if="detailRepo"
         :key="detailRepo.id"
         :repo="detailRepo"
         :accel-active="accelActive"
         :busy="busy"
+        :endpoints="endpointsOf(detailRepo)"
+        :sync-available="syncAvailable"
+        :probing="probing"
+        :probe-label="probeLabel"
         @fetch="detailRepo && onFetch(detailRepo)"
         @pull="detailRepo && onPull(detailRepo)"
         @push="detailRepo && onPush(detailRepo)"
@@ -92,6 +106,10 @@
         @switch="onSwitchCurrent"
         @commit="onCommitCurrent"
         @commit-push="onCommitPushCurrent"
+        @catchup="detailRepo && onCatchup(detailRepo)"
+        @fix="(remote: string) => detailRepo && onFix(detailRepo, remote)"
+        @merge="(remote: string) => detailRepo && onMerge(detailRepo, remote)"
+        @probe="probeEndpoints()"
       />
       <div v-else class="vdetail-empty">
         <span>在左侧选择一个仓库</span>
@@ -99,12 +117,15 @@
       </div>
     </div>
 
-    <!-- 状态栏：计数跟着当前范围走（Docker 惯例） -->
+    <!-- 状态栏：计数跟着当前范围走（Docker 惯例）；远端一致性与巡检频率也只住在这行 -->
     <div class="statusbar">
       <span>{{ scopeLabel }}</span>
-      <span>仓库 {{ rows.length }}<template v-if="statusParts.length">（{{ statusParts.join(' / ') }}）</template><template v-else>（全部干净）</template></span>
-      <span v-if="hostSummary">{{ hostSummary }}</span>
-      <span class="sb-right mono">{{ lastSync ? `已同步 ${lastSync}` : '' }}</span>
+      <span :title="hostSummary ? `远端分布：${hostSummary}` : undefined">仓库 {{ rows.length }}<template v-if="statusParts.length">（{{ statusParts.join(' / ') }}）</template><template v-else>（全部干净）</template></span>
+      <span v-if="epSummaryText" class="sb-ep">远端 {{ epSummaryText }}</span>
+      <span class="sb-right mono">
+        <span v-if="lastSync">已刷新 {{ lastSync }}</span>
+        <span v-if="syncAvailable" class="sb-probe"><template v-if="lastSync">· </template>{{ probeLabel }} · <button class="freq-btn" type="button" title="点击切换巡检频率（自动 5 分 / 自动 15 分 / 手动）" @click="cycleFreq">{{ freqLabel }}</button></span>
+      </span>
     </div>
 
     <!-- 登记远程仓库路径 -->
@@ -127,15 +148,118 @@
         </div>
       </div>
     </Teleport>
+
+    <!--
+      私人令牌（PAT）管理：自「加速」子页迁入 —— PAT 是 HTTPS 鉴权能力，不是加速能力。
+      配置存储（github-accel.json）与 IPC（ghaccel:getTokens/saveTokens）不变；
+      弹窗复用本页 arm-overlay/arm-dialog 模态框样式（登记远程路径同款）。
+    -->
+    <Teleport to="body">
+      <div v-if="showTokens" class="arm-overlay" @click.self="showTokens = false">
+        <div ref="tokenDialogRef" class="arm-dialog wide" role="dialog" aria-modal="true" aria-label="私人令牌" tabindex="-1">
+          <div class="arm-title-row">
+            <div class="arm-title">私人令牌（PAT）</div>
+            <span v-if="accelStore.privateTokens.length" class="token-count" title="已配置的令牌数">{{ accelStore.privateTokens.length }}</span>
+            <span class="grow"></span>
+            <button v-if="!showTokenForm" class="btn btn-primary btn-sm" type="button" @click="toggleTokenForm">添加令牌</button>
+          </div>
+          <div class="arm-sub">按平台/域名保存，HTTPS 推拉私有仓库时自动注入鉴权；仅存本地 github-accel.json，切勿把 PAT 发给公共代理。</div>
+
+          <!-- 现有令牌列表（空 token 显示「未配置」而非真实内容；label 默认取平台名，与平台重复时不重复展示） -->
+          <div v-if="accelStore.privateTokens.length" class="token-list">
+            <div v-for="tok in accelStore.privateTokens" :key="tok.id" class="token-row">
+              <span class="token-provider" :class="{ custom: tok.provider === 'custom' }">{{ providerLabel(tok.provider) }}</span>
+              <span class="token-id">
+                <code class="token-host mono" :title="tok.host">{{ tok.host }}</code>
+                <span v-if="tok.label && tok.label !== providerLabel(tok.provider)" class="token-title" :title="tok.label">{{ tok.label }}</span>
+              </span>
+              <code class="token-value mono">{{ tok.token ? accelStore.maskToken(tok.token) : '未配置' }}</code>
+              <span class="token-status" :class="tok.token ? 'on' : 'off'"><i class="status-dot"></i>{{ tok.token ? '已配置' : '未启用' }}</span>
+              <span class="token-acts">
+                <button class="btn btn-sm btn-ghost" type="button" @click="startTokenEdit(tok)">编辑</button>
+                <button v-if="tok.token" class="btn btn-sm btn-ghost" type="button" @click="copyToken(tok)">复制</button>
+                <button class="btn btn-sm btn-danger" type="button" @click="removeToken(tok.id)">删除</button>
+              </span>
+            </div>
+          </div>
+          <div v-else class="token-empty">
+            <svg class="token-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+            <div class="token-empty-title">尚未配置任何令牌</div>
+            <div class="token-empty-sub">HTTPS 推拉私有仓库时会因 401 失败；点右上角「添加令牌」填入 PAT 即可自动鉴权。</div>
+          </div>
+
+          <!-- 添加/编辑表单（同一表单双向复用：tokenEditingId 非空为编辑，否则为新增） -->
+          <div v-if="showTokenForm" class="token-form">
+            <div class="form-row">
+              <label class="form-label">平台</label>
+              <div class="form-field">
+                <select v-model="tokenDraft.provider" class="arm-input" @change="onProviderChange">
+                  <option v-for="p in PROVIDERS" :key="p" :value="p">{{ providerLabel(p) }}</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row">
+              <label class="form-label">域名</label>
+              <div class="form-field">
+                <input
+                  v-model="tokenDraft.host"
+                  class="arm-input mono"
+                  :disabled="tokenDraft.provider !== 'custom'"
+                  placeholder="如 git.example.com"
+                  spellcheck="false"
+                />
+                <span v-if="tokenDraft.provider !== 'custom'" class="field-note">预设平台域名不可改，需要自定义请选「自定义」</span>
+              </div>
+            </div>
+            <div class="form-row">
+              <label class="form-label">标签</label>
+              <div class="form-field">
+                <input v-model="tokenDraft.label" class="arm-input" placeholder="默认为平台名" spellcheck="false" />
+              </div>
+            </div>
+            <div class="form-row">
+              <label class="form-label">令牌</label>
+              <div class="form-field">
+                <div class="token-input-wrap">
+                  <input
+                    v-model="tokenDraft.token"
+                    class="arm-input mono"
+                    :type="showTokenPlain ? 'text' : 'password'"
+                    placeholder="PAT（如 ByytV7oivReuuWcsPJKF-oqX）"
+                    autocomplete="off"
+                    spellcheck="false"
+                  />
+                  <button class="btn btn-sm btn-ghost" type="button" tabindex="-1" @click="showTokenPlain = !showTokenPlain">{{ showTokenPlain ? '隐藏' : '显示' }}</button>
+                </div>
+              </div>
+            </div>
+            <div class="form-hint">各平台私人令牌可在「设置 → 开发者 → Personal access tokens」生成；仅本地保存，不落 git。</div>
+            <div v-if="tokenError" class="token-error">{{ tokenError }}</div>
+            <div class="form-actions">
+              <button class="btn btn-primary btn-sm" type="button" :disabled="!canSubmitToken" @click="submitToken">{{ tokenEditingId ? '保存修改' : '添加令牌' }}</button>
+              <button class="btn btn-sm btn-ghost" type="button" @click="cancelTokenEdit">取消</button>
+            </div>
+          </div>
+
+          <div class="arm-foot">
+            <span class="foot-note">凭据仅存本机 github-accel.json，不进 git 仓库</span>
+            <span class="grow"></span>
+            <button class="btn" type="button" @click="showTokens = false">关闭</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
-// GitReposPanel.vue — Git 页的「仓库」子页（方案 A 双栏工作台，设计稿 2026-10-25）。
-// 左列 = 状态分组仓库列表（需处理 / 待拉取 / 待推送 / 无远程 / 干净），
-// 右列 = 常驻详情面板 GitRepoDetailPanel（变更 / 分支 / 图谱三页签，替代 V2 的弹窗）。
+// GitReposPanel.vue — Git 页的「源码管理」子页（方案 A 双栏工作台，设计稿 2026-10-25 / 2026-10-30 v1）。
+// 左列 = 状态分组仓库列表（远端待同步 / 需处理 / 待拉取 / 待推送 / 无远程 / 干净），
+// 右列 = 常驻详情面板 GitRepoDetailPanel（变更 / 远端 / 分支 / 图谱四页签）。
 // 位置 = 本地或某台已连接远程会话；本地经 gitrepos:* IPC（主进程 execFile），
 // 远程构造 shared/git-repos-core 的命令经 sshExec 下发（同 Docker 路线）。
+// 2026-10-30：原「同步」子页并入本页 —— 列表行三点远端状态 + 详情远端条/远端页签，
+// 巡检（gitrepos:syncProbe）与补齐/合并动作收在本组件，与仓库动作共用一把 busy 锁。
 // 动作锁 / pull 确认 / 远程审计收在本组件；详情面板只取数不执行。
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useModalFocusTrap } from '../../../composables/useModalFocusTrap'
@@ -162,7 +286,6 @@ import {
   buildRemoteRepoStatusCmd,
   buildRemoteRepoVerifyCmd,
   buildRemoteSwitchCmd,
-  formatFetchFailures,
   friendlyGitError,
   interpretCommit,
   interpretPull,
@@ -172,6 +295,8 @@ import {
   repoRowKind,
   shSingleQuote,
   sortRepoRows,
+  syncDotClass,
+  syncStateText,
   toLocalRepoRow,
   toRemoteRepoRow,
   repoRowId,
@@ -179,7 +304,9 @@ import {
   type PushOutcome,
   type RepoRow,
   type RepoRowKind,
+  type SyncEndpoint,
 } from '../../../../shared/git-repos-core'
+import type { GitPrivateToken } from '../../../../shared/github-accel-core'
 
 const props = defineProps<{ active?: boolean }>()
 const emit = defineEmits<{ 'exec-terminal': [sessionId: string] }>()
@@ -263,12 +390,14 @@ async function refresh(): Promise<void> {
   const markSynced = (): void => { lastSync.value = new Date().toLocaleTimeString() }
   try {
     if (isLocal.value) {
-      if (!localPaths.value.length) { rows.value = []; markSynced(); return }
+      if (!localPaths.value.length) { rows.value = []; pruneEndpoints(); markSynced(); return }
       // ref 深层 reactive 后是 Proxy，过不了 contextBridge 的结构化克隆
       // （"An object could not be cloned"）——IPC 传参一律先拷成普通数组
       const results = await api.gitreposStatusAll([...localPaths.value])
       if (pin !== epoch) return
       rows.value = sortRepoRows(results.map(toLocalRepoRow))
+      // 仓库已从注册表移出时，旧端点快照会变成幽灵（状态栏仍计数）——本地范围即时剪掉
+      pruneEndpoints()
     } else {
       const session = scopeSession.value
       if (!session) { rows.value = []; markSynced(); return }
@@ -308,7 +437,10 @@ const filteredRows = computed(() => {
   return rows.value.filter(r => (r.name + ' ' + r.path).toLowerCase().includes(q))
 })
 
-/** 左列分组：需处理（失败/脏区/分叉）> 待拉取 > 待推送 > 无远程 > 干净（档序 = REPO_KIND_RANK） */
+/** 左列分组：需处理（失败/脏区/分叉）> 待拉取 > 待推送 > 无远程 > 干净（档序 = REPO_KIND_RANK）；
+ * 本地范围另有「远端待同步」置顶：仓库本身干净（没有要拉/要推的），但主仓或镜像没追上时
+ * 只有巡检能发现——这组让它从「干净」里浮上来（进组即从原分组摘掉，不重复列）。
+ * 脏区/待拉取/待推送 仍留在自己的组：那些动作本身就会连带修好远端。 */
 const ROW_GROUPS: Array<{ key: string; label: string; kinds: RepoRowKind[] }> = [
   { key: 'needs', label: '需处理', kinds: ['error', 'dirty', 'diverge'] },
   { key: 'pull', label: '待拉取', kinds: ['behind'] },
@@ -316,9 +448,22 @@ const ROW_GROUPS: Array<{ key: string; label: string; kinds: RepoRowKind[] }> = 
   { key: 'none', label: '无远程', kinds: ['none'] },
   { key: 'clean', label: '干净', kinds: ['clean'] },
 ]
-const groupedRows = computed(() => ROW_GROUPS
-  .map(g => ({ ...g, rows: filteredRows.value.filter(r => g.kinds.includes(r.error ? 'error' : repoRowKind(r))) }))
-  .filter(g => g.rows.length))
+const groupedRows = computed(() => {
+  const syncRows = syncAvailable.value
+    ? filteredRows.value.filter(r => !r.error && repoRowKind(r) === 'clean' && pendingOf(r) > 0)
+    : []
+  const inSync = new Set(syncRows.map(r => r.id))
+  const rest = ROW_GROUPS
+    .map(g => ({
+      ...g,
+      rows: filteredRows.value.filter(r => !inSync.has(r.id) && g.kinds.includes(r.error ? 'error' : repoRowKind(r))),
+    }))
+    .filter(g => g.rows.length)
+  return [
+    ...(syncRows.length ? [{ key: 'sync', label: '远端待同步', rows: syncRows }] : []),
+    ...rest,
+  ]
+})
 
 // ── 选中与详情：选中态只存 id，行数据跟着 rows 刷新走（refresh 后自动对齐新对象） ──
 const selectedId = ref<string | null>(null)
@@ -379,6 +524,27 @@ const hostSummary = computed(() => {
   return parts.join(' · ')
 })
 
+/** 状态栏远端汇总：一致 x/y 打头，其余只列非零项（空 = 未巡检或远程范围，整段不显示） */
+const epSummaryText = computed(() => {
+  if (!syncAvailable.value) return ''
+  let ok = 0, behind = 0, diverged = 0, unknown = 0, total = 0
+  for (const eps of Object.values(endpointsByPath.value)) {
+    for (const ep of eps) {
+      total++
+      if (ep.state === 'ok') ok++
+      else if (ep.state === 'behind') behind++
+      else if (ep.state === 'diverged') diverged++
+      else unknown++
+    }
+  }
+  if (!total) return ''
+  const parts = [`一致 ${ok}/${total}`]
+  if (behind) parts.push(`落后 ${behind}`)
+  if (diverged) parts.push(`分叉 ${diverged}`)
+  if (unknown) parts.push(`探测失败 ${unknown}`)
+  return parts.join(' · ')
+})
+
 // ── 与加速子页联动：GitHub origin + 全局 insteadOf 生效 → 「已加速」──
 // initHealth 是轻量初始化（TitleBar 同款）：不加载整份加速配置也能知道镜像接管状态
 const accelActive = computed(() => !!accelStore.health?.activePrefix)
@@ -392,6 +558,193 @@ async function withBusy(key: string, fn: () => Promise<void>): Promise<void> {
   if (busy.value) return
   busy.value = key
   try { await fn() } finally { busy.value = '' }
+}
+
+// ── 远端一致性（2026-10-30 原「同步」子页并入本页） ──
+// 数据 = gitrepos:syncProbe（逐远端 ls-remote + rev-list 分型，只读不动工作区）。
+// 该通道走**本地注册表**，因此只有本地范围有巡检能力 —— 远程范围的远端一致性
+// 以「获取」后的 ↑↓ 为准，列表不画三点、详情远端条改给提示。
+// 纪律（沿用同步子页）：镜像只允许快进；分叉绝不强推；动作共用一把 busy 锁。
+const endpointsByPath = ref<Record<string, SyncEndpoint[]>>({})
+const probedAt = ref(0)
+const probing = ref(false)
+/** 巡检在途时又被请求了一次（动作后的复检）→ 本轮结束后补跑 */
+let probeQueued = false
+const probeError = ref<string | null>(null)
+const syncAvailable = computed(() => isLocal.value)
+
+function endpointsOf(r: RepoRow): SyncEndpoint[] {
+  return syncAvailable.value ? (endpointsByPath.value[r.path] ?? []) : []
+}
+/**
+ * 「远端待同步」的入场券：只认 behind / diverged。
+ * unknown（探测失败）不是待同步——远端状态未知，把仓库塞进同步组只会给出点不动的按钮。
+ */
+function pendingOf(r: RepoRow): number {
+  return endpointsOf(r).filter(e => e.state === 'behind' || e.state === 'diverged').length
+}
+/** 行内一句话概括远端：只列非一致项，一致的路由三点表达，避免每行都挂噪声 */
+function epNote(r: RepoRow): string {
+  const eps = endpointsOf(r)
+  if (!eps.length) return ''
+  const parts: string[] = []
+  const behind = eps.filter(e => e.state === 'behind').length
+  const div = eps.filter(e => e.state === 'diverged').length
+  const fail = eps.filter(e => e.state === 'unknown').length
+  if (behind) parts.push(`落后 ${behind}`)
+  if (div) parts.push(`分叉 ${div}`)
+  if (fail) parts.push(`失败 ${fail}`)
+  return parts.join(' · ')
+}
+
+function relTime(ms: number): string {
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000))
+  if (s < 60) return '刚刚'
+  if (s < 3600) return `${Math.floor(s / 60)} 分钟前`
+  return `${Math.floor(s / 3600)} 小时前`
+}
+const probeLabel = computed(() => (probedAt.value ? `上次巡检 ${relTime(probedAt.value)}` : '未巡检'))
+
+/** 巡检频率：会话内记忆（不落盘 —— 落盘要进设置存储，另议） */
+type Freq = 'auto5' | 'auto15' | 'manual'
+const freq = ref<Freq>('auto5')
+const FREQ_LABEL: Record<Freq, string> = { auto5: '自动 5 分', auto15: '自动 15 分', manual: '手动' }
+const freqLabel = computed(() => FREQ_LABEL[freq.value])
+let timer: ReturnType<typeof setInterval> | null = null
+function armTimer(): void {
+  if (timer) { clearInterval(timer); timer = null }
+  const ms = freq.value === 'auto5' ? 5 * 60_000 : freq.value === 'auto15' ? 15 * 60_000 : 0
+  // 定时巡检连带刷新仓库状态：远端变了，↑↓ 也常常跟着变
+  if (ms) timer = setInterval(() => { if (props.active) { void refresh(); void probeEndpoints() } }, ms)
+}
+function cycleFreq(): void {
+  freq.value = freq.value === 'auto5' ? 'auto15' : freq.value === 'auto15' ? 'manual' : 'auto5'
+  armTimer()
+}
+
+/** 全量巡检：一次 syncProbe 覆盖全部本地仓库（主进程内部逐仓逐远端） */
+async function probeEndpoints(): Promise<void> {
+  const api = window.electronAPI
+  if (!api || !syncAvailable.value || !localPaths.value.length) return
+  // 在跑时排队再跑一轮：补齐/合并/批量推送结束后紧跟的巡检如果直接丢弃，
+  // 界面就会停在「动作前」的快照上（推完了仍显示落后）
+  if (probing.value) { probeQueued = true; return }
+  probing.value = true
+  probeError.value = null
+  try {
+    // ref 深层 Proxy 过不了 contextBridge 结构化克隆 —— 传参先拷普通数组
+    const results = await api.gitreposSyncProbe([...localPaths.value])
+    const map: Record<string, SyncEndpoint[]> = {}
+    for (const r of results) map[r.path] = r.endpoints
+    endpointsByPath.value = map
+    probedAt.value = Math.max(0, ...results.map(r => r.probedAt || 0)) || Date.now()
+  } catch (e) {
+    probeError.value = errMsg(e, '远端巡检失败')
+  } finally {
+    probing.value = false
+    if (probeQueued) { probeQueued = false; void probeEndpoints() }
+  }
+}
+
+/** 切回本页时复用新鲜快照：一分钟内已经巡检过就不再打一遍全量 ls-remote */
+const PROBE_FRESH_MS = 60_000
+async function probeIfStale(): Promise<void> {
+  if (probedAt.value && Date.now() - probedAt.value < PROBE_FRESH_MS) return
+  await probeEndpoints()
+}
+
+/** 单仓重探：补齐/合并后只更新这一仓的端点，避免整页闪烁与二次全量 ls-remote */
+async function reprobeOne(path: string): Promise<void> {
+  const api = window.electronAPI
+  if (!api) return
+  try {
+    const results = await api.gitreposSyncProbe([path])
+    const hit = results[0]
+    if (!hit) return
+    endpointsByPath.value = { ...endpointsByPath.value, [path]: hit.endpoints }
+    probedAt.value = hit.probedAt || Date.now()
+  } catch (e) {
+    // 补齐/合并已经动过仓库了，复检失败不能反向判成动作失败（toast 会误导用户重复操作）；
+    // 只把巡检层的问题记进错误带，端点快照保持动作前那条，由用户点「重试巡检」重取
+    probeError.value = errMsg(e, '远端巡检失败')
+  }
+}
+
+/** 只纠正已有快照的仓库：没巡检过的仓库不在这里开小灶，否则状态栏会出现「1/1」的假全局结论 */
+async function reprobeIfTracked(path: string): Promise<void> {
+  if (endpointsByPath.value[path]) await reprobeOne(path)
+}
+
+/** 剪掉已不在当前列表里的端点快照：仓库被移出后，旧快照会让状态栏继续计数（幽灵端点） */
+function pruneEndpoints(): void {
+  const live = new Set(rows.value.map(r => r.path))
+  const next: Record<string, SyncEndpoint[]> = {}
+  for (const [path, eps] of Object.entries(endpointsByPath.value)) {
+    if (live.has(path)) next[path] = eps
+  }
+  endpointsByPath.value = next
+}
+
+function reportItems(items: Array<{ remote: string; outcome: string; message: string }>): void {
+  const pushed = items.filter(i => i.outcome === 'pushed')
+  const skipped = items.filter(i => i.outcome === 'skipped')
+  if (pushed.length) toast.success(`已补齐 ${pushed.map(i => i.remote).join('、')}`)
+  const fail = items.filter(i => i.outcome === 'rejected' || i.outcome === 'failed')
+  if (fail.length) toast.error(`补齐失败：${fail.map(i => `${i.remote}（${i.message}）`).join('；')}`)
+  else if (!pushed.length && skipped.length) toast.info(skipped[0].message)
+}
+
+/** 补齐主仓：本地领先主仓的提交快进推上去（镜像由 GitCode 平台搬运） */
+async function onCatchup(r: RepoRow): Promise<void> {
+  const primary = endpointsOf(r).find(e => e.role === 'primary')
+  if (!primary) { toast.info('该仓库没有主仓端点'); return }
+  await withBusy(`catchup:${r.id}`, async () => {
+    const api = window.electronAPI
+    if (!api) return
+    try {
+      const res = await api.gitreposSyncCatchup(r.path, [primary.name])
+      reportItems(res.items)
+      // 推完 ↑N 与分组都已过期：先重读列表，再重探这一仓
+      await refresh()
+      await reprobeOne(r.path)
+    } catch (e) {
+      toast.error(errMsg(e, '补齐失败'))
+    }
+  })
+}
+
+/** 补齐指定端点（详情的每个远端各有一个「补齐」入口） */
+async function onFix(r: RepoRow, remote: string): Promise<void> {
+  await withBusy(`fix:${r.id}:${remote}`, async () => {
+    const api = window.electronAPI
+    if (!api) return
+    try {
+      const res = await api.gitreposSyncCatchup(r.path, [remote])
+      reportItems(res.items)
+      await refresh()
+      await reprobeOne(r.path)
+    } catch (e) {
+      toast.error(errMsg(e, '补齐失败'))
+    }
+  })
+}
+
+/** 分叉：先 fetch 再 --ff-only 合并；真分叉时 git 拒绝，交给用户手动处理 */
+async function onMerge(r: RepoRow, remote: string): Promise<void> {
+  await withBusy(`merge:${r.id}:${remote}`, async () => {
+    const api = window.electronAPI
+    if (!api) return
+    try {
+      const res = await api.gitreposSyncMerge(r.path, remote)
+      const verdict = interpretPull(res.stdout, res.stderr, res.code)
+      if (verdict.kind === 'failed') toast.error(`合并失败：${verdict.message}`)
+      else toast.success(verdict.message)
+      await reprobeOne(r.path)
+      await refresh()
+    } catch (e) {
+      toast.error(errMsg(e, '合并失败'))
+    }
+  })
 }
 
 // ── 审计（仅远程 pull：fetch 属读路径不写审计，与 Docker 读路径同口径） ──
@@ -427,60 +780,6 @@ async function onFetch(row: RepoRow): Promise<void> {
     } catch (e) {
       toast.error(errMsg(e, 'fetch 失败'))
     }
-  })
-}
-
-/**
- * 获取全部：对当前范围全部仓库 fetch --all --prune。fetch 属读路径（只更新
- * 远端跟踪引用，不动工作区），无需确认也不写审计；本地并发发 IPC，远程沿用
- * 分批限流（同 refresh 口径）。失败按仓库名收进明细（stderr 经友好化翻译），
- * 完成一条汇总 toast，再刷新列表。
- */
-async function onFetchAll(): Promise<void> {
-  const targets = rows.value.filter(r => !r.error)
-  if (!targets.length) return
-  await withBusy('fetch-all', async () => {
-    const api = window.electronAPI
-    if (!api) return
-    let ok = 0
-    const fails: string[] = []
-    const record = (name: string, good: boolean, err: string): void => {
-      if (good) { ok++; return }
-      fails.push(`${name}：${err || '失败原因未知'}`)
-    }
-    try {
-      if (isLocal.value) {
-        const settled = await Promise.allSettled(targets.map(r => api.gitreposFetchOne(r.path)))
-        settled.forEach((s, i) => record(
-          targets[i].name,
-          s.status === 'fulfilled' && s.value.code === 0,
-          s.status === 'rejected' ? errMsg(s.reason, 'fetch 失败') : friendlyGitError(s.value.stderr),
-        ))
-      } else {
-        const session = scopeSession.value
-        if (!session) return
-        for (let i = 0; i < targets.length; i += REMOTE_CONCURRENCY) {
-          const slice = targets.slice(i, i + REMOTE_CONCURRENCY)
-          const batch = await Promise.allSettled(
-            slice.map(r => r.sessionId
-              ? api.sshExec(r.sessionId, buildRemoteGitActionCmd(r.path, 'fetch'), REMOTE_FETCH_SEC)
-              : Promise.reject(new Error('远端会话不可用'))),
-          )
-          batch.forEach((s, bi) => record(
-            slice[bi].name,
-            s.status === 'fulfilled' && s.value.exitCode === 0,
-            s.status === 'rejected' ? errMsg(s.reason, 'fetch 失败') : friendlyGitError(s.value.stderr),
-          ))
-        }
-      }
-    } catch (e) {
-      toast.error(errMsg(e, '获取失败'))
-      return
-    }
-    if (ok && !fails.length) toast.success(`已获取 ${ok} 个仓库：远端引用已更新`)
-    else if (ok) toast.warning(`获取完成：成功 ${ok}，失败 ${fails.length} · ${formatFetchFailures(fails)}`, 8000)
-    else toast.error(`获取失败：${fails.length} 个仓库 · ${formatFetchFailures(fails)}`, 8000)
-    await refresh()
   })
 }
 
@@ -522,6 +821,8 @@ async function onPull(row: RepoRow): Promise<void> {
       else if (out.kind === 'diverged') toast.warning(`${row.name}：${out.message}`, 8000)
       else toast.success(`${row.name}：${out.message}`)
       await refresh()
+      // HEAD 可能前移：端点的落后/分叉判断是跟着本地 HEAD 算的，旧快照已过期
+      if (out.kind !== 'failed' && row.scope === 'local') await reprobeIfTracked(row.path)
     } catch (e) {
       toast.error(errMsg(e, '拉取失败'))
     }
@@ -581,6 +882,8 @@ async function onSwitch(row: RepoRow, branch: string): Promise<void> {
       }
       toast.success(`${row.name}：已切换到 ${branch}`)
       await refresh()
+      // 端点快照描述的是上一个分支的远端 SHA，换分支后必须重探，否则三点全在说谎
+      if (row.scope === 'local') await reprobeIfTracked(row.path)
     } catch (e) {
       toast.error(errMsg(e, '切换分支失败'))
     }
@@ -641,8 +944,9 @@ async function execCommit(row: RepoRow, payload: { files: string[]; msg: string 
   return false
 }
 
-/** 推送目标：上游 > 远程名/当前分支（push -u 兜底）；无法确定时为 null */
+/** 推送目标：主仓(gitcode 优先) > 上游 > 远程名/当前分支（push -u 兜底）；无法确定时为 null */
 function pushTarget(row: RepoRow): string | null {
+  if (row.primaryRemote && row.branch && !row.detached) return `${row.primaryRemote}/${row.branch}`
   if (row.upstream) return row.upstream
   if (row.remoteName && row.branch && !row.detached) return `${row.remoteName}/${row.branch}`
   return null
@@ -666,8 +970,9 @@ async function onCommitPush(row: RepoRow, payload: { files: string[]; msg: strin
   await withBusy(`commit-push:${row.id}`, async () => {
     try {
       if (!await execCommit(row, payload)) return
-      await execPush(row)
+      const pushed = await execPush(row)
       await refresh()
+      if (pushed && row.scope === 'local') await reprobeIfTracked(row.path)
     } catch (e) {
       toast.error(errMsg(e, '提交并推送失败'))
     }
@@ -690,18 +995,20 @@ async function onPush(row: RepoRow): Promise<void> {
   if (!ok) return
   await withBusy(`push:${row.id}`, async () => {
     try {
-      await execPush(row)
+      const pushed = await execPush(row)
       await refresh()
+      // 推上去了 = 主仓那个端点已经不是「落后」，不重探就要等到下一轮巡检才更正
+      if (pushed && row.scope === 'local') await reprobeIfTracked(row.path)
     } catch (e) {
       toast.error(errMsg(e, '推送失败'))
     }
   })
 }
 
-/** 推送执行体（确认 / 动作锁 / 上游判据之外的部分）：结果分级 toast */
-async function execPush(row: RepoRow): Promise<void> {
+/** 推送执行体（确认 / 动作锁 / 上游判据之外的部分）：结果分级 toast，返回是否真的推上去了 */
+async function execPush(row: RepoRow): Promise<boolean> {
   const api = window.electronAPI
-  if (!api) return
+  if (!api) return false
   let out: PushOutcome
   if (row.scope === 'local') {
     const r = await api.gitreposPush(row.path)
@@ -733,6 +1040,7 @@ async function execPush(row: RepoRow): Promise<void> {
   } else {
     toast.error(`${row.name}：${out.message}`, 6000)
   }
+  return out.kind === 'pushed'
 }
 
 async function onTerm(row: RepoRow): Promise<void> {
@@ -804,6 +1112,12 @@ async function onAdd(): Promise<void> {
       await api.gitreposAddLocal(dir)
       await loadRegistry()
       await refresh()
+      // 新仓库还没有端点快照：补一次单仓探测，否则它要等到下一轮巡检才有三点。
+      // 登记的可能是仓库子目录（注册表存原样），所以按「路径前缀最长」反查所属仓库行
+      const added = rows.value
+        .filter(r => r.path === dir || dir.startsWith(r.path.replace(/\/+$/, '') + '/'))
+        .sort((a, b) => b.path.length - a.path.length)[0]
+      if (added) void reprobeOne(added.path)
       toast.success(`已登记 ${repoNameOf(dir)}`)
     } catch (e) {
       toast.error(errMsg(e, '登记失败'))
@@ -855,25 +1169,146 @@ async function onAddRemote(): Promise<void> {
   })
 }
 
+// ── 私人令牌（PAT）管理：自「加速」子页迁入 —— PAT 是 HTTPS 鉴权能力，不是加速能力。
+// 配置存储（github-accel.json）与 IPC（ghaccel:getTokens/saveTokens）不变；
+// store 的 init() 有 loaded 幂等守卫，首次打开弹窗时补拉一次令牌清单。
+const PROVIDERS = ['gitcode', 'github', 'gitee', 'gitea', 'gitlab', 'custom'] as const
+type ProviderKind = (typeof PROVIDERS)[number]
+
+function providerLabel(p: string): string {
+  const map: Record<string, string> = { github: 'GitHub', gitcode: 'GitCode', gitee: 'Gitee', gitea: 'Gitea', gitlab: 'GitLab', custom: '自定义' }
+  return map[p] ?? p
+}
+
+const showTokens = ref(false)
+const showTokenForm = ref(false)
+const showTokenPlain = ref(false)
+const tokenError = ref('')
+const tokenEditingId = ref<string | null>(null)
+const tokenDraft = ref<{ provider: ProviderKind; host: string; label: string; token: string }>({ provider: 'gitcode', host: 'gitcode.com', label: '', token: '' })
+
+const tokenDialogRef = ref<HTMLElement | null>(null)
+const tokenTrap = useModalFocusTrap(tokenDialogRef)
+watch(showTokens, (v) => { if (v) tokenTrap.activate(); else tokenTrap.deactivate() })
+// Esc 与「关闭」同一出口（登记远程路径弹窗同款键盘退出路径）
+function onTokenKey(e: KeyboardEvent): void {
+  if (e.key === 'Escape' && showTokens.value) showTokens.value = false
+}
+onMounted(() => window.addEventListener('keydown', onTokenKey))
+onUnmounted(() => window.removeEventListener('keydown', onTokenKey))
+
+async function openTokens(): Promise<void> {
+  showTokens.value = true
+  showTokenForm.value = false
+  try {
+    await accelStore.init()
+  } catch { /* 配置读失败时保留现有缓存；保存动作会带错误反馈 */ }
+}
+
+const canSubmitToken = computed(() => tokenDraft.value.host.trim().length > 0 && tokenDraft.value.token.trim().length > 0)
+
+function resetTokenDraft(): void {
+  tokenDraft.value = { provider: 'gitcode', host: 'gitcode.com', label: '', token: '' }
+  tokenEditingId.value = null
+  tokenError.value = ''
+  showTokenPlain.value = false
+}
+
+function onProviderChange(): void {
+  // 切到预设平台时自动填 host；切到 custom 保留旧 host（便于从预设改过去微调）
+  if (tokenDraft.value.provider !== 'custom') {
+    tokenDraft.value.host = { github: 'github.com', gitcode: 'gitcode.com', gitee: 'gitee.com', gitea: 'gitea.com', gitlab: 'gitlab.com' }[tokenDraft.value.provider] || ''
+  }
+}
+
+function toggleTokenForm(): void {
+  resetTokenDraft()
+  showTokenForm.value = true
+}
+
+function startTokenEdit(tok: GitPrivateToken): void {
+  tokenEditingId.value = tok.id
+  tokenDraft.value = { provider: tok.provider as ProviderKind, host: tok.host, label: tok.label, token: tok.token }
+  showTokenForm.value = true
+  showTokenPlain.value = false
+  tokenError.value = ''
+}
+
+function cancelTokenEdit(): void {
+  showTokenForm.value = false
+  resetTokenDraft()
+}
+
+async function submitToken(): Promise<void> {
+  tokenError.value = ''
+  try {
+    const id = tokenEditingId.value ?? `tok-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const provider = tokenDraft.value.provider
+    const host = provider === 'custom' ? tokenDraft.value.host : ({ github: 'github.com', gitcode: 'gitcode.com', gitee: 'gitee.com', gitea: 'gitea.com', gitlab: 'gitlab.com' }[provider] || tokenDraft.value.host)
+    const next = accelStore.privateTokens.map(t => {
+      if (t.id === id) {
+        return { ...t, provider, host, label: tokenDraft.value.label || providerLabel(provider), token: tokenDraft.value.token.trim(), updatedAt: Date.now() }
+      }
+      return t
+    })
+    const exists = accelStore.privateTokens.some(t => t.id === id)
+    if (!exists) {
+      next.push({ id, provider, host, label: tokenDraft.value.label || providerLabel(provider), token: tokenDraft.value.token.trim(), updatedAt: Date.now() })
+    }
+    await accelStore.saveTokens(next)
+    toast.success(exists ? '令牌已更新' : '令牌已添加')
+    showTokenForm.value = false
+    resetTokenDraft()
+  } catch (e: any) {
+    tokenError.value = e?.message || '保存失败'
+  }
+}
+
+async function removeToken(id: string): Promise<void> {
+  try {
+    await accelStore.saveTokens(accelStore.privateTokens.filter(t => t.id !== id))
+    if (tokenEditingId.value === id) cancelTokenEdit()
+    toast.success('令牌已删除')
+  } catch (e: any) {
+    toast.error(e?.message || '删除失败')
+  }
+}
+
+async function copyToken(tok: { token: string; label: string }): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(tok.token)
+    toast.success(`${tok.label || '令牌'} 已复制到剪贴板`)
+  } catch {
+    toast.error('复制失败（剪贴板不可用）')
+  }
+}
+
 // ── 详情面板 ──
 // 页面可见性：面板是页内布局（不 Teleport），切走不会盖到别的页面；
-// 回到前台时刷新一次 —— 状态是快照不是实时，离开期间远端可能已变
+// 回到前台时刷新一次 —— 状态是快照不是实时，离开期间远端可能已变（远端一致性同理）
 watch(() => props.active, (active) => {
   if (active === false) return
   void refresh()
+  // 页面来回切一次就打一遍全量 ls-remote 太重：新鲜快照直接复用，过期才重探
+  void probeIfStale()
 })
 
 // ── 生命周期 ──
 onMounted(() => {
   void accelStore.initHealth()
-  void loadRegistry().then(() => refresh()).catch(e => {
-    loadError.value = errMsg(e, '注册表读取失败')
-  })
+  armTimer()
+  void loadRegistry()
+    .then(() => refresh())
+    .then(() => probeEndpoints())
+    .catch(e => {
+      loadError.value = errMsg(e, '注册表读取失败')
+    })
 })
-// 切范围即重取；范围变了，登记表单对着旧主机就没有意义了
+onUnmounted(() => { if (timer) clearInterval(timer) })
+// 切范围即重取；范围变了，登记表单对着旧主机就没有意义了（巡检只在本地范围跑）
 watch(scopeKey, () => {
   showAddRemote.value = false
-  void refresh()
+  void refresh().then(() => probeEndpoints())
 })
 </script>
 
@@ -1061,6 +1496,31 @@ watch(scopeKey, () => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* 远端三点：与「同步」子页同一套色（一致/落后/分叉/探测失败），hover 出全名与状态 */
+.dots { display: inline-flex; gap: var(--spacing-4); flex-shrink: 0; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bg-slider); }
+.dot.ok { background: var(--status-success-text); }
+.dot.behind { background: var(--status-warn-text); }
+.dot.diverged { background: var(--status-error-text); }
+.dot.off { background: var(--bg-slider); box-shadow: inset 0 0 0 1px var(--border-default); }
+.vr-ep { color: var(--status-warn-text); white-space: nowrap; margin-left: auto; }
+
+/* 巡检失败带：比取数失败轻一档（列表照常可用，只是缺远端那一层） */
+.probe-band {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-10);
+  margin: var(--spacing-8) var(--spacing-16) 0;
+  padding: var(--spacing-8) var(--spacing-12);
+  flex-shrink: 0;
+  font-size: 0.9231rem;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--status-warn-text) 10%, var(--bg-elevated));
+  border: 1px solid color-mix(in srgb, var(--status-warn-text) 30%, transparent);
+  border-radius: var(--radius-md);
+}
+.probe-band .pb-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vlist-empty { padding: 28px var(--spacing-12); text-align: center; color: var(--text-tertiary); font-size: 0.9231rem; }
 
 /* 详情未选中空态：双向居中（DESIGN.md 空状态规范） */
@@ -1091,7 +1551,20 @@ watch(scopeKey, () => {
   white-space: nowrap;
   overflow: hidden;
 }
-.sb-right { margin-left: auto; color: var(--text-secondary); }
+/* 中间三段允许收缩：窄窗口先截断统计文字，右端的巡检时间/频率必须留在视野内 */
+.statusbar > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sb-right { margin-left: auto; color: var(--text-secondary); display: inline-flex; align-items: center; gap: var(--spacing-4); flex-shrink: 0; overflow: visible; }
+.sb-ep { color: var(--text-secondary); }
+.freq-btn {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  padding: 0;
+}
+.freq-btn:hover { color: var(--text-primary); text-decoration: underline dotted; }
 
 /* ── 登记远程路径弹窗 ── */
 .arm-overlay {
@@ -1132,6 +1605,191 @@ watch(scopeKey, () => {
 }
 .arm-input:focus { border-color: var(--accent-primary); }
 .arm-foot { display: flex; gap: var(--spacing-8); justify-content: flex-end; }
+
+/* ── 私人令牌弹窗（宽版 arm-dialog；列表卡片化 + 表单浅底容器，颜色全部走主题令牌） ── */
+.arm-dialog.wide { width: min(680px, 100%); }
+
+.arm-title-row { display: flex; align-items: center; gap: var(--spacing-8); }
+.arm-title-row .grow { flex: 1; }
+
+.token-count {
+  font-size: 0.7692rem;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  border-radius: var(--radius-pill);
+  padding: 1px var(--spacing-8);
+}
+
+/* 列表：有边框容器 + 行分隔线 + hover 反馈（同步子页远端卡同款形态） */
+.token-list {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow-y: auto;
+  max-height: 280px;
+}
+
+.token-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-10);
+  padding: var(--spacing-8) var(--spacing-12);
+  transition: background 0.12s ease;
+}
+.token-row + .token-row { border-top: 1px solid var(--divider-primary); }
+.token-row:hover { background: var(--bg-hover); }
+
+/* 平台章：状态 tag 同源令牌；custom 域名走 indigo 区分 */
+.token-provider {
+  flex-shrink: 0;
+  min-width: 60px;
+  text-align: center;
+  font-size: 0.7692rem;
+  font-weight: 500;
+  color: var(--status-tag-text);
+  background: var(--status-tag-bg);
+  border: 1px solid var(--status-tag-border);
+  border-radius: var(--radius-pill);
+  padding: 1px var(--spacing-8);
+  line-height: 18px;
+}
+.token-provider.custom {
+  color: var(--accent-indigo);
+  background: var(--accent-indigo-bg);
+  border-color: color-mix(in srgb, var(--accent-indigo) 32%, transparent);
+}
+
+/* host 是身份、label 是别名（默认与平台名重复时不重复展示） */
+.token-id { display: flex; align-items: baseline; gap: var(--spacing-8); flex: 0 1 auto; min-width: 0; }
+.token-host {
+  font-size: 0.8462rem;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.token-title {
+  flex-shrink: 1;
+  font-size: 0.7692rem;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 脱敏值：mono 胶囊（bg-input 底），不抢视觉 */
+.token-value {
+  flex: 1;
+  min-width: 120px;
+  font-size: 0.8462rem;
+  color: var(--text-tertiary);
+  background: var(--bg-input);
+  border-radius: var(--radius-pill);
+  padding: 2px var(--spacing-10);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 状态：点 + 文案，替代原来的描边小签（降噪） */
+.token-status {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-6);
+  font-size: 0.7692rem;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+.token-status.on { color: var(--status-success-text); }
+.status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-tertiary); opacity: .45; }
+.token-status.on .status-dot { background: var(--status-success-text); opacity: 1; }
+
+.token-acts { display: flex; gap: var(--spacing-4); flex-shrink: 0; }
+
+/* 空态：锁图标 + 主句 + 副句，居中留白 */
+.token-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-6);
+  padding: var(--spacing-24) var(--spacing-16);
+  text-align: center;
+}
+.token-empty-icon { width: 28px; height: 28px; color: var(--text-tertiary); opacity: .7; }
+.token-empty-title { font-size: 0.9231rem; color: var(--text-secondary); }
+.token-empty-sub {
+  font-size: 0.8462rem;
+  color: var(--text-tertiary);
+  line-height: 1.6;
+  max-width: 360px;
+}
+
+/* 表单：浅底卡片化容器，与列表容器同圆角 */
+.token-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-10);
+  padding: var(--spacing-12);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-base) 45%, transparent);
+}
+
+.form-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-10);
+  min-height: 30px;
+}
+
+.form-label {
+  flex: 0 0 56px;
+  font-size: 0.8462rem;
+  color: var(--text-secondary);
+}
+
+.form-field { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--spacing-8); }
+.form-field .arm-input { flex: 1; min-width: 0; width: auto; }
+.form-field select.arm-input { font-family: var(--font-sans); }
+.field-note { flex-shrink: 0; font-size: 0.7692rem; color: var(--text-tertiary); }
+
+.token-input-wrap { flex: 1; display: flex; align-items: center; gap: var(--spacing-6); min-width: 0; }
+.token-input-wrap .arm-input { flex: 1; min-width: 0; }
+
+.form-hint {
+  font-size: 0.7692rem;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+  padding-left: calc(56px + var(--spacing-10));
+}
+
+/* 校验错误：danger 令牌色带（替代裸文本） */
+.token-error {
+  padding: var(--spacing-6) var(--spacing-10);
+  border: 1px solid var(--danger-border);
+  background: var(--danger-bg);
+  border-radius: var(--radius-sm);
+  font-size: 0.8462rem;
+  color: var(--danger-text);
+  line-height: 1.5;
+}
+
+.form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--spacing-8);
+}
+
+/* 底栏：顶部分隔线 + 左侧说明 + 右侧关闭（只作用于令牌弹窗，不碰登记远程路径弹窗） */
+.arm-dialog.wide .arm-foot {
+  align-items: center;
+  padding-top: var(--spacing-10);
+  border-top: 1px solid var(--divider-primary);
+}
+.arm-dialog.wide .arm-foot .grow { flex: 1; }
+.foot-note { font-size: 0.7692rem; color: var(--text-tertiary); }
 
 .mono { font-family: var(--font-mono); }
 </style>

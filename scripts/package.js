@@ -132,6 +132,47 @@ if (runtimeReady) {
 //      当前解释器，并在下面那条警告里点明「只有同为 3.11 才有效」。
 //    · tests/ 与 _tmp/ 不编译：它们本来就被 filter 排除，编译只是白花打包时间。
 const backendDir = path.join(root, 'backend')
+
+// 5a) 先清空 backend/ 下所有 __pycache__，再统一重编。
+//   开发机上的这几个目录里躺着多个解释器的字节码：实测 1037 个 .pyc / 26.6 MB，
+//   其中目标 3.11 只占 2.4 MB，其余是 3.12/3.13 与它们的 pytest 变体。
+//   `compileall -f` 只重写**当前解释器**那一份，别的版本会原样留下，再被
+//   extraResources 的 `**/*` 一并打进包 —— 那部分体积在目标机上一个字节都用不到
+//   （CPython 只认自己的 magic tag）。清空后重编，包里的字节码与内嵌解释器一一对应。
+//   失败不在这里硬停：下面的 compileall 才是硬闸门，权限问题会在那里暴露。
+function purgeBytecodeCache(dir) {
+  let dirs = 0
+  let files = 0
+  const walk = (d) => {
+    let entries
+    try {
+      entries = fs.readdirSync(d, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const p = path.join(d, entry.name)
+      if (entry.name !== '__pycache__') {
+        walk(p)
+        continue
+      }
+      try {
+        files += fs.readdirSync(p).length
+        fs.rmSync(p, { recursive: true, force: true })
+        dirs++
+      } catch (e) {
+        console.warn(`[package] 清理 ${p} 失败（继续）：${e.message}`)
+      }
+    }
+  }
+  walk(dir)
+  return { dirs, files }
+}
+
+const purged = purgeBytecodeCache(backendDir)
+console.log(`[package] 已清空 backend 旧字节码：${purged.dirs} 个 __pycache__ / ${purged.files} 个 .pyc`)
+
 const pyExe = runtimeReady ? runtimeProbe : isWin ? 'python' : 'python3'
 if (!runtimeReady) {
   console.warn(

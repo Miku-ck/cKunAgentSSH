@@ -7,8 +7,8 @@
       <span v-if="repo.scope === 'remote'" class="grdp-scope">远程 · SSH 会话</span>
       <span class="grdp-path mono" :title="repo.path">{{ repo.path }}</span>
       <span class="grdp-head-spacer"></span>
-      <button class="btn" type="button" :disabled="!!busy || !!repo.error" title="fetch：更新远程跟踪引用（--all --prune，不改动工作区）" @click="emit('fetch')">获取</button>
-      <button class="btn btn-primary" type="button" :disabled="!!busy || !!repo.error" title="pull：快进合并远端提交（--ff-only，分叉时不自动合并）" @click="emit('pull')">拉取</button>
+      <button class="btn" type="button" :disabled="!!busy || !!repo.error" :title="fetchHint" @click="emit('fetch')">获取</button>
+      <button class="btn btn-primary" type="button" :disabled="!!busy || !!repo.error" :title="pullHint" @click="emit('pull')">拉取</button>
       <!-- 提交/推送合一：有未提交变更 → 提交（弹窗内默认提交并推送）；
            工作区干净但有待推提交 → 直接推送。任一时刻只有一个相关动作 -->
       <button
@@ -24,7 +24,7 @@
         class="btn"
         type="button"
         :disabled="!!busy || !!repo.error || !repo.ahead"
-        title="push：推送当前分支到远程（无上游时 git push -u 建立跟踪）"
+        :title="pushHint"
         @click="emit('push')"
       >推送<span class="grdp-actct grdp-pushct">↑{{ repo.ahead }}</span></button>
       <button class="btn" type="button" :disabled="!!busy" title="在终端中打开（本地终端 / 新 SSH 会话）" @click="emit('term')">终端</button>
@@ -45,20 +45,86 @@
         远程仓库：拉取 / 推送将直接更新服务器上的工作区（部署语义），操作计入审计。
       </div>
 
-      <!-- 概要条：分支 / 上游 / 工作区 / 最近提交 / 远程仓库 -->
+      <!-- 概要条：分支 / 上游 / 未提交 / 最近提交 / 远程，标签一档、值一档（此前是长长一行，读不出结构） -->
       <div class="grdp-sum">
-        <span>分支 <b class="mono">{{ repo.detached ? '(HEAD 游离)' : (repo.branch || '—') }}</b></span>
-        <span>上游分支 <span class="mono">{{ repo.upstream || '未设置上游' }}<template v-if="repo.ahead || repo.behind"> ↑{{ repo.ahead }} ↓{{ repo.behind }}</template></span></span>
-        <span>未提交变更 <b>{{ repo.dirtyFiles }}</b></span>
-        <span v-if="repo.lastCommit">最近提交 <span class="grdp-lastc" :title="`${repo.lastCommit.subject}（${repo.lastCommit.author}）`">{{ repo.lastCommit.subject }}</span>（{{ repo.lastCommit.author }} · {{ repo.lastCommit.relTime }}）</span>
-        <span v-if="repo.originHost">远程仓库 <span class="mono">{{ repo.originHost }}/{{ repo.originSlug }}</span><span v-if="accelTag" class="grdp-acc">已加速</span></span>
-        <span v-else>无远程仓库</span>
+        <span class="sum-i">
+          <span class="sum-k">分支</span>
+          <span class="sum-v mono">{{ repo.detached ? '(HEAD 游离)' : (repo.branch || '—') }}</span>
+        </span>
+        <span class="sum-i">
+          <span class="sum-k">上游</span>
+          <span class="sum-v mono" :class="{ dim: !repo.upstream }">{{ repo.upstream || '未设置' }}</span>
+          <span v-if="repo.ahead || repo.behind" class="sum-ab">
+            <span v-if="repo.ahead" class="ab-up">↑{{ repo.ahead }}</span>
+            <span v-if="repo.behind" class="ab-down">↓{{ repo.behind }}</span>
+          </span>
+        </span>
+        <span class="sum-i">
+          <span class="sum-k">未提交</span>
+          <span class="sum-v" :class="{ warn: repo.dirtyFiles > 0 }">{{ repo.dirtyFiles }}</span>
+        </span>
+        <span v-if="repo.lastCommit" class="sum-i sum-c">
+          <span class="sum-k">最近提交</span>
+          <span class="sum-v grdp-lastc" :title="`${repo.lastCommit.subject}（${repo.lastCommit.author}）`">{{ repo.lastCommit.subject }}</span>
+          <span class="sum-meta">{{ repo.lastCommit.author }} · {{ repo.lastCommit.relTime }}</span>
+        </span>
+        <span v-if="repo.originHost" class="sum-i">
+          <span class="sum-k">远程</span>
+          <span class="sum-v mono">{{ repo.originHost }}/{{ repo.originSlug }}</span>
+          <span v-if="accelTag" class="grdp-acc">已加速</span>
+        </span>
+        <span v-else class="sum-i">
+          <span class="sum-k">远程</span>
+          <span class="sum-v dim">未配置</span>
+        </span>
       </div>
 
-      <!-- 三页签：变更（默认，日常工作流）/ 分支 / 图谱（首次激活才取数） -->
+      <!-- 远端条：常驻一行看清 主仓 / 镜像 的落后与分叉（巡检快照；逐端点动作在「远端」页签）。
+           无 remote 的仓库由概要条的「无远程仓库」表达，这里不再重复一句话。 -->
+      <div v-if="showEpbar" class="grdp-epbar">
+        <template v-if="syncAvailable">
+          <span v-if="!endpoints.length" class="grdp-epnone">
+            {{ probing ? '正在巡检远端…' : '尚未巡检该仓库的远端' }}
+          </span>
+          <span
+            v-for="ep in endpoints"
+            :key="ep.name"
+            class="grdp-chip"
+            :class="'s-' + ep.state"
+            :title="`${ep.url} · ${epStateTitle(ep)}`"
+          >
+            <i class="grdp-cdot" :class="syncDotClass(ep)"></i>
+            <span class="grdp-cname">{{ ep.name }}</span>
+            <span class="grdp-crole" :class="ep.role === 'primary' ? 'pri' : 'mir'">{{ ep.role === 'primary' ? '主仓' : '镜像' }}</span>
+            <span class="grdp-cstate">{{ syncStateText(ep) }}</span>
+            <button
+              v-if="ep.role === 'primary' && ep.state === 'behind'"
+              class="grdp-cact"
+              type="button"
+              :disabled="!!busy"
+              :title="`git push ${ep.name} ${repo.branch} --follow-tags（快进补齐主仓，非强推）`"
+              @click="emit('catchup')"
+            >补齐</button>
+            <button
+              v-else-if="ep.role === 'primary' && ep.state === 'diverged'"
+              class="grdp-cact"
+              type="button"
+              :disabled="!!busy"
+              :title="`git fetch ${ep.name} ${repo.branch} && git merge --ff-only FETCH_HEAD；真分叉时 git 拒绝，需手动处理`"
+              @click="emit('merge', ep.name)"
+            >合并</button>
+          </span>
+          <span class="grdp-epsp"></span>
+          <span v-if="probeLabel" class="grdp-epmeta">{{ probeLabel }}</span>
+          <button v-if="tab !== 'remotes'" class="grdp-eplink" type="button" @click="tab = 'remotes'">详情 ›</button>
+        </template>
+        <span v-else class="grdp-epnone">远端巡检只覆盖本地仓库：远程仓库的远端一致性以「获取」后的 ↑↓ 为准</span>
+      </div>
+
+      <!-- 四页签：变更（默认，日常工作流）/ 远端 / 分支 / 图谱（图谱首次激活才取数） -->
       <div class="grdp-tabs" role="tablist" aria-label="仓库详情分区">
         <button
-          v-for="t in TABS"
+          v-for="t in tabs"
           :key="t.key"
           type="button"
           class="grdp-tab"
@@ -66,11 +132,71 @@
           :aria-selected="tab === t.key"
           :class="{ on: tab === t.key }"
           @click="tab = t.key"
-        >{{ t.label }}<span v-if="t.key === 'changes'" class="grdp-tabct" :class="{ zero: !fileCount }">{{ fileCount }}</span></button>
+        >{{ t.label }}<span v-if="t.key === 'changes'" class="grdp-tabct" :class="{ zero: !fileCount }">{{ fileCount }}</span><span v-else-if="t.key === 'remotes'" class="grdp-tabct" :class="{ zero: !endpoints.length }">{{ endpoints.length }}</span></button>
       </div>
 
       <div class="grdp-body">
-        <div v-if="loading" class="grdp-load">正在读取仓库详情…</div>
+        <!-- 远端：逐端点 URL / SHA / 状态 / 修复动作（不依赖详情取数，所以排在最前） -->
+        <section v-if="tab === 'remotes'">
+          <div v-if="!endpoints.length" class="grdp-empty">
+            <span>{{ probing ? '正在巡检远端…' : (repo.originUrl ? '尚未巡检该仓库的远端' : '该仓库没有配置 remote') }}</span>
+            <button v-if="repo.originUrl" class="grdp-eplink" type="button" :disabled="probing || !!busy" @click="emit('probe')">巡检</button>
+          </div>
+          <template v-else>
+            <div v-if="!hasGitcodePrimary" class="grdp-epwarn">未配置 GitCode 主仓：本仓不走平台镜像，推送将回退其它远端</div>
+            <div v-for="ep in endpoints" :key="ep.name" class="grdp-ep">
+              <div class="grdp-ep-row">
+                <span class="grdp-ep-name mono" :title="ep.url">{{ ep.name }}</span>
+                <span class="grdp-ep-role" :class="ep.role === 'primary' ? 'pri' : 'mir'">{{ ep.role === 'primary' ? '主仓' : '镜像' }}</span>
+                <span class="grdp-ep-url mono" :title="ep.url">{{ ep.url }}</span>
+                <span class="grdp-ep-sha mono" :title="`远端 HEAD ${ep.sha ?? ''}`">{{ shortSha(ep.sha) }}</span>
+                <span class="grdp-ep-state" :class="'s-' + ep.state" :title="epStateTitle(ep)">{{ syncStateText(ep) }}</span>
+                <span class="grdp-ep-acts">
+                  <button
+                    v-if="ep.role === 'primary' && ep.state === 'behind'"
+                    class="btn btn-sm"
+                    type="button"
+                    :disabled="!!busy"
+                    :title="`git push ${ep.name} ${repo.branch} --follow-tags（快进补齐主仓，非强推）`"
+                    @click="emit('fix', ep.name)"
+                  >补齐</button>
+                  <button
+                    v-if="ep.role === 'primary' && ep.state === 'diverged'"
+                    class="btn btn-sm"
+                    type="button"
+                    :disabled="!!busy"
+                    :title="`git fetch ${ep.name} ${repo.branch} && git merge --ff-only FETCH_HEAD；真分叉时 git 拒绝，需手动处理`"
+                    @click="emit('merge', ep.name)"
+                  >合并</button>
+                  <span v-if="ep.role === 'mirror' && ep.state === 'behind'" class="grdp-ep-wait">等待平台搬运</span>
+                </span>
+              </div>
+              <div v-if="ep.state === 'diverged'" class="grdp-ep-note" :class="{ err: ep.role === 'mirror' }">
+                <template v-if="ep.role === 'mirror'">镜像端出现本地没有的提交（可能有人直推镜像端），平台单向镜像不应如此；请 fetch 主仓后人工核对</template>
+                <template v-else>两边各有提交：先合并（--ff-only），绝不强推覆盖</template>
+              </div>
+              <div v-else-if="ep.state === 'unknown' && ep.error" class="grdp-ep-note" :title="ep.error">{{ ep.error }}</div>
+            </div>
+            <div class="grdp-eptail">
+              <button class="grdp-eplink" type="button" :disabled="probing || !!busy" title="对全部本地仓库重跑一次 ls-remote（只比对 SHA，不动工作区）" @click="emit('probe')">
+                {{ probing ? '巡检中…' : '重新巡检' }}
+              </button>
+            </div>
+            <details class="grdp-guide">
+              <summary>平台镜像一次性配置（GitCode 侧）</summary>
+              <div class="grdp-guide-b">
+                <ol>
+                  <li>GitCode 仓库 → 项目设置 → 仓库镜像 → Push → 添加镜像</li>
+                  <li>目标填 GitHub 仓库 + classic 令牌（repo + admin:repo_hook）</li>
+                  <li>再加一条指向 Gitee。此后本地只需推主仓，镜像自动搬运</li>
+                </ol>
+                <div class="grdp-guide-note">不启用双向镜像（Push + Pull 同开）：两端并发提交会互相覆盖。落后与分叉由本页巡检发现，不依赖平台回报。</div>
+              </div>
+            </details>
+          </template>
+        </section>
+
+        <div v-else-if="loading" class="grdp-load">正在读取仓库详情…</div>
         <div v-else-if="error" class="grdp-err" role="alert">{{ error }}</div>
         <template v-else-if="detail">
           <!-- 变更：只读概览（勾选与提交动作在头部「提交」弹窗里，一处完成） -->
@@ -182,7 +308,7 @@
           </div>
 
           <div v-if="canPush" class="grdc-pushprev mono">
-            推送目标 {{ repo.branch }} → {{ repo.upstream || `${repo.remoteName}/${repo.branch}` }}<template v-if="repo.ahead">（本地已领先 ↑{{ repo.ahead }}，将一并上送）</template>
+            推送目标 {{ repo.branch }} → {{ repo.primaryRemote || repo.upstream || `${repo.remoteName}/${repo.branch}` }}<template v-if="repo.primaryRemote"> · 主仓 GitCode</template><template v-if="repo.ahead">（本地已领先 ↑{{ repo.ahead }}{{ repo.primaryRemote ? '，将推到主仓' : '，将一并上送' }}）</template>
           </div>
 
           <div class="grdc-foot">
@@ -227,12 +353,16 @@ import {
   looksLikeNoiseFile,
   parseGraphLog,
   parseRepoDetailSections,
+  remoteHostOf,
   splitBySep,
+  syncDotClass,
+  syncStateText,
   repoRowKind,
   type GitBranchInfo,
   type GraphCommitRow,
   type RepoDetail,
   type RepoRow,
+  type SyncEndpoint,
 } from '../../../../shared/git-repos-core'
 
 const props = defineProps<{
@@ -241,6 +371,14 @@ const props = defineProps<{
   accelActive: boolean
   /** 父级动作锁（fetch/pull 在途时禁用按钮，与列表行同一把锁） */
   busy?: string
+  /** 端点快照（父级巡检持有；远程范围恒为空数组） */
+  endpoints?: SyncEndpoint[]
+  /** 巡检能力是否可用（syncProbe 走本地注册表，故只覆盖本地范围） */
+  syncAvailable?: boolean
+  /** 父级巡检在途 */
+  probing?: boolean
+  /** 上次巡检的展示文案（父级算好，面板不碰定时器） */
+  probeLabel?: string
 }>()
 const emit = defineEmits<{
   fetch: []
@@ -256,10 +394,19 @@ const emit = defineEmits<{
   commit: [payload: { files: string[]; msg: string }]
   /** 提交并推送：一次确认覆盖两步（父级先提交、成功才推送） */
   'commit-push': [payload: { files: string[]; msg: string }]
+  /** 补齐主仓（本地领先主仓的提交快进推上去） */
+  catchup: []
+  /** 补齐指定远端端点 */
+  fix: [remote: string]
+  /** 分叉合并指定端点（--ff-only） */
+  merge: [remote: string]
+  /** 重跑远端巡检 */
+  probe: []
 }>()
 
 const TABS = [
   { key: 'changes', label: '变更' },
+  { key: 'remotes', label: '远端' },
   { key: 'branches', label: '分支' },
   { key: 'graph', label: '图谱' },
 ] as const
@@ -290,6 +437,34 @@ const kindText = computed(() => {
 /** GitHub 仓库 + 全局 insteadOf 生效 → 本机 fetch/pull 自动走镜像 */
 const accelTag = computed(() => props.repo.originHost === 'github.com' && props.accelActive)
 const fileCount = computed(() => detail.value?.files.length ?? props.repo.dirtyFiles)
+
+// ── 远端（巡检快照由父级传入：远端条与「远端」页签共用） ──
+const endpoints = computed<SyncEndpoint[]>(() => props.endpoints ?? [])
+const syncAvailable = computed(() => props.syncAvailable !== false)
+/** 远程范围没有巡检能力（syncProbe 走本地注册表）→「远端」页签整条不出现，省掉一句「这里不可用」 */
+const tabs = computed(() => (syncAvailable.value ? TABS : TABS.filter(t => t.key !== 'remotes')))
+watch(syncAvailable, (v) => { if (!v && tab.value === 'remotes') tab.value = 'changes' })
+
+function isGitcodeUrl(url: string): boolean {
+  const h = remoteHostOf(url)
+  return h === 'gitcode.com' || h === 'gitcode.net'
+}
+/** 没有 GitCode 主仓 = 不走平台镜像，推送退回其它远端（远端页签顶部提示） */
+/** 远端条只在对得起一行信息时出现：无 remote 的仓库概要条已写明，不再重复 */
+const showEpbar = computed(() => !syncAvailable.value || !!props.probing || endpoints.value.length > 0)
+const hasGitcodePrimary = computed(() => endpoints.value.some(e => e.role === 'primary' && isGitcodeUrl(e.url)))
+
+function epStateTitle(ep: SyncEndpoint): string {
+  if (ep.state === 'unknown') return ep.error || 'ls-remote 失败（网络 / 认证）'
+  if (ep.state === 'behind') {
+    return ep.role === 'primary' ? '远端可快进：补齐 = 快进直推' : '镜像落后主仓：等 GitCode 平台自动搬运，本页不直推镜像'
+  }
+  if (ep.state === 'diverged') return '两边各有提交：先拉取合并，绝不强推'
+  return '远端 HEAD 与本地一致'
+}
+function shortSha(sha: string | null): string {
+  return sha ? sha.slice(0, 7) : '—'
+}
 
 /** 状态含义（悬浮提示用）：图标行不显示状态码，改/增/删的区分收进 title */
 function statusTitle(status: string): string {
@@ -506,6 +681,32 @@ function loadMore(): void {
   void loadGraph()
 }
 
+const fetchHint = computed(() => {
+  const names = props.repo.remoteNames ?? []
+  const where = names.length ? `全部远端（${names.join('、')}）` : '全部远端'
+  return `fetch --all --prune：更新${where}的远端跟踪引用；不改动工作区与暂存区`
+})
+const pullHint = computed(() => {
+  const up = props.repo.upstream
+  return up
+    ? `pull --ff-only：快进合并上游 ${up}；本地与上游分叉时 git 拒绝，不自动合并`
+    : 'pull --ff-only：当前分支没有上游，git 会直接报错；先在终端 git branch -u 设置上游'
+})
+
+/**
+ * 头部「推送」的目标不是 pickRemote 的结果，而是主仓（pushOne → primaryRemoteOf，GitCode 优先），
+ * 上游没指向主仓时走 push -u。按钮文案只说「推送到远程」会让人以为推的是 origin（可能是镜像），
+ * 所以把真实目标写进 title —— 与「远端」页签里逐端点的「补齐」同一套语义。
+ */
+const pushHint = computed(() => {
+  const primary = props.repo.primaryRemote
+  if (!primary) {
+    return props.repo.upstream
+      ? `push：推送当前分支到上游 ${props.repo.upstream}`
+      : 'push：推送当前分支到远程（无上游时 git push -u 建立跟踪）'
+  }
+  return `push：推送当前分支到主仓 ${primary}（GitCode 优先；上游没指向主仓时 push -u 建立跟踪）`
+})
 // ── 推送：有上游或已知远程名+当前分支才可推 ──
 const canPush = computed(() =>
   !props.repo.error && !props.repo.detached && !!(props.repo.upstream || (props.repo.remoteName && props.repo.branch)),
@@ -585,10 +786,12 @@ onMounted(() => { void load() })
   flex-shrink: 0;
 }
 
-/* 概要条 */
+/* 概要条：标签一档（小字弱色）值一档（主色），字段之间拉大列距；换行不产生悬空分隔线 */
 .grdp-sum {
   display: flex;
-  gap: var(--spacing-14);
+  align-items: baseline;
+  column-gap: var(--spacing-12);
+  row-gap: var(--spacing-6);
   flex-wrap: wrap;
   margin: var(--spacing-8) var(--spacing-14) 0;
   padding: 7px var(--spacing-10);
@@ -598,7 +801,24 @@ onMounted(() => { void load() })
   color: var(--text-secondary);
   flex-shrink: 0;
 }
-.grdp-sum b { font-weight: 500; color: var(--text-primary); }
+.sum-i {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--spacing-6);
+  min-width: 0;
+  white-space: nowrap;
+}
+.sum-k { font-size: 0.8462rem; color: var(--text-tertiary); }
+.sum-v { font-size: 0.9231rem; color: var(--text-primary); }
+.sum-v.dim { color: var(--text-tertiary); }
+.sum-v.warn { color: var(--status-warn-text); font-weight: 500; }
+.sum-ab { display: inline-flex; gap: var(--spacing-4); font-size: 0.8462rem; }
+.ab-up { color: var(--accent-purple); }
+.ab-down { color: var(--status-info-text); }
+.sum-meta { font-size: 0.8462rem; color: var(--text-tertiary); }
+/* 最近提交信息最长：排到字段末尾并独占一行，subject 过长时行内省略，不拆散状态字段 */
+.sum-c { order: 1; flex: 1 1 100%; margin-top: var(--spacing-2); }
+.sum-c .grdp-lastc { flex: 0 1 auto; min-width: 0; max-width: 60%; }
 .grdp-lastc {
   color: var(--text-primary);
   max-width: 220px;
@@ -608,13 +828,151 @@ onMounted(() => { void load() })
   vertical-align: bottom;
 }
 .grdp-acc {
-  margin-left: 5px;
+  margin-left: var(--spacing-2);
   font-size: 0.7692rem;
   color: var(--accent-green);
   border: 1px solid color-mix(in srgb, var(--accent-green) 35%, transparent);
   border-radius: var(--radius-sm);
   padding: 0 var(--spacing-4);
 }
+
+/* ── 远端条：常驻一行看清 主仓/镜像 的状态，落后可原地补齐（逐端点动作在页签） ── */
+.grdp-epbar {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-8);
+  flex-wrap: wrap;
+  margin: var(--spacing-8) var(--spacing-14) 0;
+  flex-shrink: 0;
+  font-size: 0.8462rem;
+  color: var(--text-tertiary);
+}
+.grdp-epnone { color: var(--text-tertiary); }
+.grdp-epsp { flex: 1; }
+.grdp-epmeta { color: var(--text-tertiary); white-space: nowrap; }
+.grdp-eplink {
+  border: none;
+  background: transparent;
+  color: var(--accent-text);
+  font-size: 0.8462rem;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  padding: 0;
+  white-space: nowrap;
+}
+.grdp-eplink:hover { text-decoration: underline; }
+.grdp-eplink:disabled { opacity: .45; cursor: default; text-decoration: none; }
+.grdp-eptail { margin-top: var(--spacing-8); display: flex; }
+.grdp-empty .grdp-eplink { margin-left: var(--spacing-6); }
+
+.grdp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-6);
+  height: 22px;
+  padding: 0 var(--spacing-8);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.grdp-chip.s-behind { border-color: color-mix(in srgb, var(--status-warn-text) 38%, transparent); }
+.grdp-chip.s-diverged { border-color: color-mix(in srgb, var(--status-error-text) 42%, transparent); }
+.grdp-chip.s-unknown { border-style: dashed; }
+.grdp-cdot { width: 7px; height: 7px; border-radius: 50%; background: var(--bg-slider); flex-shrink: 0; }
+.grdp-cdot.ok { background: var(--status-success-text); }
+.grdp-cdot.behind { background: var(--status-warn-text); }
+.grdp-cdot.diverged { background: var(--status-error-text); }
+.grdp-cdot.off { box-shadow: inset 0 0 0 1px var(--border-default); }
+.grdp-cname { font-family: var(--font-mono); color: var(--text-primary); }
+.grdp-crole {
+  font-size: 0.7692rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--spacing-4);
+  color: var(--text-tertiary);
+}
+.grdp-crole.pri { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); }
+.grdp-crole.mir { color: var(--accent-indigo); border-color: color-mix(in srgb, var(--accent-indigo) 32%, transparent); }
+.grdp-chip.s-ok .grdp-cstate { color: var(--status-success-text); }
+.grdp-chip.s-behind .grdp-cstate { color: var(--status-warn-text); }
+.grdp-chip.s-diverged .grdp-cstate { color: var(--status-error-text); }
+.grdp-cact {
+  border: none;
+  border-left: 1px solid var(--divider-primary);
+  background: transparent;
+  color: var(--accent-text);
+  font: inherit;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  margin-left: var(--spacing-2);
+  padding: 0 0 0 var(--spacing-6);
+}
+.grdp-cact:hover:not(:disabled) { text-decoration: underline; }
+.grdp-cact:disabled { opacity: .45; cursor: default; }
+
+/* ── 远端页签：一远端一行（名称 + 角色 | URL | SHA | 状态 | 动作） ── */
+.grdp-epwarn {
+  margin-bottom: var(--spacing-8);
+  padding: 5px var(--spacing-10);
+  border-left: 2px solid var(--status-warn-text);
+  border-radius: var(--radius-sm);
+  background: var(--status-warn-bg);
+  color: var(--text-primary);
+  font-size: 0.8462rem;
+  line-height: 1.5;
+}
+.grdp-ep { padding: var(--spacing-8) 0; border-bottom: 1px solid var(--divider-primary); }
+.grdp-ep-row { display: flex; align-items: center; gap: var(--spacing-10); min-width: 0; }
+.grdp-ep-name { font-size: 0.9231rem; font-weight: 500; color: var(--text-primary); flex-shrink: 0; }
+.grdp-ep-role {
+  font-size: 0.7692rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--spacing-6);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.grdp-ep-role.pri { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); }
+.grdp-ep-role.mir { color: var(--accent-indigo); border-color: color-mix(in srgb, var(--accent-indigo) 32%, transparent); }
+.grdp-ep-url {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.8462rem;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.grdp-ep-sha { width: 7ch; text-align: right; font-size: 0.8462rem; color: var(--text-tertiary); flex-shrink: 0; }
+.grdp-ep-state { font-size: 0.9231rem; white-space: nowrap; flex-shrink: 0; }
+.grdp-ep-state.s-ok { color: var(--status-success-text); }
+.grdp-ep-state.s-behind { color: var(--status-warn-text); }
+.grdp-ep-state.s-diverged { color: var(--status-error-text); font-weight: 500; }
+.grdp-ep-state.s-unknown { color: var(--text-tertiary); }
+.grdp-ep-acts { display: flex; align-items: center; gap: var(--spacing-6); flex-shrink: 0; }
+.grdp-ep-wait { font-size: 0.8462rem; color: var(--text-tertiary); white-space: nowrap; }
+.grdp-ep-note { margin-top: var(--spacing-4); font-size: 0.8462rem; color: var(--text-secondary); line-height: 1.5; }
+.grdp-ep-note.err { color: var(--status-error-text); }
+
+/* 平台镜像配置折叠：一次性说明，不占默认视野 */
+.grdp-guide { margin-top: var(--spacing-12); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--bg-elevated); }
+.grdp-guide summary {
+  padding: var(--spacing-8) var(--spacing-12);
+  font-size: 0.8462rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  list-style: none;
+}
+.grdp-guide summary::-webkit-details-marker { display: none; }
+.grdp-guide summary::before { content: "▸ "; color: var(--text-tertiary); }
+.grdp-guide[open] summary::before { content: "▾ "; }
+.grdp-guide-b { padding: 0 var(--spacing-12) var(--spacing-10); font-size: 0.8462rem; color: var(--text-secondary); }
+.grdp-guide-b ol { margin: 0; padding-left: var(--spacing-20); }
+.grdp-guide-b li { margin-bottom: var(--spacing-4); }
+.grdp-guide-note { margin-top: var(--spacing-6); color: var(--text-tertiary); }
 
 /* ── 页签 ── */
 .grdp-tabs {

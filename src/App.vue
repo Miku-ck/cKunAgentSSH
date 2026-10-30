@@ -22,6 +22,7 @@
       @action-sftp="sshViewRef?.toggleSftp()"
       @action-tunnels="sshViewRef?.toggleTunnels()"
       @action-docker="sshViewRef?.toggleDocker()"
+      @action-k8s="sshViewRef?.toggleK8s()"
       @action-git="sshViewRef?.toggleGit()"
       @action-settings="sshViewRef?.openSettings()"
     />

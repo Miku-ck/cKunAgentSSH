@@ -7,7 +7,7 @@
       <div class="page-title">
         <span>Git</span>
       </div>
-      <span class="page-sub">GitHub 加速 · 仓库管理</span>
+      <span class="page-sub">GitHub 加速 · 源码管理（仓库 · 远端一致性）</span>
     </div>
 
     <!-- 子页分段：整页只有这一排全局控件，仓库子页自带自己的工具条 -->
@@ -40,9 +40,10 @@
 </template>
 
 <script setup lang="ts">
-// GitView.vue — Git 页壳（C 方案：GitHub 加速 + 仓库管理双子页）。
+// GitView.vue — Git 页壳（C 方案：GitHub 加速 + 源码管理双子页）。
 // 壳只做三件事：页头 / 子页分段 / 子页惰性挂载；子页选择存 subTab.ts 的模块级
 // ref（命令面板深链在页面挂载前就能指定目标子页，会话内记忆上次停留）。
+// 2026-10-30：原「同步」子页并入仓库工作台，子页只剩两项。
 import { computed, ref, watch } from 'vue'
 import GitAccelPanel from './GitAccelPanel.vue'
 import GitReposPanel from './GitReposPanel.vue'
@@ -53,7 +54,7 @@ const emit = defineEmits<{ 'exec-terminal': [sessionId: string] }>()
 
 const SUB_TABS = [
   { key: 'accel', label: '加速' },
-  { key: 'repos', label: '仓库' },
+  { key: 'repos', label: '源码管理' },
 ] as const
 
 /** v-model 到模块级单例：切走再回来 / 深链预置，都从这一份状态出发 */
@@ -62,8 +63,8 @@ const sub = computed<GitSubTab>({
   set: (v) => { gitSubTab.value = v },
 })
 
-// 首访惰性挂载：默认子页 accel 首帧即挂；repos 只有被选中过才挂载
-// （避免只为看加速的用户一进 Git 页就触发本地仓库取数）
+// 首访惰性挂载：默认子页 repos 首帧即挂；accel 只有被选中过才挂载
+// （避免只为看仓库的用户一进 Git 页就触发加速配置的额外取数）
 const visited = ref<Record<GitSubTab, boolean>>({ accel: sub.value === 'accel', repos: sub.value === 'repos' })
 watch(sub, (s) => { visited.value[s] = true }, { immediate: true })
 </script>

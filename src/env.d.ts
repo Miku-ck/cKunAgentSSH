@@ -156,6 +156,8 @@ interface GhaccelHealthStatus {
   fallback?: { prefix: string; name: string; latencyMs: number }
   /** hosts 托管块生效时的实时有效性；未写入不返回 */
   hosts?: { ok: boolean; message: string }
+  /** 探测实际经过的代理（无代理不返回）：不经代理时探测结论与 git 真实体验可能不一致 */
+  proxy?: string
   checkedAt: number
 }
 
@@ -229,6 +231,29 @@ interface ElectronAPI {
     patch: Partial<import('../shared/desktop-prefs').DesktopPrefs>,
   ) => Promise<import('../shared/desktop-prefs').DesktopPrefs>
   notifyDesktop: (title: string, body: string) => Promise<boolean>
+  /**
+   * 自更新（tar 形态）。state 类型来自 shared/update-core，同样走 inline import
+   * （env.d.ts 不能有顶层 import，否则全局声明全部失效）。
+   */
+  updateGetState: () => Promise<import('../shared/update-core').UpdateState | null>
+  updateCheck: () => Promise<import('../shared/update-core').UpdateState | null>
+  updateDownload: () => Promise<import('../shared/update-core').UpdateState | null>
+  updateSetFeed: (url: string) => Promise<import('../shared/update-core').UpdateState | null>
+  /** ok=false 表示标记没写成功/未就绪；true 之后主进程会退出，助手接手换包并重启 */
+  updateApply: () => Promise<{
+    ok: boolean
+    state: import('../shared/update-core').UpdateState | null
+  }>
+  onUpdateState: (
+    callback: (data: import('../shared/update-core').UpdateState) => void,
+  ) => () => void
+  /**
+   * 诊断包（本地落盘，不联网）：system.json + 脱敏后的主日志 + 崩溃转储，打成 tar.gz。
+   * 类型同样走 inline import（env.d.ts 不能有顶层 import）。
+   */
+  diagExport: () => Promise<import('../shared/diagnostics-core').DiagnosticsResult>
+  /** 在系统文件管理器里定位最近一次导出的包（已删/移则退到产物目录） */
+  diagReveal: () => Promise<void>
   windowMaximize: () => Promise<void>
   windowClose: () => Promise<void>
   onBackendStatus: (callback: (data: { status: string; port?: number; error?: string }) => void) => () => void
@@ -320,21 +345,55 @@ interface ElectronAPI {
   onTunnelStatus: (callback: (data: TunnelStatus) => void) => () => void
   // GitHub 加速（镜像套件；主进程实现见 electron/github-accel.ts，类型源在 shared/github-accel-core.ts）
   ghaccelGetConfig: () => Promise<import('../shared/github-accel-core').GithubAccelConfig>
-  ghaccelSaveLists: (
-    proxies: import('../shared/github-accel-core').AccelProxy[],
-    webMirrors: import('../shared/github-accel-core').AccelWebMirror[],
-  ) => Promise<import('../shared/github-accel-core').GithubAccelConfig>
-  ghaccelProbeAll: () => Promise<Array<{ id: string; name: string; target: string; ok: boolean; latencyMs: number | null; status?: number; error?: string }>>
+  ghaccelSaveLists: (proxies: import('../shared/github-accel-core').AccelProxy[]) => Promise<import('../shared/github-accel-core').GithubAccelConfig>
+  ghaccelProbeAll: () => Promise<Array<{
+    id: string
+    name: string
+    target: string
+    ok: boolean
+    latencyMs: number | null
+    /** 实测下行速度（B/s）：仅代理行有（archive 维度） */
+    speedBps?: number | null
+    /** archive（整仓下载）维度是否可用 */
+    archiveOk?: boolean
+    status?: number
+    error?: string
+  }>>
+  /**
+   * 一键自动调优（总控按钮调用）：实测选优 + 淘汰连续失效 + 每次刷新候选池并在可用不足时自动采纳。
+   * 会改镜像清单（内置只停用、自建/自动采纳的移除），因此返回详细的「做了什么」。
+   */
+  ghaccelAutoTune: () => Promise<{
+    best: { id: string; name: string; prefix: string } | null
+    probed: Array<{
+      id: string
+      name: string
+      target: string
+      ok: boolean
+      latencyMs: number | null
+      speedBps?: number | null
+      archiveOk?: boolean
+      status?: number
+      error?: string
+    }>
+    retired: Array<{ id: string; name: string; action: 'disabled' | 'removed' }>
+    adopted: Array<{ id: string; name: string; prefix: string }>
+    discovered: number
+  }>
   ghaccelGitStatus: () => Promise<{
     available: boolean
-    entries: Array<{ key: string; subsection: string; value: string }>
+    entries: Array<{ key: string; subsection: string; value: string; push?: boolean }>
     active: boolean
     activeSubsection?: string
     managed: boolean
     backup: string | null
+    /** 当前 push 目的地规则：none / 本应用直连 / 本应用 SSH / 用户自建 */
+    pushRewrite: 'none' | 'direct' | 'ssh' | 'user'
+    /** 用户自建 push 规则时，其子节（便于 UI 说明“不接管”） */
+    pushSubsection?: string
     message?: string
   }>
-  ghaccelGitEnable: (prefix: string) => Promise<ReturnType<ElectronAPI['ghaccelGitStatus']>>
+  ghaccelGitEnable: (prefix: string, pushMode?: 'direct' | 'ssh') => Promise<ReturnType<ElectronAPI['ghaccelGitStatus']>>
   ghaccelGitDisable: () => Promise<ReturnType<ElectronAPI['ghaccelGitStatus']>>
   /** 端到端自检（只读）：git / 代理 / SSH 443 / hosts 四项 */
   ghaccelSelfCheck: () => Promise<GhaccelSelfCheckRow[]>
@@ -343,7 +402,10 @@ interface ElectronAPI {
   ghaccelSsh443Status: () => Promise<{ applied: boolean; path: string; exists: boolean; message?: string }>
   ghaccelSsh443Apply: () => Promise<{ applied: boolean; path: string; exists: boolean }>
   ghaccelSsh443Remove: () => Promise<{ applied: boolean; path: string; exists: boolean }>
-  ghaccelOpenExternal: (url: string) => Promise<void>
+  // 私人令牌（PAT）配置（读原文 / 写全量；渲染层 maskToken 脱敏展示）
+  ghaccelGetTokens: () => Promise<import('../shared/github-accel-core').GitPrivateToken[]>
+  ghaccelSaveTokens: (tokens: import('../shared/github-accel-core').GitPrivateToken[]) =>
+    Promise<import('../shared/github-accel-core').GitPrivateToken[]>
   // GitHub 加速下载器（主进程实现见 electron/gh-download.ts）
   ghaccelDownloadStart: (url: string, opts?: { gunzip?: boolean }) => Promise<GhDownloadStatus>
   ghaccelDownloadCancel: (id: string) => Promise<void>
@@ -365,10 +427,10 @@ interface ElectronAPI {
     stale: boolean
     message?: string
   }>
-  ghaccelHostsPick: () => Promise<Array<{ domain: string; ip: string | null; latencyMs: number | null; candidates: number; error?: string }>>
+  ghaccelHostsPick: () => Promise<Array<{ domain: string; ip: string | null; latencyMs: number | null; candidates: number; verified: boolean; error?: string }>>
   ghaccelHostsApply: (entries?: { domain: string; ip: string }[]) => Promise<ReturnType<ElectronAPI['ghaccelHostsStatus']>>
   ghaccelHostsRemove: () => Promise<ReturnType<ElectronAPI['ghaccelHostsStatus']>>
-  ghaccelSaveOptions: (patch: { lastProxyPrefix?: string }) =>
+  ghaccelSaveOptions: (patch: { lastProxyPrefix?: string; pushMode?: 'direct' | 'ssh'; hostsAutoRefresh?: boolean }) =>
     Promise<import('../shared/github-accel-core').GithubAccelConfig>
   // Git 仓库管理（主进程实现见 electron/git-repos.ts；命令/解析纯逻辑在 shared/git-repos-core.ts）
   gitreposGetRegistry: () => Promise<import('../shared/git-repos-core').GitReposRegistry>
@@ -390,6 +452,11 @@ interface ElectronAPI {
   gitreposDetail: (path: string) => Promise<{ ok: boolean; error?: string; statusRaw?: string; branchRaw?: string; logRaw?: string }>
   /** 提交图谱原始输出（--graph --all + \x01 分列格式），解析在渲染层 parseGraphLog */
   gitreposGraphLog: (path: string, limit: number) => Promise<import('../shared/git-repos-core').GitRawResult>
+  // 三仓同步（主仓 + 只读镜像；实现 electron/git-repos.ts，分型纯逻辑在 shared/git-repos-core.ts）
+  gitreposSyncProbe: (paths: string[]) => Promise<import('../shared/git-repos-core').SyncProbeResult[]>
+  /** remotes 缺省 = 全部落后远端，传单元素 = 单家补齐；逐家回报非原子 */
+  gitreposSyncCatchup: (path: string, remotes?: string[]) => Promise<import('../shared/git-repos-core').SyncCatchupResult>
+  gitreposSyncMerge: (path: string, remote: string) => Promise<import('../shared/git-repos-core').GitRawResult>
   // TLS 接入网关（安全接入）
   gatewayList: () => Promise<GatewayRecord[]>
   gatewaySave: (rec: GatewayRecord) => Promise<GatewayRecord>

@@ -33,6 +33,8 @@ export default defineConfig({
         /button\.css/,
         // Docker 页的样式守卫（DockerView.guards.test.ts 断言「共享原子全收在 .docker-view 下」）
         /docker-page\.css/,
+        // K8s 页同理：没放行的话 .k8s-view 的原子守卫会对着空模块恒真
+        /k8s-page\.css/,
       ],
     },
   },

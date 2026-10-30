@@ -1,9 +1,10 @@
 /**
  * GitHub 加速 —— hosts 优选 IP（M3 增强模式）
  *
- * 流程：DoH（dns.google / cloudflare-dns）绕过本地污染解析 GitHub 系域名 →
- * 候选 IP 并发 TCP connect:443 测速取最优 → 渲染 hosts 托管块（BEGIN/END 标记圈定，
- * 纯逻辑在 shared 核心）写入系统 hosts。
+ * 流程：双源候选（本地 DoH ∪ 社区维护的 GitHub520 列表）→ 候选 IP 并发 TCP connect:443
+ * 筛可达到 → 对最快的几个做 TLS+SNI 证书校验（避免把域名钉到一张不属于它的证书上）
+ * → 渲染 hosts 托管块（BEGIN/END 标记圈定，纯逻辑在 shared 核心）写入系统 hosts
+ * → ipconfig /flushdns（Windows 有 DNS 缓存，不清理会“写了没用”）。
  *
  * 风险（UI 已标注）：① 写 hosts 需要管理员权限（EACCES 时给中文提示）；
  * ② 部分杀软对改 hosts 敏感；③ GitHub IP 段被重点干扰时优选可能全灭。
@@ -16,8 +17,11 @@ import { existsSync } from 'fs'
 import { execFile } from 'child_process'
 import https from 'https'
 import { tcpLatency } from './utils/tcp-latency'
+import { tlsProbe } from './utils/tls-latency'
+import { resolvePowerShell } from './utils/powershell-path'
 import {
   applyHostsBlock,
+  COMMUNITY_HOSTS_SOURCE,
   decodeHostsBytes,
   encodeHostsBytes,
   githubHostsDomains,
@@ -27,6 +31,8 @@ import {
   hostsBlockGeneratedAt,
   isHostsBlockStale,
   isValidIPv4,
+  mergeHostCandidates,
+  parseCommunityHosts,
   removeHostsBlock,
   HOSTS_BLOCK_BEGIN,
   HOSTS_BLOCK_END,
@@ -36,10 +42,12 @@ export interface HostsPickRow {
   domain: string
   /** 选中的最优 IP；解析失败为 null */
   ip: string | null
-  /** TCP connect 延迟；未测出为 null */
+  /** TLS 握手延迟（证书校验通过才有值）；未测出为 null */
   latencyMs: number | null
-  /** 解析到的候选总数 */
+  /** 候选总数（双源合并后） */
   candidates: number
+  /** 选中结果是否通过了 TLS+SNI 证书校验 */
+  verified: boolean
   error?: string
 }
 
@@ -66,6 +74,40 @@ function hostsPath(): string {
   return join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'drivers', 'etc', 'hosts')
 }
 
+/** 社区优选 IP 源的缓存时长：它只是候选项，能不能用/快不快仍由本地测速决定 */
+const COMMUNITY_CACHE_MS = 30 * 60_000
+
+/** 自动重选的最小间隔（巡检 30 分钟一轮，不能每轮都全量 DoH + TLS 测速） */
+const AUTO_REFRESH_MIN_INTERVAL_MS = 60 * 60_000
+
+/** TLS 握手超时：连不上的候选本来就该淘汰 */
+const TLS_TIMEOUT_MS = 3000
+
+/**
+ * 写入 hosts 后清一次系统 DNS 缓存。
+ * Windows 的 DNS Client 会缓存解析结果，改完 hosts 不清理，浏览器可能仍用旧 IP
+ * 直到缓存过期 —— 用户看到的是「写了没用」。失败不阻断（最多延迟生效）。
+ */
+async function flushDns(): Promise<void> {
+  if (process.platform !== 'win32') return
+  // 绝对路径：本应用的 PATH 不可靠（同一类问题导致过 powershell.exe ENOENT），
+  // 而 flushDns 的失败是静默的 —— 裸名找不到就等于“写了没用”且无人知
+  const exe = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'ipconfig.exe')
+  await new Promise<void>((resolvePromise) => {
+    execFile(exe, ['/flushdns'], { timeout: 5000, windowsHide: true }, () => resolvePromise())
+  })
+}
+
+/** 两份托管条目是否完全一致（用于避免无意义的重写） */
+function sameEntries(
+  a: { domain: string; ip: string }[],
+  b: { domain: string; ip: string }[],
+): boolean {
+  if (a.length !== b.length) return false
+  const want = new Map(b.map(e => [e.domain, e.ip]))
+  return a.every(e => want.get(e.domain) === e.ip)
+}
+
 /**
  * PowerShell 单引号字符串字面量。
  * 路径里的单引号是合法字符（用户名可含 `'`），不翻倍转义会把命令拼成语法错误。
@@ -74,11 +116,11 @@ function psLiteral(value: string): string {
   return `'${value.replace(/'/g, "''")}'`
 }
 
-/** HTTPS GET JSON（DoH），带超时与单次重定向 */
-function fetchJson(url: string): Promise<unknown> {
+/** HTTPS GET 文本（DoH / 社区 hosts），带超时与单次重定向 */
+function fetchBody(url: string): Promise<string> {
   return new Promise((resolvePromise, rejectPromise) => {
     let settled = false
-    const done = (v: unknown) => { if (!settled) { settled = true; resolvePromise(v) } }
+    const done = (v: string) => { if (!settled) { settled = true; resolvePromise(v) } }
     const fail = (e: unknown) => { if (!settled) { settled = true; rejectPromise(e) } }
     const go = (target: string, redirects: number) => {
       const req = https.get(target, { timeout: 6000, headers: { 'User-Agent': 'cKunAgentSSH-ghaccel-hosts' } }, (res) => {
@@ -97,9 +139,7 @@ function fetchJson(url: string): Promise<unknown> {
         }
         const chunks: Buffer[] = []
         res.on('data', (c: Buffer) => chunks.push(c))
-        res.on('end', () => {
-          try { done(JSON.parse(Buffer.concat(chunks).toString('utf-8'))) } catch (e) { fail(e) }
-        })
+        res.on('end', () => done(Buffer.concat(chunks).toString('utf-8')))
         res.on('error', fail)
       })
       req.once('timeout', () => { req.destroy(); fail(new Error('DoH 请求超时')) })
@@ -107,6 +147,11 @@ function fetchJson(url: string): Promise<unknown> {
     }
     go(url, 1)
   })
+}
+
+/** HTTPS GET JSON（DoH 应答） */
+async function fetchJson(url: string): Promise<unknown> {
+  return JSON.parse(await fetchBody(url))
 }
 
 /** 从 DoH JSON 应答提取 A 记录 IP 列表 */
@@ -178,38 +223,112 @@ export class GhHostsService {
     return run
   }
 
-  /** 优选：DoH 解析 + TCP 测速，返回每个域名的最优 IP */
+  /** 社区源解析结果（域名 → IP 列表）缓存；失败不缓存，下一轮巡检会重试 */
+  private communityCache: { at: number; byDomain: Map<string, string[]> } | null = null
+
+  private async communityIps(domains: string[]): Promise<Map<string, string[]>> {
+    if (this.communityCache && Date.now() - this.communityCache.at < COMMUNITY_CACHE_MS) {
+      return this.communityCache.byDomain
+    }
+    const byDomain = new Map<string, string[]>()
+    try {
+      const text = await fetchBody(COMMUNITY_HOSTS_SOURCE)
+      for (const { domain, ip } of parseCommunityHosts(text, domains)) {
+        const list = byDomain.get(domain) ?? []
+        if (!list.includes(ip)) list.push(ip)
+        byDomain.set(domain, list)
+      }
+      this.communityCache = { at: Date.now(), byDomain }
+    } catch (e) {
+      // 社区源挂了只会少一路候选：DoH 仍能出结果，不升级成 pick 失败
+      console.warn('[GhHosts] 社区优选 IP 源不可用:', e instanceof Error ? e.message : e)
+    }
+    return byDomain
+  }
+
+  /**
+   * 优选：双源候选合并 → TCP 筛可达 → TLS/SNI 证书校验 → 取 TLS 最快的那个。
+   *
+   * 为什么必须校验证书：hosts 把域名钉到某个 IP 后，浏览器与 git 都会校验证书。
+   * 只看 TCP 可达，会把“能握手但拿着别人的证书”的 IP（运营商/内网拦截）当成优选，
+   * 写进去就是从加速器变成阻断器。
+   */
   async pick(): Promise<HostsPickRow[]> {
     const domains = githubHostsDomains()
+    const community = await this.communityIps(domains)
     const rows: HostsPickRow[] = []
     // 每域名解析 + 测速串行化不划算；域名间并行，单域名内部先解析后测速
     await Promise.all(domains.map(async domain => {
       try {
-        const ips = await resolveViaDoh(domain)
+        const doh = await resolveViaDoh(domain)
+        const ips = mergeHostCandidates(doh, community.get(domain) ?? [])
         if (ips.length === 0) {
-          rows.push({ domain, ip: null, latencyMs: null, candidates: 0, error: 'DoH 解析无结果' })
+          rows.push({ domain, ip: null, latencyMs: null, candidates: 0, verified: false, error: '本地 DoH 与社区源均无候选' })
           return
         }
-        // 最多测 8 个候选，全部并发
-        const tested = await Promise.all(ips.slice(0, 8).map(ip => tcpLatency(ip)))
+        // 先用 TCP 把明显不可达的筛掉（便宜），再对最快的几个做 TLS 校验（贵）
+        const probed = ips.slice(0, 8)
+        const tested = await Promise.all(probed.map(ip => tcpLatency(ip)))
+        const reachable = probed
+          .map((ip, i) => ({ ip, tcpMs: tested[i] }))
+          .filter((x): x is { ip: string; tcpMs: number } => x.tcpMs !== null)
+          .sort((a, b) => a.tcpMs - b.tcpMs)
+          .slice(0, 4)
+        if (reachable.length === 0) {
+          rows.push({ domain, ip: null, latencyMs: null, candidates: ips.length, verified: false, error: '候选 IP 均不可达（443 端口）' })
+          return
+        }
+        const verified = await Promise.all(reachable.map(x => tlsProbe(x.ip, domain, TLS_TIMEOUT_MS)))
         let bestIp: string | null = null
         let bestMs: number | null = null
-        ips.slice(0, 8).forEach((ip, i) => {
-          const ms = tested[i]
-          if (ms !== null && (bestMs === null || ms < bestMs)) { bestIp = ip; bestMs = ms }
+        reachable.forEach((x, i) => {
+          const tls = verified[i]
+          if (!tls.ok || tls.latencyMs === null) return
+          if (bestMs === null || tls.latencyMs < bestMs) { bestIp = x.ip; bestMs = tls.latencyMs }
         })
         if (!bestIp) {
-          rows.push({ domain, ip: null, latencyMs: null, candidates: ips.length, error: '候选 IP 均不可达（443 端口）' })
+          rows.push({
+            domain, ip: null, latencyMs: null, candidates: ips.length, verified: false,
+            error: '候选 TCP 可达但证书校验未通过（可能被劫持或中间设备拦截）',
+          })
           return
         }
-        rows.push({ domain, ip: bestIp, latencyMs: bestMs, candidates: ips.length })
+        rows.push({ domain, ip: bestIp, latencyMs: bestMs, candidates: ips.length, verified: true })
       } catch (e) {
-        rows.push({ domain, ip: null, latencyMs: null, candidates: 0, error: e instanceof Error ? e.message : String(e) })
+        rows.push({ domain, ip: null, latencyMs: null, candidates: 0, verified: false, error: e instanceof Error ? e.message : String(e) })
       }
     }))
     rows.sort((a, b) => domains.indexOf(a.domain) - domains.indexOf(b.domain))
     this.lastPicks = rows
     return rows
+  }
+
+  /** 上次自动重选时间（进程内即可：重启后重新计算一次也没坏处） */
+  private lastAutoRefreshAt = 0
+
+  /**
+   * 自动重选（由巡检调用，默认关闭）。
+   * - 节流 1 小时：巡检 30 分钟一轮，不能每轮都全量 DoH + TLS 测速
+   * - 永不提权：后台弹 UAC 是最差的体验，那种情况留给红灯与手动按钮
+   * - 结果与现有托管块一致就不重写，避开无意义的 flushdns
+   */
+  async autoRefresh(): Promise<{ changed: boolean; message?: string }> {
+    if (Date.now() - this.lastAutoRefreshAt < AUTO_REFRESH_MIN_INTERVAL_MS) {
+      return { changed: false, message: '距上次自动重选不足 1 小时' }
+    }
+    this.lastAutoRefreshAt = Date.now()
+    const status = await this.status()
+    if (!status.applied) return { changed: false }
+    const picks = await this.pick()
+    const entries = picks.filter(r => r.ip).map(r => ({ domain: r.domain, ip: r.ip! }))
+    if (!entries.length) return { changed: false, message: '本轮优选未得到可用 IP' }
+    if (!status.stale && sameEntries(status.entries, entries)) return { changed: false }
+    try {
+      await this.apply(entries, { allowElevate: false })
+      return { changed: true, message: `已重新优选 ${entries.length} 个域名` }
+    } catch (e) {
+      return { changed: false, message: e instanceof Error ? e.message : String(e) }
+    }
   }
 
   async status(): Promise<HostsStatus> {
@@ -246,7 +365,7 @@ export class GhHostsService {
    * 由提权的 PowerShell 子进程完成写入，主应用不重启。
    * 首次写入前备份原 hosts 到 userData（还原托管块不依赖备份，但防意外）。
    */
-  async apply(entries?: { domain: string; ip: string }[]): Promise<HostsStatus> {
+  async apply(entries?: { domain: string; ip: string }[], opts: { allowElevate?: boolean } = {}): Promise<HostsStatus> {
     // 整文件读-改-写进串行队列（Q-E3）：并发 apply/remove 的读-改-写不再互相覆写
     return this.enqueue(async (): Promise<HostsStatus> => {
       const use = (entries && entries.length ? entries : this.lastPicks.filter(r => r.ip).map(r => ({ domain: r.domain, ip: r.ip! })))
@@ -271,11 +390,16 @@ export class GhHostsService {
       } catch (e: any) {
         if (e?.code === 'EACCES' || e?.code === 'EPERM') {
           // 方案 A：按需提权写入（弹 UAC，用户确认后由提权子进程落盘）
+          // 自动重选路径（allowElevate=false）在后台跑，绝不弹窗
+          if (opts.allowElevate === false) {
+            throw new Error('无权限写入 hosts（自动重选已跳过；请在界面上手动写入并授权）')
+          }
           await this.elevatedWrite(next)
         } else {
           throw e
         }
       }
+      await flushDns()
       // 注意：status() 只读不写，不需要也不应占用写队列（提权校验等读操作在
       // 队列外跑，避免与自己同队列的下一 op 死等）
       return this.status()
@@ -311,6 +435,7 @@ export class GhHostsService {
             throw e
           }
         }
+        await flushDns()
       }
       return this.status()
     })
@@ -328,6 +453,9 @@ export class GhHostsService {
     await mkdir(tmpDir, { recursive: true })
     const stamp = Date.now()
     const payloadPath = join(tmpDir, `ghaccel-hosts-${stamp}.json`)
+    // 提权子进程的"真实结果"回写这里（OK / FAIL: 原因）：仅靠退出码分不清
+    // 「内层写入失败」「UAC 被取消」「子进程根本没起来」
+    const resultPath = join(tmpDir, `ghaccel-hosts-${stamp}.result`)
     // 内容按 latin1 的原始字节转 base64：hosts 可能是 ANSI/GBK，若以 UTF-8 字符串
     // 传给提权进程，高位字节会被重新编码，块外内容又回到"UTF-8 解码再写回"的破坏路径。
     const contentBase64 = Buffer.from(encodeHostsBytes(content)).toString('base64')
@@ -345,27 +473,48 @@ export class GhHostsService {
     const script = [
       "$ErrorActionPreference = 'Stop'",
       `$target = ${psLiteral(path)}`,
-      `$payload = Get-Content -LiteralPath ${psLiteral(payloadPath)} -Raw -Encoding UTF8 | ConvertFrom-Json`,
+      `$result = ${psLiteral(resultPath)}`,
+      // 写结果文件：Start-Process -Wait 并不把子进程退出码交给父进程，提权子进程里
+      // 真正抛的错会全丢，界面上只剩一个毫无信息的"退出码 1"
+      'try {',
+      `  $payload = Get-Content -LiteralPath ${psLiteral(payloadPath)} -Raw -Encoding UTF8 | ConvertFrom-Json`,
       // 文案里不许出现下面取消判据的那几个词（取消/拒绝/提升/无法执行）：本函数用
       // stderr 匹配它们来识别"用户在 UAC 弹窗上按了取消"，而路径不符是被篡改，
       // 撞上同一组词就会被报成"已取消管理员授权"，把一次攻击提示说成用户自己放弃了。
-      "if ($payload.path -cne $target) { throw 'payload 目标路径与命令内钉死的路径不符，写入已中止' }",
-      '$bytes = [Convert]::FromBase64String($payload.contentBase64)',
-      '[System.IO.File]::WriteAllBytes($target, $bytes)',
+      "  if ($payload.path -cne $target) { throw 'payload 目标路径与命令内钉死的路径不符，写入已中止' }",
+      '  $bytes = [Convert]::FromBase64String($payload.contentBase64)',
+      '  [System.IO.File]::WriteAllBytes($target, $bytes)',
+      "  Set-Content -LiteralPath $result -Value 'OK' -Encoding UTF8",
+      '} catch {',
+      "  Set-Content -LiteralPath $result -Value ('FAIL: ' + $_.Exception.Message) -Encoding UTF8",
+      '  exit 1',
+      '}',
     ].join('\r\n')
     const encoded = Buffer.from(script, 'utf-16le').toString('base64')
 
-    const result = await new Promise<{ code: number; stdout: string; stderr: string }>((resolvePromise) => {
+    // 必须用绝对路径启动：本应用的 PATH 常被裁剪（实测 Windows 上裸名
+    // powershell.exe 直接 ENOENT，被上层映射成"退出码 1"，看起来像提权失败）
+    const ps = resolvePowerShell()
+    if (ps !== 'powershell' && !existsSync(ps)) {
+      throw new Error(`未找到 Windows PowerShell（${ps}），无法提权写 hosts`)
+    }
+
+    const result = await new Promise<{ code: number | string; killed: boolean; stdout: string; stderr: string }>((resolvePromise) => {
       execFile(
-        'powershell.exe',
+        ps,
         [
           '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Command',
-          `Start-Process powershell.exe -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand','${encoded}'`,
+          // -PassThru 才能把子进程退出码交给父进程；不能写成
+          // `Start-Process ... | ForEach-Object { exit $_.ExitCode }`
+          // （实测管道里的 exit 会把整个管道吞掉：退出码恒 0，子进程也没跑）
+          `$proc = Start-Process -FilePath ${psLiteral(ps)} -Verb RunAs -Wait -WindowStyle Hidden -PassThru -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand','${encoded}'; exit $proc.ExitCode`,
         ],
         { windowsHide: true, timeout: 120000 }, // UAC 弹窗可能等用户很久，60s 不够
         (err, stdout, stderr) => {
+          const code = err ? (err as any).code : 0
           resolvePromise({
-            code: err ? (typeof (err as any).code === 'number' ? (err as any).code : 1) : 0,
+            code: typeof code === 'number' || typeof code === 'string' ? code : 1,
+            killed: !!(err as any)?.killed,
             stdout: String(stdout ?? ''),
             stderr: String(stderr ?? ''),
           })
@@ -376,13 +525,25 @@ export class GhHostsService {
     // 清理临时文件（提权子进程已结束，删得掉；删不掉也无害）
     try { await unlink(payloadPath) } catch { /* ignore */ }
 
-    if (result.code !== 0) {
+    // 提权子进程写回来的真实结果（PS 5.1 的 Set-Content -Encoding UTF8 会带 BOM）
+    const outcome = await readFile(resultPath, 'utf-8')
+      .then(s => s.replace(/^\uFEFF/, '').trim())
+      .catch(() => '')
+    try { await unlink(resultPath) } catch { /* ignore */ }
+
+    if (outcome.startsWith('FAIL:')) {
+      throw new Error(`提权写入 hosts 失败: ${outcome.slice(5).trim() || '未知原因'}`)
+    }
+    if (result.killed) throw new Error('等待管理员授权超时（120s），hosts 未修改')
+
+    if (outcome !== 'OK') {
       const text = `${result.stdout}\n${result.stderr}`
       // UAC 取消 / 拒绝提升：给明确的中文取消文案，而不是一串英文。
       // 中英文系统的报错文案都要覆盖（英文 canceled/cancelled/elevation；中文 取消/拒绝/提升/无法执行）。
       if (/canceled|cancelled|The operation was canceled|取消|拒绝|提升|无法执行/i.test(text)) {
         throw new Error('已取消管理员授权，hosts 未修改')
       }
+      if (result.code === 'ENOENT') throw new Error(`未找到 Windows PowerShell（${ps}），无法提权写 hosts`)
       throw new Error(`提权写入 hosts 失败: ${(result.stderr || result.stdout).trim() || `退出码 ${result.code}`}`)
     }
 

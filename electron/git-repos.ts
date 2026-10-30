@@ -15,18 +15,30 @@ import { execFile } from 'child_process'
 import {
   GIT_LOG_FORMAT,
   buildGraphLogArgs,
+  classifySyncEndpoint,
+  deriveSyncConfig,
+  primaryRemoteOf,
   firstLine,
+  friendlyGitError,
+  interpretPush,
   isValidBranchName,
   isValidCommitFiles,
   isValidCommitMsg,
   isValidRemoteRepoPath,
   parseGitLog,
   parseGitStatusPorcelain,
+  parseLsRemoteSha,
   parseRemoteConfig,
+  parseRevListCount,
   pickRemote,
   type GitRawResult,
   type GitReposRegistry,
   type LocalRepoStatusResult,
+  type RepoSyncConfig,
+  type SyncCatchupResult,
+  type SyncEndpoint,
+  type SyncProbeResult,
+  type SyncPushItem,
 } from '../shared/git-repos-core'
 
 export type { GitRawResult, GitReposRegistry }
@@ -51,7 +63,7 @@ function getStorePath(): string {
 }
 
 function defaultRegistry(): GitReposRegistry {
-  return { version: 1, local: [], remote: {} }
+  return { version: 2, local: [], remote: {}, sync: {} }
 }
 
 function execGit(args: string[], timeoutMs = GIT_TIMEOUT_MS): Promise<GitRawResult> {
@@ -151,6 +163,21 @@ function sanitizeRemotePaths(value: unknown): string[] {
   return [...out]
 }
 
+/** 三仓同步配置消毒：键 = 本地绝对路径，值 = 非空 primary + 字符串数组 mirrors */
+function sanitizeSyncConfigs(value: unknown): Record<string, RepoSyncConfig> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const out: Record<string, RepoSyncConfig> = {}
+  for (const [path, cfg] of Object.entries(value as Record<string, unknown>)) {
+    if (!isAbsolutePath(path) || !cfg || typeof cfg !== 'object') continue
+    const c = cfg as { primary?: unknown; mirrors?: unknown }
+    const primary = typeof c.primary === 'string' ? c.primary.trim() : ''
+    if (!primary) continue
+    const mirrors = (Array.isArray(c.mirrors) ? c.mirrors : []).filter((m): m is string => typeof m === 'string' && m !== primary)
+    out[path] = { primary, mirrors: [...new Set(mirrors)] }
+  }
+  return out
+}
+
 async function readRegistryFromDisk(): Promise<GitReposRegistry> {
   const path = getStorePath()
   if (!existsSync(path)) return defaultRegistry()
@@ -167,14 +194,16 @@ async function readRegistryFromDisk(): Promise<GitReposRegistry> {
       await quarantineCorruptFile(path, raw)
       return defaultRegistry()
     }
+    // version 1（无 sync 段）读进来即升 2：sync 缺省时探测端按 deriveSyncConfig 推默认
     return {
-      version: 1,
+      version: 2,
       local: sanitizeLocalPaths(obj.local),
       remote: obj.remote && typeof obj.remote === 'object'
         ? Object.fromEntries(
             Object.entries(obj.remote).map(([k, v]) => [k, sanitizeRemotePaths(v)]),
           )
         : {},
+      sync: sanitizeSyncConfigs(obj.sync),
     }
   } catch (e) {
     if (e instanceof SyntaxError) {
@@ -293,6 +322,7 @@ export class GitReposService {
       lastCommit: lg.code === 0 ? (parseGitLog(lg.stdout)[0] ?? null) : null,
       originUrl: pick?.url ?? null,
       remoteName: pick?.name ?? null,
+      remotes: parseRemoteConfig(og.stdout),
     }
   }
 
@@ -345,7 +375,11 @@ export class GitReposService {
     )
   }
 
-  /** 推送：有上游直接 push；无上游按 branch.<name>.remote 或展示远端用 -u 建立跟踪 */
+  /**
+   * 推送：目标统一为主仓（primaryRemoteOf，GitCode 优先）。
+   * 上游已指向主仓 → 直接 push；否则 push -u 主仓 建立跟踪。
+   * 无 gitcode 远端时主仓回退 origin/首个（保持既有可用行为）。
+   */
   async pushOne(path: string): Promise<GitRawResult> {
     const repoPath = assertRepoPath(path)
     const head = await execGit(['-C', repoPath, 'rev-parse', '--abbrev-ref', 'HEAD'])
@@ -354,18 +388,19 @@ export class GitReposService {
       return { code: 1, stdout: '', stderr: 'HEAD 游离（detached HEAD），没有可推送的分支' }
     }
     const upstream = await execGit(['-C', repoPath, 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'])
-    if (upstream.code === 0 && upstream.stdout.trim()) {
-      return execGit(['-C', repoPath, 'push'], PUSH_TIMEOUT_MS)
-    }
     const cfgRemote = await execGit(['-C', repoPath, 'config', '--get', `branch.${branch}.remote`])
-    const remotes = await execGit(['-C', repoPath, 'config', '--get-regexp', '^remote\\..*\\.url$'])
-    const pick = cfgRemote.code === 0 && cfgRemote.stdout.trim()
-      ? { name: cfgRemote.stdout.trim() }
-      : pickRemote(parseRemoteConfig(remotes.stdout), null)
-    if (!pick?.name) {
+    const remotesRaw = await execGit(['-C', repoPath, 'config', '--get-regexp', '^remote\\..*\\.url$'])
+    const remotes = parseRemoteConfig(remotesRaw.stdout)
+    const branchRemote = cfgRemote.code === 0 && remotes[cfgRemote.stdout.trim()] ? cfgRemote.stdout.trim() : null
+    const primary = primaryRemoteOf(remotes, branchRemote)
+    if (!primary) {
       return { code: 1, stdout: '', stderr: '没有配置远程仓库，无法推送' }
     }
-    return execGit(['-C', repoPath, 'push', '-u', pick.name, branch], PUSH_TIMEOUT_MS)
+    const upstreamName = upstream.code === 0 ? upstream.stdout.trim().split('/')[0] : null
+    if (upstreamName === primary) {
+      return execGit(['-C', repoPath, 'push'], PUSH_TIMEOUT_MS)
+    }
+    return execGit(['-C', repoPath, 'push', '-u', primary, branch], PUSH_TIMEOUT_MS)
   }
 
   /** 详情三段原始输出（解析在渲染层 parseRepoDetailSections，单测共用同一份） */
@@ -385,5 +420,145 @@ export class GitReposService {
   /** 提交图谱原始输出（解析在渲染层 parseGraphLog，单测共用同一份）；limit 上限在 core 收口 */
   async graphLog(path: string, limit: number): Promise<GitRawResult> {
     return execGit(['-C', assertRepoPath(path), ...buildGraphLogArgs(limit)])
+  }
+  // ── 三仓同步（主仓 + 只读镜像）：探针 / 补齐 / 合并 ──
+
+  /** 读取单仓的同步配置：主仓统一由 primaryRemoteOf 推导（GitCode 优先），不再读注册表手动配置 */
+  private async syncConfigOf(repoPath: string, branch: string, remotes: Record<string, string>): Promise<RepoSyncConfig> {
+    let branchRemote: string | null = null
+    if (branch) {
+      const cfg = await execGit(['-C', repoPath, 'config', '--get', `branch.${branch}.remote`])
+      if (cfg.code === 0 && cfg.stdout.trim() && remotes[cfg.stdout.trim()]) branchRemote = cfg.stdout.trim()
+    }
+    return deriveSyncConfig(remotes, branchRemote)
+  }
+
+
+  /** 单仓同步探测：全部远端各跑一次 ls-remote（只比 SHA 不拉对象），按端点分型 */
+  async syncProbeOne(path: string): Promise<SyncProbeResult> {
+    const repoPath = assertRepoPath(path)
+    const base: SyncProbeResult = { path: repoPath, ok: false, branch: '', headSha: '', primary: '', endpoints: [], probedAt: Date.now() }
+    const [head, sha, remotesRaw] = await Promise.all([
+      execGit(['-C', repoPath, 'rev-parse', '--abbrev-ref', 'HEAD']),
+      execGit(['-C', repoPath, 'rev-parse', 'HEAD']),
+      execGit(['-C', repoPath, 'config', '--get-regexp', '^remote\\..*\\.url$']),
+    ])
+    if (head.code !== 0) {
+      return { ...base, error: head.code === -1 ? '未检测到 git（请安装 git 或加入 PATH）' : (firstLine(head.stderr) || 'git rev-parse 失败') }
+    }
+    const branch = head.stdout.trim()
+    if (!branch || branch === 'HEAD') {
+      return { ...base, error: 'HEAD 游离（detached HEAD），没有可比对的分支' }
+    }
+    const remotes = parseRemoteConfig(remotesRaw.stdout)
+    const names = Object.keys(remotes).sort()
+    const headSha = sha.stdout.trim()
+    if (!names.length || !headSha) {
+      return { ...base, ok: true, branch, headSha, primary: '', endpoints: [] }
+    }
+    const cfg = await this.syncConfigOf(repoPath, branch, remotes)
+    // 各远端并行 ls-remote（彼此独立，慢远端不拖累快远端）；超时口径同 fetch
+    const endpoints: SyncEndpoint[] = await Promise.all(names.map(async (name): Promise<SyncEndpoint> => {
+      const role = name === cfg.primary ? 'primary' : 'mirror'
+      const ep: SyncEndpoint = { name, url: remotes[name], role, state: 'unknown', sha: null, behind: 0 }
+      const ls = await execGit(['-C', repoPath, 'ls-remote', name, branch], FETCH_TIMEOUT_MS)
+      const remoteSha = ls.code === 0 ? parseLsRemoteSha(ls.stdout) : null
+      if (!remoteSha) {
+        return { ...ep, state: 'unknown', error: ls.code === 0 ? '远端没有该分支' : friendlyGitError(ls.stderr, 'ls-remote 失败') }
+      }
+      if (remoteSha === headSha) return { ...ep, state: 'ok', sha: remoteSha }
+      // SHA 不一致 → 问 rev-list 分型（本地不认识远端 SHA 时它非零退出 → 分叉）
+      const counts = await execGit(['-C', repoPath, 'rev-list', '--left-right', '--count', `HEAD...${remoteSha}`])
+      const parsed = counts.code === 0 ? parseRevListCount(counts.stdout) : null
+      const state = classifySyncEndpoint(headSha, remoteSha, parsed)
+      return { ...ep, state, sha: remoteSha, behind: state === 'behind' ? (parsed?.left ?? 0) : 0 }
+    }))
+    return { ...base, ok: true, branch, headSha, primary: cfg.primary, endpoints, probedAt: Date.now() }
+  }
+
+  /** 逐仓同步探测（并发上限分批，与 statusAll 同款；单仓失败按行上浮） */
+  async syncProbeAll(paths: string[]): Promise<SyncProbeResult[]> {
+    const list = [...new Set(Array.isArray(paths) ? paths.filter(p => isAbsolutePath(String(p ?? ''))) : [])]
+    const results: SyncProbeResult[] = []
+    for (let i = 0; i < list.length; i += STATUS_CONCURRENCY) {
+      const batch = await Promise.all(list.slice(i, i + STATUS_CONCURRENCY).map(async p => {
+        try {
+          return await this.syncProbeOne(p)
+        } catch (e) {
+          return { path: p, ok: false, error: e instanceof Error ? e.message : String(e), branch: '', headSha: '', primary: '', endpoints: [], probedAt: Date.now() } satisfies SyncProbeResult
+        }
+      }))
+      results.push(...batch)
+    }
+    return results
+  }
+
+  /**
+   * 补齐落后远端：先探测再逐家 `push <remote> <branch> --follow-tags`（非原子，
+   * 逐家回报）。只推 behind 态（快进）；ok 跳过、diverged/unknown 跳过并说明原因 ——
+   * 分叉必须显式合并，绝不 force。remotes 缺省 = 全部落后远端，传单元素 = 单家补齐。
+   */
+  async syncCatchup(path: string, remotes?: string[]): Promise<SyncCatchupResult> {
+    const repoPath = assertRepoPath(path)
+    const probe = await this.syncProbeOne(repoPath)
+    if (!probe.ok) {
+      throw new Error(probe.error || '探测失败，无法补齐')
+    }
+    const filter = Array.isArray(remotes) && remotes.length ? new Set(remotes.map(r => String(r ?? '').trim()).filter(Boolean)) : null
+    const items: SyncPushItem[] = []
+    for (const ep of probe.endpoints) {
+      if (filter && !filter.has(ep.name)) continue
+      if (ep.state === 'ok') {
+        items.push({ remote: ep.name, outcome: 'skipped', message: '已一致，无需补齐' })
+        continue
+      }
+      if (ep.state === 'diverged') {
+        items.push({ remote: ep.name, outcome: 'skipped', message: '已分叉：先拉取合并，绝不强推覆盖' })
+        continue
+      }
+      if (ep.state === 'unknown') {
+        items.push({ remote: ep.name, outcome: 'skipped', message: ep.error || '探测失败，无法补齐' })
+        continue
+      }
+      const push = await execGit(['-C', repoPath, 'push', ep.name, probe.branch, '--follow-tags'], PUSH_TIMEOUT_MS)
+      const verdict = interpretPush(push.stdout, push.stderr, push.code)
+      items.push({
+        remote: ep.name,
+        outcome: verdict.kind === 'pushed' ? 'pushed' : verdict.kind === 'rejected' ? 'rejected' : 'failed',
+        message: verdict.message,
+      })
+    }
+    return { path: repoPath, items }
+  }
+
+  /** 分叉合并：fetch 该远端当前分支 → merge --ff-only FETCH_HEAD（真分叉时 git 拒绝，不自动合并） */
+  async syncMerge(path: string, remote: string): Promise<GitRawResult> {
+    const repoPath = assertRepoPath(path)
+    const name = String(remote ?? '').trim()
+    if (!isValidBranchName(name)) throw new Error(`非法远端名: ${name || '(空)'}`)
+    const head = await execGit(['-C', repoPath, 'rev-parse', '--abbrev-ref', 'HEAD'])
+    const branch = head.stdout.trim()
+    if (!branch || branch === 'HEAD') {
+      return { code: 1, stdout: '', stderr: 'HEAD 游离（detached HEAD），没有可合并的分支' }
+    }
+    const fetched = await execGit(['-C', repoPath, 'fetch', name, branch], FETCH_TIMEOUT_MS)
+    if (fetched.code !== 0) return fetched
+    return execGit(['-C', repoPath, 'merge', '--ff-only', 'FETCH_HEAD'], PULL_TIMEOUT_MS)
+  }
+
+  /** 主仓切换：显式写入 sync 配置（primary = 该远端，其余全部镜像），注册表持久化 */
+  async __SYNC_SETPRIMARY_REMOVED__(path: string, primary: string): Promise<GitReposRegistry> {
+    return this.enqueue(async () => {
+      const repoPath = assertRepoPath(path)
+      const name = String(primary ?? '').trim()
+      if (!isValidBranchName(name)) throw new Error(`非法远端名: ${name || '(空)'}`)
+      const remotesRaw = await execGit(['-C', repoPath, 'config', '--get-regexp', '^remote\\..*\\.url$'])
+      const remotes = parseRemoteConfig(remotesRaw.stdout)
+      if (!remotes[name]) throw new Error(`远端 ${name} 不存在（现有：${Object.keys(remotes).sort().join('、') || '无'}）`)
+      const reg = await readRegistryFromDisk()
+      reg.sync = { ...(reg.sync ?? {}), [repoPath]: deriveSyncConfig(remotes, name) }
+      await writeRegistryToDisk(reg)
+      return reg
+    })
   }
 }

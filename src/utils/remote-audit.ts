@@ -1,5 +1,5 @@
 /**
- * 渲染层人工通道的审计写入口 —— 批量下发 / Docker 变更动作。
+ * 渲染层人工通道的审计写入口 —— 批量下发 / Docker 变更动作 / K8s 变更动作。
  *
  * S4-07：这两条通道走 ssh:exec，Electron 主进程不写 audit_log，审计页上曾完全
  * 看不到。审计是事后证据，不是执行闸门：写失败只提示，不回滚已发生的远端动作。
@@ -10,6 +10,8 @@ import { extractSSHError } from '@/types/ssh-error-types'
 
 export const AUDIT_ACTION_BULK = 'bulk_ssh_exec'
 export const AUDIT_ACTION_DOCKER = 'docker_action'
+/** K8s 的四个窄变更动作（rollout restart / scale / delete pod / delete job） */
+export const AUDIT_ACTION_K8S = 'k8s_action'
 /** Git 仓库管理的远程变更动作（pull 即部署语义，fetch 属读路径不写审计） */
 export const AUDIT_ACTION_GIT = 'git_repo_action'
 

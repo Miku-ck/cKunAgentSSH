@@ -51,9 +51,9 @@ afterAll(() => {
 })
 
 describe('GitReposService 登记链路（添加仓库）', () => {
-  it('空注册表出厂', async () => {
+  it('空注册表出厂（version 2，含空 sync 段）', async () => {
     const reg = await svc.getRegistry()
-    expect(reg).toEqual({ version: 1, local: [], remote: {} })
+    expect(reg).toEqual({ version: 2, local: [], remote: {}, sync: {} })
   })
 
   it('addLocal：合法仓库登记并持久化', async () => {
@@ -212,5 +212,114 @@ describe('GitReposService 写操作（switch / commit / push）', () => {
     const r = await svc.pushOne(repoB)
     expect(r.code).not.toBe(0)
     expect(r.stderr).toContain('没有配置远程仓库')
+  })
+})
+
+describe('GitReposService 三仓同步（probe / catchup / merge / 主仓切换）', () => {
+  // 用本地裸仓库当远端：ls-remote / push / fetch 全走文件系统，离线可测
+  let repoC = ''
+  let bareA = ''
+  let bareB = ''
+  const g = (args: string[]) => execFileSync('git', ['-C', repoC, ...args], { stdio: 'pipe' })
+  const commit = (msg: string): void => {
+    writeFileSync(join(repoC, `${msg}.txt`), `${msg}\n`)
+    g(['add', `${msg}.txt`])
+    g(['commit', '-m', msg])
+  }
+
+  beforeAll(() => {
+    repoC = join(workDir, 'repo-sync')
+    bareA = join(workDir, 'bare-a.git')
+    bareB = join(workDir, 'bare-b.git')
+    makeRepo(repoC, 'init.txt')
+    execFileSync('git', ['init', '--bare', '-b', 'main', bareA], { stdio: 'pipe' })
+    execFileSync('git', ['init', '--bare', '-b', 'main', bareB], { stdio: 'pipe' })
+    g(['remote', 'add', 'origin', bareA])
+    g(['remote', 'add', 'backup', bareB])
+    g(['push', 'origin', 'main'])
+    g(['push', 'backup', 'main'])
+  })
+
+  it('syncProbeOne：本地裸远端推平后全 ok，主仓默认 origin', async () => {
+    const r = await svc.syncProbeOne(repoC)
+    expect(r.ok).toBe(true)
+    expect(r.branch).toBe('main')
+    expect(r.primary).toBe('origin')
+    expect(r.endpoints).toHaveLength(2)
+    expect(r.endpoints.every(e => e.state === 'ok')).toBe(true)
+    expect(r.endpoints.find(e => e.name === 'origin')?.role).toBe('primary')
+    expect(r.endpoints.find(e => e.name === 'backup')?.role).toBe('mirror')
+  })
+
+  it('syncProbeOne：本地新提交后远端转 behind，落后数 = 1', async () => {
+    commit('local-2')
+    const r = await svc.syncProbeOne(repoC)
+    const origin = r.endpoints.find(e => e.name === 'origin')
+    expect(origin?.state).toBe('behind')
+    expect(origin?.behind).toBe(1)
+    // headSha 与远端 SHA 不同但仍是其快进后代
+    expect(origin?.sha).not.toBe(r.headSha)
+  })
+
+  it('syncCatchup：全部落后远端逐家补齐（push --follow-tags），再探全 ok', async () => {
+    const res = await svc.syncCatchup(repoC)
+    expect(res.items.map(i => i.remote).sort()).toEqual(['backup', 'origin'])
+    expect(res.items.every(i => i.outcome === 'pushed')).toBe(true)
+    const r = await svc.syncProbeOne(repoC)
+    expect(r.endpoints.every(e => e.state === 'ok')).toBe(true)
+  })
+
+  it('syncSetPrimary：主仓切到 backup 后角色翻转并持久化', async () => {
+    const reg = await svc.syncSetPrimary(repoC, 'backup')
+    expect(reg.sync?.[repoC]).toEqual({ primary: 'backup', mirrors: ['origin'] })
+    const r = await svc.syncProbeOne(repoC)
+    expect(r.endpoints.find(e => e.name === 'backup')?.role).toBe('primary')
+    expect(r.endpoints.find(e => e.name === 'origin')?.role).toBe('mirror')
+  })
+
+  it('分叉：远端独有提交 → diverged；catchup 跳过绝不强推；merge --ff-only 被拒', async () => {
+    // 在 bare-a（origin）侧制造独有提交：clone → commit → push
+    const cloneDir = join(workDir, 'clone-a')
+    execFileSync('git', ['clone', bareA, cloneDir], { stdio: 'pipe' })
+    const cg = (args: string[]) => execFileSync('git', ['-C', cloneDir, ...args], { stdio: 'pipe' })
+    writeFileSync(join(cloneDir, 'remote-only.txt'), 'x\n')
+    cg(['config', 'user.email', 't@t'])
+    cg(['config', 'user.name', 't'])
+    cg(['add', 'remote-only.txt'])
+    cg(['commit', '-m', 'remote only'])
+    cg(['push', 'origin', 'main'])
+    // 本地再造一个独有提交 → 真分叉
+    commit('local-3')
+    const probe = await svc.syncProbeOne(repoC)
+    const origin = probe.endpoints.find(e => e.name === 'origin')
+    expect(origin?.state).toBe('diverged')
+    // 补齐：origin 分叉被跳过（绝不强推），backup 快进补齐成功
+    const res = await svc.syncCatchup(repoC)
+    const originItem = res.items.find(i => i.remote === 'origin')
+    expect(originItem?.outcome).toBe('skipped')
+    expect(originItem?.message).toContain('分叉')
+    // 合并：真分叉时 --ff-only 被 git 拒绝（非快进），不自动合并
+    const merge = await svc.syncMerge(repoC, 'origin')
+    const { interpretPull } = await import('../shared/git-repos-core')
+    const verdict = interpretPull(merge.stdout, merge.stderr, merge.code)
+    expect(verdict.kind).toBe('diverged')
+  })
+
+  it('syncProbeAll：目录被删的仓库按行上浮错误，不拖垮整批', async () => {
+    const ghost = join(workDir, 'ghost-sync')
+    makeRepo(ghost, 'g.txt')
+    rmSync(ghost, { recursive: true, force: true })
+    const results = await svc.syncProbeAll([ghost, repoC])
+    expect(results).toHaveLength(2)
+    expect(results[0].ok).toBe(false)
+    expect(results[0].error).toBeTruthy()
+    expect(results[1].ok).toBe(true)
+  })
+
+  it('syncProbeOne：无远端仓库 ok 且 endpoints 为空（渲染层显示未纳入）', async () => {
+    const r = await svc.syncProbeOne(repoB)
+    expect(r.ok).toBe(true)
+    expect(r.endpoints).toEqual([])
+    expect(r.primary).toBe('')
   })
 })

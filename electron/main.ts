@@ -38,6 +38,9 @@ import { perfMark } from './utils/perf-mark'
 import { resolvePowerShell } from './utils/powershell-path'
 import { ensureShellShortcuts } from './shortcut-win'
 import { installMainLogger, logRendererConsole } from './main-logger'
+import { Updater } from './updater'
+import { setupCrashReporter } from './crash-reporter'
+import { diagnosticsFileExists, exportDiagnostics } from './diagnostics'
 
 // 主进程统一日志：必须在一切业务代码之前安装（打包态无 stdout，console.* 只能靠这里
 // 落盘才能在现场排障时可见）。此后包括下面这行 perfMark 在内的所有 console.* 都进
@@ -51,6 +54,27 @@ perfMark('main module loaded')
 // [HH:MM:SS.mmm] 与级别前缀，这里的 logWarn/logError 不再自己加时间戳（否则双份）。
 function logWarn(domain: string, msg: string): void { console.warn(`[${domain}] ${msg}`) }
 function logError(domain: string, msg: string): void { console.error(`[${domain}] ${msg}`) }
+
+// ─── 崩溃上报（本地 Crashpad，不联网）──────────
+// 必须在 whenReady 之前注册：渲染进程在首屏前后崩溃都要留下转储。转储目录固定
+// userData/Crashpad，诊断包按同一路径取（两边不能各算一份，见 electron/diagnostics.ts）。
+const APP_STARTED_AT = new Date()
+const CRASH_DUMPS_DIR = (() => {
+  try {
+    return setupCrashReporter({
+      userDataDir: app.getPath('userData'),
+      log: (level, message) => {
+        if (level === 'error') logError('crash', message)
+        else if (level === 'warn') logWarn('crash', message)
+        else console.log(`[crash] ${message}`)
+      },
+    })
+  } catch (e) {
+    // crash-reporter 内部已逐段兜过，这里只是最后一道：任何异常都不能挡住启动
+    logWarn('crash', `崩溃上报初始化失败（忽略）：${e instanceof Error ? e.message : String(e)}`)
+    return ''
+  }
+})()
 
 let mainWindow: BrowserWindow | null = null
 // 开发态判定：原 `is.dev`（@electron-toolkit/utils）语义就是 `!app.isPackaged`，
@@ -1419,12 +1443,17 @@ function setupSSHIPC(): void {
     return githubAccel!.getConfig()
   })
 
-  handleTrusted('ghaccel:saveLists', (_event, proxies: any[], webMirrors: any[]) => {
-    return githubAccel!.saveLists(proxies, webMirrors)
+  handleTrusted('ghaccel:saveLists', (_event, proxies: any[]) => {
+    return githubAccel!.saveLists(proxies)
   })
 
   handleTrusted('ghaccel:probeAll', () => {
     return githubAccel!.probeAll()
+  })
+
+  // 一键自动调优（懒人版总控）：实测选优 + 淘汰连续失效 + 每次刷新候选池并在可用不足时自动采纳
+  handleTrusted('ghaccel:autoTune', () => {
+    return githubAccel!.autoTune()
   })
 
   handleTrusted('ghaccel:gitStatus', () => {
@@ -1440,8 +1469,8 @@ function setupSSHIPC(): void {
     return githubAccel!.healthStatus()
   })
 
-  handleTrusted('ghaccel:gitEnable', (_event, prefix: string) => {
-    return githubAccel!.gitEnable(prefix)
+  handleTrusted('ghaccel:gitEnable', (_event, prefix: string, pushMode?: 'direct' | 'ssh') => {
+    return githubAccel!.gitEnable(prefix, pushMode)
   })
 
   handleTrusted('ghaccel:gitDisable', () => {
@@ -1460,10 +1489,12 @@ function setupSSHIPC(): void {
     return githubAccel!.ssh443Remove()
   })
 
-  // 系统浏览器打开镜像站（仅限 http/https，防 file:// 等协议跳转）
-  handleTrusted('ghaccel:openExternal', (_event, url: string) => {
-    if (typeof url !== 'string' || !/^https:\/\//i.test(url)) throw new Error('仅允许打开 https 链接')
-    return shell.openExternal(url)
+  // ── 私人令牌（PAT）配置 ──
+  handleTrusted('ghaccel:getTokens', () => {
+    return githubAccel!.getTokens()
+  })
+  handleTrusted('ghaccel:saveTokens', (_event, tokens: import('../shared/github-accel-core').GitPrivateToken[]) => {
+    return githubAccel!.saveTokens(tokens)
   })
 
   // ── GitHub 加速下载器（M2：流式落盘 + 进度推送 + Range 续传） ──
@@ -1508,8 +1539,8 @@ function setupSSHIPC(): void {
     return status
   })
 
-  // 总控选项：记住一键加速使用的镜像
-  handleTrusted('ghaccel:saveOptions', (_event, patch: { lastProxyPrefix?: string }) => {
+  // 总控选项：记住一键加速使用的镜像、push 策略、hosts 自动重选开关
+  handleTrusted('ghaccel:saveOptions', (_event, patch: { lastProxyPrefix?: string; pushMode?: 'direct' | 'ssh'; hostsAutoRefresh?: boolean }) => {
     return githubAccel!.saveOptions(patch)
   })
 
@@ -1577,6 +1608,22 @@ function setupSSHIPC(): void {
   // 提交图谱（--graph --all 原始输出，解析在渲染层）
   handleTrusted('gitrepos:graphLog', (_event, path: string, limit: number) => {
     return gitRepos!.graphLog(path, limit)
+  })
+
+  // ── 三仓同步（主仓 + 只读镜像）：探测 / 补齐 / 分叉合并 / 主仓切换 ──
+  // 全部本地仓库路径（remote 侧同步不在本期：仓库子页的远程路径先各自 fetch）
+  handleTrusted('gitrepos:syncProbe', (_event, paths: string[]) => {
+    return gitRepos!.syncProbeAll(paths)
+  })
+
+  // remotes 缺省 = 全部落后远端；传单元素 = 单家补齐。逐家回报，非原子
+  handleTrusted('gitrepos:syncCatchup', (_event, path: string, remotes?: string[]) => {
+    return gitRepos!.syncCatchup(path, remotes)
+  })
+
+  // 分叉专用：fetch 该远端当前分支 → merge --ff-only FETCH_HEAD（真分叉 git 拒绝）
+  handleTrusted('gitrepos:syncMerge', (_event, path: string, remote: string) => {
+    return gitRepos!.syncMerge(path, remote)
   })
 
   // ── TLS 接入网关（安全接入）──
@@ -1857,6 +1904,94 @@ function setupSftpIPC(): void {
   })
 }
 
+// ─── Update IPC（tar 形态自助更新）──────────────
+
+let updater: Updater | null = null
+
+/**
+ * 自更新通道。所有判定与 IO 在 electron/updater.ts，这里只做两件事：
+ * 把请求转给它、把状态推给渲染层（与 backend:status 同形）。
+ */
+function setupUpdateIPC(): void {
+  handleTrusted('update:getState', () => updater?.getState() ?? null)
+  handleTrusted('update:check', () => updater?.check() ?? null)
+  handleTrusted('update:download', () => updater?.download() ?? null)
+  handleTrusted('update:setFeed', (_event, url: unknown) => updater?.setFeed(String(url ?? '')) ?? null)
+  /**
+   * 应用更新 = 落标记 + 拉起 detached 助手，然后本进程退出。
+   * 先回 IPC 再排退出：助手在等 PID 消失，先退出的话渲染层拿到的只有断连。
+   */
+  handleTrusted('update:apply', () => {
+    if (!updater) return { ok: false, state: null }
+    const ok = updater.apply(process.pid)
+    if (ok) setTimeout(() => app.quit(), 800)
+    return { ok, state: updater.getState() }
+  })
+}
+
+// ─── 诊断包 IPC（本地落盘，不联网）──────────
+
+/** 上一次导出的包（用户可能已自行删/移，reveal 前重查盘） */
+let lastDiagnosticsPath: string | null = null
+
+/**
+ * 实际使用的解释器：内嵌 runtime 优先（与 backend-manager 的解析顺序同口径），
+ * 开发态看 CKUN_PYTHON。版本号不在这里探测 —— 为一行信息去 spawn 一个 python
+ * 不值得，包里有路径就足够判断"走的是内嵌还是系统"。
+ */
+function pythonPathForDiagnostics(): string | null {
+  if (app.isPackaged) {
+    const bundled = process.platform === 'win32'
+      ? join(process.resourcesPath, 'python-runtime', 'python.exe')
+      : join(process.resourcesPath, 'python-runtime', 'bin', 'python3')
+    if (existsSync(bundled)) return bundled
+  }
+  const explicit = (process.env.CKUN_PYTHON ?? '').trim()
+  return explicit || null
+}
+
+function setupDiagnosticsIPC(): void {
+  handleTrusted('diag:export', async () => {
+    const state = updater?.getState()
+    const result = await exportDiagnostics({
+      userDataDir: app.getPath('userData'),
+      // 开发态没有分发目录，把仓库根记进去：排障要能分辨"哪份代码的目录"
+      appDir: app.isPackaged ? dirname(app.getPath('exe')) : app.getAppPath(),
+      currentVersion: app.getVersion(),
+      electronVersion: process.versions.electron ?? '',
+      chromeVersion: process.versions.chrome ?? '',
+      nodeVersion: process.versions.node,
+      platform: process.platform,
+      arch: process.arch,
+      locale: app.getLocale(),
+      startedAt: APP_STARTED_AT,
+      runtimePath: pythonPathForDiagnostics(),
+      runtimeVersion: null,
+      updateFeedUrl: state?.feedUrl ?? '',
+      updatePhase: state?.phase ?? 'unknown',
+      // 与 crash-reporter 同一个目录（可能为空 = 转储目录建不出来，那时取默认处）
+      crashDumpsDir: CRASH_DUMPS_DIR || undefined,
+      log: (level, message) => {
+        if (level === 'error') logError('diag', message)
+        else if (level === 'warn') logWarn('diag', message)
+        else console.log(`[diag] ${message}`)
+      },
+    })
+    if (result.path) lastDiagnosticsPath = result.path
+    return result
+  })
+  /** 在文件夹中显示：包还在就定位到它，否则退到产物目录（用户可能已移动/删除） */
+  handleTrusted('diag:reveal', async () => {
+    if (diagnosticsFileExists(lastDiagnosticsPath)) {
+      shell.showItemInFolder(lastDiagnosticsPath!)
+      return
+    }
+    const dir = join(app.getPath('userData'), 'diagnostics')
+    if (!existsSync(dir)) throw new Error('还没有导出过诊断包')
+    await shell.openPath(dir)
+  })
+}
+
 // ─── App Lifecycle ──────────────────────────────────
 // 只禁 GPU 的**磁盘缓存**：它不改变渲染路径、无性能代价，挡的是"GPU 进程写不进缓存目录"
 // 那一类权限错误（沙箱内实测会出现）。
@@ -1972,6 +2107,32 @@ app.whenReady().then(async () => {
   setupSkillsIPC()
   setupSftpIPC()
   perfMark('ipc setup done')
+
+  // 自更新（tar 形态）：appDir 取 exe 所在目录 —— 开发态那是 node_modules/electron/dist，
+  // 换包等于拆开发环境，所以置空（Updater 据此把 supported 置 false，UI 禁用按钮）。
+  updater = new Updater({
+    appDir: app.isPackaged ? dirname(app.getPath('exe')) : '',
+    userDataDir: app.getPath('userData'),
+    currentVersion: app.getVersion(),
+    exeName: basename(app.getPath('exe')),
+    platform: process.platform,
+    arch: process.arch,
+    // 部署默认值来自环境变量；设置页的覆盖值落在 userData/update/config.json，loadConfig 优先读它
+    feedUrl: (process.env.CKUN_UPDATE_FEED ?? '').trim(),
+    log: (level, message) => {
+      if (level === 'error') logError('update', message)
+      else if (level === 'warn') logWarn('update', message)
+      else console.log(`[update] ${message}`)
+    },
+  })
+  // 顺序要紧：先读覆盖值（静默改内部状态），再订阅推送，最后处理上次留下的换包标记
+  updater.loadConfig()
+  updater.onState((s) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update:state', s)
+  })
+  updater.consumePending()
+  setupUpdateIPC()
+  setupDiagnosticsIPC()
   // 启动性能优化：initDesktopPrefs 读盘不阻塞首屏；关窗隐藏按默认值（不隐藏）走，
   // prefs 就绪后 shouldHideOnClose / tray 的后续状态由模块内内存更新生效。
   initDesktopPrefs(() => mainWindow).catch(e => logWarn('main', `initDesktopPrefs 失败: ${e instanceof Error ? e.message : String(e)}`))
@@ -2046,6 +2207,11 @@ app.whenReady().then(async () => {
     // 隐藏到托盘后点 Dock 图标：窗口还在，只是不可见 —— 不 show 就是"点了没反应"
     if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) mainWindow.show()
   })
+
+  // 后台检查更新：首屏与后端都已就绪，且还没配清单地址时什么都不做。
+  // 8s 是刻意往后挪的 —— 检查更新永远不该跟启动抢网络和主线程。
+  const updateTimer = setTimeout(() => { void updater?.check() }, 8000)
+  updateTimer.unref()
 })
 
 app.on('window-all-closed', () => {

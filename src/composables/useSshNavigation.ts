@@ -16,7 +16,7 @@ export const LOCAL_SHELLS = ['PowerShell', 'CMD', 'Git Bash', 'WSL']
  * 类型检查却过得去（多出来的字面量只是没人传）。现在两处共用这一个源头。
  */
 export type NavPage =
-  'home' | 'remote-mgr' | 'sftp' | 'audit' | 'schedules' | 'dashboard' | 'tunnels' | 'docker' | 'git' | 'bot'
+  'home' | 'remote-mgr' | 'sftp' | 'audit' | 'schedules' | 'dashboard' | 'tunnels' | 'docker' | 'k8s' | 'git' | 'bot'
 
 /**
  * 标题条可高亮的页键（ARCH-008 收口）：独立页 + 首页任务台。
@@ -169,6 +169,7 @@ export function useSshNavigation(
   const toggleDashboard = (): void => togglePage('dashboard')
   const toggleTunnels = (): void => togglePage('tunnels')
   const toggleDocker = (): void => togglePage('docker')
+  const toggleK8s = (): void => togglePage('k8s')
   const toggleGit = (): void => togglePage('git')
   const toggleBot = (): void => togglePage('bot')
 
@@ -404,6 +405,7 @@ export function useSshNavigation(
     toggleDashboard,
     toggleTunnels,
     toggleDocker,
+    toggleK8s,
     toggleGit,
     toggleBot,
     openLocalShell,

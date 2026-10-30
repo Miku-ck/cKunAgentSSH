@@ -35,6 +35,7 @@ export type SettingCategory =
   | 'memory'
   | 'ops'
   | 'bot'
+  | 'about'
 
 interface AppSettings {
   chat: {
