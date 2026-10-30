@@ -31,3 +31,4 @@
 | **渠道 provider**（`bot/provider.py`） | 一个平台一个实现，5 成员协议（start / outbound_parts / fallback / name / reply_window_s） | 入站管线永远拿不到平台原始对象；接入新平台 = 写 provider + 进注册表，不改管线 |
 | **寄存**（proactive queued） | QQ 被动回复窗口发不出的主动「心里话」，写 `bot_proactive_log(action=queued)` 存 48h，等对方来消息以「对了，」捎上 | 协议上 QQ 无法主动发消息；任何「直接发」的实现都会被平台拒绝 |
 | **README 双语**（`README.md` / `README.en.md`） | 中英两份 README 是同一份事实的两个语言投影：章节、表格、代码块、架构图逐节对应，任一侧改动功能 / 命令 / 架构都要同步另一侧 | 只更中文等于让英文版谎报功能与命令，「只有中文版」过期比没有英文版更误导 |
+| **示例脱敏**（README / 代码注释 / UI 占位符 / 示例配置） | 公开面一律只写占位符：`your-llm-host`、`example.com`；真实内网地址、主机名与凭据只允许存在于本地 `backend/.env`（已被 `.gitignore` 忽略） | 文档与界面是公开面，真实内网 IP 写进示例等于给攻击者画拓扑图，还会被复制粘贴扩散 |
