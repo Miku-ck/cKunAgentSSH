@@ -80,11 +80,13 @@ def _missing_credentials(runtime, provider: str, values: dict) -> list[str]:
 
 @router.get("/bot/webhook")
 def get_webhook():
+    """公网回调基址（微信渠道要填到平台里的那个地址），空串表示未配置。"""
     return {"base_url": db.get_app_setting(WEBHOOK_BASE_SETTING, "") or ""}
 
 
 @router.put("/bot/webhook")
 def set_webhook(req: WebhookRequest):
+    """写公网回调基址：只收 http/https，落库前去掉尾部斜杠；空串表示清除。"""
     value = req.base_url.strip().rstrip("/")
     if value and not value.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="公网地址必须以 http:// 或 https:// 开头")
@@ -100,6 +102,7 @@ def list_channels():
 
 @router.post("/bot/channels")
 def create_channel(req: ChannelCreateRequest):
+    """新建机器人渠道：人格不存在/渠道类型不支持/首次配置缺凭据/超出数量上限都是 400，凭据经 protect_secret 落库。"""
     if not db.get_bot_persona(req.persona_id):
         raise HTTPException(status_code=404, detail="人格不存在")
     runtime = _runtime()
@@ -130,6 +133,7 @@ def create_channel(req: ChannelCreateRequest):
 
 @router.put("/bot/channels/{channel_id}")
 def update_channel(channel_id: str, req: ChannelUpdateRequest):
+    """更新渠道（改名、换人格、补凭据）：在线切人格返回 409，避免正在生成的回复用错人格；人格不存在 404。"""
     channel = _require(channel_id)
     if req.persona_id is not None and not db.get_bot_persona(req.persona_id):
         raise HTTPException(status_code=404, detail="人格不存在")
@@ -161,6 +165,7 @@ def update_channel(channel_id: str, req: ChannelUpdateRequest):
 
 @router.delete("/bot/channels/{channel_id}")
 async def delete_channel(channel_id: str):
+    """先断开再删除渠道，它的会话记录一并消失（日志里报条数）。"""
     channel = _require(channel_id)
     await _runtime().disconnect(channel_id)
     db.delete_bot_channel(channel_id)
@@ -172,6 +177,7 @@ async def delete_channel(channel_id: str):
 
 @router.post("/bot/channels/{channel_id}/connect")
 async def connect(channel_id: str):
+    """用库里已存的凭据起连接：缺 app_id 或凭据 400、已连着 409；致命失败顺手置 enabled=False，免得每次开机拿旧凭据重试。"""
     channel = _require(channel_id)
     runtime = _runtime()
     missing = _missing_credentials(
@@ -200,6 +206,7 @@ async def connect(channel_id: str):
 
 @router.post("/bot/channels/{channel_id}/disconnect")
 async def disconnect(channel_id: str):
+    """断开连接并置 enabled=False，返回状态机快照。"""
     _require(channel_id)
     status = await _runtime().disconnect(channel_id)
     db.set_bot_channel_enabled(channel_id, False)

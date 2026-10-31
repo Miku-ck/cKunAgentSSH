@@ -204,16 +204,19 @@ def list_relations():
 
 @router.get("/bot/personas")
 def list_personas():
+    """全部人格记录（含作为兜底的默认人格 is_builtin）。"""
     return db.list_bot_personas()
 
 
 @router.post("/bot/personas")
 def create_persona(req: PersonaRequest):
+    """新建人格；头像只收图片 data_url（由 PersonaRequest 校验）。"""
     return db.create_bot_persona(**req.model_dump())
 
 
 @router.post("/bot/personas/{persona_id}/copy")
 def copy_persona(persona_id: str):
+    """整份复制一个人格；persona_id 不存在返回 404。"""
     persona = db.copy_bot_persona(persona_id)
     if not persona:
         raise HTTPException(status_code=404, detail="人格不存在")
@@ -222,6 +225,7 @@ def copy_persona(persona_id: str):
 
 @router.patch("/bot/personas/{persona_id}")
 def update_persona(persona_id: str, req: PersonaUpdateRequest):
+    """局部更新：只应用请求里出现的字段，其中 model_id 允许显式清空；不存在返回 404。"""
     data = req.model_dump(exclude_unset=True)
     data = {key: value for key, value in data.items() if value is not None or key == "model_id"}
     persona = db.update_bot_persona(persona_id, **data)
@@ -232,6 +236,7 @@ def update_persona(persona_id: str, req: PersonaUpdateRequest):
 
 @router.delete("/bot/personas/{persona_id}")
 def delete_persona(persona_id: str):
+    """删除人格；默认人格（is_builtin）返回 409 —— 它同时是列表置顶与渠道迁移的兜底。"""
     persona = db.get_bot_persona(persona_id)
     if not persona:
         raise HTTPException(status_code=404, detail="人格不存在")
@@ -350,6 +355,7 @@ def list_conversations(
     persona_id: Optional[str] = None,
     limit: int = Query(100, ge=1, le=500),
 ):
+    """会话列表，可按渠道（local/qq/wechat）与人格过滤，limit 1..500。"""
     return [
         _conversation_payload(row)
         for row in db.list_bot_conversations(
@@ -360,6 +366,7 @@ def list_conversations(
 
 @router.post("/bot/conversations")
 def create_conversation(req: CreateBotConversationRequest):
+    """新建本地会话；人格不存在返回 404。"""
     try:
         return _conversation_payload(db.create_bot_conversation(req.persona_id, req.channel))
     except ValueError:
@@ -368,6 +375,7 @@ def create_conversation(req: CreateBotConversationRequest):
 
 @router.get("/bot/conversations/{conversation_id}/messages")
 def get_messages(conversation_id: str, limit: int = Query(100, ge=1, le=500)):
+    """会话最近 limit 条消息（1..500）；会话不存在返回 404。"""
     if not db.get_bot_conversation(conversation_id):
         raise HTTPException(status_code=404, detail="会话不存在")
     return db.get_bot_messages(conversation_id, limit)
@@ -375,6 +383,7 @@ def get_messages(conversation_id: str, limit: int = Query(100, ge=1, le=500)):
 
 @router.delete("/bot/conversations/{conversation_id}")
 def delete_conversation(conversation_id: str):
+    """删除会话；不存在返回 404。"""
     if not db.delete_bot_conversation(conversation_id):
         raise HTTPException(status_code=404, detail="会话不存在")
     return {"deleted": True}
@@ -390,6 +399,7 @@ class BotConversationUpdateRequest(BaseModel):
 
 @router.patch("/bot/conversations/{conversation_id}")
 def update_conversation(conversation_id: str, req: BotConversationUpdateRequest):
+    """覆盖 QQ/微信会话的显示名与头像；本地会话返回 400 —— 标题就是人格名，盖了反而误导。"""
     conversation = db.get_bot_conversation(conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="会话不存在")
@@ -406,6 +416,7 @@ def update_conversation(conversation_id: str, req: BotConversationUpdateRequest)
 
 @router.post("/bot/chat")
 async def chat(req: BotChatRequest):
+    """以 SSE 逐段推回人格回复；会话不存在返回 404。"""
     if not db.get_bot_conversation(req.conversation_id):
         raise HTTPException(status_code=404, detail="会话不存在")
 
@@ -443,16 +454,19 @@ class GalleryItemRequest(BaseModel):
 
 @router.get("/bot/gallery")
 def list_gallery():
+    """头像图库全部条目（人格与用户头像的候选池）。"""
     return db.list_bot_gallery()
 
 
 @router.post("/bot/gallery")
 def add_gallery_item(req: GalleryItemRequest):
+    """往图库加一条 data_url 头像，可带 label。"""
     return db.create_bot_gallery_item(req.data_url, label=req.label)
 
 
 @router.delete("/bot/gallery/{item_id}")
 def remove_gallery_item(item_id: str):
+    """从图库删除条目；不存在返回 404。"""
     if not db.delete_bot_gallery_item(item_id):
         raise HTTPException(status_code=404, detail="图库条目不存在")
     return {"deleted": True}
@@ -470,10 +484,12 @@ _USER_AVATAR_KEY = "bot_user_avatar"
 
 @router.get("/bot/user-avatar")
 def get_user_avatar():
+    """用户自己的头像，存在 app_setting，空串表示未设置。"""
     return {"avatar": db.get_app_setting(_USER_AVATAR_KEY, "") or ""}
 
 
 @router.put("/bot/user-avatar")
 def put_user_avatar(req: BotUserAvatarRequest):
+    """写用户头像；空串表示清除。"""
     db.set_app_setting(_USER_AVATAR_KEY, req.avatar)
     return {"avatar": req.avatar}

@@ -13,6 +13,7 @@ router = APIRouter()
 
 @router.get("/assets/stickers/{key}")
 def read_sticker(key: str):
+    """按 manifest 里的键返回内置 png；键不存在返回 404，命中时带一天强缓存。"""
     path = sticker_mod.path_for(key)
     if not path:
         raise HTTPException(status_code=404, detail="表情包不存在")

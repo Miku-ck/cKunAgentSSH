@@ -28,6 +28,7 @@ def _runtime():
 
 @router.post("/bot/wechat/{channel_id}")
 async def wechat_callback(channel_id: str, request: Request):
+    """微信对话开放平台的回调入口：报文限 64KB（超限 413）、解密失败 400，渠道离线时回 ACK 丢弃以免平台重投。"""
     content_length = request.headers.get("content-length")
     if content_length and content_length.isdigit() and int(content_length) > MAX_BODY_BYTES:
         raise HTTPException(status_code=413, detail="回调报文过大")
