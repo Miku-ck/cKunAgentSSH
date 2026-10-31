@@ -36,7 +36,12 @@ FRIENDLY_DETAILS = {
 MISSING_DEPENDENCY_DETAIL = (
     "后端缺少 QQ 机器人依赖 qq-botpy，请在运行后端的 Python 中执行 pip install qq-botpy"
 )
-DEFAULT_RETRY_DELAYS = (5, 10, 30, 60)
+# 阶梯重连延迟（秒）。
+# 首项是 4009 "Session timed out" 平台强制断开后的等待：该事件每小时一次、
+# 已在线后发生，不是故障，应尽快重建会话（日志实测 5s 等待 + botpy ~5s 握手 ≈ 10s 空窗）。
+# 首项之后逐级放大，兜底连续失败（网络抖动/platform 限频）的爆破。初始连接失败
+# 走同样阶梯（配错凭据由 FATAL_EXCEPTIONS 兜底，不会因快速重试恶化）。
+DEFAULT_RETRY_DELAYS = (2, 5, 15, 30)
 
 
 def _install_group_message_parser(client) -> bool:
