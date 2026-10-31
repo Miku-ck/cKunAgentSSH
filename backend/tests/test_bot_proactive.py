@@ -799,7 +799,7 @@ def test_pick_topic_cares_about_fatigue_first(base_db):
     persona = db.create_bot_persona(name="晚风")
     mem.remember(persona["id"], "c1", "周末要去看展")
     topic = pro.pick_topic(persona["id"], {"last_event_kind": "fatigue"})
-    assert topic == ("他上次聊到很累，问问他现在缓过来没有", "fatigue_care")
+    assert topic == pro.Topic("他上次聊到很累，问问他现在缓过来没有", "fatigue_care")
 
 
 def test_pick_topic_shares_recent_fact(base_db):
@@ -1072,3 +1072,49 @@ async def test_probe_runs_the_real_compose_path(base_db, monkeypatch):
     assert result["text"] == "晚上有空一起打一把吗"
     assert result["desire"] < pro.FIRE_THRESHOLD, "新人格本来就开不了口：探口绕过它"
     assert calls == [("group:group-1", "晚上有空一起打一把吗", False)]
+
+
+# ── 选题器：计划回溯（spec 2026-10-31-plan-followup）──
+
+
+def _add_due_hook(persona_id: str, plan_text: str = "看展") -> str:
+    return db.add_plan_hook(
+        persona_id, None, None, plan_text, "周末",
+        "2026-10-31 00:00:00", "2026-11-02 00:00:00", "2026-10-28 12:00:00",
+    )
+
+
+NOW_PLAN = datetime(2026, 11, 2, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def test_pick_topic_uses_a_due_plan(base_db):
+    persona, _conv = _persona_conv()
+    hook_id = _add_due_hook(persona["id"])
+
+    topic = pro.pick_topic(persona["id"], {}, now=NOW_PLAN)
+
+    assert topic is not None
+    assert topic.source == "plan_due"
+    assert topic.plan_id == hook_id
+    assert "看展" in topic.describe
+    assert topic[0] == topic.describe, "下标访问必须继续可用"
+
+
+def test_fatigue_care_outranks_a_due_plan(base_db):
+    persona, _conv = _persona_conv()
+    _add_due_hook(persona["id"])
+
+    topic = pro.pick_topic(persona["id"], {"last_event_kind": "fatigue"}, now=NOW_PLAN)
+
+    assert topic.source == "fatigue_care"
+
+
+def test_plan_due_outranks_fresh_fact(base_db):
+    persona, _conv = _persona_conv()
+    _add_due_hook(persona["id"])
+    mem.add_manual(persona["id"], "用户喜欢喝美式")
+
+    topic = pro.pick_topic(persona["id"], {}, now=NOW_PLAN)
+
+    assert topic.source == "plan_due"
+

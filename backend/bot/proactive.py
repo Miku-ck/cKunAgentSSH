@@ -30,12 +30,14 @@ import asyncio
 import logging
 import random
 from datetime import datetime, timedelta, timezone
+from typing import NamedTuple
 
 import database as db
 from bot import memory as memory_mod
 from bot import relation as relation_mod
 from bot import state as state_mod
 from bot.memory import deterministic_uniform
+from bot.plan import PLAN_FOLLOWUP_H
 from bot.timeutil import fmt_ts as _fmt_ts, parse_ts as _parse
 
 logger = logging.getLogger(__name__)
@@ -334,6 +336,33 @@ TOPIC_FRESH_DAYS = 3.0   # 近窗新事实：刚记下没几天的事才够「�
 TOPIC_OLD_P = 0.12       # 旧事钩子的每日触发概率（确定性 RNG）
 
 
+class Topic(NamedTuple):
+    """选题：给 _compose 的描述 + 来源标记 + 计划钩子 id（仅 plan_due 非空）。"""
+
+    describe: str
+    source: str
+    plan_id: str = ""
+
+
+def plan_due_topic(persona_id: str, now: datetime) -> "Topic | None":
+    """到期可回溯的计划选题：窗口结束后 36h 内，最早到期的那件事先问。
+
+    文案不出现时间词、不出现具体日期：相对时间在几天后才说出口是错乱的。
+    """
+    row = db.due_plan_hook(
+        persona_id,
+        _fmt_ts(now),
+        _fmt_ts(now - timedelta(hours=PLAN_FOLLOWUP_H)),
+    )
+    if not row:
+        return None
+    return Topic(
+        f"他之前提过：{row['plan_text']}，问问后来怎么样了",
+        "plan_due",
+        row["id"],
+    )
+
+
 def _fresh_fact_topic(rows: "list[dict]", now: datetime) -> "dict | None":
     """近窗最新一条记忆。rows 按 updated_at 新→旧，首条超窗即整表超窗。"""
     for row in rows[:1]:
@@ -353,30 +382,33 @@ def _older_rows(rows: "list[dict]", now: datetime) -> "list[dict]":
     return out
 
 
-def pick_topic(persona_id: str, state: dict, *, now: "datetime | None" = None) -> "tuple[str, str] | None":
+def pick_topic(
+    persona_id: str, state: dict, *, now: "datetime | None" = None
+) -> "Topic | None":
     """主动消息的选题器：同一输入永远同一选题，可重放可单测。
 
     优先级即产品判断：
-    1. fatigue_care —— 上一轮停在他喊累（last_event_kind=fatigue）：人还没
-       缓过来就别聊别的，先问一句好点没。状态层免费给的关心时机；
-    2. fresh_fact —— 近 3 天新记的事实（novelty 轴的产品语义就是
-       「有新鲜事想分享」）：他刚说过的事她记着，想接上一句；
-    3. old_memory —— 旧事钩子：确定性 RNG（种子=persona+日期）低频翻一件
-       较旧的记忆，演出「忽然想起」而非每天复读。
+    1. fatigue_care —— 上一轮停在他喊累：人还没缓过来就别聊别的；
+    2. plan_due —— 他说过的事到期了（窗口结束后 36h 内）：最具体的开口依据；
+    3. fresh_fact —— 近 3 天新记的事实；
+    4. old_memory —— 旧事钩子，确定性 RNG 低频翻一件，演出「忽然想起」。
 
-    返回 (给 _compose 的选题描述, 来源标记)；今天没得说返回 None。
+    返回 Topic（与二元组下标/解包兼容）；今天没得说返回 None。
     """
     now = now or datetime.now(timezone.utc)
-    rows = memory_mod.list_memories(persona_id)
     if (state.get("last_event_kind") or "") == "fatigue":
-        return "他上次聊到很累，问问他现在缓过来没有", "fatigue_care"
+        return Topic("他上次聊到很累，问问他现在缓过来没有", "fatigue_care")
+    due = plan_due_topic(persona_id, now)
+    if due is not None:
+        return due
+    rows = memory_mod.list_memories(persona_id)
     fresh = _fresh_fact_topic(rows, now)
     if fresh:
-        return fresh["content"], "fresh_fact"
+        return Topic(fresh["content"], "fresh_fact")
     older = _older_rows(rows, now)
     if older and deterministic_uniform(f"topic-old:{persona_id}", now) < TOPIC_OLD_P:
         index = int(deterministic_uniform(f"topic-pick:{persona_id}", now) * len(older))
-        return older[index]["content"], "old_memory"
+        return Topic(older[index]["content"], "old_memory")
     return None
 
 
