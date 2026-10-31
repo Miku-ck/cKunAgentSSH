@@ -44,6 +44,8 @@ class Fact:
     importance: float = 0.8
     confidence: float = 0.9
     slot: str = MULTI
+    when: str = ""      # 计划的时间词（「周末」）；其余规则为空
+    subject: str = ""   # 计划正文（「看展」）；其余规则为空
 
 
 # ── 规则表 ──
@@ -144,9 +146,10 @@ _RULES: list[tuple[str, re.Pattern, str, float, str]] = [
     ),
     (
         "计划",
-        # 不强制带「我」：「周末要去看展」也是计划
+        # 不强制带「我」：「周末要去看展」也是计划。
+        # 时间词单独成组：钩子要靠它算到期窗口，content 里不带。
         re.compile(
-            r"(?:我)?(?:明天|后天|下周|周末|下个月|今晚|待会|等会儿)\s*"
+            r"(?:我)?(?P<when>明天|后天|下周|周末|下个月|今晚|待会|等会儿)\s*"
             r"(?:要|想|准备|打算|得去)?\s*(?P<x>[\u4e00-\u9fa5A-Za-z0-9]{2,25})"
         ),
         "用户的计划：{x}",
@@ -240,7 +243,16 @@ def _build(
         content = template.format(**groups)
     except (KeyError, IndexError):
         return None
-    return Fact(title=title, content=content, importance=importance, slot=slot)
+    # 计划的正文单独留一份：钩子要独立于记忆存活，不能靠切 content 前缀取
+    subject = groups.get("x", "") if title == "计划" else ""
+    return Fact(
+        title=title,
+        content=content,
+        importance=importance,
+        slot=slot,
+        when=groups.get("when", ""),
+        subject=subject,
+    )
 
 
 def _strip_leading_verbs(value: str) -> str:

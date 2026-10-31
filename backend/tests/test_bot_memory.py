@@ -288,3 +288,30 @@ def test_recalled_memory_warms_up(base_db):
     warmed = mem.list_memories(persona["id"])[0]["importance"]
     assert warmed > faded, "被想起就该更牢"
     assert warmed <= 1.0
+
+
+# ── 计划时间词（spec 2026-10-31-plan-followup）──
+
+
+def test_plan_fact_keeps_the_time_word_and_subject():
+    """计划的时间词是钩子的唯一依据，抽取时不能丢。"""
+    facts = mem.extract_facts("周末要去看展")
+    plan_facts = [f for f in facts if f.title == "计划"]
+    assert len(plan_facts) == 1
+    fact = plan_facts[0]
+    assert fact.content == "用户的计划：看展", "正文保持原样，时间词不进记忆"
+    assert fact.when == "周末"
+    assert fact.subject == "看展"
+
+
+def test_plan_subject_strips_leading_verbs():
+    facts = mem.extract_facts("明天准备去交房租")
+    fact = [f for f in facts if f.title == "计划"][0]
+    assert fact.subject == "交房租"
+
+
+def test_non_plan_facts_have_no_when_or_subject():
+    facts = mem.extract_facts("我叫小林")
+    fact = [f for f in facts if f.title == "称呼"][0]
+    assert fact.when == ""
+    assert fact.subject == ""
