@@ -114,7 +114,9 @@ class WeChatProvider:
 
 `POST /bot/wechat/{channel_id}`（**不挂 `/api`**，因此天然绕过 X-API-Token 中间件）：
 
-1. 读 body，超过 64KB 直接 413；JSON 解析失败 400。
+1. 读 body：64KB 上限按块边收边算，越界当场 413（2026-10-31 修：原先先 `request.body()`
+   整个缓冲再比长度，而 Content-Length 是可选头，chunked 大报文会先把进程撑住才收到 413）；
+   JSON 解析失败 400。
 2. `runtime.handle(channel_id)` 拿不到连接（渠道离线）→ 返回 `{"errcode":0}` 丢弃
    并记 warning。回调不能因此重投堆积。
 3. 连接把 `body["encrypted"]` 解密；`encrypted` 这个字段名只用于入站，

@@ -26,16 +26,30 @@ def _runtime():
     return get_channel_runtime()
 
 
-@router.post("/bot/wechat/{channel_id}")
-async def wechat_callback(channel_id: str, request: Request):
-    """微信对话开放平台的回调入口：报文限 64KB（超限 413）、解密失败 400，渠道离线时回 ACK 丢弃以免平台重投。"""
+async def _read_capped_body(request: Request) -> bytes:
+    """按块读、读满即拒。
+
+    Content-Length 是可选头：chunked 上传根本没有它，原先「先看头、再 `await
+    request.body()`、最后比长度」的写法会把整个流先缓冲进内存，64KB 上限只在事后
+    成立 —— 而这是唯一一个不带 X-API-Token 就能 POST 进来的公网入口。改成先算字节
+    再收，超限当场断开。
+    """
     content_length = request.headers.get("content-length")
     if content_length and content_length.isdigit() and int(content_length) > MAX_BODY_BYTES:
         raise HTTPException(status_code=413, detail="回调报文过大")
 
-    raw = await request.body()
-    if len(raw) > MAX_BODY_BYTES:
-        raise HTTPException(status_code=413, detail="回调报文过大")
+    buf = bytearray()
+    async for chunk in request.stream():
+        buf.extend(chunk)
+        if len(buf) > MAX_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="回调报文过大")
+    return bytes(buf)
+
+
+@router.post("/bot/wechat/{channel_id}")
+async def wechat_callback(channel_id: str, request: Request):
+    """微信对话开放平台的回调入口：报文限 64KB（超限 413）、解密失败 400，渠道离线时回 ACK 丢弃以免平台重投。"""
+    raw = await _read_capped_body(request)
     try:
         body = json.loads(raw)
     except (ValueError, UnicodeDecodeError) as exc:
