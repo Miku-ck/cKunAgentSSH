@@ -89,7 +89,14 @@ class BotChatService:
         if persona.get("background"):
             sections.append(f"你的背景：{persona['background']}")
         if persona.get("likes_landmines"):
-            sections.append(f"你的喜好与雷区：{persona['likes_landmines']}")
+            # 只写「是什么」等于递给它一份待播报的话题清单：接不上话时最省力的走法
+            # 就是拐回自己的喜好上（真机反馈：没人问也老自报喜好）。用法口径写在
+            # 正文之前：排在内容后面时，模型已经把那一节当清单读完了。
+            sections.append(
+                "你的喜好与雷区（这是你的底色，不是待播报的话题清单：没人问、"
+                "话也没接到那儿，就别自己拐过去说；雷区只有被踩到才表态）："
+                f"{persona['likes_landmines']}"
+            )
 
         # 表达 DNA：枚举档位编译成可执行约束。personality 负责「是谁」，
         # 这里负责「怎么开口」—— 只有前者时模型会退化回通用助手腔。

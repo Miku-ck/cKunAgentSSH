@@ -93,6 +93,9 @@ class PersonaRequest(_PersonaValidationMixin, BaseModel):
     memory_directive: str = Field("", max_length=2000)
     dialogue_samples: str = Field("", max_length=4000)
     advanced_play: str = Field("", max_length=2000)
+    # 主动性总开关：新建就要能定下来。关了只是「她自己不会先开口」，
+    # 被动回复不受影响；默认为关，新建人格不该一上来就往用户手机上发消息。
+    proactive_enabled: bool = False
     # 群参与档：新建就落在最保守档，要她在群里开口得去编辑器调上去。
     group_mode: Literal["mention_only", "ambient", "proactive"] = "mention_only"
     # 群回复要不要 @ 提问者：默认开（维持现有观感），关掉才换发送通道。

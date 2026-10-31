@@ -287,6 +287,23 @@ def test_persona_group_mode_defaults_quietest_and_rejects_unknown_values(client)
     assert bad.status_code == 422
 
 
+def test_persona_proactive_switch_is_writable_on_create(client):
+    """新建人格也要能定下主动性：编辑器新建时就带着这个开关，丢了只能再改一次才生效。"""
+    persona = create_persona(client, proactive_enabled=True)
+    assert persona["proactive_enabled"] == 1
+    # 回显之外再查一次库：接口把值当默认值吃掉时，光看响应看不出来
+    assert db.get_bot_persona(persona["id"])["proactive_enabled"] == 1
+
+    quiet = create_persona(client)
+    assert quiet["proactive_enabled"] == 0, "默认必须是关的：新建人格不该一上来就主动开口"
+
+    # 字段真进了模型才会在类型不符时 422；被 extra 静默吞掉会一路 200
+    bad = client.post(
+        "/api/bot/personas", json={"name": "乱值", "proactive_enabled": "sometimes"}
+    )
+    assert bad.status_code == 422
+
+
 def test_persona_options_lists_the_group_modes_in_order(client):
     options = client.get("/api/bot/persona-options").json()["group_mode"]
     assert [item["value"] for item in options["options"]] == [
@@ -300,6 +317,13 @@ def test_copy_persona_does_not_carry_the_group_mode_over(client):
     persona = create_persona(client, group_mode="proactive")
     copy = client.post(f"/api/bot/personas/{persona['id']}/copy").json()
     assert copy["group_mode"] == "mention_only"
+
+
+def test_copy_persona_does_not_carry_the_proactive_switch(client):
+    """副本不继承主动性总闸：与群参与档同口径，复制不能多开一张嘴。"""
+    persona = create_persona(client, proactive_enabled=True)
+    copy = client.post(f"/api/bot/personas/{persona['id']}/copy").json()
+    assert copy["proactive_enabled"] == 0
 
 
 def test_copy_persona_keeps_voice_settings(client):

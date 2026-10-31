@@ -34,7 +34,6 @@ export type SettingCategory =
   | 'agent'
   | 'memory'
   | 'ops'
-  | 'bot'
   | 'about'
 
 interface AppSettings {

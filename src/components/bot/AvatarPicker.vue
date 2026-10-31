@@ -6,7 +6,7 @@ import { botApi, type BotGalleryItem } from '@/api/bot'
 import { toFriendlyMessage } from '@/api/base'
 
 // 统一头像入口（spec §4.6）：预览即上传入口 + 服务端图库选取。
-// PersonaEditor / Bot 管理「你的头像」/ QQ 会话头像三处复用。
+// PersonaEditor / 远端会话显示设置 两处复用。
 // 预览区未设置时只留一枚虚线空位，不生成任何默认图案。
 // clearable=false 给「外层已有整体重置」的调用方（QQ 显示弹窗的恢复默认），
 // 免得同一屏出现两个都把值置空的按钮。

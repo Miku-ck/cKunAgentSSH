@@ -29,7 +29,8 @@ export const useBotStore = defineStore('bot', () => {
   const remoteMessages = ref<BotMessage[]>([])
   const remoteActiveId = ref('')
   const remoteError = ref('')
-  /** 「你的头像」（Phase 4）：Bot 管理面板设置，本地会话用户气泡使用；QQ 里你不发言不吃它。 */
+  /** 「你的头像」（Phase 4）：本地会话里你这一侧的气泡用；远端会话里你不发言不吃它。
+   *  设置侧入口已按裁决下线（与聊天记录设置重叠），但历史值仍从 bot_user_avatar 读出来照常显示。 */
   const userAvatar = ref('')
   /** 「试一句」在途标记与回显：只读侧的手动探口，不进聊天错误条也不碰消息列表。 */
   const probing = ref(false)

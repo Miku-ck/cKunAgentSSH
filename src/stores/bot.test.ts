@@ -14,7 +14,6 @@ vi.mock('@/api/bot', () => ({
     updateConversationDisplay: vi.fn(),
     probeProactive: vi.fn(),
     getUserAvatar: vi.fn(),
-    setUserAvatar: vi.fn(),
   },
   streamBotChat: vi.fn(),
 }))

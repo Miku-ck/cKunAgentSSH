@@ -2564,6 +2564,7 @@ def create_bot_persona(
     memory_directive: str = "",
     dialogue_samples: str = "",
     advanced_play: str = "",
+    proactive_enabled: int = 0,
     group_mode: str = "mention_only",
     mention_sender: int = 1,
 ) -> dict:
@@ -2577,15 +2578,16 @@ def create_bot_persona(
             "reply_style, enable_thinking, expression_dna, reaction_style, "
             "refusal_style, address_user, relationship_speed, "
             "likes_landmines, memory_directive, dialogue_samples, advanced_play, "
-            "group_mode, mention_sender, "
+            "proactive_enabled, group_mode, mention_sender, "
             "created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (persona_id, name, avatar, personality, background, greeting, model_id,
              reply_style, int(bool(enable_thinking)),
              json.dumps(expression_dna or {}, ensure_ascii=False),
              reaction_style, refusal_style, address_user, relationship_speed,
              likes_landmines, memory_directive, dialogue_samples, advanced_play,
-             group_mode, int(bool(mention_sender)), now, now),
+             int(bool(proactive_enabled)), group_mode, int(bool(mention_sender)),
+             now, now),
         )
         conn.commit()
     finally:

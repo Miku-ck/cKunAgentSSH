@@ -328,6 +328,23 @@ def test_prompt_omits_expansion_sections_when_empty():
     assert "你的背景" in prompt
 
 
+def test_likes_section_carries_its_own_usage_rule():
+    """真机反馈：没人问也老自报喜好。
+
+    光一句「你的喜好与雷区：X」是给模型一份待播报的话题清单——它接不上话时
+    最省力的走法就是拐回这儿。所以这一节必须自带用法口径，而且口径要写在内容
+    之前：内容后面再补规矩，模型已经把它当清单读完了。
+    """
+    filled = _persona(likes_landmines="喜欢夜里散步；雷区是被催")
+    prompt = BotChatService()._system_prompt(filled, "local")
+    start = prompt.index("你的喜好与雷区")
+    head = prompt[start:prompt.index("喜欢夜里散步")]
+    assert "话题清单" in head, "得明说这不是等着播报的内容"
+    assert "没人问" in head, "用法口径必须在喜好正文之前"
+    # 喜好不能整节删掉：被问到、或话正好接到那儿时它还是她这个人的一部分
+    assert "喜欢夜里散步" in prompt
+
+
 # ── 分条：空行就是另发一条消息 ──
 
 
